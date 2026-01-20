@@ -1,0 +1,17 @@
+Application starting...
+InitD3D12 start
+After EnableD3D12DebugLayer
+After CreateDXGIFactory2
+After GetHardwareAdapter
+D3D12CreateDevice(hardwareAdapter) = 0x00000000
+DXR Supported: YES
+Device created, about to create command queue
+Before CreateCommandQueue, g_device = 0000027BAF7B95A0
+CreateCommandQueue returned 0x00000000
+CommandQueue created successfully
+About to compile shaders
+Shader path: shaders\simple.hlsl
+VSMain compile returned 0x00000000
+InitializeRaytracingPipeline start
+Compiling RT Shader: shaders\raytracing.hlsl []
+CreateStateObject failed with HRESULT 0x80070057
