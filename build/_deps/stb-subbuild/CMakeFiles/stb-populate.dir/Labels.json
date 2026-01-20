@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "D:/project-render/build/_deps/stb-subbuild/CMakeFiles/stb-populate"
+		},
+		{
+			"file" : "D:/project-render/build/_deps/stb-subbuild/CMakeFiles/8a19dbb1566bad3820c1cc27570aaf6c/stb-populate.rule"
+		},
+		{
+			"file" : "D:/project-render/build/_deps/stb-subbuild/CMakeFiles/483da826a11663fc57da07093dd4d50b/stb-populate-complete.rule"
+		},
+		{
+			"file" : "D:/project-render/build/_deps/stb-subbuild/CMakeFiles/583e80941ad87708c78dd0df2fb875f1/stb-populate-build.rule"
+		},
+		{
+			"file" : "D:/project-render/build/_deps/stb-subbuild/CMakeFiles/583e80941ad87708c78dd0df2fb875f1/stb-populate-configure.rule"
+		},
+		{
+			"file" : "D:/project-render/build/_deps/stb-subbuild/CMakeFiles/583e80941ad87708c78dd0df2fb875f1/stb-populate-download.rule"
+		},
+		{
+			"file" : "D:/project-render/build/_deps/stb-subbuild/CMakeFiles/583e80941ad87708c78dd0df2fb875f1/stb-populate-install.rule"
+		},
+		{
+			"file" : "D:/project-render/build/_deps/stb-subbuild/CMakeFiles/583e80941ad87708c78dd0df2fb875f1/stb-populate-mkdir.rule"
+		},
+		{
+			"file" : "D:/project-render/build/_deps/stb-subbuild/CMakeFiles/583e80941ad87708c78dd0df2fb875f1/stb-populate-patch.rule"
+		},
+		{
+			"file" : "D:/project-render/build/_deps/stb-subbuild/CMakeFiles/583e80941ad87708c78dd0df2fb875f1/stb-populate-test.rule"
+		},
+		{
+			"file" : "D:/project-render/build/_deps/stb-subbuild/CMakeFiles/583e80941ad87708c78dd0df2fb875f1/stb-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"stb-populate"
+		],
+		"name" : "stb-populate"
+	}
+}

@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "D:/project-render/build/_deps/imgui-subbuild/CMakeFiles/imgui-populate"
+		},
+		{
+			"file" : "D:/project-render/build/_deps/imgui-subbuild/CMakeFiles/ab320e743c3083d13b50577b400811b8/imgui-populate.rule"
+		},
+		{
+			"file" : "D:/project-render/build/_deps/imgui-subbuild/CMakeFiles/0a9ea92188ec9396734d271fdf824d61/imgui-populate-complete.rule"
+		},
+		{
+			"file" : "D:/project-render/build/_deps/imgui-subbuild/CMakeFiles/a0292dd80c7665c9258c8ba3e9915e8e/imgui-populate-build.rule"
+		},
+		{
+			"file" : "D:/project-render/build/_deps/imgui-subbuild/CMakeFiles/a0292dd80c7665c9258c8ba3e9915e8e/imgui-populate-configure.rule"
+		},
+		{
+			"file" : "D:/project-render/build/_deps/imgui-subbuild/CMakeFiles/a0292dd80c7665c9258c8ba3e9915e8e/imgui-populate-download.rule"
+		},
+		{
+			"file" : "D:/project-render/build/_deps/imgui-subbuild/CMakeFiles/a0292dd80c7665c9258c8ba3e9915e8e/imgui-populate-install.rule"
+		},
+		{
+			"file" : "D:/project-render/build/_deps/imgui-subbuild/CMakeFiles/a0292dd80c7665c9258c8ba3e9915e8e/imgui-populate-mkdir.rule"
+		},
+		{
+			"file" : "D:/project-render/build/_deps/imgui-subbuild/CMakeFiles/a0292dd80c7665c9258c8ba3e9915e8e/imgui-populate-patch.rule"
+		},
+		{
+			"file" : "D:/project-render/build/_deps/imgui-subbuild/CMakeFiles/a0292dd80c7665c9258c8ba3e9915e8e/imgui-populate-test.rule"
+		},
+		{
+			"file" : "D:/project-render/build/_deps/imgui-subbuild/CMakeFiles/a0292dd80c7665c9258c8ba3e9915e8e/imgui-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"imgui-populate"
+		],
+		"name" : "imgui-populate"
+	}
+}

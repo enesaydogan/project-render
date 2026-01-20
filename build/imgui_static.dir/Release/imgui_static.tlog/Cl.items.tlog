@@ -1,0 +1,6 @@
+D:\project-render\build\_deps\imgui-src\imgui.cpp;D:\project-render\build\imgui_static.dir\Release\imgui.obj
+D:\project-render\build\_deps\imgui-src\imgui_draw.cpp;D:\project-render\build\imgui_static.dir\Release\imgui_draw.obj
+D:\project-render\build\_deps\imgui-src\imgui_tables.cpp;D:\project-render\build\imgui_static.dir\Release\imgui_tables.obj
+D:\project-render\build\_deps\imgui-src\imgui_widgets.cpp;D:\project-render\build\imgui_static.dir\Release\imgui_widgets.obj
+D:\project-render\build\_deps\imgui-src\backends\imgui_impl_win32.cpp;D:\project-render\build\imgui_static.dir\Release\imgui_impl_win32.obj
+D:\project-render\build\_deps\imgui-src\backends\imgui_impl_dx12.cpp;D:\project-render\build\imgui_static.dir\Release\imgui_impl_dx12.obj

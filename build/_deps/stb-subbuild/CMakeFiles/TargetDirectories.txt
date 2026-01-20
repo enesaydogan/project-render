@@ -1,0 +1,3 @@
+D:/project-render/build/_deps/stb-subbuild/CMakeFiles/stb-populate.dir
+D:/project-render/build/_deps/stb-subbuild/CMakeFiles/ALL_BUILD.dir
+D:/project-render/build/_deps/stb-subbuild/CMakeFiles/ZERO_CHECK.dir

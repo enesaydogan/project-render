@@ -1,0 +1,10 @@
+^D:\PROJECT-RENDER\BUILD\_DEPS\STB-SUBBUILD\CMAKEFILES\8A19DBB1566BAD3820C1CC27570AAF6C\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SD:/project-render/build/_deps/stb-subbuild -BD:/project-render/build/_deps/stb-subbuild --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file D:/project-render/build/_deps/stb-subbuild/stb-populate.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

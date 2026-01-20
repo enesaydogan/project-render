@@ -1,0 +1,5 @@
+D:/project-render/build/CMakeFiles/project-render.dir
+D:/project-render/build/CMakeFiles/imgui_static.dir
+D:/project-render/build/CMakeFiles/asset_loader.dir
+D:/project-render/build/CMakeFiles/ALL_BUILD.dir
+D:/project-render/build/CMakeFiles/ZERO_CHECK.dir
