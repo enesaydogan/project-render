@@ -4,7 +4,7 @@ InitD3D12: Hardware adapter obtained
 CreateRT: Compiling shader...
 CreateRT: CreateStateObject...
 CreateRT: StateObject OK
-CreateRT: IDs retrieved: RG=000001DCE71955A0, Ms=000001DCE7196220, HG=000001DCE7195CD0
+CreateRT: IDs retrieved: RG=0000022E5A5BD290, Ms=0000022E5A5BD2E0, HG=0000022E5A5BD330
 CreateRT: Shader table uploaded
 CreateRT: UAV descriptor heap created
 CreateRT: Output texture created
@@ -23,6 +23,7 @@ InitD3D12: Post-pipeline initialization reached
 InitD3D12: Completed OK (returning true)
 InitD3D12 returned OK
 AutoLoad: loaded assets/sample.glb (meshes=1, materials=0, textures=0)
+CreateTestTexture: Created 2x2 checkerboard texture
 AutoLoad: calling BuildAccelerationStructures()
 BuildAS: Entering BuildAccelerationStructures (meshes=1)
 BuildAS: Completed BuildAccelerationStructures

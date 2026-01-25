@@ -19,4 +19,4 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "Build complete. Output in: $buildDir"
 
-Start-Process -FilePath .\build\Release\project-render.exe
+Start-Process .\build\Release\project-render.exe "D:\project-render-2.bak\assets\DamagedHelmet.glb"
