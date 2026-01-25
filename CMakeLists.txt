@@ -75,5 +75,10 @@ if (USE_TINYGLTF)
 endif()
 target_link_libraries(project-render PRIVATE asset_loader)
 
-# Build as a Windows GUI app (no console). Remove WIN32_EXECUTABLE for console app.
-set_target_properties(project-render PROPERTIES WIN32_EXECUTABLE TRUE)
+# Build as a console app to allow output to be piped to the terminal.
+# set_target_properties(project-render PROPERTIES WIN32_EXECUTABLE TRUE)
+
+# Specify the entry point as WinMain to avoid linker errors
+if (MSVC)
+  target_link_options(project-render PRIVATE /ENTRY:"WinMainCRTStartup")
+endif()

@@ -141,6 +141,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
+      <EntryPointSymbol>"WinMainCRTStartup"</EntryPointSymbol>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
       <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
@@ -148,7 +149,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <LinkErrorReporting></LinkErrorReporting>
       <ProgramDataBaseFile>D:/project-render/build/Debug/project-render.pdb</ProgramDataBaseFile>
       <RandomizedBaseAddress></RandomizedBaseAddress>
-      <SubSystem>Windows</SubSystem>
+      <SubSystem>Console</SubSystem>
     </Link>
     <ProjectReference>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
@@ -211,6 +212,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
+      <EntryPointSymbol>"WinMainCRTStartup"</EntryPointSymbol>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
       <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
@@ -218,7 +220,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <LinkErrorReporting></LinkErrorReporting>
       <ProgramDataBaseFile>D:/project-render/build/Release/project-render.pdb</ProgramDataBaseFile>
       <RandomizedBaseAddress></RandomizedBaseAddress>
-      <SubSystem>Windows</SubSystem>
+      <SubSystem>Console</SubSystem>
     </Link>
     <ProjectReference>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
@@ -281,6 +283,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
+      <EntryPointSymbol>"WinMainCRTStartup"</EntryPointSymbol>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
       <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
@@ -288,7 +291,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <LinkErrorReporting></LinkErrorReporting>
       <ProgramDataBaseFile>D:/project-render/build/MinSizeRel/project-render.pdb</ProgramDataBaseFile>
       <RandomizedBaseAddress></RandomizedBaseAddress>
-      <SubSystem>Windows</SubSystem>
+      <SubSystem>Console</SubSystem>
     </Link>
     <ProjectReference>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
@@ -350,6 +353,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
+      <EntryPointSymbol>"WinMainCRTStartup"</EntryPointSymbol>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
       <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
@@ -357,7 +361,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <LinkErrorReporting></LinkErrorReporting>
       <ProgramDataBaseFile>D:/project-render/build/RelWithDebInfo/project-render.pdb</ProgramDataBaseFile>
       <RandomizedBaseAddress></RandomizedBaseAddress>
-      <SubSystem>Windows</SubSystem>
+      <SubSystem>Console</SubSystem>
     </Link>
     <ProjectReference>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
