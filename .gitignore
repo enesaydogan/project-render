@@ -1,0 +1,76 @@
+# .gitignore for project-render
+
+# Build directories
+/build/
+/build/**
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CMakeFiles/**
+
+# Visual Studio / MSBuild
+.vs/
+*.vcxproj.user
+*.vcxproj.filters.user
+*.suo
+*.user
+*.userosscache
+*.ncb
+*.sdf
+*.opensdf
+*.pdb
+*.ilk
+
+# Project build outputs / binaries
+*.exe
+*.dll
+*.lib
+*.a
+*.so
+*.dylib
+*.app
+*.out
+*.o
+*.obj
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.cache
+
+# IDEs and editors
+.vscode/
+.idea/
+*.code-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# vcpkg/build artifacts (if vendored under repos/)
+repos/vcpkg/buildtrees/
+repos/vcpkg/downloads/
+repos/vcpkg/packages/*/build/
+
+# Runtime-generated assets
+assets/*.glb
+
+# Backup files
+*~
+*.bak
+*.swp
+
+# Python
+venv/
+__pycache__/
+
+# Misc
+*.zip
+*.7z
+*.tar
+*.gz
+
+# End of file
