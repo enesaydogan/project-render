@@ -3,6 +3,17 @@
 RaytracingAccelerationStructure g_accel : register(t0);
 RWTexture2D<float4> g_output : register(u0);
 
+cbuffer Camera : register(b0)
+{
+    float3 camPos;
+    float _pad0;
+    float3 camForward;
+    float _pad1;
+    float3 camUp;
+    float _pad2;
+    float4 camParams; // fov, aspect, znear, zfar
+}
+
 struct RayPayload
 {
     float4 color;
@@ -15,14 +26,21 @@ void RayGen()
     uint3 launchDim = DispatchRaysDimensions();
 
     float2 uv = float2(launchIndex.xy) / float2(launchDim.xy);
-    // Simple perspective projection setup (to be improved with Camera CB)
-    float aspect = (float)launchDim.x / (float)launchDim.y;
-    float2 d = uv * 2.0 - 1.0;
-    d.x *= aspect;
+    float2 ndc = uv * 2.0 - 1.0;
+
+    float aspect = camParams.y; // provided by host
+    float fov = camParams.x;
+    float f = tan(radians(fov) * 0.5);
+
+    // Build camera basis
+    float3 R = normalize(cross(camForward, camUp));
+    float3 U = normalize(cross(R, camForward));
+
+    float3 dir = normalize(ndc.x * R * aspect * f + (-ndc.y) * U * f + camForward);
 
     RayDesc ray;
-    ray.Origin = float3(0, 0, 2.0); // Simple camera pos
-    ray.Direction = normalize(float3(d.x, -d.y, -1.0));
+    ray.Origin = camPos;
+    ray.Direction = dir;
     ray.TMin = 0.001;
     ray.TMax = 10000.0;
     

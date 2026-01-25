@@ -22,6 +22,8 @@
 #include <stdio.h>
 #include <string>
 #include <vector>
+#include <chrono>
+#include <algorithm>
 
 // Forward-declare ImGui Win32 WndProc handler (imgui_impl_win32.h documents
 // this should be declared by user)
@@ -92,6 +94,27 @@ static ComPtr<ID3D12Resource> g_vertexBuffer;
 static D3D12_VERTEX_BUFFER_VIEW g_vertexBufferView = {};
 static ComPtr<ID3D12Resource> g_constantBuffer;
 static float g_offsetX = 0.2f;
+
+// Camera for Ray Tracing
+struct CameraCB {
+  float pos[3];
+  float _pad0;
+  float forward[3];
+  float _pad1;
+  float up[3];
+  float _pad2;
+  float params[4]; // fov(deg), aspect, znear, zfar
+};
+
+// Simple Vec3 helper for CPU-side math
+struct Vec3 { float x, y, z; };
+static CameraCB g_cameraData = {{0.0f, 0.0f, 2.0f}, 0.0f, {0.0f, 0.0f, -1.0f}, 0.0f, {0.0f, 1.0f, 0.0f}, 0.0f, {45.0f, 1280.0f/720.0f, 0.1f, 1000.0f}};
+static ComPtr<ID3D12Resource> g_cameraConstantBuffer;
+static float g_camYaw = 0.0f;
+static float g_camPitch = 0.0f;
+static float g_camSpeed = 2.5f; // units/sec
+static POINT g_prevMousePos = {0, 0};
+static bool g_mouseCaptured = false;
 
 // --- DXR Globals ---
 static bool g_rayTracingSupported = false;
@@ -168,13 +191,13 @@ void CreateRayTracingPipeline() {
   // t0: TLAS
   // u0: Usage Output (ensure u0 in shader matches)
   {
-    D3D12_ROOT_PARAMETER params[2] = {};
-    // t0
+    D3D12_ROOT_PARAMETER params[3] = {};
+    // t0 - TLAS
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
     params[0].Descriptor.ShaderRegister = 0;
     params[0].Descriptor.RegisterSpace = 0;
     params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    // u0
+    // u0 - output UAV descriptor table
     D3D12_DESCRIPTOR_RANGE uavRange = {};
     uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
     uavRange.NumDescriptors = 1;
@@ -187,8 +210,14 @@ void CreateRayTracingPipeline() {
     params[1].DescriptorTable.pDescriptorRanges = &uavRange;
     params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
+    // b0 - Camera CBV
+    params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    params[2].Descriptor.ShaderRegister = 0;
+    params[2].Descriptor.RegisterSpace = 0;
+    params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
     D3D12_ROOT_SIGNATURE_DESC rootDesc = {};
-    rootDesc.NumParameters = 2;
+    rootDesc.NumParameters = 3;
     rootDesc.pParameters = params;
     rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
@@ -316,8 +345,18 @@ void CreateRayTracingPipeline() {
   UINT shaderTableSize =
       g_shaderTableEntrySize * 3; // 1 RayGen, 1 Miss, 1 HitGroup
 
-  AllocateUploadBuffer(g_device.Get(), nullptr, shaderTableSize, &g_sbtStorage,
-                       L"Shader Table");
+  try {
+    AllocateUploadBuffer(g_device.Get(), nullptr, shaderTableSize, &g_sbtStorage,
+                         L"Shader Table");
+  } catch (const std::exception &e) {
+    FILE *log = nullptr;
+    fopen_s(&log, "startup.log", "a");
+    if (log) {
+      fprintf(log, "CreateRT: AllocateUploadBuffer exception (SBT): %s\n", e.what());
+      fclose(log);
+    }
+    return;
+  }
 
   // Map and Write
   UINT8 *pData;
@@ -331,6 +370,16 @@ void CreateRayTracingPipeline() {
 
   g_sbtStorage->Unmap(0, nullptr);
 
+  // Log: shader table created
+  {
+    FILE *log = nullptr;
+    fopen_s(&log, "startup.log", "a");
+    if (log) {
+      fprintf(log, "CreateRT: Shader table uploaded\n");
+      fclose(log);
+    }
+  }
+
   g_rayGenShaderTable = g_sbtStorage->GetGPUVirtualAddress();
   g_missShaderTable = g_rayGenShaderTable + g_shaderTableEntrySize;
   g_hitGroupShaderTable = g_missShaderTable + g_shaderTableEntrySize;
@@ -340,10 +389,38 @@ void CreateRayTracingPipeline() {
   uavHeapDesc.NumDescriptors = 1;
   uavHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
   uavHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-  g_device->CreateDescriptorHeap(&uavHeapDesc, IID_PPV_ARGS(&g_uavHeap));
+  HRESULT hrUavHeap = g_device->CreateDescriptorHeap(&uavHeapDesc, IID_PPV_ARGS(&g_uavHeap));
+  if (FAILED(hrUavHeap)) {
+    FILE *log = nullptr;
+    fopen_s(&log, "startup.log", "a");
+    if (log) {
+      fprintf(log, "CreateRT: CreateDescriptorHeap failed: 0x%08x\n", (unsigned)hrUavHeap);
+      fclose(log);
+    }
+    return;
+  }
+  {
+    FILE *log = nullptr;
+    fopen_s(&log, "startup.log", "a");
+    if (log) {
+      fprintf(log, "CreateRT: UAV descriptor heap created\n");
+      fclose(log);
+    }
+  }
 
-  AllocateUAVBuffer(g_device.Get(), 1280 * 720 * 4 * 4, &g_outputUAV,
-                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"RT Output");
+  HRESULT hrAlloc = S_OK;
+  try {
+    AllocateUAVBuffer(g_device.Get(), 1280 * 720 * 4 * 4, &g_outputUAV,
+                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"RT Output");
+  } catch (const std::exception &e) {
+    FILE *log = nullptr;
+    fopen_s(&log, "startup.log", "a");
+    if (log) {
+      fprintf(log, "CreateRT: AllocateUAVBuffer exception: %s\n", e.what());
+      fclose(log);
+    }
+    return;
+  }
   // Recreate it as Texture2D for easier management?
   // AllocateUAVBuffer makes a buffer. RayGen writes to RWTexture2D.
   // We should use a Texture2D Resource.
@@ -363,10 +440,27 @@ void CreateRayTracingPipeline() {
     desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
     g_outputUAV.Reset();
-    ThrowIfFailed(g_device->CreateCommittedResource(
+    HRESULT hrCreate = g_device->CreateCommittedResource(
         &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
-        IID_PPV_ARGS(&g_outputUAV)));
+        IID_PPV_ARGS(&g_outputUAV));
+    if (FAILED(hrCreate)) {
+      FILE *log = nullptr;
+      fopen_s(&log, "startup.log", "a");
+      if (log) {
+        fprintf(log, "CreateRT: CreateCommittedResource failed: 0x%08x\n", (unsigned)hrCreate);
+        fclose(log);
+      }
+      return;
+    }
+    {
+      FILE *log = nullptr;
+      fopen_s(&log, "startup.log", "a");
+      if (log) {
+        fprintf(log, "CreateRT: Output texture created\n");
+        fclose(log);
+      }
+    }
 
     D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
     uavDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -374,16 +468,42 @@ void CreateRayTracingPipeline() {
     uavDesc.Texture2D.MipSlice = 0;
     uavDesc.Texture2D.PlaneSlice = 0;
 
-    g_device->CreateUnorderedAccessView(
-        g_outputUAV.Get(), nullptr, &uavDesc,
-        g_uavHeap->GetCPUDescriptorHandleForHeapStart());
-    g_outputUAVGpuHandle = g_uavHeap->GetGPUDescriptorHandleForHeapStart();
+    HRESULT hrUAV = S_OK;
+    if (g_uavHeap) {
+      g_device->CreateUnorderedAccessView(
+          g_outputUAV.Get(), nullptr, &uavDesc,
+          g_uavHeap->GetCPUDescriptorHandleForHeapStart());
+      g_outputUAVGpuHandle = g_uavHeap->GetGPUDescriptorHandleForHeapStart();
+      FILE *log = nullptr;
+      fopen_s(&log, "startup.log", "a");
+      if (log) {
+        fprintf(log, "CreateRT: UAV view created\n");
+        fclose(log);
+      }
+    } else {
+      FILE *log = nullptr;
+      fopen_s(&log, "startup.log", "a");
+      if (log) {
+        fprintf(log, "CreateRT: g_uavHeap is null, cannot create UAV view\n");
+        fclose(log);
+      }
+      return;
+    }
   }
 }
 
 // Helper to build AS for all loaded meshes
 // This is a naive implementation that rebuilds everything from scratch
 void BuildAccelerationStructures() {
+  // Log entry
+  {
+    FILE *log = nullptr;
+    if (fopen_s(&log, "startup.log", "a") == 0 && log) {
+      fprintf(log, "BuildAS: Entering BuildAccelerationStructures (meshes=%zu)\n", g_loadedMeshes.size());
+      fclose(log);
+    }
+  }
+
   if (!g_rayTracingSupported || !g_dxrDevice)
     return;
 
@@ -512,7 +632,17 @@ void BuildAccelerationStructures() {
   }
 
   OutputDebugStringA("DXR Acceleration Structures Built.\n");
+
+  // Log completion
+  {
+    FILE *log = nullptr;
+    if (fopen_s(&log, "startup.log", "a") == 0 && log) {
+      fprintf(log, "BuildAS: Completed BuildAccelerationStructures\n");
+      fclose(log);
+    }
+  }
 }
+
 
 inline void TransitionResource(ID3D12GraphicsCommandList *cmdList,
                                ID3D12Resource *resource,
@@ -623,6 +753,15 @@ bool InitD3D12(HWND hwnd) {
               "DXR Ray Tracing Supported and Device Initialized.\n");
           // Initialize Pipeline
           CreateRayTracingPipeline();
+          // Log: CreateRayTracingPipeline finished
+          {
+            FILE *log = nullptr;
+            fopen_s(&log, "startup.log", "a");
+            if (log) {
+              fprintf(log, "InitD3D12: CreateRayTracingPipeline finished\n");
+              fclose(log);
+            }
+          }
         } else {
           g_rayTracingSupported = false;
           OutputDebugStringA(
@@ -645,14 +784,41 @@ bool InitD3D12(HWND hwnd) {
     }
   }
 
+  // Log: about to create command queue
+  {
+    FILE *log = nullptr;
+    fopen_s(&log, "startup.log", "a");
+    if (log) {
+      fprintf(log, "InitD3D12: Before CreateCommandQueue\n");
+      fclose(log);
+    }
+  }
+
   // Create command queue
   D3D12_COMMAND_QUEUE_DESC queueDesc = {};
   queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
   queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
 
   hr = g_device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&g_commandQueue));
+  if (FAILED(hr)) {
+    FILE *log = nullptr;
+    fopen_s(&log, "startup.log", "a");
+    if (log) {
+      fprintf(log, "InitD3D12: CreateCommandQueue failed 0x%08x\n", (unsigned)hr);
+      fclose(log);
+    }
+    return false;
+  }
 
-  ThrowIfFailed(hr);
+  // Log: command queue created
+  {
+    FILE *log = nullptr;
+    fopen_s(&log, "startup.log", "a");
+    if (log) {
+      fprintf(log, "InitD3D12: CreateCommandQueue succeeded\n");
+      fclose(log);
+    }
+  }
 
   // Create swap chain
   DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
@@ -665,11 +831,48 @@ bool InitD3D12(HWND hwnd) {
   swapChainDesc.SampleDesc.Count = 1;
 
   ComPtr<IDXGISwapChain1> swapChain1;
-  ThrowIfFailed(factory->CreateSwapChainForHwnd(g_commandQueue.Get(), hwnd,
-                                                &swapChainDesc, nullptr,
-                                                nullptr, &swapChain1));
+  {
+    FILE *log = nullptr;
+    fopen_s(&log, "startup.log", "a");
+    if (log) {
+      fprintf(log, "InitD3D12: Before CreateSwapChainForHwnd\n");
+      fclose(log);
+    }
+  }
 
-  ThrowIfFailed(swapChain1.As(&g_swapChain));
+  HRESULT hrSwap = factory->CreateSwapChainForHwnd(g_commandQueue.Get(), hwnd,
+                                                   &swapChainDesc, nullptr,
+                                                   nullptr, &swapChain1);
+  if (FAILED(hrSwap)) {
+    FILE *log = nullptr;
+    fopen_s(&log, "startup.log", "a");
+    if (log) {
+      fprintf(log, "InitD3D12: CreateSwapChainForHwnd failed 0x%08x\n", (unsigned)hrSwap);
+      fclose(log);
+    }
+    return false;
+  }
+
+  HRESULT hrAs = swapChain1.As(&g_swapChain);
+  if (FAILED(hrAs)) {
+    FILE *log = nullptr;
+    fopen_s(&log, "startup.log", "a");
+    if (log) {
+      fprintf(log, "InitD3D12: swapChain1.As failed 0x%08x\n", (unsigned)hrAs);
+      fclose(log);
+    }
+    return false;
+  }
+
+  // Log: swap chain created
+  {
+    FILE *log = nullptr;
+    fopen_s(&log, "startup.log", "a");
+    if (log) {
+      fprintf(log, "InitD3D12: Swap chain created\n");
+      fclose(log);
+    }
+  }
 
   g_frameIndex = g_swapChain->GetCurrentBackBufferIndex();
 
@@ -687,32 +890,102 @@ bool InitD3D12(HWND hwnd) {
       g_rtvHeap->GetCPUDescriptorHandleForHeapStart();
   D3D12_CPU_DESCRIPTOR_HANDLE rtvHandleStart = rtvHandle;
   for (UINT i = 0; i < FrameCount; ++i) {
-    ThrowIfFailed(g_swapChain->GetBuffer(i, IID_PPV_ARGS(&g_renderTargets[i])));
+    HRESULT hrBuf = g_swapChain->GetBuffer(i, IID_PPV_ARGS(&g_renderTargets[i]));
+    if (FAILED(hrBuf)) {
+      FILE *log = nullptr;
+      fopen_s(&log, "startup.log", "a");
+      if (log) {
+        fprintf(log, "InitD3D12: GetBuffer failed for index %u: 0x%08x\n", i, (unsigned)hrBuf);
+        fclose(log);
+      }
+      return false;
+    }
     g_device->CreateRenderTargetView(g_renderTargets[i].Get(), nullptr,
                                      rtvHandle);
     rtvHandle.ptr =
         rtvHandleStart.ptr + (SIZE_T)((i + 1) * g_rtvDescriptorSize);
   }
 
+  // Log: RTVs created
+  {
+    FILE *log = nullptr;
+    fopen_s(&log, "startup.log", "a");
+    if (log) {
+      fprintf(log, "InitD3D12: RTVs created\n");
+      fclose(log);
+    }
+  }
+
+  // Log: before CBV/SRV allocator init
+  {
+    FILE *log = nullptr;
+    fopen_s(&log, "startup.log", "a");
+    if (log) {
+      fprintf(log, "InitD3D12: Before CBV/SRV allocator Init\n");
+      fclose(log);
+    }
+  }
   // Initialize descriptor allocator for CBV/SRV/UAV
   g_cbvSrvAllocator.Init(g_device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
                          1024, FrameCount);
+  {
+    FILE *log = nullptr;
+    fopen_s(&log, "startup.log", "a");
+    if (log) {
+      fprintf(log, "InitD3D12: CBV/SRV allocator initialized\n");
+      fclose(log);
+    }
+  }
 
   // Create descriptor heap for ImGui fonts (1 descriptor)
   D3D12_DESCRIPTOR_HEAP_DESC imguiHeapDesc = {};
   imguiHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
   imguiHeapDesc.NumDescriptors = 1;
   imguiHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-  ThrowIfFailed(g_device->CreateDescriptorHeap(&imguiHeapDesc,
-                                               IID_PPV_ARGS(&g_imguiHeap)));
+  HRESULT hrImg = g_device->CreateDescriptorHeap(&imguiHeapDesc,
+                                               IID_PPV_ARGS(&g_imguiHeap));
+  if (FAILED(hrImg)) {
+    FILE *log = nullptr;
+    fopen_s(&log, "startup.log", "a");
+    if (log) {
+      fprintf(log, "InitD3D12: CreateDescriptorHeap for ImGui failed 0x%08x\n", (unsigned)hrImg);
+      fclose(log);
+    }
+    return false;
+  }
+  {
+    FILE *log = nullptr;
+    fopen_s(&log, "startup.log", "a");
+    if (log) {
+      fprintf(log, "InitD3D12: ImGui descriptor heap created\n");
+      fclose(log);
+    }
+  }
 
   // Create per-frame resources (command allocators + fence values)
   for (UINT i = 0; i < FrameCount; ++i) {
-    ThrowIfFailed(g_device->CreateCommandAllocator(
+    HRESULT hrAlloc = g_device->CreateCommandAllocator(
         D3D12_COMMAND_LIST_TYPE_DIRECT,
-        IID_PPV_ARGS(&g_frameResources[i].commandAllocator)));
+        IID_PPV_ARGS(&g_frameResources[i].commandAllocator));
+    if (FAILED(hrAlloc)) {
+      FILE *log = nullptr;
+      fopen_s(&log, "startup.log", "a");
+      if (log) {
+        fprintf(log, "InitD3D12: CreateCommandAllocator failed for frame %u: 0x%08x\n", i, (unsigned)hrAlloc);
+        fclose(log);
+      }
+      return false;
+    }
     g_frameResources[i].fenceValue = 0;
     g_frameResources[i].transientDescriptorOffset = 0;
+  }
+  {
+    FILE *log = nullptr;
+    fopen_s(&log, "startup.log", "a");
+    if (log) {
+      fprintf(log, "InitD3D12: per-frame command allocators created\n");
+      fclose(log);
+    }
   }
 
   // Create a single command list (can be recycled)
@@ -790,11 +1063,9 @@ bool InitD3D12(HWND hwnd) {
                                               signature->GetBufferSize(),
                                               IID_PPV_ARGS(&g_rootSignature)));
 
-  // --- Compile simple shaders for demo triangle ---
-  // --- Compile simple shaders for demo triangle ---
-
-  ComPtr<ID3DBlob> vsBlob;
-  ComPtr<ID3DBlob> psBlob;
+  // --- Compile simple shaders for demo triangle (DXC / SM6) ---
+  ComPtr<IDxcBlob> vsBlob;
+  ComPtr<IDxcBlob> psBlob;
   std::wstring simpleShaderPath = FindShaderFile(L"shaders\\simple.hlsl");
   {
     char debugMsg[512];
@@ -802,24 +1073,30 @@ bool InitD3D12(HWND hwnd) {
               simpleShaderPath.c_str());
     OutputDebugStringA(debugMsg);
   }
-  hr = D3DCompileFromFile(simpleShaderPath.c_str(), nullptr,
-                          D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSMain", "vs_5_0",
-                          0, 0, &vsBlob, &error);
-  if (FAILED(hr) && error)
-    OutputDebugStringA((char *)error->GetBufferPointer());
+  try {
+    vsBlob = g_dxcHelper.Compile(simpleShaderPath, L"VSMain", L"vs_6_0");
+  } catch (const std::exception &e) {
+    FILE *log = nullptr;
+    if (fopen_s(&log, "startup.log", "a") == 0 && log) {
+      fprintf(log, "InitD3D12: VS compile failed (DXC) for %ls: %s\n", simpleShaderPath.c_str(), e.what());
+      fclose(log);
+    }
+    return false;
+  }
+  try {
+    psBlob = g_dxcHelper.Compile(simpleShaderPath, L"PSMain", L"ps_6_0");
+  } catch (const std::exception &e) {
+    FILE *log = nullptr;
+    if (fopen_s(&log, "startup.log", "a") == 0 && log) {
+      fprintf(log, "InitD3D12: PS compile failed (DXC) for %ls: %s\n", simpleShaderPath.c_str(), e.what());
+      fclose(log);
+    }
+    return false;
+  }
 
-  ThrowIfFailed(hr);
-  hr = D3DCompileFromFile(simpleShaderPath.c_str(), nullptr,
-                          D3D_COMPILE_STANDARD_FILE_INCLUDE, "PSMain", "ps_5_0",
-                          0, 0, &psBlob, &error);
-  if (FAILED(hr) && error)
-    OutputDebugStringA((char *)error->GetBufferPointer());
-  ThrowIfFailed(hr);
-
-  // --- Compile mesh PBR shaders (full vertex layout + PBR material pixel
-  // shader) ---
-  ComPtr<ID3DBlob> vsMeshBlob;
-  ComPtr<ID3DBlob> psMeshBlob;
+  // --- Compile mesh PBR shaders (full vertex layout + PBR material pixel shader) using DXC (SM6) ---
+  ComPtr<IDxcBlob> vsMeshBlob;
+  ComPtr<IDxcBlob> psMeshBlob;
   std::wstring pbrShaderPath = FindShaderFile(L"shaders\\pbr_mesh.hlsl");
   {
     char debugMsg[512];
@@ -827,18 +1104,26 @@ bool InitD3D12(HWND hwnd) {
               pbrShaderPath.c_str());
     OutputDebugStringA(debugMsg);
   }
-  hr = D3DCompileFromFile(pbrShaderPath.c_str(), nullptr,
-                          D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSMainMesh",
-                          "vs_5_0", 0, 0, &vsMeshBlob, &error);
-  if (FAILED(hr) && error)
-    OutputDebugStringA((char *)error->GetBufferPointer());
-  ThrowIfFailed(hr);
-  hr = D3DCompileFromFile(pbrShaderPath.c_str(), nullptr,
-                          D3D_COMPILE_STANDARD_FILE_INCLUDE, "PSMainMesh",
-                          "ps_5_0", 0, 0, &psMeshBlob, &error);
-  if (FAILED(hr) && error)
-    OutputDebugStringA((char *)error->GetBufferPointer());
-  ThrowIfFailed(hr);
+  try {
+    vsMeshBlob = g_dxcHelper.Compile(pbrShaderPath, L"VSMainMesh", L"vs_6_0");
+  } catch (const std::exception &e) {
+    FILE *log = nullptr;
+    if (fopen_s(&log, "startup.log", "a") == 0 && log) {
+      fprintf(log, "InitD3D12: VS compile failed (DXC) for %ls: %s\n", pbrShaderPath.c_str(), e.what());
+      fclose(log);
+    }
+    return false;
+  }
+  try {
+    psMeshBlob = g_dxcHelper.Compile(pbrShaderPath, L"PSMainMesh", L"ps_6_0");
+  } catch (const std::exception &e) {
+    FILE *log = nullptr;
+    if (fopen_s(&log, "startup.log", "a") == 0 && log) {
+      fprintf(log, "InitD3D12: PS compile failed (DXC) for %ls: %s\n", pbrShaderPath.c_str(), e.what());
+      fclose(log);
+    }
+    return false;
+  }
 
   // --- Create PSO ---
   D3D12_INPUT_ELEMENT_DESC inputElementDescs[] = {
@@ -943,6 +1228,16 @@ bool InitD3D12(HWND hwnd) {
   // uploads
   Asset::Initialize(g_device.Get(), g_commandQueue.Get());
 
+  // Log: reached post-Create pipeline initialization
+  {
+    FILE *log = nullptr;
+    fopen_s(&log, "startup.log", "a");
+    if (log) {
+      fprintf(log, "InitD3D12: Post-pipeline initialization reached\n");
+      fclose(log);
+    }
+  }
+
   // --- Create a simple vertex buffer in upload heap ---
   struct Vertex {
     float pos[3];
@@ -1038,6 +1333,38 @@ bool InitD3D12(HWND hwnd) {
       D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
       IID_PPV_ARGS(&g_materialConstantBuffer)));
 
+  // Allocate camera constant buffer (upload heap)
+  {
+    const UINT64 camCbSize = (sizeof(CameraCB) + 255) & ~255;
+    D3D12_RESOURCE_DESC cbDesc = {};
+    cbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    cbDesc.Width = camCbSize;
+    cbDesc.Height = 1;
+    cbDesc.DepthOrArraySize = 1;
+    cbDesc.MipLevels = 1;
+    cbDesc.SampleDesc.Count = 1;
+    cbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    ThrowIfFailed(g_device->CreateCommittedResource(&uploadHeapProps, D3D12_HEAP_FLAG_NONE, &cbDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&g_cameraConstantBuffer)));
+
+    // Initialize with default camera
+    UINT8 *pCamData = nullptr;
+    D3D12_RANGE readRange = {0, 0};
+    ThrowIfFailed(g_cameraConstantBuffer->Map(0, &readRange, reinterpret_cast<void **>(&pCamData)));
+    memcpy(pCamData, &g_cameraData, sizeof(g_cameraData));
+    g_cameraConstantBuffer->Unmap(0, nullptr);
+  }
+
+  // Log successful InitD3D12 completion
+  {
+    FILE *log = nullptr;
+    if (fopen_s(&log, "startup.log", "a") == 0 && log) {
+      fprintf(log, "InitD3D12: Completed OK (returning true)\n");
+      fclose(log);
+    }
+  }
+
   return true;
 }
 
@@ -1082,10 +1409,192 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
 
   ShowWindow(hwnd, nCmdShow);
 
+  // Log that we showed the window
+  FILE *logShow = nullptr;
+  if (fopen_s(&logShow, "startup.log", "a") == 0 && logShow) {
+    fprintf(logShow, "ShowWindow called\n");
+    fclose(logShow);
+  }
+
   if (!InitD3D12(hwnd)) {
     MessageBoxA(nullptr, "Failed to initialize D3D12", "Error",
                 MB_OK | MB_ICONERROR);
     return -1;
+  }
+
+  // Log successful D3D12 initialization
+  FILE *logInit = nullptr;
+  if (fopen_s(&logInit, "startup.log", "a") == 0 && logInit) {
+    fprintf(logInit, "InitD3D12 returned OK\n");
+    fclose(logInit);
+  }
+
+  // Auto-load sample glTF at startup (for automated DXR testing)
+  try {
+    const std::string samplePath = "assets/sample.gltf";
+    if (fs::exists(samplePath)) {
+      std::vector<Asset::GpuMesh> meshes;
+      std::vector<Asset::Material> materials;
+      std::vector<Asset::Texture> textures;
+      bool ok = Asset::LoadGltf(samplePath, meshes, &materials, &textures);
+      FILE *logAuto = nullptr;
+      if (fopen_s(&logAuto, "startup.log", "a") == 0 && logAuto) {
+        if (!ok) {
+          fprintf(logAuto, "AutoLoad: failed to load %s\n", samplePath.c_str());
+        } else {
+          fprintf(logAuto, "AutoLoad: loaded %s (meshes=%zu, materials=%zu, textures=%zu)\n",
+                  samplePath.c_str(), meshes.size(), materials.size(), textures.size());
+        }
+        fclose(logAuto);
+      }
+
+      if (ok) {
+        size_t meshBase = g_loadedMeshes.size();
+        size_t materialBase = g_loadedMaterials.size();
+        size_t textureBase = g_loadedTextures.size();
+
+        g_loadedMeshes.insert(g_loadedMeshes.end(), meshes.begin(), meshes.end());
+        g_loadedMaterials.insert(g_loadedMaterials.end(), materials.begin(), materials.end());
+        g_loadedTextures.insert(g_loadedTextures.end(), textures.begin(), textures.end());
+
+        if (!textures.empty()) {
+          // Allocate persistent descriptors from frame 0
+          DescriptorAllocation alloc = g_cbvSrvAllocator.Allocate(0, (UINT)textures.size());
+          if (g_textureDescriptorCount == 0) {
+            g_texturesGpuStart = alloc.gpu;
+          }
+          for (size_t i = 0; i < textures.size(); ++i) {
+            D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = alloc.cpu;
+            cpuHandle.ptr += i * g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+            const Asset::Texture &tex = textures[i];
+            if (tex.resource) {
+              D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+              srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+              srvDesc.Format = tex.format;
+              srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+              srvDesc.Texture2D.MipLevels = tex.mipLevels;
+              g_device->CreateShaderResourceView(tex.resource.Get(), &srvDesc, cpuHandle);
+            }
+          }
+          g_textureDescriptorCount += (UINT)textures.size();
+        }
+
+        // Rebuild AS to exercise DXR path
+        FILE *logBuild = nullptr;
+        if (fopen_s(&logBuild, "startup.log", "a") == 0 && logBuild) {
+          fprintf(logBuild, "AutoLoad: calling BuildAccelerationStructures()\n");
+          fclose(logBuild);
+        }
+        BuildAccelerationStructures();
+      }
+    } else {
+      FILE *logNoSample = nullptr;
+      if (fopen_s(&logNoSample, "startup.log", "a") == 0 && logNoSample) {
+        fprintf(logNoSample, "AutoLoad: %s not found - creating synthetic test mesh\n", "assets/sample.gltf");
+        fclose(logNoSample);
+      }
+
+      // Create a cube mesh (centered at origin, size 1.0) to exercise TLAS/DispatchRays
+      try {
+        Asset::GpuMesh gm;
+        Asset::Vertex cubeVerts[8] = {
+            {{-0.5f, -0.5f, -0.5f}, {0,0,-1}, {1,0,0,1}, {0.0f, 0.0f}},
+            {{ 0.5f, -0.5f, -0.5f}, {0,0,-1}, {1,0,0,1}, {1.0f, 0.0f}},
+            {{ 0.5f,  0.5f, -0.5f}, {0,0,-1}, {1,0,0,1}, {1.0f, 1.0f}},
+            {{-0.5f,  0.5f, -0.5f}, {0,0,-1}, {1,0,0,1}, {0.0f, 1.0f}},
+
+            {{-0.5f, -0.5f,  0.5f}, {0,0,1}, {1,0,0,1}, {0.0f, 0.0f}},
+            {{ 0.5f, -0.5f,  0.5f}, {0,0,1}, {1,0,0,1}, {1.0f, 0.0f}},
+            {{ 0.5f,  0.5f,  0.5f}, {0,0,1}, {1,0,0,1}, {1.0f, 1.0f}},
+            {{-0.5f,  0.5f,  0.5f}, {0,0,1}, {1,0,0,1}, {0.0f, 1.0f}},
+        };
+        // 12 triangles (36 indices)
+        UINT indices[36] = {
+          // back face
+          0,1,2, 0,2,3,
+          // front face
+          4,6,5, 4,7,6,
+          // left
+          4,0,3, 4,3,7,
+          // right
+          1,5,6, 1,6,2,
+          // bottom
+          4,5,1, 4,1,0,
+          // top
+          3,2,6, 3,6,7
+        };
+
+        D3D12_HEAP_PROPERTIES heapProps = {};
+        heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+        D3D12_RESOURCE_DESC vbDesc = {};
+        vbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        vbDesc.Width = sizeof(cubeVerts);
+        vbDesc.Height = 1;
+        vbDesc.DepthOrArraySize = 1;
+        vbDesc.MipLevels = 1;
+        vbDesc.SampleDesc.Count = 1;
+        vbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+        ThrowIfFailed(g_device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &vbDesc,
+                                                       D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                                       IID_PPV_ARGS(&gm.vertexBuffer)));
+
+        // copy vertex data
+        UINT8 *pData = nullptr;
+        D3D12_RANGE readRange = {0,0};
+        ThrowIfFailed(gm.vertexBuffer->Map(0, &readRange, reinterpret_cast<void **>(&pData)));
+        memcpy(pData, cubeVerts, sizeof(cubeVerts));
+        gm.vertexBuffer->Unmap(0, nullptr);
+
+        gm.vbView.BufferLocation = gm.vertexBuffer->GetGPUVirtualAddress();
+        gm.vbView.StrideInBytes = sizeof(Asset::Vertex);
+        gm.vbView.SizeInBytes = sizeof(cubeVerts);
+
+        D3D12_RESOURCE_DESC ibDesc = vbDesc;
+        ibDesc.Width = sizeof(indices);
+        ThrowIfFailed(g_device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &ibDesc,
+                                                       D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                                       IID_PPV_ARGS(&gm.indexBuffer)));
+        pData = nullptr;
+        ThrowIfFailed(gm.indexBuffer->Map(0, &readRange, reinterpret_cast<void **>(&pData)));
+        memcpy(pData, indices, sizeof(indices));
+        gm.indexBuffer->Unmap(0, nullptr);
+
+        gm.ibView.BufferLocation = gm.indexBuffer->GetGPUVirtualAddress();
+        gm.ibView.Format = DXGI_FORMAT_R32_UINT;
+        gm.ibView.SizeInBytes = sizeof(indices);
+
+        gm.vertexCount = (UINT)std::size(cubeVerts);
+        gm.indexCount = (UINT)std::size(indices);
+        gm.materialIndex = -1;
+
+        g_loadedMeshes.push_back(gm);
+
+        FILE *logSynth = nullptr;
+        if (fopen_s(&logSynth, "startup.log", "a") == 0 && logSynth) {
+          fprintf(logSynth, "AutoLoad: Added synthetic cube mesh\n");
+          fclose(logSynth);
+        }
+
+        // Build AS for synthetic mesh
+        BuildAccelerationStructures();
+
+      } catch (const std::exception &e2) {
+        FILE *logErr = nullptr;
+        if (fopen_s(&logErr, "startup.log", "a") == 0 && logErr) {
+          fprintf(logErr, "AutoLoad: exception creating synthetic mesh: %s\n", e2.what());
+          fclose(logErr);
+        }
+      }
+    }
+  } catch (const std::exception &e) {
+    FILE *logEx = nullptr;
+    if (fopen_s(&logEx, "startup.log", "a") == 0 && logEx) {
+      fprintf(logEx, "AutoLoad: exception: %s\n", e.what());
+      fclose(logEx);
+    }
   }
 
   // Basic message loop + simple render
@@ -1151,6 +1660,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
         ID3D12DescriptorHeap *heaps[] = {g_uavHeap.Get()};
         dxrList->SetDescriptorHeaps(1, heaps);
         dxrList->SetComputeRootDescriptorTable(1, g_outputUAVGpuHandle);
+
+        // Set camera constant buffer view (root parameter 2)
+        if (g_cameraConstantBuffer) {
+          dxrList->SetComputeRootConstantBufferView(2, g_cameraConstantBuffer->GetGPUVirtualAddress());
+        }
 
         D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
         dispatchDesc.RayGenerationShaderRecord.StartAddress =
@@ -1313,11 +1827,113 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     return false;
   };
 
+  // Log entering main loop
+  {
+    FILE *logMain = nullptr;
+    if (fopen_s(&logMain, "startup.log", "a") == 0 && logMain) {
+      fprintf(logMain, "Entering main loop\n");
+      fclose(logMain);
+    }
+  }
+
+  // Setup timing for camera movement
+  static auto prevTime = std::chrono::high_resolution_clock::now();
+
   while (msg.message != WM_QUIT) {
     if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
       TranslateMessage(&msg);
       DispatchMessage(&msg);
       continue;
+    }
+
+    // Compute delta time
+    auto now = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<float> dtDur = now - prevTime;
+    float dt = dtDur.count();
+    prevTime = now;
+
+    // Handle mouse rotation when RMB is pressed
+    if (GetAsyncKeyState(VK_RBUTTON) & 0x8000) {
+      POINT curPos;
+      GetCursorPos(&curPos);
+      ScreenToClient(g_hwnd, &curPos);
+      if (!g_mouseCaptured) {
+        g_prevMousePos = curPos;
+        g_mouseCaptured = true;
+      }
+      int dx = curPos.x - g_prevMousePos.x;
+      int dy = curPos.y - g_prevMousePos.y;
+      const float sensitivity = 0.12f; // degrees per pixel
+      g_camYaw += dx * sensitivity * (3.14159265f / 180.0f);
+      // Inverted Y: subtract dy so moving mouse up looks up
+      g_camPitch -= dy * sensitivity * (3.14159265f / 180.0f);
+      // clamp pitch
+      g_camPitch = max(-1.5f, min(1.5f, g_camPitch));
+      g_prevMousePos = curPos;
+    } else {
+      // release capture
+      g_mouseCaptured = false;
+      GetCursorPos(&g_prevMousePos);
+      ScreenToClient(g_hwnd, &g_prevMousePos);
+    }
+
+    // Movement: WASD
+    float moveSpeed = g_camSpeed;
+    if (GetAsyncKeyState(VK_SHIFT) & 0x8000)
+      moveSpeed *= 3.0f;
+
+    // Build forward/right vectors
+    Vec3 camF = {g_cameraData.forward[0], g_cameraData.forward[1], g_cameraData.forward[2]};
+    Vec3 camU = {g_cameraData.up[0], g_cameraData.up[1], g_cameraData.up[2]};
+    // rotate forward by yaw/pitch
+    {
+      float cp = cosf(g_camPitch);
+      float sp = sinf(g_camPitch);
+      float cy = cosf(g_camYaw);
+      float sy = sinf(g_camYaw);
+      camF.x = cp * sy;
+      camF.y = sp;
+      camF.z = cp * -cy;
+    }
+    // compute right
+    Vec3 camR = { camF.z * camU.y - camF.y * camU.z,
+                  camF.x * camU.z - camF.z * camU.x,
+                  camF.y * camU.x - camF.x * camU.y };
+    // normalize
+    auto normalize3 = [](Vec3 &v){ float l = sqrtf(v.x*v.x+v.y*v.y+v.z*v.z); if (l>0.00001f){ v.x/=l; v.y/=l; v.z/=l;} };
+    normalize3(camF); normalize3(camR);
+
+    Vec3 move = {0,0,0};
+    // W/S forward/back
+    if (GetAsyncKeyState('W') & 0x8000) { move.x += camF.x; move.y += camF.y; move.z += camF.z; }
+    if (GetAsyncKeyState('S') & 0x8000) { move.x -= camF.x; move.y -= camF.y; move.z -= camF.z; }
+    // Swapped: A now moves RIGHT, D now moves LEFT
+    if (GetAsyncKeyState('A') & 0x8000) { move.x += camR.x; move.y += camR.y; move.z += camR.z; }
+    if (GetAsyncKeyState('D') & 0x8000) { move.x -= camR.x; move.y -= camR.y; move.z -= camR.z; }
+    // Vertical movement: E up, Q down
+    if (GetAsyncKeyState('E') & 0x8000) { move.x += camU.x; move.y += camU.y; move.z += camU.z; }
+    if (GetAsyncKeyState('Q') & 0x8000) { move.x -= camU.x; move.y -= camU.y; move.z -= camU.z; }
+
+    if (move.x != 0 || move.y != 0 || move.z != 0) {
+      normalize3(move);
+      g_cameraData.pos[0] += move.x * moveSpeed * dt;
+      g_cameraData.pos[1] += move.y * moveSpeed * dt;
+      g_cameraData.pos[2] += move.z * moveSpeed * dt;
+    }
+
+    // Update camera forward from yaw/pitch
+    g_cameraData.forward[0] = (cosf(g_camPitch) * sinf(g_camYaw));
+    g_cameraData.forward[1] = sinf(g_camPitch);
+    g_cameraData.forward[2] = (cosf(g_camPitch) * -cosf(g_camYaw));
+
+    // Update camera CB on GPU
+    if (g_cameraConstantBuffer) {
+      UINT8 *pCam = nullptr;
+      D3D12_RANGE readRange = {0,0};
+      if (SUCCEEDED(g_cameraConstantBuffer->Map(0, &readRange, reinterpret_cast<void**>(&pCam)))) {
+        memcpy(pCam, &g_cameraData, sizeof(g_cameraData));
+        g_cameraConstantBuffer->Unmap(0, nullptr);
+      }
     }
 
     // Start ImGui frame
