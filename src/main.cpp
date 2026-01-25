@@ -24,7 +24,6 @@
 #include <vector>
 #include <chrono>
 #include <algorithm>
-#include <fstream>
 
 // Forward-declare ImGui Win32 WndProc handler (imgui_impl_win32.h documents
 // this should be declared by user)
@@ -1448,69 +1447,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
         }
         fclose(logAuto);
       }
-
-      if (!ok) {
-        // Attempt to create a GLB programmatically and retry load
-        try {
-          FILE *logg = nullptr; if (fopen_s(&logg, "startup.log", "a") == 0 && logg) { fprintf(logg, "AutoLoad: creating programmatic assets/sample.glb\n"); fclose(logg); }
-          std::string glbPath = "assets/sample.glb";
-
-          // JSON chunk (padded to 4 bytes)
-          std::string json = R"({"asset":{"version":"2.0"},"buffers":[{"byteLength":44}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":6}],"accessors":[{"bufferView":0,"byteOffset":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"byteOffset":0,"componentType":5123,"count":3,"type":"SCALAR"}],"meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1,"mode":4}]}],"nodes":[{"mesh":0}],"scenes":[{"nodes":[0]}],"scene":0})";
-          while (json.size() % 4 != 0) json.push_back(' ');
-
-          // Build BIN buffer: positions (3 verts) + 3 uint16 indices, pad to 4
-          std::vector<uint8_t> bin;
-          bin.reserve(44);
-          auto pushFloat = [&](float f){ uint8_t *p = reinterpret_cast<uint8_t*>(&f); bin.insert(bin.end(), p, p+4); };
-          pushFloat(-0.5f); pushFloat(-0.5f); pushFloat(0.0f);
-          pushFloat(0.5f); pushFloat(-0.5f); pushFloat(0.0f);
-          pushFloat(0.0f); pushFloat(0.5f); pushFloat(0.0f);
-          uint16_t i0=0,i1=1,i2=2;
-          bin.push_back((uint8_t)(i0 & 0xFF)); bin.push_back((uint8_t)((i0>>8)&0xFF));
-          bin.push_back((uint8_t)(i1 & 0xFF)); bin.push_back((uint8_t)((i1>>8)&0xFF));
-          bin.push_back((uint8_t)(i2 & 0xFF)); bin.push_back((uint8_t)((i2>>8)&0xFF));
-          while (bin.size() % 4 != 0) bin.push_back(0);
-
-          std::ofstream of(glbPath, std::ios::binary);
-          if (of) {
-            uint32_t magic = 0x46546C67; // 'glTF'
-            uint32_t version = 2;
-            uint32_t length = 12 + 8 + (uint32_t)json.size() + 8 + (uint32_t)bin.size();
-            of.write(reinterpret_cast<const char*>(&magic), 4);
-            of.write(reinterpret_cast<const char*>(&version), 4);
-            of.write(reinterpret_cast<const char*>(&length), 4);
-
-            uint32_t jsonLen = (uint32_t)json.size();
-            uint32_t jsonType = 0x4E4F534A; // 'JSON'
-            of.write(reinterpret_cast<const char*>(&jsonLen), 4);
-            of.write(reinterpret_cast<const char*>(&jsonType), 4);
-            of.write(json.data(), json.size());
-
-            uint32_t binLen = (uint32_t)bin.size();
-            uint32_t binType = 0x004E4942; // 'BIN\0'
-            of.write(reinterpret_cast<const char*>(&binLen), 4);
-            of.write(reinterpret_cast<const char*>(&binType), 4);
-            of.write(reinterpret_cast<const char*>(bin.data()), bin.size());
-
-            of.close();
-          }
-
-          // Retry loading GLB
-          std::vector<Asset::GpuMesh> meshes2; std::vector<Asset::Material> materials2; std::vector<Asset::Texture> textures2;
-          bool ok2 = Asset::LoadGltf(glbPath, meshes2, &materials2, &textures2);
-          FILE *log2 = nullptr; if (fopen_s(&log2, "startup.log", "a") == 0 && log2) { fprintf(log2, "AutoLoad: glb load returned %d (meshes=%zu)\n", ok2, meshes2.size()); fclose(log2); }
-          if (ok2) {
-            g_loadedMeshes.insert(g_loadedMeshes.end(), meshes2.begin(), meshes2.end());
-            g_loadedMaterials.insert(g_loadedMaterials.end(), materials2.begin(), materials2.end());
-            g_loadedTextures.insert(g_loadedTextures.end(), textures2.begin(), textures2.end());
-            BuildAccelerationStructures();
-          }
-        } catch (const std::exception &e3) {
-          FILE *loge = nullptr; if (fopen_s(&loge, "startup.log", "a") == 0 && loge) { fprintf(loge, "AutoLoad: exception creating glb: %s\n", e3.what()); fclose(loge); }
-        }
-      }
-
 
       if (ok) {
         size_t meshBase = g_loadedMeshes.size();

@@ -141,31 +141,11 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
     std::string err;
     std::string warn;
 
-    bool ret = false;
-    // Choose ASCII or Binary loader based on file extension
-    std::string ext;
-    size_t dot = path.find_last_of('.');
-    if (dot != std::string::npos) {
-        ext = path.substr(dot + 1);
-        for (char &c : ext) c = (char)tolower(c);
-    }
-    if (ext == "glb") {
-        ret = loader.LoadBinaryFromFile(&model, &err, &warn, path);
-    } else {
-        ret = loader.LoadASCIIFromFile(&model, &err, &warn, path);
-    }
-
-    if (!warn.empty()) {
-        OutputDebugStringA(warn.c_str());
-        FILE *log = nullptr; if (fopen_s(&log, "startup.log", "a")==0 && log) { fprintf(log, "tinygltf warn: %s\n", warn.c_str()); fclose(log); }
-    }
-    if (!err.empty()) {
-        OutputDebugStringA(err.c_str());
-        FILE *log = nullptr; if (fopen_s(&log, "startup.log", "a")==0 && log) { fprintf(log, "tinygltf err: %s\n", err.c_str()); fclose(log); }
-    }
+    bool ret = loader.LoadASCIIFromFile(&model, &err, &warn, path);
+    if (!warn.empty()) OutputDebugStringA(warn.c_str());
+    if (!err.empty()) OutputDebugStringA(err.c_str());
     if (!ret) {
         OutputDebugStringA("tinygltf: Failed to load glTF file\n");
-        FILE *log = nullptr; if (fopen_s(&log, "startup.log", "a")==0 && log) { fprintf(log, "tinygltf: Failed to load glTF file %s\n", path.c_str()); fclose(log); }
         return false;
     }
 
