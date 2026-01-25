@@ -8,7 +8,6 @@
 #include <windows.h>
 #include <wrl.h>
 
-
 // Try to include dxcapi.h, usually in Windows SDK.
 // If this fails, we'd need to provide the full interface definition.
 #include <dxcapi.h>
@@ -70,8 +69,10 @@ public:
 
     // Basic arguments
     args.push_back(filename.c_str());
-    args.push_back(L"-E");
-    args.push_back(entryPoint.c_str());
+    if (!entryPoint.empty()) {
+      args.push_back(L"-E");
+      args.push_back(entryPoint.c_str());
+    }
     args.push_back(L"-T");
     args.push_back(profiles.c_str());
 
@@ -81,6 +82,12 @@ public:
     args.push_back(L"-Qembed_debug");
     args.push_back(L"-Od");
 #endif
+
+    // Add defines
+    for (const auto &def : defines) {
+      args.push_back(L"-D");
+      args.push_back(def.c_str());
+    }
 
     // Load source
     ComPtr<IDxcBlobEncoding> pSource;
@@ -94,14 +101,15 @@ public:
     sourceBuffer.Encoding = DXC_CP_ACP; // Assume ANSI/UTF-8
 
     ComPtr<IDxcResult> pResults;
-    m_compiler->Compile(&sourceBuffer, args.data(), (UINT32)args.size(),
-                        m_includeHandler.Get(), IID_PPV_ARGS(&pResults));
+
+    HRESULT compileHr =
+        m_compiler->Compile(&sourceBuffer, args.data(), (UINT32)args.size(),
+                            m_includeHandler.Get(), IID_PPV_ARGS(&pResults));
 
     ComPtr<IDxcBlobUtf8> pErrors;
     pResults->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&pErrors), nullptr);
     if (pErrors && pErrors->GetStringLength() > 0) {
       OutputDebugStringA((char *)pErrors->GetStringPointer());
-      // Also print to stdout/stderr
       std::cerr << "Shader compile errors: "
                 << (char *)pErrors->GetStringPointer() << std::endl;
     }

@@ -144,10 +144,19 @@ void CreateRayTracingPipeline() {
 
   // 1. Compile Shader
   OutputDebugStringA("Compiling Ray Tracing Shaders...\n");
+
+  FILE *log = nullptr;
+  fopen_s(&log, "startup.log", "a");
+  if (log) {
+    fprintf(log, "CreateRT: Compiling shader...\n");
+    fclose(log);
+  }
+
   ComPtr<IDxcBlob> shaderBlob;
   try {
     shaderBlob =
         g_dxcHelper.Compile(L"shaders/raytracing.hlsl", L"", L"lib_6_3", {});
+
   } catch (const std::exception &e) {
     OutputDebugStringA("Shader Compilation Failed: ");
     OutputDebugStringA(e.what());
@@ -259,8 +268,21 @@ void CreateRayTracingPipeline() {
   stateObjDesc.NumSubobjects = (UINT)subobjects.size();
   stateObjDesc.pSubobjects = subobjects.data();
 
+  fopen_s(&log, "startup.log", "a");
+  if (log) {
+    fprintf(log, "CreateRT: CreateStateObject...\n");
+    fclose(log);
+  }
+
   ThrowIfFailed(g_dxrDevice->CreateStateObject(&stateObjDesc,
                                                IID_PPV_ARGS(&g_rtStateObject)));
+
+  fopen_s(&log, "startup.log", "a");
+  if (log) {
+    fprintf(log, "CreateRT: StateObject OK\n");
+    fclose(log);
+  }
+
   OutputDebugStringA("Ray Tracing Pipeline Created!\n");
 
   // 4. Create Shader Table
@@ -271,6 +293,22 @@ void CreateRayTracingPipeline() {
   void *rayGenId = properties->GetShaderIdentifier(L"RayGen");
   void *missId = properties->GetShaderIdentifier(L"Miss");
   void *hitGroupId = properties->GetShaderIdentifier(L"HitGroup");
+
+  fopen_s(&log, "startup.log", "a");
+  if (log) {
+    fprintf(log, "CreateRT: IDs retrieved: RG=%p, Ms=%p, HG=%p\n", rayGenId,
+            missId, hitGroupId);
+    fclose(log);
+  }
+
+  if (!rayGenId || !missId || !hitGroupId) {
+    fopen_s(&log, "startup.log", "a");
+    if (log) {
+      fprintf(log, "CreateRT: ERROR: One or more Shader IDs are null!\n");
+      fclose(log);
+    }
+    return;
+  }
 
   UINT shaderIdentifierSize = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
   g_shaderTableEntrySize = Align(shaderIdentifierSize,
@@ -476,27 +514,6 @@ void BuildAccelerationStructures() {
   OutputDebugStringA("DXR Acceleration Structures Built.\n");
 }
 
-inline void ThrowIfFailedEx(HRESULT hr, const char *file, int line) {
-  if (FAILED(hr)) {
-    char buf[512];
-    sprintf_s(buf, "HRESULT 0x%08x at %s:%d\n", static_cast<unsigned>(hr), file,
-              line);
-    OutputDebugStringA(buf);
-
-    // Write to log file for debugging
-    FILE *logFile = nullptr;
-    if (fopen_s(&logFile, "error.log", "a") == 0 && logFile) {
-      fprintf(logFile, "%s", buf);
-      fclose(logFile);
-    }
-
-    MessageBoxA(nullptr, buf, "Fatal Error", MB_OK | MB_ICONERROR);
-    ExitProcess(static_cast<UINT>(hr));
-  }
-}
-
-#define ThrowIfFailed(hr) ThrowIfFailedEx(hr, __FILE__, __LINE__)
-
 inline void TransitionResource(ID3D12GraphicsCommandList *cmdList,
                                ID3D12Resource *resource,
                                D3D12_RESOURCE_STATES before,
@@ -519,8 +536,9 @@ static std::wstring FindShaderFile(const wchar_t *relativePath) {
   std::vector<std::wstring> searchPaths;
   searchPaths.push_back(relativePath); // Current directory
   searchPaths.push_back(std::wstring(L"..\\..\\") +
-                        relativePath); // From build\Release\
-    searchPaths.push_back(std::wstring(L"..\\") + relativePath);      // From build\
+                        relativePath); // From build/Release/
+  searchPaths.push_back(std::wstring(L"..\\") +
+                        relativePath); // From build directory
 
   for (size_t i = 0; i < searchPaths.size(); ++i) {
     if (fs::exists(searchPaths[i])) {
@@ -567,43 +585,23 @@ static void GetHardwareAdapter(IDXGIFactory4 *pFactory,
 }
 
 bool InitD3D12(HWND hwnd) {
-  FILE *log = nullptr;
-  fopen_s(&log, "startup.log", "a");
-  if (log) {
-    fprintf(log, "InitD3D12 start\n");
-    fclose(log);
-  }
 
   g_hwnd = hwnd;
   UINT dxgiFactoryFlags = 0;
 
   EnableD3D12DebugLayer();
 
-  log = nullptr;
-  fopen_s(&log, "startup.log", "a");
-  if (log) {
-    fprintf(log, "After EnableD3D12DebugLayer\n");
-    fclose(log);
-  }
-
   ComPtr<IDXGIFactory4> factory;
   ThrowIfFailed(CreateDXGIFactory2(dxgiFactoryFlags, IID_PPV_ARGS(&factory)));
-
-  log = nullptr;
-  fopen_s(&log, "startup.log", "a");
-  if (log) {
-    fprintf(log, "After CreateDXGIFactory2\n");
-    fclose(log);
-  }
 
   // Try to find a hardware adapter that supports D3D12
   ComPtr<IDXGIAdapter1> hardwareAdapter;
   GetHardwareAdapter(factory.Get(), &hardwareAdapter);
 
-  log = nullptr;
+  FILE *log = nullptr;
   fopen_s(&log, "startup.log", "a");
   if (log) {
-    fprintf(log, "After GetHardwareAdapter\n");
+    fprintf(log, "InitD3D12: Hardware adapter obtained\n");
     fclose(log);
   }
 
@@ -611,12 +609,6 @@ bool InitD3D12(HWND hwnd) {
   if (hardwareAdapter) {
     hr = D3D12CreateDevice(hardwareAdapter.Get(), D3D_FEATURE_LEVEL_11_0,
                            IID_PPV_ARGS(&g_device));
-    log = nullptr;
-    fopen_s(&log, "startup.log", "a");
-    if (log) {
-      fprintf(log, "D3D12CreateDevice(hardwareAdapter) = 0x%08x\n", hr);
-      fclose(log);
-    }
   }
 
   // Check DXR Support
@@ -644,12 +636,7 @@ bool InitD3D12(HWND hwnd) {
     // Fall back to default adapter/device or WARP
     hr = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0,
                            IID_PPV_ARGS(&g_device));
-    log = nullptr;
-    fopen_s(&log, "startup.log", "a");
-    if (log) {
-      fprintf(log, "D3D12CreateDevice(nullptr) = 0x%08x\n", hr);
-      fclose(log);
-    }
+
     if (FAILED(hr)) {
       ComPtr<IDXGIAdapter> warpAdapter;
       ThrowIfFailed(factory->EnumWarpAdapter(IID_PPV_ARGS(&warpAdapter)));
@@ -658,46 +645,14 @@ bool InitD3D12(HWND hwnd) {
     }
   }
 
-  log = nullptr;
-  fopen_s(&log, "startup.log", "a");
-  if (log) {
-    fprintf(log, "Device created, about to create command queue\n");
-    fflush(log);
-    fclose(log);
-  }
-
   // Create command queue
   D3D12_COMMAND_QUEUE_DESC queueDesc = {};
   queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
   queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
 
-  log = nullptr;
-  fopen_s(&log, "startup.log", "a");
-  if (log) {
-    fprintf(log, "Before CreateCommandQueue, g_device = %p\n", g_device.Get());
-    fflush(log);
-    fclose(log);
-  }
-
   hr = g_device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&g_commandQueue));
 
-  log = nullptr;
-  fopen_s(&log, "startup.log", "a");
-  if (log) {
-    fprintf(log, "CreateCommandQueue returned 0x%08x\n", hr);
-    fflush(log);
-    fclose(log);
-  }
-
   ThrowIfFailed(hr);
-
-  log = nullptr;
-  fopen_s(&log, "startup.log", "a");
-  if (log) {
-    fprintf(log, "CommandQueue created successfully\n");
-    fflush(log);
-    fclose(log);
-  }
 
   // Create swap chain
   DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
@@ -836,13 +791,7 @@ bool InitD3D12(HWND hwnd) {
                                               IID_PPV_ARGS(&g_rootSignature)));
 
   // --- Compile simple shaders for demo triangle ---
-  log = nullptr;
-  fopen_s(&log, "startup.log", "a");
-  if (log) {
-    fprintf(log, "About to compile shaders\n");
-    fflush(log);
-    fclose(log);
-  }
+  // --- Compile simple shaders for demo triangle ---
 
   ComPtr<ID3DBlob> vsBlob;
   ComPtr<ID3DBlob> psBlob;
@@ -852,28 +801,12 @@ bool InitD3D12(HWND hwnd) {
     sprintf_s(debugMsg, "Loading simple shader from: %ls\n",
               simpleShaderPath.c_str());
     OutputDebugStringA(debugMsg);
-
-    log = nullptr;
-    fopen_s(&log, "startup.log", "a");
-    if (log) {
-      fprintf(log, "Shader path: %ls\n", simpleShaderPath.c_str());
-      fflush(log);
-      fclose(log);
-    }
   }
   hr = D3DCompileFromFile(simpleShaderPath.c_str(), nullptr,
                           D3D_COMPILE_STANDARD_FILE_INCLUDE, "VSMain", "vs_5_0",
                           0, 0, &vsBlob, &error);
   if (FAILED(hr) && error)
     OutputDebugStringA((char *)error->GetBufferPointer());
-
-  log = nullptr;
-  fopen_s(&log, "startup.log", "a");
-  if (log) {
-    fprintf(log, "VSMain compile returned 0x%08x\n", hr);
-    fflush(log);
-    fclose(log);
-  }
 
   ThrowIfFailed(hr);
   hr = D3DCompileFromFile(simpleShaderPath.c_str(), nullptr,
@@ -1159,6 +1092,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
   MSG msg = {};
 
   auto PopulateCommandList = [&]() {
+    FILE *log = nullptr;
+    fopen_s(&log, "frame.log", "a");
+    if (log) {
+      fprintf(log, "PopulateCommandList start\n");
+      fclose(log);
+    }
+
     // Reset per-frame command allocator and command list
     ThrowIfFailed(g_frameResources[g_frameIndex].commandAllocator->Reset());
     ThrowIfFailed(g_commandList->Reset(
@@ -1189,9 +1129,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
 
     // DXR Path
     if (g_rayTracingSupported && g_rtStateObject && g_tlas.result) {
+      log = nullptr;
+      fopen_s(&log, "frame.log", "a");
+      if (log) {
+        fprintf(log, "Entering DXR Path\n");
+        fclose(log);
+      }
       ComPtr<ID3D12GraphicsCommandList4> dxrList;
       if (SUCCEEDED(g_commandList.As(&dxrList))) {
         // 1. Dispatch Rays
+        log = nullptr;
+        fopen_s(&log, "frame.log", "a");
+        if (log) {
+          fprintf(log, "Setting Pipeline State\n");
+          fclose(log);
+        }
         dxrList->SetPipelineState1(g_rtStateObject.Get());
         dxrList->SetComputeRootSignature(g_rtGlobalRootSignature.Get());
         dxrList->SetComputeRootShaderResourceView(
@@ -1215,7 +1167,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
         dispatchDesc.Height = 720;
         dispatchDesc.Depth = 1;
 
+        log = nullptr;
+        fopen_s(&log, "frame.log", "a");
+        if (log) {
+          fprintf(log, "Calling DispatchRays\n");
+          fclose(log);
+        }
         dxrList->DispatchRays(&dispatchDesc);
+        log = nullptr;
+        fopen_s(&log, "frame.log", "a");
+        if (log) {
+          fprintf(log, "DispatchRays returned\n");
+          fclose(log);
+        }
 
         // 2. Copy to BackBuffer
         TransitionResource(dxrList.Get(), g_outputUAV.Get(),
@@ -1335,7 +1299,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     if (!InitD3D12(g_hwnd)) {
       MessageBoxA(nullptr, "Failed to recreate D3D12 device.",
                   "Device Recovery", MB_OK | MB_ICONERROR);
-      ExitProcess(-1);
+      ExitProcess(static_cast<UINT>(-1));
     }
   };
 
@@ -1585,91 +1549,28 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
 
     PopulateCommandList();
 
-    // We can QI.
-    ComPtr<ID3D12GraphicsCommandList4> dxrList;
-    if (SUCCEEDED(g_commandList.As(&dxrList))) {
-      // Bind State
-      dxrList->SetPipelineState1(g_rtStateObject.Get());
-      dxrList->SetComputeRootSignature(g_rtGlobalRootSignature.Get());
+    ID3D12CommandList *ppCommandLists[] = {g_commandList.Get()};
+    g_commandQueue->ExecuteCommandLists(_countof(ppCommandLists),
+                                        ppCommandLists);
 
-      // Bind Global Root parameters
-      // t0: TLAS
-      dxrList->SetComputeRootShaderResourceView(
-          0, g_tlas.result->GetGPUVirtualAddress());
-      // u0: Output (Descriptor Table)
-      ID3D12DescriptorHeap *heaps[] = {g_uavHeap.Get()};
-      dxrList->SetDescriptorHeaps(1, heaps);
-      dxrList->SetComputeRootDescriptorTable(1, g_outputUAVGpuHandle);
+    ThrowIfFailed(g_swapChain->Present(1, 0));
 
-      // Dispatch
-      D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
-      dispatchDesc.RayGenerationShaderRecord.StartAddress = g_rayGenShaderTable;
-      dispatchDesc.RayGenerationShaderRecord.SizeInBytes =
-          g_shaderTableEntrySize;
+    // Signal and increment the fence value.
+    const UINT64 currentFenceValue = g_fenceValues[g_frameIndex];
+    ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), currentFenceValue));
+    g_fenceValues[g_frameIndex]++;
 
-      dispatchDesc.MissShaderTable.StartAddress = g_missShaderTable;
-      dispatchDesc.MissShaderTable.SizeInBytes = g_shaderTableEntrySize;
-      dispatchDesc.MissShaderTable.StrideInBytes = g_shaderTableEntrySize;
-
-      dispatchDesc.HitGroupTable.StartAddress = g_hitGroupShaderTable;
-      dispatchDesc.HitGroupTable.SizeInBytes = g_shaderTableEntrySize;
-      dispatchDesc.HitGroupTable.StrideInBytes = g_shaderTableEntrySize;
-
-      dispatchDesc.Width = 1280;
-      dispatchDesc.Height = 720;
-      dispatchDesc.Depth = 1;
-
-      dxrList->DispatchRays(&dispatchDesc);
-
-      // Copy to Backbuffer
-      // Transition OutputUAV to CopySrc
-      TransitionResource(dxrList.Get(), g_outputUAV.Get(),
-                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                         D3D12_RESOURCE_STATE_COPY_SOURCE);
-      // Transition Backbuffer to CopyDest
-      TransitionResource(dxrList.Get(), g_renderTargets[g_frameIndex].Get(),
-                         D3D12_RESOURCE_STATE_PRESENT,
-                         D3D12_RESOURCE_STATE_COPY_DEST);
-
-      dxrList->CopyResource(g_renderTargets[g_frameIndex].Get(),
-                            g_outputUAV.Get());
-
-      // Transition Backbuffer to Present
-      TransitionResource(dxrList.Get(), g_renderTargets[g_frameIndex].Get(),
-                         D3D12_RESOURCE_STATE_COPY_DEST,
-                         D3D12_RESOURCE_STATE_PRESENT);
-
-      // Restore OutputUAV
-      TransitionResource(dxrList.Get(), g_outputUAV.Get(),
-                         D3D12_RESOURCE_STATE_COPY_SOURCE,
-                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    }
-  }
-  else {
-    // No DXR or not ready - Rasterization path handles it (already populated)
+    // Wait for previous frame
+    WaitForPreviousFrame();
   }
 
-  ID3D12CommandList *ppCommandLists[] = {g_commandList.Get()};
-  g_commandQueue->ExecuteCommandLists(_countof(ppCommandLists), ppCommandLists);
+  // Shutdown ImGui and cleanup
+  ImGui_ImplDX12_Shutdown();
+  ImGui_ImplWin32_Shutdown();
+  ImGui::DestroyContext();
 
-  ThrowIfFailed(g_swapChain->Present(1, 0));
+  // Cleanup fence event
+  CloseHandle(g_fenceEvent);
 
-  // Signal and increment the fence value.
-  const UINT64 currentFenceValue = g_fenceValues[g_frameIndex];
-  ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), currentFenceValue));
-  g_fenceValues[g_frameIndex]++;
-
-  // Wait for previous frame
-  WaitForPreviousFrame();
-}
-
-// Shutdown ImGui and cleanup
-ImGui_ImplDX12_Shutdown();
-ImGui_ImplWin32_Shutdown();
-ImGui::DestroyContext();
-
-// Cleanup fence event
-CloseHandle(g_fenceEvent);
-
-return 0;
+  return 0;
 }
