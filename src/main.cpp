@@ -189,9 +189,11 @@ void CreateRayTracingPipeline() {
 
   // 2. Create Global Root Signature
   // t0: TLAS
-  // u0: Usage Output (ensure u0 in shader matches)
+  // u0: Output UAV descriptor table
+  // t1-t16: Texture SRV descriptor table (16 texture slots)
+  // b0: Camera CBV
   {
-    D3D12_ROOT_PARAMETER params[3] = {};
+    D3D12_ROOT_PARAMETER params[4] = {};
     // t0 - TLAS
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
     params[0].Descriptor.ShaderRegister = 0;
@@ -210,14 +212,27 @@ void CreateRayTracingPipeline() {
     params[1].DescriptorTable.pDescriptorRanges = &uavRange;
     params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    // b0 - Camera CBV
-    params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-    params[2].Descriptor.ShaderRegister = 0;
-    params[2].Descriptor.RegisterSpace = 0;
+    // t1-t16 - texture SRV descriptor table (16 texture slots)
+    static D3D12_DESCRIPTOR_RANGE srvRange = {};
+    srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    srvRange.NumDescriptors = 16; // baseColor, metallicRoughness, normal, occlusion, emissive + extras
+    srvRange.BaseShaderRegister = 1; // Start at t1 (t0 is TLAS)
+    srvRange.RegisterSpace = 0;
+    srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[2].DescriptorTable.NumDescriptorRanges = 1;
+    params[2].DescriptorTable.pDescriptorRanges = &srvRange;
     params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
+    // b0 - Camera CBV
+    params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    params[3].Descriptor.ShaderRegister = 0;
+    params[3].Descriptor.RegisterSpace = 0;
+    params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
     D3D12_ROOT_SIGNATURE_DESC rootDesc = {};
-    rootDesc.NumParameters = 3;
+    rootDesc.NumParameters = 4;
     rootDesc.pParameters = params;
     rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
@@ -711,6 +726,142 @@ static void GetHardwareAdapter(IDXGIFactory4 *pFactory,
       adapter.CopyTo(ppAdapter);
       return;
     }
+  }
+}
+
+static void ExecuteCommandListAndWait(ID3D12GraphicsCommandList* cmdList)
+{
+    ThrowIfFailed(cmdList->Close());
+    ID3D12CommandList* lists[] = { cmdList };
+    g_commandQueue->ExecuteCommandLists(1, lists);
+    
+    // Wait for completion
+    ComPtr<ID3D12Fence> fence;
+    ThrowIfFailed(g_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
+    HANDLE event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+    ThrowIfFailed(g_commandQueue->Signal(fence.Get(), 1));
+    if (fence->GetCompletedValue() < 1) {
+        ThrowIfFailed(fence->SetEventOnCompletion(1, event));
+        WaitForSingleObject(event, INFINITE);
+    }
+    CloseHandle(event);
+}
+
+void CreateTestTexture() {
+  // Create a simple 2x2 checkerboard texture for testing
+  const UINT width = 2;
+  const UINT height = 2;
+  const UINT pixelSize = 4; // RGBA
+  BYTE textureData[width * height * pixelSize] = {
+    255, 0, 0, 255,    // Red
+    0, 255, 0, 255,    // Green
+    0, 0, 255, 255,    // Blue
+    255, 255, 0, 255   // Yellow
+  };
+
+  D3D12_HEAP_PROPERTIES uploadHeapProps = {};
+  uploadHeapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+  D3D12_RESOURCE_DESC uploadDesc = {};
+  uploadDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+  uploadDesc.Width = width * height * pixelSize;
+  uploadDesc.Height = 1;
+  uploadDesc.DepthOrArraySize = 1;
+  uploadDesc.MipLevels = 1;
+  uploadDesc.SampleDesc.Count = 1;
+  uploadDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+  ComPtr<ID3D12Resource> uploadBuffer;
+  ThrowIfFailed(g_device->CreateCommittedResource(&uploadHeapProps, D3D12_HEAP_FLAG_NONE, &uploadDesc,
+                                                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                                 IID_PPV_ARGS(&uploadBuffer)));
+
+  // Copy texture data to upload buffer
+  void* mappedData = nullptr;
+  uploadBuffer->Map(0, nullptr, &mappedData);
+  memcpy(mappedData, textureData, sizeof(textureData));
+  uploadBuffer->Unmap(0, nullptr);
+
+  // Create the texture resource
+  D3D12_HEAP_PROPERTIES defaultHeapProps = {};
+  defaultHeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+  D3D12_RESOURCE_DESC textureDesc = {};
+  textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+  textureDesc.Width = width;
+  textureDesc.Height = height;
+  textureDesc.DepthOrArraySize = 1;
+  textureDesc.MipLevels = 1;
+  textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+  textureDesc.SampleDesc.Count = 1;
+  textureDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+  ComPtr<ID3D12Resource> texture;
+  ThrowIfFailed(g_device->CreateCommittedResource(&defaultHeapProps, D3D12_HEAP_FLAG_NONE, &textureDesc,
+                                                 D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                 IID_PPV_ARGS(&texture)));
+
+  // Allocate descriptor for the texture
+  DescriptorAllocation alloc = g_cbvSrvAllocator.Allocate(0, 1);
+  if (g_textureDescriptorCount == 0) {
+    g_texturesGpuStart = alloc.gpu;
+  }
+
+  // Create SRV
+  D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+  srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+  srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+  srvDesc.Texture2D.MipLevels = 1;
+  g_device->CreateShaderResourceView(texture.Get(), &srvDesc, alloc.cpu);
+
+  // Copy from upload buffer to texture
+  ComPtr<ID3D12CommandAllocator> cmdAlloc;
+  ComPtr<ID3D12GraphicsCommandList> cmdList;
+  ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&cmdAlloc)));
+  ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, cmdAlloc.Get(), nullptr, IID_PPV_ARGS(&cmdList)));
+
+  D3D12_TEXTURE_COPY_LOCATION dst = {};
+  dst.pResource = texture.Get();
+  dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+  dst.SubresourceIndex = 0;
+
+  D3D12_TEXTURE_COPY_LOCATION src = {};
+  src.pResource = uploadBuffer.Get();
+  src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+  src.PlacedFootprint.Offset = 0;
+  src.PlacedFootprint.Footprint.Width = width;
+  src.PlacedFootprint.Footprint.Height = height;
+  src.PlacedFootprint.Footprint.Depth = 1;
+  src.PlacedFootprint.Footprint.RowPitch = width * pixelSize;
+  src.PlacedFootprint.Footprint.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+  cmdList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+
+  // Transition to shader resource
+  D3D12_RESOURCE_BARRIER barrier = {};
+  barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+  barrier.Transition.pResource = texture.Get();
+  barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+  barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+  cmdList->ResourceBarrier(1, &barrier);
+
+  ExecuteCommandListAndWait(cmdList.Get());
+
+  // Store the texture
+  Asset::Texture testTex;
+  testTex.resource = texture;
+  testTex.width = width;
+  testTex.height = height;
+  testTex.format = DXGI_FORMAT_R8G8B8A8_UNORM;
+  testTex.mipLevels = 1;
+  g_loadedTextures.push_back(testTex);
+  g_textureDescriptorCount = 1;
+
+  FILE *log = nullptr;
+  if (fopen_s(&log, "startup.log", "a") == 0 && log) {
+    fprintf(log, "CreateTestTexture: Created 2x2 checkerboard texture\n");
+    fclose(log);
   }
 }
 
@@ -1494,6 +1645,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
           g_textureDescriptorCount += (UINT)textures.size();
         }
 
+        // If no textures were loaded, create a simple 2x2 checkerboard texture for testing
+        if (textures.empty()) {
+          CreateTestTexture();
+        }
+
         // Rebuild AS to exercise DXR path
         FILE *logBuild = nullptr;
         if (fopen_s(&logBuild, "startup.log", "a") == 0 && logBuild) {
@@ -1675,9 +1831,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
         dxrList->SetDescriptorHeaps(1, heaps);
         dxrList->SetComputeRootDescriptorTable(1, g_outputUAVGpuHandle);
 
-        // Set camera constant buffer view (root parameter 2)
+        // Set texture descriptor table (root parameter 2) if textures are available
+        // if (g_textureDescriptorCount > 0) {
+        //     dxrList->SetComputeRootDescriptorTable(2, g_texturesGpuStart);
+        // }
+
+        // Set camera constant buffer view (root parameter 3)
         if (g_cameraConstantBuffer) {
-          dxrList->SetComputeRootConstantBufferView(2, g_cameraConstantBuffer->GetGPUVirtualAddress());
+          dxrList->SetComputeRootConstantBufferView(3, g_cameraConstantBuffer->GetGPUVirtualAddress());
         }
 
         D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
