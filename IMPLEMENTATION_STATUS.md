@@ -8,6 +8,7 @@
 - ✅ Texture loading: RGBA8 format with proper row pitch handling
 - ✅ BufferView validation to prevent crashes on invalid data
 - ✅ Support for 5 PBR texture types: baseColor, metallicRoughness, normal, occlusion, emissive
+- ✅ tinygltf integration is enabled by default (CMake option turned on). The loader now automatically uses the binary loader for `.glb` files when detected and will fetch the `tinygltf` header via FetchContent if not present on the system. A small programmatic `assets/sample.glb` is auto-generated at startup if `assets/sample.gltf` fails to load, enabling an out-of-the-box load test.
 
 ### PBR Material System
 - ✅ Material constant buffer with full PBR parameters

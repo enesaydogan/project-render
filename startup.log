@@ -4,7 +4,7 @@ InitD3D12: Hardware adapter obtained
 CreateRT: Compiling shader...
 CreateRT: CreateStateObject...
 CreateRT: StateObject OK
-CreateRT: IDs retrieved: RG=0000023D7D95A640, Ms=0000023D7D959D30, HG=0000023D7D959C90
+CreateRT: IDs retrieved: RG=000001CF6AEDBCA0, Ms=000001CF6AEDB0C0, HG=000001CF6AEDB110
 CreateRT: Shader table uploaded
 CreateRT: UAV descriptor heap created
 CreateRT: Output texture created
@@ -22,8 +22,12 @@ InitD3D12: per-frame command allocators created
 InitD3D12: Post-pipeline initialization reached
 InitD3D12: Completed OK (returning true)
 InitD3D12 returned OK
-AutoLoad: assets/sample.gltf not found - creating synthetic test mesh
-AutoLoad: Added synthetic cube mesh
+tinygltf err: Failed to decode 'uri' : data:application/octet-stream;base64,AAAAvwAAAL8AAAAAAAAPwAAAL8AAAAAAAAAD8AAAAAAQAAAgAAAAA= in Buffer
+
+tinygltf: Failed to load glTF file assets/sample.gltf
+AutoLoad: failed to load assets/sample.gltf
+AutoLoad: creating programmatic assets/sample.glb
+AutoLoad: glb load returned 1 (meshes=1)
 BuildAS: Entering BuildAccelerationStructures (meshes=1)
 BuildAS: Completed BuildAccelerationStructures
 Entering main loop

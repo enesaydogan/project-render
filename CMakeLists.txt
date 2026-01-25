@@ -47,7 +47,7 @@ add_library(asset_loader STATIC src/assets/asset_loader.cpp src/assets/asset_loa
 target_include_directories(asset_loader PUBLIC src/assets)
 
 # Optionally enable tinygltf support (install via vcpkg: `vcpkg install tinygltf`)
-option(USE_TINYGLTF "Enable tinygltf integration for glTF import (requires tinygltf headers)" OFF)
+option(USE_TINYGLTF "Enable tinygltf integration for glTF import (requires tinygltf headers)" ON)
 if (USE_TINYGLTF)
   # Try to locate tiny_gltf.h on the system include paths first
   find_path(TINYGLTF_INCLUDE_DIR NAMES tiny_gltf.h)
@@ -60,6 +60,18 @@ if (USE_TINYGLTF)
         find_path(TINYGLTF_INCLUDE_DIR NAMES tiny_gltf.h PATHS $ENV{VCPKG_ROOT}/installed/${CMAKE_HOST_SYSTEM_PROCESSOR}-windows/include NO_DEFAULT_PATH)
       endif()
     endif()
+  endif()
+
+  # If still not found, fetch tinygltf header-only repo with FetchContent
+  if (NOT TINYGLTF_INCLUDE_DIR)
+    message(STATUS "tiny_gltf.h not found on system; fetching tinygltf via FetchContent")
+    FetchContent_Declare(
+      tinygltf
+      GIT_REPOSITORY https://github.com/syoyo/tinygltf.git
+      GIT_TAG master
+    )
+    FetchContent_MakeAvailable(tinygltf)
+    set(TINYGLTF_INCLUDE_DIR ${tinygltf_SOURCE_DIR})
   endif()
 
   if (TINYGLTF_INCLUDE_DIR)
