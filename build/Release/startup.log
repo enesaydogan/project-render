@@ -2,28 +2,3 @@ Application starting...
 ShowWindow called
 InitD3D12: Hardware adapter obtained
 CreateRT: Compiling shader...
-CreateRT: CreateStateObject...
-CreateRT: StateObject OK
-CreateRT: IDs retrieved: RG=0000022971975830, Ms=0000022971974840, HG=0000022971974B60
-CreateRT: Shader table uploaded
-CreateRT: UAV descriptor heap created
-CreateRT: Output texture created
-CreateRT: UAV view created
-InitD3D12: CreateRayTracingPipeline finished
-InitD3D12: Before CreateCommandQueue
-InitD3D12: CreateCommandQueue succeeded
-InitD3D12: Before CreateSwapChainForHwnd
-InitD3D12: Swap chain created
-InitD3D12: RTVs created
-InitD3D12: Before CBV/SRV allocator Init
-InitD3D12: CBV/SRV allocator initialized
-InitD3D12: ImGui descriptor heap created
-InitD3D12: per-frame command allocators created
-InitD3D12: Post-pipeline initialization reached
-InitD3D12: Completed OK (returning true)
-InitD3D12 returned OK
-AutoLoad: assets/sample.gltf not found - creating synthetic test mesh
-AutoLoad: Added synthetic cube mesh
-BuildAS: Entering BuildAccelerationStructures (meshes=1)
-BuildAS: Completed BuildAccelerationStructures
-Entering main loop

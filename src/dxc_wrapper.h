@@ -106,6 +106,8 @@ public:
         m_compiler->Compile(&sourceBuffer, args.data(), (UINT32)args.size(),
                             m_includeHandler.Get(), IID_PPV_ARGS(&pResults));
 
+    (void)compileHr;
+
     ComPtr<IDxcBlobUtf8> pErrors;
     pResults->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&pErrors), nullptr);
     if (pErrors && pErrors->GetStringLength() > 0) {
