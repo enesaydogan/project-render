@@ -4,7 +4,7 @@ InitD3D12: Hardware adapter obtained
 CreateRT: Compiling shader...
 CreateRT: CreateStateObject...
 CreateRT: StateObject OK
-CreateRT: IDs retrieved: RG=0000021D5CB86B20, Ms=0000021D5CB869E0, HG=0000021D5CB86080
+CreateRT: IDs retrieved: RG=0000017953CA7C10, Ms=0000017953CA7F30, HG=0000017953CA7530
 CreateRT: Shader table uploaded
 CreateRT: UAV descriptor heap created
 CreateRT: Output texture created

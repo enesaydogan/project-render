@@ -38,6 +38,16 @@ using Microsoft::WRL::ComPtr;
 
 static const UINT FrameCount = 2;
 
+// Render Mode System
+enum class RenderMode {
+    Raster,        // Fast rasterization for scene traversal
+    Raytracing,    // Current DXR implementation
+    PathTracing    // Full path tracing with ReSTIR (future)
+};
+
+static RenderMode g_currentRenderMode = RenderMode::Raster;
+static bool g_showRenderModeWindow = true;
+
 static ComPtr<ID3D12Device> g_device;
 static ComPtr<ID3D12CommandQueue> g_commandQueue;
 static ComPtr<IDXGISwapChain3> g_swapChain;
@@ -45,6 +55,11 @@ static ComPtr<IDXGISwapChain3> g_swapChain;
 static ComPtr<ID3D12Resource> g_renderTargets[FrameCount];
 static ComPtr<ID3D12DescriptorHeap> g_rtvHeap;
 static UINT g_rtvDescriptorSize = 0;
+
+// Depth buffer for raster mode
+static ComPtr<ID3D12Resource> g_depthBuffer;
+static ComPtr<ID3D12DescriptorHeap> g_dsvHeap;
+static UINT g_dsvDescriptorSize = 0;
 
 static ComPtr<ID3D12DescriptorHeap> g_imguiHeap;
 
@@ -1037,6 +1052,56 @@ bool InitD3D12(HWND hwnd) {
   g_rtvDescriptorSize = g_device->GetDescriptorHandleIncrementSize(
       D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
+  // Create DSV descriptor heap for depth buffer
+  D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {};
+  dsvHeapDesc.NumDescriptors = 1;
+  dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+  dsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+  ThrowIfFailed(
+      g_device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&g_dsvHeap)));
+  g_dsvDescriptorSize = g_device->GetDescriptorHandleIncrementSize(
+      D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+
+  // Create depth buffer
+  D3D12_RESOURCE_DESC depthBufferDesc = {};
+  depthBufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+  depthBufferDesc.Alignment = 0;
+  depthBufferDesc.Width = 1280;
+  depthBufferDesc.Height = 720;
+  depthBufferDesc.DepthOrArraySize = 1;
+  depthBufferDesc.MipLevels = 1;
+  depthBufferDesc.Format = DXGI_FORMAT_D32_FLOAT;
+  depthBufferDesc.SampleDesc.Count = 1;
+  depthBufferDesc.SampleDesc.Quality = 0;
+  depthBufferDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+  depthBufferDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+  D3D12_CLEAR_VALUE depthClear = {};
+  depthClear.Format = DXGI_FORMAT_D32_FLOAT;
+  depthClear.DepthStencil.Depth = 1.0f;
+  depthClear.DepthStencil.Stencil = 0;
+
+  D3D12_HEAP_PROPERTIES depthHeapProps = {};
+  depthHeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+  depthHeapProps.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+  depthHeapProps.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+  depthHeapProps.CreationNodeMask = 1;
+  depthHeapProps.VisibleNodeMask = 1;
+
+  ThrowIfFailed(g_device->CreateCommittedResource(
+      &depthHeapProps, D3D12_HEAP_FLAG_NONE,
+      &depthBufferDesc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &depthClear,
+      IID_PPV_ARGS(&g_depthBuffer)));
+
+  // Create DSV
+  D3D12_DEPTH_STENCIL_VIEW_DESC dsvView = {};
+  dsvView.Format = DXGI_FORMAT_D32_FLOAT;
+  dsvView.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+  dsvView.Flags = D3D12_DSV_FLAG_NONE;
+
+  g_device->CreateDepthStencilView(g_depthBuffer.Get(),
+                                   &dsvView, g_dsvHeap->GetCPUDescriptorHandleForHeapStart());
+
   D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle =
       g_rtvHeap->GetCPUDescriptorHandleForHeapStart();
   D3D12_CPU_DESCRIPTOR_HANDLE rtvHandleStart = rtvHandle;
@@ -1356,6 +1421,9 @@ bool InitD3D12(HWND hwnd) {
                     vsMeshBlob->GetBufferSize()};
   meshPsoDesc.PS = {psMeshBlob->GetBufferPointer(),
                     psMeshBlob->GetBufferSize()};
+
+  // Enable depth testing for mesh rendering
+  meshPsoDesc.DepthStencilState.DepthEnable = FALSE;
 
   ThrowIfFailed(g_device->CreateGraphicsPipelineState(
       &meshPsoDesc, IID_PPV_ARGS(&g_meshPipelineState)));
@@ -1806,92 +1874,116 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
     g_commandList->RSSetViewports(1, &viewport);
     g_commandList->RSSetScissorRects(1, &scissorRect);
 
-    // DXR Path
-    if (g_rayTracingSupported && g_rtStateObject && g_tlas.result) {
-      log = nullptr;
-      fopen_s(&log, "frame.log", "a");
-      if (log) {
-        fprintf(log, "Entering DXR Path\n");
-        fclose(log);
-      }
-      ComPtr<ID3D12GraphicsCommandList4> dxrList;
-      if (SUCCEEDED(g_commandList.As(&dxrList))) {
-        // 1. Dispatch Rays
+    // Render based on current mode
+    switch (g_currentRenderMode) {
+    case RenderMode::Raytracing: {
+      // DXR Path
+      if (g_rayTracingSupported && g_rtStateObject && g_tlas.result) {
         log = nullptr;
         fopen_s(&log, "frame.log", "a");
         if (log) {
-          fprintf(log, "Setting Pipeline State\n");
+          fprintf(log, "Entering DXR Path\n");
           fclose(log);
         }
-        dxrList->SetPipelineState1(g_rtStateObject.Get());
-        dxrList->SetComputeRootSignature(g_rtGlobalRootSignature.Get());
-        dxrList->SetComputeRootShaderResourceView(
-            0, g_tlas.result->GetGPUVirtualAddress());
-        ID3D12DescriptorHeap *heaps[] = {g_uavHeap.Get()};
-        dxrList->SetDescriptorHeaps(1, heaps);
-        dxrList->SetComputeRootDescriptorTable(1, g_outputUAVGpuHandle);
+        ComPtr<ID3D12GraphicsCommandList4> dxrList;
+        if (SUCCEEDED(g_commandList.As(&dxrList))) {
+          // 1. Dispatch Rays
+          log = nullptr;
+          fopen_s(&log, "frame.log", "a");
+          if (log) {
+            fprintf(log, "Setting Pipeline State\n");
+            fclose(log);
+          }
+          dxrList->SetPipelineState1(g_rtStateObject.Get());
+          dxrList->SetComputeRootSignature(g_rtGlobalRootSignature.Get());
+          dxrList->SetComputeRootShaderResourceView(
+              0, g_tlas.result->GetGPUVirtualAddress());
+          ID3D12DescriptorHeap *heaps[] = {g_uavHeap.Get()};
+          dxrList->SetDescriptorHeaps(1, heaps);
+          dxrList->SetComputeRootDescriptorTable(1, g_outputUAVGpuHandle);
 
-        // Set texture descriptor table (root parameter 2) if textures are available
-        // if (g_textureDescriptorCount > 0) {
-        //     dxrList->SetComputeRootDescriptorTable(2, g_texturesGpuStart);
-        // }
+          // Set texture descriptor table (root parameter 2) if textures are available
+          // if (g_textureDescriptorCount > 0) {
+          //     dxrList->SetComputeRootDescriptorTable(2, g_texturesGpuStart);
+          // }
 
-        // Set camera constant buffer view (root parameter 3)
-        if (g_cameraConstantBuffer) {
-          dxrList->SetComputeRootConstantBufferView(3, g_cameraConstantBuffer->GetGPUVirtualAddress());
+          // Set camera constant buffer view (root parameter 3)
+          if (g_cameraConstantBuffer) {
+            dxrList->SetComputeRootConstantBufferView(3, g_cameraConstantBuffer->GetGPUVirtualAddress());
+          }
+
+          D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
+          dispatchDesc.RayGenerationShaderRecord.StartAddress =
+              g_rayGenShaderTable;
+          dispatchDesc.RayGenerationShaderRecord.SizeInBytes =
+              g_shaderTableEntrySize;
+          dispatchDesc.MissShaderTable.StartAddress = g_missShaderTable;
+          dispatchDesc.MissShaderTable.SizeInBytes = g_shaderTableEntrySize;
+          dispatchDesc.MissShaderTable.StrideInBytes = g_shaderTableEntrySize;
+          dispatchDesc.HitGroupTable.StartAddress = g_hitGroupShaderTable;
+          dispatchDesc.HitGroupTable.SizeInBytes = g_shaderTableEntrySize;
+          dispatchDesc.HitGroupTable.StrideInBytes = g_shaderTableEntrySize;
+          dispatchDesc.Width = 1280;
+          dispatchDesc.Height = 720;
+          dispatchDesc.Depth = 1;
+
+          log = nullptr;
+          fopen_s(&log, "frame.log", "a");
+          if (log) {
+            fprintf(log, "Calling DispatchRays\n");
+            fclose(log);
+          }
+          dxrList->DispatchRays(&dispatchDesc);
+          log = nullptr;
+          fopen_s(&log, "frame.log", "a");
+          if (log) {
+            fprintf(log, "DispatchRays returned\n");
+            fclose(log);
+          }
+
+          // 2. Copy to BackBuffer
+          TransitionResource(dxrList.Get(), g_outputUAV.Get(),
+                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                             D3D12_RESOURCE_STATE_COPY_SOURCE);
+          TransitionResource(dxrList.Get(), g_renderTargets[g_frameIndex].Get(),
+                             D3D12_RESOURCE_STATE_PRESENT,
+                             D3D12_RESOURCE_STATE_COPY_DEST);
+          dxrList->CopyResource(g_renderTargets[g_frameIndex].Get(),
+                                g_outputUAV.Get());
+
+          // 3. Prepare for ImGui (RenderTarget state)
+          TransitionResource(dxrList.Get(), g_renderTargets[g_frameIndex].Get(),
+                             D3D12_RESOURCE_STATE_COPY_DEST,
+                             D3D12_RESOURCE_STATE_RENDER_TARGET);
+          TransitionResource(dxrList.Get(), g_outputUAV.Get(),
+                             D3D12_RESOURCE_STATE_COPY_SOURCE,
+                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+          g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
         }
+      } else {
+        // Fallback to raster if DXR not available
+        TransitionResource(
+            g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
+            D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
-        D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
-        dispatchDesc.RayGenerationShaderRecord.StartAddress =
-            g_rayGenShaderTable;
-        dispatchDesc.RayGenerationShaderRecord.SizeInBytes =
-            g_shaderTableEntrySize;
-        dispatchDesc.MissShaderTable.StartAddress = g_missShaderTable;
-        dispatchDesc.MissShaderTable.SizeInBytes = g_shaderTableEntrySize;
-        dispatchDesc.MissShaderTable.StrideInBytes = g_shaderTableEntrySize;
-        dispatchDesc.HitGroupTable.StartAddress = g_hitGroupShaderTable;
-        dispatchDesc.HitGroupTable.SizeInBytes = g_shaderTableEntrySize;
-        dispatchDesc.HitGroupTable.StrideInBytes = g_shaderTableEntrySize;
-        dispatchDesc.Width = 1280;
-        dispatchDesc.Height = 720;
-        dispatchDesc.Depth = 1;
-
-        log = nullptr;
-        fopen_s(&log, "frame.log", "a");
-        if (log) {
-          fprintf(log, "Calling DispatchRays\n");
-          fclose(log);
-        }
-        dxrList->DispatchRays(&dispatchDesc);
-        log = nullptr;
-        fopen_s(&log, "frame.log", "a");
-        if (log) {
-          fprintf(log, "DispatchRays returned\n");
-          fclose(log);
-        }
-
-        // 2. Copy to BackBuffer
-        TransitionResource(dxrList.Get(), g_outputUAV.Get(),
-                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                           D3D12_RESOURCE_STATE_COPY_SOURCE);
-        TransitionResource(dxrList.Get(), g_renderTargets[g_frameIndex].Get(),
-                           D3D12_RESOURCE_STATE_PRESENT,
-                           D3D12_RESOURCE_STATE_COPY_DEST);
-        dxrList->CopyResource(g_renderTargets[g_frameIndex].Get(),
-                              g_outputUAV.Get());
-
-        // 3. Prepare for ImGui (RenderTarget state)
-        TransitionResource(dxrList.Get(), g_renderTargets[g_frameIndex].Get(),
-                           D3D12_RESOURCE_STATE_COPY_DEST,
-                           D3D12_RESOURCE_STATE_RENDER_TARGET);
-        TransitionResource(dxrList.Get(), g_outputUAV.Get(),
-                           D3D12_RESOURCE_STATE_COPY_SOURCE,
-                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-
+        FLOAT clearColor[] = {0.8f, 0.2f, 0.2f, 1.0f}; // Red to indicate fallback
+        g_commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
         g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
       }
-    } else {
-      // Rasterization Path
+      break;
+    }
+
+    case RenderMode::Raster: {
+      // Fast Rasterization Path
+      {
+        FILE *log = nullptr;
+        fopen_s(&log, "frame.log", "a");
+        if (log) {
+          fprintf(log, "Entering Raster Path\n");
+          fclose(log);
+        }
+      }
       TransitionResource(
           g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
           D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -1899,41 +1991,82 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
       FLOAT clearColor[] = {0.2f, 0.3f, 0.4f, 1.0f};
       g_commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
 
+      // Clear depth buffer
+      D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle =
+          g_dsvHeap->GetCPUDescriptorHandleForHeapStart();
+      g_commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+
       g_commandList->SetGraphicsRootSignature(g_rootSignature.Get());
-      g_commandList->SetGraphicsRootConstantBufferView(
-          0, g_constantBuffer->GetGPUVirtualAddress());
+      // Use camera constant buffer for proper camera movement
+      if (g_cameraConstantBuffer) {
+        g_commandList->SetGraphicsRootConstantBufferView(
+            0, g_cameraConstantBuffer->GetGPUVirtualAddress());
+      }
 
       // Draw demo triangle
       g_commandList->SetPipelineState(g_pipelineState.Get());
       g_commandList->IASetPrimitiveTopology(
           D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
       g_commandList->IASetVertexBuffers(0, 1, &g_vertexBufferView);
-      g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+      g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
       g_commandList->DrawInstanced(3, 1, 0, 0);
 
       // Draw loaded meshes
       if (!g_loadedMeshes.empty() && g_meshPipelineState) {
-        // ... (Simple iteration of meshes for raster fallback) ...
-        const auto &gm = g_loadedMeshes[0];
+        {
+          FILE *log = nullptr;
+          fopen_s(&log, "frame.log", "a");
+          if (log) {
+            fprintf(log, "Drawing %zu meshes\n", g_loadedMeshes.size());
+            fclose(log);
+          }
+        }
         g_commandList->SetPipelineState(g_meshPipelineState.Get());
-        g_commandList->IASetVertexBuffers(0, 1, &gm.vbView);
-        g_commandList->IASetIndexBuffer(&gm.ibView);
         g_commandList->IASetPrimitiveTopology(
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         ID3D12DescriptorHeap *heaps[] = {g_cbvSrvAllocator.Heap()};
         g_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
-        if (gm.materialIndex >= 0 &&
-            gm.materialIndex < (int)g_loadedMaterials.size()) {
+        // Ensure render targets are set for mesh rendering
+        g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
+        // Use camera constant buffer for mesh rendering
+        if (g_cameraConstantBuffer) {
           g_commandList->SetGraphicsRootConstantBufferView(
-              2, g_materialConstantBuffer->GetGPUVirtualAddress());
-          if (g_textureDescriptorCount > 0)
-            g_commandList->SetGraphicsRootDescriptorTable(1,
-                                                          g_texturesGpuStart);
+              0, g_cameraConstantBuffer->GetGPUVirtualAddress());
         }
-        if (gm.ibView.SizeInBytes > 0)
-          g_commandList->DrawIndexedInstanced(gm.ibView.SizeInBytes / 4, 1, 0,
-                                              0, 0);
+
+        // Draw all meshes (not just the first one)
+        for (size_t i = 0; i < g_loadedMeshes.size(); ++i) {
+          const auto &gm = g_loadedMeshes[i];
+          g_commandList->IASetVertexBuffers(0, 1, &gm.vbView);
+          g_commandList->IASetIndexBuffer(&gm.ibView);
+
+          if (gm.materialIndex >= 0 &&
+              gm.materialIndex < (int)g_loadedMaterials.size()) {
+            g_commandList->SetGraphicsRootConstantBufferView(
+                2, g_materialConstantBuffer->GetGPUVirtualAddress());
+            if (g_textureDescriptorCount > 0)
+              g_commandList->SetGraphicsRootDescriptorTable(1,
+                                                            g_texturesGpuStart);
+          }
+          if (gm.ibView.SizeInBytes > 0)
+            g_commandList->DrawIndexedInstanced(gm.ibView.SizeInBytes / 4, 1, 0,
+                                                0, 0);
+        }
       }
+      break;
+    }
+
+    case RenderMode::PathTracing: {
+      // TODO: Implement full path tracing with ReSTIR
+      TransitionResource(
+          g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
+          D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+
+      FLOAT clearColor[] = {0.1f, 0.1f, 0.1f, 1.0f}; // Dark to indicate WIP
+      g_commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+      g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+      break;
+    }
     }
 
     // Render ImGui (Overlay on top of whatever was drawn)
@@ -2122,8 +2255,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
         if (ImGui::MenuItem("Assets", NULL, &g_showAssetsWindow)) {
           // toggled via menu
         }
+        if (ImGui::MenuItem("Render Mode", NULL, &g_showRenderModeWindow)) {
+          // toggled via menu
+        }
         if (ImGui::MenuItem("Reset Layout")) {
           g_showAssetsWindow = true;
+          g_showRenderModeWindow = true;
           g_forceUncollapse = true;
         }
         ImGui::EndMenu();
@@ -2149,6 +2286,31 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
         memcpy(pCbData, &constants, sizeof(constants));
         g_constantBuffer->Unmap(0, nullptr);
       }
+    }
+    ImGui::End();
+
+    // Render Mode Selector
+    ImGui::SetNextWindowSize(ImVec2(300, 150), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Render Mode", &g_showRenderModeWindow)) {
+      ImGui::Text("Current Mode: %s", 
+        g_currentRenderMode == RenderMode::Raster ? "Raster" :
+        g_currentRenderMode == RenderMode::Raytracing ? "Raytracing" : "Path Tracing");
+
+      if (ImGui::RadioButton("Fast Raster", g_currentRenderMode == RenderMode::Raster)) {
+        g_currentRenderMode = RenderMode::Raster;
+      }
+      ImGui::SameLine();
+      if (ImGui::RadioButton("Raytracing", g_currentRenderMode == RenderMode::Raytracing)) {
+        g_currentRenderMode = RenderMode::Raytracing;
+      }
+
+      if (ImGui::RadioButton("Path Tracing (WIP)", g_currentRenderMode == RenderMode::PathTracing)) {
+        g_currentRenderMode = RenderMode::PathTracing;
+        // TODO: Implement path tracing
+      }
+
+      ImGui::Separator();
+      ImGui::TextWrapped("Raster: Fast scene traversal\nRaytracing: Current DXR\nPath Tracing: Advanced ReSTIR (future)");
     }
     ImGui::End();
 
