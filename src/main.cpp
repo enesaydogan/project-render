@@ -1382,12 +1382,25 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
   return DefWindowProc(hWnd, message, wParam, lParam);
 }
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow) {
   // Log startup
   FILE *startLog = nullptr;
   if (fopen_s(&startLog, "startup.log", "w") == 0 && startLog) {
     fprintf(startLog, "Application starting...\n");
     fclose(startLog);
+  }
+
+  // Parse command line for custom glTF file
+  std::string customGltfPath;
+  if (lpCmdLine && *lpCmdLine) {
+    customGltfPath = lpCmdLine;
+    // Remove quotes if present
+    if (!customGltfPath.empty() && customGltfPath.front() == '"') {
+      customGltfPath = customGltfPath.substr(1);
+    }
+    if (!customGltfPath.empty() && customGltfPath.back() == '"') {
+      customGltfPath = customGltfPath.substr(0, customGltfPath.size() - 1);
+    }
   }
 
   const wchar_t CLASS_NAME[] = L"ProjectRenderWndClass";
@@ -1430,20 +1443,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
   }
 
   // Auto-load sample glTF at startup (for automated DXR testing)
+  // Use command line argument if provided, otherwise use default
+  std::string autoLoadPath = customGltfPath.empty() ? "assets/sample.glb" : customGltfPath;
   try {
-    const std::string samplePath = "assets/sample.gltf";
-    if (fs::exists(samplePath)) {
+    if (fs::exists(autoLoadPath)) {
       std::vector<Asset::GpuMesh> meshes;
       std::vector<Asset::Material> materials;
       std::vector<Asset::Texture> textures;
-      bool ok = Asset::LoadGltf(samplePath, meshes, &materials, &textures);
+      bool ok = Asset::LoadGltf(autoLoadPath, meshes, &materials, &textures);
       FILE *logAuto = nullptr;
       if (fopen_s(&logAuto, "startup.log", "a") == 0 && logAuto) {
         if (!ok) {
-          fprintf(logAuto, "AutoLoad: failed to load %s\n", samplePath.c_str());
+          fprintf(logAuto, "AutoLoad: failed to load %s\n", autoLoadPath.c_str());
         } else {
           fprintf(logAuto, "AutoLoad: loaded %s (meshes=%zu, materials=%zu, textures=%zu)\n",
-                  samplePath.c_str(), meshes.size(), materials.size(), textures.size());
+                  autoLoadPath.c_str(), meshes.size(), materials.size(), textures.size());
         }
         fclose(logAuto);
       }
@@ -1491,7 +1505,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     } else {
       FILE *logNoSample = nullptr;
       if (fopen_s(&logNoSample, "startup.log", "a") == 0 && logNoSample) {
-        fprintf(logNoSample, "AutoLoad: %s not found - creating synthetic test mesh\n", "assets/sample.gltf");
+        fprintf(logNoSample, "AutoLoad: %s not found - creating synthetic test mesh\n", autoLoadPath.c_str());
         fclose(logNoSample);
       }
 
@@ -1992,16 +2006,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     }
     if (ImGui::Begin("Assets", &g_showAssetsWindow)) {
       ImGui::Columns(2, "asset_cols", false);
-      if (ImGui::Button("Load sample.gltf")) {
+      if (ImGui::Button("Load sample.glb")) {
         // Attempt to load a sample glTF in project folder
         std::vector<Asset::GpuMesh> meshes;
         std::vector<Asset::Material> materials;
         std::vector<Asset::Texture> textures;
-        bool ok = Asset::LoadGltf("assets/sample.gltf", meshes, &materials,
+        bool ok = Asset::LoadGltf("assets/sample.glb", meshes, &materials,
                                   &textures);
         if (!ok) {
           g_lastAssetStatus =
-              "Load failed: assets/sample.gltf not found or parse error";
+              "Load failed: assets/sample.glb not found or parse error";
           OutputDebugStringA(g_lastAssetStatus.c_str());
         } else {
           // Append to global loaded meshes/materials/textures
@@ -2045,7 +2059,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
             g_textureDescriptorCount += (UINT)textures.size();
           }
 
-          g_lastAssetStatus = "Loaded and uploaded assets/sample.gltf";
+          g_lastAssetStatus = "Loaded and uploaded assets/sample.glb";
           OutputDebugStringA(g_lastAssetStatus.c_str());
 
           // Rebuild AS

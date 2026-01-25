@@ -141,7 +141,13 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
     std::string err;
     std::string warn;
 
-    bool ret = loader.LoadASCIIFromFile(&model, &err, &warn, path);
+    bool isBinary = (path.size() >= 4 && path.substr(path.size() - 4) == ".glb");
+    bool ret;
+    if (isBinary) {
+        ret = loader.LoadBinaryFromFile(&model, &err, &warn, path);
+    } else {
+        ret = loader.LoadASCIIFromFile(&model, &err, &warn, path);
+    }
     if (!warn.empty()) OutputDebugStringA(warn.c_str());
     if (!err.empty()) OutputDebugStringA(err.c_str());
     if (!ret) {
