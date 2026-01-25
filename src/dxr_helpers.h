@@ -86,10 +86,15 @@ inline void AllocateUploadBuffer(ID3D12Device *device, void *pData,
     (*ppResource)->SetName(resourceName);
   }
 
-  void *pMappedData;
-  (*ppResource)->Map(0, nullptr, &pMappedData);
-  memcpy(pMappedData, pData, datasize);
-  (*ppResource)->Unmap(0, nullptr);
+  if (pData) {
+    void *pMappedData;
+    (*ppResource)->Map(0, nullptr, &pMappedData);
+    memcpy(pMappedData, pData, datasize);
+    (*ppResource)->Unmap(0, nullptr);
+  } else {
+    // No initial data provided; leave the upload buffer unmapped until caller
+    // writes to it explicitly. This avoids reading from a null source pointer.
+  }
 }
 
 // Helper to build a BLAS from a list of vertex/index buffers
