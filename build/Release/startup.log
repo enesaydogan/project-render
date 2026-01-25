@@ -1,13 +1,6 @@
 Application starting...
-InitD3D12 start
-After EnableD3D12DebugLayer
-After CreateDXGIFactory2
-After GetHardwareAdapter
-D3D12CreateDevice(hardwareAdapter) = 0x00000000
-Device created, about to create command queue
-Before CreateCommandQueue, g_device = 00000220E8417EC0
-CreateCommandQueue returned 0x00000000
-CommandQueue created successfully
-About to compile shaders
-Shader path: ..\..\shaders\simple.hlsl
-VSMain compile returned 0x00000000
+InitD3D12: Hardware adapter obtained
+CreateRT: Compiling shader...
+CreateRT: CreateStateObject...
+CreateRT: StateObject OK
+CreateRT: IDs retrieved: RG=000001A0136B0C70, Ms=000001A0136B05E0, HG=000001A0136B0D10
