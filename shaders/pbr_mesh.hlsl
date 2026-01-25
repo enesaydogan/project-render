@@ -6,7 +6,7 @@ cbuffer CameraCB : register(b0)
     float _pad1;
     float3 up;
     float _pad2;
-    float4 params; // fov(deg), aspect, znear, zfar
+    float params[5]; // fov(deg), aspect, znear, zfar, intensity
 };
 
 cbuffer MaterialCB : register(b1)
@@ -20,7 +20,7 @@ cbuffer MaterialCB : register(b1)
 };
 
 // Texture array - we'll bind multiple textures in a descriptor table
-Texture2D textures[16] : register(t0);
+Texture2D textures[8] : register(t0);
 SamplerState linearSampler : register(s0);
 
 struct VSInputMesh {
@@ -42,36 +42,26 @@ PSInputMesh VSMainMesh(VSInputMesh input)
 {
     PSInputMesh o;
 
-    // Apply a simple transform to make the mesh visible
-    float3 transformedPos = input.position * 0.1f; // Scale down if needed
+    // World-space position (scale to match instances used for TLAS)
+    float3 worldPos = input.position * 0.1f; // Scale down to match TLAS instance scale
 
-    // Compute view matrix
-    float3 right = normalize(cross(forward, up));
-    float3 trueUp = cross(right, forward);
+    // Projection math must match RayGen: use f = tan(fov/2) and same basis
+    float aspect = params[1];
+    float f = tan(radians(params[0]) * 0.5);
 
-    float3x3 viewRot = {
-        right.x, trueUp.x, -forward.x,
-        right.y, trueUp.y, -forward.y,
-        right.z, trueUp.z, -forward.z
-    };
+    float3 R = normalize(cross(forward, up));
+    float3 U = normalize(cross(R, forward));
 
-    float3 viewPos = mul(viewRot, transformedPos - pos);
+    float3 rel = worldPos - pos; // pos = camera position (from cbuffer)
+    float x_cam = dot(rel, R);
+    float y_cam = dot(rel, U);
+    float z_cam = dot(rel, forward);
 
-    // Compute projection matrix
-    float fovRad = params.x * 3.14159265359 / 180.0;
-    float f = 1.0 / tan(fovRad / 2.0);
-    float aspect = params.y;
-    float nearZ = params.z;
-    float farZ = params.w;
+    // Use same sign convention as RayGen: NDC.x = x_cam / (z_cam * aspect * f), NDC.y = -y_cam / (z_cam * f)
+    // We produce clip pos with w = z_cam so after perspective divide it matches RayGen direction mapping
+    o.position = float4(x_cam / (aspect * f), -y_cam / f, z_cam, z_cam);
 
-    float4 projPos;
-    projPos.x = viewPos.x * f / aspect;
-    projPos.y = viewPos.y * f;
-    projPos.z = viewPos.z * (-(farZ + nearZ) / (farZ - nearZ)) - 2.0 * farZ * nearZ / (farZ - nearZ);
-    projPos.w = -viewPos.z;
-
-    o.position = projPos;
-    o.worldPos = input.position;
+    o.worldPos = worldPos;
     o.normal = input.normal;
     o.tangent = input.tangent;
     o.uv = input.uv;
@@ -145,6 +135,11 @@ float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent, int 
 
 float4 PSMainMesh(PSInputMesh input) : SV_TARGET
 {
+#ifdef RASTER_DEBUG_UV
+    // Debug mode: output UVs in RGB for quick comparison with RayGen UV output
+    return float4(input.uv.xy, 0.0, 1.0);
+#endif
+
     // Sample textures
     int baseColorIdx = textureIndices.x;
     int metallicRoughnessIdx = textureIndices.y;

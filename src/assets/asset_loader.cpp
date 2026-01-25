@@ -5,6 +5,8 @@
 #include <iostream>
 #include <string>
 #include <sstream>
+#include <fstream>
+#include <cfloat>
 
 // If tinygltf is enabled via CMake, use it. Otherwise keep the stub.
 #ifdef USE_TINYGLTF
@@ -25,7 +27,7 @@ inline void ThrowIfFailed(HRESULT hr)
     if (FAILED(hr)) {
         char buf[256];
         sprintf_s(buf, "HRESULT 0x%08x\n", static_cast<unsigned>(hr));
-        OutputDebugStringA(buf);
+        fprintf(stderr, "%s", buf);
         ExitProcess(static_cast<UINT>(hr));
     }
 }
@@ -129,10 +131,10 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
 {
     std::ostringstream oss;
     oss << "Asset::LoadGltf (tinygltf) requested: " << path << "\n";
-    OutputDebugStringA(oss.str().c_str());
+    fprintf(stderr, "%s", oss.str().c_str());
 
     if (!std::filesystem::exists(path)) {
-        OutputDebugStringA("File not found: glTF path does not exist\n");
+        fprintf(stderr, "File not found: glTF path does not exist\n");
         return false;
     }
 
@@ -143,15 +145,40 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
 
     bool isBinary = (path.size() >= 4 && path.substr(path.size() - 4) == ".glb");
     bool ret;
+
+    // Diagnostics: print file size and header bytes before calling loader
+    std::error_code ec;
+    uint64_t fsize = 0;
+    try {
+      fsize = std::filesystem::file_size(path, ec);
+    } catch (...) {
+      ec.assign(1, std::generic_category());
+    }
+    if (ec) {
+      fprintf(stderr, "LoadGltf: failed to stat file '%s': %s\n", path.c_str(), ec.message().c_str());
+    } else {
+      fprintf(stderr, "LoadGltf: file size = %llu bytes\n", (unsigned long long)fsize);
+    }
+
     if (isBinary) {
+        std::ifstream in(path, std::ios::binary);
+        if (in) {
+            unsigned char header[4] = {0,0,0,0};
+            in.read(reinterpret_cast<char*>(header), sizeof(header));
+            fprintf(stderr, "LoadGltf: header bytes: %02x %02x %02x %02x ('%c%c%c%c')\n",
+                    header[0], header[1], header[2], header[3],
+                    isprint(header[0]) ? header[0] : '?', isprint(header[1]) ? header[1] : '?', isprint(header[2]) ? header[2] : '?', isprint(header[3]) ? header[3] : '?');
+        } else {
+            fprintf(stderr, "LoadGltf: failed to open file for header inspection: %s\n", path.c_str());
+        }
         ret = loader.LoadBinaryFromFile(&model, &err, &warn, path);
     } else {
         ret = loader.LoadASCIIFromFile(&model, &err, &warn, path);
     }
-    if (!warn.empty()) OutputDebugStringA(warn.c_str());
-    if (!err.empty()) OutputDebugStringA(err.c_str());
+    if (!warn.empty()) fprintf(stderr, "%s", warn.c_str());
+    if (!err.empty()) fprintf(stderr, "%s", err.c_str());
     if (!ret) {
-        OutputDebugStringA("tinygltf: Failed to load glTF file\n");
+        fprintf(stderr, "tinygltf: Failed to load glTF file\n");
         return false;
     }
 
@@ -159,7 +186,7 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
     info << "Loaded glTF: " << path << " | scenes=" << model.scenes.size()
          << " nodes=" << model.nodes.size() << " meshes=" << model.meshes.size()
          << " images=" << model.images.size() << "\n";
-    OutputDebugStringA(info.str().c_str());
+    fprintf(stderr, "%s", info.str().c_str());
 
     // Optionally prepare textures and materials containers
     std::vector<Texture> tmpTextures;
@@ -310,11 +337,11 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
                 // Assume decoded image in img.image; try create texture
                 Texture t;
                 if (!CreateTextureFromImage(src, img.width, img.height, comp, t)) {
-                    OutputDebugStringA("Failed to create texture from image\n");
+                    fprintf(stderr, "Failed to create texture from image\n");
                 }
                 tmpTextures[ii] = std::move(t);
             } else {
-                OutputDebugStringA("Image missing pixel data; skipping texture\n");
+                fprintf(stderr, "Image missing pixel data; skipping texture\n");
             }
         }
     }
@@ -359,6 +386,45 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
             tmpMaterials[mi] = std::move(mat);
         }
     }
+
+    // Detect if the model uses Z-up (heuristic based on bounding box extents).
+    bool zUpDetected = false;
+    {
+        float minX = FLT_MAX, minY = FLT_MAX, minZ = FLT_MAX;
+        float maxX = -FLT_MAX, maxY = -FLT_MAX, maxZ = -FLT_MAX;
+        for (size_t mi = 0; mi < model.meshes.size(); ++mi) {
+            const auto& mesh = model.meshes[mi];
+            for (size_t pi = 0; pi < mesh.primitives.size(); ++pi) {
+                const auto& prim = mesh.primitives[pi];
+                auto posIt = prim.attributes.find("POSITION");
+                if (posIt == prim.attributes.end()) continue;
+                const tinygltf::Accessor& posAccessor = model.accessors[posIt->second];
+                if (posAccessor.bufferView < 0) continue;
+                const tinygltf::BufferView& posView = model.bufferViews[posAccessor.bufferView];
+                if (posView.buffer < 0 || posView.buffer >= (int)model.buffers.size()) continue;
+                const tinygltf::Buffer& posBuffer = model.buffers[posView.buffer];
+                if (posBuffer.data.empty()) continue;
+                const unsigned char* posData = posBuffer.data.data() + posView.byteOffset + posAccessor.byteOffset;
+                size_t posByteStride = posAccessor.ByteStride(posView);
+                if (posByteStride == 0) posByteStride = sizeof(float) * 3;
+                for (size_t i = 0; i < posAccessor.count; ++i) {
+                    const float* p = reinterpret_cast<const float*>(posData + i * posByteStride);
+                    if (p[0] < minX) minX = p[0]; if (p[0] > maxX) maxX = p[0];
+                    if (p[1] < minY) minY = p[1]; if (p[1] > maxY) maxY = p[1];
+                    if (p[2] < minZ) minZ = p[2]; if (p[2] > maxZ) maxZ = p[2];
+                }
+            }
+        }
+        float ex = maxX - minX; float ey = maxY - minY; float ez = maxZ - minZ;
+        // Heuristic: if Z extent is significantly larger than Y extent, consider Z-up
+        if (ez > 0.0f && ey > 0.0f) {
+            if (ez > ey * 1.2f && ez > ex * 0.8f) {
+                zUpDetected = true;
+                fprintf(stderr, "LoadGltf: detected Z-up model (ex=%.3f, ey=%.3f, ez=%.3f). Converting to Y-up on import.\n", ex, ey, ez);
+            }
+        }
+    }
+
     for (size_t mi = 0; mi < model.meshes.size(); ++mi) {
         const auto& mesh = model.meshes[mi];
         for (size_t pi = 0; pi < mesh.primitives.size(); ++pi) {
@@ -366,32 +432,32 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
 
             // Only handle TRIANGLES or TRIANGLE_STRIP/STRIP conversions are not implemented
             if (prim.mode != TINYGLTF_MODE_TRIANGLES && prim.mode != TINYGLTF_MODE_TRIANGLE_STRIP && prim.mode != TINYGLTF_MODE_TRIANGLE_FAN) {
-                OutputDebugStringA("Skipping non-triangle primitive\n");
+                fprintf(stderr, "Skipping non-triangle primitive\n");
                 continue;
             }
 
             // Find POSITION accessor
             auto posIt = prim.attributes.find("POSITION");
             if (posIt == prim.attributes.end()) {
-                OutputDebugStringA("Primitive missing POSITION attribute; skipping\n");
+                fprintf(stderr, "Primitive missing POSITION attribute; skipping\n");
                 continue;
             }
 
             const tinygltf::Accessor& posAccessor = model.accessors[posIt->second];
             if (posAccessor.bufferView < 0) {
-                OutputDebugStringA("POSITION accessor has no bufferView; skipping\n");
+                fprintf(stderr, "POSITION accessor has no bufferView; skipping\n");
                 continue;
             }
 
             const tinygltf::BufferView& posView = model.bufferViews[posAccessor.bufferView];
             if (posView.buffer < 0 || posView.buffer >= (int)model.buffers.size()) {
-                OutputDebugStringA("POSITION bufferView references invalid buffer; skipping\n");
+                fprintf(stderr, "POSITION bufferView references invalid buffer; skipping\n");
                 continue;
             }
 
             const tinygltf::Buffer& posBuffer = model.buffers[posView.buffer];
             if (posBuffer.data.empty()) {
-                OutputDebugStringA("POSITION buffer is empty; skipping\n");
+                fprintf(stderr, "POSITION buffer is empty; skipping\n");
                 continue;
             }
 
@@ -486,9 +552,16 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
                 }
 
                 Vertex vv;
-                vv.pos[0] = p[0]; vv.pos[1] = p[1]; vv.pos[2] = p[2];
-                vv.normal[0] = nx; vv.normal[1] = ny; vv.normal[2] = nz;
-                vv.tangent[0] = tx; vv.tangent[1] = ty; vv.tangent[2] = tz; vv.tangent[3] = tw;
+                if (zUpDetected) {
+                    // Rotate -90 degrees about X: newY = Z_old, newZ = -Y_old
+                    vv.pos[0] = p[0]; vv.pos[1] = p[2]; vv.pos[2] = -p[1];
+                    vv.normal[0] = nx; vv.normal[1] = nz; vv.normal[2] = -ny;
+                    vv.tangent[0] = tx; vv.tangent[1] = tz; vv.tangent[2] = -ty; vv.tangent[3] = tw;
+                } else {
+                    vv.pos[0] = p[0]; vv.pos[1] = p[1]; vv.pos[2] = p[2];
+                    vv.normal[0] = nx; vv.normal[1] = ny; vv.normal[2] = nz;
+                    vv.tangent[0] = tx; vv.tangent[1] = ty; vv.tangent[2] = tz; vv.tangent[3] = tw;
+                }
                 vv.uv[0] = u; vv.uv[1] = v;
                 vertices.push_back(vv);
             }
@@ -498,19 +571,19 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
             if (prim.indices >= 0) {
                 const tinygltf::Accessor& idxAccessor = model.accessors[prim.indices];
                 if (idxAccessor.bufferView < 0) {
-                    OutputDebugStringA("Index accessor has no bufferView; skipping primitive\n");
+                    fprintf(stderr, "Index accessor has no bufferView; skipping primitive\n");
                     continue;
                 }
 
                 const tinygltf::BufferView& idxView = model.bufferViews[idxAccessor.bufferView];
                 if (idxView.buffer < 0 || idxView.buffer >= (int)model.buffers.size()) {
-                    OutputDebugStringA("Index bufferView references invalid buffer; skipping primitive\n");
+                    fprintf(stderr, "Index bufferView references invalid buffer; skipping primitive\n");
                     continue;
                 }
 
                 const tinygltf::Buffer& idxBuffer = model.buffers[idxView.buffer];
                 if (idxBuffer.data.empty()) {
-                    OutputDebugStringA("Index buffer is empty; skipping primitive\n");
+                    fprintf(stderr, "Index buffer is empty; skipping primitive\n");
                     continue;
                 }
 
@@ -529,7 +602,7 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
                         const uint8_t* s = reinterpret_cast<const uint8_t*>(idxData + i);
                         indices[i] = static_cast<uint32_t>(*s);
                     } else {
-                        OutputDebugStringA("Unsupported index component type; skipping primitive\n");
+                        fprintf(stderr, "Unsupported index component type; skipping primitive\n");
                         unsupportedIndexType = true;
                         break;
                     }
@@ -543,7 +616,7 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
             }
 
             if (vertices.empty() || indices.empty()) {
-                OutputDebugStringA("Generated empty vertex or index list; skipping primitive\n");
+                fprintf(stderr, "Generated empty vertex or index list; skipping primitive\n");
                 continue;
             }
 
@@ -571,7 +644,7 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
 
             std::ostringstream log;
             log << "Imported mesh[" << mi << "] prim[" << pi << "] verts=" << posAccessor.count << " idx=" << indices.size() << "\n";
-            OutputDebugStringA(log.str().c_str());
+            fprintf(stderr, "%s", log.str().c_str());
         }
     }
 
@@ -594,14 +667,14 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
 {
     std::ostringstream oss;
     oss << "Asset::LoadGltf requested: " << path << "\n";
-    OutputDebugStringA(oss.str().c_str());
+    fprintf(stderr, "%s", oss.str().c_str());
 
     if (!std::filesystem::exists(path)) {
-        OutputDebugStringA("File not found: glTF path does not exist\n");
+        fprintf(stderr, "File not found: glTF path does not exist\n");
         return false;
     }
 
-    OutputDebugStringA("Found file but loader is stubbed. Enable USE_TINYGLTF in CMake to use tinygltf.\n");
+    fprintf(stderr, "Found file but loader is stubbed. Enable USE_TINYGLTF in CMake to use tinygltf.\n");
     return true;
 }
 

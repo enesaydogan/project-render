@@ -6,7 +6,7 @@ cbuffer CameraCB : register(b0)
     float _pad1;
     float3 up;
     float _pad2;
-    float4 params; // fov(deg), aspect, znear, zfar
+    float params[5]; // fov(deg), aspect, znear, zfar, intensity
 };
 
 struct VSInput {
@@ -23,32 +23,20 @@ PSInput VSMain(VSInput input)
 {
     PSInput o;
 
-    // Compute view matrix
-    float3 right = normalize(cross(forward, up));
-    float3 trueUp = cross(right, forward);
+    // Use same camera basis and projection math as RayGen/mesh shaders
+    float aspect = params[1];
+    float f = tan(radians(params[0]) * 0.5);
 
-    float3x3 viewRot = {
-        right.x, trueUp.x, -forward.x,
-        right.y, trueUp.y, -forward.y,
-        right.z, trueUp.z, -forward.z
-    };
+    float3 R = normalize(cross(forward, up));
+    float3 U = normalize(cross(R, forward));
 
-    float3 viewPos = mul(viewRot, input.position - pos);
+    float3 rel = input.position - pos;
+    float x_cam = dot(rel, R);
+    float y_cam = dot(rel, U);
+    float z_cam = dot(rel, forward);
 
-    // Compute projection matrix
-    float fovRad = params.x * 3.14159265359 / 180.0;
-    float f = 1.0 / tan(fovRad / 2.0);
-    float aspect = params.y;
-    float nearZ = params.z;
-    float farZ = params.w;
-
-    float4 projPos;
-    projPos.x = viewPos.x * f / aspect;
-    projPos.y = viewPos.y * f;
-    projPos.z = viewPos.z * (-(farZ + nearZ) / (farZ - nearZ)) - 2.0 * farZ * nearZ / (farZ - nearZ);
-    projPos.w = -viewPos.z;
-
-    o.position = projPos;
+    // Produce clip-space position with w = z_cam so NDC matches RayGen mapping
+    o.position = float4(x_cam / (aspect * f), -y_cam / f, z_cam, z_cam);
     o.color = input.color;
     return o;
 }

@@ -1,6 +1,13 @@
-cbuffer Transform : register(b0)
+// Camera cbuffer - shared layout with raytracing shaders
+cbuffer Camera : register(b0)
 {
-    float4 offset;
+    float3 camPos;
+    float _pad0;
+    float3 camForward;
+    float _pad1;
+    float3 camUp;
+    float _pad2;
+    float camParams[5]; // fov(deg), aspect, znear, zfar, intensity
 };
 
 cbuffer MaterialCB : register(b1)
@@ -36,9 +43,25 @@ SamplerState linearSampler : register(s0);
 PSInputMesh VSMainMesh(VSInputMesh input)
 {
     PSInputMesh o;
-    float3 pos = input.position + offset.xyz;
-    o.position = float4(pos, 1.0);
-    o.worldPos = input.position;
+    // World-space position
+    float3 pos = input.position;
+
+    // Build camera basis to match raygen math
+    float aspect = camParams[1];
+    float f = tan(radians(camParams[0]) * 0.5);
+    float3 R = normalize(cross(camForward, camUp));
+    float3 U = normalize(cross(R, camForward));
+
+    float3 rel = pos - camPos;
+    float x_cam = dot(rel, R);
+    float y_cam = dot(rel, U);
+    float z_cam = dot(rel, camForward);
+
+    // Construct clip-space position where w = z_cam, so after perspective divide
+    // NDC.x = x_cam / (z_cam * aspect * f), NDC.y = -y_cam / (z_cam * f)
+    o.position = float4(x_cam / (aspect * f), -y_cam / f, z_cam, z_cam);
+
+    o.worldPos = pos;
     o.normal = input.normal;
     o.tangent = input.tangent;
     o.uv = input.uv;
@@ -142,8 +165,8 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     // Normal mapping
     float3 N = GetNormalFromMap(input.uv, input.normal, input.tangent, hasNormal);
     
-    // View and light vectors (simple setup for now)
-    float3 V = normalize(float3(0.0, 0.0, 1.0));
+    // View and light vectors (camera-based view)
+    float3 V = normalize(camPos - input.worldPos);
     float3 L = normalize(float3(0.5, 0.5, -1.0));
     float3 H = normalize(V + L);
     
@@ -190,7 +213,7 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     
     // Combine
     float NdotL = max(dot(N, L), 0.0);
-    float3 Lo = (diffuse + specular) * NdotL * 2.0; // Light intensity
+    float3 Lo = (diffuse + specular) * NdotL * params[4]; // Light intensity
     
     // Add ambient
     float3 ambient = float3(0.03, 0.03, 0.03) * baseColor * ao;
