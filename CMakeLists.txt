@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_executable(project-render src/main.cpp)
+# Additional project sources
+target_sources(project-render PRIVATE src/camera.cpp src/dxr_renderer.cpp src/raster_renderer.cpp src/file_import.cpp)
 
 if (MSVC)
   target_compile_options(project-render PRIVATE /W4 /permissive-)

@@ -14,6 +14,10 @@
 #include "imgui.h"
 #include "imgui_impl_dx12.h"
 #include "imgui_impl_win32.h"
+#include "raster_renderer.h"
+#include "dxr_renderer.h"
+#include "file_import.h"
+#include "raster_renderer.h"
 #include <codecvt>
 #include <commctrl.h>
 #include <commdlg.h>
@@ -54,12 +58,12 @@ enum class RenderMode {
 static RenderMode g_currentRenderMode = RenderMode::Raster;
 static bool g_showRenderModeWindow = true;
 // Debug toggles for DXR
-static bool g_dxrDebugUV = false;
-static bool g_dxrDumpPixels = false;
-static bool g_dxrHitDebug = false; // encode primitive ID in hit shader for debugging
-static bool g_dxrDumpD3D12Messages = false; // dump D3D12 InfoQueue messages to stderr
-static bool g_rasterDebugUV = false; // show raster UVs in mesh pixel shader (debug)
-static bool g_verboseRenderLogs = false; // when true, prints render-loop diagnostics (off by default)
+bool g_dxrDebugUV = false;
+bool g_dxrDumpPixels = false;
+bool g_dxrHitDebug = false; // encode primitive ID in hit shader for debugging
+bool g_dxrDumpD3D12Messages = false; // dump D3D12 InfoQueue messages to stderr
+bool g_rasterDebugUV = false; // show raster UVs in mesh pixel shader (debug)
+bool g_verboseRenderLogs = false; // when true, prints render-loop diagnostics (off by default)
 
 
 static ComPtr<ID3D12Device> g_device;
@@ -122,7 +126,7 @@ static UINT64 g_fenceValues[FrameCount] = {};
 static HANDLE g_fenceEvent = nullptr;
 
 // Simple pipeline objects
-static ComPtr<ID3D12RootSignature> g_rootSignature;
+ComPtr<ID3D12RootSignature> g_rootSignature;
 static ComPtr<ID3D12PipelineState> g_pipelineState;
 static ComPtr<ID3D12PipelineState> g_meshPipelineState;
 static ComPtr<ID3D12Resource> g_vertexBuffer;
@@ -142,69 +146,15 @@ static bool g_drawGrid = true; // toggle grid rendering
 
 
 
-// Camera for Ray Tracing
-struct CameraCB {
-  float pos[4];
-  float forward[4];
-  float up[4];
-  float params[5]; // fov(deg), aspect, znear, zfar, intensity
-};
+// Small camera module is defined in src/camera.h/.cpp
+#include "camera.h"
 
 // Simple Vec3 helper for CPU-side math
 struct Vec3 { float x, y, z; };
-static CameraCB g_initialCameraData = {{2.33f, -1.50f, -1.93f, 0.0f}, {-0.71f, 0.42f, 0.57f, 0.0f}, {0.0f, 1.0f, 0.0f, 0.0f}, {45.0f, 1280.0f/720.0f, 0.1f, 1000.0f, 1.0f}};
-static CameraCB g_cameraData = {{2.33f, -1.50f, -1.93f, 0.0f}, {-0.71f, 0.42f, 0.57f, 0.0f}, {0.0f, 1.0f, 0.0f, 0.0f}, {45.0f, 1280.0f/720.0f, 0.1f, 1000.0f, 1.0f}};
-static ComPtr<ID3D12Resource> g_cameraConstantBuffer;
-static float g_camYaw = 0.0f;
-static float g_camPitch = 0.0f;
-static float g_camSpeed = 0.8f; // units/sec
-static float g_mouseSensitivity = 0.002f; // radians per pixel
-static POINT g_prevMousePos = {0, 0};
-static bool g_mouseCaptured = false;
-
-// Camera look-at target (we rotate this with mouse look; camera position remains independent)
-static float g_cameraTarget[3] = {0.0f, 0.0f, 0.0f};
-static float g_cameraTargetDistance = 1.0f;
-
-void ResetCamera() {
-    g_cameraData = g_initialCameraData;
-    // Initialize yaw/pitch from forward so mouse-look feels consistent after reset
-    float fx = g_cameraData.forward[0]; float fy = g_cameraData.forward[1]; float fz = g_cameraData.forward[2];
-    // yaw = atan2(fx, -fz) ; pitch = asin(fy)
-    g_camYaw = atan2f(fx, -fz);
-    g_camPitch = asinf(fy);
-}
 
 // --- DXR Globals ---
-static bool g_rayTracingSupported = false;
-static ComPtr<ID3D12Device5> g_dxrDevice;
-struct MeshBLAS {
-  AccelerationStructureBuffers buffers;
-  UINT64 meshId; // index in g_loadedMeshes
-};
-static std::vector<MeshBLAS> g_allBLAS;
-static AccelerationStructureBuffers g_tlas;
-
-// --- DXR Pipeline Globals ---
-static DxcHelper g_dxcHelper;
-static ComPtr<ID3D12StateObject> g_rtStateObject;
-static ComPtr<ID3D12Resource> g_sbtStorage;
-static ComPtr<ID3D12RootSignature> g_rtGlobalRootSignature;
-static ComPtr<ID3D12Resource> g_outputUAV;
-static UINT g_outputUAVDescriptorSize = 0;
-static D3D12_GPU_DESCRIPTOR_HANDLE g_outputUAVGpuHandle;
-static ComPtr<ID3D12DescriptorHeap> g_uavHeap;
-
-// Shader Table Helpers
-struct ShaderTableEntry {
-  void *id;
-  // local root arguments (none for now)
-};
-static UINT g_shaderTableEntrySize = 0;
-// Pointers into g_sbtStorage
-static D3D12_GPU_VIRTUAL_ADDRESS g_rayGenShaderTable;
-static D3D12_GPU_VIRTUAL_ADDRESS g_missShaderTable;
-static D3D12_GPU_VIRTUAL_ADDRESS g_hitGroupShaderTable;
+// DXR implementation moved to DxrRenderer module
+#include "dxr_renderer.h"
 
 // Raw Helper to Add Subobject
 struct SubobjectWrapper {
@@ -220,526 +170,19 @@ struct SubobjectWrapper {
   D3D12_GLOBAL_ROOT_SIGNATURE globalRootSig;
 };
 
-void CreateRayTracingPipeline() {
-  if (!g_rayTracingSupported || !g_dxrDevice)
-    return;
+// Ray tracing pipeline and AS builder moved into DxrRenderer module
 
-  // 1. Compile Shader
-  fprintf(stderr, "Compiling Ray Tracing Shaders...\n");
+  /* Ray Tracing state object creation moved into DxrRenderer::CreateRayTracingPipeline() */
 
-  // Log to stderr only
-  fprintf(stderr, "CreateRT: Compiling shader...\n");
 
-  ComPtr<IDxcBlob> shaderBlob;
-  try {
-    // Add debug defines if requested
-    std::vector<std::wstring> compileDefines;
-    if (g_dxrDebugUV) {
-      compileDefines.push_back(L"RAYGEN_DEBUG=1");
-      fprintf(stderr, "CreateRT: Compiling shader with RAYGEN_DEBUG=1\n");
-    }
-    if (g_dxrHitDebug) {
-      compileDefines.push_back(L"HIT_DEBUG=1");
-      fprintf(stderr, "CreateRT: Compiling shader with HIT_DEBUG=1\n");
-    }
+  /* Ray tracing pipeline creation moved to DxrRenderer */
 
-    shaderBlob = g_dxcHelper.Compile(L"shaders/raytracing.hlsl", L"", L"lib_6_3", compileDefines);
+  /* Shader table creation moved into DxrRenderer::CreateRayTracingPipeline() */
 
-  } catch (const std::exception &e) {
-    fprintf(stderr, "Shader Compilation Failed: %s\n", e.what());
-    return;
-  }
+  /* Output UAV creation moved into DxrRenderer::CreateRayTracingPipeline() */
 
-  if (!shaderBlob) {
-    fprintf(stderr, "Shader compilation returned null blob\n");
-    return;
-  }
-
-  fprintf(stderr, "Shader compiled successfully, blob size: %zu bytes\n", shaderBlob->GetBufferSize());
-
-  // 2. Create Global Root Signature
-  fprintf(stderr, "Creating Global Root Signature...\n");
-  // t0: TLAS
-  // u0: Output UAV descriptor table
-  // t1-t8: Texture SRV descriptor table (8 texture slots)
-  // b0: Camera CBV
-  {
-    D3D12_ROOT_PARAMETER params[7] = {};
-    // t0 - TLAS
-    params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
-    params[0].Descriptor.ShaderRegister = 0;
-    params[0].Descriptor.RegisterSpace = 0;
-    params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    // u0 - output UAV descriptor table
-    D3D12_DESCRIPTOR_RANGE uavRange = {};
-    uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    uavRange.NumDescriptors = 1;
-    uavRange.BaseShaderRegister = 0;
-    uavRange.RegisterSpace = 0;
-    uavRange.OffsetInDescriptorsFromTableStart = 0;
-
-    params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    params[1].DescriptorTable.NumDescriptorRanges = 1;
-    params[1].DescriptorTable.pDescriptorRanges = &uavRange;
-    params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    // t1-t8 - texture SRV descriptor table (8 texture slots)
-    static D3D12_DESCRIPTOR_RANGE srvRange = {};
-    srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srvRange.NumDescriptors = 8; // baseColor, metallicRoughness, normal, occlusion + extras
-    srvRange.BaseShaderRegister = 1; // Start at t1 (t0 is TLAS)
-    srvRange.RegisterSpace = 0;
-    srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-    params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    params[2].DescriptorTable.NumDescriptorRanges = 1;
-    params[2].DescriptorTable.pDescriptorRanges = &srvRange;
-    params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    // b0 - Camera CBV
-    params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-    params[3].Descriptor.ShaderRegister = 0;
-    params[3].Descriptor.RegisterSpace = 0;
-    params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    // b1 - Material CBV
-    params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-    params[4].Descriptor.ShaderRegister = 1;
-    params[4].Descriptor.RegisterSpace = 0;
-    params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    // t9 - Vertices SRV
-    params[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
-    params[5].Descriptor.ShaderRegister = 9;
-    params[5].Descriptor.RegisterSpace = 0;
-    params[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    // t10 - Indices SRV
-    params[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
-    params[6].Descriptor.ShaderRegister = 10;
-    params[6].Descriptor.RegisterSpace = 0;
-    params[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    D3D12_ROOT_SIGNATURE_DESC rootDesc = {};
-    rootDesc.NumParameters = 7;
-    rootDesc.pParameters = params;
-    rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
-
-    // Add a static sampler for shader sampler register s0 so raytracing shaders using
-    // SamplerState linearSampler : register(s0) are satisfied without an explicit
-    // sampler descriptor in a heap.
-    static D3D12_STATIC_SAMPLER_DESC staticSampler = {};
-    staticSampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-    staticSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    staticSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    staticSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    staticSampler.MipLODBias = 0.0f;
-    staticSampler.MaxAnisotropy = 0;
-    staticSampler.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
-    staticSampler.BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK;
-    staticSampler.MinLOD = 0.0f;
-    staticSampler.MaxLOD = D3D12_FLOAT32_MAX;
-    staticSampler.ShaderRegister = 0; // s0
-    staticSampler.RegisterSpace = 0;
-    staticSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    rootDesc.NumStaticSamplers = 1;
-    rootDesc.pStaticSamplers = &staticSampler;
-
-    ComPtr<ID3DBlob> signature;
-    ComPtr<ID3DBlob> error;
-    HRESULT hrSerialize = D3D12SerializeRootSignature(
-        &rootDesc, D3D_ROOT_SIGNATURE_VERSION_1, &signature, &error);
-    if (FAILED(hrSerialize)) {
-      fprintf(stderr, "D3D12SerializeRootSignature failed: 0x%08x\n", (unsigned)hrSerialize);
-      if (error) {
-        fprintf(stderr, "Root signature error: %s\n", (char*)error->GetBufferPointer());
-      }
-      return;
-    }
-    HRESULT hrCreate = g_device->CreateRootSignature(
-        0, signature->GetBufferPointer(), signature->GetBufferSize(),
-        IID_PPV_ARGS(&g_rtGlobalRootSignature));
-    if (FAILED(hrCreate)) {
-      fprintf(stderr, "CreateRootSignature failed: 0x%08x\n", (unsigned)hrCreate);
-      return;
-    }
-  }
-
-  fprintf(stderr, "Global Root Signature created successfully\n");
-
-  // 3. Create State Object
-  // We need to construct D3D12_STATE_OBJECT_DESC manually without d3dx12
-  std::vector<D3D12_STATE_SUBOBJECT> subobjects;
-
-  // Storage to keep descs alive
-  static D3D12_DXIL_LIBRARY_DESC libDesc = {};
-  static D3D12_EXPORT_DESC exports[3] = {};
-  static D3D12_HIT_GROUP_DESC hitGroupDesc = {};
-  static D3D12_RAYTRACING_SHADER_CONFIG shaderConfig = {};
-  static D3D12_RAYTRACING_PIPELINE_CONFIG pipelineConfig = {};
-  static D3D12_GLOBAL_ROOT_SIGNATURE globalRootSigDesc = {};
-
-  // DXIL Library
-  libDesc.DXILLibrary.pShaderBytecode = shaderBlob->GetBufferPointer();
-  libDesc.DXILLibrary.BytecodeLength = shaderBlob->GetBufferSize();
-  exports[0].Name = L"RayGen";
-  exports[0].Flags = D3D12_EXPORT_FLAG_NONE;
-  exports[1].Name = L"Miss";
-  exports[1].Flags = D3D12_EXPORT_FLAG_NONE;
-  exports[2].Name = L"ClosestHit";
-  exports[2].Flags = D3D12_EXPORT_FLAG_NONE;
-  libDesc.NumExports = 3;
-  libDesc.pExports = exports;
-
-  D3D12_STATE_SUBOBJECT libSub = {};
-  libSub.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY;
-  libSub.pDesc = &libDesc;
-  subobjects.push_back(libSub);
-
-  // Hit Group
-  hitGroupDesc.HitGroupExport = L"HitGroup";
-  hitGroupDesc.Type = D3D12_HIT_GROUP_TYPE_TRIANGLES;
-  hitGroupDesc.ClosestHitShaderImport = L"ClosestHit";
-  // AnyHit/Intersection null
-
-  D3D12_STATE_SUBOBJECT hitSub = {};
-  hitSub.Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
-  hitSub.pDesc = &hitGroupDesc;
-  subobjects.push_back(hitSub);
-
-  // Shader Config
-  shaderConfig.MaxPayloadSizeInBytes = 4 * sizeof(float);   // float4 color
-  shaderConfig.MaxAttributeSizeInBytes = 2 * sizeof(float); // barycentrics
-  D3D12_STATE_SUBOBJECT shaderConfigSub = {};
-  shaderConfigSub.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG;
-  shaderConfigSub.pDesc = &shaderConfig;
-  subobjects.push_back(shaderConfigSub);
-
-  // Pipeline Config
-  pipelineConfig.MaxTraceRecursionDepth = 1;
-  D3D12_STATE_SUBOBJECT pipeConfigSub = {};
-  pipeConfigSub.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG;
-  pipeConfigSub.pDesc = &pipelineConfig;
-  subobjects.push_back(pipeConfigSub);
-
-  // Global Root Signature
-  globalRootSigDesc.pGlobalRootSignature = g_rtGlobalRootSignature.Get();
-  D3D12_STATE_SUBOBJECT rootSigSub = {};
-  rootSigSub.Type = D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE;
-  rootSigSub.pDesc = &globalRootSigDesc;
-  subobjects.push_back(rootSigSub);
-
-  D3D12_STATE_OBJECT_DESC stateObjDesc = {};
-  stateObjDesc.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE;
-  stateObjDesc.NumSubobjects = (UINT)subobjects.size();
-  stateObjDesc.pSubobjects = subobjects.data();
-
-  // Log to stderr only
-  fprintf(stderr, "CreateRT: CreateStateObject...\n");
-
-  // Diagnostics
-  fprintf(stderr, "CreateStateObject: subobjects=%zu\n", subobjects.size());
-  fprintf(stderr, "DXIL bytecode length=%llu\n", libDesc.DXILLibrary.BytecodeLength);
-  fprintf(stderr, "Exports: 0=%ls, 1=%ls, 2=%ls\n", exports[0].Name, exports[1].Name, exports[2].Name);
-  fprintf(stderr, "HitGroup: export=%ls, type=%u, closestHit=%ls\n", hitGroupDesc.HitGroupExport, (unsigned)hitGroupDesc.Type, hitGroupDesc.ClosestHitShaderImport);
-  fprintf(stderr, "Global root sig present=%d\n", g_rtGlobalRootSignature != nullptr);
-
-  HRESULT hrState = g_dxrDevice->CreateStateObject(&stateObjDesc, IID_PPV_ARGS(&g_rtStateObject));
-  if (FAILED(hrState)) {
-    fprintf(stderr, "CreateStateObject failed: 0x%08x\n", (unsigned)hrState);
-#ifdef _DEBUG
-    // Try to dump D3D12 debug messages (InfoQueue)
-    ComPtr<ID3D12InfoQueue> infoQ;
-    if (SUCCEEDED(g_device.As(&infoQ))) {
-      UINT64 num = infoQ->GetNumStoredMessagesAllowedByRetrievalFilter();
-      for (UINT64 i = 0; i < num; ++i) {
-        SIZE_T msgLen = 0;
-        infoQ->GetMessage(i, nullptr, &msgLen);
-        D3D12_MESSAGE *msg = (D3D12_MESSAGE*)malloc(msgLen);
-        if (msg) {
-          infoQ->GetMessage(i, msg, &msgLen);
-          fprintf(stderr, "D3D12 MSG: %s\n", msg->pDescription);
-          free(msg);
-        }
-      }
-    }
-#endif
-    return;
-  }
-
-  fprintf(stderr, "Ray Tracing State Object created successfully\n");
-  fprintf(stderr, "CreateRT: StateObject OK\n");
-  fprintf(stderr, "Ray Tracing Pipeline Created!\n");
-
-  // 4. Create Shader Table
-  // Get Properties
-  ComPtr<ID3D12StateObjectProperties> properties;
-  ThrowIfFailed(g_rtStateObject.As(&properties));
-
-  void *rayGenId = properties->GetShaderIdentifier(L"RayGen");
-  void *missId = properties->GetShaderIdentifier(L"Miss");
-  void *hitGroupId = properties->GetShaderIdentifier(L"HitGroup");
-
-  // Log to stderr only
-  fprintf(stderr, "CreateRT: IDs retrieved: RG=%p, Ms=%p, HG=%p\n", rayGenId, missId, hitGroupId);
-
-  if (!rayGenId || !missId || !hitGroupId) {
-    // Log to stderr only
-    fprintf(stderr, "CreateRT: ERROR: One or more Shader IDs are null!\n");
-    return;
-  }
-
-  UINT shaderIdentifierSize = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
-  g_shaderTableEntrySize = Align(shaderIdentifierSize,
-                                 D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT);
-  UINT shaderTableSize =
-      g_shaderTableEntrySize * 3; // 1 RayGen, 1 Miss, 1 HitGroup
-
-  try {
-    AllocateUploadBuffer(g_device.Get(), nullptr, shaderTableSize, &g_sbtStorage,
-                         L"Shader Table");
-  } catch (const std::exception &e) {
-    // Log to stderr only
-    fprintf(stderr, "CreateRT: AllocateUploadBuffer exception (SBT): %s\n", e.what());
-    return;
-  }
-
-  // Map and Write
-  UINT8 *pData;
-  g_sbtStorage->Map(0, nullptr, (void **)&pData);
-
-  memcpy(pData, rayGenId, shaderIdentifierSize); // RayGen at 0
-  memcpy(pData + g_shaderTableEntrySize, missId,
-         shaderIdentifierSize); // Miss at 1
-  memcpy(pData + g_shaderTableEntrySize * 2, hitGroupId,
-         shaderIdentifierSize); // Hit at 2
-
-  g_sbtStorage->Unmap(0, nullptr);
-
-  // Log: shader table created (stderr only)
-  fprintf(stderr, "CreateRT: Shader table uploaded\n");
-
-  g_rayGenShaderTable = g_sbtStorage->GetGPUVirtualAddress();
-  g_missShaderTable = g_rayGenShaderTable + g_shaderTableEntrySize;
-  g_hitGroupShaderTable = g_missShaderTable + g_shaderTableEntrySize;
-
-  fprintf(stderr, "Shader table created: RayGen at %llu, Miss at %llu, Hit at %llu\n",
-          g_rayGenShaderTable, g_missShaderTable, g_hitGroupShaderTable);
-
-  // 5. Create Output UAV
-  D3D12_DESCRIPTOR_HEAP_DESC uavHeapDesc = {};
-  uavHeapDesc.NumDescriptors = 1;
-  uavHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-  uavHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-  HRESULT hrUavHeap = g_device->CreateDescriptorHeap(&uavHeapDesc, IID_PPV_ARGS(&g_uavHeap));
-  if (FAILED(hrUavHeap)) {
-    // Log to stderr only
-    fprintf(stderr, "CreateRT: CreateDescriptorHeap failed: 0x%08x\n", (unsigned)hrUavHeap);
-    return;
-  }
-  // Log to stderr only
-  fprintf(stderr, "CreateRT: UAV descriptor heap created\n");
-
-  try {
-    AllocateUAVBuffer(g_device.Get(), 1280 * 720 * 4 * 4, &g_outputUAV,
-                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"RT Output");
-  } catch (const std::exception &e) {
-    // Log to stderr only
-    fprintf(stderr, "CreateRT: AllocateUAVBuffer exception: %s\n", e.what());
-    return;
-  }
-  // Recreate it as Texture2D for easier management?
-  // AllocateUAVBuffer makes a buffer. RayGen writes to RWTexture2D.
-  // We should use a Texture2D Resource.
-
-  {
-    D3D12_HEAP_PROPERTIES heapProps = {};
-    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-    D3D12_RESOURCE_DESC desc = {};
-    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    desc.Width = 1280;
-    desc.Height = 720;
-    desc.DepthOrArraySize = 1;
-    desc.MipLevels = 1;
-    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    desc.SampleDesc.Count = 1;
-    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-    desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-
-    g_outputUAV.Reset();
-    HRESULT hrCreate = g_device->CreateCommittedResource(
-        &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
-        IID_PPV_ARGS(&g_outputUAV));
-    if (FAILED(hrCreate)) {
-      // Log to stderr only
-      fprintf(stderr, "CreateRT: CreateCommittedResource failed: 0x%08x\n", (unsigned)hrCreate);
-      return;
-    }
-    // Log to stderr only
-    fprintf(stderr, "CreateRT: Output texture created\n");
-
-    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-    uavDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-    uavDesc.Texture2D.MipSlice = 0;
-    uavDesc.Texture2D.PlaneSlice = 0;
-
-
-    if (g_uavHeap) {
-      g_device->CreateUnorderedAccessView(
-          g_outputUAV.Get(), nullptr, &uavDesc,
-          g_uavHeap->GetCPUDescriptorHandleForHeapStart());
-      g_outputUAVGpuHandle = g_uavHeap->GetGPUDescriptorHandleForHeapStart();
-      // Log to stderr only
-      fprintf(stderr, "CreateRT: UAV view created\n");
-    } else {
-      // Log to stderr only
-      fprintf(stderr, "CreateRT: g_uavHeap is null, cannot create UAV view\n");
-      return;
-    }
-  }
-}
-
-// Helper to build AS for all loaded meshes
-// This is a naive implementation that rebuilds everything from scratch
-void BuildAccelerationStructures() {
-  // Log entry to stderr only
-  fprintf(stderr, "BuildAS: Entering BuildAccelerationStructures (meshes=%zu)\n", g_loadedMeshes.size());
-
-  if (!g_rayTracingSupported || !g_dxrDevice)
-    return;
-
-  if (g_loadedMeshes.empty())
-    return;
-
-  // Wait for GPU to finish previous work to avoid hazards (optimization:
-  // implement proper sync)
-  {
-    const UINT64 fence = g_fenceValues[g_frameIndex];
-    g_commandQueue->Signal(g_fence.Get(), fence);
-    g_fenceValues[g_frameIndex]++;
-
-    if (g_fence->GetCompletedValue() < fence) {
-      g_fence->SetEventOnCompletion(fence, g_fenceEvent);
-      WaitForSingleObject(g_fenceEvent, INFINITE);
-    }
-  }
-
-  // Create a transient command list for building AS
-  ComPtr<ID3D12CommandAllocator> cmdAlloc;
-  ComPtr<ID3D12GraphicsCommandList4> cmdList;
-
-  ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                                 IID_PPV_ARGS(&cmdAlloc)));
-  ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                            cmdAlloc.Get(), nullptr,
-                                            IID_PPV_ARGS(&cmdList)));
-
-  // 1. Build BLAS for each mesh
-  g_allBLAS.clear();
-  for (size_t i = 0; i < g_loadedMeshes.size(); ++i) {
-    const auto &mesh = g_loadedMeshes[i];
-
-    // Asset::Vertex is layout {pos, normal, tangent, uv}. Position is at offset
-    // 0. Stride is sizeof(Asset::Vertex).
-    auto bl =
-        BuildBLAS(g_dxrDevice.Get(), cmdList.Get(),
-                  mesh.vertexBuffer->GetGPUVirtualAddress(), mesh.vertexCount,
-                  sizeof(Asset::Vertex),
-                  mesh.indexBuffer->GetGPUVirtualAddress(), mesh.indexCount);
-    g_allBLAS.push_back({bl, (UINT64)i});
-  }
-
-  // 2. Build TLAS
-  // Create instances for each loaded mesh (assume identity transform for now or
-  // use node system later) For now we map 1:1 mesh : instance.
-  std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instanceDescs;
-  for (size_t i = 0; i < g_allBLAS.size(); ++i) {
-    D3D12_RAYTRACING_INSTANCE_DESC inst = {};
-    // Scale by 0.1 to match raster rendering
-    inst.Transform[0][0] = inst.Transform[1][1] = inst.Transform[2][2] = 0.1f;
-    inst.InstanceID = (UINT)i;
-    inst.InstanceMask = 0xFF;
-    inst.InstanceContributionToHitGroupIndex = 0;
-    inst.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
-    inst.AccelerationStructure =
-        g_allBLAS[i].buffers.result->GetGPUVirtualAddress();
-    instanceDescs.push_back(inst);
-  }
-
-  // Allocate instance buffer
-  ComPtr<ID3D12Resource> instanceDescBuffer;
-  AllocateUploadBuffer(g_device.Get(), instanceDescs.data(),
-                       instanceDescs.size() *
-                           sizeof(D3D12_RAYTRACING_INSTANCE_DESC),
-                       &instanceDescBuffer, L"TLAS Instance Buffer");
-
-  // DXR requires the GPU virtual address of the instance descs
-  D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
-  inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
-  inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
-  inputs.Flags =
-      D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
-  inputs.NumDescs = (UINT)instanceDescs.size();
-  inputs.InstanceDescs = instanceDescBuffer->GetGPUVirtualAddress();
-
-  D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info = {};
-  g_dxrDevice->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &info);
-
-  // Reuse/Create Global TLAS buffers
-  g_tlas.scratchSizeInBytes =
-      Align(info.ScratchDataSizeInBytes,
-            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT);
-  g_tlas.resultSizeInBytes =
-      Align(info.ResultDataMaxSizeInBytes,
-            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT);
-
-  // Always reallocate for simplicity in this demo (TODO: reuse)
-  AllocateUAVBuffer(g_device.Get(), g_tlas.scratchSizeInBytes, &g_tlas.scratch,
-                    D3D12_RESOURCE_STATE_COMMON, L"TLAS Scratch");
-  AllocateUAVBuffer(g_device.Get(), g_tlas.resultSizeInBytes, &g_tlas.result,
-                    D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
-                    L"TLAS Result");
-
-  D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {};
-  buildDesc.Inputs = inputs;
-  buildDesc.DestAccelerationStructureData =
-      g_tlas.result->GetGPUVirtualAddress();
-  buildDesc.ScratchAccelerationStructureData =
-      g_tlas.scratch->GetGPUVirtualAddress();
-
-  cmdList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
-
-  // Barrier
-  D3D12_RESOURCE_BARRIER uavBarrier = {};
-  uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-  uavBarrier.UAV.pResource = g_tlas.result.Get();
-  cmdList->ResourceBarrier(1, &uavBarrier);
-
-  cmdList->Close();
-
-  // Execute
-  ID3D12CommandList *pp[] = {cmdList.Get()};
-  g_commandQueue->ExecuteCommandLists(1, pp);
-
-  // Wait again for build to finish (simple sync)
-  {
-    const UINT64 fence = g_fenceValues[g_frameIndex];
-    g_commandQueue->Signal(g_fence.Get(), fence);
-    g_fenceValues[g_frameIndex]++;
-    if (g_fence->GetCompletedValue() < fence) {
-      g_fence->SetEventOnCompletion(fence, g_fenceEvent);
-      WaitForSingleObject(g_fenceEvent, INFINITE);
-    }
-  }
-
-  fprintf(stderr, "DXR Acceleration Structures Built.\n");
-
-  // Log completion to stderr only
-  fprintf(stderr, "BuildAS: Completed BuildAccelerationStructures\n");
-}
+// DXR acceleration structure build moved to DxrRenderer::BuildAccelerationStructures
+// (see src/dxr_renderer.cpp for implementation)
 
 inline void TransitionResource(ID3D12GraphicsCommandList *cmdList,
                                ID3D12Resource *resource,
@@ -755,6 +198,14 @@ inline void TransitionResource(ID3D12GraphicsCommandList *cmdList,
   barrier.Transition.StateAfter = after;
   barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
   cmdList->ResourceBarrier(1, &barrier);
+}
+
+// Fallback helper to avoid name-resolution problems after refactor
+static inline void TR(ID3D12GraphicsCommandList *cmdList,
+                      ID3D12Resource *resource,
+                      D3D12_RESOURCE_STATES before,
+                      D3D12_RESOURCE_STATES after) {
+  TransitionResource(cmdList, resource, before, after);
 }
 
 // Helper to find shader file with fallback paths
@@ -995,16 +446,12 @@ bool InitD3D12(HWND hwnd) {
                                                 &options5, sizeof(options5)))) {
       if (options5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_0) {
         g_rayTracingSupported = true;
-        if (SUCCEEDED(g_device.As(&g_dxrDevice))) {
-          fprintf(stderr, "DXR Ray Tracing Supported and Device Initialized.\n");
-          // Initialize Pipeline
-          CreateRayTracingPipeline();
-          // Log to stderr only
-          fprintf(stderr, "InitD3D12: CreateRayTracingPipeline finished\n");
-        } else {
-          g_rayTracingSupported = false;
-          fprintf(stderr, "DXR Supported but failed to Query ID3D12Device5 interface.\n");
-        }
+        fprintf(stderr, "DXR Ray Tracing Supported (probe)\n");
+        // Initialize DXR probe with device; command queue/fence will be attached later
+        DxrRenderer::Initialize(g_device.Get());
+        DxrRenderer::CreateRayTracingPipeline();
+        // Log to stderr only
+        fprintf(stderr, "InitD3D12: CreateRayTracingPipeline finished\n");
       }
     }
   }
@@ -1034,6 +481,29 @@ bool InitD3D12(HWND hwnd) {
   if (FAILED(hr)) {
     // Log to stderr only
     fprintf(stderr, "InitD3D12: CreateCommandQueue failed 0x%08x\n", (unsigned)hr);
+
+#ifdef _DEBUG
+    // Print device removed reason (helps diagnose driver/device removal)
+    HRESULT removedReason = g_device->GetDeviceRemovedReason();
+    fprintf(stderr, "InitD3D12: GetDeviceRemovedReason() = 0x%08x\n", (unsigned)removedReason);
+
+    // If info queue available, dump recent messages
+    ComPtr<ID3D12InfoQueue> infoQueue;
+    if (SUCCEEDED(g_device->QueryInterface(IID_PPV_ARGS(&infoQueue)))) {
+      UINT64 num = infoQueue->GetNumStoredMessagesAllowedByRetrievalFilter();
+      for (UINT64 i = 0; i < num; ++i) {
+        SIZE_T messageLength = 0;
+        infoQueue->GetMessage(i, nullptr, &messageLength);
+        std::vector<char> message(messageLength);
+        D3D12_MESSAGE* pMsg = reinterpret_cast<D3D12_MESSAGE*>(message.data());
+        infoQueue->GetMessage(i, pMsg, &messageLength);
+        fprintf(stderr, "D3D12 INFO: Category=%d Severity=%d ID=%d: %s\n",
+                (int)pMsg->Category, (int)pMsg->Severity, (int)pMsg->ID,
+                pMsg->pDescription);
+      }
+    }
+#endif
+
     return false;
   }
 
@@ -1222,6 +692,9 @@ bool InitD3D12(HWND hwnd) {
   for (UINT i = 0; i < FrameCount; ++i)
     g_fenceValues[i] = 0;
 
+  // Now that fence and event are valid, attach command queue & fence to DXR renderer
+  DxrRenderer::SetCommandQueue(g_commandQueue.Get(), g_fence.Get(), g_fenceValues, &g_frameIndex, g_fenceEvent);
+
   // --- Create a root signature with CBV b0 (vertex), descriptor table t0
   // (SRV), and CBV b1 (pixel material) ---
   D3D12_ROOT_PARAMETER rootParameters[3] = {};
@@ -1286,15 +759,17 @@ bool InitD3D12(HWND hwnd) {
               simpleShaderPath.c_str());
     fprintf(stderr, "%s", debugMsg);
   }
+  // Use local DXC helper instance here (module-level ones exist in raster/dxr modules)
+  DxcHelper localDxc;
   try {
-    vsBlob = g_dxcHelper.Compile(simpleShaderPath, L"VSMain", L"vs_6_0");
+    vsBlob = localDxc.Compile(simpleShaderPath, L"VSMain", L"vs_6_0");
   } catch (const std::exception &e) {
     // Log to stderr only
     fprintf(stderr, "InitD3D12: VS compile failed (DXC) for %ls: %s\n", simpleShaderPath.c_str(), e.what());
     return false;
   }
   try {
-    psBlob = g_dxcHelper.Compile(simpleShaderPath, L"PSMain", L"ps_6_0");
+    psBlob = localDxc.Compile(simpleShaderPath, L"PSMain", L"ps_6_0");
   } catch (const std::exception &e) {
     // Log to stderr only
     fprintf(stderr, "InitD3D12: PS compile failed (DXC) for %ls: %s\n", simpleShaderPath.c_str(), e.what());
@@ -1312,14 +787,14 @@ bool InitD3D12(HWND hwnd) {
     fprintf(stderr, "%s", debugMsg);
   }
   try {
-    vsMeshBlob = g_dxcHelper.Compile(pbrShaderPath, L"VSMainMesh", L"vs_6_0");
+    vsMeshBlob = localDxc.Compile(pbrShaderPath, L"VSMainMesh", L"vs_6_0");
   } catch (const std::exception &e) {
     // Log to stderr only
     fprintf(stderr, "InitD3D12: VS compile failed (DXC) for %ls: %s\n", pbrShaderPath.c_str(), e.what());
     return false;
   }
   try {
-    psMeshBlob = g_dxcHelper.Compile(pbrShaderPath, L"PSMainMesh", L"ps_6_0");
+    psMeshBlob = localDxc.Compile(pbrShaderPath, L"PSMainMesh", L"ps_6_0");
   } catch (const std::exception &e) {
     // Log to stderr only
     fprintf(stderr, "InitD3D12: PS compile failed (DXC) for %ls: %s\n", pbrShaderPath.c_str(), e.what());
@@ -1387,87 +862,8 @@ bool InitD3D12(HWND hwnd) {
   ThrowIfFailed(g_device->CreateGraphicsPipelineState(
       &psoDesc, IID_PPV_ARGS(&g_pipelineState)));
 
-  // Create grid PSO (we'll render quads as triangles for thicker lines)
-  D3D12_INPUT_ELEMENT_DESC simpleLayout[] = {
-      {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-      {"COLOR", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
-  D3D12_GRAPHICS_PIPELINE_STATE_DESC gridPsoDesc = psoDesc;
-  gridPsoDesc.InputLayout = {simpleLayout, _countof(simpleLayout)};
-  gridPsoDesc.VS = {vsBlob->GetBufferPointer(), vsBlob->GetBufferSize()};
-  gridPsoDesc.PS = {psBlob->GetBufferPointer(), psBlob->GetBufferSize()};
-  // Use triangle topology so each grid line is drawn as a thin quad (two triangles)
-  gridPsoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-  // Disable culling so both faces of the thin quads are visible regardless of winding
-  gridPsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-  ThrowIfFailed(g_device->CreateGraphicsPipelineState(&gridPsoDesc, IID_PPV_ARGS(&g_gridPipelineState)));
-
-  // Create ground grid vertex buffer (each line rendered as a thin quad -> two triangles)
-  {
-    struct GridVertex { float pos[3]; float col[3]; };
-    const int half = 10;
-    const float step = 0.5f;
-    std::vector<GridVertex> verts;
-    verts.reserve((half*2+1)*6*2); // 6 verts per quad, two quads per iteration
-
-    float halfThickness = g_gridThickness * 0.5f;
-
-    for (int i = -half; i <= half; ++i) {
-      float coord = i * step;
-      // Line along X at z=coord -> perpendicular in +Z
-      {
-        float sx = (float)-half * step, sz = coord;
-        float ex = (float)half * step, ez = coord;
-        // perpendicular offset
-        float ox = 0.0f, oz = halfThickness;
-        // quad verts (two triangles): start- , end- , end+ , start- , end+ , start+
-        verts.push_back({{sx, 0.0f, sz - oz}, {0.3f, 0.3f, 0.3f}});
-        verts.push_back({{ex, 0.0f, ez - oz}, {0.3f, 0.3f, 0.3f}});
-        verts.push_back({{ex, 0.0f, ez + oz}, {0.3f, 0.3f, 0.3f}});
-        verts.push_back({{sx, 0.0f, sz - oz}, {0.3f, 0.3f, 0.3f}});
-        verts.push_back({{ex, 0.0f, ez + oz}, {0.3f, 0.3f, 0.3f}});
-        verts.push_back({{sx, 0.0f, sz + oz}, {0.3f, 0.3f, 0.3f}});
-      }
-      // Line along Z at x=coord -> perpendicular in +X
-      {
-        float sx = coord, sz = (float)-half * step;
-        float ex = coord, ez = (float)half * step;
-        float ox = halfThickness, oz = 0.0f;
-        verts.push_back({{sx - ox, 0.0f, sz}, {0.3f, 0.3f, 0.3f}});
-        verts.push_back({{ex - ox, 0.0f, ez}, {0.3f, 0.3f, 0.3f}});
-        verts.push_back({{ex + ox, 0.0f, ez}, {0.3f, 0.3f, 0.3f}});
-        verts.push_back({{sx - ox, 0.0f, sz}, {0.3f, 0.3f, 0.3f}});
-        verts.push_back({{ex + ox, 0.0f, ez}, {0.3f, 0.3f, 0.3f}});
-        verts.push_back({{sx + ox, 0.0f, sz}, {0.3f, 0.3f, 0.3f}});
-      }
-    }
-
-    g_gridVertexCount = (UINT)verts.size();
-
-    UINT vbSize = (UINT)(verts.size() * sizeof(GridVertex));
-    D3D12_HEAP_PROPERTIES heapProps = {};
-    heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
-    D3D12_RESOURCE_DESC vbDesc = {};
-    vbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    vbDesc.Width = vbSize;
-    vbDesc.Height = 1;
-    vbDesc.DepthOrArraySize = 1;
-    vbDesc.MipLevels = 1;
-    vbDesc.SampleDesc.Count = 1;
-    vbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-    ThrowIfFailed(g_device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &vbDesc,
-      D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&g_gridVertexBuffer)));
-
-    UINT8* pData = nullptr;
-    D3D12_RANGE readRange = {0, 0};
-    ThrowIfFailed(g_gridVertexBuffer->Map(0, &readRange, reinterpret_cast<void**>(&pData)));
-    memcpy(pData, verts.data(), vbSize);
-    g_gridVertexBuffer->Unmap(0, nullptr);
-
-    g_gridVBView.BufferLocation = g_gridVertexBuffer->GetGPUVirtualAddress();
-    g_gridVBView.StrideInBytes = sizeof(GridVertex);
-    g_gridVBView.SizeInBytes = vbSize;
-  }
+  // Create grid resources using raster module
+  RasterRenderer::CreateGridResources(g_device.Get(), g_gridThickness);
 
   // --- Create a mesh PSO (position-only vertex layout, simple pixel shader)
   // ---
@@ -1604,84 +1000,7 @@ bool InitD3D12(HWND hwnd) {
   return true;
 }
 
-// Recreate mesh pipeline (recompiles pbr shader with optional debug define)
-void RecreateMeshPipeline() {
-  std::wstring pbrShaderPath = FindShaderFile(L"shaders\\pbr_mesh.hlsl");
-
-  try {
-    std::vector<std::wstring> compileDefines;
-    if (g_rasterDebugUV) {
-      compileDefines.push_back(L"RASTER_DEBUG_UV=1");
-      fprintf(stderr, "RecreateMeshPipeline: adding RASTER_DEBUG_UV define\n");
-    }
-
-    ComPtr<IDxcBlob> vsMeshBlob;
-    ComPtr<IDxcBlob> psMeshBlob;
-
-    vsMeshBlob = g_dxcHelper.Compile(pbrShaderPath, L"VSMainMesh", L"vs_6_0", compileDefines);
-    psMeshBlob = g_dxcHelper.Compile(pbrShaderPath, L"PSMainMesh", L"ps_6_0", compileDefines);
-
-    // Create mesh PSO using same states as earlier
-    D3D12_INPUT_ELEMENT_DESC meshInputLayout[] = {
-        {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-        {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-        {"TANGENT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 40, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}
-    };
-
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC meshPsoDesc = {};
-    // Base settings similar to earlier psoDesc
-    meshPsoDesc.InputLayout = {meshInputLayout, _countof(meshInputLayout)};
-    meshPsoDesc.pRootSignature = g_rootSignature.Get();
-    meshPsoDesc.VS = {vsMeshBlob->GetBufferPointer(), vsMeshBlob->GetBufferSize()};
-    meshPsoDesc.PS = {psMeshBlob->GetBufferPointer(), psMeshBlob->GetBufferSize()};
-
-    D3D12_RASTERIZER_DESC rasterDesc = {};
-    rasterDesc.FillMode = D3D12_FILL_MODE_SOLID;
-    rasterDesc.CullMode = D3D12_CULL_MODE_BACK;
-    rasterDesc.DepthClipEnable = TRUE;
-
-    D3D12_BLEND_DESC blendDesc = {};
-    blendDesc.AlphaToCoverageEnable = FALSE;
-    blendDesc.IndependentBlendEnable = FALSE;
-    for (int i = 0; i < D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i) {
-      blendDesc.RenderTarget[i].BlendEnable = FALSE;
-      blendDesc.RenderTarget[i].LogicOpEnable = FALSE;
-      blendDesc.RenderTarget[i].SrcBlend = D3D12_BLEND_ONE;
-      blendDesc.RenderTarget[i].DestBlend = D3D12_BLEND_ZERO;
-      blendDesc.RenderTarget[i].BlendOp = D3D12_BLEND_OP_ADD;
-      blendDesc.RenderTarget[i].SrcBlendAlpha = D3D12_BLEND_ONE;
-      blendDesc.RenderTarget[i].DestBlendAlpha = D3D12_BLEND_ZERO;
-      blendDesc.RenderTarget[i].BlendOpAlpha = D3D12_BLEND_OP_ADD;
-      blendDesc.RenderTarget[i].LogicOp = D3D12_LOGIC_OP_NOOP;
-      blendDesc.RenderTarget[i].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-    }
-
-    D3D12_DEPTH_STENCIL_DESC depthDesc = {};
-    depthDesc.DepthEnable = FALSE;
-    depthDesc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
-    depthDesc.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
-
-    meshPsoDesc.RasterizerState = rasterDesc;
-    meshPsoDesc.BlendState = blendDesc;
-    meshPsoDesc.DepthStencilState = depthDesc;
-    meshPsoDesc.SampleMask = UINT_MAX;
-    meshPsoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-    meshPsoDesc.NumRenderTargets = 1;
-    meshPsoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
-    meshPsoDesc.SampleDesc.Count = 1;
-
-    ComPtr<ID3D12PipelineState> newMeshPSO;
-    ThrowIfFailed(g_device->CreateGraphicsPipelineState(&meshPsoDesc, IID_PPV_ARGS(&newMeshPSO)));
-
-    // Replace global mesh PSO
-    g_meshPipelineState = newMeshPSO;
-    fprintf(stderr, "RecreateMeshPipeline: Mesh PSO recreated (RASTER_DEBUG_UV=%d)\n", (int)g_rasterDebugUV);
-
-  } catch (const std::exception &e) {
-    fprintf(stderr, "RecreateMeshPipeline failed: %s\n", e.what());
-  }
-}
+// Mesh PSO recreation moved to RasterRenderer::RecreateMeshPipeline (src/raster_renderer.cpp)
 
 void WaitForPreviousFrame() {
   const UINT64 currentFenceValue = g_fenceValues[g_frameIndex];
@@ -1926,7 +1245,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
         // Rebuild AS to exercise DXR path
         // Log and call BuildAccelerationStructures
         fprintf(stderr, "AutoLoad: calling BuildAccelerationStructures()\n");
-        BuildAccelerationStructures();
+        DxrRenderer::BuildAccelerationStructures(g_loadedMeshes);
 
         // Align camera to look horizontally at the loaded model (assume model centered at origin)
         {
@@ -2031,7 +1350,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
         fprintf(stderr, "AutoLoad: Added synthetic cube mesh\n");
 
         // Build AS for synthetic mesh
-        BuildAccelerationStructures();
+        DxrRenderer::BuildAccelerationStructures(g_loadedMeshes);
 
       } catch (const std::exception &e2) {
         // Log to stderr only
@@ -2081,196 +1400,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
     // Render based on current mode
     switch (g_currentRenderMode) {
     case RenderMode::Raytracing: {
-      // DXR Path
-      if (g_rayTracingSupported && g_rtStateObject && g_tlas.result) {
-        // Log to stderr only (controlled by verbose flag)
-        if (g_verboseRenderLogs) fprintf(stderr, "Entering DXR Path\n");
-        ComPtr<ID3D12GraphicsCommandList4> dxrList;
-        if (SUCCEEDED(g_commandList.As(&dxrList))) {
-          // 1. Dispatch Rays
-          // Log to stderr only (controlled by verbose flag)
-          if (g_verboseRenderLogs) fprintf(stderr, "Setting Pipeline State\n");
-          dxrList->SetPipelineState1(g_rtStateObject.Get());
-          dxrList->SetComputeRootSignature(g_rtGlobalRootSignature.Get());
-          dxrList->SetComputeRootShaderResourceView(
-              0, g_tlas.result->GetGPUVirtualAddress());
-          ID3D12DescriptorHeap *heaps[] = {g_uavHeap.Get()};
-          dxrList->SetDescriptorHeaps(1, heaps);
-          dxrList->SetComputeRootDescriptorTable(1, g_outputUAVGpuHandle);
+      // Use DXR module to perform ray dispatch and copy to backbuffer
+      if (DxrRenderer::IsReady()) {
+        if (!DxrRenderer::RenderFrame(g_commandList.Get(), g_frameIndex, g_renderTargets[g_frameIndex].Get(), rtvHandle, g_cameraConstantBuffer.Get(), g_materialConstantBuffer.Get(), g_texturesGpuStart, g_textureDescriptorCount, g_loadedMeshes)) {
+          // If RenderFrame failed, fall back to red clear
+          TR(
+              g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
+              D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
-          // Set texture descriptor table (root parameter 2) if textures are available
-          if (g_textureDescriptorCount > 0) {
-              dxrList->SetComputeRootDescriptorTable(2, g_texturesGpuStart);
-          }
-
-          // Set camera constant buffer view (root parameter 3)
-          if (g_cameraConstantBuffer) {
-            dxrList->SetComputeRootConstantBufferView(3, g_cameraConstantBuffer->GetGPUVirtualAddress());
-          }
-
-          // Set material constant buffer view (root parameter 4)
-          if (g_materialConstantBuffer) {
-            dxrList->SetComputeRootConstantBufferView(4, g_materialConstantBuffer->GetGPUVirtualAddress());
-          }
-
-          // Set vertices SRV (root parameter 5)
-          if (!g_loadedMeshes.empty() && g_loadedMeshes[0].vertexBuffer) {
-            dxrList->SetComputeRootShaderResourceView(5, g_loadedMeshes[0].vertexBuffer->GetGPUVirtualAddress());
-          }
-
-          // Set indices SRV (root parameter 6)
-          if (!g_loadedMeshes.empty() && g_loadedMeshes[0].indexBuffer) {
-            dxrList->SetComputeRootShaderResourceView(6, g_loadedMeshes[0].indexBuffer->GetGPUVirtualAddress());
-          }
-
-          D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
-          dispatchDesc.RayGenerationShaderRecord.StartAddress =
-              g_rayGenShaderTable;
-          dispatchDesc.RayGenerationShaderRecord.SizeInBytes =
-              g_shaderTableEntrySize;
-          dispatchDesc.MissShaderTable.StartAddress = g_missShaderTable;
-          dispatchDesc.MissShaderTable.SizeInBytes = g_shaderTableEntrySize;
-          dispatchDesc.MissShaderTable.StrideInBytes = g_shaderTableEntrySize;
-          dispatchDesc.HitGroupTable.StartAddress = g_hitGroupShaderTable;
-          dispatchDesc.HitGroupTable.SizeInBytes = g_shaderTableEntrySize;
-          dispatchDesc.HitGroupTable.StrideInBytes = g_shaderTableEntrySize;
-          dispatchDesc.Width = 1280;
-          dispatchDesc.Height = 720;
-          dispatchDesc.Depth = 1;
-
-          // Log to stderr only (controlled by verbose flag)
-          if (g_verboseRenderLogs) fprintf(stderr, "Calling DispatchRays\n");
-          dxrList->DispatchRays(&dispatchDesc);
-          // Log to stderr only (controlled by verbose flag)
-          if (g_verboseRenderLogs) fprintf(stderr, "DispatchRays returned\n");
-
-          // Optionally dump D3D12 InfoQueue messages after DispatchRays
-          if (g_dxrDumpD3D12Messages) {
-#ifdef _DEBUG
-            ComPtr<ID3D12InfoQueue> infoQ;
-            if (SUCCEEDED(g_device.As(&infoQ))) {
-              UINT64 num = infoQ->GetNumStoredMessagesAllowedByRetrievalFilter();
-              for (UINT64 i = 0; i < num; ++i) {
-                SIZE_T msgLen = 0;
-                infoQ->GetMessage(i, nullptr, &msgLen);
-                D3D12_MESSAGE *msg = (D3D12_MESSAGE*)malloc(msgLen);
-                if (msg) {
-                  infoQ->GetMessage(i, msg, &msgLen);
-                  fprintf(stderr, "D3D12 MSG: %s\n", msg->pDescription);
-                  free(msg);
-                }
-              }
-              // Clear messages we've read to avoid flooding
-              infoQ->ClearStoredMessages();
-            }
-#endif
-          }
-
-          // 2. Copy to BackBuffer
-          TransitionResource(dxrList.Get(), g_outputUAV.Get(),
-                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                             D3D12_RESOURCE_STATE_COPY_SOURCE);
-          TransitionResource(dxrList.Get(), g_renderTargets[g_frameIndex].Get(),
-                             D3D12_RESOURCE_STATE_PRESENT,
-                             D3D12_RESOURCE_STATE_COPY_DEST);
-          dxrList->CopyResource(g_renderTargets[g_frameIndex].Get(),
-                                g_outputUAV.Get());
-
-          // Optional debug: copy output to readback buffer and print a few pixels (this will stall)
-          if (g_dxrDumpPixels) {
-            // Create readback buffer for entire texture footprint
-            D3D12_RESOURCE_DESC outDesc = g_outputUAV->GetDesc();
-            D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint;
-            UINT numRows = 0;
-            UINT64 rowSizeInBytes = 0;
-            UINT64 totalBytes = 0;
-            g_device->GetCopyableFootprints(&outDesc, 0, 1, 0, &footprint, &numRows, &rowSizeInBytes, &totalBytes);
-
-            ComPtr<ID3D12Resource> readback;
-            D3D12_HEAP_PROPERTIES readHeapProps = {};
-            readHeapProps.Type = D3D12_HEAP_TYPE_READBACK;
-            D3D12_RESOURCE_DESC bufDesc = {};
-            bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-            bufDesc.Alignment = 0;
-            bufDesc.Width = totalBytes;
-            bufDesc.Height = 1;
-            bufDesc.DepthOrArraySize = 1;
-            bufDesc.MipLevels = 1;
-            bufDesc.SampleDesc.Count = 1;
-            bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-            bufDesc.Format = DXGI_FORMAT_UNKNOWN;
-
-            ThrowIfFailed(g_device->CreateCommittedResource(&readHeapProps, D3D12_HEAP_FLAG_NONE, &bufDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback)));
-
-            // Record copy on a transient command list so we can wait and map immediately
-            ComPtr<ID3D12CommandAllocator> tmpAlloc;
-            ComPtr<ID3D12GraphicsCommandList> tmpList;
-            ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&tmpAlloc)));
-            ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, tmpAlloc.Get(), nullptr, IID_PPV_ARGS(&tmpList)));
-
-            D3D12_TEXTURE_COPY_LOCATION dstLoc = {};
-            dstLoc.pResource = readback.Get();
-            dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-            dstLoc.PlacedFootprint = footprint;
-
-            D3D12_TEXTURE_COPY_LOCATION srcLoc = {};
-            srcLoc.pResource = g_outputUAV.Get();
-            srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-            srcLoc.SubresourceIndex = 0;
-
-            tmpList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, nullptr);
-            ThrowIfFailed(tmpList->Close());
-
-            ID3D12CommandList* lists[] = { tmpList.Get() };
-            g_commandQueue->ExecuteCommandLists(1, lists);
-
-            // Wait for completion
-            ComPtr<ID3D12Fence> fence;
-            ThrowIfFailed(g_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
-            UINT64 fenceVal = 1;
-            ThrowIfFailed(g_commandQueue->Signal(fence.Get(), fenceVal));
-            if (fence->GetCompletedValue() < fenceVal) {
-              HANDLE event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-              ThrowIfFailed(fence->SetEventOnCompletion(fenceVal, event));
-              WaitForSingleObject(event, INFINITE);
-              CloseHandle(event);
-            }
-
-            // Map and print first 4 pixels
-            UINT8* mapped = nullptr;
-            D3D12_RANGE readRange = {0, (SIZE_T)totalBytes};
-            ThrowIfFailed(readback->Map(0, &readRange, reinterpret_cast<void**>(&mapped)));
-            // Each pixel is RGBA8, RowPitch may be larger than width*4
-            UINT pitch = (UINT)footprint.Footprint.RowPitch;
-            if (pitch >= 4) {
-              fprintf(stderr, "DXR Dump: rowPitch=%u, numRows=%u\n", pitch, numRows);
-              for (UINT y = 0; y < min((UINT)4, numRows); ++y) {
-                for (UINT x = 0; x < 4; ++x) {
-                  size_t idx = (size_t)y * pitch + x * 4;
-                  unsigned char r = mapped[idx + 0];
-                  unsigned char g = mapped[idx + 1];
-                  unsigned char b = mapped[idx + 2];
-                  unsigned char a = mapped[idx + 3];
-                  fprintf(stderr, "Pixel[%u,%u] = (%u,%u,%u,%u)\n", x, y, r, g, b, a);
-                }
-              }
-            }
-            readback->Unmap(0, nullptr);
-          }
-
-          // 3. Prepare for ImGui (RenderTarget state)
-          TransitionResource(dxrList.Get(), g_renderTargets[g_frameIndex].Get(),
-                             D3D12_RESOURCE_STATE_COPY_DEST,
-                             D3D12_RESOURCE_STATE_RENDER_TARGET);
-          TransitionResource(dxrList.Get(), g_outputUAV.Get(),
-                             D3D12_RESOURCE_STATE_COPY_SOURCE,
-                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-
+          FLOAT clearColor[] = {0.8f, 0.2f, 0.2f, 1.0f}; // Red to indicate fallback
+          g_commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
           g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
         }
       } else {
         // Fallback to raster if DXR not available
-        TransitionResource(
+        TR(
             g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
             D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
@@ -2285,7 +1429,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
       // Fast Rasterization Path
       // Log to stderr only (controlled by verbose flag)
       if (g_verboseRenderLogs) fprintf(stderr, "Entering Raster Path\n");
-      TransitionResource(
+      TR(
           g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
           D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
@@ -2307,16 +1451,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
       // No demo triangle; ensure render target is bound for subsequent draws
       g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
 
-      // Draw ground grid (optional)
-      if (g_drawGrid && g_gridPipelineState && g_gridVertexCount > 0) {
-        g_commandList->SetPipelineState(g_gridPipelineState.Get());
-        g_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        g_commandList->IASetVertexBuffers(0, 1, &g_gridVBView);
-        // Use camera CB for grid shader
-        if (g_cameraConstantBuffer) {
-          g_commandList->SetGraphicsRootConstantBufferView(0, g_cameraConstantBuffer->GetGPUVirtualAddress());
-        }
-        g_commandList->DrawInstanced(g_gridVertexCount, 1, 0, 0);
+      // Draw ground grid (optional) via raster module
+      if (g_drawGrid) {
+        RasterRenderer::DrawGrid(g_commandList.Get(), g_cameraConstantBuffer.Get());
       }
 
       // Draw loaded meshes
@@ -2360,7 +1497,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
 
     case RenderMode::PathTracing: {
       // TODO: Implement full path tracing with ReSTIR
-      TransitionResource(
+      TR(
           g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
           D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
@@ -2377,7 +1514,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
     ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), g_commandList.Get());
 
     // Transition back to present
-    TransitionResource(g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
+    TR(g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
                        D3D12_RESOURCE_STATE_RENDER_TARGET,
                        D3D12_RESOURCE_STATE_PRESENT);
 
@@ -2736,21 +1873,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
         // DXR debug: show UV output from RayGen
         if (ImGui::Checkbox("DXR: Show RayGen UV (debug)", &g_dxrDebugUV)) {
           // Recreate pipeline with debug define; reinitializing RT pipeline
-          CreateRayTracingPipeline();
+          DxrRenderer::CreateRayTracingPipeline();
         }
         if (ImGui::Checkbox("DXR: Dump Output Pixels (debug, stalls)", &g_dxrDumpPixels)) {
           fprintf(stderr, "DXR: DumpOutputPixels set=%d\n", g_dxrDumpPixels);
         }
         if (ImGui::Checkbox("DXR: Encode Hit PrimID (debug)", &g_dxrHitDebug)) {
           fprintf(stderr, "DXR: HitDebug set=%d\n", g_dxrHitDebug);
-          CreateRayTracingPipeline();
+          DxrRenderer::CreateRayTracingPipeline();
         }
         if (ImGui::Checkbox("DXR: Dump D3D12 Messages (debug)", &g_dxrDumpD3D12Messages)) {
           fprintf(stderr, "DXR: DumpD3D12Messages set=%d\n", g_dxrDumpD3D12Messages);
         }
         if (ImGui::Checkbox("Raster: Show UV (debug)", &g_rasterDebugUV)) {
           fprintf(stderr, "Raster: ShowUV set=%d\n", g_rasterDebugUV);
-          RecreateMeshPipeline();
+          RasterRenderer::RecreateMeshPipeline(g_device.Get(), g_rootSignature.Get());
         }
 
         if (ImGui::RadioButton("Path Tracing (WIP)", g_currentRenderMode == RenderMode::PathTracing)) {
@@ -2845,7 +1982,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
           fprintf(stderr, "%s\n", g_lastAssetStatus.c_str());
 
           // Rebuild AS
-          BuildAccelerationStructures();
+          DxrRenderer::BuildAccelerationStructures(g_loadedMeshes);
         }
       }
 
@@ -2853,16 +1990,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
 
       // File open button (use native Win32 dialog)
       if (ImGui::Button("Open glTF...")) {
-        OPENFILENAMEW ofn = {};
-        WCHAR szFile[1024] = {};
-        ofn.lStructSize = sizeof(OPENFILENAMEW);
-        ofn.hwndOwner = g_hwnd;
-        ofn.lpstrFile = szFile;
-        ofn.nMaxFile = (DWORD)std::size(szFile);
-        ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
-        ofn.lpstrFilter = L"glTF files\0*.gltf;*.glb\0All files\0*.*\0";
-        if (GetOpenFileNameW(&ofn)) {
-          std::string utf8path = WStringToUtf8(szFile);
+        std::wstring chosen;
+        if (OpenGltfFileDialog(g_hwnd, chosen)) {
+          std::string utf8path = WStringToUtf8(chosen);
           g_selectedAssetPath = utf8path;
           g_lastAssetStatus = std::string("Selected: ") + utf8path;
           fprintf(stderr, "%s\n", g_lastAssetStatus.c_str());
