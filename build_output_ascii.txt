@@ -1,0 +1,17 @@
+Configuring (Visual Studio 17 2022)...
+-- Selecting Windows SDK version 10.0.26100.0 to target Windows 10.0.22631.
+-- Found tinygltf include dir: D:/project-render/repos/vcpkg/installed/x64-windows/include
+-- Configuring done (1.1s)
+-- Generating done (0.0s)
+-- Build files have been written to: D:/project-render/build
+Building (Debug)...
+.NET Framework i??in MSBuild s??r??m 17.14.40+3e7442088
+
+  asset_loader.vcxproj -> D:\project-render\build\Debug\asset_loader.lib
+  imgui_static.vcxproj -> D:\project-render\build\Debug\imgui_static.lib
+  main.cpp
+D:\project-render\src\main.cpp(990,25): warning C4456: declaration of 'cbDesc' hides previous local declaration [D:\project-render\build\project-render.vcxproj]
+      D:\project-render\src\main.cpp(938,23):
+      see declaration of 'cbDesc'
+  
+D:\project-render\src\main.cpp(1120,83): error C1075: '{': no matching token found [D:\project-render\build\project-render.vcxproj]
