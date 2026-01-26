@@ -218,7 +218,7 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     
     // Combine
     float NdotL = max(dot(N, L), 0.0);
-    float3 Lo = (diffuse + specular) * NdotL * params[4]; // Light intensity
+    float3 Lo = (diffuse + specular) * NdotL * camParams[4]; // Light intensity
     
     // Add ambient
     float3 ambient = float3(0.03, 0.03, 0.03) * baseColor * ao;
