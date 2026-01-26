@@ -11,13 +11,15 @@
 #include "d3d12_helpers.h"
 #include "dxc_wrapper.h"
 #include "dxr_helpers.h"
+#include "dxr_renderer.h"
+#include "file_import.h"
 #include "imgui.h"
 #include "imgui_impl_dx12.h"
 #include "imgui_impl_win32.h"
 #include "raster_renderer.h"
-#include "dxr_renderer.h"
-#include "file_import.h"
-#include "raster_renderer.h"
+#include "scene.h"
+#include <algorithm>
+#include <chrono>
 #include <codecvt>
 #include <commctrl.h>
 #include <commdlg.h>
@@ -26,8 +28,6 @@
 #include <stdio.h>
 #include <string>
 #include <vector>
-#include <chrono>
-#include <algorithm>
 
 // Forward-declare ImGui Win32 WndProc handler (imgui_impl_win32.h documents
 // this should be declared by user)
@@ -40,19 +40,34 @@ namespace fs = std::filesystem;
 
 using Microsoft::WRL::ComPtr;
 
-// Hint to NVIDIA/AMD drivers to prefer the high-performance GPU on Optimus systems
+// Top-level exception handler for debug builds (file scope)
+#ifdef _DEBUG
+static LONG WINAPI TopLevelExceptionHandler(EXCEPTION_POINTERS *ep) {
+  if (ep && ep->ExceptionRecord) {
+    fprintf(stderr, "TopLevelExceptionHandler: code=0x%08x at IP=0x%p\n",
+            (unsigned)ep->ExceptionRecord->ExceptionCode,
+            ep->ExceptionRecord->ExceptionAddress);
+  } else {
+    fprintf(stderr, "TopLevelExceptionHandler: called with null record\n");
+  }
+  return EXCEPTION_EXECUTE_HANDLER;
+}
+#endif
+
+// Hint to NVIDIA/AMD drivers to prefer the high-performance GPU on Optimus
+// systems
 extern "C" {
-  __declspec(dllexport) unsigned long long NvOptimusEnablement = 0x00000001ULL;
-  __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+__declspec(dllexport) unsigned long long NvOptimusEnablement = 0x00000001ULL;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 }
 
 static const UINT FrameCount = 2;
 
 // Render Mode System
 enum class RenderMode {
-    Raster,        // Fast rasterization for scene traversal
-    Raytracing,    // Current DXR implementation
-    PathTracing    // Full path tracing with ReSTIR (future)
+  Raster,     // Fast rasterization for scene traversal
+  Raytracing, // Current DXR implementation
+  PathTracing // Full path tracing with ReSTIR (future)
 };
 
 static RenderMode g_currentRenderMode = RenderMode::Raster;
@@ -63,10 +78,10 @@ bool g_dxrDumpPixels = false;
 bool g_dxrHitDebug = false; // encode primitive ID in hit shader for debugging
 bool g_dxrDumpD3D12Messages = false; // dump D3D12 InfoQueue messages to stderr
 bool g_rasterDebugUV = false; // show raster UVs in mesh pixel shader (debug)
-bool g_verboseRenderLogs = false; // when true, prints render-loop diagnostics (off by default)
+bool g_verboseRenderLogs =
+    false; // when true, prints render-loop diagnostics (off by default)
 
-
-static ComPtr<ID3D12Device> g_device;
+ComPtr<ID3D12Device> g_device;
 static ComPtr<ID3D12CommandQueue> g_commandQueue;
 static ComPtr<IDXGISwapChain3> g_swapChain;
 
@@ -81,7 +96,7 @@ static UINT g_dsvDescriptorSize = 0;
 
 static ComPtr<ID3D12DescriptorHeap> g_imguiHeap;
 
-static DescriptorHeapAllocator g_cbvSrvAllocator;
+DescriptorHeapAllocator g_cbvSrvAllocator;
 static FrameResource g_frameResources[FrameCount];
 static ComPtr<ID3D12GraphicsCommandList> g_commandList;
 static UINT g_frameIndex = 0;
@@ -92,13 +107,13 @@ static UINT g_windowWidth = 1280;
 static UINT g_windowHeight = 720;
 
 // Loaded meshes from Asset loader
-static std::vector<Asset::GpuMesh> g_loadedMeshes;
-static std::vector<Asset::Material> g_loadedMaterials;
-static std::vector<Asset::Texture> g_loadedTextures;
-static D3D12_GPU_DESCRIPTOR_HANDLE g_texturesGpuStart = {0};
+std::vector<Asset::GpuMesh> g_loadedMeshes;
+std::vector<Asset::Material> g_loadedMaterials;
+std::vector<Asset::Texture> g_loadedTextures;
+D3D12_GPU_DESCRIPTOR_HANDLE g_texturesGpuStart = {0};
 static ComPtr<ID3D12Resource>
     g_materialBuffer; // Persistent material constant buffer
-static UINT g_textureDescriptorCount = 0;
+UINT g_textureDescriptorCount = 0;
 static ComPtr<ID3D12Resource> g_materialConstantBuffer;
 static bool g_showAssetsWindow =
     true; // Controls visibility of the Assets panel (can be closed/reopened)
@@ -144,13 +159,13 @@ static float g_gridThickness = 0.01f; // increase to make lines thicker
 
 static bool g_drawGrid = true; // toggle grid rendering
 
-
-
 // Small camera module is defined in src/camera.h/.cpp
 #include "camera.h"
 
 // Simple Vec3 helper for CPU-side math
-struct Vec3 { float x, y, z; };
+struct Vec3 {
+  float x, y, z;
+};
 
 // --- DXR Globals ---
 // DXR implementation moved to DxrRenderer module
@@ -172,17 +187,18 @@ struct SubobjectWrapper {
 
 // Ray tracing pipeline and AS builder moved into DxrRenderer module
 
-  /* Ray Tracing state object creation moved into DxrRenderer::CreateRayTracingPipeline() */
+/* Ray Tracing state object creation moved into
+ * DxrRenderer::CreateRayTracingPipeline() */
 
+/* Ray tracing pipeline creation moved to DxrRenderer */
 
-  /* Ray tracing pipeline creation moved to DxrRenderer */
+/* Shader table creation moved into DxrRenderer::CreateRayTracingPipeline() */
 
-  /* Shader table creation moved into DxrRenderer::CreateRayTracingPipeline() */
+/* Output UAV creation moved into DxrRenderer::CreateRayTracingPipeline() */
 
-  /* Output UAV creation moved into DxrRenderer::CreateRayTracingPipeline() */
-
-// DXR acceleration structure build moved to DxrRenderer::BuildAccelerationStructures
-// (see src/dxr_renderer.cpp for implementation)
+// DXR acceleration structure build moved to
+// DxrRenderer::BuildAccelerationStructures (see src/dxr_renderer.cpp for
+// implementation)
 
 inline void TransitionResource(ID3D12GraphicsCommandList *cmdList,
                                ID3D12Resource *resource,
@@ -202,8 +218,7 @@ inline void TransitionResource(ID3D12GraphicsCommandList *cmdList,
 
 // Fallback helper to avoid name-resolution problems after refactor
 static inline void TR(ID3D12GraphicsCommandList *cmdList,
-                      ID3D12Resource *resource,
-                      D3D12_RESOURCE_STATES before,
+                      ID3D12Resource *resource, D3D12_RESOURCE_STATES before,
                       D3D12_RESOURCE_STATES after) {
   TransitionResource(cmdList, resource, before, after);
 }
@@ -260,7 +275,8 @@ static void GetHardwareAdapter(IDXGIFactory4 *pFactory,
     ComPtr<ID3D12Device> testDevice;
     if (SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0,
                                     IID_PPV_ARGS(&testDevice)))) {
-      // Prefer the adapter with the most dedicated video memory (likely the dGPU)
+      // Prefer the adapter with the most dedicated video memory (likely the
+      // dGPU)
       if (desc.DedicatedVideoMemory > maxDedicatedMem) {
         maxDedicatedMem = desc.DedicatedVideoMemory;
         bestAdapter = adapter;
@@ -273,22 +289,22 @@ static void GetHardwareAdapter(IDXGIFactory4 *pFactory,
   }
 }
 
-static void ExecuteCommandListAndWait(ID3D12GraphicsCommandList* cmdList)
-{
-    ThrowIfFailed(cmdList->Close());
-    ID3D12CommandList* lists[] = { cmdList };
-    g_commandQueue->ExecuteCommandLists(1, lists);
-    
-    // Wait for completion
-    ComPtr<ID3D12Fence> fence;
-    ThrowIfFailed(g_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
-    HANDLE event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-    ThrowIfFailed(g_commandQueue->Signal(fence.Get(), 1));
-    if (fence->GetCompletedValue() < 1) {
-        ThrowIfFailed(fence->SetEventOnCompletion(1, event));
-        WaitForSingleObject(event, INFINITE);
-    }
-    CloseHandle(event);
+static void ExecuteCommandListAndWait(ID3D12GraphicsCommandList *cmdList) {
+  ThrowIfFailed(cmdList->Close());
+  ID3D12CommandList *lists[] = {cmdList};
+  g_commandQueue->ExecuteCommandLists(1, lists);
+
+  // Wait for completion
+  ComPtr<ID3D12Fence> fence;
+  ThrowIfFailed(
+      g_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
+  HANDLE event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+  ThrowIfFailed(g_commandQueue->Signal(fence.Get(), 1));
+  if (fence->GetCompletedValue() < 1) {
+    ThrowIfFailed(fence->SetEventOnCompletion(1, event));
+    WaitForSingleObject(event, INFINITE);
+  }
+  CloseHandle(event);
 }
 
 void CreateTestTexture() {
@@ -297,10 +313,10 @@ void CreateTestTexture() {
   const UINT height = 2;
   const UINT pixelSize = 4; // RGBA
   BYTE textureData[width * height * pixelSize] = {
-    255, 0, 0, 255,    // Red
-    0, 255, 0, 255,    // Green
-    0, 0, 255, 255,    // Blue
-    255, 255, 0, 255   // Yellow
+      255, 0,   0,   255, // Red
+      0,   255, 0,   255, // Green
+      0,   0,   255, 255, // Blue
+      255, 255, 0,   255  // Yellow
   };
 
   D3D12_HEAP_PROPERTIES uploadHeapProps = {};
@@ -316,12 +332,12 @@ void CreateTestTexture() {
   uploadDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
   ComPtr<ID3D12Resource> uploadBuffer;
-  ThrowIfFailed(g_device->CreateCommittedResource(&uploadHeapProps, D3D12_HEAP_FLAG_NONE, &uploadDesc,
-                                                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                                                 IID_PPV_ARGS(&uploadBuffer)));
+  ThrowIfFailed(g_device->CreateCommittedResource(
+      &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &uploadDesc,
+      D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadBuffer)));
 
   // Copy texture data to upload buffer
-  void* mappedData = nullptr;
+  void *mappedData = nullptr;
   uploadBuffer->Map(0, nullptr, &mappedData);
   memcpy(mappedData, textureData, sizeof(textureData));
   uploadBuffer->Unmap(0, nullptr);
@@ -341,9 +357,9 @@ void CreateTestTexture() {
   textureDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
 
   ComPtr<ID3D12Resource> texture;
-  ThrowIfFailed(g_device->CreateCommittedResource(&defaultHeapProps, D3D12_HEAP_FLAG_NONE, &textureDesc,
-                                                 D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-                                                 IID_PPV_ARGS(&texture)));
+  ThrowIfFailed(g_device->CreateCommittedResource(
+      &defaultHeapProps, D3D12_HEAP_FLAG_NONE, &textureDesc,
+      D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&texture)));
 
   // Allocate descriptor for the texture
   DescriptorAllocation alloc = g_cbvSrvAllocator.Allocate(0, 1);
@@ -362,8 +378,11 @@ void CreateTestTexture() {
   // Copy from upload buffer to texture
   ComPtr<ID3D12CommandAllocator> cmdAlloc;
   ComPtr<ID3D12GraphicsCommandList> cmdList;
-  ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&cmdAlloc)));
-  ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, cmdAlloc.Get(), nullptr, IID_PPV_ARGS(&cmdList)));
+  ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                                 IID_PPV_ARGS(&cmdAlloc)));
+  ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                            cmdAlloc.Get(), nullptr,
+                                            IID_PPV_ARGS(&cmdList)));
 
   D3D12_TEXTURE_COPY_LOCATION dst = {};
   dst.pResource = texture.Get();
@@ -427,10 +446,14 @@ bool InitD3D12(HWND hwnd) {
     char descBuf[128];
     size_t converted = 0;
     wcstombs_s(&converted, descBuf, desc.Description, sizeof(descBuf));
-    fprintf(stderr, "InitD3D12: Using adapter: %s (VendorId=0x%04x, DeviceId=0x%04x, DedicatedVidMem=%llu bytes)\n",
-            descBuf, (unsigned)desc.VendorId, (unsigned)desc.DeviceId, (unsigned long long)desc.DedicatedVideoMemory);
+    fprintf(stderr,
+            "InitD3D12: Using adapter: %s (VendorId=0x%04x, DeviceId=0x%04x, "
+            "DedicatedVidMem=%llu bytes)\n",
+            descBuf, (unsigned)desc.VendorId, (unsigned)desc.DeviceId,
+            (unsigned long long)desc.DedicatedVideoMemory);
   } else {
-    fprintf(stderr, "InitD3D12: No hardware adapter selected (will try WARP)\n");
+    fprintf(stderr,
+            "InitD3D12: No hardware adapter selected (will try WARP)\n");
   }
 
   HRESULT hr = E_FAIL;
@@ -447,7 +470,8 @@ bool InitD3D12(HWND hwnd) {
       if (options5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_0) {
         g_rayTracingSupported = true;
         fprintf(stderr, "DXR Ray Tracing Supported (probe)\n");
-        // Initialize DXR probe with device; command queue/fence will be attached later
+        // Initialize DXR probe with device; command queue/fence will be
+        // attached later
         DxrRenderer::Initialize(g_device.Get());
         DxrRenderer::CreateRayTracingPipeline();
         // Log to stderr only
@@ -480,12 +504,14 @@ bool InitD3D12(HWND hwnd) {
   hr = g_device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&g_commandQueue));
   if (FAILED(hr)) {
     // Log to stderr only
-    fprintf(stderr, "InitD3D12: CreateCommandQueue failed 0x%08x\n", (unsigned)hr);
+    fprintf(stderr, "InitD3D12: CreateCommandQueue failed 0x%08x\n",
+            (unsigned)hr);
 
 #ifdef _DEBUG
     // Print device removed reason (helps diagnose driver/device removal)
     HRESULT removedReason = g_device->GetDeviceRemovedReason();
-    fprintf(stderr, "InitD3D12: GetDeviceRemovedReason() = 0x%08x\n", (unsigned)removedReason);
+    fprintf(stderr, "InitD3D12: GetDeviceRemovedReason() = 0x%08x\n",
+            (unsigned)removedReason);
 
     // If info queue available, dump recent messages
     ComPtr<ID3D12InfoQueue> infoQueue;
@@ -495,7 +521,7 @@ bool InitD3D12(HWND hwnd) {
         SIZE_T messageLength = 0;
         infoQueue->GetMessage(i, nullptr, &messageLength);
         std::vector<char> message(messageLength);
-        D3D12_MESSAGE* pMsg = reinterpret_cast<D3D12_MESSAGE*>(message.data());
+        D3D12_MESSAGE *pMsg = reinterpret_cast<D3D12_MESSAGE *>(message.data());
         infoQueue->GetMessage(i, pMsg, &messageLength);
         fprintf(stderr, "D3D12 INFO: Category=%d Severity=%d ID=%d: %s\n",
                 (int)pMsg->Category, (int)pMsg->Severity, (int)pMsg->ID,
@@ -537,7 +563,8 @@ bool InitD3D12(HWND hwnd) {
                                                    nullptr, &swapChain1);
   if (FAILED(hrSwap)) {
     // Log to stderr only
-    fprintf(stderr, "InitD3D12: CreateSwapChainForHwnd failed 0x%08x\n", (unsigned)hrSwap);
+    fprintf(stderr, "InitD3D12: CreateSwapChainForHwnd failed 0x%08x\n",
+            (unsigned)hrSwap);
     return false;
   }
 
@@ -600,8 +627,8 @@ bool InitD3D12(HWND hwnd) {
   depthHeapProps.VisibleNodeMask = 1;
 
   ThrowIfFailed(g_device->CreateCommittedResource(
-      &depthHeapProps, D3D12_HEAP_FLAG_NONE,
-      &depthBufferDesc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &depthClear,
+      &depthHeapProps, D3D12_HEAP_FLAG_NONE, &depthBufferDesc,
+      D3D12_RESOURCE_STATE_DEPTH_WRITE, &depthClear,
       IID_PPV_ARGS(&g_depthBuffer)));
 
   // Create DSV
@@ -610,17 +637,20 @@ bool InitD3D12(HWND hwnd) {
   dsvView.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
   dsvView.Flags = D3D12_DSV_FLAG_NONE;
 
-  g_device->CreateDepthStencilView(g_depthBuffer.Get(),
-                                   &dsvView, g_dsvHeap->GetCPUDescriptorHandleForHeapStart());
+  g_device->CreateDepthStencilView(
+      g_depthBuffer.Get(), &dsvView,
+      g_dsvHeap->GetCPUDescriptorHandleForHeapStart());
 
   D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle =
       g_rtvHeap->GetCPUDescriptorHandleForHeapStart();
   D3D12_CPU_DESCRIPTOR_HANDLE rtvHandleStart = rtvHandle;
   for (UINT i = 0; i < FrameCount; ++i) {
-    HRESULT hrBuf = g_swapChain->GetBuffer(i, IID_PPV_ARGS(&g_renderTargets[i]));
+    HRESULT hrBuf =
+        g_swapChain->GetBuffer(i, IID_PPV_ARGS(&g_renderTargets[i]));
     if (FAILED(hrBuf)) {
       // Log to stderr only
-      fprintf(stderr, "InitD3D12: GetBuffer failed for index %u: 0x%08x\n", i, (unsigned)hrBuf);
+      fprintf(stderr, "InitD3D12: GetBuffer failed for index %u: 0x%08x\n", i,
+              (unsigned)hrBuf);
       return false;
     }
     g_device->CreateRenderTargetView(g_renderTargets[i].Get(), nullptr,
@@ -646,10 +676,11 @@ bool InitD3D12(HWND hwnd) {
   imguiHeapDesc.NumDescriptors = 1;
   imguiHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
   HRESULT hrImg = g_device->CreateDescriptorHeap(&imguiHeapDesc,
-                                               IID_PPV_ARGS(&g_imguiHeap));
+                                                 IID_PPV_ARGS(&g_imguiHeap));
   if (FAILED(hrImg)) {
     // Log to stderr only
-    fprintf(stderr, "InitD3D12: CreateDescriptorHeap for ImGui failed 0x%08x\n", (unsigned)hrImg);
+    fprintf(stderr, "InitD3D12: CreateDescriptorHeap for ImGui failed 0x%08x\n",
+            (unsigned)hrImg);
     return false;
   }
   // Log: ImGui descriptor heap created (stderr only)
@@ -662,7 +693,9 @@ bool InitD3D12(HWND hwnd) {
         IID_PPV_ARGS(&g_frameResources[i].commandAllocator));
     if (FAILED(hrAlloc)) {
       // Log to stderr only
-      fprintf(stderr, "InitD3D12: CreateCommandAllocator failed for frame %u: 0x%08x\n", i, (unsigned)hrAlloc);
+      fprintf(stderr,
+              "InitD3D12: CreateCommandAllocator failed for frame %u: 0x%08x\n",
+              i, (unsigned)hrAlloc);
       return false;
     }
     g_frameResources[i].fenceValue = 0;
@@ -692,8 +725,10 @@ bool InitD3D12(HWND hwnd) {
   for (UINT i = 0; i < FrameCount; ++i)
     g_fenceValues[i] = 0;
 
-  // Now that fence and event are valid, attach command queue & fence to DXR renderer
-  DxrRenderer::SetCommandQueue(g_commandQueue.Get(), g_fence.Get(), g_fenceValues, &g_frameIndex, g_fenceEvent);
+  // Now that fence and event are valid, attach command queue & fence to DXR
+  // renderer
+  DxrRenderer::SetCommandQueue(g_commandQueue.Get(), g_fence.Get(),
+                               g_fenceValues, &g_frameIndex, g_fenceEvent);
 
   // --- Create a root signature with CBV b0 (vertex), descriptor table t0
   // (SRV), and CBV b1 (pixel material) ---
@@ -759,24 +794,28 @@ bool InitD3D12(HWND hwnd) {
               simpleShaderPath.c_str());
     fprintf(stderr, "%s", debugMsg);
   }
-  // Use local DXC helper instance here (module-level ones exist in raster/dxr modules)
+  // Use local DXC helper instance here (module-level ones exist in raster/dxr
+  // modules)
   DxcHelper localDxc;
   try {
     vsBlob = localDxc.Compile(simpleShaderPath, L"VSMain", L"vs_6_0");
   } catch (const std::exception &e) {
     // Log to stderr only
-    fprintf(stderr, "InitD3D12: VS compile failed (DXC) for %ls: %s\n", simpleShaderPath.c_str(), e.what());
+    fprintf(stderr, "InitD3D12: VS compile failed (DXC) for %ls: %s\n",
+            simpleShaderPath.c_str(), e.what());
     return false;
   }
   try {
     psBlob = localDxc.Compile(simpleShaderPath, L"PSMain", L"ps_6_0");
   } catch (const std::exception &e) {
     // Log to stderr only
-    fprintf(stderr, "InitD3D12: PS compile failed (DXC) for %ls: %s\n", simpleShaderPath.c_str(), e.what());
+    fprintf(stderr, "InitD3D12: PS compile failed (DXC) for %ls: %s\n",
+            simpleShaderPath.c_str(), e.what());
     return false;
   }
 
-  // --- Compile mesh PBR shaders (full vertex layout + PBR material pixel shader) using DXC (SM6) ---
+  // --- Compile mesh PBR shaders (full vertex layout + PBR material pixel
+  // shader) using DXC (SM6) ---
   ComPtr<IDxcBlob> vsMeshBlob;
   ComPtr<IDxcBlob> psMeshBlob;
   std::wstring pbrShaderPath = FindShaderFile(L"shaders\\pbr_mesh.hlsl");
@@ -790,14 +829,16 @@ bool InitD3D12(HWND hwnd) {
     vsMeshBlob = localDxc.Compile(pbrShaderPath, L"VSMainMesh", L"vs_6_0");
   } catch (const std::exception &e) {
     // Log to stderr only
-    fprintf(stderr, "InitD3D12: VS compile failed (DXC) for %ls: %s\n", pbrShaderPath.c_str(), e.what());
+    fprintf(stderr, "InitD3D12: VS compile failed (DXC) for %ls: %s\n",
+            pbrShaderPath.c_str(), e.what());
     return false;
   }
   try {
     psMeshBlob = localDxc.Compile(pbrShaderPath, L"PSMainMesh", L"ps_6_0");
   } catch (const std::exception &e) {
     // Log to stderr only
-    fprintf(stderr, "InitD3D12: PS compile failed (DXC) for %ls: %s\n", pbrShaderPath.c_str(), e.what());
+    fprintf(stderr, "InitD3D12: PS compile failed (DXC) for %ls: %s\n",
+            pbrShaderPath.c_str(), e.what());
     return false;
   }
 
@@ -913,8 +954,9 @@ bool InitD3D12(HWND hwnd) {
   // Log: reached post-Create pipeline initialization (stderr only)
   fprintf(stderr, "InitD3D12: Post-pipeline initialization reached\n");
 
-  // Demo triangle removed. Scene will rely on loaded assets for visible geometry.
-  // If you need a synthetic fallback, the code below will create a cube when auto-load fails.
+  // Demo triangle removed. Scene will rely on loaded assets for visible
+  // geometry. If you need a synthetic fallback, the code below will create a
+  // cube when auto-load fails.
 
   // --- Create constant buffer (upload heap) ---
   struct AlignConstants {
@@ -974,22 +1016,25 @@ bool InitD3D12(HWND hwnd) {
   // Allocate camera constant buffer (upload heap)
   {
     const UINT64 camCbSize = (sizeof(CameraCB) + 255) & ~255;
-    D3D12_RESOURCE_DESC cbDesc = {};
-    cbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    cbDesc.Width = camCbSize;
-    cbDesc.Height = 1;
-    cbDesc.DepthOrArraySize = 1;
-    cbDesc.MipLevels = 1;
-    cbDesc.SampleDesc.Count = 1;
-    cbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    D3D12_RESOURCE_DESC camCbDesc = {};
+    camCbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    camCbDesc.Width = camCbSize;
+    camCbDesc.Height = 1;
+    camCbDesc.DepthOrArraySize = 1;
+    camCbDesc.MipLevels = 1;
+    camCbDesc.SampleDesc.Count = 1;
+    camCbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
-    ThrowIfFailed(g_device->CreateCommittedResource(&uploadHeapProps, D3D12_HEAP_FLAG_NONE, &cbDesc,
-        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&g_cameraConstantBuffer)));
+    ThrowIfFailed(g_device->CreateCommittedResource(
+        &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &camCbDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&g_cameraConstantBuffer)));
 
     // Initialize with default camera
     UINT8 *pCamData = nullptr;
     D3D12_RANGE readRange = {0, 0};
-    ThrowIfFailed(g_cameraConstantBuffer->Map(0, &readRange, reinterpret_cast<void **>(&pCamData)));
+    ThrowIfFailed(g_cameraConstantBuffer->Map(
+        0, &readRange, reinterpret_cast<void **>(&pCamData)));
     memcpy(pCamData, &g_cameraData, sizeof(g_cameraData));
     g_cameraConstantBuffer->Unmap(0, nullptr);
   }
@@ -1000,7 +1045,8 @@ bool InitD3D12(HWND hwnd) {
   return true;
 }
 
-// Mesh PSO recreation moved to RasterRenderer::RecreateMeshPipeline (src/raster_renderer.cpp)
+// Mesh PSO recreation moved to RasterRenderer::RecreateMeshPipeline
+// (src/raster_renderer.cpp)
 
 void WaitForPreviousFrame() {
   const UINT64 currentFenceValue = g_fenceValues[g_frameIndex];
@@ -1022,7 +1068,8 @@ void WaitForPreviousFrame() {
 }
 
 void ResizeSwapChain(UINT width, UINT height) {
-  if (width == 0 || height == 0) return;
+  if (width == 0 || height == 0)
+    return;
 
   // Wait for GPU to finish
   WaitForPreviousFrame();
@@ -1036,18 +1083,20 @@ void ResizeSwapChain(UINT width, UINT height) {
   // Resize swap chain
   DXGI_SWAP_CHAIN_DESC swapChainDesc = {};
   g_swapChain->GetDesc(&swapChainDesc);
-  ThrowIfFailed(g_swapChain->ResizeBuffers(FrameCount, width, height, 
-                                           swapChainDesc.BufferDesc.Format, 
+  ThrowIfFailed(g_swapChain->ResizeBuffers(FrameCount, width, height,
+                                           swapChainDesc.BufferDesc.Format,
                                            swapChainDesc.Flags));
 
   g_windowWidth = width;
   g_windowHeight = height;
 
   // Recreate render targets
-  D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = g_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+  D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle =
+      g_rtvHeap->GetCPUDescriptorHandleForHeapStart();
   for (UINT i = 0; i < FrameCount; ++i) {
     ThrowIfFailed(g_swapChain->GetBuffer(i, IID_PPV_ARGS(&g_renderTargets[i])));
-    g_device->CreateRenderTargetView(g_renderTargets[i].Get(), nullptr, rtvHandle);
+    g_device->CreateRenderTargetView(g_renderTargets[i].Get(), nullptr,
+                                     rtvHandle);
     rtvHandle.ptr += g_rtvDescriptorSize;
   }
 
@@ -1069,16 +1118,18 @@ void ResizeSwapChain(UINT width, UINT height) {
   clearValue.Format = DXGI_FORMAT_D32_FLOAT;
   clearValue.DepthStencil.Depth = 1.0f;
 
-  ThrowIfFailed(g_device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, 
-                                                  &depthDesc, D3D12_RESOURCE_STATE_DEPTH_WRITE,
-                                                  &clearValue, IID_PPV_ARGS(&g_depthBuffer)));
+  ThrowIfFailed(g_device->CreateCommittedResource(
+      &heapProps, D3D12_HEAP_FLAG_NONE, &depthDesc,
+      D3D12_RESOURCE_STATE_DEPTH_WRITE, &clearValue,
+      IID_PPV_ARGS(&g_depthBuffer)));
 
   D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
   dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
   dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
 
-  g_device->CreateDepthStencilView(g_depthBuffer.Get(), &dsvDesc, 
-                                   g_dsvHeap->GetCPUDescriptorHandleForHeapStart());
+  g_device->CreateDepthStencilView(
+      g_depthBuffer.Get(), &dsvDesc,
+      g_dsvHeap->GetCPUDescriptorHandleForHeapStart());
 
   g_frameIndex = g_swapChain->GetCurrentBackBufferIndex();
 }
@@ -1104,10 +1155,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
   return DefWindowProc(hWnd, message, wParam, lParam);
 }
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow) {
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
+                   int nCmdShow) {
   // Do not create or show a console window here.
-  // We assume the caller runs the executable from a terminal (or redirects stdout/stderr).
-  // Logging still uses stderr but we won't forcibly allocate a console window.
+  // We assume the caller runs the executable from a terminal (or redirects
+  // stdout/stderr). Logging still uses stderr but we won't forcibly allocate a
+  // console window.
 
   // Log to stderr only
   fprintf(stderr, "Application starting...\n");
@@ -1158,146 +1211,51 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
 
   // Auto-load sample glTF at startup (for automated DXR testing)
   // Use command line argument if provided, otherwise use default
-  std::string autoLoadPath = customGltfPath.empty() ? "assets/DamagedHelmet.glb" : customGltfPath; 
+  std::string autoLoadPath =
+      customGltfPath.empty() ? "assets/DamagedHelmet.glb" : customGltfPath;
   try {
     if (fs::exists(autoLoadPath)) {
-      std::vector<Asset::GpuMesh> meshes;
-      std::vector<Asset::Material> materials;
-      std::vector<Asset::Texture> textures;
-      bool ok = Asset::LoadGltf(autoLoadPath, meshes, &materials, &textures);
-      // Log AutoLoad results to stderr only
-      if (!ok) {
-        fprintf(stderr, "AutoLoad: failed to load %s\n", autoLoadPath.c_str());
+      if (!Scene::ImportGltf(autoLoadPath)) {
+        fprintf(stderr, "AutoLoad: failed to import %s\n",
+                autoLoadPath.c_str());
       } else {
-        fprintf(stderr, "AutoLoad: loaded %s (meshes=%zu, materials=%zu, textures=%zu)\n",
-                autoLoadPath.c_str(), meshes.size(), materials.size(), textures.size());
-      }
-
-      if (ok) {
-        size_t meshBase = g_loadedMeshes.size();
-        size_t materialBase = g_loadedMaterials.size();
-        size_t textureBase = g_loadedTextures.size();
-
-        g_loadedMeshes.insert(g_loadedMeshes.end(), meshes.begin(), meshes.end());
-        g_loadedMaterials.insert(g_loadedMaterials.end(), materials.begin(), materials.end());
-        g_loadedTextures.insert(g_loadedTextures.end(), textures.begin(), textures.end());
-
-        // Update material constant buffer if materials loaded
-        if (!g_loadedMaterials.empty() && g_materialConstantBuffer) {
-          struct MaterialCB {
-            float baseColorFactor[4];
-            float params1[4];
-            float specular[4];
-            float emissiveFactor[4];
-            int textureIndices[4];
-            int emissiveAndPad[4]; // x=emissiveTexIndex, yzw=padding
-          };
-          MaterialCB matCB = {};
-          const auto &mat = g_loadedMaterials[0]; // assume first material
-          memcpy(matCB.baseColorFactor, mat.baseColorFactor, sizeof(float) * 4);
-          matCB.params1[0] = mat.metallicFactor;
-          matCB.params1[1] = mat.roughnessFactor;
-          matCB.params1[2] = mat.workflow;
-          memcpy(matCB.specular, mat.specularFactor, sizeof(float) * 3);
-          matCB.emissiveFactor[3] = mat.glossinessFactor; // glossiness in w of emissive?
-          matCB.textureIndices[0] = mat.baseColorTexture;
-          matCB.textureIndices[1] = mat.metallicRoughnessTexture;
-          matCB.textureIndices[2] = mat.normalTexture;
-          matCB.textureIndices[3] = mat.occlusionTexture;
-          matCB.emissiveAndPad[0] = -1; // no emissive texture
-          
-          UINT8 *pMatData = nullptr;
-          D3D12_RANGE readRange = {0, 0};
-          ThrowIfFailed(g_materialConstantBuffer->Map(0, &readRange, reinterpret_cast<void **>(&pMatData)));
-          memcpy(pMatData, &matCB, sizeof(matCB));
-          g_materialConstantBuffer->Unmap(0, nullptr);
-        }
-
-        if (!textures.empty()) {
-          // Allocate persistent descriptors from frame 0
-          DescriptorAllocation alloc = g_cbvSrvAllocator.Allocate(0, (UINT)textures.size());
-          if (g_textureDescriptorCount == 0) {
-            g_texturesGpuStart = alloc.gpu;
-          }
-          for (size_t i = 0; i < textures.size(); ++i) {
-            D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = alloc.cpu;
-            cpuHandle.ptr += i * g_device->GetDescriptorHandleIncrementSize(
-                                       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-
-            const Asset::Texture &tex = textures[i];
-            if (tex.resource) {
-              D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-              srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-              srvDesc.Format = tex.format;
-              srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-              srvDesc.Texture2D.MipLevels = tex.mipLevels;
-              g_device->CreateShaderResourceView(tex.resource.Get(), &srvDesc, cpuHandle);
-            }
-          }
-          g_textureDescriptorCount += (UINT)textures.size();
-        }
-
-        // If no textures were loaded, create a simple 2x2 checkerboard texture for testing
-        if (textures.empty()) {
-          CreateTestTexture();
-        }
-
-        // Rebuild AS to exercise DXR path
-        // Log and call BuildAccelerationStructures
-        fprintf(stderr, "AutoLoad: calling BuildAccelerationStructures()\n");
-        DxrRenderer::BuildAccelerationStructures(g_loadedMeshes);
-
-        // Align camera to look horizontally at the loaded model (assume model centered at origin)
-        {
-          float targetX = 0.0f, targetY = 0.0f, targetZ = 0.0f;
-          float dirX = targetX - g_cameraData.pos[0];
-          float dirY = targetY - g_cameraData.pos[1];
-          float dirZ = targetZ - g_cameraData.pos[2];
-          float yaw = atan2f(dirX, -dirZ);
-          g_camYaw = yaw;
-          g_camPitch = 0.0f; // keep horizontal
-          // Update camera forward/up in camera CB
-          float cp = cosf(g_camPitch);
-          float sp = sinf(g_camPitch);
-          g_cameraData.forward[0] = cp * sinf(g_camYaw);
-          g_cameraData.forward[1] = sp;
-          g_cameraData.forward[2] = cp * -cosf(g_camYaw);
-          g_cameraData.up[0] = 0.0f; g_cameraData.up[1] = 1.0f; g_cameraData.up[2] = 0.0f;
-        }
+        fprintf(stderr, "AutoLoad: imported %s\n", autoLoadPath.c_str());
+        // Reset camera to default view after auto-import
+        ResetCamera();
       }
     } else {
       // Log to stderr only
-      fprintf(stderr, "AutoLoad: %s not found - creating synthetic test mesh\n", autoLoadPath.c_str());
+      fprintf(stderr, "AutoLoad: %s not found - creating synthetic test mesh\n",
+              autoLoadPath.c_str());
 
-      // Create a cube mesh (centered at origin, size 1.0) to exercise TLAS/DispatchRays
+      // Create a cube mesh (centered at origin, size 1.0) to exercise
+      // TLAS/DispatchRays
       try {
         Asset::GpuMesh gm;
         Asset::Vertex cubeVerts[8] = {
-            {{-0.5f, -0.5f, -0.5f}, {0,0,-1}, {1,0,0,1}, {0.0f, 0.0f}},
-            {{ 0.5f, -0.5f, -0.5f}, {0,0,-1}, {1,0,0,1}, {1.0f, 0.0f}},
-            {{ 0.5f,  0.5f, -0.5f}, {0,0,-1}, {1,0,0,1}, {1.0f, 1.0f}},
-            {{-0.5f,  0.5f, -0.5f}, {0,0,-1}, {1,0,0,1}, {0.0f, 1.0f}},
+            {{-0.5f, -0.5f, -0.5f}, {0, 0, -1}, {1, 0, 0, 1}, {0.0f, 0.0f}},
+            {{0.5f, -0.5f, -0.5f}, {0, 0, -1}, {1, 0, 0, 1}, {1.0f, 0.0f}},
+            {{0.5f, 0.5f, -0.5f}, {0, 0, -1}, {1, 0, 0, 1}, {1.0f, 1.0f}},
+            {{-0.5f, 0.5f, -0.5f}, {0, 0, -1}, {1, 0, 0, 1}, {0.0f, 1.0f}},
 
-            {{-0.5f, -0.5f,  0.5f}, {0,0,1}, {1,0,0,1}, {0.0f, 0.0f}},
-            {{ 0.5f, -0.5f,  0.5f}, {0,0,1}, {1,0,0,1}, {1.0f, 0.0f}},
-            {{ 0.5f,  0.5f,  0.5f}, {0,0,1}, {1,0,0,1}, {1.0f, 1.0f}},
-            {{-0.5f,  0.5f,  0.5f}, {0,0,1}, {1,0,0,1}, {0.0f, 1.0f}},
+            {{-0.5f, -0.5f, 0.5f}, {0, 0, 1}, {1, 0, 0, 1}, {0.0f, 0.0f}},
+            {{0.5f, -0.5f, 0.5f}, {0, 0, 1}, {1, 0, 0, 1}, {1.0f, 0.0f}},
+            {{0.5f, 0.5f, 0.5f}, {0, 0, 1}, {1, 0, 0, 1}, {1.0f, 1.0f}},
+            {{-0.5f, 0.5f, 0.5f}, {0, 0, 1}, {1, 0, 0, 1}, {0.0f, 1.0f}},
         };
         // 12 triangles (36 indices)
-        UINT indices[36] = {
-          // back face
-          0,1,2, 0,2,3,
-          // front face
-          4,6,5, 4,7,6,
-          // left
-          4,0,3, 4,3,7,
-          // right
-          1,5,6, 1,6,2,
-          // bottom
-          4,5,1, 4,1,0,
-          // top
-          3,2,6, 3,6,7
-        };
+        UINT indices[36] = {// back face
+                            0, 1, 2, 0, 2, 3,
+                            // front face
+                            4, 6, 5, 4, 7, 6,
+                            // left
+                            4, 0, 3, 4, 3, 7,
+                            // right
+                            1, 5, 6, 1, 6, 2,
+                            // bottom
+                            4, 5, 1, 4, 1, 0,
+                            // top
+                            3, 2, 6, 3, 6, 7};
 
         D3D12_HEAP_PROPERTIES heapProps = {};
         heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
@@ -1311,14 +1269,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
         vbDesc.SampleDesc.Count = 1;
         vbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
-        ThrowIfFailed(g_device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &vbDesc,
-                                                       D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                                                       IID_PPV_ARGS(&gm.vertexBuffer)));
+        ThrowIfFailed(g_device->CreateCommittedResource(
+            &heapProps, D3D12_HEAP_FLAG_NONE, &vbDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+            IID_PPV_ARGS(&gm.vertexBuffer)));
 
         // copy vertex data
         UINT8 *pData = nullptr;
-        D3D12_RANGE readRange = {0,0};
-        ThrowIfFailed(gm.vertexBuffer->Map(0, &readRange, reinterpret_cast<void **>(&pData)));
+        D3D12_RANGE readRange = {0, 0};
+        ThrowIfFailed(gm.vertexBuffer->Map(0, &readRange,
+                                           reinterpret_cast<void **>(&pData)));
         memcpy(pData, cubeVerts, sizeof(cubeVerts));
         gm.vertexBuffer->Unmap(0, nullptr);
 
@@ -1328,11 +1288,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
 
         D3D12_RESOURCE_DESC ibDesc = vbDesc;
         ibDesc.Width = sizeof(indices);
-        ThrowIfFailed(g_device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &ibDesc,
-                                                       D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                                                       IID_PPV_ARGS(&gm.indexBuffer)));
+        ThrowIfFailed(g_device->CreateCommittedResource(
+            &heapProps, D3D12_HEAP_FLAG_NONE, &ibDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+            IID_PPV_ARGS(&gm.indexBuffer)));
         pData = nullptr;
-        ThrowIfFailed(gm.indexBuffer->Map(0, &readRange, reinterpret_cast<void **>(&pData)));
+        ThrowIfFailed(gm.indexBuffer->Map(0, &readRange,
+                                          reinterpret_cast<void **>(&pData)));
         memcpy(pData, indices, sizeof(indices));
         gm.indexBuffer->Unmap(0, nullptr);
 
@@ -1350,11 +1312,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
         fprintf(stderr, "AutoLoad: Added synthetic cube mesh\n");
 
         // Build AS for synthetic mesh
-        DxrRenderer::BuildAccelerationStructures(g_loadedMeshes);
+        Scene::RebuildAccelerationStructures();
 
       } catch (const std::exception &e2) {
         // Log to stderr only
-        fprintf(stderr, "AutoLoad: exception creating synthetic mesh: %s\n", e2.what());
+        fprintf(stderr, "AutoLoad: exception creating synthetic mesh: %s\n",
+                e2.what());
       }
     }
   } catch (const std::exception &e) {
@@ -1367,7 +1330,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
 
   auto PopulateCommandList = [&]() {
     // Log to stderr only (controlled by verbose flag)
-    if (g_verboseRenderLogs) fprintf(stderr, "PopulateCommandList start\n");
+    if (g_verboseRenderLogs)
+      fprintf(stderr, "PopulateCommandList start\n");
 
     // Reset per-frame command allocator and command list
     ThrowIfFailed(g_frameResources[g_frameIndex].commandAllocator->Reset());
@@ -1402,23 +1366,29 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
     case RenderMode::Raytracing: {
       // Use DXR module to perform ray dispatch and copy to backbuffer
       if (DxrRenderer::IsReady()) {
-        if (!DxrRenderer::RenderFrame(g_commandList.Get(), g_frameIndex, g_renderTargets[g_frameIndex].Get(), rtvHandle, g_cameraConstantBuffer.Get(), g_materialConstantBuffer.Get(), g_texturesGpuStart, g_textureDescriptorCount, g_loadedMeshes)) {
+        if (!DxrRenderer::RenderFrame(
+                g_commandList.Get(), g_frameIndex,
+                g_renderTargets[g_frameIndex].Get(), rtvHandle,
+                g_cameraConstantBuffer.Get(), g_materialConstantBuffer.Get(),
+                g_texturesGpuStart, g_textureDescriptorCount,
+                Scene::GetActiveMeshes())) {
           // If RenderFrame failed, fall back to red clear
-          TR(
-              g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
-              D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+          TR(g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
+             D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
-          FLOAT clearColor[] = {0.8f, 0.2f, 0.2f, 1.0f}; // Red to indicate fallback
-          g_commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+          FLOAT clearColor[] = {0.8f, 0.2f, 0.2f,
+                                1.0f}; // Red to indicate fallback
+          g_commandList->ClearRenderTargetView(rtvHandle, clearColor, 0,
+                                               nullptr);
           g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
         }
       } else {
         // Fallback to raster if DXR not available
-        TR(
-            g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
-            D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        TR(g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
+           D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
-        FLOAT clearColor[] = {0.8f, 0.2f, 0.2f, 1.0f}; // Red to indicate fallback
+        FLOAT clearColor[] = {0.8f, 0.2f, 0.2f,
+                              1.0f}; // Red to indicate fallback
         g_commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
         g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
       }
@@ -1428,10 +1398,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
     case RenderMode::Raster: {
       // Fast Rasterization Path
       // Log to stderr only (controlled by verbose flag)
-      if (g_verboseRenderLogs) fprintf(stderr, "Entering Raster Path\n");
-      TR(
-          g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
-          D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+      if (g_verboseRenderLogs)
+        fprintf(stderr, "Entering Raster Path\n");
+      TR(g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
+         D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
       FLOAT clearColor[] = {0.2f, 0.3f, 0.4f, 1.0f};
       g_commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
@@ -1439,7 +1409,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
       // Clear depth buffer
       D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle =
           g_dsvHeap->GetCPUDescriptorHandleForHeapStart();
-      g_commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+      g_commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH,
+                                           1.0f, 0, 0, nullptr);
 
       g_commandList->SetGraphicsRootSignature(g_rootSignature.Get());
       // Use camera constant buffer for proper camera movement
@@ -1453,13 +1424,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
 
       // Draw ground grid (optional) via raster module
       if (g_drawGrid) {
-        RasterRenderer::DrawGrid(g_commandList.Get(), g_cameraConstantBuffer.Get());
+        RasterRenderer::DrawGrid(g_commandList.Get(),
+                                 g_cameraConstantBuffer.Get());
       }
 
       // Draw loaded meshes
       if (!g_loadedMeshes.empty() && g_meshPipelineState) {
         // Log to stderr only (controlled by verbose flag)
-        if (g_verboseRenderLogs) fprintf(stderr, "Drawing %zu meshes\n", g_loadedMeshes.size());
+        if (g_verboseRenderLogs)
+          fprintf(stderr, "Drawing %zu meshes\n", g_loadedMeshes.size());
         g_commandList->SetPipelineState(g_meshPipelineState.Get());
         g_commandList->IASetPrimitiveTopology(
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -1476,6 +1449,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
         // Draw all meshes (not just the first one)
         for (size_t i = 0; i < g_loadedMeshes.size(); ++i) {
           const auto &gm = g_loadedMeshes[i];
+          // Skip meshes that have been deleted or not properly initialized
+          if (!gm.vertexBuffer || !gm.indexBuffer || gm.ibView.SizeInBytes == 0)
+            continue;
+
           g_commandList->IASetVertexBuffers(0, 1, &gm.vbView);
           g_commandList->IASetIndexBuffer(&gm.ibView);
 
@@ -1497,9 +1474,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
 
     case RenderMode::PathTracing: {
       // TODO: Implement full path tracing with ReSTIR
-      TR(
-          g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
-          D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+      TR(g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
+         D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
       FLOAT clearColor[] = {0.1f, 0.1f, 0.1f, 1.0f}; // Dark to indicate WIP
       g_commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
@@ -1515,8 +1491,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
 
     // Transition back to present
     TR(g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
-                       D3D12_RESOURCE_STATE_RENDER_TARGET,
-                       D3D12_RESOURCE_STATE_PRESENT);
+       D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
 
     ThrowIfFailed(g_commandList->Close());
   };
@@ -1557,11 +1532,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
 
   // Log entering main loop (stderr only)
   fprintf(stderr, "Entering main loop\n");
+  fflush(stderr);
 
   // Setup timing for camera movement
   static auto prevTime = std::chrono::high_resolution_clock::now();
 
+  // Enter main loop (simple, no extra SEH wrappers)
   while (msg.message != WM_QUIT) {
+    //fprintf(stderr, "MainLoop: start iteration\n");
+    fflush(stderr);
     if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
       TranslateMessage(&msg);
       DispatchMessage(&msg);
@@ -1590,10 +1569,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
     bool appFocused = (GetForegroundWindow() == g_hwnd);
 
     // Handle mouse rotation when RMB is pressed (only when the app is focused)
-    // Use FPS-style capture: confine cursor and recenter each frame for smooth relative motion
+    // Use FPS-style capture: confine cursor and recenter each frame for smooth
+    // relative motion
     RECT clientRect;
     GetClientRect(g_hwnd, &clientRect);
-    POINT centerScreen = { clientRect.right / 2, clientRect.bottom / 2 };
+    POINT centerScreen = {clientRect.right / 2, clientRect.bottom / 2};
     ClientToScreen(g_hwnd, &centerScreen);
 
     if (appFocused && (GetAsyncKeyState(VK_RBUTTON) & 0x8000)) {
@@ -1601,7 +1581,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
         // Enter capture mode
         SetCursorPos(centerScreen.x, centerScreen.y);
         ShowCursor(FALSE);
-        RECT winRect; GetWindowRect(g_hwnd, &winRect); ClipCursor(&winRect);
+        RECT winRect;
+        GetWindowRect(g_hwnd, &winRect);
+        ClipCursor(&winRect);
         g_mouseCaptured = true;
       }
 
@@ -1617,8 +1599,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
 
       // Clamp pitch to avoid flipping
       const float maxPitch = 3.14159265f * 0.5f - 0.01f;
-      if (g_camPitch > maxPitch) g_camPitch = maxPitch;
-      if (g_camPitch < -maxPitch) g_camPitch = -maxPitch;
+      if (g_camPitch > maxPitch)
+        g_camPitch = maxPitch;
+      if (g_camPitch < -maxPitch)
+        g_camPitch = -maxPitch;
 
       // Compute forward from yaw/pitch
       g_cameraData.forward[0] = cosf(g_camPitch) * sinf(g_camYaw);
@@ -1645,8 +1629,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
         moveSpeed *= 3.0f;
     }
 
-    // Build forward vector for rendering (uses yaw/pitch) and also compute a horizontal-only forward for FPS movement
-    Vec3 camF = {g_cameraData.forward[0], g_cameraData.forward[1], g_cameraData.forward[2]};
+    // Build forward vector for rendering (uses yaw/pitch) and also compute a
+    // horizontal-only forward for FPS movement
+    Vec3 camF = {g_cameraData.forward[0], g_cameraData.forward[1],
+                 g_cameraData.forward[2]};
     Vec3 camU = {g_cameraData.up[0], g_cameraData.up[1], g_cameraData.up[2]};
     // rotate forward by yaw/pitch (used for view/rendering)
     {
@@ -1661,27 +1647,60 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
 
     // Horizontal FPS movement basis (yaw-only forward)
     Vec3 worldUp = {0.0f, 1.0f, 0.0f};
-    Vec3 moveF = { sinf(g_camYaw), 0.0f, -cosf(g_camYaw) };
+    Vec3 moveF = {sinf(g_camYaw), 0.0f, -cosf(g_camYaw)};
     // Right vector = cross(moveF, worldUp)
-    Vec3 moveR = { moveF.y * worldUp.z - moveF.z * worldUp.y,
-                   moveF.z * worldUp.x - moveF.x * worldUp.z,
-                   moveF.x * worldUp.y - moveF.y * worldUp.x };
+    Vec3 moveR = {moveF.y * worldUp.z - moveF.z * worldUp.y,
+                  moveF.z * worldUp.x - moveF.x * worldUp.z,
+                  moveF.x * worldUp.y - moveF.y * worldUp.x};
 
     // normalize helper
-    auto normalize3 = [](Vec3 &v){ float l = sqrtf(v.x*v.x+v.y*v.y+v.z*v.z); if (l>0.00001f){ v.x/=l; v.y/=l; v.z/=l;} };
-    normalize3(camF); normalize3(moveR); normalize3(moveF);
+    auto normalize3 = [](Vec3 &v) {
+      float l = sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
+      if (l > 0.00001f) {
+        v.x /= l;
+        v.y /= l;
+        v.z /= l;
+      }
+    };
+    normalize3(camF);
+    normalize3(moveR);
+    normalize3(moveF);
 
-    Vec3 move = {0,0,0};
+    Vec3 move = {0, 0, 0};
     if (appFocused) {
       // W/S forward/back (horizontal)
-      if (GetAsyncKeyState('W') & 0x8000) { move.x += moveF.x; move.y += moveF.y; move.z += moveF.z; }
-      if (GetAsyncKeyState('S') & 0x8000) { move.x -= moveF.x; move.y -= moveF.y; move.z -= moveF.z; }
+      if (GetAsyncKeyState('W') & 0x8000) {
+        move.x += moveF.x;
+        move.y += moveF.y;
+        move.z += moveF.z;
+      }
+      if (GetAsyncKeyState('S') & 0x8000) {
+        move.x -= moveF.x;
+        move.y -= moveF.y;
+        move.z -= moveF.z;
+      }
       // A/D strafing (standard FPS: A=left, D=right)
-      if (GetAsyncKeyState('A') & 0x8000) { move.x -= moveR.x; move.y -= moveR.y; move.z -= moveR.z; }
-      if (GetAsyncKeyState('D') & 0x8000) { move.x += moveR.x; move.y += moveR.y; move.z += moveR.z; }
+      if (GetAsyncKeyState('A') & 0x8000) {
+        move.x -= moveR.x;
+        move.y -= moveR.y;
+        move.z -= moveR.z;
+      }
+      if (GetAsyncKeyState('D') & 0x8000) {
+        move.x += moveR.x;
+        move.y += moveR.y;
+        move.z += moveR.z;
+      }
       // Vertical movement: E up, Q down (world up)
-      if (GetAsyncKeyState('E') & 0x8000) { move.x += worldUp.x; move.y += worldUp.y; move.z += worldUp.z; }
-      if (GetAsyncKeyState('Q') & 0x8000) { move.x -= worldUp.x; move.y -= worldUp.y; move.z -= worldUp.z; }
+      if (GetAsyncKeyState('E') & 0x8000) {
+        move.x += worldUp.x;
+        move.y += worldUp.y;
+        move.z += worldUp.z;
+      }
+      if (GetAsyncKeyState('Q') & 0x8000) {
+        move.x -= worldUp.x;
+        move.y -= worldUp.y;
+        move.z -= worldUp.z;
+      }
     }
 
     if (move.x != 0 || move.y != 0 || move.z != 0) {
@@ -1700,8 +1719,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
     g_cameraData.params[1] = (float)g_windowWidth / (float)g_windowHeight;
     if (g_cameraConstantBuffer) {
       UINT8 *pCam = nullptr;
-      D3D12_RANGE readRange = {0,0};
-      if (SUCCEEDED(g_cameraConstantBuffer->Map(0, &readRange, reinterpret_cast<void**>(&pCam)))) {
+      D3D12_RANGE readRange = {0, 0};
+      if (SUCCEEDED(g_cameraConstantBuffer->Map(
+              0, &readRange, reinterpret_cast<void **>(&pCam)))) {
         memcpy(pCam, &g_cameraData, sizeof(g_cameraData));
         g_cameraConstantBuffer->Unmap(0, nullptr);
       }
@@ -1712,7 +1732,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
-    // Main menu bar: Window menu + quick panel toggles on the bar for fast access
+    // Main menu bar: Window menu + quick panel toggles on the bar for fast
+    // access
     if (ImGui::BeginMainMenuBar()) {
       // Keep Window menu for non-toggle commands
       if (ImGui::BeginMenu("Window")) {
@@ -1749,125 +1770,150 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
 
     // UI: Camera controls and debug info
     if (g_showControlsWindow) {
-      if (ImGui::Begin("Controls", &g_showControlsWindow, ImGuiWindowFlags_NoCollapse)) {
-      
-      // Camera Debug Info
-      ImGui::Text("Camera Position: (%.2f, %.2f, %.2f)", g_cameraData.pos[0], g_cameraData.pos[1], g_cameraData.pos[2]);
-      ImGui::Text("Camera Forward: (%.2f, %.2f, %.2f)", g_cameraData.forward[0], g_cameraData.forward[1], g_cameraData.forward[2]);
-      ImGui::Text("Camera Up: (%.2f, %.2f, %.2f)", g_cameraData.up[0], g_cameraData.up[1], g_cameraData.up[2]);
-      {
-        float vFov = g_cameraData.params[0];
-        float aspect = g_cameraData.params[1];
-        float vHalfRad = vFov * 0.5f * (3.14159265f / 180.0f);
-        float hFov = 2.0f * atanf(tanf(vHalfRad) * aspect) * (180.0f / 3.14159265f);
-        ImGui::Text("FOV V/H: %.1f° / %.1f°, Aspect: %.2f", vFov, hFov, aspect);
-      }
-      ImGui::Text("Near: %.2f, Far: %.2f", g_cameraData.params[2], g_cameraData.params[3]);
-      ImGui::Text("Intensity: %.2f", g_cameraData.params[4]);
-      
-      ImGui::Separator();
-      
-      // Controls
-        // Horizontal-FOV slider (UI shows H, shaders use V). Convert H -> V before storing.
+      if (ImGui::Begin("Controls", &g_showControlsWindow,
+                       ImGuiWindowFlags_NoCollapse)) {
+
+        // Camera Debug Info
+        ImGui::Text("Camera Position: (%.2f, %.2f, %.2f)", g_cameraData.pos[0],
+                    g_cameraData.pos[1], g_cameraData.pos[2]);
+        ImGui::Text("Camera Forward: (%.2f, %.2f, %.2f)",
+                    g_cameraData.forward[0], g_cameraData.forward[1],
+                    g_cameraData.forward[2]);
+        ImGui::Text("Camera Up: (%.2f, %.2f, %.2f)", g_cameraData.up[0],
+                    g_cameraData.up[1], g_cameraData.up[2]);
         {
-        float aspect = g_cameraData.params[1];
-        // compute current horizontal FOV from stored vertical FOV
-        float curV = g_cameraData.params[0];
-        float curVHalf = curV * 0.5f * (3.14159265f / 180.0f);
-        float curH = 2.0f * atanf(tanf(curVHalf) * aspect) * (180.0f / 3.14159265f);
-        float hFovSlider = curH;
-        if (ImGui::SliderFloat("Horizontal FOV", &hFovSlider, 20.0f, 160.0f)) {
-          // convert slider H (degrees) back to vertical FOV in degrees
-          float hHalfRad = hFovSlider * 0.5f * (3.14159265f / 180.0f);
-          float vHalfRadNew = atanf(tanf(hHalfRad) / aspect);
-          float vFovNew = 2.0f * vHalfRadNew * (180.0f / 3.14159265f);
-          g_cameraData.params[0] = vFovNew;
+          float vFov = g_cameraData.params[0];
+          float aspect = g_cameraData.params[1];
+          float vHalfRad = vFov * 0.5f * (3.14159265f / 180.0f);
+          float hFov =
+              2.0f * atanf(tanf(vHalfRad) * aspect) * (180.0f / 3.14159265f);
+          ImGui::Text("FOV V/H: %.1f° / %.1f°, Aspect: %.2f", vFov, hFov,
+                      aspect);
+        }
+        ImGui::Text("Near: %.2f, Far: %.2f", g_cameraData.params[2],
+                    g_cameraData.params[3]);
+        ImGui::Text("Intensity: %.2f", g_cameraData.params[4]);
+
+        ImGui::Separator();
+
+        // Controls
+        // Horizontal-FOV slider (UI shows H, shaders use V). Convert H -> V
+        // before storing.
+        {
+          float aspect = g_cameraData.params[1];
+          // compute current horizontal FOV from stored vertical FOV
+          float curV = g_cameraData.params[0];
+          float curVHalf = curV * 0.5f * (3.14159265f / 180.0f);
+          float curH =
+              2.0f * atanf(tanf(curVHalf) * aspect) * (180.0f / 3.14159265f);
+          float hFovSlider = curH;
+          if (ImGui::SliderFloat("Horizontal FOV", &hFovSlider, 20.0f,
+                                 160.0f)) {
+            // convert slider H (degrees) back to vertical FOV in degrees
+            float hHalfRad = hFovSlider * 0.5f * (3.14159265f / 180.0f);
+            float vHalfRadNew = atanf(tanf(hHalfRad) / aspect);
+            float vFovNew = 2.0f * vHalfRadNew * (180.0f / 3.14159265f);
+            g_cameraData.params[0] = vFovNew;
+            // Update camera CB
+            if (g_cameraConstantBuffer) {
+              UINT8 *pCam = nullptr;
+              D3D12_RANGE readRange = {0, 0};
+              if (SUCCEEDED(g_cameraConstantBuffer->Map(
+                      0, &readRange, reinterpret_cast<void **>(&pCam)))) {
+                memcpy(pCam, &g_cameraData, sizeof(g_cameraData));
+                g_cameraConstantBuffer->Unmap(0, nullptr);
+              }
+            }
+          }
+        }
+        if (ImGui::SliderFloat("Intensity", &g_cameraData.params[4], 0.0f,
+                               5.0f)) {
           // Update camera CB
           if (g_cameraConstantBuffer) {
             UINT8 *pCam = nullptr;
-            D3D12_RANGE readRange = {0,0};
-            if (SUCCEEDED(g_cameraConstantBuffer->Map(0, &readRange, reinterpret_cast<void**>(&pCam)))) {
+            D3D12_RANGE readRange = {0, 0};
+            if (SUCCEEDED(g_cameraConstantBuffer->Map(
+                    0, &readRange, reinterpret_cast<void **>(&pCam)))) {
+              memcpy(pCam, &g_cameraData, sizeof(g_cameraData));
+              g_cameraConstantBuffer->Unmap(0, nullptr);
+              // Debug: print camera params when intensity changes
+              fprintf(stderr,
+                      "Camera params after Intensity change: fov=%.3f "
+                      "aspect=%.3f near=%.3f far=%.3f intensity=%.3f\n",
+                      g_cameraData.params[0], g_cameraData.params[1],
+                      g_cameraData.params[2], g_cameraData.params[3],
+                      g_cameraData.params[4]);
+            }
+          }
+        }
+        if (ImGui::Button("Reset Camera")) {
+          ResetCamera();
+          // Update camera CB
+          if (g_cameraConstantBuffer) {
+            UINT8 *pCam = nullptr;
+            D3D12_RANGE readRange = {0, 0};
+            if (SUCCEEDED(g_cameraConstantBuffer->Map(
+                    0, &readRange, reinterpret_cast<void **>(&pCam)))) {
               memcpy(pCam, &g_cameraData, sizeof(g_cameraData));
               g_cameraConstantBuffer->Unmap(0, nullptr);
             }
           }
         }
-        }
-      if (ImGui::SliderFloat("Intensity", &g_cameraData.params[4], 0.0f, 5.0f)) {
-          // Update camera CB
-          if (g_cameraConstantBuffer) {
-              UINT8 *pCam = nullptr;
-              D3D12_RANGE readRange = {0,0};
-              if (SUCCEEDED(g_cameraConstantBuffer->Map(0, &readRange, reinterpret_cast<void**>(&pCam)))) {
-                  memcpy(pCam, &g_cameraData, sizeof(g_cameraData));
-                  g_cameraConstantBuffer->Unmap(0, nullptr);
-              // Debug: print camera params when intensity changes
-              fprintf(stderr, "Camera params after Intensity change: fov=%.3f aspect=%.3f near=%.3f far=%.3f intensity=%.3f\n",
-                  g_cameraData.params[0], g_cameraData.params[1], g_cameraData.params[2], g_cameraData.params[3], g_cameraData.params[4]);
-              }
-          }
-      }
-      if (ImGui::Button("Reset Camera")) {
-          ResetCamera();
-          // Update camera CB
-          if (g_cameraConstantBuffer) {
-              UINT8 *pCam = nullptr;
-              D3D12_RANGE readRange = {0,0};
-              if (SUCCEEDED(g_cameraConstantBuffer->Map(0, &readRange, reinterpret_cast<void**>(&pCam)))) {
-                  memcpy(pCam, &g_cameraData, sizeof(g_cameraData));
-                  g_cameraConstantBuffer->Unmap(0, nullptr);
-              }
-          }
-      }
-      
-      // Camera movement & mouse sensitivity controls
-      ImGui::Spacing();
-      if (ImGui::SliderFloat("Move Speed", &g_camSpeed, 0.1f, 20.0f)) {
-        // no additional action required; movement uses g_camSpeed immediately
-      }
-      if (ImGui::SliderFloat("Mouse Sensitivity", &g_mouseSensitivity, 0.001f, 0.05f)) {
-        // sensitivity applied next frame via g_mouseSensitivity
-      }
 
-      ImGui::Separator();
-      
-      if (ImGui::SliderFloat("Offset X", &g_offsetX, -1.0f, 1.0f)) {
-        // update constant buffer immediately
-        struct AlignConstants {
-          float offset[4];
-        } constants;
-        constants.offset[0] = g_offsetX;
-        constants.offset[1] = 0.0f;
-        constants.offset[2] = 0.0f;
-        constants.offset[3] = 0.0f;
-        UINT8 *pCbData = nullptr;
-        D3D12_RANGE readRange = {0, 0};
-        if (SUCCEEDED(g_constantBuffer->Map(
-                0, &readRange, reinterpret_cast<void **>(&pCbData)))) {
-          memcpy(pCbData, &constants, sizeof(constants));
-          g_constantBuffer->Unmap(0, nullptr);
+        // Camera movement & mouse sensitivity controls
+        ImGui::Spacing();
+        if (ImGui::SliderFloat("Move Speed", &g_camSpeed, 0.1f, 20.0f)) {
+          // no additional action required; movement uses g_camSpeed immediately
         }
+        if (ImGui::SliderFloat("Mouse Sensitivity", &g_mouseSensitivity, 0.001f,
+                               0.05f)) {
+          // sensitivity applied next frame via g_mouseSensitivity
+        }
+
+        ImGui::Separator();
+
+        if (ImGui::SliderFloat("Offset X", &g_offsetX, -1.0f, 1.0f)) {
+          // update constant buffer immediately
+          struct AlignConstants {
+            float offset[4];
+          } constants;
+          constants.offset[0] = g_offsetX;
+          constants.offset[1] = 0.0f;
+          constants.offset[2] = 0.0f;
+          constants.offset[3] = 0.0f;
+          UINT8 *pCbData = nullptr;
+          D3D12_RANGE readRange = {0, 0};
+          if (SUCCEEDED(g_constantBuffer->Map(
+                  0, &readRange, reinterpret_cast<void **>(&pCbData)))) {
+            memcpy(pCbData, &constants, sizeof(constants));
+            g_constantBuffer->Unmap(0, nullptr);
+          }
+        }
+        if (ImGui::Checkbox("Verbose Render Logs", &g_verboseRenderLogs)) {
+          fprintf(stderr, "Verbose Render Logs set=%d\n", g_verboseRenderLogs);
+        }
+        ImGui::End();
       }
-      if (ImGui::Checkbox("Verbose Render Logs", &g_verboseRenderLogs)) {
-        fprintf(stderr, "Verbose Render Logs set=%d\n", g_verboseRenderLogs);
-      }
-      }
-      ImGui::End();
     }
 
     // Render Mode Selector
     ImGui::SetNextWindowSize(ImVec2(300, 150), ImGuiCond_FirstUseEver);
     if (g_showRenderModeWindow) {
-      if (ImGui::Begin("Render Mode", &g_showRenderModeWindow, ImGuiWindowFlags_NoCollapse)) {
-        ImGui::Text("Current Mode: %s", 
-          g_currentRenderMode == RenderMode::Raster ? "Raster" :
-          g_currentRenderMode == RenderMode::Raytracing ? "Raytracing" : "Path Tracing");
+      if (ImGui::Begin("Render Mode", &g_showRenderModeWindow,
+                       ImGuiWindowFlags_NoCollapse)) {
+        ImGui::Text("Current Mode: %s",
+                    g_currentRenderMode == RenderMode::Raster ? "Raster"
+                    : g_currentRenderMode == RenderMode::Raytracing
+                        ? "Raytracing"
+                        : "Path Tracing");
 
-        if (ImGui::RadioButton("Fast Raster", g_currentRenderMode == RenderMode::Raster)) {
+        if (ImGui::RadioButton("Fast Raster",
+                               g_currentRenderMode == RenderMode::Raster)) {
           g_currentRenderMode = RenderMode::Raster;
         }
         ImGui::SameLine();
-        if (ImGui::RadioButton("Raytracing", g_currentRenderMode == RenderMode::Raytracing)) {
+        if (ImGui::RadioButton("Raytracing",
+                               g_currentRenderMode == RenderMode::Raytracing)) {
           g_currentRenderMode = RenderMode::Raytracing;
         }
         // DXR debug: show UV output from RayGen
@@ -1875,28 +1921,36 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
           // Recreate pipeline with debug define; reinitializing RT pipeline
           DxrRenderer::CreateRayTracingPipeline();
         }
-        if (ImGui::Checkbox("DXR: Dump Output Pixels (debug, stalls)", &g_dxrDumpPixels)) {
+        if (ImGui::Checkbox("DXR: Dump Output Pixels (debug, stalls)",
+                            &g_dxrDumpPixels)) {
           fprintf(stderr, "DXR: DumpOutputPixels set=%d\n", g_dxrDumpPixels);
         }
         if (ImGui::Checkbox("DXR: Encode Hit PrimID (debug)", &g_dxrHitDebug)) {
           fprintf(stderr, "DXR: HitDebug set=%d\n", g_dxrHitDebug);
           DxrRenderer::CreateRayTracingPipeline();
         }
-        if (ImGui::Checkbox("DXR: Dump D3D12 Messages (debug)", &g_dxrDumpD3D12Messages)) {
-          fprintf(stderr, "DXR: DumpD3D12Messages set=%d\n", g_dxrDumpD3D12Messages);
+        if (ImGui::Checkbox("DXR: Dump D3D12 Messages (debug)",
+                            &g_dxrDumpD3D12Messages)) {
+          fprintf(stderr, "DXR: DumpD3D12Messages set=%d\n",
+                  g_dxrDumpD3D12Messages);
         }
         if (ImGui::Checkbox("Raster: Show UV (debug)", &g_rasterDebugUV)) {
           fprintf(stderr, "Raster: ShowUV set=%d\n", g_rasterDebugUV);
-          RasterRenderer::RecreateMeshPipeline(g_device.Get(), g_rootSignature.Get());
+          RasterRenderer::RecreateMeshPipeline(g_device.Get(),
+                                               g_rootSignature.Get());
         }
 
-        if (ImGui::RadioButton("Path Tracing (WIP)", g_currentRenderMode == RenderMode::PathTracing)) {
+        if (ImGui::RadioButton("Path Tracing (WIP)",
+                               g_currentRenderMode ==
+                                   RenderMode::PathTracing)) {
           g_currentRenderMode = RenderMode::PathTracing;
           // TODO: Implement path tracing
         }
 
         ImGui::Separator();
-        ImGui::TextWrapped("Raster: Fast scene traversal\nRaytracing: Current DXR\nPath Tracing: Advanced ReSTIR (future)");
+        ImGui::TextWrapped(
+            "Raster: Fast scene traversal\nRaytracing: Current DXR\nPath "
+            "Tracing: Advanced ReSTIR (future)");
         ImGui::Separator();
         // Display smoothed FPS computed each frame
         if (g_fps > 0.0f) {
@@ -1922,108 +1976,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
       ImGui::SetNextWindowCollapsed(false, ImGuiCond_FirstUseEver);
     }
     if (g_showAssetsWindow) {
-      if (ImGui::Begin("Assets", &g_showAssetsWindow, ImGuiWindowFlags_NoCollapse)) {
-      ImGui::Columns(2, "asset_cols", false);
-      if (ImGui::Button("Load sample.glb")) {
-        // Attempt to load a sample glTF in project folder
-        std::vector<Asset::GpuMesh> meshes;
-        std::vector<Asset::Material> materials;
-        std::vector<Asset::Texture> textures;
-        bool ok = Asset::LoadGltf("assets/sample.glb", meshes, &materials,
-                                  &textures);
-        if (!ok) {
-          g_lastAssetStatus =
-              "Load failed: assets/sample.glb not found or parse error";
-          fprintf(stderr, "%s\n", g_lastAssetStatus.c_str());
-        } else {
-          // Append to global loaded meshes/materials/textures
-          size_t meshBase = g_loadedMeshes.size();
-          size_t materialBase = g_loadedMaterials.size();
-          size_t textureBase = g_loadedTextures.size();
-
-          g_loadedMeshes.insert(g_loadedMeshes.end(), meshes.begin(),
-                                meshes.end());
-          g_loadedMaterials.insert(g_loadedMaterials.end(), materials.begin(),
-                                   materials.end());
-          g_loadedTextures.insert(g_loadedTextures.end(), textures.begin(),
-                                  textures.end());
-
-          // Create persistent SRV descriptors for all new textures
-          if (!textures.empty()) {
-            // Allocate persistent descriptors from frame 0 (they won't be
-            // reset)
-            DescriptorAllocation alloc =
-                g_cbvSrvAllocator.Allocate(0, (UINT)textures.size());
-            if (g_textureDescriptorCount == 0) {
-              g_texturesGpuStart = alloc.gpu;
-            }
-            for (size_t i = 0; i < textures.size(); ++i) {
-              D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = alloc.cpu;
-              cpuHandle.ptr +=
-                  i * g_device->GetDescriptorHandleIncrementSize(
-                          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-
-              const Asset::Texture &tex = textures[i];
-              if (tex.resource) {
-                D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-                srvDesc.Shader4ComponentMapping =
-                    D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-                srvDesc.Format = tex.format;
-                srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-                srvDesc.Texture2D.MipLevels = tex.mipLevels;
-                g_device->CreateShaderResourceView(tex.resource.Get(),
-                                                   &srvDesc, cpuHandle);
-              }
-            }
-            g_textureDescriptorCount += (UINT)textures.size();
-          }
-
-          g_lastAssetStatus = "Loaded and uploaded assets/sample.glb";
-          fprintf(stderr, "%s\n", g_lastAssetStatus.c_str());
-
-          // Rebuild AS
-          DxrRenderer::BuildAccelerationStructures(g_loadedMeshes);
-        }
-      }
-
-      ImGui::NextColumn();
-
-      // File open button (use native Win32 dialog)
-      if (ImGui::Button("Open glTF...")) {
-        std::wstring chosen;
-        if (OpenGltfFileDialog(g_hwnd, chosen)) {
-          std::string utf8path = WStringToUtf8(chosen);
-          g_selectedAssetPath = utf8path;
-          g_lastAssetStatus = std::string("Selected: ") + utf8path;
-          fprintf(stderr, "%s\n", g_lastAssetStatus.c_str());
-        } else {
-          g_lastAssetStatus = "Open cancelled";
-        }
-      }
-      ImGui::Columns(1);
-
-      if (!g_lastAssetStatus.empty()) {
-        ImGui::TextWrapped("Status: %s", g_lastAssetStatus.c_str());
-      }
-
-      // Show a simple list of loaded meshes to make panel content visible and
-      // prevent accidental collapse confusion
-      if (!g_loadedMeshes.empty()) {
-        ImGui::Separator();
-        if (ImGui::CollapsingHeader("Loaded Meshes",
-                                    ImGuiTreeNodeFlags_DefaultOpen)) {
-          for (size_t i = 0; i < g_loadedMeshes.size(); ++i) {
-            ImGui::Text("Mesh %zu: VB=%p IB=%p", i,
-                        (void *)g_loadedMeshes[i].vertexBuffer.Get(),
-                        (void *)g_loadedMeshes[i].indexBuffer.Get());
-          }
-        }
-      } else {
-        ImGui::TextWrapped("No meshes loaded. Click 'Load sample.gltf' to "
-                           "import and upload a mesh.");
-      }
-    }
-    ImGui::End();
+      // Scene panel handled by Scene module
+      Scene::DrawScenePanel(g_hwnd, g_showAssetsWindow);
     }
 
     ImGui::Render();
@@ -2043,6 +1997,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
 
     // Wait for previous frame
     WaitForPreviousFrame();
+    //fprintf(stderr, "MainLoop: end iteration\n");
   }
 
   // Shutdown ImGui and cleanup

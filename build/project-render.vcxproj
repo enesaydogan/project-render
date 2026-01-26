@@ -430,6 +430,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="D:\project-render\src\dxr_renderer.cpp" />
     <ClCompile Include="D:\project-render\src\raster_renderer.cpp" />
     <ClCompile Include="D:\project-render\src\file_import.cpp" />
+    <ClCompile Include="D:\project-render\src\scene.cpp" />
   </ItemGroup>
   <ItemGroup />
   <ItemGroup>
