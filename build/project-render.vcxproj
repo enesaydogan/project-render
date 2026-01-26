@@ -426,6 +426,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="D:\project-render\src\main.cpp" />
+    <ClCompile Include="D:\project-render\src\camera.cpp" />
+    <ClCompile Include="D:\project-render\src\dxr_renderer.cpp" />
+    <ClCompile Include="D:\project-render\src\raster_renderer.cpp" />
+    <ClCompile Include="D:\project-render\src\file_import.cpp" />
   </ItemGroup>
   <ItemGroup />
   <ItemGroup>
