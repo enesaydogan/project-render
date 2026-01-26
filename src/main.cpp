@@ -136,7 +136,7 @@ static D3D12_VERTEX_BUFFER_VIEW g_gridVBView = {};
 static UINT g_gridVertexCount = 0;
 static ComPtr<ID3D12PipelineState> g_gridPipelineState;
 // Grid line thickness in world units (used to expand lines into thin quads)
-static float g_gridThickness = 0.04f; // increase to make lines thicker
+static float g_gridThickness = 0.01f; // increase to make lines thicker
 
 static bool g_drawGrid = true; // toggle grid rendering
 
@@ -152,12 +152,13 @@ struct CameraCB {
 
 // Simple Vec3 helper for CPU-side math
 struct Vec3 { float x, y, z; };
-static CameraCB g_initialCameraData = {{2.33f, -1.50f, -1.93f, 0.0f}, {-0.70f, 0.37f, 0.61f, 0.0f}, {0.0f, 1.0f, 0.0f, 0.0f}, {45.0f, 1280.0f/720.0f, 0.1f, 1000.0f, 1.0f}};
-static CameraCB g_cameraData = {{2.33f, -1.50f, -1.93f, 0.0f}, {-0.70f, 0.37f, 0.61f, 0.0f}, {0.0f, 1.0f, 0.0f, 0.0f}, {45.0f, 1280.0f/720.0f, 0.1f, 1000.0f, 1.0f}};
+static CameraCB g_initialCameraData = {{2.33f, -1.50f, -1.93f, 0.0f}, {-0.71f, 0.42f, 0.57f, 0.0f}, {0.0f, 1.0f, 0.0f, 0.0f}, {45.0f, 1280.0f/720.0f, 0.1f, 1000.0f, 1.0f}};
+static CameraCB g_cameraData = {{2.33f, -1.50f, -1.93f, 0.0f}, {-0.71f, 0.42f, 0.57f, 0.0f}, {0.0f, 1.0f, 0.0f, 0.0f}, {45.0f, 1280.0f/720.0f, 0.1f, 1000.0f, 1.0f}};
 static ComPtr<ID3D12Resource> g_cameraConstantBuffer;
 static float g_camYaw = 0.0f;
 static float g_camPitch = 0.0f;
-static float g_camSpeed = 2.5f; // units/sec
+static float g_camSpeed = 0.8f; // units/sec
+static float g_mouseSensitivity = 0.002f; // radians per pixel
 static POINT g_prevMousePos = {0, 0};
 static bool g_mouseCaptured = false;
 
@@ -1404,7 +1405,7 @@ bool InitD3D12(HWND hwnd) {
   {
     struct GridVertex { float pos[3]; float col[3]; };
     const int half = 10;
-    const float step = 1.0f;
+    const float step = 0.5f;
     std::vector<GridVertex> verts;
     verts.reserve((half*2+1)*6*2); // 6 verts per quad, two quads per iteration
 
@@ -2436,6 +2437,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
     float dt = dtDur.count();
     prevTime = now;
 
+    // FPS accumulation (smoothed, updated every 0.25s)
+    static float g_fps = 0.0f;
+    static float g_fpsTimer = 0.0f;
+    static int g_fpsFrames = 0;
+    ++g_fpsFrames;
+    g_fpsTimer += dt;
+    if (g_fpsTimer >= 0.25f) {
+      g_fps = static_cast<float>(g_fpsFrames) / g_fpsTimer;
+      g_fpsFrames = 0;
+      g_fpsTimer = 0.0f;
+    }
+
     // Input handling guarded by application focus
     bool appFocused = (GetForegroundWindow() == g_hwnd);
 
@@ -2460,76 +2473,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
       int dx = curPos.x - centerScreen.x;
       int dy = curPos.y - centerScreen.y;
 
-      const float sensitivity = 0.006f; // radians per pixel for orbit
-      float yaw = -dx * sensitivity;
-      float pitch = -dy * sensitivity;
+      const float sensitivity = g_mouseSensitivity; // radians per pixel
+      // Update yaw/pitch directly (FPS-style mouse look) - reversed axes
+      g_camYaw += dx * sensitivity;
+      g_camPitch += dy * sensitivity;
 
-      // Rotate target vector around camera position
-      float vecX = g_cameraTarget[0] - g_cameraData.pos[0];
-      float vecY = g_cameraTarget[1] - g_cameraData.pos[1];
-      float vecZ = g_cameraTarget[2] - g_cameraData.pos[2];
+      // Clamp pitch to avoid flipping
+      const float maxPitch = 3.14159265f * 0.5f - 0.01f;
+      if (g_camPitch > maxPitch) g_camPitch = maxPitch;
+      if (g_camPitch < -maxPitch) g_camPitch = -maxPitch;
 
-      // Yaw: rotate around world up (0,1,0)
-      float cosY = cosf(yaw);
-      float sinY = sinf(yaw);
-      float rx = cosY * vecX + sinY * vecZ;
-      float rz = -sinY * vecX + cosY * vecZ;
-      float ry = vecY;
-
-      // Pitch: rotate around right axis (cross of worldUp and current vector)
-      // compute right = normalize(cross(worldUp, rvec))
-      Vec3 rvec = {rx, ry, rz};
-      float wx = 0.0f, wy = 1.0f, wz = 0.0f;
-      Vec3 right = { wy * rvec.z - wz * rvec.y,
-                    wz * rvec.x - wx * rvec.z,
-                    wx * rvec.y - wy * rvec.x };
-      float rl = sqrtf(right.x*right.x + right.y*right.y + right.z*right.z);
-      if (rl > 1e-6f) { right.x/=rl; right.y/=rl; right.z/=rl; }
-
-      // Rodrigues rotation around 'right' by 'pitch'
-      float cp = cosf(pitch); float sp = sinf(pitch);
-      Vec3 v = {rx, ry, rz};
-      Vec3 v_cross_k = { right.y * v.z - right.z * v.y,
-                         right.z * v.x - right.x * v.z,
-                         right.x * v.y - right.y * v.x };
-      float k_dot_v = right.x * v.x + right.y * v.y + right.z * v.z;
-      Vec3 vrot;
-      vrot.x = v.x * cp + v_cross_k.x * sp + right.x * k_dot_v * (1 - cp);
-      vrot.y = v.y * cp + v_cross_k.y * sp + right.y * k_dot_v * (1 - cp);
-      vrot.z = v.z * cp + v_cross_k.z * sp + right.z * k_dot_v * (1 - cp);
-
-      // Clamp pitch to avoid flipping (limit elevation cosine)
-      float lenv = sqrtf(vrot.x*vrot.x + vrot.y*vrot.y + vrot.z*vrot.z);
-      if (lenv > 1e-6f) {
-        float ny = vrot.y / lenv;
-        if (ny > 0.99f) ny = 0.99f;
-        if (ny < -0.99f) ny = -0.99f;
-        // rescale to keep same length but clamped Y
-        float newLenXZ = sqrtf(1.0f - ny*ny);
-        float curLenXZ = sqrtf((vrot.x*vrot.x + vrot.z*vrot.z) / (vrot.x*vrot.x + vrot.y*vrot.y + vrot.z*vrot.z));
-        if (curLenXZ > 1e-6f) {
-          float scale = newLenXZ / curLenXZ;
-          vrot.x *= scale;
-          vrot.z *= scale;
-          vrot.y = ny * lenv;
-        }
-      }
-
-      // Update target
-      g_cameraTarget[0] = g_cameraData.pos[0] + vrot.x;
-      g_cameraTarget[1] = g_cameraData.pos[1] + vrot.y;
-      g_cameraTarget[2] = g_cameraData.pos[2] + vrot.z;
-
-      // Update forward and yaw/pitch state to match new look direction
-      float fx = vrot.x; float fy = vrot.y; float fz = vrot.z;
-      float fl = sqrtf(fx*fx + fy*fy + fz*fz);
-      if (fl > 1e-6f) {
-        g_cameraData.forward[0] = fx / fl;
-        g_cameraData.forward[1] = fy / fl;
-        g_cameraData.forward[2] = fz / fl;
-        g_camYaw = atan2f(g_cameraData.forward[0], -g_cameraData.forward[2]);
-        g_camPitch = asinf(g_cameraData.forward[1]);
-      }
+      // Compute forward from yaw/pitch
+      g_cameraData.forward[0] = cosf(g_camPitch) * sinf(g_camYaw);
+      g_cameraData.forward[1] = sinf(g_camPitch);
+      g_cameraData.forward[2] = cosf(g_camPitch) * -cosf(g_camYaw);
 
       // Recenter cursor for next delta
       SetCursorPos(centerScreen.x, centerScreen.y);
@@ -2674,17 +2631,31 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
       ImGui::Separator();
       
       // Controls
-      if (ImGui::SliderFloat("FOV", &g_cameraData.params[0], 10.0f, 120.0f)) {
+        // Horizontal-FOV slider (UI shows H, shaders use V). Convert H -> V before storing.
+        {
+        float aspect = g_cameraData.params[1];
+        // compute current horizontal FOV from stored vertical FOV
+        float curV = g_cameraData.params[0];
+        float curVHalf = curV * 0.5f * (3.14159265f / 180.0f);
+        float curH = 2.0f * atanf(tanf(curVHalf) * aspect) * (180.0f / 3.14159265f);
+        float hFovSlider = curH;
+        if (ImGui::SliderFloat("Horizontal FOV", &hFovSlider, 20.0f, 160.0f)) {
+          // convert slider H (degrees) back to vertical FOV in degrees
+          float hHalfRad = hFovSlider * 0.5f * (3.14159265f / 180.0f);
+          float vHalfRadNew = atanf(tanf(hHalfRad) / aspect);
+          float vFovNew = 2.0f * vHalfRadNew * (180.0f / 3.14159265f);
+          g_cameraData.params[0] = vFovNew;
           // Update camera CB
           if (g_cameraConstantBuffer) {
-              UINT8 *pCam = nullptr;
-              D3D12_RANGE readRange = {0,0};
-              if (SUCCEEDED(g_cameraConstantBuffer->Map(0, &readRange, reinterpret_cast<void**>(&pCam)))) {
-                  memcpy(pCam, &g_cameraData, sizeof(g_cameraData));
-                  g_cameraConstantBuffer->Unmap(0, nullptr);
-              }
+            UINT8 *pCam = nullptr;
+            D3D12_RANGE readRange = {0,0};
+            if (SUCCEEDED(g_cameraConstantBuffer->Map(0, &readRange, reinterpret_cast<void**>(&pCam)))) {
+              memcpy(pCam, &g_cameraData, sizeof(g_cameraData));
+              g_cameraConstantBuffer->Unmap(0, nullptr);
+            }
           }
-      }
+        }
+        }
       if (ImGui::SliderFloat("Intensity", &g_cameraData.params[4], 0.0f, 5.0f)) {
           // Update camera CB
           if (g_cameraConstantBuffer) {
@@ -2693,6 +2664,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
               if (SUCCEEDED(g_cameraConstantBuffer->Map(0, &readRange, reinterpret_cast<void**>(&pCam)))) {
                   memcpy(pCam, &g_cameraData, sizeof(g_cameraData));
                   g_cameraConstantBuffer->Unmap(0, nullptr);
+              // Debug: print camera params when intensity changes
+              fprintf(stderr, "Camera params after Intensity change: fov=%.3f aspect=%.3f near=%.3f far=%.3f intensity=%.3f\n",
+                  g_cameraData.params[0], g_cameraData.params[1], g_cameraData.params[2], g_cameraData.params[3], g_cameraData.params[4]);
               }
           }
       }
@@ -2709,6 +2683,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
           }
       }
       
+      // Camera movement & mouse sensitivity controls
+      ImGui::Spacing();
+      if (ImGui::SliderFloat("Move Speed", &g_camSpeed, 0.1f, 20.0f)) {
+        // no additional action required; movement uses g_camSpeed immediately
+      }
+      if (ImGui::SliderFloat("Mouse Sensitivity", &g_mouseSensitivity, 0.001f, 0.05f)) {
+        // sensitivity applied next frame via g_mouseSensitivity
+      }
+
       ImGui::Separator();
       
       if (ImGui::SliderFloat("Offset X", &g_offsetX, -1.0f, 1.0f)) {
@@ -2777,6 +2760,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
 
         ImGui::Separator();
         ImGui::TextWrapped("Raster: Fast scene traversal\nRaytracing: Current DXR\nPath Tracing: Advanced ReSTIR (future)");
+        ImGui::Separator();
+        // Display smoothed FPS computed each frame
+        if (g_fps > 0.0f) {
+          ImGui::Text("FPS: %.1f (%.2f ms)", g_fps, 1000.0f / g_fps);
+        } else {
+          ImGui::Text("FPS: N/A");
+        }
       }
       ImGui::End();
     }
