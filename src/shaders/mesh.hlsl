@@ -46,10 +46,15 @@ PSInputMesh VSMainMesh(VSInputMesh input)
     // World-space position
     float3 pos = input.position;
 
-    // Build camera basis to match raygen math
+    // Build camera basis to match raygen math. Use a robust reference up
+    // vector when the forward vector is nearly parallel to the provided up
+    // vector to avoid a zero-length cross product.
     float aspect = camParams[1];
     float f = tan(radians(camParams[0]) * 0.5);
-    float3 R = normalize(cross(camForward, camUp));
+    float3 refUp = abs(camForward.y) > 0.999f ? float3(0.0f, 0.0f, 1.0f) : float3(0.0f, 1.0f, 0.0f);
+    float3 R = cross(camForward, refUp);
+    R = normalize(R);
+    if (all(R == R) == false) { R = float3(1,0,0); }
     float3 U = normalize(cross(R, camForward));
 
     float3 rel = pos - camPos;

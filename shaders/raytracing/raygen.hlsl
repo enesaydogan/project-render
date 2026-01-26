@@ -17,8 +17,14 @@ void RayGen()
     float fov = camParams[0];
     float f = tan(radians(fov) * 0.5);
 
-    // Build camera basis
-    float3 R = normalize(cross(camForward, camUp));
+    // Build camera basis robustly: if camForward is nearly parallel to camUp,
+    // pick an alternate reference vector to avoid a zero-length cross product.
+    float3 refUp = abs(camForward.y) > 0.999f ? float3(0.0f, 0.0f, 1.0f) : float3(0.0f, 1.0f, 0.0f);
+    float3 R = cross(camForward, refUp);
+    R = normalize(R);
+    // If normalization produced NaNs (very unlikely after choosing refUp),
+    // fall back to a safe axis.
+    if (all(R == R) == false) { R = float3(1,0,0); }
     float3 U = normalize(cross(R, camForward));
 
     float3 dir = normalize(ndc.x * R * aspect * f + (-ndc.y) * U * f + camForward);
