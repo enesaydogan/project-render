@@ -8,7 +8,7 @@ RaytracingAccelerationStructure g_accel : register(t0);
 RWTexture2D<float4> g_output : register(u0);
 
 // Texture array - fixed large size to avoid overlap issues with other registers
-Texture2D textures[1024] : register(t1);
+Texture2D textures[2048] : register(t1);
 SamplerState linearSampler : register(s0);
 
 cbuffer Camera : register(b0)
@@ -44,7 +44,15 @@ struct MaterialData
 };
 
 // Use an SRV for materials in DXR to support multi-material indexing via InstanceID
-StructuredBuffer<MaterialData> materials : register(t1025);
+StructuredBuffer<MaterialData> materials : register(t2049);
+
+struct MeshData {
+    int materialIndex;
+    int vbIndex;
+    int ibIndex;
+    int pad;
+};
+StructuredBuffer<MeshData> meshData : register(t4098);
 
 struct Vertex {
     float3 position;
@@ -53,9 +61,9 @@ struct Vertex {
     float2 uv;
 };
 
-// Offset other buffers to avoid overlap with textures and materials
-StructuredBuffer<Vertex> vertices : register(t1026);
-StructuredBuffer<uint> indices : register(t1027);
+// Arrays of buffers for per-instance vertex/index data
+StructuredBuffer<Vertex> vertices[1024] : register(t2050);
+Buffer<uint> indices[1024] : register(t3074);
 
 struct RayPayload
 {

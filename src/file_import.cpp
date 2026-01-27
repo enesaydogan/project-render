@@ -8,7 +8,7 @@ bool OpenGltfFileDialog(HWND owner, std::wstring &outPath) {
     ofn.hwndOwner = owner;
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = (DWORD)std::size(szFile);
-    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
     ofn.lpstrFilter = L"glTF files\0*.gltf;*.glb\0All files\0*.*\0";
     if (GetOpenFileNameW(&ofn)) {
         outPath = szFile;
