@@ -49,6 +49,11 @@ void RayGen()
     TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
 
     // Flip Y when writing so DXR image matches raster output orientation
+#ifndef RAYGEN_DEBUG
     uint outY = launchDim.y - 1 - launchIndex.y;
     g_output[int2(launchIndex.x, outY)] = payload.color;
+#else
+    // In debug mode `outY` already defined above
+    g_output[int2(launchIndex.x, outY)] = payload.color;
+#endif
 }

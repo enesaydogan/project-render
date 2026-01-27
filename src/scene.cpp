@@ -49,6 +49,22 @@ bool ImportGltf(const std::string &utf8path) {
         g_loadedMaterials.insert(g_loadedMaterials.end(), materials.begin(), materials.end());
         g_loadedTextures.insert(g_loadedTextures.end(), textures.begin(), textures.end());
 
+        // Adjust newly-inserted meshes' material indices to global material base
+        for (size_t i = 0; i < meshes.size(); ++i) {
+            int &mi = g_loadedMeshes[meshBase + i].materialIndex;
+            if (mi >= 0) mi = mi + (int)materialBase;
+        }
+
+        // Adjust newly-inserted materials to reference global texture indices
+        for (size_t i = 0; i < materials.size(); ++i) {
+            Asset::Material &m = g_loadedMaterials[materialBase + i];
+            if (m.baseColorTexture >= 0) m.baseColorTexture += (int)textureBase;
+            if (m.metallicRoughnessTexture >= 0) m.metallicRoughnessTexture += (int)textureBase;
+            if (m.normalTexture >= 0) m.normalTexture += (int)textureBase;
+            if (m.occlusionTexture >= 0) m.occlusionTexture += (int)textureBase;
+            if (m.emissiveTexture >= 0) m.emissiveTexture += (int)textureBase;
+        }
+
         // Allocate SRV descriptors for new textures
         if (!textures.empty()) {
             DescriptorAllocation alloc = g_cbvSrvAllocator.Allocate(0, (UINT)textures.size());
@@ -80,6 +96,8 @@ bool ImportGltf(const std::string &utf8path) {
 
         // Rebuild AS for current active meshes
         RebuildAccelerationStructures();
+        // Recreate DXR pipeline so it can merge texture descriptors (if any)
+        DxrRenderer::CreateRayTracingPipeline(0, 0);
         return true;
     } catch (const std::exception &e) {
         s_lastStatus = std::string("Import exception: ") + e.what();

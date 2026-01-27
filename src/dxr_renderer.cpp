@@ -8,6 +8,13 @@
 
 using Microsoft::WRL::ComPtr;
 
+// Access global CBV/SRV descriptor heap so DXR can bind scene textures
+extern DescriptorHeapAllocator g_cbvSrvAllocator;
+// Globals from main/scene for descriptor bookkeeping
+extern D3D12_GPU_DESCRIPTOR_HANDLE g_texturesGpuStart;
+extern UINT g_textureDescriptorCount;
+extern Microsoft::WRL::ComPtr<ID3D12Device> g_device;
+
 // Module-local state
 static ID3D12Device* s_device = nullptr;
 static ID3D12CommandQueue* s_commandQueue = nullptr;
@@ -25,6 +32,10 @@ bool g_rayTracingSupported = false; // defined here
 
 // DXR-specific state kept internal to this module
 static ComPtr<ID3D12Device5> s_dxrDevice;
+
+// Output texture dimensions used by DXR (kept local to module)
+static UINT s_outputWidth = 1280;
+static UINT s_outputHeight = 720;
 
 inline void TransitionResource(ID3D12GraphicsCommandList *cmdList,
                                ID3D12Resource *resource,
@@ -47,7 +58,8 @@ static ComPtr<ID3D12RootSignature> s_rtGlobalRootSignature;
 static ComPtr<ID3D12Resource> s_outputUAV;
 static UINT s_outputUAVDescriptorSize = 0;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_outputUAVGpuHandle = {0};
-static ComPtr<ID3D12DescriptorHeap> s_uavHeap;
+static ComPtr<ID3D12DescriptorHeap> s_uavHeap; // fallback heap when global heap not available
+static ComPtr<ID3D12DescriptorHeap> s_mergedHeap; // merged heap that contains scene SRVs then output UAV (preferred)
 
 struct ShaderTableEntry { void* id; };
 static UINT s_shaderTableEntrySize = 0;
@@ -83,10 +95,14 @@ void SetCommandQueue(ID3D12CommandQueue* commandQueue, ID3D12Fence* fence, UINT6
     s_fenceEvent = fenceEvent;
 }
 
-void CreateRayTracingPipeline() {
+void CreateRayTracingPipeline(UINT width, UINT height) {
     if (!g_rayTracingSupported || !s_dxrDevice) return;
 
-    fprintf(stderr, "DxrRenderer: Creating Ray Tracing Pipeline...\n");
+    // Update module-local output size so Dispatch uses correct dimensions
+    s_outputWidth = (width > 0) ? width : s_outputWidth;
+    s_outputHeight = (height > 0) ? height : s_outputHeight;
+
+    fprintf(stderr, "DxrRenderer: Creating Ray Tracing Pipeline (size=%u x %u)...\n", s_outputWidth, s_outputHeight);
 
     // Compile shader
     ComPtr<IDxcBlob> shaderBlob;
@@ -163,24 +179,32 @@ void CreateRayTracingPipeline() {
     void* hitGroupId = properties->GetShaderIdentifier(L"HitGroup");
     if (!rayGenId || !missId || !hitGroupId) { fprintf(stderr, "DxrRenderer: Shader IDs null\n"); return; }
     UINT shaderIdentifierSize = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
+    // RayGen record must be aligned to 64 bytes (shader table alignment),
+    // miss/hit records must be aligned to 32 bytes (shader record alignment).
+    UINT s_rayGenEntrySize = Align(shaderIdentifierSize, D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
     s_shaderTableEntrySize = Align(shaderIdentifierSize, D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT);
-    UINT shaderTableSize = s_shaderTableEntrySize * 3;
+    // Total SBT size: raygen + miss + hit (each 1 entry for now)
+    UINT shaderTableSize = s_rayGenEntrySize + s_shaderTableEntrySize + s_shaderTableEntrySize;
     AllocateUploadBuffer(s_device, nullptr, shaderTableSize, &s_sbtStorage, L"Shader Table");
     UINT8* pData = nullptr; s_sbtStorage->Map(0, nullptr, (void**)&pData);
-    memcpy(pData, rayGenId, shaderIdentifierSize); memcpy(pData + s_shaderTableEntrySize, missId, shaderIdentifierSize); memcpy(pData + s_shaderTableEntrySize*2, hitGroupId, shaderIdentifierSize);
+    // Place RayGen at beginning (64-byte aligned slot)
+    memcpy(pData, rayGenId, shaderIdentifierSize);
+    // Place Miss right after raygen (start aligned to 64 bytes as raygen slot is 64)
+    memcpy(pData + s_rayGenEntrySize, missId, shaderIdentifierSize);
+    // Place HitGroup after miss (aligned to 32 bytes)
+    memcpy(pData + s_rayGenEntrySize + s_shaderTableEntrySize, hitGroupId, shaderIdentifierSize);
     s_sbtStorage->Unmap(0, nullptr);
-    s_rayGenShaderTable = s_sbtStorage->GetGPUVirtualAddress(); s_missShaderTable = s_rayGenShaderTable + s_shaderTableEntrySize; s_hitGroupShaderTable = s_missShaderTable + s_shaderTableEntrySize;
+    D3D12_GPU_VIRTUAL_ADDRESS baseAddr = s_sbtStorage->GetGPUVirtualAddress();
+    s_rayGenShaderTable = baseAddr;
+    s_missShaderTable = baseAddr + s_rayGenEntrySize;
+    s_hitGroupShaderTable = s_missShaderTable + s_shaderTableEntrySize;
 
-    // Create output UAV texture and heap
-    D3D12_DESCRIPTOR_HEAP_DESC uavHeapDesc = {}; uavHeapDesc.NumDescriptors = 1; uavHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; uavHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-    ThrowIfFailed(s_device->CreateDescriptorHeap(&uavHeapDesc, IID_PPV_ARGS(&s_uavHeap)));
-
-    // Create a default heap 2D texture to hold raytracing output (same format/dim as swapchain)
+    // Create a default heap 2D texture to hold raytracing output (match current swapchain size)
     D3D12_RESOURCE_DESC texDesc = {};
     texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     texDesc.Alignment = 0;
-    texDesc.Width = 1280;
-    texDesc.Height = 720;
+    texDesc.Width = s_outputWidth;
+    texDesc.Height = s_outputHeight;
     texDesc.DepthOrArraySize = 1;
     texDesc.MipLevels = 1;
     texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -191,6 +215,8 @@ void CreateRayTracingPipeline() {
 
     D3D12_HEAP_PROPERTIES heapProps = {};
     heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+    // If an output texture already exists, release it so we recreate with correct size
+    s_outputUAV.Reset();
     ThrowIfFailed(s_device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &texDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&s_outputUAV)));
     if (s_outputUAV) s_outputUAV->SetName(L"RT Output Texture");
 
@@ -199,7 +225,45 @@ void CreateRayTracingPipeline() {
     uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
     uavDesc.Texture2D.MipSlice = 0;
     uavDesc.Texture2D.PlaneSlice = 0;
-    if (s_uavHeap) { s_device->CreateUnorderedAccessView(s_outputUAV.Get(), nullptr, &uavDesc, s_uavHeap->GetCPUDescriptorHandleForHeapStart()); s_outputUAVGpuHandle = s_uavHeap->GetGPUDescriptorHandleForHeapStart(); }
+
+    // If the app has a global CBV/SRV/UAV heap and textures exist, create a merged local heap containing texture SRVs then our UAV.
+    if (g_cbvSrvAllocator.Heap() && ::g_textureDescriptorCount > 0) {
+        // Create a shader-visible heap with (textureCount + 1) slots
+        UINT texCount = ::g_textureDescriptorCount;
+        D3D12_DESCRIPTOR_HEAP_DESC desc = {};
+        desc.NumDescriptors = texCount + 1;
+        desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        ThrowIfFailed(s_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&s_mergedHeap)));
+
+        // Copy existing texture descriptors from global heap into local heap
+        UINT descSize = s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        D3D12_CPU_DESCRIPTOR_HANDLE srcCpuStart = g_cbvSrvAllocator.Heap()->GetCPUDescriptorHandleForHeapStart();
+        D3D12_GPU_DESCRIPTOR_HANDLE srcGpuStart = g_cbvSrvAllocator.Heap()->GetGPUDescriptorHandleForHeapStart();
+        // compute offset of textures start within the global heap
+        UINT texOffset = (UINT)((::g_texturesGpuStart.ptr - srcGpuStart.ptr) / descSize);
+        D3D12_CPU_DESCRIPTOR_HANDLE srcTexCpu = { srcCpuStart.ptr + (SIZE_T)texOffset * descSize };
+        D3D12_CPU_DESCRIPTOR_HANDLE dstCpuStart = s_mergedHeap->GetCPUDescriptorHandleForHeapStart();
+        // Copy texture descriptors
+        s_device->CopyDescriptorsSimple(texCount, dstCpuStart, srcTexCpu, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+        // Create UAV at the last slot
+        D3D12_CPU_DESCRIPTOR_HANDLE uavCpu = { dstCpuStart.ptr + (SIZE_T)texCount * descSize };
+        s_device->CreateUnorderedAccessView(s_outputUAV.Get(), nullptr, &uavDesc, uavCpu);
+        D3D12_GPU_DESCRIPTOR_HANDLE gpuStart = s_mergedHeap->GetGPUDescriptorHandleForHeapStart();
+        s_outputUAVGpuHandle.ptr = gpuStart.ptr + (UINT64)texCount * descSize;
+    } else if (g_cbvSrvAllocator.Heap()) {
+        // Global heap exists but no textures yet; allocate one slot from it for UAV
+        DescriptorAllocation alloc = g_cbvSrvAllocator.Allocate(0, 1);
+        s_device->CreateUnorderedAccessView(s_outputUAV.Get(), nullptr, &uavDesc, alloc.cpu);
+        s_outputUAVGpuHandle = alloc.gpu;
+    } else {
+        // Fallback: create a dedicated UAV heap (shader-visible)
+        D3D12_DESCRIPTOR_HEAP_DESC uavHeapDesc = {}; uavHeapDesc.NumDescriptors = 1; uavHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; uavHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        ThrowIfFailed(s_device->CreateDescriptorHeap(&uavHeapDesc, IID_PPV_ARGS(&s_uavHeap)));
+        s_device->CreateUnorderedAccessView(s_outputUAV.Get(), nullptr, &uavDesc, s_uavHeap->GetCPUDescriptorHandleForHeapStart());
+        s_outputUAVGpuHandle = s_uavHeap->GetGPUDescriptorHandleForHeapStart();
+    }
 
     fprintf(stderr, "DxrRenderer: Ray Tracing Pipeline ready\n");
 }
@@ -359,38 +423,91 @@ bool IsReady() {
 
 bool RenderFrame(ID3D12GraphicsCommandList* commandListBase, UINT frameIndex, ID3D12Resource* renderTarget, D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle, ID3D12Resource* cameraCB, ID3D12Resource* materialCB, D3D12_GPU_DESCRIPTOR_HANDLE texturesGpuStart, UINT textureDescriptorCount, const std::vector<Asset::GpuMesh>& meshes) {
     if (!IsReady()) return false;
-    ComPtr<ID3D12GraphicsCommandList4> dxrList;
-    if (FAILED(commandListBase->QueryInterface(IID_PPV_ARGS(&dxrList)))) return false;
+    if (!renderTarget) { fprintf(stderr, "DxrRenderer: RenderFrame called with null renderTarget\n"); return false; }
+    if (!s_outputUAV || !s_uavHeap) { fprintf(stderr, "DxrRenderer: Output UAV or UAV heap not created\n"); return false; }
 
+    ComPtr<ID3D12GraphicsCommandList4> dxrList;
+    HRESULT hrQI = commandListBase->QueryInterface(IID_PPV_ARGS(&dxrList));
+    if (FAILED(hrQI)) {
+        fprintf(stderr, "DxrRenderer: QueryInterface for ID3D12GraphicsCommandList4 failed: 0x%08x\n", (unsigned)hrQI);
+        return false;
+    }
+
+    // Set pipeline and root signature (these methods return void)
     dxrList->SetPipelineState1(s_rtStateObject.Get());
     dxrList->SetComputeRootSignature(s_rtGlobalRootSignature.Get());
+    if (!s_tlas.result) { fprintf(stderr, "DxrRenderer: TLAS result missing\n"); return false; }
     dxrList->SetComputeRootShaderResourceView(0, s_tlas.result->GetGPUVirtualAddress());
-    ID3D12DescriptorHeap* heaps[] = { s_uavHeap.Get() };
-    dxrList->SetDescriptorHeaps(1, heaps);
-    dxrList->SetComputeRootDescriptorTable(1, s_outputUAVGpuHandle);
-
-    if (textureDescriptorCount > 0) dxrList->SetComputeRootDescriptorTable(2, texturesGpuStart);
+    // Bind the single CBV/SRV/UAV heap (preferred) so root descriptor tables are valid.
+    if (g_cbvSrvAllocator.Heap()) {
+        ID3D12DescriptorHeap* heaps[] = { g_cbvSrvAllocator.Heap() };
+        dxrList->SetDescriptorHeaps(1, heaps);
+        // Output UAV was allocated in this heap
+        dxrList->SetComputeRootDescriptorTable(1, s_outputUAVGpuHandle);
+        if (textureDescriptorCount > 0) dxrList->SetComputeRootDescriptorTable(2, texturesGpuStart);
+    } else {
+        // Fallback: use the dedicated UAV heap
+        ID3D12DescriptorHeap* heaps[] = { s_uavHeap.Get() };
+        dxrList->SetDescriptorHeaps(1, heaps);
+        dxrList->SetComputeRootDescriptorTable(1, s_outputUAVGpuHandle);
+        if (textureDescriptorCount > 0 && g_cbvSrvAllocator.Heap()) dxrList->SetComputeRootDescriptorTable(2, texturesGpuStart);
+    }
     if (cameraCB) dxrList->SetComputeRootConstantBufferView(3, cameraCB->GetGPUVirtualAddress());
     if (materialCB) dxrList->SetComputeRootConstantBufferView(4, materialCB->GetGPUVirtualAddress());
     if (!meshes.empty() && meshes[0].vertexBuffer) dxrList->SetComputeRootShaderResourceView(5, meshes[0].vertexBuffer->GetGPUVirtualAddress());
     if (!meshes.empty() && meshes[0].indexBuffer) dxrList->SetComputeRootShaderResourceView(6, meshes[0].indexBuffer->GetGPUVirtualAddress());
 
     D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
+    // RayGen record size must match the raygen slot size (may be 64-aligned)
+    UINT s_rayGenEntrySize = Align(D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES, D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
     dispatchDesc.RayGenerationShaderRecord.StartAddress = s_rayGenShaderTable;
-    dispatchDesc.RayGenerationShaderRecord.SizeInBytes = s_shaderTableEntrySize;
+    dispatchDesc.RayGenerationShaderRecord.SizeInBytes = s_rayGenEntrySize;
+    // Miss/Hit tables: one entry each for now
     dispatchDesc.MissShaderTable.StartAddress = s_missShaderTable;
-    dispatchDesc.MissShaderTable.SizeInBytes = s_shaderTableEntrySize;
+    dispatchDesc.MissShaderTable.SizeInBytes = s_shaderTableEntrySize * 1;
     dispatchDesc.MissShaderTable.StrideInBytes = s_shaderTableEntrySize;
     dispatchDesc.HitGroupTable.StartAddress = s_hitGroupShaderTable;
-    dispatchDesc.HitGroupTable.SizeInBytes = s_shaderTableEntrySize;
+    dispatchDesc.HitGroupTable.SizeInBytes = s_shaderTableEntrySize * 1;
     dispatchDesc.HitGroupTable.StrideInBytes = s_shaderTableEntrySize;
-    dispatchDesc.Width = 1280; dispatchDesc.Height = 720; dispatchDesc.Depth = 1;
+
+    // Dispatch size should match created output texture size
+    dispatchDesc.Width = s_outputWidth; dispatchDesc.Height = s_outputHeight; dispatchDesc.Depth = 1;
 
     dxrList->DispatchRays(&dispatchDesc);
 
     TransitionResource(dxrList.Get(), s_outputUAV.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
     TransitionResource(dxrList.Get(), renderTarget, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST);
-    dxrList->CopyResource(renderTarget, s_outputUAV.Get());
+
+    // Validate sizes to avoid CopyResource invalid-argument errors
+    D3D12_RESOURCE_DESC srcDesc = s_outputUAV->GetDesc();
+    D3D12_RESOURCE_DESC dstDesc = renderTarget->GetDesc();
+    if (srcDesc.Width != dstDesc.Width || srcDesc.Height != dstDesc.Height) {
+        // If sizes differ, copy the intersection region with CopyTextureRegion instead of CopyResource.
+        UINT copyW = (UINT)min(srcDesc.Width, dstDesc.Width);
+        UINT copyH = (UINT)min(srcDesc.Height, dstDesc.Height);
+        fprintf(stderr, "DxrRenderer: Output size mismatch (src=%llu x %u dst=%llu x %u) - copying %u x %u region\n",
+                (unsigned long long)srcDesc.Width, (unsigned)srcDesc.Height,
+                (unsigned long long)dstDesc.Width, (unsigned)dstDesc.Height,
+                copyW, copyH);
+
+        D3D12_TEXTURE_COPY_LOCATION dstLoc = {};
+        dstLoc.pResource = renderTarget;
+        dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        dstLoc.SubresourceIndex = 0;
+
+        D3D12_TEXTURE_COPY_LOCATION srcLoc = {};
+        srcLoc.pResource = s_outputUAV.Get();
+        srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        srcLoc.SubresourceIndex = 0;
+
+        D3D12_BOX srcBox = {};
+        srcBox.left = 0; srcBox.top = 0; srcBox.front = 0;
+        srcBox.right = copyW; srcBox.bottom = copyH; srcBox.back = 1;
+
+        dxrList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, &srcBox);
+    } else {
+        dxrList->CopyResource(renderTarget, s_outputUAV.Get());
+    }
 
     // Transition back
     TransitionResource(dxrList.Get(), renderTarget, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_RENDER_TARGET);

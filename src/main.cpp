@@ -18,6 +18,7 @@
 #include "imgui_impl_win32.h"
 #include "raster_renderer.h"
 #include "scene.h"
+#include "light.h"
 #include <algorithm>
 #include <chrono>
 #include <codecvt>
@@ -155,7 +156,7 @@ static D3D12_VERTEX_BUFFER_VIEW g_gridVBView = {};
 static UINT g_gridVertexCount = 0;
 static ComPtr<ID3D12PipelineState> g_gridPipelineState;
 // Grid line thickness in world units (used to expand lines into thin quads)
-static float g_gridThickness = 0.01f; // increase to make lines thicker
+static float g_gridThickness = 0.005f; // increase to make lines thicker
 
 static bool g_drawGrid = true; // toggle grid rendering
 
@@ -473,7 +474,7 @@ bool InitD3D12(HWND hwnd) {
         // Initialize DXR probe with device; command queue/fence will be
         // attached later
         DxrRenderer::Initialize(g_device.Get());
-        DxrRenderer::CreateRayTracingPipeline();
+        DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
         // Log to stderr only
         fprintf(stderr, "InitD3D12: CreateRayTracingPipeline finished\n");
       }
@@ -929,8 +930,28 @@ bool InitD3D12(HWND hwnd) {
   // Enable depth testing for mesh rendering
   meshPsoDesc.DepthStencilState.DepthEnable = FALSE;
 
-  ThrowIfFailed(g_device->CreateGraphicsPipelineState(
-      &meshPsoDesc, IID_PPV_ARGS(&g_meshPipelineState)));
+  {
+    HRESULT hrMesh = g_device->CreateGraphicsPipelineState(&meshPsoDesc, IID_PPV_ARGS(&g_meshPipelineState));
+    if (FAILED(hrMesh)) {
+      fprintf(stderr, "InitD3D12: CreateGraphicsPipelineState (mesh) failed: 0x%08x\n", (unsigned)hrMesh);
+#ifdef _DEBUG
+      ComPtr<ID3D12InfoQueue> infoQueue;
+      if (SUCCEEDED(g_device->QueryInterface(IID_PPV_ARGS(&infoQueue)))) {
+        UINT64 num = infoQueue->GetNumStoredMessagesAllowedByRetrievalFilter();
+        for (UINT64 mi = 0; mi < num; ++mi) {
+          SIZE_T messageLength = 0;
+          infoQueue->GetMessage(mi, nullptr, &messageLength);
+          std::vector<char> message(messageLength);
+          D3D12_MESSAGE* pMsg = reinterpret_cast<D3D12_MESSAGE*>(message.data());
+          infoQueue->GetMessage(mi, pMsg, &messageLength);
+          fprintf(stderr, "D3D12 INFO (PSO create): Category=%d Severity=%d ID=%d: %s\n",
+                  (int)pMsg->Category, (int)pMsg->Severity, (int)pMsg->ID, pMsg->pDescription);
+        }
+      }
+#endif
+    }
+    ThrowIfFailed(hrMesh);
+  }
 
   // --- Initialize ImGui ---
   IMGUI_CHECKVERSION();
@@ -998,6 +1019,8 @@ bool InitD3D12(HWND hwnd) {
     float emissiveFactor[4];
     int textureIndices[4];
     int emissiveAndPad[4]; // x=emissiveTexIndex, yzw=padding
+    float lightDir[4];
+    float lightColor[4];
   };
   const UINT64 matCbSize = (sizeof(MaterialCB) + 255) & ~255;
   D3D12_RESOURCE_DESC matCbDesc = {};
@@ -1099,6 +1122,9 @@ void ResizeSwapChain(UINT width, UINT height) {
                                      rtvHandle);
     rtvHandle.ptr += g_rtvDescriptorSize;
   }
+
+  // If DXR is active, recreate its pipeline/output texture to match new size
+  DxrRenderer::CreateRayTracingPipeline(width, height);
 
   // Recreate depth buffer
   D3D12_RESOURCE_DESC depthDesc = {};
@@ -1214,7 +1240,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   std::string autoLoadPath =
       customGltfPath.empty() ? "assets/DamagedHelmet.glb" : customGltfPath;
   try {
-    if (fs::exists(autoLoadPath)) {
+        if (fs::exists(autoLoadPath)) {
       if (!Scene::ImportGltf(autoLoadPath)) {
         fprintf(stderr, "AutoLoad: failed to import %s\n",
                 autoLoadPath.c_str());
@@ -1324,6 +1350,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     // Log to stderr only
     fprintf(stderr, "AutoLoad: exception: %s\n", e.what());
   }
+
+    // Add a default ground plane (10x10)
+    AddDefaultPlane();
+    Scene::RebuildAccelerationStructures();
 
   // Basic message loop + simple render
   MSG msg = {};
@@ -1458,11 +1488,61 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
           if (gm.materialIndex >= 0 &&
               gm.materialIndex < (int)g_loadedMaterials.size()) {
-            g_commandList->SetGraphicsRootConstantBufferView(
-                2, g_materialConstantBuffer->GetGPUVirtualAddress());
+            // Upload material data for this mesh into the persistent material CB
+            struct MaterialCB {
+              float baseColorFactor[4];
+              float params1[4];
+              float specular[4];
+              float emissiveFactor[4];
+              int textureIndices[4];
+              int emissiveAndPad[4];
+              float lightDir[4];
+              float lightColor[4];
+            } matCB;
+
+            const auto &srcMat = g_loadedMaterials[gm.materialIndex];
+            matCB.baseColorFactor[0] = srcMat.baseColorFactor[0];
+            matCB.baseColorFactor[1] = srcMat.baseColorFactor[1];
+            matCB.baseColorFactor[2] = srcMat.baseColorFactor[2];
+            matCB.baseColorFactor[3] = srcMat.baseColorFactor[3];
+            matCB.params1[0] = srcMat.metallicFactor;
+            matCB.params1[1] = srcMat.roughnessFactor;
+            matCB.params1[2] = (float)srcMat.workflow;
+            matCB.params1[3] = 0.0f;
+            matCB.specular[0] = srcMat.specularFactor[0];
+            matCB.specular[1] = srcMat.specularFactor[1];
+            matCB.specular[2] = srcMat.specularFactor[2];
+            matCB.specular[3] = srcMat.glossinessFactor;
+            matCB.emissiveFactor[0] = 0.0f; matCB.emissiveFactor[1] = 0.0f; matCB.emissiveFactor[2] = 0.0f; matCB.emissiveFactor[3] = 0.0f;
+            matCB.textureIndices[0] = srcMat.baseColorTexture;
+            matCB.textureIndices[1] = srcMat.metallicRoughnessTexture;
+            matCB.textureIndices[2] = srcMat.normalTexture;
+            matCB.textureIndices[3] = srcMat.occlusionTexture;
+            matCB.emissiveAndPad[0] = srcMat.emissiveTexture;
+            matCB.emissiveAndPad[1] = matCB.emissiveAndPad[2] = matCB.emissiveAndPad[3] = 0;
+
+            // Copy global default light into material CB so both raster and DXR shaders can read it
+            extern DirectionalLight g_defaultLight;
+            matCB.lightDir[0] = g_defaultLight.dir[0];
+            matCB.lightDir[1] = g_defaultLight.dir[1];
+            matCB.lightDir[2] = g_defaultLight.dir[2];
+            matCB.lightDir[3] = g_defaultLight.dir[3];
+            matCB.lightColor[0] = g_defaultLight.color[0];
+            matCB.lightColor[1] = g_defaultLight.color[1];
+            matCB.lightColor[2] = g_defaultLight.color[2];
+            matCB.lightColor[3] = g_defaultLight.color[3];
+
+            if (g_materialConstantBuffer) {
+              UINT8 *pMat = nullptr;
+              D3D12_RANGE readRange = {0,0};
+              if (SUCCEEDED(g_materialConstantBuffer->Map(0, &readRange, reinterpret_cast<void**>(&pMat)))) {
+                memcpy(pMat, &matCB, sizeof(matCB));
+                g_materialConstantBuffer->Unmap(0, nullptr);
+              }
+              g_commandList->SetGraphicsRootConstantBufferView(2, g_materialConstantBuffer->GetGPUVirtualAddress());
+            }
             if (g_textureDescriptorCount > 0)
-              g_commandList->SetGraphicsRootDescriptorTable(1,
-                                                            g_texturesGpuStart);
+              g_commandList->SetGraphicsRootDescriptorTable(1, g_texturesGpuStart);
           }
           if (gm.ibView.SizeInBytes > 0)
             g_commandList->DrawIndexedInstanced(gm.ibView.SizeInBytes / 4, 1, 0,
@@ -1892,8 +1972,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         if (ImGui::Checkbox("Verbose Render Logs", &g_verboseRenderLogs)) {
           fprintf(stderr, "Verbose Render Logs set=%d\n", g_verboseRenderLogs);
         }
-        ImGui::End();
       }
+      ImGui::End();
     }
 
     // Render Mode Selector
@@ -1915,11 +1995,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         if (ImGui::RadioButton("Raytracing",
                                g_currentRenderMode == RenderMode::Raytracing)) {
           g_currentRenderMode = RenderMode::Raytracing;
+          // Recreate raytracing pipeline to ensure output texture matches current size
+          DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
         }
         // DXR debug: show UV output from RayGen
         if (ImGui::Checkbox("DXR: Show RayGen UV (debug)", &g_dxrDebugUV)) {
           // Recreate pipeline with debug define; reinitializing RT pipeline
-          DxrRenderer::CreateRayTracingPipeline();
+          DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
         }
         if (ImGui::Checkbox("DXR: Dump Output Pixels (debug, stalls)",
                             &g_dxrDumpPixels)) {
@@ -1927,7 +2009,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         }
         if (ImGui::Checkbox("DXR: Encode Hit PrimID (debug)", &g_dxrHitDebug)) {
           fprintf(stderr, "DXR: HitDebug set=%d\n", g_dxrHitDebug);
-          DxrRenderer::CreateRayTracingPipeline();
+          DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
         }
         if (ImGui::Checkbox("DXR: Dump D3D12 Messages (debug)",
                             &g_dxrDumpD3D12Messages)) {
@@ -1961,6 +2043,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       }
       ImGui::End();
     }
+    // (default ground plane will be added at startup)
 
     // Asset loader UI
     // Provide a persistent 'open' toggle and ensure the window starts
@@ -1980,16 +2063,22 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       Scene::DrawScenePanel(g_hwnd, g_showAssetsWindow);
     }
 
+    //fprintf(stderr, "MainLoop: ImGui::Render start\n");
     ImGui::Render();
+    //fprintf(stderr, "MainLoop: ImGui::Render done\n");
 
+    //fprintf(stderr, "MainLoop: PopulateCommandList start\n");
     PopulateCommandList();
+    //fprintf(stderr, "MainLoop: PopulateCommandList done\n");
 
     ID3D12CommandList *ppCommandLists[] = {g_commandList.Get()};
     g_commandQueue->ExecuteCommandLists(_countof(ppCommandLists),
-                                        ppCommandLists);
+                      ppCommandLists);
+    //fprintf(stderr, "MainLoop: ExecuteCommandLists done\n");
 
+    //fprintf(stderr, "MainLoop: Present start\n");
     ThrowIfFailed(g_swapChain->Present(1, 0));
-
+    //fprintf(stderr, "MainLoop: Present done\n");
     // Signal and increment the fence value.
     const UINT64 currentFenceValue = g_fenceValues[g_frameIndex];
     ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), currentFenceValue));

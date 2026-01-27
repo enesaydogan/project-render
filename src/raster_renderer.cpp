@@ -79,8 +79,9 @@ void CreateGridResources(ID3D12Device* device, float gridThickness) {
 
     // Create vertex buffer for grid
     struct GridVertex { float pos[3]; float col[3]; };
+    //grid step
     const int half = 10;
-    const float step = 1.0f;
+    const float step = 0.25f;
     std::vector<GridVertex> verts;
     verts.reserve((half*2+1)*6*2);
     float halfThickness = gridThickness * 0.5f;
@@ -178,7 +179,7 @@ void RecreateMeshPipeline(ID3D12Device* device, ID3D12RootSignature* rootSig) {
     }
 
     D3D12_DEPTH_STENCIL_DESC depthDesc = {};
-    depthDesc.DepthEnable = FALSE;
+    depthDesc.DepthEnable = TRUE;
     depthDesc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
     depthDesc.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
 
