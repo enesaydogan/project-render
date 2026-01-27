@@ -255,19 +255,27 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
             nullptr,
             IID_PPV_ARGS(&uploadBuffer)));
 
-        // Prepare a temporary RGBA buffer if source has 3 components
+        // Support any component count (1, 2, 3, 4) by converting to RGBA8
         std::vector<unsigned char> rgba;
         const unsigned char* srcPtr = src;
-        if (components == 3) {
+        if (components != 4) {
             rgba.resize(width * height * 4);
             for (int y = 0; y < height; ++y) {
                 for (int x = 0; x < width; ++x) {
-                    int si = (y * width + x) * 3;
+                    int si = (y * width + x) * components;
                     int di = (y * width + x) * 4;
-                    rgba[di+0] = src[si+0];
-                    rgba[di+1] = src[si+1];
-                    rgba[di+2] = src[si+2];
-                    rgba[di+3] = 255;
+                    if (components == 1) { // Grayscale
+                        rgba[di+0] = rgba[di+1] = rgba[di+2] = src[si+0];
+                        rgba[di+3] = 255;
+                    } else if (components == 2) { // Grayscale + Alpha
+                        rgba[di+0] = rgba[di+1] = rgba[di+2] = src[si+0];
+                        rgba[di+3] = src[si+1];
+                    } else if (components == 3) { // RGB
+                        rgba[di+0] = src[si+0];
+                        rgba[di+1] = src[si+1];
+                        rgba[di+2] = src[si+2];
+                        rgba[di+3] = 255;
+                    }
                 }
             }
             srcPtr = rgba.data();
@@ -277,7 +285,7 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
         UINT8* mapped = nullptr;
         D3D12_RANGE readRange = {0,0};
         ThrowIfFailed(uploadBuffer->Map(0, &readRange, reinterpret_cast<void**>(&mapped)));
-        for (UINT y = 0; y < numRows; ++y) {
+        for (UINT y = 0; y < (UINT)height; ++y) {
             BYTE* dest = mapped + footprint.Offset + (SIZE_T)footprint.Footprint.RowPitch * y;
             const BYTE* srcRow = srcPtr + (size_t)y * width * 4;
             memcpy(dest, srcRow, (size_t)width * 4);
@@ -306,13 +314,13 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
 
         cmdList->CopyTextureRegion(&dst, 0, 0, 0, &srcLoc, &srcBox);
 
-        // Transition to PIXEL_SHADER_RESOURCE
+        // Transition to ALL_SHADER_RESOURCE so both Raster and DXR can sample it
         D3D12_RESOURCE_BARRIER barrier = {};
         barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
         barrier.Transition.pResource = texture.Get();
         barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
         barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-        barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
         cmdList->ResourceBarrier(1, &barrier);
 
         ExecuteCommandListAndWait(cmdList.Get());
@@ -357,76 +365,191 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
             }
             mat.metallicFactor = (float)m.pbrMetallicRoughness.metallicFactor;
             mat.roughnessFactor = (float)m.pbrMetallicRoughness.roughnessFactor;
-            if (m.pbrMetallicRoughness.baseColorTexture.index >= 0) mat.baseColorTexture = m.pbrMetallicRoughness.baseColorTexture.index;
-            if (m.pbrMetallicRoughness.metallicRoughnessTexture.index >= 0) mat.metallicRoughnessTexture = m.pbrMetallicRoughness.metallicRoughnessTexture.index;
-            if (m.normalTexture.index >= 0) mat.normalTexture = m.normalTexture.index;
-            if (m.occlusionTexture.index >= 0) mat.occlusionTexture = m.occlusionTexture.index;
-            if (m.emissiveTexture.index >= 0) mat.emissiveTexture = m.emissiveTexture.index;
+
+            // Proper mapping from texture index to image source index
+            auto GetImgIdx = [&](int texIdx) {
+                if (texIdx >= 0 && texIdx < (int)model.textures.size()) {
+                    return model.textures[texIdx].source;
+                }
+                return -1;
+            };
+
+            mat.baseColorTexture = GetImgIdx(m.pbrMetallicRoughness.baseColorTexture.index);
+            mat.metallicRoughnessTexture = GetImgIdx(m.pbrMetallicRoughness.metallicRoughnessTexture.index);
+            mat.normalTexture = GetImgIdx(m.normalTexture.index);
+            mat.occlusionTexture = GetImgIdx(m.occlusionTexture.index);
+            mat.emissiveTexture = GetImgIdx(m.emissiveTexture.index);
+
             mat.doubleSided = m.doubleSided;
             if (!m.alphaMode.empty()) mat.alphaMode = m.alphaMode;
-            // Check for specular-glossiness (additionalValues often contains these when extension used)
-            auto specIt = m.additionalValues.find("specularFactor");
-            auto glossIt = m.additionalValues.find("glossinessFactor");
-            if (specIt != m.additionalValues.end() || glossIt != m.additionalValues.end()) {
-                // Mark specular-glossiness workflow
+            
+            // Handle KHR_materials_pbrSpecularGlossiness extension
+            auto khrSpec = m.extensions.find("KHR_materials_pbrSpecularGlossiness");
+            if (khrSpec != m.extensions.end()) {
                 mat.workflow = 1;
-                if (specIt != m.additionalValues.end()) {
-                    const tinygltf::Parameter& p = specIt->second;
-                    if (p.number_array.size() >= 3) {
-                        mat.specularFactor[0] = (float)p.number_array[0];
-                        mat.specularFactor[1] = (float)p.number_array[1];
-                        mat.specularFactor[2] = (float)p.number_array[2];
+                const auto& ext = khrSpec->second;
+                if (ext.Has("specularFactor")) {
+                    auto p = ext.Get("specularFactor");
+                    for (int i = 0; i < 3 && i < (int)p.ArrayLen(); ++i) {
+                        mat.specularFactor[i] = (float)p.Get(i).GetNumberAsDouble();
                     }
                 }
-                if (glossIt != m.additionalValues.end()) {
-                    const tinygltf::Parameter& p = glossIt->second;
-                    if (!p.number_array.empty()) mat.glossinessFactor = (float)p.number_array[0];
+                if (ext.Has("glossinessFactor")) {
+                    mat.glossinessFactor = (float)ext.Get("glossinessFactor").GetNumberAsDouble();
+                }
+                if (ext.Has("diffuseTexture")) {
+                    mat.baseColorTexture = GetImgIdx(ext.Get("diffuseTexture").Get("index").GetNumberAsInt());
+                }
+                if (ext.Has("specularGlossinessTexture")) {
+                    // In SG workflow, specular + glossiness can be in its own texture
+                    // But our Material struct doesn't have a slot for it yet. 
+                    // Using metallicRoughness slot as fallback if needed for shader compatibility
+                    mat.metallicRoughnessTexture = GetImgIdx(ext.Get("specularGlossinessTexture").Get("index").GetNumberAsInt());
                 }
             }
             tmpMaterials[mi] = std::move(mat);
         }
     }
 
-    // Detect if the model uses Z-up (heuristic based on bounding box extents).
-    bool zUpDetected = false;
-    {
-        float minX = FLT_MAX, minY = FLT_MAX, minZ = FLT_MAX;
-        float maxX = -FLT_MAX, maxY = -FLT_MAX, maxZ = -FLT_MAX;
-        for (size_t mi = 0; mi < model.meshes.size(); ++mi) {
-            const auto& mesh = model.meshes[mi];
-            for (size_t pi = 0; pi < mesh.primitives.size(); ++pi) {
-                const auto& prim = mesh.primitives[pi];
-                auto posIt = prim.attributes.find("POSITION");
-                if (posIt == prim.attributes.end()) continue;
-                const tinygltf::Accessor& posAccessor = model.accessors[posIt->second];
-                if (posAccessor.bufferView < 0) continue;
-                const tinygltf::BufferView& posView = model.bufferViews[posAccessor.bufferView];
-                if (posView.buffer < 0 || posView.buffer >= (int)model.buffers.size()) continue;
-                const tinygltf::Buffer& posBuffer = model.buffers[posView.buffer];
-                if (posBuffer.data.empty()) continue;
-                const unsigned char* posData = posBuffer.data.data() + posView.byteOffset + posAccessor.byteOffset;
-                size_t posByteStride = posAccessor.ByteStride(posView);
-                if (posByteStride == 0) posByteStride = sizeof(float) * 3;
-                for (size_t i = 0; i < posAccessor.count; ++i) {
-                    const float* p = reinterpret_cast<const float*>(posData + i * posByteStride);
-                    if (p[0] < minX) minX = p[0]; if (p[0] > maxX) maxX = p[0];
-                    if (p[1] < minY) minY = p[1]; if (p[1] > maxY) maxY = p[1];
-                    if (p[2] < minZ) minZ = p[2]; if (p[2] > maxZ) maxZ = p[2];
-                }
-            }
-        }
-        float ex = maxX - minX; float ey = maxY - minY; float ez = maxZ - minZ;
-        // Heuristic: if Z extent is significantly larger than Y extent, consider Z-up
-        if (ez > 0.0f && ey > 0.0f) {
-            if (ez > ey * 1.2f && ez > ex * 0.8f) {
-                zUpDetected = true;
-                fprintf(stderr, "LoadGltf: detected Z-up model (ex=%.3f, ey=%.3f, ez=%.3f). Converting to Y-up on import.\n", ex, ey, ez);
-            }
-        }
-    }
+    auto GetCompSize = [](int compType) -> size_t {
+        if (compType == TINYGLTF_COMPONENT_TYPE_FLOAT) return 4;
+        if (compType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT || compType == TINYGLTF_COMPONENT_TYPE_SHORT) return 2;
+        if (compType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE || compType == TINYGLTF_COMPONENT_TYPE_BYTE) return 1;
+        return 4;
+    };
 
-    for (size_t mi = 0; mi < model.meshes.size(); ++mi) {
-        const auto& mesh = model.meshes[mi];
+    auto GetNumComps = [](int type) -> size_t {
+        if (type == TINYGLTF_TYPE_VEC4) return 4;
+        if (type == TINYGLTF_TYPE_VEC3) return 3;
+        if (type == TINYGLTF_TYPE_VEC2) return 2;
+        if (type == TINYGLTF_TYPE_SCALAR) return 1;
+        return 0;
+    };
+
+    // Helper to extract data from tinygltf accessors robustly
+    auto GetAccessorData = [&](int accessorIdx, const unsigned char*& dataOut, size_t& strideOut, size_t& countOut, int& typeOut, int& compTypeOut) -> bool {
+        if (accessorIdx < 0) return false;
+        const auto& acc = model.accessors[accessorIdx];
+        if (acc.bufferView < 0) return false;
+        const auto& view = model.bufferViews[acc.bufferView];
+        dataOut = model.buffers[view.buffer].data.data() + view.byteOffset + acc.byteOffset;
+        strideOut = acc.ByteStride(view);
+        if (strideOut == 0) {
+            strideOut = GetCompSize(acc.componentType) * GetNumComps(acc.type);
+        }
+        countOut = acc.count;
+        typeOut = acc.type;
+        compTypeOut = acc.componentType;
+        return true;
+    };
+
+    auto ReadVec2 = [&](const unsigned char* data, int compType, float* out) {
+        for (int i=0; i<2; ++i) {
+            if (compType == TINYGLTF_COMPONENT_TYPE_FLOAT) out[i] = reinterpret_cast<const float*>(data)[i];
+            else if (compType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) out[i] = (float)reinterpret_cast<const uint16_t*>(data)[i] / 65535.0f;
+            else if (compType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE) out[i] = (float)data[i] / 255.0f;
+        }
+    };
+
+    auto ReadVec3 = [&](const unsigned char* data, int compType, float* out) {
+        for (int i=0; i<3; ++i) {
+            if (compType == TINYGLTF_COMPONENT_TYPE_FLOAT) out[i] = reinterpret_cast<const float*>(data)[i];
+            else if (compType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) out[i] = (float)reinterpret_cast<const uint16_t*>(data)[i] / 65535.0f;
+            else if (compType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE) out[i] = (float)data[i] / 255.0f;
+        }
+    };
+
+    auto ReadVec4 = [&](const unsigned char* data, int compType, float* out) {
+        for (int i=0; i<4; ++i) {
+            if (compType == TINYGLTF_COMPONENT_TYPE_FLOAT) out[i] = reinterpret_cast<const float*>(data)[i];
+            else if (compType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) out[i] = (float)reinterpret_cast<const uint16_t*>(data)[i] / 65535.0f;
+            else if (compType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE) out[i] = (float)data[i] / 255.0f;
+        }
+    };
+
+    // --- Node traversal to bake transforms into vertices ---
+    struct NodeTransform {
+        int meshIdx;
+        tinygltf::Value matrix;
+        std::vector<double> translation, rotation, scale;
+    };
+
+    // Helper to get global transform of a node (Column-Major)
+    auto GetNodeTransform = [](const tinygltf::Node& node) -> std::vector<float> {
+        std::vector<float> mat(16, 0.0f);
+        if (node.matrix.size() == 16) {
+            for (int i = 0; i < 16; ++i) mat[i] = (float)node.matrix[i];
+        } else {
+            // Start with Identity
+            for (int i = 0; i < 4; ++i) mat[i * 4 + i] = 1.0f;
+
+            float sx = 1.0f, sy = 1.0f, sz = 1.0f;
+            if (node.scale.size() == 3) {
+                sx = (float)node.scale[0]; sy = (float)node.scale[1]; sz = (float)node.scale[2];
+            }
+
+            float r[9] = {1,0,0, 0,1,0, 0,0,1};
+            if (node.rotation.size() == 4) {
+                float qx = (float)node.rotation[0], qy = (float)node.rotation[1], qz = (float)node.rotation[2], qw = (float)node.rotation[3];
+                r[0] = 1 - 2*qy*qy - 2*qz*qz; r[1] = 2*qx*qy - 2*qz*qw; r[2] = 2*qx*qz + 2*qy*qw;
+                r[3] = 2*qx*qy + 2*qz*qw;     r[4] = 1 - 2*qx*qx - 2*qz*qz; r[5] = 2*qy*qz - 2*qx*qw;
+                r[6] = 2*qx*qz - 2*qy*qw;     r[7] = 2*qy*qz + 2*qx*qw;     r[8] = 1 - 2*qx*qx - 2*qy*qy;
+            }
+
+            // Fill Column-Major Matrix from TRS: M = T * R * S
+            // Col 0
+            mat[0] = r[0] * sx; mat[1] = r[3] * sx; mat[2] = r[6] * sx;
+            // Col 1
+            mat[4] = r[1] * sy; mat[5] = r[4] * sy; mat[6] = r[7] * sy;
+            // Col 2
+            mat[8] = r[2] * sz; mat[9] = r[5] * sz; mat[10] = r[8] * sz;
+            
+            if (node.translation.size() == 3) {
+                mat[12] = (float)node.translation[0]; mat[13] = (float)node.translation[1]; mat[14] = (float)node.translation[2];
+            }
+        }
+        return mat;
+    };
+
+    // Matrix Multiply (Column-Major)
+    auto Multiply = [](const std::vector<float>& A, const std::vector<float>& B) {
+        std::vector<float> C(16, 0.0f);
+        for (int row = 0; row < 4; ++row) {
+            for (int col = 0; col < 4; ++col) {
+                float sum = 0.0f;
+                for (int k = 0; k < 4; ++k) {
+                    sum += A[k * 4 + row] * B[col * 4 + k];
+                }
+                C[col * 4 + row] = sum;
+            }
+        }
+        return C;
+    };
+
+    std::vector<std::vector<float>> globalTransforms(model.nodes.size());
+    std::vector<bool> visited(model.nodes.size(), false);
+
+    auto Traverse = [&](auto self, int nodeIdx, const std::vector<float>& parentTransform) -> void {
+        if (nodeIdx < 0 || nodeIdx >= (int)model.nodes.size()) return;
+        const auto& node = model.nodes[nodeIdx];
+        std::vector<float> local = GetNodeTransform(node);
+        globalTransforms[nodeIdx] = Multiply(parentTransform, local);
+        visited[nodeIdx] = true;
+        for (int child : node.children) self(self, child, globalTransforms[nodeIdx]);
+    };
+
+    std::vector<float> identity(16, 0.0f);
+    for (int i = 0; i < 4; ++i) identity[i * 4 + i] = 1.0f;
+
+    const auto& scene = model.scenes[model.defaultScene >= 0 ? model.defaultScene : 0];
+    for (int nodeIdx : scene.nodes) Traverse(Traverse, nodeIdx, identity);
+
+    for (int ni = 0; ni < (int)model.nodes.size(); ++ni) {
+        if (!visited[ni] || model.nodes[ni].mesh < 0) continue;
+        const auto& node = model.nodes[ni];
+        const auto& mesh = model.meshes[node.mesh];
+        const auto& worldMat = globalTransforms[ni];
+
         for (size_t pi = 0; pi < mesh.primitives.size(); ++pi) {
             const auto& prim = mesh.primitives[pi];
 
@@ -436,132 +559,81 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
                 continue;
             }
 
-            // Find POSITION accessor
+            const unsigned char *posData = nullptr, *normData = nullptr, *uvData = nullptr, *tanData = nullptr;
+            size_t posStride = 0, normStride = 0, uvStride = 0, tanStride = 0;
+            size_t vertexCount = 0;
+            int posType, posComp, normType, normComp, uvType, uvComp, tanType, tanComp;
+
             auto posIt = prim.attributes.find("POSITION");
-            if (posIt == prim.attributes.end()) {
-                fprintf(stderr, "Primitive missing POSITION attribute; skipping\n");
+            if (posIt == prim.attributes.end() || !GetAccessorData(posIt->second, posData, posStride, vertexCount, posType, posComp)) {
+                fprintf(stderr, "Primitive missing POSITION; skipping\n");
                 continue;
             }
+            if (posStride == 0) posStride = sizeof(float) * 3;
 
-            const tinygltf::Accessor& posAccessor = model.accessors[posIt->second];
-            if (posAccessor.bufferView < 0) {
-                fprintf(stderr, "POSITION accessor has no bufferView; skipping\n");
-                continue;
-            }
-
-            const tinygltf::BufferView& posView = model.bufferViews[posAccessor.bufferView];
-            if (posView.buffer < 0 || posView.buffer >= (int)model.buffers.size()) {
-                fprintf(stderr, "POSITION bufferView references invalid buffer; skipping\n");
-                continue;
-            }
-
-            const tinygltf::Buffer& posBuffer = model.buffers[posView.buffer];
-            if (posBuffer.data.empty()) {
-                fprintf(stderr, "POSITION buffer is empty; skipping\n");
-                continue;
-            }
-
-            const unsigned char* posData = posBuffer.data.data() + posView.byteOffset + posAccessor.byteOffset;
-            size_t posByteStride = posAccessor.ByteStride(posView);
-            if (posByteStride == 0) posByteStride = sizeof(float) * 3;
-
-            // Optional NORMAL accessor
-            const unsigned char* normData = nullptr;
-            size_t normByteStride = 0;
             bool hasNormal = false;
             auto normIt = prim.attributes.find("NORMAL");
-            if (normIt != prim.attributes.end()) {
-                const tinygltf::Accessor& normAccessor = model.accessors[normIt->second];
-                if (normAccessor.bufferView >= 0) {
-                    const tinygltf::BufferView& normView = model.bufferViews[normAccessor.bufferView];
-                    if (normView.buffer >= 0 && normView.buffer < (int)model.buffers.size()) {
-                        const tinygltf::Buffer& normBuffer = model.buffers[normView.buffer];
-                        if (!normBuffer.data.empty()) {
-                            normData = normBuffer.data.data() + normView.byteOffset + normAccessor.byteOffset;
-                            normByteStride = normAccessor.ByteStride(normView);
-                            if (normByteStride == 0) normByteStride = sizeof(float) * 3;
-                            hasNormal = true;
-                        }
-                    }
-                }
+            if (normIt != prim.attributes.end() && GetAccessorData(normIt->second, normData, normStride, vertexCount, normType, normComp)) {
+                if (normStride == 0) normStride = sizeof(float) * 3;
+                hasNormal = true;
             }
 
-            // Optional TANGENT accessor (vec4)
-            const unsigned char* tanData = nullptr;
-            size_t tanByteStride = 0;
-            bool hasTangent = false;
-            auto tanIt = prim.attributes.find("TANGENT");
-            if (tanIt != prim.attributes.end()) {
-                const tinygltf::Accessor& tanAccessor = model.accessors[tanIt->second];
-                if (tanAccessor.bufferView >= 0) {
-                    const tinygltf::BufferView& tanView = model.bufferViews[tanAccessor.bufferView];
-                    if (tanView.buffer >= 0 && tanView.buffer < (int)model.buffers.size()) {
-                        const tinygltf::Buffer& tanBuffer = model.buffers[tanView.buffer];
-                        if (!tanBuffer.data.empty()) {
-                            tanData = tanBuffer.data.data() + tanView.byteOffset + tanAccessor.byteOffset;
-                            tanByteStride = tanAccessor.ByteStride(tanView);
-                            if (tanByteStride == 0) tanByteStride = sizeof(float) * 4;
-                            hasTangent = true;
-                        }
-                    }
-                }
-            }
-
-            // Optional TEXCOORD_0 accessor
-            const unsigned char* uvData = nullptr;
-            size_t uvByteStride = 0;
             bool hasUV = false;
             auto uvIt = prim.attributes.find("TEXCOORD_0");
-            if (uvIt != prim.attributes.end()) {
-                const tinygltf::Accessor& uvAccessor = model.accessors[uvIt->second];
-                if (uvAccessor.bufferView >= 0) {
-                    const tinygltf::BufferView& uvView = model.bufferViews[uvAccessor.bufferView];
-                    if (uvView.buffer >= 0 && uvView.buffer < (int)model.buffers.size()) {
-                        const tinygltf::Buffer& uvBuffer = model.buffers[uvView.buffer];
-                        if (!uvBuffer.data.empty()) {
-                            uvData = uvBuffer.data.data() + uvView.byteOffset + uvAccessor.byteOffset;
-                            uvByteStride = uvAccessor.ByteStride(uvView);
-                            if (uvByteStride == 0) uvByteStride = sizeof(float) * 2;
-                            hasUV = true;
-                        }
-                    }
-                }
+            if (uvIt != prim.attributes.end() && GetAccessorData(uvIt->second, uvData, uvStride, vertexCount, uvType, uvComp)) {
+                if (uvStride == 0) uvStride = sizeof(float) * 2;
+                hasUV = true;
             }
 
-            // Gather interleaved vertices (pos, normal, uv)
+            bool hasTangent = false;
+            auto tanIt = prim.attributes.find("TANGENT");
+            if (tanIt != prim.attributes.end() && GetAccessorData(tanIt->second, tanData, tanStride, vertexCount, tanType, tanComp)) {
+                if (tanStride == 0) tanStride = sizeof(float) * 4;
+                hasTangent = true;
+            }
+
+            // Gather interleaved vertices
             std::vector<Vertex> vertices;
-            vertices.reserve(posAccessor.count);
-            for (size_t i = 0; i < posAccessor.count; ++i) {
-                const float* p = reinterpret_cast<const float*>(posData + i * posByteStride);
-                float nx = 0.0f, ny = 0.0f, nz = 0.0f;
+            vertices.reserve(vertexCount);
+            for (size_t i = 0; i < vertexCount; ++i) {
+                float p[3] = {0,0,0};
+                ReadVec3(posData + i * posStride, posComp, p);
+
+                float nx = 0.0f, ny = 1.0f, nz = 0.0f; 
                 if (hasNormal) {
-                    const float* n = reinterpret_cast<const float*>(normData + i * normByteStride);
+                    float n[3]; ReadVec3(normData + i * normStride, normComp, n);
                     nx = n[0]; ny = n[1]; nz = n[2];
                 }
 
                 float u = 0.0f, v = 0.0f;
                 if (hasUV) {
-                    const float* uv = reinterpret_cast<const float*>(uvData + i * uvByteStride);
+                    float uv[2]; ReadVec2(uvData + i * uvStride, uvComp, uv);
                     u = uv[0]; v = uv[1];
                 }
 
-                float tx = 0.0f, ty = 0.0f, tz = 0.0f, tw = 0.0f;
+                float tx = 1.0f, ty = 0.0f, tz = 0.0f, tw = 1.0f;
                 if (hasTangent) {
-                    const float* t = reinterpret_cast<const float*>(tanData + i * tanByteStride);
+                    float t[4]; ReadVec4(tanData + i * tanStride, tanComp, t);
                     tx = t[0]; ty = t[1]; tz = t[2]; tw = t[3];
                 }
 
                 Vertex vv;
-                if (zUpDetected) {
-                    // Rotate -90 degrees about X: newY = Z_old, newZ = -Y_old
-                    vv.pos[0] = p[0]; vv.pos[1] = p[2]; vv.pos[2] = -p[1];
-                    vv.normal[0] = nx; vv.normal[1] = nz; vv.normal[2] = -ny;
-                    vv.tangent[0] = tx; vv.tangent[1] = tz; vv.tangent[2] = -ty; vv.tangent[3] = tw;
-                } else {
-                    vv.pos[0] = p[0]; vv.pos[1] = p[1]; vv.pos[2] = p[2];
-                    vv.normal[0] = nx; vv.normal[1] = ny; vv.normal[2] = nz;
-                    vv.tangent[0] = tx; vv.tangent[1] = ty; vv.tangent[2] = tz; vv.tangent[3] = tw;
-                }
+                // Position: P' = M * P
+                vv.pos[0] = p[0] * worldMat[0] + p[1] * worldMat[4] + p[2] * worldMat[8] + worldMat[12];
+                vv.pos[1] = p[0] * worldMat[1] + p[1] * worldMat[5] + p[2] * worldMat[9] + worldMat[13];
+                vv.pos[2] = p[0] * worldMat[2] + p[1] * worldMat[6] + p[2] * worldMat[10] + worldMat[14];
+                
+                // Normal: N' = M_3x3 * N
+                vv.normal[0] = nx * worldMat[0] + ny * worldMat[4] + nz * worldMat[8];
+                vv.normal[1] = nx * worldMat[1] + ny * worldMat[5] + nz * worldMat[9];
+                vv.normal[2] = nx * worldMat[2] + ny * worldMat[6] + nz * worldMat[10];
+                
+                // Tangent: T' = M_3x3 * T
+                vv.tangent[0] = tx * worldMat[0] + ty * worldMat[4] + tz * worldMat[8];
+                vv.tangent[1] = tx * worldMat[1] + ty * worldMat[5] + tz * worldMat[9];
+                vv.tangent[2] = tx * worldMat[2] + ty * worldMat[6] + tz * worldMat[10];
+                vv.tangent[3] = tw;
+
                 vv.uv[0] = u; vv.uv[1] = v;
                 vertices.push_back(vv);
             }
@@ -569,50 +641,24 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
             // Indices
             std::vector<uint32_t> indices;
             if (prim.indices >= 0) {
-                const tinygltf::Accessor& idxAccessor = model.accessors[prim.indices];
-                if (idxAccessor.bufferView < 0) {
-                    fprintf(stderr, "Index accessor has no bufferView; skipping primitive\n");
-                    continue;
-                }
-
-                const tinygltf::BufferView& idxView = model.bufferViews[idxAccessor.bufferView];
-                if (idxView.buffer < 0 || idxView.buffer >= (int)model.buffers.size()) {
-                    fprintf(stderr, "Index bufferView references invalid buffer; skipping primitive\n");
-                    continue;
-                }
-
-                const tinygltf::Buffer& idxBuffer = model.buffers[idxView.buffer];
-                if (idxBuffer.data.empty()) {
-                    fprintf(stderr, "Index buffer is empty; skipping primitive\n");
-                    continue;
-                }
-
-                const unsigned char* idxData = idxBuffer.data.data() + idxView.byteOffset + idxAccessor.byteOffset;
-
-                indices.resize(idxAccessor.count);
-                bool unsupportedIndexType = false;
-                for (size_t i = 0; i < idxAccessor.count; ++i) {
-                    if (idxAccessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) {
-                        const uint16_t* s = reinterpret_cast<const uint16_t*>(idxData + i * 2);
-                        indices[i] = static_cast<uint32_t>(*s);
-                    } else if (idxAccessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT) {
-                        const uint32_t* s = reinterpret_cast<const uint32_t*>(idxData + i * 4);
-                        indices[i] = *s;
-                    } else if (idxAccessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE) {
-                        const uint8_t* s = reinterpret_cast<const uint8_t*>(idxData + i);
-                        indices[i] = static_cast<uint32_t>(*s);
-                    } else {
-                        fprintf(stderr, "Unsupported index component type; skipping primitive\n");
-                        unsupportedIndexType = true;
-                        break;
+                const unsigned char* idxData = nullptr;
+                size_t idxStride = 0, idxCount = 0;
+                int idxType, idxComp;
+                if (GetAccessorData(prim.indices, idxData, idxStride, idxCount, idxType, idxComp)) {
+                    indices.resize(idxCount);
+                    for (size_t i = 0; i < idxCount; ++i) {
+                        if (idxComp == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) {
+                            indices[i] = *reinterpret_cast<const uint16_t*>(idxData + i * 2);
+                        } else if (idxComp == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT) {
+                            indices[i] = *reinterpret_cast<const uint32_t*>(idxData + i * 4);
+                        } else if (idxComp == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE) {
+                            indices[i] = idxData[i];
+                        }
                     }
                 }
-
-                if (unsupportedIndexType) continue;
             } else {
-                // No indices; generate a simple 0..N-1 index list
-                indices.resize(posAccessor.count);
-                for (uint32_t i = 0; i < (uint32_t)posAccessor.count; ++i) indices[i] = i;
+                indices.resize(vertexCount);
+                for (uint32_t i = 0; i < (uint32_t)vertexCount; ++i) indices[i] = i;
             }
 
             if (vertices.empty() || indices.empty()) {
@@ -643,7 +689,7 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
             outMeshes.push_back(std::move(gm));
 
             std::ostringstream log;
-            log << "Imported mesh[" << mi << "] prim[" << pi << "] verts=" << posAccessor.count << " idx=" << indices.size() << "\n";
+            log << "Imported node[" << ni << "] mesh[" << node.mesh << "] prim[" << pi << "] verts=" << vertexCount << " idx=" << indices.size() << "\n";
             fprintf(stderr, "%s", log.str().c_str());
         }
     }

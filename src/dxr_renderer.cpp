@@ -34,6 +34,20 @@ bool g_rayTracingSupported = false; // defined here
 // DXR-specific state kept internal to this module
 static ComPtr<ID3D12Device5> s_dxrDevice;
 
+// Descriptor heaps for DXR
+static ComPtr<ID3D12DescriptorHeap> s_srvHeap; // Holds [Textures(2048), VBs(1024), IBs(1024), OutputUAV(1)]
+static D3D12_GPU_DESCRIPTOR_HANDLE s_texTableGpu;
+static D3D12_GPU_DESCRIPTOR_HANDLE s_vbTableGpu;
+static D3D12_GPU_DESCRIPTOR_HANDLE s_ibTableGpu;
+static D3D12_GPU_DESCRIPTOR_HANDLE s_outputUAVGpu;
+
+// Offset constants for s_srvHeap
+static const UINT DXR_HEAP_TEX_OFFSET = 0;
+static const UINT DXR_HEAP_VB_OFFSET = 2048;
+static const UINT DXR_HEAP_IB_OFFSET = 2048 + 1024;
+static const UINT DXR_HEAP_UAV_OFFSET = 2048 + 1024 + 1024;
+static const UINT DXR_HEAP_TOTAL_COUNT = 2048 + 1024 + 1024 + 1;
+
 // Output texture dimensions used by DXR (kept local to module)
 static UINT s_outputWidth = 1280;
 static UINT s_outputHeight = 720;
@@ -107,6 +121,27 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
         fprintf(stderr, "DxrRenderer: Creating Ray Tracing Pipeline (size=%u x %u)...\n", s_outputWidth, s_outputHeight);
     }
 
+    // Create a large shader-visible heap for all DXR resources early,
+    // so that BuildAccelerationStructures doesn't crash if shader compile fails.
+    if (!s_srvHeap) {
+        D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
+        heapDesc.NumDescriptors = DXR_HEAP_TOTAL_COUNT;
+        heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        HRESULT hrHeap = s_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&s_srvHeap));
+        if (FAILED(hrHeap)) {
+            fprintf(stderr, "DxrRenderer: Failed to create DXR SRV heap: 0x%08x\n", (unsigned)hrHeap);
+            return;
+        }
+
+        UINT descSize = s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        D3D12_GPU_DESCRIPTOR_HANDLE gpuStart = s_srvHeap->GetGPUDescriptorHandleForHeapStart();
+        s_texTableGpu.ptr = gpuStart.ptr + (UINT64)DXR_HEAP_TEX_OFFSET * descSize;
+        s_vbTableGpu.ptr = gpuStart.ptr + (UINT64)DXR_HEAP_VB_OFFSET * descSize;
+        s_ibTableGpu.ptr = gpuStart.ptr + (UINT64)DXR_HEAP_IB_OFFSET * descSize;
+        s_outputUAVGpu.ptr = gpuStart.ptr + (UINT64)DXR_HEAP_UAV_OFFSET * descSize;
+    }
+
     // Compile shader
     ComPtr<IDxcBlob> shaderBlob;
     try {
@@ -121,19 +156,31 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     if (!shaderBlob) { fprintf(stderr, "DxrRenderer: shader blob null\n"); return; }
 
     // Create global root signature
-    D3D12_ROOT_PARAMETER params[7] = {};
+    D3D12_ROOT_PARAMETER params[8] = {};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[0].Descriptor.ShaderRegister = 0; params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     D3D12_DESCRIPTOR_RANGE uavRange = {}; uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; uavRange.NumDescriptors = 1; uavRange.BaseShaderRegister = 0;
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; params[1].DescriptorTable.NumDescriptorRanges = 1; params[1].DescriptorTable.pDescriptorRanges = &uavRange; params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    static D3D12_DESCRIPTOR_RANGE srvRange = {}; srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; srvRange.NumDescriptors = 1024; srvRange.BaseShaderRegister = 1; srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-    params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; params[2].DescriptorTable.NumDescriptorRanges = 1; params[2].DescriptorTable.pDescriptorRanges = &srvRange; params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    
+    // Texture Table (t1 onwards)
+    static D3D12_DESCRIPTOR_RANGE texRange = {}; texRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; texRange.NumDescriptors = 2048; texRange.BaseShaderRegister = 1; texRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+    params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; params[2].DescriptorTable.NumDescriptorRanges = 1; params[2].DescriptorTable.pDescriptorRanges = &texRange; params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    
     params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV; params[3].Descriptor.ShaderRegister = 0; params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[4].Descriptor.ShaderRegister = 1025; params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    params[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[5].Descriptor.ShaderRegister = 1026; params[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    params[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[6].Descriptor.ShaderRegister = 1027; params[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[4].Descriptor.ShaderRegister = 2049; params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    // Vertex Buffer Table (t2050 onwards)
+    static D3D12_DESCRIPTOR_RANGE vbRange = {}; vbRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; vbRange.NumDescriptors = 1024; vbRange.BaseShaderRegister = 2050; vbRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+    params[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; params[5].DescriptorTable.NumDescriptorRanges = 1; params[5].DescriptorTable.pDescriptorRanges = &vbRange; params[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    // Index Buffer Table (t3074 onwards)
+    static D3D12_DESCRIPTOR_RANGE ibRange = {}; ibRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; ibRange.NumDescriptors = 1024; ibRange.BaseShaderRegister = 3074; ibRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+    params[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; params[6].DescriptorTable.NumDescriptorRanges = 1; params[6].DescriptorTable.pDescriptorRanges = &ibRange; params[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    // Mesh Data SB (t4098 onwards)
+    params[7].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[7].Descriptor.ShaderRegister = 4098; params[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rootDesc = {};
-    rootDesc.NumParameters = 7; rootDesc.pParameters = params; rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+    rootDesc.NumParameters = 8; rootDesc.pParameters = params; rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
     static D3D12_STATIC_SAMPLER_DESC staticSampler = {};
     staticSampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR; staticSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP; staticSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP; staticSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP; staticSampler.ShaderRegister = 0; staticSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -229,44 +276,10 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     uavDesc.Texture2D.MipSlice = 0;
     uavDesc.Texture2D.PlaneSlice = 0;
 
-    // If the app has a global CBV/SRV/UAV heap and textures exist, create a merged local heap containing texture SRVs then our UAV.
-    if (g_cbvSrvAllocator.Heap() && ::g_textureDescriptorCount > 0) {
-        // Create a shader-visible heap with (textureCount + 1) slots
-        UINT texCount = ::g_textureDescriptorCount;
-        D3D12_DESCRIPTOR_HEAP_DESC desc = {};
-        desc.NumDescriptors = texCount + 1;
-        desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-        ThrowIfFailed(s_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&s_mergedHeap)));
-
-        // Copy existing texture descriptors from global heap into local heap
-        UINT descSize = s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        D3D12_CPU_DESCRIPTOR_HANDLE srcCpuStart = g_cbvSrvAllocator.Heap()->GetCPUDescriptorHandleForHeapStart();
-        D3D12_GPU_DESCRIPTOR_HANDLE srcGpuStart = g_cbvSrvAllocator.Heap()->GetGPUDescriptorHandleForHeapStart();
-        // compute offset of textures start within the global heap
-        UINT texOffset = (UINT)((::g_texturesGpuStart.ptr - srcGpuStart.ptr) / descSize);
-        D3D12_CPU_DESCRIPTOR_HANDLE srcTexCpu = { srcCpuStart.ptr + (SIZE_T)texOffset * descSize };
-        D3D12_CPU_DESCRIPTOR_HANDLE dstCpuStart = s_mergedHeap->GetCPUDescriptorHandleForHeapStart();
-        // Copy texture descriptors
-        s_device->CopyDescriptorsSimple(texCount, dstCpuStart, srcTexCpu, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-
-        // Create UAV at the last slot
-        D3D12_CPU_DESCRIPTOR_HANDLE uavCpu = { dstCpuStart.ptr + (SIZE_T)texCount * descSize };
-        s_device->CreateUnorderedAccessView(s_outputUAV.Get(), nullptr, &uavDesc, uavCpu);
-        D3D12_GPU_DESCRIPTOR_HANDLE gpuStart = s_mergedHeap->GetGPUDescriptorHandleForHeapStart();
-        s_outputUAVGpuHandle.ptr = gpuStart.ptr + (UINT64)texCount * descSize;
-    } else if (g_cbvSrvAllocator.Heap()) {
-        // Global heap exists but no textures yet; allocate one slot from it for UAV
-        DescriptorAllocation alloc = g_cbvSrvAllocator.Allocate(0, 1);
-        s_device->CreateUnorderedAccessView(s_outputUAV.Get(), nullptr, &uavDesc, alloc.cpu);
-        s_outputUAVGpuHandle = alloc.gpu;
-    } else {
-        // Fallback: create a dedicated UAV heap (shader-visible)
-        D3D12_DESCRIPTOR_HEAP_DESC uavHeapDesc = {}; uavHeapDesc.NumDescriptors = 1; uavHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; uavHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-        ThrowIfFailed(s_device->CreateDescriptorHeap(&uavHeapDesc, IID_PPV_ARGS(&s_uavHeap)));
-        s_device->CreateUnorderedAccessView(s_outputUAV.Get(), nullptr, &uavDesc, s_uavHeap->GetCPUDescriptorHandleForHeapStart());
-        s_outputUAVGpuHandle = s_uavHeap->GetGPUDescriptorHandleForHeapStart();
-    }
+    // Create UAV at its slot
+    D3D12_CPU_DESCRIPTOR_HANDLE uavCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+    uavCpu.ptr += (SIZE_T)DXR_HEAP_UAV_OFFSET * s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    s_device->CreateUnorderedAccessView(s_outputUAV.Get(), nullptr, &uavDesc, uavCpu);
 
     if (g_verboseRenderLogs) {
         fprintf(stderr, "DxrRenderer: Ray Tracing Pipeline ready\n");
@@ -286,7 +299,11 @@ void BuildAccelerationStructures(const std::vector<Asset::GpuMesh>& meshes) {
         return;
     }
 
-    // Ensure meshes are valid
+    // Ensure meshes are valid and DXR heap is ready
+    if (!s_srvHeap) {
+        fprintf(stderr, "DxrRenderer: Cannot build AS - SRV heap not created (shader compile failed?)\n");
+        return;
+    }
     for (size_t i=0;i<meshes.size();++i) {
         const auto &m = meshes[i];
         if (!m.vertexBuffer || !m.indexBuffer) {
@@ -297,6 +314,33 @@ void BuildAccelerationStructures(const std::vector<Asset::GpuMesh>& meshes) {
             fprintf(stderr, "DxrRenderer: Mesh %zu has zero vertices or indices - aborting AS build\n", i);
             return;
         }
+
+        // Create SRVs for VB and IB in our persistent DXR heap
+        UINT descSize = s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        D3D12_CPU_DESCRIPTOR_HANDLE vbCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+        vbCpu.ptr += (SIZE_T)(DXR_HEAP_VB_OFFSET + i) * descSize;
+        D3D12_CPU_DESCRIPTOR_HANDLE ibCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+        ibCpu.ptr += (SIZE_T)(DXR_HEAP_IB_OFFSET + i) * descSize;
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC vbSrv = {};
+        vbSrv.Format = DXGI_FORMAT_UNKNOWN;
+        vbSrv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        vbSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        vbSrv.Buffer.FirstElement = 0;
+        vbSrv.Buffer.NumElements = m.vertexCount;
+        vbSrv.Buffer.StructureByteStride = sizeof(Asset::Vertex);
+        vbSrv.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+        s_device->CreateShaderResourceView(m.vertexBuffer.Get(), &vbSrv, vbCpu);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC ibSrv = {};
+        ibSrv.Format = DXGI_FORMAT_R32_UINT;
+        ibSrv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        ibSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        ibSrv.Buffer.FirstElement = 0;
+        ibSrv.Buffer.NumElements = m.indexCount;
+        ibSrv.Buffer.StructureByteStride = 0; // Typed buffer
+        ibSrv.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+        s_device->CreateShaderResourceView(m.indexBuffer.Get(), &ibSrv, ibCpu);
     }
 
     // Wait for GPU (simple sync)
@@ -357,7 +401,8 @@ void BuildAccelerationStructures(const std::vector<Asset::GpuMesh>& meshes) {
             inst.Transform[1][1] = 1.0f;
             inst.Transform[2][2] = 1.0f;
             
-            inst.InstanceID = (UINT)i;
+            // Set InstanceID to the mesh index for indexing into VBs/IBs and MeshData
+            inst.InstanceID = (UINT)s_allBLAS[i].meshId;
             inst.InstanceMask = 0xFF;
             inst.InstanceContributionToHitGroupIndex = 0;
             inst.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
@@ -432,51 +477,52 @@ bool IsReady() {
     return g_rayTracingSupported && s_rtStateObject != nullptr && s_tlas.result != nullptr;
 }
 
-bool RenderFrame(ID3D12GraphicsCommandList* commandListBase, UINT frameIndex, ID3D12Resource* renderTarget, D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle, ID3D12Resource* cameraCB, ID3D12Resource* materialCB, D3D12_GPU_DESCRIPTOR_HANDLE texturesGpuStart, UINT textureDescriptorCount, const std::vector<Asset::GpuMesh>& meshes) {
+bool RenderFrame(ID3D12GraphicsCommandList* commandListBase, UINT frameIndex, ID3D12Resource* renderTarget, D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle, ID3D12Resource* cameraCB, ID3D12Resource* materialCB, D3D12_GPU_DESCRIPTOR_HANDLE texturesGpuStart, UINT textureDescriptorCount, const std::vector<Asset::GpuMesh>& meshes, ID3D12Resource* meshDataSB) {
     if (!IsReady()) return false;
     if (!renderTarget) { fprintf(stderr, "DxrRenderer: RenderFrame called with null renderTarget\n"); return false; }
-    if (!s_outputUAV || !s_uavHeap) { fprintf(stderr, "DxrRenderer: Output UAV or UAV heap not created\n"); return false; }
+    if (!s_outputUAV || !s_srvHeap) { fprintf(stderr, "DxrRenderer: Output UAV or heap not created\n"); return false; }
 
     ComPtr<ID3D12GraphicsCommandList4> dxrList;
-    HRESULT hrQI = commandListBase->QueryInterface(IID_PPV_ARGS(&dxrList));
-    if (FAILED(hrQI)) {
-        fprintf(stderr, "DxrRenderer: QueryInterface for ID3D12GraphicsCommandList4 failed: 0x%08x\n", (unsigned)hrQI);
-        return false;
-    }
+    if (FAILED(commandListBase->QueryInterface(IID_PPV_ARGS(&dxrList)))) return false;
 
-    // Set pipeline and root signature (these methods return void)
+    // Set pipeline and root signature
     dxrList->SetPipelineState1(s_rtStateObject.Get());
     dxrList->SetComputeRootSignature(s_rtGlobalRootSignature.Get());
-    if (!s_tlas.result) { fprintf(stderr, "DxrRenderer: TLAS result missing\n"); return false; }
+    
+    // Bind TLAS
     dxrList->SetComputeRootShaderResourceView(0, s_tlas.result->GetGPUVirtualAddress());
-    // Bind the appropriate descriptor heap
-    if (s_mergedHeap) {
-        // Use merged heap that contains texture SRVs + output UAV
-        ID3D12DescriptorHeap* heaps[] = { s_mergedHeap.Get() };
-        dxrList->SetDescriptorHeaps(1, heaps);
-        // Output UAV is at the end of the merged heap
-        dxrList->SetComputeRootDescriptorTable(1, s_outputUAVGpuHandle);
-        // Textures start at the beginning of the merged heap
-        if (textureDescriptorCount > 0) {
-            D3D12_GPU_DESCRIPTOR_HANDLE texStart = s_mergedHeap->GetGPUDescriptorHandleForHeapStart();
-            dxrList->SetComputeRootDescriptorTable(2, texStart);
-        }
-    } else if (g_cbvSrvAllocator.Heap()) {
-        // Fallback to global heap
-        ID3D12DescriptorHeap* heaps[] = { g_cbvSrvAllocator.Heap() };
-        dxrList->SetDescriptorHeaps(1, heaps);
-        dxrList->SetComputeRootDescriptorTable(1, s_outputUAVGpuHandle);
-        if (textureDescriptorCount > 0) dxrList->SetComputeRootDescriptorTable(2, texturesGpuStart);
-    } else {
-        // Last resort: dedicated UAV heap
-        ID3D12DescriptorHeap* heaps[] = { s_uavHeap.Get() };
-        dxrList->SetDescriptorHeaps(1, heaps);
-        dxrList->SetComputeRootDescriptorTable(1, s_outputUAVGpuHandle);
+
+    // Copy global texture descriptors to our local DXR heap IF they've changed or every frame (simple)
+    if (g_cbvSrvAllocator.Heap() && textureDescriptorCount > 0) {
+        UINT descSize = s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        D3D12_CPU_DESCRIPTOR_HANDLE srcStart = g_cbvSrvAllocator.Heap()->GetCPUDescriptorHandleForHeapStart();
+        // find offset of textures in global heap
+        D3D12_GPU_DESCRIPTOR_HANDLE globalGpuStart = g_cbvSrvAllocator.Heap()->GetGPUDescriptorHandleForHeapStart();
+        UINT texOffset = (UINT)((texturesGpuStart.ptr - globalGpuStart.ptr) / descSize);
+        srcStart.ptr += (SIZE_T)texOffset * descSize;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE dstStart = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+        dstStart.ptr += (SIZE_T)DXR_HEAP_TEX_OFFSET * descSize;
+        
+        // Only copy what fits
+        UINT count = (textureDescriptorCount < 2048) ? textureDescriptorCount : 2048;
+        s_device->CopyDescriptorsSimple(count, dstStart, srcStart, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     }
+
+    // Bind descriptor heaps
+    ID3D12DescriptorHeap* heaps[] = { s_srvHeap.Get() };
+    dxrList->SetDescriptorHeaps(1, heaps);
+
+    // Bind Tables
+    dxrList->SetComputeRootDescriptorTable(1, s_outputUAVGpu);
+    dxrList->SetComputeRootDescriptorTable(2, s_texTableGpu);
     if (cameraCB) dxrList->SetComputeRootConstantBufferView(3, cameraCB->GetGPUVirtualAddress());
     if (materialCB) dxrList->SetComputeRootShaderResourceView(4, materialCB->GetGPUVirtualAddress());
-    if (!meshes.empty() && meshes[0].vertexBuffer) dxrList->SetComputeRootShaderResourceView(5, meshes[0].vertexBuffer->GetGPUVirtualAddress());
-    if (!meshes.empty() && meshes[0].indexBuffer) dxrList->SetComputeRootShaderResourceView(6, meshes[0].indexBuffer->GetGPUVirtualAddress());
+    
+    // Bind VB and IB Tables
+    dxrList->SetComputeRootDescriptorTable(5, s_vbTableGpu);
+    dxrList->SetComputeRootDescriptorTable(6, s_ibTableGpu);
+    if (meshDataSB) dxrList->SetComputeRootShaderResourceView(7, meshDataSB->GetGPUVirtualAddress());
 
     D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
     // RayGen record size must match the raygen slot size (may be 64-aligned)

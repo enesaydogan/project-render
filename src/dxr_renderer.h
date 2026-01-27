@@ -18,7 +18,7 @@ namespace DxrRenderer {
   // Return true if state object and TLAS/output are ready for rendering
   bool IsReady();
   // Perform DXR render (dispatch rays, copy to render target). Returns true if executed.
-  bool RenderFrame(ID3D12GraphicsCommandList* commandList, UINT frameIndex, ID3D12Resource* renderTarget, D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle, ID3D12Resource* cameraCB, ID3D12Resource* materialCB, D3D12_GPU_DESCRIPTOR_HANDLE texturesGpuStart, UINT textureDescriptorCount, const std::vector<Asset::GpuMesh>& meshes);
+  bool RenderFrame(ID3D12GraphicsCommandList* commandList, UINT frameIndex, ID3D12Resource* renderTarget, D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle, ID3D12Resource* cameraCB, ID3D12Resource* materialCB, D3D12_GPU_DESCRIPTOR_HANDLE texturesGpuStart, UINT textureDescriptorCount, const std::vector<Asset::GpuMesh>& meshes, ID3D12Resource* meshDataSB = nullptr);
 }
 
 extern bool g_rayTracingSupported;

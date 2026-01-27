@@ -118,6 +118,7 @@ static ComPtr<ID3D12Resource>
 UINT g_textureDescriptorCount = 0;
 static ComPtr<ID3D12Resource> g_materialConstantBuffer;
 static ComPtr<ID3D12Resource> g_materialStructuredBuffer; // Tightly packed for DXR
+static ComPtr<ID3D12Resource> g_meshStructuredBuffer; // Mesh mapping info for DXR
 static bool g_showAssetsWindow =
     true; // Controls visibility of the Assets panel (can be closed/reopened)
 static bool g_showControlsWindow =
@@ -364,8 +365,8 @@ void CreateTestTexture() {
       &defaultHeapProps, D3D12_HEAP_FLAG_NONE, &textureDesc,
       D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&texture)));
 
-  // Allocate descriptor for the texture
-  DescriptorAllocation alloc = g_cbvSrvAllocator.Allocate(0, 1);
+  // Allocate descriptor for the texture - using persistent allocation
+  DescriptorAllocation alloc = g_cbvSrvAllocator.AllocatePersistent(1);
   if (g_textureDescriptorCount == 0) {
     g_texturesGpuStart = alloc.gpu;
   }
@@ -669,7 +670,7 @@ bool InitD3D12(HWND hwnd) {
   fprintf(stderr, "InitD3D12: Before CBV/SRV allocator Init\n");
   // Initialize descriptor allocator for CBV/SRV/UAV
   g_cbvSrvAllocator.Init(g_device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-                         1024, FrameCount);
+                         65536, FrameCount);
   // Log: CBV/SRV allocator initialized (stderr only)
   fprintf(stderr, "InitD3D12: CBV/SRV allocator initialized\n");
 
@@ -741,11 +742,11 @@ bool InitD3D12(HWND hwnd) {
   rootParameters[0].Descriptor.ShaderRegister = 0;
   rootParameters[0].Descriptor.RegisterSpace = 0;
   rootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-  // t0-t15 - descriptor table (SRV) for pixel shader (16 texture slots)
+  // t0-t1023 - descriptor table (SRV) for pixel shader (large buffer for bindless-style indexing)
   static D3D12_DESCRIPTOR_RANGE descRange = {};
   descRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
   descRange.NumDescriptors =
-      16; // baseColor, metallicRoughness, normal, occlusion, emissive + extras
+      2048; // Support many textures concurrently
   descRange.BaseShaderRegister = 0;
   descRange.RegisterSpace = 0;
   descRange.OffsetInDescriptorsFromTableStart =
@@ -1080,6 +1081,18 @@ bool InitD3D12(HWND hwnd) {
         &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &matSbDesc,
         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
         IID_PPV_ARGS(&g_materialStructuredBuffer)));
+  }
+
+  // Mesh Structured Buffer for DXR
+  {
+    struct MeshData { int materialIndex; int vbIndex; int ibIndex; int pad; };
+    const UINT64 meshSbSize = sizeof(MeshData) * 1024;
+    D3D12_RESOURCE_DESC meshSbDesc = matCbDesc;
+    meshSbDesc.Width = meshSbSize;
+    ThrowIfFailed(g_device->CreateCommittedResource(
+        &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &meshSbDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&g_meshStructuredBuffer)));
   }
 
   // Allocate camera constant buffer (upload heap)
@@ -1476,12 +1489,31 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             }
         }
 
+        // Update Mesh Structured Buffer for DXR
+        auto activeMeshes = Scene::GetActiveMeshes();
+        if (g_meshStructuredBuffer && !activeMeshes.empty()) {
+            struct MeshData { int materialIndex; int vbIndex; int ibIndex; int pad; };
+            UINT8* pData = nullptr;
+            D3D12_RANGE readRange = {0,0};
+            if (SUCCEEDED(g_meshStructuredBuffer->Map(0, &readRange, reinterpret_cast<void**>(&pData)))) {
+                // We use global indices for vertices/indices in DXR
+                for (size_t i = 0; i < activeMeshes.size() && i < 1024; ++i) {
+                    MeshData m = {};
+                    m.materialIndex = activeMeshes[i].materialIndex;
+                    m.vbIndex = (int)i;
+                    m.ibIndex = (int)i;
+                    memcpy(pData + i * sizeof(MeshData), &m, sizeof(MeshData));
+                }
+                g_meshStructuredBuffer->Unmap(0, nullptr);
+            }
+        }
+
         if (!DxrRenderer::RenderFrame(
                 g_commandList.Get(), g_frameIndex,
                 g_renderTargets[g_frameIndex].Get(), rtvHandle,
                 g_cameraConstantBuffer.Get(), g_materialStructuredBuffer.Get(),
                 g_texturesGpuStart, g_textureDescriptorCount,
-                Scene::GetActiveMeshes())) {
+                activeMeshes, g_meshStructuredBuffer.Get())) {
           // If RenderFrame failed, fall back to red clear
           TR(g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
              D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);

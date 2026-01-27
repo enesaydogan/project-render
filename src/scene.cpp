@@ -65,9 +65,9 @@ bool ImportGltf(const std::string &utf8path) {
             if (m.emissiveTexture >= 0) m.emissiveTexture += (int)textureBase;
         }
 
-        // Allocate SRV descriptors for new textures
+        // Allocate SRV descriptors for new textures - using persistent allocation
         if (!textures.empty()) {
-            DescriptorAllocation alloc = g_cbvSrvAllocator.Allocate(0, (UINT)textures.size());
+            DescriptorAllocation alloc = g_cbvSrvAllocator.AllocatePersistent((UINT)textures.size());
             if (g_textureDescriptorCount == 0) g_texturesGpuStart = alloc.gpu;
             for (size_t i = 0; i < textures.size(); ++i) {
                 D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = alloc.cpu;

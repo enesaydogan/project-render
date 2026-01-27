@@ -63,8 +63,10 @@ float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent, int 
 [shader("closesthit")]
 void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes attr)
 {
-    // Access material for this instance from global structured buffer
-    MaterialData mat = materials[InstanceID()];
+    // Access mesh and material for this instance
+    uint meshIdx = InstanceID();
+    MeshData mesh = meshData[meshIdx];
+    MaterialData mat = materials[mesh.materialIndex];
 
     // Get material properties
     int baseColorIdx = mat.textureIndices.x;
@@ -86,30 +88,32 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     return;
 #endif
 
-    // Interpolate vertex attributes
+    uint3 launchIndex = DispatchRaysIndex();
     float2 bary2 = attr.barycentrics;
-    float3 bary = float3(bary2.x, bary2.y, 1.0 - bary2.x - bary2.y);
+    float3 bary = float3(1.0 - bary2.x - bary2.y, bary2.x, bary2.y);
     uint primIndex = PrimitiveIndex();
     uint baseIndex = primIndex * 3;
-    uint i0 = indices[baseIndex];
-    uint i1 = indices[baseIndex + 1];
-    uint i2 = indices[baseIndex + 2];
+    
+    // Use .Load for indices to ensure compatibility with typed buffer arrays
+    uint i0 = indices[mesh.ibIndex].Load(baseIndex);
+    uint i1 = indices[mesh.ibIndex].Load(baseIndex + 1);
+    uint i2 = indices[mesh.ibIndex].Load(baseIndex + 2);
     
     // Interpolate UV
-    float2 uv0 = vertices[i0].uv;
-    float2 uv1 = vertices[i1].uv;
-    float2 uv2 = vertices[i2].uv;
+    float2 uv0 = vertices[mesh.vbIndex][i0].uv;
+    float2 uv1 = vertices[mesh.vbIndex][i1].uv;
+    float2 uv2 = vertices[mesh.vbIndex][i2].uv;
     float2 uv = uv0 * bary.x + uv1 * bary.y + uv2 * bary.z;
     
     // Interpolate normal and tangent
-    float3 n0 = vertices[i0].normal;
-    float3 n1 = vertices[i1].normal;
-    float3 n2 = vertices[i2].normal;
+    float3 n0 = vertices[mesh.vbIndex][i0].normal;
+    float3 n1 = vertices[mesh.vbIndex][i1].normal;
+    float3 n2 = vertices[mesh.vbIndex][i2].normal;
     float3 worldNormal = normalize(n0 * bary.x + n1 * bary.y + n2 * bary.z);
     
-    float4 t0 = vertices[i0].tangent;
-    float4 t1 = vertices[i1].tangent;
-    float4 t2 = vertices[i2].tangent;
+    float4 t0 = vertices[mesh.vbIndex][i0].tangent;
+    float4 t1 = vertices[mesh.vbIndex][i1].tangent;
+    float4 t2 = vertices[mesh.vbIndex][i2].tangent;
     float4 worldTangent = t0 * bary.x + t1 * bary.y + t2 * bary.z;
     
     // Sample textures
