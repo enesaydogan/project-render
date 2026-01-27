@@ -128,8 +128,9 @@ bool ImportGltf(const std::string &utf8path, const float* rootTranslation) {
         // Adjust newly-inserted materials to reference global texture indices
         for (size_t i = 0; i < materials.size(); ++i) {
             Asset::Material &m = g_loadedMaterials[materialBase + i];
-            if (m.baseColorTexture >= 0) m.baseColorTexture += (int)textureBase;
-            if (m.metallicRoughnessTexture >= 0) m.metallicRoughnessTexture += (int)textureBase;
+            if (m.diffuseTexture >= 0) m.diffuseTexture += (int)textureBase;
+            if (m.reflectionTexture >= 0) m.reflectionTexture += (int)textureBase;
+            if (m.refractionTexture >= 0) m.refractionTexture += (int)textureBase;
             if (m.normalTexture >= 0) m.normalTexture += (int)textureBase;
             if (m.occlusionTexture >= 0) m.occlusionTexture += (int)textureBase;
             if (m.emissiveTexture >= 0) m.emissiveTexture += (int)textureBase;
@@ -273,9 +274,13 @@ void AddDefaultPlane(float offset_y) {
 
         // Default material
         Asset::Material mat;
-        mat.baseColorFactor[0] = 0.8f; mat.baseColorFactor[1] = 0.8f; mat.baseColorFactor[2] = 0.8f; mat.baseColorFactor[3] = 1.0f;
-        mat.metallicFactor = 0.0f; mat.roughnessFactor = 1.0f; mat.workflow = 0;
-        mat.baseColorTexture = -1; mat.metallicRoughnessTexture = -1; mat.normalTexture = -1; mat.occlusionTexture = -1; mat.emissiveTexture = -1;
+        // Grey default
+        mat.diffuseColor[0] = 0.8f; mat.diffuseColor[1] = 0.8f; mat.diffuseColor[2] = 0.8f; mat.diffuseColor[3] = 1.0f;
+        mat.reflectionColor[0] = 0.0f; mat.reflectionColor[1] = 0.0f; mat.reflectionColor[2] = 0.0f; mat.reflectionColor[3] = 1.0f;
+        mat.reflectionGlossiness = 0.0f; // Very rough
+        mat.refractionColor[0] = 0.0f; mat.refractionColor[1] = 0.0f; mat.refractionColor[2] = 0.0f; mat.refractionColor[3] = 1.0f;
+        mat.diffuseTexture = -1; mat.reflectionTexture = -1; mat.refractionTexture = -1; 
+        mat.normalTexture = -1; mat.occlusionTexture = -1; mat.emissiveTexture = -1;
 
         int matIndex = (int)g_loadedMaterials.size();
         g_loadedMaterials.push_back(mat);

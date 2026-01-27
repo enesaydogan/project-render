@@ -18,6 +18,7 @@
 #include "imgui_impl_win32.h"
 #include "raster_renderer.h"
 #include "scene.h"
+#include "material_editor.h"
 #include "light.h"
 #include <algorithm>
 #include <chrono>
@@ -128,6 +129,8 @@ static bool g_forceUncollapse =
 static std::string g_lastAssetStatus; // Human-readable status for the Assets UI
 static std::string
     g_selectedAssetPath; // Path chosen by Open dialog (not yet imported)
+static int g_debugMode = 0; // 0=None, 1=Albedo, 2=Normal, 3=Emissive, 4=Glossiness, 5=Metalness/Refl
+
 
 static std::string WStringToUtf8(const std::wstring &ws) {
   if (ws.empty())
@@ -1056,12 +1059,12 @@ bool InitD3D12(HWND hwnd) {
   // --- Create persistent material constant buffer ---
   // Large enough to hold many unique material instances per frame
   struct MaterialCB {
-    float baseColorFactor[4];
-    float params1[4];
-    float specular[4];
-    float emissiveFactor[4];
+    float diffuseColor[4];
+    float reflectionColor[4];
+    float refractionColor[4];
+    float emissiveColor[4];
     int textureIndices[4];
-    int emissiveAndPad[4]; // x=emissiveTexIndex, yzw=padding
+    int emissiveAndPad[4];
   };
   const UINT64 matCbSizeSingle = (sizeof(MaterialCB) + 255) & ~255;
   const UINT64 matCbSize = matCbSizeSingle * 1024; // Support up to 1024 calls
@@ -1464,10 +1467,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         // Update Structured Material Buffer for DXR
         if (g_materialStructuredBuffer && !g_loadedMaterials.empty()) {
             struct MaterialData {
-              float baseColorFactor[4];
-              float params1[4];
-              float specular[4];
-              float emissiveFactor[4];
+              float diffuseColor[4];
+              float reflectionColor[4];
+              float refractionColor[4];
+              float emissiveColor[4];
               int textureIndices[4];
               int emissiveAndPad[4];
             };
@@ -1477,19 +1480,25 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                 for (size_t i = 0; i < g_loadedMaterials.size() && i < 1024; ++i) {
                     const auto &srcMat = g_loadedMaterials[i];
                     MaterialData mat = {};
-                    memcpy(mat.baseColorFactor, srcMat.baseColorFactor, sizeof(float)*4);
-                    mat.params1[0] = srcMat.metallicFactor;
-                    mat.params1[1] = srcMat.roughnessFactor;
-                    mat.params1[2] = (float)srcMat.workflow;
-                    mat.params1[3] = 0.0f;
-                    memcpy(mat.specular, srcMat.specularFactor, sizeof(float)*3);
-                    mat.specular[3] = srcMat.glossinessFactor;
-                    mat.emissiveFactor[0] = mat.emissiveFactor[1] = mat.emissiveFactor[2] = mat.emissiveFactor[3] = 0.0f;
-                    mat.textureIndices[0] = srcMat.baseColorTexture;
-                    mat.textureIndices[1] = srcMat.metallicRoughnessTexture;
+                    memcpy(mat.diffuseColor, srcMat.diffuseColor, sizeof(float)*4);
+                    
+                    memcpy(mat.reflectionColor, srcMat.reflectionColor, sizeof(float)*3);
+                    mat.reflectionColor[3] = srcMat.reflectionGlossiness;
+
+                    memcpy(mat.refractionColor, srcMat.refractionColor, sizeof(float)*3);
+                    mat.refractionColor[3] = srcMat.refractionGlossiness;
+
+                    memcpy(mat.emissiveColor, srcMat.emissiveColor, sizeof(float)*3);
+                    mat.emissiveColor[3] = srcMat.ior; // Pack IOR in W
+
+                    mat.textureIndices[0] = srcMat.diffuseTexture;
+                    mat.textureIndices[1] = srcMat.reflectionTexture;
                     mat.textureIndices[2] = srcMat.normalTexture;
-                    mat.textureIndices[3] = srcMat.occlusionTexture;
+                    mat.textureIndices[3] = srcMat.refractionTexture;
+
                     mat.emissiveAndPad[0] = srcMat.emissiveTexture;
+                    mat.emissiveAndPad[1] = srcMat.occlusionTexture;
+
                     memcpy(pData + i * sizeof(MaterialData), &mat, sizeof(MaterialData));
                 }
                 g_materialStructuredBuffer->Unmap(0, nullptr);
@@ -1651,34 +1660,34 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             // We'll use a simple linear allocation (i % 1024) for now.
             // In a production engine, this would use a dynamic ring buffer.
             struct MaterialCB {
-              float baseColorFactor[4];
-              float params1[4];
-              float specular[4];
-              float emissiveFactor[4];
+              float diffuseColor[4];
+              float reflectionColor[4];
+              float refractionColor[4];
+              float emissiveColor[4];
               int textureIndices[4];
               int emissiveAndPad[4];
             } matCB;
 
             const auto &srcMat = g_loadedMaterials[gm.materialIndex];
-            matCB.baseColorFactor[0] = srcMat.baseColorFactor[0];
-            matCB.baseColorFactor[1] = srcMat.baseColorFactor[1];
-            matCB.baseColorFactor[2] = srcMat.baseColorFactor[2];
-            matCB.baseColorFactor[3] = srcMat.baseColorFactor[3];
-            matCB.params1[0] = srcMat.metallicFactor;
-            matCB.params1[1] = srcMat.roughnessFactor;
-            matCB.params1[2] = (float)srcMat.workflow;
-            matCB.params1[3] = 0.0f;
-            matCB.specular[0] = srcMat.specularFactor[0];
-            matCB.specular[1] = srcMat.specularFactor[1];
-            matCB.specular[2] = srcMat.specularFactor[2];
-            matCB.specular[3] = srcMat.glossinessFactor;
-            matCB.emissiveFactor[0] = 0.0f; matCB.emissiveFactor[1] = 0.0f; matCB.emissiveFactor[2] = 0.0f; matCB.emissiveFactor[3] = 0.0f;
-            matCB.textureIndices[0] = srcMat.baseColorTexture;
-            matCB.textureIndices[1] = srcMat.metallicRoughnessTexture;
+            memcpy(matCB.diffuseColor, srcMat.diffuseColor, 16);
+            memcpy(matCB.reflectionColor, srcMat.reflectionColor, 12);
+            matCB.reflectionColor[3] = srcMat.reflectionGlossiness;
+            
+            memcpy(matCB.refractionColor, srcMat.refractionColor, 12);
+            matCB.refractionColor[3] = srcMat.refractionGlossiness;
+            
+            memcpy(matCB.emissiveColor, srcMat.emissiveColor, 12);
+            matCB.emissiveColor[3] = srcMat.ior;
+
+            matCB.textureIndices[0] = srcMat.diffuseTexture;
+            matCB.textureIndices[1] = srcMat.reflectionTexture;
             matCB.textureIndices[2] = srcMat.normalTexture;
-            matCB.textureIndices[3] = srcMat.occlusionTexture;
+            matCB.textureIndices[3] = srcMat.refractionTexture;
+            
             matCB.emissiveAndPad[0] = srcMat.emissiveTexture;
-            matCB.emissiveAndPad[1] = matCB.emissiveAndPad[2] = matCB.emissiveAndPad[3] = 0;
+            matCB.emissiveAndPad[1] = srcMat.occlusionTexture;
+            matCB.emissiveAndPad[2] = 0;
+            matCB.emissiveAndPad[3] = 0;
 
             if (g_materialConstantBuffer) {
               const UINT64 matSlotSize = (sizeof(MaterialCB) + 255) & ~255;
@@ -1982,6 +1991,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
     // Ensure aspect matches the window and update camera CB on GPU
     g_cameraData.aspect = (float)g_windowWidth / (float)g_windowHeight;
+    g_cameraData.debugMode = (float)g_debugMode;
     if (g_cameraConstantBuffer) {
       UINT8 *pCam = nullptr;
       D3D12_RANGE readRange = {0, 0};
@@ -2189,6 +2199,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                         ? "Raytracing"
                         : "Path Tracing");
 
+        // Debug Render Pass Dropdown
+        const char* debugModes[] = { "None", "Albedo", "Normal", "Emissive", "Roughness/Glossiness", "Refl. Color" };
+        if (ImGui::Combo("Debug View", &g_debugMode, debugModes, IM_ARRAYSIZE(debugModes))) {
+            // State is updated; updated into camera buffer on next frame
+        }
+
         if (ImGui::RadioButton("Fast Raster",
                                g_currentRenderMode == RenderMode::Raster)) {
           g_currentRenderMode = RenderMode::Raster;
@@ -2260,6 +2276,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     if (g_showAssetsWindow) {
       // Scene panel handled by Scene module
       Scene::DrawScenePanel(g_hwnd, g_showAssetsWindow);
+      MaterialEditor::Draw(g_showAssetsWindow);
     }
 
     Scene::DrawGizmo();

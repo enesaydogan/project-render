@@ -359,12 +359,36 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
         for (size_t mi = 0; mi < model.materials.size(); ++mi) {
             const tinygltf::Material& m = model.materials[mi];
             Material mat;
-            // pbrMetallicRoughness baseColorFactor
+            // Use Name if available
+            if (!m.name.empty()) strncpy_s(mat.name, m.name.c_str(), _TRUNCATE);
+
+            // Standard PBR Metallic-Roughness conversion to Glossiness workflow
+            float baseColor[4] = {1,1,1,1};
             if (m.pbrMetallicRoughness.baseColorFactor.size() >= 4) {
-                for (int i = 0; i < 4; ++i) mat.baseColorFactor[i] = (float)m.pbrMetallicRoughness.baseColorFactor[i];
+                for (int i = 0; i < 4; ++i) baseColor[i] = (float)m.pbrMetallicRoughness.baseColorFactor[i];
             }
-            mat.metallicFactor = (float)m.pbrMetallicRoughness.metallicFactor;
-            mat.roughnessFactor = (float)m.pbrMetallicRoughness.roughnessFactor;
+            float metallic = (float)m.pbrMetallicRoughness.metallicFactor;
+            float roughness = (float)m.pbrMetallicRoughness.roughnessFactor;
+            
+            // Glossiness is inverse of roughness
+            mat.reflectionGlossiness = 1.0f - roughness;
+            
+            // Convert Metallic/Roughness to Diffuse/Reflection
+            // Dielectric F0 is commonly 0.04
+            float f0 = 0.04f;
+            for(int c=0; c<3; ++c) {
+                // Diffuse: non-metals have diffuse, metals have black diffuse
+                mat.diffuseColor[c] = baseColor[c] * (1.0f - metallic);
+                // Reflection: non-metals have f0, metals have baseColor
+                mat.reflectionColor[c] = f0 * (1.0f - metallic) + baseColor[c] * metallic;
+            }
+            mat.diffuseColor[3] = baseColor[3];
+            
+            // Emissive
+            if (m.emissiveFactor.size() >= 3) {
+                for(int i=0; i<3; ++i) mat.emissiveColor[i] = (float)m.emissiveFactor[i];
+            }
+            mat.emissiveColor[3] = 1.0f; // intensity default
 
             // Proper mapping from texture index to image source index
             auto GetImgIdx = [&](int texIdx) {
@@ -374,37 +398,40 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
                 return -1;
             };
 
-            mat.baseColorTexture = GetImgIdx(m.pbrMetallicRoughness.baseColorTexture.index);
-            mat.metallicRoughnessTexture = GetImgIdx(m.pbrMetallicRoughness.metallicRoughnessTexture.index);
+            mat.diffuseTexture = GetImgIdx(m.pbrMetallicRoughness.baseColorTexture.index);
+            // Note: GLTF MetallicRoughness texture packs (B=Metal, G=Roughness). 
+            // We map it to ReflectionTexture for now, but shader might need logic to unpack if we want to support it seamlessly.
+            // Since we are forcing V-Ray workflow, correct handling would be to not use it or split it.
+            // For now, let's assume we might lose some texture detail unless we implement complex unpacking in shader for converted mats.
+            // We will map it to occlusion for now as fallback placeholder.
+            mat.occlusionTexture = GetImgIdx(m.occlusionTexture.index); 
+
             mat.normalTexture = GetImgIdx(m.normalTexture.index);
-            mat.occlusionTexture = GetImgIdx(m.occlusionTexture.index);
             mat.emissiveTexture = GetImgIdx(m.emissiveTexture.index);
 
             mat.doubleSided = m.doubleSided;
             if (!m.alphaMode.empty()) mat.alphaMode = m.alphaMode;
             
-            // Handle KHR_materials_pbrSpecularGlossiness extension
+            // Handle KHR_materials_pbrSpecularGlossiness extension - Reference for proper Glossiness workflow
             auto khrSpec = m.extensions.find("KHR_materials_pbrSpecularGlossiness");
             if (khrSpec != m.extensions.end()) {
-                mat.workflow = 1;
                 const auto& ext = khrSpec->second;
+                if (ext.Has("diffuseFactor")) {
+                    auto p = ext.Get("diffuseFactor");
+                    for (int i = 0; i < 4; ++i) mat.diffuseColor[i] = (float)p.Get(i).GetNumberAsDouble();
+                }
                 if (ext.Has("specularFactor")) {
                     auto p = ext.Get("specularFactor");
-                    for (int i = 0; i < 3 && i < (int)p.ArrayLen(); ++i) {
-                        mat.specularFactor[i] = (float)p.Get(i).GetNumberAsDouble();
-                    }
+                    for (int i = 0; i < 3; ++i) mat.reflectionColor[i] = (float)p.Get(i).GetNumberAsDouble();
                 }
                 if (ext.Has("glossinessFactor")) {
-                    mat.glossinessFactor = (float)ext.Get("glossinessFactor").GetNumberAsDouble();
+                    mat.reflectionGlossiness = (float)ext.Get("glossinessFactor").GetNumberAsDouble();
                 }
                 if (ext.Has("diffuseTexture")) {
-                    mat.baseColorTexture = GetImgIdx(ext.Get("diffuseTexture").Get("index").GetNumberAsInt());
+                    mat.diffuseTexture = GetImgIdx(ext.Get("diffuseTexture").Get("index").GetNumberAsInt());
                 }
                 if (ext.Has("specularGlossinessTexture")) {
-                    // In SG workflow, specular + glossiness can be in its own texture
-                    // But our Material struct doesn't have a slot for it yet. 
-                    // Using metallicRoughness slot as fallback if needed for shader compatibility
-                    mat.metallicRoughnessTexture = GetImgIdx(ext.Get("specularGlossinessTexture").Get("index").GetNumberAsInt());
+                    mat.reflectionTexture = GetImgIdx(ext.Get("specularGlossinessTexture").Get("index").GetNumberAsInt());
                 }
             }
             tmpMaterials[mi] = std::move(mat);

@@ -19,6 +19,9 @@
     <ClCompile Include="D:\project-render\src\scene.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\project-render\src\material_editor.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="D:\project-render\src\light.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
