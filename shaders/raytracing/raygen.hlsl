@@ -13,15 +13,21 @@ void RayGen()
     float2 uv = (float2(launchIndex.xy) + 0.5) / float2(launchDim.xy);
     float2 ndc = uv * 2.0 - 1.0;
 
-    // Build camera basis matching the raster renderer
-    // f = 1.0 / tan(fov/2) to match raster projection
+    // Build camera basis matching the raster renderer exactly (Left-Handed View Space)
+    // f = 1.0 / tan(fov/2)
     float f_inv = tan(radians(fov) * 0.5);
     
-    float3 R = normalize(cross(camForward, camUp)); // Right (F x U in RH)
-    float3 U = normalize(cross(R, camForward));    // Up (orthonormal)
+    float3 forward = normalize(camForward);
+    float3 R = normalize(cross(forward, camUp)); // Right
+    float3 U = normalize(cross(R, forward));    // Up
     
-    // ndc.y is -1 at top of screen (uv.y=0). Invert it so top pixels look UP.
-    float3 dir = normalize(ndc.x * R * aspect * f_inv + (-ndc.y) * U * f_inv + camForward);
+    // In D3D NDC: x in [-1, 1], y in [-1, 1] (y=-1 is bottom, y=1 is top)
+    // launchIndex.y=0 is top, so uv.y=0 -> ndc.y=-1.
+    // We want uv.y=0 to map to y_view = +f_inv (Top).
+    float y_view = (-ndc.y) * f_inv;
+    float x_view = ndc.x * aspect * f_inv;
+    
+    float3 dir = normalize(x_view * R + y_view * U + forward);
 
     RayDesc ray;
     ray.Origin = camPos;

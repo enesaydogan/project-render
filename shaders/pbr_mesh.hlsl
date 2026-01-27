@@ -53,8 +53,8 @@ PSInputMesh VSMainMesh(VSInputMesh input)
 {
     PSInputMesh o;
 
-    // World-space position (scale down to match TLAS instance scale)
-    float3 worldPos = input.position * 0.1f;
+    // World-space position (match TLAS instance scale)
+    float3 worldPos = input.position;
 
     // Use a standard right-handed view basis for the camera
     float3 R = normalize(cross(forward, up)); // Right (F x U in RH with F pointing away)
