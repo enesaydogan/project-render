@@ -348,10 +348,11 @@ void BuildAccelerationStructures(const std::vector<Asset::GpuMesh>& meshes) {
         std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instanceDescs;
         for (size_t i=0;i<s_allBLAS.size();++i) {
             D3D12_RAYTRACING_INSTANCE_DESC inst = {};
-            // Identity transform:
+            // Explicit Identity Transform (3x4 Row-Major)
             // 1 0 0 0
             // 0 1 0 0
             // 0 0 1 0
+            memset(inst.Transform, 0, sizeof(inst.Transform));
             inst.Transform[0][0] = 1.0f;
             inst.Transform[1][1] = 1.0f;
             inst.Transform[2][2] = 1.0f;
