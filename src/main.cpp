@@ -72,7 +72,7 @@ enum class RenderMode {
 };
 
 static RenderMode g_currentRenderMode = RenderMode::Raster;
-static bool g_showRenderModeWindow = true;
+static bool g_showRenderModeWindow = false;
 // Debug toggles for DXR
 bool g_dxrDebugUV = false;
 bool g_dxrDumpPixels = false;
@@ -120,9 +120,9 @@ static ComPtr<ID3D12Resource> g_materialConstantBuffer;
 static ComPtr<ID3D12Resource> g_materialStructuredBuffer; // Tightly packed for DXR
 static ComPtr<ID3D12Resource> g_meshStructuredBuffer; // Mesh mapping info for DXR
 static bool g_showAssetsWindow =
-    true; // Controls visibility of the Assets panel (can be closed/reopened)
+    false; // Controls visibility of the Assets panel (can be closed/reopened)
 static bool g_showControlsWindow =
-    true; // Controls visibility of the Controls panel (can be closed/reopened)
+    false; // Controls visibility of the Controls panel (can be closed/reopened)
 static bool g_forceUncollapse =
     false; // When true, next Assets window will be forced open and focused
 static std::string g_lastAssetStatus; // Human-readable status for the Assets UI
@@ -1300,7 +1300,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       customGltfPath.empty() ? "assets/DamagedHelmet.glb" : customGltfPath;
   try {
         if (fs::exists(autoLoadPath)) {
-      if (!Scene::ImportGltf(autoLoadPath)) {
+      float helmetPos[3] = { 0.0f, 1.0f, 0.0f };
+      if (!Scene::ImportGltf(autoLoadPath, helmetPos)) {
         fprintf(stderr, "AutoLoad: failed to import %s\n",
                 autoLoadPath.c_str());
       } else {
@@ -1411,7 +1412,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   }
 
     // Add a default ground plane (10x10)
-    Scene::AddDefaultPlane();
+    Scene::AddDefaultPlane(0.1f);
 
   // Basic message loop + simple render
   MSG msg = {};
@@ -1508,12 +1509,27 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             }
         }
 
-        if (!DxrRenderer::RenderFrame(
+        if (DxrRenderer::RenderFrame(
                 g_commandList.Get(), g_frameIndex,
                 g_renderTargets[g_frameIndex].Get(), rtvHandle,
                 g_cameraConstantBuffer.Get(), g_materialStructuredBuffer.Get(),
                 g_texturesGpuStart, g_textureDescriptorCount,
                 activeMeshes, g_meshStructuredBuffer.Get())) {
+          // Success DXR render - Draw Grid with depth checks
+          if (g_drawGrid) {
+            D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = g_dsvHeap->GetCPUDescriptorHandleForHeapStart();
+            g_commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+            
+            // 1. Scene Depth Pre-pass (populate depth buffer for grid occlusion)
+            g_commandList->OMSetRenderTargets(0, nullptr, FALSE, &dsvHandle);
+            g_commandList->SetGraphicsRootSignature(g_rootSignature.Get());
+            RasterRenderer::DrawSceneDepthOnly(g_commandList.Get(), g_cameraConstantBuffer.Get(), activeMeshes);
+
+            // 2. Draw Grid (test against the populated depth buffer)
+            g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
+            RasterRenderer::DrawGrid(g_commandList.Get(), g_cameraConstantBuffer.Get());
+          }
+        } else {
           // If RenderFrame failed, fall back to red clear
           TR(g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
              D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -1545,7 +1561,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       TR(g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
          D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
-      FLOAT clearColor[] = {0.2f, 0.3f, 0.4f, 1.0f};
+      FLOAT clearColor[] = {0.1f, 0.1f, 0.12f, 1.0f};
       g_commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
 
       // Clear depth buffer
@@ -1904,6 +1920,24 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         move.y -= worldUp.y;
         move.z -= worldUp.z;
       }
+
+      // TAB: Toggle between Raster and Raytracing modes
+      static bool tabDown = false;
+      if (GetAsyncKeyState(VK_TAB) & 0x8000) {
+          if (!tabDown) {
+              if (g_currentRenderMode == RenderMode::Raster) {
+                  g_currentRenderMode = RenderMode::Raytracing;
+                  DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
+                  fprintf(stderr, "Switched to Raytracing Mode (TAB)\n");
+              } else {
+                  g_currentRenderMode = RenderMode::Raster;
+                  fprintf(stderr, "Switched to Raster Mode (TAB)\n");
+              }
+              tabDown = true;
+          }
+      } else {
+          tabDown = false;
+      }
     }
 
     if (move.x != 0 || move.y != 0 || move.z != 0) {
@@ -2142,19 +2176,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         if (ImGui::Checkbox("DXR: Show RayGen UV (debug)", &g_dxrDebugUV)) {
           // Recreate pipeline with debug define; reinitializing RT pipeline
           DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
-        }
-        if (ImGui::Checkbox("DXR: Dump Output Pixels (debug, stalls)",
-                            &g_dxrDumpPixels)) {
-          fprintf(stderr, "DXR: DumpOutputPixels set=%d\n", g_dxrDumpPixels);
-        }
-        if (ImGui::Checkbox("DXR: Encode Hit PrimID (debug)", &g_dxrHitDebug)) {
-          fprintf(stderr, "DXR: HitDebug set=%d\n", g_dxrHitDebug);
-          DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
-        }
-        if (ImGui::Checkbox("DXR: Dump D3D12 Messages (debug)",
-                            &g_dxrDumpD3D12Messages)) {
-          fprintf(stderr, "DXR: DumpD3D12Messages set=%d\n",
-                  g_dxrDumpD3D12Messages);
         }
         if (ImGui::Checkbox("Raster: Show UV (debug)", &g_rasterDebugUV)) {
           fprintf(stderr, "Raster: ShowUV set=%d\n", g_rasterDebugUV);

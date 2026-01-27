@@ -57,5 +57,5 @@ namespace Asset {
     void Initialize(ID3D12Device* device, ID3D12CommandQueue* queue);
 
     // Load a glTF file. Returns true on success. Fills out created meshes in `outMeshes`.
-    bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vector<Material>* outMaterials = nullptr, std::vector<Texture>* outTextures = nullptr);
+    bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vector<Material>* outMaterials = nullptr, std::vector<Texture>* outTextures = nullptr, const float* rootTranslation = nullptr);
 }

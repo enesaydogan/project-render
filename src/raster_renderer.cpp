@@ -21,6 +21,7 @@ D3D12_VERTEX_BUFFER_VIEW RasterRenderer::g_gridVBView = {};
 UINT RasterRenderer::g_gridVertexCount = 0;
 ComPtr<ID3D12PipelineState> RasterRenderer::g_gridPipelineState;
 ComPtr<ID3D12PipelineState> RasterRenderer::g_meshPipelineState;
+ComPtr<ID3D12PipelineState> RasterRenderer::g_depthOnlyPipelineState;
 
 static DxcHelper s_dxcHelper;
 
@@ -60,7 +61,9 @@ void CreateGridResources(ID3D12Device* device, float gridThickness) {
     }
 
     D3D12_DEPTH_STENCIL_DESC depthDesc = {};
-    depthDesc.DepthEnable = FALSE;
+    depthDesc.DepthEnable = TRUE;
+    depthDesc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    depthDesc.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
 
     psoDesc.InputLayout = {simpleLayout, _countof(simpleLayout)};
     psoDesc.VS = {vsBlob->GetBufferPointer(), vsBlob->GetBufferSize()};
@@ -72,6 +75,7 @@ void CreateGridResources(ID3D12Device* device, float gridThickness) {
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     psoDesc.NumRenderTargets = 1;
     psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
     psoDesc.SampleDesc.Count = 1;
 
     // Ensure PSO uses the application's root signature
@@ -81,38 +85,59 @@ void CreateGridResources(ID3D12Device* device, float gridThickness) {
 
     // Create vertex buffer for grid
     struct GridVertex { float pos[3]; float col[3]; };
-    //grid step
-    const int half = 10;
-    const float step = 0.25f;
+    const int half = 20; // Larger grid
+    const float step = 1.0f; // 1.0 unit steps
     std::vector<GridVertex> verts;
-    verts.reserve((half*2+1)*6*2);
+    verts.reserve((half*2+1)*6*4); // Reserve enough for sublines too
     float halfThickness = gridThickness * 0.5f;
 
     for (int i = -half; i <= half; ++i) {
       float coord = i * step;
-      // Line along X
+      
+      // Determine line color
+      float color[3] = { 0.2f, 0.2f, 0.22f }; // Default darker gray
+      float thickness = halfThickness;
+
+      if (i == 0) {
+          // Axis line
+          thickness *= 2.0f;
+      } else if (i % 5 == 0) {
+          // Major line every 5 units
+          color[0] = 0.35f; color[1] = 0.35f; color[2] = 0.38f;
+          thickness *= 1.5f;
+      }
+
+      // Line along X (varying Z)
       {
         float sx = (float)-half * step, sz = coord;
         float ex = (float)half * step, ez = coord;
-        float oz = halfThickness;
-        verts.push_back({{sx,0.0f,sz - oz},{0.3f,0.3f,0.3f}});
-        verts.push_back({{ex,0.0f,ez - oz},{0.3f,0.3f,0.3f}});
-        verts.push_back({{ex,0.0f,ez + oz},{0.3f,0.3f,0.3f}});
-        verts.push_back({{sx,0.0f,sz - oz},{0.3f,0.3f,0.3f}});
-        verts.push_back({{ex,0.0f,ez + oz},{0.3f,0.3f,0.3f}});
-        verts.push_back({{sx,0.0f,sz + oz},{0.3f,0.3f,0.3f}});
+        float oz = thickness;
+        
+        float finalCol[3] = { color[0], color[1], color[2] };
+        if (i == 0) { finalCol[0] = 0.6f; finalCol[1] = 0.1f; finalCol[2] = 0.1f; } // X axis is Red-ish
+
+        verts.push_back({{sx, 0.0f, sz - oz}, {finalCol[0], finalCol[1], finalCol[2]}});
+        verts.push_back({{ex, 0.0f, ez - oz}, {finalCol[0], finalCol[1], finalCol[2]}});
+        verts.push_back({{ex, 0.0f, ez + oz}, {finalCol[0], finalCol[1], finalCol[2]}});
+        verts.push_back({{sx, 0.0f, sz - oz}, {finalCol[0], finalCol[1], finalCol[2]}});
+        verts.push_back({{ex, 0.0f, ez + oz}, {finalCol[0], finalCol[1], finalCol[2]}});
+        verts.push_back({{sx, 0.0f, sz + oz}, {finalCol[0], finalCol[1], finalCol[2]}});
       }
-      // Line along Z
+      // Line along Z (varying X)
       {
         float sx = coord, sz = (float)-half * step;
         float ex = coord, ez = (float)half * step;
-        float ox = halfThickness;
-        verts.push_back({{sx - ox,0.0f,sz},{0.3f,0.3f,0.3f}});
-        verts.push_back({{ex - ox,0.0f,ez},{0.3f,0.3f,0.3f}});
-        verts.push_back({{ex + ox,0.0f,ez},{0.3f,0.3f,0.3f}});
-        verts.push_back({{sx - ox,0.0f,sz},{0.3f,0.3f,0.3f}});
-        verts.push_back({{ex + ox,0.0f,ez},{0.3f,0.3f,0.3f}});
-        verts.push_back({{sx + ox,0.0f,sz},{0.3f,0.3f,0.3f}});
+        float ox = thickness;
+
+        float finalCol[3] = { color[0], color[1], color[2] };
+        if (i == 0) { finalCol[0] = 0.1f; finalCol[1] = 0.1f; finalCol[2] = 0.6f; } // Z axis is Blue-ish
+
+        verts.push_back({{sx - ox, 0.0f, sz}, {finalCol[0], finalCol[1], finalCol[2]}});
+        verts.push_back({{ex - ox, 0.0f, ez}, {finalCol[0], finalCol[1], finalCol[2]}});
+        verts.push_back({{ex + ox, 0.0f, ez}, {finalCol[0], finalCol[1], finalCol[2]}});
+        verts.push_back({{sx - ox, 0.0f, sz}, {finalCol[0], finalCol[1], finalCol[2]}});
+        verts.push_back({{ex + ox, 0.0f, ez}, {finalCol[0], finalCol[1], finalCol[2]}});
+        verts.push_back({{sx + ox, 0.0f, sz}, {finalCol[0], finalCol[1], finalCol[2]}});
       }
     }
 
@@ -197,15 +222,27 @@ void RecreateMeshPipeline(ID3D12Device* device, ID3D12RootSignature* rootSig) {
     meshPsoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     meshPsoDesc.NumRenderTargets = 1;
     meshPsoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    meshPsoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
     meshPsoDesc.SampleDesc.Count = 1;
 
     if (rootSig) meshPsoDesc.pRootSignature = rootSig;
 
     ComPtr<ID3D12PipelineState> newMeshPSO;
     ThrowIfFailed(device->CreateGraphicsPipelineState(&meshPsoDesc, IID_PPV_ARGS(&newMeshPSO)));
-
     g_meshPipelineState = newMeshPSO;
-    fprintf(stderr, "RecreateMeshPipeline: Mesh PSO recreated (RASTER_DEBUG_UV=%d)\n", (int)g_rasterDebugUV);
+
+    // Depth-only PSO (same as mesh but no color writes)
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC depthPsoDesc = meshPsoDesc;
+    depthPsoDesc.BlendState.RenderTarget[0].RenderTargetWriteMask = 0; // Disable color output
+    depthPsoDesc.NumRenderTargets = 0; // No render targets bound for depth-only
+    depthPsoDesc.RTVFormats[0] = DXGI_FORMAT_UNKNOWN;
+    depthPsoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+    
+    ComPtr<ID3D12PipelineState> newDepthPSO;
+    ThrowIfFailed(device->CreateGraphicsPipelineState(&depthPsoDesc, IID_PPV_ARGS(&newDepthPSO)));
+    g_depthOnlyPipelineState = newDepthPSO;
+
+    fprintf(stderr, "RecreateMeshPipeline: Mesh PSOs recreated\n");
 
   } catch (const std::exception &e) {
     fprintf(stderr, "RecreateMeshPipeline failed: %s\n", e.what());
@@ -219,6 +256,21 @@ void DrawGrid(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB) {
     cmdList->IASetVertexBuffers(0, 1, &g_gridVBView);
     if (cameraCB) cmdList->SetGraphicsRootConstantBufferView(0, cameraCB->GetGPUVirtualAddress());
     cmdList->DrawInstanced(g_gridVertexCount, 1, 0, 0);
+}
+
+void DrawSceneDepthOnly(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB, const std::vector<Asset::GpuMesh>& meshes) {
+    if (!g_depthOnlyPipelineState || meshes.empty()) return;
+    
+    cmdList->SetPipelineState(g_depthOnlyPipelineState.Get());
+    cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    if (cameraCB) cmdList->SetGraphicsRootConstantBufferView(0, cameraCB->GetGPUVirtualAddress());
+
+    for (const auto& gm : meshes) {
+        if (!gm.vertexBuffer || !gm.indexBuffer) continue;
+        cmdList->IASetVertexBuffers(0, 1, &gm.vbView);
+        cmdList->IASetIndexBuffer(&gm.ibView);
+        cmdList->DrawIndexedInstanced(gm.indexCount, 1, 0, 0, 0);
+    }
 }
 
 } // namespace RasterRenderer
