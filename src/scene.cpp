@@ -370,6 +370,9 @@ void DrawGizmo() {
 
     // Scaling is almost always performed in Local space
     ImGuizmo::MODE actualMode = (g_currentGizmoOp == ImGuizmo::SCALE) ? ImGuizmo::LOCAL : g_currentGizmoMode;
+    // Default to WORLD for Rotation if implied by user request, but respect the toggle
+    // If the user feels it "looks weird", ensuring AxisFlip is off can help stability
+    ImGuizmo::AllowAxisFlip(false);
 
     // Make gizmo lines thicker for easier clicking
     ImGuizmo::GetStyle().TranslationLineThickness = 6.0f;
@@ -400,7 +403,37 @@ void DrawGizmo() {
     float translationMat[16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, localCenter[0], localCenter[1], localCenter[2], 1 };
     MatMul(pivotMatrix, translationMat, pivotMatrix);
 
-    if (ImGuizmo::Manipulate(view, proj, g_currentGizmoOp, actualMode, pivotMatrix)) {
+    // Adapt matrices for ImGuizmo (GL-style: Look=-Z) to fix sorting/interaction flipped feel
+    float viewImGuizmo[16];
+    memcpy(viewImGuizmo, view, 16 * sizeof(float));
+    // Flip Z-axis of View Matrix (Row 2 in math, which is indices 2,6,10,14 in Column-Major)
+    // view[2,6,10] is the Z basis vector. view[14] is Z translation.
+    viewImGuizmo[2] *= -1.0f;
+    viewImGuizmo[6] *= -1.0f;
+    viewImGuizmo[10] *= -1.0f;
+    viewImGuizmo[14] *= -1.0f;
+
+    // Build standard GL Perspective Projection (W = -Z)
+    float projImGuizmo[16];
+    memset(projImGuizmo, 0, 16*sizeof(float));
+    float fovRad = g_cameraData.fov * 3.14159265359f / 180.0f;
+    float aspect = g_cameraData.aspect;
+    float n = g_cameraData.nearZ;
+    float f = g_cameraData.farZ;
+    float t = tanf(fovRad * 0.5f);
+    
+    // 1/tan(fov/2) / aspect, 0, 0, 0
+    // 0, 1/tan(fov/2), 0, 0
+    // 0, 0, -(f+n)/(f-n), -1
+    // 0, 0, -2fn/(f-n), 0
+    
+    projImGuizmo[0] = 1.0f / (aspect * t);
+    projImGuizmo[5] = 1.0f / t;
+    projImGuizmo[10] = -(f + n) / (f - n); // GL Z remapping
+    projImGuizmo[11] = -1.0f;              // W = -Z
+    projImGuizmo[14] = -(2.0f * f * n) / (f - n);
+
+    if (ImGuizmo::Manipulate(viewImGuizmo, projImGuizmo, g_currentGizmoOp, actualMode, pivotMatrix)) {
         // NodeTransform = pivotMatrix * Translation(-localCenter)
         float invTranslationMat[16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, -localCenter[0], -localCenter[1], -localCenter[2], 1 };
         MatMul(pivotMatrix, invTranslationMat, node.transform);
