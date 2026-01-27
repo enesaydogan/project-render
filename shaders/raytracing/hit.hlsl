@@ -48,7 +48,7 @@ float3 FresnelSchlick(float cosTheta, float3 F0)
 // Extract normal from normal map and transform to world space
 float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent, int normalTexIndex)
 {
-    if (normalTexIndex < 0) return normalize(worldNormal);
+    if (normalTexIndex < 0 || length(worldTangent.xyz) < 0.001) return normalize(worldNormal);
     
     float3 tangentNormal = textures[normalTexIndex].SampleLevel(linearSampler, uv, 0).xyz * 2.0 - 1.0;
     
@@ -76,8 +76,6 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     float4 baseColorFactor = mat.baseColorFactor;
     float4 params1 = mat.params1;
     float4 emissiveFactor = mat.emissiveFactor;
-    float4 lightDir = mat.lightDir;
-    float4 lightColor = mat.lightColor;
     
 #ifdef HIT_DEBUG
     // Encode primitive index into color for debugging
@@ -179,13 +177,17 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     kD *= 1.0 - metallic;
     
     // Outgoing radiance
-    float3 Lo = (kD * baseColor / PI + specular) * NdotL;
+    float3 radiance = lightColor.rgb * lightColor.w;
+    float3 Lo = (kD * baseColor / PI + specular) * radiance * NdotL;
     
-    // Ambient lighting with AO
-    float3 ambient = float3(0.03, 0.03, 0.03) * baseColor * ao;
+    // Hemisphere ambient (sky and ground)
+    float3 groundColor = float3(0.05, 0.05, 0.05);
+    float3 skyColor = ambientColor.rgb;
+    float hemi = N.y * 0.5 + 0.5;
+    float3 ambient = lerp(groundColor, skyColor, hemi) * baseColor * ao * ambientColor.w;
     
     // Add emissive and light color scaling. Apply camera intensity.
-    float3 color = (ambient + Lo * lightColor.rgb * lightColor.w + emissive) * intensity;
+    float3 color = (ambient + Lo + emissive) * intensity;
     
     // Final tone mapping and gamma (matching raster)
     color = color / (color + float3(1.0, 1.0, 1.0));

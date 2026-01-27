@@ -11,6 +11,13 @@ cbuffer CameraCB : register(b0)
     float nearZ;
     float farZ;
     float intensity;
+    float _pad3;
+    float _pad4, _pad5;
+    
+    // Global Lighting
+    float4 lightDir; // xyz = direction towards light
+    float4 lightColor; // rgb + intensity in .w
+    float4 ambientColor; // rgb + weight in .w
 };
 
 cbuffer MaterialCB : register(b1)
@@ -21,12 +28,10 @@ cbuffer MaterialCB : register(b1)
     float4 emissiveFactor; // rgb emissive
     int4 textureIndices; // x=baseColor, y=metallicRoughness, z=normal, w=occlusion
     int4 emissiveAndPad; // x=emissiveTexIndex, yzw=padding
-    float4 lightDir; // xyz = light direction (pointing towards light)
-    float4 lightColor; // rgb + intensity in .w
 };
 
-// Texture array - we'll bind multiple textures in a descriptor table
-Texture2D textures[16] : register(t0);
+// Texture array - bonded as an unbounded array in SM 6.x
+Texture2D textures[] : register(t0);
 SamplerState linearSampler : register(s0);
 
 struct VSInputMesh {
@@ -136,7 +141,7 @@ float3 FresnelSchlickRoughness(float cosTheta, float3 F0, float roughness)
 // Extract normal from normal map and transform to world space
 float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent, int normalTexIndex)
 {
-    if (normalTexIndex < 0) return normalize(worldNormal);
+    if (normalTexIndex < 0 || length(worldTangent.xyz) < 0.001) return normalize(worldNormal);
     
     float3 tangentNormal = textures[normalTexIndex].Sample(linearSampler, uv).xyz * 2.0 - 1.0;
     
@@ -215,7 +220,14 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     
     float NdotL = saturate(dot(N, L));
     float3 color = (diffuse + spec) * lightColor.rgb * lightColor.w * NdotL;
-    color += emissive + (float3(0.03, 0.03, 0.03) * baseColor * ao);
+    
+    // Hemisphere ambient (sky and ground)
+    float3 groundColor = float3(0.05, 0.05, 0.05);
+    float3 skyColor = ambientColor.rgb;
+    float hemi = N.y * 0.5 + 0.5;
+    float3 ambient = lerp(groundColor, skyColor, hemi) * baseColor * ao * ambientColor.w;
+    
+    color += emissive + ambient;
     
     // Apply camera intensity in linear space
     color *= intensity;

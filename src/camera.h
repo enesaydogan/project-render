@@ -5,14 +5,24 @@
 using Microsoft::WRL::ComPtr;
 
 struct CameraCB {
-  float pos[4];
-  float forward[4];
-  float up[4];
+  float pos[3];
+  float _pad0;
+  float forward[3];
+  float _pad1;
+  float up[3];
+  float _pad2;
   float fov;
   float aspect;
   float nearZ;
   float farZ;
   float intensity;
+  float _pad3;
+  float _pad4, _pad5; // Align lightDir to 16-byte boundary
+  
+  // Global Scene Lighting
+  float lightDir[4];    // xyz = direction pointing TO light, w = unused
+  float lightColor[4];   // rgb + intensity in .w
+  float ambientColor[4]; // rgb + weight in .w
 };
 
 // Camera state (defined in camera.cpp)

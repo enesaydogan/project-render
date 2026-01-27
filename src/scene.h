@@ -19,6 +19,9 @@ bool ImportGltf(const std::string &utf8path);
 // Open file dialog and import selected glTF
 bool ImportGltfWithDialog(HWND hwnd);
 
+// Add a default ground plane
+void AddDefaultPlane();
+
 // Draw the Scene (Assets) panel UI. Should be called by main when assets window is visible.
 void DrawScenePanel(HWND hwnd, bool &visible);
 
