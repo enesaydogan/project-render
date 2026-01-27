@@ -13,21 +13,15 @@ void RayGen()
     float2 uv = (float2(launchIndex.xy) + 0.5) / float2(launchDim.xy);
     float2 ndc = uv * 2.0 - 1.0;
 
-    float aspect = camParams[1]; // provided by host
-    float fov = camParams[0];
-    float f = tan(radians(fov) * 0.5);
-
-    // Build camera basis robustly: if camForward is nearly parallel to camUp,
-    // pick an alternate reference vector to avoid a zero-length cross product.
-    float3 refUp = abs(camForward.y) > 0.999f ? float3(0.0f, 0.0f, 1.0f) : float3(0.0f, 1.0f, 0.0f);
-    float3 R = cross(camForward, refUp);
-    R = normalize(R);
-    // If normalization produced NaNs (very unlikely after choosing refUp),
-    // fall back to a safe axis.
-    if (all(R == R) == false) { R = float3(1,0,0); }
-    float3 U = normalize(cross(R, camForward));
-
-    float3 dir = normalize(ndc.x * R * aspect * f + (-ndc.y) * U * f + camForward);
+    // Build camera basis matching the raster renderer
+    // f = 1.0 / tan(fov/2) to match raster projection
+    float f_inv = tan(radians(fov) * 0.5);
+    
+    float3 R = normalize(cross(camForward, camUp)); // Right (F x U in RH)
+    float3 U = normalize(cross(R, camForward));    // Up (orthonormal)
+    
+    // ndc.y is -1 at top of screen (uv.y=0). Invert it so top pixels look UP.
+    float3 dir = normalize(ndc.x * R * aspect * f_inv + (-ndc.y) * U * f_inv + camForward);
 
     RayDesc ray;
     ray.Origin = camPos;
@@ -40,20 +34,12 @@ void RayGen()
 
 #ifdef RAYGEN_DEBUG
     // Debug mode: output UV gradient to verify ray generation and output copy
-    // Write flipped vertically to match raster orientation (copy to RTV assumes top-left origin)
-    uint outY = launchDim.y - 1 - launchIndex.y;
-    g_output[int2(launchIndex.x, outY)] = float4(uv.x, uv.y, 0.0, 1.0);
+    g_output[launchIndex.xy] = float4(uv.x, uv.y, 0.0, 1.0);
     return;
 #endif
 
     TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
 
-    // Flip Y when writing so DXR image matches raster output orientation
-#ifndef RAYGEN_DEBUG
-    uint outY = launchDim.y - 1 - launchIndex.y;
-    g_output[int2(launchIndex.x, outY)] = payload.color;
-#else
-    // In debug mode `outY` already defined above
-    g_output[int2(launchIndex.x, outY)] = payload.color;
-#endif
+    // Write to output. launchIndex.y=0 is the top dispatch, matching Row 0 (Top) of RT.
+    g_output[launchIndex.xy] = payload.color;
 }

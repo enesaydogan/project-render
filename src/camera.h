@@ -8,7 +8,11 @@ struct CameraCB {
   float pos[4];
   float forward[4];
   float up[4];
-  float params[5]; // fov(deg), aspect, znear, zfar, intensity
+  float fov;
+  float aspect;
+  float nearZ;
+  float farZ;
+  float intensity;
 };
 
 // Camera state (defined in camera.cpp)

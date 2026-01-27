@@ -70,14 +70,13 @@ struct MaterialCB {
 - Descriptor table is bound once per draw, not per texture
 
 ## Known Limitations / TODO
-- ❌ RTX/DXR raytracing not yet implemented (requires BLAS/TLAS, raytracing pipeline)
-- ❌ No mipmap generation (textures loaded as-is from glTF)
+- ⚠️ DXR raytracing: Basic implementation complete (BLAS/TLAS, RayGen/Hit/Miss), but limited to mesh[0] for buffer indexing.
+- ❌ No mipmap generation
 - ❌ No skinning/animation support
-- ❌ No Draco compression support
 - ❌ Anisotropic filtering not implemented
-- ❌ IBL (image-based lighting) not implemented - currently uses simple directional light
-- ❌ Shadow mapping not implemented
-- ❌ Multi-mesh rendering (only renders first mesh currently)
+- ❌ IBL (image-based lighting) not implemented
+- ❌ Shadow mapping not implemented for raster path
+- ✅ Multi-mesh rendering: Supported in Raster path with unique material slots.
 
 ## Build Status
 ✅ **Compiles successfully** with Visual Studio 2022 (C++17)

@@ -23,6 +23,7 @@ static ID3D12CommandQueue* s_commandQueue = nullptr;
 extern bool g_dxrDebugUV;
 extern bool g_dxrHitDebug;
 extern bool g_dxrDumpD3D12Messages;
+extern bool g_verboseRenderLogs;
 static ID3D12Fence* s_fence = nullptr;
 static UINT64* s_fenceValues = nullptr;
 static UINT* s_frameIndexPtr = nullptr;
@@ -102,7 +103,9 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     s_outputWidth = (width > 0) ? width : s_outputWidth;
     s_outputHeight = (height > 0) ? height : s_outputHeight;
 
-    fprintf(stderr, "DxrRenderer: Creating Ray Tracing Pipeline (size=%u x %u)...\n", s_outputWidth, s_outputHeight);
+    if (g_verboseRenderLogs) {
+        fprintf(stderr, "DxrRenderer: Creating Ray Tracing Pipeline (size=%u x %u)...\n", s_outputWidth, s_outputHeight);
+    }
 
     // Compile shader
     ComPtr<IDxcBlob> shaderBlob;
@@ -125,9 +128,9 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     static D3D12_DESCRIPTOR_RANGE srvRange = {}; srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; srvRange.NumDescriptors = 16; srvRange.BaseShaderRegister = 1; srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
     params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; params[2].DescriptorTable.NumDescriptorRanges = 1; params[2].DescriptorTable.pDescriptorRanges = &srvRange; params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV; params[3].Descriptor.ShaderRegister = 0; params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV; params[4].Descriptor.ShaderRegister = 1; params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    params[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[5].Descriptor.ShaderRegister = 17; params[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    params[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[6].Descriptor.ShaderRegister = 18; params[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[4].Descriptor.ShaderRegister = 17; params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[5].Descriptor.ShaderRegister = 18; params[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[6].Descriptor.ShaderRegister = 19; params[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rootDesc = {};
     rootDesc.NumParameters = 7; rootDesc.pParameters = params; rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
@@ -265,7 +268,9 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
         s_outputUAVGpuHandle = s_uavHeap->GetGPUDescriptorHandleForHeapStart();
     }
 
-    fprintf(stderr, "DxrRenderer: Ray Tracing Pipeline ready\n");
+    if (g_verboseRenderLogs) {
+        fprintf(stderr, "DxrRenderer: Ray Tracing Pipeline ready\n");
+    }
 }
 
 void BuildAccelerationStructures(const std::vector<Asset::GpuMesh>& meshes) {
@@ -393,7 +398,9 @@ void BuildAccelerationStructures(const std::vector<Asset::GpuMesh>& meshes) {
         s_commandQueue->Signal(s_fence, fence2);
         s_fenceValues[*s_frameIndexPtr]++;
         if (s_fence->GetCompletedValue() < fence2) { s_fence->SetEventOnCompletion(fence2, s_fenceEvent); WaitForSingleObject(s_fenceEvent, INFINITE); }
-        fprintf(stderr, "DxrRenderer: Acceleration structures built\n");
+        if (g_verboseRenderLogs) {
+            fprintf(stderr, "DxrRenderer: Acceleration structures built\n");
+        }
 
     } catch (const std::exception &e) {
         fprintf(stderr, "DxrRenderer: Exception during AS build: %s\n", e.what());
@@ -463,7 +470,7 @@ bool RenderFrame(ID3D12GraphicsCommandList* commandListBase, UINT frameIndex, ID
         dxrList->SetComputeRootDescriptorTable(1, s_outputUAVGpuHandle);
     }
     if (cameraCB) dxrList->SetComputeRootConstantBufferView(3, cameraCB->GetGPUVirtualAddress());
-    if (materialCB) dxrList->SetComputeRootConstantBufferView(4, materialCB->GetGPUVirtualAddress());
+    if (materialCB) dxrList->SetComputeRootShaderResourceView(4, materialCB->GetGPUVirtualAddress());
     if (!meshes.empty() && meshes[0].vertexBuffer) dxrList->SetComputeRootShaderResourceView(5, meshes[0].vertexBuffer->GetGPUVirtualAddress());
     if (!meshes.empty() && meshes[0].indexBuffer) dxrList->SetComputeRootShaderResourceView(6, meshes[0].indexBuffer->GetGPUVirtualAddress());
 
@@ -495,10 +502,12 @@ bool RenderFrame(ID3D12GraphicsCommandList* commandListBase, UINT frameIndex, ID
         // If sizes differ, copy the intersection region with CopyTextureRegion instead of CopyResource.
         UINT copyW = (UINT)min(srcDesc.Width, dstDesc.Width);
         UINT copyH = (UINT)min(srcDesc.Height, dstDesc.Height);
-        fprintf(stderr, "DxrRenderer: Output size mismatch (src=%llu x %u dst=%llu x %u) - copying %u x %u region\n",
-                (unsigned long long)srcDesc.Width, (unsigned)srcDesc.Height,
-                (unsigned long long)dstDesc.Width, (unsigned)dstDesc.Height,
-                copyW, copyH);
+        if (g_verboseRenderLogs) {
+            fprintf(stderr, "DxrRenderer: Output size mismatch (src=%llu x %u dst=%llu x %u) - copying %u x %u region\n",
+                    (unsigned long long)srcDesc.Width, (unsigned)srcDesc.Height,
+                    (unsigned long long)dstDesc.Width, (unsigned)dstDesc.Height,
+                    copyW, copyH);
+        }
 
         D3D12_TEXTURE_COPY_LOCATION dstLoc = {};
         dstLoc.pResource = renderTarget;

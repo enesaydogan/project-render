@@ -6,7 +6,11 @@ cbuffer CameraCB : register(b0)
     float _pad1;
     float3 up;
     float _pad2;
-    float params[5]; // fov(deg), aspect, znear, zfar, intensity
+    float fov;
+    float aspect;
+    float nearZ;
+    float farZ;
+    float intensity;
 };
 
 cbuffer MaterialCB : register(b1)
@@ -44,18 +48,13 @@ PSInputMesh VSMainMesh(VSInputMesh input)
 {
     PSInputMesh o;
 
-    // World-space position (scale to match instances used for TLAS)
-    float3 worldPos = input.position * 0.1f; // Scale down to match TLAS instance scale
+    // World-space position (scale down to match TLAS instance scale)
+    float3 worldPos = input.position * 0.1f;
 
-    // Create proper view-projection matrix for raster rendering
-    float aspect = params[1];
-    float fov = params[0];
-    float nearZ = params[2];
-    float farZ = params[3];
+    // Use a standard right-handed view basis for the camera
+    float3 R = normalize(cross(forward, up)); // Right (F x U in RH with F pointing away)
+    float3 U = normalize(cross(R, forward));  // Up (orthonormal)
     
-    // Build camera basis and transform to view space (match simple.hlsl)
-    float3 R = normalize(cross(forward, up));
-    float3 U = normalize(cross(R, forward));
     float3 rel = worldPos - pos;
     float3 viewPos;
     viewPos.x = dot(rel, R);
@@ -67,11 +66,12 @@ PSInputMesh VSMainMesh(VSInputMesh input)
     float f = 1.0f / tan(radians(fov) * 0.5f);
 
     // Apply projection (D3D clip space: z in [0,1])
+    // Standard perspective: W=Z_view, X_ndc = X_view * f / aspect, Y_ndc = Y_view * f
     float A = farZ / (farZ - nearZ);
     float B = -nearZ * farZ / (farZ - nearZ);
     o.position = float4(
         viewPos.x * f / aspect,
-        -viewPos.y * f,
+        viewPos.y * f,
         viewPos.z * A + B,
         viewPos.z
     );
@@ -169,13 +169,60 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     int metallicRoughnessIdx = textureIndices.y;
     int normalIdx = textureIndices.z;
     int occlusionIdx = textureIndices.w;
+    int emissiveIdx = emissiveAndPad.x;
     
-    // Debug: return different colors based on material index
-    if (baseColorIdx < 0) {
-        // No texture - return bright red to debug plane
-        return float4(1.0, 0.0, 0.0, 1.0);
-    } else {
-        // Has texture - return bright green to debug helmet
-        return float4(0.0, 1.0, 0.0, 1.0);
+    float4 baseColorSample = (baseColorIdx >= 0) ? textures[baseColorIdx].Sample(linearSampler, input.uv) : float4(1, 1, 1, 1);
+    float3 baseColor = baseColorSample.rgb * baseColorFactor.rgb;
+    float alpha = baseColorSample.a * baseColorFactor.a;
+    
+    float metallic = params1.x;
+    float roughness = params1.y;
+    int workflow = (int)params1.z;
+    
+    if (metallicRoughnessIdx >= 0) {
+        float4 mr = textures[metallicRoughnessIdx].Sample(linearSampler, input.uv);
+        // glTF: roughness = green, metallic = blue
+        roughness *= mr.g;
+        metallic *= mr.b;
     }
+    roughness = max(roughness, 0.04);
+    
+    float3 N = GetNormalFromMap(input.uv, input.normal, input.tangent, normalIdx);
+    float3 V = normalize(pos - input.worldPos);
+    float3 L = normalize(lightDir.xyz);
+    if (length(lightDir.xyz) < 0.001) L = float3(0, 1, 0); // fallback to up
+    float3 H = normalize(V + L);
+    
+    float ao = (occlusionIdx >= 0) ? textures[occlusionIdx].Sample(linearSampler, input.uv).r : 1.0;
+    float3 emissive = (emissiveIdx >= 0) ? textures[emissiveIdx].Sample(linearSampler, input.uv).rgb * emissiveFactor.rgb : float3(0, 0, 0);
+    
+    float3 F0 = lerp(float3(0.04, 0.04, 0.04), baseColor, metallic);
+    if (workflow == 1) {
+        F0 = specular.rgb;
+        roughness = 1.0 - specular.w; // glossiness to roughness
+    }
+    
+    float NDF = DistributionGGX(N, H, roughness);
+    float G = GeometrySmith(N, V, L, roughness);
+    float3 F = FresnelSchlick(max(dot(H, V), 0.0), F0);
+    
+    float3 numerator = NDF * G * F;
+    float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
+    float3 spec = numerator / denominator;
+    
+    float3 kD = (float3(1.0, 1.0, 1.0) - F) * (1.0 - metallic);
+    float3 diffuse = kD * baseColor / 3.14159265;
+    
+    float NdotL = saturate(dot(N, L));
+    float3 color = (diffuse + spec) * lightColor.rgb * lightColor.w * NdotL;
+    color += emissive + (float3(0.03, 0.03, 0.03) * baseColor * ao);
+    
+    // Apply camera intensity in linear space
+    color *= intensity;
+
+    // Reinhard tone mapping
+    color = color / (color + float3(1.0, 1.0, 1.0));
+    color = pow(color, float3(1.0 / 2.2, 1.0 / 2.2, 1.0 / 2.2));
+    
+    return float4(color, alpha);
 }

@@ -21,9 +21,6 @@ D3D12_VERTEX_BUFFER_VIEW RasterRenderer::g_gridVBView = {};
 UINT RasterRenderer::g_gridVertexCount = 0;
 ComPtr<ID3D12PipelineState> RasterRenderer::g_gridPipelineState;
 ComPtr<ID3D12PipelineState> RasterRenderer::g_meshPipelineState;
-ComPtr<ID3D12Resource> RasterRenderer::g_debugVertexBuffer;
-D3D12_VERTEX_BUFFER_VIEW RasterRenderer::g_debugVBView = {};
-UINT RasterRenderer::g_debugVertexCount = 0;
 
 static DxcHelper s_dxcHelper;
 
@@ -134,35 +131,6 @@ void CreateGridResources(ID3D12Device* device, float gridThickness) {
     g_gridVBView.SizeInBytes = vbSize;
 }
 
-void CreateDebugTriangleResources(ID3D12Device* device)
-{
-  struct DebugVert { float pos[3]; float col[3]; };
-
-  DebugVert verts[3] = {
-    { { 0.0f, 0.0f, 0.5f }, { 1.0f, 0.0f, 0.0f } },
-    { { 0.5f, 0.0f, 0.5f }, { 0.0f, 1.0f, 0.0f } },
-    { { 0.0f, 0.5f, 0.5f }, { 0.0f, 0.0f, 1.0f } },
-  };
-
-  const UINT vbSize = (UINT)sizeof(verts);
-
-  D3D12_HEAP_PROPERTIES heapProps = {}; heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
-  D3D12_RESOURCE_DESC vbDesc = {}; vbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; vbDesc.Width = vbSize; vbDesc.Height = 1; vbDesc.DepthOrArraySize = 1; vbDesc.MipLevels = 1; vbDesc.SampleDesc.Count = 1; vbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-  HRESULT hr = device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &vbDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&g_debugVertexBuffer));
-  if (FAILED(hr)) return;
-
-  UINT8* pData = nullptr; D3D12_RANGE readRange = {0,0};
-  ThrowIfFailed(g_debugVertexBuffer->Map(0, &readRange, reinterpret_cast<void**>(&pData)));
-  memcpy(pData, verts, vbSize);
-  g_debugVertexBuffer->Unmap(0, nullptr);
-
-  g_debugVBView.BufferLocation = g_debugVertexBuffer->GetGPUVirtualAddress();
-  g_debugVBView.StrideInBytes = sizeof(DebugVert);
-  g_debugVBView.SizeInBytes = vbSize;
-  g_debugVertexCount = 3;
-}
-
 void RecreateMeshPipeline(ID3D12Device* device, ID3D12RootSignature* rootSig) {
   std::wstring pbrShaderPath = FindShaderFileLocal(L"shaders\\pbr_mesh.hlsl");
 
@@ -198,6 +166,7 @@ void RecreateMeshPipeline(ID3D12Device* device, ID3D12RootSignature* rootSig) {
     D3D12_RASTERIZER_DESC rasterDesc = {};
     rasterDesc.FillMode = g_rasterWireframe ? D3D12_FILL_MODE_WIREFRAME : D3D12_FILL_MODE_SOLID;
     rasterDesc.CullMode = g_rasterWireframe ? D3D12_CULL_MODE_NONE : D3D12_CULL_MODE_BACK;
+    rasterDesc.FrontCounterClockwise = TRUE;
     rasterDesc.DepthClipEnable = TRUE;
 
     D3D12_BLEND_DESC blendDesc = {};
@@ -250,17 +219,6 @@ void DrawGrid(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB) {
     cmdList->IASetVertexBuffers(0, 1, &g_gridVBView);
     if (cameraCB) cmdList->SetGraphicsRootConstantBufferView(0, cameraCB->GetGPUVirtualAddress());
     cmdList->DrawInstanced(g_gridVertexCount, 1, 0, 0);
-}
-
-void DrawDebugTriangle(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB)
-{
-  if (!g_gridPipelineState || g_debugVertexCount == 0) return;
-
-  cmdList->SetPipelineState(g_gridPipelineState.Get());
-  cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-  cmdList->IASetVertexBuffers(0, 1, &g_debugVBView);
-  if (cameraCB) cmdList->SetGraphicsRootConstantBufferView(0, cameraCB->GetGPUVirtualAddress());
-  cmdList->DrawInstanced(g_debugVertexCount, 1, 0, 0);
 }
 
 } // namespace RasterRenderer
