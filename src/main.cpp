@@ -79,8 +79,9 @@ bool g_dxrDumpPixels = false;
 bool g_dxrHitDebug = false; // encode primitive ID in hit shader for debugging
 bool g_dxrDumpD3D12Messages = false; // dump D3D12 InfoQueue messages to stderr
 bool g_rasterDebugUV = false; // show raster UVs in mesh pixel shader (debug)
-bool g_verboseRenderLogs =
-    false; // when true, prints render-loop diagnostics (off by default)
+bool g_verboseRenderLogs = true; // when true, prints render-loop diagnostics (enabled for debug)
+bool g_rasterWireframe = false; // show meshes in wireframe / disable culling (debug)
+bool g_rasterDebugDepth = false; // compile shader to output depth as color for debugging
 
 ComPtr<ID3D12Device> g_device;
 static ComPtr<ID3D12CommandQueue> g_commandQueue;
@@ -142,9 +143,8 @@ static UINT64 g_fenceValues[FrameCount] = {};
 static HANDLE g_fenceEvent = nullptr;
 
 // Simple pipeline objects
-ComPtr<ID3D12RootSignature> g_rootSignature;
+  ComPtr<ID3D12RootSignature> g_rootSignature;
 static ComPtr<ID3D12PipelineState> g_pipelineState;
-static ComPtr<ID3D12PipelineState> g_meshPipelineState;
 static ComPtr<ID3D12Resource> g_vertexBuffer;
 static D3D12_VERTEX_BUFFER_VIEW g_vertexBufferView = {};
 static ComPtr<ID3D12Resource> g_constantBuffer;
@@ -155,8 +155,9 @@ static ComPtr<ID3D12Resource> g_gridVertexBuffer;
 static D3D12_VERTEX_BUFFER_VIEW g_gridVBView = {};
 static UINT g_gridVertexCount = 0;
 static ComPtr<ID3D12PipelineState> g_gridPipelineState;
+static ComPtr<ID3D12PipelineState> g_meshSimplePipelineState;
 // Grid line thickness in world units (used to expand lines into thin quads)
-static float g_gridThickness = 0.005f; // increase to make lines thicker
+static float g_gridThickness = 0.02f; // increase to make lines thicker
 
 static bool g_drawGrid = true; // toggle grid rendering
 
@@ -734,11 +735,11 @@ bool InitD3D12(HWND hwnd) {
   // --- Create a root signature with CBV b0 (vertex), descriptor table t0
   // (SRV), and CBV b1 (pixel material) ---
   D3D12_ROOT_PARAMETER rootParameters[3] = {};
-  // b0 - transform CBV for vertex shader
+  // b0 - transform CBV for vertex shader AND pixel shader (needed for view direction)
   rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
   rootParameters[0].Descriptor.ShaderRegister = 0;
   rootParameters[0].Descriptor.RegisterSpace = 0;
-  rootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+  rootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
   // t0-t15 - descriptor table (SRV) for pixel shader (16 texture slots)
   static D3D12_DESCRIPTOR_RANGE descRange = {};
   descRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
@@ -906,6 +907,8 @@ bool InitD3D12(HWND hwnd) {
 
   // Create grid resources using raster module
   RasterRenderer::CreateGridResources(g_device.Get(), g_gridThickness);
+  // Create a small debug triangle (appears regardless of mesh depth state)
+  RasterRenderer::CreateDebugTriangleResources(g_device.Get());
 
   // --- Create a mesh PSO (position-only vertex layout, simple pixel shader)
   // ---
@@ -928,10 +931,13 @@ bool InitD3D12(HWND hwnd) {
                     psMeshBlob->GetBufferSize()};
 
   // Enable depth testing for mesh rendering
-  meshPsoDesc.DepthStencilState.DepthEnable = FALSE;
+  meshPsoDesc.DepthStencilState.DepthEnable = TRUE;
+  meshPsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+  meshPsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+  meshPsoDesc.DepthStencilState.StencilEnable = FALSE;
 
   {
-    HRESULT hrMesh = g_device->CreateGraphicsPipelineState(&meshPsoDesc, IID_PPV_ARGS(&g_meshPipelineState));
+    HRESULT hrMesh = g_device->CreateGraphicsPipelineState(&meshPsoDesc, IID_PPV_ARGS(&RasterRenderer::g_meshPipelineState));
     if (FAILED(hrMesh)) {
       fprintf(stderr, "InitD3D12: CreateGraphicsPipelineState (mesh) failed: 0x%08x\n", (unsigned)hrMesh);
 #ifdef _DEBUG
@@ -951,6 +957,36 @@ bool InitD3D12(HWND hwnd) {
 #endif
     }
     ThrowIfFailed(hrMesh);
+  }
+
+  // Recreate the mesh PSO via RasterRenderer to pick up debug defines (e.g. RASTER_DEBUG_DEPTH)
+  RasterRenderer::RecreateMeshPipeline(g_device.Get(), g_rootSignature.Get());
+
+  // Additionally create a simple mesh PSO that reads only POSITION and draws a constant color
+  {
+    std::wstring simplePath = FindShaderFile(L"shaders\\simple.hlsl");
+    ComPtr<IDxcBlob> vsMeshSimpleBlob;
+    ComPtr<IDxcBlob> psMeshSimpleBlob;
+    try {
+      vsMeshSimpleBlob = localDxc.Compile(simplePath, L"VSMainMeshSimple", L"vs_6_0");
+      psMeshSimpleBlob = localDxc.Compile(simplePath, L"PSMainMeshSimple", L"ps_6_0");
+    } catch (const std::exception &e) {
+      fprintf(stderr, "InitD3D12: simple mesh shader compile failed: %s\n", e.what());
+      vsMeshSimpleBlob = nullptr;
+      psMeshSimpleBlob = nullptr;
+    }
+
+    if (vsMeshSimpleBlob && psMeshSimpleBlob) {
+      D3D12_GRAPHICS_PIPELINE_STATE_DESC simplePso = meshPsoDesc;
+      D3D12_INPUT_ELEMENT_DESC posOnlyLayout[] = {
+        {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}
+      };
+      simplePso.InputLayout = { posOnlyLayout, _countof(posOnlyLayout) };
+      simplePso.VS = { vsMeshSimpleBlob->GetBufferPointer(), vsMeshSimpleBlob->GetBufferSize() };
+      simplePso.PS = { psMeshSimpleBlob->GetBufferPointer(), psMeshSimpleBlob->GetBufferSize() };
+      if (g_rootSignature) simplePso.pRootSignature = g_rootSignature.Get();
+      ThrowIfFailed(g_device->CreateGraphicsPipelineState(&simplePso, IID_PPV_ARGS(&g_meshSimplePipelineState)));
+    }
   }
 
   // --- Initialize ImGui ---
@@ -1458,12 +1494,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                                  g_cameraConstantBuffer.Get());
       }
 
+      // Draw a simple debug triangle (uses grid PSO, depth disabled)
+      RasterRenderer::DrawDebugTriangle(g_commandList.Get(), g_cameraConstantBuffer.Get());
+
       // Draw loaded meshes
-      if (!g_loadedMeshes.empty() && g_meshPipelineState) {
+      if (!g_loadedMeshes.empty() && RasterRenderer::g_meshPipelineState) {
         // Log to stderr only (controlled by verbose flag)
         if (g_verboseRenderLogs)
           fprintf(stderr, "Drawing %zu meshes\n", g_loadedMeshes.size());
-        g_commandList->SetPipelineState(g_meshPipelineState.Get());
+        // Use the RasterRenderer mesh PSO (may output debug depth/uv depending on compile defines)
+        g_commandList->SetPipelineState(RasterRenderer::g_meshPipelineState.Get());
         g_commandList->IASetPrimitiveTopology(
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         ID3D12DescriptorHeap *heaps[] = {g_cbvSrvAllocator.Heap()};
@@ -1482,6 +1522,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           // Skip meshes that have been deleted or not properly initialized
           if (!gm.vertexBuffer || !gm.indexBuffer || gm.ibView.SizeInBytes == 0)
             continue;
+
+          if (g_verboseRenderLogs) {
+            fprintf(stderr, "Mesh[%zu]: vb=0x%016llx vbSize=%u vbStride=%u ib=0x%016llx ibSize=%u verts=%u idx=%u mat=%d\n",
+                    i,
+                    (unsigned long long)gm.vbView.BufferLocation,
+                    (unsigned)gm.vbView.SizeInBytes,
+                    (unsigned)gm.vbView.StrideInBytes,
+                    (unsigned long long)gm.ibView.BufferLocation,
+                    (unsigned)gm.ibView.SizeInBytes,
+                    (unsigned)gm.vertexCount,
+                    (unsigned)gm.indexCount,
+                    gm.materialIndex);
+          }
 
           g_commandList->IASetVertexBuffers(0, 1, &gm.vbView);
           g_commandList->IASetIndexBuffer(&gm.ibView);
@@ -1541,12 +1594,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
               }
               g_commandList->SetGraphicsRootConstantBufferView(2, g_materialConstantBuffer->GetGPUVirtualAddress());
             }
-            if (g_textureDescriptorCount > 0)
+            if (g_textureDescriptorCount > 0) {
               g_commandList->SetGraphicsRootDescriptorTable(1, g_texturesGpuStart);
+            }
           }
-          if (gm.ibView.SizeInBytes > 0)
+          if (gm.ibView.SizeInBytes > 0) {
             g_commandList->DrawIndexedInstanced(gm.ibView.SizeInBytes / 4, 1, 0,
                                                 0, 0);
+            if (g_verboseRenderLogs) {
+              fprintf(stderr, "Issued DrawIndexedInstanced for mesh[%zu]\n", i);
+            }
+          }
         }
       }
       break;
@@ -2020,6 +2078,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           fprintf(stderr, "Raster: ShowUV set=%d\n", g_rasterDebugUV);
           RasterRenderer::RecreateMeshPipeline(g_device.Get(),
                                                g_rootSignature.Get());
+        }
+
+        if (ImGui::Checkbox("Raster: Wireframe / No Cull (debug)", &g_rasterWireframe)) {
+          fprintf(stderr, "Raster: Wireframe set=%d\n", g_rasterWireframe);
+          RasterRenderer::RecreateMeshPipeline(g_device.Get(), g_rootSignature.Get());
+        }
+
+        if (ImGui::Checkbox("Raster: Debug Depth (shader)", &g_rasterDebugDepth)) {
+          fprintf(stderr, "Raster: DebugDepth set=%d\n", g_rasterDebugDepth);
+          RasterRenderer::RecreateMeshPipeline(g_device.Get(), g_rootSignature.Get());
         }
 
         if (ImGui::RadioButton("Path Tracing (WIP)",

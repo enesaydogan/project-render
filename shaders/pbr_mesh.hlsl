@@ -22,7 +22,7 @@ cbuffer MaterialCB : register(b1)
 };
 
 // Texture array - we'll bind multiple textures in a descriptor table
-Texture2D textures[8] : register(t0);
+Texture2D textures[16] : register(t0);
 SamplerState linearSampler : register(s0);
 
 struct VSInputMesh {
@@ -47,21 +47,34 @@ PSInputMesh VSMainMesh(VSInputMesh input)
     // World-space position (scale to match instances used for TLAS)
     float3 worldPos = input.position * 0.1f; // Scale down to match TLAS instance scale
 
-    // Projection math must match RayGen: use f = tan(fov/2) and same basis
+    // Create proper view-projection matrix for raster rendering
     float aspect = params[1];
-    float f = tan(radians(params[0]) * 0.5);
-
+    float fov = params[0];
+    float nearZ = params[2];
+    float farZ = params[3];
+    
+    // Build camera basis and transform to view space (match simple.hlsl)
     float3 R = normalize(cross(forward, up));
     float3 U = normalize(cross(R, forward));
+    float3 rel = worldPos - pos;
+    float3 viewPos;
+    viewPos.x = dot(rel, R);
+    viewPos.y = dot(rel, U);
+    viewPos.z = dot(rel, forward);
+    
+    // Build projection matrix
+    // Convert FOV to radians and compute focal term
+    float f = 1.0f / tan(radians(fov) * 0.5f);
 
-    float3 rel = worldPos - pos; // pos = camera position (from cbuffer)
-    float x_cam = dot(rel, R);
-    float y_cam = dot(rel, U);
-    float z_cam = dot(rel, forward);
-
-    // Use same sign convention as RayGen: NDC.x = x_cam / (z_cam * aspect * f), NDC.y = -y_cam / (z_cam * f)
-    // We produce clip pos with w = z_cam so after perspective divide it matches RayGen direction mapping
-    o.position = float4(x_cam / (aspect * f), -y_cam / f, z_cam, z_cam);
+    // Apply projection (D3D clip space: z in [0,1])
+    float A = farZ / (farZ - nearZ);
+    float B = -nearZ * farZ / (farZ - nearZ);
+    o.position = float4(
+        viewPos.x * f / aspect,
+        -viewPos.y * f,
+        viewPos.z * A + B,
+        viewPos.z
+    );
 
     o.worldPos = worldPos;
     o.normal = input.normal;
@@ -137,6 +150,15 @@ float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent, int 
 
 float4 PSMainMesh(PSInputMesh input) : SV_TARGET
 {
+#ifdef RASTER_DEBUG_DEPTH
+    // Output clip-space depth as grayscale for debugging
+    float clipW = input.position.w;
+    float depth = 0.0f;
+    if (abs(clipW) > 1e-6) {
+        depth = saturate(input.position.z / clipW);
+    }
+    return float4(depth, depth, depth, 1.0);
+#endif
 #ifdef RASTER_DEBUG_UV
     // Debug mode: output UVs in RGB for quick comparison with RayGen UV output
     return float4(input.uv.xy, 0.0, 1.0);
@@ -148,79 +170,12 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     int normalIdx = textureIndices.z;
     int occlusionIdx = textureIndices.w;
     
-    // Base color
-    float3 baseColor = baseColorFactor.rgb;
-    if (baseColorIdx >= 0) {
-        float4 texColor = textures[baseColorIdx].Sample(linearSampler, input.uv);
-        baseColor *= texColor.rgb;
+    // Debug: return different colors based on material index
+    if (baseColorIdx < 0) {
+        // No texture - return bright red to debug plane
+        return float4(1.0, 0.0, 0.0, 1.0);
+    } else {
+        // Has texture - return bright green to debug helmet
+        return float4(0.0, 1.0, 0.0, 1.0);
     }
-    
-    // Metallic-roughness
-    float metallic = params1.x;
-    float roughness = params1.y;
-    if (metallicRoughnessIdx >= 0) {
-        float4 mr = textures[metallicRoughnessIdx].Sample(linearSampler, input.uv);
-        metallic *= mr.b; // Blue channel = metallic
-        roughness *= mr.g; // Green channel = roughness
-    }
-    
-    // Clamp roughness to avoid division by zero
-    roughness = max(roughness, 0.04);
-    
-    // Normal mapping
-    float3 N = GetNormalFromMap(input.uv, input.normal, input.tangent, normalIdx);
-    
-    // Ambient occlusion
-    float ao = 1.0;
-    if (occlusionIdx >= 0) {
-        ao = textures[occlusionIdx].Sample(linearSampler, input.uv).r;
-    }
-    
-    // Emissive
-    float3 emissive = emissiveFactor.rgb;
-    if (emissiveAndPad.x >= 0) {
-        emissive *= textures[emissiveAndPad.x].Sample(linearSampler, input.uv).rgb;
-    }
-    
-    // Simple directional light setup
-    float3 V = normalize(float3(0.0, 0.0, 1.0)); // View direction (approx)
-    float3 L = normalize(lightDir.xyz);
-    float3 H = normalize(V + L);
-    
-    // Calculate reflectance at normal incidence
-    float3 F0 = float3(0.04, 0.04, 0.04); // Dielectric base reflectivity
-    F0 = lerp(F0, baseColor, metallic);
-    
-    // Cook-Torrance BRDF
-    float NDF = DistributionGGX(N, H, roughness);
-    float G = GeometrySmith(N, V, L, roughness);
-    float3 F = FresnelSchlick(max(dot(H, V), 0.0), F0);
-    
-    float3 numerator = NDF * G * F;
-    float NdotV = max(dot(N, V), 0.0);
-    float NdotL = max(dot(N, L), 0.0);
-    float denominator = 4.0 * NdotV * NdotL;
-    float3 specular = numerator / max(denominator, 0.001);
-    
-    // Energy conservation
-    float3 kS = F;
-    float3 kD = float3(1.0, 1.0, 1.0) - kS;
-    kD *= 1.0 - metallic;
-    
-    // Outgoing radiance
-    float3 Lo = (kD * baseColor / PI + specular) * NdotL;
-    
-    // Ambient lighting with AO
-    float3 ambient = float3(0.03, 0.03, 0.03) * baseColor * ao;
-    
-    // Add emissive and light color scaling
-    float3 color = ambient + Lo * lightColor.rgb * lightColor.w + emissive;
-    
-    // Simple tone mapping
-    color = color / (color + float3(1.0, 1.0, 1.0));
-    
-    // Gamma correction
-    color = pow(color, float3(1.0/2.2, 1.0/2.2, 1.0/2.2));
-    
-    return float4(color, baseColorFactor.a);
 }
