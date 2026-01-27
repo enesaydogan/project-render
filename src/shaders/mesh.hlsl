@@ -7,7 +7,11 @@ cbuffer Camera : register(b0)
     float _pad1;
     float3 camUp;
     float _pad2;
-    float camParams[5]; // fov(deg), aspect, znear, zfar, intensity
+    float fov;
+    float aspect;
+    float nearZ;
+    float farZ;
+    float intensity;
 };
 
 cbuffer MaterialCB : register(b1)
@@ -49,8 +53,7 @@ PSInputMesh VSMainMesh(VSInputMesh input)
     // Build camera basis to match raygen math. Use a robust reference up
     // vector when the forward vector is nearly parallel to the provided up
     // vector to avoid a zero-length cross product.
-    float aspect = camParams[1];
-    float f = tan(radians(camParams[0]) * 0.5);
+    float f = tan(radians(fov) * 0.5);
     float3 refUp = abs(camForward.y) > 0.999f ? float3(0.0f, 0.0f, 1.0f) : float3(0.0f, 1.0f, 0.0f);
     float3 R = cross(camForward, refUp);
     R = normalize(R);
@@ -218,7 +221,7 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     
     // Combine
     float NdotL = max(dot(N, L), 0.0);
-    float3 Lo = (diffuse + specular) * NdotL * camParams[4]; // Light intensity
+    float3 Lo = (diffuse + specular) * NdotL * intensity; // Light intensity
     
     // Add ambient
     float3 ambient = float3(0.03, 0.03, 0.03) * baseColor * ao;

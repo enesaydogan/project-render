@@ -79,7 +79,7 @@ bool g_dxrDumpPixels = false;
 bool g_dxrHitDebug = false; // encode primitive ID in hit shader for debugging
 bool g_dxrDumpD3D12Messages = false; // dump D3D12 InfoQueue messages to stderr
 bool g_rasterDebugUV = false; // show raster UVs in mesh pixel shader (debug)
-bool g_verboseRenderLogs = true; // when true, prints render-loop diagnostics (enabled for debug)
+bool g_verboseRenderLogs = false; // when true, prints render-loop diagnostics (disabled by default)
 bool g_rasterWireframe = false; // show meshes in wireframe / disable culling (debug)
 bool g_rasterDebugDepth = false; // compile shader to output depth as color for debugging
 
@@ -907,8 +907,6 @@ bool InitD3D12(HWND hwnd) {
 
   // Create grid resources using raster module
   RasterRenderer::CreateGridResources(g_device.Get(), g_gridThickness);
-  // Create a small debug triangle (appears regardless of mesh depth state)
-  RasterRenderer::CreateDebugTriangleResources(g_device.Get());
 
   // --- Create a mesh PSO (position-only vertex layout, simple pixel shader)
   // ---
@@ -1048,6 +1046,7 @@ bool InitD3D12(HWND hwnd) {
   g_constantBuffer->Unmap(0, nullptr);
 
   // --- Create persistent material constant buffer ---
+  // Large enough to hold many unique material instances per frame
   struct MaterialCB {
     float baseColorFactor[4];
     float params1[4];
@@ -1058,7 +1057,8 @@ bool InitD3D12(HWND hwnd) {
     float lightDir[4];
     float lightColor[4];
   };
-  const UINT64 matCbSize = (sizeof(MaterialCB) + 255) & ~255;
+  const UINT64 matCbSizeSingle = (sizeof(MaterialCB) + 255) & ~255;
+  const UINT64 matCbSize = matCbSizeSingle * 1024; // Support up to 1024 calls
   D3D12_RESOURCE_DESC matCbDesc = {};
   matCbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
   matCbDesc.Width = matCbSize;
@@ -1305,19 +1305,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             {{0.5f, 0.5f, 0.5f}, {0, 0, 1}, {1, 0, 0, 1}, {1.0f, 1.0f}},
             {{-0.5f, 0.5f, 0.5f}, {0, 0, 1}, {1, 0, 0, 1}, {0.0f, 1.0f}},
         };
-        // 12 triangles (36 indices)
-        UINT indices[36] = {// back face
-                            0, 1, 2, 0, 2, 3,
-                            // front face
-                            4, 6, 5, 4, 7, 6,
-                            // left
+        // 12 triangles (36 indices) - CCW for all faces
+        UINT indices[36] = {// back face (z=-0.5, norm=0,0,-1)
+                            0, 3, 2, 0, 2, 1,
+                            // front face (z=0.5, norm=0,0,1)
+                            4, 5, 6, 4, 6, 7,
+                            // left face (x=-0.5, norm=-1,0,0)
                             4, 0, 3, 4, 3, 7,
-                            // right
+                            // right face (x=0.5, norm=1,0,0)
                             1, 5, 6, 1, 6, 2,
-                            // bottom
-                            4, 5, 1, 4, 1, 0,
-                            // top
-                            3, 2, 6, 3, 6, 7};
+                            // bottom face (y=-0.5, norm=0,-1,0)
+                            4, 0, 1, 4, 1, 5,
+                            // top face (y=0.5, norm=0,1,0)
+                            3, 7, 6, 3, 6, 2};
 
         D3D12_HEAP_PROPERTIES heapProps = {};
         heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
@@ -1494,9 +1494,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                                  g_cameraConstantBuffer.Get());
       }
 
-      // Draw a simple debug triangle (uses grid PSO, depth disabled)
-      RasterRenderer::DrawDebugTriangle(g_commandList.Get(), g_cameraConstantBuffer.Get());
-
       // Draw loaded meshes
       if (!g_loadedMeshes.empty() && RasterRenderer::g_meshPipelineState) {
         // Log to stderr only (controlled by verbose flag)
@@ -1541,7 +1538,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
           if (gm.materialIndex >= 0 &&
               gm.materialIndex < (int)g_loadedMaterials.size()) {
-            // Upload material data for this mesh into the persistent material CB
+            // Upload material data for this mesh into a unique slot in the material CB
+            // We'll use a simple linear allocation (i % 1024) for now.
+            // In a production engine, this would use a dynamic ring buffer.
             struct MaterialCB {
               float baseColorFactor[4];
               float params1[4];
@@ -1586,13 +1585,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             matCB.lightColor[3] = g_defaultLight.color[3];
 
             if (g_materialConstantBuffer) {
+              const UINT64 matSlotSize = (sizeof(MaterialCB) + 255) & ~255;
+              UINT64 offset = (i % 1024) * matSlotSize;
               UINT8 *pMat = nullptr;
               D3D12_RANGE readRange = {0,0};
+              // Note: For high frequency updates, persistent mapping or multiple buffers are preferred.
               if (SUCCEEDED(g_materialConstantBuffer->Map(0, &readRange, reinterpret_cast<void**>(&pMat)))) {
-                memcpy(pMat, &matCB, sizeof(matCB));
+                memcpy(pMat + offset, &matCB, sizeof(matCB));
                 g_materialConstantBuffer->Unmap(0, nullptr);
               }
-              g_commandList->SetGraphicsRootConstantBufferView(2, g_materialConstantBuffer->GetGPUVirtualAddress());
+              g_commandList->SetGraphicsRootConstantBufferView(2, g_materialConstantBuffer->GetGPUVirtualAddress() + offset);
             }
             if (g_textureDescriptorCount > 0) {
               g_commandList->SetGraphicsRootDescriptorTable(1, g_texturesGpuStart);
@@ -1731,9 +1733,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       int dy = curPos.y - centerScreen.y;
 
       const float sensitivity = g_mouseSensitivity; // radians per pixel
-      // Update yaw/pitch directly (FPS-style mouse look) - reversed axes
+      // Update yaw/pitch directly (FPS-style mouse look)
       g_camYaw += dx * sensitivity;
-      g_camPitch += dy * sensitivity;
+      g_camPitch -= dy * sensitivity;
 
       // Clamp pitch to avoid flipping
       const float maxPitch = 3.14159265f * 0.5f - 0.01f;
@@ -1828,13 +1830,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         move.y += moveR.y;
         move.z += moveR.z;
       }
-      // Vertical movement: E up, Q down (world up)
-      if (GetAsyncKeyState('E') & 0x8000) {
+      // Vertical movement: Q up, E down (world up)
+      if (GetAsyncKeyState('Q') & 0x8000) {
         move.x += worldUp.x;
         move.y += worldUp.y;
         move.z += worldUp.z;
       }
-      if (GetAsyncKeyState('Q') & 0x8000) {
+      if (GetAsyncKeyState('E') & 0x8000) {
         move.x -= worldUp.x;
         move.y -= worldUp.y;
         move.z -= worldUp.z;
@@ -1854,7 +1856,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     g_cameraData.forward[2] = (cosf(g_camPitch) * -cosf(g_camYaw));
 
     // Ensure aspect matches the window and update camera CB on GPU
-    g_cameraData.params[1] = (float)g_windowWidth / (float)g_windowHeight;
+    g_cameraData.aspect = (float)g_windowWidth / (float)g_windowHeight;
     if (g_cameraConstantBuffer) {
       UINT8 *pCam = nullptr;
       D3D12_RANGE readRange = {0, 0};
@@ -1920,17 +1922,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         ImGui::Text("Camera Up: (%.2f, %.2f, %.2f)", g_cameraData.up[0],
                     g_cameraData.up[1], g_cameraData.up[2]);
         {
-          float vFov = g_cameraData.params[0];
-          float aspect = g_cameraData.params[1];
+          float vFov = g_cameraData.fov;
+          float aspect = g_cameraData.aspect;
           float vHalfRad = vFov * 0.5f * (3.14159265f / 180.0f);
           float hFov =
               2.0f * atanf(tanf(vHalfRad) * aspect) * (180.0f / 3.14159265f);
           ImGui::Text("FOV V/H: %.1f° / %.1f°, Aspect: %.2f", vFov, hFov,
                       aspect);
         }
-        ImGui::Text("Near: %.2f, Far: %.2f", g_cameraData.params[2],
-                    g_cameraData.params[3]);
-        ImGui::Text("Intensity: %.2f", g_cameraData.params[4]);
+        ImGui::Text("Near: %.2f, Far: %.2f", g_cameraData.nearZ,
+                    g_cameraData.farZ);
+        ImGui::Text("Intensity: %.2f", g_cameraData.intensity);
 
         ImGui::Separator();
 
@@ -1938,9 +1940,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         // Horizontal-FOV slider (UI shows H, shaders use V). Convert H -> V
         // before storing.
         {
-          float aspect = g_cameraData.params[1];
+          float aspect = g_cameraData.aspect;
           // compute current horizontal FOV from stored vertical FOV
-          float curV = g_cameraData.params[0];
+          float curV = g_cameraData.fov;
           float curVHalf = curV * 0.5f * (3.14159265f / 180.0f);
           float curH =
               2.0f * atanf(tanf(curVHalf) * aspect) * (180.0f / 3.14159265f);
@@ -1951,7 +1953,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             float hHalfRad = hFovSlider * 0.5f * (3.14159265f / 180.0f);
             float vHalfRadNew = atanf(tanf(hHalfRad) / aspect);
             float vFovNew = 2.0f * vHalfRadNew * (180.0f / 3.14159265f);
-            g_cameraData.params[0] = vFovNew;
+            g_cameraData.fov = vFovNew;
             // Update camera CB
             if (g_cameraConstantBuffer) {
               UINT8 *pCam = nullptr;
@@ -1964,7 +1966,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             }
           }
         }
-        if (ImGui::SliderFloat("Intensity", &g_cameraData.params[4], 0.0f,
+        if (ImGui::SliderFloat("Intensity", &g_cameraData.intensity, 0.0f,
                                5.0f)) {
           // Update camera CB
           if (g_cameraConstantBuffer) {
@@ -1978,9 +1980,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
               fprintf(stderr,
                       "Camera params after Intensity change: fov=%.3f "
                       "aspect=%.3f near=%.3f far=%.3f intensity=%.3f\n",
-                      g_cameraData.params[0], g_cameraData.params[1],
-                      g_cameraData.params[2], g_cameraData.params[3],
-                      g_cameraData.params[4]);
+                      g_cameraData.fov, g_cameraData.aspect,
+                      g_cameraData.nearZ, g_cameraData.farZ,
+                      g_cameraData.intensity);
             }
           }
         }
@@ -2007,6 +2009,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                                0.05f)) {
           // sensitivity applied next frame via g_mouseSensitivity
         }
+
+        ImGui::Separator();
+        ImGui::Text("Sun Light");
+        ImGui::SliderFloat3("Sun Dir", g_defaultLight.dir, -1.0f, 1.0f);
+        ImGui::ColorEdit3("Sun Color", g_defaultLight.color);
+        ImGui::SliderFloat("Sun Intensity", &g_defaultLight.color[3], 0.0f, 10.0f);
 
         ImGui::Separator();
 

@@ -19,10 +19,14 @@ cbuffer Camera : register(b0)
     float _pad1;
     float3 camUp;
     float _pad2;
-    float camParams[5]; // fov, aspect, znear, zfar, intensity
+    float fov;
+    float aspect;
+    float nearZ;
+    float farZ;
+    float intensity;
 }
 
-cbuffer Material : register(b1)
+struct MaterialData
 {
     float4 baseColorFactor;
     float4 params1; // x=metallic, y=roughness, z=workflow, w=unused
@@ -34,6 +38,9 @@ cbuffer Material : register(b1)
     float4 lightColor; // Color of the light
 };
 
+// Use an SRV for materials in DXR to support multi-material indexing via InstanceID
+StructuredBuffer<MaterialData> materials : register(t17);
+
 struct Vertex {
     float3 position;
     float3 normal;
@@ -41,9 +48,9 @@ struct Vertex {
     float2 uv;
 };
 
-// Move vertex/index buffers to higher registers to avoid conflict with textures
-StructuredBuffer<Vertex> vertices : register(t17);
-StructuredBuffer<uint> indices : register(t18);
+// Offset other buffers to avoid overlap with textures and materials
+StructuredBuffer<Vertex> vertices : register(t18);
+StructuredBuffer<uint> indices : register(t19);
 
 struct RayPayload
 {

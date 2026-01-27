@@ -12,7 +12,8 @@ extern ComPtr<ID3D12Device> g_device;
 extern std::vector<Asset::GpuMesh> g_loadedMeshes;
 extern std::vector<Asset::Material> g_loadedMaterials;
 
-DirectionalLight g_defaultLight = {{0.5f, 0.5f, -1.0f, 0.0f}, {1.0f, 1.0f, 1.0f, 1.0f}};
+// Default sun light: Intensity 2.5, pointing down at 45 degree angle (0.7, 0.7, 0)
+DirectionalLight g_defaultLight = {{0.707f, 0.707f, 0.0f, 0.0f}, {1.0f, 0.95f, 0.8f, 2.5f}};
 
 void AddDefaultPlane() {
     try {

@@ -63,12 +63,21 @@ float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent, int 
 [shader("closesthit")]
 void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes attr)
 {
-    // Get texture indices
-    int baseColorIdx = textureIndices.x;
-    int metallicRoughnessIdx = textureIndices.y;
-    int normalIdx = textureIndices.z;
-    int occlusionIdx = textureIndices.w;
-    int emissiveIdx = emissiveAndPad.x;
+    // Access material for this instance from global structured buffer
+    MaterialData mat = materials[InstanceID()];
+
+    // Get material properties
+    int baseColorIdx = mat.textureIndices.x;
+    int metallicRoughnessIdx = mat.textureIndices.y;
+    int normalIdx = mat.textureIndices.z;
+    int occlusionIdx = mat.textureIndices.w;
+    int emissiveIdx = mat.emissiveAndPad.x;
+    
+    float4 baseColorFactor = mat.baseColorFactor;
+    float4 params1 = mat.params1;
+    float4 emissiveFactor = mat.emissiveFactor;
+    float4 lightDir = mat.lightDir;
+    float4 lightColor = mat.lightColor;
     
 #ifdef HIT_DEBUG
     // Encode primitive index into color for debugging
@@ -125,6 +134,8 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     roughness = max(roughness, 0.04);
     
     // Normal mapping
+    // Note: To be perfectly accurate, worldNormal/Tangent should be transformed by ObjectToWorld.
+    // However, if the instance transform is just translation/scale, we can just normalize.
     float3 N = GetNormalFromMap(uv, worldNormal, worldTangent, normalIdx);
     
     // Ambient occlusion
@@ -139,12 +150,12 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
         emissive *= textures[emissiveIdx].SampleLevel(linearSampler, uv, 0).rgb;
     }
     
-    // Calculate view direction (from surface point to camera)
-    float3 worldPos = vertices[i0].position * bary.x + vertices[i1].position * bary.y + vertices[i2].position * bary.z;
-    float3 V = normalize(camPos - worldPos);
+    // Calculate view direction correctly in world space
+    float3 P = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+    float3 V = normalize(camPos - P);
     
-    // Simple directional light
-    float3 L = normalize(-lightDir.xyz); // Light direction (negate because it points towards light)
+    // Directional light: lightDir points *towards* the light source
+    float3 L = normalize(lightDir.xyz);
     float3 H = normalize(V + L);
     
     // Calculate reflectance at normal incidence
@@ -173,13 +184,11 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     // Ambient lighting with AO
     float3 ambient = float3(0.03, 0.03, 0.03) * baseColor * ao;
     
-    // Add emissive and light color scaling
-    float3 color = ambient + Lo * lightColor.rgb * lightColor.w + emissive;
+    // Add emissive and light color scaling. Apply camera intensity.
+    float3 color = (ambient + Lo * lightColor.rgb * lightColor.w + emissive) * intensity;
     
-    // Simple tone mapping
+    // Final tone mapping and gamma (matching raster)
     color = color / (color + float3(1.0, 1.0, 1.0));
-    
-    // Gamma correction
     color = pow(color, float3(1.0/2.2, 1.0/2.2, 1.0/2.2));
     
     payload.color = float4(color, baseColorFactor.a);
