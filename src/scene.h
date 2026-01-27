@@ -15,12 +15,12 @@ struct Node {
 };
 
 // Import a glTF/glb file into the scene. Returns true on success.
-bool ImportGltf(const std::string &utf8path);
+bool ImportGltf(const std::string &utf8path, const float* rootTranslation = nullptr);
 // Open file dialog and import selected glTF
 bool ImportGltfWithDialog(HWND hwnd);
 
 // Add a default ground plane
-void AddDefaultPlane();
+void AddDefaultPlane(float offset_y = 0.0f);
 
 // Draw the Scene (Assets) panel UI. Should be called by main when assets window is visible.
 void DrawScenePanel(HWND hwnd, bool &visible);

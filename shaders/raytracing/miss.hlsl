@@ -6,5 +6,5 @@
 [shader("miss")]
 void Miss(inout RayPayload payload)
 {
-    payload.color = float4(0.2, 0.2, 0.2, 1.0); // Dark grey background
+    payload.color = float4(0.1, 0.1, 0.12, 1.0); // Match raster background
 }

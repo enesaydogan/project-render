@@ -127,7 +127,7 @@ static void CreateDefaultBuffer(const void* initData, UINT64 byteSize, ComPtr<ID
     ExecuteCommandListAndWait(cmdList.Get());
 }
 
-bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vector<Material>* outMaterials, std::vector<Texture>* outTextures)
+bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vector<Material>* outMaterials, std::vector<Texture>* outTextures, const float* rootTranslation)
 {
     std::ostringstream oss;
     oss << "Asset::LoadGltf (tinygltf) requested: " << path << "\n";
@@ -540,6 +540,13 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
 
     std::vector<float> identity(16, 0.0f);
     for (int i = 0; i < 4; ++i) identity[i * 4 + i] = 1.0f;
+    
+    // Apply initial root translation if provided
+    if (rootTranslation) {
+        identity[12] = rootTranslation[0];
+        identity[13] = rootTranslation[1];
+        identity[14] = rootTranslation[2];
+    }
 
     const auto& scene = model.scenes[model.defaultScene >= 0 ? model.defaultScene : 0];
     for (int nodeIdx : scene.nodes) Traverse(Traverse, nodeIdx, identity);

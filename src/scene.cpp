@@ -28,13 +28,13 @@ static std::string s_lastStatus;
 
 const std::string& LastStatus() { return s_lastStatus; }
 
-bool ImportGltf(const std::string &utf8path) {
+bool ImportGltf(const std::string &utf8path, const float* rootTranslation) {
     try {
         fprintf(stderr, "Scene::ImportGltf: importing %s\n", utf8path.c_str());
         std::vector<Asset::GpuMesh> meshes;
         std::vector<Asset::Material> materials;
         std::vector<Asset::Texture> textures;
-        bool ok = Asset::LoadGltf(utf8path, meshes, &materials, &textures);
+        bool ok = Asset::LoadGltf(utf8path, meshes, &materials, &textures, rootTranslation);
         if (!ok) {
             s_lastStatus = std::string("Load failed: ") + utf8path;
             fprintf(stderr, "%s\n", s_lastStatus.c_str());
@@ -146,15 +146,15 @@ void DeleteNode(size_t index) {
     RebuildAccelerationStructures();
 }
 
-void AddDefaultPlane() {
+void AddDefaultPlane(float offset_y) {
     try {
         // plane 10x10 centered at origin on XZ plane (Y up)
         const float half = 5.0f;
         Asset::Vertex verts[4] = {
-            {{-half, 0.0f, -half}, {0.0f,1.0f,0.0f}, {1,0,0,1}, {0.0f, 0.0f}},
-            {{ half, 0.0f, -half}, {0.0f,1.0f,0.0f}, {1,0,0,1}, {1.0f, 0.0f}},
-            {{ half, 0.0f,  half}, {0.0f,1.0f,0.0f}, {1,0,0,1}, {1.0f, 1.0f}},
-            {{-half, 0.0f,  half}, {0.0f,1.0f,0.0f}, {1,0,0,1}, {0.0f, 1.0f}}
+            {{-half, offset_y, -half}, {0.0f,1.0f,0.0f}, {1,0,0,1}, {0.0f, 0.0f}},
+            {{ half, offset_y, -half}, {0.0f,1.0f,0.0f}, {1,0,0,1}, {1.0f, 0.0f}},
+            {{ half, offset_y,  half}, {0.0f,1.0f,0.0f}, {1,0,0,1}, {1.0f, 1.0f}},
+            {{-half, offset_y,  half}, {0.0f,1.0f,0.0f}, {1,0,0,1}, {0.0f, 1.0f}}
         };
         // Use CCW winding that points UP (0-3-2 and 0-2-1)
         UINT indices[6] = {0, 3, 2, 0, 2, 1};
@@ -242,33 +242,57 @@ std::vector<Asset::GpuMesh> GetActiveMeshes() {
 void DrawScenePanel(HWND hwnd, bool &visible) {
     if (!visible) return;
     if (ImGui::Begin("Scene", &visible)) {
-        ImGui::Columns(2, "scene_cols", false);
-        if (ImGui::Button("Import GLB...")) {
+        // Action area
+        if (ImGui::Button("Import GLB...", ImVec2(ImGui::GetContentRegionAvail().x, 0))) {
             ImportGltfWithDialog(hwnd);
         }
-        ImGui::NextColumn();
 
-        // Scene outline
-        ImGui::Text("Hierarchy");
         ImGui::Separator();
-        for (size_t i = 0; i < s_nodes.size(); ++i) {
-            ImGui::PushID((int)i);
-            bool selected = s_nodes[i].selected;
-            if (ImGui::Selectable(s_nodes[i].name.c_str(), selected)) {
-                SelectNode(i);
+        ImGui::Text("Hierarchy");
+
+        // Use a child for the list area to allow scrolling independently of the header/footer
+        if (ImGui::BeginChild("HierarchyRegion", ImVec2(0, -ImGui::GetFrameHeightWithSpacing() * 2), true)) {
+            if (ImGui::BeginTable("HierarchyTable", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_NoSavedSettings)) {
+                ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 65.0f);
+                // ImGui::TableHeadersRow();
+
+                for (size_t i = 0; i < s_nodes.size(); ++i) {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    
+                    ImGui::PushID((int)i);
+                    bool selected = s_nodes[i].selected;
+                    if (ImGui::Selectable(s_nodes[i].name.c_str(), selected, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowItemOverlap)) {
+                        SelectNode(i);
+                    }
+
+                    ImGui::TableSetColumnIndex(1);
+                    // Minimalist red button for deletion
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.4f, 0.1f, 0.1f, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.1f, 0.1f, 1.0f));
+                    if (ImGui::Button("Delete", ImVec2(-FLT_MIN, 0))) {
+                        DeleteNode(i);
+                        ImGui::PopStyleColor(2);
+                        ImGui::PopID();
+                        ImGui::EndTable();
+                        ImGui::EndChild();
+                        ImGui::End();
+                        return; // Refresh state next frame
+                    }
+                    ImGui::PopStyleColor(2);
+                    ImGui::PopID();
+                }
+                ImGui::EndTable();
             }
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Delete")) {
-                DeleteNode(i);
-                ImGui::PopID();
-                break; // indices changed
-            }
-            ImGui::PopID();
         }
-        ImGui::Columns(1);
+        ImGui::EndChild();
 
-        if (!s_lastStatus.empty()) ImGui::TextWrapped("Status: %s", s_lastStatus.c_str());
-
+        if (!s_lastStatus.empty()) {
+            ImGui::Separator();
+            ImGui::TextDisabled("Status:");
+            ImGui::TextWrapped("%s", s_lastStatus.c_str());
+        }
     }
     ImGui::End();
 }

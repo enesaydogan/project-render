@@ -289,7 +289,9 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
 void BuildAccelerationStructures(const std::vector<Asset::GpuMesh>& meshes) {
     if (!g_rayTracingSupported || !s_dxrDevice) return;
     if (meshes.empty()) {
-        fprintf(stderr, "DxrRenderer: BuildAccelerationStructures called with empty mesh list\n");
+        if (g_verboseRenderLogs) fprintf(stderr, "DxrRenderer: Empty scene - clearing TLAS\n");
+        s_tlas.result = nullptr;
+        s_allBLAS.clear();
         return;
     }
 
@@ -478,9 +480,19 @@ bool IsReady() {
 }
 
 bool RenderFrame(ID3D12GraphicsCommandList* commandListBase, UINT frameIndex, ID3D12Resource* renderTarget, D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle, ID3D12Resource* cameraCB, ID3D12Resource* materialCB, D3D12_GPU_DESCRIPTOR_HANDLE texturesGpuStart, UINT textureDescriptorCount, const std::vector<Asset::GpuMesh>& meshes, ID3D12Resource* meshDataSB) {
-    if (!IsReady()) return false;
-    if (!renderTarget) { fprintf(stderr, "DxrRenderer: RenderFrame called with null renderTarget\n"); return false; }
-    if (!s_outputUAV || !s_srvHeap) { fprintf(stderr, "DxrRenderer: Output UAV or heap not created\n"); return false; }
+    if (!g_rayTracingSupported || !s_rtStateObject || !s_srvHeap) return false;
+    if (!renderTarget) return false;
+
+    // Handle empty scene or missing TLAS gracefully
+    if (meshes.empty() || !s_tlas.result) {
+        TransitionResource(commandListBase, renderTarget, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        FLOAT clearColor[] = { 0.1f, 0.1f, 0.12f, 1.0f };
+        commandListBase->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+        commandListBase->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+        return true;
+    }
+
+    if (!s_outputUAV) return false;
 
     ComPtr<ID3D12GraphicsCommandList4> dxrList;
     if (FAILED(commandListBase->QueryInterface(IID_PPV_ARGS(&dxrList)))) return false;

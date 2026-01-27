@@ -2,6 +2,8 @@
 #include <d3d12.h>
 #include <wrl.h>
 #include <vector>
+#include "assets/asset_loader.h"
+
 using Microsoft::WRL::ComPtr;
 
 namespace RasterRenderer {
@@ -9,6 +11,7 @@ namespace RasterRenderer {
   void CreateGridResources(ID3D12Device* device, float gridThickness);
   void RecreateMeshPipeline(ID3D12Device* device, ID3D12RootSignature* rootSig);
   void DrawGrid(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB);
+  void DrawSceneDepthOnly(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB, const std::vector<Asset::GpuMesh>& meshes);
 
   // Expose some resources so main can inspect them (if necessary)
   extern ComPtr<ID3D12Resource> g_gridVertexBuffer;
@@ -16,4 +19,5 @@ namespace RasterRenderer {
   extern UINT g_gridVertexCount;
   extern ComPtr<ID3D12PipelineState> g_gridPipelineState;
   extern ComPtr<ID3D12PipelineState> g_meshPipelineState;
+  extern ComPtr<ID3D12PipelineState> g_depthOnlyPipelineState;
 }
