@@ -122,12 +122,12 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[0].Descriptor.ShaderRegister = 0; params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     D3D12_DESCRIPTOR_RANGE uavRange = {}; uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; uavRange.NumDescriptors = 1; uavRange.BaseShaderRegister = 0;
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; params[1].DescriptorTable.NumDescriptorRanges = 1; params[1].DescriptorTable.pDescriptorRanges = &uavRange; params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    static D3D12_DESCRIPTOR_RANGE srvRange = {}; srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; srvRange.NumDescriptors = 8; srvRange.BaseShaderRegister = 1; srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+    static D3D12_DESCRIPTOR_RANGE srvRange = {}; srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; srvRange.NumDescriptors = 16; srvRange.BaseShaderRegister = 1; srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
     params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; params[2].DescriptorTable.NumDescriptorRanges = 1; params[2].DescriptorTable.pDescriptorRanges = &srvRange; params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV; params[3].Descriptor.ShaderRegister = 0; params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV; params[4].Descriptor.ShaderRegister = 1; params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    params[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[5].Descriptor.ShaderRegister = 9; params[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    params[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[6].Descriptor.ShaderRegister = 10; params[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[5].Descriptor.ShaderRegister = 17; params[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[6].Descriptor.ShaderRegister = 18; params[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rootDesc = {};
     rootDesc.NumParameters = 7; rootDesc.pParameters = params; rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
@@ -438,19 +438,29 @@ bool RenderFrame(ID3D12GraphicsCommandList* commandListBase, UINT frameIndex, ID
     dxrList->SetComputeRootSignature(s_rtGlobalRootSignature.Get());
     if (!s_tlas.result) { fprintf(stderr, "DxrRenderer: TLAS result missing\n"); return false; }
     dxrList->SetComputeRootShaderResourceView(0, s_tlas.result->GetGPUVirtualAddress());
-    // Bind the single CBV/SRV/UAV heap (preferred) so root descriptor tables are valid.
-    if (g_cbvSrvAllocator.Heap()) {
+    // Bind the appropriate descriptor heap
+    if (s_mergedHeap) {
+        // Use merged heap that contains texture SRVs + output UAV
+        ID3D12DescriptorHeap* heaps[] = { s_mergedHeap.Get() };
+        dxrList->SetDescriptorHeaps(1, heaps);
+        // Output UAV is at the end of the merged heap
+        dxrList->SetComputeRootDescriptorTable(1, s_outputUAVGpuHandle);
+        // Textures start at the beginning of the merged heap
+        if (textureDescriptorCount > 0) {
+            D3D12_GPU_DESCRIPTOR_HANDLE texStart = s_mergedHeap->GetGPUDescriptorHandleForHeapStart();
+            dxrList->SetComputeRootDescriptorTable(2, texStart);
+        }
+    } else if (g_cbvSrvAllocator.Heap()) {
+        // Fallback to global heap
         ID3D12DescriptorHeap* heaps[] = { g_cbvSrvAllocator.Heap() };
         dxrList->SetDescriptorHeaps(1, heaps);
-        // Output UAV was allocated in this heap
         dxrList->SetComputeRootDescriptorTable(1, s_outputUAVGpuHandle);
         if (textureDescriptorCount > 0) dxrList->SetComputeRootDescriptorTable(2, texturesGpuStart);
     } else {
-        // Fallback: use the dedicated UAV heap
+        // Last resort: dedicated UAV heap
         ID3D12DescriptorHeap* heaps[] = { s_uavHeap.Get() };
         dxrList->SetDescriptorHeaps(1, heaps);
         dxrList->SetComputeRootDescriptorTable(1, s_outputUAVGpuHandle);
-        if (textureDescriptorCount > 0 && g_cbvSrvAllocator.Heap()) dxrList->SetComputeRootDescriptorTable(2, texturesGpuStart);
     }
     if (cameraCB) dxrList->SetComputeRootConstantBufferView(3, cameraCB->GetGPUVirtualAddress());
     if (materialCB) dxrList->SetComputeRootConstantBufferView(4, materialCB->GetGPUVirtualAddress());

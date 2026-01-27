@@ -66,7 +66,7 @@ static void ExecuteCommandListAndWait(ID3D12GraphicsCommandList* cmdList)
     WaitForQueueIdle(s_queue.Get());
 }
 
-static void CreateDefaultBuffer(const void* initData, UINT64 byteSize, ComPtr<ID3D12Resource>& defaultBuffer, ComPtr<ID3D12Resource>& uploadBuffer)
+static void CreateDefaultBuffer(const void* initData, UINT64 byteSize, ComPtr<ID3D12Resource>& defaultBuffer, ComPtr<ID3D12Resource>& uploadBuffer, D3D12_RESOURCE_STATES finalState = D3D12_RESOURCE_STATE_GENERIC_READ)
 {
     D3D12_HEAP_PROPERTIES defaultHeapProps = {};
     defaultHeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -115,13 +115,13 @@ static void CreateDefaultBuffer(const void* initData, UINT64 byteSize, ComPtr<ID
     // Copy from upload to default
     cmdList->CopyBufferRegion(defaultBuffer.Get(), 0, uploadBuffer.Get(), 0, byteSize);
 
-    // Transition default buffer to GENERIC_READ
+    // Transition default buffer to the requested final state (defaults to GENERIC_READ)
     D3D12_RESOURCE_BARRIER barrier = {};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     barrier.Transition.pResource = defaultBuffer.Get();
     barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_GENERIC_READ;
+    barrier.Transition.StateAfter = finalState;
     cmdList->ResourceBarrier(1, &barrier);
 
     ExecuteCommandListAndWait(cmdList.Get());
@@ -625,8 +625,8 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
             ComPtr<ID3D12Resource> vbUpload;
             ComPtr<ID3D12Resource> ibUpload;
 
-            CreateDefaultBuffer(vertices.data(), sizeof(Vertex) * vertices.size(), gm.vertexBuffer, vbUpload);
-            CreateDefaultBuffer(indices.data(), sizeof(uint32_t) * indices.size(), gm.indexBuffer, ibUpload);
+            CreateDefaultBuffer(vertices.data(), sizeof(Vertex) * vertices.size(), gm.vertexBuffer, vbUpload, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+            CreateDefaultBuffer(indices.data(), sizeof(uint32_t) * indices.size(), gm.indexBuffer, ibUpload, D3D12_RESOURCE_STATE_INDEX_BUFFER);
 
             gm.vbView.BufferLocation = gm.vertexBuffer->GetGPUVirtualAddress();
             gm.vbView.SizeInBytes = static_cast<UINT>(sizeof(Vertex) * vertices.size());
