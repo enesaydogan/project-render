@@ -12,7 +12,7 @@ namespace DxrRenderer {
   // Attach command queue and synchronization primitives once created
   void SetCommandQueue(ID3D12CommandQueue* commandQueue, ID3D12Fence* fence, UINT64* fenceValues, UINT* frameIndexPtr, HANDLE fenceEvent);
   // Build pipeline (compiles shaders and creates state object)
-  void CreateRayTracingPipeline();
+  void CreateRayTracingPipeline(UINT width, UINT height);
   // Build acceleration structures for given meshes
   void BuildAccelerationStructures(const std::vector<Asset::GpuMesh>& meshes);
   // Return true if state object and TLAS/output are ready for rendering

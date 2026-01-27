@@ -30,6 +30,8 @@ cbuffer Material : register(b1)
     float4 emissiveFactor; // rgb emissive
     int4 textureIndices; // x=baseColor, y=metallicRoughness, z=normal, w=occlusion
     int4 emissiveAndPad; // x=emissiveTexIndex, yzw=padding
+    float4 lightDir; // Direction of the light
+    float4 lightColor; // Color of the light
 };
 
 struct Vertex {

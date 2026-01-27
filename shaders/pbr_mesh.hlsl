@@ -17,6 +17,8 @@ cbuffer MaterialCB : register(b1)
     float4 emissiveFactor; // rgb emissive
     int4 textureIndices; // x=baseColor, y=metallicRoughness, z=normal, w=occlusion
     int4 emissiveAndPad; // x=emissiveTexIndex, yzw=padding
+    float4 lightDir; // xyz = light direction (pointing towards light)
+    float4 lightColor; // rgb + intensity in .w
 };
 
 // Texture array - we'll bind multiple textures in a descriptor table
@@ -181,8 +183,8 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     }
     
     // Simple directional light setup
-    float3 V = normalize(float3(0.0, 0.0, 1.0)); // View direction
-    float3 L = normalize(float3(0.5, 0.5, -1.0)); // Light direction
+    float3 V = normalize(float3(0.0, 0.0, 1.0)); // View direction (approx)
+    float3 L = normalize(lightDir.xyz);
     float3 H = normalize(V + L);
     
     // Calculate reflectance at normal incidence
@@ -211,8 +213,8 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     // Ambient lighting with AO
     float3 ambient = float3(0.03, 0.03, 0.03) * baseColor * ao;
     
-    // Add emissive
-    float3 color = ambient + Lo + emissive;
+    // Add emissive and light color scaling
+    float3 color = ambient + Lo * lightColor.rgb * lightColor.w + emissive;
     
     // Simple tone mapping
     color = color / (color + float3(1.0, 1.0, 1.0));
