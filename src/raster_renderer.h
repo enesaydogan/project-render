@@ -4,6 +4,8 @@
 #include <vector>
 #include "assets/asset_loader.h"
 
+namespace Scene { struct Instance; }
+
 using Microsoft::WRL::ComPtr;
 
 namespace RasterRenderer {
@@ -11,7 +13,7 @@ namespace RasterRenderer {
   void CreateGridResources(ID3D12Device* device, float gridThickness);
   void RecreateMeshPipeline(ID3D12Device* device, ID3D12RootSignature* rootSig);
   void DrawGrid(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB);
-  void DrawSceneDepthOnly(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB, const std::vector<Asset::GpuMesh>& meshes);
+  void DrawSceneDepthOnly(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB, const std::vector<Scene::Instance>& instances);
 
   // Expose some resources so main can inspect them (if necessary)
   extern ComPtr<ID3D12Resource> g_gridVertexBuffer;

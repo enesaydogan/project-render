@@ -736,7 +736,7 @@ bool InitD3D12(HWND hwnd) {
 
   // --- Create a root signature with CBV b0 (vertex), descriptor table t0
   // (SRV), and CBV b1 (pixel material) ---
-  D3D12_ROOT_PARAMETER rootParameters[3] = {};
+  D3D12_ROOT_PARAMETER rootParameters[4] = {};
   // b0 - transform CBV for vertex shader AND pixel shader (needed for view direction)
   rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
   rootParameters[0].Descriptor.ShaderRegister = 0;
@@ -760,6 +760,12 @@ bool InitD3D12(HWND hwnd) {
   rootParameters[2].Descriptor.ShaderRegister = 1;
   rootParameters[2].Descriptor.RegisterSpace = 0;
   rootParameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+  // b2 - world matrix as root constants for vertex shader
+  rootParameters[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+  rootParameters[3].Constants.ShaderRegister = 2;
+  rootParameters[3].Constants.RegisterSpace = 0;
+  rootParameters[3].Constants.Num32BitValues = 16;
+  rootParameters[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
 
   // static sampler for textures
   D3D12_STATIC_SAMPLER_DESC sampler = {};
@@ -1492,6 +1498,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
         // Update Mesh Structured Buffer for DXR
         auto activeMeshes = Scene::GetActiveMeshes();
+        auto sceneInstances = Scene::GetInstances();
         if (g_meshStructuredBuffer && !activeMeshes.empty()) {
             struct MeshData { int materialIndex; int vbIndex; int ibIndex; int pad; };
             UINT8* pData = nullptr;
@@ -1523,7 +1530,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             // 1. Scene Depth Pre-pass (populate depth buffer for grid occlusion)
             g_commandList->OMSetRenderTargets(0, nullptr, FALSE, &dsvHandle);
             g_commandList->SetGraphicsRootSignature(g_rootSignature.Get());
-            RasterRenderer::DrawSceneDepthOnly(g_commandList.Get(), g_cameraConstantBuffer.Get(), activeMeshes);
+            RasterRenderer::DrawSceneDepthOnly(g_commandList.Get(), g_cameraConstantBuffer.Get(), sceneInstances);
 
             // 2. Draw Grid (test against the populated depth buffer)
             g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
@@ -1587,10 +1594,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       }
 
       // Draw loaded meshes
-      if (!g_loadedMeshes.empty() && RasterRenderer::g_meshPipelineState) {
+      auto sceneInstances = Scene::GetInstances();
+      if (!sceneInstances.empty() && RasterRenderer::g_meshPipelineState) {
         // Log to stderr only (controlled by verbose flag)
         if (g_verboseRenderLogs)
-          fprintf(stderr, "Drawing %zu meshes\n", g_loadedMeshes.size());
+          fprintf(stderr, "Drawing %zu instances\n", sceneInstances.size());
         // Use the RasterRenderer mesh PSO (may output debug depth/uv depending on compile defines)
         g_commandList->SetPipelineState(RasterRenderer::g_meshPipelineState.Get());
         g_commandList->IASetPrimitiveTopology(
@@ -1605,12 +1613,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
               0, g_cameraConstantBuffer->GetGPUVirtualAddress());
         }
 
-        // Draw all meshes (not just the first one)
-        for (size_t i = 0; i < g_loadedMeshes.size(); ++i) {
-          const auto &gm = g_loadedMeshes[i];
+        // Draw all instances
+        for (size_t i = 0; i < sceneInstances.size(); ++i) {
+          const auto &inst = sceneInstances[i];
+          const auto &gm = inst.mesh;
           // Skip meshes that have been deleted or not properly initialized
           if (!gm.vertexBuffer || !gm.indexBuffer || gm.ibView.SizeInBytes == 0)
             continue;
+
+          // Set instance transform
+          g_commandList->SetGraphicsRoot32BitConstants(3, 16, inst.transform, 0);
+
+          // material binding... (existing logic needed)
+          if (gm.materialIndex >= 0 && (size_t)gm.materialIndex < g_loadedMaterials.size()) {
+              // ...
+          }
 
           if (g_verboseRenderLogs) {
             fprintf(stderr, "Mesh[%zu]: vb=0x%016llx vbSize=%u vbStride=%u ib=0x%016llx ibSize=%u verts=%u idx=%u mat=%d\n",
@@ -1938,6 +1955,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       } else {
           tabDown = false;
       }
+
+      // Selection: LBUTTON
+      static bool lbtnDown = false;
+      if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000)) {
+          if (!lbtnDown) {
+              Scene::UpdateSelection((float)g_windowWidth, (float)g_windowHeight);
+              lbtnDown = true;
+          }
+      } else {
+          lbtnDown = false;
+      }
     }
 
     if (move.x != 0 || move.y != 0 || move.z != 0) {
@@ -2233,6 +2261,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       // Scene panel handled by Scene module
       Scene::DrawScenePanel(g_hwnd, g_showAssetsWindow);
     }
+
+    Scene::DrawGizmo();
 
     //fprintf(stderr, "MainLoop: ImGui::Render start\n");
     ImGui::Render();

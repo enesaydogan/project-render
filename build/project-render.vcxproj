@@ -432,6 +432,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="D:\project-render\src\file_import.cpp" />
     <ClCompile Include="D:\project-render\src\scene.cpp" />
     <ClCompile Include="D:\project-render\src\light.cpp" />
+    <ClCompile Include="D:\project-render\src\ImGuizmo.cpp" />
   </ItemGroup>
   <ItemGroup />
   <ItemGroup>

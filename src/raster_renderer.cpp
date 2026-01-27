@@ -1,3 +1,5 @@
+#define NOMINMAX
+#include "scene.h"
 #include "raster_renderer.h"
 #include "dxc_wrapper.h"
 #include "d3d12_helpers.h"
@@ -258,15 +260,20 @@ void DrawGrid(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB) {
     cmdList->DrawInstanced(g_gridVertexCount, 1, 0, 0);
 }
 
-void DrawSceneDepthOnly(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB, const std::vector<Asset::GpuMesh>& meshes) {
-    if (!g_depthOnlyPipelineState || meshes.empty()) return;
+void DrawSceneDepthOnly(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB, const std::vector<Scene::Instance>& instances) {
+    if (!g_depthOnlyPipelineState || instances.empty()) return;
     
     cmdList->SetPipelineState(g_depthOnlyPipelineState.Get());
     cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     if (cameraCB) cmdList->SetGraphicsRootConstantBufferView(0, cameraCB->GetGPUVirtualAddress());
 
-    for (const auto& gm : meshes) {
+    for (const auto& inst : instances) {
+        const auto& gm = inst.mesh;
         if (!gm.vertexBuffer || !gm.indexBuffer) continue;
+
+        // Set World Matrix (Parameter index 3, register b2)
+        cmdList->SetGraphicsRoot32BitConstants(3, 16, inst.transform, 0);
+
         cmdList->IASetVertexBuffers(0, 1, &gm.vbView);
         cmdList->IASetIndexBuffer(&gm.ibView);
         cmdList->DrawIndexedInstanced(gm.indexCount, 1, 0, 0, 0);

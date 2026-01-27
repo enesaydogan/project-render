@@ -3,6 +3,10 @@
 #include <vector>
 #include <wrl.h>
 #include "assets/asset_loader.h"
+
+// Forward declare Scene types to avoid circular dependency if ever needed
+namespace Scene { struct Instance; }
+
 using Microsoft::WRL::ComPtr;
 
 // Declarations for DXR renderer helpers
@@ -13,8 +17,8 @@ namespace DxrRenderer {
   void SetCommandQueue(ID3D12CommandQueue* commandQueue, ID3D12Fence* fence, UINT64* fenceValues, UINT* frameIndexPtr, HANDLE fenceEvent);
   // Build pipeline (compiles shaders and creates state object)
   void CreateRayTracingPipeline(UINT width, UINT height);
-  // Build acceleration structures for given meshes
-  void BuildAccelerationStructures(const std::vector<Asset::GpuMesh>& meshes);
+  // Build acceleration structures for given meshes and instances
+  void BuildAccelerationStructures(const std::vector<Asset::GpuMesh>& meshes, const std::vector<Scene::Instance>& instances);
   // Return true if state object and TLAS/output are ready for rendering
   bool IsReady();
   // Perform DXR render (dispatch rays, copy to render target). Returns true if executed.

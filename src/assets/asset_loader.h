@@ -17,6 +17,10 @@ namespace Asset {
         UINT vertexCount = 0;
         UINT indexCount = 0;
         int materialIndex = -1; // index into materials array if provided
+
+        // Bounding box
+        float minBound[3]={0,0,0};
+        float maxBound[3]={0,0,0};
     };
 
     // Interleaved vertex layout used by the loader

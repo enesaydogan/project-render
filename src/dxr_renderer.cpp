@@ -2,6 +2,7 @@
 #include "dxc_wrapper.h"
 #include "dxr_helpers.h"
 #include "d3d12_helpers.h"
+#include "scene.h"
 #include <wrl.h>
 #include <vector>
 #include <cstdio>
@@ -286,9 +287,9 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     }
 }
 
-void BuildAccelerationStructures(const std::vector<Asset::GpuMesh>& meshes) {
+void BuildAccelerationStructures(const std::vector<Asset::GpuMesh>& meshes, const std::vector<Scene::Instance>& instances) {
     if (!g_rayTracingSupported || !s_dxrDevice) return;
-    if (meshes.empty()) {
+    if (meshes.empty() || instances.empty()) {
         if (g_verboseRenderLogs) fprintf(stderr, "DxrRenderer: Empty scene - clearing TLAS\n");
         s_tlas.result = nullptr;
         s_allBLAS.clear();
@@ -392,23 +393,30 @@ void BuildAccelerationStructures(const std::vector<Asset::GpuMesh>& meshes) {
 
         // TLAS
         std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instanceDescs;
-        for (size_t i=0;i<s_allBLAS.size();++i) {
+        for (const auto& sceneInst : instances) {
+            // Find which BLAS corresponds to this mesh
+            size_t meshIdx = (size_t)-1;
+            for(size_t i=0; i<meshes.size(); ++i) {
+                if (meshes[i].vertexBuffer == sceneInst.mesh.vertexBuffer) {
+                    meshIdx = i;
+                    break;
+                }
+            }
+            if (meshIdx == (size_t)-1) continue;
+
             D3D12_RAYTRACING_INSTANCE_DESC inst = {};
-            // Explicit Identity Transform (3x4 Row-Major)
-            // 1 0 0 0
-            // 0 1 0 0
-            // 0 0 1 0
-            memset(inst.Transform, 0, sizeof(inst.Transform));
-            inst.Transform[0][0] = 1.0f;
-            inst.Transform[1][1] = 1.0f;
-            inst.Transform[2][2] = 1.0f;
-            
-            // Set InstanceID to the mesh index for indexing into VBs/IBs and MeshData
-            inst.InstanceID = (UINT)s_allBLAS[i].meshId;
+            // Convert Column-Major 4x4 to Row-Major 3x4
+            // D3D12_RAYTRACING_INSTANCE_DESC expects 3x4 Row-Major
+            const float* m = sceneInst.transform;
+            inst.Transform[0][0] = m[0]; inst.Transform[0][1] = m[4]; inst.Transform[0][2] = m[8];  inst.Transform[0][3] = m[12];
+            inst.Transform[1][0] = m[1]; inst.Transform[1][1] = m[5]; inst.Transform[1][2] = m[9];  inst.Transform[1][3] = m[13];
+            inst.Transform[2][0] = m[2]; inst.Transform[2][1] = m[6]; inst.Transform[2][2] = m[10]; inst.Transform[2][3] = m[14];
+
+            inst.InstanceID = (UINT)meshIdx; // Use mesh index for shader binding
             inst.InstanceMask = 0xFF;
             inst.InstanceContributionToHitGroupIndex = 0;
             inst.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
-            inst.AccelerationStructure = s_allBLAS[i].buffers.result->GetGPUVirtualAddress();
+            inst.AccelerationStructure = s_allBLAS[meshIdx].buffers.result->GetGPUVirtualAddress();
             instanceDescs.push_back(inst);
         }
 

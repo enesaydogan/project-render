@@ -602,6 +602,9 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
             // Gather interleaved vertices
             std::vector<Vertex> vertices;
             vertices.reserve(vertexCount);
+            float minBound[3] = {FLT_MAX, FLT_MAX, FLT_MAX};
+            float maxBound[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
+
             for (size_t i = 0; i < vertexCount; ++i) {
                 float p[3] = {0,0,0};
                 ReadVec3(posData + i * posStride, posComp, p);
@@ -630,6 +633,12 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
                 vv.pos[1] = p[0] * worldMat[1] + p[1] * worldMat[5] + p[2] * worldMat[9] + worldMat[13];
                 vv.pos[2] = p[0] * worldMat[2] + p[1] * worldMat[6] + p[2] * worldMat[10] + worldMat[14];
                 
+                // Update bounds
+                for (int c = 0; c < 3; ++c) {
+                    if (vv.pos[c] < minBound[c]) minBound[c] = vv.pos[c];
+                    if (vv.pos[c] > maxBound[c]) maxBound[c] = vv.pos[c];
+                }
+
                 // Normal: N' = M_3x3 * N
                 vv.normal[0] = nx * worldMat[0] + ny * worldMat[4] + nz * worldMat[8];
                 vv.normal[1] = nx * worldMat[1] + ny * worldMat[5] + nz * worldMat[9];
@@ -692,6 +701,11 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
             gm.vertexCount = static_cast<UINT>(vertices.size());
             gm.indexCount = static_cast<UINT>(indices.size());
             gm.materialIndex = (prim.material >= 0) ? prim.material : -1;
+
+            for (int c = 0; c < 3; ++c) {
+                gm.minBound[c] = minBound[c];
+                gm.maxBound[c] = maxBound[c];
+            }
 
             outMeshes.push_back(std::move(gm));
 

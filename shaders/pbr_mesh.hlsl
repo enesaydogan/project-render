@@ -20,6 +20,11 @@ cbuffer CameraCB : register(b0)
     float4 ambientColor; // rgb + weight in .w
 };
 
+cbuffer WorldCB : register(b2)
+{
+    float4x4 world;
+};
+
 cbuffer MaterialCB : register(b1)
 {
     float4 baseColorFactor;
@@ -53,14 +58,15 @@ PSInputMesh VSMainMesh(VSInputMesh input)
 {
     PSInputMesh o;
 
-    // World-space position (match TLAS instance scale)
-    float3 worldPos = input.position;
+    // World-space position
+    float4 worldPos = mul(world, float4(input.position, 1.0f));
+    float3 outWorldPos = worldPos.xyz;
 
     // Use a standard right-handed view basis for the camera
     float3 R = normalize(cross(forward, up)); // Right (F x U in RH with F pointing away)
     float3 U = normalize(cross(R, forward));  // Up (orthonormal)
     
-    float3 rel = worldPos - pos;
+    float3 rel = outWorldPos - pos;
     float3 viewPos;
     viewPos.x = dot(rel, R);
     viewPos.y = dot(rel, U);
@@ -81,9 +87,9 @@ PSInputMesh VSMainMesh(VSInputMesh input)
         viewPos.z
     );
 
-    o.worldPos = worldPos;
-    o.normal = input.normal;
-    o.tangent = input.tangent;
+    o.worldPos = outWorldPos;
+    o.normal = mul((float3x3)world, input.normal);
+    o.tangent = float4(mul((float3x3)world, input.tangent.xyz), input.tangent.w);
     o.uv = input.uv;
     return o;
 }
