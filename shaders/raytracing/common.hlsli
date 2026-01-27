@@ -14,7 +14,7 @@ SamplerState linearSampler : register(s0);
 cbuffer Camera : register(b0)
 {
     float3 camPos;
-    float _pad0;
+    float debugMode;
     float3 camForward;
     float _pad1;
     float3 camUp;
@@ -35,12 +35,12 @@ cbuffer Camera : register(b0)
 
 struct MaterialData
 {
-    float4 baseColorFactor;
-    float4 params1; // x=metallic, y=roughness, z=workflow, w=unused
-    float4 specular; // rgb specular for spec-gloss workflow
-    float4 emissiveFactor; // rgb emissive
-    int4 textureIndices; // x=baseColor, y=metallicRoughness, z=normal, w=occlusion
-    int4 emissiveAndPad; // x=emissiveTexIndex, yzw=padding
+    float4 diffuseColor;
+    float4 reflectionColor;     // w = reflectionGlossiness
+    float4 refractionColor;     // w = refractionGlossiness
+    float4 emissiveColor;       // w = ior
+    int4 textureIndices;        // x=diffuse, y=reflect, z=normal, w=refract
+    int4 emissiveAndPad;        // x=emissive, y=occlusion
 };
 
 // Use an SRV for materials in DXR to support multi-material indexing via InstanceID

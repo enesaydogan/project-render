@@ -6,7 +6,7 @@ using Microsoft::WRL::ComPtr;
 
 struct CameraCB {
   float pos[3];
-  float _pad0;
+  float debugMode; // used to be _pad0
   float forward[3];
   float _pad1;
   float up[3];

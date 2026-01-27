@@ -40,19 +40,23 @@ namespace Asset {
     };
     
     struct Material {
-        float baseColorFactor[4] = {1,1,1,1};
-        float metallicFactor = 1.0f;
-        float roughnessFactor = 1.0f;
-        // Specular-Glossiness workflow
-        float specularFactor[3] = {1.0f,1.0f,1.0f};
-        float glossinessFactor = 1.0f;
-        // 0 = metallic-roughness, 1 = specular-glossiness
-        int workflow = 0;
-        int baseColorTexture = -1;
-        int metallicRoughnessTexture = -1;
+        char name[64] = "Material";
+        float diffuseColor[4] = {1,1,1,1};
+        float reflectionColor[4] = {0,0,0,1};
+        float reflectionGlossiness = 0.8f;
+        float refractionColor[4] = {0,0,0,1};
+        float refractionGlossiness = 1.0f;
+        float ior = 1.6f;
+        float emissiveColor[4] = {0,0,0,1};
+        
+        // V-Ray / Glossiness workflow texture mapping
+        int diffuseTexture = -1; // Was baseColor
+        int reflectionTexture = -1; // Was metallicRoughness (re-used often) or specular
+        int refractionTexture = -1; 
         int normalTexture = -1;
-        int occlusionTexture = -1;
         int emissiveTexture = -1;
+        int occlusionTexture = -1;
+
         bool doubleSided = false;
         std::string alphaMode = "OPAQUE";
     };

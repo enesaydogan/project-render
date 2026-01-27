@@ -12,6 +12,7 @@ target_sources(project-render PRIVATE
     src/raster_renderer.cpp 
     src/file_import.cpp 
     src/scene.cpp 
+    src/material_editor.cpp
     src/light.cpp
     src/ImGuizmo.cpp
 )
