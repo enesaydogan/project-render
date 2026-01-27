@@ -3,7 +3,15 @@
 #include <stdio.h>
 
 // Initialize camera defaults (kept consistent with previous main.cpp values)
-CameraCB g_initialCameraData = {{-0.59f, 0.42f, 0.66f, 0.0f}, {0.62f, -0.49f, -0.62f, 0.0f}, {0.0f, 1.0f, 0.0f, 0.0f}, 45.0f, 1.86f, 0.1f, 1000.0f, 1.0f};
+CameraCB g_initialCameraData = {
+    {-0.59f, 0.42f, 0.66f}, 0.0f,
+    {0.62f, -0.49f, -0.62f}, 0.0f,
+    {0.0f, 1.0f, 0.0f}, 0.0f,
+    45.0f, 1.86f, 0.1f, 1000.0f, 1.0f, 0.0f, 0.0f, 0.0f,
+    {0.707f, 0.707f, 0.0f, 0.0f}, // lightDir (45 deg)
+    {1.0f, 0.95f, 0.8f, 2.5f},    // lightColor
+    {0.2f, 0.3f, 0.4f, 0.15f}     // ambientColor
+};
 CameraCB g_cameraData = g_initialCameraData;
 ComPtr<ID3D12Resource> g_cameraConstantBuffer;
 float g_camYaw = 0.0f;

@@ -10,6 +10,3 @@ struct DirectionalLight {
 };
 
 extern DirectionalLight g_defaultLight;
-
-// Create and append a default plane (size 10x10) to the global meshes/materials.
-void AddDefaultPlane();

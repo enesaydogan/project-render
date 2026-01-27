@@ -117,6 +117,7 @@ static ComPtr<ID3D12Resource>
     g_materialBuffer; // Persistent material constant buffer
 UINT g_textureDescriptorCount = 0;
 static ComPtr<ID3D12Resource> g_materialConstantBuffer;
+static ComPtr<ID3D12Resource> g_materialStructuredBuffer; // Tightly packed for DXR
 static bool g_showAssetsWindow =
     true; // Controls visibility of the Assets panel (can be closed/reopened)
 static bool g_showControlsWindow =
@@ -1054,8 +1055,6 @@ bool InitD3D12(HWND hwnd) {
     float emissiveFactor[4];
     int textureIndices[4];
     int emissiveAndPad[4]; // x=emissiveTexIndex, yzw=padding
-    float lightDir[4];
-    float lightColor[4];
   };
   const UINT64 matCbSizeSingle = (sizeof(MaterialCB) + 255) & ~255;
   const UINT64 matCbSize = matCbSizeSingle * 1024; // Support up to 1024 calls
@@ -1071,6 +1070,17 @@ bool InitD3D12(HWND hwnd) {
       &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &matCbDesc,
       D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
       IID_PPV_ARGS(&g_materialConstantBuffer)));
+
+  // Material Structured Buffer for DXR (tightly packed, no 256B alignment)
+  {
+    const UINT64 matSbSize = sizeof(MaterialCB) * 1024;
+    D3D12_RESOURCE_DESC matSbDesc = matCbDesc;
+    matSbDesc.Width = matSbSize;
+    ThrowIfFailed(g_device->CreateCommittedResource(
+        &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &matSbDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&g_materialStructuredBuffer)));
+  }
 
   // Allocate camera constant buffer (upload heap)
   {
@@ -1388,8 +1398,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   }
 
     // Add a default ground plane (10x10)
-    AddDefaultPlane();
-    Scene::RebuildAccelerationStructures();
+    Scene::AddDefaultPlane();
 
   // Basic message loop + simple render
   MSG msg = {};
@@ -1432,10 +1441,45 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     case RenderMode::Raytracing: {
       // Use DXR module to perform ray dispatch and copy to backbuffer
       if (DxrRenderer::IsReady()) {
+        // Update Structured Material Buffer for DXR
+        if (g_materialStructuredBuffer && !g_loadedMaterials.empty()) {
+            struct MaterialData {
+              float baseColorFactor[4];
+              float params1[4];
+              float specular[4];
+              float emissiveFactor[4];
+              int textureIndices[4];
+              int emissiveAndPad[4];
+            };
+            UINT8* pData = nullptr;
+            D3D12_RANGE readRange = {0,0};
+            if (SUCCEEDED(g_materialStructuredBuffer->Map(0, &readRange, reinterpret_cast<void**>(&pData)))) {
+                for (size_t i = 0; i < g_loadedMaterials.size() && i < 1024; ++i) {
+                    const auto &srcMat = g_loadedMaterials[i];
+                    MaterialData mat = {};
+                    memcpy(mat.baseColorFactor, srcMat.baseColorFactor, sizeof(float)*4);
+                    mat.params1[0] = srcMat.metallicFactor;
+                    mat.params1[1] = srcMat.roughnessFactor;
+                    mat.params1[2] = (float)srcMat.workflow;
+                    mat.params1[3] = 0.0f;
+                    memcpy(mat.specular, srcMat.specularFactor, sizeof(float)*3);
+                    mat.specular[3] = srcMat.glossinessFactor;
+                    mat.emissiveFactor[0] = mat.emissiveFactor[1] = mat.emissiveFactor[2] = mat.emissiveFactor[3] = 0.0f;
+                    mat.textureIndices[0] = srcMat.baseColorTexture;
+                    mat.textureIndices[1] = srcMat.metallicRoughnessTexture;
+                    mat.textureIndices[2] = srcMat.normalTexture;
+                    mat.textureIndices[3] = srcMat.occlusionTexture;
+                    mat.emissiveAndPad[0] = srcMat.emissiveTexture;
+                    memcpy(pData + i * sizeof(MaterialData), &mat, sizeof(MaterialData));
+                }
+                g_materialStructuredBuffer->Unmap(0, nullptr);
+            }
+        }
+
         if (!DxrRenderer::RenderFrame(
                 g_commandList.Get(), g_frameIndex,
                 g_renderTargets[g_frameIndex].Get(), rtvHandle,
-                g_cameraConstantBuffer.Get(), g_materialConstantBuffer.Get(),
+                g_cameraConstantBuffer.Get(), g_materialStructuredBuffer.Get(),
                 g_texturesGpuStart, g_textureDescriptorCount,
                 Scene::GetActiveMeshes())) {
           // If RenderFrame failed, fall back to red clear
@@ -1548,8 +1592,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
               float emissiveFactor[4];
               int textureIndices[4];
               int emissiveAndPad[4];
-              float lightDir[4];
-              float lightColor[4];
             } matCB;
 
             const auto &srcMat = g_loadedMaterials[gm.materialIndex];
@@ -1572,17 +1614,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             matCB.textureIndices[3] = srcMat.occlusionTexture;
             matCB.emissiveAndPad[0] = srcMat.emissiveTexture;
             matCB.emissiveAndPad[1] = matCB.emissiveAndPad[2] = matCB.emissiveAndPad[3] = 0;
-
-            // Copy global default light into material CB so both raster and DXR shaders can read it
-            extern DirectionalLight g_defaultLight;
-            matCB.lightDir[0] = g_defaultLight.dir[0];
-            matCB.lightDir[1] = g_defaultLight.dir[1];
-            matCB.lightDir[2] = g_defaultLight.dir[2];
-            matCB.lightDir[3] = g_defaultLight.dir[3];
-            matCB.lightColor[0] = g_defaultLight.color[0];
-            matCB.lightColor[1] = g_defaultLight.color[1];
-            matCB.lightColor[2] = g_defaultLight.color[2];
-            matCB.lightColor[3] = g_defaultLight.color[3];
 
             if (g_materialConstantBuffer) {
               const UINT64 matSlotSize = (sizeof(MaterialCB) + 255) & ~255;
@@ -2012,9 +2043,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
         ImGui::Separator();
         ImGui::Text("Sun Light");
-        ImGui::SliderFloat3("Sun Dir", g_defaultLight.dir, -1.0f, 1.0f);
-        ImGui::ColorEdit3("Sun Color", g_defaultLight.color);
-        ImGui::SliderFloat("Sun Intensity", &g_defaultLight.color[3], 0.0f, 10.0f);
+        bool lightChanged = false;
+        if (ImGui::SliderFloat3("Sun Dir", g_cameraData.lightDir, -1.0f, 1.0f)) lightChanged = true;
+        if (ImGui::ColorEdit3("Sun Color", g_cameraData.lightColor)) lightChanged = true;
+        if (ImGui::SliderFloat("Sun Intensity", &g_cameraData.lightColor[3], 0.0f, 10.0f)) lightChanged = true;
+        if (ImGui::ColorEdit3("Ambient Color", g_cameraData.ambientColor)) lightChanged = true;
+        if (ImGui::SliderFloat("Ambient Weight", &g_cameraData.ambientColor[3], 0.0f, 1.0f)) lightChanged = true;
+
+        if (lightChanged && g_cameraConstantBuffer) {
+            UINT8 *pCam = nullptr; D3D12_RANGE readRange = {0,0};
+            if (SUCCEEDED(g_cameraConstantBuffer->Map(0, &readRange, reinterpret_cast<void**>(&pCam)))) {
+                memcpy(pCam, &g_cameraData, sizeof(g_cameraData));
+                g_cameraConstantBuffer->Unmap(0, nullptr);
+            }
+        }
 
         ImGui::Separator();
 

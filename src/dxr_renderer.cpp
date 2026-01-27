@@ -125,12 +125,12 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[0].Descriptor.ShaderRegister = 0; params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     D3D12_DESCRIPTOR_RANGE uavRange = {}; uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; uavRange.NumDescriptors = 1; uavRange.BaseShaderRegister = 0;
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; params[1].DescriptorTable.NumDescriptorRanges = 1; params[1].DescriptorTable.pDescriptorRanges = &uavRange; params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    static D3D12_DESCRIPTOR_RANGE srvRange = {}; srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; srvRange.NumDescriptors = 16; srvRange.BaseShaderRegister = 1; srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+    static D3D12_DESCRIPTOR_RANGE srvRange = {}; srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; srvRange.NumDescriptors = 1024; srvRange.BaseShaderRegister = 1; srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
     params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; params[2].DescriptorTable.NumDescriptorRanges = 1; params[2].DescriptorTable.pDescriptorRanges = &srvRange; params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV; params[3].Descriptor.ShaderRegister = 0; params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[4].Descriptor.ShaderRegister = 17; params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    params[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[5].Descriptor.ShaderRegister = 18; params[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    params[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[6].Descriptor.ShaderRegister = 19; params[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[4].Descriptor.ShaderRegister = 1025; params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[5].Descriptor.ShaderRegister = 1026; params[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[6].Descriptor.ShaderRegister = 1027; params[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rootDesc = {};
     rootDesc.NumParameters = 7; rootDesc.pParameters = params; rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
@@ -347,12 +347,15 @@ void BuildAccelerationStructures(const std::vector<Asset::GpuMesh>& meshes) {
         // TLAS
         std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instanceDescs;
         for (size_t i=0;i<s_allBLAS.size();++i) {
-            if (!s_allBLAS[i].buffers.result) {
-                fprintf(stderr, "DxrRenderer: BLAS %zu missing result buffer - aborting\n", i);
-                return;
-            }
             D3D12_RAYTRACING_INSTANCE_DESC inst = {};
-            inst.Transform[0][0] = inst.Transform[1][1] = inst.Transform[2][2] = 0.1f; // small scale to be non-zero
+            // Identity transform:
+            // 1 0 0 0
+            // 0 1 0 0
+            // 0 0 1 0
+            inst.Transform[0][0] = 1.0f;
+            inst.Transform[1][1] = 1.0f;
+            inst.Transform[2][2] = 1.0f;
+            
             inst.InstanceID = (UINT)i;
             inst.InstanceMask = 0xFF;
             inst.InstanceContributionToHitGroupIndex = 0;
