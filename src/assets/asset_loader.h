@@ -67,8 +67,17 @@ namespace Asset {
     // Initialize the loader with a device and command queue for GPU uploads.
     void Initialize(ID3D12Device* device, ID3D12CommandQueue* queue);
 
-    // Load a glTF file. Returns true on success. Fills out created meshes in `outMeshes`.
+    // Load a model based on extension (GLTF, OBJ, STL). Fills out created meshes in `outMeshes`.
+    bool LoadModel(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vector<Material>* outMaterials = nullptr, std::vector<Texture>* outTextures = nullptr, const float* rootTranslation = nullptr);
+
+    // Load a glTF file. Returns true on success.
     bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vector<Material>* outMaterials = nullptr, std::vector<Texture>* outTextures = nullptr, const float* rootTranslation = nullptr);
+
+    // Load an OBJ file. Returns true on success.
+    bool LoadOBJ(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vector<Material>* outMaterials = nullptr, std::vector<Texture>* outTextures = nullptr, const float* rootTranslation = nullptr);
+
+    // Load an STL file. Returns true on success.
+    bool LoadSTL(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vector<Material>* outMaterials = nullptr, std::vector<Texture>* outTextures = nullptr, const float* rootTranslation = nullptr);
 
     // Load a single texture from file.
     Texture LoadTextureFromFile(const std::string& path, bool isHDR = false);

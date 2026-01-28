@@ -1350,7 +1350,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   try {
         if (fs::exists(autoLoadPath)) {
       float helmetPos[3] = { 0.0f, 1.0f, 0.0f };
-      if (!Scene::ImportGltf(autoLoadPath, helmetPos)) {
+      if (!Scene::ImportModel(autoLoadPath, helmetPos)) {
         fprintf(stderr, "AutoLoad: failed to import %s\n",
                 autoLoadPath.c_str());
       } else {

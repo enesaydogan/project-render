@@ -858,4 +858,190 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
 
 #endif
 
+bool LoadOBJ(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vector<Material>* outMaterials, std::vector<Texture>* outTextures, const float* rootTranslation)
+{
+    std::ifstream file(path);
+    if (!file.is_open()) return false;
+
+    std::vector<float> positions;
+    std::vector<float> normals;
+    std::vector<float> uvs;
+    
+    struct FacePoint { int v, vt, vn; };
+    std::vector<std::vector<FacePoint>> faces;
+
+    std::string line;
+    while (std::getline(file, line)) {
+        std::stringstream ss(line);
+        std::string prefix;
+        ss >> prefix;
+        if (prefix == "v") {
+            float x, y, z; ss >> x >> y >> z;
+            positions.push_back(x); positions.push_back(y); positions.push_back(z);
+        } else if (prefix == "vn") {
+            float x, y, z; ss >> x >> y >> z;
+            normals.push_back(x); normals.push_back(y); normals.push_back(z);
+        } else if (prefix == "vt") {
+            float u, v; ss >> u >> v;
+            uvs.push_back(u); uvs.push_back(v);
+        } else if (prefix == "f") {
+            std::vector<FacePoint> face;
+            std::string part;
+            while (ss >> part) {
+                FacePoint fp = {-1, -1, -1};
+                size_t firstSlash = part.find('/');
+                size_t lastSlash = part.find_last_of('/');
+                
+                fp.v = std::stoi(part.substr(0, firstSlash)) - 1;
+                if (firstSlash != std::string::npos && lastSlash != firstSlash) {
+                    if (lastSlash > firstSlash + 1)
+                        fp.vt = std::stoi(part.substr(firstSlash + 1, lastSlash - firstSlash - 1)) - 1;
+                    fp.vn = std::stoi(part.substr(lastSlash + 1)) - 1;
+                } else if (firstSlash != std::string::npos) {
+                    fp.vt = std::stoi(part.substr(firstSlash + 1)) - 1;
+                }
+                face.push_back(fp);
+            }
+            // Triangulate if necessary (simple fan)
+            for (size_t i = 1; i < face.size() - 1; ++i) {
+                faces.push_back({face[0], face[i], face[i+1]});
+            }
+        }
+    }
+
+    std::vector<Vertex> vertices;
+    std::vector<uint32_t> indices;
+    
+    float minB[3] = {FLT_MAX, FLT_MAX, FLT_MAX}, maxB[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
+
+    for (const auto& f : faces) {
+        for (const auto& fp : f) {
+            Vertex v = {};
+            v.pos[0] = positions[fp.v * 3 + 0];
+            v.pos[1] = positions[fp.v * 3 + 1];
+            v.pos[2] = positions[fp.v * 3 + 2];
+            
+            if (rootTranslation) {
+                v.pos[0] += rootTranslation[0];
+                v.pos[1] += rootTranslation[1];
+                v.pos[2] += rootTranslation[2];
+            }
+
+            for (int i=0; i<3; ++i) {
+                minB[i] = std::min(minB[i], v.pos[i]);
+                maxB[i] = std::max(maxB[i], v.pos[i]);
+            }
+
+            if (fp.vn >= 0) {
+                v.normal[0] = normals[fp.vn * 3 + 0];
+                v.normal[1] = normals[fp.vn * 3 + 1];
+                v.normal[2] = normals[fp.vn * 3 + 2];
+            }
+            if (fp.vt >= 0) {
+                v.uv[0] = uvs[fp.vt * 2 + 0];
+                v.uv[1] = uvs[fp.vt * 2 + 1];
+            }
+            indices.push_back((uint32_t)vertices.size());
+            vertices.push_back(v);
+        }
+    }
+
+    if (vertices.empty()) return false;
+
+    GpuMesh gm;
+    ComPtr<ID3D12Resource> vbUpload, ibUpload;
+    CreateDefaultBuffer(vertices.data(), sizeof(Vertex) * vertices.size(), gm.vertexBuffer, vbUpload, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    CreateDefaultBuffer(indices.data(), sizeof(uint32_t) * indices.size(), gm.indexBuffer, ibUpload, D3D12_RESOURCE_STATE_INDEX_BUFFER);
+
+    gm.vbView.BufferLocation = gm.vertexBuffer->GetGPUVirtualAddress();
+    gm.vbView.SizeInBytes = (UINT)(sizeof(Vertex) * vertices.size());
+    gm.vbView.StrideInBytes = sizeof(Vertex);
+    gm.ibView.BufferLocation = gm.indexBuffer->GetGPUVirtualAddress();
+    gm.ibView.SizeInBytes = (UINT)(sizeof(uint32_t) * indices.size());
+    gm.ibView.Format = DXGI_FORMAT_R32_UINT;
+    gm.vertexCount = (UINT)vertices.size();
+    gm.indexCount = (UINT)indices.size();
+    gm.materialIndex = -1;
+    for(int i=0; i<3; ++i) { gm.minBound[i] = minB[i]; gm.maxBound[i] = maxB[i]; }
+    
+    outMeshes.push_back(std::move(gm));
+    return true;
+}
+
+bool LoadSTL(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vector<Material>* outMaterials, std::vector<Texture>* outTextures, const float* rootTranslation)
+{
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) return false;
+
+    char header[80];
+    file.read(header, 80);
+    uint32_t numTriangles = 0;
+    file.read(reinterpret_cast<char*>(&numTriangles), 4);
+
+    std::vector<Vertex> vertices;
+    std::vector<uint32_t> indices;
+    float minB[3] = {FLT_MAX, FLT_MAX, FLT_MAX}, maxB[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
+
+    for (uint32_t i = 0; i < numTriangles; ++i) {
+        float n[3], v1[3], v2[3], v3[3];
+        uint16_t attr;
+        file.read(reinterpret_cast<char*>(n), 12);
+        file.read(reinterpret_cast<char*>(v1), 12);
+        file.read(reinterpret_cast<char*>(v2), 12);
+        file.read(reinterpret_cast<char*>(v3), 12);
+        file.read(reinterpret_cast<char*>(&attr), 2);
+
+        auto addV = [&](float* pos) {
+            Vertex v = {};
+            for(int j=0; j<3; ++j) {
+                v.pos[j] = pos[j] + (rootTranslation ? rootTranslation[j] : 0.0f);
+                minB[j] = std::min(minB[j], v.pos[j]);
+                maxB[j] = std::max(maxB[j], v.pos[j]);
+                v.normal[j] = n[j];
+            }
+            indices.push_back((uint32_t)vertices.size());
+            vertices.push_back(v);
+        };
+        addV(v1); addV(v2); addV(v3);
+    }
+
+    if (vertices.empty()) return false;
+
+    GpuMesh gm;
+    ComPtr<ID3D12Resource> vbUpload, ibUpload;
+    CreateDefaultBuffer(vertices.data(), sizeof(Vertex) * vertices.size(), gm.vertexBuffer, vbUpload, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    CreateDefaultBuffer(indices.data(), sizeof(uint32_t) * indices.size(), gm.indexBuffer, ibUpload, D3D12_RESOURCE_STATE_INDEX_BUFFER);
+
+    gm.vbView.BufferLocation = gm.vertexBuffer->GetGPUVirtualAddress();
+    gm.vbView.SizeInBytes = (UINT)(sizeof(Vertex) * vertices.size());
+    gm.vbView.StrideInBytes = sizeof(Vertex);
+    gm.ibView.BufferLocation = gm.indexBuffer->GetGPUVirtualAddress();
+    gm.ibView.SizeInBytes = (UINT)(sizeof(uint32_t) * indices.size());
+    gm.ibView.Format = DXGI_FORMAT_R32_UINT;
+    gm.vertexCount = (UINT)vertices.size();
+    gm.indexCount = (UINT)indices.size();
+    for(int i=0; i<3; ++i) { gm.minBound[i] = minB[i]; gm.maxBound[i] = maxB[i]; }
+    
+    outMeshes.push_back(std::move(gm));
+    return true;
+}
+
+bool LoadModel(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vector<Material>* outMaterials, std::vector<Texture>* outTextures, const float* rootTranslation)
+{
+    std::string ext = std::filesystem::path(path).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+    if (ext == ".gltf" || ext == ".glb") {
+        return LoadGltf(path, outMeshes, outMaterials, outTextures, rootTranslation);
+    } else if (ext == ".obj") {
+        return LoadOBJ(path, outMeshes, outMaterials, outTextures, rootTranslation);
+    } else if (ext == ".stl") {
+        return LoadSTL(path, outMeshes, outMaterials, outTextures, rootTranslation);
+    } else if (ext == ".fbx") {
+        fprintf(stderr, "FBX loading requires Assimp. Not implemented in this standalone version.\n");
+        return false;
+    }
+    return false;
+}
+
 } // namespace Asset

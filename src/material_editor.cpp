@@ -31,17 +31,46 @@ void Draw(bool &visible) {
             ImGui::Separator();
             
             // Material Editor
-            ImGui::Text("Materials (%zu)", node.meshIndices.size());
-            
-            for (size_t mi : node.meshIndices) {
-                if (mi >= g_loadedMeshes.size()) continue;
-                Asset::GpuMesh &mesh = g_loadedMeshes[mi];
-                if (mesh.materialIndex < 0 || mesh.materialIndex >= (int)g_loadedMaterials.size()) continue;
+            if (node.meshIndices.empty()) {
+                ImGui::Text("No meshes in this node.");
+            } else {
+                // Collect materials for the dropdown
+                std::vector<int> materialIndices;
+                std::vector<std::string> comboNames;
                 
-                Asset::Material &mat = g_loadedMaterials[mesh.materialIndex];
-                
-                ImGui::PushID(mesh.materialIndex);
-                if (ImGui::CollapsingHeader(mat.name, ImGuiTreeNodeFlags_DefaultOpen)) {
+                for (size_t i = 0; i < node.meshIndices.size(); ++i) {
+                    size_t mi = node.meshIndices[i];
+                    if (mi >= g_loadedMeshes.size()) continue;
+                    int matIdx = g_loadedMeshes[mi].materialIndex;
+                    if (matIdx >= 0 && matIdx < (int)g_loadedMaterials.size()) {
+                        // Avoid duplicates in the list if multiple meshes share the same material
+                        bool exists = false;
+                        for (int existing : materialIndices) {
+                            if (existing == matIdx) { exists = true; break; }
+                        }
+                        if (!exists) {
+                            materialIndices.push_back(matIdx);
+                            comboNames.push_back(std::string(g_loadedMaterials[matIdx].name) + " (ID: " + std::to_string(matIdx) + ")");
+                        }
+                    }
+                }
+
+                static int selectedComboIdx = 0;
+                // Reset index if it's out of bounds for the newly selected node
+                if (selectedComboIdx >= (int)comboNames.size()) selectedComboIdx = 0;
+
+                if (!comboNames.empty()) {
+                    std::vector<const char*> comboChars;
+                    for (const auto& s : comboNames) comboChars.push_back(s.c_str());
+
+                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    ImGui::Combo("##MaterialSelector", &selectedComboIdx, comboChars.data(), (int)comboChars.size());
+                    ImGui::Separator();
+
+                    int matIdx = materialIndices[selectedComboIdx];
+                    Asset::Material &mat = g_loadedMaterials[matIdx];
+                    
+                    ImGui::PushID(matIdx);
                     // Diffuse
                     ImGui::ColorEdit3("Diffuse Color", mat.diffuseColor);
                     
@@ -73,8 +102,10 @@ void Draw(bool &visible) {
                         ImGui::LabelText("Occlusion", "%d", mat.occlusionTexture);
                         ImGui::TreePop();
                     }
+                    ImGui::PopID();
+                } else {
+                    ImGui::Text("No valid materials found on this model.");
                 }
-                ImGui::PopID();
             }
         }
     }
