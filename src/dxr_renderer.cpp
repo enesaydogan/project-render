@@ -5,6 +5,7 @@
 #include "dxr_helpers.h"
 #include "ibl_manager.h"
 #include "scene.h"
+#include "camera.h"
 #include <cstdio>
 #include <vector>
 #include <wrl.h>
@@ -977,6 +978,54 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
   if (s_lightBuffer) {
     dxrList->SetComputeRootShaderResourceView(
         9, s_lightBuffer->GetGPUVirtualAddress());
+  }
+
+  // SPP cap: if a max SPP is set and we've already reached it, skip ray dispatch
+  // and reuse the last output. This prevents the frame count from increasing past
+  // maxSPP and stops additional GPU work.
+  if (g_cameraData.maxSPP > 0.0f && s_accumulation.GetFrameCount() >= (UINT)g_cameraData.maxSPP) {
+      // Copy the current output texture to the render target and return
+      TransitionResource(dxrList.Get(), s_outputUAV.Get(),
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                         D3D12_RESOURCE_STATE_COPY_SOURCE);
+      TransitionResource(dxrList.Get(), renderTarget, D3D12_RESOURCE_STATE_PRESENT,
+                         D3D12_RESOURCE_STATE_COPY_DEST);
+
+      D3D12_RESOURCE_DESC srcDesc = s_outputUAV->GetDesc();
+      D3D12_RESOURCE_DESC dstDesc = renderTarget->GetDesc();
+      if (srcDesc.Width != dstDesc.Width || srcDesc.Height != dstDesc.Height) {
+          UINT copyW = (UINT)min(srcDesc.Width, dstDesc.Width);
+          UINT copyH = (UINT)min(srcDesc.Height, dstDesc.Height);
+          D3D12_TEXTURE_COPY_LOCATION dstLoc = {};
+          dstLoc.pResource = renderTarget;
+          dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+          dstLoc.SubresourceIndex = 0;
+
+          D3D12_TEXTURE_COPY_LOCATION srcLoc = {};
+          srcLoc.pResource = s_outputUAV.Get();
+          srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+          srcLoc.SubresourceIndex = 0;
+
+          D3D12_BOX srcBox = {};
+          srcBox.left = 0; srcBox.top = 0; srcBox.front = 0;
+          srcBox.right = copyW; srcBox.bottom = copyH; srcBox.back = 1;
+
+          dxrList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, &srcBox);
+      } else {
+          dxrList->CopyResource(renderTarget, s_outputUAV.Get());
+      }
+
+      // Transition back
+      TransitionResource(dxrList.Get(), renderTarget,
+                         D3D12_RESOURCE_STATE_COPY_DEST,
+                         D3D12_RESOURCE_STATE_RENDER_TARGET);
+      TransitionResource(dxrList.Get(), s_outputUAV.Get(),
+                         D3D12_RESOURCE_STATE_COPY_SOURCE,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+      // Bind RTV for subsequent ImGui draws
+      commandListBase->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+      return true;
   }
 
   D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
