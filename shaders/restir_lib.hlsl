@@ -70,4 +70,62 @@ void finalize_reservoir(inout Reservoir r, float p_target)
     r.W = min(r.W, 1000.0); // Hard cap on light contribution multiplier
 }
 
+// ReSTIR GI Reservoir
+struct GI_Reservoir
+{
+    float3 hitPos;
+    float3 radiance;
+    float w_sum;
+    uint M;
+    float W; // Final weight
+};
+
+GI_Reservoir init_gi_reservoir()
+{
+    GI_Reservoir r;
+    r.hitPos = float3(0,0,0);
+    r.radiance = float3(0,0,0);
+    r.w_sum = 0.0;
+    r.M = 0;
+    r.W = 0.0;
+    return r;
+}
+
+bool update_gi_reservoir(inout GI_Reservoir r, float3 hitPos, float3 radiance, float weight, inout RNG rng)
+{
+    float new_w_sum = r.w_sum + weight;
+    r.M++;
+    
+    if (isnan(weight) || isinf(weight)) return false;
+
+    bool selected = (next_float(rng) * new_w_sum < weight);
+    if (selected) {
+        r.hitPos = hitPos;
+        r.radiance = radiance;
+    }
+    r.w_sum = new_w_sum;
+    if (isinf(r.w_sum)) r.w_sum = 1e20;
+    
+    return selected;
+}
+
+void combine_gi_reservoirs(inout GI_Reservoir r, const GI_Reservoir r_other, float p_target, inout RNG rng)
+{
+    uint M_orig = r.M;
+    float weight = p_target * r_other.W * (float)r_other.M;
+    update_gi_reservoir(r, r_other.hitPos, r_other.radiance, weight, rng);
+    r.M = M_orig + r_other.M;
+}
+
+void finalize_gi_reservoir(inout GI_Reservoir r, float p_target)
+{
+    if (p_target > 0.0) {
+        r.W = r.w_sum / ((float)r.M * p_target);
+    } else {
+        r.W = 0.0;
+    }
+    if (isinf(r.W) || isnan(r.W)) r.W = 0.0;
+    r.W = min(r.W, 1000.0);
+}
+
 #endif // RESTIR_LIB_HLSL

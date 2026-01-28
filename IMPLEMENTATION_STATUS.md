@@ -37,14 +37,25 @@
   - Schlick Fresnel approximation with roughness-based energy compensation
   - Shared logic between Raster and Raytracing for visual parity
 
-### Path Tracing (Progressive)
+### Path Tracing (Unified DXR Path)
 - ✅ **Foundations (Phase 1)**:
   - High-precision R32G32B32A32_FLOAT accumulation buffer.
   - Linear accumulation logic with frame synchronization.
   - PCG-based Random Number Generation (RNG) library.
   - Automatic accumulation reset on interaction (camera, light, material, gizmo).
   - Progressive UI feedback with sample counter.
-- ⬜ **Direct Illumination (Phase 2)**: Next - ReSTIR DI implementation for many-light sampling.
+- ✅ **ReSTIR DI (Phase 2)**:
+  - Reservoir-based Spatio-Temporal Importance Resampling for direct lights.
+  - Supports Sun and random local light candidates.
+  - Temporal (30 frames) and Spatial (2 neighbors) resampling.
+  - Visibility-cached shading for stable soft shadows.
+- ✅ **GI & Optimization (Phase 3)**:
+  - **ReSTIR GI**: Indirect path resampling with Reconnection Shift Mapping.
+  - **Advanced BSDFs**: Height-correlated Smith visibility and Fresnel energy compensation.
+  - **Early Out / Russian Roulette**: Terminate low-contribution paths after 3 bounces.
+  - **Max SPP Limit**: Adaptive early-out when target sample count is reached.
+  - **Glass/Refraction**: Stochastic Fresnel-based transmission.
+- 🟡 **DLSS-D (Phase 4)**: Next - Hook up G-Buffer metadata to DLSS Ray Reconstruction.
 
 ### Image-Based Lighting (IBL)
 - ✅ **Normal Mapping**:

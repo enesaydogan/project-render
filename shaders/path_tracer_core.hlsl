@@ -10,8 +10,30 @@
 StructuredBuffer<Light> g_lights : register(t5000);
 RWTexture2D<float4> g_reservoir0 : register(u2);
 RWTexture2D<float4> g_reservoir1 : register(u3);
+RWTexture2D<float4> g_gi_reservoir_a0 : register(u4);
+RWTexture2D<float4> g_gi_reservoir_a1 : register(u5);
+RWTexture2D<float4> g_gi_reservoir_a2 : register(u6);
+RWTexture2D<float4> g_gi_reservoir_b0 : register(u7);
+RWTexture2D<float4> g_gi_reservoir_b1 : register(u8);
+RWTexture2D<float4> g_gi_reservoir_b2 : register(u9);
 
 #include "brdf_lib.hlsl"
+
+GI_Reservoir unpack_gi_reservoir(float4 d0, float4 d1, float4 d2) {
+    GI_Reservoir r;
+    r.hitPos = d0.xyz;
+    r.radiance = d1.xyz;
+    r.w_sum = d2.x;
+    r.M = asuint(d2.y);
+    r.W = d2.z;
+    return r;
+}
+
+void pack_gi_reservoir(GI_Reservoir r, out float4 d0, out float4 d1, out float4 d2) {
+    d0 = float4(r.hitPos, 0.0);
+    d1 = float4(r.radiance, 0.0);
+    d2 = float4(r.w_sum, asfloat(r.M), r.W, 0.0);
+}
 
 // target PDF for ReSTIR DI (luminance of lit surface)
 float calculate_p_target(float3 radiance, float3 albedo, float3 f_brdf, float NdotL) {
@@ -124,6 +146,7 @@ void RayGen()
 
         // 1. Direct Lighting (Next Event Estimation + ReSTIR for 1st bounce)
         float3 directLighting = float3(0, 0, 0);
+        float3 indirectLighting = float3(0, 0, 0);
         
         if (bounce == 0) {
             // --- ReSTIR DI Logic for Primary Hit ---
@@ -138,7 +161,7 @@ void RayGen()
                 // Evaluation for ReSTIR
                 float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
                 float3 H = normalize(ls.L + V);
-                float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * G_Smith(max(0.0, dot(N, V)), NdotL, roughness) * F_Schlick(max(0.0, dot(H, V)), F0) / (4.0 * max(0.0, dot(N, V)) * NdotL + 0.001);
+                float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL, roughness) * F_Schlick(max(0.0, dot(H, V)), F0);
                 float3 brdf = (payload.albedo / PI) * (1.0 - metallic) + spec;
 
                 float p_target = calculate_p_target(ls.radiance, payload.albedo, brdf, NdotL);
@@ -159,7 +182,7 @@ void RayGen()
 
                 float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
                 float3 H = normalize(L + V);
-                float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * G_Smith(max(0.0, dot(N, V)), NdotL, roughness) * F_Schlick(max(0.0, dot(H, V)), F0) / (4.0 * max(0.0, dot(N, V)) * NdotL + 0.001);
+                float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL, roughness) * F_Schlick(max(0.0, dot(H, V)), F0);
                 float3 brdf = (payload.albedo / PI) * (1.0 - metallic) + spec;
 
                 float p_target = calculate_p_target(radiance, payload.albedo, brdf, NdotL) * (float)numLights;
@@ -193,7 +216,7 @@ void RayGen()
                 float NdotL_prev = saturate(dot(N, L_prev));
                 float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
                 float3 H = normalize(L_prev + V);
-                float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * G_Smith(max(0.0, dot(N, V)), NdotL_prev, roughness) * F_Schlick(max(0.0, dot(H, V)), F0) / (4.0 * max(0.0, dot(N, V)) * NdotL_prev + 0.001);
+                float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL_prev, roughness) * F_Schlick(max(0.0, dot(H, V)), F0);
                 float3 brdf_prev = (payload.albedo / PI) * (1.0 - metallic) + spec;
 
                 float p_target_at_curr = calculate_p_target(radiance_prev, payload.albedo, brdf_prev, saturate(dot(N, L_prev)));
@@ -231,7 +254,7 @@ void RayGen()
                     float NdotL_neigh = saturate(dot(N, L_neigh));
                     float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
                     float3 H = normalize(L_neigh + V);
-                    float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * G_Smith(max(0.0, dot(N, V)), NdotL_neigh, roughness) * F_Schlick(max(0.0, dot(H, V)), F0) / (4.0 * max(0.0, dot(N, V)) * NdotL_neigh + 0.001);
+                    float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL_neigh, roughness) * F_Schlick(max(0.0, dot(H, V)), F0);
                     float3 brdf_neigh = (payload.albedo / PI) * (1.0 - metallic) + spec;
 
                     float p_target_at_curr = calculate_p_target(radiance_neigh, payload.albedo, brdf_neigh, NdotL_neigh);
@@ -261,7 +284,7 @@ void RayGen()
             float NdotL_final = saturate(dot(N, L_final));
             float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
             float3 H_f = normalize(L_final + V);
-            float3 spec_f = D_GGX(max(0.0, dot(N, H_f)), roughness) * G_Smith(max(0.0, dot(N, V)), NdotL_final, roughness) * F_Schlick(max(0.0, dot(H_f, V)), F0) / (4.0 * max(0.0, dot(N, V)) * NdotL_final + 0.001);
+            float3 spec_f = D_GGX(max(0.0, dot(N, H_f)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL_final, roughness) * F_Schlick(max(0.0, dot(H_f, V)), F0);
             float3 brdf_f = (payload.albedo / PI) * (1.0 - metallic) + spec_f;
 
             float p_target_final = calculate_p_target(radiance_final, payload.albedo, brdf_f, NdotL_final);
@@ -287,6 +310,97 @@ void RayGen()
                 
                 if (shadowPayload.t < 0.0) {
                     directLighting = radiance_final * brdf_f * NdotL_final * res.W;
+                }
+            }
+
+            // --- ReSTIR GI (Indirect Illumination) ---
+            GI_Reservoir gi_res = init_gi_reservoir();
+            // A. Initial Candidate
+            {
+                float3 nextDir_gi; float pdf_gi; float3 f_brdf_gi; float2 u_gi = next_float2(rng);
+                float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
+                float3 F = F_Schlick(max(0.0, dot(N, V)), F0);
+                float specProb = max(F.x, max(F.y, F.z));
+                float diffProb = (1.0 - specProb) * (1.0 - metallic);
+                float totalProb = specProb + diffProb;
+                if (next_float(rng) * totalProb < specProb) {
+                    float3 H = SampleGGX(u_gi, N, roughness);
+                    nextDir_gi = reflect(-V, H);
+                    float NdotL = saturate(dot(N, nextDir_gi));
+                    pdf_gi = (PDF_GGX(saturate(dot(N,H)), saturate(dot(V,H)), roughness) * specProb) / totalProb;
+                    f_brdf_gi = D_GGX(saturate(dot(N, H)), roughness) * G_Smith(max(0.0, dot(N, V)), NdotL, roughness) * F_Schlick(saturate(dot(H, V)), F0) / (4.0 * max(0.0, dot(N, V)) * NdotL + 0.001);
+                } else {
+                    nextDir_gi = SampleLambert(u_gi, N);
+                    float NdotL = saturate(dot(N, nextDir_gi));
+                    pdf_gi = (PDF_Lambert(NdotL) * diffProb) / totalProb;
+                    f_brdf_gi = (payload.albedo / PI) * (1.0 - metallic);
+                }
+                if (pdf_gi > 0.0) {
+                    RayDesc giRay; giRay.Origin = P + N * 0.0005; giRay.Direction = nextDir_gi;
+                    giRay.TMin = 0.0001; giRay.TMax = 1000.0;
+                    RayPayload giPayload; giPayload.color = float3(0,0,0); giPayload.emissive = float3(0,0,0); giPayload.t = -1.0;
+                    TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, giRay, giPayload);
+                    if (giPayload.t > 0) {
+                        float3 radiance = giPayload.color + giPayload.emissive;
+                        float p_target = length(radiance * f_brdf_gi * saturate(dot(N, nextDir_gi)));
+                        update_gi_reservoir(gi_res, giPayload.position, radiance, (p_target / pdf_gi), rng);
+                    }
+                }
+            }
+            // B. Temporal Resampling
+            if (frame > 0) {
+                float4 d0, d1, d2;
+                if (flip) { d0 = g_gi_reservoir_b0[launchIndex.xy]; d1 = g_gi_reservoir_b1[launchIndex.xy]; d2 = g_gi_reservoir_b2[launchIndex.xy]; }
+                else      { d0 = g_gi_reservoir_a0[launchIndex.xy]; d1 = g_gi_reservoir_a1[launchIndex.xy]; d2 = g_gi_reservoir_a2[launchIndex.xy]; }
+                GI_Reservoir prev_gi = unpack_gi_reservoir(d0, d1, d2);
+                prev_gi.M = min(prev_gi.M, 15);
+                float3 L_gi = normalize(prev_gi.hitPos - P);
+                float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
+                float3 H = normalize(L_gi + V);
+                float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * G_Smith(max(0.0, dot(N, V)), saturate(dot(N, L_gi)), roughness) * F_Schlick(max(0.0, dot(H, V)), F0) / (4.0 * max(0.0, dot(N, V)) * saturate(dot(N, L_gi)) + 0.001);
+                float3 brdf = (payload.albedo / PI) * (1.0 - metallic) + spec;
+                float p_target_at_curr = length(prev_gi.radiance * brdf * saturate(dot(N, L_gi)));
+                combine_gi_reservoirs(gi_res, prev_gi, p_target_at_curr, rng);
+            }
+            // C. Spatial Resampling
+            if (frame > 0) {
+                for (int i = 0; i < 2; ++i) {
+                    int2 offset = int2((next_float(rng) - 0.5) * 30.0, (next_float(rng) - 0.5) * 30.0);
+                    int2 neighborCoords = clamp(int2(launchIndex.xy) + offset, int2(0,0), int2(launchDim.xy)-1);
+                    float4 d0, d1, d2;
+                    if (flip) { d0 = g_gi_reservoir_b0[neighborCoords]; d1 = g_gi_reservoir_b1[neighborCoords]; d2 = g_gi_reservoir_b2[neighborCoords]; }
+                    else      { d0 = g_gi_reservoir_a0[neighborCoords]; d1 = g_gi_reservoir_a1[neighborCoords]; d2 = g_gi_reservoir_a2[neighborCoords]; }
+                    GI_Reservoir neigh_gi = unpack_gi_reservoir(d0, d1, d2);
+                    neigh_gi.M = min(neigh_gi.M, 15);
+                    float3 L_gi = normalize(neigh_gi.hitPos - P);
+                    float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
+                    float3 H = normalize(L_gi + V);
+                    float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * G_Smith(max(0.0, dot(N, V)), saturate(dot(N, L_gi)), roughness) * F_Schlick(max(0.0, dot(H, V)), F0) / (4.0 * max(0.0, dot(N, V)) * saturate(dot(N, L_gi)) + 0.001);
+                    float3 brdf = (payload.albedo / PI) * (1.0 - metallic) + spec;
+                    float p_target_at_curr = length(neigh_gi.radiance * brdf * saturate(dot(N, L_gi)));
+                    combine_gi_reservoirs(gi_res, neigh_gi, p_target_at_curr, rng);
+                }
+            }
+            // Finalize GI
+            float3 L_gi_final = normalize(gi_res.hitPos - P);
+            float3 F0_gi = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
+            float3 H_gi = normalize(L_gi_final + V);
+            float3 spec_gi = D_GGX(max(0.0, dot(N, H_gi)), roughness) * G_Smith(max(0.0, dot(N, V)), saturate(dot(N, L_gi_final)), roughness) * F_Schlick(max(0.0, dot(H_gi, V)), F0_gi) / (4.0 * max(0.0, dot(N, V)) * saturate(dot(N, L_gi_final)) + 0.001);
+            float3 brdf_gi_final = (payload.albedo / PI) * (1.0 - metallic) + spec_gi;
+            float p_target_final_gi = length(gi_res.radiance * brdf_gi_final * saturate(dot(N, L_gi_final)));
+            finalize_gi_reservoir(gi_res, p_target_final_gi);
+            float4 out_d0, out_d1, out_d2; pack_gi_reservoir(gi_res, out_d0, out_d1, out_d2);
+            if (flip) { g_gi_reservoir_a0[launchIndex.xy] = out_d0; g_gi_reservoir_a1[launchIndex.xy] = out_d1; g_gi_reservoir_a2[launchIndex.xy] = out_d2; }
+            else      { g_gi_reservoir_b0[launchIndex.xy] = out_d0; g_gi_reservoir_b1[launchIndex.xy] = out_d1; g_gi_reservoir_b2[launchIndex.xy] = out_d2; }
+            
+            if (gi_res.W > 0.0) {
+                // Visibility test for GI reconnection
+                RayDesc giVisRay; giVisRay.Origin = P + N * 0.001; giVisRay.Direction = L_gi_final;
+                giVisRay.TMin = 0.001; giVisRay.TMax = distance(gi_res.hitPos, P) - 0.002;
+                RayPayload giVisPayload; giVisPayload.t = 1.0;
+                TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, giVisRay, giVisPayload);
+                if (giVisPayload.t < 0.0) {
+                    indirectLighting = gi_res.radiance * brdf_gi_final * saturate(dot(N, L_gi_final)) * gi_res.W;
                 }
             }
         } 
@@ -325,14 +439,14 @@ void RayGen()
                 if (shadowPayload.t < 0.0) {
                      float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
                      float3 H = normalize(L_nee + V);
-                     float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * G_Smith(max(0.0, dot(N, V)), NdotL_nee, roughness) * F_Schlick(max(0.0, dot(H, V)), F0) / (4.0 * max(0.0, dot(N, V)) * NdotL_nee + 0.001);
+                     float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL_nee, roughness) * F_Schlick(max(0.0, dot(H, V)), F0);
                      float3 brdf = (payload.albedo / PI) * (1.0 - metallic) + spec;
                      directLighting = brdf * radiance_nee * NdotL_nee * 2.0; // *2 because of 50/50 sun/lights
                 }
             }
         }
 
-        accumulatedColor += throughput * (directLighting + payload.emissive);
+        accumulatedColor += throughput * (directLighting + indirectLighting + payload.emissive);
 
         // 2. Indirect Lighting Ray Generation
         float3 nextDir;
@@ -386,7 +500,7 @@ void RayGen()
                 float VdotH = saturate(dot(V, H));
                 
                 pdf = (PDF_GGX(NdotH, VdotH, roughness) * specProb) / totalProb;
-                f_brdf = D_GGX(NdotH, roughness) * G_Smith(max(0.0, dot(N, V)), NdotL, roughness) * F_Schlick(VdotH, F0) / (4.0 * max(0.0, dot(N, V)) * NdotL + 0.001);
+                f_brdf = D_GGX(NdotH, roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL, roughness) * F_Schlick(VdotH, F0);
             } else {
                 // Diffuse Lambert
                 if (giBounces >= (int)maxGIBounces) break;

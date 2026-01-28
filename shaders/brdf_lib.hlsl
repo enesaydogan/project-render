@@ -12,20 +12,31 @@ float D_GGX(float NdotH, float roughness) {
     return a2 / (PI * d * d);
 }
 
-// Smith Geometry Function
-float G_SchlickGGX(float NdotV, float roughness) {
-    float k = (roughness + 1.0);
-    k = (k * k) / 8.0;
-    return NdotV / (NdotV * (1.0 - k) + k);
+// Smith Geometry Function (Height-Correlated)
+float V_SmithCorrelated(float NdotV, float NdotL, float roughness) {
+    float a2 = roughness * roughness;
+    float GGXV = NdotL * sqrt(max(0.0, a2 + (1.0 - a2) * (NdotV * NdotV)));
+    float GGXL = NdotV * sqrt(max(0.0, a2 + (1.0 - a2) * (NdotL * NdotL)));
+    return 0.5 / (GGXV + GGXL + 0.001);
 }
 
 float G_Smith(float NdotV, float NdotL, float roughness) {
-    return G_SchlickGGX(NdotV, roughness) * G_SchlickGGX(NdotL, roughness);
+    // Legacy separable Smith for reference or fallback
+    float k = (roughness + 1.0);
+    k = (k * k) / 8.0;
+    float g1 = NdotV / (NdotV * (1.0 - k) + k);
+    float g2 = NdotL / (NdotL * (1.0 - k) + k);
+    return g1 * g2;
 }
 
 // Schlick Fresnel
 float3 F_Schlick(float cosTheta, float3 F0) {
     return F0 + (1.0 - F0) * pow(saturate(1.0 - cosTheta), 5.0);
+}
+
+// Fresnel-Schlick with roughness compensation (for IBL and rough surfaces)
+float3 F_SchlickRoughness(float cosTheta, float3 F0, float roughness) {
+    return F0 + (max(float3(1.0 - roughness, 1.0 - roughness, 1.0 - roughness), F0) - F0) * pow(saturate(1.0 - cosTheta), 5.0);
 }
 
 // GGX Importance Sampling

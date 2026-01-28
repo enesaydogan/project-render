@@ -49,6 +49,7 @@ static D3D12_GPU_DESCRIPTOR_HANDLE s_ibTableGpu;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_outputUAVGpu;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_accumUAVGpu;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_reservoirGpuHandle[2];
+static D3D12_GPU_DESCRIPTOR_HANDLE s_gi_reservoirGpuHandle[2];
 static D3D12_GPU_DESCRIPTOR_HANDLE s_iblGpuHandle;
 
 // Offset constants for s_srvHeap
@@ -59,8 +60,14 @@ static const UINT DXR_HEAP_UAV_OFFSET = 2048 + 1024 + 1024;
 static const UINT DXR_HEAP_ACCUM_UAV_OFFSET = 2048 + 1024 + 1024 + 1;
 static const UINT DXR_HEAP_RESERVOIR_0_OFFSET = 2048 + 1024 + 1024 + 2;
 static const UINT DXR_HEAP_RESERVOIR_1_OFFSET = 2048 + 1024 + 1024 + 3;
-static const UINT DXR_HEAP_IBL_OFFSET = 2048 + 1024 + 1024 + 4;
-static const UINT DXR_HEAP_TOTAL_COUNT = 2048 + 1024 + 1024 + 5;
+static const UINT DXR_HEAP_GI_RESERVOIR_0_OFFSET_A = 2048 + 1024 + 1024 + 4;
+static const UINT DXR_HEAP_GI_RESERVOIR_0_OFFSET_B = 2048 + 1024 + 1024 + 5;
+static const UINT DXR_HEAP_GI_RESERVOIR_0_OFFSET_C = 2048 + 1024 + 1024 + 6;
+static const UINT DXR_HEAP_GI_RESERVOIR_1_OFFSET_A = 2048 + 1024 + 1024 + 7;
+static const UINT DXR_HEAP_GI_RESERVOIR_1_OFFSET_B = 2048 + 1024 + 1024 + 8;
+static const UINT DXR_HEAP_GI_RESERVOIR_1_OFFSET_C = 2048 + 1024 + 1024 + 9;
+static const UINT DXR_HEAP_IBL_OFFSET = 2048 + 1024 + 1024 + 10;
+static const UINT DXR_HEAP_TOTAL_COUNT = 2048 + 1024 + 1024 + 11;
 
 // Output texture dimensions used by DXR (kept local to module)
 static UINT s_outputWidth = 1280;
@@ -112,6 +119,7 @@ static AccelerationStructureBuffers s_tlas;
 static ComPtr<ID3D12Resource> s_lightBuffer;
 static UINT s_lightCount = 0;
 static ComPtr<ID3D12Resource> s_reservoirBuffers[2];
+static ComPtr<ID3D12Resource> s_gi_reservoirBuffers[6];
 
 namespace DxrRenderer {
 
@@ -186,6 +194,10 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
         gpuStart.ptr + (UINT64)DXR_HEAP_RESERVOIR_0_OFFSET * descSize;
     s_reservoirGpuHandle[1].ptr =
         gpuStart.ptr + (UINT64)DXR_HEAP_RESERVOIR_1_OFFSET * descSize;
+    s_gi_reservoirGpuHandle[0].ptr =
+        gpuStart.ptr + (UINT64)DXR_HEAP_GI_RESERVOIR_0_OFFSET_A * descSize;
+    s_gi_reservoirGpuHandle[1].ptr =
+        gpuStart.ptr + (UINT64)DXR_HEAP_GI_RESERVOIR_1_OFFSET_A * descSize;
     s_iblGpuHandle.ptr = gpuStart.ptr + (UINT64)DXR_HEAP_IBL_OFFSET * descSize;
   }
 
@@ -215,7 +227,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
   D3D12_DESCRIPTOR_RANGE uavRange = {};
   uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-  uavRange.NumDescriptors = 4;
+  uavRange.NumDescriptors = 10;
   uavRange.BaseShaderRegister = 0;
   params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
   params[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -507,6 +519,40 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     resUavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
     resUavDesc.Texture2D.MipSlice = 0;
     s_device->CreateUnorderedAccessView(s_reservoirBuffers[i].Get(), nullptr,
+                                        &resUavDesc, resUavCpu);
+  }
+
+  // Create GI Reservoir UAVs (3 per frame for ping-ponging, 2 frames total = 6 textures)
+  for (int i = 0; i < 6; ++i) {
+    D3D12_RESOURCE_DESC resDesc = texDesc;
+    resDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; 
+    s_gi_reservoirBuffers[i].Reset();
+    ThrowIfFailed(s_device->CreateCommittedResource(
+        &heapProps, D3D12_HEAP_FLAG_NONE, &resDesc,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+        IID_PPV_ARGS(&s_gi_reservoirBuffers[i])));
+
+    D3D12_CPU_DESCRIPTOR_HANDLE resUavCpu =
+        s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+    UINT offset = 0;
+    switch(i) {
+        case 0: offset = DXR_HEAP_GI_RESERVOIR_0_OFFSET_A; break;
+        case 1: offset = DXR_HEAP_GI_RESERVOIR_0_OFFSET_B; break;
+        case 2: offset = DXR_HEAP_GI_RESERVOIR_0_OFFSET_C; break;
+        case 3: offset = DXR_HEAP_GI_RESERVOIR_1_OFFSET_A; break;
+        case 4: offset = DXR_HEAP_GI_RESERVOIR_1_OFFSET_B; break;
+        case 5: offset = DXR_HEAP_GI_RESERVOIR_1_OFFSET_C; break;
+    }
+
+    resUavCpu.ptr += (SIZE_T)offset *
+                     s_device->GetDescriptorHandleIncrementSize(
+                         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC resUavDesc = {};
+    resUavDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    resUavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    resUavDesc.Texture2D.MipSlice = 0;
+    s_device->CreateUnorderedAccessView(s_gi_reservoirBuffers[i].Get(), nullptr,
                                         &resUavDesc, resUavCpu);
   }
 

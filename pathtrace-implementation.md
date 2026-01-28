@@ -60,7 +60,7 @@ To maintain clean code, the implementation is split into specialized files:
 
 1.  **Phase 1 (Foundations):** ✅ Implement the Accumulation Buffer and basic Path Tracing loop (Reflections + Shadows).
 2.  **Phase 2 (ReSTIR DI):** ✅ Implement Reservoir sampling for local lights to get clean soft shadows.
-3.  **Phase 3 (BSDF/GI/Optimization):** 🟡 Refine BSDFs, add refraction, and implement ReSTIR GI for interior light bounces.
-4.  **Phase 4 (Streamline/DLSS-D):** Hook up the G-Buffer and Motion Vectors to DLSS Ray Reconstruction.
+3.  **Phase 3 (BSDF/GI/Optimization):** ✅ Refine BSDFs (Height-correlated Smith), added refraction, and implemented ReSTIR GI (Temporal/Spatial/Reconnection).
+4.  **Phase 4 (Streamline/DLSS-D):** 🟡 Hook up the G-Buffer and Motion Vectors to DLSS Ray Reconstruction.
 5.  **Phase 5 (Polishing):** Add the Final Export button (high-spp render to disk).
 
