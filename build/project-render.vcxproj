@@ -137,7 +137,7 @@ exit /b %1
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PostBuildEvent>
     <Link>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;comctl32.lib;Debug\imgui_static.lib;Debug\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\repos\vcpkg\installed\x64-windows\debug\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\debug\lib\miniz.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;comctl32.lib;Debug\imgui_staticd.lib;Debug\asset_loaderd.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\repos\vcpkg\installed\x64-windows\debug\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\debug\lib\miniz.lib;_deps\assimp-build\lib\Debug\assimp-vc143-mtd.lib;_deps\assimp-build\contrib\zlib\Debug\zlibstaticd.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
@@ -208,7 +208,7 @@ exit /b %1
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PostBuildEvent>
     <Link>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;comctl32.lib;Release\imgui_static.lib;Release\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\miniz.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;comctl32.lib;Release\imgui_static.lib;Release\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\miniz.lib;_deps\assimp-build\lib\Release\assimp-vc143-mt.lib;_deps\assimp-build\contrib\zlib\Release\zlibstatic.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
@@ -279,7 +279,7 @@ exit /b %1
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PostBuildEvent>
     <Link>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;comctl32.lib;MinSizeRel\imgui_static.lib;MinSizeRel\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\miniz.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;comctl32.lib;MinSizeRel\imgui_static.lib;MinSizeRel\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\miniz.lib;_deps\assimp-build\lib\MinSizeRel\assimp-vc143-mt.lib;_deps\assimp-build\contrib\zlib\MinSizeRel\zlibstatic.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
@@ -349,7 +349,7 @@ exit /b %1
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PostBuildEvent>
     <Link>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;comctl32.lib;RelWithDebInfo\imgui_static.lib;RelWithDebInfo\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\miniz.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;comctl32.lib;RelWithDebInfo\imgui_static.lib;RelWithDebInfo\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\miniz.lib;_deps\assimp-build\lib\RelWithDebInfo\assimp-vc143-mt.lib;_deps\assimp-build\contrib\zlib\RelWithDebInfo\zlibstatic.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
@@ -448,9 +448,17 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <Project>{E84030F8-86F5-3D1D-AF5D-7E83263C8400}</Project>
       <Name>asset_loader</Name>
     </ProjectReference>
+    <ProjectReference Include="D:\project-render\build\_deps\assimp-build\code\assimp.vcxproj">
+      <Project>{435FC15B-3D91-38CF-A996-E61C100C54B7}</Project>
+      <Name>assimp</Name>
+    </ProjectReference>
     <ProjectReference Include="D:\project-render\build\imgui_static.vcxproj">
       <Project>{7924691C-46B6-35AA-916A-93C623810FB0}</Project>
       <Name>imgui_static</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\project-render\build\_deps\assimp-build\contrib\zlib\zlibstatic.vcxproj">
+      <Project>{0D641F90-3D56-32FB-8E68-DA3580D2BC35}</Project>
+      <Name>zlibstatic</Name>
     </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

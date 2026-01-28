@@ -178,6 +178,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <Project>{E84030F8-86F5-3D1D-AF5D-7E83263C8400}</Project>
       <Name>asset_loader</Name>
     </ProjectReference>
+    <ProjectReference Include="D:\project-render\build\_deps\assimp-build\code\assimp.vcxproj">
+      <Project>{435FC15B-3D91-38CF-A996-E61C100C54B7}</Project>
+      <Name>assimp</Name>
+    </ProjectReference>
     <ProjectReference Include="D:\project-render\build\imgui_static.vcxproj">
       <Project>{7924691C-46B6-35AA-916A-93C623810FB0}</Project>
       <Name>imgui_static</Name>
@@ -185,6 +189,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ProjectReference Include="D:\project-render\build\project-render.vcxproj">
       <Project>{B1D5FE0C-C6C4-38CF-9BDC-85B60401C88F}</Project>
       <Name>project-render</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\project-render\build\_deps\assimp-build\contrib\zlib\zlibstatic.vcxproj">
+      <Project>{0D641F90-3D56-32FB-8E68-DA3580D2BC35}</Project>
+      <Name>zlibstatic</Name>
     </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

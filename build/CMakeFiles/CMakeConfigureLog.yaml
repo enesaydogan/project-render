@@ -5238,3 +5238,1361 @@ events:
         - "C:/Program Files/project-render"
       CMAKE_FIND_ROOT_PATH: "D:/project-render/repos/vcpkg/installed/x64-windows/debug;D:/project-render/repos/vcpkg/installed/x64-windows"
 ...
+
+---
+events:
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeDetermineCompilerId.cmake:462 (find_file)"
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeDetermineCompilerId.cmake:500 (CMAKE_DETERMINE_COMPILER_ID_WRITE)"
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeDetermineCompilerId.cmake:8 (CMAKE_DETERMINE_COMPILER_ID_BUILD)"
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeDetermineCCompiler.cmake:122 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "build/_deps/assimp-src/CMakeLists.txt:58 (PROJECT)"
+    mode: "file"
+    variable: "src_in"
+    description: "Path to a file."
+    settings:
+      SearchFramework: "LAST"
+      SearchAppBundle: "LAST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "CMakeCCompilerId.c.in"
+    candidate_directories:
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/"
+    found: "C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeCCompilerId.c.in"
+    search_context:
+      CMAKE_PREFIX_PATH:
+        - "D:/project-render/repos/vcpkg/installed/x64-windows/debug"
+        - "D:/project-render/repos/vcpkg/installed/x64-windows"
+      ENV{PATH}:
+        - "c:\\Users\\Enes\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\debugCommand"
+        - "c:\\Users\\Enes\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\copilotCli"
+        - "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.2\\bin"
+        - "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.2\\libnvvp"
+        - "C:\\Program Files (x86)\\VMware\\VMware Workstation\\bin\\"
+        - "C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\java8path"
+        - "C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\javapath"
+        - "C:\\Program Files (x86)\\Common Files\\Intel\\Shared Libraries\\redist\\intel64_win\\compiler"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common"
+        - "C:\\Program Files\\Common Files\\Autodesk Shared\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Program Files\\nodejs\\"
+        - "C:\\Program Files\\Void\\bin"
+        - "C:\\Users\\Enes\\AppData\\Roaming\\turbo-delete\\bin"
+        - "C:\\Program Files\\CMake\\bin"
+        - "C:\\Program Files\\NVIDIA Corporation\\Nsight Compute 2023.2.0\\"
+        - "C:\\Program Files\\NVIDIA Corporation\\NVIDIA App\\NvDLISR"
+        - "c:\\Users\\Enes\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\debugCommand"
+        - "c:\\Users\\Enes\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\copilotCli"
+        - "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.2\\bin"
+        - "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.2\\libnvvp"
+        - "C:\\Program Files (x86)\\VMware\\VMware Workstation\\bin\\"
+        - "C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\java8path"
+        - "C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\javapath"
+        - "C:\\Program Files (x86)\\Common Files\\Intel\\Shared Libraries\\redist\\intel64_win\\compiler"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common"
+        - "C:\\Program Files\\Common Files\\Autodesk Shared\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Program Files\\NVIDIA Corporation\\NVIDIA App\\NvDLISR"
+        - "C:\\Program Files\\nodejs\\"
+        - "C:\\Program Files\\Void\\bin"
+        - "C:\\Users\\Enes\\AppData\\Roaming\\turbo-delete\\bin"
+        - "C:\\Program Files\\CMake\\bin"
+        - "C:\\Program Files\\NVIDIA Corporation\\Nsight Compute 2023.2.0\\"
+        - "C:\\Program Files\\NVIDIA Corporation\\NVIDIA NvDLISR"
+        - "C:\\Program Files (x86)\\VMware\\VMware Workstation\\bin\\"
+        - "C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\java8path"
+        - "C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\javapath"
+        - "C:\\Program Files (x86)\\Common Files\\Intel\\Shared Libraries\\redist\\intel64_win\\compiler"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common"
+        - "C:\\Program Files\\Common Files\\Autodesk Shared\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Program Files\\NVIDIA Corporation\\NVIDIA App\\NvDLISR"
+        - "C:\\Program Files\\nodejs\\"
+        - "C:\\Program Files\\Void\\bin"
+        - "C:\\Users\\Enes\\AppData\\Roaming\\turbo-delete\\bin"
+        - "C:\\Program Files\\CMake\\bin"
+        - "C:\\Users\\Enes\\AppData\\Local\\Programs\\Python\\Python313\\Scripts\\"
+        - "C:\\Users\\Enes\\AppData\\Local\\Programs\\Python\\Python313\\"
+        - "C:\\Users\\Enes\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\Enes\\AppData\\Local\\GitHubDesktop\\bin"
+        - "C:\\Users\\Enes\\AppData\\Local\\Programs\\Antigravity\\bin"
+        - "C:\\Users\\Enes\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "C:\\Users\\Enes\\AppData\\Roaming\\npm"
+        - "C:\\Users\\Enes\\.lmstudio\\bin"
+        - "C:\\Users\\Enes\\AppData\\Local\\Programs\\cursor\\resources\\app\\bin"
+        - "D:\\project-render\\repos\\vcpkg"
+        - "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64"
+        - "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64"
+        - "C:\\Users\\Enes\\AppData\\Local\\Programs\\Windsurf\\bin"
+        - "C:\\Users\\Enes\\AppData\\Local\\Programs\\Ollama"
+        - "c:\\Users\\Enes\\.vscode\\extensions\\ms-python.debugpy-2025.18.0-win32-x64\\bundled\\scripts\\noConfigScripts"
+      CMAKE_INSTALL_PREFIX: "C:/Program Files/project-render"
+      CMAKE_SYSTEM_PREFIX_PATH:
+        - "C:/Program Files"
+        - "C:/Program Files (x86)"
+        - "C:/Program Files/CMake"
+        - "C:/Program Files/project-render"
+      CMAKE_FIND_ROOT_PATH: "D:/project-render/repos/vcpkg/installed/x64-windows/debug;D:/project-render/repos/vcpkg/installed/x64-windows"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeDetermineCCompiler.cmake:122 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "build/_deps/assimp-src/CMakeLists.txt:58 (PROJECT)"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" succeeded.
+      Compiler:  
+      Build flags: 
+      Id flags:  
+      
+      The output was:
+      0
+      .NET Framework i├ğin MSBuild s├╝r├╝m 17.14.40+3e7442088
+      Olu┼şturma ba┼şlat─▒ld─▒: 28.01.2026 10:41:45.
+      
+      1 d├╝─ş├╝m├╝nde "D:\\project-render\\build\\CMakeFiles\\4.2.1\\CompilerIdC\\CompilerIdC.vcxproj" projesi (varsay─▒lan hedefler).
+      PrepareForBuild:
+        "Debug\\" dizini olu┼şturuluyor.
+        Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
+        "Debug\\CompilerIdC.tlog\\" dizini olu┼şturuluyor.
+      InitializeBuildStatus:
+        "AlwaysCreate" belirtildi─şi i├ğin "Debug\\CompilerIdC.tlog\\unsuccessfulbuild" olu┼şturuluyor.
+        "Debug\\CompilerIdC.tlog\\unsuccessfulbuild" ├Â─şesine eri┼şiliyor.
+      ClCompile:
+        C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /nologo /W0 /WX- /diagnostics:column /Od /D _MBCS /Gm- /EHsc /RTC1 /MDd /GS /fp:precise /Zc:wchar_t /Zc:forScope /Zc:inline /Fo"Debug\\\\" /Fd"Debug\\vc143.pdb" /external:W0 /Gd /TC /FC /errorReport:queue CMakeCCompilerId.c
+        CMakeCCompilerId.c
+      Link:
+        C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /ERRORREPORT:QUEUE /OUT:".\\CompilerIdC.exe" /INCREMENTAL:NO /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /PDB:".\\CompilerIdC.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /DYNAMICBASE /NXCOMPAT /IMPLIB:".\\CompilerIdC.lib" /MACHINE:X64 Debug\\CMakeCCompilerId.obj
+        CompilerIdC.vcxproj -> D:\\project-render\\build\\CMakeFiles\\4.2.1\\CompilerIdC\\CompilerIdC.exe
+      PostBuildEvent:
+        for %%i in (cl.exe) do @echo CMAKE_C_COMPILER=%%~$PATH:i
+        :VCEnd
+        CMAKE_C_COMPILER=C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\cl.exe
+      FinalizeBuildStatus:
+        "Debug\\CompilerIdC.tlog\\unsuccessfulbuild" dosyas─▒ siliniyor.
+        "Debug\\CompilerIdC.tlog\\CompilerIdC.lastbuildstate" ├Â─şesine eri┼şiliyor.
+      "D:\\project-render\\build\\CMakeFiles\\4.2.1\\CompilerIdC\\CompilerIdC.vcxproj" Projesini Olu┼şturma ─░┼şlemi Tamamland─▒ (varsay─▒lan hedefler).
+      
+      Olu┼şturma ba┼şar─▒l─▒ oldu.
+          0 Uyar─▒
+          0 Hata
+      
+      Ge├ğen S├╝re 00:00:00.51
+      
+      
+      Compilation of the C compiler identification source "CMakeCCompilerId.c" produced "CompilerIdC.exe"
+      
+      Compilation of the C compiler identification source "CMakeCCompilerId.c" produced "CompilerIdC.vcxproj"
+      
+      The C compiler identification is MSVC, found in:
+        D:/project-render/build/CMakeFiles/4.2.1/CompilerIdC/CompilerIdC.exe
+      
+  -
+    kind: "find-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeFindBinUtils.cmake:37 (find_program)"
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeFindBinUtils.cmake:65 (__resolve_tool_path)"
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeFindBinUtils.cmake:104 (__resolve_linker_path)"
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
+      - "build/_deps/assimp-src/CMakeLists.txt:58 (PROJECT)"
+    mode: "program"
+    variable: "_CMAKE_TOOL_WITH_PATH"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "LAST"
+      SearchAppBundle: "LAST"
+      CMAKE_FIND_USE_CMAKE_PATH: false
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: false
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "lld-link"
+    candidate_directories:
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/libnvvp/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/VMware/VMware Workstation/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/Common Files/Oracle/Java/java8path/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/Common Files/Oracle/Java/javapath/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/Common Files/Intel/Shared Libraries/redist/intel64_win/compiler/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Windows/System32/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Windows/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Windows/System32/wbem/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Windows/System32/WindowsPowerShell/v1.0/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Windows/System32/OpenSSH/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/dotnet/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/NVIDIA Corporation/PhysX/Common/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/Common Files/Autodesk Shared/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/Git/cmd/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/nodejs/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/Void/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Roaming/turbo-delete/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/CMake/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/NVIDIA Corporation/Nsight Compute 2023.2.0/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/NVIDIA Corporation/NVIDIA App/NvDLISR/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/NVIDIA Corporation/NVIDIA NvDLISR/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/Python/Python313/Scripts/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/Python/Python313/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Microsoft/WindowsApps/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/GitHubDesktop/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/Antigravity/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/Microsoft VS Code/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Roaming/npm/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/.lmstudio/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/cursor/resources/app/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/project-render/repos/vcpkg/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/Windsurf/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/Ollama/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/.vscode/extensions/ms-python.debugpy-2025.18.0-win32-x64/bundled/scripts/noConfigScripts/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/sbin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/sbin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/CMake/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/CMake/sbin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/CMake/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/project-render/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/project-render/sbin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/project-render/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/libnvvp/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/VMware/VMware Workstation/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/Common Files/Oracle/Java/java8path/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/Common Files/Oracle/Java/javapath/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/Common Files/Intel/Shared Libraries/redist/intel64_win/compiler/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Windows/System32/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Windows/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Windows/System32/wbem/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Windows/System32/WindowsPowerShell/v1.0/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Windows/System32/OpenSSH/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/dotnet/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/NVIDIA Corporation/PhysX/Common/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/Common Files/Autodesk Shared/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/Git/cmd/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/nodejs/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/Void/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Roaming/turbo-delete/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/CMake/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/NVIDIA Corporation/Nsight Compute 2023.2.0/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/NVIDIA Corporation/NVIDIA App/NvDLISR/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/NVIDIA Corporation/NVIDIA NvDLISR/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/Python/Python313/Scripts/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/Python/Python313/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Microsoft/WindowsApps/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/GitHubDesktop/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/Antigravity/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/Microsoft VS Code/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Roaming/npm/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/.lmstudio/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/cursor/resources/app/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/project-render/repos/vcpkg/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/Windsurf/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/Ollama/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/.vscode/extensions/ms-python.debugpy-2025.18.0-win32-x64/bundled/scripts/noConfigScripts/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/sbin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/sbin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/CMake/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/CMake/sbin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/CMake/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/project-render/bin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/project-render/sbin/"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/project-render/"
+      - "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/"
+      - "C:/Users/Enes/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/"
+      - "C:/Users/Enes/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/"
+      - "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/bin/"
+      - "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/libnvvp/"
+      - "C:/Program Files (x86)/VMware/VMware Workstation/bin/"
+      - "C:/Program Files (x86)/Common Files/Oracle/Java/java8path/"
+      - "C:/Program Files (x86)/Common Files/Oracle/Java/javapath/"
+      - "C:/Program Files (x86)/Common Files/Intel/Shared Libraries/redist/intel64_win/compiler/"
+      - "C:/Windows/System32/"
+      - "C:/Windows/"
+      - "C:/Windows/System32/wbem/"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/"
+      - "C:/Windows/System32/OpenSSH/"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/"
+      - "C:/Program Files/dotnet/"
+      - "C:/Program Files (x86)/NVIDIA Corporation/PhysX/Common/"
+      - "C:/Program Files/Common Files/Autodesk Shared/"
+      - "C:/Program Files/Git/cmd/"
+      - "C:/Program Files/nodejs/"
+      - "C:/Program Files/Void/bin/"
+      - "C:/Users/Enes/AppData/Roaming/turbo-delete/bin/"
+      - "C:/Program Files/CMake/bin/"
+      - "C:/Program Files/NVIDIA Corporation/Nsight Compute 2023.2.0/"
+      - "C:/Program Files/NVIDIA Corporation/NVIDIA App/NvDLISR/"
+      - "C:/Program Files/NVIDIA Corporation/NVIDIA NvDLISR/"
+      - "C:/Users/Enes/AppData/Local/Programs/Python/Python313/Scripts/"
+      - "C:/Users/Enes/AppData/Local/Programs/Python/Python313/"
+      - "C:/Users/Enes/AppData/Local/Microsoft/WindowsApps/"
+      - "C:/Users/Enes/AppData/Local/GitHubDesktop/bin/"
+      - "C:/Users/Enes/AppData/Local/Programs/Antigravity/bin/"
+      - "C:/Users/Enes/AppData/Local/Programs/Microsoft VS Code/bin/"
+      - "C:/Users/Enes/AppData/Roaming/npm/"
+      - "C:/Users/Enes/.lmstudio/bin/"
+      - "C:/Users/Enes/AppData/Local/Programs/cursor/resources/app/bin/"
+      - "D:/project-render/repos/vcpkg/"
+      - "C:/Users/Enes/AppData/Local/Programs/Windsurf/bin/"
+      - "C:/Users/Enes/AppData/Local/Programs/Ollama/"
+      - "C:/Users/Enes/.vscode/extensions/ms-python.debugpy-2025.18.0-win32-x64/bundled/scripts/noConfigScripts/"
+      - "C:/Program Files/bin/"
+      - "C:/Program Files/sbin/"
+      - "C:/Program Files/"
+      - "C:/Program Files (x86)/bin/"
+      - "C:/Program Files (x86)/sbin/"
+      - "C:/Program Files (x86)/"
+      - "C:/Program Files/CMake/bin/"
+      - "C:/Program Files/CMake/sbin/"
+      - "C:/Program Files/CMake/"
+      - "C:/Program Files/project-render/bin/"
+      - "C:/Program Files/project-render/sbin/"
+      - "C:/Program Files/project-render/"
+    searched_directories:
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/libnvvp/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/libnvvp/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/libnvvp/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/VMware/VMware Workstation/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/VMware/VMware Workstation/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/VMware/VMware Workstation/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/Common Files/Oracle/Java/java8path/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/Common Files/Oracle/Java/java8path/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/Common Files/Oracle/Java/java8path/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/Common Files/Oracle/Java/javapath/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/Common Files/Oracle/Java/javapath/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/Common Files/Oracle/Java/javapath/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/Common Files/Intel/Shared Libraries/redist/intel64_win/compiler/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/Common Files/Intel/Shared Libraries/redist/intel64_win/compiler/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/Common Files/Intel/Shared Libraries/redist/intel64_win/compiler/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Windows/System32/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Windows/System32/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Windows/System32/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Windows/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Windows/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Windows/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Windows/System32/wbem/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Windows/System32/wbem/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Windows/System32/wbem/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Windows/System32/WindowsPowerShell/v1.0/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Windows/System32/WindowsPowerShell/v1.0/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Windows/System32/WindowsPowerShell/v1.0/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Windows/System32/OpenSSH/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Windows/System32/OpenSSH/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Windows/System32/OpenSSH/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/dotnet/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/dotnet/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/dotnet/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/NVIDIA Corporation/PhysX/Common/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/NVIDIA Corporation/PhysX/Common/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/NVIDIA Corporation/PhysX/Common/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/Common Files/Autodesk Shared/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/Common Files/Autodesk Shared/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/Common Files/Autodesk Shared/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/Git/cmd/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/Git/cmd/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/Git/cmd/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/nodejs/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/nodejs/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/nodejs/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/Void/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/Void/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/Void/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Roaming/turbo-delete/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Roaming/turbo-delete/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Roaming/turbo-delete/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/CMake/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/CMake/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/CMake/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/NVIDIA Corporation/Nsight Compute 2023.2.0/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/NVIDIA Corporation/Nsight Compute 2023.2.0/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/NVIDIA Corporation/Nsight Compute 2023.2.0/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/NVIDIA Corporation/NVIDIA App/NvDLISR/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/NVIDIA Corporation/NVIDIA App/NvDLISR/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/NVIDIA Corporation/NVIDIA App/NvDLISR/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/NVIDIA Corporation/NVIDIA NvDLISR/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/NVIDIA Corporation/NVIDIA NvDLISR/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/NVIDIA Corporation/NVIDIA NvDLISR/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/Python/Python313/Scripts/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/Python/Python313/Scripts/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/Python/Python313/Scripts/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/Python/Python313/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/Python/Python313/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/Python/Python313/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Microsoft/WindowsApps/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Microsoft/WindowsApps/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Microsoft/WindowsApps/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/GitHubDesktop/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/GitHubDesktop/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/GitHubDesktop/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/Antigravity/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/Antigravity/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/Antigravity/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/Microsoft VS Code/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/Microsoft VS Code/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/Microsoft VS Code/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Roaming/npm/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Roaming/npm/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Roaming/npm/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/.lmstudio/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/.lmstudio/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/.lmstudio/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/cursor/resources/app/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/cursor/resources/app/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/cursor/resources/app/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/project-render/repos/vcpkg/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/project-render/repos/vcpkg/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/project-render/repos/vcpkg/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/Windsurf/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/Windsurf/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/Windsurf/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/Ollama/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/Ollama/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/AppData/Local/Programs/Ollama/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/.vscode/extensions/ms-python.debugpy-2025.18.0-win32-x64/bundled/scripts/noConfigScripts/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/.vscode/extensions/ms-python.debugpy-2025.18.0-win32-x64/bundled/scripts/noConfigScripts/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Users/Enes/.vscode/extensions/ms-python.debugpy-2025.18.0-win32-x64/bundled/scripts/noConfigScripts/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/sbin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/sbin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/sbin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/sbin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/sbin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/sbin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files (x86)/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/CMake/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/CMake/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/CMake/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/CMake/sbin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/CMake/sbin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/CMake/sbin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/CMake/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/CMake/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/CMake/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/project-render/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/project-render/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/project-render/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/project-render/sbin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/project-render/sbin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/project-render/sbin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/project-render/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/project-render/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/debug/Program Files/project-render/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/libnvvp/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/libnvvp/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/libnvvp/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/VMware/VMware Workstation/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/VMware/VMware Workstation/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/VMware/VMware Workstation/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/Common Files/Oracle/Java/java8path/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/Common Files/Oracle/Java/java8path/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/Common Files/Oracle/Java/java8path/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/Common Files/Oracle/Java/javapath/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/Common Files/Oracle/Java/javapath/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/Common Files/Oracle/Java/javapath/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/Common Files/Intel/Shared Libraries/redist/intel64_win/compiler/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/Common Files/Intel/Shared Libraries/redist/intel64_win/compiler/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/Common Files/Intel/Shared Libraries/redist/intel64_win/compiler/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Windows/System32/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Windows/System32/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Windows/System32/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Windows/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Windows/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Windows/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Windows/System32/wbem/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Windows/System32/wbem/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Windows/System32/wbem/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Windows/System32/WindowsPowerShell/v1.0/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Windows/System32/WindowsPowerShell/v1.0/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Windows/System32/WindowsPowerShell/v1.0/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Windows/System32/OpenSSH/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Windows/System32/OpenSSH/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Windows/System32/OpenSSH/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/dotnet/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/dotnet/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/dotnet/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/NVIDIA Corporation/PhysX/Common/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/NVIDIA Corporation/PhysX/Common/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/NVIDIA Corporation/PhysX/Common/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/Common Files/Autodesk Shared/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/Common Files/Autodesk Shared/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/Common Files/Autodesk Shared/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/Git/cmd/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/Git/cmd/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/Git/cmd/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/nodejs/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/nodejs/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/nodejs/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/Void/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/Void/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/Void/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Roaming/turbo-delete/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Roaming/turbo-delete/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Roaming/turbo-delete/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/CMake/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/CMake/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/CMake/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/NVIDIA Corporation/Nsight Compute 2023.2.0/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/NVIDIA Corporation/Nsight Compute 2023.2.0/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/NVIDIA Corporation/Nsight Compute 2023.2.0/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/NVIDIA Corporation/NVIDIA App/NvDLISR/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/NVIDIA Corporation/NVIDIA App/NvDLISR/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/NVIDIA Corporation/NVIDIA App/NvDLISR/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/NVIDIA Corporation/NVIDIA NvDLISR/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/NVIDIA Corporation/NVIDIA NvDLISR/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/NVIDIA Corporation/NVIDIA NvDLISR/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/Python/Python313/Scripts/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/Python/Python313/Scripts/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/Python/Python313/Scripts/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/Python/Python313/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/Python/Python313/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/Python/Python313/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Microsoft/WindowsApps/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Microsoft/WindowsApps/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Microsoft/WindowsApps/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/GitHubDesktop/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/GitHubDesktop/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/GitHubDesktop/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/Antigravity/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/Antigravity/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/Antigravity/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/Microsoft VS Code/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/Microsoft VS Code/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/Microsoft VS Code/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Roaming/npm/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Roaming/npm/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Roaming/npm/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/.lmstudio/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/.lmstudio/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/.lmstudio/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/cursor/resources/app/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/cursor/resources/app/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/cursor/resources/app/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/project-render/repos/vcpkg/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/project-render/repos/vcpkg/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/project-render/repos/vcpkg/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/Windsurf/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/Windsurf/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/Windsurf/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/Ollama/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/Ollama/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/AppData/Local/Programs/Ollama/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/.vscode/extensions/ms-python.debugpy-2025.18.0-win32-x64/bundled/scripts/noConfigScripts/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/.vscode/extensions/ms-python.debugpy-2025.18.0-win32-x64/bundled/scripts/noConfigScripts/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Users/Enes/.vscode/extensions/ms-python.debugpy-2025.18.0-win32-x64/bundled/scripts/noConfigScripts/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/sbin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/sbin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/sbin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/sbin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/sbin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/sbin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files (x86)/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/CMake/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/CMake/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/CMake/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/CMake/sbin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/CMake/sbin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/CMake/sbin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/CMake/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/CMake/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/CMake/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/project-render/bin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/project-render/bin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/project-render/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/project-render/sbin/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/project-render/sbin/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/project-render/sbin/lld-link"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/project-render/lld-link.com"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/project-render/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/installed/x64-windows/Program Files/project-render/lld-link"
+      - "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/lld-link.com"
+      - "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/lld-link.exe"
+      - "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/lld-link"
+      - "C:/Users/Enes/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/lld-link.com"
+      - "C:/Users/Enes/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/lld-link.exe"
+      - "C:/Users/Enes/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/debugCommand/lld-link"
+      - "C:/Users/Enes/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/lld-link.com"
+      - "C:/Users/Enes/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/lld-link.exe"
+      - "C:/Users/Enes/AppData/Roaming/Code/User/globalStorage/github.copilot-chat/copilotCli/lld-link"
+      - "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/bin/lld-link.com"
+      - "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/bin/lld-link.exe"
+      - "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/bin/lld-link"
+      - "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/libnvvp/lld-link.com"
+      - "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/libnvvp/lld-link.exe"
+      - "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.2/libnvvp/lld-link"
+      - "C:/Program Files (x86)/VMware/VMware Workstation/bin/lld-link.com"
+      - "C:/Program Files (x86)/VMware/VMware Workstation/bin/lld-link.exe"
+      - "C:/Program Files (x86)/VMware/VMware Workstation/bin/lld-link"
+      - "C:/Program Files (x86)/Common Files/Oracle/Java/java8path/lld-link.com"
+      - "C:/Program Files (x86)/Common Files/Oracle/Java/java8path/lld-link.exe"
+      - "C:/Program Files (x86)/Common Files/Oracle/Java/java8path/lld-link"
+      - "C:/Program Files (x86)/Common Files/Oracle/Java/javapath/lld-link.com"
+      - "C:/Program Files (x86)/Common Files/Oracle/Java/javapath/lld-link.exe"
+      - "C:/Program Files (x86)/Common Files/Oracle/Java/javapath/lld-link"
+      - "C:/Program Files (x86)/Common Files/Intel/Shared Libraries/redist/intel64_win/compiler/lld-link.com"
+      - "C:/Program Files (x86)/Common Files/Intel/Shared Libraries/redist/intel64_win/compiler/lld-link.exe"
+      - "C:/Program Files (x86)/Common Files/Intel/Shared Libraries/redist/intel64_win/compiler/lld-link"
+      - "C:/Windows/System32/lld-link.com"
+      - "C:/Windows/System32/lld-link.exe"
+      - "C:/Windows/System32/lld-link"
+      - "C:/Windows/lld-link.com"
+      - "C:/Windows/lld-link.exe"
+      - "C:/Windows/lld-link"
+      - "C:/Windows/System32/wbem/lld-link.com"
+      - "C:/Windows/System32/wbem/lld-link.exe"
+      - "C:/Windows/System32/wbem/lld-link"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/lld-link.com"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/lld-link.exe"
+      - "C:/Windows/System32/WindowsPowerShell/v1.0/lld-link"
+      - "C:/Windows/System32/OpenSSH/lld-link.com"
+      - "C:/Windows/System32/OpenSSH/lld-link.exe"
+      - "C:/Windows/System32/OpenSSH/lld-link"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/lld-link.com"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/lld-link.exe"
+      - "C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/lld-link"
+      - "C:/Program Files/dotnet/lld-link.com"
+      - "C:/Program Files/dotnet/lld-link.exe"
+      - "C:/Program Files/dotnet/lld-link"
+      - "C:/Program Files (x86)/NVIDIA Corporation/PhysX/Common/lld-link.com"
+      - "C:/Program Files (x86)/NVIDIA Corporation/PhysX/Common/lld-link.exe"
+      - "C:/Program Files (x86)/NVIDIA Corporation/PhysX/Common/lld-link"
+      - "C:/Program Files/Common Files/Autodesk Shared/lld-link.com"
+      - "C:/Program Files/Common Files/Autodesk Shared/lld-link.exe"
+      - "C:/Program Files/Common Files/Autodesk Shared/lld-link"
+      - "C:/Program Files/Git/cmd/lld-link.com"
+      - "C:/Program Files/Git/cmd/lld-link.exe"
+      - "C:/Program Files/Git/cmd/lld-link"
+      - "C:/Program Files/nodejs/lld-link.com"
+      - "C:/Program Files/nodejs/lld-link.exe"
+      - "C:/Program Files/nodejs/lld-link"
+      - "C:/Program Files/Void/bin/lld-link.com"
+      - "C:/Program Files/Void/bin/lld-link.exe"
+      - "C:/Program Files/Void/bin/lld-link"
+      - "C:/Users/Enes/AppData/Roaming/turbo-delete/bin/lld-link.com"
+      - "C:/Users/Enes/AppData/Roaming/turbo-delete/bin/lld-link.exe"
+      - "C:/Users/Enes/AppData/Roaming/turbo-delete/bin/lld-link"
+      - "C:/Program Files/CMake/bin/lld-link.com"
+      - "C:/Program Files/CMake/bin/lld-link.exe"
+      - "C:/Program Files/CMake/bin/lld-link"
+      - "C:/Program Files/NVIDIA Corporation/Nsight Compute 2023.2.0/lld-link.com"
+      - "C:/Program Files/NVIDIA Corporation/Nsight Compute 2023.2.0/lld-link.exe"
+      - "C:/Program Files/NVIDIA Corporation/Nsight Compute 2023.2.0/lld-link"
+      - "C:/Program Files/NVIDIA Corporation/NVIDIA App/NvDLISR/lld-link.com"
+      - "C:/Program Files/NVIDIA Corporation/NVIDIA App/NvDLISR/lld-link.exe"
+      - "C:/Program Files/NVIDIA Corporation/NVIDIA App/NvDLISR/lld-link"
+      - "C:/Program Files/NVIDIA Corporation/NVIDIA NvDLISR/lld-link.com"
+      - "C:/Program Files/NVIDIA Corporation/NVIDIA NvDLISR/lld-link.exe"
+      - "C:/Program Files/NVIDIA Corporation/NVIDIA NvDLISR/lld-link"
+      - "C:/Users/Enes/AppData/Local/Programs/Python/Python313/Scripts/lld-link.com"
+      - "C:/Users/Enes/AppData/Local/Programs/Python/Python313/Scripts/lld-link.exe"
+      - "C:/Users/Enes/AppData/Local/Programs/Python/Python313/Scripts/lld-link"
+      - "C:/Users/Enes/AppData/Local/Programs/Python/Python313/lld-link.com"
+      - "C:/Users/Enes/AppData/Local/Programs/Python/Python313/lld-link.exe"
+      - "C:/Users/Enes/AppData/Local/Programs/Python/Python313/lld-link"
+      - "C:/Users/Enes/AppData/Local/Microsoft/WindowsApps/lld-link.com"
+      - "C:/Users/Enes/AppData/Local/Microsoft/WindowsApps/lld-link.exe"
+      - "C:/Users/Enes/AppData/Local/Microsoft/WindowsApps/lld-link"
+      - "C:/Users/Enes/AppData/Local/GitHubDesktop/bin/lld-link.com"
+      - "C:/Users/Enes/AppData/Local/GitHubDesktop/bin/lld-link.exe"
+      - "C:/Users/Enes/AppData/Local/GitHubDesktop/bin/lld-link"
+      - "C:/Users/Enes/AppData/Local/Programs/Antigravity/bin/lld-link.com"
+      - "C:/Users/Enes/AppData/Local/Programs/Antigravity/bin/lld-link.exe"
+      - "C:/Users/Enes/AppData/Local/Programs/Antigravity/bin/lld-link"
+      - "C:/Users/Enes/AppData/Local/Programs/Microsoft VS Code/bin/lld-link.com"
+      - "C:/Users/Enes/AppData/Local/Programs/Microsoft VS Code/bin/lld-link.exe"
+      - "C:/Users/Enes/AppData/Local/Programs/Microsoft VS Code/bin/lld-link"
+      - "C:/Users/Enes/AppData/Roaming/npm/lld-link.com"
+      - "C:/Users/Enes/AppData/Roaming/npm/lld-link.exe"
+      - "C:/Users/Enes/AppData/Roaming/npm/lld-link"
+      - "C:/Users/Enes/.lmstudio/bin/lld-link.com"
+      - "C:/Users/Enes/.lmstudio/bin/lld-link.exe"
+      - "C:/Users/Enes/.lmstudio/bin/lld-link"
+      - "C:/Users/Enes/AppData/Local/Programs/cursor/resources/app/bin/lld-link.com"
+      - "C:/Users/Enes/AppData/Local/Programs/cursor/resources/app/bin/lld-link.exe"
+      - "C:/Users/Enes/AppData/Local/Programs/cursor/resources/app/bin/lld-link"
+      - "D:/project-render/repos/vcpkg/lld-link.com"
+      - "D:/project-render/repos/vcpkg/lld-link.exe"
+      - "D:/project-render/repos/vcpkg/lld-link"
+      - "C:/Users/Enes/AppData/Local/Programs/Windsurf/bin/lld-link.com"
+      - "C:/Users/Enes/AppData/Local/Programs/Windsurf/bin/lld-link.exe"
+      - "C:/Users/Enes/AppData/Local/Programs/Windsurf/bin/lld-link"
+      - "C:/Users/Enes/AppData/Local/Programs/Ollama/lld-link.com"
+      - "C:/Users/Enes/AppData/Local/Programs/Ollama/lld-link.exe"
+      - "C:/Users/Enes/AppData/Local/Programs/Ollama/lld-link"
+      - "C:/Users/Enes/.vscode/extensions/ms-python.debugpy-2025.18.0-win32-x64/bundled/scripts/noConfigScripts/lld-link.com"
+      - "C:/Users/Enes/.vscode/extensions/ms-python.debugpy-2025.18.0-win32-x64/bundled/scripts/noConfigScripts/lld-link.exe"
+      - "C:/Users/Enes/.vscode/extensions/ms-python.debugpy-2025.18.0-win32-x64/bundled/scripts/noConfigScripts/lld-link"
+      - "C:/Program Files/bin/lld-link.com"
+      - "C:/Program Files/bin/lld-link.exe"
+      - "C:/Program Files/bin/lld-link"
+      - "C:/Program Files/sbin/lld-link.com"
+      - "C:/Program Files/sbin/lld-link.exe"
+      - "C:/Program Files/sbin/lld-link"
+      - "C:/Program Files/lld-link.com"
+      - "C:/Program Files/lld-link.exe"
+      - "C:/Program Files/lld-link"
+      - "C:/Program Files (x86)/bin/lld-link.com"
+      - "C:/Program Files (x86)/bin/lld-link.exe"
+      - "C:/Program Files (x86)/bin/lld-link"
+      - "C:/Program Files (x86)/sbin/lld-link.com"
+      - "C:/Program Files (x86)/sbin/lld-link.exe"
+      - "C:/Program Files (x86)/sbin/lld-link"
+      - "C:/Program Files (x86)/lld-link.com"
+      - "C:/Program Files (x86)/lld-link.exe"
+      - "C:/Program Files (x86)/lld-link"
+      - "C:/Program Files/CMake/bin/lld-link.com"
+      - "C:/Program Files/CMake/bin/lld-link.exe"
+      - "C:/Program Files/CMake/bin/lld-link"
+      - "C:/Program Files/CMake/sbin/lld-link.com"
+      - "C:/Program Files/CMake/sbin/lld-link.exe"
+      - "C:/Program Files/CMake/sbin/lld-link"
+      - "C:/Program Files/CMake/lld-link.com"
+      - "C:/Program Files/CMake/lld-link.exe"
+      - "C:/Program Files/CMake/lld-link"
+      - "C:/Program Files/project-render/bin/lld-link.com"
+      - "C:/Program Files/project-render/bin/lld-link.exe"
+      - "C:/Program Files/project-render/bin/lld-link"
+      - "C:/Program Files/project-render/sbin/lld-link.com"
+      - "C:/Program Files/project-render/sbin/lld-link.exe"
+      - "C:/Program Files/project-render/sbin/lld-link"
+      - "C:/Program Files/project-render/lld-link.com"
+      - "C:/Program Files/project-render/lld-link.exe"
+      - "C:/Program Files/project-render/lld-link"
+    found: false
+    search_context:
+      CMAKE_PROGRAM_PATH:
+        - "D:/project-render/repos/vcpkg/installed/x64-windows/tools"
+      CMAKE_PREFIX_PATH:
+        - "D:/project-render/repos/vcpkg/installed/x64-windows/debug"
+        - "D:/project-render/repos/vcpkg/installed/x64-windows"
+      ENV{PATH}:
+        - "c:\\Users\\Enes\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\debugCommand"
+        - "c:\\Users\\Enes\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\copilotCli"
+        - "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.2\\bin"
+        - "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.2\\libnvvp"
+        - "C:\\Program Files (x86)\\VMware\\VMware Workstation\\bin\\"
+        - "C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\java8path"
+        - "C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\javapath"
+        - "C:\\Program Files (x86)\\Common Files\\Intel\\Shared Libraries\\redist\\intel64_win\\compiler"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common"
+        - "C:\\Program Files\\Common Files\\Autodesk Shared\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Program Files\\nodejs\\"
+        - "C:\\Program Files\\Void\\bin"
+        - "C:\\Users\\Enes\\AppData\\Roaming\\turbo-delete\\bin"
+        - "C:\\Program Files\\CMake\\bin"
+        - "C:\\Program Files\\NVIDIA Corporation\\Nsight Compute 2023.2.0\\"
+        - "C:\\Program Files\\NVIDIA Corporation\\NVIDIA App\\NvDLISR"
+        - "c:\\Users\\Enes\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\debugCommand"
+        - "c:\\Users\\Enes\\AppData\\Roaming\\Code\\User\\globalStorage\\github.copilot-chat\\copilotCli"
+        - "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.2\\bin"
+        - "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.2\\libnvvp"
+        - "C:\\Program Files (x86)\\VMware\\VMware Workstation\\bin\\"
+        - "C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\java8path"
+        - "C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\javapath"
+        - "C:\\Program Files (x86)\\Common Files\\Intel\\Shared Libraries\\redist\\intel64_win\\compiler"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common"
+        - "C:\\Program Files\\Common Files\\Autodesk Shared\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Program Files\\NVIDIA Corporation\\NVIDIA App\\NvDLISR"
+        - "C:\\Program Files\\nodejs\\"
+        - "C:\\Program Files\\Void\\bin"
+        - "C:\\Users\\Enes\\AppData\\Roaming\\turbo-delete\\bin"
+        - "C:\\Program Files\\CMake\\bin"
+        - "C:\\Program Files\\NVIDIA Corporation\\Nsight Compute 2023.2.0\\"
+        - "C:\\Program Files\\NVIDIA Corporation\\NVIDIA NvDLISR"
+        - "C:\\Program Files (x86)\\VMware\\VMware Workstation\\bin\\"
+        - "C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\java8path"
+        - "C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\javapath"
+        - "C:\\Program Files (x86)\\Common Files\\Intel\\Shared Libraries\\redist\\intel64_win\\compiler"
+        - "C:\\WINDOWS\\system32"
+        - "C:\\WINDOWS"
+        - "C:\\WINDOWS\\System32\\Wbem"
+        - "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\"
+        - "C:\\WINDOWS\\System32\\OpenSSH\\"
+        - "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\"
+        - "C:\\Program Files\\dotnet\\"
+        - "C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common"
+        - "C:\\Program Files\\Common Files\\Autodesk Shared\\"
+        - "C:\\Program Files\\Git\\cmd"
+        - "C:\\Program Files\\NVIDIA Corporation\\NVIDIA App\\NvDLISR"
+        - "C:\\Program Files\\nodejs\\"
+        - "C:\\Program Files\\Void\\bin"
+        - "C:\\Users\\Enes\\AppData\\Roaming\\turbo-delete\\bin"
+        - "C:\\Program Files\\CMake\\bin"
+        - "C:\\Users\\Enes\\AppData\\Local\\Programs\\Python\\Python313\\Scripts\\"
+        - "C:\\Users\\Enes\\AppData\\Local\\Programs\\Python\\Python313\\"
+        - "C:\\Users\\Enes\\AppData\\Local\\Microsoft\\WindowsApps"
+        - "C:\\Users\\Enes\\AppData\\Local\\GitHubDesktop\\bin"
+        - "C:\\Users\\Enes\\AppData\\Local\\Programs\\Antigravity\\bin"
+        - "C:\\Users\\Enes\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "C:\\Users\\Enes\\AppData\\Roaming\\npm"
+        - "C:\\Users\\Enes\\.lmstudio\\bin"
+        - "C:\\Users\\Enes\\AppData\\Local\\Programs\\cursor\\resources\\app\\bin"
+        - "D:\\project-render\\repos\\vcpkg"
+        - "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64"
+        - "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64"
+        - "C:\\Users\\Enes\\AppData\\Local\\Programs\\Windsurf\\bin"
+        - "C:\\Users\\Enes\\AppData\\Local\\Programs\\Ollama"
+        - "c:\\Users\\Enes\\.vscode\\extensions\\ms-python.debugpy-2025.18.0-win32-x64\\bundled\\scripts\\noConfigScripts"
+      CMAKE_INSTALL_PREFIX: "C:/Program Files/project-render"
+      CMAKE_SYSTEM_PREFIX_PATH:
+        - "C:/Program Files"
+        - "C:/Program Files (x86)"
+        - "C:/Program Files/CMake"
+        - "C:/Program Files/project-render"
+      CMAKE_FIND_ROOT_PATH: "D:/project-render/repos/vcpkg/installed/x64-windows/debug;D:/project-render/repos/vcpkg/installed/x64-windows"
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeDetermineCompilerABI.cmake:83 (try_compile)"
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "build/_deps/assimp-src/CMakeLists.txt:58 (PROJECT)"
+    checks:
+      - "Detecting C compiler ABI info"
+    directories:
+      source: "D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-nopa7m"
+      binary: "D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-nopa7m"
+    cmakeVariables:
+      CMAKE_C_FLAGS: "/DWIN32 /D_WINDOWS"
+      CMAKE_C_FLAGS_DEBUG: "/Zi /Ob0 /Od /RTC1"
+      CMAKE_EXE_LINKER_FLAGS: "/machine:x64"
+      VCPKG_INSTALLED_DIR: "D:/project-render/repos/vcpkg/installed"
+      VCPKG_PREFER_SYSTEM_LIBS: "OFF"
+      VCPKG_TARGET_TRIPLET: "x64-windows"
+      Z_VCPKG_ROOT_DIR: "D:/project-render/repos/vcpkg"
+    buildResult:
+      variable: "CMAKE_C_ABI_COMPILED"
+      cached: true
+      stdout: |
+        Change Dir: 'D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-nopa7m'
+        
+        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_e25c8.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
+        .NET Framework i├ğin MSBuild s├╝r├╝m 17.14.40+3e7442088
+        Olu┼şturma ba┼şlat─▒ld─▒: 28.01.2026 10:41:45.
+        
+        1 d├╝─ş├╝m├╝nde "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-nopa7m\\cmTC_e25c8.vcxproj" projesi (varsay─▒lan hedefler).
+        PrepareForBuild:
+          Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
+          "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-nopa7m\\Debug\\" dizini olu┼şturuluyor.
+          "cmTC_e25c8.dir\\Debug\\cmTC_e25c8.tlog\\" dizini olu┼şturuluyor.
+        InitializeBuildStatus:
+          "AlwaysCreate" belirtildi─şi i├ğin "cmTC_e25c8.dir\\Debug\\cmTC_e25c8.tlog\\unsuccessfulbuild" olu┼şturuluyor.
+          "cmTC_e25c8.dir\\Debug\\cmTC_e25c8.tlog\\unsuccessfulbuild" ├Â─şesine eri┼şiliyor.
+        ClCompile:
+          C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_e25c8.dir\\Debug\\\\" /Fd"cmTC_e25c8.dir\\Debug\\vc143.pdb" /external:W1 /TC /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.2\\Modules\\CMakeCCompilerABI.c"
+          Microsoft (R) C/C++ Optimizing Compiler Version 19.44.35222 for x64
+          Copyright (C) Microsoft Corporation.  All rights reserved.
+          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_e25c8.dir\\Debug\\\\" /Fd"cmTC_e25c8.dir\\Debug\\vc143.pdb" /external:W1 /TC /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.2\\Modules\\CMakeCCompilerABI.c"
+          CMakeCCompilerABI.c
+        Link:
+          C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /OUT:"D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-nopa7m\\Debug\\cmTC_e25c8.exe" /INCREMENTAL /ILK:"cmTC_e25c8.dir\\Debug\\cmTC_e25c8.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-nopa7m/Debug/cmTC_e25c8.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-nopa7m/Debug/cmTC_e25c8.lib" /MACHINE:X64  /machine:x64 cmTC_e25c8.dir\\Debug\\CMakeCCompilerABI.obj
+          cmTC_e25c8.vcxproj -> D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-nopa7m\\Debug\\cmTC_e25c8.exe
+        FinalizeBuildStatus:
+          "cmTC_e25c8.dir\\Debug\\cmTC_e25c8.tlog\\unsuccessfulbuild" dosyas─▒ siliniyor.
+          "cmTC_e25c8.dir\\Debug\\cmTC_e25c8.tlog\\cmTC_e25c8.lastbuildstate" ├Â─şesine eri┼şiliyor.
+        "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-nopa7m\\cmTC_e25c8.vcxproj" Projesini Olu┼şturma ─░┼şlemi Tamamland─▒ (varsay─▒lan hedefler).
+        
+        Olu┼şturma ba┼şar─▒l─▒ oldu.
+            0 Uyar─▒
+            0 Hata
+        
+        Ge├ğen S├╝re 00:00:00.49
+        
+      exitCode: 0
+  -
+    kind: "message-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeDetermineCompilerABI.cmake:253 (message)"
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "build/_deps/assimp-src/CMakeLists.txt:58 (PROJECT)"
+    message: |
+      Parsed C implicit link information:
+        link line regex: [^( *|.*[/\\])(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)|link\\.exe|lld-link(\\.exe)?|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\\]+-)?ld|collect2)[^/\\]*( |$)]
+        linker tool regex: [^[ 	]*(->|"|[0-9]+>[ 	-]*Build:[ 	0-9]+ ms[ 	]*)?[ 	]*(([^"]*[/\\])?(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)|link\\.exe|lld-link(\\.exe)?))("|,| |$)]
+        linker tool for 'C': C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/HostX64/x64/link.exe
+        implicit libs: []
+        implicit objs: []
+        implicit dirs: []
+        implicit fwks: []
+      
+      
+  -
+    kind: "message-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/Internal/CMakeDetermineLinkerId.cmake:38 (message)"
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeDetermineCompilerABI.cmake:299 (cmake_determine_linker_id)"
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "build/_deps/assimp-src/CMakeLists.txt:58 (PROJECT)"
+    message: |
+      Running the C compiler's linker: "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/HostX64/x64/link.exe" "-v"
+      Microsoft (R) Incremental Linker Version 14.44.35222.0
+      Copyright (C) Microsoft Corporation.  All rights reserved.
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CheckIncludeFile.cmake:174 (try_compile)"
+      - "build/_deps/assimp-src/contrib/zlib/CMakeLists.txt:35 (check_include_file)"
+    checks:
+      - "Looking for sys/types.h"
+    directories:
+      source: "D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-kckamc"
+      binary: "D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-kckamc"
+    cmakeVariables:
+      CMAKE_C_FLAGS: "/DWIN32 /D_WINDOWS"
+      CMAKE_C_FLAGS_DEBUG: "/Zi /Ob0 /Od /RTC1"
+      CMAKE_EXE_LINKER_FLAGS: "/machine:x64"
+      CMAKE_MODULE_PATH: "D:/project-render/build/_deps/assimp-src/cmake-modules"
+      VCPKG_INSTALLED_DIR: "D:/project-render/repos/vcpkg/installed"
+      VCPKG_PREFER_SYSTEM_LIBS: "OFF"
+      VCPKG_TARGET_TRIPLET: "x64-windows"
+      Z_VCPKG_ROOT_DIR: "D:/project-render/repos/vcpkg"
+    buildResult:
+      variable: "HAVE_SYS_TYPES_H"
+      cached: true
+      stdout: |
+        Change Dir: 'D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-kckamc'
+        
+        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_7fc54.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
+        .NET Framework i├ğin MSBuild s├╝r├╝m 17.14.40+3e7442088
+        Olu┼şturma ba┼şlat─▒ld─▒: 28.01.2026 10:41:46.
+        
+        1 d├╝─ş├╝m├╝nde "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-kckamc\\cmTC_7fc54.vcxproj" projesi (varsay─▒lan hedefler).
+        PrepareForBuild:
+          Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
+          "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-kckamc\\Debug\\" dizini olu┼şturuluyor.
+          "cmTC_7fc54.dir\\Debug\\cmTC_7fc54.tlog\\" dizini olu┼şturuluyor.
+        InitializeBuildStatus:
+          "AlwaysCreate" belirtildi─şi i├ğin "cmTC_7fc54.dir\\Debug\\cmTC_7fc54.tlog\\unsuccessfulbuild" olu┼şturuluyor.
+          "cmTC_7fc54.dir\\Debug\\cmTC_7fc54.tlog\\unsuccessfulbuild" ├Â─şesine eri┼şiliyor.
+        ClCompile:
+          C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_7fc54.dir\\Debug\\\\" /Fd"cmTC_7fc54.dir\\Debug\\vc143.pdb" /external:W1 /TC /errorReport:queue "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-kckamc\\CheckIncludeFile.c"
+          Microsoft (R) C/C++ Optimizing Compiler Version 19.44.35222 for x64
+          Copyright (C) Microsoft Corporation.  All rights reserved.
+          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_7fc54.dir\\Debug\\\\" /Fd"cmTC_7fc54.dir\\Debug\\vc143.pdb" /external:W1 /TC /errorReport:queue "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-kckamc\\CheckIncludeFile.c"
+          CheckIncludeFile.c
+        Link:
+          C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /OUT:"D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-kckamc\\Debug\\cmTC_7fc54.exe" /INCREMENTAL /ILK:"cmTC_7fc54.dir\\Debug\\cmTC_7fc54.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-kckamc/Debug/cmTC_7fc54.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-kckamc/Debug/cmTC_7fc54.lib" /MACHINE:X64  /machine:x64 cmTC_7fc54.dir\\Debug\\CheckIncludeFile.obj
+          cmTC_7fc54.vcxproj -> D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-kckamc\\Debug\\cmTC_7fc54.exe
+        FinalizeBuildStatus:
+          "cmTC_7fc54.dir\\Debug\\cmTC_7fc54.tlog\\unsuccessfulbuild" dosyas─▒ siliniyor.
+          "cmTC_7fc54.dir\\Debug\\cmTC_7fc54.tlog\\cmTC_7fc54.lastbuildstate" ├Â─şesine eri┼şiliyor.
+        "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-kckamc\\cmTC_7fc54.vcxproj" Projesini Olu┼şturma ─░┼şlemi Tamamland─▒ (varsay─▒lan hedefler).
+        
+        Olu┼şturma ba┼şar─▒l─▒ oldu.
+            0 Uyar─▒
+            0 Hata
+        
+        Ge├ğen S├╝re 00:00:00.53
+        
+      exitCode: 0
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CheckIncludeFile.cmake:174 (try_compile)"
+      - "build/_deps/assimp-src/contrib/zlib/CMakeLists.txt:36 (check_include_file)"
+    checks:
+      - "Looking for stdint.h"
+    directories:
+      source: "D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-ytlqhr"
+      binary: "D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-ytlqhr"
+    cmakeVariables:
+      CMAKE_C_FLAGS: "/DWIN32 /D_WINDOWS"
+      CMAKE_C_FLAGS_DEBUG: "/Zi /Ob0 /Od /RTC1"
+      CMAKE_EXE_LINKER_FLAGS: "/machine:x64"
+      CMAKE_MODULE_PATH: "D:/project-render/build/_deps/assimp-src/cmake-modules"
+      VCPKG_INSTALLED_DIR: "D:/project-render/repos/vcpkg/installed"
+      VCPKG_PREFER_SYSTEM_LIBS: "OFF"
+      VCPKG_TARGET_TRIPLET: "x64-windows"
+      Z_VCPKG_ROOT_DIR: "D:/project-render/repos/vcpkg"
+    buildResult:
+      variable: "HAVE_STDINT_H"
+      cached: true
+      stdout: |
+        Change Dir: 'D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-ytlqhr'
+        
+        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_12ef4.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
+        .NET Framework i├ğin MSBuild s├╝r├╝m 17.14.40+3e7442088
+        Olu┼şturma ba┼şlat─▒ld─▒: 28.01.2026 10:41:47.
+        
+        1 d├╝─ş├╝m├╝nde "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-ytlqhr\\cmTC_12ef4.vcxproj" projesi (varsay─▒lan hedefler).
+        PrepareForBuild:
+          Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
+          "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-ytlqhr\\Debug\\" dizini olu┼şturuluyor.
+          "cmTC_12ef4.dir\\Debug\\cmTC_12ef4.tlog\\" dizini olu┼şturuluyor.
+        InitializeBuildStatus:
+          "AlwaysCreate" belirtildi─şi i├ğin "cmTC_12ef4.dir\\Debug\\cmTC_12ef4.tlog\\unsuccessfulbuild" olu┼şturuluyor.
+          "cmTC_12ef4.dir\\Debug\\cmTC_12ef4.tlog\\unsuccessfulbuild" ├Â─şesine eri┼şiliyor.
+        ClCompile:
+          C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_12ef4.dir\\Debug\\\\" /Fd"cmTC_12ef4.dir\\Debug\\vc143.pdb" /external:W1 /TC /errorReport:queue "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-ytlqhr\\CheckIncludeFile.c"
+          Microsoft (R) C/C++ Optimizing Compiler Version 19.44.35222 for x64
+          Copyright (C) Microsoft Corporation.  All rights reserved.
+          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_12ef4.dir\\Debug\\\\" /Fd"cmTC_12ef4.dir\\Debug\\vc143.pdb" /external:W1 /TC /errorReport:queue "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-ytlqhr\\CheckIncludeFile.c"
+          CheckIncludeFile.c
+        Link:
+          C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /OUT:"D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-ytlqhr\\Debug\\cmTC_12ef4.exe" /INCREMENTAL /ILK:"cmTC_12ef4.dir\\Debug\\cmTC_12ef4.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-ytlqhr/Debug/cmTC_12ef4.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-ytlqhr/Debug/cmTC_12ef4.lib" /MACHINE:X64  /machine:x64 cmTC_12ef4.dir\\Debug\\CheckIncludeFile.obj
+          cmTC_12ef4.vcxproj -> D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-ytlqhr\\Debug\\cmTC_12ef4.exe
+        FinalizeBuildStatus:
+          "cmTC_12ef4.dir\\Debug\\cmTC_12ef4.tlog\\unsuccessfulbuild" dosyas─▒ siliniyor.
+          "cmTC_12ef4.dir\\Debug\\cmTC_12ef4.tlog\\cmTC_12ef4.lastbuildstate" ├Â─şesine eri┼şiliyor.
+        "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-ytlqhr\\cmTC_12ef4.vcxproj" Projesini Olu┼şturma ─░┼şlemi Tamamland─▒ (varsay─▒lan hedefler).
+        
+        Olu┼şturma ba┼şar─▒l─▒ oldu.
+            0 Uyar─▒
+            0 Hata
+        
+        Ge├ğen S├╝re 00:00:00.43
+        
+      exitCode: 0
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CheckIncludeFile.cmake:174 (try_compile)"
+      - "build/_deps/assimp-src/contrib/zlib/CMakeLists.txt:37 (check_include_file)"
+    checks:
+      - "Looking for stddef.h"
+    directories:
+      source: "D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-ygkr1h"
+      binary: "D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-ygkr1h"
+    cmakeVariables:
+      CMAKE_C_FLAGS: "/DWIN32 /D_WINDOWS"
+      CMAKE_C_FLAGS_DEBUG: "/Zi /Ob0 /Od /RTC1"
+      CMAKE_EXE_LINKER_FLAGS: "/machine:x64"
+      CMAKE_MODULE_PATH: "D:/project-render/build/_deps/assimp-src/cmake-modules"
+      VCPKG_INSTALLED_DIR: "D:/project-render/repos/vcpkg/installed"
+      VCPKG_PREFER_SYSTEM_LIBS: "OFF"
+      VCPKG_TARGET_TRIPLET: "x64-windows"
+      Z_VCPKG_ROOT_DIR: "D:/project-render/repos/vcpkg"
+    buildResult:
+      variable: "HAVE_STDDEF_H"
+      cached: true
+      stdout: |
+        Change Dir: 'D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-ygkr1h'
+        
+        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_51f23.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
+        .NET Framework i├ğin MSBuild s├╝r├╝m 17.14.40+3e7442088
+        Olu┼şturma ba┼şlat─▒ld─▒: 28.01.2026 10:41:47.
+        
+        1 d├╝─ş├╝m├╝nde "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-ygkr1h\\cmTC_51f23.vcxproj" projesi (varsay─▒lan hedefler).
+        PrepareForBuild:
+          Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
+          "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-ygkr1h\\Debug\\" dizini olu┼şturuluyor.
+          "cmTC_51f23.dir\\Debug\\cmTC_51f23.tlog\\" dizini olu┼şturuluyor.
+        InitializeBuildStatus:
+          "AlwaysCreate" belirtildi─şi i├ğin "cmTC_51f23.dir\\Debug\\cmTC_51f23.tlog\\unsuccessfulbuild" olu┼şturuluyor.
+          "cmTC_51f23.dir\\Debug\\cmTC_51f23.tlog\\unsuccessfulbuild" ├Â─şesine eri┼şiliyor.
+        ClCompile:
+          C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_51f23.dir\\Debug\\\\" /Fd"cmTC_51f23.dir\\Debug\\vc143.pdb" /external:W1 /TC /errorReport:queue "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-ygkr1h\\CheckIncludeFile.c"
+          Microsoft (R) C/C++ Optimizing Compiler Version 19.44.35222 for x64
+          Copyright (C) Microsoft Corporation.  All rights reserved.
+          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_51f23.dir\\Debug\\\\" /Fd"cmTC_51f23.dir\\Debug\\vc143.pdb" /external:W1 /TC /errorReport:queue "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-ygkr1h\\CheckIncludeFile.c"
+          CheckIncludeFile.c
+        Link:
+          C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /OUT:"D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-ygkr1h\\Debug\\cmTC_51f23.exe" /INCREMENTAL /ILK:"cmTC_51f23.dir\\Debug\\cmTC_51f23.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-ygkr1h/Debug/cmTC_51f23.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-ygkr1h/Debug/cmTC_51f23.lib" /MACHINE:X64  /machine:x64 cmTC_51f23.dir\\Debug\\CheckIncludeFile.obj
+          cmTC_51f23.vcxproj -> D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-ygkr1h\\Debug\\cmTC_51f23.exe
+        FinalizeBuildStatus:
+          "cmTC_51f23.dir\\Debug\\cmTC_51f23.tlog\\unsuccessfulbuild" dosyas─▒ siliniyor.
+          "cmTC_51f23.dir\\Debug\\cmTC_51f23.tlog\\cmTC_51f23.lastbuildstate" ├Â─şesine eri┼şiliyor.
+        "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-ygkr1h\\cmTC_51f23.vcxproj" Projesini Olu┼şturma ─░┼şlemi Tamamland─▒ (varsay─▒lan hedefler).
+        
+        Olu┼şturma ba┼şar─▒l─▒ oldu.
+            0 Uyar─▒
+            0 Hata
+        
+        Ge├ğen S├╝re 00:00:00.43
+        
+      exitCode: 0
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CheckTypeSize.cmake:348 (try_compile)"
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CheckTypeSize.cmake:481 (__check_type_size_impl)"
+      - "build/_deps/assimp-src/contrib/zlib/CMakeLists.txt:55 (check_type_size)"
+    checks:
+      - "Check size of off64_t"
+    directories:
+      source: "D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-7pv3bn"
+      binary: "D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-7pv3bn"
+    cmakeVariables:
+      CMAKE_C_FLAGS: "/DWIN32 /D_WINDOWS"
+      CMAKE_C_FLAGS_DEBUG: "/Zi /Ob0 /Od /RTC1"
+      CMAKE_EXE_LINKER_FLAGS: "/machine:x64"
+      CMAKE_MODULE_PATH: "D:/project-render/build/_deps/assimp-src/cmake-modules"
+      VCPKG_INSTALLED_DIR: "D:/project-render/repos/vcpkg/installed"
+      VCPKG_PREFER_SYSTEM_LIBS: "OFF"
+      VCPKG_TARGET_TRIPLET: "x64-windows"
+      Z_VCPKG_ROOT_DIR: "D:/project-render/repos/vcpkg"
+    buildResult:
+      variable: "HAVE_OFF64_T"
+      cached: true
+      stdout: |
+        Change Dir: 'D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-7pv3bn'
+        
+        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_c832c.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
+        .NET Framework i├ğin MSBuild s├╝r├╝m 17.14.40+3e7442088
+        Olu┼şturma ba┼şlat─▒ld─▒: 28.01.2026 10:41:48.
+        
+        1 d├╝─ş├╝m├╝nde "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\cmTC_c832c.vcxproj" projesi (varsay─▒lan hedefler).
+        PrepareForBuild:
+          Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
+          "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\Debug\\" dizini olu┼şturuluyor.
+          "cmTC_c832c.dir\\Debug\\cmTC_c832c.tlog\\" dizini olu┼şturuluyor.
+        InitializeBuildStatus:
+          "AlwaysCreate" belirtildi─şi i├ğin "cmTC_c832c.dir\\Debug\\cmTC_c832c.tlog\\unsuccessfulbuild" olu┼şturuluyor.
+          "cmTC_c832c.dir\\Debug\\cmTC_c832c.tlog\\unsuccessfulbuild" ├Â─şesine eri┼şiliyor.
+        ClCompile:
+          C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _LARGEFILE64_SOURCE=1 /D HAVE_SYS_TYPES_H /D HAVE_STDINT_H /D HAVE_STDDEF_H /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_c832c.dir\\Debug\\\\" /Fd"cmTC_c832c.dir\\Debug\\vc143.pdb" /external:W1 /TC /errorReport:queue "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\OFF64_T.c"
+          Copyright (C) Microsoft Corporation.  All rights reserved.
+          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _LARGEFILE64_SOURCE=1 /D HAVE_SYS_TYPES_H /D HAVE_STDINT_H /D HAVE_STDDEF_H /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_c832c.dir\\Debug\\\\" /Fd"cmTC_c832c.dir\\Debug\\vc143.pdb" /external:W1 /TC /errorReport:queue "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\OFF64_T.c"
+          OFF64_T.c
+        D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\OFF64_T.c(29,12): error C2065: 'off64_t': undeclared identifier [D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\cmTC_c832c.vcxproj]
+        D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\OFF64_T.c(30,12): error C2065: 'off64_t': undeclared identifier [D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\cmTC_c832c.vcxproj]
+        D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\OFF64_T.c(31,12): error C2065: 'off64_t': undeclared identifier [D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\cmTC_c832c.vcxproj]
+        D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\OFF64_T.c(32,12): error C2065: 'off64_t': undeclared identifier [D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\cmTC_c832c.vcxproj]
+        D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\OFF64_T.c(33,12): error C2065: 'off64_t': undeclared identifier [D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\cmTC_c832c.vcxproj]
+        "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\cmTC_c832c.vcxproj" Projesini Olu┼şturma ─░┼şlemi Tamamland─▒ (varsay─▒lan hedefler) -- BA┼ŞARISIZ OLDU.
+        
+        Olu┼şturma BA┼ŞARISIZ OLDU.
+        
+        "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\cmTC_c832c.vcxproj" (varsay─▒lan hedef) (1) ->
+        (ClCompile hedefi) -> 
+          D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\OFF64_T.c(29,12): error C2065: 'off64_t': undeclared identifier [D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\cmTC_c832c.vcxproj]
+          D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\OFF64_T.c(30,12): error C2065: 'off64_t': undeclared identifier [D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\cmTC_c832c.vcxproj]
+          D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\OFF64_T.c(31,12): error C2065: 'off64_t': undeclared identifier [D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\cmTC_c832c.vcxproj]
+          D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\OFF64_T.c(32,12): error C2065: 'off64_t': undeclared identifier [D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\cmTC_c832c.vcxproj]
+          D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\OFF64_T.c(33,12): error C2065: 'off64_t': undeclared identifier [D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-7pv3bn\\cmTC_c832c.vcxproj]
+        
+            0 Uyar─▒
+            5 Hata
+        
+        Ge├ğen S├╝re 00:00:00.27
+        
+      exitCode: 1
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CheckFunctionExists.cmake:167 (try_compile)"
+      - "build/_deps/assimp-src/contrib/zlib/CMakeLists.txt:64 (check_function_exists)"
+    checks:
+      - "Looking for fseeko"
+    directories:
+      source: "D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-vtmbmi"
+      binary: "D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-vtmbmi"
+    cmakeVariables:
+      CMAKE_C_FLAGS: "/DWIN32 /D_WINDOWS"
+      CMAKE_C_FLAGS_DEBUG: "/Zi /Ob0 /Od /RTC1"
+      CMAKE_EXE_LINKER_FLAGS: "/machine:x64"
+      CMAKE_MODULE_PATH: "D:/project-render/build/_deps/assimp-src/cmake-modules"
+      VCPKG_INSTALLED_DIR: "D:/project-render/repos/vcpkg/installed"
+      VCPKG_PREFER_SYSTEM_LIBS: "OFF"
+      VCPKG_TARGET_TRIPLET: "x64-windows"
+      Z_VCPKG_ROOT_DIR: "D:/project-render/repos/vcpkg"
+    buildResult:
+      variable: "HAVE_FSEEKO"
+      cached: true
+      stdout: |
+        Change Dir: 'D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-vtmbmi'
+        
+        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_df2ef.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
+        .NET Framework i├ğin MSBuild s├╝r├╝m 17.14.40+3e7442088
+        Olu┼şturma ba┼şlat─▒ld─▒: 28.01.2026 10:41:48.
+        
+        1 d├╝─ş├╝m├╝nde "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-vtmbmi\\cmTC_df2ef.vcxproj" projesi (varsay─▒lan hedefler).
+        PrepareForBuild:
+          Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
+          "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-vtmbmi\\Debug\\" dizini olu┼şturuluyor.
+          "cmTC_df2ef.dir\\Debug\\cmTC_df2ef.tlog\\" dizini olu┼şturuluyor.
+        InitializeBuildStatus:
+          "AlwaysCreate" belirtildi─şi i├ğin "cmTC_df2ef.dir\\Debug\\cmTC_df2ef.tlog\\unsuccessfulbuild" olu┼şturuluyor.
+          "cmTC_df2ef.dir\\Debug\\cmTC_df2ef.tlog\\unsuccessfulbuild" ├Â─şesine eri┼şiliyor.
+        ClCompile:
+          C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CHECK_FUNCTION_EXISTS=fseeko /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_df2ef.dir\\Debug\\\\" /Fd"cmTC_df2ef.dir\\Debug\\vc143.pdb" /external:W1 /TC /errorReport:queue "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-vtmbmi\\CheckFunctionExists.c"
+          Microsoft (R) C/C++ Optimizing Compiler Version 19.44.35222 for x64
+          Copyright (C) Microsoft Corporation.  All rights reserved.
+          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CHECK_FUNCTION_EXISTS=fseeko /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_df2ef.dir\\Debug\\\\" /Fd"cmTC_df2ef.dir\\Debug\\vc143.pdb" /external:W1 /TC /errorReport:queue "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-vtmbmi\\CheckFunctionExists.c"
+          CheckFunctionExists.c
+        Link:
+          C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /OUT:"D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-vtmbmi\\Debug\\cmTC_df2ef.exe" /INCREMENTAL /ILK:"cmTC_df2ef.dir\\Debug\\cmTC_df2ef.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-vtmbmi/Debug/cmTC_df2ef.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-vtmbmi/Debug/cmTC_df2ef.lib" /MACHINE:X64  /machine:x64 cmTC_df2ef.dir\\Debug\\CheckFunctionExists.obj
+        CheckFunctionExists.obj : error LNK2019: unresolved external symbol fseeko referenced in function main [D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-vtmbmi\\cmTC_df2ef.vcxproj]
+        D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-vtmbmi\\Debug\\cmTC_df2ef.exe : fatal error LNK1120: 1 unresolved externals [D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-vtmbmi\\cmTC_df2ef.vcxproj]
+        "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-vtmbmi\\cmTC_df2ef.vcxproj" Projesini Olu┼şturma ─░┼şlemi Tamamland─▒ (varsay─▒lan hedefler) -- BA┼ŞARISIZ OLDU.
+        
+        Olu┼şturma BA┼ŞARISIZ OLDU.
+        
+        "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-vtmbmi\\cmTC_df2ef.vcxproj" (varsay─▒lan hedef) (1) ->
+        (Link hedefi) -> 
+          CheckFunctionExists.obj : error LNK2019: unresolved external symbol fseeko referenced in function main [D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-vtmbmi\\cmTC_df2ef.vcxproj]
+          D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-vtmbmi\\Debug\\cmTC_df2ef.exe : fatal error LNK1120: 1 unresolved externals [D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-vtmbmi\\cmTC_df2ef.vcxproj]
+        
+            0 Uyar─▒
+            2 Hata
+        
+        Ge├ğen S├╝re 00:00:00.39
+        
+      exitCode: 1
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "C:/Program Files/CMake/share/cmake-4.2/Modules/CheckIncludeFile.cmake:174 (try_compile)"
+      - "build/_deps/assimp-src/contrib/zlib/CMakeLists.txt:72 (check_include_file)"
+    checks:
+      - "Looking for unistd.h"
+    directories:
+      source: "D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-8tbudb"
+      binary: "D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-8tbudb"
+    cmakeVariables:
+      CMAKE_C_FLAGS: "/DWIN32 /D_WINDOWS"
+      CMAKE_C_FLAGS_DEBUG: "/Zi /Ob0 /Od /RTC1"
+      CMAKE_EXE_LINKER_FLAGS: "/machine:x64"
+      CMAKE_MODULE_PATH: "D:/project-render/build/_deps/assimp-src/cmake-modules"
+      VCPKG_INSTALLED_DIR: "D:/project-render/repos/vcpkg/installed"
+      VCPKG_PREFER_SYSTEM_LIBS: "OFF"
+      VCPKG_TARGET_TRIPLET: "x64-windows"
+      Z_VCPKG_ROOT_DIR: "D:/project-render/repos/vcpkg"
+    buildResult:
+      variable: "Z_HAVE_UNISTD_H"
+      cached: true
+      stdout: |
+        Change Dir: 'D:/project-render/build/CMakeFiles/CMakeScratch/TryCompile-8tbudb'
+        
+        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_648a6.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
+        .NET Framework i├ğin MSBuild s├╝r├╝m 17.14.40+3e7442088
+        Olu┼şturma ba┼şlat─▒ld─▒: 28.01.2026 10:41:49.
+        
+        1 d├╝─ş├╝m├╝nde "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-8tbudb\\cmTC_648a6.vcxproj" projesi (varsay─▒lan hedefler).
+        PrepareForBuild:
+          Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
+          "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-8tbudb\\Debug\\" dizini olu┼şturuluyor.
+          "cmTC_648a6.dir\\Debug\\cmTC_648a6.tlog\\" dizini olu┼şturuluyor.
+        InitializeBuildStatus:
+          "AlwaysCreate" belirtildi─şi i├ğin "cmTC_648a6.dir\\Debug\\cmTC_648a6.tlog\\unsuccessfulbuild" olu┼şturuluyor.
+          "cmTC_648a6.dir\\Debug\\cmTC_648a6.tlog\\unsuccessfulbuild" ├Â─şesine eri┼şiliyor.
+        ClCompile:
+          C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_648a6.dir\\Debug\\\\" /Fd"cmTC_648a6.dir\\Debug\\vc143.pdb" /external:W1 /TC /errorReport:queue "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-8tbudb\\CheckIncludeFile.c"
+          Microsoft (R) C/C++ Optimizing Compiler Version 19.44.35222 for x64
+          Copyright (C) Microsoft Corporation.  All rights reserved.
+          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_648a6.dir\\Debug\\\\" /Fd"cmTC_648a6.dir\\Debug\\vc143.pdb" /external:W1 /TC /errorReport:queue "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-8tbudb\\CheckIncludeFile.c"
+          CheckIncludeFile.c
+        D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-8tbudb\\CheckIncludeFile.c(1,10): error C1083: Cannot open include file: 'unistd.h': No such file or directory [D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-8tbudb\\cmTC_648a6.vcxproj]
+        "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-8tbudb\\cmTC_648a6.vcxproj" Projesini Olu┼şturma ─░┼şlemi Tamamland─▒ (varsay─▒lan hedefler) -- BA┼ŞARISIZ OLDU.
+        
+        Olu┼şturma BA┼ŞARISIZ OLDU.
+        
+        "D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-8tbudb\\cmTC_648a6.vcxproj" (varsay─▒lan hedef) (1) ->
+        (ClCompile hedefi) -> 
+          D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-8tbudb\\CheckIncludeFile.c(1,10): error C1083: Cannot open include file: 'unistd.h': No such file or directory [D:\\project-render\\build\\CMakeFiles\\CMakeScratch\\TryCompile-8tbudb\\cmTC_648a6.vcxproj]
+        
+            0 Uyar─▒
+            1 Hata
+        
+        Ge├ğen S├╝re 00:00:00.28
+        
+      exitCode: 1
+...
