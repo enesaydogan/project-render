@@ -44,10 +44,12 @@ namespace Asset {
         float diffuseColor[4] = {1,1,1,1};
         float reflectionColor[4] = {0,0,0,1};
         float reflectionGlossiness = 0.8f;
+        float metalness = 0.0f; // Added for PBR support
         float refractionColor[4] = {0,0,0,1};
         float refractionGlossiness = 1.0f;
         float ior = 1.6f;
         float emissiveColor[4] = {0,0,0,1};
+        float emissiveIntensity = 1.0f; // Multiplier for emissive
         
         // V-Ray / Glossiness workflow texture mapping
         int diffuseTexture = -1; // Was baseColor

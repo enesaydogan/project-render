@@ -25,6 +25,15 @@ inline float3 FresnelSchlickRoughness(float cosTheta, float3 F0, float roughness
     return F0 + (max(float3(1.0 - roughness, 1.0 - roughness, 1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
+inline float3 ToneMap(float3 x) {
+    float a = 2.51f;
+    float b = 0.03f;
+    float c = 2.43f;
+    float d = 0.59f;
+    float e = 0.14f;
+    return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
+}
+
 cbuffer Camera : register(b0)
 {
     float3 camPos;
@@ -55,6 +64,7 @@ struct MaterialData
     float4 emissiveColor;       // w = ior
     int4 textureIndices;        // x=diffuse, y=reflect, z=normal, w=refract
     int4 emissiveAndPad;        // x=emissive, y=occlusion, z=metalRough
+    float4 extraParams;         // x=metalness, y=emissiveIntensity
 };
 
 // Use an SRV for materials in DXR to support multi-material indexing via InstanceID

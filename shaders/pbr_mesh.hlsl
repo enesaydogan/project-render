@@ -33,6 +33,7 @@ cbuffer MaterialCB : register(b1)
     float4 emissiveColor;       // rgb, w=ior
     int4 textureIndices;        // x=diffuse, y=reflect, z=normal, w=refract
     int4 emissiveAndPad;        // x=emissive, y=occlusion, z=metalRough
+    float4 extraParams;         // x=metalness, y=emissiveIntensity
 };
 
 // Texture array - bonded as an unbounded array in SM 6.x
@@ -45,6 +46,20 @@ float2 DirectionToUV(float3 dir) {
     uv.x = atan2(dir.x, dir.z) / (2.0 * 3.14159265) + 0.5;
     uv.y = acos(clamp(dir.y, -1.0, 1.0)) / 3.14159265;
     return uv;
+}
+
+float3 sRGBToLinear(float3 sRGB) {
+    return pow(max(sRGB, 0.0), 2.2);
+}
+
+// ACES Tone Mapping
+float3 ToneMap(float3 x) {
+    float a = 2.51f;
+    float b = 0.03f;
+    float c = 2.43f;
+    float d = 0.59f;
+    float e = 0.14f;
+    return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
 }
 
 struct VSInputMesh {
@@ -187,19 +202,20 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     float alpha = diffuseColor.a;
     if (textureIndices.x >= 0) {
         float4 diffSample = textures[textureIndices.x].Sample(linearSampler, input.uv);
-        BaseColor *= diffSample.rgb;
+        BaseColor *= sRGBToLinear(diffSample.rgb);
         alpha *= diffSample.a;
     }
 
-    float metalness = 0.0;
-    float roughness = saturate(1.0 - reflectionColor.w);
+    float metalness = extraParams.x;
+    float roughnessFactor = saturate(1.0 - reflectionColor.w);
+    float roughness = roughnessFactor;
     
-    // Metal/Roughness Logic: if MR texture exists, it overrides specific channels
+    // Metal/Roughness Logic: factor * texture
     // G = Roughness, B = Metalness
     if (emissiveAndPad.z >= 0) {
         float4 mrSample = textures[emissiveAndPad.z].Sample(linearSampler, input.uv);
-        roughness = mrSample.g; // Roughness is Green
-        metalness = mrSample.b; // Metalness is Blue
+        roughness *= mrSample.g; 
+        metalness *= mrSample.b;
     }
     
     // Standard PBR Model
@@ -209,9 +225,12 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     // Normal
     float3 N = GetNormalFromMap(input.uv, input.normal, input.tangent, textureIndices.z);
 
-    // Emissive
-    float3 emiss = (emissiveAndPad.x >= 0) ? textures[emissiveAndPad.x].Sample(linearSampler, input.uv).rgb : float3(1,1,1);
-    emiss *= emissiveColor.rgb; 
+    // Emissive with boost factor and user-defined intensity
+    const float baseEmissiveBoost = 5.0f; 
+    float3 emiss = emissiveColor.rgb * baseEmissiveBoost * extraParams.y;
+    if (emissiveAndPad.x >= 0) {
+        emiss *= sRGBToLinear(textures[emissiveAndPad.x].Sample(linearSampler, input.uv).rgb);
+    } 
 
     // Occlusion
     float ao = (emissiveAndPad.y >= 0) ? textures[emissiveAndPad.y].Sample(linearSampler, input.uv).r : 1.0;
@@ -277,7 +296,7 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     if (mode == 6) return float4(metalness, metalness, metalness, 1.0); // Metalness
     if (mode == 7) return float4(ao, ao, ao, 1.0); // AO
 
-    color = color / (color + 1.0);
+    color = ToneMap(color);
     color = pow(color, 1.0/2.2);
 
     return float4(color, alpha);

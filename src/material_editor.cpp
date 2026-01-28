@@ -12,7 +12,7 @@ namespace MaterialEditor {
 
 void Draw(bool &visible) {
     if (!visible) return;
-    if (ImGui::Begin("Inspector", &visible)) {
+    if (ImGui::Begin("Material Editor", &visible)) {
         // Find selection
         int selectedIndex = -1;
         const auto& nodes = Scene::GetNodes();
@@ -45,24 +45,32 @@ void Draw(bool &visible) {
                     // Diffuse
                     ImGui::ColorEdit3("Diffuse Color", mat.diffuseColor);
                     
-                    // Reflection
+                    // PBR Parameters
+                    float roughness = 1.0f - mat.reflectionGlossiness;
+                    if (ImGui::SliderFloat("Roughness", &roughness, 0.0f, 1.0f)) {
+                        mat.reflectionGlossiness = 1.0f - roughness;
+                    }
+                    ImGui::SliderFloat("Metalness", &mat.metalness, 0.0f, 1.0f);
+
+                    // Reflection (Legacy/Legacy naming but useful for color)
                     ImGui::ColorEdit3("Reflection Color", mat.reflectionColor);
-                    ImGui::SliderFloat("Reflection Glossiness", &mat.reflectionGlossiness, 0.0f, 1.0f);
                     
-                    // Refraction
+                    // Refraction (Keep as is)
                     ImGui::ColorEdit3("Refraction Color", mat.refractionColor);
                     ImGui::SliderFloat("Refraction Glossiness", &mat.refractionGlossiness, 0.0f, 1.0f);
                     ImGui::InputFloat("IOR", &mat.ior, 0.01f, 0.1f, "%.3f");
 
                     // Emissive
                     ImGui::ColorEdit3("Emissive Color", mat.emissiveColor);
+                    ImGui::SliderFloat("Emissive Intensity", &mat.emissiveIntensity, 0.0f, 100.0f);
                     
                     // Texture Info
                     if (ImGui::TreeNode("Texture Maps (Indices)")) {
                         ImGui::LabelText("Diffuse", "%d", mat.diffuseTexture);
-                        ImGui::LabelText("Reflection", "%d", mat.reflectionTexture);
-                        ImGui::LabelText("Refraction", "%d", mat.refractionTexture);
+                        ImGui::LabelText("MetalRough", "%d", mat.metalRoughTexture);
                         ImGui::LabelText("Normal", "%d", mat.normalTexture);
+                        ImGui::LabelText("Emissive", "%d", mat.emissiveTexture);
+                        ImGui::LabelText("Occlusion", "%d", mat.occlusionTexture);
                         ImGui::TreePop();
                     }
                 }

@@ -7,6 +7,7 @@
 #include "dxr_renderer.h"
 #include "d3d12_helpers.h"
 #include "camera.h"
+#include "ibl_manager.h"
 #include <wrl.h>
 #include <string>
 #include <vector>
@@ -134,6 +135,7 @@ bool ImportGltf(const std::string &utf8path, const float* rootTranslation) {
             if (m.normalTexture >= 0) m.normalTexture += (int)textureBase;
             if (m.occlusionTexture >= 0) m.occlusionTexture += (int)textureBase;
             if (m.emissiveTexture >= 0) m.emissiveTexture += (int)textureBase;
+            if (m.metalRoughTexture >= 0) m.metalRoughTexture += (int)textureBase;
         }
 
         // Allocate SRV descriptors for new textures - using persistent allocation
@@ -186,6 +188,30 @@ bool ImportGltfWithDialog(HWND hwnd) {
         std::string utf8path(size_needed, 0);
         WideCharToMultiByte(CP_UTF8, 0, chosen.c_str(), (int)chosen.size(), &utf8path[0], size_needed, NULL, NULL);
         return ImportGltf(utf8path);
+    }
+    s_lastStatus = "Open cancelled";
+    return false;
+}
+
+bool ImportHDRWithDialog(HWND hwnd) {
+    std::wstring chosen;
+    if (OpenHDRFileDialog(hwnd, chosen)) {
+        if (chosen.empty()) { s_lastStatus = "No file chosen"; return false; }
+        // convert wstring -> utf8
+        int size_needed = WideCharToMultiByte(CP_UTF8, 0, chosen.c_str(), (int)chosen.size(), NULL, 0, NULL, NULL);
+        std::string utf8path(size_needed, 0);
+        WideCharToMultiByte(CP_UTF8, 0, chosen.c_str(), (int)chosen.size(), &utf8path[0], size_needed, NULL, NULL);
+        
+        if (IBLManager::Get().LoadEnvironmentMap(utf8path)) {
+            s_lastStatus = "IBL Map loaded: " + utf8path;
+            // Also need to push descriptors if necessary, but IBLManager handles it internally usually.
+            // However, DXR should be notified if the descriptor changed.
+            DxrRenderer::CreateRayTracingPipeline(0, 0);
+            return true;
+        } else {
+            s_lastStatus = "IBL Load failed: " + utf8path;
+            return false;
+        }
     }
     s_lastStatus = "Open cancelled";
     return false;
@@ -366,7 +392,7 @@ void DrawGizmo() {
     BuildViewMatrix(view);
     BuildProjectionMatrix(proj);
 
-    if (ImGui::IsKeyPressed(ImGuiKey_M)) g_currentGizmoOp = ImGuizmo::TRANSLATE;
+    if (ImGui::IsKeyPressed(ImGuiKey_G)) g_currentGizmoOp = ImGuizmo::TRANSLATE;
     if (ImGui::IsKeyPressed(ImGuiKey_R)) g_currentGizmoOp = ImGuizmo::ROTATE;
     if (ImGui::IsKeyPressed(ImGuiKey_T)) g_currentGizmoOp = ImGuizmo::SCALE;
     if (ImGui::IsKeyPressed(ImGuiKey_L)) {
@@ -442,6 +468,9 @@ void DrawGizmo() {
         // NodeTransform = pivotMatrix * Translation(-localCenter)
         float invTranslationMat[16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, -localCenter[0], -localCenter[1], -localCenter[2], 1 };
         MatMul(pivotMatrix, invTranslationMat, node.transform);
+        
+        // Ensure raytracing acceleration structures are updated to reflect transform changes
+        RebuildAccelerationStructures();
     }
 }
 
@@ -671,8 +700,13 @@ void DrawScenePanel(HWND hwnd, bool &visible) {
     if (!visible) return;
     if (ImGui::Begin("Scene", &visible)) {
         // Action area
-        if (ImGui::Button("Import GLB...", ImVec2(ImGui::GetContentRegionAvail().x * 0.5f, 0))) {
+        float btnWidth = ImGui::GetContentRegionAvail().x * 0.33f;
+        if (ImGui::Button("Import GLB...", ImVec2(btnWidth, 0))) {
             ImportGltfWithDialog(hwnd);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Import HDR...", ImVec2(btnWidth, 0))) {
+            ImportHDRWithDialog(hwnd);
         }
         ImGui::SameLine();
         const char* spaceNames[] = { "Local", "World" };

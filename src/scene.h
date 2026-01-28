@@ -28,6 +28,8 @@ struct Instance {
 bool ImportGltf(const std::string &utf8path, const float* rootTranslation = nullptr);
 // Open file dialog and import selected glTF
 bool ImportGltfWithDialog(HWND hwnd);
+// Open file dialog and import selected HDR/EXR
+bool ImportHDRWithDialog(HWND hwnd);
 
 // Add a default ground plane
 void AddDefaultPlane(float offset_y = 0.0f);
