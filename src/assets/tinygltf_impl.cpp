@@ -7,7 +7,7 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 
 // Optional: reduce unused warnings or define other configuration macros here.
-
 #include <tiny_gltf.h>
+#include <tinyexr.h>
 
 #endif // USE_TINYGLTF

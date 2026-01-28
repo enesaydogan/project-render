@@ -19,6 +19,7 @@
 #include "raster_renderer.h"
 #include "scene.h"
 #include "material_editor.h"
+#include "ibl_manager.h"
 #include "light.h"
 #include <algorithm>
 #include <chrono>
@@ -114,6 +115,7 @@ std::vector<Asset::GpuMesh> g_loadedMeshes;
 std::vector<Asset::Material> g_loadedMaterials;
 std::vector<Asset::Texture> g_loadedTextures;
 D3D12_GPU_DESCRIPTOR_HANDLE g_texturesGpuStart = {0};
+D3D12_GPU_DESCRIPTOR_HANDLE g_envMapGpuHandle = {0};
 static ComPtr<ID3D12Resource>
     g_materialBuffer; // Persistent material constant buffer
 UINT g_textureDescriptorCount = 0;
@@ -739,7 +741,7 @@ bool InitD3D12(HWND hwnd) {
 
   // --- Create a root signature with CBV b0 (vertex), descriptor table t0
   // (SRV), and CBV b1 (pixel material) ---
-  D3D12_ROOT_PARAMETER rootParameters[4] = {};
+  D3D12_ROOT_PARAMETER rootParameters[5] = {};
   // b0 - transform CBV for vertex shader AND pixel shader (needed for view direction)
   rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
   rootParameters[0].Descriptor.ShaderRegister = 0;
@@ -770,12 +772,27 @@ bool InitD3D12(HWND hwnd) {
   rootParameters[3].Constants.Num32BitValues = 16;
   rootParameters[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
 
+  // t0, space1 - Environment Map Descriptor Table (Texture2D)
+  static D3D12_DESCRIPTOR_RANGE envMapRange = {};
+  envMapRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+  envMapRange.NumDescriptors = 1;
+  envMapRange.BaseShaderRegister = 0;
+  envMapRange.RegisterSpace = 1;
+  envMapRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+  rootParameters[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  rootParameters[4].DescriptorTable.NumDescriptorRanges = 1;
+  rootParameters[4].DescriptorTable.pDescriptorRanges = &envMapRange;
+  rootParameters[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
   // static sampler for textures
   D3D12_STATIC_SAMPLER_DESC sampler = {};
-  sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+  sampler.Filter = D3D12_FILTER_ANISOTROPIC;
   sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
   sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
   sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  sampler.MipLODBias = 0;
+  sampler.MaxAnisotropy = 16;
   sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
   sampler.ShaderRegister = 0;
   sampler.RegisterSpace = 0;
@@ -1017,6 +1034,27 @@ bool InitD3D12(HWND hwnd) {
   // uploads
   Asset::Initialize(g_device.Get(), g_commandQueue.Get());
 
+  // Initialize IBL Manager and load default environment map
+  IBLManager::Get().Initialize(g_device.Get(), g_commandQueue.Get());
+  if (!IBLManager::Get().LoadEnvironmentMap("assets/env.exr")) {
+    fprintf(stderr, "Main: Failed to load assets/env.exr, checking for assets/env.hdr\n");
+    IBLManager::Get().LoadEnvironmentMap("assets/env.hdr");
+  }
+
+  if (IBLManager::Get().IsLoaded()) {
+      DescriptorAllocation alloc = g_cbvSrvAllocator.AllocatePersistent(1);
+      IBLManager::Get().SetGPUHandle(alloc.gpu);
+      IBLManager::Get().SetCPUHandle(alloc.cpu);
+
+      D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+      srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+      srvDesc.Format = IBLManager::Get().GetEnvMap().format;
+      srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+      // Use all available mip levels (even if only 1 is loaded for now)
+      srvDesc.Texture2D.MipLevels = (UINT)-1; 
+      g_device->CreateShaderResourceView(IBLManager::Get().GetEnvMap().resource.Get(), &srvDesc, alloc.cpu);
+  }
+
   // Log: reached post-Create pipeline initialization (stderr only)
   fprintf(stderr, "InitD3D12: Post-pipeline initialization reached\n");
 
@@ -1064,7 +1102,7 @@ bool InitD3D12(HWND hwnd) {
     float refractionColor[4];
     float emissiveColor[4];
     int textureIndices[4];
-    int emissiveAndPad[4];
+    int emissiveAndPad[4]; // x=emissive, y=occlusion, z=metalRough
   };
   const UINT64 matCbSizeSingle = (sizeof(MaterialCB) + 255) & ~255;
   const UINT64 matCbSize = matCbSizeSingle * 1024; // Support up to 1024 calls
@@ -1498,6 +1536,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
                     mat.emissiveAndPad[0] = srcMat.emissiveTexture;
                     mat.emissiveAndPad[1] = srcMat.occlusionTexture;
+                    mat.emissiveAndPad[2] = srcMat.metalRoughTexture;
+                    mat.emissiveAndPad[3] = 0;
 
                     memcpy(pData + i * sizeof(MaterialData), &mat, sizeof(MaterialData));
                 }
@@ -1596,11 +1636,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       // No demo triangle; ensure render target is bound for subsequent draws
       g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
 
+      // Bind global descriptor heap once for all raster calls
+      ID3D12DescriptorHeap* heaps[] = { g_cbvSrvAllocator.Heap() };
+      g_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
+
       // Draw ground grid (optional) via raster module
       if (g_drawGrid) {
         RasterRenderer::DrawGrid(g_commandList.Get(),
                                  g_cameraConstantBuffer.Get());
       }
+
+      // Draw Skybox
+      RasterRenderer::DrawSkybox(g_commandList.Get(), g_cameraConstantBuffer.Get());
 
       // Draw loaded meshes
       auto sceneInstances = Scene::GetInstances();
@@ -1612,8 +1659,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         g_commandList->SetPipelineState(RasterRenderer::g_meshPipelineState.Get());
         g_commandList->IASetPrimitiveTopology(
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        ID3D12DescriptorHeap *heaps[] = {g_cbvSrvAllocator.Heap()};
-        g_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
         // Ensure render targets are set for mesh rendering
         g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
         // Use camera constant buffer for mesh rendering
@@ -1686,7 +1731,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             
             matCB.emissiveAndPad[0] = srcMat.emissiveTexture;
             matCB.emissiveAndPad[1] = srcMat.occlusionTexture;
-            matCB.emissiveAndPad[2] = 0;
+            matCB.emissiveAndPad[2] = srcMat.metalRoughTexture;
             matCB.emissiveAndPad[3] = 0;
 
             if (g_materialConstantBuffer) {
@@ -1703,6 +1748,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             }
             if (g_textureDescriptorCount > 0) {
               g_commandList->SetGraphicsRootDescriptorTable(1, g_texturesGpuStart);
+            }
+            if (IBLManager::Get().IsLoaded()) {
+              g_commandList->SetGraphicsRootDescriptorTable(4, IBLManager::Get().GetGPUHandle());
             }
           }
           if (gm.ibView.SizeInBytes > 0) {
@@ -2200,7 +2248,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                         : "Path Tracing");
 
         // Debug Render Pass Dropdown
-        const char* debugModes[] = { "None", "Albedo", "Normal", "Emissive", "Roughness/Glossiness", "Refl. Color" };
+        const char* debugModes[] = { "None", "Albedo", "Normal", "Emissive", "Roughness/Glossiness", "Refl. Color", "Metalness", "AO" };
         if (ImGui::Combo("Debug View", &g_debugMode, debugModes, IM_ARRAYSIZE(debugModes))) {
             // State is updated; updated into camera buffer on next frame
         }

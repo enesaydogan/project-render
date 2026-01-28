@@ -32,12 +32,20 @@ cbuffer MaterialCB : register(b1)
     float4 refractionColor;     // rgb, w=refractionGlossiness
     float4 emissiveColor;       // rgb, w=ior
     int4 textureIndices;        // x=diffuse, y=reflect, z=normal, w=refract
-    int4 emissiveAndPad;        // x=emissive, y=occlusion, zw=pad
+    int4 emissiveAndPad;        // x=emissive, y=occlusion, z=metalRough
 };
 
 // Texture array - bonded as an unbounded array in SM 6.x
 Texture2D textures[] : register(t0);
+Texture2D envMap : register(t0, space1);
 SamplerState linearSampler : register(s0);
+
+float2 DirectionToUV(float3 dir) {
+    float2 uv;
+    uv.x = atan2(dir.x, dir.z) / (2.0 * 3.14159265) + 0.5;
+    uv.y = acos(clamp(dir.y, -1.0, 1.0)) / 3.14159265;
+    return uv;
+}
 
 struct VSInputMesh {
     float3 position : POSITION;
@@ -138,7 +146,6 @@ float3 FresnelSchlick(float cosTheta, float3 F0)
 {
     return F0 + (1.0 - F0) * pow(saturate(1.0 - cosTheta), 5.0);
 }
-
 float3 FresnelSchlickRoughness(float cosTheta, float3 F0, float roughness)
 {
     return F0 + (max(float3(1.0 - roughness, 1.0 - roughness, 1.0 - roughness), F0) - F0) * pow(saturate(1.0 - cosTheta), 5.0);
@@ -176,24 +183,29 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
 #endif
 
     // --- Texture Lookups ---
-    float4 diffSample = (textureIndices.x >= 0) ? textures[textureIndices.x].Sample(linearSampler, input.uv) : float4(1,1,1,1);
-    float3 finalDiffuse = diffSample.rgb * diffuseColor.rgb;
-    float alpha = diffSample.a * diffuseColor.a;
+    float3 BaseColor = diffuseColor.rgb;
+    float alpha = diffuseColor.a;
+    if (textureIndices.x >= 0) {
+        float4 diffSample = textures[textureIndices.x].Sample(linearSampler, input.uv);
+        BaseColor *= diffSample.rgb;
+        alpha *= diffSample.a;
+    }
 
-    // Reflection (Color maps to F0 for Specular Workflow)
-    float4 refSample = (textureIndices.y >= 0) ? textures[textureIndices.y].Sample(linearSampler, input.uv) : float4(1,1,1,1);
-    float3 finalReflect = refSample.rgb * reflectionColor.rgb;
-    // Glossiness: user wants Glossiness workflow. 
-    // We assume Texture.a might contain glossiness if RGBA, or just use parameter. 
-    // For GLTF imports, we mapped ORM (G=Roughness) to this texture.
-    // If ORM is present, Green = Roughness, so Gloss = 1 - Green.
-    // But 'refSample' is likely RGBA interpreted.
-    // This shader assumes 'reflectionColor' texture is a COLOR texture. 
-    // If it's ORM, it will look weird. 
-    // However, I must stick to the User Request for "Modern Material Editor" (V-Ray style). 
-    // V-Ray users provide a Reflection *Color* map.
-    float gloss = reflectionColor.w; 
-
+    float metalness = 0.0;
+    float roughness = saturate(1.0 - reflectionColor.w);
+    
+    // Metal/Roughness Logic: if MR texture exists, it overrides specific channels
+    // G = Roughness, B = Metalness
+    if (emissiveAndPad.z >= 0) {
+        float4 mrSample = textures[emissiveAndPad.z].Sample(linearSampler, input.uv);
+        roughness = mrSample.g; // Roughness is Green
+        metalness = mrSample.b; // Metalness is Blue
+    }
+    
+    // Standard PBR Model
+    float3 F0 = lerp(float3(0.04, 0.04, 0.04), BaseColor, metalness);
+    float3 DiffuseAlbedo = BaseColor * (1.0 - metalness);
+    
     // Normal
     float3 N = GetNormalFromMap(input.uv, input.normal, input.tangent, textureIndices.z);
 
@@ -210,15 +222,9 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     if (length(lightDir.xyz) < 0.001) L = float3(0, 1, 0); 
     float3 H = normalize(V + L);
 
-    // Glossiness -> Roughness
-    float roughness = saturate(1.0 - gloss);
     roughness = max(roughness, 0.002);
 
-    // BRDF
-    // F0 is the reflection color at normal incidence
-    float3 F0 = finalReflect;
-    
-    // Specular Term
+    // Cook-Torrance BRDF
     float NDF = DistributionGGX(N, H, roughness);
     float G = GeometrySmith(N, V, L, roughness);
     float3 F = FresnelSchlick(max(dot(H, V), 0.0), F0);
@@ -228,18 +234,32 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     float3 spec = numerator / denominator;
     
     // Energy Preservation
-    // In Specular workflow, Diffuse is usually premultiplied/blackened for metals.
-    // We also attenuate by (1-F) for Fresnel energy conservation.
     float3 kS = F;
     float3 kD = 1.0 - kS;
     
-    float3 diffuseTerm = kD * finalDiffuse / PI;
+    float3 diffuseTerm = kD * DiffuseAlbedo / PI;
     
     float NdotL = saturate(dot(N, L));
     float3 directLight = (diffuseTerm + spec) * lightColor.rgb * lightColor.w * NdotL;
     
-    // Ambient (Simplified)
-    float3 ambient = ambientColor.rgb * finalDiffuse * ao * ambientColor.w;
+    // IBL (Image Based Lighting)
+    float3 R = reflect(-V, N);
+    float3 F_ibl = FresnelSchlickRoughness(max(dot(N, V), 0.0), F0, roughness);
+    float3 kS_ibl = F_ibl;
+    float3 kD_ibl = 1.0 - kS_ibl;
+
+    float2 envUV_diff = DirectionToUV(N);
+    // Use mips now that they are available! Level 6-8 is good for diffuse
+    float3 irradiance = envMap.SampleLevel(linearSampler, envUV_diff, 7.0).rgb; 
+    float3 diffuse_ibl = kD_ibl * irradiance * DiffuseAlbedo;
+
+    float2 envUV_spec = DirectionToUV(R);
+    // Prefiltered reflection using mips based on roughness
+    float3 prefilteredColor = envMap.SampleLevel(linearSampler, envUV_spec, roughness * 7.0).rgb;
+    float3 specular_ibl = kS_ibl * prefilteredColor;
+
+    // Use a consistent 5.0x boost for IBL to match raytracing and provide good environment lighting
+    float3 ambient = (diffuse_ibl + specular_ibl) * ao * ambientColor.rgb * 5.0;
     
     float3 color = directLight + ambient + emiss;
     
@@ -248,11 +268,14 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     
     // DEBUG PASS
     int mode = (int)debugMode;
-    if (mode == 1) return float4(finalDiffuse, 1.0); // Albedo
+    // Mode 1: Albedo
+    if (mode == 1) return float4(BaseColor, 1.0);
     if (mode == 2) return float4(N * 0.5 + 0.5, 1.0); // Normal
     if (mode == 3) return float4(emiss, 1.0); // Emissive
-    if (mode == 4) return float4(gloss, gloss, gloss, 1.0); // Glossiness
-    if (mode == 5) return float4(finalReflect, 1.0); // Reflection Color
+    if (mode == 4) return float4(1.0 - roughness, 1.0 - roughness, 1.0 - roughness, 1.0); // Glossiness
+    if (mode == 5) return float4(F0, 1.0); // F0
+    if (mode == 6) return float4(metalness, metalness, metalness, 1.0); // Metalness
+    if (mode == 7) return float4(ao, ao, ao, 1.0); // AO
 
     color = color / (color + 1.0);
     color = pow(color, 1.0/2.2);

@@ -3,6 +3,7 @@
 #include "dxr_helpers.h"
 #include "d3d12_helpers.h"
 #include "scene.h"
+#include "ibl_manager.h"
 #include <wrl.h>
 #include <vector>
 #include <cstdio>
@@ -47,11 +48,13 @@ static const UINT DXR_HEAP_TEX_OFFSET = 0;
 static const UINT DXR_HEAP_VB_OFFSET = 2048;
 static const UINT DXR_HEAP_IB_OFFSET = 2048 + 1024;
 static const UINT DXR_HEAP_UAV_OFFSET = 2048 + 1024 + 1024;
-static const UINT DXR_HEAP_TOTAL_COUNT = 2048 + 1024 + 1024 + 1;
+static const UINT DXR_HEAP_IBL_OFFSET = 2048 + 1024 + 1024 + 1;
+static const UINT DXR_HEAP_TOTAL_COUNT = 2048 + 1024 + 1024 + 1 + 1;
 
 // Output texture dimensions used by DXR (kept local to module)
 static UINT s_outputWidth = 1280;
 static UINT s_outputHeight = 720;
+static D3D12_GPU_DESCRIPTOR_HANDLE s_iblGpuHandle;
 
 inline void TransitionResource(ID3D12GraphicsCommandList *cmdList,
                                ID3D12Resource *resource,
@@ -141,6 +144,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
         s_vbTableGpu.ptr = gpuStart.ptr + (UINT64)DXR_HEAP_VB_OFFSET * descSize;
         s_ibTableGpu.ptr = gpuStart.ptr + (UINT64)DXR_HEAP_IB_OFFSET * descSize;
         s_outputUAVGpu.ptr = gpuStart.ptr + (UINT64)DXR_HEAP_UAV_OFFSET * descSize;
+        s_iblGpuHandle.ptr = gpuStart.ptr + (UINT64)DXR_HEAP_IBL_OFFSET * descSize;
     }
 
     // Compile shader
@@ -157,7 +161,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     if (!shaderBlob) { fprintf(stderr, "DxrRenderer: shader blob null\n"); return; }
 
     // Create global root signature
-    D3D12_ROOT_PARAMETER params[8] = {};
+    D3D12_ROOT_PARAMETER params[9] = {};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[0].Descriptor.ShaderRegister = 0; params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     D3D12_DESCRIPTOR_RANGE uavRange = {}; uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; uavRange.NumDescriptors = 1; uavRange.BaseShaderRegister = 0;
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; params[1].DescriptorTable.NumDescriptorRanges = 1; params[1].DescriptorTable.pDescriptorRanges = &uavRange; params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -168,6 +172,10 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     
     params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV; params[3].Descriptor.ShaderRegister = 0; params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[4].Descriptor.ShaderRegister = 2049; params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    // Environment Map Descriptor Table (t0, space1)
+    static D3D12_DESCRIPTOR_RANGE envRange = {}; envRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; envRange.NumDescriptors = 1; envRange.BaseShaderRegister = 0; envRange.RegisterSpace = 1; envRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+    params[8].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; params[8].DescriptorTable.NumDescriptorRanges = 1; params[8].DescriptorTable.pDescriptorRanges = &envRange; params[8].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     // Vertex Buffer Table (t2050 onwards)
     static D3D12_DESCRIPTOR_RANGE vbRange = {}; vbRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; vbRange.NumDescriptors = 1024; vbRange.BaseShaderRegister = 2050; vbRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
@@ -181,10 +189,10 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     params[7].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[7].Descriptor.ShaderRegister = 4098; params[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rootDesc = {};
-    rootDesc.NumParameters = 8; rootDesc.pParameters = params; rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+    rootDesc.NumParameters = 9; rootDesc.pParameters = params; rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
     static D3D12_STATIC_SAMPLER_DESC staticSampler = {};
-    staticSampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR; staticSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP; staticSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP; staticSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP; staticSampler.ShaderRegister = 0; staticSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    staticSampler.Filter = D3D12_FILTER_ANISOTROPIC; staticSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP; staticSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP; staticSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP; staticSampler.MipLODBias = 0; staticSampler.MaxAnisotropy = 16; staticSampler.ShaderRegister = 0; staticSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     rootDesc.NumStaticSamplers = 1; rootDesc.pStaticSamplers = &staticSampler;
 
     ComPtr<ID3DBlob> signature; ComPtr<ID3DBlob> error;
@@ -538,6 +546,15 @@ bool RenderFrame(ID3D12GraphicsCommandList* commandListBase, UINT frameIndex, ID
     dxrList->SetComputeRootDescriptorTable(2, s_texTableGpu);
     if (cameraCB) dxrList->SetComputeRootConstantBufferView(3, cameraCB->GetGPUVirtualAddress());
     if (materialCB) dxrList->SetComputeRootShaderResourceView(4, materialCB->GetGPUVirtualAddress());
+    
+    if (IBLManager::Get().IsLoaded()) {
+        // Copy IBL descriptor from global heap to DXR local heap
+        D3D12_CPU_DESCRIPTOR_HANDLE dst = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+        dst.ptr += (SIZE_T)DXR_HEAP_IBL_OFFSET * s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        s_device->CopyDescriptorsSimple(1, dst, IBLManager::Get().GetCPUHandle(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        
+        dxrList->SetComputeRootDescriptorTable(8, s_iblGpuHandle);
+    }
     
     // Bind VB and IB Tables
     dxrList->SetComputeRootDescriptorTable(5, s_vbTableGpu);
