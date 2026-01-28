@@ -5,6 +5,6 @@
 #include "raytracing/common.hlsli"
 
 // Include individual shader files
-#include "raytracing/raygen.hlsl"
+#include "path_tracer_core.hlsl"
 #include "raytracing/miss.hlsl"
 #include "raytracing/hit.hlsl"

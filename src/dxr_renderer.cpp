@@ -1,4 +1,5 @@
 #include "dxr_renderer.h"
+#include "dxr_accumulation.h"
 #include "dxc_wrapper.h"
 #include "dxr_helpers.h"
 #include "d3d12_helpers.h"
@@ -35,6 +36,7 @@ bool g_rayTracingSupported = false; // defined here
 
 // DXR-specific state kept internal to this module
 static ComPtr<ID3D12Device5> s_dxrDevice;
+static DxrAccumulation s_accumulation;
 
 // Descriptor heaps for DXR
 static ComPtr<ID3D12DescriptorHeap> s_srvHeap; // Holds [Textures(2048), VBs(1024), IBs(1024), OutputUAV(1)]
@@ -42,19 +44,24 @@ static D3D12_GPU_DESCRIPTOR_HANDLE s_texTableGpu;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_vbTableGpu;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_ibTableGpu;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_outputUAVGpu;
+static D3D12_GPU_DESCRIPTOR_HANDLE s_accumUAVGpu;
+static D3D12_GPU_DESCRIPTOR_HANDLE s_reservoirGpuHandle[2];
+static D3D12_GPU_DESCRIPTOR_HANDLE s_iblGpuHandle;
 
 // Offset constants for s_srvHeap
 static const UINT DXR_HEAP_TEX_OFFSET = 0;
 static const UINT DXR_HEAP_VB_OFFSET = 2048;
 static const UINT DXR_HEAP_IB_OFFSET = 2048 + 1024;
 static const UINT DXR_HEAP_UAV_OFFSET = 2048 + 1024 + 1024;
-static const UINT DXR_HEAP_IBL_OFFSET = 2048 + 1024 + 1024 + 1;
-static const UINT DXR_HEAP_TOTAL_COUNT = 2048 + 1024 + 1024 + 1 + 1;
+static const UINT DXR_HEAP_ACCUM_UAV_OFFSET = 2048 + 1024 + 1024 + 1;
+static const UINT DXR_HEAP_RESERVOIR_0_OFFSET = 2048 + 1024 + 1024 + 2;
+static const UINT DXR_HEAP_RESERVOIR_1_OFFSET = 2048 + 1024 + 1024 + 3;
+static const UINT DXR_HEAP_IBL_OFFSET = 2048 + 1024 + 1024 + 4;
+static const UINT DXR_HEAP_TOTAL_COUNT = 2048 + 1024 + 1024 + 5;
 
 // Output texture dimensions used by DXR (kept local to module)
 static UINT s_outputWidth = 1280;
 static UINT s_outputHeight = 720;
-static D3D12_GPU_DESCRIPTOR_HANDLE s_iblGpuHandle;
 
 inline void TransitionResource(ID3D12GraphicsCommandList *cmdList,
                                ID3D12Resource *resource,
@@ -90,6 +97,10 @@ struct MeshBLAS { AccelerationStructureBuffers buffers; UINT64 meshId; };
 static std::vector<MeshBLAS> s_allBLAS;
 static AccelerationStructureBuffers s_tlas;
 
+static ComPtr<ID3D12Resource> s_lightBuffer;
+static UINT s_lightCount = 0;
+static ComPtr<ID3D12Resource> s_reservoirBuffers[2];
+
 namespace DxrRenderer {
 
 void Initialize(ID3D12Device* device) {
@@ -99,6 +110,7 @@ void Initialize(ID3D12Device* device) {
     if (SUCCEEDED(s_device->QueryInterface(IID_PPV_ARGS(&dev5)))) {
         g_rayTracingSupported = true;
         s_dxrDevice = dev5;
+        s_accumulation.Initialize(s_device, s_outputWidth, s_outputHeight);
         fprintf(stderr, "DxrRenderer: DXR supported on device\n");
     } else {
         g_rayTracingSupported = false;
@@ -142,8 +154,11 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
         D3D12_GPU_DESCRIPTOR_HANDLE gpuStart = s_srvHeap->GetGPUDescriptorHandleForHeapStart();
         s_texTableGpu.ptr = gpuStart.ptr + (UINT64)DXR_HEAP_TEX_OFFSET * descSize;
         s_vbTableGpu.ptr = gpuStart.ptr + (UINT64)DXR_HEAP_VB_OFFSET * descSize;
-        s_ibTableGpu.ptr = gpuStart.ptr + (UINT64)DXR_HEAP_IB_OFFSET * descSize;
+                s_ibTableGpu.ptr = gpuStart.ptr + (UINT64)DXR_HEAP_IB_OFFSET * descSize;
         s_outputUAVGpu.ptr = gpuStart.ptr + (UINT64)DXR_HEAP_UAV_OFFSET * descSize;
+        s_accumUAVGpu.ptr = gpuStart.ptr + (UINT64)DXR_HEAP_ACCUM_UAV_OFFSET * descSize;
+        s_reservoirGpuHandle[0].ptr = gpuStart.ptr + (UINT64)DXR_HEAP_RESERVOIR_0_OFFSET * descSize;
+        s_reservoirGpuHandle[1].ptr = gpuStart.ptr + (UINT64)DXR_HEAP_RESERVOIR_1_OFFSET * descSize;
         s_iblGpuHandle.ptr = gpuStart.ptr + (UINT64)DXR_HEAP_IBL_OFFSET * descSize;
     }
 
@@ -161,9 +176,9 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     if (!shaderBlob) { fprintf(stderr, "DxrRenderer: shader blob null\n"); return; }
 
     // Create global root signature
-    D3D12_ROOT_PARAMETER params[9] = {};
+    D3D12_ROOT_PARAMETER params[10] = {}; // Increased for Lights
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[0].Descriptor.ShaderRegister = 0; params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    D3D12_DESCRIPTOR_RANGE uavRange = {}; uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; uavRange.NumDescriptors = 1; uavRange.BaseShaderRegister = 0;
+    D3D12_DESCRIPTOR_RANGE uavRange = {}; uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; uavRange.NumDescriptors = 4; uavRange.BaseShaderRegister = 0;
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; params[1].DescriptorTable.NumDescriptorRanges = 1; params[1].DescriptorTable.pDescriptorRanges = &uavRange; params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     
     // Texture Table (t1 onwards)
@@ -188,8 +203,11 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     // Mesh Data SB (t4098 onwards)
     params[7].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[7].Descriptor.ShaderRegister = 4098; params[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
+    // Lights SB (t5000)
+    params[9].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; params[9].Descriptor.ShaderRegister = 5000; params[9].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
     D3D12_ROOT_SIGNATURE_DESC rootDesc = {};
-    rootDesc.NumParameters = 9; rootDesc.pParameters = params; rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+    rootDesc.NumParameters = 10; rootDesc.pParameters = params; rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
     static D3D12_STATIC_SAMPLER_DESC staticSampler = {};
     staticSampler.Filter = D3D12_FILTER_ANISOTROPIC; staticSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP; staticSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP; staticSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP; staticSampler.MipLODBias = 0; staticSampler.MaxAnisotropy = 16; staticSampler.ShaderRegister = 0; staticSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -216,7 +234,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     hitGroupDesc.HitGroupExport = L"HitGroup"; hitGroupDesc.Type = D3D12_HIT_GROUP_TYPE_TRIANGLES; hitGroupDesc.ClosestHitShaderImport = L"ClosestHit";
     D3D12_STATE_SUBOBJECT hitSub = {}; hitSub.Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP; hitSub.pDesc = &hitGroupDesc;
 
-    shaderConfig.MaxPayloadSizeInBytes = 4 * sizeof(float); shaderConfig.MaxAttributeSizeInBytes = 2 * sizeof(float);
+    shaderConfig.MaxPayloadSizeInBytes = 80; // Increased to accommodate full hit info (20 floats)
+    shaderConfig.MaxAttributeSizeInBytes = 2 * sizeof(float);
     D3D12_STATE_SUBOBJECT shaderConfigSub = {}; shaderConfigSub.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG; shaderConfigSub.pDesc = &shaderConfig;
 
     pipelineConfig.MaxTraceRecursionDepth = 2; D3D12_STATE_SUBOBJECT pipeConfigSub = {}; pipeConfigSub.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG; pipeConfigSub.pDesc = &pipelineConfig;
@@ -289,6 +308,35 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     D3D12_CPU_DESCRIPTOR_HANDLE uavCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
     uavCpu.ptr += (SIZE_T)DXR_HEAP_UAV_OFFSET * s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     s_device->CreateUnorderedAccessView(s_outputUAV.Get(), nullptr, &uavDesc, uavCpu);
+
+    // Create Accumulation UAV
+    s_accumulation.Resize(s_outputWidth, s_outputHeight);
+    D3D12_CPU_DESCRIPTOR_HANDLE accumUavCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+    accumUavCpu.ptr += (SIZE_T)DXR_HEAP_ACCUM_UAV_OFFSET * s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    
+    D3D12_UNORDERED_ACCESS_VIEW_DESC accumUavDesc = {};
+    accumUavDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    accumUavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    accumUavDesc.Texture2D.MipSlice = 0;
+    accumUavDesc.Texture2D.PlaneSlice = 0;
+    s_device->CreateUnorderedAccessView(s_accumulation.GetAccumulationBuffer(), nullptr, &accumUavDesc, accumUavCpu);
+
+    // Create Reservoir UAVs
+    for (int i = 0; i < 2; ++i) {
+        D3D12_RESOURCE_DESC resDesc = texDesc;
+        resDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; // Reservoirs need 16 bytes: index, w_sum, M, W
+        s_reservoirBuffers[i].Reset();
+        ThrowIfFailed(s_device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &resDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&s_reservoirBuffers[i])));
+        
+        D3D12_CPU_DESCRIPTOR_HANDLE resUavCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+        resUavCpu.ptr += (SIZE_T)(i == 0 ? DXR_HEAP_RESERVOIR_0_OFFSET : DXR_HEAP_RESERVOIR_1_OFFSET) * s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        
+        D3D12_UNORDERED_ACCESS_VIEW_DESC resUavDesc = {};
+        resUavDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        resUavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        resUavDesc.Texture2D.MipSlice = 0;
+        s_device->CreateUnorderedAccessView(s_reservoirBuffers[i].Get(), nullptr, &resUavDesc, resUavCpu);
+    }
 
     if (g_verboseRenderLogs) {
         fprintf(stderr, "DxrRenderer: Ray Tracing Pipeline ready\n");
@@ -513,6 +561,42 @@ void BuildAccelerationStructures(const std::vector<Asset::GpuMesh>& meshes, cons
     }
 }
 
+void UpdateLights(const std::vector<GpuLight>& lights) {
+    if (lights.empty()) {
+        s_lightCount = 0;
+        return;
+    }
+    
+    s_lightCount = (UINT)lights.size();
+    UINT bufferSize = (UINT)(lights.size() * sizeof(GpuLight));
+    
+    // Recreate buffer if size changed
+    if (!s_lightBuffer || s_lightBuffer->GetDesc().Width < bufferSize) {
+        s_lightBuffer.Reset();
+        D3D12_HEAP_PROPERTIES heapProps = { D3D12_HEAP_TYPE_UPLOAD, D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_MEMORY_POOL_UNKNOWN, 1, 1 };
+        D3D12_RESOURCE_DESC resDesc = { D3D12_RESOURCE_DIMENSION_BUFFER, 0, bufferSize, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE };
+        ThrowIfFailed(s_device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &resDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&s_lightBuffer)));
+    }
+    
+    void* pData = nullptr;
+    ThrowIfFailed(s_lightBuffer->Map(0, nullptr, &pData));
+    memcpy(pData, lights.data(), bufferSize);
+    s_lightBuffer->Unmap(0, nullptr);
+    
+    ResetAccumulation();
+}
+
+void ResetAccumulation() {
+    s_accumulation.Reset();
+    if (g_verboseRenderLogs) {
+        fprintf(stderr, "DxrRenderer: Accumulation Reset\n");
+    }
+}
+
+UINT DxrRenderer::GetAccumulationFrameCount() {
+    return s_accumulation.GetFrameCount();
+}
+
 bool IsReady() {
     return g_rayTracingSupported && s_rtStateObject != nullptr && s_tlas.result != nullptr;
 }
@@ -563,6 +647,18 @@ bool RenderFrame(ID3D12GraphicsCommandList* commandListBase, UINT frameIndex, ID
     ID3D12DescriptorHeap* heaps[] = { s_srvHeap.Get() };
     dxrList->SetDescriptorHeaps(1, heaps);
 
+    // Update frame count in camera CB if present
+    if (cameraCB) {
+        void* pData = nullptr;
+        D3D12_RANGE readRange = { 0, 0 };
+        if (SUCCEEDED(cameraCB->Map(0, &readRange, &pData))) {
+            float* pfData = (float*)pData;
+            pfData[17] = (float)s_accumulation.GetFrameCount(); // frameCount at _pad3? no, check index.
+            pfData[18] = (float)s_lightCount; // lightCount
+            cameraCB->Unmap(0, nullptr);
+        }
+    }
+
     // Bind Tables
     dxrList->SetComputeRootDescriptorTable(1, s_outputUAVGpu);
     dxrList->SetComputeRootDescriptorTable(2, s_texTableGpu);
@@ -582,6 +678,11 @@ bool RenderFrame(ID3D12GraphicsCommandList* commandListBase, UINT frameIndex, ID
     dxrList->SetComputeRootDescriptorTable(5, s_vbTableGpu);
     dxrList->SetComputeRootDescriptorTable(6, s_ibTableGpu);
     if (meshDataSB) dxrList->SetComputeRootShaderResourceView(7, meshDataSB->GetGPUVirtualAddress());
+
+    // Lights SB (t5000)
+    if (s_lightBuffer) {
+        dxrList->SetComputeRootShaderResourceView(9, s_lightBuffer->GetGPUVirtualAddress());
+    }
 
     D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
     // RayGen record size must match the raygen slot size (may be 64-aligned)
@@ -603,6 +704,9 @@ bool RenderFrame(ID3D12GraphicsCommandList* commandListBase, UINT frameIndex, ID
 
     TransitionResource(dxrList.Get(), s_outputUAV.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
     TransitionResource(dxrList.Get(), renderTarget, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST);
+
+    // Increment accumulation frame
+    s_accumulation.IncrementFrame();
 
     // Validate sizes to avoid CopyResource invalid-argument errors
     D3D12_RESOURCE_DESC srcDesc = s_outputUAV->GetDesc();

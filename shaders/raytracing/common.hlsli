@@ -4,8 +4,11 @@
 #ifndef RAYTRACING_COMMON_H
 #define RAYTRACING_COMMON_H
 
+#include "../random_lib.hlsl"
+
 RaytracingAccelerationStructure g_accel : register(t0);
 RWTexture2D<float4> g_output : register(u0);
+RWTexture2D<float4> g_accumulation : register(u1);
 
 // Texture array - fixed large size to avoid overlap issues with other registers
 Texture2D textures[2048] : register(t1);
@@ -47,8 +50,9 @@ cbuffer Camera : register(b0)
     float nearZ;
     float farZ;
     float intensity;
-    float _pad3;
-    float _pad4, _pad5;
+    float frameCount;
+    float lightCount;
+    float _pad5;
 
     // Global Lighting
     float4 lightDir; // xyz = direction towards light
@@ -91,7 +95,25 @@ Buffer<uint> indices[1024] : register(t3074);
 
 struct RayPayload
 {
-    float4 color;
+    float3 color;     // Final computed color (for legacy/simple paths)
+    float t;          // Hit distance (-1 for miss)
+    float3 normal;    // World space normal
+    float3 position;  // World space position
+    float3 albedo;    // Material albedo
+    float3 emissive;  // Emissive color
+    float roughness;
+    float metalness;
+    uint matIndex;
+};
+
+struct PathPayload
+{
+    float3 accumulatedColor;
+    float3 throughput;
+    float3 origin;
+    float3 direction;
+    bool active;
+    RNG rng;
 };
 
 #endif // RAYTRACING_COMMON_H

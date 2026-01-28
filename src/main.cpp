@@ -1463,6 +1463,32 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     // Add a default ground plane (10x10)
     Scene::AddDefaultPlane(0.1f);
 
+    // ReSTIR DI: Initialize test lights for Phase 2
+    {
+        std::vector<GpuLight> testLights;
+        GpuLight l1;
+        l1.type = 1; // Point
+        l1.position[0] = 5.0f; l1.position[1] = 8.0f; l1.position[2] = 5.0f;
+        l1.direction[0] = 0; l1.direction[1] = 0; l1.direction[2] = 0;
+        l1.color[0] = 1.0f; l1.color[1] = 0.6f; l1.color[2] = 0.4f;
+        l1.intensity = 200.0f;
+        l1.range = 100.0f;
+        l1.spotAngle = 0; l1.spotInnerAngle = 0; l1.meshIndex = 0;
+        testLights.push_back(l1);
+
+        GpuLight l2;
+        l2.type = 1; // Point
+        l2.position[0] = -5.0f; l2.position[1] = 8.0f; l2.position[2] = -5.0f;
+        l2.direction[0] = 0; l2.direction[1] = 0; l2.direction[2] = 0;
+        l2.color[0] = 0.4f; l2.color[1] = 0.6f; l2.color[2] = 1.0f;
+        l2.intensity = 200.0f;
+        l2.range = 100.0f;
+        l2.spotAngle = 0; l2.spotInnerAngle = 0; l2.meshIndex = 0;
+        testLights.push_back(l2);
+
+        DxrRenderer::UpdateLights(testLights);
+    }
+
   // Basic message loop + simple render
   MSG msg = {};
 
@@ -2054,15 +2080,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     // Ensure aspect matches the window and update camera CB on GPU
     g_cameraData.aspect = (float)g_windowWidth / (float)g_windowHeight;
     g_cameraData.debugMode = (float)g_debugMode;
-    if (g_cameraConstantBuffer) {
-      UINT8 *pCam = nullptr;
-      D3D12_RANGE readRange = {0, 0};
-      if (SUCCEEDED(g_cameraConstantBuffer->Map(
-              0, &readRange, reinterpret_cast<void **>(&pCam)))) {
-        memcpy(pCam, &g_cameraData, sizeof(g_cameraData));
-        g_cameraConstantBuffer->Unmap(0, nullptr);
-      }
-    }
+    UpdateCameraCB();
 
     // Start ImGui frame
     ImGui_ImplDX12_NewFrame();
@@ -2155,50 +2173,23 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             float vHalfRadNew = atanf(tanf(hHalfRad) / aspect);
             float vFovNew = 2.0f * vHalfRadNew * (180.0f / 3.14159265f);
             g_cameraData.fov = vFovNew;
-            // Update camera CB
-            if (g_cameraConstantBuffer) {
-              UINT8 *pCam = nullptr;
-              D3D12_RANGE readRange = {0, 0};
-              if (SUCCEEDED(g_cameraConstantBuffer->Map(
-                      0, &readRange, reinterpret_cast<void **>(&pCam)))) {
-                memcpy(pCam, &g_cameraData, sizeof(g_cameraData));
-                g_cameraConstantBuffer->Unmap(0, nullptr);
-              }
-            }
+            UpdateCameraCB();
           }
         }
         if (ImGui::SliderFloat("Intensity", &g_cameraData.intensity, 0.0f,
                                5.0f)) {
-          // Update camera CB
-          if (g_cameraConstantBuffer) {
-            UINT8 *pCam = nullptr;
-            D3D12_RANGE readRange = {0, 0};
-            if (SUCCEEDED(g_cameraConstantBuffer->Map(
-                    0, &readRange, reinterpret_cast<void **>(&pCam)))) {
-              memcpy(pCam, &g_cameraData, sizeof(g_cameraData));
-              g_cameraConstantBuffer->Unmap(0, nullptr);
-              // Debug: print camera params when intensity changes
-              fprintf(stderr,
-                      "Camera params after Intensity change: fov=%.3f "
-                      "aspect=%.3f near=%.3f far=%.3f intensity=%.3f\n",
-                      g_cameraData.fov, g_cameraData.aspect,
-                      g_cameraData.nearZ, g_cameraData.farZ,
-                      g_cameraData.intensity);
-            }
-          }
+          UpdateCameraCB();
+          // Debug: print camera params when intensity changes
+          fprintf(stderr,
+                  "Camera params after Intensity change: fov=%.3f "
+                  "aspect=%.3f near=%.3f far=%.3f intensity=%.3f\n",
+                  g_cameraData.fov, g_cameraData.aspect,
+                  g_cameraData.nearZ, g_cameraData.farZ,
+                  g_cameraData.intensity);
         }
         if (ImGui::Button("Reset Camera")) {
           ResetCamera();
-          // Update camera CB
-          if (g_cameraConstantBuffer) {
-            UINT8 *pCam = nullptr;
-            D3D12_RANGE readRange = {0, 0};
-            if (SUCCEEDED(g_cameraConstantBuffer->Map(
-                    0, &readRange, reinterpret_cast<void **>(&pCam)))) {
-              memcpy(pCam, &g_cameraData, sizeof(g_cameraData));
-              g_cameraConstantBuffer->Unmap(0, nullptr);
-            }
-          }
+          UpdateCameraCB();
         }
 
         // Camera movement & mouse sensitivity controls
@@ -2220,12 +2211,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         if (ImGui::ColorEdit3("Ambient Color", g_cameraData.ambientColor)) lightChanged = true;
         if (ImGui::SliderFloat("Ambient Weight", &g_cameraData.ambientColor[3], 0.0f, 1.0f)) lightChanged = true;
 
-        if (lightChanged && g_cameraConstantBuffer) {
-            UINT8 *pCam = nullptr; D3D12_RANGE readRange = {0,0};
-            if (SUCCEEDED(g_cameraConstantBuffer->Map(0, &readRange, reinterpret_cast<void**>(&pCam)))) {
-                memcpy(pCam, &g_cameraData, sizeof(g_cameraData));
-                g_cameraConstantBuffer->Unmap(0, nullptr);
-            }
+        if (lightChanged) {
+            UpdateCameraCB();
         }
 
         ImGui::Separator();
@@ -2265,6 +2252,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                         ? "Raytracing"
                         : "Path Tracing");
 
+        if (g_currentRenderMode == RenderMode::PathTracing) {
+            ImGui::Text("Samples: %u", DxrRenderer::GetAccumulationFrameCount());
+        }
+
         // Debug Render Pass Dropdown
         const char* debugModes[] = { "None", "Albedo", "Normal", "Emissive", "Roughness/Glossiness", "Refl. Color", "Metalness", "AO" };
         if (ImGui::Combo("Debug View", &g_debugMode, debugModes, IM_ARRAYSIZE(debugModes))) {
@@ -2280,6 +2271,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                                g_currentRenderMode == RenderMode::Raytracing)) {
           g_currentRenderMode = RenderMode::Raytracing;
           // Recreate raytracing pipeline to ensure output texture matches current size
+          DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
+        }
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Path Tracing",
+                               g_currentRenderMode == RenderMode::PathTracing)) {
+          g_currentRenderMode = RenderMode::PathTracing;
           DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
         }
         // DXR debug: show UV output from RayGen
