@@ -13,14 +13,14 @@
 #include "dxr_helpers.h"
 #include "dxr_renderer.h"
 #include "file_import.h"
+#include "ibl_manager.h"
 #include "imgui.h"
 #include "imgui_impl_dx12.h"
 #include "imgui_impl_win32.h"
+#include "light.h"
+#include "material_editor.h"
 #include "raster_renderer.h"
 #include "scene.h"
-#include "material_editor.h"
-#include "ibl_manager.h"
-#include "light.h"
 #include <algorithm>
 #include <chrono>
 #include <codecvt>
@@ -68,9 +68,8 @@ static const UINT FrameCount = 2;
 
 // Render Mode System
 enum class RenderMode {
-  Raster,     // Fast rasterization for scene traversal
-  Raytracing, // Current DXR implementation
-  PathTracing // Full path tracing with ReSTIR (future)
+  Raster, // Fast rasterization for scene traversal
+  DXR     // Unified Ray Tracing / Path Tracing path
 };
 
 static RenderMode g_currentRenderMode = RenderMode::Raster;
@@ -81,9 +80,12 @@ bool g_dxrDumpPixels = false;
 bool g_dxrHitDebug = false; // encode primitive ID in hit shader for debugging
 bool g_dxrDumpD3D12Messages = false; // dump D3D12 InfoQueue messages to stderr
 bool g_rasterDebugUV = false; // show raster UVs in mesh pixel shader (debug)
-bool g_verboseRenderLogs = false; // when true, prints render-loop diagnostics (disabled by default)
-bool g_rasterWireframe = false; // show meshes in wireframe / disable culling (debug)
-bool g_rasterDebugDepth = false; // compile shader to output depth as color for debugging
+bool g_verboseRenderLogs =
+    false; // when true, prints render-loop diagnostics (disabled by default)
+bool g_rasterWireframe =
+    false; // show meshes in wireframe / disable culling (debug)
+bool g_rasterDebugDepth =
+    false; // compile shader to output depth as color for debugging
 
 ComPtr<ID3D12Device> g_device;
 static ComPtr<ID3D12CommandQueue> g_commandQueue;
@@ -120,8 +122,10 @@ static ComPtr<ID3D12Resource>
     g_materialBuffer; // Persistent material constant buffer
 UINT g_textureDescriptorCount = 0;
 static ComPtr<ID3D12Resource> g_materialConstantBuffer;
-static ComPtr<ID3D12Resource> g_materialStructuredBuffer; // Tightly packed for DXR
-static ComPtr<ID3D12Resource> g_meshStructuredBuffer; // Mesh mapping info for DXR
+static ComPtr<ID3D12Resource>
+    g_materialStructuredBuffer; // Tightly packed for DXR
+static ComPtr<ID3D12Resource>
+    g_meshStructuredBuffer; // Mesh mapping info for DXR
 static bool g_showAssetsWindow =
     false; // Controls visibility of the Assets panel (can be closed/reopened)
 static bool g_showMaterialEditor = false;
@@ -132,8 +136,8 @@ static bool g_forceUncollapse =
 static std::string g_lastAssetStatus; // Human-readable status for the Assets UI
 static std::string
     g_selectedAssetPath; // Path chosen by Open dialog (not yet imported)
-static int g_debugMode = 0; // 0=None, 1=Albedo, 2=Normal, 3=Emissive, 4=Glossiness, 5=Metalness/Refl
-
+static int g_debugMode =
+    0; // 0=None, 1=Albedo, 2=Normal, 3=Emissive, 4=Glossiness, 5=Metalness/Refl
 
 static std::string WStringToUtf8(const std::wstring &ws) {
   if (ws.empty())
@@ -151,7 +155,7 @@ static UINT64 g_fenceValues[FrameCount] = {};
 static HANDLE g_fenceEvent = nullptr;
 
 // Simple pipeline objects
-  ComPtr<ID3D12RootSignature> g_rootSignature;
+ComPtr<ID3D12RootSignature> g_rootSignature;
 static ComPtr<ID3D12PipelineState> g_pipelineState;
 static ComPtr<ID3D12Resource> g_vertexBuffer;
 static D3D12_VERTEX_BUFFER_VIEW g_vertexBufferView = {};
@@ -743,16 +747,17 @@ bool InitD3D12(HWND hwnd) {
   // --- Create a root signature with CBV b0 (vertex), descriptor table t0
   // (SRV), and CBV b1 (pixel material) ---
   D3D12_ROOT_PARAMETER rootParameters[5] = {};
-  // b0 - transform CBV for vertex shader AND pixel shader (needed for view direction)
+  // b0 - transform CBV for vertex shader AND pixel shader (needed for view
+  // direction)
   rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
   rootParameters[0].Descriptor.ShaderRegister = 0;
   rootParameters[0].Descriptor.RegisterSpace = 0;
   rootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-  // t0-t1023 - descriptor table (SRV) for pixel shader (large buffer for bindless-style indexing)
+  // t0-t1023 - descriptor table (SRV) for pixel shader (large buffer for
+  // bindless-style indexing)
   static D3D12_DESCRIPTOR_RANGE descRange = {};
   descRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-  descRange.NumDescriptors =
-      2048; // Support many textures concurrently
+  descRange.NumDescriptors = 2048; // Support many textures concurrently
   descRange.BaseShaderRegister = 0;
   descRange.RegisterSpace = 0;
   descRange.OffsetInDescriptorsFromTableStart =
@@ -779,7 +784,8 @@ bool InitD3D12(HWND hwnd) {
   envMapRange.NumDescriptors = 1;
   envMapRange.BaseShaderRegister = 0;
   envMapRange.RegisterSpace = 1;
-  envMapRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+  envMapRange.OffsetInDescriptorsFromTableStart =
+      D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
   rootParameters[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
   rootParameters[4].DescriptorTable.NumDescriptorRanges = 1;
@@ -964,9 +970,12 @@ bool InitD3D12(HWND hwnd) {
   meshPsoDesc.DepthStencilState.StencilEnable = FALSE;
 
   {
-    HRESULT hrMesh = g_device->CreateGraphicsPipelineState(&meshPsoDesc, IID_PPV_ARGS(&RasterRenderer::g_meshPipelineState));
+    HRESULT hrMesh = g_device->CreateGraphicsPipelineState(
+        &meshPsoDesc, IID_PPV_ARGS(&RasterRenderer::g_meshPipelineState));
     if (FAILED(hrMesh)) {
-      fprintf(stderr, "InitD3D12: CreateGraphicsPipelineState (mesh) failed: 0x%08x\n", (unsigned)hrMesh);
+      fprintf(stderr,
+              "InitD3D12: CreateGraphicsPipelineState (mesh) failed: 0x%08x\n",
+              (unsigned)hrMesh);
 #ifdef _DEBUG
       ComPtr<ID3D12InfoQueue> infoQueue;
       if (SUCCEEDED(g_device->QueryInterface(IID_PPV_ARGS(&infoQueue)))) {
@@ -975,10 +984,14 @@ bool InitD3D12(HWND hwnd) {
           SIZE_T messageLength = 0;
           infoQueue->GetMessage(mi, nullptr, &messageLength);
           std::vector<char> message(messageLength);
-          D3D12_MESSAGE* pMsg = reinterpret_cast<D3D12_MESSAGE*>(message.data());
+          D3D12_MESSAGE *pMsg =
+              reinterpret_cast<D3D12_MESSAGE *>(message.data());
           infoQueue->GetMessage(mi, pMsg, &messageLength);
-          fprintf(stderr, "D3D12 INFO (PSO create): Category=%d Severity=%d ID=%d: %s\n",
-                  (int)pMsg->Category, (int)pMsg->Severity, (int)pMsg->ID, pMsg->pDescription);
+          fprintf(
+              stderr,
+              "D3D12 INFO (PSO create): Category=%d Severity=%d ID=%d: %s\n",
+              (int)pMsg->Category, (int)pMsg->Severity, (int)pMsg->ID,
+              pMsg->pDescription);
         }
       }
 #endif
@@ -986,19 +999,24 @@ bool InitD3D12(HWND hwnd) {
     ThrowIfFailed(hrMesh);
   }
 
-  // Recreate the mesh PSO via RasterRenderer to pick up debug defines (e.g. RASTER_DEBUG_DEPTH)
+  // Recreate the mesh PSO via RasterRenderer to pick up debug defines (e.g.
+  // RASTER_DEBUG_DEPTH)
   RasterRenderer::RecreateMeshPipeline(g_device.Get(), g_rootSignature.Get());
 
-  // Additionally create a simple mesh PSO that reads only POSITION and draws a constant color
+  // Additionally create a simple mesh PSO that reads only POSITION and draws a
+  // constant color
   {
     std::wstring simplePath = FindShaderFile(L"shaders\\simple.hlsl");
     ComPtr<IDxcBlob> vsMeshSimpleBlob;
     ComPtr<IDxcBlob> psMeshSimpleBlob;
     try {
-      vsMeshSimpleBlob = localDxc.Compile(simplePath, L"VSMainMeshSimple", L"vs_6_0");
-      psMeshSimpleBlob = localDxc.Compile(simplePath, L"PSMainMeshSimple", L"ps_6_0");
+      vsMeshSimpleBlob =
+          localDxc.Compile(simplePath, L"VSMainMeshSimple", L"vs_6_0");
+      psMeshSimpleBlob =
+          localDxc.Compile(simplePath, L"PSMainMeshSimple", L"ps_6_0");
     } catch (const std::exception &e) {
-      fprintf(stderr, "InitD3D12: simple mesh shader compile failed: %s\n", e.what());
+      fprintf(stderr, "InitD3D12: simple mesh shader compile failed: %s\n",
+              e.what());
       vsMeshSimpleBlob = nullptr;
       psMeshSimpleBlob = nullptr;
     }
@@ -1006,13 +1024,17 @@ bool InitD3D12(HWND hwnd) {
     if (vsMeshSimpleBlob && psMeshSimpleBlob) {
       D3D12_GRAPHICS_PIPELINE_STATE_DESC simplePso = meshPsoDesc;
       D3D12_INPUT_ELEMENT_DESC posOnlyLayout[] = {
-        {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}
-      };
-      simplePso.InputLayout = { posOnlyLayout, _countof(posOnlyLayout) };
-      simplePso.VS = { vsMeshSimpleBlob->GetBufferPointer(), vsMeshSimpleBlob->GetBufferSize() };
-      simplePso.PS = { psMeshSimpleBlob->GetBufferPointer(), psMeshSimpleBlob->GetBufferSize() };
-      if (g_rootSignature) simplePso.pRootSignature = g_rootSignature.Get();
-      ThrowIfFailed(g_device->CreateGraphicsPipelineState(&simplePso, IID_PPV_ARGS(&g_meshSimplePipelineState)));
+          {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
+           D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
+      simplePso.InputLayout = {posOnlyLayout, _countof(posOnlyLayout)};
+      simplePso.VS = {vsMeshSimpleBlob->GetBufferPointer(),
+                      vsMeshSimpleBlob->GetBufferSize()};
+      simplePso.PS = {psMeshSimpleBlob->GetBufferPointer(),
+                      psMeshSimpleBlob->GetBufferSize()};
+      if (g_rootSignature)
+        simplePso.pRootSignature = g_rootSignature.Get();
+      ThrowIfFailed(g_device->CreateGraphicsPipelineState(
+          &simplePso, IID_PPV_ARGS(&g_meshSimplePipelineState)));
     }
   }
 
@@ -1038,22 +1060,25 @@ bool InitD3D12(HWND hwnd) {
   // Initialize IBL Manager and load default environment map
   IBLManager::Get().Initialize(g_device.Get(), g_commandQueue.Get());
   if (!IBLManager::Get().LoadEnvironmentMap("assets/env.exr")) {
-    fprintf(stderr, "Main: Failed to load assets/env.exr, checking for assets/env.hdr\n");
+    fprintf(
+        stderr,
+        "Main: Failed to load assets/env.exr, checking for assets/env.hdr\n");
     IBLManager::Get().LoadEnvironmentMap("assets/env.hdr");
   }
 
   if (IBLManager::Get().IsLoaded()) {
-      DescriptorAllocation alloc = g_cbvSrvAllocator.AllocatePersistent(1);
-      IBLManager::Get().SetGPUHandle(alloc.gpu);
-      IBLManager::Get().SetCPUHandle(alloc.cpu);
+    DescriptorAllocation alloc = g_cbvSrvAllocator.AllocatePersistent(1);
+    IBLManager::Get().SetGPUHandle(alloc.gpu);
+    IBLManager::Get().SetCPUHandle(alloc.cpu);
 
-      D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-      srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-      srvDesc.Format = IBLManager::Get().GetEnvMap().format;
-      srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-      // Use all available mip levels (even if only 1 is loaded for now)
-      srvDesc.Texture2D.MipLevels = (UINT)-1; 
-      g_device->CreateShaderResourceView(IBLManager::Get().GetEnvMap().resource.Get(), &srvDesc, alloc.cpu);
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Format = IBLManager::Get().GetEnvMap().format;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    // Use all available mip levels (even if only 1 is loaded for now)
+    srvDesc.Texture2D.MipLevels = (UINT)-1;
+    g_device->CreateShaderResourceView(
+        IBLManager::Get().GetEnvMap().resource.Get(), &srvDesc, alloc.cpu);
   }
 
   // Log: reached post-Create pipeline initialization (stderr only)
@@ -1104,7 +1129,7 @@ bool InitD3D12(HWND hwnd) {
     float emissiveColor[4];
     int textureIndices[4];
     int emissiveAndPad[4]; // x=emissive, y=occlusion, z=metalRough
-    float extraParams[4]; // x=metalness, y=emissiveIntensity, zw=unused
+    float extraParams[4];  // x=metalness, y=emissiveIntensity, zw=unused
   };
   const UINT64 matCbSizeSingle = (sizeof(MaterialCB) + 255) & ~255;
   const UINT64 matCbSize = matCbSizeSingle * 1024; // Support up to 1024 calls
@@ -1134,7 +1159,12 @@ bool InitD3D12(HWND hwnd) {
 
   // Mesh Structured Buffer for DXR
   {
-    struct MeshData { int materialIndex; int vbIndex; int ibIndex; int pad; };
+    struct MeshData {
+      int materialIndex;
+      int vbIndex;
+      int ibIndex;
+      int pad;
+    };
     const UINT64 meshSbSize = sizeof(MeshData) * 1024;
     D3D12_RESOURCE_DESC meshSbDesc = matCbDesc;
     meshSbDesc.Width = meshSbSize;
@@ -1348,8 +1378,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   std::string autoLoadPath =
       customGltfPath.empty() ? "assets/DamagedHelmet.glb" : customGltfPath;
   try {
-        if (fs::exists(autoLoadPath)) {
-      float helmetPos[3] = { 0.0f, 1.0f, 0.0f };
+    if (fs::exists(autoLoadPath)) {
+      float helmetPos[3] = {0.0f, 1.0f, 0.0f};
       if (!Scene::ImportModel(autoLoadPath, helmetPos)) {
         fprintf(stderr, "AutoLoad: failed to import %s\n",
                 autoLoadPath.c_str());
@@ -1460,34 +1490,50 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     fprintf(stderr, "AutoLoad: exception: %s\n", e.what());
   }
 
-    // Add a default ground plane (10x10)
-    Scene::AddDefaultPlane(0.1f);
+  // Add a default ground plane (10x10)
+  Scene::AddDefaultPlane(0.1f);
 
-    // ReSTIR DI: Initialize test lights for Phase 2
-    {
-        std::vector<GpuLight> testLights;
-        GpuLight l1;
-        l1.type = 1; // Point
-        l1.position[0] = 5.0f; l1.position[1] = 8.0f; l1.position[2] = 5.0f;
-        l1.direction[0] = 0; l1.direction[1] = 0; l1.direction[2] = 0;
-        l1.color[0] = 1.0f; l1.color[1] = 0.6f; l1.color[2] = 0.4f;
-        l1.intensity = 200.0f;
-        l1.range = 100.0f;
-        l1.spotAngle = 0; l1.spotInnerAngle = 0; l1.meshIndex = 0;
-        testLights.push_back(l1);
+  // ReSTIR DI: Initialize test lights for Phase 2
+  {
+    std::vector<GpuLight> testLights;
+    GpuLight l1;
+    l1.type = 1; // Point
+    l1.position[0] = 5.0f;
+    l1.position[1] = 8.0f;
+    l1.position[2] = 5.0f;
+    l1.direction[0] = 0;
+    l1.direction[1] = 0;
+    l1.direction[2] = 0;
+    l1.color[0] = 1.0f;
+    l1.color[1] = 0.6f;
+    l1.color[2] = 0.4f;
+    l1.intensity = 200.0f;
+    l1.range = 100.0f;
+    l1.spotAngle = 0;
+    l1.spotInnerAngle = 0;
+    l1.meshIndex = 0;
+    testLights.push_back(l1);
 
-        GpuLight l2;
-        l2.type = 1; // Point
-        l2.position[0] = -5.0f; l2.position[1] = 8.0f; l2.position[2] = -5.0f;
-        l2.direction[0] = 0; l2.direction[1] = 0; l2.direction[2] = 0;
-        l2.color[0] = 0.4f; l2.color[1] = 0.6f; l2.color[2] = 1.0f;
-        l2.intensity = 200.0f;
-        l2.range = 100.0f;
-        l2.spotAngle = 0; l2.spotInnerAngle = 0; l2.meshIndex = 0;
-        testLights.push_back(l2);
+    GpuLight l2;
+    l2.type = 1; // Point
+    l2.position[0] = -5.0f;
+    l2.position[1] = 8.0f;
+    l2.position[2] = -5.0f;
+    l2.direction[0] = 0;
+    l2.direction[1] = 0;
+    l2.direction[2] = 0;
+    l2.color[0] = 0.4f;
+    l2.color[1] = 0.6f;
+    l2.color[2] = 1.0f;
+    l2.intensity = 200.0f;
+    l2.range = 100.0f;
+    l2.spotAngle = 0;
+    l2.spotInnerAngle = 0;
+    l2.meshIndex = 0;
+    testLights.push_back(l2);
 
-        DxrRenderer::UpdateLights(testLights);
-    }
+    DxrRenderer::UpdateLights(testLights);
+  }
 
   // Basic message loop + simple render
   MSG msg = {};
@@ -1527,97 +1573,114 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
     // Render based on current mode
     switch (g_currentRenderMode) {
-    case RenderMode::Raytracing: {
+    case RenderMode::DXR: {
       // Use DXR module to perform ray dispatch and copy to backbuffer
       if (DxrRenderer::IsReady()) {
         // Update Structured Material Buffer for DXR
         if (g_materialStructuredBuffer && !g_loadedMaterials.empty()) {
-            struct MaterialData {
-              float diffuseColor[4];
-              float reflectionColor[4];
-              float refractionColor[4];
-              float emissiveColor[4];
-              int textureIndices[4];
-              int emissiveAndPad[4];
-              float extraParams[4];
-            };
-            UINT8* pData = nullptr;
-            D3D12_RANGE readRange = {0,0};
-            if (SUCCEEDED(g_materialStructuredBuffer->Map(0, &readRange, reinterpret_cast<void**>(&pData)))) {
-                for (size_t i = 0; i < g_loadedMaterials.size() && i < 1024; ++i) {
-                    const auto &srcMat = g_loadedMaterials[i];
-                    MaterialData mat = {};
-                    memcpy(mat.diffuseColor, srcMat.diffuseColor, sizeof(float)*4);
-                    
-                    memcpy(mat.reflectionColor, srcMat.reflectionColor, sizeof(float)*3);
-                    mat.reflectionColor[3] = srcMat.reflectionGlossiness;
+          struct MaterialData {
+            float diffuseColor[4];
+            float reflectionColor[4];
+            float refractionColor[4];
+            float emissiveColor[4];
+            int textureIndices[4];
+            int emissiveAndPad[4];
+            float extraParams[4];
+          };
+          UINT8 *pData = nullptr;
+          D3D12_RANGE readRange = {0, 0};
+          if (SUCCEEDED(g_materialStructuredBuffer->Map(
+                  0, &readRange, reinterpret_cast<void **>(&pData)))) {
+            for (size_t i = 0; i < g_loadedMaterials.size() && i < 1024; ++i) {
+              const auto &srcMat = g_loadedMaterials[i];
+              MaterialData mat = {};
+              memcpy(mat.diffuseColor, srcMat.diffuseColor, sizeof(float) * 4);
 
-                    memcpy(mat.refractionColor, srcMat.refractionColor, sizeof(float)*3);
-                    mat.refractionColor[3] = srcMat.refractionGlossiness;
+              memcpy(mat.reflectionColor, srcMat.reflectionColor,
+                     sizeof(float) * 3);
+              mat.reflectionColor[3] = srcMat.reflectionGlossiness;
 
-                    memcpy(mat.emissiveColor, srcMat.emissiveColor, sizeof(float)*3);
-                    mat.emissiveColor[3] = srcMat.ior; // Pack IOR in W
+              memcpy(mat.refractionColor, srcMat.refractionColor,
+                     sizeof(float) * 3);
+              mat.refractionColor[3] = srcMat.refractionGlossiness;
 
-                    mat.textureIndices[0] = srcMat.diffuseTexture;
-                    mat.textureIndices[1] = srcMat.reflectionTexture;
-                    mat.textureIndices[2] = srcMat.normalTexture;
-                    mat.textureIndices[3] = srcMat.refractionTexture;
+              memcpy(mat.emissiveColor, srcMat.emissiveColor,
+                     sizeof(float) * 3);
+              mat.emissiveColor[3] = srcMat.ior; // Pack IOR in W
 
-                    mat.emissiveAndPad[0] = srcMat.emissiveTexture;
-                    mat.emissiveAndPad[1] = srcMat.occlusionTexture;
-                    mat.emissiveAndPad[2] = srcMat.metalRoughTexture;
-                    mat.emissiveAndPad[3] = 0; // Pad
+              mat.textureIndices[0] = srcMat.diffuseTexture;
+              mat.textureIndices[1] = srcMat.reflectionTexture;
+              mat.textureIndices[2] = srcMat.normalTexture;
+              mat.textureIndices[3] = srcMat.refractionTexture;
 
-                    mat.extraParams[0] = srcMat.metalness;
-                    mat.extraParams[1] = srcMat.emissiveIntensity;
-                    mat.extraParams[2] = 0.0f;
-                    mat.extraParams[3] = 0.0f;
+              mat.emissiveAndPad[0] = srcMat.emissiveTexture;
+              mat.emissiveAndPad[1] = srcMat.occlusionTexture;
+              mat.emissiveAndPad[2] = srcMat.metalRoughTexture;
+              mat.emissiveAndPad[3] = 0; // Pad
 
-                    memcpy(pData + i * sizeof(MaterialData), &mat, sizeof(MaterialData));
-                }
-                g_materialStructuredBuffer->Unmap(0, nullptr);
+              mat.extraParams[0] = srcMat.metalness;
+              mat.extraParams[1] = srcMat.emissiveIntensity;
+              mat.extraParams[2] = 0.0f;
+              mat.extraParams[3] = 0.0f;
+
+              memcpy(pData + i * sizeof(MaterialData), &mat,
+                     sizeof(MaterialData));
             }
+            g_materialStructuredBuffer->Unmap(0, nullptr);
+          }
         }
 
         // Update Mesh Structured Buffer for DXR
         auto activeMeshes = Scene::GetActiveMeshes();
         auto sceneInstances = Scene::GetInstances();
         if (g_meshStructuredBuffer && !activeMeshes.empty()) {
-            struct MeshData { int materialIndex; int vbIndex; int ibIndex; int pad; };
-            UINT8* pData = nullptr;
-            D3D12_RANGE readRange = {0,0};
-            if (SUCCEEDED(g_meshStructuredBuffer->Map(0, &readRange, reinterpret_cast<void**>(&pData)))) {
-                // We use global indices for vertices/indices in DXR
-                for (size_t i = 0; i < activeMeshes.size() && i < 1024; ++i) {
-                    MeshData m = {};
-                    m.materialIndex = activeMeshes[i].materialIndex;
-                    m.vbIndex = (int)i;
-                    m.ibIndex = (int)i;
-                    memcpy(pData + i * sizeof(MeshData), &m, sizeof(MeshData));
-                }
-                g_meshStructuredBuffer->Unmap(0, nullptr);
+          struct MeshData {
+            int materialIndex;
+            int vbIndex;
+            int ibIndex;
+            int pad;
+          };
+          UINT8 *pData = nullptr;
+          D3D12_RANGE readRange = {0, 0};
+          if (SUCCEEDED(g_meshStructuredBuffer->Map(
+                  0, &readRange, reinterpret_cast<void **>(&pData)))) {
+            // We use global indices for vertices/indices in DXR
+            for (size_t i = 0; i < activeMeshes.size() && i < 1024; ++i) {
+              MeshData m = {};
+              m.materialIndex = activeMeshes[i].materialIndex;
+              m.vbIndex = (int)i;
+              m.ibIndex = (int)i;
+              memcpy(pData + i * sizeof(MeshData), &m, sizeof(MeshData));
             }
+            g_meshStructuredBuffer->Unmap(0, nullptr);
+          }
         }
 
         if (DxrRenderer::RenderFrame(
                 g_commandList.Get(), g_frameIndex,
                 g_renderTargets[g_frameIndex].Get(), rtvHandle,
                 g_cameraConstantBuffer.Get(), g_materialStructuredBuffer.Get(),
-                g_texturesGpuStart, g_textureDescriptorCount,
-                activeMeshes, g_meshStructuredBuffer.Get())) {
+                g_texturesGpuStart, g_textureDescriptorCount, activeMeshes,
+                g_meshStructuredBuffer.Get())) {
           // Success DXR render - Draw Grid with depth checks
           if (g_drawGrid) {
-            D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = g_dsvHeap->GetCPUDescriptorHandleForHeapStart();
-            g_commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
-            
-            // 1. Scene Depth Pre-pass (populate depth buffer for grid occlusion)
+            D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle =
+                g_dsvHeap->GetCPUDescriptorHandleForHeapStart();
+            g_commandList->ClearDepthStencilView(
+                dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+
+            // 1. Scene Depth Pre-pass (populate depth buffer for grid
+            // occlusion)
             g_commandList->OMSetRenderTargets(0, nullptr, FALSE, &dsvHandle);
             g_commandList->SetGraphicsRootSignature(g_rootSignature.Get());
-            RasterRenderer::DrawSceneDepthOnly(g_commandList.Get(), g_cameraConstantBuffer.Get(), sceneInstances);
+            RasterRenderer::DrawSceneDepthOnly(g_commandList.Get(),
+                                               g_cameraConstantBuffer.Get(),
+                                               sceneInstances);
 
             // 2. Draw Grid (test against the populated depth buffer)
             g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
-            RasterRenderer::DrawGrid(g_commandList.Get(), g_cameraConstantBuffer.Get());
+            RasterRenderer::DrawGrid(g_commandList.Get(),
+                                     g_cameraConstantBuffer.Get());
           }
         } else {
           // If RenderFrame failed, fall back to red clear
@@ -1671,7 +1734,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
 
       // Bind global descriptor heap once for all raster calls
-      ID3D12DescriptorHeap* heaps[] = { g_cbvSrvAllocator.Heap() };
+      ID3D12DescriptorHeap *heaps[] = {g_cbvSrvAllocator.Heap()};
       g_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
 
       // Draw ground grid (optional) via raster module
@@ -1681,7 +1744,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       }
 
       // Draw Skybox
-      RasterRenderer::DrawSkybox(g_commandList.Get(), g_cameraConstantBuffer.Get());
+      RasterRenderer::DrawSkybox(g_commandList.Get(),
+                                 g_cameraConstantBuffer.Get());
 
       // Draw loaded meshes
       auto sceneInstances = Scene::GetInstances();
@@ -1689,8 +1753,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         // Log to stderr only (controlled by verbose flag)
         if (g_verboseRenderLogs)
           fprintf(stderr, "Drawing %zu instances\n", sceneInstances.size());
-        // Use the RasterRenderer mesh PSO (may output debug depth/uv depending on compile defines)
-        g_commandList->SetPipelineState(RasterRenderer::g_meshPipelineState.Get());
+        // Use the RasterRenderer mesh PSO (may output debug depth/uv depending
+        // on compile defines)
+        g_commandList->SetPipelineState(
+            RasterRenderer::g_meshPipelineState.Get());
         g_commandList->IASetPrimitiveTopology(
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         // Ensure render targets are set for mesh rendering
@@ -1710,24 +1776,25 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             continue;
 
           // Set instance transform
-          g_commandList->SetGraphicsRoot32BitConstants(3, 16, inst.transform, 0);
+          g_commandList->SetGraphicsRoot32BitConstants(3, 16, inst.transform,
+                                                       0);
 
           // material binding... (existing logic needed)
-          if (gm.materialIndex >= 0 && (size_t)gm.materialIndex < g_loadedMaterials.size()) {
-              // ...
+          if (gm.materialIndex >= 0 &&
+              (size_t)gm.materialIndex < g_loadedMaterials.size()) {
+            // ...
           }
 
           if (g_verboseRenderLogs) {
-            fprintf(stderr, "Mesh[%zu]: vb=0x%016llx vbSize=%u vbStride=%u ib=0x%016llx ibSize=%u verts=%u idx=%u mat=%d\n",
-                    i,
-                    (unsigned long long)gm.vbView.BufferLocation,
+            fprintf(stderr,
+                    "Mesh[%zu]: vb=0x%016llx vbSize=%u vbStride=%u "
+                    "ib=0x%016llx ibSize=%u verts=%u idx=%u mat=%d\n",
+                    i, (unsigned long long)gm.vbView.BufferLocation,
                     (unsigned)gm.vbView.SizeInBytes,
                     (unsigned)gm.vbView.StrideInBytes,
                     (unsigned long long)gm.ibView.BufferLocation,
-                    (unsigned)gm.ibView.SizeInBytes,
-                    (unsigned)gm.vertexCount,
-                    (unsigned)gm.indexCount,
-                    gm.materialIndex);
+                    (unsigned)gm.ibView.SizeInBytes, (unsigned)gm.vertexCount,
+                    (unsigned)gm.indexCount, gm.materialIndex);
           }
 
           g_commandList->IASetVertexBuffers(0, 1, &gm.vbView);
@@ -1735,9 +1802,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
           if (gm.materialIndex >= 0 &&
               gm.materialIndex < (int)g_loadedMaterials.size()) {
-            // Upload material data for this mesh into a unique slot in the material CB
-            // We'll use a simple linear allocation (i % 1024) for now.
-            // In a production engine, this would use a dynamic ring buffer.
+            // Upload material data for this mesh into a unique slot in the
+            // material CB We'll use a simple linear allocation (i % 1024) for
+            // now. In a production engine, this would use a dynamic ring
+            // buffer.
             struct MaterialCB {
               float diffuseColor[4];
               float reflectionColor[4];
@@ -1752,10 +1820,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             memcpy(matCB.diffuseColor, srcMat.diffuseColor, 16);
             memcpy(matCB.reflectionColor, srcMat.reflectionColor, 12);
             matCB.reflectionColor[3] = srcMat.reflectionGlossiness;
-            
+
             memcpy(matCB.refractionColor, srcMat.refractionColor, 12);
             matCB.refractionColor[3] = srcMat.refractionGlossiness;
-            
+
             memcpy(matCB.emissiveColor, srcMat.emissiveColor, 12);
             matCB.emissiveColor[3] = srcMat.ior;
 
@@ -1763,7 +1831,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             matCB.textureIndices[1] = srcMat.reflectionTexture;
             matCB.textureIndices[2] = srcMat.normalTexture;
             matCB.textureIndices[3] = srcMat.refractionTexture;
-            
+
             matCB.emissiveAndPad[0] = srcMat.emissiveTexture;
             matCB.emissiveAndPad[1] = srcMat.occlusionTexture;
             matCB.emissiveAndPad[2] = srcMat.metalRoughTexture;
@@ -1778,19 +1846,24 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
               const UINT64 matSlotSize = (sizeof(MaterialCB) + 255) & ~255;
               UINT64 offset = (i % 1024) * matSlotSize;
               UINT8 *pMat = nullptr;
-              D3D12_RANGE readRange = {0,0};
-              // Note: For high frequency updates, persistent mapping or multiple buffers are preferred.
-              if (SUCCEEDED(g_materialConstantBuffer->Map(0, &readRange, reinterpret_cast<void**>(&pMat)))) {
+              D3D12_RANGE readRange = {0, 0};
+              // Note: For high frequency updates, persistent mapping or
+              // multiple buffers are preferred.
+              if (SUCCEEDED(g_materialConstantBuffer->Map(
+                      0, &readRange, reinterpret_cast<void **>(&pMat)))) {
                 memcpy(pMat + offset, &matCB, sizeof(matCB));
                 g_materialConstantBuffer->Unmap(0, nullptr);
               }
-              g_commandList->SetGraphicsRootConstantBufferView(2, g_materialConstantBuffer->GetGPUVirtualAddress() + offset);
+              g_commandList->SetGraphicsRootConstantBufferView(
+                  2, g_materialConstantBuffer->GetGPUVirtualAddress() + offset);
             }
             if (g_textureDescriptorCount > 0) {
-              g_commandList->SetGraphicsRootDescriptorTable(1, g_texturesGpuStart);
+              g_commandList->SetGraphicsRootDescriptorTable(1,
+                                                            g_texturesGpuStart);
             }
             if (IBLManager::Get().IsLoaded()) {
-              g_commandList->SetGraphicsRootDescriptorTable(4, IBLManager::Get().GetGPUHandle());
+              g_commandList->SetGraphicsRootDescriptorTable(
+                  4, IBLManager::Get().GetGPUHandle());
             }
           }
           if (gm.ibView.SizeInBytes > 0) {
@@ -1802,17 +1875,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           }
         }
       }
-      break;
-    }
-
-    case RenderMode::PathTracing: {
-      // TODO: Implement full path tracing with ReSTIR
-      TR(g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
-         D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
-
-      FLOAT clearColor[] = {0.1f, 0.1f, 0.1f, 1.0f}; // Dark to indicate WIP
-      g_commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
-      g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
       break;
     }
     }
@@ -1872,7 +1934,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
   // Enter main loop (simple, no extra SEH wrappers)
   while (msg.message != WM_QUIT) {
-    //fprintf(stderr, "MainLoop: start iteration\n");
+    // fprintf(stderr, "MainLoop: start iteration\n");
     fflush(stderr);
     if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
       TranslateMessage(&msg);
@@ -2038,30 +2100,31 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       // TAB: Toggle between Raster and Raytracing modes
       static bool tabDown = false;
       if (GetAsyncKeyState(VK_TAB) & 0x8000) {
-          if (!tabDown) {
-              if (g_currentRenderMode == RenderMode::Raster) {
-                  g_currentRenderMode = RenderMode::Raytracing;
-                  DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
-                  fprintf(stderr, "Switched to Raytracing Mode (TAB)\n");
-              } else {
-                  g_currentRenderMode = RenderMode::Raster;
-                  fprintf(stderr, "Switched to Raster Mode (TAB)\n");
-              }
-              tabDown = true;
+        if (!tabDown) {
+          if (g_currentRenderMode == RenderMode::Raster) {
+            g_currentRenderMode = RenderMode::DXR;
+            DxrRenderer::CreateRayTracingPipeline(g_windowWidth,
+                                                  g_windowHeight);
+            fprintf(stderr, "Switched to DXR Mode (TAB)\n");
+          } else {
+            g_currentRenderMode = RenderMode::Raster;
+            fprintf(stderr, "Switched to Raster Mode (TAB)\n");
           }
+          tabDown = true;
+        }
       } else {
-          tabDown = false;
+        tabDown = false;
       }
 
       // Selection: LBUTTON
       static bool lbtnDown = false;
       if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000)) {
-          if (!lbtnDown) {
-              Scene::UpdateSelection((float)g_windowWidth, (float)g_windowHeight);
-              lbtnDown = true;
-          }
+        if (!lbtnDown) {
+          Scene::UpdateSelection((float)g_windowWidth, (float)g_windowHeight);
+          lbtnDown = true;
+        }
       } else {
-          lbtnDown = false;
+        lbtnDown = false;
       }
     }
 
@@ -2080,6 +2143,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     // Ensure aspect matches the window and update camera CB on GPU
     g_cameraData.aspect = (float)g_windowWidth / (float)g_windowHeight;
     g_cameraData.debugMode = (float)g_debugMode;
+    g_cameraData.lightCount = (float)DxrRenderer::GetLightCount();
     UpdateCameraCB();
 
     // Start ImGui frame
@@ -2183,9 +2247,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           fprintf(stderr,
                   "Camera params after Intensity change: fov=%.3f "
                   "aspect=%.3f near=%.3f far=%.3f intensity=%.3f\n",
-                  g_cameraData.fov, g_cameraData.aspect,
-                  g_cameraData.nearZ, g_cameraData.farZ,
-                  g_cameraData.intensity);
+                  g_cameraData.fov, g_cameraData.aspect, g_cameraData.nearZ,
+                  g_cameraData.farZ, g_cameraData.intensity);
         }
         if (ImGui::Button("Reset Camera")) {
           ResetCamera();
@@ -2205,14 +2268,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         ImGui::Separator();
         ImGui::Text("Sun Light");
         bool lightChanged = false;
-        if (ImGui::SliderFloat3("Sun Dir", g_cameraData.lightDir, -1.0f, 1.0f)) lightChanged = true;
-        if (ImGui::ColorEdit3("Sun Color", g_cameraData.lightColor)) lightChanged = true;
-        if (ImGui::SliderFloat("Sun Intensity", &g_cameraData.lightColor[3], 0.0f, 10.0f)) lightChanged = true;
-        if (ImGui::ColorEdit3("Ambient Color", g_cameraData.ambientColor)) lightChanged = true;
-        if (ImGui::SliderFloat("Ambient Weight", &g_cameraData.ambientColor[3], 0.0f, 1.0f)) lightChanged = true;
+        if (ImGui::SliderFloat3("Sun Dir", g_cameraData.lightDir, -1.0f, 1.0f))
+          lightChanged = true;
+        if (ImGui::ColorEdit3("Sun Color", g_cameraData.lightColor))
+          lightChanged = true;
+        if (ImGui::SliderFloat("Sun Intensity", &g_cameraData.lightColor[3],
+                               0.0f, 10.0f))
+          lightChanged = true;
+        if (ImGui::ColorEdit3("Ambient Color", g_cameraData.ambientColor))
+          lightChanged = true;
+        if (ImGui::SliderFloat("Ambient Weight", &g_cameraData.ambientColor[3],
+                               0.0f, 1.0f))
+          lightChanged = true;
 
         if (lightChanged) {
-            UpdateCameraCB();
+          UpdateCameraCB();
         }
 
         ImGui::Separator();
@@ -2248,18 +2318,31 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                        ImGuiWindowFlags_NoCollapse)) {
         ImGui::Text("Current Mode: %s",
                     g_currentRenderMode == RenderMode::Raster ? "Raster"
-                    : g_currentRenderMode == RenderMode::Raytracing
-                        ? "Raytracing"
-                        : "Path Tracing");
+                                                              : "DXR");
 
-        if (g_currentRenderMode == RenderMode::PathTracing) {
-            ImGui::Text("Samples: %u", DxrRenderer::GetAccumulationFrameCount());
+        if (g_currentRenderMode == RenderMode::DXR) {
+          ImGui::Text("Samples: %u", DxrRenderer::GetAccumulationFrameCount());
+
+          float maxBounces = g_cameraData.maxBounces;
+          if (ImGui::SliderFloat("Max Bounces", &maxBounces, 1.0f, 32.0f,
+                                 "%.0f")) {
+            g_cameraData.maxBounces = maxBounces;
+            UpdateCameraCB();
+          }
         }
 
         // Debug Render Pass Dropdown
-        const char* debugModes[] = { "None", "Albedo", "Normal", "Emissive", "Roughness/Glossiness", "Refl. Color", "Metalness", "AO" };
-        if (ImGui::Combo("Debug View", &g_debugMode, debugModes, IM_ARRAYSIZE(debugModes))) {
-            // State is updated; updated into camera buffer on next frame
+        const char *debugModes[] = {"None",
+                                    "Albedo",
+                                    "Normal",
+                                    "Emissive",
+                                    "Roughness/Glossiness",
+                                    "Refl. Color",
+                                    "Metalness",
+                                    "AO"};
+        if (ImGui::Combo("Debug View", &g_debugMode, debugModes,
+                         IM_ARRAYSIZE(debugModes))) {
+          // State is updated; updated into camera buffer on next frame
         }
 
         if (ImGui::RadioButton("Fast Raster",
@@ -2267,16 +2350,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           g_currentRenderMode = RenderMode::Raster;
         }
         ImGui::SameLine();
-        if (ImGui::RadioButton("Raytracing",
-                               g_currentRenderMode == RenderMode::Raytracing)) {
-          g_currentRenderMode = RenderMode::Raytracing;
-          // Recreate raytracing pipeline to ensure output texture matches current size
-          DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
-        }
-        ImGui::SameLine();
-        if (ImGui::RadioButton("Path Tracing",
-                               g_currentRenderMode == RenderMode::PathTracing)) {
-          g_currentRenderMode = RenderMode::PathTracing;
+        if (ImGui::RadioButton("DXR", g_currentRenderMode == RenderMode::DXR)) {
+          g_currentRenderMode = RenderMode::DXR;
+          // Recreate raytracing pipeline to ensure output texture matches
+          // current size
           DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
         }
         // DXR debug: show UV output from RayGen
@@ -2290,27 +2367,23 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                                                g_rootSignature.Get());
         }
 
-        if (ImGui::Checkbox("Raster: Wireframe / No Cull (debug)", &g_rasterWireframe)) {
+        if (ImGui::Checkbox("Raster: Wireframe / No Cull (debug)",
+                            &g_rasterWireframe)) {
           fprintf(stderr, "Raster: Wireframe set=%d\n", g_rasterWireframe);
-          RasterRenderer::RecreateMeshPipeline(g_device.Get(), g_rootSignature.Get());
+          RasterRenderer::RecreateMeshPipeline(g_device.Get(),
+                                               g_rootSignature.Get());
         }
 
-        if (ImGui::Checkbox("Raster: Debug Depth (shader)", &g_rasterDebugDepth)) {
+        if (ImGui::Checkbox("Raster: Debug Depth (shader)",
+                            &g_rasterDebugDepth)) {
           fprintf(stderr, "Raster: DebugDepth set=%d\n", g_rasterDebugDepth);
-          RasterRenderer::RecreateMeshPipeline(g_device.Get(), g_rootSignature.Get());
-        }
-
-        if (ImGui::RadioButton("Path Tracing (WIP)",
-                               g_currentRenderMode ==
-                                   RenderMode::PathTracing)) {
-          g_currentRenderMode = RenderMode::PathTracing;
-          // TODO: Implement path tracing
+          RasterRenderer::RecreateMeshPipeline(g_device.Get(),
+                                               g_rootSignature.Get());
         }
 
         ImGui::Separator();
         ImGui::TextWrapped(
-            "Raster: Fast scene traversal\nRaytracing: Current DXR\nPath "
-            "Tracing: Advanced ReSTIR (future)");
+            "Raster: Fast scene traversal\nDXR: Unified Ray/Path Tracing");
         ImGui::Separator();
         // Display smoothed FPS computed each frame
         if (g_fps > 0.0f) {
@@ -2351,30 +2424,30 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
     Scene::DrawGizmo();
 
-    //fprintf(stderr, "MainLoop: ImGui::Render start\n");
+    // fprintf(stderr, "MainLoop: ImGui::Render start\n");
     ImGui::Render();
-    //fprintf(stderr, "MainLoop: ImGui::Render done\n");
+    // fprintf(stderr, "MainLoop: ImGui::Render done\n");
 
-    //fprintf(stderr, "MainLoop: PopulateCommandList start\n");
+    // fprintf(stderr, "MainLoop: PopulateCommandList start\n");
     PopulateCommandList();
-    //fprintf(stderr, "MainLoop: PopulateCommandList done\n");
+    // fprintf(stderr, "MainLoop: PopulateCommandList done\n");
 
     ID3D12CommandList *ppCommandLists[] = {g_commandList.Get()};
     g_commandQueue->ExecuteCommandLists(_countof(ppCommandLists),
-                      ppCommandLists);
-    //fprintf(stderr, "MainLoop: ExecuteCommandLists done\n");
+                                        ppCommandLists);
+    // fprintf(stderr, "MainLoop: ExecuteCommandLists done\n");
 
-    //fprintf(stderr, "MainLoop: Present start\n");
+    // fprintf(stderr, "MainLoop: Present start\n");
     ThrowIfFailed(g_swapChain->Present(1, 0));
-    //fprintf(stderr, "MainLoop: Present done\n");
-    // Signal and increment the fence value.
+    // fprintf(stderr, "MainLoop: Present done\n");
+    //  Signal and increment the fence value.
     const UINT64 currentFenceValue = g_fenceValues[g_frameIndex];
     ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), currentFenceValue));
     g_fenceValues[g_frameIndex]++;
 
     // Wait for previous frame
     WaitForPreviousFrame();
-    //fprintf(stderr, "MainLoop: end iteration\n");
+    // fprintf(stderr, "MainLoop: end iteration\n");
   }
 
   // Shutdown ImGui and cleanup

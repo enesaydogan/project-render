@@ -6,6 +6,16 @@
 
 #include "../random_lib.hlsl"
 
+static const float PI = 3.14159265359;
+
+inline float3 sRGBToLinear(float3 sRGB) {
+    return pow(max(sRGB, 0.0), 2.2);
+}
+
+inline float3 LinearToSRGB(float3 color) {
+    return pow(max(color, 0.0), 1.0/2.2);
+}
+
 RaytracingAccelerationStructure g_accel : register(t0);
 RWTexture2D<float4> g_output : register(u0);
 RWTexture2D<float4> g_accumulation : register(u1);
@@ -52,7 +62,7 @@ cbuffer Camera : register(b0)
     float intensity;
     float frameCount;
     float lightCount;
-    float _pad5;
+    float maxBounces;
 
     // Global Lighting
     float4 lightDir; // xyz = direction towards light
@@ -101,6 +111,8 @@ struct RayPayload
     float3 position;  // World space position
     float3 albedo;    // Material albedo
     float3 emissive;  // Emissive color
+    float3 refractionColor;
+    float ior;
     float roughness;
     float metalness;
     uint matIndex;

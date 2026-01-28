@@ -4,7 +4,6 @@
 #include "common.hlsli"
 
 // Improved microfacet BRDF helpers (matching raster renderer)
-static const float PI = 3.14159265359;
 
 float DistributionGGX(float3 N, float3 H, float roughness)
 {
@@ -43,10 +42,6 @@ float GeometrySmith(float3 N, float3 V, float3 L, float roughness)
 float3 FresnelSchlick(float cosTheta, float3 F0)
 {
     return F0 + (1.0 - F0) * pow(saturate(1.0 - cosTheta), 5.0);
-}
-
-float3 sRGBToLinear(float3 sRGB) {
-    return pow(max(sRGB, 0.0), 2.2);
 }
 
 // Extract normal from normal map and transform to world space
@@ -91,7 +86,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     uint primIndex = PrimitiveIndex();
     float r = (float)(primIndex & 0xFF) / 255.0f;
     float g = (float)((primIndex >> 8) & 0xFF) / 255.0f;
-    payload.color = float4(r, g, 0.0, 1.0);
+    payload.color = float3(r, g, 0.0);
     return;
 #endif
 
@@ -215,7 +210,14 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     shadowRay.TMax = 1000.0;
     
     RayPayload shadowPayload;
-    shadowPayload.color = float3(0,0,0); 
+    shadowPayload.color = float3(0,0,0);
+    shadowPayload.albedo = float3(0,0,0);
+    shadowPayload.emissive = float3(0,0,0);
+    shadowPayload.refractionColor = float3(0,0,0);
+    shadowPayload.ior = 1.0;
+    shadowPayload.roughness = 1.0;
+    shadowPayload.metalness = 0.0;
+    shadowPayload.matIndex = 0;
     shadowPayload.t = 1.0; // Default to hit
     
     // Trace shadow ray using flags to skip hits and stop at the first occlusion
@@ -253,6 +255,8 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     // In PT mode, we skip tone mapping here and do it in RayGen after accumulation
     payload.color = color;
     payload.t = RayTCurrent();
+    payload.refractionColor = refrColor.rgb;
+    payload.ior = emisColor.w;
     payload.normal = N;
     payload.position = P;
     payload.albedo = BaseColor;

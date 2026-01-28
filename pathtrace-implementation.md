@@ -1,11 +1,13 @@
-# Path Tracing Implementation Plan (ArchViz Final Frame Quality)
+# DXR & Path Tracing Implementation Plan (ArchViz Final Frame Quality)
 
 This document outlines the architectural and technical steps to upgrade the DXR renderer to a full Path Tracing pipeline using ReSTIR and DLSS-D.
 
-## 1. Architectural Strategy: The "Progressive Accumulation" DXR Path
-Instead of a new mode, we will enhance the DXR path to support **Accumulation**.
-*   **Dynamic Mode:** 1 sample per pixel (spp) with high-speed ReSTIR + DLSS-D for interactive editing.
-*   **Static Mode:** Progressive accumulation of hundreds of spp for "Final Frame" noise-free exports.
+## 1. Architectural Strategy: The Unified DXR Path
+Instead of multiple ray-tracing modes, we provide two primary modes for the entire engine:
+1. **Raster Mode:** Fast rasterization for scene traversal and high-speed editing.
+2. **DXR Mode:** A unified ray-traced path that scales from interactive performance to final frame quality.
+    *   **Interactive (Dynamic):** 1 sample per pixel (spp) with high-speed ReSTIR + DLSS-D when moving.
+    *   **Progressive (Static):** Auto-accumulation of hundreds of spp for "Final Frame" noise-free exports when the camera is stationary.
 
 ## 2. Component Breakdown
 
@@ -43,7 +45,7 @@ The Render Panel will be updated with the following controls:
 
 ## 4. File Structure (Modular Approach)
 
-To maintain clean code, the implementation will be split into specialized files:
+To maintain clean code, the implementation is split into specialized files:
 
 | File | Responsibility |
 | :--- | :--- |
@@ -58,6 +60,7 @@ To maintain clean code, the implementation will be split into specialized files:
 
 1.  **Phase 1 (Foundations):** ✅ Implement the Accumulation Buffer and basic Path Tracing loop (Reflections + Shadows).
 2.  **Phase 2 (ReSTIR DI):** ✅ Implement Reservoir sampling for local lights to get clean soft shadows.
-3.  **Phase 3 (BSDF/GI):** 🟡 Add refraction and ReSTIR GI for interior light bounces.
+3.  **Phase 3 (BSDF/GI/Optimization):** 🟡 Refine BSDFs, add refraction, and implement ReSTIR GI for interior light bounces.
 4.  **Phase 4 (Streamline/DLSS-D):** Hook up the G-Buffer and Motion Vectors to DLSS Ray Reconstruction.
 5.  **Phase 5 (Polishing):** Add the Final Export button (high-spp render to disk).
+
