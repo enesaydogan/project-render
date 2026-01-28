@@ -52,3 +52,5 @@ HRESULT 0x80070057 at D:\project-render\src\main.cpp:1576
 HRESULT 0x80070057 at D:\project-render\src\main.cpp:1576
 HRESULT 0x80070057 at D:\project-render\src\main.cpp:953
 HRESULT 0x80070057 at D:\project-render\src\main.cpp:978
+HRESULT 0x80070057 at D:\project-render\src\dxr_renderer.cpp:533
+HRESULT 0x80070057 at D:\project-render\src\dxr_renderer.cpp:533
