@@ -28,13 +28,22 @@ Reservoir init_reservoir()
 // returns true if the candidate was selected
 bool update_reservoir(inout Reservoir r, uint lightIndex, float weight, inout RNG rng)
 {
-    r.w_sum += weight;
+    float new_w_sum = r.w_sum + weight;
     r.M++;
-    if (next_float(rng) < (weight / r.w_sum)) {
+    
+    // Check for invalid weights
+    if (isnan(weight) || isinf(weight)) return false;
+
+    bool selected = (next_float(rng) * new_w_sum < weight);
+    if (selected) {
         r.lightIndex = lightIndex;
-        return true;
     }
-    return false;
+    r.w_sum = new_w_sum;
+    
+    // Safety clamp on sum
+    if (isinf(r.w_sum)) r.w_sum = 1e20; 
+    
+    return selected;
 }
 
 // Combine two reservoirs (Spatial or Temporal resampling)
@@ -55,6 +64,10 @@ void finalize_reservoir(inout Reservoir r, float p_target)
     } else {
         r.W = 0.0;
     }
+    
+    // Sanity check and hard cap to prevent over-exposure feedback loops
+    if (isinf(r.W) || isnan(r.W)) r.W = 0.0;
+    r.W = min(r.W, 1000.0); // Hard cap on light contribution multiplier
 }
 
 #endif // RESTIR_LIB_HLSL

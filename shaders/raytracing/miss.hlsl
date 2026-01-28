@@ -18,4 +18,10 @@ void Miss(inout RayPayload payload)
     payload.normal = float3(0,0,0);
     payload.position = float3(0,0,0);
     payload.albedo = float3(0,0,0);
+    payload.emissive = float3(0,0,0);
+    payload.refractionColor = float3(0,0,0);
+    payload.ior = 1.0;
+    payload.roughness = 1.0;
+    payload.metalness = 0.0;
+    payload.matIndex = 0;
 }

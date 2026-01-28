@@ -17,10 +17,11 @@ struct CameraCB {
   float farZ;
   float intensity;
   float frameCount;
-  float _pad4, _pad5; // Align lightDir to 16-byte boundary
-  
+  float lightCount;
+  float maxBounces;
+
   // Global Scene Lighting
-  float lightDir[4];    // xyz = direction pointing TO light, w = unused
+  float lightDir[4];     // xyz = direction pointing TO light, w = unused
   float lightColor[4];   // rgb + intensity in .w
   float ambientColor[4]; // rgb + weight in .w
 };
