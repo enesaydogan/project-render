@@ -8,20 +8,24 @@ void ResetAccumulation();
 
 // Initialize camera defaults (kept consistent with previous main.cpp values)
 CameraCB g_initialCameraData = {
-    {-3.75f, 3.43f, 3.78f},
-    0.0f,
-    {0.64f, -0.40f, -0.65f},
-    0.0f,
-    {0.0f, 1.0f, 0.0f},
-    0.0f,
-    45.0f,
-    1.86f,
-    0.1f,
-    1000.0f,
-    1.0f,
-    0.0f,
-    0.0f,
-    4.0f,
+    {-3.75f, 3.43f, 3.78f},       // pos
+    0.0f,                         // debugMode
+    {0.64f, -0.40f, -0.65f},      // forward
+    0.0f,                         // _pad1
+    {0.0f, 1.0f, 0.0f},           // up
+    0.0f,                         // _pad2
+    45.0f,                        // fov
+    1.86f,                        // aspect
+    0.1f,                         // nearZ
+    1000.0f,                      // farZ
+    1.0f,                         // intensity
+    0.0f,                         // frameCount
+    0.0f,                         // lightCount
+    4.0f,                         // maxSpecularBounces
+    4.0f,                         // maxRefractiveBounces
+    4.0f,                         // maxGIBounces
+    0.0f,                         // maxSPP
+    0.0f,                         // _pad3
     {0.707f, 0.707f, 0.0f, 0.0f}, // lightDir (45 deg)
     {1.0f, 0.95f, 0.8f, 2.5f},    // lightColor
     {0.2f, 0.3f, 0.4f, 0.15f}     // ambientColor
@@ -51,7 +55,9 @@ static bool CameraChanged(const CameraCB &a, const CameraCB &b) {
       a.farZ != b.farZ)
     return true;
   if (a.intensity != b.intensity || a.debugMode != b.debugMode ||
-      a.maxBounces != b.maxBounces)
+      a.maxSpecularBounces != b.maxSpecularBounces ||
+      a.maxRefractiveBounces != b.maxRefractiveBounces ||
+      a.maxGIBounces != b.maxGIBounces || a.maxSPP != b.maxSPP)
     return true;
   for (int i = 0; i < 4; ++i) {
     if (a.lightDir[i] != b.lightDir[i])
@@ -80,15 +86,20 @@ void UpdateCameraCB() {
   if (!g_cameraConstantBuffer)
     return;
 
-  if (CameraChanged(g_cameraData, s_lastCameraData)) {
-    UINT8 *pCam = nullptr;
-    D3D12_RANGE readRange = {0, 0};
-    if (SUCCEEDED(g_cameraConstantBuffer->Map(
-            0, &readRange, reinterpret_cast<void **>(&pCam)))) {
-      memcpy(pCam, &g_cameraData, sizeof(g_cameraData));
-      g_cameraConstantBuffer->Unmap(0, nullptr);
-    }
-    // Any camera update should reset path tracing accumulation
+  bool changed = CameraChanged(g_cameraData, s_lastCameraData);
+
+  // ALWAYS update the GPU buffer because frameCount changes every frame
+  UINT8 *pCam = nullptr;
+  D3D12_RANGE readRange = {0, 0};
+  if (SUCCEEDED(g_cameraConstantBuffer->Map(
+          0, &readRange, reinterpret_cast<void **>(&pCam)))) {
+    memcpy(pCam, &g_cameraData, sizeof(g_cameraData));
+    g_cameraConstantBuffer->Unmap(0, nullptr);
+  }
+
+  if (changed) {
+    // Only reset accumulation if movement/settings changed (not just
+    // frameCount)
     DxrRenderer::ResetAccumulation();
     s_lastCameraData = g_cameraData;
   }

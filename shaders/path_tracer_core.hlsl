@@ -39,6 +39,14 @@ void RayGen()
     uint3 launchDim = DispatchRaysDimensions();
     uint frame = (uint)frameCount;
 
+    if (maxSPP > 0.0 && frame >= (uint)maxSPP) {
+        float4 total = g_accumulation[launchIndex.xy];
+        if (total.a > 0.0) {
+            g_output[launchIndex.xy] = float4(LinearToSRGB(ToneMap(total.rgb / total.a)), 1.0);
+        }
+        return;
+    }
+
     RNG rng = init_rng(launchIndex.xy, frame);
 
     // Swap reservoirs per frame for ReSTIR
@@ -63,9 +71,11 @@ void RayGen()
     float3 accumulatedColor = float3(0, 0, 0);
     float3 throughput = float3(1, 1, 1);
     
-    int max_bounces = (int)maxBounces;
+    int specularBounces = 0;
+    int refractiveBounces = 0;
+    int giBounces = 0;
 
-    for (int bounce = 0; bounce < max_bounces; ++bounce) 
+    for (int bounce = 0; bounce < 32; ++bounce) 
     {
         RayDesc ray;
         ray.Origin = rayOrigin;
@@ -336,10 +346,14 @@ void RayGen()
             float3 glassL;
             if (SampleGlass(V, N, payload.ior, u, glassL)) {
                 // Refracted
+                if (refractiveBounces >= (int)maxRefractiveBounces) break;
+                refractiveBounces++;
                 nextDir = glassL;
                 f_brdf = payload.refractionColor;
             } else {
                 // Reflected
+                if (specularBounces >= (int)maxSpecularBounces) break;
+                specularBounces++;
                 nextDir = glassL;
                 f_brdf = float3(1,1,1);
             }
@@ -362,6 +376,9 @@ void RayGen()
             
             if (next_float(rng) * totalProb < specProb) {
                 // Specular GGX
+                if (specularBounces >= (int)maxSpecularBounces) break;
+                specularBounces++;
+                
                 float3 H = SampleGGX(u, N, roughness);
                 nextDir = reflect(-V, H);
                 float NdotL = saturate(dot(N, nextDir));
@@ -372,6 +389,9 @@ void RayGen()
                 f_brdf = D_GGX(NdotH, roughness) * G_Smith(max(0.0, dot(N, V)), NdotL, roughness) * F_Schlick(VdotH, F0) / (4.0 * max(0.0, dot(N, V)) * NdotL + 0.001);
             } else {
                 // Diffuse Lambert
+                if (giBounces >= (int)maxGIBounces) break;
+                giBounces++;
+
                 nextDir = SampleLambert(u, N);
                 float NdotL = saturate(dot(N, nextDir));
                 pdf = (PDF_Lambert(NdotL) * diffProb) / totalProb;
