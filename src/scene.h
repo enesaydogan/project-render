@@ -24,10 +24,10 @@ struct Instance {
   size_t nodeIndex;
 };
 
-// Import a glTF/glb file into the scene. Returns true on success.
-bool ImportGltf(const std::string &utf8path, const float* rootTranslation = nullptr);
-// Open file dialog and import selected glTF
-bool ImportGltfWithDialog(HWND hwnd);
+// Import a model (glTF, OBJ, STL) file into the scene. Returns true on success.
+bool ImportModel(const std::string &utf8path, const float* rootTranslation = nullptr);
+// Open file dialog and import selected model
+bool ImportModelWithDialog(HWND hwnd);
 // Open file dialog and import selected HDR/EXR
 bool ImportHDRWithDialog(HWND hwnd);
 

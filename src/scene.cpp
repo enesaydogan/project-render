@@ -99,13 +99,13 @@ Node::Node() {
 
 const std::string& LastStatus() { return s_lastStatus; }
 
-bool ImportGltf(const std::string &utf8path, const float* rootTranslation) {
+bool ImportModel(const std::string &utf8path, const float* rootTranslation) {
     try {
-        fprintf(stderr, "Scene::ImportGltf: importing %s\n", utf8path.c_str());
+        fprintf(stderr, "Scene::ImportModel: importing %s\n", utf8path.c_str());
         std::vector<Asset::GpuMesh> meshes;
         std::vector<Asset::Material> materials;
         std::vector<Asset::Texture> textures;
-        bool ok = Asset::LoadGltf(utf8path, meshes, &materials, &textures, rootTranslation);
+        bool ok = Asset::LoadModel(utf8path, meshes, &materials, &textures, rootTranslation);
         if (!ok) {
             s_lastStatus = std::string("Load failed: ") + utf8path;
             fprintf(stderr, "%s\n", s_lastStatus.c_str());
@@ -179,15 +179,15 @@ bool ImportGltf(const std::string &utf8path, const float* rootTranslation) {
     }
 }
 
-bool ImportGltfWithDialog(HWND hwnd) {
+bool ImportModelWithDialog(HWND hwnd) {
     std::wstring chosen;
-    if (OpenGltfFileDialog(hwnd, chosen)) {
+    if (OpenModelFileDialog(hwnd, chosen)) {
         if (chosen.empty()) { s_lastStatus = "No file chosen"; return false; }
         // convert wstring -> utf8
         int size_needed = WideCharToMultiByte(CP_UTF8, 0, chosen.c_str(), (int)chosen.size(), NULL, 0, NULL, NULL);
         std::string utf8path(size_needed, 0);
         WideCharToMultiByte(CP_UTF8, 0, chosen.c_str(), (int)chosen.size(), &utf8path[0], size_needed, NULL, NULL);
-        return ImportGltf(utf8path);
+        return ImportModel(utf8path);
     }
     s_lastStatus = "Open cancelled";
     return false;
@@ -701,8 +701,8 @@ void DrawScenePanel(HWND hwnd, bool &visible) {
     if (ImGui::Begin("Scene", &visible)) {
         // Action area
         float btnWidth = ImGui::GetContentRegionAvail().x * 0.33f;
-        if (ImGui::Button("Import GLB...", ImVec2(btnWidth, 0))) {
-            ImportGltfWithDialog(hwnd);
+        if (ImGui::Button("Import Model...", ImVec2(btnWidth, 0))) {
+            ImportModelWithDialog(hwnd);
         }
         ImGui::SameLine();
         if (ImGui::Button("Import HDR...", ImVec2(btnWidth, 0))) {
