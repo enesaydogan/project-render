@@ -35,7 +35,22 @@ FetchContent_Declare(
   GIT_REPOSITORY https://github.com/ocornut/imgui.git
   GIT_TAG v1.89.8
 )
-FetchContent_MakeAvailable(imgui)
+
+# Fetch and build Assimp
+FetchContent_Declare(
+  assimp
+  GIT_REPOSITORY https://github.com/assimp/assimp.git
+  GIT_TAG v5.3.1
+)
+
+set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_INSTALL OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_ZLIB ON CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+
+FetchContent_MakeAvailable(imgui assimp)
 
 # ImGui sources (core + backend for Win32 + DX12)
 set(IMGUI_SOURCES
@@ -67,6 +82,7 @@ target_link_libraries(asset_loader PRIVATE
     optimized "${VCPKG_INSTALLED_DIR}/lib/tinyexr.lib"
     debug "${VCPKG_INSTALLED_DIR}/debug/lib/miniz.lib"
     optimized "${VCPKG_INSTALLED_DIR}/lib/miniz.lib"
+    assimp::assimp
 )
 
 # Optionally enable tinygltf support (install via vcpkg: `vcpkg install tinygltf`)

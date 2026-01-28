@@ -2,6 +2,12 @@
 
 ## Completed Features
 
+### Universal Mesh Import System
+- ✅ **FBX Integration**: Full support for FBX files via Assimp.
+- ✅ **Multi-Format Support**: OBJ, STL, DAE, and PLY support.
+- ✅ **Assimp Backend**: Reliable parsing of complex hierarchies and coordinate systems.
+- ✅ **Asset Selector**: Dropdown UI for picking materials in multi-material models.
+
 ### glTF Import System
 - ✅ Full vertex layout: Position, Normal, Tangent, UV
 - ✅ Material parsing: metallic-roughness and specular-glossiness workflows
