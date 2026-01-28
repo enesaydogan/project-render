@@ -471,6 +471,7 @@ void DrawGizmo() {
         
         // Ensure raytracing acceleration structures are updated to reflect transform changes
         RebuildAccelerationStructures();
+        DxrRenderer::ResetAccumulation();
     }
 }
 

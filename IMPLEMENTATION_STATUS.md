@@ -36,11 +36,17 @@
   - Smith geometry function with height-correlated masking-shadowing
   - Schlick Fresnel approximation with roughness-based energy compensation
   - Shared logic between Raster and Raytracing for visual parity
-- ✅ **Image-Based Lighting (IBL)**:
-  - Latitude-Longitude HDR environment map support (.exr)
-  - Indirect diffuse and specular reflection sampling
-  - Roughness-based specular filtering (using mip-levels)
-  - Skybox background rendering pass
+
+### Path Tracing (Progressive)
+- ✅ **Foundations (Phase 1)**:
+  - High-precision R32G32B32A32_FLOAT accumulation buffer.
+  - Linear accumulation logic with frame synchronization.
+  - PCG-based Random Number Generation (RNG) library.
+  - Automatic accumulation reset on interaction (camera, light, material, gizmo).
+  - Progressive UI feedback with sample counter.
+- ⬜ **Direct Illumination (Phase 2)**: Next - ReSTIR DI implementation for many-light sampling.
+
+### Image-Based Lighting (IBL)
 - ✅ **Normal Mapping**:
   - TBN matrix construction from vertex tangent/bitangent/normal
   - Normal map sampling and transformation to world space

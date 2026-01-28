@@ -12,9 +12,10 @@ void Miss(inout RayPayload payload)
     // Sample environment map and apply intensity
     float3 color = envMap.SampleLevel(linearSampler, uv, 0).rgb * intensity;
     
-    // Apply tone mapping and gamma to match the hit shader (Standardized Output)
-    color = ToneMap(color);
-    color = pow(color, 1.0/2.2);
-    
-    payload.color = float4(color, 1.0);
+    // In PT mode, we skip tone mapping here and do it in RayGen after accumulation
+    payload.color = color;
+    payload.t = -1.0;
+    payload.normal = float3(0,0,0);
+    payload.position = float3(0,0,0);
+    payload.albedo = float3(0,0,0);
 }

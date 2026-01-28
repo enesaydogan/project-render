@@ -9,6 +9,7 @@ add_executable(project-render src/main.cpp)
 target_sources(project-render PRIVATE 
     src/camera.cpp 
     src/dxr_renderer.cpp 
+    src/dxr_accumulation.cpp
     src/raster_renderer.cpp 
     src/file_import.cpp 
     src/scene.cpp 

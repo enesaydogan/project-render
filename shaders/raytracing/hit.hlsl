@@ -172,15 +172,16 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     // Debug Pass
     int mode = (int)debugMode;
     if (mode == 1) { 
-        payload.color = float4(BaseColor, 1.0);
+        payload.color = BaseColor;
+        payload.t = RayTCurrent();
         return;
     }
-    if (mode == 2) { payload.color = float4(N * 0.5 + 0.5, 1.0); return; }
-    if (mode == 3) { payload.color = float4(emissive, 1.0); return; }
-    if (mode == 4) { payload.color = float4(1.0 - roughness, 1.0 - roughness, 1.0 - roughness, 1.0 - roughness); return; }
-    if (mode == 5) { payload.color = float4(F0, 1.0); return; }
-    if (mode == 6) { payload.color = float4(metalness, metalness, metalness, 1.0); return; }
-    if (mode == 7) { payload.color = float4(ao, ao, ao, 1.0); return; }
+    if (mode == 2) { payload.color = N * 0.5 + 0.5; payload.t = RayTCurrent(); return; }
+    if (mode == 3) { payload.color = emissive; payload.t = RayTCurrent(); return; }
+    if (mode == 4) { payload.color = float3(1.0 - roughness, 1.0 - roughness, 1.0 - roughness); payload.t = RayTCurrent(); return; }
+    if (mode == 5) { payload.color = F0; payload.t = RayTCurrent(); return; }
+    if (mode == 6) { payload.color = float3(metalness, metalness, metalness); payload.t = RayTCurrent(); return; }
+    if (mode == 7) { payload.color = float3(ao, ao, ao); payload.t = RayTCurrent(); return; }
 
     // Calculate view direction correctly in world space
     float3 P = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
@@ -214,13 +215,14 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     shadowRay.TMax = 1000.0;
     
     RayPayload shadowPayload;
-    shadowPayload.color = float4(0,0,0,0); // Use alpha=0 to indicate shadow
+    shadowPayload.color = float3(0,0,0); 
+    shadowPayload.t = 1.0; // Default to hit
     
     // Trace shadow ray using flags to skip hits and stop at the first occlusion
     TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
     
-    // If the shadow ray reached something (didn't finish with a miss shader that sets alpha 1), it's shadowed
-    if (shadowPayload.color.a < 0.5) shadowed = 0.0;
+    // If the shadow ray reached a miss shader, it's (t < 0)
+    if (shadowPayload.t > 0.0) shadowed = 0.0;
 
     // Outgoing radiance
     float3 radiance = lightColor.rgb * lightColor.w;
@@ -248,9 +250,14 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     // Final color calculation with camera intensity. 1:1 match with raster.
     float3 color = (ambient + Lo + emissive) * intensity;
     
-    // Final tone mapping and gamma
-    color = ToneMap(color);
-    color = pow(color, float3(1.0/2.2, 1.0/2.2, 1.0/2.2));
-    
-    payload.color = float4(color, diffColor.a);
+    // In PT mode, we skip tone mapping here and do it in RayGen after accumulation
+    payload.color = color;
+    payload.t = RayTCurrent();
+    payload.normal = N;
+    payload.position = P;
+    payload.albedo = BaseColor;
+    payload.emissive = emissive;
+    payload.roughness = roughness;
+    payload.metalness = metalness;
+    payload.matIndex = (uint)mesh.materialIndex;
 }

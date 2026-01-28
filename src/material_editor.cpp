@@ -2,6 +2,7 @@
 #include "scene.h"
 #include "assets/asset_loader.h"
 #include "imgui.h"
+#include "dxr_renderer.h"
 #include <vector>
 
 // External globals from main.cpp
@@ -72,26 +73,27 @@ void Draw(bool &visible) {
                     
                     ImGui::PushID(matIdx);
                     // Diffuse
-                    ImGui::ColorEdit3("Diffuse Color", mat.diffuseColor);
+                    if (ImGui::ColorEdit3("Diffuse Color", mat.diffuseColor)) DxrRenderer::ResetAccumulation();
                     
                     // PBR Parameters
                     float roughness = 1.0f - mat.reflectionGlossiness;
                     if (ImGui::SliderFloat("Roughness", &roughness, 0.0f, 1.0f)) {
                         mat.reflectionGlossiness = 1.0f - roughness;
+                        DxrRenderer::ResetAccumulation();
                     }
-                    ImGui::SliderFloat("Metalness", &mat.metalness, 0.0f, 1.0f);
+                    if (ImGui::SliderFloat("Metalness", &mat.metalness, 0.0f, 1.0f)) DxrRenderer::ResetAccumulation();
 
                     // Reflection (Legacy/Legacy naming but useful for color)
-                    ImGui::ColorEdit3("Reflection Color", mat.reflectionColor);
+                    if (ImGui::ColorEdit3("Reflection Color", mat.reflectionColor)) DxrRenderer::ResetAccumulation();
                     
                     // Refraction (Keep as is)
-                    ImGui::ColorEdit3("Refraction Color", mat.refractionColor);
-                    ImGui::SliderFloat("Refraction Glossiness", &mat.refractionGlossiness, 0.0f, 1.0f);
-                    ImGui::InputFloat("IOR", &mat.ior, 0.01f, 0.1f, "%.3f");
+                    if (ImGui::ColorEdit3("Refraction Color", mat.refractionColor)) DxrRenderer::ResetAccumulation();
+                    if (ImGui::SliderFloat("Refraction Glossiness", &mat.refractionGlossiness, 0.0f, 1.0f)) DxrRenderer::ResetAccumulation();
+                    if (ImGui::InputFloat("IOR", &mat.ior, 0.01f, 0.1f, "%.3f")) DxrRenderer::ResetAccumulation();
 
                     // Emissive
-                    ImGui::ColorEdit3("Emissive Color", mat.emissiveColor);
-                    ImGui::SliderFloat("Emissive Intensity", &mat.emissiveIntensity, 0.0f, 100.0f);
+                    if (ImGui::ColorEdit3("Emissive Color", mat.emissiveColor)) DxrRenderer::ResetAccumulation();
+                    if (ImGui::SliderFloat("Emissive Intensity", &mat.emissiveIntensity, 0.0f, 100.0f)) DxrRenderer::ResetAccumulation();
                     
                     // Texture Info
                     if (ImGui::TreeNode("Texture Maps (Indices)")) {

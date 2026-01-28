@@ -10,6 +10,9 @@
     <ClCompile Include="D:\project-render\src\dxr_renderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\project-render\src\dxr_accumulation.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="D:\project-render\src\raster_renderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

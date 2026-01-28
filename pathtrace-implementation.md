@@ -28,7 +28,7 @@ Instead of a new mode, we will enhance the DXR path to support **Accumulation**.
 *   **Area Lights:** Treat emissive model geometry as first-class area lights in the ReSTIR reservoirs.
 
 ### E. DLSS-D (Ray Reconstruction) Integration
-*   **Streamline Framework:** Use NVIDIA Streamline to inject DLSS 3.5+.
+*   **Streamline Framework:** Use NVIDIA Streamline to inject DLSS 4.0+.
 *   **G-Buffer Expansion:** Export Motion Vectors, Depth, Normals, and Albedo to the Streamline constants.
 *   **Ray Reconstruction:** Replace traditional denoisers with DLSS-D to handle ReSTIR's noisy output while preserving sharp ArchViz details.
 
@@ -56,8 +56,8 @@ To maintain clean code, the implementation will be split into specialized files:
 
 ## 5. Implementation Phases
 
-1.  **Phase 1 (Foundations):** Implement the Accumulation Buffer and basic Path Tracing loop (Reflections + Shadows).
-2.  **Phase 2 (ReSTIR DI):** Implement Reservoir sampling for local lights to get clean soft shadows.
-3.  **Phase 3 (BSDF/GI):** Add refraction and ReSTIR GI for interior light bounces.
+1.  **Phase 1 (Foundations):** ✅ Implement the Accumulation Buffer and basic Path Tracing loop (Reflections + Shadows).
+2.  **Phase 2 (ReSTIR DI):** ✅ Implement Reservoir sampling for local lights to get clean soft shadows.
+3.  **Phase 3 (BSDF/GI):** 🟡 Add refraction and ReSTIR GI for interior light bounces.
 4.  **Phase 4 (Streamline/DLSS-D):** Hook up the G-Buffer and Motion Vectors to DLSS Ray Reconstruction.
 5.  **Phase 5 (Polishing):** Add the Final Export button (high-spp render to disk).
