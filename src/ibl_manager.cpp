@@ -22,5 +22,16 @@ bool IBLManager::LoadEnvironmentMap(const std::string& path) {
     }
 
     std::cout << "Loaded environment map: " << path << " (" << m_envMap.width << "x" << m_envMap.height << ")" << std::endl;
+
+    // Refresh descriptor if handle is already assigned
+    if (m_cpuHandle.ptr != 0) {
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Format = m_envMap.format;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MipLevels = m_envMap.mipLevels;
+        m_device->CreateShaderResourceView(m_envMap.resource.Get(), &srvDesc, m_cpuHandle);
+    }
+
     return true;
 }

@@ -219,7 +219,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     shaderConfig.MaxPayloadSizeInBytes = 4 * sizeof(float); shaderConfig.MaxAttributeSizeInBytes = 2 * sizeof(float);
     D3D12_STATE_SUBOBJECT shaderConfigSub = {}; shaderConfigSub.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG; shaderConfigSub.pDesc = &shaderConfig;
 
-    pipelineConfig.MaxTraceRecursionDepth = 1; D3D12_STATE_SUBOBJECT pipeConfigSub = {}; pipeConfigSub.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG; pipeConfigSub.pDesc = &pipelineConfig;
+    pipelineConfig.MaxTraceRecursionDepth = 2; D3D12_STATE_SUBOBJECT pipeConfigSub = {}; pipeConfigSub.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG; pipeConfigSub.pDesc = &pipelineConfig;
 
     globalRootSigDesc.pGlobalRootSignature = s_rtGlobalRootSignature.Get(); D3D12_STATE_SUBOBJECT rootSigSub = {}; rootSigSub.Type = D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE; rootSigSub.pDesc = &globalRootSigDesc;
 
@@ -266,7 +266,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     texDesc.Height = s_outputHeight;
     texDesc.DepthOrArraySize = 1;
     texDesc.MipLevels = 1;
-    texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    texDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
     texDesc.SampleDesc.Count = 1;
     texDesc.SampleDesc.Quality = 0;
     texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
@@ -280,7 +280,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     if (s_outputUAV) s_outputUAV->SetName(L"RT Output Texture");
 
     D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-    uavDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    uavDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
     uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
     uavDesc.Texture2D.MipSlice = 0;
     uavDesc.Texture2D.PlaneSlice = 0;
@@ -297,7 +297,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
 
 void BuildAccelerationStructures(const std::vector<Asset::GpuMesh>& meshes, const std::vector<Scene::Instance>& instances) {
     if (!g_rayTracingSupported || !s_dxrDevice) return;
-    if (meshes.empty() || instances.empty()) {
+    try {
+        if (meshes.empty() || instances.empty()) {
         if (g_verboseRenderLogs) fprintf(stderr, "DxrRenderer: Empty scene - clearing TLAS\n");
         s_tlas.result = nullptr;
         s_allBLAS.clear();
@@ -370,34 +371,55 @@ void BuildAccelerationStructures(const std::vector<Asset::GpuMesh>& meshes, cons
     if (FAILED(hrList)) { fprintf(stderr, "DxrRenderer: CreateCommandList failed: 0x%08x\n", (unsigned)hrList); return; }
 
     // BLAS
-    s_allBLAS.clear();
-    try {
-        for (size_t i=0;i<meshes.size();++i) {
-            const auto &mesh = meshes[i];
-            // Protect against invalid GPU virtual addresses
-            if (!mesh.vertexBuffer || !mesh.indexBuffer) {
-                fprintf(stderr, "DxrRenderer: Skipping mesh %zu because buffers are null\n", i);
-                continue;
+    // Optimization: Only rebuild BLAS if the mesh resource has changed.
+    // BLAS are defined in local space, so they don't need to rebuild when models are transformed.
+    static std::vector<ID3D12Resource*> s_cachedMeshBuffers;
+    bool meshesChanged = (meshes.size() != s_cachedMeshBuffers.size());
+    if (!meshesChanged) {
+        for (size_t i = 0; i < meshes.size(); ++i) {
+            if (meshes[i].vertexBuffer.Get() != s_cachedMeshBuffers[i]) {
+                meshesChanged = true;
+                break;
             }
-            auto vbAddr = mesh.vertexBuffer->GetGPUVirtualAddress();
-            auto ibAddr = mesh.indexBuffer->GetGPUVirtualAddress();
-            if (vbAddr == 0 || ibAddr == 0) {
-                fprintf(stderr, "DxrRenderer: Mesh %zu has invalid GPU addresses (vb=0x%016llx ib=0x%016llx) - aborting\n", i, (unsigned long long)vbAddr, (unsigned long long)ibAddr);
-                return;
-            }
-            auto bl = BuildBLAS(s_dxrDevice.Get(), cmdList.Get(), vbAddr, mesh.vertexCount, sizeof(Asset::Vertex), ibAddr, mesh.indexCount);
-            // Basic validation
-            if (!bl.result || !bl.scratch) {
-                fprintf(stderr, "DxrRenderer: BuildBLAS produced invalid buffers for mesh %zu\n", i);
-                return;
-            }
-            s_allBLAS.push_back({bl, (UINT64)i});
         }
+    }
 
-        if (s_allBLAS.empty()) {
-            fprintf(stderr, "DxrRenderer: No BLAS built - aborting TLAS build\n");
+    if (meshesChanged || s_allBLAS.empty()) {
+        s_allBLAS.clear();
+        s_cachedMeshBuffers.clear();
+        try {
+            for (size_t i=0;i<meshes.size();++i) {
+                const auto &mesh = meshes[i];
+                // Protect against invalid GPU virtual addresses
+                if (!mesh.vertexBuffer || !mesh.indexBuffer) {
+                    fprintf(stderr, "DxrRenderer: Skipping mesh %zu because buffers are null\n", i);
+                    continue;
+                }
+                auto vbAddr = mesh.vertexBuffer->GetGPUVirtualAddress();
+                auto ibAddr = mesh.indexBuffer->GetGPUVirtualAddress();
+                if (vbAddr == 0 || ibAddr == 0) {
+                    fprintf(stderr, "DxrRenderer: Mesh %zu has invalid GPU addresses (vb=0x%016llx ib=0x%016llx) - aborting\n", i, (unsigned long long)vbAddr, (unsigned long long)ibAddr);
+                    return;
+                }
+                auto bl = BuildBLAS(s_dxrDevice.Get(), cmdList.Get(), vbAddr, mesh.vertexCount, sizeof(Asset::Vertex), ibAddr, mesh.indexCount);
+                // Basic validation
+                if (!bl.result || !bl.scratch) {
+                    fprintf(stderr, "DxrRenderer: BuildBLAS produced invalid buffers for mesh %zu\n", i);
+                    return;
+                }
+                s_allBLAS.push_back({bl, (UINT64)i});
+                s_cachedMeshBuffers.push_back(mesh.vertexBuffer.Get());
+            }
+        } catch (...) {
+            fprintf(stderr, "DxrRenderer: BLAS Build crashed\n");
             return;
         }
+    }
+
+    if (s_allBLAS.empty()) {
+        fprintf(stderr, "DxrRenderer: No BLAS built - aborting TLAS build\n");
+        return;
+    }
 
         // TLAS
         std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instanceDescs;

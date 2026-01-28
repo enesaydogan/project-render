@@ -462,18 +462,13 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
             for(int c=0; c<3; ++c) mat.diffuseColor[c] = baseColorFactor[c];
             mat.diffuseColor[3] = baseColorFactor[3];
             
-            // We store metallic in reflectionColor.z and roughness in reflectionColor.w (Glossiness = 1-R)
+            // We store metallic in mat.metalness and roughness in reflectionColor.w (Glossiness = 1-R)
             mat.reflectionColor[0] = 1.0f; // Specular tint default
             mat.reflectionColor[1] = 1.0f;
-            mat.reflectionColor[2] = metallicFactor; 
+            mat.reflectionColor[2] = 1.0f; 
+            mat.metalness = metallicFactor;
             mat.reflectionGlossiness = 1.0f - roughnessFactor;
             
-            // Emissive
-            if (m.emissiveFactor.size() >= 3) {
-                for(int i=0; i<3; ++i) mat.emissiveColor[i] = (float)m.emissiveFactor[i];
-            }
-            mat.emissiveColor[3] = 1.0f; // intensity default
-
             // Proper mapping from texture index to image source index
             auto GetImgIdx = [&](int texIdx) {
                 if (texIdx >= 0 && texIdx < (int)model.textures.size()) {
@@ -481,6 +476,16 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
                 }
                 return -1;
             };
+
+            // Emissive
+            if (m.emissiveFactor.size() >= 3) {
+                for(int i=0; i<3; ++i) mat.emissiveColor[i] = (float)m.emissiveFactor[i];
+            } else if (GetImgIdx(m.emissiveTexture.index) >= 0) {
+                // Default to white if an emissive texture is present but no factor is defined
+                mat.emissiveColor[0] = mat.emissiveColor[1] = mat.emissiveColor[2] = 1.0f;
+            }
+            mat.emissiveColor[3] = 1.0f; // ior default if not packed elsewhere
+            mat.emissiveIntensity = 1.0f;
 
             int baseColorTexIdx = GetImgIdx(m.pbrMetallicRoughness.baseColorTexture.index);
             mat.diffuseTexture = baseColorTexIdx;

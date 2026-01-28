@@ -4,8 +4,8 @@
 
 // Initialize camera defaults (kept consistent with previous main.cpp values)
 CameraCB g_initialCameraData = {
-    {-0.59f, 0.42f, 0.66f}, 0.0f,
-    {0.62f, -0.49f, -0.62f}, 0.0f,
+    {-3.75f, 3.43f, 3.78f}, 0.0f,
+    {0.64f, -0.40f, -0.65f}, 0.0f,
     {0.0f, 1.0f, 0.0f}, 0.0f,
     45.0f, 1.86f, 0.1f, 1000.0f, 1.0f, 0.0f, 0.0f, 0.0f,
     {0.707f, 0.707f, 0.0f, 0.0f}, // lightDir (45 deg)

@@ -124,6 +124,7 @@ static ComPtr<ID3D12Resource> g_materialStructuredBuffer; // Tightly packed for 
 static ComPtr<ID3D12Resource> g_meshStructuredBuffer; // Mesh mapping info for DXR
 static bool g_showAssetsWindow =
     false; // Controls visibility of the Assets panel (can be closed/reopened)
+static bool g_showMaterialEditor = false;
 static bool g_showControlsWindow =
     false; // Controls visibility of the Controls panel (can be closed/reopened)
 static bool g_forceUncollapse =
@@ -558,7 +559,7 @@ bool InitD3D12(HWND hwnd) {
   swapChainDesc.BufferCount = 2;
   swapChainDesc.Width = clientWidth;
   swapChainDesc.Height = clientHeight;
-  swapChainDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+  swapChainDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
   swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
   swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
   swapChainDesc.SampleDesc.Count = 1;
@@ -927,7 +928,7 @@ bool InitD3D12(HWND hwnd) {
   psoDesc.SampleMask = UINT_MAX;
   psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
   psoDesc.NumRenderTargets = 1;
-  psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+  psoDesc.RTVFormats[0] = DXGI_FORMAT_R10G10B10A2_UNORM;
   psoDesc.SampleDesc.Count = 1;
 
   ThrowIfFailed(g_device->CreateGraphicsPipelineState(
@@ -1023,7 +1024,7 @@ bool InitD3D12(HWND hwnd) {
   ImGui_ImplWin32_Init(hwnd);
   // Initialize DX12 backend with device, number of frames, RTV format and
   // descriptor heap for fonts
-  ImGui_ImplDX12_Init(g_device.Get(), FrameCount, DXGI_FORMAT_R8G8B8A8_UNORM,
+  ImGui_ImplDX12_Init(g_device.Get(), FrameCount, DXGI_FORMAT_R10G10B10A2_UNORM,
                       g_imguiHeap.Get(),
                       g_imguiHeap->GetCPUDescriptorHandleForHeapStart(),
                       g_imguiHeap->GetGPUDescriptorHandleForHeapStart());
@@ -1103,6 +1104,7 @@ bool InitD3D12(HWND hwnd) {
     float emissiveColor[4];
     int textureIndices[4];
     int emissiveAndPad[4]; // x=emissive, y=occlusion, z=metalRough
+    float extraParams[4]; // x=metalness, y=emissiveIntensity, zw=unused
   };
   const UINT64 matCbSizeSingle = (sizeof(MaterialCB) + 255) & ~255;
   const UINT64 matCbSize = matCbSizeSingle * 1024; // Support up to 1024 calls
@@ -1511,6 +1513,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
               float emissiveColor[4];
               int textureIndices[4];
               int emissiveAndPad[4];
+              float extraParams[4];
             };
             UINT8* pData = nullptr;
             D3D12_RANGE readRange = {0,0};
@@ -1537,7 +1540,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                     mat.emissiveAndPad[0] = srcMat.emissiveTexture;
                     mat.emissiveAndPad[1] = srcMat.occlusionTexture;
                     mat.emissiveAndPad[2] = srcMat.metalRoughTexture;
-                    mat.emissiveAndPad[3] = 0;
+                    mat.emissiveAndPad[3] = 0; // Pad
+
+                    mat.extraParams[0] = srcMat.metalness;
+                    mat.extraParams[1] = srcMat.emissiveIntensity;
+                    mat.extraParams[2] = 0.0f;
+                    mat.extraParams[3] = 0.0f;
 
                     memcpy(pData + i * sizeof(MaterialData), &mat, sizeof(MaterialData));
                 }
@@ -1711,6 +1719,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
               float emissiveColor[4];
               int textureIndices[4];
               int emissiveAndPad[4];
+              float extraParams[4];
             } matCB;
 
             const auto &srcMat = g_loadedMaterials[gm.materialIndex];
@@ -1733,6 +1742,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             matCB.emissiveAndPad[1] = srcMat.occlusionTexture;
             matCB.emissiveAndPad[2] = srcMat.metalRoughTexture;
             matCB.emissiveAndPad[3] = 0;
+
+            matCB.extraParams[0] = srcMat.metalness;
+            matCB.extraParams[1] = srcMat.emissiveIntensity;
+            matCB.extraParams[2] = 0.0f;
+            matCB.extraParams[3] = 0.0f;
 
             if (g_materialConstantBuffer) {
               const UINT64 matSlotSize = (sizeof(MaterialCB) + 255) & ~255;
@@ -2086,6 +2100,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       ImGui::Checkbox("##RenderModeToggle", &g_showRenderModeWindow);
       ImGui::SameLine();
       ImGui::Text("Render Mode");
+      ImGui::SameLine();
+      ImGui::Checkbox("##MaterialEditorToggle", &g_showMaterialEditor);
+      ImGui::SameLine();
+      ImGui::Text("Material Editor");
       ImGui::PopStyleVar();
 
       ImGui::EndMainMenuBar();
@@ -2321,10 +2339,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     } else {
       ImGui::SetNextWindowCollapsed(false, ImGuiCond_FirstUseEver);
     }
+
+    if (ImGui::IsKeyPressed(ImGuiKey_M, false)) {
+      g_showMaterialEditor = !g_showMaterialEditor;
+    }
+
     if (g_showAssetsWindow) {
       // Scene panel handled by Scene module
       Scene::DrawScenePanel(g_hwnd, g_showAssetsWindow);
-      MaterialEditor::Draw(g_showAssetsWindow);
+    }
+    if (g_showMaterialEditor) {
+      MaterialEditor::Draw(g_showMaterialEditor);
     }
 
     Scene::DrawGizmo();

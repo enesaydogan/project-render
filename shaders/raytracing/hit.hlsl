@@ -45,6 +45,10 @@ float3 FresnelSchlick(float cosTheta, float3 F0)
     return F0 + (1.0 - F0) * pow(saturate(1.0 - cosTheta), 5.0);
 }
 
+float3 sRGBToLinear(float3 sRGB) {
+    return pow(max(sRGB, 0.0), 2.2);
+}
+
 // Extract normal from normal map and transform to world space
 float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent, int normalTexIndex)
 {
@@ -108,31 +112,39 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     float2 uv2 = vertices[mesh.vbIndex][i2].uv;
     float2 uv = uv0 * bary.x + uv1 * bary.y + uv2 * bary.z;
     
-    // Interpolate normal and tangent
+    // Interpolate normal and tangent (local space)
     float3 n0 = vertices[mesh.vbIndex][i0].normal;
     float3 n1 = vertices[mesh.vbIndex][i1].normal;
     float3 n2 = vertices[mesh.vbIndex][i2].normal;
-    float3 worldNormal = normalize(n0 * bary.x + n1 * bary.y + n2 * bary.z);
+    float3 localNormal = normalize(n0 * bary.x + n1 * bary.y + n2 * bary.z);
     
     float4 t0 = vertices[mesh.vbIndex][i0].tangent;
     float4 t1 = vertices[mesh.vbIndex][i1].tangent;
     float4 t2 = vertices[mesh.vbIndex][i2].tangent;
-    float4 worldTangent = t0 * bary.x + t1 * bary.y + t2 * bary.z;
+    float4 localTangent = t0 * bary.x + t1 * bary.y + t2 * bary.z;
+
+    // Transform to world space
+    // ObjectToWorld3x4() is provided by DXR
+    float3 worldNormal = normalize(mul((float3x3)ObjectToWorld3x4(), localNormal));
+    float4 worldTangent;
+    worldTangent.xyz = normalize(mul((float3x3)ObjectToWorld3x4(), localTangent.xyz));
+    worldTangent.w = localTangent.w;
     
     // Sample textures
     float3 BaseColor = diffColor.rgb;
     if (texDiff >= 0) {
-        BaseColor *= textures[texDiff].SampleLevel(linearSampler, uv, 0).rgb;
+        BaseColor *= sRGBToLinear(textures[texDiff].SampleLevel(linearSampler, uv, 0).rgb);
     }
     
-    float metalness = 0.0;
-    float roughness = saturate(1.0 - reflColor.w);
+    float metalness = mat.extraParams.x;
+    float roughnessFactor = saturate(1.0 - reflColor.w);
+    float roughness = roughnessFactor;
     
-    // Metal/Roughness Logic
+    // Metal/Roughness Logic: factor * texture
     if (texMR >= 0) {
         float4 mrSample = textures[texMR].SampleLevel(linearSampler, uv, 0);
-        roughness = mrSample.g; 
-        metalness = mrSample.b;
+        roughness *= mrSample.g; 
+        metalness *= mrSample.b;
     }
 
     roughness = max(roughness, 0.002);
@@ -150,10 +162,11 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
         ao = textures[texOcc].SampleLevel(linearSampler, uv, 0).r;
     }
     
-    // Emissive
-    float3 emissive = emisColor.rgb;
+    // Emissive with boost factor and user intensity
+    const float baseEmissiveBoost = 5.0f;
+    float3 emissive = emisColor.rgb * baseEmissiveBoost * mat.extraParams.y;
     if (texEmis >= 0) {
-        emissive *= textures[texEmis].SampleLevel(linearSampler, uv, 0).rgb;
+        emissive *= sRGBToLinear(textures[texEmis].SampleLevel(linearSampler, uv, 0).rgb);
     }
     
     // Debug Pass
@@ -192,9 +205,26 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     float3 kS = F;
     float3 kD = 1.0 - kS;
     
+    // Shadow Ray
+    float shadowed = 1.0;
+    RayDesc shadowRay;
+    shadowRay.Origin = P + N * 0.001; // Offset to avoid self-intersection
+    shadowRay.Direction = L;
+    shadowRay.TMin = 0.001;
+    shadowRay.TMax = 1000.0;
+    
+    RayPayload shadowPayload;
+    shadowPayload.color = float4(0,0,0,0); // Use alpha=0 to indicate shadow
+    
+    // Trace shadow ray using flags to skip hits and stop at the first occlusion
+    TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
+    
+    // If the shadow ray reached something (didn't finish with a miss shader that sets alpha 1), it's shadowed
+    if (shadowPayload.color.a < 0.5) shadowed = 0.0;
+
     // Outgoing radiance
     float3 radiance = lightColor.rgb * lightColor.w;
-    float3 Lo = (kD * DiffuseAlbedo / PI + specular) * radiance * NdotL;
+    float3 Lo = (kD * DiffuseAlbedo / PI + specular) * radiance * NdotL * shadowed;
     
     // IBL
     float3 R = reflect(-V, N);
@@ -219,7 +249,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     float3 color = (ambient + Lo + emissive) * intensity;
     
     // Final tone mapping and gamma
-    color = color / (color + float3(1.0, 1.0, 1.0));
+    color = ToneMap(color);
     color = pow(color, float3(1.0/2.2, 1.0/2.2, 1.0/2.2));
     
     payload.color = float4(color, diffColor.a);
