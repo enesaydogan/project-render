@@ -62,7 +62,11 @@ cbuffer Camera : register(b0)
     float intensity;
     float frameCount;
     float lightCount;
-    float maxBounces;
+    float maxSpecularBounces;
+    float maxRefractiveBounces;
+    float maxGIBounces;
+    float maxSPP;
+    float _pad3;
 
     // Global Lighting
     float4 lightDir; // xyz = direction towards light

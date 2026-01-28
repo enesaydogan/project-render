@@ -2144,6 +2144,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     g_cameraData.aspect = (float)g_windowWidth / (float)g_windowHeight;
     g_cameraData.debugMode = (float)g_debugMode;
     g_cameraData.lightCount = (float)DxrRenderer::GetLightCount();
+    g_cameraData.frameCount = (float)DxrRenderer::GetAccumulationFrameCount();
     UpdateCameraCB();
 
     // Start ImGui frame
@@ -2323,12 +2324,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         if (g_currentRenderMode == RenderMode::DXR) {
           ImGui::Text("Samples: %u", DxrRenderer::GetAccumulationFrameCount());
 
-          float maxBounces = g_cameraData.maxBounces;
-          if (ImGui::SliderFloat("Max Bounces", &maxBounces, 1.0f, 32.0f,
-                                 "%.0f")) {
-            g_cameraData.maxBounces = maxBounces;
+          if (ImGui::SliderFloat("Reflection Bounces",
+                                 &g_cameraData.maxSpecularBounces, 0.0f, 16.0f,
+                                 "%.0f"))
             UpdateCameraCB();
-          }
+          if (ImGui::SliderFloat("Refraction Bounces",
+                                 &g_cameraData.maxRefractiveBounces, 0.0f,
+                                 16.0f, "%.0f"))
+            UpdateCameraCB();
+          if (ImGui::SliderFloat("GI Bounces", &g_cameraData.maxGIBounces, 0.0f,
+                                 16.0f, "%.0f"))
+            UpdateCameraCB();
+
+          if (ImGui::InputFloat("Max SPP (0=Inf)", &g_cameraData.maxSPP, 1.0f,
+                                10.0f, "%.0f"))
+            UpdateCameraCB();
         }
 
         // Debug Render Pass Dropdown

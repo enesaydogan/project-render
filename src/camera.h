@@ -18,7 +18,11 @@ struct CameraCB {
   float intensity;
   float frameCount;
   float lightCount;
-  float maxBounces;
+  float maxSpecularBounces;
+  float maxRefractiveBounces;
+  float maxGIBounces;
+  float maxSPP;
+  float _pad3;
 
   // Global Scene Lighting
   float lightDir[4];     // xyz = direction pointing TO light, w = unused
