@@ -14,6 +14,7 @@ target_sources(project-render PRIVATE
     src/scene.cpp 
     src/material_editor.cpp
     src/light.cpp
+    src/ibl_manager.cpp
     src/ImGuizmo.cpp
 )
 
@@ -56,6 +57,17 @@ target_link_libraries(project-render PRIVATE imgui_static)
 # Asset loader static library (stub implementation present)
 add_library(asset_loader STATIC src/assets/asset_loader.cpp src/assets/asset_loader.h)
 target_include_directories(asset_loader PUBLIC src/assets)
+
+# VCPKG integration (since packages were installed into the local repos/vcpkg)
+set(VCPKG_ROOT "${CMAKE_SOURCE_DIR}/repos/vcpkg")
+set(VCPKG_INSTALLED_DIR "${VCPKG_ROOT}/installed/x64-windows")
+target_include_directories(asset_loader PUBLIC "${VCPKG_INSTALLED_DIR}/include")
+target_link_libraries(asset_loader PRIVATE 
+    debug "${VCPKG_INSTALLED_DIR}/debug/lib/tinyexr.lib"
+    optimized "${VCPKG_INSTALLED_DIR}/lib/tinyexr.lib"
+    debug "${VCPKG_INSTALLED_DIR}/debug/lib/miniz.lib"
+    optimized "${VCPKG_INSTALLED_DIR}/lib/miniz.lib"
+)
 
 # Optionally enable tinygltf support (install via vcpkg: `vcpkg install tinygltf`)
 option(USE_TINYGLTF "Enable tinygltf integration for glTF import (requires tinygltf headers)" OFF)

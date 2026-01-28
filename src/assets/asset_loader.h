@@ -56,6 +56,7 @@ namespace Asset {
         int normalTexture = -1;
         int emissiveTexture = -1;
         int occlusionTexture = -1;
+        int metalRoughTexture = -1; // Added for GLTF PBR support
 
         bool doubleSided = false;
         std::string alphaMode = "OPAQUE";
@@ -66,4 +67,7 @@ namespace Asset {
 
     // Load a glTF file. Returns true on success. Fills out created meshes in `outMeshes`.
     bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vector<Material>* outMaterials = nullptr, std::vector<Texture>* outTextures = nullptr, const float* rootTranslation = nullptr);
+
+    // Load a single texture from file.
+    Texture LoadTextureFromFile(const std::string& path, bool isHDR = false);
 }

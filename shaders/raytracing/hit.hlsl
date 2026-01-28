@@ -80,6 +80,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     int texRefr = mat.textureIndices.w;
     int texEmis = mat.emissiveAndPad.x;
     int texOcc  = mat.emissiveAndPad.y;
+    int texMR   = mat.emissiveAndPad.z;
 
 #ifdef HIT_DEBUG
     // Encode primitive index into color for debugging
@@ -119,20 +120,26 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     float4 worldTangent = t0 * bary.x + t1 * bary.y + t2 * bary.z;
     
     // Sample textures
-    float3 baseColor = diffColor.rgb;
+    float3 BaseColor = diffColor.rgb;
     if (texDiff >= 0) {
-        float4 texColor = textures[texDiff].SampleLevel(linearSampler, uv, 0);
-        baseColor *= texColor.rgb;
+        BaseColor *= textures[texDiff].SampleLevel(linearSampler, uv, 0).rgb;
     }
     
-    float3 reflectAlbedo = reflColor.rgb;
-    if (texRefl >= 0) {
-        float4 t = textures[texRefl].SampleLevel(linearSampler, uv, 0);
-        reflectAlbedo *= t.rgb;
+    float metalness = 0.0;
+    float roughness = saturate(1.0 - reflColor.w);
+    
+    // Metal/Roughness Logic
+    if (texMR >= 0) {
+        float4 mrSample = textures[texMR].SampleLevel(linearSampler, uv, 0);
+        roughness = mrSample.g; 
+        metalness = mrSample.b;
     }
-    float gloss = reflColor.w;
-    float roughness = saturate(1.0 - gloss);
+
     roughness = max(roughness, 0.002);
+    
+    // Standard PBR Model
+    float3 F0 = lerp(float3(0.04, 0.04, 0.04), BaseColor, metalness);
+    float3 DiffuseAlbedo = BaseColor * (1.0 - metalness);
     
     // Normal mapping
     float3 N = GetNormalFromMap(uv, worldNormal, worldTangent, texNorm);
@@ -151,11 +158,16 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     
     // Debug Pass
     int mode = (int)debugMode;
-    if (mode == 1) { payload.color = float4(baseColor, 1.0); return; }
+    if (mode == 1) { 
+        payload.color = float4(BaseColor, 1.0);
+        return;
+    }
     if (mode == 2) { payload.color = float4(N * 0.5 + 0.5, 1.0); return; }
     if (mode == 3) { payload.color = float4(emissive, 1.0); return; }
-    if (mode == 4) { payload.color = float4(gloss, gloss, gloss, 1.0); return; }
-    if (mode == 5) { payload.color = float4(reflectAlbedo, 1.0); return; }
+    if (mode == 4) { payload.color = float4(1.0 - roughness, 1.0 - roughness, 1.0 - roughness, 1.0 - roughness); return; }
+    if (mode == 5) { payload.color = float4(F0, 1.0); return; }
+    if (mode == 6) { payload.color = float4(metalness, metalness, metalness, 1.0); return; }
+    if (mode == 7) { payload.color = float4(ao, ao, ao, 1.0); return; }
 
     // Calculate view direction correctly in world space
     float3 P = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
@@ -164,9 +176,6 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     // Directional light
     float3 L = normalize(lightDir.xyz);
     float3 H = normalize(V + L);
-    
-    // F0 from Reflect Color
-    float3 F0 = reflectAlbedo;
     
     // Cook-Torrance BRDF
     float NDF = DistributionGGX(N, H, roughness);
@@ -181,19 +190,32 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     
     // Energy conservation
     float3 kS = F;
-    float3 kD = float3(1.0, 1.0, 1.0) - kS;
+    float3 kD = 1.0 - kS;
     
     // Outgoing radiance
     float3 radiance = lightColor.rgb * lightColor.w;
-    float3 Lo = (kD * baseColor / PI + specular) * radiance * NdotL;
+    float3 Lo = (kD * DiffuseAlbedo / PI + specular) * radiance * NdotL;
     
-    // Hemisphere ambient (sky and ground)
-    float3 groundColor = float3(0.05, 0.05, 0.05);
-    float3 skyColor = ambientColor.rgb;
-    float hemi = N.y * 0.5 + 0.5;
-    float3 ambient = lerp(groundColor, skyColor, hemi) * baseColor * ao * ambientColor.w;
+    // IBL
+    float3 R = reflect(-V, N);
+    float3 F_ibl = FresnelSchlickRoughness(max(dot(N, V), 0.0), F0, roughness);
+    float3 kS_ibl = F_ibl;
+    float3 kD_ibl = 1.0 - kS_ibl;
+
+    float2 envUV_diff = DirectionToUV(N);
+    // Use higher mips for diffuse irradiance
+    float3 irradiance = envMap.SampleLevel(linearSampler, envUV_diff, 7.0).rgb; 
+    float3 diffuse_ibl = kD_ibl * irradiance * DiffuseAlbedo;
+
+    float2 envUV_spec = DirectionToUV(R);
+    // Use mips for glossy reflections
+    float3 prefilteredColor = envMap.SampleLevel(linearSampler, envUV_spec, roughness * 7.0).rgb;
+    float3 specular_ibl = kS_ibl * prefilteredColor;
+
+    // Use a consistent 5.0x boost for IBL to match raster and provide good environment lighting
+    float3 ambient = (diffuse_ibl + specular_ibl) * ao * ambientColor.rgb * 5.0;
     
-    // Add emissive and light color scaling. Apply camera intensity.
+    // Final color calculation with camera intensity. 1:1 match with raster.
     float3 color = (ambient + Lo + emissive) * intensity;
     
     // Final tone mapping and gamma

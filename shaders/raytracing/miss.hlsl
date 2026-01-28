@@ -6,5 +6,15 @@
 [shader("miss")]
 void Miss(inout RayPayload payload)
 {
-    payload.color = float4(0.1, 0.1, 0.12, 1.0); // Match raster background
+    float3 dir = WorldRayDirection();
+    float2 uv = DirectionToUV(dir);
+    
+    // Sample environment map and apply intensity
+    float3 color = envMap.SampleLevel(linearSampler, uv, 0).rgb * intensity;
+    
+    // Apply tone mapping and gamma to match the hit shader (Standardized Output)
+    color = color / (color + 1.0);
+    color = pow(color, 1.0/2.2);
+    
+    payload.color = float4(color, 1.0);
 }

@@ -24,11 +24,17 @@
 - ✅ Persistent SRV descriptors (created once per texture, not per-frame)
 - ✅ Mesh PSO with full vertex input layout (48 bytes: pos, normal, tangent, uv)
 
-### PBR Shader (shaders/pbr_mesh.hlsl)
+### PBR Shader (shaders/pbr_mesh.hlsl & shaders/raytracing/hit.hlsl)
 - ✅ **Microfacet BRDF**:
   - GGX normal distribution function
   - Smith geometry function with height-correlated masking-shadowing
   - Schlick Fresnel approximation with roughness-based energy compensation
+  - Shared logic between Raster and Raytracing for visual parity
+- ✅ **Image-Based Lighting (IBL)**:
+  - Latitude-Longitude HDR environment map support (.exr)
+  - Indirect diffuse and specular reflection sampling
+  - Roughness-based specular filtering (using mip-levels)
+  - Skybox background rendering pass
 - ✅ **Normal Mapping**:
   - TBN matrix construction from vertex tangent/bitangent/normal
   - Normal map sampling and transformation to world space
@@ -70,13 +76,14 @@ struct MaterialCB {
 - Descriptor table is bound once per draw, not per texture
 
 ## Known Limitations / TODO
-- ⚠️ DXR raytracing: Basic implementation complete (BLAS/TLAS, RayGen/Hit/Miss), but limited to mesh[0] for buffer indexing.
-- ❌ No mipmap generation
+- ⚠️ DXR raytracing: Full mesh/material support and PBR integration complete, but optimization and complex scene traversal still in progress.
+- ❌ No mipmap generation (except for manual HDR mips)
 - ❌ No skinning/animation support
 - ❌ Anisotropic filtering not implemented
-- ❌ IBL (image-based lighting) not implemented
+- ✅ IBL (image-based lighting): Fully implemented with HDR support and background skybox.
 - ❌ Shadow mapping not implemented for raster path
 - ✅ Multi-mesh rendering: Supported in Raster path with unique material slots.
+- ❌ Irradiance map pre-filtering (currently using crude mips)
 
 ## Build Status
 ✅ **Compiles successfully** with Visual Studio 2022 (C++17)

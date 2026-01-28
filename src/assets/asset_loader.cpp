@@ -1,3 +1,6 @@
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include "asset_loader.h"
 #include <stdio.h>
 #include <windows.h>
@@ -7,18 +10,17 @@
 #include <sstream>
 #include <fstream>
 #include <cfloat>
-
-// If tinygltf is enabled via CMake, use it. Otherwise keep the stub.
-#ifdef USE_TINYGLTF
-#include <windows.h>
-#include <stdio.h>
-#include <tiny_gltf.h>
 #include <filesystem>
 #include <wrl.h>
 #include <d3d12.h>
-#include <vector>
-#include <sstream>
 #include <algorithm>
+#include <stb_image.h>
+#include <tinyexr.h>
+#include <cmath>
+
+#ifdef USE_TINYGLTF
+#include <tiny_gltf.h>
+#endif
 
 using Microsoft::WRL::ComPtr;
 
@@ -43,6 +45,9 @@ void Initialize(ID3D12Device* device, ID3D12CommandQueue* queue)
     s_queue = queue;
 }
 
+// ... rest of the file ... (excluding LoadGltf until later)
+
+
 static void WaitForQueueIdle(ID3D12CommandQueue* queue)
 {
     // Create a temporary fence and wait until GPU has finished executing.
@@ -64,6 +69,192 @@ static void ExecuteCommandListAndWait(ID3D12GraphicsCommandList* cmdList)
     ID3D12CommandList* lists[] = { cmdList };
     s_queue->ExecuteCommandLists(1, lists);
     WaitForQueueIdle(s_queue.Get());
+}
+
+inline uint32_t ComputeMipLevels(uint32_t width, uint32_t height) {
+    if (width == 0 || height == 0) return 1;
+    return static_cast<uint32_t>(std::floor(std::log2(std::max(width, height)))) + 1;
+}
+
+static bool CreateGpuTexture(const void* src, int width, int height, int components, DXGI_FORMAT format, Texture& outTex)
+{
+    if (!s_device || !src) return false;
+
+    uint32_t mipLevels = ComputeMipLevels(width, height);
+
+    D3D12_RESOURCE_DESC texDesc = {};
+    texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    texDesc.Width = (UINT)width;
+    texDesc.Height = (UINT)height;
+    texDesc.DepthOrArraySize = 1;
+    texDesc.MipLevels = (UINT16)mipLevels;
+    texDesc.Format = format;
+    texDesc.SampleDesc.Count = 1;
+    texDesc.SampleDesc.Quality = 0;
+    texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    texDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+    D3D12_HEAP_PROPERTIES defaultHeapProps = { D3D12_HEAP_TYPE_DEFAULT, D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_MEMORY_POOL_UNKNOWN, 1, 1 };
+    ThrowIfFailed(s_device->CreateCommittedResource(&defaultHeapProps, D3D12_HEAP_FLAG_NONE, &texDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&outTex.resource)));
+
+    std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints(mipLevels);
+    std::vector<UINT> numRows(mipLevels);
+    std::vector<UINT64> rowPitches(mipLevels);
+    UINT64 totalBytes = 0;
+    s_device->GetCopyableFootprints(&texDesc, 0, (UINT)mipLevels, 0, footprints.data(), numRows.data(), rowPitches.data(), &totalBytes);
+
+    D3D12_HEAP_PROPERTIES uploadHeapProps = { D3D12_HEAP_TYPE_UPLOAD, D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_MEMORY_POOL_UNKNOWN, 1, 1 };
+    D3D12_RESOURCE_DESC bufDesc = {};
+    bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufDesc.Width = totalBytes;
+    bufDesc.Height = 1;
+    bufDesc.DepthOrArraySize = 1;
+    bufDesc.MipLevels = 1;
+    bufDesc.Format = DXGI_FORMAT_UNKNOWN;
+    bufDesc.SampleDesc.Count = 1;
+    bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    ComPtr<ID3D12Resource> uploadBuffer;
+    ThrowIfFailed(s_device->CreateCommittedResource(&uploadHeapProps, D3D12_HEAP_FLAG_NONE, &bufDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadBuffer)));
+
+    void* mapped = nullptr;
+    ThrowIfFailed(uploadBuffer->Map(0, nullptr, &mapped));
+
+    int bpp = (format == DXGI_FORMAT_R32G32B32A32_FLOAT) ? 16 : 4;
+    
+    // Copy base level and generate mips in system memory
+    std::vector<uint8_t> mipMemory;
+    const uint8_t* currentSrc = (const uint8_t*)src;
+    int curW = width;
+    int curH = height;
+
+    for (uint32_t i = 0; i < mipLevels; ++i) {
+        // Copy current level to upload buffer
+        for (int y = 0; y < curH; ++y) {
+            memcpy((uint8_t*)mapped + footprints[i].Offset + (size_t)y * footprints[i].Footprint.RowPitch, 
+                   currentSrc + (size_t)y * curW * bpp, (size_t)curW * bpp);
+        }
+
+        if (i + 1 < mipLevels) {
+            int nextW = std::max(1, curW >> 1);
+            int nextH = std::max(1, curH >> 1);
+            std::vector<uint8_t> nextMip(nextW * nextH * bpp);
+
+            if (format == DXGI_FORMAT_R32G32B32A32_FLOAT) {
+                const float* s = (const float*)currentSrc;
+                float* d = (float*)nextMip.data();
+                for (int y = 0; y < nextH; ++y) {
+                    for (int x = 0; x < nextW; ++x) {
+                        float r=0, g=0, b=0, a=0;
+                        for (int sy=0; sy<2; ++sy) {
+                            for (int sx=0; sx<2; ++sx) {
+                                int sX = std::min(x * 2 + sx, curW - 1);
+                                int sY = std::min(y * 2 + sy, curH - 1);
+                                const float* p = s + (sY * curW + sX) * 4;
+                                r += p[0]; g += p[1]; b += p[2]; a += p[3];
+                            }
+                        }
+                        float* pDst = d + (y * nextW + x) * 4;
+                        pDst[0] = r * 0.25f; pDst[1] = g * 0.25f; pDst[2] = b * 0.25f; pDst[3] = a * 0.25f;
+                    }
+                }
+            } else {
+                for (int y = 0; y < nextH; ++y) {
+                    for (int x = 0; x < nextW; ++x) {
+                        int r=0, g=0, b=0, a=0;
+                        for (int sy=0; sy<2; ++sy) {
+                            for (int sx=0; sx<2; ++sx) {
+                                int sX = std::min(x * 2 + sx, curW - 1);
+                                int sY = std::min(y * 2 + sy, curH - 1);
+                                const uint8_t* p = currentSrc + (sY * curW + sX) * 4;
+                                r += p[0]; g += p[1]; b += p[2]; a += p[3];
+                            }
+                        }
+                        uint8_t* pDst = nextMip.data() + (y * nextW + x) * 4;
+                        pDst[0] = (uint8_t)(r / 4); pDst[1] = (uint8_t)(g / 4); pDst[2] = (uint8_t)(b / 4); pDst[3] = (uint8_t)(a / 4);
+                    }
+                }
+            }
+            mipMemory = std::move(nextMip);
+            currentSrc = mipMemory.data();
+            curW = nextW;
+            curH = nextH;
+        }
+    }
+
+    uploadBuffer->Unmap(0, nullptr);
+
+    ComPtr<ID3D12CommandAllocator> allocator;
+    ComPtr<ID3D12GraphicsCommandList> cmdList;
+    ThrowIfFailed(s_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)));
+    ThrowIfFailed(s_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&cmdList)));
+
+    for (uint32_t i = 0; i < mipLevels; ++i) {
+        D3D12_TEXTURE_COPY_LOCATION dst = { outTex.resource.Get(), D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, i };
+        D3D12_TEXTURE_COPY_LOCATION srcLoc = { uploadBuffer.Get(), D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, footprints[i] };
+        cmdList->CopyTextureRegion(&dst, 0, 0, 0, &srcLoc, nullptr);
+    }
+
+    D3D12_RESOURCE_BARRIER barrier = {};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = outTex.resource.Get();
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+    cmdList->ResourceBarrier(1, &barrier);
+
+    ExecuteCommandListAndWait(cmdList.Get());
+
+    outTex.width = width;
+    outTex.height = height;
+    outTex.format = format;
+    outTex.mipLevels = mipLevels;
+    return true;
+}
+
+Texture LoadTextureFromFile(const std::string& path, bool isHDR)
+{
+    if (!s_device) return {};
+
+    int width, height, comp;
+    if (isHDR) {
+        float* data = nullptr;
+        bool loaded = false;
+
+        if (path.find(".exr") != std::string::npos) {
+            const char* err = nullptr;
+            int ret = LoadEXR(&data, &width, &height, path.c_str(), &err);
+            if (ret != TINYEXR_SUCCESS) {
+                if (err) {
+                    fprintf(stderr, "tinyexr error: %s\n", err);
+                    FreeEXRErrorMessage(err);
+                }
+                return {};
+            }
+            loaded = true;
+        } else {
+            data = stbi_loadf(path.c_str(), &width, &height, &comp, 4);
+            if (data) loaded = true;
+        }
+
+        if (!loaded || !data) return {};
+
+        Texture tex;
+        CreateGpuTexture(data, width, height, 4, DXGI_FORMAT_R32G32B32A32_FLOAT, tex);
+        
+        if (path.find(".exr") != std::string::npos) {
+            free(data);
+        } else {
+            stbi_image_free(data);
+        }
+        return tex;
+    } else {
+        unsigned char* data = stbi_load(path.c_str(), &width, &height, &comp, 4);
+        if (!data) return {};
+        Texture tex;
+        CreateGpuTexture(data, width, height, 4, DXGI_FORMAT_R8G8B8A8_UNORM, tex);
+        stbi_image_free(data);
+        return tex;
+    }
 }
 
 static void CreateDefaultBuffer(const void* initData, UINT64 byteSize, ComPtr<ID3D12Resource>& defaultBuffer, ComPtr<ID3D12Resource>& uploadBuffer, D3D12_RESOURCE_STATES finalState = D3D12_RESOURCE_STATE_GENERIC_READ)
@@ -126,6 +317,8 @@ static void CreateDefaultBuffer(const void* initData, UINT64 byteSize, ComPtr<ID
 
     ExecuteCommandListAndWait(cmdList.Get());
 }
+
+#ifdef USE_TINYGLTF
 
 bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vector<Material>* outMaterials, std::vector<Texture>* outTextures, const float* rootTranslation)
 {
@@ -198,63 +391,6 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
     auto CreateTextureFromImage = [&](const unsigned char* src, int width, int height, int components, Texture& outTex) -> bool {
         if (!s_device) return false;
 
-        DXGI_FORMAT fmt = DXGI_FORMAT_R8G8B8A8_UNORM;
-        D3D12_RESOURCE_DESC texDesc = {};
-        texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        texDesc.Alignment = 0;
-        texDesc.Width = (UINT)width;
-        texDesc.Height = (UINT)height;
-        texDesc.DepthOrArraySize = 1;
-        texDesc.MipLevels = 1;
-        texDesc.Format = fmt;
-        texDesc.SampleDesc.Count = 1;
-        texDesc.SampleDesc.Quality = 0;
-        texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        texDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
-
-        D3D12_HEAP_PROPERTIES defaultHeapProps = {};
-        defaultHeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-        ComPtr<ID3D12Resource> texture;
-        ThrowIfFailed(s_device->CreateCommittedResource(
-            &defaultHeapProps,
-            D3D12_HEAP_FLAG_NONE,
-            &texDesc,
-            D3D12_RESOURCE_STATE_COPY_DEST,
-            nullptr,
-            IID_PPV_ARGS(&texture)));
-
-        // Get required size for upload buffer
-        UINT64 requiredSize = 0;
-        D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint;
-        UINT numRows = 0;
-        UINT64 rowSizeInBytes = 0;
-        UINT64 totalBytes = 0;
-        s_device->GetCopyableFootprints(&texDesc, 0, 1, 0, &footprint, &numRows, &rowSizeInBytes, &totalBytes);
-
-        D3D12_HEAP_PROPERTIES uploadHeapProps = {};
-        uploadHeapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-        D3D12_RESOURCE_DESC bufDesc = {};
-        bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        bufDesc.Alignment = 0;
-        bufDesc.Width = totalBytes;
-        bufDesc.Height = 1;
-        bufDesc.DepthOrArraySize = 1;
-        bufDesc.MipLevels = 1;
-        bufDesc.Format = DXGI_FORMAT_UNKNOWN;
-        bufDesc.SampleDesc.Count = 1;
-        bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-        ComPtr<ID3D12Resource> uploadBuffer;
-        ThrowIfFailed(s_device->CreateCommittedResource(
-            &uploadHeapProps,
-            D3D12_HEAP_FLAG_NONE,
-            &bufDesc,
-            D3D12_RESOURCE_STATE_GENERIC_READ,
-            nullptr,
-            IID_PPV_ARGS(&uploadBuffer)));
-
         // Support any component count (1, 2, 3, 4) by converting to RGBA8
         std::vector<unsigned char> rgba;
         const unsigned char* srcPtr = src;
@@ -281,56 +417,7 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
             srcPtr = rgba.data();
         }
 
-        // Map upload buffer and copy rows respecting RowPitch
-        UINT8* mapped = nullptr;
-        D3D12_RANGE readRange = {0,0};
-        ThrowIfFailed(uploadBuffer->Map(0, &readRange, reinterpret_cast<void**>(&mapped)));
-        for (UINT y = 0; y < (UINT)height; ++y) {
-            BYTE* dest = mapped + footprint.Offset + (SIZE_T)footprint.Footprint.RowPitch * y;
-            const BYTE* srcRow = srcPtr + (size_t)y * width * 4;
-            memcpy(dest, srcRow, (size_t)width * 4);
-        }
-        uploadBuffer->Unmap(0, nullptr);
-
-        // Create a temporary command allocator and list
-        ComPtr<ID3D12CommandAllocator> allocator;
-        ComPtr<ID3D12GraphicsCommandList> cmdList;
-        ThrowIfFailed(s_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)));
-        ThrowIfFailed(s_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&cmdList)));
-
-        D3D12_TEXTURE_COPY_LOCATION dst = {};
-        dst.pResource = texture.Get();
-        dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-        dst.SubresourceIndex = 0;
-
-        D3D12_TEXTURE_COPY_LOCATION srcLoc = {};
-        srcLoc.pResource = uploadBuffer.Get();
-        srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-        srcLoc.PlacedFootprint = footprint;
-
-        D3D12_BOX srcBox = {};
-        srcBox.left = 0; srcBox.top = 0; srcBox.front = 0;
-        srcBox.right = width; srcBox.bottom = height; srcBox.back = 1;
-
-        cmdList->CopyTextureRegion(&dst, 0, 0, 0, &srcLoc, &srcBox);
-
-        // Transition to ALL_SHADER_RESOURCE so both Raster and DXR can sample it
-        D3D12_RESOURCE_BARRIER barrier = {};
-        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        barrier.Transition.pResource = texture.Get();
-        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-        barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
-        cmdList->ResourceBarrier(1, &barrier);
-
-        ExecuteCommandListAndWait(cmdList.Get());
-
-        outTex.resource = texture;
-        outTex.width = (UINT)width;
-        outTex.height = (UINT)height;
-        outTex.format = fmt;
-        outTex.mipLevels = 1;
-        return true;
+        return CreateGpuTexture(srcPtr, width, height, 4, DXGI_FORMAT_R8G8B8A8_UNORM, outTex);
     };
 
     // If the caller requested materials/textures, load them first
@@ -362,27 +449,24 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
             // Use Name if available
             if (!m.name.empty()) strncpy_s(mat.name, m.name.c_str(), _TRUNCATE);
 
-            // Standard PBR Metallic-Roughness conversion to Glossiness workflow
-            float baseColor[4] = {1,1,1,1};
+            // Standard PBR Metallic-Roughness logic
+            float baseColorFactor[4] = {1,1,1,1};
             if (m.pbrMetallicRoughness.baseColorFactor.size() >= 4) {
-                for (int i = 0; i < 4; ++i) baseColor[i] = (float)m.pbrMetallicRoughness.baseColorFactor[i];
+                for (int i = 0; i < 4; ++i) baseColorFactor[i] = (float)m.pbrMetallicRoughness.baseColorFactor[i];
             }
-            float metallic = (float)m.pbrMetallicRoughness.metallicFactor;
-            float roughness = (float)m.pbrMetallicRoughness.roughnessFactor;
+            float metallicFactor = (float)m.pbrMetallicRoughness.metallicFactor;
+            float roughnessFactor = (float)m.pbrMetallicRoughness.roughnessFactor;
             
-            // Glossiness is inverse of roughness
-            mat.reflectionGlossiness = 1.0f - roughness;
+            // Store raw factors. Shaders will handle the Metallic vs Specular split.
+            // We use diffuseColor for Base Color factor in GLTF mode.
+            for(int c=0; c<3; ++c) mat.diffuseColor[c] = baseColorFactor[c];
+            mat.diffuseColor[3] = baseColorFactor[3];
             
-            // Convert Metallic/Roughness to Diffuse/Reflection
-            // Dielectric F0 is commonly 0.04
-            float f0 = 0.04f;
-            for(int c=0; c<3; ++c) {
-                // Diffuse: non-metals have diffuse, metals have black diffuse
-                mat.diffuseColor[c] = baseColor[c] * (1.0f - metallic);
-                // Reflection: non-metals have f0, metals have baseColor
-                mat.reflectionColor[c] = f0 * (1.0f - metallic) + baseColor[c] * metallic;
-            }
-            mat.diffuseColor[3] = baseColor[3];
+            // We store metallic in reflectionColor.z and roughness in reflectionColor.w (Glossiness = 1-R)
+            mat.reflectionColor[0] = 1.0f; // Specular tint default
+            mat.reflectionColor[1] = 1.0f;
+            mat.reflectionColor[2] = metallicFactor; 
+            mat.reflectionGlossiness = 1.0f - roughnessFactor;
             
             // Emissive
             if (m.emissiveFactor.size() >= 3) {
@@ -398,16 +482,17 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
                 return -1;
             };
 
-            mat.diffuseTexture = GetImgIdx(m.pbrMetallicRoughness.baseColorTexture.index);
-            // Note: GLTF MetallicRoughness texture packs (B=Metal, G=Roughness). 
-            // We map it to ReflectionTexture for now, but shader might need logic to unpack if we want to support it seamlessly.
-            // Since we are forcing V-Ray workflow, correct handling would be to not use it or split it.
-            // For now, let's assume we might lose some texture detail unless we implement complex unpacking in shader for converted mats.
-            // We will map it to occlusion for now as fallback placeholder.
-            mat.occlusionTexture = GetImgIdx(m.occlusionTexture.index); 
-
+            int baseColorTexIdx = GetImgIdx(m.pbrMetallicRoughness.baseColorTexture.index);
+            mat.diffuseTexture = baseColorTexIdx;
             mat.normalTexture = GetImgIdx(m.normalTexture.index);
             mat.emissiveTexture = GetImgIdx(m.emissiveTexture.index);
+            mat.occlusionTexture = GetImgIdx(m.occlusionTexture.index);
+            mat.metalRoughTexture = GetImgIdx(m.pbrMetallicRoughness.metallicRoughnessTexture.index);
+            
+            // Fallback for non-PBR shaders: set reflectionTexture to BaseColor if metallic
+            if (metallicFactor > 0.5f) {
+                mat.reflectionTexture = baseColorTexIdx;
+            }
 
             mat.doubleSided = m.doubleSided;
             if (!m.alphaMode.empty()) mat.alphaMode = m.alphaMode;
@@ -749,15 +834,9 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
     return true;
 }
 
-} // namespace Asset
-
 #else
 
-#include <filesystem>
-
-namespace Asset {
-
-bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vector<Material>* outMaterials, std::vector<Texture>* outTextures)
+bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vector<Material>* outMaterials, std::vector<Texture>* outTextures, const float* rootTranslation)
 {
     std::ostringstream oss;
     oss << "Asset::LoadGltf requested: " << path << "\n";
@@ -772,6 +851,6 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
     return true;
 }
 
-} // namespace Asset
-
 #endif
+
+} // namespace Asset

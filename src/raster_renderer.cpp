@@ -1,6 +1,7 @@
 #define NOMINMAX
 #include "scene.h"
 #include "raster_renderer.h"
+#include "ibl_manager.h"
 #include "dxc_wrapper.h"
 #include "d3d12_helpers.h"
 #include <wrl.h>
@@ -23,6 +24,7 @@ D3D12_VERTEX_BUFFER_VIEW RasterRenderer::g_gridVBView = {};
 UINT RasterRenderer::g_gridVertexCount = 0;
 ComPtr<ID3D12PipelineState> RasterRenderer::g_gridPipelineState;
 ComPtr<ID3D12PipelineState> RasterRenderer::g_meshPipelineState;
+ComPtr<ID3D12PipelineState> RasterRenderer::g_skyboxPipelineState;
 ComPtr<ID3D12PipelineState> RasterRenderer::g_depthOnlyPipelineState;
 
 static DxcHelper s_dxcHelper;
@@ -244,6 +246,27 @@ void RecreateMeshPipeline(ID3D12Device* device, ID3D12RootSignature* rootSig) {
     ThrowIfFailed(device->CreateGraphicsPipelineState(&depthPsoDesc, IID_PPV_ARGS(&newDepthPSO)));
     g_depthOnlyPipelineState = newDepthPSO;
 
+    // --- Skybox PSO ---
+    try {
+        std::wstring skyboxPath = FindShaderFileLocal(L"shaders\\skybox.hlsl");
+        ComPtr<IDxcBlob> vsSkyBlob = s_dxcHelper.Compile(skyboxPath, L"VSMain", L"vs_6_0", {});
+        ComPtr<IDxcBlob> psSkyBlob = s_dxcHelper.Compile(skyboxPath, L"PSMain", L"ps_6_0", {});
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC skyPsoDesc = meshPsoDesc;
+        skyPsoDesc.VS = {vsSkyBlob->GetBufferPointer(), vsSkyBlob->GetBufferSize()};
+        skyPsoDesc.PS = {psSkyBlob->GetBufferPointer(), psSkyBlob->GetBufferSize()};
+        skyPsoDesc.InputLayout = {nullptr, 0}; // No input layout (generated in VS)
+        
+        // Skybox should render behind everything
+        skyPsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+        skyPsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+
+        ThrowIfFailed(device->CreateGraphicsPipelineState(&skyPsoDesc, IID_PPV_ARGS(&g_skyboxPipelineState)));
+        fprintf(stderr, "RecreateMeshPipeline: Skybox PSO created\n");
+    } catch (const std::exception& eSky) {
+        fprintf(stderr, "RecreateMeshPipeline: Skybox PSO failed: %s\n", eSky.what());
+    }
+
     fprintf(stderr, "RecreateMeshPipeline: Mesh PSOs recreated\n");
 
   } catch (const std::exception &e) {
@@ -259,7 +282,16 @@ void DrawGrid(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB) {
     if (cameraCB) cmdList->SetGraphicsRootConstantBufferView(0, cameraCB->GetGPUVirtualAddress());
     cmdList->DrawInstanced(g_gridVertexCount, 1, 0, 0);
 }
-
+void DrawSkybox(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB) {
+    if (!g_skyboxPipelineState) return;
+    cmdList->SetPipelineState(g_skyboxPipelineState.Get());
+    cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    cmdList->SetGraphicsRootConstantBufferView(0, cameraCB->GetGPUVirtualAddress());
+    if (IBLManager::Get().IsLoaded()) {
+        cmdList->SetGraphicsRootDescriptorTable(4, IBLManager::Get().GetGPUHandle());
+    }
+    cmdList->DrawInstanced(3, 1, 0, 0); // Full screen triangle
+}
 void DrawSceneDepthOnly(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB, const std::vector<Scene::Instance>& instances) {
     if (!g_depthOnlyPipelineState || instances.empty()) return;
     

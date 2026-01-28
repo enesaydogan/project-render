@@ -9,7 +9,21 @@ RWTexture2D<float4> g_output : register(u0);
 
 // Texture array - fixed large size to avoid overlap issues with other registers
 Texture2D textures[2048] : register(t1);
+// Environment Map (Latitude-Longitude) - Moved to Space 1 to avoid conflicts
+Texture2D envMap : register(t0, space1);
 SamplerState linearSampler : register(s0);
+
+inline float2 DirectionToUV(float3 dir) {
+    float2 uv;
+    uv.x = atan2(dir.x, dir.z) / (2.0 * 3.14159265359) + 0.5;
+    uv.y = acos(clamp(dir.y, -1.0, 1.0)) / 3.14159265359;
+    return uv;
+}
+
+inline float3 FresnelSchlickRoughness(float cosTheta, float3 F0, float roughness)
+{
+    return F0 + (max(float3(1.0 - roughness, 1.0 - roughness, 1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
 
 cbuffer Camera : register(b0)
 {
@@ -40,7 +54,7 @@ struct MaterialData
     float4 refractionColor;     // w = refractionGlossiness
     float4 emissiveColor;       // w = ior
     int4 textureIndices;        // x=diffuse, y=reflect, z=normal, w=refract
-    int4 emissiveAndPad;        // x=emissive, y=occlusion
+    int4 emissiveAndPad;        // x=emissive, y=occlusion, z=metalRough
 };
 
 // Use an SRV for materials in DXR to support multi-material indexing via InstanceID
