@@ -1147,6 +1147,12 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
         (s_streamline->GetMode() == StreamlineManager::Mode::DLSS_RayReconstruction);
       
       pfData[23] = useRawForDlss ? 0.0f : (float)s_accumulation.GetFrameCount();
+      
+      // Index 43: dlssEnabled (mapped from _padPrev0).
+      // Used by shader to decide whether to ToneMap (if disabled) or output Linear (if enabled).
+      bool anyDlss = s_streamline && s_streamline->IsEnabled() && 
+         (s_streamline->GetMode() != StreamlineManager::Mode::Off);
+      pfData[43] = anyDlss ? 1.0f : 0.0f;
 
       cameraCB->Unmap(0, nullptr);
     }
