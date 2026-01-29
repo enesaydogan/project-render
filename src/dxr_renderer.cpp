@@ -26,6 +26,8 @@ static ID3D12CommandQueue *s_commandQueue = nullptr;
 
 static StreamlineManager* s_streamline = nullptr;
 static bool s_streamlineResetHistory = true;
+// Configurable DLSS-RR evaluation frequency (frames/Sample-Per-Pixel). Default 10 SPP.
+static unsigned s_dlssEvalSpp = 10u;
 
 // Some debug toggles live in main.cpp; declare them here so we can react to UI
 // changes
@@ -78,7 +80,9 @@ static const UINT DXR_HEAP_NORMAL_ROUGHNESS_UAV_OFFSET =
   2048 + 1024 + 1024 + 13;
 static const UINT DXR_HEAP_DLSS_OUT_UAV_OFFSET = 2048 + 1024 + 1024 + 14;
 static const UINT DXR_HEAP_IBL_OFFSET = 2048 + 1024 + 1024 + 15;
-static const UINT DXR_HEAP_TOTAL_COUNT = 2048 + 1024 + 1024 + 16;
+static const UINT DXR_HEAP_SPEC_ALBEDO_OFFSET = 2048 + 1024 + 1024 + 16;
+static const UINT DXR_HEAP_SPEC_HITDIST_OFFSET = 2048 + 1024 + 1024 + 17;
+static const UINT DXR_HEAP_TOTAL_COUNT = 2048 + 1024 + 1024 + 18;
 
 // Output texture dimensions used by DXR (kept local to module)
 static UINT s_outputWidth = 1280;
@@ -86,6 +90,18 @@ static UINT s_outputHeight = 720;
 // Output (swapchain) dimensions last requested by the host
 static UINT s_presentWidth = 1280;
 static UINT s_presentHeight = 720;
+
+// Halton sequence helper for CPU-side jitter
+static float Halton(uint32_t index, uint32_t base) {
+    float f = 1.0f;
+    float r = 0.0f;
+    while (index > 0) {
+        f /= (float)base;
+        r += f * (float)(index % base);
+        index /= base;
+    }
+    return r;
+}
 
 inline void TransitionResource(ID3D12GraphicsCommandList *cmdList,
                                ID3D12Resource *resource,
@@ -112,6 +128,8 @@ static ComPtr<ID3D12Resource> s_mvecUAV;
 static ComPtr<ID3D12Resource> s_albedoUAV;
 static ComPtr<ID3D12Resource> s_normalRoughnessUAV;
 static ComPtr<ID3D12Resource> s_dlssOutputUAV;
+static ComPtr<ID3D12Resource> s_specularAlbedoUAV;
+static ComPtr<ID3D12Resource> s_specHitDistanceUAV;
 static UINT s_outputUAVDescriptorSize = 0;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_outputUAVGpuHandle = {0};
 static ComPtr<ID3D12DescriptorHeap>
@@ -500,6 +518,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   s_depthUAV.Reset();
   s_mvecUAV.Reset();
   s_albedoUAV.Reset();
+  s_specularAlbedoUAV.Reset();
+  s_specHitDistanceUAV.Reset();
   s_normalRoughnessUAV.Reset();
   s_dlssOutputUAV.Reset();
   ThrowIfFailed(s_device->CreateCommittedResource(
@@ -533,6 +553,10 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
                    L"RT Motion Vectors");
   CreateUavTexture(s_albedoUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
                    L"RT Albedo");
+  CreateUavTexture(s_specularAlbedoUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                   L"RT Specular Albedo");
+  CreateUavTexture(s_specHitDistanceUAV, texDesc, DXGI_FORMAT_R32_FLOAT,
+                   L"RT Specular HitDistance");
   CreateUavTexture(s_normalRoughnessUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
                    L"RT NormalRoughness");
 
@@ -573,6 +597,10 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     // u10+
     CreateUavAt(s_depthUAV.Get(), DXGI_FORMAT_R32_FLOAT, DXR_HEAP_DEPTH_UAV_OFFSET);
     CreateUavAt(s_mvecUAV.Get(), DXGI_FORMAT_R16G16_FLOAT, DXR_HEAP_MVEC_UAV_OFFSET);
+    CreateUavAt(s_specularAlbedoUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
+          DXR_HEAP_SPEC_ALBEDO_OFFSET);
+    CreateUavAt(s_specHitDistanceUAV.Get(), DXGI_FORMAT_R32_FLOAT,
+          DXR_HEAP_SPEC_HITDIST_OFFSET);
     CreateUavAt(s_albedoUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
           DXR_HEAP_ALBEDO_UAV_OFFSET);
     CreateUavAt(s_normalRoughnessUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
@@ -1009,11 +1037,13 @@ void SetStreamlineManager(StreamlineManager* streamline) {
 
 void ResetStreamlineHistory() { s_streamlineResetHistory = true; }
 
-UINT DxrRenderer::GetAccumulationFrameCount() {
-  return s_accumulation.GetFrameCount();
-}
+UINT GetAccumulationFrameCount() { return s_accumulation.GetFrameCount(); }
 
-UINT DxrRenderer::GetLightCount() { return s_lightCount; }
+UINT GetLightCount() { return s_lightCount; }
+
+// DLSS-RR SPP configuration accessors
+void SetDlssEvalSpp(unsigned spp) { s_dlssEvalSpp = spp < 1 ? 1u : spp; }
+unsigned GetDlssEvalSpp() { return s_dlssEvalSpp; }
 
 bool IsReady() {
   return g_rayTracingSupported && s_rtStateObject != nullptr &&
@@ -1088,12 +1118,22 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
   ID3D12DescriptorHeap *heaps[] = {s_srvHeap.Get()};
   dxrList->SetDescriptorHeaps(1, heaps);
 
+  // Compute jitter for this frame (DLSS-RR compatible)
+  // Note: DLSS expects jitter in range [-0.5, 0.5] pixel space
+  uint32_t frameIdx = s_accumulation.GetFrameCount() + 1;
+  float jitterX = Halton(frameIdx, 2) - 0.5f;
+  float jitterY = Halton(frameIdx, 3) - 0.5f;
+
   // Update frame count in camera CB if present
   if (cameraCB) {
     void *pData = nullptr;
     D3D12_RANGE readRange = {0, 0};
     if (SUCCEEDED(cameraCB->Map(0, &readRange, &pData))) {
       float *pfData = (float *)pData;
+      // Index 7 = jitterX (_pad1)
+      pfData[7] = jitterX;
+      // Index 11 = jitterY (_pad2)
+      pfData[11] = jitterY;
       pfData[17] =
           (float)s_accumulation
               .GetFrameCount();         // frameCount at _pad3? no, check index.
@@ -1241,11 +1281,99 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
+    if (s_specularAlbedoUAV) {
+      TransitionResource(dxrList.Get(), s_specularAlbedoUAV.Get(),
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
+    if (s_specHitDistanceUAV) {
+        TransitionResource(dxrList.Get(), s_specHitDistanceUAV.Get(),
+                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
 
     const bool resetHistory = s_streamlineResetHistory;
     s_streamlineResetHistory = false;
 
-    if (s_streamline->Evaluate(
+    // User Request: Eval DLSS-D every N spp. ✅
+    // Evaluate DLSS-RR less frequently so the denoiser receives a higher-quality
+    // frame (we reuse the previous DLSS output on intervening frames).
+    bool allowEval = true;
+    if (s_streamline->GetMode() == StreamlineManager::Mode::DLSS_RayReconstruction) {
+        const unsigned curSpp = s_accumulation.GetFrameCount();
+        const unsigned configSpp = DxrRenderer::GetDlssEvalSpp();
+        // Evaluate on frame 0 and every configSpp frames thereafter
+        if (curSpp != 0 && (curSpp % configSpp) != 0) {
+            allowEval = false;
+        }
+
+        // Force evaluate if camera moved significantly since last DLSS eval to
+        // avoid reproject / alignment jitter when reusing previous DLSS output.
+        static float lastEvalCamPos[3] = { 0.0f, 0.0f, 0.0f };
+        static bool lastEvalCamPosValid = false;
+        if (!lastEvalCamPosValid) {
+            lastEvalCamPos[0] = g_cameraData.pos[0];
+            lastEvalCamPos[1] = g_cameraData.pos[1];
+            lastEvalCamPos[2] = g_cameraData.pos[2];
+            lastEvalCamPosValid = true;
+        }
+        // Consider both translation and rotation (mouse look) as camera motion.
+        static float lastEvalCamForward[3] = { 0.0f, 0.0f, 0.0f };
+        static float lastEvalCamUp[3] = { 0.0f, 0.0f, 0.0f };
+        static bool lastEvalCamOrientValid = false;
+        auto camMoved = [&]() {
+            float dx = g_cameraData.pos[0] - lastEvalCamPos[0];
+            float dy = g_cameraData.pos[1] - lastEvalCamPos[1];
+            float dz = g_cameraData.pos[2] - lastEvalCamPos[2];
+            const float posThresh = 1e-4f; // small translation threshold
+            bool posMoved = (dx*dx + dy*dy + dz*dz) > posThresh * posThresh;
+
+            bool orientMoved = false;
+            if (!lastEvalCamOrientValid) {
+                lastEvalCamForward[0] = g_cameraData.forward[0];
+                lastEvalCamForward[1] = g_cameraData.forward[1];
+                lastEvalCamForward[2] = g_cameraData.forward[2];
+                lastEvalCamUp[0] = g_cameraData.up[0];
+                lastEvalCamUp[1] = g_cameraData.up[1];
+                lastEvalCamUp[2] = g_cameraData.up[2];
+                lastEvalCamOrientValid = true;
+            } else {
+                float dotF = g_cameraData.forward[0] * lastEvalCamForward[0] +
+                             g_cameraData.forward[1] * lastEvalCamForward[1] +
+                             g_cameraData.forward[2] * lastEvalCamForward[2];
+                float dotU = g_cameraData.up[0] * lastEvalCamUp[0] +
+                             g_cameraData.up[1] * lastEvalCamUp[1] +
+                             g_cameraData.up[2] * lastEvalCamUp[2];
+                // Small angular threshold; if forward/up change noticeably, consider as rotation
+                const float orientThresh = 1e-3f; // ~0.03 degrees
+                if (fabsf(1.0f - dotF) > orientThresh || fabsf(1.0f - dotU) > orientThresh) {
+                    orientMoved = true;
+                }
+            }
+
+            return posMoved || orientMoved;
+        }();
+        if (camMoved) {
+            allowEval = true;
+            // update last evaluated cam pos now that we will evaluate
+            lastEvalCamPos[0] = g_cameraData.pos[0];
+            lastEvalCamPos[1] = g_cameraData.pos[1];
+            lastEvalCamPos[2] = g_cameraData.pos[2];
+            // update last evaluated orientation
+            lastEvalCamForward[0] = g_cameraData.forward[0];
+            lastEvalCamForward[1] = g_cameraData.forward[1];
+            lastEvalCamForward[2] = g_cameraData.forward[2];
+            lastEvalCamUp[0] = g_cameraData.up[0];
+            lastEvalCamUp[1] = g_cameraData.up[1];
+            lastEvalCamUp[2] = g_cameraData.up[2];
+        }
+
+        if (!allowEval) {
+           // fprintf(stderr, "DLSS-RR: skipping evaluate at spp=%u (every %u spp)\n", curSpp, configSpp);
+        }
+    }
+
+    if (allowEval && s_streamline->Evaluate(
             dxrList.Get(),
             s_outputUAV.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
             s_dlssOutputUAV.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -1255,9 +1383,17 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
             s_normalRoughnessUAV.Get(),
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
             s_albedoUAV.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-            resetHistory)) {
+            s_specularAlbedoUAV.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            s_specHitDistanceUAV.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            nullptr, D3D12_RESOURCE_STATE_COMMON,
+            resetHistory, jitterX, jitterY)) {
       usedDlss = true;
       postColor = s_dlssOutputUAV.Get();
+    } else if (!allowEval && s_streamline->GetMode() == StreamlineManager::Mode::DLSS_RayReconstruction && s_dlssOutputUAV) {
+       // Reuse previous DLSS output
+       postColor = s_dlssOutputUAV.Get();
+       // Important: Ensure we treat it as if DLSS was used (e.g. valid resource)
+       usedDlss = true; 
     }
 
     // Back to UAV for next frame dispatch
@@ -1277,6 +1413,16 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
     }
     if (s_normalRoughnessUAV) {
       TransitionResource(dxrList.Get(), s_normalRoughnessUAV.Get(),
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+    if (s_specularAlbedoUAV) {
+      TransitionResource(dxrList.Get(), s_specularAlbedoUAV.Get(),
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+    if (s_specHitDistanceUAV) {
+       TransitionResource(dxrList.Get(), s_specHitDistanceUAV.Get(),
                          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }

@@ -38,7 +38,7 @@ target_include_directories(project-render PRIVATE "${STREAMLINE_ROOT}/include")
 # NOTE: This project uses dynamic loading (LoadLibrary) so we don't link against
 # any Streamline import libs, but the DLLs must be present at runtime.
 set(STREAMLINE_BIN_DIR "${STREAMLINE_ROOT}/bin/x64")
-set(STREAMLINE_DEV_BIN_DIR "${STREAMLINE_ROOT}/bin/x64/development")
+set(STREAMLINE_DEV_BIN_DIR "${STREAMLINE_ROOT}/bin/x64/")
 set(STREAMLINE_SCRIPTS_DIR "${STREAMLINE_ROOT}/scripts")
 
 # DLSS needs NGX. NVIDIA provides "development" NGX DLLs that don't enforce the

@@ -58,9 +58,9 @@ cbuffer Camera : register(b0)
     float3 camPos;
     float debugMode;
     float3 camForward;
-    float _pad1;
+    float jitterX;
     float3 camUp;
-    float _pad2;
+    float jitterY;
     float fov;
     float aspect;
     float nearZ;

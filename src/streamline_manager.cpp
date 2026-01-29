@@ -166,6 +166,9 @@ static bool ReadBoolEnv(const wchar_t* name, bool defaultValue) {
     return false;
   return defaultValue;
 }
+
+// TODO: replace with your NVIDIA-provided NGX applicationId.
+static constexpr uint32_t kDefaultNgxApplicationId = 24;
 } // namespace
 
 StreamlineManager::StreamlineManager() = default;
@@ -212,6 +215,9 @@ bool StreamlineManager::InitializeEarly() {
       m_applicationId = ReadApplicationIdFromFile(m_pluginDir);
     }
   }
+  if (m_applicationId == 0) {
+    m_applicationId = kDefaultNgxApplicationId;
+  }
 
   if (!LoadInterposer()) {
     fprintf(stderr,
@@ -246,12 +252,10 @@ bool StreamlineManager::InitializeEarly() {
   pref.logMessageCallback = m_mirrorLogsToStderr ? &SLLogCallback : nullptr;
   pref.renderAPI = sl::RenderAPI::eD3D12;
   // NGX-backed features (DLSS/DLSS-RR) require an application id.
-  // Development NGX DLLs usually ignore whitelist enforcement, but Streamline
-  // still expects a non-zero value. Allow override via env/file; otherwise use
-  // a non-zero placeholder.
-  pref.applicationId = (m_applicationId != 0) ? m_applicationId : 1u;
+  pref.applicationId = 24;
   pref.engine = sl::EngineType::eCustom;
-  pref.engineVersion = "project-render";
+  pref.engineVersion = "1.0.0";
+  pref.projectId = "a0f57b54-1daf-4934-90ae-c4035c19df04";
   pref.flags = sl::PreferenceFlags::eDisableCLStateTracking |
                sl::PreferenceFlags::eAllowOTA |
                sl::PreferenceFlags::eLoadDownloadedPlugins |
@@ -406,7 +410,8 @@ StreamlineManager::GetRecommendedRenderSize(uint32_t outputWidth,
       options.mode = ToSlDlssMode(m_quality);
       options.outputWidth = outputWidth;
       options.outputHeight = outputHeight;
-      options.colorBuffersHDR = sl::Boolean::eFalse;
+      // DLSS-RR only supports HDR pipelines.
+      options.colorBuffersHDR = sl::Boolean::eTrue;
       // matrices filled during Evaluate
 
       sl::DLSSDOptimalSettings settings{};
@@ -451,7 +456,14 @@ bool StreamlineManager::Evaluate(
     ID3D12Resource* mvec, D3D12_RESOURCE_STATES mvecState,
     ID3D12Resource* normalRoughness,
     D3D12_RESOURCE_STATES normalRoughnessState, ID3D12Resource* albedo,
-    D3D12_RESOURCE_STATES albedoState, bool resetHistory) {
+    D3D12_RESOURCE_STATES albedoState,
+    ID3D12Resource* specularAlbedo,
+    D3D12_RESOURCE_STATES specularAlbedoState,
+    ID3D12Resource* specularHitDistance,
+    D3D12_RESOURCE_STATES specularHitDistanceState,
+    ID3D12Resource* specularMotionVectors,
+    D3D12_RESOURCE_STATES specularMotionVectorsState,
+    bool resetHistory, float jitterX, float jitterY) {
   if (!m_enabled || m_mode == Mode::Off)
     return false;
   if (!m_initialized || !m_deviceSet)
@@ -527,16 +539,15 @@ bool StreamlineManager::Evaluate(
 
   // Match raygen jitter (see shaders/path_tracer_core.hlsl): Halton jitter in
   // pixel units.
-  const uint32_t sppIndex = (uint32_t)cam.frameCount;
-  const float jx = Halton(sppIndex + 1, 2) - 0.5f;
-  const float jy = Halton(sppIndex + 1, 3) - 0.5f;
-  c.jitterOffset = sl::float2(jx, jy);
+  // Using passed jitter values to ensure synchronization with shader.
+  c.jitterOffset = sl::float2(jitterX, jitterY);
 
   // Required by Streamline common validation; 0 offset for a pinhole camera.
   c.cameraPinholeOffset = sl::float2(0.0f, 0.0f);
 
-  // Motion vectors are in pixel space
-  c.mvecScale = sl::float2(2.0f / (float)renderWidth, 2.0f / (float)renderHeight);
+  // Motion vectors are in pixel space (see ProgrammingGuideDLSS_RR.md).
+  c.mvecScale =
+      sl::float2(1.0f / (float)renderWidth, 1.0f / (float)renderHeight);
 
   c.cameraNear = cam.nearZ;
   c.cameraFar = cam.farZ;
@@ -576,13 +587,29 @@ bool StreamlineManager::Evaluate(
       return false;
     }
   } else if (m_mode == Mode::DLSS_RayReconstruction) {
-    if (!m_slDLSSDSetOptions)
+    // DLSS-RR is an extension of DLSS and requires both DLSS + DLSSD options
+    // (see ProgrammingGuideDLSS_RR.md section 5.0).
+    if (!m_slDLSSSetOptions || !m_slDLSSDSetOptions)
       return false;
+
+    sl::DLSSOptions dlssOpt{};
+    dlssOpt.mode = ToSlDlssMode(m_quality);
+    dlssOpt.outputWidth = outputWidth;
+    dlssOpt.outputHeight = outputHeight;
+    dlssOpt.colorBuffersHDR = sl::Boolean::eTrue;
+    res = m_slDLSSSetOptions(m_viewport, dlssOpt);
+    if (res != sl::Result::eOk) {
+      fprintf(stderr, "StreamlineManager: slDLSSSetOptions failed (%d)\n",
+              (int)res);
+      return false;
+    }
+
     sl::DLSSDOptions opt{};
     opt.mode = ToSlDlssMode(m_quality);
     opt.outputWidth = outputWidth;
     opt.outputHeight = outputHeight;
-    opt.colorBuffersHDR = sl::Boolean::eFalse;
+    // DLSS-RR only supports HDR pipelines.
+    opt.colorBuffersHDR = sl::Boolean::eTrue;
     opt.normalRoughnessMode = sl::DLSSDNormalRoughnessMode::ePacked;
     opt.worldToCameraView = MakeWorldToCameraView(cam);
     opt.cameraViewToWorld = cameraViewToWorld;
@@ -623,9 +650,15 @@ bool StreamlineManager::Evaluate(
   sl::ResourceTag nrTag{};
   sl::Resource albedoRes{};
   sl::ResourceTag albedoTag{};
+  sl::Resource specAlbedoRes{};
+  sl::ResourceTag specAlbedoTag{};
+  sl::Resource specHitDistRes{};
+  sl::ResourceTag specHitDistTag{};
+  sl::Resource specMvecRes{};
+  sl::ResourceTag specMvecTag{};
 
   std::vector<const sl::BaseStructure*> inputs;
-  inputs.reserve(8);
+  inputs.reserve(16);
   inputs.push_back(&m_viewport);
   inputs.push_back(&depthTag);
   inputs.push_back(&mvecTag);
@@ -646,6 +679,36 @@ bool StreamlineManager::Evaluate(
 
     inputs.push_back(&nrTag);
     inputs.push_back(&albedoTag);
+
+    if (specularAlbedo) {
+      specAlbedoRes = sl::Resource(sl::ResourceType::eTex2d, specularAlbedo,
+                                   (uint32_t)specularAlbedoState);
+      specAlbedoTag = sl::ResourceTag{&specAlbedoRes,
+                                      sl::kBufferTypeSpecularAlbedo,
+                                      sl::ResourceLifecycle::eValidUntilEvaluate,
+                                      &renderExtent};
+      inputs.push_back(&specAlbedoTag);
+    }
+
+    if (specularHitDistance) {
+      specHitDistRes = sl::Resource(sl::ResourceType::eTex2d, specularHitDistance,
+                                    (uint32_t)specularHitDistanceState);
+      specHitDistTag = sl::ResourceTag{&specHitDistRes,
+                                       sl::kBufferTypeSpecularHitDistance,
+                                       sl::ResourceLifecycle::eValidUntilEvaluate,
+                                       &renderExtent};
+      inputs.push_back(&specHitDistTag);
+    }
+
+    if (specularMotionVectors) {
+      specMvecRes = sl::Resource(sl::ResourceType::eTex2d, specularMotionVectors,
+                                 (uint32_t)specularMotionVectorsState);
+      specMvecTag = sl::ResourceTag{&specMvecRes,
+                                    sl::kBufferTypeSpecularMotionVectors,
+                                    sl::ResourceLifecycle::eValidUntilEvaluate,
+                                    &renderExtent};
+      inputs.push_back(&specMvecTag);
+    }
   }
 
   sl::Feature feature = (m_mode == Mode::DLSS_SuperResolution) ? sl::kFeatureDLSS
