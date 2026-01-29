@@ -114,6 +114,8 @@ void RayGen()
     float3 primaryAlbedo = float3(0, 0, 0);
     float primaryRoughness = 1.0;
     float primaryViewZ = -1.0;
+    float3 primarySpecAlbedo = float3(0, 0, 0);
+    float primarySpecHitDist = -1.0;
     
     int specularBounces = 0;
     int refractiveBounces = 0;
@@ -150,6 +152,32 @@ void RayGen()
             primaryRoughness = max(0.001, payload.roughness);
             // View-space z (positive forward)
             primaryViewZ = dot(primaryPos - camPos, forward);
+
+            // Specular Albedo calculation for DLSS-RR
+            float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, payload.metalness);
+            float NdotV = saturate(dot(payload.normal, -rayDir));
+            primarySpecAlbedo = EnvBRDFApprox2(F0, primaryRoughness * primaryRoughness, NdotV);
+
+            // Trace dedicated specular reflection ray to get hit distance for DLSS-RR
+            // Only trace if the surface has significant specular reflectance
+            if (max(primarySpecAlbedo.r, max(primarySpecAlbedo.g, primarySpecAlbedo.b)) > 0.001) {
+                float3 R_spec = reflect(rayDir, payload.normal);
+                RayDesc specHitRay;
+                specHitRay.Origin = primaryPos + payload.normal * 0.001;
+                specHitRay.Direction = R_spec;
+                specHitRay.TMin = 0.001;
+                specHitRay.TMax = 1000.0;
+                RayPayload specHitPayload;
+                specHitPayload.t = -1.0;
+                TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, specHitRay, specHitPayload);
+                if (specHitPayload.t > 0) {
+                    primarySpecHitDist = specHitPayload.t;
+                } else {
+                    primarySpecHitDist = 1000.0; // Miss
+                }
+            } else {
+                primarySpecHitDist = 0.0; // Non-reflective
+            }
         }
 
         if (payload.t < 0.0) {
@@ -572,6 +600,8 @@ void RayGen()
         g_motionVectors[launchIndex.xy] = float2(0.0, 0.0);
         g_albedoOut[launchIndex.xy] = float4(0.0, 0.0, 0.0, 1.0);
         g_normalRoughnessOut[launchIndex.xy] = float4(0.0, 1.0, 0.0, 1.0);
+        g_specularAlbedo[launchIndex.xy] = float4(0.0, 0.0, 0.0, 1.0);
+        g_specHitDistance[launchIndex.xy] = 0.0;
     } else {
         float nearZc = nearZ;
         float farZc = farZ;
@@ -616,17 +646,18 @@ void RayGen()
         }
         g_albedoOut[launchIndex.xy] = float4(primaryAlbedo, 1.0);
         g_normalRoughnessOut[launchIndex.xy] = float4(normalize(primaryNormal), primaryRoughness);
+        g_specularAlbedo[launchIndex.xy] = float4(primarySpecAlbedo, 1.0);
+        g_specHitDistance[launchIndex.xy] = primarySpecHitDist;
     }
 
     if (accumFrame == 0) {
         g_accumulation[launchIndex.xy] = float4(finalColor, 1.0);
         
-        // If DLSS is NOT enabled, we must ToneMap/SRGB here for correct display.
-        // If DLSS IS enabled, we output Linear.
-        if (dlssEnabled < 0.5) {
-            g_output[launchIndex.xy] = float4(LinearToSRGB(ToneMap(finalColor)), 1.0);
-        } else {
+        // Use linear HDR for DLSS/denoiser, or tonemap for direct display
+        if (dlssEnabled > 0.5) {
             g_output[launchIndex.xy] = float4(finalColor, 1.0);
+        } else {
+            g_output[launchIndex.xy] = float4(LinearToSRGB(ToneMap(finalColor)), 1.0);
         }
     } else {
         float4 prev_accum = g_accumulation[launchIndex.xy];
@@ -636,10 +667,14 @@ void RayGen()
         g_accumulation[launchIndex.xy] = float4(total_accum_color, total_samples);
         
         float3 result = total_accum_color / total_samples;
-        if (dlssEnabled < 0.5) {
-            result = LinearToSRGB(ToneMap(result));
+        
+        if (dlssEnabled > 0.5) {
+            // Output linear for DLSS evaluation
+            g_output[launchIndex.xy] = float4(result, 1.0);
+        } else {
+            // Output display-ready for standard accumulation
+            g_output[launchIndex.xy] = float4(LinearToSRGB(ToneMap(result)), 1.0);
         }
-        g_output[launchIndex.xy] = float4(result, 1.0);
     }
 }
 
