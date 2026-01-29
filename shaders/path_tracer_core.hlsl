@@ -72,9 +72,10 @@ void RayGen()
 {
     uint3 launchIndex = DispatchRaysIndex();
     uint3 launchDim = DispatchRaysDimensions();
-    uint frame = (uint)frameCount;
+    uint frame = (uint)globalFrameCount;
+    uint accumFrame = (uint)accumulationCount;
 
-    if (maxSPP > 0.0 && frame >= (uint)maxSPP) {
+    if (maxSPP > 0.0 && accumFrame >= (uint)maxSPP) {
         float4 total = g_accumulation[launchIndex.xy];
         if (total.a > 0.0) {
             g_output[launchIndex.xy] = float4(LinearToSRGB(ToneMap(total.rgb / total.a)), 1.0);
@@ -617,7 +618,7 @@ void RayGen()
         g_normalRoughnessOut[launchIndex.xy] = float4(normalize(primaryNormal), primaryRoughness);
     }
 
-    if (frame == 0) {
+    if (accumFrame == 0) {
         g_accumulation[launchIndex.xy] = float4(finalColor, 1.0);
         // DLSS expects linear input. Removed ToneMap/SRGB.
         g_output[launchIndex.xy] = float4(finalColor, 1.0);
