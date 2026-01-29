@@ -287,7 +287,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
   D3D12_DESCRIPTOR_RANGE uavRange = {};
   uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-  uavRange.NumDescriptors = 16;
+  uavRange.NumDescriptors = 20; // Increased from 16 to 20 to support u16, u17+
   uavRange.BaseShaderRegister = 0;
   params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
   params[1].DescriptorTable.NumDescriptorRanges = 1;

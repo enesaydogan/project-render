@@ -558,6 +558,7 @@ bool StreamlineManager::Evaluate(
   c.cameraMotionIncluded = sl::Boolean::eTrue;
   c.motionVectors3D = sl::Boolean::eFalse;
   c.motionVectorsDilated = sl::Boolean::eFalse;
+  // Shader calculates motion vectors without the jitter offset applied.
   c.motionVectorsJittered = sl::Boolean::eFalse;
   c.reset = resetHistory ? sl::Boolean::eTrue : sl::Boolean::eFalse;
   // Streamline 2.10 Constants has no 'renderingGameFrames' field.
