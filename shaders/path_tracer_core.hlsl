@@ -87,8 +87,8 @@ void RayGen()
     // Swap reservoirs per frame for ReSTIR
     bool flip = (frame % 2) == 1;
 
-    // Deterministic per-frame jitter (pixel units) for DLSS/TAA friendliness
-    float2 jitter = float2(halton(frame + 1, 2), halton(frame + 1, 3)) - 0.5;
+    // Use jitter from Camera CB (calculated on CPU to match DLSS)
+    float2 jitter = float2(jitterX, jitterY);
     float2 uv = (float2(launchIndex.xy) + 0.5 + jitter) / float2(launchDim.xy);
     float2 ndc = uv * 2.0 - 1.0;
 
@@ -605,20 +605,29 @@ void RayGen()
             mvec = prevScreen - currScreen;
         }
         g_motionVectors[launchIndex.xy] = mvec;
+        // Debug: Motion Vectors (new debug mode index = 8)
+        if (debugMode == 8.0) {
+            float2 mv = g_motionVectors[launchIndex.xy];
+            float2 mvNorm = mv / float2(launchDim.xy);
+            float3 col = float3(0.5 + 0.5 * mvNorm.x, 0.5 + 0.5 * mvNorm.y, saturate(length(mvNorm) * 2.0));
+            g_output[launchIndex.xy] = float4(col, 1.0);
+            return;
+        }
         g_albedoOut[launchIndex.xy] = float4(primaryAlbedo, 1.0);
         g_normalRoughnessOut[launchIndex.xy] = float4(normalize(primaryNormal), primaryRoughness);
     }
 
     if (frame == 0) {
         g_accumulation[launchIndex.xy] = float4(finalColor, 1.0);
-        g_output[launchIndex.xy] = float4(LinearToSRGB(ToneMap(finalColor)), 1.0);
+        // DLSS expects linear input. Removed ToneMap/SRGB.
+        g_output[launchIndex.xy] = float4(finalColor, 1.0);
     } else {
         float4 prev_accum = g_accumulation[launchIndex.xy];
         float3 total_accum_color = prev_accum.rgb + finalColor;
         float total_samples = prev_accum.a + 1.0;
         
         g_accumulation[launchIndex.xy] = float4(total_accum_color, total_samples);
-        g_output[launchIndex.xy] = float4(LinearToSRGB(ToneMap(total_accum_color / total_samples)), 1.0);
+        g_output[launchIndex.xy] = float4(total_accum_color / total_samples, 1.0);
     }
 }
 

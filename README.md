@@ -34,6 +34,7 @@ Next steps:
 DLSS / DLSS Ray Reconstruction (Streamline)
 
 - This project integrates NVIDIA Streamline (DLSS-SR + DLSS-RR) for the DXR render path.
+  - DLSS-RR evaluation is throttled to every 10 SPP by default to provide the denoiser a better-quality frame (see `src/dxr_renderer.cpp`). Camera motion forces evaluation to avoid reprojection jitter.
 - DLSS features use NGX and require an NVIDIA-provided application id.
 	- Set environment variable `SL_APPLICATION_ID` (or `PROJECT_RENDER_SL_APPLICATION_ID`) before launching, or
 	- Create `sl_appid.txt` next to the executable containing the integer application id.

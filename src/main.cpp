@@ -137,7 +137,7 @@ static std::string g_lastAssetStatus; // Human-readable status for the Assets UI
 static std::string
     g_selectedAssetPath; // Path chosen by Open dialog (not yet imported)
 static int g_debugMode =
-    0; // 0=None, 1=Albedo, 2=Normal, 3=Emissive, 4=Glossiness, 5=Metalness/Refl
+    0; // 0=None, 1=Albedo, 2=Normal, 3=Emissive, 4=Glossiness, 5=Refl. Color, 6=Metalness, 7=AO, 8=Motion Vectors
 
 static std::string WStringToUtf8(const std::wstring &ws) {
   if (ws.empty())
@@ -2468,6 +2468,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           if (g_streamline.GetLogToFile()) {
             ImGui::TextWrapped("SL log dir: %ls", g_streamline.GetLogDirectory().c_str());
           }
+
+          // DLSS-RR evaluation frequency control
+          int dlssEvalSpp = (int)DxrRenderer::GetDlssEvalSpp();
+          if (ImGui::InputInt("DLSS-RR Eval SPP", &dlssEvalSpp, 1, 10)) {
+            if (dlssEvalSpp < 1) dlssEvalSpp = 1;
+            DxrRenderer::SetDlssEvalSpp((unsigned)dlssEvalSpp);
+            DxrRenderer::ResetStreamlineHistory();
+          }
+          ImGui::SameLine();
+          ImGui::TextDisabled("Apply: Reuses last DLSS output on skipped frames");
         }
 
         // Debug Render Pass Dropdown
@@ -2478,7 +2488,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                                     "Roughness/Glossiness",
                                     "Refl. Color",
                                     "Metalness",
-                                    "AO"};
+                                    "AO",
+                                    "Motion Vectors"};
         if (ImGui::Combo("Debug View", &g_debugMode, debugModes,
                          IM_ARRAYSIZE(debugModes))) {
           // State is updated; updated into camera buffer on next frame

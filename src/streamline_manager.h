@@ -107,7 +107,13 @@ public:
                 D3D12_RESOURCE_STATES normalRoughnessState,
                 ID3D12Resource* albedo,
                 D3D12_RESOURCE_STATES albedoState,
-                bool resetHistory);
+                ID3D12Resource* specularAlbedo,
+                D3D12_RESOURCE_STATES specularAlbedoState,
+                ID3D12Resource* specularHitDistance,
+                D3D12_RESOURCE_STATES specularHitDistanceState,
+                ID3D12Resource* specularMotionVectors,
+                D3D12_RESOURCE_STATES specularMotionVectorsState,
+                bool resetHistory, float jitterX = 0.0f, float jitterY = 0.0f);
 
   // DXGI/D3D12 proxy exports from sl.interposer.dll
   HRESULT CreateDXGIFactory2(UINT flags, REFIID riid, void** ppFactory) const;
@@ -158,7 +164,7 @@ private:
   bool m_deviceSet = false;
   bool m_featureFunctionsReady = false;
 
-  uint32_t m_applicationId = 0;
+  uint32_t m_applicationId = 24;
 
   Mode m_mode = Mode::Off;
   Quality m_quality = Quality::Balanced;

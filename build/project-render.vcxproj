@@ -136,19 +136,19 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/development/sl.interposer.dll D:/project-render/build/Debug/sl.interposer.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64//sl.interposer.dll D:/project-render/build/Debug/sl.interposer.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/development/sl.common.dll D:/project-render/build/Debug/sl.common.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64//sl.common.dll D:/project-render/build/Debug/sl.common.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/development/sl.dlss.dll D:/project-render/build/Debug/sl.dlss.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64//sl.dlss.dll D:/project-render/build/Debug/sl.dlss.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/development/sl.dlss_d.dll D:/project-render/build/Debug/sl.dlss_d.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64//sl.dlss_d.dll D:/project-render/build/Debug/sl.dlss_d.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/development/nvngx_dlss.dll D:/project-render/build/Debug/nvngx_dlss.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64//nvngx_dlss.dll D:/project-render/build/Debug/nvngx_dlss.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/development/nvngx_dlssd.dll D:/project-render/build/Debug/nvngx_dlssd.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64//nvngx_dlssd.dll D:/project-render/build/Debug/nvngx_dlssd.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/development/nvngx_dlss.license.txt D:/project-render/build/Debug/nvngx_dlss.license.txt
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64//nvngx_dlss.license.txt D:/project-render/build/Debug/nvngx_dlss.license.txt
 if %errorlevel% neq 0 goto :cmEnd
 "C:\Program Files\CMake\bin\cmake.exe" -E rm -f D:/project-render/build/Debug/sl.interposer.json
 if %errorlevel% neq 0 goto :cmEnd

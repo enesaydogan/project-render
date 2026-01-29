@@ -54,6 +54,10 @@ bool IsReady();
 UINT GetAccumulationFrameCount();
 // Get number of lights transferred to GPU
 UINT GetLightCount();
+// DLSS-RR evaluation frequency configuration
+// - Set/Get number of SPP between DLSS evaluations (minimum 1)
+void SetDlssEvalSpp(unsigned spp);
+unsigned GetDlssEvalSpp();
 // Perform DXR render (dispatch rays, copy to render target). Returns true if
 // executed.
 bool RenderFrame(ID3D12GraphicsCommandList *commandList, UINT frameIndex,
