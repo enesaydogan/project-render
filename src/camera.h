@@ -28,6 +28,19 @@ struct CameraCB {
   float lightDir[4];     // xyz = direction pointing TO light, w = unused
   float lightColor[4];   // rgb + intensity in .w
   float ambientColor[4]; // rgb + weight in .w
+
+  // --- Streamline / DLSS history support ---
+  // These fields must NOT participate in accumulation reset decisions.
+  float prevPos[3];
+  float prevValid;
+  float prevForward[3];
+  float _padPrev0;
+  float prevUp[3];
+  float _padPrev1;
+  float prevFov;
+  float prevAspect;
+  float prevNearZ;
+  float prevFarZ;
 };
 
 // Camera state (defined in camera.cpp)

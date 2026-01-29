@@ -87,7 +87,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <BufferSecurityCheck></BufferSecurityCheck>
@@ -114,10 +114,10 @@
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;USE_TINYGLTF=1;CMAKE_INTDIR=\"Debug\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -125,9 +125,34 @@
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <PostBuildEvent>
-      <Message></Message>
+      <Message>	</Message>
       <Command>setlocal
 C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -noprofile -executionpolicy Bypass -file D:/project-render/repos/vcpkg/scripts/buildsystems/msbuild/applocal.ps1 -targetBinary D:/project-render/build/Debug/project-render.exe -installedDir D:/project-render/repos/vcpkg/installed/x64-windows/debug/bin -OutVariable out
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/development/sl.interposer.dll D:/project-render/build/Debug/sl.interposer.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/development/sl.common.dll D:/project-render/build/Debug/sl.common.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/development/sl.dlss.dll D:/project-render/build/Debug/sl.dlss.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/development/sl.dlss_d.dll D:/project-render/build/Debug/sl.dlss_d.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/development/nvngx_dlss.dll D:/project-render/build/Debug/nvngx_dlss.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/development/nvngx_dlssd.dll D:/project-render/build/Debug/nvngx_dlssd.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/development/nvngx_dlss.license.txt D:/project-render/build/Debug/nvngx_dlss.license.txt
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -f D:/project-render/build/Debug/sl.interposer.json
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/scripts/sl.common.json D:/project-render/build/Debug/sl.common.json
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -157,7 +182,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <BufferSecurityCheck></BufferSecurityCheck>
@@ -185,10 +210,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_TINYGLTF=1;CMAKE_INTDIR=\"Release\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -196,9 +221,34 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <PostBuildEvent>
-      <Message></Message>
+      <Message>	</Message>
       <Command>setlocal
 C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -noprofile -executionpolicy Bypass -file D:/project-render/repos/vcpkg/scripts/buildsystems/msbuild/applocal.ps1 -targetBinary D:/project-render/build/Release/project-render.exe -installedDir D:/project-render/repos/vcpkg/installed/x64-windows/bin -OutVariable out
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.interposer.dll D:/project-render/build/Release/sl.interposer.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.common.dll D:/project-render/build/Release/sl.common.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.dlss.dll D:/project-render/build/Release/sl.dlss.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.dlss_d.dll D:/project-render/build/Release/sl.dlss_d.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlss.dll D:/project-render/build/Release/nvngx_dlss.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlssd.dll D:/project-render/build/Release/nvngx_dlssd.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlss.license.txt D:/project-render/build/Release/nvngx_dlss.license.txt
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -f D:/project-render/build/Release/sl.interposer.json
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/scripts/sl.common.json D:/project-render/build/Release/sl.common.json
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -228,7 +278,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <BufferSecurityCheck></BufferSecurityCheck>
@@ -256,10 +306,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_TINYGLTF=1;CMAKE_INTDIR=\"MinSizeRel\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -267,9 +317,34 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <PostBuildEvent>
-      <Message></Message>
+      <Message>	</Message>
       <Command>setlocal
 C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -noprofile -executionpolicy Bypass -file D:/project-render/repos/vcpkg/scripts/buildsystems/msbuild/applocal.ps1 -targetBinary D:/project-render/build/MinSizeRel/project-render.exe -installedDir D:/project-render/repos/vcpkg/installed/x64-windows/bin -OutVariable out
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.interposer.dll D:/project-render/build/MinSizeRel/sl.interposer.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.common.dll D:/project-render/build/MinSizeRel/sl.common.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.dlss.dll D:/project-render/build/MinSizeRel/sl.dlss.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.dlss_d.dll D:/project-render/build/MinSizeRel/sl.dlss_d.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlss.dll D:/project-render/build/MinSizeRel/nvngx_dlss.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlssd.dll D:/project-render/build/MinSizeRel/nvngx_dlssd.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlss.license.txt D:/project-render/build/MinSizeRel/nvngx_dlss.license.txt
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -f D:/project-render/build/MinSizeRel/sl.interposer.json
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/scripts/sl.common.json D:/project-render/build/MinSizeRel/sl.common.json
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -299,7 +374,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <BufferSecurityCheck></BufferSecurityCheck>
@@ -326,10 +401,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_TINYGLTF=1;CMAKE_INTDIR=\"RelWithDebInfo\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -337,9 +412,34 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <PostBuildEvent>
-      <Message></Message>
+      <Message>	</Message>
       <Command>setlocal
 C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -noprofile -executionpolicy Bypass -file D:/project-render/repos/vcpkg/scripts/buildsystems/msbuild/applocal.ps1 -targetBinary D:/project-render/build/RelWithDebInfo/project-render.exe -installedDir D:/project-render/repos/vcpkg/installed/x64-windows/bin -OutVariable out
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.interposer.dll D:/project-render/build/RelWithDebInfo/sl.interposer.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.common.dll D:/project-render/build/RelWithDebInfo/sl.common.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.dlss.dll D:/project-render/build/RelWithDebInfo/sl.dlss.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.dlss_d.dll D:/project-render/build/RelWithDebInfo/sl.dlss_d.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlss.dll D:/project-render/build/RelWithDebInfo/nvngx_dlss.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlssd.dll D:/project-render/build/RelWithDebInfo/nvngx_dlssd.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlss.license.txt D:/project-render/build/RelWithDebInfo/nvngx_dlss.license.txt
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -f D:/project-render/build/RelWithDebInfo/sl.interposer.json
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/scripts/sl.common.json D:/project-render/build/RelWithDebInfo/sl.common.json
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -429,6 +529,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="D:\project-render\src\camera.cpp" />
     <ClCompile Include="D:\project-render\src\dxr_renderer.cpp" />
     <ClCompile Include="D:\project-render\src\dxr_accumulation.cpp" />
+    <ClCompile Include="D:\project-render\src\streamline_manager.cpp" />
     <ClCompile Include="D:\project-render\src\raster_renderer.cpp" />
     <ClCompile Include="D:\project-render\src\file_import.cpp" />
     <ClCompile Include="D:\project-render\src\scene.cpp" />

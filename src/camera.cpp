@@ -42,6 +42,8 @@ float g_cameraTarget[3] = {0.0f, 0.0f, 0.0f};
 float g_cameraTargetDistance = 1.0f;
 
 static CameraCB s_lastCameraData = {};
+static CameraCB s_prevFrameCameraData = {};
+static bool s_prevFrameValid = false;
 
 static bool CameraChanged(const CameraCB &a, const CameraCB &b) {
   if (a.pos[0] != b.pos[0] || a.pos[1] != b.pos[1] || a.pos[2] != b.pos[2])
@@ -86,6 +88,23 @@ void UpdateCameraCB() {
   if (!g_cameraConstantBuffer)
     return;
 
+  // Provide previous-frame camera info for motion vectors / DLSS, but do not
+  // use it for accumulation reset.
+  g_cameraData.prevPos[0] = s_prevFrameCameraData.pos[0];
+  g_cameraData.prevPos[1] = s_prevFrameCameraData.pos[1];
+  g_cameraData.prevPos[2] = s_prevFrameCameraData.pos[2];
+  g_cameraData.prevForward[0] = s_prevFrameCameraData.forward[0];
+  g_cameraData.prevForward[1] = s_prevFrameCameraData.forward[1];
+  g_cameraData.prevForward[2] = s_prevFrameCameraData.forward[2];
+  g_cameraData.prevUp[0] = s_prevFrameCameraData.up[0];
+  g_cameraData.prevUp[1] = s_prevFrameCameraData.up[1];
+  g_cameraData.prevUp[2] = s_prevFrameCameraData.up[2];
+  g_cameraData.prevFov = s_prevFrameCameraData.fov;
+  g_cameraData.prevAspect = s_prevFrameCameraData.aspect;
+  g_cameraData.prevNearZ = s_prevFrameCameraData.nearZ;
+  g_cameraData.prevFarZ = s_prevFrameCameraData.farZ;
+  g_cameraData.prevValid = s_prevFrameValid ? 1.0f : 0.0f;
+
   bool changed = CameraChanged(g_cameraData, s_lastCameraData);
 
   // ALWAYS update the GPU buffer because frameCount changes every frame
@@ -103,4 +122,8 @@ void UpdateCameraCB() {
     DxrRenderer::ResetAccumulation();
     s_lastCameraData = g_cameraData;
   }
+
+  // Update prev-frame data for the next frame.
+  s_prevFrameCameraData = g_cameraData;
+  s_prevFrameValid = true;
 }

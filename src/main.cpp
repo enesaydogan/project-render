@@ -185,6 +185,10 @@ struct Vec3 {
 // DXR implementation moved to DxrRenderer module
 #include "dxr_renderer.h"
 
+// NVIDIA Streamline (DLSS-SR + DLSS-RR)
+#include "streamline_manager.h"
+static StreamlineManager g_streamline;
+
 // Raw Helper to Add Subobject
 struct SubobjectWrapper {
   D3D12_STATE_SUBOBJECT subobject;
@@ -444,10 +448,34 @@ bool InitD3D12(HWND hwnd) {
   g_hwnd = hwnd;
   UINT dxgiFactoryFlags = 0;
 
+  // Streamline must be initialized before any DXGI/D3D calls.
+  const bool streamlineReady = g_streamline.InitializeEarly();
+
   EnableD3D12DebugLayer();
 
   ComPtr<IDXGIFactory4> factory;
-  ThrowIfFailed(CreateDXGIFactory2(dxgiFactoryFlags, IID_PPV_ARGS(&factory)));
+  {
+    HRESULT hrFactory = E_NOINTERFACE;
+    if (streamlineReady) {
+      hrFactory = g_streamline.CreateDXGIFactory2(dxgiFactoryFlags,
+                                                  IID_PPV_ARGS(&factory));
+    }
+    if (FAILED(hrFactory)) {
+      ThrowIfFailed(
+          ::CreateDXGIFactory2(dxgiFactoryFlags, IID_PPV_ARGS(&factory)));
+    }
+  }
+
+  auto CreateDevice = [&](IUnknown *adapter, REFIID riid,
+                          void **ppDevice) -> HRESULT {
+    if (streamlineReady) {
+      HRESULT hrSL = g_streamline.D3D12CreateDevice(
+          adapter, D3D_FEATURE_LEVEL_11_0, riid, ppDevice);
+      if (SUCCEEDED(hrSL))
+        return hrSL;
+    }
+    return ::D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, riid, ppDevice);
+  };
 
   // Try to find a hardware adapter that supports D3D12
   ComPtr<IDXGIAdapter1> hardwareAdapter;
@@ -472,8 +500,11 @@ bool InitD3D12(HWND hwnd) {
 
   HRESULT hr = E_FAIL;
   if (hardwareAdapter) {
-    hr = D3D12CreateDevice(hardwareAdapter.Get(), D3D_FEATURE_LEVEL_11_0,
-                           IID_PPV_ARGS(&g_device));
+    hr = CreateDevice(hardwareAdapter.Get(), IID_PPV_ARGS(&g_device));
+  }
+
+  if (SUCCEEDED(hr) && streamlineReady) {
+    g_streamline.OnD3D12DeviceCreated(g_device.Get());
   }
 
   // Check DXR Support
@@ -496,16 +527,25 @@ bool InitD3D12(HWND hwnd) {
 
   if (FAILED(hr)) {
     // Fall back to default adapter/device or WARP
-    hr = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0,
-                           IID_PPV_ARGS(&g_device));
+    hr = CreateDevice(nullptr, IID_PPV_ARGS(&g_device));
+
+    if (SUCCEEDED(hr) && streamlineReady) {
+      g_streamline.OnD3D12DeviceCreated(g_device.Get());
+    }
 
     if (FAILED(hr)) {
       ComPtr<IDXGIAdapter> warpAdapter;
       ThrowIfFailed(factory->EnumWarpAdapter(IID_PPV_ARGS(&warpAdapter)));
-      ThrowIfFailed(D3D12CreateDevice(warpAdapter.Get(), D3D_FEATURE_LEVEL_11_0,
-                                      IID_PPV_ARGS(&g_device)));
+      ThrowIfFailed(CreateDevice(warpAdapter.Get(), IID_PPV_ARGS(&g_device)));
+
+      if (streamlineReady) {
+        g_streamline.OnD3D12DeviceCreated(g_device.Get());
+      }
     }
   }
+
+  // Provide Streamline manager to DXR module (optional feature).
+  DxrRenderer::SetStreamlineManager(&g_streamline);
 
   // Log: about to create command queue (stderr only)
   fprintf(stderr, "InitD3D12: Before CreateCommandQueue\n");
@@ -2339,6 +2379,95 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           if (ImGui::InputFloat("Max SPP (0=Inf)", &g_cameraData.maxSPP, 1.0f,
                                 10.0f, "%.0f"))
             UpdateCameraCB();
+
+          ImGui::Separator();
+          ImGui::Text("Streamline / DLSS");
+          bool dlssEnabled = g_streamline.IsEnabled();
+          if (ImGui::Checkbox("Enable", &dlssEnabled)) {
+            g_streamline.SetEnabled(dlssEnabled);
+            DxrRenderer::ResetStreamlineHistory();
+            // DLSS uses a different internal render resolution; recreate resources.
+            DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
+          }
+
+          const char* dlssModes[] = {"Off", "DLSS Super Resolution", "DLSS Ray Reconstruction"};
+          int modeIdx = 0;
+          switch (g_streamline.GetMode()) {
+          case StreamlineManager::Mode::Off:
+            modeIdx = 0;
+            break;
+          case StreamlineManager::Mode::DLSS_SuperResolution:
+            modeIdx = 1;
+            break;
+          case StreamlineManager::Mode::DLSS_RayReconstruction:
+            modeIdx = 2;
+            break;
+          }
+          if (ImGui::Combo("Mode", &modeIdx, dlssModes, IM_ARRAYSIZE(dlssModes))) {
+            StreamlineManager::Mode newMode = StreamlineManager::Mode::Off;
+            if (modeIdx == 1)
+              newMode = StreamlineManager::Mode::DLSS_SuperResolution;
+            if (modeIdx == 2)
+              newMode = StreamlineManager::Mode::DLSS_RayReconstruction;
+            g_streamline.SetMode(newMode);
+            DxrRenderer::ResetStreamlineHistory();
+            DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
+          }
+
+          const char* qualities[] = {"Max Performance", "Balanced", "Max Quality", "Ultra Performance", "Ultra Quality", "DLAA"};
+          int qIdx = 1;
+          switch (g_streamline.GetQuality()) {
+          case StreamlineManager::Quality::MaxPerformance: qIdx = 0; break;
+          case StreamlineManager::Quality::Balanced: qIdx = 1; break;
+          case StreamlineManager::Quality::MaxQuality: qIdx = 2; break;
+          case StreamlineManager::Quality::UltraPerformance: qIdx = 3; break;
+          case StreamlineManager::Quality::UltraQuality: qIdx = 4; break;
+          case StreamlineManager::Quality::DLAA: qIdx = 5; break;
+          }
+          if (ImGui::Combo("Quality", &qIdx, qualities, IM_ARRAYSIZE(qualities))) {
+            StreamlineManager::Quality newQ = StreamlineManager::Quality::Balanced;
+            if (qIdx == 0) newQ = StreamlineManager::Quality::MaxPerformance;
+            if (qIdx == 1) newQ = StreamlineManager::Quality::Balanced;
+            if (qIdx == 2) newQ = StreamlineManager::Quality::MaxQuality;
+            if (qIdx == 3) newQ = StreamlineManager::Quality::UltraPerformance;
+            if (qIdx == 4) newQ = StreamlineManager::Quality::UltraQuality;
+            if (qIdx == 5) newQ = StreamlineManager::Quality::DLAA;
+            g_streamline.SetQuality(newQ);
+            DxrRenderer::ResetStreamlineHistory();
+            DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
+          }
+
+          if (ImGui::Button("Reset DLSS History")) {
+            DxrRenderer::ResetStreamlineHistory();
+          }
+          ImGui::SameLine();
+          ImGui::Text("SL: %s / %s",
+                      g_streamline.IsInitialized() ? "Init" : "Off",
+                      g_streamline.IsDeviceSet() ? "Device" : "NoDevice");
+
+          ImGui::Text("NGX AppId: %u", g_streamline.GetApplicationId());
+          if (g_streamline.IsEnabled() && g_streamline.GetMode() != StreamlineManager::Mode::Off &&
+              (!g_streamline.IsInitialized() || !g_streamline.IsDeviceSet() ||
+               !g_streamline.AreFeatureFunctionsReady())) {
+            ImGui::TextWrapped(
+                "DLSS plugins may be disabled. If you see 'Missing NGX context', "
+                "set env SL_APPLICATION_ID (or create sl_appid.txt next to the exe) "
+                "to your NVIDIA-provided NGX application id.");
+          }
+
+          ImGui::Separator();
+          ImGui::Text("Streamline logging (restart required)");
+          bool slLogToFile = g_streamline.GetLogToFile();
+          if (ImGui::Checkbox("Write sl.log to file", &slLogToFile)) {
+            g_streamline.SetLogToFile(slLogToFile);
+          }
+          bool slMirror = g_streamline.GetMirrorLogsToStderr();
+          if (ImGui::Checkbox("Mirror SL logs to console", &slMirror)) {
+            g_streamline.SetMirrorLogsToStderr(slMirror);
+          }
+          if (g_streamline.GetLogToFile()) {
+            ImGui::TextWrapped("SL log dir: %ls", g_streamline.GetLogDirectory().c_str());
+          }
         }
 
         // Debug Render Pass Dropdown

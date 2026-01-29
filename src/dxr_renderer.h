@@ -12,6 +12,8 @@ struct Instance;
 
 using Microsoft::WRL::ComPtr;
 
+class StreamlineManager;
+
 struct GpuLight {
   uint32_t type;
   float position[3];
@@ -42,6 +44,10 @@ void BuildAccelerationStructures(const std::vector<Asset::GpuMesh> &meshes,
 void UpdateLights(const std::vector<GpuLight> &lights);
 // Reset accumulation for path tracing
 void ResetAccumulation();
+// Attach Streamline manager (optional) for DLSS-SR / DLSS-RR evaluation.
+void SetStreamlineManager(StreamlineManager* streamline);
+// Resets Streamline/DLSS temporal history without touching DXR accumulation.
+void ResetStreamlineHistory();
 // Return true if state object and TLAS/output are ready for rendering
 bool IsReady();
 // Get current accumulation frame count
