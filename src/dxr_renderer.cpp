@@ -28,6 +28,7 @@ static StreamlineManager* s_streamline = nullptr;
 static bool s_streamlineResetHistory = true;
 // Configurable DLSS-RR evaluation frequency (frames/Sample-Per-Pixel). Default 10 SPP.
 static unsigned s_dlssEvalSpp = 10u;
+static UINT s_jitterFrameIndex = 0;
 
 // Some debug toggles live in main.cpp; declare them here so we can react to UI
 // changes
@@ -1120,7 +1121,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
 
   // Compute jitter for this frame (DLSS-RR compatible)
   // Note: DLSS expects jitter in range [-0.5, 0.5] pixel space
-  uint32_t frameIdx = s_accumulation.GetFrameCount() + 1;
+  s_jitterFrameIndex++;
+  uint32_t frameIdx = s_jitterFrameIndex;
   float jitterX = Halton(frameIdx, 2) - 0.5f;
   float jitterY = Halton(frameIdx, 3) - 0.5f;
 
@@ -1134,10 +1136,18 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
       pfData[7] = jitterX;
       // Index 11 = jitterY (_pad2)
       pfData[11] = jitterY;
-      pfData[17] =
-          (float)s_accumulation
-              .GetFrameCount();         // frameCount at _pad3? no, check index.
+      
+      // Index 17: globalFrameCount (monotonic, for RNG)
+      pfData[17] = (float)s_jitterFrameIndex;
       pfData[18] = (float)s_lightCount; // lightCount
+
+      // Index 23: accumulationCount. 
+      // If DLSS-RR is on, force 0 (effectively disabling accumulation) so we feed raw frames.
+      bool useRawForDlss = s_streamline && s_streamline->IsEnabled() && 
+        (s_streamline->GetMode() == StreamlineManager::Mode::DLSS_RayReconstruction);
+      
+      pfData[23] = useRawForDlss ? 0.0f : (float)s_accumulation.GetFrameCount();
+
       cameraCB->Unmap(0, nullptr);
     }
   }

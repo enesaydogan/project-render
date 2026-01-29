@@ -66,13 +66,13 @@ cbuffer Camera : register(b0)
     float nearZ;
     float farZ;
     float intensity;
-    float frameCount;
+    float globalFrameCount; // Monotonic frame count for RNG
     float lightCount;
     float maxSpecularBounces;
     float maxRefractiveBounces;
     float maxGIBounces;
     float maxSPP;
-    float _pad3;
+    float accumulationCount; // Count since last reset (0 if no accumulation)
 
     // Global Lighting
     float4 lightDir; // xyz = direction towards light
