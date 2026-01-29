@@ -20,6 +20,12 @@ RaytracingAccelerationStructure g_accel : register(t0);
 RWTexture2D<float4> g_output : register(u0);
 RWTexture2D<float4> g_accumulation : register(u1);
 
+// Streamline / DLSS inputs (u10+)
+RWTexture2D<float> g_depth : register(u10);
+RWTexture2D<float2> g_motionVectors : register(u11);
+RWTexture2D<float4> g_albedoOut : register(u12);
+RWTexture2D<float4> g_normalRoughnessOut : register(u13);
+
 // Texture array - fixed large size to avoid overlap issues with other registers
 Texture2D textures[2048] : register(t1);
 // Environment Map (Latitude-Longitude) - Moved to Space 1 to avoid conflicts
@@ -72,6 +78,18 @@ cbuffer Camera : register(b0)
     float4 lightDir; // xyz = direction towards light
     float4 lightColor; // rgb + intensity in .w
     float4 ambientColor; // rgb + weight in .w
+
+    // --- Streamline / DLSS history support ---
+    float3 prevPos;
+    float prevValid;
+    float3 prevForward;
+    float _padPrev0;
+    float3 prevUp;
+    float _padPrev1;
+    float prevFov;
+    float prevAspect;
+    float prevNearZ;
+    float prevFarZ;
 }
 
 struct MaterialData

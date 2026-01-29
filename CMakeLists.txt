@@ -10,6 +10,7 @@ target_sources(project-render PRIVATE
     src/camera.cpp 
     src/dxr_renderer.cpp 
     src/dxr_accumulation.cpp
+  src/streamline_manager.cpp
     src/raster_renderer.cpp 
     src/file_import.cpp 
     src/scene.cpp 
@@ -28,6 +29,54 @@ target_link_libraries(project-render PRIVATE d3d12 dxgi)
 # Link the D3D shader compiler for runtime shader compilation
 target_link_libraries(project-render PRIVATE d3dcompiler)
 target_link_libraries(project-render PRIVATE comctl32)
+
+# Streamline (DLSS-SR + DLSS-RR) SDK headers (runtime is dynamically loaded)
+set(STREAMLINE_ROOT "${CMAKE_SOURCE_DIR}/thirdparty/Streamline")
+target_include_directories(project-render PRIVATE "${STREAMLINE_ROOT}/include")
+
+# Copy Streamline + NGX runtime files next to the executable.
+# NOTE: This project uses dynamic loading (LoadLibrary) so we don't link against
+# any Streamline import libs, but the DLLs must be present at runtime.
+set(STREAMLINE_BIN_DIR "${STREAMLINE_ROOT}/bin/x64")
+set(STREAMLINE_DEV_BIN_DIR "${STREAMLINE_ROOT}/bin/x64/development")
+set(STREAMLINE_SCRIPTS_DIR "${STREAMLINE_ROOT}/scripts")
+
+# DLSS needs NGX. NVIDIA provides "development" NGX DLLs that don't enforce the
+# AppID whitelist check (typically with a watermark). For convenience, use those
+# automatically in Debug builds.
+set(STREAMLINE_RUNTIME_BIN_DIR "$<IF:$<CONFIG:Debug>,${STREAMLINE_DEV_BIN_DIR},${STREAMLINE_BIN_DIR}>")
+
+add_custom_command(TARGET project-render POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${STREAMLINE_RUNTIME_BIN_DIR}/sl.interposer.dll"
+    "$<TARGET_FILE_DIR:project-render>/sl.interposer.dll"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${STREAMLINE_RUNTIME_BIN_DIR}/sl.common.dll"
+    "$<TARGET_FILE_DIR:project-render>/sl.common.dll"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${STREAMLINE_RUNTIME_BIN_DIR}/sl.dlss.dll"
+    "$<TARGET_FILE_DIR:project-render>/sl.dlss.dll"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${STREAMLINE_RUNTIME_BIN_DIR}/sl.dlss_d.dll"
+    "$<TARGET_FILE_DIR:project-render>/sl.dlss_d.dll"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${STREAMLINE_RUNTIME_BIN_DIR}/nvngx_dlss.dll"
+    "$<TARGET_FILE_DIR:project-render>/nvngx_dlss.dll"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${STREAMLINE_RUNTIME_BIN_DIR}/nvngx_dlssd.dll"
+    "$<TARGET_FILE_DIR:project-render>/nvngx_dlssd.dll"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${STREAMLINE_RUNTIME_BIN_DIR}/nvngx_dlss.license.txt"
+    "$<TARGET_FILE_DIR:project-render>/nvngx_dlss.license.txt"
+  # Do NOT ship Streamline's default interposer JSON next to the executable.
+  # It overrides Preferences and (in the SDK-provided file) forces showConsole
+  # and logPath=C:/NGXLogs. Remove any stale copy from previous builds.
+  COMMAND ${CMAKE_COMMAND} -E rm -f
+    "$<TARGET_FILE_DIR:project-render>/sl.interposer.json"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${STREAMLINE_SCRIPTS_DIR}/sl.common.json"
+    "$<TARGET_FILE_DIR:project-render>/sl.common.json"
+)
 
 # Fetch and build Dear ImGui at configure time
 include(FetchContent)

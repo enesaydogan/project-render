@@ -54,6 +54,19 @@ float4 pack_reservoir(Reservoir r) {
     return float4(asfloat(r.lightIndex), r.w_sum, asfloat(r.M), r.W);
 }
 
+float halton(uint index, uint base)
+{
+    float f = 1.0;
+    float r = 0.0;
+    while (index > 0)
+    {
+        f /= (float)base;
+        r += f * (float)(index % base);
+        index /= base;
+    }
+    return r;
+}
+
 [shader("raygeneration")]
 void RayGen()
 {
@@ -74,8 +87,8 @@ void RayGen()
     // Swap reservoirs per frame for ReSTIR
     bool flip = (frame % 2) == 1;
 
-    // Jittered sample for anti-aliasing
-    float2 jitter = next_float2(rng) - 0.5;
+    // Deterministic per-frame jitter (pixel units) for DLSS/TAA friendliness
+    float2 jitter = float2(halton(frame + 1, 2), halton(frame + 1, 3)) - 0.5;
     float2 uv = (float2(launchIndex.xy) + 0.5 + jitter) / float2(launchDim.xy);
     float2 ndc = uv * 2.0 - 1.0;
 
@@ -92,6 +105,14 @@ void RayGen()
 
     float3 accumulatedColor = float3(0, 0, 0);
     float3 throughput = float3(1, 1, 1);
+
+    // Primary hit info for DLSS inputs
+    bool primaryHit = false;
+    float3 primaryPos = float3(0, 0, 0);
+    float3 primaryNormal = float3(0, 1, 0);
+    float3 primaryAlbedo = float3(0, 0, 0);
+    float primaryRoughness = 1.0;
+    float primaryViewZ = -1.0;
     
     int specularBounces = 0;
     int refractiveBounces = 0;
@@ -119,6 +140,16 @@ void RayGen()
         payload.t = -1.0;
 
         TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
+
+        if (bounce == 0 && payload.t >= 0.0) {
+            primaryHit = true;
+            primaryPos = payload.position;
+            primaryNormal = payload.normal;
+            primaryAlbedo = payload.albedo;
+            primaryRoughness = max(0.001, payload.roughness);
+            // View-space z (positive forward)
+            primaryViewZ = dot(primaryPos - camPos, forward);
+        }
 
         if (payload.t < 0.0) {
             // Miss: add sky color and terminate
@@ -533,6 +564,50 @@ void RayGen()
 
 
     float3 finalColor = accumulatedColor * intensity;
+
+    // Write DLSS inputs
+    if (!primaryHit || primaryViewZ <= 0.0) {
+        g_depth[launchIndex.xy] = 1.0;
+        g_motionVectors[launchIndex.xy] = float2(0.0, 0.0);
+        g_albedoOut[launchIndex.xy] = float4(0.0, 0.0, 0.0, 1.0);
+        g_normalRoughnessOut[launchIndex.xy] = float4(0.0, 1.0, 0.0, 1.0);
+    } else {
+        float nearZc = nearZ;
+        float farZc = farZ;
+        float A = farZc / (farZc - nearZc);
+        float B = (-nearZc * farZc) / (farZc - nearZc);
+        float ndcZ = A + (B / primaryViewZ);
+        g_depth[launchIndex.xy] = saturate(ndcZ);
+
+        // Current NDC XY (no jitter)
+        float f_inv_c = tan(radians(fov) * 0.5);
+        float3 rel = primaryPos - camPos;
+        float viewX = dot(rel, R);
+        float viewY = dot(rel, U);
+        float viewZ = dot(rel, forward);
+        float ndcX = viewX / (viewZ * aspect * f_inv_c);
+        float ndcY = -viewY / (viewZ * f_inv_c);
+        float2 currScreen = (float2(ndcX, ndcY) * 0.5 + 0.5) * float2(launchDim.xy);
+
+        float2 mvec = float2(0.0, 0.0);
+        if (prevValid > 0.5) {
+            float3 forwardP = normalize(prevForward);
+            float3 Rp = normalize(cross(forwardP, prevUp));
+            float3 Up = normalize(cross(Rp, forwardP));
+            float f_inv_p = tan(radians(prevFov) * 0.5);
+            float3 relP = primaryPos - prevPos;
+            float vxP = dot(relP, Rp);
+            float vyP = dot(relP, Up);
+            float vzP = dot(relP, forwardP);
+            float ndcXP = vxP / (vzP * prevAspect * f_inv_p);
+            float ndcYP = -vyP / (vzP * f_inv_p);
+            float2 prevScreen = (float2(ndcXP, ndcYP) * 0.5 + 0.5) * float2(launchDim.xy);
+            mvec = prevScreen - currScreen;
+        }
+        g_motionVectors[launchIndex.xy] = mvec;
+        g_albedoOut[launchIndex.xy] = float4(primaryAlbedo, 1.0);
+        g_normalRoughnessOut[launchIndex.xy] = float4(normalize(primaryNormal), primaryRoughness);
+    }
 
     if (frame == 0) {
         g_accumulation[launchIndex.xy] = float4(finalColor, 1.0);

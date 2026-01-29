@@ -6,6 +6,7 @@
 #include "ibl_manager.h"
 #include "scene.h"
 #include "camera.h"
+#include "streamline_manager.h"
 #include <cstdio>
 #include <vector>
 #include <wrl.h>
@@ -22,6 +23,9 @@ extern Microsoft::WRL::ComPtr<ID3D12Device> g_device;
 // Module-local state
 static ID3D12Device *s_device = nullptr;
 static ID3D12CommandQueue *s_commandQueue = nullptr;
+
+static StreamlineManager* s_streamline = nullptr;
+static bool s_streamlineResetHistory = true;
 
 // Some debug toggles live in main.cpp; declare them here so we can react to UI
 // changes
@@ -66,12 +70,22 @@ static const UINT DXR_HEAP_GI_RESERVOIR_0_OFFSET_C = 2048 + 1024 + 1024 + 6;
 static const UINT DXR_HEAP_GI_RESERVOIR_1_OFFSET_A = 2048 + 1024 + 1024 + 7;
 static const UINT DXR_HEAP_GI_RESERVOIR_1_OFFSET_B = 2048 + 1024 + 1024 + 8;
 static const UINT DXR_HEAP_GI_RESERVOIR_1_OFFSET_C = 2048 + 1024 + 1024 + 9;
-static const UINT DXR_HEAP_IBL_OFFSET = 2048 + 1024 + 1024 + 10;
-static const UINT DXR_HEAP_TOTAL_COUNT = 2048 + 1024 + 1024 + 11;
+// Extra UAVs (u10+) reserved for Streamline/DLSS inputs/outputs
+static const UINT DXR_HEAP_DEPTH_UAV_OFFSET = 2048 + 1024 + 1024 + 10;
+static const UINT DXR_HEAP_MVEC_UAV_OFFSET = 2048 + 1024 + 1024 + 11;
+static const UINT DXR_HEAP_ALBEDO_UAV_OFFSET = 2048 + 1024 + 1024 + 12;
+static const UINT DXR_HEAP_NORMAL_ROUGHNESS_UAV_OFFSET =
+  2048 + 1024 + 1024 + 13;
+static const UINT DXR_HEAP_DLSS_OUT_UAV_OFFSET = 2048 + 1024 + 1024 + 14;
+static const UINT DXR_HEAP_IBL_OFFSET = 2048 + 1024 + 1024 + 15;
+static const UINT DXR_HEAP_TOTAL_COUNT = 2048 + 1024 + 1024 + 16;
 
 // Output texture dimensions used by DXR (kept local to module)
 static UINT s_outputWidth = 1280;
 static UINT s_outputHeight = 720;
+// Output (swapchain) dimensions last requested by the host
+static UINT s_presentWidth = 1280;
+static UINT s_presentHeight = 720;
 
 inline void TransitionResource(ID3D12GraphicsCommandList *cmdList,
                                ID3D12Resource *resource,
@@ -93,6 +107,11 @@ static ComPtr<ID3D12StateObject> s_rtStateObject;
 static ComPtr<ID3D12Resource> s_sbtStorage;
 static ComPtr<ID3D12RootSignature> s_rtGlobalRootSignature;
 static ComPtr<ID3D12Resource> s_outputUAV;
+static ComPtr<ID3D12Resource> s_depthUAV;
+static ComPtr<ID3D12Resource> s_mvecUAV;
+static ComPtr<ID3D12Resource> s_albedoUAV;
+static ComPtr<ID3D12Resource> s_normalRoughnessUAV;
+static ComPtr<ID3D12Resource> s_dlssOutputUAV;
 static UINT s_outputUAVDescriptorSize = 0;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_outputUAVGpuHandle = {0};
 static ComPtr<ID3D12DescriptorHeap>
@@ -155,9 +174,31 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   if (!g_rayTracingSupported || !s_dxrDevice)
     return;
 
-  // Update module-local output size so Dispatch uses correct dimensions
-  s_outputWidth = (width > 0) ? width : s_outputWidth;
-  s_outputHeight = (height > 0) ? height : s_outputHeight;
+  // Track requested output (swapchain) size.
+  if (width > 0)
+    s_presentWidth = width;
+  if (height > 0)
+    s_presentHeight = height;
+
+  const UINT outW = s_presentWidth;
+  const UINT outH = s_presentHeight;
+
+  // Compute internal render size (DLSS wants us to render smaller and upscale).
+  UINT renderW = outW;
+  UINT renderH = outH;
+  if (s_streamline && s_streamline->IsInitialized() && s_streamline->IsDeviceSet() &&
+      s_streamline->IsEnabled() &&
+      s_streamline->GetMode() != StreamlineManager::Mode::Off) {
+    auto rec = s_streamline->GetRecommendedRenderSize(outW, outH);
+    if (rec.renderWidth > 0 && rec.renderHeight > 0) {
+      renderW = rec.renderWidth;
+      renderH = rec.renderHeight;
+    }
+  }
+
+  // Update module-local render size so Dispatch uses correct dimensions.
+  s_outputWidth = renderW;
+  s_outputHeight = renderH;
 
   if (g_verboseRenderLogs) {
     fprintf(stderr,
@@ -227,7 +268,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
   D3D12_DESCRIPTOR_RANGE uavRange = {};
   uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-  uavRange.NumDescriptors = 10;
+  uavRange.NumDescriptors = 16;
   uavRange.BaseShaderRegister = 0;
   params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
   params[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -437,8 +478,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   s_missShaderTable = baseAddr + s_rayGenEntrySize;
   s_hitGroupShaderTable = s_missShaderTable + s_shaderTableEntrySize;
 
-  // Create a default heap 2D texture to hold raytracing output (match current
-  // swapchain size)
+  // Create a default heap 2D texture to hold raytracing output (render-size)
   D3D12_RESOURCE_DESC texDesc = {};
   texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
   texDesc.Alignment = 0;
@@ -457,12 +497,48 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   // If an output texture already exists, release it so we recreate with correct
   // size
   s_outputUAV.Reset();
+  s_depthUAV.Reset();
+  s_mvecUAV.Reset();
+  s_albedoUAV.Reset();
+  s_normalRoughnessUAV.Reset();
+  s_dlssOutputUAV.Reset();
   ThrowIfFailed(s_device->CreateCommittedResource(
       &heapProps, D3D12_HEAP_FLAG_NONE, &texDesc,
       D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
       IID_PPV_ARGS(&s_outputUAV)));
   if (s_outputUAV)
     s_outputUAV->SetName(L"RT Output Texture");
+
+  D3D12_RESOURCE_DESC outDesc = texDesc;
+  outDesc.Width = outW;
+  outDesc.Height = outH;
+
+  auto CreateUavTexture = [&](ComPtr<ID3D12Resource>& out,
+                              const D3D12_RESOURCE_DESC& baseDesc,
+                              DXGI_FORMAT format,
+                              const wchar_t* name) {
+    D3D12_RESOURCE_DESC desc = baseDesc;
+    desc.Format = format;
+    desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    ThrowIfFailed(s_device->CreateCommittedResource(
+        &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&out)));
+    if (out)
+      out->SetName(name);
+  };
+
+  // DLSS/Streamline inputs for DXR
+  CreateUavTexture(s_depthUAV, texDesc, DXGI_FORMAT_R32_FLOAT, L"RT Depth");
+  CreateUavTexture(s_mvecUAV, texDesc, DXGI_FORMAT_R16G16_FLOAT,
+                   L"RT Motion Vectors");
+  CreateUavTexture(s_albedoUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                   L"RT Albedo");
+  CreateUavTexture(s_normalRoughnessUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                   L"RT NormalRoughness");
+
+  // DLSS output is output-size (same format as swapchain for easy copy)
+  CreateUavTexture(s_dlssOutputUAV, outDesc, DXGI_FORMAT_R10G10B10A2_UNORM,
+                   L"RT DLSS Output");
 
   D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
   uavDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
@@ -478,6 +554,31 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
                                         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
   s_device->CreateUnorderedAccessView(s_outputUAV.Get(), nullptr, &uavDesc,
                                       uavCpu);
+
+    auto CreateUavAt = [&](ID3D12Resource* res, DXGI_FORMAT fmt,
+               UINT heapOffset) {
+    D3D12_UNORDERED_ACCESS_VIEW_DESC d = {};
+    d.Format = fmt;
+    d.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    d.Texture2D.MipSlice = 0;
+    d.Texture2D.PlaneSlice = 0;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE h =
+      s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+    h.ptr += (SIZE_T)heapOffset * s_device->GetDescriptorHandleIncrementSize(
+                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    s_device->CreateUnorderedAccessView(res, nullptr, &d, h);
+    };
+
+    // u10+
+    CreateUavAt(s_depthUAV.Get(), DXGI_FORMAT_R32_FLOAT, DXR_HEAP_DEPTH_UAV_OFFSET);
+    CreateUavAt(s_mvecUAV.Get(), DXGI_FORMAT_R16G16_FLOAT, DXR_HEAP_MVEC_UAV_OFFSET);
+    CreateUavAt(s_albedoUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
+          DXR_HEAP_ALBEDO_UAV_OFFSET);
+    CreateUavAt(s_normalRoughnessUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
+          DXR_HEAP_NORMAL_ROUGHNESS_UAV_OFFSET);
+    CreateUavAt(s_dlssOutputUAV.Get(), DXGI_FORMAT_R10G10B10A2_UNORM,
+          DXR_HEAP_DLSS_OUT_UAV_OFFSET);
 
   // Create Accumulation UAV
   s_accumulation.Resize(s_outputWidth, s_outputHeight);
@@ -892,10 +993,21 @@ void UpdateLights(const std::vector<GpuLight> &lights) {
 
 void ResetAccumulation() {
   s_accumulation.Reset();
+  // Keep Streamline history reset separate from accumulation decisions.
+  // Accumulation resets happen on real camera/settings changes; per-frame jitter
+  // changes must not trigger this.
+  s_streamlineResetHistory = true;
   if (g_verboseRenderLogs) {
     fprintf(stderr, "DxrRenderer: Accumulation Reset\n");
   }
 }
+
+void SetStreamlineManager(StreamlineManager* streamline) {
+  s_streamline = streamline;
+  s_streamlineResetHistory = true;
+}
+
+void ResetStreamlineHistory() { s_streamlineResetHistory = true; }
 
 UINT DxrRenderer::GetAccumulationFrameCount() {
   return s_accumulation.GetFrameCount();
@@ -1095,31 +1207,94 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
 
   dxrList->DispatchRays(&dispatchDesc);
 
-  TransitionResource(dxrList.Get(), s_outputUAV.Get(),
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+  // Increment accumulation frame (DLSS must not affect this)
+  s_accumulation.IncrementFrame();
+
+  // Optional Streamline / DLSS evaluation
+  ID3D12Resource* postColor = s_outputUAV.Get();
+  bool usedDlss = false;
+  const D3D12_RESOURCE_DESC dstDesc = renderTarget->GetDesc();
+  const uint32_t outW = (uint32_t)dstDesc.Width;
+  const uint32_t outH = (uint32_t)dstDesc.Height;
+
+  if (s_streamline && s_streamline->IsInitialized() && s_streamline->IsDeviceSet() &&
+      s_streamline->IsEnabled() &&
+      s_streamline->GetMode() != StreamlineManager::Mode::Off &&
+      s_dlssOutputUAV && s_depthUAV && s_mvecUAV) {
+
+    TransitionResource(dxrList.Get(), s_outputUAV.Get(),
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    TransitionResource(dxrList.Get(), s_depthUAV.Get(),
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    TransitionResource(dxrList.Get(), s_mvecUAV.Get(),
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    if (s_albedoUAV) {
+      TransitionResource(dxrList.Get(), s_albedoUAV.Get(),
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
+    if (s_normalRoughnessUAV) {
+      TransitionResource(dxrList.Get(), s_normalRoughnessUAV.Get(),
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
+
+    const bool resetHistory = s_streamlineResetHistory;
+    s_streamlineResetHistory = false;
+
+    if (s_streamline->Evaluate(
+            dxrList.Get(),
+            s_outputUAV.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            s_dlssOutputUAV.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            s_outputWidth, s_outputHeight, outW, outH,
+            s_depthUAV.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            s_mvecUAV.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            s_normalRoughnessUAV.Get(),
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            s_albedoUAV.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            resetHistory)) {
+      usedDlss = true;
+      postColor = s_dlssOutputUAV.Get();
+    }
+
+    // Back to UAV for next frame dispatch
+    TransitionResource(dxrList.Get(), s_outputUAV.Get(),
+                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionResource(dxrList.Get(), s_depthUAV.Get(),
+                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionResource(dxrList.Get(), s_mvecUAV.Get(),
+                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    if (s_albedoUAV) {
+      TransitionResource(dxrList.Get(), s_albedoUAV.Get(),
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+    if (s_normalRoughnessUAV) {
+      TransitionResource(dxrList.Get(), s_normalRoughnessUAV.Get(),
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+  }
+
+  // Copy postColor to the render target
+  TransitionResource(dxrList.Get(), postColor,
+                     usedDlss ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS
+                              : D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                      D3D12_RESOURCE_STATE_COPY_SOURCE);
   TransitionResource(dxrList.Get(), renderTarget, D3D12_RESOURCE_STATE_PRESENT,
                      D3D12_RESOURCE_STATE_COPY_DEST);
 
-  // Increment accumulation frame
-  s_accumulation.IncrementFrame();
-
   // Validate sizes to avoid CopyResource invalid-argument errors
-  D3D12_RESOURCE_DESC srcDesc = s_outputUAV->GetDesc();
-  D3D12_RESOURCE_DESC dstDesc = renderTarget->GetDesc();
+  const D3D12_RESOURCE_DESC srcDesc = postColor->GetDesc();
   if (srcDesc.Width != dstDesc.Width || srcDesc.Height != dstDesc.Height) {
-    // If sizes differ, copy the intersection region with CopyTextureRegion
-    // instead of CopyResource.
     UINT copyW = (UINT)min(srcDesc.Width, dstDesc.Width);
     UINT copyH = (UINT)min(srcDesc.Height, dstDesc.Height);
-    if (g_verboseRenderLogs) {
-      fprintf(stderr,
-              "DxrRenderer: Output size mismatch (src=%llu x %u dst=%llu x %u) "
-              "- copying %u x %u region\n",
-              (unsigned long long)srcDesc.Width, (unsigned)srcDesc.Height,
-              (unsigned long long)dstDesc.Width, (unsigned)dstDesc.Height,
-              copyW, copyH);
-    }
 
     D3D12_TEXTURE_COPY_LOCATION dstLoc = {};
     dstLoc.pResource = renderTarget;
@@ -1127,7 +1302,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
     dstLoc.SubresourceIndex = 0;
 
     D3D12_TEXTURE_COPY_LOCATION srcLoc = {};
-    srcLoc.pResource = s_outputUAV.Get();
+    srcLoc.pResource = postColor;
     srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
     srcLoc.SubresourceIndex = 0;
 
@@ -1141,15 +1316,14 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
 
     dxrList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, &srcBox);
   } else {
-    dxrList->CopyResource(renderTarget, s_outputUAV.Get());
+    dxrList->CopyResource(renderTarget, postColor);
   }
 
   // Transition back
   TransitionResource(dxrList.Get(), renderTarget,
                      D3D12_RESOURCE_STATE_COPY_DEST,
                      D3D12_RESOURCE_STATE_RENDER_TARGET);
-  TransitionResource(dxrList.Get(), s_outputUAV.Get(),
-                     D3D12_RESOURCE_STATE_COPY_SOURCE,
+  TransitionResource(dxrList.Get(), postColor, D3D12_RESOURCE_STATE_COPY_SOURCE,
                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
   // Bind RTV for subsequent ImGui draws

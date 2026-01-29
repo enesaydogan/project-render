@@ -1,0 +1,42 @@
+Application starting...
+ShowWindow called
+StreamlineManager: NOTE: No NGX applicationId configured. Using placeholder id=1. For production NGX DLLs you must set SL_APPLICATION_ID or sl_appid.txt.
+InitD3D12: Using adapter: NVIDIA GeForce RTX 3060 Laptop GPU (VendorId=0x10de, DeviceId=0x2520, DedicatedVidMem=6285164544 bytes)
+DXR Ray Tracing Supported (probe)
+DxrRenderer: DXR supported on device
+DxrRenderer: MaxPayloadSizeInBytes=128
+InitD3D12: CreateRayTracingPipeline finished
+InitD3D12: Before CreateCommandQueue
+InitD3D12: CreateCommandQueue succeeded
+InitD3D12: Before CreateSwapChainForHwnd
+InitD3D12: Swap chain created
+InitD3D12: RTVs created
+InitD3D12: Before CBV/SRV allocator Init
+InitD3D12: CBV/SRV allocator initialized
+InitD3D12: ImGui descriptor heap created
+InitD3D12: per-frame command allocators created
+Loading simple shader from: shaders\simple.hlsl
+Loading PBR shader from: shaders\pbr_mesh.hlsl
+RecreateMeshPipeline: Skybox PSO created
+RecreateMeshPipeline: Mesh PSOs recreated
+InitD3D12: Post-pipeline initialization reached
+InitD3D12: Completed OK (returning true)
+InitD3D12 returned OK
+Scene::ImportModel: importing assets/DamagedHelmet.glb
+Asset::LoadGltf (tinygltf) requested: assets/DamagedHelmet.glb
+LoadGltf: file size = 3773916 bytes
+LoadGltf: header bytes: 67 6c 54 46 ('glTF')
+Loaded glTF: assets/DamagedHelmet.glb | scenes=1 nodes=1 meshes=1 images=5
+Imported node[0] mesh[0] prim[0] verts=14556 idx=46356
+Loaded: assets/DamagedHelmet.glb
+DxrRenderer: MaxPayloadSizeInBytes=128
+AutoLoad: imported assets/DamagedHelmet.glb
+AddDefaultPlane: added plane (10x10) with material 1
+Entering main loop
+DxrRenderer: MaxPayloadSizeInBytes=128
+Switched to DXR Mode (TAB)
+DxrRenderer: MaxPayloadSizeInBytes=128
+DxrRenderer: MaxPayloadSizeInBytes=128
+DxrRenderer: MaxPayloadSizeInBytes=128
+DxrRenderer: MaxPayloadSizeInBytes=128
+DxrRenderer: MaxPayloadSizeInBytes=128
