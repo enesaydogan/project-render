@@ -620,15 +620,26 @@ void RayGen()
 
     if (accumFrame == 0) {
         g_accumulation[launchIndex.xy] = float4(finalColor, 1.0);
-        // DLSS expects linear input. Removed ToneMap/SRGB.
-        g_output[launchIndex.xy] = float4(finalColor, 1.0);
+        
+        // If DLSS is NOT enabled, we must ToneMap/SRGB here for correct display.
+        // If DLSS IS enabled, we output Linear.
+        if (dlssEnabled < 0.5) {
+            g_output[launchIndex.xy] = float4(LinearToSRGB(ToneMap(finalColor)), 1.0);
+        } else {
+            g_output[launchIndex.xy] = float4(finalColor, 1.0);
+        }
     } else {
         float4 prev_accum = g_accumulation[launchIndex.xy];
         float3 total_accum_color = prev_accum.rgb + finalColor;
         float total_samples = prev_accum.a + 1.0;
         
         g_accumulation[launchIndex.xy] = float4(total_accum_color, total_samples);
-        g_output[launchIndex.xy] = float4(total_accum_color / total_samples, 1.0);
+        
+        float3 result = total_accum_color / total_samples;
+        if (dlssEnabled < 0.5) {
+            result = LinearToSRGB(ToneMap(result));
+        }
+        g_output[launchIndex.xy] = float4(result, 1.0);
     }
 }
 
