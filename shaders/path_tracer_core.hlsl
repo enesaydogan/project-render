@@ -94,6 +94,10 @@ void RayGen()
     float2 uv = (float2(launchIndex.xy) + 0.5 + jitter) / float2(launchDim.xy);
     float2 ndc = uv * 2.0 - 1.0;
 
+    // Non-jittered pixel center for motion vectors / sky reprojection.
+    float2 uvCenter = (float2(launchIndex.xy) + 0.5) / float2(launchDim.xy);
+    float2 ndcCenter = uvCenter * 2.0 - 1.0;
+
     float f_inv = tan(radians(fov) * 0.5);
     float3 forward = normalize(camForward);
     float3 R = normalize(cross(forward, camUp));
@@ -104,6 +108,16 @@ void RayGen()
     
     float3 rayDir = normalize(x_view * R + y_view * U + forward);
     float3 rayOrigin = camPos;
+
+    // Center ray direction (no jitter).
+    float y_view_center = (-ndcCenter.y) * f_inv;
+    float x_view_center = ndcCenter.x * aspect * f_inv;
+    float3 rayDirCenter = normalize(x_view_center * R + y_view_center * U + forward);
+
+    // DLSS-RR is very sensitive to jitter leaking into depth/MVs.
+    // When RR is active, generate guide buffers from a stable (non-jittered)
+    // primary ray at the pixel center.
+    bool useStableGbuffer = (dlssRayReconstruction > 0.5);
 
     float3 accumulatedColor = float3(0, 0, 0);
     float3 throughput = float3(1, 1, 1);
@@ -117,6 +131,57 @@ void RayGen()
     float primaryViewZ = -1.0;
     float3 primarySpecAlbedo = float3(0, 0, 0);
     float primarySpecHitDist = -1.0;
+
+    if (useStableGbuffer) {
+        RayDesc gRay;
+        gRay.Origin = rayOrigin;
+        gRay.Direction = rayDirCenter;
+        gRay.TMin = 0.001;
+        gRay.TMax = 10000.0;
+
+        RayPayload gPayload;
+        gPayload.color = float3(0,0,0);
+        gPayload.albedo = float3(0,0,0);
+        gPayload.emissive = float3(0,0,0);
+        gPayload.normal = float3(0,0,0);
+        gPayload.position = float3(0,0,0);
+        gPayload.refractionColor = float3(0,0,0);
+        gPayload.ior = 1.0;
+        gPayload.roughness = 1.0;
+        gPayload.metalness = 0.0;
+        gPayload.matIndex = 0;
+        gPayload.t = -1.0;
+
+        TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, gRay, gPayload);
+
+        if (gPayload.t >= 0.0) {
+            primaryHit = true;
+            primaryPos = gPayload.position;
+            primaryNormal = gPayload.normal;
+            primaryAlbedo = gPayload.albedo;
+            primaryRoughness = max(0.001, gPayload.roughness);
+            primaryViewZ = dot(primaryPos - camPos, forward);
+
+            float3 F0 = lerp(float3(0.04, 0.04, 0.04), gPayload.albedo, gPayload.metalness);
+            float NdotV = saturate(dot(gPayload.normal, -rayDirCenter));
+            primarySpecAlbedo = EnvBRDFApprox2(F0, primaryRoughness * primaryRoughness, NdotV);
+
+            if (max(primarySpecAlbedo.r, max(primarySpecAlbedo.g, primarySpecAlbedo.b)) > 0.001) {
+                float3 R_spec = reflect(rayDirCenter, gPayload.normal);
+                RayDesc specHitRay;
+                specHitRay.Origin = primaryPos + gPayload.normal * 0.001;
+                specHitRay.Direction = R_spec;
+                specHitRay.TMin = 0.001;
+                specHitRay.TMax = 1000.0;
+                RayPayload specHitPayload;
+                specHitPayload.t = -1.0;
+                TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, specHitRay, specHitPayload);
+                primarySpecHitDist = (specHitPayload.t > 0) ? specHitPayload.t : 1000.0;
+            } else {
+                primarySpecHitDist = 0.0;
+            }
+        }
+    }
     
     int specularBounces = 0;
     int refractiveBounces = 0;
@@ -145,7 +210,7 @@ void RayGen()
 
         TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
 
-        if (bounce == 0 && payload.t >= 0.0) {
+        if (!useStableGbuffer && bounce == 0 && payload.t >= 0.0) {
             primaryHit = true;
             primaryPos = payload.position;
             primaryNormal = payload.normal;
@@ -598,32 +663,53 @@ void RayGen()
 
     // Write DLSS inputs
     static const float2 kInvalidMvec = float2(-1e6, -1e6);
+    float2 currScreen = float2(launchIndex.xy) + 0.5;
     if (!primaryHit || primaryViewZ <= 0.0) {
-        g_depth[launchIndex.xy] = 1.0;
-        g_motionVectors[launchIndex.xy] = kInvalidMvec;
+        // Depth semantics depend on the Streamline feature:
+        // - DLSS-SR: HW/NDC depth in [0,1] (far plane = 1)
+        // - DLSS-RR: linear view-space depth (positive forward)
+        g_depth[launchIndex.xy] = (dlssRayReconstruction > 0.5) ? farZ : 1.0;
+
+        // Stabilize sky/background: compute motion from camera rotation (and translation has no effect at infinity).
+        float2 mvecSky = float2(0.0, 0.0);
+        if (prevValid > 0.5) {
+            float3 forwardP = normalize(prevForward);
+            float3 Rp = normalize(cross(forwardP, prevUp));
+            float3 Up = normalize(cross(Rp, forwardP));
+            float f_inv_p = tan(radians(prevFov) * 0.5);
+
+            float vxP = dot(rayDirCenter, Rp);
+            float vyP = dot(rayDirCenter, Up);
+            float vzP = dot(rayDirCenter, forwardP);
+            if (vzP > 0.001) {
+                float ndcXP = vxP / (vzP * prevAspect * f_inv_p);
+                float ndcYP = -vyP / (vzP * f_inv_p);
+                float2 prevScreen = (float2(ndcXP, ndcYP) * 0.5 + 0.5) * float2(launchDim.xy);
+                mvecSky = prevScreen - currScreen;
+            }
+        }
+        g_motionVectors[launchIndex.xy] = mvecSky;
         g_albedoOut[launchIndex.xy] = float4(0.0, 0.0, 0.0, 1.0);
         g_normalRoughnessOut[launchIndex.xy] = float4(0.0, 1.0, 0.0, 1.0);
         g_specularAlbedo[launchIndex.xy] = float4(0.0, 0.0, 0.0, 1.0);
         g_specHitDistance[launchIndex.xy] = 0.0;
-        g_specularMotionVectors[launchIndex.xy] = kInvalidMvec;
+        g_specularMotionVectors[launchIndex.xy] = mvecSky;
     } else {
-        float nearZc = nearZ;
-        float farZc = farZ;
-        float A = farZc / (farZc - nearZc);
-        float B = (-nearZc * farZc) / (farZc - nearZc);
-        float ndcZ = A + (B / primaryViewZ);
-        g_depth[launchIndex.xy] = saturate(ndcZ);
+        if (dlssRayReconstruction > 0.5) {
+            // Linear view-space depth (positive forward)
+            g_depth[launchIndex.xy] = primaryViewZ;
+        } else {
+            // HW/NDC depth in [0,1] compatible with cameraViewToClip.
+            float nearZc = nearZ;
+            float farZc = farZ;
+            float A = farZc / (farZc - nearZc);
+            float B = (-nearZc * farZc) / (farZc - nearZc);
+            float ndcZ = A + (B / primaryViewZ);
+            g_depth[launchIndex.xy] = saturate(ndcZ);
+        }
 
-        // Current NDC XY (no jitter)
-        float f_inv_c = tan(radians(fov) * 0.5);
-        float3 rel = primaryPos - camPos;
-        float viewX = dot(rel, R);
-        float viewY = dot(rel, U);
-        float viewZ = dot(rel, forward);
-        float ndcX = viewX / (viewZ * aspect * f_inv_c);
-        float ndcY = -viewY / (viewZ * f_inv_c);
-        float2 currScreen = (float2(ndcX, ndcY) * 0.5 + 0.5) * float2(launchDim.xy);
-
+        // Motion vectors: avoid using jittered hit position (primaryPos) since
+        // that bakes jitter into mvec and causes visible shaking with DLSS.
         float2 mvec = kInvalidMvec;
         float2 specMvec = kInvalidMvec;
 
@@ -632,35 +718,25 @@ void RayGen()
             float3 Rp = normalize(cross(forwardP, prevUp));
             float3 Up = normalize(cross(Rp, forwardP));
             float f_inv_p = tan(radians(prevFov) * 0.5);
-            
-            // Standard Motion Vector (Surface)
-            float3 relP = primaryPos - prevPos;
+
+            // Reconstruct a stable world point from pixel center + depth (no jitter).
+            float viewZc = primaryViewZ;
+            float3 P_world = camPos + R * (x_view_center * viewZc) + U * (y_view_center * viewZc) + forward * viewZc;
+
+            float3 relP = P_world - prevPos;
             float vxP = dot(relP, Rp);
             float vyP = dot(relP, Up);
             float vzP = dot(relP, forwardP);
-            float ndcXP = vxP / (vzP * prevAspect * f_inv_p);
-            float ndcYP = -vyP / (vzP * f_inv_p);
-            float2 prevScreen = (float2(ndcXP, ndcYP) * 0.5 + 0.5) * float2(launchDim.xy);
-            mvec = prevScreen - currScreen;
+            if (vzP > 0.001) {
+                float ndcXP = vxP / (vzP * prevAspect * f_inv_p);
+                float ndcYP = -vyP / (vzP * f_inv_p);
+                float2 prevScreen = (float2(ndcXP, ndcYP) * 0.5 + 0.5) * float2(launchDim.xy);
+                mvec = prevScreen - currScreen;
+            }
 
-            // Specular Motion Vector (Virtual Reflection Point)
+            // Specular MV: approximate with surface MV for stability.
             if (any(primarySpecAlbedo > 0.0)) {
-               float3 R_spec = reflect(rayDir, normalize(primaryNormal));
-               // Virtual position = Reflection Origin + Reflection Dir * HitDist
-               // This approximates the point in space being reflected.
-               float3 P_virt = primaryPos + R_spec * primarySpecHitDist;
-               
-               float3 relP_virt = P_virt - prevPos;
-               float vxP_virt = dot(relP_virt, Rp);
-               float vyP_virt = dot(relP_virt, Up);
-               float vzP_virt = dot(relP_virt, forwardP);
-               
-               if (vzP_virt > 0.001) {
-                  float ndcXP_virt = vxP_virt / (vzP_virt * prevAspect * f_inv_p);
-                  float ndcYP_virt = -vyP_virt / (vzP_virt * f_inv_p);
-                  float2 prevScreenVirt = (float2(ndcXP_virt, ndcYP_virt) * 0.5 + 0.5) * float2(launchDim.xy);
-                  specMvec = prevScreenVirt - currScreen;
-               }
+                specMvec = mvec;
             }
         }
         g_motionVectors[launchIndex.xy] = mvec;

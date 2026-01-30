@@ -169,6 +169,7 @@ static AccelerationStructureBuffers s_tlas;
 
 static ComPtr<ID3D12Resource> s_lightBuffer;
 static UINT s_lightCount = 0;
+static std::vector<GpuLight> s_lastLightsCpu;
 static ComPtr<ID3D12Resource> s_reservoirBuffers[2];
 static ComPtr<ID3D12Resource> s_gi_reservoirBuffers[6];
 
@@ -1133,8 +1134,23 @@ void BuildAccelerationStructures(
 
 void UpdateLights(const std::vector<GpuLight> &lights) {
   if (lights.empty()) {
-    s_lightCount = 0;
+    if (s_lightCount != 0) {
+      s_lightCount = 0;
+      s_lastLightsCpu.clear();
+      ResetAccumulation();
+    }
     return;
+  }
+
+  // Avoid resetting accumulation / Streamline history when lights didn't change.
+  if (lights.size() == s_lastLightsCpu.size()) {
+    const size_t byteSize = lights.size() * sizeof(GpuLight);
+    if (byteSize > 0 &&
+        memcmp(lights.data(), s_lastLightsCpu.data(), byteSize) == 0) {
+      // Keep s_lightCount accurate (and allow the caller to still call UpdateLights every frame).
+      s_lightCount = (UINT)lights.size();
+      return;
+    }
   }
 
   s_lightCount = (UINT)lights.size();
@@ -1166,6 +1182,8 @@ void UpdateLights(const std::vector<GpuLight> &lights) {
   ThrowIfFailed(s_lightBuffer->Map(0, nullptr, &pData));
   memcpy(pData, lights.data(), bufferSize);
   s_lightBuffer->Unmap(0, nullptr);
+
+  s_lastLightsCpu = lights;
 
   ResetAccumulation();
 }
@@ -1303,31 +1321,15 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
       pfData[17] = (float)s_jitterFrameIndex;
       pfData[18] = (float)s_lightCount; // lightCount
 
-  // Index 23: accumulationCount.
-  // DLSS-RR is a temporal denoiser; don't also accumulate history.
-  pfData[23] = rrActive ? 0.0f : (float)s_accumulation.GetFrameCount();
+        // Index 23: accumulationCount.
+        // DLSS-RR is a temporal denoiser; don't also accumulate history.
+        pfData[23] = rrActive ? 0.0f : (float)s_accumulation.GetFrameCount();
 
-  // Streamline flags used by shaders/raytracing/common.hlsli.
-  // Index 43: dlssEnabled
-  // Index 47: dlssRayReconstruction
-  pfData[43] = dlssActive ? 1.0f : 0.0f;
-  pfData[47] = rrActive ? 1.0f : 0.0f;
-	  
-	  
-	  // If DLSS-RR is on, force 0 (effectively disabling accumulation) so we
-      // feed raw frames.
-      bool useRawForDlss = s_streamline && s_streamline->IsEnabled() &&
-                           (s_streamline->GetMode() ==
-                            StreamlineManager::Mode::DLSS_RayReconstruction);
-
-      pfData[23] = useRawForDlss ? 0.0f : (float)s_accumulation.GetFrameCount();
-
-      // Index 43: dlssEnabled (mapped from _padPrev0).
-      // Used by shader to decide whether to ToneMap (if disabled) or output
-      // Linear (if enabled).
-      bool anyDlss = s_streamline && s_streamline->IsEnabled() &&
-                     (s_streamline->GetMode() != StreamlineManager::Mode::Off);
-      pfData[43] = anyDlss ? 1.0f : 0.0f;
+        // Streamline flags used by shaders/raytracing/common.hlsli.
+        // Index 43: dlssEnabled
+        // Index 47: dlssRayReconstruction
+        pfData[43] = dlssActive ? 1.0f : 0.0f;
+        pfData[47] = rrActive ? 1.0f : 0.0f;
 
       cameraCB->Unmap(0, nullptr);
     }

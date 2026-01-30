@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <sl_security.h>
+#include <sl_helpers.h>
 
 using Microsoft::WRL::ComPtr;
 
@@ -645,7 +646,10 @@ bool StreamlineManager::Evaluate(
   sl::Resource outRes(sl::ResourceType::eTex2d, colorOut,
                       (uint32_t)colorOutState);
 
-  sl::ResourceTag depthTag{&depthRes, sl::kBufferTypeDepth,
+  const sl::BufferType depthType =
+      (m_mode == Mode::DLSS_RayReconstruction) ? sl::kBufferTypeLinearDepth
+                                              : sl::kBufferTypeDepth;
+  sl::ResourceTag depthTag{&depthRes, depthType,
                            sl::ResourceLifecycle::eValidUntilEvaluate,
                            &renderExtent};
   sl::ResourceTag mvecTag{&mvecRes, sl::kBufferTypeMotionVectors,
@@ -712,7 +716,8 @@ bool StreamlineManager::Evaluate(
       inputs.push_back(&specHitDistTag);
     }
 
-    if (specularMotionVectors) {
+    // Provide either specular motion vectors OR specular hit distance, not both.
+    if (specularMotionVectors && !specularHitDistance) {
       specMvecRes =
           sl::Resource(sl::ResourceType::eTex2d, specularMotionVectors,
                        (uint32_t)specularMotionVectorsState);
@@ -731,8 +736,8 @@ bool StreamlineManager::Evaluate(
                             (uint32_t)inputs.size(),
                             reinterpret_cast<sl::CommandBuffer *>(cmdList));
   if (res != sl::Result::eOk) {
-    fprintf(stderr, "StreamlineManager: slEvaluateFeature failed (%d)\n",
-            (int)res);
+      fprintf(stderr, "StreamlineManager: slEvaluateFeature failed (%d=%s)\n",
+        (int)res, sl::getResultAsStr(res));
     return false;
   }
 
