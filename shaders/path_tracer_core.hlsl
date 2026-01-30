@@ -669,7 +669,7 @@ void RayGen()
         float3 result = total_accum_color / total_samples;
         
         if (dlssEnabled > 0.5) {
-            // Output linear for DLSS evaluation
+            // Output linear for DLSS evaluation problem burada
             g_output[launchIndex.xy] = float4(result, 1.0);
         } else {
             // Output display-ready for standard accumulation
