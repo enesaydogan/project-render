@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <windows.h>
 
 #include <d3d12.h>
@@ -75,6 +76,11 @@ public:
 
   void SetEnabled(bool enabled);
   bool IsEnabled() const { return m_enabled; }
+
+  // Debug/inspection helpers (used by UI).
+  void SetMotionVectorsJittered(bool jittered);
+  bool GetMotionVectorsJittered() const;
+  std::pair<float, float> GetLastMvecScale() const;
 
   // Returns optimal/required internal render resolution for the selected mode.
   // If Streamline isn't ready, returns output size.
@@ -171,6 +177,11 @@ private:
 
   sl::ViewportHandle m_viewport{123};
   uint32_t m_frameCounter = 0;
+
+  // Debug state
+  bool m_motionVectorsJittered = false;
+  float m_lastMvecScaleX = 1.0f;
+  float m_lastMvecScaleY = 1.0f;
 
   std::wstring m_pluginDir;
   std::wstring m_logsDir;

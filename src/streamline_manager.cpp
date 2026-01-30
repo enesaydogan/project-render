@@ -13,9 +13,9 @@
 using Microsoft::WRL::ComPtr;
 
 namespace {
-static void SLLogCallback(sl::LogType type, const char* msg) {
+static void SLLogCallback(sl::LogType type, const char *msg) {
   // Keep it simple: mirror to stderr.
-  const char* prefix = "SL";
+  const char *prefix = "SL";
   switch (type) {
   case sl::LogType::eInfo:
     prefix = "SL-INFO";
@@ -43,7 +43,7 @@ static std::wstring GetExecutableDir() {
 }
 
 static sl::float4x4 MakePerspectiveViewToClip(float fovDegrees, float aspect,
-                                             float nearZ, float farZ) {
+                                              float nearZ, float farZ) {
   // Row-major matrix, matching the projection math used in your shaders.
   //
   // In simple.hlsl you effectively do:
@@ -63,9 +63,11 @@ static sl::float4x4 MakePerspectiveViewToClip(float fovDegrees, float aspect,
   return m;
 }
 
-static sl::float3 ToSl3(const float v[3]) { return sl::float3(v[0], v[1], v[2]); }
+static sl::float3 ToSl3(const float v[3]) {
+  return sl::float3(v[0], v[1], v[2]);
+}
 
-static sl::float4x4 MakeCameraViewToWorld(const CameraCB& cam) {
+static sl::float4x4 MakeCameraViewToWorld(const CameraCB &cam) {
   // Build an orthonormal basis like in the shaders.
   sl::float3 fwd = ToSl3(cam.forward);
   sl::float3 up = ToSl3(cam.up);
@@ -84,14 +86,14 @@ static sl::float4x4 MakeCameraViewToWorld(const CameraCB& cam) {
   return m;
 }
 
-static sl::float4x4 MakeWorldToCameraView(const CameraCB& cam) {
+static sl::float4x4 MakeWorldToCameraView(const CameraCB &cam) {
   sl::float4x4 camViewToWorld = MakeCameraViewToWorld(cam);
   sl::float4x4 worldToCamera{};
   sl::matrixOrthoNormalInvert(worldToCamera, camViewToWorld);
   return worldToCamera;
 }
 
-static void FillExtent(sl::Extent& e, uint32_t w, uint32_t h) {
+static void FillExtent(sl::Extent &e, uint32_t w, uint32_t h) {
   e.left = 0;
   e.top = 0;
   e.width = w;
@@ -109,9 +111,9 @@ static float Halton(uint32_t index, uint32_t base) {
   return r;
 }
 
-static uint32_t ParseUint32(const std::string& s) {
+static uint32_t ParseUint32(const std::string &s) {
   // Accept decimal or 0x-prefixed hex.
-  char* end = nullptr;
+  char *end = nullptr;
   unsigned long v = std::strtoul(s.c_str(), &end, 0);
   if (!end || end == s.c_str())
     return 0;
@@ -120,10 +122,11 @@ static uint32_t ParseUint32(const std::string& s) {
   return (uint32_t)v;
 }
 
-static uint32_t ReadApplicationIdFromFile(const std::wstring& exeDir) {
+static uint32_t ReadApplicationIdFromFile(const std::wstring &exeDir) {
   // Simple convention: drop a text file next to the exe with the NGX app id.
   // Example content: 1234567
-  const std::filesystem::path p = std::filesystem::path(exeDir) / L"sl_appid.txt";
+  const std::filesystem::path p =
+      std::filesystem::path(exeDir) / L"sl_appid.txt";
   std::ifstream f(p, std::ios::in);
   if (!f.is_open())
     return 0;
@@ -136,7 +139,8 @@ static uint32_t ReadApplicationIdFromFile(const std::wstring& exeDir) {
 static uint32_t ReadApplicationIdFromEnv() {
   // Prefer the generic Streamline name, but allow a project-specific one too.
   wchar_t buf[128] = {};
-  DWORD n = GetEnvironmentVariableW(L"SL_APPLICATION_ID", buf, (DWORD)_countof(buf));
+  DWORD n =
+      GetEnvironmentVariableW(L"SL_APPLICATION_ID", buf, (DWORD)_countof(buf));
   if (n > 0 && n < _countof(buf)) {
     std::wstring ws(buf);
     std::string s(ws.begin(), ws.end());
@@ -152,7 +156,7 @@ static uint32_t ReadApplicationIdFromEnv() {
   return 0;
 }
 
-static bool ReadBoolEnv(const wchar_t* name, bool defaultValue) {
+static bool ReadBoolEnv(const wchar_t *name, bool defaultValue) {
   wchar_t buf[16] = {};
   DWORD n = GetEnvironmentVariableW(name, buf, (DWORD)_countof(buf));
   if (n == 0 || n >= _countof(buf))
@@ -220,8 +224,9 @@ bool StreamlineManager::InitializeEarly() {
   }
 
   if (!LoadInterposer()) {
-    fprintf(stderr,
-            "StreamlineManager: sl.interposer.dll not available; DLSS disabled\n");
+    fprintf(
+        stderr,
+        "StreamlineManager: sl.interposer.dll not available; DLSS disabled\n");
     return false;
   }
 
@@ -239,7 +244,7 @@ bool StreamlineManager::InitializeEarly() {
     std::filesystem::create_directories(m_logsDir);
   }
 
-  const wchar_t* pluginPaths[] = {m_pluginDir.c_str()};
+  const wchar_t *pluginPaths[] = {m_pluginDir.c_str()};
 
   sl::Preferences pref{};
   pref.showConsole = false;
@@ -280,7 +285,7 @@ bool StreamlineManager::InitializeEarly() {
   return true;
 }
 
-bool StreamlineManager::OnD3D12DeviceCreated(ID3D12Device* device) {
+bool StreamlineManager::OnD3D12DeviceCreated(ID3D12Device *device) {
   if (!m_initialized)
     return false;
   if (!device)
@@ -372,8 +377,8 @@ StreamlineManager::GetRecommendedRenderSize(uint32_t outputWidth,
                                             uint32_t outputHeight) const {
   RecommendedRenderSize out{outputWidth, outputHeight};
   if (!m_initialized || !m_deviceSet || !m_cachedOptimalValid ||
-      m_cachedOptimalOutW != outputWidth || m_cachedOptimalOutH != outputHeight ||
-      m_cachedOptimalMode != m_mode ||
+      m_cachedOptimalOutW != outputWidth ||
+      m_cachedOptimalOutH != outputHeight || m_cachedOptimalMode != m_mode ||
       m_cachedOptimalQuality != m_quality) {
     // recompute
     if (!m_initialized || !m_deviceSet) {
@@ -448,22 +453,20 @@ StreamlineManager::GetRecommendedRenderSize(uint32_t outputWidth,
 }
 
 bool StreamlineManager::Evaluate(
-    ID3D12GraphicsCommandList* cmdList, ID3D12Resource* colorIn,
-    D3D12_RESOURCE_STATES colorInState, ID3D12Resource* colorOut,
+    ID3D12GraphicsCommandList *cmdList, ID3D12Resource *colorIn,
+    D3D12_RESOURCE_STATES colorInState, ID3D12Resource *colorOut,
     D3D12_RESOURCE_STATES colorOutState, uint32_t renderWidth,
     uint32_t renderHeight, uint32_t outputWidth, uint32_t outputHeight,
-    ID3D12Resource* depth, D3D12_RESOURCE_STATES depthState,
-    ID3D12Resource* mvec, D3D12_RESOURCE_STATES mvecState,
-    ID3D12Resource* normalRoughness,
-    D3D12_RESOURCE_STATES normalRoughnessState, ID3D12Resource* albedo,
-    D3D12_RESOURCE_STATES albedoState,
-    ID3D12Resource* specularAlbedo,
-    D3D12_RESOURCE_STATES specularAlbedoState,
-    ID3D12Resource* specularHitDistance,
+    ID3D12Resource *depth, D3D12_RESOURCE_STATES depthState,
+    ID3D12Resource *mvec, D3D12_RESOURCE_STATES mvecState,
+    ID3D12Resource *normalRoughness, D3D12_RESOURCE_STATES normalRoughnessState,
+    ID3D12Resource *albedo, D3D12_RESOURCE_STATES albedoState,
+    ID3D12Resource *specularAlbedo, D3D12_RESOURCE_STATES specularAlbedoState,
+    ID3D12Resource *specularHitDistance,
     D3D12_RESOURCE_STATES specularHitDistanceState,
-    ID3D12Resource* specularMotionVectors,
-    D3D12_RESOURCE_STATES specularMotionVectorsState,
-    bool resetHistory, float jitterX, float jitterY) {
+    ID3D12Resource *specularMotionVectors,
+    D3D12_RESOURCE_STATES specularMotionVectorsState, bool resetHistory,
+    float jitterX, float jitterY) {
   if (!m_enabled || m_mode == Mode::Off)
     return false;
   if (!m_initialized || !m_deviceSet)
@@ -474,7 +477,7 @@ bool StreamlineManager::Evaluate(
     return false;
 
   // Frame token
-  sl::FrameToken* frameToken = nullptr;
+  sl::FrameToken *frameToken = nullptr;
   uint32_t frameIndex = m_frameCounter++;
   sl::Result res = m_slGetNewFrameToken(frameToken, &frameIndex);
   if (res != sl::Result::eOk || !frameToken) {
@@ -487,7 +490,7 @@ bool StreamlineManager::Evaluate(
   sl::Constants c{};
 
   // Camera matrices must NOT include jitter; provide jitter separately.
-  const CameraCB& cam = g_cameraData;
+  const CameraCB &cam = g_cameraData;
 
   CameraCB prevCam = cam;
   if (cam.prevValid > 0.5f) {
@@ -506,8 +509,8 @@ bool StreamlineManager::Evaluate(
     prevCam.farZ = cam.prevFarZ;
   }
 
-  c.cameraViewToClip = MakePerspectiveViewToClip(cam.fov, cam.aspect, cam.nearZ,
-                                                 cam.farZ);
+  c.cameraViewToClip =
+      MakePerspectiveViewToClip(cam.fov, cam.aspect, cam.nearZ, cam.farZ);
   sl::matrixFullInvert(c.clipToCameraView, c.cameraViewToClip);
 
   // Camera vectors
@@ -546,8 +549,9 @@ bool StreamlineManager::Evaluate(
   c.cameraPinholeOffset = sl::float2(0.0f, 0.0f);
 
   // Motion vectors are in pixel space (see ProgrammingGuideDLSS_RR.md).
-  c.mvecScale =
-      sl::float2(1.0f / (float)renderWidth, 1.0f / (float)renderHeight);
+  c.mvecScale = sl::float2(1.0f, 1.0f);
+  m_lastMvecScaleX = c.mvecScale.x;
+  m_lastMvecScaleY = c.mvecScale.y;
 
   c.cameraNear = cam.nearZ;
   c.cameraFar = cam.farZ;
@@ -559,16 +563,20 @@ bool StreamlineManager::Evaluate(
   c.motionVectors3D = sl::Boolean::eFalse;
   c.motionVectorsDilated = sl::Boolean::eFalse;
   // Shader calculates motion vectors without the jitter offset applied.
-  c.motionVectorsJittered = sl::Boolean::eFalse;
+  // Allow overriding for debugging via SetMotionVectorsJittered.
+  c.motionVectorsJittered =
+      m_motionVectorsJittered ? sl::Boolean::eTrue : sl::Boolean::eFalse;
   c.reset = resetHistory ? sl::Boolean::eTrue : sl::Boolean::eFalse;
   // Streamline 2.10 Constants has no 'renderingGameFrames' field.
 
-  // Provide a reasonable invalid value (we always write motion)
-  c.motionVectorsInvalidValue = 0.0f;
+  // Match OptiX path: use an impossible sentinel for invalid motion vectors.
+  // Shader must write this value for invalid pixels.
+  c.motionVectorsInvalidValue = -1e6f;
 
   res = m_slSetConstants(c, *frameToken, m_viewport);
   if (res != sl::Result::eOk) {
-    fprintf(stderr, "StreamlineManager: slSetConstants failed (%d)\n", (int)res);
+    fprintf(stderr, "StreamlineManager: slSetConstants failed (%d)\n",
+            (int)res);
     return false;
   }
 
@@ -631,7 +639,8 @@ bool StreamlineManager::Evaluate(
   sl::Resource depthRes(sl::ResourceType::eTex2d, depth, (uint32_t)depthState);
   sl::Resource mvecRes(sl::ResourceType::eTex2d, mvec, (uint32_t)mvecState);
   sl::Resource inRes(sl::ResourceType::eTex2d, colorIn, (uint32_t)colorInState);
-  sl::Resource outRes(sl::ResourceType::eTex2d, colorOut, (uint32_t)colorOutState);
+  sl::Resource outRes(sl::ResourceType::eTex2d, colorOut,
+                      (uint32_t)colorOutState);
 
   sl::ResourceTag depthTag{&depthRes, sl::kBufferTypeDepth,
                            sl::ResourceLifecycle::eValidUntilEvaluate,
@@ -658,7 +667,7 @@ bool StreamlineManager::Evaluate(
   sl::Resource specMvecRes{};
   sl::ResourceTag specMvecTag{};
 
-  std::vector<const sl::BaseStructure*> inputs;
+  std::vector<const sl::BaseStructure *> inputs;
   inputs.reserve(16);
   inputs.push_back(&m_viewport);
   inputs.push_back(&depthTag);
@@ -672,8 +681,8 @@ bool StreamlineManager::Evaluate(
     nrTag = sl::ResourceTag{&nrRes, sl::kBufferTypeNormalRoughness,
                             sl::ResourceLifecycle::eValidUntilEvaluate,
                             &renderExtent};
-    albedoRes = sl::Resource(sl::ResourceType::eTex2d, albedo,
-                             (uint32_t)albedoState);
+    albedoRes =
+        sl::Resource(sl::ResourceType::eTex2d, albedo, (uint32_t)albedoState);
     albedoTag = sl::ResourceTag{&albedoRes, sl::kBufferTypeAlbedo,
                                 sl::ResourceLifecycle::eValidUntilEvaluate,
                                 &renderExtent};
@@ -684,40 +693,40 @@ bool StreamlineManager::Evaluate(
     if (specularAlbedo) {
       specAlbedoRes = sl::Resource(sl::ResourceType::eTex2d, specularAlbedo,
                                    (uint32_t)specularAlbedoState);
-      specAlbedoTag = sl::ResourceTag{&specAlbedoRes,
-                                      sl::kBufferTypeSpecularAlbedo,
-                                      sl::ResourceLifecycle::eValidUntilEvaluate,
-                                      &renderExtent};
+      specAlbedoTag = sl::ResourceTag{
+          &specAlbedoRes, sl::kBufferTypeSpecularAlbedo,
+          sl::ResourceLifecycle::eValidUntilEvaluate, &renderExtent};
       inputs.push_back(&specAlbedoTag);
     }
 
     if (specularHitDistance) {
-      specHitDistRes = sl::Resource(sl::ResourceType::eTex2d, specularHitDistance,
-                                    (uint32_t)specularHitDistanceState);
-      specHitDistTag = sl::ResourceTag{&specHitDistRes,
-                                       sl::kBufferTypeSpecularHitDistance,
-                                       sl::ResourceLifecycle::eValidUntilEvaluate,
-                                       &renderExtent};
+      specHitDistRes =
+          sl::Resource(sl::ResourceType::eTex2d, specularHitDistance,
+                       (uint32_t)specularHitDistanceState);
+      specHitDistTag = sl::ResourceTag{
+          &specHitDistRes, sl::kBufferTypeSpecularHitDistance,
+          sl::ResourceLifecycle::eValidUntilEvaluate, &renderExtent};
       inputs.push_back(&specHitDistTag);
     }
 
     if (specularMotionVectors) {
-      specMvecRes = sl::Resource(sl::ResourceType::eTex2d, specularMotionVectors,
-                                 (uint32_t)specularMotionVectorsState);
-      specMvecTag = sl::ResourceTag{&specMvecRes,
-                                    sl::kBufferTypeSpecularMotionVectors,
-                                    sl::ResourceLifecycle::eValidUntilEvaluate,
-                                    &renderExtent};
+      specMvecRes =
+          sl::Resource(sl::ResourceType::eTex2d, specularMotionVectors,
+                       (uint32_t)specularMotionVectorsState);
+      specMvecTag = sl::ResourceTag{
+          &specMvecRes, sl::kBufferTypeSpecularMotionVectors,
+          sl::ResourceLifecycle::eValidUntilEvaluate, &renderExtent};
       inputs.push_back(&specMvecTag);
     }
   }
 
-  sl::Feature feature = (m_mode == Mode::DLSS_SuperResolution) ? sl::kFeatureDLSS
-                                                              : sl::kFeatureDLSS_RR;
+  sl::Feature feature = (m_mode == Mode::DLSS_SuperResolution)
+                            ? sl::kFeatureDLSS
+                            : sl::kFeatureDLSS_RR;
 
   res = m_slEvaluateFeature(feature, *frameToken, inputs.data(),
                             (uint32_t)inputs.size(),
-                            reinterpret_cast<sl::CommandBuffer*>(cmdList));
+                            reinterpret_cast<sl::CommandBuffer *>(cmdList));
   if (res != sl::Result::eOk) {
     fprintf(stderr, "StreamlineManager: slEvaluateFeature failed (%d)\n",
             (int)res);
@@ -727,17 +736,29 @@ bool StreamlineManager::Evaluate(
   return true;
 }
 
+void StreamlineManager::SetMotionVectorsJittered(bool jittered) {
+  m_motionVectorsJittered = jittered;
+}
+
+bool StreamlineManager::GetMotionVectorsJittered() const {
+  return m_motionVectorsJittered;
+}
+
+std::pair<float, float> StreamlineManager::GetLastMvecScale() const {
+  return {m_lastMvecScaleX, m_lastMvecScaleY};
+}
+
 HRESULT StreamlineManager::CreateDXGIFactory2(UINT flags, REFIID riid,
-                                              void** ppFactory) const {
+                                              void **ppFactory) const {
   if (!m_CreateDXGIFactory2)
     return E_NOINTERFACE;
   return m_CreateDXGIFactory2(flags, riid, ppFactory);
 }
 
-HRESULT StreamlineManager::D3D12CreateDevice(IUnknown* adapter,
-                                            D3D_FEATURE_LEVEL minFeatureLevel,
-                                            REFIID riid,
-                                            void** ppDevice) const {
+HRESULT StreamlineManager::D3D12CreateDevice(IUnknown *adapter,
+                                             D3D_FEATURE_LEVEL minFeatureLevel,
+                                             REFIID riid,
+                                             void **ppDevice) const {
   if (!m_D3D12CreateDevice)
     return E_NOINTERFACE;
   return m_D3D12CreateDevice(adapter, minFeatureLevel, riid, ppDevice);
@@ -753,8 +774,9 @@ bool StreamlineManager::LoadInterposer() {
   // If verification fails, we still attempt to load in development.
   bool sigOk = sl::security::verifyEmbeddedSignature(dllPath.c_str());
   if (!sigOk) {
-    fprintf(stderr,
-            "StreamlineManager: sl.interposer.dll signature not verified (dev?)\n");
+    fprintf(
+        stderr,
+        "StreamlineManager: sl.interposer.dll signature not verified (dev?)\n");
   }
 
   m_interposerModule = LoadLibraryW(dllPath.c_str());
@@ -775,26 +797,26 @@ bool StreamlineManager::LoadCoreFunctions() {
   if (!m_interposerModule)
     return false;
 
-  m_slInit = reinterpret_cast<PFun_slInit*>(
+  m_slInit = reinterpret_cast<PFun_slInit *>(
       GetProcAddress(m_interposerModule, "slInit"));
-  m_slShutdown = reinterpret_cast<PFun_slShutdown*>(
+  m_slShutdown = reinterpret_cast<PFun_slShutdown *>(
       GetProcAddress(m_interposerModule, "slShutdown"));
-  m_slSetD3DDevice = reinterpret_cast<PFun_slSetD3DDevice*>(
+  m_slSetD3DDevice = reinterpret_cast<PFun_slSetD3DDevice *>(
       GetProcAddress(m_interposerModule, "slSetD3DDevice"));
-    m_slIsFeatureSupported = reinterpret_cast<PFun_slIsFeatureSupported*>(
+  m_slIsFeatureSupported = reinterpret_cast<PFun_slIsFeatureSupported *>(
       GetProcAddress(m_interposerModule, "slIsFeatureSupported"));
-  m_slGetNewFrameToken = reinterpret_cast<PFun_slGetNewFrameToken*>(
+  m_slGetNewFrameToken = reinterpret_cast<PFun_slGetNewFrameToken *>(
       GetProcAddress(m_interposerModule, "slGetNewFrameToken"));
-  m_slSetConstants = reinterpret_cast<PFun_slSetConstants*>(
+  m_slSetConstants = reinterpret_cast<PFun_slSetConstants *>(
       GetProcAddress(m_interposerModule, "slSetConstants"));
-  m_slEvaluateFeature = reinterpret_cast<PFun_slEvaluateFeature*>(
+  m_slEvaluateFeature = reinterpret_cast<PFun_slEvaluateFeature *>(
       GetProcAddress(m_interposerModule, "slEvaluateFeature"));
-  m_slGetFeatureFunction = reinterpret_cast<PFun_slGetFeatureFunction*>(
+  m_slGetFeatureFunction = reinterpret_cast<PFun_slGetFeatureFunction *>(
       GetProcAddress(m_interposerModule, "slGetFeatureFunction"));
 
-    return m_slInit && m_slShutdown && m_slSetD3DDevice && m_slIsFeatureSupported &&
-      m_slGetNewFrameToken && m_slSetConstants && m_slEvaluateFeature &&
-      m_slGetFeatureFunction;
+  return m_slInit && m_slShutdown && m_slSetD3DDevice &&
+         m_slIsFeatureSupported && m_slGetNewFrameToken && m_slSetConstants &&
+         m_slEvaluateFeature && m_slGetFeatureFunction;
 }
 
 bool StreamlineManager::LoadFeatureFunctions() {
@@ -805,22 +827,22 @@ bool StreamlineManager::LoadFeatureFunctions() {
     if (!m_slIsFeatureSupported || !m_hasAdapterLuid)
       return true; // best effort
     sl::AdapterInfo ai{};
-    ai.deviceLUID = reinterpret_cast<uint8_t*>(&m_adapterLuid);
+    ai.deviceLUID = reinterpret_cast<uint8_t *>(&m_adapterLuid);
     ai.deviceLUIDSizeInBytes = sizeof(LUID);
     return m_slIsFeatureSupported(f, ai) == sl::Result::eOk;
   };
 
-  void* fn = nullptr;
-  sl::Result res = m_slGetFeatureFunction(sl::kFeatureDLSS,
-                                         "slDLSSGetOptimalSettings", fn);
+  void *fn = nullptr;
+  sl::Result res =
+      m_slGetFeatureFunction(sl::kFeatureDLSS, "slDLSSGetOptimalSettings", fn);
   if (res == sl::Result::eOk)
     m_slDLSSGetOptimalSettings =
-        reinterpret_cast<PFun_slDLSSGetOptimalSettings*>(fn);
+        reinterpret_cast<PFun_slDLSSGetOptimalSettings *>(fn);
 
   fn = nullptr;
   res = m_slGetFeatureFunction(sl::kFeatureDLSS, "slDLSSSetOptions", fn);
   if (res == sl::Result::eOk)
-    m_slDLSSSetOptions = reinterpret_cast<PFun_slDLSSSetOptions*>(fn);
+    m_slDLSSSetOptions = reinterpret_cast<PFun_slDLSSSetOptions *>(fn);
 
   fn = nullptr;
   if (isSupported(sl::kFeatureDLSS_RR)) {
@@ -828,12 +850,12 @@ bool StreamlineManager::LoadFeatureFunctions() {
                                  "slDLSSDGetOptimalSettings", fn);
     if (res == sl::Result::eOk)
       m_slDLSSDGetOptimalSettings =
-          reinterpret_cast<PFun_slDLSSDGetOptimalSettings*>(fn);
+          reinterpret_cast<PFun_slDLSSDGetOptimalSettings *>(fn);
 
     fn = nullptr;
     res = m_slGetFeatureFunction(sl::kFeatureDLSS_RR, "slDLSSDSetOptions", fn);
     if (res == sl::Result::eOk)
-      m_slDLSSDSetOptions = reinterpret_cast<PFun_slDLSSDSetOptions*>(fn);
+      m_slDLSSDSetOptions = reinterpret_cast<PFun_slDLSSDSetOptions *>(fn);
   } else {
     m_slDLSSDGetOptimalSettings = nullptr;
     m_slDLSSDSetOptions = nullptr;
@@ -842,4 +864,3 @@ bool StreamlineManager::LoadFeatureFunctions() {
   // It's OK for RR functions to be missing on unsupported hardware.
   return m_slDLSSSetOptions != nullptr;
 }
-
