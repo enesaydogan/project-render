@@ -1,11 +1,11 @@
 #include "dxr_renderer.h"
+#include "camera.h"
 #include "d3d12_helpers.h"
 #include "dxc_wrapper.h"
 #include "dxr_accumulation.h"
 #include "dxr_helpers.h"
 #include "ibl_manager.h"
 #include "scene.h"
-#include "camera.h"
 #include "streamline_manager.h"
 #include <cstdio>
 #include <vector>
@@ -24,11 +24,15 @@ extern Microsoft::WRL::ComPtr<ID3D12Device> g_device;
 static ID3D12Device *s_device = nullptr;
 static ID3D12CommandQueue *s_commandQueue = nullptr;
 
-static StreamlineManager* s_streamline = nullptr;
+static StreamlineManager *s_streamline = nullptr;
 static bool s_streamlineResetHistory = true;
-// Configurable DLSS-RR evaluation frequency (frames/Sample-Per-Pixel). Default 10 SPP.
+// Configurable DLSS-RR evaluation frequency (frames/Sample-Per-Pixel). Default
+// 10 SPP.
 static unsigned s_dlssEvalSpp = 10u;
-static UINT s_jitterFrameIndex = 0;
+// Exposed for UI/debug (WinMain). Keep external linkage.
+unsigned int s_jitterFrameIndex = 0;
+float s_lastJitterX = 0.0f;
+float s_lastJitterY = 0.0f;
 
 // Some debug toggles live in main.cpp; declare them here so we can react to UI
 // changes
@@ -78,12 +82,13 @@ static const UINT DXR_HEAP_DEPTH_UAV_OFFSET = 2048 + 1024 + 1024 + 10;
 static const UINT DXR_HEAP_MVEC_UAV_OFFSET = 2048 + 1024 + 1024 + 11;
 static const UINT DXR_HEAP_ALBEDO_UAV_OFFSET = 2048 + 1024 + 1024 + 12;
 static const UINT DXR_HEAP_NORMAL_ROUGHNESS_UAV_OFFSET =
-  2048 + 1024 + 1024 + 13;
+    2048 + 1024 + 1024 + 13;
 static const UINT DXR_HEAP_DLSS_OUT_UAV_OFFSET = 2048 + 1024 + 1024 + 14;
 static const UINT DXR_HEAP_IBL_OFFSET = 2048 + 1024 + 1024 + 15;
 static const UINT DXR_HEAP_SPEC_ALBEDO_OFFSET = 2048 + 1024 + 1024 + 16;
 static const UINT DXR_HEAP_SPEC_HITDIST_OFFSET = 2048 + 1024 + 1024 + 17;
-static const UINT DXR_HEAP_TOTAL_COUNT = 2048 + 1024 + 1024 + 18;
+static const UINT DXR_HEAP_SPEC_MVEC_OFFSET = 2048 + 1024 + 1024 + 18;
+static const UINT DXR_HEAP_TOTAL_COUNT = 2048 + 1024 + 1024 + 19;
 
 // Output texture dimensions used by DXR (kept local to module)
 static UINT s_outputWidth = 1280;
@@ -94,14 +99,14 @@ static UINT s_presentHeight = 720;
 
 // Halton sequence helper for CPU-side jitter
 static float Halton(uint32_t index, uint32_t base) {
-    float f = 1.0f;
-    float r = 0.0f;
-    while (index > 0) {
-        f /= (float)base;
-        r += f * (float)(index % base);
-        index /= base;
-    }
-    return r;
+  float f = 1.0f;
+  float r = 0.0f;
+  while (index > 0) {
+    f /= (float)base;
+    r += f * (float)(index % base);
+    index /= base;
+  }
+  return r;
 }
 
 inline void TransitionResource(ID3D12GraphicsCommandList *cmdList,
@@ -131,6 +136,7 @@ static ComPtr<ID3D12Resource> s_normalRoughnessUAV;
 static ComPtr<ID3D12Resource> s_dlssOutputUAV;
 static ComPtr<ID3D12Resource> s_specularAlbedoUAV;
 static ComPtr<ID3D12Resource> s_specHitDistanceUAV;
+static ComPtr<ID3D12Resource> s_specularMotionVectorsUAV;
 static UINT s_outputUAVDescriptorSize = 0;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_outputUAVGpuHandle = {0};
 static ComPtr<ID3D12DescriptorHeap>
@@ -205,8 +211,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   // Compute internal render size (DLSS wants us to render smaller and upscale).
   UINT renderW = outW;
   UINT renderH = outH;
-  if (s_streamline && s_streamline->IsInitialized() && s_streamline->IsDeviceSet() &&
-      s_streamline->IsEnabled() &&
+  if (s_streamline && s_streamline->IsInitialized() &&
+      s_streamline->IsDeviceSet() && s_streamline->IsEnabled() &&
       s_streamline->GetMode() != StreamlineManager::Mode::Off) {
     auto rec = s_streamline->GetRecommendedRenderSize(outW, outH);
     if (rec.renderWidth > 0 && rec.renderHeight > 0) {
@@ -521,6 +527,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   s_albedoUAV.Reset();
   s_specularAlbedoUAV.Reset();
   s_specHitDistanceUAV.Reset();
+  s_specularMotionVectorsUAV.Reset();
   s_normalRoughnessUAV.Reset();
   s_dlssOutputUAV.Reset();
   ThrowIfFailed(s_device->CreateCommittedResource(
@@ -534,10 +541,9 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   outDesc.Width = outW;
   outDesc.Height = outH;
 
-  auto CreateUavTexture = [&](ComPtr<ID3D12Resource>& out,
-                              const D3D12_RESOURCE_DESC& baseDesc,
-                              DXGI_FORMAT format,
-                              const wchar_t* name) {
+  auto CreateUavTexture = [&](ComPtr<ID3D12Resource> &out,
+                              const D3D12_RESOURCE_DESC &baseDesc,
+                              DXGI_FORMAT format, const wchar_t *name) {
     D3D12_RESOURCE_DESC desc = baseDesc;
     desc.Format = format;
     desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
@@ -558,8 +564,10 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
                    L"RT Specular Albedo");
   CreateUavTexture(s_specHitDistanceUAV, texDesc, DXGI_FORMAT_R32_FLOAT,
                    L"RT Specular HitDistance");
-  CreateUavTexture(s_normalRoughnessUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
-                   L"RT NormalRoughness");
+  CreateUavTexture(s_specularMotionVectorsUAV, texDesc,
+                   DXGI_FORMAT_R16G16_FLOAT, L"RT Specular MotionVectors");
+  CreateUavTexture(s_normalRoughnessUAV, texDesc,
+                   DXGI_FORMAT_R16G16B16A16_FLOAT, L"RT NormalRoughness");
 
   // DLSS output is output-size (same format as swapchain for easy copy)
   CreateUavTexture(s_dlssOutputUAV, outDesc, DXGI_FORMAT_R10G10B10A2_UNORM,
@@ -580,8 +588,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   s_device->CreateUnorderedAccessView(s_outputUAV.Get(), nullptr, &uavDesc,
                                       uavCpu);
 
-    auto CreateUavAt = [&](ID3D12Resource* res, DXGI_FORMAT fmt,
-               UINT heapOffset) {
+  auto CreateUavAt = [&](ID3D12Resource *res, DXGI_FORMAT fmt,
+                         UINT heapOffset) {
     D3D12_UNORDERED_ACCESS_VIEW_DESC d = {};
     d.Format = fmt;
     d.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
@@ -589,25 +597,29 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     d.Texture2D.PlaneSlice = 0;
 
     D3D12_CPU_DESCRIPTOR_HANDLE h =
-      s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+        s_srvHeap->GetCPUDescriptorHandleForHeapStart();
     h.ptr += (SIZE_T)heapOffset * s_device->GetDescriptorHandleIncrementSize(
-                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+                                      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     s_device->CreateUnorderedAccessView(res, nullptr, &d, h);
-    };
+  };
 
-    // u10+
-    CreateUavAt(s_depthUAV.Get(), DXGI_FORMAT_R32_FLOAT, DXR_HEAP_DEPTH_UAV_OFFSET);
-    CreateUavAt(s_mvecUAV.Get(), DXGI_FORMAT_R16G16_FLOAT, DXR_HEAP_MVEC_UAV_OFFSET);
-    CreateUavAt(s_specularAlbedoUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
-          DXR_HEAP_SPEC_ALBEDO_OFFSET);
-    CreateUavAt(s_specHitDistanceUAV.Get(), DXGI_FORMAT_R32_FLOAT,
-          DXR_HEAP_SPEC_HITDIST_OFFSET);
-    CreateUavAt(s_albedoUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
-          DXR_HEAP_ALBEDO_UAV_OFFSET);
-    CreateUavAt(s_normalRoughnessUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
-          DXR_HEAP_NORMAL_ROUGHNESS_UAV_OFFSET);
-    CreateUavAt(s_dlssOutputUAV.Get(), DXGI_FORMAT_R10G10B10A2_UNORM,
-          DXR_HEAP_DLSS_OUT_UAV_OFFSET);
+  // u10+
+  CreateUavAt(s_depthUAV.Get(), DXGI_FORMAT_R32_FLOAT,
+              DXR_HEAP_DEPTH_UAV_OFFSET);
+  CreateUavAt(s_mvecUAV.Get(), DXGI_FORMAT_R16G16_FLOAT,
+              DXR_HEAP_MVEC_UAV_OFFSET);
+  CreateUavAt(s_specularAlbedoUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
+              DXR_HEAP_SPEC_ALBEDO_OFFSET);
+  CreateUavAt(s_specHitDistanceUAV.Get(), DXGI_FORMAT_R32_FLOAT,
+              DXR_HEAP_SPEC_HITDIST_OFFSET);
+  CreateUavAt(s_specularMotionVectorsUAV.Get(), DXGI_FORMAT_R16G16_FLOAT,
+              DXR_HEAP_SPEC_MVEC_OFFSET);
+  CreateUavAt(s_albedoUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
+              DXR_HEAP_ALBEDO_UAV_OFFSET);
+  CreateUavAt(s_normalRoughnessUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
+              DXR_HEAP_NORMAL_ROUGHNESS_UAV_OFFSET);
+  CreateUavAt(s_dlssOutputUAV.Get(), DXGI_FORMAT_R10G10B10A2_UNORM,
+              DXR_HEAP_DLSS_OUT_UAV_OFFSET);
 
   // Create Accumulation UAV
   s_accumulation.Resize(s_outputWidth, s_outputHeight);
@@ -652,10 +664,11 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
                                         &resUavDesc, resUavCpu);
   }
 
-  // Create GI Reservoir UAVs (3 per frame for ping-ponging, 2 frames total = 6 textures)
+  // Create GI Reservoir UAVs (3 per frame for ping-ponging, 2 frames total = 6
+  // textures)
   for (int i = 0; i < 6; ++i) {
     D3D12_RESOURCE_DESC resDesc = texDesc;
-    resDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; 
+    resDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
     s_gi_reservoirBuffers[i].Reset();
     ThrowIfFailed(s_device->CreateCommittedResource(
         &heapProps, D3D12_HEAP_FLAG_NONE, &resDesc,
@@ -665,18 +678,30 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     D3D12_CPU_DESCRIPTOR_HANDLE resUavCpu =
         s_srvHeap->GetCPUDescriptorHandleForHeapStart();
     UINT offset = 0;
-    switch(i) {
-        case 0: offset = DXR_HEAP_GI_RESERVOIR_0_OFFSET_A; break;
-        case 1: offset = DXR_HEAP_GI_RESERVOIR_0_OFFSET_B; break;
-        case 2: offset = DXR_HEAP_GI_RESERVOIR_0_OFFSET_C; break;
-        case 3: offset = DXR_HEAP_GI_RESERVOIR_1_OFFSET_A; break;
-        case 4: offset = DXR_HEAP_GI_RESERVOIR_1_OFFSET_B; break;
-        case 5: offset = DXR_HEAP_GI_RESERVOIR_1_OFFSET_C; break;
+    switch (i) {
+    case 0:
+      offset = DXR_HEAP_GI_RESERVOIR_0_OFFSET_A;
+      break;
+    case 1:
+      offset = DXR_HEAP_GI_RESERVOIR_0_OFFSET_B;
+      break;
+    case 2:
+      offset = DXR_HEAP_GI_RESERVOIR_0_OFFSET_C;
+      break;
+    case 3:
+      offset = DXR_HEAP_GI_RESERVOIR_1_OFFSET_A;
+      break;
+    case 4:
+      offset = DXR_HEAP_GI_RESERVOIR_1_OFFSET_B;
+      break;
+    case 5:
+      offset = DXR_HEAP_GI_RESERVOIR_1_OFFSET_C;
+      break;
     }
 
-    resUavCpu.ptr += (SIZE_T)offset *
-                     s_device->GetDescriptorHandleIncrementSize(
-                         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    resUavCpu.ptr +=
+        (SIZE_T)offset * s_device->GetDescriptorHandleIncrementSize(
+                             D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
     D3D12_UNORDERED_ACCESS_VIEW_DESC resUavDesc = {};
     resUavDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
@@ -1023,15 +1048,15 @@ void UpdateLights(const std::vector<GpuLight> &lights) {
 void ResetAccumulation() {
   s_accumulation.Reset();
   // Keep Streamline history reset separate from accumulation decisions.
-  // Accumulation resets happen on real camera/settings changes; per-frame jitter
-  // changes must not trigger this.
+  // Accumulation resets happen on real camera/settings changes; per-frame
+  // jitter changes must not trigger this.
   s_streamlineResetHistory = true;
   if (g_verboseRenderLogs) {
     fprintf(stderr, "DxrRenderer: Accumulation Reset\n");
   }
 }
 
-void SetStreamlineManager(StreamlineManager* streamline) {
+void SetStreamlineManager(StreamlineManager *streamline) {
   s_streamline = streamline;
   s_streamlineResetHistory = true;
 }
@@ -1119,12 +1144,23 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
   ID3D12DescriptorHeap *heaps[] = {s_srvHeap.Get()};
   dxrList->SetDescriptorHeaps(1, heaps);
 
-  // Compute jitter for this frame (DLSS-RR compatible)
-  // Note: DLSS expects jitter in range [-0.5, 0.5] pixel space
+  // Compute jitter for this frame.
+  // Note: DLSS expects jitter in range [-0.5, 0.5] pixel space.
+  // Match OptiX behavior: DLSS-D (Ray Reconstruction) should NOT use jittered
+  // rays; keep jitter at 0 while RR is enabled.
   s_jitterFrameIndex++;
   uint32_t frameIdx = s_jitterFrameIndex;
   float jitterX = Halton(frameIdx, 2) - 0.5f;
   float jitterY = Halton(frameIdx, 3) - 0.5f;
+  if (s_streamline && s_streamline->IsEnabled() &&
+      s_streamline->GetMode() == StreamlineManager::Mode::DLSS_RayReconstruction) {
+    jitterX = 0.0f;
+    jitterY = 0.0f;
+  }
+
+  // Expose the final jitter values for UI/debug overlays.
+  s_lastJitterX = jitterX;
+  s_lastJitterY = jitterY;
 
   // Update frame count in camera CB if present
   if (cameraCB) {
@@ -1136,22 +1172,31 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
       pfData[7] = jitterX;
       // Index 11 = jitterY (_pad2)
       pfData[11] = jitterY;
-      
+
       // Index 17: globalFrameCount (monotonic, for RNG)
       pfData[17] = (float)s_jitterFrameIndex;
       pfData[18] = (float)s_lightCount; // lightCount
 
-      // Index 23: accumulationCount. 
-      // If DLSS-RR is on, force 0 (effectively disabling accumulation) so we feed raw frames.
-      bool useRawForDlss = s_streamline && s_streamline->IsEnabled() && 
-        (s_streamline->GetMode() == StreamlineManager::Mode::DLSS_RayReconstruction);
-      
+// Index 23: accumulationCount.
+      // Keep accumulation enabled even when DLSS-RR is active.
+      // RR is a denoiser but feeding extremely noisy 1spp frames tends to
+      // produce splotchy artifacts in this path tracer.
+      pfData[23] = (float)s_accumulation.GetFrameCount();
+	  
+	  
+	  // If DLSS-RR is on, force 0 (effectively disabling accumulation) so we
+      // feed raw frames.
+      bool useRawForDlss = s_streamline && s_streamline->IsEnabled() &&
+                           (s_streamline->GetMode() ==
+                            StreamlineManager::Mode::DLSS_RayReconstruction);
+
       pfData[23] = useRawForDlss ? 0.0f : (float)s_accumulation.GetFrameCount();
-      
+
       // Index 43: dlssEnabled (mapped from _padPrev0).
-      // Used by shader to decide whether to ToneMap (if disabled) or output Linear (if enabled).
-      bool anyDlss = s_streamline && s_streamline->IsEnabled() && 
-         (s_streamline->GetMode() != StreamlineManager::Mode::Off);
+      // Used by shader to decide whether to ToneMap (if disabled) or output
+      // Linear (if enabled).
+      bool anyDlss = s_streamline && s_streamline->IsEnabled() &&
+                     (s_streamline->GetMode() != StreamlineManager::Mode::Off);
       pfData[43] = anyDlss ? 1.0f : 0.0f;
 
       cameraCB->Unmap(0, nullptr);
@@ -1194,52 +1239,58 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
         9, s_lightBuffer->GetGPUVirtualAddress());
   }
 
-  // SPP cap: if a max SPP is set and we've already reached it, skip ray dispatch
-  // and reuse the last output. This prevents the frame count from increasing past
-  // maxSPP and stops additional GPU work.
-  if (g_cameraData.maxSPP > 0.0f && s_accumulation.GetFrameCount() >= (UINT)g_cameraData.maxSPP) {
-      // Copy the current output texture to the render target and return
-      TransitionResource(dxrList.Get(), s_outputUAV.Get(),
-                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                         D3D12_RESOURCE_STATE_COPY_SOURCE);
-      TransitionResource(dxrList.Get(), renderTarget, D3D12_RESOURCE_STATE_PRESENT,
-                         D3D12_RESOURCE_STATE_COPY_DEST);
+  // SPP cap: if a max SPP is set and we've already reached it, skip ray
+  // dispatch and reuse the last output. This prevents the frame count from
+  // increasing past maxSPP and stops additional GPU work.
+  if (g_cameraData.maxSPP > 0.0f &&
+      s_accumulation.GetFrameCount() >= (UINT)g_cameraData.maxSPP) {
+    // Copy the current output texture to the render target and return
+    TransitionResource(dxrList.Get(), s_outputUAV.Get(),
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                       D3D12_RESOURCE_STATE_COPY_SOURCE);
+    TransitionResource(dxrList.Get(), renderTarget,
+                       D3D12_RESOURCE_STATE_PRESENT,
+                       D3D12_RESOURCE_STATE_COPY_DEST);
 
-      D3D12_RESOURCE_DESC srcDesc = s_outputUAV->GetDesc();
-      D3D12_RESOURCE_DESC dstDesc = renderTarget->GetDesc();
-      if (srcDesc.Width != dstDesc.Width || srcDesc.Height != dstDesc.Height) {
-          UINT copyW = (UINT)min(srcDesc.Width, dstDesc.Width);
-          UINT copyH = (UINT)min(srcDesc.Height, dstDesc.Height);
-          D3D12_TEXTURE_COPY_LOCATION dstLoc = {};
-          dstLoc.pResource = renderTarget;
-          dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-          dstLoc.SubresourceIndex = 0;
+    D3D12_RESOURCE_DESC srcDesc = s_outputUAV->GetDesc();
+    D3D12_RESOURCE_DESC dstDesc = renderTarget->GetDesc();
+    if (srcDesc.Width != dstDesc.Width || srcDesc.Height != dstDesc.Height) {
+      UINT copyW = (UINT)min(srcDesc.Width, dstDesc.Width);
+      UINT copyH = (UINT)min(srcDesc.Height, dstDesc.Height);
+      D3D12_TEXTURE_COPY_LOCATION dstLoc = {};
+      dstLoc.pResource = renderTarget;
+      dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+      dstLoc.SubresourceIndex = 0;
 
-          D3D12_TEXTURE_COPY_LOCATION srcLoc = {};
-          srcLoc.pResource = s_outputUAV.Get();
-          srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-          srcLoc.SubresourceIndex = 0;
+      D3D12_TEXTURE_COPY_LOCATION srcLoc = {};
+      srcLoc.pResource = s_outputUAV.Get();
+      srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+      srcLoc.SubresourceIndex = 0;
 
-          D3D12_BOX srcBox = {};
-          srcBox.left = 0; srcBox.top = 0; srcBox.front = 0;
-          srcBox.right = copyW; srcBox.bottom = copyH; srcBox.back = 1;
+      D3D12_BOX srcBox = {};
+      srcBox.left = 0;
+      srcBox.top = 0;
+      srcBox.front = 0;
+      srcBox.right = copyW;
+      srcBox.bottom = copyH;
+      srcBox.back = 1;
 
-          dxrList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, &srcBox);
-      } else {
-          dxrList->CopyResource(renderTarget, s_outputUAV.Get());
-      }
+      dxrList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, &srcBox);
+    } else {
+      dxrList->CopyResource(renderTarget, s_outputUAV.Get());
+    }
 
-      // Transition back
-      TransitionResource(dxrList.Get(), renderTarget,
-                         D3D12_RESOURCE_STATE_COPY_DEST,
-                         D3D12_RESOURCE_STATE_RENDER_TARGET);
-      TransitionResource(dxrList.Get(), s_outputUAV.Get(),
-                         D3D12_RESOURCE_STATE_COPY_SOURCE,
-                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    // Transition back
+    TransitionResource(dxrList.Get(), renderTarget,
+                       D3D12_RESOURCE_STATE_COPY_DEST,
+                       D3D12_RESOURCE_STATE_RENDER_TARGET);
+    TransitionResource(dxrList.Get(), s_outputUAV.Get(),
+                       D3D12_RESOURCE_STATE_COPY_SOURCE,
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-      // Bind RTV for subsequent ImGui draws
-      commandListBase->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
-      return true;
+    // Bind RTV for subsequent ImGui draws
+    commandListBase->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+    return true;
   }
 
   D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
@@ -1267,14 +1318,14 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
   s_accumulation.IncrementFrame();
 
   // Optional Streamline / DLSS evaluation
-  ID3D12Resource* postColor = s_outputUAV.Get();
+  ID3D12Resource *postColor = s_outputUAV.Get();
   bool usedDlss = false;
   const D3D12_RESOURCE_DESC dstDesc = renderTarget->GetDesc();
   const uint32_t outW = (uint32_t)dstDesc.Width;
   const uint32_t outH = (uint32_t)dstDesc.Height;
 
-  if (s_streamline && s_streamline->IsInitialized() && s_streamline->IsDeviceSet() &&
-      s_streamline->IsEnabled() &&
+  if (s_streamline && s_streamline->IsInitialized() &&
+      s_streamline->IsDeviceSet() && s_streamline->IsEnabled() &&
       s_streamline->GetMode() != StreamlineManager::Mode::Off &&
       s_dlssOutputUAV && s_depthUAV && s_mvecUAV) {
 
@@ -1303,113 +1354,38 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
                          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
     if (s_specHitDistanceUAV) {
-        TransitionResource(dxrList.Get(), s_specHitDistanceUAV.Get(),
-                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+      TransitionResource(dxrList.Get(), s_specHitDistanceUAV.Get(),
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
+    if (s_specularMotionVectorsUAV) {
+      TransitionResource(dxrList.Get(), s_specularMotionVectorsUAV.Get(),
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
 
     const bool resetHistory = s_streamlineResetHistory;
     s_streamlineResetHistory = false;
 
-    // User Request: Eval DLSS-D every N spp. ✅
-    // Evaluate DLSS-RR less frequently so the denoiser receives a higher-quality
-    // frame (we reuse the previous DLSS output on intervening frames).
-    bool allowEval = true;
-    if (s_streamline->GetMode() == StreamlineManager::Mode::DLSS_RayReconstruction) {
-        const unsigned curSpp = s_accumulation.GetFrameCount();
-        const unsigned configSpp = DxrRenderer::GetDlssEvalSpp();
-        // Evaluate on frame 0 and every configSpp frames thereafter
-        if (curSpp != 0 && (curSpp % configSpp) != 0) {
-            allowEval = false;
-        }
-
-        // Force evaluate if camera moved significantly since last DLSS eval to
-        // avoid reproject / alignment jitter when reusing previous DLSS output.
-        static float lastEvalCamPos[3] = { 0.0f, 0.0f, 0.0f };
-        static bool lastEvalCamPosValid = false;
-        if (!lastEvalCamPosValid) {
-            lastEvalCamPos[0] = g_cameraData.pos[0];
-            lastEvalCamPos[1] = g_cameraData.pos[1];
-            lastEvalCamPos[2] = g_cameraData.pos[2];
-            lastEvalCamPosValid = true;
-        }
-        // Consider both translation and rotation (mouse look) as camera motion.
-        static float lastEvalCamForward[3] = { 0.0f, 0.0f, 0.0f };
-        static float lastEvalCamUp[3] = { 0.0f, 0.0f, 0.0f };
-        static bool lastEvalCamOrientValid = false;
-        auto camMoved = [&]() {
-            float dx = g_cameraData.pos[0] - lastEvalCamPos[0];
-            float dy = g_cameraData.pos[1] - lastEvalCamPos[1];
-            float dz = g_cameraData.pos[2] - lastEvalCamPos[2];
-            const float posThresh = 1e-4f; // small translation threshold
-            bool posMoved = (dx*dx + dy*dy + dz*dz) > posThresh * posThresh;
-
-            bool orientMoved = false;
-            if (!lastEvalCamOrientValid) {
-                lastEvalCamForward[0] = g_cameraData.forward[0];
-                lastEvalCamForward[1] = g_cameraData.forward[1];
-                lastEvalCamForward[2] = g_cameraData.forward[2];
-                lastEvalCamUp[0] = g_cameraData.up[0];
-                lastEvalCamUp[1] = g_cameraData.up[1];
-                lastEvalCamUp[2] = g_cameraData.up[2];
-                lastEvalCamOrientValid = true;
-            } else {
-                float dotF = g_cameraData.forward[0] * lastEvalCamForward[0] +
-                             g_cameraData.forward[1] * lastEvalCamForward[1] +
-                             g_cameraData.forward[2] * lastEvalCamForward[2];
-                float dotU = g_cameraData.up[0] * lastEvalCamUp[0] +
-                             g_cameraData.up[1] * lastEvalCamUp[1] +
-                             g_cameraData.up[2] * lastEvalCamUp[2];
-                // Small angular threshold; if forward/up change noticeably, consider as rotation
-                const float orientThresh = 1e-3f; // ~0.03 degrees
-                if (fabsf(1.0f - dotF) > orientThresh || fabsf(1.0f - dotU) > orientThresh) {
-                    orientMoved = true;
-                }
-            }
-
-            return posMoved || orientMoved;
-        }();
-        if (camMoved) {
-            allowEval = true;
-            // update last evaluated cam pos now that we will evaluate
-            lastEvalCamPos[0] = g_cameraData.pos[0];
-            lastEvalCamPos[1] = g_cameraData.pos[1];
-            lastEvalCamPos[2] = g_cameraData.pos[2];
-            // update last evaluated orientation
-            lastEvalCamForward[0] = g_cameraData.forward[0];
-            lastEvalCamForward[1] = g_cameraData.forward[1];
-            lastEvalCamForward[2] = g_cameraData.forward[2];
-            lastEvalCamUp[0] = g_cameraData.up[0];
-            lastEvalCamUp[1] = g_cameraData.up[1];
-            lastEvalCamUp[2] = g_cameraData.up[2];
-        }
-
-        if (!allowEval) {
-           // fprintf(stderr, "DLSS-RR: skipping evaluate at spp=%u (every %u spp)\n", curSpp, configSpp);
-        }
-    }
-
-    if (allowEval && s_streamline->Evaluate(
-            dxrList.Get(),
-            s_outputUAV.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-            s_dlssOutputUAV.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            s_outputWidth, s_outputHeight, outW, outH,
-            s_depthUAV.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-            s_mvecUAV.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-            s_normalRoughnessUAV.Get(),
+    if (s_streamline->Evaluate(
+            dxrList.Get(), s_outputUAV.Get(),
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-            s_albedoUAV.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-            s_specularAlbedoUAV.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-            s_specHitDistanceUAV.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-            nullptr, D3D12_RESOURCE_STATE_COMMON,
-            resetHistory, jitterX, jitterY)) {
+            s_dlssOutputUAV.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            s_outputWidth, s_outputHeight, outW, outH, s_depthUAV.Get(),
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, s_mvecUAV.Get(),
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            s_normalRoughnessUAV.Get(),
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, s_albedoUAV.Get(),
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            s_specularAlbedoUAV.Get(),
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            s_specHitDistanceUAV.Get(),
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            s_specularMotionVectorsUAV.Get(),
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, resetHistory,
+            jitterX, jitterY)) {
       usedDlss = true;
       postColor = s_dlssOutputUAV.Get();
-    } else if (!allowEval && s_streamline->GetMode() == StreamlineManager::Mode::DLSS_RayReconstruction && s_dlssOutputUAV) {
-       // Reuse previous DLSS output
-       postColor = s_dlssOutputUAV.Get();
-       // Important: Ensure we treat it as if DLSS was used (e.g. valid resource)
-       usedDlss = true; 
     }
 
     // Back to UAV for next frame dispatch
@@ -1438,7 +1414,12 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
     if (s_specHitDistanceUAV) {
-       TransitionResource(dxrList.Get(), s_specHitDistanceUAV.Get(),
+      TransitionResource(dxrList.Get(), s_specHitDistanceUAV.Get(),
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+    if (s_specularMotionVectorsUAV) {
+      TransitionResource(dxrList.Get(), s_specularMotionVectorsUAV.Get(),
                          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }

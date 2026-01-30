@@ -595,13 +595,15 @@ void RayGen()
     float3 finalColor = accumulatedColor * intensity;
 
     // Write DLSS inputs
+    static const float2 kInvalidMvec = float2(-1e6, -1e6);
     if (!primaryHit || primaryViewZ <= 0.0) {
         g_depth[launchIndex.xy] = 1.0;
-        g_motionVectors[launchIndex.xy] = float2(0.0, 0.0);
+        g_motionVectors[launchIndex.xy] = kInvalidMvec;
         g_albedoOut[launchIndex.xy] = float4(0.0, 0.0, 0.0, 1.0);
         g_normalRoughnessOut[launchIndex.xy] = float4(0.0, 1.0, 0.0, 1.0);
         g_specularAlbedo[launchIndex.xy] = float4(0.0, 0.0, 0.0, 1.0);
         g_specHitDistance[launchIndex.xy] = 0.0;
+        g_specularMotionVectors[launchIndex.xy] = kInvalidMvec;
     } else {
         float nearZc = nearZ;
         float farZc = farZ;
@@ -620,12 +622,16 @@ void RayGen()
         float ndcY = -viewY / (viewZ * f_inv_c);
         float2 currScreen = (float2(ndcX, ndcY) * 0.5 + 0.5) * float2(launchDim.xy);
 
-        float2 mvec = float2(0.0, 0.0);
+        float2 mvec = kInvalidMvec;
+        float2 specMvec = kInvalidMvec;
+
         if (prevValid > 0.5) {
             float3 forwardP = normalize(prevForward);
             float3 Rp = normalize(cross(forwardP, prevUp));
             float3 Up = normalize(cross(Rp, forwardP));
             float f_inv_p = tan(radians(prevFov) * 0.5);
+            
+            // Standard Motion Vector (Surface)
             float3 relP = primaryPos - prevPos;
             float vxP = dot(relP, Rp);
             float vyP = dot(relP, Up);
@@ -634,8 +640,29 @@ void RayGen()
             float ndcYP = -vyP / (vzP * f_inv_p);
             float2 prevScreen = (float2(ndcXP, ndcYP) * 0.5 + 0.5) * float2(launchDim.xy);
             mvec = prevScreen - currScreen;
+
+            // Specular Motion Vector (Virtual Reflection Point)
+            if (any(primarySpecAlbedo > 0.0)) {
+               float3 R_spec = reflect(rayDir, normalize(primaryNormal));
+               // Virtual position = Reflection Origin + Reflection Dir * HitDist
+               // This approximates the point in space being reflected.
+               float3 P_virt = primaryPos + R_spec * primarySpecHitDist;
+               
+               float3 relP_virt = P_virt - prevPos;
+               float vxP_virt = dot(relP_virt, Rp);
+               float vyP_virt = dot(relP_virt, Up);
+               float vzP_virt = dot(relP_virt, forwardP);
+               
+               if (vzP_virt > 0.001) {
+                  float ndcXP_virt = vxP_virt / (vzP_virt * prevAspect * f_inv_p);
+                  float ndcYP_virt = -vyP_virt / (vzP_virt * f_inv_p);
+                  float2 prevScreenVirt = (float2(ndcXP_virt, ndcYP_virt) * 0.5 + 0.5) * float2(launchDim.xy);
+                  specMvec = prevScreenVirt - currScreen;
+               }
+            }
         }
         g_motionVectors[launchIndex.xy] = mvec;
+        g_specularMotionVectors[launchIndex.xy] = specMvec;
         // Debug: Motion Vectors (new debug mode index = 8)
         if (debugMode == 8.0) {
             float2 mv = g_motionVectors[launchIndex.xy];
