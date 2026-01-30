@@ -86,9 +86,9 @@ cbuffer Camera : register(b0)
     float3 prevPos;
     float prevValid;
     float3 prevForward;
-    float dlssEnabled; // Was _padPrev0
+    float dlssEnabled;
     float3 prevUp;
-    float _padPrev1;
+    float dlssRayReconstruction;
     float prevFov;
     float prevAspect;
     float prevNearZ;
