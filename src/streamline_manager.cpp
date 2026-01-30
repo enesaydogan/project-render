@@ -390,7 +390,8 @@ StreamlineManager::GetRecommendedRenderSize(uint32_t outputWidth,
       options.mode = ToSlDlssMode(m_quality);
       options.outputWidth = outputWidth;
       options.outputHeight = outputHeight;
-      options.colorBuffersHDR = sl::Boolean::eFalse;
+      // We feed DLSS with linear HDR (pre-tonemap) color.
+      options.colorBuffersHDR = sl::Boolean::eTrue;
 
       sl::DLSSOptimalSettings settings{};
       sl::Result res = m_slDLSSGetOptimalSettings(options, settings);
@@ -549,7 +550,9 @@ bool StreamlineManager::Evaluate(
   c.cameraPinholeOffset = sl::float2(0.0f, 0.0f);
 
   // Motion vectors are in pixel space (see ProgrammingGuideDLSS_RR.md).
-  c.mvecScale = sl::float2(1.0f, 1.0f);
+  // Streamline expects motion vectors in [-1,1] after applying mvecScale.
+  // Our motion vectors are in pixel units.
+  c.mvecScale = sl::float2(1.0f / (float)renderWidth, 1.0f / (float)renderHeight);
   m_lastMvecScaleX = c.mvecScale.x;
   m_lastMvecScaleY = c.mvecScale.y;
 
@@ -588,7 +591,7 @@ bool StreamlineManager::Evaluate(
     opt.mode = ToSlDlssMode(m_quality);
     opt.outputWidth = outputWidth;
     opt.outputHeight = outputHeight;
-    opt.colorBuffersHDR = sl::Boolean::eFalse;
+    opt.colorBuffersHDR = sl::Boolean::eTrue;
     res = m_slDLSSSetOptions(m_viewport, opt);
     if (res != sl::Result::eOk) {
       fprintf(stderr, "StreamlineManager: slDLSSSetOptions failed (%d)\n",

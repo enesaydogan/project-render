@@ -34,9 +34,9 @@ struct CameraCB {
   float prevPos[3];
   float prevValid;
   float prevForward[3];
-  float _padPrev0;
+  float dlssEnabled;
   float prevUp[3];
-  float _padPrev1;
+  float dlssRayReconstruction;
   float prevFov;
   float prevAspect;
   float prevNearZ;

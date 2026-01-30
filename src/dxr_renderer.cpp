@@ -134,6 +134,7 @@ static ComPtr<ID3D12Resource> s_mvecUAV;
 static ComPtr<ID3D12Resource> s_albedoUAV;
 static ComPtr<ID3D12Resource> s_normalRoughnessUAV;
 static ComPtr<ID3D12Resource> s_dlssOutputUAV;
+static ComPtr<ID3D12Resource> s_tonemapOutputUAV;
 static ComPtr<ID3D12Resource> s_specularAlbedoUAV;
 static ComPtr<ID3D12Resource> s_specHitDistanceUAV;
 static ComPtr<ID3D12Resource> s_specularMotionVectorsUAV;
@@ -144,6 +145,12 @@ static ComPtr<ID3D12DescriptorHeap>
 static ComPtr<ID3D12DescriptorHeap>
     s_mergedHeap; // merged heap that contains scene SRVs then output UAV
                   // (preferred)
+
+// Tonemap compute pipeline resources (linear HDR -> swapchain format)
+static ComPtr<ID3D12RootSignature> s_tonemapRootSig;
+static ComPtr<ID3D12PipelineState> s_tonemapPSO;
+static ComPtr<ID3D12Resource> s_tonemapCB;
+static ComPtr<ID3D12DescriptorHeap> s_tonemapHeap;
 
 struct ShaderTableEntry {
   void *id;
@@ -166,6 +173,115 @@ static ComPtr<ID3D12Resource> s_reservoirBuffers[2];
 static ComPtr<ID3D12Resource> s_gi_reservoirBuffers[6];
 
 namespace DxrRenderer {
+
+struct TonemapConstants {
+  uint32_t outWidth;
+  uint32_t outHeight;
+  float exposure;
+  float _pad;
+};
+
+static void EnsureTonemapPipeline() {
+  if (s_tonemapPSO && s_tonemapRootSig && s_tonemapCB && s_tonemapHeap)
+    return;
+  if (!s_device)
+    return;
+
+  // Root signature: b0 constants, t0 SRV, u0 UAV
+  D3D12_DESCRIPTOR_RANGE srvRange{};
+  srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+  srvRange.NumDescriptors = 1;
+  srvRange.BaseShaderRegister = 0;
+  srvRange.RegisterSpace = 0;
+
+  D3D12_DESCRIPTOR_RANGE uavRange{};
+  uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+  uavRange.NumDescriptors = 1;
+  uavRange.BaseShaderRegister = 0;
+  uavRange.RegisterSpace = 0;
+
+  D3D12_ROOT_PARAMETER params[3] = {};
+  params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+  params[0].Descriptor.ShaderRegister = 0;
+  params[0].Descriptor.RegisterSpace = 0;
+  params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[1].DescriptorTable.NumDescriptorRanges = 1;
+  params[1].DescriptorTable.pDescriptorRanges = &srvRange;
+  params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[2].DescriptorTable.NumDescriptorRanges = 1;
+  params[2].DescriptorTable.pDescriptorRanges = &uavRange;
+  params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+  rsDesc.NumParameters = _countof(params);
+  rsDesc.pParameters = params;
+  rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+  ComPtr<ID3DBlob> sig;
+  ComPtr<ID3DBlob> err;
+  HRESULT hrSerialize = D3D12SerializeRootSignature(
+      &rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err);
+  if (FAILED(hrSerialize)) {
+    if (err)
+      fprintf(stderr, "DxrRenderer: Tonemap root signature error: %s\n",
+              (char *)err->GetBufferPointer());
+    return;
+  }
+  ThrowIfFailed(s_device->CreateRootSignature(0, sig->GetBufferPointer(),
+                                              sig->GetBufferSize(),
+                                              IID_PPV_ARGS(&s_tonemapRootSig)));
+
+  // Compile compute shader
+  ComPtr<IDxcBlob> cs;
+  try {
+    std::vector<std::wstring> defines;
+    cs = s_dxcHelper.Compile(L"shaders/tonemap_cs.hlsl", L"CSMain", L"cs_6_3",
+                             defines);
+  } catch (const std::exception &e) {
+    fprintf(stderr, "DxrRenderer: Tonemap CS compile failed: %s\n", e.what());
+    return;
+  }
+  if (!cs) {
+    fprintf(stderr, "DxrRenderer: Tonemap CS blob null\n");
+    return;
+  }
+
+  D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+  psoDesc.pRootSignature = s_tonemapRootSig.Get();
+  psoDesc.CS.pShaderBytecode = cs->GetBufferPointer();
+  psoDesc.CS.BytecodeLength = cs->GetBufferSize();
+  ThrowIfFailed(s_device->CreateComputePipelineState(
+      &psoDesc, IID_PPV_ARGS(&s_tonemapPSO)));
+
+  // Descriptor heap: SRV + UAV
+  D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+  heapDesc.NumDescriptors = 2;
+  heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+  heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+  ThrowIfFailed(s_device->CreateDescriptorHeap(&heapDesc,
+                                               IID_PPV_ARGS(&s_tonemapHeap)));
+
+  // Constant buffer
+  D3D12_HEAP_PROPERTIES uploadProps{};
+  uploadProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+  D3D12_RESOURCE_DESC cbDesc{};
+  cbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+  cbDesc.Width = (sizeof(TonemapConstants) + 255) & ~255;
+  cbDesc.Height = 1;
+  cbDesc.DepthOrArraySize = 1;
+  cbDesc.MipLevels = 1;
+  cbDesc.SampleDesc.Count = 1;
+  cbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+  ThrowIfFailed(s_device->CreateCommittedResource(
+      &uploadProps, D3D12_HEAP_FLAG_NONE, &cbDesc,
+      D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&s_tonemapCB)));
+  if (s_tonemapCB)
+    s_tonemapCB->SetName(L"Tonemap Constants");
+}
 
 void Initialize(ID3D12Device *device) {
   s_device = device;
@@ -511,7 +627,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   texDesc.Height = s_outputHeight;
   texDesc.DepthOrArraySize = 1;
   texDesc.MipLevels = 1;
-  texDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
+  // Render output is linear HDR (pre-tonemap / pre-DLSS).
+  texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
   texDesc.SampleDesc.Count = 1;
   texDesc.SampleDesc.Quality = 0;
   texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
@@ -530,6 +647,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   s_specularMotionVectorsUAV.Reset();
   s_normalRoughnessUAV.Reset();
   s_dlssOutputUAV.Reset();
+  s_tonemapOutputUAV.Reset();
   ThrowIfFailed(s_device->CreateCommittedResource(
       &heapProps, D3D12_HEAP_FLAG_NONE, &texDesc,
       D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
@@ -569,12 +687,16 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   CreateUavTexture(s_normalRoughnessUAV, texDesc,
                    DXGI_FORMAT_R16G16B16A16_FLOAT, L"RT NormalRoughness");
 
-  // DLSS output is output-size (same format as swapchain for easy copy)
-  CreateUavTexture(s_dlssOutputUAV, outDesc, DXGI_FORMAT_R10G10B10A2_UNORM,
-                   L"RT DLSS Output");
+  // DLSS output is output-size in linear HDR (pre-tonemap).
+  CreateUavTexture(s_dlssOutputUAV, outDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                   L"RT DLSS Output (HDR)");
+
+  // Tonemap output is swapchain-format (output-size) for easy CopyResource.
+  CreateUavTexture(s_tonemapOutputUAV, outDesc, DXGI_FORMAT_R10G10B10A2_UNORM,
+                   L"RT Tonemap Output");
 
   D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-  uavDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
+  uavDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
   uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
   uavDesc.Texture2D.MipSlice = 0;
   uavDesc.Texture2D.PlaneSlice = 0;
@@ -618,8 +740,11 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
               DXR_HEAP_ALBEDO_UAV_OFFSET);
   CreateUavAt(s_normalRoughnessUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
               DXR_HEAP_NORMAL_ROUGHNESS_UAV_OFFSET);
-  CreateUavAt(s_dlssOutputUAV.Get(), DXGI_FORMAT_R10G10B10A2_UNORM,
+  CreateUavAt(s_dlssOutputUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
               DXR_HEAP_DLSS_OUT_UAV_OFFSET);
+
+  // Prepare tonemap pipeline resources.
+  EnsureTonemapPipeline();
 
   // Create Accumulation UAV
   s_accumulation.Resize(s_outputWidth, s_outputHeight);
@@ -1107,6 +1232,14 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
   if (FAILED(commandListBase->QueryInterface(IID_PPV_ARGS(&dxrList))))
     return false;
 
+  const bool dlssActive =
+      (s_streamline && s_streamline->IsInitialized() &&
+       s_streamline->IsDeviceSet() && s_streamline->IsEnabled() &&
+       s_streamline->GetMode() != StreamlineManager::Mode::Off);
+  const bool rrActive =
+      dlssActive &&
+      (s_streamline->GetMode() == StreamlineManager::Mode::DLSS_RayReconstruction);
+
   // Set pipeline and root signature
   dxrList->SetPipelineState1(s_rtStateObject.Get());
   dxrList->SetComputeRootSignature(s_rtGlobalRootSignature.Get());
@@ -1146,17 +1279,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
 
   // Compute jitter for this frame.
   // Note: DLSS expects jitter in range [-0.5, 0.5] pixel space.
-  // Match OptiX behavior: DLSS-D (Ray Reconstruction) should NOT use jittered
-  // rays; keep jitter at 0 while RR is enabled.
   s_jitterFrameIndex++;
   uint32_t frameIdx = s_jitterFrameIndex;
   float jitterX = Halton(frameIdx, 2) - 0.5f;
   float jitterY = Halton(frameIdx, 3) - 0.5f;
-  if (s_streamline && s_streamline->IsEnabled() &&
-      s_streamline->GetMode() == StreamlineManager::Mode::DLSS_RayReconstruction) {
-    jitterX = 0.0f;
-    jitterY = 0.0f;
-  }
 
   // Expose the final jitter values for UI/debug overlays.
   s_lastJitterX = jitterX;
@@ -1177,11 +1303,15 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
       pfData[17] = (float)s_jitterFrameIndex;
       pfData[18] = (float)s_lightCount; // lightCount
 
-// Index 23: accumulationCount.
-      // Keep accumulation enabled even when DLSS-RR is active.
-      // RR is a denoiser but feeding extremely noisy 1spp frames tends to
-      // produce splotchy artifacts in this path tracer.
-      pfData[23] = (float)s_accumulation.GetFrameCount();
+  // Index 23: accumulationCount.
+  // DLSS-RR is a temporal denoiser; don't also accumulate history.
+  pfData[23] = rrActive ? 0.0f : (float)s_accumulation.GetFrameCount();
+
+  // Streamline flags used by shaders/raytracing/common.hlsli.
+  // Index 43: dlssEnabled
+  // Index 47: dlssRayReconstruction
+  pfData[43] = dlssActive ? 1.0f : 0.0f;
+  pfData[47] = rrActive ? 1.0f : 0.0f;
 	  
 	  
 	  // If DLSS-RR is on, force 0 (effectively disabling accumulation) so we
@@ -1239,10 +1369,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
         9, s_lightBuffer->GetGPUVirtualAddress());
   }
 
-  // SPP cap: if a max SPP is set and we've already reached it, skip ray
-  // dispatch and reuse the last output. This prevents the frame count from
-  // increasing past maxSPP and stops additional GPU work.
-  if (g_cameraData.maxSPP > 0.0f &&
+  // Note: previously we skipped dispatch once maxSPP was reached and copied the
+  // last output directly to the swapchain. With an HDR pipeline (FP16 output +
+  // post tonemap), we keep dispatch enabled and rely on the shader early-out.
+  if (false && g_cameraData.maxSPP > 0.0f &&
       s_accumulation.GetFrameCount() >= (UINT)g_cameraData.maxSPP) {
     // Copy the current output texture to the render target and return
     TransitionResource(dxrList.Get(), s_outputUAV.Get(),
@@ -1314,8 +1444,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
 
   dxrList->DispatchRays(&dispatchDesc);
 
-  // Increment accumulation frame (DLSS must not affect this)
-  s_accumulation.IncrementFrame();
+  // Increment accumulation history only when actually used.
+  if (!rrActive)
+    s_accumulation.IncrementFrame();
 
   // Optional Streamline / DLSS evaluation
   ID3D12Resource *postColor = s_outputUAV.Get();
@@ -1425,49 +1556,101 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
     }
   }
 
-  // Copy postColor to the render target
-  TransitionResource(dxrList.Get(), postColor,
-                     usedDlss ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS
-                              : D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                     D3D12_RESOURCE_STATE_COPY_SOURCE);
-  TransitionResource(dxrList.Get(), renderTarget, D3D12_RESOURCE_STATE_PRESENT,
-                     D3D12_RESOURCE_STATE_COPY_DEST);
+  // Tonemap linear HDR to swapchain format, then copy.
+  EnsureTonemapPipeline();
 
-  // Validate sizes to avoid CopyResource invalid-argument errors
-  const D3D12_RESOURCE_DESC srcDesc = postColor->GetDesc();
-  if (srcDesc.Width != dstDesc.Width || srcDesc.Height != dstDesc.Height) {
-    UINT copyW = (UINT)min(srcDesc.Width, dstDesc.Width);
-    UINT copyH = (UINT)min(srcDesc.Height, dstDesc.Height);
+  if (s_tonemapPSO && s_tonemapRootSig && s_tonemapHeap && s_tonemapCB &&
+      s_tonemapOutputUAV) {
+    // Update constants
+    TonemapConstants tc{};
+    tc.outWidth = outW;
+    tc.outHeight = outH;
+    tc.exposure = 1.0f;
 
-    D3D12_TEXTURE_COPY_LOCATION dstLoc = {};
-    dstLoc.pResource = renderTarget;
-    dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-    dstLoc.SubresourceIndex = 0;
+    void *p = nullptr;
+    D3D12_RANGE readRange = {0, 0};
+    if (SUCCEEDED(s_tonemapCB->Map(0, &readRange, &p))) {
+      memcpy(p, &tc, sizeof(tc));
+      s_tonemapCB->Unmap(0, nullptr);
+    }
 
-    D3D12_TEXTURE_COPY_LOCATION srcLoc = {};
-    srcLoc.pResource = postColor;
-    srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-    srcLoc.SubresourceIndex = 0;
+    // Create SRV (slot 0) and UAV (slot 1)
+    const UINT descInc = s_device->GetDescriptorHandleIncrementSize(
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_CPU_DESCRIPTOR_HANDLE cpuStart =
+        s_tonemapHeap->GetCPUDescriptorHandleForHeapStart();
 
-    D3D12_BOX srcBox = {};
-    srcBox.left = 0;
-    srcBox.top = 0;
-    srcBox.front = 0;
-    srcBox.right = copyW;
-    srcBox.bottom = copyH;
-    srcBox.back = 1;
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+    srv.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv.Texture2D.MipLevels = 1;
+    s_device->CreateShaderResourceView(postColor, &srv, cpuStart);
 
-    dxrList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, &srcBox);
+    D3D12_CPU_DESCRIPTOR_HANDLE uavCpu = cpuStart;
+    uavCpu.ptr += descInc;
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
+    uav.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
+    uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    uav.Texture2D.MipSlice = 0;
+    uav.Texture2D.PlaneSlice = 0;
+    s_device->CreateUnorderedAccessView(s_tonemapOutputUAV.Get(), nullptr,
+                                        &uav, uavCpu);
+
+    // Barriers
+    TransitionResource(dxrList.Get(), postColor,
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+    ID3D12DescriptorHeap *tmHeaps[] = {s_tonemapHeap.Get()};
+    dxrList->SetDescriptorHeaps(1, tmHeaps);
+    dxrList->SetPipelineState(s_tonemapPSO.Get());
+    dxrList->SetComputeRootSignature(s_tonemapRootSig.Get());
+    dxrList->SetComputeRootConstantBufferView(0,
+                                              s_tonemapCB->GetGPUVirtualAddress());
+
+    D3D12_GPU_DESCRIPTOR_HANDLE gpuStart =
+        s_tonemapHeap->GetGPUDescriptorHandleForHeapStart();
+    dxrList->SetComputeRootDescriptorTable(1, gpuStart);
+    D3D12_GPU_DESCRIPTOR_HANDLE gpuUav = gpuStart;
+    gpuUav.ptr += descInc;
+    dxrList->SetComputeRootDescriptorTable(2, gpuUav);
+
+    const UINT gx = (outW + 7) / 8;
+    const UINT gy = (outH + 7) / 8;
+    dxrList->Dispatch(gx, gy, 1);
+
+    // Copy tonemapped output to the render target
+    TransitionResource(dxrList.Get(), s_tonemapOutputUAV.Get(),
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                       D3D12_RESOURCE_STATE_COPY_SOURCE);
+    TransitionResource(dxrList.Get(), renderTarget, D3D12_RESOURCE_STATE_PRESENT,
+                       D3D12_RESOURCE_STATE_COPY_DEST);
+    dxrList->CopyResource(renderTarget, s_tonemapOutputUAV.Get());
+
+    // Transition back
+    TransitionResource(dxrList.Get(), renderTarget,
+                       D3D12_RESOURCE_STATE_COPY_DEST,
+                       D3D12_RESOURCE_STATE_RENDER_TARGET);
+    TransitionResource(dxrList.Get(), s_tonemapOutputUAV.Get(),
+                       D3D12_RESOURCE_STATE_COPY_SOURCE,
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    TransitionResource(dxrList.Get(), postColor,
+                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
   } else {
+    // Fallback: copy (may be invalid if formats don't match)
+    TransitionResource(dxrList.Get(), renderTarget, D3D12_RESOURCE_STATE_PRESENT,
+                       D3D12_RESOURCE_STATE_COPY_DEST);
+    TransitionResource(dxrList.Get(), postColor, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                       D3D12_RESOURCE_STATE_COPY_SOURCE);
     dxrList->CopyResource(renderTarget, postColor);
+    TransitionResource(dxrList.Get(), renderTarget,
+                       D3D12_RESOURCE_STATE_COPY_DEST,
+                       D3D12_RESOURCE_STATE_RENDER_TARGET);
+    TransitionResource(dxrList.Get(), postColor, D3D12_RESOURCE_STATE_COPY_SOURCE,
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
   }
-
-  // Transition back
-  TransitionResource(dxrList.Get(), renderTarget,
-                     D3D12_RESOURCE_STATE_COPY_DEST,
-                     D3D12_RESOURCE_STATE_RENDER_TARGET);
-  TransitionResource(dxrList.Get(), postColor, D3D12_RESOURCE_STATE_COPY_SOURCE,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
   // Bind RTV for subsequent ImGui draws
   commandListBase->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);

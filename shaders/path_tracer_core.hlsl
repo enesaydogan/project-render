@@ -78,7 +78,8 @@ void RayGen()
     if (maxSPP > 0.0 && accumFrame >= (uint)maxSPP) {
         float4 total = g_accumulation[launchIndex.xy];
         if (total.a > 0.0) {
-            g_output[launchIndex.xy] = float4(LinearToSRGB(ToneMap(total.rgb / total.a)), 1.0);
+            // Output is always linear HDR; tonemapping happens after DLSS/RR.
+            g_output[launchIndex.xy] = float4(total.rgb / total.a, 1.0);
         }
         return;
     }
@@ -250,8 +251,9 @@ void RayGen()
             }
 
             // B. Temporal Resampling
-            // ... (keep current temporal resampling, but use refined brdf for candidate evaluation if possible) ...
-            if (frame > 0) {
+            // DLSS-RR prefers minimal temporal correlation; disable temporal reuse
+            // while RR is enabled.
+            if (frame > 0 && dlssRayReconstruction < 0.5) {
                 float4 prev_data;
                 if (flip) prev_data = g_reservoir0[launchIndex.xy];
                 else      prev_data = g_reservoir1[launchIndex.xy];
@@ -408,7 +410,7 @@ void RayGen()
                 }
             }
             // B. Temporal Resampling
-            if (frame > 0) {
+            if (frame > 0 && dlssRayReconstruction < 0.5) {
                 float4 d0, d1, d2;
                 if (flip) { d0 = g_gi_reservoir_b0[launchIndex.xy]; d1 = g_gi_reservoir_b1[launchIndex.xy]; d2 = g_gi_reservoir_b2[launchIndex.xy]; }
                 else      { d0 = g_gi_reservoir_a0[launchIndex.xy]; d1 = g_gi_reservoir_a1[launchIndex.xy]; d2 = g_gi_reservoir_a2[launchIndex.xy]; }
@@ -677,15 +679,11 @@ void RayGen()
         g_specHitDistance[launchIndex.xy] = primarySpecHitDist;
     }
 
+    // DLSS-RR should receive per-frame (non-accumulated) input.
+    // CPU sets accumulationCount=0 when RR is enabled.
     if (accumFrame == 0) {
         g_accumulation[launchIndex.xy] = float4(finalColor, 1.0);
-        
-        // Use linear HDR for DLSS/denoiser, or tonemap for direct display
-        if (dlssEnabled > 0.5) {
-            g_output[launchIndex.xy] = float4(finalColor, 1.0);
-        } else {
-            g_output[launchIndex.xy] = float4(LinearToSRGB(ToneMap(finalColor)), 1.0);
-        }
+        g_output[launchIndex.xy] = float4(finalColor, 1.0);
     } else {
         float4 prev_accum = g_accumulation[launchIndex.xy];
         float3 total_accum_color = prev_accum.rgb + finalColor;
@@ -694,14 +692,8 @@ void RayGen()
         g_accumulation[launchIndex.xy] = float4(total_accum_color, total_samples);
         
         float3 result = total_accum_color / total_samples;
-        
-        if (dlssEnabled > 0.5) {
-            // Output linear for DLSS evaluation problem burada
-            g_output[launchIndex.xy] = float4(result, 1.0);
-        } else {
-            // Output display-ready for standard accumulation
-            g_output[launchIndex.xy] = float4(LinearToSRGB(ToneMap(result)), 1.0);
-        }
+
+        g_output[launchIndex.xy] = float4(result, 1.0);
     }
 }
 
