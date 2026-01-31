@@ -57,3 +57,4 @@ HRESULT 0x80070057 at D:\project-render\src\dxr_renderer.cpp:533
 HRESULT 0x80004004 at D:\project-render\src\main.cpp:2580
 HRESULT 0x80004004 at D:\project-render\src\main.cpp:2580
 HRESULT 0x887a0005 at D:\project-render\src\dxr_renderer.cpp:623
+HRESULT 0x80004004 at D:\project-render\src\main.cpp:2593

@@ -132,6 +132,7 @@ void RayGen()
     float3 primarySpecAlbedo = float3(0, 0, 0);
     float primarySpecHitDist = -1.0;
 
+
     if (useStableGbuffer) {
         RayDesc gRay;
         gRay.Origin = rayOrigin;
@@ -210,6 +211,7 @@ void RayGen()
 
         TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
 
+
         if (!useStableGbuffer && bounce == 0 && payload.t >= 0.0) {
             primaryHit = true;
             primaryPos = payload.position;
@@ -248,7 +250,17 @@ void RayGen()
 
         if (payload.t < 0.0) {
             // Miss: add sky color and terminate
-            accumulatedColor += throughput * payload.color;
+            // RR is very sensitive to sky shimmer. For the primary ray, sample
+            // the environment using a non-jittered ray direction.
+            float3 missColor = payload.color;
+            if (bounce == 0 && dlssRayReconstruction > 0.5) {
+                float2 skyUv = DirectionToUV(rayDirCenter);
+                // Slight mip bias helps remove residual HDRI aliasing that shows up
+                // as shimmer, especially along silhouettes.
+                const float rrSkyLod = 0;
+                missColor = envMap.SampleLevel(linearSampler, skyUv, rrSkyLod).rgb * intensity;
+            }
+            accumulatedColor += throughput * missColor;
             
             // On first bounce miss, update reservoir to empty
             if (bounce == 0) {
@@ -664,6 +676,10 @@ void RayGen()
     // Write DLSS inputs
     static const float2 kInvalidMvec = float2(-1e6, -1e6);
     float2 currScreen = float2(launchIndex.xy) + 0.5;
+    float2 screenDim = float2(launchDim.xy);
+    float2 screenMin = float2(-0.5, -0.5);
+    float2 screenMax = screenDim + float2(0.5, 0.5);
+
     if (!primaryHit || primaryViewZ <= 0.0) {
         // Depth semantics depend on the Streamline feature:
         // - DLSS-SR: HW/NDC depth in [0,1] (far plane = 1)
@@ -685,7 +701,11 @@ void RayGen()
                 float ndcXP = vxP / (vzP * prevAspect * f_inv_p);
                 float ndcYP = -vyP / (vzP * f_inv_p);
                 float2 prevScreen = (float2(ndcXP, ndcYP) * 0.5 + 0.5) * float2(launchDim.xy);
-                mvecSky = prevScreen - currScreen;
+                if (any(prevScreen < screenMin) || any(prevScreen > screenMax)) {
+                    mvecSky = kInvalidMvec;
+                } else {
+                    mvecSky = prevScreen - currScreen;
+                }
             }
         }
         g_motionVectors[launchIndex.xy] = mvecSky;
@@ -731,7 +751,11 @@ void RayGen()
                 float ndcXP = vxP / (vzP * prevAspect * f_inv_p);
                 float ndcYP = -vyP / (vzP * f_inv_p);
                 float2 prevScreen = (float2(ndcXP, ndcYP) * 0.5 + 0.5) * float2(launchDim.xy);
-                mvec = prevScreen - currScreen;
+                if (any(prevScreen < screenMin) || any(prevScreen > screenMax)) {
+                    mvec = kInvalidMvec;
+                } else {
+                    mvec = prevScreen - currScreen;
+                }
             }
 
             // Specular MV: approximate with surface MV for stability.
@@ -741,18 +765,51 @@ void RayGen()
         }
         g_motionVectors[launchIndex.xy] = mvec;
         g_specularMotionVectors[launchIndex.xy] = specMvec;
-        // Debug: Motion Vectors (new debug mode index = 8)
-        if (debugMode == 8.0) {
-            float2 mv = g_motionVectors[launchIndex.xy];
-            float2 mvNorm = mv / float2(launchDim.xy);
-            float3 col = float3(0.5 + 0.5 * mvNorm.x, 0.5 + 0.5 * mvNorm.y, saturate(length(mvNorm) * 2.0));
-            g_output[launchIndex.xy] = float4(col, 1.0);
-            return;
-        }
         g_albedoOut[launchIndex.xy] = float4(primaryAlbedo, 1.0);
         g_normalRoughnessOut[launchIndex.xy] = float4(normalize(primaryNormal), primaryRoughness);
         g_specularAlbedo[launchIndex.xy] = float4(primarySpecAlbedo, 1.0);
         g_specHitDistance[launchIndex.xy] = primarySpecHitDist;
+    }
+
+    // Debug: Motion Vectors (debug mode index = 8)
+    // Visualizes g_motionVectors in pixel units. Yellow-ish means near-zero MV.
+    if (debugMode == 8.0) {
+        float2 mv = g_motionVectors[launchIndex.xy];
+        // Handle our invalid sentinel.
+        if (abs(mv.x) > 1e5 || abs(mv.y) > 1e5) {
+            mv = float2(0.0, 0.0);
+        }
+        // Visualize in a fixed pixel scale so typical camera motion is visible.
+        // 32 pixels = full scale.
+        const float kMvPixelsForFullScale = 32.0;
+        float2 mvVis = mv / kMvPixelsForFullScale;
+        mvVis = clamp(mvVis, float2(-1.0, -1.0), float2(1.0, 1.0));
+        float mag = saturate(length(mv) / kMvPixelsForFullScale);
+        float3 col = float3(0.5 + 0.5 * mvVis.x, 0.5 + 0.5 * mvVis.y, mag);
+        g_output[launchIndex.xy] = float4(col, 1.0);
+        return;
+    }
+
+    // Debug: Specular Hit Distance (debug mode index = 9)
+    if (debugMode == 9.0) {
+        float d = g_specHitDistance[launchIndex.xy];
+        float v = saturate(d / max(farZ, 1e-3));
+        g_output[launchIndex.xy] = float4(v, v, v, 1.0);
+        return;
+    }
+
+    // Debug: Specular Motion Vectors (debug mode index = 10)
+    if (debugMode == 10.0) {
+        float2 mv = g_specularMotionVectors[launchIndex.xy];
+        // Handle our invalid sentinel.
+        if (abs(mv.x) > 1e5 || abs(mv.y) > 1e5) {
+            mv = float2(0.0, 0.0);
+        }
+        float2 mvNorm = mv / float2(launchDim.xy);
+        float3 col = float3(0.5 + 0.5 * mvNorm.x, 0.5 + 0.5 * mvNorm.y,
+                            saturate(length(mvNorm) * 2.0));
+        g_output[launchIndex.xy] = float4(col, 1.0);
+        return;
     }
 
     // DLSS-RR should receive per-frame (non-accumulated) input.

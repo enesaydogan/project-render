@@ -54,10 +54,10 @@ bool IsReady();
 UINT GetAccumulationFrameCount();
 // Get number of lights transferred to GPU
 UINT GetLightCount();
-// DLSS-RR evaluation frequency configuration
-// - Set/Get number of SPP between DLSS evaluations (minimum 1)
-void SetDlssEvalSpp(unsigned spp);
-unsigned GetDlssEvalSpp();
+// Camera jitter scale applied only when DLSS-RR is active.
+// 1.0 = full jitter (best DLSS sampling), 0.0 = disable jitter.
+void SetRrJitterScale(float scale);
+float GetRrJitterScale();
 // Perform DXR render (dispatch rays, copy to render target). Returns true if
 // executed.
 bool RenderFrame(ID3D12GraphicsCommandList *commandList, UINT frameIndex,

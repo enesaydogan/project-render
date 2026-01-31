@@ -24,7 +24,7 @@ CameraCB g_initialCameraData = {
     4.0f,                         // maxSpecularBounces
     4.0f,                         // maxRefractiveBounces
     4.0f,                         // maxGIBounces
-    0.0f,                         // maxSPP
+    200.0f,                       // maxSPP
     0.0f,                         // _pad3
     {0.707f, 0.707f, 0.0f, 0.0f}, // lightDir (45 deg)
     {1.0f, 0.95f, 0.8f, 2.5f},    // lightColor
