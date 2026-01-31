@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <vector>
 #include <wrl.h>
+#include <sstream>
 
 using Microsoft::WRL::ComPtr;
 
@@ -848,9 +849,17 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
 void BuildAccelerationStructures(
     const std::vector<Asset::GpuMesh> &meshes,
     const std::vector<Scene::Instance> &instances) {
+  {
+    std::ostringstream _oss; _oss << "DxrRenderer::BuildAccelerationStructures: ENTRY meshes=" << meshes.size() << " instances=" << instances.size() << "\n";
+    fprintf(stderr, "%s", _oss.str().c_str()); fflush(stderr);
+  }
   if (!g_rayTracingSupported || !s_dxrDevice)
     return;
   try {
+    {
+      std::ostringstream _oss2; _oss2 << "DxrRenderer::BuildAccelerationStructures: after check - commandQueue=" << s_commandQueue << " fence=" << s_fence << " s_srvHeap=" << s_srvHeap.Get() << "\n";
+      fprintf(stderr, "%s", _oss2.str().c_str()); fflush(stderr);
+    }
     if (meshes.empty() || instances.empty()) {
       if (g_verboseRenderLogs)
         fprintf(stderr, "DxrRenderer: Empty scene - clearing TLAS\n");
@@ -873,6 +882,7 @@ void BuildAccelerationStructures(
                       "(shader compile failed?)\n");
       return;
     }
+    fprintf(stderr, "DxrRenderer::BuildAccelerationStructures: srvHeap OK. validating meshes...\n"); fflush(stderr);
     for (size_t i = 0; i < meshes.size(); ++i) {
       const auto &m = meshes[i];
       if (!m.vertexBuffer || !m.indexBuffer) {
@@ -893,13 +903,38 @@ void BuildAccelerationStructures(
       // Create SRVs for VB and IB in our persistent DXR heap
       UINT descSize = s_device->GetDescriptorHandleIncrementSize(
           D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-      D3D12_CPU_DESCRIPTOR_HANDLE vbCpu =
-          s_srvHeap->GetCPUDescriptorHandleForHeapStart();
-      vbCpu.ptr += (SIZE_T)(DXR_HEAP_VB_OFFSET + i) * descSize;
-      D3D12_CPU_DESCRIPTOR_HANDLE ibCpu =
-          s_srvHeap->GetCPUDescriptorHandleForHeapStart();
-      ibCpu.ptr += (SIZE_T)(DXR_HEAP_IB_OFFSET + i) * descSize;
 
+      // Defensive: ensure descriptor indices don't overflow the heap
+      size_t vbIndex = (size_t)DXR_HEAP_VB_OFFSET + i;
+      size_t ibIndex = (size_t)DXR_HEAP_IB_OFFSET + i;
+      if (vbIndex >= DXR_HEAP_TOTAL_COUNT || ibIndex >= DXR_HEAP_TOTAL_COUNT) {
+        fprintf(stderr, "DxrRenderer: Descriptor heap overflow for mesh %zu (vbIndex=%zu ibIndex=%zu total=%u)\n", i, vbIndex, ibIndex, DXR_HEAP_TOTAL_COUNT);
+        fflush(stderr);
+        return;
+      }
+
+      D3D12_CPU_DESCRIPTOR_HANDLE vbCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+      vbCpu.ptr += (SIZE_T)vbIndex * descSize;
+      D3D12_CPU_DESCRIPTOR_HANDLE ibCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+      ibCpu.ptr += (SIZE_T)ibIndex * descSize;
+
+      fprintf(stderr, "DxrRenderer: Creating VB/IB SRV for mesh %llu (vb=%p ib=%p verts=%u idx=%u)\n", (unsigned long long)i, m.vertexBuffer.Get(), m.indexBuffer.Get(), m.vertexCount, m.indexCount);
+      fflush(stderr);
+
+      // Extra defensive checks to avoid crashing the process when a malformed
+      // mesh or descriptor calculation slips through earlier validation.
+      if (!m.vertexBuffer.Get()) {
+        fprintf(stderr, "DxrRenderer: Null vertex buffer for mesh %zu - aborting AS build\n", i); fflush(stderr);
+        return;
+      }
+      if (!m.indexBuffer.Get()) {
+        fprintf(stderr, "DxrRenderer: Null index buffer for mesh %zu - aborting AS build\n", i); fflush(stderr);
+        return;
+      }
+      if (vbCpu.ptr == 0 || ibCpu.ptr == 0) {
+        fprintf(stderr, "DxrRenderer: Computed empty CPU descriptor handle for mesh %zu (vbCpu=%llu ibCpu=%llu) - aborting\n", i, (unsigned long long)vbCpu.ptr, (unsigned long long)ibCpu.ptr); fflush(stderr);
+        return;
+      }
       D3D12_SHADER_RESOURCE_VIEW_DESC vbSrv = {};
       vbSrv.Format = DXGI_FORMAT_UNKNOWN;
       vbSrv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
@@ -909,6 +944,7 @@ void BuildAccelerationStructures(
       vbSrv.Buffer.StructureByteStride = sizeof(Asset::Vertex);
       vbSrv.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
       s_device->CreateShaderResourceView(m.vertexBuffer.Get(), &vbSrv, vbCpu);
+      fprintf(stderr, "DxrRenderer: VB SRV created for mesh %zu\n", i); fflush(stderr);
 
       D3D12_SHADER_RESOURCE_VIEW_DESC ibSrv = {};
       ibSrv.Format = DXGI_FORMAT_R32_UINT;
@@ -919,6 +955,7 @@ void BuildAccelerationStructures(
       ibSrv.Buffer.StructureByteStride = 0; // Typed buffer
       ibSrv.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
       s_device->CreateShaderResourceView(m.indexBuffer.Get(), &ibSrv, ibCpu);
+      fprintf(stderr, "DxrRenderer: IB SRV created for mesh %zu\n", i); fflush(stderr);
     }
 
     // Wait for GPU (simple sync)
@@ -934,6 +971,7 @@ void BuildAccelerationStructures(
       WaitForSingleObject(s_fenceEvent, INFINITE);
     }
 
+    fprintf(stderr, "DxrRenderer: Creating command allocator/list\n"); fflush(stderr);
     // Create command list
     ComPtr<ID3D12CommandAllocator> cmdAlloc;
     ComPtr<ID3D12GraphicsCommandList4> cmdList;
