@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <functional>
 #include <wrl.h>
 #include <d3d12.h>
 #include <vector>
@@ -66,6 +67,11 @@ namespace Asset {
 
     // Initialize the loader with a device and command queue for GPU uploads.
     void Initialize(ID3D12Device* device, ID3D12CommandQueue* queue);
+
+    // Progress callback: progress [0..1], status message. May be called from loader thread.
+    using ProgressCallback = std::function<void(float, const std::string&)>;
+    void SetProgressCallback(ProgressCallback cb);
+    void ClearProgressCallback();
 
     // Load a model based on extension (GLTF, OBJ, STL). Fills out created meshes in `outMeshes`.
     bool LoadModel(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vector<Material>* outMaterials = nullptr, std::vector<Texture>* outTextures = nullptr, const float* rootTranslation = nullptr);
