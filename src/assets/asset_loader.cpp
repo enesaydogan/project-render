@@ -43,11 +43,23 @@ namespace Asset {
 
 static ComPtr<ID3D12Device> s_device;
 static ComPtr<ID3D12CommandQueue> s_queue;
+// Optional progress callback. Signature: progress [0..1], status message
+static std::function<void(float, const std::string&)> s_progressCb;
 
 void Initialize(ID3D12Device* device, ID3D12CommandQueue* queue)
 {
     s_device = device;
     s_queue = queue;
+}
+
+void SetProgressCallback(ProgressCallback cb)
+{
+    s_progressCb = cb;
+}
+
+void ClearProgressCallback()
+{
+    s_progressCb = ProgressCallback();
 }
 
 // ... rest of the file ... (excluding LoadGltf until later)
@@ -809,8 +821,12 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
             ComPtr<ID3D12Resource> vbUpload;
             ComPtr<ID3D12Resource> ibUpload;
 
+            fprintf(stderr, "CreateDefaultBuffer: vb bytes=%zu ib bytes=%zu (mesh verts=%zu idx=%zu)\n", sizeof(Vertex) * vertices.size(), sizeof(uint32_t) * indices.size(), vertices.size(), indices.size());
+            fflush(stderr);
             CreateDefaultBuffer(vertices.data(), sizeof(Vertex) * vertices.size(), gm.vertexBuffer, vbUpload, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+            fprintf(stderr, "CreateDefaultBuffer: vb created\n"); fflush(stderr);
             CreateDefaultBuffer(indices.data(), sizeof(uint32_t) * indices.size(), gm.indexBuffer, ibUpload, D3D12_RESOURCE_STATE_INDEX_BUFFER);
+            fprintf(stderr, "CreateDefaultBuffer: ib created\n"); fflush(stderr);
 
             gm.vbView.BufferLocation = gm.vertexBuffer->GetGPUVirtualAddress();
             gm.vbView.SizeInBytes = static_cast<UINT>(sizeof(Vertex) * vertices.size());
@@ -866,6 +882,7 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
 bool LoadWithAssimp(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vector<Material>* outMaterials, std::vector<Texture>* outTextures, const float* rootTranslation)
 {
     Assimp::Importer importer;
+    if (s_progressCb) s_progressCb(0.01f, std::string("Starting import: ") + path);
     const aiScene* scene = importer.ReadFile(path, 
         aiProcess_Triangulate | 
         aiProcess_CalcTangentSpace | 
@@ -877,6 +894,7 @@ bool LoadWithAssimp(const std::string& path, std::vector<GpuMesh>& outMeshes, st
 
     if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
         fprintf(stderr, "Assimp Error: %s\n", importer.GetErrorString());
+        if (s_progressCb) s_progressCb(0.0f, std::string("Assimp Error: ") + importer.GetErrorString());
         return false;
     }
 
@@ -927,7 +945,14 @@ bool LoadWithAssimp(const std::string& path, std::vector<GpuMesh>& outMeshes, st
             }
             outMaterials->push_back(mat);
         }
+        if (s_progressCb) s_progressCb(0.12f, std::string("Materials parsed: ") + std::to_string(scene->mNumMaterials));
     }
+
+    // Progress accounting for mesh processing
+    int totalMeshes = (int)scene->mNumMeshes;
+    int processedMeshes = 0;
+
+    if (s_progressCb) s_progressCb(0.15f, std::string("Processing meshes: 0/") + std::to_string(totalMeshes));
 
     std::function<void(aiNode*, aiMatrix4x4)> processNode = [&](aiNode* node, aiMatrix4x4 parentTransform) {
         aiMatrix4x4 currentTransform = parentTransform * node->mTransformation;
@@ -988,8 +1013,11 @@ bool LoadWithAssimp(const std::string& path, std::vector<GpuMesh>& outMeshes, st
 
             GpuMesh gm;
             ComPtr<ID3D12Resource> vbUpload, ibUpload;
+            fprintf(stderr, "CreateDefaultBuffer (GLTF path): vb bytes=%zu ib bytes=%zu (mesh verts=%zu idx=%zu)\n", sizeof(Vertex) * vertices.size(), sizeof(uint32_t) * indices.size(), vertices.size(), indices.size()); fflush(stderr);
             CreateDefaultBuffer(vertices.data(), sizeof(Vertex) * vertices.size(), gm.vertexBuffer, vbUpload, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+            fprintf(stderr, "CreateDefaultBuffer (GLTF path): vb created\n"); fflush(stderr);
             CreateDefaultBuffer(indices.data(), sizeof(uint32_t) * indices.size(), gm.indexBuffer, ibUpload, D3D12_RESOURCE_STATE_INDEX_BUFFER);
+            fprintf(stderr, "CreateDefaultBuffer (GLTF path): ib created\n"); fflush(stderr);
 
             gm.vbView.BufferLocation = gm.vertexBuffer->GetGPUVirtualAddress();
             gm.vbView.SizeInBytes = (UINT)(sizeof(Vertex) * vertices.size());
@@ -1003,6 +1031,14 @@ bool LoadWithAssimp(const std::string& path, std::vector<GpuMesh>& outMeshes, st
             gm.materialIndex = mesh->mMaterialIndex;
 
             outMeshes.push_back(std::move(gm));
+            // Update progress after each mesh
+            processedMeshes++;
+            if (s_progressCb && totalMeshes > 0) {
+                float p = 0.15f + 0.8f * (processedMeshes / (float)totalMeshes);
+                if (p > 0.95f) p = 0.95f;
+                char buf[256]; sprintf_s(buf, "Importing meshes: %d/%d", processedMeshes, totalMeshes);
+                s_progressCb(p, std::string(buf));
+            }
         }
 
         for (unsigned int i = 0; i < node->mNumChildren; ++i)
@@ -1010,6 +1046,7 @@ bool LoadWithAssimp(const std::string& path, std::vector<GpuMesh>& outMeshes, st
     };
 
     processNode(scene->mRootNode, aiMatrix4x4());
+    if (s_progressCb) s_progressCb(1.0f, std::string("Import complete: ") + path);
     return true;
 }
 

@@ -6,6 +6,9 @@
 #include "ImGuizmo.h"
 #include "dxr_renderer.h"
 #include "d3d12_helpers.h"
+#include <thread>
+#include <mutex>
+#include <atomic>
 #include "camera.h"
 #include "ibl_manager.h"
 #include <wrl.h>
@@ -30,6 +33,18 @@ extern ComPtr<ID3D12Device> g_device;
 namespace Scene {
 
 static std::vector<Node> s_nodes;
+// Import progress & pending results (for async import)
+static std::atomic<bool> s_importInProgress(false);
+static std::atomic<float> s_importProgress(0.0f);
+static std::string s_importStatus;
+static std::mutex s_importStatusMutex;
+
+static std::vector<Asset::GpuMesh> s_pendingMeshes;
+static std::vector<Asset::Material> s_pendingMaterials;
+static std::vector<Asset::Texture> s_pendingTextures;
+static std::string s_pendingPath;
+static std::atomic<bool> s_pendingReady(false);
+static std::mutex s_pendingMutex;
 static ImGuizmo::OPERATION g_currentGizmoOp = ImGuizmo::TRANSLATE;
 static ImGuizmo::MODE g_currentGizmoMode = ImGuizmo::WORLD;
 
@@ -147,12 +162,14 @@ bool ImportModel(const std::string &utf8path, const float* rootTranslation) {
                 cpuHandle.ptr += i * g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
                 const Asset::Texture &tex = textures[i];
                 if (tex.resource) {
+                    fprintf(stderr, "CreateShaderResourceView: texture %zu (res=%p w=%u h=%u mips=%u fmt=%u)\n", i, tex.resource.Get(), tex.width, tex.height, tex.mipLevels, (unsigned)tex.format); fflush(stderr);
                     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
                     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
                     srvDesc.Format = tex.format;
                     srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
                     srvDesc.Texture2D.MipLevels = tex.mipLevels;
                     g_device->CreateShaderResourceView(tex.resource.Get(), &srvDesc, cpuHandle);
+                    fprintf(stderr, "CreateShaderResourceView: done for texture %zu\n", i); fflush(stderr);
                 }
             }
             g_textureDescriptorCount += (UINT)textures.size();
@@ -168,9 +185,13 @@ bool ImportModel(const std::string &utf8path, const float* rootTranslation) {
         fprintf(stderr, "%s\n", s_lastStatus.c_str());
 
         // Rebuild AS for current active meshes
+        fprintf(stderr, "RebuildAccelerationStructures: start\n"); fflush(stderr);
         RebuildAccelerationStructures();
+        fprintf(stderr, "RebuildAccelerationStructures: done\n"); fflush(stderr);
         // Recreate DXR pipeline so it can merge texture descriptors (if any)
+        fprintf(stderr, "CreateRayTracingPipeline: start\n"); fflush(stderr);
         DxrRenderer::CreateRayTracingPipeline(0, 0);
+        fprintf(stderr, "CreateRayTracingPipeline: done\n"); fflush(stderr);
         return true;
     } catch (const std::exception &e) {
         s_lastStatus = std::string("Import exception: ") + e.what();
@@ -187,7 +208,47 @@ bool ImportModelWithDialog(HWND hwnd) {
         int size_needed = WideCharToMultiByte(CP_UTF8, 0, chosen.c_str(), (int)chosen.size(), NULL, 0, NULL, NULL);
         std::string utf8path(size_needed, 0);
         WideCharToMultiByte(CP_UTF8, 0, chosen.c_str(), (int)chosen.size(), &utf8path[0], size_needed, NULL, NULL);
-        return ImportModel(utf8path);
+
+        if (s_importInProgress.load()) {
+            s_lastStatus = "Import already in progress";
+            return false;
+        }
+
+        // Reset progress state and set callback
+        s_importInProgress = true;
+        s_importProgress = 0.0f;
+        {
+            std::lock_guard<std::mutex> lg(s_importStatusMutex);
+            s_importStatus = "Starting import...";
+        }
+
+        Asset::SetProgressCallback([&](float p, const std::string &msg) {
+            s_importProgress = p;
+            std::lock_guard<std::mutex> lg(s_importStatusMutex);
+            s_importStatus = msg;
+        });
+
+        // Launch background thread to do CPU-side import. The main thread will merge results when ready.
+        std::thread([utf8path]() {
+            std::vector<Asset::GpuMesh> meshes;
+            std::vector<Asset::Material> materials;
+            std::vector<Asset::Texture> textures;
+            bool ok = Asset::LoadModel(utf8path, meshes, &materials, &textures, nullptr);
+
+            // Store pending results for main thread to pick up
+            {
+                std::lock_guard<std::mutex> lg(s_pendingMutex);
+                s_pendingMeshes = std::move(meshes);
+                s_pendingMaterials = std::move(materials);
+                s_pendingTextures = std::move(textures);
+                s_pendingPath = utf8path;
+            }
+            s_pendingReady = true;
+            // Keep progress callback until main thread merges, but clear loader callback now
+            Asset::ClearProgressCallback();
+        }).detach();
+
+        return true;
     }
     s_lastStatus = "Open cancelled";
     return false;
@@ -700,6 +761,105 @@ void UpdateSelection(float screenWidth, float screenHeight) {
 void DrawScenePanel(HWND hwnd, bool &visible) {
     if (!visible) return;
     if (ImGui::Begin("Scene", &visible)) {
+        // If background import finished CPU-side, merge results on main thread (GPU uploads, descriptors, AS rebuild)
+        if (s_pendingReady.load()) {
+            std::vector<Asset::GpuMesh> meshes;
+            std::vector<Asset::Material> materials;
+            std::vector<Asset::Texture> textures;
+            std::string srcPath;
+            {
+                std::lock_guard<std::mutex> lg(s_pendingMutex);
+                meshes = std::move(s_pendingMeshes);
+                materials = std::move(s_pendingMaterials);
+                textures = std::move(s_pendingTextures);
+                srcPath = std::move(s_pendingPath);
+                s_pendingMeshes.clear(); s_pendingMaterials.clear(); s_pendingTextures.clear(); s_pendingPath.clear();
+            }
+            s_pendingReady = false;
+
+            // Merge into global lists (same logic as ImportModel)
+            size_t meshBase = g_loadedMeshes.size();
+            size_t materialBase = g_loadedMaterials.size();
+            size_t textureBase = g_loadedTextures.size();
+
+            g_loadedMeshes.insert(g_loadedMeshes.end(), meshes.begin(), meshes.end());
+            g_loadedMaterials.insert(g_loadedMaterials.end(), materials.begin(), materials.end());
+            g_loadedTextures.insert(g_loadedTextures.end(), textures.begin(), textures.end());
+
+            for (size_t i = 0; i < meshes.size(); ++i) {
+                int &mi = g_loadedMeshes[meshBase + i].materialIndex;
+                if (mi >= 0) mi = mi + (int)materialBase;
+            }
+
+            for (size_t i = 0; i < materials.size(); ++i) {
+                Asset::Material &m = g_loadedMaterials[materialBase + i];
+                if (m.diffuseTexture >= 0) m.diffuseTexture += (int)textureBase;
+                if (m.reflectionTexture >= 0) m.reflectionTexture += (int)textureBase;
+                if (m.refractionTexture >= 0) m.refractionTexture += (int)textureBase;
+                if (m.normalTexture >= 0) m.normalTexture += (int)textureBase;
+                if (m.occlusionTexture >= 0) m.occlusionTexture += (int)textureBase;
+                if (m.emissiveTexture >= 0) m.emissiveTexture += (int)textureBase;
+                if (m.metalRoughTexture >= 0) m.metalRoughTexture += (int)textureBase;
+            }
+
+            if (!textures.empty()) {
+                DescriptorAllocation alloc = g_cbvSrvAllocator.AllocatePersistent((UINT)textures.size());
+                if (g_textureDescriptorCount == 0) g_texturesGpuStart = alloc.gpu;
+                for (size_t i = 0; i < textures.size(); ++i) {
+                    D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = alloc.cpu;
+                    cpuHandle.ptr += i * g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+                    const Asset::Texture &tex = textures[i];
+                    if (tex.resource) {
+                        fprintf(stderr, "CreateShaderResourceView: texture %zu (res=%p w=%u h=%u mips=%u fmt=%u)\n", i, tex.resource.Get(), tex.width, tex.height, tex.mipLevels, (unsigned)tex.format); fflush(stderr);
+                        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+                        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                        srvDesc.Format = tex.format;
+                        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+                        srvDesc.Texture2D.MipLevels = tex.mipLevels;
+                        g_device->CreateShaderResourceView(tex.resource.Get(), &srvDesc, cpuHandle);
+                        fprintf(stderr, "CreateShaderResourceView: done for texture %zu\n", i); fflush(stderr);
+                    }
+                }
+                g_textureDescriptorCount += (UINT)textures.size();
+            }
+
+            // Create a scene node for this import
+            Node node;
+            node.name = std::filesystem::path(srcPath).filename().string();
+            for (size_t i = 0; i < meshes.size(); ++i) node.meshIndices.push_back(meshBase + i);
+            s_nodes.push_back(node);
+
+            s_lastStatus = std::string("Loaded: ") + srcPath;
+            fprintf(stderr, "%s\n", s_lastStatus.c_str());
+
+            // Rebuild AS and pipeline on main thread
+            fprintf(stderr, "RebuildAccelerationStructures: start\n"); fflush(stderr);
+            RebuildAccelerationStructures();
+            fprintf(stderr, "RebuildAccelerationStructures: done\n"); fflush(stderr);
+            fprintf(stderr, "CreateRayTracingPipeline: start\n"); fflush(stderr);
+            DxrRenderer::CreateRayTracingPipeline(0, 0);
+            fprintf(stderr, "CreateRayTracingPipeline: done\n"); fflush(stderr);
+
+            // Clear import-in-progress flag
+            s_importInProgress = false;
+            s_importProgress = 1.0f;
+            {
+                std::lock_guard<std::mutex> lg(s_importStatusMutex);
+                s_importStatus = "Import finished";
+            }
+        }
+
+        // Show progress bar if an import is in progress
+        if (s_importInProgress.load()) {
+            float p = s_importProgress.load();
+            std::string status;
+            {
+                std::lock_guard<std::mutex> lg(s_importStatusMutex);
+                status = s_importStatus;
+            }
+            ImGui::ProgressBar(p, ImVec2(-FLT_MIN, 0));
+            ImGui::Text("%s", status.c_str());
+        }
         // Action area
         float btnWidth = ImGui::GetContentRegionAvail().x * 0.33f;
         if (ImGui::Button("Import Model...", ImVec2(btnWidth, 0))) {
