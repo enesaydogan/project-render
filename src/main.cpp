@@ -2376,9 +2376,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                                  16.0f, "%.0f"))
             UpdateCameraCB();
 
-          if (ImGui::InputFloat("Max SPP (0=Inf)", &g_cameraData.maxSPP, 1.0f,
-                                10.0f, "%.0f"))
+          int maxSpp = (int)g_cameraData.maxSPP;
+          if (maxSpp < 10) maxSpp = 10;
+          if (maxSpp > 1000) maxSpp = 1000;
+          if (ImGui::SliderInt("Max SPP", &maxSpp, 10, 1000)) {
+            g_cameraData.maxSPP = (float)maxSpp;
             UpdateCameraCB();
+          }
 
           ImGui::Separator();
           ImGui::Text("Streamline / DLSS");
@@ -2410,6 +2414,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             if (modeIdx == 2)
               newMode = StreamlineManager::Mode::DLSS_RayReconstruction;
             g_streamline.SetMode(newMode);
+            if (newMode == StreamlineManager::Mode::DLSS_RayReconstruction) {
+              // RR shimmer is often worst at silhouettes/screen edges.
+              // Default to a more stable jitter amplitude when entering RR.
+              DxrRenderer::SetRrJitterScale(0.5f);
+            }
             DxrRenderer::ResetStreamlineHistory();
             DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
           }
@@ -2445,6 +2454,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                       g_streamline.IsInitialized() ? "Init" : "Off",
                       g_streamline.IsDeviceSet() ? "Device" : "NoDevice");
 
+          if (g_streamline.GetMode() == StreamlineManager::Mode::DLSS_RayReconstruction) {
+            float rrJitterScale = DxrRenderer::GetRrJitterScale();
+            if (ImGui::SliderFloat("RR Jitter Scale", &rrJitterScale, 0.0f, 1.0f, "%.2f")) {
+              DxrRenderer::SetRrJitterScale(rrJitterScale);
+              DxrRenderer::ResetStreamlineHistory();
+            }
+            ImGui::TextWrapped(
+                "Lowering jitter can reduce edge/silhouette shimmer (especially near screen borders) but may reduce DLSS-RR reconstruction/AA quality.");
+          }
+
           ImGui::Text("NGX AppId: %u", g_streamline.GetApplicationId());
           if (g_streamline.IsEnabled() && g_streamline.GetMode() != StreamlineManager::Mode::Off &&
               (!g_streamline.IsInitialized() || !g_streamline.IsDeviceSet() ||
@@ -2469,15 +2488,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             ImGui::TextWrapped("SL log dir: %ls", g_streamline.GetLogDirectory().c_str());
           }
 
-          // DLSS-RR evaluation frequency control
-          int dlssEvalSpp = (int)DxrRenderer::GetDlssEvalSpp();
-          if (ImGui::InputInt("DLSS-RR Eval SPP", &dlssEvalSpp, 1, 10)) {
-            if (dlssEvalSpp < 1) dlssEvalSpp = 1;
-            DxrRenderer::SetDlssEvalSpp((unsigned)dlssEvalSpp);
-            DxrRenderer::ResetStreamlineHistory();
-          }
-          ImGui::SameLine();
-          ImGui::TextDisabled("Apply: Reuses last DLSS output on skipped frames");
         }
 
         // Debug Render Pass Dropdown
@@ -2489,7 +2499,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                                     "Refl. Color",
                                     "Metalness",
                                     "AO",
-                                    "Motion Vectors"};
+                                    "Motion Vectors",
+                                    "Spec Hit Distance",
+                                    "Spec Motion Vectors"};
         if (ImGui::Combo("Debug View", &g_debugMode, debugModes,
                          IM_ARRAYSIZE(debugModes))) {
           // State is updated; updated into camera buffer on next frame

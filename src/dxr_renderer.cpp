@@ -26,9 +26,12 @@ static ID3D12CommandQueue *s_commandQueue = nullptr;
 
 static StreamlineManager *s_streamline = nullptr;
 static bool s_streamlineResetHistory = true;
-// Configurable DLSS-RR evaluation frequency (frames/Sample-Per-Pixel). Default
-// 10 SPP.
-static unsigned s_dlssEvalSpp = 10u;
+// RR jitter scale default: lower than 1.0 to reduce silhouette/screen-edge shimmer.
+static float s_rrJitterScale = 0.5f;
+// When DLSS-RR is active we don't use the accumulation buffer; track a still-frame
+// SPP count separately so maxSPP can still freeze rendering.
+static UINT s_rrStillFrameSpp = 0;
+static bool s_hasTonemappedFrame = false;
 // Exposed for UI/debug (WinMain). Keep external linkage.
 unsigned int s_jitterFrameIndex = 0;
 float s_lastJitterX = 0.0f;
@@ -1190,6 +1193,8 @@ void UpdateLights(const std::vector<GpuLight> &lights) {
 
 void ResetAccumulation() {
   s_accumulation.Reset();
+  s_rrStillFrameSpp = 0;
+  s_hasTonemappedFrame = false;
   // Keep Streamline history reset separate from accumulation decisions.
   // Accumulation resets happen on real camera/settings changes; per-frame
   // jitter changes must not trigger this.
@@ -1204,15 +1209,25 @@ void SetStreamlineManager(StreamlineManager *streamline) {
   s_streamlineResetHistory = true;
 }
 
-void ResetStreamlineHistory() { s_streamlineResetHistory = true; }
+void ResetStreamlineHistory() {
+  // Resetting DLSS history should resume sampling even if we previously froze.
+  s_rrStillFrameSpp = 0;
+  s_hasTonemappedFrame = false;
+  s_streamlineResetHistory = true;
+}
 
 UINT GetAccumulationFrameCount() { return s_accumulation.GetFrameCount(); }
 
 UINT GetLightCount() { return s_lightCount; }
 
-// DLSS-RR SPP configuration accessors
-void SetDlssEvalSpp(unsigned spp) { s_dlssEvalSpp = spp < 1 ? 1u : spp; }
-unsigned GetDlssEvalSpp() { return s_dlssEvalSpp; }
+// RR jitter scale accessors
+void SetRrJitterScale(float scale) {
+  if (scale < 0.0f) scale = 0.0f;
+  if (scale > 1.0f) scale = 1.0f;
+  s_rrJitterScale = scale;
+}
+
+float GetRrJitterScale() { return s_rrJitterScale; }
 
 bool IsReady() {
   return g_rayTracingSupported && s_rtStateObject != nullptr &&
@@ -1258,6 +1273,44 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
       dlssActive &&
       (s_streamline->GetMode() == StreamlineManager::Mode::DLSS_RayReconstruction);
 
+  // If we've hit maxSPP and the camera/settings haven't changed (meaning
+  // ResetAccumulation hasn't been called), freeze rendering and keep presenting
+  // the last tonemapped output. This works for both accumulation and DLSS-RR.
+  const UINT maxSpp = (g_cameraData.maxSPP > 0.0f) ? (UINT)g_cameraData.maxSPP : 0u;
+  const UINT currSpp = rrActive ? s_rrStillFrameSpp : s_accumulation.GetFrameCount();
+  if (maxSpp > 0 && currSpp >= maxSpp) {
+    ID3D12Resource *freezeSrc = nullptr;
+    if (s_tonemapOutputUAV) {
+      freezeSrc = s_tonemapOutputUAV.Get();
+    } else {
+      // If tonemap output isn't available (e.g., swapchain is HDR), fall back to
+      // copying the main output directly if formats match.
+      const DXGI_FORMAT dstFmt = renderTarget->GetDesc().Format;
+      if (s_outputUAV && s_outputUAV->GetDesc().Format == dstFmt) {
+        freezeSrc = s_outputUAV.Get();
+      }
+    }
+
+    if (freezeSrc) {
+      TransitionResource(dxrList.Get(), freezeSrc,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                         D3D12_RESOURCE_STATE_COPY_SOURCE);
+    TransitionResource(dxrList.Get(), renderTarget, D3D12_RESOURCE_STATE_PRESENT,
+                       D3D12_RESOURCE_STATE_COPY_DEST);
+      dxrList->CopyResource(renderTarget, freezeSrc);
+
+      s_hasTonemappedFrame = true;
+    TransitionResource(dxrList.Get(), renderTarget,
+                       D3D12_RESOURCE_STATE_COPY_DEST,
+                       D3D12_RESOURCE_STATE_RENDER_TARGET);
+      TransitionResource(dxrList.Get(), freezeSrc,
+                         D3D12_RESOURCE_STATE_COPY_SOURCE,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    commandListBase->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+    return true;
+    }
+  }
+
   // Set pipeline and root signature
   dxrList->SetPipelineState1(s_rtStateObject.Get());
   dxrList->SetComputeRootSignature(s_rtGlobalRootSignature.Get());
@@ -1301,6 +1354,14 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
   uint32_t frameIdx = s_jitterFrameIndex;
   float jitterX = Halton(frameIdx, 2) - 0.5f;
   float jitterY = Halton(frameIdx, 3) - 0.5f;
+
+  // DLSS-RR can shimmer at silhouettes because pixel jitter causes much larger
+  // ray-direction changes near the screen edges in a perspective camera.
+  // Allow reducing jitter amplitude in RR mode as a stability/quality trade.
+  if (rrActive) {
+    jitterX *= s_rrJitterScale;
+    jitterY *= s_rrJitterScale;
+  }
 
   // Expose the final jitter values for UI/debug overlays.
   s_lastJitterX = jitterX;
@@ -1371,59 +1432,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
         9, s_lightBuffer->GetGPUVirtualAddress());
   }
 
-  // Note: previously we skipped dispatch once maxSPP was reached and copied the
-  // last output directly to the swapchain. With an HDR pipeline (FP16 output +
-  // post tonemap), we keep dispatch enabled and rely on the shader early-out.
-  if (false && g_cameraData.maxSPP > 0.0f &&
-      s_accumulation.GetFrameCount() >= (UINT)g_cameraData.maxSPP) {
-    // Copy the current output texture to the render target and return
-    TransitionResource(dxrList.Get(), s_outputUAV.Get(),
-                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                       D3D12_RESOURCE_STATE_COPY_SOURCE);
-    TransitionResource(dxrList.Get(), renderTarget,
-                       D3D12_RESOURCE_STATE_PRESENT,
-                       D3D12_RESOURCE_STATE_COPY_DEST);
-
-    D3D12_RESOURCE_DESC srcDesc = s_outputUAV->GetDesc();
-    D3D12_RESOURCE_DESC dstDesc = renderTarget->GetDesc();
-    if (srcDesc.Width != dstDesc.Width || srcDesc.Height != dstDesc.Height) {
-      UINT copyW = (UINT)min(srcDesc.Width, dstDesc.Width);
-      UINT copyH = (UINT)min(srcDesc.Height, dstDesc.Height);
-      D3D12_TEXTURE_COPY_LOCATION dstLoc = {};
-      dstLoc.pResource = renderTarget;
-      dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-      dstLoc.SubresourceIndex = 0;
-
-      D3D12_TEXTURE_COPY_LOCATION srcLoc = {};
-      srcLoc.pResource = s_outputUAV.Get();
-      srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-      srcLoc.SubresourceIndex = 0;
-
-      D3D12_BOX srcBox = {};
-      srcBox.left = 0;
-      srcBox.top = 0;
-      srcBox.front = 0;
-      srcBox.right = copyW;
-      srcBox.bottom = copyH;
-      srcBox.back = 1;
-
-      dxrList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, &srcBox);
-    } else {
-      dxrList->CopyResource(renderTarget, s_outputUAV.Get());
-    }
-
-    // Transition back
-    TransitionResource(dxrList.Get(), renderTarget,
-                       D3D12_RESOURCE_STATE_COPY_DEST,
-                       D3D12_RESOURCE_STATE_RENDER_TARGET);
-    TransitionResource(dxrList.Get(), s_outputUAV.Get(),
-                       D3D12_RESOURCE_STATE_COPY_SOURCE,
-                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-
-    // Bind RTV for subsequent ImGui draws
-    commandListBase->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
-    return true;
-  }
+  // (Legacy) maxSPP early-out used to be here. We now freeze using the
+  // tonemapped output above so it also works with DLSS-RR.
 
   D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
   // RayGen record size must match the raygen slot size (may be 64-aligned)
@@ -1449,6 +1459,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
   // Increment accumulation history only when actually used.
   if (!rrActive)
     s_accumulation.IncrementFrame();
+  else
+    s_rrStillFrameSpp++;
 
   // Optional Streamline / DLSS evaluation
   ID3D12Resource *postColor = s_outputUAV.Get();
@@ -1457,7 +1469,12 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
   const uint32_t outW = (uint32_t)dstDesc.Width;
   const uint32_t outH = (uint32_t)dstDesc.Height;
 
-  if (s_streamline && s_streamline->IsInitialized() &&
+  // If a shader debug view is active, do not run DLSS/DLSS-RR.
+  // DLSS is temporal and will "process" the debug visualization itself,
+  // which can look like shimmer even when the underlying buffer is stable.
+  const bool debugViewActive = (g_cameraData.debugMode != 0.0f);
+
+  if (!debugViewActive && s_streamline && s_streamline->IsInitialized() &&
       s_streamline->IsDeviceSet() && s_streamline->IsEnabled() &&
       s_streamline->GetMode() != StreamlineManager::Mode::Off &&
       s_dlssOutputUAV && s_depthUAV && s_mvecUAV) {
@@ -1652,6 +1669,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
                        D3D12_RESOURCE_STATE_RENDER_TARGET);
     TransitionResource(dxrList.Get(), postColor, D3D12_RESOURCE_STATE_COPY_SOURCE,
                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    // Consider the frame presented even if tonemap is missing (debug/dev).
+    s_hasTonemappedFrame = true;
   }
 
   // Bind RTV for subsequent ImGui draws
