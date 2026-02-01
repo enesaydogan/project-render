@@ -1176,7 +1176,7 @@ bool InitD3D12(HWND hwnd) {
     float extraParams[4];  // x=metalness, y=emissiveIntensity, zw=unused
   };
   const UINT64 matCbSizeSingle = (sizeof(MaterialCB) + 255) & ~255;
-  const UINT64 matCbSize = matCbSizeSingle * 1024; // Support up to 1024 calls
+  const UINT64 matCbSize = matCbSizeSingle * 16384; // Support up to 16384 calls
   D3D12_RESOURCE_DESC matCbDesc = {};
   matCbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
   matCbDesc.Width = matCbSize;
@@ -1192,7 +1192,7 @@ bool InitD3D12(HWND hwnd) {
 
   // Material Structured Buffer for DXR (tightly packed, no 256B alignment)
   {
-    const UINT64 matSbSize = sizeof(MaterialCB) * 1024;
+    const UINT64 matSbSize = sizeof(MaterialCB) * 16384;
     D3D12_RESOURCE_DESC matSbDesc = matCbDesc;
     matSbDesc.Width = matSbSize;
     ThrowIfFailed(g_device->CreateCommittedResource(
@@ -1209,7 +1209,7 @@ bool InitD3D12(HWND hwnd) {
       int ibIndex;
       int pad;
     };
-    const UINT64 meshSbSize = sizeof(MeshData) * 1024;
+    const UINT64 meshSbSize = sizeof(MeshData) * 16384;
     D3D12_RESOURCE_DESC meshSbDesc = matCbDesc;
     meshSbDesc.Width = meshSbSize;
     ThrowIfFailed(g_device->CreateCommittedResource(
@@ -1645,7 +1645,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           D3D12_RANGE readRange = {0, 0};
           if (SUCCEEDED(g_materialStructuredBuffer->Map(
                   0, &readRange, reinterpret_cast<void **>(&pData)))) {
-            for (size_t i = 0; i < g_loadedMaterials.size() && i < 1024; ++i) {
+            for (size_t i = 0; i < g_loadedMaterials.size() && i < 16384; ++i) {
               const auto &srcMat = g_loadedMaterials[i];
               MaterialData mat = {};
               memcpy(mat.diffuseColor, srcMat.diffuseColor, sizeof(float) * 4);
@@ -1699,7 +1699,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           if (SUCCEEDED(g_meshStructuredBuffer->Map(
                   0, &readRange, reinterpret_cast<void **>(&pData)))) {
             // We use global indices for vertices/indices in DXR
-            for (size_t i = 0; i < activeMeshes.size() && i < 1024; ++i) {
+            for (size_t i = 0; i < activeMeshes.size() && i < 16384; ++i) {
               MeshData m = {};
               m.materialIndex = activeMeshes[i].materialIndex;
               m.vbIndex = (int)i;
