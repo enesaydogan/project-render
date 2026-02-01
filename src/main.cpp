@@ -87,6 +87,10 @@ bool g_rasterWireframe =
 bool g_rasterDebugDepth =
     false; // compile shader to output depth as color for debugging
 
+// Global runtime flags (set by command-line)
+bool g_debugLog = false; // enable verbose debug logging (use --debug-log)
+bool g_fastImport = false; // enable Assimp optimization flags to speed imports (--fast-import)
+
 ComPtr<ID3D12Device> g_device;
 static ComPtr<ID3D12CommandQueue> g_commandQueue;
 static ComPtr<IDXGISwapChain3> g_swapChain;
@@ -1369,16 +1373,26 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   // Log to stderr only
   fprintf(stderr, "Application starting...\n");
 
-  // Parse command line for custom glTF file
+  // Parse command line for flags and optional custom glTF file
   std::string customGltfPath;
   if (lpCmdLine && *lpCmdLine) {
-    customGltfPath = lpCmdLine;
-    // Remove quotes if present
-    if (!customGltfPath.empty() && customGltfPath.front() == '"') {
-      customGltfPath = customGltfPath.substr(1);
-    }
-    if (!customGltfPath.empty() && customGltfPath.back() == '"') {
-      customGltfPath = customGltfPath.substr(0, customGltfPath.size() - 1);
+    std::string cmd = lpCmdLine;
+    std::istringstream iss(cmd);
+    std::string token;
+    while (iss >> token) {
+      if (token == "--debug-log") {
+        g_debugLog = true;
+      } else if (token == "--fast-import" || token == "--optimize-import") {
+        g_fastImport = true;
+      } else {
+        // first non-flag token is interpreted as a path
+        if (customGltfPath.empty()) {
+          // remove quotes if present
+          if (!token.empty() && token.front() == '"') token = token.substr(1);
+          if (!token.empty() && token.back() == '"') token = token.substr(0, token.size() - 1);
+          customGltfPath = token;
+        }
+      }
     }
   }
 
