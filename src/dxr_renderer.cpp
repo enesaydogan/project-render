@@ -11,6 +11,11 @@
 #include <vector>
 #include <wrl.h>
 #include <sstream>
+#include <cstdarg>
+
+// Expose global debug flag (set by WinMain parsing)
+extern bool g_debugLog;
+
 
 using Microsoft::WRL::ComPtr;
 
@@ -67,32 +72,34 @@ static D3D12_GPU_DESCRIPTOR_HANDLE s_reservoirGpuHandle[2];
 static D3D12_GPU_DESCRIPTOR_HANDLE s_gi_reservoirGpuHandle[2];
 static D3D12_GPU_DESCRIPTOR_HANDLE s_iblGpuHandle;
 
-// Offset constants for s_srvHeap
+// Descriptor counts (tweak to support large models)
+static const UINT DXR_HEAP_TEX_COUNT = 2048;        // max textures
+static const UINT DXR_HEAP_VB_COUNT = 4096;         // vertex buffer SRVs
+static const UINT DXR_HEAP_IB_COUNT = 4096;         // index buffer SRVs
 static const UINT DXR_HEAP_TEX_OFFSET = 0;
-static const UINT DXR_HEAP_VB_OFFSET = 2048;
-static const UINT DXR_HEAP_IB_OFFSET = 2048 + 1024;
-static const UINT DXR_HEAP_UAV_OFFSET = 2048 + 1024 + 1024;
-static const UINT DXR_HEAP_ACCUM_UAV_OFFSET = 2048 + 1024 + 1024 + 1;
-static const UINT DXR_HEAP_RESERVOIR_0_OFFSET = 2048 + 1024 + 1024 + 2;
-static const UINT DXR_HEAP_RESERVOIR_1_OFFSET = 2048 + 1024 + 1024 + 3;
-static const UINT DXR_HEAP_GI_RESERVOIR_0_OFFSET_A = 2048 + 1024 + 1024 + 4;
-static const UINT DXR_HEAP_GI_RESERVOIR_0_OFFSET_B = 2048 + 1024 + 1024 + 5;
-static const UINT DXR_HEAP_GI_RESERVOIR_0_OFFSET_C = 2048 + 1024 + 1024 + 6;
-static const UINT DXR_HEAP_GI_RESERVOIR_1_OFFSET_A = 2048 + 1024 + 1024 + 7;
-static const UINT DXR_HEAP_GI_RESERVOIR_1_OFFSET_B = 2048 + 1024 + 1024 + 8;
-static const UINT DXR_HEAP_GI_RESERVOIR_1_OFFSET_C = 2048 + 1024 + 1024 + 9;
+static const UINT DXR_HEAP_VB_OFFSET = DXR_HEAP_TEX_OFFSET + DXR_HEAP_TEX_COUNT;
+static const UINT DXR_HEAP_IB_OFFSET = DXR_HEAP_VB_OFFSET + DXR_HEAP_VB_COUNT;
+static const UINT DXR_HEAP_UAV_OFFSET = DXR_HEAP_IB_OFFSET + DXR_HEAP_IB_COUNT;
+static const UINT DXR_HEAP_ACCUM_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 1;
+static const UINT DXR_HEAP_RESERVOIR_0_OFFSET = DXR_HEAP_UAV_OFFSET + 2;
+static const UINT DXR_HEAP_RESERVOIR_1_OFFSET = DXR_HEAP_UAV_OFFSET + 3;
+static const UINT DXR_HEAP_GI_RESERVOIR_0_OFFSET_A = DXR_HEAP_UAV_OFFSET + 4;
+static const UINT DXR_HEAP_GI_RESERVOIR_0_OFFSET_B = DXR_HEAP_UAV_OFFSET + 5;
+static const UINT DXR_HEAP_GI_RESERVOIR_0_OFFSET_C = DXR_HEAP_UAV_OFFSET + 6;
+static const UINT DXR_HEAP_GI_RESERVOIR_1_OFFSET_A = DXR_HEAP_UAV_OFFSET + 7;
+static const UINT DXR_HEAP_GI_RESERVOIR_1_OFFSET_B = DXR_HEAP_UAV_OFFSET + 8;
+static const UINT DXR_HEAP_GI_RESERVOIR_1_OFFSET_C = DXR_HEAP_UAV_OFFSET + 9;
 // Extra UAVs (u10+) reserved for Streamline/DLSS inputs/outputs
-static const UINT DXR_HEAP_DEPTH_UAV_OFFSET = 2048 + 1024 + 1024 + 10;
-static const UINT DXR_HEAP_MVEC_UAV_OFFSET = 2048 + 1024 + 1024 + 11;
-static const UINT DXR_HEAP_ALBEDO_UAV_OFFSET = 2048 + 1024 + 1024 + 12;
-static const UINT DXR_HEAP_NORMAL_ROUGHNESS_UAV_OFFSET =
-    2048 + 1024 + 1024 + 13;
-static const UINT DXR_HEAP_DLSS_OUT_UAV_OFFSET = 2048 + 1024 + 1024 + 14;
-static const UINT DXR_HEAP_IBL_OFFSET = 2048 + 1024 + 1024 + 15;
-static const UINT DXR_HEAP_SPEC_ALBEDO_OFFSET = 2048 + 1024 + 1024 + 16;
-static const UINT DXR_HEAP_SPEC_HITDIST_OFFSET = 2048 + 1024 + 1024 + 17;
-static const UINT DXR_HEAP_SPEC_MVEC_OFFSET = 2048 + 1024 + 1024 + 18;
-static const UINT DXR_HEAP_TOTAL_COUNT = 2048 + 1024 + 1024 + 19;
+static const UINT DXR_HEAP_DEPTH_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 10;
+static const UINT DXR_HEAP_MVEC_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 11;
+static const UINT DXR_HEAP_ALBEDO_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 12;
+static const UINT DXR_HEAP_NORMAL_ROUGHNESS_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 13;
+static const UINT DXR_HEAP_DLSS_OUT_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 14;
+static const UINT DXR_HEAP_IBL_OFFSET = DXR_HEAP_UAV_OFFSET + 15;
+static const UINT DXR_HEAP_SPEC_ALBEDO_OFFSET = DXR_HEAP_UAV_OFFSET + 16;
+static const UINT DXR_HEAP_SPEC_HITDIST_OFFSET = DXR_HEAP_UAV_OFFSET + 17;
+static const UINT DXR_HEAP_SPEC_MVEC_OFFSET = DXR_HEAP_UAV_OFFSET + 18;
+static const UINT DXR_HEAP_TOTAL_COUNT = DXR_HEAP_TEX_COUNT + DXR_HEAP_VB_COUNT + DXR_HEAP_IB_COUNT + 19;
 
 // Output texture dimensions used by DXR (kept local to module)
 static UINT s_outputWidth = 1280;
@@ -849,14 +856,14 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
 void BuildAccelerationStructures(
     const std::vector<Asset::GpuMesh> &meshes,
     const std::vector<Scene::Instance> &instances) {
-  {
+  if (g_debugLog) {
     std::ostringstream _oss; _oss << "DxrRenderer::BuildAccelerationStructures: ENTRY meshes=" << meshes.size() << " instances=" << instances.size() << "\n";
     fprintf(stderr, "%s", _oss.str().c_str()); fflush(stderr);
   }
   if (!g_rayTracingSupported || !s_dxrDevice)
     return;
   try {
-    {
+    if (g_debugLog) {
       std::ostringstream _oss2; _oss2 << "DxrRenderer::BuildAccelerationStructures: after check - commandQueue=" << s_commandQueue << " fence=" << s_fence << " s_srvHeap=" << s_srvHeap.Get() << "\n";
       fprintf(stderr, "%s", _oss2.str().c_str()); fflush(stderr);
     }
@@ -918,8 +925,10 @@ void BuildAccelerationStructures(
       D3D12_CPU_DESCRIPTOR_HANDLE ibCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
       ibCpu.ptr += (SIZE_T)ibIndex * descSize;
 
-      fprintf(stderr, "DxrRenderer: Creating VB/IB SRV for mesh %llu (vb=%p ib=%p verts=%u idx=%u)\n", (unsigned long long)i, m.vertexBuffer.Get(), m.indexBuffer.Get(), m.vertexCount, m.indexCount);
-      fflush(stderr);
+      if (g_debugLog) {
+        fprintf(stderr, "DxrRenderer: Creating VB/IB SRV for mesh %llu (vb=%p ib=%p verts=%u idx=%u)\n", (unsigned long long)i, m.vertexBuffer.Get(), m.indexBuffer.Get(), m.vertexCount, m.indexCount);
+        fflush(stderr);
+      }
 
       // Extra defensive checks to avoid crashing the process when a malformed
       // mesh or descriptor calculation slips through earlier validation.
@@ -944,7 +953,7 @@ void BuildAccelerationStructures(
       vbSrv.Buffer.StructureByteStride = sizeof(Asset::Vertex);
       vbSrv.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
       s_device->CreateShaderResourceView(m.vertexBuffer.Get(), &vbSrv, vbCpu);
-      fprintf(stderr, "DxrRenderer: VB SRV created for mesh %zu\n", i); fflush(stderr);
+      if (g_debugLog) { fprintf(stderr, "DxrRenderer: VB SRV created for mesh %zu\n", i); fflush(stderr); }
 
       D3D12_SHADER_RESOURCE_VIEW_DESC ibSrv = {};
       ibSrv.Format = DXGI_FORMAT_R32_UINT;
@@ -955,7 +964,7 @@ void BuildAccelerationStructures(
       ibSrv.Buffer.StructureByteStride = 0; // Typed buffer
       ibSrv.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
       s_device->CreateShaderResourceView(m.indexBuffer.Get(), &ibSrv, ibCpu);
-      fprintf(stderr, "DxrRenderer: IB SRV created for mesh %zu\n", i); fflush(stderr);
+      if (g_debugLog) { fprintf(stderr, "DxrRenderer: IB SRV created for mesh %zu\n", i); fflush(stderr); }
     }
 
     // Wait for GPU (simple sync)

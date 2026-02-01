@@ -29,6 +29,11 @@
 
 using Microsoft::WRL::ComPtr;
 
+// Access global runtime flags set by WinMain
+extern bool g_debugLog;
+extern bool g_fastImport;
+
+
 inline void ThrowIfFailed(HRESULT hr)
 {
     if (FAILED(hr)) {
@@ -883,14 +888,14 @@ bool LoadWithAssimp(const std::string& path, std::vector<GpuMesh>& outMeshes, st
 {
     Assimp::Importer importer;
     if (s_progressCb) s_progressCb(0.01f, std::string("Starting import: ") + path);
-    const aiScene* scene = importer.ReadFile(path, 
-        aiProcess_Triangulate | 
-        aiProcess_CalcTangentSpace | 
-        aiProcess_GenSmoothNormals |
-        aiProcess_JoinIdenticalVertices |
-        aiProcess_SortByPType |
-        aiProcess_ConvertToLeftHanded |
-        aiProcess_GlobalScale);
+    unsigned int assimpFlags = aiProcess_Triangulate | aiProcess_CalcTangentSpace | aiProcess_GenSmoothNormals |
+        aiProcess_JoinIdenticalVertices | aiProcess_SortByPType | aiProcess_ConvertToLeftHanded | aiProcess_GlobalScale;
+    if (g_fastImport) {
+        // Aggressively optimize meshes and graph to reduce mesh count and speed up uploads
+        assimpFlags |= aiProcess_PreTransformVertices | aiProcess_OptimizeMeshes | aiProcess_OptimizeGraph | aiProcess_ImproveCacheLocality;
+    }
+
+    const aiScene* scene = importer.ReadFile(path, assimpFlags);
 
     if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
         fprintf(stderr, "Assimp Error: %s\n", importer.GetErrorString());
@@ -1013,11 +1018,11 @@ bool LoadWithAssimp(const std::string& path, std::vector<GpuMesh>& outMeshes, st
 
             GpuMesh gm;
             ComPtr<ID3D12Resource> vbUpload, ibUpload;
-            fprintf(stderr, "CreateDefaultBuffer (GLTF path): vb bytes=%zu ib bytes=%zu (mesh verts=%zu idx=%zu)\n", sizeof(Vertex) * vertices.size(), sizeof(uint32_t) * indices.size(), vertices.size(), indices.size()); fflush(stderr);
+            if (g_debugLog) { fprintf(stderr, "CreateDefaultBuffer (Assimp path): vb bytes=%zu ib bytes=%zu (mesh verts=%zu idx=%zu)\n", sizeof(Vertex) * vertices.size(), sizeof(uint32_t) * indices.size(), vertices.size(), indices.size()); fflush(stderr); }
             CreateDefaultBuffer(vertices.data(), sizeof(Vertex) * vertices.size(), gm.vertexBuffer, vbUpload, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
-            fprintf(stderr, "CreateDefaultBuffer (GLTF path): vb created\n"); fflush(stderr);
+            if (g_debugLog) { fprintf(stderr, "CreateDefaultBuffer (Assimp path): vb created\n"); fflush(stderr); }
             CreateDefaultBuffer(indices.data(), sizeof(uint32_t) * indices.size(), gm.indexBuffer, ibUpload, D3D12_RESOURCE_STATE_INDEX_BUFFER);
-            fprintf(stderr, "CreateDefaultBuffer (GLTF path): ib created\n"); fflush(stderr);
+            if (g_debugLog) { fprintf(stderr, "CreateDefaultBuffer (Assimp path): ib created\n"); fflush(stderr); }
 
             gm.vbView.BufferLocation = gm.vertexBuffer->GetGPUVirtualAddress();
             gm.vbView.SizeInBytes = (UINT)(sizeof(Vertex) * vertices.size());
