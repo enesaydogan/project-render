@@ -74,9 +74,9 @@ static D3D12_GPU_DESCRIPTOR_HANDLE s_gi_reservoirGpuHandle[2];
 static D3D12_GPU_DESCRIPTOR_HANDLE s_iblGpuHandle;
 
 // Descriptor counts (tweak to support large models)
-static const UINT DXR_HEAP_TEX_COUNT = 2048;        // max textures
-static const UINT DXR_HEAP_VB_COUNT = 4096;         // vertex buffer SRVs
-static const UINT DXR_HEAP_IB_COUNT = 4096;         // index buffer SRVs
+static const UINT DXR_HEAP_TEX_COUNT = 16384;       // max textures (increased from 2048)
+static const UINT DXR_HEAP_VB_COUNT = 16384;        // vertex buffer SRVs (increased from 4096)
+static const UINT DXR_HEAP_IB_COUNT = 16384;        // index buffer SRVs (increased from 4096)
 static const UINT DXR_HEAP_TEX_OFFSET = 0;
 static const UINT DXR_HEAP_VB_OFFSET = DXR_HEAP_TEX_OFFSET + DXR_HEAP_TEX_COUNT;
 static const UINT DXR_HEAP_IB_OFFSET = DXR_HEAP_VB_OFFSET + DXR_HEAP_VB_COUNT;
@@ -1335,6 +1335,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
                  UINT textureDescriptorCount,
                  const std::vector<Asset::GpuMesh> &meshes,
                  ID3D12Resource *meshDataSB) {
+  // fprintf(stderr, "DxrRenderer: RenderFrame start\n");
   if (!g_rayTracingSupported || !s_rtStateObject || !s_srvHeap)
     return false;
   if (!renderTarget)
@@ -1411,6 +1412,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
   // Bind TLAS
   dxrList->SetComputeRootShaderResourceView(
       0, s_tlas.result->GetGPUVirtualAddress());
+  
+  // fprintf(stderr, "DxrRenderer: RenderFrame - SetRootSignature done\n");
 
   // Copy global texture descriptors to our local DXR heap IF they've changed or
   // every frame (simple)
@@ -1432,10 +1435,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
 
     // Only copy what fits
     UINT count =
-        (textureDescriptorCount < 2048) ? textureDescriptorCount : 2048;
+        (textureDescriptorCount < DXR_HEAP_TEX_COUNT) ? textureDescriptorCount : DXR_HEAP_TEX_COUNT;
     s_device->CopyDescriptorsSimple(count, dstStart, srcStart,
                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
   }
+  // fprintf(stderr, "DxrRenderer: RenderFrame - CopyDescriptorsSimple done\n");
 
   // Bind descriptor heaps
   ID3D12DescriptorHeap *heaps[] = {s_srvHeap.Get()};
@@ -1547,7 +1551,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
   dispatchDesc.Height = s_outputHeight;
   dispatchDesc.Depth = 1;
 
+  // fprintf(stderr, "DxrRenderer: Dispatching Rays\n");
   dxrList->DispatchRays(&dispatchDesc);
+  // fprintf(stderr, "DxrRenderer: Dispatched Rays\n");
 
   // Increment accumulation history only when actually used.
   if (!rrActive)
