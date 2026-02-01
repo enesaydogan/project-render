@@ -889,7 +889,7 @@ bool LoadWithAssimp(const std::string& path, std::vector<GpuMesh>& outMeshes, st
     Assimp::Importer importer;
     if (s_progressCb) s_progressCb(0.01f, std::string("Starting import: ") + path);
     unsigned int assimpFlags = aiProcess_Triangulate | aiProcess_CalcTangentSpace | aiProcess_GenSmoothNormals |
-        aiProcess_JoinIdenticalVertices | aiProcess_SortByPType | aiProcess_ConvertToLeftHanded | aiProcess_GlobalScale;
+        aiProcess_JoinIdenticalVertices | aiProcess_SortByPType | aiProcess_FlipUVs | aiProcess_GlobalScale;
     if (g_fastImport) {
         // Aggressively optimize meshes and graph to reduce mesh count and speed up uploads
         assimpFlags |= aiProcess_PreTransformVertices | aiProcess_OptimizeMeshes | aiProcess_OptimizeGraph | aiProcess_ImproveCacheLocality;
