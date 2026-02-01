@@ -22,6 +22,9 @@ target_sources(project-render PRIVATE
 
 if (MSVC)
   target_compile_options(project-render PRIVATE /W4 /permissive-)
+  # Enable strong optimization for Release builds
+  target_compile_options(project-render PRIVATE $<$<CONFIG:Release>:/Ox /Ob2 /Oi /Ot /Oy /GL>)
+  target_link_options(project-render PRIVATE $<$<CONFIG:Release>:/LTCG>)
 endif()
 
 target_link_libraries(project-render PRIVATE d3d12 dxgi)
