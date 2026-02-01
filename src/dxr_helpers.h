@@ -121,8 +121,11 @@ BuildBLAS(ID3D12Device5 *device, ID3D12GraphicsCommandList4 *commandList,
   D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
   inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
   inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+  // Use PREFER_FAST_BUILD for faster load times.
+  // PREFER_FAST_TRACE is better for runtime performance but much slower to build.
+  // For models taking "ages" to load, FAST_BUILD is the right trade-off.
   inputs.Flags =
-      D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+      D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
   inputs.NumDescs = 1;
   inputs.pGeometryDescs = &geomDesc;
 

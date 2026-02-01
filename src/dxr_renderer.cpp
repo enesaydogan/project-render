@@ -9,6 +9,7 @@
 #include "streamline_manager.h"
 #include <cstdio>
 #include <vector>
+#include <unordered_map>
 #include <wrl.h>
 #include <sstream>
 #include <cstdarg>
@@ -166,7 +167,7 @@ static ComPtr<ID3D12DescriptorHeap> s_tonemapHeap;
 struct ShaderTableEntry {
   void *id;
 };
-static UINT s_shaderTableEntrySize = 0;
+static UINT64 s_shaderTableEntrySize = 0;
 static D3D12_GPU_VIRTUAL_ADDRESS s_rayGenShaderTable = 0;
 static D3D12_GPU_VIRTUAL_ADDRESS s_missShaderTable = 0;
 static D3D12_GPU_VIRTUAL_ADDRESS s_hitGroupShaderTable = 0;
@@ -606,12 +607,12 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   UINT shaderIdentifierSize = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
   // RayGen record must be aligned to 64 bytes (shader table alignment),
   // miss/hit records must be aligned to 32 bytes (shader record alignment).
-  UINT s_rayGenEntrySize =
+  UINT64 s_rayGenEntrySize =
       Align(shaderIdentifierSize, D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
   s_shaderTableEntrySize = Align(shaderIdentifierSize,
                                  D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT);
   // Total SBT size: raygen + miss + hit (each 1 entry for now)
-  UINT shaderTableSize =
+  UINT64 shaderTableSize =
       s_rayGenEntrySize + s_shaderTableEntrySize + s_shaderTableEntrySize;
   AllocateUploadBuffer(s_device, nullptr, shaderTableSize, &s_sbtStorage,
                        L"Shader Table");
@@ -1015,46 +1016,80 @@ void BuildAccelerationStructures(
       }
     }
 
+    // Pipelining:
+    // Create separate allocators for each batch so we can submit them without blocking/waiting on the CPU.
+    // We only wait once at the very end.
+    const size_t BLAS_BATCH_SIZE = 500;
+    size_t batchCount = 0;
+
+    std::vector<ComPtr<ID3D12CommandAllocator>> pendingAllocators;
+    pendingAllocators.push_back(cmdAlloc); // The initial one
+
     if (meshesChanged || s_allBLAS.empty()) {
       s_allBLAS.clear();
       s_cachedMeshBuffers.clear();
       try {
         for (size_t i = 0; i < meshes.size(); ++i) {
           const auto &mesh = meshes[i];
-          // Protect against invalid GPU virtual addresses
-          if (!mesh.vertexBuffer || !mesh.indexBuffer) {
-            fprintf(stderr,
-                    "DxrRenderer: Skipping mesh %zu because buffers are null\n",
-                    i);
-            continue;
-          }
+          if (!mesh.vertexBuffer || !mesh.indexBuffer) continue;
+          
           auto vbAddr = mesh.vertexBuffer->GetGPUVirtualAddress();
           auto ibAddr = mesh.indexBuffer->GetGPUVirtualAddress();
-          if (vbAddr == 0 || ibAddr == 0) {
-            fprintf(stderr,
-                    "DxrRenderer: Mesh %zu has invalid GPU addresses "
-                    "(vb=0x%016llx ib=0x%016llx) - aborting\n",
-                    i, (unsigned long long)vbAddr, (unsigned long long)ibAddr);
-            return;
-          }
+          
           auto bl = BuildBLAS(s_dxrDevice.Get(), cmdList.Get(), vbAddr,
                               mesh.vertexCount, sizeof(Asset::Vertex), ibAddr,
                               mesh.indexCount);
-          // Basic validation
-          if (!bl.result || !bl.scratch) {
-            fprintf(stderr,
-                    "DxrRenderer: BuildBLAS produced invalid buffers for mesh "
-                    "%zu\n",
-                    i);
-            return;
+          if (bl.result && bl.scratch) {
+              s_allBLAS.push_back({bl, (UINT64)i});
+              s_cachedMeshBuffers.push_back(mesh.vertexBuffer.Get());
           }
-          s_allBLAS.push_back({bl, (UINT64)i});
-          s_cachedMeshBuffers.push_back(mesh.vertexBuffer.Get());
+
+          batchCount++;
+          if (batchCount >= BLAS_BATCH_SIZE) {
+              ThrowIfFailed(cmdList->Close());
+              ID3D12CommandList* lists[] = { cmdList.Get() };
+              s_commandQueue->ExecuteCommandLists(1, lists);
+              
+              // DO NOT WAIT. Create new allocator and continue recording.
+              ComPtr<ID3D12CommandAllocator> nextAlloc;
+              ThrowIfFailed(s_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&nextAlloc)));
+              pendingAllocators.push_back(nextAlloc);
+              
+              // Reset same list with new allocator
+              ThrowIfFailed(cmdList->Reset(nextAlloc.Get(), nullptr));
+              batchCount = 0;
+          }
         }
+        
+        // Final flush if any remaining (and ensure list is closed regardless)
+        ThrowIfFailed(cmdList->Close());
+        ID3D12CommandList* lists[] = { cmdList.Get() };
+        s_commandQueue->ExecuteCommandLists(1, lists);
+
+        // NOW we wait for everything to finish (Single Wait)
+        const UINT64 fenceVal = s_fenceValues[*s_frameIndexPtr];
+        s_commandQueue->Signal(s_fence, fenceVal);
+        s_fenceValues[*s_frameIndexPtr]++;
+        if (s_fence->GetCompletedValue() < fenceVal) {
+            s_fence->SetEventOnCompletion(fenceVal, s_fenceEvent);
+            WaitForSingleObject(s_fenceEvent, INFINITE);
+        }
+        
+        // Safe to release all scratch buffers now
+        for(size_t k=0; k < s_allBLAS.size(); ++k) {
+            s_allBLAS[k].buffers.scratch.Reset();
+        }
+        
+        // Restore a fresh allocator/list for TLAS build (reuse the last one created)
+        pendingAllocators.clear(); 
+        ThrowIfFailed(cmdAlloc->Reset()); // Reuse the original handle for scope
+        ThrowIfFailed(cmdList->Reset(cmdAlloc.Get(), nullptr));
+
       } catch (...) {
         fprintf(stderr, "DxrRenderer: BLAS Build crashed\n");
         return;
       }
+      printf("DxrRenderer: BLAS creation completed. Total BLAS count: %zu\n", s_allBLAS.size());
     }
 
     if (s_allBLAS.empty()) {
@@ -1063,18 +1098,29 @@ void BuildAccelerationStructures(
     }
 
     // TLAS
-    std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instanceDescs;
-    for (const auto &sceneInst : instances) {
-      // Find which BLAS corresponds to this mesh
-      size_t meshIdx = (size_t)-1;
-      for (size_t i = 0; i < meshes.size(); ++i) {
-        if (meshes[i].vertexBuffer == sceneInst.mesh.vertexBuffer) {
-          meshIdx = i;
-          break;
+    
+    // Optimization: Pre-compute map from VertexBuffer -> BLAS Index
+    std::unordered_map<ID3D12Resource*, size_t> meshToBlasIndex;
+    meshToBlasIndex.reserve(s_allBLAS.size());
+    for (size_t k = 0; k < s_allBLAS.size(); ++k) {
+        // s_allBLAS[k].meshId stores originalMeshIndex
+        size_t origIdx = (size_t)s_allBLAS[k].meshId;
+        if (origIdx < meshes.size() && meshes[origIdx].vertexBuffer) {
+            meshToBlasIndex[meshes[origIdx].vertexBuffer.Get()] = k;
         }
-      }
-      if (meshIdx == (size_t)-1)
-        continue;
+    }
+
+    std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instanceDescs;
+    instanceDescs.reserve(instances.size());
+
+    for (const auto &sceneInst : instances) {
+      if (!sceneInst.mesh.vertexBuffer) continue;
+
+      auto it = meshToBlasIndex.find(sceneInst.mesh.vertexBuffer.Get());
+      if (it == meshToBlasIndex.end()) continue;
+
+      size_t blasIndex = it->second;
+      UINT originalMeshIdx = (UINT)s_allBLAS[blasIndex].meshId;
 
       D3D12_RAYTRACING_INSTANCE_DESC inst = {};
       // Convert Column-Major 4x4 to Row-Major 3x4
@@ -1093,12 +1139,12 @@ void BuildAccelerationStructures(
       inst.Transform[2][2] = m[10];
       inst.Transform[2][3] = m[14];
 
-      inst.InstanceID = (UINT)meshIdx; // Use mesh index for shader binding
+      inst.InstanceID = originalMeshIdx; // Use mesh index for shader binding
       inst.InstanceMask = 0xFF;
       inst.InstanceContributionToHitGroupIndex = 0;
       inst.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
       inst.AccelerationStructure =
-          s_allBLAS[meshIdx].buffers.result->GetGPUVirtualAddress();
+          s_allBLAS[blasIndex].buffers.result->GetGPUVirtualAddress();
       instanceDescs.push_back(inst);
     }
 
@@ -1484,7 +1530,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
 
   D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
   // RayGen record size must match the raygen slot size (may be 64-aligned)
-  UINT s_rayGenEntrySize = Align(D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES,
+  UINT64 s_rayGenEntrySize = Align(D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES,
                                  D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
   dispatchDesc.RayGenerationShaderRecord.StartAddress = s_rayGenShaderTable;
   dispatchDesc.RayGenerationShaderRecord.SizeInBytes = s_rayGenEntrySize;

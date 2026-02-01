@@ -22,6 +22,7 @@
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
+#include <assimp/ProgressHandler.hpp>
 
 #ifdef USE_TINYGLTF
 #include <tiny_gltf.h>
@@ -884,15 +885,50 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
 
 #endif
 
+// Custom Progress Handler for Assimp to feed into our system
+class AssetProgressHandler : public Assimp::ProgressHandler {
+public:
+    AssetProgressHandler(std::function<void(float, const std::string&)> cb, const std::string& path) 
+        : m_cb(cb), m_path(path) {}
+    
+    virtual bool Update(float percentage) override {
+        if (m_cb) {
+             // Assimp reports 0.0 to 1.0 (or sometimes -1.0 if unknown)
+             if (percentage >= 0.0f) {
+                 float p = percentage; // already 0..1
+                 // Clamp to 0..1 just in case
+                 if (p < 0.0f) p = 0.0f;
+                 if (p > 1.0f) p = 1.0f;
+                 // Re-map 0..1 to 0..0.8 range for "Loading" phase (leaving room for processing)
+                 m_cb(p * 0.8f, "Importing " + m_path + "...");
+             }
+        }
+        return true; 
+    }
+private:
+    std::function<void(float, const std::string&)> m_cb;
+    std::string m_path;
+};
+
 bool LoadWithAssimp(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vector<Material>* outMaterials, std::vector<Texture>* outTextures, const float* rootTranslation)
 {
     Assimp::Importer importer;
+    // Hook up progress handler.
+    // NOTE: Assimp Importer takes ownership of the progress handler and deletes it in its destructor.
+    // Therefore, we must allocate it on the heap.
+    if (s_progressCb) {
+        AssetProgressHandler* progressHandler = new AssetProgressHandler(s_progressCb, path);
+        importer.SetProgressHandler(progressHandler);
+    }
+
     if (s_progressCb) s_progressCb(0.01f, std::string("Starting import: ") + path);
+    // Base flags: fast loading, fewer optimizations
     unsigned int assimpFlags = aiProcess_Triangulate | aiProcess_CalcTangentSpace | aiProcess_GenSmoothNormals |
-        aiProcess_JoinIdenticalVertices | aiProcess_SortByPType | aiProcess_FlipUVs | aiProcess_GlobalScale;
+        aiProcess_SortByPType | aiProcess_FlipUVs | aiProcess_GlobalScale;
+    
     if (g_fastImport) {
-        // Aggressively optimize meshes and graph to reduce mesh count and speed up uploads
-        assimpFlags |= aiProcess_PreTransformVertices | aiProcess_OptimizeMeshes | aiProcess_OptimizeGraph | aiProcess_ImproveCacheLocality;
+        // Aggressively optimize: Join vertices, Improve Cache, etc. (Can be slow to load!)
+        assimpFlags |= aiProcess_JoinIdenticalVertices | aiProcess_PreTransformVertices | aiProcess_OptimizeMeshes | aiProcess_OptimizeGraph | aiProcess_ImproveCacheLocality;
     }
 
     const aiScene* scene = importer.ReadFile(path, assimpFlags);
