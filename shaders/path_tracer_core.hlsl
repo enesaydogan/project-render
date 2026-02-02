@@ -114,11 +114,6 @@ void RayGen()
     float x_view_center = ndcCenter.x * aspect * f_inv;
     float3 rayDirCenter = normalize(x_view_center * R + y_view_center * U + forward);
 
-    // DLSS-RR is very sensitive to jitter leaking into depth/MVs.
-    // When RR is active, generate guide buffers from a stable (non-jittered)
-    // primary ray at the pixel center.
-    bool useStableGbuffer = (dlssRayReconstruction > 0.5);
-
     float3 accumulatedColor = float3(0, 0, 0);
     float3 throughput = float3(1, 1, 1);
 
@@ -132,58 +127,6 @@ void RayGen()
     float3 primarySpecAlbedo = float3(0, 0, 0);
     float primarySpecHitDist = -1.0;
 
-
-    if (useStableGbuffer) {
-        RayDesc gRay;
-        gRay.Origin = rayOrigin;
-        gRay.Direction = rayDirCenter;
-        gRay.TMin = 0.001;
-        gRay.TMax = 10000.0;
-
-        RayPayload gPayload;
-        gPayload.color = float3(0,0,0);
-        gPayload.albedo = float3(0,0,0);
-        gPayload.emissive = float3(0,0,0);
-        gPayload.normal = float3(0,0,0);
-        gPayload.position = float3(0,0,0);
-        gPayload.refractionColor = float3(0,0,0);
-        gPayload.ior = 1.0;
-        gPayload.roughness = 1.0;
-        gPayload.metalness = 0.0;
-        gPayload.matIndex = 0;
-        gPayload.t = -1.0;
-
-        TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, gRay, gPayload);
-
-        if (gPayload.t >= 0.0) {
-            primaryHit = true;
-            primaryPos = gPayload.position;
-            primaryNormal = gPayload.normal;
-            primaryAlbedo = gPayload.albedo;
-            primaryRoughness = max(0.001, gPayload.roughness);
-            primaryViewZ = dot(primaryPos - camPos, forward);
-
-            float3 F0 = lerp(float3(0.04, 0.04, 0.04), gPayload.albedo, gPayload.metalness);
-            float NdotV = saturate(dot(gPayload.normal, -rayDirCenter));
-            primarySpecAlbedo = EnvBRDFApprox2(F0, primaryRoughness * primaryRoughness, NdotV);
-
-            if (max(primarySpecAlbedo.r, max(primarySpecAlbedo.g, primarySpecAlbedo.b)) > 0.001) {
-                float3 R_spec = reflect(rayDirCenter, gPayload.normal);
-                RayDesc specHitRay;
-                specHitRay.Origin = primaryPos + gPayload.normal * 0.001;
-                specHitRay.Direction = R_spec;
-                specHitRay.TMin = 0.001;
-                specHitRay.TMax = 1000.0;
-                RayPayload specHitPayload;
-                specHitPayload.t = -1.0;
-                TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, specHitRay, specHitPayload);
-                primarySpecHitDist = (specHitPayload.t > 0) ? specHitPayload.t : 1000.0;
-            } else {
-                primarySpecHitDist = 0.0;
-            }
-        }
-    }
-    
     int specularBounces = 0;
     int refractiveBounces = 0;
     int giBounces = 0;
@@ -212,14 +155,17 @@ void RayGen()
         TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
 
 
-        if (!useStableGbuffer && bounce == 0 && payload.t >= 0.0) {
+        if (bounce == 0 && payload.t >= 0.0) {
             primaryHit = true;
             primaryPos = payload.position;
             primaryNormal = payload.normal;
             primaryAlbedo = payload.albedo;
             primaryRoughness = max(0.001, payload.roughness);
-            // View-space z (positive forward)
-            primaryViewZ = dot(primaryPos - camPos, forward);
+            
+            // For DLSS-RR, use the distance along the center ray to avoid depth jitter
+            // but use the actual hit position for coordinates.
+            float3 toHit = primaryPos - camPos;
+            primaryViewZ = dot(toHit, forward); 
 
             // Specular Albedo calculation for DLSS-RR
             float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, payload.metalness);
@@ -227,8 +173,8 @@ void RayGen()
             primarySpecAlbedo = EnvBRDFApprox2(F0, primaryRoughness * primaryRoughness, NdotV);
 
             // Trace dedicated specular reflection ray to get hit distance for DLSS-RR
-            // Only trace if the surface has significant specular reflectance
-            if (max(primarySpecAlbedo.r, max(primarySpecAlbedo.g, primarySpecAlbedo.b)) > 0.001) {
+            // Only trace if the surface has significant specular reflectance AND RR is active
+            if (dlssRayReconstruction > 0.5 && max(primarySpecAlbedo.r, max(primarySpecAlbedo.g, primarySpecAlbedo.b)) > 0.01) {
                 float3 R_spec = reflect(rayDir, payload.normal);
                 RayDesc specHitRay;
                 specHitRay.Origin = primaryPos + payload.normal * 0.001;
@@ -237,14 +183,10 @@ void RayGen()
                 specHitRay.TMax = 1000.0;
                 RayPayload specHitPayload;
                 specHitPayload.t = -1.0;
-                TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, specHitRay, specHitPayload);
-                if (specHitPayload.t > 0) {
-                    primarySpecHitDist = specHitPayload.t;
-                } else {
-                    primarySpecHitDist = 1000.0; // Miss
-                }
+                TraceRay(g_accel, RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0xFF, 0, 0, 0, specHitRay, specHitPayload);
+                primarySpecHitDist = (specHitPayload.t > 0) ? specHitPayload.t : 1000.0;
             } else {
-                primarySpecHitDist = 0.0; // Non-reflective
+                primarySpecHitDist = 0.0;
             }
         }
 

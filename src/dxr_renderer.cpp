@@ -981,7 +981,9 @@ void BuildAccelerationStructures(
     s_fenceValues[*s_frameIndexPtr]++;
     if (s_fence->GetCompletedValue() < fence) {
       s_fence->SetEventOnCompletion(fence, s_fenceEvent);
-      WaitForSingleObject(s_fenceEvent, INFINITE);
+      if (WaitForSingleObject(s_fenceEvent, 5000) == WAIT_TIMEOUT) {
+          fprintf(stderr, "DxrRenderer: Timeout waiting for AS build sync (5s). GPU might have hung.\n");
+      }
     }
 
     fprintf(stderr, "DxrRenderer: Creating command allocator/list\n"); fflush(stderr);
@@ -1049,6 +1051,7 @@ void BuildAccelerationStructures(
 
           batchCount++;
           if (batchCount >= BLAS_BATCH_SIZE) {
+              fprintf(stderr, "DxrRenderer: Submitting BLAS batch (mesh %zu/%zu)...\n", i, meshes.size());
               ThrowIfFailed(cmdList->Close());
               ID3D12CommandList* lists[] = { cmdList.Get() };
               s_commandQueue->ExecuteCommandLists(1, lists);
@@ -1075,7 +1078,9 @@ void BuildAccelerationStructures(
         s_fenceValues[*s_frameIndexPtr]++;
         if (s_fence->GetCompletedValue() < fenceVal) {
             s_fence->SetEventOnCompletion(fenceVal, s_fenceEvent);
-            WaitForSingleObject(s_fenceEvent, INFINITE);
+            if (WaitForSingleObject(s_fenceEvent, 10000) == WAIT_TIMEOUT) {
+                fprintf(stderr, "DxrRenderer: Timeout waiting for BLAS build batch (10s).\n");
+            }
         }
         
         // Safe to release all scratch buffers now
@@ -1202,7 +1207,9 @@ void BuildAccelerationStructures(
     s_fenceValues[*s_frameIndexPtr]++;
     if (s_fence->GetCompletedValue() < fence2) {
       s_fence->SetEventOnCompletion(fence2, s_fenceEvent);
-      WaitForSingleObject(s_fenceEvent, INFINITE);
+      if (WaitForSingleObject(s_fenceEvent, 5000) == WAIT_TIMEOUT) {
+          fprintf(stderr, "DxrRenderer: Timeout waiting for TLAS build (5s).\n");
+      }
     }
     if (g_verboseRenderLogs) {
       fprintf(stderr, "DxrRenderer: Acceleration structures built\n");
@@ -1418,29 +1425,36 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
   
   // fprintf(stderr, "DxrRenderer: RenderFrame - SetRootSignature done\n");
 
-  // Copy global texture descriptors to our local DXR heap IF they've changed or
-  // every frame (simple)
+  // Copy global texture descriptors to our local DXR heap IF they've changed
+  static D3D12_GPU_DESCRIPTOR_HANDLE s_lastTexturesGpuStart = {0};
+  static UINT s_lastTextureDescriptorCount = 0;
+
   if (g_cbvSrvAllocator.Heap() && textureDescriptorCount > 0) {
-    UINT descSize = s_device->GetDescriptorHandleIncrementSize(
-        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-    D3D12_CPU_DESCRIPTOR_HANDLE srcStart =
-        g_cbvSrvAllocator.Heap()->GetCPUDescriptorHandleForHeapStart();
-    // find offset of textures in global heap
-    D3D12_GPU_DESCRIPTOR_HANDLE globalGpuStart =
-        g_cbvSrvAllocator.Heap()->GetGPUDescriptorHandleForHeapStart();
-    UINT texOffset =
-        (UINT)((texturesGpuStart.ptr - globalGpuStart.ptr) / descSize);
-    srcStart.ptr += (SIZE_T)texOffset * descSize;
+    if (texturesGpuStart.ptr != s_lastTexturesGpuStart.ptr || textureDescriptorCount != s_lastTextureDescriptorCount) {
+      UINT descSize = s_device->GetDescriptorHandleIncrementSize(
+          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+      D3D12_CPU_DESCRIPTOR_HANDLE srcStart =
+          g_cbvSrvAllocator.Heap()->GetCPUDescriptorHandleForHeapStart();
+      // find offset of textures in global heap
+      D3D12_GPU_DESCRIPTOR_HANDLE globalGpuStart =
+          g_cbvSrvAllocator.Heap()->GetGPUDescriptorHandleForHeapStart();
+      UINT texOffset =
+          (UINT)((texturesGpuStart.ptr - globalGpuStart.ptr) / descSize);
+      srcStart.ptr += (SIZE_T)texOffset * descSize;
 
-    D3D12_CPU_DESCRIPTOR_HANDLE dstStart =
-        s_srvHeap->GetCPUDescriptorHandleForHeapStart();
-    dstStart.ptr += (SIZE_T)DXR_HEAP_TEX_OFFSET * descSize;
+      D3D12_CPU_DESCRIPTOR_HANDLE dstStart =
+          s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+      dstStart.ptr += (SIZE_T)DXR_HEAP_TEX_OFFSET * descSize;
 
-    // Only copy what fits
-    UINT count =
-        (textureDescriptorCount < DXR_HEAP_TEX_COUNT) ? textureDescriptorCount : DXR_HEAP_TEX_COUNT;
-    s_device->CopyDescriptorsSimple(count, dstStart, srcStart,
-                                    D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+      // Only copy what fits
+      UINT count =
+          (textureDescriptorCount < DXR_HEAP_TEX_COUNT) ? textureDescriptorCount : DXR_HEAP_TEX_COUNT;
+      s_device->CopyDescriptorsSimple(count, dstStart, srcStart,
+                                      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+      s_lastTexturesGpuStart = texturesGpuStart;
+      s_lastTextureDescriptorCount = textureDescriptorCount;
+    }
   }
   // fprintf(stderr, "DxrRenderer: RenderFrame - CopyDescriptorsSimple done\n");
 

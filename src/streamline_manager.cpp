@@ -143,16 +143,16 @@ static uint32_t ReadApplicationIdFromEnv() {
   DWORD n =
       GetEnvironmentVariableW(L"SL_APPLICATION_ID", buf, (DWORD)_countof(buf));
   if (n > 0 && n < _countof(buf)) {
-    std::wstring ws(buf);
-    std::string s(ws.begin(), ws.end());
-    return ParseUint32(s);
+    wchar_t *end = nullptr;
+    unsigned long v = std::wcstoul(buf, &end, 0);
+    return (end && end != buf) ? (uint32_t)v : 0;
   }
   n = GetEnvironmentVariableW(L"PROJECT_RENDER_SL_APPLICATION_ID", buf,
                               (DWORD)_countof(buf));
   if (n > 0 && n < _countof(buf)) {
-    std::wstring ws(buf);
-    std::string s(ws.begin(), ws.end());
-    return ParseUint32(s);
+    wchar_t *end = nullptr;
+    unsigned long v = std::wcstoul(buf, &end, 0);
+    return (end && end != buf) ? (uint32_t)v : 0;
   }
   return 0;
 }
@@ -258,7 +258,7 @@ bool StreamlineManager::InitializeEarly() {
   pref.logMessageCallback = m_mirrorLogsToStderr ? &SLLogCallback : nullptr;
   pref.renderAPI = sl::RenderAPI::eD3D12;
   // NGX-backed features (DLSS/DLSS-RR) require an application id.
-  pref.applicationId = 24;
+  pref.applicationId = m_applicationId;
   pref.engine = sl::EngineType::eCustom;
   pref.engineVersion = "1.0.0";
   pref.projectId = "a0f57b54-1daf-4934-90ae-c4035c19df04";
