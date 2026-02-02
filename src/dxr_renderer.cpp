@@ -354,6 +354,9 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   s_outputWidth = renderW;
   s_outputHeight = renderH;
 
+  // Resize accumulation buffer to match new render size
+  s_accumulation.Resize(s_outputWidth, s_outputHeight);
+
   if (g_verboseRenderLogs) {
     fprintf(stderr,
             "DxrRenderer: Creating Ray Tracing Pipeline (size=%u x %u)...\n",
