@@ -21,6 +21,7 @@ void DxrAccumulation::Resize(UINT width, UINT height) {
 
 void DxrAccumulation::Reset() {
     m_frameCount = 0;
+    m_needsClear = true;
 }
 
 void DxrAccumulation::IncrementFrame() {
@@ -78,4 +79,19 @@ void DxrAccumulation::CreateResources(UINT width, UINT height) {
 
     m_device->CreateUnorderedAccessView(m_accumulationBuffer.Get(), nullptr, &uavDesc, m_uavHeap->GetCPUDescriptorHandleForHeapStart());
     m_accumulationUAVGpu = m_uavHeap->GetGPUDescriptorHandleForHeapStart();
+    m_needsClear = true;
+}
+
+void DxrAccumulation::Clear(ID3D12GraphicsCommandList4* commandList) {
+    if (m_accumulationBuffer) {
+        float clearValue[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        commandList->ClearUnorderedAccessViewFloat(
+            m_accumulationUAVGpu,
+            m_uavHeap->GetCPUDescriptorHandleForHeapStart(),
+            m_accumulationBuffer.Get(),
+            clearValue,
+            0,
+            nullptr
+        );
+    }
 }
