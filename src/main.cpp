@@ -2437,15 +2437,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
           }
 
-          const char* qualities[] = {"Max Performance", "Balanced", "Max Quality", "Ultra Performance", "Ultra Quality", "DLAA"};
+          const char* qualities[] = {"Max Performance", "Balanced", "Max Quality", "Ultra Performance", "DLAA"};
           int qIdx = 1;
           switch (g_streamline.GetQuality()) {
           case StreamlineManager::Quality::MaxPerformance: qIdx = 0; break;
           case StreamlineManager::Quality::Balanced: qIdx = 1; break;
           case StreamlineManager::Quality::MaxQuality: qIdx = 2; break;
           case StreamlineManager::Quality::UltraPerformance: qIdx = 3; break;
-          case StreamlineManager::Quality::UltraQuality: qIdx = 4; break;
-          case StreamlineManager::Quality::DLAA: qIdx = 5; break;
+          case StreamlineManager::Quality::DLAA: qIdx = 4; break;
           }
           if (ImGui::Combo("Quality", &qIdx, qualities, IM_ARRAYSIZE(qualities))) {
             StreamlineManager::Quality newQ = StreamlineManager::Quality::Balanced;
@@ -2453,8 +2452,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             if (qIdx == 1) newQ = StreamlineManager::Quality::Balanced;
             if (qIdx == 2) newQ = StreamlineManager::Quality::MaxQuality;
             if (qIdx == 3) newQ = StreamlineManager::Quality::UltraPerformance;
-            if (qIdx == 4) newQ = StreamlineManager::Quality::UltraQuality;
-            if (qIdx == 5) newQ = StreamlineManager::Quality::DLAA;
+            if (qIdx == 4) newQ = StreamlineManager::Quality::DLAA;
             g_streamline.SetQuality(newQ);
             DxrRenderer::ResetStreamlineHistory();
             DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
@@ -2467,6 +2465,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           ImGui::Text("SL: %s / %s",
                       g_streamline.IsInitialized() ? "Init" : "Off",
                       g_streamline.IsDeviceSet() ? "Device" : "NoDevice");
+
+          // Show recommended render (input) size and output (swapchain) size
+          {
+            auto rec = g_streamline.GetRecommendedRenderSize(g_windowWidth, g_windowHeight);
+            ImGui::Text("Render (in): %u x %u    Output (out): %u x %u",
+                        (unsigned)rec.renderWidth, (unsigned)rec.renderHeight,
+                        (unsigned)g_windowWidth, (unsigned)g_windowHeight);
+          }
 
           if (g_streamline.GetMode() == StreamlineManager::Mode::DLSS_RayReconstruction) {
             float rrJitterScale = DxrRenderer::GetRrJitterScale();
