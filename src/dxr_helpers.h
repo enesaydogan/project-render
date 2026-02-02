@@ -125,7 +125,7 @@ BuildBLAS(ID3D12Device5 *device, ID3D12GraphicsCommandList4 *commandList,
   // PREFER_FAST_TRACE is better for runtime performance but much slower to build.
   // For models taking "ages" to load, FAST_BUILD is the right trade-off.
   inputs.Flags =
-      D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE; //PREFER_FAST_BUILD; but testing trace for now
+      D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
   inputs.NumDescs = 1;
   inputs.pGeometryDescs = &geomDesc;
 

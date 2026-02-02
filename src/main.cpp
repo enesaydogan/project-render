@@ -1272,12 +1272,32 @@ void WaitForPreviousFrame() {
   g_fenceValues[g_frameIndex] = currentFenceValue + 1;
 }
 
+void WaitGPUIdle() {
+  if (!g_commandQueue || !g_fence || !g_fenceEvent)
+    return;
+  const UINT64 waitValue = g_fenceValues[g_frameIndex] + 100;
+  HRESULT hr = g_commandQueue->Signal(g_fence.Get(), waitValue);
+  if (FAILED(hr)) {
+      if (g_device->GetDeviceRemovedReason() != S_OK) {
+          fprintf(stderr, "WaitGPUIdle: Signal failed due to Device Removal\n");
+      }
+      return;
+  }
+  g_fence->SetEventOnCompletion(waitValue, g_fenceEvent);
+  if (WaitForSingleObject(g_fenceEvent, 5000) == WAIT_TIMEOUT) {
+      fprintf(stderr, "WaitGPUIdle: Timeout waiting for GPU idle (5s). GPU might be hung.\n");
+  }
+  for (UINT i = 0; i < FrameCount; ++i) {
+    g_fenceValues[i] = waitValue + 1;
+  }
+}
+
 void ResizeSwapChain(UINT width, UINT height) {
   if (width == 0 || height == 0)
     return;
 
   // Wait for GPU to finish
-  WaitForPreviousFrame();
+  WaitGPUIdle();
 
   // Release render targets
   for (UINT i = 0; i < FrameCount; ++i) {
@@ -2157,6 +2177,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         if (!tabDown) {
           if (g_currentRenderMode == RenderMode::Raster) {
             g_currentRenderMode = RenderMode::DXR;
+            WaitGPUIdle();
             DxrRenderer::CreateRayTracingPipeline(g_windowWidth,
                                                   g_windowHeight);
             fprintf(stderr, "Switched to DXR Mode (TAB)\n");
@@ -2405,6 +2426,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             g_streamline.SetEnabled(dlssEnabled);
             DxrRenderer::ResetStreamlineHistory();
             // DLSS uses a different internal render resolution; recreate resources.
+            WaitGPUIdle();
             DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
           }
 
@@ -2434,6 +2456,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
               DxrRenderer::SetRrJitterScale(0.5f);
             }
             DxrRenderer::ResetStreamlineHistory();
+            WaitGPUIdle();
             DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
           }
 
@@ -2455,6 +2478,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             if (qIdx == 4) newQ = StreamlineManager::Quality::DLAA;
             g_streamline.SetQuality(newQ);
             DxrRenderer::ResetStreamlineHistory();
+            WaitGPUIdle();
             DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
           }
 
@@ -2536,11 +2560,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           g_currentRenderMode = RenderMode::DXR;
           // Recreate raytracing pipeline to ensure output texture matches
           // current size
+          WaitGPUIdle();
           DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
         }
         // DXR debug: show UV output from RayGen
         if (ImGui::Checkbox("DXR: Show RayGen UV (debug)", &g_dxrDebugUV)) {
           // Recreate pipeline with debug define; reinitializing RT pipeline
+          WaitGPUIdle();
           DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
         }
         if (ImGui::Checkbox("Raster: Show UV (debug)", &g_rasterDebugUV)) {
@@ -2629,6 +2655,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
     // Wait for previous frame
     WaitForPreviousFrame();
+
+    // Check if the GPU was removed (TDR) during the last frame
+    if (CheckDeviceRemoved()) {
+      fprintf(stderr, "MainLoop: Device was removed. Re-initializing...\n");
+      continue; // Start fresh next iteration
+    }
+
     // fprintf(stderr, "MainLoop: end iteration\n");
   }
 
