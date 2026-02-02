@@ -13,6 +13,7 @@ public:
     void Resize(UINT width, UINT height);
     void Reset();
     void IncrementFrame();
+    void Clear(ID3D12GraphicsCommandList4* commandList);
 
     UINT GetFrameCount() const { return m_frameCount; }
     ID3D12Resource* GetAccumulationBuffer() const { return m_accumulationBuffer.Get(); }
@@ -22,6 +23,9 @@ public:
     bool IsAccumulating() const { return m_isAccumulating; }
     void SetEnabled(bool enabled) { m_enabled = enabled; if(!enabled) Reset(); }
     bool IsEnabled() const { return m_enabled; }
+
+    bool NeedsClear() const { return m_needsClear; }
+    void SetNeedsClear(bool needs) { m_needsClear = needs; }
 
 private:
     void CreateResources(UINT width, UINT height);
@@ -36,4 +40,5 @@ private:
     UINT m_height = 0;
     bool m_isAccumulating = true;
     bool m_enabled = true;
+    bool m_needsClear = false;
 };

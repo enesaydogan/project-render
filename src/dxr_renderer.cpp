@@ -1535,6 +1535,12 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
   // (Legacy) maxSPP early-out used to be here. We now freeze using the
   // tonemapped output above so it also works with DLSS-RR.
 
+  // Clear accumulation buffer if needed
+  if (s_accumulation.NeedsClear()) {
+    s_accumulation.Clear(dxrList.Get());
+    s_accumulation.SetNeedsClear(false);
+  }
+
   D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
   // RayGen record size must match the raygen slot size (may be 64-aligned)
   UINT64 s_rayGenEntrySize = Align(D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES,
