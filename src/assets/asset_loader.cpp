@@ -516,6 +516,19 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
             mat.emissiveTexture = GetImgIdx(m.emissiveTexture.index);
             mat.occlusionTexture = GetImgIdx(m.occlusionTexture.index);
             mat.metalRoughTexture = GetImgIdx(m.pbrMetallicRoughness.metallicRoughnessTexture.index);
+
+            // If texture creation failed for a referenced image, clear the slot.
+            // This avoids sampling uninitialized descriptors (often shows up as black).
+            auto ClearIfInvalid = [&](int& texIdx) {
+                if (texIdx < 0) return;
+                if (texIdx >= (int)tmpTextures.size()) { texIdx = -1; return; }
+                if (!tmpTextures[texIdx].resource) texIdx = -1;
+            };
+            ClearIfInvalid(mat.diffuseTexture);
+            ClearIfInvalid(mat.normalTexture);
+            ClearIfInvalid(mat.emissiveTexture);
+            ClearIfInvalid(mat.occlusionTexture);
+            ClearIfInvalid(mat.metalRoughTexture);
             
             // Fallback for non-PBR shaders: set reflectionTexture to BaseColor if metallic
             if (metallicFactor > 0.5f) {
@@ -546,6 +559,10 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
                 if (ext.Has("specularGlossinessTexture")) {
                     mat.reflectionTexture = GetImgIdx(ext.Get("specularGlossinessTexture").Get("index").GetNumberAsInt());
                 }
+
+                // Validate any overridden texture slots as well.
+                if (mat.diffuseTexture >= 0 && mat.diffuseTexture < (int)tmpTextures.size() && !tmpTextures[mat.diffuseTexture].resource) mat.diffuseTexture = -1;
+                if (mat.reflectionTexture >= 0 && mat.reflectionTexture < (int)tmpTextures.size() && !tmpTextures[mat.reflectionTexture].resource) mat.reflectionTexture = -1;
             }
             tmpMaterials[mi] = std::move(mat);
         }
@@ -978,15 +995,27 @@ bool LoadWithAssimp(const std::string& path, std::vector<GpuMesh>& outMeshes, st
             };
 
             if (outTextures) {
+                auto TryAddTexture = [&](const std::string& texPath, int& outIndex) {
+                    outIndex = -1;
+                    if (texPath.empty()) return;
+                    Asset::Texture t = LoadTextureFromFile(texPath);
+                    if (!t.resource) {
+                        fprintf(stderr, "Assimp: texture load failed: %s\n", texPath.c_str());
+                        return;
+                    }
+                    outIndex = (int)outTextures->size();
+                    outTextures->push_back(std::move(t));
+                };
+
                 std::string dp = GetTexturePath(aiTextureType_DIFFUSE);
-                if (!dp.empty()) { mat.diffuseTexture = (int)outTextures->size(); outTextures->push_back(LoadTextureFromFile(dp)); }
+                TryAddTexture(dp, mat.diffuseTexture);
                 
                 std::string np = GetTexturePath(aiTextureType_NORMALS);
                 if (np.empty()) np = GetTexturePath(aiTextureType_HEIGHT); // Fallback
-                if (!np.empty()) { mat.normalTexture = (int)outTextures->size(); outTextures->push_back(LoadTextureFromFile(np)); }
+                TryAddTexture(np, mat.normalTexture);
 
                 std::string ep = GetTexturePath(aiTextureType_EMISSIVE);
-                if (!ep.empty()) { mat.emissiveTexture = (int)outTextures->size(); outTextures->push_back(LoadTextureFromFile(ep)); }
+                TryAddTexture(ep, mat.emissiveTexture);
             }
             outMaterials->push_back(mat);
         }

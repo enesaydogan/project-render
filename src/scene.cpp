@@ -48,6 +48,37 @@ static std::mutex s_pendingMutex;
 static ImGuizmo::OPERATION g_currentGizmoOp = ImGuizmo::TRANSLATE;
 static ImGuizmo::MODE g_currentGizmoMode = ImGuizmo::WORLD;
 
+int AddTextureFromFile(const std::string &utf8path, bool isHDR) {
+    if (!g_device) {
+        fprintf(stderr, "AddTextureFromFile: no device\n");
+        return -1;
+    }
+    Asset::Texture tex = Asset::LoadTextureFromFile(utf8path, isHDR);
+    if (!tex.resource) {
+        fprintf(stderr, "AddTextureFromFile: failed to load '%s'\n", utf8path.c_str());
+        return -1;
+    }
+
+    const int newIndex = (int)g_loadedTextures.size();
+    g_loadedTextures.push_back(std::move(tex));
+
+    DescriptorAllocation alloc = g_cbvSrvAllocator.AllocatePersistent(1);
+    if (g_textureDescriptorCount == 0) g_texturesGpuStart = alloc.gpu;
+
+    const Asset::Texture &t = g_loadedTextures.back();
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Format = t.format;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MipLevels = t.mipLevels;
+    g_device->CreateShaderResourceView(t.resource.Get(), &srvDesc, alloc.cpu);
+
+    g_textureDescriptorCount += 1;
+    fprintf(stderr, "AddTextureFromFile: added texture #%d '%s' (w=%u h=%u mips=%u)\n",
+            newIndex, utf8path.c_str(), t.width, t.height, t.mipLevels);
+    return newIndex;
+}
+
 // Helper: Simple matrix math for ImGuizmo
 void BuildViewMatrix(float* mat) {
     float pos[3] = {g_cameraData.pos[0], g_cameraData.pos[1], g_cameraData.pos[2]};

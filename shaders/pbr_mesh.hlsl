@@ -39,6 +39,9 @@ cbuffer MaterialCB : register(b1)
     int4 textureIndices;        // x=diffuse, y=reflect, z=normal, w=refract
     int4 emissiveAndPad;        // x=emissive, y=occlusion, z=metalRough
     float4 extraParams;         // x=metalness, y=emissiveIntensity
+    float4 archvizParams0;      // x=clearcoat, y=clearcoatRoughness, z=thinWalled, w=translucency
+    float4 uvTransform;         // xy=uvScale, zw=uvOffset
+    float4 triPlanarParams;     // x=enabled, y=scale, z=sharpness, w=normalStrength
 };
 
 // Texture array - bonded as an unbounded array in SM 6.x
@@ -55,6 +58,71 @@ float2 DirectionToUV(float3 dir) {
 
 float3 sRGBToLinear(float3 sRGB) {
     return pow(max(sRGB, 0.0), 2.2);
+}
+
+float3 TriPlanarWeights(float3 n, float sharpness)
+{
+    float3 an = abs(n);
+    an = pow(max(an, 0.0), max(sharpness, 0.01));
+    float s = an.x + an.y + an.z;
+    return (s > 1e-5) ? (an / s) : float3(0.3333, 0.3333, 0.3333);
+}
+
+float2 TriPlanarUV_X(float3 p, float scale) { return float2(p.y, p.z) * scale; }
+float2 TriPlanarUV_Y(float3 p, float scale) { return float2(p.z, p.x) * scale; }
+float2 TriPlanarUV_Z(float3 p, float scale) { return float2(p.x, p.y) * scale; }
+
+float4 SampleTriPlanar(int texIndex, float3 worldPos, float3 worldNormal, float scale, float sharpness)
+{
+    if (texIndex < 0) return float4(1,1,1,1);
+    float3 w = TriPlanarWeights(worldNormal, sharpness);
+    float4 sx = textures[texIndex].Sample(linearSampler, TriPlanarUV_X(worldPos, scale));
+    float4 sy = textures[texIndex].Sample(linearSampler, TriPlanarUV_Y(worldPos, scale));
+    float4 sz = textures[texIndex].Sample(linearSampler, TriPlanarUV_Z(worldPos, scale));
+    return sx * w.x + sy * w.y + sz * w.z;
+}
+
+float3 UnpackNormal(float4 n)
+{
+    return n.xyz * 2.0 - 1.0;
+}
+
+float3 SampleTriPlanarNormal(int texIndex, float3 worldPos, float3 worldNormal, float scale, float sharpness, float strength)
+{
+    if (texIndex < 0) return normalize(worldNormal);
+    float3 Nw = normalize(worldNormal);
+    float3 w = TriPlanarWeights(Nw, sharpness);
+
+    float3 nx = UnpackNormal(textures[texIndex].Sample(linearSampler, TriPlanarUV_X(worldPos, scale)));
+    float3 ny = UnpackNormal(textures[texIndex].Sample(linearSampler, TriPlanarUV_Y(worldPos, scale)));
+    float3 nz = UnpackNormal(textures[texIndex].Sample(linearSampler, TriPlanarUV_Z(worldPos, scale)));
+    nx.xy *= strength; ny.xy *= strength; nz.xy *= strength;
+    nx = normalize(nx); ny = normalize(ny); nz = normalize(nz);
+
+    float sx = (Nw.x >= 0.0) ? 1.0 : -1.0;
+    float sy = (Nw.y >= 0.0) ? 1.0 : -1.0;
+    float sz = (Nw.z >= 0.0) ? 1.0 : -1.0;
+
+    float3 Tx = float3(0,1,0);
+    float3 Bx = float3(0,0,sx);
+    float3 Nx = float3(sx,0,0);
+    float3x3 TBNx = float3x3(Tx, Bx, Nx);
+
+    float3 Ty = float3(0,0,1);
+    float3 By = float3(sy,0,0);
+    float3 Ny = float3(0,sy,0);
+    float3x3 TBNy = float3x3(Ty, By, Ny);
+
+    float3 Tz = float3(1,0,0);
+    float3 Bz = float3(0,sz,0);
+    float3 Nz = float3(0,0,sz);
+    float3x3 TBNz = float3x3(Tz, Bz, Nz);
+
+    float3 wx = normalize(mul(nx, TBNx));
+    float3 wy = normalize(mul(ny, TBNy));
+    float3 wz = normalize(mul(nz, TBNz));
+
+    return normalize(wx * w.x + wy * w.y + wz * w.z);
 }
 
 // ACES Tone Mapping
@@ -203,10 +271,20 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
 #endif
 
     // --- Texture Lookups ---
+    float2 uv = input.uv * uvTransform.xy + uvTransform.zw;
+    float3 worldPos = input.worldPos;
+    float3 worldNormal = normalize(input.normal);
+
+    bool triPlanar = (triPlanarParams.x > 0.5);
+    float triScale = max(triPlanarParams.y, 1e-6);
+    float triSharp = max(triPlanarParams.z, 0.01);
+    float triNormStrength = max(triPlanarParams.w, 0.0);
+
     float3 BaseColor = diffuseColor.rgb;
     float alpha = diffuseColor.a;
     if (textureIndices.x >= 0) {
-        float4 diffSample = textures[textureIndices.x].Sample(linearSampler, input.uv);
+        float4 diffSample = triPlanar ? SampleTriPlanar(textureIndices.x, worldPos, worldNormal, triScale, triSharp)
+                                      : textures[textureIndices.x].Sample(linearSampler, uv);
         BaseColor *= sRGBToLinear(diffSample.rgb);
         alpha *= diffSample.a;
     }
@@ -218,27 +296,38 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     // Metal/Roughness Logic: factor * texture
     // G = Roughness, B = Metalness
     if (emissiveAndPad.z >= 0) {
-        float4 mrSample = textures[emissiveAndPad.z].Sample(linearSampler, input.uv);
+        float4 mrSample = triPlanar ? SampleTriPlanar(emissiveAndPad.z, worldPos, worldNormal, triScale, triSharp)
+                                    : textures[emissiveAndPad.z].Sample(linearSampler, uv);
         roughness *= mrSample.g; 
         metalness *= mrSample.b;
     }
     
-    // Standard PBR Model
-    float3 F0 = lerp(float3(0.04, 0.04, 0.04), BaseColor, metalness);
+    // Standard PBR Model (dielectric F0 from IOR)
+    float ior = max(emissiveColor.w, 1.0);
+    float f0s = (ior - 1.0) / (ior + 1.0);
+    f0s = f0s * f0s;
+    float3 F0 = lerp(float3(f0s, f0s, f0s), BaseColor, metalness);
     float3 DiffuseAlbedo = BaseColor * (1.0 - metalness);
     
     // Normal
-    float3 N = GetNormalFromMap(input.uv, input.normal, input.tangent, textureIndices.z);
+    float3 N = triPlanar ? SampleTriPlanarNormal(textureIndices.z, worldPos, worldNormal, triScale, triSharp, triNormStrength)
+                         : GetNormalFromMap(uv, worldNormal, input.tangent, textureIndices.z);
 
     // Emissive with boost factor and user-defined intensity
     const float baseEmissiveBoost = 5.0f; 
     float3 emiss = emissiveColor.rgb * baseEmissiveBoost * extraParams.y;
     if (emissiveAndPad.x >= 0) {
-        emiss *= sRGBToLinear(textures[emissiveAndPad.x].Sample(linearSampler, input.uv).rgb);
+        float3 e = triPlanar ? SampleTriPlanar(emissiveAndPad.x, worldPos, worldNormal, triScale, triSharp).rgb
+                             : textures[emissiveAndPad.x].Sample(linearSampler, uv).rgb;
+        emiss *= sRGBToLinear(e);
     } 
 
     // Occlusion
-    float ao = (emissiveAndPad.y >= 0) ? textures[emissiveAndPad.y].Sample(linearSampler, input.uv).r : 1.0;
+    float ao = 1.0;
+    if (emissiveAndPad.y >= 0) {
+        ao = triPlanar ? SampleTriPlanar(emissiveAndPad.y, worldPos, worldNormal, triScale, triSharp).r
+                       : textures[emissiveAndPad.y].Sample(linearSampler, uv).r;
+    }
 
     // Lighting
     float3 V = normalize(pos - input.worldPos);
@@ -246,7 +335,12 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     if (length(lightDir.xyz) < 0.001) L = float3(0, 1, 0); 
     float3 H = normalize(V + L);
 
-    roughness = max(roughness, 0.002);
+    // Clamp to reduce fireflies / unstable highlights in archviz scenes
+    roughness = max(roughness, 0.02);
+
+    float clearcoat = saturate(archvizParams0.x);
+    float clearcoatRoughness = max(archvizParams0.y, 0.02);
+    float translucency = saturate(archvizParams0.w);
 
     // Cook-Torrance BRDF
     float NDF = DistributionGGX(N, H, roughness);
@@ -256,6 +350,18 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     float3 numerator = NDF * G * F;
     float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
     float3 spec = numerator / denominator;
+
+    // Clearcoat (secondary GGX lobe)
+    float3 coatSpec = float3(0.0, 0.0, 0.0);
+    if (clearcoat > 0.001) {
+        float3 F0c = float3(0.04, 0.04, 0.04);
+        float NDFc = DistributionGGX(N, H, clearcoatRoughness);
+        float Gc = GeometrySmith(N, V, L, clearcoatRoughness);
+        float3 Fc = FresnelSchlick(max(dot(H, V), 0.0), F0c);
+        float3 numc = NDFc * Gc * Fc;
+        float denc = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
+        coatSpec = numc / denc;
+    }
     
     // Energy Preservation
     float3 kS = F;
@@ -264,7 +370,16 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     float3 diffuseTerm = kD * DiffuseAlbedo / PI;
     
     float NdotL = saturate(dot(N, L));
-    float3 directLight = (diffuseTerm + spec) * lightColor.rgb * lightColor.w * NdotL;
+    float3 radiance = lightColor.rgb * lightColor.w;
+    float3 baseDirect = (diffuseTerm + spec) * radiance * NdotL;
+    float3 coatDirect = coatSpec * radiance * NdotL;
+    float3 directLight = baseDirect * (1.0 - clearcoat) + coatDirect * clearcoat;
+
+    // Backlighting translucency approximation
+    if (translucency > 0.001) {
+        float NdotL_back = saturate(dot(-N, L));
+        directLight += (DiffuseAlbedo / PI) * radiance * NdotL_back * translucency;
+    }
     
     // IBL (Image Based Lighting)
     float3 R = reflect(-V, N);
@@ -282,8 +397,23 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     float3 prefilteredColor = envMap.SampleLevel(linearSampler, envUV_spec, roughness * 7.0).rgb;
     float3 specular_ibl = kS_ibl * prefilteredColor;
 
+    float3 coat_ibl = float3(0.0, 0.0, 0.0);
+    if (clearcoat > 0.001) {
+        float3 prefilteredCoat = envMap.SampleLevel(linearSampler, envUV_spec, clearcoatRoughness * 7.0).rgb;
+        float3 F0c = float3(0.04, 0.04, 0.04);
+        float3 Fc_ibl = FresnelSchlickRoughness(max(dot(N, V), 0.0), F0c, clearcoatRoughness);
+        coat_ibl = Fc_ibl * prefilteredCoat;
+    }
+
     // Use a consistent 5.0x boost for IBL to match raytracing and provide good environment lighting
-    float3 ambient = (diffuse_ibl + specular_ibl) * ao * ambientColor.rgb * 5.0;
+    float3 ambientBase = (diffuse_ibl + specular_ibl) * ao * ambientColor.rgb * 5.0;
+    float3 ambient = ambientBase * (1.0 - clearcoat) + (coat_ibl * ao * ambientColor.rgb * 5.0) * clearcoat;
+
+    if (translucency > 0.001) {
+        float2 envUV_back = DirectionToUV(-N);
+        float3 irradianceBack = envMap.SampleLevel(linearSampler, envUV_back, 7.0).rgb;
+        ambient += (DiffuseAlbedo * irradianceBack) * (ambientColor.rgb * 5.0) * translucency;
+    }
     
     float3 color = directLight + ambient + emiss;
     

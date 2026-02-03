@@ -1,2 +1,0 @@
-File 'D:\project-render\build\Debug\sl.interposer.dll' is signed by NVIDIA and the signature was verified.
-Loaded environment map: assets/env.exr (1024x512)

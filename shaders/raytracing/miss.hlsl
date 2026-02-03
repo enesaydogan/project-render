@@ -23,5 +23,7 @@ void Miss(inout RayPayload payload)
     payload.ior = 1.0;
     payload.roughness = 1.0;
     payload.metalness = 0.0;
+    payload.thinWalled = 0.0;
+    payload.translucency = 0.0;
     payload.matIndex = 0;
 }

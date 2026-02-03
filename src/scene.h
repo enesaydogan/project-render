@@ -31,6 +31,10 @@ bool ImportModelWithDialog(HWND hwnd);
 // Open file dialog and import selected HDR/EXR
 bool ImportHDRWithDialog(HWND hwnd);
 
+// Load a texture from file and append it to the global texture array.
+// Returns the global texture index, or -1 on failure.
+int AddTextureFromFile(const std::string &utf8path, bool isHDR = false);
+
 // Add a default ground plane
 void AddDefaultPlane(float offset_y = 0.0f);
 
