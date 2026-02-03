@@ -11,11 +11,16 @@ cbuffer CameraCB : register(b0)
     float nearZ;
     float farZ;
     float intensity;
-    float _pad3;
-    float _pad4, _pad5;
+    float globalFrameCount; 
+    float lightCount;
+    float maxSpecularBounces;
+    float maxRefractiveBounces;
+    float maxGIBounces;
+    float maxSPP;
+    float accumulationCount; 
 
     // Global Lighting
-    float4 lightDir; // xyz = direction towards light
+    float4 lightDir; // xyz = direction towards light, w = sun radius (rad)
     float4 lightColor; // rgb + intensity in .w
     float4 ambientColor; // rgb + weight in .w
 };
@@ -74,8 +79,19 @@ float4 PSMain(PSInput input) : SV_TARGET {
     float2 uv = DirectionToUV(dir);
     float3 color = envMap.SampleLevel(linearSampler, uv, 0).rgb;
     
-    // Use the intensity from CameraCB
-    color *= intensity;
+    // Add Analytic Sun Disc
+    // lightDir.w holds the sun *radius* in radians (set in main.cpp)
+    float3 L = normalize(lightDir.xyz);
+    float cosTheta = dot(dir, L);
+    float cosSunRadius = cos(lightDir.w);
+    
+    if (cosTheta > cosSunRadius) {
+         // Use sun color * intensity
+         color = lightColor.rgb * lightColor.w;
+    } else {
+         // Only apply sky intensity scaling to the map, not the sun (which has its own intensity)
+         color *= intensity;
+    }
     
     // ACES Tone Mapping
     color = ToneMap(color);

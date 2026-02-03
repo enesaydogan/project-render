@@ -17,6 +17,7 @@ target_sources(project-render PRIVATE
     src/material_editor.cpp
     src/light.cpp
     src/ibl_manager.cpp
+    src/PragueSkyModel.cpp
     src/ImGuizmo.cpp
     src/oidn_denoiser.cpp
 )
