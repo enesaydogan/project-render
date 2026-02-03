@@ -37,6 +37,9 @@
     <ClCompile Include="D:\project-render\src\ImGuizmo.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\project-render\src\oidn_denoiser.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="D:\project-render\CMakeLists.txt" />

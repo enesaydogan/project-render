@@ -18,6 +18,7 @@ target_sources(project-render PRIVATE
     src/light.cpp
     src/ibl_manager.cpp
     src/ImGuizmo.cpp
+    src/oidn_denoiser.cpp
 )
 
 if (MSVC)
@@ -36,6 +37,48 @@ target_link_libraries(project-render PRIVATE comctl32)
 # Streamline (DLSS-SR + DLSS-RR) SDK headers (runtime is dynamically loaded)
 set(STREAMLINE_ROOT "${CMAKE_SOURCE_DIR}/thirdparty/Streamline")
 target_include_directories(project-render PRIVATE "${STREAMLINE_ROOT}/include")
+
+# Optional OpenImageDenoise support (GPU zero-copy requires building OIDN with
+# a GPU backend and platform support for D3D12 shared resource import)
+option(USE_OPENIMAGEDENOISE "Enable OpenImageDenoise support" OFF)
+if (USE_OPENIMAGEDENOISE)
+  # Point to the local pre-built binaries in thirdparty/oidn
+  set(OIDN_ROOT "${CMAKE_SOURCE_DIR}/thirdparty/oidn")
+  set(OpenImageDenoise_DIR "${OIDN_ROOT}/lib/cmake/OpenImageDenoise-2.4.1")
+  find_package(OpenImageDenoise CONFIG REQUIRED)
+
+  target_link_libraries(project-render PRIVATE OpenImageDenoise)
+  target_compile_definitions(project-render PRIVATE USE_OIDN=1)
+  message(STATUS "OpenImageDenoise support enabled (using local binaries at ${OIDN_ROOT})")
+
+  # Define OIDN DLLs to copy to the output directory
+  set(OIDN_DLL_DIR "${OIDN_ROOT}/bin")
+  set(OIDN_DLLS
+    "${OIDN_DLL_DIR}/OpenImageDenoise.dll"
+    "${OIDN_DLL_DIR}/OpenImageDenoise_core.dll"
+    "${OIDN_DLL_DIR}/OpenImageDenoise_device_cpu.dll"
+    "${OIDN_DLL_DIR}/OpenImageDenoise_device_cuda.dll"
+    "${OIDN_DLL_DIR}/OpenImageDenoise_device_hip.dll"
+    "${OIDN_DLL_DIR}/OpenImageDenoise_device_sycl.dll"
+    "${OIDN_DLL_DIR}/sycl8.dll"
+    "${OIDN_DLL_DIR}/tbb12.dll"
+    "${OIDN_DLL_DIR}/tbbbind.dll"
+    "${OIDN_DLL_DIR}/tbbbind_2_0.dll"
+    "${OIDN_DLL_DIR}/tbbbind_2_5.dll"
+    "${OIDN_DLL_DIR}/ur_adapter_level_zero.dll"
+    "${OIDN_DLL_DIR}/ur_loader.dll"
+    "${OIDN_DLL_DIR}/ur_win_proxy_loader.dll"
+  )
+
+  add_custom_command(TARGET project-render POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      ${OIDN_DLLS}
+      "$<TARGET_FILE_DIR:project-render>/"
+    COMMENT "Copying OpenImageDenoise runtime binaries..."
+  )
+else()
+  message(STATUS "OpenImageDenoise support disabled (USE_OPENIMAGEDENOISE=OFF)")
+endif()
 
 # Copy Streamline + NGX runtime files next to the executable.
 # NOTE: This project uses dynamic loading (LoadLibrary) so we don't link against
@@ -123,13 +166,20 @@ target_link_libraries(imgui_static PRIVATE d3d12 d3dcompiler)
 target_link_libraries(project-render PRIVATE imgui_static)
 
 # Asset loader static library (stub implementation present)
-add_library(asset_loader STATIC src/assets/asset_loader.cpp src/assets/asset_loader.h)
+add_library(asset_loader STATIC 
+    src/assets/asset_loader.cpp 
+    src/assets/asset_loader.h
+    src/assets/tinygltf_impl.cpp
+)
 target_include_directories(asset_loader PUBLIC src/assets)
 
 # VCPKG integration (since packages were installed into the local repos/vcpkg)
 set(VCPKG_ROOT "${CMAKE_SOURCE_DIR}/repos/vcpkg")
 set(VCPKG_INSTALLED_DIR "${VCPKG_ROOT}/installed/x64-windows")
-target_include_directories(asset_loader PUBLIC "${VCPKG_INSTALLED_DIR}/include")
+target_include_directories(asset_loader PUBLIC 
+    "${VCPKG_INSTALLED_DIR}/include"
+    "${VCPKG_INSTALLED_DIR}/include/miniz"
+)
 target_link_libraries(asset_loader PRIVATE 
     debug "${VCPKG_INSTALLED_DIR}/debug/lib/tinyexr.lib"
     optimized "${VCPKG_INSTALLED_DIR}/lib/tinyexr.lib"
@@ -138,8 +188,17 @@ target_link_libraries(asset_loader PRIVATE
     assimp::assimp
 )
 
+# Copy vcpkg DLLs (e.g., miniz.dll) to the output directory
+set(VCPKG_RUNTIME_BIN_DIR "$<IF:$<CONFIG:Debug>,${VCPKG_INSTALLED_DIR}/debug/bin,${VCPKG_INSTALLED_DIR}/bin>")
+add_custom_command(TARGET project-render POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${VCPKG_RUNTIME_BIN_DIR}/miniz.dll"
+    "$<TARGET_FILE_DIR:project-render>/miniz.dll"
+  COMMENT "Copying vcpkg runtime binaries (miniz.dll)..."
+)
+
 # Optionally enable tinygltf support (install via vcpkg: `vcpkg install tinygltf`)
-option(USE_TINYGLTF "Enable tinygltf integration for glTF import (requires tinygltf headers)" OFF)
+option(USE_TINYGLTF "Enable tinygltf integration for glTF import (requires tinygltf headers)" ON)
 if (USE_TINYGLTF)
   # Try to locate tiny_gltf.h on the system include paths first
   find_path(TINYGLTF_INCLUDE_DIR NAMES tiny_gltf.h)
@@ -158,9 +217,6 @@ if (USE_TINYGLTF)
     message(STATUS "Found tinygltf include dir: ${TINYGLTF_INCLUDE_DIR}")
     target_include_directories(asset_loader PUBLIC ${TINYGLTF_INCLUDE_DIR})
     target_compile_definitions(asset_loader PUBLIC USE_TINYGLTF=1)
-    # Compile the tinygltf implementation unit into the asset_loader library so
-    # that the header-only library's symbols are instantiated exactly once.
-    target_sources(asset_loader PRIVATE src/assets/tinygltf_impl.cpp)
   else()
     message(WARNING "USE_TINYGLTF enabled but tiny_gltf.h not found. Build will use stub loader.")
   endif()

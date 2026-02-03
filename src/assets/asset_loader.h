@@ -22,6 +22,10 @@ namespace Asset {
         // Bounding box
         float minBound[3]={0,0,0};
         float maxBound[3]={0,0,0};
+
+        // CPU copies for raycasting/physics
+        std::vector<struct Vertex> cpuVertices;
+        std::vector<uint32_t> cpuIndices;
     };
 
     // Interleaved vertex layout used by the loader

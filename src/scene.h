@@ -45,8 +45,8 @@ const std::vector<Node>& GetNodes();
 void SelectNode(size_t index);
 std::vector<Instance> GetInstances();
 
-// Ray-cast selection from mouse
-void UpdateSelection(float screenWidth, float screenHeight);
+// Ray-cast selection from mouse. Returns the global material index of the hit submesh, or -1.
+int UpdateSelection(float screenWidth, float screenHeight);
 void DeleteNode(size_t index);
 
 // Rebuild acceleration structures using active meshes

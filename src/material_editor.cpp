@@ -11,9 +11,32 @@ extern std::vector<Asset::Material> g_loadedMaterials;
 
 namespace MaterialEditor {
 
+static int s_pendingMaterialSelect = -1;
+static bool s_pickingEnabled = false;
+
+bool IsPickingEnabled() { return s_pickingEnabled; }
+void SetPickingEnabled(bool enabled) { s_pickingEnabled = enabled; }
+
+void SelectMaterial(int materialIndex) {
+    s_pendingMaterialSelect = materialIndex;
+}
+
 void Draw(bool &visible) {
     if (!visible) return;
     if (ImGui::Begin("Material Editor", &visible)) {
+        // Toolbar
+        if (s_pickingEnabled) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 1.0f));
+            if (ImGui::Button("Cancel Pick")) s_pickingEnabled = false;
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+            ImGui::Text("Click on object surface...");
+        } else {
+            if (ImGui::Button("Pick Material")) s_pickingEnabled = true;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Click to start picking material from scene objects");
+        }
+        ImGui::Separator();
+
         // Find selection
         int selectedIndex = -1;
         const auto& nodes = Scene::GetNodes();
@@ -57,6 +80,24 @@ void Draw(bool &visible) {
                 }
 
                 static int selectedComboIdx = 0;
+                
+                // Handle external selection request (Picking)
+                if (s_pendingMaterialSelect != -1) {
+                    bool found = false;
+                    for (int i = 0; i < (int)materialIndices.size(); ++i) {
+                        if (materialIndices[i] == s_pendingMaterialSelect) {
+                            selectedComboIdx = i;
+                            found = true;
+                            fprintf(stderr, "MaterialEditor: Auto-selecting material index %d (Combo index %d)\n", s_pendingMaterialSelect, i);
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        fprintf(stderr, "MaterialEditor: Pending material select %d not found in node's material list.\n", s_pendingMaterialSelect);
+                    }
+                    s_pendingMaterialSelect = -1;
+                }
+
                 // Reset index if it's out of bounds for the newly selected node
                 if (selectedComboIdx >= (int)comboNames.size()) selectedComboIdx = 0;
 

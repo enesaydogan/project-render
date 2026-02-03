@@ -846,6 +846,10 @@ bool LoadGltf(const std::string& path, std::vector<GpuMesh>& outMeshes, std::vec
             gm.indexCount = static_cast<UINT>(indices.size());
             gm.materialIndex = (prim.material >= 0) ? prim.material : -1;
 
+            // Keep CPU copies for raypicking
+            gm.cpuVertices = vertices;
+            gm.cpuIndices = indices;
+
             for (int c = 0; c < 3; ++c) {
                 gm.minBound[c] = minBound[c];
                 gm.maxBound[c] = maxBound[c];
@@ -1068,6 +1072,9 @@ bool LoadWithAssimp(const std::string& path, std::vector<GpuMesh>& outMeshes, st
             gm.ibView.Format = DXGI_FORMAT_R32_UINT;
             gm.vertexCount = (UINT)vertices.size();
             gm.indexCount = (UINT)indices.size();
+            // Keep CPU copies for raypicking
+            gm.cpuVertices = vertices;
+            gm.cpuIndices = indices;
             for(int c=0; c<3; ++c) { gm.minBound[c] = minB[c]; gm.maxBound[c] = maxB[c]; }
             gm.materialIndex = mesh->mMaterialIndex;
 

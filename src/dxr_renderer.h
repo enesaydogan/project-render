@@ -1,5 +1,6 @@
 #pragma once
 #include "assets/asset_loader.h"
+#include "oidn_denoiser.h"
 #include <d3d12.h>
 #include <vector>
 #include <wrl.h>
@@ -52,6 +53,15 @@ void ResetStreamlineHistory();
 bool IsReady();
 // Get current accumulation frame count
 UINT GetAccumulationFrameCount();
+
+// Denoiser mode control (Off, OIDN CPU, OIDN GPU)
+enum class DenoiserMode { Off = 0, OIDN_CPU = 1, OIDN_GPU = 2 };
+void SetDenoiserMode(DenoiserMode m);
+DenoiserMode GetDenoiserMode();
+
+void SetOidnQuality(OidnDenoiser::Quality q);
+OidnDenoiser::Quality GetOidnQuality();
+
 // Get number of lights transferred to GPU
 UINT GetLightCount();
 // Camera jitter scale applied only when DLSS-RR is active.
@@ -60,7 +70,7 @@ void SetRrJitterScale(float scale);
 float GetRrJitterScale();
 // Perform DXR render (dispatch rays, copy to render target). Returns true if
 // executed.
-bool RenderFrame(ID3D12GraphicsCommandList *commandList, UINT frameIndex,
+bool RenderFrame(ID3D12GraphicsCommandList *commandList, ID3D12CommandAllocator *cmdAlloc, UINT frameIndex,
                  ID3D12Resource *renderTarget,
                  D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle,
                  ID3D12Resource *cameraCB, ID3D12Resource *materialCB,

@@ -7,6 +7,7 @@
 #include "ibl_manager.h"
 #include "scene.h"
 #include "streamline_manager.h"
+#include "oidn_denoiser.h"
 #include <cstdio>
 #include <vector>
 #include <unordered_map>
@@ -33,6 +34,10 @@ static ID3D12CommandQueue *s_commandQueue = nullptr;
 
 static StreamlineManager *s_streamline = nullptr;
 static bool s_streamlineResetHistory = true;
+// Denoiser mode & wrapper
+static DxrRenderer::DenoiserMode s_denoiserMode = DxrRenderer::DenoiserMode::Off;
+static OidnDenoiser s_oidnDenoiser;
+static OidnDenoiser::Quality s_oidnQuality = OidnDenoiser::Quality::Balanced;
 // RR jitter scale default: lower than 1.0 to reduce silhouette/screen-edge shimmer.
 static float s_rrJitterScale = 0.5f;
 // When DLSS-RR is active we don't use the accumulation buffer; track a still-frame
@@ -100,7 +105,8 @@ static const UINT DXR_HEAP_IBL_OFFSET = DXR_HEAP_UAV_OFFSET + 15;
 static const UINT DXR_HEAP_SPEC_ALBEDO_OFFSET = DXR_HEAP_UAV_OFFSET + 16;
 static const UINT DXR_HEAP_SPEC_HITDIST_OFFSET = DXR_HEAP_UAV_OFFSET + 17;
 static const UINT DXR_HEAP_SPEC_MVEC_OFFSET = DXR_HEAP_UAV_OFFSET + 18;
-static const UINT DXR_HEAP_TOTAL_COUNT = DXR_HEAP_TEX_COUNT + DXR_HEAP_VB_COUNT + DXR_HEAP_IB_COUNT + 19;
+static const UINT DXR_HEAP_OIDN_OUT_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 19;
+static const UINT DXR_HEAP_TOTAL_COUNT = DXR_HEAP_TEX_COUNT + DXR_HEAP_VB_COUNT + DXR_HEAP_IB_COUNT + 20;
 
 // Output texture dimensions used by DXR (kept local to module)
 static UINT s_outputWidth = 1280;
@@ -146,6 +152,7 @@ static ComPtr<ID3D12Resource> s_mvecUAV;
 static ComPtr<ID3D12Resource> s_albedoUAV;
 static ComPtr<ID3D12Resource> s_normalRoughnessUAV;
 static ComPtr<ID3D12Resource> s_dlssOutputUAV;
+static ComPtr<ID3D12Resource> s_oidnOutputUAV;
 static ComPtr<ID3D12Resource> s_tonemapOutputUAV;
 static ComPtr<ID3D12Resource> s_specularAlbedoUAV;
 static ComPtr<ID3D12Resource> s_specHitDistanceUAV;
@@ -664,8 +671,9 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   s_normalRoughnessUAV.Reset();
   s_dlssOutputUAV.Reset();
   s_tonemapOutputUAV.Reset();
+  // Enable SHARED flag for OIDN interop (and potentially DLSS/Streamline)
   ThrowIfFailed(s_device->CreateCommittedResource(
-      &heapProps, D3D12_HEAP_FLAG_NONE, &texDesc,
+      &heapProps, D3D12_HEAP_FLAG_SHARED, &texDesc,
       D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
       IID_PPV_ARGS(&s_outputUAV)));
   if (s_outputUAV)
@@ -677,12 +685,12 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
 
   auto CreateUavTexture = [&](ComPtr<ID3D12Resource> &out,
                               const D3D12_RESOURCE_DESC &baseDesc,
-                              DXGI_FORMAT format, const wchar_t *name) {
+                              DXGI_FORMAT format, const wchar_t *name, bool shared = false) {
     D3D12_RESOURCE_DESC desc = baseDesc;
     desc.Format = format;
     desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
     ThrowIfFailed(s_device->CreateCommittedResource(
-        &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
+        &heapProps, shared ? D3D12_HEAP_FLAG_SHARED : D3D12_HEAP_FLAG_NONE, &desc,
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&out)));
     if (out)
       out->SetName(name);
@@ -693,7 +701,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   CreateUavTexture(s_mvecUAV, texDesc, DXGI_FORMAT_R16G16_FLOAT,
                    L"RT Motion Vectors");
   CreateUavTexture(s_albedoUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
-                   L"RT Albedo");
+                   L"RT Albedo", true); // Shared for OIDN
   CreateUavTexture(s_specularAlbedoUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
                    L"RT Specular Albedo");
   CreateUavTexture(s_specHitDistanceUAV, texDesc, DXGI_FORMAT_R32_FLOAT,
@@ -701,13 +709,18 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   CreateUavTexture(s_specularMotionVectorsUAV, texDesc,
                    DXGI_FORMAT_R16G16_FLOAT, L"RT Specular MotionVectors");
   CreateUavTexture(s_normalRoughnessUAV, texDesc,
-                   DXGI_FORMAT_R16G16B16A16_FLOAT, L"RT NormalRoughness");
+                   DXGI_FORMAT_R16G16B16A16_FLOAT, L"RT NormalRoughness", true); // Shared for OIDN
 
   // DLSS output is output-size in linear HDR (pre-tonemap).
   CreateUavTexture(s_dlssOutputUAV, outDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
                    L"RT DLSS Output (HDR)");
 
+  // OIDN output (HDR) - same format as DLSS output for tonemapping.
+  CreateUavTexture(s_oidnOutputUAV, outDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                   L"RT OIDN Output (HDR)", true); // Shared for OIDN
+
   // Tonemap output is swapchain-format (output-size) for easy CopyResource.
+  // Not shared (only used by internal CS and Copy)
   CreateUavTexture(s_tonemapOutputUAV, outDesc, DXGI_FORMAT_R10G10B10A2_UNORM,
                    L"RT Tonemap Output");
 
@@ -758,6 +771,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
               DXR_HEAP_NORMAL_ROUGHNESS_UAV_OFFSET);
   CreateUavAt(s_dlssOutputUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
               DXR_HEAP_DLSS_OUT_UAV_OFFSET);
+  CreateUavAt(s_oidnOutputUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
+              DXR_HEAP_OIDN_OUT_UAV_OFFSET);
 
   // Prepare tonemap pipeline resources.
   EnsureTonemapPipeline();
@@ -1294,10 +1309,13 @@ void UpdateLights(const std::vector<GpuLight> &lights) {
   ResetAccumulation();
 }
 
+static bool s_hasDenoised = false;
+
 void ResetAccumulation() {
   s_accumulation.Reset();
   s_rrStillFrameSpp = 0;
   s_hasTonemappedFrame = false;
+  s_hasDenoised = false; // Reset auto-denoiser state
   // Keep Streamline history reset separate from accumulation decisions.
   // Accumulation resets happen on real camera/settings changes; per-frame
   // jitter changes must not trigger this.
@@ -1319,6 +1337,29 @@ void ResetStreamlineHistory() {
   s_streamlineResetHistory = true;
 }
 
+void SetDenoiserMode(DenoiserMode m) {
+  if (s_denoiserMode == m) return;
+  s_denoiserMode = m;
+  if (s_denoiserMode != DenoiserMode::Off) {
+    // Try to initialize OIDN wrapper; if device isn't ready, initialization
+    // will be attempted on first RunDenoise call.
+    s_oidnDenoiser.Initialize(s_device);
+  } else {
+    s_oidnDenoiser.Shutdown();
+  }
+  // Reset accumulation as denoiser mode change may affect post-process outputs
+  DxrRenderer::ResetAccumulation();
+}
+
+DenoiserMode GetDenoiserMode() { return s_denoiserMode; }
+
+void SetOidnQuality(OidnDenoiser::Quality q) {
+  s_oidnQuality = q;
+  s_oidnDenoiser.SetQuality(q);
+}
+
+OidnDenoiser::Quality GetOidnQuality() { return s_oidnQuality; }
+
 UINT GetAccumulationFrameCount() { return s_accumulation.GetFrameCount(); }
 
 UINT GetLightCount() { return s_lightCount; }
@@ -1337,7 +1378,7 @@ bool IsReady() {
          s_tlas.result != nullptr;
 }
 
-bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
+bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAllocator *cmdAlloc, UINT frameIndex,
                  ID3D12Resource *renderTarget,
                  D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle,
                  ID3D12Resource *cameraCB, ID3D12Resource *materialCB,
@@ -1346,6 +1387,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
                  const std::vector<Asset::GpuMesh> &meshes,
                  ID3D12Resource *meshDataSB) {
   // fprintf(stderr, "DxrRenderer: RenderFrame start\n");
+  (void)frameIndex;
   if (!g_rayTracingSupported || !s_rtStateObject || !s_srvHeap)
     return false;
   if (!renderTarget)
@@ -1377,14 +1419,26 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
       dlssActive &&
       (s_streamline->GetMode() == StreamlineManager::Mode::DLSS_RayReconstruction);
 
+  bool usedOidn = false;
+
   // If we've hit maxSPP and the camera/settings haven't changed (meaning
   // ResetAccumulation hasn't been called), freeze rendering and keep presenting
   // the last tonemapped output. This works for both accumulation and DLSS-RR.
   const UINT maxSpp = (g_cameraData.maxSPP > 0.0f) ? (UINT)g_cameraData.maxSPP : 0u;
   const UINT currSpp = rrActive ? s_rrStillFrameSpp : s_accumulation.GetFrameCount();
-  if (maxSpp > 0 && currSpp >= maxSpp) {
+
+  bool isOidnMode = (s_denoiserMode != DxrRenderer::DenoiserMode::Off && !dlssActive);
+  bool canAutoDenoise = isOidnMode && maxSpp > 0 && currSpp >= maxSpp && !s_hasDenoised;
+  bool doDenoise = canAutoDenoise;
+
+  // FREEZE LOGIC:
+  // If we reached max SPP and we are NOT trying to run a denoise pass this frame,
+  // then we freeze (copy last valid frame).
+  if (maxSpp > 0 && currSpp >= maxSpp && !doDenoise) {
     ID3D12Resource *freezeSrc = nullptr;
-    if (s_tonemapOutputUAV) {
+    if (s_hasDenoised && s_tonemapOutputUAV) {
+      freezeSrc = s_tonemapOutputUAV.Get();
+    } else if (s_tonemapOutputUAV) {
       freezeSrc = s_tonemapOutputUAV.Get();
     } else {
       // If tonemap output isn't available (e.g., swapchain is HDR), fall back to
@@ -1574,15 +1628,25 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
   dispatchDesc.Height = s_outputHeight;
   dispatchDesc.Depth = 1;
 
-  // fprintf(stderr, "DxrRenderer: Dispatching Rays\n");
-  dxrList->DispatchRays(&dispatchDesc);
-  // fprintf(stderr, "DxrRenderer: Dispatched Rays\n");
+  // Only Dispatch Rays if we are NOT in a pure denoise pass.
+  // If we are denoising an already-completed frame (e.g. at MaxSPP),
+  // we do not want to add more samples or modify the accumulation buffer.
+  if (!doDenoise) {
+    // fprintf(stderr, "DxrRenderer: Dispatching Rays\n");
+    dxrList->DispatchRays(&dispatchDesc);
+    // fprintf(stderr, "DxrRenderer: Dispatched Rays\n");
 
-  // Increment accumulation history only when actually used.
-  if (!rrActive)
-    s_accumulation.IncrementFrame();
-  else
-    s_rrStillFrameSpp++;
+    // Increment accumulation history only when actually used.
+    if (!rrActive)
+      s_accumulation.IncrementFrame();
+    else
+      s_rrStillFrameSpp++;
+  } else {
+    // We are skipping dispatch to run OIDN on the EXISTING buffer.
+    // Important: We must assume the PREVIOUS frame has finished writing to s_outputUAV.
+    // The main loop Wait logic typically guarantees this.
+    // fprintf(stderr, "DxrRenderer: Skipping DispatchRays for Denoise Pass\n");
+  }
 
   // Optional Streamline / DLSS evaluation
   ID3D12Resource *postColor = s_outputUAV.Get();
@@ -1659,8 +1723,12 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
       usedDlss = true;
       postColor = s_dlssOutputUAV.Get();
     }
-
-    // Back to UAV for next frame dispatch
+    
+    // Restore states for potentially other passes (OIDN or next frame)
+    // Streamline outputs are UAV. Inputs need to be reset if we want to use them again as UAVs.
+    // Note: OIDN needs them as SRVs (Read) usually, but we have a dedicated transition block below.
+    // For now, let's reset to UAV to be safe and consistent, OR rely on the central transitions.
+    // The original code reset them here.
     TransitionResource(dxrList.Get(), s_outputUAV.Get(),
                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -1695,6 +1763,101 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
                          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
+  }
+
+  // If DLSS wasn't used, allow OIDN (or other denoiser) to operate on the
+  // linear HDR output as a post-process cleanup step.
+  // IMPORTANT: When DLSS is active, color is output-resolution while our AOVs
+  // (albedo/normal) are render-resolution. Running OIDN in that configuration
+  // produces invalid results. Keep OIDN gated to the non-DLSS path.
+  bool shouldRunOidn = doDenoise && !usedDlss;
+
+  if (shouldRunOidn && s_oidnOutputUAV && postColor) {
+    fprintf(stderr, "DxrRenderer: MaxSPP reached. Auto-triggering OIDN denoise.\n");
+    s_oidnDenoiser.Initialize(s_device);
+
+    // Ensure input is in COMMON state for interop
+    // postColor is currently in UAV state (either s_outputUAV or s_dlssOutputUAV)
+    TransitionResource(dxrList.Get(), postColor,
+                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, // Assumed state
+                        D3D12_RESOURCE_STATE_COMMON);
+      
+    if (s_albedoUAV) {
+      TransitionResource(dxrList.Get(), s_albedoUAV.Get(),
+                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                          D3D12_RESOURCE_STATE_COMMON);
+    }
+    if (s_normalRoughnessUAV) {
+      TransitionResource(dxrList.Get(), s_normalRoughnessUAV.Get(),
+                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                          D3D12_RESOURCE_STATE_COMMON);
+    }
+
+    // s_oidnOutputUAV was created/kept as UAV; transition to COMMON for OIDN write
+    TransitionResource(dxrList.Get(), s_oidnOutputUAV.Get(),
+               D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+               D3D12_RESOURCE_STATE_COMMON);
+
+    // FLUSH & SYNC for OIDN:
+    // We must execute the command list to ensure resources are in COMMON state
+    // before OIDN tries to access them.
+    if (cmdAlloc && s_commandQueue && s_fence) {
+      // Flush the transitions to COMMON so OIDN can safely access the resources.
+      ThrowIfFailed(dxrList->Close());
+      ID3D12CommandList *lists[] = {dxrList.Get()};
+      s_commandQueue->ExecuteCommandLists(1, lists);
+
+      UINT64 fenceVal = s_fenceValues[*s_frameIndexPtr];
+      s_commandQueue->Signal(s_fence, fenceVal);
+      s_fenceValues[*s_frameIndexPtr]++;
+
+      if (s_fence->GetCompletedValue() < fenceVal) {
+        s_fence->SetEventOnCompletion(fenceVal, s_fenceEvent);
+        WaitForSingleObject(s_fenceEvent, INFINITE);
+      }
+
+      // Start a fresh command list for any fallback copy + state restores.
+      ThrowIfFailed(cmdAlloc->Reset());
+      ThrowIfFailed(dxrList->Reset(cmdAlloc, nullptr));
+      ID3D12DescriptorHeap *dxrHeaps[] = {s_srvHeap.Get()};
+      dxrList->SetDescriptorHeaps(1, dxrHeaps);
+
+      // Run OIDN.
+      // We pass the command queue so the denoiser can manage its own internal copy-execute-sync cycle
+      // to handle Tiled <-> Linear layout conversion for D3D12 interop.
+      bool ran = s_oidnDenoiser.RunDenoise(
+          dxrList.Get(), s_commandQueue, postColor, s_albedoUAV.Get(), s_normalRoughnessUAV.Get(),
+          s_oidnOutputUAV.Get(), false);
+
+      // Restore Resource States from COMMON to what the engine expects.
+      TransitionResource(dxrList.Get(), postColor, D3D12_RESOURCE_STATE_COMMON,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+      if (s_albedoUAV) {
+        TransitionResource(dxrList.Get(), s_albedoUAV.Get(),
+                           D3D12_RESOURCE_STATE_COMMON,
+                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+      }
+      if (s_normalRoughnessUAV) {
+        TransitionResource(dxrList.Get(), s_normalRoughnessUAV.Get(),
+                           D3D12_RESOURCE_STATE_COMMON,
+                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+      }
+      TransitionResource(dxrList.Get(), s_oidnOutputUAV.Get(),
+                         D3D12_RESOURCE_STATE_COMMON,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+      s_hasDenoised = ran;
+      if (ran) {
+        usedOidn = true;
+        postColor = s_oidnOutputUAV.Get();
+        fprintf(stderr, "DxrRenderer: OIDN denoise completed successfully.\n");
+      } else {
+        fprintf(stderr,
+                "DxrRenderer: OIDN denoise did not run (unsupported config or failure).\n");
+      }
+    }
+    
+      // postColor is in UAV state so the Tonemap block can transition it to SRV.
   }
 
   // Tonemap linear HDR to swapchain format, then copy.
@@ -1779,6 +1942,14 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, UINT frameIndex,
     TransitionResource(dxrList.Get(), postColor,
                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    if (usedOidn) {
+      // If we just ran a one-shot or continuous OIDN pass, we can mark the
+      // frame as tonemapped so that if maxSPP is reached, we don't keep
+      // re-tonemapping the same results.
+      // Additionally, for one-shot denoise, this helps keep the result on screen.
+      s_hasTonemappedFrame = true;
+    }
   } else {
     // Fallback: copy (may be invalid if formats don't match)
     TransitionResource(dxrList.Get(), renderTarget, D3D12_RESOURCE_STATE_PRESENT,

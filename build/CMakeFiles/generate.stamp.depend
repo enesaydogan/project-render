@@ -1,7 +1,6 @@
 # CMake generation dependency list for this directory.
 C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeCXXInformation.cmake
 C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeCommonLanguageInclude.cmake
-C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeDependentOption.cmake
 C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeGenericSystem.cmake
 C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeInitializeConfigs.cmake
 C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeLanguageInformation.cmake
@@ -32,4 +31,7 @@ D:/project-render/CMakeLists.txt
 D:/project-render/build/CMakeFiles/4.2.1/CMakeCXXCompiler.cmake
 D:/project-render/build/CMakeFiles/4.2.1/CMakeRCCompiler.cmake
 D:/project-render/build/CMakeFiles/4.2.1/CMakeSystem.cmake
-D:/project-render/repos/vcpkg/scripts/buildsystems/vcpkg.cmake
+D:/project-render/thirdparty/oidn/lib/cmake/OpenImageDenoise-2.4.1/OpenImageDenoiseConfig.cmake
+D:/project-render/thirdparty/oidn/lib/cmake/OpenImageDenoise-2.4.1/OpenImageDenoiseConfigVersion.cmake
+D:/project-render/thirdparty/oidn/lib/cmake/OpenImageDenoise-2.4.1/OpenImageDenoiseTargets-release.cmake
+D:/project-render/thirdparty/oidn/lib/cmake/OpenImageDenoise-2.4.1/OpenImageDenoiseTargets.cmake

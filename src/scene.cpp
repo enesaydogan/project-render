@@ -555,6 +555,45 @@ static bool RayAABBIntersection(const float* rayOrigin, const float* rayDir, con
     return tmax >= std::max(0.0f, tmin);
 }
 
+// Moeller-Trumbore Ray-Triangle Intersection
+static bool RayTriangleIntersection(const float* orig, const float* dir, const float* v0, const float* v1, const float* v2, float& t) {
+    const float EPSILON = 1e-7f;
+    float edge1[3], edge2[3], h[3], s[3], q[3];
+    float a, f, u, v;
+
+    for(int i=0;i<3;i++) {
+        edge1[i] = v1[i] - v0[i];
+        edge2[i] = v2[i] - v0[i];
+    }
+    
+    // h = dir x edge2
+    h[0] = dir[1]*edge2[2] - dir[2]*edge2[1];
+    h[1] = dir[2]*edge2[0] - dir[0]*edge2[2];
+    h[2] = dir[0]*edge2[1] - dir[1]*edge2[0];
+    
+    a = edge1[0]*h[0] + edge1[1]*h[1] + edge1[2]*h[2];
+    if (a > -EPSILON && a < EPSILON) return false;
+    
+    f = 1.0f/a;
+    for(int i=0;i<3;i++) s[i] = orig[i] - v0[i];
+    
+    u = f * (s[0]*h[0] + s[1]*h[1] + s[2]*h[2]);
+    if (u < 0.0f || u > 1.0f) return false;
+    
+    // q = s x edge1
+    q[0] = s[1]*edge1[2] - s[2]*edge1[1];
+    q[1] = s[2]*edge1[0] - s[0]*edge1[2];
+    q[2] = s[0]*edge1[1] - s[1]*edge1[0];
+    
+    v = f * (dir[0]*q[0] + dir[1]*q[1] + dir[2]*q[2]);
+    if (v < 0.0f || u + v > 1.0f) return false;
+    
+    t = f * (edge2[0]*q[0] + edge2[1]*q[1] + edge2[2]*q[2]);
+    if (t > EPSILON) return true;
+    
+    return false;
+}
+
 void MatMul(const float* a, const float* b, float* out);
 
 // Helper: Inverse 4x4 matrix (simplified, assumes affine/orthonormal part)
@@ -683,8 +722,8 @@ bool Inverse4x4(const float* m, float* out) {
     return true;
 }
 
-void UpdateSelection(float screenWidth, float screenHeight) {
-    if (ImGuizmo::IsOver() || ImGuizmo::IsUsing() || ImGui::IsAnyItemHovered()) return;
+int UpdateSelection(float screenWidth, float screenHeight) {
+    if (ImGuizmo::IsOver() || ImGuizmo::IsUsing() || ImGui::IsAnyItemHovered()) return -1;
 
     float view[16], proj[16];
     BuildViewMatrix(view);
@@ -711,6 +750,7 @@ void UpdateSelection(float screenWidth, float screenHeight) {
 
     float minT = 1e30f;
     int hitNode = -1;
+    int hitMaterial = -1;
 
     for (size_t i = 0; i < s_nodes.size(); ++i) {
         auto& node = s_nodes[i];
@@ -746,8 +786,46 @@ void UpdateSelection(float screenWidth, float screenHeight) {
             }
 
             if (tmax >= tmin && tmin < minT) {
-                minT = tmin;
-                hitNode = (int)i;
+                // Broad phase hit: do we have CPU geometry to check triangles?
+                bool triHit = false;
+                float meshT = 1e30f;
+
+                if (!mesh.cpuVertices.empty() && !mesh.cpuIndices.empty()) {
+                    for (size_t k = 0; k < mesh.cpuIndices.size(); k += 3) {
+                         // Safety check
+                         if (k + 2 >= mesh.cpuIndices.size()) break;
+                         uint32_t i0 = mesh.cpuIndices[k];
+                         uint32_t i1 = mesh.cpuIndices[k+1];
+                         uint32_t i2 = mesh.cpuIndices[k+2];
+
+                         if(i0 < mesh.cpuVertices.size() && i1 < mesh.cpuVertices.size() && i2 < mesh.cpuVertices.size()) {
+                            float tVal;
+                            if (RayTriangleIntersection(localOrig, localDir, 
+                                mesh.cpuVertices[i0].pos, 
+                                mesh.cpuVertices[i1].pos, 
+                                mesh.cpuVertices[i2].pos, tVal)) 
+                            {
+                                if (tVal < meshT) {
+                                    meshT = tVal;
+                                    triHit = true;
+                                }
+                            }
+                         }
+                    }
+
+                    if (triHit && meshT < minT) {
+                        minT = meshT;
+                        hitNode = (int)i;
+                        hitMaterial = mesh.materialIndex;
+                    }
+                } else {
+                    // Fallback to AABB reference if no CPU geometry
+                    if (tmin < minT) {
+                        minT = tmin;
+                        hitNode = (int)i;
+                        hitMaterial = mesh.materialIndex;
+                    }
+                }
             }
         }
     }
@@ -755,7 +833,11 @@ void UpdateSelection(float screenWidth, float screenHeight) {
     if (hitNode != -1) {
         for (auto& n : s_nodes) n.selected = false;
         s_nodes[hitNode].selected = true;
+        
+        fprintf(stderr, "Scene: Picked Node '%s' (ID %d), Material ID %d\n", s_nodes[hitNode].name.c_str(), hitNode, hitMaterial);
     }
+    
+    return hitMaterial;
 }
 
 void DrawScenePanel(HWND hwnd, bool &visible) {

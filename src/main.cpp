@@ -1731,7 +1731,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         }
 
         if (DxrRenderer::RenderFrame(
-                g_commandList.Get(), g_frameIndex,
+                g_commandList.Get(), g_frameResources[g_frameIndex].commandAllocator.Get(), g_frameIndex,
                 g_renderTargets[g_frameIndex].Get(), rtvHandle,
                 g_cameraConstantBuffer.Get(), g_materialStructuredBuffer.Get(),
                 g_texturesGpuStart, g_textureDescriptorCount, activeMeshes,
@@ -2195,7 +2195,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       static bool lbtnDown = false;
       if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000)) {
         if (!lbtnDown) {
-          Scene::UpdateSelection((float)g_windowWidth, (float)g_windowHeight);
+          // Always run selection logic to allow selecting nodes
+          int pickedMaterial = Scene::UpdateSelection((float)g_windowWidth, (float)g_windowHeight);
+          
+          if (pickedMaterial != -1) {
+             // Only switch the Material Editor's active material if the Picking Tool is explicitly enabled
+             if (MaterialEditor::IsPickingEnabled()) {
+                 MaterialEditor::SelectMaterial(pickedMaterial);
+                 MaterialEditor::SetPickingEnabled(false);
+             }
+          }
           lbtnDown = true;
         }
       } else {
@@ -2507,6 +2516,37 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             ImGui::TextWrapped(
                 "Lowering jitter can reduce edge/silhouette shimmer (especially near screen borders) but may reduce DLSS-RR reconstruction/AA quality.");
           }
+
+          // Denoiser selection
+          const char* denoisers[] = {"Off", "OIDN (CPU)", "OIDN (GPU)"};
+          int denoiserIdx = 0;
+          switch (DxrRenderer::GetDenoiserMode()) {
+            case DxrRenderer::DenoiserMode::Off: denoiserIdx = 0; break;
+            case DxrRenderer::DenoiserMode::OIDN_CPU: denoiserIdx = 1; break;
+            case DxrRenderer::DenoiserMode::OIDN_GPU: denoiserIdx = 2; break;
+          }
+          if (ImGui::Combo("Denoiser", &denoiserIdx, denoisers, IM_ARRAYSIZE(denoisers))) {
+            DxrRenderer::DenoiserMode newMode = DxrRenderer::DenoiserMode::Off;
+            if (denoiserIdx == 1) newMode = DxrRenderer::DenoiserMode::OIDN_CPU;
+            if (denoiserIdx == 2) newMode = DxrRenderer::DenoiserMode::OIDN_GPU;
+            DxrRenderer::SetDenoiserMode(newMode);
+            // Recreate pipeline/resources to account for any mode-specific resources
+            // and reset accumulation for stable rendering.
+            DxrRenderer::ResetAccumulation();
+            WaitGPUIdle();
+            DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
+          }
+
+          if (DxrRenderer::GetDenoiserMode() != DxrRenderer::DenoiserMode::Off) {
+            const char* oidnQualities[] = {"Fast", "Balanced", "High"};
+            int qualIdx = (int)DxrRenderer::GetOidnQuality();
+            if (ImGui::Combo("OIDN Quality", &qualIdx, oidnQualities, IM_ARRAYSIZE(oidnQualities))) {
+              DxrRenderer::SetOidnQuality((OidnDenoiser::Quality)qualIdx);
+            }
+          }
+
+          // Denoising is automatically triggered once when Max SPP is reached
+          // (only if a denoiser is selected).
 
           ImGui::Text("NGX AppId: %u", g_streamline.GetApplicationId());
           if (g_streamline.IsEnabled() && g_streamline.GetMode() != StreamlineManager::Mode::Off &&

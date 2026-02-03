@@ -18,6 +18,20 @@
 ### PBR Material System
 - ✅ Material constant buffer with full PBR parameters
 - ✅ Texture index indirection (shader samples by material texture indices)
+
+### Denoising System
+- ✅ **Open Image Denoiser (OIDN) 2.x Integration**
+- ✅ **GPU Zero-Copy**: Uses D3D12 shared handles for maximum performance.
+- ✅ **Multi-Channel Input**: Support for Color, Albedo, and Normal buffers.
+- ✅ **Dynamic Quality**: Fast, Balanced, and High quality presets.
+- ✅ **Post-Processing Pipeline**: Integrated into the accumulation and tonemapping chain.
+
+### Denoising (OIDN & DLSS)
+- ✅ **DLSS Ray Reconstruction**: NVIDIA Streamline integration for real-time denoising.
+- ✅ **Intel Open Image Denoise (OIDN) 2.4.1**: Integrated for high-quality final-frame cleanup.
+- ✅ **GPU Zero-Copy**: Ultra-fast image sharing between D3D12 and OIDN via shared handles.
+- ✅ **One-Shot Cleanup**: Manual "Run Final Denoise" button for path-traced samples.
+- ✅ **Quality Presets**: UI selection for Fast, Balanced, and High denoising modes.
 - ✅ Support for both metallic-roughness and specular-glossiness workflows
 - ✅ Emissive factor and texture support
 
