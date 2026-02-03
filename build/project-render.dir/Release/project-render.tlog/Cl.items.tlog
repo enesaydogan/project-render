@@ -9,5 +9,6 @@ D:\project-render\src\scene.cpp;D:\project-render\build\project-render.dir\Relea
 D:\project-render\src\material_editor.cpp;D:\project-render\build\project-render.dir\Release\material_editor.obj
 D:\project-render\src\light.cpp;D:\project-render\build\project-render.dir\Release\light.obj
 D:\project-render\src\ibl_manager.cpp;D:\project-render\build\project-render.dir\Release\ibl_manager.obj
+D:\project-render\src\PragueSkyModel.cpp;D:\project-render\build\project-render.dir\Release\PragueSkyModel.obj
 D:\project-render\src\ImGuizmo.cpp;D:\project-render\build\project-render.dir\Release\ImGuizmo.obj
 D:\project-render\src\oidn_denoiser.cpp;D:\project-render\build\project-render.dir\Release\oidn_denoiser.obj

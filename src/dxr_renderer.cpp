@@ -1275,7 +1275,10 @@ void UpdateLights(const std::vector<GpuLight> &lights) {
   }
 
   s_lightCount = (UINT)lights.size();
+
+  // Ensure buffer size is at least 1 element to avoid creation errors/null descriptors
   UINT bufferSize = (UINT)(lights.size() * sizeof(GpuLight));
+  if (bufferSize == 0) bufferSize = sizeof(GpuLight);
 
   // Recreate buffer if size changed
   if (!s_lightBuffer || s_lightBuffer->GetDesc().Width < bufferSize) {
@@ -1574,15 +1577,21 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
     dxrList->SetComputeRootShaderResourceView(
         4, materialCB->GetGPUVirtualAddress());
 
-  if (IBLManager::Get().IsLoaded()) {
+  // Always bind IBL descriptor (even if null/empty, we bound a fallback in main.cpp)
+  {
     // Copy IBL descriptor from global heap to DXR local heap
     D3D12_CPU_DESCRIPTOR_HANDLE dst =
         s_srvHeap->GetCPUDescriptorHandleForHeapStart();
     dst.ptr += (SIZE_T)DXR_HEAP_IBL_OFFSET *
                s_device->GetDescriptorHandleIncrementSize(
                    D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-    s_device->CopyDescriptorsSimple(1, dst, IBLManager::Get().GetCPUHandle(),
-                                    D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    
+    // GetCPUHandle should now always be valid (allocated in main.cpp)
+    D3D12_CPU_DESCRIPTOR_HANDLE src = IBLManager::Get().GetCPUHandle();
+    if(src.ptr != 0) {
+        s_device->CopyDescriptorsSimple(1, dst, src,
+                                        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    }
 
     dxrList->SetComputeRootDescriptorTable(8, s_iblGpuHandle);
   }

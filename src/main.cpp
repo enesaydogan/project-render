@@ -1086,26 +1086,50 @@ bool InitD3D12(HWND hwnd) {
 
   // Initialize IBL Manager and load default environment map
   IBLManager::Get().Initialize(g_device.Get(), g_commandQueue.Get());
+  /*
   if (!IBLManager::Get().LoadEnvironmentMap("assets/env.exr")) {
     fprintf(
         stderr,
         "Main: Failed to load assets/env.exr, checking for assets/env.hdr\n");
     IBLManager::Get().LoadEnvironmentMap("assets/env.hdr");
   }
+  */
 
-  if (IBLManager::Get().IsLoaded()) {
+  // Initialize Prague Sky Model
+  IBLManager::Get().InitializeSkyModel("assets/PragueSkyModelDataset.dat");
+  IBLManager::Get().SetIBLSource(IBLManager::IBLSource::PragueSkyModel);
+
+  // Always allocate a descriptor for the environment map, so it can be updated later
+  // even if no file is currently loaded.
+  {
     DescriptorAllocation alloc = g_cbvSrvAllocator.AllocatePersistent(1);
     IBLManager::Get().SetGPUHandle(alloc.gpu);
     IBLManager::Get().SetCPUHandle(alloc.cpu);
+    g_envMapGpuHandle = alloc.gpu;
 
-    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srvDesc.Format = IBLManager::Get().GetEnvMap().format;
-    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    // Use all available mip levels (even if only 1 is loaded for now)
-    srvDesc.Texture2D.MipLevels = (UINT)-1;
-    g_device->CreateShaderResourceView(
-        IBLManager::Get().GetEnvMap().resource.Get(), &srvDesc, alloc.cpu);
+    // If loaded, create the view immediately.
+    // If not loaded, we ideally need a valid descriptor (null SRV or dummy texture) to prevent crashes
+    // if the shader accesses it.
+    if (IBLManager::Get().IsLoaded()) {
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Format = IBLManager::Get().GetEnvMap().format;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MipLevels = (UINT)-1;
+        g_device->CreateShaderResourceView(
+            IBLManager::Get().GetEnvMap().resource.Get(), &srvDesc, alloc.cpu);
+    } else {
+        // Create a default scalar (null) SRV or similar? 
+        // For Texture2D, a null SRV describes a "null resource" but with valid format info.
+        // Or we can rely on IBLManager creating a dummy texture. 
+        // Let's create a NULL SRV so it's a valid descriptor (returns 0 on sample).
+        D3D12_SHADER_RESOURCE_VIEW_DESC nullSrvDesc = {};
+        nullSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        nullSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        nullSrvDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; // Standard env map format
+        nullSrvDesc.Texture2D.MipLevels = 1;
+        g_device->CreateShaderResourceView(nullptr, &nullSrvDesc, alloc.cpu);
+    }
   }
 
   // Log: reached post-Create pipeline initialization (stderr only)
@@ -1555,50 +1579,58 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
   // ReSTIR DI: Initialize test lights for Phase 2
   {
+    // User requested to remove all lights except the sun
     std::vector<GpuLight> testLights;
-    GpuLight l1;
-    l1.type = 1; // Point
-    l1.position[0] = 5.0f;
-    l1.position[1] = 8.0f;
-    l1.position[2] = 5.0f;
-    l1.direction[0] = 0;
-    l1.direction[1] = 0;
-    l1.direction[2] = 0;
-    l1.color[0] = 1.0f;
-    l1.color[1] = 0.6f;
-    l1.color[2] = 0.4f;
-    l1.intensity = 200.0f;
-    l1.range = 100.0f;
-    l1.spotAngle = 0;
-    l1.spotInnerAngle = 0;
-    l1.meshIndex = 0;
-    testLights.push_back(l1);
-
-    GpuLight l2;
-    l2.type = 1; // Point
-    l2.position[0] = -5.0f;
-    l2.position[1] = 8.0f;
-    l2.position[2] = -5.0f;
-    l2.direction[0] = 0;
-    l2.direction[1] = 0;
-    l2.direction[2] = 0;
-    l2.color[0] = 0.4f;
-    l2.color[1] = 0.6f;
-    l2.color[2] = 1.0f;
-    l2.intensity = 200.0f;
-    l2.range = 100.0f;
-    l2.spotAngle = 0;
-    l2.spotInnerAngle = 0;
-    l2.meshIndex = 0;
-    testLights.push_back(l2);
-
     DxrRenderer::UpdateLights(testLights);
   }
+
+  // State variables for Time and North Offset
+  static float g_timeOfDay = 10.0f; 
+  static float g_northOffset = 45.0f; 
 
   // Basic message loop + simple render
   MSG msg = {};
 
   auto PopulateCommandList = [&]() {
+    // Update Sky Parameters (Run every frame to ensure consistency)
+    {
+         const float PI = 3.14159265f;
+         const float DEG2RAD = PI / 180.0f;
+
+         // Simple sun path logic
+         float hourArg = (g_timeOfDay - 12.0f) / 6.0f; 
+         float elRad = std::cos(hourArg * (PI / 2.0f)) * (PI / 2.0f);
+         if (elRad < 0) elRad = 0;
+
+         float azDeg = (g_timeOfDay - 12.0f) * 15.0f + g_northOffset;
+         float azRad = azDeg * DEG2RAD;
+
+         // Get current parameters to preserve other sliders
+         float sunSize = IBLManager::Get().GetSunSize();
+         float sunInt = IBLManager::Get().GetSunIntensity();
+
+         // Apply to Sky Model
+         IBLManager::Get().SetSolarAltitude(elRad);
+         IBLManager::Get().SetSolarAzimuth(azRad);
+         IBLManager::Get().UpdateSkyModel();
+
+         // Sync Directional Light
+         float sunX = std::cos(azRad) * std::cos(elRad);
+         float sunZ = std::sin(azRad) * std::cos(elRad);
+         float sunY = std::sin(elRad);
+         
+         g_cameraData.lightDir[0] = sunX;
+         g_cameraData.lightDir[1] = sunY;
+         g_cameraData.lightDir[2] = sunZ;
+         // Pass angular radius in radians to w component
+         g_cameraData.lightDir[3] = sunSize * DEG2RAD * 0.5f;
+
+         // Sync Sun Intensity
+         g_cameraData.lightColor[3] = sunInt; 
+
+         UpdateCameraCB();
+    }
+
     // Log to stderr only (controlled by verbose flag)
     if (g_verboseRenderLogs)
       fprintf(stderr, "PopulateCommandList start\n");
@@ -1815,15 +1847,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       ID3D12DescriptorHeap *heaps[] = {g_cbvSrvAllocator.Heap()};
       g_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
 
+      // Draw Skybox (Always passes depth, but doesn't write depth)
+      RasterRenderer::DrawSkybox(g_commandList.Get(), g_cameraConstantBuffer.Get());
+
       // Draw ground grid (optional) via raster module
       if (g_drawGrid) {
         RasterRenderer::DrawGrid(g_commandList.Get(),
                                  g_cameraConstantBuffer.Get());
       }
-
-      // Draw Skybox
-      RasterRenderer::DrawSkybox(g_commandList.Get(),
-                                 g_cameraConstantBuffer.Get());
 
       // Draw loaded meshes
       auto sceneInstances = Scene::GetInstances();
@@ -2372,24 +2403,79 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         }
 
         ImGui::Separator();
-        ImGui::Text("Sun Light");
-        bool lightChanged = false;
-        if (ImGui::SliderFloat3("Sun Dir", g_cameraData.lightDir, -1.0f, 1.0f))
-          lightChanged = true;
-        if (ImGui::ColorEdit3("Sun Color", g_cameraData.lightColor))
-          lightChanged = true;
-        if (ImGui::SliderFloat("Sun Intensity", &g_cameraData.lightColor[3],
-                               0.0f, 10.0f))
-          lightChanged = true;
-        if (ImGui::ColorEdit3("Ambient Color", g_cameraData.ambientColor))
-          lightChanged = true;
-        if (ImGui::SliderFloat("Ambient Weight", &g_cameraData.ambientColor[3],
-                               0.0f, 1.0f))
-          lightChanged = true;
 
-        if (lightChanged) {
-          UpdateCameraCB();
+        // Manual Sun Control removed as Prague Model is default
+
+        ImGui::Text("Environment / Sky Model");
+        
+        static int iblSource = 0; 
+        iblSource = (int)IBLManager::Get().GetIBLSource();
+        if (ImGui::RadioButton("File IBL", &iblSource, 0)) {
+             IBLManager::Get().SetIBLSource(IBLManager::IBLSource::File);
         }
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Prague Sky", &iblSource, 1)) {
+             IBLManager::Get().SetIBLSource(IBLManager::IBLSource::PragueSkyModel);
+        }
+
+        if (iblSource == 1) {
+            bool uiParamChanged = false;
+            
+            float vis = IBLManager::Get().GetSkyVisibility();
+            if (ImGui::SliderFloat("Visibility (km)", &vis, 10.0f, 120.0f)) {
+                IBLManager::Get().SetSkyVisibility(vis);
+                uiParamChanged = true;
+            }
+            float albedo = IBLManager::Get().GetSkyAlbedo();
+            if (ImGui::SliderFloat("Earth Albedo", &albedo, 0.0f, 1.0f)) {
+                 IBLManager::Get().SetSkyAlbedo(albedo);
+                 uiParamChanged = true;
+            }
+            float altitude = IBLManager::Get().GetObserverAltitude();
+            if (ImGui::SliderFloat("Altitude (m)", &altitude, 0.0f, 15000.0f)) {
+                 IBLManager::Get().SetObserverAltitude(altitude);
+                 uiParamChanged = true;
+            }
+
+            // Intensity Controls
+            float skyInt = IBLManager::Get().GetSkyIntensity();
+            if (ImGui::SliderFloat("Sky Intensity", &skyInt, 0.0f, 5.0f)) {
+                IBLManager::Get().SetSkyIntensity(skyInt);
+                uiParamChanged = true;
+            }
+            float sunInt = IBLManager::Get().GetSunIntensity();
+            if (ImGui::SliderFloat("Sun Intensity", &sunInt, 0.0f, 10.0f)) {
+                IBLManager::Get().SetSunIntensity(sunInt);
+                // Changes analytic light intensity
+            }
+            float sunSize = IBLManager::Get().GetSunSize();
+            if (ImGui::SliderFloat("Sun Size (deg)", &sunSize, 0.1f, 5.0f)) {
+                IBLManager::Get().SetSunSize(sunSize);
+                // Changes analytic light radius
+            }
+
+            // float elev = IBLManager::Get().GetSolarAltitude(); // Not used directly, driven by Time
+            
+            // GUI State for Time/North (controlled by global static vars now)
+            
+            if (ImGui::SliderFloat("Time of Day", &g_timeOfDay, 6.0f, 18.0f)) uiParamChanged = true;
+            if (ImGui::SliderFloat("North Offset", &g_northOffset, 0.0f, 360.0f)) uiParamChanged = true;
+
+            // Logic moved to PopulateCommandList to ensure update even when UI is closed
+
+            // If UI changed non-light parameters (texture content), force logical reset
+            if (uiParamChanged) {
+                 DxrRenderer::ResetAccumulation();
+            }
+
+            UpdateCameraCB(); // automatically resets accumulation if lightDir/Color changed
+        }
+        
+        ImGui::Spacing();
+        if (ImGui::ColorEdit3("Ambient Color", g_cameraData.ambientColor))
+             UpdateCameraCB();
+        if (ImGui::SliderFloat("Ambient Weight", &g_cameraData.ambientColor[3], 0.0f, 1.0f))
+             UpdateCameraCB();
 
         ImGui::Separator();
 

@@ -327,8 +327,8 @@ void RecreateMeshPipeline(ID3D12Device *device, ID3D12RootSignature *rootSig) {
       skyPsoDesc.InputLayout = {nullptr,
                                 0}; // No input layout (generated in VS)
 
-      // Skybox should render behind everything
-      skyPsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+      // Skybox should render behind everything - but use ALWAYS to ensure it draws if depth is 1.0
+      skyPsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
       skyPsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
 
       ThrowIfFailed(device->CreateGraphicsPipelineState(

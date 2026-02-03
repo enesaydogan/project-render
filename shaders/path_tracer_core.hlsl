@@ -399,7 +399,16 @@ void RayGen()
             if (p_target_final > 0.0) {
                 RayDesc shadowRay;
                 shadowRay.Origin = P + N * 0.001;
-                shadowRay.Direction = L_final;
+                
+                // Jitter shadow ray for Sun (Disc Light)
+                if (res.lightIndex == 0xFFFFFFFF && lightDir.w > 0.0) {
+                     // lightDir.w holds the sun angular radius (half-angle)
+                     float2 u_s = next_float2(rng);
+                     shadowRay.Direction = SampleCone(L_final, cos(lightDir.w), u_s);
+                } else {
+                     shadowRay.Direction = L_final;
+                }
+                
                 shadowRay.TMin = 0.001;
                 shadowRay.TMax = dist_final - 0.002;
                 RayPayload shadowPayload;

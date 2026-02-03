@@ -9,4 +9,4 @@ struct DirectionalLight {
   float color[4]; // rgb + intensity in .w
 };
 
-extern DirectionalLight g_defaultLight;
+// extern DirectionalLight g_defaultLight;

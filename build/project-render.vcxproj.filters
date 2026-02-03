@@ -34,6 +34,9 @@
     <ClCompile Include="D:\project-render\src\ibl_manager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\project-render\src\PragueSkyModel.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="D:\project-render\src\ImGuizmo.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
