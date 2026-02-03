@@ -1,1 +1,0 @@
-active=2 total=2 textureDescriptors=5 texturesStart=0x0035678a00120000

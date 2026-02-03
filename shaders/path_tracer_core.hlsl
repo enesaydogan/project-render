@@ -19,6 +19,21 @@ RWTexture2D<float4> g_gi_reservoir_b2 : register(u9);
 
 #include "brdf_lib.hlsl"
 
+// Cosine-weighted cone sampling around a direction (very small, stable approximation)
+float3 SampleCone(float3 dir, float cosThetaMax, float2 u)
+{
+    float z = lerp(cosThetaMax, 1.0, u.x);
+    float r = sqrt(max(0.0, 1.0 - z * z));
+    float phi = 2.0 * PI * u.y;
+    float x = r * cos(phi);
+    float y = r * sin(phi);
+
+    float3 up = abs(dir.z) < 0.999 ? float3(0,0,1) : float3(1,0,0);
+    float3 T = normalize(cross(up, dir));
+    float3 B = cross(dir, T);
+    return normalize(T * x + B * y + dir * z);
+}
+
 GI_Reservoir unpack_gi_reservoir(float4 d0, float4 d1, float4 d2) {
     GI_Reservoir r;
     r.hitPos = d0.xyz;
@@ -149,6 +164,8 @@ void RayGen()
         payload.ior = 1.0;
         payload.roughness = 1.0;
         payload.metalness = 0.0;
+        payload.thinWalled = 0.0;
+        payload.translucency = 0.0;
         payload.matIndex = 0;
         payload.t = -1.0;
 
@@ -539,14 +556,37 @@ void RayGen()
         bool isRefractive = length(payload.refractionColor) > 0.01;
         if (isRefractive) {
             float3 glassL;
-            if (SampleGlass(V, N, payload.ior, u, glassL)) {
-                // Refracted
+            bool refracted = false;
+
+            // Thin-walled mode: window glass approximation (no bending)
+            if (payload.thinWalled > 0.5) {
+                float cosTheta = abs(dot(V, N));
+                float F = FresnelDielectric(cosTheta, payload.ior);
+                if (u.x < F) {
+                    refracted = false;
+                    glassL = reflect(-V, N);
+                } else {
+                    refracted = true;
+                    glassL = rayDir; // straight-through
+                }
+            } else {
+                refracted = SampleGlass(V, N, payload.ior, u, glassL);
+            }
+
+            // Rough transmission/reflection blur (cheap approximation)
+            float rgh = max(payload.roughness, 0.0);
+            if (rgh > 0.02) {
+                float cosMax = saturate(1.0 - rgh * rgh);
+                float2 ucone = float2(next_float(rng), next_float(rng));
+                glassL = SampleCone(glassL, cosMax, ucone);
+            }
+
+            if (refracted) {
                 if (refractiveBounces >= (int)maxRefractiveBounces) break;
                 refractiveBounces++;
                 nextDir = glassL;
                 f_brdf = payload.refractionColor;
             } else {
-                // Reflected
                 if (specularBounces >= (int)maxSpecularBounces) break;
                 specularBounces++;
                 nextDir = glassL;
@@ -561,28 +601,35 @@ void RayGen()
             rayDir = nextDir;
             continue; 
         } else {
-            // Metallic / Diffuse PBR sampling
+            // Metallic / Diffuse PBR sampling (+ optional diffuse translucency)
             float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
             float3 F = F_Schlick(max(0.0, dot(N, V)), F0);
-            
+
             float specProb = max(F.x, max(F.y, F.z));
-            float diffProb = (1.0 - specProb) * (1.0 - metallic);
-            float totalProb = specProb + diffProb;
-            
-            if (next_float(rng) * totalProb < specProb) {
+            float baseDiffProb = (1.0 - specProb) * (1.0 - metallic);
+            float transProb = baseDiffProb * saturate(payload.translucency);
+            float diffProb = max(0.0, baseDiffProb - transProb);
+            float totalProb = specProb + diffProb + transProb;
+
+            float pick = next_float(rng) * totalProb;
+            float cosineTerm = 1.0;
+
+            if (pick < specProb) {
                 // Specular GGX
                 if (specularBounces >= (int)maxSpecularBounces) break;
                 specularBounces++;
-                
+
                 float3 H = SampleGGX(u, N, roughness);
                 nextDir = reflect(-V, H);
                 float NdotL = saturate(dot(N, nextDir));
                 float NdotH = saturate(dot(N, H));
                 float VdotH = saturate(dot(V, H));
-                
+
                 pdf = (PDF_GGX(NdotH, VdotH, roughness) * specProb) / totalProb;
                 f_brdf = D_GGX(NdotH, roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL, roughness) * F_Schlick(VdotH, F0);
-            } else {
+                rayOrigin = P + N * 0.001;
+                cosineTerm = NdotL;
+            } else if (pick < (specProb + diffProb)) {
                 // Diffuse Lambert
                 if (giBounces >= (int)maxGIBounces) break;
                 giBounces++;
@@ -591,8 +638,33 @@ void RayGen()
                 float NdotL = saturate(dot(N, nextDir));
                 pdf = (PDF_Lambert(NdotL) * diffProb) / totalProb;
                 f_brdf = (payload.albedo / PI) * (1.0 - metallic);
+                rayOrigin = P + N * 0.001;
+                cosineTerm = NdotL;
+            } else {
+                // Diffuse translucency (transmission) Lambert
+                if (giBounces >= (int)maxGIBounces) break;
+                giBounces++;
+
+                nextDir = SampleLambert(u, -N);
+                float NdotL_t = saturate(dot(-N, nextDir));
+                pdf = (PDF_Lambert(NdotL_t) * transProb) / totalProb;
+                f_brdf = (payload.albedo / PI) * (1.0 - metallic);
+                rayOrigin = P - N * 0.001;
+                cosineTerm = NdotL_t;
             }
-            rayOrigin = P + N * 0.001;
+
+            if (pdf <= 0.0) break;
+            throughput *= (f_brdf * cosineTerm) / pdf;
+            rayDir = nextDir;
+            
+            // Russian Roulette
+            if (bounce > 2) {
+                float p = max(throughput.x, max(throughput.y, throughput.z));
+                if (p <= 0.0 || next_float(rng) > p) break;
+                throughput /= p;
+            }
+
+            continue;
         }
 
         if (pdf <= 0.0) break;

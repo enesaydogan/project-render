@@ -104,6 +104,9 @@ struct MaterialData
     int4 textureIndices;        // x=diffuse, y=reflect, z=normal, w=refract
     int4 emissiveAndPad;        // x=emissive, y=occlusion, z=metalRough
     float4 extraParams;         // x=metalness, y=emissiveIntensity
+    float4 archvizParams0;      // x=clearcoat, y=clearcoatRoughness, z=thinWalled, w=translucency
+    float4 uvTransform;         // xy=uvScale, zw=uvOffset
+    float4 triPlanarParams;     // x=enabled, y=scale, z=sharpness, w=normalStrength
 };
 
 // Use an SRV for materials in DXR to support multi-material indexing via InstanceID
@@ -140,6 +143,8 @@ struct RayPayload
     float ior;
     float roughness;
     float metalness;
+    float thinWalled;     // 0/1 for thin glass/leaves
+    float translucency;   // [0..1] diffuse-like transmission
     uint matIndex;
 };
 

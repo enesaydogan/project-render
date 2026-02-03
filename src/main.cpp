@@ -1174,6 +1174,9 @@ bool InitD3D12(HWND hwnd) {
     int textureIndices[4];
     int emissiveAndPad[4]; // x=emissive, y=occlusion, z=metalRough
     float extraParams[4];  // x=metalness, y=emissiveIntensity, zw=unused
+    float archvizParams0[4]; // x=clearcoat, y=clearcoatRoughness, z=thinWalled, w=translucency
+    float uvTransform[4];    // xy=uvScale, zw=uvOffset
+    float triPlanarParams[4]; // x=enabled, y=scale, z=sharpness, w=normalStrength
   };
   const UINT64 matCbSizeSingle = (sizeof(MaterialCB) + 255) & ~255;
   const UINT64 matCbSize = matCbSizeSingle * 16384; // Support up to 16384 calls
@@ -1660,6 +1663,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             int textureIndices[4];
             int emissiveAndPad[4];
             float extraParams[4];
+            float archvizParams0[4];
+            float uvTransform[4];
+            float triPlanarParams[4];
           };
           UINT8 *pData = nullptr;
           D3D12_RANGE readRange = {0, 0};
@@ -1696,6 +1702,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
               mat.extraParams[1] = srcMat.emissiveIntensity;
               mat.extraParams[2] = 0.0f;
               mat.extraParams[3] = 0.0f;
+
+              mat.archvizParams0[0] = srcMat.clearcoat;
+              mat.archvizParams0[1] = srcMat.clearcoatRoughness;
+              mat.archvizParams0[2] = srcMat.thinWalled;
+              mat.archvizParams0[3] = srcMat.translucency;
+
+              mat.uvTransform[0] = srcMat.uvScale[0];
+              mat.uvTransform[1] = srcMat.uvScale[1];
+              mat.uvTransform[2] = srcMat.uvOffset[0];
+              mat.uvTransform[3] = srcMat.uvOffset[1];
+
+              mat.triPlanarParams[0] = srcMat.triPlanarEnabled;
+              mat.triPlanarParams[1] = srcMat.triPlanarScale;
+              mat.triPlanarParams[2] = srcMat.triPlanarSharpness;
+              mat.triPlanarParams[3] = srcMat.triPlanarNormalStrength;
 
               memcpy(pData + i * sizeof(MaterialData), &mat,
                      sizeof(MaterialData));
@@ -1888,6 +1909,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
               int textureIndices[4];
               int emissiveAndPad[4];
               float extraParams[4];
+              float archvizParams0[4];
+              float uvTransform[4];
+              float triPlanarParams[4];
             } matCB;
 
             const auto &srcMat = g_loadedMaterials[gm.materialIndex];
@@ -1915,6 +1939,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             matCB.extraParams[1] = srcMat.emissiveIntensity;
             matCB.extraParams[2] = 0.0f;
             matCB.extraParams[3] = 0.0f;
+
+            matCB.archvizParams0[0] = srcMat.clearcoat;
+            matCB.archvizParams0[1] = srcMat.clearcoatRoughness;
+            matCB.archvizParams0[2] = srcMat.thinWalled;
+            matCB.archvizParams0[3] = srcMat.translucency;
+
+            matCB.uvTransform[0] = srcMat.uvScale[0];
+            matCB.uvTransform[1] = srcMat.uvScale[1];
+            matCB.uvTransform[2] = srcMat.uvOffset[0];
+            matCB.uvTransform[3] = srcMat.uvOffset[1];
+
+            matCB.triPlanarParams[0] = srcMat.triPlanarEnabled;
+            matCB.triPlanarParams[1] = srcMat.triPlanarScale;
+            matCB.triPlanarParams[2] = srcMat.triPlanarSharpness;
+            matCB.triPlanarParams[3] = srcMat.triPlanarNormalStrength;
 
             if (g_materialConstantBuffer) {
               const UINT64 matSlotSize = (sizeof(MaterialCB) + 255) & ~255;
@@ -2667,7 +2706,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       Scene::DrawScenePanel(g_hwnd, g_showAssetsWindow);
     }
     if (g_showMaterialEditor) {
-      MaterialEditor::Draw(g_showMaterialEditor);
+      MaterialEditor::Draw(g_hwnd, g_showMaterialEditor);
     }
 
     Scene::DrawGizmo();

@@ -55,6 +55,24 @@ namespace Asset {
         float ior = 1.6f;
         float emissiveColor[4] = {0,0,0,1};
         float emissiveIntensity = 1.0f; // Multiplier for emissive
+
+        // --- Archviz extensions (engine-side lookdev controls) ---
+        // Clearcoat (varnish / lacquer) secondary specular lobe
+        float clearcoat = 0.0f;           // [0..1]
+        float clearcoatRoughness = 0.1f;  // [0..1]
+        // Thin-walled transmission model (window glass, leaves)
+        float thinWalled = 0.0f;          // 0/1
+        // Diffuse-like translucency (leaves/fabric approximation)
+        float translucency = 0.0f;        // [0..1]
+        // Simple UV transform for real-world scaling
+        float uvScale[2] = {1.0f, 1.0f};
+        float uvOffset[2] = {0.0f, 0.0f};
+
+        // Tri-planar mapping (world-space projection)
+        float triPlanarEnabled = 0.0f;      // 0/1
+        float triPlanarScale = 1.0f;        // world tiling frequency
+        float triPlanarSharpness = 4.0f;    // blending exponent (higher = sharper)
+        float triPlanarNormalStrength = 1.0f; // normal intensity for tri-planar normal maps
         
         // V-Ray / Glossiness workflow texture mapping
         int diffuseTexture = -1; // Was baseColor

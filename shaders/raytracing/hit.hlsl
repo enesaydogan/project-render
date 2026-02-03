@@ -44,6 +44,71 @@ float3 FresnelSchlick(float cosTheta, float3 F0)
     return F0 + (1.0 - F0) * pow(saturate(1.0 - cosTheta), 5.0);
 }
 
+float3 TriPlanarWeights(float3 n, float sharpness)
+{
+    float3 an = abs(n);
+    an = pow(max(an, 0.0), max(sharpness, 0.01));
+    float s = an.x + an.y + an.z;
+    return (s > 1e-5) ? (an / s) : float3(0.3333, 0.3333, 0.3333);
+}
+
+float2 TriPlanarUV_X(float3 p, float scale) { return float2(p.y, p.z) * scale; }
+float2 TriPlanarUV_Y(float3 p, float scale) { return float2(p.z, p.x) * scale; }
+float2 TriPlanarUV_Z(float3 p, float scale) { return float2(p.x, p.y) * scale; }
+
+float4 SampleTriPlanarLevel0(int texIndex, float3 worldPos, float3 worldNormal, float scale, float sharpness)
+{
+    if (texIndex < 0) return float4(1,1,1,1);
+    float3 w = TriPlanarWeights(worldNormal, sharpness);
+    float4 sx = textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_X(worldPos, scale), 0);
+    float4 sy = textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_Y(worldPos, scale), 0);
+    float4 sz = textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_Z(worldPos, scale), 0);
+    return sx * w.x + sy * w.y + sz * w.z;
+}
+
+float3 UnpackNormal(float4 n)
+{
+    return n.xyz * 2.0 - 1.0;
+}
+
+float3 SampleTriPlanarNormalLevel0(int texIndex, float3 worldPos, float3 worldNormal, float scale, float sharpness, float strength)
+{
+    if (texIndex < 0) return normalize(worldNormal);
+    float3 Nw = normalize(worldNormal);
+    float3 w = TriPlanarWeights(Nw, sharpness);
+
+    float3 nx = UnpackNormal(textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_X(worldPos, scale), 0));
+    float3 ny = UnpackNormal(textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_Y(worldPos, scale), 0));
+    float3 nz = UnpackNormal(textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_Z(worldPos, scale), 0));
+    nx.xy *= strength; ny.xy *= strength; nz.xy *= strength;
+    nx = normalize(nx); ny = normalize(ny); nz = normalize(nz);
+
+    float sx = (Nw.x >= 0.0) ? 1.0 : -1.0;
+    float sy = (Nw.y >= 0.0) ? 1.0 : -1.0;
+    float sz = (Nw.z >= 0.0) ? 1.0 : -1.0;
+
+    float3 Tx = float3(0,1,0);
+    float3 Bx = float3(0,0,sx);
+    float3 Nx = float3(sx,0,0);
+    float3x3 TBNx = float3x3(Tx, Bx, Nx);
+
+    float3 Ty = float3(0,0,1);
+    float3 By = float3(sy,0,0);
+    float3 Ny = float3(0,sy,0);
+    float3x3 TBNy = float3x3(Ty, By, Ny);
+
+    float3 Tz = float3(1,0,0);
+    float3 Bz = float3(0,sz,0);
+    float3 Nz = float3(0,0,sz);
+    float3x3 TBNz = float3x3(Tz, Bz, Nz);
+
+    float3 wx = normalize(mul(nx, TBNx));
+    float3 wy = normalize(mul(ny, TBNy));
+    float3 wz = normalize(mul(nz, TBNz));
+
+    return normalize(wx * w.x + wy * w.y + wz * w.z);
+}
+
 // Extract normal from normal map and transform to world space
 float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent, int normalTexIndex)
 {
@@ -81,6 +146,10 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     int texOcc  = mat.emissiveAndPad.y;
     int texMR   = mat.emissiveAndPad.z;
 
+    float4 arch0 = mat.archvizParams0;
+    float4 uvXf = mat.uvTransform;
+    float4 triP = mat.triPlanarParams;
+
 #ifdef HIT_DEBUG
     // Encode primitive index into color for debugging
     uint primIndex = PrimitiveIndex();
@@ -106,6 +175,12 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     float2 uv1 = vertices[mesh.vbIndex][i1].uv;
     float2 uv2 = vertices[mesh.vbIndex][i2].uv;
     float2 uv = uv0 * bary.x + uv1 * bary.y + uv2 * bary.z;
+
+    // Material UV transform (real-world scaling control)
+    uv = uv * uvXf.xy + uvXf.zw;
+
+    // World position (used by tri-planar)
+    float3 P = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
     
     // Interpolate normal and tangent (local space)
     float3 n0 = vertices[mesh.vbIndex][i0].normal;
@@ -125,10 +200,17 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     worldTangent.xyz = normalize(mul((float3x3)ObjectToWorld3x4(), localTangent.xyz));
     worldTangent.w = localTangent.w;
     
+    bool triPlanar = (triP.x > 0.5);
+    float triScale = max(triP.y, 1e-6);
+    float triSharp = max(triP.z, 0.01);
+    float triNormStrength = max(triP.w, 0.0);
+
     // Sample textures
     float3 BaseColor = diffColor.rgb;
     if (texDiff >= 0) {
-        BaseColor *= sRGBToLinear(textures[texDiff].SampleLevel(linearSampler, uv, 0).rgb);
+        float3 bc = triPlanar ? SampleTriPlanarLevel0(texDiff, P, worldNormal, triScale, triSharp).rgb
+                              : textures[texDiff].SampleLevel(linearSampler, uv, 0).rgb;
+        BaseColor *= sRGBToLinear(bc);
     }
     
     float metalness = mat.extraParams.x;
@@ -137,31 +219,40 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     
     // Metal/Roughness Logic: factor * texture
     if (texMR >= 0) {
-        float4 mrSample = textures[texMR].SampleLevel(linearSampler, uv, 0);
+        float4 mrSample = triPlanar ? SampleTriPlanarLevel0(texMR, P, worldNormal, triScale, triSharp)
+                                    : textures[texMR].SampleLevel(linearSampler, uv, 0);
         roughness *= mrSample.g; 
         metalness *= mrSample.b;
     }
 
-    roughness = max(roughness, 0.002);
+    // Clamp to reduce fireflies / unstable highlights in archviz scenes
+    roughness = max(roughness, 0.02);
     
-    // Standard PBR Model
-    float3 F0 = lerp(float3(0.04, 0.04, 0.04), BaseColor, metalness);
+    // Standard PBR Model (dielectric F0 from IOR)
+    float ior = max(emisColor.w, 1.0);
+    float f0s = (ior - 1.0) / (ior + 1.0);
+    f0s = f0s * f0s;
+    float3 F0 = lerp(float3(f0s, f0s, f0s), BaseColor, metalness);
     float3 DiffuseAlbedo = BaseColor * (1.0 - metalness);
     
     // Normal mapping
-    float3 N = GetNormalFromMap(uv, worldNormal, worldTangent, texNorm);
+    float3 N = triPlanar ? SampleTriPlanarNormalLevel0(texNorm, P, worldNormal, triScale, triSharp, triNormStrength)
+                         : GetNormalFromMap(uv, worldNormal, worldTangent, texNorm);
     
     // Ambient occlusion
     float ao = 1.0;
     if (texOcc >= 0) {
-        ao = textures[texOcc].SampleLevel(linearSampler, uv, 0).r;
+        ao = triPlanar ? SampleTriPlanarLevel0(texOcc, P, worldNormal, triScale, triSharp).r
+                       : textures[texOcc].SampleLevel(linearSampler, uv, 0).r;
     }
     
     // Emissive with boost factor and user intensity
     const float baseEmissiveBoost = 5.0f;
     float3 emissive = emisColor.rgb * baseEmissiveBoost * mat.extraParams.y;
     if (texEmis >= 0) {
-        emissive *= sRGBToLinear(textures[texEmis].SampleLevel(linearSampler, uv, 0).rgb);
+        float3 e = triPlanar ? SampleTriPlanarLevel0(texEmis, P, worldNormal, triScale, triSharp).rgb
+                             : textures[texEmis].SampleLevel(linearSampler, uv, 0).rgb;
+        emissive *= sRGBToLinear(e);
     }
     
     // Debug Pass
@@ -179,12 +270,16 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     if (mode == 7) { payload.color = float3(ao, ao, ao); payload.t = RayTCurrent(); return; }
 
     // Calculate view direction correctly in world space
-    float3 P = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
     float3 V = normalize(camPos - P);
     
     // Directional light
     float3 L = normalize(lightDir.xyz);
     float3 H = normalize(V + L);
+
+    // Archviz extensions
+    float clearcoat = saturate(arch0.x);
+    float clearcoatRoughness = max(arch0.y, 0.02);
+    float translucency = saturate(arch0.w);
     
     // Cook-Torrance BRDF
     float NDF = DistributionGGX(N, H, roughness);
@@ -196,6 +291,18 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     float NdotL = saturate(dot(N, L));
     float denominator = 4.0 * NdotV * NdotL;
     float3 specular = numerator / max(denominator, 0.001);
+
+    // Clearcoat (secondary GGX lobe, fixed dielectric F0)
+    float3 coatSpecular = float3(0.0, 0.0, 0.0);
+    if (clearcoat > 0.001) {
+        float3 F0c = float3(0.04, 0.04, 0.04);
+        float NDFc = DistributionGGX(N, H, clearcoatRoughness);
+        float Gc = GeometrySmith(N, V, L, clearcoatRoughness);
+        float3 Fc = FresnelSchlick(max(dot(H, V), 0.0), F0c);
+        float3 numc = NDFc * Gc * Fc;
+        float denc = 4.0 * NdotV * NdotL;
+        coatSpecular = numc / max(denc, 0.001);
+    }
     
     // Energy conservation
     float3 kS = F;
@@ -228,7 +335,18 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
 
     // Outgoing radiance
     float3 radiance = lightColor.rgb * lightColor.w;
-    float3 Lo = (kD * DiffuseAlbedo / PI + specular) * radiance * NdotL * shadowed;
+
+    float3 baseLo = (kD * DiffuseAlbedo / PI + specular) * radiance * NdotL * shadowed;
+    float3 coatLo = coatSpecular * radiance * NdotL * shadowed;
+
+    // Simple energy split: coat takes priority over base layer
+    float3 Lo = baseLo * (1.0 - clearcoat) + coatLo * clearcoat;
+
+    // Backlighting translucency approximation (leaves/fabric)
+    if (translucency > 0.001) {
+        float NdotL_back = saturate(dot(-N, L));
+        Lo += (DiffuseAlbedo / PI) * radiance * NdotL_back * translucency;
+    }
     
     // IBL
     float3 R = reflect(-V, N);
@@ -246,8 +364,25 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     float3 prefilteredColor = envMap.SampleLevel(linearSampler, envUV_spec, roughness * 7.0).rgb;
     float3 specular_ibl = kS_ibl * prefilteredColor;
 
+    // Clearcoat IBL (reuse the same reflection vector)
+    float3 coat_ibl = float3(0.0, 0.0, 0.0);
+    if (clearcoat > 0.001) {
+        float3 prefilteredCoat = envMap.SampleLevel(linearSampler, envUV_spec, clearcoatRoughness * 7.0).rgb;
+        float3 F0c = float3(0.04, 0.04, 0.04);
+        float3 Fc_ibl = FresnelSchlickRoughness(max(dot(N, V), 0.0), F0c, clearcoatRoughness);
+        coat_ibl = Fc_ibl * prefilteredCoat;
+    }
+
     // Use a consistent 5.0x boost for IBL to match raster and provide good environment lighting
-    float3 ambient = (diffuse_ibl + specular_ibl) * ao * ambientColor.rgb * 5.0;
+    float3 ambientBase = (diffuse_ibl + specular_ibl) * ao * ambientColor.rgb * 5.0;
+    float3 ambient = ambientBase * (1.0 - clearcoat) + (coat_ibl * ao * ambientColor.rgb * 5.0) * clearcoat;
+
+    // Optional translucency from environment (very rough)
+    if (translucency > 0.001) {
+        float2 envUV_back = DirectionToUV(-N);
+        float3 irradianceBack = envMap.SampleLevel(linearSampler, envUV_back, 7.0).rgb;
+        ambient += (DiffuseAlbedo * irradianceBack) * (ambientColor.rgb * 5.0) * translucency;
+    }
     
     // Final color calculation with camera intensity. 1:1 match with raster.
     float3 color = (ambient + Lo + emissive) * intensity;
@@ -263,5 +398,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     payload.emissive = emissive;
     payload.roughness = roughness;
     payload.metalness = metalness;
+    payload.thinWalled = arch0.z;
+    payload.translucency = translucency;
     payload.matIndex = (uint)mesh.materialIndex;
 }
