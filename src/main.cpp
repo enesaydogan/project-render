@@ -105,7 +105,6 @@ static ComPtr<ID3D12DescriptorHeap> g_dsvHeap;
 static UINT g_dsvDescriptorSize = 0;
 
 static ComPtr<ID3D12DescriptorHeap> g_imguiHeap;
-
 DescriptorHeapAllocator g_cbvSrvAllocator;
 static FrameResource g_frameResources[FrameCount];
 static ComPtr<ID3D12GraphicsCommandList> g_commandList;
@@ -728,22 +727,6 @@ bool InitD3D12(HWND hwnd) {
   // Log: CBV/SRV allocator initialized (stderr only)
   fprintf(stderr, "InitD3D12: CBV/SRV allocator initialized\n");
 
-  // Create descriptor heap for ImGui fonts (1 descriptor)
-  D3D12_DESCRIPTOR_HEAP_DESC imguiHeapDesc = {};
-  imguiHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-  imguiHeapDesc.NumDescriptors = 1;
-  imguiHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-  HRESULT hrImg = g_device->CreateDescriptorHeap(&imguiHeapDesc,
-                                                 IID_PPV_ARGS(&g_imguiHeap));
-  if (FAILED(hrImg)) {
-    // Log to stderr only
-    fprintf(stderr, "InitD3D12: CreateDescriptorHeap for ImGui failed 0x%08x\n",
-            (unsigned)hrImg);
-    return false;
-  }
-  // Log: ImGui descriptor heap created (stderr only)
-  fprintf(stderr, "InitD3D12: ImGui descriptor heap created\n");
-
   // Create per-frame resources (command allocators + fence values)
   for (UINT i = 0; i < FrameCount; ++i) {
     HRESULT hrAlloc = g_device->CreateCommandAllocator(
@@ -1088,12 +1071,12 @@ bool InitD3D12(HWND hwnd) {
   ImGuiIO &io = ImGui::GetIO();
   (void)io;
   ImGui_ImplWin32_Init(hwnd);
-  // Initialize DX12 backend with device, number of frames, RTV format and
-  // descriptor heap for fonts
+  // Initialize DX12 backend with the main CBV/SRV/UAV heap so we can show
+  // thumbnails using existing engine texture SRVs.
+  DescriptorAllocation imguiFontAlloc = g_cbvSrvAllocator.AllocatePersistent(1);
   ImGui_ImplDX12_Init(g_device.Get(), FrameCount, DXGI_FORMAT_R10G10B10A2_UNORM,
-                      g_imguiHeap.Get(),
-                      g_imguiHeap->GetCPUDescriptorHandleForHeapStart(),
-                      g_imguiHeap->GetGPUDescriptorHandleForHeapStart());
+                      g_cbvSrvAllocator.Heap(), imguiFontAlloc.cpu,
+                      imguiFontAlloc.gpu);
 
   ImGui_ImplDX12_CreateDeviceObjects();
 
@@ -1993,7 +1976,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     }
 
     // Render ImGui (Overlay on top of whatever was drawn)
-    ID3D12DescriptorHeap *ppHeaps[] = {g_imguiHeap.Get()};
+    ID3D12DescriptorHeap *ppHeaps[] = {g_cbvSrvAllocator.Heap()};
     g_commandList->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
     ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), g_commandList.Get());
 
@@ -2014,7 +1997,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     g_vertexBuffer.Reset();
     g_constantBuffer.Reset();
     g_commandList.Reset();
-    g_imguiHeap.Reset();
 
     for (UINT i = 0; i < FrameCount; ++i) {
       g_frameResources[i].commandAllocator.Reset();
