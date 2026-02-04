@@ -1,5 +1,6 @@
 #include "dxr_renderer.h"
 #include "camera.h"
+#include "clouds.h" // Access CloudManager
 #include "d3d12_helpers.h"
 #include "dxc_wrapper.h"
 #include "dxr_accumulation.h"
@@ -27,6 +28,7 @@ extern DescriptorHeapAllocator g_cbvSrvAllocator;
 extern D3D12_GPU_DESCRIPTOR_HANDLE g_texturesGpuStart;
 extern UINT g_textureDescriptorCount;
 extern Microsoft::WRL::ComPtr<ID3D12Device> g_device;
+extern CloudManager g_cloudManager; // Global from main.cpp
 
 // Module-local state
 static ID3D12Device *s_device = nullptr;
@@ -106,7 +108,10 @@ static const UINT DXR_HEAP_SPEC_ALBEDO_OFFSET = DXR_HEAP_UAV_OFFSET + 16;
 static const UINT DXR_HEAP_SPEC_HITDIST_OFFSET = DXR_HEAP_UAV_OFFSET + 17;
 static const UINT DXR_HEAP_SPEC_MVEC_OFFSET = DXR_HEAP_UAV_OFFSET + 18;
 static const UINT DXR_HEAP_OIDN_OUT_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 19;
-static const UINT DXR_HEAP_TOTAL_COUNT = DXR_HEAP_TEX_COUNT + DXR_HEAP_VB_COUNT + DXR_HEAP_IB_COUNT + 20;
+// Cloud Resources (CBV + SRV) - must be contiguous for table
+static const UINT DXR_HEAP_CLOUD_CB_OFFSET = DXR_HEAP_UAV_OFFSET + 20;
+static const UINT DXR_HEAP_CLOUD_TEX_OFFSET = DXR_HEAP_UAV_OFFSET + 21;
+static const UINT DXR_HEAP_TOTAL_COUNT = DXR_HEAP_TEX_COUNT + DXR_HEAP_VB_COUNT + DXR_HEAP_IB_COUNT + 22;
 
 // Output texture dimensions used by DXR (kept local to module)
 static UINT s_outputWidth = 1280;
@@ -426,7 +431,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   }
 
   // Create global root signature
-  D3D12_ROOT_PARAMETER params[10] = {}; // Increased for Lights
+  D3D12_ROOT_PARAMETER params[11] = {}; // Increased for Lights & Cloud
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
   params[0].Descriptor.ShaderRegister = 0;
   params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -505,22 +510,54 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   params[9].Descriptor.ShaderRegister = 5000;
   params[9].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
+  // Cloud Table (b10, t10) - Moved to space 2 to avoid collision with textures table
+  static D3D12_DESCRIPTOR_RANGE cloudRanges[2] = {};
+  // Range 1: CBV b10
+  cloudRanges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_CBV;
+  cloudRanges[0].NumDescriptors = 1;
+  cloudRanges[0].BaseShaderRegister = 10;
+  cloudRanges[0].RegisterSpace = 2; // Space 2
+  cloudRanges[0].OffsetInDescriptorsFromTableStart = 0;
+  // Range 2: SRV t10
+  cloudRanges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+  cloudRanges[1].NumDescriptors = 1;
+  cloudRanges[1].BaseShaderRegister = 10;
+  cloudRanges[1].RegisterSpace = 2; // Space 2
+  cloudRanges[1].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+  params[10].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[10].DescriptorTable.NumDescriptorRanges = 2;
+  params[10].DescriptorTable.pDescriptorRanges = cloudRanges;
+  params[10].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
   D3D12_ROOT_SIGNATURE_DESC rootDesc = {};
-  rootDesc.NumParameters = 10;
+  rootDesc.NumParameters = 11;
   rootDesc.pParameters = params;
   rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
-  static D3D12_STATIC_SAMPLER_DESC staticSampler = {};
-  staticSampler.Filter = D3D12_FILTER_ANISOTROPIC;
-  staticSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-  staticSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-  staticSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-  staticSampler.MipLODBias = 0;
-  staticSampler.MaxAnisotropy = 16;
-  staticSampler.ShaderRegister = 0;
-  staticSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-  rootDesc.NumStaticSamplers = 1;
-  rootDesc.pStaticSamplers = &staticSampler;
+  static D3D12_STATIC_SAMPLER_DESC staticSamplers[2] = {};
+  // s0: Aniso Wrap
+  staticSamplers[0].Filter = D3D12_FILTER_ANISOTROPIC;
+  staticSamplers[0].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  staticSamplers[0].AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  staticSamplers[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  staticSamplers[0].MipLODBias = 0;
+  staticSamplers[0].MaxAnisotropy = 16;
+  staticSamplers[0].ShaderRegister = 0;
+  staticSamplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  // s10: Linear Wrap (for 3D Noise)
+  staticSamplers[1].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+  staticSamplers[1].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  staticSamplers[1].AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  staticSamplers[1].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  staticSamplers[1].MipLODBias = 0;
+  staticSamplers[1].MaxAnisotropy = 1;
+  staticSamplers[1].ShaderRegister = 10;
+  staticSamplers[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  rootDesc.NumStaticSamplers = 2;
+  rootDesc.pStaticSamplers = staticSamplers;
 
   ComPtr<ID3DBlob> signature;
   ComPtr<ID3DBlob> error;
@@ -1576,6 +1613,38 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
   if (materialCB)
     dxrList->SetComputeRootShaderResourceView(
         4, materialCB->GetGPUVirtualAddress());
+
+  // --- Bind Cloud Resources (Slot 10) ---
+  {
+      // 1. Create Cloud CBV at DXR_HEAP_CLOUD_CB_OFFSET
+      D3D12_CPU_DESCRIPTOR_HANDLE cbvCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+      cbvCpu.ptr += (SIZE_T)DXR_HEAP_CLOUD_CB_OFFSET * s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+      
+      D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
+      cbvDesc.BufferLocation = g_cloudManager.GetConstantBufferAddr();
+      cbvDesc.SizeInBytes = (sizeof(CloudParams) + 255) & ~255;
+      s_device->CreateConstantBufferView(&cbvDesc, cbvCpu);
+
+      // 2. Create Cloud SRV at DXR_HEAP_CLOUD_TEX_OFFSET
+      D3D12_CPU_DESCRIPTOR_HANDLE srvCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+      srvCpu.ptr += (SIZE_T)DXR_HEAP_CLOUD_TEX_OFFSET * s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+      
+      D3D12_RESOURCE_DESC noiseDesc = g_cloudManager.GetNoiseTexture()->GetDesc();
+      D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+      srvDesc.Format = noiseDesc.Format;
+      srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
+      srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+      srvDesc.Texture3D.MipLevels = noiseDesc.MipLevels;
+      srvDesc.Texture3D.MostDetailedMip = 0;
+      srvDesc.Texture3D.ResourceMinLODClamp = 0.0f;
+      s_device->CreateShaderResourceView(g_cloudManager.GetNoiseTexture(), &srvDesc, srvCpu);
+
+      // 3. Bind Table (pointing to start of CBV)
+      D3D12_GPU_DESCRIPTOR_HANDLE cloudGpu = s_srvHeap->GetGPUDescriptorHandleForHeapStart();
+      cloudGpu.ptr += (UINT64)DXR_HEAP_CLOUD_CB_OFFSET * s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+      
+      dxrList->SetComputeRootDescriptorTable(10, cloudGpu);
+  }
 
   // Always bind IBL descriptor (even if null/empty, we bound a fallback in main.cpp)
   {

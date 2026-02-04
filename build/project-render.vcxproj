@@ -587,6 +587,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="D:\project-render\src\PragueSkyModel.cpp" />
     <ClCompile Include="D:\project-render\src\ImGuizmo.cpp" />
     <ClCompile Include="D:\project-render\src\oidn_denoiser.cpp" />
+    <ClCompile Include="D:\project-render\src\clouds.cpp" />
   </ItemGroup>
   <ItemGroup />
   <ItemGroup>

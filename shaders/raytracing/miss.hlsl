@@ -2,6 +2,7 @@
 // Miss shader
 
 #include "common.hlsli"
+#include "../clouds.hlsl" // Volume Clouds logic
 
 [shader("miss")]
 void Miss(inout RayPayload payload)
@@ -18,24 +19,44 @@ void Miss(inout RayPayload payload)
     float cosTheta = dot(normalize(dir), L);
     // Use cosine of angular radius
     float cosSunRadius = cos(lightDir.w);
-    
-    // Draw sun disc if ray points within the cone
+
     if (cosTheta > cosSunRadius) {
-        // Evaluate sun radiance (Color * Intensity)
-        // We replace the sky color with the sun color here
-        color = lightColor.rgb * lightColor.w;
+         // Simple sun disc (white, multiplied by intensity)
+         color += float3(10.0, 10.0, 8.0) * intensity;
     }
+
+    // --- Volumetric Clouds ---
+    float tMin = 0.0;
+    float tMax = 50000.0; // Far
     
-    // In PT mode, we skip tone mapping here and do it in RayGen after accumulation
+    // Pass global lightColor logic
+    float4 cloudRes = RaymarchClouds(WorldRayOrigin(), dir, tMin, tMax, L, lightColor.rgb);
+
+    // If a cloud debug view is selected, show it directly.
+    // (Avoid compositing with the environment, which makes debug hard to read.)
+    int dbg = (int)debugMode;
+    if (dbg >= 11) {
+        color = cloudRes.rgb;
+    } else {
+        // Composite clouds over sky
+        // cloudRes.rgb is accumulated color, cloudRes.a is Final Transmittance (0 = blocked, 1 = transparent)
+        // So: Color = Sky * Transmittance + CloudColor
+        color = color * cloudRes.a + cloudRes.rgb;
+    }
+
+    // Fill payload
+    // RayPayload in common.hlsli has float3 color
     payload.color = color;
     payload.t = -1.0;
+    
+    // Fill remaining payload members to default to avoid undefined behavior or validation errors
     payload.normal = float3(0,0,0);
     payload.position = float3(0,0,0);
     payload.albedo = float3(0,0,0);
     payload.emissive = float3(0,0,0);
     payload.refractionColor = float3(0,0,0);
     payload.ior = 1.0;
-    payload.roughness = 1.0;
+    payload.roughness = 0.0;
     payload.metalness = 0.0;
     payload.thinWalled = 0.0;
     payload.translucency = 0.0;

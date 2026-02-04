@@ -20,6 +20,7 @@ target_sources(project-render PRIVATE
     src/PragueSkyModel.cpp
     src/ImGuizmo.cpp
     src/oidn_denoiser.cpp
+    src/clouds.cpp
 )
 
 if (MSVC)

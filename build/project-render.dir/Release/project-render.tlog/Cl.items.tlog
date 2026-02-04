@@ -12,3 +12,4 @@ D:\project-render\src\ibl_manager.cpp;D:\project-render\build\project-render.dir
 D:\project-render\src\PragueSkyModel.cpp;D:\project-render\build\project-render.dir\Release\PragueSkyModel.obj
 D:\project-render\src\ImGuizmo.cpp;D:\project-render\build\project-render.dir\Release\ImGuizmo.obj
 D:\project-render\src\oidn_denoiser.cpp;D:\project-render\build\project-render.dir\Release\oidn_denoiser.obj
+D:\project-render\src\clouds.cpp;D:\project-render\build\project-render.dir\Release\clouds.obj
