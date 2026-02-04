@@ -21,6 +21,7 @@
 #include "material_editor.h"
 #include "raster_renderer.h"
 #include "scene.h"
+#include "clouds.h" // Add clouds
 #include <algorithm>
 #include <chrono>
 #include <codecvt>
@@ -90,6 +91,8 @@ bool g_rasterDebugDepth =
 // Global runtime flags (set by command-line)
 bool g_debugLog = false; // enable verbose debug logging (use --debug-log)
 bool g_fastImport = false; // enable Assimp optimization flags to speed imports (--fast-import)
+
+CloudManager g_cloudManager; // Global Global Manager
 
 ComPtr<ID3D12Device> g_device;
 static ComPtr<ID3D12CommandQueue> g_commandQueue;
@@ -1254,6 +1257,25 @@ bool InitD3D12(HWND hwnd) {
     g_cameraConstantBuffer->Unmap(0, nullptr);
   }
 
+  // Initialize Cloud Manager (Generate noise texture, upload params)
+  {
+      fprintf(stderr, "Initializing Cloud Manager...\n");
+      
+      // Use a temporary command list to ensure clean state
+      ComPtr<ID3D12CommandAllocator> tempAlloc;
+      ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&tempAlloc)));
+      ComPtr<ID3D12GraphicsCommandList> tempList;
+      ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, tempAlloc.Get(), nullptr, IID_PPV_ARGS(&tempList)));
+      
+      g_cloudManager.Initialize(g_device.Get(), tempList.Get());
+      
+      // Execute immediately using the existing helper which closes the list and waits
+      ExecuteCommandListAndWait(tempList.Get());
+  }
+
+  // NOTE: g_commandList was closed early in InitD3D12 (after creation). 
+  // It will be Reset() in the first frame's PopulateCommandList.
+
   // Log successful InitD3D12 completion (stderr only)
   fprintf(stderr, "InitD3D12: Completed OK (returning true)\n");
 
@@ -2272,6 +2294,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       g_cameraData.pos[0] += move.x * moveSpeed * dt;
       g_cameraData.pos[1] += move.y * moveSpeed * dt;
       g_cameraData.pos[2] += move.z * moveSpeed * dt;
+      
       // Reset accumulation immediately when the camera position changes via input
       DxrRenderer::ResetAccumulation();
     }
@@ -2287,6 +2310,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     g_cameraData.lightCount = (float)DxrRenderer::GetLightCount();
     g_cameraData.frameCount = (float)DxrRenderer::GetAccumulationFrameCount();
     UpdateCameraCB();
+    
+    // Update Cloud Manager (uploads changed params to GPU)
+    g_cloudManager.Update(dt);
 
     // Start ImGui frame
     ImGui_ImplDX12_NewFrame();
@@ -2313,6 +2339,51 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       ImGui::SameLine();
       // Use compact spacing for menu bar toggles
       ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 6));
+      if (ImGui::BeginMenu("Clouds")) {
+          CloudParams& cp = g_cloudManager.GetParams();
+          bool changed = false;
+
+          if (ImGui::Button("Reset to Defaults")) {
+            g_cloudManager.ResetToDefaults();
+            changed = true;
+          }
+          ImGui::Separator();
+
+          changed |= ImGui::SliderFloat("Density", &cp.density, 0.0f, 5.0f);
+          changed |= ImGui::SliderFloat("Absorption", &cp.absorption, 0.0f, 2.0f);
+          changed |= ImGui::SliderFloat("Coverage", &cp.coverage, 0.0f, 1.0f);
+          changed |= ImGui::SliderFloat("Coverage Variation", &cp.coverageVariation, 0.0f, 1.0f);
+          changed |= ImGui::SliderFloat("Scattering (g)", &cp.scattering, -0.99f, 0.99f);
+          changed |= ImGui::SliderInt("Steps", &cp.steps, 16, 128);
+          changed |= ImGui::SliderFloat("Sun Intensity", &cp.sunIntensity, 0.0f, 20.0f);
+          changed |= ImGui::SliderFloat("Cloud Top", &cp.cloudTop, 200.0f, 1000.0f);
+          changed |= ImGui::SliderFloat("Cloud Bottom", &cp.cloudBottom, 50.0f, 300.0f);
+          changed |= ImGui::SliderFloat("Wind Speed", &cp.windSpeed, 0.0f, 50.0f);
+
+          ImGui::Separator();
+          changed |= ImGui::SliderFloat("Base Scale", &cp.baseScale, 0.0001f, 0.0020f, "%.5f", ImGuiSliderFlags_Logarithmic);
+          changed |= ImGui::SliderFloat("Detail Scale", &cp.detailScale, 0.0005f, 0.01f, "%.5f", ImGuiSliderFlags_Logarithmic);
+          changed |= ImGui::SliderFloat("Coverage Scale", &cp.coverageScale, 0.00005f, 0.0010f, "%.5f", ImGuiSliderFlags_Logarithmic);
+          changed |= ImGui::SliderFloat("Erosion", &cp.erosion, 0.0f, 1.0f);
+          changed |= ImGui::SliderFloat("Warp Strength", &cp.warpStrength, 0.0f, 2.0f);
+          changed |= ImGui::SliderFloat("Shape Power", &cp.shapePower, 0.5f, 3.0f);
+          changed |= ImGui::SliderFloat("Powder", &cp.powderStrength, 0.0f, 1.5f);
+
+          ImGui::Separator();
+          changed |= ImGui::SliderInt("Shadow Steps", &cp.shadowSteps, 1, 16);
+          changed |= ImGui::SliderFloat("Shadow Step Size", &cp.shadowStepSize, 10.0f, 500.0f);
+          changed |= ImGui::SliderFloat("Shadow LOD", &cp.shadowLod, 0.0f, 5.0f);
+          changed |= ImGui::SliderInt("Max Ray Steps", &cp.maxSteps, 64, 2048);
+          changed |= ImGui::SliderFloat("Vertical Step (m)", &cp.verticalStepMeters, 2.0f, 80.0f);
+          changed |= ImGui::SliderInt("Shadow Every N Steps", &cp.shadowEvery, 1, 16);
+          changed |= ImGui::SliderFloat("Shadow Density Threshold", &cp.shadowDensityThreshold, 0.0f, 0.5f);
+          
+          if (changed) {
+              DxrRenderer::ResetAccumulation();
+          }
+          ImGui::EndMenu();
+      }
+
       ImGui::Checkbox("##AssetsToggle", &g_showAssetsWindow);
       ImGui::SameLine();
       ImGui::Text("Assets");
@@ -2729,7 +2800,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                                     "AO",
                                     "Motion Vectors",
                                     "Spec Hit Distance",
-                                    "Spec Motion Vectors"};
+                                    "Spec Motion Vectors",
+                                    "Cloud: Slab Mask",
+                                    "Cloud: CB Sanity",
+                                    "Cloud: Noise Sanity",
+                                    "Cloud: Density Sanity",
+                                    "Cloud: Opacity (1-T)",
+                                    "Cloud: BaseShape Sanity"};
         if (ImGui::Combo("Debug View", &g_debugMode, debugModes,
                          IM_ARRAYSIZE(debugModes))) {
           // State is updated; updated into camera buffer on next frame
