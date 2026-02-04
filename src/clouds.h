@@ -54,10 +54,14 @@ public:
     D3D12_GPU_VIRTUAL_ADDRESS GetConstantBufferAddr() const { return m_constantBuffer->GetGPUVirtualAddress(); }
     CloudParams& GetParams() { return m_params; }
 
+    // GPU descriptor handle that points to the contiguous CBV+SRV descriptors for clouds
+    D3D12_GPU_DESCRIPTOR_HANDLE GetGPUHandle() const { return m_gpuHandle; }
+
 private:
     void CreateTextures(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList);
     void CreateConstantBuffer(ID3D12Device* device);
     void UpdateConstantBuffer();
+    void CreateDescriptors(ID3D12Device* device);
 
     Microsoft::WRL::ComPtr<ID3D12Resource> m_baseTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_detailTexture;
@@ -67,4 +71,11 @@ private:
     CloudParams m_params;
     UINT8* m_cbMappedData = nullptr;
     bool m_initialized = false;
+
+    // Descriptor handles for binding to raster shaders
+    D3D12_CPU_DESCRIPTOR_HANDLE m_cpuHandle = {};
+    D3D12_GPU_DESCRIPTOR_HANDLE m_gpuHandle = {};
 };
+
+// Global instance declared in main.cpp, exposed here for other modules
+extern CloudManager g_cloudManager;

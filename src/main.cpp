@@ -776,7 +776,7 @@ bool InitD3D12(HWND hwnd) {
 
   // --- Create a root signature with CBV b0 (vertex), descriptor table t0
   // (SRV), and CBV b1 (pixel material) ---
-  D3D12_ROOT_PARAMETER rootParameters[5] = {};
+  D3D12_ROOT_PARAMETER rootParameters[6] = {};
   // b0 - transform CBV for vertex shader AND pixel shader (needed for view
   // direction)
   rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
@@ -822,24 +822,55 @@ bool InitD3D12(HWND hwnd) {
   rootParameters[4].DescriptorTable.pDescriptorRanges = &envMapRange;
   rootParameters[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
+  // Cloud resources (space2): CBV b10 + SRV t10,t11
+  static D3D12_DESCRIPTOR_RANGE cloudRanges[2] = {};
+  cloudRanges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_CBV;
+  cloudRanges[0].NumDescriptors = 1;
+  cloudRanges[0].BaseShaderRegister = 10; // b10
+  cloudRanges[0].RegisterSpace = 2;
+  cloudRanges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+  cloudRanges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+  cloudRanges[1].NumDescriptors = 2; // Base + Detail
+  cloudRanges[1].BaseShaderRegister = 10; // t10, t11
+  cloudRanges[1].RegisterSpace = 2;
+  cloudRanges[1].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+  rootParameters[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  rootParameters[5].DescriptorTable.NumDescriptorRanges = 2;
+  rootParameters[5].DescriptorTable.pDescriptorRanges = cloudRanges;
+  rootParameters[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
   // static sampler for textures
-  D3D12_STATIC_SAMPLER_DESC sampler = {};
-  sampler.Filter = D3D12_FILTER_ANISOTROPIC;
-  sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-  sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-  sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-  sampler.MipLODBias = 0;
-  sampler.MaxAnisotropy = 16;
-  sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
-  sampler.ShaderRegister = 0;
-  sampler.RegisterSpace = 0;
-  sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+  D3D12_STATIC_SAMPLER_DESC samplers[2] = {};
+  // Default sampler (space 0, register 0)
+  samplers[0].Filter = D3D12_FILTER_ANISOTROPIC;
+  samplers[0].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  samplers[0].AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  samplers[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  samplers[0].MipLODBias = 0;
+  samplers[0].MaxAnisotropy = 16;
+  samplers[0].ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+  samplers[0].ShaderRegister = 0;
+  samplers[0].RegisterSpace = 0;
+  samplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+  // Cloud sampler (space 2, register 0)
+  samplers[1].Filter = D3D12_FILTER_ANISOTROPIC;
+  samplers[1].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  samplers[1].AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  samplers[1].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  samplers[1].MipLODBias = 0;
+  samplers[1].MaxAnisotropy = 16;
+  samplers[1].ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+  samplers[1].ShaderRegister = 0;
+  samplers[1].RegisterSpace = 2;
+  samplers[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
   D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc = {};
   rootSignatureDesc.NumParameters = _countof(rootParameters);
   rootSignatureDesc.pParameters = rootParameters;
-  rootSignatureDesc.NumStaticSamplers = 1;
-  rootSignatureDesc.pStaticSamplers = &sampler;
+  rootSignatureDesc.NumStaticSamplers = _countof(samplers);
+  rootSignatureDesc.pStaticSamplers = samplers;
   rootSignatureDesc.Flags =
       D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 

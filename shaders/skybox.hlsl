@@ -74,10 +74,12 @@ PSInput VSMain(VSInput input) {
     return output;
 }
 
+#include "clouds.hlsl"
+
 float4 PSMain(PSInput input) : SV_TARGET {
     float3 dir = normalize(input.viewDir);
     float2 uv = DirectionToUV(dir);
-    float3 color = envMap.SampleLevel(linearSampler, uv, 0).rgb;
+    float3 baseSky = envMap.SampleLevel(linearSampler, uv, 0).rgb;
     
     // Add Analytic Sun Disc
     // lightDir.w holds the sun *radius* in radians (set in main.cpp)
@@ -85,18 +87,25 @@ float4 PSMain(PSInput input) : SV_TARGET {
     float cosTheta = dot(dir, L);
     float cosSunRadius = cos(lightDir.w);
     
+    float3 color;
     if (cosTheta > cosSunRadius) {
          // Use sun color * intensity
          color = lightColor.rgb * lightColor.w;
     } else {
          // Only apply sky intensity scaling to the map, not the sun (which has its own intensity)
-         color *= intensity;
+         color = baseSky * intensity;
     }
-    
+
+    // Raymarch clouds and composite in front of sky
+    // Use a large tMax to ensure we cover the full atmosphere shell
+    float4 cloudOut = RaymarchClouds(pos, dir, 0.0f, 100000.0f, normalize(lightDir.xyz), lightColor.rgb * lightColor.w);
+    // cloudOut.rgb = in-scattered radiance, cloudOut.a = remaining transmittance
+    float3 composed = cloudOut.rgb + color * cloudOut.a;
+
     // ACES Tone Mapping
-    color = ToneMap(color);
+    composed = ToneMap(composed);
     // Gamma correction
-    color = pow(color, 1.0/2.2);
+    composed = pow(composed, 1.0/2.2);
     
-    return float4(color, 1.0);
+    return float4(composed, 1.0);
 }

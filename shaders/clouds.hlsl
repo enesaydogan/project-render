@@ -39,7 +39,7 @@ struct CloudParams {
 ConstantBuffer<CloudParams> CloudCB : register(b10, space2);
 Texture3D<float4> NoiseTex : register(t10, space2);
 Texture3D<float4> DetailTex : register(t11, space2);
-SamplerState LinearWrapSampler : register(s10);
+SamplerState LinearWrapSampler : register(s0, space2);
 
 #ifndef CLOUDS_PI
 static const float CLOUDS_PI = 3.14159265f;
