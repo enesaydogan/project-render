@@ -80,99 +80,101 @@ float SampleWarp(float3 uvw, float lod) {
     return NoiseTex.SampleLevel(LinearWrapSampler, uvw, lod).a;
 }
 
-// Base cloud height profile: flatter bottom, puffier mid, eroded top.
+// Breaking grid alignment
+float3 RotateDomain(float3 p) {
+    // ~33 degrees
+    float c = 0.83867; 
+    float s = 0.54463;
+    return float3(p.x * c + p.z * s, p.y, p.z * c - p.x * s);
+}
+
+// Improved height profile for realistic cloud shapes
 float HeightGradient(float h) {
-    // Stronger base, softer top (cumulus-ish)
-    float g0 = smoothstep(0.0, 0.08, h);
-    float g1 = 1.0 - smoothstep(0.68, 1.0, h);
-    float mid = smoothstep(0.10, 0.55, h) * (1.0 - smoothstep(0.55, 0.95, h));
-    return saturate(g0 * g1) * lerp(0.65, 1.0, mid);
+   // Remap 0..1 to shape
+   // Bottom fade (sharp)
+   float bottom = smoothstep(0.0, 0.05, h);
+   // Top fade (round/anvil)
+   float top = smoothstep(0.95, 0.65, h);
+   return bottom * top; 
 }
 
 float SampleDensity(float3 p, float lod) {
     float heightPct = (p.y - CloudCB.cloudBottom) / (CloudCB.cloudTop - CloudCB.cloudBottom);
     if (heightPct < 0.0 || heightPct > 1.0) return 0.0;
 
-    // World -> noise space
-    float3 baseUVW = p * CloudCB.baseScale;
+    // 1. Base Coordinates with Rotation to break tracking
+    float3 basePos = p * CloudCB.baseScale;
+    basePos.xz += CloudCB.timeSeconds * CloudCB.windSpeed * float2(0.001, 0.0005); // Diagonal wind
+    
+    // Domain Warp (Low Frequency)
+    float3 warpPos = RotateDomain(basePos) * 0.5f;
+    float warp = SampleWarp(warpPos, lod);
+    basePos += (warp - 0.5f) * CloudCB.warpStrength * 1.5f;
 
-    // Wind scroll + slight shear with height
-    float windT = CloudCB.timeSeconds * CloudCB.windSpeed;
-    baseUVW.xz += windT * float2(0.0022, 0.0016);
-    baseUVW.x += heightPct * CloudCB.windSpeed * 0.00035f;
+    // 2. Base Shape (Perlin-Worley)
+    // Rotate sampling to avoid axis streaks
+    float3 noiseCoord = RotateDomain(basePos);
+    float3 noise = SampleNoise(noiseCoord, lod);
+    
+    float lowFreqFBM = noise.r * 0.625 + noise.g * 0.25 + noise.b * 0.125;
+    float baseCloud = Remap(lowFreqFBM, -(1.0 - lowFreqFBM), 1.0, 0.0, 1.0);
+    
+    // 3. Density Gradient
+    float heightGrad = HeightGradient(heightPct);
+    baseCloud *= heightGrad;
 
-    // Domain warp to break up blobs
-    float3 warpUVW = baseUVW * 0.65f + float3(17.0, 3.0, 11.0);
-    float wx = SampleWarp(warpUVW + float3(0.0, 0.0, 0.0), 2.0);
-    float wy = SampleWarp(warpUVW + float3(13.5, 7.2, 5.1), 2.0);
-    float wz = SampleWarp(warpUVW + float3(2.8, 19.3, 11.7), 2.0);
-    float3 warp = (float3(wx, wy, wz) * 2.0f - 1.0f) * CloudCB.warpStrength;
-    baseUVW += warp * 0.35f;
+    // 4. Coverage
+    // Apply coverage by eroding the density signal
+    
+    // Remap coverage slider as requested: 0.0 on slider behaves like 0.4 internal.
+    // This shifts the useful range to be fully accessible.
+    // We strictly map [0,1] -> [0.4, 1.0] for the density calculation.
+    float effectiveCoverage = lerp(0.4f, 1.0f, CloudCB.coverage);
+    
+    // Map effective coverage to a density threshold.
+    // At 0.4 (slider 0), we want a threshold around 0.6 to allow sparse clouds.
+    // At 1.0 (slider 1), we want a threshold ~0.05 for overcast.
+    float densityThreshold = lerp(0.6f, 0.05f, CloudCB.coverage); 
 
-    // Packed noise
-    float4 nBase = NoiseTex.SampleLevel(LinearWrapSampler, baseUVW, lod);
-    float perlin = nBase.r;       // billowy base
-    float worley = nBase.g;       // cellular breakup
+    // Standard Schneider remap:
+    float covRemap = Remap(baseCloud, densityThreshold, 1.0f, 0.0f, 1.0f);
+    baseCloud = covRemap; 
+    
+    // 5. Cloud Type / Weather variation (simulated by large scale noise)
+    // Acts as a "probability to spawn cloud here"
+    float3 coveragePos = p * CloudCB.coverageScale + float3(CloudCB.timeSeconds * 0.005, 0, 0);
+    
+    // ROTATE coverage coordinates to prevent axis-aligned streaks/seams in the probability mask
+    coveragePos = RotateDomain(coveragePos);
+    
+    float weatherNoise = SampleNoise(coveragePos, lod + 2.0).r;
+    
+    // Sync weather mask with coverage so we don't punch holes in "full" coverage
+    // Use effectiveCoverage here to ensure consistency
+    float weatherThreshold = lerp(0.85f, 0.0f, effectiveCoverage);
+    // Smoother transition for weather mask to avoid hard cloud cuts
+    float weatherMask = smoothstep(weatherThreshold - 0.2f, weatherThreshold + 0.2f, weatherNoise);
+    baseCloud *= weatherMask;
 
-    // Large-scale coverage modulation (acts like a cheap 2D coverage map).
-    // IMPORTANT: Coverage must be linear and predictable:
-    // - coverage=0 => no clouds
-    // - coverage=1 => full cover
-    // We achieve this by using a uniform-ish noise field as a *mask* instead of
-    // using coverage as a hard threshold inside the base density field.
-    float coverage = saturate(CloudCB.coverage);
-    float2 covUV = p.xz * CloudCB.coverageScale + windT * float2(0.00035, 0.00027);
-    // Use a more uniform-ish noise distribution for the coverage mask.
-    // Perlin alone tends to be biased, causing "dead" slider ranges.
-    float4 covN = NoiseTex.SampleLevel(LinearWrapSampler, float3(covUV, 0.5f), 3.0f);
-    float covNoise = covN.g * 0.70f + covN.r * 0.30f; // worley base + a bit of perlin
-    covNoise = saturate((covNoise - 0.5f) * 1.75f + 0.5f); // contrast to spread values
-
-    // Edge softness (coverageVariation controls transition width).
-    // Keep this fairly small so coverage 0.4->0.9 actually changes the mask.
-    float covEdge = lerp(0.0020f, 0.035f, saturate(CloudCB.coverageVariation));
-    float a = max(0.0f, covNoise - covEdge);
-    float b = min(1.0f, covNoise + covEdge);
-    float coverageMask = smoothstep(a, b, coverage);
-
-    // Only treat it as "overcast" very near 1.0.
-    float overcast = smoothstep(0.92f, 1.0f, coverage);
-
-    // Perlin-Worley style base shape.
-    // At high coverage, fade out Worley breakup so Coverage=1 can approach overcast.
-    float baseShape = saturate(perlin * 1.8f - 0.2f);
-    float worleyMask = saturate(worley * 1.2f + 0.1f);
-    worleyMask = lerp(worleyMask, 1.0f, overcast);
-    baseShape *= worleyMask;
-    // At near-overcast, reduce "clumpiness" so it fills in more uniformly.
-    float effectiveShapePower = lerp(CloudCB.shapePower, 1.15f, overcast);
-    baseShape = pow(baseShape, effectiveShapePower);
-
-    // Overcast bias: enforce a soft floor so coverage=1 can approach full cover.
-    // This prevents Perlin low regions from punching bald holes when coverage is max.
-    float overcastFloor = overcast * 0.35f;
-    baseShape = max(baseShape, overcastFloor);
-
-    // Erosion/detail (stronger towards the top)
-    float3 detailUVW = p * CloudCB.detailScale + warp * 0.5f;
-    detailUVW.xz += windT * float2(0.0045, 0.0031);
-    float4 nDetail = NoiseTex.SampleLevel(LinearWrapSampler, detailUVW, lod);
-    float detail = saturate(nDetail.b * 1.2f - 0.1f);
-    float erosionAmt = CloudCB.erosion * lerp(0.15f, 1.0f, smoothstep(0.25f, 1.0f, heightPct));
-    // Keep erosion responsive; only damp slightly at true overcast.
-    erosionAmt *= lerp(1.0f, 0.8f, overcast);
-
-    // Stronger, more obvious erosion response.
-    baseShape = saturate(baseShape - detail * erosionAmt * 0.9f);
-    baseShape = saturate(baseShape - (1.0f - baseShape) * detail * erosionAmt * 0.45f);
-
-    // Height shaping
-    float heightFade = HeightGradient(heightPct);
-
-    float density = baseShape * coverageMask;
-    density *= heightFade;
-
-    return density * CloudCB.density;
+    // 6. Detail Erosion (High Frequency)
+    if (baseCloud > 0.0) {
+        float3 detailPos = p * CloudCB.detailScale;
+        detailPos.xz += CloudCB.timeSeconds * CloudCB.windSpeed * 0.002;
+        // Rotate detail too
+        detailPos = RotateDomain(detailPos);
+        
+        float3 detailNoise = SampleNoise(detailPos, lod);
+        float highFreqFBM = detailNoise.r * 0.625 + detailNoise.g * 0.25 + detailNoise.b * 0.125;
+        
+        // Erode edges more than center
+        float modifier = lerp(highFreqFBM, 1.0 - highFreqFBM, saturate(heightPct * 5.0)); // Invert at bottom?
+        
+        // Remap density based on detail
+        float erosion = CloudCB.erosion * 0.5; // Scale erosion
+        baseCloud = Remap(baseCloud, highFreqFBM * erosion, 1.0, 0.0, 1.0);
+    }
+    
+    return saturate(baseCloud) * CloudCB.density;
 }
 
 // Raymarch function returning accumulated cloud color (rgb) and transmittance (a)
@@ -180,16 +182,14 @@ float SampleDensity(float3 p, float lod) {
 float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, float3 sunDir, float3 lightColor) {
     if (tMax <= tMin) return float4(0,0,0,1); // Full transmittance
 
-    // Intersect with the cloud altitude slab [cloudBottom, cloudTop] in world-space Y.
-    // This prevents enormous step sizes (and missed clouds) when tMin/tMax are very wide.
+
+    // Slab intersection
     float slabEnter = 0.0f;
     float slabExit = -1.0f;
     float dy = rayDir.y;
     if (abs(dy) < 1e-5f) {
-        // Ray parallel to slab planes
         if (rayOrigin.y >= CloudCB.cloudBottom && rayOrigin.y <= CloudCB.cloudTop) {
-            slabEnter = 0.0f;
-            slabExit = tMax;
+            slabEnter = 0.0f; slabExit = tMax;
         } else {
             return float4(0,0,0,1);
         }
@@ -202,160 +202,113 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
 
     float tStart = max(max(0.0f, tMin), slabEnter);
     float tEnd = min(min(tMax, 100000.0f), slabExit);
-    if (tEnd <= tStart) {
-        #ifdef RAYTRACING_COMMON_H
-        int dbg = (int)debugMode;
-        if (dbg == 11) return float4(0, 0, 0, 1); // slab mask
-        #endif
-        return float4(0,0,0,1);
-    }
+    
+    if (tEnd <= tStart) return float4(0,0,0,1);
 
     float thickness = tEnd - tStart;
-
-    #ifdef RAYTRACING_COMMON_H
-    int dbg = (int)debugMode;
-    if (dbg == 11) {
-        // Slab mask (should be white anywhere the ray intersects the cloud layer)
-        return float4(1, 1, 1, 1);
-    }
-    if (dbg == 12) {
-        // CB sanity check: show normalized bottom/top/coverage
-        float b = saturate(CloudCB.cloudBottom / 1000.0f);
-        float t = saturate(CloudCB.cloudTop / 1000.0f);
-        return float4(b, t, saturate(CloudCB.coverage), 1);
-    }
-    if (dbg == 13) {
-        // Noise sanity check at the first point inside the slab
-        float3 p0 = rayOrigin + rayDir * tStart;
-        float3 uvw = p0 * CloudCB.baseScale;
-        float4 n = NoiseTex.SampleLevel(LinearWrapSampler, uvw, 0.0f);
-        return float4(n.rgb, 1);
-    }
-    if (dbg == 14) {
-        // Density sanity at mid-slab (avoid boundary fade = 0)
-        float tMid = 0.5f * (tStart + tEnd);
-        float3 pMid = rayOrigin + rayDir * tMid;
-        float d = SampleDensity(pMid, 0.0f);
-        return float4(d, d, d, 1);
-    }
-    if (dbg == 16) {
-        // Base shape sanity (pre-coverage threshold) at mid-slab
-        float tMid = 0.5f * (tStart + tEnd);
-        float3 pMid = rayOrigin + rayDir * tMid;
-
-        float heightPct = (pMid.y - CloudCB.cloudBottom) / (CloudCB.cloudTop - CloudCB.cloudBottom);
-        float3 baseUVW = pMid * CloudCB.baseScale;
-        float windT = CloudCB.timeSeconds * CloudCB.windSpeed;
-        baseUVW.xz += windT * float2(0.0022, 0.0016);
-        baseUVW.x += heightPct * CloudCB.windSpeed * 0.00035f;
-
-        float4 nBase = NoiseTex.SampleLevel(LinearWrapSampler, baseUVW, 0.0f);
-        float perlin = nBase.r;
-        float worley = nBase.g;
-
-        float baseShape = saturate(perlin * 1.8f - 0.2f);
-        baseShape *= saturate(worley * 1.2f + 0.1f);
-        baseShape = pow(baseShape, CloudCB.shapePower);
-
-        return float4(baseShape, baseShape, baseShape, 1);
-    }
-    #endif
-
-    // Sampling resolution based on *vertical* traversal.
-    // For near-horizon rays, thickness along the ray can be tens of km; if we
-    // keep a fixed step count, we undersample and get speckles / no clouds.
+    
+    // Adaptive stepping
     float verticalThickness = max(1.0f, CloudCB.cloudTop - CloudCB.cloudBottom);
     float verticalStepMeters = max(1.0f, CloudCB.verticalStepMeters);
-    float rayDirYAbs = max(0.02f, abs(rayDir.y));
-    int targetSteps = (int)ceil((verticalThickness / verticalStepMeters) / rayDirYAbs);
-    int steps = clamp(max(CloudCB.steps, targetSteps), 8, max(8, CloudCB.maxSteps));
-    float stepSize = thickness / (float)steps;
+    float rayDirYAbs = max(0.05f, abs(rayDir.y)); // Min clamp to avoid inf steps
+    
+    // Smooth stepping logic (preserved from fix)
+    float targetStepsF = (verticalThickness / verticalStepMeters) / rayDirYAbs;
+    float smoothSteps = clamp(max((float)CloudCB.steps, targetStepsF), 10.0f, (float)CloudCB.maxSteps);
+    int steps = (int)ceil(smoothSteps);
+    float stepSize = thickness / smoothSteps; 
+
     float3 pos = rayOrigin + rayDir * tStart;
     
+    // Dither start (preserved)
+    float jitter = 0.0;
+    #ifdef RAYTRACING_COMMON_H
+    jitter = InterleavedGradientNoise(DispatchRaysIndex().xy, (uint)globalFrameCount);
+    #endif
+    pos += rayDir * (jitter * stepSize);
+
     float3 sum = float3(0,0,0);
     float transmittance = 1.0f;
     
+    // Phase Function
     float cosAngle = dot(rayDir, sunDir);
     float phase = PhaseHG(cosAngle, CloudCB.scattering);
 
-    // Dither start to reduce banding.
-    // Disabled by default because it can look like speckle without strong temporal accumulation.
-    // With the adaptive step count below, banding is already minimal.
-    // float jitter = 0.0f;
-    // #ifdef RAYTRACING_COMMON_H
-    // jitter = InterleavedGradientNoise(DispatchRaysIndex().xy, globalFrameCount);
-    // #endif
-    // pos += rayDir * (jitter * stepSize);
-
-    // Ambient: prefer the sky's ambient if available (common.hlsli), else a fallback gradient.
-    float3 ambientSky = float3(0.0, 0.0, 0.0);
-    float ambientW = 0.0f;
+    // Setup Ambient Color
+    float3 ambientSkyColor = float3(0.0, 0.0, 0.0);
+    float ambientWeight = 0.0f;
+    
     #ifdef RAYTRACING_COMMON_H
-    ambientSky = ambientColor.rgb;
-    ambientW = ambientColor.w;
+    // Use the global ambient color passed from the CPU (usually derived from Skybox/EnvMap)
+    ambientSkyColor = ambientColor.rgb;
+    ambientWeight = ambientColor.w; // Weight determining how much to use global vs procedural
     #endif
 
-    float3 ambientTop = float3(0.55, 0.68, 0.90);
-    float3 ambientBottom = float3(0.62, 0.66, 0.70);
-
-    float cachedLightTrans = 1.0f;
-    int shadowCountdown = 0;
-
+    // Fallback/Bias colors (Neutral Grey/White base)
+    // We keep these strictly neutral so they don't fight with the sky color
+    float3 kSkyZenith = float3(0.4, 0.45, 0.55); // Blue-grey
+    float3 kSkyHorizon = float3(0.7, 0.7, 0.75); // Light grey
+    
+    // Lighting loop
     for(int i = 0; i < steps; ++i) {
         if (transmittance < 0.01f) break;
 
         float density = SampleDensity(pos, 0.0f);
+        
         if (density > 0.001f) {
-            // Shadowing is expensive: only recompute occasionally and only when
-            // density is significant.
-            if (shadowCountdown <= 0 && density >= CloudCB.shadowDensityThreshold) {
-                float shadowDens = 0.0f;
-                float3 lpos = pos;
-                float lstep = CloudCB.shadowStepSize;
-                [loop]
-                for (int s = 0; s < CloudCB.shadowSteps; ++s) {
-                    lpos += sunDir * lstep;
-                    float d = SampleDensity(lpos, CloudCB.shadowLod);
-                    shadowDens += d * lstep;
-                    if (shadowDens * CloudCB.absorption > 6.0f) break;
-                }
-                cachedLightTrans = exp(-shadowDens * CloudCB.absorption);
-                shadowCountdown = max(1, CloudCB.shadowEvery);
-            }
-            shadowCountdown--;
-            
-            // Powder effect (dark edges) - approximation
-            float powder = (1.0f - exp(-density * 2.0f)) * CloudCB.powderStrength;
-            
-            float heightPct = (pos.y - CloudCB.cloudBottom) / (CloudCB.cloudTop - CloudCB.cloudBottom);
-            float3 ambientGrad = lerp(ambientBottom, ambientTop, heightPct);
-            float3 ambient = lerp(ambientGrad, ambientSky, saturate(ambientW));
-            ambient *= 0.35f;
-            
-            // Direct Sun Lighting
-            // Use slightly reduced powder effect on direct light to prevent too much darkening
-            float3 sunLight = lightColor * CloudCB.sunIntensity * cachedLightTrans * phase * lerp(1.0, powder, 0.65);
-            
-            // Scattering integral integration
-            // Energy = (Sun + Ambient) * density
-            float3 incoming = (sunLight + ambient) * density;
-            
             float extinction = density * CloudCB.absorption;
             float stepTrans = exp(-extinction * stepSize);
+
+            // Light Energy Calculation
+            // 1. Direct Sun (with shadow ray)
+            float shadowTerm = 1.0f;
+            if (density > CloudCB.shadowDensityThreshold) {
+               // Cheap shadow march: 4 steps
+               float3 lPos = pos;
+               float lDens = 0.0;
+               float lStep = CloudCB.shadowStepSize;
+               
+               // Offset randomized slightly to break banding
+               lPos += sunDir * (lStep * jitter); 
+
+               [unroll]
+               for(int s=0; s<4; ++s) { // Hardcoded 4 for perf, or use CloudCB.shadowSteps
+                   lPos += sunDir * lStep;
+                   lDens += SampleDensity(lPos, CloudCB.shadowLod);
+               }
+               shadowTerm = exp(-lDens * lStep * CloudCB.absorption);
+            }
             
-            // Analytic integration over step
-            sum += incoming * transmittance * (1.0f - stepTrans) / max(0.0001f, extinction);
+            // Powder effect: Darken edges facing away from sun, brighten edges facing sun?
+            // Simple Beer-Powder approximation for realism
+            float powder = 1.0f - exp(-density * 2.0f);
+            float directLight = shadowTerm * phase * lerp(1.0f, 2.0f * powder, 0.5f);
+            
+            // 2. Ambient Light
+            // Height based gradient
+            float hPct = (pos.y - CloudCB.cloudBottom) / (CloudCB.cloudTop - CloudCB.cloudBottom);
+            float3 ambientGrad = lerp(kSkyHorizon, kSkyZenith, hPct);
+            
+            // Blend procedural gradient with real sky ambient
+            // If ambientWeight is 1.0, we fully use the sky's average color.
+            float3 ambient = lerp(ambientGrad, ambientSkyColor, saturate(ambientWeight));
+            
+            // Ambient occlusion based on density: deeper = darker
+            ambient *= exp(-density * 1.0f);
+            ambient *= 0.6f; // Overall Ambient intensity boost
+            
+            float3 source = (sunDir * CloudCB.sunIntensity * directLight * lightColor) + ambient;
+            
+            // Integation: Energy = Source * Density * (Integral of T over step)
+            // Integra(T) = (1 - stepTrans) / extinction
+            float3 integ = source * density * (1.0f - stepTrans) / max(1e-4f, extinction);
+            
+            sum += integ * transmittance;
             transmittance *= stepTrans;
         }
+        
         pos += rayDir * stepSize;
     }
-
-    #ifdef RAYTRACING_COMMON_H
-    if (dbg == 15) {
-        float o = saturate(1.0f - transmittance);
-        return float4(o, o, o, 1);
-    }
-    #endif
 
     return float4(sum, transmittance);
 }
