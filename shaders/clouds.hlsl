@@ -98,8 +98,30 @@ float HeightGradient(float h) {
    return bottom * top; 
 }
 
+// Ray-Sphere Intersection
+// Returns float2(tNear, tFar). If no hit, returns float2(-1, -1).
+float2 RaySphereIntersect(float3 ro, float3 rd, float3 sphereCenter, float sphereRadius) {
+    float3 oc = ro - sphereCenter;
+    float b = dot(oc, rd);
+    float c = dot(oc, oc) - sphereRadius * sphereRadius;
+    float h = b * b - c;
+    if (h < 0.0) return float2(-1.0, -1.0); // No hit
+    h = sqrt(h);
+    return float2(-b - h, -b + h);
+}
+
+static const float EARTH_RADIUS = 6360000.0;
+static const float3 PLANET_CENTER = float3(0.0, -EARTH_RADIUS, 0.0);
+
 float SampleDensity(float3 p, float lod) {
-    float heightPct = (p.y - CloudCB.cloudBottom) / (CloudCB.cloudTop - CloudCB.cloudBottom);
+    // Spherical Altitude Calculation
+    float distToCenter = length(p - PLANET_CENTER);
+    float heightAboveGround = distToCenter - EARTH_RADIUS;
+    
+    // Check bounds
+    if (heightAboveGround < CloudCB.cloudBottom || heightAboveGround > CloudCB.cloudTop) return 0.0;
+
+    float heightPct = (heightAboveGround - CloudCB.cloudBottom) / (CloudCB.cloudTop - CloudCB.cloudBottom);
     if (heightPct < 0.0 || heightPct > 1.0) return 0.0;
 
     // 1. Base Coordinates with Rotation to break tracking
@@ -147,6 +169,7 @@ float SampleDensity(float3 p, float lod) {
     // Use 2D noise for weather map to prevent vertical streaking artifacts from 3D sampling
     // 3D noise at large scales can look like vertical columns if the Z variation is slow
     float2 weatherUV = coveragePos.xz;
+    // Map weatherUV to spherical cap? For now, large scale planar offset is fine locally.
     float weatherNoise = NoiseTex.SampleLevel(LinearWrapSampler, float3(weatherUV, 0.5f), lod + 2.0).r;
     
     // Sync weather mask with coverage so we don't punch holes in "full" coverage
@@ -180,28 +203,55 @@ float SampleDensity(float3 p, float lod) {
 // Raymarch function returning accumulated cloud color (rgb) and transmittance (a)
 // tMin/tMax: Intersection distance with cloud shell
 float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, float3 sunDir, float3 lightColor) {
-    if (tMax <= tMin) return float4(0,0,0,1); // Full transmittance
+    // 1. Setup Intersection for Spherical Shell
+    float innerRadius = EARTH_RADIUS + CloudCB.cloudBottom;
+    float outerRadius = EARTH_RADIUS + CloudCB.cloudTop;
+    
+    float2 hitInner = RaySphereIntersect(rayOrigin, rayDir, PLANET_CENTER, innerRadius);
+    float2 hitOuter = RaySphereIntersect(rayOrigin, rayDir, PLANET_CENTER, outerRadius);
 
-
-    // Slab intersection
-    float slabEnter = 0.0f;
-    float slabExit = -1.0f;
-    float dy = rayDir.y;
-    if (abs(dy) < 1e-5f) {
-        if (rayOrigin.y >= CloudCB.cloudBottom && rayOrigin.y <= CloudCB.cloudTop) {
-            slabEnter = 0.0f; slabExit = tMax;
-        } else {
-            return float4(0,0,0,1);
-        }
-    } else {
-        float t0 = (CloudCB.cloudBottom - rayOrigin.y) / dy;
-        float t1 = (CloudCB.cloudTop - rayOrigin.y) / dy;
-        slabEnter = min(t0, t1);
-        slabExit = max(t0, t1);
+    float tStart = 0.0;
+    float tEnd = 0.0;
+    // Determine the march interval
+    // Case 1: Camera below cloud layer (Ground view)
+    float distToCenter = length(rayOrigin - PLANET_CENTER);
+    if (distToCenter < innerRadius) {
+         // Ray must hit inner sphere (exit) and outer sphere (exit) to see clouds?
+         // No, looking up from ground:
+         // Ray usually enters layer at hitInner.y (far hit of inner sphere?)
+         // Wait, if inside, 'far hit' is the boundary in front of us. 'near hit' is behind us.
+         // Let's assume t > 0.
+         
+         // Looking up: Ray hits inner shell at tInner (enter clouds), then hits outer shell at tOuter (exit clouds).
+         // hitInner.y should be the positive intersection (since we are inside, one is neg, one is pos).
+         tStart = max(0.0, hitInner.y);
+         tEnd = max(0.0, hitOuter.y);
+    } 
+    // Case 2: Camera inside cloud layer
+    else if (distToCenter < outerRadius) {
+        // We are inside the shell.
+        // tStart is 0.
+        // tEnd is min(dist to inner sphere, dist to outer sphere).
+        // If we look down, we hit inner sphere. If we look up, we hit outer sphere.
+        tStart = 0.0;
+        float dInner = (hitInner.x > 0) ? hitInner.x : ((hitInner.y > 0) ? hitInner.y : 1e9);
+        float dOuter = (hitOuter.y > 0) ? hitOuter.y : 1e9;
+        tEnd = min(dInner, dOuter);
     }
-
-    float tStart = max(max(0.0f, tMin), slabEnter);
-    float tEnd = min(min(tMax, 100000.0f), slabExit);
+    // Case 3: Camera above clouds (Space) - not handled, assuming ground/air
+    else {
+        // Outside looking down
+        tStart = hitOuter.x;
+        tEnd = max(hitInner.x > 0 ? hitInner.x : hitOuter.y, 0.0);
+        // ... complex logic, simplified for now
+        if (hitOuter.x < 0) return float4(0,0,0,1);
+        tEnd = hitOuter.y; // Simplified
+    }
+    
+    // Clip by scene depth (tMax)
+    // tStart = max(tStart, max(0.0f, tMin)); // Don't clip start by tMin if tMin is scene geometry? tMin usually 0 or NearZ
+    // tMax comes from depth buffer.
+    tEnd = min(tEnd, (tMax > 0.0) ? tMax : 100000.0);
     
     if (tEnd <= tStart) return float4(0,0,0,1);
 
@@ -210,7 +260,8 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
     // Adaptive stepping
     float verticalThickness = max(1.0f, CloudCB.cloudTop - CloudCB.cloudBottom);
     float verticalStepMeters = max(1.0f, CloudCB.verticalStepMeters);
-    float rayDirYAbs = max(0.05f, abs(rayDir.y)); // Min clamp to avoid inf steps
+    // Rough approx of vertical component for step count
+    float rayDirYAbs = max(0.05f, abs(rayDir.y)); 
     
     // Smooth stepping logic (preserved from fix)
     float targetStepsF = (verticalThickness / verticalStepMeters) / rayDirYAbs;
