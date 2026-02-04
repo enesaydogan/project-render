@@ -874,6 +874,7 @@ int UpdateSelection(float screenWidth, float screenHeight) {
 void DrawScenePanel(HWND hwnd, bool &visible) {
     if (!visible) return;
     if (ImGui::Begin("Scene", &visible)) {
+        bool uiChanged = false;
         // If background import finished CPU-side, merge results on main thread (GPU uploads, descriptors, AS rebuild)
         if (s_pendingReady.load()) {
             std::vector<Asset::GpuMesh> meshes;
@@ -977,10 +978,12 @@ void DrawScenePanel(HWND hwnd, bool &visible) {
         float btnWidth = ImGui::GetContentRegionAvail().x * 0.33f;
         if (ImGui::Button("Import Model...", ImVec2(btnWidth, 0))) {
             ImportModelWithDialog(hwnd);
+            uiChanged = true;
         }
         ImGui::SameLine();
         if (ImGui::Button("Import HDR...", ImVec2(btnWidth, 0))) {
             ImportHDRWithDialog(hwnd);
+            uiChanged = true;
         }
         ImGui::SameLine();
         const char* spaceNames[] = { "Local", "World" };
@@ -988,6 +991,7 @@ void DrawScenePanel(HWND hwnd, bool &visible) {
         ImGui::SetNextItemWidth(-FLT_MIN);
         if (ImGui::Combo("##Space", &currentSpace, spaceNames, 2)) {
             g_currentGizmoMode = (currentSpace == 1) ? ImGuizmo::WORLD : ImGuizmo::LOCAL;
+            uiChanged = true;
         }
 
         ImGui::Separator();
@@ -1016,6 +1020,8 @@ void DrawScenePanel(HWND hwnd, bool &visible) {
                     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.1f, 0.1f, 1.0f));
                     if (ImGui::Button("Delete", ImVec2(-FLT_MIN, 0))) {
                         DeleteNode(i);
+                        // Ensure accumulation is reset immediately for delete operations
+                        DxrRenderer::ResetAccumulation();
                         ImGui::PopStyleColor(2);
                         ImGui::PopID();
                         ImGui::EndTable();
@@ -1030,6 +1036,11 @@ void DrawScenePanel(HWND hwnd, bool &visible) {
             }
         }
         ImGui::EndChild();
+
+        // Reset accumulation once per Scene window when any UI widget changed
+        if (uiChanged) {
+            DxrRenderer::ResetAccumulation();
+        }
 
         if (!s_lastStatus.empty()) {
             ImGui::Separator();

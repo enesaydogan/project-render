@@ -2130,6 +2130,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       g_cameraData.forward[1] = sinf(g_camPitch);
       g_cameraData.forward[2] = cosf(g_camPitch) * -cosf(g_camYaw);
 
+      // Reset accumulation immediately when the camera orientation changes via mouse
+      DxrRenderer::ResetAccumulation();
+
       // Recenter cursor for next delta
       SetCursorPos(centerScreen.x, centerScreen.y);
     } else {
@@ -2269,6 +2272,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       g_cameraData.pos[0] += move.x * moveSpeed * dt;
       g_cameraData.pos[1] += move.y * moveSpeed * dt;
       g_cameraData.pos[2] += move.z * moveSpeed * dt;
+      // Reset accumulation immediately when the camera position changes via input
+      DxrRenderer::ResetAccumulation();
     }
 
     // Update camera forward from yaw/pitch
@@ -2332,6 +2337,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     if (g_showControlsWindow) {
       if (ImGui::Begin("Controls", &g_showControlsWindow,
                        ImGuiWindowFlags_NoCollapse)) {
+        bool uiChanged = false;
 
         // Camera Debug Info
         ImGui::Text("Camera Position: (%.2f, %.2f, %.2f)", g_cameraData.pos[0],
@@ -2375,11 +2381,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             float vFovNew = 2.0f * vHalfRadNew * (180.0f / 3.14159265f);
             g_cameraData.fov = vFovNew;
             UpdateCameraCB();
+            uiChanged = true;
           }
         }
         if (ImGui::SliderFloat("Intensity", &g_cameraData.intensity, 0.0f,
                                5.0f)) {
           UpdateCameraCB();
+          uiChanged = true;
           // Debug: print camera params when intensity changes
           fprintf(stderr,
                   "Camera params after Intensity change: fov=%.3f "
@@ -2390,16 +2398,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         if (ImGui::Button("Reset Camera")) {
           ResetCamera();
           UpdateCameraCB();
+          uiChanged = true;
         }
 
         // Camera movement & mouse sensitivity controls
         ImGui::Spacing();
         if (ImGui::SliderFloat("Move Speed", &g_camSpeed, 0.1f, 20.0f)) {
           // no additional action required; movement uses g_camSpeed immediately
+          uiChanged = true;
         }
         if (ImGui::SliderFloat("Mouse Sensitivity", &g_mouseSensitivity, 0.001f,
                                0.05f)) {
           // sensitivity applied next frame via g_mouseSensitivity
+          uiChanged = true;
         }
 
         ImGui::Separator();
@@ -2412,10 +2423,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         iblSource = (int)IBLManager::Get().GetIBLSource();
         if (ImGui::RadioButton("File IBL", &iblSource, 0)) {
              IBLManager::Get().SetIBLSource(IBLManager::IBLSource::File);
+             uiChanged = true;
         }
         ImGui::SameLine();
         if (ImGui::RadioButton("Prague Sky", &iblSource, 1)) {
              IBLManager::Get().SetIBLSource(IBLManager::IBLSource::PragueSkyModel);
+             uiChanged = true;
         }
 
         if (iblSource == 1) {
@@ -2425,16 +2438,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             if (ImGui::SliderFloat("Visibility (km)", &vis, 10.0f, 120.0f)) {
                 IBLManager::Get().SetSkyVisibility(vis);
                 uiParamChanged = true;
+                uiChanged = true;
             }
             float albedo = IBLManager::Get().GetSkyAlbedo();
             if (ImGui::SliderFloat("Earth Albedo", &albedo, 0.0f, 1.0f)) {
                  IBLManager::Get().SetSkyAlbedo(albedo);
                  uiParamChanged = true;
+                 uiChanged = true;
             }
             float altitude = IBLManager::Get().GetObserverAltitude();
             if (ImGui::SliderFloat("Altitude (m)", &altitude, 0.0f, 15000.0f)) {
                  IBLManager::Get().SetObserverAltitude(altitude);
                  uiParamChanged = true;
+                 uiChanged = true;
             }
 
             // Intensity Controls
@@ -2442,24 +2458,27 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             if (ImGui::SliderFloat("Sky Intensity", &skyInt, 0.0f, 5.0f)) {
                 IBLManager::Get().SetSkyIntensity(skyInt);
                 uiParamChanged = true;
+                uiChanged = true;
             }
             float sunInt = IBLManager::Get().GetSunIntensity();
             if (ImGui::SliderFloat("Sun Intensity", &sunInt, 0.0f, 10.0f)) {
                 IBLManager::Get().SetSunIntensity(sunInt);
                 // Changes analytic light intensity
+                uiChanged = true;
             }
             float sunSize = IBLManager::Get().GetSunSize();
             if (ImGui::SliderFloat("Sun Size (deg)", &sunSize, 0.1f, 5.0f)) {
                 IBLManager::Get().SetSunSize(sunSize);
                 // Changes analytic light radius
+                uiChanged = true;
             }
 
             // float elev = IBLManager::Get().GetSolarAltitude(); // Not used directly, driven by Time
             
             // GUI State for Time/North (controlled by global static vars now)
             
-            if (ImGui::SliderFloat("Time of Day", &g_timeOfDay, 6.0f, 18.0f)) uiParamChanged = true;
-            if (ImGui::SliderFloat("North Offset", &g_northOffset, 0.0f, 360.0f)) uiParamChanged = true;
+            if (ImGui::SliderFloat("Time of Day", &g_timeOfDay, 6.0f, 18.0f)) { uiParamChanged = true; uiChanged = true; }
+            if (ImGui::SliderFloat("North Offset", &g_northOffset, 0.0f, 360.0f)) { uiParamChanged = true; uiChanged = true; }
 
             // Logic moved to PopulateCommandList to ensure update even when UI is closed
 
@@ -2472,10 +2491,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         }
         
         ImGui::Spacing();
-        if (ImGui::ColorEdit3("Ambient Color", g_cameraData.ambientColor))
+        if (ImGui::ColorEdit3("Ambient Color", g_cameraData.ambientColor)) {
              UpdateCameraCB();
-        if (ImGui::SliderFloat("Ambient Weight", &g_cameraData.ambientColor[3], 0.0f, 1.0f))
+             uiChanged = true;
+        }
+        if (ImGui::SliderFloat("Ambient Weight", &g_cameraData.ambientColor[3], 0.0f, 1.0f)) {
              UpdateCameraCB();
+             uiChanged = true;
+        }
 
         ImGui::Separator();
 
@@ -2495,9 +2518,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             memcpy(pCbData, &constants, sizeof(constants));
             g_constantBuffer->Unmap(0, nullptr);
           }
+          uiChanged = true;
         }
         if (ImGui::Checkbox("Verbose Render Logs", &g_verboseRenderLogs)) {
           fprintf(stderr, "Verbose Render Logs set=%d\n", g_verboseRenderLogs);
+          uiChanged = true;
         }
       }
       ImGui::End();
@@ -2508,6 +2533,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     if (g_showRenderModeWindow) {
       if (ImGui::Begin("Render Mode", &g_showRenderModeWindow,
                        ImGuiWindowFlags_NoCollapse)) {
+        bool uiChanged = false;
         ImGui::Text("Current Mode: %s",
                     g_currentRenderMode == RenderMode::Raster ? "Raster"
                                                               : "DXR");
@@ -2517,15 +2543,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
           if (ImGui::SliderFloat("Reflection Bounces",
                                  &g_cameraData.maxSpecularBounces, 0.0f, 16.0f,
-                                 "%.0f"))
+                                 "%.0f")) {
             UpdateCameraCB();
+            uiChanged = true;
+          }
           if (ImGui::SliderFloat("Refraction Bounces",
                                  &g_cameraData.maxRefractiveBounces, 0.0f,
-                                 16.0f, "%.0f"))
+                                 16.0f, "%.0f")) {
             UpdateCameraCB();
+            uiChanged = true;
+          }
           if (ImGui::SliderFloat("GI Bounces", &g_cameraData.maxGIBounces, 0.0f,
-                                 16.0f, "%.0f"))
+                                 16.0f, "%.0f")) {
             UpdateCameraCB();
+            uiChanged = true;
+          }
 
           int maxSpp = (int)g_cameraData.maxSPP;
           if (maxSpp < 10) maxSpp = 10;
@@ -2533,6 +2565,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           if (ImGui::SliderInt("Max SPP", &maxSpp, 10, 1000)) {
             g_cameraData.maxSPP = (float)maxSpp;
             UpdateCameraCB();
+            uiChanged = true;
           }
 
           ImGui::Separator();
@@ -2544,6 +2577,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             // DLSS uses a different internal render resolution; recreate resources.
             WaitGPUIdle();
             DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
+            uiChanged = true;
           }
 
           const char* dlssModes[] = {"Off", "DLSS Super Resolution", "DLSS Ray Reconstruction"};
@@ -2574,6 +2608,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             DxrRenderer::ResetStreamlineHistory();
             WaitGPUIdle();
             DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
+            uiChanged = true;
           }
 
           const char* qualities[] = {"Max Performance", "Balanced", "Max Quality", "Ultra Performance", "DLAA"};
@@ -2619,6 +2654,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             if (ImGui::SliderFloat("RR Jitter Scale", &rrJitterScale, 0.0f, 1.0f, "%.2f")) {
               DxrRenderer::SetRrJitterScale(rrJitterScale);
               DxrRenderer::ResetStreamlineHistory();
+              uiChanged = true;
             }
             ImGui::TextWrapped(
                 "Lowering jitter can reduce edge/silhouette shimmer (especially near screen borders) but may reduce DLSS-RR reconstruction/AA quality.");
@@ -2649,6 +2685,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             int qualIdx = (int)DxrRenderer::GetOidnQuality();
             if (ImGui::Combo("OIDN Quality", &qualIdx, oidnQualities, IM_ARRAYSIZE(oidnQualities))) {
               DxrRenderer::SetOidnQuality((OidnDenoiser::Quality)qualIdx);
+              uiChanged = true;
             }
           }
 
@@ -2696,6 +2733,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         if (ImGui::Combo("Debug View", &g_debugMode, debugModes,
                          IM_ARRAYSIZE(debugModes))) {
           // State is updated; updated into camera buffer on next frame
+          uiChanged = true;
+        }
+
+        // Reset accumulation once per window when any UI widget changed
+        if (uiChanged) {
+          DxrRenderer::ResetAccumulation();
         }
 
         if (ImGui::RadioButton("Fast Raster",
