@@ -111,7 +111,8 @@ static const UINT DXR_HEAP_OIDN_OUT_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 19;
 // Cloud Resources (CBV + SRV) - must be contiguous for table
 static const UINT DXR_HEAP_CLOUD_CB_OFFSET = DXR_HEAP_UAV_OFFSET + 20;
 static const UINT DXR_HEAP_CLOUD_TEX_OFFSET = DXR_HEAP_UAV_OFFSET + 21;
-static const UINT DXR_HEAP_TOTAL_COUNT = DXR_HEAP_TEX_COUNT + DXR_HEAP_VB_COUNT + DXR_HEAP_IB_COUNT + 22;
+static const UINT DXR_HEAP_CLOUD_DETAIL_TEX_OFFSET = DXR_HEAP_UAV_OFFSET + 22;
+static const UINT DXR_HEAP_TOTAL_COUNT = DXR_HEAP_TEX_COUNT + DXR_HEAP_VB_COUNT + DXR_HEAP_IB_COUNT + 23;
 
 // Output texture dimensions used by DXR (kept local to module)
 static UINT s_outputWidth = 1280;
@@ -518,9 +519,9 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   cloudRanges[0].BaseShaderRegister = 10;
   cloudRanges[0].RegisterSpace = 2; // Space 2
   cloudRanges[0].OffsetInDescriptorsFromTableStart = 0;
-  // Range 2: SRV t10
+  // Range 2: SRV t10, t11
   cloudRanges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-  cloudRanges[1].NumDescriptors = 1;
+  cloudRanges[1].NumDescriptors = 2;
   cloudRanges[1].BaseShaderRegister = 10;
   cloudRanges[1].RegisterSpace = 2; // Space 2
   cloudRanges[1].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
@@ -1625,11 +1626,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
       cbvDesc.SizeInBytes = (sizeof(CloudParams) + 255) & ~255;
       s_device->CreateConstantBufferView(&cbvDesc, cbvCpu);
 
-      // 2. Create Cloud SRV at DXR_HEAP_CLOUD_TEX_OFFSET
+      // 2. Create Cloud Base SRV at DXR_HEAP_CLOUD_TEX_OFFSET
       D3D12_CPU_DESCRIPTOR_HANDLE srvCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
       srvCpu.ptr += (SIZE_T)DXR_HEAP_CLOUD_TEX_OFFSET * s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
       
-      D3D12_RESOURCE_DESC noiseDesc = g_cloudManager.GetNoiseTexture()->GetDesc();
+      D3D12_RESOURCE_DESC noiseDesc = g_cloudManager.GetBaseTexture()->GetDesc();
       D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
       srvDesc.Format = noiseDesc.Format;
       srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
@@ -1637,9 +1638,26 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
       srvDesc.Texture3D.MipLevels = noiseDesc.MipLevels;
       srvDesc.Texture3D.MostDetailedMip = 0;
       srvDesc.Texture3D.ResourceMinLODClamp = 0.0f;
-      s_device->CreateShaderResourceView(g_cloudManager.GetNoiseTexture(), &srvDesc, srvCpu);
+      s_device->CreateShaderResourceView(g_cloudManager.GetBaseTexture(), &srvDesc, srvCpu);
 
-      // 3. Bind Table (pointing to start of CBV)
+      // 3. Create Cloud Detail SRV at DXR_HEAP_CLOUD_DETAIL_TEX_OFFSET
+      D3D12_CPU_DESCRIPTOR_HANDLE srvCpuDetail = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+      srvCpuDetail.ptr += (SIZE_T)DXR_HEAP_CLOUD_DETAIL_TEX_OFFSET * s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+      D3D12_RESOURCE_DESC detailDesc = g_cloudManager.GetDetailTexture()->GetDesc();
+      D3D12_SHADER_RESOURCE_VIEW_DESC srvDescDetail = {};
+      srvDescDetail.Format = detailDesc.Format;
+      srvDescDetail.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
+      srvDescDetail.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+      srvDescDetail.Texture3D.MipLevels = detailDesc.MipLevels;
+      srvDescDetail.Texture3D.MostDetailedMip = 0;
+      srvDescDetail.Texture3D.ResourceMinLODClamp = 0.0f;
+      s_device->CreateShaderResourceView(g_cloudManager.GetDetailTexture(), &srvDescDetail, srvCpuDetail);
+
+      // 4. Bind Table (pointing to start of CBV)
+      // Because the root signature expects contiguous ranges (CBV, SRV, SRV...), and our heap layout is CBV, BaseTex, DetailTex,
+      // and we confirmed DXR_HEAP_CLOUD_DETAIL_TEX_OFFSET is contiguous after DXR_HEAP_CLOUD_TEX_OFFSET,
+      // we can just bind the table handle pointing to CBV.
       D3D12_GPU_DESCRIPTOR_HANDLE cloudGpu = s_srvHeap->GetGPUDescriptorHandleForHeapStart();
       cloudGpu.ptr += (UINT64)DXR_HEAP_CLOUD_CB_OFFSET * s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
       

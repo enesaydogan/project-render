@@ -49,17 +49,19 @@ public:
 
     void ResetToDefaults();
     
-    ID3D12Resource* GetNoiseTexture() const { return m_noiseTexture.Get(); }
+    ID3D12Resource* GetBaseTexture() const { return m_baseTexture.Get(); }
+    ID3D12Resource* GetDetailTexture() const { return m_detailTexture.Get(); }
     D3D12_GPU_VIRTUAL_ADDRESS GetConstantBufferAddr() const { return m_constantBuffer->GetGPUVirtualAddress(); }
     CloudParams& GetParams() { return m_params; }
 
 private:
-    void CreateNoiseTexture(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList);
+    void CreateTextures(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList);
     void CreateConstantBuffer(ID3D12Device* device);
     void UpdateConstantBuffer();
 
-    Microsoft::WRL::ComPtr<ID3D12Resource> m_noiseTexture;
-    Microsoft::WRL::ComPtr<ID3D12Resource> m_uploadBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_baseTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_detailTexture;
+    std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> m_uploadBuffers;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_constantBuffer;
     
     CloudParams m_params;

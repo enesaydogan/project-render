@@ -30,7 +30,7 @@ if (MSVC)
   target_link_options(project-render PRIVATE $<$<CONFIG:Release>:/LTCG>)
 endif()
 
-target_link_libraries(project-render PRIVATE d3d12 dxgi)
+target_link_libraries(project-render PRIVATE d3d12 dxgi dxguid)
 
 # Link the D3D shader compiler for runtime shader compilation
 target_link_libraries(project-render PRIVATE d3dcompiler)
@@ -38,7 +38,10 @@ target_link_libraries(project-render PRIVATE comctl32)
 
 # Streamline (DLSS-SR + DLSS-RR) SDK headers (runtime is dynamically loaded)
 set(STREAMLINE_ROOT "${CMAKE_SOURCE_DIR}/thirdparty/Streamline")
+# Agility SDK headers (includes d3dx12 helper library)
+target_include_directories(project-render PRIVATE "${STREAMLINE_ROOT}/external/dx-agility-sdk-headers-1.714.0-preview/include")
 target_include_directories(project-render PRIVATE "${STREAMLINE_ROOT}/include")
+
 
 # Optional OpenImageDenoise support (GPU zero-copy requires building OIDN with
 # a GPU backend and platform support for D3D12 shared resource import)

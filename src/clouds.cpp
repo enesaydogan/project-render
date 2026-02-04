@@ -1,5 +1,6 @@
 #include "clouds.h"
 #include "dxr_helpers.h" // For Align, etc.
+#include <d3dx12/d3dx12.h>
 #include <vector>
 #include <random>
 #include <algorithm>
@@ -201,20 +202,20 @@ namespace {
         CloudParams p = {};
 
         // Defaults tuned for archviz-friendly cumulus (less smoky, more defined).
-        p.density = 0.95f;
-        p.absorption = 1.00f;
-        p.coverage = 0.45f;
-        p.scattering = 0.78f;
-        p.steps = 96;
+        p.density = 4.22f;
+        p.absorption = 0.417f;
+        p.coverage = 0.117f;
+        p.scattering = 0.027f;
+        p.steps = 128; // Screenshot says 128
         p.sunIntensity = 3.0f;
         p.cloudTop = 680.0f;
         p.cloudBottom = 240.0f;
-        p.windSpeed = 1.0f; // requested default
+        p.windSpeed = 0.0f; // Slider is 0.0
 
-        p.baseScale = 0.00062f;
-        p.detailScale = 0.0024f;
+        p.baseScale = 0.00051f;
+        p.detailScale = 0.01000f;
         p.coverageScale = 0.00022f;
-        p.coverageVariation = 0.25f;
+        p.coverageVariation = 0.25f; // From slider
         p.erosion = 0.65f;
         p.warpStrength = 0.75f;
         p.shapePower = 1.85f;
@@ -241,7 +242,7 @@ void CloudManager::Initialize(ID3D12Device* device, ID3D12GraphicsCommandList* c
     m_params = MakeDefaultCloudParams();
 
     CreateConstantBuffer(device);
-    CreateNoiseTexture(device, cmdList);
+    CreateTextures(device, cmdList);
 
     m_initialized = true;
 }
@@ -293,169 +294,226 @@ void CloudManager::UpdateConstantBuffer() {
     }
 }
 
-void CloudManager::CreateNoiseTexture(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList) {
-    fprintf(stderr, "CloudManager: Generating high-quality noise data...\n");
-    // 1. Generate Noise Data (128x128x128 RGBA8_UNORM)
-    const UINT width = 128;
-    const UINT height = 128;
-    const UINT depth = 128; // Keep 128^3 for now
-    const UINT textureDataSize = width * height * depth * 4;
-    std::vector<UINT8> noiseData(textureDataSize);
+// Helper for remapping
+static float Remap(float val, float minVal, float maxVal, float newMin, float newMax) {
+    return newMin + (val - minVal) * (newMax - newMin) / (maxVal - minVal);
+}
 
-    // Generate packed noise:
-    //   R: billowy Perlin FBM (base)
-    //   G: Worley FBM low/mid (base breakup)
-    //   B: Worley FBM high (erosion/detail)
-    //   A: low-frequency Perlin for domain warp
-    const uint32_t worleySeed = 1337u;
+void CloudManager::CreateTextures(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList) {
+    fprintf(stderr, "CloudManager: Generating 1:1 Compliant Noise Textures (Base + Detail)...\n");
     
-    for (int z = 0; z < (int)depth; ++z) {
-        for (int y = 0; y < (int)height; ++y) {
-            for (int x = 0; x < (int)width; ++x) {
-                
-                float u = (float)x / (float)width;
-                float v = (float)y / (float)height;
-                float w = (float)z / (float)depth;
+    // --- 1. Base Shape Texture (128x128x128 RGBA8) ---
+    // R: Perlin-Worley (Base Shape)
+    // G: Worley FBM (Freq 1)
+    // B: Worley FBM (Freq 2)
+    // A: Worley FBM (Freq 3)
+    {
+        const UINT width = 128;
+        const UINT height = 128;
+        const UINT depth = 128;
+        const UINT textureDataSize = width * height * depth * 4;
+        std::vector<UINT8> noiseData(textureDataSize);
 
-                // Billowy Perlin FBM
-                float scale = 6.0f; // Integer scale for tiling
-                float nx = u * scale;
-                float ny = v * scale;
-                float nz = w * scale;
+        const uint32_t worleySeed = 1337u;
 
-                float perlin = 0.0f;
-                float amp = 1.0f;
-                float maxVal = 0.0f;
-                for (int i = 0; i < 5; ++i) {
-                    float n = GradientNoiseTiled(nx, ny, nz, (int)scale); // -1..1 approx
-                    float billow = 2.0f * fabsf(n) - 1.0f; // billowy
-                    perlin += billow * amp;
-                    maxVal += amp;
-                    nx *= 2.0f;
-                    ny *= 2.0f;
-                    nz *= 2.0f;
-                    scale *= 2.0f; // Period doubles
-                    amp *= 0.5f;
+        for (int z = 0; z < (int)depth; ++z) {
+            for (int y = 0; y < (int)height; ++y) {
+                for (int x = 0; x < (int)width; ++x) {
+                    float u = (float)x / (float)width;
+                    float v = (float)y / (float)height;
+                    float w = (float)z / (float)depth;
+
+                    // Perlin FBM (7 Octaves technically, but 5 is usually enough)
+                    float perlin = 0.0f;
+                    float scale = 4.0f; // Base freq
+                    float amp = 1.0f;
+                    float maxVal = 0.0f;
+                    for(int i=0; i<5; ++i) {
+                        float n = GradientNoiseTiled(u * scale, v * scale, w * scale, (int)scale);
+                        perlin += n * amp;
+                        maxVal += amp;
+                        scale *= 2.0f;
+                        amp *= 0.5f;
+                    }
+                    perlin = (perlin / maxVal) * 0.5f + 0.5f; // [0,1]
+
+                    // Worley FBMs for Base
+                    // Enscape frequencies: 4, 8, 16? roughly
+                    float wf1 = WorleyFBM(u, v, w, 4, 8, 16, worleySeed);
+                    float wf2 = WorleyFBM(u, v, w, 8, 16, 32, worleySeed ^ 0x12345678);
+                    float wf3 = WorleyFBM(u, v, w, 16, 32, 64, worleySeed ^ 0x87654321);
+
+                    // Perlin-Worley Remap: 
+                    // Remap Perlin using the inverted Worley as the low-bound
+                    float worleyBase = wf1; // Use the lowest freq worley for the shape erosion
+                    float perlinWorley = Remap(perlin, worleyBase, 1.0f, 0.0f, 1.0f);
+                    perlinWorley = (std::max)(0.0f, (std::min)(1.0f, perlinWorley));
+
+                    // Warp Noise (Low Freq Perlin) in Alpha
+                    // Use scale 2.0 for warp (must be integer for tiling)
+                    float warp = GradientNoiseTiled(u * 2.0f, v * 2.0f + 5.5f, w * 2.0f + 1.2f, 2);
+                    warp = warp * 0.5f + 0.5f;
+
+                    const UINT idx = (UINT)((z * (width * height) + y * width + x) * 4);
+                    noiseData[idx + 0] = (UINT8)(perlinWorley * 255.0f);
+                    noiseData[idx + 1] = (UINT8)((std::max)(0.0f, wf1) * 255.0f); // Worley 1
+                    noiseData[idx + 2] = (UINT8)((std::max)(0.0f, wf2) * 255.0f); // Worley 2
+                    noiseData[idx + 3] = (UINT8)((std::max)(0.0f, warp) * 255.0f); // Warp (Perlin)
                 }
-                perlin = perlin / (std::max)(0.0001f, maxVal);
-                perlin = perlin * 0.5f + 0.5f;
-                perlin = powf((std::max)(0.0f, (std::min)(1.0f, perlin)), 1.15f);
-
-                // Worley (base + detail)
-                float worleyBase = WorleyFBM(u, v, w, 4, 8, 16, worleySeed);
-                float worleyDetail = WorleyFBM(u, v, w, 16, 32, 64, worleySeed ^ 0x51ED270Bu);
-
-                // Warp noise (very low frequency)
-                // Use scale 2.0 for warp (must be integer for tiling)
-                float wx0 = u * 2.0f; 
-                float wy0 = v * 2.0f + 3.0f; // Offset is fine if period matches
-                float wz0 = w * 2.0f + 11.0f; // Period is 2. 11%2 = 1. 3%2 = 1.
-                // We need the noise to tile at period 2? 
-                // Wait. u goes 0..1. Input goes 0..2.
-                // We need Noise(0) == Noise(2). 
-                // GradientNoiseTiled(..., 2) handles this.
-                
-                float warp = GradientNoiseTiled(wx0, wy0, wz0, 2);
-                warp = warp * 0.5f + 0.5f;
-                warp = (std::max)(0.0f, (std::min)(1.0f, warp));
-
-                // Pack
-                const UINT idx = (UINT)((z * (width * height) + y * width + x) * 4);
-                noiseData[idx + 0] = (UINT8)((std::max)(0.0f, (std::min)(1.0f, perlin)) * 255.0f);
-                noiseData[idx + 1] = (UINT8)((std::max)(0.0f, (std::min)(1.0f, worleyBase)) * 255.0f);
-                noiseData[idx + 2] = (UINT8)((std::max)(0.0f, (std::min)(1.0f, worleyDetail)) * 255.0f);
-                noiseData[idx + 3] = (UINT8)((std::max)(0.0f, (std::min)(1.0f, warp)) * 255.0f);
             }
         }
+
+        // Create Resource
+        D3D12_RESOURCE_DESC texDesc = {};
+        texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE3D;
+        texDesc.Width = width;
+        texDesc.Height = height;
+        texDesc.DepthOrArraySize = depth;
+        texDesc.MipLevels = 1;
+        texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        texDesc.SampleDesc.Count = 1;
+        texDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+        D3D12_HEAP_PROPERTIES defaultHeap = {};
+        defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+        ThrowIfFailed(device->CreateCommittedResource(
+            &defaultHeap, D3D12_HEAP_FLAG_NONE, &texDesc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            IID_PPV_ARGS(&m_baseTexture)));
+        m_baseTexture->SetName(L"CloudBaseTexture");
+
+        // Upload
+        const UINT64 uploadSize = GetRequiredIntermediateSize(m_baseTexture.Get(), 0, 1);
+        Microsoft::WRL::ComPtr<ID3D12Resource> uploadBuffer;
+        D3D12_HEAP_PROPERTIES uploadHeap = {};
+        uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+        D3D12_RESOURCE_DESC bufferDesc = {};
+        bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        bufferDesc.Width = uploadSize;
+        bufferDesc.Height = 1;
+        bufferDesc.DepthOrArraySize = 1;
+        bufferDesc.MipLevels = 1;
+        bufferDesc.Format = DXGI_FORMAT_UNKNOWN;
+        bufferDesc.SampleDesc.Count = 1;
+        bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        bufferDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+        
+        ThrowIfFailed(device->CreateCommittedResource(
+            &uploadHeap, D3D12_HEAP_FLAG_NONE, &bufferDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+            IID_PPV_ARGS(&uploadBuffer)));
+        
+        D3D12_SUBRESOURCE_DATA srcData = {};
+        srcData.pData = noiseData.data();
+        srcData.RowPitch = width * 4;
+        srcData.SlicePitch = srcData.RowPitch * height;
+
+        UpdateSubresources(cmdList, m_baseTexture.Get(), uploadBuffer.Get(), 0, 0, 1, &srcData);
+        
+        D3D12_RESOURCE_BARRIER barrier = {};
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource = m_baseTexture.Get();
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+        barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        cmdList->ResourceBarrier(1, &barrier);
+
+        m_uploadBuffers.push_back(uploadBuffer);
     }
 
-    // 2. Create GPU Texture Resource
-    D3D12_RESOURCE_DESC texDesc = {};
-    texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE3D;
-    texDesc.Alignment = 0;
-    texDesc.Width = width;
-    texDesc.Height = height;
-    texDesc.DepthOrArraySize = depth;
-    texDesc.MipLevels = 1;
-    texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    texDesc.SampleDesc.Count = 1;
-    texDesc.SampleDesc.Quality = 0;
-    texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-    texDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+    // --- 2. Detail Texture (32x32x32 RGBA8) ---
+    // R: Worley low
+    // G: Worley med
+    // B: Worley high
+    // A: Unused
+    {
+        const UINT width = 32;
+        const UINT height = 32;
+        const UINT depth = 32;
+        const UINT textureDataSize = width * height * depth * 4;
+        std::vector<UINT8> noiseData(textureDataSize);
+        const uint32_t detailSeed = 9999u;
 
-    D3D12_HEAP_PROPERTIES defaultHeap = {};
-    defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        for (int z = 0; z < (int)depth; ++z) {
+            for (int y = 0; y < (int)height; ++y) {
+                for (int x = 0; x < (int)width; ++x) {
+                    float u = (float)x / (float)width;
+                    float v = (float)y / (float)height;
+                    float w = (float)z / (float)depth;
 
-    ThrowIfFailed(device->CreateCommittedResource(
-        &defaultHeap, D3D12_HEAP_FLAG_NONE, &texDesc,
-        D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-        IID_PPV_ARGS(&m_noiseTexture)));
-    m_noiseTexture->SetName(L"CloudNoiseTexture");
+                    // Detail frequencies. Since texture is small, we repeat fewer times?
+                    // Actually, Detail noise is typically tiled heavily in the shader. 
+                    // Standard FBM mix.
+                    float d1 = WorleyFBM(u, v, w, 2, 4, 8, detailSeed);
+                    float d2 = WorleyFBM(u, v, w, 4, 8, 16, detailSeed ^ 0x11223344);
+                    float d3 = WorleyFBM(u, v, w, 8, 16, 32, detailSeed ^ 0xAABBCCDD);
 
-    // 3. Create Upload Buffer
-    const UINT bytesPerTexel = 4;
-    const UINT rowPitch = (width * bytesPerTexel + 255) & ~255;
-    const UINT slicePitch = rowPitch * height;
-    const UINT64 uploadBufferSize = slicePitch * depth;
-    
-    D3D12_HEAP_PROPERTIES uploadHeap = {};
-    uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-    D3D12_RESOURCE_DESC uploadDesc = {};
-    uploadDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    uploadDesc.Width = uploadBufferSize;
-    uploadDesc.Height = 1;
-    uploadDesc.DepthOrArraySize = 1;
-    uploadDesc.MipLevels = 1;
-    uploadDesc.Format = DXGI_FORMAT_UNKNOWN;
-    uploadDesc.SampleDesc.Count = 1;
-    uploadDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    uploadDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
-
-    ThrowIfFailed(device->CreateCommittedResource(
-        &uploadHeap, D3D12_HEAP_FLAG_NONE, &uploadDesc,
-        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-        IID_PPV_ARGS(&m_uploadBuffer)));
-    m_uploadBuffer->SetName(L"CloudNoiseUpload");
-
-    // 4. Copy data to Upload Buffer (Manual layout)
-    fprintf(stderr, "CloudManager: Copying to upload buffer...\n");
-    UINT8* pData = nullptr;
-    ThrowIfFailed(m_uploadBuffer->Map(0, nullptr, reinterpret_cast<void**>(&pData)));
-
-    for (UINT z = 0; z < depth; ++z) {
-        for (UINT y = 0; y < height; ++y) {
-            UINT8* destRow = pData + (z * slicePitch) + (y * rowPitch);
-            const UINT8* srcRow = noiseData.data() + (z * height * width * bytesPerTexel) + (y * width * bytesPerTexel);
-            memcpy(destRow, srcRow, width * bytesPerTexel);
+                    const UINT idx = (UINT)((z * (width * height) + y * width + x) * 4);
+                    noiseData[idx + 0] = (UINT8)((std::max)(0.0f, d1) * 255.0f);
+                    noiseData[idx + 1] = (UINT8)((std::max)(0.0f, d2) * 255.0f);
+                    noiseData[idx + 2] = (UINT8)((std::max)(0.0f, d3) * 255.0f);
+                    noiseData[idx + 3] = 255; 
+                }
+            }
         }
+
+        D3D12_RESOURCE_DESC texDesc = {};
+        texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE3D;
+        texDesc.Width = width;
+        texDesc.Height = height;
+        texDesc.DepthOrArraySize = depth;
+        texDesc.MipLevels = 1;
+        texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        texDesc.SampleDesc.Count = 1;
+        texDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+        D3D12_HEAP_PROPERTIES defaultHeap = {};
+        defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+        ThrowIfFailed(device->CreateCommittedResource(
+            &defaultHeap, D3D12_HEAP_FLAG_NONE, &texDesc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            IID_PPV_ARGS(&m_detailTexture)));
+        m_detailTexture->SetName(L"CloudDetailTexture");
+
+        const UINT64 uploadSize = GetRequiredIntermediateSize(m_detailTexture.Get(), 0, 1);
+        Microsoft::WRL::ComPtr<ID3D12Resource> uploadBuffer;
+        D3D12_HEAP_PROPERTIES uploadHeap = {};
+        uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+        D3D12_RESOURCE_DESC bufferDesc = {};
+        bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        bufferDesc.Width = uploadSize;
+        bufferDesc.Height = 1;
+        bufferDesc.DepthOrArraySize = 1;
+        bufferDesc.MipLevels = 1;
+        bufferDesc.Format = DXGI_FORMAT_UNKNOWN;
+        bufferDesc.SampleDesc.Count = 1;
+        bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        bufferDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+        
+        ThrowIfFailed(device->CreateCommittedResource(
+            &uploadHeap, D3D12_HEAP_FLAG_NONE, &bufferDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+            IID_PPV_ARGS(&uploadBuffer)));
+        
+        D3D12_SUBRESOURCE_DATA srcData = {};
+        srcData.pData = noiseData.data();
+        srcData.RowPitch = width * 4;
+        srcData.SlicePitch = srcData.RowPitch * height;
+
+        UpdateSubresources(cmdList, m_detailTexture.Get(), uploadBuffer.Get(), 0, 0, 1, &srcData);
+        
+        D3D12_RESOURCE_BARRIER barrier = {};
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource = m_detailTexture.Get();
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+        barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        cmdList->ResourceBarrier(1, &barrier);
+
+        m_uploadBuffers.push_back(uploadBuffer);
     }
-    m_uploadBuffer->Unmap(0, nullptr);
-
-    // 5. Copy from Buffer to Texture using CopyTextureRegion
-    D3D12_TEXTURE_COPY_LOCATION dstLoc = {};
-    dstLoc.pResource = m_noiseTexture.Get();
-    dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-    dstLoc.SubresourceIndex = 0;
-
-    D3D12_TEXTURE_COPY_LOCATION srcLoc = {};
-    srcLoc.pResource = m_uploadBuffer.Get();
-    srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-    srcLoc.PlacedFootprint.Offset = 0;
-    srcLoc.PlacedFootprint.Footprint.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    srcLoc.PlacedFootprint.Footprint.Width = width;
-    srcLoc.PlacedFootprint.Footprint.Height = height;
-    srcLoc.PlacedFootprint.Footprint.Depth = depth;
-    srcLoc.PlacedFootprint.Footprint.RowPitch = rowPitch;
-
-    cmdList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, nullptr);
-
-    // 6. Transition to Shader Resource
-    D3D12_RESOURCE_BARRIER barrier = {};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition.pResource = m_noiseTexture.Get();
-    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    cmdList->ResourceBarrier(1, &barrier);
 }
