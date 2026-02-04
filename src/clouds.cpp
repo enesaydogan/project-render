@@ -39,13 +39,58 @@ namespace {
         };
         
         auto getHash = [](int x, int y, int z) {
-            // Simple spatial hash
             int h = x * 374761393 + y * 668265263 + z * 1274126177;
             h = (h ^ (h >> 13)) * 1274126177;
             return h ^ (h >> 16);
         };
 
-        // Trilinear interpolation of gradients
+        return lerp(
+            lerp(
+                lerp(grad(getHash(X,Y,Z), x, y, z), grad(getHash(X+1,Y,Z), x-1, y, z), u),
+                lerp(grad(getHash(X,Y+1,Z), x, y-1, z), grad(getHash(X+1,Y+1,Z), x-1, y-1, z), u),
+                v
+            ),
+            lerp(
+                lerp(grad(getHash(X,Y,Z+1), x, y, z-1), grad(getHash(X+1,Y,Z+1), x-1, y, z-1), u),
+                lerp(grad(getHash(X,Y+1,Z+1), x, y-1, z-1), grad(getHash(X+1,Y+1,Z+1), x-1, y-1, z-1), u),
+                v
+            ),
+            w
+        );
+    }
+
+    // Tiled version for seamless textures
+    float GradientNoiseTiled(float x, float y, float z, int tile) {
+        int X = (int)floor(x);
+        int Y = (int)floor(y);
+        int Z = (int)floor(z);
+        
+        x -= floor(x);
+        y -= floor(y);
+        z -= floor(z);
+        
+        float u = x * x * x * (x * (x * 6.0f - 15.0f) + 10.0f);
+        float v = y * y * y * (y * (y * 6.0f - 15.0f) + 10.0f);
+        float w = z * z * z * (z * (z * 6.0f - 15.0f) + 10.0f);
+        
+        auto grad = [](int hash, float x, float y, float z) {
+            int h = hash & 15;
+            float u = h < 8 ? x : y;
+            float v = h < 4 ? y : (h == 12 || h == 14 ? x : z);
+            return ((h & 1) == 0 ? u : -u) + ((h & 2) == 0 ? v : -v);
+        };
+        
+        auto getHash = [tile](int x, int y, int z) {
+            // Check negatives too to be safe, though inputs are positive here
+            x = ((x % tile) + tile) % tile;
+            y = ((y % tile) + tile) % tile;
+            z = ((z % tile) + tile) % tile;
+
+            int h = x * 374761393 + y * 668265263 + z * 1274126177;
+            h = (h ^ (h >> 13)) * 1274126177;
+            return h ^ (h >> 16);
+        };
+
         return lerp(
             lerp(
                 lerp(grad(getHash(X,Y,Z), x, y, z), grad(getHash(X+1,Y,Z), x-1, y, z), u),
@@ -273,7 +318,7 @@ void CloudManager::CreateNoiseTexture(ID3D12Device* device, ID3D12GraphicsComman
                 float w = (float)z / (float)depth;
 
                 // Billowy Perlin FBM
-                float scale = 6.5f;
+                float scale = 6.0f; // Integer scale for tiling
                 float nx = u * scale;
                 float ny = v * scale;
                 float nz = w * scale;
@@ -282,13 +327,14 @@ void CloudManager::CreateNoiseTexture(ID3D12Device* device, ID3D12GraphicsComman
                 float amp = 1.0f;
                 float maxVal = 0.0f;
                 for (int i = 0; i < 5; ++i) {
-                    float n = GradientNoise(nx, ny, nz); // -1..1 approx
+                    float n = GradientNoiseTiled(nx, ny, nz, (int)scale); // -1..1 approx
                     float billow = 2.0f * fabsf(n) - 1.0f; // billowy
                     perlin += billow * amp;
                     maxVal += amp;
                     nx *= 2.0f;
                     ny *= 2.0f;
                     nz *= 2.0f;
+                    scale *= 2.0f; // Period doubles
                     amp *= 0.5f;
                 }
                 perlin = perlin / (std::max)(0.0001f, maxVal);
@@ -300,10 +346,16 @@ void CloudManager::CreateNoiseTexture(ID3D12Device* device, ID3D12GraphicsComman
                 float worleyDetail = WorleyFBM(u, v, w, 16, 32, 64, worleySeed ^ 0x51ED270Bu);
 
                 // Warp noise (very low frequency)
-                float wx0 = u * 2.0f + 17.0f;
-                float wy0 = v * 2.0f + 3.0f;
-                float wz0 = w * 2.0f + 11.0f;
-                float warp = GradientNoise(wx0, wy0, wz0);
+                // Use scale 2.0 for warp (must be integer for tiling)
+                float wx0 = u * 2.0f; 
+                float wy0 = v * 2.0f + 3.0f; // Offset is fine if period matches
+                float wz0 = w * 2.0f + 11.0f; // Period is 2. 11%2 = 1. 3%2 = 1.
+                // We need the noise to tile at period 2? 
+                // Wait. u goes 0..1. Input goes 0..2.
+                // We need Noise(0) == Noise(2). 
+                // GradientNoiseTiled(..., 2) handles this.
+                
+                float warp = GradientNoiseTiled(wx0, wy0, wz0, 2);
                 warp = warp * 0.5f + 0.5f;
                 warp = (std::max)(0.0f, (std::min)(1.0f, warp));
 
