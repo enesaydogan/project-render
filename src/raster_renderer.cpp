@@ -4,6 +4,7 @@
 #include "dxc_wrapper.h"
 #include "ibl_manager.h"
 #include "scene.h"
+#include "clouds.h"
 #include <cstdio>
 #include <filesystem>
 #include <vector>
@@ -357,6 +358,7 @@ void DrawGrid(ID3D12GraphicsCommandList *cmdList, ID3D12Resource *cameraCB) {
         0, cameraCB->GetGPUVirtualAddress());
   cmdList->DrawInstanced(g_gridVertexCount, 1, 0, 0);
 }
+
 void DrawSkybox(ID3D12GraphicsCommandList *cmdList, ID3D12Resource *cameraCB) {
   if (!g_skyboxPipelineState)
     return;
@@ -367,6 +369,10 @@ void DrawSkybox(ID3D12GraphicsCommandList *cmdList, ID3D12Resource *cameraCB) {
   if (IBLManager::Get().IsLoaded()) {
     cmdList->SetGraphicsRootDescriptorTable(4,
                                             IBLManager::Get().GetGPUHandle());
+  }
+  // Bind cloud descriptor table (CBV + BaseSRV + DetailSRV) at root param 5 if available
+  if (g_cloudManager.GetGPUHandle().ptr != 0) {
+    cmdList->SetGraphicsRootDescriptorTable(5, g_cloudManager.GetGPUHandle());
   }
   cmdList->DrawInstanced(3, 1, 0, 0); // Full screen triangle
 }

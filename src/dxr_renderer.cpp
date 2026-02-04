@@ -536,8 +536,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   rootDesc.pParameters = params;
   rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
-  static D3D12_STATIC_SAMPLER_DESC staticSamplers[2] = {};
-  // s0: Aniso Wrap
+  static D3D12_STATIC_SAMPLER_DESC staticSamplers[3] = {};
+  // s0: Aniso Wrap (space 0)
   staticSamplers[0].Filter = D3D12_FILTER_ANISOTROPIC;
   staticSamplers[0].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
   staticSamplers[0].AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -545,9 +545,10 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   staticSamplers[0].MipLODBias = 0;
   staticSamplers[0].MaxAnisotropy = 16;
   staticSamplers[0].ShaderRegister = 0;
+  staticSamplers[0].RegisterSpace = 0;
   staticSamplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-  // s10: Linear Wrap (for 3D Noise)
+  // s10: Linear Wrap (for 3D Noise) in space 0
   staticSamplers[1].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
   staticSamplers[1].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
   staticSamplers[1].AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -555,9 +556,21 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   staticSamplers[1].MipLODBias = 0;
   staticSamplers[1].MaxAnisotropy = 1;
   staticSamplers[1].ShaderRegister = 10;
+  staticSamplers[1].RegisterSpace = 0;
   staticSamplers[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-  rootDesc.NumStaticSamplers = 2;
+  // s0 in space 2: Linear Wrap sampler for clouds (space2)
+  staticSamplers[2].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+  staticSamplers[2].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  staticSamplers[2].AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  staticSamplers[2].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  staticSamplers[2].MipLODBias = 0;
+  staticSamplers[2].MaxAnisotropy = 1;
+  staticSamplers[2].ShaderRegister = 0;
+  staticSamplers[2].RegisterSpace = 2;
+  staticSamplers[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  rootDesc.NumStaticSamplers = _countof(staticSamplers);
   rootDesc.pStaticSamplers = staticSamplers;
 
   ComPtr<ID3DBlob> signature;

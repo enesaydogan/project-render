@@ -236,6 +236,8 @@ namespace {
     }
 }
 
+extern DescriptorHeapAllocator g_cbvSrvAllocator; // allocator from main.cpp
+
 void CloudManager::Initialize(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList) {
     if (m_initialized) return;
 
@@ -244,7 +246,53 @@ void CloudManager::Initialize(ID3D12Device* device, ID3D12GraphicsCommandList* c
     CreateConstantBuffer(device);
     CreateTextures(device, cmdList);
 
+    // Create persistent descriptors (CBV + BaseTex SRV + DetailTex SRV)
+    CreateDescriptors(device);
+
     m_initialized = true;
+}
+
+void CloudManager::CreateDescriptors(ID3D12Device* device) {
+    // Allocate 3 contiguous persistent descriptors: CBV, Base SRV, Detail SRV
+    DescriptorAllocation alloc = g_cbvSrvAllocator.AllocatePersistent(3);
+    m_cpuHandle = alloc.cpu;
+    m_gpuHandle = alloc.gpu;
+
+    UINT descSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    // 1) CBV (b10, space2)
+    D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
+    cbvDesc.BufferLocation = m_constantBuffer->GetGPUVirtualAddress();
+    cbvDesc.SizeInBytes = (sizeof(CloudParams) + 255) & ~255;
+    device->CreateConstantBufferView(&cbvDesc, m_cpuHandle);
+
+    // 2) Base Texture SRV (t10, space2)
+    D3D12_CPU_DESCRIPTOR_HANDLE srvCpu = m_cpuHandle;
+    srvCpu.ptr += (SIZE_T)descSize * 1;
+
+    D3D12_RESOURCE_DESC noiseDesc = m_baseTexture->GetDesc();
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Format = noiseDesc.Format;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Texture3D.MipLevels = noiseDesc.MipLevels;
+    srvDesc.Texture3D.MostDetailedMip = 0;
+    srvDesc.Texture3D.ResourceMinLODClamp = 0.0f;
+    device->CreateShaderResourceView(m_baseTexture.Get(), &srvDesc, srvCpu);
+
+    // 3) Detail Texture SRV (t11, space2)
+    D3D12_CPU_DESCRIPTOR_HANDLE srvCpuDetail = m_cpuHandle;
+    srvCpuDetail.ptr += (SIZE_T)descSize * 2;
+
+    D3D12_RESOURCE_DESC detailDesc = m_detailTexture->GetDesc();
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDescDetail = {};
+    srvDescDetail.Format = detailDesc.Format;
+    srvDescDetail.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
+    srvDescDetail.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDescDetail.Texture3D.MipLevels = detailDesc.MipLevels;
+    srvDescDetail.Texture3D.MostDetailedMip = 0;
+    srvDescDetail.Texture3D.ResourceMinLODClamp = 0.0f;
+    device->CreateShaderResourceView(m_detailTexture.Get(), &srvDescDetail, srvCpuDetail);
 }
 
 void CloudManager::ResetToDefaults() {
