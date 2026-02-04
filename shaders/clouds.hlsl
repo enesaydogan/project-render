@@ -38,6 +38,7 @@ struct CloudParams {
 // Bindings: Register Space 2 to avoid collision with standard descriptors
 ConstantBuffer<CloudParams> CloudCB : register(b10, space2);
 Texture3D<float4> NoiseTex : register(t10, space2);
+Texture3D<float4> DetailTex : register(t11, space2);
 SamplerState LinearWrapSampler : register(s10);
 
 #ifndef CLOUDS_PI
@@ -136,10 +137,8 @@ float SampleDensity(float3 p, float lod) {
     // 2. Base Shape (Perlin-Worley)
     // Rotate sampling to avoid axis streaks
     float3 noiseCoord = RotateDomain(basePos);
-    float3 noise = SampleNoise(noiseCoord, lod);
-    
-    float lowFreqFBM = noise.r * 0.625 + noise.g * 0.25 + noise.b * 0.125;
-    float baseCloud = Remap(lowFreqFBM, -(1.0 - lowFreqFBM), 1.0, 0.0, 1.0);
+    // Base R is Channel-Packed Perlin-Worley from C++ generation
+    float baseCloud = NoiseTex.SampleLevel(LinearWrapSampler, noiseCoord, lod).r;
     
     // 3. Density Gradient
     float heightGrad = HeightGradient(heightPct);
@@ -164,7 +163,7 @@ float SampleDensity(float3 p, float lod) {
     
     // 5. Cloud Type / Weather variation (simulated by large scale noise)
     // Acts as a "probability to spawn cloud here"
-    float3 coveragePos = p * CloudCB.coverageScale + float3(CloudCB.timeSeconds * 0.005, 0, 0);
+    float3 coveragePos = p * CloudCB.coverageScale + float3(CloudCB.timeSeconds * CloudCB.windSpeed * 0.005, 0, 0);
     
     // Use 2D noise for weather map to prevent vertical streaking artifacts from 3D sampling
     // 3D noise at large scales can look like vertical columns if the Z variation is slow
@@ -186,7 +185,7 @@ float SampleDensity(float3 p, float lod) {
         // Rotate detail too
         detailPos = RotateDomain(detailPos);
         
-        float3 detailNoise = SampleNoise(detailPos, lod);
+        float3 detailNoise = DetailTex.SampleLevel(LinearWrapSampler, detailPos, lod).rgb;
         float highFreqFBM = detailNoise.r * 0.625 + detailNoise.g * 0.25 + detailNoise.b * 0.125;
         
         // Erode edges more than center

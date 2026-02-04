@@ -86,7 +86,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /external:I "D:/project-render/thirdparty/oidn/include"</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
@@ -115,10 +115,10 @@
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;USE_OIDN=1;USE_TINYGLTF=1;CMAKE_INTDIR=\"Debug\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -172,7 +172,7 @@ exit /b %1
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PostBuildEvent>
     <Link>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;comctl32.lib;D:\project-render\thirdparty\oidn\lib\OpenImageDenoise.lib;Debug\imgui_staticd.lib;Debug\asset_loaderd.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\repos\vcpkg\installed\x64-windows\debug\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\debug\lib\miniz.lib;_deps\assimp-build\lib\Debug\assimp-vc143-mtd.lib;_deps\assimp-build\contrib\zlib\Debug\zlibstaticd.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;comctl32.lib;D:\project-render\thirdparty\oidn\lib\OpenImageDenoise.lib;Debug\imgui_staticd.lib;Debug\asset_loaderd.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\repos\vcpkg\installed\x64-windows\debug\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\debug\lib\miniz.lib;_deps\assimp-build\lib\Debug\assimp-vc143-mtd.lib;_deps\assimp-build\contrib\zlib\Debug\zlibstaticd.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
@@ -192,7 +192,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /external:I "D:/project-render/thirdparty/oidn/include"</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
@@ -226,10 +226,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_OIDN=1;USE_TINYGLTF=1;CMAKE_INTDIR=\"Release\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -283,7 +283,7 @@ exit /b %1
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PostBuildEvent>
     <Link>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;comctl32.lib;D:\project-render\thirdparty\oidn\lib\OpenImageDenoise.lib;Release\imgui_static.lib;Release\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\miniz.lib;_deps\assimp-build\lib\Release\assimp-vc143-mt.lib;_deps\assimp-build\contrib\zlib\Release\zlibstatic.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;comctl32.lib;D:\project-render\thirdparty\oidn\lib\OpenImageDenoise.lib;Release\imgui_static.lib;Release\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\miniz.lib;_deps\assimp-build\lib\Release\assimp-vc143-mt.lib;_deps\assimp-build\contrib\zlib\Release\zlibstatic.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
@@ -304,7 +304,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /external:I "D:/project-render/thirdparty/oidn/include"</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
@@ -334,10 +334,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_OIDN=1;USE_TINYGLTF=1;CMAKE_INTDIR=\"MinSizeRel\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -391,7 +391,7 @@ exit /b %1
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PostBuildEvent>
     <Link>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;comctl32.lib;D:\project-render\thirdparty\oidn\lib\OpenImageDenoise.lib;MinSizeRel\imgui_static.lib;MinSizeRel\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\miniz.lib;_deps\assimp-build\lib\MinSizeRel\assimp-vc143-mt.lib;_deps\assimp-build\contrib\zlib\MinSizeRel\zlibstatic.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;comctl32.lib;D:\project-render\thirdparty\oidn\lib\OpenImageDenoise.lib;MinSizeRel\imgui_static.lib;MinSizeRel\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\miniz.lib;_deps\assimp-build\lib\MinSizeRel\assimp-vc143-mt.lib;_deps\assimp-build\contrib\zlib\MinSizeRel\zlibstatic.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
@@ -411,7 +411,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /external:I "D:/project-render/thirdparty/oidn/include"</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
@@ -440,10 +440,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_OIDN=1;USE_TINYGLTF=1;CMAKE_INTDIR=\"RelWithDebInfo\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -497,7 +497,7 @@ exit /b %1
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PostBuildEvent>
     <Link>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;comctl32.lib;D:\project-render\thirdparty\oidn\lib\OpenImageDenoise.lib;RelWithDebInfo\imgui_static.lib;RelWithDebInfo\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\miniz.lib;_deps\assimp-build\lib\RelWithDebInfo\assimp-vc143-mt.lib;_deps\assimp-build\contrib\zlib\RelWithDebInfo\zlibstatic.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;comctl32.lib;D:\project-render\thirdparty\oidn\lib\OpenImageDenoise.lib;RelWithDebInfo\imgui_static.lib;RelWithDebInfo\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\miniz.lib;_deps\assimp-build\lib\RelWithDebInfo\assimp-vc143-mt.lib;_deps\assimp-build\contrib\zlib\RelWithDebInfo\zlibstatic.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>

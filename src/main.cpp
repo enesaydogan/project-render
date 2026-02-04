@@ -2358,7 +2358,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           changed |= ImGui::SliderFloat("Density", &cp.density, 0.0f, 5.0f);
           changed |= ImGui::SliderFloat("Absorption", &cp.absorption, 0.0f, 2.0f);
           changed |= ImGui::SliderFloat("Coverage", &cp.coverage, 0.0f, 1.0f);
-          changed |= ImGui::SliderFloat("Coverage Variation", &cp.coverageVariation, 0.0f, 1.0f);
           changed |= ImGui::SliderFloat("Scattering (g)", &cp.scattering, -0.99f, 0.99f);
           changed |= ImGui::SliderInt("Steps", &cp.steps, 16, 128);
           changed |= ImGui::SliderFloat("Sun Intensity", &cp.sunIntensity, 0.0f, 20.0f);
@@ -2372,8 +2371,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           changed |= ImGui::SliderFloat("Coverage Scale", &cp.coverageScale, 0.00005f, 0.0010f, "%.5f", ImGuiSliderFlags_Logarithmic);
           changed |= ImGui::SliderFloat("Erosion", &cp.erosion, 0.0f, 1.0f);
           changed |= ImGui::SliderFloat("Warp Strength", &cp.warpStrength, 0.0f, 2.0f);
-          changed |= ImGui::SliderFloat("Shape Power", &cp.shapePower, 0.5f, 3.0f);
-          changed |= ImGui::SliderFloat("Powder", &cp.powderStrength, 0.0f, 1.5f);
 
           ImGui::Separator();
           changed |= ImGui::SliderInt("Shadow Steps", &cp.shadowSteps, 1, 16);
