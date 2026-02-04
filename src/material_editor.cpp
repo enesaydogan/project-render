@@ -63,15 +63,16 @@ static bool IsHDRTexturePath(const std::wstring &path) {
 void Draw(HWND hwnd, bool &visible) {
     if (!visible) return;
     if (ImGui::Begin("Material Editor", &visible)) {
+        bool uiChanged = false;
         // --- Header / toolbar ---
         if (s_pickingEnabled) {
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 1.0f));
-            if (ImGui::Button("Cancel Pick")) s_pickingEnabled = false;
+            if (ImGui::Button("Cancel Pick")) { s_pickingEnabled = false; uiChanged = true; }
             ImGui::PopStyleColor();
             ImGui::SameLine();
             ImGui::TextUnformatted("Click on object surface...");
         } else {
-            if (ImGui::Button("Pick Material")) s_pickingEnabled = true;
+            if (ImGui::Button("Pick Material")) { s_pickingEnabled = true; uiChanged = true; }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Pick material by clicking the surface in the viewport");
         }
         ImGui::SameLine();
@@ -171,9 +172,9 @@ void Draw(HWND hwnd, bool &visible) {
             } else {
                 ImGui::TextDisabled("No node selected");
             }
-            ImGui::Checkbox("Show all materials", &s_showAllMaterials);
+            if (ImGui::Checkbox("Show all materials", &s_showAllMaterials)) uiChanged = true;
             ImGui::SetNextItemWidth(-FLT_MIN);
-            ImGui::InputTextWithHint("##filter", "Search material name...", s_filter, sizeof(s_filter));
+            if (ImGui::InputTextWithHint("##filter", "Search material name...", s_filter, sizeof(s_filter))) uiChanged = true;
             ImGui::Separator();
 
             if (!s_showAllMaterials && !selectedNode) {
@@ -190,6 +191,7 @@ void Draw(HWND hwnd, bool &visible) {
                     bool selected = (matIdx == s_selectedMaterial);
                     if (ImGui::Selectable(label.c_str(), selected)) {
                         s_selectedMaterial = matIdx;
+                        uiChanged = true;
                     }
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip("Material ID: %d", matIdx);
@@ -206,6 +208,8 @@ void Draw(HWND hwnd, bool &visible) {
             if (s_selectedMaterial < 0 || s_selectedMaterial >= (int)g_loadedMaterials.size()) {
                 ImGui::TextWrapped("Select a material from the list.");
             } else {
+                // Reset accumulation once per window when any UI widget changed
+                if (uiChanged) DxrRenderer::ResetAccumulation();
                 int matIdx = s_selectedMaterial;
                 Asset::Material &mat = g_loadedMaterials[matIdx];
                 ImGui::PushID(matIdx);
