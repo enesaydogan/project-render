@@ -367,3 +367,47 @@ void IBLManager::UpdateTextureFromSkyModel() {
 
     CreateTexFromData(m_device.Get(), m_queue.Get(), width, height, pixels, m_proceduralTexture);
 }
+
+DirectX::XMFLOAT3 IBLManager::GetSunColor() const {
+    if (!m_skyInitialized || !m_pragueSkyModel) {
+        return { 1.0f, 1.0f, 1.0f };
+    }
+
+    PragueSkyModel::Vector3 viewpoint = {0.0, 0.0, (double)m_altitude};
+    PragueSkyModel::Vector3 sunDir = {
+        std::cos(m_solarAzimuth) * std::cos(m_solarElevation),
+        std::sin(m_solarAzimuth) * std::cos(m_solarElevation),
+        std::sin(m_solarElevation)
+    };
+
+    auto params = m_pragueSkyModel->computeParameters(
+        viewpoint,
+        sunDir,
+        m_solarElevation,
+        m_solarAzimuth,
+        m_visibility,
+        m_albedo
+    );
+
+    const float startLambda = 380.0f;
+    const float endLambda = 780.0f;
+    const float stepLambda = 20.0f;
+
+    float X = 0, Y = 0, Z = 0;
+
+    for (float l = startLambda; l <= endLambda; l += stepLambda) {
+        double rad = m_pragueSkyModel->sunRadiance(params, l);
+        // Scale sun radiance: Physical values are huge (~1e7 to 1e9), so we apply a normalization factor
+        // to bring it into a usable HDR range (e.g., 0-1000) for the engine.
+        // 0.000015f ensures it is bright but not blindingly infinite compared to sky.
+        float val = (float)rad * m_sunIntensity * 0.000005f;
+        X += val * cieX(l) * stepLambda;
+        Y += val * cieY(l) * stepLambda;
+        Z += val * cieZ(l) * stepLambda;
+    }
+
+    float r, g, b;
+    XYZtoRGB(X, Y, Z, r, g, b);
+
+    return { std::max(0.0f, r), std::max(0.0f, g), std::max(0.0f, b) };
+}

@@ -82,9 +82,9 @@ float SampleWarp(float3 uvw, float lod) {
 
 // Breaking grid alignment
 float3 RotateDomain(float3 p) {
-    // ~33 degrees
-    float c = 0.83867; 
-    float s = 0.54463;
+    // 45 degrees
+    float c = 0.70710678; 
+    float s = 0.70710678;
     return float3(p.x * c + p.z * s, p.y, p.z * c - p.x * s);
 }
 
@@ -144,10 +144,10 @@ float SampleDensity(float3 p, float lod) {
     // Acts as a "probability to spawn cloud here"
     float3 coveragePos = p * CloudCB.coverageScale + float3(CloudCB.timeSeconds * 0.005, 0, 0);
     
-    // ROTATE coverage coordinates to prevent axis-aligned streaks/seams in the probability mask
-    coveragePos = RotateDomain(coveragePos);
-    
-    float weatherNoise = SampleNoise(coveragePos, lod + 2.0).r;
+    // Use 2D noise for weather map to prevent vertical streaking artifacts from 3D sampling
+    // 3D noise at large scales can look like vertical columns if the Z variation is slow
+    float2 weatherUV = coveragePos.xz;
+    float weatherNoise = NoiseTex.SampleLevel(LinearWrapSampler, float3(weatherUV, 0.5f), lod + 2.0).r;
     
     // Sync weather mask with coverage so we don't punch holes in "full" coverage
     // Use effectiveCoverage here to ensure consistency
@@ -246,8 +246,30 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
 
     // Fallback/Bias colors (Neutral Grey/White base)
     // We keep these strictly neutral so they don't fight with the sky color
-    float3 kSkyZenith = float3(0.4, 0.45, 0.55); // Blue-grey
-    float3 kSkyHorizon = float3(0.7, 0.7, 0.75); // Light grey
+    float3 kSkyZenith = float3(0.5, 0.55, 0.65); // Brighter blue-grey
+    float3 kSkyHorizon = float3(0.8, 0.8, 0.82); // Brighter Light grey
+    
+    #ifdef RAYTRACING_COMMON_H
+    // If we have access to the Raytracing Common header, we can sample the actual Skybox
+    // for a much better approximation of the ambient environment.
+    
+    // Sample Zenith (Up) and Horizon (Side) from the EnvMap
+    // Use a high mip level (e.g., 6-8) to get the blurred/irradiance color
+    float2 uvZenith = DirectionToUV(float3(0.0, 1.0, 0.0));
+    float2 uvHorizon = DirectionToUV(float3(1.0, 0.0, 0.0));
+    
+    // Scale down the sampled values significantly because the Prague Sky Model outputs raw radiance units (very high).
+    // Factor 0.001f brings the ~4000-10000 range down to ~4-10 range max
+    float skyScale = 0.001f; 
+
+    float3 realZenith = envMap.SampleLevel(linearSampler, uvZenith, 8.0).rgb * intensity * skyScale;
+    float3 realHorizon = envMap.SampleLevel(linearSampler, uvHorizon, 8.0).rgb * intensity * skyScale;
+    
+    // Blend towards real sky colors based on weight
+    // If weight is high, we match the skybox perfectly.
+    kSkyZenith = lerp(kSkyZenith, realZenith, saturate(ambientWeight));
+    kSkyHorizon = lerp(kSkyHorizon, realHorizon, saturate(ambientWeight));
+    #endif
     
     // Lighting loop
     for(int i = 0; i < steps; ++i) {
@@ -261,6 +283,10 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
 
             // Light Energy Calculation
             // 1. Direct Sun (with shadow ray)
+            
+            // Manual scaling to fix "blown out" sun color from Prague Sky Model without touching C++
+            float3 sunColorScaled = lightColor * 0.000015f; 
+
             float shadowTerm = 1.0f;
             if (density > CloudCB.shadowDensityThreshold) {
                // Cheap shadow march: 4 steps
@@ -287,17 +313,14 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
             // 2. Ambient Light
             // Height based gradient
             float hPct = (pos.y - CloudCB.cloudBottom) / (CloudCB.cloudTop - CloudCB.cloudBottom);
-            float3 ambientGrad = lerp(kSkyHorizon, kSkyZenith, hPct);
-            
-            // Blend procedural gradient with real sky ambient
-            // If ambientWeight is 1.0, we fully use the sky's average color.
-            float3 ambient = lerp(ambientGrad, ambientSkyColor, saturate(ambientWeight));
+            // kSkyHorizon and kSkyZenith now contain the actual sampled sky colors (if weighted)
+            float3 ambient = lerp(kSkyHorizon, kSkyZenith, hPct);
             
             // Ambient occlusion based on density: deeper = darker
             ambient *= exp(-density * 1.0f);
             ambient *= 0.6f; // Overall Ambient intensity boost
             
-            float3 source = (sunDir * CloudCB.sunIntensity * directLight * lightColor) + ambient;
+            float3 source = (sunDir * CloudCB.sunIntensity * directLight * sunColorScaled) + ambient;
             
             // Integation: Energy = Source * Density * (Integral of T over step)
             // Integra(T) = (1 - stepTrans) / extinction

@@ -21,8 +21,8 @@ void Miss(inout RayPayload payload)
     float cosSunRadius = cos(lightDir.w);
 
     if (cosTheta > cosSunRadius) {
-         // Simple sun disc (white, multiplied by intensity)
-         color += float3(10.0, 10.0, 8.0) * intensity;
+         // Simple sun disc (use integrated lightColor)
+         color += lightColor.rgb * intensity;
     }
 
     // --- Volumetric Clouds ---

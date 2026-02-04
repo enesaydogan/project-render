@@ -3,6 +3,7 @@
 #include <wrl.h>
 #include <string>
 #include <memory>
+#include <DirectXMath.h>
 #include "asset_loader.h"
 #include "PragueSkyModel.h"
 
@@ -50,6 +51,9 @@ public:
     void SetSunIntensity(float v) { if (m_sunIntensity != v) { m_sunIntensity = v; m_skyDirty = true; } }
     float GetSunIntensity() const { return m_sunIntensity; }
 
+    DirectX::XMFLOAT3 GetSunColor() const;
+    
+    // Core members
     void SetSunSize(float degrees) { if (m_sunSize != degrees) { m_sunSize = degrees; m_skyDirty = true; } }
     float GetSunSize() const { return m_sunSize; }
 

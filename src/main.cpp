@@ -1647,6 +1647,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
          // Pass angular radius in radians to w component
          g_cameraData.lightDir[3] = sunSize * DEG2RAD * 0.5f;
 
+         // Sync Sun Color from Sky Model
+         auto sunRGB = IBLManager::Get().GetSunColor();
+         g_cameraData.lightColor[0] = sunRGB.x;
+         g_cameraData.lightColor[1] = sunRGB.y;
+         g_cameraData.lightColor[2] = sunRGB.z;
+
          // Sync Sun Intensity
          g_cameraData.lightColor[3] = sunInt; 
 
