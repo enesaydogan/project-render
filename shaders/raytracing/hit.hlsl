@@ -326,6 +326,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     shadowPayload.metalness = 0.0;
     shadowPayload.matIndex = 0;
     shadowPayload.t = 1.0; // Default to hit
+    shadowPayload.rayDepth = 1;
     
     // Trace shadow ray using flags to skip hits and stop at the first occlusion
     TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xFF, 0, 0, 0, shadowRay, shadowPayload);

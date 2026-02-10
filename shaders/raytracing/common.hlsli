@@ -146,6 +146,7 @@ struct RayPayload
     float thinWalled;     // 0/1 for thin glass/leaves
     float translucency;   // [0..1] diffuse-like transmission
     uint matIndex;
+    uint rayDepth;        // 0 = primary, >0 = secondary
 };
 
 struct PathPayload

@@ -277,6 +277,20 @@ static void EnableD3D12DebugLayer() {
 #endif
 }
 
+static void EnforceReleaseDebugFlags() {
+#ifndef _DEBUG
+  g_dxrDebugUV = false;
+  g_dxrDumpPixels = false;
+  g_dxrHitDebug = false;
+  g_dxrDumpD3D12Messages = false;
+  g_rasterDebugUV = false;
+  g_rasterWireframe = false;
+  g_rasterDebugDepth = false;
+  g_debugLog = false;
+  g_debugMode = 0;
+#endif
+}
+
 // Select the first suitable hardware adapter (non-software) that supports D3D12
 static void GetHardwareAdapter(IDXGIFactory4 *pFactory,
                                IDXGIAdapter1 **ppAdapter) {
@@ -1464,7 +1478,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     std::string token;
     while (iss >> token) {
       if (token == "--debug-log") {
+      #ifdef _DEBUG
         g_debugLog = true;
+      #else
+        fprintf(stderr, "--debug-log ignored in non-debug builds\n");
+      #endif
       } else if (token == "--fast-import" || token == "--optimize-import") {
         g_fastImport = true;
       } else {
@@ -1497,6 +1515,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   }
 
   ShowWindow(hwnd, nCmdShow);
+
+  EnforceReleaseDebugFlags();
 
   // Log that we showed the window (stderr only)
   fprintf(stderr, "ShowWindow called\n");
@@ -2823,29 +2843,33 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
         }
 
+      #ifdef _DEBUG
         // Debug Render Pass Dropdown
         const char *debugModes[] = {"None",
-                                    "Albedo",
-                                    "Normal",
-                                    "Emissive",
-                                    "Roughness/Glossiness",
-                                    "Refl. Color",
-                                    "Metalness",
-                                    "AO",
-                                    "Motion Vectors",
-                                    "Spec Hit Distance",
-                                    "Spec Motion Vectors",
-                                    "Cloud: Slab Mask",
-                                    "Cloud: CB Sanity",
-                                    "Cloud: Noise Sanity",
-                                    "Cloud: Density Sanity",
-                                    "Cloud: Opacity (1-T)",
-                                    "Cloud: BaseShape Sanity"};
+                  "Albedo",
+                  "Normal",
+                  "Emissive",
+                  "Roughness/Glossiness",
+                  "Refl. Color",
+                  "Metalness",
+                  "AO",
+                  "Motion Vectors",
+                  "Spec Hit Distance",
+                  "Spec Motion Vectors",
+                  "Cloud: Slab Mask",
+                  "Cloud: CB Sanity",
+                  "Cloud: Noise Sanity",
+                  "Cloud: Density Sanity",
+                  "Cloud: Opacity (1-T)",
+                  "Cloud: BaseShape Sanity"};
         if (ImGui::Combo("Debug View", &g_debugMode, debugModes,
-                         IM_ARRAYSIZE(debugModes))) {
+             IM_ARRAYSIZE(debugModes))) {
           // State is updated; updated into camera buffer on next frame
           uiChanged = true;
         }
+      #else
+        g_debugMode = 0;
+      #endif
 
         // Reset accumulation once per window when any UI widget changed
         if (uiChanged) {
@@ -2864,6 +2888,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           WaitGPUIdle();
           DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
         }
+#ifdef _DEBUG
         // DXR debug: show UV output from RayGen
         if (ImGui::Checkbox("DXR: Show RayGen UV (debug)", &g_dxrDebugUV)) {
           // Recreate pipeline with debug define; reinitializing RT pipeline
@@ -2889,6 +2914,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           RasterRenderer::RecreateMeshPipeline(g_device.Get(),
                                                g_rootSignature.Get());
         }
+#else
+        g_dxrDebugUV = false;
+        g_rasterDebugUV = false;
+        g_rasterWireframe = false;
+        g_rasterDebugDepth = false;
+#endif
 
         ImGui::Separator();
         ImGui::TextWrapped(
