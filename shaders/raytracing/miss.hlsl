@@ -26,22 +26,24 @@ void Miss(inout RayPayload payload)
     }
 
     // --- Volumetric Clouds ---
-    float tMin = 0.0;
-    float tMax = 50000.0; // Far
-    
-    // Pass global lightColor logic
-    float4 cloudRes = RaymarchClouds(WorldRayOrigin(), dir, tMin, tMax, L, lightColor.rgb);
+    if (payload.rayDepth <= 1) {
+        float tMin = 0.0;
+        float tMax = 50000.0; // Far
 
-    // If a cloud debug view is selected, show it directly.
-    // (Avoid compositing with the environment, which makes debug hard to read.)
-    int dbg = (int)debugMode;
-    if (dbg >= 11) {
-        color = cloudRes.rgb;
-    } else {
-        // Composite clouds over sky
-        // cloudRes.rgb is accumulated color, cloudRes.a is Final Transmittance (0 = blocked, 1 = transparent)
-        // So: Color = Sky * Transmittance + CloudColor
-        color = color * cloudRes.a + cloudRes.rgb;
+        // Pass global lightColor logic
+        float4 cloudRes = RaymarchClouds(WorldRayOrigin(), dir, tMin, tMax, L, lightColor.rgb);
+
+        // If a cloud debug view is selected, show it directly.
+        // (Avoid compositing with the environment, which makes debug hard to read.)
+        int dbg = (int)debugMode;
+        if (dbg >= 11) {
+            color = cloudRes.rgb;
+        } else {
+            // Composite clouds over sky
+            // cloudRes.rgb is accumulated color, cloudRes.a is Final Transmittance (0 = blocked, 1 = transparent)
+            // So: Color = Sky * Transmittance + CloudColor
+            color = color * cloudRes.a + cloudRes.rgb;
+        }
     }
 
     // Fill payload
@@ -61,4 +63,5 @@ void Miss(inout RayPayload payload)
     payload.thinWalled = 0.0;
     payload.translucency = 0.0;
     payload.matIndex = 0;
+    // Preserve rayDepth; set by caller before TraceRay.
 }

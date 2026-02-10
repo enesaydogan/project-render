@@ -168,6 +168,7 @@ void RayGen()
         payload.translucency = 0.0;
         payload.matIndex = 0;
         payload.t = -1.0;
+        payload.rayDepth = (uint)bounce;
 
         TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
 
@@ -200,6 +201,7 @@ void RayGen()
                 specHitRay.TMax = 1000.0;
                 RayPayload specHitPayload;
                 specHitPayload.t = -1.0;
+                specHitPayload.rayDepth = (uint)bounce + 1;
                 TraceRay(g_accel, RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0xFF, 0, 0, 0, specHitRay, specHitPayload);
                 primarySpecHitDist = (specHitPayload.t > 0) ? specHitPayload.t : 1000.0;
             } else {
@@ -413,6 +415,7 @@ void RayGen()
                 shadowRay.TMax = dist_final - 0.002;
                 RayPayload shadowPayload;
                 shadowPayload.t = 1.0;
+                shadowPayload.rayDepth = (uint)bounce + 1;
                 TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
                 
                 if (shadowPayload.t < 0.0) {
@@ -445,7 +448,7 @@ void RayGen()
                 if (pdf_gi > 0.0) {
                     RayDesc giRay; giRay.Origin = P + N * 0.0005; giRay.Direction = nextDir_gi;
                     giRay.TMin = 0.0001; giRay.TMax = 1000.0;
-                    RayPayload giPayload; giPayload.color = float3(0,0,0); giPayload.emissive = float3(0,0,0); giPayload.t = -1.0;
+                    RayPayload giPayload; giPayload.color = float3(0,0,0); giPayload.emissive = float3(0,0,0); giPayload.t = -1.0; giPayload.rayDepth = (uint)bounce + 1;
                     TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, giRay, giPayload);
                     if (giPayload.t > 0) {
                         float3 radiance = giPayload.color + giPayload.emissive;
@@ -504,7 +507,7 @@ void RayGen()
                 // Visibility test for GI reconnection
                 RayDesc giVisRay; giVisRay.Origin = P + N * 0.001; giVisRay.Direction = L_gi_final;
                 giVisRay.TMin = 0.001; giVisRay.TMax = distance(gi_res.hitPos, P) - 0.002;
-                RayPayload giVisPayload; giVisPayload.t = 1.0;
+                RayPayload giVisPayload; giVisPayload.t = 1.0; giVisPayload.rayDepth = (uint)bounce + 1;
                 TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, giVisRay, giVisPayload);
                 if (giVisPayload.t < 0.0) {
                     indirectLighting = gi_res.radiance * brdf_gi_final * saturate(dot(N, L_gi_final)) * gi_res.W;
@@ -542,6 +545,7 @@ void RayGen()
                 shadowRay.TMax = dist_nee - 0.001;
                 RayPayload shadowPayload;
                 shadowPayload.t = 1.0;
+                shadowPayload.rayDepth = (uint)bounce + 1;
                 TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
                 if (shadowPayload.t < 0.0) {
                      float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
