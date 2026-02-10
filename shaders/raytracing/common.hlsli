@@ -93,6 +93,10 @@ cbuffer Camera : register(b0)
     float prevAspect;
     float prevNearZ;
     float prevFarZ;
+    float noiseThreshold;
+    float useAdaptiveSampling;
+    float debugVisualizationMode; // 0=None, 1=NoiseMap
+    float _padNew;
 }
 
 struct MaterialData

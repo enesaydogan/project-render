@@ -41,6 +41,10 @@ struct CameraCB {
   float prevAspect;
   float prevNearZ;
   float prevFarZ;
+  float noiseThreshold;
+  float useAdaptiveSampling;
+  float debugVisualizationMode;
+  float _padNew;
 };
 
 // Camera state (defined in camera.cpp)

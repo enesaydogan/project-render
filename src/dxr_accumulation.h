@@ -18,6 +18,8 @@ public:
     UINT GetFrameCount() const { return m_frameCount; }
     ID3D12Resource* GetAccumulationBuffer() const { return m_accumulationBuffer.Get(); }
     D3D12_GPU_DESCRIPTOR_HANDLE GetAccumulationUAV() const { return m_accumulationUAVGpu; }
+    ID3D12Resource* GetVarianceBuffer() const { return m_varianceBuffer.Get(); }
+    D3D12_GPU_DESCRIPTOR_HANDLE GetVarianceUAV() const { return m_varianceUAVGpu; }
 
     // Check if accumulation is needed (e.g. if we haven't reached a limit)
     bool IsAccumulating() const { return m_isAccumulating; }
@@ -32,8 +34,10 @@ private:
 
     ComPtr<ID3D12Device> m_device;
     ComPtr<ID3D12Resource> m_accumulationBuffer;
+    ComPtr<ID3D12Resource> m_varianceBuffer;
     ComPtr<ID3D12DescriptorHeap> m_uavHeap;
     D3D12_GPU_DESCRIPTOR_HANDLE m_accumulationUAVGpu;
+    D3D12_GPU_DESCRIPTOR_HANDLE m_varianceUAVGpu;
 
     UINT m_frameCount = 0;
     UINT m_width = 0;
