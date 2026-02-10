@@ -101,7 +101,7 @@ void RayGen()
     }
 
     // Adaptive Sampling Early Exit
-    if (accumFrame > 32 && useAdaptiveSampling > 0.5 && debugVisualizationMode == 0.0) {
+    if (accumFrame > 32 && useAdaptiveSampling > 0.5) {
         float4 acc = g_accumulation[launchIndex.xy];
         float accSq = g_variance[launchIndex.xy];
         
@@ -114,7 +114,12 @@ void RayGen()
             float noise = sem / (meanLum + 0.01);
             
             if (noise < noiseThreshold) {
-                 g_output[launchIndex.xy] = float4(acc.rgb / n, 1.0);
+                 if (debugVisualizationMode == 1.0) {
+                     // Debug: Show Converged pixels as Green
+                     g_output[launchIndex.xy] = float4(0.0, 1.0, 0.0, 1.0);
+                 } else {
+                     g_output[launchIndex.xy] = float4(acc.rgb / n, 1.0);
+                 }
                  return;
             }
         }
@@ -897,9 +902,10 @@ void RayGen()
              // Coefficient of Variation
              float noise = sem / (meanLum + 0.01); 
              
-             // Visualize: 0% = Black, 10% = White
-             float vis = saturate(noise * 10.0);
-             g_output[launchIndex.xy] = float4(vis, vis, vis, 1.0);
+             // Visualize: 0% = Black, 20% = White (Scaled 5x)
+             float vis = saturate(noise * 5.0);
+             // Active (Noisy) pixels in Red-ish/Gray to contrast with Green converged pixels
+             g_output[launchIndex.xy] = float4(vis, vis * 0.5, vis * 0.5, 1.0);
         } else {
             g_output[launchIndex.xy] = float4(result, 1.0);
         }
