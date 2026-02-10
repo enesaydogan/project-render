@@ -76,6 +76,7 @@ static D3D12_GPU_DESCRIPTOR_HANDLE s_vbTableGpu;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_ibTableGpu;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_outputUAVGpu;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_accumUAVGpu;
+static D3D12_GPU_DESCRIPTOR_HANDLE s_varianceUAVGpu;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_reservoirGpuHandle[2];
 static D3D12_GPU_DESCRIPTOR_HANDLE s_gi_reservoirGpuHandle[2];
 static D3D12_GPU_DESCRIPTOR_HANDLE s_iblGpuHandle;
@@ -108,11 +109,12 @@ static const UINT DXR_HEAP_SPEC_ALBEDO_OFFSET = DXR_HEAP_UAV_OFFSET + 16;
 static const UINT DXR_HEAP_SPEC_HITDIST_OFFSET = DXR_HEAP_UAV_OFFSET + 17;
 static const UINT DXR_HEAP_SPEC_MVEC_OFFSET = DXR_HEAP_UAV_OFFSET + 18;
 static const UINT DXR_HEAP_OIDN_OUT_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 19;
+static const UINT DXR_HEAP_VARIANCE_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 20;
 // Cloud Resources (CBV + SRV) - must be contiguous for table
-static const UINT DXR_HEAP_CLOUD_CB_OFFSET = DXR_HEAP_UAV_OFFSET + 20;
-static const UINT DXR_HEAP_CLOUD_TEX_OFFSET = DXR_HEAP_UAV_OFFSET + 21;
-static const UINT DXR_HEAP_CLOUD_DETAIL_TEX_OFFSET = DXR_HEAP_UAV_OFFSET + 22;
-static const UINT DXR_HEAP_TOTAL_COUNT = DXR_HEAP_TEX_COUNT + DXR_HEAP_VB_COUNT + DXR_HEAP_IB_COUNT + 23;
+static const UINT DXR_HEAP_CLOUD_CB_OFFSET = DXR_HEAP_UAV_OFFSET + 21;
+static const UINT DXR_HEAP_CLOUD_TEX_OFFSET = DXR_HEAP_UAV_OFFSET + 22;
+static const UINT DXR_HEAP_CLOUD_DETAIL_TEX_OFFSET = DXR_HEAP_UAV_OFFSET + 23;
+static const UINT DXR_HEAP_TOTAL_COUNT = DXR_HEAP_TEX_COUNT + DXR_HEAP_VB_COUNT + DXR_HEAP_IB_COUNT + 24;
 
 // Output texture dimensions used by DXR (kept local to module)
 static UINT s_outputWidth = 1280;
@@ -198,7 +200,28 @@ static std::vector<GpuLight> s_lastLightsCpu;
 static ComPtr<ID3D12Resource> s_reservoirBuffers[2];
 static ComPtr<ID3D12Resource> s_gi_reservoirBuffers[6];
 
+// Noise Statistics Resources
+static ComPtr<ID3D12RootSignature> s_noiseStatsRootSig;
+static ComPtr<ID3D12PipelineState> s_noiseStatsPSO;
+static ComPtr<ID3D12Resource> s_noiseStatsCB;
+static ComPtr<ID3D12Resource> s_noiseStatsOutputBuffer;
+static ComPtr<ID3D12Resource> s_noiseStatsReadbackBuffer;
+static ComPtr<ID3D12DescriptorHeap> s_noiseStatsHeap;
+static float s_lastNoiseLevel = 0.0f;
+
 namespace DxrRenderer {
+
+struct NoiseStatsConstants {
+    uint32_t width;
+    uint32_t height;
+    float padding[2];
+};
+
+float GetCurrentNoiseLevel() {
+    return s_lastNoiseLevel;
+}
+
+static void EnsureNoiseStatsPipeline();
 
 struct TonemapConstants {
   uint32_t outWidth;
@@ -309,6 +332,114 @@ static void EnsureTonemapPipeline() {
     s_tonemapCB->SetName(L"Tonemap Constants");
 }
 
+static void EnsureNoiseStatsPipeline() {
+    if (s_noiseStatsPSO && s_noiseStatsRootSig && s_noiseStatsCB && s_noiseStatsOutputBuffer) return;
+    if (!s_device) return;
+
+    // Root signature: b0 (CB), u0(Tex), u1(Tex), u2(Buffer)
+    D3D12_DESCRIPTOR_RANGE uavRanges[3];
+    // u0 - Accumulation
+    uavRanges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    uavRanges[0].NumDescriptors = 1;
+    uavRanges[0].BaseShaderRegister = 0;
+    uavRanges[0].RegisterSpace = 0;
+    uavRanges[0].OffsetInDescriptorsFromTableStart = 0;
+    
+    // u1 - Variance
+    uavRanges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    uavRanges[1].NumDescriptors = 1;
+    uavRanges[1].BaseShaderRegister = 1;
+    uavRanges[1].RegisterSpace = 0;
+    uavRanges[1].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    // u2 - Output Buffer
+    uavRanges[2].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    uavRanges[2].NumDescriptors = 1;
+    uavRanges[2].BaseShaderRegister = 2;
+    uavRanges[2].RegisterSpace = 0;
+    uavRanges[2].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER params[2] = {};
+    // b0
+    params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    params[0].Descriptor.ShaderRegister = 0;
+    params[0].Descriptor.RegisterSpace = 0;
+    params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    // table with u0, u1, u2
+    params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[1].DescriptorTable.NumDescriptorRanges = 3;
+    params[1].DescriptorTable.pDescriptorRanges = uavRanges;
+    params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
+    rsDesc.NumParameters = 2;
+    rsDesc.pParameters = params;
+    rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ComPtr<ID3DBlob> sig, err;
+    if (FAILED(D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err))) {
+        if (err) fprintf(stderr, "NoiseStats RS Error: %s\n", (char*)err->GetBufferPointer());
+        return;
+    }
+    s_device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(), IID_PPV_ARGS(&s_noiseStatsRootSig));
+
+    // Compile CS
+    ComPtr<IDxcBlob> cs;
+    try {
+        std::vector<std::wstring> defines;
+        cs = s_dxcHelper.Compile(L"shaders/noise_statistics_cs.hlsl", L"CSMain", L"cs_6_3", defines);
+    } catch (std::exception& e) { 
+        fprintf(stderr, "NoiseStats CS Compile Exception: %s\n", e.what());
+        return; 
+    }
+    
+    if (!cs) {
+        fprintf(stderr, "NoiseStats CS Compile Failed (null blob)\n");
+        return;
+    }
+
+    D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
+    psoDesc.pRootSignature = s_noiseStatsRootSig.Get();
+    psoDesc.CS.pShaderBytecode = cs->GetBufferPointer();
+    psoDesc.CS.BytecodeLength = cs->GetBufferSize();
+    s_device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&s_noiseStatsPSO));
+
+    // Create CB
+    D3D12_HEAP_PROPERTIES uploadProps = {};
+    uploadProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+    D3D12_RESOURCE_DESC cbDesc = {};
+    cbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    cbDesc.Width = 256;
+    cbDesc.Height = 1;
+    cbDesc.DepthOrArraySize = 1;
+    cbDesc.MipLevels = 1;
+    cbDesc.SampleDesc.Count = 1;
+    cbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    s_device->CreateCommittedResource(&uploadProps, D3D12_HEAP_FLAG_NONE, &cbDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&s_noiseStatsCB));
+
+    // Create Output Buffer (UAV, Default Heap)
+    D3D12_HEAP_PROPERTIES defaultProps = {};
+    defaultProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+    D3D12_RESOURCE_DESC bufDesc = cbDesc;
+    bufDesc.Width = sizeof(float); // 4 bytes
+    bufDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    s_device->CreateCommittedResource(&defaultProps, D3D12_HEAP_FLAG_NONE, &bufDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&s_noiseStatsOutputBuffer));
+    
+    // Create Readback Buffer
+    D3D12_HEAP_PROPERTIES readbackProps = {};
+    readbackProps.Type = D3D12_HEAP_TYPE_READBACK;
+    bufDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+    s_device->CreateCommittedResource(&readbackProps, D3D12_HEAP_FLAG_NONE, &bufDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&s_noiseStatsReadbackBuffer));
+
+    // Descriptor Heap
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
+    heapDesc.NumDescriptors = 3;
+    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    s_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&s_noiseStatsHeap));
+}
+
 void Initialize(ID3D12Device *device) {
   s_device = device;
   if (!s_device) {
@@ -401,6 +532,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     s_outputUAVGpu.ptr = gpuStart.ptr + (UINT64)DXR_HEAP_UAV_OFFSET * descSize;
     s_accumUAVGpu.ptr =
         gpuStart.ptr + (UINT64)DXR_HEAP_ACCUM_UAV_OFFSET * descSize;
+    s_varianceUAVGpu.ptr =
+        gpuStart.ptr + (UINT64)DXR_HEAP_VARIANCE_UAV_OFFSET * descSize;
     s_reservoirGpuHandle[0].ptr =
         gpuStart.ptr + (UINT64)DXR_HEAP_RESERVOIR_0_OFFSET * descSize;
     s_reservoirGpuHandle[1].ptr =
@@ -438,7 +571,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
   D3D12_DESCRIPTOR_RANGE uavRange = {};
   uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-  uavRange.NumDescriptors = 20; // Increased from 16 to 20 to support u16, u17+
+  uavRange.NumDescriptors = 21; // Increased to 21 to support Variance (u20)
   uavRange.BaseShaderRegister = 0;
   params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
   params[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -843,6 +976,20 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   accumUavDesc.Texture2D.PlaneSlice = 0;
   s_device->CreateUnorderedAccessView(s_accumulation.GetAccumulationBuffer(),
                                       nullptr, &accumUavDesc, accumUavCpu);
+
+  // Create Variance UAV (for Noise Calculation / Adaptive Sampling)
+  D3D12_CPU_DESCRIPTOR_HANDLE varUavCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+  varUavCpu.ptr += (SIZE_T)DXR_HEAP_VARIANCE_UAV_OFFSET *
+                   s_device->GetDescriptorHandleIncrementSize(
+                       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+  D3D12_UNORDERED_ACCESS_VIEW_DESC varUavDesc = {};
+  varUavDesc.Format = DXGI_FORMAT_R32_FLOAT;
+  varUavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+  varUavDesc.Texture2D.MipSlice = 0;
+  varUavDesc.Texture2D.PlaneSlice = 0;
+  s_device->CreateUnorderedAccessView(s_accumulation.GetVarianceBuffer(),
+                                      nullptr, &varUavDesc, varUavCpu);
 
   // Create Reservoir UAVs
   for (int i = 0; i < 2; ++i) {
@@ -1368,6 +1515,7 @@ static bool s_hasDenoised = false;
 void ResetAccumulation() {
   s_accumulation.Reset();
   s_rrStillFrameSpp = 0;
+  s_lastNoiseLevel = 0.0f; // Reset noise level so rendering restarts
   s_hasTonemappedFrame = false;
   s_hasDenoised = false; // Reset auto-denoiser state
   // Keep Streamline history reset separate from accumulation decisions.
@@ -1481,14 +1629,24 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
   const UINT maxSpp = (g_cameraData.maxSPP > 0.0f) ? (UINT)g_cameraData.maxSPP : 0u;
   const UINT currSpp = rrActive ? s_rrStillFrameSpp : s_accumulation.GetFrameCount();
 
+  // Adaptive Sampling Convergence Check
+  bool isConverged = false;
+  if (g_cameraData.useAdaptiveSampling > 0.5f && s_lastNoiseLevel > 0.0f) {
+      if (s_lastNoiseLevel < g_cameraData.noiseThreshold) {
+          isConverged = true;
+      }
+  }
+
   bool isOidnMode = (s_denoiserMode != DxrRenderer::DenoiserMode::Off && !dlssActive);
-  bool canAutoDenoise = isOidnMode && maxSpp > 0 && currSpp >= maxSpp && !s_hasDenoised;
+  bool reachedEndCondition = (maxSpp > 0 && currSpp >= maxSpp) || isConverged;
+
+  bool canAutoDenoise = isOidnMode && reachedEndCondition && !s_hasDenoised;
   bool doDenoise = canAutoDenoise;
 
   // FREEZE LOGIC:
-  // If we reached max SPP and we are NOT trying to run a denoise pass this frame,
+  // If we reached max SPP (or converged) and we are NOT trying to run a denoise pass this frame,
   // then we freeze (copy last valid frame).
-  if (maxSpp > 0 && currSpp >= maxSpp && !doDenoise) {
+  if (reachedEndCondition && !doDenoise) {
     ID3D12Resource *freezeSrc = nullptr;
     if (s_hasDenoised && s_tonemapOutputUAV) {
       freezeSrc = s_tonemapOutputUAV.Get();
@@ -1740,7 +1898,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
   // Only Dispatch Rays if we are NOT in a pure denoise pass.
   // If we are denoising an already-completed frame (e.g. at MaxSPP),
   // we do not want to add more samples or modify the accumulation buffer.
-  if (!doDenoise) {
+  
+  if (!doDenoise && !isConverged) {
     // fprintf(stderr, "DxrRenderer: Dispatching Rays\n");
     dxrList->DispatchRays(&dispatchDesc);
     // fprintf(stderr, "DxrRenderer: Dispatched Rays\n");
@@ -1751,10 +1910,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
     else
       s_rrStillFrameSpp++;
   } else {
-    // We are skipping dispatch to run OIDN on the EXISTING buffer.
-    // Important: We must assume the PREVIOUS frame has finished writing to s_outputUAV.
-    // The main loop Wait logic typically guarantees this.
-    // fprintf(stderr, "DxrRenderer: Skipping DispatchRays for Denoise Pass\n");
+    // We are skipping dispatch to run OIDN on the EXISTING buffer or because we are converged.
+    if (isConverged && !doDenoise && g_verboseRenderLogs) {
+        // Optional: Log convergence? 
+        // fprintf(stderr, "DxrRenderer: Converged (Noise: %.4f < %.4f)\n", s_lastNoiseLevel, g_cameraData.noiseThreshold);
+    }
   }
 
   // Optional Streamline / DLSS evaluation
@@ -1768,6 +1928,86 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
   // DLSS is temporal and will "process" the debug visualization itself,
   // which can look like shimmer even when the underlying buffer is stable.
   const bool debugViewActive = (g_cameraData.debugMode != 0.0f);
+
+  // --- Noise Statistics (Moved outside Streamline block) ---
+  // Run every 10 samples (arbitrary choice for perf), but ONLY if accumulating and we have data.
+  // Also run if s_lastNoiseLevel is 0 (initial calculation) regardless of modulo.
+  bool shouldCalcNoise = s_accumulation.IsAccumulating() && s_accumulation.GetFrameCount() > 0;
+  if (shouldCalcNoise) {
+      if (s_lastNoiseLevel == 0.0f || (s_accumulation.GetFrameCount() % 10 == 0)) {
+          EnsureNoiseStatsPipeline();
+          if (s_noiseStatsPSO) {
+                // 1. Readback previous result FIRST (from readback buffer populated in previous run)
+                {
+                    float* data = nullptr;
+                    if (SUCCEEDED(s_noiseStatsReadbackBuffer->Map(0, nullptr, (void**)&data))) {
+                        s_lastNoiseLevel = *data;
+                        s_noiseStatsReadbackBuffer->Unmap(0, nullptr);
+                    }
+                }
+
+                // 2. UAV Barrier to ensure RayTrace writes are visible to Compute
+                D3D12_RESOURCE_BARRIER uavBarrier = {};
+                uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+                uavBarrier.UAV.pResource = nullptr;
+                dxrList->ResourceBarrier(1, &uavBarrier);
+
+                // 3. Dispatch Noise Stats
+                // Update constants
+                NoiseStatsConstants nsc = { s_outputWidth, s_outputHeight };
+                void* mapPtr = nullptr;
+                if (SUCCEEDED(s_noiseStatsCB->Map(0, nullptr, &mapPtr))) {
+                    memcpy(mapPtr, &nsc, sizeof(nsc));
+                    s_noiseStatsCB->Unmap(0, nullptr);
+                }
+
+                // Bind & Dispatch
+                dxrList->SetPipelineState(s_noiseStatsPSO.Get());
+                dxrList->SetComputeRootSignature(s_noiseStatsRootSig.Get());
+                ID3D12DescriptorHeap* nsHeaps[] = { s_noiseStatsHeap.Get() };
+                dxrList->SetDescriptorHeaps(1, nsHeaps);
+                
+                // Update Descriptors: u0(Accum), u1(Var), u2(Out) in heap
+                UINT inc = s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+                D3D12_CPU_DESCRIPTOR_HANDLE cpuStart = s_noiseStatsHeap->GetCPUDescriptorHandleForHeapStart();
+                D3D12_GPU_DESCRIPTOR_HANDLE gpuStart = s_noiseStatsHeap->GetGPUDescriptorHandleForHeapStart();
+
+                // u0
+                D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+                uavDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+                uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+                s_device->CreateUnorderedAccessView(s_accumulation.GetAccumulationBuffer(), nullptr, &uavDesc, cpuStart);
+
+                // u1
+                uavDesc.Format = DXGI_FORMAT_R32_FLOAT;
+                D3D12_CPU_DESCRIPTOR_HANDLE u1 = cpuStart; u1.ptr += inc;
+                s_device->CreateUnorderedAccessView(s_accumulation.GetVarianceBuffer(), nullptr, &uavDesc, u1);
+
+                // u2
+                D3D12_UNORDERED_ACCESS_VIEW_DESC bufDesc = {};
+                bufDesc.Format = DXGI_FORMAT_UNKNOWN;
+                bufDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+                bufDesc.Buffer.FirstElement = 0;
+                bufDesc.Buffer.NumElements = 1;
+                bufDesc.Buffer.StructureByteStride = sizeof(float);
+                bufDesc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
+                D3D12_CPU_DESCRIPTOR_HANDLE u2 = cpuStart; u2.ptr += 2 * inc;
+                s_device->CreateUnorderedAccessView(s_noiseStatsOutputBuffer.Get(), nullptr, &bufDesc, u2);
+
+                dxrList->SetComputeRootConstantBufferView(0, s_noiseStatsCB->GetGPUVirtualAddress());
+                dxrList->SetComputeRootDescriptorTable(1, gpuStart);
+                
+                dxrList->Dispatch(1, 1, 1);
+
+                // 4. Copy to Readback (for NEXT frame to read)
+                TransitionResource(dxrList.Get(), s_noiseStatsOutputBuffer.Get(), 
+                                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+                dxrList->CopyResource(s_noiseStatsReadbackBuffer.Get(), s_noiseStatsOutputBuffer.Get());
+                TransitionResource(dxrList.Get(), s_noiseStatsOutputBuffer.Get(), 
+                                    D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+          }
+      }
+  }
 
   if (!debugViewActive && s_streamline && s_streamline->IsInitialized() &&
       s_streamline->IsDeviceSet() && s_streamline->IsEnabled() &&

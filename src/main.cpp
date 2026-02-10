@@ -2665,6 +2665,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
         if (g_currentRenderMode == RenderMode::DXR) {
           ImGui::Text("Samples: %u", DxrRenderer::GetAccumulationFrameCount());
+          
+          float currentNoise = DxrRenderer::GetCurrentNoiseLevel();
+          if (currentNoise > 0.0f) {
+              ImGui::Text("Noise Level: %.2f%%", currentNoise * 100.0f);
+          } else {
+              ImGui::Text("Noise Level: Calculating...");
+          }
 
           if (ImGui::SliderFloat("Reflection Bounces",
                                  &g_cameraData.maxSpecularBounces, 0.0f, 16.0f,
@@ -2691,6 +2698,38 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             g_cameraData.maxSPP = (float)maxSpp;
             UpdateCameraCB();
             uiChanged = true;
+          }
+
+          ImGui::Separator();
+          ImGui::Text("Adaptive Sampling");
+          bool adaptive = g_cameraData.useAdaptiveSampling > 0.5f;
+          if (ImGui::Checkbox("Enable Adaptive Sampling", &adaptive)) {
+            g_cameraData.useAdaptiveSampling = adaptive ? 1.0f : 0.0f;
+            UpdateCameraCB();
+            uiChanged = true;
+          }
+          if (adaptive) {
+             float maxSppF = g_cameraData.maxSPP;
+             // If adaptive is on, we might want to increase maxSPP effectively to infinity 
+             // or let user control it. User said "Max SPP or Noise, whichever first".
+             // So we keep Max SPP control.
+             
+             float nVal = g_cameraData.noiseThreshold * 100.0f;
+             if (ImGui::SliderFloat("Target Noise %", &nVal, 1.0f, 30.0f, "%.1f%%")) {
+                 g_cameraData.noiseThreshold = nVal / 100.0f;
+                 UpdateCameraCB();
+                 uiChanged = true;
+             }
+             
+             bool viz = g_cameraData.debugVisualizationMode > 0.5f;
+             if (ImGui::Checkbox("Show Noise Map (Debug)", &viz)) {
+                 g_cameraData.debugVisualizationMode = viz ? 1.0f : 0.0f;
+                 UpdateCameraCB();
+                 uiChanged = true;
+             }
+             
+             if (ImGui::IsItemHovered())
+                 ImGui::SetTooltip("White = High Noise (10%+), Black = Low Noise");
           }
 
           ImGui::Separator();

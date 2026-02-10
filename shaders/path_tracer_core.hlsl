@@ -8,6 +8,7 @@
 
 // Additional resources for ReSTIR
 StructuredBuffer<Light> g_lights : register(t5000);
+RWTexture2D<float> g_variance : register(u20);
 RWTexture2D<float4> g_reservoir0 : register(u2);
 RWTexture2D<float4> g_reservoir1 : register(u3);
 RWTexture2D<float4> g_gi_reservoir_a0 : register(u4);
@@ -97,6 +98,26 @@ void RayGen()
             g_output[launchIndex.xy] = float4(total.rgb / total.a, 1.0);
         }
         return;
+    }
+
+    // Adaptive Sampling Early Exit
+    if (accumFrame > 32 && useAdaptiveSampling > 0.5 && debugVisualizationMode == 0.0) {
+        float4 acc = g_accumulation[launchIndex.xy];
+        float accSq = g_variance[launchIndex.xy];
+        
+        if (acc.a > 0.0) {
+            float n = acc.a;
+            float meanLum = dot(acc.rgb, float3(0.2126, 0.7152, 0.0722)) / n;
+            float meanSq = accSq / n;
+            float var = max(0.0, meanSq - meanLum * meanLum);
+            float sem = sqrt(var / n);
+            float noise = sem / (meanLum + 0.01);
+            
+            if (noise < noiseThreshold) {
+                 g_output[launchIndex.xy] = float4(acc.rgb / n, 1.0);
+                 return;
+            }
+        }
     }
 
     RNG rng = init_rng(launchIndex.xy, frame);
@@ -841,9 +862,19 @@ void RayGen()
 
     // DLSS-RR should receive per-frame (non-accumulated) input.
     // CPU sets accumulationCount=0 when RR is enabled.
+    
+    float lum = dot(finalColor, float3(0.2126, 0.7152, 0.0722));
+    float lumSq = lum * lum;
+
     if (accumFrame == 0) {
         g_accumulation[launchIndex.xy] = float4(finalColor, 1.0);
-        g_output[launchIndex.xy] = float4(finalColor, 1.0);
+        g_variance[launchIndex.xy] = lumSq;
+        
+        if (debugVisualizationMode == 1.0) {
+            g_output[launchIndex.xy] = float4(1, 0, 0, 1); // High noise indicator
+        } else {
+            g_output[launchIndex.xy] = float4(finalColor, 1.0);
+        }
     } else {
         float4 prev_accum = g_accumulation[launchIndex.xy];
         float3 total_accum_color = prev_accum.rgb + finalColor;
@@ -851,9 +882,27 @@ void RayGen()
         
         g_accumulation[launchIndex.xy] = float4(total_accum_color, total_samples);
         
+        float prev_varsum = g_variance[launchIndex.xy];
+        float total_varsum = prev_varsum + lumSq;
+        g_variance[launchIndex.xy] = total_varsum;
+        
         float3 result = total_accum_color / total_samples;
 
-        g_output[launchIndex.xy] = float4(result, 1.0);
+        if (debugVisualizationMode == 1.0) {
+             float meanLum = dot(result, float3(0.2126, 0.7152, 0.0722));
+             float meanSq = total_varsum / total_samples;
+             float var = max(0.0, meanSq - meanLum * meanLum);
+             // Standard Error of Mean
+             float sem = sqrt(var / total_samples);
+             // Coefficient of Variation
+             float noise = sem / (meanLum + 0.01); 
+             
+             // Visualize: 0% = Black, 10% = White
+             float vis = saturate(noise * 10.0);
+             g_output[launchIndex.xy] = float4(vis, vis, vis, 1.0);
+        } else {
+            g_output[launchIndex.xy] = float4(result, 1.0);
+        }
     }
 }
 

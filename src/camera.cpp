@@ -28,7 +28,21 @@ CameraCB g_initialCameraData = {
     0.0f,                         // _pad3
     {0.707f, 0.707f, 0.0f, 0.0f}, // lightDir (45 deg)
     {1.0f, 0.95f, 0.8f, 2.5f},    // lightColor
-    {0.2f, 0.3f, 0.4f, 0.15f}     // ambientColor
+    {0.2f, 0.3f, 0.4f, 0.15f},    // ambientColor
+    {0.0f, 0.0f, 0.0f},           // prevPos
+    0.0f,                         // prevValid
+    {0.0f, 0.0f, 0.0f},           // prevForward
+    0.0f,                         // dlssEnabled
+    {0.0f, 0.0f, 0.0f},           // prevUp
+    0.0f,                         // dlssRayReconstruction
+    0.0f,                         // prevFov
+    0.0f,                         // prevAspect
+    0.0f,                         // prevNearZ
+    0.0f,                         // prevFarZ
+    0.05f,                        // noiseThreshold (5%)
+    0.0f,                         // useAdaptiveSampling
+    0.0f,                         // debugVisualizationMode
+    0.0f                          // _padNew
 };
 CameraCB g_cameraData = g_initialCameraData;
 ComPtr<ID3D12Resource> g_cameraConstantBuffer;

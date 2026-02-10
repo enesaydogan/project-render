@@ -78,6 +78,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandList, ID3D12CommandAllocator 
                  UINT textureDescriptorCount,
                  const std::vector<Asset::GpuMesh> &meshes,
                  ID3D12Resource *meshDataSB = nullptr);
+
+// Returns the last calculated average noise level (0.0 - 1.0+)
+float GetCurrentNoiseLevel();
 } // namespace DxrRenderer
 
 extern bool g_rayTracingSupported;
