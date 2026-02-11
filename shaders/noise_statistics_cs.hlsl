@@ -50,11 +50,12 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 // Avoid divide by zero
                 float noise = sem / (meanLum + 0.001);
                 
-                totalNoise += noise;
+                // Aggregate as Root Mean Square (RMS) to penalize outliers/noisy patches heavily
+                totalNoise += noise * noise;
                 count += 1.0;
             }
         }
     }
     
-    g_output[0] = count > 0.0 ? (totalNoise / count) : 0.0;
+    g_output[0] = count > 0.0 ? sqrt(totalNoise / count) : 0.0;
 }
