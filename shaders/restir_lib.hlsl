@@ -67,7 +67,7 @@ void finalize_reservoir(inout Reservoir r, float p_target)
     
     // Sanity check and hard cap to prevent over-exposure feedback loops
     if (isinf(r.W) || isnan(r.W) || r.W < 0.0) r.W = 0.0;
-    r.W = min(r.W, 100.0); // reduced from 1000.0 for better stability
+    r.W = min(r.W, 50.0); // reduced from 100.0
 }
 
 // ReSTIR GI Reservoir
@@ -93,32 +93,32 @@ GI_Reservoir init_gi_reservoir()
 
 bool update_gi_reservoir(inout GI_Reservoir r, float3 hitPos, float3 radiance, float weight, inout RNG rng)
 {
-    // Clamp extreme weights
-    weight = clamp(weight, 0.0, 1e10);
-    
-    float new_w_sum = r.w_sum + weight;
-    r.M++;
+    // Clamp extreme weights to prevent fireflies from dominating local neighborhoods
+    weight = clamp(weight, 0.0, 1e7);
     
     if (isnan(weight) || isinf(weight)) return false;
 
+    float new_w_sum = r.w_sum + weight;
+    r.M++;
+    
     bool selected = (next_float(rng) * new_w_sum < weight);
     if (selected) {
         r.hitPos = hitPos;
         r.radiance = radiance;
     }
     r.w_sum = new_w_sum;
-    if (isinf(r.w_sum)) r.w_sum = 1e20;
+    if (isinf(r.w_sum)) r.w_sum = 1e15;
     
     return selected;
 }
 
 void combine_gi_reservoirs(inout GI_Reservoir r, const GI_Reservoir r_other, float p_target, inout RNG rng)
 {
-    if (r_other.M == 0) return;
+    if (r_other.M == 0 || isnan(p_target) || isinf(p_target)) return;
     uint M_orig = r.M;
     float weight = p_target * r_other.W * (float)r_other.M;
     update_gi_reservoir(r, r_other.hitPos, r_other.radiance, weight, rng);
-    r.M = min(M_orig + r_other.M, 500); // Cap M to prevent overflow and over-weighting
+    r.M = min(M_orig + r_other.M, 60); // Reduced from 500 for better responsiveness to lighting changes
 }
 
 void finalize_gi_reservoir(inout GI_Reservoir r, float p_target)
@@ -129,7 +129,7 @@ void finalize_gi_reservoir(inout GI_Reservoir r, float p_target)
         r.W = 0.0;
     }
     if (isinf(r.W) || isnan(r.W) || r.W < 0.0) r.W = 0.0;
-    r.W = min(r.W, 100.0); // reduced from 1000.0
+    r.W = min(r.W, 50.0); // reduced from 100.0 for better stability in Archviz
 }
 
 #endif // RESTIR_LIB_HLSL

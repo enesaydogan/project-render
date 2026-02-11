@@ -9,7 +9,7 @@ float D_GGX(float NdotH, float roughness) {
     float a = roughness * roughness;
     float a2 = a * a;
     float d = (NdotH * a2 - NdotH) * NdotH + 1.0;
-    return a2 / (PI * d * d);
+    return a2 / (PI * d * d + 1e-7); // Safety epsilon
 }
 
 // Smith Geometry Function (Height-Correlated)
@@ -17,15 +17,14 @@ float V_SmithCorrelated(float NdotV, float NdotL, float roughness) {
     float a2 = roughness * roughness;
     float GGXV = NdotL * sqrt(max(0.0, a2 + (1.0 - a2) * (NdotV * NdotV)));
     float GGXL = NdotV * sqrt(max(0.0, a2 + (1.0 - a2) * (NdotL * NdotL)));
-    return 0.5 / (GGXV + GGXL + 0.001);
+    return 0.5 / (GGXV + GGXL + 1e-5);
 }
 
 float G_Smith(float NdotV, float NdotL, float roughness) {
     // Legacy separable Smith for reference or fallback
-    float k = (roughness + 1.0);
-    k = (k * k) / 8.0;
-    float g1 = NdotV / (NdotV * (1.0 - k) + k);
-    float g2 = NdotL / (NdotL * (1.0 - k) + k);
+    float k = (roughness * roughness) / 2.0; // Archviz optimization
+    float g1 = NdotV / (NdotV * (1.0 - k) + k + 1e-5);
+    float g2 = NdotL / (NdotL * (1.0 - k) + k + 1e-5);
     return g1 * g2;
 }
 

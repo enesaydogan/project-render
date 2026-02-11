@@ -205,7 +205,7 @@ void RayGen()
             primaryPos = payload.position;
             primaryNormal = payload.normal;
             primaryAlbedo = payload.albedo;
-            primaryRoughness = max(0.001, payload.roughness);
+            primaryRoughness = max(0.04, payload.roughness); // Increased min roughness for archviz stability
             
             // For DLSS-RR, use the distance along the center ray to avoid depth jitter
             // but use the actual hit position for coordinates.
@@ -353,27 +353,33 @@ void RayGen()
             // C. Spatial Resampling (Neighbor Pixels)
             if (frame > 0) {
                 for (int i = 0; i < 2; ++i) {
-                    int2 offset = int2((next_float(rng) - 0.5) * 20.0, (next_float(rng) - 0.5) * 20.0);
+                    // Reduced radius (12.0) and better distribution to prevent blocky artifacts
+                    float2 unitSample = float2(next_float(rng), next_float(rng)) * 2.0 - 1.0;
+                    int2 offset = int2(unitSample * 12.0);
                     int2 neighborCoords = clamp(int2(launchIndex.xy) + offset, int2(0,0), int2(launchDim.xy)-1);
                     
                     float4 neighbor_data;
                     if (flip) neighbor_data = g_reservoir0[neighborCoords];
                     else      neighbor_data = g_reservoir1[neighborCoords];
                     Reservoir neighbor_res = unpack_reservoir(neighbor_data);
-                    neighbor_res.M = min(neighbor_res.M, 30); // Cap neighbor contribution
+                    
+                    // Cap neighbor contribution based on M and distance to avoid over-weighting fireflies
+                    neighbor_res.M = min(neighbor_res.M, 20); 
                     
                     // Re-evaluate neighbor light candidate at current shading point
                     float3 L_neigh;
                     float3 radiance_neigh;
+                    float dist_neigh = 1.0;
                     if (neighbor_res.lightIndex == 0xFFFFFFFF) {
                         L_neigh = normalize(lightDir.xyz);
+                        dist_neigh = 1000.0;
                         radiance_neigh = lightColor.rgb * lightColor.w;
                     } else if (neighbor_res.lightIndex < numLights) {
                         Light l = g_lights[neighbor_res.lightIndex];
                         L_neigh = l.position - P;
-                        float dist = length(L_neigh);
-                        L_neigh /= dist;
-                        radiance_neigh = l.color * (l.intensity / (dist * dist + 1.0));
+                        dist_neigh = length(L_neigh);
+                        L_neigh /= dist_neigh;
+                        radiance_neigh = l.color * (l.intensity / (dist_neigh * dist_neigh + 1.0));
                     } else {
                         radiance_neigh = float3(0,0,0);
                     }
@@ -385,6 +391,16 @@ void RayGen()
                     float3 brdf_neigh = (payload.albedo / PI) * (1.0 - metallic) + spec;
 
                     float p_target_at_curr = calculate_p_target(radiance_neigh, payload.albedo, brdf_neigh, NdotL_neigh);
+                    
+                    // Simple Visibility check for spatial reuse significantly reduces block artifacts
+                    if (p_target_at_curr > 0.0) {
+                        RayDesc spatialRay; spatialRay.Origin = P + N * 0.001; spatialRay.Direction = L_neigh;
+                        spatialRay.TMin = 0.001; spatialRay.TMax = dist_neigh - 0.002;
+                        RayPayload spatialPayload; spatialPayload.t = 1.0;
+                        TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, spatialRay, spatialPayload);
+                        if (spatialPayload.t > 0.0) p_target_at_curr = 0.0; // Occluded
+                    }
+
                     combine_reservoirs(res, neighbor_res, p_target_at_curr, rng);
                 }
             }
@@ -502,7 +518,8 @@ void RayGen()
             // C. Spatial Resampling
             if (frame > 0) {
                 for (int i = 0; i < 2; ++i) {
-                    int2 offset = int2((next_float(rng) - 0.5) * 30.0, (next_float(rng) - 0.5) * 30.0);
+                    float2 unitSample = float2(next_float(rng), next_float(rng)) * 2.0 - 1.0;
+                    int2 offset = int2(unitSample * 16.0);
                     int2 neighborCoords = clamp(int2(launchIndex.xy) + offset, int2(0,0), int2(launchDim.xy)-1);
                     float4 d0, d1, d2;
                     if (flip) { d0 = g_gi_reservoir_b0[neighborCoords]; d1 = g_gi_reservoir_b1[neighborCoords]; d2 = g_gi_reservoir_b2[neighborCoords]; }
@@ -515,6 +532,16 @@ void RayGen()
                     float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * G_Smith(max(0.0, dot(N, V)), saturate(dot(N, L_gi)), roughness) * F_Schlick(max(0.0, dot(H, V)), F0) / (4.0 * max(0.0, dot(N, V)) * saturate(dot(N, L_gi)) + 0.001);
                     float3 brdf = (payload.albedo / PI) * (1.0 - metallic) + spec;
                     float p_target_at_curr = length(neigh_gi.radiance * brdf * saturate(dot(N, L_gi)));
+                    
+                    // Spatial Jacobian / Visibility for GI
+                    if (p_target_at_curr > 0.0) {
+                        RayDesc spatialRay; spatialRay.Origin = P + N * 0.001; spatialRay.Direction = L_gi;
+                        spatialRay.TMin = 0.001; spatialRay.TMax = distance(neigh_gi.hitPos, P) - 0.002;
+                        RayPayload spatialPayload; spatialPayload.t = 1.0;
+                        TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, spatialRay, spatialPayload);
+                        if (spatialPayload.t > 0.0) p_target_at_curr = 0.0;
+                    }
+
                     combine_gi_reservoirs(gi_res, neigh_gi, p_target_at_curr, rng);
                 }
             }
@@ -724,8 +751,7 @@ void RayGen()
     // Safety check on final result - check all components
     if (any(isnan(accumulatedColor)) || any(isinf(accumulatedColor))) accumulatedColor = float3(0,0,0);
 
-
-    float3 finalColor = accumulatedColor * intensity;
+    float3 finalColor = min(accumulatedColor * intensity, 2000.0); // HDR Stability clamp
 
     // Write DLSS inputs
     static const float2 kInvalidMvec = float2(-1e6, -1e6);
