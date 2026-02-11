@@ -2705,6 +2705,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           bool adaptive = g_cameraData.useAdaptiveSampling > 0.5f;
           if (ImGui::Checkbox("Enable Adaptive Sampling", &adaptive)) {
             g_cameraData.useAdaptiveSampling = adaptive ? 1.0f : 0.0f;
+            // Ensure threshold is valid when enabling
+            if (g_cameraData.noiseThreshold <= 0.0f) {
+                g_cameraData.noiseThreshold = 0.05f; // Default 5%
+            }
             UpdateCameraCB();
             uiChanged = true;
           }
