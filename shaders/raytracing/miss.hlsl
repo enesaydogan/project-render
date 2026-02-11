@@ -26,6 +26,8 @@ void Miss(inout RayPayload payload)
     }
 
     // --- Volumetric Clouds ---
+    // March clouds for primary and indirect reflection/refraction rays (rayDepth < 1)
+    // but skip for shadow rays (which usually have higher depth or specific flags) to save performance and reduce noise.
     if (payload.rayDepth <= 1) {
         float tMin = 0.0;
         float tMax = 50000.0; // Far

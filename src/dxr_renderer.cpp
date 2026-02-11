@@ -1853,15 +1853,21 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
     s_accumulation.Clear(dxrList.Get(), s_accumUAVGpu, accumCpu, s_varianceUAVGpu, varCpu);
     
     // Also clear reservoir buffers to prevent artifacts from stale data
-    float clearValue[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    // Important: lightIndex should be cleared to 0xFFFFFFFF (invalid) 
+    uint32_t clearUint[4] = { 0xFFFFFFFF, 0, 0, 0 };
+    float clearRes[4];
+    memcpy(clearRes, clearUint, sizeof(clearUint));
+
     for (int i = 0; i < 2; ++i) {
       if (s_reservoirBuffers[i]) {
         D3D12_CPU_DESCRIPTOR_HANDLE resCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
         resCpu.ptr += (SIZE_T)(i == 0 ? DXR_HEAP_RESERVOIR_0_OFFSET : DXR_HEAP_RESERVOIR_1_OFFSET) *
                       s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        dxrList->ClearUnorderedAccessViewFloat(s_reservoirGpuHandle[i], resCpu, s_reservoirBuffers[i].Get(), clearValue, 0, nullptr);
+        dxrList->ClearUnorderedAccessViewFloat(s_reservoirGpuHandle[i], resCpu, s_reservoirBuffers[i].Get(), clearRes, 0, nullptr);
       }
     }
+    // GI reservoirs use different packing but hitPos=0 is fine for clearing
+    float clearGI[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     for (int i = 0; i < 6; ++i) {
       if (s_gi_reservoirBuffers[i]) {
         UINT offset = 0;
@@ -1875,7 +1881,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
         }
         D3D12_CPU_DESCRIPTOR_HANDLE resCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
         resCpu.ptr += (SIZE_T)offset * s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        dxrList->ClearUnorderedAccessViewFloat(s_gi_reservoirGpuHandle[i], resCpu, s_gi_reservoirBuffers[i].Get(), clearValue, 0, nullptr);
+        dxrList->ClearUnorderedAccessViewFloat(s_gi_reservoirGpuHandle[i], resCpu, s_gi_reservoirBuffers[i].Get(), clearGI, 0, nullptr);
       }
     }
     
