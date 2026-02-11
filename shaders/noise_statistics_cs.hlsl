@@ -35,20 +35,14 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             
             if (n > 1.0) // Need at least 2 samples for variance
             {
-                float accSq = g_variance[uint2(x, y)];
-                
+                float accM2 = g_variance[uint2(x, y)];
                 float meanLum = dot(acc.rgb, float3(0.2126, 0.7152, 0.0722)) / n;
-                float meanSq = accSq / n;
                 
-                // Variance = E[x^2] - (E[x])^2
-                float var = max(0.0, meanSq - meanLum * meanLum);
-                
-                // Standard Error of Mean = sqrt(Var / N)
-                float sem = sqrt(var / n);
+                // Standard Error of Mean: SEM = sqrt(M2) / N
+                float sem = sqrt(max(0.0, accM2)) / n;
                 
                 // Coefficient of Variation (Noise) = SEM / Mean
-                // Avoid divide by zero
-                float noise = sem / (meanLum + 0.001);
+                float noise = sem / (max(0.01, meanLum) + 0.001);
                 
                 // Aggregate as Root Mean Square (RMS) to penalize outliers/noisy patches heavily
                 totalNoise += noise * noise;

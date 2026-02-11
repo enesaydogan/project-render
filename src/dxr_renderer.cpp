@@ -1637,10 +1637,13 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
   const UINT maxSpp = (g_cameraData.maxSPP > 0.0f) ? (UINT)g_cameraData.maxSPP : 0u;
   const UINT currSpp = rrActive ? s_rrStillFrameSpp : s_accumulation.GetFrameCount();
 
-  // Adaptive Sampling Convergence Check
+  // Adaptive Sampling Global Stop
+  // We disable the global stop if per-pixel adaptive sampling is active, 
+  // to ensure every pixel gets cleaned to the target threshold.
   bool isConverged = false;
   if (g_cameraData.useAdaptiveSampling > 0.5f && s_lastNoiseLevel > 0.0f) {
-      if (s_lastNoiseLevel < g_cameraData.noiseThreshold) {
+      // Global stop only if we're well below the threshold or not using per-pixel exit
+      if (s_lastNoiseLevel < (g_cameraData.noiseThreshold * 0.5f)) {
           isConverged = true;
       }
   }
