@@ -101,18 +101,18 @@ void RayGen()
     }
 
     // Adaptive Sampling Early Exit
-    if (accumFrame > 128 && useAdaptiveSampling > 0.5) {
+    if (accumFrame > 64 && useAdaptiveSampling > 0.5) {
         float4 acc = g_accumulation[launchIndex.xy];
-        float accSq = g_variance[launchIndex.xy];
+        float accM2 = g_variance[launchIndex.xy];
         
         if (acc.a > 1.0) {
             float n = acc.a;
             float3 meanColor = acc.rgb / n;
             float meanLum = dot(meanColor, float3(0.2126, 0.7152, 0.0722));
-            float meanSq = accSq / n;
-            float var = max(0.0, meanSq - meanLum * meanLum);
-            float sem = sqrt(var / n);
-            // Coefficient of Variation with robust denominator for dark areas
+            
+            // Welford-based Standard Error of Mean: SEM = sqrt(M2) / N
+            // (Note: var = M2/N, SEM = sqrt(var/N) = sqrt(M2/N^2) = sqrt(M2)/N)
+            float sem = sqrt(max(0.0, accM2)) / n;
             float noise = sem / (max(0.01, meanLum) + 0.001); 
             
             if (noise < noiseThreshold) {
@@ -898,11 +898,10 @@ void RayGen()
     
     float lum = dot(finalColor, float3(0.2126, 0.7152, 0.0722));
     if (isnan(lum) || isinf(lum)) lum = 0.0;
-    float lumSq = lum * lum;
 
     if (accumFrame == 0) {
         g_accumulation[launchIndex.xy] = float4(finalColor, 1.0);
-        g_variance[launchIndex.xy] = lumSq;
+        g_variance[launchIndex.xy] = 0.0; // M2 starts at 0 for N=1
         
         if (debugVisualizationMode == 1.0) {
             g_output[launchIndex.xy] = float4(1, 0, 0, 1); // High noise indicator
@@ -911,32 +910,34 @@ void RayGen()
         }
     } else {
         float4 prev_accum = g_accumulation[launchIndex.xy];
-        float3 total_accum_color = prev_accum.rgb + finalColor;
-        float total_samples = prev_accum.a + 1.0;
+        float n = prev_accum.a;
+        float3 oldSum = prev_accum.rgb;
+        float oldMeanLum = dot(oldSum / n, float3(0.2126, 0.7152, 0.0722));
         
-        g_accumulation[launchIndex.xy] = float4(total_accum_color, total_samples);
+        float next_n = n + 1.0;
+        float3 nextSum = oldSum + finalColor;
+        float3 nextMean = nextSum / next_n;
+        float nextMeanLum = dot(nextMean, float3(0.2126, 0.7152, 0.0722));
         
-        float prev_varsum = g_variance[launchIndex.xy];
-        float total_varsum = prev_varsum + lumSq;
-        g_variance[launchIndex.xy] = total_varsum;
+        // Welford's Online Variance: M2_n = M2_{n-1} + (x - mu_{n-1})(x - mu_n)
+        float prev_M2 = g_variance[launchIndex.xy];
+        float next_M2 = max(0.0, prev_M2 + (lum - oldMeanLum) * (lum - nextMeanLum));
         
-        float3 result = total_accum_color / total_samples;
-
+        g_accumulation[launchIndex.xy] = float4(nextSum, next_n);
+        g_variance[launchIndex.xy] = next_M2;
+        
         if (debugVisualizationMode == 1.0) {
-             float meanLum = dot(result, float3(0.2126, 0.7152, 0.0722));
-             float meanSq = total_varsum / total_samples;
-             float var = max(0.0, meanSq - meanLum * meanLum);
-             // Standard Error of Mean
-             float sem = sqrt(var / total_samples);
+             // Standard Error of Mean: SEM = sqrt(M2) / N
+             float sem = sqrt(next_M2) / next_n;
              // Coefficient of Variation
-             float noise = sem / (meanLum + 0.01); 
+             float noise = sem / (max(0.01, nextMeanLum) + 0.001); 
              
              // Visualize: 0% = Black, 20% = White (Scaled 5x)
              float vis = saturate(noise * 5.0);
              // Active (Noisy) pixels in Red-ish/Gray to contrast with Green converged pixels
              g_output[launchIndex.xy] = float4(vis, vis * 0.5, vis * 0.5, 1.0);
         } else {
-            g_output[launchIndex.xy] = float4(result, 1.0);
+            g_output[launchIndex.xy] = float4(nextMean, 1.0);
         }
     }
 }
