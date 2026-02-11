@@ -13,7 +13,9 @@ public:
     void Resize(UINT width, UINT height);
     void Reset();
     void IncrementFrame();
-    void Clear(ID3D12GraphicsCommandList4* commandList);
+    void Clear(ID3D12GraphicsCommandList4* commandList, 
+               D3D12_GPU_DESCRIPTOR_HANDLE accumGpu, D3D12_CPU_DESCRIPTOR_HANDLE accumCpu,
+               D3D12_GPU_DESCRIPTOR_HANDLE varGpu, D3D12_CPU_DESCRIPTOR_HANDLE varCpu);
 
     UINT GetFrameCount() const { return m_frameCount; }
     ID3D12Resource* GetAccumulationBuffer() const { return m_accumulationBuffer.Get(); }
