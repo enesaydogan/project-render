@@ -104,12 +104,14 @@ void DxrAccumulation::CreateResources(UINT width, UINT height) {
     m_needsClear = true;
 }
 
-void DxrAccumulation::Clear(ID3D12GraphicsCommandList4* commandList) {
+void DxrAccumulation::Clear(ID3D12GraphicsCommandList4* commandList, 
+                           D3D12_GPU_DESCRIPTOR_HANDLE accumGpu, D3D12_CPU_DESCRIPTOR_HANDLE accumCpu,
+                           D3D12_GPU_DESCRIPTOR_HANDLE varGpu, D3D12_CPU_DESCRIPTOR_HANDLE varCpu) {
     if (m_accumulationBuffer) {
         float clearValue[4] = {0.0f, 0.0f, 0.0f, 0.0f};
         commandList->ClearUnorderedAccessViewFloat(
-            m_accumulationUAVGpu,
-            m_uavHeap->GetCPUDescriptorHandleForHeapStart(),
+            accumGpu,
+            accumCpu,
             m_accumulationBuffer.Get(),
             clearValue,
             0,
@@ -117,10 +119,8 @@ void DxrAccumulation::Clear(ID3D12GraphicsCommandList4* commandList) {
         );
         
         // Clear Variance
-        D3D12_CPU_DESCRIPTOR_HANDLE varCpu = m_uavHeap->GetCPUDescriptorHandleForHeapStart();
-        varCpu.ptr += m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         commandList->ClearUnorderedAccessViewFloat(
-            m_varianceUAVGpu,
+            varGpu,
             varCpu,
             m_varianceBuffer.Get(),
             clearValue,

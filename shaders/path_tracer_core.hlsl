@@ -105,20 +105,21 @@ void RayGen()
         float4 acc = g_accumulation[launchIndex.xy];
         float accSq = g_variance[launchIndex.xy];
         
-        if (acc.a > 0.0) {
+        if (acc.a > 1.0) {
             float n = acc.a;
-            float meanLum = dot(acc.rgb, float3(0.2126, 0.7152, 0.0722)) / n;
+            float3 meanColor = acc.rgb / n;
+            float meanLum = dot(meanColor, float3(0.2126, 0.7152, 0.0722));
             float meanSq = accSq / n;
             float var = max(0.0, meanSq - meanLum * meanLum);
             float sem = sqrt(var / n);
-            float noise = sem / (meanLum + 0.01);
+            float noise = sem / (meanLum + 0.001); // Smaller epsilon for better dark area handling
             
             if (noise < noiseThreshold) {
                  if (debugVisualizationMode == 1.0) {
                      // Debug: Show Converged pixels as Green
                      g_output[launchIndex.xy] = float4(0.0, 1.0, 0.0, 1.0);
                  } else {
-                     g_output[launchIndex.xy] = float4(acc.rgb / n, 1.0);
+                     g_output[launchIndex.xy] = float4(meanColor, 1.0);
                  }
                  return;
             }
@@ -869,6 +870,7 @@ void RayGen()
     // CPU sets accumulationCount=0 when RR is enabled.
     
     float lum = dot(finalColor, float3(0.2126, 0.7152, 0.0722));
+    if (isnan(lum) || isinf(lum)) lum = 0.0;
     float lumSq = lum * lum;
 
     if (accumFrame == 0) {

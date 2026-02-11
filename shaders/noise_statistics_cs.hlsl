@@ -23,8 +23,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     float totalNoise = 0.0;
     float count = 0.0;
     
-    // Stride to sample ~1/64th of the image for performance
-    const uint stride = 8;
+    // Stride to sample ~1/16th of the image for better accuracy
+    const uint stride = 4;
     
     for (uint y = 0; y < height; y += stride)
     {

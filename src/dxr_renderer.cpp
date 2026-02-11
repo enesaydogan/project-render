@@ -1845,7 +1845,12 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
 
   // Clear accumulation buffer if needed
   if (s_accumulation.NeedsClear()) {
-    s_accumulation.Clear(dxrList.Get());
+    D3D12_CPU_DESCRIPTOR_HANDLE accumCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+    accumCpu.ptr += (SIZE_T)DXR_HEAP_ACCUM_UAV_OFFSET * s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_CPU_DESCRIPTOR_HANDLE varCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+    varCpu.ptr += (SIZE_T)DXR_HEAP_VARIANCE_UAV_OFFSET * s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    s_accumulation.Clear(dxrList.Get(), s_accumUAVGpu, accumCpu, s_varianceUAVGpu, varCpu);
     
     // Also clear reservoir buffers to prevent artifacts from stale data
     float clearValue[4] = {0.0f, 0.0f, 0.0f, 0.0f};

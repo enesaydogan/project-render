@@ -59,15 +59,15 @@ void combine_reservoirs(inout Reservoir r, const Reservoir r_other, float p_targ
 // Finalize the reservoir weight
 void finalize_reservoir(inout Reservoir r, float p_target)
 {
-    if (p_target > 0.0) {
+    if (p_target > 0.0 && r.M > 0) {
         r.W = r.w_sum / ((float)r.M * p_target);
     } else {
         r.W = 0.0;
     }
     
     // Sanity check and hard cap to prevent over-exposure feedback loops
-    if (isinf(r.W) || isnan(r.W)) r.W = 0.0;
-    r.W = min(r.W, 1000.0); // Hard cap on light contribution multiplier
+    if (isinf(r.W) || isnan(r.W) || r.W < 0.0) r.W = 0.0;
+    r.W = min(r.W, 100.0); // reduced from 1000.0 for better stability
 }
 
 // ReSTIR GI Reservoir
@@ -93,6 +93,9 @@ GI_Reservoir init_gi_reservoir()
 
 bool update_gi_reservoir(inout GI_Reservoir r, float3 hitPos, float3 radiance, float weight, inout RNG rng)
 {
+    // Clamp extreme weights
+    weight = clamp(weight, 0.0, 1e10);
+    
     float new_w_sum = r.w_sum + weight;
     r.M++;
     
@@ -111,21 +114,22 @@ bool update_gi_reservoir(inout GI_Reservoir r, float3 hitPos, float3 radiance, f
 
 void combine_gi_reservoirs(inout GI_Reservoir r, const GI_Reservoir r_other, float p_target, inout RNG rng)
 {
+    if (r_other.M == 0) return;
     uint M_orig = r.M;
     float weight = p_target * r_other.W * (float)r_other.M;
     update_gi_reservoir(r, r_other.hitPos, r_other.radiance, weight, rng);
-    r.M = M_orig + r_other.M;
+    r.M = min(M_orig + r_other.M, 500); // Cap M to prevent overflow and over-weighting
 }
 
 void finalize_gi_reservoir(inout GI_Reservoir r, float p_target)
 {
-    if (p_target > 0.0) {
+    if (p_target > 0.0 && r.M > 0) {
         r.W = r.w_sum / ((float)r.M * p_target);
     } else {
         r.W = 0.0;
     }
-    if (isinf(r.W) || isnan(r.W)) r.W = 0.0;
-    r.W = min(r.W, 1000.0);
+    if (isinf(r.W) || isnan(r.W) || r.W < 0.0) r.W = 0.0;
+    r.W = min(r.W, 100.0); // reduced from 1000.0
 }
 
 #endif // RESTIR_LIB_HLSL
