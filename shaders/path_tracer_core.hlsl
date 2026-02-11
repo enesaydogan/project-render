@@ -101,7 +101,7 @@ void RayGen()
     }
 
     // Adaptive Sampling Early Exit
-    if (accumFrame > 32 && useAdaptiveSampling > 0.5) {
+    if (accumFrame > 128 && useAdaptiveSampling > 0.5) {
         float4 acc = g_accumulation[launchIndex.xy];
         float accSq = g_variance[launchIndex.xy];
         
@@ -112,7 +112,8 @@ void RayGen()
             float meanSq = accSq / n;
             float var = max(0.0, meanSq - meanLum * meanLum);
             float sem = sqrt(var / n);
-            float noise = sem / (meanLum + 0.001); // Smaller epsilon for better dark area handling
+            // Coefficient of Variation with robust denominator for dark areas
+            float noise = sem / (max(0.01, meanLum) + 0.001); 
             
             if (noise < noiseThreshold) {
                  if (debugVisualizationMode == 1.0) {
@@ -353,9 +354,10 @@ void RayGen()
             // C. Spatial Resampling (Neighbor Pixels)
             if (frame > 0) {
                 for (int i = 0; i < 2; ++i) {
-                    // Reduced radius (12.0) and better distribution to prevent blocky artifacts
-                    float2 unitSample = float2(next_float(rng), next_float(rng)) * 2.0 - 1.0;
-                    int2 offset = int2(unitSample * 12.0);
+                    // Use a disk distribution for better sampling coverage and to avoid banding
+                    float angle = next_float(rng) * 2.0 * PI;
+                    float radius = sqrt(next_float(rng)) * 16.0; // Slightly larger 16px radius
+                    int2 offset = int2(cos(angle) * radius, sin(angle) * radius);
                     int2 neighborCoords = clamp(int2(launchIndex.xy) + offset, int2(0,0), int2(launchDim.xy)-1);
                     
                     float4 neighbor_data;
@@ -363,8 +365,8 @@ void RayGen()
                     else      neighbor_data = g_reservoir1[neighborCoords];
                     Reservoir neighbor_res = unpack_reservoir(neighbor_data);
                     
-                    // Cap neighbor contribution based on M and distance to avoid over-weighting fireflies
-                    neighbor_res.M = min(neighbor_res.M, 20); 
+                    // Cap neighbor contribution to prevent fireflies from dominating
+                    neighbor_res.M = min(neighbor_res.M, 15); 
                     
                     // Re-evaluate neighbor light candidate at current shading point
                     float3 L_neigh;
@@ -747,11 +749,10 @@ void RayGen()
         }
     }
 
-    // Safety check on final result
-    // Safety check on final result - check all components
+    // Final result with aggressive firefly suppression for Archviz
     if (any(isnan(accumulatedColor)) || any(isinf(accumulatedColor))) accumulatedColor = float3(0,0,0);
 
-    float3 finalColor = min(accumulatedColor * intensity, 2000.0); // HDR Stability clamp
+    float3 finalColor = min(accumulatedColor * intensity, 1000.0); // More aggressive clamp to prevent blowout
 
     // Write DLSS inputs
     static const float2 kInvalidMvec = float2(-1e6, -1e6);

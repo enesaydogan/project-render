@@ -67,7 +67,7 @@ void finalize_reservoir(inout Reservoir r, float p_target)
     
     // Sanity check and hard cap to prevent over-exposure feedback loops
     if (isinf(r.W) || isnan(r.W) || r.W < 0.0) r.W = 0.0;
-    r.W = min(r.W, 50.0); // reduced from 100.0
+    r.W = min(r.W, 15.0); // Reduced to 15.0 for interior archviz stability
 }
 
 // ReSTIR GI Reservoir
