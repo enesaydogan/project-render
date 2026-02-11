@@ -78,7 +78,7 @@ static D3D12_GPU_DESCRIPTOR_HANDLE s_outputUAVGpu;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_accumUAVGpu;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_varianceUAVGpu;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_reservoirGpuHandle[2];
-static D3D12_GPU_DESCRIPTOR_HANDLE s_gi_reservoirGpuHandle[2];
+static D3D12_GPU_DESCRIPTOR_HANDLE s_gi_reservoirGpuHandle[6];
 static D3D12_GPU_DESCRIPTOR_HANDLE s_iblGpuHandle;
 
 // Descriptor counts (tweak to support large models)
@@ -541,7 +541,15 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     s_gi_reservoirGpuHandle[0].ptr =
         gpuStart.ptr + (UINT64)DXR_HEAP_GI_RESERVOIR_0_OFFSET_A * descSize;
     s_gi_reservoirGpuHandle[1].ptr =
+        gpuStart.ptr + (UINT64)DXR_HEAP_GI_RESERVOIR_0_OFFSET_B * descSize;
+    s_gi_reservoirGpuHandle[2].ptr =
+        gpuStart.ptr + (UINT64)DXR_HEAP_GI_RESERVOIR_0_OFFSET_C * descSize;
+    s_gi_reservoirGpuHandle[3].ptr =
         gpuStart.ptr + (UINT64)DXR_HEAP_GI_RESERVOIR_1_OFFSET_A * descSize;
+    s_gi_reservoirGpuHandle[4].ptr =
+        gpuStart.ptr + (UINT64)DXR_HEAP_GI_RESERVOIR_1_OFFSET_B * descSize;
+    s_gi_reservoirGpuHandle[5].ptr =
+        gpuStart.ptr + (UINT64)DXR_HEAP_GI_RESERVOIR_1_OFFSET_C * descSize;
     s_iblGpuHandle.ptr = gpuStart.ptr + (UINT64)DXR_HEAP_IBL_OFFSET * descSize;
   }
 
@@ -1643,43 +1651,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
   bool canAutoDenoise = isOidnMode && reachedEndCondition && !s_hasDenoised;
   bool doDenoise = canAutoDenoise;
 
-  // FREEZE LOGIC:
-  // If we reached max SPP (or converged) and we are NOT trying to run a denoise pass this frame,
-  // then we freeze (copy last valid frame).
-  if (reachedEndCondition && !doDenoise) {
-    ID3D12Resource *freezeSrc = nullptr;
-    if (s_hasDenoised && s_tonemapOutputUAV) {
-      freezeSrc = s_tonemapOutputUAV.Get();
-    } else if (s_tonemapOutputUAV) {
-      freezeSrc = s_tonemapOutputUAV.Get();
-    } else {
-      // If tonemap output isn't available (e.g., swapchain is HDR), fall back to
-      // copying the main output directly if formats match.
-      const DXGI_FORMAT dstFmt = renderTarget->GetDesc().Format;
-      if (s_outputUAV && s_outputUAV->GetDesc().Format == dstFmt) {
-        freezeSrc = s_outputUAV.Get();
-      }
-    }
-
-    if (freezeSrc) {
-      TransitionResource(dxrList.Get(), freezeSrc,
-                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                         D3D12_RESOURCE_STATE_COPY_SOURCE);
-    TransitionResource(dxrList.Get(), renderTarget, D3D12_RESOURCE_STATE_PRESENT,
-                       D3D12_RESOURCE_STATE_COPY_DEST);
-      dxrList->CopyResource(renderTarget, freezeSrc);
-
-      s_hasTonemappedFrame = true;
-    TransitionResource(dxrList.Get(), renderTarget,
-                       D3D12_RESOURCE_STATE_COPY_DEST,
-                       D3D12_RESOURCE_STATE_RENDER_TARGET);
-      TransitionResource(dxrList.Get(), freezeSrc,
-                         D3D12_RESOURCE_STATE_COPY_SOURCE,
-                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    commandListBase->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
-    return true;
-    }
-  }
+  // Flag to freeze after tonemapping instead of early return
+  bool shouldFreezeAfterTonemap = reachedEndCondition && !doDenoise;
 
   // Set pipeline and root signature
   dxrList->SetPipelineState1(s_rtStateObject.Get());
@@ -1873,6 +1846,34 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
   // Clear accumulation buffer if needed
   if (s_accumulation.NeedsClear()) {
     s_accumulation.Clear(dxrList.Get());
+    
+    // Also clear reservoir buffers to prevent artifacts from stale data
+    float clearValue[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    for (int i = 0; i < 2; ++i) {
+      if (s_reservoirBuffers[i]) {
+        D3D12_CPU_DESCRIPTOR_HANDLE resCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+        resCpu.ptr += (SIZE_T)(i == 0 ? DXR_HEAP_RESERVOIR_0_OFFSET : DXR_HEAP_RESERVOIR_1_OFFSET) *
+                      s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        dxrList->ClearUnorderedAccessViewFloat(s_reservoirGpuHandle[i], resCpu, s_reservoirBuffers[i].Get(), clearValue, 0, nullptr);
+      }
+    }
+    for (int i = 0; i < 6; ++i) {
+      if (s_gi_reservoirBuffers[i]) {
+        UINT offset = 0;
+        switch (i) {
+        case 0: offset = DXR_HEAP_GI_RESERVOIR_0_OFFSET_A; break;
+        case 1: offset = DXR_HEAP_GI_RESERVOIR_0_OFFSET_B; break;
+        case 2: offset = DXR_HEAP_GI_RESERVOIR_0_OFFSET_C; break;
+        case 3: offset = DXR_HEAP_GI_RESERVOIR_1_OFFSET_A; break;
+        case 4: offset = DXR_HEAP_GI_RESERVOIR_1_OFFSET_B; break;
+        case 5: offset = DXR_HEAP_GI_RESERVOIR_1_OFFSET_C; break;
+        }
+        D3D12_CPU_DESCRIPTOR_HANDLE resCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+        resCpu.ptr += (SIZE_T)offset * s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        dxrList->ClearUnorderedAccessViewFloat(s_gi_reservoirGpuHandle[i], resCpu, s_gi_reservoirBuffers[i].Get(), clearValue, 0, nullptr);
+      }
+    }
+    
     s_accumulation.SetNeedsClear(false);
   }
 
@@ -1904,10 +1905,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
     dxrList->DispatchRays(&dispatchDesc);
     // fprintf(stderr, "DxrRenderer: Dispatched Rays\n");
 
-    // Increment accumulation history only when actually used.
-    if (!rrActive)
+    // Increment accumulation history only when actually used and not at end condition.
+    if (!rrActive && !reachedEndCondition)
       s_accumulation.IncrementFrame();
-    else
+    else if (rrActive && !reachedEndCondition)
       s_rrStillFrameSpp++;
   } else {
     // We are skipping dispatch to run OIDN on the EXISTING buffer or because we are converged.
@@ -2314,6 +2315,41 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
 
     // Consider the frame presented even if tonemap is missing (debug/dev).
     s_hasTonemappedFrame = true;
+  }
+
+  // FREEZE LOGIC AFTER TONEMAPPING:
+  // If we reached max SPP (or converged) and froze, copy the newly tonemapped result to present it.
+  if (shouldFreezeAfterTonemap) {
+    ID3D12Resource *freezeSrc = nullptr;
+    if (s_hasDenoised && s_tonemapOutputUAV) {
+      freezeSrc = s_tonemapOutputUAV.Get();
+    } else if (s_tonemapOutputUAV) {
+      freezeSrc = s_tonemapOutputUAV.Get();
+    } else {
+      // If tonemap output isn't available (e.g., swapchain is HDR), fall back to
+      // copying the main output directly if formats match.
+      const DXGI_FORMAT dstFmt = renderTarget->GetDesc().Format;
+      if (s_outputUAV && s_outputUAV->GetDesc().Format == dstFmt) {
+        freezeSrc = s_outputUAV.Get();
+      }
+    }
+
+    if (freezeSrc) {
+      TransitionResource(dxrList.Get(), freezeSrc,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                         D3D12_RESOURCE_STATE_COPY_SOURCE);
+      TransitionResource(dxrList.Get(), renderTarget, D3D12_RESOURCE_STATE_PRESENT,
+                         D3D12_RESOURCE_STATE_COPY_DEST);
+      dxrList->CopyResource(renderTarget, freezeSrc);
+
+      s_hasTonemappedFrame = true;
+      TransitionResource(dxrList.Get(), renderTarget,
+                         D3D12_RESOURCE_STATE_COPY_DEST,
+                         D3D12_RESOURCE_STATE_RENDER_TARGET);
+      TransitionResource(dxrList.Get(), freezeSrc,
+                         D3D12_RESOURCE_STATE_COPY_SOURCE,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
   }
 
   // Bind RTV for subsequent ImGui draws
