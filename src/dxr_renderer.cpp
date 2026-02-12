@@ -1660,14 +1660,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
       }
       isConverged = s_noiseConvergedLatched;
   }
-  // Never freeze on convergence/maxSPP while a debug view is active.
-  if (debugViewActive) {
-      isConverged = false;
-      s_noiseConvergedLatched = false;
-  }
-
   bool isOidnMode = (s_denoiserMode != DxrRenderer::DenoiserMode::Off && !dlssActive);
-  bool reachedEndCondition = (!debugViewActive) && ((maxSpp > 0 && currSpp >= maxSpp) || isConverged);
+  bool reachedEndCondition = ((maxSpp > 0 && currSpp >= maxSpp) || isConverged);
 
   bool canAutoDenoise = isOidnMode && reachedEndCondition && !s_hasDenoised;
   bool doDenoise = canAutoDenoise;
@@ -1932,7 +1926,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
   // If we are denoising an already-completed frame (e.g. at MaxSPP),
   // we do not want to add more samples or modify the accumulation buffer.
   
-  if (!doDenoise && !isConverged) {
+  if (!doDenoise && !reachedEndCondition) {
     // fprintf(stderr, "DxrRenderer: Dispatching Rays\n");
     dxrList->DispatchRays(&dispatchDesc);
     // fprintf(stderr, "DxrRenderer: Dispatched Rays\n");
@@ -1943,8 +1937,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
     else if (rrActive && !reachedEndCondition)
       s_rrStillFrameSpp++;
   } else {
-    // We are skipping dispatch to run OIDN on the EXISTING buffer or because we are converged.
-    if (isConverged && !doDenoise && g_verboseRenderLogs) {
+    // We are skipping dispatch to run OIDN on the existing buffer or because
+    // we reached an end condition (noise/maxSPP).
+    if (reachedEndCondition && !doDenoise && g_verboseRenderLogs) {
         // Optional: Log convergence? 
         // fprintf(stderr, "DxrRenderer: Converged (Noise: %.4f < %.4f)\n", s_lastNoiseLevel, g_cameraData.noiseThreshold);
     }

@@ -124,11 +124,11 @@ void RayGen()
     const float kAdaptiveAbsSemFloor = 5e-4;
     const float kAdaptiveAbsSemScale = 0.0125;
     const float kAdaptiveEdgeAbsSemScale = 0.0075;
-    const float kAdaptiveMinKeepProb = 0.08;
-    const float kAdaptiveEdgeMinKeepProb = 0.18;
+    const float kAdaptiveMinKeepProb = 0.10;
+    const float kAdaptiveEdgeMinKeepProb = 0.22;
     const float kAdaptiveEdgeContrastThreshold = 0.02;
-    const float kAdaptiveMinExpectedRatio = 0.60;
-    const float kAdaptiveLagKeepScale = 0.85;
+    const float kAdaptiveMinExpectedRatio = 0.90;
+    const float kAdaptiveLagKeepScale = 1.00;
     const float kRestirSpatialRadiusPx = (useAdaptiveSampling > 0.5) ? 6.0 : 12.0;
     const bool debugViewActive = (debugMode > 0.0) || (debugVisualizationMode == 1.0);
 
