@@ -1637,13 +1637,15 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
   const UINT maxSpp = (g_cameraData.maxSPP > 0.0f) ? (UINT)g_cameraData.maxSPP : 0u;
   const UINT currSpp = rrActive ? s_rrStillFrameSpp : s_accumulation.GetFrameCount();
 
-  // Adaptive Sampling Global Stop
-  // We disable the global stop if per-pixel adaptive sampling is active, 
-  // to ensure every pixel gets cleaned to the target threshold.
+  // Global stop by measured noise:
+  // For adaptive mode, require a higher minimum SPP before trusting the global
+  // estimate to avoid early false convergence in interiors.
   bool isConverged = false;
-  if (g_cameraData.useAdaptiveSampling > 0.5f && s_lastNoiseLevel > 0.0f) {
-      // Global stop only if we're well below the threshold or not using per-pixel exit
-      if (s_lastNoiseLevel < (g_cameraData.noiseThreshold * 0.5f)) {
+  if (s_lastNoiseLevel > 0.0f) {
+      const bool adaptiveEnabled = (g_cameraData.useAdaptiveSampling > 0.5f);
+      const UINT minNoiseStopSpp = adaptiveEnabled ? 128u : 16u;
+      if (currSpp >= minNoiseStopSpp &&
+          s_lastNoiseLevel <= g_cameraData.noiseThreshold) {
           isConverged = true;
       }
   }
@@ -1934,6 +1936,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
 
   // Optional Streamline / DLSS evaluation
   ID3D12Resource *postColor = s_outputUAV.Get();
+  // After one-shot OIDN at end conditions, keep showing the denoised HDR buffer
+  // instead of falling back to the raw output on following frames.
+  if (reachedEndCondition && isOidnMode && s_hasDenoised && s_oidnOutputUAV) {
+    postColor = s_oidnOutputUAV.Get();
+  }
   bool usedDlss = false;
   const D3D12_RESOURCE_DESC dstDesc = renderTarget->GetDesc();
   const uint32_t outW = (uint32_t)dstDesc.Width;

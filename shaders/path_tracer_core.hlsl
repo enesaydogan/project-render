@@ -90,6 +90,13 @@ void RayGen()
     uint3 launchDim = DispatchRaysDimensions();
     uint frame = (uint)globalFrameCount;
     uint accumFrame = (uint)accumulationCount;
+    // Keep per-frame reservoir ping-pong deterministic even for pixels that
+    // early-out due to adaptive sampling.
+    bool flip = (frame % 2) == 1;
+    const uint kAdaptiveStartSpp = 128u;
+    const float kAdaptiveThresholdScale = 0.75;
+    const float kAdaptiveMinKeepProb = 0.15;
+    const float kRestirSpatialRadiusPx = (useAdaptiveSampling > 0.5) ? 8.0 : 12.0;
 
     if (maxSPP > 0.0 && accumFrame >= (uint)maxSPP) {
         float4 total = g_accumulation[launchIndex.xy];
@@ -101,11 +108,11 @@ void RayGen()
     }
 
     // Adaptive Sampling Early Exit
-    if (accumFrame > 64 && useAdaptiveSampling > 0.5) {
+    if (accumFrame > kAdaptiveStartSpp && useAdaptiveSampling > 0.5) {
         float4 acc = g_accumulation[launchIndex.xy];
         float accM2 = g_variance[launchIndex.xy];
         
-        if (acc.a > 1.0) {
+        if (acc.a > (float)kAdaptiveStartSpp) {
             float n = acc.a;
             float3 meanColor = acc.rgb / n;
             float meanLum = dot(meanColor, float3(0.2126, 0.7152, 0.0722));
@@ -114,8 +121,30 @@ void RayGen()
             // (Note: var = M2/N, SEM = sqrt(var/N) = sqrt(M2/N^2) = sqrt(M2)/N)
             float sem = sqrt(max(0.0, accM2)) / n;
             float noise = sem / (max(0.01, meanLum) + 0.001); 
+            float effectiveThreshold = max(0.001, noiseThreshold * kAdaptiveThresholdScale);
             
-            if (noise < noiseThreshold) {
+            if (noise < effectiveThreshold) {
+                 // Avoid a hard binary "wave" by keeping a small stochastic
+                 // fraction of converged pixels actively sampling.
+                 RNG adaptiveRng = init_rng(launchIndex.xy + uint2(0x9e37u, 0x7f4au),
+                                            frame ^ 0xA511E9B3u);
+                 float keepProb = max(kAdaptiveMinKeepProb, saturate(noise / effectiveThreshold));
+                 if (next_float(adaptiveRng) > keepProb) {
+                 // Preserve reservoir continuity for neighbors that still resample
+                 // this pixel. Without this copy, adaptive early-out leaves stale
+                 // ping-pong sides and can make ReSTIR reuse unstable.
+                 if (flip) {
+                     g_reservoir1[launchIndex.xy] = g_reservoir0[launchIndex.xy];
+                     g_gi_reservoir_a0[launchIndex.xy] = g_gi_reservoir_b0[launchIndex.xy];
+                     g_gi_reservoir_a1[launchIndex.xy] = g_gi_reservoir_b1[launchIndex.xy];
+                     g_gi_reservoir_a2[launchIndex.xy] = g_gi_reservoir_b2[launchIndex.xy];
+                 } else {
+                     g_reservoir0[launchIndex.xy] = g_reservoir1[launchIndex.xy];
+                     g_gi_reservoir_b0[launchIndex.xy] = g_gi_reservoir_a0[launchIndex.xy];
+                     g_gi_reservoir_b1[launchIndex.xy] = g_gi_reservoir_a1[launchIndex.xy];
+                     g_gi_reservoir_b2[launchIndex.xy] = g_gi_reservoir_a2[launchIndex.xy];
+                 }
+
                  if (debugVisualizationMode == 1.0) {
                      // Debug: Show Converged pixels as Green
                      g_output[launchIndex.xy] = float4(0.0, 1.0, 0.0, 1.0);
@@ -123,14 +152,12 @@ void RayGen()
                      g_output[launchIndex.xy] = float4(meanColor, 1.0);
                  }
                  return;
-            }
+                 }
+             }
         }
     }
 
     RNG rng = init_rng(launchIndex.xy, frame);
-
-    // Swap reservoirs per frame for ReSTIR
-    bool flip = (frame % 2) == 1;
 
     // Use jitter from Camera CB (calculated on CPU to match DLSS)
     float2 jitter = float2(jitterX, jitterY);
@@ -353,10 +380,11 @@ void RayGen()
 
             // C. Spatial Resampling (Neighbor Pixels)
             if (frame > 0) {
-                for (int i = 0; i < 2; ++i) {
+                int spatialReuseCount = (useAdaptiveSampling > 0.5) ? 1 : 2;
+                for (int i = 0; i < spatialReuseCount; ++i) {
                     // Use a disk distribution for better sampling coverage and to avoid banding
                     float angle = next_float(rng) * 2.0 * PI;
-                    float radius = sqrt(next_float(rng)) * 16.0; // Slightly larger 16px radius
+                    float radius = sqrt(next_float(rng)) * kRestirSpatialRadiusPx;
                     int2 offset = int2(cos(angle) * radius, sin(angle) * radius);
                     int2 neighborCoords = clamp(int2(launchIndex.xy) + offset, int2(0,0), int2(launchDim.xy)-1);
                     
@@ -519,9 +547,10 @@ void RayGen()
             }
             // C. Spatial Resampling
             if (frame > 0) {
-                for (int i = 0; i < 2; ++i) {
+                int spatialReuseCount = (useAdaptiveSampling > 0.5) ? 1 : 2;
+                for (int i = 0; i < spatialReuseCount; ++i) {
                     float2 unitSample = float2(next_float(rng), next_float(rng)) * 2.0 - 1.0;
-                    int2 offset = int2(unitSample * 16.0);
+                    int2 offset = int2(unitSample * kRestirSpatialRadiusPx);
                     int2 neighborCoords = clamp(int2(launchIndex.xy) + offset, int2(0,0), int2(launchDim.xy)-1);
                     float4 d0, d1, d2;
                     if (flip) { d0 = g_gi_reservoir_b0[neighborCoords]; d1 = g_gi_reservoir_b1[neighborCoords]; d2 = g_gi_reservoir_b2[neighborCoords]; }
