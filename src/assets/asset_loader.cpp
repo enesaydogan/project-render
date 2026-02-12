@@ -253,6 +253,12 @@ static bool CreateGpuTexture(const void *src, int width, int height,
   outTex.height = height;
   outTex.format = format;
   outTex.mipLevels = mipLevels;
+
+  // Store CPU data for serialization
+  bpp = (format == DXGI_FORMAT_R32G32B32A32_FLOAT) ? 16 : 4;
+  outTex.cpuData.assign((const uint8_t *)src,
+                        (const uint8_t *)src + (size_t)width * height * bpp);
+
   return true;
 }
 
@@ -1409,6 +1415,40 @@ bool LoadModel(const std::string &path, std::vector<GpuMesh> &outMeshes,
     return LoadWithAssimp(path, outMeshes, outMaterials, outTextures,
                           rootTranslation);
   }
+}
+
+Texture LoadTextureFromMemory(const void *src, int width, int height,
+                              DXGI_FORMAT format) {
+  Texture tex;
+  CreateGpuTexture(src, width, height, 4, format, tex);
+  return tex;
+}
+
+GpuMesh LoadMeshFromMemory(const std::vector<Vertex> &vertices,
+                           const std::vector<uint32_t> &indices) {
+  GpuMesh mesh;
+  mesh.vertexCount = (UINT)vertices.size();
+  mesh.indexCount = (UINT)indices.size();
+  mesh.cpuVertices = vertices;
+  mesh.cpuIndices = indices;
+
+  ComPtr<ID3D12Resource> vUpload, iUpload;
+  CreateDefaultBuffer(vertices.data(), vertices.size() * sizeof(Vertex),
+                      mesh.vertexBuffer, vUpload,
+                      D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+  CreateDefaultBuffer(indices.data(), indices.size() * sizeof(uint32_t),
+                      mesh.indexBuffer, iUpload,
+                      D3D12_RESOURCE_STATE_INDEX_BUFFER);
+
+  mesh.vbView.BufferLocation = mesh.vertexBuffer->GetGPUVirtualAddress();
+  mesh.vbView.StrideInBytes = sizeof(Vertex);
+  mesh.vbView.SizeInBytes = (UINT)(vertices.size() * sizeof(Vertex));
+
+  mesh.ibView.BufferLocation = mesh.indexBuffer->GetGPUVirtualAddress();
+  mesh.ibView.Format = DXGI_FORMAT_R32_UINT;
+  mesh.ibView.SizeInBytes = (UINT)(indices.size() * sizeof(uint32_t));
+
+  return mesh;
 }
 
 } // namespace Asset
