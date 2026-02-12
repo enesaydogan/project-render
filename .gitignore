@@ -76,3 +76,8 @@ __pycache__/
 
 # End of file
 *.bin
+*.tlog
+build/project-render.dir/Release/project-render.tlog/CL.read.1.tlog
+build/project-render.dir/Release/project-render.tlog/CL.write.1.tlog
+build/project-render.dir/Release/project-render.tlog/CL.command.1.tlog
+build/project-render.dir/Release/*.obj
