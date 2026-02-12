@@ -382,6 +382,8 @@ void RayGen()
         float3 V = -rayDir;
         float roughness = max(0.001, payload.roughness);
         float metallic = payload.metalness;
+        float transmission = saturate(max(payload.refractionColor.r, max(payload.refractionColor.g, payload.refractionColor.b))) * (1.0 - metallic);
+        float3 diffuseAlbedo = payload.albedo * (1.0 - metallic) * (1.0 - transmission);
 
         // 1. Direct Lighting (Next Event Estimation + ReSTIR for 1st bounce)
         float3 directLighting = float3(0, 0, 0);
@@ -401,7 +403,7 @@ void RayGen()
                 float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
                 float3 H = normalize(ls.L + V);
                 float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL, roughness) * F_Schlick(max(0.0, dot(H, V)), F0);
-                float3 brdf = (payload.albedo / PI) * (1.0 - metallic) + spec;
+                float3 brdf = (diffuseAlbedo / PI) + spec;
 
                 float p_target = calculate_p_target(ls.radiance, payload.albedo, brdf, NdotL);
                 update_reservoir(res, 0xFFFFFFFF, p_target, rng);
@@ -422,7 +424,7 @@ void RayGen()
                 float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
                 float3 H = normalize(L + V);
                 float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL, roughness) * F_Schlick(max(0.0, dot(H, V)), F0);
-                float3 brdf = (payload.albedo / PI) * (1.0 - metallic) + spec;
+                float3 brdf = (diffuseAlbedo / PI) + spec;
 
                 float p_target = calculate_p_target(radiance, payload.albedo, brdf, NdotL) * (float)numLights;
                 update_reservoir(res, lightIdx, p_target, rng);
@@ -457,7 +459,7 @@ void RayGen()
                 float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
                 float3 H = normalize(L_prev + V);
                 float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL_prev, roughness) * F_Schlick(max(0.0, dot(H, V)), F0);
-                float3 brdf_prev = (payload.albedo / PI) * (1.0 - metallic) + spec;
+                float3 brdf_prev = (diffuseAlbedo / PI) + spec;
 
                 float p_target_at_curr = calculate_p_target(radiance_prev, payload.albedo, brdf_prev, saturate(dot(N, L_prev)));
                 combine_reservoirs(res, prev_res, p_target_at_curr, rng);
@@ -508,7 +510,7 @@ void RayGen()
                     float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
                     float3 H = normalize(L_neigh + V);
                     float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL_neigh, roughness) * F_Schlick(max(0.0, dot(H, V)), F0);
-                    float3 brdf_neigh = (payload.albedo / PI) * (1.0 - metallic) + spec;
+                    float3 brdf_neigh = (diffuseAlbedo / PI) + spec;
 
                     float p_target_at_curr = calculate_p_target(radiance_neigh, payload.albedo, brdf_neigh, NdotL_neigh);
                     
@@ -549,7 +551,7 @@ void RayGen()
             float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
             float3 H_f = normalize(L_final + V);
             float3 spec_f = D_GGX(max(0.0, dot(N, H_f)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL_final, roughness) * F_Schlick(max(0.0, dot(H_f, V)), F0);
-            float3 brdf_f = (payload.albedo / PI) * (1.0 - metallic) + spec_f;
+            float3 brdf_f = (diffuseAlbedo / PI) + spec_f;
 
             float p_target_final = calculate_p_target(radiance_final, payload.albedo, brdf_f, NdotL_final);
             
@@ -608,7 +610,7 @@ void RayGen()
                     nextDir_gi = SampleLambert(u_gi, N);
                     float NdotL = saturate(dot(N, nextDir_gi));
                     pdf_gi = (PDF_Lambert(NdotL) * diffProb) / totalProb;
-                    f_brdf_gi = (payload.albedo / PI) * (1.0 - metallic);
+                    f_brdf_gi = (diffuseAlbedo / PI);
                 }
                 if (pdf_gi > 0.0) {
                     RayDesc giRay; giRay.Origin = P + N * 0.0005; giRay.Direction = nextDir_gi;
@@ -634,7 +636,7 @@ void RayGen()
                 float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
                 float3 H = normalize(L_gi + V);
                 float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * G_Smith(max(0.0, dot(N, V)), saturate(dot(N, L_gi)), roughness) * F_Schlick(max(0.0, dot(H, V)), F0) / (4.0 * max(0.0, dot(N, V)) * saturate(dot(N, L_gi)) + 0.001);
-                float3 brdf = (payload.albedo / PI) * (1.0 - metallic) + spec;
+                float3 brdf = (diffuseAlbedo / PI) + spec;
                 float p_target_at_curr = length(prev_gi.radiance * brdf * saturate(dot(N, L_gi)));
                 combine_gi_reservoirs(gi_res, prev_gi, p_target_at_curr, rng);
             }
@@ -659,7 +661,7 @@ void RayGen()
                     float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
                     float3 H = normalize(L_gi + V);
                     float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * G_Smith(max(0.0, dot(N, V)), saturate(dot(N, L_gi)), roughness) * F_Schlick(max(0.0, dot(H, V)), F0) / (4.0 * max(0.0, dot(N, V)) * saturate(dot(N, L_gi)) + 0.001);
-                    float3 brdf = (payload.albedo / PI) * (1.0 - metallic) + spec;
+                    float3 brdf = (diffuseAlbedo / PI) + spec;
                     float p_target_at_curr = length(neigh_gi.radiance * brdf * saturate(dot(N, L_gi)));
                     
                     // Spatial Jacobian / Visibility for GI
@@ -680,7 +682,7 @@ void RayGen()
             float3 F0_gi = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
             float3 H_gi = normalize(L_gi_final + V);
             float3 spec_gi = D_GGX(max(0.0, dot(N, H_gi)), roughness) * G_Smith(max(0.0, dot(N, V)), saturate(dot(N, L_gi_final)), roughness) * F_Schlick(max(0.0, dot(H_gi, V)), F0_gi) / (4.0 * max(0.0, dot(N, V)) * saturate(dot(N, L_gi_final)) + 0.001);
-            float3 brdf_gi_final = (payload.albedo / PI) * (1.0 - metallic) + spec_gi;
+            float3 brdf_gi_final = (diffuseAlbedo / PI) + spec_gi;
             float p_target_final_gi = length(gi_res.radiance * brdf_gi_final * saturate(dot(N, L_gi_final)));
             finalize_gi_reservoir(gi_res, p_target_final_gi);
             float4 out_d0, out_d1, out_d2; pack_gi_reservoir(gi_res, out_d0, out_d1, out_d2);
@@ -737,7 +739,7 @@ void RayGen()
                      float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
                      float3 H = normalize(L_nee + V);
                      float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL_nee, roughness) * F_Schlick(max(0.0, dot(H, V)), F0);
-                     float3 brdf = (payload.albedo / PI) * (1.0 - metallic) + spec;
+                     float3 brdf = (diffuseAlbedo / PI) + spec;
                      directLighting = brdf * radiance_nee * NdotL_nee * 2.0; // *2 because of 50/50 sun/lights
                 }
             }
@@ -807,7 +809,7 @@ void RayGen()
             float3 F = F_Schlick(max(0.0, dot(N, V)), F0);
 
             float specProb = max(F.x, max(F.y, F.z));
-            float baseDiffProb = (1.0 - specProb) * (1.0 - metallic);
+            float baseDiffProb = (1.0 - specProb) * (1.0 - metallic) * (1.0 - transmission);
             float transProb = baseDiffProb * saturate(payload.translucency);
             float diffProb = max(0.0, baseDiffProb - transProb);
             float totalProb = specProb + diffProb + transProb;
@@ -839,7 +841,7 @@ void RayGen()
                 nextDir = SampleLambert(u, N);
                 float NdotL = saturate(dot(N, nextDir));
                 pdf = (PDF_Lambert(NdotL) * diffProb) / totalProb;
-                f_brdf = (payload.albedo / PI) * (1.0 - metallic);
+                f_brdf = diffuseAlbedo / PI;
                 rayOrigin = P + N * 0.001;
                 cosineTerm = NdotL;
                 currentRayType = RAY_TYPE_DIFFUSE;

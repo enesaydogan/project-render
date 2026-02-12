@@ -229,12 +229,16 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     // Clamp to reduce fireflies / unstable highlights in archviz scenes
     roughness = max(roughness, 0.02);
     
+    // Attenuate diffuse by transmission (refraction) for dielectrics.
+    // This removes the "tint" or "solid" look from glass.
+    float transmission = saturate(max(refrColor.r, max(refrColor.g, refrColor.b))) * (1.0 - metalness);
+    float3 DiffuseAlbedo = BaseColor * (1.0 - metalness) * (1.0 - transmission);
+
     // Standard PBR Model (dielectric F0 from IOR)
     float ior = max(emisColor.w, 1.0);
     float f0s = (ior - 1.0) / (ior + 1.0);
     f0s = f0s * f0s;
     float3 F0 = lerp(float3(f0s, f0s, f0s), BaseColor, metalness);
-    float3 DiffuseAlbedo = BaseColor * (1.0 - metalness);
     
     // Normal mapping
     float3 N = triPlanar ? SampleTriPlanarNormalLevel0(texNorm, P, worldNormal, triScale, triSharp, triNormStrength)
