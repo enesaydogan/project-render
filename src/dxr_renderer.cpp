@@ -208,6 +208,7 @@ static ComPtr<ID3D12Resource> s_noiseStatsOutputBuffer;
 static ComPtr<ID3D12Resource> s_noiseStatsReadbackBuffer;
 static ComPtr<ID3D12DescriptorHeap> s_noiseStatsHeap;
 static float s_lastNoiseLevel = 0.0f;
+static bool s_noiseConvergedLatched = false;
 
 namespace DxrRenderer {
 
@@ -1524,6 +1525,7 @@ void ResetAccumulation() {
   s_accumulation.Reset();
   s_rrStillFrameSpp = 0;
   s_lastNoiseLevel = 0.0f; // Reset noise level so rendering restarts
+  s_noiseConvergedLatched = false;
   s_hasTonemappedFrame = false;
   s_hasDenoised = false; // Reset auto-denoiser state
   // Keep Streamline history reset separate from accumulation decisions.
@@ -1637,17 +1639,23 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
   const UINT maxSpp = (g_cameraData.maxSPP > 0.0f) ? (UINT)g_cameraData.maxSPP : 0u;
   const UINT currSpp = rrActive ? s_rrStillFrameSpp : s_accumulation.GetFrameCount();
 
-  // Global stop by measured noise:
-  // For adaptive mode, require a higher minimum SPP before trusting the global
-  // estimate to avoid early false convergence in interiors.
+  // Global stop by measured noise with hysteresis to avoid stop/resume flicker.
   bool isConverged = false;
   if (s_lastNoiseLevel > 0.0f) {
       const bool adaptiveEnabled = (g_cameraData.useAdaptiveSampling > 0.5f);
-      const UINT minNoiseStopSpp = adaptiveEnabled ? 128u : 16u;
-      if (currSpp >= minNoiseStopSpp &&
-          s_lastNoiseLevel <= g_cameraData.noiseThreshold) {
-          isConverged = true;
+      const UINT minNoiseStopSpp = adaptiveEnabled ? 24u : 16u;
+      const float stopThreshold = g_cameraData.noiseThreshold * 0.95f;
+      const float resumeThreshold = g_cameraData.noiseThreshold * 1.15f;
+      if (currSpp >= minNoiseStopSpp) {
+        if (s_noiseConvergedLatched) {
+          if (s_lastNoiseLevel > resumeThreshold) {
+            s_noiseConvergedLatched = false;
+          }
+        } else if (s_lastNoiseLevel <= stopThreshold) {
+          s_noiseConvergedLatched = true;
+        }
       }
+      isConverged = s_noiseConvergedLatched;
   }
 
   bool isOidnMode = (s_denoiserMode != DxrRenderer::DenoiserMode::Off && !dlssActive);
@@ -1952,11 +1960,12 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
   const bool debugViewActive = (g_cameraData.debugMode != 0.0f);
 
   // --- Noise Statistics (Moved outside Streamline block) ---
-  // Run every 10 samples (arbitrary choice for perf), but ONLY if accumulating and we have data.
+  // Run periodically, but faster in adaptive mode so stop decisions react sooner.
   // Also run if s_lastNoiseLevel is 0 (initial calculation) regardless of modulo.
   bool shouldCalcNoise = s_accumulation.IsAccumulating() && s_accumulation.GetFrameCount() > 0;
   if (shouldCalcNoise) {
-      if (s_lastNoiseLevel == 0.0f || (s_accumulation.GetFrameCount() % 10 == 0)) {
+      const UINT noiseEvalPeriod = (g_cameraData.useAdaptiveSampling > 0.5f) ? 4u : 10u;
+      if (s_lastNoiseLevel == 0.0f || (s_accumulation.GetFrameCount() % noiseEvalPeriod == 0)) {
           EnsureNoiseStatsPipeline();
           if (s_noiseStatsPSO) {
                 // 1. Readback previous result FIRST (from readback buffer populated in previous run)
