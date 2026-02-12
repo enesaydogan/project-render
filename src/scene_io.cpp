@@ -231,8 +231,6 @@ bool SaveScene(const std::string &path) {
     // 7. Embedded Assets
     for (size_t i = 0; i < g_loadedMeshes.size(); ++i) {
       const auto &mesh = g_loadedMeshes[i];
-      if (mesh.cpuVertices.empty())
-        continue;
       json m;
       m["index"] = i;
       m["materialIndex"] = mesh.materialIndex;
@@ -249,14 +247,16 @@ bool SaveScene(const std::string &path) {
 
     for (size_t i = 0; i < g_loadedTextures.size(); ++i) {
       const auto &tex = g_loadedTextures[i];
-      if (tex.cpuData.empty())
-        continue;
       json t;
       t["index"] = i;
       t["width"] = tex.width;
       t["height"] = tex.height;
       t["format"] = (int)tex.format;
-      t["data"] = Base64Encode(tex.cpuData.data(), tex.cpuData.size());
+      if (!tex.cpuData.empty()) {
+        t["data"] = Base64Encode(tex.cpuData.data(), tex.cpuData.size());
+      } else {
+        t["data"] = ""; // Missing CPU data but keep index slot
+      }
       j["embeddedAssets"]["textures"].push_back(t);
     }
 
@@ -292,10 +292,19 @@ bool LoadScene(const std::string &path) {
         fprintf(stderr, "LoadScene: decoding %zu embedded textures\n",
                 ea["textures"].size());
         for (const auto &t : ea["textures"]) {
-          std::vector<unsigned char> data = Base64Decode(t["data"]);
-          Asset::Texture tex = Asset::LoadTextureFromMemory(
-              data.data(), t["width"], t["height"], (DXGI_FORMAT)t["format"]);
-          g_loadedTextures.push_back(tex);
+          size_t idx = t.value("index", g_loadedTextures.size());
+          if (idx >= g_loadedTextures.size()) {
+            g_loadedTextures.resize(idx + 1);
+          }
+          std::string b64 = t.value("data", "");
+          if (!b64.empty()) {
+            std::vector<unsigned char> data = Base64Decode(b64);
+            Asset::Texture tex = Asset::LoadTextureFromMemory(
+                data.data(), t["width"], t["height"], (DXGI_FORMAT)t["format"]);
+            g_loadedTextures[idx] = std::move(tex);
+          } else {
+            // Keep slot empty if no data
+          }
         }
         // Register these just-loaded embedded textures
         Scene::RegisterTextures(g_loadedTextures);

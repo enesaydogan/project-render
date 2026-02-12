@@ -1448,6 +1448,16 @@ GpuMesh LoadMeshFromMemory(const std::vector<Vertex> &vertices,
   mesh.ibView.Format = DXGI_FORMAT_R32_UINT;
   mesh.ibView.SizeInBytes = (UINT)(indices.size() * sizeof(uint32_t));
 
+  // Calculate Bounds
+  mesh.minBound[0] = mesh.minBound[1] = mesh.minBound[2] = 1e30f;
+  mesh.maxBound[0] = mesh.maxBound[1] = mesh.maxBound[2] = -1e30f;
+  for (const auto &v : vertices) {
+    for (int i = 0; i < 3; ++i) {
+      mesh.minBound[i] = std::min(mesh.minBound[i], v.pos[i]);
+      mesh.maxBound[i] = std::max(mesh.maxBound[i], v.pos[i]);
+    }
+  }
+
   return mesh;
 }
 
