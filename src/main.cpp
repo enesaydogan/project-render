@@ -93,6 +93,7 @@ bool g_debugLog = false; // enable verbose debug logging (use --debug-log)
 bool g_fastImport = false; // enable Assimp optimization flags to speed imports (--fast-import)
 
 CloudManager g_cloudManager; // Global Global Manager
+static bool g_cloudRenderingEnabled = true;
 
 ComPtr<ID3D12Device> g_device;
 static ComPtr<ID3D12CommandQueue> g_commandQueue;
@@ -2365,6 +2366,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     g_cameraData.debugMode = (float)g_debugMode;
     g_cameraData.lightCount = (float)DxrRenderer::GetLightCount();
     g_cameraData.frameCount = (float)DxrRenderer::GetAccumulationFrameCount();
+    g_cameraData.cloudRenderingEnabled = g_cloudRenderingEnabled ? 1.0f : 0.0f;
     UpdateCameraCB();
     
     // Update Cloud Manager (uploads changed params to GPU)
@@ -2398,6 +2400,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       if (ImGui::BeginMenu("Clouds")) {
           CloudParams& cp = g_cloudManager.GetParams();
           bool changed = false;
+
+          if (ImGui::Checkbox("Enable Cloud Rendering", &g_cloudRenderingEnabled)) {
+            changed = true;
+          }
+          ImGui::Separator();
 
           if (ImGui::Button("Reset to Defaults")) {
             g_cloudManager.ResetToDefaults();

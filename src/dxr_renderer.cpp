@@ -2147,6 +2147,13 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
     }
   }
 
+  // RR stop path: if we reached end conditions and Streamline did not run this
+  // frame, keep presenting the last DLSS output instead of falling back to raw
+  // s_outputUAV (which appears noisy).
+  if (rrActive && reachedEndCondition && !usedDlss && s_dlssOutputUAV) {
+    postColor = s_dlssOutputUAV.Get();
+  }
+
   // If DLSS wasn't used, allow OIDN (or other denoiser) to operate on the
   // linear HDR output as a post-process cleanup step.
   // IMPORTANT: When DLSS is active, color is output-resolution while our AOVs

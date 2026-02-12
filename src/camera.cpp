@@ -42,7 +42,7 @@ CameraCB g_initialCameraData = {
     0.05f,                        // noiseThreshold (5%)
     1.0f,                         // useAdaptiveSampling (default ON)
     0.0f,                         // debugVisualizationMode
-    0.0f                          // _padNew
+    1.0f                          // cloudRenderingEnabled (default ON)
 };
 CameraCB g_cameraData = g_initialCameraData;
 ComPtr<ID3D12Resource> g_cameraConstantBuffer;

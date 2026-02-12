@@ -370,7 +370,8 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
             ambient *= exp(-density * 1.0f);
             ambient *= 0.6f; // Overall Ambient intensity boost
             
-            float3 source = (sunDir * CloudCB.sunIntensity * directLight * sunColorScaled) + ambient;
+            float3 source = (CloudCB.sunIntensity * directLight * sunColorScaled) + ambient;
+            source = max(source, 0.0);
             
             // Integation: Energy = Source * Density * (Integral of T over step)
             // Integra(T) = (1 - stepTrans) / extinction

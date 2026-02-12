@@ -44,7 +44,7 @@ struct CameraCB {
   float noiseThreshold;
   float useAdaptiveSampling;
   float debugVisualizationMode;
-  float _padNew;
+  float cloudRenderingEnabled;
 };
 
 // Camera state (defined in camera.cpp)

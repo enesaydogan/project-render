@@ -96,7 +96,7 @@ cbuffer Camera : register(b0)
     float noiseThreshold;
     float useAdaptiveSampling;
     float debugVisualizationMode; // 0=None, 1=NoiseMap
-    float _padNew;
+    float cloudRenderingEnabled;
 }
 
 struct MaterialData
