@@ -135,6 +135,12 @@ struct Vertex {
 StructuredBuffer<Vertex> vertices[1024] : register(t2050);
 Buffer<uint> indices[1024] : register(t3074);
 
+#define RAY_TYPE_PRIMARY    0
+#define RAY_TYPE_REFLECTION 1
+#define RAY_TYPE_REFRACTION 2
+#define RAY_TYPE_DIFFUSE    3
+#define RAY_TYPE_SHADOW     4
+
 struct RayPayload
 {
     float3 color;     // Final computed color (for legacy/simple paths)
@@ -151,6 +157,7 @@ struct RayPayload
     float translucency;   // [0..1] diffuse-like transmission
     uint matIndex;
     uint rayDepth;        // 0 = primary, >0 = secondary
+    uint rayType;         // RAY_TYPE_...
 };
 
 struct PathPayload
