@@ -70,6 +70,30 @@ float4 pack_reservoir(Reservoir r) {
     return float4(asfloat(r.lightIndex), r.w_sum, asfloat(r.M), r.W);
 }
 
+bool IsSpatiallyCompatible(uint2 p0, uint2 p1, float ndotMin, float depthTolBase)
+{
+    float4 n0 = g_normalRoughnessOut[p0];
+    float4 n1 = g_normalRoughnessOut[p1];
+    float3 nn0 = n0.xyz;
+    float3 nn1 = n1.xyz;
+    float l0 = dot(nn0, nn0);
+    float l1 = dot(nn1, nn1);
+
+    // If previous-frame data is invalid/uninitialized, don't hard-reject.
+    if (l0 > 0.25 && l1 > 0.25) {
+        nn0 = normalize(nn0);
+        nn1 = normalize(nn1);
+        if (dot(nn0, nn1) < ndotMin) return false;
+    }
+
+    float d0 = g_depth[p0];
+    float d1 = g_depth[p1];
+    float depthTol = depthTolBase + 0.02 * max(d0, d1);
+    if (abs(d0 - d1) > depthTol) return false;
+
+    return true;
+}
+
 float halton(uint index, uint base)
 {
     float f = 1.0;
@@ -93,10 +117,16 @@ void RayGen()
     // Keep per-frame reservoir ping-pong deterministic even for pixels that
     // early-out due to adaptive sampling.
     bool flip = (frame % 2) == 1;
-    const uint kAdaptiveStartSpp = 128u;
-    const float kAdaptiveThresholdScale = 0.75;
-    const float kAdaptiveMinKeepProb = 0.15;
-    const float kRestirSpatialRadiusPx = (useAdaptiveSampling > 0.5) ? 8.0 : 12.0;
+    const uint kAdaptiveStartSpp = 24u;
+    const float kAdaptiveRelScale = 0.90;
+    const float kAdaptiveEdgeRelScale = 0.65;
+    const float kAdaptiveAbsSemFloor = 5e-4;
+    const float kAdaptiveAbsSemScale = 0.0125;
+    const float kAdaptiveEdgeAbsSemScale = 0.0075;
+    const float kAdaptiveMinKeepProb = 0.08;
+    const float kAdaptiveEdgeMinKeepProb = 0.18;
+    const float kAdaptiveEdgeContrastThreshold = 0.02;
+    const float kRestirSpatialRadiusPx = (useAdaptiveSampling > 0.5) ? 6.0 : 12.0;
 
     if (maxSPP > 0.0 && accumFrame >= (uint)maxSPP) {
         float4 total = g_accumulation[launchIndex.xy];
@@ -120,15 +150,50 @@ void RayGen()
             // Welford-based Standard Error of Mean: SEM = sqrt(M2) / N
             // (Note: var = M2/N, SEM = sqrt(var/N) = sqrt(M2/N^2) = sqrt(M2)/N)
             float sem = sqrt(max(0.0, accM2)) / n;
-            float noise = sem / (max(0.01, meanLum) + 0.001); 
-            float effectiveThreshold = max(0.001, noiseThreshold * kAdaptiveThresholdScale);
-            
-            if (noise < effectiveThreshold) {
+            float noise = sem / (max(0.01, meanLum) + 0.001);
+
+            // Edge-aware guard from current accumulation neighborhood.
+            float edgeContrast = 0.0;
+            if (launchIndex.x > 0) {
+                uint2 p = uint2(int2(launchIndex.xy) + int2(-1, 0));
+                float4 a = g_accumulation[p];
+                if (a.a > 1.0) edgeContrast = max(edgeContrast, abs(dot(a.rgb / a.a, float3(0.2126, 0.7152, 0.0722)) - meanLum));
+            }
+            if (launchIndex.x + 1 < launchDim.x) {
+                uint2 p = uint2(int2(launchIndex.xy) + int2(1, 0));
+                float4 a = g_accumulation[p];
+                if (a.a > 1.0) edgeContrast = max(edgeContrast, abs(dot(a.rgb / a.a, float3(0.2126, 0.7152, 0.0722)) - meanLum));
+            }
+            if (launchIndex.y > 0) {
+                uint2 p = uint2(int2(launchIndex.xy) + int2(0, -1));
+                float4 a = g_accumulation[p];
+                if (a.a > 1.0) edgeContrast = max(edgeContrast, abs(dot(a.rgb / a.a, float3(0.2126, 0.7152, 0.0722)) - meanLum));
+            }
+            if (launchIndex.y + 1 < launchDim.y) {
+                uint2 p = uint2(int2(launchIndex.xy) + int2(0, 1));
+                float4 a = g_accumulation[p];
+                if (a.a > 1.0) edgeContrast = max(edgeContrast, abs(dot(a.rgb / a.a, float3(0.2126, 0.7152, 0.0722)) - meanLum));
+            }
+
+            bool isEdgeRegion = edgeContrast > kAdaptiveEdgeContrastThreshold;
+            float relThreshold = max(0.001, noiseThreshold * (isEdgeRegion ? kAdaptiveEdgeRelScale : kAdaptiveRelScale));
+            float absSemThreshold = max(kAdaptiveAbsSemFloor, noiseThreshold * (isEdgeRegion ? kAdaptiveEdgeAbsSemScale : kAdaptiveAbsSemScale));
+
+            // Dual criterion:
+            // - relative for regular regions
+            // - absolute SEM to avoid over-sampling very dark areas indefinitely.
+            bool convergedRelative = (noise < relThreshold);
+            bool convergedAbsolute = (sem < absSemThreshold);
+            if (convergedRelative || convergedAbsolute) {
                  // Avoid a hard binary "wave" by keeping a small stochastic
                  // fraction of converged pixels actively sampling.
                  RNG adaptiveRng = init_rng(launchIndex.xy + uint2(0x9e37u, 0x7f4au),
                                             frame ^ 0xA511E9B3u);
-                 float keepProb = max(kAdaptiveMinKeepProb, saturate(noise / effectiveThreshold));
+                 float relProximity = saturate(noise / relThreshold);
+                 float absProximity = saturate(sem / absSemThreshold);
+                 float proximity = min(relProximity, absProximity);
+                 float minKeepProb = isEdgeRegion ? kAdaptiveEdgeMinKeepProb : kAdaptiveMinKeepProb;
+                 float keepProb = max(minKeepProb, proximity);
                  if (next_float(adaptiveRng) > keepProb) {
                  // Preserve reservoir continuity for neighbors that still resample
                  // this pixel. Without this copy, adaptive early-out leaves stale
@@ -387,6 +452,13 @@ void RayGen()
                     float radius = sqrt(next_float(rng)) * kRestirSpatialRadiusPx;
                     int2 offset = int2(cos(angle) * radius, sin(angle) * radius);
                     int2 neighborCoords = clamp(int2(launchIndex.xy) + offset, int2(0,0), int2(launchDim.xy)-1);
+
+                    // Edge-aware reuse reject (uses previous-frame G-buffer written to u10/u13).
+                    if (useAdaptiveSampling > 0.5 && frame > 2) {
+                        if (!IsSpatiallyCompatible(launchIndex.xy, uint2(neighborCoords), 0.92, 0.01)) {
+                            continue;
+                        }
+                    }
                     
                     float4 neighbor_data;
                     if (flip) neighbor_data = g_reservoir0[neighborCoords];
@@ -552,6 +624,13 @@ void RayGen()
                     float2 unitSample = float2(next_float(rng), next_float(rng)) * 2.0 - 1.0;
                     int2 offset = int2(unitSample * kRestirSpatialRadiusPx);
                     int2 neighborCoords = clamp(int2(launchIndex.xy) + offset, int2(0,0), int2(launchDim.xy)-1);
+
+                    if (useAdaptiveSampling > 0.5 && frame > 2) {
+                        if (!IsSpatiallyCompatible(launchIndex.xy, uint2(neighborCoords), 0.90, 0.015)) {
+                            continue;
+                        }
+                    }
+
                     float4 d0, d1, d2;
                     if (flip) { d0 = g_gi_reservoir_b0[neighborCoords]; d1 = g_gi_reservoir_b1[neighborCoords]; d2 = g_gi_reservoir_b2[neighborCoords]; }
                     else      { d0 = g_gi_reservoir_a0[neighborCoords]; d1 = g_gi_reservoir_a1[neighborCoords]; d2 = g_gi_reservoir_a2[neighborCoords]; }
