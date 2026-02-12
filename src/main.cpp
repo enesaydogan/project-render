@@ -118,6 +118,7 @@ static HWND g_hwnd = nullptr;
 // Window dimensions
 static UINT g_windowWidth = 1280;
 static UINT g_windowHeight = 720;
+static bool g_appClosing = false;
 
 // Loaded meshes from Asset loader
 std::vector<Asset::GpuMesh> g_loadedMeshes;
@@ -178,7 +179,7 @@ static ComPtr<ID3D12PipelineState> g_meshSimplePipelineState;
 // Grid line thickness in world units (used to expand lines into thin quads)
 static float g_gridThickness = 0.02f; // increase to make lines thicker
 
-static bool g_drawGrid = true; // toggle grid rendering
+static bool g_drawGrid = false; // toggle grid rendering (default OFF)
 
 // Small camera module is defined in src/camera.h/.cpp
 #include "camera.h"
@@ -1342,7 +1343,11 @@ void WaitForPreviousFrame() {
   if (g_fence->GetCompletedValue() < g_fenceValues[g_frameIndex]) {
     ThrowIfFailed(g_fence->SetEventOnCompletion(g_fenceValues[g_frameIndex],
                                                 g_fenceEvent));
-    WaitForSingleObject(g_fenceEvent, INFINITE);
+    const DWORD waitMs = g_appClosing ? 50u : INFINITE;
+    DWORD wr = WaitForSingleObject(g_fenceEvent, waitMs);
+    if (wr == WAIT_TIMEOUT && g_appClosing) {
+      return;
+    }
   }
 
   // Set the fence value for the next frame.
@@ -1445,8 +1450,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
     return true;
 
   switch (message) {
+  case WM_CLOSE:
+    g_appClosing = true;
+    PostQuitMessage(0);
+    return 0;
   case WM_SIZE:
-    if (g_swapChain && wParam != SIZE_MINIMIZED) {
+    if (!g_appClosing && g_swapChain && wParam != SIZE_MINIMIZED) {
       UINT width = LOWORD(lParam);
       UINT height = HIWORD(lParam);
       ResizeSwapChain(width, height);
@@ -2144,8 +2153,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
       TranslateMessage(&msg);
       DispatchMessage(&msg);
+      if (msg.message == WM_QUIT || g_appClosing)
+        break;
       continue;
     }
+    if (g_appClosing)
+      break;
 
     // Compute delta time
     auto now = std::chrono::high_resolution_clock::now();
@@ -2366,7 +2379,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     g_cameraData.debugMode = (float)g_debugMode;
     g_cameraData.lightCount = (float)DxrRenderer::GetLightCount();
     g_cameraData.frameCount = (float)DxrRenderer::GetDisplayedSampleCount();
-    g_cameraData.cloudRenderingEnabled = g_cloudRenderingEnabled ? 1.0f : 0.0f;
+    const bool fileIblActive =
+        (IBLManager::Get().GetIBLSource() == IBLManager::IBLSource::File);
+    const bool effectiveCloudRendering = g_cloudRenderingEnabled && !fileIblActive;
+    g_cameraData.cloudRenderingEnabled = effectiveCloudRendering ? 1.0f : 0.0f;
     UpdateCameraCB();
     
     // Update Cloud Manager (uploads changed params to GPU)
@@ -2549,6 +2565,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         // Manual Sun Control removed as Prague Model is default
 
         ImGui::Text("Environment / Sky Model");
+
+        bool fileIblEnabled =
+            (IBLManager::Get().GetIBLSource() == IBLManager::IBLSource::File);
+        if (ImGui::Checkbox("Enable File IBL", &fileIblEnabled)) {
+             if (fileIblEnabled) {
+                 IBLManager::Get().SetIBLSource(IBLManager::IBLSource::File);
+             } else {
+                 IBLManager::Get().SetIBLSource(IBLManager::IBLSource::PragueSkyModel);
+                 IBLManager::Get().UpdateSkyModel();
+             }
+             uiChanged = true;
+        }
         
         static int iblSource = 0; 
         iblSource = (int)IBLManager::Get().GetIBLSource();
@@ -2559,6 +2587,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         ImGui::SameLine();
         if (ImGui::RadioButton("Prague Sky", &iblSource, 1)) {
              IBLManager::Get().SetIBLSource(IBLManager::IBLSource::PragueSkyModel);
+             IBLManager::Get().UpdateSkyModel();
              uiChanged = true;
         }
 
@@ -2630,6 +2659,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
              UpdateCameraCB();
              uiChanged = true;
         }
+        ImGui::Checkbox("Show Grid", &g_drawGrid);
 
         ImGui::Separator();
 
