@@ -736,7 +736,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
 
   // Create state object (DXIL lib etc.)
   static D3D12_DXIL_LIBRARY_DESC libDesc = {};
-  static D3D12_EXPORT_DESC exports[3] = {};
+  static D3D12_EXPORT_DESC exports[4] = {};
   static D3D12_HIT_GROUP_DESC hitGroupDesc = {};
   static D3D12_RAYTRACING_SHADER_CONFIG shaderConfig = {};
   static D3D12_RAYTRACING_PIPELINE_CONFIG pipelineConfig = {};
@@ -747,7 +747,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   exports[0].Name = L"RayGen";
   exports[1].Name = L"Miss";
   exports[2].Name = L"ClosestHit";
-  libDesc.NumExports = 3;
+  exports[3].Name = L"AnyHit";
+  libDesc.NumExports = 4;
   libDesc.pExports = exports;
   D3D12_STATE_SUBOBJECT libSub = {};
   libSub.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY;
@@ -756,6 +757,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   hitGroupDesc.HitGroupExport = L"HitGroup";
   hitGroupDesc.Type = D3D12_HIT_GROUP_TYPE_TRIANGLES;
   hitGroupDesc.ClosestHitShaderImport = L"ClosestHit";
+  hitGroupDesc.AnyHitShaderImport = L"AnyHit";
   D3D12_STATE_SUBOBJECT hitSub = {};
   hitSub.Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
   hitSub.pDesc = &hitGroupDesc;

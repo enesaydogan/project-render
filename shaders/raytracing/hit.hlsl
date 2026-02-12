@@ -405,3 +405,24 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     payload.translucency = translucency;
     payload.matIndex = (uint)mesh.materialIndex;
 }
+
+[shader("anyhit")]
+void AnyHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes attr)
+{
+    // For shadow rays hitting glass or thin-walled materials, we want to let light through.
+    // This is a critical optimization for interior scenes with windows.
+    if (payload.rayType == RAY_TYPE_SHADOW) {
+        uint meshIdx = InstanceID();
+        MeshData mesh = meshData[meshIdx];
+        uint matIdx = (uint)max(0, mesh.materialIndex);
+        MaterialData mat = materials[matIdx];
+        
+        // Let light through if it's a glass-like material:
+        // 1. Has refraction color (transparent)
+        // 2. Is marked as thin-walled (architectural glass)
+        // 3. Has translucency
+        if (length(mat.refractionColor.rgb) > 0.01 || mat.archvizParams0.z > 0.5 || mat.archvizParams0.w > 0.01) {
+            IgnoreHit();
+        }
+    }
+}
