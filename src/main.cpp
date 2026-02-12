@@ -8,6 +8,7 @@
 #include <d3d12sdklayers.h>
 #endif
 #include "assets/asset_loader.h"
+#include "clouds.h" // Add clouds
 #include "d3d12_helpers.h"
 #include "dxc_wrapper.h"
 #include "dxr_helpers.h"
@@ -21,7 +22,6 @@
 #include "material_editor.h"
 #include "raster_renderer.h"
 #include "scene.h"
-#include "clouds.h" // Add clouds
 #include <algorithm>
 #include <chrono>
 #include <codecvt>
@@ -90,7 +90,8 @@ bool g_rasterDebugDepth =
 
 // Global runtime flags (set by command-line)
 bool g_debugLog = false; // enable verbose debug logging (use --debug-log)
-bool g_fastImport = false; // enable Assimp optimization flags to speed imports (--fast-import)
+bool g_fastImport =
+    false; // enable Assimp optimization flags to speed imports (--fast-import)
 
 CloudManager g_cloudManager; // Global Global Manager
 static bool g_cloudRenderingEnabled = true;
@@ -145,7 +146,8 @@ static std::string g_lastAssetStatus; // Human-readable status for the Assets UI
 static std::string
     g_selectedAssetPath; // Path chosen by Open dialog (not yet imported)
 static int g_debugMode =
-    0; // 0=None, 1=Albedo, 2=Normal, 3=Emissive, 4=Glossiness, 5=Refl. Color, 6=Metalness, 7=AO, 8=Motion Vectors
+    0; // 0=None, 1=Albedo, 2=Normal, 3=Emissive, 4=Glossiness, 5=Refl. Color,
+       // 6=Metalness, 7=AO, 8=Motion Vectors
 
 static std::string WStringToUtf8(const std::wstring &ws) {
   if (ws.empty())
@@ -843,13 +845,15 @@ bool InitD3D12(HWND hwnd) {
   cloudRanges[0].NumDescriptors = 1;
   cloudRanges[0].BaseShaderRegister = 10; // b10
   cloudRanges[0].RegisterSpace = 2;
-  cloudRanges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+  cloudRanges[0].OffsetInDescriptorsFromTableStart =
+      D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
   cloudRanges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-  cloudRanges[1].NumDescriptors = 2; // Base + Detail
+  cloudRanges[1].NumDescriptors = 2;      // Base + Detail
   cloudRanges[1].BaseShaderRegister = 10; // t10, t11
   cloudRanges[1].RegisterSpace = 2;
-  cloudRanges[1].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+  cloudRanges[1].OffsetInDescriptorsFromTableStart =
+      D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
   rootParameters[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
   rootParameters[5].DescriptorTable.NumDescriptorRanges = 2;
@@ -1148,8 +1152,8 @@ bool InitD3D12(HWND hwnd) {
   IBLManager::Get().InitializeSkyModel("assets/PragueSkyModelDataset.dat");
   IBLManager::Get().SetIBLSource(IBLManager::IBLSource::PragueSkyModel);
 
-  // Always allocate a descriptor for the environment map, so it can be updated later
-  // even if no file is currently loaded.
+  // Always allocate a descriptor for the environment map, so it can be updated
+  // later even if no file is currently loaded.
   {
     DescriptorAllocation alloc = g_cbvSrvAllocator.AllocatePersistent(1);
     IBLManager::Get().SetGPUHandle(alloc.gpu);
@@ -1157,27 +1161,31 @@ bool InitD3D12(HWND hwnd) {
     g_envMapGpuHandle = alloc.gpu;
 
     // If loaded, create the view immediately.
-    // If not loaded, we ideally need a valid descriptor (null SRV or dummy texture) to prevent crashes
-    // if the shader accesses it.
+    // If not loaded, we ideally need a valid descriptor (null SRV or dummy
+    // texture) to prevent crashes if the shader accesses it.
     if (IBLManager::Get().IsLoaded()) {
-        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        srvDesc.Format = IBLManager::Get().GetEnvMap().format;
-        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-        srvDesc.Texture2D.MipLevels = (UINT)-1;
-        g_device->CreateShaderResourceView(
-            IBLManager::Get().GetEnvMap().resource.Get(), &srvDesc, alloc.cpu);
+      D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+      srvDesc.Shader4ComponentMapping =
+          D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+      srvDesc.Format = IBLManager::Get().GetEnvMap().format;
+      srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+      srvDesc.Texture2D.MipLevels = (UINT)-1;
+      g_device->CreateShaderResourceView(
+          IBLManager::Get().GetEnvMap().resource.Get(), &srvDesc, alloc.cpu);
     } else {
-        // Create a default scalar (null) SRV or similar? 
-        // For Texture2D, a null SRV describes a "null resource" but with valid format info.
-        // Or we can rely on IBLManager creating a dummy texture. 
-        // Let's create a NULL SRV so it's a valid descriptor (returns 0 on sample).
-        D3D12_SHADER_RESOURCE_VIEW_DESC nullSrvDesc = {};
-        nullSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-        nullSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        nullSrvDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; // Standard env map format
-        nullSrvDesc.Texture2D.MipLevels = 1;
-        g_device->CreateShaderResourceView(nullptr, &nullSrvDesc, alloc.cpu);
+      // Create a default scalar (null) SRV or similar?
+      // For Texture2D, a null SRV describes a "null resource" but with valid
+      // format info. Or we can rely on IBLManager creating a dummy texture.
+      // Let's create a NULL SRV so it's a valid descriptor (returns 0 on
+      // sample).
+      D3D12_SHADER_RESOURCE_VIEW_DESC nullSrvDesc = {};
+      nullSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+      nullSrvDesc.Shader4ComponentMapping =
+          D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+      nullSrvDesc.Format =
+          DXGI_FORMAT_R32G32B32A32_FLOAT; // Standard env map format
+      nullSrvDesc.Texture2D.MipLevels = 1;
+      g_device->CreateShaderResourceView(nullptr, &nullSrvDesc, alloc.cpu);
     }
   }
 
@@ -1228,11 +1236,13 @@ bool InitD3D12(HWND hwnd) {
     float refractionColor[4];
     float emissiveColor[4];
     int textureIndices[4];
-    int emissiveAndPad[4]; // x=emissive, y=occlusion, z=metalRough
-    float extraParams[4];  // x=metalness, y=emissiveIntensity, zw=unused
-    float archvizParams0[4]; // x=clearcoat, y=clearcoatRoughness, z=thinWalled, w=translucency
+    int emissiveAndPad[4];   // x=emissive, y=occlusion, z=metalRough
+    float extraParams[4];    // x=metalness, y=emissiveIntensity, zw=unused
+    float archvizParams0[4]; // x=clearcoat, y=clearcoatRoughness, z=thinWalled,
+                             // w=translucency
     float uvTransform[4];    // xy=uvScale, zw=uvOffset
-    float triPlanarParams[4]; // x=enabled, y=scale, z=sharpness, w=normalStrength
+    float
+        triPlanarParams[4]; // x=enabled, y=scale, z=sharpness, w=normalStrength
   };
   const UINT64 matCbSizeSingle = (sizeof(MaterialCB) + 255) & ~255;
   const UINT64 matCbSize = matCbSizeSingle * 16384; // Support up to 16384 calls
@@ -1305,21 +1315,25 @@ bool InitD3D12(HWND hwnd) {
 
   // Initialize Cloud Manager (Generate noise texture, upload params)
   {
-      fprintf(stderr, "Initializing Cloud Manager...\n");
-      
-      // Use a temporary command list to ensure clean state
-      ComPtr<ID3D12CommandAllocator> tempAlloc;
-      ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&tempAlloc)));
-      ComPtr<ID3D12GraphicsCommandList> tempList;
-      ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, tempAlloc.Get(), nullptr, IID_PPV_ARGS(&tempList)));
-      
-      g_cloudManager.Initialize(g_device.Get(), tempList.Get());
-      
-      // Execute immediately using the existing helper which closes the list and waits
-      ExecuteCommandListAndWait(tempList.Get());
+    fprintf(stderr, "Initializing Cloud Manager...\n");
+
+    // Use a temporary command list to ensure clean state
+    ComPtr<ID3D12CommandAllocator> tempAlloc;
+    ThrowIfFailed(g_device->CreateCommandAllocator(
+        D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&tempAlloc)));
+    ComPtr<ID3D12GraphicsCommandList> tempList;
+    ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                              tempAlloc.Get(), nullptr,
+                                              IID_PPV_ARGS(&tempList)));
+
+    g_cloudManager.Initialize(g_device.Get(), tempList.Get());
+
+    // Execute immediately using the existing helper which closes the list and
+    // waits
+    ExecuteCommandListAndWait(tempList.Get());
   }
 
-  // NOTE: g_commandList was closed early in InitD3D12 (after creation). 
+  // NOTE: g_commandList was closed early in InitD3D12 (after creation).
   // It will be Reset() in the first frame's PopulateCommandList.
 
   // Log successful InitD3D12 completion (stderr only)
@@ -1360,14 +1374,16 @@ void WaitGPUIdle() {
   const UINT64 waitValue = g_fenceValues[g_frameIndex] + 100;
   HRESULT hr = g_commandQueue->Signal(g_fence.Get(), waitValue);
   if (FAILED(hr)) {
-      if (g_device->GetDeviceRemovedReason() != S_OK) {
-          fprintf(stderr, "WaitGPUIdle: Signal failed due to Device Removal\n");
-      }
-      return;
+    if (g_device->GetDeviceRemovedReason() != S_OK) {
+      fprintf(stderr, "WaitGPUIdle: Signal failed due to Device Removal\n");
+    }
+    return;
   }
   g_fence->SetEventOnCompletion(waitValue, g_fenceEvent);
   if (WaitForSingleObject(g_fenceEvent, 5000) == WAIT_TIMEOUT) {
-      fprintf(stderr, "WaitGPUIdle: Timeout waiting for GPU idle (5s). GPU might be hung.\n");
+    fprintf(
+        stderr,
+        "WaitGPUIdle: Timeout waiting for GPU idle (5s). GPU might be hung.\n");
   }
   for (UINT i = 0; i < FrameCount; ++i) {
     g_fenceValues[i] = waitValue + 1;
@@ -1487,19 +1503,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     std::string token;
     while (iss >> token) {
       if (token == "--debug-log") {
-      #ifdef _DEBUG
+#ifdef _DEBUG
         g_debugLog = true;
-      #else
+#else
         fprintf(stderr, "--debug-log ignored in non-debug builds\n");
-      #endif
+#endif
       } else if (token == "--fast-import" || token == "--optimize-import") {
         g_fastImport = true;
       } else {
         // first non-flag token is interpreted as a path
         if (customGltfPath.empty()) {
           // remove quotes if present
-          if (!token.empty() && token.front() == '"') token = token.substr(1);
-          if (!token.empty() && token.back() == '"') token = token.substr(0, token.size() - 1);
+          if (!token.empty() && token.front() == '"')
+            token = token.substr(1);
+          if (!token.empty() && token.back() == '"')
+            token = token.substr(0, token.size() - 1);
           customGltfPath = token;
         }
       }
@@ -1667,8 +1685,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   }
 
   // State variables for Time and North Offset
-  static float g_timeOfDay = 10.0f; 
-  static float g_northOffset = 45.0f; 
+  static float g_timeOfDay = 10.0f;
+  static float g_northOffset = 45.0f;
 
   // Basic message loop + simple render
   MSG msg = {};
@@ -1676,47 +1694,48 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   auto PopulateCommandList = [&]() {
     // Update Sky Parameters (Run every frame to ensure consistency)
     {
-         const float PI = 3.14159265f;
-         const float DEG2RAD = PI / 180.0f;
+      const float PI = 3.14159265f;
+      const float DEG2RAD = PI / 180.0f;
 
-         // Simple sun path logic
-         float hourArg = (g_timeOfDay - 12.0f) / 6.0f; 
-         float elRad = std::cos(hourArg * (PI / 2.0f)) * (PI / 2.0f);
-         if (elRad < 0) elRad = 0;
+      // Simple sun path logic
+      float hourArg = (g_timeOfDay - 12.0f) / 6.0f;
+      float elRad = std::cos(hourArg * (PI / 2.0f)) * (PI / 2.0f);
+      if (elRad < 0)
+        elRad = 0;
 
-         float azDeg = (g_timeOfDay - 12.0f) * 15.0f + g_northOffset;
-         float azRad = azDeg * DEG2RAD;
+      float azDeg = (g_timeOfDay - 12.0f) * 15.0f + g_northOffset;
+      float azRad = azDeg * DEG2RAD;
 
-         // Get current parameters to preserve other sliders
-         float sunSize = IBLManager::Get().GetSunSize();
-         float sunInt = IBLManager::Get().GetSunIntensity();
+      // Get current parameters to preserve other sliders
+      float sunSize = IBLManager::Get().GetSunSize();
+      float sunInt = IBLManager::Get().GetSunIntensity();
 
-         // Apply to Sky Model
-         IBLManager::Get().SetSolarAltitude(elRad);
-         IBLManager::Get().SetSolarAzimuth(azRad);
-         IBLManager::Get().UpdateSkyModel();
+      // Apply to Sky Model
+      IBLManager::Get().SetSolarAltitude(elRad);
+      IBLManager::Get().SetSolarAzimuth(azRad);
+      IBLManager::Get().UpdateSkyModel();
 
-         // Sync Directional Light
-         float sunX = std::cos(azRad) * std::cos(elRad);
-         float sunZ = std::sin(azRad) * std::cos(elRad);
-         float sunY = std::sin(elRad);
-         
-         g_cameraData.lightDir[0] = sunX;
-         g_cameraData.lightDir[1] = sunY;
-         g_cameraData.lightDir[2] = sunZ;
-         // Pass angular radius in radians to w component
-         g_cameraData.lightDir[3] = sunSize * DEG2RAD * 0.5f;
+      // Sync Directional Light
+      float sunX = std::cos(azRad) * std::cos(elRad);
+      float sunZ = std::sin(azRad) * std::cos(elRad);
+      float sunY = std::sin(elRad);
 
-         // Sync Sun Color from Sky Model
-         auto sunRGB = IBLManager::Get().GetSunColor();
-         g_cameraData.lightColor[0] = sunRGB.x;
-         g_cameraData.lightColor[1] = sunRGB.y;
-         g_cameraData.lightColor[2] = sunRGB.z;
+      g_cameraData.lightDir[0] = sunX;
+      g_cameraData.lightDir[1] = sunY;
+      g_cameraData.lightDir[2] = sunZ;
+      // Pass angular radius in radians to w component
+      g_cameraData.lightDir[3] = sunSize * DEG2RAD * 0.5f;
 
-         // Sync Sun Intensity
-         g_cameraData.lightColor[3] = sunInt; 
+      // Sync Sun Color from Sky Model
+      auto sunRGB = IBLManager::Get().GetSunColor();
+      g_cameraData.lightColor[0] = sunRGB.x;
+      g_cameraData.lightColor[1] = sunRGB.y;
+      g_cameraData.lightColor[2] = sunRGB.z;
 
-         UpdateCameraCB();
+      // Sync Sun Intensity
+      g_cameraData.lightColor[3] = sunInt;
+
+      UpdateCameraCB();
     }
 
     // Log to stderr only (controlled by verbose flag)
@@ -1855,8 +1874,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         }
 
         if (DxrRenderer::RenderFrame(
-                g_commandList.Get(), g_frameResources[g_frameIndex].commandAllocator.Get(), g_frameIndex,
-                g_renderTargets[g_frameIndex].Get(), rtvHandle,
+                g_commandList.Get(),
+                g_frameResources[g_frameIndex].commandAllocator.Get(),
+                g_frameIndex, g_renderTargets[g_frameIndex].Get(), rtvHandle,
                 g_cameraConstantBuffer.Get(), g_materialStructuredBuffer.Get(),
                 g_texturesGpuStart, g_textureDescriptorCount, activeMeshes,
                 g_meshStructuredBuffer.Get())) {
@@ -1936,7 +1956,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       g_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
 
       // Draw Skybox (Always passes depth, but doesn't write depth)
-      RasterRenderer::DrawSkybox(g_commandList.Get(), g_cameraConstantBuffer.Get());
+      RasterRenderer::DrawSkybox(g_commandList.Get(),
+                                 g_cameraConstantBuffer.Get());
 
       // Draw ground grid (optional) via raster module
       if (g_drawGrid) {
@@ -2222,7 +2243,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       g_cameraData.forward[1] = sinf(g_camPitch);
       g_cameraData.forward[2] = cosf(g_camPitch) * -cosf(g_camYaw);
 
-      // Reset accumulation immediately when the camera orientation changes via mouse
+      // Reset accumulation immediately when the camera orientation changes via
+      // mouse
       DxrRenderer::ResetAccumulation();
 
       // Recenter cursor for next delta
@@ -2343,14 +2365,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000)) {
         if (!lbtnDown) {
           // Always run selection logic to allow selecting nodes
-          int pickedMaterial = Scene::UpdateSelection((float)g_windowWidth, (float)g_windowHeight);
-          
+          int pickedMaterial = Scene::UpdateSelection((float)g_windowWidth,
+                                                      (float)g_windowHeight);
+
           if (pickedMaterial != -1) {
-             // Only switch the Material Editor's active material if the Picking Tool is explicitly enabled
-             if (MaterialEditor::IsPickingEnabled()) {
-                 MaterialEditor::SelectMaterial(pickedMaterial);
-                 MaterialEditor::SetPickingEnabled(false);
-             }
+            // Only switch the Material Editor's active material if the Picking
+            // Tool is explicitly enabled
+            if (MaterialEditor::IsPickingEnabled()) {
+              MaterialEditor::SelectMaterial(pickedMaterial);
+              MaterialEditor::SetPickingEnabled(false);
+            }
           }
           lbtnDown = true;
         }
@@ -2364,8 +2388,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       g_cameraData.pos[0] += move.x * moveSpeed * dt;
       g_cameraData.pos[1] += move.y * moveSpeed * dt;
       g_cameraData.pos[2] += move.z * moveSpeed * dt;
-      
-      // Reset accumulation immediately when the camera position changes via input
+
+      // Reset accumulation immediately when the camera position changes via
+      // input
       DxrRenderer::ResetAccumulation();
     }
 
@@ -2381,10 +2406,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     g_cameraData.frameCount = (float)DxrRenderer::GetDisplayedSampleCount();
     const bool fileIblActive =
         (IBLManager::Get().GetIBLSource() == IBLManager::IBLSource::File);
-    const bool effectiveCloudRendering = g_cloudRenderingEnabled && !fileIblActive;
+    const bool effectiveCloudRendering =
+        g_cloudRenderingEnabled && !fileIblActive;
     g_cameraData.cloudRenderingEnabled = effectiveCloudRendering ? 1.0f : 0.0f;
     UpdateCameraCB();
-    
+
     // Update Cloud Manager (uploads changed params to GPU)
     g_cloudManager.Update(dt);
 
@@ -2414,50 +2440,66 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       // Use compact spacing for menu bar toggles
       ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 6));
       if (ImGui::BeginMenu("Clouds")) {
-          CloudParams& cp = g_cloudManager.GetParams();
-          bool changed = false;
+        CloudParams &cp = g_cloudManager.GetParams();
+        bool changed = false;
 
-          if (ImGui::Checkbox("Enable Cloud Rendering", &g_cloudRenderingEnabled)) {
-            changed = true;
-          }
-          ImGui::Separator();
+        if (ImGui::Checkbox("Enable Cloud Rendering",
+                            &g_cloudRenderingEnabled)) {
+          changed = true;
+        }
+        ImGui::Separator();
 
-          if (ImGui::Button("Reset to Defaults")) {
-            g_cloudManager.ResetToDefaults();
-            changed = true;
-          }
-          ImGui::Separator();
+        if (ImGui::Button("Reset to Defaults")) {
+          g_cloudManager.ResetToDefaults();
+          changed = true;
+        }
+        ImGui::Separator();
 
-          changed |= ImGui::SliderFloat("Density", &cp.density, 0.0f, 5.0f);
-          changed |= ImGui::SliderFloat("Absorption", &cp.absorption, 0.0f, 2.0f);
-          changed |= ImGui::SliderFloat("Coverage", &cp.coverage, 0.0f, 1.0f);
-          changed |= ImGui::SliderFloat("Scattering (g)", &cp.scattering, -0.99f, 0.99f);
-          changed |= ImGui::SliderInt("Steps", &cp.steps, 16, 128);
-          changed |= ImGui::SliderFloat("Sun Intensity", &cp.sunIntensity, 0.0f, 20.0f);
-          changed |= ImGui::SliderFloat("Cloud Top", &cp.cloudTop, 200.0f, 1000.0f);
-          changed |= ImGui::SliderFloat("Cloud Bottom", &cp.cloudBottom, 50.0f, 300.0f);
-          changed |= ImGui::SliderFloat("Wind Speed", &cp.windSpeed, 0.0f, 50.0f);
+        changed |= ImGui::SliderFloat("Density", &cp.density, 0.0f, 5.0f);
+        changed |= ImGui::SliderFloat("Absorption", &cp.absorption, 0.0f, 2.0f);
+        changed |= ImGui::SliderFloat("Coverage", &cp.coverage, 0.0f, 1.0f);
+        changed |=
+            ImGui::SliderFloat("Scattering (g)", &cp.scattering, -0.99f, 0.99f);
+        changed |= ImGui::SliderInt("Steps", &cp.steps, 16, 128);
+        changed |=
+            ImGui::SliderFloat("Sun Intensity", &cp.sunIntensity, 0.0f, 20.0f);
+        changed |=
+            ImGui::SliderFloat("Cloud Top", &cp.cloudTop, 200.0f, 1000.0f);
+        changed |=
+            ImGui::SliderFloat("Cloud Bottom", &cp.cloudBottom, 50.0f, 300.0f);
+        changed |= ImGui::SliderFloat("Wind Speed", &cp.windSpeed, 0.0f, 50.0f);
 
-          ImGui::Separator();
-          changed |= ImGui::SliderFloat("Base Scale", &cp.baseScale, 0.0001f, 0.0020f, "%.5f", ImGuiSliderFlags_Logarithmic);
-          changed |= ImGui::SliderFloat("Detail Scale", &cp.detailScale, 0.0005f, 0.01f, "%.5f", ImGuiSliderFlags_Logarithmic);
-          changed |= ImGui::SliderFloat("Coverage Scale", &cp.coverageScale, 0.00005f, 0.0010f, "%.5f", ImGuiSliderFlags_Logarithmic);
-          changed |= ImGui::SliderFloat("Erosion", &cp.erosion, 0.0f, 1.0f);
-          changed |= ImGui::SliderFloat("Warp Strength", &cp.warpStrength, 0.0f, 2.0f);
+        ImGui::Separator();
+        changed |=
+            ImGui::SliderFloat("Base Scale", &cp.baseScale, 0.0001f, 0.0020f,
+                               "%.5f", ImGuiSliderFlags_Logarithmic);
+        changed |=
+            ImGui::SliderFloat("Detail Scale", &cp.detailScale, 0.0005f, 0.01f,
+                               "%.5f", ImGuiSliderFlags_Logarithmic);
+        changed |=
+            ImGui::SliderFloat("Coverage Scale", &cp.coverageScale, 0.00005f,
+                               0.0010f, "%.5f", ImGuiSliderFlags_Logarithmic);
+        changed |= ImGui::SliderFloat("Erosion", &cp.erosion, 0.0f, 1.0f);
+        changed |=
+            ImGui::SliderFloat("Warp Strength", &cp.warpStrength, 0.0f, 2.0f);
 
-          ImGui::Separator();
-          changed |= ImGui::SliderInt("Shadow Steps", &cp.shadowSteps, 1, 16);
-          changed |= ImGui::SliderFloat("Shadow Step Size", &cp.shadowStepSize, 10.0f, 500.0f);
-          changed |= ImGui::SliderFloat("Shadow LOD", &cp.shadowLod, 0.0f, 5.0f);
-          changed |= ImGui::SliderInt("Max Ray Steps", &cp.maxSteps, 64, 2048);
-          changed |= ImGui::SliderFloat("Vertical Step (m)", &cp.verticalStepMeters, 2.0f, 80.0f);
-          changed |= ImGui::SliderInt("Shadow Every N Steps", &cp.shadowEvery, 1, 16);
-          changed |= ImGui::SliderFloat("Shadow Density Threshold", &cp.shadowDensityThreshold, 0.0f, 0.5f);
-          
-          if (changed) {
-              DxrRenderer::ResetAccumulation();
-          }
-          ImGui::EndMenu();
+        ImGui::Separator();
+        changed |= ImGui::SliderInt("Shadow Steps", &cp.shadowSteps, 1, 16);
+        changed |= ImGui::SliderFloat("Shadow Step Size", &cp.shadowStepSize,
+                                      10.0f, 500.0f);
+        changed |= ImGui::SliderFloat("Shadow LOD", &cp.shadowLod, 0.0f, 5.0f);
+        changed |= ImGui::SliderInt("Max Ray Steps", &cp.maxSteps, 64, 2048);
+        changed |= ImGui::SliderFloat("Vertical Step (m)",
+                                      &cp.verticalStepMeters, 2.0f, 80.0f);
+        changed |=
+            ImGui::SliderInt("Shadow Every N Steps", &cp.shadowEvery, 1, 16);
+        changed |= ImGui::SliderFloat("Shadow Density Threshold",
+                                      &cp.shadowDensityThreshold, 0.0f, 0.5f);
+
+        if (changed) {
+          DxrRenderer::ResetAccumulation();
+        }
+        ImGui::EndMenu();
       }
 
       ImGui::Checkbox("##AssetsToggle", &g_showAssetsWindow);
@@ -2569,95 +2611,108 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         bool fileIblEnabled =
             (IBLManager::Get().GetIBLSource() == IBLManager::IBLSource::File);
         if (ImGui::Checkbox("Enable File IBL", &fileIblEnabled)) {
-             if (fileIblEnabled) {
-                 IBLManager::Get().SetIBLSource(IBLManager::IBLSource::File);
-             } else {
-                 IBLManager::Get().SetIBLSource(IBLManager::IBLSource::PragueSkyModel);
-                 IBLManager::Get().UpdateSkyModel();
-             }
-             uiChanged = true;
+          if (fileIblEnabled) {
+            IBLManager::Get().SetIBLSource(IBLManager::IBLSource::File);
+          } else {
+            IBLManager::Get().SetIBLSource(
+                IBLManager::IBLSource::PragueSkyModel);
+            IBLManager::Get().UpdateSkyModel();
+          }
+          uiChanged = true;
         }
-        
-        static int iblSource = 0; 
+
+        static int iblSource = 0;
         iblSource = (int)IBLManager::Get().GetIBLSource();
         if (ImGui::RadioButton("File IBL", &iblSource, 0)) {
-             IBLManager::Get().SetIBLSource(IBLManager::IBLSource::File);
-             uiChanged = true;
+          IBLManager::Get().SetIBLSource(IBLManager::IBLSource::File);
+          uiChanged = true;
         }
         ImGui::SameLine();
         if (ImGui::RadioButton("Prague Sky", &iblSource, 1)) {
-             IBLManager::Get().SetIBLSource(IBLManager::IBLSource::PragueSkyModel);
-             IBLManager::Get().UpdateSkyModel();
-             uiChanged = true;
+          IBLManager::Get().SetIBLSource(IBLManager::IBLSource::PragueSkyModel);
+          IBLManager::Get().UpdateSkyModel();
+          uiChanged = true;
         }
 
         if (iblSource == 1) {
-            bool uiParamChanged = false;
-            
-            float vis = IBLManager::Get().GetSkyVisibility();
-            if (ImGui::SliderFloat("Visibility (km)", &vis, 10.0f, 120.0f)) {
-                IBLManager::Get().SetSkyVisibility(vis);
-                uiParamChanged = true;
-                uiChanged = true;
-            }
-            float albedo = IBLManager::Get().GetSkyAlbedo();
-            if (ImGui::SliderFloat("Earth Albedo", &albedo, 0.0f, 1.0f)) {
-                 IBLManager::Get().SetSkyAlbedo(albedo);
-                 uiParamChanged = true;
-                 uiChanged = true;
-            }
-            float altitude = IBLManager::Get().GetObserverAltitude();
-            if (ImGui::SliderFloat("Altitude (m)", &altitude, 0.0f, 15000.0f)) {
-                 IBLManager::Get().SetObserverAltitude(altitude);
-                 uiParamChanged = true;
-                 uiChanged = true;
-            }
+          bool uiParamChanged = false;
 
-            // Intensity Controls
-            float skyInt = IBLManager::Get().GetSkyIntensity();
-            if (ImGui::SliderFloat("Sky Intensity", &skyInt, 0.0f, 5.0f)) {
-                IBLManager::Get().SetSkyIntensity(skyInt);
-                uiParamChanged = true;
-                uiChanged = true;
-            }
-            float sunInt = IBLManager::Get().GetSunIntensity();
-            if (ImGui::SliderFloat("Sun Intensity", &sunInt, 0.0f, 10.0f)) {
-                IBLManager::Get().SetSunIntensity(sunInt);
-                // Changes analytic light intensity
-                uiChanged = true;
-            }
-            float sunSize = IBLManager::Get().GetSunSize();
-            if (ImGui::SliderFloat("Sun Size (deg)", &sunSize, 0.1f, 5.0f)) {
-                IBLManager::Get().SetSunSize(sunSize);
-                // Changes analytic light radius
-                uiChanged = true;
-            }
+          float vis = IBLManager::Get().GetSkyVisibility();
+          if (ImGui::SliderFloat("Visibility (km)", &vis, 10.0f, 120.0f)) {
+            IBLManager::Get().SetSkyVisibility(vis);
+            uiParamChanged = true;
+            uiChanged = true;
+          }
+          float albedo = IBLManager::Get().GetSkyAlbedo();
+          if (ImGui::SliderFloat("Earth Albedo", &albedo, 0.0f, 1.0f)) {
+            IBLManager::Get().SetSkyAlbedo(albedo);
+            uiParamChanged = true;
+            uiChanged = true;
+          }
+          float altitude = IBLManager::Get().GetObserverAltitude();
+          if (ImGui::SliderFloat("Altitude (m)", &altitude, 0.0f, 15000.0f)) {
+            IBLManager::Get().SetObserverAltitude(altitude);
+            uiParamChanged = true;
+            uiChanged = true;
+          }
 
-            // float elev = IBLManager::Get().GetSolarAltitude(); // Not used directly, driven by Time
-            
-            // GUI State for Time/North (controlled by global static vars now)
-            
-            if (ImGui::SliderFloat("Time of Day", &g_timeOfDay, 6.0f, 18.0f)) { uiParamChanged = true; uiChanged = true; }
-            if (ImGui::SliderFloat("North Offset", &g_northOffset, 0.0f, 360.0f)) { uiParamChanged = true; uiChanged = true; }
+          // Intensity Controls
+          float skyInt = IBLManager::Get().GetSkyIntensity();
+          if (ImGui::SliderFloat("Sky Intensity", &skyInt, 0.0f, 5.0f)) {
+            IBLManager::Get().SetSkyIntensity(skyInt);
+            uiParamChanged = true;
+            uiChanged = true;
+          }
+          float sunInt = IBLManager::Get().GetSunIntensity();
+          if (ImGui::SliderFloat("Sun Intensity", &sunInt, 0.0f, 5.0f)) {
+            IBLManager::Get().SetSunIntensity(sunInt);
+            // Changes analytic light intensity
+            uiChanged = true;
+          }
+          float sunSize = IBLManager::Get().GetSunSize();
+          if (ImGui::SliderFloat("Sun Size (deg)", &sunSize, 0.1f, 5.0f)) {
+            IBLManager::Get().SetSunSize(sunSize);
+            // Changes analytic light radius
+            uiChanged = true;
+          }
 
-            // Logic moved to PopulateCommandList to ensure update even when UI is closed
+          // float elev = IBLManager::Get().GetSolarAltitude(); // Not used
+          // directly, driven by Time
 
-            // If UI changed non-light parameters (texture content), force logical reset
-            if (uiParamChanged) {
-                 DxrRenderer::ResetAccumulation();
-            }
+          // GUI State for Time/North (controlled by global static vars now)
 
-            UpdateCameraCB(); // automatically resets accumulation if lightDir/Color changed
+          if (ImGui::SliderFloat("Time of Day", &g_timeOfDay, 6.0f, 18.0f)) {
+            uiParamChanged = true;
+            uiChanged = true;
+          }
+          if (ImGui::SliderFloat("North Offset", &g_northOffset, 0.0f,
+                                 360.0f)) {
+            uiParamChanged = true;
+            uiChanged = true;
+          }
+
+          // Logic moved to PopulateCommandList to ensure update even when UI is
+          // closed
+
+          // If UI changed non-light parameters (texture content), force logical
+          // reset
+          if (uiParamChanged) {
+            DxrRenderer::ResetAccumulation();
+          }
+
+          UpdateCameraCB(); // automatically resets accumulation if
+                            // lightDir/Color changed
         }
-        
+
         ImGui::Spacing();
         if (ImGui::ColorEdit3("Ambient Color", g_cameraData.ambientColor)) {
-             UpdateCameraCB();
-             uiChanged = true;
+          UpdateCameraCB();
+          uiChanged = true;
         }
-        if (ImGui::SliderFloat("Ambient Weight", &g_cameraData.ambientColor[3], 0.0f, 1.0f)) {
-             UpdateCameraCB();
-             uiChanged = true;
+        if (ImGui::SliderFloat("Ambient Weight", &g_cameraData.ambientColor[3],
+                               0.0f, 1.0f)) {
+          UpdateCameraCB();
+          uiChanged = true;
         }
         ImGui::Checkbox("Show Grid", &g_drawGrid);
 
@@ -2701,12 +2756,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
         if (g_currentRenderMode == RenderMode::DXR) {
           ImGui::Text("Samples: %u", DxrRenderer::GetDisplayedSampleCount());
-          
+
           float currentNoise = DxrRenderer::GetCurrentNoiseLevel();
           if (currentNoise > 0.0f) {
-              ImGui::Text("Noise Level: %.2f%%", currentNoise * 100.0f);
+            ImGui::Text("Noise Level: %.2f%%", currentNoise * 100.0f);
           } else {
-              ImGui::Text("Noise Level: Calculating...");
+            ImGui::Text("Noise Level: Calculating...");
           }
 
           if (ImGui::SliderFloat("Reflection Bounces",
@@ -2728,8 +2783,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           }
 
           int maxSpp = (int)g_cameraData.maxSPP;
-          if (maxSpp < 10) maxSpp = 10;
-          if (maxSpp > 1000) maxSpp = 1000;
+          if (maxSpp < 10)
+            maxSpp = 10;
+          if (maxSpp > 1000)
+            maxSpp = 1000;
           if (ImGui::SliderInt("Max SPP", &maxSpp, 10, 1000)) {
             g_cameraData.maxSPP = (float)maxSpp;
             UpdateCameraCB();
@@ -2743,33 +2800,34 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             g_cameraData.useAdaptiveSampling = adaptive ? 1.0f : 0.0f;
             // Ensure threshold is valid when enabling
             if (g_cameraData.noiseThreshold <= 0.0f) {
-                g_cameraData.noiseThreshold = 0.05f; // Default 5%
+              g_cameraData.noiseThreshold = 0.05f; // Default 5%
             }
             UpdateCameraCB();
             uiChanged = true;
           }
           if (adaptive) {
-             float maxSppF = g_cameraData.maxSPP;
-             // If adaptive is on, we might want to increase maxSPP effectively to infinity 
-             // or let user control it. User said "Max SPP or Noise, whichever first".
-             // So we keep Max SPP control.
-             
-             float nVal = g_cameraData.noiseThreshold * 100.0f;
-             if (ImGui::SliderFloat("Target Noise %", &nVal, 1.0f, 30.0f, "%.1f%%")) {
-                 g_cameraData.noiseThreshold = nVal / 100.0f;
-                 UpdateCameraCB();
-                 uiChanged = true;
-             }
-             
-             bool viz = g_cameraData.debugVisualizationMode > 0.5f;
-             if (ImGui::Checkbox("Show Noise Map (Debug)", &viz)) {
-                 g_cameraData.debugVisualizationMode = viz ? 1.0f : 0.0f;
-                 UpdateCameraCB();
-                 uiChanged = true;
-             }
-             
-             if (ImGui::IsItemHovered())
-                 ImGui::SetTooltip("White = High Noise (10%+), Black = Low Noise");
+            float maxSppF = g_cameraData.maxSPP;
+            // If adaptive is on, we might want to increase maxSPP effectively
+            // to infinity or let user control it. User said "Max SPP or Noise,
+            // whichever first". So we keep Max SPP control.
+
+            float nVal = g_cameraData.noiseThreshold * 100.0f;
+            if (ImGui::SliderFloat("Target Noise %", &nVal, 1.0f, 30.0f,
+                                   "%.1f%%")) {
+              g_cameraData.noiseThreshold = nVal / 100.0f;
+              UpdateCameraCB();
+              uiChanged = true;
+            }
+
+            bool viz = g_cameraData.debugVisualizationMode > 0.5f;
+            if (ImGui::Checkbox("Show Noise Map (Debug)", &viz)) {
+              g_cameraData.debugVisualizationMode = viz ? 1.0f : 0.0f;
+              UpdateCameraCB();
+              uiChanged = true;
+            }
+
+            if (ImGui::IsItemHovered())
+              ImGui::SetTooltip("White = High Noise (10%+), Black = Low Noise");
           }
 
           ImGui::Separator();
@@ -2778,13 +2836,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           if (ImGui::Checkbox("Enable", &dlssEnabled)) {
             g_streamline.SetEnabled(dlssEnabled);
             DxrRenderer::ResetStreamlineHistory();
-            // DLSS uses a different internal render resolution; recreate resources.
+            // DLSS uses a different internal render resolution; recreate
+            // resources.
             WaitGPUIdle();
-            DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
+            DxrRenderer::CreateRayTracingPipeline(g_windowWidth,
+                                                  g_windowHeight);
             uiChanged = true;
           }
 
-          const char* dlssModes[] = {"Off", "DLSS Super Resolution", "DLSS Ray Reconstruction"};
+          const char *dlssModes[] = {"Off", "DLSS Super Resolution",
+                                     "DLSS Ray Reconstruction"};
           int modeIdx = 0;
           switch (g_streamline.GetMode()) {
           case StreamlineManager::Mode::Off:
@@ -2797,7 +2858,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             modeIdx = 2;
             break;
           }
-          if (ImGui::Combo("Mode", &modeIdx, dlssModes, IM_ARRAYSIZE(dlssModes))) {
+          if (ImGui::Combo("Mode", &modeIdx, dlssModes,
+                           IM_ARRAYSIZE(dlssModes))) {
             StreamlineManager::Mode newMode = StreamlineManager::Mode::Off;
             if (modeIdx == 1)
               newMode = StreamlineManager::Mode::DLSS_SuperResolution;
@@ -2811,30 +2873,51 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             }
             DxrRenderer::ResetStreamlineHistory();
             WaitGPUIdle();
-            DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
+            DxrRenderer::CreateRayTracingPipeline(g_windowWidth,
+                                                  g_windowHeight);
             uiChanged = true;
           }
 
-          const char* qualities[] = {"Max Performance", "Balanced", "Max Quality", "Ultra Performance", "DLAA"};
+          const char *qualities[] = {"Max Performance", "Balanced",
+                                     "Max Quality", "Ultra Performance",
+                                     "DLAA"};
           int qIdx = 1;
           switch (g_streamline.GetQuality()) {
-          case StreamlineManager::Quality::MaxPerformance: qIdx = 0; break;
-          case StreamlineManager::Quality::Balanced: qIdx = 1; break;
-          case StreamlineManager::Quality::MaxQuality: qIdx = 2; break;
-          case StreamlineManager::Quality::UltraPerformance: qIdx = 3; break;
-          case StreamlineManager::Quality::DLAA: qIdx = 4; break;
+          case StreamlineManager::Quality::MaxPerformance:
+            qIdx = 0;
+            break;
+          case StreamlineManager::Quality::Balanced:
+            qIdx = 1;
+            break;
+          case StreamlineManager::Quality::MaxQuality:
+            qIdx = 2;
+            break;
+          case StreamlineManager::Quality::UltraPerformance:
+            qIdx = 3;
+            break;
+          case StreamlineManager::Quality::DLAA:
+            qIdx = 4;
+            break;
           }
-          if (ImGui::Combo("Quality", &qIdx, qualities, IM_ARRAYSIZE(qualities))) {
-            StreamlineManager::Quality newQ = StreamlineManager::Quality::Balanced;
-            if (qIdx == 0) newQ = StreamlineManager::Quality::MaxPerformance;
-            if (qIdx == 1) newQ = StreamlineManager::Quality::Balanced;
-            if (qIdx == 2) newQ = StreamlineManager::Quality::MaxQuality;
-            if (qIdx == 3) newQ = StreamlineManager::Quality::UltraPerformance;
-            if (qIdx == 4) newQ = StreamlineManager::Quality::DLAA;
+          if (ImGui::Combo("Quality", &qIdx, qualities,
+                           IM_ARRAYSIZE(qualities))) {
+            StreamlineManager::Quality newQ =
+                StreamlineManager::Quality::Balanced;
+            if (qIdx == 0)
+              newQ = StreamlineManager::Quality::MaxPerformance;
+            if (qIdx == 1)
+              newQ = StreamlineManager::Quality::Balanced;
+            if (qIdx == 2)
+              newQ = StreamlineManager::Quality::MaxQuality;
+            if (qIdx == 3)
+              newQ = StreamlineManager::Quality::UltraPerformance;
+            if (qIdx == 4)
+              newQ = StreamlineManager::Quality::DLAA;
             g_streamline.SetQuality(newQ);
             DxrRenderer::ResetStreamlineHistory();
             WaitGPUIdle();
-            DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
+            DxrRenderer::CreateRayTracingPipeline(g_windowWidth,
+                                                  g_windowHeight);
           }
 
           if (ImGui::Button("Reset DLSS History")) {
@@ -2847,47 +2930,63 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
           // Show recommended render (input) size and output (swapchain) size
           {
-            auto rec = g_streamline.GetRecommendedRenderSize(g_windowWidth, g_windowHeight);
+            auto rec = g_streamline.GetRecommendedRenderSize(g_windowWidth,
+                                                             g_windowHeight);
             ImGui::Text("Render (in): %u x %u    Output (out): %u x %u",
                         (unsigned)rec.renderWidth, (unsigned)rec.renderHeight,
                         (unsigned)g_windowWidth, (unsigned)g_windowHeight);
           }
 
-          if (g_streamline.GetMode() == StreamlineManager::Mode::DLSS_RayReconstruction) {
+          if (g_streamline.GetMode() ==
+              StreamlineManager::Mode::DLSS_RayReconstruction) {
             float rrJitterScale = DxrRenderer::GetRrJitterScale();
-            if (ImGui::SliderFloat("RR Jitter Scale", &rrJitterScale, 0.0f, 1.0f, "%.2f")) {
+            if (ImGui::SliderFloat("RR Jitter Scale", &rrJitterScale, 0.0f,
+                                   1.0f, "%.2f")) {
               DxrRenderer::SetRrJitterScale(rrJitterScale);
               DxrRenderer::ResetStreamlineHistory();
               uiChanged = true;
             }
-            ImGui::TextWrapped(
-                "Lowering jitter can reduce edge/silhouette shimmer (especially near screen borders) but may reduce DLSS-RR reconstruction/AA quality.");
+            ImGui::TextWrapped("Lowering jitter can reduce edge/silhouette "
+                               "shimmer (especially near screen borders) but "
+                               "may reduce DLSS-RR reconstruction/AA quality.");
           }
 
           // Denoiser selection
-          const char* denoisers[] = {"Off", "OIDN (CPU)", "OIDN (GPU)"};
+          const char *denoisers[] = {"Off", "OIDN (CPU)", "OIDN (GPU)"};
           int denoiserIdx = 0;
           switch (DxrRenderer::GetDenoiserMode()) {
-            case DxrRenderer::DenoiserMode::Off: denoiserIdx = 0; break;
-            case DxrRenderer::DenoiserMode::OIDN_CPU: denoiserIdx = 1; break;
-            case DxrRenderer::DenoiserMode::OIDN_GPU: denoiserIdx = 2; break;
+          case DxrRenderer::DenoiserMode::Off:
+            denoiserIdx = 0;
+            break;
+          case DxrRenderer::DenoiserMode::OIDN_CPU:
+            denoiserIdx = 1;
+            break;
+          case DxrRenderer::DenoiserMode::OIDN_GPU:
+            denoiserIdx = 2;
+            break;
           }
-          if (ImGui::Combo("Denoiser", &denoiserIdx, denoisers, IM_ARRAYSIZE(denoisers))) {
+          if (ImGui::Combo("Denoiser", &denoiserIdx, denoisers,
+                           IM_ARRAYSIZE(denoisers))) {
             DxrRenderer::DenoiserMode newMode = DxrRenderer::DenoiserMode::Off;
-            if (denoiserIdx == 1) newMode = DxrRenderer::DenoiserMode::OIDN_CPU;
-            if (denoiserIdx == 2) newMode = DxrRenderer::DenoiserMode::OIDN_GPU;
+            if (denoiserIdx == 1)
+              newMode = DxrRenderer::DenoiserMode::OIDN_CPU;
+            if (denoiserIdx == 2)
+              newMode = DxrRenderer::DenoiserMode::OIDN_GPU;
             DxrRenderer::SetDenoiserMode(newMode);
-            // Recreate pipeline/resources to account for any mode-specific resources
-            // and reset accumulation for stable rendering.
+            // Recreate pipeline/resources to account for any mode-specific
+            // resources and reset accumulation for stable rendering.
             DxrRenderer::ResetAccumulation();
             WaitGPUIdle();
-            DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
+            DxrRenderer::CreateRayTracingPipeline(g_windowWidth,
+                                                  g_windowHeight);
           }
 
-          if (DxrRenderer::GetDenoiserMode() != DxrRenderer::DenoiserMode::Off) {
-            const char* oidnQualities[] = {"Fast", "Balanced", "High"};
+          if (DxrRenderer::GetDenoiserMode() !=
+              DxrRenderer::DenoiserMode::Off) {
+            const char *oidnQualities[] = {"Fast", "Balanced", "High"};
             int qualIdx = (int)DxrRenderer::GetOidnQuality();
-            if (ImGui::Combo("OIDN Quality", &qualIdx, oidnQualities, IM_ARRAYSIZE(oidnQualities))) {
+            if (ImGui::Combo("OIDN Quality", &qualIdx, oidnQualities,
+                             IM_ARRAYSIZE(oidnQualities))) {
               DxrRenderer::SetOidnQuality((OidnDenoiser::Quality)qualIdx);
               uiChanged = true;
             }
@@ -2897,13 +2996,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           // (only if a denoiser is selected).
 
           ImGui::Text("NGX AppId: %u", g_streamline.GetApplicationId());
-          if (g_streamline.IsEnabled() && g_streamline.GetMode() != StreamlineManager::Mode::Off &&
+          if (g_streamline.IsEnabled() &&
+              g_streamline.GetMode() != StreamlineManager::Mode::Off &&
               (!g_streamline.IsInitialized() || !g_streamline.IsDeviceSet() ||
                !g_streamline.AreFeatureFunctionsReady())) {
-            ImGui::TextWrapped(
-                "DLSS plugins may be disabled. If you see 'Missing NGX context', "
-                "set env SL_APPLICATION_ID (or create sl_appid.txt next to the exe) "
-                "to your NVIDIA-provided NGX application id.");
+            ImGui::TextWrapped("DLSS plugins may be disabled. If you see "
+                               "'Missing NGX context', "
+                               "set env SL_APPLICATION_ID (or create "
+                               "sl_appid.txt next to the exe) "
+                               "to your NVIDIA-provided NGX application id.");
           }
 
           ImGui::Separator();
@@ -2917,36 +3018,36 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             g_streamline.SetMirrorLogsToStderr(slMirror);
           }
           if (g_streamline.GetLogToFile()) {
-            ImGui::TextWrapped("SL log dir: %ls", g_streamline.GetLogDirectory().c_str());
+            ImGui::TextWrapped("SL log dir: %ls",
+                               g_streamline.GetLogDirectory().c_str());
           }
-
         }
 
         // Debug Render Pass Dropdown
         const char *debugModes[] = {"None",
-                  "Albedo",
-                  "Normal",
-                  "Emissive",
-                  "Roughness/Glossiness",
-                  "Refl. Color",
-                  "Metalness",
-                  "AO",
-                  "Motion Vectors",
-                  "Spec Hit Distance",
-                  "Spec Motion Vectors",
-                  "Cloud: Slab Mask",
-                  "Cloud: CB Sanity",
-                  "Cloud: Noise Sanity",
-                  "Cloud: Density Sanity",
-                  "Cloud: Opacity (1-T)",
-                  "Cloud: BaseShape Sanity",
-                  "Debug: Accum Samples (N)",
-                  "Debug: History Validity",
-                  "Debug: Per-Pixel Noise",
-                  "Debug: Sample Deficit",
-                  "Debug: Recent Reset Mask"};
+                                    "Albedo",
+                                    "Normal",
+                                    "Emissive",
+                                    "Roughness/Glossiness",
+                                    "Refl. Color",
+                                    "Metalness",
+                                    "AO",
+                                    "Motion Vectors",
+                                    "Spec Hit Distance",
+                                    "Spec Motion Vectors",
+                                    "Cloud: Slab Mask",
+                                    "Cloud: CB Sanity",
+                                    "Cloud: Noise Sanity",
+                                    "Cloud: Density Sanity",
+                                    "Cloud: Opacity (1-T)",
+                                    "Cloud: BaseShape Sanity",
+                                    "Debug: Accum Samples (N)",
+                                    "Debug: History Validity",
+                                    "Debug: Per-Pixel Noise",
+                                    "Debug: Sample Deficit",
+                                    "Debug: Recent Reset Mask"};
         if (ImGui::Combo("Debug View", &g_debugMode, debugModes,
-             IM_ARRAYSIZE(debugModes))) {
+                         IM_ARRAYSIZE(debugModes))) {
           // Keep history when switching diagnostics so comparisons are from the
           // same accumulated frame state.
         }

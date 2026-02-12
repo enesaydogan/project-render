@@ -7,7 +7,6 @@
 #include <string>
 #include <wrl.h>
 
-
 class IBLManager {
 public:
   enum class IBLSource { File, PragueSkyModel };
@@ -137,7 +136,7 @@ private:
   float m_solarElevation = 0.5f;
   float m_solarAzimuth = 0.0f;
   float m_altitude = 200.0f; // meters (0 - 15000)
-  float m_skyIntensity = 0.5f;
+  float m_skyIntensity = 1.0f;
   float m_sunIntensity = 1.0f;
-  float m_sunSize = 1.0f; // degrees
+  float m_sunSize = 2.0f; // degrees
 };
