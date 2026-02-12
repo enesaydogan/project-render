@@ -179,7 +179,7 @@ static ComPtr<ID3D12PipelineState> g_meshSimplePipelineState;
 // Grid line thickness in world units (used to expand lines into thin quads)
 static float g_gridThickness = 0.02f; // increase to make lines thicker
 
-static bool g_drawGrid = false; // toggle grid rendering (default OFF)
+bool g_drawGrid = false; // toggle grid rendering (default OFF)
 
 // Small camera module is defined in src/camera.h/.cpp
 #include "camera.h"
@@ -195,7 +195,7 @@ struct Vec3 {
 
 // NVIDIA Streamline (DLSS-SR + DLSS-RR)
 #include "streamline_manager.h"
-static StreamlineManager g_streamline;
+StreamlineManager g_streamline;
 
 // Raw Helper to Add Subobject
 struct SubobjectWrapper {
