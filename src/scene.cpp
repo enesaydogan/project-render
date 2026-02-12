@@ -30,6 +30,7 @@ extern UINT g_textureDescriptorCount;
 extern D3D12_GPU_DESCRIPTOR_HANDLE g_texturesGpuStart;
 extern DescriptorHeapAllocator g_cbvSrvAllocator;
 extern ComPtr<ID3D12Device> g_device;
+extern void WaitGPUIdle();
 
 namespace Scene {
 
@@ -213,13 +214,25 @@ bool ImportModel(const std::string &utf8path, const float *rootTranslation) {
 
     RegisterTextures(textures);
 
-    // Create a scene node for this import
-    Node node;
-    node.name = std::filesystem::path(utf8path).filename().string();
-    node.sourcePath = utf8path;
-    for (size_t i = 0; i < meshes.size(); ++i)
-      node.meshIndices.push_back(meshBase + i);
-    s_nodes.push_back(node);
+    // Create scene nodes for this import.
+    // If multiple meshes, create a node for each to support "Hierarchy" /
+    // individual transforms.
+    if (meshes.size() > 1) {
+      for (size_t i = 0; i < meshes.size(); ++i) {
+        Node node;
+        node.name = std::filesystem::path(utf8path).filename().stem().string() +
+                    "_" + std::to_string(i);
+        node.sourcePath = utf8path;
+        node.meshIndices.push_back(meshBase + i);
+        s_nodes.push_back(node);
+      }
+    } else if (meshes.size() == 1) {
+      Node node;
+      node.name = std::filesystem::path(utf8path).filename().string();
+      node.sourcePath = utf8path;
+      node.meshIndices.push_back(meshBase);
+      s_nodes.push_back(node);
+    }
 
     s_lastStatus = std::string("Loaded: ") + utf8path;
     fprintf(stderr, "%s\n", s_lastStatus.c_str());
@@ -385,6 +398,10 @@ void SelectNode(size_t index) {
 void DeleteNode(size_t index) {
   if (index >= s_nodes.size())
     return;
+
+  // Ensure GPU is not using the resources we are about to release
+  WaitGPUIdle();
+
   // Mark meshes as empty by clearing their vertex/index resources
   for (size_t mi : s_nodes[index].meshIndices) {
     if (mi < g_loadedMeshes.size()) {
@@ -399,6 +416,7 @@ void DeleteNode(size_t index) {
 
   // Rebuild AS after deletion
   RebuildAccelerationStructures();
+  DxrRenderer::ResetAccumulation();
 }
 
 void AddDefaultPlane(float offset_y) {
@@ -472,6 +490,10 @@ void AddDefaultPlane(float offset_y) {
 
     gm.vertexCount = 4;
     gm.indexCount = 6;
+
+    // Populate CPU copies for serialization/raypicking
+    gm.cpuVertices.assign(verts, verts + 4);
+    gm.cpuIndices.assign(indices, indices + 6);
 
     gm.minBound[0] = -half;
     gm.minBound[1] = offset_y;
@@ -1207,6 +1229,7 @@ void DrawScenePanel(HWND hwnd, bool &visible) {
 }
 
 void ResetScene() {
+  WaitGPUIdle();
   s_nodes.clear();
   g_loadedMeshes.clear();
   g_loadedMaterials.clear();
