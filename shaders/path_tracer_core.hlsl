@@ -349,7 +349,7 @@ void RayGen()
             // RR is very sensitive to sky shimmer. For the primary ray, sample
             // the environment using a non-jittered ray direction.
             float3 missColor = payload.color;
-            if (bounce == 0 && dlssRayReconstruction > 0.5) {
+            if (bounce == 0 && dlssRayReconstruction > 0.5 && cloudRenderingEnabled < 0.5) {
                 float2 skyUv = DirectionToUV(rayDirCenter);
                 // Slight mip bias helps remove residual HDRI aliasing that shows up
                 // as shimmer, especially along silhouettes.
