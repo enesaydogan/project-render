@@ -2365,7 +2365,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     g_cameraData.aspect = (float)g_windowWidth / (float)g_windowHeight;
     g_cameraData.debugMode = (float)g_debugMode;
     g_cameraData.lightCount = (float)DxrRenderer::GetLightCount();
-    g_cameraData.frameCount = (float)DxrRenderer::GetAccumulationFrameCount();
+    g_cameraData.frameCount = (float)DxrRenderer::GetDisplayedSampleCount();
     g_cameraData.cloudRenderingEnabled = g_cloudRenderingEnabled ? 1.0f : 0.0f;
     UpdateCameraCB();
     
@@ -2670,7 +2670,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                                                               : "DXR");
 
         if (g_currentRenderMode == RenderMode::DXR) {
-          ImGui::Text("Samples: %u", DxrRenderer::GetAccumulationFrameCount());
+          ImGui::Text("Samples: %u", DxrRenderer::GetDisplayedSampleCount());
           
           float currentNoise = DxrRenderer::GetCurrentNoiseLevel();
           if (currentNoise > 0.0f) {

@@ -1574,6 +1574,18 @@ OidnDenoiser::Quality GetOidnQuality() { return s_oidnQuality; }
 
 UINT GetAccumulationFrameCount() { return s_accumulation.GetFrameCount(); }
 
+UINT GetDisplayedSampleCount() {
+  const bool dlssActive =
+      (s_streamline && s_streamline->IsInitialized() &&
+       s_streamline->IsDeviceSet() && s_streamline->IsEnabled() &&
+       s_streamline->GetMode() != StreamlineManager::Mode::Off);
+  const bool rrActive =
+      dlssActive &&
+      (s_streamline->GetMode() ==
+       StreamlineManager::Mode::DLSS_RayReconstruction);
+  return rrActive ? s_rrStillFrameSpp : s_accumulation.GetFrameCount();
+}
+
 UINT GetLightCount() { return s_lightCount; }
 
 // RR jitter scale accessors
@@ -2042,7 +2054,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
       }
   }
 
-  if (!debugViewActive && s_streamline && s_streamline->IsInitialized() &&
+  // For RR, once we reach stop conditions, keep the last RR output instead of
+  // re-evaluating with stale inputs and changing jitter.
+  const bool skipDlssEvalAtStop = rrActive && reachedEndCondition;
+  if (!debugViewActive && !skipDlssEvalAtStop &&
+      s_streamline && s_streamline->IsInitialized() &&
       s_streamline->IsDeviceSet() && s_streamline->IsEnabled() &&
       s_streamline->GetMode() != StreamlineManager::Mode::Off &&
       s_dlssOutputUAV && s_depthUAV && s_mvecUAV) {
