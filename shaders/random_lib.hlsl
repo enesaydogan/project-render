@@ -18,7 +18,17 @@ uint pcg_hash(uint input) {
 
 RNG init_rng(uint2 pixel, uint frame) {
     RNG rng;
-    rng.state = pcg_hash(pixel.y * 65536u + pixel.x + pcg_hash(frame));
+    // Stronger spatial/temporal seed mixing to avoid visible structured blocks.
+    uint seed = pixel.x * 1973u;
+    seed ^= pixel.y * 9277u;
+    seed ^= frame * 26699u;
+    seed ^= 0x68bc21ebu;
+    seed ^= (seed >> 16);
+    seed *= 2246822519u;
+    seed ^= (seed >> 13);
+    seed *= 3266489917u;
+    seed ^= (seed >> 16);
+    rng.state = pcg_hash(seed);
     return rng;
 }
 

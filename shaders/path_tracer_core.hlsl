@@ -118,6 +118,7 @@ void RayGen()
     // early-out due to adaptive sampling.
     bool flip = (frame % 2) == 1;
     const uint kAdaptiveStartSpp = 24u;
+    const uint kAdaptiveMinPerPixelSpp = 64u;
     const float kAdaptiveRelScale = 0.90;
     const float kAdaptiveEdgeRelScale = 0.65;
     const float kAdaptiveAbsSemFloor = 5e-4;
@@ -126,9 +127,12 @@ void RayGen()
     const float kAdaptiveMinKeepProb = 0.08;
     const float kAdaptiveEdgeMinKeepProb = 0.18;
     const float kAdaptiveEdgeContrastThreshold = 0.02;
+    const float kAdaptiveMinExpectedRatio = 0.60;
+    const float kAdaptiveLagKeepScale = 0.85;
     const float kRestirSpatialRadiusPx = (useAdaptiveSampling > 0.5) ? 6.0 : 12.0;
+    const bool debugViewActive = (debugMode > 0.0) || (debugVisualizationMode == 1.0);
 
-    if (maxSPP > 0.0 && accumFrame >= (uint)maxSPP) {
+    if (!debugViewActive && maxSPP > 0.0 && accumFrame >= (uint)maxSPP) {
         float4 total = g_accumulation[launchIndex.xy];
         if (total.a > 0.0) {
             // Output is always linear HDR; tonemapping happens after DLSS/RR.
@@ -142,7 +146,7 @@ void RayGen()
         float4 acc = g_accumulation[launchIndex.xy];
         float accM2 = g_variance[launchIndex.xy];
         
-        if (acc.a > (float)kAdaptiveStartSpp) {
+        if (acc.a > (float)kAdaptiveMinPerPixelSpp) {
             float n = acc.a;
             float3 meanColor = acc.rgb / n;
             float meanLum = dot(meanColor, float3(0.2126, 0.7152, 0.0722));
@@ -194,6 +198,15 @@ void RayGen()
                  float proximity = min(relProximity, absProximity);
                  float minKeepProb = isEdgeRegion ? kAdaptiveEdgeMinKeepProb : kAdaptiveMinKeepProb;
                  float keepProb = max(minKeepProb, proximity);
+                 float expectedN = max(1.0, accumFrame + 1.0);
+                 float deficitRatio = saturate((expectedN - n) / expectedN);
+                 // Don't let converged pixels fall too far behind global SPP.
+                 if (n < expectedN * kAdaptiveMinExpectedRatio) {
+                     keepProb = 1.0;
+                 } else {
+                     float lagKeepProb = deficitRatio * kAdaptiveLagKeepScale;
+                     keepProb = max(keepProb, lagKeepProb);
+                 }
                  if (next_float(adaptiveRng) > keepProb) {
                  // Preserve reservoir continuity for neighbors that still resample
                  // this pixel. Without this copy, adaptive early-out leaves stale
@@ -352,7 +365,9 @@ void RayGen()
             break;
         }
 
-        if (debugMode != 0) {
+        // Legacy material/cloud debug modes (1..16) visualize primary-hit payloads.
+        // New accumulation diagnostics (17+) must run full path-tracing flow.
+        if (debugMode > 0.0 && debugMode <= 16.0) {
             accumulatedColor = payload.color;
             break;
         }
@@ -860,7 +875,9 @@ void RayGen()
     // Final result with aggressive firefly suppression for Archviz
     if (any(isnan(accumulatedColor)) || any(isinf(accumulatedColor))) accumulatedColor = float3(0,0,0);
 
-    float3 finalColor = min(accumulatedColor * intensity, 1000.0); // More aggressive clamp to prevent blowout
+    // Radiance must be non-negative. Clamp numerical underflow/instability.
+    float3 finalColor = clamp(accumulatedColor * intensity, 0.0, 1000.0);
+    if (any(isnan(finalColor)) || any(isinf(finalColor))) finalColor = float3(0, 0, 0);
 
     // Write DLSS inputs
     static const float2 kInvalidMvec = float2(-1e6, -1e6);
@@ -1006,6 +1023,7 @@ void RayGen()
     
     float lum = dot(finalColor, float3(0.2126, 0.7152, 0.0722));
     if (isnan(lum) || isinf(lum)) lum = 0.0;
+    bool historyRepairedThisFrame = false;
 
     if (accumFrame == 0) {
         g_accumulation[launchIndex.xy] = float4(finalColor, 1.0);
@@ -1020,16 +1038,32 @@ void RayGen()
         float4 prev_accum = g_accumulation[launchIndex.xy];
         float n = prev_accum.a;
         float3 oldSum = prev_accum.rgb;
-        float oldMeanLum = dot(oldSum / n, float3(0.2126, 0.7152, 0.0722));
+
+        // Defensive: if history is invalid/uninitialized for this pixel,
+        // re-seed accumulation instead of propagating NaNs/Infs.
+        bool invalidHistory = (n < 1.0) || isnan(n) || isinf(n) ||
+                              any(isnan(oldSum)) || any(isinf(oldSum));
+        if (invalidHistory) {
+            // Repair corrupt/empty history, then continue normal accumulation
+            // instead of hard-resetting this pixel each frame.
+            historyRepairedThisFrame = true;
+            n = 1.0;
+            oldSum = finalColor;
+        }
+
+        float safeN = max(n, 1.0);
+        float oldMeanLum = dot(oldSum / safeN, float3(0.2126, 0.7152, 0.0722));
         
-        float next_n = n + 1.0;
+        float next_n = safeN + 1.0;
         float3 nextSum = oldSum + finalColor;
         float3 nextMean = nextSum / next_n;
         float nextMeanLum = dot(nextMean, float3(0.2126, 0.7152, 0.0722));
         
         // Welford's Online Variance: M2_n = M2_{n-1} + (x - mu_{n-1})(x - mu_n)
-        float prev_M2 = g_variance[launchIndex.xy];
-        float next_M2 = max(0.0, prev_M2 + (lum - oldMeanLum) * (lum - nextMeanLum));
+        float prev_M2 = invalidHistory ? 0.0 : g_variance[launchIndex.xy];
+        float next_M2 = prev_M2 + (lum - oldMeanLum) * (lum - nextMeanLum);
+        if (isnan(next_M2) || isinf(next_M2)) next_M2 = 0.0;
+        next_M2 = max(0.0, next_M2);
         
         g_accumulation[launchIndex.xy] = float4(nextSum, next_n);
         g_variance[launchIndex.xy] = next_M2;
@@ -1047,6 +1081,69 @@ void RayGen()
         } else {
             g_output[launchIndex.xy] = float4(nextMean, 1.0);
         }
+    }
+
+    // Debug: Accumulation sample count N (debug mode index = 17)
+    if (debugMode == 17.0) {
+        float n = g_accumulation[launchIndex.xy].a;
+        float maxN = max(maxSPP, 1.0);
+        float v = saturate(n / maxN);
+        // Blue->Cyan->White ramp for quick low/high N detection.
+        float3 col = lerp(float3(0.0, 0.0, 0.35), float3(0.2, 0.9, 1.0), sqrt(v));
+        g_output[launchIndex.xy] = float4(col, 1.0);
+        return;
+    }
+
+    // Debug: History validity / corruption mask (debug mode index = 18)
+    if (debugMode == 18.0) {
+        float4 accDbg = g_accumulation[launchIndex.xy];
+        float varDbg = g_variance[launchIndex.xy];
+        float n = accDbg.a;
+        bool invalid = (n < 0.0) || isnan(n) || isinf(n) ||
+                       any(isnan(accDbg.rgb)) || any(isinf(accDbg.rgb)) ||
+                       isnan(varDbg) || isinf(varDbg) || (varDbg < 0.0);
+        // Red = invalid, green = valid and initialized, blue = n==0 (not yet accumulated).
+        float3 col = invalid ? float3(1.0, 0.0, 0.0) : ((n <= 0.5) ? float3(0.0, 0.0, 1.0) : float3(0.0, 1.0, 0.0));
+        g_output[launchIndex.xy] = float4(col, 1.0);
+        return;
+    }
+
+    // Debug: Per-pixel estimated noise from history (debug mode index = 19)
+    if (debugMode == 19.0) {
+        float4 accDbg = g_accumulation[launchIndex.xy];
+        float n = max(accDbg.a, 1.0);
+        float meanLum = dot(accDbg.rgb / n, float3(0.2126, 0.7152, 0.0722));
+        float m2 = max(0.0, g_variance[launchIndex.xy]);
+        float sem = sqrt(m2) / n;
+        float noise = sem / (max(0.01, meanLum) + 0.001);
+        float v = saturate(noise * 5.0);
+        // Black->Orange->Red heatmap.
+        float3 col = lerp(float3(0.0, 0.0, 0.0), float3(1.0, 0.35, 0.0), v);
+        g_output[launchIndex.xy] = float4(col, 1.0);
+        return;
+    }
+
+    // Debug: Sample deficit vs expected history count (debug mode index = 20)
+    if (debugMode == 20.0) {
+        float n = g_accumulation[launchIndex.xy].a;
+        float expectedN = max(1.0, accumFrame + 1.0);
+        float deficit = max(0.0, expectedN - n);
+        float v = saturate(deficit / expectedN);
+        // Black = on-track, Magenta/White = lagging/reset pixels.
+        float3 col = lerp(float3(0.0, 0.0, 0.0), float3(1.0, 0.0, 1.0), sqrt(v));
+        g_output[launchIndex.xy] = float4(col, 1.0);
+        return;
+    }
+
+    // Debug: Recent reset mask (debug mode index = 21)
+    if (debugMode == 21.0) {
+        float n = g_accumulation[launchIndex.xy].a;
+        bool recentReset = (accumFrame > 4.0) && (n <= 2.0);
+        // Yellow = history repaired this frame, Red = very low sample count.
+        float3 col = historyRepairedThisFrame ? float3(1.0, 1.0, 0.0) :
+                     (recentReset ? float3(1.0, 0.0, 0.0) : float3(0.0, 0.0, 0.0));
+        g_output[launchIndex.xy] = float4(col, 1.0);
+        return;
     }
 }
 
