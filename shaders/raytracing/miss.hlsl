@@ -28,12 +28,14 @@ void Miss(inout RayPayload payload)
     // --- Volumetric Clouds ---
     // March clouds for primary and indirect reflection/refraction rays (rayDepth < 1)
     // but skip for shadow rays (which usually have higher depth or specific flags) to save performance and reduce noise.
-    if (payload.rayDepth <= 1) {
+    if (cloudRenderingEnabled > 0.5 && payload.rayDepth <= 1) {
         float tMin = 0.0;
         float tMax = 50000.0; // Far
 
         // Pass global lightColor logic
         float4 cloudRes = RaymarchClouds(WorldRayOrigin(), dir, tMin, tMax, L, lightColor.rgb);
+        cloudRes.a = saturate(cloudRes.a);
+        cloudRes.rgb = max(cloudRes.rgb, 0.0);
 
         // If a cloud debug view is selected, show it directly.
         // (Avoid compositing with the environment, which makes debug hard to read.)
@@ -50,7 +52,7 @@ void Miss(inout RayPayload payload)
 
     // Fill payload
     // RayPayload in common.hlsli has float3 color
-    payload.color = color;
+    payload.color = max(color, 0.0);
     payload.t = -1.0;
     
     // Fill remaining payload members to default to avoid undefined behavior or validation errors
