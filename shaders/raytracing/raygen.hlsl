@@ -38,6 +38,7 @@ void RayGen()
     RayPayload payload;
     payload.color = float4(0, 0, 0, 1);
     payload.rayDepth = 0;
+    payload.rayType = RAY_TYPE_PRIMARY;
 
 #ifdef RAYGEN_DEBUG
     // Debug mode: output UV gradient to verify ray generation and output copy
