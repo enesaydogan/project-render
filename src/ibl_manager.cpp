@@ -398,9 +398,9 @@ DirectX::XMFLOAT3 IBLManager::GetSunColor() const {
     for (float l = startLambda; l <= endLambda; l += stepLambda) {
         double rad = m_pragueSkyModel->sunRadiance(params, l);
         // Scale sun radiance: Physical values are huge (~1e7 to 1e9), so we apply a normalization factor
-        // to bring it into a usable HDR range (e.g., 0-1000) for the engine.
-        // 0.000015f ensures it is bright but not blindingly infinite compared to sky.
-        float val = (float)rad * m_sunIntensity * 0.000005f;
+        // to bring it into a usable HDR range.
+        // The effective intensity is controlled by g_cameraData.lightColor.w (Sun Intensity key in UI).
+        float val = (float)rad * 0.000005f;
         X += val * cieX(l) * stepLambda;
         Y += val * cieY(l) * stepLambda;
         Z += val * cieZ(l) * stepLambda;
