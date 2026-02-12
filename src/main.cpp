@@ -287,7 +287,6 @@ static void EnforceReleaseDebugFlags() {
   g_rasterWireframe = false;
   g_rasterDebugDepth = false;
   g_debugLog = false;
-  g_debugMode = 0;
 #endif
 }
 
@@ -2886,7 +2885,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
         }
 
-      #ifdef _DEBUG
         // Debug Render Pass Dropdown
         const char *debugModes[] = {"None",
                   "Albedo",
@@ -2904,15 +2902,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                   "Cloud: Noise Sanity",
                   "Cloud: Density Sanity",
                   "Cloud: Opacity (1-T)",
-                  "Cloud: BaseShape Sanity"};
+                  "Cloud: BaseShape Sanity",
+                  "Debug: Accum Samples (N)",
+                  "Debug: History Validity",
+                  "Debug: Per-Pixel Noise",
+                  "Debug: Sample Deficit",
+                  "Debug: Recent Reset Mask"};
         if (ImGui::Combo("Debug View", &g_debugMode, debugModes,
              IM_ARRAYSIZE(debugModes))) {
-          // State is updated; updated into camera buffer on next frame
-          uiChanged = true;
+          // Keep history when switching diagnostics so comparisons are from the
+          // same accumulated frame state.
         }
-      #else
-        g_debugMode = 0;
-      #endif
 
         // Reset accumulation once per window when any UI widget changed
         if (uiChanged) {

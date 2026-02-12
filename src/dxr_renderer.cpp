@@ -1638,6 +1638,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
   // the last tonemapped output. This works for both accumulation and DLSS-RR.
   const UINT maxSpp = (g_cameraData.maxSPP > 0.0f) ? (UINT)g_cameraData.maxSPP : 0u;
   const UINT currSpp = rrActive ? s_rrStillFrameSpp : s_accumulation.GetFrameCount();
+  const bool debugViewActive =
+      (g_cameraData.debugMode != 0.0f) ||
+      (g_cameraData.debugVisualizationMode != 0.0f);
 
   // Global stop by measured noise with hysteresis to avoid stop/resume flicker.
   bool isConverged = false;
@@ -1657,9 +1660,14 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
       }
       isConverged = s_noiseConvergedLatched;
   }
+  // Never freeze on convergence/maxSPP while a debug view is active.
+  if (debugViewActive) {
+      isConverged = false;
+      s_noiseConvergedLatched = false;
+  }
 
   bool isOidnMode = (s_denoiserMode != DxrRenderer::DenoiserMode::Off && !dlssActive);
-  bool reachedEndCondition = (maxSpp > 0 && currSpp >= maxSpp) || isConverged;
+  bool reachedEndCondition = (!debugViewActive) && ((maxSpp > 0 && currSpp >= maxSpp) || isConverged);
 
   bool canAutoDenoise = isOidnMode && reachedEndCondition && !s_hasDenoised;
   bool doDenoise = canAutoDenoise;
@@ -1957,7 +1965,6 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
   // If a shader debug view is active, do not run DLSS/DLSS-RR.
   // DLSS is temporal and will "process" the debug visualization itself,
   // which can look like shimmer even when the underlying buffer is stable.
-  const bool debugViewActive = (g_cameraData.debugMode != 0.0f);
 
   // --- Noise Statistics (Moved outside Streamline block) ---
   // Run periodically, but faster in adaptive mode so stop decisions react sooner.

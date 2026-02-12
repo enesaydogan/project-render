@@ -38,7 +38,7 @@ void Miss(inout RayPayload payload)
         // If a cloud debug view is selected, show it directly.
         // (Avoid compositing with the environment, which makes debug hard to read.)
         int dbg = (int)debugMode;
-        if (dbg >= 11) {
+        if (dbg >= 11 && dbg <= 16) {
             color = cloudRes.rgb;
         } else {
             // Composite clouds over sky

@@ -40,7 +40,7 @@ CameraCB g_initialCameraData = {
     0.0f,                         // prevNearZ
     0.0f,                         // prevFarZ
     0.05f,                        // noiseThreshold (5%)
-    0.0f,                         // useAdaptiveSampling
+    1.0f,                         // useAdaptiveSampling (default ON)
     0.0f,                         // debugVisualizationMode
     0.0f                          // _padNew
 };
