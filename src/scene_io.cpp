@@ -17,6 +17,13 @@ extern RenderMode g_currentRenderMode;
 extern float g_camYaw;
 extern float g_camPitch;
 extern bool g_cloudRenderingEnabled;
+extern float g_camSpeed;
+extern float g_mouseSensitivity;
+extern bool g_drawGrid;
+#include "streamline_manager.h"
+extern StreamlineManager g_streamline;
+#include "clouds.h"
+extern CloudManager g_cloudManager;
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -140,9 +147,44 @@ bool SaveScene(const std::string &path) {
     j["camera"]["maxGIBounces"] = g_cameraData.maxGIBounces;
     j["camera"]["yaw"] = g_camYaw;
     j["camera"]["pitch"] = g_camPitch;
+    j["camera"]["useAdaptiveSampling"] = g_cameraData.useAdaptiveSampling;
+    j["camera"]["noiseThreshold"] = g_cameraData.noiseThreshold;
+    j["camera"]["debugVisualizationMode"] = g_cameraData.debugVisualizationMode;
 
     // 2. Settings
     j["settings"]["cloudRendering"] = g_cloudRenderingEnabled;
+    j["settings"]["camSpeed"] = g_camSpeed;
+    j["settings"]["mouseSensitivity"] = g_mouseSensitivity;
+    j["settings"]["drawGrid"] = g_drawGrid;
+
+    // Cloud Parameters
+    auto &cp = g_cloudManager.GetParams();
+    j["clouds"]["density"] = cp.density;
+    j["clouds"]["absorption"] = cp.absorption;
+    j["clouds"]["coverage"] = cp.coverage;
+    j["clouds"]["scattering"] = cp.scattering;
+    j["clouds"]["steps"] = cp.steps;
+    j["clouds"]["sunIntensity"] = cp.sunIntensity;
+    j["clouds"]["cloudTop"] = cp.cloudTop;
+    j["clouds"]["cloudBottom"] = cp.cloudBottom;
+    j["clouds"]["windSpeed"] = cp.windSpeed;
+    j["clouds"]["baseScale"] = cp.baseScale;
+    j["clouds"]["detailScale"] = cp.detailScale;
+    j["clouds"]["coverageScale"] = cp.coverageScale;
+    j["clouds"]["erosion"] = cp.erosion;
+    j["clouds"]["warpStrength"] = cp.warpStrength;
+    j["clouds"]["shadowSteps"] = cp.shadowSteps;
+    j["clouds"]["shadowStepSize"] = cp.shadowStepSize;
+    j["clouds"]["shadowLod"] = cp.shadowLod;
+    j["clouds"]["maxSteps"] = cp.maxSteps;
+    j["clouds"]["verticalStepMeters"] = cp.verticalStepMeters;
+    j["clouds"]["shadowEvery"] = cp.shadowEvery;
+    j["clouds"]["shadowDensityThreshold"] = cp.shadowDensityThreshold;
+
+    // Streamline / DLSS
+    j["streamline"]["enabled"] = g_streamline.IsEnabled();
+    j["streamline"]["mode"] = (int)g_streamline.GetMode();
+    j["streamline"]["quality"] = (int)g_streamline.GetQuality();
 
     // Global Scene Lighting
     j["lighting"]["lightDir"] = {
@@ -360,11 +402,56 @@ bool LoadScene(const std::string &path) {
       // Restore Yaw/Pitch for consistent mouse-look
       g_camYaw = c.value("yaw", g_camYaw);
       g_camPitch = c.value("pitch", g_camPitch);
+      g_cameraData.useAdaptiveSampling = c.value("useAdaptiveSampling", 0.0f);
+      g_cameraData.noiseThreshold = c.value("noiseThreshold", 0.05f);
+      g_cameraData.debugVisualizationMode =
+          c.value("debugVisualizationMode", 0.0f);
     }
 
     // 2.5 Settings
     if (j.contains("settings")) {
-      g_cloudRenderingEnabled = j["settings"].value("cloudRendering", true);
+      auto s = j["settings"];
+      g_cloudRenderingEnabled = s.value("cloudRendering", true);
+      g_camSpeed = s.value("camSpeed", g_camSpeed);
+      g_mouseSensitivity = s.value("mouseSensitivity", g_mouseSensitivity);
+      g_drawGrid = s.value("drawGrid", g_drawGrid);
+    }
+
+    if (j.contains("clouds")) {
+      auto c = j["clouds"];
+      auto &cp = g_cloudManager.GetParams();
+      cp.density = c.value("density", cp.density);
+      cp.absorption = c.value("absorption", cp.absorption);
+      cp.coverage = c.value("coverage", cp.coverage);
+      cp.scattering = c.value("scattering", cp.scattering);
+      cp.steps = c.value("steps", cp.steps);
+      cp.sunIntensity = c.value("sunIntensity", cp.sunIntensity);
+      cp.cloudTop = c.value("cloudTop", cp.cloudTop);
+      cp.cloudBottom = c.value("cloudBottom", cp.cloudBottom);
+      cp.windSpeed = c.value("windSpeed", cp.windSpeed);
+      cp.baseScale = c.value("baseScale", cp.baseScale);
+      cp.detailScale = c.value("detailScale", cp.detailScale);
+      cp.coverageScale = c.value("coverageScale", cp.coverageScale);
+      cp.erosion = c.value("erosion", cp.erosion);
+      cp.warpStrength = c.value("warpStrength", cp.warpStrength);
+      cp.shadowSteps = c.value("shadowSteps", cp.shadowSteps);
+      cp.shadowStepSize = c.value("shadowStepSize", cp.shadowStepSize);
+      cp.shadowLod = c.value("shadowLod", cp.shadowLod);
+      cp.maxSteps = c.value("maxSteps", cp.maxSteps);
+      cp.verticalStepMeters =
+          c.value("verticalStepMeters", cp.verticalStepMeters);
+      cp.shadowEvery = c.value("shadowEvery", cp.shadowEvery);
+      cp.shadowDensityThreshold =
+          c.value("shadowDensityThreshold", cp.shadowDensityThreshold);
+    }
+
+    if (j.contains("streamline")) {
+      auto sl = j["streamline"];
+      g_streamline.SetEnabled(sl.value("enabled", true));
+      g_streamline.SetMode((StreamlineManager::Mode)sl.value(
+          "mode", (int)StreamlineManager::Mode::Off));
+      g_streamline.SetQuality((StreamlineManager::Quality)sl.value(
+          "quality", (int)StreamlineManager::Quality::Balanced));
     }
 
     if (j.contains("lighting")) {
