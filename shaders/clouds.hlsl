@@ -99,12 +99,16 @@ float HeightGradient(float h) {
    return bottom * top; 
 }
 
-// Ray-Sphere Intersection
+// Stable Ray-Sphere Intersection
 // Returns float2(tNear, tFar). If no hit, returns float2(-1, -1).
 float2 RaySphereIntersect(float3 ro, float3 rd, float3 sphereCenter, float sphereRadius) {
     float3 oc = ro - sphereCenter;
     float b = dot(oc, rd);
-    float c = dot(oc, oc) - sphereRadius * sphereRadius;
+    
+    // c = (oc^2 - R^2). Use (a-b)(a+b) for stability at large scales.
+    float dist = length(oc);
+    float c = (dist - sphereRadius) * (dist + sphereRadius);
+    
     float h = b * b - c;
     if (h < 0.0) return float2(-1.0, -1.0); // No hit
     h = sqrt(h);
@@ -115,15 +119,19 @@ static const float EARTH_RADIUS = 6360000.0;
 static const float3 PLANET_CENTER = float3(0.0, -EARTH_RADIUS, 0.0);
 
 float SampleDensity(float3 p, float lod) {
-    // Spherical Altitude Calculation
-    float distToCenter = length(p - PLANET_CENTER);
-    float heightAboveGround = distToCenter - EARTH_RADIUS;
+    // Stable Spherical Altitude Calculation
+    float3 relP = p - PLANET_CENTER;
+    float distToCenter = length(relP);
+    
+    // Accurate height Above ground: h = sqrt(p.x^2 + (p.y+R)^2 + p.z^2) - R
+    // Using (h+R)^2 = p.x^2 + p.y^2 + 2p.yR + R^2 + R^2
+    // h = (p.x^2 + p.y^2 + 2.0*p.y*R) / (dist + R)
+    float heightAboveGround = (dot(p, p) + 2.0 * p.y * EARTH_RADIUS) / (distToCenter + EARTH_RADIUS);
     
     // Check bounds
     if (heightAboveGround < CloudCB.cloudBottom || heightAboveGround > CloudCB.cloudTop) return 0.0;
-
-    float heightPct = (heightAboveGround - CloudCB.cloudBottom) / (CloudCB.cloudTop - CloudCB.cloudBottom);
-    if (heightPct < 0.0 || heightPct > 1.0) return 0.0;
+    
+    float heightPct = saturate((heightAboveGround - CloudCB.cloudBottom) / (CloudCB.cloudTop - CloudCB.cloudBottom));
 
     // 1. Base Coordinates with Rotation to break tracking
     float3 basePos = p * CloudCB.baseScale;
@@ -270,12 +278,12 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
 
     float3 pos = rayOrigin + rayDir * tStart;
     
-    // Dither start (preserved)
-    float jitter = 0.0;
+    // Dither start (Using stable IGN but very low amplitude)
+    float jitter = 0.5;
     #ifdef RAYTRACING_COMMON_H
+    // Low amplitude jitter helps break bands without causing massive chunks
     jitter = InterleavedGradientNoise(DispatchRaysIndex().xy, (uint)globalFrameCount);
-    // Lower dithering amplitude to reduce cloud edge sparkle/splotches.
-    jitter *= 0.35f;
+    jitter = 0.3 + 0.4 * jitter; // Center around 0.5
     #endif
     pos += rayDir * (jitter * stepSize);
 
@@ -337,7 +345,7 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
             // 1. Direct Sun (with shadow ray)
             
             // Manual scaling to fix "blown out" sun color from Prague Sky Model without touching C++
-            float3 sunColorScaled = lightColor * 0.000015f; 
+            float3 sunColorScaled = lightColor * 0.000025f; 
 
             float shadowTerm = 1.0f;
             if (density > CloudCB.shadowDensityThreshold) {

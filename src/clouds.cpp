@@ -2,8 +2,8 @@
 #include "dxr_helpers.h" // For Align, etc.
 #include <algorithm>
 #include <cmath>
-#include <d3dx12/d3dx12.h>
 #include <random>
+#include <string>
 #include <vector>
 
 using namespace DirectX;
@@ -232,7 +232,7 @@ CloudParams MakeDefaultCloudParams() {
   p.shadowStepSize = 120.0f;
   p.shadowLod = 2.0f;
 
-  p.maxSteps = 512;
+  p.maxSteps = 256;
   p.verticalStepMeters = 25.0f;
   p.shadowEvery = 4;
   p.shadowDensityThreshold = 0.05f;

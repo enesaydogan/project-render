@@ -68,18 +68,22 @@ public:
   DescriptorAllocation AllocatePersistent(UINT count) {
     DescriptorAllocation alloc = {};
     if (m_persistentOffset + count > m_numDescriptors) {
-        ThrowIfFailed(E_OUTOFMEMORY); // Actually probably should use a real HRESULT
+      ThrowIfFailed(
+          E_OUTOFMEMORY); // Actually probably should use a real HRESULT
     }
     UINT offset = m_persistentOffset;
     m_persistentOffset += count;
 
     // Push all transient starts forward
     for (UINT i = 0; i < (UINT)m_nextOffset.size(); ++i) {
-        if (m_nextOffset[i] < m_persistentOffset) m_nextOffset[i] = m_persistentOffset;
+      if (m_nextOffset[i] < m_persistentOffset)
+        m_nextOffset[i] = m_persistentOffset;
     }
 
-    D3D12_CPU_DESCRIPTOR_HANDLE cpuStart = m_heap->GetCPUDescriptorHandleForHeapStart();
-    D3D12_GPU_DESCRIPTOR_HANDLE gpuStart = m_heap->GetGPUDescriptorHandleForHeapStart();
+    D3D12_CPU_DESCRIPTOR_HANDLE cpuStart =
+        m_heap->GetCPUDescriptorHandleForHeapStart();
+    D3D12_GPU_DESCRIPTOR_HANDLE gpuStart =
+        m_heap->GetGPUDescriptorHandleForHeapStart();
 
     alloc.offset = offset;
     alloc.cpu.ptr = cpuStart.ptr + (SIZE_T)offset * m_descriptorSize;
@@ -130,3 +134,79 @@ struct FrameResource {
   std::vector<ComPtr<ID3D12Resource>>
       transientResources; // keep transient upload buffers alive per-frame
 };
+
+// --- D3DX12 Replacements for missing headeers ---
+
+inline UINT64 GetRequiredIntermediateSize(ID3D12Resource *pDestinationResource,
+                                          UINT FirstSubresource,
+                                          UINT NumSubresources) {
+  D3D12_RESOURCE_DESC Desc = pDestinationResource->GetDesc();
+  UINT64 RequiredSize = 0;
+  ID3D12Device *pDevice;
+  pDestinationResource->GetDevice(IID_PPV_ARGS(&pDevice));
+  pDevice->GetCopyableFootprints(&Desc, FirstSubresource, NumSubresources, 0,
+                                 nullptr, nullptr, nullptr, &RequiredSize);
+  pDevice->Release();
+  return RequiredSize;
+}
+
+inline void UpdateSubresources(ID3D12GraphicsCommandList *pCmdList,
+                               ID3D12Resource *pDestinationResource,
+                               ID3D12Resource *pIntermediate,
+                               UINT64 IntermediateOffset, UINT FirstSubresource,
+                               UINT NumSubresources,
+                               D3D12_SUBRESOURCE_DATA *pSrcData) {
+  D3D12_RESOURCE_DESC Desc = pDestinationResource->GetDesc();
+  ID3D12Device *pDevice;
+  pDestinationResource->GetDevice(IID_PPV_ARGS(&pDevice));
+
+  std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> Layouts(NumSubresources);
+  std::vector<UINT> NumRows(NumSubresources);
+  std::vector<UINT64> RowSizes(NumSubresources);
+  UINT64 RequiredSize = 0;
+
+  pDevice->GetCopyableFootprints(
+      &Desc, FirstSubresource, NumSubresources, IntermediateOffset,
+      Layouts.data(), NumRows.data(), RowSizes.data(), &RequiredSize);
+  pDevice->Release();
+
+  BYTE *pData;
+  HRESULT hr =
+      pIntermediate->Map(0, nullptr, reinterpret_cast<void **>(&pData));
+  if (FAILED(hr))
+    return;
+
+  for (UINT i = 0; i < NumSubresources; ++i) {
+    D3D12_SUBRESOURCE_DATA src = pSrcData[i];
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT layout = Layouts[i];
+
+    for (UINT z = 0; z < layout.Footprint.Depth; ++z) {
+      BYTE *pDestSliceStart =
+          pData + layout.Offset +
+          (z * layout.Footprint.Height * layout.Footprint.RowPitch);
+      const BYTE *pSrcSliceStart =
+          reinterpret_cast<const BYTE *>(src.pData) + (z * src.SlicePitch);
+
+      for (UINT y = 0; y < NumRows[i]; ++y) {
+        BYTE *pDestRow = pDestSliceStart + (y * layout.Footprint.RowPitch);
+        const BYTE *pSrcRow = pSrcSliceStart + (y * src.RowPitch);
+        memcpy(pDestRow, pSrcRow, RowSizes[i]);
+      }
+    }
+  }
+  pIntermediate->Unmap(0, nullptr);
+
+  for (UINT i = 0; i < NumSubresources; ++i) {
+    D3D12_TEXTURE_COPY_LOCATION Dst = {};
+    Dst.pResource = pDestinationResource;
+    Dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    Dst.SubresourceIndex = FirstSubresource + i;
+
+    D3D12_TEXTURE_COPY_LOCATION Src = {};
+    Src.pResource = pIntermediate;
+    Src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    Src.PlacedFootprint = Layouts[i];
+
+    pCmdList->CopyTextureRegion(&Dst, 0, 0, 0, &Src, nullptr);
+  }
+}
