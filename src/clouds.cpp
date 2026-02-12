@@ -6,7 +6,6 @@
 #include <random>
 #include <vector>
 
-
 using namespace DirectX;
 
 // Improved Perlin-Gradient Noise Generation
@@ -253,7 +252,7 @@ void CloudManager::Initialize(ID3D12Device *device,
 
   m_params = MakeDefaultCloudParams();
 
-  CreateConstantBuffer(device);
+  CreateConstantBuffers(device);
   CreateTextures(device, cmdList);
 
   // Create persistent descriptors (CBV + BaseTex SRV + DetailTex SRV)
@@ -273,7 +272,9 @@ void CloudManager::CreateDescriptors(ID3D12Device *device) {
 
   // 1) CBV (b10, space2)
   D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
-  cbvDesc.BufferLocation = m_constantBuffer->GetGPUVirtualAddress();
+  cbvDesc.BufferLocation =
+      m_constantBuffers[0]
+          ->GetGPUVirtualAddress(); // Descriptor points to frame 0 initially
   cbvDesc.SizeInBytes = (sizeof(CloudParams) + 255) & ~255;
   device->CreateConstantBufferView(&cbvDesc, m_cpuHandle);
 
@@ -315,14 +316,15 @@ void CloudManager::ResetToDefaults() {
   }
 }
 
-void CloudManager::Update(float dt) {
+void CloudManager::Update(float dt, UINT frameIndex) {
   if (!m_initialized)
     return;
   m_params.timeSeconds += dt;
+  m_currentFrame = frameIndex % 3;
   UpdateConstantBuffer();
 }
 
-void CloudManager::CreateConstantBuffer(ID3D12Device *device) {
+void CloudManager::CreateConstantBuffers(ID3D12Device *device) {
   UINT size = (sizeof(CloudParams) + 255) & ~255;
 
   D3D12_HEAP_PROPERTIES heapProps = {};
@@ -339,21 +341,24 @@ void CloudManager::CreateConstantBuffer(ID3D12Device *device) {
   bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
   bufDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
 
-  ThrowIfFailed(device->CreateCommittedResource(
-      &heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
-      D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-      IID_PPV_ARGS(&m_constantBuffer)));
+  for (int i = 0; i < 3; ++i) {
+    ThrowIfFailed(device->CreateCommittedResource(
+        &heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&m_constantBuffers[i])));
 
-  m_constantBuffer->SetName(L"CloudConstantBuffer");
+    std::wstring name = L"CloudConstantBuffer_" + std::to_wstring(i);
+    m_constantBuffers[i]->SetName(name.c_str());
 
-  D3D12_RANGE readRange = {0, 0};
-  ThrowIfFailed(m_constantBuffer->Map(
-      0, &readRange, reinterpret_cast<void **>(&m_cbMappedData)));
+    D3D12_RANGE readRange = {0, 0};
+    ThrowIfFailed(m_constantBuffers[i]->Map(
+        0, &readRange, reinterpret_cast<void **>(&m_cbMappedData[i])));
+  }
 }
 
 void CloudManager::UpdateConstantBuffer() {
-  if (m_cbMappedData) {
-    memcpy(m_cbMappedData, &m_params, sizeof(CloudParams));
+  if (m_cbMappedData[m_currentFrame]) {
+    memcpy(m_cbMappedData[m_currentFrame], &m_params, sizeof(CloudParams));
   }
 }
 
