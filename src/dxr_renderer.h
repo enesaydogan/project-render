@@ -53,6 +53,8 @@ void ResetStreamlineHistory();
 bool IsReady();
 // Get current accumulation frame count
 UINT GetAccumulationFrameCount();
+// Get effective sample count shown to UI (RR uses its own still-frame counter).
+UINT GetDisplayedSampleCount();
 
 // Denoiser mode control (Off, OIDN CPU, OIDN GPU)
 enum class DenoiserMode { Off = 0, OIDN_CPU = 1, OIDN_GPU = 2 };
