@@ -23,6 +23,23 @@ cbuffer CameraCB : register(b0)
     float4 lightDir; // xyz = direction towards light, w = sun radius (rad)
     float4 lightColor; // rgb + intensity in .w
     float4 ambientColor; // rgb + weight in .w
+
+    // Keep layout aligned with src/camera.h so cloudRenderingEnabled reads the
+    // correct value in raster mode too.
+    float3 prevPos;
+    float prevValid;
+    float3 prevForward;
+    float dlssEnabled;
+    float3 prevUp;
+    float dlssRayReconstruction;
+    float prevFov;
+    float prevAspect;
+    float prevNearZ;
+    float prevFarZ;
+    float noiseThreshold;
+    float useAdaptiveSampling;
+    float debugVisualizationMode;
+    float cloudRenderingEnabled;
 };
 
 Texture2D envMap : register(t0, space1);
@@ -98,9 +115,12 @@ float4 PSMain(PSInput input) : SV_TARGET {
 
     // Raymarch clouds and composite in front of sky
     // Use a large tMax to ensure we cover the full atmosphere shell
-    float4 cloudOut = RaymarchClouds(pos, dir, 0.0f, 100000.0f, normalize(lightDir.xyz), lightColor.rgb * lightColor.w);
-    // cloudOut.rgb = in-scattered radiance, cloudOut.a = remaining transmittance
-    float3 composed = cloudOut.rgb + color * cloudOut.a;
+    float3 composed = color;
+    if (cloudRenderingEnabled > 0.5f) {
+        float4 cloudOut = RaymarchClouds(pos, dir, 0.0f, 100000.0f, normalize(lightDir.xyz), lightColor.rgb * lightColor.w);
+        // cloudOut.rgb = in-scattered radiance, cloudOut.a = remaining transmittance
+        composed = cloudOut.rgb + color * cloudOut.a;
+    }
 
     // ACES Tone Mapping
     composed = ToneMap(composed);
