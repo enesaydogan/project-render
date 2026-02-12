@@ -130,7 +130,8 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     // Access mesh and material for this instance
     uint meshIdx = InstanceID();
     MeshData mesh = meshData[meshIdx];
-    MaterialData mat = materials[mesh.materialIndex];
+    uint matIdx = (uint)max(0, mesh.materialIndex);
+    MaterialData mat = materials[matIdx];
 
     // Get material properties
     float4 diffColor = mat.diffuseColor;

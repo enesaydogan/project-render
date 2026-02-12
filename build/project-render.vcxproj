@@ -86,7 +86,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /external:I "D:/project-render/thirdparty/oidn/include"</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
@@ -115,10 +115,10 @@
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;USE_OIDN=1;USE_TINYGLTF=1;CMAKE_INTDIR=\"Debug\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -192,7 +192,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /external:I "D:/project-render/thirdparty/oidn/include"</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
@@ -226,10 +226,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_OIDN=1;USE_TINYGLTF=1;CMAKE_INTDIR=\"Release\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -304,7 +304,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /external:I "D:/project-render/thirdparty/oidn/include"</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
@@ -334,10 +334,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_OIDN=1;USE_TINYGLTF=1;CMAKE_INTDIR=\"MinSizeRel\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -411,7 +411,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /external:I "D:/project-render/thirdparty/oidn/include"</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
@@ -440,10 +440,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_OIDN=1;USE_TINYGLTF=1;CMAKE_INTDIR=\"RelWithDebInfo\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -588,6 +588,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="D:\project-render\src\ImGuizmo.cpp" />
     <ClCompile Include="D:\project-render\src\oidn_denoiser.cpp" />
     <ClCompile Include="D:\project-render\src\clouds.cpp" />
+    <ClCompile Include="D:\project-render\src\scene_io.cpp" />
   </ItemGroup>
   <ItemGroup />
   <ItemGroup>

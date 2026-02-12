@@ -46,6 +46,9 @@
     <ClCompile Include="D:\project-render\src\clouds.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\project-render\src\scene_io.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="D:\project-render\CMakeLists.txt" />

@@ -7,6 +7,7 @@
 #ifdef _DEBUG
 #include <d3d12sdklayers.h>
 #endif
+#include "ImGuizmo.h"
 #include "assets/asset_loader.h"
 #include "clouds.h" // Add clouds
 #include "d3d12_helpers.h"
@@ -22,6 +23,7 @@
 #include "material_editor.h"
 #include "raster_renderer.h"
 #include "scene.h"
+#include "scene_io.h"
 #include <algorithm>
 #include <chrono>
 #include <codecvt>
@@ -67,13 +69,9 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 
 static const UINT FrameCount = 2;
 
-// Render Mode System
-enum class RenderMode {
-  Raster, // Fast rasterization for scene traversal
-  DXR     // Unified Ray Tracing / Path Tracing path
-};
+// RenderMode is now defined in scene.h
 
-static RenderMode g_currentRenderMode = RenderMode::Raster;
+RenderMode g_currentRenderMode = RenderMode::Raster;
 static bool g_showRenderModeWindow = false;
 // Debug toggles for DXR
 bool g_dxrDebugUV = false;
@@ -94,7 +92,7 @@ bool g_fastImport =
     false; // enable Assimp optimization flags to speed imports (--fast-import)
 
 CloudManager g_cloudManager; // Global Global Manager
-static bool g_cloudRenderingEnabled = true;
+bool g_cloudRenderingEnabled = true;
 
 ComPtr<ID3D12Device> g_device;
 static ComPtr<ID3D12CommandQueue> g_commandQueue;
@@ -1497,6 +1495,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
   // Parse command line for flags and optional custom glTF file
   std::string customGltfPath;
+  std::string sceneToLoad;
   if (lpCmdLine && *lpCmdLine) {
     std::string cmd = lpCmdLine;
     std::istringstream iss(cmd);
@@ -1510,6 +1509,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 #endif
       } else if (token == "--fast-import" || token == "--optimize-import") {
         g_fastImport = true;
+      } else if (token == "--load") {
+        if (iss >> token) {
+          // remove quotes if present
+          if (!token.empty() && token.front() == '"')
+            token = token.substr(1);
+          if (!token.empty() && token.back() == '"')
+            token = token.substr(0, token.size() - 1);
+          sceneToLoad = token;
+        }
       } else {
         // first non-flag token is interpreted as a path
         if (customGltfPath.empty()) {
@@ -1557,125 +1565,33 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   // Log successful D3D12 initialization (stderr only)
   fprintf(stderr, "InitD3D12 returned OK\n");
 
-  // Auto-load sample glTF at startup (for automated DXR testing)
-  // Use command line argument if provided, otherwise use default
-  std::string autoLoadPath =
-      customGltfPath.empty() ? "assets/DamagedHelmet.glb" : customGltfPath;
-  try {
-    if (fs::exists(autoLoadPath)) {
-      float helmetPos[3] = {0.0f, 1.0f, 0.0f};
-      if (!Scene::ImportModel(autoLoadPath, helmetPos)) {
-        fprintf(stderr, "AutoLoad: failed to import %s\n",
-                autoLoadPath.c_str());
+  // Scene Setup
+  if (!sceneToLoad.empty()) {
+    if (fs::exists(sceneToLoad)) {
+      if (SceneIO::LoadScene(sceneToLoad)) {
+        fprintf(stderr, "Startup: loaded scene %s\n", sceneToLoad.c_str());
       } else {
-        fprintf(stderr, "AutoLoad: imported %s\n", autoLoadPath.c_str());
-        // Reset camera to default view after auto-import
+        fprintf(stderr, "Startup: failed to load scene %s\n",
+                sceneToLoad.c_str());
+      }
+    } else {
+      fprintf(stderr, "Startup: --load path not found: %s\n",
+              sceneToLoad.c_str());
+    }
+  } else if (!customGltfPath.empty()) {
+    if (fs::exists(customGltfPath)) {
+      float rootPos[3] = {0, 0, 0};
+      if (Scene::ImportModel(customGltfPath, rootPos)) {
         ResetCamera();
       }
     } else {
-      // Log to stderr only
-      fprintf(stderr, "AutoLoad: %s not found - creating synthetic test mesh\n",
-              autoLoadPath.c_str());
-
-      // Create a cube mesh (centered at origin, size 1.0) to exercise
-      // TLAS/DispatchRays
-      try {
-        Asset::GpuMesh gm;
-        Asset::Vertex cubeVerts[8] = {
-            {{-0.5f, -0.5f, -0.5f}, {0, 0, -1}, {1, 0, 0, 1}, {0.0f, 0.0f}},
-            {{0.5f, -0.5f, -0.5f}, {0, 0, -1}, {1, 0, 0, 1}, {1.0f, 0.0f}},
-            {{0.5f, 0.5f, -0.5f}, {0, 0, -1}, {1, 0, 0, 1}, {1.0f, 1.0f}},
-            {{-0.5f, 0.5f, -0.5f}, {0, 0, -1}, {1, 0, 0, 1}, {0.0f, 1.0f}},
-
-            {{-0.5f, -0.5f, 0.5f}, {0, 0, 1}, {1, 0, 0, 1}, {0.0f, 0.0f}},
-            {{0.5f, -0.5f, 0.5f}, {0, 0, 1}, {1, 0, 0, 1}, {1.0f, 0.0f}},
-            {{0.5f, 0.5f, 0.5f}, {0, 0, 1}, {1, 0, 0, 1}, {1.0f, 1.0f}},
-            {{-0.5f, 0.5f, 0.5f}, {0, 0, 1}, {1, 0, 0, 1}, {0.0f, 1.0f}},
-        };
-        // 12 triangles (36 indices) - CCW for all faces
-        UINT indices[36] = {// back face (z=-0.5, norm=0,0,-1)
-                            0, 3, 2, 0, 2, 1,
-                            // front face (z=0.5, norm=0,0,1)
-                            4, 5, 6, 4, 6, 7,
-                            // left face (x=-0.5, norm=-1,0,0)
-                            4, 0, 3, 4, 3, 7,
-                            // right face (x=0.5, norm=1,0,0)
-                            1, 5, 6, 1, 6, 2,
-                            // bottom face (y=-0.5, norm=0,-1,0)
-                            4, 0, 1, 4, 1, 5,
-                            // top face (y=0.5, norm=0,1,0)
-                            3, 7, 6, 3, 6, 2};
-
-        D3D12_HEAP_PROPERTIES heapProps = {};
-        heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-        D3D12_RESOURCE_DESC vbDesc = {};
-        vbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        vbDesc.Width = sizeof(cubeVerts);
-        vbDesc.Height = 1;
-        vbDesc.DepthOrArraySize = 1;
-        vbDesc.MipLevels = 1;
-        vbDesc.SampleDesc.Count = 1;
-        vbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-        ThrowIfFailed(g_device->CreateCommittedResource(
-            &heapProps, D3D12_HEAP_FLAG_NONE, &vbDesc,
-            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-            IID_PPV_ARGS(&gm.vertexBuffer)));
-
-        // copy vertex data
-        UINT8 *pData = nullptr;
-        D3D12_RANGE readRange = {0, 0};
-        ThrowIfFailed(gm.vertexBuffer->Map(0, &readRange,
-                                           reinterpret_cast<void **>(&pData)));
-        memcpy(pData, cubeVerts, sizeof(cubeVerts));
-        gm.vertexBuffer->Unmap(0, nullptr);
-
-        gm.vbView.BufferLocation = gm.vertexBuffer->GetGPUVirtualAddress();
-        gm.vbView.StrideInBytes = sizeof(Asset::Vertex);
-        gm.vbView.SizeInBytes = sizeof(cubeVerts);
-
-        D3D12_RESOURCE_DESC ibDesc = vbDesc;
-        ibDesc.Width = sizeof(indices);
-        ThrowIfFailed(g_device->CreateCommittedResource(
-            &heapProps, D3D12_HEAP_FLAG_NONE, &ibDesc,
-            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-            IID_PPV_ARGS(&gm.indexBuffer)));
-        pData = nullptr;
-        ThrowIfFailed(gm.indexBuffer->Map(0, &readRange,
-                                          reinterpret_cast<void **>(&pData)));
-        memcpy(pData, indices, sizeof(indices));
-        gm.indexBuffer->Unmap(0, nullptr);
-
-        gm.ibView.BufferLocation = gm.indexBuffer->GetGPUVirtualAddress();
-        gm.ibView.Format = DXGI_FORMAT_R32_UINT;
-        gm.ibView.SizeInBytes = sizeof(indices);
-
-        gm.vertexCount = (UINT)std::size(cubeVerts);
-        gm.indexCount = (UINT)std::size(indices);
-        gm.materialIndex = -1;
-
-        g_loadedMeshes.push_back(gm);
-
-        // Log to stderr only
-        fprintf(stderr, "AutoLoad: Added synthetic cube mesh\n");
-
-        // Build AS for synthetic mesh
-        Scene::RebuildAccelerationStructures();
-
-      } catch (const std::exception &e2) {
-        // Log to stderr only
-        fprintf(stderr, "AutoLoad: exception creating synthetic mesh: %s\n",
-                e2.what());
-      }
+      fprintf(stderr, "Startup: custom mesh path not found: %s\n",
+              customGltfPath.c_str());
     }
-  } catch (const std::exception &e) {
-    // Log to stderr only
-    fprintf(stderr, "AutoLoad: exception: %s\n", e.what());
+  } else {
+    // Default: Just ground plane, no auto-loaded GLBs anymore
+    Scene::AddDefaultPlane(0.0f);
   }
-
-  // Add a default ground plane (10x10)
-  Scene::AddDefaultPlane(0.1f);
 
   // ReSTIR DI: Initialize test lights for Phase 2
   {
@@ -2418,20 +2334,42 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
+    ImGuizmo::BeginFrame();
 
     // Main menu bar: Window menu + quick panel toggles on the bar for fast
     // access
     if (ImGui::BeginMainMenuBar()) {
-      // Keep Window menu for non-toggle commands
-      if (ImGui::BeginMenu("Window")) {
-        if (ImGui::MenuItem("Reset Layout")) {
-          g_showAssetsWindow = true;
-          g_showControlsWindow = true;
-          g_showRenderModeWindow = true;
-          g_forceUncollapse = true;
+      if (ImGui::BeginMenu("File")) {
+        if (ImGui::MenuItem("Save Scene...")) {
+          std::wstring chosen;
+          if (SaveSceneFileDialog(g_hwnd, chosen)) {
+            std::string utf8 = WStringToUtf8(chosen);
+            if (SceneIO::SaveScene(utf8)) {
+              fprintf(stderr, "Scene saved to %s\n", utf8.c_str());
+            } else {
+              fprintf(stderr, "Failed to save scene to %s\n", utf8.c_str());
+            }
+          }
+        }
+        if (ImGui::MenuItem("Load Scene...")) {
+          std::wstring chosen;
+          if (OpenSceneFileDialog(g_hwnd, chosen)) {
+            std::string utf8 = WStringToUtf8(chosen);
+            if (SceneIO::LoadScene(utf8)) {
+              fprintf(stderr, "Scene loaded from %s\n", utf8.c_str());
+            } else {
+              fprintf(stderr, "Failed to load scene from %s\n", utf8.c_str());
+            }
+          }
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Exit", "Alt+F4")) {
+          g_appClosing = true;
         }
         ImGui::EndMenu();
       }
+
+      // Keep Window menu for non-toggle commands
 
       // Quick access toggles (side-by-side) for panels
       ImGui::SameLine();
