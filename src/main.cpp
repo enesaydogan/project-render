@@ -2328,7 +2328,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     UpdateCameraCB();
 
     // Update Cloud Manager (uploads changed params to GPU)
-    g_cloudManager.Update(dt);
+    g_cloudManager.Update(dt, g_frameIndex);
 
     // Start ImGui frame
     ImGui_ImplDX12_NewFrame();

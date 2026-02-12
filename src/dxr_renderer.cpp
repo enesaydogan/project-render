@@ -6,19 +6,18 @@
 #include "dxr_accumulation.h"
 #include "dxr_helpers.h"
 #include "ibl_manager.h"
+#include "oidn_denoiser.h"
 #include "scene.h"
 #include "streamline_manager.h"
-#include "oidn_denoiser.h"
-#include <cstdio>
-#include <vector>
-#include <unordered_map>
-#include <wrl.h>
-#include <sstream>
 #include <cstdarg>
+#include <cstdio>
+#include <sstream>
+#include <unordered_map>
+#include <vector>
+#include <wrl.h>
 
 // Expose global debug flag (set by WinMain parsing)
 extern bool g_debugLog;
-
 
 using Microsoft::WRL::ComPtr;
 
@@ -37,13 +36,15 @@ static ID3D12CommandQueue *s_commandQueue = nullptr;
 static StreamlineManager *s_streamline = nullptr;
 static bool s_streamlineResetHistory = true;
 // Denoiser mode & wrapper
-static DxrRenderer::DenoiserMode s_denoiserMode = DxrRenderer::DenoiserMode::Off;
+static DxrRenderer::DenoiserMode s_denoiserMode =
+    DxrRenderer::DenoiserMode::Off;
 static OidnDenoiser s_oidnDenoiser;
 static OidnDenoiser::Quality s_oidnQuality = OidnDenoiser::Quality::Balanced;
-// RR jitter scale default: lower than 1.0 to reduce silhouette/screen-edge shimmer.
+// RR jitter scale default: lower than 1.0 to reduce silhouette/screen-edge
+// shimmer.
 static float s_rrJitterScale = 0.5f;
-// When DLSS-RR is active we don't use the accumulation buffer; track a still-frame
-// SPP count separately so maxSPP can still freeze rendering.
+// When DLSS-RR is active we don't use the accumulation buffer; track a
+// still-frame SPP count separately so maxSPP can still freeze rendering.
 static UINT s_rrStillFrameSpp = 0;
 static bool s_hasTonemappedFrame = false;
 // Exposed for UI/debug (WinMain). Keep external linkage.
@@ -82,9 +83,12 @@ static D3D12_GPU_DESCRIPTOR_HANDLE s_gi_reservoirGpuHandle[6];
 static D3D12_GPU_DESCRIPTOR_HANDLE s_iblGpuHandle;
 
 // Descriptor counts (tweak to support large models)
-static const UINT DXR_HEAP_TEX_COUNT = 16384;       // max textures (increased from 2048)
-static const UINT DXR_HEAP_VB_COUNT = 16384;        // vertex buffer SRVs (increased from 4096)
-static const UINT DXR_HEAP_IB_COUNT = 16384;        // index buffer SRVs (increased from 4096)
+static const UINT DXR_HEAP_TEX_COUNT =
+    16384; // max textures (increased from 2048)
+static const UINT DXR_HEAP_VB_COUNT =
+    16384; // vertex buffer SRVs (increased from 4096)
+static const UINT DXR_HEAP_IB_COUNT =
+    16384; // index buffer SRVs (increased from 4096)
 static const UINT DXR_HEAP_TEX_OFFSET = 0;
 static const UINT DXR_HEAP_VB_OFFSET = DXR_HEAP_TEX_OFFSET + DXR_HEAP_TEX_COUNT;
 static const UINT DXR_HEAP_IB_OFFSET = DXR_HEAP_VB_OFFSET + DXR_HEAP_VB_COUNT;
@@ -102,7 +106,8 @@ static const UINT DXR_HEAP_GI_RESERVOIR_1_OFFSET_C = DXR_HEAP_UAV_OFFSET + 9;
 static const UINT DXR_HEAP_DEPTH_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 10;
 static const UINT DXR_HEAP_MVEC_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 11;
 static const UINT DXR_HEAP_ALBEDO_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 12;
-static const UINT DXR_HEAP_NORMAL_ROUGHNESS_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 13;
+static const UINT DXR_HEAP_NORMAL_ROUGHNESS_UAV_OFFSET =
+    DXR_HEAP_UAV_OFFSET + 13;
 static const UINT DXR_HEAP_DLSS_OUT_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 14;
 static const UINT DXR_HEAP_IBL_OFFSET = DXR_HEAP_UAV_OFFSET + 15;
 static const UINT DXR_HEAP_SPEC_ALBEDO_OFFSET = DXR_HEAP_UAV_OFFSET + 16;
@@ -114,7 +119,8 @@ static const UINT DXR_HEAP_VARIANCE_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 20;
 static const UINT DXR_HEAP_CLOUD_CB_OFFSET = DXR_HEAP_UAV_OFFSET + 21;
 static const UINT DXR_HEAP_CLOUD_TEX_OFFSET = DXR_HEAP_UAV_OFFSET + 22;
 static const UINT DXR_HEAP_CLOUD_DETAIL_TEX_OFFSET = DXR_HEAP_UAV_OFFSET + 23;
-static const UINT DXR_HEAP_TOTAL_COUNT = DXR_HEAP_TEX_COUNT + DXR_HEAP_VB_COUNT + DXR_HEAP_IB_COUNT + 24;
+static const UINT DXR_HEAP_TOTAL_COUNT =
+    DXR_HEAP_TEX_COUNT + DXR_HEAP_VB_COUNT + DXR_HEAP_IB_COUNT + 24;
 
 // Output texture dimensions used by DXR (kept local to module)
 static UINT s_outputWidth = 1280;
@@ -209,18 +215,17 @@ static ComPtr<ID3D12Resource> s_noiseStatsReadbackBuffer;
 static ComPtr<ID3D12DescriptorHeap> s_noiseStatsHeap;
 static float s_lastNoiseLevel = 0.0f;
 static bool s_noiseConvergedLatched = false;
+static bool s_cloudDescriptorsDone = false;
 
 namespace DxrRenderer {
 
 struct NoiseStatsConstants {
-    uint32_t width;
-    uint32_t height;
-    float padding[2];
+  uint32_t width;
+  uint32_t height;
+  float padding[2];
 };
 
-float GetCurrentNoiseLevel() {
-    return s_lastNoiseLevel;
-}
+float GetCurrentNoiseLevel() { return s_lastNoiseLevel; }
 
 static void EnsureNoiseStatsPipeline();
 
@@ -312,8 +317,8 @@ static void EnsureTonemapPipeline() {
   heapDesc.NumDescriptors = 2;
   heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
   heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-  ThrowIfFailed(s_device->CreateDescriptorHeap(&heapDesc,
-                                               IID_PPV_ARGS(&s_tonemapHeap)));
+  ThrowIfFailed(
+      s_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&s_tonemapHeap)));
 
   // Constant buffer
   D3D12_HEAP_PROPERTIES uploadProps{};
@@ -334,111 +339,131 @@ static void EnsureTonemapPipeline() {
 }
 
 static void EnsureNoiseStatsPipeline() {
-    if (s_noiseStatsPSO && s_noiseStatsRootSig && s_noiseStatsCB && s_noiseStatsOutputBuffer) return;
-    if (!s_device) return;
+  if (s_noiseStatsPSO && s_noiseStatsRootSig && s_noiseStatsCB &&
+      s_noiseStatsOutputBuffer)
+    return;
+  if (!s_device)
+    return;
 
-    // Root signature: b0 (CB), u0(Tex), u1(Tex), u2(Buffer)
-    D3D12_DESCRIPTOR_RANGE uavRanges[3];
-    // u0 - Accumulation
-    uavRanges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    uavRanges[0].NumDescriptors = 1;
-    uavRanges[0].BaseShaderRegister = 0;
-    uavRanges[0].RegisterSpace = 0;
-    uavRanges[0].OffsetInDescriptorsFromTableStart = 0;
-    
-    // u1 - Variance
-    uavRanges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    uavRanges[1].NumDescriptors = 1;
-    uavRanges[1].BaseShaderRegister = 1;
-    uavRanges[1].RegisterSpace = 0;
-    uavRanges[1].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+  // Root signature: b0 (CB), u0(Tex), u1(Tex), u2(Buffer)
+  D3D12_DESCRIPTOR_RANGE uavRanges[3];
+  // u0 - Accumulation
+  uavRanges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+  uavRanges[0].NumDescriptors = 1;
+  uavRanges[0].BaseShaderRegister = 0;
+  uavRanges[0].RegisterSpace = 0;
+  uavRanges[0].OffsetInDescriptorsFromTableStart = 0;
 
-    // u2 - Output Buffer
-    uavRanges[2].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    uavRanges[2].NumDescriptors = 1;
-    uavRanges[2].BaseShaderRegister = 2;
-    uavRanges[2].RegisterSpace = 0;
-    uavRanges[2].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+  // u1 - Variance
+  uavRanges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+  uavRanges[1].NumDescriptors = 1;
+  uavRanges[1].BaseShaderRegister = 1;
+  uavRanges[1].RegisterSpace = 0;
+  uavRanges[1].OffsetInDescriptorsFromTableStart =
+      D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_ROOT_PARAMETER params[2] = {};
-    // b0
-    params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-    params[0].Descriptor.ShaderRegister = 0;
-    params[0].Descriptor.RegisterSpace = 0;
-    params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+  // u2 - Output Buffer
+  uavRanges[2].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+  uavRanges[2].NumDescriptors = 1;
+  uavRanges[2].BaseShaderRegister = 2;
+  uavRanges[2].RegisterSpace = 0;
+  uavRanges[2].OffsetInDescriptorsFromTableStart =
+      D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    // table with u0, u1, u2
-    params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    params[1].DescriptorTable.NumDescriptorRanges = 3;
-    params[1].DescriptorTable.pDescriptorRanges = uavRanges;
-    params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+  D3D12_ROOT_PARAMETER params[2] = {};
+  // b0
+  params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+  params[0].Descriptor.ShaderRegister = 0;
+  params[0].Descriptor.RegisterSpace = 0;
+  params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
-    rsDesc.NumParameters = 2;
-    rsDesc.pParameters = params;
-    rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+  // table with u0, u1, u2
+  params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[1].DescriptorTable.NumDescriptorRanges = 3;
+  params[1].DescriptorTable.pDescriptorRanges = uavRanges;
+  params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    ComPtr<ID3DBlob> sig, err;
-    if (FAILED(D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err))) {
-        if (err) fprintf(stderr, "NoiseStats RS Error: %s\n", (char*)err->GetBufferPointer());
-        return;
-    }
-    s_device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(), IID_PPV_ARGS(&s_noiseStatsRootSig));
+  D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
+  rsDesc.NumParameters = 2;
+  rsDesc.pParameters = params;
+  rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
-    // Compile CS
-    ComPtr<IDxcBlob> cs;
-    try {
-        std::vector<std::wstring> defines;
-        cs = s_dxcHelper.Compile(L"shaders/noise_statistics_cs.hlsl", L"CSMain", L"cs_6_3", defines);
-    } catch (std::exception& e) { 
-        fprintf(stderr, "NoiseStats CS Compile Exception: %s\n", e.what());
-        return; 
-    }
-    
-    if (!cs) {
-        fprintf(stderr, "NoiseStats CS Compile Failed (null blob)\n");
-        return;
-    }
+  ComPtr<ID3DBlob> sig, err;
+  if (FAILED(D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1,
+                                         &sig, &err))) {
+    if (err)
+      fprintf(stderr, "NoiseStats RS Error: %s\n",
+              (char *)err->GetBufferPointer());
+    return;
+  }
+  s_device->CreateRootSignature(0, sig->GetBufferPointer(),
+                                sig->GetBufferSize(),
+                                IID_PPV_ARGS(&s_noiseStatsRootSig));
 
-    D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
-    psoDesc.pRootSignature = s_noiseStatsRootSig.Get();
-    psoDesc.CS.pShaderBytecode = cs->GetBufferPointer();
-    psoDesc.CS.BytecodeLength = cs->GetBufferSize();
-    s_device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&s_noiseStatsPSO));
+  // Compile CS
+  ComPtr<IDxcBlob> cs;
+  try {
+    std::vector<std::wstring> defines;
+    cs = s_dxcHelper.Compile(L"shaders/noise_statistics_cs.hlsl", L"CSMain",
+                             L"cs_6_3", defines);
+  } catch (std::exception &e) {
+    fprintf(stderr, "NoiseStats CS Compile Exception: %s\n", e.what());
+    return;
+  }
 
-    // Create CB
-    D3D12_HEAP_PROPERTIES uploadProps = {};
-    uploadProps.Type = D3D12_HEAP_TYPE_UPLOAD;
-    D3D12_RESOURCE_DESC cbDesc = {};
-    cbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    cbDesc.Width = 256;
-    cbDesc.Height = 1;
-    cbDesc.DepthOrArraySize = 1;
-    cbDesc.MipLevels = 1;
-    cbDesc.SampleDesc.Count = 1;
-    cbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    s_device->CreateCommittedResource(&uploadProps, D3D12_HEAP_FLAG_NONE, &cbDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&s_noiseStatsCB));
+  if (!cs) {
+    fprintf(stderr, "NoiseStats CS Compile Failed (null blob)\n");
+    return;
+  }
 
-    // Create Output Buffer (UAV, Default Heap)
-    D3D12_HEAP_PROPERTIES defaultProps = {};
-    defaultProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-    D3D12_RESOURCE_DESC bufDesc = cbDesc;
-    bufDesc.Width = sizeof(float); // 4 bytes
-    bufDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-    s_device->CreateCommittedResource(&defaultProps, D3D12_HEAP_FLAG_NONE, &bufDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&s_noiseStatsOutputBuffer));
-    
-    // Create Readback Buffer
-    D3D12_HEAP_PROPERTIES readbackProps = {};
-    readbackProps.Type = D3D12_HEAP_TYPE_READBACK;
-    bufDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
-    s_device->CreateCommittedResource(&readbackProps, D3D12_HEAP_FLAG_NONE, &bufDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&s_noiseStatsReadbackBuffer));
+  D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
+  psoDesc.pRootSignature = s_noiseStatsRootSig.Get();
+  psoDesc.CS.pShaderBytecode = cs->GetBufferPointer();
+  psoDesc.CS.BytecodeLength = cs->GetBufferSize();
+  s_device->CreateComputePipelineState(&psoDesc,
+                                       IID_PPV_ARGS(&s_noiseStatsPSO));
 
-    // Descriptor Heap
-    D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-    heapDesc.NumDescriptors = 3;
-    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-    s_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&s_noiseStatsHeap));
+  // Create CB
+  D3D12_HEAP_PROPERTIES uploadProps = {};
+  uploadProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+  D3D12_RESOURCE_DESC cbDesc = {};
+  cbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+  cbDesc.Width = 256;
+  cbDesc.Height = 1;
+  cbDesc.DepthOrArraySize = 1;
+  cbDesc.MipLevels = 1;
+  cbDesc.SampleDesc.Count = 1;
+  cbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+  s_device->CreateCommittedResource(&uploadProps, D3D12_HEAP_FLAG_NONE, &cbDesc,
+                                    D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                    IID_PPV_ARGS(&s_noiseStatsCB));
+
+  // Create Output Buffer (UAV, Default Heap)
+  D3D12_HEAP_PROPERTIES defaultProps = {};
+  defaultProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+  D3D12_RESOURCE_DESC bufDesc = cbDesc;
+  bufDesc.Width = sizeof(float); // 4 bytes
+  bufDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+  s_device->CreateCommittedResource(
+      &defaultProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
+      D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+      IID_PPV_ARGS(&s_noiseStatsOutputBuffer));
+
+  // Create Readback Buffer
+  D3D12_HEAP_PROPERTIES readbackProps = {};
+  readbackProps.Type = D3D12_HEAP_TYPE_READBACK;
+  bufDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+  s_device->CreateCommittedResource(&readbackProps, D3D12_HEAP_FLAG_NONE,
+                                    &bufDesc, D3D12_RESOURCE_STATE_COPY_DEST,
+                                    nullptr,
+                                    IID_PPV_ARGS(&s_noiseStatsReadbackBuffer));
+
+  // Descriptor Heap
+  D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
+  heapDesc.NumDescriptors = 3;
+  heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+  heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+  s_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&s_noiseStatsHeap));
 }
 
 void Initialize(ID3D12Device *device) {
@@ -511,6 +536,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   // Create a large shader-visible heap for all DXR resources early,
   // so that BuildAccelerationStructures doesn't crash if shader compile fails.
   if (!s_srvHeap) {
+    s_cloudDescriptorsDone = false;
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
     heapDesc.NumDescriptors = DXR_HEAP_TOTAL_COUNT;
     heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -574,7 +600,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   }
 
   // Create global root signature
-  D3D12_ROOT_PARAMETER params[11] = {}; // Increased for Lights & Cloud
+  D3D12_ROOT_PARAMETER params[12] =
+      {}; // Increased for Lights & Cloud (Split CBV/SRV)
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
   params[0].Descriptor.ShaderRegister = 0;
   params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -653,28 +680,30 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   params[9].Descriptor.ShaderRegister = 5000;
   params[9].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-  // Cloud Table (b10, t10) - Moved to space 2 to avoid collision with textures table
-  static D3D12_DESCRIPTOR_RANGE cloudRanges[2] = {};
-  // Range 1: CBV b10
-  cloudRanges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_CBV;
-  cloudRanges[0].NumDescriptors = 1;
-  cloudRanges[0].BaseShaderRegister = 10;
-  cloudRanges[0].RegisterSpace = 2; // Space 2
-  cloudRanges[0].OffsetInDescriptorsFromTableStart = 0;
+  // Cloud Table (b10, t10) - Split into Root CBV (10) and Table (11)
   // Range 2: SRV t10, t11
-  cloudRanges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-  cloudRanges[1].NumDescriptors = 2;
-  cloudRanges[1].BaseShaderRegister = 10;
-  cloudRanges[1].RegisterSpace = 2; // Space 2
-  cloudRanges[1].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+  static D3D12_DESCRIPTOR_RANGE cloudSrvRange = {};
+  cloudSrvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+  cloudSrvRange.NumDescriptors = 2;
+  cloudSrvRange.BaseShaderRegister = 10;
+  cloudSrvRange.RegisterSpace = 2; // Space 2
+  cloudSrvRange.OffsetInDescriptorsFromTableStart =
+      D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-  params[10].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-  params[10].DescriptorTable.NumDescriptorRanges = 2;
-  params[10].DescriptorTable.pDescriptorRanges = cloudRanges;
+  // Slot 10: Root CBV (b10, space2)
+  params[10].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+  params[10].Descriptor.ShaderRegister = 10;
+  params[10].Descriptor.RegisterSpace = 2;
   params[10].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
+  // Slot 11: SRV Table (t10, t11, space2)
+  params[11].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[11].DescriptorTable.NumDescriptorRanges = 1;
+  params[11].DescriptorTable.pDescriptorRanges = &cloudSrvRange;
+  params[11].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
   D3D12_ROOT_SIGNATURE_DESC rootDesc = {};
-  rootDesc.NumParameters = 11;
+  rootDesc.NumParameters = 12;
   rootDesc.pParameters = params;
   rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
@@ -878,18 +907,19 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   outDesc.Width = outW;
   outDesc.Height = outH;
 
-  auto CreateUavTexture = [&](ComPtr<ID3D12Resource> &out,
-                              const D3D12_RESOURCE_DESC &baseDesc,
-                              DXGI_FORMAT format, const wchar_t *name, bool shared = false) {
-    D3D12_RESOURCE_DESC desc = baseDesc;
-    desc.Format = format;
-    desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-    ThrowIfFailed(s_device->CreateCommittedResource(
-        &heapProps, shared ? D3D12_HEAP_FLAG_SHARED : D3D12_HEAP_FLAG_NONE, &desc,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&out)));
-    if (out)
-      out->SetName(name);
-  };
+  auto CreateUavTexture =
+      [&](ComPtr<ID3D12Resource> &out, const D3D12_RESOURCE_DESC &baseDesc,
+          DXGI_FORMAT format, const wchar_t *name, bool shared = false) {
+        D3D12_RESOURCE_DESC desc = baseDesc;
+        desc.Format = format;
+        desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        ThrowIfFailed(s_device->CreateCommittedResource(
+            &heapProps, shared ? D3D12_HEAP_FLAG_SHARED : D3D12_HEAP_FLAG_NONE,
+            &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+            IID_PPV_ARGS(&out)));
+        if (out)
+          out->SetName(name);
+      };
 
   // DLSS/Streamline inputs for DXR
   CreateUavTexture(s_depthUAV, texDesc, DXGI_FORMAT_R32_FLOAT, L"RT Depth");
@@ -904,7 +934,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   CreateUavTexture(s_specularMotionVectorsUAV, texDesc,
                    DXGI_FORMAT_R16G16_FLOAT, L"RT Specular MotionVectors");
   CreateUavTexture(s_normalRoughnessUAV, texDesc,
-                   DXGI_FORMAT_R16G16B16A16_FLOAT, L"RT NormalRoughness", true); // Shared for OIDN
+                   DXGI_FORMAT_R16G16B16A16_FLOAT, L"RT NormalRoughness",
+                   true); // Shared for OIDN
 
   // DLSS output is output-size in linear HDR (pre-tonemap).
   CreateUavTexture(s_dlssOutputUAV, outDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
@@ -989,7 +1020,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
                                       nullptr, &accumUavDesc, accumUavCpu);
 
   // Create Variance UAV (for Noise Calculation / Adaptive Sampling)
-  D3D12_CPU_DESCRIPTOR_HANDLE varUavCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+  D3D12_CPU_DESCRIPTOR_HANDLE varUavCpu =
+      s_srvHeap->GetCPUDescriptorHandleForHeapStart();
   varUavCpu.ptr += (SIZE_T)DXR_HEAP_VARIANCE_UAV_OFFSET *
                    s_device->GetDescriptorHandleIncrementSize(
                        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
@@ -1085,15 +1117,23 @@ void BuildAccelerationStructures(
     const std::vector<Asset::GpuMesh> &meshes,
     const std::vector<Scene::Instance> &instances) {
   if (g_debugLog) {
-    std::ostringstream _oss; _oss << "DxrRenderer::BuildAccelerationStructures: ENTRY meshes=" << meshes.size() << " instances=" << instances.size() << "\n";
-    fprintf(stderr, "%s", _oss.str().c_str()); fflush(stderr);
+    std::ostringstream _oss;
+    _oss << "DxrRenderer::BuildAccelerationStructures: ENTRY meshes="
+         << meshes.size() << " instances=" << instances.size() << "\n";
+    fprintf(stderr, "%s", _oss.str().c_str());
+    fflush(stderr);
   }
   if (!g_rayTracingSupported || !s_dxrDevice)
     return;
   try {
     if (g_debugLog) {
-      std::ostringstream _oss2; _oss2 << "DxrRenderer::BuildAccelerationStructures: after check - commandQueue=" << s_commandQueue << " fence=" << s_fence << " s_srvHeap=" << s_srvHeap.Get() << "\n";
-      fprintf(stderr, "%s", _oss2.str().c_str()); fflush(stderr);
+      std::ostringstream _oss2;
+      _oss2 << "DxrRenderer::BuildAccelerationStructures: after check - "
+               "commandQueue="
+            << s_commandQueue << " fence=" << s_fence
+            << " s_srvHeap=" << s_srvHeap.Get() << "\n";
+      fprintf(stderr, "%s", _oss2.str().c_str());
+      fflush(stderr);
     }
     if (meshes.empty() || instances.empty()) {
       if (g_verboseRenderLogs)
@@ -1117,7 +1157,9 @@ void BuildAccelerationStructures(
                       "(shader compile failed?)\n");
       return;
     }
-    fprintf(stderr, "DxrRenderer::BuildAccelerationStructures: srvHeap OK. validating meshes...\n"); fflush(stderr);
+    fprintf(stderr, "DxrRenderer::BuildAccelerationStructures: srvHeap OK. "
+                    "validating meshes...\n");
+    fflush(stderr);
     for (size_t i = 0; i < meshes.size(); ++i) {
       const auto &m = meshes[i];
       if (!m.vertexBuffer || !m.indexBuffer) {
@@ -1143,33 +1185,55 @@ void BuildAccelerationStructures(
       size_t vbIndex = (size_t)DXR_HEAP_VB_OFFSET + i;
       size_t ibIndex = (size_t)DXR_HEAP_IB_OFFSET + i;
       if (vbIndex >= DXR_HEAP_TOTAL_COUNT || ibIndex >= DXR_HEAP_TOTAL_COUNT) {
-        fprintf(stderr, "DxrRenderer: Descriptor heap overflow for mesh %zu (vbIndex=%zu ibIndex=%zu total=%u)\n", i, vbIndex, ibIndex, DXR_HEAP_TOTAL_COUNT);
+        fprintf(stderr,
+                "DxrRenderer: Descriptor heap overflow for mesh %zu "
+                "(vbIndex=%zu ibIndex=%zu total=%u)\n",
+                i, vbIndex, ibIndex, DXR_HEAP_TOTAL_COUNT);
         fflush(stderr);
         return;
       }
 
-      D3D12_CPU_DESCRIPTOR_HANDLE vbCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+      D3D12_CPU_DESCRIPTOR_HANDLE vbCpu =
+          s_srvHeap->GetCPUDescriptorHandleForHeapStart();
       vbCpu.ptr += (SIZE_T)vbIndex * descSize;
-      D3D12_CPU_DESCRIPTOR_HANDLE ibCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+      D3D12_CPU_DESCRIPTOR_HANDLE ibCpu =
+          s_srvHeap->GetCPUDescriptorHandleForHeapStart();
       ibCpu.ptr += (SIZE_T)ibIndex * descSize;
 
       if (g_debugLog) {
-        fprintf(stderr, "DxrRenderer: Creating VB/IB SRV for mesh %llu (vb=%p ib=%p verts=%u idx=%u)\n", (unsigned long long)i, m.vertexBuffer.Get(), m.indexBuffer.Get(), m.vertexCount, m.indexCount);
+        fprintf(stderr,
+                "DxrRenderer: Creating VB/IB SRV for mesh %llu (vb=%p ib=%p "
+                "verts=%u idx=%u)\n",
+                (unsigned long long)i, m.vertexBuffer.Get(),
+                m.indexBuffer.Get(), m.vertexCount, m.indexCount);
         fflush(stderr);
       }
 
       // Extra defensive checks to avoid crashing the process when a malformed
       // mesh or descriptor calculation slips through earlier validation.
       if (!m.vertexBuffer.Get()) {
-        fprintf(stderr, "DxrRenderer: Null vertex buffer for mesh %zu - aborting AS build\n", i); fflush(stderr);
+        fprintf(stderr,
+                "DxrRenderer: Null vertex buffer for mesh %zu - aborting AS "
+                "build\n",
+                i);
+        fflush(stderr);
         return;
       }
       if (!m.indexBuffer.Get()) {
-        fprintf(stderr, "DxrRenderer: Null index buffer for mesh %zu - aborting AS build\n", i); fflush(stderr);
+        fprintf(
+            stderr,
+            "DxrRenderer: Null index buffer for mesh %zu - aborting AS build\n",
+            i);
+        fflush(stderr);
         return;
       }
       if (vbCpu.ptr == 0 || ibCpu.ptr == 0) {
-        fprintf(stderr, "DxrRenderer: Computed empty CPU descriptor handle for mesh %zu (vbCpu=%llu ibCpu=%llu) - aborting\n", i, (unsigned long long)vbCpu.ptr, (unsigned long long)ibCpu.ptr); fflush(stderr);
+        fprintf(stderr,
+                "DxrRenderer: Computed empty CPU descriptor handle for mesh "
+                "%zu (vbCpu=%llu ibCpu=%llu) - aborting\n",
+                i, (unsigned long long)vbCpu.ptr,
+                (unsigned long long)ibCpu.ptr);
+        fflush(stderr);
         return;
       }
       D3D12_SHADER_RESOURCE_VIEW_DESC vbSrv = {};
@@ -1181,7 +1245,10 @@ void BuildAccelerationStructures(
       vbSrv.Buffer.StructureByteStride = sizeof(Asset::Vertex);
       vbSrv.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
       s_device->CreateShaderResourceView(m.vertexBuffer.Get(), &vbSrv, vbCpu);
-      if (g_debugLog) { fprintf(stderr, "DxrRenderer: VB SRV created for mesh %zu\n", i); fflush(stderr); }
+      if (g_debugLog) {
+        fprintf(stderr, "DxrRenderer: VB SRV created for mesh %zu\n", i);
+        fflush(stderr);
+      }
 
       D3D12_SHADER_RESOURCE_VIEW_DESC ibSrv = {};
       ibSrv.Format = DXGI_FORMAT_R32_UINT;
@@ -1192,7 +1259,10 @@ void BuildAccelerationStructures(
       ibSrv.Buffer.StructureByteStride = 0; // Typed buffer
       ibSrv.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
       s_device->CreateShaderResourceView(m.indexBuffer.Get(), &ibSrv, ibCpu);
-      if (g_debugLog) { fprintf(stderr, "DxrRenderer: IB SRV created for mesh %zu\n", i); fflush(stderr); }
+      if (g_debugLog) {
+        fprintf(stderr, "DxrRenderer: IB SRV created for mesh %zu\n", i);
+        fflush(stderr);
+      }
     }
 
     // Wait for GPU (simple sync)
@@ -1206,11 +1276,13 @@ void BuildAccelerationStructures(
     if (s_fence->GetCompletedValue() < fence) {
       s_fence->SetEventOnCompletion(fence, s_fenceEvent);
       if (WaitForSingleObject(s_fenceEvent, 5000) == WAIT_TIMEOUT) {
-          fprintf(stderr, "DxrRenderer: Timeout waiting for AS build sync (5s). GPU might have hung.\n");
+        fprintf(stderr, "DxrRenderer: Timeout waiting for AS build sync (5s). "
+                        "GPU might have hung.\n");
       }
     }
 
-    fprintf(stderr, "DxrRenderer: Creating command allocator/list\n"); fflush(stderr);
+    fprintf(stderr, "DxrRenderer: Creating command allocator/list\n");
+    fflush(stderr);
     // Create command list
     ComPtr<ID3D12CommandAllocator> cmdAlloc;
     ComPtr<ID3D12GraphicsCommandList4> cmdList;
@@ -1246,8 +1318,8 @@ void BuildAccelerationStructures(
     }
 
     // Pipelining:
-    // Create separate allocators for each batch so we can submit them without blocking/waiting on the CPU.
-    // We only wait once at the very end.
+    // Create separate allocators for each batch so we can submit them without
+    // blocking/waiting on the CPU. We only wait once at the very end.
     const size_t BLAS_BATCH_SIZE = 500;
     size_t batchCount = 0;
 
@@ -1260,40 +1332,44 @@ void BuildAccelerationStructures(
       try {
         for (size_t i = 0; i < meshes.size(); ++i) {
           const auto &mesh = meshes[i];
-          if (!mesh.vertexBuffer || !mesh.indexBuffer) continue;
-          
+          if (!mesh.vertexBuffer || !mesh.indexBuffer)
+            continue;
+
           auto vbAddr = mesh.vertexBuffer->GetGPUVirtualAddress();
           auto ibAddr = mesh.indexBuffer->GetGPUVirtualAddress();
-          
+
           auto bl = BuildBLAS(s_dxrDevice.Get(), cmdList.Get(), vbAddr,
                               mesh.vertexCount, sizeof(Asset::Vertex), ibAddr,
                               mesh.indexCount);
           if (bl.result && bl.scratch) {
-              s_allBLAS.push_back({bl, (UINT64)i});
-              s_cachedMeshBuffers.push_back(mesh.vertexBuffer.Get());
+            s_allBLAS.push_back({bl, (UINT64)i});
+            s_cachedMeshBuffers.push_back(mesh.vertexBuffer.Get());
           }
 
           batchCount++;
           if (batchCount >= BLAS_BATCH_SIZE) {
-              fprintf(stderr, "DxrRenderer: Submitting BLAS batch (mesh %zu/%zu)...\n", i, meshes.size());
-              ThrowIfFailed(cmdList->Close());
-              ID3D12CommandList* lists[] = { cmdList.Get() };
-              s_commandQueue->ExecuteCommandLists(1, lists);
-              
-              // DO NOT WAIT. Create new allocator and continue recording.
-              ComPtr<ID3D12CommandAllocator> nextAlloc;
-              ThrowIfFailed(s_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&nextAlloc)));
-              pendingAllocators.push_back(nextAlloc);
-              
-              // Reset same list with new allocator
-              ThrowIfFailed(cmdList->Reset(nextAlloc.Get(), nullptr));
-              batchCount = 0;
+            fprintf(stderr,
+                    "DxrRenderer: Submitting BLAS batch (mesh %zu/%zu)...\n", i,
+                    meshes.size());
+            ThrowIfFailed(cmdList->Close());
+            ID3D12CommandList *lists[] = {cmdList.Get()};
+            s_commandQueue->ExecuteCommandLists(1, lists);
+
+            // DO NOT WAIT. Create new allocator and continue recording.
+            ComPtr<ID3D12CommandAllocator> nextAlloc;
+            ThrowIfFailed(s_device->CreateCommandAllocator(
+                D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&nextAlloc)));
+            pendingAllocators.push_back(nextAlloc);
+
+            // Reset same list with new allocator
+            ThrowIfFailed(cmdList->Reset(nextAlloc.Get(), nullptr));
+            batchCount = 0;
           }
         }
-        
+
         // Final flush if any remaining (and ensure list is closed regardless)
         ThrowIfFailed(cmdList->Close());
-        ID3D12CommandList* lists[] = { cmdList.Get() };
+        ID3D12CommandList *lists[] = {cmdList.Get()};
         s_commandQueue->ExecuteCommandLists(1, lists);
 
         // NOW we wait for everything to finish (Single Wait)
@@ -1301,19 +1377,22 @@ void BuildAccelerationStructures(
         s_commandQueue->Signal(s_fence, fenceVal);
         s_fenceValues[*s_frameIndexPtr]++;
         if (s_fence->GetCompletedValue() < fenceVal) {
-            s_fence->SetEventOnCompletion(fenceVal, s_fenceEvent);
-            if (WaitForSingleObject(s_fenceEvent, 10000) == WAIT_TIMEOUT) {
-                fprintf(stderr, "DxrRenderer: Timeout waiting for BLAS build batch (10s).\n");
-            }
+          s_fence->SetEventOnCompletion(fenceVal, s_fenceEvent);
+          if (WaitForSingleObject(s_fenceEvent, 10000) == WAIT_TIMEOUT) {
+            fprintf(
+                stderr,
+                "DxrRenderer: Timeout waiting for BLAS build batch (10s).\n");
+          }
         }
-        
+
         // Safe to release all scratch buffers now
-        for(size_t k=0; k < s_allBLAS.size(); ++k) {
-            s_allBLAS[k].buffers.scratch.Reset();
+        for (size_t k = 0; k < s_allBLAS.size(); ++k) {
+          s_allBLAS[k].buffers.scratch.Reset();
         }
-        
-        // Restore a fresh allocator/list for TLAS build (reuse the last one created)
-        pendingAllocators.clear(); 
+
+        // Restore a fresh allocator/list for TLAS build (reuse the last one
+        // created)
+        pendingAllocators.clear();
         ThrowIfFailed(cmdAlloc->Reset()); // Reuse the original handle for scope
         ThrowIfFailed(cmdList->Reset(cmdAlloc.Get(), nullptr));
 
@@ -1321,7 +1400,8 @@ void BuildAccelerationStructures(
         fprintf(stderr, "DxrRenderer: BLAS Build crashed\n");
         return;
       }
-      printf("DxrRenderer: BLAS creation completed. Total BLAS count: %zu\n", s_allBLAS.size());
+      printf("DxrRenderer: BLAS creation completed. Total BLAS count: %zu\n",
+             s_allBLAS.size());
     }
 
     if (s_allBLAS.empty()) {
@@ -1330,26 +1410,28 @@ void BuildAccelerationStructures(
     }
 
     // TLAS
-    
+
     // Optimization: Pre-compute map from VertexBuffer -> BLAS Index
-    std::unordered_map<ID3D12Resource*, size_t> meshToBlasIndex;
+    std::unordered_map<ID3D12Resource *, size_t> meshToBlasIndex;
     meshToBlasIndex.reserve(s_allBLAS.size());
     for (size_t k = 0; k < s_allBLAS.size(); ++k) {
-        // s_allBLAS[k].meshId stores originalMeshIndex
-        size_t origIdx = (size_t)s_allBLAS[k].meshId;
-        if (origIdx < meshes.size() && meshes[origIdx].vertexBuffer) {
-            meshToBlasIndex[meshes[origIdx].vertexBuffer.Get()] = k;
-        }
+      // s_allBLAS[k].meshId stores originalMeshIndex
+      size_t origIdx = (size_t)s_allBLAS[k].meshId;
+      if (origIdx < meshes.size() && meshes[origIdx].vertexBuffer) {
+        meshToBlasIndex[meshes[origIdx].vertexBuffer.Get()] = k;
+      }
     }
 
     std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instanceDescs;
     instanceDescs.reserve(instances.size());
 
     for (const auto &sceneInst : instances) {
-      if (!sceneInst.mesh.vertexBuffer) continue;
+      if (!sceneInst.mesh.vertexBuffer)
+        continue;
 
       auto it = meshToBlasIndex.find(sceneInst.mesh.vertexBuffer.Get());
-      if (it == meshToBlasIndex.end()) continue;
+      if (it == meshToBlasIndex.end())
+        continue;
 
       size_t blasIndex = it->second;
       UINT originalMeshIdx = (UINT)s_allBLAS[blasIndex].meshId;
@@ -1432,7 +1514,7 @@ void BuildAccelerationStructures(
     if (s_fence->GetCompletedValue() < fence2) {
       s_fence->SetEventOnCompletion(fence2, s_fenceEvent);
       if (WaitForSingleObject(s_fenceEvent, 5000) == WAIT_TIMEOUT) {
-          fprintf(stderr, "DxrRenderer: Timeout waiting for TLAS build (5s).\n");
+        fprintf(stderr, "DxrRenderer: Timeout waiting for TLAS build (5s).\n");
       }
     }
     if (g_verboseRenderLogs) {
@@ -1472,12 +1554,14 @@ void UpdateLights(const std::vector<GpuLight> &lights) {
     return;
   }
 
-  // Avoid resetting accumulation / Streamline history when lights didn't change.
+  // Avoid resetting accumulation / Streamline history when lights didn't
+  // change.
   if (lights.size() == s_lastLightsCpu.size()) {
     const size_t byteSize = lights.size() * sizeof(GpuLight);
     if (byteSize > 0 &&
         memcmp(lights.data(), s_lastLightsCpu.data(), byteSize) == 0) {
-      // Keep s_lightCount accurate (and allow the caller to still call UpdateLights every frame).
+      // Keep s_lightCount accurate (and allow the caller to still call
+      // UpdateLights every frame).
       s_lightCount = (UINT)lights.size();
       return;
     }
@@ -1485,9 +1569,11 @@ void UpdateLights(const std::vector<GpuLight> &lights) {
 
   s_lightCount = (UINT)lights.size();
 
-  // Ensure buffer size is at least 1 element to avoid creation errors/null descriptors
+  // Ensure buffer size is at least 1 element to avoid creation errors/null
+  // descriptors
   UINT bufferSize = (UINT)(lights.size() * sizeof(GpuLight));
-  if (bufferSize == 0) bufferSize = sizeof(GpuLight);
+  if (bufferSize == 0)
+    bufferSize = sizeof(GpuLight);
 
   // Recreate buffer if size changed
   if (!s_lightBuffer || s_lightBuffer->GetDesc().Width < bufferSize) {
@@ -1552,7 +1638,8 @@ void ResetStreamlineHistory() {
 }
 
 void SetDenoiserMode(DenoiserMode m) {
-  if (s_denoiserMode == m) return;
+  if (s_denoiserMode == m)
+    return;
   s_denoiserMode = m;
   if (s_denoiserMode != DenoiserMode::Off) {
     // Try to initialize OIDN wrapper; if device isn't ready, initialization
@@ -1582,9 +1669,8 @@ UINT GetDisplayedSampleCount() {
        s_streamline->IsDeviceSet() && s_streamline->IsEnabled() &&
        s_streamline->GetMode() != StreamlineManager::Mode::Off);
   const bool rrActive =
-      dlssActive &&
-      (s_streamline->GetMode() ==
-       StreamlineManager::Mode::DLSS_RayReconstruction);
+      dlssActive && (s_streamline->GetMode() ==
+                     StreamlineManager::Mode::DLSS_RayReconstruction);
   return rrActive ? s_rrStillFrameSpp : s_accumulation.GetFrameCount();
 }
 
@@ -1592,8 +1678,10 @@ UINT GetLightCount() { return s_lightCount; }
 
 // RR jitter scale accessors
 void SetRrJitterScale(float scale) {
-  if (scale < 0.0f) scale = 0.0f;
-  if (scale > 1.0f) scale = 1.0f;
+  if (scale < 0.0f)
+    scale = 0.0f;
+  if (scale > 1.0f)
+    scale = 1.0f;
   s_rrJitterScale = scale;
 }
 
@@ -1604,7 +1692,8 @@ bool IsReady() {
          s_tlas.result != nullptr;
 }
 
-bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAllocator *cmdAlloc, UINT frameIndex,
+bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
+                 ID3D12CommandAllocator *cmdAlloc, UINT frameIndex,
                  ID3D12Resource *renderTarget,
                  D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle,
                  ID3D12Resource *cameraCB, ID3D12Resource *materialCB,
@@ -1642,39 +1731,41 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
        s_streamline->IsDeviceSet() && s_streamline->IsEnabled() &&
        s_streamline->GetMode() != StreamlineManager::Mode::Off);
   const bool rrActive =
-      dlssActive &&
-      (s_streamline->GetMode() == StreamlineManager::Mode::DLSS_RayReconstruction);
+      dlssActive && (s_streamline->GetMode() ==
+                     StreamlineManager::Mode::DLSS_RayReconstruction);
 
   bool usedOidn = false;
 
   // If we've hit maxSPP and the camera/settings haven't changed (meaning
   // ResetAccumulation hasn't been called), freeze rendering and keep presenting
   // the last tonemapped output. This works for both accumulation and DLSS-RR.
-  const UINT maxSpp = (g_cameraData.maxSPP > 0.0f) ? (UINT)g_cameraData.maxSPP : 0u;
-  const UINT currSpp = rrActive ? s_rrStillFrameSpp : s_accumulation.GetFrameCount();
-  const bool debugViewActive =
-      (g_cameraData.debugMode != 0.0f) ||
-      (g_cameraData.debugVisualizationMode != 0.0f);
+  const UINT maxSpp =
+      (g_cameraData.maxSPP > 0.0f) ? (UINT)g_cameraData.maxSPP : 0u;
+  const UINT currSpp =
+      rrActive ? s_rrStillFrameSpp : s_accumulation.GetFrameCount();
+  const bool debugViewActive = (g_cameraData.debugMode != 0.0f) ||
+                               (g_cameraData.debugVisualizationMode != 0.0f);
 
   // Global stop by measured noise with hysteresis to avoid stop/resume flicker.
   bool isConverged = false;
   if (s_lastNoiseLevel > 0.0f) {
-      const bool adaptiveEnabled = (g_cameraData.useAdaptiveSampling > 0.5f);
-      const UINT minNoiseStopSpp = adaptiveEnabled ? 32u : 24u;
-      const float stopThreshold = g_cameraData.noiseThreshold * 0.90f;
-      const float resumeThreshold = g_cameraData.noiseThreshold * 1.20f;
-      if (currSpp >= minNoiseStopSpp) {
-        if (s_noiseConvergedLatched) {
-          if (s_lastNoiseLevel > resumeThreshold) {
-            s_noiseConvergedLatched = false;
-          }
-        } else if (s_lastNoiseLevel <= stopThreshold) {
-          s_noiseConvergedLatched = true;
+    const bool adaptiveEnabled = (g_cameraData.useAdaptiveSampling > 0.5f);
+    const UINT minNoiseStopSpp = adaptiveEnabled ? 32u : 24u;
+    const float stopThreshold = g_cameraData.noiseThreshold * 0.90f;
+    const float resumeThreshold = g_cameraData.noiseThreshold * 1.20f;
+    if (currSpp >= minNoiseStopSpp) {
+      if (s_noiseConvergedLatched) {
+        if (s_lastNoiseLevel > resumeThreshold) {
+          s_noiseConvergedLatched = false;
         }
+      } else if (s_lastNoiseLevel <= stopThreshold) {
+        s_noiseConvergedLatched = true;
       }
-      isConverged = s_noiseConvergedLatched;
+    }
+    isConverged = s_noiseConvergedLatched;
   }
-  bool isOidnMode = (s_denoiserMode != DxrRenderer::DenoiserMode::Off && !dlssActive);
+  bool isOidnMode =
+      (s_denoiserMode != DxrRenderer::DenoiserMode::Off && !dlssActive);
   bool reachedEndCondition = ((maxSpp > 0 && currSpp >= maxSpp) || isConverged);
 
   bool canAutoDenoise = isOidnMode && reachedEndCondition && !s_hasDenoised;
@@ -1690,7 +1781,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
   // Bind TLAS
   dxrList->SetComputeRootShaderResourceView(
       0, s_tlas.result->GetGPUVirtualAddress());
-  
+
   // fprintf(stderr, "DxrRenderer: RenderFrame - SetRootSignature done\n");
 
   // Copy global texture descriptors to our local DXR heap IF they've changed
@@ -1698,7 +1789,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
   static UINT s_lastTextureDescriptorCount = 0;
 
   if (g_cbvSrvAllocator.Heap() && textureDescriptorCount > 0) {
-    if (texturesGpuStart.ptr != s_lastTexturesGpuStart.ptr || textureDescriptorCount != s_lastTextureDescriptorCount) {
+    if (texturesGpuStart.ptr != s_lastTexturesGpuStart.ptr ||
+        textureDescriptorCount != s_lastTextureDescriptorCount) {
       UINT descSize = s_device->GetDescriptorHandleIncrementSize(
           D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
       D3D12_CPU_DESCRIPTOR_HANDLE srcStart =
@@ -1715,8 +1807,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
       dstStart.ptr += (SIZE_T)DXR_HEAP_TEX_OFFSET * descSize;
 
       // Only copy what fits
-      UINT count =
-          (textureDescriptorCount < DXR_HEAP_TEX_COUNT) ? textureDescriptorCount : DXR_HEAP_TEX_COUNT;
+      UINT count = (textureDescriptorCount < DXR_HEAP_TEX_COUNT)
+                       ? textureDescriptorCount
+                       : DXR_HEAP_TEX_COUNT;
       s_device->CopyDescriptorsSimple(count, dstStart, srcStart,
                                       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
@@ -1764,15 +1857,15 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
       pfData[17] = (float)s_jitterFrameIndex;
       pfData[18] = (float)s_lightCount; // lightCount
 
-        // Index 23: accumulationCount.
-        // DLSS-RR is a temporal denoiser; don't also accumulate history.
-        pfData[23] = rrActive ? 0.0f : (float)s_accumulation.GetFrameCount();
+      // Index 23: accumulationCount.
+      // DLSS-RR is a temporal denoiser; don't also accumulate history.
+      pfData[23] = rrActive ? 0.0f : (float)s_accumulation.GetFrameCount();
 
-        // Streamline flags used by shaders/raytracing/common.hlsli.
-        // Index 43: dlssEnabled
-        // Index 47: dlssRayReconstruction
-        pfData[43] = dlssActive ? 1.0f : 0.0f;
-        pfData[47] = rrActive ? 1.0f : 0.0f;
+      // Streamline flags used by shaders/raytracing/common.hlsli.
+      // Index 43: dlssEnabled
+      // Index 47: dlssRayReconstruction
+      pfData[43] = dlssActive ? 1.0f : 0.0f;
+      pfData[47] = rrActive ? 1.0f : 0.0f;
 
       cameraCB->Unmap(0, nullptr);
     }
@@ -1789,55 +1882,70 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
         4, materialCB->GetGPUVirtualAddress());
 
   // --- Bind Cloud Resources (Slot 10) ---
-  {
-      // 1. Create Cloud CBV at DXR_HEAP_CLOUD_CB_OFFSET
-      D3D12_CPU_DESCRIPTOR_HANDLE cbvCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
-      cbvCpu.ptr += (SIZE_T)DXR_HEAP_CLOUD_CB_OFFSET * s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-      
-      D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
-      cbvDesc.BufferLocation = g_cloudManager.GetConstantBufferAddr();
-      cbvDesc.SizeInBytes = (sizeof(CloudParams) + 255) & ~255;
-      s_device->CreateConstantBufferView(&cbvDesc, cbvCpu);
+  if (g_cloudManager.GetBaseTexture() && g_cloudManager.GetDetailTexture()) {
+    if (!s_cloudDescriptorsDone) {
+      // 1. Skip Cloud CBV creation in Heap (Used Root Descriptor instead)
 
       // 2. Create Cloud Base SRV at DXR_HEAP_CLOUD_TEX_OFFSET
-      D3D12_CPU_DESCRIPTOR_HANDLE srvCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
-      srvCpu.ptr += (SIZE_T)DXR_HEAP_CLOUD_TEX_OFFSET * s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-      
-      D3D12_RESOURCE_DESC noiseDesc = g_cloudManager.GetBaseTexture()->GetDesc();
+      D3D12_CPU_DESCRIPTOR_HANDLE srvCpu =
+          s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+      srvCpu.ptr += (SIZE_T)DXR_HEAP_CLOUD_TEX_OFFSET *
+                    s_device->GetDescriptorHandleIncrementSize(
+                        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+      D3D12_RESOURCE_DESC noiseDesc =
+          g_cloudManager.GetBaseTexture()->GetDesc();
       D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
       srvDesc.Format = noiseDesc.Format;
       srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
-      srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+      srvDesc.Shader4ComponentMapping =
+          D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
       srvDesc.Texture3D.MipLevels = noiseDesc.MipLevels;
       srvDesc.Texture3D.MostDetailedMip = 0;
       srvDesc.Texture3D.ResourceMinLODClamp = 0.0f;
-      s_device->CreateShaderResourceView(g_cloudManager.GetBaseTexture(), &srvDesc, srvCpu);
+      s_device->CreateShaderResourceView(g_cloudManager.GetBaseTexture(),
+                                         &srvDesc, srvCpu);
 
       // 3. Create Cloud Detail SRV at DXR_HEAP_CLOUD_DETAIL_TEX_OFFSET
-      D3D12_CPU_DESCRIPTOR_HANDLE srvCpuDetail = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
-      srvCpuDetail.ptr += (SIZE_T)DXR_HEAP_CLOUD_DETAIL_TEX_OFFSET * s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+      D3D12_CPU_DESCRIPTOR_HANDLE srvCpuDetail =
+          s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+      srvCpuDetail.ptr += (SIZE_T)DXR_HEAP_CLOUD_DETAIL_TEX_OFFSET *
+                          s_device->GetDescriptorHandleIncrementSize(
+                              D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-      D3D12_RESOURCE_DESC detailDesc = g_cloudManager.GetDetailTexture()->GetDesc();
+      D3D12_RESOURCE_DESC detailDesc =
+          g_cloudManager.GetDetailTexture()->GetDesc();
       D3D12_SHADER_RESOURCE_VIEW_DESC srvDescDetail = {};
       srvDescDetail.Format = detailDesc.Format;
       srvDescDetail.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
-      srvDescDetail.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+      srvDescDetail.Shader4ComponentMapping =
+          D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
       srvDescDetail.Texture3D.MipLevels = detailDesc.MipLevels;
       srvDescDetail.Texture3D.MostDetailedMip = 0;
       srvDescDetail.Texture3D.ResourceMinLODClamp = 0.0f;
-      s_device->CreateShaderResourceView(g_cloudManager.GetDetailTexture(), &srvDescDetail, srvCpuDetail);
+      s_device->CreateShaderResourceView(g_cloudManager.GetDetailTexture(),
+                                         &srvDescDetail, srvCpuDetail);
 
-      // 4. Bind Table (pointing to start of CBV)
-      // Because the root signature expects contiguous ranges (CBV, SRV, SRV...), and our heap layout is CBV, BaseTex, DetailTex,
-      // and we confirmed DXR_HEAP_CLOUD_DETAIL_TEX_OFFSET is contiguous after DXR_HEAP_CLOUD_TEX_OFFSET,
-      // we can just bind the table handle pointing to CBV.
-      D3D12_GPU_DESCRIPTOR_HANDLE cloudGpu = s_srvHeap->GetGPUDescriptorHandleForHeapStart();
-      cloudGpu.ptr += (UINT64)DXR_HEAP_CLOUD_CB_OFFSET * s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-      
-      dxrList->SetComputeRootDescriptorTable(10, cloudGpu);
+      s_cloudDescriptorsDone = true;
+    }
+
+    // 4. Bind Resources
+    // Slot 10: Root CBV
+    dxrList->SetComputeRootConstantBufferView(
+        10, g_cloudManager.GetConstantBufferAddr());
+
+    // Slot 11: SRV Table
+    D3D12_GPU_DESCRIPTOR_HANDLE cloudSRV =
+        s_srvHeap->GetGPUDescriptorHandleForHeapStart();
+    cloudSRV.ptr += (UINT64)DXR_HEAP_CLOUD_TEX_OFFSET *
+                    s_device->GetDescriptorHandleIncrementSize(
+                        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    dxrList->SetComputeRootDescriptorTable(11, cloudSRV);
   }
 
-  // Always bind IBL descriptor (even if null/empty, we bound a fallback in main.cpp)
+  // Always bind IBL descriptor (even if null/empty, we bound a fallback in
+  // main.cpp)
   {
     // Copy IBL descriptor from global heap to DXR local heap
     D3D12_CPU_DESCRIPTOR_HANDLE dst =
@@ -1845,12 +1953,12 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
     dst.ptr += (SIZE_T)DXR_HEAP_IBL_OFFSET *
                s_device->GetDescriptorHandleIncrementSize(
                    D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-    
+
     // GetCPUHandle should now always be valid (allocated in main.cpp)
     D3D12_CPU_DESCRIPTOR_HANDLE src = IBLManager::Get().GetCPUHandle();
-    if(src.ptr != 0) {
-        s_device->CopyDescriptorsSimple(1, dst, src,
-                                        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    if (src.ptr != 0) {
+      s_device->CopyDescriptorsSimple(1, dst, src,
+                                      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     }
 
     dxrList->SetComputeRootDescriptorTable(8, s_iblGpuHandle);
@@ -1874,25 +1982,37 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
 
   // Clear accumulation buffer if needed
   if (s_accumulation.NeedsClear()) {
-    D3D12_CPU_DESCRIPTOR_HANDLE accumCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
-    accumCpu.ptr += (SIZE_T)DXR_HEAP_ACCUM_UAV_OFFSET * s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-    D3D12_CPU_DESCRIPTOR_HANDLE varCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
-    varCpu.ptr += (SIZE_T)DXR_HEAP_VARIANCE_UAV_OFFSET * s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_CPU_DESCRIPTOR_HANDLE accumCpu =
+        s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+    accumCpu.ptr += (SIZE_T)DXR_HEAP_ACCUM_UAV_OFFSET *
+                    s_device->GetDescriptorHandleIncrementSize(
+                        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_CPU_DESCRIPTOR_HANDLE varCpu =
+        s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+    varCpu.ptr += (SIZE_T)DXR_HEAP_VARIANCE_UAV_OFFSET *
+                  s_device->GetDescriptorHandleIncrementSize(
+                      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-    s_accumulation.Clear(dxrList.Get(), s_accumUAVGpu, accumCpu, s_varianceUAVGpu, varCpu);
-    
+    s_accumulation.Clear(dxrList.Get(), s_accumUAVGpu, accumCpu,
+                         s_varianceUAVGpu, varCpu);
+
     // Also clear reservoir buffers to prevent artifacts from stale data
-    // Important: lightIndex should be cleared to 0xFFFFFFFF (invalid) 
-    uint32_t clearUint[4] = { 0xFFFFFFFF, 0, 0, 0 };
+    // Important: lightIndex should be cleared to 0xFFFFFFFF (invalid)
+    uint32_t clearUint[4] = {0xFFFFFFFF, 0, 0, 0};
     float clearRes[4];
     memcpy(clearRes, clearUint, sizeof(clearUint));
 
     for (int i = 0; i < 2; ++i) {
       if (s_reservoirBuffers[i]) {
-        D3D12_CPU_DESCRIPTOR_HANDLE resCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
-        resCpu.ptr += (SIZE_T)(i == 0 ? DXR_HEAP_RESERVOIR_0_OFFSET : DXR_HEAP_RESERVOIR_1_OFFSET) *
-                      s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        dxrList->ClearUnorderedAccessViewFloat(s_reservoirGpuHandle[i], resCpu, s_reservoirBuffers[i].Get(), clearRes, 0, nullptr);
+        D3D12_CPU_DESCRIPTOR_HANDLE resCpu =
+            s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+        resCpu.ptr += (SIZE_T)(i == 0 ? DXR_HEAP_RESERVOIR_0_OFFSET
+                                      : DXR_HEAP_RESERVOIR_1_OFFSET) *
+                      s_device->GetDescriptorHandleIncrementSize(
+                          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        dxrList->ClearUnorderedAccessViewFloat(s_reservoirGpuHandle[i], resCpu,
+                                               s_reservoirBuffers[i].Get(),
+                                               clearRes, 0, nullptr);
       }
     }
     // GI reservoirs use different packing but hitPos=0 is fine for clearing
@@ -1901,26 +2021,44 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
       if (s_gi_reservoirBuffers[i]) {
         UINT offset = 0;
         switch (i) {
-        case 0: offset = DXR_HEAP_GI_RESERVOIR_0_OFFSET_A; break;
-        case 1: offset = DXR_HEAP_GI_RESERVOIR_0_OFFSET_B; break;
-        case 2: offset = DXR_HEAP_GI_RESERVOIR_0_OFFSET_C; break;
-        case 3: offset = DXR_HEAP_GI_RESERVOIR_1_OFFSET_A; break;
-        case 4: offset = DXR_HEAP_GI_RESERVOIR_1_OFFSET_B; break;
-        case 5: offset = DXR_HEAP_GI_RESERVOIR_1_OFFSET_C; break;
+        case 0:
+          offset = DXR_HEAP_GI_RESERVOIR_0_OFFSET_A;
+          break;
+        case 1:
+          offset = DXR_HEAP_GI_RESERVOIR_0_OFFSET_B;
+          break;
+        case 2:
+          offset = DXR_HEAP_GI_RESERVOIR_0_OFFSET_C;
+          break;
+        case 3:
+          offset = DXR_HEAP_GI_RESERVOIR_1_OFFSET_A;
+          break;
+        case 4:
+          offset = DXR_HEAP_GI_RESERVOIR_1_OFFSET_B;
+          break;
+        case 5:
+          offset = DXR_HEAP_GI_RESERVOIR_1_OFFSET_C;
+          break;
         }
-        D3D12_CPU_DESCRIPTOR_HANDLE resCpu = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
-        resCpu.ptr += (SIZE_T)offset * s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        dxrList->ClearUnorderedAccessViewFloat(s_gi_reservoirGpuHandle[i], resCpu, s_gi_reservoirBuffers[i].Get(), clearGI, 0, nullptr);
+        D3D12_CPU_DESCRIPTOR_HANDLE resCpu =
+            s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+        resCpu.ptr +=
+            (SIZE_T)offset * s_device->GetDescriptorHandleIncrementSize(
+                                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        dxrList->ClearUnorderedAccessViewFloat(
+            s_gi_reservoirGpuHandle[i], resCpu, s_gi_reservoirBuffers[i].Get(),
+            clearGI, 0, nullptr);
       }
     }
-    
+
     s_accumulation.SetNeedsClear(false);
   }
 
   D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
   // RayGen record size must match the raygen slot size (may be 64-aligned)
-  UINT64 s_rayGenEntrySize = Align(D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES,
-                                 D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
+  UINT64 s_rayGenEntrySize =
+      Align(D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES,
+            D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
   dispatchDesc.RayGenerationShaderRecord.StartAddress = s_rayGenShaderTable;
   dispatchDesc.RayGenerationShaderRecord.SizeInBytes = s_rayGenEntrySize;
   // Miss/Hit tables: one entry each for now
@@ -1939,13 +2077,14 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
   // Only Dispatch Rays if we are NOT in a pure denoise pass.
   // If we are denoising an already-completed frame (e.g. at MaxSPP),
   // we do not want to add more samples or modify the accumulation buffer.
-  
+
   if (!doDenoise && !reachedEndCondition) {
     // fprintf(stderr, "DxrRenderer: Dispatching Rays\n");
     dxrList->DispatchRays(&dispatchDesc);
     // fprintf(stderr, "DxrRenderer: Dispatched Rays\n");
 
-    // Increment accumulation history only when actually used and not at end condition.
+    // Increment accumulation history only when actually used and not at end
+    // condition.
     if (!rrActive && !reachedEndCondition)
       s_accumulation.IncrementFrame();
     else if (rrActive && !reachedEndCondition)
@@ -1954,8 +2093,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
     // We are skipping dispatch to run OIDN on the existing buffer or because
     // we reached an end condition (noise/maxSPP).
     if (reachedEndCondition && !doDenoise && g_verboseRenderLogs) {
-        // Optional: Log convergence? 
-        // fprintf(stderr, "DxrRenderer: Converged (Noise: %.4f < %.4f)\n", s_lastNoiseLevel, g_cameraData.noiseThreshold);
+      // Optional: Log convergence?
+      // fprintf(stderr, "DxrRenderer: Converged (Noise: %.4f < %.4f)\n",
+      // s_lastNoiseLevel, g_cameraData.noiseThreshold);
     }
   }
 
@@ -1976,92 +2116,111 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
   // which can look like shimmer even when the underlying buffer is stable.
 
   // --- Noise Statistics (Moved outside Streamline block) ---
-  // Run periodically, but faster in adaptive mode so stop decisions react sooner.
-  // Also run if s_lastNoiseLevel is 0 (initial calculation) regardless of modulo.
-  bool shouldCalcNoise = s_accumulation.IsAccumulating() && s_accumulation.GetFrameCount() > 0;
+  // Run periodically, but faster in adaptive mode so stop decisions react
+  // sooner. Also run if s_lastNoiseLevel is 0 (initial calculation) regardless
+  // of modulo.
+  bool shouldCalcNoise =
+      s_accumulation.IsAccumulating() && s_accumulation.GetFrameCount() > 0;
   if (shouldCalcNoise) {
-      const UINT noiseEvalPeriod = (g_cameraData.useAdaptiveSampling > 0.5f) ? 4u : 10u;
-      if (s_lastNoiseLevel == 0.0f || (s_accumulation.GetFrameCount() % noiseEvalPeriod == 0)) {
-          EnsureNoiseStatsPipeline();
-          if (s_noiseStatsPSO) {
-                // 1. Readback previous result FIRST (from readback buffer populated in previous run)
-                {
-                    float* data = nullptr;
-                    if (SUCCEEDED(s_noiseStatsReadbackBuffer->Map(0, nullptr, (void**)&data))) {
-                        s_lastNoiseLevel = *data;
-                        s_noiseStatsReadbackBuffer->Unmap(0, nullptr);
-                    }
-                }
-
-                // 2. UAV Barrier to ensure RayTrace writes are visible to Compute
-                D3D12_RESOURCE_BARRIER uavBarrier = {};
-                uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-                uavBarrier.UAV.pResource = nullptr;
-                dxrList->ResourceBarrier(1, &uavBarrier);
-
-                // 3. Dispatch Noise Stats
-                // Update constants
-                NoiseStatsConstants nsc = { s_outputWidth, s_outputHeight };
-                void* mapPtr = nullptr;
-                if (SUCCEEDED(s_noiseStatsCB->Map(0, nullptr, &mapPtr))) {
-                    memcpy(mapPtr, &nsc, sizeof(nsc));
-                    s_noiseStatsCB->Unmap(0, nullptr);
-                }
-
-                // Bind & Dispatch
-                dxrList->SetPipelineState(s_noiseStatsPSO.Get());
-                dxrList->SetComputeRootSignature(s_noiseStatsRootSig.Get());
-                ID3D12DescriptorHeap* nsHeaps[] = { s_noiseStatsHeap.Get() };
-                dxrList->SetDescriptorHeaps(1, nsHeaps);
-                
-                // Update Descriptors: u0(Accum), u1(Var), u2(Out) in heap
-                UINT inc = s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-                D3D12_CPU_DESCRIPTOR_HANDLE cpuStart = s_noiseStatsHeap->GetCPUDescriptorHandleForHeapStart();
-                D3D12_GPU_DESCRIPTOR_HANDLE gpuStart = s_noiseStatsHeap->GetGPUDescriptorHandleForHeapStart();
-
-                // u0
-                D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-                uavDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
-                uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-                s_device->CreateUnorderedAccessView(s_accumulation.GetAccumulationBuffer(), nullptr, &uavDesc, cpuStart);
-
-                // u1
-                uavDesc.Format = DXGI_FORMAT_R32_FLOAT;
-                D3D12_CPU_DESCRIPTOR_HANDLE u1 = cpuStart; u1.ptr += inc;
-                s_device->CreateUnorderedAccessView(s_accumulation.GetVarianceBuffer(), nullptr, &uavDesc, u1);
-
-                // u2
-                D3D12_UNORDERED_ACCESS_VIEW_DESC bufDesc = {};
-                bufDesc.Format = DXGI_FORMAT_UNKNOWN;
-                bufDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-                bufDesc.Buffer.FirstElement = 0;
-                bufDesc.Buffer.NumElements = 1;
-                bufDesc.Buffer.StructureByteStride = sizeof(float);
-                bufDesc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
-                D3D12_CPU_DESCRIPTOR_HANDLE u2 = cpuStart; u2.ptr += 2 * inc;
-                s_device->CreateUnorderedAccessView(s_noiseStatsOutputBuffer.Get(), nullptr, &bufDesc, u2);
-
-                dxrList->SetComputeRootConstantBufferView(0, s_noiseStatsCB->GetGPUVirtualAddress());
-                dxrList->SetComputeRootDescriptorTable(1, gpuStart);
-                
-                dxrList->Dispatch(1, 1, 1);
-
-                // 4. Copy to Readback (for NEXT frame to read)
-                TransitionResource(dxrList.Get(), s_noiseStatsOutputBuffer.Get(), 
-                                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
-                dxrList->CopyResource(s_noiseStatsReadbackBuffer.Get(), s_noiseStatsOutputBuffer.Get());
-                TransitionResource(dxrList.Get(), s_noiseStatsOutputBuffer.Get(), 
-                                    D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    const UINT noiseEvalPeriod =
+        (g_cameraData.useAdaptiveSampling > 0.5f) ? 4u : 10u;
+    if (s_lastNoiseLevel == 0.0f ||
+        (s_accumulation.GetFrameCount() % noiseEvalPeriod == 0)) {
+      EnsureNoiseStatsPipeline();
+      if (s_noiseStatsPSO) {
+        // 1. Readback previous result FIRST (from readback buffer populated in
+        // previous run)
+        {
+          float *data = nullptr;
+          if (SUCCEEDED(s_noiseStatsReadbackBuffer->Map(0, nullptr,
+                                                        (void **)&data))) {
+            s_lastNoiseLevel = *data;
+            s_noiseStatsReadbackBuffer->Unmap(0, nullptr);
           }
+        }
+
+        // 2. UAV Barrier to ensure RayTrace writes are visible to Compute
+        D3D12_RESOURCE_BARRIER uavBarrier = {};
+        uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        uavBarrier.UAV.pResource = nullptr;
+        dxrList->ResourceBarrier(1, &uavBarrier);
+
+        // 3. Dispatch Noise Stats
+        // Update constants
+        NoiseStatsConstants nsc = {s_outputWidth, s_outputHeight};
+        void *mapPtr = nullptr;
+        if (SUCCEEDED(s_noiseStatsCB->Map(0, nullptr, &mapPtr))) {
+          memcpy(mapPtr, &nsc, sizeof(nsc));
+          s_noiseStatsCB->Unmap(0, nullptr);
+        }
+
+        // Bind & Dispatch
+        dxrList->SetPipelineState(s_noiseStatsPSO.Get());
+        dxrList->SetComputeRootSignature(s_noiseStatsRootSig.Get());
+        ID3D12DescriptorHeap *nsHeaps[] = {s_noiseStatsHeap.Get()};
+        dxrList->SetDescriptorHeaps(1, nsHeaps);
+
+        // Update Descriptors: u0(Accum), u1(Var), u2(Out) in heap
+        UINT inc = s_device->GetDescriptorHandleIncrementSize(
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        D3D12_CPU_DESCRIPTOR_HANDLE cpuStart =
+            s_noiseStatsHeap->GetCPUDescriptorHandleForHeapStart();
+        D3D12_GPU_DESCRIPTOR_HANDLE gpuStart =
+            s_noiseStatsHeap->GetGPUDescriptorHandleForHeapStart();
+
+        // u0
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+        uavDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        s_device->CreateUnorderedAccessView(
+            s_accumulation.GetAccumulationBuffer(), nullptr, &uavDesc,
+            cpuStart);
+
+        // u1
+        uavDesc.Format = DXGI_FORMAT_R32_FLOAT;
+        D3D12_CPU_DESCRIPTOR_HANDLE u1 = cpuStart;
+        u1.ptr += inc;
+        s_device->CreateUnorderedAccessView(s_accumulation.GetVarianceBuffer(),
+                                            nullptr, &uavDesc, u1);
+
+        // u2
+        D3D12_UNORDERED_ACCESS_VIEW_DESC bufDesc = {};
+        bufDesc.Format = DXGI_FORMAT_UNKNOWN;
+        bufDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        bufDesc.Buffer.FirstElement = 0;
+        bufDesc.Buffer.NumElements = 1;
+        bufDesc.Buffer.StructureByteStride = sizeof(float);
+        bufDesc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
+        D3D12_CPU_DESCRIPTOR_HANDLE u2 = cpuStart;
+        u2.ptr += 2 * inc;
+        s_device->CreateUnorderedAccessView(s_noiseStatsOutputBuffer.Get(),
+                                            nullptr, &bufDesc, u2);
+
+        dxrList->SetComputeRootConstantBufferView(
+            0, s_noiseStatsCB->GetGPUVirtualAddress());
+        dxrList->SetComputeRootDescriptorTable(1, gpuStart);
+
+        dxrList->Dispatch(1, 1, 1);
+
+        // 4. Copy to Readback (for NEXT frame to read)
+        TransitionResource(dxrList.Get(), s_noiseStatsOutputBuffer.Get(),
+                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                           D3D12_RESOURCE_STATE_COPY_SOURCE);
+        dxrList->CopyResource(s_noiseStatsReadbackBuffer.Get(),
+                              s_noiseStatsOutputBuffer.Get());
+        TransitionResource(dxrList.Get(), s_noiseStatsOutputBuffer.Get(),
+                           D3D12_RESOURCE_STATE_COPY_SOURCE,
+                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
       }
+    }
   }
 
   // For RR, once we reach stop conditions, keep the last RR output instead of
   // re-evaluating with stale inputs and changing jitter.
   const bool skipDlssEvalAtStop = rrActive && reachedEndCondition;
-  if (!debugViewActive && !skipDlssEvalAtStop &&
-      s_streamline && s_streamline->IsInitialized() &&
-      s_streamline->IsDeviceSet() && s_streamline->IsEnabled() &&
+  if (!debugViewActive && !skipDlssEvalAtStop && s_streamline &&
+      s_streamline->IsInitialized() && s_streamline->IsDeviceSet() &&
+      s_streamline->IsEnabled() &&
       s_streamline->GetMode() != StreamlineManager::Mode::Off &&
       s_dlssOutputUAV && s_depthUAV && s_mvecUAV) {
 
@@ -2123,12 +2282,13 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
       usedDlss = true;
       postColor = s_dlssOutputUAV.Get();
     }
-    
+
     // Restore states for potentially other passes (OIDN or next frame)
-    // Streamline outputs are UAV. Inputs need to be reset if we want to use them again as UAVs.
-    // Note: OIDN needs them as SRVs (Read) usually, but we have a dedicated transition block below.
-    // For now, let's reset to UAV to be safe and consistent, OR rely on the central transitions.
-    // The original code reset them here.
+    // Streamline outputs are UAV. Inputs need to be reset if we want to use
+    // them again as UAVs. Note: OIDN needs them as SRVs (Read) usually, but we
+    // have a dedicated transition block below. For now, let's reset to UAV to
+    // be safe and consistent, OR rely on the central transitions. The original
+    // code reset them here.
     TransitionResource(dxrList.Get(), s_outputUAV.Get(),
                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -2180,36 +2340,40 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
   bool shouldRunOidn = doDenoise && !usedDlss;
 
   if (shouldRunOidn && s_oidnOutputUAV && postColor) {
-    fprintf(stderr, "DxrRenderer: MaxSPP reached. Auto-triggering OIDN denoise.\n");
+    fprintf(stderr,
+            "DxrRenderer: MaxSPP reached. Auto-triggering OIDN denoise.\n");
     s_oidnDenoiser.Initialize(s_device);
 
     // Ensure input is in COMMON state for interop
-    // postColor is currently in UAV state (either s_outputUAV or s_dlssOutputUAV)
+    // postColor is currently in UAV state (either s_outputUAV or
+    // s_dlssOutputUAV)
     TransitionResource(dxrList.Get(), postColor,
-                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, // Assumed state
-                        D3D12_RESOURCE_STATE_COMMON);
-      
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS, // Assumed state
+                       D3D12_RESOURCE_STATE_COMMON);
+
     if (s_albedoUAV) {
       TransitionResource(dxrList.Get(), s_albedoUAV.Get(),
-                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                          D3D12_RESOURCE_STATE_COMMON);
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                         D3D12_RESOURCE_STATE_COMMON);
     }
     if (s_normalRoughnessUAV) {
       TransitionResource(dxrList.Get(), s_normalRoughnessUAV.Get(),
-                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                          D3D12_RESOURCE_STATE_COMMON);
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                         D3D12_RESOURCE_STATE_COMMON);
     }
 
-    // s_oidnOutputUAV was created/kept as UAV; transition to COMMON for OIDN write
+    // s_oidnOutputUAV was created/kept as UAV; transition to COMMON for OIDN
+    // write
     TransitionResource(dxrList.Get(), s_oidnOutputUAV.Get(),
-               D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-               D3D12_RESOURCE_STATE_COMMON);
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                       D3D12_RESOURCE_STATE_COMMON);
 
     // FLUSH & SYNC for OIDN:
     // We must execute the command list to ensure resources are in COMMON state
     // before OIDN tries to access them.
     if (cmdAlloc && s_commandQueue && s_fence) {
-      // Flush the transitions to COMMON so OIDN can safely access the resources.
+      // Flush the transitions to COMMON so OIDN can safely access the
+      // resources.
       ThrowIfFailed(dxrList->Close());
       ID3D12CommandList *lists[] = {dxrList.Get()};
       s_commandQueue->ExecuteCommandLists(1, lists);
@@ -2230,11 +2394,12 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
       dxrList->SetDescriptorHeaps(1, dxrHeaps);
 
       // Run OIDN.
-      // We pass the command queue so the denoiser can manage its own internal copy-execute-sync cycle
-      // to handle Tiled <-> Linear layout conversion for D3D12 interop.
+      // We pass the command queue so the denoiser can manage its own internal
+      // copy-execute-sync cycle to handle Tiled <-> Linear layout conversion
+      // for D3D12 interop.
       bool ran = s_oidnDenoiser.RunDenoise(
-          dxrList.Get(), s_commandQueue, postColor, s_albedoUAV.Get(), s_normalRoughnessUAV.Get(),
-          s_oidnOutputUAV.Get(), false);
+          dxrList.Get(), s_commandQueue, postColor, s_albedoUAV.Get(),
+          s_normalRoughnessUAV.Get(), s_oidnOutputUAV.Get(), false);
 
       // Restore Resource States from COMMON to what the engine expects.
       TransitionResource(dxrList.Get(), postColor, D3D12_RESOURCE_STATE_COMMON,
@@ -2259,12 +2424,12 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
         postColor = s_oidnOutputUAV.Get();
         fprintf(stderr, "DxrRenderer: OIDN denoise completed successfully.\n");
       } else {
-        fprintf(stderr,
-                "DxrRenderer: OIDN denoise did not run (unsupported config or failure).\n");
+        fprintf(stderr, "DxrRenderer: OIDN denoise did not run (unsupported "
+                        "config or failure).\n");
       }
     }
-    
-      // postColor is in UAV state so the Tonemap block can transition it to SRV.
+
+    // postColor is in UAV state so the Tonemap block can transition it to SRV.
   }
 
   // Tonemap linear HDR to swapchain format, then copy.
@@ -2305,8 +2470,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
     uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
     uav.Texture2D.MipSlice = 0;
     uav.Texture2D.PlaneSlice = 0;
-    s_device->CreateUnorderedAccessView(s_tonemapOutputUAV.Get(), nullptr,
-                                        &uav, uavCpu);
+    s_device->CreateUnorderedAccessView(s_tonemapOutputUAV.Get(), nullptr, &uav,
+                                        uavCpu);
 
     // Barriers
     TransitionResource(dxrList.Get(), postColor,
@@ -2317,8 +2482,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
     dxrList->SetDescriptorHeaps(1, tmHeaps);
     dxrList->SetPipelineState(s_tonemapPSO.Get());
     dxrList->SetComputeRootSignature(s_tonemapRootSig.Get());
-    dxrList->SetComputeRootConstantBufferView(0,
-                                              s_tonemapCB->GetGPUVirtualAddress());
+    dxrList->SetComputeRootConstantBufferView(
+        0, s_tonemapCB->GetGPUVirtualAddress());
 
     D3D12_GPU_DESCRIPTOR_HANDLE gpuStart =
         s_tonemapHeap->GetGPUDescriptorHandleForHeapStart();
@@ -2335,7 +2500,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
     TransitionResource(dxrList.Get(), s_tonemapOutputUAV.Get(),
                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                        D3D12_RESOURCE_STATE_COPY_SOURCE);
-    TransitionResource(dxrList.Get(), renderTarget, D3D12_RESOURCE_STATE_PRESENT,
+    TransitionResource(dxrList.Get(), renderTarget,
+                       D3D12_RESOURCE_STATE_PRESENT,
                        D3D12_RESOURCE_STATE_COPY_DEST);
     dxrList->CopyResource(renderTarget, s_tonemapOutputUAV.Get());
 
@@ -2354,20 +2520,24 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
       // If we just ran a one-shot or continuous OIDN pass, we can mark the
       // frame as tonemapped so that if maxSPP is reached, we don't keep
       // re-tonemapping the same results.
-      // Additionally, for one-shot denoise, this helps keep the result on screen.
+      // Additionally, for one-shot denoise, this helps keep the result on
+      // screen.
       s_hasTonemappedFrame = true;
     }
   } else {
     // Fallback: copy (may be invalid if formats don't match)
-    TransitionResource(dxrList.Get(), renderTarget, D3D12_RESOURCE_STATE_PRESENT,
+    TransitionResource(dxrList.Get(), renderTarget,
+                       D3D12_RESOURCE_STATE_PRESENT,
                        D3D12_RESOURCE_STATE_COPY_DEST);
-    TransitionResource(dxrList.Get(), postColor, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+    TransitionResource(dxrList.Get(), postColor,
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                        D3D12_RESOURCE_STATE_COPY_SOURCE);
     dxrList->CopyResource(renderTarget, postColor);
     TransitionResource(dxrList.Get(), renderTarget,
                        D3D12_RESOURCE_STATE_COPY_DEST,
                        D3D12_RESOURCE_STATE_RENDER_TARGET);
-    TransitionResource(dxrList.Get(), postColor, D3D12_RESOURCE_STATE_COPY_SOURCE,
+    TransitionResource(dxrList.Get(), postColor,
+                       D3D12_RESOURCE_STATE_COPY_SOURCE,
                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
     // Consider the frame presented even if tonemap is missing (debug/dev).
@@ -2375,7 +2545,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
   }
 
   // FREEZE LOGIC AFTER TONEMAPPING:
-  // If we reached max SPP (or converged) and froze, copy the newly tonemapped result to present it.
+  // If we reached max SPP (or converged) and froze, copy the newly tonemapped
+  // result to present it.
   if (shouldFreezeAfterTonemap) {
     ID3D12Resource *freezeSrc = nullptr;
     if (s_hasDenoised && s_tonemapOutputUAV) {
@@ -2383,8 +2554,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
     } else if (s_tonemapOutputUAV) {
       freezeSrc = s_tonemapOutputUAV.Get();
     } else {
-      // If tonemap output isn't available (e.g., swapchain is HDR), fall back to
-      // copying the main output directly if formats match.
+      // If tonemap output isn't available (e.g., swapchain is HDR), fall back
+      // to copying the main output directly if formats match.
       const DXGI_FORMAT dstFmt = renderTarget->GetDesc().Format;
       if (s_outputUAV && s_outputUAV->GetDesc().Format == dstFmt) {
         freezeSrc = s_outputUAV.Get();
@@ -2395,7 +2566,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
       TransitionResource(dxrList.Get(), freezeSrc,
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                          D3D12_RESOURCE_STATE_COPY_SOURCE);
-      TransitionResource(dxrList.Get(), renderTarget, D3D12_RESOURCE_STATE_PRESENT,
+      TransitionResource(dxrList.Get(), renderTarget,
+                         D3D12_RESOURCE_STATE_PRESENT,
                          D3D12_RESOURCE_STATE_COPY_DEST);
       dxrList->CopyResource(renderTarget, freezeSrc);
 
