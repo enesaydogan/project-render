@@ -79,16 +79,18 @@ bool IsSpatiallyCompatible(uint2 p0, uint2 p1, float ndotMin, float depthTolBase
     float l0 = dot(nn0, nn0);
     float l1 = dot(nn1, nn1);
 
-    // If previous-frame data is invalid/uninitialized, don't hard-reject.
-    if (l0 > 0.25 && l1 > 0.25) {
-        nn0 = normalize(nn0);
-        nn1 = normalize(nn1);
-        if (dot(nn0, nn1) < ndotMin) return false;
-    }
+    // History is unreliable for spatial reuse when normal/depth buffers are invalid.
+    if (l0 <= 0.25 || l1 <= 0.25) return false;
+    nn0 = normalize(nn0);
+    nn1 = normalize(nn1);
+    if (dot(nn0, nn1) < ndotMin) return false;
+    if (abs(n0.w - n1.w) > 0.25) return false;
 
     float d0 = g_depth[p0];
     float d1 = g_depth[p1];
-    float depthTol = depthTolBase + 0.02 * max(d0, d1);
+    if (!isfinite(d0) || !isfinite(d1) || d0 <= 0.0 || d1 <= 0.0) return false;
+    float depthScale = max(max(abs(d0), abs(d1)), 1.0);
+    float depthTol = max(0.0025, depthTolBase * depthScale);
     if (abs(d0 - d1) > depthTol) return false;
 
     return true;
@@ -120,14 +122,14 @@ void RayGen()
     const uint kAdaptiveStartSpp = 24u;
     const uint kAdaptiveMinPerPixelSpp = 64u;
     const float kAdaptiveRelScale = 0.90;
-    const float kAdaptiveEdgeRelScale = 0.65;
+    const float kAdaptiveEdgeRelScale = 0.55;
     const float kAdaptiveAbsSemFloor = 5e-4;
     const float kAdaptiveAbsSemScale = 0.0125;
-    const float kAdaptiveEdgeAbsSemScale = 0.0075;
+    const float kAdaptiveEdgeAbsSemScale = 0.0055;
     const float kAdaptiveMinKeepProb = 0.10;
     const float kAdaptiveEdgeMinKeepProb = 0.22;
-    const float kAdaptiveEdgeContrastThreshold = 0.02;
-    const float kAdaptiveMinExpectedRatio = 0.90;
+    const float kAdaptiveEdgeContrastThreshold = 0.012;
+    const float kAdaptiveMinExpectedRatio = 0.95;
     const float kAdaptiveLagKeepScale = 1.00;
     const float kRestirSpatialRadiusPx = (useAdaptiveSampling > 0.5) ? 6.0 : 12.0;
     const bool debugViewActive = (debugMode > 0.0) || (debugVisualizationMode == 1.0);
@@ -459,8 +461,8 @@ void RayGen()
             }
 
             // C. Spatial Resampling (Neighbor Pixels)
-            if (frame > 0) {
-                int spatialReuseCount = (useAdaptiveSampling > 0.5) ? 1 : 2;
+            if (frame > 6) {
+                const int spatialReuseCount = 1;
                 for (int i = 0; i < spatialReuseCount; ++i) {
                     // Use a disk distribution for better sampling coverage and to avoid banding
                     float angle = next_float(rng) * 2.0 * PI;
@@ -468,11 +470,9 @@ void RayGen()
                     int2 offset = int2(cos(angle) * radius, sin(angle) * radius);
                     int2 neighborCoords = clamp(int2(launchIndex.xy) + offset, int2(0,0), int2(launchDim.xy)-1);
 
-                    // Edge-aware reuse reject (uses previous-frame G-buffer written to u10/u13).
-                    if (useAdaptiveSampling > 0.5 && frame > 2) {
-                        if (!IsSpatiallyCompatible(launchIndex.xy, uint2(neighborCoords), 0.92, 0.01)) {
-                            continue;
-                        }
+                    // Always guard spatial reuse at geometric/material edges.
+                    if (!IsSpatiallyCompatible(launchIndex.xy, uint2(neighborCoords), 0.96, 0.006)) {
+                        continue;
                     }
                     
                     float4 neighbor_data;
@@ -481,7 +481,7 @@ void RayGen()
                     Reservoir neighbor_res = unpack_reservoir(neighbor_data);
                     
                     // Cap neighbor contribution to prevent fireflies from dominating
-                    neighbor_res.M = min(neighbor_res.M, 15); 
+                    neighbor_res.M = min(neighbor_res.M, 8); 
                     
                     // Re-evaluate neighbor light candidate at current shading point
                     float3 L_neigh;
@@ -512,7 +512,7 @@ void RayGen()
                     // Simple Visibility check for spatial reuse significantly reduces block artifacts
                     if (p_target_at_curr > 0.0) {
                         RayDesc spatialRay; spatialRay.Origin = P + N * 0.001; spatialRay.Direction = L_neigh;
-                        spatialRay.TMin = 0.001; spatialRay.TMax = dist_neigh - 0.002;
+                        spatialRay.TMin = 0.001; spatialRay.TMax = max(0.001, dist_neigh - 0.003);
                         RayPayload spatialPayload; spatialPayload.t = 1.0;
                         TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, spatialRay, spatialPayload);
                         if (spatialPayload.t > 0.0) p_target_at_curr = 0.0; // Occluded
@@ -633,24 +633,22 @@ void RayGen()
                 combine_gi_reservoirs(gi_res, prev_gi, p_target_at_curr, rng);
             }
             // C. Spatial Resampling
-            if (frame > 0) {
-                int spatialReuseCount = (useAdaptiveSampling > 0.5) ? 1 : 2;
+            if (frame > 6) {
+                const int spatialReuseCount = 1;
                 for (int i = 0; i < spatialReuseCount; ++i) {
                     float2 unitSample = float2(next_float(rng), next_float(rng)) * 2.0 - 1.0;
                     int2 offset = int2(unitSample * kRestirSpatialRadiusPx);
                     int2 neighborCoords = clamp(int2(launchIndex.xy) + offset, int2(0,0), int2(launchDim.xy)-1);
 
-                    if (useAdaptiveSampling > 0.5 && frame > 2) {
-                        if (!IsSpatiallyCompatible(launchIndex.xy, uint2(neighborCoords), 0.90, 0.015)) {
-                            continue;
-                        }
+                    if (!IsSpatiallyCompatible(launchIndex.xy, uint2(neighborCoords), 0.94, 0.010)) {
+                        continue;
                     }
 
                     float4 d0, d1, d2;
                     if (flip) { d0 = g_gi_reservoir_b0[neighborCoords]; d1 = g_gi_reservoir_b1[neighborCoords]; d2 = g_gi_reservoir_b2[neighborCoords]; }
                     else      { d0 = g_gi_reservoir_a0[neighborCoords]; d1 = g_gi_reservoir_a1[neighborCoords]; d2 = g_gi_reservoir_a2[neighborCoords]; }
                     GI_Reservoir neigh_gi = unpack_gi_reservoir(d0, d1, d2);
-                    neigh_gi.M = min(neigh_gi.M, 15);
+                    neigh_gi.M = min(neigh_gi.M, 8);
                     float3 L_gi = normalize(neigh_gi.hitPos - P);
                     float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
                     float3 H = normalize(L_gi + V);
@@ -661,7 +659,7 @@ void RayGen()
                     // Spatial Jacobian / Visibility for GI
                     if (p_target_at_curr > 0.0) {
                         RayDesc spatialRay; spatialRay.Origin = P + N * 0.001; spatialRay.Direction = L_gi;
-                        spatialRay.TMin = 0.001; spatialRay.TMax = distance(neigh_gi.hitPos, P) - 0.002;
+                        spatialRay.TMin = 0.001; spatialRay.TMax = max(0.001, distance(neigh_gi.hitPos, P) - 0.003);
                         RayPayload spatialPayload; spatialPayload.t = 1.0;
                         TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, spatialRay, spatialPayload);
                         if (spatialPayload.t > 0.0) p_target_at_curr = 0.0;
@@ -685,7 +683,7 @@ void RayGen()
             if (gi_res.W > 0.0) {
                 // Visibility test for GI reconnection
                 RayDesc giVisRay; giVisRay.Origin = P + N * 0.001; giVisRay.Direction = L_gi_final;
-                giVisRay.TMin = 0.001; giVisRay.TMax = distance(gi_res.hitPos, P) - 0.002;
+                giVisRay.TMin = 0.001; giVisRay.TMax = max(0.001, distance(gi_res.hitPos, P) - 0.003);
                 RayPayload giVisPayload; giVisPayload.t = 1.0; giVisPayload.rayDepth = (uint)bounce + 1;
                 TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, giVisRay, giVisPayload);
                 if (giVisPayload.t < 0.0) {

@@ -1658,9 +1658,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase, ID3D12CommandAlloca
   bool isConverged = false;
   if (s_lastNoiseLevel > 0.0f) {
       const bool adaptiveEnabled = (g_cameraData.useAdaptiveSampling > 0.5f);
-      const UINT minNoiseStopSpp = adaptiveEnabled ? 24u : 16u;
-      const float stopThreshold = g_cameraData.noiseThreshold * 0.95f;
-      const float resumeThreshold = g_cameraData.noiseThreshold * 1.15f;
+      const UINT minNoiseStopSpp = adaptiveEnabled ? 32u : 24u;
+      const float stopThreshold = g_cameraData.noiseThreshold * 0.90f;
+      const float resumeThreshold = g_cameraData.noiseThreshold * 1.20f;
       if (currSpp >= minNoiseStopSpp) {
         if (s_noiseConvergedLatched) {
           if (s_lastNoiseLevel > resumeThreshold) {

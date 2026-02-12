@@ -274,6 +274,8 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
     float jitter = 0.0;
     #ifdef RAYTRACING_COMMON_H
     jitter = InterleavedGradientNoise(DispatchRaysIndex().xy, (uint)globalFrameCount);
+    // Lower dithering amplitude to reduce cloud edge sparkle/splotches.
+    jitter *= 0.35f;
     #endif
     pos += rayDir * (jitter * stepSize);
 
