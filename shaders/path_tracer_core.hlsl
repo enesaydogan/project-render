@@ -220,11 +220,13 @@ void RayGen()
                  // ping-pong sides and can make ReSTIR reuse unstable.
                  if (flip) {
                      g_reservoir1[launchIndex.xy] = g_reservoir0[launchIndex.xy];
+                     InterlockedAdd(g_shaderCounters[SHADER_COUNTER_RESERVOIR_WRITES], 1);
                      g_gi_reservoir_a0[launchIndex.xy] = g_gi_reservoir_b0[launchIndex.xy];
                      g_gi_reservoir_a1[launchIndex.xy] = g_gi_reservoir_b1[launchIndex.xy];
                      g_gi_reservoir_a2[launchIndex.xy] = g_gi_reservoir_b2[launchIndex.xy];
                  } else {
                      g_reservoir0[launchIndex.xy] = g_reservoir1[launchIndex.xy];
+                     InterlockedAdd(g_shaderCounters[SHADER_COUNTER_RESERVOIR_WRITES], 1);
                      g_gi_reservoir_b0[launchIndex.xy] = g_gi_reservoir_a0[launchIndex.xy];
                      g_gi_reservoir_b1[launchIndex.xy] = g_gi_reservoir_a1[launchIndex.xy];
                      g_gi_reservoir_b2[launchIndex.xy] = g_gi_reservoir_a2[launchIndex.xy];
@@ -313,6 +315,7 @@ void RayGen()
         payload.rayType = currentRayType;
 
         TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
+        InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TRACE_RAYS], 1);
 
 
         if (bounce == 0 && payload.t >= 0.0) {
@@ -346,6 +349,7 @@ void RayGen()
                 specHitPayload.rayDepth = (uint)bounce + 1;
                 specHitPayload.rayType = RAY_TYPE_REFLECTION;
                 TraceRay(g_accel, RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0xFF, 0, 0, 0, specHitRay, specHitPayload);
+                InterlockedAdd(g_shaderCounters[SHADER_COUNTER_SPECULAR_TRACES], 1);
                 primarySpecHitDist = (specHitPayload.t > 0) ? specHitPayload.t : 1000.0;
             } else {
                 primarySpecHitDist = 0.0;
@@ -369,8 +373,8 @@ void RayGen()
             // On first bounce miss, update reservoir to empty
             if (bounce == 0) {
                 float4 res_data = pack_reservoir(init_reservoir());
-                if (flip) g_reservoir1[launchIndex.xy] = res_data;
-                else      g_reservoir0[launchIndex.xy] = res_data;
+                if (flip) { g_reservoir1[launchIndex.xy] = res_data; InterlockedAdd(g_shaderCounters[SHADER_COUNTER_RESERVOIR_WRITES], 1); }
+                else      { g_reservoir0[launchIndex.xy] = res_data; InterlockedAdd(g_shaderCounters[SHADER_COUNTER_RESERVOIR_WRITES], 1); }
             }
             break;
         }
@@ -442,6 +446,7 @@ void RayGen()
                 float4 prev_data;
                 if (flip) prev_data = g_reservoir0[launchIndex.xy];
                 else      prev_data = g_reservoir1[launchIndex.xy];
+                InterlockedAdd(g_shaderCounters[SHADER_COUNTER_RESERVOIR_READS], 1);
                 Reservoir prev_res = unpack_reservoir(prev_data);
                 prev_res.M = min(prev_res.M, 30);
                 
@@ -488,6 +493,7 @@ void RayGen()
                     float4 neighbor_data;
                     if (flip) neighbor_data = g_reservoir0[neighborCoords];
                     else      neighbor_data = g_reservoir1[neighborCoords];
+                    InterlockedAdd(g_shaderCounters[SHADER_COUNTER_SPATIAL_NEIGHBOR_READS], 1);
                     Reservoir neighbor_res = unpack_reservoir(neighbor_data);
                     
                     // Cap neighbor contribution to prevent fireflies from dominating
@@ -526,6 +532,7 @@ void RayGen()
                         RayPayload spatialPayload; spatialPayload.t = 1.0;
                         spatialPayload.rayType = RAY_TYPE_SHADOW;
                         TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, spatialRay, spatialPayload);
+                        InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TRACE_RAYS], 1);
                         if (spatialPayload.t > 0.0) p_target_at_curr = 0.0; // Occluded
                     }
 
@@ -565,8 +572,8 @@ void RayGen()
 
             // Store ReSTIR state for next frame
             float4 packed_res = pack_reservoir(res);
-            if (flip) g_reservoir1[launchIndex.xy] = packed_res;
-            else      g_reservoir0[launchIndex.xy] = packed_res;
+            if (flip) { g_reservoir1[launchIndex.xy] = packed_res; InterlockedAdd(g_shaderCounters[SHADER_COUNTER_RESERVOIR_WRITES], 1); }
+            else      { g_reservoir0[launchIndex.xy] = packed_res; InterlockedAdd(g_shaderCounters[SHADER_COUNTER_RESERVOIR_WRITES], 1); }
 
             // D. Apply Visibility for current frame shading
             if (p_target_final > 0.0) {
@@ -589,6 +596,8 @@ void RayGen()
                 shadowPayload.rayDepth = (uint)bounce + 1;
                 shadowPayload.rayType = RAY_TYPE_SHADOW;
                 TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
+                InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TRACE_RAYS], 1);
+                InterlockedAdd(g_shaderCounters[SHADER_COUNTER_SHADOW_TRACES], 1);
                 
                 if (shadowPayload.t < 0.0) {
                     directLighting = radiance_final * brdf_f * NdotL_final * res.W;
@@ -625,6 +634,7 @@ void RayGen()
                         RayPayload giPayload; giPayload.color = float3(0,0,0); giPayload.emissive = float3(0,0,0); giPayload.t = -1.0; giPayload.rayDepth = (uint)bounce + 1;
                         giPayload.rayType = RAY_TYPE_DIFFUSE;
                         TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, giRay, giPayload);
+                        InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TRACE_RAYS], 1);
                         // Include sky/clouds in GI radiance
                         float3 radiance = (giPayload.t > 0.0) ? (giPayload.color + giPayload.emissive) : giPayload.color;
                         float3 hitPos = (giPayload.t > 0.0) ? giPayload.position : (P + nextDir_gi * 1000.0);
@@ -681,6 +691,7 @@ void RayGen()
                             RayPayload spatialPayload; spatialPayload.t = 1.0;
                             spatialPayload.rayType = RAY_TYPE_SHADOW;
                             TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, spatialRay, spatialPayload);
+                            InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TRACE_RAYS], 1);
                             if (spatialPayload.t > 0.0) p_target_at_curr = 0.0;
                         }
 
@@ -706,6 +717,7 @@ void RayGen()
                     RayPayload giVisPayload; giVisPayload.t = 1.0; giVisPayload.rayDepth = (uint)bounce + 1;
                     giVisPayload.rayType = RAY_TYPE_SHADOW;
                     TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, giVisRay, giVisPayload);
+                    InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TRACE_RAYS], 1);
                     if (giVisPayload.t < 0.0) {
                         indirectLighting = gi_res.radiance * brdf_gi_final * saturate(dot(N, L_gi_final)) * gi_res.W;
                     }
@@ -757,6 +769,8 @@ void RayGen()
                 shadowPayload.rayDepth = (uint)bounce + 1;
                 shadowPayload.rayType = RAY_TYPE_SHADOW;
                 TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
+                InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TRACE_RAYS], 1);
+                InterlockedAdd(g_shaderCounters[SHADER_COUNTER_SHADOW_TRACES], 1);
                 if (shadowPayload.t < 0.0) {
                      float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
                      float3 H = normalize(L_nee + V);

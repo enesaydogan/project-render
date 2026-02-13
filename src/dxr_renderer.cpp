@@ -93,6 +93,10 @@ static D3D12_GPU_DESCRIPTOR_HANDLE s_varianceUAVGpu;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_reservoirGpuHandle[2];
 static D3D12_GPU_DESCRIPTOR_HANDLE s_gi_reservoirGpuHandle[6];
 static D3D12_GPU_DESCRIPTOR_HANDLE s_iblGpuHandle;
+static D3D12_GPU_DESCRIPTOR_HANDLE s_shaderCountersGpuHandle;
+static Microsoft::WRL::ComPtr<ID3D12Resource> s_shaderCountersBuffer;
+static Microsoft::WRL::ComPtr<ID3D12Resource> s_shaderCountersReadbackBuffer;
+static UINT s_lastShaderCounters[16] = {0};
 
 // Descriptor counts (tweak to support large models)
 static const UINT DXR_HEAP_TEX_COUNT =
@@ -131,8 +135,10 @@ static const UINT DXR_HEAP_VARIANCE_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 20;
 static const UINT DXR_HEAP_CLOUD_CB_OFFSET = DXR_HEAP_UAV_OFFSET + 21;
 static const UINT DXR_HEAP_CLOUD_TEX_OFFSET = DXR_HEAP_UAV_OFFSET + 22;
 static const UINT DXR_HEAP_CLOUD_DETAIL_TEX_OFFSET = DXR_HEAP_UAV_OFFSET + 23;
+// Extra debug UAV: shader counters (readback)
+static const UINT DXR_HEAP_SHADER_COUNTERS_OFFSET = DXR_HEAP_UAV_OFFSET + 24;
 static const UINT DXR_HEAP_TOTAL_COUNT =
-    DXR_HEAP_TEX_COUNT + DXR_HEAP_VB_COUNT + DXR_HEAP_IB_COUNT + 24;
+    DXR_HEAP_TEX_COUNT + DXR_HEAP_VB_COUNT + DXR_HEAP_IB_COUNT + 25;
 
 // Output texture dimensions used by DXR (kept local to module)
 static UINT s_outputWidth = 1280;
@@ -590,6 +596,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     s_gi_reservoirGpuHandle[5].ptr =
         gpuStart.ptr + (UINT64)DXR_HEAP_GI_RESERVOIR_1_OFFSET_C * descSize;
     s_iblGpuHandle.ptr = gpuStart.ptr + (UINT64)DXR_HEAP_IBL_OFFSET * descSize;
+    s_shaderCountersGpuHandle.ptr = gpuStart.ptr + (UINT64)DXR_HEAP_SHADER_COUNTERS_OFFSET * descSize;
   }
 
   // Compile shader
@@ -619,7 +626,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
   D3D12_DESCRIPTOR_RANGE uavRange = {};
   uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-  uavRange.NumDescriptors = 21; // Increased to 21 to support Variance (u20)
+  uavRange.NumDescriptors = 25; // expanded to include shader counters (u24)
   uavRange.BaseShaderRegister = 0;
   params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
   params[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -1118,6 +1125,66 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     resUavDesc.Texture2D.MipSlice = 0;
     s_device->CreateUnorderedAccessView(s_gi_reservoirBuffers[i].Get(), nullptr,
                                         &resUavDesc, resUavCpu);
+  }
+
+  // Create a small GPU buffer for shader instrumentation counters (u24)
+  {
+    const UINT kNumCounters = 16;
+    D3D12_RESOURCE_DESC bufDesc = {};
+    bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufDesc.Alignment = 0;
+    bufDesc.Width = sizeof(UINT) * kNumCounters;
+    bufDesc.Height = 1;
+    bufDesc.DepthOrArraySize = 1;
+    bufDesc.MipLevels = 1;
+    bufDesc.Format = DXGI_FORMAT_UNKNOWN;
+    bufDesc.SampleDesc.Count = 1;
+    bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    bufDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+    ThrowIfFailed(s_device->CreateCommittedResource(
+        &heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+        IID_PPV_ARGS(&s_shaderCountersBuffer)));
+    s_shaderCountersBuffer->SetName(L"Shader Counters Buffer");
+
+    // Create UAV descriptor for counters in global DXR heap (u24)
+    D3D12_UNORDERED_ACCESS_VIEW_DESC bufUav = {};
+    bufUav.Format = DXGI_FORMAT_UNKNOWN;
+    bufUav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    bufUav.Buffer.FirstElement = 0;
+    bufUav.Buffer.NumElements = kNumCounters;
+    bufUav.Buffer.StructureByteStride = sizeof(UINT);
+    bufUav.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle =
+        s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+    cpuHandle.ptr += (SIZE_T)DXR_HEAP_SHADER_COUNTERS_OFFSET *
+                     s_device->GetDescriptorHandleIncrementSize(
+                         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    s_device->CreateUnorderedAccessView(s_shaderCountersBuffer.Get(), nullptr,
+                                        &bufUav, cpuHandle);
+
+    // Readback buffer (host-readable)
+    D3D12_RESOURCE_DESC readDesc = {};
+    readDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    readDesc.Alignment = 0;
+    readDesc.Width = sizeof(UINT) * kNumCounters;
+    readDesc.Height = 1;
+    readDesc.DepthOrArraySize = 1;
+    readDesc.MipLevels = 1;
+    readDesc.Format = DXGI_FORMAT_UNKNOWN;
+    readDesc.SampleDesc.Count = 1;
+    readDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    readDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+    D3D12_HEAP_PROPERTIES readbackHeap = {};
+    readbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
+    ThrowIfFailed(s_device->CreateCommittedResource(
+        &readbackHeap, D3D12_HEAP_FLAG_NONE, &readDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+        IID_PPV_ARGS(&s_shaderCountersReadbackBuffer)));
+    s_shaderCountersReadbackBuffer->SetName(L"Shader Counters Readback");
   }
 
   // Create query heap for GPU profiling
@@ -2107,6 +2174,15 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     uavBarrier.UAV.pResource = nullptr; // Global UAV barrier
     dxrList->ResourceBarrier(1, &uavBarrier);
 
+    // Clear shader counters (debug instrumentation)
+    if (s_shaderCountersBuffer) {
+      UINT zeroVals[4] = {0,0,0,0};
+      UINT inc = s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+      D3D12_CPU_DESCRIPTOR_HANDLE cpuCounters = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+      cpuCounters.ptr += (SIZE_T)DXR_HEAP_SHADER_COUNTERS_OFFSET * inc;
+      dxrList->ClearUnorderedAccessViewUint(s_shaderCountersGpuHandle, cpuCounters, s_shaderCountersBuffer.Get(), zeroVals, 0, nullptr);
+    }
+
     // End ReSTIR timer
     if (s_queryHeap) {
       dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 2); // ReSTIR end
@@ -2143,6 +2219,15 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     // Start DispatchRays timer
     if (s_queryHeap) {
       dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 3); // Dispatch start
+    }
+
+    // Ensure shader counters are reset per-frame (debug instrumentation)
+    if (s_shaderCountersBuffer) {
+      UINT zeros[4] = {0,0,0,0};
+      UINT inc = s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+      D3D12_CPU_DESCRIPTOR_HANDLE cpuCounters = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+      cpuCounters.ptr += (SIZE_T)DXR_HEAP_SHADER_COUNTERS_OFFSET * inc;
+      dxrList->ClearUnorderedAccessViewUint(s_shaderCountersGpuHandle, cpuCounters, s_shaderCountersBuffer.Get(), zeros, 0, nullptr);
     }
 
     // fprintf(stderr, "DxrRenderer: Dispatching Rays\n");
@@ -2199,7 +2284,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       s_accumulation.IsAccumulating() && s_accumulation.GetFrameCount() > 0;
   if (shouldCalcNoise) {
     const UINT noiseEvalPeriod =
-        (g_cameraData.useAdaptiveSampling > 0.5f) ? 4u : 10u;
+        (g_cameraData.useAdaptiveSampling > 0.5f) ? 8u : 20u;
     if (s_lastNoiseLevel == 0.0f ||
         (s_accumulation.GetFrameCount() % noiseEvalPeriod == 0)) {
       // Start noise calculation timer
@@ -2281,6 +2366,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
             0, s_noiseStatsCB->GetGPUVirtualAddress());
         dxrList->SetComputeRootDescriptorTable(1, gpuStart);
 
+        // Dispatch single thread group that covers all sampling work
+        // The shader will distribute work among its 256 threads
         dxrList->Dispatch(1, 1, 1);
 
         // 4. Copy to Readback (for NEXT frame to read)
@@ -2680,6 +2767,13 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   // End frame timer and resolve queries
   if (s_queryHeap) {
     dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 9); // Frame end
+    // Copy shader counters (GPU -> readback) so CPU can inspect them next map
+    if (s_shaderCountersBuffer && s_shaderCountersReadbackBuffer) {
+      TransitionResource(dxrList.Get(), s_shaderCountersBuffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+      dxrList->CopyResource(s_shaderCountersReadbackBuffer.Get(), s_shaderCountersBuffer.Get());
+      TransitionResource(dxrList.Get(), s_shaderCountersBuffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+
     dxrList->ResolveQueryData(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 10, s_queryReadbackBuffer.Get(), 0);
   }
 
@@ -2732,6 +2826,22 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     }
   }
 
+  // Read shader counters readback (from GPU) and log a short summary
+  if (s_shaderCountersReadbackBuffer) {
+    UINT *c = nullptr;
+    if (SUCCEEDED(s_shaderCountersReadbackBuffer->Map(0, nullptr, (void**)&c))) {
+      for (UINT i = 0; i < 16; ++i) s_lastShaderCounters[i] = c[i];
+      s_shaderCountersReadbackBuffer->Unmap(0, nullptr);
+
+      if (g_verboseRenderLogs) {
+        fprintf(stderr, "ShaderCounters: TR=%u SH=%u SPEC=%u TEX=%u VTX=%u RESR=%u RESW=%u\n",
+                s_lastShaderCounters[0], s_lastShaderCounters[1], s_lastShaderCounters[2],
+                s_lastShaderCounters[5], s_lastShaderCounters[4],
+                s_lastShaderCounters[6], s_lastShaderCounters[7]);
+      }
+    }
+  }
+
   // Bind RTV for subsequent ImGui draws
   commandListBase->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
   return true;
@@ -2746,6 +2856,14 @@ void GetGPUTimes(float& restirTime, float& dispatchTime, float& denoiseTime, flo
   dispatchTime = s_gpuTimes[1];
   denoiseTime = s_gpuTimes[2];
   noiseTime = s_gpuTimes[3];
+}
+
+// Expose shader counters (filled from last GPU readback)
+void GetShaderCounters(UINT *outCounters, UINT maxCount) {
+  if (!outCounters || maxCount == 0) return;
+  UINT toCopy = (maxCount < _countof(s_lastShaderCounters)) ? maxCount : _countof(s_lastShaderCounters);
+  for (UINT i = 0; i < toCopy; ++i) outCounters[i] = s_lastShaderCounters[i];
+  for (UINT i = toCopy; i < maxCount; ++i) outCounters[i] = 0u;
 }
 
 } // namespace DxrRenderer

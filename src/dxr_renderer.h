@@ -62,6 +62,10 @@ float GetFPS();
 float GetSPPPerSec();
 void GetGPUTimes(float& restirTime, float& dispatchTime, float& denoiseTime, float& noiseTime);
 
+// Shader instrumentation counters (debug)
+// outCounters will be filled with up to maxCount uint values (0 when not available)
+void GetShaderCounters(UINT *outCounters, UINT maxCount);
+
 // Denoiser mode control (Off, OIDN CPU, OIDN GPU)
 enum class DenoiserMode { Off = 0, OIDN_CPU = 1, OIDN_GPU = 2 };
 void SetDenoiserMode(DenoiserMode m);

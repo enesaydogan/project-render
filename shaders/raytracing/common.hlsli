@@ -29,6 +29,22 @@ RWTexture2D<float4> g_specularAlbedo : register(u16);
 RWTexture2D<float> g_specHitDistance : register(u17);
 RWTexture2D<float2> g_specularMotionVectors : register(u18);
 
+// === Shader instrumentation counters (debug) ===
+static const uint SHADER_COUNTER_TRACE_RAYS = 0;
+static const uint SHADER_COUNTER_SHADOW_TRACES = 1;
+static const uint SHADER_COUNTER_SPECULAR_TRACES = 2;
+static const uint SHADER_COUNTER_INDEX_LOADS = 3;      // index buffer loads
+static const uint SHADER_COUNTER_VERTEX_FETCHES = 4;   // vertex loads
+static const uint SHADER_COUNTER_TEXTURE_SAMPLES = 5;  // texture.SampleLevel calls
+static const uint SHADER_COUNTER_RESERVOIR_READS = 6;  // reservoir reads
+static const uint SHADER_COUNTER_RESERVOIR_WRITES = 7; // reservoir writes
+static const uint SHADER_COUNTER_SPATIAL_NEIGHBOR_READS = 8;
+static const uint SHADER_COUNTER_ENV_SAMPLES = 9;
+static const uint SHADER_COUNTER_COUNT = 16; // allocated counters
+
+// GPU-writable counters buffer (read back by host)
+RWStructuredBuffer<uint> g_shaderCounters : register(u24);
+
 // Texture array - fixed large size to avoid overlap issues with other registers
 Texture2D textures[2048] : register(t1);
 // Environment Map (Latitude-Longitude) - Moved to Space 1 to avoid conflicts

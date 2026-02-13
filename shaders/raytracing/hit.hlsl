@@ -170,6 +170,10 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     uint i0 = indices[mesh.ibIndex].Load(baseIndex);
     uint i1 = indices[mesh.ibIndex].Load(baseIndex + 1);
     uint i2 = indices[mesh.ibIndex].Load(baseIndex + 2);
+
+    // Instrumentation: count index + vertex fetches
+    InterlockedAdd(g_shaderCounters[SHADER_COUNTER_INDEX_LOADS], 3);
+    InterlockedAdd(g_shaderCounters[SHADER_COUNTER_VERTEX_FETCHES], 3);
     
     // Interpolate UV
     float2 uv0 = vertices[mesh.vbIndex][i0].uv;
@@ -212,6 +216,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
         float3 bc = triPlanar ? SampleTriPlanarLevel0(texDiff, P, worldNormal, triScale, triSharp).rgb
                               : textures[texDiff].SampleLevel(linearSampler, uv, 0).rgb;
         BaseColor *= sRGBToLinear(bc);
+        InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TEXTURE_SAMPLES], 1);
     }
     
     float metalness = mat.extraParams.x;
@@ -224,6 +229,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
                                     : textures[texMR].SampleLevel(linearSampler, uv, 0);
         roughness *= mrSample.g; 
         metalness *= mrSample.b;
+        InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TEXTURE_SAMPLES], 1);
     }
 
     // Clamp to reduce fireflies / unstable highlights in archviz scenes
@@ -249,6 +255,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     if (texOcc >= 0) {
         ao = triPlanar ? SampleTriPlanarLevel0(texOcc, P, worldNormal, triScale, triSharp).r
                        : textures[texOcc].SampleLevel(linearSampler, uv, 0).r;
+        InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TEXTURE_SAMPLES], 1);
     }
     
     // Emissive with boost factor and user intensity
@@ -258,6 +265,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
         float3 e = triPlanar ? SampleTriPlanarLevel0(texEmis, P, worldNormal, triScale, triSharp).rgb
                              : textures[texEmis].SampleLevel(linearSampler, uv, 0).rgb;
         emissive *= sRGBToLinear(e);
+        InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TEXTURE_SAMPLES], 1);
     }
     
     // Debug Pass
@@ -364,11 +372,13 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     float2 envUV_diff = DirectionToUV(N);
     // Use higher mips for diffuse irradiance
     float3 irradiance = envMap.SampleLevel(linearSampler, envUV_diff, 7.0).rgb; 
+    InterlockedAdd(g_shaderCounters[SHADER_COUNTER_ENV_SAMPLES], 1);
     float3 diffuse_ibl = kD_ibl * irradiance * DiffuseAlbedo;
 
     float2 envUV_spec = DirectionToUV(R);
     // Use mips for glossy reflections
     float3 prefilteredColor = envMap.SampleLevel(linearSampler, envUV_spec, roughness * 7.0).rgb;
+    InterlockedAdd(g_shaderCounters[SHADER_COUNTER_ENV_SAMPLES], 1);
     float3 specular_ibl = kS_ibl * prefilteredColor;
 
     // Clearcoat IBL (reuse the same reflection vector)
