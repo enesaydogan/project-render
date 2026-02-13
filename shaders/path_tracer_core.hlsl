@@ -60,9 +60,14 @@ float calculate_p_target(float3 radiance, float3 albedo, float3 f_brdf, float Nd
 Reservoir unpack_reservoir(float4 data) {
     Reservoir r;
     r.lightIndex = asuint(data.x);
+    // Defensive: if hardware normalized the NaN bits, reset to Sun index
+    if (r.lightIndex == 0x7FC00000) r.lightIndex = 0xFFFFFFFF;
     r.w_sum = data.y;
     r.M = asuint(data.z);
     r.W = data.w;
+    // Extra safety: clamp state
+    if (isnan(r.w_sum) || isinf(r.w_sum)) r.w_sum = 0.0;
+    if (isnan(r.W) || isinf(r.W)) r.W = 0.0;
     return r;
 }
 
@@ -618,11 +623,14 @@ void RayGen()
                     RayPayload giPayload; giPayload.color = float3(0,0,0); giPayload.emissive = float3(0,0,0); giPayload.t = -1.0; giPayload.rayDepth = (uint)bounce + 1;
                     giPayload.rayType = RAY_TYPE_DIFFUSE;
                     TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, giRay, giPayload);
-                    if (giPayload.t > 0) {
-                        float3 radiance = giPayload.color + giPayload.emissive;
-                        float p_target = length(radiance * f_brdf_gi * saturate(dot(N, nextDir_gi)));
-                        update_gi_reservoir(gi_res, giPayload.position, radiance, (p_target / pdf_gi), rng);
-                    }
+                    // Include sky/clouds in GI radiance
+                    float3 radiance = (giPayload.t > 0.0) ? (giPayload.color + giPayload.emissive) : giPayload.color;
+                    float3 hitPos = (giPayload.t > 0.0) ? giPayload.position : (P + nextDir_gi * 1000.0);
+                    
+                    float p_target = length(radiance * f_brdf_gi * saturate(dot(N, nextDir_gi)));
+                    // Clamp weight to prevent fireflies from rare but bright background samples
+                    float ris_weight = min(p_target / max(1e-5, pdf_gi), 1e5);
+                    update_gi_reservoir(gi_res, hitPos, radiance, ris_weight, rng);
                 }
             }
             // B. Temporal Resampling
@@ -859,7 +867,7 @@ void RayGen()
                 currentRayType = RAY_TYPE_DIFFUSE;
             }
 
-            if (pdf <= 0.0) break;
+            if (!(pdf > 0.0)) break;
             throughput *= (f_brdf * cosineTerm) / pdf;
             rayDir = nextDir;
             
@@ -873,7 +881,7 @@ void RayGen()
             continue;
         }
 
-        if (pdf <= 0.0) break;
+        if (!(pdf > 0.0)) break;
 
         throughput *= (f_brdf * saturate(dot(N, nextDir))) / pdf;
         rayDir = nextDir;
@@ -1033,34 +1041,24 @@ void RayGen()
     }
 
     // Final NaN/Inf check and clamping before accumulation
-    if (any(isnan(finalColor)) || any(isinf(finalColor))) finalColor = float3(0.0, 0.0, 0.0);
-    finalColor = clamp(finalColor, 0.0, 10000.0); // Extreme clamp for stability
+    if (!any(isfinite(finalColor))) finalColor = float3(0,0,0);
+    finalColor = clamp(finalColor, 0.0, 100.0); // Hard clamp to prevent firefly corruption
 
     float lum = dot(finalColor, float3(0.2126, 0.7152, 0.0722));
-    if (isnan(lum) || isinf(lum)) lum = 0.0;
+    if (!isfinite(lum)) lum = 0.0;
     bool historyRepairedThisFrame = false;
 
     if (accumFrame == 0) {
         g_accumulation[launchIndex.xy] = float4(finalColor, 1.0);
-        g_variance[launchIndex.xy] = 0.0; // M2 starts at 0 for N=1
-        
-        if (debugVisualizationMode == 1.0) {
-            g_output[launchIndex.xy] = float4(1, 0, 0, 1); // High noise indicator
-        } else {
-            g_output[launchIndex.xy] = float4(finalColor, 1.0);
-        }
+        g_variance[launchIndex.xy] = 0.0;
+        g_output[launchIndex.xy] = float4(finalColor, 1.0);
     } else {
         float4 prev_accum = g_accumulation[launchIndex.xy];
         float n = prev_accum.a;
         float3 oldSum = prev_accum.rgb;
 
-        // Defensive: if history is invalid/uninitialized for this pixel,
-        // re-seed accumulation instead of propagating NaNs/Infs.
-        bool invalidHistory = (n < 1.0) || isnan(n) || isinf(n) ||
-                              any(isnan(oldSum)) || any(isinf(oldSum));
+        bool invalidHistory = !isfinite(n) || (n < 1.0) || any(!isfinite(oldSum));
         if (invalidHistory) {
-            // Repair corrupt/empty history, then continue normal accumulation
-            // instead of hard-resetting this pixel each frame.
             historyRepairedThisFrame = true;
             n = 1.0;
             oldSum = finalColor;

@@ -395,6 +395,7 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
     }
 
     if (any(isnan(sum)) || any(isinf(sum))) sum = float3(0.0, 0.0, 0.0);
+    if (isnan(transmittance) || isinf(transmittance)) transmittance = 1.0f;
     sum = clamp(sum, 0.0, 64.0);
     transmittance = saturate(transmittance);
     return float4(sum, transmittance);
