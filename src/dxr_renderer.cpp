@@ -2010,9 +2010,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                                       : DXR_HEAP_RESERVOIR_1_OFFSET) *
                       s_device->GetDescriptorHandleIncrementSize(
                           D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        dxrList->ClearUnorderedAccessViewFloat(s_reservoirGpuHandle[i], resCpu,
-                                               s_reservoirBuffers[i].Get(),
-                                               clearRes, 0, nullptr);
+        dxrList->ClearUnorderedAccessViewUint(s_reservoirGpuHandle[i], resCpu,
+                                              s_reservoirBuffers[i].Get(),
+                                              clearUint, 0, nullptr);
       }
     }
     // GI reservoirs use different packing but hitPos=0 is fine for clearing
@@ -2050,6 +2050,12 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
             clearGI, 0, nullptr);
       }
     }
+
+    // Ensure clears are finished before DispatchRays / ReSTIR
+    D3D12_RESOURCE_BARRIER uavBarrier = {};
+    uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    uavBarrier.UAV.pResource = nullptr; // Global UAV barrier
+    dxrList->ResourceBarrier(1, &uavBarrier);
 
     s_accumulation.SetNeedsClear(false);
   }
