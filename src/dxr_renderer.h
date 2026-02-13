@@ -56,6 +56,12 @@ UINT GetAccumulationFrameCount();
 // Get effective sample count shown to UI (RR uses its own still-frame counter).
 UINT GetDisplayedSampleCount();
 
+// Profiling functions
+float GetFrameTimeMs();
+float GetFPS();
+float GetSPPPerSec();
+void GetGPUTimes(float& restirTime, float& dispatchTime, float& denoiseTime, float& noiseTime);
+
 // Denoiser mode control (Off, OIDN CPU, OIDN GPU)
 enum class DenoiserMode { Off = 0, OIDN_CPU = 1, OIDN_GPU = 2 };
 void SetDenoiserMode(DenoiserMode m);
