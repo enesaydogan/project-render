@@ -525,7 +525,7 @@ void RayGen()
                         spatialRay.TMin = 0.001; spatialRay.TMax = max(0.001, dist_neigh - 0.003);
                         RayPayload spatialPayload; spatialPayload.t = 1.0;
                         spatialPayload.rayType = RAY_TYPE_SHADOW;
-                        TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_CULL_BACK_FACING_TRIANGLES | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, spatialRay, spatialPayload);
+                        TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, spatialRay, spatialPayload);
                         if (spatialPayload.t > 0.0) p_target_at_curr = 0.0; // Occluded
                     }
 
@@ -588,7 +588,7 @@ void RayGen()
                 shadowPayload.t = 1.0;
                 shadowPayload.rayDepth = (uint)bounce + 1;
                 shadowPayload.rayType = RAY_TYPE_SHADOW;
-                TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_CULL_BACK_FACING_TRIANGLES | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
+                TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
                 
                 if (shadowPayload.t < 0.0) {
                     directLighting = radiance_final * brdf_f * NdotL_final * res.W;
@@ -705,7 +705,7 @@ void RayGen()
                     giVisRay.TMin = 0.001; giVisRay.TMax = max(0.001, distance(gi_res.hitPos, P) - 0.003);
                     RayPayload giVisPayload; giVisPayload.t = 1.0; giVisPayload.rayDepth = (uint)bounce + 1;
                     giVisPayload.rayType = RAY_TYPE_SHADOW;
-                    TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_CULL_BACK_FACING_TRIANGLES | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, giVisRay, giVisPayload);
+                    TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, giVisRay, giVisPayload);
                     if (giVisPayload.t < 0.0) {
                         indirectLighting = gi_res.radiance * brdf_gi_final * saturate(dot(N, L_gi_final)) * gi_res.W;
                     }
@@ -756,7 +756,7 @@ void RayGen()
                 shadowPayload.t = 1.0;
                 shadowPayload.rayDepth = (uint)bounce + 1;
                 shadowPayload.rayType = RAY_TYPE_SHADOW;
-                TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_CULL_BACK_FACING_TRIANGLES | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
+                TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
                 if (shadowPayload.t < 0.0) {
                      float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
                      float3 H = normalize(L_nee + V);

@@ -335,7 +335,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     shadowPayload.rayType = RAY_TYPE_SHADOW;
     
     // Trace shadow ray using flags to skip hits and stop at the first occlusion
-    TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_CULL_BACK_FACING_TRIANGLES | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
+    TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
     
     // If the shadow ray reached a miss shader, it's (t < 0)
     if (shadowPayload.t > 0.0) shadowed = 0.0;
@@ -391,8 +391,12 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
         ambient += (DiffuseAlbedo * irradianceBack) * (ambientColor.rgb * 5.0) * translucency;
     }
     
-    // Final color calculation with camera intensity. 1:1 match with raster.
+    // For diffuse transport rays used by path tracing GI probes, avoid adding
+    // unoccluded ambient IBL here. GI raygen will add emissive separately.
     float3 color = (ambient + Lo + emissive) * intensity;
+    if (payload.rayType == RAY_TYPE_DIFFUSE) {
+        color = Lo;
+    }
     
     // In PT mode, we skip tone mapping here and do it in RayGen after accumulation
     payload.color = color;
