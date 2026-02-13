@@ -596,116 +596,130 @@ void RayGen()
             }
 
             // --- ReSTIR GI (Indirect Illumination) ---
-            GI_Reservoir gi_res = init_gi_reservoir();
-            // A. Initial Candidate
-            {
-                float3 nextDir_gi; float pdf_gi; float3 f_brdf_gi; float2 u_gi = next_float2(rng);
-                float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
-                float3 F = F_Schlick(max(0.0, dot(N, V)), F0);
-                float specProb = max(F.x, max(F.y, F.z));
-                float diffProb = (1.0 - specProb) * (1.0 - metallic);
-                float totalProb = specProb + diffProb;
-                if (next_float(rng) * totalProb < specProb) {
-                    float3 H = SampleGGX(u_gi, N, roughness);
-                    nextDir_gi = reflect(-V, H);
-                    float NdotL = saturate(dot(N, nextDir_gi));
-                    pdf_gi = (PDF_GGX(saturate(dot(N,H)), saturate(dot(V,H)), roughness) * specProb) / totalProb;
-                    f_brdf_gi = D_GGX(saturate(dot(N, H)), roughness) * G_Smith(max(0.0, dot(N, V)), NdotL, roughness) * F_Schlick(saturate(dot(H, V)), F0) / (4.0 * max(0.0, dot(N, V)) * NdotL + 0.001);
-                } else {
-                    nextDir_gi = SampleLambert(u_gi, N);
-                    float NdotL = saturate(dot(N, nextDir_gi));
-                    pdf_gi = (PDF_Lambert(NdotL) * diffProb) / totalProb;
-                    f_brdf_gi = (diffuseAlbedo / PI);
-                }
-                if (pdf_gi > 0.0) {
-                    RayDesc giRay; giRay.Origin = P + N * 0.0005; giRay.Direction = nextDir_gi;
-                    giRay.TMin = 0.0001; giRay.TMax = 1000.0;
-                    RayPayload giPayload; giPayload.color = float3(0,0,0); giPayload.emissive = float3(0,0,0); giPayload.t = -1.0; giPayload.rayDepth = (uint)bounce + 1;
-                    giPayload.rayType = RAY_TYPE_DIFFUSE;
-                    TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, giRay, giPayload);
-                    // Include sky/clouds in GI radiance
-                    float3 radiance = (giPayload.t > 0.0) ? (giPayload.color + giPayload.emissive) : giPayload.color;
-                    float3 hitPos = (giPayload.t > 0.0) ? giPayload.position : (P + nextDir_gi * 1000.0);
-                    
-                    float p_target = length(radiance * f_brdf_gi * saturate(dot(N, nextDir_gi)));
-                    // Clamp weight to prevent fireflies from rare but bright background samples
-                    float ris_weight = min(p_target / max(1e-5, pdf_gi), 1e5);
-                    update_gi_reservoir(gi_res, hitPos, radiance, ris_weight, rng);
-                }
-            }
-            // B. Temporal Resampling
-            if (frame > 0 && dlssRayReconstruction < 0.5) {
-                float4 d0, d1, d2;
-                if (flip) { d0 = g_gi_reservoir_b0[launchIndex.xy]; d1 = g_gi_reservoir_b1[launchIndex.xy]; d2 = g_gi_reservoir_b2[launchIndex.xy]; }
-                else      { d0 = g_gi_reservoir_a0[launchIndex.xy]; d1 = g_gi_reservoir_a1[launchIndex.xy]; d2 = g_gi_reservoir_a2[launchIndex.xy]; }
-                GI_Reservoir prev_gi = unpack_gi_reservoir(d0, d1, d2);
-                prev_gi.M = min(prev_gi.M, 15);
-                float3 L_gi = normalize(prev_gi.hitPos - P);
-                float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
-                float3 H = normalize(L_gi + V);
-                float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * G_Smith(max(0.0, dot(N, V)), saturate(dot(N, L_gi)), roughness) * F_Schlick(max(0.0, dot(H, V)), F0) / (4.0 * max(0.0, dot(N, V)) * saturate(dot(N, L_gi)) + 0.001);
-                float3 brdf = (diffuseAlbedo / PI) + spec;
-                float p_target_at_curr = length(prev_gi.radiance * brdf * saturate(dot(N, L_gi)));
-                combine_gi_reservoirs(gi_res, prev_gi, p_target_at_curr, rng);
-            }
-            // C. Spatial Resampling
-            if (frame > 6) {
-                const int spatialReuseCount = 1;
-                for (int i = 0; i < spatialReuseCount; ++i) {
-                    float2 unitSample = float2(next_float(rng), next_float(rng)) * 2.0 - 1.0;
-                    int2 offset = int2(unitSample * kRestirSpatialRadiusPx);
-                    int2 neighborCoords = clamp(int2(launchIndex.xy) + offset, int2(0,0), int2(launchDim.xy)-1);
-
-                    if (!IsSpatiallyCompatible(launchIndex.xy, uint2(neighborCoords), 0.94, 0.010)) {
-                        continue;
+            // Respect GI bounce budget: 0 means disable indirect GI entirely.
+            if (maxGIBounces > 0.0) {
+                GI_Reservoir gi_res = init_gi_reservoir();
+                // A. Initial Candidate
+                {
+                    float3 nextDir_gi; float pdf_gi; float3 f_brdf_gi; float2 u_gi = next_float2(rng);
+                    float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
+                    float3 F = F_Schlick(max(0.0, dot(N, V)), F0);
+                    float specProb = max(F.x, max(F.y, F.z));
+                    float diffProb = (1.0 - specProb) * (1.0 - metallic);
+                    float totalProb = specProb + diffProb;
+                    if (next_float(rng) * totalProb < specProb) {
+                        float3 H = SampleGGX(u_gi, N, roughness);
+                        nextDir_gi = reflect(-V, H);
+                        float NdotL = saturate(dot(N, nextDir_gi));
+                        pdf_gi = (PDF_GGX(saturate(dot(N,H)), saturate(dot(V,H)), roughness) * specProb) / totalProb;
+                        f_brdf_gi = D_GGX(saturate(dot(N, H)), roughness) * G_Smith(max(0.0, dot(N, V)), NdotL, roughness) * F_Schlick(saturate(dot(H, V)), F0) / (4.0 * max(0.0, dot(N, V)) * NdotL + 0.001);
+                    } else {
+                        nextDir_gi = SampleLambert(u_gi, N);
+                        float NdotL = saturate(dot(N, nextDir_gi));
+                        pdf_gi = (PDF_Lambert(NdotL) * diffProb) / totalProb;
+                        f_brdf_gi = (diffuseAlbedo / PI);
                     }
-
+                    if (pdf_gi > 0.0) {
+                        RayDesc giRay; giRay.Origin = P + N * 0.0005; giRay.Direction = nextDir_gi;
+                        giRay.TMin = 0.0001; giRay.TMax = 1000.0;
+                        RayPayload giPayload; giPayload.color = float3(0,0,0); giPayload.emissive = float3(0,0,0); giPayload.t = -1.0; giPayload.rayDepth = (uint)bounce + 1;
+                        giPayload.rayType = RAY_TYPE_DIFFUSE;
+                        TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, giRay, giPayload);
+                        // Include sky/clouds in GI radiance
+                        float3 radiance = (giPayload.t > 0.0) ? (giPayload.color + giPayload.emissive) : giPayload.color;
+                        float3 hitPos = (giPayload.t > 0.0) ? giPayload.position : (P + nextDir_gi * 1000.0);
+                        
+                        float p_target = length(radiance * f_brdf_gi * saturate(dot(N, nextDir_gi)));
+                        // Clamp weight to prevent fireflies from rare but bright background samples
+                        float ris_weight = min(p_target / max(1e-5, pdf_gi), 1e5);
+                        update_gi_reservoir(gi_res, hitPos, radiance, ris_weight, rng);
+                    }
+                }
+                // B. Temporal Resampling
+                if (frame > 0 && dlssRayReconstruction < 0.5) {
                     float4 d0, d1, d2;
-                    if (flip) { d0 = g_gi_reservoir_b0[neighborCoords]; d1 = g_gi_reservoir_b1[neighborCoords]; d2 = g_gi_reservoir_b2[neighborCoords]; }
-                    else      { d0 = g_gi_reservoir_a0[neighborCoords]; d1 = g_gi_reservoir_a1[neighborCoords]; d2 = g_gi_reservoir_a2[neighborCoords]; }
-                    GI_Reservoir neigh_gi = unpack_gi_reservoir(d0, d1, d2);
-                    neigh_gi.M = min(neigh_gi.M, 8);
-                    float3 L_gi = normalize(neigh_gi.hitPos - P);
+                    if (flip) { d0 = g_gi_reservoir_b0[launchIndex.xy]; d1 = g_gi_reservoir_b1[launchIndex.xy]; d2 = g_gi_reservoir_b2[launchIndex.xy]; }
+                    else      { d0 = g_gi_reservoir_a0[launchIndex.xy]; d1 = g_gi_reservoir_a1[launchIndex.xy]; d2 = g_gi_reservoir_a2[launchIndex.xy]; }
+                    GI_Reservoir prev_gi = unpack_gi_reservoir(d0, d1, d2);
+                    prev_gi.M = min(prev_gi.M, 15);
+                    float3 L_gi = normalize(prev_gi.hitPos - P);
                     float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
                     float3 H = normalize(L_gi + V);
                     float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * G_Smith(max(0.0, dot(N, V)), saturate(dot(N, L_gi)), roughness) * F_Schlick(max(0.0, dot(H, V)), F0) / (4.0 * max(0.0, dot(N, V)) * saturate(dot(N, L_gi)) + 0.001);
                     float3 brdf = (diffuseAlbedo / PI) + spec;
-                    float p_target_at_curr = length(neigh_gi.radiance * brdf * saturate(dot(N, L_gi)));
-                    
-                    // Spatial Jacobian / Visibility for GI
-                    if (p_target_at_curr > 0.0) {
-                        RayDesc spatialRay; spatialRay.Origin = P + N * 0.001; spatialRay.Direction = L_gi;
-                        spatialRay.TMin = 0.001; spatialRay.TMax = max(0.001, distance(neigh_gi.hitPos, P) - 0.003);
-                        RayPayload spatialPayload; spatialPayload.t = 1.0;
-                        spatialPayload.rayType = RAY_TYPE_SHADOW;
-                        TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, spatialRay, spatialPayload);
-                        if (spatialPayload.t > 0.0) p_target_at_curr = 0.0;
-                    }
-
-                    combine_gi_reservoirs(gi_res, neigh_gi, p_target_at_curr, rng);
+                    float p_target_at_curr = length(prev_gi.radiance * brdf * saturate(dot(N, L_gi)));
+                    combine_gi_reservoirs(gi_res, prev_gi, p_target_at_curr, rng);
                 }
-            }
-            // Finalize GI
-            float3 L_gi_final = normalize(gi_res.hitPos - P);
-            float3 F0_gi = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
-            float3 H_gi = normalize(L_gi_final + V);
-            float3 spec_gi = D_GGX(max(0.0, dot(N, H_gi)), roughness) * G_Smith(max(0.0, dot(N, V)), saturate(dot(N, L_gi_final)), roughness) * F_Schlick(max(0.0, dot(H_gi, V)), F0_gi) / (4.0 * max(0.0, dot(N, V)) * saturate(dot(N, L_gi_final)) + 0.001);
-            float3 brdf_gi_final = (diffuseAlbedo / PI) + spec_gi;
-            float p_target_final_gi = length(gi_res.radiance * brdf_gi_final * saturate(dot(N, L_gi_final)));
-            finalize_gi_reservoir(gi_res, p_target_final_gi);
-            float4 out_d0, out_d1, out_d2; pack_gi_reservoir(gi_res, out_d0, out_d1, out_d2);
-            if (flip) { g_gi_reservoir_a0[launchIndex.xy] = out_d0; g_gi_reservoir_a1[launchIndex.xy] = out_d1; g_gi_reservoir_a2[launchIndex.xy] = out_d2; }
-            else      { g_gi_reservoir_b0[launchIndex.xy] = out_d0; g_gi_reservoir_b1[launchIndex.xy] = out_d1; g_gi_reservoir_b2[launchIndex.xy] = out_d2; }
-            
-            if (gi_res.W > 0.0) {
-                // Visibility test for GI reconnection
-                RayDesc giVisRay; giVisRay.Origin = P + N * 0.001; giVisRay.Direction = L_gi_final;
-                giVisRay.TMin = 0.001; giVisRay.TMax = max(0.001, distance(gi_res.hitPos, P) - 0.003);
-                RayPayload giVisPayload; giVisPayload.t = 1.0; giVisPayload.rayDepth = (uint)bounce + 1;
-                giVisPayload.rayType = RAY_TYPE_SHADOW;
-                TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_CULL_BACK_FACING_TRIANGLES | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, giVisRay, giVisPayload);
-                if (giVisPayload.t < 0.0) {
-                    indirectLighting = gi_res.radiance * brdf_gi_final * saturate(dot(N, L_gi_final)) * gi_res.W;
+                // C. Spatial Resampling
+                if (frame > 6) {
+                    const int spatialReuseCount = 1;
+                    for (int i = 0; i < spatialReuseCount; ++i) {
+                        float2 unitSample = float2(next_float(rng), next_float(rng)) * 2.0 - 1.0;
+                        int2 offset = int2(unitSample * kRestirSpatialRadiusPx);
+                        int2 neighborCoords = clamp(int2(launchIndex.xy) + offset, int2(0,0), int2(launchDim.xy)-1);
+
+                        if (!IsSpatiallyCompatible(launchIndex.xy, uint2(neighborCoords), 0.94, 0.010)) {
+                            continue;
+                        }
+
+                        float4 d0, d1, d2;
+                        if (flip) { d0 = g_gi_reservoir_b0[neighborCoords]; d1 = g_gi_reservoir_b1[neighborCoords]; d2 = g_gi_reservoir_b2[neighborCoords]; }
+                        else      { d0 = g_gi_reservoir_a0[neighborCoords]; d1 = g_gi_reservoir_a1[neighborCoords]; d2 = g_gi_reservoir_a2[neighborCoords]; }
+                        GI_Reservoir neigh_gi = unpack_gi_reservoir(d0, d1, d2);
+                        neigh_gi.M = min(neigh_gi.M, 8);
+                        float3 L_gi = normalize(neigh_gi.hitPos - P);
+                        float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
+                        float3 H = normalize(L_gi + V);
+                        float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * G_Smith(max(0.0, dot(N, V)), saturate(dot(N, L_gi)), roughness) * F_Schlick(max(0.0, dot(H, V)), F0) / (4.0 * max(0.0, dot(N, V)) * saturate(dot(N, L_gi)) + 0.001);
+                        float3 brdf = (diffuseAlbedo / PI) + spec;
+                        float p_target_at_curr = length(neigh_gi.radiance * brdf * saturate(dot(N, L_gi)));
+                        
+                        // Spatial Jacobian / Visibility for GI
+                        if (p_target_at_curr > 0.0) {
+                            RayDesc spatialRay; spatialRay.Origin = P + N * 0.001; spatialRay.Direction = L_gi;
+                            spatialRay.TMin = 0.001; spatialRay.TMax = max(0.001, distance(neigh_gi.hitPos, P) - 0.003);
+                            RayPayload spatialPayload; spatialPayload.t = 1.0;
+                            spatialPayload.rayType = RAY_TYPE_SHADOW;
+                            TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, spatialRay, spatialPayload);
+                            if (spatialPayload.t > 0.0) p_target_at_curr = 0.0;
+                        }
+
+                        combine_gi_reservoirs(gi_res, neigh_gi, p_target_at_curr, rng);
+                    }
+                }
+                // Finalize GI
+                float3 L_gi_final = normalize(gi_res.hitPos - P);
+                float3 F0_gi = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
+                float3 H_gi = normalize(L_gi_final + V);
+                float3 spec_gi = D_GGX(max(0.0, dot(N, H_gi)), roughness) * G_Smith(max(0.0, dot(N, V)), saturate(dot(N, L_gi_final)), roughness) * F_Schlick(max(0.0, dot(H_gi, V)), F0_gi) / (4.0 * max(0.0, dot(N, V)) * saturate(dot(N, L_gi_final)) + 0.001);
+                float3 brdf_gi_final = (diffuseAlbedo / PI) + spec_gi;
+                float p_target_final_gi = length(gi_res.radiance * brdf_gi_final * saturate(dot(N, L_gi_final)));
+                finalize_gi_reservoir(gi_res, p_target_final_gi);
+                float4 out_d0, out_d1, out_d2; pack_gi_reservoir(gi_res, out_d0, out_d1, out_d2);
+                if (flip) { g_gi_reservoir_a0[launchIndex.xy] = out_d0; g_gi_reservoir_a1[launchIndex.xy] = out_d1; g_gi_reservoir_a2[launchIndex.xy] = out_d2; }
+                else      { g_gi_reservoir_b0[launchIndex.xy] = out_d0; g_gi_reservoir_b1[launchIndex.xy] = out_d1; g_gi_reservoir_b2[launchIndex.xy] = out_d2; }
+                
+                if (gi_res.W > 0.0) {
+                    // Visibility test for GI reconnection
+                    RayDesc giVisRay; giVisRay.Origin = P + N * 0.001; giVisRay.Direction = L_gi_final;
+                    giVisRay.TMin = 0.001; giVisRay.TMax = max(0.001, distance(gi_res.hitPos, P) - 0.003);
+                    RayPayload giVisPayload; giVisPayload.t = 1.0; giVisPayload.rayDepth = (uint)bounce + 1;
+                    giVisPayload.rayType = RAY_TYPE_SHADOW;
+                    TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_CULL_BACK_FACING_TRIANGLES | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, giVisRay, giVisPayload);
+                    if (giVisPayload.t < 0.0) {
+                        indirectLighting = gi_res.radiance * brdf_gi_final * saturate(dot(N, L_gi_final)) * gi_res.W;
+                    }
+                }
+            } else {
+                float4 zero4 = float4(0.0, 0.0, 0.0, 0.0);
+                if (flip) {
+                    g_gi_reservoir_a0[launchIndex.xy] = zero4;
+                    g_gi_reservoir_a1[launchIndex.xy] = zero4;
+                    g_gi_reservoir_a2[launchIndex.xy] = zero4;
+                } else {
+                    g_gi_reservoir_b0[launchIndex.xy] = zero4;
+                    g_gi_reservoir_b1[launchIndex.xy] = zero4;
+                    g_gi_reservoir_b2[launchIndex.xy] = zero4;
                 }
             }
         } 
