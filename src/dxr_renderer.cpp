@@ -9,6 +9,7 @@
 #include "oidn_denoiser.h"
 #include "scene.h"
 #include "streamline_manager.h"
+#include <chrono>
 #include <cstdarg>
 #include <cstdio>
 #include <sstream>
@@ -51,6 +52,17 @@ static bool s_hasTonemappedFrame = false;
 unsigned int s_jitterFrameIndex = 0;
 float s_lastJitterX = 0.0f;
 float s_lastJitterY = 0.0f;
+
+// Profiling state
+static ComPtr<ID3D12QueryHeap> s_queryHeap;
+static ComPtr<ID3D12Resource> s_queryReadbackBuffer;
+static UINT64 s_queryResults[10]; // For 10 timestamps: frame_start, restir_start, restir_end, dispatch_end, denoise_start, denoise_end, noise_start, noise_end, frame_end
+static float s_gpuTimes[4]; // Times in ms: ReSTIR, DispatchRays, Denoising, Noise
+static float s_frameTimeMs = 0.0f;
+static float s_fps = 0.0f;
+static float s_sppPerSec = 0.0f;
+static UINT s_lastFrameCount = 0;
+static std::chrono::high_resolution_clock::time_point s_lastFrameTime;
 
 // Some debug toggles live in main.cpp; declare them here so we can react to UI
 // changes
@@ -1108,6 +1120,34 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
                                         &resUavDesc, resUavCpu);
   }
 
+  // Create query heap for GPU profiling
+  D3D12_QUERY_HEAP_DESC queryHeapDesc = {};
+  queryHeapDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+  queryHeapDesc.Count = 10; // frame_start, restir_start, restir_end, dispatch_start, dispatch_end, denoise_start, denoise_end, noise_start, noise_end, frame_end
+  ThrowIfFailed(s_device->CreateQueryHeap(&queryHeapDesc, IID_PPV_ARGS(&s_queryHeap)));
+
+  // Create readback buffer for query results
+  D3D12_RESOURCE_DESC readbackDesc = {};
+  readbackDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+  readbackDesc.Alignment = 0;
+  readbackDesc.Width = sizeof(UINT64) * 10;
+  readbackDesc.Height = 1;
+  readbackDesc.DepthOrArraySize = 1;
+  readbackDesc.MipLevels = 1;
+  readbackDesc.Format = DXGI_FORMAT_UNKNOWN;
+  readbackDesc.SampleDesc.Count = 1;
+  readbackDesc.SampleDesc.Quality = 0;
+  readbackDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+  readbackDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+  D3D12_HEAP_PROPERTIES readbackHeap = {};
+  readbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
+  ThrowIfFailed(s_device->CreateCommittedResource(
+      &readbackHeap, D3D12_HEAP_FLAG_NONE, &readbackDesc,
+      D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+      IID_PPV_ARGS(&s_queryReadbackBuffer)));
+  s_queryReadbackBuffer->SetName(L"Query Readback Buffer");
+
   if (g_verboseRenderLogs) {
     fprintf(stderr, "DxrRenderer: Ray Tracing Pipeline ready\n");
   }
@@ -1778,6 +1818,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   dxrList->SetPipelineState1(s_rtStateObject.Get());
   dxrList->SetComputeRootSignature(s_rtGlobalRootSignature.Get());
 
+  // Start GPU profiling timer
+  if (s_queryHeap) {
+    dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0); // Frame start
+  }
+
   // Bind TLAS
   dxrList->SetComputeRootShaderResourceView(
       0, s_tlas.result->GetGPUVirtualAddress());
@@ -1982,6 +2027,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
   // Clear accumulation buffer if needed
   if (s_accumulation.NeedsClear()) {
+    // Start ReSTIR timer
+    if (s_queryHeap) {
+      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 1); // ReSTIR start
+    }
+
     D3D12_CPU_DESCRIPTOR_HANDLE accumCpu =
         s_srvHeap->GetCPUDescriptorHandleForHeapStart();
     accumCpu.ptr += (SIZE_T)DXR_HEAP_ACCUM_UAV_OFFSET *
@@ -2057,6 +2107,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     uavBarrier.UAV.pResource = nullptr; // Global UAV barrier
     dxrList->ResourceBarrier(1, &uavBarrier);
 
+    // End ReSTIR timer
+    if (s_queryHeap) {
+      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 2); // ReSTIR end
+    }
+
     s_accumulation.SetNeedsClear(false);
   }
 
@@ -2085,9 +2140,19 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   // we do not want to add more samples or modify the accumulation buffer.
 
   if (!doDenoise && !reachedEndCondition) {
+    // Start DispatchRays timer
+    if (s_queryHeap) {
+      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 3); // Dispatch start
+    }
+
     // fprintf(stderr, "DxrRenderer: Dispatching Rays\n");
     dxrList->DispatchRays(&dispatchDesc);
     // fprintf(stderr, "DxrRenderer: Dispatched Rays\n");
+
+    // End DispatchRays timer
+    if (s_queryHeap) {
+      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 4); // Dispatch end
+    }
 
     // Increment accumulation history only when actually used and not at end
     // condition.
@@ -2098,6 +2163,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   } else {
     // We are skipping dispatch to run OIDN on the existing buffer or because
     // we reached an end condition (noise/maxSPP).
+    // Still write the queries to avoid stale data
+    if (s_queryHeap) {
+      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 3); // Dispatch start (skipped)
+      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 4); // Dispatch end (skipped)
+    }
     if (reachedEndCondition && !doDenoise && g_verboseRenderLogs) {
       // Optional: Log convergence?
       // fprintf(stderr, "DxrRenderer: Converged (Noise: %.4f < %.4f)\n",
@@ -2132,6 +2202,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         (g_cameraData.useAdaptiveSampling > 0.5f) ? 4u : 10u;
     if (s_lastNoiseLevel == 0.0f ||
         (s_accumulation.GetFrameCount() % noiseEvalPeriod == 0)) {
+      // Start noise calculation timer
+      if (s_queryHeap) {
+        dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 7); // Noise start
+      }
+
       EnsureNoiseStatsPipeline();
       if (s_noiseStatsPSO) {
         // 1. Readback previous result FIRST (from readback buffer populated in
@@ -2217,6 +2292,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         TransitionResource(dxrList.Get(), s_noiseStatsOutputBuffer.Get(),
                            D3D12_RESOURCE_STATE_COPY_SOURCE,
                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+        // End noise calculation timer
+        if (s_queryHeap) {
+          dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 8); // Noise end
+        }
       }
     }
   }
@@ -2346,6 +2426,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   bool shouldRunOidn = doDenoise && !usedDlss;
 
   if (shouldRunOidn && s_oidnOutputUAV && postColor) {
+    // Start denoising timer
+    if (s_queryHeap) {
+      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 5); // Denoise start
+    }
+
     fprintf(stderr,
             "DxrRenderer: MaxSPP reached. Auto-triggering OIDN denoise.\n");
     s_oidnDenoiser.Initialize(s_device);
@@ -2433,6 +2518,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         fprintf(stderr, "DxrRenderer: OIDN denoise did not run (unsupported "
                         "config or failure).\n");
       }
+    }
+
+    // End denoising timer
+    if (s_queryHeap) {
+      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 6); // Denoise end
     }
 
     // postColor is in UAV state so the Tonemap block can transition it to SRV.
@@ -2587,9 +2677,75 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     }
   }
 
+  // End frame timer and resolve queries
+  if (s_queryHeap) {
+    dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 9); // Frame end
+    dxrList->ResolveQueryData(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 10, s_queryReadbackBuffer.Get(), 0);
+  }
+
+  // Calculate CPU frame time and FPS
+  auto now = std::chrono::high_resolution_clock::now();
+  if (s_lastFrameTime.time_since_epoch().count() != 0) {
+    auto frameDuration = now - s_lastFrameTime;
+    s_frameTimeMs = std::chrono::duration<float, std::milli>(frameDuration).count();
+    s_fps = 1000.0f / s_frameTimeMs;
+
+    // Calculate SPP/s
+    UINT currentFrameCount = GetDisplayedSampleCount();
+    if (currentFrameCount > s_lastFrameCount) {
+      float sppIncrease = (float)(currentFrameCount - s_lastFrameCount);
+      s_sppPerSec = sppIncrease / (s_frameTimeMs / 1000.0f);
+      s_lastFrameCount = currentFrameCount;
+    }
+  }
+  s_lastFrameTime = now;
+
+  // Read GPU timestamps and calculate times (will be available next frame)
+  if (s_queryReadbackBuffer) {
+    UINT64 *data = nullptr;
+    if (SUCCEEDED(s_queryReadbackBuffer->Map(0, nullptr, (void**)&data))) {
+      UINT64 gpuFrequency = 0;
+      s_commandQueue->GetTimestampFrequency(&gpuFrequency);
+      double timestampToMs = 1000.0 / gpuFrequency;
+
+      // ReSTIR time: restir_end - restir_start
+      if (data[2] > data[1]) {
+        s_gpuTimes[0] = (float)((data[2] - data[1]) * timestampToMs);
+      }
+
+      // DispatchRays time: dispatch_end - dispatch_start
+      if (data[4] > data[3]) {
+        s_gpuTimes[1] = (float)((data[4] - data[3]) * timestampToMs);
+      }
+
+      // Denoising time: denoise_end - denoise_start
+      if (data[6] > data[5]) {
+        s_gpuTimes[2] = (float)((data[6] - data[5]) * timestampToMs);
+      }
+
+      // Noise calculation time: noise_end - noise_start
+      if (data[8] > data[7]) {
+        s_gpuTimes[3] = (float)((data[8] - data[7]) * timestampToMs);
+      }
+
+      s_queryReadbackBuffer->Unmap(0, nullptr);
+    }
+  }
+
   // Bind RTV for subsequent ImGui draws
   commandListBase->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
   return true;
+}
+
+// Profiling functions
+float GetFrameTimeMs() { return s_frameTimeMs; }
+float GetFPS() { return s_fps; }
+float GetSPPPerSec() { return s_sppPerSec; }
+void GetGPUTimes(float& restirTime, float& dispatchTime, float& denoiseTime, float& noiseTime) {
+  restirTime = s_gpuTimes[0];
+  dispatchTime = s_gpuTimes[1];
+  denoiseTime = s_gpuTimes[2];
+  noiseTime = s_gpuTimes[3];
 }
 
 } // namespace DxrRenderer

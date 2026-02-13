@@ -2744,7 +2744,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             uiChanged = true;
           }
           if (adaptive) {
-            float maxSppF = g_cameraData.maxSPP;
             // If adaptive is on, we might want to increase maxSPP effectively
             // to infinity or let user control it. User said "Max SPP or Noise,
             // whichever first". So we keep Max SPP control.
@@ -3050,6 +3049,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         } else {
           ImGui::Text("FPS: N/A");
         }
+
+        // Display profiling info
+        ImGui::Separator();
+        ImGui::Text("Profiling");
+        ImGui::Text("Frame Time: %.2f ms", DxrRenderer::GetFrameTimeMs());
+        ImGui::Text("FPS: %.1f", DxrRenderer::GetFPS());
+        ImGui::Text("SPP/s: %.1f", DxrRenderer::GetSPPPerSec());
+        
+        float restirTime, dispatchTime, denoiseTime, noiseTime;
+        DxrRenderer::GetGPUTimes(restirTime, dispatchTime, denoiseTime, noiseTime);
+        ImGui::Text("GPU Times:");
+        ImGui::Text("  ReSTIR: %.2f ms", restirTime);
+        ImGui::Text("  DispatchRays: %.2f ms", dispatchTime);
+        ImGui::Text("  Denoising: %.2f ms", denoiseTime);
+        ImGui::Text("  Noise Calc: %.2f ms", noiseTime);
       }
       ImGui::End();
     }
