@@ -3064,6 +3064,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         ImGui::Text("  DispatchRays: %.2f ms", dispatchTime);
         ImGui::Text("  Denoising: %.2f ms", denoiseTime);
         ImGui::Text("  Noise Calc: %.2f ms", noiseTime);
+
+        // Shader instrumentation counters (if available)
+        {
+          UINT shaderCounters[16] = {0};
+          DxrRenderer::GetShaderCounters(shaderCounters, _countof(shaderCounters));
+          ImGui::Text("Shader counters (last frame):");
+          ImGui::Text("  TraceRays=%u  Shadow=%u  Spec=%u", shaderCounters[0], shaderCounters[1], shaderCounters[2]);
+          ImGui::Text("  TexSamples=%u  VertexFetches=%u  ResReads=%u  ResWrites=%u", shaderCounters[5], shaderCounters[4], shaderCounters[6], shaderCounters[7]);
+        }
       }
       ImGui::End();
     }
