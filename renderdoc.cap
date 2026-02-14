@@ -1,0 +1,34 @@
+{
+    "rdocCaptureSettings": 1,
+    "settings": {
+        "autoStart": false,
+        "commandLine": "--load assets/scene.json",
+        "environment": [
+            {
+                "separator": "Platform style",
+                "type": "Set",
+                "value": "NSIGHT_SHADER_DEBUG=\"1\"",
+                "variable": "debug"
+            }
+        ],
+        "executable": "D:\\project-render\\build\\Debug\\project-render.exe",
+        "inject": false,
+        "numQueuedFrames": 0,
+        "options": {
+            "allowFullscreen": true,
+            "allowVSync": true,
+            "apiValidation": false,
+            "captureAllCmdLists": false,
+            "captureCallstacks": false,
+            "captureCallstacksOnlyDraws": false,
+            "debugOutputMute": true,
+            "delayForDebugger": 0,
+            "hookIntoChildren": false,
+            "refAllResources": false,
+            "softMemoryLimit": 0,
+            "verifyBufferAccess": false
+        },
+        "queuedFrameCap": 0,
+        "workingDir": "D:/project-render"
+    }
+}

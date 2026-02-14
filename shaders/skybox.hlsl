@@ -43,6 +43,7 @@ cbuffer CameraCB : register(b0)
 };
 
 Texture2D envMap : register(t0, space1);
+Texture2D bakedClouds : register(t12, space2); // baked lat-long clouds (rgb + transmittance)
 SamplerState linearSampler : register(s0);
 
 struct VSInput {
@@ -113,13 +114,14 @@ float4 PSMain(PSInput input) : SV_TARGET {
          color = baseSky * intensity;
     }
 
-    // Raymarch clouds and composite in front of sky
-    // Use a large tMax to ensure we cover the full atmosphere shell
+    // Use baked lat-long clouds when available (much cheaper than raymarching each pixel)
     float3 composed = color;
     if (cloudRenderingEnabled > 0.5f) {
-        float4 cloudOut = RaymarchClouds(pos, dir, 0.0f, 100000.0f, normalize(lightDir.xyz), lightColor.rgb * lightColor.w);
-        // cloudOut.rgb = in-scattered radiance, cloudOut.a = remaining transmittance
-        composed = cloudOut.rgb + color * cloudOut.a;
+        float4 baked = bakedClouds.SampleLevel(linearSampler, uv, 0);
+        baked.a = saturate(baked.a);
+        baked.rgb = max(baked.rgb, 0.0);
+        // If debug view selected, show baked cloud color directly
+        composed = baked.rgb + color * baked.a;
     }
 
     // ACES Tone Mapping

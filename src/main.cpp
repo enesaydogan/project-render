@@ -847,8 +847,8 @@ bool InitD3D12(HWND hwnd) {
       D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
   cloudRanges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-  cloudRanges[1].NumDescriptors = 2;      // Base + Detail
-  cloudRanges[1].BaseShaderRegister = 10; // t10, t11
+  cloudRanges[1].NumDescriptors = 3;      // Base + Detail + BakedSky
+  cloudRanges[1].BaseShaderRegister = 10; // t10, t11, t12
   cloudRanges[1].RegisterSpace = 2;
   cloudRanges[1].OffsetInDescriptorsFromTableStart =
       D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
@@ -1789,13 +1789,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           }
         }
 
-        if (DxrRenderer::RenderFrame(
+        bool dxrOk = DxrRenderer::RenderFrame(
                 g_commandList.Get(),
                 g_frameResources[g_frameIndex].commandAllocator.Get(),
                 g_frameIndex, g_renderTargets[g_frameIndex].Get(), rtvHandle,
                 g_cameraConstantBuffer.Get(), g_materialStructuredBuffer.Get(),
                 g_texturesGpuStart, g_textureDescriptorCount, activeMeshes,
-                g_meshStructuredBuffer.Get())) {
+                g_meshStructuredBuffer.Get());
+        if (dxrOk) {
           // Success DXR render - Draw Grid with depth checks
           if (g_drawGrid) {
             D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle =
@@ -1872,6 +1873,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       g_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
 
       // Draw Skybox (Always passes depth, but doesn't write depth)
+      if (g_cloudManager.NeedsBake()) {
+          fprintf(stderr, "Main: calling g_cloudManager.BakeSky() before DrawSkybox\n");
+          g_cloudManager.BakeSky(g_commandList.Get(), g_cameraConstantBuffer.Get());
+          fprintf(stderr, "Main: returned from g_cloudManager.BakeSky()\n");
+      }
       RasterRenderer::DrawSkybox(g_commandList.Get(),
                                  g_cameraConstantBuffer.Get());
 

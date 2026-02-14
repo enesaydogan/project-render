@@ -135,10 +135,11 @@ static const UINT DXR_HEAP_VARIANCE_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 20;
 static const UINT DXR_HEAP_CLOUD_CB_OFFSET = DXR_HEAP_UAV_OFFSET + 21;
 static const UINT DXR_HEAP_CLOUD_TEX_OFFSET = DXR_HEAP_UAV_OFFSET + 22;
 static const UINT DXR_HEAP_CLOUD_DETAIL_TEX_OFFSET = DXR_HEAP_UAV_OFFSET + 23;
+static const UINT DXR_HEAP_CLOUD_BAKED_TEX_OFFSET = DXR_HEAP_UAV_OFFSET + 24;
 // Extra debug UAV: shader counters (readback)
-static const UINT DXR_HEAP_SHADER_COUNTERS_OFFSET = DXR_HEAP_UAV_OFFSET + 24;
+static const UINT DXR_HEAP_SHADER_COUNTERS_OFFSET = DXR_HEAP_UAV_OFFSET + 25;
 static const UINT DXR_HEAP_TOTAL_COUNT =
-    DXR_HEAP_TEX_COUNT + DXR_HEAP_VB_COUNT + DXR_HEAP_IB_COUNT + 25;
+    DXR_HEAP_TEX_COUNT + DXR_HEAP_VB_COUNT + DXR_HEAP_IB_COUNT + 26;
 
 // Output texture dimensions used by DXR (kept local to module)
 static UINT s_outputWidth = 1280;
@@ -708,7 +709,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   // Range 2: SRV t10, t11
   static D3D12_DESCRIPTOR_RANGE cloudSrvRange = {};
   cloudSrvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-  cloudSrvRange.NumDescriptors = 2;
+  cloudSrvRange.NumDescriptors = 3; // base, detail, baked
   cloudSrvRange.BaseShaderRegister = 10;
   cloudSrvRange.RegisterSpace = 2; // Space 2
   cloudSrvRange.OffsetInDescriptorsFromTableStart =
@@ -1813,12 +1814,13 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                  UINT textureDescriptorCount,
                  const std::vector<Asset::GpuMesh> &meshes,
                  ID3D12Resource *meshDataSB) {
-  // fprintf(stderr, "DxrRenderer: RenderFrame start\n");
   (void)frameIndex;
-  if (!g_rayTracingSupported || !s_rtStateObject || !s_srvHeap)
+  if (!g_rayTracingSupported || !s_rtStateObject || !s_srvHeap) {
     return false;
-  if (!renderTarget)
+  }
+  if (!renderTarget) {
     return false;
+  }
 
   // Handle empty scene or missing TLAS gracefully
   if (meshes.empty() || !s_tlas.result) {
@@ -1886,6 +1888,12 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   // Flag to freeze after tonemapping instead of early return
   bool shouldFreezeAfterTonemap = reachedEndCondition && !doDenoise;
 
+  // Bake clouds before DXR state binding. BakeSky uses compute PSO/root-signature
+  // and descriptor heaps, so it must not run mid-way through DXR root bindings.
+  if (g_cloudManager.NeedsBake()) {
+    g_cloudManager.BakeSky(commandListBase, cameraCB);
+  }
+
   // Set pipeline and root signature
   dxrList->SetPipelineState1(s_rtStateObject.Get());
   dxrList->SetComputeRootSignature(s_rtGlobalRootSignature.Get());
@@ -1929,7 +1937,6 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                        : DXR_HEAP_TEX_COUNT;
       s_device->CopyDescriptorsSimple(count, dstStart, srcStart,
                                       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-
       s_lastTexturesGpuStart = texturesGpuStart;
       s_lastTextureDescriptorCount = textureDescriptorCount;
     }
@@ -2043,6 +2050,23 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       s_device->CreateShaderResourceView(g_cloudManager.GetDetailTexture(),
                                          &srvDescDetail, srvCpuDetail);
 
+      // 4. Create Baked Sky SRV at DXR_HEAP_CLOUD_BAKED_TEX_OFFSET
+      D3D12_CPU_DESCRIPTOR_HANDLE srvCpuBaked =
+          s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+      srvCpuBaked.ptr += (SIZE_T)DXR_HEAP_CLOUD_BAKED_TEX_OFFSET *
+                         s_device->GetDescriptorHandleIncrementSize(
+                             D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+      if (g_cloudManager.GetBakedSkyTexture()) {
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDescBaked = {};
+        srvDescBaked.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        srvDescBaked.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDescBaked.Texture2D.MipLevels = 1;
+        srvDescBaked.Texture2D.MostDetailedMip = 0;
+        srvDescBaked.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        s_device->CreateShaderResourceView(g_cloudManager.GetBakedSkyTexture(), &srvDescBaked, srvCpuBaked);
+      }
+
       s_cloudDescriptorsDone = true;
     }
 
@@ -2059,6 +2083,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
     dxrList->SetComputeRootDescriptorTable(11, cloudSRV);
+
   }
 
   // Always bind IBL descriptor (even if null/empty, we bound a fallback in
@@ -2235,9 +2260,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       dxrList->ClearUnorderedAccessViewUint(s_shaderCountersGpuHandle, cpuCounters, s_shaderCountersBuffer.Get(), zeros, 0, nullptr);
     }
 
-    // fprintf(stderr, "DxrRenderer: Dispatching Rays\n");
     dxrList->DispatchRays(&dispatchDesc);
-    // fprintf(stderr, "DxrRenderer: Dispatched Rays\n");
 
     // End DispatchRays timer
     if (s_queryHeap) {

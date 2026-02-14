@@ -1,5 +1,6 @@
 #include "clouds.h"
 #include "dxr_helpers.h" // For Align, etc.
+#include "dxc_wrapper.h"
 #include <algorithm>
 #include <cmath>
 #include <random>
@@ -255,15 +256,19 @@ void CloudManager::Initialize(ID3D12Device *device,
   CreateConstantBuffers(device);
   CreateTextures(device, cmdList);
 
-  // Create persistent descriptors (CBV + BaseTex SRV + DetailTex SRV)
+  // Create persistent descriptors (CBV + BaseTex SRV + DetailTex SRV + BakedSky SRV)
   CreateDescriptors(device);
+
+  // Mark first bake requested so baked-sky is populated at startup
+  m_lastBakedParams = m_params;
+  m_bakeRequested = true;
 
   m_initialized = true;
 }
 
 void CloudManager::CreateDescriptors(ID3D12Device *device) {
-  // Allocate 3 contiguous persistent descriptors: CBV, Base SRV, Detail SRV
-  DescriptorAllocation alloc = g_cbvSrvAllocator.AllocatePersistent(3);
+  // Allocate 4 contiguous persistent descriptors: CBV, Base SRV, Detail SRV, BakedSky SRV
+  DescriptorAllocation alloc = g_cbvSrvAllocator.AllocatePersistent(4);
   m_cpuHandle = alloc.cpu;
   m_gpuHandle = alloc.gpu;
 
@@ -307,6 +312,28 @@ void CloudManager::CreateDescriptors(ID3D12Device *device) {
   srvDescDetail.Texture3D.ResourceMinLODClamp = 0.0f;
   device->CreateShaderResourceView(m_detailTexture.Get(), &srvDescDetail,
                                    srvCpuDetail);
+
+  // 4) Baked Sky SRV (t12, space2)
+  D3D12_CPU_DESCRIPTOR_HANDLE srvCpuBaked = m_cpuHandle;
+  srvCpuBaked.ptr += (SIZE_T)descSize * 3;
+  D3D12_SHADER_RESOURCE_VIEW_DESC srvDescBaked = {};
+  srvDescBaked.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+  srvDescBaked.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+  srvDescBaked.Texture2D.MipLevels = 1;
+  srvDescBaked.Texture2D.MostDetailedMip = 0;
+  srvDescBaked.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  device->CreateShaderResourceView(m_bakedSkyTexture.Get(), &srvDescBaked, srvCpuBaked);
+
+  // Allocate a separate persistent descriptor for the UAV used by the bake CS
+  DescriptorAllocation uavAlloc = g_cbvSrvAllocator.AllocatePersistent(1);
+  m_bakedSkyUAVCpuHandle = uavAlloc.cpu;
+  m_bakedSkyUAVGpuHandle = uavAlloc.gpu;
+
+  D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+  uavDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+  uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+  uavDesc.Texture2D.MipSlice = 0;
+  device->CreateUnorderedAccessView(m_bakedSkyTexture.Get(), nullptr, &uavDesc, m_bakedSkyUAVCpuHandle);
 }
 
 void CloudManager::ResetToDefaults() {
@@ -319,7 +346,19 @@ void CloudManager::ResetToDefaults() {
 void CloudManager::Update(float dt, UINT frameIndex) {
   if (!m_initialized)
     return;
+
+  // Advance animation time
   m_params.timeSeconds += dt;
+
+  // Detect parameter changes (excluding time) to trigger a bake request.
+  CloudParams a = m_params;
+  CloudParams b = m_lastBakedParams;
+  a.timeSeconds = 0.0f;
+  b.timeSeconds = 0.0f;
+  if (memcmp(&a, &b, sizeof(CloudParams)) != 0) {
+    m_bakeRequested = true;
+  }
+
   m_currentFrame = frameIndex % 3;
   UpdateConstantBuffer();
 }
@@ -360,6 +399,206 @@ void CloudManager::UpdateConstantBuffer() {
   if (m_cbMappedData[m_currentFrame]) {
     memcpy(m_cbMappedData[m_currentFrame], &m_params, sizeof(CloudParams));
   }
+}
+
+// Compile bake CS + create root signature / PSO (lazy)
+static void CreateBakePipelineIfNeeded(ID3D12Device* device,
+                                       Microsoft::WRL::ComPtr<ID3D12RootSignature>& outRootSig,
+                                       Microsoft::WRL::ComPtr<ID3D12PipelineState>& outPSO) {
+  if (outPSO && outRootSig) return;
+  if (!device) return;
+
+  // Root signature: b0 = CameraCB, table = (b10 + t10..t12, space2), table u0 = UAV
+  // Root parameters:
+  // 0: Camera CB (b0)
+  // 1: Cloud CB (b10, space2) - root CBV for simplicity
+  // 2: SRV table (t10..t12, space2)
+  // 3: UAV table (u0)
+  D3D12_ROOT_PARAMETER params[4] = {};
+
+  // b0 (Camera)
+  params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+  params[0].Descriptor.ShaderRegister = 0;
+  params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  // b10 (Cloud CB) as root CBV (space2)
+  params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+  params[1].Descriptor.ShaderRegister = 10;
+  params[1].Descriptor.RegisterSpace = 2;
+  params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  // SRV table t10..t12 (space2)
+  D3D12_DESCRIPTOR_RANGE srvRange = {};
+  srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+  srvRange.NumDescriptors = 3; // NoiseTex(t10), DetailTex(t11), BakedSky(t12)
+  srvRange.BaseShaderRegister = 10;
+  srvRange.RegisterSpace = 2;
+  srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+  params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[2].DescriptorTable.NumDescriptorRanges = 1;
+  params[2].DescriptorTable.pDescriptorRanges = &srvRange;
+  params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  // UAV table (u0)
+  D3D12_DESCRIPTOR_RANGE uavRange = {};
+  uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+  uavRange.NumDescriptors = 1;
+  uavRange.BaseShaderRegister = 0;
+  uavRange.RegisterSpace = 0;
+  uavRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+  params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[3].DescriptorTable.NumDescriptorRanges = 1;
+  params[3].DescriptorTable.pDescriptorRanges = &uavRange;
+  params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  // Add a static linear sampler (binding s0) to match shader's 'linearSampler'
+  D3D12_STATIC_SAMPLER_DESC staticSampler = {};
+  staticSampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+  staticSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  staticSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  staticSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  staticSampler.MipLODBias = 0;
+  staticSampler.MaxAnisotropy = 1;
+  staticSampler.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+  staticSampler.BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+  staticSampler.MinLOD = 0.0f;
+  staticSampler.MaxLOD = D3D12_FLOAT32_MAX;
+  staticSampler.ShaderRegister = 0; // s0
+  staticSampler.RegisterSpace = 2; // match LinearWrapSampler : register(s0, space2) in clouds.hlsl
+  staticSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
+  rsDesc.NumParameters = _countof(params);
+  rsDesc.pParameters = params;
+  rsDesc.NumStaticSamplers = 1;
+  rsDesc.pStaticSamplers = &staticSampler;
+  rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+  Microsoft::WRL::ComPtr<ID3DBlob> sig;
+  Microsoft::WRL::ComPtr<ID3DBlob> err;
+  HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err);
+  if (FAILED(hr)) {
+    if (err) fprintf(stderr, "CreateBakePipeline: RootSig serialize error: %s\n", (char*)err->GetBufferPointer());
+    return;
+  }
+  ThrowIfFailed(device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(), IID_PPV_ARGS(&outRootSig)));
+
+  // Compile CS
+  DxcHelper localDxc;
+  ComPtr<IDxcBlob> cs;
+  try {
+    cs = localDxc.Compile(L"shaders/sky_bake_cs.hlsl", L"CSMain", L"cs_6_3", {});
+  } catch (const std::exception &e) {
+    fprintf(stderr, "CreateBakePipeline: CS compile failed: %s\n", e.what());
+    return;
+  }
+  if (!cs) return;
+
+  D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
+  psoDesc.pRootSignature = outRootSig.Get();
+  psoDesc.CS.pShaderBytecode = cs->GetBufferPointer();
+  psoDesc.CS.BytecodeLength = cs->GetBufferSize();
+  HRESULT hrCreate = device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&outPSO));
+  if (FAILED(hrCreate)) {
+    fprintf(stderr, "CreateBakePipelineIfNeeded: CreateComputePipelineState failed. HR=0x%08x, CS size=%zu, rootSig=%p\n", (unsigned)hrCreate, (size_t)cs->GetBufferSize(), (void*)psoDesc.pRootSignature);
+    return;
+  }
+}
+
+void CloudManager::BakeSky(ID3D12GraphicsCommandList *cmdList, ID3D12Resource *cameraCB) {
+  if (!m_initialized || !cmdList || !m_bakedSkyTexture) {
+    return;
+  }
+
+  // Create bake PSO/root-signature lazily
+  ID3D12Device *device = nullptr;
+  cmdList->GetDevice(IID_PPV_ARGS(&device));
+  Microsoft::WRL::ComPtr<ID3D12RootSignature> localRootSig = m_bakeRootSig;
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> localPSO = m_bakePSO;
+  CreateBakePipelineIfNeeded(device, localRootSig, localPSO);
+  m_bakeRootSig = localRootSig;
+  m_bakePSO = localPSO;
+  if (!m_bakePSO || !m_bakeRootSig) {
+    if (device) device->Release();
+    return;
+  }
+
+  // Bind descriptor heap (global CBV/SRV/UAV heap)
+  ID3D12DescriptorHeap *heaps[] = { g_cbvSrvAllocator.Heap() };
+  cmdList->SetDescriptorHeaps(1, heaps);
+
+  // Set compute pipeline & root signature
+  cmdList->SetPipelineState(m_bakePSO.Get());
+  cmdList->SetComputeRootSignature(m_bakeRootSig.Get());
+
+  // b0 = camera CB (optional)
+  if (cameraCB) {
+    cmdList->SetComputeRootConstantBufferView(0, cameraCB->GetGPUVirtualAddress());
+  }
+
+  // b10 = Cloud CB (root CBV)
+  cmdList->SetComputeRootConstantBufferView(1, GetConstantBufferAddr());
+
+  // t10..t12 = SRV descriptor table (skip the first descriptor which is CBV in our persistent block)
+  // m_gpuHandle points to the contiguous CBV+SRV descriptors for clouds; advance by one descriptor to reach the SRV start
+  {
+    ID3D12Device *dev = nullptr;
+    cmdList->GetDevice(IID_PPV_ARGS(&dev));
+    UINT descSize = dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    if (dev) dev->Release();
+
+    D3D12_GPU_DESCRIPTOR_HANDLE srvTable = m_gpuHandle;
+    srvTable.ptr += (UINT64)descSize * 1; // move past CBV to first SRV
+    cmdList->SetComputeRootDescriptorTable(2, srvTable);
+  }
+
+  // Root table (3) = UAV for baked sky
+  cmdList->SetComputeRootDescriptorTable(3, m_bakedSkyUAVGpuHandle);
+
+  // Transition baked texture to UAV
+  {
+    D3D12_RESOURCE_BARRIER barrier = {};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = m_bakedSkyTexture.Get();
+    barrier.Transition.StateBefore =
+      D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    cmdList->ResourceBarrier(1, &barrier);
+  }
+
+  // Dispatch
+  D3D12_RESOURCE_DESC desc = m_bakedSkyTexture->GetDesc();
+  const UINT tgX = 16, tgY = 16;
+  UINT dispatchX = (UINT)((desc.Width + tgX - 1) / tgX);
+  UINT dispatchY = (UINT)((desc.Height + tgY - 1) / tgY);
+  cmdList->Dispatch(dispatchX, dispatchY, 1);
+
+  // UAV barrier & transition back to SRV for sampling
+  D3D12_RESOURCE_BARRIER uavBarrier = {};
+  uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+  uavBarrier.UAV.pResource = m_bakedSkyTexture.Get();
+  cmdList->ResourceBarrier(1, &uavBarrier);
+
+  {
+    D3D12_RESOURCE_BARRIER barrier = {};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = m_bakedSkyTexture.Get();
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    barrier.Transition.StateAfter =
+      D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    cmdList->ResourceBarrier(1, &barrier);
+  }
+
+  // Mark baked state
+  m_bakeRequested = false;
+  m_lastBakedParams = m_params;
+  if (device) device->Release();
 }
 
 // Helper for remapping
@@ -600,4 +839,32 @@ void CloudManager::CreateTextures(ID3D12Device *device,
 
     m_uploadBuffers.push_back(uploadBuffer);
   }
+
+  // --- 3. Baked Sky Texture (Latitude-Longitude) ---
+  {
+    const UINT width = 4096;   // 4K horizontal
+    const UINT height = 2048;  // 4K-equivalent lat-long (2:1)
+
+    D3D12_RESOURCE_DESC skyDesc = {};
+    skyDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    skyDesc.Width = width;
+    skyDesc.Height = height;
+    skyDesc.DepthOrArraySize = 1;
+    skyDesc.MipLevels = 1;
+    skyDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; // HDR enough for clouds
+    skyDesc.SampleDesc.Count = 1;
+    skyDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    skyDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+    D3D12_HEAP_PROPERTIES defaultHeap = {};
+    defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    ThrowIfFailed(device->CreateCommittedResource(
+      &defaultHeap, D3D12_HEAP_FLAG_NONE, &skyDesc,
+      D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+      nullptr, IID_PPV_ARGS(&m_bakedSkyTexture)));
+    m_bakedSkyTexture->SetName(L"BakedCloudSkyTexture");
+  }
 }
+
