@@ -1,6 +1,7 @@
 #pragma once
 
 #include <d3d12.h>
+#include <cwchar>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -81,6 +82,19 @@ public:
     args.push_back(L"-Zi");
     args.push_back(L"-Qembed_debug");
     args.push_back(L"-Od");
+#else
+    // Optional for Nsight in Release/optimized builds:
+    // set NSIGHT_SHADER_DEBUG=1 to embed shader debug symbols.
+    wchar_t nsightDebugEnv[16] = {};
+    DWORD nsightDebugLen = GetEnvironmentVariableW(
+        L"NSIGHT_SHADER_DEBUG", nsightDebugEnv,
+        static_cast<DWORD>(std::size(nsightDebugEnv)));
+    if (nsightDebugLen > 0 && wcscmp(nsightDebugEnv, L"0") != 0) {
+      args.push_back(L"-Zi");
+      args.push_back(L"-Qembed_debug");
+      // Keep optimization in Release while still embedding symbols.
+      args.push_back(L"-Zss");
+    }
 #endif
 
     // Add defines

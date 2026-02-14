@@ -269,7 +269,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     }
     
     // Debug Pass
-    int mode = (int)debugMode;
+    int mode = (int)SHADER_DEBUG_MODE;
     if (mode == 1) { 
         payload.color = BaseColor;
         payload.t = RayTCurrent();

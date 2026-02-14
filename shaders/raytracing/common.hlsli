@@ -6,6 +6,10 @@
 
 #include "../random_lib.hlsl"
 
+#ifndef SHADER_ENABLE_DEBUG
+#define SHADER_ENABLE_DEBUG 1
+#endif
+
 static const float PI = 3.14159265359;
 
 inline float3 sRGBToLinear(float3 sRGB) {
@@ -44,6 +48,16 @@ static const uint SHADER_COUNTER_COUNT = 16; // allocated counters
 
 // GPU-writable counters buffer (read back by host)
 RWStructuredBuffer<uint> g_shaderCounters : register(u24);
+
+#if SHADER_ENABLE_DEBUG
+#define SHADER_DEBUG_MODE debugMode
+#define SHADER_DEBUG_VIS_MODE debugVisualizationMode
+#define SHADER_COUNTER_ADD(counterIndex, value) InterlockedAdd(g_shaderCounters[(counterIndex)], (value))
+#else
+#define SHADER_DEBUG_MODE 0.0
+#define SHADER_DEBUG_VIS_MODE 0.0
+#define SHADER_COUNTER_ADD(counterIndex, value) ((void)0)
+#endif
 
 // Texture array - fixed large size to avoid overlap issues with other registers
 Texture2D textures[2048] : register(t1);
