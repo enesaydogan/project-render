@@ -30,7 +30,8 @@ void Miss(inout RayPayload payload)
     // gi or di (RAY_TYPE_DIFFUSE or RAY_TYPE_SHADOW) should not take clouds in calculation.
     bool allowClouds = (payload.rayType == RAY_TYPE_PRIMARY || 
                         payload.rayType == RAY_TYPE_REFLECTION || 
-                        payload.rayType == RAY_TYPE_REFRACTION);
+                        payload.rayType == RAY_TYPE_REFRACTION ||
+                        payload.rayType == RAY_TYPE_DIFFUSE);
     if (cloudRenderingEnabled > 0.5 && allowClouds) {
         int dbg = (int)SHADER_DEBUG_MODE;
         bool cloudDebugView = (dbg >= 11 && dbg <= 16);
