@@ -155,15 +155,11 @@ float SampleDensity(float3 p, float lod) {
     // 4. Coverage
     // Apply coverage by eroding the density signal
     
-    // Remap coverage slider as requested: 0.0 on slider behaves like 0.4 internal.
-    // This shifts the useful range to be fully accessible.
-    // We strictly map [0,1] -> [0.4, 1.0] for the density calculation.
-    float effectiveCoverage = lerp(0.4f, 1.0f, CloudCB.coverage);
-    
-    // Map effective coverage to a density threshold.
-    // At 0.4 (slider 0), we want a threshold around 0.6 to allow sparse clouds.
-    // At 1.0 (slider 1), we want a threshold ~0.05 for overcast.
-    float densityThreshold = lerp(0.6f, 0.05f, CloudCB.coverage); 
+    // Coverage should map naturally from clear sky (0) to overcast (1).
+    float effectiveCoverage = saturate(CloudCB.coverage);
+    // High threshold at low coverage removes most clouds; low threshold at high
+    // coverage produces overcast-like fill.
+    float densityThreshold = lerp(0.9f, 0.05f, effectiveCoverage);
 
     // Standard Schneider remap:
     float covRemap = Remap(baseCloud, densityThreshold, 1.0f, 0.0f, 1.0f);
@@ -209,7 +205,7 @@ float SampleDensity(float3 p, float lod) {
 
 // Raymarch function returning accumulated cloud color (rgb) and transmittance (a)
 // tMin/tMax: Intersection distance with cloud shell
-float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, float3 sunDir, float3 lightColor) {
+float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, float3 sunDir, float3 lightColor, uint rayType, uint rayDepth) {
     // 1. Setup Intersection for Spherical Shell
     float innerRadius = EARTH_RADIUS + CloudCB.cloudBottom;
     float outerRadius = EARTH_RADIUS + CloudCB.cloudTop;
@@ -274,7 +270,11 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
     float targetStepsF = (verticalThickness / verticalStepMeters) / rayDirYAbs;
     float smoothSteps = clamp(max((float)CloudCB.steps, targetStepsF), 10.0f, (float)CloudCB.maxSteps);
     int steps = (int)ceil(smoothSteps);
-    float stepSize = thickness / smoothSteps; 
+    bool isSecondarySpecular = (rayType == 2u || rayType == 3u) && (rayDepth > 0u);
+    if (isSecondarySpecular) {
+        steps = max(8, (int)ceil(smoothSteps * 0.75f));
+    }
+    float stepSize = thickness / (float)steps; 
 
     float3 pos = rayOrigin + rayDir * tStart;
     
@@ -332,10 +332,19 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
     #endif
     
     // Lighting loop
+    float shadowTermCached = 1.0f;
+    uint shadowEvery = (uint)max(1, CloudCB.shadowEvery);
+    if (isSecondarySpecular) {
+        shadowEvery = max(1u, shadowEvery * 2u);
+    }
+    float densityLodBias = isSecondarySpecular ? 0.5f : 0.0f;
+    float shadowLod = CloudCB.shadowLod + densityLodBias;
+    int shadowSteps = max(1, CloudCB.shadowSteps);
+
     for(int i = 0; i < steps; ++i) {
         if (transmittance < 0.01f) break;
 
-        float density = SampleDensity(pos, 0.0f);
+        float density = SampleDensity(pos, densityLodBias);
         
         if (density > 0.001f) {
             float extinction = density * CloudCB.absorption;
@@ -347,22 +356,27 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
             // Manual scaling to fix "blown out" sun color from Prague Sky Model without touching C++
             float3 sunColorScaled = lightColor * 0.000025f; 
 
-            float shadowTerm = 1.0f;
+            float shadowTerm = shadowTermCached;
             if (density > CloudCB.shadowDensityThreshold) {
-               // Cheap shadow march: 4 steps
-               float3 lPos = pos;
-               float lDens = 0.0;
-               float lStep = CloudCB.shadowStepSize;
-               
-               // Offset randomized slightly to break banding
-               lPos += sunDir * (lStep * jitter); 
+               if (((uint)i % shadowEvery) == 0u) {
+                   float3 lPos = pos;
+                   float lDens = 0.0;
+                   float lStep = CloudCB.shadowStepSize;
 
-               [unroll]
-               for(int s=0; s<4; ++s) { // Hardcoded 4 for perf, or use CloudCB.shadowSteps
-                   lPos += sunDir * lStep;
-                   lDens += SampleDensity(lPos, CloudCB.shadowLod);
+                   // Offset randomized slightly to break banding
+                   lPos += sunDir * (lStep * jitter);
+
+                   [loop]
+                   for(int s = 0; s < shadowSteps; ++s) {
+                       lPos += sunDir * lStep;
+                       lDens += SampleDensity(lPos, shadowLod);
+                   }
+                   shadowTermCached = exp(-lDens * lStep * CloudCB.absorption);
                }
-               shadowTerm = exp(-lDens * lStep * CloudCB.absorption);
+               shadowTerm = shadowTermCached;
+            } else {
+               shadowTermCached = 1.0f;
+               shadowTerm = 1.0f;
             }
             
             // Powder effect: Darken edges facing away from sun, brighten edges facing sun?
@@ -399,5 +413,9 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
     sum = clamp(sum, 0.0, 64.0);
     transmittance = saturate(transmittance);
     return float4(sum, transmittance);
+}
+
+float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, float3 sunDir, float3 lightColor) {
+    return RaymarchClouds(rayOrigin, rayDir, tMin, tMax, sunDir, lightColor, 0u, 0u);
 }
 #endif

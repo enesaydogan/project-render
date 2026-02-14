@@ -209,33 +209,33 @@ CloudParams MakeDefaultCloudParams() {
   CloudParams p = {};
 
   // Defaults tuned for archviz-friendly cumulus (less smoky, more defined).
-  p.density = 4.22f;
-  p.absorption = 0.417f;
-  p.coverage = 0.117f;
-  p.scattering = 0.8f;
-  p.steps = 128; // Screenshot says 128
-  p.sunIntensity = 3.0f;
-  p.cloudTop = 680.0f;
-  p.cloudBottom = 240.0f;
-  p.windSpeed = 0.0f; // Slider is 0.0
+  p.density = 2.4f;
+  p.absorption = 0.65f;
+  p.coverage = 0.20f;
+  p.scattering = 0.90f;
+  p.steps = 96;
+  p.sunIntensity = 1.2f;
+  p.cloudTop = 1000.0f;
+  p.cloudBottom = 300.0f;
+  p.windSpeed = 0.01f;
 
-  p.baseScale = 0.00051f;
+  p.baseScale = 0.00035f;
   p.detailScale = 0.01000f;
-  p.coverageScale = 0.00022f;
+  p.coverageScale = 0.00080f;
   p.coverageVariation = 0.25f; // From slider
-  p.erosion = 0.65f;
-  p.warpStrength = 0.75f;
+  p.erosion = 0.90f;
+  p.warpStrength = 1.00f;
   p.shapePower = 1.85f;
   p.powderStrength = 0.45f;
 
-  p.shadowSteps = 8;
-  p.shadowStepSize = 120.0f;
+  p.shadowSteps = 6;
+  p.shadowStepSize = 180.0f;
   p.shadowLod = 2.0f;
 
-  p.maxSteps = 256;
-  p.verticalStepMeters = 25.0f;
-  p.shadowEvery = 4;
-  p.shadowDensityThreshold = 0.05f;
+  p.maxSteps = 192;
+  p.verticalStepMeters = 30.0f;
+  p.shadowEvery = 6;
+  p.shadowDensityThreshold = 0.06f;
 
   p.timeSeconds = 0.0f;
   p._pad = {0, 0, 0};

@@ -395,8 +395,8 @@ bool LoadScene(const std::string &path) {
       g_cameraData.fov = c.value("fov", 60.0f);
       g_cameraData.intensity = c.value("intensity", 1.0f);
       g_cameraData.maxSPP = c.value("maxSPP", 1024.0f);
-      g_cameraData.maxSpecularBounces = c.value("maxSpecularBounces", 4.0f);
-      g_cameraData.maxRefractiveBounces = c.value("maxRefractiveBounces", 4.0f);
+      g_cameraData.maxSpecularBounces = c.value("maxSpecularBounces", 3.0f);
+      g_cameraData.maxRefractiveBounces = c.value("maxRefractiveBounces", 3.0f);
       g_cameraData.maxGIBounces = c.value("maxGIBounces", 2.0f);
 
       // Restore Yaw/Pitch for consistent mouse-look

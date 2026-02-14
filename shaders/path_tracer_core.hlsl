@@ -476,7 +476,7 @@ void RayGen()
             }
 
             // C. Spatial Resampling (Neighbor Pixels)
-            if (frame > 6) {
+            if (frame > 6 && ((frame & 1u) == 0u)) {
                 const int spatialReuseCount = 1;
                 for (int i = 0; i < spatialReuseCount; ++i) {
                     // Use a disk distribution for better sampling coverage and to avoid banding
@@ -661,7 +661,7 @@ void RayGen()
                     combine_gi_reservoirs(gi_res, prev_gi, p_target_at_curr, rng);
                 }
                 // C. Spatial Resampling
-                if (frame > 6) {
+                if (frame > 6 && ((frame & 1u) == 0u)) {
                     const int spatialReuseCount = 1;
                     for (int i = 0; i < spatialReuseCount; ++i) {
                         float2 unitSample = float2(next_float(rng), next_float(rng)) * 2.0 - 1.0;
@@ -829,7 +829,7 @@ void RayGen()
                 specularBounces++;
                 nextDir = glassL;
                 f_brdf = float3(1,1,1);
-                currentRayType = RAY_TYPE_REFLECTION;
+                currentRayType = RAY_TYPE_DIFFUSE;
             }
             pdf = 1.0;
             rayOrigin = P + nextDir * 0.001; 
@@ -868,7 +868,7 @@ void RayGen()
                 f_brdf = D_GGX(NdotH, roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL, roughness) * F_Schlick(VdotH, F0);
                 rayOrigin = P + N * 0.001;
                 cosineTerm = NdotL;
-                currentRayType = RAY_TYPE_REFLECTION;
+                currentRayType = RAY_TYPE_DIFFUSE;
             } else if (pick < (specProb + diffProb)) {
                 // Diffuse Lambert
                 if (giBounces >= (int)maxGIBounces) break;
