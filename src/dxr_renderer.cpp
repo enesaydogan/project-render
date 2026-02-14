@@ -603,10 +603,15 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   ComPtr<IDxcBlob> shaderBlob;
   try {
     std::vector<std::wstring> compileDefines;
+#ifdef _DEBUG
+    compileDefines.push_back(L"SHADER_ENABLE_DEBUG=1");
     if (::g_dxrDebugUV)
       compileDefines.push_back(L"RAYGEN_DEBUG=1");
     if (::g_dxrHitDebug)
       compileDefines.push_back(L"HIT_DEBUG=1");
+#else
+    compileDefines.push_back(L"SHADER_ENABLE_DEBUG=0");
+#endif
     shaderBlob = s_dxcHelper.Compile(L"shaders/raytracing.hlsl", L"",
                                      L"lib_6_3", compileDefines);
   } catch (const std::exception &e) {

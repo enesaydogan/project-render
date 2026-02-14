@@ -2317,7 +2317,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
     // Ensure aspect matches the window and update camera CB on GPU
     g_cameraData.aspect = (float)g_windowWidth / (float)g_windowHeight;
+  #ifdef _DEBUG
     g_cameraData.debugMode = (float)g_debugMode;
+  #else
+    g_debugMode = 0;
+    g_cameraData.debugMode = 0.0f;
+    g_cameraData.debugVisualizationMode = 0.0f;
+  #endif
     g_cameraData.lightCount = (float)DxrRenderer::GetLightCount();
     g_cameraData.frameCount = (float)DxrRenderer::GetDisplayedSampleCount();
     const bool fileIblActive =
@@ -2756,6 +2762,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
               uiChanged = true;
             }
 
+            #ifdef _DEBUG
             bool viz = g_cameraData.debugVisualizationMode > 0.5f;
             if (ImGui::Checkbox("Show Noise Map (Debug)", &viz)) {
               g_cameraData.debugVisualizationMode = viz ? 1.0f : 0.0f;
@@ -2765,6 +2772,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
             if (ImGui::IsItemHovered())
               ImGui::SetTooltip("White = High Noise (10%+), Black = Low Noise");
+            #else
+            g_cameraData.debugVisualizationMode = 0.0f;
+            #endif
           }
 
           ImGui::Separator();
@@ -2983,11 +2993,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                                     "Debug: Per-Pixel Noise",
                                     "Debug: Sample Deficit",
                                     "Debug: Recent Reset Mask"};
+      #ifdef _DEBUG
         if (ImGui::Combo("Debug View", &g_debugMode, debugModes,
-                         IM_ARRAYSIZE(debugModes))) {
+             IM_ARRAYSIZE(debugModes))) {
           // Keep history when switching diagnostics so comparisons are from the
           // same accumulated frame state.
         }
+      #else
+        g_debugMode = 0;
+      #endif
 
         // Reset accumulation once per window when any UI widget changed
         if (uiChanged) {

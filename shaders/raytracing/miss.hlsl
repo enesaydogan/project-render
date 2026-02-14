@@ -42,7 +42,7 @@ void Miss(inout RayPayload payload)
 
         // If a cloud debug view is selected, show it directly.
         // (Avoid compositing with the environment, which makes debug hard to read.)
-        int dbg = (int)debugMode;
+        int dbg = (int)SHADER_DEBUG_MODE;
         if (dbg >= 11 && dbg <= 16) {
             color = cloudRes.rgb;
         } else {

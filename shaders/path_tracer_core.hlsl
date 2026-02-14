@@ -137,7 +137,7 @@ void RayGen()
     const float kAdaptiveMinExpectedRatio = 0.95;
     const float kAdaptiveLagKeepScale = 1.00;
     const float kRestirSpatialRadiusPx = (useAdaptiveSampling > 0.5) ? 6.0 : 12.0;
-    const bool debugViewActive = (debugMode > 0.0) || (debugVisualizationMode == 1.0);
+    const bool debugViewActive = (SHADER_DEBUG_MODE > 0.0) || (SHADER_DEBUG_VIS_MODE == 1.0);
 
     if (!debugViewActive && maxSPP > 0.0 && accumFrame >= (uint)maxSPP) {
         float4 total = g_accumulation[launchIndex.xy];
@@ -220,19 +220,19 @@ void RayGen()
                  // ping-pong sides and can make ReSTIR reuse unstable.
                  if (flip) {
                      g_reservoir1[launchIndex.xy] = g_reservoir0[launchIndex.xy];
-                     InterlockedAdd(g_shaderCounters[SHADER_COUNTER_RESERVOIR_WRITES], 1);
+                     SHADER_COUNTER_ADD(SHADER_COUNTER_RESERVOIR_WRITES, 1);
                      g_gi_reservoir_a0[launchIndex.xy] = g_gi_reservoir_b0[launchIndex.xy];
                      g_gi_reservoir_a1[launchIndex.xy] = g_gi_reservoir_b1[launchIndex.xy];
                      g_gi_reservoir_a2[launchIndex.xy] = g_gi_reservoir_b2[launchIndex.xy];
                  } else {
                      g_reservoir0[launchIndex.xy] = g_reservoir1[launchIndex.xy];
-                     InterlockedAdd(g_shaderCounters[SHADER_COUNTER_RESERVOIR_WRITES], 1);
+                     SHADER_COUNTER_ADD(SHADER_COUNTER_RESERVOIR_WRITES, 1);
                      g_gi_reservoir_b0[launchIndex.xy] = g_gi_reservoir_a0[launchIndex.xy];
                      g_gi_reservoir_b1[launchIndex.xy] = g_gi_reservoir_a1[launchIndex.xy];
                      g_gi_reservoir_b2[launchIndex.xy] = g_gi_reservoir_a2[launchIndex.xy];
                  }
 
-                 if (debugVisualizationMode == 1.0) {
+                 if (SHADER_DEBUG_VIS_MODE == 1.0) {
                      // Debug: Show Converged pixels as Green
                      g_output[launchIndex.xy] = float4(0.0, 1.0, 0.0, 1.0);
                  } else {
@@ -315,7 +315,7 @@ void RayGen()
         payload.rayType = currentRayType;
 
         TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
-        InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TRACE_RAYS], 1);
+        SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
 
 
         if (bounce == 0 && payload.t >= 0.0) {
@@ -349,7 +349,7 @@ void RayGen()
                 specHitPayload.rayDepth = (uint)bounce + 1;
                 specHitPayload.rayType = RAY_TYPE_REFLECTION;
                 TraceRay(g_accel, RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0xFF, 0, 0, 0, specHitRay, specHitPayload);
-                InterlockedAdd(g_shaderCounters[SHADER_COUNTER_SPECULAR_TRACES], 1);
+                SHADER_COUNTER_ADD(SHADER_COUNTER_SPECULAR_TRACES, 1);
                 primarySpecHitDist = (specHitPayload.t > 0) ? specHitPayload.t : 1000.0;
             } else {
                 primarySpecHitDist = 0.0;
@@ -373,15 +373,15 @@ void RayGen()
             // On first bounce miss, update reservoir to empty
             if (bounce == 0) {
                 float4 res_data = pack_reservoir(init_reservoir());
-                if (flip) { g_reservoir1[launchIndex.xy] = res_data; InterlockedAdd(g_shaderCounters[SHADER_COUNTER_RESERVOIR_WRITES], 1); }
-                else      { g_reservoir0[launchIndex.xy] = res_data; InterlockedAdd(g_shaderCounters[SHADER_COUNTER_RESERVOIR_WRITES], 1); }
+                if (flip) { g_reservoir1[launchIndex.xy] = res_data; SHADER_COUNTER_ADD(SHADER_COUNTER_RESERVOIR_WRITES, 1); }
+                else      { g_reservoir0[launchIndex.xy] = res_data; SHADER_COUNTER_ADD(SHADER_COUNTER_RESERVOIR_WRITES, 1); }
             }
             break;
         }
 
         // Legacy material/cloud debug modes (1..16) visualize primary-hit payloads.
         // New accumulation diagnostics (17+) must run full path-tracing flow.
-        if (debugMode > 0.0 && debugMode <= 16.0) {
+        if (SHADER_DEBUG_MODE > 0.0 && SHADER_DEBUG_MODE <= 16.0) {
             accumulatedColor = payload.color;
             break;
         }
@@ -446,7 +446,7 @@ void RayGen()
                 float4 prev_data;
                 if (flip) prev_data = g_reservoir0[launchIndex.xy];
                 else      prev_data = g_reservoir1[launchIndex.xy];
-                InterlockedAdd(g_shaderCounters[SHADER_COUNTER_RESERVOIR_READS], 1);
+                SHADER_COUNTER_ADD(SHADER_COUNTER_RESERVOIR_READS, 1);
                 Reservoir prev_res = unpack_reservoir(prev_data);
                 prev_res.M = min(prev_res.M, 30);
                 
@@ -493,7 +493,7 @@ void RayGen()
                     float4 neighbor_data;
                     if (flip) neighbor_data = g_reservoir0[neighborCoords];
                     else      neighbor_data = g_reservoir1[neighborCoords];
-                    InterlockedAdd(g_shaderCounters[SHADER_COUNTER_SPATIAL_NEIGHBOR_READS], 1);
+                    SHADER_COUNTER_ADD(SHADER_COUNTER_SPATIAL_NEIGHBOR_READS, 1);
                     Reservoir neighbor_res = unpack_reservoir(neighbor_data);
                     
                     // Cap neighbor contribution to prevent fireflies from dominating
@@ -532,7 +532,7 @@ void RayGen()
                         RayPayload spatialPayload; spatialPayload.t = 1.0;
                         spatialPayload.rayType = RAY_TYPE_SHADOW;
                         TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, spatialRay, spatialPayload);
-                        InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TRACE_RAYS], 1);
+                        SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                         if (spatialPayload.t > 0.0) p_target_at_curr = 0.0; // Occluded
                     }
 
@@ -572,8 +572,8 @@ void RayGen()
 
             // Store ReSTIR state for next frame
             float4 packed_res = pack_reservoir(res);
-            if (flip) { g_reservoir1[launchIndex.xy] = packed_res; InterlockedAdd(g_shaderCounters[SHADER_COUNTER_RESERVOIR_WRITES], 1); }
-            else      { g_reservoir0[launchIndex.xy] = packed_res; InterlockedAdd(g_shaderCounters[SHADER_COUNTER_RESERVOIR_WRITES], 1); }
+            if (flip) { g_reservoir1[launchIndex.xy] = packed_res; SHADER_COUNTER_ADD(SHADER_COUNTER_RESERVOIR_WRITES, 1); }
+            else      { g_reservoir0[launchIndex.xy] = packed_res; SHADER_COUNTER_ADD(SHADER_COUNTER_RESERVOIR_WRITES, 1); }
 
             // D. Apply Visibility for current frame shading
             if (p_target_final > 0.0) {
@@ -596,8 +596,8 @@ void RayGen()
                 shadowPayload.rayDepth = (uint)bounce + 1;
                 shadowPayload.rayType = RAY_TYPE_SHADOW;
                 TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
-                InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TRACE_RAYS], 1);
-                InterlockedAdd(g_shaderCounters[SHADER_COUNTER_SHADOW_TRACES], 1);
+                SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
+                SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
                 
                 if (shadowPayload.t < 0.0) {
                     directLighting = radiance_final * brdf_f * NdotL_final * res.W;
@@ -634,7 +634,7 @@ void RayGen()
                         RayPayload giPayload; giPayload.color = float3(0,0,0); giPayload.emissive = float3(0,0,0); giPayload.t = -1.0; giPayload.rayDepth = (uint)bounce + 1;
                         giPayload.rayType = RAY_TYPE_DIFFUSE;
                         TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, giRay, giPayload);
-                        InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TRACE_RAYS], 1);
+                        SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                         // Include sky/clouds in GI radiance
                         float3 radiance = (giPayload.t > 0.0) ? (giPayload.color + giPayload.emissive) : giPayload.color;
                         float3 hitPos = (giPayload.t > 0.0) ? giPayload.position : (P + nextDir_gi * 1000.0);
@@ -691,7 +691,7 @@ void RayGen()
                             RayPayload spatialPayload; spatialPayload.t = 1.0;
                             spatialPayload.rayType = RAY_TYPE_SHADOW;
                             TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, spatialRay, spatialPayload);
-                            InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TRACE_RAYS], 1);
+                            SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                             if (spatialPayload.t > 0.0) p_target_at_curr = 0.0;
                         }
 
@@ -717,7 +717,7 @@ void RayGen()
                     RayPayload giVisPayload; giVisPayload.t = 1.0; giVisPayload.rayDepth = (uint)bounce + 1;
                     giVisPayload.rayType = RAY_TYPE_SHADOW;
                     TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, giVisRay, giVisPayload);
-                    InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TRACE_RAYS], 1);
+                    SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                     if (giVisPayload.t < 0.0) {
                         indirectLighting = gi_res.radiance * brdf_gi_final * saturate(dot(N, L_gi_final)) * gi_res.W;
                     }
@@ -769,8 +769,8 @@ void RayGen()
                 shadowPayload.rayDepth = (uint)bounce + 1;
                 shadowPayload.rayType = RAY_TYPE_SHADOW;
                 TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
-                InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TRACE_RAYS], 1);
-                InterlockedAdd(g_shaderCounters[SHADER_COUNTER_SHADOW_TRACES], 1);
+                SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
+                SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
                 if (shadowPayload.t < 0.0) {
                      float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
                      float3 H = normalize(L_nee + V);
@@ -1029,7 +1029,7 @@ void RayGen()
 
     // Debug: Motion Vectors (debug mode index = 8)
     // Visualizes g_motionVectors in pixel units. Yellow-ish means near-zero MV.
-    if (debugMode == 8.0) {
+    if (SHADER_DEBUG_MODE == 8.0) {
         float2 mv = g_motionVectors[launchIndex.xy];
         // Handle our invalid sentinel.
         if (abs(mv.x) > 1e5 || abs(mv.y) > 1e5) {
@@ -1047,7 +1047,7 @@ void RayGen()
     }
 
     // Debug: Specular Hit Distance (debug mode index = 9)
-    if (debugMode == 9.0) {
+    if (SHADER_DEBUG_MODE == 9.0) {
         float d = g_specHitDistance[launchIndex.xy];
         float v = saturate(d / max(farZ, 1e-3));
         g_output[launchIndex.xy] = float4(v, v, v, 1.0);
@@ -1055,7 +1055,7 @@ void RayGen()
     }
 
     // Debug: Specular Motion Vectors (debug mode index = 10)
-    if (debugMode == 10.0) {
+    if (SHADER_DEBUG_MODE == 10.0) {
         float2 mv = g_specularMotionVectors[launchIndex.xy];
         // Handle our invalid sentinel.
         if (abs(mv.x) > 1e5 || abs(mv.y) > 1e5) {
@@ -1109,7 +1109,7 @@ void RayGen()
         g_accumulation[launchIndex.xy] = float4(nextSum, next_n);
         g_variance[launchIndex.xy] = next_M2;
         
-        if (debugVisualizationMode == 1.0) {
+        if (SHADER_DEBUG_VIS_MODE == 1.0) {
              // Standard Error of Mean: SEM = sqrt(M2) / N
              float sem = sqrt(next_M2) / next_n;
              // Coefficient of Variation
@@ -1125,7 +1125,7 @@ void RayGen()
     }
 
     // Debug: Accumulation sample count N (debug mode index = 17)
-    if (debugMode == 17.0) {
+    if (SHADER_DEBUG_MODE == 17.0) {
         float n = g_accumulation[launchIndex.xy].a;
         float maxN = max(maxSPP, 1.0);
         float v = saturate(n / maxN);
@@ -1136,7 +1136,7 @@ void RayGen()
     }
 
     // Debug: History validity / corruption mask (debug mode index = 18)
-    if (debugMode == 18.0) {
+    if (SHADER_DEBUG_MODE == 18.0) {
         float4 accDbg = g_accumulation[launchIndex.xy];
         float varDbg = g_variance[launchIndex.xy];
         float n = accDbg.a;
@@ -1150,7 +1150,7 @@ void RayGen()
     }
 
     // Debug: Per-pixel estimated noise from history (debug mode index = 19)
-    if (debugMode == 19.0) {
+    if (SHADER_DEBUG_MODE == 19.0) {
         float4 accDbg = g_accumulation[launchIndex.xy];
         float n = max(accDbg.a, 1.0);
         float meanLum = dot(accDbg.rgb / n, float3(0.2126, 0.7152, 0.0722));
@@ -1165,7 +1165,7 @@ void RayGen()
     }
 
     // Debug: Sample deficit vs expected history count (debug mode index = 20)
-    if (debugMode == 20.0) {
+    if (SHADER_DEBUG_MODE == 20.0) {
         float n = g_accumulation[launchIndex.xy].a;
         float expectedN = max(1.0, accumFrame + 1.0);
         float deficit = max(0.0, expectedN - n);
@@ -1177,7 +1177,7 @@ void RayGen()
     }
 
     // Debug: Recent reset mask (debug mode index = 21)
-    if (debugMode == 21.0) {
+    if (SHADER_DEBUG_MODE == 21.0) {
         float n = g_accumulation[launchIndex.xy].a;
         bool recentReset = (accumFrame > 4.0) && (n <= 2.0);
         // Yellow = history repaired this frame, Red = very low sample count.
