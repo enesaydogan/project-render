@@ -212,6 +212,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
 
     // Sample textures
     float3 BaseColor = diffColor.rgb;
+    int mode = (int)SHADER_DEBUG_MODE;
     if (texDiff >= 0) {
         float3 bc = triPlanar ? SampleTriPlanarLevel0(texDiff, P, worldNormal, triScale, triSharp).rgb
                               : textures[texDiff].SampleLevel(linearSampler, uv, 0).rgb;
@@ -250,9 +251,9 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     float3 N = triPlanar ? SampleTriPlanarNormalLevel0(texNorm, P, worldNormal, triScale, triSharp, triNormStrength)
                          : GetNormalFromMap(uv, worldNormal, worldTangent, texNorm);
     
-    // Ambient occlusion
+    // Ambient occlusion (only needed for AO debug mode)
     float ao = 1.0;
-    if (texOcc >= 0) {
+    if (texOcc >= 0 && mode == 7) {
         ao = triPlanar ? SampleTriPlanarLevel0(texOcc, P, worldNormal, triScale, triSharp).r
                        : textures[texOcc].SampleLevel(linearSampler, uv, 0).r;
         // InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TEXTURE_SAMPLES], 1);
@@ -269,7 +270,6 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     }
     
     // Debug Pass
-    int mode = (int)SHADER_DEBUG_MODE;
     if (mode == 1) { 
         payload.color = BaseColor;
         payload.t = RayTCurrent();

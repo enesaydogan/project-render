@@ -32,24 +32,32 @@ void Miss(inout RayPayload payload)
                         payload.rayType == RAY_TYPE_REFLECTION || 
                         payload.rayType == RAY_TYPE_REFRACTION);
     if (cloudRenderingEnabled > 0.5 && allowClouds) {
+        int dbg = (int)SHADER_DEBUG_MODE;
+        bool cloudDebugView = (dbg >= 11 && dbg <= 16);
+        bool primaryRay = (payload.rayType == RAY_TYPE_PRIMARY);
+
         float tMin = 0.0;
         float tMax = 50000.0; // Far
 
         // Pass global lightColor logic
-        float4 cloudRes = RaymarchClouds(WorldRayOrigin(), dir, tMin, tMax, L, lightColor.rgb);
+        float4 cloudRes = RaymarchClouds(WorldRayOrigin(), dir, tMin, tMax, L, lightColor.rgb, payload.rayType, payload.rayDepth);
         cloudRes.a = saturate(cloudRes.a);
         cloudRes.rgb = max(cloudRes.rgb, 0.0);
 
         // If a cloud debug view is selected, show it directly.
         // (Avoid compositing with the environment, which makes debug hard to read.)
-        int dbg = (int)SHADER_DEBUG_MODE;
-        if (dbg >= 11 && dbg <= 16) {
+        if (cloudDebugView) {
             color = cloudRes.rgb;
         } else {
             // Composite clouds over sky
             // cloudRes.rgb is accumulated color, cloudRes.a is Final Transmittance (0 = blocked, 1 = transparent)
             // So: Color = Sky * Transmittance + CloudColor
-            color = color * cloudRes.a + cloudRes.rgb;
+            float3 skyColor = color;
+            float3 fullCloudColor = skyColor * cloudRes.a + cloudRes.rgb;
+
+            color = fullCloudColor;
+
+            color = clamp(color, 0.0, 128.0);
         }
     }
 
