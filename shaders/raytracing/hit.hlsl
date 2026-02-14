@@ -172,8 +172,8 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     uint i2 = indices[mesh.ibIndex].Load(baseIndex + 2);
 
     // Instrumentation: count index + vertex fetches
-    InterlockedAdd(g_shaderCounters[SHADER_COUNTER_INDEX_LOADS], 3);
-    InterlockedAdd(g_shaderCounters[SHADER_COUNTER_VERTEX_FETCHES], 3);
+    // InterlockedAdd(g_shaderCounters[SHADER_COUNTER_INDEX_LOADS], 3);
+    // InterlockedAdd(g_shaderCounters[SHADER_COUNTER_VERTEX_FETCHES], 3);
     
     // Interpolate UV
     float2 uv0 = vertices[mesh.vbIndex][i0].uv;
@@ -216,7 +216,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
         float3 bc = triPlanar ? SampleTriPlanarLevel0(texDiff, P, worldNormal, triScale, triSharp).rgb
                               : textures[texDiff].SampleLevel(linearSampler, uv, 0).rgb;
         BaseColor *= sRGBToLinear(bc);
-        InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TEXTURE_SAMPLES], 1);
+        // InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TEXTURE_SAMPLES], 1);
     }
     
     float metalness = mat.extraParams.x;
@@ -229,7 +229,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
                                     : textures[texMR].SampleLevel(linearSampler, uv, 0);
         roughness *= mrSample.g; 
         metalness *= mrSample.b;
-        InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TEXTURE_SAMPLES], 1);
+        // InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TEXTURE_SAMPLES], 1);
     }
 
     // Clamp to reduce fireflies / unstable highlights in archviz scenes
@@ -255,7 +255,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     if (texOcc >= 0) {
         ao = triPlanar ? SampleTriPlanarLevel0(texOcc, P, worldNormal, triScale, triSharp).r
                        : textures[texOcc].SampleLevel(linearSampler, uv, 0).r;
-        InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TEXTURE_SAMPLES], 1);
+        // InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TEXTURE_SAMPLES], 1);
     }
     
     // Emissive with boost factor and user intensity
@@ -265,7 +265,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
         float3 e = triPlanar ? SampleTriPlanarLevel0(texEmis, P, worldNormal, triScale, triSharp).rgb
                              : textures[texEmis].SampleLevel(linearSampler, uv, 0).rgb;
         emissive *= sRGBToLinear(e);
-        InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TEXTURE_SAMPLES], 1);
+        // InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TEXTURE_SAMPLES], 1);
     }
     
     // Debug Pass
@@ -282,123 +282,93 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     if (mode == 6) { payload.color = float3(metalness, metalness, metalness); payload.t = RayTCurrent(); return; }
     if (mode == 7) { payload.color = float3(ao, ao, ao); payload.t = RayTCurrent(); return; }
 
-    // Calculate view direction correctly in world space
-    float3 V = normalize(camPos - P);
-    
-    // Directional light
-    float3 L = normalize(lightDir.xyz);
-    float3 H = normalize(V + L);
-
     // Archviz extensions
-    float clearcoat = saturate(arch0.x);
-    float clearcoatRoughness = max(arch0.y, 0.02);
     float translucency = saturate(arch0.w);
     
-    // Cook-Torrance BRDF
-    float NDF = DistributionGGX(N, H, roughness);
-    float G = GeometrySmith(N, V, L, roughness);
-    float3 F = FresnelSchlick(max(dot(H, V), 0.0), F0);
+    float3 Lo = float3(0,0,0);
+    float3 ambient = float3(0,0,0);
+
+    // OPTIMIZATION:
+    // Only calculate direct lighting (Shadow Ray) for GI Diffuse rays.
+    // Primary rays use ReSTIR in RayGen and don't need this locally computed color.
+    // IBL (ambient) is currently unused by both RayGen (for Primary) and Diffuse rays (which take Lo only).
     
-    float3 numerator = NDF * G * F;
-    float NdotV = max(dot(N, V), 0.0);
-    float NdotL = saturate(dot(N, L));
-    float denominator = 4.0 * NdotV * NdotL;
-    float3 specular = numerator / max(denominator, 0.001);
+    if (payload.rayType == RAY_TYPE_DIFFUSE)
+    {
+        // Calculate view direction correctly in world space
+        float3 V = normalize(camPos - P);
+        
+        // Directional light
+        float3 L = normalize(lightDir.xyz);
+        float3 H = normalize(V + L);
 
-    // Clearcoat (secondary GGX lobe, fixed dielectric F0)
-    float3 coatSpecular = float3(0.0, 0.0, 0.0);
-    if (clearcoat > 0.001) {
-        float3 F0c = float3(0.04, 0.04, 0.04);
-        float NDFc = DistributionGGX(N, H, clearcoatRoughness);
-        float Gc = GeometrySmith(N, V, L, clearcoatRoughness);
-        float3 Fc = FresnelSchlick(max(dot(H, V), 0.0), F0c);
-        float3 numc = NDFc * Gc * Fc;
-        float denc = 4.0 * NdotV * NdotL;
-        coatSpecular = numc / max(denc, 0.001);
-    }
-    
-    // Energy conservation
-    float3 kS = F;
-    float3 kD = 1.0 - kS;
-    
-    // Shadow Ray
-    float shadowed = 1.0;
-    RayDesc shadowRay;
-    shadowRay.Origin = P + N * 0.001; // Offset to avoid self-intersection
-    shadowRay.Direction = L;
-    shadowRay.TMin = 0.001;
-    shadowRay.TMax = 1000.0;
-    
-    RayPayload shadowPayload;
-    shadowPayload.color = float3(0,0,0);
-    shadowPayload.albedo = float3(0,0,0);
-    shadowPayload.emissive = float3(0,0,0);
-    shadowPayload.refractionColor = float3(0,0,0);
-    shadowPayload.ior = 1.0;
-    shadowPayload.roughness = 1.0;
-    shadowPayload.metalness = 0.0;
-    shadowPayload.matIndex = 0;
-    shadowPayload.t = 1.0; // Default to hit
-    shadowPayload.rayDepth = 1;
-    shadowPayload.rayType = RAY_TYPE_SHADOW;
-    
-    // Trace shadow ray using flags to skip hits and stop at the first occlusion
-    TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
-    
-    // If the shadow ray reached a miss shader, it's (t < 0)
-    if (shadowPayload.t > 0.0) shadowed = 0.0;
+        float clearcoat = saturate(arch0.x);
+        float clearcoatRoughness = max(arch0.y, 0.02);
 
-    // Outgoing radiance
-    float3 radiance = lightColor.rgb * lightColor.w;
+        // Cook-Torrance BRDF
+        float NDF = DistributionGGX(N, H, roughness);
+        float G = GeometrySmith(N, V, L, roughness);
+        float3 F = FresnelSchlick(max(dot(H, V), 0.0), F0);
+        
+        float3 numerator = NDF * G * F;
+        float NdotV = max(dot(N, V), 0.0);
+        float NdotL = saturate(dot(N, L));
+        float denominator = 4.0 * NdotV * NdotL;
+        float3 specular = numerator / max(denominator, 0.001);
 
-    float3 baseLo = (kD * DiffuseAlbedo / PI + specular) * radiance * NdotL * shadowed;
-    float3 coatLo = coatSpecular * radiance * NdotL * shadowed;
+        // Clearcoat (secondary GGX lobe, fixed dielectric F0)
+        float3 coatSpecular = float3(0.0, 0.0, 0.0);
+        if (clearcoat > 0.001) {
+            float3 F0c = float3(0.04, 0.04, 0.04);
+            float NDFc = DistributionGGX(N, H, clearcoatRoughness);
+            float Gc = GeometrySmith(N, V, L, clearcoatRoughness);
+            float3 Fc = FresnelSchlick(max(dot(H, V), 0.0), F0c);
+            float3 numc = NDFc * Gc * Fc;
+            float denc = 4.0 * NdotV * NdotL;
+            coatSpecular = numc / max(denc, 0.001);
+        }
+        
+        // Energy conservation
+        float3 kS = F;
+        float3 kD = 1.0 - kS;
 
-    // Simple energy split: coat takes priority over base layer
-    float3 Lo = baseLo * (1.0 - clearcoat) + coatLo * clearcoat;
+        // Shadow Ray
+        float shadowed = 1.0;
+        RayDesc shadowRay;
+        shadowRay.Origin = P + N * 0.001; // Offset to avoid self-intersection
+        shadowRay.Direction = L;
+        shadowRay.TMin = 0.001;
+        shadowRay.TMax = 1000.0;
+        
+        RayPayload shadowPayload;
+        shadowPayload.color = float3(0,0,0);
+        shadowPayload.albedo = float3(0,0,0);
+        shadowPayload.emissive = float3(0,0,0);
+        shadowPayload.refractionColor = float3(0,0,0);
+        shadowPayload.ior = 1.0;
+        shadowPayload.roughness = 1.0;
+        shadowPayload.metalness = 0.0;
+        shadowPayload.matIndex = 0;
+        shadowPayload.t = 1.0; 
+        shadowPayload.rayDepth = 1;
+        shadowPayload.rayType = RAY_TYPE_SHADOW;
+        
+        TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
+        
+        if (shadowPayload.t > 0.0) shadowed = 0.0;
 
-    // Backlighting translucency approximation (leaves/fabric)
-    if (translucency > 0.001) {
-        float NdotL_back = saturate(dot(-N, L));
-        Lo += (DiffuseAlbedo / PI) * radiance * NdotL_back * translucency;
-    }
-    
-    // IBL
-    float3 R = reflect(-V, N);
-    float3 F_ibl = FresnelSchlickRoughness(max(dot(N, V), 0.0), F0, roughness);
-    float3 kS_ibl = F_ibl;
-    float3 kD_ibl = 1.0 - kS_ibl;
+        // Outgoing radiance
+        float3 radiance = lightColor.rgb * lightColor.w;
 
-    float2 envUV_diff = DirectionToUV(N);
-    // Use higher mips for diffuse irradiance
-    float3 irradiance = envMap.SampleLevel(linearSampler, envUV_diff, 7.0).rgb; 
-    InterlockedAdd(g_shaderCounters[SHADER_COUNTER_ENV_SAMPLES], 1);
-    float3 diffuse_ibl = kD_ibl * irradiance * DiffuseAlbedo;
+        float3 baseLo = (kD * DiffuseAlbedo / PI + specular) * radiance * NdotL * shadowed;
+        float3 coatLo = coatSpecular * radiance * NdotL * shadowed;
 
-    float2 envUV_spec = DirectionToUV(R);
-    // Use mips for glossy reflections
-    float3 prefilteredColor = envMap.SampleLevel(linearSampler, envUV_spec, roughness * 7.0).rgb;
-    InterlockedAdd(g_shaderCounters[SHADER_COUNTER_ENV_SAMPLES], 1);
-    float3 specular_ibl = kS_ibl * prefilteredColor;
+        Lo = baseLo * (1.0 - clearcoat) + coatLo * clearcoat;
 
-    // Clearcoat IBL (reuse the same reflection vector)
-    float3 coat_ibl = float3(0.0, 0.0, 0.0);
-    if (clearcoat > 0.001) {
-        float3 prefilteredCoat = envMap.SampleLevel(linearSampler, envUV_spec, clearcoatRoughness * 7.0).rgb;
-        float3 F0c = float3(0.04, 0.04, 0.04);
-        float3 Fc_ibl = FresnelSchlickRoughness(max(dot(N, V), 0.0), F0c, clearcoatRoughness);
-        coat_ibl = Fc_ibl * prefilteredCoat;
-    }
-
-    // Use a consistent 5.0x boost for IBL to match raster and provide good environment lighting
-    float3 ambientBase = (diffuse_ibl + specular_ibl) * ao * ambientColor.rgb * 5.0;
-    float3 ambient = ambientBase * (1.0 - clearcoat) + (coat_ibl * ao * ambientColor.rgb * 5.0) * clearcoat;
-
-    // Optional translucency from environment (very rough)
-    if (translucency > 0.001) {
-        float2 envUV_back = DirectionToUV(-N);
-        float3 irradianceBack = envMap.SampleLevel(linearSampler, envUV_back, 7.0).rgb;
-        ambient += (DiffuseAlbedo * irradianceBack) * (ambientColor.rgb * 5.0) * translucency;
+        if (translucency > 0.001) {
+            float NdotL_back = saturate(dot(-N, L));
+            Lo += (DiffuseAlbedo / PI) * radiance * NdotL_back * translucency;
+        }
     }
     
     // For diffuse transport rays used by path tracing GI probes, avoid adding
