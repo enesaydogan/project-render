@@ -880,7 +880,7 @@ void RayGen()
                 f_brdf = diffuseAlbedo / PI;
                 rayOrigin = P + N * 0.001;
                 cosineTerm = NdotL;
-                currentRayType = RAY_TYPE_DIFFUSE;
+                currentRayType = RAY_TYPE_REFLECTION;
             } else {
                 // Diffuse translucency (transmission) Lambert
                 if (giBounces >= (int)maxGIBounces) break;
@@ -892,7 +892,7 @@ void RayGen()
                 f_brdf = (payload.albedo / PI) * (1.0 - metallic);
                 rayOrigin = P - N * 0.001;
                 cosineTerm = NdotL_t;
-                currentRayType = RAY_TYPE_DIFFUSE;
+                currentRayType = RAY_TYPE_REFLECTION;
             }
 
             if (!(pdf > 0.0)) break;
