@@ -25,9 +25,8 @@ void Miss(inout RayPayload payload)
          color += lightColor.rgb * intensity;
     }
 
-    // --- Volumetric Clouds ---
-    // March clouds for visibility, reflection and refraction rays.
-    // gi or di (RAY_TYPE_DIFFUSE or RAY_TYPE_SHADOW) should not take clouds in calculation.
+    // --- Volumetric Clouds (baked) ---
+    // Use pre-baked lat-long cloud texture for misses/reflections/refractions.
     bool allowClouds = (payload.rayType == RAY_TYPE_PRIMARY || 
                         payload.rayType == RAY_TYPE_REFLECTION || 
                         payload.rayType == RAY_TYPE_REFRACTION ||
@@ -35,30 +34,19 @@ void Miss(inout RayPayload payload)
     if (cloudRenderingEnabled > 0.5 && allowClouds) {
         int dbg = (int)SHADER_DEBUG_MODE;
         bool cloudDebugView = (dbg >= 11 && dbg <= 16);
-        bool primaryRay = (payload.rayType == RAY_TYPE_PRIMARY);
 
-        float tMin = 0.0;
-        float tMax = 50000.0; // Far
+        float2 skyUv = DirectionToUV(dir);
+        float4 baked = bakedClouds.SampleLevel(linearSampler, skyUv, 0);
+        baked.a = saturate(baked.a);
+        baked.rgb = max(baked.rgb, 0.0);
 
-        // Pass global lightColor logic
-        float4 cloudRes = RaymarchClouds(WorldRayOrigin(), dir, tMin, tMax, L, lightColor.rgb, payload.rayType, payload.rayDepth);
-        cloudRes.a = saturate(cloudRes.a);
-        cloudRes.rgb = max(cloudRes.rgb, 0.0);
-
-        // If a cloud debug view is selected, show it directly.
-        // (Avoid compositing with the environment, which makes debug hard to read.)
         if (cloudDebugView) {
-            color = cloudRes.rgb;
+            color = baked.rgb;
         } else {
-            // Composite clouds over sky
-            // cloudRes.rgb is accumulated color, cloudRes.a is Final Transmittance (0 = blocked, 1 = transparent)
-            // So: Color = Sky * Transmittance + CloudColor
+            // Composite: Sky * Transmittance + CloudColor
             float3 skyColor = color;
-            float3 fullCloudColor = skyColor * cloudRes.a + cloudRes.rgb;
-
-            color = fullCloudColor;
-
-            color = clamp(color, 0.0, 128.0);
+            float3 fullCloudColor = skyColor * baked.a + baked.rgb;
+            color = clamp(fullCloudColor, 0.0, 128.0);
         }
     }
 

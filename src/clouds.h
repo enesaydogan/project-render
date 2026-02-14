@@ -56,6 +56,14 @@ public:
   }
   CloudParams &GetParams() { return m_params; }
 
+  // Request an on-GPU bake of the current clouds (runs a compute pass)
+  // - cmdList: graphics/compute command list to record the bake into
+  // - cameraCB: optional camera constant buffer (used for origin/light)
+  void BakeSky(ID3D12GraphicsCommandList *cmdList, ID3D12Resource *cameraCB = nullptr);
+  void RequestBake() { m_bakeRequested = true; }
+  bool NeedsBake() const { return m_bakeRequested; }
+  ID3D12Resource *GetBakedSkyTexture() const { return m_bakedSkyTexture.Get(); }
+
   // GPU descriptor handle that points to the contiguous CBV+SRV descriptors for
   // clouds
   D3D12_GPU_DESCRIPTOR_HANDLE GetGPUHandle() const { return m_gpuHandle; }
@@ -68,6 +76,7 @@ private:
 
   Microsoft::WRL::ComPtr<ID3D12Resource> m_baseTexture;
   Microsoft::WRL::ComPtr<ID3D12Resource> m_detailTexture;
+  Microsoft::WRL::ComPtr<ID3D12Resource> m_bakedSkyTexture; // lat-long baked sky (RGBA + transmittance)
   std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> m_uploadBuffers;
   Microsoft::WRL::ComPtr<ID3D12Resource> m_constantBuffers[3];
   UINT m_currentFrame = 0;
@@ -79,6 +88,18 @@ private:
   // Descriptor handles for binding to raster shaders
   D3D12_CPU_DESCRIPTOR_HANDLE m_cpuHandle = {};
   D3D12_GPU_DESCRIPTOR_HANDLE m_gpuHandle = {};
+
+  // UAV descriptor (for compute bake) - persistent allocation
+  D3D12_CPU_DESCRIPTOR_HANDLE m_bakedSkyUAVCpuHandle = {};
+  D3D12_GPU_DESCRIPTOR_HANDLE m_bakedSkyUAVGpuHandle = {};
+
+  // Bake pipeline state / root signature cached here
+  Microsoft::WRL::ComPtr<ID3D12RootSignature> m_bakeRootSig;
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> m_bakePSO;
+
+  // Bake control
+  bool m_bakeRequested = false;
+  CloudParams m_lastBakedParams = {};
 };
 
 // Global instance declared in main.cpp, exposed here for other modules

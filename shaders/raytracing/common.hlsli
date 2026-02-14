@@ -63,6 +63,7 @@ RWStructuredBuffer<uint> g_shaderCounters : register(u24);
 Texture2D textures[2048] : register(t1);
 // Environment Map (Latitude-Longitude) - Moved to Space 1 to avoid conflicts
 Texture2D envMap : register(t0, space1);
+Texture2D bakedClouds : register(t12, space2); // Pre-baked lat-long cloud texture (rgb + transmittance)
 SamplerState linearSampler : register(s0);
 
 inline float2 DirectionToUV(float3 dir) {
