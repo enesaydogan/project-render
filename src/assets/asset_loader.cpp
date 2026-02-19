@@ -53,6 +53,7 @@ static ComPtr<ID3D12Device> s_device;
 static ComPtr<ID3D12CommandQueue> s_queue;
 // Optional progress callback. Signature: progress [0..1], status message
 std::function<void(float, const std::string &)> s_progressCb;
+static thread_local bool s_deferGpuUpload = false;
 
 void Initialize(ID3D12Device *device, ID3D12CommandQueue *queue) {
   s_device = device;
@@ -66,6 +67,10 @@ void Initialize(ID3D12Device *device, ID3D12CommandQueue *queue) {
 void SetProgressCallback(ProgressCallback cb) { s_progressCb = cb; }
 
 void ClearProgressCallback() { s_progressCb = ProgressCallback(); }
+
+void SetDeferGpuUpload(bool enable) { s_deferGpuUpload = enable; }
+
+bool GetDeferGpuUpload() { return s_deferGpuUpload; }
 
 // ... rest of the file ... (excluding LoadGltf until later)
 
@@ -1602,21 +1607,23 @@ GpuMesh LoadMeshFromMemory(const std::vector<Vertex> &vertices,
   mesh.cpuVertices = vertices;
   mesh.cpuIndices = indices;
 
-  ComPtr<ID3D12Resource> vUpload, iUpload;
-  CreateDefaultBuffer(vertices.data(), vertices.size() * sizeof(Vertex),
-                      mesh.vertexBuffer, vUpload,
-                      D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
-  CreateDefaultBuffer(indices.data(), indices.size() * sizeof(uint32_t),
-                      mesh.indexBuffer, iUpload,
-                      D3D12_RESOURCE_STATE_INDEX_BUFFER);
+  if (!s_deferGpuUpload) {
+    ComPtr<ID3D12Resource> vUpload, iUpload;
+    CreateDefaultBuffer(vertices.data(), vertices.size() * sizeof(Vertex),
+                        mesh.vertexBuffer, vUpload,
+                        D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    CreateDefaultBuffer(indices.data(), indices.size() * sizeof(uint32_t),
+                        mesh.indexBuffer, iUpload,
+                        D3D12_RESOURCE_STATE_INDEX_BUFFER);
 
-  mesh.vbView.BufferLocation = mesh.vertexBuffer->GetGPUVirtualAddress();
-  mesh.vbView.StrideInBytes = sizeof(Vertex);
-  mesh.vbView.SizeInBytes = (UINT)(vertices.size() * sizeof(Vertex));
+    mesh.vbView.BufferLocation = mesh.vertexBuffer->GetGPUVirtualAddress();
+    mesh.vbView.StrideInBytes = sizeof(Vertex);
+    mesh.vbView.SizeInBytes = (UINT)(vertices.size() * sizeof(Vertex));
 
-  mesh.ibView.BufferLocation = mesh.indexBuffer->GetGPUVirtualAddress();
-  mesh.ibView.Format = DXGI_FORMAT_R32_UINT;
-  mesh.ibView.SizeInBytes = (UINT)(indices.size() * sizeof(uint32_t));
+    mesh.ibView.BufferLocation = mesh.indexBuffer->GetGPUVirtualAddress();
+    mesh.ibView.Format = DXGI_FORMAT_R32_UINT;
+    mesh.ibView.SizeInBytes = (UINT)(indices.size() * sizeof(uint32_t));
+  }
 
   // Calculate Bounds
   mesh.minBound[0] = mesh.minBound[1] = mesh.minBound[2] = 1e30f;

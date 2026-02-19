@@ -98,6 +98,10 @@ void Initialize(ID3D12Device *device, ID3D12CommandQueue *queue);
 using ProgressCallback = std::function<void(float, const std::string &)>;
 void SetProgressCallback(ProgressCallback cb);
 void ClearProgressCallback();
+// When enabled for the current thread, mesh loading will keep CPU geometry and
+// defer GPU buffer creation. Useful for background import workers.
+void SetDeferGpuUpload(bool enable);
+bool GetDeferGpuUpload();
 
 // Expose current progress callback to importers that run in separate translation
 // units (used by skp_loader.cpp). Kept intentionally minimal.

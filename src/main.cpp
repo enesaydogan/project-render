@@ -19,6 +19,7 @@
 #include "imgui.h"
 #include "imgui_impl_dx12.h"
 #include "imgui_impl_win32.h"
+#include "imgui_theme.h"
 #include "light.h"
 #include "material_editor.h"
 #include "raster_renderer.h"
@@ -1119,6 +1120,7 @@ bool InitD3D12(HWND hwnd) {
   // --- Initialize ImGui ---
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
+  ApplyModernImGuiTheme();
   ImGuiIO &io = ImGui::GetIO();
   (void)io;
   ImGui_ImplWin32_Init(hwnd);
