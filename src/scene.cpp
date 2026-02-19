@@ -160,6 +160,19 @@ Node::Node() {
   visible = true;
 }
 
+static void EnsureGpuBuffersForMeshes(std::vector<Asset::GpuMesh> &meshes) {
+  for (auto &mesh : meshes) {
+    if (mesh.vertexBuffer && mesh.indexBuffer)
+      continue;
+    if (mesh.cpuVertices.empty() || mesh.cpuIndices.empty())
+      continue;
+    const int materialIndex = mesh.materialIndex;
+    Asset::GpuMesh uploaded = Asset::LoadMeshFromMemory(mesh.cpuVertices, mesh.cpuIndices);
+    uploaded.materialIndex = materialIndex;
+    mesh = std::move(uploaded);
+  }
+}
+
 const std::string &LastStatus() { return s_lastStatus; }
 
 bool ImportModel(const std::string &utf8path, const float *rootTranslation) {
@@ -183,6 +196,7 @@ bool ImportModel(const std::string &utf8path, const float *rootTranslation) {
       fprintf(stderr, "%s\n", s_lastStatus.c_str());
       return false;
     }
+    EnsureGpuBuffersForMeshes(meshes);
 
     size_t meshBase = g_loadedMeshes.size();
     size_t materialBase = g_loadedMaterials.size();
@@ -329,8 +343,10 @@ bool ImportModelWithDialog(HWND hwnd) {
       std::vector<Asset::GpuMesh> meshes;
       std::vector<Asset::Material> materials;
       std::vector<Asset::Texture> textures;
+      Asset::SetDeferGpuUpload(true);
       bool ok =
           Asset::LoadModel(utf8path, meshes, &materials, &textures, nullptr);
+      Asset::SetDeferGpuUpload(false);
 
       // If the loader failed or produced no meshes, report error and do not
       // queue pending results for the main thread to merge.
@@ -1041,6 +1057,7 @@ void DrawScenePanel(HWND hwnd, bool &visible) {
         s_pendingPath.clear();
       }
       s_pendingReady = false;
+      EnsureGpuBuffersForMeshes(meshes);
 
       // Merge into global lists (same logic as ImportModel)
       size_t meshBase = g_loadedMeshes.size();

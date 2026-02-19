@@ -660,6 +660,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="D:\project-render\src\ImGuizmo.cpp" />
     <ClCompile Include="D:\project-render\src\oidn_denoiser.cpp" />
     <ClCompile Include="D:\project-render\src\clouds.cpp" />
+    <ClCompile Include="D:\project-render\src\imgui_theme.cpp" />
     <ClCompile Include="D:\project-render\src\scene_io.cpp" />
   </ItemGroup>
   <ItemGroup />

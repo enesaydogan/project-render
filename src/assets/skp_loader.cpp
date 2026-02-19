@@ -1,7 +1,6 @@
 #include "asset_loader.h"
 #include <algorithm>
 #include <cmath>
-#include <filesystem>
 #include <functional>
 #include <map>
 #include <string>
@@ -20,6 +19,7 @@
 #include <SketchUpAPI/model/face.h>
 #include <SketchUpAPI/model/mesh_helper.h>
 #include <SketchUpAPI/model/material.h>
+#include <SketchUpAPI/model/image_rep.h>
 #include <SketchUpAPI/model/texture_writer.h>
 #include <SketchUpAPI/model/texture.h>
 #include <SketchUpAPI/model/uv_helper.h>
@@ -161,6 +161,42 @@ static bool ShouldUseBackSideMaterial(SUFaceRef face,
   // If tessellated winding opposes face-front normal, this mesh represents the
   // back side and should use back-side material/UVs.
   return DotVec(triNormal, faceNormal) < 0.0;
+}
+
+static bool LoadTextureFromWriterTextureId(SUTextureWriterRef writer, long textureId,
+                                           Asset::Texture &outTex) {
+  SUImageRepRef image = SU_INVALID;
+  if (SU_ERROR_NONE != SUImageRepCreate(&image))
+    return false;
+
+  bool ok = false;
+  if (SU_ERROR_NONE == SUTextureWriterGetImageRep(writer, textureId, &image)) {
+    if (SU_ERROR_NONE == SUImageRepConvertTo32BitsPerPixel(image)) {
+      size_t width = 0, height = 0;
+      if (SU_ERROR_NONE == SUImageRepGetPixelDimensions(image, &width, &height) &&
+          width > 0 && height > 0) {
+        std::vector<SUColor> colors(width * height);
+        if (SU_ERROR_NONE == SUImageRepGetDataAsColors(image, colors.data())) {
+          std::vector<uint8_t> rgba(width * height * 4);
+          for (size_t i = 0; i < colors.size(); ++i) {
+            rgba[i * 4 + 0] = colors[i].red;
+            rgba[i * 4 + 1] = colors[i].green;
+            rgba[i * 4 + 2] = colors[i].blue;
+            rgba[i * 4 + 3] = colors[i].alpha;
+          }
+          Asset::Texture tex = Asset::LoadTextureFromMemory(
+              rgba.data(), (int)width, (int)height, DXGI_FORMAT_R8G8B8A8_UNORM);
+          if (tex.resource) {
+            outTex = std::move(tex);
+            ok = true;
+          }
+        }
+      }
+    }
+  }
+
+  SUImageRepRelease(&image);
+  return ok;
 }
 
 static SUMaterialRef ResolveFaceMaterial(SUFaceRef face, bool preferBackSide,
@@ -649,16 +685,8 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
   }
 
   if (textureWriterValid) {
-    // Export textures (if any) to a temp dir next to the SKP (unique per-path).
-    std::filesystem::path base = std::filesystem::absolute(path).parent_path();
-    std::string texDir =
-        (base / ("skp_textures_" + std::to_string(std::hash<std::string>()(path)))).string();
-    std::error_code ec;
-    std::filesystem::create_directories(texDir, ec);
-    SUTextureWriterWriteAllTextures(texWriter, texDir.c_str());
-
-    // For each material we previously created, find textures on front or back
-    // side and attach to engine materials.
+    // Extract textures directly from SketchUp API image reps to avoid slow
+    // disk round-trips (WriteAllTextures + reloading files).
     if (outMaterials && outTextures) {
       std::map<long, int> textureIdToIndex;
       for (size_t fi = 0; fi < faceCount; ++fi) {
@@ -679,22 +707,12 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
         if (cachedTex != textureIdToIndex.end()) {
           texIndex = cachedTex->second;
         } else {
-          SUStringRef suPath = SU_INVALID;
-          SUStringCreate(&suPath);
-          if (SU_ERROR_NONE !=
-              SUTextureWriterGetTextureFilePath(texWriter, texId, &suPath)) {
-            SUStringRelease(&suPath);
-            continue;
-          }
-
-          std::string texPath = SUStringToStdString(suPath);
-          SUStringRelease(&suPath);
-          Asset::Texture t = Asset::LoadTextureFromFile(texPath, false);
-          if (!t.resource)
+          Asset::Texture tex;
+          if (!LoadTextureFromWriterTextureId(texWriter, texId, tex))
             continue;
 
           texIndex = (int)outTextures->size();
-          outTextures->push_back(t);
+          outTextures->push_back(std::move(tex));
           textureIdToIndex[texId] = texIndex;
         }
 
