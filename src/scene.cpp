@@ -176,6 +176,14 @@ bool ImportModel(const std::string &utf8path, const float *rootTranslation) {
       return false;
     }
 
+    // If loader returned success but produced no meshes, treat as failure —
+    // prevents UI from reporting success when nothing was created.
+    if (meshes.empty()) {
+      s_lastStatus = std::string("Load failed (no meshes returned): ") + utf8path;
+      fprintf(stderr, "%s\n", s_lastStatus.c_str());
+      return false;
+    }
+
     size_t meshBase = g_loadedMeshes.size();
     size_t materialBase = g_loadedMaterials.size();
     size_t textureBase = g_loadedTextures.size();
@@ -214,25 +222,14 @@ bool ImportModel(const std::string &utf8path, const float *rootTranslation) {
 
     RegisterTextures(textures);
 
-    // Create scene nodes for this import.
-    // If multiple meshes, create a node for each to support "Hierarchy" /
-    // individual transforms.
-    if (meshes.size() > 1) {
-      for (size_t i = 0; i < meshes.size(); ++i) {
-        Node node;
-        node.name = std::filesystem::path(utf8path).filename().stem().string() +
-                    "_" + std::to_string(i);
-        node.sourcePath = utf8path;
-        node.meshIndices.push_back(meshBase + i);
-        s_nodes.push_back(node);
-      }
-    } else if (meshes.size() == 1) {
-      Node node;
-      node.name = std::filesystem::path(utf8path).filename().string();
-      node.sourcePath = utf8path;
-      node.meshIndices.push_back(meshBase);
-      s_nodes.push_back(node);
-    }
+    // Create a single parent node for this import, named after the source
+    // file. All imported meshes are attached to this node.
+    Node node;
+    node.name = std::filesystem::path(utf8path).filename().string();
+    node.sourcePath = utf8path;
+    for (size_t i = 0; i < meshes.size(); ++i)
+      node.meshIndices.push_back(meshBase + i);
+    s_nodes.push_back(node);
 
     s_lastStatus = std::string("Loaded: ") + utf8path;
     fprintf(stderr, "%s\n", s_lastStatus.c_str());
@@ -334,6 +331,22 @@ bool ImportModelWithDialog(HWND hwnd) {
       std::vector<Asset::Texture> textures;
       bool ok =
           Asset::LoadModel(utf8path, meshes, &materials, &textures, nullptr);
+
+      // If the loader failed or produced no meshes, report error and do not
+      // queue pending results for the main thread to merge.
+      if (!ok || meshes.empty()) {
+        std::string msg = !ok ? (std::string("Import failed: ") + utf8path)
+                              : (std::string("Import produced no meshes: ") + utf8path);
+        fprintf(stderr, "Scene::ImportModel (async): %s\n", msg.c_str());
+        {
+          std::lock_guard<std::mutex> lg(s_importStatusMutex);
+          s_importStatus = msg;
+        }
+        s_importInProgress = false;
+        s_importProgress = 0.0f;
+        Asset::ClearProgressCallback();
+        return; // abort thread — nothing to merge
+      }
 
       // Store pending results for main thread to pick up
       {
