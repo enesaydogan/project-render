@@ -266,12 +266,60 @@ Texture LoadTextureFromFile(const std::string &path, bool isHDR) {
   if (!s_device)
     return {};
 
-  int width, height, comp;
-  if (isHDR) {
-    float *data = nullptr;
-    bool loaded = false;
+  // Helper: robustly convert path bytes to a Windows wide string.
+  // Try UTF-8 first; if that doesn't map to an existing file, fall back to
+  // the ANSI code page (CP_ACP). This fixes paths produced by Assimp on
+  // Windows that use the local code page for non-ASCII characters.
+  auto ConvertPathToWString = [](const std::string &s) -> std::wstring {
+    if (s.empty())
+      return {};
 
+    std::wstring utf8w;
+    // Try UTF-8 (fail on invalid sequences)
+    int req = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s.c_str(), -1,
+                                  nullptr, 0);
+    if (req) {
+      utf8w.resize(req);
+      if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s.c_str(), -1,
+                              &utf8w[0], req)) {
+        if (!utf8w.empty() && utf8w.back() == L'\0')
+          utf8w.pop_back();
+        try {
+          if (std::filesystem::exists(std::filesystem::path(utf8w)))
+            return utf8w;
+        } catch (...) {
+          /* ignore filesystem errors */
+        }
+      }
+    }
+
+    // Fallback: interpret input as ANSI (system code page)
+    int req2 = MultiByteToWideChar(CP_ACP, 0, s.c_str(), -1, nullptr, 0);
+    if (req2) {
+      std::wstring acpw(req2, 0);
+      if (MultiByteToWideChar(CP_ACP, 0, s.c_str(), -1, &acpw[0], req2)) {
+        if (!acpw.empty() && acpw.back() == L'\0')
+          acpw.pop_back();
+        try {
+          if (std::filesystem::exists(std::filesystem::path(acpw)))
+            return acpw;
+        } catch (...) {
+          /* ignore filesystem errors */
+        }
+        return acpw; // return ACP conversion if UTF-8 didn't resolve to an existing file
+      }
+    }
+
+    // Final fallback: return the UTF-8 conversion (may be empty)
+    return utf8w;
+  };
+
+  int width = 0, height = 0, comp = 0;
+
+  if (isHDR) {
+    // EXR via tinyexr (filename API)
     if (path.find(".exr") != std::string::npos) {
+      float *data = nullptr;
       const char *err = nullptr;
       int ret = LoadEXR(&data, &width, &height, path.c_str(), &err);
       if (ret != TINYEXR_SUCCESS) {
@@ -281,30 +329,51 @@ Texture LoadTextureFromFile(const std::string &path, bool isHDR) {
         }
         return {};
       }
-      loaded = true;
-    } else {
-      data = stbi_loadf(path.c_str(), &width, &height, &comp, 4);
-      if (data)
-        loaded = true;
+      Texture tex;
+      CreateGpuTexture(data, width, height, 4, DXGI_FORMAT_R32G32B32A32_FLOAT,
+                       tex);
+      free(data);
+      return tex;
     }
 
-    if (!loaded || !data)
+    // HDR (non-EXR) — try stbi_loadf first, then fallback to wide-path file I/O
+    float *fdata = stbi_loadf(path.c_str(), &width, &height, &comp, 4);
+    if (!fdata) {
+      std::wstring wpath = ConvertPathToWString(path);
+      if (!wpath.empty()) {
+        FILE *wf = _wfopen(wpath.c_str(), L"rb");
+        if (wf) {
+          fdata = stbi_loadf_from_file(wf, &width, &height, &comp, 4);
+          fclose(wf);
+        }
+      }
+    }
+
+    if (!fdata)
       return {};
 
     Texture tex;
-    CreateGpuTexture(data, width, height, 4, DXGI_FORMAT_R32G32B32A32_FLOAT,
+    CreateGpuTexture(fdata, width, height, 4, DXGI_FORMAT_R32G32B32A32_FLOAT,
                      tex);
-
-    if (path.find(".exr") != std::string::npos) {
-      free(data);
-    } else {
-      stbi_image_free(data);
-    }
+    stbi_image_free(fdata);
     return tex;
   } else {
+    // LDR images: try stbi_load then fallback to wide-path _wfopen + stbi_load_from_file
     unsigned char *data = stbi_load(path.c_str(), &width, &height, &comp, 4);
+    if (!data) {
+      std::wstring wpath = ConvertPathToWString(path);
+      if (!wpath.empty()) {
+        FILE *wf = _wfopen(wpath.c_str(), L"rb");
+        if (wf) {
+          data = stbi_load_from_file(wf, &width, &height, &comp, 4);
+          fclose(wf);
+        }
+      }
+    }
+
     if (!data)
       return {};
+
     Texture tex;
     CreateGpuTexture(data, width, height, 4, DXGI_FORMAT_R8G8B8A8_UNORM, tex);
     stbi_image_free(data);
@@ -1208,8 +1277,98 @@ bool LoadWithAssimp(const std::string &path, std::vector<GpuMesh> &outMeshes,
           outIndex = -1;
           if (texPath.empty())
             return;
+
+          // Handle embedded Assimp textures referenced as "*<index>" (e.g. "*0").
+          // Assimp stores embedded images in scene->mTextures; these can be
+          // compressed (mHeight == 0, pcData points to PNG/JPEG bytes) or
+          // uncompressed RGBA (mHeight > 0).
+          if (!texPath.empty() && texPath[0] == '*' && scene->mNumTextures > 0) {
+            int idx = atoi(texPath.c_str() + 1);
+            if (idx >= 0 && idx < (int)scene->mNumTextures) {
+              aiTexture *aiTex = scene->mTextures[idx];
+              Asset::Texture t;
+
+              if (aiTex->mHeight == 0) {
+                // compressed image in memory (mWidth == byte-size)
+                int w = 0, h = 0, comp = 0;
+                unsigned char *img = stbi_load_from_memory(
+                    (const unsigned char *)aiTex->pcData, (int)aiTex->mWidth, &w,
+                    &h, &comp, 4);
+                if (img) {
+                  t = LoadTextureFromMemory(img, w, h,
+                                             DXGI_FORMAT_R8G8B8A8_UNORM);
+                  stbi_image_free(img);
+                }
+              } else {
+                // uncompressed RGBA data
+                t = LoadTextureFromMemory(aiTex->pcData, aiTex->mWidth,
+                                          aiTex->mHeight,
+                                          DXGI_FORMAT_R8G8B8A8_UNORM);
+              }
+
+              if (!t.resource) {
+                fprintf(stderr, "Assimp: embedded texture load failed: %s\n",
+                        texPath.c_str());
+                return;
+              }
+
+              outIndex = (int)outTextures->size();
+              outTextures->push_back(std::move(t));
+              return;
+            }
+          }
+
+          // Fallback: file-backed texture path
           Asset::Texture t = LoadTextureFromFile(texPath);
           if (!t.resource) {
+            // If the material referenced a filename but the file doesn't
+            // exist on disk, Assimp may have embedded the image into
+            // scene->mTextures. Try to match by filename basename.
+            if (scene->mNumTextures > 0) {
+              std::string requestedName =
+                  std::filesystem::path(texPath).filename().string();
+              auto iequals = [](const std::string &a, const std::string &b) {
+                if (a.size() != b.size())
+                  return false;
+                for (size_t i = 0; i < a.size(); ++i)
+                  if (tolower((unsigned char)a[i]) !=
+                      tolower((unsigned char)b[i]))
+                    return false;
+                return true;
+              };
+
+              for (unsigned int ti = 0; ti < scene->mNumTextures; ++ti) {
+                aiTexture *aiTex = scene->mTextures[ti];
+                std::string aiName = aiTex->mFilename.C_Str();
+                std::string aiBase = std::filesystem::path(aiName).filename().string();
+                if (!aiBase.empty() && iequals(aiBase, requestedName)) {
+                  Asset::Texture embeddedTex;
+                  if (aiTex->mHeight == 0) {
+                    int w = 0, h = 0, comp = 0;
+                    unsigned char *img = stbi_load_from_memory(
+                        (const unsigned char *)aiTex->pcData,
+                        (int)aiTex->mWidth, &w, &h, &comp, 4);
+                    if (img) {
+                      embeddedTex =
+                          LoadTextureFromMemory(img, w, h,
+                                                DXGI_FORMAT_R8G8B8A8_UNORM);
+                      stbi_image_free(img);
+                    }
+                  } else {
+                    embeddedTex = LoadTextureFromMemory(aiTex->pcData,
+                                                        aiTex->mWidth,
+                                                        aiTex->mHeight,
+                                                        DXGI_FORMAT_R8G8B8A8_UNORM);
+                  }
+                  if (embeddedTex.resource) {
+                    outIndex = (int)outTextures->size();
+                    outTextures->push_back(std::move(embeddedTex));
+                    return;
+                  }
+                }
+              }
+            }
+
             fprintf(stderr, "Assimp: texture load failed: %s\n",
                     texPath.c_str());
             return;
