@@ -331,6 +331,8 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
 
     // Lighting
     float3 V = normalize(pos - input.worldPos);
+    // Two-sided shading guard for assets with inconsistent face orientation.
+    if (dot(N, V) < 0.0) N = -N;
     float3 L = normalize(lightDir.xyz);
     if (length(lightDir.xyz) < 0.001) L = float3(0, 1, 0); 
     float3 H = normalize(V + L);

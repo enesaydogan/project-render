@@ -7,6 +7,9 @@
     <ClCompile Include="D:\project-render\src\assets\tinygltf_impl.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\project-render\src\assets\skp_loader.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="D:\project-render\src\assets\asset_loader.h">

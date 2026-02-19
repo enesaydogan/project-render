@@ -250,6 +250,9 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     // Normal mapping
     float3 N = triPlanar ? SampleTriPlanarNormalLevel0(texNorm, P, worldNormal, triScale, triSharp, triNormStrength)
                          : GetNormalFromMap(uv, worldNormal, worldTangent, texNorm);
+    // Two-sided shading guard for reverse-oriented faces.
+    float3 viewDirTwoSided = normalize(-WorldRayDirection());
+    if (dot(N, viewDirTwoSided) < 0.0) N = -N;
     
     // Ambient occlusion (only needed for AO debug mode)
     float ao = 1.0;

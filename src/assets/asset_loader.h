@@ -99,6 +99,10 @@ using ProgressCallback = std::function<void(float, const std::string &)>;
 void SetProgressCallback(ProgressCallback cb);
 void ClearProgressCallback();
 
+// Expose current progress callback to importers that run in separate translation
+// units (used by skp_loader.cpp). Kept intentionally minimal.
+extern std::function<void(float, const std::string &)> s_progressCb;
+
 // Load a model based on extension (GLTF, OBJ, STL). Fills out created meshes in
 // `outMeshes`.
 bool LoadModel(const std::string &path, std::vector<GpuMesh> &outMeshes,
@@ -120,6 +124,12 @@ bool LoadOBJ(const std::string &path, std::vector<GpuMesh> &outMeshes,
 
 // Load an STL file. Returns true on success.
 bool LoadSTL(const std::string &path, std::vector<GpuMesh> &outMeshes,
+             std::vector<Material> *outMaterials = nullptr,
+             std::vector<Texture> *outTextures = nullptr,
+             const float *rootTranslation = nullptr);
+
+// Load a SketchUp (.skp) file. Requires BUILD option USE_SKETCHUP_SDK to be ON.
+bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
              std::vector<Material> *outMaterials = nullptr,
              std::vector<Texture> *outTextures = nullptr,
              const float *rootTranslation = nullptr);

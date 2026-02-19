@@ -86,7 +86,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\thirdparty\sketchup_sdk\headers;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /external:I "D:/project-render/thirdparty/oidn/include"</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
@@ -109,16 +109,16 @@
       <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
       <UseFullPaths>false</UseFullPaths>
       <WarningLevel>Level4</WarningLevel>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;USE_OIDN=1;USE_TINYGLTF=1;CMAKE_INTDIR="Debug"</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;USE_OIDN=1;USE_SKETCHUP_SDK=1;USE_TINYGLTF=1;CMAKE_INTDIR="Debug"</PreprocessorDefinitions>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
     </ClCompile>
     <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;USE_OIDN=1;USE_TINYGLTF=1;CMAKE_INTDIR=\"Debug\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;USE_OIDN=1;USE_SKETCHUP_SDK=1;USE_TINYGLTF=1;CMAKE_INTDIR=\"Debug\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\thirdparty\sketchup_sdk\headers;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\thirdparty\sketchup_sdk\headers;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -126,7 +126,7 @@
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <PostBuildEvent>
-      <Message>Copying OpenImageDenoise runtime binaries...		Copying vcpkg runtime binaries (miniz.dll)...</Message>
+      <Message>Copying OpenImageDenoise runtime binaries...		Copying SketchUp SDK runtime DLL...	Copying SketchUpCommonPreferences.dll to output...	Copying vcpkg runtime binaries (miniz.dll)...</Message>
       <Command>setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/oidn/bin/OpenImageDenoise.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_core.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cpu.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cuda.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_hip.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_sycl.dll D:/project-render/thirdparty/oidn/bin/sycl8.dll D:/project-render/thirdparty/oidn/bin/tbb12.dll D:/project-render/thirdparty/oidn/bin/tbbbind.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_0.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_5.dll D:/project-render/thirdparty/oidn/bin/ur_adapter_level_zero.dll D:/project-render/thirdparty/oidn/bin/ur_loader.dll D:/project-render/thirdparty/oidn/bin/ur_win_proxy_loader.dll D:/project-render/build/Debug/
 if %errorlevel% neq 0 goto :cmEnd
@@ -162,6 +162,24 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/sketchup_sdk/binaries/sketchup/x64/SketchUpAPI.dll D:/project-render/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/sketchup_sdk/binaries/sketchup/x64/SketchUpCommonPreferences.dll D:/project-render/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/repos/vcpkg/installed/x64-windows/debug/bin/miniz.dll D:/project-render/build/Debug/miniz.dll
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
@@ -172,9 +190,9 @@ exit /b %1
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PostBuildEvent>
     <Link>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;comctl32.lib;D:\project-render\thirdparty\oidn\lib\OpenImageDenoise.lib;Debug\imgui_staticd.lib;Debug\asset_loaderd.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\repos\vcpkg\installed\x64-windows\debug\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\debug\lib\miniz.lib;_deps\assimp-build\lib\Debug\assimp-vc143-mtd.lib;_deps\assimp-build\contrib\zlib\Debug\zlibstaticd.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;comctl32.lib;D:\project-render\thirdparty\oidn\lib\OpenImageDenoise.lib;Debug\imgui_staticd.lib;Debug\asset_loaderd.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\thirdparty\sketchup_sdk\binaries\sketchup\x64\SketchUpAPI.lib;D:\project-render\repos\vcpkg\installed\x64-windows\debug\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\debug\lib\miniz.lib;_deps\assimp-build\lib\Debug\assimp-vc143-mtd.lib;_deps\assimp-build\contrib\zlib\Debug\zlibstaticd.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64 /WHOLEARCHIVE:D:/project-render/build/Debug/asset_loaderd.lib</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
       <EntryPointSymbol>"WinMainCRTStartup"</EntryPointSymbol>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -192,7 +210,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\thirdparty\sketchup_sdk\headers;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /external:I "D:/project-render/thirdparty/oidn/include"</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
@@ -218,18 +236,18 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <UseFullPaths>false</UseFullPaths>
       <WarningLevel>Level4</WarningLevel>
       <WholeProgramOptimization>true</WholeProgramOptimization>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_OIDN=1;USE_TINYGLTF=1;CMAKE_INTDIR="Release"</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_OIDN=1;USE_SKETCHUP_SDK=1;USE_TINYGLTF=1;CMAKE_INTDIR="Release"</PreprocessorDefinitions>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <DebugInformationFormat>
       </DebugInformationFormat>
       <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
     </ClCompile>
     <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_OIDN=1;USE_TINYGLTF=1;CMAKE_INTDIR=\"Release\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_OIDN=1;USE_SKETCHUP_SDK=1;USE_TINYGLTF=1;CMAKE_INTDIR=\"Release\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\thirdparty\sketchup_sdk\headers;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\thirdparty\sketchup_sdk\headers;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -237,7 +255,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <PostBuildEvent>
-      <Message>Copying OpenImageDenoise runtime binaries...		Copying vcpkg runtime binaries (miniz.dll)...</Message>
+      <Message>Copying OpenImageDenoise runtime binaries...		Copying SketchUp SDK runtime DLL...	Copying SketchUpCommonPreferences.dll to output...	Copying vcpkg runtime binaries (miniz.dll)...</Message>
       <Command>setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/oidn/bin/OpenImageDenoise.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_core.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cpu.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cuda.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_hip.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_sycl.dll D:/project-render/thirdparty/oidn/bin/sycl8.dll D:/project-render/thirdparty/oidn/bin/tbb12.dll D:/project-render/thirdparty/oidn/bin/tbbbind.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_0.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_5.dll D:/project-render/thirdparty/oidn/bin/ur_adapter_level_zero.dll D:/project-render/thirdparty/oidn/bin/ur_loader.dll D:/project-render/thirdparty/oidn/bin/ur_win_proxy_loader.dll D:/project-render/build/Release/
 if %errorlevel% neq 0 goto :cmEnd
@@ -273,6 +291,24 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/sketchup_sdk/binaries/sketchup/x64/SketchUpAPI.dll D:/project-render/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/sketchup_sdk/binaries/sketchup/x64/SketchUpCommonPreferences.dll D:/project-render/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/repos/vcpkg/installed/x64-windows/bin/miniz.dll D:/project-render/build/Release/miniz.dll
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
@@ -283,9 +319,9 @@ exit /b %1
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PostBuildEvent>
     <Link>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;comctl32.lib;D:\project-render\thirdparty\oidn\lib\OpenImageDenoise.lib;Release\imgui_static.lib;Release\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\miniz.lib;_deps\assimp-build\lib\Release\assimp-vc143-mt.lib;_deps\assimp-build\contrib\zlib\Release\zlibstatic.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;comctl32.lib;D:\project-render\thirdparty\oidn\lib\OpenImageDenoise.lib;Release\imgui_static.lib;Release\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\thirdparty\sketchup_sdk\binaries\sketchup\x64\SketchUpAPI.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\miniz.lib;_deps\assimp-build\lib\Release\assimp-vc143-mt.lib;_deps\assimp-build\contrib\zlib\Release\zlibstatic.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64 /WHOLEARCHIVE:D:/project-render/build/Release/asset_loader.lib</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
       <EntryPointSymbol>"WinMainCRTStartup"</EntryPointSymbol>
       <GenerateDebugInformation>false</GenerateDebugInformation>
@@ -304,7 +340,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\thirdparty\sketchup_sdk\headers;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /external:I "D:/project-render/thirdparty/oidn/include"</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
@@ -326,18 +362,18 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
       <UseFullPaths>false</UseFullPaths>
       <WarningLevel>Level4</WarningLevel>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_OIDN=1;USE_TINYGLTF=1;CMAKE_INTDIR="MinSizeRel"</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_OIDN=1;USE_SKETCHUP_SDK=1;USE_TINYGLTF=1;CMAKE_INTDIR="MinSizeRel"</PreprocessorDefinitions>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <DebugInformationFormat>
       </DebugInformationFormat>
       <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
     </ClCompile>
     <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_OIDN=1;USE_TINYGLTF=1;CMAKE_INTDIR=\"MinSizeRel\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_OIDN=1;USE_SKETCHUP_SDK=1;USE_TINYGLTF=1;CMAKE_INTDIR=\"MinSizeRel\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\thirdparty\sketchup_sdk\headers;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\thirdparty\sketchup_sdk\headers;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -345,7 +381,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <PostBuildEvent>
-      <Message>Copying OpenImageDenoise runtime binaries...		Copying vcpkg runtime binaries (miniz.dll)...</Message>
+      <Message>Copying OpenImageDenoise runtime binaries...		Copying SketchUp SDK runtime DLL...	Copying SketchUpCommonPreferences.dll to output...	Copying vcpkg runtime binaries (miniz.dll)...</Message>
       <Command>setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/oidn/bin/OpenImageDenoise.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_core.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cpu.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cuda.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_hip.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_sycl.dll D:/project-render/thirdparty/oidn/bin/sycl8.dll D:/project-render/thirdparty/oidn/bin/tbb12.dll D:/project-render/thirdparty/oidn/bin/tbbbind.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_0.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_5.dll D:/project-render/thirdparty/oidn/bin/ur_adapter_level_zero.dll D:/project-render/thirdparty/oidn/bin/ur_loader.dll D:/project-render/thirdparty/oidn/bin/ur_win_proxy_loader.dll D:/project-render/build/MinSizeRel/
 if %errorlevel% neq 0 goto :cmEnd
@@ -381,6 +417,24 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/sketchup_sdk/binaries/sketchup/x64/SketchUpAPI.dll D:/project-render/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/sketchup_sdk/binaries/sketchup/x64/SketchUpCommonPreferences.dll D:/project-render/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/repos/vcpkg/installed/x64-windows/bin/miniz.dll D:/project-render/build/MinSizeRel/miniz.dll
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
@@ -391,9 +445,9 @@ exit /b %1
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PostBuildEvent>
     <Link>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;comctl32.lib;D:\project-render\thirdparty\oidn\lib\OpenImageDenoise.lib;MinSizeRel\imgui_static.lib;MinSizeRel\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\miniz.lib;_deps\assimp-build\lib\MinSizeRel\assimp-vc143-mt.lib;_deps\assimp-build\contrib\zlib\MinSizeRel\zlibstatic.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;comctl32.lib;D:\project-render\thirdparty\oidn\lib\OpenImageDenoise.lib;MinSizeRel\imgui_static.lib;MinSizeRel\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\thirdparty\sketchup_sdk\binaries\sketchup\x64\SketchUpAPI.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\miniz.lib;_deps\assimp-build\lib\MinSizeRel\assimp-vc143-mt.lib;_deps\assimp-build\contrib\zlib\MinSizeRel\zlibstatic.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64 /WHOLEARCHIVE:D:/project-render/build/MinSizeRel/asset_loader.lib</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
       <EntryPointSymbol>"WinMainCRTStartup"</EntryPointSymbol>
       <GenerateDebugInformation>false</GenerateDebugInformation>
@@ -411,7 +465,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\thirdparty\sketchup_sdk\headers;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /external:I "D:/project-render/thirdparty/oidn/include"</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
@@ -434,16 +488,16 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
       <UseFullPaths>false</UseFullPaths>
       <WarningLevel>Level4</WarningLevel>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_OIDN=1;USE_TINYGLTF=1;CMAKE_INTDIR="RelWithDebInfo"</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_OIDN=1;USE_SKETCHUP_SDK=1;USE_TINYGLTF=1;CMAKE_INTDIR="RelWithDebInfo"</PreprocessorDefinitions>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
     </ClCompile>
     <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_OIDN=1;USE_TINYGLTF=1;CMAKE_INTDIR=\"RelWithDebInfo\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;USE_OIDN=1;USE_SKETCHUP_SDK=1;USE_TINYGLTF=1;CMAKE_INTDIR=\"RelWithDebInfo\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\thirdparty\sketchup_sdk\headers;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\thirdparty\sketchup_sdk\headers;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -451,7 +505,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <PostBuildEvent>
-      <Message>Copying OpenImageDenoise runtime binaries...		Copying vcpkg runtime binaries (miniz.dll)...</Message>
+      <Message>Copying OpenImageDenoise runtime binaries...		Copying SketchUp SDK runtime DLL...	Copying SketchUpCommonPreferences.dll to output...	Copying vcpkg runtime binaries (miniz.dll)...</Message>
       <Command>setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/oidn/bin/OpenImageDenoise.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_core.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cpu.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cuda.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_hip.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_sycl.dll D:/project-render/thirdparty/oidn/bin/sycl8.dll D:/project-render/thirdparty/oidn/bin/tbb12.dll D:/project-render/thirdparty/oidn/bin/tbbbind.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_0.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_5.dll D:/project-render/thirdparty/oidn/bin/ur_adapter_level_zero.dll D:/project-render/thirdparty/oidn/bin/ur_loader.dll D:/project-render/thirdparty/oidn/bin/ur_win_proxy_loader.dll D:/project-render/build/RelWithDebInfo/
 if %errorlevel% neq 0 goto :cmEnd
@@ -487,6 +541,24 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/sketchup_sdk/binaries/sketchup/x64/SketchUpAPI.dll D:/project-render/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/sketchup_sdk/binaries/sketchup/x64/SketchUpCommonPreferences.dll D:/project-render/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/repos/vcpkg/installed/x64-windows/bin/miniz.dll D:/project-render/build/RelWithDebInfo/miniz.dll
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
@@ -497,9 +569,9 @@ exit /b %1
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PostBuildEvent>
     <Link>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;comctl32.lib;D:\project-render\thirdparty\oidn\lib\OpenImageDenoise.lib;RelWithDebInfo\imgui_static.lib;RelWithDebInfo\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\miniz.lib;_deps\assimp-build\lib\RelWithDebInfo\assimp-vc143-mt.lib;_deps\assimp-build\contrib\zlib\RelWithDebInfo\zlibstatic.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;comctl32.lib;D:\project-render\thirdparty\oidn\lib\OpenImageDenoise.lib;RelWithDebInfo\imgui_static.lib;RelWithDebInfo\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\thirdparty\sketchup_sdk\binaries\sketchup\x64\SketchUpAPI.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\miniz.lib;_deps\assimp-build\lib\RelWithDebInfo\assimp-vc143-mt.lib;_deps\assimp-build\contrib\zlib\RelWithDebInfo\zlibstatic.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64 /WHOLEARCHIVE:D:/project-render/build/RelWithDebInfo/asset_loader.lib</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
       <EntryPointSymbol>"WinMainCRTStartup"</EntryPointSymbol>
       <GenerateDebugInformation>true</GenerateDebugInformation>

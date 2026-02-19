@@ -28,6 +28,10 @@
 #include <tiny_gltf.h>
 #endif
 
+#ifdef USE_SKETCHUP_SDK
+#include <SketchUpAPI/initialize.h>
+#endif
+
 using Microsoft::WRL::ComPtr;
 
 // Access global runtime flags set by WinMain
@@ -48,11 +52,15 @@ namespace Asset {
 static ComPtr<ID3D12Device> s_device;
 static ComPtr<ID3D12CommandQueue> s_queue;
 // Optional progress callback. Signature: progress [0..1], status message
-static std::function<void(float, const std::string &)> s_progressCb;
+std::function<void(float, const std::string &)> s_progressCb;
 
 void Initialize(ID3D12Device *device, ID3D12CommandQueue *queue) {
   s_device = device;
   s_queue = queue;
+#ifdef USE_SKETCHUP_SDK
+  // Initialize SketchUp C API when SDK support is compiled in.
+  SUInitialize();
+#endif
 }
 
 void SetProgressCallback(ProgressCallback cb) { s_progressCb = cb; }
@@ -1567,7 +1575,10 @@ bool LoadModel(const std::string &path, std::vector<GpuMesh> &outMeshes,
   std::string ext = std::filesystem::path(path).extension().string();
   std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
-  if (ext == ".gltf" || ext == ".glb") {
+  if (ext == ".skp") {
+    return LoadSkp(path, outMeshes, outMaterials, outTextures,
+                   rootTranslation);
+  } else if (ext == ".gltf" || ext == ".glb") {
     return LoadGltf(path, outMeshes, outMaterials, outTextures,
                     rootTranslation);
   } else {
