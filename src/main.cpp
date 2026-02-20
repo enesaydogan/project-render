@@ -111,6 +111,11 @@ static ComPtr<ID3D12Resource> g_exportRenderTarget;
 static ComPtr<ID3D12DescriptorHeap> g_exportRtvHeap;
 static UINT g_exportRenderTargetWidth = 0;
 static UINT g_exportRenderTargetHeight = 0;
+static D3D12_RESOURCE_STATES g_exportRenderTargetState =
+    D3D12_RESOURCE_STATE_PRESENT;
+static D3D12_CPU_DESCRIPTOR_HANDLE g_exportPreviewSrvCpu = {0};
+static D3D12_GPU_DESCRIPTOR_HANDLE g_exportPreviewSrvGpu = {0};
+static bool g_exportPreviewSrvAllocated = false;
 
 static ComPtr<ID3D12DescriptorHeap> g_imguiHeap;
 DescriptorHeapAllocator g_cbvSrvAllocator;
@@ -1696,6 +1701,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     g_exportRtvHeap.Reset();
     g_exportRenderTargetWidth = 0;
     g_exportRenderTargetHeight = 0;
+    g_exportRenderTargetState = D3D12_RESOURCE_STATE_PRESENT;
 
     D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
     rtvHeapDesc.NumDescriptors = 1;
@@ -1737,11 +1743,30 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       return false;
     }
 
+    if (!g_exportPreviewSrvAllocated) {
+      DescriptorAllocation srvAlloc = g_cbvSrvAllocator.AllocatePersistent(1);
+      g_exportPreviewSrvCpu = srvAlloc.cpu;
+      g_exportPreviewSrvGpu = srvAlloc.gpu;
+      g_exportPreviewSrvAllocated = true;
+    }
+    if (g_exportPreviewSrvAllocated) {
+      D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+      srvDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
+      srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+      srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+      srvDesc.Texture2D.MostDetailedMip = 0;
+      srvDesc.Texture2D.MipLevels = 1;
+      srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+      g_device->CreateShaderResourceView(g_exportRenderTarget.Get(), &srvDesc,
+                                         g_exportPreviewSrvCpu);
+    }
+
     g_device->CreateRenderTargetView(
         g_exportRenderTarget.Get(), nullptr,
         g_exportRtvHeap->GetCPUDescriptorHandleForHeapStart());
     g_exportRenderTargetWidth = width;
     g_exportRenderTargetHeight = height;
+    g_exportRenderTargetState = D3D12_RESOURCE_STATE_PRESENT;
     return true;
   };
 
@@ -1769,6 +1794,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     g_exportRtvHeap.Reset();
     g_exportRenderTargetWidth = 0;
     g_exportRenderTargetHeight = 0;
+    g_exportRenderTargetState = D3D12_RESOURCE_STATE_PRESENT;
     UpdateCameraCB();
   };
 
@@ -2052,6 +2078,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                 g_texturesGpuStart, g_textureDescriptorCount, activeMeshes,
                 g_meshStructuredBuffer.Get());
         if (dxrOk) {
+          if (g_renderExportJob.active && dxrTarget == g_exportRenderTarget.Get()) {
+            g_exportRenderTargetState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+          }
           // Success DXR render - Draw Grid with depth checks
           if (!g_renderExportJob.active && g_drawGrid) {
             D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle =
@@ -2301,9 +2330,24 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     }
 
     // Render ImGui (Overlay on top of whatever was drawn)
+    if (g_renderExportJob.active && g_exportRenderTarget &&
+        g_exportPreviewSrvGpu.ptr != 0 &&
+        g_exportRenderTargetState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE) {
+      TR(g_commandList.Get(), g_exportRenderTarget.Get(),
+         g_exportRenderTargetState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+      g_exportRenderTargetState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    }
+
     ID3D12DescriptorHeap *ppHeaps[] = {g_cbvSrvAllocator.Heap()};
     g_commandList->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
     ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), g_commandList.Get());
+
+    if (g_renderExportJob.active && g_exportRenderTarget &&
+        g_exportRenderTargetState != D3D12_RESOURCE_STATE_PRESENT) {
+      TR(g_commandList.Get(), g_exportRenderTarget.Get(),
+         g_exportRenderTargetState, D3D12_RESOURCE_STATE_PRESENT);
+      g_exportRenderTargetState = D3D12_RESOURCE_STATE_PRESENT;
+    }
 
     // Transition back to present
     TR(g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
@@ -2660,6 +2704,30 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
     ImGuizmo::BeginFrame();
+
+    // Draw export preview directly into the main viewport (scaled to fit),
+    // so users can track render progress without opening a separate panel.
+    if (g_renderExportJob.active && g_exportPreviewSrvGpu.ptr != 0 &&
+        g_renderExportJob.targetHeight > 0) {
+      ImGuiViewport *vp = ImGui::GetMainViewport();
+      if (vp) {
+        const float srcAspect = (float)g_renderExportJob.targetWidth /
+                                (float)g_renderExportJob.targetHeight;
+        float drawW = vp->Size.x;
+        float drawH = drawW / srcAspect;
+        if (drawH > vp->Size.y) {
+          drawH = vp->Size.y;
+          drawW = drawH * srcAspect;
+        }
+        if (drawW > 0.0f && drawH > 0.0f) {
+          const ImVec2 pMin(vp->Pos.x + (vp->Size.x - drawW) * 0.5f,
+                            vp->Pos.y + (vp->Size.y - drawH) * 0.5f);
+          const ImVec2 pMax(pMin.x + drawW, pMin.y + drawH);
+          ImGui::GetBackgroundDrawList()->AddImage(
+              (ImTextureID)g_exportPreviewSrvGpu.ptr, pMin, pMax);
+        }
+      }
+    }
 
     // Main menu bar: Window menu + quick panel toggles on the bar for fast
     // access
