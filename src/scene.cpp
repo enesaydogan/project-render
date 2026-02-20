@@ -1214,8 +1214,7 @@ void DrawScenePanel(HWND hwnd, bool &visible) {
           ImGui::PushID((int)i);
           bool selected = s_nodes[i].selected;
           if (ImGui::Selectable(s_nodes[i].name.c_str(), selected,
-                                ImGuiSelectableFlags_SpanAllColumns |
-                                    ImGuiSelectableFlags_AllowItemOverlap)) {
+                                ImGuiSelectableFlags_SpanAllColumns)) {
             SelectNode(i);
           }
 

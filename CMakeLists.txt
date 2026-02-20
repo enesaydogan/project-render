@@ -10,7 +10,7 @@ target_sources(project-render PRIVATE
     src/camera.cpp 
     src/dxr_renderer.cpp 
     src/dxr_accumulation.cpp
-  src/streamline_manager.cpp
+    src/streamline_manager.cpp
     src/raster_renderer.cpp 
     src/file_import.cpp 
     src/scene.cpp 
@@ -23,7 +23,6 @@ target_sources(project-render PRIVATE
     src/clouds.cpp
     src/imgui_theme.cpp
     src/scene_io.cpp
-    src/render_exporter.cpp
 )
 
 if (MSVC)
@@ -33,7 +32,7 @@ if (MSVC)
   target_link_options(project-render PRIVATE $<$<CONFIG:Release>:/LTCG>)
 endif()
 
-target_link_libraries(project-render PRIVATE d3d12 dxgi dxguid)
+target_link_libraries(project-render PRIVATE d3d12 dxgi dxguid ole32 windowscodecs)
 
 # Link the D3D shader compiler for runtime shader compilation
 target_link_libraries(project-render PRIVATE d3dcompiler)
@@ -46,10 +45,9 @@ target_include_directories(project-render PRIVATE "${STREAMLINE_ROOT}/external/d
 target_include_directories(project-render PRIVATE "${STREAMLINE_ROOT}/include")
 target_include_directories(project-render PRIVATE "${STREAMLINE_ROOT}/external/json/include")
 
-# VCPKG headers (for stb_image_write, etc.)
+# vcpkg roots (used by asset_loader and runtime copy steps)
 set(VCPKG_ROOT "${CMAKE_SOURCE_DIR}/repos/vcpkg")
 set(VCPKG_INSTALLED_DIR "${VCPKG_ROOT}/installed/x64-windows")
-target_include_directories(project-render PRIVATE "${VCPKG_INSTALLED_DIR}/include")
 
 
 # Optional OpenImageDenoise support (GPU zero-copy requires building OIDN with
@@ -245,9 +243,7 @@ endif()
 
 target_include_directories(asset_loader PUBLIC src/assets)
 
-# VCPKG integration (since packages were installed into the local repos/vcpkg)
-set(VCPKG_ROOT "${CMAKE_SOURCE_DIR}/repos/vcpkg")
-set(VCPKG_INSTALLED_DIR "${VCPKG_ROOT}/installed/x64-windows")
+# vcpkg integration (packages installed under repos/vcpkg)
 target_include_directories(asset_loader PUBLIC 
     "${VCPKG_INSTALLED_DIR}/include"
     "${VCPKG_INSTALLED_DIR}/include/miniz"

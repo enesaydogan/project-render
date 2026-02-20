@@ -10,11 +10,13 @@
 #include "scene.h"
 #include "streamline_manager.h"
 #include <chrono>
+#include <cstdint>
 #include <cstdarg>
 #include <cstdio>
 #include <sstream>
 #include <unordered_map>
 #include <vector>
+#include <wincodec.h>
 #include <wrl.h>
 
 // Expose global debug flag (set by WinMain parsing)
@@ -235,6 +237,147 @@ static ComPtr<ID3D12DescriptorHeap> s_noiseStatsHeap;
 static float s_lastNoiseLevel = 0.0f;
 static bool s_noiseConvergedLatched = false;
 static bool s_cloudDescriptorsDone = false;
+static bool s_hasDenoised = false;
+
+static bool SaveRgba8ToPngWic(const std::wstring &filePath, UINT width,
+                              UINT height, const uint8_t *pixels,
+                              UINT rowStride) {
+  if (filePath.empty() || width == 0 || height == 0 || !pixels ||
+      rowStride == 0) {
+    return false;
+  }
+
+  HRESULT hrInit = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  const bool needsCoUninit = SUCCEEDED(hrInit);
+  if (FAILED(hrInit) && hrInit != RPC_E_CHANGED_MODE) {
+    return false;
+  }
+
+  bool success = false;
+  do {
+    auto LogFail = [&](const char *step, HRESULT hr) {
+      fprintf(stderr, "DxrRenderer: PNG export failed at %s (hr=0x%08x)\n",
+              step, (unsigned)hr);
+    };
+
+    ComPtr<IWICImagingFactory> factory;
+    HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr,
+                                  CLSCTX_INPROC_SERVER,
+                                  IID_PPV_ARGS(&factory));
+    if (FAILED(hr)) {
+      LogFail("CoCreateInstance(IWICImagingFactory)", hr);
+      break;
+    }
+
+    ComPtr<IWICStream> stream;
+    hr = factory->CreateStream(&stream);
+    if (FAILED(hr)) {
+      LogFail("CreateStream", hr);
+      break;
+    }
+
+    hr = stream->InitializeFromFilename(filePath.c_str(), GENERIC_WRITE);
+    if (FAILED(hr)) {
+      LogFail("InitializeFromFilename", hr);
+      break;
+    }
+
+    ComPtr<IWICBitmapEncoder> encoder;
+    hr = factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder);
+    if (FAILED(hr)) {
+      LogFail("CreateEncoder(PNG)", hr);
+      break;
+    }
+
+    hr = encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache);
+    if (FAILED(hr)) {
+      LogFail("Encoder::Initialize", hr);
+      break;
+    }
+
+    ComPtr<IWICBitmapFrameEncode> frame;
+    ComPtr<IPropertyBag2> props;
+    hr = encoder->CreateNewFrame(&frame, &props);
+    if (FAILED(hr)) {
+      LogFail("CreateNewFrame", hr);
+      break;
+    }
+
+    hr = frame->Initialize(props.Get());
+    if (FAILED(hr)) {
+      LogFail("Frame::Initialize", hr);
+      break;
+    }
+
+    hr = frame->SetSize(width, height);
+    if (FAILED(hr)) {
+      LogFail("Frame::SetSize", hr);
+      break;
+    }
+
+    // Use BGRA for widest encoder compatibility.
+    WICPixelFormatGUID pixelFormat = GUID_WICPixelFormat32bppBGRA;
+    hr = frame->SetPixelFormat(&pixelFormat);
+    if (FAILED(hr)) {
+      LogFail("Frame::SetPixelFormat", hr);
+      break;
+    }
+
+    if (!IsEqualGUID(pixelFormat, GUID_WICPixelFormat32bppBGRA) &&
+        !IsEqualGUID(pixelFormat, GUID_WICPixelFormat32bppRGBA)) {
+      fprintf(stderr,
+              "DxrRenderer: PNG export failed: unexpected pixel format after "
+              "SetPixelFormat.\n");
+      break;
+    }
+
+    std::vector<uint8_t> writeBuffer;
+    const uint8_t *writePixels = pixels;
+    UINT writeRowStride = rowStride;
+    if (IsEqualGUID(pixelFormat, GUID_WICPixelFormat32bppBGRA)) {
+      writeBuffer.resize((size_t)width * (size_t)height * 4u);
+      for (UINT y = 0; y < height; ++y) {
+        const uint8_t *src = pixels + (size_t)y * rowStride;
+        uint8_t *dst = writeBuffer.data() + (size_t)y * (size_t)width * 4u;
+        for (UINT x = 0; x < width; ++x) {
+          dst[x * 4 + 0] = src[x * 4 + 2];
+          dst[x * 4 + 1] = src[x * 4 + 1];
+          dst[x * 4 + 2] = src[x * 4 + 0];
+          dst[x * 4 + 3] = src[x * 4 + 3];
+        }
+      }
+      writePixels = writeBuffer.data();
+      writeRowStride = width * 4u;
+    }
+
+    const UINT imageBytes = writeRowStride * height;
+    hr = frame->WritePixels(height, writeRowStride, imageBytes,
+                            const_cast<BYTE *>(writePixels));
+    if (FAILED(hr)) {
+      LogFail("Frame::WritePixels", hr);
+      break;
+    }
+
+    hr = frame->Commit();
+    if (FAILED(hr)) {
+      LogFail("Frame::Commit", hr);
+      break;
+    }
+
+    hr = encoder->Commit();
+    if (FAILED(hr)) {
+      LogFail("Encoder::Commit", hr);
+      break;
+    }
+
+    success = true;
+  } while (false);
+
+  if (needsCoUninit) {
+    CoUninitialize();
+  }
+  return success;
+}
 
 namespace DxrRenderer {
 
@@ -245,6 +388,7 @@ struct NoiseStatsConstants {
 };
 
 float GetCurrentNoiseLevel() { return s_lastNoiseLevel; }
+bool HasDenoisedOutput() { return s_hasDenoised; }
 
 static void EnsureNoiseStatsPipeline();
 
@@ -1720,8 +1864,6 @@ void UpdateLights(const std::vector<GpuLight> &lights) {
   ResetAccumulation();
 }
 
-static bool s_hasDenoised = false;
-
 void ResetAccumulation() {
   s_accumulation.Reset();
   s_rrStillFrameSpp = 0;
@@ -2873,6 +3015,165 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   // Bind RTV for subsequent ImGui draws
   commandListBase->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
   return true;
+}
+
+bool ExportTonemappedFrameToPng(const std::wstring &filePath) {
+  if (filePath.empty() || !s_device || !s_commandQueue || !s_fence ||
+      !s_fenceValues || !s_frameIndexPtr || !s_fenceEvent ||
+      !s_tonemapOutputUAV) {
+    fprintf(stderr,
+            "DxrRenderer: ExportTonemappedFrameToPng precondition failed.\n");
+    return false;
+  }
+
+  ID3D12Resource *source = s_tonemapOutputUAV.Get();
+  const D3D12_RESOURCE_DESC srcDesc = source->GetDesc();
+  if (srcDesc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
+      srcDesc.Format != DXGI_FORMAT_R10G10B10A2_UNORM) {
+    fprintf(stderr,
+            "DxrRenderer: ExportTonemappedFrameToPng unsupported source "
+            "resource format.\n");
+    return false;
+  }
+
+  const UINT width = static_cast<UINT>(srcDesc.Width);
+  const UINT height = srcDesc.Height;
+  if (width == 0 || height == 0) {
+    fprintf(stderr, "DxrRenderer: ExportTonemappedFrameToPng invalid size.\n");
+    return false;
+  }
+  fprintf(stderr, "DxrRenderer: ExportTonemappedFrameToPng writing %ux%u\n",
+          width, height);
+
+  ComPtr<ID3D12CommandAllocator> cmdAlloc;
+  if (FAILED(s_device->CreateCommandAllocator(
+          D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&cmdAlloc)))) {
+    fprintf(stderr, "DxrRenderer: ExportTonemappedFrameToPng failed to create "
+                    "command allocator.\n");
+    return false;
+  }
+
+  ComPtr<ID3D12GraphicsCommandList> cmdList;
+  if (FAILED(s_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                         cmdAlloc.Get(), nullptr,
+                                         IID_PPV_ARGS(&cmdList)))) {
+    fprintf(stderr, "DxrRenderer: ExportTonemappedFrameToPng failed to create "
+                    "command list.\n");
+    return false;
+  }
+
+  D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
+  UINT numRows = 0;
+  UINT64 rowSizeInBytes = 0;
+  UINT64 totalBytes = 0;
+  s_device->GetCopyableFootprints(&srcDesc, 0, 1, 0, &footprint, &numRows,
+                                  &rowSizeInBytes, &totalBytes);
+  if (totalBytes == 0 || numRows == 0) {
+    fprintf(stderr, "DxrRenderer: ExportTonemappedFrameToPng invalid "
+                    "copyable footprint.\n");
+    return false;
+  }
+
+  D3D12_HEAP_PROPERTIES readbackHeap = {};
+  readbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
+
+  D3D12_RESOURCE_DESC readbackDesc = {};
+  readbackDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+  readbackDesc.Width = totalBytes;
+  readbackDesc.Height = 1;
+  readbackDesc.DepthOrArraySize = 1;
+  readbackDesc.MipLevels = 1;
+  readbackDesc.SampleDesc.Count = 1;
+  readbackDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+  ComPtr<ID3D12Resource> readback;
+  if (FAILED(s_device->CreateCommittedResource(
+          &readbackHeap, D3D12_HEAP_FLAG_NONE, &readbackDesc,
+          D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback)))) {
+    fprintf(stderr, "DxrRenderer: ExportTonemappedFrameToPng failed to create "
+                    "readback buffer.\n");
+    return false;
+  }
+
+  TransitionResource(cmdList.Get(), source, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                     D3D12_RESOURCE_STATE_COPY_SOURCE);
+
+  D3D12_TEXTURE_COPY_LOCATION srcLoc = {};
+  srcLoc.pResource = source;
+  srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+  srcLoc.SubresourceIndex = 0;
+
+  D3D12_TEXTURE_COPY_LOCATION dstLoc = {};
+  dstLoc.pResource = readback.Get();
+  dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+  dstLoc.PlacedFootprint = footprint;
+
+  cmdList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, nullptr);
+
+  TransitionResource(cmdList.Get(), source, D3D12_RESOURCE_STATE_COPY_SOURCE,
+                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+  if (FAILED(cmdList->Close())) {
+    fprintf(stderr, "DxrRenderer: ExportTonemappedFrameToPng failed to close "
+                    "command list.\n");
+    return false;
+  }
+
+  ID3D12CommandList *lists[] = {cmdList.Get()};
+  s_commandQueue->ExecuteCommandLists(1, lists);
+
+  const UINT fi = *s_frameIndexPtr;
+  const UINT64 fenceValue = s_fenceValues[fi] + 1000;
+  if (FAILED(s_commandQueue->Signal(s_fence, fenceValue))) {
+    fprintf(stderr, "DxrRenderer: ExportTonemappedFrameToPng failed to signal "
+                    "fence.\n");
+    return false;
+  }
+  s_fenceValues[fi] = fenceValue + 1;
+
+  if (s_fence->GetCompletedValue() < fenceValue) {
+    if (FAILED(s_fence->SetEventOnCompletion(fenceValue, s_fenceEvent))) {
+      fprintf(stderr, "DxrRenderer: ExportTonemappedFrameToPng "
+                      "SetEventOnCompletion failed.\n");
+      return false;
+    }
+    if (WaitForSingleObject(s_fenceEvent, 5000) == WAIT_TIMEOUT) {
+      fprintf(stderr, "DxrRenderer: ExportTonemappedFrameToPng wait timed "
+                      "out.\n");
+      return false;
+    }
+  }
+
+  uint8_t *mapped = nullptr;
+  if (FAILED(readback->Map(0, nullptr, reinterpret_cast<void **>(&mapped))) ||
+      !mapped) {
+    fprintf(stderr,
+            "DxrRenderer: ExportTonemappedFrameToPng failed to map readback.\n");
+    return false;
+  }
+
+  std::vector<uint8_t> rgba(width * height * 4);
+  const UINT srcPitch = footprint.Footprint.RowPitch;
+  for (UINT y = 0; y < height; ++y) {
+    const uint8_t *srcRow = mapped + footprint.Offset + y * srcPitch;
+    uint8_t *dstRow = rgba.data() + y * (width * 4);
+    const auto *srcPixels = reinterpret_cast<const uint32_t *>(srcRow);
+    for (UINT x = 0; x < width; ++x) {
+      const uint32_t packed = srcPixels[x];
+      const uint32_t r10 = packed & 0x3FFu;
+      const uint32_t g10 = (packed >> 10) & 0x3FFu;
+      const uint32_t b10 = (packed >> 20) & 0x3FFu;
+      const uint32_t a2 = (packed >> 30) & 0x3u;
+      dstRow[x * 4 + 0] = static_cast<uint8_t>((r10 * 255u + 511u) / 1023u);
+      dstRow[x * 4 + 1] = static_cast<uint8_t>((g10 * 255u + 511u) / 1023u);
+      dstRow[x * 4 + 2] = static_cast<uint8_t>((b10 * 255u + 511u) / 1023u);
+      dstRow[x * 4 + 3] = static_cast<uint8_t>((a2 * 255u + 1u) / 3u);
+    }
+  }
+
+  readback->Unmap(0, nullptr);
+
+  return SaveRgba8ToPngWic(filePath, width, height, rgba.data(), width * 4);
 }
 
 // Profiling functions
