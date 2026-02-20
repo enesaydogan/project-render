@@ -2,6 +2,7 @@
 #include "assets/asset_loader.h"
 #include "oidn_denoiser.h"
 #include <d3d12.h>
+#include <string>
 #include <vector>
 #include <wrl.h>
 
@@ -93,6 +94,12 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandList, ID3D12CommandAllocator 
 
 // Returns the last calculated average noise level (0.0 - 1.0+)
 float GetCurrentNoiseLevel();
+// Returns true once the one-shot end-condition denoiser output is available.
+bool HasDenoisedOutput();
+
+// Exports the latest tonemapped DXR frame to a PNG file.
+// The PNG is lossless (maximum quality by format design).
+bool ExportTonemappedFrameToPng(const std::wstring &filePath);
 } // namespace DxrRenderer
 
 extern bool g_rayTracingSupported;

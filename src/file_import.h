@@ -18,3 +18,5 @@ bool OpenSceneFileDialog(HWND owner, std::wstring &outPath);
 // Opens a Win32 file-save dialog for scene files. Returns true if a file was
 // chosen.
 bool SaveSceneFileDialog(HWND owner, std::wstring &outPath);
+// Opens a Win32 file-save dialog for rendered image export. Defaults to PNG.
+bool SaveRenderImageFileDialog(HWND owner, std::wstring &outPath);

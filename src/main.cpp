@@ -107,6 +107,10 @@ static UINT g_rtvDescriptorSize = 0;
 static ComPtr<ID3D12Resource> g_depthBuffer;
 static ComPtr<ID3D12DescriptorHeap> g_dsvHeap;
 static UINT g_dsvDescriptorSize = 0;
+static ComPtr<ID3D12Resource> g_exportRenderTarget;
+static ComPtr<ID3D12DescriptorHeap> g_exportRtvHeap;
+static UINT g_exportRenderTargetWidth = 0;
+static UINT g_exportRenderTargetHeight = 0;
 
 static ComPtr<ID3D12DescriptorHeap> g_imguiHeap;
 DescriptorHeapAllocator g_cbvSrvAllocator;
@@ -147,6 +151,48 @@ static std::string
 static int g_debugMode =
     0; // 0=None, 1=Albedo, 2=Normal, 3=Emissive, 4=Glossiness, 5=Refl. Color,
        // 6=Metalness, 7=AO, 8=Motion Vectors
+
+struct RenderResolutionPreset {
+  const char *label;
+  UINT width;
+  UINT height;
+};
+
+static const RenderResolutionPreset g_renderResolutionPresets[] = {
+    {"1280 x 720 (HD)", 1280, 720},
+    {"1920 x 1080 (Full HD)", 1920, 1080},
+    {"2560 x 1440 (QHD)", 2560, 1440},
+    {"3840 x 2160 (4K)", 3840, 2160},
+};
+
+struct RenderExportSettings {
+  int resolutionPreset = 1;
+  int maxSpp = 512;
+  float noisePercent = 5.0f;
+  int denoiserIndex = 1; // 0=Off, 1=OIDN CPU, 2=OIDN GPU
+};
+
+struct RenderExportJobState {
+  bool active = false;
+  bool completionArmed = false;
+  int completionFrames = 0;
+  int settleFramesRemaining = 0;
+  UINT minSppBeforeNoiseStop = 32;
+  std::wstring outputPath;
+  UINT targetWidth = 1920;
+  UINT targetHeight = 1080;
+  int targetMaxSpp = 512;
+  float targetNoiseThreshold = 0.05f;
+  RenderMode previousMode = RenderMode::Raster;
+  float previousMaxSpp = 200.0f;
+  float previousNoiseThreshold = 0.05f;
+  float previousAdaptiveSampling = 1.0f;
+  int previousDenoiserIndex = 0;
+};
+
+static RenderExportSettings g_renderExportSettings;
+static RenderExportJobState g_renderExportJob;
+static std::string g_renderExportStatus;
 
 static std::string WStringToUtf8(const std::wstring &ws) {
   if (ws.empty())
@@ -1123,6 +1169,14 @@ bool InitD3D12(HWND hwnd) {
   ApplyModernImGuiTheme();
   ImGuiIO &io = ImGui::GetIO();
   (void)io;
+  // Legacy ImGui DX12 init path does not advertise RendererHasTextures.
+  // Build the atlas up-front so first NewFrame doesn't hit font-atlas assert.
+  if (!io.Fonts->IsBuilt()) {
+    unsigned char *pixels = nullptr;
+    int width = 0;
+    int height = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+  }
   ImGui_ImplWin32_Init(hwnd);
   // Initialize DX12 backend with the main CBV/SRV/UAV heap so we can show
   // thumbnails using existing engine texture SRVs.
@@ -1608,8 +1662,200 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
   // Basic message loop + simple render
   MSG msg = {};
+  auto DenoiserModeFromIndex = [](int idx) -> DxrRenderer::DenoiserMode {
+    if (idx == 1)
+      return DxrRenderer::DenoiserMode::OIDN_CPU;
+    if (idx == 2)
+      return DxrRenderer::DenoiserMode::OIDN_GPU;
+    return DxrRenderer::DenoiserMode::Off;
+  };
+
+  auto DenoiserIndexFromMode = [](DxrRenderer::DenoiserMode mode) -> int {
+    switch (mode) {
+    case DxrRenderer::DenoiserMode::OIDN_CPU:
+      return 1;
+    case DxrRenderer::DenoiserMode::OIDN_GPU:
+      return 2;
+    default:
+      return 0;
+    }
+  };
+
+  auto EnsureExportRenderTarget = [&](UINT width, UINT height) -> bool {
+    if (!g_device || width == 0 || height == 0) {
+      return false;
+    }
+
+    if (g_exportRenderTarget && g_exportRtvHeap &&
+        g_exportRenderTargetWidth == width &&
+        g_exportRenderTargetHeight == height) {
+      return true;
+    }
+
+    g_exportRenderTarget.Reset();
+    g_exportRtvHeap.Reset();
+    g_exportRenderTargetWidth = 0;
+    g_exportRenderTargetHeight = 0;
+
+    D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
+    rtvHeapDesc.NumDescriptors = 1;
+    rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+    rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+    if (FAILED(
+            g_device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&g_exportRtvHeap)))) {
+      return false;
+    }
+
+    D3D12_RESOURCE_DESC rtDesc = {};
+    rtDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    rtDesc.Alignment = 0;
+    rtDesc.Width = width;
+    rtDesc.Height = height;
+    rtDesc.DepthOrArraySize = 1;
+    rtDesc.MipLevels = 1;
+    rtDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
+    rtDesc.SampleDesc.Count = 1;
+    rtDesc.SampleDesc.Quality = 0;
+    rtDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    rtDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+    D3D12_HEAP_PROPERTIES heapProps = {};
+    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    D3D12_CLEAR_VALUE clearValue = {};
+    clearValue.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
+    clearValue.Color[0] = 0.0f;
+    clearValue.Color[1] = 0.0f;
+    clearValue.Color[2] = 0.0f;
+    clearValue.Color[3] = 1.0f;
+
+    if (FAILED(g_device->CreateCommittedResource(
+            &heapProps, D3D12_HEAP_FLAG_NONE, &rtDesc,
+            D3D12_RESOURCE_STATE_PRESENT, &clearValue,
+            IID_PPV_ARGS(&g_exportRenderTarget)))) {
+      g_exportRtvHeap.Reset();
+      return false;
+    }
+
+    g_device->CreateRenderTargetView(
+        g_exportRenderTarget.Get(), nullptr,
+        g_exportRtvHeap->GetCPUDescriptorHandleForHeapStart());
+    g_exportRenderTargetWidth = width;
+    g_exportRenderTargetHeight = height;
+    return true;
+  };
+
+  auto RestoreRenderExportState = [&]() {
+    if (!g_renderExportJob.active) {
+      return;
+    }
+
+    g_cameraData.maxSPP = g_renderExportJob.previousMaxSpp;
+    g_cameraData.noiseThreshold = g_renderExportJob.previousNoiseThreshold;
+    g_cameraData.useAdaptiveSampling =
+        g_renderExportJob.previousAdaptiveSampling;
+    DxrRenderer::SetDenoiserMode(
+        DenoiserModeFromIndex(g_renderExportJob.previousDenoiserIndex));
+    g_currentRenderMode = g_renderExportJob.previousMode;
+
+    WaitGPUIdle();
+    DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
+    DxrRenderer::ResetAccumulation();
+    g_renderExportJob.active = false;
+    g_renderExportJob.completionArmed = false;
+    g_renderExportJob.completionFrames = 0;
+    g_renderExportJob.settleFramesRemaining = 0;
+    g_exportRenderTarget.Reset();
+    g_exportRtvHeap.Reset();
+    g_exportRenderTargetWidth = 0;
+    g_exportRenderTargetHeight = 0;
+    UpdateCameraCB();
+  };
+
+  auto StartRenderExportJob = [&](const std::wstring &outputPath) {
+    if (g_renderExportJob.active || outputPath.empty() || !g_rayTracingSupported) {
+      return;
+    }
+
+    int presetIndex = g_renderExportSettings.resolutionPreset;
+    if (presetIndex < 0 ||
+        presetIndex >= (int)IM_ARRAYSIZE(g_renderResolutionPresets)) {
+      presetIndex = 0;
+    }
+
+    g_renderExportJob.active = true;
+    g_renderExportJob.outputPath = outputPath;
+    g_renderExportJob.targetWidth =
+        g_renderResolutionPresets[presetIndex].width;
+    g_renderExportJob.targetHeight =
+        g_renderResolutionPresets[presetIndex].height;
+    g_renderExportJob.targetMaxSpp =
+        (g_renderExportSettings.maxSpp < 1) ? 1 : g_renderExportSettings.maxSpp;
+    g_renderExportJob.targetNoiseThreshold =
+        (g_renderExportSettings.noisePercent <= 0.0f)
+            ? 0.001f
+            : (g_renderExportSettings.noisePercent / 100.0f);
+    g_renderExportJob.minSppBeforeNoiseStop =
+        (g_renderExportJob.targetMaxSpp < 32) ? (UINT)g_renderExportJob.targetMaxSpp : 32u;
+    if (g_renderExportJob.minSppBeforeNoiseStop < 8u) {
+      g_renderExportJob.minSppBeforeNoiseStop = 8u;
+    }
+    g_renderExportJob.completionArmed = false;
+    g_renderExportJob.completionFrames = 0;
+    g_renderExportJob.settleFramesRemaining = 0;
+    if (g_renderExportSettings.denoiserIndex < 0 ||
+        g_renderExportSettings.denoiserIndex > 2) {
+      g_renderExportSettings.denoiserIndex = 0;
+    }
+    g_renderExportJob.previousMode = g_currentRenderMode;
+    g_renderExportJob.previousMaxSpp = g_cameraData.maxSPP;
+    g_renderExportJob.previousNoiseThreshold = g_cameraData.noiseThreshold;
+    g_renderExportJob.previousAdaptiveSampling = g_cameraData.useAdaptiveSampling;
+    g_renderExportJob.previousDenoiserIndex =
+        DenoiserIndexFromMode(DxrRenderer::GetDenoiserMode());
+
+    g_currentRenderMode = RenderMode::DXR;
+    g_cameraData.maxSPP = (float)g_renderExportJob.targetMaxSpp;
+    g_cameraData.noiseThreshold = g_renderExportJob.targetNoiseThreshold;
+    g_cameraData.useAdaptiveSampling = 1.0f;
+    DxrRenderer::SetDenoiserMode(
+        DenoiserModeFromIndex(g_renderExportSettings.denoiserIndex));
+
+    if (!EnsureExportRenderTarget(g_renderExportJob.targetWidth,
+                                  g_renderExportJob.targetHeight)) {
+      g_renderExportStatus = "Failed to allocate export render target.";
+      g_cameraData.maxSPP = g_renderExportJob.previousMaxSpp;
+      g_cameraData.noiseThreshold = g_renderExportJob.previousNoiseThreshold;
+      g_cameraData.useAdaptiveSampling =
+          g_renderExportJob.previousAdaptiveSampling;
+      DxrRenderer::SetDenoiserMode(
+          DenoiserModeFromIndex(g_renderExportJob.previousDenoiserIndex));
+      g_currentRenderMode = g_renderExportJob.previousMode;
+      g_renderExportJob.active = false;
+      UpdateCameraCB();
+      return;
+    }
+
+    WaitGPUIdle();
+    DxrRenderer::CreateRayTracingPipeline(g_renderExportJob.targetWidth,
+                                          g_renderExportJob.targetHeight);
+    DxrRenderer::ResetAccumulation();
+    UpdateCameraCB();
+
+    g_renderExportStatus = "Rendering...";
+    fprintf(stderr, "Render export started: %ux%u, maxSPP=%d, noise=%.3f, "
+                    "denoiser=%d\n",
+            g_renderExportJob.targetWidth, g_renderExportJob.targetHeight,
+            g_renderExportJob.targetMaxSpp,
+            g_renderExportJob.targetNoiseThreshold,
+            g_renderExportSettings.denoiserIndex);
+  };
 
   auto PopulateCommandList = [&]() {
+    if (g_renderExportJob.active) {
+      g_currentRenderMode = RenderMode::DXR;
+    }
+
     // Update Sky Parameters (Run every frame to ensure consistency)
     {
       const float PI = 3.14159265f;
@@ -1791,16 +2037,23 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           }
         }
 
+        ID3D12Resource *dxrTarget = g_renderTargets[g_frameIndex].Get();
+        D3D12_CPU_DESCRIPTOR_HANDLE dxrRtv = rtvHandle;
+        if (g_renderExportJob.active && g_exportRenderTarget && g_exportRtvHeap) {
+          dxrTarget = g_exportRenderTarget.Get();
+          dxrRtv = g_exportRtvHeap->GetCPUDescriptorHandleForHeapStart();
+        }
+
         bool dxrOk = DxrRenderer::RenderFrame(
                 g_commandList.Get(),
                 g_frameResources[g_frameIndex].commandAllocator.Get(),
-                g_frameIndex, g_renderTargets[g_frameIndex].Get(), rtvHandle,
+                g_frameIndex, dxrTarget, dxrRtv,
                 g_cameraConstantBuffer.Get(), g_materialStructuredBuffer.Get(),
                 g_texturesGpuStart, g_textureDescriptorCount, activeMeshes,
                 g_meshStructuredBuffer.Get());
         if (dxrOk) {
           // Success DXR render - Draw Grid with depth checks
-          if (g_drawGrid) {
+          if (!g_renderExportJob.active && g_drawGrid) {
             D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle =
                 g_dsvHeap->GetCPUDescriptorHandleForHeapStart();
             g_commandList->ClearDepthStencilView(
@@ -1818,6 +2071,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
             RasterRenderer::DrawGrid(g_commandList.Get(),
                                      g_cameraConstantBuffer.Get());
+          }
+          if (g_renderExportJob.active) {
+            TR(g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
+               D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            FLOAT clearColor[] = {0.08f, 0.08f, 0.09f, 1.0f};
+            g_commandList->ClearRenderTargetView(rtvHandle, clearColor, 0,
+                                                 nullptr);
+            g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
           }
         } else {
           // If RenderFrame failed, fall back to red clear
@@ -2318,6 +2579,56 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       DxrRenderer::ResetAccumulation();
     }
 
+    if (g_renderExportJob.active) {
+      g_currentRenderMode = RenderMode::DXR;
+
+      const UINT currentSpp = DxrRenderer::GetDisplayedSampleCount();
+      const float currentNoise = DxrRenderer::GetCurrentNoiseLevel();
+      const bool sppDone = currentSpp >= (UINT)g_renderExportJob.targetMaxSpp;
+      const bool noiseDone =
+          (currentSpp >= g_renderExportJob.minSppBeforeNoiseStop) &&
+          (currentNoise > 0.0f) &&
+          (currentNoise <= g_renderExportJob.targetNoiseThreshold * 0.90f);
+
+      const bool reachedEnd = sppDone || noiseDone;
+
+      if (reachedEnd && !g_renderExportJob.completionArmed) {
+        g_renderExportJob.completionArmed = true;
+        g_renderExportJob.completionFrames = 0;
+        g_renderExportJob.settleFramesRemaining =
+            (g_renderExportSettings.denoiserIndex == 0) ? 1 : 3;
+      }
+
+      if (g_renderExportJob.completionArmed) {
+        ++g_renderExportJob.completionFrames;
+        if (g_renderExportJob.settleFramesRemaining > 0) {
+          --g_renderExportJob.settleFramesRemaining;
+        } else {
+          const bool denoiserEnabled = (g_renderExportSettings.denoiserIndex != 0);
+          const bool denoisedReady = DxrRenderer::HasDenoisedOutput();
+          // Wait for the one-shot denoiser to produce output. Keep a timeout so
+          // export cannot hang forever on denoiser failures.
+          if (denoiserEnabled && !denoisedReady &&
+              g_renderExportJob.completionFrames < 240) {
+            // keep waiting
+          } else {
+          const bool exported = DxrRenderer::ExportTonemappedFrameToPng(
+              g_renderExportJob.outputPath);
+          const std::string outPathUtf8 =
+              WStringToUtf8(g_renderExportJob.outputPath);
+          if (exported) {
+            g_renderExportStatus = "Saved: " + outPathUtf8;
+            fprintf(stderr, "Render export finished: %s\n", outPathUtf8.c_str());
+          } else {
+            g_renderExportStatus = "Export failed: " + outPathUtf8;
+            fprintf(stderr, "Render export failed: %s\n", outPathUtf8.c_str());
+          }
+          RestoreRenderExportState();
+          }
+        }
+      }
+    }
+
     // Update camera forward from yaw/pitch
     g_cameraData.forward[0] = (cosf(g_camPitch) * sinf(g_camYaw));
     g_cameraData.forward[1] = sinf(g_camPitch);
@@ -2470,6 +2781,107 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       ImGui::SameLine();
       ImGui::Text("Material Editor");
       ImGui::PopStyleVar();
+
+      const float renderButtonWidth = 120.0f;
+      const float rightPadding = 12.0f;
+      const float rightX =
+          ImGui::GetWindowWidth() - renderButtonWidth - rightPadding;
+      if (rightX > ImGui::GetCursorPosX()) {
+        ImGui::SetCursorPosX(rightX);
+      }
+
+      if (!g_rayTracingSupported) {
+        ImGui::BeginDisabled();
+      }
+      if (ImGui::Button(g_renderExportJob.active ? "Rendering..." : "Render",
+                        ImVec2(renderButtonWidth, 0))) {
+        ImGui::OpenPopup("Render Export");
+      }
+      if (!g_rayTracingSupported) {
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered()) {
+          ImGui::SetTooltip("DXR is not supported on this device.");
+        }
+      }
+
+      if (ImGui::BeginPopup("Render Export")) {
+        ImGui::TextUnformatted("DXR Render Settings");
+        ImGui::Separator();
+
+        const int presetCount = (int)IM_ARRAYSIZE(g_renderResolutionPresets);
+        if (g_renderExportSettings.resolutionPreset < 0 ||
+            g_renderExportSettings.resolutionPreset >= presetCount) {
+          g_renderExportSettings.resolutionPreset = 0;
+        }
+
+        const RenderResolutionPreset &activePreset =
+            g_renderResolutionPresets[g_renderExportSettings.resolutionPreset];
+        if (ImGui::BeginCombo("Render Resolution", activePreset.label)) {
+          for (int i = 0; i < presetCount; ++i) {
+            const bool selected = (i == g_renderExportSettings.resolutionPreset);
+            if (ImGui::Selectable(g_renderResolutionPresets[i].label, selected)) {
+              g_renderExportSettings.resolutionPreset = i;
+            }
+            if (selected) {
+              ImGui::SetItemDefaultFocus();
+            }
+          }
+          ImGui::EndCombo();
+        }
+
+        ImGui::SliderInt("Max SPP", &g_renderExportSettings.maxSpp, 16, 4096);
+        ImGui::SliderFloat("Noise %", &g_renderExportSettings.noisePercent, 0.1f,
+                           30.0f, "%.2f%%");
+
+        const char *denoisers[] = {"Off", "OIDN (CPU)", "OIDN (GPU)"};
+        ImGui::Combo("Denoiser", &g_renderExportSettings.denoiserIndex,
+                     denoisers, IM_ARRAYSIZE(denoisers));
+
+        if (g_renderExportJob.active) {
+          const UINT spp = DxrRenderer::GetDisplayedSampleCount();
+          const float noise = DxrRenderer::GetCurrentNoiseLevel();
+          const bool denoiserEnabled = (g_renderExportSettings.denoiserIndex != 0);
+          ImGui::Separator();
+          ImGui::Text("Progress: %u / %d SPP", spp,
+                      g_renderExportJob.targetMaxSpp);
+          ImGui::Text("Output: %u x %u", g_renderExportJob.targetWidth,
+                      g_renderExportJob.targetHeight);
+          if (noise > 0.0f) {
+            ImGui::Text("Noise: %.2f%% / %.2f%%", noise * 100.0f,
+                        g_renderExportJob.targetNoiseThreshold * 100.0f);
+          } else {
+            ImGui::Text("Noise: Calculating...");
+          }
+          ImGui::Text("Min SPP before noise-stop: %u",
+                      g_renderExportJob.minSppBeforeNoiseStop);
+          if (denoiserEnabled) {
+            ImGui::Text("Denoiser output: %s",
+                        DxrRenderer::HasDenoisedOutput() ? "Ready" : "Waiting");
+          }
+          if (g_renderExportJob.completionArmed) {
+            ImGui::Text("Finalizing... (%d)", g_renderExportJob.settleFramesRemaining);
+          }
+
+          if (ImGui::Button("Cancel Render")) {
+            g_renderExportStatus = "Render canceled.";
+            RestoreRenderExportState();
+          }
+        } else {
+          if (ImGui::Button("Render and Export PNG...")) {
+            std::wstring chosenPath;
+            if (SaveRenderImageFileDialog(g_hwnd, chosenPath)) {
+              StartRenderExportJob(chosenPath);
+            }
+          }
+        }
+
+        if (!g_renderExportStatus.empty()) {
+          ImGui::Separator();
+          ImGui::TextWrapped("%s", g_renderExportStatus.c_str());
+        }
+
+        ImGui::EndPopup();
+      }
 
       ImGui::EndMainMenuBar();
     }

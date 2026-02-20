@@ -88,3 +88,21 @@ bool SaveSceneFileDialog(HWND owner, std::wstring &outPath) {
   }
   return false;
 }
+
+bool SaveRenderImageFileDialog(HWND owner, std::wstring &outPath) {
+  OPENFILENAMEW ofn = {};
+  WCHAR szFile[1024] = {L"render.png"};
+  ofn.lStructSize = sizeof(OPENFILENAMEW);
+  ofn.hwndOwner = owner;
+  ofn.lpstrFile = szFile;
+  ofn.nMaxFile = (DWORD)std::size(szFile);
+  ofn.Flags = OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR |
+              OFN_OVERWRITEPROMPT;
+  ofn.lpstrFilter = L"PNG image\0*.png\0All files\0*.*\0";
+  ofn.lpstrDefExt = L"png";
+  if (GetSaveFileNameW(&ofn)) {
+    outPath = szFile;
+    return true;
+  }
+  return false;
+}
