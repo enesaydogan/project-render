@@ -205,7 +205,14 @@ void RestoreRenderExportState() {
       DenoiserModeFromIndex(g_renderExportJob.previousDenoiserIndex));
   g_currentRenderMode = g_renderExportJob.previousMode;
 
+  // Restore Streamline/DLSS state that was disabled for export so we
+  // recompute noise statistics correctly.
+  DX12Context::g_streamline.SetMode((StreamlineManager::Mode)g_renderExportJob.previousStreamlineMode);
+  DX12Context::g_streamline.SetQuality((StreamlineManager::Quality)g_renderExportJob.previousStreamlineQuality);
+  DX12Context::g_streamline.SetEnabled(g_renderExportJob.previousStreamlineEnabled);
+
   WaitGPUIdle();
+  DxrRenderer::ResetStreamlineHistory();
   DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
   DxrRenderer::ResetAccumulation();
   g_renderExportJob.active = false;
@@ -263,6 +270,19 @@ void StartRenderExportJob(const std::wstring &outputPath) {
   g_renderExportJob.previousDenoiserIndex =
       DenoiserIndexFromMode(DxrRenderer::GetDenoiserMode());
 
+    // Save Streamline/DLSS state so we can disable it for the export (this
+    // allows noise statistics to be computed even when DLSS-RR would normally
+    // bypass accumulation). We'll restore these in RestoreRenderExportState().
+    g_renderExportJob.previousStreamlineEnabled =
+      DX12Context::g_streamline.IsEnabled();
+    g_renderExportJob.previousStreamlineMode =
+      (int)DX12Context::g_streamline.GetMode();
+    g_renderExportJob.previousStreamlineQuality =
+      (int)DX12Context::g_streamline.GetQuality();
+    if (g_renderExportJob.previousStreamlineEnabled) {
+    DX12Context::g_streamline.SetEnabled(false);
+    }
+
   g_currentRenderMode = RenderMode::DXR;
   g_cameraData.maxSPP = (float)g_renderExportJob.targetMaxSpp;
   g_cameraData.noiseThreshold = g_renderExportJob.targetNoiseThreshold;
@@ -280,6 +300,10 @@ void StartRenderExportJob(const std::wstring &outputPath) {
     DxrRenderer::SetDenoiserMode(
         DenoiserModeFromIndex(g_renderExportJob.previousDenoiserIndex));
     g_currentRenderMode = g_renderExportJob.previousMode;
+    // Restore Streamline/DLSS state if we disabled it earlier
+    DX12Context::g_streamline.SetMode((StreamlineManager::Mode)g_renderExportJob.previousStreamlineMode);
+    DX12Context::g_streamline.SetQuality((StreamlineManager::Quality)g_renderExportJob.previousStreamlineQuality);
+    DX12Context::g_streamline.SetEnabled(g_renderExportJob.previousStreamlineEnabled);
     g_renderExportJob.active = false;
     UpdateCameraCB();
     return;

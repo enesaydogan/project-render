@@ -35,6 +35,11 @@ struct RenderExportJobState {
   float previousNoiseThreshold = 0.05f;
   float previousAdaptiveSampling = 1.0f;
   int previousDenoiserIndex = 0;
+  // Streamline (DLSS) state saved/restored during export so noise can be
+  // calculated even when DLSS-RR is normally active.
+  bool previousStreamlineEnabled = false;
+  int previousStreamlineMode = 0;
+  int previousStreamlineQuality = 1;
 };
 
 // Resolution presets (defined in editor_ui.cpp)
