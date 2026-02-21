@@ -301,21 +301,132 @@ if(MSVC)
   target_link_options(project-render PRIVATE "/WHOLEARCHIVE:$<TARGET_FILE:asset_loader>")
 endif()
 
-# Add the Prague Sky Model compute shader to the build
-set(PRAGUE_SKY_SHADER "shaders/prague_sky_cs.hlsl")
-if (EXISTS "${CMAKE_SOURCE_DIR}/${PRAGUE_SKY_SHADER}")
-  source_group("Shaders" FILES ${PRAGUE_SKY_SHADER})
+# Instead of shipping plain text HLSL, compile shaders to bytecode
+# files (.cso) at build time and distribute those.  The runtime loader
+# (in dxc_wrapper.cpp) will prefer .cso blobs when available.
+#
+set(SHADER_SOURCE_DIR "${CMAKE_SOURCE_DIR}/shaders")
+set(SHADER_BINARY_DIR "${CMAKE_BINARY_DIR}/shaders")
+file(GLOB_RECURSE SHADER_ALL_INPUTS CONFIGURE_DEPENDS
+    "${SHADER_SOURCE_DIR}/*.hlsl"
+    "${SHADER_SOURCE_DIR}/*.hlsli"
+)
 
-  # Ensure the shader is copied to the output directory
-  add_custom_command(
-      TARGET project-render POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              ${CMAKE_SOURCE_DIR}/${PRAGUE_SKY_SHADER}
-              $<TARGET_FILE_DIR:project-render>
+# Locate DXC on the path and build a handful of known entrypoint/profile
+# combinations.
+find_program(DXC_COMPILER dxc HINTS ENV PATH)
+if(DXC_COMPILER)
+  message(STATUS "Found DXC compiler: ${DXC_COMPILER}")
+
+  # Build compile list automatically from discovered entry points.
+  # Format per entry: "relative_file|entry_point|profile".
+  set(SHADER_COMPILE_LIST)
+  file(GLOB_RECURSE SHADER_HLSL_FILES CONFIGURE_DEPENDS
+      "${SHADER_SOURCE_DIR}/*.hlsl"
   )
+  foreach(shader_path IN LISTS SHADER_HLSL_FILES)
+    file(RELATIVE_PATH shader_rel "${SHADER_SOURCE_DIR}" "${shader_path}")
+    file(READ "${shader_path}" shader_text)
+
+    # DXR library translation unit.
+    if(shader_rel STREQUAL "raytracing.hlsl")
+      list(APPEND SHADER_COMPILE_LIST "${shader_rel}||lib_6_3")
+    endif()
+
+    string(REGEX MATCHALL "VSMain[A-Za-z0-9_]*[ \t\r\n]*\\(" vs_matches "${shader_text}")
+    foreach(raw IN LISTS vs_matches)
+      string(REGEX REPLACE "[ \t\r\n]*\\($" "" entry "${raw}")
+      list(APPEND SHADER_COMPILE_LIST "${shader_rel}|${entry}|vs_6_0")
+    endforeach()
+
+    string(REGEX MATCHALL "PSMain[A-Za-z0-9_]*[ \t\r\n]*\\(" ps_matches "${shader_text}")
+    foreach(raw IN LISTS ps_matches)
+      string(REGEX REPLACE "[ \t\r\n]*\\($" "" entry "${raw}")
+      list(APPEND SHADER_COMPILE_LIST "${shader_rel}|${entry}|ps_6_0")
+    endforeach()
+
+    string(REGEX MATCHALL "CSMain[A-Za-z0-9_]*[ \t\r\n]*\\(" cs_matches "${shader_text}")
+    foreach(raw IN LISTS cs_matches)
+      string(REGEX REPLACE "[ \t\r\n]*\\($" "" entry "${raw}")
+      list(APPEND SHADER_COMPILE_LIST "${shader_rel}|${entry}|cs_6_3")
+    endforeach()
+  endforeach()
+  list(REMOVE_DUPLICATES SHADER_COMPILE_LIST)
+
+  set(COMPILED_SHADERS)
+  foreach(entry IN LISTS SHADER_COMPILE_LIST)
+    # convert pipe-separated string into a proper CMake list by swapping | for ;
+    string(REPLACE "|" ";" parts "${entry}")
+    if(NOT parts)
+      message(WARNING "Empty shader list entry encountered, skipping")
+      continue()
+    endif()
+
+    list(GET parts 0 file)
+    list(GET parts 1 ep)
+    list(GET parts 2 profile)
+
+    set(src "${SHADER_SOURCE_DIR}/${file}")
+    if(NOT EXISTS "${src}")
+      message(WARNING "Shader source not found at ${src}; skipping compile.")
+      continue()
+    endif()
+
+    get_filename_component(base "${file}" NAME_WE)
+    set(out "${SHADER_BINARY_DIR}/${base}_${ep}_${profile}.cso")
+
+    set(dxc_args -T ${profile})
+    if(NOT ep STREQUAL "")
+      list(APPEND dxc_args -E ${ep})
+    endif()
+    list(APPEND dxc_args -Fo "${out}" "${src}")
+
+    set(entry_label "${ep}")
+    if(entry_label STREQUAL "")
+      set(entry_label "<library>")
+    endif()
+
+    add_custom_command(
+      OUTPUT "${out}"
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_BINARY_DIR}"
+      COMMAND ${DXC_COMPILER} ${dxc_args}
+      DEPENDS "${src}" ${SHADER_ALL_INPUTS}
+      COMMENT "Compiling shader ${file} [${entry_label},${profile}]"
+    )
+    list(APPEND COMPILED_SHADERS "${out}")
+  endforeach()
+
+  if(COMPILED_SHADERS)
+    add_custom_target(compile_shaders ALL DEPENDS ${COMPILED_SHADERS})
+    add_dependencies(project-render compile_shaders)
+  endif()
 else()
-  message(WARNING "Prague sky shader not found at ${CMAKE_SOURCE_DIR}/${PRAGUE_SKY_SHADER} — skipping copy.")
+  message(WARNING "DXC compiler not found; shaders will be compiled at runtime")
 endif()
+
+# Copy only compiled shader bytecode to the runtime folder.
+if(DXC_COMPILER)
+  add_custom_command(TARGET project-render POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E rm -rf
+          "$<TARGET_FILE_DIR:project-render>/shaders"
+      COMMAND ${CMAKE_COMMAND} -E make_directory
+          "$<TARGET_FILE_DIR:project-render>/shaders"
+      COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${SHADER_BINARY_DIR}"
+          "$<TARGET_FILE_DIR:project-render>/shaders"
+      COMMENT "Copying compiled shader blobs..."
+  )
+endif()
+
+# Bring the assets directory along so models, textures, and
+# other external data can be referenced by the executable from the
+# build output without manual copying.
+add_custom_command(TARGET project-render POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/assets"
+        "$<TARGET_FILE_DIR:project-render>/assets"
+    COMMENT "Copying assets folder..."
+)
 
 # Build as a console app to allow output to be piped to the terminal.
 # set_target_properties(project-render PROPERTIES WIN32_EXECUTABLE TRUE)
