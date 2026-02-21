@@ -4,6 +4,9 @@
     <ClCompile Include="D:\project-render\src\main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\project-render\src\editor_ui.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="D:\project-render\src\camera.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
