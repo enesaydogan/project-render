@@ -1,6 +1,7 @@
 #pragma once
 
 #include <d3d12.h>
+#include <cstdio>
 #include <cwchar>
 #include <iostream>
 #include <stdexcept>
@@ -66,6 +67,27 @@ public:
                            const std::wstring &entryPoint,
                            const std::wstring &profiles,
                            const std::vector<std::wstring> &defines = {}) {
+    const std::string filenameUtf8 = WStringToUtf8(filename);
+    const std::string entryUtf8 =
+        entryPoint.empty() ? std::string("<library>") : WStringToUtf8(entryPoint);
+    const std::string profileUtf8 = WStringToUtf8(profiles);
+
+    std::string defineList;
+    for (size_t i = 0; i < defines.size(); ++i) {
+      if (i > 0) {
+        defineList += ",";
+      }
+      defineList += WStringToUtf8(defines[i]);
+    }
+    if (defineList.empty()) {
+      defineList = "<none>";
+    }
+
+    const std::string shaderTag = "file=\"" + filenameUtf8 + "\" entry=\"" +
+                                  entryUtf8 + "\" profile=\"" + profileUtf8 +
+                                  "\" defines=\"" + defineList + "\"";
+    LogShaderCompileMessage("ShaderCompile START: " + shaderTag);
+
     std::vector<LPCWSTR> args;
 
     // Basic arguments
@@ -106,7 +128,9 @@ public:
     // Load source
     ComPtr<IDxcBlobEncoding> pSource;
     if (FAILED(m_utils->LoadFile(filename.c_str(), nullptr, &pSource))) {
-      throw std::runtime_error("Failed to load shader file");
+      LogShaderCompileMessage("ShaderCompile FAIL: " + shaderTag +
+                              " reason=\"Failed to load shader file\"");
+      throw std::runtime_error("Failed to load shader file: " + filenameUtf8);
     }
 
     DxcBuffer sourceBuffer;
@@ -120,28 +144,106 @@ public:
         m_compiler->Compile(&sourceBuffer, args.data(), (UINT32)args.size(),
                             m_includeHandler.Get(), IID_PPV_ARGS(&pResults));
 
-    (void)compileHr;
-
-    ComPtr<IDxcBlobUtf8> pErrors;
-    pResults->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&pErrors), nullptr);
-    if (pErrors && pErrors->GetStringLength() > 0) {
-      OutputDebugStringA((char *)pErrors->GetStringPointer());
-      std::cerr << "Shader compile errors: "
-                << (char *)pErrors->GetStringPointer() << std::endl;
+    if (FAILED(compileHr) || !pResults) {
+      LogShaderCompileMessage("ShaderCompile FAIL: " + shaderTag +
+                              " compileHr=" + HrToHex(compileHr) +
+                              " reason=\"DXC Compile call failed\"");
+      throw std::runtime_error("Shader compilation invocation failed: " +
+                               filenameUtf8);
     }
 
-    HRESULT hrStatus;
-    pResults->GetStatus(&hrStatus);
+    ComPtr<IDxcBlobUtf8> pErrors;
+    HRESULT errorOutputHr =
+        pResults->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&pErrors), nullptr);
+    std::string compilerMessages;
+    if (SUCCEEDED(errorOutputHr) && pErrors && pErrors->GetStringLength() > 0) {
+      compilerMessages.assign((char *)pErrors->GetStringPointer(),
+                              pErrors->GetStringLength());
+    }
+
+    HRESULT hrStatus = E_FAIL;
+    HRESULT statusHr = pResults->GetStatus(&hrStatus);
+    if (FAILED(statusHr)) {
+      hrStatus = compileHr;
+    }
+
     if (FAILED(hrStatus)) {
-      throw std::runtime_error("Shader compilation failed");
+      std::string fail = "ShaderCompile FAIL: " + shaderTag +
+                         " compileHr=" + HrToHex(compileHr) +
+                         " statusHr=" + HrToHex(statusHr) +
+                         " resultHr=" + HrToHex(hrStatus);
+      if (!compilerMessages.empty()) {
+        fail += "\n";
+        fail += compilerMessages;
+      }
+      LogShaderCompileMessage(fail);
+      throw std::runtime_error("Shader compilation failed: " + filenameUtf8 +
+                               " [" + entryUtf8 + " / " + profileUtf8 + "]");
+    }
+
+    if (!compilerMessages.empty()) {
+      LogShaderCompileMessage("ShaderCompile INFO: " + shaderTag +
+                              " compilerMessages=\n" + compilerMessages);
     }
 
     ComPtr<IDxcBlob> pBlob;
-    pResults->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&pBlob), nullptr);
+    HRESULT blobHr = pResults->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&pBlob),
+                                         nullptr);
+    if (FAILED(blobHr) || !pBlob) {
+      LogShaderCompileMessage("ShaderCompile FAIL: " + shaderTag +
+                              " reason=\"Missing shader object blob\" blobHr=" +
+                              HrToHex(blobHr));
+      throw std::runtime_error("Shader compile output blob missing: " +
+                               filenameUtf8);
+    }
+
+    LogShaderCompileMessage(
+        "ShaderCompile OK: " + shaderTag +
+        " bytecodeBytes=" + std::to_string((size_t)pBlob->GetBufferSize()));
     return pBlob;
   }
 
 private:
+  static std::string WStringToUtf8(const std::wstring &text) {
+    if (text.empty()) {
+      return {};
+    }
+
+    int sizeNeeded = WideCharToMultiByte(CP_UTF8, 0, text.c_str(),
+                                         (int)text.size(), nullptr, 0, nullptr,
+                                         nullptr);
+    if (sizeNeeded <= 0) {
+      return "<wide-char-convert-failed>";
+    }
+
+    std::string out((size_t)sizeNeeded, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), (int)text.size(), &out[0],
+                        sizeNeeded, nullptr, nullptr);
+    return out;
+  }
+
+  static std::string HrToHex(HRESULT hr) {
+    char buf[32] = {};
+    sprintf_s(buf, "0x%08X", (unsigned)hr);
+    return buf;
+  }
+
+  static void LogShaderCompileMessage(const std::string &message) {
+    std::string line = message;
+    if (line.empty() || line.back() != '\n') {
+      line.push_back('\n');
+    }
+
+    OutputDebugStringA(line.c_str());
+    fprintf(stderr, "%s", line.c_str());
+
+    FILE *logFile = nullptr;
+    if (fopen_s(&logFile, "error.log", "a") == 0 && logFile) {
+      fprintf(logFile, "%s", line.c_str());
+      fclose(logFile);
+    }
+  }
+
   HMODULE m_dxcDll = nullptr;
   DxcCreateInstanceProc m_createInstance = nullptr;
 

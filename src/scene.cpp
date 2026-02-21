@@ -4,6 +4,7 @@
 #include "assets/asset_loader.h"
 #include "camera.h"
 #include "d3d12_helpers.h"
+#include "dx12_context.h"
 #include "dxr_renderer.h"
 #include "file_import.h"
 #include "ibl_manager.h"
@@ -29,8 +30,8 @@ extern std::vector<Asset::Texture> g_loadedTextures;
 extern UINT g_textureDescriptorCount;
 extern D3D12_GPU_DESCRIPTOR_HANDLE g_texturesGpuStart;
 extern DescriptorHeapAllocator g_cbvSrvAllocator;
-extern ComPtr<ID3D12Device> g_device;
-extern void WaitGPUIdle();
+
+using namespace DX12Context;
 
 namespace Scene {
 
@@ -167,7 +168,8 @@ static void EnsureGpuBuffersForMeshes(std::vector<Asset::GpuMesh> &meshes) {
     if (mesh.cpuVertices.empty() || mesh.cpuIndices.empty())
       continue;
     const int materialIndex = mesh.materialIndex;
-    Asset::GpuMesh uploaded = Asset::LoadMeshFromMemory(mesh.cpuVertices, mesh.cpuIndices);
+    Asset::GpuMesh uploaded =
+        Asset::LoadMeshFromMemory(mesh.cpuVertices, mesh.cpuIndices);
     uploaded.materialIndex = materialIndex;
     mesh = std::move(uploaded);
   }
@@ -192,7 +194,8 @@ bool ImportModel(const std::string &utf8path, const float *rootTranslation) {
     // If loader returned success but produced no meshes, treat as failure —
     // prevents UI from reporting success when nothing was created.
     if (meshes.empty()) {
-      s_lastStatus = std::string("Load failed (no meshes returned): ") + utf8path;
+      s_lastStatus =
+          std::string("Load failed (no meshes returned): ") + utf8path;
       fprintf(stderr, "%s\n", s_lastStatus.c_str());
       return false;
     }
@@ -351,8 +354,9 @@ bool ImportModelWithDialog(HWND hwnd) {
       // If the loader failed or produced no meshes, report error and do not
       // queue pending results for the main thread to merge.
       if (!ok || meshes.empty()) {
-        std::string msg = !ok ? (std::string("Import failed: ") + utf8path)
-                              : (std::string("Import produced no meshes: ") + utf8path);
+        std::string msg =
+            !ok ? (std::string("Import failed: ") + utf8path)
+                : (std::string("Import produced no meshes: ") + utf8path);
         fprintf(stderr, "Scene::ImportModel (async): %s\n", msg.c_str());
         {
           std::lock_guard<std::mutex> lg(s_importStatusMutex);

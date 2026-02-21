@@ -238,6 +238,7 @@ static float s_lastNoiseLevel = 0.0f;
 static bool s_noiseConvergedLatched = false;
 static bool s_cloudDescriptorsDone = false;
 static bool s_hasDenoised = false;
+static int s_lastRenderFrameFailReason = -1;
 
 static bool SaveRgba8ToPngWic(const std::wstring &filePath, UINT width,
                               UINT height, const uint8_t *pixels,
@@ -1956,16 +1957,26 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                  UINT textureDescriptorCount,
                  const std::vector<Asset::GpuMesh> &meshes,
                  ID3D12Resource *meshDataSB) {
+  auto ReturnFail = [&](int reason, const char *message) -> bool {
+    if (s_lastRenderFrameFailReason != reason) {
+      fprintf(stderr, "DxrRenderer::RenderFrame FAIL[%d]: %s\n", reason,
+              message);
+      s_lastRenderFrameFailReason = reason;
+    }
+    return false;
+  };
+
   (void)frameIndex;
   if (!g_rayTracingSupported || !s_rtStateObject || !s_srvHeap) {
-    return false;
+    return ReturnFail(1, "DXR core state missing (support/stateObject/srvHeap)");
   }
   if (!renderTarget) {
-    return false;
+    return ReturnFail(2, "renderTarget is null");
   }
 
   // Handle empty scene or missing TLAS gracefully
   if (meshes.empty() || !s_tlas.result) {
+    s_lastRenderFrameFailReason = -1;
     TransitionResource(commandListBase, renderTarget,
                        D3D12_RESOURCE_STATE_PRESENT,
                        D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -1976,11 +1987,14 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   }
 
   if (!s_outputUAV)
-    return false;
+    return ReturnFail(3, "s_outputUAV is null");
 
   ComPtr<ID3D12GraphicsCommandList4> dxrList;
-  if (FAILED(commandListBase->QueryInterface(IID_PPV_ARGS(&dxrList))))
-    return false;
+  HRESULT hrAsList4 = commandListBase->QueryInterface(IID_PPV_ARGS(&dxrList));
+  if (FAILED(hrAsList4))
+    return ReturnFail(4, "QueryInterface(ID3D12GraphicsCommandList4) failed");
+
+  s_lastRenderFrameFailReason = -1;
 
   const bool dlssActive =
       (s_streamline && s_streamline->IsInitialized() &&

@@ -1,21 +1,22 @@
 #define NOMINMAX
 #include "raster_renderer.h"
+#include "clouds.h"
 #include "d3d12_helpers.h"
+#include "dx12_context.h"
 #include "dxc_wrapper.h"
 #include "ibl_manager.h"
 #include "scene.h"
-#include "clouds.h"
 #include <cstdio>
 #include <filesystem>
 #include <vector>
 #include <wrl.h>
 
-
 using Microsoft::WRL::ComPtr;
 
 // Access to a few global symbols from main.cpp
-extern ComPtr<ID3D12Device> g_device;
 extern ComPtr<ID3D12RootSignature> g_rootSignature;
+
+using namespace DX12Context;
 extern bool g_rasterDebugUV;
 extern bool g_rasterWireframe;
 extern bool g_rasterDebugDepth;
@@ -328,7 +329,8 @@ void RecreateMeshPipeline(ID3D12Device *device, ID3D12RootSignature *rootSig) {
       skyPsoDesc.InputLayout = {nullptr,
                                 0}; // No input layout (generated in VS)
 
-      // Skybox should render behind everything - but use ALWAYS to ensure it draws if depth is 1.0
+      // Skybox should render behind everything - but use ALWAYS to ensure it
+      // draws if depth is 1.0
       skyPsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
       skyPsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
 
@@ -370,7 +372,8 @@ void DrawSkybox(ID3D12GraphicsCommandList *cmdList, ID3D12Resource *cameraCB) {
     cmdList->SetGraphicsRootDescriptorTable(4,
                                             IBLManager::Get().GetGPUHandle());
   }
-  // Bind cloud descriptor table (CBV + BaseSRV + DetailSRV) at root param 5 if available
+  // Bind cloud descriptor table (CBV + BaseSRV + DetailSRV) at root param 5 if
+  // available
   if (g_cloudManager.GetGPUHandle().ptr != 0) {
     cmdList->SetGraphicsRootDescriptorTable(5, g_cloudManager.GetGPUHandle());
   }
