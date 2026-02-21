@@ -5,6 +5,9 @@
       <FullPath>D:\project-render\build\x64\Release\ZERO_CHECK</FullPath>
     </ProjectOutput>
     <ProjectOutput>
+      <FullPath>D:\project-render\build\x64\Release\compile_shaders</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
       <FullPath>D:\project-render\build\Release\project-render.exe</FullPath>
     </ProjectOutput>
     <ProjectOutput>

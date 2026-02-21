@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <filesystem> // used for precompiled shader check
 #include <windows.h>
 #include <wrl.h>
 
@@ -67,6 +68,21 @@ public:
                            const std::wstring &entryPoint,
                            const std::wstring &profiles,
                            const std::vector<std::wstring> &defines = {}) {
+    // If a precompiled bytecode variant exists in the same directory,
+    // load that first and skip runtime compilation.  The naming scheme
+    // matches the CMake build rules above.
+    std::filesystem::path hlslPath(filename);
+    std::wstring base = hlslPath.stem().wstring();
+    std::wstring csoName = base + L"_" + entryPoint + L"_" + profiles + L".cso";
+    std::filesystem::path csoPath = hlslPath.parent_path() / csoName;
+    if (std::filesystem::exists(csoPath)) {
+      ComPtr<IDxcBlobEncoding> blobEnc;
+      if (SUCCEEDED(m_utils->LoadFile(csoPath.wstring().c_str(), nullptr, &blobEnc))) {
+        // IDxcBlobEncoding inherits IDxcBlob
+        return blobEnc;
+      }
+      // fall through to compile if loading failed
+    }
     const std::string filenameUtf8 = WStringToUtf8(filename);
     const std::string entryUtf8 =
         entryPoint.empty() ? std::string("<library>") : WStringToUtf8(entryPoint);

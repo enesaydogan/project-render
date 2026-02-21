@@ -126,7 +126,7 @@
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <PostBuildEvent>
-      <Message>Copying OpenImageDenoise runtime binaries...		Copying SketchUp SDK runtime DLL...	Copying SketchUpCommonPreferences.dll to output...	Copying vcpkg runtime binaries (miniz.dll)...</Message>
+      <Message>Copying OpenImageDenoise runtime binaries...		Copying SketchUp SDK runtime DLL...	Copying SketchUpCommonPreferences.dll to output...	Copying vcpkg runtime binaries (miniz.dll)...	Copying compiled shader blobs...	Copying assets folder...</Message>
       <Command>setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/oidn/bin/OpenImageDenoise.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_core.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cpu.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cuda.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_hip.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_sycl.dll D:/project-render/thirdparty/oidn/bin/sycl8.dll D:/project-render/thirdparty/oidn/bin/tbb12.dll D:/project-render/thirdparty/oidn/bin/tbbbind.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_0.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_5.dll D:/project-render/thirdparty/oidn/bin/ur_adapter_level_zero.dll D:/project-render/thirdparty/oidn/bin/ur_loader.dll D:/project-render/thirdparty/oidn/bin/ur_win_proxy_loader.dll D:/project-render/build/Debug/
 if %errorlevel% neq 0 goto :cmEnd
@@ -181,6 +181,28 @@ exit /b %1
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/repos/vcpkg/installed/x64-windows/debug/bin/miniz.dll D:/project-render/build/Debug/miniz.dll
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/Debug/shaders
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/Debug/shaders
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/build/shaders D:/project-render/build/Debug/shaders
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/assets D:/project-render/build/Debug/assets
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -255,7 +277,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <PostBuildEvent>
-      <Message>Copying OpenImageDenoise runtime binaries...		Copying SketchUp SDK runtime DLL...	Copying SketchUpCommonPreferences.dll to output...	Copying vcpkg runtime binaries (miniz.dll)...</Message>
+      <Message>Copying OpenImageDenoise runtime binaries...		Copying SketchUp SDK runtime DLL...	Copying SketchUpCommonPreferences.dll to output...	Copying vcpkg runtime binaries (miniz.dll)...	Copying compiled shader blobs...	Copying assets folder...</Message>
       <Command>setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/oidn/bin/OpenImageDenoise.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_core.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cpu.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cuda.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_hip.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_sycl.dll D:/project-render/thirdparty/oidn/bin/sycl8.dll D:/project-render/thirdparty/oidn/bin/tbb12.dll D:/project-render/thirdparty/oidn/bin/tbbbind.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_0.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_5.dll D:/project-render/thirdparty/oidn/bin/ur_adapter_level_zero.dll D:/project-render/thirdparty/oidn/bin/ur_loader.dll D:/project-render/thirdparty/oidn/bin/ur_win_proxy_loader.dll D:/project-render/build/Release/
 if %errorlevel% neq 0 goto :cmEnd
@@ -310,6 +332,28 @@ exit /b %1
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/repos/vcpkg/installed/x64-windows/bin/miniz.dll D:/project-render/build/Release/miniz.dll
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/Release/shaders
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/Release/shaders
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/build/shaders D:/project-render/build/Release/shaders
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/assets D:/project-render/build/Release/assets
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -381,7 +425,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <PostBuildEvent>
-      <Message>Copying OpenImageDenoise runtime binaries...		Copying SketchUp SDK runtime DLL...	Copying SketchUpCommonPreferences.dll to output...	Copying vcpkg runtime binaries (miniz.dll)...</Message>
+      <Message>Copying OpenImageDenoise runtime binaries...		Copying SketchUp SDK runtime DLL...	Copying SketchUpCommonPreferences.dll to output...	Copying vcpkg runtime binaries (miniz.dll)...	Copying compiled shader blobs...	Copying assets folder...</Message>
       <Command>setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/oidn/bin/OpenImageDenoise.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_core.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cpu.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cuda.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_hip.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_sycl.dll D:/project-render/thirdparty/oidn/bin/sycl8.dll D:/project-render/thirdparty/oidn/bin/tbb12.dll D:/project-render/thirdparty/oidn/bin/tbbbind.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_0.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_5.dll D:/project-render/thirdparty/oidn/bin/ur_adapter_level_zero.dll D:/project-render/thirdparty/oidn/bin/ur_loader.dll D:/project-render/thirdparty/oidn/bin/ur_win_proxy_loader.dll D:/project-render/build/MinSizeRel/
 if %errorlevel% neq 0 goto :cmEnd
@@ -436,6 +480,28 @@ exit /b %1
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/repos/vcpkg/installed/x64-windows/bin/miniz.dll D:/project-render/build/MinSizeRel/miniz.dll
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/MinSizeRel/shaders
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/MinSizeRel/shaders
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/build/shaders D:/project-render/build/MinSizeRel/shaders
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/assets D:/project-render/build/MinSizeRel/assets
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -505,7 +571,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <PostBuildEvent>
-      <Message>Copying OpenImageDenoise runtime binaries...		Copying SketchUp SDK runtime DLL...	Copying SketchUpCommonPreferences.dll to output...	Copying vcpkg runtime binaries (miniz.dll)...</Message>
+      <Message>Copying OpenImageDenoise runtime binaries...		Copying SketchUp SDK runtime DLL...	Copying SketchUpCommonPreferences.dll to output...	Copying vcpkg runtime binaries (miniz.dll)...	Copying compiled shader blobs...	Copying assets folder...</Message>
       <Command>setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/oidn/bin/OpenImageDenoise.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_core.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cpu.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cuda.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_hip.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_sycl.dll D:/project-render/thirdparty/oidn/bin/sycl8.dll D:/project-render/thirdparty/oidn/bin/tbb12.dll D:/project-render/thirdparty/oidn/bin/tbbbind.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_0.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_5.dll D:/project-render/thirdparty/oidn/bin/ur_adapter_level_zero.dll D:/project-render/thirdparty/oidn/bin/ur_loader.dll D:/project-render/thirdparty/oidn/bin/ur_win_proxy_loader.dll D:/project-render/build/RelWithDebInfo/
 if %errorlevel% neq 0 goto :cmEnd
@@ -566,6 +632,28 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 :cmErrorLevel
 exit /b %1
 :cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/RelWithDebInfo/shaders
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/RelWithDebInfo/shaders
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/build/shaders D:/project-render/build/RelWithDebInfo/shaders
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/assets D:/project-render/build/RelWithDebInfo/assets
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PostBuildEvent>
     <Link>
@@ -600,7 +688,7 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
-      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCXXInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeGenericSystem.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeInitializeConfigs.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeLanguageInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeRCInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\shared_internal_commands.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FetchContent.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FetchContent\CMakeLists.cmake.in;C:\Program Files\CMake\share\cmake-4.2\Modules\FindGit.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageHandleStandardArgs.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageMessage.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Linker\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Linker\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-Initialize.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\WindowsPaths.cmake;D:\project-render\build\CMakeFiles\4.2.1\CMakeCXXCompiler.cmake;D:\project-render\build\CMakeFiles\4.2.1\CMakeRCCompiler.cmake;D:\project-render\build\CMakeFiles\4.2.1\CMakeSystem.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseConfig.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseConfigVersion.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseTargets-release.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseTargets.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCXXInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeGenericSystem.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeInitializeConfigs.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeLanguageInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeRCInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\shared_internal_commands.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FetchContent.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FetchContent\CMakeLists.cmake.in;C:\Program Files\CMake\share\cmake-4.2\Modules\FindGit.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageHandleStandardArgs.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageMessage.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Linker\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Linker\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-Initialize.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\WindowsPaths.cmake;D:\project-render\build\CMakeFiles\4.2.1\CMakeCXXCompiler.cmake;D:\project-render\build\CMakeFiles\4.2.1\CMakeRCCompiler.cmake;D:\project-render\build\CMakeFiles\4.2.1\CMakeSystem.cmake;D:\project-render\build\CMakeFiles\cmake.verify_globs;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseConfig.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseConfigVersion.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseTargets-release.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseTargets.cmake;%(AdditionalInputs)</AdditionalInputs>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\build\CMakeFiles\generate.stamp</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
       <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Building Custom Rule D:/project-render/CMakeLists.txt</Message>
@@ -613,7 +701,7 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
-      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCXXInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeGenericSystem.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeInitializeConfigs.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeLanguageInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeRCInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\shared_internal_commands.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FetchContent.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FetchContent\CMakeLists.cmake.in;C:\Program Files\CMake\share\cmake-4.2\Modules\FindGit.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageHandleStandardArgs.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageMessage.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Linker\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Linker\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-Initialize.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\WindowsPaths.cmake;D:\project-render\build\CMakeFiles\4.2.1\CMakeCXXCompiler.cmake;D:\project-render\build\CMakeFiles\4.2.1\CMakeRCCompiler.cmake;D:\project-render\build\CMakeFiles\4.2.1\CMakeSystem.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseConfig.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseConfigVersion.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseTargets-release.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseTargets.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCXXInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeGenericSystem.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeInitializeConfigs.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeLanguageInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeRCInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\shared_internal_commands.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FetchContent.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FetchContent\CMakeLists.cmake.in;C:\Program Files\CMake\share\cmake-4.2\Modules\FindGit.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageHandleStandardArgs.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageMessage.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Linker\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Linker\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-Initialize.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\WindowsPaths.cmake;D:\project-render\build\CMakeFiles\4.2.1\CMakeCXXCompiler.cmake;D:\project-render\build\CMakeFiles\4.2.1\CMakeRCCompiler.cmake;D:\project-render\build\CMakeFiles\4.2.1\CMakeSystem.cmake;D:\project-render\build\CMakeFiles\cmake.verify_globs;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseConfig.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseConfigVersion.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseTargets-release.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseTargets.cmake;%(AdditionalInputs)</AdditionalInputs>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\build\CMakeFiles\generate.stamp</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
       <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Building Custom Rule D:/project-render/CMakeLists.txt</Message>
@@ -626,7 +714,7 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
-      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCXXInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeGenericSystem.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeInitializeConfigs.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeLanguageInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeRCInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\shared_internal_commands.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FetchContent.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FetchContent\CMakeLists.cmake.in;C:\Program Files\CMake\share\cmake-4.2\Modules\FindGit.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageHandleStandardArgs.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageMessage.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Linker\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Linker\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-Initialize.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\WindowsPaths.cmake;D:\project-render\build\CMakeFiles\4.2.1\CMakeCXXCompiler.cmake;D:\project-render\build\CMakeFiles\4.2.1\CMakeRCCompiler.cmake;D:\project-render\build\CMakeFiles\4.2.1\CMakeSystem.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseConfig.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseConfigVersion.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseTargets-release.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseTargets.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCXXInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeGenericSystem.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeInitializeConfigs.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeLanguageInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeRCInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\shared_internal_commands.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FetchContent.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FetchContent\CMakeLists.cmake.in;C:\Program Files\CMake\share\cmake-4.2\Modules\FindGit.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageHandleStandardArgs.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageMessage.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Linker\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Linker\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-Initialize.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\WindowsPaths.cmake;D:\project-render\build\CMakeFiles\4.2.1\CMakeCXXCompiler.cmake;D:\project-render\build\CMakeFiles\4.2.1\CMakeRCCompiler.cmake;D:\project-render\build\CMakeFiles\4.2.1\CMakeSystem.cmake;D:\project-render\build\CMakeFiles\cmake.verify_globs;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseConfig.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseConfigVersion.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseTargets-release.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseTargets.cmake;%(AdditionalInputs)</AdditionalInputs>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\build\CMakeFiles\generate.stamp</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
       <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Building Custom Rule D:/project-render/CMakeLists.txt</Message>
@@ -639,7 +727,7 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
-      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCXXInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeGenericSystem.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeInitializeConfigs.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeLanguageInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeRCInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\shared_internal_commands.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FetchContent.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FetchContent\CMakeLists.cmake.in;C:\Program Files\CMake\share\cmake-4.2\Modules\FindGit.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageHandleStandardArgs.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageMessage.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Linker\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Linker\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-Initialize.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\WindowsPaths.cmake;D:\project-render\build\CMakeFiles\4.2.1\CMakeCXXCompiler.cmake;D:\project-render\build\CMakeFiles\4.2.1\CMakeRCCompiler.cmake;D:\project-render\build\CMakeFiles\4.2.1\CMakeSystem.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseConfig.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseConfigVersion.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseTargets-release.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseTargets.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCXXInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeGenericSystem.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeInitializeConfigs.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeLanguageInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeRCInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Compiler\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\shared_internal_commands.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FetchContent.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FetchContent\CMakeLists.cmake.in;C:\Program Files\CMake\share\cmake-4.2\Modules\FindGit.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageHandleStandardArgs.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\FindPackageMessage.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Linker\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Linker\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-Initialize.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\Windows.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\Platform\WindowsPaths.cmake;D:\project-render\build\CMakeFiles\4.2.1\CMakeCXXCompiler.cmake;D:\project-render\build\CMakeFiles\4.2.1\CMakeRCCompiler.cmake;D:\project-render\build\CMakeFiles\4.2.1\CMakeSystem.cmake;D:\project-render\build\CMakeFiles\cmake.verify_globs;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseConfig.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseConfigVersion.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseTargets-release.cmake;D:\project-render\thirdparty\oidn\lib\cmake\OpenImageDenoise-2.4.1\OpenImageDenoiseTargets.cmake;%(AdditionalInputs)</AdditionalInputs>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\build\CMakeFiles\generate.stamp</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
     </CustomBuild>
@@ -681,6 +769,12 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ProjectReference Include="D:\project-render\build\_deps\assimp-build\code\assimp.vcxproj">
       <Project>{435FC15B-3D91-38CF-A996-E61C100C54B7}</Project>
       <Name>assimp</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\project-render\build\compile_shaders.vcxproj">
+      <Project>{48219348-E4B2-3503-933D-20B045585C73}</Project>
+      <Name>compile_shaders</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
     </ProjectReference>
     <ProjectReference Include="D:\project-render\build\imgui_static.vcxproj">
       <Project>{7924691C-46B6-35AA-916A-93C623810FB0}</Project>
