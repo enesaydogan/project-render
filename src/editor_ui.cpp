@@ -8,6 +8,7 @@
 #include "camera.h"
 #include "clouds.h"
 #include "d3d12_helpers.h"
+#include "dx12_context.h"
 #include "dxr_renderer.h"
 #include "file_import.h"
 #include "ibl_manager.h"
@@ -25,11 +26,10 @@
 #include <string>
 
 using Microsoft::WRL::ComPtr;
+using namespace DX12Context;
 
 // ── extern globals defined in main.cpp ──────────────────────────────────────
 extern HWND g_hwnd;
-extern UINT g_windowWidth;
-extern UINT g_windowHeight;
 extern bool g_appClosing;
 extern bool g_cloudRenderingEnabled;
 extern CloudManager g_cloudManager;
@@ -41,7 +41,8 @@ extern bool g_rasterDebugUV;
 extern bool g_rasterWireframe;
 extern bool g_rasterDebugDepth;
 extern ComPtr<ID3D12RootSignature> g_rootSignature;
-extern StreamlineManager g_streamline;
+extern CameraCB g_cameraData;
+// use DX12Context::g_streamline
 extern float g_camSpeed;
 extern float g_mouseSensitivity;
 extern ComPtr<ID3D12Resource> g_constantBuffer;
@@ -58,7 +59,6 @@ extern D3D12_RESOURCE_STATES g_exportRenderTargetState;
 extern D3D12_CPU_DESCRIPTOR_HANDLE g_exportPreviewSrvCpu;
 extern D3D12_GPU_DESCRIPTOR_HANDLE g_exportPreviewSrvGpu;
 extern bool g_exportPreviewSrvAllocated;
-extern ComPtr<ID3D12Device> g_device;
 extern DescriptorHeapAllocator g_cbvSrvAllocator;
 
 // ── globals owned by this translation unit ──────────────────────────────────
@@ -108,7 +108,6 @@ static int DenoiserIndexFromMode(DxrRenderer::DenoiserMode mode) {
 
 // Forward declarations for helpers also used by the export job logic in
 // main.cpp
-extern void WaitGPUIdle();
 
 static bool EnsureExportRenderTarget(UINT width, UINT height) {
   if (!g_device || width == 0 || height == 0) {
@@ -880,9 +879,9 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
 
         ImGui::Separator();
         ImGui::Text("Streamline / DLSS");
-        bool dlssEnabled = g_streamline.IsEnabled();
+        bool dlssEnabled = DX12Context::g_streamline.IsEnabled();
         if (ImGui::Checkbox("Enable", &dlssEnabled)) {
-          g_streamline.SetEnabled(dlssEnabled);
+          DX12Context::g_streamline.SetEnabled(dlssEnabled);
           DxrRenderer::ResetStreamlineHistory();
           // DLSS uses a different internal render resolution; recreate
           // resources.
@@ -894,7 +893,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
         const char *dlssModes[] = {"Off", "DLSS Super Resolution",
                                    "DLSS Ray Reconstruction"};
         int modeIdx = 0;
-        switch (g_streamline.GetMode()) {
+        switch (DX12Context::g_streamline.GetMode()) {
         case StreamlineManager::Mode::Off:
           modeIdx = 0;
           break;
@@ -912,7 +911,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
             newMode = StreamlineManager::Mode::DLSS_SuperResolution;
           if (modeIdx == 2)
             newMode = StreamlineManager::Mode::DLSS_RayReconstruction;
-          g_streamline.SetMode(newMode);
+          DX12Context::g_streamline.SetMode(newMode);
           if (newMode == StreamlineManager::Mode::DLSS_RayReconstruction) {
             // RR shimmer is often worst at silhouettes/screen edges.
             // Default to a more stable jitter amplitude when entering RR.
@@ -927,7 +926,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
         const char *qualities[] = {"Max Performance", "Balanced", "Max Quality",
                                    "Ultra Performance", "DLAA"};
         int qIdx = 1;
-        switch (g_streamline.GetQuality()) {
+        switch (DX12Context::g_streamline.GetQuality()) {
         case StreamlineManager::Quality::MaxPerformance:
           qIdx = 0;
           break;
@@ -958,7 +957,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
             newQ = StreamlineManager::Quality::UltraPerformance;
           if (qIdx == 4)
             newQ = StreamlineManager::Quality::DLAA;
-          g_streamline.SetQuality(newQ);
+          DX12Context::g_streamline.SetQuality(newQ);
           DxrRenderer::ResetStreamlineHistory();
           WaitGPUIdle();
           DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
@@ -969,19 +968,20 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
         }
         ImGui::SameLine();
         ImGui::Text("SL: %s / %s",
-                    g_streamline.IsInitialized() ? "Init" : "Off",
-                    g_streamline.IsDeviceSet() ? "Device" : "NoDevice");
+                    DX12Context::g_streamline.IsInitialized() ? "Init" : "Off",
+                    DX12Context::g_streamline.IsDeviceSet() ? "Device"
+                                                            : "NoDevice");
 
         // Show recommended render (input) size and output (swapchain) size
         {
-          auto rec = g_streamline.GetRecommendedRenderSize(g_windowWidth,
-                                                           g_windowHeight);
+          auto rec = DX12Context::g_streamline.GetRecommendedRenderSize(
+              g_windowWidth, g_windowHeight);
           ImGui::Text("Render (in): %u x %u    Output (out): %u x %u",
                       (unsigned)rec.renderWidth, (unsigned)rec.renderHeight,
                       (unsigned)g_windowWidth, (unsigned)g_windowHeight);
         }
 
-        if (g_streamline.GetMode() ==
+        if (DX12Context::g_streamline.GetMode() ==
             StreamlineManager::Mode::DLSS_RayReconstruction) {
           float rrJitterScale = DxrRenderer::GetRrJitterScale();
           if (ImGui::SliderFloat("RR Jitter Scale", &rrJitterScale, 0.0f, 1.0f,
@@ -1037,11 +1037,14 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
         // Denoising is automatically triggered once when Max SPP is reached
         // (only if a denoiser is selected).
 
-        ImGui::Text("NGX AppId: %u", g_streamline.GetApplicationId());
-        if (g_streamline.IsEnabled() &&
-            g_streamline.GetMode() != StreamlineManager::Mode::Off &&
-            (!g_streamline.IsInitialized() || !g_streamline.IsDeviceSet() ||
-             !g_streamline.AreFeatureFunctionsReady())) {
+        ImGui::Text("NGX AppId: %u",
+                    DX12Context::g_streamline.GetApplicationId());
+        if (DX12Context::g_streamline.IsEnabled() &&
+            DX12Context::g_streamline.GetMode() !=
+                StreamlineManager::Mode::Off &&
+            (!DX12Context::g_streamline.IsInitialized() ||
+             !DX12Context::g_streamline.IsDeviceSet() ||
+             !DX12Context::g_streamline.AreFeatureFunctionsReady())) {
           ImGui::TextWrapped("DLSS plugins may be disabled. If you see "
                              "'Missing NGX context', "
                              "set env SL_APPLICATION_ID (or create "
@@ -1051,17 +1054,18 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
 
         ImGui::Separator();
         ImGui::Text("Streamline logging (restart required)");
-        bool slLogToFile = g_streamline.GetLogToFile();
+        bool slLogToFile = DX12Context::g_streamline.GetLogToFile();
         if (ImGui::Checkbox("Write sl.log to file", &slLogToFile)) {
-          g_streamline.SetLogToFile(slLogToFile);
+          DX12Context::g_streamline.SetLogToFile(slLogToFile);
         }
-        bool slMirror = g_streamline.GetMirrorLogsToStderr();
+        bool slMirror = DX12Context::g_streamline.GetMirrorLogsToStderr();
         if (ImGui::Checkbox("Mirror SL logs to console", &slMirror)) {
-          g_streamline.SetMirrorLogsToStderr(slMirror);
+          DX12Context::g_streamline.SetMirrorLogsToStderr(slMirror);
         }
-        if (g_streamline.GetLogToFile()) {
-          ImGui::TextWrapped("SL log dir: %ls",
-                             g_streamline.GetLogDirectory().c_str());
+        if (DX12Context::g_streamline.GetLogToFile()) {
+          ImGui::TextWrapped(
+              "SL log dir: %ls",
+              DX12Context::g_streamline.GetLogDirectory().c_str());
         }
       }
 

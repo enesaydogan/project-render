@@ -20,8 +20,10 @@ extern bool g_cloudRenderingEnabled;
 extern float g_camSpeed;
 extern float g_mouseSensitivity;
 extern bool g_drawGrid;
+#include "dx12_context.h"
 #include "streamline_manager.h"
-extern StreamlineManager g_streamline;
+
+// use DX12Context::g_streamline
 #include "clouds.h"
 extern CloudManager g_cloudManager;
 
@@ -182,9 +184,9 @@ bool SaveScene(const std::string &path) {
     j["clouds"]["shadowDensityThreshold"] = cp.shadowDensityThreshold;
 
     // Streamline / DLSS
-    j["streamline"]["enabled"] = g_streamline.IsEnabled();
-    j["streamline"]["mode"] = (int)g_streamline.GetMode();
-    j["streamline"]["quality"] = (int)g_streamline.GetQuality();
+    j["streamline"]["enabled"] = DX12Context::g_streamline.IsEnabled();
+    j["streamline"]["mode"] = (int)DX12Context::g_streamline.GetMode();
+    j["streamline"]["quality"] = (int)DX12Context::g_streamline.GetQuality();
 
     // Global Scene Lighting
     j["lighting"]["lightDir"] = {
@@ -447,10 +449,10 @@ bool LoadScene(const std::string &path) {
 
     if (j.contains("streamline")) {
       auto sl = j["streamline"];
-      g_streamline.SetEnabled(sl.value("enabled", true));
-      g_streamline.SetMode((StreamlineManager::Mode)sl.value(
+      DX12Context::g_streamline.SetEnabled(sl.value("enabled", true));
+      DX12Context::g_streamline.SetMode((StreamlineManager::Mode)sl.value(
           "mode", (int)StreamlineManager::Mode::Off));
-      g_streamline.SetQuality((StreamlineManager::Quality)sl.value(
+      DX12Context::g_streamline.SetQuality((StreamlineManager::Quality)sl.value(
           "quality", (int)StreamlineManager::Quality::Balanced));
     }
 

@@ -646,6 +646,8 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="D:\project-render\src\main.cpp" />
+    <ClCompile Include="D:\project-render\src\input_handler.cpp" />
+    <ClCompile Include="D:\project-render\src\dx12_context.cpp" />
     <ClCompile Include="D:\project-render\src\editor_ui.cpp" />
     <ClCompile Include="D:\project-render\src\camera.cpp" />
     <ClCompile Include="D:\project-render\src\dxr_renderer.cpp" />

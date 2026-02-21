@@ -4,6 +4,12 @@
     <ClCompile Include="D:\project-render\src\main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\project-render\src\input_handler.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\project-render\src\dx12_context.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="D:\project-render\src\editor_ui.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

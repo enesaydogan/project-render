@@ -1,16 +1,8 @@
-#include <d3d12.h>
-#include <d3dcompiler.h>
-#include <dxgi1_6.h>
-#include <windows.h>
-#include <wrl.h>
-
-#ifdef _DEBUG
-#include <d3d12sdklayers.h>
-#endif
 #include "ImGuizmo.h"
 #include "assets/asset_loader.h"
 #include "clouds.h" // Add clouds
 #include "d3d12_helpers.h"
+#include "dx12_context.h"
 #include "dxc_wrapper.h"
 #include "dxr_helpers.h"
 #include "dxr_renderer.h"
@@ -21,8 +13,10 @@
 #include "imgui_impl_dx12.h"
 #include "imgui_impl_win32.h"
 #include "imgui_theme.h"
+#include "input_handler.h"
 #include "light.h"
 #include "material_editor.h"
+#include "oidn_denoiser.h"
 #include "raster_renderer.h"
 #include "scene.h"
 #include "scene_io.h"
@@ -46,9 +40,7 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd,
 
 namespace fs = std::filesystem;
 
-using Microsoft::WRL::ComPtr;
-
-// Top-level exception handler for debug builds (file scope)
+// Top-level exception handler for debug builds.
 #ifdef _DEBUG
 static LONG WINAPI TopLevelExceptionHandler(EXCEPTION_POINTERS *ep) {
   if (ep && ep->ExceptionRecord) {
@@ -68,8 +60,6 @@ extern "C" {
 __declspec(dllexport) unsigned long long NvOptimusEnablement = 0x00000001ULL;
 __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 }
-
-static const UINT FrameCount = 2;
 
 // RenderMode is now defined in scene.h
 
@@ -96,18 +86,6 @@ bool g_fastImport =
 CloudManager g_cloudManager; // Global Global Manager
 bool g_cloudRenderingEnabled = true;
 
-ComPtr<ID3D12Device> g_device;
-static ComPtr<ID3D12CommandQueue> g_commandQueue;
-static ComPtr<IDXGISwapChain3> g_swapChain;
-
-static ComPtr<ID3D12Resource> g_renderTargets[FrameCount];
-static ComPtr<ID3D12DescriptorHeap> g_rtvHeap;
-static UINT g_rtvDescriptorSize = 0;
-
-// Depth buffer for raster mode
-static ComPtr<ID3D12Resource> g_depthBuffer;
-static ComPtr<ID3D12DescriptorHeap> g_dsvHeap;
-static UINT g_dsvDescriptorSize = 0;
 ComPtr<ID3D12Resource> g_exportRenderTarget;
 ComPtr<ID3D12DescriptorHeap> g_exportRtvHeap;
 UINT g_exportRenderTargetWidth = 0;
@@ -119,14 +97,9 @@ bool g_exportPreviewSrvAllocated = false;
 
 static ComPtr<ID3D12DescriptorHeap> g_imguiHeap;
 DescriptorHeapAllocator g_cbvSrvAllocator;
-static FrameResource g_frameResources[FrameCount];
-static ComPtr<ID3D12GraphicsCommandList> g_commandList;
-static UINT g_frameIndex = 0;
 HWND g_hwnd = nullptr;
 
 // Window dimensions
-UINT g_windowWidth = 1280;
-UINT g_windowHeight = 720;
 bool g_appClosing = false;
 
 // Loaded meshes from Asset loader
@@ -143,17 +116,10 @@ static ComPtr<ID3D12Resource>
     g_materialStructuredBuffer; // Tightly packed for DXR
 static ComPtr<ID3D12Resource>
     g_meshStructuredBuffer; // Mesh mapping info for DXR
-// Panel visibility, render export structs, and debug mode moved to editor_ui.h
-// / editor_ui.cpp
+
 static std::string g_lastAssetStatus; // Human-readable status for the Assets UI
 static std::string
     g_selectedAssetPath; // Path chosen by Open dialog (not yet imported)
-
-// WStringToUtf8 moved to editor_ui.cpp
-
-static ComPtr<ID3D12Fence> g_fence;
-static UINT64 g_fenceValues[FrameCount] = {};
-static HANDLE g_fenceEvent = nullptr;
 
 // Simple pipeline objects
 ComPtr<ID3D12RootSignature> g_rootSignature;
@@ -188,7 +154,7 @@ struct Vec3 {
 
 // NVIDIA Streamline (DLSS-SR + DLSS-RR)
 #include "streamline_manager.h"
-StreamlineManager g_streamline;
+// Now defined in DX12Context::g_streamline
 
 // Raw Helper to Add Subobject
 struct SubobjectWrapper {
@@ -324,14 +290,14 @@ static void GetHardwareAdapter(IDXGIFactory4 *pFactory,
 static void ExecuteCommandListAndWait(ID3D12GraphicsCommandList *cmdList) {
   ThrowIfFailed(cmdList->Close());
   ID3D12CommandList *lists[] = {cmdList};
-  g_commandQueue->ExecuteCommandLists(1, lists);
+  DX12Context::g_commandQueue->ExecuteCommandLists(1, lists);
 
   // Wait for completion
   ComPtr<ID3D12Fence> fence;
-  ThrowIfFailed(
-      g_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
+  ThrowIfFailed(DX12Context::g_device->CreateFence(0, D3D12_FENCE_FLAG_NONE,
+                                                   IID_PPV_ARGS(&fence)));
   HANDLE event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-  ThrowIfFailed(g_commandQueue->Signal(fence.Get(), 1));
+  ThrowIfFailed(DX12Context::g_commandQueue->Signal(fence.Get(), 1));
   if (fence->GetCompletedValue() < 1) {
     ThrowIfFailed(fence->SetEventOnCompletion(1, event));
     WaitForSingleObject(event, INFINITE);
@@ -364,7 +330,7 @@ void CreateTestTexture() {
   uploadDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
   ComPtr<ID3D12Resource> uploadBuffer;
-  ThrowIfFailed(g_device->CreateCommittedResource(
+  ThrowIfFailed(DX12Context::g_device->CreateCommittedResource(
       &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &uploadDesc,
       D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadBuffer)));
 
@@ -389,7 +355,7 @@ void CreateTestTexture() {
   textureDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
 
   ComPtr<ID3D12Resource> texture;
-  ThrowIfFailed(g_device->CreateCommittedResource(
+  ThrowIfFailed(DX12Context::g_device->CreateCommittedResource(
       &defaultHeapProps, D3D12_HEAP_FLAG_NONE, &textureDesc,
       D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&texture)));
 
@@ -405,16 +371,17 @@ void CreateTestTexture() {
   srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
   srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
   srvDesc.Texture2D.MipLevels = 1;
-  g_device->CreateShaderResourceView(texture.Get(), &srvDesc, alloc.cpu);
+  DX12Context::g_device->CreateShaderResourceView(texture.Get(), &srvDesc,
+                                                  alloc.cpu);
 
   // Copy from upload buffer to texture
   ComPtr<ID3D12CommandAllocator> cmdAlloc;
   ComPtr<ID3D12GraphicsCommandList> cmdList;
-  ThrowIfFailed(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                                 IID_PPV_ARGS(&cmdAlloc)));
-  ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                            cmdAlloc.Get(), nullptr,
-                                            IID_PPV_ARGS(&cmdList)));
+  ThrowIfFailed(DX12Context::g_device->CreateCommandAllocator(
+      D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&cmdAlloc)));
+  ThrowIfFailed(DX12Context::g_device->CreateCommandList(
+      0, D3D12_COMMAND_LIST_TYPE_DIRECT, cmdAlloc.Get(), nullptr,
+      IID_PPV_ARGS(&cmdList)));
 
   D3D12_TEXTURE_COPY_LOCATION dst = {};
   dst.pResource = texture.Get();
@@ -457,330 +424,40 @@ void CreateTestTexture() {
   fprintf(stderr, "CreateTestTexture: Created 2x2 checkerboard texture\n");
 }
 
-bool InitD3D12(HWND hwnd) {
+bool InitApplication(HWND hwnd) {
 
   g_hwnd = hwnd;
-  UINT dxgiFactoryFlags = 0;
 
-  // Streamline must be initialized before any DXGI/D3D calls.
-  const bool streamlineReady = g_streamline.InitializeEarly();
-
-  EnableD3D12DebugLayer();
-
-  ComPtr<IDXGIFactory4> factory;
-  {
-    HRESULT hrFactory = E_NOINTERFACE;
-    if (streamlineReady) {
-      hrFactory = g_streamline.CreateDXGIFactory2(dxgiFactoryFlags,
-                                                  IID_PPV_ARGS(&factory));
-    }
-    if (FAILED(hrFactory)) {
-      ThrowIfFailed(
-          ::CreateDXGIFactory2(dxgiFactoryFlags, IID_PPV_ARGS(&factory)));
-    }
-  }
-
-  auto CreateDevice = [&](IUnknown *adapter, REFIID riid,
-                          void **ppDevice) -> HRESULT {
-    if (streamlineReady) {
-      HRESULT hrSL = g_streamline.D3D12CreateDevice(
-          adapter, D3D_FEATURE_LEVEL_11_0, riid, ppDevice);
-      if (SUCCEEDED(hrSL))
-        return hrSL;
-    }
-    return ::D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, riid, ppDevice);
-  };
-
-  // Try to find a hardware adapter that supports D3D12
-  ComPtr<IDXGIAdapter1> hardwareAdapter;
-  GetHardwareAdapter(factory.Get(), &hardwareAdapter);
-
-  // Print adapter info (vendor/name/memory)
-  if (hardwareAdapter) {
-    DXGI_ADAPTER_DESC1 desc;
-    hardwareAdapter->GetDesc1(&desc);
-    char descBuf[128];
-    size_t converted = 0;
-    wcstombs_s(&converted, descBuf, desc.Description, sizeof(descBuf));
-    fprintf(stderr,
-            "InitD3D12: Using adapter: %s (VendorId=0x%04x, DeviceId=0x%04x, "
-            "DedicatedVidMem=%llu bytes)\n",
-            descBuf, (unsigned)desc.VendorId, (unsigned)desc.DeviceId,
-            (unsigned long long)desc.DedicatedVideoMemory);
-  } else {
-    fprintf(stderr,
-            "InitD3D12: No hardware adapter selected (will try WARP)\n");
-  }
-
-  HRESULT hr = E_FAIL;
-  if (hardwareAdapter) {
-    hr = CreateDevice(hardwareAdapter.Get(), IID_PPV_ARGS(&g_device));
-  }
-
-  if (SUCCEEDED(hr) && streamlineReady) {
-    g_streamline.OnD3D12DeviceCreated(g_device.Get());
-  }
-
-  // Check DXR Support
-  if (SUCCEEDED(hr)) {
-    D3D12_FEATURE_DATA_D3D12_OPTIONS5 options5 = {};
-    if (SUCCEEDED(g_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5,
-                                                &options5, sizeof(options5)))) {
-      if (options5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_0) {
-        g_rayTracingSupported = true;
-        fprintf(stderr, "DXR Ray Tracing Supported (probe)\n");
-        // Initialize DXR probe with device; command queue/fence will be
-        // attached later
-        DxrRenderer::Initialize(g_device.Get());
-        DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
-        // Log to stderr only
-        fprintf(stderr, "InitD3D12: CreateRayTracingPipeline finished\n");
-      }
-    }
-  }
-
-  if (FAILED(hr)) {
-    // Fall back to default adapter/device or WARP
-    hr = CreateDevice(nullptr, IID_PPV_ARGS(&g_device));
-
-    if (SUCCEEDED(hr) && streamlineReady) {
-      g_streamline.OnD3D12DeviceCreated(g_device.Get());
-    }
-
-    if (FAILED(hr)) {
-      ComPtr<IDXGIAdapter> warpAdapter;
-      ThrowIfFailed(factory->EnumWarpAdapter(IID_PPV_ARGS(&warpAdapter)));
-      ThrowIfFailed(CreateDevice(warpAdapter.Get(), IID_PPV_ARGS(&g_device)));
-
-      if (streamlineReady) {
-        g_streamline.OnD3D12DeviceCreated(g_device.Get());
-      }
-    }
+  if (!DX12Context::InitD3D12(hwnd)) {
+    return false;
   }
 
   // Provide Streamline manager to DXR module (optional feature).
-  DxrRenderer::SetStreamlineManager(&g_streamline);
+  DxrRenderer::SetStreamlineManager(&DX12Context::g_streamline);
 
-  // Log: about to create command queue (stderr only)
-  fprintf(stderr, "InitD3D12: Before CreateCommandQueue\n");
+  // Probe DXR support on the current device.
+  DxrRenderer::Initialize(DX12Context::g_device.Get());
 
-  // Create command queue
-  D3D12_COMMAND_QUEUE_DESC queueDesc = {};
-  queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-  queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
-
-  hr = g_device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&g_commandQueue));
-  if (FAILED(hr)) {
-    // Log to stderr only
-    fprintf(stderr, "InitD3D12: CreateCommandQueue failed 0x%08x\n",
-            (unsigned)hr);
-
-#ifdef _DEBUG
-    // Print device removed reason (helps diagnose driver/device removal)
-    HRESULT removedReason = g_device->GetDeviceRemovedReason();
-    fprintf(stderr, "InitD3D12: GetDeviceRemovedReason() = 0x%08x\n",
-            (unsigned)removedReason);
-
-    // If info queue available, dump recent messages
-    ComPtr<ID3D12InfoQueue> infoQueue;
-    if (SUCCEEDED(g_device->QueryInterface(IID_PPV_ARGS(&infoQueue)))) {
-      UINT64 num = infoQueue->GetNumStoredMessagesAllowedByRetrievalFilter();
-      for (UINT64 i = 0; i < num; ++i) {
-        SIZE_T messageLength = 0;
-        infoQueue->GetMessage(i, nullptr, &messageLength);
-        std::vector<char> message(messageLength);
-        D3D12_MESSAGE *pMsg = reinterpret_cast<D3D12_MESSAGE *>(message.data());
-        infoQueue->GetMessage(i, pMsg, &messageLength);
-        fprintf(stderr, "D3D12 INFO: Category=%d Severity=%d ID=%d: %s\n",
-                (int)pMsg->Category, (int)pMsg->Severity, (int)pMsg->ID,
-                pMsg->pDescription);
-      }
-    }
-#endif
-
-    return false;
+  if (g_rayTracingSupported) {
+    fprintf(stderr, "DXR Ray Tracing Supported (probe)\n");
+    DxrRenderer::CreateRayTracingPipeline(DX12Context::g_windowWidth,
+                                          DX12Context::g_windowHeight);
+    fprintf(stderr, "InitApplication: CreateRayTracingPipeline finished\n");
+  } else {
+    fprintf(stderr, "DXR Ray Tracing NOT supported on this device\n");
   }
 
-  // Log: command queue created (stderr only)
-  fprintf(stderr, "InitD3D12: CreateCommandQueue succeeded\n");
-
-  // Create swap chain
-  RECT clientRect;
-  GetClientRect(hwnd, &clientRect);
-  UINT clientWidth = clientRect.right - clientRect.left;
-  UINT clientHeight = clientRect.bottom - clientRect.top;
-
-  g_windowWidth = clientWidth;
-  g_windowHeight = clientHeight;
-
-  DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
-  swapChainDesc.BufferCount = 2;
-  swapChainDesc.Width = clientWidth;
-  swapChainDesc.Height = clientHeight;
-  swapChainDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
-  swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-  swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-  swapChainDesc.SampleDesc.Count = 1;
-
-  ComPtr<IDXGISwapChain1> swapChain1;
-  // Log to stderr only
-  fprintf(stderr, "InitD3D12: Before CreateSwapChainForHwnd\n");
-
-  HRESULT hrSwap = factory->CreateSwapChainForHwnd(g_commandQueue.Get(), hwnd,
-                                                   &swapChainDesc, nullptr,
-                                                   nullptr, &swapChain1);
-  if (FAILED(hrSwap)) {
-    // Log to stderr only
-    fprintf(stderr, "InitD3D12: CreateSwapChainForHwnd failed 0x%08x\n",
-            (unsigned)hrSwap);
-    return false;
-  }
-
-  HRESULT hrAs = swapChain1.As(&g_swapChain);
-  if (FAILED(hrAs)) {
-    // Log to stderr only
-    fprintf(stderr, "InitD3D12: swapChain1.As failed 0x%08x\n", (unsigned)hrAs);
-    return false;
-  }
-
-  // Log: swap chain created (stderr only)
-  fprintf(stderr, "InitD3D12: Swap chain created\n");
-
-  g_frameIndex = g_swapChain->GetCurrentBackBufferIndex();
-
-  // Create RTV descriptor heap
-  D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
-  rtvHeapDesc.NumDescriptors = FrameCount;
-  rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-  rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-  ThrowIfFailed(
-      g_device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&g_rtvHeap)));
-  g_rtvDescriptorSize = g_device->GetDescriptorHandleIncrementSize(
-      D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-
-  // Create DSV descriptor heap for depth buffer
-  D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {};
-  dsvHeapDesc.NumDescriptors = 1;
-  dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
-  dsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-  ThrowIfFailed(
-      g_device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&g_dsvHeap)));
-  g_dsvDescriptorSize = g_device->GetDescriptorHandleIncrementSize(
-      D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
-
-  // Create depth buffer
-  D3D12_RESOURCE_DESC depthBufferDesc = {};
-  depthBufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-  depthBufferDesc.Alignment = 0;
-  depthBufferDesc.Width = g_windowWidth;
-  depthBufferDesc.Height = g_windowHeight;
-  depthBufferDesc.DepthOrArraySize = 1;
-  depthBufferDesc.MipLevels = 1;
-  depthBufferDesc.Format = DXGI_FORMAT_D32_FLOAT;
-  depthBufferDesc.SampleDesc.Count = 1;
-  depthBufferDesc.SampleDesc.Quality = 0;
-  depthBufferDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-  depthBufferDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-
-  D3D12_CLEAR_VALUE depthClear = {};
-  depthClear.Format = DXGI_FORMAT_D32_FLOAT;
-  depthClear.DepthStencil.Depth = 1.0f;
-  depthClear.DepthStencil.Stencil = 0;
-
-  D3D12_HEAP_PROPERTIES depthHeapProps = {};
-  depthHeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-  depthHeapProps.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
-  depthHeapProps.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
-  depthHeapProps.CreationNodeMask = 1;
-  depthHeapProps.VisibleNodeMask = 1;
-
-  ThrowIfFailed(g_device->CreateCommittedResource(
-      &depthHeapProps, D3D12_HEAP_FLAG_NONE, &depthBufferDesc,
-      D3D12_RESOURCE_STATE_DEPTH_WRITE, &depthClear,
-      IID_PPV_ARGS(&g_depthBuffer)));
-
-  // Create DSV
-  D3D12_DEPTH_STENCIL_VIEW_DESC dsvView = {};
-  dsvView.Format = DXGI_FORMAT_D32_FLOAT;
-  dsvView.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
-  dsvView.Flags = D3D12_DSV_FLAG_NONE;
-
-  g_device->CreateDepthStencilView(
-      g_depthBuffer.Get(), &dsvView,
-      g_dsvHeap->GetCPUDescriptorHandleForHeapStart());
-
-  D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle =
-      g_rtvHeap->GetCPUDescriptorHandleForHeapStart();
-  D3D12_CPU_DESCRIPTOR_HANDLE rtvHandleStart = rtvHandle;
-  for (UINT i = 0; i < FrameCount; ++i) {
-    HRESULT hrBuf =
-        g_swapChain->GetBuffer(i, IID_PPV_ARGS(&g_renderTargets[i]));
-    if (FAILED(hrBuf)) {
-      // Log to stderr only
-      fprintf(stderr, "InitD3D12: GetBuffer failed for index %u: 0x%08x\n", i,
-              (unsigned)hrBuf);
-      return false;
-    }
-    g_device->CreateRenderTargetView(g_renderTargets[i].Get(), nullptr,
-                                     rtvHandle);
-    rtvHandle.ptr =
-        rtvHandleStart.ptr + (SIZE_T)((i + 1) * g_rtvDescriptorSize);
-  }
-
-  // Log: RTVs created (stderr only)
-  fprintf(stderr, "InitD3D12: RTVs created\n");
-
-  // Log: before CBV/SRV allocator init (stderr only)
-  fprintf(stderr, "InitD3D12: Before CBV/SRV allocator Init\n");
   // Initialize descriptor allocator for CBV/SRV/UAV
-  g_cbvSrvAllocator.Init(g_device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-                         65536, FrameCount);
-  // Log: CBV/SRV allocator initialized (stderr only)
-  fprintf(stderr, "InitD3D12: CBV/SRV allocator initialized\n");
-
-  // Create per-frame resources (command allocators + fence values)
-  for (UINT i = 0; i < FrameCount; ++i) {
-    HRESULT hrAlloc = g_device->CreateCommandAllocator(
-        D3D12_COMMAND_LIST_TYPE_DIRECT,
-        IID_PPV_ARGS(&g_frameResources[i].commandAllocator));
-    if (FAILED(hrAlloc)) {
-      // Log to stderr only
-      fprintf(stderr,
-              "InitD3D12: CreateCommandAllocator failed for frame %u: 0x%08x\n",
-              i, (unsigned)hrAlloc);
-      return false;
-    }
-    g_frameResources[i].fenceValue = 0;
-    g_frameResources[i].transientDescriptorOffset = 0;
-  }
-  // Log: per-frame command allocators created (stderr only)
-  fprintf(stderr, "InitD3D12: per-frame command allocators created\n");
-
-  // Create a single command list (can be recycled)
-  ThrowIfFailed(g_device->CreateCommandList(
-      0, D3D12_COMMAND_LIST_TYPE_DIRECT,
-      g_frameResources[g_frameIndex].commandAllocator.Get(), nullptr,
-      IID_PPV_ARGS(&g_commandList)));
-  // Command lists are created in the recording state. Close it for now.
-  ThrowIfFailed(g_commandList->Close());
-
-  // Create fence
-  ThrowIfFailed(g_device->CreateFence(g_fenceValues[g_frameIndex],
-                                      D3D12_FENCE_FLAG_NONE,
-                                      IID_PPV_ARGS(&g_fence)));
-  g_fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-  if (g_fenceEvent == nullptr) {
-    ThrowIfFailed(HRESULT_FROM_WIN32(GetLastError()));
-  }
-
-  // Initialize fence values
-  for (UINT i = 0; i < FrameCount; ++i)
-    g_fenceValues[i] = 0;
+  g_cbvSrvAllocator.Init(DX12Context::g_device.Get(),
+                         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 65536,
+                         FrameCount);
 
   // Now that fence and event are valid, attach command queue & fence to DXR
   // renderer
-  DxrRenderer::SetCommandQueue(g_commandQueue.Get(), g_fence.Get(),
-                               g_fenceValues, &g_frameIndex, g_fenceEvent);
+  DxrRenderer::SetCommandQueue(
+      DX12Context::g_commandQueue.Get(), DX12Context::g_fence.Get(),
+      DX12Context::g_fenceValues, &DX12Context::g_frameIndex,
+      DX12Context::g_fenceEvent);
 
   // --- Create a root signature with CBV b0 (vertex), descriptor table t0
   // (SRV), and CBV b1 (pixel material) ---
@@ -888,9 +565,9 @@ bool InitD3D12(HWND hwnd) {
   ComPtr<ID3DBlob> error;
   ThrowIfFailed(D3D12SerializeRootSignature(
       &rootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1, &signature, &error));
-  ThrowIfFailed(g_device->CreateRootSignature(0, signature->GetBufferPointer(),
-                                              signature->GetBufferSize(),
-                                              IID_PPV_ARGS(&g_rootSignature)));
+  ThrowIfFailed(DX12Context::g_device->CreateRootSignature(
+      0, signature->GetBufferPointer(), signature->GetBufferSize(),
+      IID_PPV_ARGS(&g_rootSignature)));
 
   // --- Compile simple shaders for demo triangle (DXC / SM6) ---
   ComPtr<IDxcBlob> vsBlob;
@@ -1008,11 +685,12 @@ bool InitD3D12(HWND hwnd) {
   psoDesc.RTVFormats[0] = DXGI_FORMAT_R10G10B10A2_UNORM;
   psoDesc.SampleDesc.Count = 1;
 
-  ThrowIfFailed(g_device->CreateGraphicsPipelineState(
+  ThrowIfFailed(DX12Context::g_device->CreateGraphicsPipelineState(
       &psoDesc, IID_PPV_ARGS(&g_pipelineState)));
 
   // Create grid resources using raster module
-  RasterRenderer::CreateGridResources(g_device.Get(), g_gridThickness);
+  RasterRenderer::CreateGridResources(DX12Context::g_device.Get(),
+                                      g_gridThickness);
 
   // --- Create a mesh PSO (position-only vertex layout, simple pixel shader)
   // ---
@@ -1041,15 +719,17 @@ bool InitD3D12(HWND hwnd) {
   meshPsoDesc.DepthStencilState.StencilEnable = FALSE;
 
   {
-    HRESULT hrMesh = g_device->CreateGraphicsPipelineState(
+    HRESULT hrMesh = DX12Context::g_device->CreateGraphicsPipelineState(
         &meshPsoDesc, IID_PPV_ARGS(&RasterRenderer::g_meshPipelineState));
     if (FAILED(hrMesh)) {
       fprintf(stderr,
-              "InitD3D12: CreateGraphicsPipelineState (mesh) failed: 0x%08x\n",
+              "InitApplication: CreateGraphicsPipelineState (mesh) failed: "
+              "0x%08x\n",
               (unsigned)hrMesh);
 #ifdef _DEBUG
       ComPtr<ID3D12InfoQueue> infoQueue;
-      if (SUCCEEDED(g_device->QueryInterface(IID_PPV_ARGS(&infoQueue)))) {
+      if (SUCCEEDED(DX12Context::g_device->QueryInterface(
+              IID_PPV_ARGS(&infoQueue)))) {
         UINT64 num = infoQueue->GetNumStoredMessagesAllowedByRetrievalFilter();
         for (UINT64 mi = 0; mi < num; ++mi) {
           SIZE_T messageLength = 0;
@@ -1072,7 +752,8 @@ bool InitD3D12(HWND hwnd) {
 
   // Recreate the mesh PSO via RasterRenderer to pick up debug defines (e.g.
   // RASTER_DEBUG_DEPTH)
-  RasterRenderer::RecreateMeshPipeline(g_device.Get(), g_rootSignature.Get());
+  RasterRenderer::RecreateMeshPipeline(DX12Context::g_device.Get(),
+                                       g_rootSignature.Get());
 
   // Additionally create a simple mesh PSO that reads only POSITION and draws a
   // constant color
@@ -1104,7 +785,7 @@ bool InitD3D12(HWND hwnd) {
                       psMeshSimpleBlob->GetBufferSize()};
       if (g_rootSignature)
         simplePso.pRootSignature = g_rootSignature.Get();
-      ThrowIfFailed(g_device->CreateGraphicsPipelineState(
+      ThrowIfFailed(DX12Context::g_device->CreateGraphicsPipelineState(
           &simplePso, IID_PPV_ARGS(&g_meshSimplePipelineState)));
     }
   }
@@ -1127,18 +808,20 @@ bool InitD3D12(HWND hwnd) {
   // Initialize DX12 backend with the main CBV/SRV/UAV heap so we can show
   // thumbnails using existing engine texture SRVs.
   DescriptorAllocation imguiFontAlloc = g_cbvSrvAllocator.AllocatePersistent(1);
-  ImGui_ImplDX12_Init(g_device.Get(), FrameCount, DXGI_FORMAT_R10G10B10A2_UNORM,
-                      g_cbvSrvAllocator.Heap(), imguiFontAlloc.cpu,
-                      imguiFontAlloc.gpu);
+  ImGui_ImplDX12_Init(DX12Context::g_device.Get(), FrameCount,
+                      DXGI_FORMAT_R10G10B10A2_UNORM, g_cbvSrvAllocator.Heap(),
+                      imguiFontAlloc.cpu, imguiFontAlloc.gpu);
 
   ImGui_ImplDX12_CreateDeviceObjects();
 
   // Initialize asset loader with device & command queue so it can perform
   // uploads
-  Asset::Initialize(g_device.Get(), g_commandQueue.Get());
+  Asset::Initialize(DX12Context::g_device.Get(),
+                    DX12Context::g_commandQueue.Get());
 
   // Initialize IBL Manager and load default environment map
-  IBLManager::Get().Initialize(g_device.Get(), g_commandQueue.Get());
+  IBLManager::Get().Initialize(DX12Context::g_device.Get(),
+                               DX12Context::g_commandQueue.Get());
   /*
   if (!IBLManager::Get().LoadEnvironmentMap("assets/env.exr")) {
     fprintf(
@@ -1170,7 +853,7 @@ bool InitD3D12(HWND hwnd) {
       srvDesc.Format = IBLManager::Get().GetEnvMap().format;
       srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
       srvDesc.Texture2D.MipLevels = (UINT)-1;
-      g_device->CreateShaderResourceView(
+      DX12Context::g_device->CreateShaderResourceView(
           IBLManager::Get().GetEnvMap().resource.Get(), &srvDesc, alloc.cpu);
     } else {
       // Create a default scalar (null) SRV or similar?
@@ -1185,7 +868,8 @@ bool InitD3D12(HWND hwnd) {
       nullSrvDesc.Format =
           DXGI_FORMAT_R32G32B32A32_FLOAT; // Standard env map format
       nullSrvDesc.Texture2D.MipLevels = 1;
-      g_device->CreateShaderResourceView(nullptr, &nullSrvDesc, alloc.cpu);
+      DX12Context::g_device->CreateShaderResourceView(nullptr, &nullSrvDesc,
+                                                      alloc.cpu);
     }
   }
 
@@ -1214,7 +898,7 @@ bool InitD3D12(HWND hwnd) {
   D3D12_HEAP_PROPERTIES uploadHeapProps = {};
   uploadHeapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
 
-  ThrowIfFailed(g_device->CreateCommittedResource(
+  ThrowIfFailed(DX12Context::g_device->CreateCommittedResource(
       &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &cbDesc,
       D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
       IID_PPV_ARGS(&g_constantBuffer)));
@@ -1254,7 +938,7 @@ bool InitD3D12(HWND hwnd) {
   matCbDesc.MipLevels = 1;
   matCbDesc.SampleDesc.Count = 1;
   matCbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-  ThrowIfFailed(g_device->CreateCommittedResource(
+  ThrowIfFailed(DX12Context::g_device->CreateCommittedResource(
       &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &matCbDesc,
       D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
       IID_PPV_ARGS(&g_materialConstantBuffer)));
@@ -1264,7 +948,7 @@ bool InitD3D12(HWND hwnd) {
     const UINT64 matSbSize = sizeof(MaterialCB) * 16384;
     D3D12_RESOURCE_DESC matSbDesc = matCbDesc;
     matSbDesc.Width = matSbSize;
-    ThrowIfFailed(g_device->CreateCommittedResource(
+    ThrowIfFailed(DX12Context::g_device->CreateCommittedResource(
         &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &matSbDesc,
         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
         IID_PPV_ARGS(&g_materialStructuredBuffer)));
@@ -1281,7 +965,7 @@ bool InitD3D12(HWND hwnd) {
     const UINT64 meshSbSize = sizeof(MeshData) * 16384;
     D3D12_RESOURCE_DESC meshSbDesc = matCbDesc;
     meshSbDesc.Width = meshSbSize;
-    ThrowIfFailed(g_device->CreateCommittedResource(
+    ThrowIfFailed(DX12Context::g_device->CreateCommittedResource(
         &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &meshSbDesc,
         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
         IID_PPV_ARGS(&g_meshStructuredBuffer)));
@@ -1299,7 +983,7 @@ bool InitD3D12(HWND hwnd) {
     camCbDesc.SampleDesc.Count = 1;
     camCbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
-    ThrowIfFailed(g_device->CreateCommittedResource(
+    ThrowIfFailed(DX12Context::g_device->CreateCommittedResource(
         &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &camCbDesc,
         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
         IID_PPV_ARGS(&g_cameraConstantBuffer)));
@@ -1319,14 +1003,14 @@ bool InitD3D12(HWND hwnd) {
 
     // Use a temporary command list to ensure clean state
     ComPtr<ID3D12CommandAllocator> tempAlloc;
-    ThrowIfFailed(g_device->CreateCommandAllocator(
+    ThrowIfFailed(DX12Context::g_device->CreateCommandAllocator(
         D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&tempAlloc)));
     ComPtr<ID3D12GraphicsCommandList> tempList;
-    ThrowIfFailed(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                              tempAlloc.Get(), nullptr,
-                                              IID_PPV_ARGS(&tempList)));
+    ThrowIfFailed(DX12Context::g_device->CreateCommandList(
+        0, D3D12_COMMAND_LIST_TYPE_DIRECT, tempAlloc.Get(), nullptr,
+        IID_PPV_ARGS(&tempList)));
 
-    g_cloudManager.Initialize(g_device.Get(), tempList.Get());
+    g_cloudManager.Initialize(DX12Context::g_device.Get(), tempList.Get());
 
     // Execute immediately using the existing helper which closes the list and
     // waits
@@ -1345,121 +1029,6 @@ bool InitD3D12(HWND hwnd) {
 // Mesh PSO recreation moved to RasterRenderer::RecreateMeshPipeline
 // (src/raster_renderer.cpp)
 
-void WaitForPreviousFrame() {
-  const UINT64 currentFenceValue = g_fenceValues[g_frameIndex];
-  ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), currentFenceValue));
-
-  // Update index
-  g_frameIndex = g_swapChain->GetCurrentBackBufferIndex();
-
-  // If the next frame is not ready to be rendered yet, wait until it is
-  // signaled.
-  if (g_fence->GetCompletedValue() < g_fenceValues[g_frameIndex]) {
-    ThrowIfFailed(g_fence->SetEventOnCompletion(g_fenceValues[g_frameIndex],
-                                                g_fenceEvent));
-    const DWORD waitMs = g_appClosing ? 50u : INFINITE;
-    DWORD wr = WaitForSingleObject(g_fenceEvent, waitMs);
-    if (wr == WAIT_TIMEOUT && g_appClosing) {
-      return;
-    }
-  }
-
-  // Set the fence value for the next frame.
-  g_fenceValues[g_frameIndex] = currentFenceValue + 1;
-}
-
-void WaitGPUIdle() {
-  if (!g_commandQueue || !g_fence || !g_fenceEvent)
-    return;
-  const UINT64 waitValue = g_fenceValues[g_frameIndex] + 100;
-  HRESULT hr = g_commandQueue->Signal(g_fence.Get(), waitValue);
-  if (FAILED(hr)) {
-    if (g_device->GetDeviceRemovedReason() != S_OK) {
-      fprintf(stderr, "WaitGPUIdle: Signal failed due to Device Removal\n");
-    }
-    return;
-  }
-  g_fence->SetEventOnCompletion(waitValue, g_fenceEvent);
-  if (WaitForSingleObject(g_fenceEvent, 5000) == WAIT_TIMEOUT) {
-    fprintf(
-        stderr,
-        "WaitGPUIdle: Timeout waiting for GPU idle (5s). GPU might be hung.\n");
-  }
-  for (UINT i = 0; i < FrameCount; ++i) {
-    g_fenceValues[i] = waitValue + 1;
-  }
-}
-
-void ResizeSwapChain(UINT width, UINT height) {
-  if (width == 0 || height == 0)
-    return;
-
-  // Wait for GPU to finish
-  WaitGPUIdle();
-
-  // Release render targets
-  for (UINT i = 0; i < FrameCount; ++i) {
-    g_renderTargets[i].Reset();
-  }
-  g_depthBuffer.Reset();
-
-  // Resize swap chain
-  DXGI_SWAP_CHAIN_DESC swapChainDesc = {};
-  g_swapChain->GetDesc(&swapChainDesc);
-  ThrowIfFailed(g_swapChain->ResizeBuffers(FrameCount, width, height,
-                                           swapChainDesc.BufferDesc.Format,
-                                           swapChainDesc.Flags));
-
-  g_windowWidth = width;
-  g_windowHeight = height;
-
-  // Recreate render targets
-  D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle =
-      g_rtvHeap->GetCPUDescriptorHandleForHeapStart();
-  for (UINT i = 0; i < FrameCount; ++i) {
-    ThrowIfFailed(g_swapChain->GetBuffer(i, IID_PPV_ARGS(&g_renderTargets[i])));
-    g_device->CreateRenderTargetView(g_renderTargets[i].Get(), nullptr,
-                                     rtvHandle);
-    rtvHandle.ptr += g_rtvDescriptorSize;
-  }
-
-  // If DXR is active, recreate its pipeline/output texture to match new size
-  DxrRenderer::CreateRayTracingPipeline(width, height);
-
-  // Recreate depth buffer
-  D3D12_RESOURCE_DESC depthDesc = {};
-  depthDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-  depthDesc.Width = width;
-  depthDesc.Height = height;
-  depthDesc.DepthOrArraySize = 1;
-  depthDesc.MipLevels = 1;
-  depthDesc.Format = DXGI_FORMAT_D32_FLOAT;
-  depthDesc.SampleDesc.Count = 1;
-  depthDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-
-  D3D12_HEAP_PROPERTIES heapProps = {};
-  heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-  D3D12_CLEAR_VALUE clearValue = {};
-  clearValue.Format = DXGI_FORMAT_D32_FLOAT;
-  clearValue.DepthStencil.Depth = 1.0f;
-
-  ThrowIfFailed(g_device->CreateCommittedResource(
-      &heapProps, D3D12_HEAP_FLAG_NONE, &depthDesc,
-      D3D12_RESOURCE_STATE_DEPTH_WRITE, &clearValue,
-      IID_PPV_ARGS(&g_depthBuffer)));
-
-  D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
-  dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
-  dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
-
-  g_device->CreateDepthStencilView(
-      g_depthBuffer.Get(), &dsvDesc,
-      g_dsvHeap->GetCPUDescriptorHandleForHeapStart());
-
-  g_frameIndex = g_swapChain->GetCurrentBackBufferIndex();
-}
-
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
                          LPARAM lParam) {
   if (ImGui_ImplWin32_WndProcHandler(hWnd, message, wParam, lParam))
@@ -1471,10 +1040,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
     PostQuitMessage(0);
     return 0;
   case WM_SIZE:
-    if (!g_appClosing && g_swapChain && wParam != SIZE_MINIMIZED) {
+    if (!g_appClosing && DX12Context::g_swapChain && wParam != SIZE_MINIMIZED) {
       UINT width = LOWORD(lParam);
       UINT height = HIWORD(lParam);
-      ResizeSwapChain(width, height);
+      DX12Context::ResizeSwapChain(width, height);
     }
     return 0;
   case WM_DESTROY:
@@ -1487,6 +1056,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                    int nCmdShow) {
+#ifdef _DEBUG
+  SetUnhandledExceptionFilter(TopLevelExceptionHandler);
+#endif
+
   // Do not create or show a console window here.
   // We assume the caller runs the executable from a terminal (or redirects
   // stdout/stderr). Logging still uses stderr but we won't forcibly allocate a
@@ -1558,14 +1131,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   // Log that we showed the window (stderr only)
   fprintf(stderr, "ShowWindow called\n");
 
-  if (!InitD3D12(hwnd)) {
-    MessageBoxA(nullptr, "Failed to initialize D3D12", "Error",
+  if (!InitApplication(hwnd)) {
+    MessageBoxA(nullptr, "Failed to initialize application", "Error",
                 MB_OK | MB_ICONERROR);
     return -1;
   }
 
-  // Log successful D3D12 initialization (stderr only)
-  fprintf(stderr, "InitD3D12 returned OK\n");
+  fprintf(stderr, "InitApplication returned OK\n");
 
   // Scene Setup
   if (!sceneToLoad.empty()) {
@@ -1667,32 +1239,36 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       fprintf(stderr, "PopulateCommandList start\n");
 
     // Reset per-frame command allocator and command list
-    ThrowIfFailed(g_frameResources[g_frameIndex].commandAllocator->Reset());
-    ThrowIfFailed(g_commandList->Reset(
-        g_frameResources[g_frameIndex].commandAllocator.Get(), nullptr));
+    ThrowIfFailed(DX12Context::g_frameResources[DX12Context::g_frameIndex]
+                      .commandAllocator->Reset());
+    ThrowIfFailed(DX12Context::g_commandList->Reset(
+        DX12Context::g_frameResources[DX12Context::g_frameIndex]
+            .commandAllocator.Get(),
+        nullptr));
 
     // Reset per-frame transient descriptor allocator
-    g_cbvSrvAllocator.ResetFrame(g_frameIndex);
+    g_cbvSrvAllocator.ResetFrame(DX12Context::g_frameIndex);
 
     // Get RTV handle
     D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle =
-        g_rtvHeap->GetCPUDescriptorHandleForHeapStart();
-    rtvHandle.ptr =
-        rtvHandle.ptr + (SIZE_T)(g_frameIndex * g_rtvDescriptorSize);
+        DX12Context::g_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    rtvHandle.ptr = rtvHandle.ptr + (SIZE_T)(DX12Context::g_frameIndex *
+                                             DX12Context::g_rtvDescriptorSize);
 
     // Set viewport and scissor
     D3D12_VIEWPORT viewport = {};
     viewport.TopLeftX = 0;
     viewport.TopLeftY = 0;
-    viewport.Width = (float)g_windowWidth;
-    viewport.Height = (float)g_windowHeight;
+    viewport.Width = (float)DX12Context::g_windowWidth;
+    viewport.Height = (float)DX12Context::g_windowHeight;
     viewport.MinDepth = 0.0f;
     viewport.MaxDepth = 1.0f;
 
-    D3D12_RECT scissorRect = {0, 0, (LONG)g_windowWidth, (LONG)g_windowHeight};
+    D3D12_RECT scissorRect = {0, 0, (LONG)DX12Context::g_windowWidth,
+                              (LONG)DX12Context::g_windowHeight};
 
-    g_commandList->RSSetViewports(1, &viewport);
-    g_commandList->RSSetScissorRects(1, &scissorRect);
+    DX12Context::g_commandList->RSSetViewports(1, &viewport);
+    DX12Context::g_commandList->RSSetScissorRects(1, &scissorRect);
 
     // Render based on current mode
     switch (g_currentRenderMode) {
@@ -1797,7 +1373,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           }
         }
 
-        ID3D12Resource *dxrTarget = g_renderTargets[g_frameIndex].Get();
+        ID3D12Resource *dxrTarget =
+            DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get();
         D3D12_CPU_DESCRIPTOR_HANDLE dxrRtv = rtvHandle;
         if (g_renderExportJob.active && g_exportRenderTarget &&
             g_exportRtvHeap) {
@@ -1806,11 +1383,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         }
 
         bool dxrOk = DxrRenderer::RenderFrame(
-            g_commandList.Get(),
-            g_frameResources[g_frameIndex].commandAllocator.Get(), g_frameIndex,
-            dxrTarget, dxrRtv, g_cameraConstantBuffer.Get(),
-            g_materialStructuredBuffer.Get(), g_texturesGpuStart,
-            g_textureDescriptorCount, activeMeshes,
+            DX12Context::g_commandList.Get(),
+            DX12Context::g_frameResources[DX12Context::g_frameIndex]
+                .commandAllocator.Get(),
+            DX12Context::g_frameIndex, dxrTarget, dxrRtv,
+            g_cameraConstantBuffer.Get(), g_materialStructuredBuffer.Get(),
+            g_texturesGpuStart, g_textureDescriptorCount, activeMeshes,
             g_meshStructuredBuffer.Get());
         if (dxrOk) {
           if (g_renderExportJob.active &&
@@ -1820,52 +1398,62 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           // Success DXR render - Draw Grid with depth checks
           if (!g_renderExportJob.active && g_drawGrid) {
             D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle =
-                g_dsvHeap->GetCPUDescriptorHandleForHeapStart();
-            g_commandList->ClearDepthStencilView(
+                DX12Context::g_dsvHeap->GetCPUDescriptorHandleForHeapStart();
+            DX12Context::g_commandList->ClearDepthStencilView(
                 dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
             // 1. Scene Depth Pre-pass (populate depth buffer for grid
             // occlusion)
-            g_commandList->OMSetRenderTargets(0, nullptr, FALSE, &dsvHandle);
-            g_commandList->SetGraphicsRootSignature(g_rootSignature.Get());
-            RasterRenderer::DrawSceneDepthOnly(g_commandList.Get(),
+            DX12Context::g_commandList->OMSetRenderTargets(0, nullptr, FALSE,
+                                                           &dsvHandle);
+            DX12Context::g_commandList->SetGraphicsRootSignature(
+                g_rootSignature.Get());
+            RasterRenderer::DrawSceneDepthOnly(DX12Context::g_commandList.Get(),
                                                g_cameraConstantBuffer.Get(),
                                                sceneInstances);
 
             // 2. Draw Grid (test against the populated depth buffer)
-            g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
-            RasterRenderer::DrawGrid(g_commandList.Get(),
+            DX12Context::g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE,
+                                                           &dsvHandle);
+            RasterRenderer::DrawGrid(DX12Context::g_commandList.Get(),
                                      g_cameraConstantBuffer.Get());
           }
           if (g_renderExportJob.active) {
-            TR(g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
+            TR(DX12Context::g_commandList.Get(),
+               DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),
                D3D12_RESOURCE_STATE_PRESENT,
                D3D12_RESOURCE_STATE_RENDER_TARGET);
             FLOAT clearColor[] = {0.08f, 0.08f, 0.09f, 1.0f};
-            g_commandList->ClearRenderTargetView(rtvHandle, clearColor, 0,
-                                                 nullptr);
-            g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+            DX12Context::g_commandList->ClearRenderTargetView(
+                rtvHandle, clearColor, 0, nullptr);
+            DX12Context::g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE,
+                                                           nullptr);
           }
         } else {
           // If RenderFrame failed, fall back to red clear
-          TR(g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
+          TR(DX12Context::g_commandList.Get(),
+             DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),
              D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
           FLOAT clearColor[] = {0.8f, 0.2f, 0.2f,
                                 1.0f}; // Red to indicate fallback
-          g_commandList->ClearRenderTargetView(rtvHandle, clearColor, 0,
-                                               nullptr);
-          g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+          DX12Context::g_commandList->ClearRenderTargetView(
+              rtvHandle, clearColor, 0, nullptr);
+          DX12Context::g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE,
+                                                         nullptr);
         }
       } else {
         // Fallback to raster if DXR not available
-        TR(g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
+        TR(DX12Context::g_commandList.Get(),
+           DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),
            D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
         FLOAT clearColor[] = {0.8f, 0.2f, 0.2f,
                               1.0f}; // Red to indicate fallback
-        g_commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
-        g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+        DX12Context::g_commandList->ClearRenderTargetView(rtvHandle, clearColor,
+                                                          0, nullptr);
+        DX12Context::g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE,
+                                                       nullptr);
       }
       break;
     }
@@ -1875,46 +1463,50 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       // Log to stderr only (controlled by verbose flag)
       if (g_verboseRenderLogs)
         fprintf(stderr, "Entering Raster Path\n");
-      TR(g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
+      TR(DX12Context::g_commandList.Get(),
+         DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),
          D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
       FLOAT clearColor[] = {0.1f, 0.1f, 0.12f, 1.0f};
-      g_commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+      DX12Context::g_commandList->ClearRenderTargetView(rtvHandle, clearColor,
+                                                        0, nullptr);
 
       // Clear depth buffer
       D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle =
-          g_dsvHeap->GetCPUDescriptorHandleForHeapStart();
-      g_commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH,
-                                           1.0f, 0, 0, nullptr);
+          DX12Context::g_dsvHeap->GetCPUDescriptorHandleForHeapStart();
+      DX12Context::g_commandList->ClearDepthStencilView(
+          dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
-      g_commandList->SetGraphicsRootSignature(g_rootSignature.Get());
+      DX12Context::g_commandList->SetGraphicsRootSignature(
+          g_rootSignature.Get());
       // Use camera constant buffer for proper camera movement
       if (g_cameraConstantBuffer) {
-        g_commandList->SetGraphicsRootConstantBufferView(
+        DX12Context::g_commandList->SetGraphicsRootConstantBufferView(
             0, g_cameraConstantBuffer->GetGPUVirtualAddress());
       }
 
       // No demo triangle; ensure render target is bound for subsequent draws
-      g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
+      DX12Context::g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE,
+                                                     &dsvHandle);
 
       // Bind global descriptor heap once for all raster calls
       ID3D12DescriptorHeap *heaps[] = {g_cbvSrvAllocator.Heap()};
-      g_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
+      DX12Context::g_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
 
       // Draw Skybox (Always passes depth, but doesn't write depth)
       if (g_cloudManager.NeedsBake()) {
         fprintf(stderr,
                 "Main: calling g_cloudManager.BakeSky() before DrawSkybox\n");
-        g_cloudManager.BakeSky(g_commandList.Get(),
+        g_cloudManager.BakeSky(DX12Context::g_commandList.Get(),
                                g_cameraConstantBuffer.Get());
         fprintf(stderr, "Main: returned from g_cloudManager.BakeSky()\n");
       }
-      RasterRenderer::DrawSkybox(g_commandList.Get(),
+      RasterRenderer::DrawSkybox(DX12Context::g_commandList.Get(),
                                  g_cameraConstantBuffer.Get());
 
       // Draw ground grid (optional) via raster module
       if (g_drawGrid) {
-        RasterRenderer::DrawGrid(g_commandList.Get(),
+        RasterRenderer::DrawGrid(DX12Context::g_commandList.Get(),
                                  g_cameraConstantBuffer.Get());
       }
 
@@ -1926,15 +1518,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           fprintf(stderr, "Drawing %zu instances\n", sceneInstances.size());
         // Use the RasterRenderer mesh PSO (may output debug depth/uv depending
         // on compile defines)
-        g_commandList->SetPipelineState(
+        DX12Context::g_commandList->SetPipelineState(
             RasterRenderer::g_meshPipelineState.Get());
-        g_commandList->IASetPrimitiveTopology(
+        DX12Context::g_commandList->IASetPrimitiveTopology(
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         // Ensure render targets are set for mesh rendering
-        g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
+        DX12Context::g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE,
+                                                       &dsvHandle);
         // Use camera constant buffer for mesh rendering
         if (g_cameraConstantBuffer) {
-          g_commandList->SetGraphicsRootConstantBufferView(
+          DX12Context::g_commandList->SetGraphicsRootConstantBufferView(
               0, g_cameraConstantBuffer->GetGPUVirtualAddress());
         }
 
@@ -1947,8 +1540,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             continue;
 
           // Set instance transform
-          g_commandList->SetGraphicsRoot32BitConstants(3, 16, inst.transform,
-                                                       0);
+          DX12Context::g_commandList->SetGraphicsRoot32BitConstants(
+              3, 16, inst.transform, 0);
 
           // material binding... (existing logic needed)
           if (gm.materialIndex >= 0 &&
@@ -1968,8 +1561,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                     (unsigned)gm.indexCount, gm.materialIndex);
           }
 
-          g_commandList->IASetVertexBuffers(0, 1, &gm.vbView);
-          g_commandList->IASetIndexBuffer(&gm.ibView);
+          DX12Context::g_commandList->IASetVertexBuffers(0, 1, &gm.vbView);
+          DX12Context::g_commandList->IASetIndexBuffer(&gm.ibView);
 
           if (gm.materialIndex >= 0 &&
               gm.materialIndex < (int)g_loadedMaterials.size()) {
@@ -2043,21 +1636,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                 memcpy(pMat + offset, &matCB, sizeof(matCB));
                 g_materialConstantBuffer->Unmap(0, nullptr);
               }
-              g_commandList->SetGraphicsRootConstantBufferView(
+              DX12Context::g_commandList->SetGraphicsRootConstantBufferView(
                   2, g_materialConstantBuffer->GetGPUVirtualAddress() + offset);
             }
             if (g_textureDescriptorCount > 0) {
-              g_commandList->SetGraphicsRootDescriptorTable(1,
-                                                            g_texturesGpuStart);
+              DX12Context::g_commandList->SetGraphicsRootDescriptorTable(
+                  1, g_texturesGpuStart);
             }
             if (IBLManager::Get().IsLoaded()) {
-              g_commandList->SetGraphicsRootDescriptorTable(
+              DX12Context::g_commandList->SetGraphicsRootDescriptorTable(
                   4, IBLManager::Get().GetGPUHandle());
             }
           }
           if (gm.ibView.SizeInBytes > 0) {
-            g_commandList->DrawIndexedInstanced(gm.ibView.SizeInBytes / 4, 1, 0,
-                                                0, 0);
+            DX12Context::g_commandList->DrawIndexedInstanced(
+                gm.ibView.SizeInBytes / 4, 1, 0, 0, 0);
             if (g_verboseRenderLogs) {
               fprintf(stderr, "Issued DrawIndexedInstanced for mesh[%zu]\n", i);
             }
@@ -2073,27 +1666,29 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         g_exportPreviewSrvGpu.ptr != 0 &&
         g_exportRenderTargetState !=
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE) {
-      TR(g_commandList.Get(), g_exportRenderTarget.Get(),
+      TR(DX12Context::g_commandList.Get(), g_exportRenderTarget.Get(),
          g_exportRenderTargetState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
       g_exportRenderTargetState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     }
 
     ID3D12DescriptorHeap *ppHeaps[] = {g_cbvSrvAllocator.Heap()};
-    g_commandList->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
-    ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), g_commandList.Get());
+    DX12Context::g_commandList->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
+    ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(),
+                                  DX12Context::g_commandList.Get());
 
     if (g_renderExportJob.active && g_exportRenderTarget &&
         g_exportRenderTargetState != D3D12_RESOURCE_STATE_PRESENT) {
-      TR(g_commandList.Get(), g_exportRenderTarget.Get(),
+      TR(DX12Context::g_commandList.Get(), g_exportRenderTarget.Get(),
          g_exportRenderTargetState, D3D12_RESOURCE_STATE_PRESENT);
       g_exportRenderTargetState = D3D12_RESOURCE_STATE_PRESENT;
     }
 
     // Transition back to present
-    TR(g_commandList.Get(), g_renderTargets[g_frameIndex].Get(),
+    TR(DX12Context::g_commandList.Get(),
+       DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),
        D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
 
-    ThrowIfFailed(g_commandList->Close());
+    ThrowIfFailed(DX12Context::g_commandList->Close());
   };
 
   auto RecreateDevice = [&]() {
@@ -2105,14 +1700,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     g_rootSignature.Reset();
     g_vertexBuffer.Reset();
     g_constantBuffer.Reset();
-    g_commandList.Reset();
+    DX12Context::g_commandList.Reset();
 
     for (UINT i = 0; i < FrameCount; ++i) {
-      g_frameResources[i].commandAllocator.Reset();
+      DX12Context::g_frameResources[i].commandAllocator.Reset();
     }
 
     // Attempt reinitialization
-    if (!InitD3D12(g_hwnd)) {
+    if (!InitApplication(g_hwnd)) {
       MessageBoxA(nullptr, "Failed to recreate D3D12 device.",
                   "Device Recovery", MB_OK | MB_ICONERROR);
       ExitProcess(static_cast<UINT>(-1));
@@ -2120,7 +1715,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   };
 
   auto CheckDeviceRemoved = [&]() {
-    HRESULT reason = g_device->GetDeviceRemovedReason();
+    HRESULT reason = DX12Context::g_device->GetDeviceRemovedReason();
     if (FAILED(reason)) {
       // Attempt to recreate the device
       RecreateDevice();
@@ -2168,200 +1763,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       g_fpsTimer = 0.0f;
     }
 
-    // Input handling guarded by application focus
-    bool appFocused = (GetForegroundWindow() == g_hwnd);
-
-    // Handle mouse rotation when RMB is pressed (only when the app is focused)
-    // Use FPS-style capture: confine cursor and recenter each frame for smooth
-    // relative motion
-    RECT clientRect;
-    GetClientRect(g_hwnd, &clientRect);
-    POINT centerScreen = {clientRect.right / 2, clientRect.bottom / 2};
-    ClientToScreen(g_hwnd, &centerScreen);
-
-    if (appFocused && (GetAsyncKeyState(VK_RBUTTON) & 0x8000)) {
-      if (!g_mouseCaptured) {
-        // Enter capture mode
-        SetCursorPos(centerScreen.x, centerScreen.y);
-        ShowCursor(FALSE);
-        RECT winRect;
-        GetWindowRect(g_hwnd, &winRect);
-        ClipCursor(&winRect);
-        g_mouseCaptured = true;
-      }
-
-      POINT curPos;
-      GetCursorPos(&curPos);
-      int dx = curPos.x - centerScreen.x;
-      int dy = curPos.y - centerScreen.y;
-
-      const float sensitivity = g_mouseSensitivity; // radians per pixel
-      // Update yaw/pitch directly (FPS-style mouse look)
-      g_camYaw += dx * sensitivity;
-      g_camPitch -= dy * sensitivity;
-
-      // Clamp pitch to avoid flipping
-      const float maxPitch = 3.14159265f * 0.5f - 0.01f;
-      if (g_camPitch > maxPitch)
-        g_camPitch = maxPitch;
-      if (g_camPitch < -maxPitch)
-        g_camPitch = -maxPitch;
-
-      // Compute forward from yaw/pitch
-      g_cameraData.forward[0] = cosf(g_camPitch) * sinf(g_camYaw);
-      g_cameraData.forward[1] = sinf(g_camPitch);
-      g_cameraData.forward[2] = cosf(g_camPitch) * -cosf(g_camYaw);
-
-      // Reset accumulation immediately when the camera orientation changes via
-      // mouse
-      DxrRenderer::ResetAccumulation();
-
-      // Recenter cursor for next delta
-      SetCursorPos(centerScreen.x, centerScreen.y);
-    } else {
-      if (g_mouseCaptured) {
-        ShowCursor(TRUE);
-        ClipCursor(NULL);
-        g_mouseCaptured = false;
-      }
-      if (appFocused) {
-        GetCursorPos(&g_prevMousePos);
-        ScreenToClient(g_hwnd, &g_prevMousePos);
-      }
-    }
-    // Movement: WASD (only when app is focused)
-    float moveSpeed = g_camSpeed;
-    if (appFocused) {
-      if (GetAsyncKeyState(VK_SHIFT) & 0x8000)
-        moveSpeed *= 3.0f;
-    }
-
-    // Build forward vector for rendering (uses yaw/pitch) and also compute a
-    // horizontal-only forward for FPS movement
-    Vec3 camF = {g_cameraData.forward[0], g_cameraData.forward[1],
-                 g_cameraData.forward[2]};
-    Vec3 camU = {g_cameraData.up[0], g_cameraData.up[1], g_cameraData.up[2]};
-    // rotate forward by yaw/pitch (used for view/rendering)
-    {
-      float cp = cosf(g_camPitch);
-      float sp = sinf(g_camPitch);
-      float cy = cosf(g_camYaw);
-      float sy = sinf(g_camYaw);
-      camF.x = cp * sy;
-      camF.y = sp;
-      camF.z = cp * -cy;
-    }
-
-    // Horizontal FPS movement basis (yaw-only forward)
-    Vec3 worldUp = {0.0f, 1.0f, 0.0f};
-    Vec3 moveF = {sinf(g_camYaw), 0.0f, -cosf(g_camYaw)};
-    // Right vector = cross(moveF, worldUp)
-    Vec3 moveR = {moveF.y * worldUp.z - moveF.z * worldUp.y,
-                  moveF.z * worldUp.x - moveF.x * worldUp.z,
-                  moveF.x * worldUp.y - moveF.y * worldUp.x};
-
-    // normalize helper
-    auto normalize3 = [](Vec3 &v) {
-      float l = sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
-      if (l > 0.00001f) {
-        v.x /= l;
-        v.y /= l;
-        v.z /= l;
-      }
-    };
-    normalize3(camF);
-    normalize3(moveR);
-    normalize3(moveF);
-
-    Vec3 move = {0, 0, 0};
-    if (appFocused) {
-      // W/S forward/back (horizontal)
-      if (GetAsyncKeyState('W') & 0x8000) {
-        move.x += moveF.x;
-        move.y += moveF.y;
-        move.z += moveF.z;
-      }
-      if (GetAsyncKeyState('S') & 0x8000) {
-        move.x -= moveF.x;
-        move.y -= moveF.y;
-        move.z -= moveF.z;
-      }
-      // A/D strafing (standard FPS: A=left, D=right)
-      if (GetAsyncKeyState('A') & 0x8000) {
-        move.x -= moveR.x;
-        move.y -= moveR.y;
-        move.z -= moveR.z;
-      }
-      if (GetAsyncKeyState('D') & 0x8000) {
-        move.x += moveR.x;
-        move.y += moveR.y;
-        move.z += moveR.z;
-      }
-      // Vertical movement: Q up, E down (world up)
-      if (GetAsyncKeyState('Q') & 0x8000) {
-        move.x += worldUp.x;
-        move.y += worldUp.y;
-        move.z += worldUp.z;
-      }
-      if (GetAsyncKeyState('E') & 0x8000) {
-        move.x -= worldUp.x;
-        move.y -= worldUp.y;
-        move.z -= worldUp.z;
-      }
-
-      // TAB: Toggle between Raster and Raytracing modes
-      static bool tabDown = false;
-      if (GetAsyncKeyState(VK_TAB) & 0x8000) {
-        if (!tabDown) {
-          if (g_currentRenderMode == RenderMode::Raster) {
-            g_currentRenderMode = RenderMode::DXR;
-            WaitGPUIdle();
-            DxrRenderer::CreateRayTracingPipeline(g_windowWidth,
-                                                  g_windowHeight);
-            fprintf(stderr, "Switched to DXR Mode (TAB)\n");
-          } else {
-            g_currentRenderMode = RenderMode::Raster;
-            fprintf(stderr, "Switched to Raster Mode (TAB)\n");
-          }
-          tabDown = true;
-        }
-      } else {
-        tabDown = false;
-      }
-
-      // Selection: LBUTTON
-      static bool lbtnDown = false;
-      if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000)) {
-        if (!lbtnDown) {
-          // Always run selection logic to allow selecting nodes
-          int pickedMaterial = Scene::UpdateSelection((float)g_windowWidth,
-                                                      (float)g_windowHeight);
-
-          if (pickedMaterial != -1) {
-            // Only switch the Material Editor's active material if the Picking
-            // Tool is explicitly enabled
-            if (MaterialEditor::IsPickingEnabled()) {
-              MaterialEditor::SelectMaterial(pickedMaterial);
-              MaterialEditor::SetPickingEnabled(false);
-            }
-          }
-          lbtnDown = true;
-        }
-      } else {
-        lbtnDown = false;
-      }
-    }
-
-    if (move.x != 0 || move.y != 0 || move.z != 0) {
-      normalize3(move);
-      g_cameraData.pos[0] += move.x * moveSpeed * dt;
-      g_cameraData.pos[1] += move.y * moveSpeed * dt;
-      g_cameraData.pos[2] += move.z * moveSpeed * dt;
-
-      // Reset accumulation immediately when the camera position changes via
-      // input
-      DxrRenderer::ResetAccumulation();
-    }
+    Input::Update(dt);
 
     if (g_renderExportJob.active) {
       g_currentRenderMode = RenderMode::DXR;
@@ -2422,7 +1824,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     g_cameraData.forward[2] = (cosf(g_camPitch) * -cosf(g_camYaw));
 
     // Ensure aspect matches the window and update camera CB on GPU
-    g_cameraData.aspect = (float)g_windowWidth / (float)g_windowHeight;
+    g_cameraData.aspect =
+        (float)DX12Context::g_windowWidth / (float)DX12Context::g_windowHeight;
 #ifdef _DEBUG
     g_cameraData.debugMode = (float)g_debugMode;
 #else
@@ -2440,7 +1843,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     UpdateCameraCB();
 
     // Update Cloud Manager (uploads changed params to GPU)
-    g_cloudManager.Update(dt, g_frameIndex);
+    g_cloudManager.Update(dt, DX12Context::g_frameIndex);
 
     // Editor UI (moved to editor_ui.cpp)
     DrawEditorUI(g_fps, g_timeOfDay, g_northOffset);
@@ -2449,21 +1852,23 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     PopulateCommandList();
     // fprintf(stderr, "MainLoop: PopulateCommandList done\n");
 
-    ID3D12CommandList *ppCommandLists[] = {g_commandList.Get()};
-    g_commandQueue->ExecuteCommandLists(_countof(ppCommandLists),
-                                        ppCommandLists);
+    ID3D12CommandList *ppCommandLists[] = {DX12Context::g_commandList.Get()};
+    DX12Context::g_commandQueue->ExecuteCommandLists(_countof(ppCommandLists),
+                                                     ppCommandLists);
     // fprintf(stderr, "MainLoop: ExecuteCommandLists done\n");
 
     // fprintf(stderr, "MainLoop: Present start\n");
-    ThrowIfFailed(g_swapChain->Present(1, 0));
+    ThrowIfFailed(DX12Context::g_swapChain->Present(1, 0));
     // fprintf(stderr, "MainLoop: Present done\n");
     //  Signal and increment the fence value.
-    const UINT64 currentFenceValue = g_fenceValues[g_frameIndex];
-    ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), currentFenceValue));
-    g_fenceValues[g_frameIndex]++;
+    const UINT64 currentFenceValue =
+        DX12Context::g_fenceValues[DX12Context::g_frameIndex];
+    ThrowIfFailed(DX12Context::g_commandQueue->Signal(
+        DX12Context::g_fence.Get(), currentFenceValue));
+    DX12Context::g_fenceValues[DX12Context::g_frameIndex]++;
 
     // Wait for previous frame
-    WaitForPreviousFrame();
+    DX12Context::WaitForPreviousFrame();
 
     // Check if the GPU was removed (TDR) during the last frame
     if (CheckDeviceRemoved()) {
@@ -2480,7 +1885,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   ImGui::DestroyContext();
 
   // Cleanup fence event
-  CloseHandle(g_fenceEvent);
+  CloseHandle(DX12Context::g_fenceEvent);
 
   return 0;
 }
