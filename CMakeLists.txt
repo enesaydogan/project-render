@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_executable(project-render src/main.cpp)
 # Additional project sources
 target_sources(project-render PRIVATE 
+    src/editor_ui.cpp
     src/camera.cpp 
     src/dxr_renderer.cpp 
     src/dxr_accumulation.cpp
