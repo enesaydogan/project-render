@@ -9,6 +9,7 @@
 #include <cmath>
 #include <iostream>
 #include <vector>
+#include <thread>
 
 // Simple analytic approximation of CIE 1931 color matching functions.
 inline float Gaussian(float x, float alpha, float mu, float sigma1,
@@ -306,85 +307,79 @@ void IBLManager::UpdateTextureFromSkyModel() {
   const float endLambda = 780.0f;
   const float stepLambda = 20.0f;
 
-  // Simple loop (can be parallelized)
-  for (int y = 0; y < (int)height; ++y) {
-    for (int x = 0; x < (int)width; ++x) {
-      float u = (float)x / (float)width;
-      float v = (float)y / (float)height;
+  // Parallelize generation across rows to utilize multiple CPU cores.
+  unsigned hwThreads = std::thread::hardware_concurrency();
+  if (hwThreads == 0) hwThreads = 1;
+  unsigned numThreads = (unsigned)std::min<unsigned>(hwThreads, height);
+  unsigned chunk = (height + numThreads - 1) / numThreads;
 
-      float theta = v * (float)PI;
-      float phi = u * 2.0f * (float)PI;
+  // Capture frequently used values locally for thread safety and perf
+  auto skyModel = m_pragueSkyModel.get();
+  const double solarElev = m_solarElevation;
+  const double solarAzi = m_solarAzimuth;
+  const double visibility = m_visibility;
+  const double albedo = m_albedo;
+  const float skyIntensity = m_skyIntensity;
 
-      // Y-up coordinate system to match skybox.hlsl usually
-      // skybox.hlsl: uv.y = acos(dir.y) / PI  => y = cos(theta)
-      // skybox.hlsl: uv.x = atan2(dir.x, dir.z) ...
+  std::vector<std::thread> threads;
+  threads.reserve(numThreads);
 
-      double dy = std::cos(theta);
-      double sinTheta = std::sin(theta);
-      // Inverted dx and dz to match the shader's atan2(x, z) / 2PI + 0.5
-      // convention This aligns the texture's sun hotspot with the analytic sun
-      // disc
-      double dx = sinTheta * -std::sin(phi);
-      double dz = sinTheta * -std::cos(phi);
+  for (unsigned t = 0; t < numThreads; ++t) {
+    int y0 = (int)std::min<unsigned>(t * chunk, height);
+    int y1 = (int)std::min<unsigned>((t + 1) * chunk, height);
+    threads.emplace_back([=, &pixels]() {
+      for (int y = y0; y < y1; ++y) {
+        for (int x = 0; x < (int)width; ++x) {
+          float u = (float)x / (float)width;
+          float v = (float)y / (float)height;
 
-      // Texture is Y-up, but PragueSkyModel expects Z-up.
-      // We map our Y (up) to Model Z (up).
-      // Our Z (forward) to Model Y.
-      // Our X (right) to Model X.
-      PragueSkyModel::Vector3 viewDir = {dx, dz, dy};
+          float theta = v * (float)PI;
+          float phi = u * 2.0f * (float)PI;
 
-      if (dy < -0.01) {
-        // Ground / Below horizon - Gray
-        pixels[(y * width + x) * 4 + 0] = 0.2f;
-        pixels[(y * width + x) * 4 + 1] = 0.2f;
-        pixels[(y * width + x) * 4 + 2] = 0.2f;
-        pixels[(y * width + x) * 4 + 3] = 1.0f;
-        continue;
+          double dy = std::cos(theta);
+          double sinTheta = std::sin(theta);
+          double dx = sinTheta * -std::sin(phi);
+          double dz = sinTheta * -std::cos(phi);
+
+          PragueSkyModel::Vector3 viewDir = {dx, dz, dy};
+
+          if (dy < -0.01) {
+            pixels[(y * width + x) * 4 + 0] = 0.2f;
+            pixels[(y * width + x) * 4 + 1] = 0.2f;
+            pixels[(y * width + x) * 4 + 2] = 0.2f;
+            pixels[(y * width + x) * 4 + 3] = 1.0f;
+            continue;
+          }
+
+          auto params = skyModel->computeParameters(viewpoint, viewDir, solarElev, solarAzi, visibility, albedo);
+
+          float X = 0, Y = 0, Z = 0;
+          for (float l = startLambda; l <= endLambda; l += stepLambda) {
+            double rad = skyModel->skyRadiance(params, l);
+            float val = (float)rad * skyIntensity * 0.01f;
+            X += val * cieX(l) * stepLambda;
+            Y += val * cieY(l) * stepLambda;
+            Z += val * cieZ(l) * stepLambda;
+          }
+
+          float r, g, b;
+          XYZtoRGB(X, Y, Z, r, g, b);
+
+          if (x == width / 2 && y == height / 2) {
+            std::cout << "[DEBUG] Center RGB: " << r << ", " << g << ", " << b
+                      << " (Unscaled X:" << X << " Y:" << Y << ")" << std::endl;
+          }
+
+          pixels[(y * width + x) * 4 + 0] = std::max(0.0f, r);
+          pixels[(y * width + x) * 4 + 1] = std::max(0.0f, g);
+          pixels[(y * width + x) * 4 + 2] = std::max(0.0f, b);
+          pixels[(y * width + x) * 4 + 3] = 1.0f;
+        }
       }
-
-      auto params = m_pragueSkyModel->computeParameters(
-          viewpoint, viewDir, m_solarElevation, m_solarAzimuth, m_visibility,
-          m_albedo);
-
-      // Custom Sun Disk logic
-      // Z-up dot product. viewDir and sunDir are both Z-up.
-      // sunDir computed at start of function... wait, sunDir depends on
-      // solarAzimuth/Elevation.
-      float X = 0, Y = 0, Z = 0;
-
-      // Integration
-      for (float l = startLambda; l <= endLambda; l += stepLambda) {
-        double rad = m_pragueSkyModel->skyRadiance(params, l);
-
-        // Scale sky model output
-        float val = (float)rad * m_skyIntensity * 0.01f;
-
-        X += val * cieX(l) * stepLambda;
-        Y += val * cieY(l) * stepLambda;
-        Z += val * cieZ(l) * stepLambda;
-      }
-
-      // Normalize approximate luminance (hacky exposure)
-      // If X/Y/Z are too huge, we might need a factor.
-      // Standard sky usually ~few thousands.
-      // Our shader tone mapper takes generic units, but let's apply a small
-      // scale to bring it to ~1.0 range if needed. Let's try raw first.
-
-      float r, g, b;
-      XYZtoRGB(X, Y, Z, r, g, b);
-
-      // Debug center pixel
-      if (x == width / 2 && y == height / 2) {
-        std::cout << "[DEBUG] Center RGB: " << r << ", " << g << ", " << b
-                  << " (Unscaled X:" << X << " Y:" << Y << ")" << std::endl;
-      }
-
-      pixels[(y * width + x) * 4 + 0] = std::max(0.0f, r);
-      pixels[(y * width + x) * 4 + 1] = std::max(0.0f, g);
-      pixels[(y * width + x) * 4 + 2] = std::max(0.0f, b);
-      pixels[(y * width + x) * 4 + 3] = 1.0f;
-    }
+    });
   }
+
+  for (auto &th : threads) th.join();
 
   CreateTexFromData(m_device.Get(), m_queue.Get(), width, height, pixels,
                     m_proceduralTexture);
