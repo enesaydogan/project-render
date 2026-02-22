@@ -8,6 +8,7 @@
 
 RWTexture2D<float4> g_accumulation : register(u0);
 RWTexture2D<float> g_variance : register(u1);
+// one float per sampled texel; shader writes noise^2 or 0
 RWStructuredBuffer<float> g_output : register(u2);
 
 cbuffer Constants : register(b0)
@@ -17,39 +18,29 @@ cbuffer Constants : register(b0)
     float padding[2];
 };
 
-[numthreads(1, 1, 1)]
+// dispatch a 2D grid; each thread handles one sampled texel (stride steps)
+[numthreads(16, 16, 1)]
 void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
-    float totalNoise = 0.0;
-    float count = 0.0;
-    
-    // Stride to sample ~1/16th of the image for better accuracy
     const uint stride = 4;
-    
-    for (uint y = 0; y < height; y += stride)
-    {
-        for (uint x = 0; x < width; x += stride)
-        {
-            float4 acc = g_accumulation[uint2(x, y)];
-            float n = acc.a;
-            
-            if (n > 1.0) // Need at least 2 samples for variance
-            {
-                float accM2 = g_variance[uint2(x, y)];
-                float meanLum = dot(acc.rgb, float3(0.2126, 0.7152, 0.0722)) / n;
-                
-                // Standard Error of Mean: SEM = sqrt(M2) / N
-                float sem = sqrt(max(0.0, accM2)) / n;
-                
-                // Coefficient of Variation (Noise) = SEM / Mean
-                float noise = sem / (max(0.01, meanLum) + 0.001);
-                
-                // Aggregate as Root Mean Square (RMS) to penalize outliers/noisy patches heavily
-                totalNoise += noise * noise;
-                count += 1.0;
-            }
-        }
+    uint x = dispatchThreadID.x * stride;
+    uint y = dispatchThreadID.y * stride;
+    if (x >= width || y >= height)
+        return;
+
+    float4 acc = g_accumulation[uint2(x, y)];
+    float n = acc.a;
+    float result = 0.0;
+    if (n > 1.0) {
+        float accM2 = g_variance[uint2(x, y)];
+        float meanLum = dot(acc.rgb, float3(0.2126, 0.7152, 0.0722)) / n;
+        float sem = sqrt(max(0.0, accM2)) / n;
+        float noise = sem / (max(0.01, meanLum) + 0.001);
+        result = noise * noise;
     }
-    
-    g_output[0] = count > 0.0 ? sqrt(totalNoise / count) : 0.0;
+
+    // compute flat index into output buffer
+    uint gridW = (width + stride - 1) / stride;
+    uint idx = dispatchThreadID.y * gridW + dispatchThreadID.x;
+    g_output[idx] = result;
 }

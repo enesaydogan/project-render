@@ -219,13 +219,14 @@ void Draw(HWND hwnd, bool &visible) {
       s_selectedMaterial = materialIndices.front();
     }
 
-    // --- Two-pane layout: left list, right inspector ---
+    // --- Two-pane layout: list on top, inspector below ---
     ImVec2 avail = ImGui::GetContentRegionAvail();
-    float leftWidth = 280.0f;
-    if (leftWidth > avail.x * 0.5f)
-      leftWidth = avail.x * 0.5f;
+    // reserve roughly 30% of the vertical space for the material list
+    float listHeight = avail.y * 0.3f;
+    if (listHeight < 150.0f)
+      listHeight = 150.0f; // minimum height so the list isn't too small
 
-    ImGui::BeginChild("##mat_list", ImVec2(leftWidth, 0), true);
+    ImGui::BeginChild("##mat_list", ImVec2(0, listHeight), true);
     {
       if (selectedNode) {
         ImGui::Text("Node: %s", selectedNode->name.c_str());
@@ -267,7 +268,8 @@ void Draw(HWND hwnd, bool &visible) {
     }
     ImGui::EndChild();
 
-    ImGui::SameLine();
+    // separator between list and inspector for clarity
+    ImGui::Separator();
 
     ImGui::BeginChild("##mat_inspector", ImVec2(0, 0), false);
     {
@@ -618,7 +620,9 @@ void Draw(HWND hwnd, bool &visible) {
                 DxrRenderer::ResetAccumulation();
               }
 
-              ImGui::SameLine();
+              // Buttons on their own line to avoid horizontally wide layout
+              ImGui::NewLine();
+              ImGui::SameLine(120 + thumbSize + 10);
               if (ImGui::Button("Clear")) {
                 idx = -1;
                 DxrRenderer::ResetAccumulation();
