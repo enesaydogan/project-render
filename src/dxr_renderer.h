@@ -61,6 +61,7 @@ UINT GetDisplayedSampleCount();
 void BeginFrameProfiling(ID3D12GraphicsCommandList *commandList);
 void EndFrameProfiling(ID3D12GraphicsCommandList *commandList);
 float GetFrameTimeMs();
+float GetCPUWorkTimeMs();
 float GetFPS();
 float GetSPPPerSec();
 void GetGPUTimes(float& restirTime, float& dispatchTime, float& denoiseTime, float& noiseTime);
