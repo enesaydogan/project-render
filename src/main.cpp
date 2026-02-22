@@ -1896,6 +1896,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   }
 
   // Shutdown ImGui and cleanup
+  // Persist panel visibility so user window open/closed state is remembered
+  SavePanelVisibility();
   ImGui_ImplDX12_Shutdown();
   ImGui_ImplWin32_Shutdown();
   ImGui::DestroyContext();

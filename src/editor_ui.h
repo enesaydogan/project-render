@@ -73,3 +73,6 @@ void RestoreRenderExportState();
 
 // Utility
 std::string WStringToUtf8(const std::wstring &ws);
+
+// Persist panel visibility across runs (written to panels_state.ini)
+void SavePanelVisibility();

@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <string>
+#include <fstream>
 
 using Microsoft::WRL::ComPtr;
 using namespace DX12Context;
@@ -1259,17 +1260,71 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
 
   // Asset loader UI
   // Provide a persistent 'open' toggle and ensure the window starts
-  // un-collapsed and a reasonable size
+  // a reasonable size. Previously we forced windows to be un-collapsed on
+  // first use which prevented honoring imgui.ini; instead read the
+  // ini on first frame to derive an initial open/closed state.
   ImGui::SetNextWindowSize(ImVec2(360, 220), ImGuiCond_FirstUseEver);
-  // If user requested a reset, force un-collapse and focus the window this
-  // frame
-  if (g_forceUncollapse) {
-    ImGui::SetNextWindowCollapsed(false, ImGuiCond_Always);
-    ImGui::SetNextWindowFocus();
-    g_forceUncollapse = false;
-  } else {
-    ImGui::SetNextWindowCollapsed(false, ImGuiCond_FirstUseEver);
+
+  static bool s_iniRead = false;
+  if (!s_iniRead) {
+    s_iniRead = true;
+    // First prefer our saved visibility file (written on exit). If it's
+    // present, honour it. Otherwise fall back to parsing ImGui's ini file
+    // for a best-effort collapsed/open state.
+    {
+      std::ifstream panelsFile("panels_state.ini");
+      if (panelsFile) {
+        std::string line;
+        while (std::getline(panelsFile, line)) {
+          if (line.rfind("Scene=", 0) == 0) {
+            g_showAssetsWindow = (atoi(line.c_str() + 6) != 0);
+          } else if (line.rfind("RenderMode=", 0) == 0) {
+            g_showRenderModeWindow = (atoi(line.c_str() + 11) != 0);
+          } else if (line.rfind("MaterialEditor=", 0) == 0) {
+            g_showMaterialEditor = (atoi(line.c_str() + 15) != 0);
+          } else if (line.rfind("Controls=", 0) == 0) {
+            g_showControlsWindow = (atoi(line.c_str() + 9) != 0);
+          }
+        }
+      } else {
+        const char *iniName = io.IniFilename ? io.IniFilename : "imgui.ini";
+        std::ifstream ini(iniName);
+        if (ini) {
+          auto readCollapsed = [&](const std::string &section)->int {
+            ini.clear();
+            ini.seekg(0);
+            std::string line;
+            std::string header = "[Window][" + section + "]";
+            while (std::getline((std::istream &)ini, line)) {
+              if (line == header) {
+                while (std::getline((std::istream &)ini, line)) {
+                  if (line.empty() || line[0] == '[')
+                    break;
+                  const std::string key = "Collapsed=";
+                  if (line.rfind(key, 0) == 0) {
+                    return atoi(line.c_str() + key.size());
+                  }
+                }
+                break;
+              }
+            }
+            return -1; // not found
+          };
+
+          int sceneCollapsed = readCollapsed("Scene");
+          if (sceneCollapsed >= 0) {
+            g_showAssetsWindow = (sceneCollapsed == 0);
+          }
+          int renderCollapsed = readCollapsed("Render Mode");
+          if (renderCollapsed >= 0) {
+            g_showRenderModeWindow = (renderCollapsed == 0);
+          }
+        }
+      }
+    }
   }
+
+// (SavePanelVisibility implemented below at file scope)
 
   if (ImGui::IsKeyPressed(ImGuiKey_M, false)) {
     g_showMaterialEditor = !g_showMaterialEditor;
@@ -1288,4 +1343,20 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
   // fprintf(stderr, "MainLoop: ImGui::Render start\n");
   ImGui::Render();
   // fprintf(stderr, "MainLoop: ImGui::Render done\n");
+}
+
+// Save panel visibility to a small file so we can restore whether windows
+// were open or closed across runs. ImGui does not persist an explicit
+// "visible" flag, so we maintain this separately.
+void SavePanelVisibility() {
+  const char *fileName = "panels_state.ini";
+  FILE *f = fopen(fileName, "w");
+  if (!f)
+    return;
+  fprintf(f, "[PanelVisibility]\n");
+  fprintf(f, "Scene=%d\n", g_showAssetsWindow ? 1 : 0);
+  fprintf(f, "RenderMode=%d\n", g_showRenderModeWindow ? 1 : 0);
+  fprintf(f, "MaterialEditor=%d\n", g_showMaterialEditor ? 1 : 0);
+  fprintf(f, "Controls=%d\n", g_showControlsWindow ? 1 : 0);
+  fclose(f);
 }
