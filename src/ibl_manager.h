@@ -119,6 +119,13 @@ private:
   Asset::Texture m_fileTexture;       // Backing store for file IBL
   Asset::Texture m_proceduralTexture; // Backing store for Sky Model
 
+  // When using a file-based IBL we mute the analytic sun/light.  We cache
+  // the previous sun parameters here so they can be restored when the user
+  // switches back to a procedural sky model.
+  float m_savedSunIntensity = 0.0f;
+  float m_savedSunSize = 0.0f;
+  bool m_savedSunValid = false; // indicates cache contains meaningful values
+
   IBLSource m_source = IBLSource::File;
 
   D3D12_GPU_DESCRIPTOR_HANDLE m_gpuHandle = {0};

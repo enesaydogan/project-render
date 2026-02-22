@@ -1454,15 +1454,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                                                          nullptr);
         }
       } else {
-        // Fallback to raster if DXR not available
+        // DXR mode was selected but the renderer isn't ready yet (missing
+        // TLAS or state object).  Avoid leaving the previous raster frame
+        // sitting on the screen by clearing to red and logging.
+        if (g_verboseRenderLogs)
+          fprintf(stderr, "Main: DXR path selected but IsReady()==false\n");
         TR(DX12Context::g_commandList.Get(),
            DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),
            D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
-
-        FLOAT clearColor[] = {0.8f, 0.2f, 0.2f,
-                              1.0f}; // Red to indicate fallback
-        DX12Context::g_commandList->ClearRenderTargetView(rtvHandle, clearColor,
-                                                          0, nullptr);
+        FLOAT clearColor[] = {0.8f, 0.2f, 0.2f, 1.0f};
+        DX12Context::g_commandList->ClearRenderTargetView(rtvHandle,
+                                                          clearColor, 0,
+                                                          nullptr);
         DX12Context::g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE,
                                                        nullptr);
       }

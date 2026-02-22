@@ -1733,18 +1733,26 @@ void BuildAccelerationStructures(
     }
 
     // Workaround: some drivers crash when TLAS contains a single instance.
-    // Add a second "dummy" instance referencing the same BLAS but with
-    // InstanceMask=0 so it is invisible to rays. This satisfies the driver
-    // without changing visible output.
+    // Add a second "dummy" instance referencing the same BLAS but placed
+    // far outside the view frustum.  We leave the InstanceMask unchanged
+    // (0xFF) so the driver treats it as a valid instance; the translation
+    // ensures it will never be hit by a ray.  This avoids the one-instance
+    // optimization/pathology while keeping the scene effectively unchanged.
     if (instanceDescs.size() == 1) {
       D3D12_RAYTRACING_INSTANCE_DESC dummy = instanceDescs[0];
-      dummy.InstanceMask = 0; // masked-out, will never be hit
-      // The hit group index and other fields don't matter since mask=0
+      // translate the dummy a large distance along X (and Y/Z) so it's off-
+      // screen.  Use a translation of e.g. 1e6 units; the exact value isn't
+      // important as long as it's outside typical scene bounds.
+      dummy.Transform[0][3] += 1e6f;
+      dummy.Transform[1][3] += 1e6f;
+      dummy.Transform[2][3] += 1e6f;
+      // keep mask=0xFF so the TLAS sees two valid instances
+      // InstanceContributionToHitGroupIndex etc are same as original
       instanceDescs.push_back(dummy);
       if (g_verboseRenderLogs) {
         fprintf(stderr,
-                "DxrRenderer: Added dummy TLAS instance to avoid single-"
-                "instance driver bug\n");
+                "DxrRenderer: Added off-screen dummy TLAS instance to avoid "
+                "single-instance driver bug\n");
       }
     }
 
