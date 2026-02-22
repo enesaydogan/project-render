@@ -412,7 +412,7 @@ DirectX::XMFLOAT3 IBLManager::GetSunColor() const {
     // normalization factor to bring it into a usable HDR range. The effective
     // intensity is controlled by g_cameraData.lightColor.w (Sun Intensity key
     // in UI).
-    float val = (float)rad * 0.0000002f;
+    float val = (float)rad * 0.000002f;
     X += val * cieX(l) * stepLambda;
     Y += val * cieY(l) * stepLambda;
     Z += val * cieZ(l) * stepLambda;
