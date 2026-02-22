@@ -1220,6 +1220,8 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
       // Display smoothed FPS computed each frame
       if (fps > 0.0f) {
         ImGui::Text("FPS: %.1f (%.2f ms)", fps, 1000.0f / fps);
+        ImGui::Text("CPU Frame Time: %.2f ms", DxrRenderer::GetFrameTimeMs());
+        ImGui::Text("GPU Frame Time: %.2f ms", DxrRenderer::GetGPUFrameTimeMs());
       } else {
         ImGui::Text("FPS: N/A");
       }
@@ -1227,7 +1229,6 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
       // Display profiling info
       ImGui::Separator();
       ImGui::Text("Profiling");
-      ImGui::Text("Frame Time: %.2f ms", DxrRenderer::GetFrameTimeMs());
       ImGui::Text("FPS: %.1f", DxrRenderer::GetFPS());
       ImGui::Text("SPP/s: %.1f", DxrRenderer::GetSPPPerSec());
 

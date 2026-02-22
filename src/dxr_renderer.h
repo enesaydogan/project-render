@@ -62,6 +62,7 @@ float GetFrameTimeMs();
 float GetFPS();
 float GetSPPPerSec();
 void GetGPUTimes(float& restirTime, float& dispatchTime, float& denoiseTime, float& noiseTime);
+float GetGPUFrameTimeMs();
 
 // Shader instrumentation counters (debug)
 // outCounters will be filled with up to maxCount uint values (0 when not available)

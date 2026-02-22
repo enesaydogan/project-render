@@ -60,6 +60,7 @@ static ComPtr<ID3D12QueryHeap> s_queryHeap;
 static ComPtr<ID3D12Resource> s_queryReadbackBuffer;
 static UINT64 s_queryResults[10]; // For 10 timestamps: frame_start, restir_start, restir_end, dispatch_end, denoise_start, denoise_end, noise_start, noise_end, frame_end
 static float s_gpuTimes[4]; // Times in ms: ReSTIR, DispatchRays, Denoising, Noise
+static float s_gpuFrameTimeMs = 0.0f; // Total GPU frame time (from timestamp 0..9)
 static float s_frameTimeMs = 0.0f;
 static float s_fps = 0.0f;
 static float s_sppPerSec = 0.0f;
@@ -3006,6 +3007,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         s_gpuTimes[3] = (float)((data[8] - data[7]) * timestampToMs);
       }
 
+      // Compute full GPU frame time using frame start (0) and frame end (9)
+      if (data[9] > data[0]) {
+        s_gpuFrameTimeMs = (float)((data[9] - data[0]) * timestampToMs);
+      }
+
       s_queryReadbackBuffer->Unmap(0, nullptr);
     }
   }
@@ -3200,6 +3206,8 @@ void GetGPUTimes(float& restirTime, float& dispatchTime, float& denoiseTime, flo
   denoiseTime = s_gpuTimes[2];
   noiseTime = s_gpuTimes[3];
 }
+
+float GetGPUFrameTimeMs() { return s_gpuFrameTimeMs; }
 
 // Expose shader counters (filled from last GPU readback)
 void GetShaderCounters(UINT *outCounters, UINT maxCount) {
