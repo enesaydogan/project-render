@@ -392,12 +392,12 @@ void DrawSceneDepthOnly(ID3D12GraphicsCommandList *cmdList,
         0, cameraCB->GetGPUVirtualAddress());
 
   for (const auto &inst : instances) {
-    const auto &gm = inst.mesh;
+    const auto &gm = *inst.mesh;
     if (!gm.vertexBuffer || !gm.indexBuffer)
       continue;
 
     // Set World Matrix (Parameter index 3, register b2)
-    cmdList->SetGraphicsRoot32BitConstants(3, 16, inst.transform, 0);
+    cmdList->SetGraphicsRoot32BitConstants(3, 16, &inst.transform, 0);
 
     cmdList->IASetVertexBuffers(0, 1, &gm.vbView);
     cmdList->IASetIndexBuffer(&gm.ibView);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "assets/asset_loader.h"
+#include <DirectXMath.h>
 #include <string>
 #include <vector>
 #include <windows.h>
@@ -25,9 +26,10 @@ struct Node {
 
 // Instance mapping for rendering
 struct Instance {
-  Asset::GpuMesh mesh;
-  const float *transform; // pointer to node.transform
-  size_t nodeIndex;
+  std::string name;
+  DirectX::XMMATRIX transform;
+  int id;
+  const Asset::GpuMesh *mesh;
 };
 
 // Import a model (glTF, OBJ, STL) file into the scene. Returns true on success.
@@ -68,8 +70,8 @@ void DeleteNode(size_t index);
 // Rebuild acceleration structures using active meshes
 void RebuildAccelerationStructures();
 
-// Return vector of active meshes (copy) for rendering / DXR dispatch
-std::vector<Asset::GpuMesh> GetActiveMeshes();
+// Return vector of pointers to active meshes for rendering / DXR dispatch
+std::vector<const Asset::GpuMesh*> GetActiveMeshes();
 
 // Status message to display in UI
 const std::string &LastStatus();
