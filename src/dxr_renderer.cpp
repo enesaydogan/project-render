@@ -235,6 +235,7 @@ static ComPtr<ID3D12Resource> s_noiseStatsCB;
 static ComPtr<ID3D12Resource> s_noiseStatsOutputBuffer;
 static ComPtr<ID3D12Resource> s_noiseStatsReadbackBuffer;
 static ComPtr<ID3D12DescriptorHeap> s_noiseStatsHeap;
+static UINT s_noiseStatsCapacity = 0; // number of floats currently allocated in output buffer
 static float s_lastNoiseLevel = 0.0f;
 static bool s_noiseConvergedLatched = false;
 static bool s_cloudDescriptorsDone = false;
@@ -504,8 +505,12 @@ static void EnsureTonemapPipeline() {
 }
 
 static void EnsureNoiseStatsPipeline() {
+  // We always need to ensure buffers are large enough – pipeline objects can
+  // be reused, but the output/readback buffers may have to grow when the
+  // render resolution changes.  Early-out only if everything is created and
+  // capacity is nonzero; actual resizing happens later in the dispatch code.
   if (s_noiseStatsPSO && s_noiseStatsRootSig && s_noiseStatsCB &&
-      s_noiseStatsOutputBuffer)
+      s_noiseStatsOutputBuffer && s_noiseStatsCapacity > 0)
     return;
   if (!s_device)
     return;
@@ -603,18 +608,21 @@ static void EnsureNoiseStatsPipeline() {
                                     D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
                                     IID_PPV_ARGS(&s_noiseStatsCB));
 
-  // Create Output Buffer (UAV, Default Heap)
+  // Create Output Buffer (UAV, Default Heap) - actual allocation deferred
+  // until we know required sample count.  We'll create a minimal placeholder
+  // here and grow it later when dispatching.
   D3D12_HEAP_PROPERTIES defaultProps = {};
   defaultProps.Type = D3D12_HEAP_TYPE_DEFAULT;
   D3D12_RESOURCE_DESC bufDesc = cbDesc;
-  bufDesc.Width = sizeof(float); // 4 bytes
+  bufDesc.Width = sizeof(float) * 2; // two floats: sum and count
   bufDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
   s_device->CreateCommittedResource(
       &defaultProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
       D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
       IID_PPV_ARGS(&s_noiseStatsOutputBuffer));
+  s_noiseStatsCapacity = 1; // start with a single element to avoid zero-size
 
-  // Create Readback Buffer
+  // Create Readback Buffer (placeholder)
   D3D12_HEAP_PROPERTIES readbackProps = {};
   readbackProps.Type = D3D12_HEAP_TYPE_READBACK;
   bufDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
@@ -2478,12 +2486,25 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       EnsureNoiseStatsPipeline();
       if (s_noiseStatsPSO) {
         // 1. Readback previous result FIRST (from readback buffer populated in
-        // previous run)
+        // previous run).  The buffer now contains one float per sampled texel.
         {
           float *data = nullptr;
           if (SUCCEEDED(s_noiseStatsReadbackBuffer->Map(0, nullptr,
                                                         (void **)&data))) {
-            s_lastNoiseLevel = *data;
+            const UINT stride = 4;
+            UINT gridW = (s_outputWidth + stride - 1) / stride;
+            UINT gridH = (s_outputHeight + stride - 1) / stride;
+            UINT total = gridW * gridH;
+            double sumSq = 0.0;
+            UINT count = 0;
+            for (UINT i = 0; i < total; ++i) {
+              float v = data[i];
+              if (v > 0.0f) {
+                sumSq += v;
+                ++count;
+              }
+            }
+            s_lastNoiseLevel = (count > 0) ? sqrt((float)(sumSq / count)) : 0.0f;
             s_noiseStatsReadbackBuffer->Unmap(0, nullptr);
           }
         }
@@ -2532,12 +2553,50 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         s_device->CreateUnorderedAccessView(s_accumulation.GetVarianceBuffer(),
                                             nullptr, &uavDesc, u1);
 
-        // u2
+        // Determine required output size (grid dims)
+        const UINT stride = 4;
+        UINT gridW = (s_outputWidth + stride - 1) / stride;
+        UINT gridH = (s_outputHeight + stride - 1) / stride;
+        UINT required = gridW * gridH;
+        if (required > s_noiseStatsCapacity) {
+          // recreate output and readback buffers with new size
+          s_noiseStatsOutputBuffer.Reset();
+          s_noiseStatsReadbackBuffer.Reset();
+          D3D12_RESOURCE_DESC outDesc = {};
+          outDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+          outDesc.Width = sizeof(float) * required;
+          outDesc.Height = 1;
+          outDesc.DepthOrArraySize = 1;
+          outDesc.MipLevels = 1;
+          outDesc.SampleDesc.Count = 1;
+          outDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+          outDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+          D3D12_HEAP_PROPERTIES defaultPropsLocal = {};
+          defaultPropsLocal.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+          s_device->CreateCommittedResource(
+              &defaultPropsLocal, D3D12_HEAP_FLAG_NONE, &outDesc,
+              D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+              IID_PPV_ARGS(&s_noiseStatsOutputBuffer));
+          s_noiseStatsCapacity = required;
+
+          D3D12_HEAP_PROPERTIES rdProps = {};
+          rdProps.Type = D3D12_HEAP_TYPE_READBACK;
+          outDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+          s_device->CreateCommittedResource(&rdProps, D3D12_HEAP_FLAG_NONE,
+                                            &outDesc,
+                                            D3D12_RESOURCE_STATE_COPY_DEST,
+                                            nullptr,
+                                            IID_PPV_ARGS(&s_noiseStatsReadbackBuffer));
+        }
+
+        // u2 - output buffer has variable element count
         D3D12_UNORDERED_ACCESS_VIEW_DESC bufDesc = {};
         bufDesc.Format = DXGI_FORMAT_UNKNOWN;
         bufDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
         bufDesc.Buffer.FirstElement = 0;
-        bufDesc.Buffer.NumElements = 1;
+        bufDesc.Buffer.NumElements = max(1u, s_noiseStatsCapacity);
         bufDesc.Buffer.StructureByteStride = sizeof(float);
         bufDesc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
         D3D12_CPU_DESCRIPTOR_HANDLE u2 = cpuStart;
@@ -2549,9 +2608,14 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
             0, s_noiseStatsCB->GetGPUVirtualAddress());
         dxrList->SetComputeRootDescriptorTable(1, gpuStart);
 
-        // Dispatch single thread group that covers all sampling work
-        // The shader will distribute work among its 256 threads
-        dxrList->Dispatch(1, 1, 1);
+        // Dispatch thread groups sized 16x16; each thread samples stride pixels
+        const UINT groupSizeX = 16;
+        const UINT groupSizeY = 16;
+        UINT dispatchX = (s_outputWidth + stride * groupSizeX - 1) /
+                         (stride * groupSizeX);
+        UINT dispatchY = (s_outputHeight + stride * groupSizeY - 1) /
+                         (stride * groupSizeY);
+        dxrList->Dispatch(dispatchX, dispatchY, 1);
 
         // 4. Copy to Readback (for NEXT frame to read)
         TransitionResource(dxrList.Get(), s_noiseStatsOutputBuffer.Get(),
