@@ -796,6 +796,8 @@ bool InitApplication(HWND hwnd) {
   ApplyModernImGuiTheme();
   ImGuiIO &io = ImGui::GetIO();
   (void)io;
+  io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+  io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
   // Legacy ImGui DX12 init path does not advertise RendererHasTextures.
   // Build the atlas up-front so first NewFrame doesn't hit font-atlas assert.
   if (!io.Fonts->IsBuilt()) {
@@ -813,6 +815,12 @@ bool InitApplication(HWND hwnd) {
                       imguiFontAlloc.cpu, imguiFontAlloc.gpu);
 
   ImGui_ImplDX12_CreateDeviceObjects();
+  // When viewports are enabled we want windows created by ImGui to look
+  // consistent across platform-native child windows.
+  ImGuiStyle &style = ImGui::GetStyle();
+  if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+    style.WindowRounding = 0.0f;
+  }
 
   // Initialize asset loader with device & command queue so it can perform
   // uploads
@@ -1116,9 +1124,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
   RegisterClassW(&wc);
 
-  HWND hwnd = CreateWindowExW(0, CLASS_NAME, L"project-render - DX12 Starter",
+  HWND hwnd = CreateWindowExW(0, CLASS_NAME, L"Project-Render",
                               WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-                              1280, 720, nullptr, nullptr, hInstance, nullptr);
+                              1920, 1080, nullptr, nullptr, hInstance, nullptr);
 
   if (!hwnd) {
     return 0;
@@ -1675,6 +1683,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     DX12Context::g_commandList->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
     ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(),
                                   DX12Context::g_commandList.Get());
+
+    // Handle multi-viewport windows (platform windows) when enabled so
+    // ImGui viewports receive input and are properly rendered.
+    ImGuiIO &io = ImGui::GetIO();
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+      ImGui::UpdatePlatformWindows();
+      ImGui::RenderPlatformWindowsDefault();
+    }
 
     if (g_renderExportJob.active && g_exportRenderTarget &&
         g_exportRenderTargetState != D3D12_RESOURCE_STATE_PRESENT) {
