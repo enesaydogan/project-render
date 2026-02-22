@@ -6,6 +6,7 @@
 #include <random>
 #include <string>
 #include <vector>
+#include <thread>
 
 using namespace DirectX;
 
@@ -626,58 +627,64 @@ void CloudManager::CreateTextures(ID3D12Device *device,
 
     const uint32_t worleySeed = 1337u;
 
-    for (int z = 0; z < (int)depth; ++z) {
-      for (int y = 0; y < (int)height; ++y) {
-        for (int x = 0; x < (int)width; ++x) {
-          float u = (float)x / (float)width;
-          float v = (float)y / (float)height;
-          float w = (float)z / (float)depth;
+    // Parallelize over Z slices to utilize multiple CPU cores at startup.
+    unsigned hwThreads = std::thread::hardware_concurrency();
+    if (hwThreads == 0) hwThreads = 1;
+    unsigned numThreads = (unsigned)std::min<unsigned>(hwThreads, depth);
+    unsigned chunk = (depth + numThreads - 1) / numThreads;
 
-          // Perlin FBM (7 Octaves technically, but 5 is usually enough)
-          float perlin = 0.0f;
-          float scale = 4.0f; // Base freq
-          float amp = 1.0f;
-          float maxVal = 0.0f;
-          for (int i = 0; i < 5; ++i) {
-            float n =
-                GradientNoiseTiled(u * scale, v * scale, w * scale, (int)scale);
-            perlin += n * amp;
-            maxVal += amp;
-            scale *= 2.0f;
-            amp *= 0.5f;
+    std::vector<std::thread> threads;
+    threads.reserve(numThreads);
+
+    for (unsigned t = 0; t < numThreads; ++t) {
+      int z0 = (int)std::min<unsigned>(t * chunk, depth);
+      int z1 = (int)std::min<unsigned>((t + 1) * chunk, depth);
+      threads.emplace_back([=, &noiseData]() {
+        for (int z = z0; z < z1; ++z) {
+          for (int y = 0; y < (int)height; ++y) {
+            for (int x = 0; x < (int)width; ++x) {
+              float u = (float)x / (float)width;
+              float v = (float)y / (float)height;
+              float w = (float)z / (float)depth;
+
+              // Perlin FBM (7 Octaves technically, but 5 is usually enough)
+              float perlin = 0.0f;
+              float scale = 4.0f; // Base freq
+              float amp = 1.0f;
+              float maxVal = 0.0f;
+              for (int i = 0; i < 5; ++i) {
+                float n = GradientNoiseTiled(u * scale, v * scale, w * scale, (int)scale);
+                perlin += n * amp;
+                maxVal += amp;
+                scale *= 2.0f;
+                amp *= 0.5f;
+              }
+              perlin = (perlin / maxVal) * 0.5f + 0.5f; // [0,1]
+
+              // Worley FBMs for Base
+              float wf1 = WorleyFBM(u, v, w, 4, 8, 16, worleySeed);
+              float wf2 = WorleyFBM(u, v, w, 8, 16, 32, worleySeed ^ 0x12345678);
+              float wf3 = WorleyFBM(u, v, w, 16, 32, 64, worleySeed ^ 0x87654321);
+
+              float worleyBase = wf1;
+              float perlinWorley = Remap(perlin, worleyBase, 1.0f, 0.0f, 1.0f);
+              perlinWorley = (std::max)(0.0f, (std::min)(1.0f, perlinWorley));
+
+              float warp = GradientNoiseTiled(u * 2.0f, v * 2.0f + 5.5f, w * 2.0f + 1.2f, 2);
+              warp = warp * 0.5f + 0.5f;
+
+              const UINT idx = (UINT)((z * (width * height) + y * width + x) * 4);
+              noiseData[idx + 0] = (UINT8)(perlinWorley * 255.0f);
+              noiseData[idx + 1] = (UINT8)((std::max)(0.0f, wf1) * 255.0f);
+              noiseData[idx + 2] = (UINT8)((std::max)(0.0f, wf2) * 255.0f);
+              noiseData[idx + 3] = (UINT8)((std::max)(0.0f, warp) * 255.0f);
+            }
           }
-          perlin = (perlin / maxVal) * 0.5f + 0.5f; // [0,1]
-
-          // Worley FBMs for Base
-          // Enscape frequencies: 4, 8, 16? roughly
-          float wf1 = WorleyFBM(u, v, w, 4, 8, 16, worleySeed);
-          float wf2 = WorleyFBM(u, v, w, 8, 16, 32, worleySeed ^ 0x12345678);
-          float wf3 = WorleyFBM(u, v, w, 16, 32, 64, worleySeed ^ 0x87654321);
-
-          // Perlin-Worley Remap:
-          // Remap Perlin using the inverted Worley as the low-bound
-          float worleyBase =
-              wf1; // Use the lowest freq worley for the shape erosion
-          float perlinWorley = Remap(perlin, worleyBase, 1.0f, 0.0f, 1.0f);
-          perlinWorley = (std::max)(0.0f, (std::min)(1.0f, perlinWorley));
-
-          // Warp Noise (Low Freq Perlin) in Alpha
-          // Use scale 2.0 for warp (must be integer for tiling)
-          float warp =
-              GradientNoiseTiled(u * 2.0f, v * 2.0f + 5.5f, w * 2.0f + 1.2f, 2);
-          warp = warp * 0.5f + 0.5f;
-
-          const UINT idx = (UINT)((z * (width * height) + y * width + x) * 4);
-          noiseData[idx + 0] = (UINT8)(perlinWorley * 255.0f);
-          noiseData[idx + 1] =
-              (UINT8)((std::max)(0.0f, wf1) * 255.0f); // Worley 1
-          noiseData[idx + 2] =
-              (UINT8)((std::max)(0.0f, wf2) * 255.0f); // Worley 2
-          noiseData[idx + 3] =
-              (UINT8)((std::max)(0.0f, warp) * 255.0f); // Warp (Perlin)
         }
-      }
+      });
     }
+
+    for (auto &th : threads) th.join();
 
     // Create Resource
     D3D12_RESOURCE_DESC texDesc = {};
@@ -755,27 +762,43 @@ void CloudManager::CreateTextures(ID3D12Device *device,
     std::vector<UINT8> noiseData(textureDataSize);
     const uint32_t detailSeed = 9999u;
 
-    for (int z = 0; z < (int)depth; ++z) {
-      for (int y = 0; y < (int)height; ++y) {
-        for (int x = 0; x < (int)width; ++x) {
-          float u = (float)x / (float)width;
-          float v = (float)y / (float)height;
-          float w = (float)z / (float)depth;
+    // Parallelize detail texture generation similarly to base texture.
+    {
+      unsigned hwThreads = std::thread::hardware_concurrency();
+      if (hwThreads == 0) hwThreads = 1;
+      unsigned numThreads = (unsigned)std::min<unsigned>(hwThreads, depth);
+      unsigned chunk = (depth + numThreads - 1) / numThreads;
 
-          // Detail frequencies. Since texture is small, we repeat fewer times?
-          // Actually, Detail noise is typically tiled heavily in the shader.
-          // Standard FBM mix.
-          float d1 = WorleyFBM(u, v, w, 2, 4, 8, detailSeed);
-          float d2 = WorleyFBM(u, v, w, 4, 8, 16, detailSeed ^ 0x11223344);
-          float d3 = WorleyFBM(u, v, w, 8, 16, 32, detailSeed ^ 0xAABBCCDD);
+      std::vector<std::thread> threads;
+      threads.reserve(numThreads);
 
-          const UINT idx = (UINT)((z * (width * height) + y * width + x) * 4);
-          noiseData[idx + 0] = (UINT8)((std::max)(0.0f, d1) * 255.0f);
-          noiseData[idx + 1] = (UINT8)((std::max)(0.0f, d2) * 255.0f);
-          noiseData[idx + 2] = (UINT8)((std::max)(0.0f, d3) * 255.0f);
-          noiseData[idx + 3] = 255;
-        }
+      for (unsigned t = 0; t < numThreads; ++t) {
+        int z0 = (int)std::min<unsigned>(t * chunk, depth);
+        int z1 = (int)std::min<unsigned>((t + 1) * chunk, depth);
+        threads.emplace_back([=, &noiseData]() {
+          for (int z = z0; z < z1; ++z) {
+            for (int y = 0; y < (int)height; ++y) {
+              for (int x = 0; x < (int)width; ++x) {
+                float u = (float)x / (float)width;
+                float v = (float)y / (float)height;
+                float w = (float)z / (float)depth;
+
+                float d1 = WorleyFBM(u, v, w, 2, 4, 8, detailSeed);
+                float d2 = WorleyFBM(u, v, w, 4, 8, 16, detailSeed ^ 0x11223344);
+                float d3 = WorleyFBM(u, v, w, 8, 16, 32, detailSeed ^ 0xAABBCCDD);
+
+                const UINT idx = (UINT)((z * (width * height) + y * width + x) * 4);
+                noiseData[idx + 0] = (UINT8)((std::max)(0.0f, d1) * 255.0f);
+                noiseData[idx + 1] = (UINT8)((std::max)(0.0f, d2) * 255.0f);
+                noiseData[idx + 2] = (UINT8)((std::max)(0.0f, d3) * 255.0f);
+                noiseData[idx + 3] = 255;
+              }
+            }
+          }
+        });
       }
+
+      for (auto &th : threads) th.join();
     }
 
     D3D12_RESOURCE_DESC texDesc = {};

@@ -30,9 +30,12 @@ target_sources(project-render PRIVATE
 
 if (MSVC)
   target_compile_options(project-render PRIVATE /W4 /permissive-)
-  # Enable strong optimization for Release builds
-  target_compile_options(project-render PRIVATE $<$<CONFIG:Release>:/Ox /Ob2 /Oi /Ot /Oy /GL>)
+  # Enable strong optimization for Release builds and use AVX2 when available
+  target_compile_options(project-render PRIVATE $<$<CONFIG:Release>:/Ox /Ob2 /Oi /Ot /Oy /GL /arch:AVX2>)
   target_link_options(project-render PRIVATE $<$<CONFIG:Release>:/LTCG>)
+else()
+  # Non-MSVC toolchains: enable high optimization and AVX2/FMA where supported
+  add_compile_options(-O3 -march=native -mavx2 -mfma)
 endif()
 
 target_link_libraries(project-render PRIVATE d3d12 dxgi dxguid ole32 windowscodecs)
