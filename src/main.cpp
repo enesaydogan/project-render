@@ -1255,6 +1255,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             .commandAllocator.Get(),
         nullptr));
 
+    DxrRenderer::BeginFrameProfiling(DX12Context::g_commandList.Get());
+
     // Reset per-frame transient descriptor allocator
     g_cbvSrvAllocator.ResetFrame(DX12Context::g_frameIndex);
 
@@ -1472,8 +1474,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       // Log to stderr only (controlled by verbose flag)
       if (g_verboseRenderLogs)
         fprintf(stderr, "Entering Raster Path\n");
-
-      DxrRenderer::BeginFrameProfiling(DX12Context::g_commandList.Get());
 
       TR(DX12Context::g_commandList.Get(),
          DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),

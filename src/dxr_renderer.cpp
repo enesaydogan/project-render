@@ -2058,8 +2058,6 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   dxrList->SetPipelineState1(s_rtStateObject.Get());
   dxrList->SetComputeRootSignature(s_rtGlobalRootSignature.Get());
 
-  BeginFrameProfiling(dxrList.Get());
-
   // Bind TLAS
   dxrList->SetComputeRootShaderResourceView(
       0, s_tlas.result->GetGPUVirtualAddress());
@@ -3116,7 +3114,11 @@ bool ExportTonemappedFrameToPng(const std::wstring &filePath) {
 }
 
 // Profiling functions
+static std::chrono::high_resolution_clock::time_point s_cpuFrameStartTime;
+static float s_cpuWorkTimeMs = 0.0f;
+
 void BeginFrameProfiling(ID3D12GraphicsCommandList *commandList) {
+  s_cpuFrameStartTime = std::chrono::high_resolution_clock::now();
   if (s_queryHeap) {
     // Record all timestamps at the start. DXR mode will overwrite specific ones.
     // This prevents stale/undefined data from appearing in the UI for raster
@@ -3128,6 +3130,9 @@ void BeginFrameProfiling(ID3D12GraphicsCommandList *commandList) {
 }
 
 void EndFrameProfiling(ID3D12GraphicsCommandList *commandList) {
+  auto cpuEnd = std::chrono::high_resolution_clock::now();
+  s_cpuWorkTimeMs = std::chrono::duration<float, std::milli>(cpuEnd - s_cpuFrameStartTime).count();
+
   if (s_queryHeap) {
     commandList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
                           9); // Frame end
@@ -3226,6 +3231,7 @@ void EndFrameProfiling(ID3D12GraphicsCommandList *commandList) {
 }
 
 float GetFrameTimeMs() { return s_frameTimeMs; }
+float GetCPUWorkTimeMs() { return s_cpuWorkTimeMs; }
 float GetFPS() { return s_fps; }
 float GetSPPPerSec() { return s_sppPerSec; }
 void GetGPUTimes(float& restirTime, float& dispatchTime, float& denoiseTime, float& noiseTime) {
