@@ -1690,7 +1690,7 @@ void BuildAccelerationStructures(
     }
 
     std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instanceDescs;
-    instanceDescs.reserve(instances.size());
+    instanceDescs.reserve(instances.size() + 1); // +1 for potential dummy
 
     for (const auto &sceneInst : instances) {
       if (!sceneInst.mesh || !sceneInst.mesh->vertexBuffer)
@@ -1730,6 +1730,22 @@ void BuildAccelerationStructures(
       inst.AccelerationStructure =
           s_allBLAS[blasIndex].buffers.result->GetGPUVirtualAddress();
       instanceDescs.push_back(inst);
+    }
+
+    // Workaround: some drivers crash when TLAS contains a single instance.
+    // Add a second "dummy" instance referencing the same BLAS but with
+    // InstanceMask=0 so it is invisible to rays. This satisfies the driver
+    // without changing visible output.
+    if (instanceDescs.size() == 1) {
+      D3D12_RAYTRACING_INSTANCE_DESC dummy = instanceDescs[0];
+      dummy.InstanceMask = 0; // masked-out, will never be hit
+      // The hit group index and other fields don't matter since mask=0
+      instanceDescs.push_back(dummy);
+      if (g_verboseRenderLogs) {
+        fprintf(stderr,
+                "DxrRenderer: Added dummy TLAS instance to avoid single-"
+                "instance driver bug\n");
+      }
     }
 
     ComPtr<ID3D12Resource> instanceDescBuffer;
