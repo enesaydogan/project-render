@@ -345,6 +345,41 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
   ImGui::NewFrame();
   ImGuizmo::BeginFrame();
 
+  // Fullscreen DockSpace root so panels can be docked and rearranged.
+  ImGuiIO &io = ImGui::GetIO();
+  if (io.ConfigFlags & ImGuiConfigFlags_DockingEnable) {
+    ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoTitleBar |
+                                    ImGuiWindowFlags_NoCollapse |
+                                    ImGuiWindowFlags_NoResize |
+                                    ImGuiWindowFlags_NoMove |
+                                    ImGuiWindowFlags_NoBringToFrontOnFocus |
+                                    ImGuiWindowFlags_NoNavFocus;
+
+    ImGuiViewport *viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->Pos);
+    ImGui::SetNextWindowSize(viewport->Size);
+    ImGui::SetNextWindowViewport(viewport->ID);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+
+    window_flags |= ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
+
+    // Make host window background transparent so the engine's DX12 render
+    // output (the swapchain backbuffer) remains visible beneath the dock
+    // central node.
+    ImGui::SetNextWindowBgAlpha(0.0f);
+
+    ImGui::Begin("DockSpaceRoot", nullptr, window_flags);
+    ImGui::PopStyleVar(3);
+
+    ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
+    ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f),
+                     ImGuiDockNodeFlags_PassthruCentralNode);
+    ImGui::End();
+  }
+
   // Draw export preview directly into the main viewport (scaled to fit),
   // so users can track render progress without opening a separate panel.
   if (g_renderExportJob.active && g_exportPreviewSrvGpu.ptr != 0 &&
@@ -502,6 +537,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
     if (ImGui::Button(g_renderExportJob.active ? "Rendering..." : "Render",
                       ImVec2(renderButtonWidth, 0))) {
       ImGui::OpenPopup("Render Export");
+      fprintf(stderr, "UI: Render button pressed\n");
     }
     if (!g_rayTracingSupported) {
       ImGui::EndDisabled();
