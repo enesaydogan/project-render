@@ -63,11 +63,21 @@ void ApplyModernImGuiTheme() {
   colors[ImGuiCol_SeparatorActive] = accent;
 
   colors[ImGuiCol_Tab] = ImVec4(0.10f, 0.12f, 0.14f, 1.00f);
-  colors[ImGuiCol_TabHovered] = ImVec4(0.18f, 0.65f, 0.75f, 0.95f);
-  colors[ImGuiCol_TabActive] = ImVec4(0.14f, 0.55f, 0.65f, 1.00f);
+  // Make docked tab backgrounds more visually distinct and accented so
+  // window names (tab labels) read as interactive/clickable.
+  colors[ImGuiCol_TabHovered] = ImVec4(accent.x, accent.y, accent.z, 0.95f);
+  colors[ImGuiCol_TabActive] = ImVec4(accent.x * 0.9f, accent.y * 0.9f,
+                                     accent.z * 0.9f, 1.00f);
   colors[ImGuiCol_TabUnfocused] = ImVec4(0.07f, 0.08f, 0.10f, 1.00f);
-  colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.09f, 0.10f, 0.12f, 1.00f);
+  colors[ImGuiCol_TabUnfocusedActive] = ImVec4(accent.x * 0.5f,
+                                              accent.y * 0.5f,
+                                              accent.z * 0.5f, 1.00f);
 
   // Optional: tweak alpha of popups/menus to feel more modern
   colors[ImGuiCol_PopupBg].w = 0.95f;
+
+  // Slight accent tint for active title bars to reinforce clickability
+  colors[ImGuiCol_TitleBgActive] = ImVec4(accent.x * 0.08f,
+                                          accent.y * 0.12f,
+                                          accent.z * 0.12f, 1.00f);
 }
