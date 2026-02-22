@@ -1471,6 +1471,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       // Log to stderr only (controlled by verbose flag)
       if (g_verboseRenderLogs)
         fprintf(stderr, "Entering Raster Path\n");
+
+      DxrRenderer::BeginFrameProfiling(DX12Context::g_commandList.Get());
+
       TR(DX12Context::g_commandList.Get(),
          DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),
          D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -1665,6 +1668,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           }
         }
       }
+      DxrRenderer::EndFrameProfiling(DX12Context::g_commandList.Get());
       break;
     }
     }
