@@ -8,6 +8,8 @@
 #include <cstring>
 #include <stdio.h>
 
+#include <immintrin.h>
+
 #include "PragueSkyModel.h"
 
 /////////////////////////////////////////////////////////////////////////////////////
@@ -874,20 +876,58 @@ double PragueSkyModel::reconstruct(const AngleParameters&                   radi
     // decomposed into sum of rankRad outer products of 'sun' and 'zenith' vectors and these vectors were
     // stored as piece-wise polynomial approximation. Here the process is reversed (for one point).
 
+    // Compute sun and zenith parameter vectors first, then perform vectorized dot-product
+    const int R = metadata.rank;
     double result = 0.0;
-    for (int r = 0; r < metadata.rank; ++r) {
-        // Restore the right value in the 'sun' vector
-        const double sunParam = evalPL(channelParameters + metadata.sunOffset + r * metadata.sunStride +
+
+    // For small ranks, do scalar path to avoid allocation overhead
+    if (R <= 4) {
+        for (int r = 0; r < R; ++r) {
+            const double sunParam = evalPL(channelParameters + metadata.sunOffset + r * metadata.sunStride +
                                           radianceParameters.gamma.index,
-                                      radianceParameters.gamma.factor);
+                                          radianceParameters.gamma.factor);
 
-        // Restore the right value in the 'zenith' vector
-        const double zenithParam = evalPL(channelParameters + metadata.zenithOffset +
-                                              r * metadata.zenithStride + radianceParameters.alpha.index,
-                                          radianceParameters.alpha.factor);
+            const double zenithParam = evalPL(channelParameters + metadata.zenithOffset + r * metadata.zenithStride +
+                                              radianceParameters.alpha.index,
+                                              radianceParameters.alpha.factor);
+            result += sunParam * zenithParam;
+        }
+    } else {
+        // Reuse thread-local scratch buffers to avoid per-call allocations
+        thread_local std::vector<double> sunParamsScratch;
+        thread_local std::vector<double> zenParamsScratch;
+        if ((int)sunParamsScratch.size() < R) sunParamsScratch.resize(R);
+        if ((int)zenParamsScratch.size() < R) zenParamsScratch.resize(R);
+        double *sunParams = sunParamsScratch.data();
+        double *zenParams = zenParamsScratch.data();
 
-        // Accumulate their "outer" product
-        result += sunParam * zenithParam;
+        for (int r = 0; r < R; ++r) {
+            sunParams[r] = evalPL(channelParameters + metadata.sunOffset + r * metadata.sunStride +
+                                   radianceParameters.gamma.index,
+                                   radianceParameters.gamma.factor);
+            zenParams[r] = evalPL(channelParameters + metadata.zenithOffset + r * metadata.zenithStride +
+                                   radianceParameters.alpha.index,
+                                   radianceParameters.alpha.factor);
+        }
+
+        // Vectorized dot-product using AVX (process 4 doubles at once)
+        int i = 0;
+        const int simdWidth = 4; // __m256d
+        __m256d acc = _mm256_setzero_pd();
+        for (; i + simdWidth - 1 < R; i += simdWidth) {
+            __m256d a = _mm256_loadu_pd(sunParams + i);
+            __m256d b = _mm256_loadu_pd(zenParams + i);
+            acc = _mm256_add_pd(acc, _mm256_mul_pd(a, b));
+        }
+        // Horizontal sum of acc
+        double tmp[4];
+        _mm256_storeu_pd(tmp, acc);
+        result = tmp[0] + tmp[1] + tmp[2] + tmp[3];
+
+        // Tail
+        for (; i < R; ++i) {
+            result += sunParams[i] * zenParams[i];
+        }
     }
 
     // De-emphasize (for radiance only)
