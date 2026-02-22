@@ -13,7 +13,7 @@
 - **Microfacet PBR BRDF**: Physically-based rendering using GGX distribution, Smith geometry, and Schlick Fresnel, shared between raster and raytracing paths for visual parity.
 
 ### 🧠 Intelligent Denoising & Upscaling
-- **NVIDIA DLSS Ray Reconstruction (DLSS-D)**: Integrated via Streamline for high-quality real-time denoising of complex lighting and reflections.
+- **NVIDIA DLSS Ray Reconstruction (DLSS-D)**: Integrated via Streamline for high-quality real-time denoising of complex lighting and reflections. Fully stable with physically correct specular motion vectors and jittered reprojection.
 - **Intel Open Image Denoise (OIDN) 2.x**: Integrated for high-quality final-frame cleanup via GPU zero-copy shared handles.
 - **DLSS Super Resolution (DLSS-SR)**: High-performance upscaling for fluid interaction even at 4K.
 
@@ -25,6 +25,16 @@
   - Thin-walled transmission (glass/leaves).
   - Tri-planar mapping and local UV transforms.
 - **Procedural Grass System**: Optimized grass generation and rendering for large-scale environments.
+
+### 🖥️ Editor & UI
+- **Advanced Workspace**: Full ImGui docking and multi-viewport support for multi-monitor setups.
+- **Persistent Layouts**: Automatic saving and restoration of panel states and window positions.
+- **Custom Theming**: Tailored ArchViz-focused dark theme for comfortable long-term use.
+
+### ⚡ Performance & Optimizations
+- **Multi-Threading**: Highly parallelized procedural cloud noise generation and sky model evaluation.
+- **SIMD Acceleration**: AVX2-optimized math routines for CPU-side sky and atmospheric calculations.
+- **Precise Timing**: Accurate frame and raster timing mechanisms for smooth profiling and rendering.
 
 ---
 
