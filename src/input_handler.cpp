@@ -18,6 +18,7 @@ extern POINT g_prevMousePos;
 extern float g_camSpeed;
 extern RenderMode g_currentRenderMode;
 extern CameraCB g_cameraData;
+extern bool g_verboseRenderLogs; // from main.cpp for debug logging
 
 // Simple Vec3 helper for CPU-side math
 struct Vec3 {
@@ -179,8 +180,12 @@ void Update(float dt) {
           DX12Context::WaitGPUIdle();
           DxrRenderer::CreateRayTracingPipeline(DX12Context::g_windowWidth,
                                                 DX12Context::g_windowHeight);
-          // printf/logging... let's just ignore printing to stderr here for
-          // simplicity
+          // ensure acceleration structures are fresh when we switch modes;
+          // sometimes the TLAS can be cleared if the scene was momentarily
+          // empty, so rebuild here to guarantee IsReady() will succeed.
+          Scene::RebuildAccelerationStructures();
+          if (g_verboseRenderLogs)
+            fprintf(stderr, "InputHandler: switched to DXR, rebuilt TLAS\n");
         } else {
           g_currentRenderMode = RenderMode::Raster;
         }

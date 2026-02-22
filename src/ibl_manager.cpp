@@ -67,6 +67,18 @@ bool IBLManager::LoadEnvironmentMap(const std::string &path) {
             << tex.height << ")" << std::endl;
 
   m_fileTexture = tex;
+
+  // Switching to file-based IBL automatically sets the source and disables the
+  // analytic sun.  The sun parameters are cached so we can restore them when
+  // the user returns to a procedural sky model.
+  if (!m_savedSunValid) {
+    m_savedSunIntensity = m_sunIntensity;
+    m_savedSunSize = m_sunSize;
+    m_savedSunValid = true;
+  }
+  m_sunIntensity = 0.0f;
+  m_sunSize = 0.0f;
+
   m_source = IBLSource::File;
   m_envMap = m_fileTexture;
 
@@ -103,8 +115,25 @@ void IBLManager::UpdateSkyModel() {
 
 void IBLManager::SetIBLSource(IBLSource source) {
   if (m_source != source) {
+    // if we are leaving file-based IBL, restore cached sun parameters
+    if (m_source == IBLSource::File && m_savedSunValid) {
+      m_sunIntensity = m_savedSunIntensity;
+      m_sunSize = m_savedSunSize;
+      m_savedSunValid = false;
+    }
+
     m_source = source;
     if (m_source == IBLSource::File) {
+      // backup current sun values (only once)
+      if (!m_savedSunValid) {
+        m_savedSunIntensity = m_sunIntensity;
+        m_savedSunSize = m_sunSize;
+        m_savedSunValid = true;
+      }
+      // mute the analytic sun, the env map may already contain sun lighting
+      m_sunIntensity = 0.0f;
+      m_sunSize = 0.0f;
+
       if (m_fileTexture.resource) {
         m_envMap = m_fileTexture;
         CreateDescriptor();
