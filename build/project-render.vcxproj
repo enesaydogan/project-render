@@ -754,7 +754,6 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="D:\project-render\src\clouds.cpp" />
     <ClCompile Include="D:\project-render\src\imgui_theme.cpp" />
     <ClCompile Include="D:\project-render\src\scene_io.cpp" />
-    <ClCompile Include="D:\project-render\src\gpu_timer.cpp" />
   </ItemGroup>
   <ItemGroup />
   <ItemGroup>

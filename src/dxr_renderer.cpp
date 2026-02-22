@@ -2055,10 +2055,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   dxrList->SetPipelineState1(s_rtStateObject.Get());
   dxrList->SetComputeRootSignature(s_rtGlobalRootSignature.Get());
 
-  // Start GPU profiling timer
-  if (s_queryHeap) {
-    dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0); // Frame start
-  }
+  BeginFrameProfiling(dxrList.Get());
 
   // Bind TLAS
   dxrList->SetComputeRootShaderResourceView(
@@ -2949,88 +2946,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     }
   }
 
-  // End frame timer and resolve queries
-  if (s_queryHeap) {
-    dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 9); // Frame end
-    // Copy shader counters (GPU -> readback) so CPU can inspect them next map
-    if (s_shaderCountersBuffer && s_shaderCountersReadbackBuffer) {
-      TransitionResource(dxrList.Get(), s_shaderCountersBuffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
-      dxrList->CopyResource(s_shaderCountersReadbackBuffer.Get(), s_shaderCountersBuffer.Get());
-      TransitionResource(dxrList.Get(), s_shaderCountersBuffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    }
-
-    dxrList->ResolveQueryData(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 10, s_queryReadbackBuffer.Get(), 0);
-  }
-
-  // Calculate CPU frame time and FPS
-  auto now = std::chrono::high_resolution_clock::now();
-  if (s_lastFrameTime.time_since_epoch().count() != 0) {
-    auto frameDuration = now - s_lastFrameTime;
-    s_frameTimeMs = std::chrono::duration<float, std::milli>(frameDuration).count();
-    s_fps = 1000.0f / s_frameTimeMs;
-
-    // Calculate SPP/s
-    UINT currentFrameCount = GetDisplayedSampleCount();
-    if (currentFrameCount > s_lastFrameCount) {
-      float sppIncrease = (float)(currentFrameCount - s_lastFrameCount);
-      s_sppPerSec = sppIncrease / (s_frameTimeMs / 1000.0f);
-      s_lastFrameCount = currentFrameCount;
-    }
-  }
-  s_lastFrameTime = now;
-
-  // Read GPU timestamps and calculate times (will be available next frame)
-  if (s_queryReadbackBuffer) {
-    UINT64 *data = nullptr;
-    if (SUCCEEDED(s_queryReadbackBuffer->Map(0, nullptr, (void**)&data))) {
-      UINT64 gpuFrequency = 0;
-      s_commandQueue->GetTimestampFrequency(&gpuFrequency);
-      double timestampToMs = 1000.0 / gpuFrequency;
-
-      // ReSTIR time: restir_end - restir_start
-      if (data[2] > data[1]) {
-        s_gpuTimes[0] = (float)((data[2] - data[1]) * timestampToMs);
-      }
-
-      // DispatchRays time: dispatch_end - dispatch_start
-      if (data[4] > data[3]) {
-        s_gpuTimes[1] = (float)((data[4] - data[3]) * timestampToMs);
-      }
-
-      // Denoising time: denoise_end - denoise_start
-      if (data[6] > data[5]) {
-        s_gpuTimes[2] = (float)((data[6] - data[5]) * timestampToMs);
-      }
-
-      // Noise calculation time: noise_end - noise_start
-      if (data[8] > data[7]) {
-        s_gpuTimes[3] = (float)((data[8] - data[7]) * timestampToMs);
-      }
-
-      // Compute full GPU frame time using frame start (0) and frame end (9)
-      if (data[9] > data[0]) {
-        s_gpuFrameTimeMs = (float)((data[9] - data[0]) * timestampToMs);
-      }
-
-      s_queryReadbackBuffer->Unmap(0, nullptr);
-    }
-  }
-
-  // Read shader counters readback (from GPU) and log a short summary
-  if (s_shaderCountersReadbackBuffer) {
-    UINT *c = nullptr;
-    if (SUCCEEDED(s_shaderCountersReadbackBuffer->Map(0, nullptr, (void**)&c))) {
-      for (UINT i = 0; i < 16; ++i) s_lastShaderCounters[i] = c[i];
-      s_shaderCountersReadbackBuffer->Unmap(0, nullptr);
-
-      if (g_verboseRenderLogs) {
-        fprintf(stderr, "ShaderCounters: TR=%u SH=%u SPEC=%u TEX=%u VTX=%u RESR=%u RESW=%u\n",
-                s_lastShaderCounters[0], s_lastShaderCounters[1], s_lastShaderCounters[2],
-                s_lastShaderCounters[5], s_lastShaderCounters[4],
-                s_lastShaderCounters[6], s_lastShaderCounters[7]);
-      }
-    }
-  }
+  EndFrameProfiling(dxrList.Get());
 
   // Bind RTV for subsequent ImGui draws
   commandListBase->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
@@ -3197,6 +3113,115 @@ bool ExportTonemappedFrameToPng(const std::wstring &filePath) {
 }
 
 // Profiling functions
+void BeginFrameProfiling(ID3D12GraphicsCommandList *commandList) {
+  if (s_queryHeap) {
+    // Record all timestamps at the start. DXR mode will overwrite specific ones.
+    // This prevents stale/undefined data from appearing in the UI for raster
+    // mode.
+    for (int i = 0; i < 10; ++i) {
+      commandList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, i);
+    }
+  }
+}
+
+void EndFrameProfiling(ID3D12GraphicsCommandList *commandList) {
+  if (s_queryHeap) {
+    commandList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
+                          9); // Frame end
+    // Copy shader counters (GPU -> readback) so CPU can inspect them next map
+    if (s_shaderCountersBuffer && s_shaderCountersReadbackBuffer) {
+      TransitionResource(
+          commandList, s_shaderCountersBuffer.Get(),
+          D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+      commandList->CopyResource(s_shaderCountersReadbackBuffer.Get(),
+                                s_shaderCountersBuffer.Get());
+      TransitionResource(
+          commandList, s_shaderCountersBuffer.Get(),
+          D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+
+    commandList->ResolveQueryData(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
+                                  0, 10, s_queryReadbackBuffer.Get(), 0);
+  }
+
+  // Calculate CPU frame time and FPS
+  auto now = std::chrono::high_resolution_clock::now();
+  if (s_lastFrameTime.time_since_epoch().count() != 0) {
+    auto frameDuration = now - s_lastFrameTime;
+    s_frameTimeMs =
+        std::chrono::duration<float, std::milli>(frameDuration).count();
+    s_fps = 1000.0f / s_frameTimeMs;
+
+    // Calculate SPP/s
+    UINT currentFrameCount = GetDisplayedSampleCount();
+    if (currentFrameCount > s_lastFrameCount) {
+      float sppIncrease = (float)(currentFrameCount - s_lastFrameCount);
+      s_sppPerSec = sppIncrease / (s_frameTimeMs / 1000.0f);
+    } else {
+      s_sppPerSec = 0.0f;
+    }
+    s_lastFrameCount = currentFrameCount;
+  }
+  s_lastFrameTime = now;
+
+  // Read GPU timestamps and calculate times (will be available next frame)
+  if (s_queryReadbackBuffer) {
+    UINT64 *data = nullptr;
+    if (SUCCEEDED(s_queryReadbackBuffer->Map(0, nullptr, (void **)&data))) {
+      UINT64 gpuFrequency = 0;
+      s_commandQueue->GetTimestampFrequency(&gpuFrequency);
+      double timestampToMs = 1000.0 / gpuFrequency;
+
+      // ReSTIR time: restir_end - restir_start
+      if (data[2] > data[1]) {
+        s_gpuTimes[0] = (float)((data[2] - data[1]) * timestampToMs);
+      }
+
+      // DispatchRays time: dispatch_end - dispatch_start
+      if (data[4] > data[3]) {
+        s_gpuTimes[1] = (float)((data[4] - data[3]) * timestampToMs);
+      }
+
+      // Denoising time: denoise_end - denoise_start
+      if (data[6] > data[5]) {
+        s_gpuTimes[2] = (float)((data[6] - data[5]) * timestampToMs);
+      }
+
+      // Noise calculation time: noise_end - noise_start
+      if (data[8] > data[7]) {
+        s_gpuTimes[3] = (float)((data[8] - data[7]) * timestampToMs);
+      }
+
+      // Compute full GPU frame time using frame start (0) and frame end (9)
+      if (data[9] > data[0]) {
+        s_gpuFrameTimeMs = (float)((data[9] - data[0]) * timestampToMs);
+      }
+
+      s_queryReadbackBuffer->Unmap(0, nullptr);
+    }
+  }
+
+  // Read shader counters readback (from GPU) and log a short summary
+  if (s_shaderCountersReadbackBuffer) {
+    UINT *c = nullptr;
+    if (SUCCEEDED(s_shaderCountersReadbackBuffer->Map(0, nullptr, (void **)&c))) {
+      for (UINT i = 0; i < 16; ++i)
+        s_lastShaderCounters[i] = c[i];
+      s_shaderCountersReadbackBuffer->Unmap(0, nullptr);
+
+      if (g_verboseRenderLogs) {
+        fprintf(stderr,
+                "ShaderCounters: TR=%u SH=%u SPEC=%u TEX=%u VTX=%u RESR=%u "
+                "RESW=%u\n",
+                s_lastShaderCounters[0], s_lastShaderCounters[1],
+                s_lastShaderCounters[2], s_lastShaderCounters[5],
+                s_lastShaderCounters[4], s_lastShaderCounters[6],
+                s_lastShaderCounters[7]);
+      }
+    }
+  }
+}
+
 float GetFrameTimeMs() { return s_frameTimeMs; }
 float GetFPS() { return s_fps; }
 float GetSPPPerSec() { return s_sppPerSec; }

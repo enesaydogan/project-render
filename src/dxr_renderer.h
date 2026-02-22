@@ -58,6 +58,8 @@ UINT GetAccumulationFrameCount();
 UINT GetDisplayedSampleCount();
 
 // Profiling functions
+void BeginFrameProfiling(ID3D12GraphicsCommandList *commandList);
+void EndFrameProfiling(ID3D12GraphicsCommandList *commandList);
 float GetFrameTimeMs();
 float GetFPS();
 float GetSPPPerSec();
