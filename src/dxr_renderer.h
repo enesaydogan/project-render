@@ -37,10 +37,10 @@ void Initialize(ID3D12Device *device);
 void SetCommandQueue(ID3D12CommandQueue *commandQueue, ID3D12Fence *fence,
                      UINT64 *fenceValues, UINT *frameIndexPtr,
                      HANDLE fenceEvent);
-// Build pipeline (compiles shaders and creates state object)
+// Build RayTracing pipeline (TLAS, BLAS, and PSO)
 void CreateRayTracingPipeline(UINT width, UINT height);
 // Build acceleration structures for given meshes and instances
-void BuildAccelerationStructures(const std::vector<Asset::GpuMesh> &meshes,
+void BuildAccelerationStructures(const std::vector<const Asset::GpuMesh*> &meshes,
                                  const std::vector<Scene::Instance> &instances);
 // Update light buffer for ReSTIR
 void UpdateLights(const std::vector<GpuLight> &lights);
@@ -92,7 +92,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandList, ID3D12CommandAllocator 
                  ID3D12Resource *cameraCB, ID3D12Resource *materialCB,
                  D3D12_GPU_DESCRIPTOR_HANDLE texturesGpuStart,
                  UINT textureDescriptorCount,
-                 const std::vector<Asset::GpuMesh> &meshes,
+                 const std::vector<const Asset::GpuMesh*> &meshes,
                  ID3D12Resource *meshDataSB = nullptr);
 
 // Returns the last calculated average noise level (0.0 - 1.0+)

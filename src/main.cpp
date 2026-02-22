@@ -112,6 +112,7 @@ static ComPtr<ID3D12Resource>
     g_materialBuffer; // Persistent material constant buffer
 UINT g_textureDescriptorCount = 0;
 static ComPtr<ID3D12Resource> g_materialConstantBuffer;
+static void *g_materialCbMappedData = nullptr;
 static ComPtr<ID3D12Resource>
     g_materialStructuredBuffer; // Tightly packed for DXR
 static ComPtr<ID3D12Resource>
@@ -127,6 +128,7 @@ static ComPtr<ID3D12PipelineState> g_pipelineState;
 static ComPtr<ID3D12Resource> g_vertexBuffer;
 static D3D12_VERTEX_BUFFER_VIEW g_vertexBufferView = {};
 ComPtr<ID3D12Resource> g_constantBuffer;
+void *g_constantCbMappedData = nullptr;
 static float g_offsetX = 0.2f;
 
 // Grid rendering resources
@@ -910,15 +912,12 @@ bool InitApplication(HWND hwnd) {
       &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &cbDesc,
       D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
       IID_PPV_ARGS(&g_constantBuffer)));
+  ThrowIfFailed(g_constantBuffer->Map(
+      0, nullptr, reinterpret_cast<void **>(&g_constantCbMappedData)));
 
   // Initialize constant buffer data (small offset)
   AlignConstants constants = {{0.2f, 0.0f, 0.0f, 0.0f}};
-  UINT8 *pCbData = nullptr;
-  D3D12_RANGE readRangeCB = {0, 0};
-  ThrowIfFailed(g_constantBuffer->Map(0, &readRangeCB,
-                                      reinterpret_cast<void **>(&pCbData)));
-  memcpy(pCbData, &constants, sizeof(constants));
-  g_constantBuffer->Unmap(0, nullptr);
+  memcpy(g_constantCbMappedData, &constants, sizeof(constants));
 
   // --- Create persistent material constant buffer ---
   // Large enough to hold many unique material instances per frame
@@ -950,6 +949,8 @@ bool InitApplication(HWND hwnd) {
       &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &matCbDesc,
       D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
       IID_PPV_ARGS(&g_materialConstantBuffer)));
+  ThrowIfFailed(g_materialConstantBuffer->Map(
+      0, nullptr, reinterpret_cast<void **>(&g_materialCbMappedData)));
 
   // Material Structured Buffer for DXR (tightly packed, no 256B alignment)
   {
@@ -1372,7 +1373,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             // We use global indices for vertices/indices in DXR
             for (size_t i = 0; i < activeMeshes.size() && i < 16384; ++i) {
               MeshData m = {};
-              m.materialIndex = activeMeshes[i].materialIndex;
+              m.materialIndex = activeMeshes[i]->materialIndex;
               m.vbIndex = (int)i;
               m.ibIndex = (int)i;
               memcpy(pData + i * sizeof(MeshData), &m, sizeof(MeshData));
@@ -1542,129 +1543,118 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
               0, g_cameraConstantBuffer->GetGPUVirtualAddress());
         }
 
+        // Bind common textures and IBL once for all instances
+        if (g_textureDescriptorCount > 0) {
+          DX12Context::g_commandList->SetGraphicsRootDescriptorTable(
+              1, g_texturesGpuStart);
+        }
+        if (IBLManager::Get().IsLoaded()) {
+          DX12Context::g_commandList->SetGraphicsRootDescriptorTable(
+              4, IBLManager::Get().GetGPUHandle());
+        }
+
         // Draw all instances
+        int lastMaterialIndex = -2;
+        ID3D12Resource *lastVB = nullptr;
+        ID3D12Resource *lastIB = nullptr;
+
         for (size_t i = 0; i < sceneInstances.size(); ++i) {
           const auto &inst = sceneInstances[i];
-          const auto &gm = inst.mesh;
+          const auto &gm = *inst.mesh;
           // Skip meshes that have been deleted or not properly initialized
           if (!gm.vertexBuffer || !gm.indexBuffer || gm.ibView.SizeInBytes == 0)
             continue;
 
           // Set instance transform
           DX12Context::g_commandList->SetGraphicsRoot32BitConstants(
-              3, 16, inst.transform, 0);
+              3, 16, &inst.transform, 0);
 
-          // material binding... (existing logic needed)
-          if (gm.materialIndex >= 0 &&
-              (size_t)gm.materialIndex < g_loadedMaterials.size()) {
-            // ...
-          }
-
-          if (g_verboseRenderLogs) {
-            fprintf(stderr,
-                    "Mesh[%zu]: vb=0x%016llx vbSize=%u vbStride=%u "
-                    "ib=0x%016llx ibSize=%u verts=%u idx=%u mat=%d\n",
-                    i, (unsigned long long)gm.vbView.BufferLocation,
-                    (unsigned)gm.vbView.SizeInBytes,
-                    (unsigned)gm.vbView.StrideInBytes,
-                    (unsigned long long)gm.ibView.BufferLocation,
-                    (unsigned)gm.ibView.SizeInBytes, (unsigned)gm.vertexCount,
-                    (unsigned)gm.indexCount, gm.materialIndex);
-          }
-
-          DX12Context::g_commandList->IASetVertexBuffers(0, 1, &gm.vbView);
-          DX12Context::g_commandList->IASetIndexBuffer(&gm.ibView);
-
+          // material binding...
           if (gm.materialIndex >= 0 &&
               gm.materialIndex < (int)g_loadedMaterials.size()) {
-            // Upload material data for this mesh into a unique slot in the
-            // material CB We'll use a simple linear allocation (i % 1024) for
-            // now. In a production engine, this would use a dynamic ring
-            // buffer.
-            struct MaterialCB {
-              float diffuseColor[4];
-              float reflectionColor[4];
-              float refractionColor[4];
-              float emissiveColor[4];
-              int textureIndices[4];
-              int emissiveAndPad[4];
-              float extraParams[4];
-              float archvizParams0[4];
-              float uvTransform[4];
-              float triPlanarParams[4];
-            } matCB;
 
-            const auto &srcMat = g_loadedMaterials[gm.materialIndex];
-            memcpy(matCB.diffuseColor, srcMat.diffuseColor, 16);
-            memcpy(matCB.reflectionColor, srcMat.reflectionColor, 12);
-            matCB.reflectionColor[3] = srcMat.reflectionGlossiness;
+            if (gm.materialIndex != lastMaterialIndex) {
+              struct MaterialCB {
+                float diffuseColor[4];
+                float reflectionColor[4];
+                float refractionColor[4];
+                float emissiveColor[4];
+                int textureIndices[4];
+                int emissiveAndPad[4];
+                float extraParams[4];
+                float archvizParams0[4];
+                float uvTransform[4];
+                float triPlanarParams[4];
+              } matCB;
 
-            memcpy(matCB.refractionColor, srcMat.refractionColor, 12);
-            matCB.refractionColor[3] = srcMat.refractionGlossiness;
+              const auto &srcMat = g_loadedMaterials[gm.materialIndex];
+              memcpy(matCB.diffuseColor, srcMat.diffuseColor, 16);
+              memcpy(matCB.reflectionColor, srcMat.reflectionColor, 12);
+              matCB.reflectionColor[3] = srcMat.reflectionGlossiness;
 
-            memcpy(matCB.emissiveColor, srcMat.emissiveColor, 12);
-            matCB.emissiveColor[3] = srcMat.ior;
+              memcpy(matCB.refractionColor, srcMat.refractionColor, 12);
+              matCB.refractionColor[3] = srcMat.refractionGlossiness;
 
-            matCB.textureIndices[0] = srcMat.diffuseTexture;
-            matCB.textureIndices[1] = srcMat.reflectionTexture;
-            matCB.textureIndices[2] = srcMat.normalTexture;
-            matCB.textureIndices[3] = srcMat.refractionTexture;
+              memcpy(matCB.emissiveColor, srcMat.emissiveColor, 12);
+              matCB.emissiveColor[3] = srcMat.ior;
 
-            matCB.emissiveAndPad[0] = srcMat.emissiveTexture;
-            matCB.emissiveAndPad[1] = srcMat.occlusionTexture;
-            matCB.emissiveAndPad[2] = srcMat.metalRoughTexture;
-            matCB.emissiveAndPad[3] = 0;
+              matCB.textureIndices[0] = srcMat.diffuseTexture;
+              matCB.textureIndices[1] = srcMat.reflectionTexture;
+              matCB.textureIndices[2] = srcMat.normalTexture;
+              matCB.textureIndices[3] = srcMat.refractionTexture;
 
-            matCB.extraParams[0] = srcMat.metalness;
-            matCB.extraParams[1] = srcMat.emissiveIntensity;
-            matCB.extraParams[2] = 0.0f;
-            matCB.extraParams[3] = 0.0f;
+              matCB.emissiveAndPad[0] = srcMat.emissiveTexture;
+              matCB.emissiveAndPad[1] = srcMat.occlusionTexture;
+              matCB.emissiveAndPad[2] = srcMat.metalRoughTexture;
+              matCB.emissiveAndPad[3] = 0;
 
-            matCB.archvizParams0[0] = srcMat.clearcoat;
-            matCB.archvizParams0[1] = srcMat.clearcoatRoughness;
-            matCB.archvizParams0[2] = srcMat.thinWalled;
-            matCB.archvizParams0[3] = srcMat.translucency;
+              matCB.extraParams[0] = srcMat.metalness;
+              matCB.extraParams[1] = srcMat.emissiveIntensity;
+              matCB.extraParams[2] = 0.0f;
+              matCB.extraParams[3] = 0.0f;
 
-            matCB.uvTransform[0] = srcMat.uvScale[0];
-            matCB.uvTransform[1] = srcMat.uvScale[1];
-            matCB.uvTransform[2] = srcMat.uvOffset[0];
-            matCB.uvTransform[3] = srcMat.uvOffset[1];
+              matCB.archvizParams0[0] = srcMat.clearcoat;
+              matCB.archvizParams0[1] = srcMat.clearcoatRoughness;
+              matCB.archvizParams0[2] = srcMat.thinWalled;
+              matCB.archvizParams0[3] = srcMat.translucency;
 
-            matCB.triPlanarParams[0] = srcMat.triPlanarEnabled;
-            matCB.triPlanarParams[1] = srcMat.triPlanarScale;
-            matCB.triPlanarParams[2] = srcMat.triPlanarSharpness;
-            matCB.triPlanarParams[3] = srcMat.triPlanarNormalStrength;
+              matCB.uvTransform[0] = srcMat.uvScale[0];
+              matCB.uvTransform[1] = srcMat.uvScale[1];
+              matCB.uvTransform[2] = srcMat.uvOffset[0];
+              matCB.uvTransform[3] = srcMat.uvOffset[1];
 
-            if (g_materialConstantBuffer) {
-              const UINT64 matSlotSize = (sizeof(MaterialCB) + 255) & ~255;
-              UINT64 offset = (i % 1024) * matSlotSize;
-              UINT8 *pMat = nullptr;
-              D3D12_RANGE readRange = {0, 0};
-              // Note: For high frequency updates, persistent mapping or
-              // multiple buffers are preferred.
-              if (SUCCEEDED(g_materialConstantBuffer->Map(
-                      0, &readRange, reinterpret_cast<void **>(&pMat)))) {
-                memcpy(pMat + offset, &matCB, sizeof(matCB));
-                g_materialConstantBuffer->Unmap(0, nullptr);
+              matCB.triPlanarParams[0] = srcMat.triPlanarEnabled;
+              matCB.triPlanarParams[1] = srcMat.triPlanarScale;
+              matCB.triPlanarParams[2] = srcMat.triPlanarSharpness;
+              matCB.triPlanarParams[3] = srcMat.triPlanarNormalStrength;
+
+              if (g_materialCbMappedData) {
+                const UINT64 matSlotSize = (sizeof(MaterialCB) + 255) & ~255;
+                // Use material index based slotting to capitalize on shared
+                // materials
+                UINT64 offset = (gm.materialIndex % 16384) * matSlotSize;
+                memcpy((uint8_t *)g_materialCbMappedData + offset, &matCB,
+                       sizeof(matCB));
+                DX12Context::g_commandList->SetGraphicsRootConstantBufferView(
+                    2,
+                    g_materialConstantBuffer->GetGPUVirtualAddress() + offset);
               }
-              DX12Context::g_commandList->SetGraphicsRootConstantBufferView(
-                  2, g_materialConstantBuffer->GetGPUVirtualAddress() + offset);
-            }
-            if (g_textureDescriptorCount > 0) {
-              DX12Context::g_commandList->SetGraphicsRootDescriptorTable(
-                  1, g_texturesGpuStart);
-            }
-            if (IBLManager::Get().IsLoaded()) {
-              DX12Context::g_commandList->SetGraphicsRootDescriptorTable(
-                  4, IBLManager::Get().GetGPUHandle());
+              lastMaterialIndex = gm.materialIndex;
             }
           }
+
+          if (gm.vertexBuffer.Get() != lastVB) {
+            DX12Context::g_commandList->IASetVertexBuffers(0, 1, &gm.vbView);
+            lastVB = gm.vertexBuffer.Get();
+          }
+          if (gm.indexBuffer.Get() != lastIB) {
+            DX12Context::g_commandList->IASetIndexBuffer(&gm.ibView);
+            lastIB = gm.indexBuffer.Get();
+          }
+
           if (gm.ibView.SizeInBytes > 0) {
             DX12Context::g_commandList->DrawIndexedInstanced(
                 gm.ibView.SizeInBytes / 4, 1, 0, 0, 0);
-            if (g_verboseRenderLogs) {
-              fprintf(stderr, "Issued DrawIndexedInstanced for mesh[%zu]\n", i);
-            }
           }
         }
       }

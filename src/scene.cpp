@@ -585,19 +585,20 @@ void RebuildAccelerationStructures() {
   DxrRenderer::BuildAccelerationStructures(GetActiveMeshes(), GetInstances());
 }
 
-std::vector<Asset::GpuMesh> GetActiveMeshes() {
-  std::vector<Asset::GpuMesh> active;
+std::vector<const Asset::GpuMesh*> GetActiveMeshes() {
+  std::vector<const Asset::GpuMesh*> active;
   for (size_t i = 0; i < g_loadedMeshes.size(); ++i) {
     const auto &m = g_loadedMeshes[i];
     if (m.vertexBuffer && m.indexBuffer && m.vertexCount > 0 &&
         m.indexCount > 0)
-      active.push_back(m);
+      active.push_back(&m);
   }
   return active;
 }
 
 std::vector<Instance> GetInstances() {
   std::vector<Instance> instances;
+  instances.reserve(1280); // Heuristic
   for (size_t ni = 0; ni < s_nodes.size(); ++ni) {
     const auto &node = s_nodes[ni];
     if (!node.visible)
@@ -605,9 +606,11 @@ std::vector<Instance> GetInstances() {
     for (size_t mi : node.meshIndices) {
       if (mi < g_loadedMeshes.size()) {
         Instance inst;
-        inst.mesh = g_loadedMeshes[mi];
-        inst.transform = node.transform;
-        inst.nodeIndex = ni;
+        inst.name = node.name;
+        inst.mesh = &g_loadedMeshes[mi];
+        inst.transform = DirectX::XMLoadFloat4x4(
+            reinterpret_cast<const DirectX::XMFLOAT4X4 *>(node.transform));
+        inst.id = (int)ni;
         instances.push_back(inst);
       }
     }

@@ -1373,7 +1373,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
 }
 
 void BuildAccelerationStructures(
-    const std::vector<Asset::GpuMesh> &meshes,
+    const std::vector<const Asset::GpuMesh*> &meshes,
     const std::vector<Scene::Instance> &instances) {
   if (g_debugLog) {
     std::ostringstream _oss;
@@ -1420,7 +1420,7 @@ void BuildAccelerationStructures(
                     "validating meshes...\n");
     fflush(stderr);
     for (size_t i = 0; i < meshes.size(); ++i) {
-      const auto &m = meshes[i];
+      const auto &m = *meshes[i];
       if (!m.vertexBuffer || !m.indexBuffer) {
         fprintf(stderr,
                 "DxrRenderer: Mesh %zu missing vertex or index buffer - "
@@ -1569,7 +1569,7 @@ void BuildAccelerationStructures(
     bool meshesChanged = (meshes.size() != s_cachedMeshBuffers.size());
     if (!meshesChanged) {
       for (size_t i = 0; i < meshes.size(); ++i) {
-        if (meshes[i].vertexBuffer.Get() != s_cachedMeshBuffers[i]) {
+        if (meshes[i]->vertexBuffer.Get() != s_cachedMeshBuffers[i]) {
           meshesChanged = true;
           break;
         }
@@ -1590,7 +1590,7 @@ void BuildAccelerationStructures(
       s_cachedMeshBuffers.clear();
       try {
         for (size_t i = 0; i < meshes.size(); ++i) {
-          const auto &mesh = meshes[i];
+          const auto &mesh = *meshes[i];
           if (!mesh.vertexBuffer || !mesh.indexBuffer)
             continue;
 
@@ -1676,8 +1676,8 @@ void BuildAccelerationStructures(
     for (size_t k = 0; k < s_allBLAS.size(); ++k) {
       // s_allBLAS[k].meshId stores originalMeshIndex
       size_t origIdx = (size_t)s_allBLAS[k].meshId;
-      if (origIdx < meshes.size() && meshes[origIdx].vertexBuffer) {
-        meshToBlasIndex[meshes[origIdx].vertexBuffer.Get()] = k;
+      if (origIdx < meshes.size() && meshes[origIdx]->vertexBuffer) {
+        meshToBlasIndex[meshes[origIdx]->vertexBuffer.Get()] = k;
       }
     }
 
@@ -1685,10 +1685,10 @@ void BuildAccelerationStructures(
     instanceDescs.reserve(instances.size());
 
     for (const auto &sceneInst : instances) {
-      if (!sceneInst.mesh.vertexBuffer)
+      if (!sceneInst.mesh || !sceneInst.mesh->vertexBuffer)
         continue;
 
-      auto it = meshToBlasIndex.find(sceneInst.mesh.vertexBuffer.Get());
+      auto it = meshToBlasIndex.find(sceneInst.mesh->vertexBuffer.Get());
       if (it == meshToBlasIndex.end())
         continue;
 
@@ -1696,21 +1696,24 @@ void BuildAccelerationStructures(
       UINT originalMeshIdx = (UINT)s_allBLAS[blasIndex].meshId;
 
       D3D12_RAYTRACING_INSTANCE_DESC inst = {};
-      // Convert Column-Major 4x4 to Row-Major 3x4
-      // D3D12_RAYTRACING_INSTANCE_DESC expects 3x4 Row-Major
-      const float *m = sceneInst.transform;
-      inst.Transform[0][0] = m[0];
-      inst.Transform[0][1] = m[4];
-      inst.Transform[0][2] = m[8];
-      inst.Transform[0][3] = m[12];
-      inst.Transform[1][0] = m[1];
-      inst.Transform[1][1] = m[5];
-      inst.Transform[1][2] = m[9];
-      inst.Transform[1][3] = m[13];
-      inst.Transform[2][0] = m[2];
-      inst.Transform[2][1] = m[6];
-      inst.Transform[2][2] = m[10];
-      inst.Transform[2][3] = m[14];
+      // Extract from XMMATRIX
+      DirectX::XMFLOAT4X4 m;
+      DirectX::XMStoreFloat4x4(&m, sceneInst.transform);
+
+      // Convert Column-Major 4x4 (stored in m) to Row-Major 3x4
+      // s_allBLAS[blasIndex].meshId stores originalMeshIndex
+      inst.Transform[0][0] = m._11;
+      inst.Transform[0][1] = m._21;
+      inst.Transform[0][2] = m._31;
+      inst.Transform[0][3] = m._41;
+      inst.Transform[1][0] = m._12;
+      inst.Transform[1][1] = m._22;
+      inst.Transform[1][2] = m._32;
+      inst.Transform[1][3] = m._42;
+      inst.Transform[2][0] = m._13;
+      inst.Transform[2][1] = m._23;
+      inst.Transform[2][2] = m._33;
+      inst.Transform[2][3] = m._43;
 
       inst.InstanceID = originalMeshIdx; // Use mesh index for shader binding
       inst.InstanceMask = 0xFF;
@@ -1956,7 +1959,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                  ID3D12Resource *cameraCB, ID3D12Resource *materialCB,
                  D3D12_GPU_DESCRIPTOR_HANDLE texturesGpuStart,
                  UINT textureDescriptorCount,
-                 const std::vector<Asset::GpuMesh> &meshes,
+                 const std::vector<const Asset::GpuMesh*> &meshes,
                  ID3D12Resource *meshDataSB) {
   auto ReturnFail = [&](int reason, const char *message) -> bool {
     if (s_lastRenderFrameFailReason != reason) {

@@ -1,4 +1,5 @@
 #include "camera.h"
+#include "d3d12_helpers.h"
 #include <math.h>
 
 // Forward declare for accumulation reset
@@ -121,13 +122,16 @@ void UpdateCameraCB() {
 
   bool changed = CameraChanged(g_cameraData, s_lastCameraData);
 
-  // ALWAYS update the GPU buffer because frameCount changes every frame
-  UINT8 *pCam = nullptr;
-  D3D12_RANGE readRange = {0, 0};
-  if (SUCCEEDED(g_cameraConstantBuffer->Map(
-          0, &readRange, reinterpret_cast<void **>(&pCam)))) {
+  // Persistent mapping for camera CB
+  static void *pCam = nullptr;
+  if (!pCam && g_cameraConstantBuffer) {
+    ThrowIfFailed(g_cameraConstantBuffer->Map(0, nullptr,
+                                              reinterpret_cast<void **>(&pCam)));
+  }
+
+  if (pCam) {
     memcpy(pCam, &g_cameraData, sizeof(g_cameraData));
-    g_cameraConstantBuffer->Unmap(0, nullptr);
+    // No Unmap needed for upload heap persistent mapping.
   }
 
   if (changed) {

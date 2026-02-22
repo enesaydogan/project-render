@@ -832,12 +832,18 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
           constants.offset[1] = 0.0f;
           constants.offset[2] = 0.0f;
           constants.offset[3] = 0.0f;
-          UINT8 *pCbData = nullptr;
-          D3D12_RANGE readRange = {0, 0};
-          if (SUCCEEDED(g_constantBuffer->Map(
-                  0, &readRange, reinterpret_cast<void **>(&pCbData)))) {
-            memcpy(pCbData, &constants, sizeof(constants));
-            g_constantBuffer->Unmap(0, nullptr);
+          
+          extern void *g_constantCbMappedData;
+          if (g_constantCbMappedData) {
+            memcpy(g_constantCbMappedData, &constants, sizeof(constants));
+          } else {
+            UINT8 *pCbData = nullptr;
+            D3D12_RANGE readRange = {0, 0};
+            if (SUCCEEDED(g_constantBuffer->Map(
+                    0, &readRange, reinterpret_cast<void **>(&pCbData)))) {
+              memcpy(pCbData, &constants, sizeof(constants));
+              g_constantBuffer->Unmap(0, nullptr);
+            }
           }
           uiChanged = true;
         }
