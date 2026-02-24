@@ -23,8 +23,8 @@
 #include "streamline_manager.h"
 
 #include <algorithm>
-#include <string>
 #include <fstream>
+#include <string>
 
 using Microsoft::WRL::ComPtr;
 using namespace DX12Context;
@@ -208,9 +208,12 @@ void RestoreRenderExportState() {
 
   // Restore Streamline/DLSS state that was disabled for export so we
   // recompute noise statistics correctly.
-  DX12Context::g_streamline.SetMode((StreamlineManager::Mode)g_renderExportJob.previousStreamlineMode);
-  DX12Context::g_streamline.SetQuality((StreamlineManager::Quality)g_renderExportJob.previousStreamlineQuality);
-  DX12Context::g_streamline.SetEnabled(g_renderExportJob.previousStreamlineEnabled);
+  DX12Context::g_streamline.SetMode(
+      (StreamlineManager::Mode)g_renderExportJob.previousStreamlineMode);
+  DX12Context::g_streamline.SetQuality(
+      (StreamlineManager::Quality)g_renderExportJob.previousStreamlineQuality);
+  DX12Context::g_streamline.SetEnabled(
+      g_renderExportJob.previousStreamlineEnabled);
 
   WaitGPUIdle();
   DxrRenderer::ResetStreamlineHistory();
@@ -271,18 +274,18 @@ void StartRenderExportJob(const std::wstring &outputPath) {
   g_renderExportJob.previousDenoiserIndex =
       DenoiserIndexFromMode(DxrRenderer::GetDenoiserMode());
 
-    // Save Streamline/DLSS state so we can disable it for the export (this
-    // allows noise statistics to be computed even when DLSS-RR would normally
-    // bypass accumulation). We'll restore these in RestoreRenderExportState().
-    g_renderExportJob.previousStreamlineEnabled =
+  // Save Streamline/DLSS state so we can disable it for the export (this
+  // allows noise statistics to be computed even when DLSS-RR would normally
+  // bypass accumulation). We'll restore these in RestoreRenderExportState().
+  g_renderExportJob.previousStreamlineEnabled =
       DX12Context::g_streamline.IsEnabled();
-    g_renderExportJob.previousStreamlineMode =
+  g_renderExportJob.previousStreamlineMode =
       (int)DX12Context::g_streamline.GetMode();
-    g_renderExportJob.previousStreamlineQuality =
+  g_renderExportJob.previousStreamlineQuality =
       (int)DX12Context::g_streamline.GetQuality();
-    if (g_renderExportJob.previousStreamlineEnabled) {
+  if (g_renderExportJob.previousStreamlineEnabled) {
     DX12Context::g_streamline.SetEnabled(false);
-    }
+  }
 
   g_currentRenderMode = RenderMode::DXR;
   g_cameraData.maxSPP = (float)g_renderExportJob.targetMaxSpp;
@@ -302,9 +305,13 @@ void StartRenderExportJob(const std::wstring &outputPath) {
         DenoiserModeFromIndex(g_renderExportJob.previousDenoiserIndex));
     g_currentRenderMode = g_renderExportJob.previousMode;
     // Restore Streamline/DLSS state if we disabled it earlier
-    DX12Context::g_streamline.SetMode((StreamlineManager::Mode)g_renderExportJob.previousStreamlineMode);
-    DX12Context::g_streamline.SetQuality((StreamlineManager::Quality)g_renderExportJob.previousStreamlineQuality);
-    DX12Context::g_streamline.SetEnabled(g_renderExportJob.previousStreamlineEnabled);
+    DX12Context::g_streamline.SetMode(
+        (StreamlineManager::Mode)g_renderExportJob.previousStreamlineMode);
+    DX12Context::g_streamline.SetQuality(
+        (StreamlineManager::Quality)
+            g_renderExportJob.previousStreamlineQuality);
+    DX12Context::g_streamline.SetEnabled(
+        g_renderExportJob.previousStreamlineEnabled);
     g_renderExportJob.active = false;
     UpdateCameraCB();
     return;
@@ -349,12 +356,10 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
   // Fullscreen DockSpace root so panels can be docked and rearranged.
   ImGuiIO &io = ImGui::GetIO();
   if (io.ConfigFlags & ImGuiConfigFlags_DockingEnable) {
-    ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoTitleBar |
-                                    ImGuiWindowFlags_NoCollapse |
-                                    ImGuiWindowFlags_NoResize |
-                                    ImGuiWindowFlags_NoMove |
-                                    ImGuiWindowFlags_NoBringToFrontOnFocus |
-                                    ImGuiWindowFlags_NoNavFocus;
+    ImGuiWindowFlags window_flags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
 
     ImGuiViewport *viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->Pos);
@@ -679,16 +684,29 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
           uiChanged = true;
         }
       }
-      if (ImGui::SliderFloat("Intensity", &g_cameraData.intensity, 0.0f,
-                             5.0f)) {
-        UpdateCameraCB();
-        uiChanged = true;
-        // Debug: print camera params when intensity changes
-        fprintf(stderr,
-                "Camera params after Intensity change: fov=%.3f "
-                "aspect=%.3f near=%.3f far=%.3f intensity=%.3f\n",
-                g_cameraData.fov, g_cameraData.aspect, g_cameraData.nearZ,
-                g_cameraData.farZ, g_cameraData.intensity);
+      {
+        bool autoExp = DxrRenderer::GetAutoExposure();
+        if (ImGui::Checkbox("Auto Exposure", &autoExp)) {
+          DxrRenderer::SetAutoExposure(autoExp);
+          uiChanged = true;
+        }
+        if (autoExp) {
+          float comp = DxrRenderer::GetExposureCompensation();
+          if (ImGui::SliderFloat("Exposure Comp", &comp, 0.1f, 10.0f,
+                                 "%.2fx")) {
+            DxrRenderer::SetExposureCompensation(comp);
+            uiChanged = true;
+          }
+          ImGui::BeginDisabled();
+        }
+        if (ImGui::SliderFloat("Intensity", &g_cameraData.intensity, 0.0f,
+                               5.0f)) {
+          UpdateCameraCB();
+          uiChanged = true;
+        }
+        if (autoExp) {
+          ImGui::EndDisabled();
+        }
       }
       if (ImGui::Button("Reset Camera")) {
         ResetCamera();
@@ -763,13 +781,14 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
 
         // Intensity Controls
         float skyInt = IBLManager::Get().GetSkyIntensity();
-        if (ImGui::SliderFloat("Sky Intensity", &skyInt, 0.0f, 5.0f)) {
+        if (ImGui::SliderFloat("Sky Intensity", &skyInt, 0.0f, 10.0f)) {
           IBLManager::Get().SetSkyIntensity(skyInt);
           uiParamChanged = true;
           uiChanged = true;
         }
         float sunInt = IBLManager::Get().GetSunIntensity();
-        if (ImGui::SliderFloat("Sun Intensity", &sunInt, 0.0f, 5.0f)) {
+        if (ImGui::SliderFloat("Sun Intensity (Lux)", &sunInt, 0.0f, 150000.0f,
+                               "%.0f Lux")) {
           IBLManager::Get().SetSunIntensity(sunInt);
           // Changes analytic light intensity
           uiChanged = true;
@@ -832,7 +851,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
           constants.offset[1] = 0.0f;
           constants.offset[2] = 0.0f;
           constants.offset[3] = 0.0f;
-          
+
           extern void *g_constantCbMappedData;
           if (g_constantCbMappedData) {
             memcpy(g_constantCbMappedData, &constants, sizeof(constants));
@@ -1234,7 +1253,8 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
       if (fps > 0.0f) {
         ImGui::Text("FPS: %.1f (%.2f ms)", fps, 1000.0f / fps);
         ImGui::Text("CPU Work Time: %.2f ms", DxrRenderer::GetCPUWorkTimeMs());
-        ImGui::Text("GPU Frame Time: %.2f ms", DxrRenderer::GetGPUFrameTimeMs());
+        ImGui::Text("GPU Frame Time: %.2f ms",
+                    DxrRenderer::GetGPUFrameTimeMs());
         ImGui::Text("Full Frame Time: %.2f ms", DxrRenderer::GetFrameTimeMs());
       } else {
         ImGui::Text("FPS: N/A");
@@ -1305,7 +1325,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
         const char *iniName = io.IniFilename ? io.IniFilename : "imgui.ini";
         std::ifstream ini(iniName);
         if (ini) {
-          auto readCollapsed = [&](const std::string &section)->int {
+          auto readCollapsed = [&](const std::string &section) -> int {
             ini.clear();
             ini.seekg(0);
             std::string line;
@@ -1339,7 +1359,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
     }
   }
 
-// (SavePanelVisibility implemented below at file scope)
+  // (SavePanelVisibility implemented below at file scope)
 
   if (ImGui::IsKeyPressed(ImGuiKey_M, false)) {
     g_showMaterialEditor = !g_showMaterialEditor;

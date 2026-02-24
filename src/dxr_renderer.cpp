@@ -9,7 +9,9 @@
 #include "oidn_denoiser.h"
 #include "scene.h"
 #include "streamline_manager.h"
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -18,7 +20,6 @@
 #include <vector>
 #include <wincodec.h>
 #include <wrl.h>
-
 
 // Expose global debug flag (set by WinMain parsing)
 extern bool g_debugLog;
@@ -44,9 +45,12 @@ static DxrRenderer::DenoiserMode s_denoiserMode =
     DxrRenderer::DenoiserMode::Off;
 static OidnDenoiser s_oidnDenoiser;
 static OidnDenoiser::Quality s_oidnQuality = OidnDenoiser::Quality::Balanced;
-// RR jitter scale default: lower than 1.0 to reduce silhouette/screen-edge
-// shimmer.
 static float s_rrJitterScale = 0.5f;
+
+static bool s_autoExposure = true;
+static float s_exposureCompensation = 1.0f;
+static float s_smoothedExposure = 1e-5f; // New: persistent smoothed exposure
+
 // When DLSS-RR is active we don't use the accumulation buffer; track a
 // still-frame SPP count separately so maxSPP can still freeze rendering.
 static UINT s_rrStillFrameSpp = 0;
@@ -412,6 +416,11 @@ float GetCurrentNoiseLevel() { return s_lastNoiseLevel; }
 float GetCurrentAvgLuminance() { return s_avgLuminanceCdM2; }
 float GetCurrentEV100() { return s_lastEV100; }
 bool HasDenoisedOutput() { return s_hasDenoised; }
+
+void SetAutoExposure(bool enable) { s_autoExposure = enable; }
+bool GetAutoExposure() { return s_autoExposure; }
+void SetExposureCompensation(float comp) { s_exposureCompensation = comp; }
+float GetExposureCompensation() { return s_exposureCompensation; }
 
 static void EnsureNoiseStatsPipeline();
 static void EnsureAvgLumPipeline();
@@ -3191,13 +3200,31 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     tc.outWidth = outW;
     tc.outHeight = outH;
 
-    // Auto-exposure: map middle grey (0.18) to the average scene luminance.
-    // Clamp to avoid extreme exposure values.
+    // Auto-exposure logic
     float targetExposure = 1.0f;
-    if (s_avgLuminanceCdM2 > 1e-5f) {
-      targetExposure = 0.18f / s_avgLuminanceCdM2;
+    if (s_autoExposure) {
+      if (s_avgLuminanceCdM2 > 1e-5f) {
+        targetExposure = (0.18f / s_avgLuminanceCdM2) * s_exposureCompensation;
+      }
+      targetExposure = std::clamp(targetExposure, 1e-10f, 1e10f);
+
+      // Simple temporal smoothing (Exponential Moving Average)
+      // smoothingFactor: lower is smoother, higher is faster
+      const float smoothingFactor = 0.02f;
+      s_smoothedExposure +=
+          (targetExposure - s_smoothedExposure) * smoothingFactor;
+
+      // Sync to global camera data ONLY if auto-exposure is on
+      g_cameraData.intensity = s_smoothedExposure;
+      targetExposure = s_smoothedExposure;
+    } else {
+      // Manual mode: use whatever is in g_cameraData.intensity
+      // Reset smoothed exposure so it's ready when switching back
+      s_smoothedExposure = g_cameraData.intensity;
+      targetExposure = g_cameraData.intensity;
     }
-    tc.exposure = std::clamp(targetExposure, 0.001f, 1000.0f);
+
+    tc.exposure = targetExposure;
 
     void *p = nullptr;
     D3D12_RANGE readRange = {0, 0};

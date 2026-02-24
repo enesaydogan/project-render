@@ -313,9 +313,8 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     float3 N = triPlanar ? SampleTriPlanarNormal(textureIndices.z, worldPos, worldNormal, triScale, triSharp, triNormStrength)
                          : GetNormalFromMap(uv, worldNormal, input.tangent, textureIndices.z);
 
-    // Emissive with boost factor and user-defined intensity
-    const float baseEmissiveBoost = 5.0f; 
-    float3 emiss = emissiveColor.rgb * baseEmissiveBoost * extraParams.y;
+    // Emissive with user-defined intensity
+    float3 emiss = emissiveColor.rgb * extraParams.y;
     if (emissiveAndPad.x >= 0) {
         float3 e = triPlanar ? SampleTriPlanar(emissiveAndPad.x, worldPos, worldNormal, triScale, triSharp).rgb
                              : textures[emissiveAndPad.x].Sample(linearSampler, uv).rgb;
@@ -407,14 +406,14 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
         coat_ibl = Fc_ibl * prefilteredCoat;
     }
 
-    // Use a consistent 5.0x boost for IBL to match raytracing and provide good environment lighting
-    float3 ambientBase = (diffuse_ibl + specular_ibl) * ao * ambientColor.rgb * 5.0;
-    float3 ambient = ambientBase * (1.0 - clearcoat) + (coat_ibl * ao * ambientColor.rgb * 5.0) * clearcoat;
+    // IBL Ambient
+    float3 ambientBase = (diffuse_ibl + specular_ibl) * ao * ambientColor.rgb;
+    float3 ambient = ambientBase * (1.0 - clearcoat) + (coat_ibl * ao * ambientColor.rgb) * clearcoat;
 
     if (translucency > 0.001) {
         float2 envUV_back = DirectionToUV(-N);
         float3 irradianceBack = envMap.SampleLevel(linearSampler, envUV_back, 7.0).rgb;
-        ambient += (DiffuseAlbedo * irradianceBack) * (ambientColor.rgb * 5.0) * translucency;
+        ambient += (DiffuseAlbedo * irradianceBack) * (ambientColor.rgb) * translucency;
     }
     
     float3 color = directLight + ambient + emiss;

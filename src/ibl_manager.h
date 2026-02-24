@@ -144,6 +144,6 @@ private:
   float m_solarAzimuth = 0.0f;
   float m_altitude = 200.0f; // meters (0 - 15000)
   float m_skyIntensity = 1.0f;
-  float m_sunIntensity = 1.0f;
-  float m_sunSize = 2.0f; // degrees
+  float m_sunIntensity = 100000.0f;
+  float m_sunSize = 0.5f; // degrees (actual sun size is ~0.5 deg)
 };
