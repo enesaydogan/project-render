@@ -14,17 +14,18 @@ void Miss(inout RayPayload payload)
     float3 color = envMap.SampleLevel(linearSampler, uv, 0).rgb * intensity;
 
     // Add Analytic Sun Disc
-    // lightDir.w holds the sun *radius* in radians (set in main.cpp)
     float3 L = normalize(lightDir.xyz);
     float cosTheta = dot(normalize(dir), L);
-    // Use cosine of angular radius
     float cosSunRadius = cos(lightDir.w);
 
-    if (cosTheta > cosSunRadius) {
-         // Simple sun disc (use integrated lightColor)
-         color += lightColor.rgb * intensity;
+    if (cosTheta > cosSunRadius && payload.rayType != RAY_TYPE_DIFFUSE) {
+         // Physically correct sun radiance = Illuminance (Lux) / Solid Angle (sr)
+         // Omega = 2 * PI * (1 - cos(theta))
+         float sunSolidAngle = 2.0f * PI * (1.0f - cosSunRadius);
+         float3 sunRadiance = (lightColor.rgb * lightColor.w) / max(sunSolidAngle, 1e-7f);
+         color = sunRadiance * intensity;
     }
-
+    
     // --- Volumetric Clouds (baked) ---
     // Use pre-baked lat-long cloud texture for misses/reflections/refractions.
     bool allowClouds = (payload.rayType == RAY_TYPE_PRIMARY || 
@@ -34,19 +35,20 @@ void Miss(inout RayPayload payload)
     if (cloudRenderingEnabled > 0.5 && allowClouds) {
         int dbg = (int)SHADER_DEBUG_MODE;
         bool cloudDebugView = (dbg >= 11 && dbg <= 16);
-
+        
         float2 skyUv = DirectionToUV(dir);
         float4 baked = bakedClouds.SampleLevel(linearSampler, skyUv, 0);
         baked.a = saturate(baked.a);
         baked.rgb = max(baked.rgb, 0.0);
-
+        
         if (cloudDebugView) {
             color = baked.rgb;
         } else {
             // Composite: Sky * Transmittance + CloudColor
             float3 skyColor = color;
             float3 fullCloudColor = skyColor * baked.a + baked.rgb;
-            color = clamp(fullCloudColor, 0.0, 128.0);
+            // Relaxed clamp for physical units + exposure
+            color = clamp(fullCloudColor, 0.0, 100000.0);
         }
     }
 

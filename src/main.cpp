@@ -1185,7 +1185,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
   // State variables for Time and North Offset
   static float g_timeOfDay = 10.0f;
-  static float g_northOffset = 45.0f;
+  static float g_northOffset = 0.0f;
 
   // Basic message loop + simple render
   MSG msg = {};
@@ -1463,9 +1463,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
            DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),
            D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
         FLOAT clearColor[] = {0.8f, 0.2f, 0.2f, 1.0f};
-        DX12Context::g_commandList->ClearRenderTargetView(rtvHandle,
-                                                          clearColor, 0,
-                                                          nullptr);
+        DX12Context::g_commandList->ClearRenderTargetView(rtvHandle, clearColor,
+                                                          0, nullptr);
         DX12Context::g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE,
                                                        nullptr);
       }

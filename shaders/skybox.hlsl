@@ -107,10 +107,14 @@ float4 PSMain(PSInput input) : SV_TARGET {
     
     float3 color;
     if (cosTheta > cosSunRadius) {
-         // Use sun color * intensity
-         color = lightColor.rgb * lightColor.w;
+         // Physically correct sun radiance = Illuminance (Lux) / Solid Angle (sr)
+         // Omega = 2 * PI * (1 - cos(theta))
+         const float PI = 3.14159265f;
+         float sunSolidAngle = 2.0f * PI * (1.0f - cosSunRadius);
+         float3 sunRadiance = (lightColor.rgb * lightColor.w) / max(sunSolidAngle, 1e-7f);
+         color = sunRadiance * intensity;
     } else {
-         // Only apply sky intensity scaling to the map, not the sun (which has its own intensity)
+         // Apply sky intensity scaling and camera exposure
          color = baseSky * intensity;
     }
 

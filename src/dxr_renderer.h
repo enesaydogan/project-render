@@ -6,7 +6,6 @@
 #include <vector>
 #include <wrl.h>
 
-
 // Forward declare Scene types to avoid circular dependency if ever needed
 namespace Scene {
 struct Instance;
@@ -40,14 +39,15 @@ void SetCommandQueue(ID3D12CommandQueue *commandQueue, ID3D12Fence *fence,
 // Build RayTracing pipeline (TLAS, BLAS, and PSO)
 void CreateRayTracingPipeline(UINT width, UINT height);
 // Build acceleration structures for given meshes and instances
-void BuildAccelerationStructures(const std::vector<const Asset::GpuMesh*> &meshes,
-                                 const std::vector<Scene::Instance> &instances);
+void BuildAccelerationStructures(
+    const std::vector<const Asset::GpuMesh *> &meshes,
+    const std::vector<Scene::Instance> &instances);
 // Update light buffer for ReSTIR
 void UpdateLights(const std::vector<GpuLight> &lights);
 // Reset accumulation for path tracing
 void ResetAccumulation();
 // Attach Streamline manager (optional) for DLSS-SR / DLSS-RR evaluation.
-void SetStreamlineManager(StreamlineManager* streamline);
+void SetStreamlineManager(StreamlineManager *streamline);
 // Resets Streamline/DLSS temporal history without touching DXR accumulation.
 void ResetStreamlineHistory();
 // Return true if state object and TLAS/output are ready for rendering
@@ -64,11 +64,13 @@ float GetFrameTimeMs();
 float GetCPUWorkTimeMs();
 float GetFPS();
 float GetSPPPerSec();
-void GetGPUTimes(float& restirTime, float& dispatchTime, float& denoiseTime, float& noiseTime);
+void GetGPUTimes(float &restirTime, float &dispatchTime, float &denoiseTime,
+                 float &noiseTime);
 float GetGPUFrameTimeMs();
 
 // Shader instrumentation counters (debug)
-// outCounters will be filled with up to maxCount uint values (0 when not available)
+// outCounters will be filled with up to maxCount uint values (0 when not
+// available)
 void GetShaderCounters(UINT *outCounters, UINT maxCount);
 
 // Denoiser mode control (Off, OIDN CPU, OIDN GPU)
@@ -87,13 +89,14 @@ void SetRrJitterScale(float scale);
 float GetRrJitterScale();
 // Perform DXR render (dispatch rays, copy to render target). Returns true if
 // executed.
-bool RenderFrame(ID3D12GraphicsCommandList *commandList, ID3D12CommandAllocator *cmdAlloc, UINT frameIndex,
+bool RenderFrame(ID3D12GraphicsCommandList *commandList,
+                 ID3D12CommandAllocator *cmdAlloc, UINT frameIndex,
                  ID3D12Resource *renderTarget,
                  D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle,
                  ID3D12Resource *cameraCB, ID3D12Resource *materialCB,
                  D3D12_GPU_DESCRIPTOR_HANDLE texturesGpuStart,
                  UINT textureDescriptorCount,
-                 const std::vector<const Asset::GpuMesh*> &meshes,
+                 const std::vector<const Asset::GpuMesh *> &meshes,
                  ID3D12Resource *meshDataSB = nullptr);
 
 // Returns the last calculated average noise level (0.0 - 1.0+)
@@ -105,6 +108,11 @@ float GetCurrentAvgLuminance();
 float GetCurrentEV100();
 // Returns true once the one-shot end-condition denoiser output is available.
 bool HasDenoisedOutput();
+
+void SetAutoExposure(bool enable);
+bool GetAutoExposure();
+void SetExposureCompensation(float comp);
+float GetExposureCompensation();
 
 // Exports the latest tonemapped DXR frame to a PNG file.
 // The PNG is lossless (maximum quality by format design).

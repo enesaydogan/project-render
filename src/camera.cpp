@@ -9,41 +9,41 @@ void ResetAccumulation();
 
 // Initialize camera defaults (kept consistent with previous main.cpp values)
 CameraCB g_initialCameraData = {
-    {-3.75f, 3.43f, 3.78f},       // pos
-    0.0f,                         // debugMode
-    {0.64f, -0.40f, -0.65f},      // forward
-    0.0f,                         // _pad1
-    {0.0f, 1.0f, 0.0f},           // up
-    0.0f,                         // _pad2
-    45.0f,                        // fov
-    1.86f,                        // aspect
-    0.1f,                         // nearZ
-    1000.0f,                      // farZ
-    1.0f,                         // intensity
-    0.0f,                         // frameCount
-    0.0f,                         // lightCount
-    3.0f,                         // maxSpecularBounces
-    3.0f,                         // maxRefractiveBounces
-    2.0f,                         // maxGIBounces
-    200.0f,                       // maxSPP
-    0.0f,                         // _pad3
-    {0.707f, 0.707f, 0.0f, 0.0f}, // lightDir (45 deg)
-    {1.0f, 0.95f, 0.8f, 2.5f},    // lightColor
-    {0.2f, 0.3f, 0.4f, 0.15f},    // ambientColor
-    {0.0f, 0.0f, 0.0f},           // prevPos
-    0.0f,                         // prevValid
-    {0.0f, 0.0f, 0.0f},           // prevForward
-    0.0f,                         // dlssEnabled
-    {0.0f, 0.0f, 0.0f},           // prevUp
-    0.0f,                         // dlssRayReconstruction
-    0.0f,                         // prevFov
-    0.0f,                         // prevAspect
-    0.0f,                         // prevNearZ
-    0.0f,                         // prevFarZ
-    0.05f,                        // noiseThreshold (5%)
-    1.0f,                         // useAdaptiveSampling (default ON)
-    0.0f,                         // debugVisualizationMode
-    1.0f                          // cloudRenderingEnabled (default ON)
+    {-3.75f, 3.43f, 3.78f},         // pos
+    0.0f,                           // debugMode
+    {0.64f, -0.40f, -0.65f},        // forward
+    0.0f,                           // _pad1
+    {0.0f, 1.0f, 0.0f},             // up
+    0.0f,                           // _pad2
+    45.0f,                          // fov
+    1.86f,                          // aspect
+    0.1f,                           // nearZ
+    1000.0f,                        // farZ
+    1e-5f,                          // intensity
+    0.0f,                           // frameCount
+    0.0f,                           // lightCount
+    3.0f,                           // maxSpecularBounces
+    3.0f,                           // maxRefractiveBounces
+    2.0f,                           // maxGIBounces
+    200.0f,                         // maxSPP
+    0.0f,                           // _pad3
+    {0.707f, 0.707f, 0.0f, 0.0f},   // lightDir (45 deg)
+    {1.0f, 0.95f, 0.8f, 100000.0f}, // lightColor (rgb + intensity in .w)
+    {0.2f, 0.3f, 0.4f, 0.15f},      // ambientColor
+    {0.0f, 0.0f, 0.0f},             // prevPos
+    0.0f,                           // prevValid
+    {0.0f, 0.0f, 0.0f},             // prevForward
+    0.0f,                           // dlssEnabled
+    {0.0f, 0.0f, 0.0f},             // prevUp
+    0.0f,                           // dlssRayReconstruction
+    0.0f,                           // prevFov
+    0.0f,                           // prevAspect
+    0.0f,                           // prevNearZ
+    0.0f,                           // prevFarZ
+    0.05f,                          // noiseThreshold (5%)
+    1.0f,                           // useAdaptiveSampling (default ON)
+    0.0f,                           // debugVisualizationMode
+    1.0f                            // cloudRenderingEnabled (default ON)
 };
 CameraCB g_cameraData = g_initialCameraData;
 ComPtr<ID3D12Resource> g_cameraConstantBuffer;
@@ -71,7 +71,7 @@ static bool CameraChanged(const CameraCB &a, const CameraCB &b) {
   if (a.fov != b.fov || a.aspect != b.aspect || a.nearZ != b.nearZ ||
       a.farZ != b.farZ)
     return true;
-  if (a.intensity != b.intensity || a.debugMode != b.debugMode ||
+  if (a.debugMode != b.debugMode ||
       a.maxSpecularBounces != b.maxSpecularBounces ||
       a.maxRefractiveBounces != b.maxRefractiveBounces ||
       a.maxGIBounces != b.maxGIBounces || a.maxSPP != b.maxSPP)
@@ -125,8 +125,8 @@ void UpdateCameraCB() {
   // Persistent mapping for camera CB
   static void *pCam = nullptr;
   if (!pCam && g_cameraConstantBuffer) {
-    ThrowIfFailed(g_cameraConstantBuffer->Map(0, nullptr,
-                                              reinterpret_cast<void **>(&pCam)));
+    ThrowIfFailed(g_cameraConstantBuffer->Map(
+        0, nullptr, reinterpret_cast<void **>(&pCam)));
   }
 
   if (pCam) {

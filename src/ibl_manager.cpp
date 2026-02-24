@@ -8,8 +8,8 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
-#include <vector>
 #include <thread>
+#include <vector>
 
 // Simple analytic approximation of CIE 1931 color matching functions.
 inline float Gaussian(float x, float alpha, float mu, float sigma1,
@@ -338,7 +338,8 @@ void IBLManager::UpdateTextureFromSkyModel() {
 
   // Parallelize generation across rows to utilize multiple CPU cores.
   unsigned hwThreads = std::thread::hardware_concurrency();
-  if (hwThreads == 0) hwThreads = 1;
+  if (hwThreads == 0)
+    hwThreads = 1;
   unsigned numThreads = (unsigned)std::min<unsigned>(hwThreads, height);
   unsigned chunk = (height + numThreads - 1) / numThreads;
 
@@ -373,19 +374,25 @@ void IBLManager::UpdateTextureFromSkyModel() {
           PragueSkyModel::Vector3 viewDir = {dx, dz, dy};
 
           if (dy < -0.01) {
-            pixels[(y * width + x) * 4 + 0] = 0.2f;
-            pixels[(y * width + x) * 4 + 1] = 0.2f;
-            pixels[(y * width + x) * 4 + 2] = 0.2f;
+            // Calibrated ground radiance (placeholder for dark soil/grass)
+            // Approx 0.05 * sky brightness or a dark constant in cd/m2
+            const float groundRadiance = 100.0f;
+            pixels[(y * width + x) * 4 + 0] = groundRadiance;
+            pixels[(y * width + x) * 4 + 1] = groundRadiance;
+            pixels[(y * width + x) * 4 + 2] = groundRadiance;
             pixels[(y * width + x) * 4 + 3] = 1.0f;
             continue;
           }
 
-          auto params = skyModel->computeParameters(viewpoint, viewDir, solarElev, solarAzi, visibility, albedo);
+          auto params = skyModel->computeParameters(
+              viewpoint, viewDir, solarElev, solarAzi, visibility, albedo);
 
           float X = 0, Y = 0, Z = 0;
           for (float l = startLambda; l <= endLambda; l += stepLambda) {
             double rad = skyModel->skyRadiance(params, l);
-            float val = (float)rad * skyIntensity * 0.01f;
+            // Convert spectral radiance (W/sr/m2/nm) to physical luminance
+            // (cd/m2) using K_m = 683.0 lm/W
+            float val = (float)rad * skyIntensity * 683.0f;
             X += val * cieX(l) * stepLambda;
             Y += val * cieY(l) * stepLambda;
             Z += val * cieZ(l) * stepLambda;
@@ -408,7 +415,8 @@ void IBLManager::UpdateTextureFromSkyModel() {
     });
   }
 
-  for (auto &th : threads) th.join();
+  for (auto &th : threads)
+    th.join();
 
   CreateTexFromData(m_device.Get(), m_queue.Get(), width, height, pixels,
                     m_proceduralTexture);
@@ -437,11 +445,9 @@ DirectX::XMFLOAT3 IBLManager::GetSunColor() const {
 
   for (float l = startLambda; l <= endLambda; l += stepLambda) {
     double rad = m_pragueSkyModel->sunRadiance(params, l);
-    // Scale sun radiance: Physical values are huge (~1e7 to 1e9), so we apply a
-    // normalization factor to bring it into a usable HDR range. The effective
-    // intensity is controlled by g_cameraData.lightColor.w (Sun Intensity key
-    // in UI).
-    float val = (float)rad * 0.000002f;
+    // Convert spectral irradiance (W/m2/nm) to physical illuminance (Lux)
+    // using K_m = 683.0 lm/W
+    float val = (float)rad * 683.0f;
     X += val * cieX(l) * stepLambda;
     Y += val * cieY(l) * stepLambda;
     Z += val * cieZ(l) * stepLambda;
@@ -450,5 +456,9 @@ DirectX::XMFLOAT3 IBLManager::GetSunColor() const {
   float r, g, b;
   XYZtoRGB(X, Y, Z, r, g, b);
 
-  return {std::max(0.0f, r), std::max(0.0f, g), std::max(0.0f, b)};
+  // Return normalized color (chromaticity).
+  // The absolute intensity (Y) will be handled by the Sun Intensity slider in
+  // Lux.
+  float mag = std::max(1e-6f, Y);
+  return {r / mag, g / mag, b / mag};
 }
