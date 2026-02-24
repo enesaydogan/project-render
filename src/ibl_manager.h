@@ -143,7 +143,7 @@ private:
   float m_solarElevation = 0.5f;
   float m_solarAzimuth = 0.0f;
   float m_altitude = 200.0f; // meters (0 - 15000)
-  float m_skyIntensity = 1.0f;
-  float m_sunIntensity = 100000.0f;
-  float m_sunSize = 0.5f; // degrees (actual sun size is ~0.5 deg)
+  float m_skyIntensity = 5.0f; //boost sky to balance sun
+  float m_sunIntensity = 10000.0f; //reduce default intensity
+  float m_sunSize = 1.5f; // degrees (actual sun size is ~0.5 deg)
 };

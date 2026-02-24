@@ -55,6 +55,9 @@ static float s_smoothedExposure = 1e-5f; // New: persistent smoothed exposure
 // still-frame SPP count separately so maxSPP can still freeze rendering.
 static UINT s_rrStillFrameSpp = 0;
 static bool s_hasTonemappedFrame = false;
+// Cache to detect manual exposure/intensity changes while rendering is frozen
+static float s_lastCameraIntensity = -1e30f;
+static float s_lastExposureCompensation = 1.0f;
 // Exposed for UI/debug (WinMain). Keep external linkage.
 unsigned int s_jitterFrameIndex = 0;
 float s_lastJitterX = 0.0f;
@@ -419,7 +422,13 @@ bool HasDenoisedOutput() { return s_hasDenoised; }
 
 void SetAutoExposure(bool enable) { s_autoExposure = enable; }
 bool GetAutoExposure() { return s_autoExposure; }
-void SetExposureCompensation(float comp) { s_exposureCompensation = comp; }
+void SetExposureCompensation(float comp) {
+  if (s_exposureCompensation != comp) {
+    s_exposureCompensation = comp;
+    s_hasTonemappedFrame = false; // ensure tonemap re-applies new compensation
+    s_lastExposureCompensation = comp;
+  }
+}
 float GetExposureCompensation() { return s_exposureCompensation; }
 
 static void EnsureNoiseStatsPipeline();
@@ -2185,6 +2194,22 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
   s_lastRenderFrameFailReason = -1;
 
+  // If the user changed manual intensity or exposure compensation while the
+  // renderer is frozen at max SPP, ensure we re-run tonemapping so the
+  // displayed image updates immediately.
+  {
+    float curIntensity = g_cameraData.intensity;
+    if (std::abs(curIntensity - s_lastCameraIntensity) > 1e-6f) {
+      s_lastCameraIntensity = curIntensity;
+      s_hasTonemappedFrame = false;
+    }
+    if (std::abs(s_exposureCompensation - s_lastExposureCompensation) >
+        1e-6f) {
+      s_lastExposureCompensation = s_exposureCompensation;
+      s_hasTonemappedFrame = false;
+    }
+  }
+
   const bool dlssActive =
       (s_streamline && s_streamline->IsInitialized() &&
        s_streamline->IsDeviceSet() && s_streamline->IsEnabled() &&
@@ -3203,20 +3228,33 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     // Auto-exposure logic
     float targetExposure = 1.0f;
     if (s_autoExposure) {
-      if (s_avgLuminanceCdM2 > 1e-5f) {
-        targetExposure = (0.18f / s_avgLuminanceCdM2) * s_exposureCompensation;
+      // Don't apply auto-exposure until we have enough samples to get a
+      // reasonable average luminance. Use displayed SPP as the trigger.
+      const UINT currentSpp = GetDisplayedSampleCount();
+      const UINT kAutoExposureMinSpp = 10; // start auto-exposure after this
+
+      if (currentSpp >= kAutoExposureMinSpp) {
+        if (s_avgLuminanceCdM2 > 1e-5f) {
+          targetExposure = (0.18f / s_avgLuminanceCdM2) * s_exposureCompensation;
+        }
+        targetExposure = std::clamp(targetExposure, 1e-20f, 1e10f);
+
+        // Simple temporal smoothing (Exponential Moving Average)
+        // smoothingFactor: lower is smoother, higher is faster
+        const float smoothingFactor = 0.05f;
+        s_smoothedExposure += (targetExposure - s_smoothedExposure) * smoothingFactor;
+
+        // Sync to global camera data ONLY if auto-exposure is on and active
+        g_cameraData.intensity = s_smoothedExposure;
+        targetExposure = s_smoothedExposure;
+      } else {
+        // Before the auto-exposure threshold, preserve manual exposure so
+        // the image doesn't jump. Initialize the smoothed value from the
+        // current camera intensity so the transition at the threshold is
+        // smooth.
+        s_smoothedExposure = g_cameraData.intensity;
+        targetExposure = g_cameraData.intensity;
       }
-      targetExposure = std::clamp(targetExposure, 1e-10f, 1e10f);
-
-      // Simple temporal smoothing (Exponential Moving Average)
-      // smoothingFactor: lower is smoother, higher is faster
-      const float smoothingFactor = 0.02f;
-      s_smoothedExposure +=
-          (targetExposure - s_smoothedExposure) * smoothingFactor;
-
-      // Sync to global camera data ONLY if auto-exposure is on
-      g_cameraData.intensity = s_smoothedExposure;
-      targetExposure = s_smoothedExposure;
     } else {
       // Manual mode: use whatever is in g_cameraData.intensity
       // Reset smoothed exposure so it's ready when switching back
