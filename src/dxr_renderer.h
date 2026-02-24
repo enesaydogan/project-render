@@ -98,6 +98,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandList, ID3D12CommandAllocator 
 
 // Returns the last calculated average noise level (0.0 - 1.0+)
 float GetCurrentNoiseLevel();
+
+// Returns the last calculated average scene luminance in cd/m²
+float GetCurrentAvgLuminance();
+// Returns the last calculated EV100
+float GetCurrentEV100();
 // Returns true once the one-shot end-condition denoiser output is available.
 bool HasDenoisedOutput();
 
