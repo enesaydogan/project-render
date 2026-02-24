@@ -875,6 +875,13 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
           ImGui::Text("Noise Level: Calculating...");
         }
 
+        float avgLum = DxrRenderer::GetCurrentAvgLuminance();
+        float ev100 = DxrRenderer::GetCurrentEV100();
+        if (avgLum > 0.0f) {
+          ImGui::Text("Avg Luminance: %.2f cd/m²", avgLum);
+          ImGui::Text("EV100: %.2f", ev100);
+        }
+
         if (ImGui::SliderFloat("Reflection Bounces",
                                &g_cameraData.maxSpecularBounces, 0.0f, 16.0f,
                                "%.0f")) {

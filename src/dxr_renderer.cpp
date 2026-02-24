@@ -237,6 +237,18 @@ static ComPtr<ID3D12Resource> s_noiseStatsReadbackBuffer;
 static ComPtr<ID3D12DescriptorHeap> s_noiseStatsHeap;
 static UINT s_noiseStatsCapacity = 0; // number of floats currently allocated in output buffer
 static float s_lastNoiseLevel = 0.0f;
+
+// Average Luminance Resources
+static ComPtr<ID3D12RootSignature> s_avgLumRootSig;
+static ComPtr<ID3D12PipelineState> s_avgLumPSO;
+static ComPtr<ID3D12Resource> s_avgLumCB;
+static ComPtr<ID3D12Resource> s_avgLumBuffer;
+static ComPtr<ID3D12Resource> s_avgLumReadbackBuffer;
+static ComPtr<ID3D12DescriptorHeap> s_avgLumHeap;
+static UINT s_avgLumCapacity = 0;
+static float s_avgLuminanceCdM2 = 0.0f;
+static float s_lastEV100 = 0.0f;
+
 static bool s_noiseConvergedLatched = false;
 static bool s_cloudDescriptorsDone = false;
 static bool s_hasDenoised = false;
@@ -391,9 +403,12 @@ struct NoiseStatsConstants {
 };
 
 float GetCurrentNoiseLevel() { return s_lastNoiseLevel; }
+float GetCurrentAvgLuminance() { return s_avgLuminanceCdM2; }
+float GetCurrentEV100() { return s_lastEV100; }
 bool HasDenoisedOutput() { return s_hasDenoised; }
 
 static void EnsureNoiseStatsPipeline();
+static void EnsureAvgLumPipeline();
 
 struct TonemapConstants {
   uint32_t outWidth;
@@ -637,6 +652,124 @@ static void EnsureNoiseStatsPipeline() {
   heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
   heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
   s_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&s_noiseStatsHeap));
+}
+
+static void EnsureAvgLumPipeline() {
+  if (s_avgLumPSO && s_avgLumRootSig && s_avgLumCB && s_avgLumBuffer &&
+      s_avgLumCapacity > 0)
+    return;
+  if (!s_device)
+    return;
+
+  // Root signature: b0 (CB), t0 (SRV), u0 (UAV)
+  D3D12_DESCRIPTOR_RANGE srvRange{};
+  srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+  srvRange.NumDescriptors = 1;
+  srvRange.BaseShaderRegister = 0;
+  srvRange.RegisterSpace = 0;
+
+  D3D12_DESCRIPTOR_RANGE uavRange{};
+  uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+  uavRange.NumDescriptors = 1;
+  uavRange.BaseShaderRegister = 0;
+  uavRange.RegisterSpace = 0;
+
+  D3D12_ROOT_PARAMETER params[3] = {};
+  params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+  params[0].Descriptor.ShaderRegister = 0;
+  params[0].Descriptor.RegisterSpace = 0;
+  params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[1].DescriptorTable.NumDescriptorRanges = 1;
+  params[1].DescriptorTable.pDescriptorRanges = &srvRange;
+  params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[2].DescriptorTable.NumDescriptorRanges = 1;
+  params[2].DescriptorTable.pDescriptorRanges = &uavRange;
+  params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
+  rsDesc.NumParameters = 3;
+  rsDesc.pParameters = params;
+  rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+  ComPtr<ID3DBlob> sig, err;
+  if (FAILED(D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1,
+                                         &sig, &err))) {
+    if (err)
+      fprintf(stderr, "AvgLum RS Error: %s\n", (char *)err->GetBufferPointer());
+    return;
+  }
+  s_device->CreateRootSignature(0, sig->GetBufferPointer(),
+                                sig->GetBufferSize(),
+                                IID_PPV_ARGS(&s_avgLumRootSig));
+
+  // Compile CS
+  ComPtr<IDxcBlob> cs;
+  try {
+    std::vector<std::wstring> defines;
+    cs = s_dxcHelper.Compile(L"shaders/avg_luminance_cs.hlsl", L"CSMain",
+                             L"cs_6_3", defines);
+  } catch (std::exception &e) {
+    fprintf(stderr, "AvgLum CS Compile Exception: %s\n", e.what());
+    return;
+  }
+
+  if (!cs) {
+    fprintf(stderr, "AvgLum CS Compile Failed (null blob)\n");
+    return;
+  }
+
+  D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
+  psoDesc.pRootSignature = s_avgLumRootSig.Get();
+  psoDesc.CS.pShaderBytecode = cs->GetBufferPointer();
+  psoDesc.CS.BytecodeLength = cs->GetBufferSize();
+  s_device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&s_avgLumPSO));
+
+  // Create CB
+  D3D12_HEAP_PROPERTIES uploadProps = {};
+  uploadProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+  D3D12_RESOURCE_DESC cbDesc = {};
+  cbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+  cbDesc.Width = 256;
+  cbDesc.Height = 1;
+  cbDesc.DepthOrArraySize = 1;
+  cbDesc.MipLevels = 1;
+  cbDesc.SampleDesc.Count = 1;
+  cbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+  s_device->CreateCommittedResource(&uploadProps, D3D12_HEAP_FLAG_NONE, &cbDesc,
+                                    D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                    IID_PPV_ARGS(&s_avgLumCB));
+
+  // Create Output Buffer (UAV, Default Heap)
+  D3D12_HEAP_PROPERTIES defaultProps = {};
+  defaultProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+  D3D12_RESOURCE_DESC bufDesc = cbDesc;
+  bufDesc.Width = sizeof(float) * 2;
+  bufDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+  s_device->CreateCommittedResource(&defaultProps, D3D12_HEAP_FLAG_NONE,
+                                    &bufDesc,
+                                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                    nullptr, IID_PPV_ARGS(&s_avgLumBuffer));
+  s_avgLumCapacity = 1;
+
+  // Create Readback Buffer
+  D3D12_HEAP_PROPERTIES readbackProps = {};
+  readbackProps.Type = D3D12_HEAP_TYPE_READBACK;
+  bufDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+  s_device->CreateCommittedResource(
+      &readbackProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
+      D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+      IID_PPV_ARGS(&s_avgLumReadbackBuffer));
+
+  // Descriptor Heap
+  D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
+  heapDesc.NumDescriptors = 2; // SRV, UAV
+  heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+  heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+  s_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&s_avgLumHeap));
 }
 
 void Initialize(ID3D12Device *device) {
@@ -2886,6 +3019,133 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     // postColor is in UAV state so the Tonemap block can transition it to SRV.
   }
 
+  bool postColorInSrv = false;
+
+  // --- Average Luminance Calculation ---
+  {
+    EnsureAvgLumPipeline();
+    if (s_avgLumPSO && s_avgLumRootSig && s_avgLumCB && s_avgLumBuffer &&
+        s_avgLumReadbackBuffer && s_avgLumHeap) {
+      // 1. Read previous results
+      float *data = nullptr;
+      if (SUCCEEDED(s_avgLumReadbackBuffer->Map(0, nullptr, (void **)&data))) {
+        const UINT stride = 8;
+        const UINT gridW = (s_outputWidth + stride - 1) / stride;
+        const UINT gridH = (s_outputHeight + stride - 1) / stride;
+        const UINT total = gridW * gridH;
+        double sumLum = 0.0;
+        UINT count = 0;
+        // The buffer might be larger from a previous resolution
+        const UINT limit = (std::min)(
+            total,
+            (UINT)(s_avgLumReadbackBuffer->GetDesc().Width / sizeof(float)));
+        for (UINT i = 0; i < limit; ++i) {
+          float v = data[i];
+          if (v >= 0.0f) {
+            sumLum += v;
+            ++count;
+          }
+        }
+        s_avgLuminanceCdM2 = (count > 0) ? (float)(sumLum / count) : 0.0f;
+        if (s_avgLuminanceCdM2 > 1e-6f) {
+          // EV100 = log2(L / 0.125) = log2(L * 8)
+          s_lastEV100 = log2f(s_avgLuminanceCdM2 / 0.125f);
+        } else {
+          s_lastEV100 = -10.0f;
+        }
+        s_avgLumReadbackBuffer->Unmap(0, nullptr);
+      }
+
+      // 2. Grow buffers if needed
+      const UINT stride = 8;
+      const UINT gridW = (s_outputWidth + stride - 1) / stride;
+      const UINT gridH = (s_outputHeight + stride - 1) / stride;
+      const UINT total = gridW * gridH;
+      if (total > s_avgLumCapacity) {
+        s_avgLumCapacity = total;
+        D3D12_RESOURCE_DESC desc = s_avgLumBuffer->GetDesc();
+        desc.Width = total * sizeof(float);
+        D3D12_HEAP_PROPERTIES defHeap = {};
+        defHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        s_device->CreateCommittedResource(
+            &defHeap, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+            IID_PPV_ARGS(&s_avgLumBuffer));
+
+        desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+        D3D12_HEAP_PROPERTIES rdHeap = {};
+        rdHeap.Type = D3D12_HEAP_TYPE_READBACK;
+        s_device->CreateCommittedResource(&rdHeap, D3D12_HEAP_FLAG_NONE, &desc,
+                                          D3D12_RESOURCE_STATE_COPY_DEST,
+                                          nullptr,
+                                          IID_PPV_ARGS(&s_avgLumReadbackBuffer));
+      }
+
+      // 3. Dispatch
+      struct {
+        uint32_t w, h;
+        float padding[2];
+      } nsc = {s_outputWidth, s_outputHeight, {0.0f, 0.0f}};
+      void *mapPtr = nullptr;
+      if (SUCCEEDED(s_avgLumCB->Map(0, nullptr, &mapPtr))) {
+        memcpy(mapPtr, &nsc, sizeof(nsc));
+        s_avgLumCB->Unmap(0, nullptr);
+      }
+
+      const UINT descSize = s_device->GetDescriptorHandleIncrementSize(
+          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+      D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle =
+          s_avgLumHeap->GetCPUDescriptorHandleForHeapStart();
+
+      D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+      srv.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+      srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+      srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+      srv.Texture2D.MipLevels = 1;
+      s_device->CreateShaderResourceView(postColor, &srv, cpuHandle);
+
+      D3D12_CPU_DESCRIPTOR_HANDLE uavCpu = cpuHandle;
+      uavCpu.ptr += descSize;
+      D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
+      uav.Format = DXGI_FORMAT_UNKNOWN;
+      uav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+      uav.Buffer.NumElements = total;
+      uav.Buffer.StructureByteStride = sizeof(float);
+      s_device->CreateUnorderedAccessView(s_avgLumBuffer.Get(), nullptr, &uav,
+                                          uavCpu);
+
+      // Barrier to SRV for current shader
+      TransitionResource(dxrList.Get(), postColor,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+      postColorInSrv = true;
+
+      ID3D12DescriptorHeap *avgHeaps[] = {s_avgLumHeap.Get()};
+      dxrList->SetDescriptorHeaps(1, avgHeaps);
+      dxrList->SetPipelineState(s_avgLumPSO.Get());
+      dxrList->SetComputeRootSignature(s_avgLumRootSig.Get());
+      dxrList->SetComputeRootConstantBufferView(
+          0, s_avgLumCB->GetGPUVirtualAddress());
+      
+      D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle =
+          s_avgLumHeap->GetGPUDescriptorHandleForHeapStart();
+      dxrList->SetComputeRootDescriptorTable(1, gpuHandle);
+      gpuHandle.ptr += descSize;
+      dxrList->SetComputeRootDescriptorTable(2, gpuHandle);
+
+      dxrList->Dispatch((gridW + 15) / 16, (gridH + 15) / 16, 1);
+
+      // Copy results back
+      TransitionResource(dxrList.Get(), s_avgLumBuffer.Get(),
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                         D3D12_RESOURCE_STATE_COPY_SOURCE);
+      dxrList->CopyResource(s_avgLumReadbackBuffer.Get(), s_avgLumBuffer.Get());
+      TransitionResource(dxrList.Get(), s_avgLumBuffer.Get(),
+                         D3D12_RESOURCE_STATE_COPY_SOURCE,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+  }
+
   // Tonemap linear HDR to swapchain format, then copy.
   EnsureTonemapPipeline();
 
@@ -2928,9 +3188,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                                         uavCpu);
 
     // Barriers
-    TransitionResource(dxrList.Get(), postColor,
-                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    if (!postColorInSrv) {
+      TransitionResource(dxrList.Get(), postColor,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
 
     ID3D12DescriptorHeap *tmHeaps[] = {s_tonemapHeap.Get()};
     dxrList->SetDescriptorHeaps(1, tmHeaps);
