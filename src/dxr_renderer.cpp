@@ -10,14 +10,15 @@
 #include "scene.h"
 #include "streamline_manager.h"
 #include <chrono>
-#include <cstdint>
 #include <cstdarg>
+#include <cstdint>
 #include <cstdio>
 #include <sstream>
 #include <unordered_map>
 #include <vector>
 #include <wincodec.h>
 #include <wrl.h>
+
 
 // Expose global debug flag (set by WinMain parsing)
 extern bool g_debugLog;
@@ -58,9 +59,14 @@ float s_lastJitterY = 0.0f;
 // Profiling state
 static ComPtr<ID3D12QueryHeap> s_queryHeap;
 static ComPtr<ID3D12Resource> s_queryReadbackBuffer;
-static UINT64 s_queryResults[10]; // For 10 timestamps: frame_start, restir_start, restir_end, dispatch_end, denoise_start, denoise_end, noise_start, noise_end, frame_end
-static float s_gpuTimes[4]; // Times in ms: ReSTIR, DispatchRays, Denoising, Noise
-static float s_gpuFrameTimeMs = 0.0f; // Total GPU frame time (from timestamp 0..9)
+static UINT64
+    s_queryResults[10]; // For 10 timestamps: frame_start, restir_start,
+                        // restir_end, dispatch_end, denoise_start, denoise_end,
+                        // noise_start, noise_end, frame_end
+static float
+    s_gpuTimes[4]; // Times in ms: ReSTIR, DispatchRays, Denoising, Noise
+static float s_gpuFrameTimeMs =
+    0.0f; // Total GPU frame time (from timestamp 0..9)
 static float s_frameTimeMs = 0.0f;
 static float s_fps = 0.0f;
 static float s_sppPerSec = 0.0f;
@@ -235,7 +241,8 @@ static ComPtr<ID3D12Resource> s_noiseStatsCB;
 static ComPtr<ID3D12Resource> s_noiseStatsOutputBuffer;
 static ComPtr<ID3D12Resource> s_noiseStatsReadbackBuffer;
 static ComPtr<ID3D12DescriptorHeap> s_noiseStatsHeap;
-static UINT s_noiseStatsCapacity = 0; // number of floats currently allocated in output buffer
+static UINT s_noiseStatsCapacity =
+    0; // number of floats currently allocated in output buffer
 static float s_lastNoiseLevel = 0.0f;
 
 // Average Luminance Resources
@@ -277,8 +284,7 @@ static bool SaveRgba8ToPngWic(const std::wstring &filePath, UINT width,
 
     ComPtr<IWICImagingFactory> factory;
     HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr,
-                                  CLSCTX_INPROC_SERVER,
-                                  IID_PPV_ARGS(&factory));
+                                  CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
     if (FAILED(hr)) {
       LogFail("CoCreateInstance(IWICImagingFactory)", hr);
       break;
@@ -759,10 +765,10 @@ static void EnsureAvgLumPipeline() {
   D3D12_HEAP_PROPERTIES readbackProps = {};
   readbackProps.Type = D3D12_HEAP_TYPE_READBACK;
   bufDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
-  s_device->CreateCommittedResource(
-      &readbackProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
-      D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-      IID_PPV_ARGS(&s_avgLumReadbackBuffer));
+  s_device->CreateCommittedResource(&readbackProps, D3D12_HEAP_FLAG_NONE,
+                                    &bufDesc, D3D12_RESOURCE_STATE_COPY_DEST,
+                                    nullptr,
+                                    IID_PPV_ARGS(&s_avgLumReadbackBuffer));
 
   // Descriptor Heap
   D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
@@ -884,7 +890,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     s_gi_reservoirGpuHandle[5].ptr =
         gpuStart.ptr + (UINT64)DXR_HEAP_GI_RESERVOIR_1_OFFSET_C * descSize;
     s_iblGpuHandle.ptr = gpuStart.ptr + (UINT64)DXR_HEAP_IBL_OFFSET * descSize;
-    s_shaderCountersGpuHandle.ptr = gpuStart.ptr + (UINT64)DXR_HEAP_SHADER_COUNTERS_OFFSET * descSize;
+    s_shaderCountersGpuHandle.ptr =
+        gpuStart.ptr + (UINT64)DXR_HEAP_SHADER_COUNTERS_OFFSET * descSize;
   }
 
   // Compile shader
@@ -1483,8 +1490,11 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   // Create query heap for GPU profiling
   D3D12_QUERY_HEAP_DESC queryHeapDesc = {};
   queryHeapDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
-  queryHeapDesc.Count = 10; // frame_start, restir_start, restir_end, dispatch_start, dispatch_end, denoise_start, denoise_end, noise_start, noise_end, frame_end
-  ThrowIfFailed(s_device->CreateQueryHeap(&queryHeapDesc, IID_PPV_ARGS(&s_queryHeap)));
+  queryHeapDesc.Count = 10; // frame_start, restir_start, restir_end,
+                            // dispatch_start, dispatch_end, denoise_start,
+                            // denoise_end, noise_start, noise_end, frame_end
+  ThrowIfFailed(
+      s_device->CreateQueryHeap(&queryHeapDesc, IID_PPV_ARGS(&s_queryHeap)));
 
   // Create readback buffer for query results
   D3D12_RESOURCE_DESC readbackDesc = {};
@@ -1514,7 +1524,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
 }
 
 void BuildAccelerationStructures(
-    const std::vector<const Asset::GpuMesh*> &meshes,
+    const std::vector<const Asset::GpuMesh *> &meshes,
     const std::vector<Scene::Instance> &instances) {
   if (g_debugLog) {
     std::ostringstream _oss;
@@ -2124,7 +2134,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                  ID3D12Resource *cameraCB, ID3D12Resource *materialCB,
                  D3D12_GPU_DESCRIPTOR_HANDLE texturesGpuStart,
                  UINT textureDescriptorCount,
-                 const std::vector<const Asset::GpuMesh*> &meshes,
+                 const std::vector<const Asset::GpuMesh *> &meshes,
                  ID3D12Resource *meshDataSB) {
   auto ReturnFail = [&](int reason, const char *message) -> bool {
     if (s_lastRenderFrameFailReason != reason) {
@@ -2137,7 +2147,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
   (void)frameIndex;
   if (!g_rayTracingSupported || !s_rtStateObject || !s_srvHeap) {
-    return ReturnFail(1, "DXR core state missing (support/stateObject/srvHeap)");
+    return ReturnFail(1,
+                      "DXR core state missing (support/stateObject/srvHeap)");
   }
   if (!renderTarget) {
     return ReturnFail(2, "renderTarget is null");
@@ -2213,8 +2224,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   // Flag to freeze after tonemapping instead of early return
   bool shouldFreezeAfterTonemap = reachedEndCondition && !doDenoise;
 
-  // Bake clouds before DXR state binding. BakeSky uses compute PSO/root-signature
-  // and descriptor heaps, so it must not run mid-way through DXR root bindings.
+  // Bake clouds before DXR state binding. BakeSky uses compute
+  // PSO/root-signature and descriptor heaps, so it must not run mid-way through
+  // DXR root bindings.
   if (g_cloudManager.NeedsBake()) {
     g_cloudManager.BakeSky(commandListBase, cameraCB);
   }
@@ -2383,8 +2395,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         srvDescBaked.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         srvDescBaked.Texture2D.MipLevels = 1;
         srvDescBaked.Texture2D.MostDetailedMip = 0;
-        srvDescBaked.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        s_device->CreateShaderResourceView(g_cloudManager.GetBakedSkyTexture(), &srvDescBaked, srvCpuBaked);
+        srvDescBaked.Shader4ComponentMapping =
+            D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        s_device->CreateShaderResourceView(g_cloudManager.GetBakedSkyTexture(),
+                                           &srvDescBaked, srvCpuBaked);
       }
 
       s_cloudDescriptorsDone = true;
@@ -2403,7 +2417,6 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
     dxrList->SetComputeRootDescriptorTable(11, cloudSRV);
-
   }
 
   // Always bind IBL descriptor (even if null/empty, we bound a fallback in
@@ -2446,7 +2459,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   if (s_accumulation.NeedsClear()) {
     // Start ReSTIR timer
     if (s_queryHeap) {
-      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 1); // ReSTIR start
+      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
+                        1); // ReSTIR start
     }
 
     D3D12_CPU_DESCRIPTOR_HANDLE accumCpu =
@@ -2526,16 +2540,21 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
     // Clear shader counters (debug instrumentation)
     if (s_shaderCountersBuffer) {
-      UINT zeroVals[4] = {0,0,0,0};
-      UINT inc = s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-      D3D12_CPU_DESCRIPTOR_HANDLE cpuCounters = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+      UINT zeroVals[4] = {0, 0, 0, 0};
+      UINT inc = s_device->GetDescriptorHandleIncrementSize(
+          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+      D3D12_CPU_DESCRIPTOR_HANDLE cpuCounters =
+          s_srvHeap->GetCPUDescriptorHandleForHeapStart();
       cpuCounters.ptr += (SIZE_T)DXR_HEAP_SHADER_COUNTERS_OFFSET * inc;
-      dxrList->ClearUnorderedAccessViewUint(s_shaderCountersGpuHandle, cpuCounters, s_shaderCountersBuffer.Get(), zeroVals, 0, nullptr);
+      dxrList->ClearUnorderedAccessViewUint(
+          s_shaderCountersGpuHandle, cpuCounters, s_shaderCountersBuffer.Get(),
+          zeroVals, 0, nullptr);
     }
 
     // End ReSTIR timer
     if (s_queryHeap) {
-      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 2); // ReSTIR end
+      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
+                        2); // ReSTIR end
     }
 
     s_accumulation.SetNeedsClear(false);
@@ -2568,23 +2587,29 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   if (!doDenoise && !reachedEndCondition) {
     // Start DispatchRays timer
     if (s_queryHeap) {
-      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 3); // Dispatch start
+      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
+                        3); // Dispatch start
     }
 
     // Ensure shader counters are reset per-frame (debug instrumentation)
     if (s_shaderCountersBuffer) {
-      UINT zeros[4] = {0,0,0,0};
-      UINT inc = s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-      D3D12_CPU_DESCRIPTOR_HANDLE cpuCounters = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+      UINT zeros[4] = {0, 0, 0, 0};
+      UINT inc = s_device->GetDescriptorHandleIncrementSize(
+          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+      D3D12_CPU_DESCRIPTOR_HANDLE cpuCounters =
+          s_srvHeap->GetCPUDescriptorHandleForHeapStart();
       cpuCounters.ptr += (SIZE_T)DXR_HEAP_SHADER_COUNTERS_OFFSET * inc;
-      dxrList->ClearUnorderedAccessViewUint(s_shaderCountersGpuHandle, cpuCounters, s_shaderCountersBuffer.Get(), zeros, 0, nullptr);
+      dxrList->ClearUnorderedAccessViewUint(
+          s_shaderCountersGpuHandle, cpuCounters, s_shaderCountersBuffer.Get(),
+          zeros, 0, nullptr);
     }
 
     dxrList->DispatchRays(&dispatchDesc);
 
     // End DispatchRays timer
     if (s_queryHeap) {
-      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 4); // Dispatch end
+      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
+                        4); // Dispatch end
     }
 
     // Increment accumulation history only when actually used and not at end
@@ -2598,8 +2623,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     // we reached an end condition (noise/maxSPP).
     // Still write the queries to avoid stale data
     if (s_queryHeap) {
-      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 3); // Dispatch start (skipped)
-      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 4); // Dispatch end (skipped)
+      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
+                        3); // Dispatch start (skipped)
+      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
+                        4); // Dispatch end (skipped)
     }
     if (reachedEndCondition && !doDenoise && g_verboseRenderLogs) {
       // Optional: Log convergence?
@@ -2637,7 +2664,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         (s_accumulation.GetFrameCount() % noiseEvalPeriod == 0)) {
       // Start noise calculation timer
       if (s_queryHeap) {
-        dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 7); // Noise start
+        dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
+                          7); // Noise start
       }
 
       EnsureNoiseStatsPipeline();
@@ -2661,7 +2689,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                 ++count;
               }
             }
-            s_lastNoiseLevel = (count > 0) ? sqrt((float)(sumSq / count)) : 0.0f;
+            s_lastNoiseLevel =
+                (count > 0) ? sqrt((float)(sumSq / count)) : 0.0f;
             s_noiseStatsReadbackBuffer->Unmap(0, nullptr);
           }
         }
@@ -2741,11 +2770,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
           D3D12_HEAP_PROPERTIES rdProps = {};
           rdProps.Type = D3D12_HEAP_TYPE_READBACK;
           outDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
-          s_device->CreateCommittedResource(&rdProps, D3D12_HEAP_FLAG_NONE,
-                                            &outDesc,
-                                            D3D12_RESOURCE_STATE_COPY_DEST,
-                                            nullptr,
-                                            IID_PPV_ARGS(&s_noiseStatsReadbackBuffer));
+          s_device->CreateCommittedResource(
+              &rdProps, D3D12_HEAP_FLAG_NONE, &outDesc,
+              D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+              IID_PPV_ARGS(&s_noiseStatsReadbackBuffer));
         }
 
         // u2 - output buffer has variable element count
@@ -2768,10 +2796,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         // Dispatch thread groups sized 16x16; each thread samples stride pixels
         const UINT groupSizeX = 16;
         const UINT groupSizeY = 16;
-        UINT dispatchX = (s_outputWidth + stride * groupSizeX - 1) /
-                         (stride * groupSizeX);
-        UINT dispatchY = (s_outputHeight + stride * groupSizeY - 1) /
-                         (stride * groupSizeY);
+        UINT dispatchX =
+            (s_outputWidth + stride * groupSizeX - 1) / (stride * groupSizeX);
+        UINT dispatchY =
+            (s_outputHeight + stride * groupSizeY - 1) / (stride * groupSizeY);
         dxrList->Dispatch(dispatchX, dispatchY, 1);
 
         // 4. Copy to Readback (for NEXT frame to read)
@@ -2786,7 +2814,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
         // End noise calculation timer
         if (s_queryHeap) {
-          dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 8); // Noise end
+          dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
+                            8); // Noise end
         }
       }
     }
@@ -2919,7 +2948,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   if (shouldRunOidn && s_oidnOutputUAV && postColor) {
     // Start denoising timer
     if (s_queryHeap) {
-      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 5); // Denoise start
+      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
+                        5); // Denoise start
     }
 
     fprintf(stderr,
@@ -3013,7 +3043,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
     // End denoising timer
     if (s_queryHeap) {
-      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 6); // Denoise end
+      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
+                        6); // Denoise end
     }
 
     // postColor is in UAV state so the Tonemap block can transition it to SRV.
@@ -3033,20 +3064,24 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         const UINT gridW = (s_outputWidth + stride - 1) / stride;
         const UINT gridH = (s_outputHeight + stride - 1) / stride;
         const UINT total = gridW * gridH;
-        double sumLum = 0.0;
+        double sumLogLum = 0.0;
         UINT count = 0;
         // The buffer might be larger from a previous resolution
-        const UINT limit = (std::min)(
-            total,
-            (UINT)(s_avgLumReadbackBuffer->GetDesc().Width / sizeof(float)));
+        const UINT limit =
+            (std::min)(total, (UINT)(s_avgLumReadbackBuffer->GetDesc().Width /
+                                     sizeof(float)));
         for (UINT i = 0; i < limit; ++i) {
           float v = data[i];
-          if (v >= 0.0f) {
-            sumLum += v;
+          // Since we store log(max(luminance, 1e-4)), v should be finite.
+          if (std::isfinite(v)) {
+            sumLogLum += v;
             ++count;
           }
         }
-        s_avgLuminanceCdM2 = (count > 0) ? (float)(sumLum / count) : 0.0f;
+        // Geometric mean (log-average)
+        s_avgLuminanceCdM2 =
+            (count > 0) ? expf((float)(sumLogLum / count)) : 0.0f;
+
         if (s_avgLuminanceCdM2 > 1e-6f) {
           // EV100 = log2(L / 0.125) = log2(L * 8)
           s_lastEV100 = log2f(s_avgLuminanceCdM2 / 0.125f);
@@ -3067,18 +3102,18 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         desc.Width = total * sizeof(float);
         D3D12_HEAP_PROPERTIES defHeap = {};
         defHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
-        s_device->CreateCommittedResource(
-            &defHeap, D3D12_HEAP_FLAG_NONE, &desc,
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
-            IID_PPV_ARGS(&s_avgLumBuffer));
+        s_device->CreateCommittedResource(&defHeap, D3D12_HEAP_FLAG_NONE, &desc,
+                                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                          nullptr,
+                                          IID_PPV_ARGS(&s_avgLumBuffer));
 
         desc.Flags = D3D12_RESOURCE_FLAG_NONE;
         D3D12_HEAP_PROPERTIES rdHeap = {};
         rdHeap.Type = D3D12_HEAP_TYPE_READBACK;
-        s_device->CreateCommittedResource(&rdHeap, D3D12_HEAP_FLAG_NONE, &desc,
-                                          D3D12_RESOURCE_STATE_COPY_DEST,
-                                          nullptr,
-                                          IID_PPV_ARGS(&s_avgLumReadbackBuffer));
+        s_device->CreateCommittedResource(
+            &rdHeap, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            IID_PPV_ARGS(&s_avgLumReadbackBuffer));
       }
 
       // 3. Dispatch
@@ -3126,7 +3161,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       dxrList->SetComputeRootSignature(s_avgLumRootSig.Get());
       dxrList->SetComputeRootConstantBufferView(
           0, s_avgLumCB->GetGPUVirtualAddress());
-      
+
       D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle =
           s_avgLumHeap->GetGPUDescriptorHandleForHeapStart();
       dxrList->SetComputeRootDescriptorTable(1, gpuHandle);
@@ -3155,7 +3190,14 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     TonemapConstants tc{};
     tc.outWidth = outW;
     tc.outHeight = outH;
-    tc.exposure = 1.0f;
+
+    // Auto-exposure: map middle grey (0.18) to the average scene luminance.
+    // Clamp to avoid extreme exposure values.
+    float targetExposure = 1.0f;
+    if (s_avgLuminanceCdM2 > 1e-5f) {
+      targetExposure = 0.18f / s_avgLuminanceCdM2;
+    }
+    tc.exposure = std::clamp(targetExposure, 0.001f, 1000.0f);
 
     void *p = nullptr;
     D3D12_RANGE readRange = {0, 0};
@@ -3333,8 +3375,8 @@ bool ExportTonemappedFrameToPng(const std::wstring &filePath) {
           width, height);
 
   ComPtr<ID3D12CommandAllocator> cmdAlloc;
-  if (FAILED(s_device->CreateCommandAllocator(
-          D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&cmdAlloc)))) {
+  if (FAILED(s_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                              IID_PPV_ARGS(&cmdAlloc)))) {
     fprintf(stderr, "DxrRenderer: ExportTonemappedFrameToPng failed to create "
                     "command allocator.\n");
     return false;
@@ -3382,7 +3424,8 @@ bool ExportTonemappedFrameToPng(const std::wstring &filePath) {
     return false;
   }
 
-  TransitionResource(cmdList.Get(), source, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+  TransitionResource(cmdList.Get(), source,
+                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                      D3D12_RESOURCE_STATE_COPY_SOURCE);
 
   D3D12_TEXTURE_COPY_LOCATION srcLoc = {};
@@ -3434,8 +3477,9 @@ bool ExportTonemappedFrameToPng(const std::wstring &filePath) {
   uint8_t *mapped = nullptr;
   if (FAILED(readback->Map(0, nullptr, reinterpret_cast<void **>(&mapped))) ||
       !mapped) {
-    fprintf(stderr,
-            "DxrRenderer: ExportTonemappedFrameToPng failed to map readback.\n");
+    fprintf(
+        stderr,
+        "DxrRenderer: ExportTonemappedFrameToPng failed to map readback.\n");
     return false;
   }
 
@@ -3470,9 +3514,9 @@ static float s_cpuWorkTimeMs = 0.0f;
 void BeginFrameProfiling(ID3D12GraphicsCommandList *commandList) {
   s_cpuFrameStartTime = std::chrono::high_resolution_clock::now();
   if (s_queryHeap) {
-    // Record all timestamps at the start. DXR mode will overwrite specific ones.
-    // This prevents stale/undefined data from appearing in the UI for raster
-    // mode.
+    // Record all timestamps at the start. DXR mode will overwrite specific
+    // ones. This prevents stale/undefined data from appearing in the UI for
+    // raster mode.
     for (int i = 0; i < 10; ++i) {
       commandList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, i);
     }
@@ -3481,21 +3525,23 @@ void BeginFrameProfiling(ID3D12GraphicsCommandList *commandList) {
 
 void EndFrameProfiling(ID3D12GraphicsCommandList *commandList) {
   auto cpuEnd = std::chrono::high_resolution_clock::now();
-  s_cpuWorkTimeMs = std::chrono::duration<float, std::milli>(cpuEnd - s_cpuFrameStartTime).count();
+  s_cpuWorkTimeMs =
+      std::chrono::duration<float, std::milli>(cpuEnd - s_cpuFrameStartTime)
+          .count();
 
   if (s_queryHeap) {
     commandList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
                           9); // Frame end
     // Copy shader counters (GPU -> readback) so CPU can inspect them next map
     if (s_shaderCountersBuffer && s_shaderCountersReadbackBuffer) {
-      TransitionResource(
-          commandList, s_shaderCountersBuffer.Get(),
-          D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+      TransitionResource(commandList, s_shaderCountersBuffer.Get(),
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                         D3D12_RESOURCE_STATE_COPY_SOURCE);
       commandList->CopyResource(s_shaderCountersReadbackBuffer.Get(),
                                 s_shaderCountersBuffer.Get());
-      TransitionResource(
-          commandList, s_shaderCountersBuffer.Get(),
-          D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+      TransitionResource(commandList, s_shaderCountersBuffer.Get(),
+                         D3D12_RESOURCE_STATE_COPY_SOURCE,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
 
     commandList->ResolveQueryData(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
@@ -3562,7 +3608,8 @@ void EndFrameProfiling(ID3D12GraphicsCommandList *commandList) {
   // Read shader counters readback (from GPU) and log a short summary
   if (s_shaderCountersReadbackBuffer) {
     UINT *c = nullptr;
-    if (SUCCEEDED(s_shaderCountersReadbackBuffer->Map(0, nullptr, (void **)&c))) {
+    if (SUCCEEDED(
+            s_shaderCountersReadbackBuffer->Map(0, nullptr, (void **)&c))) {
       for (UINT i = 0; i < 16; ++i)
         s_lastShaderCounters[i] = c[i];
       s_shaderCountersReadbackBuffer->Unmap(0, nullptr);
@@ -3584,7 +3631,8 @@ float GetFrameTimeMs() { return s_frameTimeMs; }
 float GetCPUWorkTimeMs() { return s_cpuWorkTimeMs; }
 float GetFPS() { return s_fps; }
 float GetSPPPerSec() { return s_sppPerSec; }
-void GetGPUTimes(float& restirTime, float& dispatchTime, float& denoiseTime, float& noiseTime) {
+void GetGPUTimes(float &restirTime, float &dispatchTime, float &denoiseTime,
+                 float &noiseTime) {
   restirTime = s_gpuTimes[0];
   dispatchTime = s_gpuTimes[1];
   denoiseTime = s_gpuTimes[2];
@@ -3595,10 +3643,15 @@ float GetGPUFrameTimeMs() { return s_gpuFrameTimeMs; }
 
 // Expose shader counters (filled from last GPU readback)
 void GetShaderCounters(UINT *outCounters, UINT maxCount) {
-  if (!outCounters || maxCount == 0) return;
-  UINT toCopy = (maxCount < _countof(s_lastShaderCounters)) ? maxCount : _countof(s_lastShaderCounters);
-  for (UINT i = 0; i < toCopy; ++i) outCounters[i] = s_lastShaderCounters[i];
-  for (UINT i = toCopy; i < maxCount; ++i) outCounters[i] = 0u;
+  if (!outCounters || maxCount == 0)
+    return;
+  UINT toCopy = (maxCount < _countof(s_lastShaderCounters))
+                    ? maxCount
+                    : _countof(s_lastShaderCounters);
+  for (UINT i = 0; i < toCopy; ++i)
+    outCounters[i] = s_lastShaderCounters[i];
+  for (UINT i = toCopy; i < maxCount; ++i)
+    outCounters[i] = 0u;
 }
 
 } // namespace DxrRenderer

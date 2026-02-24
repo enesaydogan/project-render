@@ -27,10 +27,12 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     float3 color = g_input.Load(int3(x, y, 0)).rgb;
     
-    // Standard luminance weights (Rec. 709)
-    float luminance = dot(color, float3(0.2126, 0.7152, 0.0722));
+    // Log-luminance for geometric mean (log-average).
+    // Using max(..., 1e-4) to avoid log(0) and provide a floor for dark pixels.
+    float luma = dot(color, float3(0.2126, 0.7152, 0.0722));
+    float logLuminance = log(max(luma, 1e-4f));
 
     uint gridW = (width + stride - 1) / stride;
     uint idx = dispatchThreadID.y * gridW + dispatchThreadID.x;
-    g_output[idx] = luminance;
+    g_output[idx] = logLuminance;
 }
