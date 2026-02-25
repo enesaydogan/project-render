@@ -46,7 +46,13 @@ void Miss(inout RayPayload payload)
         } else {
             // Composite: Sky * Transmittance + CloudColor
             float3 skyColor = color;
-            float3 fullCloudColor = skyColor * baked.a + baked.rgb;
+            float opacity = 1.0 - baked.a;
+            // Lift only dense cloud cores to keep silhouette and edge contrast.
+            float denseCore = pow(saturate(opacity), 2.2);
+            float skyLeak = 0.10 * denseCore;
+            float3 fullCloudColor = skyColor * (baked.a + skyLeak) + baked.rgb;
+            // Additional soft floor, biased to dense regions only.
+            fullCloudColor += skyColor * (0.025 * denseCore);
             // Relaxed clamp for physical units + exposure
             color = clamp(fullCloudColor, 0.0, 100000.0);
         }
