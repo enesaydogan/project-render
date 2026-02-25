@@ -1368,12 +1368,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
         ImGui::BeginDisabled();
       }
       if (ImGui::RadioButton("DXR", g_currentRenderMode == RenderMode::DXR)) {
-        if (RecreateDxrPipelineSafe(g_windowWidth, g_windowHeight,
-                                    "Render mode switch to DXR")) {
-          g_currentRenderMode = RenderMode::DXR;
-        } else {
-          g_currentRenderMode = RenderMode::Raster;
-        }
+        g_currentRenderMode = RenderMode::DXR;
       }
       if (!g_rayTracingSupported) {
         ImGui::EndDisabled();
