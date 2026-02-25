@@ -123,6 +123,12 @@ public:
 
   Asset::Texture &GetEnvMap() { return m_envMap; }
   bool IsLoaded() const { return m_envMap.resource != nullptr; }
+  Asset::Texture &GetEnvConditionalCdf() { return m_envConditionalCdf; }
+  Asset::Texture &GetEnvMarginalCdf() { return m_envMarginalCdf; }
+  bool HasEnvImportanceData() const {
+    return m_envConditionalCdf.resource != nullptr &&
+           m_envMarginalCdf.resource != nullptr;
+  }
 
   void SetGPUHandle(D3D12_GPU_DESCRIPTOR_HANDLE handle) {
     m_gpuHandle = handle;
@@ -141,10 +147,13 @@ private:
 
   void UpdateTextureFromSkyModel();
   void CreateDescriptor();
+  bool BuildEnvironmentImportanceTextures(const Asset::Texture &envTex);
 
   Asset::Texture m_envMap;            // Current API-facing env map
   Asset::Texture m_fileTexture;       // Backing store for file IBL
   Asset::Texture m_proceduralTexture; // Backing store for Sky Model
+  Asset::Texture m_envConditionalCdf; // RGBA32F: x=conditional CDF, y=texel PMF
+  Asset::Texture m_envMarginalCdf;    // RGBA32F: x=marginal CDF per row
 
   // When using a file-based IBL we mute the analytic sun/light.  We cache
   // the previous sun parameters here so they can be restored when the user

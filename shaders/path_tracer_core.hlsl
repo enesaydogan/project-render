@@ -788,6 +788,75 @@ void RayGen()
             }
         }
 
+        // Environment NEE (importance sampled lat-long CDF)
+        {
+            LightSample envLs = sample_env_map(envMap, envConditionalCdf, envMarginalCdf, linearSampler, rng);
+            SHADER_COUNTER_ADD(SHADER_COUNTER_ENV_SAMPLES, 1);
+
+            float NdotL_env = saturate(dot(N, envLs.L));
+            if (envLs.pdf > 1e-8 && NdotL_env > 0.0) {
+                RayDesc envShadowRay;
+                envShadowRay.Origin = P + N * 0.001;
+                envShadowRay.Direction = envLs.L;
+                envShadowRay.TMin = 0.001;
+                envShadowRay.TMax = 10000.0;
+
+                RayPayload envShadowPayload;
+                envShadowPayload.t = 1.0;
+                envShadowPayload.rayDepth = (uint)bounce + 1;
+                envShadowPayload.rayType = RAY_TYPE_SHADOW;
+                TraceRay(g_accel,
+                         RAY_FLAG_SKIP_CLOSEST_HIT_SHADER |
+                             RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
+                             RAY_FLAG_FORCE_NON_OPAQUE,
+                         0xFF, 0, 0, 0, envShadowRay, envShadowPayload);
+                SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
+                SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
+
+                if (envShadowPayload.t < 0.0) {
+                    float3 F0_env = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
+                    float3 H_env = normalize(envLs.L + V);
+                    float3 spec_env = D_GGX(max(0.0, dot(N, H_env)), roughness) *
+                                      V_SmithCorrelated(max(0.0, dot(N, V)), NdotL_env, roughness) *
+                                      F_Schlick(max(0.0, dot(H_env, V)), F0_env);
+                    float3 brdf_env = (diffuseAlbedo / PI) + spec_env;
+
+                    // MIS: compare environment-light sampling PDF against
+                    // the BRDF sampling PDF for this same direction.
+                    float3 F_env = F_Schlick(max(0.0, dot(N, V)), F0_env);
+                    float specProbEnv = max(F_env.x, max(F_env.y, F_env.z));
+                    float baseDiffProbEnv =
+                        (1.0 - specProbEnv) * (1.0 - metallic) * (1.0 - transmission);
+                    float transProbEnv = baseDiffProbEnv * saturate(payload.translucency);
+                    float diffProbEnv = max(0.0, baseDiffProbEnv - transProbEnv);
+                    float totalProbEnv = max(1e-6, specProbEnv + diffProbEnv + transProbEnv);
+
+                    float NdotH_env = saturate(dot(N, H_env));
+                    float VdotH_env = saturate(dot(V, H_env));
+                    float pdfSpecEnv = 0.0;
+                    if (specProbEnv > 0.0 && NdotH_env > 0.0 && VdotH_env > 0.0) {
+                        pdfSpecEnv =
+                            (PDF_GGX(NdotH_env, VdotH_env, roughness) * specProbEnv) /
+                            totalProbEnv;
+                    }
+                    float pdfDiffEnv = 0.0;
+                    if (diffProbEnv > 0.0) {
+                        pdfDiffEnv = (PDF_Lambert(NdotL_env) * diffProbEnv) / totalProbEnv;
+                    }
+                    float pdfBrdfEnv = max(0.0, pdfSpecEnv + pdfDiffEnv);
+
+                    float pdfLightEnv = max(1e-8, envLs.pdf);
+                    float misW = (pdfLightEnv * pdfLightEnv) /
+                                 (pdfLightEnv * pdfLightEnv +
+                                  pdfBrdfEnv * pdfBrdfEnv + 1e-12);
+
+                    float3 envContrib = brdf_env * envLs.radiance *
+                                        (NdotL_env / pdfLightEnv) * misW;
+                    directLighting += envContrib;
+                }
+            }
+        }
+
         accumulatedColor += throughput * (directLighting + indirectLighting + payload.emissive);
 
         // 2. Indirect Lighting Ray Generation

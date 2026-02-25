@@ -96,6 +96,7 @@ bool IBLManager::LoadEnvironmentMap(const std::string &path) {
 
   m_source = IBLSource::File;
   m_envMap = m_fileTexture;
+  BuildEnvironmentImportanceTextures(m_envMap);
 
   CreateDescriptor();
   return true;
@@ -123,6 +124,7 @@ void IBLManager::UpdateSkyModel() {
   if (m_source == IBLSource::PragueSkyModel && m_skyDirty && m_skyInitialized) {
     UpdateTextureFromSkyModel();
     m_envMap = m_proceduralTexture;
+    BuildEnvironmentImportanceTextures(m_envMap);
     CreateDescriptor();
     m_skyDirty = false;
   }
@@ -152,6 +154,7 @@ void IBLManager::SetIBLSource(IBLSource source) {
 
       if (m_fileTexture.resource) {
         m_envMap = m_fileTexture;
+        BuildEnvironmentImportanceTextures(m_envMap);
         CreateDescriptor();
       } else {
         std::cerr << "Cannot switch to File IBL: no file loaded." << std::endl;
@@ -168,6 +171,7 @@ void IBLManager::SetIBLSource(IBLSource source) {
           UpdateTextureFromSkyModel();
         }
         m_envMap = m_proceduralTexture;
+        BuildEnvironmentImportanceTextures(m_envMap);
         CreateDescriptor();
       } else {
         std::cerr << "Cannot switch to Sky Model: not initialized."
@@ -308,7 +312,7 @@ static bool CreateTexFromData(ID3D12Device *device, ID3D12CommandQueue *queue,
   barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
   barrier.Transition.pResource = texture.Get();
   barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-  barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+  barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
   barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
   cmdList->ResourceBarrier(1, &barrier);
 
@@ -330,9 +334,149 @@ static bool CreateTexFromData(ID3D12Device *device, ID3D12CommandQueue *queue,
   outTex.height = height;
   outTex.mipLevels = 1;
   outTex.format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+  outTex.cpuData.assign(reinterpret_cast<const uint8_t *>(data.data()),
+                        reinterpret_cast<const uint8_t *>(data.data()) +
+                            data.size() * sizeof(float));
 
   std::cout << "CreateTexFromData: Texture uploaded successfully. " << width
             << "x" << height << std::endl;
+
+  return true;
+}
+
+bool IBLManager::BuildEnvironmentImportanceTextures(const Asset::Texture &envTex) {
+  if (!m_device || !m_queue || !envTex.resource || envTex.width == 0 ||
+      envTex.height == 0 || envTex.cpuData.empty()) {
+    m_envConditionalCdf = {};
+    m_envMarginalCdf = {};
+    return false;
+  }
+
+  const UINT width = envTex.width;
+  const UINT height = envTex.height;
+  const double pi = 3.14159265358979323846;
+
+  const bool isFloatRGBA =
+      envTex.format == DXGI_FORMAT_R32G32B32A32_FLOAT &&
+      envTex.cpuData.size() >= (size_t)width * (size_t)height * 16;
+  const bool isUNormRGBA =
+      envTex.format == DXGI_FORMAT_R8G8B8A8_UNORM &&
+      envTex.cpuData.size() >= (size_t)width * (size_t)height * 4;
+
+  if (!isFloatRGBA && !isUNormRGBA) {
+    m_envConditionalCdf = {};
+    m_envMarginalCdf = {};
+    return false;
+  }
+
+  std::vector<double> texelWeights((size_t)width * (size_t)height, 0.0);
+  std::vector<double> rowSums(height, 0.0);
+
+  for (UINT y = 0; y < height; ++y) {
+    const double theta = ((double)y + 0.5) / (double)height * pi;
+    const double sinTheta = std::max(0.0, std::sin(theta));
+    double rowSum = 0.0;
+
+    for (UINT x = 0; x < width; ++x) {
+      float r = 0.0f, g = 0.0f, b = 0.0f;
+      const size_t idx = ((size_t)y * (size_t)width + (size_t)x);
+      if (isFloatRGBA) {
+        const float *rgba = reinterpret_cast<const float *>(envTex.cpuData.data());
+        const size_t base = idx * 4;
+        r = rgba[base + 0];
+        g = rgba[base + 1];
+        b = rgba[base + 2];
+      } else {
+        const uint8_t *rgba = envTex.cpuData.data();
+        const size_t base = idx * 4;
+        r = (float)rgba[base + 0] / 255.0f;
+        g = (float)rgba[base + 1] / 255.0f;
+        b = (float)rgba[base + 2] / 255.0f;
+      }
+
+      const double luminance = std::max(
+          0.0, 0.2126 * (double)r + 0.7152 * (double)g + 0.0722 * (double)b);
+      const double weight = luminance * sinTheta;
+      texelWeights[idx] = weight;
+      rowSum += weight;
+    }
+
+    rowSums[y] = rowSum;
+  }
+
+  double totalWeight = 0.0;
+  for (UINT y = 0; y < height; ++y) {
+    totalWeight += rowSums[y];
+  }
+
+  if (totalWeight <= 1e-20) {
+    totalWeight = 0.0;
+    for (UINT y = 0; y < height; ++y) {
+      const double theta = ((double)y + 0.5) / (double)height * pi;
+      const double sinTheta = std::max(1e-6, std::sin(theta));
+      const double rowWeight = sinTheta * (double)width;
+      rowSums[y] = rowWeight;
+      totalWeight += rowWeight;
+      for (UINT x = 0; x < width; ++x) {
+        texelWeights[(size_t)y * (size_t)width + (size_t)x] = sinTheta;
+      }
+    }
+  }
+
+  std::vector<float> conditionalData((size_t)width * (size_t)height * 4, 0.0f);
+  std::vector<float> marginalData((size_t)height * 4, 0.0f);
+
+  double marginalAccum = 0.0;
+  for (UINT y = 0; y < height; ++y) {
+    const double rowSum = rowSums[y];
+    double rowAccum = 0.0;
+
+    for (UINT x = 0; x < width; ++x) {
+      const size_t texelIdx = (size_t)y * (size_t)width + (size_t)x;
+      const double w = texelWeights[texelIdx];
+      rowAccum += w;
+
+      const float condCdf = (rowSum > 1e-20)
+                                ? (float)std::clamp(rowAccum / rowSum, 0.0, 1.0)
+                                : (float)(x + 1) / (float)width;
+      const float pmf =
+          (totalWeight > 1e-20) ? (float)std::max(0.0, w / totalWeight) : 0.0f;
+
+      const size_t outBase = texelIdx * 4;
+      conditionalData[outBase + 0] = condCdf;
+      conditionalData[outBase + 1] = pmf;
+      conditionalData[outBase + 2] = 0.0f;
+      conditionalData[outBase + 3] = 1.0f;
+    }
+
+    marginalAccum += rowSum;
+    const float marginalCdf =
+        (totalWeight > 1e-20)
+            ? (float)std::clamp(marginalAccum / totalWeight, 0.0, 1.0)
+            : (float)(y + 1) / (float)height;
+    const size_t mBase = (size_t)y * 4;
+    marginalData[mBase + 0] = marginalCdf;
+    marginalData[mBase + 1] = 0.0f;
+    marginalData[mBase + 2] = 0.0f;
+    marginalData[mBase + 3] = 1.0f;
+  }
+
+  conditionalData[((size_t)height * (size_t)width - 1) * 4 + 0] = 1.0f;
+  marginalData[((size_t)height - 1) * 4 + 0] = 1.0f;
+
+  if (!CreateTexFromData(m_device.Get(), m_queue.Get(), width, height,
+                         conditionalData, m_envConditionalCdf)) {
+    m_envConditionalCdf = {};
+    m_envMarginalCdf = {};
+    return false;
+  }
+
+  if (!CreateTexFromData(m_device.Get(), m_queue.Get(), height, 1,
+                         marginalData, m_envMarginalCdf)) {
+    m_envConditionalCdf = {};
+    m_envMarginalCdf = {};
+    return false;
+  }
 
   return true;
 }
@@ -477,7 +621,7 @@ void IBLManager::UpdateTextureFromSkyModel() {
             b = b * (1.0f - horizonBlend) + gb * horizonBlend;
           }
 
-          if (x == width / 2 && y == height / 2) {
+          if (x == (int)(width / 2) && y == (int)(height / 2)) {
             std::cout << "[DEBUG] Center RGB: " << r << ", " << g << ", " << b
                       << " (Unscaled X:" << X << " Y:" << Y << ")" << std::endl;
           }

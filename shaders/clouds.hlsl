@@ -297,6 +297,8 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
     // Setup Ambient Color
     float3 ambientSkyColor = float3(0.0, 0.0, 0.0);
     float ambientWeight = 0.0f;
+    float ambientAutoBoost = 1.0f;
+    float sunExposureComp = 1.0f;
     
     #ifdef RAYTRACING_COMMON_H
     // Use the global ambient color passed from the CPU (usually derived from Skybox/EnvMap)
@@ -315,15 +317,23 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
     
     // Sample Zenith (Up) and Horizon (Side) from the EnvMap
     // Use a high mip level (e.g., 6-8) to get the blurred/irradiance color
-    float2 uvZenith = DirectionToUV(float3(0.0, 1.0, 0.0));
-    float2 uvHorizon = DirectionToUV(float3(1.0, 0.0, 0.0));
-    
-    // Scale down the sampled values significantly because the Prague Sky Model outputs raw radiance units (very high).
-    // Factor 0.001f brings the ~4000-10000 range down to ~4-10 range max
-    float skyScale = 0.001f; 
+    float2 uvZenith = DirectionToUVRotated(float3(0.0, 1.0, 0.0));
+    float2 uvHorizon = DirectionToUVRotated(float3(1.0, 0.0, 0.0));
 
-    float3 realZenith = envMap.SampleLevel(linearSampler, uvZenith, 8.0).rgb * intensity * skyScale;
-    float3 realHorizon = envMap.SampleLevel(linearSampler, uvHorizon, 8.0).rgb * intensity * skyScale;
+    // Keep cloud ambient reasonably stable when post-lighting exposure scale
+    // gets very low in physical camera mode.
+    float intensityForCloudAmbient = max(intensity, 1.0f);
+    float skyScale = 0.00125f;
+
+    float3 realZenith = envMap.SampleLevel(linearSampler, uvZenith, 8.0).rgb * intensityForCloudAmbient * skyScale;
+    float3 realHorizon = envMap.SampleLevel(linearSampler, uvHorizon, 8.0).rgb * intensityForCloudAmbient * skyScale;
+
+    float3 avgSky = 0.5f * (realZenith + realHorizon);
+    float avgSkyLum = max(1e-4f, dot(avgSky, float3(0.2126f, 0.7152f, 0.0722f)));
+    ambientAutoBoost = clamp(0.12f / avgSkyLum, 1.0f, 12.0f);
+    realZenith *= ambientAutoBoost;
+    realHorizon *= ambientAutoBoost;
+    sunExposureComp = 1.0f / max(0.25f, intensity);
     
     // Blend towards real sky colors based on weight
     // If weight is high, we match the skybox perfectly.
@@ -353,8 +363,8 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
             // Light Energy Calculation
             // 1. Direct Sun (with shadow ray)
             
-            // Manual scaling to fix "blown out" sun color from Prague Sky Model without touching C++
-            float3 sunColorScaled = lightColor * 0.000025f; 
+            // Stabilize cloud sun term against post-lighting exposure scaling.
+            float3 sunColorScaled = lightColor * (0.000025f * sunExposureComp);
 
             float shadowTerm = shadowTermCached;
             if (density > CloudCB.shadowDensityThreshold) {
@@ -392,7 +402,11 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
             
             // Ambient occlusion based on density: deeper = darker
             ambient *= exp(-density * 1.0f);
-            ambient *= 0.6f; // Overall Ambient intensity boost
+            ambient *= 0.6f;
+
+            // Prevent full-black cloud silhouettes under low ambient exposure.
+            float3 ambientFloor = 0.02f * (kSkyZenith + kSkyHorizon) * 0.5f;
+            ambient = max(ambient, ambientFloor);
             
             float3 source = (CloudCB.sunIntensity * directLight * sunColorScaled) + ambient;
             source = max(source, 0.0);
@@ -410,6 +424,21 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
 
     if (any(isnan(sum)) || any(isinf(sum))) sum = float3(0.0, 0.0, 0.0);
     if (isnan(transmittance) || isinf(transmittance)) transmittance = 1.0f;
+
+    // Extra lift for dense cloud cores under physically-scaled lighting.
+    float cloudLightBoost = 2.5f;
+#ifdef RAYTRACING_COMMON_H
+    // If post-lighting exposure scale is low, compensate cloud scattering so
+    // clouds don't collapse to black while preserving highlights.
+    cloudLightBoost *= clamp(1.0f / max(0.25f, intensity), 1.0f, 6.0f);
+#endif
+    sum *= cloudLightBoost;
+
+    // Cheap multiple-scattering floor proportional to cloud opacity.
+    float opacity = 1.0f - saturate(transmittance);
+    float3 msFloor = 0.035f * opacity * (kSkyHorizon + kSkyZenith) * 0.5f;
+    sum += msFloor;
+
     sum = clamp(sum, 0.0, 64.0);
     transmittance = saturate(transmittance);
     return float4(sum, transmittance);
