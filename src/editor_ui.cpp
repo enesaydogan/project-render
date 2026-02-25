@@ -540,9 +540,16 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
       changed |=
           ImGui::SliderFloat("Coverage Scale", &cp.coverageScale, 0.00005f,
                              0.0010f, "%.5f", ImGuiSliderFlags_Logarithmic);
+        changed |=
+          ImGui::SliderFloat("Coverage Variation", &cp.coverageVariation,
+                   0.0f, 1.0f);
       changed |= ImGui::SliderFloat("Erosion", &cp.erosion, 0.0f, 1.0f);
       changed |=
           ImGui::SliderFloat("Warp Strength", &cp.warpStrength, 0.0f, 2.0f);
+        changed |=
+          ImGui::SliderFloat("Shape Power", &cp.shapePower, 0.4f, 3.0f);
+        changed |= ImGui::SliderFloat("Powder Strength", &cp.powderStrength,
+                      0.0f, 1.5f);
 
       ImGui::Separator();
       changed |= ImGui::SliderInt("Shadow Steps", &cp.shadowSteps, 1, 16);

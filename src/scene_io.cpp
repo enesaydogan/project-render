@@ -174,8 +174,11 @@ bool SaveScene(const std::string &path) {
     j["clouds"]["baseScale"] = cp.baseScale;
     j["clouds"]["detailScale"] = cp.detailScale;
     j["clouds"]["coverageScale"] = cp.coverageScale;
+    j["clouds"]["coverageVariation"] = cp.coverageVariation;
     j["clouds"]["erosion"] = cp.erosion;
     j["clouds"]["warpStrength"] = cp.warpStrength;
+    j["clouds"]["shapePower"] = cp.shapePower;
+    j["clouds"]["powderStrength"] = cp.powderStrength;
     j["clouds"]["shadowSteps"] = cp.shadowSteps;
     j["clouds"]["shadowStepSize"] = cp.shadowStepSize;
     j["clouds"]["shadowLod"] = cp.shadowLod;
@@ -437,8 +440,11 @@ bool LoadScene(const std::string &path) {
       cp.baseScale = c.value("baseScale", cp.baseScale);
       cp.detailScale = c.value("detailScale", cp.detailScale);
       cp.coverageScale = c.value("coverageScale", cp.coverageScale);
+      cp.coverageVariation = c.value("coverageVariation", cp.coverageVariation);
       cp.erosion = c.value("erosion", cp.erosion);
       cp.warpStrength = c.value("warpStrength", cp.warpStrength);
+      cp.shapePower = c.value("shapePower", cp.shapePower);
+      cp.powderStrength = c.value("powderStrength", cp.powderStrength);
       cp.shadowSteps = c.value("shadowSteps", cp.shadowSteps);
       cp.shadowStepSize = c.value("shadowStepSize", cp.shadowStepSize);
       cp.shadowLod = c.value("shadowLod", cp.shadowLod);
