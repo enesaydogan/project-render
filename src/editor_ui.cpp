@@ -522,7 +522,6 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
       changed |= ImGui::SliderFloat("Coverage", &cp.coverage, 0.0f, 1.0f);
       changed |=
           ImGui::SliderFloat("Scattering (g)", &cp.scattering, -0.99f, 0.99f);
-      changed |= ImGui::SliderInt("Steps", &cp.steps, 16, 128);
       changed |=
           ImGui::SliderFloat("Sun Intensity", &cp.sunIntensity, 0.0f, 20.0f);
       changed |= ImGui::SliderFloat("Cloud Top", &cp.cloudTop, 200.0f, 1000.0f);
@@ -556,13 +555,6 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
       changed |= ImGui::SliderFloat("Shadow Step Size", &cp.shadowStepSize,
                                     10.0f, 500.0f);
       changed |= ImGui::SliderFloat("Shadow LOD", &cp.shadowLod, 0.0f, 5.0f);
-      changed |= ImGui::SliderInt("Max Ray Steps", &cp.maxSteps, 64, 2048);
-      changed |= ImGui::SliderFloat("Vertical Step (m)", &cp.verticalStepMeters,
-                                    2.0f, 80.0f);
-      changed |=
-          ImGui::SliderInt("Shadow Every N Steps", &cp.shadowEvery, 1, 16);
-      changed |= ImGui::SliderFloat("Shadow Density Threshold",
-                                    &cp.shadowDensityThreshold, 0.0f, 0.5f);
 
       if (changed) {
         DxrRenderer::ResetAccumulation();
