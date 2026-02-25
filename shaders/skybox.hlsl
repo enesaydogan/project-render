@@ -128,7 +128,11 @@ float4 PSMain(PSInput input) : SV_TARGET {
         baked.a = saturate(baked.a);
         baked.rgb = max(baked.rgb, 0.0);
         // If debug view selected, show baked cloud color directly
-        composed = baked.rgb + color * baked.a;
+        float opacity = 1.0 - baked.a;
+        float denseCore = pow(saturate(opacity), 2.2);
+        float skyLeak = 0.10 * denseCore;
+        composed = baked.rgb + color * (baked.a + skyLeak);
+        composed += color * (0.025 * denseCore);
     }
 
     return float4(composed, 1.0);

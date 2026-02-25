@@ -45,6 +45,11 @@ SamplerState LinearWrapSampler : register(s0, space2);
 static const float CLOUDS_PI = 3.14159265f;
 #endif
 
+// Cloud absorption parameter is authored in artist-friendly UI units.
+// Normalize to physical-scene march units so typical values (0.2..1.0)
+// remain usable after switching to physical lighting.
+static const float CLOUD_ABSORPTION_SCALE = 0.01f;
+
 // Dual Henyey-Greenstein for realistic cloud scattering
 // (Forward peak + slight backward peak)
 float PhaseHG(float cosTheta, float g) {
@@ -357,7 +362,11 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
         float density = SampleDensity(pos, densityLodBias);
         
         if (density > 0.001f) {
-            float extinction = density * CloudCB.absorption;
+            float denseMask = saturate(density * 1.25f);
+            float absorptionCoeff = CloudCB.absorption * CLOUD_ABSORPTION_SCALE;
+            // Softer extinction at wispy edges, close to user value in dense cores.
+            float viewAbsorption = absorptionCoeff * lerp(0.72f, 1.00f, denseMask);
+            float extinction = density * viewAbsorption;
             float stepTrans = exp(-extinction * stepSize);
 
             // Light Energy Calculation
@@ -381,7 +390,10 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
                        lPos += sunDir * lStep;
                        lDens += SampleDensity(lPos, shadowLod);
                    }
-                   shadowTermCached = exp(-lDens * lStep * CloudCB.absorption);
+                   // Stronger absorption for light/shadow integration restores
+                   // internal cloud structure without over-darkening edge wisps.
+                   float shadowAbsorption = absorptionCoeff * lerp(1.00f, 1.45f, denseMask);
+                   shadowTermCached = exp(-lDens * lStep * shadowAbsorption);
                }
                shadowTerm = shadowTermCached;
             } else {
@@ -434,9 +446,10 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
 #endif
     sum *= cloudLightBoost;
 
-    // Cheap multiple-scattering floor proportional to cloud opacity.
+    // Cheap multiple-scattering floor, biased toward dense cores only.
     float opacity = 1.0f - saturate(transmittance);
-    float3 msFloor = 0.035f * opacity * (kSkyHorizon + kSkyZenith) * 0.5f;
+    float denseCore = pow(saturate(opacity), 1.8f);
+    float3 msFloor = 0.022f * denseCore * (kSkyHorizon + kSkyZenith) * 0.5f;
     sum += msFloor;
 
     sum = clamp(sum, 0.0, 64.0);

@@ -362,17 +362,34 @@ void RayGen()
             // the environment using a non-jittered ray direction.
             float3 missColor = payload.color;
             if (bounce == 0 && dlssRayReconstruction > 0.5) {
-                float2 skyUv = DirectionToUV(rayDirCenter);
+                float2 skyUv = DirectionToUVRotated(rayDirCenter);
                 // Slight mip bias helps remove residual HDRI aliasing that shows up
                 // as shimmer, especially along silhouettes.
                 const float rrSkyLod = 0;
-                if (cloudRenderingEnabled > 0.5) {
+
+                float3 rrSky = envMap.SampleLevel(linearSampler, skyUv, rrSkyLod).rgb * intensity;
+
+                // Keep sun disc behavior consistent with miss/skybox shading.
+                float3 L = normalize(lightDir.xyz);
+                float cosTheta = dot(normalize(rayDirCenter), L);
+                float cosSunRadius = cos(lightDir.w);
+                if (cosTheta > cosSunRadius) {
+                    float sunSolidAngle = 2.0f * PI * (1.0f - cosSunRadius);
+                    float3 sunRadiance = (lightColor.rgb * lightColor.w) / max(sunSolidAngle, 1e-7f);
+                    rrSky = sunRadiance * intensity;
+                }
+
+                if (cloudRenderingEnabled > 0.5f) {
                     float4 baked = bakedClouds.SampleLevel(linearSampler, skyUv, 0);
                     baked.a = saturate(baked.a);
                     baked.rgb = max(baked.rgb, 0.0);
-                    missColor = baked.rgb + envMap.SampleLevel(linearSampler, skyUv, rrSkyLod).rgb * intensity * baked.a;
+                    float opacity = 1.0f - baked.a;
+                    float denseCore = pow(saturate(opacity), 2.2f);
+                    float skyLeak = 0.10f * denseCore;
+                    missColor = baked.rgb + rrSky * (baked.a + skyLeak);
+                    missColor += rrSky * (0.025f * denseCore);
                 } else {
-                    missColor = envMap.SampleLevel(linearSampler, skyUv, rrSkyLod).rgb * intensity;
+                    missColor = rrSky;
                 }
             }
             accumulatedColor += throughput * missColor;
@@ -1002,7 +1019,7 @@ void RayGen()
     if (any(isnan(accumulatedColor)) || any(isinf(accumulatedColor))) accumulatedColor = float3(0,0,0);
 
     // Radiance must be non-negative. Clamp numerical underflow/instability.
-    float3 finalColor = clamp(accumulatedColor * intensity, 0.0, 1000.0);
+    float3 finalColor = clamp(accumulatedColor, 0.0, 1000.0);
     if (any(isnan(finalColor)) || any(isinf(finalColor))) finalColor = float3(0, 0, 0);
 
     // Write DLSS inputs
