@@ -146,20 +146,22 @@ static const UINT DXR_HEAP_NORMAL_ROUGHNESS_UAV_OFFSET =
     DXR_HEAP_UAV_OFFSET + 13;
 static const UINT DXR_HEAP_DLSS_OUT_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 14;
 static const UINT DXR_HEAP_IBL_OFFSET = DXR_HEAP_UAV_OFFSET + 15;
-static const UINT DXR_HEAP_SPEC_ALBEDO_OFFSET = DXR_HEAP_UAV_OFFSET + 16;
-static const UINT DXR_HEAP_SPEC_HITDIST_OFFSET = DXR_HEAP_UAV_OFFSET + 17;
-static const UINT DXR_HEAP_SPEC_MVEC_OFFSET = DXR_HEAP_UAV_OFFSET + 18;
-static const UINT DXR_HEAP_OIDN_OUT_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 19;
-static const UINT DXR_HEAP_VARIANCE_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 20;
+static const UINT DXR_HEAP_IBL_CONDITIONAL_CDF_OFFSET = DXR_HEAP_UAV_OFFSET + 16;
+static const UINT DXR_HEAP_IBL_MARGINAL_CDF_OFFSET = DXR_HEAP_UAV_OFFSET + 17;
+static const UINT DXR_HEAP_SPEC_ALBEDO_OFFSET = DXR_HEAP_UAV_OFFSET + 18;
+static const UINT DXR_HEAP_SPEC_HITDIST_OFFSET = DXR_HEAP_UAV_OFFSET + 19;
+static const UINT DXR_HEAP_SPEC_MVEC_OFFSET = DXR_HEAP_UAV_OFFSET + 20;
+static const UINT DXR_HEAP_OIDN_OUT_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 21;
+static const UINT DXR_HEAP_VARIANCE_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 22;
 // Cloud Resources (CBV + SRV) - must be contiguous for table
-static const UINT DXR_HEAP_CLOUD_CB_OFFSET = DXR_HEAP_UAV_OFFSET + 21;
-static const UINT DXR_HEAP_CLOUD_TEX_OFFSET = DXR_HEAP_UAV_OFFSET + 22;
-static const UINT DXR_HEAP_CLOUD_DETAIL_TEX_OFFSET = DXR_HEAP_UAV_OFFSET + 23;
-static const UINT DXR_HEAP_CLOUD_BAKED_TEX_OFFSET = DXR_HEAP_UAV_OFFSET + 24;
+static const UINT DXR_HEAP_CLOUD_CB_OFFSET = DXR_HEAP_UAV_OFFSET + 23;
+static const UINT DXR_HEAP_CLOUD_TEX_OFFSET = DXR_HEAP_UAV_OFFSET + 24;
+static const UINT DXR_HEAP_CLOUD_DETAIL_TEX_OFFSET = DXR_HEAP_UAV_OFFSET + 25;
+static const UINT DXR_HEAP_CLOUD_BAKED_TEX_OFFSET = DXR_HEAP_UAV_OFFSET + 26;
 // Extra debug UAV: shader counters (readback)
-static const UINT DXR_HEAP_SHADER_COUNTERS_OFFSET = DXR_HEAP_UAV_OFFSET + 25;
+static const UINT DXR_HEAP_SHADER_COUNTERS_OFFSET = DXR_HEAP_UAV_OFFSET + 27;
 static const UINT DXR_HEAP_TOTAL_COUNT =
-    DXR_HEAP_TEX_COUNT + DXR_HEAP_VB_COUNT + DXR_HEAP_IB_COUNT + 26;
+  DXR_HEAP_TEX_COUNT + DXR_HEAP_VB_COUNT + DXR_HEAP_IB_COUNT + 28;
 
 // Output texture dimensions used by DXR (kept local to module)
 static UINT s_outputWidth = 1280;
@@ -998,10 +1000,10 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   params[4].Descriptor.ShaderRegister = 2049;
   params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-  // Environment Map Descriptor Table (t0, space1)
+  // Environment Descriptor Table (t0..t2, space1): env map + importance CDFs
   static D3D12_DESCRIPTOR_RANGE envRange = {};
   envRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-  envRange.NumDescriptors = 1;
+  envRange.NumDescriptors = 3;
   envRange.BaseShaderRegister = 0;
   envRange.RegisterSpace = 1;
   envRange.OffsetInDescriptorsFromTableStart =
@@ -2481,10 +2483,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     dxrList->SetComputeRootDescriptorTable(11, cloudSRV);
   }
 
-  // Always bind IBL descriptor (even if null/empty, we bound a fallback in
-  // main.cpp)
+  // Always bind IBL descriptors (env map + importance CDFs)
   {
-    // Copy IBL descriptor from global heap to DXR local heap
+    // 1) Env map descriptor copied from global heap (allocated in main.cpp)
     D3D12_CPU_DESCRIPTOR_HANDLE dst =
         s_srvHeap->GetCPUDescriptorHandleForHeapStart();
     dst.ptr += (SIZE_T)DXR_HEAP_IBL_OFFSET *
@@ -2496,6 +2497,61 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     if (src.ptr != 0) {
       s_device->CopyDescriptorsSimple(1, dst, src,
                                       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    }
+
+    // 2) Conditional CDF (t1, space1)
+    D3D12_CPU_DESCRIPTOR_HANDLE dstConditional =
+        s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+    dstConditional.ptr +=
+        (SIZE_T)DXR_HEAP_IBL_CONDITIONAL_CDF_OFFSET *
+        s_device->GetDescriptorHandleIncrementSize(
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC condSrv = {};
+    condSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    condSrv.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    condSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    condSrv.Texture2D.MostDetailedMip = 0;
+    condSrv.Texture2D.MipLevels = 1;
+    condSrv.Texture2D.ResourceMinLODClamp = 0.0f;
+
+    if (IBLManager::Get().HasEnvImportanceData() &&
+        IBLManager::Get().GetEnvConditionalCdf().resource) {
+      condSrv.Format = IBLManager::Get().GetEnvConditionalCdf().format;
+      condSrv.Texture2D.MipLevels = IBLManager::Get().GetEnvConditionalCdf().mipLevels;
+      s_device->CreateShaderResourceView(
+          IBLManager::Get().GetEnvConditionalCdf().resource.Get(), &condSrv,
+          dstConditional);
+    } else {
+      s_device->CreateShaderResourceView(nullptr, &condSrv, dstConditional);
+    }
+
+    // 3) Marginal CDF (t2, space1)
+    D3D12_CPU_DESCRIPTOR_HANDLE dstMarginal =
+        s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+    dstMarginal.ptr +=
+        (SIZE_T)DXR_HEAP_IBL_MARGINAL_CDF_OFFSET *
+        s_device->GetDescriptorHandleIncrementSize(
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC marginalSrv = {};
+    marginalSrv.Shader4ComponentMapping =
+        D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    marginalSrv.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    marginalSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    marginalSrv.Texture2D.MostDetailedMip = 0;
+    marginalSrv.Texture2D.MipLevels = 1;
+    marginalSrv.Texture2D.ResourceMinLODClamp = 0.0f;
+
+    if (IBLManager::Get().HasEnvImportanceData() &&
+        IBLManager::Get().GetEnvMarginalCdf().resource) {
+      marginalSrv.Format = IBLManager::Get().GetEnvMarginalCdf().format;
+      marginalSrv.Texture2D.MipLevels = IBLManager::Get().GetEnvMarginalCdf().mipLevels;
+      s_device->CreateShaderResourceView(
+          IBLManager::Get().GetEnvMarginalCdf().resource.Get(), &marginalSrv,
+          dstMarginal);
+    } else {
+      s_device->CreateShaderResourceView(nullptr, &marginalSrv, dstMarginal);
     }
 
     dxrList->SetComputeRootDescriptorTable(8, s_iblGpuHandle);

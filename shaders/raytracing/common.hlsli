@@ -63,6 +63,8 @@ RWStructuredBuffer<uint> g_shaderCounters : register(u24);
 Texture2D textures[2048] : register(t1);
 // Environment Map (Latitude-Longitude) - Moved to Space 1 to avoid conflicts
 Texture2D envMap : register(t0, space1);
+Texture2D<float4> envConditionalCdf : register(t1, space1);
+Texture2D<float4> envMarginalCdf : register(t2, space1);
 Texture2D bakedClouds : register(t12, space2); // Pre-baked lat-long cloud texture (rgb + transmittance)
 SamplerState linearSampler : register(s0);
 
@@ -71,6 +73,18 @@ inline float2 DirectionToUV(float3 dir) {
     uv.x = atan2(dir.x, dir.z) / (2.0 * 3.14159265359) + 0.5;
     uv.y = acos(clamp(dir.y, -1.0, 1.0)) / 3.14159265359;
     return uv;
+}
+
+inline float3 UVToDirection(float2 uv) {
+    float phi = (uv.x - 0.5) * 2.0 * PI;
+    float theta = uv.y * PI;
+    float sinTheta = sin(theta);
+
+    float3 dir;
+    dir.x = sinTheta * sin(phi);
+    dir.y = cos(theta);
+    dir.z = sinTheta * cos(phi);
+    return normalize(dir);
 }
 
 inline float3 FresnelSchlickRoughness(float cosTheta, float3 F0, float roughness)
