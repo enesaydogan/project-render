@@ -3,6 +3,7 @@
 #include "dxr_renderer.h"
 #include "ibl_manager.h"
 #include "scene.h"
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -394,8 +395,10 @@ bool LoadScene(const std::string &path) {
         g_cameraData.up[1] = c["up"][1];
         g_cameraData.up[2] = c["up"][2];
       }
-      g_cameraData.fov = c.value("fov", 60.0f);
-      g_cameraData.intensity = c.value("intensity", 1.0f);
+        g_cameraData.fov = c.value("fov", 60.0f);
+        g_cameraData.intensity = c.value("intensity", g_cameraData.intensity);
+        g_cameraData.intensity =
+          (std::clamp)(g_cameraData.intensity, 1e-5f, 10.0f);
       g_cameraData.maxSPP = c.value("maxSPP", 1024.0f);
       g_cameraData.maxSpecularBounces = c.value("maxSpecularBounces", 3.0f);
       g_cameraData.maxRefractiveBounces = c.value("maxRefractiveBounces", 3.0f);

@@ -23,6 +23,8 @@
 #include "streamline_manager.h"
 
 #include <algorithm>
+#include <cmath>
+#include <exception>
 #include <fstream>
 #include <string>
 
@@ -106,6 +108,9 @@ static int DenoiserIndexFromMode(DxrRenderer::DenoiserMode mode) {
     return 0;
   }
 }
+
+static bool RecreateDxrPipelineSafe(UINT width, UINT height,
+                                    const char *context);
 
 // Forward declarations for helpers also used by the export job logic in
 // main.cpp
@@ -215,9 +220,11 @@ void RestoreRenderExportState() {
   DX12Context::g_streamline.SetEnabled(
       g_renderExportJob.previousStreamlineEnabled);
 
-  WaitGPUIdle();
   DxrRenderer::ResetStreamlineHistory();
-  DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
+  if (!RecreateDxrPipelineSafe(g_windowWidth, g_windowHeight,
+                               "RestoreRenderExportState")) {
+    g_currentRenderMode = RenderMode::Raster;
+  }
   DxrRenderer::ResetAccumulation();
   g_renderExportJob.active = false;
   g_renderExportJob.completionArmed = false;
@@ -317,9 +324,28 @@ void StartRenderExportJob(const std::wstring &outputPath) {
     return;
   }
 
-  WaitGPUIdle();
-  DxrRenderer::CreateRayTracingPipeline(g_renderExportJob.targetWidth,
-                                        g_renderExportJob.targetHeight);
+    if (!RecreateDxrPipelineSafe(g_renderExportJob.targetWidth,
+                   g_renderExportJob.targetHeight,
+                   "StartRenderExportJob")) {
+    g_renderExportStatus = "Failed to create DXR pipeline for export.";
+    g_cameraData.maxSPP = g_renderExportJob.previousMaxSpp;
+    g_cameraData.noiseThreshold = g_renderExportJob.previousNoiseThreshold;
+    g_cameraData.useAdaptiveSampling =
+      g_renderExportJob.previousAdaptiveSampling;
+    DxrRenderer::SetDenoiserMode(
+      DenoiserModeFromIndex(g_renderExportJob.previousDenoiserIndex));
+    g_currentRenderMode = g_renderExportJob.previousMode;
+    DX12Context::g_streamline.SetMode(
+      (StreamlineManager::Mode)g_renderExportJob.previousStreamlineMode);
+    DX12Context::g_streamline.SetQuality(
+      (StreamlineManager::Quality)
+        g_renderExportJob.previousStreamlineQuality);
+    DX12Context::g_streamline.SetEnabled(
+      g_renderExportJob.previousStreamlineEnabled);
+    g_renderExportJob.active = false;
+    UpdateCameraCB();
+    return;
+    }
   DxrRenderer::ResetAccumulation();
   UpdateCameraCB();
 
@@ -342,6 +368,30 @@ std::string WStringToUtf8(const std::wstring &ws) {
   WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), (int)ws.size(), &s[0],
                       size_needed, NULL, NULL);
   return s;
+}
+
+static bool RecreateDxrPipelineSafe(UINT width, UINT height,
+                                    const char *context) {
+  if (!g_rayTracingSupported) {
+    fprintf(stderr,
+            "DXR pipeline recreate skipped (%s): ray tracing not supported.\n",
+            context ? context : "unknown");
+    return false;
+  }
+
+  try {
+    WaitGPUIdle();
+    DxrRenderer::CreateRayTracingPipeline(width, height);
+    return true;
+  } catch (const std::exception &e) {
+    fprintf(stderr, "DXR pipeline recreate failed (%s): %s\n",
+            context ? context : "unknown", e.what());
+  } catch (...) {
+    fprintf(stderr,
+            "DXR pipeline recreate failed (%s): unknown exception\n",
+            context ? context : "unknown");
+  }
+  return false;
 }
 
 // ── Main UI draw function ───────────────────────────────────────────────────
@@ -659,7 +709,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
       }
       ImGui::Text("Near: %.2f, Far: %.2f", g_cameraData.nearZ,
                   g_cameraData.farZ);
-      ImGui::Text("Intensity: %.2f", g_cameraData.intensity);
+      ImGui::Text("Exposure Scale: %.4f", g_cameraData.intensity);
 
       ImGui::Separator();
 
@@ -685,11 +735,53 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
         }
       }
       {
+        ImGui::Text("Camera Exposure");
         bool autoExp = DxrRenderer::GetAutoExposure();
         if (ImGui::Checkbox("Auto Exposure", &autoExp)) {
           DxrRenderer::SetAutoExposure(autoExp);
           uiChanged = true;
         }
+
+        bool physicalCam = DxrRenderer::GetPhysicalCameraExposure();
+        if (ImGui::Checkbox("Physical Camera (ISO/Shutter/f)", &physicalCam)) {
+          DxrRenderer::SetPhysicalCameraExposure(physicalCam);
+          uiChanged = true;
+        }
+
+        if (!autoExp && physicalCam) {
+          if (ImGui::Button("Preset: Engine Daylight")) {
+            DxrRenderer::SetPhysicalCameraSettings(400.0f, 1.0f / 30.0f,
+                                                   2.8f);
+            uiChanged = true;
+          }
+          ImGui::SameLine();
+          if (ImGui::Button("Preset: Sunny 16")) {
+            DxrRenderer::SetPhysicalCameraSettings(100.0f, 1.0f / 125.0f,
+                                                   16.0f);
+            uiChanged = true;
+          }
+          ImGui::SameLine();
+          if (ImGui::Button("Preset: Interior")) {
+            DxrRenderer::SetPhysicalCameraSettings(800.0f, 1.0f / 15.0f, 2.8f);
+            uiChanged = true;
+          }
+
+          if (ImGui::Button("Match to Scene EV")) {
+            float sceneEV = DxrRenderer::GetCurrentEV100();
+            float iso = 100.0f;
+            float aperture = 8.0f;
+            float shutterSeconds =
+                (aperture * aperture * 100.0f) /
+                ((std::max)(0.001f, iso) * powf(2.0f, sceneEV));
+            shutterSeconds = (std::clamp)(shutterSeconds, 1.0f / 8000.0f, 30.0f);
+            DxrRenderer::SetPhysicalCameraSettings(iso, shutterSeconds,
+                                                   aperture);
+            uiChanged = true;
+          }
+          ImGui::TextDisabled(
+              "Use Match to Scene EV if image is too dark/bright.");
+        }
+
         if (autoExp) {
           float comp = DxrRenderer::GetExposureCompensation();
           if (ImGui::SliderFloat("Exposure Comp", &comp, 0.1f, 10.0f,
@@ -697,15 +789,54 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
             DxrRenderer::SetExposureCompensation(comp);
             uiChanged = true;
           }
-          ImGui::BeginDisabled();
         }
-        if (ImGui::SliderFloat("Intensity", &g_cameraData.intensity, 0.0f,
-                               5.0f)) {
-          UpdateCameraCB();
-          uiChanged = true;
-        }
-        if (autoExp) {
-          ImGui::EndDisabled();
+
+        if (!autoExp && physicalCam) {
+          float iso = 100.0f;
+          float shutterSeconds = 1.0f / 125.0f;
+          float aperture = 16.0f;
+          DxrRenderer::GetPhysicalCameraSettings(iso, shutterSeconds, aperture);
+
+          if (ImGui::SliderFloat("ISO", &iso, 25.0f, 6400.0f, "%.0f")) {
+            DxrRenderer::SetPhysicalCameraSettings(iso, shutterSeconds,
+                                                   aperture);
+            uiChanged = true;
+          }
+
+          if (ImGui::SliderFloat("Shutter (seconds)", &shutterSeconds,
+                                 1.0f / 8000.0f, 30.0f, "%.4f s",
+                                 ImGuiSliderFlags_Logarithmic)) {
+            DxrRenderer::SetPhysicalCameraSettings(iso, shutterSeconds,
+                                                   aperture);
+            uiChanged = true;
+          }
+          if (shutterSeconds <= 1.0f) {
+            ImGui::Text("~ 1/%.0f s", 1.0f / (std::max)(shutterSeconds, 1.0e-6f));
+          }
+
+          if (ImGui::SliderFloat("Aperture (f/N)", &aperture, 1.0f, 22.0f,
+                                 "f/%.1f")) {
+            DxrRenderer::SetPhysicalCameraSettings(iso, shutterSeconds,
+                                                   aperture);
+            uiChanged = true;
+          }
+
+          ImGui::Text("Camera EV100: %.2f", DxrRenderer::GetPhysicalCameraEV100());
+        } else {
+          if (autoExp) {
+            ImGui::BeginDisabled();
+          }
+          if (ImGui::SliderFloat("Manual Exposure Scale", &g_cameraData.intensity,
+                                 0.0001f, 2.0f, "%.4f",
+                                 ImGuiSliderFlags_Logarithmic)) {
+            UpdateCameraCB();
+            uiChanged = true;
+          }
+          ImGui::TextDisabled(
+              "Affects only camera exposure (post-lighting multiplier), not sun/sky light power.");
+          if (autoExp) {
+            ImGui::EndDisabled();
+          }
         }
       }
       if (ImGui::Button("Reset Camera")) {
@@ -760,6 +891,17 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
       if (iblSource == 1) {
         bool uiParamChanged = false;
 
+        bool physicalSky = IBLManager::Get().IsPhysicalCalibrationEnabled();
+        if (ImGui::Checkbox("Physical Calibration", &physicalSky)) {
+          IBLManager::Get().SetPhysicalCalibrationEnabled(physicalSky);
+          uiParamChanged = true;
+          uiChanged = true;
+        }
+        if (physicalSky) {
+          ImGui::TextDisabled(
+              "Physical mode: sky gain=1.0, sun=110000 lux, sun size=0.53 deg");
+        }
+
         float vis = IBLManager::Get().GetSkyVisibility();
         if (ImGui::SliderFloat("Visibility (km)", &vis, 10.0f, 120.0f)) {
           IBLManager::Get().SetSkyVisibility(vis);
@@ -780,6 +922,9 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
         }
 
         // Intensity Controls
+        if (physicalSky) {
+          ImGui::BeginDisabled();
+        }
         float skyInt = IBLManager::Get().GetSkyIntensity();
         if (ImGui::SliderFloat("Sky Intensity", &skyInt, 0.0f, 10.0f)) {
           IBLManager::Get().SetSkyIntensity(skyInt);
@@ -798,6 +943,9 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
           IBLManager::Get().SetSunSize(sunSize);
           // Changes analytic light radius
           uiChanged = true;
+        }
+        if (physicalSky) {
+          ImGui::EndDisabled();
         }
 
         // float elev = IBLManager::Get().GetSolarAltitude(); // Not used
@@ -978,8 +1126,8 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
           DxrRenderer::ResetStreamlineHistory();
           // DLSS uses a different internal render resolution; recreate
           // resources.
-          WaitGPUIdle();
-          DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
+          RecreateDxrPipelineSafe(g_windowWidth, g_windowHeight,
+                                  "DLSS enable toggle");
           uiChanged = true;
         }
 
@@ -1011,8 +1159,8 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
             DxrRenderer::SetRrJitterScale(0.5f);
           }
           DxrRenderer::ResetStreamlineHistory();
-          WaitGPUIdle();
-          DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
+          RecreateDxrPipelineSafe(g_windowWidth, g_windowHeight,
+                                  "DLSS mode change");
           uiChanged = true;
         }
 
@@ -1052,8 +1200,8 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
             newQ = StreamlineManager::Quality::DLAA;
           DX12Context::g_streamline.SetQuality(newQ);
           DxrRenderer::ResetStreamlineHistory();
-          WaitGPUIdle();
-          DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
+          RecreateDxrPipelineSafe(g_windowWidth, g_windowHeight,
+                                  "DLSS quality change");
         }
 
         if (ImGui::Button("Reset DLSS History")) {
@@ -1113,8 +1261,8 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
           // Recreate pipeline/resources to account for any mode-specific
           // resources and reset accumulation for stable rendering.
           DxrRenderer::ResetAccumulation();
-          WaitGPUIdle();
-          DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
+          RecreateDxrPipelineSafe(g_windowWidth, g_windowHeight,
+                                  "Denoiser mode change");
         }
 
         if (DxrRenderer::GetDenoiserMode() != DxrRenderer::DenoiserMode::Off) {
@@ -1205,19 +1353,28 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
         g_currentRenderMode = RenderMode::Raster;
       }
       ImGui::SameLine();
+      if (!g_rayTracingSupported) {
+        ImGui::BeginDisabled();
+      }
       if (ImGui::RadioButton("DXR", g_currentRenderMode == RenderMode::DXR)) {
-        g_currentRenderMode = RenderMode::DXR;
-        // Recreate raytracing pipeline to ensure output texture matches
-        // current size
-        WaitGPUIdle();
-        DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
+        if (RecreateDxrPipelineSafe(g_windowWidth, g_windowHeight,
+                                    "Render mode switch to DXR")) {
+          g_currentRenderMode = RenderMode::DXR;
+        } else {
+          g_currentRenderMode = RenderMode::Raster;
+        }
+      }
+      if (!g_rayTracingSupported) {
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::TextDisabled("(DXR unsupported)");
       }
 #ifdef _DEBUG
       // DXR debug: show UV output from RayGen
       if (ImGui::Checkbox("DXR: Show RayGen UV (debug)", &g_dxrDebugUV)) {
         // Recreate pipeline with debug define; reinitializing RT pipeline
-        WaitGPUIdle();
-        DxrRenderer::CreateRayTracingPipeline(g_windowWidth, g_windowHeight);
+        RecreateDxrPipelineSafe(g_windowWidth, g_windowHeight,
+                                "DXR debug UV toggle");
       }
       if (ImGui::Checkbox("Raster: Show UV (debug)", &g_rasterDebugUV)) {
         fprintf(stderr, "Raster: ShowUV set=%d\n", g_rasterDebugUV);

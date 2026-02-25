@@ -19,7 +19,7 @@ CameraCB g_initialCameraData = {
     1.86f,                          // aspect
     0.1f,                           // nearZ
     1000.0f,                        // farZ
-    1e-5f,                          // intensity
+    0.02f,                          // intensity (manual exposure scale default)
     0.0f,                           // frameCount
     0.0f,                           // lightCount
     3.0f,                           // maxSpecularBounces

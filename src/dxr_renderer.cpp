@@ -49,7 +49,11 @@ static float s_rrJitterScale = 0.5f;
 
 static bool s_autoExposure = true;
 static float s_exposureCompensation = 1.0f;
-static float s_smoothedExposure = 1e-5f; // New: persistent smoothed exposure
+static float s_smoothedExposure = 0.02f; // persistent smoothed exposure
+static bool s_physicalCameraExposure = true;
+static float s_cameraIso = 400.0f;
+static float s_cameraShutterSeconds = 1.0f / 30.0f;
+static float s_cameraApertureFNumber = 2.8f;
 
 // When DLSS-RR is active we don't use the accumulation buffer; track a
 // still-frame SPP count separately so maxSPP can still freeze rendering.
@@ -430,6 +434,30 @@ void SetExposureCompensation(float comp) {
   }
 }
 float GetExposureCompensation() { return s_exposureCompensation; }
+void SetPhysicalCameraExposure(bool enable) {
+  s_physicalCameraExposure = enable;
+  s_hasTonemappedFrame = false;
+}
+bool GetPhysicalCameraExposure() { return s_physicalCameraExposure; }
+void SetPhysicalCameraSettings(float iso, float shutterSeconds,
+                               float apertureFNumber) {
+  s_cameraIso = (std::max)(iso, 1.0f);
+  s_cameraShutterSeconds = (std::max)(shutterSeconds, 1.0f / 8000.0f);
+  s_cameraApertureFNumber = (std::max)(apertureFNumber, 0.7f);
+  s_hasTonemappedFrame = false;
+}
+void GetPhysicalCameraSettings(float &iso, float &shutterSeconds,
+                               float &apertureFNumber) {
+  iso = s_cameraIso;
+  shutterSeconds = s_cameraShutterSeconds;
+  apertureFNumber = s_cameraApertureFNumber;
+}
+float GetPhysicalCameraEV100() {
+  float safeIso = (std::max)(s_cameraIso, 1.0f);
+  float safeShutter = (std::max)(s_cameraShutterSeconds, 1.0e-6f);
+  float safeAperture = (std::max)(s_cameraApertureFNumber, 0.7f);
+  return log2f((safeAperture * safeAperture / safeShutter) * (100.0f / safeIso));
+}
 
 static void EnsureNoiseStatsPipeline();
 static void EnsureAvgLumPipeline();
@@ -3281,10 +3309,21 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         targetExposure = g_cameraData.intensity;
       }
     } else {
-      // Manual mode: use whatever is in g_cameraData.intensity
-      // Reset smoothed exposure so it's ready when switching back
-      s_smoothedExposure = g_cameraData.intensity;
-      targetExposure = g_cameraData.intensity;
+      // Manual mode
+      if (s_physicalCameraExposure) {
+        // Exposure scale from camera EV100.
+        // Calibration constant 1.2 is commonly used for scene-referred HDR.
+        const float ev100 = GetPhysicalCameraEV100();
+        targetExposure =
+            (1.0f / (1.2f * powf(2.0f, ev100))) * s_exposureCompensation;
+        targetExposure = (std::max)(targetExposure, 1e-20f);
+        g_cameraData.intensity = targetExposure;
+      } else {
+        targetExposure = g_cameraData.intensity;
+      }
+
+      // Keep smoothed state aligned when switching between modes.
+      s_smoothedExposure = targetExposure;
     }
 
     tc.exposure = targetExposure;

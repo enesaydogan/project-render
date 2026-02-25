@@ -113,6 +113,13 @@ void SetAutoExposure(bool enable);
 bool GetAutoExposure();
 void SetExposureCompensation(float comp);
 float GetExposureCompensation();
+void SetPhysicalCameraExposure(bool enable);
+bool GetPhysicalCameraExposure();
+void SetPhysicalCameraSettings(float iso, float shutterSeconds,
+                               float apertureFNumber);
+void GetPhysicalCameraSettings(float &iso, float &shutterSeconds,
+                               float &apertureFNumber);
+float GetPhysicalCameraEV100();
 
 // Exports the latest tonemapped DXR frame to a PNG file.
 // The PNG is lossless (maximum quality by format design).
