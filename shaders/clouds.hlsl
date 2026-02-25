@@ -177,9 +177,11 @@ float SampleDensity(float3 p, float lod) {
     
     // Coverage should map naturally from clear sky (0) to overcast (1).
     float effectiveCoverage = saturate(CloudCB.coverage);
+    // Perceptual remap: make low-mid slider values produce visible cloud amount.
+    float coverageLinear = pow(effectiveCoverage, 0.65f);
     // High threshold at low coverage removes most clouds; low threshold at high
     // coverage produces overcast-like fill.
-    float densityThreshold = lerp(0.9f, 0.05f, effectiveCoverage);
+    float densityThreshold = lerp(0.93f, 0.04f, coverageLinear);
 
     // Standard Schneider remap:
     float covRemap = Remap(baseCloud, densityThreshold, 1.0f, 0.0f, 1.0f);
@@ -196,8 +198,8 @@ float SampleDensity(float3 p, float lod) {
     float weatherNoise = NoiseTex.SampleLevel(LinearWrapSampler, float3(weatherUV, 0.5f), lod + 2.0).r;
     
     // Sync weather mask with coverage so we don't punch holes in "full" coverage
-    // Use effectiveCoverage here to ensure consistency
-    float weatherThreshold = lerp(0.85f, 0.0f, effectiveCoverage);
+    // Use remapped coverage here for consistent visual response.
+    float weatherThreshold = lerp(0.88f, 0.0f, coverageLinear);
     float weatherBias = (weatherNoise - 0.5f) * (0.35f * saturate(CloudCB.coverageVariation));
     weatherThreshold = saturate(weatherThreshold + weatherBias);
     // Smoother transition for weather mask to avoid hard cloud cuts

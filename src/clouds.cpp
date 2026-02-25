@@ -210,34 +210,34 @@ float WorleyFBM(float x, float y, float z, int c0, int c1, int c2,
 CloudParams MakeDefaultCloudParams() {
   CloudParams p = {};
 
-  // Defaults tuned for archviz-friendly cumulus (less smoky, more defined).
-  p.density = 2.4f;
-  p.absorption = 0.65f;
-  p.coverage = 0.20f;
-  p.scattering = 0.90f;
-  p.steps = 96;
-  p.sunIntensity = 1.2f;
+  // Baked-cloud quality defaults (higher fidelity than old real-time profile).
+  p.density = 2.8f;
+  p.absorption = 0.72f;
+  p.coverage = 0.28f;
+  p.scattering = 0.88f;
+  p.steps = 128;
+  p.sunIntensity = 1.35f;
   p.cloudTop = 1000.0f;
   p.cloudBottom = 300.0f;
-  p.windSpeed = 0.01f;
+  p.windSpeed = 0.012f;
 
-  p.baseScale = 0.00035f;
-  p.detailScale = 0.01000f;
-  p.coverageScale = 0.00080f;
-  p.coverageVariation = 0.25f; // From slider
-  p.erosion = 0.90f;
-  p.warpStrength = 1.00f;
-  p.shapePower = 1.85f;
-  p.powderStrength = 0.45f;
+  p.baseScale = 0.00028f;
+  p.detailScale = 0.00900f;
+  p.coverageScale = 0.00055f;
+  p.coverageVariation = 0.45f;
+  p.erosion = 0.82f;
+  p.warpStrength = 1.20f;
+  p.shapePower = 2.10f;
+  p.powderStrength = 0.72f;
 
-  p.shadowSteps = 6;
-  p.shadowStepSize = 180.0f;
-  p.shadowLod = 2.0f;
+  p.shadowSteps = 10;
+  p.shadowStepSize = 140.0f;
+  p.shadowLod = 1.5f;
 
-  p.maxSteps = 192;
-  p.verticalStepMeters = 30.0f;
-  p.shadowEvery = 6;
-  p.shadowDensityThreshold = 0.06f;
+  p.maxSteps = 320;
+  p.verticalStepMeters = 18.0f;
+  p.shadowEvery = 3;
+  p.shadowDensityThreshold = 0.035f;
 
   p.timeSeconds = 0.0f;
   p._pad = {0, 0, 0};
