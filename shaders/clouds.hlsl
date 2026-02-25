@@ -153,9 +153,24 @@ float SampleDensity(float3 p, float lod) {
     // Base R is Channel-Packed Perlin-Worley from C++ generation
     float baseCloud = NoiseTex.SampleLevel(LinearWrapSampler, noiseCoord, lod).r;
     
-    // 3. Density Gradient
+    // 3. Density Gradient + Cloud Type Profile
     float heightGrad = HeightGradient(heightPct);
-    baseCloud *= heightGrad;
+
+    // Spatial cloud type field: 0 = puffy cumulus, 1 = flatter stratiform.
+    float typeNoise = NoiseTex.SampleLevel(
+        LinearWrapSampler,
+        noiseCoord * 0.23f + float3(0.0f, CloudCB.timeSeconds * 0.0002f, 0.0f),
+        lod + 2.0f).g;
+    float typeBlend = saturate(CloudCB.coverageVariation) * smoothstep(0.30f, 0.80f, typeNoise);
+
+    float cumulusProfile = pow(saturate(heightGrad), max(0.35f, CloudCB.shapePower));
+    float stratusProfile = smoothstep(0.0f, 0.08f, heightPct) * smoothstep(0.65f, 0.30f, heightPct);
+    float verticalProfile = lerp(cumulusProfile, stratusProfile, typeBlend);
+    baseCloud *= verticalProfile;
+
+    // Shape curve: keep cumulus a bit punchier, stratus a bit softer.
+    float shapeCurve = lerp(1.15f, 0.90f, typeBlend);
+    baseCloud = pow(saturate(baseCloud), shapeCurve);
 
     // 4. Coverage
     // Apply coverage by eroding the density signal
@@ -183,8 +198,11 @@ float SampleDensity(float3 p, float lod) {
     // Sync weather mask with coverage so we don't punch holes in "full" coverage
     // Use effectiveCoverage here to ensure consistency
     float weatherThreshold = lerp(0.85f, 0.0f, effectiveCoverage);
+    float weatherBias = (weatherNoise - 0.5f) * (0.35f * saturate(CloudCB.coverageVariation));
+    weatherThreshold = saturate(weatherThreshold + weatherBias);
     // Smoother transition for weather mask to avoid hard cloud cuts
-    float weatherMask = smoothstep(weatherThreshold - 0.2f, weatherThreshold + 0.2f, weatherNoise);
+    float weatherWidth = lerp(0.12f, 0.30f, saturate(CloudCB.coverageVariation));
+    float weatherMask = smoothstep(weatherThreshold - weatherWidth, weatherThreshold + weatherWidth, weatherNoise);
     baseCloud *= weatherMask;
 
     // 6. Detail Erosion (High Frequency)
@@ -197,12 +215,14 @@ float SampleDensity(float3 p, float lod) {
         float3 detailNoise = DetailTex.SampleLevel(LinearWrapSampler, detailPos, lod).rgb;
         float highFreqFBM = detailNoise.r * 0.625 + detailNoise.g * 0.25 + detailNoise.b * 0.125;
         
-        // Erode edges more than center
-        float modifier = lerp(highFreqFBM, 1.0 - highFreqFBM, saturate(heightPct * 5.0)); // Invert at bottom?
+        // Directional erosion adds wind-sheared edge complexity.
+        float modifier = lerp(highFreqFBM, 1.0 - highFreqFBM, saturate(heightPct * 5.0));
+        float windPhase = 0.5f + 0.5f * sin(dot(detailPos.xz, float2(0.11f, 0.07f)) + CloudCB.timeSeconds * CloudCB.windSpeed * 0.05f);
+        float directionalErosion = lerp(highFreqFBM, modifier, windPhase);
         
         // Remap density based on detail
-        float erosion = CloudCB.erosion * 0.5; // Scale erosion
-        baseCloud = Remap(baseCloud, highFreqFBM * erosion, 1.0, 0.0, 1.0);
+        float erosion = CloudCB.erosion * lerp(0.35f, 0.75f, 1.0f - typeBlend);
+        baseCloud = Remap(baseCloud, directionalErosion * erosion, 1.0, 0.0, 1.0);
     }
     
     return saturate(baseCloud) * CloudCB.density;
@@ -295,9 +315,10 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
     float3 sum = float3(0,0,0);
     float transmittance = 1.0f;
     
-    // Phase Function
+    // Phase Function (sun-angle aware)
     float cosAngle = dot(rayDir, sunDir);
-    float phase = PhaseHG(cosAngle, CloudCB.scattering);
+    float basePhaseG = clamp(CloudCB.scattering, -0.95f, 0.95f);
+    float sunElevation = saturate(sunDir.y * 0.5f + 0.5f);
 
     // Setup Ambient Color
     float3 ambientSkyColor = float3(0.0, 0.0, 0.0);
@@ -373,7 +394,9 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
             // 1. Direct Sun (with shadow ray)
             
             // Stabilize cloud sun term against post-lighting exposure scaling.
-            float3 sunColorScaled = lightColor * (0.000025f * sunExposureComp);
+            float sunset = saturate((0.35f - sunElevation) / 0.35f);
+            float3 sunsetTint = lerp(float3(1.0f, 1.0f, 1.0f), float3(1.0f, 0.86f, 0.72f), sunset * 0.7f);
+            float3 sunColorScaled = lightColor * (0.000025f * sunExposureComp) * sunsetTint;
 
             float shadowTerm = shadowTermCached;
             if (density > CloudCB.shadowDensityThreshold) {
@@ -401,10 +424,15 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
                shadowTerm = 1.0f;
             }
             
-            // Powder effect: Darken edges facing away from sun, brighten edges facing sun?
-            // Simple Beer-Powder approximation for realism
-            float powder = 1.0f - exp(-density * 2.0f);
-            float directLight = shadowTerm * phase * lerp(1.0f, 2.0f * powder, 0.5f);
+            // Sun-angle + density dependent phase keeps silver-lining and avoids flat shading.
+            float gLocal = clamp(basePhaseG + lerp(0.03f, 0.14f, denseMask), -0.95f, 0.93f);
+            float phaseLocal = PhaseHG(cosAngle, gLocal);
+            float backScatter = pow(saturate(-cosAngle), 2.0f) * (1.0f - sunElevation) * 0.18f;
+            phaseLocal += backScatter;
+
+            // Beer-powder approximation (user-controlled via powderStrength)
+            float powder = 1.0f - exp(-density * (1.5f + 1.5f * CloudCB.powderStrength));
+            float directLight = shadowTerm * phaseLocal * lerp(1.0f, 1.0f + 1.8f * CloudCB.powderStrength * powder, 0.65f);
             
             // 2. Ambient Light
             // Height based gradient
@@ -416,11 +444,20 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
             ambient *= exp(-density * 1.0f);
             ambient *= 0.6f;
 
+            // Ground bounce gives cloud bottoms warmer/filled response.
+            float groundWeight = (1.0f - saturate(hPct)) * (0.35f + 0.65f * denseMask);
+            float3 groundBounce = kSkyHorizon * (0.12f * groundWeight);
+            ambient += groundBounce;
+
             // Prevent full-black cloud silhouettes under low ambient exposure.
             float3 ambientFloor = 0.02f * (kSkyZenith + kSkyHorizon) * 0.5f;
             ambient = max(ambient, ambientFloor);
             
-            float3 source = (CloudCB.sunIntensity * directLight * sunColorScaled) + ambient;
+            float shadowOcclusion = 1.0f - shadowTerm;
+            float msStep = (1.0f - stepTrans) * shadowOcclusion;
+            float3 multiScatter = ambient * (0.55f * CloudCB.powderStrength * msStep);
+
+            float3 source = (CloudCB.sunIntensity * directLight * sunColorScaled) + ambient + multiScatter;
             source = max(source, 0.0);
             
             // Integation: Energy = Source * Density * (Integral of T over step)
@@ -446,11 +483,16 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
 #endif
     sum *= cloudLightBoost;
 
-    // Cheap multiple-scattering floor, biased toward dense cores only.
+    // Multiple-scattering tail (dense-core weighted, sky/sun tinted).
     float opacity = 1.0f - saturate(transmittance);
-    float denseCore = pow(saturate(opacity), 1.8f);
-    float3 msFloor = 0.022f * denseCore * (kSkyHorizon + kSkyZenith) * 0.5f;
-    sum += msFloor;
+    float denseCore = pow(saturate(opacity), 1.7f);
+    float sunset = saturate((0.35f - sunElevation) / 0.35f);
+    float3 msSkyTint = lerp(kSkyHorizon, kSkyZenith, 0.35f);
+    float3 msSunTint = lightColor * (0.000018f * sunExposureComp) *
+                       lerp(float3(1.0f, 1.0f, 1.0f), float3(1.0f, 0.85f, 0.70f), sunset * 0.7f);
+    float3 msColor = lerp(msSkyTint, msSunTint, 0.38f);
+    float msStrength = 0.012f + 0.030f * CloudCB.powderStrength;
+    sum += msColor * (msStrength * denseCore);
 
     sum = clamp(sum, 0.0, 64.0);
     transmittance = saturate(transmittance);
