@@ -68,6 +68,9 @@ public:
   float GetObserverAltitude() const { return m_altitude; }
 
   void SetSkyIntensity(float v) {
+    if (m_physicalCalibrationEnabled) {
+      return;
+    }
     if (m_skyIntensity != v) {
       m_skyIntensity = v;
       m_skyDirty = true;
@@ -76,6 +79,9 @@ public:
   float GetSkyIntensity() const { return m_skyIntensity; }
 
   void SetSunIntensity(float v) {
+    if (m_physicalCalibrationEnabled) {
+      return;
+    }
     if (m_sunIntensity != v) {
       m_sunIntensity = v;
       m_skyDirty = true;
@@ -87,12 +93,20 @@ public:
 
   // Core members
   void SetSunSize(float degrees) {
+    if (m_physicalCalibrationEnabled) {
+      return;
+    }
     if (m_sunSize != degrees) {
       m_sunSize = degrees;
       m_skyDirty = true;
     }
   }
   float GetSunSize() const { return m_sunSize; }
+
+  void SetPhysicalCalibrationEnabled(bool enabled);
+  bool IsPhysicalCalibrationEnabled() const {
+    return m_physicalCalibrationEnabled;
+  }
 
   Asset::Texture &GetEnvMap() { return m_envMap; }
   bool IsLoaded() const { return m_envMap.resource != nullptr; }
@@ -146,4 +160,9 @@ private:
   float m_skyIntensity = 5.0f; //boost sky to balance sun
   float m_sunIntensity = 10000.0f; //reduce default intensity
   float m_sunSize = 1.5f; // degrees (actual sun size is ~0.5 deg)
+  bool m_physicalCalibrationEnabled = false;
+
+  static constexpr float kPhysicalSkyIntensity = 1.0f;
+  static constexpr float kPhysicalSunIntensityLux = 110000.0f;
+  static constexpr float kPhysicalSunSizeDeg = 0.53f;
 };

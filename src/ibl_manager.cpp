@@ -47,6 +47,20 @@ bool IBLManager::Initialize(ID3D12Device *device, ID3D12CommandQueue *queue) {
   return true;
 }
 
+void IBLManager::SetPhysicalCalibrationEnabled(bool enabled) {
+  if (m_physicalCalibrationEnabled == enabled) {
+    return;
+  }
+
+  m_physicalCalibrationEnabled = enabled;
+  if (m_physicalCalibrationEnabled) {
+    m_skyIntensity = kPhysicalSkyIntensity;
+    m_sunIntensity = kPhysicalSunIntensityLux;
+    m_sunSize = kPhysicalSunSizeDeg;
+    m_skyDirty = true;
+  }
+}
+
 bool IBLManager::LoadEnvironmentMap(const std::string &path) {
   if (!m_device)
     return false;
@@ -116,7 +130,8 @@ void IBLManager::UpdateSkyModel() {
 void IBLManager::SetIBLSource(IBLSource source) {
   if (m_source != source) {
     // if we are leaving file-based IBL, restore cached sun parameters
-    if (m_source == IBLSource::File && m_savedSunValid) {
+    if (m_source == IBLSource::File && m_savedSunValid &&
+        !m_physicalCalibrationEnabled) {
       m_sunIntensity = m_savedSunIntensity;
       m_sunSize = m_savedSunSize;
       m_savedSunValid = false;
@@ -143,6 +158,11 @@ void IBLManager::SetIBLSource(IBLSource source) {
       }
     } else {
       if (m_skyInitialized) {
+        if (m_physicalCalibrationEnabled) {
+          m_skyIntensity = kPhysicalSkyIntensity;
+          m_sunIntensity = kPhysicalSunIntensityLux;
+          m_sunSize = kPhysicalSunSizeDeg;
+        }
         if (m_skyDirty || !m_proceduralTexture.resource) {
           UpdateTextureFromSkyModel();
         }
@@ -349,7 +369,8 @@ void IBLManager::UpdateTextureFromSkyModel() {
   const double solarAzi = m_solarAzimuth;
   const double visibility = m_visibility;
   const double albedo = m_albedo;
-  const float skyIntensity = m_skyIntensity;
+  const float skyIntensity =
+      m_physicalCalibrationEnabled ? kPhysicalSkyIntensity : m_skyIntensity;
 
   std::vector<std::thread> threads;
   threads.reserve(numThreads);
