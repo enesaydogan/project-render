@@ -373,19 +373,16 @@ void IBLManager::UpdateTextureFromSkyModel() {
 
           PragueSkyModel::Vector3 viewDir = {dx, dz, dy};
 
-          if (dy < -0.01) {
-            // Calibrated ground radiance (placeholder for dark soil/grass)
-            // Approx 0.05 * sky brightness or a dark constant in cd/m2
-            const float groundRadiance = 100.0f;
-            pixels[(y * width + x) * 4 + 0] = groundRadiance;
-            pixels[(y * width + x) * 4 + 1] = groundRadiance;
-            pixels[(y * width + x) * 4 + 2] = groundRadiance;
-            pixels[(y * width + x) * 4 + 3] = 1.0f;
-            continue;
+          // For lower hemisphere, mirror the direction across the horizon so
+          // we can derive physically plausible ground illumination from sky
+          // radiance instead of using a black/constant placeholder.
+          PragueSkyModel::Vector3 sampleDir = viewDir;
+          if (sampleDir.z < 0.0) {
+            sampleDir.z = -sampleDir.z;
           }
 
           auto params = skyModel->computeParameters(
-              viewpoint, viewDir, solarElev, solarAzi, visibility, albedo);
+              viewpoint, sampleDir, solarElev, solarAzi, visibility, albedo);
 
           float X = 0, Y = 0, Z = 0;
           for (float l = startLambda; l <= endLambda; l += stepLambda) {
@@ -400,6 +397,35 @@ void IBLManager::UpdateTextureFromSkyModel() {
 
           float r, g, b;
           XYZtoRGB(X, Y, Z, r, g, b);
+
+          // Lower hemisphere: approximate earth as Lambertian reflector lit by
+          // sky dome. This keeps ground values in a realistic range relative to
+          // the sky and avoids exposure bias from a pitch-black nadir.
+          if (dy < 0.0) {
+            const float PI_F = 3.14159265359f;
+            const float groundAlbedo = std::clamp((float)albedo, 0.02f, 0.95f);
+            const float reflectance = groundAlbedo / PI_F;
+
+            // Earth/soil tint blended with neutral so user albedo still drives
+            // brightness while color remains plausible outdoors.
+            const float earthR = 0.36f;
+            const float earthG = 0.30f;
+            const float earthB = 0.24f;
+            const float tintStrength = 0.65f;
+
+            float gr = std::max(0.0f, r) * reflectance *
+                       ((1.0f - tintStrength) + tintStrength * earthR);
+            float gg = std::max(0.0f, g) * reflectance *
+                       ((1.0f - tintStrength) + tintStrength * earthG);
+            float gb = std::max(0.0f, b) * reflectance *
+                       ((1.0f - tintStrength) + tintStrength * earthB);
+
+            // Smooth blend around the horizon to avoid a hard seam.
+            float horizonBlend = std::clamp((float)(-dy) / 0.08f, 0.0f, 1.0f);
+            r = r * (1.0f - horizonBlend) + gr * horizonBlend;
+            g = g * (1.0f - horizonBlend) + gg * horizonBlend;
+            b = b * (1.0f - horizonBlend) + gb * horizonBlend;
+          }
 
           if (x == width / 2 && y == height / 2) {
             std::cout << "[DEBUG] Center RGB: " << r << ", " << g << ", " << b
