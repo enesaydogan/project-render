@@ -40,6 +40,8 @@ cbuffer CameraCB : register(b0)
     float useAdaptiveSampling;
     float debugVisualizationMode;
     float cloudRenderingEnabled;
+    float iblRotationDegrees;
+    float3 _cameraPadEnd;
 };
 
 Texture2D envMap : register(t0, space1);
@@ -59,6 +61,7 @@ float2 DirectionToUV(float3 dir) {
     float2 uv;
     uv.x = atan2(dir.x, dir.z) / (2.0 * 3.14159265) + 0.5;
     uv.y = acos(dir.y) / 3.14159265;
+    uv.x = frac(uv.x + (iblRotationDegrees / 360.0));
     return uv;
 }
 

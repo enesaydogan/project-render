@@ -45,6 +45,8 @@ struct CameraCB {
   float useAdaptiveSampling;
   float debugVisualizationMode;
   float cloudRenderingEnabled;
+  float iblRotationDegrees;
+  float _cameraPadEnd[3];
 };
 
 // Camera state (defined in camera.cpp)

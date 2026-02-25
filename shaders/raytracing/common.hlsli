@@ -128,6 +128,14 @@ cbuffer Camera : register(b0)
     float useAdaptiveSampling;
     float debugVisualizationMode; // 0=None, 1=NoiseMap
     float cloudRenderingEnabled;
+    float iblRotationDegrees;
+    float3 _cameraPadEnd;
+}
+
+inline float2 DirectionToUVRotated(float3 dir) {
+    float2 uv = DirectionToUV(dir);
+    uv.x = frac(uv.x + (iblRotationDegrees / 360.0));
+    return uv;
 }
 
 struct MaterialData

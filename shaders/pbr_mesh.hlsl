@@ -23,6 +23,24 @@ cbuffer CameraCB : register(b0)
     float4 lightDir; // xyz = direction towards light
     float4 lightColor; // rgb + intensity in .w
     float4 ambientColor; // rgb + weight in .w
+
+    // Keep layout aligned with src/camera.h for trailing fields.
+    float3 prevPos;
+    float prevValid;
+    float3 prevForward;
+    float dlssEnabled;
+    float3 prevUp;
+    float dlssRayReconstruction;
+    float prevFov;
+    float prevAspect;
+    float prevNearZ;
+    float prevFarZ;
+    float noiseThreshold;
+    float useAdaptiveSampling;
+    float debugVisualizationMode;
+    float cloudRenderingEnabled;
+    float iblRotationDegrees;
+    float3 _cameraPadEnd;
 };
 
 cbuffer WorldCB : register(b2)
@@ -53,6 +71,7 @@ float2 DirectionToUV(float3 dir) {
     float2 uv;
     uv.x = atan2(dir.x, dir.z) / (2.0 * 3.14159265) + 0.5;
     uv.y = acos(clamp(dir.y, -1.0, 1.0)) / 3.14159265;
+    uv.x = frac(uv.x + (iblRotationDegrees / 360.0));
     return uv;
 }
 

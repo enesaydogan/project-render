@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -372,13 +373,28 @@ void IBLManager::UpdateTextureFromSkyModel() {
   const float skyIntensity =
       m_physicalCalibrationEnabled ? kPhysicalSkyIntensity : m_skyIntensity;
 
+  double globalSkyLumSum = 0.0;
+  double globalSkyLumMax = 0.0;
+  double globalHorizonLumSum = 0.0;
+  unsigned long long globalSkyLumCount = 0;
+  unsigned long long globalHorizonLumCount = 0;
+  std::mutex statsMutex;
+
   std::vector<std::thread> threads;
   threads.reserve(numThreads);
 
   for (unsigned t = 0; t < numThreads; ++t) {
     int y0 = (int)std::min<unsigned>(t * chunk, height);
     int y1 = (int)std::min<unsigned>((t + 1) * chunk, height);
-    threads.emplace_back([=, &pixels]() {
+    threads.emplace_back([=, &pixels, &globalSkyLumSum, &globalSkyLumMax,
+                          &globalHorizonLumSum, &globalSkyLumCount,
+                          &globalHorizonLumCount, &statsMutex]() {
+      double localSkyLumSum = 0.0;
+      double localSkyLumMax = 0.0;
+      double localHorizonLumSum = 0.0;
+      unsigned long long localSkyLumCount = 0;
+      unsigned long long localHorizonLumCount = 0;
+
       for (int y = y0; y < y1; ++y) {
         for (int x = 0; x < (int)width; ++x) {
           float u = (float)x / (float)width;
@@ -418,6 +434,19 @@ void IBLManager::UpdateTextureFromSkyModel() {
 
           float r, g, b;
           XYZtoRGB(X, Y, Z, r, g, b);
+
+          // Keep physical luminance diagnostics from the original sky model
+          // output (before lower hemisphere replacement).
+          if (dy >= 0.0) {
+            float lum = (std::max)(0.0f, Y);
+            localSkyLumSum += lum;
+            localSkyLumMax = (std::max)(localSkyLumMax, (double)lum);
+            ++localSkyLumCount;
+            if (dy < 0.1) {
+              localHorizonLumSum += lum;
+              ++localHorizonLumCount;
+            }
+          }
 
           // Lower hemisphere: approximate earth as Lambertian reflector lit by
           // sky dome. This keeps ground values in a realistic range relative to
@@ -459,11 +488,30 @@ void IBLManager::UpdateTextureFromSkyModel() {
           pixels[(y * width + x) * 4 + 3] = 1.0f;
         }
       }
+
+      {
+        std::lock_guard<std::mutex> lock(statsMutex);
+        globalSkyLumSum += localSkyLumSum;
+        globalSkyLumMax = (std::max)(globalSkyLumMax, localSkyLumMax);
+        globalHorizonLumSum += localHorizonLumSum;
+        globalSkyLumCount += localSkyLumCount;
+        globalHorizonLumCount += localHorizonLumCount;
+      }
     });
   }
 
   for (auto &th : threads)
     th.join();
+
+  m_dbgSkyAvgLuminanceCdM2 =
+      (globalSkyLumCount > 0)
+          ? (float)(globalSkyLumSum / (double)globalSkyLumCount)
+          : 0.0f;
+  m_dbgSkyHorizonLuminanceCdM2 =
+      (globalHorizonLumCount > 0)
+          ? (float)(globalHorizonLumSum / (double)globalHorizonLumCount)
+          : 0.0f;
+  m_dbgSkyMaxLuminanceCdM2 = (float)globalSkyLumMax;
 
   CreateTexFromData(m_device.Get(), m_queue.Get(), width, height, pixels,
                     m_proceduralTexture);
