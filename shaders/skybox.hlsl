@@ -128,10 +128,5 @@ float4 PSMain(PSInput input) : SV_TARGET {
         composed = baked.rgb + color * baked.a;
     }
 
-    // ACES Tone Mapping
-    composed = ToneMap(composed);
-    // Gamma correction
-    composed = pow(composed, 1.0/2.2);
-    
     return float4(composed, 1.0);
 }

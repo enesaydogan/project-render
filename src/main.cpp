@@ -1481,8 +1481,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
          DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),
          D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
-      FLOAT clearColor[] = {0.1f, 0.1f, 0.12f, 1.0f};
-      DX12Context::g_commandList->ClearRenderTargetView(rtvHandle, clearColor,
+      D3D12_CPU_DESCRIPTOR_HANDLE rasterRtv = rtvHandle;
+      bool rasterHdrReady = RasterRenderer::PrepareHdrRenderTarget(
+          DX12Context::g_device.Get(), DX12Context::g_commandList.Get(),
+          DX12Context::g_windowWidth, DX12Context::g_windowHeight, &rasterRtv);
+
+      FLOAT clearColor[] = {0.0f, 0.0f, 0.0f, 1.0f};
+      DX12Context::g_commandList->ClearRenderTargetView(rasterRtv, clearColor,
                                                         0, nullptr);
 
       // Clear depth buffer
@@ -1500,7 +1505,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       }
 
       // No demo triangle; ensure render target is bound for subsequent draws
-      DX12Context::g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE,
+      DX12Context::g_commandList->OMSetRenderTargets(1, &rasterRtv, FALSE,
                                                      &dsvHandle);
 
       // Bind global descriptor heap once for all raster calls
@@ -1537,7 +1542,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         DX12Context::g_commandList->IASetPrimitiveTopology(
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         // Ensure render targets are set for mesh rendering
-        DX12Context::g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE,
+        DX12Context::g_commandList->OMSetRenderTargets(1, &rasterRtv, FALSE,
                                                        &dsvHandle);
         // Use camera constant buffer for mesh rendering
         if (g_cameraConstantBuffer) {
@@ -1660,6 +1665,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           }
         }
       }
+
+      if (rasterHdrReady) {
+        RasterRenderer::TonemapHdrToBackbuffer(
+            DX12Context::g_device.Get(), DX12Context::g_commandList.Get(),
+            DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),
+            DX12Context::g_windowWidth, DX12Context::g_windowHeight);
+      }
+
       DxrRenderer::EndFrameProfiling(DX12Context::g_commandList.Get());
       break;
     }
@@ -1674,6 +1687,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
          g_exportRenderTargetState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
       g_exportRenderTargetState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     }
+
+    // Ensure UI always targets the swapchain backbuffer RTV.
+    DX12Context::g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE,
+                             nullptr);
 
     ID3D12DescriptorHeap *ppHeaps[] = {g_cbvSrvAllocator.Heap()};
     DX12Context::g_commandList->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
