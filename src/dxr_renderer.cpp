@@ -3099,22 +3099,45 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         const UINT gridH = (s_outputHeight + stride - 1) / stride;
         const UINT total = gridW * gridH;
         double sumLogLum = 0.0;
+        double sumLum = 0.0;
         UINT count = 0;
         // The buffer might be larger from a previous resolution
-        const UINT limit =
-            (std::min)(total, (UINT)(s_avgLumReadbackBuffer->GetDesc().Width /
-                                     sizeof(float)));
+        // desc.Width contains total * sizeof(float) * 2
+        const UINT maxFloats = (UINT)(s_avgLumReadbackBuffer->GetDesc().Width / sizeof(float));
+        // We read pairs, so limit the loop to half the floats
+        const UINT limit = (std::min)(total, maxFloats / 2);
+
         for (UINT i = 0; i < limit; ++i) {
-          float v = data[i];
-          // Since we store log(max(luminance, 1e-4)), v should be finite.
-          if (std::isfinite(v)) {
-            sumLogLum += v;
+          float logVal = data[i * 2 + 0];
+          float lumVal = data[i * 2 + 1];
+
+          if (std::isfinite(logVal) && std::isfinite(lumVal)) {
+            sumLogLum += logVal;
+            sumLum += lumVal;
             ++count;
           }
         }
-        // Geometric mean (log-average)
-        s_avgLuminanceCdM2 =
-            (count > 0) ? expf((float)(sumLogLum / count)) : 0.0f;
+        
+        float avgLog = (count > 0) ? expf((float)(sumLogLum / count)) : 0.0f;
+        float avgLin = (count > 0) ? (float)(sumLum / count) : 0.0f;
+
+        // Use a weighted blend to prevent scenes with bright lights from exploding.
+        // If Arithmetic mean is much higher than Geometric, it means high variance (bright lights).
+        // Bias towards Arithmetic mean in that case to reduce exposure but not completely define it by the sun.
+        // A common trick is to use a high percentile, or blend.
+        // For now, let's use a conservative approach:
+        // Use Geometric Mean as base, but blend in Arithmetic Mean if the difference is huge.
+        // Also clamp the minimum luminance to avoid divergence in dark scenes.
+        float targetLum = avgLog;
+        if (avgLin > avgLog * 10.0f) {
+            // Significant variance (fireflies or sun). Pull the average up towards linear to reduce exposure.
+            targetLum = avgLog * 0.2f + avgLin * 0.8f; 
+        } else {
+            targetLum = avgLog;
+        }
+
+        s_avgLuminanceCdM2 = (std::max)(targetLum, 1e-4f);
+
 
         if (s_avgLuminanceCdM2 > 1e-6f) {
           // EV100 = log2(L / 0.125) = log2(L * 8)
@@ -3126,14 +3149,16 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       }
 
       // 2. Grow buffers if needed
+      // Buffer stores pairs of floats: {logLuminance, luminance}
       const UINT stride = 8;
       const UINT gridW = (s_outputWidth + stride - 1) / stride;
       const UINT gridH = (s_outputHeight + stride - 1) / stride;
       const UINT total = gridW * gridH;
+      // Capacity check needs to account for 2 floats per element
       if (total > s_avgLumCapacity) {
         s_avgLumCapacity = total;
         D3D12_RESOURCE_DESC desc = s_avgLumBuffer->GetDesc();
-        desc.Width = total * sizeof(float);
+        desc.Width = total * sizeof(float) * 2; // Store {logLum, lum}
         D3D12_HEAP_PROPERTIES defHeap = {};
         defHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
         s_device->CreateCommittedResource(&defHeap, D3D12_HEAP_FLAG_NONE, &desc,
@@ -3179,7 +3204,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       uav.Format = DXGI_FORMAT_UNKNOWN;
       uav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
       uav.Buffer.NumElements = total;
-      uav.Buffer.StructureByteStride = sizeof(float);
+      uav.Buffer.StructureByteStride = sizeof(float) * 2; // {logLum, lum}
       s_device->CreateUnorderedAccessView(s_avgLumBuffer.Get(), nullptr, &uav,
                                           uavCpu);
 

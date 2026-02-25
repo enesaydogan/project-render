@@ -2,7 +2,7 @@
 // Calculates average luminance of a texture and writes to a structured buffer.
 
 Texture2D<float4> g_input : register(t0);
-RWStructuredBuffer<float> g_output : register(u0);
+RWStructuredBuffer<float2> g_output : register(u0);
 
 cbuffer Constants : register(b0)
 {
@@ -34,5 +34,5 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     uint gridW = (width + stride - 1) / stride;
     uint idx = dispatchThreadID.y * gridW + dispatchThreadID.x;
-    g_output[idx] = logLuminance;
+    g_output[idx] = float2(logLuminance, luma);
 }
