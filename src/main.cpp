@@ -1284,6 +1284,22 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     // Render based on current mode
     switch (g_currentRenderMode) {
     case RenderMode::DXR: {
+      if (!DxrRenderer::IsReady()) {
+        try {
+          DX12Context::WaitGPUIdle();
+          DxrRenderer::CreateRayTracingPipeline(DX12Context::g_windowWidth,
+                                                DX12Context::g_windowHeight);
+        } catch (const std::exception &e) {
+          fprintf(stderr,
+                  "DXR lazy pipeline create failed during mode switch: %s\n",
+                  e.what());
+        } catch (...) {
+          fprintf(stderr,
+                  "DXR lazy pipeline create failed during mode switch: unknown "
+                  "exception\n");
+        }
+      }
+
       // Use DXR module to perform ray dispatch and copy to backbuffer
       if (DxrRenderer::IsReady()) {
         // Update Structured Material Buffer for DXR
@@ -1394,13 +1410,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         }
 
         bool dxrOk = DxrRenderer::RenderFrame(
-            DX12Context::g_commandList.Get(),
-            DX12Context::g_frameResources[DX12Context::g_frameIndex]
-                .commandAllocator.Get(),
-            DX12Context::g_frameIndex, dxrTarget, dxrRtv,
-            g_cameraConstantBuffer.Get(), g_materialStructuredBuffer.Get(),
-            g_texturesGpuStart, g_textureDescriptorCount, activeMeshes,
-            g_meshStructuredBuffer.Get());
+          DX12Context::g_commandList.Get(),
+          DX12Context::g_frameResources[DX12Context::g_frameIndex]
+            .commandAllocator.Get(),
+          DX12Context::g_frameIndex, dxrTarget, dxrRtv,
+          g_cameraConstantBuffer.Get(), g_materialStructuredBuffer.Get(),
+          g_texturesGpuStart, g_textureDescriptorCount, activeMeshes,
+          g_meshStructuredBuffer.Get());
         if (dxrOk) {
           if (g_renderExportJob.active &&
               dxrTarget == g_exportRenderTarget.Get()) {
