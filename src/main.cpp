@@ -1186,6 +1186,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   // State variables for Time and North Offset
   static float g_timeOfDay = 10.0f;
   static float g_northOffset = 0.0f;
+  static float g_latitudeDeg = 50.08f; // Prague default latitude
+  static float g_dayOfYear = 172.0f;   // June solstice-ish
 
   // Basic message loop + simple render
   MSG msg = {};
@@ -1202,14 +1204,44 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       const float PI = 3.14159265f;
       const float DEG2RAD = PI / 180.0f;
 
-      // Simple sun path logic
-      float hourArg = (g_timeOfDay - 12.0f) / 6.0f;
-      float elRad = std::cos(hourArg * (PI / 2.0f)) * (PI / 2.0f);
-      if (elRad < 0)
-        elRad = 0;
+      // Physically-based solar position model (local solar time).
+      // Latitude: [-66.5, 66.5], Day: [1, 365], Hour angle: 15 deg/hour.
+      const float latitudeRad = g_latitudeDeg * DEG2RAD;
+      const float day = (std::clamp)(g_dayOfYear, 1.0f, 365.0f);
+      const float declDeg =
+          23.44f * std::sin(2.0f * PI * (284.0f + day) / 365.0f);
+      const float declRad = declDeg * DEG2RAD;
+      const float hourAngleRad = (g_timeOfDay - 12.0f) * 15.0f * DEG2RAD;
 
-      float azDeg = (g_timeOfDay - 12.0f) * 15.0f + g_northOffset;
-      float azRad = azDeg * DEG2RAD;
+      float sinEl = std::sin(latitudeRad) * std::sin(declRad) +
+                    std::cos(latitudeRad) * std::cos(declRad) *
+                        std::cos(hourAngleRad);
+      sinEl = (std::clamp)(sinEl, -1.0f, 1.0f);
+      float elRad = std::asin(sinEl);
+
+      // Azimuth from North, clockwise: 90=east, 180=south, 270=west.
+      float azNorthRad =
+          std::atan2(std::sin(hourAngleRad),
+                     std::cos(hourAngleRad) * std::sin(latitudeRad) -
+                         std::tan(declRad) * std::cos(latitudeRad)) +
+          PI;
+      azNorthRad += g_northOffset * DEG2RAD;
+
+      // Prague model convention: azimuth is in XY plane from +X toward +Y.
+      // Our world convention in shaders is +Z = north, +X = east, +Y = up.
+      // Mapping Prague(X,Y,Z) -> World(X,Z,Y) means:
+      //   azPrague = 0 at world +X (east), +PI/2 at world +Z (north).
+      float azPragueRad = (PI * 0.5f) - azNorthRad;
+      while (azPragueRad < -PI)
+        azPragueRad += 2.0f * PI;
+      while (azPragueRad > PI)
+        azPragueRad -= 2.0f * PI;
+
+      if (elRad < -0.15f) {
+        // Keep a bit below horizon for twilight behavior from Prague model,
+        // but avoid excessively negative values.
+        elRad = -0.15f;
+      }
 
       // Get current parameters to preserve other sliders
       float sunSize = IBLManager::Get().GetSunSize();
@@ -1217,12 +1249,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
       // Apply to Sky Model
       IBLManager::Get().SetSolarAltitude(elRad);
-      IBLManager::Get().SetSolarAzimuth(azRad);
+      IBLManager::Get().SetSolarAzimuth(azPragueRad);
       IBLManager::Get().UpdateSkyModel();
 
       // Sync Directional Light
-      float sunX = std::cos(azRad) * std::cos(elRad);
-      float sunZ = std::sin(azRad) * std::cos(elRad);
+      float sunX = std::sin(azNorthRad) * std::cos(elRad);
+      float sunZ = std::cos(azNorthRad) * std::cos(elRad);
       float sunY = std::sin(elRad);
 
       g_cameraData.lightDir[0] = sunX;
@@ -1239,6 +1271,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
       // Sync Sun Intensity
       g_cameraData.lightColor[3] = sunInt;
+
+        // IBL environment map rotation (degrees), consumed by shaders.
+        g_cameraData.iblRotationDegrees =
+          IBLManager::Get().GetIblRotationDegrees();
 
       UpdateCameraCB();
     }
@@ -1891,7 +1927,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     g_cloudManager.Update(dt, DX12Context::g_frameIndex);
 
     // Editor UI (moved to editor_ui.cpp)
-    DrawEditorUI(g_fps, g_timeOfDay, g_northOffset);
+    DrawEditorUI(g_fps, g_timeOfDay, g_northOffset, g_latitudeDeg,
+           g_dayOfYear);
 
     // fprintf(stderr, "MainLoop: PopulateCommandList start\n");
     PopulateCommandList();

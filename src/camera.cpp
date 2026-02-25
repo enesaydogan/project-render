@@ -43,7 +43,9 @@ CameraCB g_initialCameraData = {
     0.05f,                          // noiseThreshold (5%)
     1.0f,                           // useAdaptiveSampling (default ON)
     0.0f,                           // debugVisualizationMode
-    1.0f                            // cloudRenderingEnabled (default ON)
+    1.0f,                           // cloudRenderingEnabled (default ON)
+    0.0f,                           // iblRotationDegrees
+    {0.0f, 0.0f, 0.0f}              // _cameraPadEnd
 };
 CameraCB g_cameraData = g_initialCameraData;
 ComPtr<ID3D12Resource> g_cameraConstantBuffer;
@@ -84,6 +86,8 @@ static bool CameraChanged(const CameraCB &a, const CameraCB &b) {
     if (a.ambientColor[i] != b.ambientColor[i])
       return true;
   }
+  if (a.iblRotationDegrees != b.iblRotationDegrees)
+    return true;
   return false;
 }
 

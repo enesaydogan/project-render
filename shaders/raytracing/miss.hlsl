@@ -8,7 +8,7 @@
 void Miss(inout RayPayload payload)
 {
     float3 dir = WorldRayDirection();
-    float2 uv = DirectionToUV(dir);
+    float2 uv = DirectionToUVRotated(dir);
     
     // Sample environment map and apply intensity
     float3 color = envMap.SampleLevel(linearSampler, uv, 0).rgb * intensity;
@@ -36,7 +36,7 @@ void Miss(inout RayPayload payload)
         int dbg = (int)SHADER_DEBUG_MODE;
         bool cloudDebugView = (dbg >= 11 && dbg <= 16);
         
-        float2 skyUv = DirectionToUV(dir);
+        float2 skyUv = DirectionToUVRotated(dir);
         float4 baked = bakedClouds.SampleLevel(linearSampler, skyUv, 0);
         baked.a = saturate(baked.a);
         baked.rgb = max(baked.rgb, 0.0);

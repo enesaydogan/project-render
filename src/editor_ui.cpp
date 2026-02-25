@@ -396,7 +396,8 @@ static bool RecreateDxrPipelineSafe(UINT width, UINT height,
 
 // ── Main UI draw function ───────────────────────────────────────────────────
 
-void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
+void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
+                  float &latitudeDeg, float &dayOfYear) {
   // Start ImGui frame
   ImGui_ImplDX12_NewFrame();
   ImGui_ImplWin32_NewFrame();
@@ -863,6 +864,14 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
 
       ImGui::Text("Environment / Sky Model");
 
+      float iblRotationDeg = IBLManager::Get().GetIblRotationDegrees();
+      if (ImGui::SliderFloat("IBL Rotation (deg)", &iblRotationDeg, 0.0f,
+                             360.0f, "%.1f")) {
+        IBLManager::Get().SetIblRotationDegrees(iblRotationDeg);
+        UpdateCameraCB();
+        uiChanged = true;
+      }
+
       bool fileIblEnabled =
           (IBLManager::Get().GetIBLSource() == IBLManager::IBLSource::File);
       if (ImGui::Checkbox("Enable File IBL", &fileIblEnabled)) {
@@ -951,7 +960,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
         // float elev = IBLManager::Get().GetSolarAltitude(); // Not used
         // directly, driven by Time
 
-        // GUI State for Time/North (controlled by global static vars now)
+        // GUI State for solar model parameters (controlled by main loop refs)
 
         if (ImGui::SliderFloat("Time of Day", &timeOfDay, 6.0f, 18.0f)) {
           uiParamChanged = true;
@@ -961,6 +970,23 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset) {
           uiParamChanged = true;
           uiChanged = true;
         }
+        if (ImGui::SliderFloat("Latitude (deg)", &latitudeDeg, -66.5f,
+                               66.5f)) {
+          uiParamChanged = true;
+          uiChanged = true;
+        }
+        if (ImGui::SliderFloat("Day of Year", &dayOfYear, 1.0f, 365.0f,
+                               "%.0f")) {
+          uiParamChanged = true;
+          uiChanged = true;
+        }
+
+        ImGui::Text("Sky Avg Y: %.0f cd/m²",
+                    IBLManager::Get().GetSkyAvgLuminanceCdM2());
+        ImGui::Text("Sky Horizon Y: %.0f cd/m²",
+                    IBLManager::Get().GetSkyHorizonLuminanceCdM2());
+        ImGui::Text("Sky Max Y: %.0f cd/m²",
+                    IBLManager::Get().GetSkyMaxLuminanceCdM2());
 
         // Logic moved to PopulateCommandList to ensure update even when UI is
         // closed

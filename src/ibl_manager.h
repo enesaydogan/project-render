@@ -90,6 +90,11 @@ public:
   float GetSunIntensity() const { return m_sunIntensity; }
 
   DirectX::XMFLOAT3 GetSunColor() const;
+  float GetSkyAvgLuminanceCdM2() const { return m_dbgSkyAvgLuminanceCdM2; }
+  float GetSkyHorizonLuminanceCdM2() const {
+    return m_dbgSkyHorizonLuminanceCdM2;
+  }
+  float GetSkyMaxLuminanceCdM2() const { return m_dbgSkyMaxLuminanceCdM2; }
 
   // Core members
   void SetSunSize(float degrees) {
@@ -107,6 +112,14 @@ public:
   bool IsPhysicalCalibrationEnabled() const {
     return m_physicalCalibrationEnabled;
   }
+
+  void SetIblRotationDegrees(float degrees) {
+    float wrapped = fmodf(degrees, 360.0f);
+    if (wrapped < 0.0f)
+      wrapped += 360.0f;
+    m_iblRotationDegrees = wrapped;
+  }
+  float GetIblRotationDegrees() const { return m_iblRotationDegrees; }
 
   Asset::Texture &GetEnvMap() { return m_envMap; }
   bool IsLoaded() const { return m_envMap.resource != nullptr; }
@@ -165,4 +178,10 @@ private:
   static constexpr float kPhysicalSkyIntensity = 1.0f;
   static constexpr float kPhysicalSunIntensityLux = 110000.0f;
   static constexpr float kPhysicalSunSizeDeg = 0.53f;
+
+  float m_iblRotationDegrees = 0.0f;
+
+  float m_dbgSkyAvgLuminanceCdM2 = 0.0f;
+  float m_dbgSkyHorizonLuminanceCdM2 = 0.0f;
+  float m_dbgSkyMaxLuminanceCdM2 = 0.0f;
 };

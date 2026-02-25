@@ -64,8 +64,10 @@ extern int g_debugMode;
 // Draw the complete editor UI for one frame.
 // Call between ImGui::NewFrame() and ImGui::Render().
 // |fps| is the smoothed FPS value computed in the main loop.
-// |timeOfDay| and |northOffset| are references to the sky time parameters.
-void DrawEditorUI(float fps, float &timeOfDay, float &northOffset);
+// |timeOfDay|, |northOffset|, |latitudeDeg| and |dayOfYear| are references to
+// sky/solar parameters.
+void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
+                  float &latitudeDeg, float &dayOfYear);
 
 // Helper: start / restore / cancel a render export job
 void StartRenderExportJob(const std::wstring &outputPath);
