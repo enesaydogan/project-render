@@ -15,6 +15,14 @@ namespace RasterRenderer {
   void DrawGrid(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB);
   void DrawSkybox(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB);
   void DrawSceneDepthOnly(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB, const std::vector<Scene::Instance>& instances);
+  bool PrepareHdrRenderTarget(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList,
+                              UINT width, UINT height,
+                              D3D12_CPU_DESCRIPTOR_HANDLE* outRtv);
+  bool TonemapHdrToBackbuffer(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList,
+                              ID3D12Resource* backbuffer,
+                              UINT width, UINT height);
+  float GetCurrentAvgLuminance();
+  float GetCurrentEV100();
 
   // Expose some resources so main can inspect them (if necessary)
   extern ComPtr<ID3D12Resource> g_gridVertexBuffer;

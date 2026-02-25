@@ -432,8 +432,5 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     if (mode == 6) return float4(metalness, metalness, metalness, 1.0); // Metalness
     if (mode == 7) return float4(ao, ao, ao, 1.0); // AO
 
-    color = ToneMap(color);
-    color = pow(color, 1.0/2.2);
-
     return float4(color, alpha);
 }
