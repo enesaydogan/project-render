@@ -94,9 +94,10 @@ bool IsSpatiallyCompatible(uint2 p0, uint2 p1, float ndotMin, float depthTolBase
     float d0 = g_depth[p0];
     float d1 = g_depth[p1];
     if (!isfinite(d0) || !isfinite(d1) || d0 <= 0.0 || d1 <= 0.0) return false;
-    float depthScale = max(max(abs(d0), abs(d1)), 1.0);
-    float depthTol = max(0.0025, depthTolBase * depthScale);
-    if (abs(d0 - d1) > depthTol) return false;
+    
+    // Stricter depth tolerance to prevent silhouette leaking
+    float depthTol = depthTolBase * min(d0, d1);
+    if (abs(d0 - d1) > max(0.05, depthTol)) return false;
 
     return true;
 }
@@ -296,7 +297,7 @@ void RayGen()
         RayDesc ray;
         ray.Origin = rayOrigin;
         ray.Direction = rayDir;
-        ray.TMin = 0.001;
+        ray.TMin = 0.002;
         ray.TMax = 10000.0;
 
         RayPayload payload;
@@ -342,9 +343,9 @@ void RayGen()
             if (dlssRayReconstruction > 0.5 && max(primarySpecAlbedo.r, max(primarySpecAlbedo.g, primarySpecAlbedo.b)) > 0.01) {
                 float3 R_spec = reflect(rayDir, payload.normal);
                 RayDesc specHitRay;
-                specHitRay.Origin = primaryPos + payload.normal * 0.001;
+                specHitRay.Origin = primaryPos + payload.normal * 0.002;
                 specHitRay.Direction = R_spec;
-                specHitRay.TMin = 0.001;
+                specHitRay.TMin = 0.002;
                 specHitRay.TMax = 1000.0;
                 RayPayload specHitPayload;
                 specHitPayload.t = -1.0;
@@ -565,11 +566,11 @@ void RayGen()
                     
                     // Simple Visibility check for spatial reuse significantly reduces block artifacts
                     if (p_target_at_curr > 0.0) {
-                        RayDesc spatialRay; spatialRay.Origin = P + N * 0.001; spatialRay.Direction = L_neigh;
+                        RayDesc spatialRay; spatialRay.Origin = P + N * 0.002; spatialRay.Direction = L_neigh;
                         spatialRay.TMin = 0.001; spatialRay.TMax = max(0.001, dist_neigh - 0.003);
                         RayPayload spatialPayload; spatialPayload.t = 1.0;
                         spatialPayload.rayType = RAY_TYPE_SHADOW;
-                        TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, spatialRay, spatialPayload);
+                        TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, spatialRay, spatialPayload);
                         SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                         if (spatialPayload.t > 0.0) p_target_at_curr = 0.0; // Occluded
                     }
@@ -616,7 +617,7 @@ void RayGen()
             // D. Apply Visibility for current frame shading
             if (p_target_final > 0.0) {
                 RayDesc shadowRay;
-                shadowRay.Origin = P + N * 0.001;
+                shadowRay.Origin = P + N * 0.002;
                 
                 // Jitter shadow ray for Sun (Disc Light)
                 if (res.lightIndex == 0xFFFFFFFF && lightDir.w > 0.0) {
@@ -633,7 +634,7 @@ void RayGen()
                 shadowPayload.t = 1.0;
                 shadowPayload.rayDepth = (uint)bounce + 1;
                 shadowPayload.rayType = RAY_TYPE_SHADOW;
-                TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
+                TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
                 SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                 SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
                 
@@ -657,7 +658,7 @@ void RayGen()
                     f_brdf_gi = (diffuseAlbedo / PI);
                     
                     if (pdf_gi > 0.0) {
-                        RayDesc giRay; giRay.Origin = P + N * 0.0005; giRay.Direction = nextDir_gi;
+                        RayDesc giRay; giRay.Origin = P + N * 0.002; giRay.Direction = nextDir_gi;
                         giRay.TMin = 0.0001; giRay.TMax = 1000.0;
                         RayPayload giPayload; giPayload.color = float3(0,0,0); giPayload.emissive = float3(0,0,0); giPayload.t = -1.0; giPayload.rayDepth = (uint)bounce + 1;
                         giPayload.rayType = RAY_TYPE_GI_EVAL;
@@ -708,11 +709,11 @@ void RayGen()
                         
                         // Spatial Jacobian / Visibility for GI
                         if (p_target_at_curr > 0.0) {
-                            RayDesc spatialRay; spatialRay.Origin = P + N * 0.001; spatialRay.Direction = L_gi;
+                            RayDesc spatialRay; spatialRay.Origin = P + N * 0.002; spatialRay.Direction = L_gi;
                             spatialRay.TMin = 0.001; spatialRay.TMax = max(0.001, distance(neigh_gi.hitPos, P) - 0.003);
                             RayPayload spatialPayload; spatialPayload.t = 1.0;
                             spatialPayload.rayType = RAY_TYPE_SHADOW;
-                            TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, spatialRay, spatialPayload);
+                            TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, spatialRay, spatialPayload);
                             SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                             if (spatialPayload.t > 0.0) p_target_at_curr = 0.0;
                         }
@@ -731,11 +732,11 @@ void RayGen()
                 
                 if (gi_res.W > 0.0) {
                     // Visibility test for GI reconnection
-                    RayDesc giVisRay; giVisRay.Origin = P + N * 0.001; giVisRay.Direction = L_gi_final;
+                    RayDesc giVisRay; giVisRay.Origin = P + N * 0.002; giVisRay.Direction = L_gi_final;
                     giVisRay.TMin = 0.001; giVisRay.TMax = max(0.001, distance(gi_res.hitPos, P) - 0.003);
                     RayPayload giVisPayload; giVisPayload.t = 1.0; giVisPayload.rayDepth = (uint)bounce + 1;
                     giVisPayload.rayType = RAY_TYPE_SHADOW;
-                    TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, giVisRay, giVisPayload);
+                    TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, giVisRay, giVisPayload);
                     SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                     if (giVisPayload.t < 0.0) {
                         indirectLighting = gi_res.radiance * brdf_gi_final * saturate(dot(N, L_gi_final)) * gi_res.W;
@@ -779,7 +780,7 @@ void RayGen()
             float NdotL_nee = saturate(dot(N, L_nee));
             if (NdotL_nee > 0) {
                 RayDesc shadowRay;
-                shadowRay.Origin = P + N * 0.001;
+                shadowRay.Origin = P + N * 0.002;
                 shadowRay.Direction = L_nee;
                 shadowRay.TMin = 0.001;
                 shadowRay.TMax = dist_nee - 0.001;
@@ -787,7 +788,7 @@ void RayGen()
                 shadowPayload.t = 1.0;
                 shadowPayload.rayDepth = (uint)bounce + 1;
                 shadowPayload.rayType = RAY_TYPE_SHADOW;
-                TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
+                TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
                 SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                 SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
                 if (shadowPayload.t < 0.0) {
@@ -808,7 +809,7 @@ void RayGen()
             float NdotL_env = saturate(dot(N, envLs.L));
             if (envLs.pdf > 1e-8 && NdotL_env > 0.0) {
                 RayDesc envShadowRay;
-                envShadowRay.Origin = P + N * 0.001;
+                envShadowRay.Origin = P + N * 0.002;
                 envShadowRay.Direction = envLs.L;
                 envShadowRay.TMin = 0.001;
                 envShadowRay.TMax = 10000.0;
@@ -819,8 +820,7 @@ void RayGen()
                 envShadowPayload.rayType = RAY_TYPE_SHADOW;
                 TraceRay(g_accel,
                          RAY_FLAG_SKIP_CLOSEST_HIT_SHADER |
-                             RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
-                             RAY_FLAG_FORCE_NON_OPAQUE,
+                             RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
                          0xFF, 0, 0, 0, envShadowRay, envShadowPayload);
                 SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                 SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
@@ -927,7 +927,7 @@ void RayGen()
                 currentRayType = RAY_TYPE_REFLECTION;
             }
             pdf = 1.0;
-            rayOrigin = P + nextDir * 0.001; 
+            rayOrigin = P + nextDir * 0.002; 
             // For glass, the cosine term and PDF often cancel out in simple path tracers,
             // but we'll manually update throughput here to ensure it's correct.
             throughput *= f_brdf;
@@ -963,7 +963,7 @@ void RayGen()
 
                 pdf = (PDF_GGX(NdotH, VdotH, roughness) * specProb) / totalProb;
                 f_brdf = D_GGX(NdotH, roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL, roughness) * F_Schlick(VdotH, F0);
-                rayOrigin = P + N * 0.001;
+                rayOrigin = P + N * 0.002;
                 cosineTerm = NdotL;
                 currentRayType = RAY_TYPE_REFLECTION;
             } else if (pick < (specProb + diffProb)) {
@@ -975,7 +975,7 @@ void RayGen()
                 float NdotL = saturate(dot(N, nextDir));
                 pdf = (PDF_Lambert(NdotL) * diffProb) / totalProb;
                 f_brdf = diffuseAlbedo / PI;
-                rayOrigin = P + N * 0.001;
+                rayOrigin = P + N * 0.002;
                 cosineTerm = NdotL;
                 currentRayType = RAY_TYPE_DIFFUSE;
             } else {
@@ -987,7 +987,7 @@ void RayGen()
                 float NdotL_t = saturate(dot(-N, nextDir));
                 pdf = (PDF_Lambert(NdotL_t) * transProb) / totalProb;
                 f_brdf = (payload.albedo / PI) * (1.0 - metallic);
-                rayOrigin = P - N * 0.001;
+                rayOrigin = P - N * 0.002;
                 cosineTerm = NdotL_t;
                 currentRayType = RAY_TYPE_DIFFUSE;
             }
