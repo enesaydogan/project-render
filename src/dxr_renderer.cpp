@@ -3468,23 +3468,17 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       s_hasTonemappedFrame = true;
     }
   } else {
-    // Fallback: copy (may be invalid if formats don't match)
-    TransitionResource(dxrList.Get(), renderTarget,
-                       D3D12_RESOURCE_STATE_PRESENT,
-                       D3D12_RESOURCE_STATE_COPY_DEST);
-    TransitionResource(dxrList.Get(), postColor,
-                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                       D3D12_RESOURCE_STATE_COPY_SOURCE);
-    dxrList->CopyResource(renderTarget, postColor);
-    TransitionResource(dxrList.Get(), renderTarget,
-                       D3D12_RESOURCE_STATE_COPY_DEST,
-                       D3D12_RESOURCE_STATE_RENDER_TARGET);
-    TransitionResource(dxrList.Get(), postColor,
-                       D3D12_RESOURCE_STATE_COPY_SOURCE,
-                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    // Tonemap resources are mandatory for SDR swapchain output.
+    // Do not copy HDR postColor directly into the UNORM backbuffer since that
+    // causes severe clipping/blown highlights.
+    if (postColor && postColorInSrv) {
+      TransitionResource(dxrList.Get(), postColor,
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
 
-    // Consider the frame presented even if tonemap is missing (debug/dev).
-    s_hasTonemappedFrame = true;
+    return ReturnFail(14,
+                      "Tonemap pipeline unavailable; aborted DXR frame to avoid HDR->UNORM clipping");
   }
 
   // FREEZE LOGIC AFTER TONEMAPPING:
