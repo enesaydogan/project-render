@@ -197,6 +197,7 @@ Buffer<uint> indices[1024] : register(t3074);
 #define RAY_TYPE_REFRACTION 2
 #define RAY_TYPE_DIFFUSE    3
 #define RAY_TYPE_SHADOW     4
+#define RAY_TYPE_GI_EVAL    5
 
 struct RayPayload
 {
