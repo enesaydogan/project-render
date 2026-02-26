@@ -502,65 +502,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
     ImGui::SameLine();
     // Use compact spacing for menu bar toggles
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 6));
-    if (ImGui::BeginMenu("Clouds")) {
-      CloudParams &cp = g_cloudManager.GetParams();
-      bool changed = false;
-
-      if (ImGui::Checkbox("Enable Cloud Rendering", &g_cloudRenderingEnabled)) {
-        changed = true;
-      }
-      ImGui::Separator();
-
-      if (ImGui::Button("Reset to Defaults")) {
-        g_cloudManager.ResetToDefaults();
-        changed = true;
-      }
-      ImGui::Separator();
-
-      changed |= ImGui::SliderFloat("Density", &cp.density, 0.0f, 5.0f);
-      changed |= ImGui::SliderFloat("Absorption", &cp.absorption, 0.0f, 2.0f);
-      changed |= ImGui::SliderFloat("Coverage", &cp.coverage, 0.0f, 1.0f);
-      changed |=
-          ImGui::SliderFloat("Scattering (g)", &cp.scattering, -0.99f, 0.99f);
-      changed |=
-          ImGui::SliderFloat("Sun Intensity", &cp.sunIntensity, 0.0f, 20.0f);
-      changed |= ImGui::SliderFloat("Cloud Top", &cp.cloudTop, 200.0f, 1000.0f);
-      changed |=
-          ImGui::SliderFloat("Cloud Bottom", &cp.cloudBottom, 50.0f, 300.0f);
-      changed |= ImGui::SliderFloat("Wind Speed", &cp.windSpeed, 0.0f, 50.0f);
-
-      ImGui::Separator();
-      changed |=
-          ImGui::SliderFloat("Base Scale", &cp.baseScale, 0.0001f, 0.0020f,
-                             "%.5f", ImGuiSliderFlags_Logarithmic);
-      changed |=
-          ImGui::SliderFloat("Detail Scale", &cp.detailScale, 0.0005f, 0.01f,
-                             "%.5f", ImGuiSliderFlags_Logarithmic);
-      changed |=
-          ImGui::SliderFloat("Coverage Scale", &cp.coverageScale, 0.00005f,
-                             0.0010f, "%.5f", ImGuiSliderFlags_Logarithmic);
-        changed |=
-          ImGui::SliderFloat("Coverage Variation", &cp.coverageVariation,
-                   0.0f, 1.0f);
-      changed |= ImGui::SliderFloat("Erosion", &cp.erosion, 0.0f, 1.0f);
-      changed |=
-          ImGui::SliderFloat("Warp Strength", &cp.warpStrength, 0.0f, 2.0f);
-        changed |=
-          ImGui::SliderFloat("Shape Power", &cp.shapePower, 0.4f, 3.0f);
-        changed |= ImGui::SliderFloat("Powder Strength", &cp.powderStrength,
-                      0.0f, 1.5f);
-
-      ImGui::Separator();
-      changed |= ImGui::SliderInt("Shadow Steps", &cp.shadowSteps, 1, 16);
-      changed |= ImGui::SliderFloat("Shadow Step Size", &cp.shadowStepSize,
-                                    10.0f, 500.0f);
-      changed |= ImGui::SliderFloat("Shadow LOD", &cp.shadowLod, 0.0f, 5.0f);
-
-      if (changed) {
-        DxrRenderer::ResetAccumulation();
-      }
-      ImGui::EndMenu();
-    }
+    // Cloud settings have been moved into the Controls window. No dropdown needed.
 
     ImGui::Checkbox("##AssetsToggle", &g_showAssetsWindow);
     ImGui::SameLine();
@@ -1043,6 +985,50 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
       if (ImGui::Checkbox("Verbose Render Logs", &g_verboseRenderLogs)) {
         fprintf(stderr, "Verbose Render Logs set=%d\n", g_verboseRenderLogs);
         uiChanged = true;
+      }
+
+      // Cloud settings section moved to the bottom of the controls window
+      ImGui::Separator();
+      ImGui::Text("Cloud Settings");
+      {
+        CloudParams &cp = g_cloudManager.GetParams();
+        bool cloudChanged = false;
+
+        if (ImGui::Checkbox("Enable Cloud Rendering", &g_cloudRenderingEnabled)) {
+          cloudChanged = true;
+        }
+        if (ImGui::Button("Reset to Defaults")) {
+          g_cloudManager.ResetToDefaults();
+          cloudChanged = true;
+        }
+
+        cloudChanged |= ImGui::SliderFloat("Density", &cp.density, 0.0f, 5.0f);
+        cloudChanged |= ImGui::SliderFloat("Absorption", &cp.absorption, 0.0f, 2.0f);
+        cloudChanged |= ImGui::SliderFloat("Coverage", &cp.coverage, 0.0f, 1.0f);
+        cloudChanged |= ImGui::SliderFloat("Scattering (g)", &cp.scattering, -0.99f, 0.99f);
+        cloudChanged |= ImGui::SliderFloat("Sun Intensity", &cp.sunIntensity, 0.0f, 20.0f);
+        cloudChanged |= ImGui::SliderFloat("Cloud Top", &cp.cloudTop, 200.0f, 1000.0f);
+        cloudChanged |= ImGui::SliderFloat("Cloud Bottom", &cp.cloudBottom, 50.0f, 300.0f);
+        cloudChanged |= ImGui::SliderFloat("Wind Speed", &cp.windSpeed, 0.0f, 50.0f);
+
+        ImGui::Separator();
+        cloudChanged |= ImGui::SliderFloat("Base Scale", &cp.baseScale, 0.0001f, 0.0020f, "%.5f", ImGuiSliderFlags_Logarithmic);
+        cloudChanged |= ImGui::SliderFloat("Detail Scale", &cp.detailScale, 0.0005f, 0.01f, "%.5f", ImGuiSliderFlags_Logarithmic);
+        cloudChanged |= ImGui::SliderFloat("Coverage Scale", &cp.coverageScale, 0.00005f, 0.0010f, "%.5f", ImGuiSliderFlags_Logarithmic);
+        cloudChanged |= ImGui::SliderFloat("Coverage Variation", &cp.coverageVariation, 0.0f, 1.0f);
+        cloudChanged |= ImGui::SliderFloat("Erosion", &cp.erosion, 0.0f, 1.0f);
+        cloudChanged |= ImGui::SliderFloat("Warp Strength", &cp.warpStrength, 0.0f, 2.0f);
+        cloudChanged |= ImGui::SliderFloat("Shape Power", &cp.shapePower, 0.4f, 3.0f);
+        cloudChanged |= ImGui::SliderFloat("Powder Strength", &cp.powderStrength, 0.0f, 1.5f);
+
+        ImGui::Separator();
+        cloudChanged |= ImGui::SliderInt("Shadow Steps", &cp.shadowSteps, 1, 16);
+        cloudChanged |= ImGui::SliderFloat("Shadow Step Size", &cp.shadowStepSize, 10.0f, 500.0f);
+        cloudChanged |= ImGui::SliderFloat("Shadow LOD", &cp.shadowLod, 0.0f, 5.0f);
+
+        if (cloudChanged) {
+          DxrRenderer::ResetAccumulation();
+        }
       }
     }
     ImGui::End();
