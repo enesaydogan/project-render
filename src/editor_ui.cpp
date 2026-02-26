@@ -813,6 +813,25 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
         uiChanged = true;
       }
 
+      // analytic sun intensity (always visible; used when the procedural
+      // sun is active, and remembered otherwise).
+      {
+        float analyticSunInt = IBLManager::Get().GetSunIntensity();
+        if (ImGui::SliderFloat("Analytic Sun Intensity", &analyticSunInt,
+                               0.0f, 150000.0f, "%.0f Lux")) {
+          IBLManager::Get().SetSunIntensity(analyticSunInt);
+          uiChanged = true;
+        }
+      }
+
+      // environment sampling mode
+      bool sampleSolid = (g_cameraData.sampleEnvSolidAngle > 0.5f);
+      if (ImGui::Checkbox("Solid-angle env sampling", &sampleSolid)) {
+        g_cameraData.sampleEnvSolidAngle = sampleSolid ? 1.0f : 0.0f;
+        IBLManager::Get().SetEnvSolidAngleSampling(sampleSolid);
+        uiChanged = true;
+      }
+
       bool fileIblEnabled =
           (IBLManager::Get().GetIBLSource() == IBLManager::IBLSource::File);
       if (ImGui::Checkbox("Enable File IBL", &fileIblEnabled)) {
@@ -881,18 +900,39 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
           uiParamChanged = true;
           uiChanged = true;
         }
-        float sunInt = IBLManager::Get().GetSunIntensity();
-        if (ImGui::SliderFloat("Sun Intensity (Lux)", &sunInt, 0.0f, 150000.0f,
-                               "%.0f Lux")) {
-          IBLManager::Get().SetSunIntensity(sunInt);
-          // Changes analytic light intensity
-          uiChanged = true;
-        }
-        float sunSize = IBLManager::Get().GetSunSize();
-        if (ImGui::SliderFloat("Sun Size (deg)", &sunSize, 0.1f, 5.0f)) {
-          IBLManager::Get().SetSunSize(sunSize);
-          // Changes analytic light radius
-          uiChanged = true;
+
+        bool usingFileIBL =
+            (IBLManager::Get().GetIBLSource() == IBLManager::IBLSource::File);
+        if (!usingFileIBL) {
+          float sunInt = IBLManager::Get().GetSunIntensity();
+          if (ImGui::SliderFloat("Sun Intensity (Lux)", &sunInt, 0.0f, 150000.0f,
+                                 "%.0f Lux")) {
+            IBLManager::Get().SetSunIntensity(sunInt);
+            // Changes analytic light intensity
+            uiChanged = true;
+          }
+          float sunSize = IBLManager::Get().GetSunSize();
+          if (ImGui::SliderFloat("Sun Size (deg)", &sunSize, 0.1f, 5.0f)) {
+            IBLManager::Get().SetSunSize(sunSize);
+            // Changes analytic light radius
+            uiChanged = true;
+          }
+        } else {
+          if (IBLManager::Get().HasFileSun()) {
+            float fsInt = IBLManager::Get().GetFileSunIntensity();
+            if (ImGui::SliderFloat("File Sun Scale", &fsInt, 0.0f, 200.0f,
+                                   "%.1f", ImGuiSliderFlags_Logarithmic)) {
+              IBLManager::Get().SetFileSunIntensity(fsInt);
+              uiChanged = true;
+            }
+            float fsSize = IBLManager::Get().GetFileSunRadiusDeg();
+            if (ImGui::SliderFloat("File Sun Size (deg)", &fsSize, 0.01f, 5.0f)) {
+              IBLManager::Get().SetFileSunRadiusDeg(fsSize);
+              uiChanged = true;
+            }
+          } else {
+            ImGui::TextDisabled("No dominant sun found in the environment map");
+          }
         }
         if (physicalSky) {
           ImGui::EndDisabled();

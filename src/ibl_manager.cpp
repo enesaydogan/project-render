@@ -42,6 +42,28 @@ inline void XYZtoRGB(float x, float y, float z, float &r, float &g, float &b) {
   b = 0.0556434f * x - 0.2040259f * y + 1.0572252f * z;
 }
 
+// Mathematical constants/utilities
+static const float PI = 3.14159265358979323846f;
+static float radians(float deg) { return deg * (PI / 180.0f); }
+
+// Helpers for environment sampling (match HLSL implementations)
+static DirectX::XMFLOAT3 UVToDirection(float u, float v) {
+    float phi = (u - 0.5f) * 2.0f * PI;
+    float theta = v * PI;
+    float sinTheta = sinf(theta);
+    DirectX::XMFLOAT3 dir;
+    dir.x = sinTheta * sinf(phi);
+    dir.y = cosf(theta);
+    dir.z = sinTheta * cosf(phi);
+    return dir;
+}
+
+static DirectX::XMFLOAT3 RotateY(const DirectX::XMFLOAT3 &v, float angle) {
+    float c = cosf(angle);
+    float s = sinf(angle);
+    return {c * v.x + s * v.z, v.y, -s * v.x + c * v.z};
+}
+
 bool IBLManager::Initialize(ID3D12Device *device, ID3D12CommandQueue *queue) {
   m_device = device;
   m_queue = queue;
@@ -96,7 +118,14 @@ bool IBLManager::LoadEnvironmentMap(const std::string &path) {
 
   m_source = IBLSource::File;
   m_envMap = m_fileTexture;
-  BuildEnvironmentImportanceTextures(m_envMap);
+  if (BuildEnvironmentImportanceTextures(m_envMap)) {
+    if (m_hasFileSun) {
+      std::cout << "Extracted sun from env map: radiance="
+                << m_fileSunRadiance.x << "," << m_fileSunRadiance.y << ","
+                << m_fileSunRadiance.z << ", radius=" << m_fileSunRadiusDeg
+                << "deg" << std::endl;
+    }
+  }
 
   CreateDescriptor();
   return true;
@@ -344,6 +373,22 @@ static bool CreateTexFromData(ID3D12Device *device, ID3D12CommandQueue *queue,
   return true;
 }
 
+// Setter invoked from UI when user toggles between sampling modes.
+void IBLManager::SetEnvSolidAngleSampling(bool enabled) {
+  if (m_envSolidAngleSampling != enabled) {
+    m_envSolidAngleSampling = enabled;
+    // recompute CDFs if we already have an environment map
+    if (m_envMap.resource) {
+      BuildEnvironmentImportanceTextures(m_envMap);
+    }
+  }
+}
+
+// note: the weighting applied to each texel can either include the
+// sin(theta) term (solid-angle sampling) or not.  The former is physically
+// correct for lat-long maps; the latter corresponds to naive texel-area
+// weighting and is kept around only for experimentation.
+
 bool IBLManager::BuildEnvironmentImportanceTextures(const Asset::Texture &envTex) {
   if (!m_device || !m_queue || !envTex.resource || envTex.width == 0 ||
       envTex.height == 0 || envTex.cpuData.empty()) {
@@ -396,9 +441,10 @@ bool IBLManager::BuildEnvironmentImportanceTextures(const Asset::Texture &envTex
 
       const double luminance = std::max(
           0.0, 0.2126 * (double)r + 0.7152 * (double)g + 0.0722 * (double)b);
-      const double weight = luminance * sinTheta;
-      texelWeights[idx] = weight;
-      rowSum += weight;
+    // apply optional solid-angle term
+    const double weight = luminance * (m_envSolidAngleSampling ? sinTheta : 1.0);
+    texelWeights[idx] = weight;
+    rowSum += weight;
     }
 
     rowSums[y] = rowSum;
@@ -409,12 +455,97 @@ bool IBLManager::BuildEnvironmentImportanceTextures(const Asset::Texture &envTex
     totalWeight += rowSums[y];
   }
 
+  // detect a bright "sun" pixel or cluster and remove it from the CDF
+  // if it's significantly brighter than the average texel.
+  size_t maxIdx = 0;
+  double maxWeight = 0.0;
+  for (size_t i = 0; i < texelWeights.size(); ++i) {
+    if (texelWeights[i] > maxWeight) {
+      maxWeight = texelWeights[i];
+      maxIdx = i;
+    }
+  }
+  double avgWeight = (width * (double)height > 0) ?
+                        (totalWeight / (width * (double)height)) : 0.0;
+  if (maxWeight > avgWeight * 1000.0) {
+    // treat the brightest cluster as sun
+    UINT sunX = (UINT)(maxIdx % width);
+    UINT sunY = (UINT)(maxIdx / width);
+    float u = ((float)sunX + 0.5f) / (float)width;
+    float v = ((float)sunY + 0.5f) / (float)height;
+    DirectX::XMFLOAT3 localDir = UVToDirection(u, v);
+    m_fileSunLocalDir = localDir;
+
+    // read radiance from the texel
+    float r = 0, g = 0, b = 0;
+    if (isFloatRGBA) {
+      const float *rgba = reinterpret_cast<const float *>(envTex.cpuData.data());
+      size_t base = maxIdx * 4;
+      r = rgba[base + 0];
+      g = rgba[base + 1];
+      b = rgba[base + 2];
+    } else {
+      const uint8_t *rgba = envTex.cpuData.data();
+      size_t base = maxIdx * 4;
+      r = (float)rgba[base + 0] / 255.0f;
+      g = (float)rgba[base + 1] / 255.0f;
+      b = (float)rgba[base + 2] / 255.0f;
+    }
+    // convert to chromaticity and derive a reasonable default intensity
+    double lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    if (lum > 1e-6) {
+        m_fileSunRadiance = {(float)(r / lum), (float)(g / lum), (float)(b / lum)};
+        // set intensity proportional to luminance but scaled down by 100 so that
+        // a raw HDR texel value of e.g. 1000 becomes ~10 lux; user can adjust
+        // with the slider.
+        m_fileSunIntensity = (float)std::max(1.0, lum / 100.0);
+    } else {
+        m_fileSunRadiance = {1,1,1};
+        m_fileSunIntensity = 1.0f;
+    }
+
+    // compute angular radius from cluster of bright texels
+    double thresh = maxWeight * 0.1;
+    double maxAngle = 0.0;
+    for (size_t i = 0; i < texelWeights.size(); ++i) {
+      if (texelWeights[i] > thresh) {
+        UINT x = (UINT)(i % width);
+        UINT y = (UINT)(i / width);
+        float uu = ((float)x + 0.5f) / (float)width;
+        float vv = ((float)y + 0.5f) / (float)height;
+        DirectX::XMFLOAT3 d = UVToDirection(uu, vv);
+        float dotp = d.x * localDir.x + d.y * localDir.y + d.z * localDir.z;
+        dotp = std::clamp(dotp, -1.0f, 1.0f);
+        double ang = acos(dotp);
+        if (ang > maxAngle) maxAngle = ang;
+      }
+    }
+    m_fileSunRadiusDeg = (float)(maxAngle * (180.0 / PI));
+    m_hasFileSun = true;
+
+    // zero out cluster weights and adjust row sums
+    for (size_t i = 0; i < texelWeights.size(); ++i) {
+      if (texelWeights[i] > thresh) {
+        UINT y = (UINT)(i / width);
+        rowSums[y] -= texelWeights[i];
+        texelWeights[i] = 0.0;
+      }
+    }
+
+    // recompute totalWeight after removal
+    totalWeight = 0.0;
+    for (UINT y = 0; y < height; ++y)
+      totalWeight += rowSums[y];
+  } else {
+    m_hasFileSun = false;
+  }
+
   if (totalWeight <= 1e-20) {
     totalWeight = 0.0;
     for (UINT y = 0; y < height; ++y) {
       const double theta = ((double)y + 0.5) / (double)height * pi;
       const double sinTheta = std::max(1e-6, std::sin(theta));
-      const double rowWeight = sinTheta * (double)width;
+      const double rowWeight = (m_envSolidAngleSampling ? sinTheta : 1.0) * (double)width;
       rowSums[y] = rowWeight;
       totalWeight += rowWeight;
       for (UINT x = 0; x < width; ++x) {
@@ -659,6 +790,12 @@ void IBLManager::UpdateTextureFromSkyModel() {
 
   CreateTexFromData(m_device.Get(), m_queue.Get(), width, height, pixels,
                     m_proceduralTexture);
+}
+
+DirectX::XMFLOAT3 IBLManager::GetFileSunWorldDir() const {
+  // rotate stored local direction by -iblRotationDegrees to match shader
+  float rotRad = -radians(m_iblRotationDegrees);
+  return RotateY(m_fileSunLocalDir, rotRad);
 }
 
 DirectX::XMFLOAT3 IBLManager::GetSunColor() const {

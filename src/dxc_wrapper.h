@@ -244,20 +244,10 @@ private:
     return buf;
   }
 
+  // Logging is disabled because shaders are precompiled; runtime compilation
+  // messages are no longer needed and clutter the console.
   static void LogShaderCompileMessage(const std::string &message) {
-    std::string line = message;
-    if (line.empty() || line.back() != '\n') {
-      line.push_back('\n');
-    }
-
-    OutputDebugStringA(line.c_str());
-    fprintf(stderr, "%s", line.c_str());
-
-    FILE *logFile = nullptr;
-    if (fopen_s(&logFile, "error.log", "a") == 0 && logFile) {
-      fprintf(logFile, "%s", line.c_str());
-      fclose(logFile);
-    }
+    (void)message;
   }
 
   HMODULE m_dxcDll = nullptr;

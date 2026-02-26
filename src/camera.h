@@ -46,9 +46,12 @@ struct CameraCB {
   float debugVisualizationMode;
   float cloudRenderingEnabled;
   float iblRotationDegrees;
-  float _cameraPadEnd[3];
+    // When true we build/sample the environment CDF using solid-angle weighting
+    // (luminance * sin(theta)) rather than raw texel area.  Turning this off
+    // can be useful for debugging or comparing the two approaches.
+    float sampleEnvSolidAngle;
+    float _cameraPadEnd[2];
 };
-
 // Camera state (defined in camera.cpp)
 extern CameraCB g_initialCameraData;
 extern CameraCB g_cameraData;

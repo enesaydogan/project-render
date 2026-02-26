@@ -130,6 +130,24 @@ public:
            m_envMarginalCdf.resource != nullptr;
   }
 
+  // File-sun accessors
+  bool HasFileSun() const { return m_hasFileSun; }
+  // direction in unrotated (map-local) space
+  DirectX::XMFLOAT3 GetFileSunLocalDir() const { return m_fileSunLocalDir; }
+  // world-space direction accounting for current IBL rotation
+  DirectX::XMFLOAT3 GetFileSunWorldDir() const;
+  DirectX::XMFLOAT3 GetFileSunRadiance() const { return m_fileSunRadiance; }
+  float GetFileSunIntensity() const { return m_fileSunIntensity; }
+  float GetFileSunRadiusDeg() const { return m_fileSunRadiusDeg; }
+  void SetFileSunIntensity(float v) { m_fileSunIntensity = v; }
+  void SetFileSunRadiusDeg(float deg) { m_fileSunRadiusDeg = deg; }
+
+
+  // Toggle between solid-angle weighting and simple texel-area weighting when
+  // building/sampling the environment importance textures.  True by default.
+  void SetEnvSolidAngleSampling(bool enabled);
+  bool GetEnvSolidAngleSampling() const { return m_envSolidAngleSampling; }
+
   void SetGPUHandle(D3D12_GPU_DESCRIPTOR_HANDLE handle) {
     m_gpuHandle = handle;
   }
@@ -183,6 +201,20 @@ private:
   float m_sunIntensity = 10000.0f; //reduce default intensity
   float m_sunSize = 1.5f; // degrees (actual sun size is ~0.5 deg)
   bool m_physicalCalibrationEnabled = false;
+  // when true, importance textures are generated using solid-angle weights
+  // (sin(theta)).  The UI allows toggling this for experimentation.
+  bool m_envSolidAngleSampling = true;
+
+  // data for automatically extracted sun from a file-based IBL.  When
+  // m_hasFileSun is true the environment CDF has had the sun pixels removed
+  // and the analytic sun parameters below describe the light.
+  bool m_hasFileSun = false;
+  // direction in local (unrotated) map space; rotation applied when using
+  // world-space value.
+  DirectX::XMFLOAT3 m_fileSunLocalDir = {0.0f, 1.0f, 0.0f};
+  DirectX::XMFLOAT3 m_fileSunRadiance = {1.0f, 1.0f, 1.0f};
+  float m_fileSunIntensity = 1.0f;
+  float m_fileSunRadiusDeg = 0.53f;
 
   static constexpr float kPhysicalSkyIntensity = 1.0f;
   static constexpr float kPhysicalSunIntensityLux = 110000.0f;
