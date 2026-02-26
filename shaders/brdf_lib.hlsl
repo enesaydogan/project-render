@@ -30,12 +30,12 @@ float G_Smith(float NdotV, float NdotL, float roughness) {
 
 // Schlick Fresnel
 float3 F_Schlick(float cosTheta, float3 F0) {
-    return F0 + (1.0 - F0) * pow(saturate(1.0 - cosTheta), 5.0);
+    return F0 + (1.0 - F0) * pow5(saturate(1.0 - cosTheta));
 }
 
 // Fresnel-Schlick with roughness compensation (for IBL and rough surfaces)
 float3 F_SchlickRoughness(float cosTheta, float3 F0, float roughness) {
-    return F0 + (max(float3(1.0 - roughness, 1.0 - roughness, 1.0 - roughness), F0) - F0) * pow(saturate(1.0 - cosTheta), 5.0);
+    return F0 + (max(float3(1.0 - roughness, 1.0 - roughness, 1.0 - roughness), F0) - F0) * pow5(saturate(1.0 - cosTheta));
 }
 
 // GGX Importance Sampling
@@ -89,7 +89,7 @@ float PDF_Lambert(float NdotL) {
 float FresnelDielectric(float cosTheta, float ior) {
     float r0 = (1.0 - ior) / (1.0 + ior);
     r0 = r0 * r0;
-    return r0 + (1.0 - r0) * pow(saturate(1.0 - cosTheta), 5.0);
+    return r0 + (1.0 - r0) * pow5(saturate(1.0 - cosTheta));
 }
 
 // DLSS-RR Specular Albedo approximation

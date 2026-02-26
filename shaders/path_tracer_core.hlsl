@@ -397,7 +397,7 @@ void RayGen()
                 }
             }
             
-            if (bounce > 0 && !prevIsDelta) {
+            if (bounce > 0 && bounce <= 2 && !prevIsDelta) {
                 float pdfLight = evaluate_env_map_pdf(envConditionalCdf, envMarginalCdf, rayDir);
                 float misW = (prevPdf * prevPdf) / (prevPdf * prevPdf + pdfLight * pdfLight + 1e-12);
                 missColor *= misW;
@@ -805,6 +805,9 @@ void RayGen()
         }
 
         // Environment NEE (importance sampled lat-long CDF)
+        // Skip for deep bounces: in indoor scenes, env shadow rays almost always hit
+        // walls/ceiling. BRDF-sampled misses still capture env light unweighted.
+        if (bounce <= 1)
         {
             LightSample envLs = sample_env_map(envMap, envConditionalCdf, envMarginalCdf, linearSampler, rng);
             SHADER_COUNTER_ADD(SHADER_COUNTER_ENV_SAMPLES, 1);
@@ -870,7 +873,7 @@ void RayGen()
                     directLighting += envContrib;
                 }
             }
-        }
+        } // end env NEE (bounce <= 1)
 
         // If ReSTIR GI is enabled, it already evaluated the first diffuse bounce.
         // Avoid double-counting by ignoring the main path tracer's first diffuse bounce.
@@ -888,7 +891,7 @@ void RayGen()
         float2 u = float2(next_float(rng), next_float(rng));
 
         // Refraction / Glass logic
-        bool isRefractive = length(payload.refractionColor) > 0.01;
+        bool isRefractive = max(payload.refractionColor.r, max(payload.refractionColor.g, payload.refractionColor.b)) > 0.01;
         if (isRefractive) {
             float3 glassL;
             bool refracted = false;
@@ -1001,8 +1004,8 @@ void RayGen()
             prevPdf = pdf;
             prevIsDelta = false;
             
-            // Russian Roulette
-            if (bounce > 2) {
+            // Russian Roulette (start early for faster indoor path termination)
+            if (bounce > 1) {
                 float p = max(throughput.x, max(throughput.y, throughput.z));
                 if (p <= 0.0 || next_float(rng) > p) break;
                 throughput /= p;

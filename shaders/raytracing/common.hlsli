@@ -12,6 +12,9 @@
 
 static const float PI = 3.14159265359;
 
+// Fast x^5 for Schlick Fresnel (avoids transcendental pow)
+inline float pow5(float x) { float x2 = x * x; return x2 * x2 * x; }
+
 inline float3 sRGBToLinear(float3 sRGB) {
     return pow(max(sRGB, 0.0), 2.2);
 }
@@ -89,7 +92,7 @@ inline float3 UVToDirection(float2 uv) {
 
 inline float3 FresnelSchlickRoughness(float cosTheta, float3 F0, float roughness)
 {
-    return F0 + (max(float3(1.0 - roughness, 1.0 - roughness, 1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+    return F0 + (max(float3(1.0 - roughness, 1.0 - roughness, 1.0 - roughness), F0) - F0) * pow5(saturate(1.0 - cosTheta));
 }
 
 inline float3 ToneMap(float3 x) {
