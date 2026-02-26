@@ -1243,37 +1243,60 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         elRad = -0.15f;
       }
 
-      // Get current parameters to preserve other sliders
-      float sunSize = IBLManager::Get().GetSunSize();
-      float sunInt = IBLManager::Get().GetSunIntensity();
+      bool usingFileIBL =
+          (IBLManager::Get().GetIBLSource() == IBLManager::IBLSource::File);
+      if (!usingFileIBL) {
+        // Get current parameters to preserve other sliders
+        float sunSize = IBLManager::Get().GetSunSize();
+        float sunInt = IBLManager::Get().GetSunIntensity();
 
-      // Apply to Sky Model
-      IBLManager::Get().SetSolarAltitude(elRad);
-      IBLManager::Get().SetSolarAzimuth(azPragueRad);
-      IBLManager::Get().UpdateSkyModel();
+        // Apply to Sky Model
+        IBLManager::Get().SetSolarAltitude(elRad);
+        IBLManager::Get().SetSolarAzimuth(azPragueRad);
+        IBLManager::Get().UpdateSkyModel();
 
-      // Sync Directional Light
-      float sunX = std::sin(azNorthRad) * std::cos(elRad);
-      float sunZ = std::cos(azNorthRad) * std::cos(elRad);
-      float sunY = std::sin(elRad);
+        // Sync Directional Light (from sky model)
+        float sunX = std::sin(azNorthRad) * std::cos(elRad);
+        float sunZ = std::cos(azNorthRad) * std::cos(elRad);
+        float sunY = std::sin(elRad);
 
-      g_cameraData.lightDir[0] = sunX;
-      g_cameraData.lightDir[1] = sunY;
-      g_cameraData.lightDir[2] = sunZ;
-      // Pass angular radius in radians to w component
-      g_cameraData.lightDir[3] = sunSize * DEG2RAD * 0.5f;
+        g_cameraData.lightDir[0] = sunX;
+        g_cameraData.lightDir[1] = sunY;
+        g_cameraData.lightDir[2] = sunZ;
+        // Pass angular radius in radians to w component
+        g_cameraData.lightDir[3] = sunSize * DEG2RAD * 0.5f;
 
-      // Sync Sun Color from Sky Model
-      auto sunRGB = IBLManager::Get().GetSunColor();
-      g_cameraData.lightColor[0] = sunRGB.x;
-      g_cameraData.lightColor[1] = sunRGB.y;
-      g_cameraData.lightColor[2] = sunRGB.z;
+        // Sync Sun Color from Sky Model
+        auto sunRGB = IBLManager::Get().GetSunColor();
+        g_cameraData.lightColor[0] = sunRGB.x;
+        g_cameraData.lightColor[1] = sunRGB.y;
+        g_cameraData.lightColor[2] = sunRGB.z;
 
-      // Sync Sun Intensity
-      g_cameraData.lightColor[3] = sunInt;
+        // Sync Sun Intensity
+        g_cameraData.lightColor[3] = sunInt;
+      } else {
+        // File IBL: use extracted sun if available, otherwise turn off
+        if (IBLManager::Get().HasFileSun()) {
+          auto worldDir = IBLManager::Get().GetFileSunWorldDir();
+          g_cameraData.lightDir[0] = worldDir.x;
+          g_cameraData.lightDir[1] = worldDir.y;
+          g_cameraData.lightDir[2] = worldDir.z;
+          g_cameraData.lightDir[3] =
+              IBLManager::Get().GetFileSunRadiusDeg() * DEG2RAD * 0.5f;
 
-        // IBL environment map rotation (degrees), consumed by shaders.
-        g_cameraData.iblRotationDegrees =
+          auto rad = IBLManager::Get().GetFileSunRadiance();
+          g_cameraData.lightColor[0] = rad.x;
+          g_cameraData.lightColor[1] = rad.y;
+          g_cameraData.lightColor[2] = rad.z;
+          g_cameraData.lightColor[3] = IBLManager::Get().GetFileSunIntensity();
+        } else {
+          g_cameraData.lightDir[3] = 0.0f;
+          g_cameraData.lightColor[3] = 0.0f;
+        }
+      }
+
+      // IBL environment map rotation (degrees), consumed by shaders.
+      g_cameraData.iblRotationDegrees =
           IBLManager::Get().GetIblRotationDegrees();
 
       UpdateCameraCB();

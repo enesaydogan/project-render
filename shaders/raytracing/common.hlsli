@@ -143,6 +143,10 @@ cbuffer Camera : register(b0)
     float debugVisualizationMode; // 0=None, 1=NoiseMap
     float cloudRenderingEnabled;
     float iblRotationDegrees;
+    // 1 = compute env map CDF / pdf in solid-angle measure (luminance*sin(theta)).
+    // 0 = use raw texel luminance (area) which is incorrect but useful for
+    // comparisons/debugging.
+    float sampleEnvSolidAngle;
     float3 _cameraPadEnd;
 }
 
