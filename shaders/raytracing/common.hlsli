@@ -70,8 +70,8 @@ SamplerState linearSampler : register(s0);
 
 inline float2 DirectionToUV(float3 dir) {
     float2 uv;
-    uv.x = atan2(dir.x, dir.z) / (2.0 * 3.14159265359) + 0.5;
-    uv.y = acos(clamp(dir.y, -1.0, 1.0)) / 3.14159265359;
+    uv.x = atan2(dir.x, dir.z) / (2.0 * PI) + 0.5;
+    uv.y = acos(clamp(dir.y, -1.0, 1.0)) / PI;
     return uv;
 }
 
@@ -216,16 +216,6 @@ struct RayPayload
     uint matIndex;
     uint rayDepth;        // 0 = primary, >0 = secondary
     uint rayType;         // RAY_TYPE_...
-};
-
-struct PathPayload
-{
-    float3 accumulatedColor;
-    float3 throughput;
-    float3 origin;
-    float3 direction;
-    bool active;
-    RNG rng;
 };
 
 #endif // RAYTRACING_COMMON_H
