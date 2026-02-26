@@ -3,46 +3,8 @@
 
 #include "common.hlsli"
 
-// Improved microfacet BRDF helpers (matching raster renderer)
-
-float DistributionGGX(float3 N, float3 H, float roughness)
-{
-    float a = roughness * roughness;
-    float a2 = a * a;
-    float NdotH = max(dot(N, H), 0.0);
-    float NdotH2 = NdotH * NdotH;
-    
-    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
-    denom = PI * denom * denom;
-    
-    return a2 / max(denom, 0.0001);
-}
-
-float GeometrySchlickGGX(float NdotV, float roughness)
-{
-    float r = (roughness + 1.0);
-    float k = (r * r) / 8.0;
-    
-    float nom = NdotV;
-    float denom = NdotV * (1.0 - k) + k;
-    
-    return nom / max(denom, 0.0001);
-}
-
-float GeometrySmith(float3 N, float3 V, float3 L, float roughness)
-{
-    float NdotV = max(dot(N, V), 0.0);
-    float NdotL = max(dot(N, L), 0.0);
-    float ggx2 = GeometrySchlickGGX(NdotV, roughness);
-    float ggx1 = GeometrySchlickGGX(NdotL, roughness);
-    
-    return ggx1 * ggx2;
-}
-
-float3 FresnelSchlick(float cosTheta, float3 F0)
-{
-    return F0 + (1.0 - F0) * pow(saturate(1.0 - cosTheta), 5.0);
-}
+// BRDF helpers: using D_GGX, V_SmithCorrelated, F_Schlick from brdf_lib.hlsl
+// (included via path_tracer_core.hlsl before this file)
 
 float3 TriPlanarWeights(float3 n, float sharpness)
 {
@@ -112,7 +74,7 @@ float3 SampleTriPlanarNormalLevel0(int texIndex, float3 worldPos, float3 worldNo
 // Extract normal from normal map and transform to world space
 float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent, int normalTexIndex)
 {
-    if (normalTexIndex < 0 || length(worldTangent.xyz) < 0.001) return normalize(worldNormal);
+    if (normalTexIndex < 0 || dot(worldTangent.xyz, worldTangent.xyz) < 1e-6) return normalize(worldNormal);
     
     float3 tangentNormal = textures[normalTexIndex].SampleLevel(linearSampler, uv, 0).xyz * 2.0 - 1.0;
     
@@ -257,9 +219,9 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     float3 viewDirTwoSided = normalize(-WorldRayDirection());
     if (dot(N, viewDirTwoSided) < 0.0) N = -N;
     
-    // Ambient occlusion
+    // Ambient occlusion (only needed for GI_EVAL which computes Lo)
     float ao = 1.0;
-    if (texOcc >= 0) {
+    if (texOcc >= 0 && payload.rayType == RAY_TYPE_GI_EVAL) {
         ao = triPlanar ? SampleTriPlanarLevel0(texOcc, P, worldNormal, triScale, triSharp).r
                        : textures[texOcc].SampleLevel(linearSampler, uv, 0).r;
         SHADER_COUNTER_ADD(SHADER_COUNTER_TEXTURE_SAMPLES, 1);
@@ -301,79 +263,39 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     
     if (payload.rayType == RAY_TYPE_GI_EVAL)
     {
-        // Calculate view direction correctly in world space
-        float3 V = normalize(-WorldRayDirection());
-        
-        // Directional light
+        // Simplified diffuse-only evaluation for GI bounces.
+        // Specular and clearcoat are skipped: the path tracer handles specular
+        // via BRDF importance sampling; GI reservoirs only carry diffuse transport.
         float3 L = normalize(lightDir.xyz);
-        float3 H = normalize(V + L);
-
-        float clearcoat = saturate(arch0.x);
-        float clearcoatRoughness = max(arch0.y, 0.02);
-
-        // Cook-Torrance BRDF
-        float NDF = DistributionGGX(N, H, roughness);
-        float G = GeometrySmith(N, V, L, roughness);
-        float3 F = FresnelSchlick(max(dot(H, V), 0.0), F0);
-        
-        float3 numerator = NDF * G * F;
-        float NdotV = max(dot(N, V), 0.0);
         float NdotL = saturate(dot(N, L));
-        float denominator = 4.0 * NdotV * NdotL;
-        float3 specular = numerator / max(denominator, 0.001);
 
-        // Clearcoat (secondary GGX lobe, fixed dielectric F0)
-        float3 coatSpecular = float3(0.0, 0.0, 0.0);
-        if (clearcoat > 0.001) {
-            float3 F0c = float3(0.04, 0.04, 0.04);
-            float NDFc = DistributionGGX(N, H, clearcoatRoughness);
-            float Gc = GeometrySmith(N, V, L, clearcoatRoughness);
-            float3 Fc = FresnelSchlick(max(dot(H, V), 0.0), F0c);
-            float3 numc = NDFc * Gc * Fc;
-            float denc = 4.0 * NdotV * NdotL;
-            coatSpecular = numc / max(denc, 0.001);
+        // Skip shadow ray entirely when sun is below hemisphere
+        if (NdotL > 0.0) {
+            RayDesc shadowRay;
+            shadowRay.Origin = P + N * 0.002;
+            shadowRay.Direction = L;
+            shadowRay.TMin = 0.002;
+            shadowRay.TMax = 1000.0;
+
+            RayPayload shadowPayload;
+            shadowPayload.t = 1.0;
+            shadowPayload.rayDepth = 1;
+            shadowPayload.rayType = RAY_TYPE_SHADOW;
+
+            TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
+
+            if (shadowPayload.t < 0.0) { // Miss = not occluded
+                float3 radiance = lightColor.rgb * lightColor.w;
+                Lo = (DiffuseAlbedo / PI) * radiance * NdotL;
+            }
         }
-        
-        // Energy conservation
-        float3 kS = F;
-        float3 kD = 1.0 - kS;
 
-        // Shadow Ray
-        float shadowed = 1.0;
-        RayDesc shadowRay;
-        shadowRay.Origin = P + N * 0.002; // Offset to avoid self-intersection
-        shadowRay.Direction = L;
-        shadowRay.TMin = 0.002;
-        shadowRay.TMax = 1000.0;
-        
-        RayPayload shadowPayload;
-        shadowPayload.color = float3(0,0,0);
-        shadowPayload.albedo = float3(0,0,0);
-        shadowPayload.emissive = float3(0,0,0);
-        shadowPayload.refractionColor = float3(0,0,0);
-        shadowPayload.ior = 1.0;
-        shadowPayload.roughness = 1.0;
-        shadowPayload.metalness = 0.0;
-        shadowPayload.matIndex = 0;
-        shadowPayload.t = 1.0; 
-        shadowPayload.rayDepth = 1;
-        shadowPayload.rayType = RAY_TYPE_SHADOW;
-        
-        TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
-        
-        if (shadowPayload.t > 0.0) shadowed = 0.0;
-
-        // Outgoing radiance
-        float3 radiance = lightColor.rgb * lightColor.w;
-
-        float3 baseLo = (kD * DiffuseAlbedo / PI + specular) * radiance * NdotL * shadowed;
-        float3 coatLo = coatSpecular * radiance * NdotL * shadowed;
-
-        Lo = baseLo * (1.0 - clearcoat) + coatLo * clearcoat;
-
+        // Back-face diffuse translucency (not shadow-tested, intentional for thin geometry)
         if (translucency > 0.001) {
-            float NdotL_back = saturate(dot(-N, L));
-            Lo += (DiffuseAlbedo / PI) * radiance * NdotL_back * translucency;
+            float NdotL_back = saturate(dot(-N, normalize(lightDir.xyz)));
+            if (NdotL_back > 0.0) {
+                Lo += (DiffuseAlbedo / PI) * (lightColor.rgb * lightColor.w) * NdotL_back * translucency;
+            }
         }
     }
     
