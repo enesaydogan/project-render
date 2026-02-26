@@ -18,12 +18,13 @@ void Miss(inout RayPayload payload)
     float cosTheta = dot(normalize(dir), L);
     float cosSunRadius = cos(lightDir.w);
 
-    if (cosTheta > cosSunRadius && payload.rayType != RAY_TYPE_DIFFUSE) {
+        if (cosTheta > cosSunRadius && payload.rayType != RAY_TYPE_DIFFUSE) {
          // Physically correct sun radiance = Illuminance (Lux) / Solid Angle (sr)
          // Omega = 2 * PI * (1 - cos(theta))
          float sunSolidAngle = 2.0f * PI * (1.0f - cosSunRadius);
          float3 sunRadiance = (lightColor.rgb * lightColor.w) / max(sunSolidAngle, 1e-7f);
-         color = sunRadiance * intensity;
+            const float dxrSunDiscMatchGain = 1.12f;
+            color = sunRadiance * intensity * dxrSunDiscMatchGain;
     }
     
     // --- Volumetric Clouds (baked) ---

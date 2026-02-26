@@ -376,7 +376,8 @@ void RayGen()
                 if (cosTheta > cosSunRadius) {
                     float sunSolidAngle = 2.0f * PI * (1.0f - cosSunRadius);
                     float3 sunRadiance = (lightColor.rgb * lightColor.w) / max(sunSolidAngle, 1e-7f);
-                    rrSky = sunRadiance * intensity;
+                    const float dxrSunDiscMatchGain = 1.12f;
+                    rrSky = sunRadiance * intensity * dxrSunDiscMatchGain;
                 }
 
                 if (cloudRenderingEnabled > 0.5f) {
@@ -1161,11 +1162,20 @@ void RayGen()
         return;
     }
 
-    // Final NaN/Inf check and clamping before accumulation
+    // Final NaN/Inf check and firefly limiting before accumulation.
+    // Use luminance-preserving scaling instead of per-channel clipping so
+    // bright sky/sun values do not desaturate toward gray/white.
     if (!any(isfinite(finalColor))) finalColor = float3(0,0,0);
-    finalColor = clamp(finalColor, 0.0, 100.0); // Hard clamp to prevent firefly corruption
+    finalColor = max(finalColor, 0.0);
 
-    float lum = dot(finalColor, float3(0.2126, 0.7152, 0.0722));
+    const float3 kLumaWeights = float3(0.2126, 0.7152, 0.0722);
+    const float kMaxSampleLuminance = 10000.0; //enes  10 x boost for the better sun
+    float sampleLum = dot(finalColor, kLumaWeights);
+    if (sampleLum > kMaxSampleLuminance) {
+        finalColor *= (kMaxSampleLuminance / sampleLum);
+    }
+
+    float lum = dot(finalColor, kLumaWeights);
     if (!isfinite(lum)) lum = 0.0;
     bool historyRepairedThisFrame = false;
 
