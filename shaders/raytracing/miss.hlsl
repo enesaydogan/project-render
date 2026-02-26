@@ -18,13 +18,16 @@ void Miss(inout RayPayload payload)
     float cosTheta = dot(normalize(dir), L);
     float cosSunRadius = cos(lightDir.w);
 
-        if (cosTheta > cosSunRadius && payload.rayType != RAY_TYPE_DIFFUSE) {
+    // Do not add sun disc for rays that already use Next Event Estimation (NEE)
+    // to avoid double-counting the sun.
+    bool useNEE = (payload.rayType == RAY_TYPE_DIFFUSE || payload.rayType == RAY_TYPE_REFLECTION || payload.rayType == RAY_TYPE_REFRACTION);
+    if (cosTheta > cosSunRadius && !useNEE) {
          // Physically correct sun radiance = Illuminance (Lux) / Solid Angle (sr)
          // Omega = 2 * PI * (1 - cos(theta))
          float sunSolidAngle = 2.0f * PI * (1.0f - cosSunRadius);
          float3 sunRadiance = (lightColor.rgb * lightColor.w) / max(sunSolidAngle, 1e-7f);
-            const float dxrSunDiscMatchGain = 1.12f;
-            color = sunRadiance * intensity * dxrSunDiscMatchGain;
+         const float dxrSunDiscMatchGain = 1.12f;
+         color = sunRadiance * intensity * dxrSunDiscMatchGain;
     }
     
     // --- Volumetric Clouds (baked) ---
@@ -32,7 +35,8 @@ void Miss(inout RayPayload payload)
     bool allowClouds = (payload.rayType == RAY_TYPE_PRIMARY || 
                         payload.rayType == RAY_TYPE_REFLECTION || 
                         payload.rayType == RAY_TYPE_REFRACTION ||
-                        payload.rayType == RAY_TYPE_DIFFUSE);
+                        payload.rayType == RAY_TYPE_DIFFUSE ||
+                        payload.rayType == RAY_TYPE_GI_EVAL);
     if (cloudRenderingEnabled > 0.5 && allowClouds) {
         int dbg = (int)SHADER_DEBUG_MODE;
         bool cloudDebugView = (dbg >= 11 && dbg <= 16);

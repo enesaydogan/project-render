@@ -288,6 +288,8 @@ void RayGen()
     int refractiveBounces = 0;
     int giBounces = 0;
     uint currentRayType = RAY_TYPE_PRIMARY;
+    float prevPdf = 1.0;
+    bool prevIsDelta = false;
 
     for (int bounce = 0; bounce < 32; ++bounce) 
     {
@@ -393,7 +395,18 @@ void RayGen()
                     missColor = rrSky;
                 }
             }
-            accumulatedColor += throughput * missColor;
+            
+            if (bounce > 0 && !prevIsDelta) {
+                float pdfLight = evaluate_env_map_pdf(envConditionalCdf, envMarginalCdf, rayDir);
+                float misW = (prevPdf * prevPdf) / (prevPdf * prevPdf + pdfLight * pdfLight + 1e-12);
+                missColor *= misW;
+            }
+            
+            // If ReSTIR GI is enabled, it already evaluated the first diffuse bounce.
+            // Avoid double-counting by ignoring the main path tracer's first diffuse bounce.
+            if (!(bounce == 1 && maxGIBounces > 0.0 && currentRayType == RAY_TYPE_DIFFUSE)) {
+                accumulatedColor += throughput * missColor;
+            }
             
             // On first bounce miss, update reservoir to empty
             if (bounce == 0) {
@@ -636,28 +649,18 @@ void RayGen()
                 // A. Initial Candidate
                 {
                     float3 nextDir_gi; float pdf_gi; float3 f_brdf_gi; float2 u_gi = next_float2(rng);
-                    float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
-                    float3 F = F_Schlick(max(0.0, dot(N, V)), F0);
-                    float specProb = max(F.x, max(F.y, F.z));
-                    float diffProb = (1.0 - specProb) * (1.0 - metallic);
-                    float totalProb = specProb + diffProb;
-                    if (next_float(rng) * totalProb < specProb) {
-                        float3 H = SampleGGX(u_gi, N, roughness);
-                        nextDir_gi = reflect(-V, H);
-                        float NdotL = saturate(dot(N, nextDir_gi));
-                        pdf_gi = (PDF_GGX(saturate(dot(N,H)), saturate(dot(V,H)), roughness) * specProb) / totalProb;
-                        f_brdf_gi = D_GGX(saturate(dot(N, H)), roughness) * G_Smith(max(0.0, dot(N, V)), NdotL, roughness) * F_Schlick(saturate(dot(H, V)), F0) / (4.0 * max(0.0, dot(N, V)) * NdotL + 0.001);
-                    } else {
-                        nextDir_gi = SampleLambert(u_gi, N);
-                        float NdotL = saturate(dot(N, nextDir_gi));
-                        pdf_gi = (PDF_Lambert(NdotL) * diffProb) / totalProb;
-                        f_brdf_gi = (diffuseAlbedo / PI);
-                    }
+                    
+                    // ReSTIR GI only handles diffuse. Specular and refraction are handled by the main path tracer.
+                    nextDir_gi = SampleLambert(u_gi, N);
+                    float NdotL = saturate(dot(N, nextDir_gi));
+                    pdf_gi = PDF_Lambert(NdotL);
+                    f_brdf_gi = (diffuseAlbedo / PI);
+                    
                     if (pdf_gi > 0.0) {
                         RayDesc giRay; giRay.Origin = P + N * 0.0005; giRay.Direction = nextDir_gi;
                         giRay.TMin = 0.0001; giRay.TMax = 1000.0;
                         RayPayload giPayload; giPayload.color = float3(0,0,0); giPayload.emissive = float3(0,0,0); giPayload.t = -1.0; giPayload.rayDepth = (uint)bounce + 1;
-                        giPayload.rayType = RAY_TYPE_DIFFUSE;
+                        giPayload.rayType = RAY_TYPE_GI_EVAL;
                         TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, giRay, giPayload);
                         SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                         // Include sky/clouds in GI radiance
@@ -678,10 +681,7 @@ void RayGen()
                     GI_Reservoir prev_gi = unpack_gi_reservoir(d0, d1, d2);
                     prev_gi.M = min(prev_gi.M, 15);
                     float3 L_gi = normalize(prev_gi.hitPos - P);
-                    float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
-                    float3 H = normalize(L_gi + V);
-                    float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * G_Smith(max(0.0, dot(N, V)), saturate(dot(N, L_gi)), roughness) * F_Schlick(max(0.0, dot(H, V)), F0) / (4.0 * max(0.0, dot(N, V)) * saturate(dot(N, L_gi)) + 0.001);
-                    float3 brdf = (diffuseAlbedo / PI) + spec;
+                    float3 brdf = (diffuseAlbedo / PI);
                     float p_target_at_curr = length(prev_gi.radiance * brdf * saturate(dot(N, L_gi)));
                     combine_gi_reservoirs(gi_res, prev_gi, p_target_at_curr, rng);
                 }
@@ -703,10 +703,7 @@ void RayGen()
                         GI_Reservoir neigh_gi = unpack_gi_reservoir(d0, d1, d2);
                         neigh_gi.M = min(neigh_gi.M, 8);
                         float3 L_gi = normalize(neigh_gi.hitPos - P);
-                        float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
-                        float3 H = normalize(L_gi + V);
-                        float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * G_Smith(max(0.0, dot(N, V)), saturate(dot(N, L_gi)), roughness) * F_Schlick(max(0.0, dot(H, V)), F0) / (4.0 * max(0.0, dot(N, V)) * saturate(dot(N, L_gi)) + 0.001);
-                        float3 brdf = (diffuseAlbedo / PI) + spec;
+                        float3 brdf = (diffuseAlbedo / PI);
                         float p_target_at_curr = length(neigh_gi.radiance * brdf * saturate(dot(N, L_gi)));
                         
                         // Spatial Jacobian / Visibility for GI
@@ -725,10 +722,7 @@ void RayGen()
                 }
                 // Finalize GI
                 float3 L_gi_final = normalize(gi_res.hitPos - P);
-                float3 F0_gi = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
-                float3 H_gi = normalize(L_gi_final + V);
-                float3 spec_gi = D_GGX(max(0.0, dot(N, H_gi)), roughness) * G_Smith(max(0.0, dot(N, V)), saturate(dot(N, L_gi_final)), roughness) * F_Schlick(max(0.0, dot(H_gi, V)), F0_gi) / (4.0 * max(0.0, dot(N, V)) * saturate(dot(N, L_gi_final)) + 0.001);
-                float3 brdf_gi_final = (diffuseAlbedo / PI) + spec_gi;
+                float3 brdf_gi_final = (diffuseAlbedo / PI);
                 float p_target_final_gi = length(gi_res.radiance * brdf_gi_final * saturate(dot(N, L_gi_final)));
                 finalize_gi_reservoir(gi_res, p_target_final_gi);
                 float4 out_d0, out_d1, out_d2; pack_gi_reservoir(gi_res, out_d0, out_d1, out_d2);
@@ -875,6 +869,13 @@ void RayGen()
             }
         }
 
+        // If ReSTIR GI is enabled, it already evaluated the first diffuse bounce.
+        // Avoid double-counting by ignoring the main path tracer's first diffuse bounce.
+        if (bounce == 1 && maxGIBounces > 0.0 && currentRayType == RAY_TYPE_DIFFUSE) {
+            directLighting = float3(0, 0, 0);
+            payload.emissive = float3(0, 0, 0);
+        }
+
         accumulatedColor += throughput * (directLighting + indirectLighting + payload.emissive);
 
         // 2. Indirect Lighting Ray Generation
@@ -923,7 +924,7 @@ void RayGen()
                 specularBounces++;
                 nextDir = glassL;
                 f_brdf = float3(1,1,1);
-                currentRayType = RAY_TYPE_DIFFUSE;
+                currentRayType = RAY_TYPE_REFLECTION;
             }
             pdf = 1.0;
             rayOrigin = P + nextDir * 0.001; 
@@ -932,6 +933,8 @@ void RayGen()
             throughput *= f_brdf;
             // Skip the standard PBR throughput update
             rayDir = nextDir;
+            prevPdf = pdf;
+            prevIsDelta = true;
             continue; 
         } else {
             // Metallic / Diffuse PBR sampling (+ optional diffuse translucency)
@@ -962,7 +965,7 @@ void RayGen()
                 f_brdf = D_GGX(NdotH, roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL, roughness) * F_Schlick(VdotH, F0);
                 rayOrigin = P + N * 0.001;
                 cosineTerm = NdotL;
-                currentRayType = RAY_TYPE_DIFFUSE;
+                currentRayType = RAY_TYPE_REFLECTION;
             } else if (pick < (specProb + diffProb)) {
                 // Diffuse Lambert
                 if (giBounces >= (int)maxGIBounces) break;
@@ -974,7 +977,7 @@ void RayGen()
                 f_brdf = diffuseAlbedo / PI;
                 rayOrigin = P + N * 0.001;
                 cosineTerm = NdotL;
-                currentRayType = RAY_TYPE_REFLECTION;
+                currentRayType = RAY_TYPE_DIFFUSE;
             } else {
                 // Diffuse translucency (transmission) Lambert
                 if (giBounces >= (int)maxGIBounces) break;
@@ -986,12 +989,14 @@ void RayGen()
                 f_brdf = (payload.albedo / PI) * (1.0 - metallic);
                 rayOrigin = P - N * 0.001;
                 cosineTerm = NdotL_t;
-                currentRayType = RAY_TYPE_REFLECTION;
+                currentRayType = RAY_TYPE_DIFFUSE;
             }
 
             if (!(pdf > 0.0)) break;
             throughput *= (f_brdf * cosineTerm) / pdf;
             rayDir = nextDir;
+            prevPdf = pdf;
+            prevIsDelta = false;
             
             // Russian Roulette
             if (bounce > 2) {

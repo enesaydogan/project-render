@@ -143,4 +143,31 @@ LightSample sample_env_map(Texture2D env,
     return ls;
 }
 
+float evaluate_env_map_pdf(Texture2D<float4> conditionalCdf,
+                           Texture2D<float4> marginalCdf,
+                           float3 dir)
+{
+    uint envW, envH;
+    conditionalCdf.GetDimensions(envW, envH);
+    if (envW == 0 || envH == 0) return 0.0;
+
+    float rotRad = radians(iblRotationDegrees);
+    float3 localDir = RotateY(dir, rotRad);
+    float2 uv = DirectionToUV(localDir);
+
+    uint col = min((uint)(uv.x * envW), envW - 1);
+    uint row = min((uint)(uv.y * envH), envH - 1);
+
+    float texelPmf = max(0.0, conditionalCdf.Load(int3(col, row, 0)).y);
+    float theta = ((float)row + 0.5) / (float)envH * PI;
+    float sinTheta = max(1e-6, sin(theta));
+    float dOmega = (2.0 * PI / (float)envW) * (PI / (float)envH) * sinTheta;
+
+    if (sampleEnvSolidAngle > 0.5) {
+        return texelPmf / max(1e-12, dOmega);
+    } else {
+        return texelPmf;
+    }
+}
+
 #endif // LIGHTS_LIB_HLSL

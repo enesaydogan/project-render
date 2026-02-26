@@ -296,10 +296,10 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     // Primary rays use ReSTIR in RayGen and don't need this locally computed color.
     // IBL (ambient) is currently unused by both RayGen (for Primary) and Diffuse rays (which take Lo only).
     
-    if (payload.rayType == RAY_TYPE_DIFFUSE)
+    if (payload.rayType == RAY_TYPE_GI_EVAL)
     {
         // Calculate view direction correctly in world space
-        float3 V = normalize(camPos - P);
+        float3 V = normalize(-WorldRayDirection());
         
         // Directional light
         float3 L = normalize(lightDir.xyz);
@@ -377,7 +377,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     // For diffuse transport rays used by path tracing GI probes, avoid adding
     // unoccluded ambient IBL here. GI raygen will add emissive separately.
     float3 color = (ambient + Lo + emissive) * intensity;
-    if (payload.rayType == RAY_TYPE_DIFFUSE) {
+    if (payload.rayType == RAY_TYPE_GI_EVAL) {
         color = Lo;
     }
     
@@ -402,7 +402,7 @@ void AnyHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes a
 {
     // For shadow or diffuse (GI visibility) rays hitting glass or thin-walled materials, we want to let light through.
     // This is a critical optimization for interior scenes with windows.
-    if (payload.rayType == RAY_TYPE_SHADOW || payload.rayType == RAY_TYPE_DIFFUSE) {
+    if (payload.rayType == RAY_TYPE_SHADOW || payload.rayType == RAY_TYPE_DIFFUSE || payload.rayType == RAY_TYPE_GI_EVAL) {
         uint meshIdx = InstanceID();
         MeshData mesh = meshData[meshIdx];
         uint matIdx = (uint)max(0, mesh.materialIndex);
