@@ -762,19 +762,22 @@ void RayGen()
             float3 L_nee;
             float3 radiance_nee;
             float dist_nee;
-            if (next_float(rng) < 0.5 || numLights == 0) {
-                // Sample Sun
+            float neeWeight = 1.0; // PDF compensation factor
+            if (numLights == 0 || next_float(rng) < 0.5) {
+                // Sample Sun (probability = numLights > 0 ? 0.5 : 1.0)
                 L_nee = normalize(lightDir.xyz);
                 radiance_nee = lightColor.rgb * lightColor.w;
                 dist_nee = 1000.0;
+                neeWeight = (numLights > 0) ? 2.0 : 1.0;
             } else {
-                // Sample random point light
+                // Sample random point light (probability = 0.5 * 1/numLights)
                 uint lightIdx = next_uint(rng) % numLights;
                 Light l = g_lights[lightIdx];
                 L_nee = l.position - P;
                 dist_nee = length(L_nee);
                 L_nee /= dist_nee;
                 radiance_nee = l.color * (l.intensity / (dist_nee * dist_nee + 1.0)) * (float)numLights;
+                neeWeight = 2.0;
             }
 
             float NdotL_nee = saturate(dot(N, L_nee));
@@ -796,7 +799,7 @@ void RayGen()
                      float3 H = normalize(L_nee + V);
                      float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL_nee, roughness) * F_Schlick(max(0.0, dot(H, V)), F0);
                      float3 brdf = (diffuseAlbedo / PI) + spec;
-                     directLighting = brdf * radiance_nee * NdotL_nee * 2.0; // *2 because of 50/50 sun/lights
+                     directLighting = brdf * radiance_nee * NdotL_nee * neeWeight;
                 }
             }
         }
@@ -1006,18 +1009,6 @@ void RayGen()
             }
 
             continue;
-        }
-
-        if (!(pdf > 0.0)) break;
-
-        throughput *= (f_brdf * saturate(dot(N, nextDir))) / pdf;
-        rayDir = nextDir;
-
-        // Russian Roulette
-        if (bounce > 2) {
-            float p = max(throughput.x, max(throughput.y, throughput.z));
-            if (p <= 0.0 || next_float(rng) > p) break;
-            throughput /= p;
         }
     }
 

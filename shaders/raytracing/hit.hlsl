@@ -172,8 +172,8 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     uint i2 = indices[mesh.ibIndex].Load(baseIndex + 2);
 
     // Instrumentation: count index + vertex fetches
-    // InterlockedAdd(g_shaderCounters[SHADER_COUNTER_INDEX_LOADS], 3);
-    // InterlockedAdd(g_shaderCounters[SHADER_COUNTER_VERTEX_FETCHES], 3);
+    SHADER_COUNTER_ADD(SHADER_COUNTER_INDEX_LOADS, 3);
+    SHADER_COUNTER_ADD(SHADER_COUNTER_VERTEX_FETCHES, 3);
     
     // Interpolate UV
     float2 uv0 = vertices[mesh.vbIndex][i0].uv;
@@ -199,9 +199,12 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     float4 localTangent = t0 * bary.x + t1 * bary.y + t2 * bary.z;
 
     // Transform to world space
-    // ObjectToWorld3x4() is provided by DXR
-    float3 worldNormal = normalize(mul((float3x3)ObjectToWorld3x4(), localNormal));
+    // Normals must be transformed by the inverse-transpose of the model matrix
+    // to handle non-uniform scaling correctly. In DXR:
+    //   mul(v, M) = transpose(M)*v, so mul(normal, WorldToObject) = inv(transpose(ObjectToWorld))*normal
+    float3 worldNormal = normalize(mul(localNormal, (float3x3)WorldToObject3x4()));
     float4 worldTangent;
+    // Tangents (directions) use ObjectToWorld directly
     worldTangent.xyz = normalize(mul((float3x3)ObjectToWorld3x4(), localTangent.xyz));
     worldTangent.w = localTangent.w;
     
@@ -217,7 +220,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
         float3 bc = triPlanar ? SampleTriPlanarLevel0(texDiff, P, worldNormal, triScale, triSharp).rgb
                               : textures[texDiff].SampleLevel(linearSampler, uv, 0).rgb;
         BaseColor *= sRGBToLinear(bc);
-        // InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TEXTURE_SAMPLES], 1);
+        SHADER_COUNTER_ADD(SHADER_COUNTER_TEXTURE_SAMPLES, 1);
     }
     
     float metalness = mat.extraParams.x;
@@ -230,7 +233,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
                                     : textures[texMR].SampleLevel(linearSampler, uv, 0);
         roughness *= mrSample.g; 
         metalness *= mrSample.b;
-        // InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TEXTURE_SAMPLES], 1);
+        SHADER_COUNTER_ADD(SHADER_COUNTER_TEXTURE_SAMPLES, 1);
     }
 
     // Clamp to reduce fireflies / unstable highlights in archviz scenes
@@ -254,12 +257,12 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     float3 viewDirTwoSided = normalize(-WorldRayDirection());
     if (dot(N, viewDirTwoSided) < 0.0) N = -N;
     
-    // Ambient occlusion (only needed for AO debug mode)
+    // Ambient occlusion
     float ao = 1.0;
-    if (texOcc >= 0 && mode == 7) {
+    if (texOcc >= 0) {
         ao = triPlanar ? SampleTriPlanarLevel0(texOcc, P, worldNormal, triScale, triSharp).r
                        : textures[texOcc].SampleLevel(linearSampler, uv, 0).r;
-        // InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TEXTURE_SAMPLES], 1);
+        SHADER_COUNTER_ADD(SHADER_COUNTER_TEXTURE_SAMPLES, 1);
     }
     
     // Emissive with boost factor and user intensity
@@ -269,7 +272,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
         float3 e = triPlanar ? SampleTriPlanarLevel0(texEmis, P, worldNormal, triScale, triSharp).rgb
                              : textures[texEmis].SampleLevel(linearSampler, uv, 0).rgb;
         emissive *= sRGBToLinear(e);
-        // InterlockedAdd(g_shaderCounters[SHADER_COUNTER_TEXTURE_SAMPLES], 1);
+        SHADER_COUNTER_ADD(SHADER_COUNTER_TEXTURE_SAMPLES, 1);
     }
     
     // Debug Pass
@@ -374,6 +377,9 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
         }
     }
     
+    // Apply AO to diffuse and ambient lighting
+    Lo *= ao;
+    
     // For diffuse transport rays used by path tracing GI probes, avoid adding
     // unoccluded ambient IBL here. GI raygen will add emissive separately.
     float3 color = (ambient + Lo + emissive) * intensity;
@@ -412,7 +418,8 @@ void AnyHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes a
         // 1. Has refraction color (transparent)
         // 2. Is marked as thin-walled (architectural glass)
         // 3. Has translucency
-        if (length(mat.refractionColor.rgb) > 0.01 || mat.archvizParams0.z > 0.5 || mat.archvizParams0.w > 0.01) {
+        float maxRefr = max(mat.refractionColor.r, max(mat.refractionColor.g, mat.refractionColor.b));
+        if (maxRefr > 0.01 || mat.archvizParams0.z > 0.5 || mat.archvizParams0.w > 0.01) {
             IgnoreHit();
         }
     }

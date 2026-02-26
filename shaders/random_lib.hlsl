@@ -50,9 +50,10 @@ float3 next_float3(inout RNG rng) {
     return float3(next_float(rng), next_float(rng), next_float(rng));
 }
 
-// Consine weighted hemisphere sampling
+// Cosine weighted hemisphere sampling
 float3 sample_hemisphere_cosine(float2 u) {
-    float phi = 2.0 * 3.14159265 * u.x;
+    static const float kPI = 3.14159265359;
+    float phi = 2.0 * kPI * u.x;
     float cos_theta = sqrt(u.y);
     float sin_theta = sqrt(1.0 - u.y);
     return float3(sin_theta * cos(phi), cos_theta, sin_theta * sin(phi));
