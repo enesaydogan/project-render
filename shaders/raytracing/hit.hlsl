@@ -338,9 +338,9 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
         // Shadow Ray
         float shadowed = 1.0;
         RayDesc shadowRay;
-        shadowRay.Origin = P + N * 0.001; // Offset to avoid self-intersection
+        shadowRay.Origin = P + N * 0.002; // Offset to avoid self-intersection
         shadowRay.Direction = L;
-        shadowRay.TMin = 0.001;
+        shadowRay.TMin = 0.002;
         shadowRay.TMax = 1000.0;
         
         RayPayload shadowPayload;
@@ -356,7 +356,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
         shadowPayload.rayDepth = 1;
         shadowPayload.rayType = RAY_TYPE_SHADOW;
         
-        TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
+        TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
         
         if (shadowPayload.t > 0.0) shadowed = 0.0;
 
