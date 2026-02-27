@@ -79,7 +79,8 @@ LightSample sample_env_map(Texture2D env,
                            Texture2D<float4> conditionalCdf,
                            Texture2D<float4> marginalCdf,
                            SamplerState s,
-                           inout RNG rng)
+                           inout RNG rng,
+                           float sampleLod)
 {
     LightSample ls;
     ls.L = float3(0.0, 1.0, 0.0);
@@ -138,7 +139,7 @@ LightSample sample_env_map(Texture2D env,
     }
 
     ls.L = worldDir;
-    ls.radiance = env.SampleLevel(s, uvRot, 0).rgb;
+    ls.radiance = env.SampleLevel(s, uvRot, sampleLod).rgb;
     ls.pdf = max(0.0, pdf);
     return ls;
 }

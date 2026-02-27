@@ -8,10 +8,16 @@
 void Miss(inout RayPayload payload)
 {
     float3 dir = WorldRayDirection();
+    uint rayType = UnpackPayloadRayType(payload.packedIorType);
     float2 uv = DirectionToUVRotated(dir);
-    
+
+    bool isPrimary = (rayType == RAY_TYPE_PRIMARY);
+    float pathDistance = max(length(WorldRayOrigin() - camPos), 1e-3);
+    float envLod = isPrimary ? 0.0 : clamp(log2(pathDistance * 0.02) + 0.35, 0.0, 10.0);
+    float cloudLod = isPrimary ? 0.0 : min(10.0, envLod + 0.5);
+
     // Sample environment map and apply intensity
-    float3 skySample = envMap.SampleLevel(linearSampler, uv, 0).rgb * intensity;
+    float3 skySample = envMap.SampleLevel(linearSampler, uv, envLod).rgb * intensity;
     // Mix between a flat global ambient color and the procedural sky based on
     // ambientColor.w.  This mirrors the logic used in the raster shader so that
     // ray tracing respects the same tint/weight settings.
@@ -26,7 +32,7 @@ void Miss(inout RayPayload payload)
 
     // Do not add sun disc for rays that already use Next Event Estimation (NEE)
     // to avoid double-counting the sun.
-    bool useNEE = (payload.rayType == RAY_TYPE_DIFFUSE || payload.rayType == RAY_TYPE_REFLECTION || payload.rayType == RAY_TYPE_REFRACTION);
+    bool useNEE = (rayType == RAY_TYPE_DIFFUSE || rayType == RAY_TYPE_REFLECTION || rayType == RAY_TYPE_REFRACTION);
     if (cosTheta > cosSunRadius && !useNEE) {
          // Physically correct sun radiance = Illuminance (Lux) / Solid Angle (sr)
          // Omega = 2 * PI * (1 - cos(theta))
@@ -38,17 +44,17 @@ void Miss(inout RayPayload payload)
     
     // --- Volumetric Clouds (baked) ---
     // Use pre-baked lat-long cloud texture for misses/reflections/refractions.
-    bool allowClouds = (payload.rayType == RAY_TYPE_PRIMARY || 
-                        payload.rayType == RAY_TYPE_REFLECTION || 
-                        payload.rayType == RAY_TYPE_REFRACTION ||
-                        payload.rayType == RAY_TYPE_DIFFUSE ||
-                        payload.rayType == RAY_TYPE_GI_EVAL);
+    bool allowClouds = (rayType == RAY_TYPE_PRIMARY ||
+                        rayType == RAY_TYPE_REFLECTION ||
+                        rayType == RAY_TYPE_REFRACTION ||
+                        rayType == RAY_TYPE_DIFFUSE ||
+                        rayType == RAY_TYPE_GI_EVAL);
     if (cloudRenderingEnabled > 0.5 && allowClouds) {
         int dbg = (int)SHADER_DEBUG_MODE;
         bool cloudDebugView = (dbg >= 11 && dbg <= 16);
         
         float2 skyUv = DirectionToUVRotated(dir);
-        float4 baked = bakedClouds.SampleLevel(linearSampler, skyUv, 0);
+        float4 baked = bakedClouds.SampleLevel(linearSampler, skyUv, cloudLod);
         baked.a = saturate(baked.a);
         baked.rgb = max(baked.rgb, 0.0);
         
@@ -71,20 +77,12 @@ void Miss(inout RayPayload payload)
 
     // Fill payload
     // RayPayload in common.hlsli has float3 color
-    payload.color = max(color, 0.0);
+    PayloadSetColor(payload, max(color, 0.0));
     payload.t = -1.0;
-    
-    // Fill remaining payload members to default to avoid undefined behavior or validation errors
-    payload.normal = float3(0,0,0);
-    payload.position = float3(0,0,0);
-    payload.albedo = float3(0,0,0);
-    payload.emissive = float3(0,0,0);
-    payload.refractionColor = float3(0,0,0);
-    payload.ior = 1.0;
-    payload.roughness = 0.0;
-    payload.metalness = 0.0;
-    payload.thinWalled = 0.0;
-    payload.translucency = 0.0;
-    payload.matIndex = 0;
-    // Preserve rayDepth; set by caller before TraceRay.
+
+    // Fill remaining payload members to defaults to avoid undefined behavior.
+    payload.packedNormal = PackNormalOctahedron(float3(0, 1, 0));
+    payload.packedAlbedo = PackPayloadAlbedo(float3(0, 0, 0));
+    payload.packedSurface = PackPayloadSurface(0.0, 0.0, 0.0, 0.0);
+    payload.packedIorType = PackPayloadIorType(1.0, rayType, false);
 }

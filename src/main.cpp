@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <chrono>
 #include <codecvt>
+#include <cmath>
 #include <commctrl.h>
 #include <commdlg.h>
 #include <filesystem>
@@ -115,6 +116,8 @@ static ComPtr<ID3D12Resource> g_materialConstantBuffer;
 static void *g_materialCbMappedData = nullptr;
 static ComPtr<ID3D12Resource>
     g_materialStructuredBuffer; // Tightly packed for DXR
+static ComPtr<ID3D12Resource>
+    g_materialExtraStructuredBuffer; // Secondary material data for DXR
 static ComPtr<ID3D12Resource>
     g_meshStructuredBuffer; // Mesh mapping info for DXR
 
@@ -935,6 +938,17 @@ bool InitApplication(HWND hwnd) {
     float
         triPlanarParams[4]; // x=enabled, y=scale, z=sharpness, w=normalStrength
   };
+  struct DxrMaterialData {
+    float baseColor_opacity[4];
+    float emissive_ior[4];
+    float pbrParams_flags[4];
+    UINT packedTextures[4];
+  };
+  struct DxrMaterialExtraData {
+    float archvizParams0[4];
+    float uvTransform[4];
+    float triPlanarParams[4];
+  };
   const UINT64 matCbSizeSingle = (sizeof(MaterialCB) + 255) & ~255;
   const UINT64 matCbSize = matCbSizeSingle * 16384; // Support up to 16384 calls
   D3D12_RESOURCE_DESC matCbDesc = {};
@@ -954,13 +968,24 @@ bool InitApplication(HWND hwnd) {
 
   // Material Structured Buffer for DXR (tightly packed, no 256B alignment)
   {
-    const UINT64 matSbSize = sizeof(MaterialCB) * 16384;
+    const UINT64 matSbSize = sizeof(DxrMaterialData) * 16384;
     D3D12_RESOURCE_DESC matSbDesc = matCbDesc;
     matSbDesc.Width = matSbSize;
     ThrowIfFailed(DX12Context::g_device->CreateCommittedResource(
         &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &matSbDesc,
         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
         IID_PPV_ARGS(&g_materialStructuredBuffer)));
+  }
+
+  // Material Extra Structured Buffer for DXR (secondary/conditional data)
+  {
+    const UINT64 matExtraSbSize = sizeof(DxrMaterialExtraData) * 16384;
+    D3D12_RESOURCE_DESC matExtraSbDesc = matCbDesc;
+    matExtraSbDesc.Width = matExtraSbSize;
+    ThrowIfFailed(DX12Context::g_device->CreateCommittedResource(
+        &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &matExtraSbDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&g_materialExtraStructuredBuffer)));
   }
 
   // Mesh Structured Buffer for DXR
@@ -1361,75 +1386,129 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
       // Use DXR module to perform ray dispatch and copy to backbuffer
       if (DxrRenderer::IsReady()) {
-        // Update Structured Material Buffer for DXR
-        if (g_materialStructuredBuffer && !g_loadedMaterials.empty()) {
-          struct MaterialData {
-            float diffuseColor[4];
-            float reflectionColor[4];
-            float refractionColor[4];
-            float emissiveColor[4];
-            int textureIndices[4];
-            int emissiveAndPad[4];
-            float extraParams[4];
+        // Update Structured Material Buffers for DXR.
+        // Core material data stays at 64 bytes; heavy/conditional values live
+        // in a secondary buffer.
+        if (g_materialStructuredBuffer && g_materialExtraStructuredBuffer &&
+            !g_loadedMaterials.empty()) {
+          struct DxrMaterialData {
+            float baseColor_opacity[4];
+            float emissive_ior[4];
+            float pbrParams_flags[4];
+            UINT packedTextures[4];
+          };
+          struct DxrMaterialExtraData {
             float archvizParams0[4];
             float uvTransform[4];
             float triPlanarParams[4];
           };
-          UINT8 *pData = nullptr;
+
+          static constexpr UINT kMaterialFlagAlphaTested = 1u << 0;
+          static constexpr UINT kMaterialFlagThinWalled = 1u << 1;
+          static constexpr UINT kMaterialFlagTranslucent = 1u << 2;
+          static constexpr UINT kMaterialFlagTriPlanar = 1u << 3;
+          static constexpr UINT kMaterialFlagUvTransform = 1u << 4;
+          static constexpr UINT kMaterialFlagGlass = 1u << 5;
+          static constexpr UINT kMaterialFlagDoubleSided = 1u << 6;
+
+          auto PackTexPair = [](int lo, int hi) -> UINT {
+            const UINT lo16 = (lo >= 0) ? ((UINT)lo & 0xFFFFu) : 0xFFFFu;
+            const UINT hi16 = (hi >= 0) ? ((UINT)hi & 0xFFFFu) : 0xFFFFu;
+            return lo16 | (hi16 << 16);
+          };
+
+          UINT8 *pCore = nullptr;
+          UINT8 *pExtra = nullptr;
           D3D12_RANGE readRange = {0, 0};
-          if (SUCCEEDED(g_materialStructuredBuffer->Map(
-                  0, &readRange, reinterpret_cast<void **>(&pData)))) {
+          const bool coreMapped = SUCCEEDED(g_materialStructuredBuffer->Map(
+              0, &readRange, reinterpret_cast<void **>(&pCore)));
+          const bool extraMapped = SUCCEEDED(g_materialExtraStructuredBuffer->Map(
+              0, &readRange, reinterpret_cast<void **>(&pExtra)));
+          if (coreMapped && extraMapped) {
             for (size_t i = 0; i < g_loadedMaterials.size() && i < 16384; ++i) {
               const auto &srcMat = g_loadedMaterials[i];
-              MaterialData mat = {};
-              memcpy(mat.diffuseColor, srcMat.diffuseColor, sizeof(float) * 4);
 
-              memcpy(mat.reflectionColor, srcMat.reflectionColor,
-                     sizeof(float) * 3);
-              mat.reflectionColor[3] = srcMat.reflectionGlossiness;
+              DxrMaterialData mat = {};
+              memcpy(mat.baseColor_opacity, srcMat.diffuseColor,
+                     sizeof(float) * 4);
+              memcpy(mat.emissive_ior, srcMat.emissiveColor, sizeof(float) * 3);
+              mat.emissive_ior[3] = srcMat.ior;
 
-              memcpy(mat.refractionColor, srcMat.refractionColor,
-                     sizeof(float) * 3);
-              mat.refractionColor[3] = srcMat.refractionGlossiness;
+              const float roughness =
+                  (std::clamp)(1.0f - srcMat.reflectionGlossiness, 0.0f, 1.0f);
+              const float metalness = (std::clamp)(srcMat.metalness, 0.0f, 1.0f);
+              const float refrMax = (std::max)(
+                  srcMat.refractionColor[0],
+                  (std::max)(srcMat.refractionColor[1], srcMat.refractionColor[2]));
+              const float transmission =
+                  (std::clamp)(refrMax, 0.0f, 1.0f) * (1.0f - metalness);
 
-              memcpy(mat.emissiveColor, srcMat.emissiveColor,
-                     sizeof(float) * 3);
-              mat.emissiveColor[3] = srcMat.ior; // Pack IOR in W
+              UINT flags = 0;
+              if (srcMat.alphaMode != "OPAQUE" || srcMat.diffuseColor[3] < 0.999f) {
+                flags |= kMaterialFlagAlphaTested;
+              }
+              if (srcMat.thinWalled > 0.5f) {
+                flags |= kMaterialFlagThinWalled;
+              }
+              if (srcMat.translucency > 0.01f) {
+                flags |= kMaterialFlagTranslucent;
+              }
+              if (srcMat.triPlanarEnabled > 0.5f) {
+                flags |= kMaterialFlagTriPlanar;
+              }
+              if (fabsf(srcMat.uvScale[0] - 1.0f) > 1e-5f ||
+                  fabsf(srcMat.uvScale[1] - 1.0f) > 1e-5f ||
+                  fabsf(srcMat.uvOffset[0]) > 1e-5f ||
+                  fabsf(srcMat.uvOffset[1]) > 1e-5f) {
+                flags |= kMaterialFlagUvTransform;
+              }
+              if (refrMax > 0.01f || srcMat.thinWalled > 0.5f) {
+                flags |= kMaterialFlagGlass;
+              }
+              if (srcMat.doubleSided) {
+                flags |= kMaterialFlagDoubleSided;
+              }
 
-              mat.textureIndices[0] = srcMat.diffuseTexture;
-              mat.textureIndices[1] = srcMat.reflectionTexture;
-              mat.textureIndices[2] = srcMat.normalTexture;
-              mat.textureIndices[3] = srcMat.refractionTexture;
+              float flagsAsFloat = 0.0f;
+              memcpy(&flagsAsFloat, &flags, sizeof(flags));
+              mat.pbrParams_flags[0] = metalness;
+              mat.pbrParams_flags[1] = roughness;
+              mat.pbrParams_flags[2] = transmission;
+              mat.pbrParams_flags[3] = flagsAsFloat;
 
-              mat.emissiveAndPad[0] = srcMat.emissiveTexture;
-              mat.emissiveAndPad[1] = srcMat.occlusionTexture;
-              mat.emissiveAndPad[2] = srcMat.metalRoughTexture;
-              mat.emissiveAndPad[3] = 0; // Pad
+              mat.packedTextures[0] =
+                  PackTexPair(srcMat.diffuseTexture, srcMat.normalTexture);
+              mat.packedTextures[1] =
+                  PackTexPair(srcMat.metalRoughTexture, srcMat.occlusionTexture);
+              mat.packedTextures[2] =
+                  PackTexPair(srcMat.emissiveTexture, srcMat.refractionTexture);
+              mat.packedTextures[3] =
+                  PackTexPair(srcMat.reflectionTexture, -1);
 
-              mat.extraParams[0] = srcMat.metalness;
-              mat.extraParams[1] = srcMat.emissiveIntensity;
-              mat.extraParams[2] = 0.0f;
-              mat.extraParams[3] = 0.0f;
+              DxrMaterialExtraData extra = {};
+              extra.archvizParams0[0] = srcMat.clearcoat;
+              extra.archvizParams0[1] = srcMat.clearcoatRoughness;
+              extra.archvizParams0[2] = srcMat.thinWalled;
+              extra.archvizParams0[3] = srcMat.translucency;
+              extra.uvTransform[0] = srcMat.uvScale[0];
+              extra.uvTransform[1] = srcMat.uvScale[1];
+              extra.uvTransform[2] = srcMat.uvOffset[0];
+              extra.uvTransform[3] = srcMat.uvOffset[1];
+              extra.triPlanarParams[0] = srcMat.triPlanarEnabled;
+              extra.triPlanarParams[1] = srcMat.triPlanarScale;
+              extra.triPlanarParams[2] = srcMat.triPlanarSharpness;
+              extra.triPlanarParams[3] = srcMat.triPlanarNormalStrength;
 
-              mat.archvizParams0[0] = srcMat.clearcoat;
-              mat.archvizParams0[1] = srcMat.clearcoatRoughness;
-              mat.archvizParams0[2] = srcMat.thinWalled;
-              mat.archvizParams0[3] = srcMat.translucency;
-
-              mat.uvTransform[0] = srcMat.uvScale[0];
-              mat.uvTransform[1] = srcMat.uvScale[1];
-              mat.uvTransform[2] = srcMat.uvOffset[0];
-              mat.uvTransform[3] = srcMat.uvOffset[1];
-
-              mat.triPlanarParams[0] = srcMat.triPlanarEnabled;
-              mat.triPlanarParams[1] = srcMat.triPlanarScale;
-              mat.triPlanarParams[2] = srcMat.triPlanarSharpness;
-              mat.triPlanarParams[3] = srcMat.triPlanarNormalStrength;
-
-              memcpy(pData + i * sizeof(MaterialData), &mat,
-                     sizeof(MaterialData));
+              memcpy(pCore + i * sizeof(DxrMaterialData), &mat, sizeof(mat));
+              memcpy(pExtra + i * sizeof(DxrMaterialExtraData), &extra,
+                     sizeof(extra));
             }
+          }
+          if (coreMapped) {
             g_materialStructuredBuffer->Unmap(0, nullptr);
+          }
+          if (extraMapped) {
+            g_materialExtraStructuredBuffer->Unmap(0, nullptr);
           }
         }
 
@@ -1475,7 +1554,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           DX12Context::g_frameIndex, dxrTarget, dxrRtv,
           g_cameraConstantBuffer.Get(), g_materialStructuredBuffer.Get(),
           g_texturesGpuStart, g_textureDescriptorCount, activeMeshes,
-          g_meshStructuredBuffer.Get());
+          g_meshStructuredBuffer.Get(), g_materialExtraStructuredBuffer.Get());
         if (dxrOk) {
           if (g_renderExportJob.active &&
               dxrTarget == g_exportRenderTarget.Get()) {

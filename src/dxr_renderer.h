@@ -42,6 +42,10 @@ void CreateRayTracingPipeline(UINT width, UINT height);
 void BuildAccelerationStructures(
     const std::vector<const Asset::GpuMesh *> &meshes,
     const std::vector<Scene::Instance> &instances);
+// Mark a material as changed in a way that can affect DXR traversal flags
+// (alpha/blend/transmission). The next render frame will rebuild BLAS/TLAS as
+// needed.
+void MarkMaterialDirty(int materialIndex);
 // Update light buffer for ReSTIR
 void UpdateLights(const std::vector<GpuLight> &lights);
 // Reset accumulation for path tracing
@@ -97,7 +101,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandList,
                  D3D12_GPU_DESCRIPTOR_HANDLE texturesGpuStart,
                  UINT textureDescriptorCount,
                  const std::vector<const Asset::GpuMesh *> &meshes,
-                 ID3D12Resource *meshDataSB = nullptr);
+                 ID3D12Resource *meshDataSB = nullptr,
+                 ID3D12Resource *materialExtraSB = nullptr);
 
 // Returns the last calculated average noise level (0.0 - 1.0+)
 float GetCurrentNoiseLevel();
