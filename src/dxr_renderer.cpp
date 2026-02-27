@@ -47,11 +47,13 @@ static OidnDenoiser s_oidnDenoiser;
 static OidnDenoiser::Quality s_oidnQuality = OidnDenoiser::Quality::Balanced;
 static float s_rrJitterScale = 0.5f;
 
-static bool s_autoExposure = true;
+// default off so that users see the raw sky intensity without
+// automatic normalization.  The UI checkbox will toggle this at runtime.
+static bool s_autoExposure = false;
 static float s_exposureCompensation = 1.0f;
 static float s_smoothedExposure = 0.02f; // persistent smoothed exposure
 static bool s_physicalCameraExposure = true;
-static float s_cameraIso = 400.0f;
+static float s_cameraIso = 100.0f;
 static float s_cameraShutterSeconds = 1.0f / 30.0f;
 static float s_cameraApertureFNumber = 2.8f;
 

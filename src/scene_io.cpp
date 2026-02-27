@@ -153,6 +153,14 @@ bool SaveScene(const std::string &path) {
     j["camera"]["useAdaptiveSampling"] = g_cameraData.useAdaptiveSampling;
     j["camera"]["noiseThreshold"] = g_cameraData.noiseThreshold;
     j["camera"]["debugVisualizationMode"] = g_cameraData.debugVisualizationMode;
+    // Exposure / physical camera state
+    j["camera"]["autoExposure"] = DxrRenderer::GetAutoExposure();
+    j["camera"]["physicalCameraExposure"] = DxrRenderer::GetPhysicalCameraExposure();
+    float iso, shutter, aperture;
+    DxrRenderer::GetPhysicalCameraSettings(iso, shutter, aperture);
+    j["camera"]["iso"] = iso;
+    j["camera"]["shutterSeconds"] = shutter;
+    j["camera"]["aperture"] = aperture;
 
     // 2. Settings
     j["settings"]["cloudRendering"] = g_cloudRenderingEnabled;
@@ -414,6 +422,16 @@ bool LoadScene(const std::string &path) {
       g_cameraData.noiseThreshold = c.value("noiseThreshold", 0.05f);
       g_cameraData.debugVisualizationMode =
           c.value("debugVisualizationMode", 0.0f);
+
+      // restore exposure/physical camera settings as well
+      bool autoExp = c.value("autoExposure", DxrRenderer::GetAutoExposure());
+      DxrRenderer::SetAutoExposure(autoExp);
+      bool phys = c.value("physicalCameraExposure", DxrRenderer::GetPhysicalCameraExposure());
+      DxrRenderer::SetPhysicalCameraExposure(phys);
+      float iso = c.value("iso", 100.0f);
+      float shutter = c.value("shutterSeconds", 1.0f/125.0f);
+      float aperture = c.value("aperture", 16.0f);
+      DxrRenderer::SetPhysicalCameraSettings(iso, shutter, aperture);
     }
 
     // 2.5 Settings

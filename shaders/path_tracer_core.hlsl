@@ -138,6 +138,9 @@ void RayGen()
     const float kAdaptiveMinExpectedRatio = 0.95;
     const float kAdaptiveLagKeepScale = 1.00;
     const float kRestirSpatialRadiusPx = (useAdaptiveSampling > 0.5) ? 6.0 : 12.0;
+    // Artistic control: boost environment contribution to scene lighting
+    // (DI/GI transport) without making the visible sky dome brighter.
+    const float kEnvLightingBoost = 3.0;
     const bool debugViewActive = (SHADER_DEBUG_MODE > 0.0) || (SHADER_DEBUG_VIS_MODE == 1.0);
 
     if (!debugViewActive && maxSPP > 0.0 && accumFrame >= (uint)maxSPP) {
@@ -401,6 +404,13 @@ void RayGen()
                 float pdfLight = evaluate_env_map_pdf(envConditionalCdf, envMarginalCdf, rayDir);
                 float misW = (prevPdf * prevPdf) / (prevPdf * prevPdf + pdfLight * pdfLight + 1e-12);
                 missColor *= misW;
+            }
+
+            // Secondary misses are indirect environment transport seen through
+            // BRDF paths. Boost those only so models receive stronger sky GI
+            // while the primary visible sky remains unchanged.
+            if (bounce > 0) {
+                missColor *= kEnvLightingBoost;
             }
             
             // If ReSTIR GI is enabled, it already evaluated the first diffuse bounce.
@@ -870,6 +880,7 @@ void RayGen()
 
                     float3 envContrib = brdf_env * envLs.radiance *
                                         (NdotL_env / pdfLightEnv) * misW;
+                    envContrib *= kEnvLightingBoost;
                     directLighting += envContrib;
                 }
             }
