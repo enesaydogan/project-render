@@ -580,6 +580,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
       if (g_renderExportJob.active) {
         const UINT spp = DxrRenderer::GetDisplayedSampleCount();
         const float noise = DxrRenderer::GetCurrentNoiseLevel();
+        const bool hasNoise = DxrRenderer::HasNoiseEstimate();
         const bool denoiserEnabled =
             (g_renderExportSettings.denoiserIndex != 0);
         ImGui::Separator();
@@ -587,7 +588,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
                     g_renderExportJob.targetMaxSpp);
         ImGui::Text("Output: %u x %u", g_renderExportJob.targetWidth,
                     g_renderExportJob.targetHeight);
-        if (noise > 0.0f) {
+        if (hasNoise) {
           ImGui::Text("Noise: %.2f%% / %.2f%%", noise * 100.0f,
                       g_renderExportJob.targetNoiseThreshold * 100.0f);
         } else {
@@ -1087,7 +1088,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
         ImGui::Text("Samples: %u", DxrRenderer::GetDisplayedSampleCount());
 
         float currentNoise = DxrRenderer::GetCurrentNoiseLevel();
-        if (currentNoise > 0.0f) {
+        if (DxrRenderer::HasNoiseEstimate()) {
           ImGui::Text("Noise Level: %.2f%%", currentNoise * 100.0f);
         } else {
           ImGui::Text("Noise Level: Calculating...");

@@ -320,6 +320,8 @@ static ComPtr<ID3D12DescriptorHeap> s_noiseStatsHeap;
 static UINT s_noiseStatsCapacity =
     0; // number of floats currently allocated in output buffer
 static float s_lastNoiseLevel = 0.0f;
+static bool s_hasNoiseEstimate = false;
+static UINT64 s_noiseStatsDispatchCount = 0;
 
 // Average Luminance Resources
 static ComPtr<ID3D12RootSignature> s_avgLumRootSig;
@@ -485,6 +487,7 @@ struct NoiseStatsConstants {
 };
 
 float GetCurrentNoiseLevel() { return s_lastNoiseLevel; }
+bool HasNoiseEstimate() { return s_hasNoiseEstimate; }
 float GetCurrentAvgLuminance() { return s_avgLuminanceCdM2; }
 float GetCurrentEV100() { return s_lastEV100; }
 bool HasDenoisedOutput() { return s_hasDenoised; }
@@ -2865,6 +2868,8 @@ void ResetAccumulation() {
   s_accumulation.Reset();
   s_rrStillFrameSpp = 0;
   s_lastNoiseLevel = 0.0f; // Reset noise level so rendering restarts
+  s_hasNoiseEstimate = false;
+  s_noiseStatsDispatchCount = 0;
   s_noiseConvergedLatched = false;
   s_hasTonemappedFrame = false;
   s_hasDenoised = false; // Reset auto-denoiser state
@@ -3047,7 +3052,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
   // Global stop by measured noise with hysteresis to avoid stop/resume flicker.
   bool isConverged = false;
-  if (s_lastNoiseLevel > 0.0f) {
+  if (s_hasNoiseEstimate) {
     const bool adaptiveEnabled = (g_cameraData.useAdaptiveSampling > 0.5f);
     const UINT minNoiseStopSpp = adaptiveEnabled ? 32u : 24u;
     const float stopThreshold = g_cameraData.noiseThreshold * 0.90f;
@@ -3564,26 +3569,35 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       EnsureNoiseStatsPipeline();
       if (s_noiseStatsPSO) {
         // 1. Readback previous result FIRST (from readback buffer populated in
-        // previous run).  The buffer now contains one float per sampled texel.
+        // previous run). The buffer contains one float per sampled texel.
         {
           float *data = nullptr;
-          if (SUCCEEDED(s_noiseStatsReadbackBuffer->Map(0, nullptr,
+          if (s_noiseStatsDispatchCount > 0 &&
+              SUCCEEDED(s_noiseStatsReadbackBuffer->Map(0, nullptr,
                                                         (void **)&data))) {
             const UINT stride = 4;
             UINT gridW = (s_outputWidth + stride - 1) / stride;
             UINT gridH = (s_outputHeight + stride - 1) / stride;
             UINT total = gridW * gridH;
             double sumSq = 0.0;
-            UINT count = 0;
+            UINT positiveCount = 0;
+            UINT validCount = 0;
             for (UINT i = 0; i < total; ++i) {
               float v = data[i];
-              if (v > 0.0f) {
-                sumSq += v;
-                ++count;
+              if (std::isfinite(v) && v >= 0.0f) {
+                ++validCount;
+                if (v > 1e-12f) {
+                  sumSq += v;
+                  ++positiveCount;
+                }
               }
             }
-            s_lastNoiseLevel =
-                (count > 0) ? sqrt((float)(sumSq / count)) : 0.0f;
+            if (positiveCount > 0) {
+              // Average only positive entries so "not-yet-sampled" texels
+              // (zeroed entries) don't bias noise toward 0.
+              s_lastNoiseLevel = sqrtf((float)(sumSq / positiveCount));
+              s_hasNoiseEstimate = true;
+            }
             s_noiseStatsReadbackBuffer->Unmap(0, nullptr);
           }
         }
@@ -3704,6 +3718,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         TransitionResource(dxrList.Get(), s_noiseStatsOutputBuffer.Get(),
                            D3D12_RESOURCE_STATE_COPY_SOURCE,
                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        s_noiseStatsDispatchCount++;
 
         // End noise calculation timer
         if (s_queryHeap) {
