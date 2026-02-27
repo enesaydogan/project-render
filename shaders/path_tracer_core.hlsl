@@ -8,7 +8,8 @@
 
 // Additional resources for ReSTIR
 StructuredBuffer<Light> g_lights : register(t5000);
-RWTexture2D<float> g_variance : register(u20);
+// Matches DXR_HEAP_VARIANCE_UAV_OFFSET (u22) in dxr_renderer.cpp.
+RWTexture2D<float> g_variance : register(u22);
 RWTexture2D<float4> g_reservoir0 : register(u2);
 RWTexture2D<float4> g_reservoir1 : register(u3);
 RWTexture2D<float4> g_gi_reservoir_a0 : register(u4);

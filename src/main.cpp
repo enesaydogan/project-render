@@ -1953,10 +1953,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
       const UINT currentSpp = DxrRenderer::GetDisplayedSampleCount();
       const float currentNoise = DxrRenderer::GetCurrentNoiseLevel();
+      const bool hasNoiseEstimate = DxrRenderer::HasNoiseEstimate();
       const bool sppDone = currentSpp >= (UINT)g_renderExportJob.targetMaxSpp;
       const bool noiseDone =
           (currentSpp >= g_renderExportJob.minSppBeforeNoiseStop) &&
-          (currentNoise > 0.0f) &&
+          hasNoiseEstimate &&
           (currentNoise <= g_renderExportJob.targetNoiseThreshold * 0.90f);
 
       const bool reachedEnd = sppDone || noiseDone;

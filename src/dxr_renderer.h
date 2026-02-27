@@ -110,6 +110,7 @@ void SubmitAsyncRestirWork();
 
 // Returns the last calculated average noise level (0.0 - 1.0+)
 float GetCurrentNoiseLevel();
+bool HasNoiseEstimate();
 
 // Returns the last calculated average scene luminance in cd/m²
 float GetCurrentAvgLuminance();
