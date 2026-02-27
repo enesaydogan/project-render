@@ -692,7 +692,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
 
         if (!autoExp && physicalCam) {
           if (ImGui::Button("Preset: Engine Daylight")) {
-            DxrRenderer::SetPhysicalCameraSettings(400.0f, 1.0f / 30.0f,
+            DxrRenderer::SetPhysicalCameraSettings(100.0f, 1.0f / 30.0f,
                                                    2.8f);
             uiChanged = true;
           }
@@ -895,7 +895,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
           ImGui::BeginDisabled();
         }
         float skyInt = IBLManager::Get().GetSkyIntensity();
-        if (ImGui::SliderFloat("Sky Intensity", &skyInt, 0.0f, 10.0f)) {
+        if (ImGui::SliderFloat("Sky Intensity", &skyInt, 0.0f, 100.0f)) {
           IBLManager::Get().SetSkyIntensity(skyInt);
           uiParamChanged = true;
           uiChanged = true;

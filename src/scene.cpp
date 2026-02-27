@@ -1277,6 +1277,10 @@ void ResetScene() {
 
   // Reset DXR state if it's active
   DxrRenderer::ResetAccumulation();
+  // Ensure camera/exposure defaults are restored when starting a fresh scene
+  DxrRenderer::SetAutoExposure(false);
+  DxrRenderer::SetPhysicalCameraExposure(true);
+  DxrRenderer::SetPhysicalCameraSettings(100.0f, 1.0f/30.0f, 2.8f);
 }
 
 } // namespace Scene

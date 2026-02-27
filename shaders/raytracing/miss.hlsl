@@ -11,7 +11,13 @@ void Miss(inout RayPayload payload)
     float2 uv = DirectionToUVRotated(dir);
     
     // Sample environment map and apply intensity
-    float3 color = envMap.SampleLevel(linearSampler, uv, 0).rgb * intensity;
+    float3 skySample = envMap.SampleLevel(linearSampler, uv, 0).rgb * intensity;
+    // Mix between a flat global ambient color and the procedural sky based on
+    // ambientColor.w.  This mirrors the logic used in the raster shader so that
+    // ray tracing respects the same tint/weight settings.
+    float3 globalAmb = ambientColor.rgb;
+    float w = ambientColor.w;
+    float3 color = lerp(globalAmb, skySample, w);
 
     // Add Analytic Sun Disc
     float3 L = normalize(lightDir.xyz);

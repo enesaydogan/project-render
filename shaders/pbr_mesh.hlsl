@@ -426,13 +426,29 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     }
 
     // IBL Ambient
-    float3 ambientBase = (diffuse_ibl + specular_ibl) * ao * ambientColor.rgb;
-    float3 ambient = ambientBase * (1.0 - clearcoat) + (coat_ibl * ao * ambientColor.rgb) * clearcoat;
+    // Combine environment-based IBL with the user-specified global ambient color.
+    // ambientColor.rgb holds the global tint, and ambientColor.w is a weight
+    // controlling how much we rely on the procedural env map (1 = full env
+    // map, 0 = only global color).
+    float w = ambientColor.w;
+    float3 envIBL = (diffuse_ibl + specular_ibl) * ao;
+    float3 globalAmb = ambientColor.rgb;
+
+    // compute ambient before clearcoat so we only mix once
+    float3 ambientNoCoat = lerp(globalAmb, envIBL, w);
+    float3 ambient = ambientNoCoat * (1.0 - clearcoat);
+    // add clearcoat contribution using coat_ibl already computed above
+    if (clearcoat > 0.001) {
+        float3 ambCoat = (coat_ibl * ao) * globalAmb;
+        ambient += ambCoat * clearcoat;
+    }
 
     if (translucency > 0.001) {
         float2 envUV_back = DirectionToUV(-N);
         float3 irradianceBack = envMap.SampleLevel(linearSampler, envUV_back, 7.0).rgb;
-        ambient += (DiffuseAlbedo * irradianceBack) * (ambientColor.rgb) * translucency;
+        float3 envBack = (DiffuseAlbedo * irradianceBack) * ao;
+        float3 backAmbient = lerp(globalAmb, envBack, w);
+        ambient += backAmbient * translucency;
     }
     
     float3 color = directLight + ambient + emiss;
