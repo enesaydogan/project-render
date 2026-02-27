@@ -2039,6 +2039,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     ID3D12CommandList *ppCommandLists[] = {DX12Context::g_commandList.Get()};
     DX12Context::g_commandQueue->ExecuteCommandLists(_countof(ppCommandLists),
                                                      ppCommandLists);
+    DxrRenderer::SubmitAsyncRestirWork();
     // fprintf(stderr, "MainLoop: ExecuteCommandLists done\n");
 
     // fprintf(stderr, "MainLoop: Present start\n");

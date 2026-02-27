@@ -15,6 +15,7 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <sstream>
 #include <unordered_map>
 #include <vector>
@@ -34,6 +35,7 @@ extern UINT g_textureDescriptorCount;
 extern Microsoft::WRL::ComPtr<ID3D12Device> g_device;
 extern CloudManager g_cloudManager; // Global from main.cpp
 extern std::vector<Asset::Material> g_loadedMaterials;
+extern std::vector<Asset::Texture> g_loadedTextures;
 
 // Module-local state
 static ID3D12Device *s_device = nullptr;
@@ -268,6 +270,35 @@ static AccelerationStructureBuffers s_tlas;
 static std::vector<ID3D12Resource *> s_cachedMeshBuffersForBlas;
 static std::vector<uint8_t> s_cachedMeshOpaqueForBlas;
 static std::vector<uint8_t> s_dirtyMaterialFlags;
+static std::vector<const Asset::GpuMesh *> s_cachedTlasMeshOrder;
+static bool s_tlasSupportsUpdate = false;
+
+// Async compute execution for decoupled ReSTIR DI/GI.
+static ComPtr<ID3D12CommandQueue> s_asyncComputeQueue;
+static ComPtr<ID3D12Fence> s_asyncDirectFence;
+static ComPtr<ID3D12Fence> s_asyncComputeFence;
+static ComPtr<ID3D12CommandAllocator> s_asyncComputeAllocator;
+static ComPtr<ID3D12GraphicsCommandList4> s_asyncComputeList;
+static HANDLE s_asyncComputeFenceEvent = nullptr;
+static UINT64 s_asyncDirectFenceValue = 1;
+static UINT64 s_asyncComputeFenceValue = 1;
+static UINT64 s_asyncComputePendingFenceWait = 0;
+static bool s_asyncRestirPending = false;
+static bool s_asyncRestirAvailable = false;
+static bool s_asyncRestirInitTried = false;
+static ComPtr<ID3D12Resource> s_asyncRestirCameraCB;
+
+enum class TextureStreamingPolicy {
+  FullRes = 0,
+  Balanced = 1,
+  Aggressive = 2
+};
+static TextureStreamingPolicy s_textureStreamingPolicy =
+    TextureStreamingPolicy::Balanced;
+static TextureStreamingPolicy s_lastAppliedTextureStreamingPolicy =
+    TextureStreamingPolicy::Balanced;
+static bool s_textureStreamingAuto = true;
+static bool s_textureTableDirty = true;
 
 static ComPtr<ID3D12Resource> s_lightBuffer;
 static UINT s_lightCount = 0;
@@ -773,6 +804,284 @@ static void EnsureRestirGiSpatialPipeline() {
   }
 }
 
+static void EnsureAsyncComputeContext() {
+  if (s_asyncRestirAvailable || s_asyncRestirInitTried || !s_device ||
+      !s_commandQueue) {
+    return;
+  }
+  s_asyncRestirInitTried = true;
+
+  D3D12_COMMAND_QUEUE_DESC queueDesc = {};
+  queueDesc.Type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
+  queueDesc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
+  queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+  queueDesc.NodeMask = 0;
+
+  HRESULT hr = s_device->CreateCommandQueue(&queueDesc,
+                                            IID_PPV_ARGS(&s_asyncComputeQueue));
+  if (FAILED(hr)) {
+    fprintf(stderr,
+            "DxrRenderer: Async compute queue creation failed (0x%08x). "
+            "Falling back to direct queue ReSTIR.\n",
+            (unsigned)hr);
+    return;
+  }
+
+  hr = s_device->CreateFence(0, D3D12_FENCE_FLAG_NONE,
+                             IID_PPV_ARGS(&s_asyncDirectFence));
+  if (FAILED(hr)) {
+    fprintf(stderr,
+            "DxrRenderer: Async direct fence creation failed (0x%08x)\n",
+            (unsigned)hr);
+    s_asyncComputeQueue.Reset();
+    return;
+  }
+
+  hr = s_device->CreateFence(0, D3D12_FENCE_FLAG_NONE,
+                             IID_PPV_ARGS(&s_asyncComputeFence));
+  if (FAILED(hr)) {
+    fprintf(stderr,
+            "DxrRenderer: Async compute fence creation failed (0x%08x)\n",
+            (unsigned)hr);
+    s_asyncDirectFence.Reset();
+    s_asyncComputeQueue.Reset();
+    return;
+  }
+
+  hr = s_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE,
+                                        IID_PPV_ARGS(&s_asyncComputeAllocator));
+  if (FAILED(hr)) {
+    fprintf(stderr,
+            "DxrRenderer: Async compute allocator creation failed (0x%08x)\n",
+            (unsigned)hr);
+    s_asyncComputeFence.Reset();
+    s_asyncDirectFence.Reset();
+    s_asyncComputeQueue.Reset();
+    return;
+  }
+
+  hr = s_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COMPUTE,
+                                   s_asyncComputeAllocator.Get(), nullptr,
+                                   IID_PPV_ARGS(&s_asyncComputeList));
+  if (FAILED(hr)) {
+    fprintf(stderr, "DxrRenderer: Async compute list creation failed (0x%08x)\n",
+            (unsigned)hr);
+    s_asyncComputeAllocator.Reset();
+    s_asyncComputeFence.Reset();
+    s_asyncDirectFence.Reset();
+    s_asyncComputeQueue.Reset();
+    return;
+  }
+  s_asyncComputeList->Close();
+
+  s_asyncComputeFenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+  if (!s_asyncComputeFenceEvent) {
+    fprintf(stderr, "DxrRenderer: Async compute fence event creation failed\n");
+    s_asyncComputeList.Reset();
+    s_asyncComputeAllocator.Reset();
+    s_asyncComputeFence.Reset();
+    s_asyncDirectFence.Reset();
+    s_asyncComputeQueue.Reset();
+    return;
+  }
+
+  s_asyncDirectFenceValue = 1;
+  s_asyncComputeFenceValue = 1;
+  s_asyncComputePendingFenceWait = 0;
+  s_asyncRestirAvailable = true;
+}
+
+static void DispatchRestirSpatialPasses(ID3D12GraphicsCommandList4 *list,
+                                        ID3D12Resource *cameraCB) {
+  if (!list || !cameraCB || !s_srvHeap || !s_device) {
+    return;
+  }
+
+  EnsureRestirSpatialPipeline();
+  if (s_restirSpatialPSO && s_restirSpatialRootSig) {
+    D3D12_RESOURCE_BARRIER uavBarrier = {};
+    uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    uavBarrier.UAV.pResource = nullptr;
+    list->ResourceBarrier(1, &uavBarrier);
+
+    ID3D12DescriptorHeap *rtHeaps[] = {s_srvHeap.Get()};
+    list->SetDescriptorHeaps(1, rtHeaps);
+    list->SetPipelineState(s_restirSpatialPSO.Get());
+    list->SetComputeRootSignature(s_restirSpatialRootSig.Get());
+    list->SetComputeRootConstantBufferView(0, cameraCB->GetGPUVirtualAddress());
+
+    UINT inc = s_device->GetDescriptorHandleIncrementSize(
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_GPU_DESCRIPTOR_HANDLE restirUavTable = s_outputUAVGpu;
+    restirUavTable.ptr += (UINT64)2 * (UINT64)inc; // u2..u13 table base
+    list->SetComputeRootDescriptorTable(1, restirUavTable);
+
+    const UINT gx = (s_outputWidth + 7) / 8;
+    const UINT gy = (s_outputHeight + 7) / 8;
+    list->Dispatch(gx, gy, 1);
+
+    uavBarrier.UAV.pResource = nullptr;
+    list->ResourceBarrier(1, &uavBarrier);
+  }
+
+  EnsureRestirGiSpatialPipeline();
+  if (s_restirGiSpatialPSO && s_restirGiSpatialRootSig) {
+    D3D12_RESOURCE_BARRIER uavBarrier = {};
+    uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    uavBarrier.UAV.pResource = nullptr;
+    list->ResourceBarrier(1, &uavBarrier);
+
+    ID3D12DescriptorHeap *rtHeaps[] = {s_srvHeap.Get()};
+    list->SetDescriptorHeaps(1, rtHeaps);
+    list->SetPipelineState(s_restirGiSpatialPSO.Get());
+    list->SetComputeRootSignature(s_restirGiSpatialRootSig.Get());
+    list->SetComputeRootConstantBufferView(0, cameraCB->GetGPUVirtualAddress());
+
+    UINT inc = s_device->GetDescriptorHandleIncrementSize(
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_GPU_DESCRIPTOR_HANDLE restirGiUavTable = s_outputUAVGpu;
+    restirGiUavTable.ptr += (UINT64)4 * (UINT64)inc; // u4..u13 table base
+    list->SetComputeRootDescriptorTable(1, restirGiUavTable);
+
+    const UINT gx = (s_outputWidth + 7) / 8;
+    const UINT gy = (s_outputHeight + 7) / 8;
+    list->Dispatch(gx, gy, 1);
+
+    uavBarrier.UAV.pResource = nullptr;
+    list->ResourceBarrier(1, &uavBarrier);
+  }
+}
+
+static TextureStreamingPolicy ChooseAutoTextureStreamingPolicy() {
+  // Simple adaptive policy based on measured GPU frame time.
+  // 60 FPS target: favor quality under budget, trade mips when over budget.
+  if (s_gpuFrameTimeMs > 26.0f) {
+    return TextureStreamingPolicy::Aggressive;
+  }
+  if (s_gpuFrameTimeMs > 18.0f) {
+    return TextureStreamingPolicy::Balanced;
+  }
+  return TextureStreamingPolicy::FullRes;
+}
+
+static UINT ComputeStreamingMostDetailedMip(const Asset::Texture &tex,
+                                            TextureStreamingPolicy policy) {
+  if (policy == TextureStreamingPolicy::FullRes || tex.mipLevels <= 1) {
+    return 0;
+  }
+
+  const UINT maxDim = (tex.width > tex.height) ? tex.width : tex.height;
+  UINT drop = 0;
+  if (policy == TextureStreamingPolicy::Balanced) {
+    if (maxDim >= 4096) {
+      drop = 2;
+    } else if (maxDim >= 2048) {
+      drop = 1;
+    }
+  } else {
+    if (maxDim >= 4096) {
+      drop = 3;
+    } else if (maxDim >= 2048) {
+      drop = 2;
+    } else if (maxDim >= 1024) {
+      drop = 1;
+    }
+  }
+  if (drop >= tex.mipLevels) {
+    drop = tex.mipLevels - 1;
+  }
+  return drop;
+}
+
+static void UpdateTextureDescriptorTable(
+    D3D12_GPU_DESCRIPTOR_HANDLE texturesGpuStart, UINT textureDescriptorCount) {
+  if (!s_srvHeap || !s_device || textureDescriptorCount == 0) {
+    return;
+  }
+
+  if (s_textureStreamingAuto) {
+    TextureStreamingPolicy desired = ChooseAutoTextureStreamingPolicy();
+    if (desired != s_textureStreamingPolicy) {
+      s_textureStreamingPolicy = desired;
+      s_textureTableDirty = true;
+    }
+  }
+
+  static D3D12_GPU_DESCRIPTOR_HANDLE s_lastTexturesGpuStart = {0};
+  static UINT s_lastTextureDescriptorCount = 0;
+  static UINT s_lastRefreshFrame = 0;
+  const bool sourceChanged = (texturesGpuStart.ptr != s_lastTexturesGpuStart.ptr) ||
+      (textureDescriptorCount != s_lastTextureDescriptorCount);
+  const bool policyChanged =
+      (s_textureStreamingPolicy != s_lastAppliedTextureStreamingPolicy);
+  const bool periodicRefresh = (s_jitterFrameIndex - s_lastRefreshFrame) > 120;
+
+  if (!sourceChanged && !policyChanged && !s_textureTableDirty &&
+      !periodicRefresh) {
+    return;
+  }
+
+  const UINT descSize = s_device->GetDescriptorHandleIncrementSize(
+      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+  D3D12_CPU_DESCRIPTOR_HANDLE dst =
+      s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+  dst.ptr += (SIZE_T)DXR_HEAP_TEX_OFFSET * descSize;
+
+  const UINT maxCount =
+      (textureDescriptorCount < DXR_HEAP_TEX_COUNT) ? textureDescriptorCount
+                                                    : DXR_HEAP_TEX_COUNT;
+  const UINT availableTextures =
+      (UINT)((g_loadedTextures.size() < maxCount) ? g_loadedTextures.size()
+                                                  : maxCount);
+  for (UINT i = 0; i < maxCount; ++i) {
+    D3D12_CPU_DESCRIPTOR_HANDLE cpu = dst;
+    cpu.ptr += (SIZE_T)i * descSize;
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Shader4ComponentMapping =
+        D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+
+    if (i < availableTextures && g_loadedTextures[(size_t)i].resource) {
+      const Asset::Texture &tex = g_loadedTextures[(size_t)i];
+      const UINT mostDetailedMip =
+          ComputeStreamingMostDetailedMip(tex, s_textureStreamingPolicy);
+      srvDesc.Format = tex.format;
+      srvDesc.Texture2D.MostDetailedMip = mostDetailedMip;
+      srvDesc.Texture2D.MipLevels =
+          (mostDetailedMip < tex.mipLevels) ? (tex.mipLevels - mostDetailedMip)
+                                            : 1u;
+      srvDesc.Texture2D.ResourceMinLODClamp = (float)mostDetailedMip;
+      s_device->CreateShaderResourceView(tex.resource.Get(), &srvDesc, cpu);
+    } else {
+      srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+      srvDesc.Texture2D.MipLevels = 1;
+      srvDesc.Texture2D.MostDetailedMip = 0;
+      srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+      s_device->CreateShaderResourceView(nullptr, &srvDesc, cpu);
+    }
+  }
+
+  s_lastTexturesGpuStart = texturesGpuStart;
+  s_lastTextureDescriptorCount = textureDescriptorCount;
+  s_lastAppliedTextureStreamingPolicy = s_textureStreamingPolicy;
+  s_lastRefreshFrame = s_jitterFrameIndex;
+  s_textureTableDirty = false;
+}
+
+static UINT64 ReadbackUint64(ID3D12Resource *resource) {
+  if (!resource) {
+    return 0;
+  }
+  void *mapped = nullptr;
+  if (FAILED(resource->Map(0, nullptr, &mapped)) || !mapped) {
+    return 0;
+  }
+  UINT64 value = *((const UINT64 *)mapped);
+  resource->Unmap(0, nullptr);
+  return value;
+}
+
 static void EnsureNoiseStatsPipeline() {
   // We always need to ensure buffers are large enough – pipeline objects can
   // be reused, but the output/readback buffers may have to grow when the
@@ -1052,6 +1361,21 @@ void SetCommandQueue(ID3D12CommandQueue *commandQueue, ID3D12Fence *fence,
   s_fenceValues = fenceValues;
   s_frameIndexPtr = frameIndexPtr;
   s_fenceEvent = fenceEvent;
+  if (s_asyncComputeFenceEvent) {
+    CloseHandle(s_asyncComputeFenceEvent);
+    s_asyncComputeFenceEvent = nullptr;
+  }
+  s_asyncComputeQueue.Reset();
+  s_asyncDirectFence.Reset();
+  s_asyncComputeFence.Reset();
+  s_asyncComputeAllocator.Reset();
+  s_asyncComputeList.Reset();
+  s_asyncRestirPending = false;
+  s_asyncRestirCameraCB.Reset();
+  s_asyncComputePendingFenceWait = 0;
+  s_asyncRestirAvailable = false;
+  s_asyncRestirInitTried = false;
+  EnsureAsyncComputeContext();
 }
 
 void CreateRayTracingPipeline(UINT width, UINT height) {
@@ -1086,6 +1410,10 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
 
   // Resize accumulation buffer to match new render size
   s_accumulation.Resize(s_outputWidth, s_outputHeight);
+  s_textureTableDirty = true;
+  s_cloudDescriptorsDone = false;
+  s_asyncRestirPending = false;
+  s_asyncRestirCameraCB.Reset();
 
   if (g_verboseRenderLogs) {
     fprintf(stderr,
@@ -1888,9 +2216,12 @@ void BuildAccelerationStructures(
       if (g_verboseRenderLogs)
         fprintf(stderr, "DxrRenderer: Empty scene - clearing TLAS\n");
       s_tlas.result = nullptr;
+      s_tlas.scratch = nullptr;
+      s_tlasSupportsUpdate = false;
       s_allBLAS.clear();
       s_cachedMeshBuffersForBlas.clear();
       s_cachedMeshOpaqueForBlas.clear();
+      s_cachedTlasMeshOrder.clear();
       return;
     }
 
@@ -2083,13 +2414,15 @@ void BuildAccelerationStructures(
     const size_t BLAS_BATCH_SIZE = 500;
     size_t batchCount = 0;
 
-    std::vector<ComPtr<ID3D12CommandAllocator>> pendingAllocators;
-    pendingAllocators.push_back(cmdAlloc); // The initial one
+    std::vector<ComPtr<ID3D12CommandAllocator>> submittedBatchAllocators;
+    submittedBatchAllocators.push_back(cmdAlloc); // keep alive until fence wait
 
     if (meshesChanged || s_allBLAS.empty()) {
       s_allBLAS.clear();
       s_cachedMeshBuffersForBlas.clear();
       s_cachedMeshOpaqueForBlas.clear();
+      s_tlasSupportsUpdate = false;
+      s_cachedTlasMeshOrder.clear();
       try {
         for (size_t i = 0; i < meshes.size(); ++i) {
           const auto &mesh = *meshes[i];
@@ -2101,7 +2434,8 @@ void BuildAccelerationStructures(
 
           auto bl = BuildBLAS(s_dxrDevice.Get(), cmdList.Get(), vbAddr,
                               mesh.vertexCount, sizeof(Asset::Vertex), ibAddr,
-                              mesh.indexCount, meshOpaqueStates[i] != 0);
+                              mesh.indexCount, meshOpaqueStates[i] != 0,
+                              false, true);
           if (bl.result && bl.scratch) {
             s_allBLAS.push_back({bl, (UINT64)i});
             s_cachedMeshBuffersForBlas.push_back(mesh.vertexBuffer.Get());
@@ -2121,7 +2455,7 @@ void BuildAccelerationStructures(
             ComPtr<ID3D12CommandAllocator> nextAlloc;
             ThrowIfFailed(s_device->CreateCommandAllocator(
                 D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&nextAlloc)));
-            pendingAllocators.push_back(nextAlloc);
+            submittedBatchAllocators.push_back(nextAlloc);
 
             // Reset same list with new allocator
             ThrowIfFailed(cmdList->Reset(nextAlloc.Get(), nullptr));
@@ -2147,15 +2481,89 @@ void BuildAccelerationStructures(
           }
         }
 
-        // Safe to release all scratch buffers now
+        submittedBatchAllocators.clear();
+
+        // BLAS compaction pass (reduces AS VRAM footprint).
+        std::vector<ComPtr<ID3D12Resource>> compactedResults(s_allBLAS.size());
+        std::vector<UINT64> compactedSizes(s_allBLAS.size(), 0);
+        size_t compactCount = 0;
         for (size_t k = 0; k < s_allBLAS.size(); ++k) {
-          s_allBLAS[k].buffers.scratch.Reset();
+          MeshBLAS &meshBlas = s_allBLAS[k];
+          UINT64 compactedSize =
+              ReadbackUint64(meshBlas.buffers.compactedSizeReadback.Get());
+          meshBlas.buffers.compactedSizeInBytes = compactedSize;
+          if (compactedSize == 0 || compactedSize >=
+                                       meshBlas.buffers.resultSizeInBytes) {
+            continue;
+          }
+
+          UINT64 compactedAligned =
+              Align(compactedSize,
+                    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT);
+          // Keep a small margin to avoid tiny compaction wins that add copy
+          // overhead for almost no memory reduction.
+          if (compactedAligned + 1024 >= meshBlas.buffers.resultSizeInBytes) {
+            continue;
+          }
+
+          AllocateUAVBuffer(s_device, compactedAligned, &compactedResults[k],
+                            D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
+                            L"BLAS Result (Compacted)");
+          compactedSizes[k] = compactedAligned;
+          compactCount++;
         }
 
-        // Restore a fresh allocator/list for TLAS build (reuse the last one
-        // created)
-        pendingAllocators.clear();
-        ThrowIfFailed(cmdAlloc->Reset()); // Reuse the original handle for scope
+        if (compactCount > 0) {
+          ThrowIfFailed(cmdAlloc->Reset());
+          ThrowIfFailed(cmdList->Reset(cmdAlloc.Get(), nullptr));
+          for (size_t k = 0; k < s_allBLAS.size(); ++k) {
+            if (!compactedResults[k]) {
+              continue;
+            }
+            cmdList->CopyRaytracingAccelerationStructure(
+                compactedResults[k]->GetGPUVirtualAddress(),
+                s_allBLAS[k].buffers.result->GetGPUVirtualAddress(),
+                D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_COMPACT);
+          }
+
+          D3D12_RESOURCE_BARRIER compactBarrier = {};
+          compactBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+          compactBarrier.UAV.pResource = nullptr;
+          cmdList->ResourceBarrier(1, &compactBarrier);
+
+          ThrowIfFailed(cmdList->Close());
+          ID3D12CommandList *compactLists[] = {cmdList.Get()};
+          s_commandQueue->ExecuteCommandLists(1, compactLists);
+
+          const UINT64 compactFenceVal = s_fenceValues[*s_frameIndexPtr];
+          s_commandQueue->Signal(s_fence, compactFenceVal);
+          s_fenceValues[*s_frameIndexPtr]++;
+          if (s_fence->GetCompletedValue() < compactFenceVal) {
+            s_fence->SetEventOnCompletion(compactFenceVal, s_fenceEvent);
+            if (WaitForSingleObject(s_fenceEvent, 10000) == WAIT_TIMEOUT) {
+              fprintf(stderr,
+                      "DxrRenderer: Timeout waiting for BLAS compaction "
+                      "batch (10s).\n");
+            }
+          }
+
+          for (size_t k = 0; k < s_allBLAS.size(); ++k) {
+            if (compactedResults[k]) {
+              s_allBLAS[k].buffers.result = compactedResults[k];
+              s_allBLAS[k].buffers.resultSizeInBytes = compactedSizes[k];
+            }
+          }
+        }
+
+        // Safe to release temporary BLAS resources now.
+        for (size_t k = 0; k < s_allBLAS.size(); ++k) {
+          s_allBLAS[k].buffers.scratch.Reset();
+          s_allBLAS[k].buffers.compactedSizeBuffer.Reset();
+          s_allBLAS[k].buffers.compactedSizeReadback.Reset();
+        }
+
+        // Restore a fresh allocator/list for TLAS build.
+        ThrowIfFailed(cmdAlloc->Reset());
         ThrowIfFailed(cmdList->Reset(cmdAlloc.Get(), nullptr));
 
       } catch (...) {
@@ -2170,6 +2578,8 @@ void BuildAccelerationStructures(
 
     if (s_allBLAS.empty()) {
       fprintf(stderr, "DxrRenderer: No BLAS built - aborting TLAS build\n");
+      s_tlasSupportsUpdate = false;
+      s_cachedTlasMeshOrder.clear();
       return;
     }
 
@@ -2188,6 +2598,8 @@ void BuildAccelerationStructures(
 
     std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instanceDescs;
     instanceDescs.reserve(instances.size() + 1); // +1 for potential dummy
+    std::vector<const Asset::GpuMesh *> instanceMeshOrder;
+    instanceMeshOrder.reserve(instances.size() + 1);
 
     for (const auto &sceneInst : instances) {
       if (!sceneInst.mesh || !sceneInst.mesh->vertexBuffer)
@@ -2227,6 +2639,7 @@ void BuildAccelerationStructures(
       inst.AccelerationStructure =
           s_allBLAS[blasIndex].buffers.result->GetGPUVirtualAddress();
       instanceDescs.push_back(inst);
+      instanceMeshOrder.push_back(sceneInst.mesh);
     }
 
     // Workaround: some drivers crash when TLAS contains a single instance.
@@ -2246,11 +2659,20 @@ void BuildAccelerationStructures(
       // keep mask=0xFF so the TLAS sees two valid instances
       // InstanceContributionToHitGroupIndex etc are same as original
       instanceDescs.push_back(dummy);
+      instanceMeshOrder.push_back(instanceMeshOrder[0]);
       if (g_verboseRenderLogs) {
         fprintf(stderr,
                 "DxrRenderer: Added off-screen dummy TLAS instance to avoid "
                 "single-instance driver bug\n");
       }
+    }
+    if (instanceDescs.empty()) {
+      fprintf(stderr, "DxrRenderer: No valid TLAS instances - clearing TLAS\n");
+      s_tlas.result.Reset();
+      s_tlas.scratch.Reset();
+      s_tlasSupportsUpdate = false;
+      s_cachedTlasMeshOrder.clear();
+      return;
     }
 
     ComPtr<ID3D12Resource> instanceDescBuffer;
@@ -2262,24 +2684,55 @@ void BuildAccelerationStructures(
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
     inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
     inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
-    inputs.Flags =
-        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
     inputs.NumDescs = (UINT)instanceDescs.size();
     inputs.InstanceDescs = instanceDescBuffer->GetGPUVirtualAddress();
 
-    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info = {};
-    s_dxrDevice->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &info);
-    s_tlas.scratchSizeInBytes =
-        Align(info.ScratchDataSizeInBytes,
-              D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT);
-    s_tlas.resultSizeInBytes =
-        Align(info.ResultDataMaxSizeInBytes,
-              D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT);
-    AllocateUAVBuffer(s_device, s_tlas.scratchSizeInBytes, &s_tlas.scratch,
-                      D3D12_RESOURCE_STATE_COMMON, L"TLAS Scratch");
-    AllocateUAVBuffer(s_device, s_tlas.resultSizeInBytes, &s_tlas.result,
-                      D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
-                      L"TLAS Result");
+    bool canRefitTlas = !meshesChanged && s_tlasSupportsUpdate && s_tlas.result &&
+                        s_tlas.scratch &&
+                        (instanceMeshOrder.size() ==
+                         s_cachedTlasMeshOrder.size());
+    if (canRefitTlas) {
+      for (size_t i = 0; i < instanceMeshOrder.size(); ++i) {
+        if (instanceMeshOrder[i] != s_cachedTlasMeshOrder[i]) {
+          canRefitTlas = false;
+          break;
+        }
+      }
+    }
+
+    if (!canRefitTlas) {
+      inputs.Flags =
+          D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE |
+          D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE;
+
+      D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info = {};
+      s_dxrDevice->GetRaytracingAccelerationStructurePrebuildInfo(&inputs,
+                                                                  &info);
+      const UINT64 requiredScratchSize = Align(
+          (std::max)(info.ScratchDataSizeInBytes, info.UpdateScratchDataSizeInBytes),
+          D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT);
+      const UINT64 requiredResultSize =
+          Align(info.ResultDataMaxSizeInBytes,
+                D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT);
+
+      if (!s_tlas.scratch || s_tlas.scratchSizeInBytes < requiredScratchSize) {
+        s_tlas.scratch.Reset();
+        AllocateUAVBuffer(s_device, requiredScratchSize, &s_tlas.scratch,
+                          D3D12_RESOURCE_STATE_COMMON, L"TLAS Scratch");
+        s_tlas.scratchSizeInBytes = requiredScratchSize;
+      }
+      if (!s_tlas.result || s_tlas.resultSizeInBytes < requiredResultSize) {
+        s_tlas.result.Reset();
+        AllocateUAVBuffer(s_device, requiredResultSize, &s_tlas.result,
+                          D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
+                          L"TLAS Result");
+        s_tlas.resultSizeInBytes = requiredResultSize;
+      }
+    } else {
+      inputs.Flags =
+          D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE |
+          D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
+    }
 
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {};
     buildDesc.Inputs = inputs;
@@ -2287,6 +2740,10 @@ void BuildAccelerationStructures(
         s_tlas.result->GetGPUVirtualAddress();
     buildDesc.ScratchAccelerationStructureData =
         s_tlas.scratch->GetGPUVirtualAddress();
+    if (canRefitTlas) {
+      buildDesc.SourceAccelerationStructureData =
+          s_tlas.result->GetGPUVirtualAddress();
+    }
     cmdList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
 
     D3D12_RESOURCE_BARRIER uavBarrier = {};
@@ -2309,7 +2766,13 @@ void BuildAccelerationStructures(
       }
     }
     if (g_verboseRenderLogs) {
-      fprintf(stderr, "DxrRenderer: Acceleration structures built\n");
+      fprintf(stderr, "DxrRenderer: Acceleration structures %s\n",
+              canRefitTlas ? "updated (TLAS refit)" : "rebuilt");
+    }
+
+    if (!canRefitTlas) {
+      s_cachedTlasMeshOrder = instanceMeshOrder;
+      s_tlasSupportsUpdate = true;
     }
 
   } catch (const std::exception &e) {
@@ -2540,6 +3003,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     return ReturnFail(4, "QueryInterface(ID3D12GraphicsCommandList4) failed");
 
   s_lastRenderFrameFailReason = -1;
+  EnsureAsyncComputeContext();
+  if (s_asyncRestirAvailable && s_asyncComputePendingFenceWait > 0) {
+    s_commandQueue->Wait(s_asyncComputeFence.Get(), s_asyncComputePendingFenceWait);
+    s_asyncComputePendingFenceWait = 0;
+  }
 
   // If the user changed manual intensity or exposure compensation while the
   // renderer is frozen at max SPP, ensure we re-run tonemapping so the
@@ -2622,37 +3090,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
   // fprintf(stderr, "DxrRenderer: RenderFrame - SetRootSignature done\n");
 
-  // Copy global texture descriptors to our local DXR heap IF they've changed
-  static D3D12_GPU_DESCRIPTOR_HANDLE s_lastTexturesGpuStart = {0};
-  static UINT s_lastTextureDescriptorCount = 0;
-
   if (g_cbvSrvAllocator.Heap() && textureDescriptorCount > 0) {
-    if (texturesGpuStart.ptr != s_lastTexturesGpuStart.ptr ||
-        textureDescriptorCount != s_lastTextureDescriptorCount) {
-      UINT descSize = s_device->GetDescriptorHandleIncrementSize(
-          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-      D3D12_CPU_DESCRIPTOR_HANDLE srcStart =
-          g_cbvSrvAllocator.Heap()->GetCPUDescriptorHandleForHeapStart();
-      // find offset of textures in global heap
-      D3D12_GPU_DESCRIPTOR_HANDLE globalGpuStart =
-          g_cbvSrvAllocator.Heap()->GetGPUDescriptorHandleForHeapStart();
-      UINT texOffset =
-          (UINT)((texturesGpuStart.ptr - globalGpuStart.ptr) / descSize);
-      srcStart.ptr += (SIZE_T)texOffset * descSize;
-
-      D3D12_CPU_DESCRIPTOR_HANDLE dstStart =
-          s_srvHeap->GetCPUDescriptorHandleForHeapStart();
-      dstStart.ptr += (SIZE_T)DXR_HEAP_TEX_OFFSET * descSize;
-
-      // Only copy what fits
-      UINT count = (textureDescriptorCount < DXR_HEAP_TEX_COUNT)
-                       ? textureDescriptorCount
-                       : DXR_HEAP_TEX_COUNT;
-      s_device->CopyDescriptorsSimple(count, dstStart, srcStart,
-                                      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-      s_lastTexturesGpuStart = texturesGpuStart;
-      s_lastTextureDescriptorCount = textureDescriptorCount;
-    }
+    // Keep local texture table resident in the DXR heap, with adaptive mip
+    // clamping under GPU pressure.
+    UpdateTextureDescriptorTable(texturesGpuStart, textureDescriptorCount);
   }
   // fprintf(stderr, "DxrRenderer: RenderFrame - CopyDescriptorsSimple done\n");
 
@@ -3078,60 +3519,12 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   // Phase 4: decoupled ReSTIR DI temporal/spatial reuse in a dedicated compute
   // pass. RayGen now writes initial candidates, and this pass performs reuse.
   if (didDispatchRays) {
-    EnsureRestirSpatialPipeline();
-    if (s_restirSpatialPSO && s_restirSpatialRootSig && cameraCB) {
-      D3D12_RESOURCE_BARRIER uavBarrier = {};
-      uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-      uavBarrier.UAV.pResource = nullptr;
-      dxrList->ResourceBarrier(1, &uavBarrier);
-
-      ID3D12DescriptorHeap *rtHeaps[] = {s_srvHeap.Get()};
-      dxrList->SetDescriptorHeaps(1, rtHeaps);
-      dxrList->SetPipelineState(s_restirSpatialPSO.Get());
-      dxrList->SetComputeRootSignature(s_restirSpatialRootSig.Get());
-      dxrList->SetComputeRootConstantBufferView(0,
-                                                cameraCB->GetGPUVirtualAddress());
-
-      UINT inc = s_device->GetDescriptorHandleIncrementSize(
-          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-      D3D12_GPU_DESCRIPTOR_HANDLE restirUavTable = s_outputUAVGpu;
-      restirUavTable.ptr += (UINT64)2 * (UINT64)inc; // u2..u13 table base
-      dxrList->SetComputeRootDescriptorTable(1, restirUavTable);
-
-      const UINT gx = (s_outputWidth + 7) / 8;
-      const UINT gy = (s_outputHeight + 7) / 8;
-      dxrList->Dispatch(gx, gy, 1);
-
-      uavBarrier.UAV.pResource = nullptr;
-      dxrList->ResourceBarrier(1, &uavBarrier);
-    }
-
-    EnsureRestirGiSpatialPipeline();
-    if (s_restirGiSpatialPSO && s_restirGiSpatialRootSig && cameraCB) {
-      D3D12_RESOURCE_BARRIER uavBarrier = {};
-      uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-      uavBarrier.UAV.pResource = nullptr;
-      dxrList->ResourceBarrier(1, &uavBarrier);
-
-      ID3D12DescriptorHeap *rtHeaps[] = {s_srvHeap.Get()};
-      dxrList->SetDescriptorHeaps(1, rtHeaps);
-      dxrList->SetPipelineState(s_restirGiSpatialPSO.Get());
-      dxrList->SetComputeRootSignature(s_restirGiSpatialRootSig.Get());
-      dxrList->SetComputeRootConstantBufferView(0,
-                                                cameraCB->GetGPUVirtualAddress());
-
-      UINT inc = s_device->GetDescriptorHandleIncrementSize(
-          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-      D3D12_GPU_DESCRIPTOR_HANDLE restirGiUavTable = s_outputUAVGpu;
-      restirGiUavTable.ptr += (UINT64)4 * (UINT64)inc; // u4..u13 table base
-      dxrList->SetComputeRootDescriptorTable(1, restirGiUavTable);
-
-      const UINT gx = (s_outputWidth + 7) / 8;
-      const UINT gy = (s_outputHeight + 7) / 8;
-      dxrList->Dispatch(gx, gy, 1);
-
-      uavBarrier.UAV.pResource = nullptr;
-      dxrList->ResourceBarrier(1, &uavBarrier);
+    if (cameraCB && s_asyncRestirAvailable) {
+      // Submit on async queue after this frame's direct list executes.
+      s_asyncRestirPending = true;
+      s_asyncRestirCameraCB = cameraCB;
+    } else if (cameraCB) {
+      DispatchRestirSpatialPasses(dxrList.Get(), cameraCB);
     }
   }
 
@@ -3905,6 +4298,65 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   // Bind RTV for subsequent ImGui draws
   commandListBase->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
   return true;
+}
+
+void SubmitAsyncRestirWork() {
+  if (!s_asyncRestirPending) {
+    return;
+  }
+
+  if (!s_asyncRestirAvailable || !s_commandQueue || !s_asyncComputeQueue ||
+      !s_asyncDirectFence || !s_asyncComputeFence || !s_asyncComputeAllocator ||
+      !s_asyncComputeList || !s_asyncRestirCameraCB || !s_srvHeap) {
+    s_asyncRestirPending = false;
+    s_asyncRestirCameraCB.Reset();
+    return;
+  }
+
+  // Ensure allocator/list are no longer in-flight from the previous async
+  // submit.
+  const UINT64 previousAsyncFence =
+      (s_asyncComputeFenceValue > 1) ? (s_asyncComputeFenceValue - 1) : 0;
+  if (previousAsyncFence > 0 &&
+      s_asyncComputeFence->GetCompletedValue() < previousAsyncFence) {
+    if (s_asyncComputeFenceEvent) {
+      s_asyncComputeFence->SetEventOnCompletion(previousAsyncFence,
+                                                s_asyncComputeFenceEvent);
+      if (WaitForSingleObject(s_asyncComputeFenceEvent, 5000) == WAIT_TIMEOUT) {
+        fprintf(stderr,
+                "DxrRenderer: Timeout waiting for previous async ReSTIR pass.\n");
+        s_asyncRestirPending = false;
+        s_asyncRestirCameraCB.Reset();
+        return;
+      }
+    } else {
+      return;
+    }
+  }
+
+  ThrowIfFailed(s_asyncComputeAllocator->Reset());
+  ThrowIfFailed(s_asyncComputeList->Reset(s_asyncComputeAllocator.Get(), nullptr));
+
+  DispatchRestirSpatialPasses(s_asyncComputeList.Get(), s_asyncRestirCameraCB.Get());
+
+  ThrowIfFailed(s_asyncComputeList->Close());
+
+  // Run compute only after this frame's direct queue work has completed.
+  const UINT64 directFenceValue = s_asyncDirectFenceValue++;
+  ThrowIfFailed(s_commandQueue->Signal(s_asyncDirectFence.Get(), directFenceValue));
+  ThrowIfFailed(
+      s_asyncComputeQueue->Wait(s_asyncDirectFence.Get(), directFenceValue));
+
+  ID3D12CommandList *lists[] = {s_asyncComputeList.Get()};
+  s_asyncComputeQueue->ExecuteCommandLists(1, lists);
+
+  const UINT64 computeFenceValue = s_asyncComputeFenceValue++;
+  ThrowIfFailed(
+      s_asyncComputeQueue->Signal(s_asyncComputeFence.Get(), computeFenceValue));
+  s_asyncComputePendingFenceWait = computeFenceValue;
+
+  s_asyncRestirPending = false;
+  s_asyncRestirCameraCB.Reset();
 }
 
 bool ExportTonemappedFrameToPng(const std::wstring &filePath) {

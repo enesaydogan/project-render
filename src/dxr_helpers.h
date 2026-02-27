@@ -17,9 +17,13 @@ struct AccelerationStructureBuffers {
   ComPtr<ID3D12Resource> scratch;
   ComPtr<ID3D12Resource> result;
   ComPtr<ID3D12Resource> instanceDesc; // Used only for TLAS
+  ComPtr<ID3D12Resource> compactedSizeBuffer; // BLAS post-build info
+  ComPtr<ID3D12Resource> compactedSizeReadback;
   UINT64 resultSizeInBytes = 0;
   UINT64 scratchSizeInBytes = 0;
   UINT64 instanceDescSizeInBytes = 0;
+  UINT64 compactedSizeInBytes = 0;
+  bool supportsUpdate = false;
 };
 
 // Start Alignment at 256 bytes for good measure
@@ -97,12 +101,41 @@ inline void AllocateUploadBuffer(ID3D12Device *device, void *pData,
   }
 }
 
+inline void AllocateReadbackBuffer(ID3D12Device *device, UINT64 bufferSize,
+                                   ID3D12Resource **ppResource,
+                                   const wchar_t *resourceName = nullptr) {
+  D3D12_HEAP_PROPERTIES heapProps = {};
+  heapProps.Type = D3D12_HEAP_TYPE_READBACK;
+
+  D3D12_RESOURCE_DESC bufferDesc = {};
+  bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+  bufferDesc.Width = bufferSize;
+  bufferDesc.Height = 1;
+  bufferDesc.DepthOrArraySize = 1;
+  bufferDesc.MipLevels = 1;
+  bufferDesc.Format = DXGI_FORMAT_UNKNOWN;
+  bufferDesc.SampleDesc.Count = 1;
+  bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+  bufferDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+  if (FAILED(device->CreateCommittedResource(
+          &heapProps, D3D12_HEAP_FLAG_NONE, &bufferDesc,
+          D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(ppResource)))) {
+    throw std::runtime_error("Failed to allocate readback buffer");
+  }
+
+  if (resourceName && *ppResource) {
+    (*ppResource)->SetName(resourceName);
+  }
+}
+
 // Helper to build a BLAS from a list of vertex/index buffers
 inline AccelerationStructureBuffers
 BuildBLAS(ID3D12Device5 *device, ID3D12GraphicsCommandList4 *commandList,
           D3D12_GPU_VIRTUAL_ADDRESS vbPtr, UINT vertexCount, UINT vertexStride,
           D3D12_GPU_VIRTUAL_ADDRESS ibPtr, UINT indexCount,
-          bool isOpaque = true) {
+          bool isOpaque = true, bool allowUpdate = false,
+          bool allowCompaction = true) {
   D3D12_RAYTRACING_GEOMETRY_DESC geomDesc = {};
   geomDesc.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
   geomDesc.Triangles.VertexBuffer.StartAddress = vbPtr;
@@ -122,10 +155,19 @@ BuildBLAS(ID3D12Device5 *device, ID3D12GraphicsCommandList4 *commandList,
   inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
   inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
   // Use PREFER_FAST_BUILD for faster load times.
-  // PREFER_FAST_TRACE is better for runtime performance but much slower to build.
-  // For models taking "ages" to load, FAST_BUILD is the right trade-off.
+  // PREFER_FAST_TRACE is better for runtime performance but much slower to
+  // build. For models taking "ages" to load, FAST_BUILD is the right trade-
+  // off.
   inputs.Flags =
       D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
+  if (allowUpdate) {
+    inputs.Flags |=
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE;
+  }
+  if (allowCompaction) {
+    inputs.Flags |=
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_COMPACTION;
+  }
   inputs.NumDescs = 1;
   inputs.pGeometryDescs = &geomDesc;
 
@@ -134,7 +176,7 @@ BuildBLAS(ID3D12Device5 *device, ID3D12GraphicsCommandList4 *commandList,
 
   AccelerationStructureBuffers buffers;
   buffers.scratchSizeInBytes =
-      Align(info.ScratchDataSizeInBytes,
+      Align((std::max)(info.ScratchDataSizeInBytes, info.UpdateScratchDataSizeInBytes),
             D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT);
   buffers.resultSizeInBytes =
       Align(info.ResultDataMaxSizeInBytes,
@@ -145,22 +187,66 @@ BuildBLAS(ID3D12Device5 *device, ID3D12GraphicsCommandList4 *commandList,
   AllocateUAVBuffer(device, buffers.resultSizeInBytes, &buffers.result,
                     D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
                     L"BLAS Result");
+  buffers.supportsUpdate = allowUpdate;
+
+  D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC postBuildInfo =
+      {};
+  D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {};
+  if (allowCompaction) {
+    // The GPU writes compacted size in bytes into this 8-byte UAV buffer.
+    AllocateUAVBuffer(device, sizeof(UINT64), &buffers.compactedSizeBuffer,
+                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                      L"BLAS Compacted Size GPU");
+    AllocateReadbackBuffer(device, sizeof(UINT64), &buffers.compactedSizeReadback,
+                           L"BLAS Compacted Size Readback");
+
+    postBuildInfo.InfoType =
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_COMPACTED_SIZE;
+    postBuildInfo.DestBuffer =
+        buffers.compactedSizeBuffer->GetGPUVirtualAddress();
+  }
 
   // Build
-  D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {};
   buildDesc.Inputs = inputs;
   buildDesc.DestAccelerationStructureData =
       buffers.result->GetGPUVirtualAddress();
   buildDesc.ScratchAccelerationStructureData =
       buffers.scratch->GetGPUVirtualAddress();
-
-  commandList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
+  if (allowCompaction) {
+    commandList->BuildRaytracingAccelerationStructure(&buildDesc, 1,
+                                                      &postBuildInfo);
+  } else {
+    commandList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
+  }
 
   // UAV barrier
   D3D12_RESOURCE_BARRIER uavBarrier = {};
   uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
   uavBarrier.UAV.pResource = buffers.result.Get();
   commandList->ResourceBarrier(1, &uavBarrier);
+
+  if (allowCompaction) {
+    // Copy compacted-size post-build info into CPU-readable memory.
+    D3D12_RESOURCE_BARRIER toCopy = {};
+    toCopy.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    toCopy.Transition.pResource = buffers.compactedSizeBuffer.Get();
+    toCopy.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    toCopy.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    toCopy.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    commandList->ResourceBarrier(1, &toCopy);
+
+    commandList->CopyBufferRegion(buffers.compactedSizeReadback.Get(), 0,
+                                  buffers.compactedSizeBuffer.Get(), 0,
+                                  sizeof(UINT64));
+
+    D3D12_RESOURCE_BARRIER backToUav = {};
+    backToUav.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    backToUav.Transition.pResource = buffers.compactedSizeBuffer.Get();
+    backToUav.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    backToUav.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    backToUav.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    commandList->ResourceBarrier(1, &backToUav);
+  }
 
   return buffers;
 }
