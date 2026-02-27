@@ -159,22 +159,45 @@ inline float2 DirectionToUVRotated(float3 dir) {
     return uv;
 }
 
+// Material flags (bit-packed in MaterialData.pbrParams_flags.w as uint bits).
+static const uint MATERIAL_FLAG_ALPHA_TESTED = 1u << 0;
+static const uint MATERIAL_FLAG_THIN_WALLED  = 1u << 1;
+static const uint MATERIAL_FLAG_TRANSLUCENT  = 1u << 2;
+static const uint MATERIAL_FLAG_TRI_PLANAR   = 1u << 3;
+static const uint MATERIAL_FLAG_UV_TRANSFORM = 1u << 4;
+static const uint MATERIAL_FLAG_GLASS        = 1u << 5;
+static const uint MATERIAL_FLAG_DOUBLE_SIDED = 1u << 6;
+
 struct MaterialData
 {
-    float4 diffuseColor;
-    float4 reflectionColor;     // w = reflectionGlossiness
-    float4 refractionColor;     // w = refractionGlossiness
-    float4 emissiveColor;       // w = ior
-    int4 textureIndices;        // x=diffuse, y=reflect, z=normal, w=refract
-    int4 emissiveAndPad;        // x=emissive, y=occlusion, z=metalRough
-    float4 extraParams;         // x=metalness, y=emissiveIntensity
+    float4 baseColor_opacity;   // rgb + opacity
+    float4 emissive_ior;        // rgb + ior
+    float4 pbrParams_flags;     // x=metalness, y=roughness, z=transmission, w=flags (asfloat)
+    uint4  packedTextures;      // 8x 16-bit indices packed as pairs
+};
+
+struct MaterialExtraData
+{
     float4 archvizParams0;      // x=clearcoat, y=clearcoatRoughness, z=thinWalled, w=translucency
     float4 uvTransform;         // xy=uvScale, zw=uvOffset
     float4 triPlanarParams;     // x=enabled, y=scale, z=sharpness, w=normalStrength
 };
 
-// Use an SRV for materials in DXR to support multi-material indexing via InstanceID
+inline int UnpackTextureIndexLow(uint packedPair)
+{
+    uint v = packedPair & 0xFFFFu;
+    return (v == 0xFFFFu) ? -1 : (int)v;
+}
+
+inline int UnpackTextureIndexHigh(uint packedPair)
+{
+    uint v = (packedPair >> 16) & 0xFFFFu;
+    return (v == 0xFFFFu) ? -1 : (int)v;
+}
+
+// Use SRVs for materials in DXR to support multi-material indexing via InstanceID.
 StructuredBuffer<MaterialData> materials : register(t2049);
+StructuredBuffer<MaterialExtraData> materialExtras : register(t4099);
 
 struct MeshData {
     int materialIndex;
@@ -204,21 +227,109 @@ Buffer<uint> indices[1024] : register(t3074);
 
 struct RayPayload
 {
-    float3 color;     // Final computed color (for legacy/simple paths)
-    float t;          // Hit distance (-1 for miss)
-    float3 normal;    // World space normal
-    float3 position;  // World space position
-    float3 albedo;    // Material albedo
-    float3 emissive;  // Emissive color
-    float3 refractionColor;
-    float ior;
-    float roughness;
-    float metalness;
-    float thinWalled;     // 0/1 for thin glass/leaves
-    float translucency;   // [0..1] diffuse-like transmission
-    uint matIndex;
-    uint rayDepth;        // 0 = primary, >0 = secondary
-    uint rayType;         // RAY_TYPE_...
+    float t;              // Hit distance (-1 for miss)
+    uint packedColor0;    // R,G as fp16
+    uint packedColor1;    // B as fp16 (low 16 bits)
+    uint packedNormal;    // Octahedral packed normal
+    uint packedAlbedo;    // 3x8 UNORM base color
+    uint packedSurface;   // 4x8 UNORM: roughness/metallic/transmission/translucency
+    uint packedIorType;   // 16-bit half IOR + 8-bit rayType + thin-walled bit
 };
+
+inline uint PackNormalOctahedron(float3 n)
+{
+    n = normalize(n);
+    n /= (abs(n.x) + abs(n.y) + abs(n.z));
+    float2 p = n.xy;
+    if (n.z < 0.0) {
+        float2 signNotZero = float2((p.x >= 0.0) ? 1.0 : -1.0,
+                                    (p.y >= 0.0) ? 1.0 : -1.0);
+        p = (1.0 - abs(p.yx)) * signNotZero;
+    }
+    uint2 enc = (uint2)round(saturate(p * 0.5 + 0.5) * 65535.0);
+    return (enc.y << 16) | enc.x;
+}
+
+inline float3 UnpackNormalOctahedron(uint packed)
+{
+    float2 p = float2((packed & 0xFFFFu) / 65535.0,
+                      ((packed >> 16) & 0xFFFFu) / 65535.0) * 2.0 - 1.0;
+    float3 n = float3(p.x, p.y, 1.0 - abs(p.x) - abs(p.y));
+    if (n.z < 0.0) {
+        float2 signNotZero = float2((n.x >= 0.0) ? 1.0 : -1.0,
+                                    (n.y >= 0.0) ? 1.0 : -1.0);
+        n.xy = (1.0 - abs(n.yx)) * signNotZero;
+    }
+    return normalize(n);
+}
+
+inline void PayloadSetColor(inout RayPayload p, float3 c)
+{
+    uint3 h = uint3(f32tof16(max(c, 0.0)));
+    p.packedColor0 = (h.x & 0xFFFFu) | ((h.y & 0xFFFFu) << 16);
+    p.packedColor1 = (h.z & 0xFFFFu);
+}
+
+inline float3 PayloadGetColor(RayPayload p)
+{
+    uint hr = p.packedColor0 & 0xFFFFu;
+    uint hg = (p.packedColor0 >> 16) & 0xFFFFu;
+    uint hb = p.packedColor1 & 0xFFFFu;
+    return max(float3(f16tof32(hr), f16tof32(hg), f16tof32(hb)), 0.0);
+}
+
+inline uint PackPayloadAlbedo(float3 c)
+{
+    uint3 q = (uint3)round(saturate(c) * 255.0);
+    return (q.x) | (q.y << 8) | (q.z << 16);
+}
+
+inline float3 UnpackPayloadAlbedo(uint packed)
+{
+    float3 q = float3(
+        packed & 0xFFu,
+        (packed >> 8) & 0xFFu,
+        (packed >> 16) & 0xFFu);
+    return q / 255.0;
+}
+
+inline uint PackPayloadSurface(float roughness, float metallic,
+                               float transmission, float translucency)
+{
+    uint4 q = (uint4)round(saturate(float4(roughness, metallic, transmission, translucency)) * 255.0);
+    return (q.x) | (q.y << 8) | (q.z << 16) | (q.w << 24);
+}
+
+inline float4 UnpackPayloadSurface(uint packed)
+{
+    float4 q = float4(
+        (packed) & 0xFFu,
+        (packed >> 8) & 0xFFu,
+        (packed >> 16) & 0xFFu,
+        (packed >> 24) & 0xFFu);
+    return q / 255.0;
+}
+
+inline uint PackPayloadIorType(float ior, uint rayType, bool thinWalled)
+{
+    uint hIor = f32tof16(clamp(ior, 1.0, 8.0)) & 0xFFFFu;
+    uint thin = thinWalled ? (1u << 24) : 0u;
+    return hIor | ((rayType & 0xFFu) << 16) | thin;
+}
+
+inline float UnpackPayloadIor(uint packed)
+{
+    return max(1.0, f16tof32(packed & 0xFFFFu));
+}
+
+inline uint UnpackPayloadRayType(uint packed)
+{
+    return (packed >> 16) & 0xFFu;
+}
+
+inline bool UnpackPayloadThinWalled(uint packed)
+{
+    return (packed & (1u << 24)) != 0;
+}
 
 #endif // RAYTRACING_COMMON_H

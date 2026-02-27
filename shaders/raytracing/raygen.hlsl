@@ -36,9 +36,12 @@ void RayGen()
     ray.TMax = 10000.0;
 
     RayPayload payload;
-    payload.color = float4(0, 0, 0, 1);
-    payload.rayDepth = 0;
-    payload.rayType = RAY_TYPE_PRIMARY;
+    payload.t = -1.0;
+    PayloadSetColor(payload, float3(0.0, 0.0, 0.0));
+    payload.packedNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
+    payload.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
+    payload.packedSurface = PackPayloadSurface(1.0, 0.0, 0.0, 0.0);
+    payload.packedIorType = PackPayloadIorType(1.0, RAY_TYPE_PRIMARY, false);
 
 #ifdef RAYGEN_DEBUG
     // Debug mode: output UV gradient to verify ray generation and output copy
@@ -49,5 +52,5 @@ void RayGen()
     TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
 
     // Write to output. launchIndex.y=0 is the top dispatch, matching Row 0 (Top) of RT.
-    g_output[launchIndex.xy] = payload.color;
+    g_output[launchIndex.xy] = float4(PayloadGetColor(payload), 1.0);
 }

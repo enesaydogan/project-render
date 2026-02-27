@@ -33,6 +33,7 @@ extern D3D12_GPU_DESCRIPTOR_HANDLE g_texturesGpuStart;
 extern UINT g_textureDescriptorCount;
 extern Microsoft::WRL::ComPtr<ID3D12Device> g_device;
 extern CloudManager g_cloudManager; // Global from main.cpp
+extern std::vector<Asset::Material> g_loadedMaterials;
 
 // Module-local state
 static ID3D12Device *s_device = nullptr;
@@ -199,6 +200,28 @@ inline void TransitionResource(ID3D12GraphicsCommandList *cmdList,
   barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
   cmdList->ResourceBarrier(1, &barrier);
 }
+
+static void DumpD3D12InfoQueueMessages(const char *contextTag) {
+  if (!g_dxrDumpD3D12Messages || !s_device) {
+    return;
+  }
+  ComPtr<ID3D12InfoQueue> infoQueue;
+  if (FAILED(s_device->QueryInterface(IID_PPV_ARGS(&infoQueue)))) {
+    return;
+  }
+  const UINT64 n = infoQueue->GetNumStoredMessagesAllowedByRetrievalFilter();
+  for (UINT64 i = 0; i < n; ++i) {
+    SIZE_T messageLength = 0;
+    infoQueue->GetMessage(i, nullptr, &messageLength);
+    std::vector<char> message(messageLength);
+    D3D12_MESSAGE *pMsg = reinterpret_cast<D3D12_MESSAGE *>(message.data());
+    if (SUCCEEDED(infoQueue->GetMessage(i, pMsg, &messageLength))) {
+      fprintf(stderr, "D3D12 INFO (%s): Category=%d Severity=%d ID=%d: %s\n",
+              contextTag, (int)pMsg->Category, (int)pMsg->Severity,
+              (int)pMsg->ID, pMsg->pDescription);
+    }
+  }
+}
 static DxcHelper s_dxcHelper;
 static ComPtr<ID3D12StateObject> s_rtStateObject;
 static ComPtr<ID3D12Resource> s_sbtStorage;
@@ -242,12 +265,19 @@ struct MeshBLAS {
 };
 static std::vector<MeshBLAS> s_allBLAS;
 static AccelerationStructureBuffers s_tlas;
+static std::vector<ID3D12Resource *> s_cachedMeshBuffersForBlas;
+static std::vector<uint8_t> s_cachedMeshOpaqueForBlas;
+static std::vector<uint8_t> s_dirtyMaterialFlags;
 
 static ComPtr<ID3D12Resource> s_lightBuffer;
 static UINT s_lightCount = 0;
 static std::vector<GpuLight> s_lastLightsCpu;
 static ComPtr<ID3D12Resource> s_reservoirBuffers[2];
 static ComPtr<ID3D12Resource> s_gi_reservoirBuffers[6];
+static ComPtr<ID3D12RootSignature> s_restirSpatialRootSig;
+static ComPtr<ID3D12PipelineState> s_restirSpatialPSO;
+static ComPtr<ID3D12RootSignature> s_restirGiSpatialRootSig;
+static ComPtr<ID3D12PipelineState> s_restirGiSpatialPSO;
 
 // Noise Statistics Resources
 static ComPtr<ID3D12RootSignature> s_noiseStatsRootSig;
@@ -465,6 +495,8 @@ float GetPhysicalCameraEV100() {
 
 static void EnsureNoiseStatsPipeline();
 static void EnsureAvgLumPipeline();
+static void EnsureRestirSpatialPipeline();
+static void EnsureRestirGiSpatialPipeline();
 
 struct TonemapConstants {
   uint32_t outWidth;
@@ -573,6 +605,172 @@ static void EnsureTonemapPipeline() {
       D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&s_tonemapCB)));
   if (s_tonemapCB)
     s_tonemapCB->SetName(L"Tonemap Constants");
+}
+
+static void EnsureRestirSpatialPipeline() {
+  if (s_restirSpatialPSO && s_restirSpatialRootSig) {
+    return;
+  }
+  if (!s_device) {
+    return;
+  }
+
+  // Root signature:
+  //  - b0: Camera constants (frame index, DLSS toggles, dimensions)
+  //  - UAV table: u2..u13 (reservoir ping-pong + depth/normal compatibility)
+  D3D12_DESCRIPTOR_RANGE uavRange = {};
+  uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+  uavRange.NumDescriptors = 12; // u2..u13
+  uavRange.BaseShaderRegister = 2;
+  uavRange.RegisterSpace = 0;
+  uavRange.OffsetInDescriptorsFromTableStart =
+      D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+  D3D12_ROOT_PARAMETER params[2] = {};
+  params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+  params[0].Descriptor.ShaderRegister = 0;
+  params[0].Descriptor.RegisterSpace = 0;
+  params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[1].DescriptorTable.NumDescriptorRanges = 1;
+  params[1].DescriptorTable.pDescriptorRanges = &uavRange;
+  params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
+  rsDesc.NumParameters = _countof(params);
+  rsDesc.pParameters = params;
+  rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+  ComPtr<ID3DBlob> sig, err;
+  HRESULT hrSerialize = D3D12SerializeRootSignature(
+      &rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err);
+  if (FAILED(hrSerialize)) {
+    if (err) {
+      fprintf(stderr, "DxrRenderer: ReSTIR spatial RS error: %s\n",
+              (char *)err->GetBufferPointer());
+    }
+    return;
+  }
+
+  ThrowIfFailed(s_device->CreateRootSignature(
+      0, sig->GetBufferPointer(), sig->GetBufferSize(),
+      IID_PPV_ARGS(&s_restirSpatialRootSig)));
+
+  ComPtr<IDxcBlob> cs;
+  try {
+    std::vector<std::wstring> defines;
+    cs = s_dxcHelper.Compile(L"shaders/restir_spatial_cs.hlsl", L"CSMain",
+                             L"cs_6_3", defines);
+  } catch (const std::exception &e) {
+    fprintf(stderr, "DxrRenderer: ReSTIR spatial CS compile failed: %s\n",
+            e.what());
+    return;
+  }
+  if (!cs) {
+    fprintf(stderr, "DxrRenderer: ReSTIR spatial CS blob null\n");
+    return;
+  }
+
+  D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
+  psoDesc.pRootSignature = s_restirSpatialRootSig.Get();
+  psoDesc.CS.pShaderBytecode = cs->GetBufferPointer();
+  psoDesc.CS.BytecodeLength = cs->GetBufferSize();
+  HRESULT hrPso = s_device->CreateComputePipelineState(
+      &psoDesc, IID_PPV_ARGS(&s_restirSpatialPSO));
+  if (FAILED(hrPso)) {
+    fprintf(stderr,
+            "DxrRenderer: ReSTIR spatial CreateComputePipelineState failed: "
+            "0x%08x\n",
+            (unsigned)hrPso);
+    DumpD3D12InfoQueueMessages("ReSTIR spatial PSO create");
+    s_restirSpatialPSO.Reset();
+    s_restirSpatialRootSig.Reset();
+    return;
+  }
+}
+
+static void EnsureRestirGiSpatialPipeline() {
+  if (s_restirGiSpatialPSO && s_restirGiSpatialRootSig) {
+    return;
+  }
+  if (!s_device) {
+    return;
+  }
+
+  // Root signature:
+  //  - b0: Camera constants
+  //  - UAV table: u4..u13 (GI reservoirs + depth/normal compatibility data)
+  D3D12_DESCRIPTOR_RANGE uavRange = {};
+  uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+  uavRange.NumDescriptors = 10; // u4..u13
+  uavRange.BaseShaderRegister = 4;
+  uavRange.RegisterSpace = 0;
+  uavRange.OffsetInDescriptorsFromTableStart =
+      D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+  D3D12_ROOT_PARAMETER params[2] = {};
+  params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+  params[0].Descriptor.ShaderRegister = 0;
+  params[0].Descriptor.RegisterSpace = 0;
+  params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[1].DescriptorTable.NumDescriptorRanges = 1;
+  params[1].DescriptorTable.pDescriptorRanges = &uavRange;
+  params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
+  rsDesc.NumParameters = _countof(params);
+  rsDesc.pParameters = params;
+  rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+  ComPtr<ID3DBlob> sig, err;
+  HRESULT hrSerialize = D3D12SerializeRootSignature(
+      &rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err);
+  if (FAILED(hrSerialize)) {
+    if (err) {
+      fprintf(stderr, "DxrRenderer: ReSTIR GI spatial RS error: %s\n",
+              (char *)err->GetBufferPointer());
+    }
+    return;
+  }
+
+  ThrowIfFailed(s_device->CreateRootSignature(
+      0, sig->GetBufferPointer(), sig->GetBufferSize(),
+      IID_PPV_ARGS(&s_restirGiSpatialRootSig)));
+
+  ComPtr<IDxcBlob> cs;
+  try {
+    std::vector<std::wstring> defines;
+    cs = s_dxcHelper.Compile(L"shaders/restir_gi_spatial_cs.hlsl", L"CSMain",
+                             L"cs_6_3", defines);
+  } catch (const std::exception &e) {
+    fprintf(stderr, "DxrRenderer: ReSTIR GI spatial CS compile failed: %s\n",
+            e.what());
+    return;
+  }
+  if (!cs) {
+    fprintf(stderr, "DxrRenderer: ReSTIR GI spatial CS blob null\n");
+    return;
+  }
+
+  D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
+  psoDesc.pRootSignature = s_restirGiSpatialRootSig.Get();
+  psoDesc.CS.pShaderBytecode = cs->GetBufferPointer();
+  psoDesc.CS.BytecodeLength = cs->GetBufferSize();
+  HRESULT hrPso = s_device->CreateComputePipelineState(
+      &psoDesc, IID_PPV_ARGS(&s_restirGiSpatialPSO));
+  if (FAILED(hrPso)) {
+    fprintf(stderr,
+            "DxrRenderer: ReSTIR GI spatial CreateComputePipelineState "
+            "failed: 0x%08x\n",
+            (unsigned)hrPso);
+    DumpD3D12InfoQueueMessages("ReSTIR GI spatial PSO create");
+    s_restirGiSpatialPSO.Reset();
+    s_restirGiSpatialRootSig.Reset();
+    return;
+  }
 }
 
 static void EnsureNoiseStatsPipeline() {
@@ -969,8 +1167,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   }
 
   // Create global root signature
-  D3D12_ROOT_PARAMETER params[12] =
-      {}; // Increased for Lights & Cloud (Split CBV/SRV)
+  D3D12_ROOT_PARAMETER params[13] =
+      {}; // Increased for Lights, material extras, and cloud resources
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
   params[0].Descriptor.ShaderRegister = 0;
   params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -1044,6 +1242,11 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   params[7].Descriptor.ShaderRegister = 4098;
   params[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
+  // Material Extra Data SB (t4099)
+  params[12].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[12].Descriptor.ShaderRegister = 4099;
+  params[12].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
   // Lights SB (t5000)
   params[9].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
   params[9].Descriptor.ShaderRegister = 5000;
@@ -1072,7 +1275,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   params[11].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
   D3D12_ROOT_SIGNATURE_DESC rootDesc = {};
-  rootDesc.NumParameters = 12;
+  rootDesc.NumParameters = 13;
   rootDesc.pParameters = params;
   rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
@@ -1160,8 +1363,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   hitSub.Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
   hitSub.pDesc = &hitGroupDesc;
 
-  fprintf(stderr, "DxrRenderer: MaxPayloadSizeInBytes=%u\n", 128);
-  shaderConfig.MaxPayloadSizeInBytes = 128;
+  fprintf(stderr, "DxrRenderer: MaxPayloadSizeInBytes=%u\n", 32);
+  shaderConfig.MaxPayloadSizeInBytes = 32;
   shaderConfig.MaxAttributeSizeInBytes = 2 * sizeof(float);
   D3D12_STATE_SUBOBJECT shaderConfigSub = {};
   shaderConfigSub.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG;
@@ -1194,6 +1397,29 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   if (FAILED(hrState)) {
     fprintf(stderr, "DxrRenderer: CreateStateObject failed: 0x%08x\n",
             (unsigned)hrState);
+    fprintf(stderr,
+            "DxrRenderer: RT pipeline config dump: payload=%u attr=%u recursion=%u rootParams=%u\n",
+            shaderConfig.MaxPayloadSizeInBytes, shaderConfig.MaxAttributeSizeInBytes,
+            pipelineConfig.MaxTraceRecursionDepth, rootDesc.NumParameters);
+    if (g_dxrDumpD3D12Messages) {
+      ComPtr<ID3D12InfoQueue> infoQueue;
+      if (SUCCEEDED(s_device->QueryInterface(IID_PPV_ARGS(&infoQueue)))) {
+        const UINT64 n =
+            infoQueue->GetNumStoredMessagesAllowedByRetrievalFilter();
+        for (UINT64 i = 0; i < n; ++i) {
+          SIZE_T messageLength = 0;
+          infoQueue->GetMessage(i, nullptr, &messageLength);
+          std::vector<char> message(messageLength);
+          D3D12_MESSAGE *pMsg =
+              reinterpret_cast<D3D12_MESSAGE *>(message.data());
+          if (SUCCEEDED(infoQueue->GetMessage(i, pMsg, &messageLength))) {
+            fprintf(stderr, "D3D12 INFO (CreateStateObject): Cat=%d Sev=%d ID=%d: %s\n",
+                    (int)pMsg->Category, (int)pMsg->Severity, (int)pMsg->ID,
+                    pMsg->pDescription);
+          }
+        }
+      }
+    }
     return;
   }
 
@@ -1573,6 +1799,69 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   }
 }
 
+static bool IsMaterialAlphaTestedOrGlass(const Asset::Material &m) {
+  const bool alphaTested =
+      (m.alphaMode != "OPAQUE") || (m.diffuseColor[3] < 0.999f);
+  const float maxRefr = (std::max)(
+      m.refractionColor[0],
+      (std::max)(m.refractionColor[1], m.refractionColor[2]));
+  const bool glassLike = (maxRefr > 0.01f) || (m.thinWalled > 0.5f);
+  return alphaTested || glassLike;
+}
+
+static bool IsMeshOpaqueForRt(const Asset::GpuMesh &mesh) {
+  const int matIdx = mesh.materialIndex;
+  if (matIdx < 0 || matIdx >= (int)g_loadedMaterials.size()) {
+    return true;
+  }
+  return !IsMaterialAlphaTestedOrGlass(g_loadedMaterials[(size_t)matIdx]);
+}
+
+static bool HasDirtyMaterialsForMeshes(
+    const std::vector<const Asset::GpuMesh *> &meshes) {
+  if (s_dirtyMaterialFlags.empty()) {
+    return false;
+  }
+  for (const Asset::GpuMesh *mesh : meshes) {
+    if (!mesh) {
+      continue;
+    }
+    const int matIdx = mesh->materialIndex;
+    if (matIdx >= 0 && matIdx < (int)s_dirtyMaterialFlags.size() &&
+        s_dirtyMaterialFlags[(size_t)matIdx] != 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void MarkMaterialDirty(int materialIndex) {
+  if (materialIndex < 0) {
+    return;
+  }
+  const size_t idx = (size_t)materialIndex;
+  if (idx >= s_dirtyMaterialFlags.size()) {
+    s_dirtyMaterialFlags.resize(idx + 1, 0);
+  }
+  s_dirtyMaterialFlags[idx] = 1;
+}
+
+static void ClearDirtyMaterialsForMeshes(
+    const std::vector<const Asset::GpuMesh *> &meshes) {
+  if (s_dirtyMaterialFlags.empty()) {
+    return;
+  }
+  for (const Asset::GpuMesh *mesh : meshes) {
+    if (!mesh) {
+      continue;
+    }
+    const int matIdx = mesh->materialIndex;
+    if (matIdx >= 0 && matIdx < (int)s_dirtyMaterialFlags.size()) {
+      s_dirtyMaterialFlags[(size_t)matIdx] = 0;
+    }
+  }
+}
+
 void BuildAccelerationStructures(
     const std::vector<const Asset::GpuMesh *> &meshes,
     const std::vector<Scene::Instance> &instances) {
@@ -1600,6 +1889,8 @@ void BuildAccelerationStructures(
         fprintf(stderr, "DxrRenderer: Empty scene - clearing TLAS\n");
       s_tlas.result = nullptr;
       s_allBLAS.clear();
+      s_cachedMeshBuffersForBlas.clear();
+      s_cachedMeshOpaqueForBlas.clear();
       return;
     }
 
@@ -1763,18 +2054,27 @@ void BuildAccelerationStructures(
     }
 
     // BLAS
-    // Optimization: Only rebuild BLAS if the mesh resource has changed.
-    // BLAS are defined in local space, so they don't need to rebuild when
-    // models are transformed.
-    static std::vector<ID3D12Resource *> s_cachedMeshBuffers;
-    bool meshesChanged = (meshes.size() != s_cachedMeshBuffers.size());
+    // Rebuild when geometry buffers change, opaque/transparent material
+    // classification changes, or a material was explicitly marked dirty.
+    std::vector<uint8_t> meshOpaqueStates(meshes.size(), 1u);
+    for (size_t i = 0; i < meshes.size(); ++i) {
+      meshOpaqueStates[i] = IsMeshOpaqueForRt(*meshes[i]) ? 1u : 0u;
+    }
+
+    bool meshesChanged = (meshes.size() != s_cachedMeshBuffersForBlas.size()) ||
+                         (meshes.size() != s_cachedMeshOpaqueForBlas.size());
     if (!meshesChanged) {
       for (size_t i = 0; i < meshes.size(); ++i) {
-        if (meshes[i]->vertexBuffer.Get() != s_cachedMeshBuffers[i]) {
+        if (meshes[i]->vertexBuffer.Get() != s_cachedMeshBuffersForBlas[i] ||
+            meshOpaqueStates[i] != s_cachedMeshOpaqueForBlas[i]) {
           meshesChanged = true;
           break;
         }
       }
+    }
+
+    if (!meshesChanged && HasDirtyMaterialsForMeshes(meshes)) {
+      meshesChanged = true;
     }
 
     // Pipelining:
@@ -1788,7 +2088,8 @@ void BuildAccelerationStructures(
 
     if (meshesChanged || s_allBLAS.empty()) {
       s_allBLAS.clear();
-      s_cachedMeshBuffers.clear();
+      s_cachedMeshBuffersForBlas.clear();
+      s_cachedMeshOpaqueForBlas.clear();
       try {
         for (size_t i = 0; i < meshes.size(); ++i) {
           const auto &mesh = *meshes[i];
@@ -1800,10 +2101,11 @@ void BuildAccelerationStructures(
 
           auto bl = BuildBLAS(s_dxrDevice.Get(), cmdList.Get(), vbAddr,
                               mesh.vertexCount, sizeof(Asset::Vertex), ibAddr,
-                              mesh.indexCount);
+                              mesh.indexCount, meshOpaqueStates[i] != 0);
           if (bl.result && bl.scratch) {
             s_allBLAS.push_back({bl, (UINT64)i});
-            s_cachedMeshBuffers.push_back(mesh.vertexBuffer.Get());
+            s_cachedMeshBuffersForBlas.push_back(mesh.vertexBuffer.Get());
+            s_cachedMeshOpaqueForBlas.push_back(meshOpaqueStates[i]);
           }
 
           batchCount++;
@@ -1863,6 +2165,8 @@ void BuildAccelerationStructures(
       printf("DxrRenderer: BLAS creation completed. Total BLAS count: %zu\n",
              s_allBLAS.size());
     }
+
+    ClearDirtyMaterialsForMeshes(meshes);
 
     if (s_allBLAS.empty()) {
       fprintf(stderr, "DxrRenderer: No BLAS built - aborting TLAS build\n");
@@ -2185,7 +2489,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                  D3D12_GPU_DESCRIPTOR_HANDLE texturesGpuStart,
                  UINT textureDescriptorCount,
                  const std::vector<const Asset::GpuMesh *> &meshes,
-                 ID3D12Resource *meshDataSB) {
+                 ID3D12Resource *meshDataSB,
+                 ID3D12Resource *materialExtraSB) {
   auto ReturnFail = [&](int reason, const char *message) -> bool {
     if (s_lastRenderFrameFailReason != reason) {
       fprintf(stderr, "DxrRenderer::RenderFrame FAIL[%d]: %s\n", reason,
@@ -2214,6 +2519,16 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     commandListBase->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
     commandListBase->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
     return true;
+  }
+
+  // Material blend/transparency edits can change opaque traversal flags. Rebuild
+  // BLAS/TLAS lazily on the first frame that observes dirty materials.
+  if (HasDirtyMaterialsForMeshes(meshes)) {
+    BuildAccelerationStructures(meshes, Scene::GetInstances());
+    if (!s_tlas.result) {
+      return ReturnFail(15,
+                        "TLAS missing after dirty-material rebuild attempt");
+    }
   }
 
   if (!s_outputUAV)
@@ -2402,6 +2717,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   if (materialCB)
     dxrList->SetComputeRootShaderResourceView(
         4, materialCB->GetGPUVirtualAddress());
+  if (materialExtraSB)
+    dxrList->SetComputeRootShaderResourceView(
+        12, materialExtraSB->GetGPUVirtualAddress());
 
   // --- Bind Cloud Resources (Slot 10) ---
   if (g_cloudManager.GetBaseTexture() && g_cloudManager.GetDetailTexture()) {
@@ -2704,6 +3022,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   // If we are denoising an already-completed frame (e.g. at MaxSPP),
   // we do not want to add more samples or modify the accumulation buffer.
 
+  bool didDispatchRays = false;
   if (!doDenoise && !reachedEndCondition) {
     // Start DispatchRays timer
     if (s_queryHeap) {
@@ -2725,6 +3044,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     }
 
     dxrList->DispatchRays(&dispatchDesc);
+    didDispatchRays = true;
 
     // End DispatchRays timer
     if (s_queryHeap) {
@@ -2752,6 +3072,66 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       // Optional: Log convergence?
       // fprintf(stderr, "DxrRenderer: Converged (Noise: %.4f < %.4f)\n",
       // s_lastNoiseLevel, g_cameraData.noiseThreshold);
+    }
+  }
+
+  // Phase 4: decoupled ReSTIR DI temporal/spatial reuse in a dedicated compute
+  // pass. RayGen now writes initial candidates, and this pass performs reuse.
+  if (didDispatchRays) {
+    EnsureRestirSpatialPipeline();
+    if (s_restirSpatialPSO && s_restirSpatialRootSig && cameraCB) {
+      D3D12_RESOURCE_BARRIER uavBarrier = {};
+      uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+      uavBarrier.UAV.pResource = nullptr;
+      dxrList->ResourceBarrier(1, &uavBarrier);
+
+      ID3D12DescriptorHeap *rtHeaps[] = {s_srvHeap.Get()};
+      dxrList->SetDescriptorHeaps(1, rtHeaps);
+      dxrList->SetPipelineState(s_restirSpatialPSO.Get());
+      dxrList->SetComputeRootSignature(s_restirSpatialRootSig.Get());
+      dxrList->SetComputeRootConstantBufferView(0,
+                                                cameraCB->GetGPUVirtualAddress());
+
+      UINT inc = s_device->GetDescriptorHandleIncrementSize(
+          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+      D3D12_GPU_DESCRIPTOR_HANDLE restirUavTable = s_outputUAVGpu;
+      restirUavTable.ptr += (UINT64)2 * (UINT64)inc; // u2..u13 table base
+      dxrList->SetComputeRootDescriptorTable(1, restirUavTable);
+
+      const UINT gx = (s_outputWidth + 7) / 8;
+      const UINT gy = (s_outputHeight + 7) / 8;
+      dxrList->Dispatch(gx, gy, 1);
+
+      uavBarrier.UAV.pResource = nullptr;
+      dxrList->ResourceBarrier(1, &uavBarrier);
+    }
+
+    EnsureRestirGiSpatialPipeline();
+    if (s_restirGiSpatialPSO && s_restirGiSpatialRootSig && cameraCB) {
+      D3D12_RESOURCE_BARRIER uavBarrier = {};
+      uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+      uavBarrier.UAV.pResource = nullptr;
+      dxrList->ResourceBarrier(1, &uavBarrier);
+
+      ID3D12DescriptorHeap *rtHeaps[] = {s_srvHeap.Get()};
+      dxrList->SetDescriptorHeaps(1, rtHeaps);
+      dxrList->SetPipelineState(s_restirGiSpatialPSO.Get());
+      dxrList->SetComputeRootSignature(s_restirGiSpatialRootSig.Get());
+      dxrList->SetComputeRootConstantBufferView(0,
+                                                cameraCB->GetGPUVirtualAddress());
+
+      UINT inc = s_device->GetDescriptorHandleIncrementSize(
+          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+      D3D12_GPU_DESCRIPTOR_HANDLE restirGiUavTable = s_outputUAVGpu;
+      restirGiUavTable.ptr += (UINT64)4 * (UINT64)inc; // u4..u13 table base
+      dxrList->SetComputeRootDescriptorTable(1, restirGiUavTable);
+
+      const UINT gx = (s_outputWidth + 7) / 8;
+      const UINT gy = (s_outputHeight + 7) / 8;
+      dxrList->Dispatch(gx, gy, 1);
+
+      uavBarrier.UAV.pResource = nullptr;
+      dxrList->ResourceBarrier(1, &uavBarrier);
     }
   }
 

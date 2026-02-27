@@ -282,6 +282,10 @@ void Draw(HWND hwnd, bool &visible) {
           DxrRenderer::ResetAccumulation();
         int matIdx = s_selectedMaterial;
         Asset::Material &mat = g_loadedMaterials[matIdx];
+        auto MarkOpacityDirty = [&]() {
+          DxrRenderer::MarkMaterialDirty(matIdx);
+          DxrRenderer::ResetAccumulation();
+        };
         ImGui::PushID(matIdx);
 
         // Clipboard helpers
@@ -467,17 +471,17 @@ void Draw(HWND hwnd, bool &visible) {
         ImGui::SameLine();
         if (ImGui::Button("Paste") && s_hasClipboard) {
           mat = s_clipboard;
-          DxrRenderer::ResetAccumulation();
+          MarkOpacityDirty();
         }
         ImGui::SameLine();
         if (ImGui::Button("Reset")) {
           ResetDefaults(true);
-          DxrRenderer::ResetAccumulation();
+          MarkOpacityDirty();
         }
         ImGui::SameLine();
         if (ImGui::Button("Reset (No Tex)")) {
           ResetDefaults(false);
-          DxrRenderer::ResetAccumulation();
+          MarkOpacityDirty();
         }
 
         ImGui::Separator();
@@ -506,7 +510,7 @@ void Draw(HWND hwnd, bool &visible) {
         ImGui::SameLine();
         if (ImGui::Button("Apply")) {
           ApplyPreset(mat, presetIdx);
-          DxrRenderer::ResetAccumulation();
+          MarkOpacityDirty();
         }
 
         ImGui::Separator();
@@ -536,12 +540,12 @@ void Draw(HWND hwnd, bool &visible) {
               DxrRenderer::ResetAccumulation();
             if (ImGui::SliderFloat("Translucency", &mat.translucency, 0.0f,
                                    1.0f))
-              DxrRenderer::ResetAccumulation();
+              MarkOpacityDirty();
             {
               bool thin = mat.thinWalled > 0.5f;
               if (ImGui::Checkbox("Thin Walled", &thin)) {
                 mat.thinWalled = thin ? 1.0f : 0.0f;
-                DxrRenderer::ResetAccumulation();
+                MarkOpacityDirty();
               }
             }
 
@@ -549,7 +553,7 @@ void Draw(HWND hwnd, bool &visible) {
             if (ImGui::ColorEdit3("Reflection Tint", mat.reflectionColor))
               DxrRenderer::ResetAccumulation();
             if (ImGui::ColorEdit3("Refraction Color", mat.refractionColor))
-              DxrRenderer::ResetAccumulation();
+              MarkOpacityDirty();
             if (ImGui::SliderFloat("Refraction Glossiness",
                                    &mat.refractionGlossiness, 0.0f, 1.0f))
               DxrRenderer::ResetAccumulation();
@@ -718,7 +722,7 @@ void Draw(HWND hwnd, bool &visible) {
               mode = 2;
             if (ImGui::Combo("Alpha Mode", &mode, alphaModes, 3)) {
               mat.alphaMode = alphaModes[mode];
-              DxrRenderer::ResetAccumulation();
+              MarkOpacityDirty();
             }
             ImGui::EndTabItem();
           }

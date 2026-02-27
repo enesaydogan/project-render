@@ -354,6 +354,10 @@ if(DXC_COMPILER)
       list(APPEND SHADER_COMPILE_LIST "${shader_rel}|${entry}|cs_6_3")
     endforeach()
   endforeach()
+  # Ensure dedicated ReSTIR spatial pass is always compiled, even if
+  # entry-point discovery misses it on some CMake regex edge cases.
+  list(APPEND SHADER_COMPILE_LIST "restir_spatial_cs.hlsl|CSMain|cs_6_3")
+  list(APPEND SHADER_COMPILE_LIST "restir_gi_spatial_cs.hlsl|CSMain|cs_6_3")
   list(REMOVE_DUPLICATES SHADER_COMPILE_LIST)
 
   set(COMPILED_SHADERS)

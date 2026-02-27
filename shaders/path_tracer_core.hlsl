@@ -75,33 +75,6 @@ float4 pack_reservoir(Reservoir r) {
     return float4(asfloat(r.lightIndex), r.w_sum, asfloat(r.M), r.W);
 }
 
-bool IsSpatiallyCompatible(uint2 p0, uint2 p1, float ndotMin, float depthTolBase)
-{
-    float4 n0 = g_normalRoughnessOut[p0];
-    float4 n1 = g_normalRoughnessOut[p1];
-    float3 nn0 = n0.xyz;
-    float3 nn1 = n1.xyz;
-    float l0 = dot(nn0, nn0);
-    float l1 = dot(nn1, nn1);
-
-    // History is unreliable for spatial reuse when normal/depth buffers are invalid.
-    if (l0 <= 0.25 || l1 <= 0.25) return false;
-    nn0 = normalize(nn0);
-    nn1 = normalize(nn1);
-    if (dot(nn0, nn1) < ndotMin) return false;
-    if (abs(n0.w - n1.w) > 0.25) return false;
-
-    float d0 = g_depth[p0];
-    float d1 = g_depth[p1];
-    if (!isfinite(d0) || !isfinite(d1) || d0 <= 0.0 || d1 <= 0.0) return false;
-    
-    // Stricter depth tolerance to prevent silhouette leaking
-    float depthTol = depthTolBase * min(d0, d1);
-    if (abs(d0 - d1) > max(0.05, depthTol)) return false;
-
-    return true;
-}
-
 float halton(uint index, uint base)
 {
     float f = 1.0;
@@ -113,6 +86,18 @@ float halton(uint index, uint base)
         index /= base;
     }
     return r;
+}
+
+RayPayload InitRayPayload(uint rayType)
+{
+    RayPayload p;
+    p.t = -1.0;
+    PayloadSetColor(p, float3(0.0, 0.0, 0.0));
+    p.packedNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
+    p.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
+    p.packedSurface = PackPayloadSurface(1.0, 0.0, 0.0, 0.0);
+    p.packedIorType = PackPayloadIorType(1.0, rayType, false);
+    return p;
 }
 
 [shader("raygeneration")]
@@ -137,7 +122,6 @@ void RayGen()
     const float kAdaptiveEdgeContrastThreshold = 0.012;
     const float kAdaptiveMinExpectedRatio = 0.95;
     const float kAdaptiveLagKeepScale = 1.00;
-    const float kRestirSpatialRadiusPx = (useAdaptiveSampling > 0.5) ? 6.0 : 12.0;
     // Artistic control: boost environment contribution to scene lighting
     // (DI/GI transport) without making the visible sky dome brighter.
     const float kEnvLightingBoost = 3.0;
@@ -303,33 +287,27 @@ void RayGen()
         ray.TMin = 0.002;
         ray.TMax = 10000.0;
 
-        RayPayload payload;
-        payload.color = float3(0,0,0);
-        payload.albedo = float3(0,0,0);
-        payload.emissive = float3(0,0,0);
-        payload.normal = float3(0,0,0);
-        payload.position = float3(0,0,0);
-        payload.refractionColor = float3(0,0,0);
-        payload.ior = 1.0;
-        payload.roughness = 1.0;
-        payload.metalness = 0.0;
-        payload.thinWalled = 0.0;
-        payload.translucency = 0.0;
-        payload.matIndex = 0;
-        payload.t = -1.0;
-        payload.rayDepth = (uint)bounce;
-        payload.rayType = currentRayType;
+        RayPayload payload = InitRayPayload(currentRayType);
 
         TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
         SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
 
+        float3 payloadColor = PayloadGetColor(payload);
+        float3 payloadAlbedo = UnpackPayloadAlbedo(payload.packedAlbedo);
+        float4 payloadSurface = UnpackPayloadSurface(payload.packedSurface);
+        float payloadRoughness = max(0.001, payloadSurface.x);
+        float payloadMetalness = payloadSurface.y;
+        float payloadTransmission = payloadSurface.z;
+        float payloadTranslucency = payloadSurface.w;
+        float payloadIor = UnpackPayloadIor(payload.packedIorType);
+        bool payloadThinWalled = UnpackPayloadThinWalled(payload.packedIorType);
 
         if (bounce == 0 && payload.t >= 0.0) {
             primaryHit = true;
-            primaryPos = payload.position;
-            primaryNormal = payload.normal;
-            primaryAlbedo = payload.albedo;
-            primaryRoughness = max(0.04, payload.roughness); // Increased min roughness for archviz stability
+            primaryPos = rayOrigin + rayDir * payload.t;
+            primaryNormal = UnpackNormalOctahedron(payload.packedNormal);
+            primaryAlbedo = payloadAlbedo;
+            primaryRoughness = max(0.04, payloadRoughness); // Increased min roughness for archviz stability
             
             // For DLSS-RR, use the distance along the center ray to avoid depth jitter
             // but use the actual hit position for coordinates.
@@ -337,23 +315,20 @@ void RayGen()
             primaryViewZ = dot(toHit, forward); 
 
             // Specular Albedo calculation for DLSS-RR
-            float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, payload.metalness);
-            float NdotV = saturate(dot(payload.normal, -rayDir));
+            float3 F0 = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, payloadMetalness);
+            float NdotV = saturate(dot(primaryNormal, -rayDir));
             primarySpecAlbedo = EnvBRDFApprox2(F0, primaryRoughness * primaryRoughness, NdotV);
 
             // Trace dedicated specular reflection ray to get hit distance for DLSS-RR
             // Only trace if the surface has significant specular reflectance AND RR is active
             if (dlssRayReconstruction > 0.5 && max(primarySpecAlbedo.r, max(primarySpecAlbedo.g, primarySpecAlbedo.b)) > 0.01) {
-                float3 R_spec = reflect(rayDir, payload.normal);
+                float3 R_spec = reflect(rayDir, primaryNormal);
                 RayDesc specHitRay;
-                specHitRay.Origin = primaryPos + payload.normal * 0.002;
+                specHitRay.Origin = primaryPos + primaryNormal * 0.002;
                 specHitRay.Direction = R_spec;
                 specHitRay.TMin = 0.002;
                 specHitRay.TMax = 1000.0;
-                RayPayload specHitPayload;
-                specHitPayload.t = -1.0;
-                specHitPayload.rayDepth = (uint)bounce + 1;
-                specHitPayload.rayType = RAY_TYPE_REFLECTION;
+                RayPayload specHitPayload = InitRayPayload(RAY_TYPE_REFLECTION);
                 TraceRay(g_accel, RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0xFF, 0, 0, 0, specHitRay, specHitPayload);
                 SHADER_COUNTER_ADD(SHADER_COUNTER_SPECULAR_TRACES, 1);
                 primarySpecHitDist = (specHitPayload.t > 0) ? specHitPayload.t : 1000.0;
@@ -366,12 +341,12 @@ void RayGen()
             // Miss: add sky color and terminate
             // RR is very sensitive to sky shimmer. For the primary ray, sample
             // the environment using a non-jittered ray direction.
-            float3 missColor = payload.color;
+            float3 missColor = payloadColor;
             if (bounce == 0 && dlssRayReconstruction > 0.5) {
                 float2 skyUv = DirectionToUVRotated(rayDirCenter);
                 // Slight mip bias helps remove residual HDRI aliasing that shows up
                 // as shimmer, especially along silhouettes.
-                const float rrSkyLod = 0;
+                float rrSkyLod = clamp(log2(max(length(rayOrigin - camPos), 1e-3) * 0.02), 0.0, 10.0);
 
                 float3 rrSky = envMap.SampleLevel(linearSampler, skyUv, rrSkyLod).rgb * intensity;
 
@@ -387,7 +362,7 @@ void RayGen()
                 }
 
                 if (cloudRenderingEnabled > 0.5f) {
-                    float4 baked = bakedClouds.SampleLevel(linearSampler, skyUv, 0);
+                    float4 baked = bakedClouds.SampleLevel(linearSampler, skyUv, rrSkyLod);
                     baked.a = saturate(baked.a);
                     baked.rgb = max(baked.rgb, 0.0);
                     float opacity = 1.0f - baked.a;
@@ -431,17 +406,17 @@ void RayGen()
         // Legacy material/cloud debug modes (1..16) visualize primary-hit payloads.
         // New accumulation diagnostics (17+) must run full path-tracing flow.
         if (SHADER_DEBUG_MODE > 0.0 && SHADER_DEBUG_MODE <= 16.0) {
-            accumulatedColor = payload.color;
+            accumulatedColor = payloadColor;
             break;
         }
 
-        float3 N = payload.normal;
-        float3 P = payload.position;
+        float3 N = UnpackNormalOctahedron(payload.packedNormal);
+        float3 P = rayOrigin + rayDir * payload.t;
         float3 V = -rayDir;
-        float roughness = max(0.001, payload.roughness);
-        float metallic = payload.metalness;
-        float transmission = saturate(max(payload.refractionColor.r, max(payload.refractionColor.g, payload.refractionColor.b))) * (1.0 - metallic);
-        float3 diffuseAlbedo = payload.albedo * (1.0 - metallic) * (1.0 - transmission);
+        float roughness = payloadRoughness;
+        float metallic = payloadMetalness;
+        float transmission = saturate(payloadTransmission) * (1.0 - metallic);
+        float3 diffuseAlbedo = payloadAlbedo * (1.0 - metallic) * (1.0 - transmission);
 
         // 1. Direct Lighting (Next Event Estimation + ReSTIR for 1st bounce)
         float3 directLighting = float3(0, 0, 0);
@@ -458,12 +433,12 @@ void RayGen()
                 float NdotL = saturate(dot(N, ls.L));
                 
                 // Evaluation for ReSTIR
-                float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
+                float3 F0 = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, metallic);
                 float3 H = normalize(ls.L + V);
                 float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL, roughness) * F_Schlick(max(0.0, dot(H, V)), F0);
                 float3 brdf = (diffuseAlbedo / PI) + spec;
 
-                float p_target = calculate_p_target(ls.radiance, payload.albedo, brdf, NdotL);
+                float p_target = calculate_p_target(ls.radiance, payloadAlbedo, brdf, NdotL);
                 update_reservoir(res, 0xFFFFFFFF, p_target, rng);
             }
 
@@ -479,115 +454,18 @@ void RayGen()
                 float3 radiance = l.color * attenuation;
                 float NdotL = saturate(dot(N, L));
 
-                float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
+                float3 F0 = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, metallic);
                 float3 H = normalize(L + V);
                 float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL, roughness) * F_Schlick(max(0.0, dot(H, V)), F0);
                 float3 brdf = (diffuseAlbedo / PI) + spec;
 
-                float p_target = calculate_p_target(radiance, payload.albedo, brdf, NdotL) * (float)numLights;
+                float p_target = calculate_p_target(radiance, payloadAlbedo, brdf, NdotL) * (float)numLights;
                 update_reservoir(res, lightIdx, p_target, rng);
             }
 
-            // B. Temporal Resampling
-            // DLSS-RR prefers minimal temporal correlation; disable temporal reuse
-            // while RR is enabled.
-            if (frame > 0 && dlssRayReconstruction < 0.5) {
-                float4 prev_data;
-                if (flip) prev_data = g_reservoir0[launchIndex.xy];
-                else      prev_data = g_reservoir1[launchIndex.xy];
-                SHADER_COUNTER_ADD(SHADER_COUNTER_RESERVOIR_READS, 1);
-                Reservoir prev_res = unpack_reservoir(prev_data);
-                prev_res.M = min(prev_res.M, 30);
-                
-                float3 L_prev;
-                float3 radiance_prev;
-                if (prev_res.lightIndex == 0xFFFFFFFF) {
-                    L_prev = normalize(lightDir.xyz);
-                    radiance_prev = lightColor.rgb * lightColor.w;
-                } else if (prev_res.lightIndex < numLights) {
-                    Light l = g_lights[prev_res.lightIndex];
-                    L_prev = l.position - P;
-                    float dist = length(L_prev);
-                    L_prev /= dist;
-                    radiance_prev = l.color * (l.intensity / (dist * dist + 1.0));
-                } else {
-                    radiance_prev = float3(0,0,0);
-                }
-                
-                float NdotL_prev = saturate(dot(N, L_prev));
-                float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
-                float3 H = normalize(L_prev + V);
-                float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL_prev, roughness) * F_Schlick(max(0.0, dot(H, V)), F0);
-                float3 brdf_prev = (diffuseAlbedo / PI) + spec;
-
-                float p_target_at_curr = calculate_p_target(radiance_prev, payload.albedo, brdf_prev, saturate(dot(N, L_prev)));
-                combine_reservoirs(res, prev_res, p_target_at_curr, rng);
-            }
-
-            // C. Spatial Resampling (Neighbor Pixels)
-            if (frame > 6 && ((frame & 1u) == 0u)) {
-                const int spatialReuseCount = 1;
-                for (int i = 0; i < spatialReuseCount; ++i) {
-                    // Use a disk distribution for better sampling coverage and to avoid banding
-                    float angle = next_float(rng) * 2.0 * PI;
-                    float radius = sqrt(next_float(rng)) * kRestirSpatialRadiusPx;
-                    int2 offset = int2(cos(angle) * radius, sin(angle) * radius);
-                    int2 neighborCoords = clamp(int2(launchIndex.xy) + offset, int2(0,0), int2(launchDim.xy)-1);
-
-                    // Always guard spatial reuse at geometric/material edges.
-                    if (!IsSpatiallyCompatible(launchIndex.xy, uint2(neighborCoords), 0.96, 0.006)) {
-                        continue;
-                    }
-                    
-                    float4 neighbor_data;
-                    if (flip) neighbor_data = g_reservoir0[neighborCoords];
-                    else      neighbor_data = g_reservoir1[neighborCoords];
-                    SHADER_COUNTER_ADD(SHADER_COUNTER_SPATIAL_NEIGHBOR_READS, 1);
-                    Reservoir neighbor_res = unpack_reservoir(neighbor_data);
-                    
-                    // Cap neighbor contribution to prevent fireflies from dominating
-                    neighbor_res.M = min(neighbor_res.M, 8); 
-                    
-                    // Re-evaluate neighbor light candidate at current shading point
-                    float3 L_neigh;
-                    float3 radiance_neigh;
-                    float dist_neigh = 1.0;
-                    if (neighbor_res.lightIndex == 0xFFFFFFFF) {
-                        L_neigh = normalize(lightDir.xyz);
-                        dist_neigh = 1000.0;
-                        radiance_neigh = lightColor.rgb * lightColor.w;
-                    } else if (neighbor_res.lightIndex < numLights) {
-                        Light l = g_lights[neighbor_res.lightIndex];
-                        L_neigh = l.position - P;
-                        dist_neigh = length(L_neigh);
-                        L_neigh /= dist_neigh;
-                        radiance_neigh = l.color * (l.intensity / (dist_neigh * dist_neigh + 1.0));
-                    } else {
-                        radiance_neigh = float3(0,0,0);
-                    }
-
-                    float NdotL_neigh = saturate(dot(N, L_neigh));
-                    float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
-                    float3 H = normalize(L_neigh + V);
-                    float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL_neigh, roughness) * F_Schlick(max(0.0, dot(H, V)), F0);
-                    float3 brdf_neigh = (diffuseAlbedo / PI) + spec;
-
-                    float p_target_at_curr = calculate_p_target(radiance_neigh, payload.albedo, brdf_neigh, NdotL_neigh);
-                    
-                    // Simple Visibility check for spatial reuse significantly reduces block artifacts
-                    if (p_target_at_curr > 0.0) {
-                        RayDesc spatialRay; spatialRay.Origin = P + N * 0.002; spatialRay.Direction = L_neigh;
-                        spatialRay.TMin = 0.001; spatialRay.TMax = max(0.001, dist_neigh - 0.003);
-                        RayPayload spatialPayload; spatialPayload.t = 1.0;
-                        spatialPayload.rayType = RAY_TYPE_SHADOW;
-                        TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, spatialRay, spatialPayload);
-                        SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
-                        if (spatialPayload.t > 0.0) p_target_at_curr = 0.0; // Occluded
-                    }
-
-                    combine_reservoirs(res, neighbor_res, p_target_at_curr, rng);
-                }
-            }
+            // Temporal and spatial reuse are now decoupled into a dedicated
+            // compute pass (restir_spatial_cs.hlsl). RayGen keeps only
+            // per-pixel initial candidate generation and direct evaluation.
 
             // C. Final ReSTIR DI Shading & Finalization
             float3 L_final;
@@ -609,12 +487,12 @@ void RayGen()
             }
 
             float NdotL_final = saturate(dot(N, L_final));
-            float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
+            float3 F0 = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, metallic);
             float3 H_f = normalize(L_final + V);
             float3 spec_f = D_GGX(max(0.0, dot(N, H_f)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL_final, roughness) * F_Schlick(max(0.0, dot(H_f, V)), F0);
             float3 brdf_f = (diffuseAlbedo / PI) + spec_f;
 
-            float p_target_final = calculate_p_target(radiance_final, payload.albedo, brdf_f, NdotL_final);
+            float p_target_final = calculate_p_target(radiance_final, payloadAlbedo, brdf_f, NdotL_final);
             
             // Finalize reservoir BEFORE storing (so W is valid in next frame)
             finalize_reservoir(res, p_target_final);
@@ -640,10 +518,8 @@ void RayGen()
                 
                 shadowRay.TMin = 0.001;
                 shadowRay.TMax = dist_final - 0.002;
-                RayPayload shadowPayload;
+                RayPayload shadowPayload = InitRayPayload(RAY_TYPE_SHADOW);
                 shadowPayload.t = 1.0;
-                shadowPayload.rayDepth = (uint)bounce + 1;
-                shadowPayload.rayType = RAY_TYPE_SHADOW;
                 TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
                 SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                 SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
@@ -670,13 +546,15 @@ void RayGen()
                     if (pdf_gi > 0.0) {
                         RayDesc giRay; giRay.Origin = P + N * 0.002; giRay.Direction = nextDir_gi;
                         giRay.TMin = 0.0001; giRay.TMax = 1000.0;
-                        RayPayload giPayload; giPayload.color = float3(0,0,0); giPayload.emissive = float3(0,0,0); giPayload.t = -1.0; giPayload.rayDepth = (uint)bounce + 1;
-                        giPayload.rayType = RAY_TYPE_GI_EVAL;
+                        RayPayload giPayload = InitRayPayload(RAY_TYPE_GI_EVAL);
                         TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, giRay, giPayload);
                         SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                         // Include sky/clouds in GI radiance
-                        float3 radiance = (giPayload.t > 0.0) ? (giPayload.color + giPayload.emissive) : giPayload.color;
-                        float3 hitPos = (giPayload.t > 0.0) ? giPayload.position : (P + nextDir_gi * 1000.0);
+                        float3 giColor = PayloadGetColor(giPayload);
+                        float3 radiance = giColor;
+                        float3 hitPos = (giPayload.t > 0.0)
+                            ? (giRay.Origin + giRay.Direction * giPayload.t)
+                            : (P + nextDir_gi * 1000.0);
                         
                         float p_target = length(radiance * f_brdf_gi * saturate(dot(N, nextDir_gi)));
                         // Clamp weight to prevent fireflies from rare but bright background samples
@@ -684,53 +562,9 @@ void RayGen()
                         update_gi_reservoir(gi_res, hitPos, radiance, ris_weight, rng);
                     }
                 }
-                // B. Temporal Resampling
-                if (frame > 0 && dlssRayReconstruction < 0.5) {
-                    float4 d0, d1, d2;
-                    if (flip) { d0 = g_gi_reservoir_b0[launchIndex.xy]; d1 = g_gi_reservoir_b1[launchIndex.xy]; d2 = g_gi_reservoir_b2[launchIndex.xy]; }
-                    else      { d0 = g_gi_reservoir_a0[launchIndex.xy]; d1 = g_gi_reservoir_a1[launchIndex.xy]; d2 = g_gi_reservoir_a2[launchIndex.xy]; }
-                    GI_Reservoir prev_gi = unpack_gi_reservoir(d0, d1, d2);
-                    prev_gi.M = min(prev_gi.M, 15);
-                    float3 L_gi = normalize(prev_gi.hitPos - P);
-                    float3 brdf = (diffuseAlbedo / PI);
-                    float p_target_at_curr = length(prev_gi.radiance * brdf * saturate(dot(N, L_gi)));
-                    combine_gi_reservoirs(gi_res, prev_gi, p_target_at_curr, rng);
-                }
-                // C. Spatial Resampling
-                if (frame > 6 && ((frame & 1u) == 0u)) {
-                    const int spatialReuseCount = 1;
-                    for (int i = 0; i < spatialReuseCount; ++i) {
-                        float2 unitSample = float2(next_float(rng), next_float(rng)) * 2.0 - 1.0;
-                        int2 offset = int2(unitSample * kRestirSpatialRadiusPx);
-                        int2 neighborCoords = clamp(int2(launchIndex.xy) + offset, int2(0,0), int2(launchDim.xy)-1);
-
-                        if (!IsSpatiallyCompatible(launchIndex.xy, uint2(neighborCoords), 0.94, 0.010)) {
-                            continue;
-                        }
-
-                        float4 d0, d1, d2;
-                        if (flip) { d0 = g_gi_reservoir_b0[neighborCoords]; d1 = g_gi_reservoir_b1[neighborCoords]; d2 = g_gi_reservoir_b2[neighborCoords]; }
-                        else      { d0 = g_gi_reservoir_a0[neighborCoords]; d1 = g_gi_reservoir_a1[neighborCoords]; d2 = g_gi_reservoir_a2[neighborCoords]; }
-                        GI_Reservoir neigh_gi = unpack_gi_reservoir(d0, d1, d2);
-                        neigh_gi.M = min(neigh_gi.M, 8);
-                        float3 L_gi = normalize(neigh_gi.hitPos - P);
-                        float3 brdf = (diffuseAlbedo / PI);
-                        float p_target_at_curr = length(neigh_gi.radiance * brdf * saturate(dot(N, L_gi)));
-                        
-                        // Spatial Jacobian / Visibility for GI
-                        if (p_target_at_curr > 0.0) {
-                            RayDesc spatialRay; spatialRay.Origin = P + N * 0.002; spatialRay.Direction = L_gi;
-                            spatialRay.TMin = 0.001; spatialRay.TMax = max(0.001, distance(neigh_gi.hitPos, P) - 0.003);
-                            RayPayload spatialPayload; spatialPayload.t = 1.0;
-                            spatialPayload.rayType = RAY_TYPE_SHADOW;
-                            TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, spatialRay, spatialPayload);
-                            SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
-                            if (spatialPayload.t > 0.0) p_target_at_curr = 0.0;
-                        }
-
-                        combine_gi_reservoirs(gi_res, neigh_gi, p_target_at_curr, rng);
-                    }
-                }
+                // Temporal/spatial GI reuse moved to dedicated compute pass
+                // (restir_gi_spatial_cs.hlsl). RayGen keeps initial candidate
+                // generation and per-frame visibility evaluation.
                 // Finalize GI
                 float3 L_gi_final = normalize(gi_res.hitPos - P);
                 float3 brdf_gi_final = (diffuseAlbedo / PI);
@@ -744,8 +578,8 @@ void RayGen()
                     // Visibility test for GI reconnection
                     RayDesc giVisRay; giVisRay.Origin = P + N * 0.002; giVisRay.Direction = L_gi_final;
                     giVisRay.TMin = 0.001; giVisRay.TMax = max(0.001, distance(gi_res.hitPos, P) - 0.003);
-                    RayPayload giVisPayload; giVisPayload.t = 1.0; giVisPayload.rayDepth = (uint)bounce + 1;
-                    giVisPayload.rayType = RAY_TYPE_SHADOW;
+                    RayPayload giVisPayload = InitRayPayload(RAY_TYPE_SHADOW);
+                    giVisPayload.t = 1.0;
                     TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, giVisRay, giVisPayload);
                     SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                     if (giVisPayload.t < 0.0) {
@@ -797,15 +631,13 @@ void RayGen()
                 shadowRay.Direction = L_nee;
                 shadowRay.TMin = 0.001;
                 shadowRay.TMax = dist_nee - 0.001;
-                RayPayload shadowPayload;
+                RayPayload shadowPayload = InitRayPayload(RAY_TYPE_SHADOW);
                 shadowPayload.t = 1.0;
-                shadowPayload.rayDepth = (uint)bounce + 1;
-                shadowPayload.rayType = RAY_TYPE_SHADOW;
                 TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
                 SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                 SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
                 if (shadowPayload.t < 0.0) {
-                     float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
+                     float3 F0 = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, metallic);
                      float3 H = normalize(L_nee + V);
                      float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL_nee, roughness) * F_Schlick(max(0.0, dot(H, V)), F0);
                      float3 brdf = (diffuseAlbedo / PI) + spec;
@@ -819,7 +651,8 @@ void RayGen()
         // walls/ceiling. BRDF-sampled misses still capture env light unweighted.
         if (bounce <= 1)
         {
-            LightSample envLs = sample_env_map(envMap, envConditionalCdf, envMarginalCdf, linearSampler, rng);
+            float envSampleLod = clamp(log2(max(length(P - camPos), 1e-3) * 0.02) + ((bounce > 0) ? 0.35 : 0.0), 0.0, 10.0);
+            LightSample envLs = sample_env_map(envMap, envConditionalCdf, envMarginalCdf, linearSampler, rng, envSampleLod);
             SHADER_COUNTER_ADD(SHADER_COUNTER_ENV_SAMPLES, 1);
 
             float NdotL_env = saturate(dot(N, envLs.L));
@@ -830,10 +663,8 @@ void RayGen()
                 envShadowRay.TMin = 0.001;
                 envShadowRay.TMax = 10000.0;
 
-                RayPayload envShadowPayload;
+                RayPayload envShadowPayload = InitRayPayload(RAY_TYPE_SHADOW);
                 envShadowPayload.t = 1.0;
-                envShadowPayload.rayDepth = (uint)bounce + 1;
-                envShadowPayload.rayType = RAY_TYPE_SHADOW;
                 TraceRay(g_accel,
                          RAY_FLAG_SKIP_CLOSEST_HIT_SHADER |
                              RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
@@ -842,7 +673,7 @@ void RayGen()
                 SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
 
                 if (envShadowPayload.t < 0.0) {
-                    float3 F0_env = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
+                    float3 F0_env = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, metallic);
                     float3 H_env = normalize(envLs.L + V);
                     float3 spec_env = D_GGX(max(0.0, dot(N, H_env)), roughness) *
                                       V_SmithCorrelated(max(0.0, dot(N, V)), NdotL_env, roughness) *
@@ -855,7 +686,7 @@ void RayGen()
                     float specProbEnv = max(F_env.x, max(F_env.y, F_env.z));
                     float baseDiffProbEnv =
                         (1.0 - specProbEnv) * (1.0 - metallic) * (1.0 - transmission);
-                    float transProbEnv = baseDiffProbEnv * saturate(payload.translucency);
+                    float transProbEnv = baseDiffProbEnv * saturate(payloadTranslucency);
                     float diffProbEnv = max(0.0, baseDiffProbEnv - transProbEnv);
                     float totalProbEnv = max(1e-6, specProbEnv + diffProbEnv + transProbEnv);
 
@@ -890,10 +721,10 @@ void RayGen()
         // Avoid double-counting by ignoring the main path tracer's first diffuse bounce.
         if (bounce == 1 && maxGIBounces > 0.0 && currentRayType == RAY_TYPE_DIFFUSE) {
             directLighting = float3(0, 0, 0);
-            payload.emissive = float3(0, 0, 0);
+            payloadColor = float3(0, 0, 0);
         }
 
-        accumulatedColor += throughput * (directLighting + indirectLighting + payload.emissive);
+        accumulatedColor += throughput * (directLighting + indirectLighting + payloadColor);
 
         // 2. Indirect Lighting Ray Generation
         float3 nextDir;
@@ -902,15 +733,15 @@ void RayGen()
         float2 u = float2(next_float(rng), next_float(rng));
 
         // Refraction / Glass logic
-        bool isRefractive = max(payload.refractionColor.r, max(payload.refractionColor.g, payload.refractionColor.b)) > 0.01;
+        bool isRefractive = payloadTransmission > 0.01;
         if (isRefractive) {
             float3 glassL;
             bool refracted = false;
 
             // Thin-walled mode: window glass approximation (no bending)
-            if (payload.thinWalled > 0.5) {
+            if (payloadThinWalled) {
                 float cosTheta = abs(dot(V, N));
-                float F = FresnelDielectric(cosTheta, payload.ior);
+                float F = FresnelDielectric(cosTheta, payloadIor);
                 if (u.x < F) {
                     refracted = false;
                     glassL = reflect(-V, N);
@@ -919,11 +750,11 @@ void RayGen()
                     glassL = rayDir; // straight-through
                 }
             } else {
-                refracted = SampleGlass(V, N, payload.ior, u, glassL);
+                refracted = SampleGlass(V, N, payloadIor, u, glassL);
             }
 
             // Rough transmission/reflection blur (cheap approximation)
-            float rgh = max(payload.roughness, 0.0);
+            float rgh = max(roughness, 0.0);
             if (rgh > 0.02) {
                 float cosMax = saturate(1.0 - rgh * rgh);
                 float2 ucone = float2(next_float(rng), next_float(rng));
@@ -934,7 +765,7 @@ void RayGen()
                 if (refractiveBounces >= (int)maxRefractiveBounces) break;
                 refractiveBounces++;
                 nextDir = glassL;
-                f_brdf = payload.refractionColor;
+                f_brdf = float3(payloadTransmission, payloadTransmission, payloadTransmission);
                 currentRayType = RAY_TYPE_REFRACTION;
             } else {
                 if (specularBounces >= (int)maxSpecularBounces) break;
@@ -955,12 +786,12 @@ void RayGen()
             continue; 
         } else {
             // Metallic / Diffuse PBR sampling (+ optional diffuse translucency)
-            float3 F0 = lerp(float3(0.04, 0.04, 0.04), payload.albedo, metallic);
+            float3 F0 = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, metallic);
             float3 F = F_Schlick(max(0.0, dot(N, V)), F0);
 
             float specProb = max(F.x, max(F.y, F.z));
             float baseDiffProb = (1.0 - specProb) * (1.0 - metallic) * (1.0 - transmission);
-            float transProb = baseDiffProb * saturate(payload.translucency);
+            float transProb = baseDiffProb * saturate(payloadTranslucency);
             float diffProb = max(0.0, baseDiffProb - transProb);
             float totalProb = specProb + diffProb + transProb;
 
@@ -1003,7 +834,7 @@ void RayGen()
                 nextDir = SampleLambert(u, -N);
                 float NdotL_t = saturate(dot(-N, nextDir));
                 pdf = (PDF_Lambert(NdotL_t) * transProb) / totalProb;
-                f_brdf = (payload.albedo / PI) * (1.0 - metallic);
+                f_brdf = (payloadAlbedo / PI) * (1.0 - metallic);
                 rayOrigin = P - N * 0.002;
                 cosineTerm = NdotL_t;
                 currentRayType = RAY_TYPE_DIFFUSE;
