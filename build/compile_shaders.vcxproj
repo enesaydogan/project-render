@@ -105,12 +105,12 @@
     </Midl>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\avg_luminance_cs_CSMain_cs_6_3.cso.rule">
-      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling shader avg_luminance_cs.hlsl [CSMain,cs_6_3]</Message>
+    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\avg_luminance_cs_CSMain_cs_6_5.cso.rule">
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling shader avg_luminance_cs.hlsl [CSMain,cs_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_3 -E CSMain -Fo D:/project-render/build/shaders/avg_luminance_cs_CSMain_cs_6_3.cso D:/project-render/shaders/avg_luminance_cs.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_5 -E CSMain -Fo D:/project-render/build/shaders/avg_luminance_cs_CSMain_cs_6_5.cso D:/project-render/shaders/avg_luminance_cs.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -119,13 +119,13 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\skybox.hlsl;D:\project-render\shaders\tonemap_cs.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\build\shaders\avg_luminance_cs_CSMain_cs_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\build\shaders\avg_luminance_cs_CSMain_cs_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling shader avg_luminance_cs.hlsl [CSMain,cs_6_3]</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling shader avg_luminance_cs.hlsl [CSMain,cs_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_3 -E CSMain -Fo D:/project-render/build/shaders/avg_luminance_cs_CSMain_cs_6_3.cso D:/project-render/shaders/avg_luminance_cs.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_5 -E CSMain -Fo D:/project-render/build/shaders/avg_luminance_cs_CSMain_cs_6_5.cso D:/project-render/shaders/avg_luminance_cs.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -134,13 +134,13 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\skybox.hlsl;D:\project-render\shaders\tonemap_cs.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\build\shaders\avg_luminance_cs_CSMain_cs_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\build\shaders\avg_luminance_cs_CSMain_cs_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Compiling shader avg_luminance_cs.hlsl [CSMain,cs_6_3]</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Compiling shader avg_luminance_cs.hlsl [CSMain,cs_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_3 -E CSMain -Fo D:/project-render/build/shaders/avg_luminance_cs_CSMain_cs_6_3.cso D:/project-render/shaders/avg_luminance_cs.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_5 -E CSMain -Fo D:/project-render/build/shaders/avg_luminance_cs_CSMain_cs_6_5.cso D:/project-render/shaders/avg_luminance_cs.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -149,13 +149,13 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\skybox.hlsl;D:\project-render\shaders\tonemap_cs.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\build\shaders\avg_luminance_cs_CSMain_cs_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\build\shaders\avg_luminance_cs_CSMain_cs_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Compiling shader avg_luminance_cs.hlsl [CSMain,cs_6_3]</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Compiling shader avg_luminance_cs.hlsl [CSMain,cs_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_3 -E CSMain -Fo D:/project-render/build/shaders/avg_luminance_cs_CSMain_cs_6_3.cso D:/project-render/shaders/avg_luminance_cs.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_5 -E CSMain -Fo D:/project-render/build/shaders/avg_luminance_cs_CSMain_cs_6_5.cso D:/project-render/shaders/avg_luminance_cs.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -164,17 +164,17 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\skybox.hlsl;D:\project-render\shaders\tonemap_cs.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\build\shaders\avg_luminance_cs_CSMain_cs_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\build\shaders\avg_luminance_cs_CSMain_cs_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
-    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\noise_statistics_cs_CSMain_cs_6_3.cso.rule">
-      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling shader noise_statistics_cs.hlsl [CSMain,cs_6_3]</Message>
+    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\noise_statistics_cs_CSMain_cs_6_5.cso.rule">
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling shader noise_statistics_cs.hlsl [CSMain,cs_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_3 -E CSMain -Fo D:/project-render/build/shaders/noise_statistics_cs_CSMain_cs_6_3.cso D:/project-render/shaders/noise_statistics_cs.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_5 -E CSMain -Fo D:/project-render/build/shaders/noise_statistics_cs_CSMain_cs_6_5.cso D:/project-render/shaders/noise_statistics_cs.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -183,13 +183,13 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\skybox.hlsl;D:\project-render\shaders\tonemap_cs.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\build\shaders\noise_statistics_cs_CSMain_cs_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\build\shaders\noise_statistics_cs_CSMain_cs_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling shader noise_statistics_cs.hlsl [CSMain,cs_6_3]</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling shader noise_statistics_cs.hlsl [CSMain,cs_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_3 -E CSMain -Fo D:/project-render/build/shaders/noise_statistics_cs_CSMain_cs_6_3.cso D:/project-render/shaders/noise_statistics_cs.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_5 -E CSMain -Fo D:/project-render/build/shaders/noise_statistics_cs_CSMain_cs_6_5.cso D:/project-render/shaders/noise_statistics_cs.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -198,13 +198,13 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\skybox.hlsl;D:\project-render\shaders\tonemap_cs.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\build\shaders\noise_statistics_cs_CSMain_cs_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\build\shaders\noise_statistics_cs_CSMain_cs_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Compiling shader noise_statistics_cs.hlsl [CSMain,cs_6_3]</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Compiling shader noise_statistics_cs.hlsl [CSMain,cs_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_3 -E CSMain -Fo D:/project-render/build/shaders/noise_statistics_cs_CSMain_cs_6_3.cso D:/project-render/shaders/noise_statistics_cs.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_5 -E CSMain -Fo D:/project-render/build/shaders/noise_statistics_cs_CSMain_cs_6_5.cso D:/project-render/shaders/noise_statistics_cs.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -213,13 +213,13 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\skybox.hlsl;D:\project-render\shaders\tonemap_cs.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\build\shaders\noise_statistics_cs_CSMain_cs_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\build\shaders\noise_statistics_cs_CSMain_cs_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Compiling shader noise_statistics_cs.hlsl [CSMain,cs_6_3]</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Compiling shader noise_statistics_cs.hlsl [CSMain,cs_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_3 -E CSMain -Fo D:/project-render/build/shaders/noise_statistics_cs_CSMain_cs_6_3.cso D:/project-render/shaders/noise_statistics_cs.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_5 -E CSMain -Fo D:/project-render/build/shaders/noise_statistics_cs_CSMain_cs_6_5.cso D:/project-render/shaders/noise_statistics_cs.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -228,7 +228,7 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\skybox.hlsl;D:\project-render\shaders\tonemap_cs.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\build\shaders\noise_statistics_cs_CSMain_cs_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\build\shaders\noise_statistics_cs_CSMain_cs_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
     </CustomBuild>
   </ItemGroup>
@@ -361,12 +361,12 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
-    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\raytracing__lib_6_3.cso.rule">
-      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling shader raytracing.hlsl [^&lt;library^&gt;,lib_6_3]</Message>
+    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\raytracing__lib_6_5.cso.rule">
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling shader raytracing.hlsl [^&lt;library^&gt;,lib_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T lib_6_3 -Fo D:/project-render/build/shaders/raytracing__lib_6_3.cso D:/project-render/shaders/raytracing.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T lib_6_5 -Fo D:/project-render/build/shaders/raytracing__lib_6_5.cso D:/project-render/shaders/raytracing.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -375,13 +375,13 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\skybox.hlsl;D:\project-render\shaders\tonemap_cs.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\build\shaders\raytracing__lib_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\build\shaders\raytracing__lib_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling shader raytracing.hlsl [^&lt;library^&gt;,lib_6_3]</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling shader raytracing.hlsl [^&lt;library^&gt;,lib_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T lib_6_3 -Fo D:/project-render/build/shaders/raytracing__lib_6_3.cso D:/project-render/shaders/raytracing.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T lib_6_5 -Fo D:/project-render/build/shaders/raytracing__lib_6_5.cso D:/project-render/shaders/raytracing.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -390,13 +390,13 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\skybox.hlsl;D:\project-render\shaders\tonemap_cs.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\build\shaders\raytracing__lib_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\build\shaders\raytracing__lib_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Compiling shader raytracing.hlsl [^&lt;library^&gt;,lib_6_3]</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Compiling shader raytracing.hlsl [^&lt;library^&gt;,lib_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T lib_6_3 -Fo D:/project-render/build/shaders/raytracing__lib_6_3.cso D:/project-render/shaders/raytracing.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T lib_6_5 -Fo D:/project-render/build/shaders/raytracing__lib_6_5.cso D:/project-render/shaders/raytracing.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -405,13 +405,13 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\skybox.hlsl;D:\project-render\shaders\tonemap_cs.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\build\shaders\raytracing__lib_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\build\shaders\raytracing__lib_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Compiling shader raytracing.hlsl [^&lt;library^&gt;,lib_6_3]</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Compiling shader raytracing.hlsl [^&lt;library^&gt;,lib_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T lib_6_3 -Fo D:/project-render/build/shaders/raytracing__lib_6_3.cso D:/project-render/shaders/raytracing.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T lib_6_5 -Fo D:/project-render/build/shaders/raytracing__lib_6_5.cso D:/project-render/shaders/raytracing.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -420,17 +420,17 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\skybox.hlsl;D:\project-render\shaders\tonemap_cs.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\build\shaders\raytracing__lib_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\build\shaders\raytracing__lib_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
-    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\restir_gi_spatial_cs_CSMain_cs_6_3.cso.rule">
-      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling shader restir_gi_spatial_cs.hlsl [CSMain,cs_6_3]</Message>
+    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\restir_gi_spatial_cs_CSMain_cs_6_5.cso.rule">
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling shader restir_gi_spatial_cs.hlsl [CSMain,cs_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_3 -E CSMain -Fo D:/project-render/build/shaders/restir_gi_spatial_cs_CSMain_cs_6_3.cso D:/project-render/shaders/restir_gi_spatial_cs.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_5 -E CSMain -Fo D:/project-render/build/shaders/restir_gi_spatial_cs_CSMain_cs_6_5.cso D:/project-render/shaders/restir_gi_spatial_cs.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -439,13 +439,13 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\skybox.hlsl;D:\project-render\shaders\tonemap_cs.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\build\shaders\restir_gi_spatial_cs_CSMain_cs_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\build\shaders\restir_gi_spatial_cs_CSMain_cs_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling shader restir_gi_spatial_cs.hlsl [CSMain,cs_6_3]</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling shader restir_gi_spatial_cs.hlsl [CSMain,cs_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_3 -E CSMain -Fo D:/project-render/build/shaders/restir_gi_spatial_cs_CSMain_cs_6_3.cso D:/project-render/shaders/restir_gi_spatial_cs.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_5 -E CSMain -Fo D:/project-render/build/shaders/restir_gi_spatial_cs_CSMain_cs_6_5.cso D:/project-render/shaders/restir_gi_spatial_cs.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -454,13 +454,13 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\skybox.hlsl;D:\project-render\shaders\tonemap_cs.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\build\shaders\restir_gi_spatial_cs_CSMain_cs_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\build\shaders\restir_gi_spatial_cs_CSMain_cs_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Compiling shader restir_gi_spatial_cs.hlsl [CSMain,cs_6_3]</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Compiling shader restir_gi_spatial_cs.hlsl [CSMain,cs_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_3 -E CSMain -Fo D:/project-render/build/shaders/restir_gi_spatial_cs_CSMain_cs_6_3.cso D:/project-render/shaders/restir_gi_spatial_cs.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_5 -E CSMain -Fo D:/project-render/build/shaders/restir_gi_spatial_cs_CSMain_cs_6_5.cso D:/project-render/shaders/restir_gi_spatial_cs.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -469,13 +469,13 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\skybox.hlsl;D:\project-render\shaders\tonemap_cs.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\build\shaders\restir_gi_spatial_cs_CSMain_cs_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\build\shaders\restir_gi_spatial_cs_CSMain_cs_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Compiling shader restir_gi_spatial_cs.hlsl [CSMain,cs_6_3]</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Compiling shader restir_gi_spatial_cs.hlsl [CSMain,cs_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_3 -E CSMain -Fo D:/project-render/build/shaders/restir_gi_spatial_cs_CSMain_cs_6_3.cso D:/project-render/shaders/restir_gi_spatial_cs.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_5 -E CSMain -Fo D:/project-render/build/shaders/restir_gi_spatial_cs_CSMain_cs_6_5.cso D:/project-render/shaders/restir_gi_spatial_cs.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -484,17 +484,17 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\skybox.hlsl;D:\project-render\shaders\tonemap_cs.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\build\shaders\restir_gi_spatial_cs_CSMain_cs_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\build\shaders\restir_gi_spatial_cs_CSMain_cs_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
-    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\restir_spatial_cs_CSMain_cs_6_3.cso.rule">
-      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling shader restir_spatial_cs.hlsl [CSMain,cs_6_3]</Message>
+    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\restir_spatial_cs_CSMain_cs_6_5.cso.rule">
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling shader restir_spatial_cs.hlsl [CSMain,cs_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_3 -E CSMain -Fo D:/project-render/build/shaders/restir_spatial_cs_CSMain_cs_6_3.cso D:/project-render/shaders/restir_spatial_cs.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_5 -E CSMain -Fo D:/project-render/build/shaders/restir_spatial_cs_CSMain_cs_6_5.cso D:/project-render/shaders/restir_spatial_cs.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -503,13 +503,13 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\skybox.hlsl;D:\project-render\shaders\tonemap_cs.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\build\shaders\restir_spatial_cs_CSMain_cs_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\build\shaders\restir_spatial_cs_CSMain_cs_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling shader restir_spatial_cs.hlsl [CSMain,cs_6_3]</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling shader restir_spatial_cs.hlsl [CSMain,cs_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_3 -E CSMain -Fo D:/project-render/build/shaders/restir_spatial_cs_CSMain_cs_6_3.cso D:/project-render/shaders/restir_spatial_cs.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_5 -E CSMain -Fo D:/project-render/build/shaders/restir_spatial_cs_CSMain_cs_6_5.cso D:/project-render/shaders/restir_spatial_cs.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -518,13 +518,13 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\skybox.hlsl;D:\project-render\shaders\tonemap_cs.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\build\shaders\restir_spatial_cs_CSMain_cs_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\build\shaders\restir_spatial_cs_CSMain_cs_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Compiling shader restir_spatial_cs.hlsl [CSMain,cs_6_3]</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Compiling shader restir_spatial_cs.hlsl [CSMain,cs_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_3 -E CSMain -Fo D:/project-render/build/shaders/restir_spatial_cs_CSMain_cs_6_3.cso D:/project-render/shaders/restir_spatial_cs.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_5 -E CSMain -Fo D:/project-render/build/shaders/restir_spatial_cs_CSMain_cs_6_5.cso D:/project-render/shaders/restir_spatial_cs.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -533,13 +533,13 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\skybox.hlsl;D:\project-render\shaders\tonemap_cs.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\build\shaders\restir_spatial_cs_CSMain_cs_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\build\shaders\restir_spatial_cs_CSMain_cs_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Compiling shader restir_spatial_cs.hlsl [CSMain,cs_6_3]</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Compiling shader restir_spatial_cs.hlsl [CSMain,cs_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_3 -E CSMain -Fo D:/project-render/build/shaders/restir_spatial_cs_CSMain_cs_6_3.cso D:/project-render/shaders/restir_spatial_cs.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_5 -E CSMain -Fo D:/project-render/build/shaders/restir_spatial_cs_CSMain_cs_6_5.cso D:/project-render/shaders/restir_spatial_cs.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -548,7 +548,7 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\skybox.hlsl;D:\project-render\shaders\tonemap_cs.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\build\shaders\restir_spatial_cs_CSMain_cs_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\build\shaders\restir_spatial_cs_CSMain_cs_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
     </CustomBuild>
   </ItemGroup>
@@ -809,12 +809,12 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
-    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\sky_bake_cs_CSMain_cs_6_3.cso.rule">
-      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling shader sky_bake_cs.hlsl [CSMain,cs_6_3]</Message>
+    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\sky_bake_cs_CSMain_cs_6_5.cso.rule">
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling shader sky_bake_cs.hlsl [CSMain,cs_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_3 -E CSMain -Fo D:/project-render/build/shaders/sky_bake_cs_CSMain_cs_6_3.cso D:/project-render/shaders/sky_bake_cs.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_5 -E CSMain -Fo D:/project-render/build/shaders/sky_bake_cs_CSMain_cs_6_5.cso D:/project-render/shaders/sky_bake_cs.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -823,13 +823,13 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\skybox.hlsl;D:\project-render\shaders\tonemap_cs.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\build\shaders\sky_bake_cs_CSMain_cs_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\build\shaders\sky_bake_cs_CSMain_cs_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling shader sky_bake_cs.hlsl [CSMain,cs_6_3]</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling shader sky_bake_cs.hlsl [CSMain,cs_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_3 -E CSMain -Fo D:/project-render/build/shaders/sky_bake_cs_CSMain_cs_6_3.cso D:/project-render/shaders/sky_bake_cs.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_5 -E CSMain -Fo D:/project-render/build/shaders/sky_bake_cs_CSMain_cs_6_5.cso D:/project-render/shaders/sky_bake_cs.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -838,13 +838,13 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\skybox.hlsl;D:\project-render\shaders\tonemap_cs.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\build\shaders\sky_bake_cs_CSMain_cs_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\build\shaders\sky_bake_cs_CSMain_cs_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Compiling shader sky_bake_cs.hlsl [CSMain,cs_6_3]</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Compiling shader sky_bake_cs.hlsl [CSMain,cs_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_3 -E CSMain -Fo D:/project-render/build/shaders/sky_bake_cs_CSMain_cs_6_3.cso D:/project-render/shaders/sky_bake_cs.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_5 -E CSMain -Fo D:/project-render/build/shaders/sky_bake_cs_CSMain_cs_6_5.cso D:/project-render/shaders/sky_bake_cs.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -853,13 +853,13 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\skybox.hlsl;D:\project-render\shaders\tonemap_cs.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\build\shaders\sky_bake_cs_CSMain_cs_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\build\shaders\sky_bake_cs_CSMain_cs_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Compiling shader sky_bake_cs.hlsl [CSMain,cs_6_3]</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Compiling shader sky_bake_cs.hlsl [CSMain,cs_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_3 -E CSMain -Fo D:/project-render/build/shaders/sky_bake_cs_CSMain_cs_6_3.cso D:/project-render/shaders/sky_bake_cs.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_5 -E CSMain -Fo D:/project-render/build/shaders/sky_bake_cs_CSMain_cs_6_5.cso D:/project-render/shaders/sky_bake_cs.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -868,7 +868,7 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\skybox.hlsl;D:\project-render\shaders\tonemap_cs.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\build\shaders\sky_bake_cs_CSMain_cs_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\build\shaders\sky_bake_cs_CSMain_cs_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
     </CustomBuild>
   </ItemGroup>
@@ -1001,12 +1001,12 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
-    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\tonemap_cs_CSMain_cs_6_3.cso.rule">
-      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling shader tonemap_cs.hlsl [CSMain,cs_6_3]</Message>
+    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\tonemap_cs_CSMain_cs_6_5.cso.rule">
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling shader tonemap_cs.hlsl [CSMain,cs_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_3 -E CSMain -Fo D:/project-render/build/shaders/tonemap_cs_CSMain_cs_6_3.cso D:/project-render/shaders/tonemap_cs.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_5 -E CSMain -Fo D:/project-render/build/shaders/tonemap_cs_CSMain_cs_6_5.cso D:/project-render/shaders/tonemap_cs.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -1015,13 +1015,13 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\shaders\tonemap_cs.hlsl;D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\skybox.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\build\shaders\tonemap_cs_CSMain_cs_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\build\shaders\tonemap_cs_CSMain_cs_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling shader tonemap_cs.hlsl [CSMain,cs_6_3]</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling shader tonemap_cs.hlsl [CSMain,cs_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_3 -E CSMain -Fo D:/project-render/build/shaders/tonemap_cs_CSMain_cs_6_3.cso D:/project-render/shaders/tonemap_cs.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_5 -E CSMain -Fo D:/project-render/build/shaders/tonemap_cs_CSMain_cs_6_5.cso D:/project-render/shaders/tonemap_cs.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -1030,13 +1030,13 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\shaders\tonemap_cs.hlsl;D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\skybox.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\build\shaders\tonemap_cs_CSMain_cs_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\build\shaders\tonemap_cs_CSMain_cs_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Compiling shader tonemap_cs.hlsl [CSMain,cs_6_3]</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Compiling shader tonemap_cs.hlsl [CSMain,cs_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_3 -E CSMain -Fo D:/project-render/build/shaders/tonemap_cs_CSMain_cs_6_3.cso D:/project-render/shaders/tonemap_cs.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_5 -E CSMain -Fo D:/project-render/build/shaders/tonemap_cs_CSMain_cs_6_5.cso D:/project-render/shaders/tonemap_cs.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -1045,13 +1045,13 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\shaders\tonemap_cs.hlsl;D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\skybox.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\build\shaders\tonemap_cs_CSMain_cs_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\build\shaders\tonemap_cs_CSMain_cs_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Compiling shader tonemap_cs.hlsl [CSMain,cs_6_3]</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Compiling shader tonemap_cs.hlsl [CSMain,cs_6_5]</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_3 -E CSMain -Fo D:/project-render/build/shaders/tonemap_cs_CSMain_cs_6_3.cso D:/project-render/shaders/tonemap_cs.hlsl
+"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe" -T cs_6_5 -E CSMain -Fo D:/project-render/build/shaders/tonemap_cs_CSMain_cs_6_5.cso D:/project-render/shaders/tonemap_cs.hlsl
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -1060,7 +1060,7 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\shaders\tonemap_cs.hlsl;D:\project-render\shaders\avg_luminance_cs.hlsl;D:\project-render\shaders\brdf_lib.hlsl;D:\project-render\shaders\clouds.hlsl;D:\project-render\shaders\lights_lib.hlsl;D:\project-render\shaders\noise_statistics_cs.hlsl;D:\project-render\shaders\path_tracer_core.hlsl;D:\project-render\shaders\pbr_mesh.hlsl;D:\project-render\shaders\random_lib.hlsl;D:\project-render\shaders\raytracing.hlsl;D:\project-render\shaders\raytracing\common.hlsli;D:\project-render\shaders\raytracing\hit.hlsl;D:\project-render\shaders\raytracing\miss.hlsl;D:\project-render\shaders\raytracing\raygen.hlsl;D:\project-render\shaders\restir_gi_spatial_cs.hlsl;D:\project-render\shaders\restir_lib.hlsl;D:\project-render\shaders\restir_spatial_cs.hlsl;D:\project-render\shaders\simple.hlsl;D:\project-render\shaders\sky_bake_cs.hlsl;D:\project-render\shaders\skybox.hlsl;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\build\shaders\tonemap_cs_CSMain_cs_6_3.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\build\shaders\tonemap_cs_CSMain_cs_6_5.cso</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
     </CustomBuild>
   </ItemGroup>
@@ -1074,7 +1074,7 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
-      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\build\shaders\avg_luminance_cs_CSMain_cs_6_3.cso;D:\project-render\build\shaders\noise_statistics_cs_CSMain_cs_6_3.cso;D:\project-render\build\shaders\pbr_mesh_VSMainMesh_vs_6_0.cso;D:\project-render\build\shaders\pbr_mesh_PSMainMesh_ps_6_0.cso;D:\project-render\build\shaders\raytracing__lib_6_3.cso;D:\project-render\build\shaders\restir_gi_spatial_cs_CSMain_cs_6_3.cso;D:\project-render\build\shaders\restir_spatial_cs_CSMain_cs_6_3.cso;D:\project-render\build\shaders\simple_VSMain_vs_6_0.cso;D:\project-render\build\shaders\simple_VSMainMeshSimple_vs_6_0.cso;D:\project-render\build\shaders\simple_PSMain_ps_6_0.cso;D:\project-render\build\shaders\simple_PSMainMeshSimple_ps_6_0.cso;D:\project-render\build\shaders\sky_bake_cs_CSMain_cs_6_3.cso;D:\project-render\build\shaders\skybox_VSMain_vs_6_0.cso;D:\project-render\build\shaders\skybox_PSMain_ps_6_0.cso;D:\project-render\build\shaders\tonemap_cs_CSMain_cs_6_3.cso;%(AdditionalInputs)</AdditionalInputs>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\build\shaders\avg_luminance_cs_CSMain_cs_6_5.cso;D:\project-render\build\shaders\noise_statistics_cs_CSMain_cs_6_5.cso;D:\project-render\build\shaders\pbr_mesh_VSMainMesh_vs_6_0.cso;D:\project-render\build\shaders\pbr_mesh_PSMainMesh_ps_6_0.cso;D:\project-render\build\shaders\raytracing__lib_6_5.cso;D:\project-render\build\shaders\restir_gi_spatial_cs_CSMain_cs_6_5.cso;D:\project-render\build\shaders\restir_spatial_cs_CSMain_cs_6_5.cso;D:\project-render\build\shaders\simple_VSMain_vs_6_0.cso;D:\project-render\build\shaders\simple_VSMainMeshSimple_vs_6_0.cso;D:\project-render\build\shaders\simple_PSMain_ps_6_0.cso;D:\project-render\build\shaders\simple_PSMainMeshSimple_ps_6_0.cso;D:\project-render\build\shaders\sky_bake_cs_CSMain_cs_6_5.cso;D:\project-render\build\shaders\skybox_VSMain_vs_6_0.cso;D:\project-render\build\shaders\skybox_PSMain_ps_6_0.cso;D:\project-render\build\shaders\tonemap_cs_CSMain_cs_6_5.cso;%(AdditionalInputs)</AdditionalInputs>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\build\CMakeFiles\compile_shaders</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
       <VerifyInputsAndOutputsExist Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</VerifyInputsAndOutputsExist>
@@ -1086,7 +1086,7 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
-      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\build\shaders\avg_luminance_cs_CSMain_cs_6_3.cso;D:\project-render\build\shaders\noise_statistics_cs_CSMain_cs_6_3.cso;D:\project-render\build\shaders\pbr_mesh_VSMainMesh_vs_6_0.cso;D:\project-render\build\shaders\pbr_mesh_PSMainMesh_ps_6_0.cso;D:\project-render\build\shaders\raytracing__lib_6_3.cso;D:\project-render\build\shaders\restir_gi_spatial_cs_CSMain_cs_6_3.cso;D:\project-render\build\shaders\restir_spatial_cs_CSMain_cs_6_3.cso;D:\project-render\build\shaders\simple_VSMain_vs_6_0.cso;D:\project-render\build\shaders\simple_VSMainMeshSimple_vs_6_0.cso;D:\project-render\build\shaders\simple_PSMain_ps_6_0.cso;D:\project-render\build\shaders\simple_PSMainMeshSimple_ps_6_0.cso;D:\project-render\build\shaders\sky_bake_cs_CSMain_cs_6_3.cso;D:\project-render\build\shaders\skybox_VSMain_vs_6_0.cso;D:\project-render\build\shaders\skybox_PSMain_ps_6_0.cso;D:\project-render\build\shaders\tonemap_cs_CSMain_cs_6_3.cso;%(AdditionalInputs)</AdditionalInputs>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\build\shaders\avg_luminance_cs_CSMain_cs_6_5.cso;D:\project-render\build\shaders\noise_statistics_cs_CSMain_cs_6_5.cso;D:\project-render\build\shaders\pbr_mesh_VSMainMesh_vs_6_0.cso;D:\project-render\build\shaders\pbr_mesh_PSMainMesh_ps_6_0.cso;D:\project-render\build\shaders\raytracing__lib_6_5.cso;D:\project-render\build\shaders\restir_gi_spatial_cs_CSMain_cs_6_5.cso;D:\project-render\build\shaders\restir_spatial_cs_CSMain_cs_6_5.cso;D:\project-render\build\shaders\simple_VSMain_vs_6_0.cso;D:\project-render\build\shaders\simple_VSMainMeshSimple_vs_6_0.cso;D:\project-render\build\shaders\simple_PSMain_ps_6_0.cso;D:\project-render\build\shaders\simple_PSMainMeshSimple_ps_6_0.cso;D:\project-render\build\shaders\sky_bake_cs_CSMain_cs_6_5.cso;D:\project-render\build\shaders\skybox_VSMain_vs_6_0.cso;D:\project-render\build\shaders\skybox_PSMain_ps_6_0.cso;D:\project-render\build\shaders\tonemap_cs_CSMain_cs_6_5.cso;%(AdditionalInputs)</AdditionalInputs>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\build\CMakeFiles\compile_shaders</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
       <VerifyInputsAndOutputsExist Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</VerifyInputsAndOutputsExist>
@@ -1098,7 +1098,7 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
-      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\build\shaders\avg_luminance_cs_CSMain_cs_6_3.cso;D:\project-render\build\shaders\noise_statistics_cs_CSMain_cs_6_3.cso;D:\project-render\build\shaders\pbr_mesh_VSMainMesh_vs_6_0.cso;D:\project-render\build\shaders\pbr_mesh_PSMainMesh_ps_6_0.cso;D:\project-render\build\shaders\raytracing__lib_6_3.cso;D:\project-render\build\shaders\restir_gi_spatial_cs_CSMain_cs_6_3.cso;D:\project-render\build\shaders\restir_spatial_cs_CSMain_cs_6_3.cso;D:\project-render\build\shaders\simple_VSMain_vs_6_0.cso;D:\project-render\build\shaders\simple_VSMainMeshSimple_vs_6_0.cso;D:\project-render\build\shaders\simple_PSMain_ps_6_0.cso;D:\project-render\build\shaders\simple_PSMainMeshSimple_ps_6_0.cso;D:\project-render\build\shaders\sky_bake_cs_CSMain_cs_6_3.cso;D:\project-render\build\shaders\skybox_VSMain_vs_6_0.cso;D:\project-render\build\shaders\skybox_PSMain_ps_6_0.cso;D:\project-render\build\shaders\tonemap_cs_CSMain_cs_6_3.cso;%(AdditionalInputs)</AdditionalInputs>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\build\shaders\avg_luminance_cs_CSMain_cs_6_5.cso;D:\project-render\build\shaders\noise_statistics_cs_CSMain_cs_6_5.cso;D:\project-render\build\shaders\pbr_mesh_VSMainMesh_vs_6_0.cso;D:\project-render\build\shaders\pbr_mesh_PSMainMesh_ps_6_0.cso;D:\project-render\build\shaders\raytracing__lib_6_5.cso;D:\project-render\build\shaders\restir_gi_spatial_cs_CSMain_cs_6_5.cso;D:\project-render\build\shaders\restir_spatial_cs_CSMain_cs_6_5.cso;D:\project-render\build\shaders\simple_VSMain_vs_6_0.cso;D:\project-render\build\shaders\simple_VSMainMeshSimple_vs_6_0.cso;D:\project-render\build\shaders\simple_PSMain_ps_6_0.cso;D:\project-render\build\shaders\simple_PSMainMeshSimple_ps_6_0.cso;D:\project-render\build\shaders\sky_bake_cs_CSMain_cs_6_5.cso;D:\project-render\build\shaders\skybox_VSMain_vs_6_0.cso;D:\project-render\build\shaders\skybox_PSMain_ps_6_0.cso;D:\project-render\build\shaders\tonemap_cs_CSMain_cs_6_5.cso;%(AdditionalInputs)</AdditionalInputs>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\build\CMakeFiles\compile_shaders</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
       <VerifyInputsAndOutputsExist Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</VerifyInputsAndOutputsExist>
@@ -1110,7 +1110,7 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
-      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\build\shaders\avg_luminance_cs_CSMain_cs_6_3.cso;D:\project-render\build\shaders\noise_statistics_cs_CSMain_cs_6_3.cso;D:\project-render\build\shaders\pbr_mesh_VSMainMesh_vs_6_0.cso;D:\project-render\build\shaders\pbr_mesh_PSMainMesh_ps_6_0.cso;D:\project-render\build\shaders\raytracing__lib_6_3.cso;D:\project-render\build\shaders\restir_gi_spatial_cs_CSMain_cs_6_3.cso;D:\project-render\build\shaders\restir_spatial_cs_CSMain_cs_6_3.cso;D:\project-render\build\shaders\simple_VSMain_vs_6_0.cso;D:\project-render\build\shaders\simple_VSMainMeshSimple_vs_6_0.cso;D:\project-render\build\shaders\simple_PSMain_ps_6_0.cso;D:\project-render\build\shaders\simple_PSMainMeshSimple_ps_6_0.cso;D:\project-render\build\shaders\sky_bake_cs_CSMain_cs_6_3.cso;D:\project-render\build\shaders\skybox_VSMain_vs_6_0.cso;D:\project-render\build\shaders\skybox_PSMain_ps_6_0.cso;D:\project-render\build\shaders\tonemap_cs_CSMain_cs_6_3.cso;%(AdditionalInputs)</AdditionalInputs>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\build\shaders\avg_luminance_cs_CSMain_cs_6_5.cso;D:\project-render\build\shaders\noise_statistics_cs_CSMain_cs_6_5.cso;D:\project-render\build\shaders\pbr_mesh_VSMainMesh_vs_6_0.cso;D:\project-render\build\shaders\pbr_mesh_PSMainMesh_ps_6_0.cso;D:\project-render\build\shaders\raytracing__lib_6_5.cso;D:\project-render\build\shaders\restir_gi_spatial_cs_CSMain_cs_6_5.cso;D:\project-render\build\shaders\restir_spatial_cs_CSMain_cs_6_5.cso;D:\project-render\build\shaders\simple_VSMain_vs_6_0.cso;D:\project-render\build\shaders\simple_VSMainMeshSimple_vs_6_0.cso;D:\project-render\build\shaders\simple_PSMain_ps_6_0.cso;D:\project-render\build\shaders\simple_PSMainMeshSimple_ps_6_0.cso;D:\project-render\build\shaders\sky_bake_cs_CSMain_cs_6_5.cso;D:\project-render\build\shaders\skybox_VSMain_vs_6_0.cso;D:\project-render\build\shaders\skybox_PSMain_ps_6_0.cso;D:\project-render\build\shaders\tonemap_cs_CSMain_cs_6_5.cso;%(AdditionalInputs)</AdditionalInputs>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\build\CMakeFiles\compile_shaders</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
       <VerifyInputsAndOutputsExist Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</VerifyInputsAndOutputsExist>

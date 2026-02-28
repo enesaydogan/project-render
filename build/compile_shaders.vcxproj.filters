@@ -1,10 +1,10 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\avg_luminance_cs_CSMain_cs_6_3.cso.rule">
+    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\avg_luminance_cs_CSMain_cs_6_5.cso.rule">
       <Filter>CMake Rules</Filter>
     </CustomBuild>
-    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\noise_statistics_cs_CSMain_cs_6_3.cso.rule">
+    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\noise_statistics_cs_CSMain_cs_6_5.cso.rule">
       <Filter>CMake Rules</Filter>
     </CustomBuild>
     <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\pbr_mesh_PSMainMesh_ps_6_0.cso.rule">
@@ -13,13 +13,13 @@
     <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\pbr_mesh_VSMainMesh_vs_6_0.cso.rule">
       <Filter>CMake Rules</Filter>
     </CustomBuild>
-    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\raytracing__lib_6_3.cso.rule">
+    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\raytracing__lib_6_5.cso.rule">
       <Filter>CMake Rules</Filter>
     </CustomBuild>
-    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\restir_gi_spatial_cs_CSMain_cs_6_3.cso.rule">
+    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\restir_gi_spatial_cs_CSMain_cs_6_5.cso.rule">
       <Filter>CMake Rules</Filter>
     </CustomBuild>
-    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\restir_spatial_cs_CSMain_cs_6_3.cso.rule">
+    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\restir_spatial_cs_CSMain_cs_6_5.cso.rule">
       <Filter>CMake Rules</Filter>
     </CustomBuild>
     <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\simple_PSMainMeshSimple_ps_6_0.cso.rule">
@@ -34,7 +34,7 @@
     <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\simple_VSMain_vs_6_0.cso.rule">
       <Filter>CMake Rules</Filter>
     </CustomBuild>
-    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\sky_bake_cs_CSMain_cs_6_3.cso.rule">
+    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\sky_bake_cs_CSMain_cs_6_5.cso.rule">
       <Filter>CMake Rules</Filter>
     </CustomBuild>
     <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\skybox_PSMain_ps_6_0.cso.rule">
@@ -43,7 +43,7 @@
     <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\skybox_VSMain_vs_6_0.cso.rule">
       <Filter>CMake Rules</Filter>
     </CustomBuild>
-    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\tonemap_cs_CSMain_cs_6_3.cso.rule">
+    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\tonemap_cs_CSMain_cs_6_5.cso.rule">
       <Filter>CMake Rules</Filter>
     </CustomBuild>
     <CustomBuild Include="D:\project-render\build\CMakeFiles\7d135c0e884da3827d2d9f49919ef4ac\compile_shaders.rule">

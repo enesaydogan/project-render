@@ -522,13 +522,15 @@ void RayGen()
                 
                 shadowRay.TMin = 0.001;
                 shadowRay.TMax = dist_final - 0.002;
-                RayPayload shadowPayload = InitRayPayload(RAY_TYPE_SHADOW);
-                shadowPayload.t = 1.0;
-                TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
+                
+                RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
+                q.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, shadowRay);
+                q.Proceed();
+                
                 SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                 SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
                 
-                if (shadowPayload.t < 0.0) {
+                if (q.CommittedStatus() == COMMITTED_NOTHING) {
                     // Trial 2: MIS for ReSTIR
                     float pdfLight = (res.W > 0.0) ? (1.0 / res.W) : 0.0;
                     
@@ -606,11 +608,13 @@ void RayGen()
                     // Visibility test for GI reconnection
                     RayDesc giVisRay; giVisRay.Origin = P + N * 0.002; giVisRay.Direction = L_gi_final;
                     giVisRay.TMin = 0.001; giVisRay.TMax = max(0.001, distance(gi_res.hitPos, P) - 0.003);
-                    RayPayload giVisPayload = InitRayPayload(RAY_TYPE_SHADOW);
-                    giVisPayload.t = 1.0;
-                    TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, giVisRay, giVisPayload);
+                    
+                    RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q_gi;
+                    q_gi.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, giVisRay);
+                    q_gi.Proceed();
+                    
                     SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
-                    if (giVisPayload.t < 0.0) {
+                    if (q_gi.CommittedStatus() == COMMITTED_NOTHING) {
                         indirectLighting = gi_res.radiance * brdf_gi_final * saturate(dot(N, L_gi_final)) * gi_res.W;
                     }
                 }
@@ -659,12 +663,14 @@ void RayGen()
                 shadowRay.Direction = L_nee;
                 shadowRay.TMin = 0.001;
                 shadowRay.TMax = dist_nee - 0.001;
-                RayPayload shadowPayload = InitRayPayload(RAY_TYPE_SHADOW);
-                shadowPayload.t = 1.0;
-                TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
+                
+                RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q_nee;
+                q_nee.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, shadowRay);
+                q_nee.Proceed();
+                
                 SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                 SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
-                if (shadowPayload.t < 0.0) {
+                if (q_nee.CommittedStatus() == COMMITTED_NOTHING) {
                      float3 F0 = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, metallic);
                      float3 H = normalize(L_nee + V);
                      float3 F_val = F_Schlick(max(0.0, dot(H, V)), F0);
@@ -700,16 +706,14 @@ void RayGen()
                 envShadowRay.TMin = 0.001;
                 envShadowRay.TMax = 10000.0;
 
-                RayPayload envShadowPayload = InitRayPayload(RAY_TYPE_SHADOW);
-                envShadowPayload.t = 1.0;
-                TraceRay(g_accel,
-                         RAY_FLAG_SKIP_CLOSEST_HIT_SHADER |
-                             RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
-                         0xFF, 0, 0, 0, envShadowRay, envShadowPayload);
+                RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q_env;
+                q_env.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, envShadowRay);
+                q_env.Proceed();
+                
                 SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                 SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
 
-                if (envShadowPayload.t < 0.0) {
+                if (q_env.CommittedStatus() == COMMITTED_NOTHING) {
                     float3 F0_env = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, metallic);
                     float3 H_env = normalize(envLs.L + V);
                     float3 F_env_val = F_Schlick(max(0.0, dot(H_env, V)), F0_env);
