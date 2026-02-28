@@ -436,8 +436,9 @@ void RayGen()
                 // Evaluation for ReSTIR
                 float3 F0 = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, metallic);
                 float3 H = normalize(ls.L + V);
-                float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL, roughness) * F_Schlick(max(0.0, dot(H, V)), F0);
-                float3 brdf = (diffuseAlbedo / PI) + spec;
+                float3 F = F_Schlick(max(0.0, dot(H, V)), F0);
+                float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL, roughness) * F;
+                float3 brdf = (diffuseAlbedo / PI) * (1.0 - F) + spec;
 
                 float p_target = calculate_p_target(ls.radiance, payloadAlbedo, brdf, NdotL);
                 update_reservoir(res, 0xFFFFFFFF, p_target, rng);
@@ -457,8 +458,9 @@ void RayGen()
 
                 float3 F0 = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, metallic);
                 float3 H = normalize(L + V);
-                float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL, roughness) * F_Schlick(max(0.0, dot(H, V)), F0);
-                float3 brdf = (diffuseAlbedo / PI) + spec;
+                float3 F = F_Schlick(max(0.0, dot(H, V)), F0);
+                float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL, roughness) * F;
+                float3 brdf = (diffuseAlbedo / PI) * (1.0 - F) + spec;
 
                 float p_target = calculate_p_target(radiance, payloadAlbedo, brdf, NdotL) * (float)numLights;
                 update_reservoir(res, lightIdx, p_target, rng);
@@ -490,8 +492,9 @@ void RayGen()
             float NdotL_final = saturate(dot(N, L_final));
             float3 F0 = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, metallic);
             float3 H_f = normalize(L_final + V);
-            float3 spec_f = D_GGX(max(0.0, dot(N, H_f)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL_final, roughness) * F_Schlick(max(0.0, dot(H_f, V)), F0);
-            float3 brdf_f = (diffuseAlbedo / PI) + spec_f;
+            float3 F_f = F_Schlick(max(0.0, dot(H_f, V)), F0);
+            float3 spec_f = D_GGX(max(0.0, dot(N, H_f)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL_final, roughness) * F_f;
+            float3 brdf_f = (diffuseAlbedo / PI) * (1.0 - F_f) + spec_f;
 
             float p_target_final = calculate_p_target(radiance_final, payloadAlbedo, brdf_f, NdotL_final);
             
@@ -526,7 +529,31 @@ void RayGen()
                 SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
                 
                 if (shadowPayload.t < 0.0) {
-                    directLighting = radiance_final * brdf_f * NdotL_final * res.W;
+                    // Trial 2: MIS for ReSTIR
+                    float pdfLight = (res.W > 0.0) ? (1.0 / res.W) : 0.0;
+                    
+                    float specProb = max(F_f.x, max(F_f.y, F_f.z));
+                    float baseDiffProb = (1.0 - specProb) * (1.0 - metallic) * (1.0 - transmission);
+                    float transProb = baseDiffProb * saturate(payloadTranslucency);
+                    float diffProb = max(0.0, baseDiffProb - transProb);
+                    float totalProb = max(1e-6, specProb + diffProb + transProb);
+
+                    float NdotH_final = saturate(dot(N, H_f));
+                    float VdotH_final = saturate(dot(V, H_f));
+                    
+                    float pdfSpec = 0.0;
+                    if (specProb > 0.0 && NdotH_final > 0.0 && VdotH_final > 0.0) {
+                        pdfSpec = (PDF_GGX(NdotH_final, VdotH_final, roughness) * specProb) / totalProb;
+                    }
+                    float pdfDiff = 0.0;
+                    if (diffProb > 0.0 && NdotL_final > 0.0) {
+                        pdfDiff = (PDF_Lambert(NdotL_final) * diffProb) / totalProb;
+                    }
+                    
+                    float pdfBrdf = pdfSpec + pdfDiff;
+                    float misW = (pdfLight * pdfLight) / (pdfLight * pdfLight + pdfBrdf * pdfBrdf + 1e-12);
+                    
+                    directLighting = radiance_final * brdf_f * NdotL_final * res.W * misW;
                 }
             }
 
@@ -640,9 +667,18 @@ void RayGen()
                 if (shadowPayload.t < 0.0) {
                      float3 F0 = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, metallic);
                      float3 H = normalize(L_nee + V);
-                     float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL_nee, roughness) * F_Schlick(max(0.0, dot(H, V)), F0);
-                     float3 brdf = (diffuseAlbedo / PI) + spec;
-                     directLighting = brdf * radiance_nee * NdotL_nee * neeWeight;
+                     float3 F_val = F_Schlick(max(0.0, dot(H, V)), F0);
+                     float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL_nee, roughness) * F_val;
+                     float3 brdf = (diffuseAlbedo / PI) * (1.0 - F_val) + spec;
+                     
+                     // Trial 2: MIS for NEE
+                     float distanceSquared = dist_nee * dist_nee + 1.0;
+                     float pdfLight = distanceSquared / (max(0.001, NdotL_nee)); // Approximation of point light PDF, actually delta lights can't easily do MIS.
+                     // Since we only have delta point lights and directional sun, MIS with BRDF is degenerate.
+                     // But for robustness if area lights are added, we set misW = 1.0 for delta lights.
+                     float misW = 1.0; 
+                     
+                     directLighting = brdf * radiance_nee * NdotL_nee * neeWeight * misW;
                 }
             }
         }
@@ -676,10 +712,11 @@ void RayGen()
                 if (envShadowPayload.t < 0.0) {
                     float3 F0_env = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, metallic);
                     float3 H_env = normalize(envLs.L + V);
+                    float3 F_env_val = F_Schlick(max(0.0, dot(H_env, V)), F0_env);
                     float3 spec_env = D_GGX(max(0.0, dot(N, H_env)), roughness) *
                                       V_SmithCorrelated(max(0.0, dot(N, V)), NdotL_env, roughness) *
-                                      F_Schlick(max(0.0, dot(H_env, V)), F0_env);
-                    float3 brdf_env = (diffuseAlbedo / PI) + spec_env;
+                                      F_env_val;
+                    float3 brdf_env = (diffuseAlbedo / PI) * (1.0 - F_env_val) + spec_env;
 
                     // MIS: compare environment-light sampling PDF against
                     // the BRDF sampling PDF for this same direction.
@@ -847,11 +884,16 @@ void RayGen()
             prevPdf = pdf;
             prevIsDelta = false;
             
-            // Russian Roulette (start early for faster indoor path termination)
-            if (bounce > 1) {
-                float p = max(throughput.x, max(throughput.y, throughput.z));
-                if (p <= 0.0 || next_float(rng) > p) break;
-                throughput /= p;
+            // Russian Roulette
+            if (bounce >= 2) {
+                float maxThroughput = max(throughput.x, max(throughput.y, throughput.z));
+                if (maxThroughput < 0.1) {
+                    float p = max(0.05, maxThroughput);
+                    if (next_float(rng) > p) {
+                        break;
+                    }
+                    throughput /= p;
+                }
             }
 
             continue;

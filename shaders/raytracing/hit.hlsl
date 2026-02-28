@@ -309,12 +309,24 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
             shadowPayload.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
             shadowPayload.packedSurface = PackPayloadSurface(1.0, 0.0, 0.0, 0.0);
             shadowPayload.packedIorType = PackPayloadIorType(1.0, RAY_TYPE_SHADOW, false);
-
             TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
 
             if (shadowPayload.t < 0.0) { // Miss = not occluded
                 float3 radiance = lightColor.rgb * lightColor.w;
-                Lo = (DiffuseAlbedo / PI) * radiance * NdotL;
+                float3 V = normalize(-WorldRayDirection());
+                float3 H = normalize(V + L);
+                float NdotV = saturate(dot(N, V));
+                float NdotH = saturate(dot(N, H));
+                float VdotH = saturate(dot(V, H));
+                
+                float3 F = F_Schlick(VdotH, F0);
+                float D = D_GGX(NdotH, roughness);
+                float V_vis = V_SmithCorrelated(NdotV, NdotL, roughness);
+
+                float3 SpecularBRDF = D * V_vis * F;
+                float3 DiffuseBRDF = (DiffuseAlbedo / PI) * (1.0 - F);
+                
+                Lo = (DiffuseBRDF + SpecularBRDF) * radiance * NdotL;
             }
         }
 
