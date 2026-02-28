@@ -128,110 +128,11 @@ void RayGen()
     const float kEnvLightingBoost = 3.0;
     const bool debugViewActive = (SHADER_DEBUG_MODE > 0.0) || (SHADER_DEBUG_VIS_MODE == 1.0);
 
-    if (!debugViewActive && maxSPP > 0.0 && accumFrame >= (uint)maxSPP) {
-        float4 total = g_accumulation[launchIndex.xy];
-        if (total.a > 0.0) {
-            // Output is always linear HDR; tonemapping happens after DLSS/RR.
-            g_output[launchIndex.xy] = float4(total.rgb / total.a, 1.0);
-        }
-        return;
-    }
-
-    // Adaptive Sampling Early Exit
-    if (accumFrame > kAdaptiveStartSpp && useAdaptiveSampling > 0.5) {
-        float4 acc = g_accumulation[launchIndex.xy];
-        float accM2 = g_variance[launchIndex.xy];
-        
-        if (acc.a > (float)kAdaptiveMinPerPixelSpp) {
-            float n = acc.a;
-            float3 meanColor = acc.rgb / n;
-            float meanLum = dot(meanColor, float3(0.2126, 0.7152, 0.0722));
-            
-            // Welford-based Standard Error of Mean: SEM = sqrt(M2) / N
-            // (Note: var = M2/N, SEM = sqrt(var/N) = sqrt(M2/N^2) = sqrt(M2)/N)
-            float sem = sqrt(max(0.0, accM2)) / n;
-            float noise = sem / (max(0.01, meanLum) + 0.001);
-
-            // Edge-aware guard from current accumulation neighborhood.
-            float edgeContrast = 0.0;
-            if (launchIndex.x > 0) {
-                uint2 p = uint2(int2(launchIndex.xy) + int2(-1, 0));
-                float4 a = g_accumulation[p];
-                if (a.a > 1.0) edgeContrast = max(edgeContrast, abs(dot(a.rgb / a.a, float3(0.2126, 0.7152, 0.0722)) - meanLum));
-            }
-            if (launchIndex.x + 1 < launchDim.x) {
-                uint2 p = uint2(int2(launchIndex.xy) + int2(1, 0));
-                float4 a = g_accumulation[p];
-                if (a.a > 1.0) edgeContrast = max(edgeContrast, abs(dot(a.rgb / a.a, float3(0.2126, 0.7152, 0.0722)) - meanLum));
-            }
-            if (launchIndex.y > 0) {
-                uint2 p = uint2(int2(launchIndex.xy) + int2(0, -1));
-                float4 a = g_accumulation[p];
-                if (a.a > 1.0) edgeContrast = max(edgeContrast, abs(dot(a.rgb / a.a, float3(0.2126, 0.7152, 0.0722)) - meanLum));
-            }
-            if (launchIndex.y + 1 < launchDim.y) {
-                uint2 p = uint2(int2(launchIndex.xy) + int2(0, 1));
-                float4 a = g_accumulation[p];
-                if (a.a > 1.0) edgeContrast = max(edgeContrast, abs(dot(a.rgb / a.a, float3(0.2126, 0.7152, 0.0722)) - meanLum));
-            }
-
-            bool isEdgeRegion = edgeContrast > kAdaptiveEdgeContrastThreshold;
-            float relThreshold = max(0.001, noiseThreshold * (isEdgeRegion ? kAdaptiveEdgeRelScale : kAdaptiveRelScale));
-            float absSemThreshold = max(kAdaptiveAbsSemFloor, noiseThreshold * (isEdgeRegion ? kAdaptiveEdgeAbsSemScale : kAdaptiveAbsSemScale));
-
-            // Dual criterion:
-            // - relative for regular regions
-            // - absolute SEM to avoid over-sampling very dark areas indefinitely.
-            bool convergedRelative = (noise < relThreshold);
-            bool convergedAbsolute = (sem < absSemThreshold);
-            if (convergedRelative || convergedAbsolute) {
-                 // Avoid a hard binary "wave" by keeping a small stochastic
-                 // fraction of converged pixels actively sampling.
-                 RNG adaptiveRng = init_rng(launchIndex.xy + uint2(0x9e37u, 0x7f4au),
-                                            frame ^ 0xA511E9B3u);
-                 float relProximity = saturate(noise / relThreshold);
-                 float absProximity = saturate(sem / absSemThreshold);
-                 float proximity = min(relProximity, absProximity);
-                 float minKeepProb = isEdgeRegion ? kAdaptiveEdgeMinKeepProb : kAdaptiveMinKeepProb;
-                 float keepProb = max(minKeepProb, proximity);
-                 float expectedN = max(1.0, accumFrame + 1.0);
-                 float deficitRatio = saturate((expectedN - n) / expectedN);
-                 // Don't let converged pixels fall too far behind global SPP.
-                 if (n < expectedN * kAdaptiveMinExpectedRatio) {
-                     keepProb = 1.0;
-                 } else {
-                     float lagKeepProb = deficitRatio * kAdaptiveLagKeepScale;
-                     keepProb = max(keepProb, lagKeepProb);
-                 }
-                 if (next_float(adaptiveRng) > keepProb) {
-                 // Preserve reservoir continuity for neighbors that still resample
-                 // this pixel. Without this copy, adaptive early-out leaves stale
-                 // ping-pong sides and can make ReSTIR reuse unstable.
-                 if (flip) {
-                     g_reservoir1[launchIndex.xy] = g_reservoir0[launchIndex.xy];
-                     SHADER_COUNTER_ADD(SHADER_COUNTER_RESERVOIR_WRITES, 1);
-                     g_gi_reservoir_a0[launchIndex.xy] = g_gi_reservoir_b0[launchIndex.xy];
-                     g_gi_reservoir_a1[launchIndex.xy] = g_gi_reservoir_b1[launchIndex.xy];
-                     g_gi_reservoir_a2[launchIndex.xy] = g_gi_reservoir_b2[launchIndex.xy];
-                 } else {
-                     g_reservoir0[launchIndex.xy] = g_reservoir1[launchIndex.xy];
-                     SHADER_COUNTER_ADD(SHADER_COUNTER_RESERVOIR_WRITES, 1);
-                     g_gi_reservoir_b0[launchIndex.xy] = g_gi_reservoir_a0[launchIndex.xy];
-                     g_gi_reservoir_b1[launchIndex.xy] = g_gi_reservoir_a1[launchIndex.xy];
-                     g_gi_reservoir_b2[launchIndex.xy] = g_gi_reservoir_a2[launchIndex.xy];
-                 }
-
-                 if (SHADER_DEBUG_VIS_MODE == 1.0) {
-                     // Debug: Show Converged pixels as Green
-                     g_output[launchIndex.xy] = float4(0.0, 1.0, 0.0, 1.0);
-                 } else {
-                     g_output[launchIndex.xy] = float4(meanColor, 1.0);
-                 }
-                 return;
-                 }
-             }
-        }
-    }
+    const float2 kInvalidMvec = float2(-1e6, -1e6);
+    float2 currScreen = float2(launchIndex.xy) + 0.5;
+    float2 screenDim = float2(launchDim.xy);
+    float2 screenMin = float2(-0.5, -0.5);
+    float2 screenMax = screenDim + float2(0.5, 0.5);
 
     RNG rng = init_rng(launchIndex.xy, frame);
 
@@ -303,38 +204,170 @@ void RayGen()
         float payloadIor = UnpackPayloadIor(payload.packedIorType);
         bool payloadThinWalled = UnpackPayloadThinWalled(payload.packedIorType);
 
-        if (bounce == 0 && payload.t >= 0.0) {
-            primaryHit = true;
-            primaryPos = rayOrigin + rayDir * payload.t;
-            primaryNormal = UnpackNormalOctahedron(payload.packedNormal);
-            primaryAlbedo = payloadAlbedo;
-            primaryRoughness = max(0.04, payloadRoughness); // Increased min roughness for archviz stability
-            
-            // For DLSS-RR, use the distance along the center ray to avoid depth jitter
-            // but use the actual hit position for coordinates.
-            float3 toHit = primaryPos - camPos;
-            primaryViewZ = dot(toHit, forward); 
+        if (bounce == 0) {
+            if (payload.t >= 0.0) {
+                primaryHit = true;
+                primaryPos = rayOrigin + rayDir * payload.t;
+                primaryNormal = UnpackNormalOctahedron(payload.packedNormal);
+                primaryAlbedo = payloadAlbedo;
+                primaryRoughness = max(0.04, payloadRoughness); // Increased min roughness for archviz stability
+                
+                // For DLSS-RR, use the distance along the center ray to avoid depth jitter
+                // but use the actual hit position for coordinates.
+                float3 toHit = primaryPos - camPos;
+                primaryViewZ = dot(toHit, forward); 
 
-            // Specular Albedo calculation for DLSS-RR
-            float3 F0 = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, payloadMetalness);
-            float NdotV = saturate(dot(primaryNormal, -rayDir));
-            primarySpecAlbedo = EnvBRDFApprox2(F0, primaryRoughness * primaryRoughness, NdotV);
+                // Specular Albedo calculation for DLSS-RR
+                float3 F0_primary = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, payloadMetalness);
+                float NdotV_primary = saturate(dot(primaryNormal, -rayDir));
+                primarySpecAlbedo = EnvBRDFApprox2(F0_primary, primaryRoughness * primaryRoughness, NdotV_primary);
 
-            // Trace dedicated specular reflection ray to get hit distance for DLSS-RR
-            // Only trace if the surface has significant specular reflectance AND RR is active
-            if (dlssRayReconstruction > 0.5 && max(primarySpecAlbedo.r, max(primarySpecAlbedo.g, primarySpecAlbedo.b)) > 0.01) {
-                float3 R_spec = reflect(rayDir, primaryNormal);
-                RayDesc specHitRay;
-                specHitRay.Origin = primaryPos + primaryNormal * 0.002;
-                specHitRay.Direction = R_spec;
-                specHitRay.TMin = 0.002;
-                specHitRay.TMax = 1000.0;
-                RayPayload specHitPayload = InitRayPayload(RAY_TYPE_REFLECTION);
-                TraceRay(g_accel, RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0xFF, 0, 0, 0, specHitRay, specHitPayload);
-                SHADER_COUNTER_ADD(SHADER_COUNTER_SPECULAR_TRACES, 1);
-                primarySpecHitDist = (specHitPayload.t > 0) ? specHitPayload.t : 1000.0;
+                // Trace dedicated specular reflection ray to get hit distance for DLSS-RR
+                // Only trace if the surface has significant specular reflectance AND RR is active
+                if (dlssRayReconstruction > 0.5 && max(primarySpecAlbedo.r, max(primarySpecAlbedo.g, primarySpecAlbedo.b)) > 0.01) {
+                    float3 R_spec = reflect(rayDir, primaryNormal);
+                    RayDesc specHitRay;
+                    specHitRay.Origin = primaryPos + primaryNormal * 0.002;
+                    specHitRay.Direction = R_spec;
+                    specHitRay.TMin = 0.002;
+                    specHitRay.TMax = 1000.0;
+                    RayPayload specHitPayload = InitRayPayload(RAY_TYPE_REFLECTION);
+                    TraceRay(g_accel, RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0xFF, 0, 0, 0, specHitRay, specHitPayload);
+                    SHADER_COUNTER_ADD(SHADER_COUNTER_SPECULAR_TRACES, 1);
+                    primarySpecHitDist = (specHitPayload.t > 0) ? specHitPayload.t : 1000.0;
+                } else {
+                    primarySpecHitDist = 0.0;
+                }
+            }
+
+            // --- G-Buffer & Motion Vector Writing (Mandatory for every frame) ---
+            if (!primaryHit || primaryViewZ <= 0.0) {
+                g_depth[launchIndex.xy] = (dlssRayReconstruction > 0.5) ? farZ : 1.0;
+                float2 mvecSky = float2(0.0, 0.0);
+                if (prevValid > 0.5) {
+                    float3 forwardP = normalize(prevForward);
+                    float3 Rp = normalize(cross(forwardP, prevUp));
+                    float3 Up = normalize(cross(Rp, forwardP));
+                    float f_inv_p = tan(radians(prevFov) * 0.5);
+                    float vxP = dot(rayDirCenter, Rp);
+                    float vyP = dot(rayDirCenter, Up);
+                    float vzP = dot(rayDirCenter, forwardP);
+                    if (vzP > 0.001) {
+                        float ndcXP = vxP / (vzP * prevAspect * f_inv_p);
+                        float ndcYP = -vyP / (vzP * f_inv_p);
+                        float2 prevScreen = (float2(ndcXP, ndcYP) * 0.5 + 0.5) * float2(launchDim.xy);
+                        if (any(prevScreen < screenMin) || any(prevScreen > screenMax)) mvecSky = kInvalidMvec;
+                        else mvecSky = prevScreen - currScreen;
+                    }
+                }
+                g_motionVectors[launchIndex.xy] = mvecSky;
+                g_albedoOut[launchIndex.xy] = float4(0.0, 0.0, 0.0, 1.0);
+                g_normalRoughnessOut[launchIndex.xy] = float4(0.0, 1.0, 0.0, 1.0);
+                g_specularAlbedo[launchIndex.xy] = float4(0.0, 0.0, 0.0, 1.0);
+                g_specHitDistance[launchIndex.xy] = 0.0;
+                g_specularMotionVectors[launchIndex.xy] = mvecSky;
             } else {
-                primarySpecHitDist = 0.0;
+                if (dlssRayReconstruction > 0.5) g_depth[launchIndex.xy] = primaryViewZ;
+                else {
+                    float nearZc = nearZ;
+                    float farZc = farZ;
+                    float A = farZc / (farZc - nearZc);
+                    float B = (-nearZc * farZc) / (farZc - nearZc);
+                    float ndcZ = A + (B / primaryViewZ);
+                    g_depth[launchIndex.xy] = saturate(ndcZ);
+                }
+                float2 mvec = kInvalidMvec;
+                float2 specMvec = kInvalidMvec;
+                if (prevValid > 0.5) {
+                    float3 forwardP = normalize(prevForward);
+                    float3 Rp = normalize(cross(forwardP, prevUp));
+                    float3 Up = normalize(cross(Rp, forwardP));
+                    float f_inv_p = tan(radians(prevFov) * 0.5);
+                    float viewZc = primaryViewZ;
+                    float3 P_world = camPos + R * (x_view_center * viewZc) + U * (y_view_center * viewZc) + forward * viewZc;
+                    float3 relP = P_world - prevPos;
+                    float vxP = dot(relP, Rp);
+                    float vyP = dot(relP, Up);
+                    float vzP = dot(relP, forwardP);
+                    if (vzP > 0.001) {
+                        float ndcXP = vxP / (vzP * prevAspect * f_inv_p);
+                        float ndcYP = -vyP / (vzP * f_inv_p);
+                        float2 prevScreen = (float2(ndcXP, ndcYP) * 0.5 + 0.5) * float2(launchDim.xy);
+                        if (any(prevScreen < screenMin) || any(prevScreen > screenMax)) mvec = kInvalidMvec;
+                        else mvec = prevScreen - currScreen;
+                    }
+                    if (any(primarySpecAlbedo > 0.0)) specMvec = mvec;
+                }
+                g_motionVectors[launchIndex.xy] = mvec;
+                g_specularMotionVectors[launchIndex.xy] = specMvec;
+                g_albedoOut[launchIndex.xy] = float4(primaryAlbedo, 1.0);
+                g_normalRoughnessOut[launchIndex.xy] = float4(normalize(primaryNormal), primaryRoughness);
+                g_specularAlbedo[launchIndex.xy] = float4(primarySpecAlbedo, 1.0);
+                g_specHitDistance[launchIndex.xy] = primarySpecHitDist;
+            }
+
+            // --- Adaptive Sampling Early Exit (Now after G-buffers are fresh) ---
+            if (!debugViewActive && maxSPP > 0.0 && accumFrame >= (uint)maxSPP) {
+                float4 total = g_accumulation[launchIndex.xy];
+                if (total.a > 0.0) g_output[launchIndex.xy] = float4(total.rgb / total.a, 1.0);
+                return;
+            }
+
+            if (accumFrame > kAdaptiveStartSpp && useAdaptiveSampling > 0.5) {
+                float4 acc = g_accumulation[launchIndex.xy];
+                float accM2 = g_variance[launchIndex.xy];
+                if (acc.a > (float)kAdaptiveMinPerPixelSpp) {
+                    float n_acc = acc.a;
+                    float3 meanColor = acc.rgb / n_acc;
+                    float meanLum = dot(meanColor, float3(0.2126, 0.7152, 0.0722));
+                    float sem = sqrt(max(0.0, accM2)) / n_acc;
+                    float noise = sem / (max(0.01, meanLum) + 0.001);
+                    float edgeContrast = 0.0;
+                    if (launchIndex.x > 0) {
+                        float4 a = g_accumulation[launchIndex.xy + uint2(-1, 0)];
+                        if (a.a > 1.0) edgeContrast = max(edgeContrast, abs(dot(a.rgb/a.a, float3(0.2126,0.7152,0.0722)) - meanLum));
+                    }
+                    if (launchIndex.x + 1 < launchDim.x) {
+                        float4 a = g_accumulation[launchIndex.xy + uint2(1, 0)];
+                        if (a.a > 1.0) edgeContrast = max(edgeContrast, abs(dot(a.rgb/a.a, float3(0.2126,0.7152,0.0722)) - meanLum));
+                    }
+                    if (launchIndex.y > 0) {
+                        float4 a = g_accumulation[launchIndex.xy + uint2(0, -1)];
+                        if (a.a > 1.0) edgeContrast = max(edgeContrast, abs(dot(a.rgb/a.a, float3(0.2126,0.7152,0.0722)) - meanLum));
+                    }
+                    if (launchIndex.y + 1 < launchDim.y) {
+                        float4 a = g_accumulation[launchIndex.xy + uint2(0, 1)];
+                        if (a.a > 1.0) edgeContrast = max(edgeContrast, abs(dot(a.rgb/a.a, float3(0.2126,0.7152,0.0722)) - meanLum));
+                    }
+                    bool isEdgeRegion = edgeContrast > kAdaptiveEdgeContrastThreshold;
+                    float relThreshold = max(0.001, noiseThreshold * (isEdgeRegion ? kAdaptiveEdgeRelScale : kAdaptiveRelScale));
+                    float absSemThreshold = max(kAdaptiveAbsSemFloor, noiseThreshold * (isEdgeRegion ? kAdaptiveEdgeAbsSemScale : kAdaptiveAbsSemScale));
+                    if (noise < relThreshold || sem < absSemThreshold) {
+                         RNG adaptiveRng = init_rng(launchIndex.xy + uint2(0x9e37u, 0x7f4au), frame ^ 0xA511E9B3u);
+                         float proximity = min(saturate(noise / relThreshold), saturate(sem / absSemThreshold));
+                         float keepProb = max(isEdgeRegion ? kAdaptiveEdgeMinKeepProb : kAdaptiveMinKeepProb, proximity);
+                         if (n_acc < (float)accumFrame * kAdaptiveMinExpectedRatio) keepProb = 1.0;
+                         else keepProb = max(keepProb, saturate(((float)accumFrame - n_acc) / (float)accumFrame) * kAdaptiveLagKeepScale);
+                         
+                         if (next_float(adaptiveRng) > keepProb) {
+                            if (flip) {
+                                g_reservoir1[launchIndex.xy] = g_reservoir0[launchIndex.xy];
+                                g_gi_reservoir_a0[launchIndex.xy] = g_gi_reservoir_b0[launchIndex.xy];
+                                g_gi_reservoir_a1[launchIndex.xy] = g_gi_reservoir_b1[launchIndex.xy];
+                                g_gi_reservoir_a2[launchIndex.xy] = g_gi_reservoir_b2[launchIndex.xy];
+                            } else {
+                                g_reservoir0[launchIndex.xy] = g_reservoir1[launchIndex.xy];
+                                g_gi_reservoir_b0[launchIndex.xy] = g_gi_reservoir_a0[launchIndex.xy];
+                                g_gi_reservoir_b1[launchIndex.xy] = g_gi_reservoir_a1[launchIndex.xy];
+                                g_gi_reservoir_b2[launchIndex.xy] = g_gi_reservoir_a2[launchIndex.xy];
+                            }
+                            SHADER_COUNTER_ADD(SHADER_COUNTER_RESERVOIR_WRITES, 1);
+                            if (SHADER_DEBUG_VIS_MODE == 1.0) g_output[launchIndex.xy] = float4(0.0, 1.0, 0.0, 1.0);
+                            else g_output[launchIndex.xy] = float4(meanColor, 1.0);
+                            return;
+                         }
+                    }
+                }
             }
         }
 
@@ -921,102 +954,6 @@ void RayGen()
     if (any(isnan(finalColor)) || any(isinf(finalColor))) finalColor = float3(0, 0, 0);
 
     // Write DLSS inputs
-    static const float2 kInvalidMvec = float2(-1e6, -1e6);
-    float2 currScreen = float2(launchIndex.xy) + 0.5;
-    float2 screenDim = float2(launchDim.xy);
-    float2 screenMin = float2(-0.5, -0.5);
-    float2 screenMax = screenDim + float2(0.5, 0.5);
-
-    if (!primaryHit || primaryViewZ <= 0.0) {
-        // Depth semantics depend on the Streamline feature:
-        // - DLSS-SR: HW/NDC depth in [0,1] (far plane = 1)
-        // - DLSS-RR: linear view-space depth (positive forward)
-        g_depth[launchIndex.xy] = (dlssRayReconstruction > 0.5) ? farZ : 1.0;
-
-        // Stabilize sky/background: compute motion from camera rotation (and translation has no effect at infinity).
-        float2 mvecSky = float2(0.0, 0.0);
-        if (prevValid > 0.5) {
-            float3 forwardP = normalize(prevForward);
-            float3 Rp = normalize(cross(forwardP, prevUp));
-            float3 Up = normalize(cross(Rp, forwardP));
-            float f_inv_p = tan(radians(prevFov) * 0.5);
-
-            float vxP = dot(rayDirCenter, Rp);
-            float vyP = dot(rayDirCenter, Up);
-            float vzP = dot(rayDirCenter, forwardP);
-            if (vzP > 0.001) {
-                float ndcXP = vxP / (vzP * prevAspect * f_inv_p);
-                float ndcYP = -vyP / (vzP * f_inv_p);
-                float2 prevScreen = (float2(ndcXP, ndcYP) * 0.5 + 0.5) * float2(launchDim.xy);
-                if (any(prevScreen < screenMin) || any(prevScreen > screenMax)) {
-                    mvecSky = kInvalidMvec;
-                } else {
-                    mvecSky = prevScreen - currScreen;
-                }
-            }
-        }
-        g_motionVectors[launchIndex.xy] = mvecSky;
-        g_albedoOut[launchIndex.xy] = float4(0.0, 0.0, 0.0, 1.0);
-        g_normalRoughnessOut[launchIndex.xy] = float4(0.0, 1.0, 0.0, 1.0);
-        g_specularAlbedo[launchIndex.xy] = float4(0.0, 0.0, 0.0, 1.0);
-        g_specHitDistance[launchIndex.xy] = 0.0;
-        g_specularMotionVectors[launchIndex.xy] = mvecSky;
-    } else {
-        if (dlssRayReconstruction > 0.5) {
-            // Linear view-space depth (positive forward)
-            g_depth[launchIndex.xy] = primaryViewZ;
-        } else {
-            // HW/NDC depth in [0,1] compatible with cameraViewToClip.
-            float nearZc = nearZ;
-            float farZc = farZ;
-            float A = farZc / (farZc - nearZc);
-            float B = (-nearZc * farZc) / (farZc - nearZc);
-            float ndcZ = A + (B / primaryViewZ);
-            g_depth[launchIndex.xy] = saturate(ndcZ);
-        }
-
-        // Motion vectors: avoid using jittered hit position (primaryPos) since
-        // that bakes jitter into mvec and causes visible shaking with DLSS.
-        float2 mvec = kInvalidMvec;
-        float2 specMvec = kInvalidMvec;
-
-        if (prevValid > 0.5) {
-            float3 forwardP = normalize(prevForward);
-            float3 Rp = normalize(cross(forwardP, prevUp));
-            float3 Up = normalize(cross(Rp, forwardP));
-            float f_inv_p = tan(radians(prevFov) * 0.5);
-
-            // Reconstruct a stable world point from pixel center + depth (no jitter).
-            float viewZc = primaryViewZ;
-            float3 P_world = camPos + R * (x_view_center * viewZc) + U * (y_view_center * viewZc) + forward * viewZc;
-
-            float3 relP = P_world - prevPos;
-            float vxP = dot(relP, Rp);
-            float vyP = dot(relP, Up);
-            float vzP = dot(relP, forwardP);
-            if (vzP > 0.001) {
-                float ndcXP = vxP / (vzP * prevAspect * f_inv_p);
-                float ndcYP = -vyP / (vzP * f_inv_p);
-                float2 prevScreen = (float2(ndcXP, ndcYP) * 0.5 + 0.5) * float2(launchDim.xy);
-                if (any(prevScreen < screenMin) || any(prevScreen > screenMax)) {
-                    mvec = kInvalidMvec;
-                } else {
-                    mvec = prevScreen - currScreen;
-                }
-            }
-
-            // Specular MV: approximate with surface MV for stability.
-            if (any(primarySpecAlbedo > 0.0)) {
-                specMvec = mvec;
-            }
-        }
-        g_motionVectors[launchIndex.xy] = mvec;
-        g_specularMotionVectors[launchIndex.xy] = specMvec;
-        g_albedoOut[launchIndex.xy] = float4(primaryAlbedo, 1.0);
-        g_normalRoughnessOut[launchIndex.xy] = float4(normalize(primaryNormal), primaryRoughness);
-        g_specularAlbedo[launchIndex.xy] = float4(primarySpecAlbedo, 1.0);
-        g_specHitDistance[launchIndex.xy] = primarySpecHitDist;
-    }
 
     // Debug: Motion Vectors (debug mode index = 8)
     // Visualizes g_motionVectors in pixel units. Yellow-ish means near-zero MV.
@@ -1110,7 +1047,7 @@ void RayGen()
         g_variance[launchIndex.xy] = next_M2;
         
         if (SHADER_DEBUG_VIS_MODE == 1.0) {
-             // Standard Error of Mean: SEM = sqrt(M2) / N
+             // Standard Error of Mean: SEM = sqrt(next_M2) / next_n;
              float sem = sqrt(next_M2) / next_n;
              // Coefficient of Variation
              float noise = sem / (max(0.01, nextMeanLum) + 0.001); 
@@ -1120,7 +1057,15 @@ void RayGen()
              // Active (Noisy) pixels in Red-ish/Gray to contrast with Green converged pixels
              g_output[launchIndex.xy] = float4(vis, vis * 0.5, vis * 0.5, 1.0);
         } else {
-            g_output[launchIndex.xy] = float4(nextMean, 1.0);
+            // DLSS Ray Reconstruction is a temporal denoiser and expects raw, jittered, non-accumulated 
+            // single-frame inputs to perform its own temporal reconstruction. 
+            // However, we still maintain g_accumulation in the background for noise estimation 
+            // and adaptive sampling logic.
+            if (dlssRayReconstruction > 0.5) {
+                g_output[launchIndex.xy] = float4(finalColor, 1.0);
+            } else {
+                g_output[launchIndex.xy] = float4(nextMean, 1.0);
+            }
         }
     }
 

@@ -151,7 +151,8 @@ static const UINT DXR_HEAP_NORMAL_ROUGHNESS_UAV_OFFSET =
     DXR_HEAP_UAV_OFFSET + 13;
 static const UINT DXR_HEAP_DLSS_OUT_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 14;
 static const UINT DXR_HEAP_IBL_OFFSET = DXR_HEAP_UAV_OFFSET + 15;
-static const UINT DXR_HEAP_IBL_CONDITIONAL_CDF_OFFSET = DXR_HEAP_UAV_OFFSET + 16;
+static const UINT DXR_HEAP_IBL_CONDITIONAL_CDF_OFFSET =
+    DXR_HEAP_UAV_OFFSET + 16;
 static const UINT DXR_HEAP_IBL_MARGINAL_CDF_OFFSET = DXR_HEAP_UAV_OFFSET + 17;
 static const UINT DXR_HEAP_SPEC_ALBEDO_OFFSET = DXR_HEAP_UAV_OFFSET + 18;
 static const UINT DXR_HEAP_SPEC_HITDIST_OFFSET = DXR_HEAP_UAV_OFFSET + 19;
@@ -166,7 +167,7 @@ static const UINT DXR_HEAP_CLOUD_BAKED_TEX_OFFSET = DXR_HEAP_UAV_OFFSET + 26;
 // Extra debug UAV: shader counters (readback)
 static const UINT DXR_HEAP_SHADER_COUNTERS_OFFSET = DXR_HEAP_UAV_OFFSET + 27;
 static const UINT DXR_HEAP_TOTAL_COUNT =
-  DXR_HEAP_TEX_COUNT + DXR_HEAP_VB_COUNT + DXR_HEAP_IB_COUNT + 28;
+    DXR_HEAP_TEX_COUNT + DXR_HEAP_VB_COUNT + DXR_HEAP_IB_COUNT + 28;
 
 // Output texture dimensions used by DXR (kept local to module)
 static UINT s_outputWidth = 1280;
@@ -288,11 +289,7 @@ static bool s_asyncRestirAvailable = false;
 static bool s_asyncRestirInitTried = false;
 static ComPtr<ID3D12Resource> s_asyncRestirCameraCB;
 
-enum class TextureStreamingPolicy {
-  FullRes = 0,
-  Balanced = 1,
-  Aggressive = 2
-};
+enum class TextureStreamingPolicy { FullRes = 0, Balanced = 1, Aggressive = 2 };
 static TextureStreamingPolicy s_textureStreamingPolicy =
     TextureStreamingPolicy::Balanced;
 static TextureStreamingPolicy s_lastAppliedTextureStreamingPolicy =
@@ -524,7 +521,8 @@ float GetPhysicalCameraEV100() {
   float safeIso = (std::max)(s_cameraIso, 1.0f);
   float safeShutter = (std::max)(s_cameraShutterSeconds, 1.0e-6f);
   float safeAperture = (std::max)(s_cameraApertureFNumber, 0.7f);
-  return log2f((safeAperture * safeAperture / safeShutter) * (100.0f / safeIso));
+  return log2f((safeAperture * safeAperture / safeShutter) *
+               (100.0f / safeIso));
 }
 
 static void EnsureNoiseStatsPipeline();
@@ -867,7 +865,8 @@ static void EnsureAsyncComputeContext() {
                                    s_asyncComputeAllocator.Get(), nullptr,
                                    IID_PPV_ARGS(&s_asyncComputeList));
   if (FAILED(hr)) {
-    fprintf(stderr, "DxrRenderer: Async compute list creation failed (0x%08x)\n",
+    fprintf(stderr,
+            "DxrRenderer: Async compute list creation failed (0x%08x)\n",
             (unsigned)hr);
     s_asyncComputeAllocator.Reset();
     s_asyncComputeFence.Reset();
@@ -996,8 +995,9 @@ static UINT ComputeStreamingMostDetailedMip(const Asset::Texture &tex,
   return drop;
 }
 
-static void UpdateTextureDescriptorTable(
-    D3D12_GPU_DESCRIPTOR_HANDLE texturesGpuStart, UINT textureDescriptorCount) {
+static void
+UpdateTextureDescriptorTable(D3D12_GPU_DESCRIPTOR_HANDLE texturesGpuStart,
+                             UINT textureDescriptorCount) {
   if (!s_srvHeap || !s_device || textureDescriptorCount == 0) {
     return;
   }
@@ -1013,7 +1013,8 @@ static void UpdateTextureDescriptorTable(
   static D3D12_GPU_DESCRIPTOR_HANDLE s_lastTexturesGpuStart = {0};
   static UINT s_lastTextureDescriptorCount = 0;
   static UINT s_lastRefreshFrame = 0;
-  const bool sourceChanged = (texturesGpuStart.ptr != s_lastTexturesGpuStart.ptr) ||
+  const bool sourceChanged =
+      (texturesGpuStart.ptr != s_lastTexturesGpuStart.ptr) ||
       (textureDescriptorCount != s_lastTextureDescriptorCount);
   const bool policyChanged =
       (s_textureStreamingPolicy != s_lastAppliedTextureStreamingPolicy);
@@ -1030,9 +1031,9 @@ static void UpdateTextureDescriptorTable(
       s_srvHeap->GetCPUDescriptorHandleForHeapStart();
   dst.ptr += (SIZE_T)DXR_HEAP_TEX_OFFSET * descSize;
 
-  const UINT maxCount =
-      (textureDescriptorCount < DXR_HEAP_TEX_COUNT) ? textureDescriptorCount
-                                                    : DXR_HEAP_TEX_COUNT;
+  const UINT maxCount = (textureDescriptorCount < DXR_HEAP_TEX_COUNT)
+                            ? textureDescriptorCount
+                            : DXR_HEAP_TEX_COUNT;
   const UINT availableTextures =
       (UINT)((g_loadedTextures.size() < maxCount) ? g_loadedTextures.size()
                                                   : maxCount);
@@ -1041,8 +1042,7 @@ static void UpdateTextureDescriptorTable(
     cpu.ptr += (SIZE_T)i * descSize;
 
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-    srvDesc.Shader4ComponentMapping =
-        D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
 
     if (i < availableTextures && g_loadedTextures[(size_t)i].resource) {
@@ -1051,9 +1051,9 @@ static void UpdateTextureDescriptorTable(
           ComputeStreamingMostDetailedMip(tex, s_textureStreamingPolicy);
       srvDesc.Format = tex.format;
       srvDesc.Texture2D.MostDetailedMip = mostDetailedMip;
-      srvDesc.Texture2D.MipLevels =
-          (mostDetailedMip < tex.mipLevels) ? (tex.mipLevels - mostDetailedMip)
-                                            : 1u;
+      srvDesc.Texture2D.MipLevels = (mostDetailedMip < tex.mipLevels)
+                                        ? (tex.mipLevels - mostDetailedMip)
+                                        : 1u;
       srvDesc.Texture2D.ResourceMinLODClamp = (float)mostDetailedMip;
       s_device->CreateShaderResourceView(tex.resource.Get(), &srvDesc, cpu);
     } else {
@@ -1729,8 +1729,10 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     fprintf(stderr, "DxrRenderer: CreateStateObject failed: 0x%08x\n",
             (unsigned)hrState);
     fprintf(stderr,
-            "DxrRenderer: RT pipeline config dump: payload=%u attr=%u recursion=%u rootParams=%u\n",
-            shaderConfig.MaxPayloadSizeInBytes, shaderConfig.MaxAttributeSizeInBytes,
+            "DxrRenderer: RT pipeline config dump: payload=%u attr=%u "
+            "recursion=%u rootParams=%u\n",
+            shaderConfig.MaxPayloadSizeInBytes,
+            shaderConfig.MaxAttributeSizeInBytes,
             pipelineConfig.MaxTraceRecursionDepth, rootDesc.NumParameters);
     if (g_dxrDumpD3D12Messages) {
       ComPtr<ID3D12InfoQueue> infoQueue;
@@ -1744,7 +1746,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
           D3D12_MESSAGE *pMsg =
               reinterpret_cast<D3D12_MESSAGE *>(message.data());
           if (SUCCEEDED(infoQueue->GetMessage(i, pMsg, &messageLength))) {
-            fprintf(stderr, "D3D12 INFO (CreateStateObject): Cat=%d Sev=%d ID=%d: %s\n",
+            fprintf(stderr,
+                    "D3D12 INFO (CreateStateObject): Cat=%d Sev=%d ID=%d: %s\n",
                     (int)pMsg->Category, (int)pMsg->Severity, (int)pMsg->ID,
                     pMsg->pDescription);
           }
@@ -2133,9 +2136,9 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
 static bool IsMaterialAlphaTestedOrGlass(const Asset::Material &m) {
   const bool alphaTested =
       (m.alphaMode != "OPAQUE") || (m.diffuseColor[3] < 0.999f);
-  const float maxRefr = (std::max)(
-      m.refractionColor[0],
-      (std::max)(m.refractionColor[1], m.refractionColor[2]));
+  const float maxRefr =
+      (std::max)(m.refractionColor[0],
+                 (std::max)(m.refractionColor[1], m.refractionColor[2]));
   const bool glassLike = (maxRefr > 0.01f) || (m.thinWalled > 0.5f);
   return alphaTested || glassLike;
 }
@@ -2148,8 +2151,8 @@ static bool IsMeshOpaqueForRt(const Asset::GpuMesh &mesh) {
   return !IsMaterialAlphaTestedOrGlass(g_loadedMaterials[(size_t)matIdx]);
 }
 
-static bool HasDirtyMaterialsForMeshes(
-    const std::vector<const Asset::GpuMesh *> &meshes) {
+static bool
+HasDirtyMaterialsForMeshes(const std::vector<const Asset::GpuMesh *> &meshes) {
   if (s_dirtyMaterialFlags.empty()) {
     return false;
   }
@@ -2435,10 +2438,10 @@ void BuildAccelerationStructures(
           auto vbAddr = mesh.vertexBuffer->GetGPUVirtualAddress();
           auto ibAddr = mesh.indexBuffer->GetGPUVirtualAddress();
 
-          auto bl = BuildBLAS(s_dxrDevice.Get(), cmdList.Get(), vbAddr,
-                              mesh.vertexCount, sizeof(Asset::Vertex), ibAddr,
-                              mesh.indexCount, meshOpaqueStates[i] != 0,
-                              false, true);
+          auto bl =
+              BuildBLAS(s_dxrDevice.Get(), cmdList.Get(), vbAddr,
+                        mesh.vertexCount, sizeof(Asset::Vertex), ibAddr,
+                        mesh.indexCount, meshOpaqueStates[i] != 0, false, true);
           if (bl.result && bl.scratch) {
             s_allBLAS.push_back({bl, (UINT64)i});
             s_cachedMeshBuffersForBlas.push_back(mesh.vertexBuffer.Get());
@@ -2495,8 +2498,8 @@ void BuildAccelerationStructures(
           UINT64 compactedSize =
               ReadbackUint64(meshBlas.buffers.compactedSizeReadback.Get());
           meshBlas.buffers.compactedSizeInBytes = compactedSize;
-          if (compactedSize == 0 || compactedSize >=
-                                       meshBlas.buffers.resultSizeInBytes) {
+          if (compactedSize == 0 ||
+              compactedSize >= meshBlas.buffers.resultSizeInBytes) {
             continue;
           }
 
@@ -2509,9 +2512,10 @@ void BuildAccelerationStructures(
             continue;
           }
 
-          AllocateUAVBuffer(s_device, compactedAligned, &compactedResults[k],
-                            D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
-                            L"BLAS Result (Compacted)");
+          AllocateUAVBuffer(
+              s_device, compactedAligned, &compactedResults[k],
+              D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
+              L"BLAS Result (Compacted)");
           compactedSizes[k] = compactedAligned;
           compactCount++;
         }
@@ -2690,10 +2694,10 @@ void BuildAccelerationStructures(
     inputs.NumDescs = (UINT)instanceDescs.size();
     inputs.InstanceDescs = instanceDescBuffer->GetGPUVirtualAddress();
 
-    bool canRefitTlas = !meshesChanged && s_tlasSupportsUpdate && s_tlas.result &&
-                        s_tlas.scratch &&
-                        (instanceMeshOrder.size() ==
-                         s_cachedTlasMeshOrder.size());
+    bool canRefitTlas =
+        !meshesChanged && s_tlasSupportsUpdate && s_tlas.result &&
+        s_tlas.scratch &&
+        (instanceMeshOrder.size() == s_cachedTlasMeshOrder.size());
     if (canRefitTlas) {
       for (size_t i = 0; i < instanceMeshOrder.size(); ++i) {
         if (instanceMeshOrder[i] != s_cachedTlasMeshOrder[i]) {
@@ -2711,9 +2715,10 @@ void BuildAccelerationStructures(
       D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info = {};
       s_dxrDevice->GetRaytracingAccelerationStructurePrebuildInfo(&inputs,
                                                                   &info);
-      const UINT64 requiredScratchSize = Align(
-          (std::max)(info.ScratchDataSizeInBytes, info.UpdateScratchDataSizeInBytes),
-          D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT);
+      const UINT64 requiredScratchSize =
+          Align((std::max)(info.ScratchDataSizeInBytes,
+                           info.UpdateScratchDataSizeInBytes),
+                D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT);
       const UINT64 requiredResultSize =
           Align(info.ResultDataMaxSizeInBytes,
                 D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT);
@@ -2726,9 +2731,10 @@ void BuildAccelerationStructures(
       }
       if (!s_tlas.result || s_tlas.resultSizeInBytes < requiredResultSize) {
         s_tlas.result.Reset();
-        AllocateUAVBuffer(s_device, requiredResultSize, &s_tlas.result,
-                          D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
-                          L"TLAS Result");
+        AllocateUAVBuffer(
+            s_device, requiredResultSize, &s_tlas.result,
+            D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
+            L"TLAS Result");
         s_tlas.resultSizeInBytes = requiredResultSize;
       }
     } else {
@@ -2957,8 +2963,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                  D3D12_GPU_DESCRIPTOR_HANDLE texturesGpuStart,
                  UINT textureDescriptorCount,
                  const std::vector<const Asset::GpuMesh *> &meshes,
-                 ID3D12Resource *meshDataSB,
-                 ID3D12Resource *materialExtraSB) {
+                 ID3D12Resource *meshDataSB, ID3D12Resource *materialExtraSB) {
   auto ReturnFail = [&](int reason, const char *message) -> bool {
     if (s_lastRenderFrameFailReason != reason) {
       fprintf(stderr, "DxrRenderer::RenderFrame FAIL[%d]: %s\n", reason,
@@ -2989,8 +2994,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     return true;
   }
 
-  // Material blend/transparency edits can change opaque traversal flags. Rebuild
-  // BLAS/TLAS lazily on the first frame that observes dirty materials.
+  // Material blend/transparency edits can change opaque traversal flags.
+  // Rebuild BLAS/TLAS lazily on the first frame that observes dirty materials.
   if (HasDirtyMaterialsForMeshes(meshes)) {
     BuildAccelerationStructures(meshes, Scene::GetInstances());
     if (!s_tlas.result) {
@@ -3010,7 +3015,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   s_lastRenderFrameFailReason = -1;
   EnsureAsyncComputeContext();
   if (s_asyncRestirAvailable && s_asyncComputePendingFenceWait > 0) {
-    s_commandQueue->Wait(s_asyncComputeFence.Get(), s_asyncComputePendingFenceWait);
+    s_commandQueue->Wait(s_asyncComputeFence.Get(),
+                         s_asyncComputePendingFenceWait);
     s_asyncComputePendingFenceWait = 0;
   }
 
@@ -3023,8 +3029,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       s_lastCameraIntensity = curIntensity;
       s_hasTonemappedFrame = false;
     }
-    if (std::abs(s_exposureCompensation - s_lastExposureCompensation) >
-        1e-6f) {
+    if (std::abs(s_exposureCompensation - s_lastExposureCompensation) > 1e-6f) {
       s_lastExposureCompensation = s_exposureCompensation;
       s_hasTonemappedFrame = false;
     }
@@ -3141,8 +3146,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       pfData[18] = (float)s_lightCount; // lightCount
 
       // Index 23: accumulationCount.
-      // DLSS-RR is a temporal denoiser; don't also accumulate history.
-      pfData[23] = rrActive ? 0.0f : (float)s_accumulation.GetFrameCount();
+      // We pass the actual still-frame count even for RR, so the shader can
+      // calculate variance/noise for adaptive sampling and UI feedback.
+      pfData[23] = (float)currSpp;
 
       // Streamline flags used by shaders/raytracing/common.hlsli.
       // Index 43: dlssEnabled
@@ -3268,10 +3274,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     // 2) Conditional CDF (t1, space1)
     D3D12_CPU_DESCRIPTOR_HANDLE dstConditional =
         s_srvHeap->GetCPUDescriptorHandleForHeapStart();
-    dstConditional.ptr +=
-        (SIZE_T)DXR_HEAP_IBL_CONDITIONAL_CDF_OFFSET *
-        s_device->GetDescriptorHandleIncrementSize(
-            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    dstConditional.ptr += (SIZE_T)DXR_HEAP_IBL_CONDITIONAL_CDF_OFFSET *
+                          s_device->GetDescriptorHandleIncrementSize(
+                              D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
     D3D12_SHADER_RESOURCE_VIEW_DESC condSrv = {};
     condSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -3284,7 +3289,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     if (IBLManager::Get().HasEnvImportanceData() &&
         IBLManager::Get().GetEnvConditionalCdf().resource) {
       condSrv.Format = IBLManager::Get().GetEnvConditionalCdf().format;
-      condSrv.Texture2D.MipLevels = IBLManager::Get().GetEnvConditionalCdf().mipLevels;
+      condSrv.Texture2D.MipLevels =
+          IBLManager::Get().GetEnvConditionalCdf().mipLevels;
       s_device->CreateShaderResourceView(
           IBLManager::Get().GetEnvConditionalCdf().resource.Get(), &condSrv,
           dstConditional);
@@ -3295,10 +3301,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     // 3) Marginal CDF (t2, space1)
     D3D12_CPU_DESCRIPTOR_HANDLE dstMarginal =
         s_srvHeap->GetCPUDescriptorHandleForHeapStart();
-    dstMarginal.ptr +=
-        (SIZE_T)DXR_HEAP_IBL_MARGINAL_CDF_OFFSET *
-        s_device->GetDescriptorHandleIncrementSize(
-            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    dstMarginal.ptr += (SIZE_T)DXR_HEAP_IBL_MARGINAL_CDF_OFFSET *
+                       s_device->GetDescriptorHandleIncrementSize(
+                           D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
     D3D12_SHADER_RESOURCE_VIEW_DESC marginalSrv = {};
     marginalSrv.Shader4ComponentMapping =
@@ -3312,7 +3317,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     if (IBLManager::Get().HasEnvImportanceData() &&
         IBLManager::Get().GetEnvMarginalCdf().resource) {
       marginalSrv.Format = IBLManager::Get().GetEnvMarginalCdf().format;
-      marginalSrv.Texture2D.MipLevels = IBLManager::Get().GetEnvMarginalCdf().mipLevels;
+      marginalSrv.Texture2D.MipLevels =
+          IBLManager::Get().GetEnvMarginalCdf().mipLevels;
       s_device->CreateShaderResourceView(
           IBLManager::Get().GetEnvMarginalCdf().resource.Get(), &marginalSrv,
           dstMarginal);
@@ -3553,13 +3559,13 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   // Run periodically, but faster in adaptive mode so stop decisions react
   // sooner. Also run if s_lastNoiseLevel is 0 (initial calculation) regardless
   // of modulo.
-  bool shouldCalcNoise =
-      s_accumulation.IsAccumulating() && s_accumulation.GetFrameCount() > 0;
+  const UINT frameCounter =
+      rrActive ? s_rrStillFrameSpp : s_accumulation.GetFrameCount();
+  bool shouldCalcNoise = s_accumulation.IsAccumulating() && frameCounter > 0;
   if (shouldCalcNoise) {
     const UINT noiseEvalPeriod =
         (g_cameraData.useAdaptiveSampling > 0.5f) ? 8u : 20u;
-    if (s_lastNoiseLevel == 0.0f ||
-        (s_accumulation.GetFrameCount() % noiseEvalPeriod == 0)) {
+    if (s_lastNoiseLevel == 0.0f || (frameCounter % noiseEvalPeriod == 0)) {
       // Start noise calculation timer
       if (s_queryHeap) {
         dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
@@ -3977,7 +3983,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         UINT count = 0;
         // The buffer might be larger from a previous resolution
         // desc.Width contains total * sizeof(float) * 2
-        const UINT maxFloats = (UINT)(s_avgLumReadbackBuffer->GetDesc().Width / sizeof(float));
+        const UINT maxFloats =
+            (UINT)(s_avgLumReadbackBuffer->GetDesc().Width / sizeof(float));
         // We read pairs, so limit the loop to half the floats
         const UINT limit = (std::min)(total, maxFloats / 2);
 
@@ -3991,27 +3998,28 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
             ++count;
           }
         }
-        
+
         float avgLog = (count > 0) ? expf((float)(sumLogLum / count)) : 0.0f;
         float avgLin = (count > 0) ? (float)(sumLum / count) : 0.0f;
 
-        // Use a weighted blend to prevent scenes with bright lights from exploding.
-        // If Arithmetic mean is much higher than Geometric, it means high variance (bright lights).
-        // Bias towards Arithmetic mean in that case to reduce exposure but not completely define it by the sun.
-        // A common trick is to use a high percentile, or blend.
-        // For now, let's use a conservative approach:
-        // Use Geometric Mean as base, but blend in Arithmetic Mean if the difference is huge.
-        // Also clamp the minimum luminance to avoid divergence in dark scenes.
+        // Use a weighted blend to prevent scenes with bright lights from
+        // exploding. If Arithmetic mean is much higher than Geometric, it means
+        // high variance (bright lights). Bias towards Arithmetic mean in that
+        // case to reduce exposure but not completely define it by the sun. A
+        // common trick is to use a high percentile, or blend. For now, let's
+        // use a conservative approach: Use Geometric Mean as base, but blend in
+        // Arithmetic Mean if the difference is huge. Also clamp the minimum
+        // luminance to avoid divergence in dark scenes.
         float targetLum = avgLog;
         if (avgLin > avgLog * 10.0f) {
-            // Significant variance (fireflies or sun). Pull the average up towards linear to reduce exposure.
-            targetLum = avgLog * 0.2f + avgLin * 0.8f; 
+          // Significant variance (fireflies or sun). Pull the average up
+          // towards linear to reduce exposure.
+          targetLum = avgLog * 0.2f + avgLin * 0.8f;
         } else {
-            targetLum = avgLog;
+          targetLum = avgLog;
         }
 
         s_avgLuminanceCdM2 = (std::max)(targetLum, 1e-4f);
-
 
         if (s_avgLuminanceCdM2 > 1e-6f) {
           // EV100 = log2(L / 0.125) = log2(L * 8)
@@ -4134,14 +4142,16 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
       if (currentSpp >= kAutoExposureMinSpp) {
         if (s_avgLuminanceCdM2 > 1e-5f) {
-          targetExposure = (0.18f / s_avgLuminanceCdM2) * s_exposureCompensation;
+          targetExposure =
+              (0.18f / s_avgLuminanceCdM2) * s_exposureCompensation;
         }
         targetExposure = std::clamp(targetExposure, 1e-20f, 1e10f);
 
         // Simple temporal smoothing (Exponential Moving Average)
         // smoothingFactor: lower is smoother, higher is faster
         const float smoothingFactor = 0.05f;
-        s_smoothedExposure += (targetExposure - s_smoothedExposure) * smoothingFactor;
+        s_smoothedExposure +=
+            (targetExposure - s_smoothedExposure) * smoothingFactor;
 
         // Sync to global camera data ONLY if auto-exposure is on and active
         g_cameraData.intensity = s_smoothedExposure;
@@ -4267,8 +4277,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
 
-    return ReturnFail(14,
-                      "Tonemap pipeline unavailable; aborted DXR frame to avoid HDR->UNORM clipping");
+    return ReturnFail(14, "Tonemap pipeline unavailable; aborted DXR frame to "
+                          "avoid HDR->UNORM clipping");
   }
 
   // FREEZE LOGIC AFTER TONEMAPPING:
@@ -4338,8 +4348,9 @@ void SubmitAsyncRestirWork() {
       s_asyncComputeFence->SetEventOnCompletion(previousAsyncFence,
                                                 s_asyncComputeFenceEvent);
       if (WaitForSingleObject(s_asyncComputeFenceEvent, 5000) == WAIT_TIMEOUT) {
-        fprintf(stderr,
-                "DxrRenderer: Timeout waiting for previous async ReSTIR pass.\n");
+        fprintf(
+            stderr,
+            "DxrRenderer: Timeout waiting for previous async ReSTIR pass.\n");
         s_asyncRestirPending = false;
         s_asyncRestirCameraCB.Reset();
         return;
@@ -4350,15 +4361,18 @@ void SubmitAsyncRestirWork() {
   }
 
   ThrowIfFailed(s_asyncComputeAllocator->Reset());
-  ThrowIfFailed(s_asyncComputeList->Reset(s_asyncComputeAllocator.Get(), nullptr));
+  ThrowIfFailed(
+      s_asyncComputeList->Reset(s_asyncComputeAllocator.Get(), nullptr));
 
-  DispatchRestirSpatialPasses(s_asyncComputeList.Get(), s_asyncRestirCameraCB.Get());
+  DispatchRestirSpatialPasses(s_asyncComputeList.Get(),
+                              s_asyncRestirCameraCB.Get());
 
   ThrowIfFailed(s_asyncComputeList->Close());
 
   // Run compute only after this frame's direct queue work has completed.
   const UINT64 directFenceValue = s_asyncDirectFenceValue++;
-  ThrowIfFailed(s_commandQueue->Signal(s_asyncDirectFence.Get(), directFenceValue));
+  ThrowIfFailed(
+      s_commandQueue->Signal(s_asyncDirectFence.Get(), directFenceValue));
   ThrowIfFailed(
       s_asyncComputeQueue->Wait(s_asyncDirectFence.Get(), directFenceValue));
 
@@ -4366,8 +4380,8 @@ void SubmitAsyncRestirWork() {
   s_asyncComputeQueue->ExecuteCommandLists(1, lists);
 
   const UINT64 computeFenceValue = s_asyncComputeFenceValue++;
-  ThrowIfFailed(
-      s_asyncComputeQueue->Signal(s_asyncComputeFence.Get(), computeFenceValue));
+  ThrowIfFailed(s_asyncComputeQueue->Signal(s_asyncComputeFence.Get(),
+                                            computeFenceValue));
   s_asyncComputePendingFenceWait = computeFenceValue;
 
   s_asyncRestirPending = false;
