@@ -383,6 +383,7 @@ void RayGen()
                 float rrSkyLod = clamp(log2(max(length(rayOrigin - camPos), 1e-3) * 0.02), 0.0, 10.0);
 
                 float3 rrSky = envMap.SampleLevel(linearSampler, skyUv, rrSkyLod).rgb * intensity;
+                float3 rrColor = lerp(ambientColor.rgb, rrSky, ambientColor.w);
 
                 // Keep sun disc behavior consistent with miss/skybox shading.
                 float3 L = normalize(lightDir.xyz);
@@ -392,7 +393,7 @@ void RayGen()
                     float sunSolidAngle = 2.0f * PI * (1.0f - cosSunRadius);
                     float3 sunRadiance = (lightColor.rgb * lightColor.w) / max(sunSolidAngle, 1e-7f);
                     const float dxrSunDiscMatchGain = 1.12f;
-                    rrSky = sunRadiance * intensity * dxrSunDiscMatchGain;
+                    rrColor = sunRadiance * intensity * dxrSunDiscMatchGain;
                 }
 
                 if (cloudRenderingEnabled > 0.5f) {
@@ -402,10 +403,11 @@ void RayGen()
                     float opacity = 1.0f - baked.a;
                     float denseCore = pow(saturate(opacity), 2.2f);
                     float skyLeak = 0.10f * denseCore;
-                    missColor = baked.rgb + rrSky * (baked.a + skyLeak);
-                    missColor += rrSky * (0.025f * denseCore);
+                    missColor = baked.rgb + rrColor * (baked.a + skyLeak);
+                    missColor += rrColor * (0.025f * denseCore);
+                    missColor = clamp(missColor, 0.0f, 100000.0f);
                 } else {
-                    missColor = rrSky;
+                    missColor = rrColor;
                 }
             }
             
