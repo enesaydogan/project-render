@@ -111,8 +111,8 @@ void RayGen()
     // Keep per-frame reservoir ping-pong deterministic even for pixels that
     // early-out due to adaptive sampling.
     bool flip = (frame % 2) == 1;
-    const uint kAdaptiveStartSpp = 24u;
-    const uint kAdaptiveMinPerPixelSpp = 64u;
+    const uint kAdaptiveStartSpp = 16u;
+    const uint kAdaptiveMinPerPixelSpp = 16u;
     const float kAdaptiveRelScale = 0.90;
     const float kAdaptiveEdgeRelScale = 0.55;
     const float kAdaptiveAbsSemFloor = 5e-4;
@@ -121,7 +121,7 @@ void RayGen()
     const float kAdaptiveMinKeepProb = 0.10;
     const float kAdaptiveEdgeMinKeepProb = 0.22;
     const float kAdaptiveEdgeContrastThreshold = 0.012;
-    const float kAdaptiveMinExpectedRatio = 0.95;
+    const float kAdaptiveMinExpectedRatio = 0.15;
     const float kAdaptiveLagKeepScale = 1.00;
     // Artistic control: boost environment contribution to scene lighting
     // (DI/GI transport) without making the visible sky dome brighter.
