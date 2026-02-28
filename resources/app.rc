@@ -1,0 +1,38 @@
+#include "resource.h"
+#include <windows.h>
+
+// the path to your .ico file should match the APP_ICON variable in CMakeLists
+IDI_APP_ICON ICON "app.ico"
+
+// simple version information block
+1 VERSIONINFO
+FILEVERSION 0,0,1,0
+PRODUCTVERSION 0,0,1,0
+FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+FILEFLAGS 0x1L
+#else
+FILEFLAGS 0x0L
+#endif
+FILEOS 0x40004L
+FILETYPE 0x1L
+FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"  // U.S. English, Unicode
+        BEGIN
+            VALUE "CompanyName", "AI SLOP INC\0"
+            VALUE "FileDescription", "Project Render executable\0"
+            VALUE "FileVersion", "0.0.1\0"
+            VALUE "InternalName", "project-render.exe\0"
+            VALUE "OriginalFilename", "project-render.exe\0"
+            VALUE "ProductName", "Project Render\0"
+            VALUE "ProductVersion", "0.0.1\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

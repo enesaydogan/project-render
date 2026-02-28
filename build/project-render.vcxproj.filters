@@ -66,6 +66,11 @@
     <CustomBuild Include="D:\project-render\CMakeLists.txt" />
   </ItemGroup>
   <ItemGroup>
+    <ResourceCompile Include="D:\project-render\resources\app.rc">
+      <Filter>Source Files</Filter>
+    </ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
     <Filter Include="Source Files">
       <UniqueIdentifier>{9569D824-A87A-3709-8E90-D3714CA14A7B}</UniqueIdentifier>
     </Filter>
