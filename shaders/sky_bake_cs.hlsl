@@ -29,7 +29,6 @@ cbuffer CameraCB : register(b0)
 
     float4 lightDir;
     float4 lightColor;
-    float4 ambientColor;
 };
 
 RWTexture2D<float4> g_bakedSky : register(u0);

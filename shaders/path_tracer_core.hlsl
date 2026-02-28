@@ -383,7 +383,7 @@ void RayGen()
                 float rrSkyLod = clamp(log2(max(length(rayOrigin - camPos), 1e-3) * 0.02), 0.0, 10.0);
 
                 float3 rrSky = envMap.SampleLevel(linearSampler, skyUv, rrSkyLod).rgb * intensity;
-                float3 rrColor = lerp(ambientColor.rgb, rrSky, ambientColor.w);
+                float3 rrColor = rrSky;
 
                 // Keep sun disc behavior consistent with miss/skybox shading.
                 float3 L = normalize(lightDir.xyz);

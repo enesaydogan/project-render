@@ -322,17 +322,9 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
     float basePhaseG = clamp(CloudCB.scattering, -0.95f, 0.95f);
     float sunElevation = saturate(sunDir.y * 0.5f + 0.5f);
 
-    // Setup Ambient Color
-    float3 ambientSkyColor = float3(0.0, 0.0, 0.0);
-    float ambientWeight = 0.0f;
+    // Setup ambient sky approximation (driven by env/prague sky samples).
     float ambientAutoBoost = 1.0f;
     float sunExposureComp = 1.0f;
-    
-    #ifdef RAYTRACING_COMMON_H
-    // Use the global ambient color passed from the CPU (usually derived from Skybox/EnvMap)
-    ambientSkyColor = ambientColor.rgb;
-    ambientWeight = ambientColor.w; // Weight determining how much to use global vs procedural
-    #endif
 
     // Fallback/Bias colors (Neutral Grey/White base)
     // We keep these strictly neutral so they don't fight with the sky color
@@ -363,10 +355,9 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
     realHorizon *= ambientAutoBoost;
     sunExposureComp = 1.0f / max(0.25f, intensity);
     
-    // Blend towards real sky colors based on weight
-    // If weight is high, we match the skybox perfectly.
-    kSkyZenith = lerp(kSkyZenith, realZenith, saturate(ambientWeight));
-    kSkyHorizon = lerp(kSkyHorizon, realHorizon, saturate(ambientWeight));
+    // Use real sky colors directly.
+    kSkyZenith = realZenith;
+    kSkyHorizon = realHorizon;
     #endif
     
     // Lighting loop

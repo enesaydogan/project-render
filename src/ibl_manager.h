@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include "PragueSkyModel.h"
 #include "assets/asset_loader.h"
 #include <DirectXMath.h>
@@ -71,6 +72,7 @@ public:
     if (m_physicalCalibrationEnabled) {
       return;
     }
+    v = std::clamp(v, 0.0f, 5.0f);
     if (m_skyIntensity != v) {
       m_skyIntensity = v;
       m_skyDirty = true;
@@ -197,7 +199,7 @@ private:
   float m_solarElevation = 0.5f;
   float m_solarAzimuth = 0.0f;
   float m_altitude = 200.0f; // meters (0 - 15000)
-  float m_skyIntensity = 20.0f; // boost sky to balance sun (UI now allows up to 100)
+  float m_skyIntensity = 1.0f; // non-physical sky gain (UI range 0..5)
   float m_sunIntensity = 1000.0f; //reduce default intensity
   float m_sunSize = 1.5f; // degrees (actual sun size is ~0.5 deg)
   bool m_physicalCalibrationEnabled = false;

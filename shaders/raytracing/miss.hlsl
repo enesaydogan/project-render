@@ -18,14 +18,8 @@ void Miss(inout RayPayload payload)
     float envLod = isViewLikeRay ? 0.0 : clamp(log2(pathDistance * 0.02) + 0.35, 0.0, 10.0);
     float cloudLod = isViewLikeRay ? 0.0 : min(10.0, envLod + 0.5);
 
-    // Sample environment map and apply intensity
-    float3 skySample = envMap.SampleLevel(linearSampler, uv, envLod).rgb * intensity;
-    // Mix between a flat global ambient color and the procedural sky based on
-    // ambientColor.w.  This mirrors the logic used in the raster shader so that
-    // ray tracing respects the same tint/weight settings.
-    float3 globalAmb = ambientColor.rgb;
-    float w = ambientColor.w;
-    float3 color = lerp(globalAmb, skySample, w);
+    // Sample environment map and apply camera exposure scale.
+    float3 color = envMap.SampleLevel(linearSampler, uv, envLod).rgb * intensity;
 
     // Add Analytic Sun Disc
     float3 L = normalize(lightDir.xyz);

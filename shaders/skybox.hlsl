@@ -22,7 +22,6 @@ cbuffer CameraCB : register(b0)
     // Global Lighting
     float4 lightDir; // xyz = direction towards light, w = sun radius (rad)
     float4 lightColor; // rgb + intensity in .w
-    float4 ambientColor; // rgb + weight in .w
 
     // Keep layout aligned with src/camera.h so cloudRenderingEnabled reads the
     // correct value in raster mode too.
@@ -41,7 +40,8 @@ cbuffer CameraCB : register(b0)
     float debugVisualizationMode;
     float cloudRenderingEnabled;
     float iblRotationDegrees;
-    float3 _cameraPadEnd;
+    float sampleEnvSolidAngle;
+    float2 _cameraPadEnd;
 };
 
 Texture2D envMap : register(t0, space1);

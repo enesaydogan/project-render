@@ -8,7 +8,7 @@
 cbuffer Camera : register(b0)
 {
     float globalFrameCount : packoffset(c4.y);
-    float dlssRayReconstruction : packoffset(c11.w);
+    float dlssRayReconstruction : packoffset(c10.w);
 }
 
 RWTexture2D<float> g_depth : register(u10);

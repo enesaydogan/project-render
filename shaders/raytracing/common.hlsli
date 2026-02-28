@@ -128,7 +128,6 @@ cbuffer Camera : register(b0)
     // Global Lighting
     float4 lightDir; // xyz = direction towards light
     float4 lightColor; // rgb + intensity in .w
-    float4 ambientColor; // rgb + weight in .w
 
     // --- Streamline / DLSS history support ---
     float3 prevPos;
@@ -150,7 +149,7 @@ cbuffer Camera : register(b0)
     // 0 = use raw texel luminance (area) which is incorrect but useful for
     // comparisons/debugging.
     float sampleEnvSolidAngle;
-    float3 _cameraPadEnd;
+    float2 _cameraPadEnd;
 }
 
 inline float2 DirectionToUVRotated(float3 dir) {

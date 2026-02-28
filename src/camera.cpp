@@ -26,10 +26,9 @@ CameraCB g_initialCameraData = {
     3.0f,                           // maxRefractiveBounces
     2.0f,                           // maxGIBounces
     200.0f,                         // maxSPP
-    0.0f,                           // _pad3
+    0.0f,                           // accumulationCount
     {0.707f, 0.707f, 0.0f, 0.0f},   // lightDir (45 deg)
     {1.0f, 0.95f, 0.8f, 100000.0f}, // lightColor (rgb + intensity in .w)
-    {0.2f, 0.3f, 0.4f, 0.15f},      // ambientColor
     {0.0f, 0.0f, 0.0f},             // prevPos
     0.0f,                           // prevValid
     {0.0f, 0.0f, 0.0f},             // prevForward
@@ -83,8 +82,6 @@ static bool CameraChanged(const CameraCB &a, const CameraCB &b) {
     if (a.lightDir[i] != b.lightDir[i])
       return true;
     if (a.lightColor[i] != b.lightColor[i])
-      return true;
-    if (a.ambientColor[i] != b.ambientColor[i])
       return true;
   }
   if (a.iblRotationDegrees != b.iblRotationDegrees)
