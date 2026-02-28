@@ -888,11 +888,20 @@ void RayGen()
             prevPdf = pdf;
             prevIsDelta = false;
             
-            // Russian Roulette
+            // Russian Roulette (Albedo-guided)
             if (bounce >= 2) {
                 float maxThroughput = max(throughput.x, max(throughput.y, throughput.z));
-                if (maxThroughput < 0.1) {
-                    float p = max(0.05, maxThroughput);
+                // Additionally factor in the current surface's theoretical max contribution (albedo + specular). 
+                // A dark surface shouldn't spawn a ray just because previous throughput was high.
+                float maxAlbedo = max(payloadAlbedo.x, max(payloadAlbedo.y, payloadAlbedo.z));
+                float maxSpec = max(specProb, 0.04);
+                float surfaceMax = max(maxAlbedo, maxSpec);
+                
+                // Effective power remaining in the path.
+                float P_rr = maxThroughput * surfaceMax;
+
+                if (P_rr < 0.1) {
+                    float p = max(0.05, P_rr);
                     if (next_float(rng) > p) {
                         break;
                     }
