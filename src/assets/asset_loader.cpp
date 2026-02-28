@@ -1127,7 +1127,19 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
 
       gm.vertexCount = static_cast<UINT>(vertices.size());
       gm.indexCount = static_cast<UINT>(indices.size());
-      gm.materialIndex = (prim.material >= 0) ? prim.material : -1;
+      // Use provided material index or reserve a default slot if none.
+      if (prim.material >= 0) {
+        gm.materialIndex = prim.material;
+      } else if (wantMaterials) {
+        // generate a blank default material and append to tmpMaterials
+        Material def;
+        def.diffuseColor[0] = def.diffuseColor[1] = def.diffuseColor[2] = 0.8f;
+        def.diffuseColor[3] = 1.0f;
+        tmpMaterials.push_back(def);
+        gm.materialIndex = (int)tmpMaterials.size() - 1;
+      } else {
+        gm.materialIndex = -1;
+      }
 
       // Keep CPU copies for raypicking
       gm.cpuVertices = vertices;
