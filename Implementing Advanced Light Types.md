@@ -54,6 +54,11 @@ Area lights create inherent noise due to spatial sampling, and IES lights create
 
 Tackle Phase 1 and Phase 3 first. Getting the C++ structs and the HLSL math aligned is the hardest part. Once the lights evaluate correctly on a single pixel, piping them into the ReSTIR reservoirs and DXR visibility checks becomes a matter of routing.
 
+### **Phase 7 Ui Panel Implementation (src/editor_ui.cpp)**
+
+create light panel, this panel wil be used to create a light, set light's position, set light's emission, set light's type, set light's direction, set light's inner/outer cone angle, set light's radius, set light's IES texture
+also Imgizmo will be used to move the light, rotate and scale the light. also wil list the lits on the scene.
+
 ### ✨ Additional implementation notes & architectural tips
 The roadmap above already hits every major phase. A few extras that will keep the system maintainable and debuggable:
 
