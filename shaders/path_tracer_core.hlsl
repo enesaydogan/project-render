@@ -418,7 +418,7 @@ void RayGen()
             // Secondary misses are indirect environment transport seen through
             // BRDF paths. Boost those only so models receive stronger sky GI
             // while the primary visible sky remains unchanged.
-            if (bounce > 0) {
+            if (bounce > 0 && currentRayType == RAY_TYPE_DIFFUSE) {
                 missColor *= kEnvLightingBoost;
             }
             
