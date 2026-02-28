@@ -31,6 +31,7 @@
 #include <stdio.h>
 #include <string>
 #include <vector>
+#include "resource.h"
 
 // Forward-declare ImGui Win32 WndProc handler (imgui_impl_win32.h documents
 // this should be declared by user)
@@ -99,6 +100,7 @@ bool g_exportPreviewSrvAllocated = false;
 static ComPtr<ID3D12DescriptorHeap> g_imguiHeap;
 DescriptorHeapAllocator g_cbvSrvAllocator;
 HWND g_hwnd = nullptr;
+static constexpr wchar_t kMainWindowTitle[] = L"Project-Render";
 
 // Window dimensions
 bool g_appClosing = false;
@@ -254,6 +256,23 @@ static void EnforceReleaseDebugFlags() {
   g_rasterDebugDepth = false;
   g_debugLog = false;
 #endif
+}
+
+static void EnsureMainWindowTitle(HWND hwnd) {
+  if (!hwnd)
+    return;
+  wchar_t currentTitle[128] = {};
+  GetWindowTextW(hwnd, currentTitle, (int)_countof(currentTitle));
+  if (wcscmp(currentTitle, kMainWindowTitle) != 0) {
+    SetWindowTextW(hwnd, kMainWindowTitle);
+    static wchar_t s_lastSeenBadTitle[128] = {};
+    if (wcscmp(currentTitle, s_lastSeenBadTitle) != 0) {
+      wcsncpy_s(s_lastSeenBadTitle, currentTitle, _TRUNCATE);
+      fprintf(stderr,
+              "EnsureMainWindowTitle: repaired window title ('%ls' -> '%ls')\n",
+              currentTitle, kMainWindowTitle);
+    }
+  }
 }
 
 // Select the first suitable hardware adapter (non-software) that supports D3D12
@@ -1069,6 +1088,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
     return true;
 
   switch (message) {
+  case WM_SETTEXT: {
+    // Let Windows process the text first, then enforce our title policy.
+    LRESULT result = DefWindowProcW(hWnd, message, wParam, lParam);
+    EnsureMainWindowTitle(hWnd);
+    return result;
+  }
   case WM_CLOSE:
     g_appClosing = true;
     PostQuitMessage(0);
@@ -1085,7 +1110,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
     return 0;
   }
 
-  return DefWindowProc(hWnd, message, wParam, lParam);
+  return DefWindowProcW(hWnd, message, wParam, lParam);
 }
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
@@ -1143,14 +1168,28 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
   const wchar_t CLASS_NAME[] = L"ProjectRenderWndClass";
 
-  WNDCLASSW wc = {};
-  wc.lpfnWndProc = WndProc;
-  wc.hInstance = hInstance;
-  wc.lpszClassName = CLASS_NAME;
+  // use the extended version so we can set a small icon directly
+  WNDCLASSEXW wcx = {};
+  wcx.cbSize = sizeof(wcx);
+  wcx.lpfnWndProc = WndProc;
+  wcx.hInstance = hInstance;
+  wcx.lpszClassName = CLASS_NAME;
 
-  RegisterClassW(&wc);
+  // load icon defined in resources/app.rc (large + small)
+  HICON hIcon = (HICON)LoadImageW(hInstance,
+                                  MAKEINTRESOURCEW(IDI_APP_ICON),
+                                  IMAGE_ICON,
+                                  0, 0,
+                                  LR_DEFAULTSIZE);
+  if (!hIcon) {
+    fprintf(stderr, "Main: failed to load icon resource (0x%08x)\n", GetLastError());
+  }
+  wcx.hIcon   = hIcon; // big icon for Alt-Tab/taskbar
+  wcx.hIconSm = hIcon; // small icon for title bar
 
-  HWND hwnd = CreateWindowExW(0, CLASS_NAME, L"Project-Render",
+  RegisterClassExW(&wcx);
+
+  HWND hwnd = CreateWindowExW(0, CLASS_NAME, kMainWindowTitle,
                               WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
                               1920, 1080, nullptr, nullptr, hInstance, nullptr);
 
@@ -1170,6 +1209,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                 MB_OK | MB_ICONERROR);
     return -1;
   }
+
+  // Defensive: restore the intended Unicode caption in case any startup path
+  // accidentally set it through an ANSI codepath.
+  SetWindowTextW(hwnd, kMainWindowTitle);
 
   fprintf(stderr, "InitApplication returned OK\n");
 
@@ -1918,6 +1961,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   while (msg.message != WM_QUIT) {
     // fprintf(stderr, "MainLoop: start iteration\n");
     fflush(stderr);
+    EnsureMainWindowTitle(hwnd);
     if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
       TranslateMessage(&msg);
       DispatchMessage(&msg);

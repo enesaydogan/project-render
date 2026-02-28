@@ -1,10 +1,16 @@
 cmake_minimum_required(VERSION 3.20)
-project(project-render LANGUAGES CXX)
+project(project-render VERSION 0.0.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_executable(project-render src/main.cpp)
+
+# expose version information to the code as a preprocessor macro
+# PROJECT_VERSION is automatically populated from project(... VERSION ...)
+# no escape backslash required; CMake splits on whitespace
+target_compile_definitions(project-render PRIVATE
+    APP_VERSION="${PROJECT_VERSION}")
 # Additional project sources
 target_sources(project-render PRIVATE 
     src/input_handler.cpp
@@ -39,6 +45,9 @@ else()
 endif()
 
 target_link_libraries(project-render PRIVATE d3d12 dxgi dxguid ole32 windowscodecs)
+
+# make resources/ visible for includes (resource.h)
+target_include_directories(project-render PRIVATE "${CMAKE_SOURCE_DIR}/resources")
 
 # Link the D3D shader compiler for runtime shader compilation
 target_link_libraries(project-render PRIVATE d3dcompiler)
@@ -99,6 +108,16 @@ else()
 endif()
 
 # Copy Streamline + NGX runtime files next to the executable.
+
+# optional windows resources (icon + version info)
+if (WIN32)
+  # look for a manifest/icon file under resources/
+  set(APP_ICON "${CMAKE_SOURCE_DIR}/resources/app.ico")
+  set(APP_RC   "${CMAKE_SOURCE_DIR}/resources/app.rc")
+  if(EXISTS ${APP_RC})
+    target_sources(project-render PRIVATE ${APP_RC})
+  endif()
+endif()
 # NOTE: This project uses dynamic loading (LoadLibrary) so we don't link against
 # any Streamline import libs, but the DLLs must be present at runtime.
 set(STREAMLINE_BIN_DIR "${STREAMLINE_ROOT}/bin/x64")
