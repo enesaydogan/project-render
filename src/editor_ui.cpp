@@ -896,7 +896,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
           ImGui::BeginDisabled();
         }
         float skyInt = IBLManager::Get().GetSkyIntensity();
-        if (ImGui::SliderFloat("Sky Intensity", &skyInt, 0.0f, 100.0f)) {
+        if (ImGui::SliderFloat("Sky Intensity", &skyInt, 0.0f, 5.0f, "%.3f")) {
           IBLManager::Get().SetSkyIntensity(skyInt);
           uiParamChanged = true;
           uiChanged = true;
@@ -984,15 +984,6 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
       }
 
       ImGui::Spacing();
-      if (ImGui::ColorEdit3("Ambient Color", g_cameraData.ambientColor)) {
-        UpdateCameraCB();
-        uiChanged = true;
-      }
-      if (ImGui::SliderFloat("Ambient Weight", &g_cameraData.ambientColor[3],
-                             0.0f, 1.0f)) {
-        UpdateCameraCB();
-        uiChanged = true;
-      }
       ImGui::Checkbox("Show Grid", &g_drawGrid);
 
       ImGui::Separator();

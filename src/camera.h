@@ -22,12 +22,11 @@ struct CameraCB {
   float maxRefractiveBounces;
   float maxGIBounces;
   float maxSPP;
-  float _pad3;
+  float accumulationCount;
 
   // Global Scene Lighting
   float lightDir[4];     // xyz = direction pointing TO light, w = unused
   float lightColor[4];   // rgb + intensity in .w
-  float ambientColor[4]; // rgb + weight in .w
 
   // --- Streamline / DLSS history support ---
   // These fields must NOT participate in accumulation reset decisions.
@@ -46,11 +45,11 @@ struct CameraCB {
   float debugVisualizationMode;
   float cloudRenderingEnabled;
   float iblRotationDegrees;
-    // When true we build/sample the environment CDF using solid-angle weighting
-    // (luminance * sin(theta)) rather than raw texel area.  Turning this off
-    // can be useful for debugging or comparing the two approaches.
-    float sampleEnvSolidAngle;
-    float _cameraPadEnd[2];
+  // When true we build/sample the environment CDF using solid-angle weighting
+  // (luminance * sin(theta)) rather than raw texel area. Turning this off can
+  // be useful for debugging or comparing the two approaches.
+  float sampleEnvSolidAngle;
+  float _cameraPadEnd[2];
 };
 // Camera state (defined in camera.cpp)
 extern CameraCB g_initialCameraData;

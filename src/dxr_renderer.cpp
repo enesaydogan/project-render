@@ -3150,26 +3150,21 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     void *pData = nullptr;
     D3D12_RANGE readRange = {0, 0};
     if (SUCCEEDED(cameraCB->Map(0, &readRange, &pData))) {
-      float *pfData = (float *)pData;
-      // Index 7 = jitterX (_pad1)
-      pfData[7] = jitterX;
-      // Index 11 = jitterY (_pad2)
-      pfData[11] = jitterY;
+      CameraCB *cam = reinterpret_cast<CameraCB *>(pData);
+      cam->_pad1 = jitterX;
+      cam->_pad2 = jitterY;
 
-      // Index 17: globalFrameCount (monotonic, for RNG)
-      pfData[17] = (float)s_jitterFrameIndex;
-      pfData[18] = (float)s_lightCount; // lightCount
+      // Monotonic frame count for RNG / temporal logic.
+      cam->frameCount = (float)s_jitterFrameIndex;
+      cam->lightCount = (float)s_lightCount;
 
-      // Index 23: accumulationCount.
-      // We pass the actual still-frame count even for RR, so the shader can
-      // calculate variance/noise for adaptive sampling and UI feedback.
-      pfData[23] = (float)currSpp;
+      // Keep actual still-frame count even for RR so shaders can compute
+      // variance/noise for adaptive sampling and diagnostics.
+      cam->accumulationCount = (float)currSpp;
 
-      // Streamline flags used by shaders/raytracing/common.hlsli.
-      // Index 43: dlssEnabled
-      // Index 47: dlssRayReconstruction
-      pfData[43] = dlssActive ? 1.0f : 0.0f;
-      pfData[47] = rrActive ? 1.0f : 0.0f;
+      // Streamline flags used by raytracing shaders.
+      cam->dlssEnabled = dlssActive ? 1.0f : 0.0f;
+      cam->dlssRayReconstruction = rrActive ? 1.0f : 0.0f;
 
       cameraCB->Unmap(0, nullptr);
     }

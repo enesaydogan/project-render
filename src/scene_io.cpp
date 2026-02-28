@@ -208,9 +208,6 @@ bool SaveScene(const std::string &path) {
     j["lighting"]["lightColor"] = {
         g_cameraData.lightColor[0], g_cameraData.lightColor[1],
         g_cameraData.lightColor[2], g_cameraData.lightColor[3]};
-    j["lighting"]["ambientColor"] = {
-        g_cameraData.ambientColor[0], g_cameraData.ambientColor[1],
-        g_cameraData.ambientColor[2], g_cameraData.ambientColor[3]};
 
     // 3. Render Mode
     j["renderMode"] =
@@ -487,10 +484,22 @@ bool LoadScene(const std::string &path) {
 
     if (j.contains("lighting")) {
       auto l = j["lighting"];
-      for (int i = 0; i < 4; ++i) {
-        g_cameraData.lightDir[i] = l["lightDir"][i];
-        g_cameraData.lightColor[i] = l["lightColor"][i];
-        g_cameraData.ambientColor[i] = l["ambientColor"][i];
+      if (l.contains("lightDir") && l["lightDir"].is_array() &&
+          l["lightDir"].size() >= 4) {
+        for (int i = 0; i < 4; ++i) {
+          g_cameraData.lightDir[i] = l["lightDir"][i];
+        }
+      }
+      if (l.contains("lightColor") && l["lightColor"].is_array() &&
+          l["lightColor"].size() >= 4) {
+        for (int i = 0; i < 4; ++i) {
+          g_cameraData.lightColor[i] = l["lightColor"][i];
+        }
+      }
+      if (l.contains("ambientColor")) {
+        fprintf(stderr,
+                "LoadScene: Deprecated field 'lighting.ambientColor' found; "
+                "ignoring it (Prague sky/env-driven lighting).\n");
       }
     }
 
