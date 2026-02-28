@@ -155,7 +155,8 @@ bool SaveScene(const std::string &path) {
     j["camera"]["debugVisualizationMode"] = g_cameraData.debugVisualizationMode;
     // Exposure / physical camera state
     j["camera"]["autoExposure"] = DxrRenderer::GetAutoExposure();
-    j["camera"]["physicalCameraExposure"] = DxrRenderer::GetPhysicalCameraExposure();
+    j["camera"]["physicalCameraExposure"] =
+        DxrRenderer::GetPhysicalCameraExposure();
     float iso, shutter, aperture;
     DxrRenderer::GetPhysicalCameraSettings(iso, shutter, aperture);
     j["camera"]["iso"] = iso;
@@ -406,9 +407,9 @@ bool LoadScene(const std::string &path) {
         g_cameraData.up[1] = c["up"][1];
         g_cameraData.up[2] = c["up"][2];
       }
-        g_cameraData.fov = c.value("fov", 60.0f);
-        g_cameraData.intensity = c.value("intensity", g_cameraData.intensity);
-        g_cameraData.intensity =
+      g_cameraData.fov = c.value("fov", 60.0f);
+      g_cameraData.intensity = c.value("intensity", g_cameraData.intensity);
+      g_cameraData.intensity =
           (std::clamp)(g_cameraData.intensity, 1e-5f, 10.0f);
       g_cameraData.maxSPP = c.value("maxSPP", 1024.0f);
       g_cameraData.maxSpecularBounces = c.value("maxSpecularBounces", 3.0f);
@@ -426,10 +427,11 @@ bool LoadScene(const std::string &path) {
       // restore exposure/physical camera settings as well
       bool autoExp = c.value("autoExposure", DxrRenderer::GetAutoExposure());
       DxrRenderer::SetAutoExposure(autoExp);
-      bool phys = c.value("physicalCameraExposure", DxrRenderer::GetPhysicalCameraExposure());
+      bool phys = c.value("physicalCameraExposure",
+                          DxrRenderer::GetPhysicalCameraExposure());
       DxrRenderer::SetPhysicalCameraExposure(phys);
       float iso = c.value("iso", 100.0f);
-      float shutter = c.value("shutterSeconds", 1.0f/125.0f);
+      float shutter = c.value("shutterSeconds", 1.0f / 125.0f);
       float aperture = c.value("aperture", 16.0f);
       DxrRenderer::SetPhysicalCameraSettings(iso, shutter, aperture);
     }

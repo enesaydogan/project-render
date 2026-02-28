@@ -319,7 +319,8 @@ Texture LoadTextureFromFile(const std::string &path, bool isHDR) {
         } catch (...) {
           /* ignore filesystem errors */
         }
-        return acpw; // return ACP conversion if UTF-8 didn't resolve to an existing file
+        return acpw; // return ACP conversion if UTF-8 didn't resolve to an
+                     // existing file
       }
     }
 
@@ -371,7 +372,8 @@ Texture LoadTextureFromFile(const std::string &path, bool isHDR) {
     stbi_image_free(fdata);
     return tex;
   } else {
-    // LDR images: try stbi_load then fallback to wide-path _wfopen + stbi_load_from_file
+    // LDR images: try stbi_load then fallback to wide-path _wfopen +
+    // stbi_load_from_file
     unsigned char *data = stbi_load(path.c_str(), &width, &height, &comp, 4);
     if (!data) {
       std::wstring wpath = ConvertPathToWString(path);
@@ -398,6 +400,8 @@ static void CreateDefaultBuffer(
     const void *initData, UINT64 byteSize,
     ComPtr<ID3D12Resource> &defaultBuffer, ComPtr<ID3D12Resource> &uploadBuffer,
     D3D12_RESOURCE_STATES finalState = D3D12_RESOURCE_STATE_GENERIC_READ) {
+  if (byteSize == 0)
+    return;
   D3D12_HEAP_PROPERTIES defaultHeapProps = {};
   defaultHeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
 
@@ -1291,11 +1295,12 @@ bool LoadWithAssimp(const std::string &path, std::vector<GpuMesh> &outMeshes,
           if (texPath.empty())
             return;
 
-          // Handle embedded Assimp textures referenced as "*<index>" (e.g. "*0").
-          // Assimp stores embedded images in scene->mTextures; these can be
-          // compressed (mHeight == 0, pcData points to PNG/JPEG bytes) or
+          // Handle embedded Assimp textures referenced as "*<index>" (e.g.
+          // "*0"). Assimp stores embedded images in scene->mTextures; these can
+          // be compressed (mHeight == 0, pcData points to PNG/JPEG bytes) or
           // uncompressed RGBA (mHeight > 0).
-          if (!texPath.empty() && texPath[0] == '*' && scene->mNumTextures > 0) {
+          if (!texPath.empty() && texPath[0] == '*' &&
+              scene->mNumTextures > 0) {
             int idx = atoi(texPath.c_str() + 1);
             if (idx >= 0 && idx < (int)scene->mNumTextures) {
               aiTexture *aiTex = scene->mTextures[idx];
@@ -1304,12 +1309,12 @@ bool LoadWithAssimp(const std::string &path, std::vector<GpuMesh> &outMeshes,
               if (aiTex->mHeight == 0) {
                 // compressed image in memory (mWidth == byte-size)
                 int w = 0, h = 0, comp = 0;
-                unsigned char *img = stbi_load_from_memory(
-                    (const unsigned char *)aiTex->pcData, (int)aiTex->mWidth, &w,
-                    &h, &comp, 4);
+                unsigned char *img =
+                    stbi_load_from_memory((const unsigned char *)aiTex->pcData,
+                                          (int)aiTex->mWidth, &w, &h, &comp, 4);
                 if (img) {
                   t = LoadTextureFromMemory(img, w, h,
-                                             DXGI_FORMAT_R8G8B8A8_UNORM);
+                                            DXGI_FORMAT_R8G8B8A8_UNORM);
                   stbi_image_free(img);
                 }
               } else {
@@ -1353,7 +1358,8 @@ bool LoadWithAssimp(const std::string &path, std::vector<GpuMesh> &outMeshes,
               for (unsigned int ti = 0; ti < scene->mNumTextures; ++ti) {
                 aiTexture *aiTex = scene->mTextures[ti];
                 std::string aiName = aiTex->mFilename.C_Str();
-                std::string aiBase = std::filesystem::path(aiName).filename().string();
+                std::string aiBase =
+                    std::filesystem::path(aiName).filename().string();
                 if (!aiBase.empty() && iequals(aiBase, requestedName)) {
                   Asset::Texture embeddedTex;
                   if (aiTex->mHeight == 0) {
@@ -1362,16 +1368,14 @@ bool LoadWithAssimp(const std::string &path, std::vector<GpuMesh> &outMeshes,
                         (const unsigned char *)aiTex->pcData,
                         (int)aiTex->mWidth, &w, &h, &comp, 4);
                     if (img) {
-                      embeddedTex =
-                          LoadTextureFromMemory(img, w, h,
-                                                DXGI_FORMAT_R8G8B8A8_UNORM);
+                      embeddedTex = LoadTextureFromMemory(
+                          img, w, h, DXGI_FORMAT_R8G8B8A8_UNORM);
                       stbi_image_free(img);
                     }
                   } else {
-                    embeddedTex = LoadTextureFromMemory(aiTex->pcData,
-                                                        aiTex->mWidth,
-                                                        aiTex->mHeight,
-                                                        DXGI_FORMAT_R8G8B8A8_UNORM);
+                    embeddedTex = LoadTextureFromMemory(
+                        aiTex->pcData, aiTex->mWidth, aiTex->mHeight,
+                        DXGI_FORMAT_R8G8B8A8_UNORM);
                   }
                   if (embeddedTex.resource) {
                     outIndex = (int)outTextures->size();
@@ -1581,8 +1585,7 @@ bool LoadModel(const std::string &path, std::vector<GpuMesh> &outMeshes,
   std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
   if (ext == ".skp") {
-    return LoadSkp(path, outMeshes, outMaterials, outTextures,
-                   rootTranslation);
+    return LoadSkp(path, outMeshes, outMaterials, outTextures, rootTranslation);
   } else if (ext == ".gltf" || ext == ".glb") {
     return LoadGltf(path, outMeshes, outMaterials, outTextures,
                     rootTranslation);
@@ -1606,6 +1609,12 @@ GpuMesh LoadMeshFromMemory(const std::vector<Vertex> &vertices,
   mesh.indexCount = (UINT)indices.size();
   mesh.cpuVertices = vertices;
   mesh.cpuIndices = indices;
+
+  if (vertices.empty() || indices.empty()) {
+    // Return a valid but "empty" mesh instead of trying to create 0-length
+    // D3D12 buffers
+    return mesh;
+  }
 
   if (!s_deferGpuUpload) {
     ComPtr<ID3D12Resource> vUpload, iUpload;
