@@ -11,10 +11,12 @@ void Miss(inout RayPayload payload)
     uint rayType = UnpackPayloadRayType(payload.packedIorType);
     float2 uv = DirectionToUVRotated(dir);
 
-    bool isPrimary = (rayType == RAY_TYPE_PRIMARY);
+    // Keep direct camera view and transmission-through-glass view aligned so
+    // sky/cloud appearance does not shift when looking through windows.
+    bool isViewLikeRay = (rayType == RAY_TYPE_PRIMARY || rayType == RAY_TYPE_REFRACTION);
     float pathDistance = max(length(WorldRayOrigin() - camPos), 1e-3);
-    float envLod = isPrimary ? 0.0 : clamp(log2(pathDistance * 0.02) + 0.35, 0.0, 10.0);
-    float cloudLod = isPrimary ? 0.0 : min(10.0, envLod + 0.5);
+    float envLod = isViewLikeRay ? 0.0 : clamp(log2(pathDistance * 0.02) + 0.35, 0.0, 10.0);
+    float cloudLod = isViewLikeRay ? 0.0 : min(10.0, envLod + 0.5);
 
     // Sample environment map and apply intensity
     float3 skySample = envMap.SampleLevel(linearSampler, uv, envLod).rgb * intensity;
