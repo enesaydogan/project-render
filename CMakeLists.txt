@@ -333,7 +333,7 @@ if(DXC_COMPILER)
 
     # DXR library translation unit.
     if(shader_rel STREQUAL "raytracing.hlsl")
-      list(APPEND SHADER_COMPILE_LIST "${shader_rel}||lib_6_3")
+      list(APPEND SHADER_COMPILE_LIST "${shader_rel}||lib_6_5")
     endif()
 
     string(REGEX MATCHALL "VSMain[A-Za-z0-9_]*[ \t\r\n]*\\(" vs_matches "${shader_text}")
@@ -351,13 +351,13 @@ if(DXC_COMPILER)
     string(REGEX MATCHALL "CSMain[A-Za-z0-9_]*[ \t\r\n]*\\(" cs_matches "${shader_text}")
     foreach(raw IN LISTS cs_matches)
       string(REGEX REPLACE "[ \t\r\n]*\\($" "" entry "${raw}")
-      list(APPEND SHADER_COMPILE_LIST "${shader_rel}|${entry}|cs_6_3")
+      list(APPEND SHADER_COMPILE_LIST "${shader_rel}|${entry}|cs_6_5")
     endforeach()
   endforeach()
   # Ensure dedicated ReSTIR spatial pass is always compiled, even if
   # entry-point discovery misses it on some CMake regex edge cases.
-  list(APPEND SHADER_COMPILE_LIST "restir_spatial_cs.hlsl|CSMain|cs_6_3")
-  list(APPEND SHADER_COMPILE_LIST "restir_gi_spatial_cs.hlsl|CSMain|cs_6_3")
+  list(APPEND SHADER_COMPILE_LIST "restir_spatial_cs.hlsl|CSMain|cs_6_5")
+  list(APPEND SHADER_COMPILE_LIST "restir_gi_spatial_cs.hlsl|CSMain|cs_6_5")
   list(REMOVE_DUPLICATES SHADER_COMPILE_LIST)
 
   set(COMPILED_SHADERS)

@@ -1487,7 +1487,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     compileDefines.push_back(L"SHADER_ENABLE_DEBUG=0");
 #endif
     shaderBlob = s_dxcHelper.Compile(L"shaders/raytracing.hlsl", L"",
-                                     L"lib_6_3", compileDefines);
+                                     L"lib_6_5", compileDefines);
   } catch (const std::exception &e) {
     fprintf(stderr, "DxrRenderer: Shader Compilation Failed: %s\n", e.what());
     return;
