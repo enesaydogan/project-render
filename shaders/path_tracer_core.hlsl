@@ -784,7 +784,10 @@ void RayGen()
                                  (pdfLightEnv * pdfLightEnv +
                                   pdfBrdfEnv * pdfBrdfEnv + 1e-12);
 
-                    float3 envContrib = brdf_env * envLs.radiance *
+                    // Keep environment NEE exposure-consistent with miss/sky
+                    // shading paths, which already apply camera intensity.
+                    float3 envRadiance = envLs.radiance * intensity;
+                    float3 envContrib = brdf_env * envRadiance *
                                         (NdotL_env / pdfLightEnv) * misW;
                     envContrib *= kEnvLightingBoost;
                     directLighting += envContrib;
