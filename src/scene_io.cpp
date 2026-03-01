@@ -21,6 +21,11 @@ extern bool g_cloudRenderingEnabled;
 extern float g_camSpeed;
 extern float g_mouseSensitivity;
 extern bool g_drawGrid;
+extern float g_timeOfDay;
+extern float g_northOffset;
+extern float g_latitudeDeg;
+extern float g_dayOfYear;
+extern int g_debugMode;
 #include "dx12_context.h"
 #include "streamline_manager.h"
 
@@ -143,6 +148,8 @@ bool SaveScene(const std::string &path) {
     j["camera"]["up"] = {g_cameraData.up[0], g_cameraData.up[1],
                          g_cameraData.up[2]};
     j["camera"]["fov"] = g_cameraData.fov;
+    j["camera"]["nearZ"] = g_cameraData.nearZ;
+    j["camera"]["farZ"] = g_cameraData.farZ;
     j["camera"]["intensity"] = g_cameraData.intensity;
     j["camera"]["maxSPP"] = g_cameraData.maxSPP;
     j["camera"]["maxSpecularBounces"] = g_cameraData.maxSpecularBounces;
@@ -153,10 +160,13 @@ bool SaveScene(const std::string &path) {
     j["camera"]["useAdaptiveSampling"] = g_cameraData.useAdaptiveSampling;
     j["camera"]["noiseThreshold"] = g_cameraData.noiseThreshold;
     j["camera"]["debugVisualizationMode"] = g_cameraData.debugVisualizationMode;
+    j["camera"]["sampleEnvSolidAngle"] = g_cameraData.sampleEnvSolidAngle;
     // Exposure / physical camera state
     j["camera"]["autoExposure"] = DxrRenderer::GetAutoExposure();
     j["camera"]["physicalCameraExposure"] =
         DxrRenderer::GetPhysicalCameraExposure();
+    j["camera"]["exposureCompensation"] =
+        DxrRenderer::GetExposureCompensation();
     float iso, shutter, aperture;
     DxrRenderer::GetPhysicalCameraSettings(iso, shutter, aperture);
     j["camera"]["iso"] = iso;
@@ -168,6 +178,13 @@ bool SaveScene(const std::string &path) {
     j["settings"]["camSpeed"] = g_camSpeed;
     j["settings"]["mouseSensitivity"] = g_mouseSensitivity;
     j["settings"]["drawGrid"] = g_drawGrid;
+    j["settings"]["debugView"] = g_debugMode;
+
+    // Sky controls (used to drive Prague sky every frame in main loop)
+    j["sky"]["timeOfDay"] = g_timeOfDay;
+    j["sky"]["northOffset"] = g_northOffset;
+    j["sky"]["latitudeDeg"] = g_latitudeDeg;
+    j["sky"]["dayOfYear"] = g_dayOfYear;
 
     // Cloud Parameters
     auto &cp = g_cloudManager.GetParams();
@@ -201,6 +218,11 @@ bool SaveScene(const std::string &path) {
     j["streamline"]["mode"] = (int)DX12Context::g_streamline.GetMode();
     j["streamline"]["quality"] = (int)DX12Context::g_streamline.GetQuality();
 
+    // DXR post-processing / reconstruction
+    j["dxr"]["denoiserMode"] = (int)DxrRenderer::GetDenoiserMode();
+    j["dxr"]["oidnQuality"] = (int)DxrRenderer::GetOidnQuality();
+    j["dxr"]["rrJitterScale"] = DxrRenderer::GetRrJitterScale();
+
     // Global Scene Lighting
     j["lighting"]["lightDir"] = {
         g_cameraData.lightDir[0], g_cameraData.lightDir[1],
@@ -218,6 +240,7 @@ bool SaveScene(const std::string &path) {
     j["ibl"]["source"] = (ibl.GetIBLSource() == IBLManager::IBLSource::File)
                              ? "File"
                              : "PragueSkyModel";
+    j["ibl"]["filePath"] = ibl.GetEnvironmentMapPath();
     j["ibl"]["visibility"] = ibl.GetSkyVisibility();
     j["ibl"]["albedo"] = ibl.GetSkyAlbedo();
     j["ibl"]["solarElevation"] = ibl.GetSolarAltitude();
@@ -226,6 +249,11 @@ bool SaveScene(const std::string &path) {
     j["ibl"]["skyIntensity"] = ibl.GetSkyIntensity();
     j["ibl"]["sunIntensity"] = ibl.GetSunIntensity();
     j["ibl"]["sunSize"] = ibl.GetSunSize();
+    j["ibl"]["physicalCalibration"] = ibl.IsPhysicalCalibrationEnabled();
+    j["ibl"]["iblRotationDegrees"] = ibl.GetIblRotationDegrees();
+    j["ibl"]["envSolidAngleSampling"] = ibl.GetEnvSolidAngleSampling();
+    j["ibl"]["fileSunIntensity"] = ibl.GetFileSunIntensity();
+    j["ibl"]["fileSunRadiusDeg"] = ibl.GetFileSunRadiusDeg();
 
     // 5. Materials (Flat list of all materials)
     for (const auto &mat : g_loadedMaterials) {
@@ -261,9 +289,13 @@ bool SaveScene(const std::string &path) {
       // we would save texture paths/names.
       m["diffuseTexture"] = mat.diffuseTexture;
       m["reflectionTexture"] = mat.reflectionTexture;
+      m["refractionTexture"] = mat.refractionTexture;
       m["normalTexture"] = mat.normalTexture;
       m["emissiveTexture"] = mat.emissiveTexture;
+      m["occlusionTexture"] = mat.occlusionTexture;
       m["metalRoughTexture"] = mat.metalRoughTexture;
+      m["doubleSided"] = mat.doubleSided;
+      m["alphaMode"] = mat.alphaMode;
 
       j["materials"].push_back(m);
     }
@@ -274,6 +306,7 @@ bool SaveScene(const std::string &path) {
       n["name"] = node.name;
       n["sourcePath"] = node.sourcePath;
       n["visible"] = node.visible;
+      n["selected"] = node.selected;
       n["meshIndices"] = node.meshIndices;
       std::vector<float> transform(16);
       for (int i = 0; i < 16; ++i)
@@ -306,6 +339,8 @@ bool SaveScene(const std::string &path) {
       m["materialIndex"] = mesh.materialIndex;
       m["vertexCount"] = mesh.vertexCount;
       m["indexCount"] = mesh.indexCount;
+      m["minBound"] = {mesh.minBound[0], mesh.minBound[1], mesh.minBound[2]};
+      m["maxBound"] = {mesh.maxBound[0], mesh.maxBound[1], mesh.maxBound[2]};
       m["vertices"] = Base64Encode(
           reinterpret_cast<const unsigned char *>(mesh.cpuVertices.data()),
           mesh.cpuVertices.size() * sizeof(Asset::Vertex));
@@ -398,6 +433,18 @@ bool LoadScene(const std::string &path) {
 
           Asset::GpuMesh mesh = Asset::LoadMeshFromMemory(vertices, indices);
           mesh.materialIndex = m.value("materialIndex", -1);
+          if (m.contains("minBound") && m["minBound"].is_array() &&
+              m["minBound"].size() >= 3) {
+            mesh.minBound[0] = m["minBound"][0];
+            mesh.minBound[1] = m["minBound"][1];
+            mesh.minBound[2] = m["minBound"][2];
+          }
+          if (m.contains("maxBound") && m["maxBound"].is_array() &&
+              m["maxBound"].size() >= 3) {
+            mesh.maxBound[0] = m["maxBound"][0];
+            mesh.maxBound[1] = m["maxBound"][1];
+            mesh.maxBound[2] = m["maxBound"][2];
+          }
           g_loadedMeshes.push_back(mesh);
         }
         embeddedMeshCount = g_loadedMeshes.size();
@@ -421,6 +468,8 @@ bool LoadScene(const std::string &path) {
         g_cameraData.up[2] = c["up"][2];
       }
       g_cameraData.fov = c.value("fov", 60.0f);
+      g_cameraData.nearZ = c.value("nearZ", g_cameraData.nearZ);
+      g_cameraData.farZ = c.value("farZ", g_cameraData.farZ);
       g_cameraData.intensity = c.value("intensity", g_cameraData.intensity);
       g_cameraData.intensity =
           (std::clamp)(g_cameraData.intensity, 1e-5f, 10.0f);
@@ -436,6 +485,8 @@ bool LoadScene(const std::string &path) {
       g_cameraData.noiseThreshold = c.value("noiseThreshold", 0.05f);
       g_cameraData.debugVisualizationMode =
           c.value("debugVisualizationMode", 0.0f);
+      g_cameraData.sampleEnvSolidAngle =
+          c.value("sampleEnvSolidAngle", g_cameraData.sampleEnvSolidAngle);
 
       // restore exposure/physical camera settings as well
       bool autoExp = c.value("autoExposure", DxrRenderer::GetAutoExposure());
@@ -447,6 +498,9 @@ bool LoadScene(const std::string &path) {
       float shutter = c.value("shutterSeconds", 1.0f / 125.0f);
       float aperture = c.value("aperture", 16.0f);
       DxrRenderer::SetPhysicalCameraSettings(iso, shutter, aperture);
+      float exposureComp = c.value("exposureCompensation",
+                                   DxrRenderer::GetExposureCompensation());
+      DxrRenderer::SetExposureCompensation(exposureComp);
     }
 
     // 2.5 Settings
@@ -456,6 +510,15 @@ bool LoadScene(const std::string &path) {
       g_camSpeed = s.value("camSpeed", g_camSpeed);
       g_mouseSensitivity = s.value("mouseSensitivity", g_mouseSensitivity);
       g_drawGrid = s.value("drawGrid", g_drawGrid);
+      g_debugMode = s.value("debugView", g_debugMode);
+    }
+
+    if (j.contains("sky")) {
+      auto s = j["sky"];
+      g_timeOfDay = s.value("timeOfDay", g_timeOfDay);
+      g_northOffset = s.value("northOffset", g_northOffset);
+      g_latitudeDeg = s.value("latitudeDeg", g_latitudeDeg);
+      g_dayOfYear = s.value("dayOfYear", g_dayOfYear);
     }
 
     if (j.contains("clouds")) {
@@ -496,6 +559,16 @@ bool LoadScene(const std::string &path) {
           "mode", (int)StreamlineManager::Mode::Off));
       DX12Context::g_streamline.SetQuality((StreamlineManager::Quality)sl.value(
           "quality", (int)StreamlineManager::Quality::Balanced));
+    }
+
+    if (j.contains("dxr")) {
+      auto d = j["dxr"];
+      DxrRenderer::SetDenoiserMode((DxrRenderer::DenoiserMode)d.value(
+          "denoiserMode", (int)DxrRenderer::GetDenoiserMode()));
+      DxrRenderer::SetOidnQuality((OidnDenoiser::Quality)d.value(
+          "oidnQuality", (int)DxrRenderer::GetOidnQuality()));
+      DxrRenderer::SetRrJitterScale(
+          d.value("rrJitterScale", DxrRenderer::GetRrJitterScale()));
     }
 
     if (j.contains("lighting")) {
@@ -568,9 +641,22 @@ bool LoadScene(const std::string &path) {
     if (j.contains("ibl")) {
       auto &ibl = IBLManager::Get();
       auto i = j["ibl"];
-      ibl.SetIBLSource((i["source"] == "File")
-                           ? IBLManager::IBLSource::File
-                           : IBLManager::IBLSource::PragueSkyModel);
+      const bool wantsFile = (i["source"] == "File");
+      if (wantsFile) {
+        std::string iblPath = i.value("filePath", std::string());
+        bool loadedFile = false;
+        if (!iblPath.empty() && fs::exists(iblPath)) {
+          loadedFile = ibl.LoadEnvironmentMap(iblPath);
+        }
+        if (!loadedFile) {
+          fprintf(stderr,
+                  "LoadScene: file IBL requested but missing/unloadable path: "
+                  "%s\n",
+                  iblPath.c_str());
+        }
+      }
+      ibl.SetIBLSource(wantsFile ? IBLManager::IBLSource::File
+                                 : IBLManager::IBLSource::PragueSkyModel);
       ibl.SetSkyVisibility(i.value("visibility", 30.0f));
       ibl.SetSkyAlbedo(i.value("albedo", 0.5f));
       ibl.SetSolarAltitude(i.value("solarElevation", 0.5f));
@@ -579,6 +665,16 @@ bool LoadScene(const std::string &path) {
       ibl.SetSkyIntensity(i.value("skyIntensity", 1.0f));
       ibl.SetSunIntensity(i.value("sunIntensity", 1.0f));
       ibl.SetSunSize(i.value("sunSize", 2.0f));
+      ibl.SetPhysicalCalibrationEnabled(
+          i.value("physicalCalibration", ibl.IsPhysicalCalibrationEnabled()));
+      ibl.SetIblRotationDegrees(
+          i.value("iblRotationDegrees", ibl.GetIblRotationDegrees()));
+      ibl.SetEnvSolidAngleSampling(
+          i.value("envSolidAngleSampling", ibl.GetEnvSolidAngleSampling()));
+      ibl.SetFileSunIntensity(
+          i.value("fileSunIntensity", ibl.GetFileSunIntensity()));
+      ibl.SetFileSunRadiusDeg(
+          i.value("fileSunRadiusDeg", ibl.GetFileSunRadiusDeg()));
       ibl.UpdateSkyModel();
     }
 
@@ -602,6 +698,7 @@ bool LoadScene(const std::string &path) {
             for (int i = 0; i < 16; ++i)
               node.transform[i] = n["transform"][i];
           }
+          node.selected = n.value("selected", false);
           auto &sceneNodes =
               const_cast<std::vector<Scene::Node> &>(Scene::GetNodes());
           sceneNodes.push_back(node);
@@ -623,6 +720,7 @@ bool LoadScene(const std::string &path) {
                 for (int i = 0; i < 16; ++i)
                   node.transform[i] = n["transform"][i];
               }
+              node.selected = n.value("selected", false);
             }
           }
           continue;
@@ -642,6 +740,7 @@ bool LoadScene(const std::string &path) {
                 for (int i = 0; i < 16; ++i)
                   node.transform[i] = n["transform"][i];
               }
+              node.selected = n.value("selected", false);
               fprintf(
                   stderr,
                   "LoadScene: Successfully imported %s and updated node '%s'\n",
@@ -746,6 +845,11 @@ bool LoadScene(const std::string &path) {
           mat.reflectionTexture =
               (tidx >= 0 && tidx < (int)g_loadedTextures.size()) ? tidx : -1;
         }
+        if (sm.contains("refractionTexture")) {
+          int tidx = sm["refractionTexture"];
+          mat.refractionTexture =
+              (tidx >= 0 && tidx < (int)g_loadedTextures.size()) ? tidx : -1;
+        }
         if (sm.contains("normalTexture")) {
           int tidx = sm["normalTexture"];
           mat.normalTexture =
@@ -756,11 +860,18 @@ bool LoadScene(const std::string &path) {
           mat.emissiveTexture =
               (tidx >= 0 && tidx < (int)g_loadedTextures.size()) ? tidx : -1;
         }
+        if (sm.contains("occlusionTexture")) {
+          int tidx = sm["occlusionTexture"];
+          mat.occlusionTexture =
+              (tidx >= 0 && tidx < (int)g_loadedTextures.size()) ? tidx : -1;
+        }
         if (sm.contains("metalRoughTexture")) {
           int tidx = sm["metalRoughTexture"];
           mat.metalRoughTexture =
               (tidx >= 0 && tidx < (int)g_loadedTextures.size()) ? tidx : -1;
         }
+        mat.doubleSided = sm.value("doubleSided", mat.doubleSided);
+        mat.alphaMode = sm.value("alphaMode", mat.alphaMode);
       }
     }
 

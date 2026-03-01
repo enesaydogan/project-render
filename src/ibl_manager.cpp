@@ -104,6 +104,7 @@ bool IBLManager::LoadEnvironmentMap(const std::string &path) {
             << tex.height << ")" << std::endl;
 
   m_fileTexture = tex;
+  m_envMapPath = path;
 
   // Switching to file-based IBL automatically sets the source and disables the
   // analytic sun.  The sun parameters are cached so we can restore them when
