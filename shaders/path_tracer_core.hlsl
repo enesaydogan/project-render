@@ -503,9 +503,9 @@ void RayGen()
             }
 
             // C. Final ReSTIR DI Shading & Finalization
-            float3 L_final;
-            float dist_final;
-            float3 radiance_final;
+            float3 L_final = float3(0.0, 1.0, 0.0);
+            float dist_final = 1e10;
+            float3 radiance_final = float3(0.0, 0.0, 0.0);
 
             if (res.lightIndex == 0xFFFFFFFF) {
                 L_final = normalize(lightDir.xyz);
@@ -543,7 +543,7 @@ void RayGen()
             else      { g_reservoir0[launchIndex.xy] = packed_res; SHADER_COUNTER_ADD(SHADER_COUNTER_RESERVOIR_WRITES, 1); }
 
             // D. Apply Visibility
-            if (p_target_final > 0.0) {
+            if (p_target_final > 0.0 && isfinite(dist_final)) {
                 RayDesc shadowRay;
                 shadowRay.Origin = P + N * 0.002;
                 
@@ -554,7 +554,7 @@ void RayGen()
                 }
                 
                 shadowRay.TMin = 0.001;
-                shadowRay.TMax = dist_final - 0.002;
+                shadowRay.TMax = max(0.001, dist_final - 0.002);
                 
                 RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
                 q.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, shadowRay);
@@ -694,12 +694,12 @@ void RayGen()
             }
 
             float NdotL_nee = saturate(dot(N, L_nee));
-            if (NdotL_nee > 0) {
+            if (NdotL_nee > 0 && isfinite(dist_nee)) {
                 RayDesc shadowRay;
                 shadowRay.Origin = P + N * 0.002;
                 shadowRay.Direction = L_nee;
                 shadowRay.TMin = 0.001;
-                shadowRay.TMax = dist_nee - 0.001;
+                shadowRay.TMax = max(0.001, dist_nee - 0.001);
                 
                 RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q_nee;
                 q_nee.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, shadowRay);

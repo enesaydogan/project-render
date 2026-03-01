@@ -927,6 +927,123 @@ static void EnsureAsyncComputeContext() {
   s_asyncRestirAvailable = true;
 }
 
+static void DisableAsyncRestir(const char *reason) {
+  if (reason && reason[0] != '\0') {
+    fprintf(stderr, "DxrRenderer: %s\n", reason);
+  }
+  s_asyncRestirPending = false;
+  s_asyncComputePendingFenceWait = 0;
+  s_asyncRestirAvailable = false;
+  s_asyncRestirInitTried = true;
+  if (s_asyncComputeFenceEvent) {
+    CloseHandle(s_asyncComputeFenceEvent);
+    s_asyncComputeFenceEvent = nullptr;
+  }
+  s_asyncComputeList.Reset();
+  s_asyncComputeAllocator.Reset();
+  s_asyncComputeFence.Reset();
+  s_asyncDirectFence.Reset();
+  s_asyncComputeQueue.Reset();
+}
+
+static bool EnsureAsyncRestirCameraBuffer() {
+  if (s_asyncRestirCameraCB) {
+    return true;
+  }
+  if (!s_device) {
+    return false;
+  }
+
+  D3D12_HEAP_PROPERTIES uploadProps = {};
+  uploadProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+  D3D12_RESOURCE_DESC cbDesc = {};
+  cbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+  cbDesc.Width = (sizeof(CameraCB) + 255u) & ~255u;
+  cbDesc.Height = 1;
+  cbDesc.DepthOrArraySize = 1;
+  cbDesc.MipLevels = 1;
+  cbDesc.SampleDesc.Count = 1;
+  cbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+  HRESULT hr = s_device->CreateCommittedResource(
+      &uploadProps, D3D12_HEAP_FLAG_NONE, &cbDesc,
+      D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+      IID_PPV_ARGS(&s_asyncRestirCameraCB));
+  if (FAILED(hr)) {
+    fprintf(stderr,
+            "DxrRenderer: Failed to create async ReSTIR camera buffer "
+            "(0x%08x)\n",
+            (unsigned)hr);
+    s_asyncRestirCameraCB.Reset();
+    return false;
+  }
+  return true;
+}
+
+static bool UploadAsyncRestirCamera(const CameraCB &cameraSnapshot) {
+  if (!EnsureAsyncRestirCameraBuffer()) {
+    return false;
+  }
+  void *dst = nullptr;
+  HRESULT hr = s_asyncRestirCameraCB->Map(0, nullptr, &dst);
+  if (FAILED(hr) || !dst) {
+    fprintf(stderr,
+            "DxrRenderer: Failed to map async ReSTIR camera buffer "
+            "(0x%08x)\n",
+            (unsigned)hr);
+    return false;
+  }
+  memcpy(dst, &cameraSnapshot, sizeof(CameraCB));
+  s_asyncRestirCameraCB->Unmap(0, nullptr);
+  return true;
+}
+
+static void WaitForAsyncRestirIdleForLightUpdates() {
+  if (!s_asyncRestirAvailable || !s_asyncComputeFence) {
+    return;
+  }
+
+  // Drop a not-yet-submitted pass if light data changed this frame.
+  s_asyncRestirPending = false;
+
+  UINT64 waitFence = s_asyncComputePendingFenceWait;
+  if (waitFence == 0 && s_asyncComputeFenceValue > 1) {
+    waitFence = s_asyncComputeFenceValue - 1;
+  }
+  if (waitFence == 0) {
+    return;
+  }
+
+  if (s_asyncComputeFence->GetCompletedValue() >= waitFence) {
+    s_asyncComputePendingFenceWait = 0;
+    return;
+  }
+
+  if (!s_asyncComputeFenceEvent) {
+    DisableAsyncRestir(
+        "Async ReSTIR fence event missing while syncing light updates; "
+        "falling back to direct-queue ReSTIR.");
+    return;
+  }
+
+  HRESULT hr = s_asyncComputeFence->SetEventOnCompletion(waitFence,
+                                                         s_asyncComputeFenceEvent);
+  if (FAILED(hr)) {
+    DisableAsyncRestir(
+        "Failed to wait for async ReSTIR during light update; falling back "
+        "to direct-queue ReSTIR.");
+    return;
+  }
+  if (WaitForSingleObject(s_asyncComputeFenceEvent, 5000) == WAIT_TIMEOUT) {
+    DisableAsyncRestir(
+        "Timeout waiting for async ReSTIR during light update; falling back "
+        "to direct-queue ReSTIR.");
+    return;
+  }
+  s_asyncComputePendingFenceWait = 0;
+}
+
 static void DispatchRestirSpatialPasses(ID3D12GraphicsCommandList4 *list,
                                         ID3D12Resource *cameraCB) {
   if (!list || !cameraCB || !s_srvHeap || !s_device) {
@@ -2849,6 +2966,8 @@ void BuildAccelerationStructures(
 }
 
 void UpdateLights(const std::vector<Light> &lights) {
+  WaitForAsyncRestirIdleForLightUpdates();
+
   if (lights.empty()) {
     if (s_lightCount != 0) {
       s_lightCount = 0;
@@ -3171,6 +3290,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   s_lastJitterX = jitterX;
   s_lastJitterY = jitterY;
 
+  CameraCB asyncCameraSnapshot = {};
+  bool hasAsyncCameraSnapshot = false;
+
   // Update frame count in camera CB if present
   if (cameraCB) {
     void *pData = nullptr;
@@ -3191,6 +3313,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       // Streamline flags used by raytracing shaders.
       cam->dlssEnabled = dlssActive ? 1.0f : 0.0f;
       cam->dlssRayReconstruction = rrActive ? 1.0f : 0.0f;
+      asyncCameraSnapshot = *cam;
+      hasAsyncCameraSnapshot = true;
 
       cameraCB->Unmap(0, nullptr);
     }
@@ -3566,10 +3690,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   // Phase 4: decoupled ReSTIR DI temporal/spatial reuse in a dedicated compute
   // pass. RayGen now writes initial candidates, and this pass performs reuse.
   if (didDispatchRays) {
-    if (cameraCB && s_asyncRestirAvailable) {
+    if (cameraCB && s_asyncRestirAvailable && hasAsyncCameraSnapshot &&
+        UploadAsyncRestirCamera(asyncCameraSnapshot)) {
       // Submit on async queue after this frame's direct list executes.
       s_asyncRestirPending = true;
-      s_asyncRestirCameraCB = cameraCB;
     } else if (cameraCB) {
       DispatchRestirSpatialPasses(dxrList.Get(), cameraCB);
     }
@@ -4370,7 +4494,6 @@ void SubmitAsyncRestirWork() {
       !s_asyncDirectFence || !s_asyncComputeFence || !s_asyncComputeAllocator ||
       !s_asyncComputeList || !s_asyncRestirCameraCB || !s_srvHeap) {
     s_asyncRestirPending = false;
-    s_asyncRestirCameraCB.Reset();
     return;
   }
 
@@ -4381,47 +4504,85 @@ void SubmitAsyncRestirWork() {
   if (previousAsyncFence > 0 &&
       s_asyncComputeFence->GetCompletedValue() < previousAsyncFence) {
     if (s_asyncComputeFenceEvent) {
-      s_asyncComputeFence->SetEventOnCompletion(previousAsyncFence,
-                                                s_asyncComputeFenceEvent);
+      HRESULT hrWait = s_asyncComputeFence->SetEventOnCompletion(
+          previousAsyncFence, s_asyncComputeFenceEvent);
+      if (FAILED(hrWait)) {
+        DisableAsyncRestir(
+            "Failed to wait for previous async ReSTIR pass; falling back to "
+            "direct-queue ReSTIR.");
+        return;
+      }
       if (WaitForSingleObject(s_asyncComputeFenceEvent, 5000) == WAIT_TIMEOUT) {
-        fprintf(
-            stderr,
-            "DxrRenderer: Timeout waiting for previous async ReSTIR pass.\n");
-        s_asyncRestirPending = false;
-        s_asyncRestirCameraCB.Reset();
+        DisableAsyncRestir(
+            "Timeout waiting for previous async ReSTIR pass; falling back to "
+            "direct-queue ReSTIR.");
         return;
       }
     } else {
+      DisableAsyncRestir(
+          "Async ReSTIR fence event missing; falling back to direct-queue "
+          "ReSTIR.");
       return;
     }
   }
 
-  ThrowIfFailed(s_asyncComputeAllocator->Reset());
-  ThrowIfFailed(
-      s_asyncComputeList->Reset(s_asyncComputeAllocator.Get(), nullptr));
+  HRESULT hr = s_asyncComputeAllocator->Reset();
+  if (FAILED(hr)) {
+    DisableAsyncRestir(
+        "Async ReSTIR allocator reset failed; falling back to direct-queue "
+        "ReSTIR.");
+    return;
+  }
+  hr = s_asyncComputeList->Reset(s_asyncComputeAllocator.Get(), nullptr);
+  if (FAILED(hr)) {
+    DisableAsyncRestir(
+        "Async ReSTIR command list reset failed; falling back to direct-queue "
+        "ReSTIR.");
+    return;
+  }
 
   DispatchRestirSpatialPasses(s_asyncComputeList.Get(),
                               s_asyncRestirCameraCB.Get());
 
-  ThrowIfFailed(s_asyncComputeList->Close());
+  hr = s_asyncComputeList->Close();
+  if (FAILED(hr)) {
+    DisableAsyncRestir(
+        "Async ReSTIR command list close failed; falling back to direct-queue "
+        "ReSTIR.");
+    return;
+  }
 
   // Run compute only after this frame's direct queue work has completed.
   const UINT64 directFenceValue = s_asyncDirectFenceValue++;
-  ThrowIfFailed(
-      s_commandQueue->Signal(s_asyncDirectFence.Get(), directFenceValue));
-  ThrowIfFailed(
-      s_asyncComputeQueue->Wait(s_asyncDirectFence.Get(), directFenceValue));
+  hr = s_commandQueue->Signal(s_asyncDirectFence.Get(), directFenceValue);
+  if (FAILED(hr)) {
+    DisableAsyncRestir(
+        "Async ReSTIR direct-queue signal failed; falling back to direct-queue "
+        "ReSTIR.");
+    return;
+  }
+  hr = s_asyncComputeQueue->Wait(s_asyncDirectFence.Get(), directFenceValue);
+  if (FAILED(hr)) {
+    DisableAsyncRestir(
+        "Async ReSTIR compute-queue wait failed; falling back to direct-queue "
+        "ReSTIR.");
+    return;
+  }
 
   ID3D12CommandList *lists[] = {s_asyncComputeList.Get()};
   s_asyncComputeQueue->ExecuteCommandLists(1, lists);
 
   const UINT64 computeFenceValue = s_asyncComputeFenceValue++;
-  ThrowIfFailed(s_asyncComputeQueue->Signal(s_asyncComputeFence.Get(),
-                                            computeFenceValue));
+  hr = s_asyncComputeQueue->Signal(s_asyncComputeFence.Get(), computeFenceValue);
+  if (FAILED(hr)) {
+    DisableAsyncRestir(
+        "Async ReSTIR compute-queue signal failed; falling back to direct-queue "
+        "ReSTIR.");
+    return;
+  }
   s_asyncComputePendingFenceWait = computeFenceValue;
 
   s_asyncRestirPending = false;
-  s_asyncRestirCameraCB.Reset();
 }
 
 bool ExportTonemappedFrameToPng(const std::wstring &filePath) {
