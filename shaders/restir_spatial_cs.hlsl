@@ -1,18 +1,10 @@
-// shaders/restir_spatial_cs.hlsl
-// Dedicated ReSTIR DI temporal/spatial reuse pass.
-
 #include "restir_lib.hlsl"
+#include "raytracing/common.hlsli"
+#include "brdf_lib.hlsl"
+#include "lights_lib.hlsl"
 
-// Keep Camera layout-compatible with raytracing/common.hlsli (b0) while only
-// exposing fields this compute pass needs.
-cbuffer Camera : register(b0)
-{
-    float globalFrameCount : packoffset(c4.y);
-    float dlssRayReconstruction : packoffset(c10.w);
-}
-
-RWTexture2D<float> g_depth : register(u10);
-RWTexture2D<float4> g_normalRoughnessOut : register(u13);
+// Additional resources for ReSTIR
+StructuredBuffer<Light> g_lights : register(t5000);
 
 RWTexture2D<float4> g_reservoir0 : register(u2);
 RWTexture2D<float4> g_reservoir1 : register(u3);
@@ -84,6 +76,37 @@ void LoadSharedSlot(uint2 slot, int2 pix, uint2 dim, bool flip)
     s_prevReservoirTile[idx] = flip ? g_reservoir0[p] : g_reservoir1[p];
 }
 
+// Reconstruct world-space position from pixel UV + linear depth.
+float3 ReconstructWorldPos(uint2 pix, uint2 dim, float depth)
+{
+    float2 uv = ((float2)pix + 0.5) / (float2)dim;
+    float2 ndc = uv * 2.0 - 1.0;
+    ndc.y = -ndc.y; // flip Y
+
+    float halfH = tan(fov * 0.5);
+    float halfW = halfH * aspect;
+
+    float3 right = normalize(cross(camForward, camUp));
+    float3 up    = cross(right, camForward);
+
+    float3 dir = normalize(camForward + right * (ndc.x * halfW) + up * (ndc.y * halfH));
+    return camPos + dir * depth;
+}
+
+// Evaluate a simplified p_target for a reservoir candidate at the given surface.
+float EvalCandidatePTarget(uint candidateLightIndex, float3 N, float3 P)
+{
+    if (candidateLightIndex != 0xFFFFFFFF && (uint)lightCount > 0) {
+        uint lIdx = candidateLightIndex % (uint)lightCount;
+        Light l = g_lights[lIdx];
+        LightSample ls = evaluate_light(l, P);
+        return max(0.0, length(ls.radiance * saturate(dot(N, ls.L))));
+    } else if (candidateLightIndex == 0xFFFFFFFF) {
+        return max(0.0, length(lightColor.rgb * lightColor.w * saturate(dot(N, lightDir.xyz))));
+    }
+    return 1.0;
+}
+
 [numthreads(8, 8, 1)]
 void CSMain(uint3 dtid : SV_DispatchThreadID,
             uint3 gtid : SV_GroupThreadID,
@@ -94,7 +117,6 @@ void CSMain(uint3 dtid : SV_DispatchThreadID,
     uint frame = (uint)globalFrameCount;
     bool flip = (frame & 1u) == 1u;
     if (dlssRayReconstruction > 0.5) {
-        // Keep RR path minimally correlated.
         return;
     }
 
@@ -141,25 +163,29 @@ void CSMain(uint3 dtid : SV_DispatchThreadID,
     uint2 pix = uint2(localPix);
     RNG rng = init_rng(pix + uint2(0x51D2u, 0xC3A5u), frame ^ 0xBA5Eu);
 
+    float4 centerNormalRoughness = s_normalTile[tile_index(sharedCenter)];
+    float3 N = normalize(centerNormalRoughness.xyz);
+    float centerDepth = s_depthTile[tile_index(sharedCenter)];
+
+    // Reconstruct world position for correct local light evaluation
+    float3 P = ReconstructWorldPos(pix, dim, centerDepth);
+
     float4 curData = flip ? g_reservoir1[pix] : g_reservoir0[pix];
     Reservoir res = unpack_reservoir(curData);
     if (res.M == 0) {
-        // No candidate from raygen; keep as-is.
         return;
     }
 
-    // Temporal reuse from previous ping-pong side.
+    // Temporal reuse
     if (frame > 0) {
         float4 prevData = s_prevReservoirTile[tile_index(sharedCenter)];
         Reservoir prev = unpack_reservoir(prevData);
         prev.M = min(prev.M, 30);
-        combine_reservoirs(res, prev, 1.0, rng);
+        float p_target = EvalCandidatePTarget(prev.lightIndex, N, P);
+        combine_reservoirs(res, prev, p_target, rng);
     }
 
-    float4 centerNormal = s_normalTile[tile_index(sharedCenter)];
-    float centerDepth = s_depthTile[tile_index(sharedCenter)];
-
-    // Spatial reuse from previous frame neighbors.
+    // Spatial reuse from 4 immediate neighbors
     static const int2 kOffsets[4] = {
         int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1)
     };
@@ -168,7 +194,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID,
         uint2 sN = uint2(int2(sharedCenter) + kOffsets[i]);
         float4 neighNormal = s_normalTile[tile_index(sN)];
         float neighDepth = s_depthTile[tile_index(sN)];
-        if (!IsSpatiallyCompatibleData(centerNormal, centerDepth,
+        if (!IsSpatiallyCompatibleData(centerNormalRoughness, centerDepth,
                                        neighNormal, neighDepth,
                                        0.96, 0.006)) {
             continue;
@@ -177,10 +203,13 @@ void CSMain(uint3 dtid : SV_DispatchThreadID,
         float4 neighData = s_prevReservoirTile[tile_index(sN)];
         Reservoir neigh = unpack_reservoir(neighData);
         neigh.M = min(neigh.M, 8);
-        combine_reservoirs(res, neigh, 1.0, rng);
+        float p_target = EvalCandidatePTarget(neigh.lightIndex, N, P);
+        combine_reservoirs(res, neigh, p_target, rng);
     }
 
-    finalize_reservoir(res, 1.0);
+    float final_p_target = EvalCandidatePTarget(res.lightIndex, N, P);
+    finalize_reservoir(res, final_p_target);
+
     float4 outData = pack_reservoir(res);
     if (flip) {
         g_reservoir1[pix] = outData;

@@ -18,12 +18,13 @@
 #include "material_editor.h"
 #include "oidn_denoiser.h"
 #include "raster_renderer.h"
+#include "resource.h"
 #include "scene.h"
 #include "scene_io.h"
 #include <algorithm>
 #include <chrono>
-#include <codecvt>
 #include <cmath>
+#include <codecvt>
 #include <commctrl.h>
 #include <commdlg.h>
 #include <filesystem>
@@ -31,7 +32,7 @@
 #include <stdio.h>
 #include <string>
 #include <vector>
-#include "resource.h"
+
 
 // Forward-declare ImGui Win32 WndProc handler (imgui_impl_win32.h documents
 // this should be declared by user)
@@ -1176,15 +1177,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   wcx.lpszClassName = CLASS_NAME;
 
   // load icon defined in resources/app.rc (large + small)
-  HICON hIcon = (HICON)LoadImageW(hInstance,
-                                  MAKEINTRESOURCEW(IDI_APP_ICON),
-                                  IMAGE_ICON,
-                                  0, 0,
-                                  LR_DEFAULTSIZE);
+  HICON hIcon = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON),
+                                  IMAGE_ICON, 0, 0, LR_DEFAULTSIZE);
   if (!hIcon) {
-    fprintf(stderr, "Main: failed to load icon resource (0x%08x)\n", GetLastError());
+    fprintf(stderr, "Main: failed to load icon resource (0x%08x)\n",
+            GetLastError());
   }
-  wcx.hIcon   = hIcon; // big icon for Alt-Tab/taskbar
+  wcx.hIcon = hIcon;   // big icon for Alt-Tab/taskbar
   wcx.hIconSm = hIcon; // small icon for title bar
 
   RegisterClassExW(&wcx);
@@ -1247,7 +1246,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   // ReSTIR DI: Initialize test lights for Phase 2
   {
     // User requested to remove all lights except the sun
-    std::vector<GpuLight> testLights;
+    std::vector<Light> testLights;
     DxrRenderer::UpdateLights(testLights);
   }
 
@@ -1281,9 +1280,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       const float declRad = declDeg * DEG2RAD;
       const float hourAngleRad = (g_timeOfDay - 12.0f) * 15.0f * DEG2RAD;
 
-      float sinEl = std::sin(latitudeRad) * std::sin(declRad) +
-                    std::cos(latitudeRad) * std::cos(declRad) *
-                        std::cos(hourAngleRad);
+      float sinEl =
+          std::sin(latitudeRad) * std::sin(declRad) +
+          std::cos(latitudeRad) * std::cos(declRad) * std::cos(hourAngleRad);
       sinEl = (std::clamp)(sinEl, -1.0f, 1.0f);
       float elRad = std::asin(sinEl);
 
@@ -1465,8 +1464,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           D3D12_RANGE readRange = {0, 0};
           const bool coreMapped = SUCCEEDED(g_materialStructuredBuffer->Map(
               0, &readRange, reinterpret_cast<void **>(&pCore)));
-          const bool extraMapped = SUCCEEDED(g_materialExtraStructuredBuffer->Map(
-              0, &readRange, reinterpret_cast<void **>(&pExtra)));
+          const bool extraMapped =
+              SUCCEEDED(g_materialExtraStructuredBuffer->Map(
+                  0, &readRange, reinterpret_cast<void **>(&pExtra)));
           if (coreMapped && extraMapped) {
             for (size_t i = 0; i < g_loadedMaterials.size() && i < 16384; ++i) {
               const auto &srcMat = g_loadedMaterials[i];
@@ -1479,15 +1479,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
               const float roughness =
                   (std::clamp)(1.0f - srcMat.reflectionGlossiness, 0.0f, 1.0f);
-              const float metalness = (std::clamp)(srcMat.metalness, 0.0f, 1.0f);
-              const float refrMax = (std::max)(
-                  srcMat.refractionColor[0],
-                  (std::max)(srcMat.refractionColor[1], srcMat.refractionColor[2]));
+              const float metalness =
+                  (std::clamp)(srcMat.metalness, 0.0f, 1.0f);
+              const float refrMax =
+                  (std::max)(srcMat.refractionColor[0],
+                             (std::max)(srcMat.refractionColor[1],
+                                        srcMat.refractionColor[2]));
               const float transmission =
                   (std::clamp)(refrMax, 0.0f, 1.0f) * (1.0f - metalness);
 
               UINT flags = 0;
-              if (srcMat.alphaMode != "OPAQUE" || srcMat.diffuseColor[3] < 0.999f) {
+              if (srcMat.alphaMode != "OPAQUE" ||
+                  srcMat.diffuseColor[3] < 0.999f) {
                 flags |= kMaterialFlagAlphaTested;
               }
               if (srcMat.thinWalled > 0.5f) {
@@ -1521,12 +1524,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
               mat.packedTextures[0] =
                   PackTexPair(srcMat.diffuseTexture, srcMat.normalTexture);
-              mat.packedTextures[1] =
-                  PackTexPair(srcMat.metalRoughTexture, srcMat.occlusionTexture);
+              mat.packedTextures[1] = PackTexPair(srcMat.metalRoughTexture,
+                                                  srcMat.occlusionTexture);
               mat.packedTextures[2] =
                   PackTexPair(srcMat.emissiveTexture, srcMat.refractionTexture);
-              mat.packedTextures[3] =
-                  PackTexPair(srcMat.reflectionTexture, -1);
+              mat.packedTextures[3] = PackTexPair(srcMat.reflectionTexture, -1);
 
               DxrMaterialExtraData extra = {};
               extra.archvizParams0[0] = srcMat.clearcoat;
@@ -1591,13 +1593,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         }
 
         bool dxrOk = DxrRenderer::RenderFrame(
-          DX12Context::g_commandList.Get(),
-          DX12Context::g_frameResources[DX12Context::g_frameIndex]
-            .commandAllocator.Get(),
-          DX12Context::g_frameIndex, dxrTarget, dxrRtv,
-          g_cameraConstantBuffer.Get(), g_materialStructuredBuffer.Get(),
-          g_texturesGpuStart, g_textureDescriptorCount, activeMeshes,
-          g_meshStructuredBuffer.Get(), g_materialExtraStructuredBuffer.Get());
+            DX12Context::g_commandList.Get(),
+            DX12Context::g_frameResources[DX12Context::g_frameIndex]
+                .commandAllocator.Get(),
+            DX12Context::g_frameIndex, dxrTarget, dxrRtv,
+            g_cameraConstantBuffer.Get(), g_materialStructuredBuffer.Get(),
+            g_texturesGpuStart, g_textureDescriptorCount, activeMeshes,
+            g_meshStructuredBuffer.Get(),
+            g_materialExtraStructuredBuffer.Get());
         if (dxrOk) {
           if (g_renderExportJob.active &&
               dxrTarget == g_exportRenderTarget.Get()) {
@@ -1887,7 +1890,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
     // Ensure UI always targets the swapchain backbuffer RTV.
     DX12Context::g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE,
-                             nullptr);
+                                                   nullptr);
 
     ID3D12DescriptorHeap *ppHeaps[] = {g_cbvSrvAllocator.Heap()};
     DX12Context::g_commandList->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
@@ -2074,8 +2077,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     g_cloudManager.Update(dt, DX12Context::g_frameIndex);
 
     // Editor UI (moved to editor_ui.cpp)
-    DrawEditorUI(g_fps, g_timeOfDay, g_northOffset, g_latitudeDeg,
-           g_dayOfYear);
+    DrawEditorUI(g_fps, g_timeOfDay, g_northOffset, g_latitudeDeg, g_dayOfYear);
 
     // fprintf(stderr, "MainLoop: PopulateCommandList start\n");
     PopulateCommandList();

@@ -5,26 +5,24 @@
 #define LIGHTS_LIB_HLSL
 
 #define LIGHT_TYPE_DIRECTIONAL 0
-#define LIGHT_TYPE_POINT       1
+#define LIGHT_TYPE_OMNI        1
 #define LIGHT_TYPE_SPOT        2
-#define LIGHT_TYPE_AREA        3
+#define LIGHT_TYPE_AREA_RECT   3
+#define LIGHT_TYPE_AREA_DISK   4
+#define LIGHT_TYPE_IES         5
 
 struct Light
 {
     uint type;
     float3 position;
+    float3 emission;
     float3 direction;
-    float intensity;
-    float3 color;
-    float range;
-    float spotAngle; // cos(outer)
-    float spotInnerAngle; // cos(inner)
-    uint meshIndex; // For area lights
-    uint padding;
+    float radius;
+    float innerConeAngle; // cos(inner)
+    float outerConeAngle; // cos(outer)
+    float2 areaExtents;
+    int iesAtlasIndex;
 };
-
-// For now, we use the global directional light from the Camera CB
-// In Phase 2, we will add a StructuredBuffer<Light> for local lights.
 
 struct LightSample
 {
@@ -34,14 +32,122 @@ struct LightSample
     float pdf;        // PDF of sampling this light
 };
 
-// Evaluate a directional light (like the Sun)
-LightSample evaluate_directional_light(float3 lightDir, float3 lightColor, float intensity)
+// IES Atlas resources — uncomment when IES pipeline (Phase 2) is implemented:
+// Texture2DArray<float4> g_iesAtlas : register(t100, space3);
+// SamplerState g_iesSampler : register(s100, space3);
+
+inline LightSample evaluate_directional_light(float3 lightDir, float3 lightColor, float intensity)
 {
     LightSample ls;
     ls.L = normalize(lightDir);
     ls.radiance = lightColor * intensity;
-    ls.dist = 1e10; // "Infinity"
-    ls.pdf = 1.0;   // Dirac delta for directional light
+    ls.dist = 1e10; // "Infinite" distance for directional light
+    ls.pdf = 1.0;   // Treat as delta for NEE
+    return ls;
+}
+
+LightSample evaluate_omni_light(Light light, float3 P)
+{
+    LightSample ls;
+    float3 toLight = light.position - P;
+    ls.dist = length(toLight);
+    ls.L = toLight / max(1e-6, ls.dist);
+    
+    // Inverse square falloff with radius clamping for soft shadows/preventing singularities
+    float distSq = ls.dist * ls.dist;
+    float attenuation = 1.0;
+    if (light.radius > 0.0) {
+        // Soften the falloff near the light source
+        attenuation = 1.0 / (distSq + light.radius * light.radius);
+    } else {
+        attenuation = 1.0 / max(1e-6, distSq);
+    }
+    
+    ls.radiance = light.emission * attenuation;
+    ls.pdf = 1.0; // For point lights, we treat as delta unless we sample area
+    return ls;
+}
+
+LightSample evaluate_spot_light(Light light, float3 P)
+{
+    LightSample ls = evaluate_omni_light(light, P);
+    
+    // Spot light direction is the emission vector (pointing away from the light)
+    // ls.L points from surface TO light, so -ls.L points from light TO surface
+    float cosTheta = dot(-ls.L, normalize(light.direction));
+    float spotScale = smoothstep(light.outerConeAngle, light.innerConeAngle, cosTheta);
+    
+    ls.radiance *= spotScale;
+    return ls;
+}
+
+// IES light evaluation — falls back to omni until IES pipeline (Phase 2) is implemented.
+// When IES textures are loaded, uncomment the atlas declarations above and restore
+// the spherical-mapping + texture lookup here.
+LightSample evaluate_ies_light(Light light, float3 P)
+{
+    // Placeholder: treat as omni light until IES atlas is available
+    return evaluate_omni_light(light, P);
+}
+
+LightSample evaluate_light(Light light, float3 P)
+{
+    if (light.type == LIGHT_TYPE_DIRECTIONAL)
+        // For directional lights, evaluate_directional expects a vector pointing TOWARDS light.
+        // light.direction is the vector pointing AWAY from the light.
+        return evaluate_directional_light(-light.direction, light.emission, 1.0);
+    else if (light.type == LIGHT_TYPE_OMNI)
+        return evaluate_omni_light(light, P);
+    else if (light.type == LIGHT_TYPE_SPOT)
+        return evaluate_spot_light(light, P);
+    else if (light.type == LIGHT_TYPE_IES)
+        return evaluate_ies_light(light, P);
+    else if (light.type == LIGHT_TYPE_AREA_RECT || light.type == LIGHT_TYPE_AREA_DISK)
+    {
+        // For evaluate_light (no random numbers available), approximate area light
+        // as a point light at the center. Use sample_area_light() when random samples are available.
+        return evaluate_omni_light(light, P);
+    }
+    
+    LightSample ls;
+    ls.L = float3(0,1,0);
+    ls.radiance = 0;
+    ls.dist = 1e10;
+    ls.pdf = 0;
+    return ls;
+}
+
+LightSample sample_area_light(Light light, float3 P, float2 xi)
+{
+    LightSample ls;
+    float3 samplePos = light.position;
+    float3 lightNormal = normalize(light.direction);
+    float area = 1.0;
+
+    // Basis for area light orientation
+    float3 forward = lightNormal;
+    float3 right = normalize(cross(forward, abs(forward.y) > 0.9 ? float3(1, 0, 0) : float3(0, 1, 0)));
+    float3 up = cross(right, forward);
+
+    if (light.type == LIGHT_TYPE_AREA_RECT) {
+        samplePos += (xi.x - 0.5) * light.areaExtents.x * right + (xi.y - 0.5) * light.areaExtents.y * up;
+        area = light.areaExtents.x * light.areaExtents.y;
+    } else if (light.type == LIGHT_TYPE_AREA_DISK) {
+        float r = sqrt(xi.x) * light.areaExtents.x; // Uniform disk sampling
+        float phi = 2.0 * PI * xi.y;
+        samplePos += r * cos(phi) * right + r * sin(phi) * up;
+        area = PI * light.areaExtents.x * light.areaExtents.x;
+    }
+
+    float3 toLight = samplePos - P;
+    ls.dist = length(toLight);
+    ls.L = toLight / max(1e-6, ls.dist);
+    
+    // Geometry term
+    float cosLight = max(0.0, dot(lightNormal, -ls.L));
+    ls.radiance = (light.emission / max(1e-6, area)) * cosLight / max(1e-6, ls.dist * ls.dist);
+    ls.pdf = 1.0 / area; // PDF in area measure
+
     return ls;
 }
 

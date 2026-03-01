@@ -1,6 +1,7 @@
 #pragma once
 
 #include "assets/asset_loader.h"
+#include "light.h"
 #include <DirectXMath.h>
 #include <string>
 #include <vector>
@@ -51,16 +52,28 @@ void AddDefaultPlane(float offset_y = 0.0f);
 // is visible.
 void DrawScenePanel(HWND hwnd, bool &visible);
 
+// Draw the Lights panel UI.
+void DrawLightsPanel(bool &visible);
+
 // Clear all scene data (nodes, meshes, materials, textures)
 void ResetScene();
 
 // Draw the ImGuizmo gizmo for selection
 void DrawGizmo();
 
+// Draw ImGuizmo gizmo for the selected light
+void DrawLightGizmo();
+
 // Node manipulation
 const std::vector<Node> &GetNodes();
 void SelectNode(size_t index);
 std::vector<Instance> GetInstances();
+
+// Light manipulation
+std::vector<Light> &GetLights();
+void AddLight(LightType type);
+void RemoveLight(size_t index);
+void UpdateLights();
 
 // Ray-cast selection from mouse. Returns the global material index of the hit
 // submesh, or -1.
@@ -71,7 +84,7 @@ void DeleteNode(size_t index);
 void RebuildAccelerationStructures();
 
 // Return vector of pointers to active meshes for rendering / DXR dispatch
-std::vector<const Asset::GpuMesh*> GetActiveMeshes();
+std::vector<const Asset::GpuMesh *> GetActiveMeshes();
 
 // Status message to display in UI
 const std::string &LastStatus();

@@ -14,6 +14,12 @@ struct Reservoir
     float W;          // Resampling weight (w_sum / (M * p_target))
 };
 
+// target PDF for ReSTIR DI (luminance of lit surface)
+inline float calculate_p_target(float3 radiance, float3 albedo, float3 f_brdf, float NdotL) {
+    float p = length(max(0.0, radiance * f_brdf * NdotL));
+    return min(p, 1e10); // Clamp to prevent infinity
+}
+
 Reservoir init_reservoir()
 {
     Reservoir r;

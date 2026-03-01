@@ -1659,4 +1659,115 @@ GpuMesh LoadMeshFromMemory(const std::vector<Vertex> &vertices,
   return mesh;
 }
 
+inline float lerp(float a, float b, float t) { return a + t * (b - a); }
+
+Texture LoadIES(const std::string &path) {
+  std::ifstream file(path);
+  if (!file.is_open())
+    return {};
+
+  std::string line;
+  if (!std::getline(file, line))
+    return {};
+  // Skip to data
+  while (std::getline(file, line)) {
+    if (line.find("TILT=") != std::string::npos)
+      break;
+  }
+  if (line.find("TILT=NONE") == std::string::npos) {
+    // If there is tilt data, skip the 4 lines of tilt info
+    for (int i = 0; i < 4; ++i)
+      std::getline(file, line);
+  }
+
+  int numLamps, numVerticalAngles, numHorizontalAngles, phototype, unitType;
+  float lumens, multiplier, width, length, height;
+
+  file >> numLamps >> lumens >> multiplier >> numVerticalAngles >>
+      numHorizontalAngles >> phototype >> unitType >> width >> length >> height;
+
+  float ballMult, volt, watts;
+  file >> ballMult >> volt >> watts;
+
+  std::vector<float> verticalAngles(numVerticalAngles);
+  for (int i = 0; i < numVerticalAngles; ++i)
+    file >> verticalAngles[i];
+
+  std::vector<float> horizontalAngles(numHorizontalAngles);
+  for (int i = 0; i < numHorizontalAngles; ++i)
+    file >> horizontalAngles[i];
+
+  std::vector<float> candelaValues(numVerticalAngles * numHorizontalAngles);
+  for (int i = 0; i < numVerticalAngles * numHorizontalAngles; ++i) {
+    file >> candelaValues[i];
+  }
+
+  const int texW = 256;
+  const int texH = 256;
+  std::vector<float> bakedData(texW * texH * 4, 0.0f);
+
+  for (int y = 0; y < texH; ++y) {
+    float theta = (float)y / (float)(texH - 1) * 180.0f;
+    for (int x = 0; x < texW; ++x) {
+      float phi = (float)x / (float)(texW - 1) * 360.0f;
+
+      // Wrap phi if needed (IES often stores 0-90 or 0-180 and assumes
+      // symmetry)
+      float lookPhi = phi;
+      if (numHorizontalAngles > 1) {
+        float maxH = horizontalAngles.back();
+        if (maxH == 90.0f) {
+          // Quadrant symmetry
+          lookPhi = fmodf(phi, 90.0f);
+          if (((int)(phi / 90.0f) % 2) == 1)
+            lookPhi = 90.0f - lookPhi;
+        } else if (maxH == 180.0f) {
+          // Half symmetry
+          lookPhi = fmodf(phi, 180.0f);
+          if (((int)(phi / 180.0f) % 2) == 1)
+            lookPhi = 180.0f - lookPhi;
+        }
+      } else {
+        lookPhi = 0.0f;
+      }
+
+      // Linear interpolation for vertical
+      int v0 = 0;
+      while (v0 < numVerticalAngles - 2 && verticalAngles[v0 + 1] < theta)
+        v0++;
+      int v1 = std::min(v0 + 1, numVerticalAngles - 1);
+      float vLerp = (theta - verticalAngles[v0]) /
+                    std::max(1e-5f, verticalAngles[v1] - verticalAngles[v0]);
+      vLerp = std::clamp(vLerp, 0.0f, 1.0f);
+
+      // Linear interpolation for horizontal
+      int h0 = 0;
+      while (h0 < numHorizontalAngles - 2 && horizontalAngles[h0 + 1] < lookPhi)
+        h0++;
+      int h1 = std::min(h0 + 1, numHorizontalAngles - 1);
+      float hLerp =
+          (lookPhi - horizontalAngles[h0]) /
+          std::max(1e-5f, horizontalAngles[h1] - horizontalAngles[h0]);
+      hLerp = std::clamp(hLerp, 0.0f, 1.0f);
+
+      float c00 = candelaValues[h0 * numVerticalAngles + v0];
+      float c01 = candelaValues[h0 * numVerticalAngles + v1];
+      float c10 = candelaValues[h1 * numVerticalAngles + v0];
+      float c11 = candelaValues[h1 * numVerticalAngles + v1];
+
+      float val = lerp(lerp(c00, c01, vLerp), lerp(c10, c11, vLerp), hLerp) *
+                  multiplier;
+
+      int pixelIdx = (y * texW + x) * 4;
+      bakedData[pixelIdx + 0] = val;
+      bakedData[pixelIdx + 1] = val;
+      bakedData[pixelIdx + 2] = val;
+      bakedData[pixelIdx + 3] = 1.0f;
+    }
+  }
+
+  return LoadTextureFromMemory(bakedData.data(), texW, texH,
+                               DXGI_FORMAT_R32G32B32A32_FLOAT);
+}
+
 } // namespace Asset

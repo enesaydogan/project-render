@@ -36,6 +36,7 @@ using namespace DX12Context;
 namespace Scene {
 
 static std::vector<Node> s_nodes;
+static std::vector<Light> s_lights;
 // Import progress & pending results (for async import)
 static std::atomic<bool> s_importInProgress(false);
 static std::atomic<float> s_importProgress(0.0f);
@@ -307,6 +308,8 @@ void RegisterTextures(const std::vector<Asset::Texture> &textures) {
   g_textureDescriptorCount += (UINT)textures.size();
 }
 
+static int s_selectedLightIdx = -1;
+
 bool ImportModelWithDialog(HWND hwnd) {
   std::wstring chosen;
   if (OpenModelFileDialog(hwnd, chosen)) {
@@ -421,11 +424,11 @@ bool ImportHDRWithDialog(HWND hwnd) {
 const std::vector<Node> &GetNodes() { return s_nodes; }
 
 void SelectNode(size_t index) {
-  if (index >= s_nodes.size())
-    return;
   for (size_t i = 0; i < s_nodes.size(); ++i)
     s_nodes[i].selected = false;
-  s_nodes[index].selected = true;
+  s_selectedLightIdx = -1;
+  if (index < s_nodes.size())
+    s_nodes[index].selected = true;
 }
 
 void DeleteNode(size_t index) {
@@ -585,8 +588,8 @@ void RebuildAccelerationStructures() {
   DxrRenderer::BuildAccelerationStructures(GetActiveMeshes(), GetInstances());
 }
 
-std::vector<const Asset::GpuMesh*> GetActiveMeshes() {
-  std::vector<const Asset::GpuMesh*> active;
+std::vector<const Asset::GpuMesh *> GetActiveMeshes() {
+  std::vector<const Asset::GpuMesh *> active;
   for (size_t i = 0; i < g_loadedMeshes.size(); ++i) {
     const auto &m = g_loadedMeshes[i];
     if (m.vertexBuffer && m.indexBuffer && m.vertexCount > 0 &&
@@ -616,6 +619,406 @@ std::vector<Instance> GetInstances() {
     }
   }
   return instances;
+}
+
+std::vector<Light> &GetLights() { return s_lights; }
+
+void UpdateLights() { DxrRenderer::UpdateLights(s_lights); }
+
+void AddLight(LightType type) {
+  Light l = {};
+  memset(&l, 0, sizeof(Light));
+  l.type = (uint32_t)type;
+  l.position[0] = 0;
+  l.position[1] = 2;
+  l.position[2] = 0;
+  l.emission[0] = 1000;
+  l.emission[1] = 1000;
+  l.emission[2] = 1000;
+  l.direction[0] = 0;
+  l.direction[1] = -1;
+  l.direction[2] = 0;
+  l.radius = 0.1f;
+  l.innerConeAngle = cosf(DirectX::XMConvertToRadians(30.0f));
+  l.outerConeAngle = cosf(DirectX::XMConvertToRadians(45.0f));
+  l.areaExtents[0] = 1;
+  l.areaExtents[1] = 1;
+  l.iesAtlasIndex = -1;
+  s_lights.push_back(l);
+  UpdateLights();
+}
+
+void RemoveLight(size_t index) {
+  if (index < s_lights.size()) {
+    s_lights.erase(s_lights.begin() + index);
+    UpdateLights();
+  }
+}
+
+void DrawLightsPanel(bool &visible) {
+  if (!visible)
+    return;
+  if (ImGui::Begin("Global Lights", &visible)) {
+    if (ImGui::Button("Add Point Light"))
+      AddLight(LightType::Omni);
+    ImGui::SameLine();
+    if (ImGui::Button("Add Spot Light"))
+      AddLight(LightType::Spot);
+    ImGui::SameLine();
+    if (ImGui::Button("Add Rect Area"))
+      AddLight(LightType::AreaRect);
+    ImGui::SameLine();
+    if (ImGui::Button("Add Disk Area"))
+      AddLight(LightType::AreaDisk);
+
+    ImGui::Separator();
+
+    for (size_t i = 0; i < s_lights.size(); ++i) {
+      ImGui::PushID((int)i);
+      Light &l = s_lights[i];
+      char buf[64];
+      const char *typeStr = "Unknown";
+      switch ((LightType)l.type) {
+      case LightType::Directional:
+        typeStr = "Sun";
+        break;
+      case LightType::Omni:
+        typeStr = "Omni";
+        break;
+      case LightType::Spot:
+        typeStr = "Spot";
+        break;
+      case LightType::AreaRect:
+        typeStr = "Rect";
+        break;
+      case LightType::AreaDisk:
+        typeStr = "Disk";
+        break;
+      case LightType::IES:
+        typeStr = "IES";
+        break;
+      }
+      sprintf(buf, "Light %zu (%s)", i, typeStr);
+
+      bool isSelected = (s_selectedLightIdx == (int)i);
+      if (isSelected)
+        ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.3f, 0.5f, 0.8f, 0.7f));
+
+      bool headerOpen = ImGui::CollapsingHeader(buf);
+
+      // Select light when clicking the header
+      if (ImGui::IsItemClicked(0)) {
+        s_selectedLightIdx = (int)i;
+        for (auto &n : s_nodes)
+          n.selected = false;
+      }
+
+      if (isSelected)
+        ImGui::PopStyleColor();
+
+      if (headerOpen) {
+        bool changed = false;
+        changed |= ImGui::DragFloat3("Position", l.position, 0.1f);
+
+        // Color + Intensity (separate controls)
+        // Compute current intensity as max component
+        float maxComp =
+            std::max({l.emission[0], l.emission[1], l.emission[2], 0.001f});
+        float color[3] = {l.emission[0] / maxComp, l.emission[1] / maxComp,
+                          l.emission[2] / maxComp};
+        float intensity = maxComp;
+
+        if (ImGui::ColorEdit3("Color", color)) {
+          l.emission[0] = color[0] * intensity;
+          l.emission[1] = color[1] * intensity;
+          l.emission[2] = color[2] * intensity;
+          changed = true;
+        }
+        if (ImGui::DragFloat("Intensity", &intensity, 10.0f, 0.0f, 1000000.0f,
+                             "%.2f")) {
+          l.emission[0] = color[0] * intensity;
+          l.emission[1] = color[1] * intensity;
+          l.emission[2] = color[2] * intensity;
+          changed = true;
+        }
+
+        if (l.type != (uint32_t)LightType::Omni) {
+          changed |= ImGui::DragFloat3("Direction", l.direction, 0.01f);
+        }
+
+        changed |= ImGui::DragFloat("Radius", &l.radius, 0.01f, 0.0f, 10.0f);
+
+        if (l.type == (uint32_t)LightType::Spot) {
+          float inner = acosf(l.innerConeAngle) * 180.0f / 3.14159f;
+          float outer = acosf(l.outerConeAngle) * 180.0f / 3.14159f;
+          if (ImGui::SliderFloat("Inner Angle", &inner, 0, 90)) {
+            l.innerConeAngle = cosf(DirectX::XMConvertToRadians(inner));
+            changed = true;
+          }
+          if (ImGui::SliderFloat("Outer Angle", &outer, inner, 90)) {
+            l.outerConeAngle = cosf(DirectX::XMConvertToRadians(outer));
+            changed = true;
+          }
+        }
+
+        if (l.type == (uint32_t)LightType::AreaRect ||
+            l.type == (uint32_t)LightType::AreaDisk) {
+          changed |=
+              ImGui::DragFloat2("Extents", l.areaExtents, 0.1f, 0.01f, 50.0f);
+        }
+
+        if (l.type == (uint32_t)LightType::IES) {
+          ImGui::Text("IES Atlas Index: %d (placeholder)", l.iesAtlasIndex);
+        }
+
+        ImGui::Spacing();
+        if (ImGui::Button("Select for Gizmo")) {
+          s_selectedLightIdx = (int)i;
+          for (auto &n : s_nodes)
+            n.selected = false;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Remove")) {
+          if (s_selectedLightIdx == (int)i)
+            s_selectedLightIdx = -1;
+          else if (s_selectedLightIdx > (int)i)
+            s_selectedLightIdx--;
+          RemoveLight(i);
+          ImGui::PopID();
+          break;
+        }
+        if (changed)
+          UpdateLights();
+      }
+      ImGui::PopID();
+    }
+  }
+  ImGui::End();
+}
+
+void DrawLightGizmo() {
+  float view[16], proj[16];
+  BuildViewMatrix(view);
+  BuildProjectionMatrix(proj);
+
+  ImGuiViewport *mainVp = ImGui::GetMainViewport();
+  float windowX = mainVp ? mainVp->Pos.x : 0.0f;
+  float windowY = mainVp ? mainVp->Pos.y : 0.0f;
+  float windowWidth =
+      mainVp ? mainVp->Size.x : (float)ImGui::GetIO().DisplaySize.x;
+  float windowHeight =
+      mainVp ? mainVp->Size.y : (float)ImGui::GetIO().DisplaySize.y;
+
+  ImDrawList *drawList = ImGui::GetForegroundDrawList();
+
+  auto WorldToScreen = [&](const float *wp, ImVec2 &outSp) -> bool {
+    float viewPos[4];
+    for (int i = 0; i < 4; i++) {
+      viewPos[i] = wp[0] * view[0 * 4 + i] + wp[1] * view[1 * 4 + i] +
+                   wp[2] * view[2 * 4 + i] + 1.0f * view[3 * 4 + i];
+    }
+    float clipPos[4];
+    for (int i = 0; i < 4; i++) {
+      clipPos[i] = viewPos[0] * proj[0 * 4 + i] + viewPos[1] * proj[1 * 4 + i] +
+                   viewPos[2] * proj[2 * 4 + i] + viewPos[3] * proj[3 * 4 + i];
+    }
+    if (clipPos[3] < 0.001f) // Behind camera
+      return false;
+    outSp.x = windowX + (clipPos[0] / clipPos[3] + 1.0f) * 0.5f * windowWidth;
+    outSp.y = windowY + (1.0f - clipPos[1] / clipPos[3]) * 0.5f * windowHeight;
+    return true;
+  };
+
+  // 1. Draw wireframes / icons for ALL lights to visualize their layout
+  for (size_t i = 0; i < s_lights.size(); ++i) {
+    Light &l = s_lights[i];
+    bool isSelected = (s_selectedLightIdx == (int)i);
+    ImU32 col =
+        isSelected ? IM_COL32(255, 200, 50, 255) : IM_COL32(200, 200, 200, 150);
+    float thick = isSelected ? 3.0f : 1.5f;
+
+    ImVec2 screenPos;
+    if (!WorldToScreen(l.position, screenPos))
+      continue;
+
+    // Draw little center circle for the light
+    drawList->AddCircleFilled(screenPos, 4.0f, col);
+
+    if (l.type == (uint32_t)LightType::Omni) {
+      drawList->AddCircle(screenPos, l.radius * 5.0f + 10.0f, col, 16, thick);
+    } else {
+      // spot, directional, area: draw an arrow representing 'direction'
+      float fwd[3] = {l.direction[0], l.direction[1], l.direction[2]};
+      float arrowEnd[3] = {l.position[0] + fwd[0] * 1.0f,
+                           l.position[1] + fwd[1] * 1.0f,
+                           l.position[2] + fwd[2] * 1.0f};
+
+      ImVec2 sEnd;
+      if (WorldToScreen(arrowEnd, sEnd)) {
+        drawList->AddLine(screenPos, sEnd, col, thick);
+      }
+
+      if (l.type == (uint32_t)LightType::AreaRect ||
+          l.type == (uint32_t)LightType::AreaDisk) {
+        // Draw the wireframe of the area light surface
+        float up_ref[3] = {0, 1, 0};
+        if (fabsf(fwd[1]) > 0.99f) {
+          up_ref[0] = 1;
+          up_ref[1] = 0;
+        }
+
+        // right = up_ref x fwd
+        float right[3] = {up_ref[1] * fwd[2] - up_ref[2] * fwd[1],
+                          up_ref[2] * fwd[0] - up_ref[0] * fwd[2],
+                          up_ref[0] * fwd[1] - up_ref[1] * fwd[0]};
+        float rlen = sqrtf(right[0] * right[0] + right[1] * right[1] +
+                           right[2] * right[2]);
+        if (rlen > 0.001f) {
+          right[0] /= rlen;
+          right[1] /= rlen;
+          right[2] /= rlen;
+        }
+
+        // up = fwd x right
+        float up[3] = {fwd[1] * right[2] - fwd[2] * right[1],
+                       fwd[2] * right[0] - fwd[0] * right[2],
+                       fwd[0] * right[1] - fwd[1] * right[0]};
+
+        float hw = l.areaExtents[0] * 0.5f;
+        float hh = l.areaExtents[1] * 0.5f;
+
+        // 4 corners of the quad
+        float c[4][3];
+        c[0][0] = l.position[0] + right[0] * hw + up[0] * hh;
+        c[0][1] = l.position[1] + right[1] * hw + up[1] * hh;
+        c[0][2] = l.position[2] + right[2] * hw + up[2] * hh;
+
+        c[1][0] = l.position[0] - right[0] * hw + up[0] * hh;
+        c[1][1] = l.position[1] - right[1] * hw + up[1] * hh;
+        c[1][2] = l.position[2] - right[2] * hw + up[2] * hh;
+
+        c[2][0] = l.position[0] - right[0] * hw - up[0] * hh;
+        c[2][1] = l.position[1] - right[1] * hw - up[1] * hh;
+        c[2][2] = l.position[2] - right[2] * hw - up[2] * hh;
+
+        c[3][0] = l.position[0] + right[0] * hw - up[0] * hh;
+        c[3][1] = l.position[1] + right[1] * hw - up[1] * hh;
+        c[3][2] = l.position[2] + right[2] * hw - up[2] * hh;
+
+        ImVec2 sc[4];
+        bool ok = true;
+        for (int k = 0; k < 4; k++) {
+          if (!WorldToScreen(c[k], sc[k]))
+            ok = false;
+        }
+
+        if (ok) {
+          if (l.type == (uint32_t)LightType::AreaDisk) {
+            // Draw a quick octagon for the disk
+            drawList->AddLine(sc[0], sc[1], col, thick);
+            drawList->AddLine(sc[1], sc[2], col, thick);
+            drawList->AddLine(sc[2], sc[3], col, thick);
+            drawList->AddLine(sc[3], sc[0], col, thick);
+          } else {
+            // Draw rect
+            drawList->AddLine(sc[0], sc[1], col, thick);
+            drawList->AddLine(sc[1], sc[2], col, thick);
+            drawList->AddLine(sc[2], sc[3], col, thick);
+            drawList->AddLine(sc[3], sc[0], col, thick);
+          }
+        }
+      }
+    }
+  }
+
+  // 2. Do ImGuizmo manipulate for the selected light
+  if (s_selectedLightIdx < 0 || s_selectedLightIdx >= (int)s_lights.size())
+    return;
+
+  Light &l = s_lights[s_selectedLightIdx];
+
+  ImGuizmo::AllowAxisFlip(false);
+  ImGuizmo::GetStyle().TranslationLineThickness = 6.0f;
+
+  // Build a matrix containing both position and direction
+  float up_ref[3] = {0, 1, 0};
+  float fwd[3] = {l.direction[0], l.direction[1], l.direction[2]};
+  if (fabsf(fwd[1]) > 0.99f) {
+    up_ref[0] = 1;
+    up_ref[1] = 0;
+  }
+  float right[3] = {up_ref[1] * fwd[2] - up_ref[2] * fwd[1],
+                    up_ref[2] * fwd[0] - up_ref[0] * fwd[2],
+                    up_ref[0] * fwd[1] - up_ref[1] * fwd[0]};
+  float rlen =
+      sqrtf(right[0] * right[0] + right[1] * right[1] + right[2] * right[2]);
+  if (rlen > 0.001f) {
+    right[0] /= rlen;
+    right[1] /= rlen;
+    right[2] /= rlen;
+  } else {
+    right[0] = 1;
+    right[1] = 0;
+    right[2] = 0;
+  }
+  float up[3] = {fwd[1] * right[2] - fwd[2] * right[1],
+                 fwd[2] * right[0] - fwd[0] * right[2],
+                 fwd[0] * right[1] - fwd[1] * right[0]};
+
+  float matrix[16] = {right[0],      right[1],      right[2],      0,
+                      up[0],         up[1],         up[2],         0,
+                      fwd[0],        fwd[1],        fwd[2],        0,
+                      l.position[0], l.position[1], l.position[2], 1};
+
+  // Keyboard toggles for Translate / Rotate / Scale
+  if (ImGui::IsKeyPressed(ImGuiKey_G))
+    g_currentGizmoOp = ImGuizmo::TRANSLATE;
+  if (ImGui::IsKeyPressed(ImGuiKey_R))
+    g_currentGizmoOp = ImGuizmo::ROTATE;
+  if (ImGui::IsKeyPressed(ImGuiKey_T))
+    g_currentGizmoOp = ImGuizmo::SCALE;
+
+  // Only allow uniform scale mode for lights if T is pressed
+  ImGuizmo::OPERATION op = (g_currentGizmoOp == ImGuizmo::SCALE)
+                               ? ImGuizmo::SCALE
+                               : g_currentGizmoOp;
+
+  ImGuizmo::SetID(10000 + s_selectedLightIdx);
+  ImGuizmo::SetOrthographic(false);
+  ImGuizmo::SetDrawlist(drawList);
+  ImGuizmo::SetRect(windowX, windowY, windowWidth, windowHeight);
+
+  if (ImGuizmo::Manipulate(view, proj, op, ImGuizmo::WORLD, matrix)) {
+    // Read back position
+    l.position[0] = matrix[12];
+    l.position[1] = matrix[13];
+    l.position[2] = matrix[14];
+
+    // Read back direction (Z axis of matrix)
+    float nfwd[3] = {matrix[8], matrix[9], matrix[10]};
+    float nlen =
+        sqrtf(nfwd[0] * nfwd[0] + nfwd[1] * nfwd[1] + nfwd[2] * nfwd[2]);
+    if (nlen > 0.001f) {
+      l.direction[0] = nfwd[0] / nlen;
+      l.direction[1] = nfwd[1] / nlen;
+      l.direction[2] = nfwd[2] / nlen;
+    }
+
+    // Read back scale (if SCALE Op)
+    if (op == ImGuizmo::SCALE) {
+      // Approximate scale change (just based on X axis magnitude of matrix)
+      float currentScaleX =
+          sqrtf(matrix[0] * matrix[0] + matrix[1] * matrix[1] +
+                matrix[2] * matrix[2]);
+      if (currentScaleX > 0.001f) {
+        l.areaExtents[0] *= currentScaleX;
+        l.areaExtents[1] *= currentScaleX;
+        l.radius *= currentScaleX;
+      }
+    }
+
+    UpdateLights();
+  }
 }
 
 void MatMul(const float *a, const float *b, float *out) {
@@ -1002,10 +1405,7 @@ int UpdateSelection(float screenWidth, float screenHeight) {
   }
 
   if (hitNode != -1) {
-    for (auto &n : s_nodes)
-      n.selected = false;
-    s_nodes[hitNode].selected = true;
-
+    SelectNode((size_t)hitNode);
     fprintf(stderr, "Scene: Picked Node '%s' (ID %d), Material ID %d\n",
             s_nodes[hitNode].name.c_str(), hitNode, hitMaterial);
   }
@@ -1253,7 +1653,7 @@ void ResetScene() {
   // Ensure camera/exposure defaults are restored when starting a fresh scene
   DxrRenderer::SetAutoExposure(false);
   DxrRenderer::SetPhysicalCameraExposure(true);
-  DxrRenderer::SetPhysicalCameraSettings(100.0f, 1.0f/30.0f, 2.8f);
+  DxrRenderer::SetPhysicalCameraSettings(100.0f, 1.0f / 30.0f, 2.8f);
 }
 
 } // namespace Scene

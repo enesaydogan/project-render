@@ -82,6 +82,7 @@ std::string g_renderExportStatus;
 
 bool g_showRenderModeWindow = false;
 bool g_showAssetsWindow = false;
+bool g_showLightsWindow = false;
 bool g_showMaterialEditor = false;
 bool g_showControlsWindow = false;
 bool g_forceUncollapse = false;
@@ -324,28 +325,28 @@ void StartRenderExportJob(const std::wstring &outputPath) {
     return;
   }
 
-    if (!RecreateDxrPipelineSafe(g_renderExportJob.targetWidth,
-                   g_renderExportJob.targetHeight,
-                   "StartRenderExportJob")) {
+  if (!RecreateDxrPipelineSafe(g_renderExportJob.targetWidth,
+                               g_renderExportJob.targetHeight,
+                               "StartRenderExportJob")) {
     g_renderExportStatus = "Failed to create DXR pipeline for export.";
     g_cameraData.maxSPP = g_renderExportJob.previousMaxSpp;
     g_cameraData.noiseThreshold = g_renderExportJob.previousNoiseThreshold;
     g_cameraData.useAdaptiveSampling =
-      g_renderExportJob.previousAdaptiveSampling;
+        g_renderExportJob.previousAdaptiveSampling;
     DxrRenderer::SetDenoiserMode(
-      DenoiserModeFromIndex(g_renderExportJob.previousDenoiserIndex));
+        DenoiserModeFromIndex(g_renderExportJob.previousDenoiserIndex));
     g_currentRenderMode = g_renderExportJob.previousMode;
     DX12Context::g_streamline.SetMode(
-      (StreamlineManager::Mode)g_renderExportJob.previousStreamlineMode);
+        (StreamlineManager::Mode)g_renderExportJob.previousStreamlineMode);
     DX12Context::g_streamline.SetQuality(
-      (StreamlineManager::Quality)
-        g_renderExportJob.previousStreamlineQuality);
+        (StreamlineManager::Quality)
+            g_renderExportJob.previousStreamlineQuality);
     DX12Context::g_streamline.SetEnabled(
-      g_renderExportJob.previousStreamlineEnabled);
+        g_renderExportJob.previousStreamlineEnabled);
     g_renderExportJob.active = false;
     UpdateCameraCB();
     return;
-    }
+  }
   DxrRenderer::ResetAccumulation();
   UpdateCameraCB();
 
@@ -387,8 +388,7 @@ static bool RecreateDxrPipelineSafe(UINT width, UINT height,
     fprintf(stderr, "DXR pipeline recreate failed (%s): %s\n",
             context ? context : "unknown", e.what());
   } catch (...) {
-    fprintf(stderr,
-            "DXR pipeline recreate failed (%s): unknown exception\n",
+    fprintf(stderr, "DXR pipeline recreate failed (%s): unknown exception\n",
             context ? context : "unknown");
   }
   return false;
@@ -502,11 +502,16 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
     ImGui::SameLine();
     // Use compact spacing for menu bar toggles
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 6));
-    // Cloud settings have been moved into the Controls window. No dropdown needed.
+    // Cloud settings have been moved into the Controls window. No dropdown
+    // needed.
 
     ImGui::Checkbox("##AssetsToggle", &g_showAssetsWindow);
     ImGui::SameLine();
     ImGui::Text("Assets");
+    ImGui::SameLine();
+    ImGui::Checkbox("##LightsToggle", &g_showLightsWindow);
+    ImGui::SameLine();
+    ImGui::Text("Lights");
     ImGui::SameLine();
     ImGui::Checkbox("##ControlsToggle", &g_showControlsWindow);
     ImGui::SameLine();
@@ -693,8 +698,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
 
         if (!autoExp && physicalCam) {
           if (ImGui::Button("Preset: Engine Daylight")) {
-            DxrRenderer::SetPhysicalCameraSettings(100.0f, 1.0f / 30.0f,
-                                                   2.8f);
+            DxrRenderer::SetPhysicalCameraSettings(100.0f, 1.0f / 30.0f, 2.8f);
             uiChanged = true;
           }
           ImGui::SameLine();
@@ -716,7 +720,8 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
             float shutterSeconds =
                 (aperture * aperture * 100.0f) /
                 ((std::max)(0.001f, iso) * powf(2.0f, sceneEV));
-            shutterSeconds = (std::clamp)(shutterSeconds, 1.0f / 8000.0f, 30.0f);
+            shutterSeconds =
+                (std::clamp)(shutterSeconds, 1.0f / 8000.0f, 30.0f);
             DxrRenderer::SetPhysicalCameraSettings(iso, shutterSeconds,
                                                    aperture);
             uiChanged = true;
@@ -754,7 +759,8 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
             uiChanged = true;
           }
           if (shutterSeconds <= 1.0f) {
-            ImGui::Text("~ 1/%.0f s", 1.0f / (std::max)(shutterSeconds, 1.0e-6f));
+            ImGui::Text("~ 1/%.0f s",
+                        1.0f / (std::max)(shutterSeconds, 1.0e-6f));
           }
 
           if (ImGui::SliderFloat("Aperture (f/N)", &aperture, 1.0f, 22.0f,
@@ -764,19 +770,20 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
             uiChanged = true;
           }
 
-          ImGui::Text("Camera EV100: %.2f", DxrRenderer::GetPhysicalCameraEV100());
+          ImGui::Text("Camera EV100: %.2f",
+                      DxrRenderer::GetPhysicalCameraEV100());
         } else {
           if (autoExp) {
             ImGui::BeginDisabled();
           }
-          if (ImGui::SliderFloat("Manual Exposure Scale", &g_cameraData.intensity,
-                                 0.0001f, 2.0f, "%.4f",
+          if (ImGui::SliderFloat("Manual Exposure Scale",
+                                 &g_cameraData.intensity, 0.0001f, 2.0f, "%.4f",
                                  ImGuiSliderFlags_Logarithmic)) {
             UpdateCameraCB();
             uiChanged = true;
           }
-          ImGui::TextDisabled(
-              "Affects only camera exposure (post-lighting multiplier), not sun/sky light power.");
+          ImGui::TextDisabled("Affects only camera exposure (post-lighting "
+                              "multiplier), not sun/sky light power.");
           if (autoExp) {
             ImGui::EndDisabled();
           }
@@ -818,8 +825,8 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
       // sun is active, and remembered otherwise).
       {
         float analyticSunInt = IBLManager::Get().GetSunIntensity();
-        if (ImGui::SliderFloat("Analytic Sun Intensity", &analyticSunInt,
-                               0.0f, 150000.0f, "%.0f Lux")) {
+        if (ImGui::SliderFloat("Analytic Sun Intensity", &analyticSunInt, 0.0f,
+                               150000.0f, "%.0f Lux")) {
           IBLManager::Get().SetSunIntensity(analyticSunInt);
           uiChanged = true;
         }
@@ -906,8 +913,8 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
             (IBLManager::Get().GetIBLSource() == IBLManager::IBLSource::File);
         if (!usingFileIBL) {
           float sunInt = IBLManager::Get().GetSunIntensity();
-          if (ImGui::SliderFloat("Sun Intensity (Lux)", &sunInt, 0.0f, 150000.0f,
-                                 "%.0f Lux")) {
+          if (ImGui::SliderFloat("Sun Intensity (Lux)", &sunInt, 0.0f,
+                                 150000.0f, "%.0f Lux")) {
             IBLManager::Get().SetSunIntensity(sunInt);
             // Changes analytic light intensity
             uiChanged = true;
@@ -927,7 +934,8 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
               uiChanged = true;
             }
             float fsSize = IBLManager::Get().GetFileSunRadiusDeg();
-            if (ImGui::SliderFloat("File Sun Size (deg)", &fsSize, 0.01f, 5.0f)) {
+            if (ImGui::SliderFloat("File Sun Size (deg)", &fsSize, 0.01f,
+                                   5.0f)) {
               IBLManager::Get().SetFileSunRadiusDeg(fsSize);
               uiChanged = true;
             }
@@ -952,8 +960,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
           uiParamChanged = true;
           uiChanged = true;
         }
-        if (ImGui::SliderFloat("Latitude (deg)", &latitudeDeg, -66.5f,
-                               66.5f)) {
+        if (ImGui::SliderFloat("Latitude (deg)", &latitudeDeg, -66.5f, 66.5f)) {
           uiParamChanged = true;
           uiChanged = true;
         }
@@ -1026,7 +1033,8 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
         CloudParams &cp = g_cloudManager.GetParams();
         bool cloudChanged = false;
 
-        if (ImGui::Checkbox("Enable Cloud Rendering", &g_cloudRenderingEnabled)) {
+        if (ImGui::Checkbox("Enable Cloud Rendering",
+                            &g_cloudRenderingEnabled)) {
           cloudChanged = true;
         }
         if (ImGui::Button("Reset to Defaults")) {
@@ -1035,28 +1043,48 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
         }
 
         cloudChanged |= ImGui::SliderFloat("Density", &cp.density, 0.0f, 5.0f);
-        cloudChanged |= ImGui::SliderFloat("Absorption", &cp.absorption, 0.0f, 2.0f);
-        cloudChanged |= ImGui::SliderFloat("Coverage", &cp.coverage, 0.0f, 1.0f);
-        cloudChanged |= ImGui::SliderFloat("Scattering (g)", &cp.scattering, -0.99f, 0.99f);
-        cloudChanged |= ImGui::SliderFloat("Sun Intensity", &cp.sunIntensity, 0.0f, 20.0f);
-        cloudChanged |= ImGui::SliderFloat("Cloud Top", &cp.cloudTop, 200.0f, 1000.0f);
-        cloudChanged |= ImGui::SliderFloat("Cloud Bottom", &cp.cloudBottom, 50.0f, 300.0f);
-        cloudChanged |= ImGui::SliderFloat("Wind Speed", &cp.windSpeed, 0.0f, 50.0f);
+        cloudChanged |=
+            ImGui::SliderFloat("Absorption", &cp.absorption, 0.0f, 2.0f);
+        cloudChanged |=
+            ImGui::SliderFloat("Coverage", &cp.coverage, 0.0f, 1.0f);
+        cloudChanged |=
+            ImGui::SliderFloat("Scattering (g)", &cp.scattering, -0.99f, 0.99f);
+        cloudChanged |=
+            ImGui::SliderFloat("Sun Intensity", &cp.sunIntensity, 0.0f, 20.0f);
+        cloudChanged |=
+            ImGui::SliderFloat("Cloud Top", &cp.cloudTop, 200.0f, 1000.0f);
+        cloudChanged |=
+            ImGui::SliderFloat("Cloud Bottom", &cp.cloudBottom, 50.0f, 300.0f);
+        cloudChanged |=
+            ImGui::SliderFloat("Wind Speed", &cp.windSpeed, 0.0f, 50.0f);
 
         ImGui::Separator();
-        cloudChanged |= ImGui::SliderFloat("Base Scale", &cp.baseScale, 0.0001f, 0.0020f, "%.5f", ImGuiSliderFlags_Logarithmic);
-        cloudChanged |= ImGui::SliderFloat("Detail Scale", &cp.detailScale, 0.0005f, 0.01f, "%.5f", ImGuiSliderFlags_Logarithmic);
-        cloudChanged |= ImGui::SliderFloat("Coverage Scale", &cp.coverageScale, 0.00005f, 0.0010f, "%.5f", ImGuiSliderFlags_Logarithmic);
-        cloudChanged |= ImGui::SliderFloat("Coverage Variation", &cp.coverageVariation, 0.0f, 1.0f);
+        cloudChanged |=
+            ImGui::SliderFloat("Base Scale", &cp.baseScale, 0.0001f, 0.0020f,
+                               "%.5f", ImGuiSliderFlags_Logarithmic);
+        cloudChanged |=
+            ImGui::SliderFloat("Detail Scale", &cp.detailScale, 0.0005f, 0.01f,
+                               "%.5f", ImGuiSliderFlags_Logarithmic);
+        cloudChanged |=
+            ImGui::SliderFloat("Coverage Scale", &cp.coverageScale, 0.00005f,
+                               0.0010f, "%.5f", ImGuiSliderFlags_Logarithmic);
+        cloudChanged |= ImGui::SliderFloat("Coverage Variation",
+                                           &cp.coverageVariation, 0.0f, 1.0f);
         cloudChanged |= ImGui::SliderFloat("Erosion", &cp.erosion, 0.0f, 1.0f);
-        cloudChanged |= ImGui::SliderFloat("Warp Strength", &cp.warpStrength, 0.0f, 2.0f);
-        cloudChanged |= ImGui::SliderFloat("Shape Power", &cp.shapePower, 0.4f, 3.0f);
-        cloudChanged |= ImGui::SliderFloat("Powder Strength", &cp.powderStrength, 0.0f, 1.5f);
+        cloudChanged |=
+            ImGui::SliderFloat("Warp Strength", &cp.warpStrength, 0.0f, 2.0f);
+        cloudChanged |=
+            ImGui::SliderFloat("Shape Power", &cp.shapePower, 0.4f, 3.0f);
+        cloudChanged |= ImGui::SliderFloat("Powder Strength",
+                                           &cp.powderStrength, 0.0f, 1.5f);
 
         ImGui::Separator();
-        cloudChanged |= ImGui::SliderInt("Shadow Steps", &cp.shadowSteps, 1, 16);
-        cloudChanged |= ImGui::SliderFloat("Shadow Step Size", &cp.shadowStepSize, 10.0f, 500.0f);
-        cloudChanged |= ImGui::SliderFloat("Shadow LOD", &cp.shadowLod, 0.0f, 5.0f);
+        cloudChanged |=
+            ImGui::SliderInt("Shadow Steps", &cp.shadowSteps, 1, 16);
+        cloudChanged |= ImGui::SliderFloat("Shadow Step Size",
+                                           &cp.shadowStepSize, 10.0f, 500.0f);
+        cloudChanged |=
+            ImGui::SliderFloat("Shadow LOD", &cp.shadowLod, 0.0f, 5.0f);
 
         if (cloudChanged) {
           DxrRenderer::ResetAccumulation();
@@ -1525,6 +1553,8 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
             g_showMaterialEditor = (atoi(line.c_str() + 15) != 0);
           } else if (line.rfind("Controls=", 0) == 0) {
             g_showControlsWindow = (atoi(line.c_str() + 9) != 0);
+          } else if (line.rfind("Lights=", 0) == 0) {
+            g_showLightsWindow = (atoi(line.c_str() + 7) != 0);
           }
         }
       } else {
@@ -1560,6 +1590,10 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
           if (renderCollapsed >= 0) {
             g_showRenderModeWindow = (renderCollapsed == 0);
           }
+          int lightsCollapsed = readCollapsed("Global Lights");
+          if (lightsCollapsed >= 0) {
+            g_showLightsWindow = (lightsCollapsed == 0);
+          }
         }
       }
     }
@@ -1571,15 +1605,23 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
     g_showMaterialEditor = !g_showMaterialEditor;
   }
 
+  if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+    Scene::SelectNode((size_t)-1);
+  }
+
   if (g_showAssetsWindow) {
     // Scene panel handled by Scene module
     Scene::DrawScenePanel(g_hwnd, g_showAssetsWindow);
+  }
+  if (g_showLightsWindow) {
+    Scene::DrawLightsPanel(g_showLightsWindow);
   }
   if (g_showMaterialEditor) {
     MaterialEditor::Draw(g_hwnd, g_showMaterialEditor);
   }
 
   Scene::DrawGizmo();
+  Scene::DrawLightGizmo();
 
   // fprintf(stderr, "MainLoop: ImGui::Render start\n");
   ImGui::Render();
@@ -1599,5 +1641,6 @@ void SavePanelVisibility() {
   fprintf(f, "RenderMode=%d\n", g_showRenderModeWindow ? 1 : 0);
   fprintf(f, "MaterialEditor=%d\n", g_showMaterialEditor ? 1 : 0);
   fprintf(f, "Controls=%d\n", g_showControlsWindow ? 1 : 0);
+  fprintf(f, "Lights=%d\n", g_showLightsWindow ? 1 : 0);
   fclose(f);
 }
