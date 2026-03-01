@@ -706,7 +706,7 @@ void Draw(HWND hwnd, bool &visible) {
             if (ImGui::ColorEdit3("Emissive Color", mat.emissiveColor))
               DxrRenderer::ResetAccumulation();
             if (ImGui::SliderFloat("Emissive Intensity", &mat.emissiveIntensity,
-                                   0.0f, 100.0f))
+                                   0.0f, 1000000.0f))
               DxrRenderer::ResetAccumulation();
             ImGui::EndTabItem();
           }

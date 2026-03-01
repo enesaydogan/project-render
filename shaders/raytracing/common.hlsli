@@ -180,6 +180,7 @@ struct MaterialExtraData
     float4 archvizParams0;      // x=clearcoat, y=clearcoatRoughness, z=thinWalled, w=translucency
     float4 uvTransform;         // xy=uvScale, zw=uvOffset
     float4 triPlanarParams;     // x=enabled, y=scale, z=sharpness, w=normalStrength
+    float4 shadingParams;       // x=emissiveIntensity, yzw=reserved
 };
 
 inline int UnpackTextureIndexLow(uint packedPair)

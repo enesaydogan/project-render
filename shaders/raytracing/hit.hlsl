@@ -134,6 +134,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     float4 arch0 = matExtra.archvizParams0;
     float4 uvXf = matExtra.uvTransform;
     float4 triP = matExtra.triPlanarParams;
+    float emissiveIntensity = max(0.0, matExtra.shadingParams.x);
 
 #ifdef HIT_DEBUG
     // Encode primitive index into color for debugging
@@ -254,7 +255,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     
     // Emissive with a conservative default boost.
     const float baseEmissiveBoost = 5.0f;
-    float3 emissive = emisColor.rgb * baseEmissiveBoost;
+    float3 emissive = emisColor.rgb * (baseEmissiveBoost * emissiveIntensity);
     if (texEmis >= 0) {
         float3 e = triPlanar ? SampleTriPlanar(texEmis, P, worldNormal, triScale, triSharp, textureLod, dominantTriPlanar).rgb
                              : textures[texEmis].SampleLevel(linearSampler, uv, textureLod).rgb;

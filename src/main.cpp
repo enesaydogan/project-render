@@ -105,6 +105,9 @@ static constexpr wchar_t kMainWindowTitle[] = L"Project-Render";
 
 // Window dimensions
 bool g_appClosing = false;
+static bool g_hasPendingResize = false;
+static UINT g_pendingResizeWidth = 0;
+static UINT g_pendingResizeHeight = 0;
 
 // Loaded meshes from Asset loader
 std::vector<Asset::GpuMesh> g_loadedMeshes;
@@ -968,6 +971,7 @@ bool InitApplication(HWND hwnd) {
     float archvizParams0[4];
     float uvTransform[4];
     float triPlanarParams[4];
+    float shadingParams[4];
   };
   const UINT64 matCbSizeSingle = (sizeof(MaterialCB) + 255) & ~255;
   const UINT64 matCbSize = matCbSizeSingle * 16384; // Support up to 16384 calls
@@ -1101,9 +1105,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
     return 0;
   case WM_SIZE:
     if (!g_appClosing && DX12Context::g_swapChain && wParam != SIZE_MINIMIZED) {
-      UINT width = LOWORD(lParam);
-      UINT height = HIWORD(lParam);
-      DX12Context::ResizeSwapChain(width, height);
+      g_pendingResizeWidth = LOWORD(lParam);
+      g_pendingResizeHeight = HIWORD(lParam);
+      g_hasPendingResize = true;
     }
     return 0;
   case WM_DESTROY:
@@ -1443,6 +1447,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             float archvizParams0[4];
             float uvTransform[4];
             float triPlanarParams[4];
+            float shadingParams[4];
           };
 
           static constexpr UINT kMaterialFlagAlphaTested = 1u << 0;
@@ -1543,6 +1548,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
               extra.triPlanarParams[1] = srcMat.triPlanarScale;
               extra.triPlanarParams[2] = srcMat.triPlanarSharpness;
               extra.triPlanarParams[3] = srcMat.triPlanarNormalStrength;
+              extra.shadingParams[0] = (std::max)(0.0f, srcMat.emissiveIntensity);
 
               memcpy(pCore + i * sizeof(DxrMaterialData), &mat, sizeof(mat));
               memcpy(pExtra + i * sizeof(DxrMaterialExtraData), &extra,
@@ -1974,6 +1980,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     }
     if (g_appClosing)
       break;
+
+    if (g_hasPendingResize && g_pendingResizeWidth > 0 &&
+        g_pendingResizeHeight > 0 && DX12Context::g_swapChain) {
+      DX12Context::ResizeSwapChain(g_pendingResizeWidth, g_pendingResizeHeight);
+      g_hasPendingResize = false;
+    }
 
     // Compute delta time
     auto now = std::chrono::high_resolution_clock::now();

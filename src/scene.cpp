@@ -57,6 +57,10 @@ int AddTextureFromFile(const std::string &utf8path, bool isHDR) {
     fprintf(stderr, "AddTextureFromFile: no device\n");
     return -1;
   }
+  // Serialize with renderer work to avoid re-entrant queue activity while
+  // modal dialogs are active and the window may also be resizing.
+  WaitGPUIdle();
+
   Asset::Texture tex = Asset::LoadTextureFromFile(utf8path, isHDR);
   if (!tex.resource) {
     fprintf(stderr, "AddTextureFromFile: failed to load '%s'\n",
