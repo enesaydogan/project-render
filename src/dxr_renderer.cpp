@@ -2568,10 +2568,6 @@ void BuildAccelerationStructures(
       }
     }
 
-    if (!meshesChanged && HasDirtyMaterialsForMeshes(meshes)) {
-      meshesChanged = true;
-    }
-
     // Pipelining:
     // Create separate allocators for each batch so we can submit them without
     // blocking/waiting on the CPU. We only wait once at the very end.
@@ -3154,13 +3150,29 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     return true;
   }
 
-  // Material blend/transparency edits can change opaque traversal flags.
-  // Rebuild BLAS/TLAS lazily on the first frame that observes dirty materials.
+  // Material edits only require AS rebuild when opaque-vs-nonopaque state
+  // changes (affects BLAS geometry flags / AnyHit path).
   if (HasDirtyMaterialsForMeshes(meshes)) {
-    BuildAccelerationStructures(meshes, Scene::GetInstances());
-    if (!s_tlas.result) {
-      return ReturnFail(15,
-                        "TLAS missing after dirty-material rebuild attempt");
+    bool opacityStateChanged = (s_cachedMeshOpaqueForBlas.size() != meshes.size());
+    if (!opacityStateChanged) {
+      for (size_t i = 0; i < meshes.size(); ++i) {
+        const uint8_t nowOpaque = IsMeshOpaqueForRt(*meshes[i]) ? 1u : 0u;
+        if (nowOpaque != s_cachedMeshOpaqueForBlas[i]) {
+          opacityStateChanged = true;
+          break;
+        }
+      }
+    }
+
+    if (opacityStateChanged) {
+      BuildAccelerationStructures(meshes, Scene::GetInstances());
+      if (!s_tlas.result) {
+        return ReturnFail(15,
+                          "TLAS missing after dirty-material rebuild attempt");
+      }
+    } else {
+      // Pure shading edits (e.g. roughness/albedo) don't need BLAS/TLAS work.
+      ClearDirtyMaterialsForMeshes(meshes);
     }
   }
 
