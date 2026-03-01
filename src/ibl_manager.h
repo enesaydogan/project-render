@@ -19,6 +19,7 @@ public:
 
   bool Initialize(ID3D12Device *device, ID3D12CommandQueue *queue);
   bool LoadEnvironmentMap(const std::string &path);
+  const std::string &GetEnvironmentMapPath() const { return m_envMapPath; }
 
   // Sky Model Integration
   bool InitializeSkyModel(const std::string &datasetPath);
@@ -172,6 +173,7 @@ private:
   Asset::Texture m_envMap;            // Current API-facing env map
   Asset::Texture m_fileTexture;       // Backing store for file IBL
   Asset::Texture m_proceduralTexture; // Backing store for Sky Model
+  std::string m_envMapPath;           // Last loaded file IBL path
   Asset::Texture m_envConditionalCdf; // RGBA32F: x=conditional CDF, y=texel PMF
   Asset::Texture m_envMarginalCdf;    // RGBA32F: x=marginal CDF per row
 

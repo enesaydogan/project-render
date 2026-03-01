@@ -114,6 +114,9 @@ std::vector<Asset::GpuMesh> g_loadedMeshes;
 std::vector<Asset::Material> g_loadedMaterials;
 std::vector<Asset::Texture> g_loadedTextures;
 D3D12_GPU_DESCRIPTOR_HANDLE g_texturesGpuStart = {0};
+D3D12_CPU_DESCRIPTOR_HANDLE g_texturesCpuStart = {0};
+UINT g_textureDescriptorCapacity = 0;
+static constexpr UINT kSceneTextureDescriptorCapacity = 16384;
 D3D12_GPU_DESCRIPTOR_HANDLE g_envMapGpuHandle = {0};
 static ComPtr<ID3D12Resource>
     g_materialBuffer; // Persistent material constant buffer
@@ -150,6 +153,11 @@ static ComPtr<ID3D12PipelineState> g_meshSimplePipelineState;
 static float g_gridThickness = 0.02f; // increase to make lines thicker
 
 bool g_drawGrid = false; // toggle grid rendering (default OFF)
+// Sky model UI state (serialized by SceneIO).
+float g_timeOfDay = 10.0f;
+float g_northOffset = 0.0f;
+float g_latitudeDeg = 50.08f; // Prague default latitude
+float g_dayOfYear = 172.0f;   // June solstice-ish
 
 // Small camera module is defined in src/camera.h/.cpp
 #include "camera.h"
@@ -387,11 +395,21 @@ void CreateTestTexture() {
       &defaultHeapProps, D3D12_HEAP_FLAG_NONE, &textureDesc,
       D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&texture)));
 
-  // Allocate descriptor for the texture - using persistent allocation
-  DescriptorAllocation alloc = g_cbvSrvAllocator.AllocatePersistent(1);
-  if (g_textureDescriptorCount == 0) {
-    g_texturesGpuStart = alloc.gpu;
+  if (g_texturesCpuStart.ptr == 0 || g_textureDescriptorCapacity == 0) {
+    fprintf(stderr, "CreateTestTexture: texture descriptor table unavailable\n");
+    return;
   }
+  const UINT newIndex = (UINT)g_loadedTextures.size();
+  if (newIndex >= g_textureDescriptorCapacity) {
+    fprintf(stderr,
+            "CreateTestTexture: texture descriptor capacity exceeded (%u)\n",
+            g_textureDescriptorCapacity);
+    return;
+  }
+  const UINT descInc = DX12Context::g_device->GetDescriptorHandleIncrementSize(
+      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+  D3D12_CPU_DESCRIPTOR_HANDLE textureCpu = g_texturesCpuStart;
+  textureCpu.ptr += (SIZE_T)newIndex * descInc;
 
   // Create SRV
   D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
@@ -400,7 +418,7 @@ void CreateTestTexture() {
   srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
   srvDesc.Texture2D.MipLevels = 1;
   DX12Context::g_device->CreateShaderResourceView(texture.Get(), &srvDesc,
-                                                  alloc.cpu);
+                                                  textureCpu);
 
   // Copy from upload buffer to texture
   ComPtr<ID3D12CommandAllocator> cmdAlloc;
@@ -446,10 +464,11 @@ void CreateTestTexture() {
   testTex.format = DXGI_FORMAT_R8G8B8A8_UNORM;
   testTex.mipLevels = 1;
   g_loadedTextures.push_back(testTex);
-  g_textureDescriptorCount = 1;
+  g_textureDescriptorCount = (UINT)g_loadedTextures.size();
 
   // Log to stderr only
-  fprintf(stderr, "CreateTestTexture: Created 2x2 checkerboard texture\n");
+  fprintf(stderr, "CreateTestTexture: Created 2x2 checkerboard texture #%u\n",
+          newIndex);
 }
 
 bool InitApplication(HWND hwnd) {
@@ -479,6 +498,16 @@ bool InitApplication(HWND hwnd) {
   g_cbvSrvAllocator.Init(DX12Context::g_device.Get(),
                          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 65536,
                          FrameCount);
+  // Reserve a dedicated contiguous descriptor range for scene textures.
+  // Texture indices in materials/shaders directly index into this table.
+  {
+    DescriptorAllocation textureTableAlloc =
+        g_cbvSrvAllocator.AllocatePersistent(kSceneTextureDescriptorCapacity);
+    g_texturesCpuStart = textureTableAlloc.cpu;
+    g_texturesGpuStart = textureTableAlloc.gpu;
+    g_textureDescriptorCapacity = kSceneTextureDescriptorCapacity;
+    g_textureDescriptorCount = 0;
+  }
 
   // Now that fence and event are valid, attach command queue & fence to DXR
   // renderer
@@ -1253,12 +1282,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     std::vector<Light> testLights;
     DxrRenderer::UpdateLights(testLights);
   }
-
-  // State variables for Time and North Offset
-  static float g_timeOfDay = 10.0f;
-  static float g_northOffset = 0.0f;
-  static float g_latitudeDeg = 50.08f; // Prague default latitude
-  static float g_dayOfYear = 172.0f;   // June solstice-ish
 
   // Basic message loop + simple render
   MSG msg = {};

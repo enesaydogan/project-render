@@ -29,7 +29,8 @@ extern std::vector<Asset::Material> g_loadedMaterials;
 extern std::vector<Asset::Texture> g_loadedTextures;
 extern UINT g_textureDescriptorCount;
 extern D3D12_GPU_DESCRIPTOR_HANDLE g_texturesGpuStart;
-extern DescriptorHeapAllocator g_cbvSrvAllocator;
+extern D3D12_CPU_DESCRIPTOR_HANDLE g_texturesCpuStart;
+extern UINT g_textureDescriptorCapacity;
 
 using namespace DX12Context;
 
@@ -52,6 +53,40 @@ static std::mutex s_pendingMutex;
 static ImGuizmo::OPERATION g_currentGizmoOp = ImGuizmo::TRANSLATE;
 static ImGuizmo::MODE g_currentGizmoMode = ImGuizmo::WORLD;
 
+static bool GetTextureDescriptorCpuHandle(UINT textureIndex,
+                                          D3D12_CPU_DESCRIPTOR_HANDLE *outCpu) {
+  if (!outCpu || !g_device || g_texturesCpuStart.ptr == 0 ||
+      g_textureDescriptorCapacity == 0) {
+    return false;
+  }
+  if (textureIndex >= g_textureDescriptorCapacity) {
+    return false;
+  }
+  const UINT inc = g_device->GetDescriptorHandleIncrementSize(
+      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+  if (inc == 0) {
+    return false;
+  }
+  *outCpu = g_texturesCpuStart;
+  outCpu->ptr += (SIZE_T)textureIndex * (SIZE_T)inc;
+  return true;
+}
+
+static bool WriteTextureSrv(UINT textureIndex, const Asset::Texture &tex) {
+  D3D12_CPU_DESCRIPTOR_HANDLE cpu = {};
+  if (!tex.resource || !GetTextureDescriptorCpuHandle(textureIndex, &cpu)) {
+    return false;
+  }
+
+  D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+  srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  srvDesc.Format = tex.format;
+  srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+  srvDesc.Texture2D.MipLevels = tex.mipLevels;
+  g_device->CreateShaderResourceView(tex.resource.Get(), &srvDesc, cpu);
+  return true;
+}
+
 int AddTextureFromFile(const std::string &utf8path, bool isHDR) {
   if (!g_device) {
     fprintf(stderr, "AddTextureFromFile: no device\n");
@@ -69,21 +104,23 @@ int AddTextureFromFile(const std::string &utf8path, bool isHDR) {
   }
 
   const int newIndex = (int)g_loadedTextures.size();
+  if ((UINT)newIndex >= g_textureDescriptorCapacity) {
+    fprintf(stderr,
+            "AddTextureFromFile: descriptor capacity exceeded (%u) for '%s'\n",
+            g_textureDescriptorCapacity, utf8path.c_str());
+    return -1;
+  }
   g_loadedTextures.push_back(std::move(tex));
 
-  DescriptorAllocation alloc = g_cbvSrvAllocator.AllocatePersistent(1);
-  if (g_textureDescriptorCount == 0)
-    g_texturesGpuStart = alloc.gpu;
-
   const Asset::Texture &t = g_loadedTextures.back();
-  D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-  srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-  srvDesc.Format = t.format;
-  srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-  srvDesc.Texture2D.MipLevels = t.mipLevels;
-  g_device->CreateShaderResourceView(t.resource.Get(), &srvDesc, alloc.cpu);
+  if (!WriteTextureSrv((UINT)newIndex, t)) {
+    g_loadedTextures.pop_back();
+    fprintf(stderr, "AddTextureFromFile: failed to create SRV for '%s'\n",
+            utf8path.c_str());
+    return -1;
+  }
 
-  g_textureDescriptorCount += 1;
+  g_textureDescriptorCount = (UINT)g_loadedTextures.size();
   fprintf(stderr,
           "AddTextureFromFile: added texture #%d '%s' (w=%u h=%u mips=%u)\n",
           newIndex, utf8path.c_str(), t.width, t.height, t.mipLevels);
@@ -280,17 +317,35 @@ void RegisterTextures(const std::vector<Asset::Texture> &textures) {
   if (textures.empty())
     return;
 
-  // Allocate SRV descriptors for new textures - using persistent allocation
-  DescriptorAllocation alloc =
-      g_cbvSrvAllocator.AllocatePersistent((UINT)textures.size());
+  if (!g_device || g_texturesCpuStart.ptr == 0 || g_textureDescriptorCapacity == 0) {
+    fprintf(stderr, "RegisterTextures: texture descriptor table unavailable\n");
+    return;
+  }
 
-  if (g_textureDescriptorCount == 0)
-    g_texturesGpuStart = alloc.gpu;
+  size_t globalStart = 0;
+  if (g_loadedTextures.size() >= textures.size()) {
+    globalStart = g_loadedTextures.size() - textures.size();
+  }
+
+  if (globalStart >= (size_t)g_textureDescriptorCapacity) {
+    fprintf(stderr,
+            "RegisterTextures: descriptor capacity exceeded before upload "
+            "(start=%zu cap=%u)\n",
+            globalStart, g_textureDescriptorCapacity);
+    g_textureDescriptorCount = g_textureDescriptorCapacity;
+    return;
+  }
 
   for (size_t i = 0; i < textures.size(); ++i) {
-    D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = alloc.cpu;
-    cpuHandle.ptr += i * g_device->GetDescriptorHandleIncrementSize(
-                             D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    const size_t globalIndexSizeT = globalStart + i;
+    if (globalIndexSizeT >= (size_t)g_textureDescriptorCapacity) {
+      fprintf(stderr,
+              "RegisterTextures: descriptor capacity reached at texture %zu "
+              "(cap=%u)\n",
+              globalIndexSizeT, g_textureDescriptorCapacity);
+      break;
+    }
+
     const Asset::Texture &tex = textures[i];
     if (tex.resource) {
       fprintf(stderr,
@@ -299,17 +354,13 @@ void RegisterTextures(const std::vector<Asset::Texture> &textures) {
               i, tex.resource.Get(), tex.width, tex.height, tex.mipLevels,
               (unsigned)tex.format);
       fflush(stderr);
-      D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-      srvDesc.Shader4ComponentMapping =
-          D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-      srvDesc.Format = tex.format;
-      srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-      srvDesc.Texture2D.MipLevels = tex.mipLevels;
-      g_device->CreateShaderResourceView(tex.resource.Get(), &srvDesc,
-                                         cpuHandle);
+      WriteTextureSrv((UINT)globalIndexSizeT, tex);
     }
   }
-  g_textureDescriptorCount += (UINT)textures.size();
+  const size_t clampedCount = (g_loadedTextures.size() < (size_t)g_textureDescriptorCapacity)
+                                  ? g_loadedTextures.size()
+                                  : (size_t)g_textureDescriptorCapacity;
+  g_textureDescriptorCount = (UINT)clampedCount;
 }
 
 static int s_selectedLightIdx = -1;
@@ -1478,38 +1529,7 @@ void DrawScenePanel(HWND hwnd, bool &visible) {
           m.metalRoughTexture += (int)textureBase;
       }
 
-      if (!textures.empty()) {
-        DescriptorAllocation alloc =
-            g_cbvSrvAllocator.AllocatePersistent((UINT)textures.size());
-        if (g_textureDescriptorCount == 0)
-          g_texturesGpuStart = alloc.gpu;
-        for (size_t i = 0; i < textures.size(); ++i) {
-          D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = alloc.cpu;
-          cpuHandle.ptr += i * g_device->GetDescriptorHandleIncrementSize(
-                                   D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-          const Asset::Texture &tex = textures[i];
-          if (tex.resource) {
-            fprintf(stderr,
-                    "CreateShaderResourceView: texture %zu (res=%p w=%u h=%u "
-                    "mips=%u fmt=%u)\n",
-                    i, tex.resource.Get(), tex.width, tex.height, tex.mipLevels,
-                    (unsigned)tex.format);
-            fflush(stderr);
-            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-            srvDesc.Shader4ComponentMapping =
-                D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            srvDesc.Format = tex.format;
-            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-            srvDesc.Texture2D.MipLevels = tex.mipLevels;
-            g_device->CreateShaderResourceView(tex.resource.Get(), &srvDesc,
-                                               cpuHandle);
-            fprintf(stderr, "CreateShaderResourceView: done for texture %zu\n",
-                    i);
-            fflush(stderr);
-          }
-        }
-        g_textureDescriptorCount += (UINT)textures.size();
-      }
+      RegisterTextures(textures);
 
       // Create a scene node for this import
       Node node;
