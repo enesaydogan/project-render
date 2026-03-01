@@ -1217,7 +1217,7 @@ static bool RayAABBIntersection(const float *rayOrigin, const float *rayDir,
                                 float &t) {
   float tmin = -FLT_MAX, tmax = FLT_MAX;
   for (int i = 0; i < 3; ++i) {
-    if (abs(rayDir[i]) < 1e-6f) {
+    if (std::fabs(rayDir[i]) < 1e-6f) {
       if (rayOrigin[i] < minP[i] || rayOrigin[i] > maxP[i])
         return false;
     } else {
@@ -1350,29 +1350,84 @@ int UpdateSelection(float screenWidth, float screenHeight) {
   if (ImGuizmo::IsOver() || ImGuizmo::IsUsing() || ImGui::IsAnyItemHovered())
     return -1;
 
-  float view[16], proj[16];
-  BuildViewMatrix(view);
-  BuildProjectionMatrix(proj);
+  if (screenWidth <= 1.0f || screenHeight <= 1.0f)
+    return -1;
 
-  // Use ImGui mouse position for better synchronization with UI and Gizmo
-  ImVec2 mpos = ImGui::GetIO().MousePos;
+  // Use viewport-relative mouse coordinates.
+  ImVec2 mposAbs = ImGui::GetIO().MousePos;
+  ImGuiViewport *vp = ImGui::GetMainViewport();
+  float vpX = vp ? vp->Pos.x : 0.0f;
+  float vpY = vp ? vp->Pos.y : 0.0f;
+  float mx = mposAbs.x - vpX;
+  float my = mposAbs.y - vpY;
+  if (mx < 0.0f || my < 0.0f || mx > screenWidth || my > screenHeight)
+    return -1;
+
   // NDC [-1, 1]
-  float mox = (mpos.x / screenWidth) * 2.0f - 1.0f;
-  float moy = 1.0f - (mpos.y / screenHeight) * 2.0f;
+  float ndcX = (mx / screenWidth) * 2.0f - 1.0f;
+  float ndcY = 1.0f - (my / screenHeight) * 2.0f;
 
-  // Ray construction
-  float vx = mox / proj[0];
-  float vy = moy / proj[5];
-  float vz = 1.0f;
+  // Build ray from the same camera basis used by DXR raygen.
+  const float kPi = 3.14159265359f;
+  float fovRad = g_cameraData.fov * (kPi / 180.0f);
+  float tanHalfFov = tanf(fovRad * 0.5f);
+  float aspect = (screenHeight > 0.0f) ? (screenWidth / screenHeight)
+                                       : g_cameraData.aspect;
 
-  // View to World Ray Direction
-  float dir[3] = {vx * view[0] + vy * view[1] + vz * view[2],
-                  vx * view[4] + vy * view[5] + vz * view[6],
-                  vx * view[8] + vy * view[9] + vz * view[10]};
-  float orig[3] = {g_cameraData.pos[0], g_cameraData.pos[1],
-                   g_cameraData.pos[2]};
+  float forward[3] = {g_cameraData.forward[0], g_cameraData.forward[1],
+                      g_cameraData.forward[2]};
+  float upHint[3] = {g_cameraData.up[0], g_cameraData.up[1], g_cameraData.up[2]};
 
-  float minT = 1e30f;
+  auto Normalize3 = [](float v[3]) -> bool {
+    float len2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+    if (len2 <= 1e-12f)
+      return false;
+    float invLen = 1.0f / sqrtf(len2);
+    v[0] *= invLen;
+    v[1] *= invLen;
+    v[2] *= invLen;
+    return true;
+  };
+
+  auto Cross3 = [](const float a[3], const float b[3], float out[3]) {
+    out[0] = a[1] * b[2] - a[2] * b[1];
+    out[1] = a[2] * b[0] - a[0] * b[2];
+    out[2] = a[0] * b[1] - a[1] * b[0];
+  };
+
+  if (!Normalize3(forward))
+    return -1;
+  float right[3];
+  Cross3(forward, upHint, right);
+  if (!Normalize3(right))
+    return -1;
+  float up[3];
+  Cross3(right, forward, up);
+  if (!Normalize3(up))
+    return -1;
+
+  float xView = ndcX * aspect * tanHalfFov;
+  float yView = ndcY * tanHalfFov;
+  float dir[3] = {xView * right[0] + yView * up[0] + forward[0],
+                  xView * right[1] + yView * up[1] + forward[1],
+                  xView * right[2] + yView * up[2] + forward[2]};
+  if (!Normalize3(dir))
+    return -1;
+
+  float orig[3] = {g_cameraData.pos[0], g_cameraData.pos[1], g_cameraData.pos[2]};
+
+  auto TransformPoint = [](const float m[16], const float p[3], float out[3]) {
+    out[0] = p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12];
+    out[1] = p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13];
+    out[2] = p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14];
+  };
+  auto TransformVector = [](const float m[16], const float v[3], float out[3]) {
+    out[0] = v[0] * m[0] + v[1] * m[4] + v[2] * m[8];
+    out[1] = v[0] * m[1] + v[1] * m[5] + v[2] * m[9];
+    out[2] = v[0] * m[2] + v[1] * m[6] + v[2] * m[10];
+  };
+
+  float minWorldDist2 = FLT_MAX;
   int hitNode = -1;
   int hitMaterial = -1;
 
@@ -1386,74 +1441,83 @@ int UpdateSelection(float screenWidth, float screenHeight) {
       continue;
 
     // Transform ray to local space
-    float localOrig[3] = {orig[0] * invNode[0] + orig[1] * invNode[4] +
-                              orig[2] * invNode[8] + invNode[12],
-                          orig[0] * invNode[1] + orig[1] * invNode[5] +
-                              orig[2] * invNode[9] + invNode[13],
-                          orig[0] * invNode[2] + orig[1] * invNode[6] +
-                              orig[2] * invNode[10] + invNode[14]};
-    float localDir[3] = {
-        dir[0] * invNode[0] + dir[1] * invNode[4] + dir[2] * invNode[8],
-        dir[0] * invNode[1] + dir[1] * invNode[5] + dir[2] * invNode[9],
-        dir[0] * invNode[2] + dir[1] * invNode[6] + dir[2] * invNode[10]};
+    float localOrig[3], localDir[3];
+    TransformPoint(invNode, orig, localOrig);
+    TransformVector(invNode, dir, localDir);
+    float localDirLen2 = localDir[0] * localDir[0] + localDir[1] * localDir[1] +
+                         localDir[2] * localDir[2];
+    if (localDirLen2 <= 1e-12f)
+      continue;
 
     for (size_t mIdx : node.meshIndices) {
       if (mIdx >= g_loadedMeshes.size())
         continue;
       const auto &mesh = g_loadedMeshes[mIdx];
 
-      float tmin = 0.001f, tmax = 1e30f;
-      for (int a = 0; a < 3; ++a) {
-        float invD = 1.0f / (localDir[a] != 0.0f ? localDir[a] : 1e-9f);
-        float t0 = (mesh.minBound[a] - localOrig[a]) * invD;
-        float t1 = (mesh.maxBound[a] - localOrig[a]) * invD;
-        if (invD < 0.0f)
-          std::swap(t0, t1);
-        tmin = std::max(tmin, t0);
-        tmax = std::min(tmax, t1);
+      float boxT = 1e30f;
+      if (!RayAABBIntersection(localOrig, localDir, mesh.minBound, mesh.maxBound,
+                               boxT)) {
+        continue;
       }
 
-      if (tmax >= tmin && tmin < minT) {
-        // Broad phase hit: do we have CPU geometry to check triangles?
+      // Broad phase hit: refine with triangle tests when CPU geometry exists.
+      if (!mesh.cpuVertices.empty() && !mesh.cpuIndices.empty()) {
         bool triHit = false;
-        float meshT = 1e30f;
+        float bestMeshDist2 = FLT_MAX;
 
-        if (!mesh.cpuVertices.empty() && !mesh.cpuIndices.empty()) {
-          for (size_t k = 0; k < mesh.cpuIndices.size(); k += 3) {
-            // Safety check
-            if (k + 2 >= mesh.cpuIndices.size())
-              break;
-            uint32_t i0 = mesh.cpuIndices[k];
-            uint32_t i1 = mesh.cpuIndices[k + 1];
-            uint32_t i2 = mesh.cpuIndices[k + 2];
-
-            if (i0 < mesh.cpuVertices.size() && i1 < mesh.cpuVertices.size() &&
-                i2 < mesh.cpuVertices.size()) {
-              float tVal;
-              if (RayTriangleIntersection(localOrig, localDir,
-                                          mesh.cpuVertices[i0].pos,
-                                          mesh.cpuVertices[i1].pos,
-                                          mesh.cpuVertices[i2].pos, tVal)) {
-                if (tVal < meshT) {
-                  meshT = tVal;
-                  triHit = true;
-                }
-              }
-            }
+        for (size_t k = 0; k + 2 < mesh.cpuIndices.size(); k += 3) {
+          uint32_t i0 = mesh.cpuIndices[k];
+          uint32_t i1 = mesh.cpuIndices[k + 1];
+          uint32_t i2 = mesh.cpuIndices[k + 2];
+          if (i0 >= mesh.cpuVertices.size() || i1 >= mesh.cpuVertices.size() ||
+              i2 >= mesh.cpuVertices.size()) {
+            continue;
           }
 
-          if (triHit && meshT < minT) {
-            minT = meshT;
-            hitNode = (int)i;
-            hitMaterial = mesh.materialIndex;
+          float tVal = 0.0f;
+          if (!RayTriangleIntersection(localOrig, localDir, mesh.cpuVertices[i0].pos,
+                                       mesh.cpuVertices[i1].pos,
+                                       mesh.cpuVertices[i2].pos, tVal)) {
+            continue;
           }
-        } else {
-          // Fallback to AABB reference if no CPU geometry
-          if (tmin < minT) {
-            minT = tmin;
-            hitNode = (int)i;
-            hitMaterial = mesh.materialIndex;
+
+          float localHit[3] = {localOrig[0] + localDir[0] * tVal,
+                               localOrig[1] + localDir[1] * tVal,
+                               localOrig[2] + localDir[2] * tVal};
+          float worldHit[3];
+          TransformPoint(node.transform, localHit, worldHit);
+          float dx = worldHit[0] - orig[0];
+          float dy = worldHit[1] - orig[1];
+          float dz = worldHit[2] - orig[2];
+          float worldDist2 = dx * dx + dy * dy + dz * dz;
+
+          if (worldDist2 < bestMeshDist2) {
+            bestMeshDist2 = worldDist2;
+            triHit = true;
           }
+        }
+
+        if (triHit && bestMeshDist2 < minWorldDist2) {
+          minWorldDist2 = bestMeshDist2;
+          hitNode = (int)i;
+          hitMaterial = mesh.materialIndex;
+        }
+      } else {
+        // Fallback to AABB hit point in world-space distance.
+        float localHit[3] = {localOrig[0] + localDir[0] * boxT,
+                             localOrig[1] + localDir[1] * boxT,
+                             localOrig[2] + localDir[2] * boxT};
+        float worldHit[3];
+        TransformPoint(node.transform, localHit, worldHit);
+        float dx = worldHit[0] - orig[0];
+        float dy = worldHit[1] - orig[1];
+        float dz = worldHit[2] - orig[2];
+        float worldDist2 = dx * dx + dy * dy + dz * dz;
+
+        if (worldDist2 < minWorldDist2) {
+          minWorldDist2 = worldDist2;
+          hitNode = (int)i;
+          hitMaterial = mesh.materialIndex;
         }
       }
     }
