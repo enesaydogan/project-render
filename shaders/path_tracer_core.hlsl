@@ -52,11 +52,7 @@ void pack_gi_reservoir(GI_Reservoir r, out float4 d0, out float4 d1, out float4 
     d2 = float4(r.w_sum, asfloat(r.M), r.W, 0.0);
 }
 
-// target PDF for ReSTIR DI (luminance of lit surface)
-float calculate_p_target(float3 radiance, float3 albedo, float3 f_brdf, float NdotL) {
-    float p = length(max(0.0, radiance * f_brdf * NdotL));
-    return min(p, 1e10); // Clamp to prevent infinity
-}
+// target PDF for ReSTIR DI (luminance of lit surface) - now in restir_lib.hlsl
 
 Reservoir unpack_reservoir(float4 data) {
     Reservoir r;
@@ -463,12 +459,11 @@ void RayGen()
             Reservoir res = init_reservoir();
             
             // A. Initial Candidate Sampling
-            // Sample Sun
+            // Sample Sun (Directional)
             {
                 LightSample ls = evaluate_directional_light(lightDir.xyz, lightColor.rgb, lightColor.w);
                 float NdotL = saturate(dot(N, ls.L));
                 
-                // Evaluation for ReSTIR
                 float3 F0 = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, metallic);
                 float3 H = normalize(ls.L + V);
                 float3 F = F_Schlick(max(0.0, dot(H, V)), F0);
@@ -484,26 +479,28 @@ void RayGen()
             if (numLights > 0) {
                 uint lightIdx = next_uint(rng) % numLights;
                 Light l = g_lights[lightIdx];
-                float3 L = l.position - P;
-                float dist = length(L);
-                L /= dist;
-                float attenuation = l.intensity / (dist * dist + 1.0);
-                float3 radiance = l.color * attenuation;
-                float NdotL = saturate(dot(N, L));
-
+                
+                LightSample ls;
+                if (l.type == LIGHT_TYPE_AREA_RECT || l.type == LIGHT_TYPE_AREA_DISK) {
+                    ls = sample_area_light(l, P, next_float2(rng));
+                } else {
+                    ls = evaluate_light(l, P);
+                }
+                
+                float NdotL = saturate(dot(N, ls.L));
                 float3 F0 = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, metallic);
-                float3 H = normalize(L + V);
+                float3 H = normalize(ls.L + V);
                 float3 F = F_Schlick(max(0.0, dot(H, V)), F0);
                 float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL, roughness) * F;
                 float3 brdf = (diffuseAlbedo / PI) * (1.0 - F) + spec;
 
-                float p_target = calculate_p_target(radiance, payloadAlbedo, brdf, NdotL) * (float)numLights;
+                float p_target = calculate_p_target(ls.radiance, payloadAlbedo, brdf, NdotL) * (float)numLights;
+                if (l.type == LIGHT_TYPE_AREA_RECT || l.type == LIGHT_TYPE_AREA_DISK) {
+                     p_target *= (1.0 / max(1e-6, ls.pdf));
+                }
+
                 update_reservoir(res, lightIdx, p_target, rng);
             }
-
-            // Temporal and spatial reuse are now decoupled into a dedicated
-            // compute pass (restir_spatial_cs.hlsl). RayGen keeps only
-            // per-pixel initial candidate generation and direct evaluation.
 
             // C. Final ReSTIR DI Shading & Finalization
             float3 L_final;
@@ -516,10 +513,16 @@ void RayGen()
                 radiance_final = lightColor.rgb * lightColor.w;
             } else if (res.lightIndex < numLights) {
                 Light l = g_lights[res.lightIndex];
-                L_final = l.position - P;
-                dist_final = length(L_final);
-                L_final /= dist_final;
-                radiance_final = l.color * (l.intensity / (dist_final * dist_final + 1.0));
+                LightSample ls;
+                if (l.type == LIGHT_TYPE_AREA_RECT || l.type == LIGHT_TYPE_AREA_DISK) {
+                    // For now, re-sample. In a production ReSTIR, we'd store the sample point.
+                    ls = sample_area_light(l, P, next_float2(rng)); 
+                } else {
+                    ls = evaluate_light(l, P);
+                }
+                L_final = ls.L;
+                dist_final = ls.dist;
+                radiance_final = ls.radiance;
             } else {
                 radiance_final = float3(0,0,0);
             }
@@ -533,24 +536,19 @@ void RayGen()
 
             float p_target_final = calculate_p_target(radiance_final, payloadAlbedo, brdf_f, NdotL_final);
             
-            // Finalize reservoir BEFORE storing (so W is valid in next frame)
             finalize_reservoir(res, p_target_final);
 
-            // Store ReSTIR state for next frame
             float4 packed_res = pack_reservoir(res);
             if (flip) { g_reservoir1[launchIndex.xy] = packed_res; SHADER_COUNTER_ADD(SHADER_COUNTER_RESERVOIR_WRITES, 1); }
             else      { g_reservoir0[launchIndex.xy] = packed_res; SHADER_COUNTER_ADD(SHADER_COUNTER_RESERVOIR_WRITES, 1); }
 
-            // D. Apply Visibility for current frame shading
+            // D. Apply Visibility
             if (p_target_final > 0.0) {
                 RayDesc shadowRay;
                 shadowRay.Origin = P + N * 0.002;
                 
-                // Jitter shadow ray for Sun (Disc Light)
                 if (res.lightIndex == 0xFFFFFFFF && lightDir.w > 0.0) {
-                     // lightDir.w holds the sun angular radius (half-angle)
-                     float2 u_s = next_float2(rng);
-                     shadowRay.Direction = SampleCone(L_final, cos(lightDir.w), u_s);
+                     shadowRay.Direction = SampleCone(L_final, cos(lightDir.w), next_float2(rng));
                 } else {
                      shadowRay.Direction = L_final;
                 }
@@ -562,11 +560,7 @@ void RayGen()
                 q.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, shadowRay);
                 q.Proceed();
                 
-                SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
-                SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
-                
                 if (q.CommittedStatus() == COMMITTED_NOTHING) {
-                    // Trial 2: MIS for ReSTIR
                     float pdfLight = (res.W > 0.0) ? (1.0 / res.W) : 0.0;
                     
                     float specProb = max(F_f.x, max(F_f.y, F_f.z));
@@ -681,14 +675,22 @@ void RayGen()
                 dist_nee = 1000.0;
                 neeWeight = (numLights > 0) ? 2.0 : 1.0;
             } else {
-                // Sample random point light (probability = 0.5 * 1/numLights)
+                // Sample random local light (probability = 0.5 * 1/numLights)
                 uint lightIdx = next_uint(rng) % numLights;
                 Light l = g_lights[lightIdx];
-                L_nee = l.position - P;
-                dist_nee = length(L_nee);
-                L_nee /= dist_nee;
-                radiance_nee = l.color * (l.intensity / (dist_nee * dist_nee + 1.0)) * (float)numLights;
+                LightSample ls;
+                if (l.type == LIGHT_TYPE_AREA_RECT || l.type == LIGHT_TYPE_AREA_DISK) {
+                    ls = sample_area_light(l, P, next_float2(rng));
+                } else {
+                    ls = evaluate_light(l, P);
+                }
+                L_nee = ls.L;
+                dist_nee = ls.dist;
+                radiance_nee = ls.radiance * (float)numLights;
                 neeWeight = 2.0;
+                if (l.type == LIGHT_TYPE_AREA_RECT || l.type == LIGHT_TYPE_AREA_DISK) {
+                    radiance_nee *= (1.0 / max(1e-6, ls.pdf));
+                }
             }
 
             float NdotL_nee = saturate(dot(N, L_nee));

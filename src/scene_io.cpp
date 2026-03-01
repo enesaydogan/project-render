@@ -282,7 +282,23 @@ bool SaveScene(const std::string &path) {
       j["nodes"].push_back(n);
     }
 
-    // 7. Embedded Assets
+    // 7. Multi-Light System
+    for (const auto &light : Scene::GetLights()) {
+      json l;
+      l["type"] = light.type;
+      l["position"] = {light.position[0], light.position[1], light.position[2]};
+      l["emission"] = {light.emission[0], light.emission[1], light.emission[2]};
+      l["direction"] = {light.direction[0], light.direction[1],
+                        light.direction[2]};
+      l["radius"] = light.radius;
+      l["innerConeAngle"] = light.innerConeAngle;
+      l["outerConeAngle"] = light.outerConeAngle;
+      l["areaExtents"] = {light.areaExtents[0], light.areaExtents[1]};
+      l["iesAtlasIndex"] = light.iesAtlasIndex;
+      j["lights"].push_back(l);
+    }
+
+    // 8. Embedded Assets
     for (size_t i = 0; i < g_loadedMeshes.size(); ++i) {
       const auto &mesh = g_loadedMeshes[i];
       json m;
@@ -501,6 +517,45 @@ bool LoadScene(const std::string &path) {
                 "LoadScene: Deprecated field 'lighting.ambientColor' found; "
                 "ignoring it (Prague sky/env-driven lighting).\n");
       }
+    }
+
+    // 2.7 Multi-Light System
+    if (j.contains("lights") && j["lights"].is_array()) {
+      auto &sceneLights = Scene::GetLights();
+      sceneLights.clear();
+      for (const auto &l : j["lights"]) {
+        Light light = {};
+        light.type = l.value("type", 1u);
+        auto p = l.value("position", std::vector<float>{0, 0, 0});
+        if (p.size() >= 3) {
+          light.position[0] = p[0];
+          light.position[1] = p[1];
+          light.position[2] = p[2];
+        }
+        auto e = l.value("emission", std::vector<float>{10, 10, 10});
+        if (e.size() >= 3) {
+          light.emission[0] = e[0];
+          light.emission[1] = e[1];
+          light.emission[2] = e[2];
+        }
+        auto d = l.value("direction", std::vector<float>{0, -1, 0});
+        if (d.size() >= 3) {
+          light.direction[0] = d[0];
+          light.direction[1] = d[1];
+          light.direction[2] = d[2];
+        }
+        light.radius = l.value("radius", 0.1f);
+        light.innerConeAngle = l.value("innerConeAngle", 1.0f);
+        light.outerConeAngle = l.value("outerConeAngle", 0.5f);
+        auto ae = l.value("areaExtents", std::vector<float>{1, 1});
+        if (ae.size() >= 2) {
+          light.areaExtents[0] = ae[0];
+          light.areaExtents[1] = ae[1];
+        }
+        light.iesAtlasIndex = l.value("iesAtlasIndex", -1);
+        sceneLights.push_back(light);
+      }
+      Scene::UpdateLights();
     }
 
     // 3. Render Mode

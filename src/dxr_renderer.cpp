@@ -1,3 +1,4 @@
+// DXR Renderer Implementation
 #include "dxr_renderer.h"
 #include "camera.h"
 #include "clouds.h" // Access CloudManager
@@ -162,7 +163,8 @@ static const UINT DXR_HEAP_VARIANCE_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 22;
 static const UINT DXR_HEAP_SHADER_COUNTERS_OFFSET = DXR_HEAP_UAV_OFFSET + 24;
 
 // Dedicated SRV blocks after UAV range so UAV registers stay stable.
-static const UINT DXR_HEAP_ENV_SRV_OFFSET = DXR_HEAP_UAV_OFFSET + DXR_HEAP_UAV_COUNT;
+static const UINT DXR_HEAP_ENV_SRV_OFFSET =
+    DXR_HEAP_UAV_OFFSET + DXR_HEAP_UAV_COUNT;
 static const UINT DXR_HEAP_ENV_SRV_COUNT = 3; // t0..t2, space1
 static const UINT DXR_HEAP_IBL_OFFSET = DXR_HEAP_ENV_SRV_OFFSET + 0;
 static const UINT DXR_HEAP_IBL_CONDITIONAL_CDF_OFFSET =
@@ -314,7 +316,7 @@ static bool s_textureTableDirty = true;
 
 static ComPtr<ID3D12Resource> s_lightBuffer;
 static UINT s_lightCount = 0;
-static std::vector<GpuLight> s_lastLightsCpu;
+static std::vector<Light> s_lastLightsCpu;
 static ComPtr<ID3D12Resource> s_reservoirBuffers[2];
 static ComPtr<ID3D12Resource> s_gi_reservoirBuffers[6];
 static ComPtr<ID3D12RootSignature> s_restirSpatialRootSig;
@@ -662,9 +664,6 @@ static void EnsureRestirSpatialPipeline() {
     return;
   }
 
-  // Root signature:
-  //  - b0: Camera constants (frame index, DLSS toggles, dimensions)
-  //  - UAV table: u2..u13 (reservoir ping-pong + depth/normal compatibility)
   D3D12_DESCRIPTOR_RANGE uavRange = {};
   uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
   uavRange.NumDescriptors = 12; // u2..u13
@@ -673,7 +672,15 @@ static void EnsureRestirSpatialPipeline() {
   uavRange.OffsetInDescriptorsFromTableStart =
       D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-  D3D12_ROOT_PARAMETER params[2] = {};
+  D3D12_DESCRIPTOR_RANGE texRange = {};
+  texRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+  texRange.NumDescriptors = 2048; // t1..t2049
+  texRange.BaseShaderRegister = 1;
+  texRange.RegisterSpace = 0;
+  texRange.OffsetInDescriptorsFromTableStart =
+      D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+  D3D12_ROOT_PARAMETER params[4] = {};
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
   params[0].Descriptor.ShaderRegister = 0;
   params[0].Descriptor.RegisterSpace = 0;
@@ -683,6 +690,18 @@ static void EnsureRestirSpatialPipeline() {
   params[1].DescriptorTable.NumDescriptorRanges = 1;
   params[1].DescriptorTable.pDescriptorRanges = &uavRange;
   params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  // Lights StructuredBuffer (t5000)
+  params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[2].Descriptor.ShaderRegister = 5000;
+  params[2].Descriptor.RegisterSpace = 0;
+  params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  // Texture Table (t1..t2048)
+  params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[3].DescriptorTable.NumDescriptorRanges = 1;
+  params[3].DescriptorTable.pDescriptorRanges = &texRange;
+  params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
   D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
   rsDesc.NumParameters = _countof(params);
@@ -708,7 +727,7 @@ static void EnsureRestirSpatialPipeline() {
   try {
     std::vector<std::wstring> defines;
     cs = s_dxcHelper.Compile(L"shaders/restir_spatial_cs.hlsl", L"CSMain",
-                             L"cs_6_3", defines);
+                             L"cs_6_5", defines);
   } catch (const std::exception &e) {
     fprintf(stderr, "DxrRenderer: ReSTIR spatial CS compile failed: %s\n",
             e.what());
@@ -932,6 +951,13 @@ static void DispatchRestirSpatialPasses(ID3D12GraphicsCommandList4 *list,
     D3D12_GPU_DESCRIPTOR_HANDLE restirUavTable = s_outputUAVGpu;
     restirUavTable.ptr += (UINT64)2 * (UINT64)inc; // u2..u13 table base
     list->SetComputeRootDescriptorTable(1, restirUavTable);
+
+    if (s_lightBuffer) {
+      list->SetComputeRootShaderResourceView(
+          2, s_lightBuffer->GetGPUVirtualAddress());
+    }
+
+    list->SetComputeRootDescriptorTable(3, s_texTableGpu);
 
     const UINT gx = (s_outputWidth + 7) / 8;
     const UINT gy = (s_outputHeight + 7) / 8;
@@ -2822,7 +2848,7 @@ void BuildAccelerationStructures(
   }
 }
 
-void UpdateLights(const std::vector<GpuLight> &lights) {
+void UpdateLights(const std::vector<Light> &lights) {
   if (lights.empty()) {
     if (s_lightCount != 0) {
       s_lightCount = 0;
@@ -2835,7 +2861,7 @@ void UpdateLights(const std::vector<GpuLight> &lights) {
   // Avoid resetting accumulation / Streamline history when lights didn't
   // change.
   if (lights.size() == s_lastLightsCpu.size()) {
-    const size_t byteSize = lights.size() * sizeof(GpuLight);
+    const size_t byteSize = lights.size() * sizeof(Light);
     if (byteSize > 0 &&
         memcmp(lights.data(), s_lastLightsCpu.data(), byteSize) == 0) {
       // Keep s_lightCount accurate (and allow the caller to still call
@@ -2849,9 +2875,9 @@ void UpdateLights(const std::vector<GpuLight> &lights) {
 
   // Ensure buffer size is at least 1 element to avoid creation errors/null
   // descriptors
-  UINT bufferSize = (UINT)(lights.size() * sizeof(GpuLight));
+  UINT bufferSize = (UINT)(lights.size() * sizeof(Light));
   if (bufferSize == 0)
-    bufferSize = sizeof(GpuLight);
+    bufferSize = sizeof(Light);
 
   // Recreate buffer if size changed
   if (!s_lightBuffer || s_lightBuffer->GetDesc().Width < bufferSize) {

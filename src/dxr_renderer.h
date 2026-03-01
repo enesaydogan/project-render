@@ -6,6 +6,8 @@
 #include <vector>
 #include <wrl.h>
 
+#include "light.h"
+
 // Forward declare Scene types to avoid circular dependency if ever needed
 namespace Scene {
 struct Instance;
@@ -15,21 +17,9 @@ using Microsoft::WRL::ComPtr;
 
 class StreamlineManager;
 
-struct GpuLight {
-  uint32_t type;
-  float position[3];
-  float direction[3];
-  float intensity;
-  float color[3];
-  float range;
-  float spotAngle;
-  float spotInnerAngle;
-  uint32_t meshIndex;
-  uint32_t padding; // Align to 64 bytes
-};
-
-// Declarations for DXR renderer helpers
+// Update light buffer for ReSTIR
 namespace DxrRenderer {
+void UpdateLights(const std::vector<Light> &lights);
 // Initialize probe (device required). Call this early to detect support.
 void Initialize(ID3D12Device *device);
 // Attach command queue and synchronization primitives once created
@@ -47,7 +37,7 @@ void BuildAccelerationStructures(
 // needed.
 void MarkMaterialDirty(int materialIndex);
 // Update light buffer for ReSTIR
-void UpdateLights(const std::vector<GpuLight> &lights);
+void UpdateLights(const std::vector<Light> &lights);
 // Reset accumulation for path tracing
 void ResetAccumulation();
 // Attach Streamline manager (optional) for DLSS-SR / DLSS-RR evaluation.
