@@ -558,7 +558,9 @@ void RayGen()
                 
                 RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
                 q.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, shadowRay);
-                q.Proceed();
+                // Drain the query so non-opaque candidates (e.g. glass) do not
+                // early-out visibility before opaque blockers behind them.
+                while (q.Proceed()) {}
                 
                 if (q.CommittedStatus() == COMMITTED_NOTHING) {
                     float pdfLight = (res.W > 0.0) ? (1.0 / res.W) : 0.0;
@@ -640,7 +642,7 @@ void RayGen()
                     
                     RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q_gi;
                     q_gi.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, giVisRay);
-                    q_gi.Proceed();
+                    while (q_gi.Proceed()) {}
                     
                     SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                     if (q_gi.CommittedStatus() == COMMITTED_NOTHING) {
@@ -703,7 +705,7 @@ void RayGen()
                 
                 RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q_nee;
                 q_nee.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, shadowRay);
-                q_nee.Proceed();
+                while (q_nee.Proceed()) {}
                 
                 SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                 SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
@@ -745,7 +747,7 @@ void RayGen()
 
                 RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q_env;
                 q_env.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, envShadowRay);
-                q_env.Proceed();
+                while (q_env.Proceed()) {}
                 
                 SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                 SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
