@@ -301,9 +301,17 @@ void ResizeSwapChain(UINT width, UINT height) {
 
   DXGI_SWAP_CHAIN_DESC swapChainDesc = {};
   g_swapChain->GetDesc(&swapChainDesc);
-  ThrowIfFailed(g_swapChain->ResizeBuffers(FrameCount, width, height,
-                                           swapChainDesc.BufferDesc.Format,
-                                           swapChainDesc.Flags));
+  HRESULT hrResize = g_swapChain->ResizeBuffers(FrameCount, width, height,
+                                                swapChainDesc.BufferDesc.Format,
+                                                swapChainDesc.Flags);
+  if (FAILED(hrResize)) {
+    HRESULT removedReason = g_device ? g_device->GetDeviceRemovedReason() : S_OK;
+    fprintf(stderr,
+            "DX12Context::ResizeSwapChain failed (hr=0x%08x, "
+            "deviceRemovedReason=0x%08x, size=%ux%u)\n",
+            (unsigned)hrResize, (unsigned)removedReason, width, height);
+    return;
+  }
 
   g_windowWidth = width;
   g_windowHeight = height;
