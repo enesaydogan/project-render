@@ -431,8 +431,11 @@ else()
 endif()
 
 # Copy only compiled shader bytecode to the runtime folder.
+# Runtime expects blobs next to the executable under ./shaders.
 if(DXC_COMPILER)
   add_custom_command(TARGET project-render POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E rm -rf
+          "$<TARGET_FILE_DIR:project-render>/shaders"
       COMMAND ${CMAKE_COMMAND} -E rm -rf
           "$<TARGET_FILE_DIR:project-render>/shaders"
       COMMAND ${CMAKE_COMMAND} -E make_directory
