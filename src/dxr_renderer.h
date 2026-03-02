@@ -32,6 +32,8 @@ void CreateRayTracingPipeline(UINT width, UINT height);
 void BuildAccelerationStructures(
     const std::vector<const Asset::GpuMesh *> &meshes,
     const std::vector<Scene::Instance> &instances);
+// Request a full BLAS/TLAS rebuild on the next RenderFrame call.
+void RequestAccelerationStructureRebuild();
 // Mark a material as changed in a way that can affect DXR traversal flags
 // (alpha/blend/transmission). The next render frame will rebuild BLAS/TLAS as
 // needed.

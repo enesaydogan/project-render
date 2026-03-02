@@ -6,6 +6,7 @@
 #include "dxc_wrapper.h"
 #include "dxr_accumulation.h"
 #include "dxr_helpers.h"
+#include "grass_manager.h"
 #include "ibl_manager.h"
 #include "oidn_denoiser.h"
 #include "scene.h"
@@ -290,6 +291,7 @@ static std::vector<uint8_t> s_cachedMeshOpaqueForBlas;
 static std::vector<uint8_t> s_dirtyMaterialFlags;
 static std::vector<const Asset::GpuMesh *> s_cachedTlasMeshOrder;
 static bool s_tlasSupportsUpdate = false;
+static bool s_forceAsRebuild = false;
 
 // Async compute execution for decoupled ReSTIR DI/GI.
 static ComPtr<ID3D12CommandQueue> s_asyncComputeQueue;
@@ -2338,6 +2340,8 @@ void MarkMaterialDirty(int materialIndex) {
   s_dirtyMaterialFlags[idx] = 1;
 }
 
+void RequestAccelerationStructureRebuild() { s_forceAsRebuild = true; }
+
 static void ClearDirtyMaterialsForMeshes(
     const std::vector<const Asset::GpuMesh *> &meshes) {
   if (s_dirtyMaterialFlags.empty()) {
@@ -2836,16 +2840,74 @@ void BuildAccelerationStructures(
       return;
     }
 
+    // --- append grass TLAS instances on CPU (stable fallback path) ---
+    {
+      const UINT grassRequested = GrassManager::GetInstanceCount();
+      if (grassRequested > 0) {
+        const Asset::GpuMesh *patchMesh = GrassManager::GetPatchMesh();
+        UINT64 patchBlasAddr = 0;
+        UINT patchMeshIndex = 0;
+        if (patchMesh && patchMesh->vertexBuffer) {
+          auto patchIt = meshToBlasIndex.find(patchMesh->vertexBuffer.Get());
+          if (patchIt != meshToBlasIndex.end()) {
+            const size_t patchBlasIndex = patchIt->second;
+            if (patchBlasIndex < s_allBLAS.size() &&
+                s_allBLAS[patchBlasIndex].buffers.result) {
+              patchBlasAddr =
+                  s_allBLAS[patchBlasIndex].buffers.result->GetGPUVirtualAddress();
+              patchMeshIndex = (UINT)s_allBLAS[patchBlasIndex].meshId;
+            }
+          }
+        }
+
+        if (patchBlasAddr != 0) {
+          const auto &blades = GrassManager::GetBlades();
+          instanceDescs.reserve(instanceDescs.size() + blades.size());
+          instanceMeshOrder.reserve(instanceMeshOrder.size() + blades.size());
+          for (const FGrassBlade &b : blades) {
+            const float s = sinf(b.yawRadians);
+            const float c = cosf(b.yawRadians);
+            const float sc = (std::max)(b.scale, 1e-3f);
+
+            D3D12_RAYTRACING_INSTANCE_DESC inst = {};
+            inst.Transform[0][0] = c * sc;
+            inst.Transform[0][1] = 0.0f;
+            inst.Transform[0][2] = -s * sc;
+            inst.Transform[0][3] = b.position.x;
+            inst.Transform[1][0] = 0.0f;
+            inst.Transform[1][1] = sc;
+            inst.Transform[1][2] = 0.0f;
+            inst.Transform[1][3] = b.position.y;
+            inst.Transform[2][0] = s * sc;
+            inst.Transform[2][1] = 0.0f;
+            inst.Transform[2][2] = c * sc;
+            inst.Transform[2][3] = b.position.z;
+            inst.InstanceID = patchMeshIndex;
+            inst.InstanceMask = 0xFF;
+            inst.InstanceContributionToHitGroupIndex = 0;
+            inst.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_OPAQUE;
+            inst.AccelerationStructure = patchBlasAddr;
+            instanceDescs.push_back(inst);
+            instanceMeshOrder.push_back(patchMesh);
+          }
+        } else if (g_verboseRenderLogs) {
+          fprintf(stderr,
+                  "DxrRenderer: grass instances present but no valid patch BLAS;"
+                  " skipping grass TLAS append this frame\n");
+        }
+      }
+    }
+    const UINT totalCount = (UINT)instanceDescs.size();
+
     ComPtr<ID3D12Resource> instanceDescBuffer;
     AllocateUploadBuffer(s_device, instanceDescs.data(),
-                         instanceDescs.size() *
-                             sizeof(D3D12_RAYTRACING_INSTANCE_DESC),
+                         (UINT64)totalCount * sizeof(D3D12_RAYTRACING_INSTANCE_DESC),
                          &instanceDescBuffer, L"TLAS Instance Buffer");
 
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
     inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
     inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
-    inputs.NumDescs = (UINT)instanceDescs.size();
+    inputs.NumDescs = totalCount;
     inputs.InstanceDescs = instanceDescBuffer->GetGPUVirtualAddress();
 
     bool canRefitTlas =
@@ -3152,6 +3214,14 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
   // Material edits only require AS rebuild when opaque-vs-nonopaque state
   // changes (affects BLAS geometry flags / AnyHit path).
+  if (s_forceAsRebuild) {
+    BuildAccelerationStructures(meshes, Scene::GetInstances());
+    s_forceAsRebuild = false;
+    if (!s_tlas.result) {
+      return ReturnFail(16, "TLAS missing after forced rebuild");
+    }
+  }
+
   if (HasDirtyMaterialsForMeshes(meshes)) {
     bool opacityStateChanged = (s_cachedMeshOpaqueForBlas.size() != meshes.size());
     if (!opacityStateChanged) {

@@ -561,6 +561,52 @@ void Draw(HWND hwnd, bool &visible) {
             ImGui::EndTabItem();
           }
 
+          if (ImGui::BeginTabItem("Grass")) {
+            bool grassChanged = false;
+
+            if (ImGui::Checkbox("Enable Grass", &mat.isGrass)) {
+              if (mat.isGrass) {
+                // Initialize grass tint from the current material albedo.
+                mat.grassColor[0] = mat.diffuseColor[0];
+                mat.grassColor[1] = mat.diffuseColor[1];
+                mat.grassColor[2] = mat.diffuseColor[2];
+              }
+              grassChanged = true;
+            }
+
+            if (!mat.isGrass) {
+              ImGui::TextDisabled(
+                  "Enable Grass to use this material as a grass emitter.");
+            } else {
+              if (ImGui::ColorEdit3("Grass Color", mat.grassColor)) {
+                mat.diffuseColor[0] = mat.grassColor[0];
+                mat.diffuseColor[1] = mat.grassColor[1];
+                mat.diffuseColor[2] = mat.grassColor[2];
+                DxrRenderer::ResetAccumulation();
+              }
+              if (ImGui::SliderFloat("Blade Size", &mat.grassBladeSize, 0.05f,
+                                     5.0f, "%.2f")) {
+                grassChanged = true;
+              }
+              if (ImGui::SliderFloat("Blade Count / m2", &mat.grassBladeCount,
+                                     0.0f, 256.0f, "%.1f")) {
+                grassChanged = true;
+              }
+              if (ImGui::SliderFloat("Blade Variation",
+                                     &mat.grassBladeVariation, 0.0f, 1.0f,
+                                     "%.2f")) {
+                grassChanged = true;
+              }
+            }
+
+            if (grassChanged) {
+              DxrRenderer::ResetAccumulation();
+              DxrRenderer::RequestAccelerationStructureRebuild();
+            }
+
+            ImGui::EndTabItem();
+          }
+
           if (ImGui::BeginTabItem("Textures")) {
             auto DrawTextureSlot = [&](const char *label, int &idx) {
               ImGui::PushID(label);

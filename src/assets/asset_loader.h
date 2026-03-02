@@ -88,6 +88,13 @@ struct Material {
 
   bool doubleSided = false;
   std::string alphaMode = "OPAQUE";
+
+  // Grass controls (UI driven).
+  bool isGrass = false;
+  float grassColor[3] = {0.28f, 0.68f, 0.24f};
+  float grassBladeSize = 1.0f;
+  float grassBladeCount = 8.0f; // density in blades per square meter
+  float grassBladeVariation = 1.0f; // 0=no randomness, 1=full random scale/yaw
 };
 
 // Initialize the loader with a device and command queue for GPU uploads.

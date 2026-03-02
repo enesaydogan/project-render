@@ -3,6 +3,7 @@
 # Build directories
 /src-example/
 /build/_deps/*
+/build/Debug/*
 
 # CMake generated files
 CMakeCache.txt

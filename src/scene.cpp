@@ -7,6 +7,7 @@
 #include "dx12_context.h"
 #include "dxr_renderer.h"
 #include "file_import.h"
+#include "grass_manager.h"
 #include "ibl_manager.h"
 #include "imgui.h"
 #include <algorithm>
@@ -650,6 +651,18 @@ std::vector<const Asset::GpuMesh *> GetActiveMeshes() {
     if (m.vertexBuffer && m.indexBuffer && m.vertexCount > 0 &&
         m.indexCount > 0)
       active.push_back(&m);
+  }
+  // Include procedural grass patch mesh so DXR rebuilds can resolve its BLAS.
+  const Asset::GpuMesh *patch = GrassManager::GetPatchMesh();
+  if (patch && patch->vertexBuffer && patch->indexBuffer && patch->indexCount > 0) {
+    const bool alreadyPresent = std::any_of(
+        active.begin(), active.end(),
+        [patch](const Asset::GpuMesh *m) {
+          return m && m->vertexBuffer.Get() == patch->vertexBuffer.Get();
+        });
+    if (!alreadyPresent) {
+      active.push_back(patch);
+    }
   }
   return active;
 }

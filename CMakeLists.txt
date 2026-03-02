@@ -32,6 +32,7 @@ target_sources(project-render PRIVATE
     src/clouds.cpp
     src/imgui_theme.cpp
     src/scene_io.cpp
+    src/grass_manager.cpp
 )
 
 if (MSVC)
