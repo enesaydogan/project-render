@@ -63,7 +63,7 @@ bool OpenSceneFileDialog(HWND owner, std::wstring &outPath) {
   ofn.nMaxFile = (DWORD)std::size(szFile);
   ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY |
               OFN_NOCHANGEDIR;
-  ofn.lpstrFilter = L"Scene files\0*.json;*.render\0All files\0*.*\0";
+  ofn.lpstrFilter = L"Project Render Scene (*.prs)\0*.prs\0Legacy Scene (*.json)\0*.json\0All files\0*.*\0";
   if (GetOpenFileNameW(&ofn)) {
     outPath = szFile;
     return true;
@@ -73,15 +73,15 @@ bool OpenSceneFileDialog(HWND owner, std::wstring &outPath) {
 
 bool SaveSceneFileDialog(HWND owner, std::wstring &outPath) {
   OPENFILENAMEW ofn = {};
-  WCHAR szFile[1024] = {L"scene.json"};
+  WCHAR szFile[1024] = {L"scene.prs"};
   ofn.lStructSize = sizeof(OPENFILENAMEW);
   ofn.hwndOwner = owner;
   ofn.lpstrFile = szFile;
   ofn.nMaxFile = (DWORD)std::size(szFile);
   ofn.Flags = OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR |
               OFN_OVERWRITEPROMPT;
-  ofn.lpstrFilter = L"Scene files\0*.json;*.render\0All files\0*.*\0";
-  ofn.lpstrDefExt = L"json";
+  ofn.lpstrFilter = L"Project Render Scene (*.prs)\0*.prs\0All files\0*.*\0";
+  ofn.lpstrDefExt = L"prs";
   if (GetSaveFileNameW(&ofn)) {
     outPath = szFile;
     return true;
