@@ -53,6 +53,7 @@ target_include_directories(project-render PRIVATE "${CMAKE_SOURCE_DIR}/resources
 # Link the D3D shader compiler for runtime shader compilation
 target_link_libraries(project-render PRIVATE d3dcompiler)
 target_link_libraries(project-render PRIVATE comctl32)
+target_link_libraries(project-render PRIVATE Cabinet)  # Windows Compression API (LZMS) for .prs scene files
 
 # Streamline (DLSS-SR + DLSS-RR) SDK headers (runtime is dynamically loaded)
 set(STREAMLINE_ROOT "${CMAKE_SOURCE_DIR}/thirdparty/Streamline")
