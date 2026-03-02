@@ -156,9 +156,7 @@ add_custom_command(TARGET project-render POST_BUILD
   # and logPath=C:/NGXLogs. Remove any stale copy from previous builds.
   COMMAND ${CMAKE_COMMAND} -E rm -f
     "$<TARGET_FILE_DIR:project-render>/sl.interposer.json"
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    "${STREAMLINE_SCRIPTS_DIR}/sl.common.json"
-    "$<TARGET_FILE_DIR:project-render>/sl.common.json"
+  # sl.common.json is no longer copied; keep the file out of the build tree.
 )
 
 # Fetch and build Dear ImGui at configure time
@@ -323,6 +321,21 @@ if(MSVC)
   target_link_options(project-render PRIVATE "/WHOLEARCHIVE:$<TARGET_FILE:asset_loader>")
 endif()
 
+# Place build outputs into dedicated folders to avoid spilling .lib/.exp into
+# the top-level build directory. This keeps asset_loader.lib, imgui_static.lib,
+# project-render.lib and project-render.exp out of the build root.
+set_target_properties(project-render asset_loader imgui_static PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+  RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/Debug/bin"
+  RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/Release/bin"
+  ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+  ARCHIVE_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/Debug/lib"
+  ARCHIVE_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/Release/lib"
+  LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+  LIBRARY_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/Debug/lib"
+  LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/Release/lib"
+)
+
 # Instead of shipping plain text HLSL, compile shaders to bytecode
 # files (.cso) at build time and distribute those.  The runtime loader
 # (in dxc_wrapper.cpp) will prefer .cso blobs when available.
@@ -339,6 +352,9 @@ file(GLOB_RECURSE SHADER_ALL_INPUTS CONFIGURE_DEPENDS
 find_program(DXC_COMPILER dxc HINTS ENV PATH)
 if(DXC_COMPILER)
   message(STATUS "Found DXC compiler: ${DXC_COMPILER}")
+  # Determine the directory containing the DXC executable so we can copy
+  # runtime DLLs (dxcompiler.dll and dxil.dll) next to the executable.
+  get_filename_component(DXC_DIR ${DXC_COMPILER} DIRECTORY)
 
   # Build compile list automatically from discovered entry points.
   # Format per entry: "relative_file|entry_point|profile".
@@ -443,6 +459,13 @@ if(DXC_COMPILER)
       COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${SHADER_BINARY_DIR}"
           "$<TARGET_FILE_DIR:project-render>/shaders"
+      # Copy DXC runtime DLLs (if present alongside the dxc executable)
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${DXC_DIR}/dxcompiler.dll"
+        "$<TARGET_FILE_DIR:project-render>/dxcompiler.dll"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${DXC_DIR}/dxil.dll"
+        "$<TARGET_FILE_DIR:project-render>/dxil.dll"
       COMMENT "Copying compiled shader blobs..."
   )
 endif()

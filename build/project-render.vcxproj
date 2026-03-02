@@ -59,25 +59,25 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup>
     <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
-    <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\build\Debug\</OutDir>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\build\Debug\bin\</OutDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">project-render.dir\Debug\</IntDir>
     <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">project-render</TargetName>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">.exe</TargetExt>
     <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</LinkIncremental>
     <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</GenerateManifest>
-    <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\build\Release\</OutDir>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\build\Release\bin\</OutDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">project-render.dir\Release\</IntDir>
     <TargetName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">project-render</TargetName>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='Release|x64'">.exe</TargetExt>
     <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkIncremental>
     <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</GenerateManifest>
-    <OutDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\build\MinSizeRel\</OutDir>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\build\bin\MinSizeRel\</OutDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">project-render.dir\MinSizeRel\</IntDir>
     <TargetName Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">project-render</TargetName>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">.exe</TargetExt>
     <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkIncremental>
     <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">true</GenerateManifest>
-    <OutDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\build\RelWithDebInfo\</OutDir>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\build\bin\RelWithDebInfo\</OutDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">project-render.dir\RelWithDebInfo\</IntDir>
     <TargetName Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">project-render</TargetName>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">.exe</TargetExt>
@@ -128,7 +128,7 @@
     <PostBuildEvent>
       <Message>Copying OpenImageDenoise runtime binaries...		Copying SketchUp SDK runtime DLL...	Copying SketchUpCommonPreferences.dll to output...	Copying vcpkg runtime binaries (miniz.dll)...	Copying compiled shader blobs...	Copying assets folder...</Message>
       <Command>setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/oidn/bin/OpenImageDenoise.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_core.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cpu.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cuda.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_hip.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_sycl.dll D:/project-render/thirdparty/oidn/bin/sycl8.dll D:/project-render/thirdparty/oidn/bin/tbb12.dll D:/project-render/thirdparty/oidn/bin/tbbbind.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_0.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_5.dll D:/project-render/thirdparty/oidn/bin/ur_adapter_level_zero.dll D:/project-render/thirdparty/oidn/bin/ur_loader.dll D:/project-render/thirdparty/oidn/bin/ur_win_proxy_loader.dll D:/project-render/build/Debug/
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/oidn/bin/OpenImageDenoise.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_core.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cpu.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cuda.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_hip.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_sycl.dll D:/project-render/thirdparty/oidn/bin/sycl8.dll D:/project-render/thirdparty/oidn/bin/tbb12.dll D:/project-render/thirdparty/oidn/bin/tbbbind.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_0.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_5.dll D:/project-render/thirdparty/oidn/bin/ur_adapter_level_zero.dll D:/project-render/thirdparty/oidn/bin/ur_loader.dll D:/project-render/thirdparty/oidn/bin/ur_win_proxy_loader.dll D:/project-render/build/Debug/bin/
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -137,23 +137,21 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64//sl.interposer.dll D:/project-render/build/Debug/sl.interposer.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64//sl.interposer.dll D:/project-render/build/Debug/bin/sl.interposer.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64//sl.common.dll D:/project-render/build/Debug/sl.common.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64//sl.common.dll D:/project-render/build/Debug/bin/sl.common.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64//sl.dlss.dll D:/project-render/build/Debug/sl.dlss.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64//sl.dlss.dll D:/project-render/build/Debug/bin/sl.dlss.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64//sl.dlss_d.dll D:/project-render/build/Debug/sl.dlss_d.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64//sl.dlss_d.dll D:/project-render/build/Debug/bin/sl.dlss_d.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64//nvngx_dlss.dll D:/project-render/build/Debug/nvngx_dlss.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64//nvngx_dlss.dll D:/project-render/build/Debug/bin/nvngx_dlss.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64//nvngx_dlssd.dll D:/project-render/build/Debug/nvngx_dlssd.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64//nvngx_dlssd.dll D:/project-render/build/Debug/bin/nvngx_dlssd.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64//nvngx_dlss.license.txt D:/project-render/build/Debug/nvngx_dlss.license.txt
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64//nvngx_dlss.license.txt D:/project-render/build/Debug/bin/nvngx_dlss.license.txt
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E rm -f D:/project-render/build/Debug/sl.interposer.json
-if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/scripts/sl.common.json D:/project-render/build/Debug/sl.common.json
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -f D:/project-render/build/Debug/bin/sl.interposer.json
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -162,7 +160,7 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/sketchup_sdk/binaries/sketchup/x64/SketchUpAPI.dll D:/project-render/build/Debug
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/sketchup_sdk/binaries/sketchup/x64/SketchUpAPI.dll D:/project-render/build/Debug/bin
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -171,7 +169,7 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/sketchup_sdk/binaries/sketchup/x64/SketchUpCommonPreferences.dll D:/project-render/build/Debug
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/sketchup_sdk/binaries/sketchup/x64/SketchUpCommonPreferences.dll D:/project-render/build/Debug/bin
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -180,7 +178,7 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/repos/vcpkg/installed/x64-windows/debug/bin/miniz.dll D:/project-render/build/Debug/miniz.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/repos/vcpkg/installed/x64-windows/debug/bin/miniz.dll D:/project-render/build/Debug/bin/miniz.dll
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -189,13 +187,17 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/Debug/shaders
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/Debug/bin/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/Debug/shaders
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/Debug/bin/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/Debug/shaders
+"C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/Debug/bin/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/build/shaders D:/project-render/build/Debug/shaders
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/build/shaders D:/project-render/build/Debug/bin/shaders
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/dxcompiler.dll" D:/project-render/build/Debug/bin/dxcompiler.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/dxil.dll" D:/project-render/build/Debug/bin/dxil.dll
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -204,7 +206,7 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/assets D:/project-render/build/Debug/assets
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/assets D:/project-render/build/Debug/bin/assets
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -214,17 +216,17 @@ exit /b %1
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PostBuildEvent>
     <Link>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;ole32.lib;windowscodecs.lib;d3dcompiler.lib;comctl32.lib;D:\project-render\thirdparty\oidn\lib\OpenImageDenoise.lib;Debug\imgui_staticd.lib;Debug\asset_loaderd.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\thirdparty\sketchup_sdk\binaries\sketchup\x64\SketchUpAPI.lib;D:\project-render\repos\vcpkg\installed\x64-windows\debug\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\debug\lib\miniz.lib;_deps\assimp-build\lib\Debug\assimp-vc143-mtd.lib;_deps\assimp-build\contrib\zlib\Debug\zlibstaticd.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;ole32.lib;windowscodecs.lib;d3dcompiler.lib;comctl32.lib;D:\project-render\thirdparty\oidn\lib\OpenImageDenoise.lib;Debug\lib\imgui_staticd.lib;Debug\lib\asset_loaderd.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\thirdparty\sketchup_sdk\binaries\sketchup\x64\SketchUpAPI.lib;D:\project-render\repos\vcpkg\installed\x64-windows\debug\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\debug\lib\miniz.lib;_deps\assimp-build\lib\Debug\assimp-vc143-mtd.lib;_deps\assimp-build\contrib\zlib\Debug\zlibstaticd.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalOptions>%(AdditionalOptions) /machine:x64 /WHOLEARCHIVE:D:/project-render/build/Debug/asset_loaderd.lib</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64 /WHOLEARCHIVE:D:/project-render/build/Debug/lib/asset_loaderd.lib</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
       <EntryPointSymbol>"WinMainCRTStartup"</EntryPointSymbol>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
       <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
-      <ImportLibrary>D:/project-render/build/Debug/project-render.lib</ImportLibrary>
+      <ImportLibrary>D:/project-render/build/Debug/lib/project-render.lib</ImportLibrary>
       <LinkErrorReporting></LinkErrorReporting>
-      <ProgramDataBaseFile>D:/project-render/build/Debug/project-render.pdb</ProgramDataBaseFile>
+      <ProgramDataBaseFile>D:/project-render/build/Debug/bin/project-render.pdb</ProgramDataBaseFile>
       <RandomizedBaseAddress></RandomizedBaseAddress>
       <SubSystem>Console</SubSystem>
     </Link>
@@ -282,7 +284,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <PostBuildEvent>
       <Message>Copying OpenImageDenoise runtime binaries...		Copying SketchUp SDK runtime DLL...	Copying SketchUpCommonPreferences.dll to output...	Copying vcpkg runtime binaries (miniz.dll)...	Copying compiled shader blobs...	Copying assets folder...</Message>
       <Command>setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/oidn/bin/OpenImageDenoise.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_core.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cpu.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cuda.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_hip.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_sycl.dll D:/project-render/thirdparty/oidn/bin/sycl8.dll D:/project-render/thirdparty/oidn/bin/tbb12.dll D:/project-render/thirdparty/oidn/bin/tbbbind.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_0.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_5.dll D:/project-render/thirdparty/oidn/bin/ur_adapter_level_zero.dll D:/project-render/thirdparty/oidn/bin/ur_loader.dll D:/project-render/thirdparty/oidn/bin/ur_win_proxy_loader.dll D:/project-render/build/Release/
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/oidn/bin/OpenImageDenoise.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_core.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cpu.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cuda.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_hip.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_sycl.dll D:/project-render/thirdparty/oidn/bin/sycl8.dll D:/project-render/thirdparty/oidn/bin/tbb12.dll D:/project-render/thirdparty/oidn/bin/tbbbind.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_0.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_5.dll D:/project-render/thirdparty/oidn/bin/ur_adapter_level_zero.dll D:/project-render/thirdparty/oidn/bin/ur_loader.dll D:/project-render/thirdparty/oidn/bin/ur_win_proxy_loader.dll D:/project-render/build/Release/bin/
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -291,23 +293,21 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.interposer.dll D:/project-render/build/Release/sl.interposer.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.interposer.dll D:/project-render/build/Release/bin/sl.interposer.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.common.dll D:/project-render/build/Release/sl.common.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.common.dll D:/project-render/build/Release/bin/sl.common.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.dlss.dll D:/project-render/build/Release/sl.dlss.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.dlss.dll D:/project-render/build/Release/bin/sl.dlss.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.dlss_d.dll D:/project-render/build/Release/sl.dlss_d.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.dlss_d.dll D:/project-render/build/Release/bin/sl.dlss_d.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlss.dll D:/project-render/build/Release/nvngx_dlss.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlss.dll D:/project-render/build/Release/bin/nvngx_dlss.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlssd.dll D:/project-render/build/Release/nvngx_dlssd.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlssd.dll D:/project-render/build/Release/bin/nvngx_dlssd.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlss.license.txt D:/project-render/build/Release/nvngx_dlss.license.txt
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlss.license.txt D:/project-render/build/Release/bin/nvngx_dlss.license.txt
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E rm -f D:/project-render/build/Release/sl.interposer.json
-if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/scripts/sl.common.json D:/project-render/build/Release/sl.common.json
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -f D:/project-render/build/Release/bin/sl.interposer.json
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -316,7 +316,7 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/sketchup_sdk/binaries/sketchup/x64/SketchUpAPI.dll D:/project-render/build/Release
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/sketchup_sdk/binaries/sketchup/x64/SketchUpAPI.dll D:/project-render/build/Release/bin
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -325,7 +325,7 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/sketchup_sdk/binaries/sketchup/x64/SketchUpCommonPreferences.dll D:/project-render/build/Release
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/sketchup_sdk/binaries/sketchup/x64/SketchUpCommonPreferences.dll D:/project-render/build/Release/bin
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -334,7 +334,7 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/repos/vcpkg/installed/x64-windows/bin/miniz.dll D:/project-render/build/Release/miniz.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/repos/vcpkg/installed/x64-windows/bin/miniz.dll D:/project-render/build/Release/bin/miniz.dll
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -343,13 +343,17 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/Release/shaders
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/Release/bin/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/Release/shaders
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/Release/bin/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/Release/shaders
+"C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/Release/bin/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/build/shaders D:/project-render/build/Release/shaders
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/build/shaders D:/project-render/build/Release/bin/shaders
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/dxcompiler.dll" D:/project-render/build/Release/bin/dxcompiler.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/dxil.dll" D:/project-render/build/Release/bin/dxil.dll
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -358,7 +362,7 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/assets D:/project-render/build/Release/assets
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/assets D:/project-render/build/Release/bin/assets
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -368,18 +372,18 @@ exit /b %1
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PostBuildEvent>
     <Link>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;ole32.lib;windowscodecs.lib;d3dcompiler.lib;comctl32.lib;D:\project-render\thirdparty\oidn\lib\OpenImageDenoise.lib;Release\imgui_static.lib;Release\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\thirdparty\sketchup_sdk\binaries\sketchup\x64\SketchUpAPI.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\miniz.lib;_deps\assimp-build\lib\Release\assimp-vc143-mt.lib;_deps\assimp-build\contrib\zlib\Release\zlibstatic.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;ole32.lib;windowscodecs.lib;d3dcompiler.lib;comctl32.lib;D:\project-render\thirdparty\oidn\lib\OpenImageDenoise.lib;Release\lib\imgui_static.lib;Release\lib\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\thirdparty\sketchup_sdk\binaries\sketchup\x64\SketchUpAPI.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\miniz.lib;_deps\assimp-build\lib\Release\assimp-vc143-mt.lib;_deps\assimp-build\contrib\zlib\Release\zlibstatic.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalOptions>%(AdditionalOptions) /machine:x64 /WHOLEARCHIVE:D:/project-render/build/Release/asset_loader.lib</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64 /WHOLEARCHIVE:D:/project-render/build/Release/lib/asset_loader.lib</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
       <EntryPointSymbol>"WinMainCRTStartup"</EntryPointSymbol>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
       <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
-      <ImportLibrary>D:/project-render/build/Release/project-render.lib</ImportLibrary>
+      <ImportLibrary>D:/project-render/build/Release/lib/project-render.lib</ImportLibrary>
       <LinkErrorReporting></LinkErrorReporting>
       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
-      <ProgramDataBaseFile>D:/project-render/build/Release/project-render.pdb</ProgramDataBaseFile>
+      <ProgramDataBaseFile>D:/project-render/build/Release/bin/project-render.pdb</ProgramDataBaseFile>
       <RandomizedBaseAddress></RandomizedBaseAddress>
       <SubSystem>Console</SubSystem>
     </Link>
@@ -432,7 +436,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <PostBuildEvent>
       <Message>Copying OpenImageDenoise runtime binaries...		Copying SketchUp SDK runtime DLL...	Copying SketchUpCommonPreferences.dll to output...	Copying vcpkg runtime binaries (miniz.dll)...	Copying compiled shader blobs...	Copying assets folder...</Message>
       <Command>setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/oidn/bin/OpenImageDenoise.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_core.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cpu.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cuda.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_hip.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_sycl.dll D:/project-render/thirdparty/oidn/bin/sycl8.dll D:/project-render/thirdparty/oidn/bin/tbb12.dll D:/project-render/thirdparty/oidn/bin/tbbbind.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_0.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_5.dll D:/project-render/thirdparty/oidn/bin/ur_adapter_level_zero.dll D:/project-render/thirdparty/oidn/bin/ur_loader.dll D:/project-render/thirdparty/oidn/bin/ur_win_proxy_loader.dll D:/project-render/build/MinSizeRel/
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/oidn/bin/OpenImageDenoise.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_core.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cpu.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cuda.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_hip.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_sycl.dll D:/project-render/thirdparty/oidn/bin/sycl8.dll D:/project-render/thirdparty/oidn/bin/tbb12.dll D:/project-render/thirdparty/oidn/bin/tbbbind.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_0.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_5.dll D:/project-render/thirdparty/oidn/bin/ur_adapter_level_zero.dll D:/project-render/thirdparty/oidn/bin/ur_loader.dll D:/project-render/thirdparty/oidn/bin/ur_win_proxy_loader.dll D:/project-render/build/bin/MinSizeRel/
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -441,23 +445,21 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.interposer.dll D:/project-render/build/MinSizeRel/sl.interposer.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.interposer.dll D:/project-render/build/bin/MinSizeRel/sl.interposer.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.common.dll D:/project-render/build/MinSizeRel/sl.common.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.common.dll D:/project-render/build/bin/MinSizeRel/sl.common.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.dlss.dll D:/project-render/build/MinSizeRel/sl.dlss.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.dlss.dll D:/project-render/build/bin/MinSizeRel/sl.dlss.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.dlss_d.dll D:/project-render/build/MinSizeRel/sl.dlss_d.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.dlss_d.dll D:/project-render/build/bin/MinSizeRel/sl.dlss_d.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlss.dll D:/project-render/build/MinSizeRel/nvngx_dlss.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlss.dll D:/project-render/build/bin/MinSizeRel/nvngx_dlss.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlssd.dll D:/project-render/build/MinSizeRel/nvngx_dlssd.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlssd.dll D:/project-render/build/bin/MinSizeRel/nvngx_dlssd.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlss.license.txt D:/project-render/build/MinSizeRel/nvngx_dlss.license.txt
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlss.license.txt D:/project-render/build/bin/MinSizeRel/nvngx_dlss.license.txt
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E rm -f D:/project-render/build/MinSizeRel/sl.interposer.json
-if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/scripts/sl.common.json D:/project-render/build/MinSizeRel/sl.common.json
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -f D:/project-render/build/bin/MinSizeRel/sl.interposer.json
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -466,7 +468,7 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/sketchup_sdk/binaries/sketchup/x64/SketchUpAPI.dll D:/project-render/build/MinSizeRel
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/sketchup_sdk/binaries/sketchup/x64/SketchUpAPI.dll D:/project-render/build/bin/MinSizeRel
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -475,7 +477,7 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/sketchup_sdk/binaries/sketchup/x64/SketchUpCommonPreferences.dll D:/project-render/build/MinSizeRel
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/sketchup_sdk/binaries/sketchup/x64/SketchUpCommonPreferences.dll D:/project-render/build/bin/MinSizeRel
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -484,7 +486,7 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/repos/vcpkg/installed/x64-windows/bin/miniz.dll D:/project-render/build/MinSizeRel/miniz.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/repos/vcpkg/installed/x64-windows/bin/miniz.dll D:/project-render/build/bin/MinSizeRel/miniz.dll
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -493,13 +495,17 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/MinSizeRel/shaders
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/bin/MinSizeRel/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/MinSizeRel/shaders
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/bin/MinSizeRel/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/MinSizeRel/shaders
+"C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/bin/MinSizeRel/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/build/shaders D:/project-render/build/MinSizeRel/shaders
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/build/shaders D:/project-render/build/bin/MinSizeRel/shaders
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/dxcompiler.dll" D:/project-render/build/bin/MinSizeRel/dxcompiler.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/dxil.dll" D:/project-render/build/bin/MinSizeRel/dxil.dll
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -508,7 +514,7 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/assets D:/project-render/build/MinSizeRel/assets
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/assets D:/project-render/build/bin/MinSizeRel/assets
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -518,17 +524,17 @@ exit /b %1
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PostBuildEvent>
     <Link>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;ole32.lib;windowscodecs.lib;d3dcompiler.lib;comctl32.lib;D:\project-render\thirdparty\oidn\lib\OpenImageDenoise.lib;MinSizeRel\imgui_static.lib;MinSizeRel\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\thirdparty\sketchup_sdk\binaries\sketchup\x64\SketchUpAPI.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\miniz.lib;_deps\assimp-build\lib\MinSizeRel\assimp-vc143-mt.lib;_deps\assimp-build\contrib\zlib\MinSizeRel\zlibstatic.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;ole32.lib;windowscodecs.lib;d3dcompiler.lib;comctl32.lib;D:\project-render\thirdparty\oidn\lib\OpenImageDenoise.lib;lib\MinSizeRel\imgui_static.lib;lib\MinSizeRel\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\thirdparty\sketchup_sdk\binaries\sketchup\x64\SketchUpAPI.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\miniz.lib;_deps\assimp-build\lib\MinSizeRel\assimp-vc143-mt.lib;_deps\assimp-build\contrib\zlib\MinSizeRel\zlibstatic.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalOptions>%(AdditionalOptions) /machine:x64 /WHOLEARCHIVE:D:/project-render/build/MinSizeRel/asset_loader.lib</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64 /WHOLEARCHIVE:D:/project-render/build/lib/MinSizeRel/asset_loader.lib</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
       <EntryPointSymbol>"WinMainCRTStartup"</EntryPointSymbol>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
       <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
-      <ImportLibrary>D:/project-render/build/MinSizeRel/project-render.lib</ImportLibrary>
+      <ImportLibrary>D:/project-render/build/lib/MinSizeRel/project-render.lib</ImportLibrary>
       <LinkErrorReporting></LinkErrorReporting>
-      <ProgramDataBaseFile>D:/project-render/build/MinSizeRel/project-render.pdb</ProgramDataBaseFile>
+      <ProgramDataBaseFile>D:/project-render/build/bin/MinSizeRel/project-render.pdb</ProgramDataBaseFile>
       <RandomizedBaseAddress></RandomizedBaseAddress>
       <SubSystem>Console</SubSystem>
     </Link>
@@ -580,7 +586,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <PostBuildEvent>
       <Message>Copying OpenImageDenoise runtime binaries...		Copying SketchUp SDK runtime DLL...	Copying SketchUpCommonPreferences.dll to output...	Copying vcpkg runtime binaries (miniz.dll)...	Copying compiled shader blobs...	Copying assets folder...</Message>
       <Command>setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/oidn/bin/OpenImageDenoise.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_core.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cpu.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cuda.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_hip.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_sycl.dll D:/project-render/thirdparty/oidn/bin/sycl8.dll D:/project-render/thirdparty/oidn/bin/tbb12.dll D:/project-render/thirdparty/oidn/bin/tbbbind.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_0.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_5.dll D:/project-render/thirdparty/oidn/bin/ur_adapter_level_zero.dll D:/project-render/thirdparty/oidn/bin/ur_loader.dll D:/project-render/thirdparty/oidn/bin/ur_win_proxy_loader.dll D:/project-render/build/RelWithDebInfo/
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/oidn/bin/OpenImageDenoise.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_core.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cpu.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_cuda.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_hip.dll D:/project-render/thirdparty/oidn/bin/OpenImageDenoise_device_sycl.dll D:/project-render/thirdparty/oidn/bin/sycl8.dll D:/project-render/thirdparty/oidn/bin/tbb12.dll D:/project-render/thirdparty/oidn/bin/tbbbind.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_0.dll D:/project-render/thirdparty/oidn/bin/tbbbind_2_5.dll D:/project-render/thirdparty/oidn/bin/ur_adapter_level_zero.dll D:/project-render/thirdparty/oidn/bin/ur_loader.dll D:/project-render/thirdparty/oidn/bin/ur_win_proxy_loader.dll D:/project-render/build/bin/RelWithDebInfo/
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -589,23 +595,21 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.interposer.dll D:/project-render/build/RelWithDebInfo/sl.interposer.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.interposer.dll D:/project-render/build/bin/RelWithDebInfo/sl.interposer.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.common.dll D:/project-render/build/RelWithDebInfo/sl.common.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.common.dll D:/project-render/build/bin/RelWithDebInfo/sl.common.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.dlss.dll D:/project-render/build/RelWithDebInfo/sl.dlss.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.dlss.dll D:/project-render/build/bin/RelWithDebInfo/sl.dlss.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.dlss_d.dll D:/project-render/build/RelWithDebInfo/sl.dlss_d.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/sl.dlss_d.dll D:/project-render/build/bin/RelWithDebInfo/sl.dlss_d.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlss.dll D:/project-render/build/RelWithDebInfo/nvngx_dlss.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlss.dll D:/project-render/build/bin/RelWithDebInfo/nvngx_dlss.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlssd.dll D:/project-render/build/RelWithDebInfo/nvngx_dlssd.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlssd.dll D:/project-render/build/bin/RelWithDebInfo/nvngx_dlssd.dll
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlss.license.txt D:/project-render/build/RelWithDebInfo/nvngx_dlss.license.txt
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/bin/x64/nvngx_dlss.license.txt D:/project-render/build/bin/RelWithDebInfo/nvngx_dlss.license.txt
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E rm -f D:/project-render/build/RelWithDebInfo/sl.interposer.json
-if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/Streamline/scripts/sl.common.json D:/project-render/build/RelWithDebInfo/sl.common.json
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -f D:/project-render/build/bin/RelWithDebInfo/sl.interposer.json
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -614,7 +618,7 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/sketchup_sdk/binaries/sketchup/x64/SketchUpAPI.dll D:/project-render/build/RelWithDebInfo
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/sketchup_sdk/binaries/sketchup/x64/SketchUpAPI.dll D:/project-render/build/bin/RelWithDebInfo
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -623,7 +627,7 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/sketchup_sdk/binaries/sketchup/x64/SketchUpCommonPreferences.dll D:/project-render/build/RelWithDebInfo
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/thirdparty/sketchup_sdk/binaries/sketchup/x64/SketchUpCommonPreferences.dll D:/project-render/build/bin/RelWithDebInfo
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -632,7 +636,7 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/repos/vcpkg/installed/x64-windows/bin/miniz.dll D:/project-render/build/RelWithDebInfo/miniz.dll
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different D:/project-render/repos/vcpkg/installed/x64-windows/bin/miniz.dll D:/project-render/build/bin/RelWithDebInfo/miniz.dll
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -641,13 +645,17 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/RelWithDebInfo/shaders
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/bin/RelWithDebInfo/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/RelWithDebInfo/shaders
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/bin/RelWithDebInfo/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/RelWithDebInfo/shaders
+"C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/bin/RelWithDebInfo/shaders
 if %errorlevel% neq 0 goto :cmEnd
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/build/shaders D:/project-render/build/RelWithDebInfo/shaders
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/build/shaders D:/project-render/build/bin/RelWithDebInfo/shaders
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/dxcompiler.dll" D:/project-render/build/bin/RelWithDebInfo/dxcompiler.dll
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/dxil.dll" D:/project-render/build/bin/RelWithDebInfo/dxil.dll
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -656,7 +664,7 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/assets D:/project-render/build/RelWithDebInfo/assets
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/assets D:/project-render/build/bin/RelWithDebInfo/assets
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -666,17 +674,17 @@ exit /b %1
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PostBuildEvent>
     <Link>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;ole32.lib;windowscodecs.lib;d3dcompiler.lib;comctl32.lib;D:\project-render\thirdparty\oidn\lib\OpenImageDenoise.lib;RelWithDebInfo\imgui_static.lib;RelWithDebInfo\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\thirdparty\sketchup_sdk\binaries\sketchup\x64\SketchUpAPI.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\miniz.lib;_deps\assimp-build\lib\RelWithDebInfo\assimp-vc143-mt.lib;_deps\assimp-build\contrib\zlib\RelWithDebInfo\zlibstatic.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;ole32.lib;windowscodecs.lib;d3dcompiler.lib;comctl32.lib;D:\project-render\thirdparty\oidn\lib\OpenImageDenoise.lib;lib\RelWithDebInfo\imgui_static.lib;lib\RelWithDebInfo\asset_loader.lib;d3d12.lib;d3dcompiler.lib;D:\project-render\thirdparty\sketchup_sdk\binaries\sketchup\x64\SketchUpAPI.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\tinyexr.lib;D:\project-render\repos\vcpkg\installed\x64-windows\lib\miniz.lib;_deps\assimp-build\lib\RelWithDebInfo\assimp-vc143-mt.lib;_deps\assimp-build\contrib\zlib\RelWithDebInfo\zlibstatic.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalOptions>%(AdditionalOptions) /machine:x64 /WHOLEARCHIVE:D:/project-render/build/RelWithDebInfo/asset_loader.lib</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64 /WHOLEARCHIVE:D:/project-render/build/lib/RelWithDebInfo/asset_loader.lib</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
       <EntryPointSymbol>"WinMainCRTStartup"</EntryPointSymbol>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
       <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
-      <ImportLibrary>D:/project-render/build/RelWithDebInfo/project-render.lib</ImportLibrary>
+      <ImportLibrary>D:/project-render/build/lib/RelWithDebInfo/project-render.lib</ImportLibrary>
       <LinkErrorReporting></LinkErrorReporting>
-      <ProgramDataBaseFile>D:/project-render/build/RelWithDebInfo/project-render.pdb</ProgramDataBaseFile>
+      <ProgramDataBaseFile>D:/project-render/build/bin/RelWithDebInfo/project-render.pdb</ProgramDataBaseFile>
       <RandomizedBaseAddress></RandomizedBaseAddress>
       <SubSystem>Console</SubSystem>
     </Link>
