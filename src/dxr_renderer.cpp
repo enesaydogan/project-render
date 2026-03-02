@@ -2572,10 +2572,24 @@ void BuildAccelerationStructures(
       }
     }
 
+    auto WaitForFenceWithTimeout = [&](UINT64 fenceValue, DWORD timeoutMs,
+                                       const char *timeoutMsg) -> bool {
+      if (s_fence->GetCompletedValue() >= fenceValue) {
+        return true;
+      }
+      s_fence->SetEventOnCompletion(fenceValue, s_fenceEvent);
+      if (WaitForSingleObject(s_fenceEvent, timeoutMs) == WAIT_TIMEOUT) {
+        fprintf(stderr, "%s\n", timeoutMsg);
+        return false;
+      }
+      return true;
+    };
+
     // Pipelining:
     // Create separate allocators for each batch so we can submit them without
     // blocking/waiting on the CPU. We only wait once at the very end.
     const size_t BLAS_BATCH_SIZE = 500;
+    const bool enableBlasCompaction = meshes.size() <= 1500;
     size_t batchCount = 0;
 
     std::vector<ComPtr<ID3D12CommandAllocator>> submittedBatchAllocators;
@@ -2596,10 +2610,11 @@ void BuildAccelerationStructures(
           auto vbAddr = mesh.vertexBuffer->GetGPUVirtualAddress();
           auto ibAddr = mesh.indexBuffer->GetGPUVirtualAddress();
 
-          auto bl =
+            auto bl =
               BuildBLAS(s_dxrDevice.Get(), cmdList.Get(), vbAddr,
-                        mesh.vertexCount, sizeof(Asset::Vertex), ibAddr,
-                        mesh.indexCount, meshOpaqueStates[i] != 0, false, true);
+                  mesh.vertexCount, sizeof(Asset::Vertex), ibAddr,
+                  mesh.indexCount, meshOpaqueStates[i] != 0, false,
+                  enableBlasCompaction);
           if (bl.result && bl.scratch) {
             s_allBLAS.push_back({bl, (UINT64)i});
             s_cachedMeshBuffersForBlas.push_back(mesh.vertexBuffer.Get());
@@ -2636,88 +2651,86 @@ void BuildAccelerationStructures(
         const UINT64 fenceVal = s_fenceValues[*s_frameIndexPtr];
         s_commandQueue->Signal(s_fence, fenceVal);
         s_fenceValues[*s_frameIndexPtr]++;
-        if (s_fence->GetCompletedValue() < fenceVal) {
-          s_fence->SetEventOnCompletion(fenceVal, s_fenceEvent);
-          if (WaitForSingleObject(s_fenceEvent, 10000) == WAIT_TIMEOUT) {
-            fprintf(
-                stderr,
-                "DxrRenderer: Timeout waiting for BLAS build batch (10s).\n");
-          }
+        if (!WaitForFenceWithTimeout(
+                fenceVal, 10000,
+                "DxrRenderer: Timeout waiting for BLAS build batch (10s). Aborting AS rebuild for this frame.")) {
+          return;
         }
 
         submittedBatchAllocators.clear();
 
-        // BLAS compaction pass (reduces AS VRAM footprint).
-        std::vector<ComPtr<ID3D12Resource>> compactedResults(s_allBLAS.size());
-        std::vector<UINT64> compactedSizes(s_allBLAS.size(), 0);
-        size_t compactCount = 0;
-        for (size_t k = 0; k < s_allBLAS.size(); ++k) {
-          MeshBLAS &meshBlas = s_allBLAS[k];
-          UINT64 compactedSize =
-              ReadbackUint64(meshBlas.buffers.compactedSizeReadback.Get());
-          meshBlas.buffers.compactedSizeInBytes = compactedSize;
-          if (compactedSize == 0 ||
-              compactedSize >= meshBlas.buffers.resultSizeInBytes) {
-            continue;
-          }
-
-          UINT64 compactedAligned =
-              Align(compactedSize,
-                    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT);
-          // Keep a small margin to avoid tiny compaction wins that add copy
-          // overhead for almost no memory reduction.
-          if (compactedAligned + 1024 >= meshBlas.buffers.resultSizeInBytes) {
-            continue;
-          }
-
-          AllocateUAVBuffer(
-              s_device, compactedAligned, &compactedResults[k],
-              D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
-              L"BLAS Result (Compacted)");
-          compactedSizes[k] = compactedAligned;
-          compactCount++;
-        }
-
-        if (compactCount > 0) {
-          ThrowIfFailed(cmdAlloc->Reset());
-          ThrowIfFailed(cmdList->Reset(cmdAlloc.Get(), nullptr));
+        if (enableBlasCompaction) {
+          // BLAS compaction pass (reduces AS VRAM footprint).
+          std::vector<ComPtr<ID3D12Resource>> compactedResults(s_allBLAS.size());
+          std::vector<UINT64> compactedSizes(s_allBLAS.size(), 0);
+          size_t compactCount = 0;
           for (size_t k = 0; k < s_allBLAS.size(); ++k) {
-            if (!compactedResults[k]) {
+            MeshBLAS &meshBlas = s_allBLAS[k];
+            UINT64 compactedSize =
+                ReadbackUint64(meshBlas.buffers.compactedSizeReadback.Get());
+            meshBlas.buffers.compactedSizeInBytes = compactedSize;
+            if (compactedSize == 0 ||
+                compactedSize >= meshBlas.buffers.resultSizeInBytes) {
               continue;
             }
-            cmdList->CopyRaytracingAccelerationStructure(
-                compactedResults[k]->GetGPUVirtualAddress(),
-                s_allBLAS[k].buffers.result->GetGPUVirtualAddress(),
-                D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_COMPACT);
+
+            UINT64 compactedAligned =
+                Align(compactedSize,
+                      D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT);
+            if (compactedAligned + 1024 >= meshBlas.buffers.resultSizeInBytes) {
+              continue;
+            }
+
+            AllocateUAVBuffer(
+                s_device, compactedAligned, &compactedResults[k],
+                D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
+                L"BLAS Result (Compacted)");
+            compactedSizes[k] = compactedAligned;
+            compactCount++;
           }
 
-          D3D12_RESOURCE_BARRIER compactBarrier = {};
-          compactBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-          compactBarrier.UAV.pResource = nullptr;
-          cmdList->ResourceBarrier(1, &compactBarrier);
+          if (compactCount > 0) {
+            ThrowIfFailed(cmdAlloc->Reset());
+            ThrowIfFailed(cmdList->Reset(cmdAlloc.Get(), nullptr));
+            for (size_t k = 0; k < s_allBLAS.size(); ++k) {
+              if (!compactedResults[k]) {
+                continue;
+              }
+              cmdList->CopyRaytracingAccelerationStructure(
+                  compactedResults[k]->GetGPUVirtualAddress(),
+                  s_allBLAS[k].buffers.result->GetGPUVirtualAddress(),
+                  D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_COMPACT);
+            }
 
-          ThrowIfFailed(cmdList->Close());
-          ID3D12CommandList *compactLists[] = {cmdList.Get()};
-          s_commandQueue->ExecuteCommandLists(1, compactLists);
+            D3D12_RESOURCE_BARRIER compactBarrier = {};
+            compactBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+            compactBarrier.UAV.pResource = nullptr;
+            cmdList->ResourceBarrier(1, &compactBarrier);
 
-          const UINT64 compactFenceVal = s_fenceValues[*s_frameIndexPtr];
-          s_commandQueue->Signal(s_fence, compactFenceVal);
-          s_fenceValues[*s_frameIndexPtr]++;
-          if (s_fence->GetCompletedValue() < compactFenceVal) {
-            s_fence->SetEventOnCompletion(compactFenceVal, s_fenceEvent);
-            if (WaitForSingleObject(s_fenceEvent, 10000) == WAIT_TIMEOUT) {
-              fprintf(stderr,
-                      "DxrRenderer: Timeout waiting for BLAS compaction "
-                      "batch (10s).\n");
+            ThrowIfFailed(cmdList->Close());
+            ID3D12CommandList *compactLists[] = {cmdList.Get()};
+            s_commandQueue->ExecuteCommandLists(1, compactLists);
+
+            const UINT64 compactFenceVal = s_fenceValues[*s_frameIndexPtr];
+            s_commandQueue->Signal(s_fence, compactFenceVal);
+            s_fenceValues[*s_frameIndexPtr]++;
+            if (!WaitForFenceWithTimeout(
+                    compactFenceVal, 10000,
+                    "DxrRenderer: Timeout waiting for BLAS compaction batch (10s). Keeping original BLAS for safety.")) {
+              return;
+            }
+
+            for (size_t k = 0; k < s_allBLAS.size(); ++k) {
+              if (compactedResults[k]) {
+                s_allBLAS[k].buffers.result = compactedResults[k];
+                s_allBLAS[k].buffers.resultSizeInBytes = compactedSizes[k];
+              }
             }
           }
-
-          for (size_t k = 0; k < s_allBLAS.size(); ++k) {
-            if (compactedResults[k]) {
-              s_allBLAS[k].buffers.result = compactedResults[k];
-              s_allBLAS[k].buffers.resultSizeInBytes = compactedSizes[k];
-            }
-          }
+        } else if (g_verboseRenderLogs) {
+          fprintf(stderr,
+                  "DxrRenderer: Skipping BLAS compaction for large scene (%zu meshes) to reduce peak VRAM and load time.\n",
+                  meshes.size());
         }
 
         // Safe to release temporary BLAS resources now.
@@ -2984,11 +2997,10 @@ void BuildAccelerationStructures(
     const UINT64 fence2 = s_fenceValues[*s_frameIndexPtr];
     s_commandQueue->Signal(s_fence, fence2);
     s_fenceValues[*s_frameIndexPtr]++;
-    if (s_fence->GetCompletedValue() < fence2) {
-      s_fence->SetEventOnCompletion(fence2, s_fenceEvent);
-      if (WaitForSingleObject(s_fenceEvent, 5000) == WAIT_TIMEOUT) {
-        fprintf(stderr, "DxrRenderer: Timeout waiting for TLAS build (5s).\n");
-      }
+    if (!WaitForFenceWithTimeout(
+            fence2, 5000,
+            "DxrRenderer: Timeout waiting for TLAS build (5s). Keeping previous AS state for this frame.")) {
+      return;
     }
     if (g_verboseRenderLogs) {
       fprintf(stderr, "DxrRenderer: Acceleration structures %s\n",
