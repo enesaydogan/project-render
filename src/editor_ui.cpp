@@ -758,6 +758,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
                                                    aperture);
             uiChanged = true;
           }
+
           if (shutterSeconds <= 1.0f) {
             ImGui::Text("~ 1/%.0f s",
                         1.0f / (std::max)(shutterSeconds, 1.0e-6f));

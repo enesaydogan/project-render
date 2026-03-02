@@ -61,6 +61,7 @@ extern bool g_forceUncollapse;
 // Debug mode (defined in editor_ui.cpp)
 extern int g_debugMode;
 
+
 // Draw the complete editor UI for one frame.
 // Call between ImGui::NewFrame() and ImGui::Render().
 // |fps| is the smoothed FPS value computed in the main loop.

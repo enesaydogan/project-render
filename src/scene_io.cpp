@@ -296,6 +296,12 @@ bool SaveScene(const std::string &path) {
       m["metalRoughTexture"] = mat.metalRoughTexture;
       m["doubleSided"] = mat.doubleSided;
       m["alphaMode"] = mat.alphaMode;
+      m["isGrass"] = mat.isGrass;
+      m["grassColor"] = {mat.grassColor[0], mat.grassColor[1],
+                         mat.grassColor[2]};
+      m["grassBladeSize"] = mat.grassBladeSize;
+      m["grassBladeCount"] = mat.grassBladeCount;
+      m["grassBladeVariation"] = mat.grassBladeVariation;
 
       j["materials"].push_back(m);
     }
@@ -834,6 +840,19 @@ bool LoadScene(const std::string &path) {
             sm.value("triPlanarSharpness", mat.triPlanarSharpness);
         mat.triPlanarNormalStrength =
             sm.value("triPlanarNormalStrength", mat.triPlanarNormalStrength);
+        mat.isGrass = sm.value("isGrass", mat.isGrass);
+        if (sm.contains("grassColor"))
+          for (int k = 0; k < 3; k++)
+            mat.grassColor[k] = sm["grassColor"][k];
+        else if (mat.isGrass) {
+          mat.grassColor[0] = mat.diffuseColor[0];
+          mat.grassColor[1] = mat.diffuseColor[1];
+          mat.grassColor[2] = mat.diffuseColor[2];
+        }
+        mat.grassBladeSize = sm.value("grassBladeSize", mat.grassBladeSize);
+        mat.grassBladeCount = sm.value("grassBladeCount", mat.grassBladeCount);
+        mat.grassBladeVariation =
+            sm.value("grassBladeVariation", mat.grassBladeVariation);
 
         if (sm.contains("diffuseTexture")) {
           int tidx = sm["diffuseTexture"];
