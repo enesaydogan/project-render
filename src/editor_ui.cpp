@@ -122,6 +122,22 @@ static void StartSceneIoJob(bool isSave, const std::string &utf8Path) {
     return;
   }
 
+  // Safety: loading a scene mutates global mesh/material/texture arrays and
+  // rebuilds DXR resources. Doing that from a worker thread races with
+  // RenderFrame and can trigger device removal / TLAS-missing failures on
+  // large scenes. Keep save async, but execute load on main thread.
+  if (!isSave) {
+    fprintf(stderr,
+            "SceneIO: Load executes on main thread for stability (async save remains enabled).\n");
+    const bool ok = SceneIO::LoadScene(utf8Path);
+    if (ok) {
+      fprintf(stderr, "Loaded scene %s\n", utf8Path.c_str());
+    } else {
+      fprintf(stderr, "Failed to load scene %s\n", utf8Path.c_str());
+    }
+    return;
+  }
+
   g_sceneIoJob.active = true;
   g_sceneIoJob.isSave = isSave;
   g_sceneIoJob.path = utf8Path;
