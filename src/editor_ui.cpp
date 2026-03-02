@@ -23,9 +23,12 @@
 #include "streamline_manager.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <exception>
 #include <fstream>
+#include <future>
+#include <mutex>
 #include <string>
 
 using Microsoft::WRL::ComPtr;
@@ -88,6 +91,136 @@ bool g_showControlsWindow = false;
 bool g_forceUncollapse = false;
 
 int g_debugMode = 0; // 0=None, 1=Albedo, 2=Normal, 3=Emissive, ...
+
+struct SceneIoJobState {
+  bool active = false;
+  bool isSave = false;
+  std::future<bool> worker;
+  std::string path;
+  std::string stage;
+  float progress = 0.0f;
+};
+
+static SceneIoJobState g_sceneIoJob;
+static std::mutex g_sceneIoUiMutex;
+static std::atomic<float> g_sceneIoProgressAtomic{0.0f};
+static std::atomic<uint32_t> g_sceneIoTickAtomic{0};
+static std::string g_sceneIoStageAtomic;
+
+static void SceneIoProgressSink(float progress01, const char *stage) {
+  g_sceneIoProgressAtomic.store((std::clamp)(progress01, 0.0f, 1.0f),
+                                std::memory_order_relaxed);
+  {
+    std::lock_guard<std::mutex> lock(g_sceneIoUiMutex);
+    g_sceneIoStageAtomic = stage ? stage : "";
+  }
+  g_sceneIoTickAtomic.fetch_add(1, std::memory_order_relaxed);
+}
+
+static void StartSceneIoJob(bool isSave, const std::string &utf8Path) {
+  if (g_sceneIoJob.active || utf8Path.empty()) {
+    return;
+  }
+
+  g_sceneIoJob.active = true;
+  g_sceneIoJob.isSave = isSave;
+  g_sceneIoJob.path = utf8Path;
+  g_sceneIoJob.progress = 0.0f;
+  g_sceneIoJob.stage = isSave ? "Preparing save" : "Preparing load";
+  g_sceneIoProgressAtomic.store(0.0f, std::memory_order_relaxed);
+  g_sceneIoTickAtomic.store(0, std::memory_order_relaxed);
+  {
+    std::lock_guard<std::mutex> lock(g_sceneIoUiMutex);
+    g_sceneIoStageAtomic = g_sceneIoJob.stage;
+  }
+
+  SceneIO::SetProgressCallback(&SceneIoProgressSink);
+  g_sceneIoJob.worker =
+      std::async(std::launch::async, [isSave, utf8Path]() -> bool {
+        return isSave ? SceneIO::SaveScene(utf8Path) : SceneIO::LoadScene(utf8Path);
+      });
+}
+
+static void UpdateSceneIoJob() {
+  if (!g_sceneIoJob.active) {
+    return;
+  }
+
+  g_sceneIoJob.progress =
+      g_sceneIoProgressAtomic.load(std::memory_order_relaxed);
+  {
+    std::lock_guard<std::mutex> lock(g_sceneIoUiMutex);
+    if (!g_sceneIoStageAtomic.empty()) {
+      g_sceneIoJob.stage = g_sceneIoStageAtomic;
+    }
+  }
+
+  if (g_sceneIoJob.worker.valid() &&
+      g_sceneIoJob.worker.wait_for(std::chrono::milliseconds(0)) ==
+          std::future_status::ready) {
+    bool ok = false;
+    try {
+      ok = g_sceneIoJob.worker.get();
+    } catch (const std::exception &e) {
+      fprintf(stderr, "Scene I/O worker exception: %s\n", e.what());
+      ok = false;
+    } catch (...) {
+      fprintf(stderr, "Scene I/O worker exception: unknown\n");
+      ok = false;
+    }
+
+    SceneIO::SetProgressCallback(nullptr);
+    g_sceneIoJob.active = false;
+    g_sceneIoJob.progress = 1.0f;
+    g_sceneIoJob.stage = ok ? (g_sceneIoJob.isSave ? "Save complete"
+                                                    : "Load complete")
+                            : (g_sceneIoJob.isSave ? "Save failed"
+                                                   : "Load failed");
+
+    if (ok) {
+      fprintf(stderr, "%s scene %s\n",
+              g_sceneIoJob.isSave ? "Saved" : "Loaded", g_sceneIoJob.path.c_str());
+    } else {
+      fprintf(stderr, "Failed to %s scene %s\n",
+              g_sceneIoJob.isSave ? "save" : "load", g_sceneIoJob.path.c_str());
+    }
+  }
+}
+
+static void DrawSceneIoOverlay() {
+  if (!g_sceneIoJob.active) {
+    return;
+  }
+
+  ImGuiViewport *vp = ImGui::GetMainViewport();
+  if (!vp) {
+    return;
+  }
+
+  ImGui::SetNextWindowViewport(vp->ID);
+  ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + 12.0f),
+                          ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+  ImGui::SetNextWindowBgAlpha(0.90f);
+  ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
+                           ImGuiWindowFlags_AlwaysAutoResize |
+                           ImGuiWindowFlags_NoMove |
+                           ImGuiWindowFlags_NoSavedSettings |
+                           ImGuiWindowFlags_NoFocusOnAppearing |
+                           ImGuiWindowFlags_NoNav |
+                           ImGuiWindowFlags_NoDocking;
+
+  if (ImGui::Begin("##SceneIOOverlay", nullptr, flags)) {
+    const char *title = g_sceneIoJob.isSave ? "Saving scene" : "Loading scene";
+    const int dots = (int)(ImGui::GetTime() * 4.0) % 4;
+    char anim[8] = "";
+    for (int i = 0; i < dots; ++i) anim[i] = '.';
+    ImGui::Text("%s%s", title, anim);
+    ImGui::TextWrapped("%s", g_sceneIoJob.stage.c_str());
+    ImGui::ProgressBar((std::clamp)(g_sceneIoJob.progress, 0.0f, 1.0f),
+                       ImVec2(420.0f, 0.0f));
+  }
+  ImGui::End();
+}
 
 // ── helper lambdas/functions that were local to WinMain ─────────────────────
 
@@ -398,6 +531,8 @@ static bool RecreateDxrPipelineSafe(UINT width, UINT height,
 
 void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
                   float &latitudeDeg, float &dayOfYear) {
+  UpdateSceneIoJob();
+
   // Start ImGui frame
   ImGui_ImplDX12_NewFrame();
   ImGui_ImplWin32_NewFrame();
@@ -465,27 +600,25 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
   // access
   if (ImGui::BeginMainMenuBar()) {
     if (ImGui::BeginMenu("File")) {
+      if (g_sceneIoJob.active) {
+        ImGui::BeginDisabled();
+      }
       if (ImGui::MenuItem("Save Scene...")) {
         std::wstring chosen;
         if (SaveSceneFileDialog(g_hwnd, chosen)) {
           std::string utf8 = WStringToUtf8(chosen);
-          if (SceneIO::SaveScene(utf8)) {
-            fprintf(stderr, "Scene saved to %s\n", utf8.c_str());
-          } else {
-            fprintf(stderr, "Failed to save scene to %s\n", utf8.c_str());
-          }
+          StartSceneIoJob(true, utf8);
         }
       }
       if (ImGui::MenuItem("Load Scene...")) {
         std::wstring chosen;
         if (OpenSceneFileDialog(g_hwnd, chosen)) {
           std::string utf8 = WStringToUtf8(chosen);
-          if (SceneIO::LoadScene(utf8)) {
-            fprintf(stderr, "Scene loaded from %s\n", utf8.c_str());
-          } else {
-            fprintf(stderr, "Failed to load scene from %s\n", utf8.c_str());
-          }
+          StartSceneIoJob(false, utf8);
         }
+      }
+      if (g_sceneIoJob.active) {
+        ImGui::EndDisabled();
       }
       ImGui::Separator();
       if (ImGui::MenuItem("Exit", "Alt+F4")) {
@@ -633,6 +766,8 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
 
     ImGui::EndMainMenuBar();
   }
+
+  DrawSceneIoOverlay();
 
   // UI: Camera controls and debug info
   if (g_showControlsWindow) {

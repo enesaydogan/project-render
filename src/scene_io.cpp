@@ -4,10 +4,14 @@
 #include "ibl_manager.h"
 #include "scene.h"
 #include <algorithm>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
+#include <mutex>
 #include <nlohmann/json.hpp>
+#include <thread>
 #include <vector>
 
 // Windows Compression API for LZMS
@@ -52,6 +56,22 @@ using json = nlohmann::json;
 
 static const char PRS_MAGIC[4] = {'P', 'R', 'S', '1'};
 static const uint32_t PRS_VERSION = 1;
+static const char PRS_CHUNK_MAGIC[4] = {'P', 'R', 'S', 'C'};
+static constexpr size_t PRS_CHUNK_SIZE = 4ull * 1024ull * 1024ull; // 4 MB
+
+static std::mutex g_sceneIoProgressMutex;
+static SceneIO::ProgressCallback g_sceneIoProgressCb = nullptr;
+
+static void ReportProgress(float progress01, const char *stage) {
+  SceneIO::ProgressCallback cb = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(g_sceneIoProgressMutex);
+    cb = g_sceneIoProgressCb;
+  }
+  if (!cb) return;
+  progress01 = (std::clamp)(progress01, 0.0f, 1.0f);
+  cb(progress01, stage ? stage : "");
+}
 
 // ---------------------------------------------------------------------------
 // Binary buffer helpers
@@ -94,18 +114,18 @@ public:
 // ---------------------------------------------------------------------------
 // LZMS compression / decompression  (Windows Compression API — no deps)
 // ---------------------------------------------------------------------------
-static bool CompressLZMS(const std::vector<uint8_t> &input,
-                         std::vector<uint8_t> &output) {
+static bool CompressLZMSBlock(const uint8_t* input, size_t inputSize,
+                              std::vector<uint8_t> &output) {
   COMPRESSOR_HANDLE h = nullptr;
   if (!CreateCompressor(COMPRESS_ALGORITHM_LZMS, nullptr, &h)) {
     fprintf(stderr, "PRS: CreateCompressor failed (%lu)\n", GetLastError());
     return false;
   }
   SIZE_T needed = 0;
-  Compress(h, input.data(), input.size(), nullptr, 0, &needed);
+  Compress(h, input, inputSize, nullptr, 0, &needed);
   output.resize(needed);
   SIZE_T actual = 0;
-  BOOL ok = Compress(h, input.data(), input.size(),
+  BOOL ok = Compress(h, input, inputSize,
                      output.data(), output.size(), &actual);
   CloseCompressor(h);
   if (!ok) { fprintf(stderr, "PRS: Compress failed (%lu)\n", GetLastError()); return false; }
@@ -113,20 +133,212 @@ static bool CompressLZMS(const std::vector<uint8_t> &input,
   return true;
 }
 
-static bool DecompressLZMS(const uint8_t *comp, size_t compSize,
-                           std::vector<uint8_t> &output, size_t uncompSize) {
+static bool DecompressLZMSBlock(const uint8_t *comp, size_t compSize,
+                                uint8_t* out, size_t outSize, size_t& actualOut) {
   DECOMPRESSOR_HANDLE h = nullptr;
   if (!CreateDecompressor(COMPRESS_ALGORITHM_LZMS, nullptr, &h)) {
     fprintf(stderr, "PRS: CreateDecompressor failed (%lu)\n", GetLastError());
     return false;
   }
-  output.resize(uncompSize);
   SIZE_T actual = 0;
-  BOOL ok = Decompress(h, comp, compSize, output.data(), output.size(), &actual);
+  BOOL ok = Decompress(h, comp, compSize, out, outSize, &actual);
   CloseDecompressor(h);
   if (!ok) { fprintf(stderr, "PRS: Decompress failed (%lu)\n", GetLastError()); return false; }
+  actualOut = static_cast<size_t>(actual);
+  return true;
+}
+
+static bool DecompressLZMSLegacy(const uint8_t *comp, size_t compSize,
+                                 std::vector<uint8_t> &output, size_t uncompSize) {
+  output.resize(uncompSize);
+  size_t actual = 0;
+  if (!DecompressLZMSBlock(comp, compSize, output.data(), output.size(), actual)) {
+    return false;
+  }
   output.resize(actual);
   return true;
+}
+
+static inline void WriteU32(std::vector<uint8_t>& out, uint32_t v) {
+  out.insert(out.end(), reinterpret_cast<const uint8_t*>(&v),
+             reinterpret_cast<const uint8_t*>(&v) + sizeof(v));
+}
+
+static inline void WriteU64(std::vector<uint8_t>& out, uint64_t v) {
+  out.insert(out.end(), reinterpret_cast<const uint8_t*>(&v),
+             reinterpret_cast<const uint8_t*>(&v) + sizeof(v));
+}
+
+static inline bool ReadU32(const uint8_t* data, size_t size, size_t& pos, uint32_t& out) {
+  if (pos + sizeof(uint32_t) > size) return false;
+  memcpy(&out, data + pos, sizeof(uint32_t));
+  pos += sizeof(uint32_t);
+  return true;
+}
+
+static inline bool ReadU64(const uint8_t* data, size_t size, size_t& pos, uint64_t& out) {
+  if (pos + sizeof(uint64_t) > size) return false;
+  memcpy(&out, data + pos, sizeof(uint64_t));
+  pos += sizeof(uint64_t);
+  return true;
+}
+
+static size_t GetWorkerCount(size_t tasks) {
+  if (tasks == 0) return 1;
+  unsigned int hw = std::thread::hardware_concurrency();
+  size_t workers = hw == 0 ? 4 : static_cast<size_t>(hw);
+  return (std::min)(workers, tasks);
+}
+
+static bool CompressLZMSChunked(const std::vector<uint8_t> &input,
+                                std::vector<uint8_t> &output) {
+  if (input.empty()) {
+    output.clear();
+    output.insert(output.end(), PRS_CHUNK_MAGIC, PRS_CHUNK_MAGIC + 4);
+    WriteU32(output, 0);
+    return true;
+  }
+
+  const size_t chunkCount = (input.size() + PRS_CHUNK_SIZE - 1) / PRS_CHUNK_SIZE;
+  std::vector<std::vector<uint8_t>> compressedChunks(chunkCount);
+  std::vector<uint64_t> uncompSizes(chunkCount, 0);
+  std::vector<uint64_t> compSizes(chunkCount, 0);
+
+  std::atomic<size_t> nextChunk{0};
+  std::atomic<size_t> doneChunks{0};
+  std::atomic<bool> failed{false};
+  const size_t workerCount = GetWorkerCount(chunkCount);
+  std::vector<std::thread> workers;
+  workers.reserve(workerCount);
+
+  for (size_t w = 0; w < workerCount; ++w) {
+    workers.emplace_back([&]() {
+      while (true) {
+        size_t ci = nextChunk.fetch_add(1);
+        if (ci >= chunkCount || failed.load()) break;
+
+        const size_t offset = ci * PRS_CHUNK_SIZE;
+        const size_t blockSize = (std::min)(PRS_CHUNK_SIZE, input.size() - offset);
+        uncompSizes[ci] = static_cast<uint64_t>(blockSize);
+        if (!CompressLZMSBlock(input.data() + offset, blockSize, compressedChunks[ci])) {
+          failed.store(true);
+          break;
+        }
+        compSizes[ci] = static_cast<uint64_t>(compressedChunks[ci].size());
+        const size_t done = doneChunks.fetch_add(1) + 1;
+        const float p = 0.30f + 0.55f * ((float)done / (float)chunkCount);
+        ReportProgress(p, "Compressing scene data");
+      }
+    });
+  }
+  for (auto& t : workers) t.join();
+
+  if (failed.load()) {
+    return false;
+  }
+
+  size_t totalCompBytes = 0;
+  for (const auto& chunk : compressedChunks) totalCompBytes += chunk.size();
+
+  output.clear();
+  output.reserve(8 + chunkCount * 16 + totalCompBytes);
+  output.insert(output.end(), PRS_CHUNK_MAGIC, PRS_CHUNK_MAGIC + 4);
+  WriteU32(output, static_cast<uint32_t>(chunkCount));
+  for (size_t i = 0; i < chunkCount; ++i) {
+    WriteU64(output, uncompSizes[i]);
+    WriteU64(output, compSizes[i]);
+  }
+  for (const auto& chunk : compressedChunks) {
+    output.insert(output.end(), chunk.begin(), chunk.end());
+  }
+  return true;
+}
+
+static bool DecompressLZMSAny(const uint8_t *comp, size_t compSize,
+                              std::vector<uint8_t> &output, size_t uncompSize) {
+  if (compSize >= 8 && memcmp(comp, PRS_CHUNK_MAGIC, 4) == 0) {
+    size_t pos = 4;
+    uint32_t chunkCount = 0;
+    if (!ReadU32(comp, compSize, pos, chunkCount)) return false;
+
+    struct ChunkDesc {
+      uint64_t uncompSize;
+      uint64_t compSize;
+      size_t compOffset;
+      size_t outOffset;
+    };
+    std::vector<ChunkDesc> chunks;
+    chunks.resize(chunkCount);
+
+    uint64_t totalUncomp = 0;
+    for (uint32_t i = 0; i < chunkCount; ++i) {
+      uint64_t usz = 0;
+      uint64_t csz = 0;
+      if (!ReadU64(comp, compSize, pos, usz) || !ReadU64(comp, compSize, pos, csz)) return false;
+      chunks[i].uncompSize = usz;
+      chunks[i].compSize = csz;
+      chunks[i].outOffset = static_cast<size_t>(totalUncomp);
+      totalUncomp += usz;
+    }
+
+    if (totalUncomp != uncompSize) {
+      fprintf(stderr, "PRS: Chunked decompression size mismatch (header=%zu, chunks=%llu)\n",
+              uncompSize, static_cast<unsigned long long>(totalUncomp));
+      return false;
+    }
+
+    size_t compOffset = pos;
+    for (uint32_t i = 0; i < chunkCount; ++i) {
+      if (chunks[i].compSize > (std::numeric_limits<size_t>::max)()) return false;
+      size_t csz = static_cast<size_t>(chunks[i].compSize);
+      if (compOffset + csz > compSize) return false;
+      chunks[i].compOffset = compOffset;
+      compOffset += csz;
+    }
+    if (compOffset != compSize) return false;
+
+    output.resize(uncompSize);
+    std::atomic<size_t> nextChunk{0};
+    std::atomic<size_t> doneChunks{0};
+    std::atomic<bool> failed{false};
+    const size_t workerCount = GetWorkerCount(chunkCount);
+    std::vector<std::thread> workers;
+    workers.reserve(workerCount);
+
+    for (size_t w = 0; w < workerCount; ++w) {
+      workers.emplace_back([&]() {
+        while (true) {
+          size_t ci = nextChunk.fetch_add(1);
+          if (ci >= chunkCount || failed.load()) break;
+
+          const ChunkDesc& cd = chunks[ci];
+          if (cd.uncompSize > (std::numeric_limits<size_t>::max)()) {
+            failed.store(true);
+            break;
+          }
+
+          size_t blockActual = 0;
+          size_t outSize = static_cast<size_t>(cd.uncompSize);
+          if (!DecompressLZMSBlock(comp + cd.compOffset,
+                                   static_cast<size_t>(cd.compSize),
+                                   output.data() + cd.outOffset,
+                                   outSize,
+                                   blockActual) || blockActual != outSize) {
+            failed.store(true);
+            break;
+          }
+          const size_t done = doneChunks.fetch_add(1) + 1;
+          const float p = 0.20f + 0.40f * ((float)done / (float)chunkCount);
+          ReportProgress(p, "Decompressing scene data");
+        }
+      });
+    }
+    for (auto& t : workers) t.join();
+
+    return !failed.load();
+  }
+
+  return DecompressLZMSLegacy(comp, compSize, output, uncompSize);
 }
 
 // ---------------------------------------------------------------------------
@@ -704,16 +916,23 @@ static std::vector<unsigned char> Base64Decode(const std::string &enc) {
 // ===========================================================================
 namespace SceneIO {
 
+void SetProgressCallback(ProgressCallback cb) {
+  std::lock_guard<std::mutex> lock(g_sceneIoProgressMutex);
+  g_sceneIoProgressCb = cb;
+}
+
 // ---------------------------------------------------------------------------
 // SaveScene — Binary compressed .prs format
 // ---------------------------------------------------------------------------
 bool SaveScene(const std::string &path) {
   try {
+    ReportProgress(0.01f, "Preparing scene metadata");
     fprintf(stderr, "PRS: Saving scene to %s\n", path.c_str());
 
     // 1. Build metadata as msgpack
     json metadata = BuildMetadata();
     std::vector<uint8_t> msgpack = json::to_msgpack(metadata);
+    ReportProgress(0.08f, "Packing metadata");
     fprintf(stderr, "PRS: Metadata: %zu bytes (msgpack)\n", msgpack.size());
 
     // 2. Build uncompressed binary payload
@@ -732,6 +951,7 @@ bool SaveScene(const std::string &path) {
     w.writeU32((uint32_t)msgpack.size());
     w.writeBytes(msgpack.data(), msgpack.size());
     msgpack.clear(); msgpack.shrink_to_fit();
+    ReportProgress(0.12f, "Serializing meshes");
 
     // Meshes — raw binary (no base64 = saves ~33% size)
     w.writeU32((uint32_t)g_loadedMeshes.size());
@@ -759,13 +979,14 @@ bool SaveScene(const std::string &path) {
       w.writeU32(db);
       if (db) w.writeBytes(tex.cpuData.data(), db);
     }
+    ReportProgress(0.28f, "Finalizing payload");
 
     size_t uncompSize = payload.size();
     fprintf(stderr, "PRS: Uncompressed: %.2f MB\n", uncompSize / (1024.0*1024.0));
 
     // 3. Compress with LZMS
     std::vector<uint8_t> compressed;
-    if (!CompressLZMS(payload, compressed)) {
+    if (!CompressLZMSChunked(payload, compressed)) {
       fprintf(stderr, "PRS: Compression failed\n");
       return false;
     }
@@ -784,9 +1005,11 @@ bool SaveScene(const std::string &path) {
     uint64_t usz = (uint64_t)uncompSize;
     file.write(reinterpret_cast<const char*>(&usz), 8);
     file.write(reinterpret_cast<const char*>(compressed.data()), compressed.size());
+        ReportProgress(0.98f, "Writing file");
 
     fprintf(stderr, "PRS: Saved %.2f MB (was %.2f MB uncompressed)\n",
             (16+compressed.size())/(1024.0*1024.0), uncompSize/(1024.0*1024.0));
+        ReportProgress(1.0f, "Save complete");
     return true;
   } catch (const std::exception &e) {
     std::cerr << "SaveScene: " << e.what() << std::endl;
@@ -820,6 +1043,7 @@ bool LoadScene(const std::string &path) {
 // ---------------------------------------------------------------------------
 bool LoadScenePRS(const std::string &path) {
   try {
+    ReportProgress(0.01f, "Reading scene file");
     fprintf(stderr, "PRS: Loading %s\n", path.c_str());
 
     std::ifstream file(path, std::ios::binary | std::ios::ate);
@@ -838,14 +1062,16 @@ bool LoadScenePRS(const std::string &path) {
     std::vector<uint8_t> comp(compSize);
     file.read(reinterpret_cast<char*>(comp.data()), compSize);
     file.close();
+    ReportProgress(0.15f, "Read complete");
 
     fprintf(stderr, "PRS: File %.2f MB, uncompressed %.2f MB\n",
             fileSize/(1024.0*1024.0), uncompSize/(1024.0*1024.0));
 
     // Decompress
     std::vector<uint8_t> payload;
-    if (!DecompressLZMS(comp.data(), compSize, payload, (size_t)uncompSize)) return false;
+    if (!DecompressLZMSAny(comp.data(), compSize, payload, (size_t)uncompSize)) return false;
     comp.clear(); comp.shrink_to_fit();
+    ReportProgress(0.62f, "Parsing scene data");
 
     BinaryReader r(payload.data(), payload.size());
 
@@ -892,6 +1118,7 @@ bool LoadScenePRS(const std::string &path) {
       }
     }
     Scene::RegisterTextures(g_loadedTextures);
+    ReportProgress(0.82f, "Uploading textures and meshes");
 
     // Create GPU meshes
     bool hasEmbedded = (numMeshes > 0);
@@ -922,6 +1149,7 @@ bool LoadScenePRS(const std::string &path) {
     UpdateCameraCB();
     DxrRenderer::ResetAccumulation();
     fprintf(stderr, "PRS: Scene loaded OK\n");
+    ReportProgress(1.0f, "Load complete");
     return true;
   } catch (const std::exception &e) {
     std::cerr << "LoadScenePRS: " << e.what() << std::endl;
