@@ -68,21 +68,22 @@ public:
                            const std::wstring &entryPoint,
                            const std::wstring &profiles,
                            const std::vector<std::wstring> &defines = {}) {
-    // If a precompiled bytecode variant exists in the same directory,
-    // load that first and skip runtime compilation.  The naming scheme
-    // matches the CMake build rules above.
-    std::filesystem::path hlslPath(filename);
-    std::wstring base = hlslPath.stem().wstring();
-    std::wstring csoName = base + L"_" + entryPoint + L"_" + profiles + L".cso";
-    std::filesystem::path csoPath = hlslPath.parent_path() / csoName;
-    if (std::filesystem::exists(csoPath)) {
-      ComPtr<IDxcBlobEncoding> blobEnc;
-      if (SUCCEEDED(m_utils->LoadFile(csoPath.wstring().c_str(), nullptr, &blobEnc))) {
-        // IDxcBlobEncoding inherits IDxcBlob
-        return blobEnc;
-      }
-      // fall through to compile if loading failed
+    // Prefer precompiled bytecode and only compile source as fallback.
+    // Runtime deployment expects blobs next to the executable in ./shaders.
+    std::filesystem::path requestedPath(filename);
+    std::wstring base = requestedPath.stem().wstring();
+    if (base.empty()) {
+      base = filename;
     }
+    if (ComPtr<IDxcBlobEncoding> blobEnc = TryLoadPrecompiledBlob(
+            m_utils.Get(), requestedPath, base, entryPoint, profiles)) {
+      // IDxcBlobEncoding inherits IDxcBlob.
+      return blobEnc;
+    }
+
+    // Fall back to source compilation.
+    const std::filesystem::path sourcePath = ResolveShaderSourcePath(requestedPath);
+    const std::wstring sourceFile = sourcePath.wstring();
     const std::string filenameUtf8 = WStringToUtf8(filename);
     const std::string entryUtf8 =
         entryPoint.empty() ? std::string("<library>") : WStringToUtf8(entryPoint);
@@ -107,7 +108,7 @@ public:
     std::vector<LPCWSTR> args;
 
     // Basic arguments
-    args.push_back(filename.c_str());
+    args.push_back(sourceFile.c_str());
     if (!entryPoint.empty()) {
       args.push_back(L"-E");
       args.push_back(entryPoint.c_str());
@@ -143,7 +144,7 @@ public:
 
     // Load source
     ComPtr<IDxcBlobEncoding> pSource;
-    if (FAILED(m_utils->LoadFile(filename.c_str(), nullptr, &pSource))) {
+    if (FAILED(m_utils->LoadFile(sourceFile.c_str(), nullptr, &pSource))) {
       LogShaderCompileMessage("ShaderCompile FAIL: " + shaderTag +
                               " reason=\"Failed to load shader file\"");
       throw std::runtime_error("Failed to load shader file: " + filenameUtf8);
@@ -220,6 +221,248 @@ public:
   }
 
 private:
+  static std::filesystem::path GetExecutableDirectory() {
+    wchar_t modulePath[MAX_PATH] = {};
+    DWORD len =
+        GetModuleFileNameW(nullptr, modulePath, static_cast<DWORD>(std::size(modulePath)));
+    if (len == 0 || len >= std::size(modulePath)) {
+      return {};
+    }
+    return std::filesystem::path(modulePath).parent_path();
+  }
+
+  static void AppendUniquePath(std::vector<std::filesystem::path> &paths,
+                               const std::filesystem::path &candidate) {
+    if (candidate.empty()) {
+      return;
+    }
+    const std::filesystem::path normalized = candidate.lexically_normal();
+    for (const auto &existing : paths) {
+      if (existing == normalized) {
+        return;
+      }
+    }
+    paths.push_back(normalized);
+  }
+
+  static bool ShaderDirNameEquals(const std::filesystem::path &segment,
+                                  const wchar_t *name) {
+    if (segment.empty() || !name) {
+      return false;
+    }
+    return _wcsicmp(segment.wstring().c_str(), name) == 0;
+  }
+
+  static std::filesystem::path StripLeadingShaderDirectory(
+      const std::filesystem::path &path) {
+    if (path.empty() || path.is_absolute()) {
+      return path;
+    }
+
+    auto it = path.begin();
+    if (it == path.end()) {
+      return path;
+    }
+
+    if (!ShaderDirNameEquals(*it, L"shaders") &&
+        !ShaderDirNameEquals(*it, L"shader")) {
+      return path;
+    }
+
+    ++it;
+    std::filesystem::path stripped;
+    for (; it != path.end(); ++it) {
+      stripped /= *it;
+    }
+    return stripped;
+  }
+
+  static std::vector<std::filesystem::path>
+  BuildBlobSearchDirectories(const std::filesystem::path &requestedPath) {
+    std::vector<std::filesystem::path> dirs;
+    const std::filesystem::path exeDir = GetExecutableDirectory();
+    std::error_code ec;
+    const std::filesystem::path cwd = std::filesystem::current_path(ec);
+    const std::filesystem::path relNoShaderPrefix =
+        StripLeadingShaderDirectory(requestedPath);
+
+    // Preferred deployment location: <exe>/shaders
+    AppendUniquePath(dirs, exeDir / L"shaders");
+    AppendUniquePath(dirs, cwd / L"shaders");
+    // Compatibility fallback: <exe>/shader
+    AppendUniquePath(dirs, exeDir / L"shader");
+    AppendUniquePath(dirs, cwd / L"shader");
+
+    if (requestedPath.has_parent_path()) {
+      if (requestedPath.is_absolute()) {
+        AppendUniquePath(dirs, requestedPath.parent_path());
+      } else {
+        AppendUniquePath(dirs, exeDir / requestedPath.parent_path());
+        AppendUniquePath(dirs, cwd / requestedPath.parent_path());
+      }
+    }
+
+    if (relNoShaderPrefix.has_parent_path()) {
+      AppendUniquePath(dirs, exeDir / L"shaders" / relNoShaderPrefix.parent_path());
+      AppendUniquePath(dirs, cwd / L"shaders" / relNoShaderPrefix.parent_path());
+      AppendUniquePath(dirs, exeDir / L"shader" / relNoShaderPrefix.parent_path());
+      AppendUniquePath(dirs, cwd / L"shader" / relNoShaderPrefix.parent_path());
+    }
+
+    return dirs;
+  }
+
+  static bool MatchesBlobPrefix(const std::wstring &fileName,
+                                const std::wstring &prefix) {
+    if (fileName.size() <= prefix.size() + 4) {
+      return false;
+    }
+    if (fileName.rfind(prefix, 0) != 0) {
+      return false;
+    }
+    if (fileName.size() < 4 ||
+        _wcsicmp(fileName.substr(fileName.size() - 4).c_str(), L".cso") != 0) {
+      return false;
+    }
+    return true;
+  }
+
+  static int ParseProfileScore(const std::wstring &profile) {
+    // Expected forms: cs_6_3, ps_6_0, lib_6_5, etc.
+    size_t stageSep = profile.find(L'_');
+    if (stageSep == std::wstring::npos) {
+      return -1;
+    }
+    size_t minorSep = profile.find(L'_', stageSep + 1);
+    if (minorSep == std::wstring::npos) {
+      return -1;
+    }
+    try {
+      const int major = std::stoi(profile.substr(stageSep + 1, minorSep - stageSep - 1));
+      const int minor = std::stoi(profile.substr(minorSep + 1));
+      return major * 100 + minor;
+    } catch (...) {
+      return -1;
+    }
+  }
+
+  static std::filesystem::path FindClosestProfileBlob(
+      const std::vector<std::filesystem::path> &dirs,
+      const std::wstring &prefix,
+      const std::wstring &requestedProfile) {
+    std::filesystem::path bestPath;
+    int bestScore = -1;
+    const int requestedScore = ParseProfileScore(requestedProfile);
+
+    for (const auto &dir : dirs) {
+      std::error_code ec;
+      if (!std::filesystem::exists(dir, ec) || !std::filesystem::is_directory(dir, ec)) {
+        continue;
+      }
+
+      for (const auto &entry : std::filesystem::directory_iterator(dir, ec)) {
+        if (ec || !entry.is_regular_file()) {
+          continue;
+        }
+        const std::wstring name = entry.path().filename().wstring();
+        if (!MatchesBlobPrefix(name, prefix)) {
+          continue;
+        }
+
+        const size_t profileStart = prefix.size();
+        const size_t profileLen = name.size() - profileStart - 4; // strip ".cso"
+        const std::wstring candidateProfile = name.substr(profileStart, profileLen);
+        int score = ParseProfileScore(candidateProfile);
+        if (score < 0) {
+          score = 0;
+        }
+
+        // Prefer equal/newer profile versions, fall back to highest available.
+        if (requestedScore >= 0 && score < requestedScore) {
+          score -= 1000;
+        }
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestPath = entry.path();
+        }
+      }
+    }
+
+    return bestPath;
+  }
+
+  static ComPtr<IDxcBlobEncoding> TryLoadPrecompiledBlob(
+      IDxcUtils *utils, const std::filesystem::path &requestedPath,
+      const std::wstring &base, const std::wstring &entryPoint,
+      const std::wstring &profiles) {
+    if (!utils || base.empty()) {
+      return {};
+    }
+
+    const std::wstring prefix = base + L"_" + entryPoint + L"_";
+    const std::wstring exactName = prefix + profiles + L".cso";
+    const auto dirs = BuildBlobSearchDirectories(requestedPath);
+
+    for (const auto &dir : dirs) {
+      const std::filesystem::path csoPath = dir / exactName;
+      std::error_code ec;
+      if (!std::filesystem::exists(csoPath, ec)) {
+        continue;
+      }
+      ComPtr<IDxcBlobEncoding> blobEnc;
+      if (SUCCEEDED(utils->LoadFile(csoPath.wstring().c_str(), nullptr, &blobEnc))) {
+        return blobEnc;
+      }
+    }
+
+    // If exact profile is missing (e.g., asking for cs_6_3 when only cs_6_5
+    // was packaged), load the closest available profile for the same shader.
+    const std::filesystem::path altPath =
+        FindClosestProfileBlob(dirs, prefix, profiles);
+    if (!altPath.empty()) {
+      ComPtr<IDxcBlobEncoding> blobEnc;
+      if (SUCCEEDED(utils->LoadFile(altPath.wstring().c_str(), nullptr, &blobEnc))) {
+        return blobEnc;
+      }
+    }
+
+    return {};
+  }
+
+  static std::filesystem::path
+  ResolveShaderSourcePath(const std::filesystem::path &requestedPath) {
+    if (requestedPath.empty()) {
+      return requestedPath;
+    }
+
+    std::error_code ec;
+    if (std::filesystem::exists(requestedPath, ec)) {
+      return requestedPath;
+    }
+
+    const std::filesystem::path exeDir = GetExecutableDirectory();
+    const std::filesystem::path relNoShaderPrefix =
+        StripLeadingShaderDirectory(requestedPath);
+
+    std::vector<std::filesystem::path> candidates;
+    AppendUniquePath(candidates, exeDir / requestedPath);
+    AppendUniquePath(candidates, exeDir / L"shaders" / relNoShaderPrefix);
+    AppendUniquePath(candidates, exeDir / L"shader" / relNoShaderPrefix);
+    AppendUniquePath(candidates, std::filesystem::current_path(ec) / requestedPath);
+    AppendUniquePath(candidates,
+                     std::filesystem::current_path(ec) / L"shaders" / relNoShaderPrefix);
+    AppendUniquePath(candidates,
+                     std::filesystem::current_path(ec) / L"shader" / relNoShaderPrefix);
+
+    for (const auto &candidate : candidates) {
+      if (std::filesystem::exists(candidate, ec)) {
+        return candidate;
+      }
+    }
+    return requestedPath;
+  }
+
   static std::string WStringToUtf8(const std::wstring &text) {
     if (text.empty()) {
       return {};

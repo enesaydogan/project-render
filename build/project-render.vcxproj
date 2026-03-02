@@ -191,6 +191,8 @@ if %errorlevel% neq 0 goto :VCEnd
 setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/Debug/shaders
 if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/Debug/shaders
+if %errorlevel% neq 0 goto :cmEnd
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/Debug/shaders
 if %errorlevel% neq 0 goto :cmEnd
 "C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/build/shaders D:/project-render/build/Debug/shaders
@@ -343,6 +345,8 @@ if %errorlevel% neq 0 goto :VCEnd
 setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/Release/shaders
 if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/Release/shaders
+if %errorlevel% neq 0 goto :cmEnd
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/Release/shaders
 if %errorlevel% neq 0 goto :cmEnd
 "C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/build/shaders D:/project-render/build/Release/shaders
@@ -491,6 +495,8 @@ if %errorlevel% neq 0 goto :VCEnd
 setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/MinSizeRel/shaders
 if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/MinSizeRel/shaders
+if %errorlevel% neq 0 goto :cmEnd
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/MinSizeRel/shaders
 if %errorlevel% neq 0 goto :cmEnd
 "C:\Program Files\CMake\bin\cmake.exe" -E copy_directory D:/project-render/build/shaders D:/project-render/build/MinSizeRel/shaders
@@ -635,6 +641,8 @@ exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
 setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/RelWithDebInfo/shaders
+if %errorlevel% neq 0 goto :cmEnd
 "C:\Program Files\CMake\bin\cmake.exe" -E rm -rf D:/project-render/build/RelWithDebInfo/shaders
 if %errorlevel% neq 0 goto :cmEnd
 "C:\Program Files\CMake\bin\cmake.exe" -E make_directory D:/project-render/build/RelWithDebInfo/shaders
