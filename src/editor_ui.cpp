@@ -123,20 +123,9 @@ static void StartSceneIoJob(bool isSave, const std::string &utf8Path) {
   }
 
   // Safety: loading a scene mutates global mesh/material/texture arrays and
-  // rebuilds DXR resources. Doing that from a worker thread races with
-  // RenderFrame and can trigger device removal / TLAS-missing failures on
-  // large scenes. Keep save async, but execute load on main thread.
-  if (!isSave) {
-    fprintf(stderr,
-            "SceneIO: Load executes on main thread for stability (async save remains enabled).\n");
-    const bool ok = SceneIO::LoadScene(utf8Path);
-    if (ok) {
-      fprintf(stderr, "Loaded scene %s\n", utf8Path.c_str());
-    } else {
-      fprintf(stderr, "Failed to load scene %s\n", utf8Path.c_str());
-    }
-    return;
-  }
+  // rebuilds DXR resources. Previously, doing that from a worker thread raced
+  // with RenderFrame and triggered device removal. Now, the main thread will
+  // skip rendering the scene while `IsSceneLoadInProgress` is true.
 
   g_sceneIoJob.active = true;
   g_sceneIoJob.isSave = isSave;
@@ -155,6 +144,10 @@ static void StartSceneIoJob(bool isSave, const std::string &utf8Path) {
       std::async(std::launch::async, [isSave, utf8Path]() -> bool {
         return isSave ? SceneIO::SaveScene(utf8Path) : SceneIO::LoadScene(utf8Path);
       });
+}
+
+bool IsSceneLoadInProgress() {
+  return g_sceneIoJob.active && !g_sceneIoJob.isSave;
 }
 
 static void UpdateSceneIoJob() {
@@ -588,6 +581,15 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
     ImGui::End();
   }
 
+  DrawSceneIoOverlay();
+
+  if (IsSceneLoadInProgress()) {
+    // A scene load is mutating global engine state! Skip all other Editor UI 
+    // rendering so we don't race/crash parsing materials/mesh arrays.
+    ImGui::Render();
+    return;
+  }
+
   // Draw export preview directly into the main viewport (scaled to fit),
   // so users can track render progress without opening a separate panel.
   if (g_renderExportJob.active && g_exportPreviewSrvGpu.ptr != 0 &&
@@ -782,8 +784,6 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
 
     ImGui::EndMainMenuBar();
   }
-
-  DrawSceneIoOverlay();
 
   // UI: Camera controls and debug info
   if (g_showControlsWindow) {

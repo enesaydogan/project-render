@@ -1575,7 +1575,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     DX12Context::g_commandList->RSSetViewports(1, &viewport);
     DX12Context::g_commandList->RSSetScissorRects(1, &scissorRect);
 
-    // --- Rebuild grass instance list every frame (shared by DXR & Raster) ---
+    if (IsSceneLoadInProgress()) {
+      TR(DX12Context::g_commandList.Get(),
+         DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),
+         D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+
+      FLOAT clearColor[] = {0.1f, 0.1f, 0.1f, 1.0f};
+      DX12Context::g_commandList->ClearRenderTargetView(rtvHandle, clearColor,
+                                                        0, nullptr);
+    } else {
+      // --- Rebuild grass instance list every frame (shared by DXR & Raster) ---
     {
         static UINT s_prevGrassBladeCount = (UINT)-1;
         static int s_prevGrassMaterial = -2;
@@ -2101,6 +2110,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       break;
     }
     }
+    } // End else !IsSceneLoadInProgress()
 
     // Render ImGui (Overlay on top of whatever was drawn)
     if (g_renderExportJob.active && g_exportRenderTarget &&
