@@ -41,7 +41,8 @@ cbuffer CameraCB : register(b0)
     float cloudRenderingEnabled;
     float iblRotationDegrees;
     float sampleEnvSolidAngle;
-    float2 _cameraPadEnd;
+    float nrdEnabled;
+    float _cameraPadEnd;
 };
 
 Texture2D envMap : register(t0, space1);
