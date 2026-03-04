@@ -69,8 +69,8 @@ float GetGPUFrameTimeMs();
 // available)
 void GetShaderCounters(UINT *outCounters, UINT maxCount);
 
-// Denoiser mode control (Off, OIDN CPU, OIDN GPU)
-enum class DenoiserMode { Off = 0, OIDN_CPU = 1, OIDN_GPU = 2 };
+// Denoiser mode control (Off, OIDN CPU, OIDN GPU, NRD ReLAX)
+enum class DenoiserMode { Off = 0, OIDN_CPU = 1, OIDN_GPU = 2, NRD_RELAX = 3 };
 void SetDenoiserMode(DenoiserMode m);
 DenoiserMode GetDenoiserMode();
 

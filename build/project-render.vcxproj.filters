@@ -19,6 +19,9 @@
     <ClCompile Include="D:\project-render\src\dxr_renderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\project-render\src\nrd_denoiser.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="D:\project-render\src\dxr_accumulation.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -66,6 +69,14 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Integration\NRDIntegration.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Integration\NRDIntegration.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
     <CustomBuild Include="D:\project-render\CMakeLists.txt" />
   </ItemGroup>
   <ItemGroup>
@@ -74,6 +85,9 @@
     </ResourceCompile>
   </ItemGroup>
   <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{851FD15C-CB78-3F88-BF89-A45B6D8C7077}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Source Files">
       <UniqueIdentifier>{9569D824-A87A-3709-8E90-D3714CA14A7B}</UniqueIdentifier>
     </Filter>

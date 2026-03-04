@@ -174,6 +174,44 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
       <CopyToOutputDirectory>Never</CopyToOutputDirectory>
     </ProjectReference>
+    <ProjectReference Include="D:\project-render\build\_deps\mathlib-build\MathLib.vcxproj">
+      <Project>{E78890AE-E522-30AC-AF46-9BD480F3A067}</Project>
+      <Name>MathLib</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="D:\project-render\build\thirdparty\NRD\NRD.vcxproj">
+      <Project>{027DA7B9-556B-33B6-8773-F0CB1C4A1547}</Project>
+      <Name>NRD</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\project-render\build\thirdparty\NRD\NRDShaders.vcxproj">
+      <Project>{AFF9EFCC-4C13-3EDA-B3D9-318916109269}</Project>
+      <Name>NRDShaders</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="D:\project-render\build\_deps\nri-build\NRI.vcxproj">
+      <Project>{8A560AC6-2D5F-3DD5-A7A3-2DECA66C5E97}</Project>
+      <Name>NRI</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\project-render\build\_deps\nri-build\NRI_D3D12.vcxproj">
+      <Project>{DB2FA039-811D-361C-89EA-F2778947738C}</Project>
+      <Name>NRI_D3D12</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\project-render\build\_deps\nri-build\NRI_Shared.vcxproj">
+      <Project>{7AB38B0C-F1C3-32F4-8237-AC0CB334C058}</Project>
+      <Name>NRI_Shared</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\project-render\build\_deps\shadermake-build\ShaderMake.vcxproj">
+      <Project>{79D58EAA-DCE8-3484-86C4-8E69A868CBC7}</Project>
+      <Name>ShaderMake</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="D:\project-render\build\_deps\shadermake-build\ShaderMakeBlob.vcxproj">
+      <Project>{6F740F7E-AF9F-37A4-8422-A17D0C5248CB}</Project>
+      <Name>ShaderMakeBlob</Name>
+    </ProjectReference>
     <ProjectReference Include="D:\project-render\build\asset_loader.vcxproj">
       <Project>{E84030F8-86F5-3D1D-AF5D-7E83263C8400}</Project>
       <Name>asset_loader</Name>

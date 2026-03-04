@@ -1,0 +1,14 @@
+{
+    "version": 1,
+    "revision": 0,
+    "rules": [
+        {
+            "primary-output": "NRD.dir\\Release\\Timer.obj",
+            "outputs": [
+                "D:\\project-render\\build\\thirdparty\\NRD\\NRD.dir\\Release\\vc143.pdb",
+                "NRD.dir\\Release\\"
+            ],
+            "requires": []
+        }
+    ]
+}

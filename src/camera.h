@@ -49,7 +49,8 @@ struct CameraCB {
   // (luminance * sin(theta)) rather than raw texel area. Turning this off can
   // be useful for debugging or comparing the two approaches.
   float sampleEnvSolidAngle;
-  float _cameraPadEnd[2];
+  float nrdEnabled;
+  float _cameraPadEnd;
 };
 // Camera state (defined in camera.cpp)
 extern CameraCB g_initialCameraData;

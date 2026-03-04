@@ -1,0 +1,128 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="D:\project-render\thirdparty\NRD\Source\InstanceImpl.cpp">
+      <Filter>Source</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\project-render\thirdparty\NRD\Source\Reblur.cpp">
+      <Filter>Source</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\project-render\thirdparty\NRD\Source\Reference.cpp">
+      <Filter>Source</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\project-render\thirdparty\NRD\Source\Relax.cpp">
+      <Filter>Source</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\project-render\thirdparty\NRD\Source\Sigma.cpp">
+      <Filter>Source</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\project-render\thirdparty\NRD\Source\Timer.cpp">
+      <Filter>Source</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\project-render\thirdparty\NRD\Source\Wrapper.cpp">
+      <Filter>Source</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\InstanceImpl.h">
+      <Filter>Source</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\StdAllocator.h">
+      <Filter>Source</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Timer.h">
+      <Filter>Source</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Reblur_Diffuse.hpp">
+      <Filter>Denoisers</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Reblur_DiffuseDirectionalOcclusion.hpp">
+      <Filter>Denoisers</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Reblur_DiffuseOcclusion.hpp">
+      <Filter>Denoisers</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Reblur_DiffuseSh.hpp">
+      <Filter>Denoisers</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Reblur_DiffuseSpecular.hpp">
+      <Filter>Denoisers</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Reblur_DiffuseSpecularOcclusion.hpp">
+      <Filter>Denoisers</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Reblur_DiffuseSpecularSh.hpp">
+      <Filter>Denoisers</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Reblur_Specular.hpp">
+      <Filter>Denoisers</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Reblur_SpecularOcclusion.hpp">
+      <Filter>Denoisers</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Reblur_SpecularSh.hpp">
+      <Filter>Denoisers</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Reference.hpp">
+      <Filter>Denoisers</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Relax_Diffuse.hpp">
+      <Filter>Denoisers</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Relax_DiffuseSh.hpp">
+      <Filter>Denoisers</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Relax_DiffuseSpecular.hpp">
+      <Filter>Denoisers</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Relax_DiffuseSpecularSh.hpp">
+      <Filter>Denoisers</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Relax_Specular.hpp">
+      <Filter>Denoisers</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Relax_SpecularSh.hpp">
+      <Filter>Denoisers</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Sigma_Shadow.hpp">
+      <Filter>Denoisers</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Sigma_ShadowTranslucency.hpp">
+      <Filter>Denoisers</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Resources\Version.h">
+      <Filter>Resources</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Include\NRD.h">
+      <Filter>Include</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Include\NRDDescs.h">
+      <Filter>Include</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Include\NRDSettings.h">
+      <Filter>Include</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\project-render\thirdparty\NRD\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="D:\project-render\thirdparty\NRD\Resources\NRD.rc">
+      <Filter>Resources</Filter>
+    </ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Denoisers">
+      <UniqueIdentifier>{1BC2D2D7-FD8D-3CC3-8517-DE722202232D}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Include">
+      <UniqueIdentifier>{0494E6E0-B318-3D48-8992-158E414438C7}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Resources">
+      <UniqueIdentifier>{A5790CF5-E6F1-3D04-A2CB-AE99AEF2738A}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source">
+      <UniqueIdentifier>{EC729C0B-7FA8-3593-8829-D0ED7DC49D8E}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

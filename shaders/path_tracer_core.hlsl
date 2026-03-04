@@ -962,6 +962,17 @@ void RayGen()
     float3 finalColor = clamp(accumulatedColor, 0.0, 1000.0);
     if (any(isnan(finalColor)) || any(isinf(finalColor))) finalColor = float3(0, 0, 0);
 
+    if (nrdEnabled > 0.5) {
+        float hitDist = (primarySpecHitDist > 0.0) ? primarySpecHitDist : 1000.0;
+        // Use Diffuse for the whole combined radiance since we don't decouple them cleanly here
+        g_nrdDiffuseRadianceHitDist[launchIndex.xy] = float4(finalColor, hitDist);
+        g_nrdSpecRadianceHitDist[launchIndex.xy] = float4(0.0, 0.0, 0.0, hitDist);
+        g_nrdViewZ[launchIndex.xy] = primaryViewZ;
+        g_nrdNormalRoughness[launchIndex.xy] = float4(normalize(primaryNormal), saturate(primaryRoughness));
+        g_nrdMv[launchIndex.xy] = g_motionVectors[launchIndex.xy];
+        g_nrdEmission[launchIndex.xy] = float4(0.0, 0.0, 0.0, 1.0);
+    }
+
     // Write DLSS inputs
 
     // Debug: Motion Vectors (debug mode index = 8)

@@ -16,8 +16,9 @@ target_sources(project-render PRIVATE
     src/input_handler.cpp
     src/dx12_context.cpp
     src/editor_ui.cpp
-    src/camera.cpp 
-    src/dxr_renderer.cpp 
+    src/camera.cpp
+    src/dxr_renderer.cpp
+    src/nrd_denoiser.cpp
     src/dxr_accumulation.cpp
     src/streamline_manager.cpp
     src/raster_renderer.cpp 
@@ -108,7 +109,21 @@ if (USE_OPENIMAGEDENOISE)
 else()
   message(STATUS "OpenImageDenoise support disabled (USE_OPENIMAGEDENOISE=OFF)")
 endif()
+  # NRD Integration
+  set(NRD_NRI ON CACHE BOOL "" FORCE)
+  add_subdirectory(thirdparty/NRD)
+  target_link_libraries(project-render PRIVATE NRD NRDIntegration NRI)
+  target_compile_definitions(project-render PRIVATE USE_NRD=1)
 
+  add_custom_command(TARGET project-render POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      $<TARGET_FILE:NRD>
+      "$<TARGET_FILE_DIR:project-render>/"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      $<TARGET_FILE:NRI>
+      "$<TARGET_FILE_DIR:project-render>/"
+    COMMENT "Copying NRD and NRI runtime binaries..."
+  )
 # Copy Streamline + NGX runtime files next to the executable.
 
 # optional windows resources (icon + version info)

@@ -5,6 +5,18 @@
       <FullPath>D:\project-render\build\x64\Release\ZERO_CHECK</FullPath>
     </ProjectOutput>
     <ProjectOutput>
+      <FullPath>D:\project-render\build\_deps\mathlib-build\x64\Release\MathLib</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>D:\project-render\build\_deps\shadermake-build\x64\Release\ShaderMake</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>D:\project-render\build\thirdparty\NRD\x64\Release\NRDShaders</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>D:\project-render\build\thirdparty\NRD\Release\NRD.dll</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
       <FullPath>D:\project-render\build\x64\Release\compile_shaders</FullPath>
     </ProjectOutput>
     <ProjectOutput>

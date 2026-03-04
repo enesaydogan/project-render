@@ -40,7 +40,8 @@ cbuffer CameraCB : register(b0)
     float cloudRenderingEnabled;
     float iblRotationDegrees;
     float sampleEnvSolidAngle;
-    float2 _cameraPadEnd;
+    float nrdEnabled;
+    float _cameraPadEnd;
 };
 
 cbuffer WorldCB : register(b2)

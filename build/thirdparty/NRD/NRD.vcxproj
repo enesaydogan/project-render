@@ -1,0 +1,452 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="MinSizeRel|x64">
+      <Configuration>MinSizeRel</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="RelWithDebInfo|x64">
+      <Configuration>RelWithDebInfo</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{027DA7B9-556B-33B6-8773-F0CB1C4A1547}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <Platform>x64</Platform>
+    <ProjectName>NRD</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+    <UseDebugLibraries>true</UseDebugLibraries>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+    <UseDebugLibraries>false</UseDebugLibraries>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+    <UseDebugLibraries>false</UseDebugLibraries>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+    <UseDebugLibraries>false</UseDebugLibraries>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\build\thirdparty\NRD\Debug\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NRD.dir\Debug\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NRDd</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">.dll</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</GenerateManifest>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\build\thirdparty\NRD\Release\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NRD.dir\Release\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NRD</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Release|x64'">.dll</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</GenerateManifest>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\build\thirdparty\NRD\MinSizeRel\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">NRD.dir\MinSizeRel\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">NRD</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">.dll</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">true</GenerateManifest>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\build\thirdparty\NRD\RelWithDebInfo\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">NRD.dir\RelWithDebInfo\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">NRD</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">.dll</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">true</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">true</GenerateManifest>
+  </PropertyGroup>
+  <PropertyGroup />
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
+      <BufferSecurityCheck></BufferSecurityCheck>
+      <CallingConvention></CallingConvention>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <DisableSpecificWarnings>4324</DisableSpecificWarnings>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <FloatingPointModel></FloatingPointModel>
+      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>Disabled</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
+      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <SupportJustMyCode></SupportJustMyCode>
+      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <UseFullPaths>false</UseFullPaths>
+      <WarningLevel>Level4</WarningLevel>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NRD_API=extern "C" __declspec(dllexport);WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;NRD_EMBEDS_SPIRV_SHADERS=0;NRD_EMBEDS_DXIL_SHADERS=1;NRD_EMBEDS_DXBC_SHADERS=0;SPIRV_SREG_OFFSET=0;SPIRV_BREG_OFFSET=2;SPIRV_UREG_OFFSET=3;SPIRV_TREG_OFFSET=20;NRD_SUPPORTS_VIEWPORT_OFFSET=0;NRD_SUPPORTS_CHECKERBOARD=1;NRD_SUPPORTS_HISTORY_CONFIDENCE=1;NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX=1;NRD_SUPPORTS_BASECOLOR_METALNESS=1;NRD_SUPPORTS_ANTIFIREFLY=1;REBLUR_PERFORMANCE_MODE=0;NRD_STATIC_LIBRARY=0;CMAKE_INTDIR="Debug";NRD_EXPORTS</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <ScanSourceForModuleDependencies>true</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;NRD_API=extern \"C\" __declspec(dllexport);WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;NRD_EMBEDS_SPIRV_SHADERS=0;NRD_EMBEDS_DXIL_SHADERS=1;NRD_EMBEDS_DXBC_SHADERS=0;SPIRV_SREG_OFFSET=0;SPIRV_BREG_OFFSET=2;SPIRV_UREG_OFFSET=3;SPIRV_TREG_OFFSET=20;NRD_SUPPORTS_VIEWPORT_OFFSET=0;NRD_SUPPORTS_CHECKERBOARD=1;NRD_SUPPORTS_HISTORY_CONFIDENCE=1;NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX=1;NRD_SUPPORTS_BASECOLOR_METALNESS=1;NRD_SUPPORTS_ANTIFIREFLY=1;REBLUR_PERFORMANCE_MODE=0;NRD_STATIC_LIBRARY=0;CMAKE_INTDIR=\"Debug\";NRD_EXPORTS</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Link>
+      <AdditionalDependencies>..\..\_deps\shadermake-build\Debug\ShaderMakeBlobd.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <DataExecutionPrevention></DataExecutionPrevention>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
+      <ImportLibrary>D:/project-render/build/thirdparty/NRD/Debug/NRDd.lib</ImportLibrary>
+      <LinkErrorReporting></LinkErrorReporting>
+      <ProgramDataBaseFile>D:/project-render/build/thirdparty/NRD/Debug/NRDd.pdb</ProgramDataBaseFile>
+      <RandomizedBaseAddress></RandomizedBaseAddress>
+      <SubSystem></SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <BufferSecurityCheck></BufferSecurityCheck>
+      <CallingConvention></CallingConvention>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <DisableSpecificWarnings>4324</DisableSpecificWarnings>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <FloatingPointModel></FloatingPointModel>
+      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>MaxSpeed</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <SupportJustMyCode></SupportJustMyCode>
+      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <UseFullPaths>false</UseFullPaths>
+      <WarningLevel>Level4</WarningLevel>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;NRD_API=extern "C" __declspec(dllexport);WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;NRD_EMBEDS_SPIRV_SHADERS=0;NRD_EMBEDS_DXIL_SHADERS=1;NRD_EMBEDS_DXBC_SHADERS=0;SPIRV_SREG_OFFSET=0;SPIRV_BREG_OFFSET=2;SPIRV_UREG_OFFSET=3;SPIRV_TREG_OFFSET=20;NRD_SUPPORTS_VIEWPORT_OFFSET=0;NRD_SUPPORTS_CHECKERBOARD=1;NRD_SUPPORTS_HISTORY_CONFIDENCE=1;NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX=1;NRD_SUPPORTS_BASECOLOR_METALNESS=1;NRD_SUPPORTS_ANTIFIREFLY=1;REBLUR_PERFORMANCE_MODE=0;NRD_STATIC_LIBRARY=0;CMAKE_INTDIR="Release";NRD_EXPORTS</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <ScanSourceForModuleDependencies>true</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;NRD_API=extern \"C\" __declspec(dllexport);WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;NRD_EMBEDS_SPIRV_SHADERS=0;NRD_EMBEDS_DXIL_SHADERS=1;NRD_EMBEDS_DXBC_SHADERS=0;SPIRV_SREG_OFFSET=0;SPIRV_BREG_OFFSET=2;SPIRV_UREG_OFFSET=3;SPIRV_TREG_OFFSET=20;NRD_SUPPORTS_VIEWPORT_OFFSET=0;NRD_SUPPORTS_CHECKERBOARD=1;NRD_SUPPORTS_HISTORY_CONFIDENCE=1;NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX=1;NRD_SUPPORTS_BASECOLOR_METALNESS=1;NRD_SUPPORTS_ANTIFIREFLY=1;REBLUR_PERFORMANCE_MODE=0;NRD_STATIC_LIBRARY=0;CMAKE_INTDIR=\"Release\";NRD_EXPORTS</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Link>
+      <AdditionalDependencies>..\..\_deps\shadermake-build\Release\ShaderMakeBlob.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <DataExecutionPrevention></DataExecutionPrevention>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
+      <ImportLibrary>D:/project-render/build/thirdparty/NRD/Release/NRD.lib</ImportLibrary>
+      <LinkErrorReporting></LinkErrorReporting>
+      <ProgramDataBaseFile>D:/project-render/build/thirdparty/NRD/Release/NRD.pdb</ProgramDataBaseFile>
+      <RandomizedBaseAddress></RandomizedBaseAddress>
+      <SubSystem></SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <BufferSecurityCheck></BufferSecurityCheck>
+      <CallingConvention></CallingConvention>
+      <DisableSpecificWarnings>4324</DisableSpecificWarnings>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <FloatingPointModel></FloatingPointModel>
+      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
+      <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>MinSpace</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <SupportJustMyCode></SupportJustMyCode>
+      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <UseFullPaths>false</UseFullPaths>
+      <WarningLevel>Level4</WarningLevel>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;NRD_API=extern "C" __declspec(dllexport);WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;NRD_EMBEDS_SPIRV_SHADERS=0;NRD_EMBEDS_DXIL_SHADERS=1;NRD_EMBEDS_DXBC_SHADERS=0;SPIRV_SREG_OFFSET=0;SPIRV_BREG_OFFSET=2;SPIRV_UREG_OFFSET=3;SPIRV_TREG_OFFSET=20;NRD_SUPPORTS_VIEWPORT_OFFSET=0;NRD_SUPPORTS_CHECKERBOARD=1;NRD_SUPPORTS_HISTORY_CONFIDENCE=1;NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX=1;NRD_SUPPORTS_BASECOLOR_METALNESS=1;NRD_SUPPORTS_ANTIFIREFLY=1;REBLUR_PERFORMANCE_MODE=0;NRD_STATIC_LIBRARY=0;CMAKE_INTDIR="MinSizeRel";NRD_EXPORTS</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <DebugInformationFormat>
+      </DebugInformationFormat>
+      <ScanSourceForModuleDependencies>true</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;NRD_API=extern \"C\" __declspec(dllexport);WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;NRD_EMBEDS_SPIRV_SHADERS=0;NRD_EMBEDS_DXIL_SHADERS=1;NRD_EMBEDS_DXBC_SHADERS=0;SPIRV_SREG_OFFSET=0;SPIRV_BREG_OFFSET=2;SPIRV_UREG_OFFSET=3;SPIRV_TREG_OFFSET=20;NRD_SUPPORTS_VIEWPORT_OFFSET=0;NRD_SUPPORTS_CHECKERBOARD=1;NRD_SUPPORTS_HISTORY_CONFIDENCE=1;NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX=1;NRD_SUPPORTS_BASECOLOR_METALNESS=1;NRD_SUPPORTS_ANTIFIREFLY=1;REBLUR_PERFORMANCE_MODE=0;NRD_STATIC_LIBRARY=0;CMAKE_INTDIR=\"MinSizeRel\";NRD_EXPORTS</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Link>
+      <AdditionalDependencies>..\..\_deps\shadermake-build\MinSizeRel\ShaderMakeBlob.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <DataExecutionPrevention></DataExecutionPrevention>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
+      <ImportLibrary>D:/project-render/build/thirdparty/NRD/MinSizeRel/NRD.lib</ImportLibrary>
+      <LinkErrorReporting></LinkErrorReporting>
+      <ProgramDataBaseFile>D:/project-render/build/thirdparty/NRD/MinSizeRel/NRD.pdb</ProgramDataBaseFile>
+      <RandomizedBaseAddress></RandomizedBaseAddress>
+      <SubSystem></SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <BufferSecurityCheck></BufferSecurityCheck>
+      <CallingConvention></CallingConvention>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <DisableSpecificWarnings>4324</DisableSpecificWarnings>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <FloatingPointModel></FloatingPointModel>
+      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
+      <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>MaxSpeed</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <SupportJustMyCode></SupportJustMyCode>
+      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <UseFullPaths>false</UseFullPaths>
+      <WarningLevel>Level4</WarningLevel>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;NRD_API=extern "C" __declspec(dllexport);WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;NRD_EMBEDS_SPIRV_SHADERS=0;NRD_EMBEDS_DXIL_SHADERS=1;NRD_EMBEDS_DXBC_SHADERS=0;SPIRV_SREG_OFFSET=0;SPIRV_BREG_OFFSET=2;SPIRV_UREG_OFFSET=3;SPIRV_TREG_OFFSET=20;NRD_SUPPORTS_VIEWPORT_OFFSET=0;NRD_SUPPORTS_CHECKERBOARD=1;NRD_SUPPORTS_HISTORY_CONFIDENCE=1;NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX=1;NRD_SUPPORTS_BASECOLOR_METALNESS=1;NRD_SUPPORTS_ANTIFIREFLY=1;REBLUR_PERFORMANCE_MODE=0;NRD_STATIC_LIBRARY=0;CMAKE_INTDIR="RelWithDebInfo";NRD_EXPORTS</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <ScanSourceForModuleDependencies>true</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;NRD_API=extern \"C\" __declspec(dllexport);WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;NRD_EMBEDS_SPIRV_SHADERS=0;NRD_EMBEDS_DXIL_SHADERS=1;NRD_EMBEDS_DXBC_SHADERS=0;SPIRV_SREG_OFFSET=0;SPIRV_BREG_OFFSET=2;SPIRV_UREG_OFFSET=3;SPIRV_TREG_OFFSET=20;NRD_SUPPORTS_VIEWPORT_OFFSET=0;NRD_SUPPORTS_CHECKERBOARD=1;NRD_SUPPORTS_HISTORY_CONFIDENCE=1;NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX=1;NRD_SUPPORTS_BASECOLOR_METALNESS=1;NRD_SUPPORTS_ANTIFIREFLY=1;REBLUR_PERFORMANCE_MODE=0;NRD_STATIC_LIBRARY=0;CMAKE_INTDIR=\"RelWithDebInfo\";NRD_EXPORTS</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Link>
+      <AdditionalDependencies>..\..\_deps\shadermake-build\RelWithDebInfo\ShaderMakeBlob.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <DataExecutionPrevention></DataExecutionPrevention>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
+      <ImportLibrary>D:/project-render/build/thirdparty/NRD/RelWithDebInfo/NRD.lib</ImportLibrary>
+      <LinkErrorReporting></LinkErrorReporting>
+      <ProgramDataBaseFile>D:/project-render/build/thirdparty/NRD/RelWithDebInfo/NRD.pdb</ProgramDataBaseFile>
+      <RandomizedBaseAddress></RandomizedBaseAddress>
+      <SubSystem></SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\project-render\thirdparty\NRD\CMakeLists.txt">
+      <UseUtf8Encoding>Always</UseUtf8Encoding>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Building Custom Rule D:/project-render/thirdparty/NRD/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SD:/project-render -BD:/project-render/build --check-stamp-file D:/project-render/build/thirdparty/NRD/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeDependentOption.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\PatchInfo.txt.in;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\RepositoryInfo.txt.in;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\UpdateInfo.txt.in;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\download.cmake.in;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\extractfile.cmake.in;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\shared_internal_commands.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\stepscript.cmake.in;C:\Program Files\CMake\share\cmake-4.2\Modules\FetchContent.cmake;D:\project-render\build\CMakeFiles\cmake.verify_globs;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\project-render\build\thirdparty\NRD\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Building Custom Rule D:/project-render/thirdparty/NRD/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SD:/project-render -BD:/project-render/build --check-stamp-file D:/project-render/build/thirdparty/NRD/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeDependentOption.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\PatchInfo.txt.in;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\RepositoryInfo.txt.in;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\UpdateInfo.txt.in;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\download.cmake.in;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\extractfile.cmake.in;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\shared_internal_commands.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\stepscript.cmake.in;C:\Program Files\CMake\share\cmake-4.2\Modules\FetchContent.cmake;D:\project-render\build\CMakeFiles\cmake.verify_globs;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\project-render\build\thirdparty\NRD\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Building Custom Rule D:/project-render/thirdparty/NRD/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SD:/project-render -BD:/project-render/build --check-stamp-file D:/project-render/build/thirdparty/NRD/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeDependentOption.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\PatchInfo.txt.in;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\RepositoryInfo.txt.in;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\UpdateInfo.txt.in;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\download.cmake.in;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\extractfile.cmake.in;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\shared_internal_commands.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\stepscript.cmake.in;C:\Program Files\CMake\share\cmake-4.2\Modules\FetchContent.cmake;D:\project-render\build\CMakeFiles\cmake.verify_globs;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\project-render\build\thirdparty\NRD\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Building Custom Rule D:/project-render/thirdparty/NRD/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SD:/project-render -BD:/project-render/build --check-stamp-file D:/project-render/build/thirdparty/NRD/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Program Files\CMake\share\cmake-4.2\Modules\CMakeDependentOption.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\PatchInfo.txt.in;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\RepositoryInfo.txt.in;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\UpdateInfo.txt.in;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\download.cmake.in;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\extractfile.cmake.in;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\shared_internal_commands.cmake;C:\Program Files\CMake\share\cmake-4.2\Modules\ExternalProject\stepscript.cmake.in;C:\Program Files\CMake\share\cmake-4.2\Modules\FetchContent.cmake;D:\project-render\build\CMakeFiles\cmake.verify_globs;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\project-render\build\thirdparty\NRD\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="D:\project-render\thirdparty\NRD\Source\InstanceImpl.cpp" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\InstanceImpl.h" />
+    <ClCompile Include="D:\project-render\thirdparty\NRD\Source\Reblur.cpp" />
+    <ClCompile Include="D:\project-render\thirdparty\NRD\Source\Reference.cpp" />
+    <ClCompile Include="D:\project-render\thirdparty\NRD\Source\Relax.cpp" />
+    <ClCompile Include="D:\project-render\thirdparty\NRD\Source\Sigma.cpp" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\StdAllocator.h" />
+    <ClCompile Include="D:\project-render\thirdparty\NRD\Source\Timer.cpp" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Timer.h" />
+    <ClCompile Include="D:\project-render\thirdparty\NRD\Source\Wrapper.cpp" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Reblur_Diffuse.hpp" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Reblur_DiffuseDirectionalOcclusion.hpp" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Reblur_DiffuseOcclusion.hpp" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Reblur_DiffuseSh.hpp" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Reblur_DiffuseSpecular.hpp" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Reblur_DiffuseSpecularOcclusion.hpp" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Reblur_DiffuseSpecularSh.hpp" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Reblur_Specular.hpp" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Reblur_SpecularOcclusion.hpp" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Reblur_SpecularSh.hpp" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Reference.hpp" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Relax_Diffuse.hpp" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Relax_DiffuseSh.hpp" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Relax_DiffuseSpecular.hpp" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Relax_DiffuseSpecularSh.hpp" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Relax_Specular.hpp" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Relax_SpecularSh.hpp" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Sigma_Shadow.hpp" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Source\Denoisers\Sigma_ShadowTranslucency.hpp" />
+    <ResourceCompile Include="D:\project-render\thirdparty\NRD\Resources\NRD.rc">
+      <ScanSourceForModuleDependencies Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ScanSourceForModuleDependencies>
+      <ScanSourceForModuleDependencies Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ScanSourceForModuleDependencies>
+      <ScanSourceForModuleDependencies Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</ScanSourceForModuleDependencies>
+      <ScanSourceForModuleDependencies Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</ScanSourceForModuleDependencies>
+    </ResourceCompile>
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Resources\Version.h" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Include\NRD.h" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Include\NRDDescs.h" />
+    <ClInclude Include="D:\project-render\thirdparty\NRD\Include\NRDSettings.h" />
+  </ItemGroup>
+  <ItemGroup />
+  <ItemGroup>
+    <ProjectReference Include="D:\project-render\build\ZERO_CHECK.vcxproj">
+      <Project>{EFA9E6D7-03DE-312C-86B4-E109105C51F5}</Project>
+      <Name>ZERO_CHECK</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="D:\project-render\build\_deps\mathlib-build\MathLib.vcxproj">
+      <Project>{E78890AE-E522-30AC-AF46-9BD480F3A067}</Project>
+      <Name>MathLib</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="D:\project-render\build\thirdparty\NRD\NRDShaders.vcxproj">
+      <Project>{AFF9EFCC-4C13-3EDA-B3D9-318916109269}</Project>
+      <Name>NRDShaders</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="D:\project-render\build\_deps\shadermake-build\ShaderMakeBlob.vcxproj">
+      <Project>{6F740F7E-AF9F-37A4-8422-A17D0C5248CB}</Project>
+      <Name>ShaderMakeBlob</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

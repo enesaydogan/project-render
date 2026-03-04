@@ -9,6 +9,7 @@
 #include "grass_manager.h"
 #include "ibl_manager.h"
 #include "oidn_denoiser.h"
+#include "nrd_denoiser.h"
 #include "scene.h"
 #include "streamline_manager.h"
 #include <algorithm>
@@ -136,7 +137,7 @@ static const UINT DXR_HEAP_TEX_OFFSET = 0;
 static const UINT DXR_HEAP_VB_OFFSET = DXR_HEAP_TEX_OFFSET + DXR_HEAP_TEX_COUNT;
 static const UINT DXR_HEAP_IB_OFFSET = DXR_HEAP_VB_OFFSET + DXR_HEAP_VB_COUNT;
 static const UINT DXR_HEAP_UAV_OFFSET = DXR_HEAP_IB_OFFSET + DXR_HEAP_IB_COUNT;
-static const UINT DXR_HEAP_UAV_COUNT = 25; // u0..u24
+static const UINT DXR_HEAP_UAV_COUNT = 33; // u0..u32
 static const UINT DXR_HEAP_ACCUM_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 1;
 static const UINT DXR_HEAP_RESERVOIR_0_OFFSET = DXR_HEAP_UAV_OFFSET + 2;
 static const UINT DXR_HEAP_RESERVOIR_1_OFFSET = DXR_HEAP_UAV_OFFSET + 3;
@@ -162,6 +163,16 @@ static const UINT DXR_HEAP_OIDN_OUT_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 21;
 static const UINT DXR_HEAP_VARIANCE_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 22;
 // Extra debug UAV: shader counters (readback) at u24
 static const UINT DXR_HEAP_SHADER_COUNTERS_OFFSET = DXR_HEAP_UAV_OFFSET + 24;
+
+// NRD dedicated UAVs
+static const UINT DXR_HEAP_NRD_DIFFUSE_RADIANCE_HITDIST_OFFSET = DXR_HEAP_UAV_OFFSET + 25;
+static const UINT DXR_HEAP_NRD_SPEC_RADIANCE_HITDIST_OFFSET = DXR_HEAP_UAV_OFFSET + 26;
+static const UINT DXR_HEAP_NRD_VIEWZ_OFFSET = DXR_HEAP_UAV_OFFSET + 27;
+static const UINT DXR_HEAP_NRD_NORMAL_ROUGHNESS_OFFSET = DXR_HEAP_UAV_OFFSET + 28;
+static const UINT DXR_HEAP_NRD_MV_OFFSET = DXR_HEAP_UAV_OFFSET + 29;
+static const UINT DXR_HEAP_NRD_OUT_DIFFUSE_OFFSET = DXR_HEAP_UAV_OFFSET + 30;
+static const UINT DXR_HEAP_NRD_OUT_SPECULAR_OFFSET = DXR_HEAP_UAV_OFFSET + 31;
+static const UINT DXR_HEAP_NRD_EMISSION_OFFSET = DXR_HEAP_UAV_OFFSET + 32;
 
 // Dedicated SRV blocks after UAV range so UAV registers stay stable.
 static const UINT DXR_HEAP_ENV_SRV_OFFSET =
@@ -258,6 +269,17 @@ static ComPtr<ID3D12Resource> s_tonemapOutputUAV;
 static ComPtr<ID3D12Resource> s_specularAlbedoUAV;
 static ComPtr<ID3D12Resource> s_specHitDistanceUAV;
 static ComPtr<ID3D12Resource> s_specularMotionVectorsUAV;
+
+// NRD resources
+static ComPtr<ID3D12Resource> s_nrdDiffuseRadianceHitDistUAV;
+static ComPtr<ID3D12Resource> s_nrdSpecRadianceHitDistUAV;
+static ComPtr<ID3D12Resource> s_nrdViewZUAV;
+static ComPtr<ID3D12Resource> s_nrdNormalRoughnessUAV;
+static ComPtr<ID3D12Resource> s_nrdMvUAV;
+static ComPtr<ID3D12Resource> s_nrdOutDiffuseUAV;
+static ComPtr<ID3D12Resource> s_nrdOutSpecularUAV;
+static ComPtr<ID3D12Resource> s_nrdEmissionUAV;
+
 static UINT s_outputUAVDescriptorSize = 0;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_outputUAVGpuHandle = {0};
 static ComPtr<ID3D12DescriptorHeap>
@@ -1524,6 +1546,9 @@ void SetCommandQueue(ID3D12CommandQueue *commandQueue, ID3D12Fence *fence,
   s_fenceValues = fenceValues;
   s_frameIndexPtr = frameIndexPtr;
   s_fenceEvent = fenceEvent;
+
+  NrdDenoiser::Get().Initialize(s_device, s_commandQueue);
+
   if (s_asyncComputeFenceEvent) {
     CloseHandle(s_asyncComputeFenceEvent);
     s_asyncComputeFenceEvent = nullptr;
@@ -1982,6 +2007,14 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   s_specHitDistanceUAV.Reset();
   s_specularMotionVectorsUAV.Reset();
   s_normalRoughnessUAV.Reset();
+  s_nrdDiffuseRadianceHitDistUAV.Reset();
+  s_nrdSpecRadianceHitDistUAV.Reset();
+  s_nrdViewZUAV.Reset();
+  s_nrdNormalRoughnessUAV.Reset();
+  s_nrdMvUAV.Reset();
+  s_nrdOutDiffuseUAV.Reset();
+  s_nrdOutSpecularUAV.Reset();
+  s_nrdEmissionUAV.Reset();
   s_dlssOutputUAV.Reset();
   s_tonemapOutputUAV.Reset();
   // Enable SHARED flag for OIDN interop (and potentially DLSS/Streamline)
@@ -2025,6 +2058,16 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   CreateUavTexture(s_normalRoughnessUAV, texDesc,
                    DXGI_FORMAT_R16G16B16A16_FLOAT, L"RT NormalRoughness",
                    true); // Shared for OIDN
+
+  // NRD required resources (all are full window bounds, mostly FP16 or FP32)
+  CreateUavTexture(s_nrdDiffuseRadianceHitDistUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD DiffRadiance HitDist");
+  CreateUavTexture(s_nrdSpecRadianceHitDistUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD SpecRadiance HitDist");
+  CreateUavTexture(s_nrdViewZUAV, texDesc, DXGI_FORMAT_R32_FLOAT, L"NRD ViewZ");
+  CreateUavTexture(s_nrdNormalRoughnessUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD NormalRoughness");
+  CreateUavTexture(s_nrdMvUAV, texDesc, DXGI_FORMAT_R16G16_FLOAT, L"NRD MotionVectors");
+  CreateUavTexture(s_nrdOutDiffuseUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD Out Diffuse");
+  CreateUavTexture(s_nrdOutSpecularUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD Out Specular");
+  CreateUavTexture(s_nrdEmissionUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD Emission");
 
   // DLSS output is output-size in linear HDR (pre-tonemap).
   CreateUavTexture(s_dlssOutputUAV, outDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
@@ -2088,9 +2131,28 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
               DXR_HEAP_DLSS_OUT_UAV_OFFSET);
   CreateUavAt(s_oidnOutputUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
               DXR_HEAP_OIDN_OUT_UAV_OFFSET);
+  CreateUavAt(s_nrdDiffuseRadianceHitDistUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
+              DXR_HEAP_NRD_DIFFUSE_RADIANCE_HITDIST_OFFSET);
+  CreateUavAt(s_nrdSpecRadianceHitDistUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
+              DXR_HEAP_NRD_SPEC_RADIANCE_HITDIST_OFFSET);
+  CreateUavAt(s_nrdViewZUAV.Get(), DXGI_FORMAT_R32_FLOAT,
+              DXR_HEAP_NRD_VIEWZ_OFFSET);
+  CreateUavAt(s_nrdNormalRoughnessUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
+              DXR_HEAP_NRD_NORMAL_ROUGHNESS_OFFSET);
+  CreateUavAt(s_nrdMvUAV.Get(), DXGI_FORMAT_R16G16_FLOAT,
+              DXR_HEAP_NRD_MV_OFFSET);
+  CreateUavAt(s_nrdOutDiffuseUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
+              DXR_HEAP_NRD_OUT_DIFFUSE_OFFSET);
+  CreateUavAt(s_nrdOutSpecularUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
+              DXR_HEAP_NRD_OUT_SPECULAR_OFFSET);
+  CreateUavAt(s_nrdEmissionUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
+              DXR_HEAP_NRD_EMISSION_OFFSET);
 
   // Prepare tonemap pipeline resources.
   EnsureTonemapPipeline();
+
+  // Initialize NRD wrapper
+  NrdDenoiser::Get().Recreate(s_outputWidth, s_outputHeight);
 
   // Create Accumulation UAV
   s_accumulation.Resize(s_outputWidth, s_outputHeight);
@@ -3134,6 +3196,10 @@ void SetDenoiserMode(DenoiserMode m) {
   if (s_denoiserMode == m)
     return;
   s_denoiserMode = m;
+  
+  g_cameraData.nrdEnabled = (m == DenoiserMode::NRD_RELAX) ? 1.0f : 0.0f;
+  UpdateCameraCB();
+
   if (s_denoiserMode != DenoiserMode::Off) {
     // Try to initialize OIDN wrapper; if device isn't ready, initialization
     // will be attempted on first RunDenoise call.
@@ -3795,6 +3861,38 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
   // Optional Streamline / DLSS evaluation
   ID3D12Resource *postColor = s_outputUAV.Get();
+
+  // Evaluate NRD
+  if (!debugViewActive && s_denoiserMode == DenoiserMode::NRD_RELAX && s_nrdOutDiffuseUAV) {
+    if (s_queryHeap) {
+      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
+                        5); // Start Denoise
+    }
+
+    const bool resetHistory = s_streamlineResetHistory || (currSpp == 0) || !s_accumulation.IsAccumulating();
+
+    NrdDenoiser::Get().Denoise(
+        dxrList.Get(),
+        s_nrdDiffuseRadianceHitDistUAV.Get(),
+        s_nrdSpecRadianceHitDistUAV.Get(),
+        s_nrdViewZUAV.Get(),
+        s_nrdNormalRoughnessUAV.Get(),
+        s_nrdMvUAV.Get(),
+        s_nrdOutDiffuseUAV.Get(),
+        s_nrdOutSpecularUAV.Get(),
+        g_cameraData,
+        jitterX, jitterY,
+        resetHistory
+    );
+
+    postColor = s_nrdOutDiffuseUAV.Get();
+
+    if (s_queryHeap) {
+      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
+                        6); // End Denoise
+    }
+  }
+
   // After one-shot OIDN at end conditions, keep showing the denoised HDR buffer
   // instead of falling back to the raw output on following frames.
   if (reachedEndCondition && isOidnMode && s_hasDenoised && s_oidnOutputUAV) {

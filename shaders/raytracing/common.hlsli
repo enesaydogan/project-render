@@ -36,6 +36,14 @@ RWTexture2D<float4> g_specularAlbedo : register(u16);
 RWTexture2D<float> g_specHitDistance : register(u17);
 RWTexture2D<float2> g_specularMotionVectors : register(u18);
 
+// NRD inputs (u25+)
+RWTexture2D<float4> g_nrdDiffuseRadianceHitDist : register(u25);
+RWTexture2D<float4> g_nrdSpecRadianceHitDist : register(u26);
+RWTexture2D<float>  g_nrdViewZ : register(u27);
+RWTexture2D<float4> g_nrdNormalRoughness : register(u28);
+RWTexture2D<float2> g_nrdMv : register(u29);
+RWTexture2D<float4> g_nrdEmission : register(u32);
+
 // === Shader instrumentation counters (debug) ===
 static const uint SHADER_COUNTER_TRACE_RAYS = 0;
 static const uint SHADER_COUNTER_SHADOW_TRACES = 1;
@@ -149,7 +157,8 @@ cbuffer Camera : register(b0)
     // 0 = use raw texel luminance (area) which is incorrect but useful for
     // comparisons/debugging.
     float sampleEnvSolidAngle;
-    float2 _cameraPadEnd;
+    float nrdEnabled;
+    float _cameraPadEnd;
 }
 
 inline float2 DirectionToUVRotated(float3 dir) {

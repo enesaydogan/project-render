@@ -1,0 +1,91 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\project-render\build\CMakeFiles\9055b2246d144e6e4e8be0a01fee97fb\NRDShaders.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\project-render\thirdparty\NRD\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\Clear.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\Clear.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\Common.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\NRD.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\NRDConfig.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\Poisson.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REBLUR_Blur.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REBLUR_Blur.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REBLUR_ClassifyTiles.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REBLUR_ClassifyTiles.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REBLUR_Common.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REBLUR_Common_DiffuseSpatialFilter.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REBLUR_Common_SpecularSpatialFilter.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REBLUR_Config.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REBLUR_HistoryFix.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REBLUR_HistoryFix.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REBLUR_HitDistReconstruction.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REBLUR_HitDistReconstruction.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REBLUR_PostBlur.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REBLUR_PostBlur.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REBLUR_PrePass.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REBLUR_PrePass.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REBLUR_SplitScreen.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REBLUR_SplitScreen.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REBLUR_TemporalAccumulation.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REBLUR_TemporalAccumulation.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REBLUR_TemporalStabilization.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REBLUR_TemporalStabilization.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REBLUR_Validation.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REBLUR_Validation.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REFERENCE_Copy.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REFERENCE_Copy.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REFERENCE_TemporalAccumulation.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\REFERENCE_TemporalAccumulation.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_AntiFirefly.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_AntiFirefly.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_Atrous.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_Atrous.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_AtrousSmem.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_AtrousSmem.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_ClassifyTiles.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_ClassifyTiles.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_Common.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_Config.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_Copy.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_Copy.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_HistoryClamping.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_HistoryClamping.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_HistoryFix.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_HistoryFix.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_HitDistReconstruction.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_HitDistReconstruction.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_PrePass.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_PrePass.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_SplitScreen.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_SplitScreen.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_TemporalAccumulation.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_TemporalAccumulation.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_Validation.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\RELAX_Validation.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\SIGMA_Blur.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\SIGMA_Blur.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\SIGMA_ClassifyTiles.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\SIGMA_ClassifyTiles.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\SIGMA_Common.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\SIGMA_Config.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\SIGMA_Copy.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\SIGMA_Copy.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\SIGMA_SmoothTiles.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\SIGMA_SmoothTiles.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\SIGMA_SplitScreen.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\SIGMA_SplitScreen.resources.hlsli" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\SIGMA_TemporalStabilization.cs.hlsl" />
+    <None Include="D:\project-render\thirdparty\NRD\Shaders\SIGMA_TemporalStabilization.resources.hlsli" />
+    <None Include="D:\project-render\build\thirdparty\NRD\CMakeFiles\NRDShaders" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{5E02EFA4-3503-36A1-8938-77B7A681AB22}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
