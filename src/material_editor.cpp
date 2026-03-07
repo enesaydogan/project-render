@@ -297,7 +297,7 @@ void Draw(HWND hwnd, bool &visible) {
             r = 0.0f;
           if (r > 1.0f)
             r = 1.0f;
-          mat.reflectionGlossiness = 1.0f - r;
+          mat.roughness = r;
         };
 
         auto ResetDefaults = [&](bool keepTextures) {
@@ -306,8 +306,6 @@ void Draw(HWND hwnd, bool &visible) {
           char nameBuf[64];
           strncpy_s(nameBuf, mat.name, _TRUNCATE);
           int d = mat.diffuseTexture;
-          int r = mat.reflectionTexture;
-          int rr = mat.refractionTexture;
           int n = mat.normalTexture;
           int e = mat.emissiveTexture;
           int o = mat.occlusionTexture;
@@ -317,8 +315,6 @@ void Draw(HWND hwnd, bool &visible) {
           strncpy_s(mat.name, nameBuf, _TRUNCATE);
           if (keepTextures) {
             mat.diffuseTexture = d;
-            mat.reflectionTexture = r;
-            mat.refractionTexture = rr;
             mat.normalTexture = n;
             mat.emissiveTexture = e;
             mat.occlusionTexture = o;
@@ -329,12 +325,12 @@ void Draw(HWND hwnd, bool &visible) {
         auto ApplyPreset = [](Asset::Material &m, int presetIdx) {
           auto SetRoughness = [&](float r) {
             r = (r < 0.0f) ? 0.0f : (r > 1.0f ? 1.0f : r);
-            m.reflectionGlossiness = 1.0f - r;
+            m.roughness = r;
           };
 
           // Defaults that keep behavior stable
-          m.clearcoat = 0.0f;
-          m.clearcoatRoughness = 0.1f;
+          m.coatWeight = 0.0f;
+          m.coatRoughness = 0.1f;
           m.thinWalled = 0.0f;
           m.translucency = 0.0f;
           m.uvScale[0] = 1.0f;
@@ -348,10 +344,10 @@ void Draw(HWND hwnd, bool &visible) {
           m.triPlanarNormalStrength = 1.0f;
 
           // Keep refraction off unless preset wants it
-          m.refractionColor[0] = 0.0f;
-          m.refractionColor[1] = 0.0f;
-          m.refractionColor[2] = 0.0f;
-          m.refractionGlossiness = 1.0f;
+          m.transmissionColor[0] = 1.0f;
+          m.transmissionColor[1] = 1.0f;
+          m.transmissionColor[2] = 1.0f;
+          m.transmissionWeight = 0.0f;
 
           // Corona-like archviz presets (engine approximation)
           switch (presetIdx) {
@@ -380,15 +376,15 @@ void Draw(HWND hwnd, bool &visible) {
             m.metalness = 0.0f;
             m.ior = 1.5f;
             SetRoughness(0.35f);
-            m.clearcoat = 0.8f;
-            m.clearcoatRoughness = 0.08f;
+            m.coatWeight = 0.8f;
+            m.coatRoughness = 0.08f;
             break;
           case 5: // Tile (Ceramic)
             m.metalness = 0.0f;
             m.ior = 1.52f;
             SetRoughness(0.25f);
-            m.clearcoat = 0.6f;
-            m.clearcoatRoughness = 0.12f;
+            m.coatWeight = 0.6f;
+            m.coatRoughness = 0.12f;
             break;
           case 6: // Metal (Brushed)
             m.metalness = 1.0f;
@@ -404,37 +400,37 @@ void Draw(HWND hwnd, bool &visible) {
             m.metalness = 0.0f;
             m.ior = 1.45f;
             SetRoughness(0.35f);
-            m.clearcoat = 0.25f;
-            m.clearcoatRoughness = 0.15f;
+            m.coatWeight = 0.25f;
+            m.coatRoughness = 0.15f;
             break;
           case 9: // Glass (Clear Window, Thin)
             m.metalness = 0.0f;
             m.ior = 1.52f;
             SetRoughness(0.02f);
-            m.refractionColor[0] = 1.0f;
-            m.refractionColor[1] = 1.0f;
-            m.refractionColor[2] = 1.0f;
-            m.refractionGlossiness = 1.0f;
+            m.transmissionColor[0] = 1.0f;
+            m.transmissionColor[1] = 1.0f;
+            m.transmissionColor[2] = 1.0f;
+            m.transmissionWeight = 1.0f;
             m.thinWalled = 1.0f;
             break;
           case 10: // Glass (Frosted, Thin)
             m.metalness = 0.0f;
             m.ior = 1.52f;
             SetRoughness(0.35f);
-            m.refractionColor[0] = 1.0f;
-            m.refractionColor[1] = 1.0f;
-            m.refractionColor[2] = 1.0f;
-            m.refractionGlossiness = 0.6f;
+            m.transmissionColor[0] = 1.0f;
+            m.transmissionColor[1] = 1.0f;
+            m.transmissionColor[2] = 1.0f;
+            m.transmissionWeight = 1.0f;
             m.thinWalled = 1.0f;
             break;
           case 11: // Glass (Tinted, Thin)
             m.metalness = 0.0f;
             m.ior = 1.52f;
             SetRoughness(0.05f);
-            m.refractionColor[0] = 0.85f;
-            m.refractionColor[1] = 0.95f;
-            m.refractionColor[2] = 1.0f;
-            m.refractionGlossiness = 1.0f;
+            m.transmissionColor[0] = 0.85f;
+            m.transmissionColor[1] = 0.95f;
+            m.transmissionColor[2] = 1.0f;
+            m.transmissionWeight = 1.0f;
             m.thinWalled = 1.0f;
             break;
           case 12: // Fabric (Approx)
@@ -521,7 +517,7 @@ void Draw(HWND hwnd, bool &visible) {
             if (ImGui::ColorEdit3("Base Color", mat.diffuseColor))
               DxrRenderer::ResetAccumulation();
 
-            float roughness = 1.0f - mat.reflectionGlossiness;
+            float roughness = mat.roughness;
             if (ImGui::SliderFloat("Roughness", &roughness, 0.0f, 1.0f)) {
               SetRoughness(roughness);
               DxrRenderer::ResetAccumulation();
@@ -529,15 +525,34 @@ void Draw(HWND hwnd, bool &visible) {
             if (ImGui::SliderFloat("Metalness", &mat.metalness, 0.0f, 1.0f))
               DxrRenderer::ResetAccumulation();
 
+            if (ImGui::SliderFloat("Specular Weight", &mat.specularWeight,
+                                   0.0f, 1.0f))
+              DxrRenderer::ResetAccumulation();
+
             if (ImGui::InputFloat("IOR", &mat.ior, 0.01f, 0.1f, "%.3f"))
               DxrRenderer::ResetAccumulation();
 
-            ImGui::SeparatorText("Coat / Translucency");
-            if (ImGui::SliderFloat("Clearcoat", &mat.clearcoat, 0.0f, 1.0f))
+            ImGui::SeparatorText("Transmission / Coat");
+            float transmission = mat.transmissionWeight;
+            if (ImGui::SliderFloat("Transmission", &transmission, 0.0f,
+                                   1.0f)) {
+              mat.transmissionWeight = transmission;
+              MarkOpacityDirty();
+            }
+            if (ImGui::ColorEdit3("Transmission Color", mat.transmissionColor)) {
               DxrRenderer::ResetAccumulation();
-            if (ImGui::SliderFloat("Clearcoat Roughness",
-                                   &mat.clearcoatRoughness, 0.0f, 1.0f))
+            }
+            float coatWeight = mat.coatWeight;
+            if (ImGui::SliderFloat("Coat", &coatWeight, 0.0f, 1.0f)) {
+              mat.coatWeight = coatWeight;
               DxrRenderer::ResetAccumulation();
+            }
+            float coatRoughness = mat.coatRoughness;
+            if (ImGui::SliderFloat("Coat Roughness",
+                                   &coatRoughness, 0.0f, 1.0f)) {
+              mat.coatRoughness = coatRoughness;
+              DxrRenderer::ResetAccumulation();
+            }
             if (ImGui::SliderFloat("Translucency", &mat.translucency, 0.0f,
                                    1.0f))
               MarkOpacityDirty();
@@ -548,15 +563,6 @@ void Draw(HWND hwnd, bool &visible) {
                 MarkOpacityDirty();
               }
             }
-
-            ImGui::SeparatorText("Advanced (Tint) ");
-            if (ImGui::ColorEdit3("Reflection Tint", mat.reflectionColor))
-              DxrRenderer::ResetAccumulation();
-            if (ImGui::ColorEdit3("Refraction Color", mat.refractionColor))
-              MarkOpacityDirty();
-            if (ImGui::SliderFloat("Refraction Glossiness",
-                                   &mat.refractionGlossiness, 0.0f, 1.0f))
-              DxrRenderer::ResetAccumulation();
 
             ImGui::EndTabItem();
           }
@@ -716,8 +722,6 @@ void Draw(HWND hwnd, bool &visible) {
             DrawTextureSlot("Normal", mat.normalTexture);
             DrawTextureSlot("Occlusion", mat.occlusionTexture);
             DrawTextureSlot("Emissive", mat.emissiveTexture);
-            DrawTextureSlot("Reflection", mat.reflectionTexture);
-            DrawTextureSlot("Refraction", mat.refractionTexture);
 
             ImGui::EndTabItem();
           }
@@ -774,10 +778,9 @@ void Draw(HWND hwnd, bool &visible) {
           }
 
           if (ImGui::BeginTabItem("QA")) {
-            float rough = 1.0f - mat.reflectionGlossiness;
+            float rough = (std::clamp)(mat.roughness, 0.0f, 1.0f);
             bool isMetal = mat.metalness > 0.5f;
-            bool isGlass = (mat.refractionColor[0] + mat.refractionColor[1] +
-                            mat.refractionColor[2]) > 0.01f;
+            bool isGlass = mat.transmissionWeight > 0.01f;
             float aMin = fminf(mat.diffuseColor[0],
                                fminf(mat.diffuseColor[1], mat.diffuseColor[2]));
             float aMax = fmaxf(mat.diffuseColor[0],
@@ -793,10 +796,12 @@ void Draw(HWND hwnd, bool &visible) {
                                  "Roughness < 0.02 can cause fireflies (shader "
                                  "clamps to 0.02).\n");
             }
-            if (mat.clearcoat > 0.01f && mat.clearcoatRoughness < 0.02f) {
+            const float qaCoatWeight = mat.coatWeight;
+            const float qaCoatRoughness = mat.coatRoughness;
+            if (qaCoatWeight > 0.01f && qaCoatRoughness < 0.02f) {
               ImGui::TextColored(
                   ImVec4(1, 0.65f, 0, 1),
-                  "Clearcoat roughness very low; may sparkle.\n");
+              "Coat roughness very low; may sparkle.\n");
             }
             ImGui::EndTabItem();
           }

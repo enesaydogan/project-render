@@ -636,7 +636,8 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
         // SketchUp materials are generally non-metallic and mostly matte in the
         // viewport. Use a conservative default to better match expected look.
         mtl.metalness = 0.0f;
-        mtl.reflectionGlossiness = 0.0f;
+        mtl.roughness = 1.0f;
+        mtl.specularWeight = 1.0f;
         mtl.doubleSided = true;
 
         // Add to list

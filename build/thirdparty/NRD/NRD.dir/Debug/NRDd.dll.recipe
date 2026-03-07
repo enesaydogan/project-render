@@ -16,15 +16,6 @@
     <ProjectOutput>
       <FullPath>D:\project-render\build\thirdparty\NRD\Debug\NRDd.dll</FullPath>
     </ProjectOutput>
-    <ProjectOutput>
-      <FullPath>D:\project-render\build\x64\Debug\compile_shaders</FullPath>
-    </ProjectOutput>
-    <ProjectOutput>
-      <FullPath>D:\project-render\build\Debug\bin\project-render.exe</FullPath>
-    </ProjectOutput>
-    <ProjectOutput>
-      <FullPath>D:\project-render\build\x64\Debug\ALL_BUILD</FullPath>
-    </ProjectOutput>
   </ProjectOutputs>
   <ContentFiles />
   <SatelliteDlls />

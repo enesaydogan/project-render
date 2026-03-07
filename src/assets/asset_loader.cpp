@@ -622,13 +622,8 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
         mat.diffuseColor[c] = baseColorFactor[c];
       mat.diffuseColor[3] = baseColorFactor[3];
 
-      // We store metallic in mat.metalness and roughness in reflectionColor.w
-      // (Glossiness = 1-R)
-      mat.reflectionColor[0] = 1.0f; // Specular tint default
-      mat.reflectionColor[1] = 1.0f;
-      mat.reflectionColor[2] = 1.0f;
       mat.metalness = metallicFactor;
-      mat.reflectionGlossiness = 1.0f - roughnessFactor;
+      mat.roughness = roughnessFactor;
 
       // Proper mapping from texture index to image source index
       auto GetImgIdx = [&](int texIdx) {
@@ -654,6 +649,84 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
       mat.emissiveIntensity = 1.0f;
       if (GetImgIdx(m.emissiveTexture.index) >= 0) {
         mat.emissiveIntensity *= 0.1f;
+      }
+
+      auto GetExtensionNumber = [&](const tinygltf::Value &value,
+                                    const char *key,
+                                    double fallback) -> double {
+        return value.Has(key) ? value.Get(key).GetNumberAsDouble() : fallback;
+      };
+
+      auto khrTransmission = m.extensions.find("KHR_materials_transmission");
+      if (khrTransmission != m.extensions.end()) {
+        mat.transmissionWeight =
+            (float)GetExtensionNumber(khrTransmission->second,
+                                      "transmissionFactor", 0.0);
+      }
+
+      auto khrIor = m.extensions.find("KHR_materials_ior");
+      if (khrIor != m.extensions.end()) {
+        mat.ior = (float)GetExtensionNumber(khrIor->second, "ior", mat.ior);
+      }
+
+      auto khrSpecular = m.extensions.find("KHR_materials_specular");
+      if (khrSpecular != m.extensions.end()) {
+        const float specularFactor =
+            (float)GetExtensionNumber(khrSpecular->second,
+                                      "specularFactor",
+                                      mat.specularWeight);
+        mat.specularWeight = (std::clamp)(specularFactor, 0.0f, 1.0f);
+
+        if (khrSpecular->second.Has("specularColorFactor")) {
+          const auto specColor = khrSpecular->second.Get("specularColorFactor");
+          const float specularColor[3] = {
+              (float)specColor.Get(0).GetNumberAsDouble(),
+              (float)specColor.Get(1).GetNumberAsDouble(),
+              (float)specColor.Get(2).GetNumberAsDouble()};
+          const float specularScale =
+              (std::max)(specularColor[0],
+                         (std::max)(specularColor[1], specularColor[2]));
+          mat.specularWeight =
+              (std::clamp)(mat.specularWeight * specularScale, 0.0f, 1.0f);
+        }
+      }
+
+      auto khrClearcoat = m.extensions.find("KHR_materials_clearcoat");
+      if (khrClearcoat != m.extensions.end()) {
+        mat.coatWeight = (float)GetExtensionNumber(khrClearcoat->second,
+                                                   "clearcoatFactor", 0.0);
+        mat.coatRoughness =
+            (float)GetExtensionNumber(khrClearcoat->second,
+                                      "clearcoatRoughnessFactor", 0.0);
+      }
+
+      auto khrEmissiveStrength =
+          m.extensions.find("KHR_materials_emissive_strength");
+      if (khrEmissiveStrength != m.extensions.end()) {
+        mat.emissiveIntensity =
+            (float)GetExtensionNumber(khrEmissiveStrength->second,
+                                      "emissiveStrength",
+                                      mat.emissiveIntensity);
+      }
+
+      auto khrVolume = m.extensions.find("KHR_materials_volume");
+      if (khrVolume != m.extensions.end()) {
+        const float thicknessFactor =
+            (float)GetExtensionNumber(khrVolume->second,
+                                      "thicknessFactor",
+                                      0.0);
+        mat.thinWalled = (thicknessFactor > 1e-4f) ? 0.0f : 1.0f;
+
+        if (khrVolume->second.Has("attenuationColor")) {
+          const auto attenuationColor = khrVolume->second.Get("attenuationColor");
+          for (int i = 0; i < 3; ++i) {
+            mat.transmissionColor[i] =
+                (float)attenuationColor.Get(i).GetNumberAsDouble();
+          }
+        }
+      } else if (mat.transmissionWeight > 0.01f) {
+        // glTF transmission without KHR_materials_volume behaves like thin glass.
+        mat.thinWalled = 1.0f;
       }
 
       int baseColorTexIdx =
@@ -684,12 +757,6 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
       ClearIfInvalid(mat.occlusionTexture);
       ClearIfInvalid(mat.metalRoughTexture);
 
-      // Fallback for non-PBR shaders: set reflectionTexture to BaseColor if
-      // metallic
-      if (metallicFactor > 0.5f) {
-        mat.reflectionTexture = baseColorTexIdx;
-      }
-
       mat.doubleSided = m.doubleSided;
       if (!m.alphaMode.empty())
         mat.alphaMode = m.alphaMode;
@@ -706,21 +773,22 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
         }
         if (ext.Has("specularFactor")) {
           auto p = ext.Get("specularFactor");
-          for (int i = 0; i < 3; ++i)
-            mat.reflectionColor[i] = (float)p.Get(i).GetNumberAsDouble();
+          const float specularColor[3] = {
+              (float)p.Get(0).GetNumberAsDouble(),
+              (float)p.Get(1).GetNumberAsDouble(),
+              (float)p.Get(2).GetNumberAsDouble()};
+          const float specularScale =
+              (std::max)(specularColor[0],
+                         (std::max)(specularColor[1], specularColor[2]));
+          mat.specularWeight = (std::clamp)(specularScale, 0.0f, 1.0f);
         }
         if (ext.Has("glossinessFactor")) {
-          mat.reflectionGlossiness =
-              (float)ext.Get("glossinessFactor").GetNumberAsDouble();
+          mat.roughness =
+              1.0f - (float)ext.Get("glossinessFactor").GetNumberAsDouble();
         }
         if (ext.Has("diffuseTexture")) {
           mat.diffuseTexture = GetImgIdx(
               ext.Get("diffuseTexture").Get("index").GetNumberAsInt());
-        }
-        if (ext.Has("specularGlossinessTexture")) {
-          mat.reflectionTexture = GetImgIdx(ext.Get("specularGlossinessTexture")
-                                                .Get("index")
-                                                .GetNumberAsInt());
         }
 
         // Validate any overridden texture slots as well.
@@ -728,10 +796,6 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
             mat.diffuseTexture < (int)tmpTextures.size() &&
             !tmpTextures[mat.diffuseTexture].resource)
           mat.diffuseTexture = -1;
-        if (mat.reflectionTexture >= 0 &&
-            mat.reflectionTexture < (int)tmpTextures.size() &&
-            !tmpTextures[mat.reflectionTexture].resource)
-          mat.reflectionTexture = -1;
       }
       tmpMaterials[mi] = std::move(mat);
     }
@@ -1288,7 +1352,7 @@ bool LoadWithAssimp(const std::string &path, std::vector<GpuMesh> &outMeshes,
       float roughness = 0.5f, metalness = 0.0f;
       aiMat->Get(AI_MATKEY_ROUGHNESS_FACTOR, roughness);
       aiMat->Get(AI_MATKEY_METALLIC_FACTOR, metalness);
-      mat.reflectionGlossiness = 1.0f - roughness;
+      mat.roughness = roughness;
       mat.metalness = metalness;
 
       auto GetTexturePath = [&](aiTextureType type) -> std::string {

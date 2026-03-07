@@ -1118,14 +1118,14 @@ bool InitApplication(HWND hwnd) {
   // Large enough to hold many unique material instances per frame
   struct MaterialCB {
     float diffuseColor[4];
-    float reflectionColor[4];
-    float refractionColor[4];
+    float surfaceParams[4];      // x=roughness, y=metalness, z=specularWeight
+    float transmissionParams[4]; // rgb=transmissionColor, a=transmissionWeight
     float emissiveColor[4];
-    int textureIndices[4];
-    int emissiveAndPad[4];   // x=emissive, y=occlusion, z=metalRough
-    float extraParams[4];    // x=metalness, y=emissiveIntensity, zw=unused
-    float archvizParams0[4]; // x=clearcoat, y=clearcoatRoughness, z=thinWalled,
-                             // w=translucency
+    int textureIndices[4];       // x=diffuse, z=normal
+    int emissiveAndPad[4];       // x=emissive, y=occlusion, z=metalRough
+    float extraParams[4];        // x=emissiveIntensity
+    float coatLayerParams[4];    // x=coatWeight, y=coatRoughness, z=thinWalled,
+                                 // w=translucency
     float uvTransform[4];    // xy=uvScale, zw=uvOffset
     float
         triPlanarParams[4]; // x=enabled, y=scale, z=sharpness, w=normalStrength
@@ -1137,10 +1137,11 @@ bool InitApplication(HWND hwnd) {
     UINT packedTextures[4];
   };
   struct DxrMaterialExtraData {
-    float archvizParams0[4];
+    float coatLayerParams[4];
     float uvTransform[4];
     float triPlanarParams[4];
     float shadingParams[4];
+    float transmissionColor[4];
   };
   const UINT64 matCbSizeSingle = (sizeof(MaterialCB) + 255) & ~255;
   const UINT64 matCbSize = matCbSizeSingle * 16384; // Support up to 16384 calls
@@ -1657,10 +1658,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             UINT packedTextures[4];
           };
           struct DxrMaterialExtraData {
-            float archvizParams0[4];
+            float coatLayerParams[4];
             float uvTransform[4];
             float triPlanarParams[4];
             float shadingParams[4];
+            float transmissionColor[4];
           };
 
           static constexpr UINT kMaterialFlagAlphaTested = 1u << 0;
@@ -1695,16 +1697,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
               memcpy(mat.emissive_ior, srcMat.emissiveColor, sizeof(float) * 3);
               mat.emissive_ior[3] = srcMat.ior;
 
-              const float roughness =
-                  (std::clamp)(1.0f - srcMat.reflectionGlossiness, 0.0f, 1.0f);
+              float roughness = (std::clamp)(srcMat.roughness, 0.0f, 1.0f);
               const float metalness =
                   (std::clamp)(srcMat.metalness, 0.0f, 1.0f);
-              const float refrMax =
-                  (std::max)(srcMat.refractionColor[0],
-                             (std::max)(srcMat.refractionColor[1],
-                                        srcMat.refractionColor[2]));
-              const float transmission =
-                  (std::clamp)(refrMax, 0.0f, 1.0f) * (1.0f - metalness);
+              float transmission =
+                  (std::clamp)(srcMat.transmissionWeight, 0.0f, 1.0f);
+              transmission *= (1.0f - metalness);
 
               UINT flags = 0;
               if (srcMat.alphaMode != "OPAQUE" ||
@@ -1726,7 +1724,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                   fabsf(srcMat.uvOffset[1]) > 1e-5f) {
                 flags |= kMaterialFlagUvTransform;
               }
-              if (refrMax > 0.01f || srcMat.thinWalled > 0.5f) {
+              if (transmission > 0.01f || srcMat.thinWalled > 0.5f) {
                 flags |= kMaterialFlagGlass;
               }
               if (srcMat.doubleSided) {
@@ -1745,14 +1743,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
               mat.packedTextures[1] = PackTexPair(srcMat.metalRoughTexture,
                                                   srcMat.occlusionTexture);
               mat.packedTextures[2] =
-                  PackTexPair(srcMat.emissiveTexture, srcMat.refractionTexture);
-              mat.packedTextures[3] = PackTexPair(srcMat.reflectionTexture, -1);
+                  PackTexPair(srcMat.emissiveTexture, -1);
+                mat.packedTextures[3] = PackTexPair(-1, -1);
 
               DxrMaterialExtraData extra = {};
-              extra.archvizParams0[0] = srcMat.clearcoat;
-              extra.archvizParams0[1] = srcMat.clearcoatRoughness;
-              extra.archvizParams0[2] = srcMat.thinWalled;
-              extra.archvizParams0[3] = srcMat.translucency;
+              float coatWeight = (std::clamp)(srcMat.coatWeight, 0.0f, 1.0f);
+              float coatRoughness =
+                  (std::clamp)(srcMat.coatRoughness, 0.0f, 1.0f);
+                extra.coatLayerParams[0] = coatWeight;
+                extra.coatLayerParams[1] = coatRoughness;
+                extra.coatLayerParams[2] = srcMat.thinWalled;
+                extra.coatLayerParams[3] = srcMat.translucency;
               extra.uvTransform[0] = srcMat.uvScale[0];
               extra.uvTransform[1] = srcMat.uvScale[1];
               extra.uvTransform[2] = srcMat.uvOffset[0];
@@ -1762,6 +1763,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
               extra.triPlanarParams[2] = srcMat.triPlanarSharpness;
               extra.triPlanarParams[3] = srcMat.triPlanarNormalStrength;
               extra.shadingParams[0] = (std::max)(0.0f, srcMat.emissiveIntensity);
+              extra.shadingParams[1] = (std::clamp)(srcMat.specularWeight, 0.0f, 1.0f);
+                extra.transmissionColor[0] =
+                  (std::clamp)(srcMat.transmissionColor[0], 0.0f, 1.0f);
+                extra.transmissionColor[1] =
+                  (std::clamp)(srcMat.transmissionColor[1], 0.0f, 1.0f);
+                extra.transmissionColor[2] =
+                  (std::clamp)(srcMat.transmissionColor[2], 0.0f, 1.0f);
+                extra.transmissionColor[3] = 1.0f;
 
               memcpy(pCore + i * sizeof(DxrMaterialData), &mat, sizeof(mat));
               memcpy(pExtra + i * sizeof(DxrMaterialExtraData), &extra,
@@ -2013,47 +2022,58 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             if (gm.materialIndex != lastMaterialIndex) {
               struct MaterialCB {
                 float diffuseColor[4];
-                float reflectionColor[4];
-                float refractionColor[4];
+                float surfaceParams[4];
+                float transmissionParams[4];
                 float emissiveColor[4];
                 int textureIndices[4];
                 int emissiveAndPad[4];
                 float extraParams[4];
-                float archvizParams0[4];
+                float coatLayerParams[4];
                 float uvTransform[4];
                 float triPlanarParams[4];
               } matCB;
 
               const auto &srcMat = g_loadedMaterials[gm.materialIndex];
               memcpy(matCB.diffuseColor, srcMat.diffuseColor, 16);
-              memcpy(matCB.reflectionColor, srcMat.reflectionColor, 12);
-              matCB.reflectionColor[3] = srcMat.reflectionGlossiness;
+              float rasterRoughness = (std::clamp)(srcMat.roughness, 0.0f, 1.0f);
+        matCB.surfaceParams[0] = rasterRoughness;
+        matCB.surfaceParams[1] = srcMat.metalness;
+        matCB.surfaceParams[2] =
+          (std::clamp)(srcMat.specularWeight, 0.0f, 1.0f);
+        matCB.surfaceParams[3] = 0.0f;
 
-              memcpy(matCB.refractionColor, srcMat.refractionColor, 12);
-              matCB.refractionColor[3] = srcMat.refractionGlossiness;
+        matCB.transmissionParams[0] = srcMat.transmissionColor[0];
+        matCB.transmissionParams[1] = srcMat.transmissionColor[1];
+        matCB.transmissionParams[2] = srcMat.transmissionColor[2];
+        matCB.transmissionParams[3] =
+          (std::clamp)(srcMat.transmissionWeight, 0.0f, 1.0f);
 
               memcpy(matCB.emissiveColor, srcMat.emissiveColor, 12);
               matCB.emissiveColor[3] = srcMat.ior;
 
               matCB.textureIndices[0] = srcMat.diffuseTexture;
-              matCB.textureIndices[1] = srcMat.reflectionTexture;
+        matCB.textureIndices[1] = -1;
               matCB.textureIndices[2] = srcMat.normalTexture;
-              matCB.textureIndices[3] = srcMat.refractionTexture;
+        matCB.textureIndices[3] = -1;
 
               matCB.emissiveAndPad[0] = srcMat.emissiveTexture;
               matCB.emissiveAndPad[1] = srcMat.occlusionTexture;
               matCB.emissiveAndPad[2] = srcMat.metalRoughTexture;
               matCB.emissiveAndPad[3] = 0;
 
-              matCB.extraParams[0] = srcMat.metalness;
-              matCB.extraParams[1] = srcMat.emissiveIntensity;
-              matCB.extraParams[2] = 0.0f;
+                matCB.extraParams[0] = srcMat.emissiveIntensity;
+                matCB.extraParams[1] = 0.0f;
+                matCB.extraParams[2] = 0.0f;
               matCB.extraParams[3] = 0.0f;
 
-              matCB.archvizParams0[0] = srcMat.clearcoat;
-              matCB.archvizParams0[1] = srcMat.clearcoatRoughness;
-              matCB.archvizParams0[2] = srcMat.thinWalled;
-              matCB.archvizParams0[3] = srcMat.translucency;
+              float rasterCoatWeight =
+                  (std::clamp)(srcMat.coatWeight, 0.0f, 1.0f);
+              float rasterCoatRoughness =
+                  (std::clamp)(srcMat.coatRoughness, 0.0f, 1.0f);
+                matCB.coatLayerParams[0] = rasterCoatWeight;
+                matCB.coatLayerParams[1] = rasterCoatRoughness;
+                matCB.coatLayerParams[2] = srcMat.thinWalled;
+                matCB.coatLayerParams[3] = srcMat.translucency;
 
               matCB.uvTransform[0] = srcMat.uvScale[0];
               matCB.uvTransform[1] = srcMat.uvScale[1];

@@ -1,0 +1,14 @@
+{
+    "version": 1,
+    "revision": 0,
+    "rules": [
+        {
+            "primary-output": "NRD.dir\\Debug\\Reblur.obj",
+            "outputs": [
+                "D:\\project-render\\build\\thirdparty\\NRD\\NRD.dir\\Debug\\vc143.pdb",
+                "NRD.dir\\Debug\\"
+            ],
+            "requires": []
+        }
+    ]
+}

@@ -80,5 +80,6 @@ void Miss(inout RayPayload payload)
     payload.packedNormal = PackNormalOctahedron(float3(0, 1, 0));
     payload.packedAlbedo = PackPayloadAlbedo(float3(0, 0, 0));
     payload.packedSurface = PackPayloadSurface(0.0, 0.0, 0.0, 0.0);
-    payload.packedIorType = PackPayloadIorType(1.0, rayType, false);
+    payload.packedIorType = PackPayloadIorType(1.0, rayType, false, 1.0);
+    payload.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
 }

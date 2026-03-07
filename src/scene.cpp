@@ -266,10 +266,6 @@ bool ImportModel(const std::string &utf8path, const float *rootTranslation) {
       Asset::Material &m = g_loadedMaterials[materialBase + i];
       if (m.diffuseTexture >= 0)
         m.diffuseTexture += (int)textureBase;
-      if (m.reflectionTexture >= 0)
-        m.reflectionTexture += (int)textureBase;
-      if (m.refractionTexture >= 0)
-        m.refractionTexture += (int)textureBase;
       if (m.normalTexture >= 0)
         m.normalTexture += (int)textureBase;
       if (m.occlusionTexture >= 0)
@@ -601,21 +597,17 @@ void AddDefaultPlane(float offset_y) {
     mat.diffuseColor[1] = 0.8f;
     mat.diffuseColor[2] = 0.8f;
     mat.diffuseColor[3] = 1.0f;
-    mat.reflectionColor[0] = 0.0f;
-    mat.reflectionColor[1] = 0.0f;
-    mat.reflectionColor[2] = 0.0f;
-    mat.reflectionColor[3] = 1.0f;
-    mat.reflectionGlossiness = 0.0f; // Very rough
-    mat.refractionColor[0] = 0.0f;
-    mat.refractionColor[1] = 0.0f;
-    mat.refractionColor[2] = 0.0f;
-    mat.refractionColor[3] = 1.0f;
+    mat.roughness = 1.0f;
+    mat.specularWeight = 1.0f;
+    mat.transmissionWeight = 0.0f;
+    mat.transmissionColor[0] = 1.0f;
+    mat.transmissionColor[1] = 1.0f;
+    mat.transmissionColor[2] = 1.0f;
     mat.diffuseTexture = -1;
-    mat.reflectionTexture = -1;
-    mat.refractionTexture = -1;
     mat.normalTexture = -1;
     mat.occlusionTexture = -1;
     mat.emissiveTexture = -1;
+    mat.metalRoughTexture = -1;
 
     int matIndex = (int)g_loadedMaterials.size();
     g_loadedMaterials.push_back(mat);
@@ -1592,10 +1584,6 @@ void DrawScenePanel(HWND hwnd, bool &visible) {
         Asset::Material &m = g_loadedMaterials[materialBase + i];
         if (m.diffuseTexture >= 0)
           m.diffuseTexture += (int)textureBase;
-        if (m.reflectionTexture >= 0)
-          m.reflectionTexture += (int)textureBase;
-        if (m.refractionTexture >= 0)
-          m.refractionTexture += (int)textureBase;
         if (m.normalTexture >= 0)
           m.normalTexture += (int)textureBase;
         if (m.occlusionTexture >= 0)

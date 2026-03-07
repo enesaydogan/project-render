@@ -5,22 +5,10 @@
       <FullPath>D:\project-render\build\x64\Debug\ZERO_CHECK</FullPath>
     </ProjectOutput>
     <ProjectOutput>
-      <FullPath>D:\project-render\build\_deps\mathlib-build\x64\Debug\MathLib</FullPath>
-    </ProjectOutput>
-    <ProjectOutput>
       <FullPath>D:\project-render\build\_deps\shadermake-build\x64\Debug\ShaderMake</FullPath>
     </ProjectOutput>
     <ProjectOutput>
       <FullPath>D:\project-render\build\thirdparty\NRD\x64\Debug\NRDShaders</FullPath>
-    </ProjectOutput>
-    <ProjectOutput>
-      <FullPath>D:\project-render\build\thirdparty\NRD\Debug\NRDd.dll</FullPath>
-    </ProjectOutput>
-    <ProjectOutput>
-      <FullPath>D:\project-render\build\x64\Debug\compile_shaders</FullPath>
-    </ProjectOutput>
-    <ProjectOutput>
-      <FullPath>D:\project-render\build\Debug\bin\project-render.exe</FullPath>
     </ProjectOutput>
   </ProjectOutputs>
   <ContentFiles />
