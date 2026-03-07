@@ -218,15 +218,13 @@ void NrdDenoiser::Denoise(ID3D12GraphicsCommandList* cmdList,
 
     // Setup relax settings
     nrd::RelaxSettings relaxSettings = {};
-    // Conservative temporal settings for a combined (non-split) radiance signal:
-    // reduce history drag and over-aggressive preblur that can look like streaking.
-    relaxSettings.diffuseMaxAccumulatedFrameNum = 8;
-    relaxSettings.diffuseMaxFastAccumulatedFrameNum = 2;
-    relaxSettings.historyFixFrameNum = 1;
-    relaxSettings.diffusePrepassBlurRadius = 8.0f;
+    // The current integration still feeds a combined beauty-like signal, so
+    // bias RELAX toward stability while keeping spatial blur modest.
+    relaxSettings.diffuseMaxAccumulatedFrameNum = 24;
+    relaxSettings.diffuseMaxFastAccumulatedFrameNum = 6;
+    relaxSettings.historyFixFrameNum = 3;
+    relaxSettings.diffusePrepassBlurRadius = 4.0f;
     relaxSettings.atrousIterationNum = 4;
-    relaxSettings.antilagSettings.accelerationAmount = 0.9f;
-    relaxSettings.antilagSettings.resetAmount = 1.0f;
     m_nrdIntegration->SetDenoiserSettings(nrd::Identifier(0), &relaxSettings);
 
     nrd::ResourceSnapshot resourceSnapshot = {};

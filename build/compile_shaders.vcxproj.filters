@@ -13,6 +13,9 @@
     <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\noise_statistics_cs_CSMain_cs_6_5.cso.rule">
       <Filter>CMake Rules</Filter>
     </CustomBuild>
+    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\nrd_composite_cs_CSMain_cs_6_5.cso.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
     <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\pbr_mesh_PSMainMesh_ps_6_0.cso.rule">
       <Filter>CMake Rules</Filter>
     </CustomBuild>
