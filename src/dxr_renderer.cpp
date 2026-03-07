@@ -3527,6 +3527,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   uint32_t frameIdx = s_jitterFrameIndex;
   float jitterX = Halton(frameIdx, 2) - 0.5f;
   float jitterY = Halton(frameIdx, 3) - 0.5f;
+  const bool nrdOnlyActive =
+      (s_denoiserMode == DenoiserMode::NRD_RELAX) && !dlssActive;
 
   // DLSS-RR can shimmer at silhouettes because pixel jitter causes much larger
   // ray-direction changes near the screen edges in a perspective camera.
@@ -3534,6 +3536,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   if (rrActive) {
     jitterX *= s_rrJitterScale;
     jitterY *= s_rrJitterScale;
+  } else if (nrdOnlyActive) {
+    // NRD by itself doesn't need presentation jitter. Keeping Halton jitter in
+    // the denoiser-only path adds subpixel coverage crawl on silhouettes.
+    jitterX = 0.0f;
+    jitterY = 0.0f;
   }
 
   // Expose the final jitter values for UI/debug overlays.
