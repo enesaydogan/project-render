@@ -331,9 +331,11 @@ void RayGen()
                 primaryDiffuseSplit = diffuseBucket / splitSum;
                 primarySpecularSplit = specularBucket / splitSum;
 
-                // Trace dedicated specular reflection ray to get hit distance for DLSS-RR
-                // Only trace if the surface has significant specular reflectance AND RR is active
-                if (dlssRayReconstruction > 0.5 && max(primarySpecAlbedo.r, max(primarySpecAlbedo.g, primarySpecAlbedo.b)) > 0.01) {
+                // Trace dedicated specular reflection ray to get hit distance for DLSS-RR and NRD.
+                // NRD's RELAX uses this distance to scale its spatial A-Trous filter per-pixel —
+                // without it, all specular pixels get the same fixed blur radius regardless of
+                // how close or far the reflected geometry is, causing noise on glossy surfaces.
+                if ((dlssRayReconstruction > 0.5 || nrdActive) && max(primarySpecAlbedo.r, max(primarySpecAlbedo.g, primarySpecAlbedo.b)) > 0.01) {
                     float3 R_spec = reflect(rayDir, primaryNormal);
                     RayDesc specHitRay;
                     specHitRay.Origin = primaryPos + primaryNormal * 0.002;
@@ -1138,6 +1140,14 @@ void RayGen()
         // used in both the shader and the composite so the round-trip is lossless.
         float3 demodAlbedo = primaryHit ? max(primaryAlbedo, float3(0.01, 0.01, 0.01)) : float3(1.0, 1.0, 1.0);
         float3 nrdDiffDemod = nrdDiffuseColor / demodAlbedo;
+        // Specular demodulation: strip the environment-integrated specular albedo
+        // (F_env) from the specular signal.  For metallic surfaces F_env is the
+        // metal colour, so without this NRD's luminance edge-stopper treats material
+        // colour variation as noise and blurs across material boundaries.
+        // primarySpecAlbedo = EnvBRDFApprox2(F0, roughness^2, NdotV) is also
+        // stored to g_specularAlbedo and re-applied in the composite.
+        float3 demodSpecAlbedo = primaryHit ? max(primarySpecAlbedo, float3(0.01, 0.01, 0.01)) : float3(1.0, 1.0, 1.0);
+        float3 nrdSpecDemod = nrdSpecularColor / demodSpecAlbedo;
         // Diffuse hit distance = distance from primary surface to secondary diffuse
         // hit, which we don't track per-pixel.  Use 0 as the documented safe
         // fallback (RELAX applies conservative fixed-radius filtering in this case).
@@ -1155,7 +1165,7 @@ void RayGen()
         float3 nrdNormal = primaryHit ? normalize(primaryNormal) : float3(0.0, 1.0, 0.0);
         float nrdRoughness = primaryHit ? saturate(primaryRoughness) : 1.0;
         g_nrdDiffuseRadianceHitDist[launchIndex.xy] = float4(nrdDiffDemod, diffHitDist);
-        g_nrdSpecRadianceHitDist[launchIndex.xy] = float4(nrdSpecularColor, specHitDist);
+        g_nrdSpecRadianceHitDist[launchIndex.xy] = float4(nrdSpecDemod, specHitDist);
         g_nrdViewZ[launchIndex.xy] = nrdViewZ;
         g_nrdNormalRoughness[launchIndex.xy] = float4(nrdNormal, nrdRoughness);
         g_nrdMv[launchIndex.xy] = nrdMv;
