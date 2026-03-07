@@ -243,6 +243,10 @@ void RayGen()
 
     float3 accumulatedColor = float3(0, 0, 0);
     float3 throughput = float3(1, 1, 1);
+    float3 nrdStablePrimary = float3(0, 0, 0);
+    float primaryDiffuseSplit = 1.0;
+    float primarySpecularSplit = 0.0;
+    bool nrdPrimarySurface = false;
 
     // Primary hit info for DLSS inputs
     bool primaryHit = false;
@@ -306,6 +310,26 @@ void RayGen()
                                                     payloadIor, payloadSpecularWeight);
                 float NdotV_primary = saturate(dot(primaryNormal, -rayDir));
                 primarySpecAlbedo = EnvBRDFApprox2(F0_primary, primaryRoughness * primaryRoughness, NdotV_primary);
+
+                float coatProbPrimary = 0.0;
+                float specProbPrimary = 0.0;
+                float diffProbPrimary = 0.0;
+                float transProbPrimary = 0.0;
+                float totalProbPrimary = 1.0;
+                ComputeLobeProbabilities(primaryNormal, -rayDir,
+                                         payloadAlbedo,
+                                         payloadMetalness, payloadTransmission,
+                                         payloadTranslucency,
+                                         payloadIor, payloadSpecularWeight,
+                                         payloadCoatWeight,
+                                         coatProbPrimary, specProbPrimary,
+                                         diffProbPrimary, transProbPrimary,
+                                         totalProbPrimary);
+                float diffuseBucket = max(0.0, diffProbPrimary + transProbPrimary);
+                float specularBucket = max(0.0, coatProbPrimary + specProbPrimary + saturate(payloadTransmission));
+                float splitSum = max(diffuseBucket + specularBucket, 1e-5);
+                primaryDiffuseSplit = diffuseBucket / splitSum;
+                primarySpecularSplit = specularBucket / splitSum;
 
                 // Trace dedicated specular reflection ray to get hit distance for DLSS-RR
                 // Only trace if the surface has significant specular reflectance AND RR is active
@@ -513,6 +537,11 @@ void RayGen()
             // Avoid double-counting by ignoring the main path tracer's first diffuse bounce.
             if (!(bounce == 1 && maxGIBounces > 0.0 && currentRayType == RAY_TYPE_DIFFUSE)) {
                 accumulatedColor += throughput * missColor;
+            }
+
+            if (bounce == 0) {
+                nrdStablePrimary = missColor;
+                nrdPrimarySurface = false;
             }
             
             // On first bounce miss, update reservoir to empty
@@ -917,6 +946,11 @@ void RayGen()
             payloadColor = float3(0, 0, 0);
         }
 
+        if (bounce == 0) {
+            nrdStablePrimary = payloadColor;
+            nrdPrimarySurface = true;
+        }
+
         accumulatedColor += throughput * (directLighting + indirectLighting + payloadColor);
 
         // 2. Indirect Lighting Ray Generation
@@ -1091,25 +1125,42 @@ void RayGen()
     if (any(isnan(finalColor)) || any(isinf(finalColor))) finalColor = float3(0, 0, 0);
 
     if (nrdEnabled > 0.5) {
-        // RELAX expects sane HDR range for stable moment tracking.
-        float3 nrdColor = min(finalColor, 250.0);
-        // Use primary hit depth as a stable diffuse hit distance proxy.
-        float diffHitDist = (primaryHit && primaryViewZ > 0.0) ? primaryViewZ : 0.0;
+        float3 stableColor = max(nrdStablePrimary, 0.0);
+        float3 surfaceColor = nrdPrimarySurface ? max(finalColor - stableColor, 0.0) : float3(0.0, 0.0, 0.0);
+        float splitSum = max(primaryDiffuseSplit + primarySpecularSplit, 1e-5);
+        float3 nrdDiffuseColor = min(surfaceColor * (primaryDiffuseSplit / splitSum), 250.0);
+        float3 nrdSpecularColor = min(surfaceColor * (primarySpecularSplit / splitSum), 250.0);
+        // Albedo demodulation: strip the primary surface albedo from the diffuse
+        // signal before handing it to NRD.  NRD's edge-stopping functions then
+        // operate on irradiance (smooth, lighting-shaped) rather than on radiance
+        // (high-frequency texture albedo × irradiance).  The albedo is restored
+        // in the composite shader after denoising.  The same clamp (0.01) must be
+        // used in both the shader and the composite so the round-trip is lossless.
+        float3 demodAlbedo = primaryHit ? max(primaryAlbedo, float3(0.01, 0.01, 0.01)) : float3(1.0, 1.0, 1.0);
+        float3 nrdDiffDemod = nrdDiffuseColor / demodAlbedo;
+        // Diffuse hit distance = distance from primary surface to secondary diffuse
+        // hit, which we don't track per-pixel.  Use 0 as the documented safe
+        // fallback (RELAX applies conservative fixed-radius filtering in this case).
+        // Using primaryViewZ (camera-to-primary depth) was WRONG: it mis-scales the
+        // A-Trous filter kernel relative to scene GI depth.
+        float diffHitDist = 0.0;
+        float specHitDist = (primaryHit && primarySpecHitDist > 0.0) ? primarySpecHitDist : 0.0;
         // Keep sky just inside denoising range to avoid "viewZ < denoisingRange"
         // rejection paths turning INF/background pixels black.
         float nrdViewZ = (primaryHit && primaryViewZ > 0.0) ? primaryViewZ : (farZ * 0.999f);
-        // NRD currently relies on camera matrices for reprojection.
-        // Feeding our existing screen-space MVs here causes visible streaking.
-        float2 nrdMv = float2(0.0, 0.0);
+        // Use the already-computed screen-space motion vectors (pixel units).
+        // Discard the sentinel value used to mark out-of-bounds pixels.
+        float2 nrdMv = g_motionVectors[launchIndex.xy];
+        if (abs(nrdMv.x) > 1e5 || abs(nrdMv.y) > 1e5) nrdMv = float2(0.0, 0.0);
         float3 nrdNormal = primaryHit ? normalize(primaryNormal) : float3(0.0, 1.0, 0.0);
         float nrdRoughness = primaryHit ? saturate(primaryRoughness) : 1.0;
-        // Use Diffuse for the whole combined radiance since we don't decouple them cleanly here
-        g_nrdDiffuseRadianceHitDist[launchIndex.xy] = float4(nrdColor, diffHitDist);
-        g_nrdSpecRadianceHitDist[launchIndex.xy] = float4(0.0, 0.0, 0.0, 0.0);
+        g_nrdDiffuseRadianceHitDist[launchIndex.xy] = float4(nrdDiffDemod, diffHitDist);
+        g_nrdSpecRadianceHitDist[launchIndex.xy] = float4(nrdSpecularColor, specHitDist);
         g_nrdViewZ[launchIndex.xy] = nrdViewZ;
         g_nrdNormalRoughness[launchIndex.xy] = float4(nrdNormal, nrdRoughness);
         g_nrdMv[launchIndex.xy] = nrdMv;
-        g_nrdEmission[launchIndex.xy] = float4(0.0, 0.0, 0.0, 1.0);
+        g_nrdEmission[launchIndex.xy] = float4(stableColor,
+                                               nrdPrimarySurface ? 1.0 : 0.0);
     }
 
     // Write DLSS inputs
