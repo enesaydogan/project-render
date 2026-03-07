@@ -31,7 +31,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     float3 demodAlbedo = max(albedo, float3(0.01f, 0.01f, 0.01f));
     float3 demodSpecAlbedo = max(specAlbedo, float3(0.01f, 0.01f, 0.01f));
 
-    // Reconstruct: stable emission + denoised irradiance × albedo + denoised specular × F_env
+    // Reconstruct: stable emission + denoised irradiance * albedo + denoised specular * F_env.
     float3 color = max(stable.rgb + denoisedDiffuse * demodAlbedo + denoisedSpecular * demodSpecAlbedo, 0.0f.xxx);
 
     // Suppress warnings from unused raw buffers (kept in the root sig for

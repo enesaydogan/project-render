@@ -91,6 +91,16 @@ float3 EvaluateSurfaceBrdf(float3 N, float3 V, float3 L,
     return baseBrdf * (1.0 - clearcoat) + coatBrdf * clearcoat;
 }
 
+bool IsDeltaLikeThinTransmission(bool thinWalled, float roughness, float metallic,
+                                 float transmission, float3 transmissionColor)
+{
+    return thinWalled &&
+           (metallic <= 0.05) &&
+           (roughness <= 0.02) &&
+           (transmission >= 0.95) &&
+           all(transmissionColor >= float3(0.98, 0.98, 0.98));
+}
+
 void ComputeLobeProbabilities(float3 N, float3 V,
                               float3 albedo,
                               float metallic, float transmission,
@@ -270,18 +280,69 @@ void RayGen()
     float prevPdf = 1.0;
     bool prevIsDelta = false;
 
+    RayPayload pretracedPrimaryPayload = InitRayPayload(RAY_TYPE_PRIMARY);
+    bool hasPretracedPrimaryPayload = false;
+    const int maxPrimaryDeltaSteps = 8;
+
+    for (int deltaStep = 0; deltaStep < maxPrimaryDeltaSteps; ++deltaStep)
+    {
+        RayDesc primaryResolveRay;
+        primaryResolveRay.Origin = rayOrigin;
+        primaryResolveRay.Direction = rayDir;
+        primaryResolveRay.TMin = 0.002;
+        primaryResolveRay.TMax = 10000.0;
+
+        RayPayload primaryResolvePayload = InitRayPayload(currentRayType);
+        TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, primaryResolveRay, primaryResolvePayload);
+        SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
+
+        if (primaryResolvePayload.t < 0.0) {
+            pretracedPrimaryPayload = primaryResolvePayload;
+            hasPretracedPrimaryPayload = true;
+            break;
+        }
+
+        float4 resolveSurface = UnpackPayloadSurface(primaryResolvePayload.packedSurface);
+        float resolveRoughness = max(0.001, resolveSurface.x);
+        float resolveMetalness = resolveSurface.y;
+        float resolveTransmission = resolveSurface.z;
+        float3 resolveTransmissionColor =
+            UnpackPayloadTransmissionColor(primaryResolvePayload.packedTransmission);
+        bool resolveThinWalled = UnpackPayloadThinWalled(primaryResolvePayload.packedIorType);
+
+        if (!IsDeltaLikeThinTransmission(resolveThinWalled, resolveRoughness,
+                                         resolveMetalness, resolveTransmission,
+                                         resolveTransmissionColor)) {
+            pretracedPrimaryPayload = primaryResolvePayload;
+            hasPretracedPrimaryPayload = true;
+            break;
+        }
+
+        float3 resolveP = rayOrigin + rayDir * primaryResolvePayload.t;
+        throughput *= max(resolveTransmissionColor, float3(0.0, 0.0, 0.0)) * resolveTransmission;
+        rayOrigin = resolveP + rayDir * 0.002;
+    }
+
+    if (!hasPretracedPrimaryPayload) {
+        pretracedPrimaryPayload = InitRayPayload(currentRayType);
+    }
+
     for (int bounce = 0; bounce < 32; ++bounce) 
     {
-        RayDesc ray;
-        ray.Origin = rayOrigin;
-        ray.Direction = rayDir;
-        ray.TMin = 0.002;
-        ray.TMax = 10000.0;
+        RayPayload payload;
+        if (bounce == 0) {
+            payload = pretracedPrimaryPayload;
+        } else {
+            RayDesc ray;
+            ray.Origin = rayOrigin;
+            ray.Direction = rayDir;
+            ray.TMin = 0.002;
+            ray.TMax = 10000.0;
 
-        RayPayload payload = InitRayPayload(currentRayType);
-
-        TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
-        SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
+            payload = InitRayPayload(currentRayType);
+            TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
+            SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
+        }
 
         float3 payloadColor = PayloadGetColor(payload);
         float3 payloadAlbedo = UnpackPayloadAlbedo(payload.packedAlbedo);
@@ -974,8 +1035,20 @@ void RayGen()
             float3 glassL;
             bool refracted = false;
 
-            // Thin-walled mode: window glass approximation (no bending)
-            if (payloadThinWalled) {
+            // Thin-walled mode: window glass approximation (no bending).
+            // For clear architectural window glass, stochastic Fresnel branch
+            // selection creates visible salt-and-pepper noise because adjacent
+            // pixels randomly flip between reflection and transmission. Treat
+            // that primary path as deterministic transmission instead.
+            bool deterministicThinGlass =
+                payloadThinWalled &&
+                (bounce == 0) &&
+                (roughness <= 0.02) &&
+                (payloadTransmission >= 0.95);
+            if (deterministicThinGlass) {
+                refracted = true;
+                glassL = rayDir;
+            } else if (payloadThinWalled) {
                 float cosTheta = abs(dot(V, N));
                 float F = FresnelDielectric(cosTheta, payloadIor);
                 if (u.x < F) {
