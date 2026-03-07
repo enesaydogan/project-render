@@ -64,6 +64,11 @@ static DirectX::XMFLOAT3 RotateY(const DirectX::XMFLOAT3 &v, float angle) {
     return {c * v.x + s * v.z, v.y, -s * v.x + c * v.z};
 }
 
+static bool CreateTexFromData(ID3D12Device *device, ID3D12CommandQueue *queue,
+                              UINT width, UINT height,
+                              const std::vector<float> &data,
+                              Asset::Texture &outTex);
+
 bool IBLManager::Initialize(ID3D12Device *device, ID3D12CommandQueue *queue) {
   m_device = device;
   m_queue = queue;
@@ -88,6 +93,13 @@ bool IBLManager::LoadEnvironmentMap(const std::string &path) {
   if (!m_device)
     return false;
 
+  // File HDRIs commonly arrive in scene-linear RGB values that are far below
+  // the luminance domain used by the procedural sky path, which converts
+  // spectral radiance with the photopic 683 lm/W factor. Calibrate imported
+  // file IBLs into that same range so the skybox and env lighting are visible
+  // without extreme camera ISO.
+  static constexpr float kFileHdrCalibrationScale = 68300.0f;
+
   bool isHDR = false;
   if (path.find(".hdr") != std::string::npos ||
       path.find(".exr") != std::string::npos) {
@@ -98,6 +110,25 @@ bool IBLManager::LoadEnvironmentMap(const std::string &path) {
   if (!tex.resource) {
     std::cerr << "Failed to load environment map: " << path << std::endl;
     return false;
+  }
+
+  if (isHDR && tex.format == DXGI_FORMAT_R32G32B32A32_FLOAT &&
+      tex.width > 0 && tex.height > 0 &&
+      tex.cpuData.size() >= (size_t)tex.width * (size_t)tex.height * 16) {
+    const float *src = reinterpret_cast<const float *>(tex.cpuData.data());
+    std::vector<float> calibrated((size_t)tex.width * (size_t)tex.height * 4);
+    for (size_t i = 0; i < calibrated.size(); i += 4) {
+      calibrated[i + 0] = src[i + 0] * kFileHdrCalibrationScale;
+      calibrated[i + 1] = src[i + 1] * kFileHdrCalibrationScale;
+      calibrated[i + 2] = src[i + 2] * kFileHdrCalibrationScale;
+      calibrated[i + 3] = src[i + 3];
+    }
+
+    Asset::Texture calibratedTex;
+    if (CreateTexFromData(m_device.Get(), m_queue.Get(), tex.width, tex.height,
+                          calibrated, calibratedTex)) {
+      tex = std::move(calibratedTex);
+    }
   }
 
   std::cout << "Loaded environment map: " << path << " (" << tex.width << "x"
@@ -495,14 +526,9 @@ bool IBLManager::BuildEnvironmentImportanceTextures(const Asset::Texture &envTex
     // convert to chromaticity and derive a reasonable default intensity
     double lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
     if (lum > 1e-6) {
-        m_fileSunRadiance = {(float)(r / lum), (float)(g / lum), (float)(b / lum)};
-        // set intensity proportional to luminance but scaled down by 100 so that
-        // a raw HDR texel value of e.g. 1000 becomes ~10 lux; user can adjust
-        // with the slider.
-        m_fileSunIntensity = (float)std::max(1.0, lum / 100.0);
+      m_fileSunRadiance = {(float)(r / lum), (float)(g / lum), (float)(b / lum)};
     } else {
         m_fileSunRadiance = {1,1,1};
-        m_fileSunIntensity = 1.0f;
     }
 
     // compute angular radius from cluster of bright texels
@@ -521,7 +547,19 @@ bool IBLManager::BuildEnvironmentImportanceTextures(const Asset::Texture &envTex
         if (ang > maxAngle) maxAngle = ang;
       }
     }
-    m_fileSunRadiusDeg = (float)(maxAngle * (180.0 / PI));
+    const double minSunRadiusRad = 0.25 * (PI / 180.0);
+    const double sunRadiusRad = (std::max)(maxAngle, minSunRadiusRad);
+    m_fileSunRadiusDeg = (float)(sunRadiusRad * (180.0 / PI));
+
+    if (lum > 1e-6) {
+      // Preserve the imported sun disc energy. The directional light stores
+      // integrated sun radiance over the extracted disc, while sky shaders
+      // divide by solid angle to reconstruct the original disc radiance.
+      const double sunSolidAngle = 2.0 * pi * (1.0 - std::cos(sunRadiusRad));
+      m_fileSunIntensity = (float)(lum * sunSolidAngle);
+    } else {
+      m_fileSunIntensity = 0.0f;
+    }
     m_hasFileSun = true;
 
     // zero out cluster weights and adjust row sums
