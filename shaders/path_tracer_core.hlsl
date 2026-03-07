@@ -1147,7 +1147,12 @@ void RayGen()
         // primarySpecAlbedo = EnvBRDFApprox2(F0, roughness^2, NdotV) is also
         // stored to g_specularAlbedo and re-applied in the composite.
         float3 demodSpecAlbedo = primaryHit ? max(primarySpecAlbedo, float3(0.01, 0.01, 0.01)) : float3(1.0, 1.0, 1.0);
-        float3 nrdSpecDemod = nrdSpecularColor / demodSpecAlbedo;
+        // Clamp after demodulation.  Dividing by demodSpecAlbedo can amplify the
+        // signal 25-100x on smooth dielectrics (F_env ≈ 0.01-0.04), turning a
+        // single bright 1-spp specular sample into an extreme outlier that NRD's
+        // antiFirefly struggles to suppress.  Cap at 200 — still generous for
+        // HDR interior scenes while preventing amplification blowup.
+        float3 nrdSpecDemod = min(nrdSpecularColor / demodSpecAlbedo, float3(200.0, 200.0, 200.0));
         // Diffuse hit distance = distance from primary surface to secondary diffuse
         // hit, which we don't track per-pixel.  Use 0 as the documented safe
         // fallback (RELAX applies conservative fixed-radius filtering in this case).
