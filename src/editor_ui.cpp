@@ -1286,6 +1286,24 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
       }
 
       if (g_currentRenderMode == RenderMode::DXR) {
+        static std::string s_nrdDumpStatus;
+        const bool nrdActive =
+            (DxrRenderer::GetDenoiserMode() == DxrRenderer::DenoiserMode::NRD_RELAX);
+
+        ImGui::BeginDisabled(!nrdActive);
+        if (ImGui::Button("Dump NRD Buffers")) {
+          const bool ok = DxrRenderer::ExportNrdDebugBuffersToPng(L"run");
+          s_nrdDumpStatus =
+              ok ? "Saved NRD debug PNGs to run/" : "NRD buffer dump failed";
+        }
+        ImGui::EndDisabled();
+        if (!nrdActive) {
+          ImGui::SameLine();
+          ImGui::TextUnformatted("Enable NRD to dump current NRD textures");
+        } else if (!s_nrdDumpStatus.empty()) {
+          ImGui::TextWrapped("%s", s_nrdDumpStatus.c_str());
+        }
+        ImGui::Separator();
 
         if (ImGui::SliderFloat("Reflection Bounces",
                                &g_cameraData.maxSpecularBounces, 0.0f, 16.0f,

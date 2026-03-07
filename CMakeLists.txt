@@ -110,6 +110,11 @@ else()
   message(STATUS "OpenImageDenoise support disabled (USE_OPENIMAGEDENOISE=OFF)")
 endif()
   # NRD Integration
+  # Match engine-side NRD input packing:
+  # - normals are stored directly in RGBA16F
+  # - roughness is linear in alpha
+  set(NRD_NORMAL_ENCODING "4" CACHE STRING "" FORCE)
+  set(NRD_ROUGHNESS_ENCODING "1" CACHE STRING "" FORCE)
   set(NRD_NRI ON CACHE BOOL "" FORCE)
   add_subdirectory(thirdparty/NRD)
   target_link_libraries(project-render PRIVATE NRD NRDIntegration NRI)

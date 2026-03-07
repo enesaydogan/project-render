@@ -19,6 +19,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <iomanip>
+#include <limits>
 #include <sstream>
 #include <unordered_map>
 #include <vector>
@@ -4936,6 +4939,489 @@ bool ExportTonemappedFrameToPng(const std::wstring &filePath) {
   readback->Unmap(0, nullptr);
 
   return SaveRgba8ToPngWic(filePath, width, height, rgba.data(), width * 4);
+}
+
+static float HalfToFloat(uint16_t h) {
+  const uint32_t sign = (uint32_t)(h & 0x8000u) << 16;
+  uint32_t exp = (h >> 10) & 0x1Fu;
+  uint32_t mant = h & 0x03FFu;
+
+  if (exp == 0) {
+    if (mant == 0) {
+      const uint32_t bits = sign;
+      float out = 0.0f;
+      memcpy(&out, &bits, sizeof(out));
+      return out;
+    }
+
+    exp = 1;
+    while ((mant & 0x0400u) == 0) {
+      mant <<= 1;
+      exp--;
+    }
+    mant &= 0x03FFu;
+    const uint32_t bits = sign | ((exp + 112u) << 23) | (mant << 13);
+    float out = 0.0f;
+    memcpy(&out, &bits, sizeof(out));
+    return out;
+  }
+
+  if (exp == 31) {
+    const uint32_t bits = sign | 0x7F800000u | (mant << 13);
+    float out = 0.0f;
+    memcpy(&out, &bits, sizeof(out));
+    return out;
+  }
+
+  const uint32_t bits = sign | ((exp + 112u) << 23) | (mant << 13);
+  float out = 0.0f;
+  memcpy(&out, &bits, sizeof(out));
+  return out;
+}
+
+static uint8_t Float01ToByte(float v) {
+  v = (std::clamp)(v, 0.0f, 1.0f);
+  return (uint8_t)(v * 255.0f + 0.5f);
+}
+
+static uint8_t LinearToSrgbByte(float v) {
+  v = (std::clamp)(v, 0.0f, 1.0f);
+  v = powf(v, 1.0f / 2.2f);
+  return Float01ToByte(v);
+}
+
+static std::wstring FloatTag(float v) {
+  if (!std::isfinite(v))
+    return L"inf";
+  std::wostringstream oss;
+  oss << std::fixed << std::setprecision(3) << v;
+  std::wstring s = oss.str();
+  for (wchar_t &ch : s) {
+    if (ch == L'-')
+      ch = L'm';
+    else if (ch == L'.')
+      ch = L'p';
+  }
+  return s;
+}
+
+static bool ReadbackTexture2D(ID3D12Resource *source,
+                              D3D12_RESOURCE_STATES assumedState,
+                              std::vector<uint8_t> &raw,
+                              D3D12_PLACED_SUBRESOURCE_FOOTPRINT &footprint,
+                              UINT &width, UINT &height) {
+  if (!source || !s_device || !s_commandQueue || !s_fence || !s_fenceValues ||
+      !s_frameIndexPtr || !s_fenceEvent) {
+    return false;
+  }
+
+  const D3D12_RESOURCE_DESC srcDesc = source->GetDesc();
+  if (srcDesc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
+      srcDesc.DepthOrArraySize != 1 || srcDesc.MipLevels != 1) {
+    return false;
+  }
+
+  width = (UINT)srcDesc.Width;
+  height = srcDesc.Height;
+  if (width == 0 || height == 0) {
+    return false;
+  }
+
+  UINT numRows = 0;
+  UINT64 rowSizeInBytes = 0;
+  UINT64 totalBytes = 0;
+  s_device->GetCopyableFootprints(&srcDesc, 0, 1, 0, &footprint, &numRows,
+                                  &rowSizeInBytes, &totalBytes);
+  if (numRows == 0 || totalBytes == 0) {
+    return false;
+  }
+
+  D3D12_HEAP_PROPERTIES readbackHeap = {};
+  readbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
+
+  D3D12_RESOURCE_DESC readbackDesc = {};
+  readbackDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+  readbackDesc.Width = totalBytes;
+  readbackDesc.Height = 1;
+  readbackDesc.DepthOrArraySize = 1;
+  readbackDesc.MipLevels = 1;
+  readbackDesc.SampleDesc.Count = 1;
+  readbackDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+  ComPtr<ID3D12Resource> readback;
+  if (FAILED(s_device->CreateCommittedResource(
+          &readbackHeap, D3D12_HEAP_FLAG_NONE, &readbackDesc,
+          D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback)))) {
+    return false;
+  }
+
+  ComPtr<ID3D12CommandAllocator> cmdAlloc;
+  if (FAILED(s_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                              IID_PPV_ARGS(&cmdAlloc)))) {
+    return false;
+  }
+
+  ComPtr<ID3D12GraphicsCommandList> cmdList;
+  if (FAILED(s_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                         cmdAlloc.Get(), nullptr,
+                                         IID_PPV_ARGS(&cmdList)))) {
+    return false;
+  }
+
+  TransitionResource(cmdList.Get(), source, assumedState,
+                     D3D12_RESOURCE_STATE_COPY_SOURCE);
+
+  D3D12_TEXTURE_COPY_LOCATION srcLoc = {};
+  srcLoc.pResource = source;
+  srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+  srcLoc.SubresourceIndex = 0;
+
+  D3D12_TEXTURE_COPY_LOCATION dstLoc = {};
+  dstLoc.pResource = readback.Get();
+  dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+  dstLoc.PlacedFootprint = footprint;
+
+  cmdList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, nullptr);
+
+  TransitionResource(cmdList.Get(), source, D3D12_RESOURCE_STATE_COPY_SOURCE,
+                     assumedState);
+
+  if (FAILED(cmdList->Close())) {
+    return false;
+  }
+
+  ID3D12CommandList *lists[] = {cmdList.Get()};
+  s_commandQueue->ExecuteCommandLists(1, lists);
+
+  const UINT fi = *s_frameIndexPtr;
+  const UINT64 fenceValue = s_fenceValues[fi] + 1000;
+  if (FAILED(s_commandQueue->Signal(s_fence, fenceValue))) {
+    return false;
+  }
+  s_fenceValues[fi] = fenceValue + 1;
+
+  if (s_fence->GetCompletedValue() < fenceValue) {
+    if (FAILED(s_fence->SetEventOnCompletion(fenceValue, s_fenceEvent))) {
+      return false;
+    }
+    if (WaitForSingleObject(s_fenceEvent, 5000) == WAIT_TIMEOUT) {
+      return false;
+    }
+  }
+
+  uint8_t *mapped = nullptr;
+  if (FAILED(readback->Map(0, nullptr, (void **)&mapped)) || !mapped) {
+    return false;
+  }
+
+  raw.resize((size_t)totalBytes);
+  memcpy(raw.data(), mapped, (size_t)totalBytes);
+  readback->Unmap(0, nullptr);
+  return true;
+}
+
+static bool SaveGrayPngFromFloats(const std::wstring &filePath, UINT width,
+                                  UINT height, const std::vector<float> &values,
+                                  float minValue, float maxValue,
+                                  bool useLogScale) {
+  if (values.size() != (size_t)width * (size_t)height)
+    return false;
+
+  std::vector<uint8_t> rgba((size_t)width * (size_t)height * 4u, 255u);
+  const float safeMin = std::isfinite(minValue) ? minValue : 0.0f;
+  const float safeMax = std::isfinite(maxValue) ? maxValue : safeMin;
+  const float denom = (safeMax > safeMin) ? (safeMax - safeMin) : 1.0f;
+  const float logMin =
+      useLogScale ? logf(((std::max)(safeMin, 0.0f)) + 1.0f) : 0.0f;
+  const float logMax =
+      useLogScale ? logf(((std::max)(safeMax, 0.0f)) + 1.0f) : 1.0f;
+  const float logDenom = (logMax > logMin) ? (logMax - logMin) : 1.0f;
+
+  for (size_t i = 0; i < values.size(); ++i) {
+    float v = values[i];
+    float n = 0.0f;
+    if (std::isfinite(v)) {
+      if (useLogScale) {
+        const float lv = logf(((std::max)(v, 0.0f)) + 1.0f);
+        n = (lv - logMin) / logDenom;
+      } else {
+        n = (v - safeMin) / denom;
+      }
+    }
+    const uint8_t c = Float01ToByte(n);
+    rgba[i * 4 + 0] = c;
+    rgba[i * 4 + 1] = c;
+    rgba[i * 4 + 2] = c;
+  }
+
+  return SaveRgba8ToPngWic(filePath, width, height, rgba.data(), width * 4u);
+}
+
+static bool ExportNrdRadianceHitDistTexture(const std::wstring &directoryPath,
+                                            const std::wstring &baseName,
+                                            ID3D12Resource *resource) {
+  if (!resource)
+    return false;
+
+  std::vector<uint8_t> raw;
+  D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
+  UINT width = 0, height = 0;
+  if (!ReadbackTexture2D(resource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, raw,
+                         footprint, width, height)) {
+    return false;
+  }
+
+  std::vector<uint8_t> rgba((size_t)width * (size_t)height * 4u, 255u);
+  std::vector<float> alpha((size_t)width * (size_t)height, 0.0f);
+  float lumMin = (std::numeric_limits<float>::max)();
+  float lumMax = 0.0f;
+  float alphaMin = (std::numeric_limits<float>::max)();
+  float alphaMax = 0.0f;
+
+  for (UINT y = 0; y < height; ++y) {
+    const uint16_t *srcRow = (const uint16_t *)(raw.data() + footprint.Offset +
+                                                (size_t)y * footprint.Footprint.RowPitch);
+    for (UINT x = 0; x < width; ++x) {
+      const size_t idx = (size_t)y * width + x;
+      const float r = HalfToFloat(srcRow[x * 4 + 0]);
+      const float g = HalfToFloat(srcRow[x * 4 + 1]);
+      const float b = HalfToFloat(srcRow[x * 4 + 2]);
+      const float a = HalfToFloat(srcRow[x * 4 + 3]);
+      const float lum = (std::max)(0.0f, 0.2126f * r + 0.7152f * g + 0.0722f * b);
+      lumMin = (std::min)(lumMin, lum);
+      lumMax = (std::max)(lumMax, lum);
+      if (std::isfinite(a) && a > 0.0f) {
+        alphaMin = (std::min)(alphaMin, a);
+        alphaMax = (std::max)(alphaMax, a);
+      }
+      alpha[idx] = a;
+
+      rgba[idx * 4 + 0] = LinearToSrgbByte(r / (1.0f + (std::max)(0.0f, r)));
+      rgba[idx * 4 + 1] = LinearToSrgbByte(g / (1.0f + (std::max)(0.0f, g)));
+      rgba[idx * 4 + 2] = LinearToSrgbByte(b / (1.0f + (std::max)(0.0f, b)));
+    }
+  }
+
+  if (lumMin == (std::numeric_limits<float>::max)())
+    lumMin = 0.0f;
+  if (alphaMin == (std::numeric_limits<float>::max)())
+    alphaMin = 0.0f;
+
+  fprintf(stderr,
+          "DxrRenderer: %ls RGB luminance range [%.6f, %.6f], alpha range "
+          "[%.6f, %.6f]\n",
+          baseName.c_str(), lumMin, lumMax, alphaMin, alphaMax);
+
+  const std::wstring rgbPath =
+      directoryPath + L"/" + baseName + L"_rgb_lum_" + FloatTag(lumMin) + L"_" +
+      FloatTag(lumMax) + L".png";
+  const std::wstring aPath =
+      directoryPath + L"/" + baseName + L"_a_" + FloatTag(alphaMin) + L"_" +
+      FloatTag(alphaMax) + L".png";
+
+  const bool rgbOk =
+      SaveRgba8ToPngWic(rgbPath, width, height, rgba.data(), width * 4u);
+  const bool aOk = SaveGrayPngFromFloats(aPath, width, height, alpha, alphaMin,
+                                         alphaMax, true);
+  return rgbOk && aOk;
+}
+
+static bool ExportNrdNormalRoughnessTexture(const std::wstring &directoryPath,
+                                            const std::wstring &baseName,
+                                            ID3D12Resource *resource) {
+  if (!resource)
+    return false;
+
+  std::vector<uint8_t> raw;
+  D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
+  UINT width = 0, height = 0;
+  if (!ReadbackTexture2D(resource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, raw,
+                         footprint, width, height)) {
+    return false;
+  }
+
+  std::vector<uint8_t> normalRgba((size_t)width * (size_t)height * 4u, 255u);
+  std::vector<float> roughness((size_t)width * (size_t)height, 0.0f);
+  float roughMin = (std::numeric_limits<float>::max)();
+  float roughMax = 0.0f;
+
+  for (UINT y = 0; y < height; ++y) {
+    const uint16_t *srcRow = (const uint16_t *)(raw.data() + footprint.Offset +
+                                                (size_t)y * footprint.Footprint.RowPitch);
+    for (UINT x = 0; x < width; ++x) {
+      const size_t idx = (size_t)y * width + x;
+      const float nx = HalfToFloat(srcRow[x * 4 + 0]);
+      const float ny = HalfToFloat(srcRow[x * 4 + 1]);
+      const float nz = HalfToFloat(srcRow[x * 4 + 2]);
+      const float r = HalfToFloat(srcRow[x * 4 + 3]);
+      normalRgba[idx * 4 + 0] = Float01ToByte(nx * 0.5f + 0.5f);
+      normalRgba[idx * 4 + 1] = Float01ToByte(ny * 0.5f + 0.5f);
+      normalRgba[idx * 4 + 2] = Float01ToByte(nz * 0.5f + 0.5f);
+      roughness[idx] = r;
+      if (std::isfinite(r)) {
+        roughMin = (std::min)(roughMin, r);
+        roughMax = (std::max)(roughMax, r);
+      }
+    }
+  }
+
+  if (roughMin == (std::numeric_limits<float>::max)())
+    roughMin = 0.0f;
+  fprintf(stderr, "DxrRenderer: %ls roughness range [%.6f, %.6f]\n",
+          baseName.c_str(), roughMin, roughMax);
+
+  const std::wstring normalPath =
+      directoryPath + L"/" + baseName + L"_normal.png";
+  const std::wstring roughPath =
+      directoryPath + L"/" + baseName + L"_roughness_" + FloatTag(roughMin) +
+      L"_" + FloatTag(roughMax) + L".png";
+
+  const bool normalOk = SaveRgba8ToPngWic(normalPath, width, height,
+                                          normalRgba.data(), width * 4u);
+  const bool roughOk = SaveGrayPngFromFloats(roughPath, width, height,
+                                             roughness, roughMin, roughMax,
+                                             false);
+  return normalOk && roughOk;
+}
+
+static bool ExportNrdViewZTexture(const std::wstring &directoryPath,
+                                  const std::wstring &baseName,
+                                  ID3D12Resource *resource) {
+  if (!resource)
+    return false;
+
+  std::vector<uint8_t> raw;
+  D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
+  UINT width = 0, height = 0;
+  if (!ReadbackTexture2D(resource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, raw,
+                         footprint, width, height)) {
+    return false;
+  }
+
+  std::vector<float> values((size_t)width * (size_t)height, 0.0f);
+  float minV = (std::numeric_limits<float>::max)();
+  float maxV = 0.0f;
+  for (UINT y = 0; y < height; ++y) {
+    const float *srcRow =
+        (const float *)(raw.data() + footprint.Offset +
+                        (size_t)y * footprint.Footprint.RowPitch);
+    for (UINT x = 0; x < width; ++x) {
+      const float v = srcRow[x];
+      values[(size_t)y * width + x] = v;
+      if (std::isfinite(v) && v > 0.0f) {
+        minV = (std::min)(minV, v);
+        maxV = (std::max)(maxV, v);
+      }
+    }
+  }
+
+  if (minV == (std::numeric_limits<float>::max)())
+    minV = 0.0f;
+  fprintf(stderr, "DxrRenderer: %ls range [%.6f, %.6f]\n", baseName.c_str(),
+          minV, maxV);
+
+  const std::wstring path =
+      directoryPath + L"/" + baseName + L"_" + FloatTag(minV) + L"_" +
+      FloatTag(maxV) + L".png";
+  return SaveGrayPngFromFloats(path, width, height, values, minV, maxV, true);
+}
+
+static bool ExportNrdMotionTexture(const std::wstring &directoryPath,
+                                   const std::wstring &baseName,
+                                   ID3D12Resource *resource) {
+  if (!resource)
+    return false;
+
+  std::vector<uint8_t> raw;
+  D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
+  UINT width = 0, height = 0;
+  if (!ReadbackTexture2D(resource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, raw,
+                         footprint, width, height)) {
+    return false;
+  }
+
+  std::vector<uint8_t> rgba((size_t)width * (size_t)height * 4u, 255u);
+  float maxAbs = 0.0f;
+  for (UINT y = 0; y < height; ++y) {
+    const uint16_t *srcRow = (const uint16_t *)(raw.data() + footprint.Offset +
+                                                (size_t)y * footprint.Footprint.RowPitch);
+    for (UINT x = 0; x < width; ++x) {
+      const float mx = HalfToFloat(srcRow[x * 2 + 0]);
+      const float my = HalfToFloat(srcRow[x * 2 + 1]);
+      if (std::isfinite(mx))
+        maxAbs = (std::max)(maxAbs, fabsf(mx));
+      if (std::isfinite(my))
+        maxAbs = (std::max)(maxAbs, fabsf(my));
+    }
+  }
+  maxAbs = (std::max)(maxAbs, 1e-6f);
+
+  for (UINT y = 0; y < height; ++y) {
+    const uint16_t *srcRow = (const uint16_t *)(raw.data() + footprint.Offset +
+                                                (size_t)y * footprint.Footprint.RowPitch);
+    for (UINT x = 0; x < width; ++x) {
+      const size_t idx = (size_t)y * width + x;
+      const float mx = HalfToFloat(srcRow[x * 2 + 0]);
+      const float my = HalfToFloat(srcRow[x * 2 + 1]);
+      const float nx = std::isfinite(mx) ? (0.5f + 0.5f * mx / maxAbs) : 0.5f;
+      const float ny = std::isfinite(my) ? (0.5f + 0.5f * my / maxAbs) : 0.5f;
+      const float mag =
+          std::isfinite(mx) && std::isfinite(my)
+              ? (sqrtf(mx * mx + my * my) / maxAbs)
+              : 0.0f;
+      rgba[idx * 4 + 0] = Float01ToByte(nx);
+      rgba[idx * 4 + 1] = Float01ToByte(ny);
+      rgba[idx * 4 + 2] = Float01ToByte(mag);
+    }
+  }
+
+  fprintf(stderr, "DxrRenderer: %ls maxAbs %.6f\n", baseName.c_str(), maxAbs);
+
+  const std::wstring path =
+      directoryPath + L"/" + baseName + L"_maxabs_" + FloatTag(maxAbs) +
+      L".png";
+  return SaveRgba8ToPngWic(path, width, height, rgba.data(), width * 4u);
+}
+
+bool ExportNrdDebugBuffersToPng(const std::wstring &directoryPath) {
+  if (directoryPath.empty() || !s_device) {
+    fprintf(stderr,
+            "DxrRenderer: ExportNrdDebugBuffersToPng invalid arguments.\n");
+    return false;
+  }
+  if (!s_nrdDiffuseRadianceHitDistUAV || !s_nrdSpecRadianceHitDistUAV ||
+      !s_nrdViewZUAV || !s_nrdNormalRoughnessUAV || !s_nrdMvUAV ||
+      !s_nrdOutDiffuseUAV || !s_nrdOutSpecularUAV) {
+    fprintf(stderr,
+            "DxrRenderer: ExportNrdDebugBuffersToPng missing NRD resources.\n");
+    return false;
+  }
+
+  std::error_code ec;
+  std::filesystem::create_directories(directoryPath, ec);
+  if (ec) {
+    fprintf(stderr, "DxrRenderer: failed to create export dir.\n");
+    return false;
+  }
+
+  bool ok = true;
+  ok &= ExportNrdRadianceHitDistTexture(directoryPath, L"nrd_in_diffuse",
+                                        s_nrdDiffuseRadianceHitDistUAV.Get());
+  ok &= ExportNrdRadianceHitDistTexture(directoryPath, L"nrd_in_specular",
+                                        s_nrdSpecRadianceHitDistUAV.Get());
+  ok &= ExportNrdViewZTexture(directoryPath, L"nrd_in_viewz",
+                              s_nrdViewZUAV.Get());
+  ok &= ExportNrdNormalRoughnessTexture(directoryPath, L"nrd_in_normal_roughness",
+                                        s_nrdNormalRoughnessUAV.Get());
+  ok &= ExportNrdMotionTexture(directoryPath, L"nrd_in_mv", s_nrdMvUAV.Get());
+  ok &= ExportNrdRadianceHitDistTexture(directoryPath, L"nrd_out_diffuse",
+                                        s_nrdOutDiffuseUAV.Get());
+  ok &= ExportNrdRadianceHitDistTexture(directoryPath, L"nrd_out_specular",
+                                        s_nrdOutSpecularUAV.Get());
+
+  fprintf(stderr, "DxrRenderer: NRD debug export %s to %ls\n",
+          ok ? "completed" : "failed", directoryPath.c_str());
+  return ok;
 }
 
 // Profiling functions

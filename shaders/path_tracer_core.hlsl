@@ -123,6 +123,7 @@ void RayGen()
     // (DI/GI transport) without making the visible sky dome brighter.
     const float kEnvLightingBoost = 3.0;
     const bool debugViewActive = (SHADER_DEBUG_MODE > 0.0) || (SHADER_DEBUG_VIS_MODE == 1.0);
+    const bool nrdActive = (nrdEnabled > 0.5);
 
     const float2 kInvalidMvec = float2(-1e6, -1e6);
     float2 currScreen = float2(launchIndex.xy) + 0.5;
@@ -303,13 +304,13 @@ void RayGen()
             }
 
             // --- Adaptive Sampling Early Exit (Now after G-buffers are fresh) ---
-            if (!debugViewActive && maxSPP > 0.0 && accumFrame >= (uint)maxSPP) {
+            if (!nrdActive && !debugViewActive && maxSPP > 0.0 && accumFrame >= (uint)maxSPP) {
                 float4 total = g_accumulation[launchIndex.xy];
                 if (total.a > 0.0) g_output[launchIndex.xy] = float4(total.rgb / total.a, 1.0);
                 return;
             }
 
-            if (accumFrame > kAdaptiveStartSpp && useAdaptiveSampling > 0.5) {
+            if (!nrdActive && accumFrame > kAdaptiveStartSpp && useAdaptiveSampling > 0.5) {
                 float4 acc = g_accumulation[launchIndex.xy];
                 float accM2 = g_variance[launchIndex.xy];
                 if (acc.a > (float)kAdaptiveMinPerPixelSpp) {
@@ -963,13 +964,24 @@ void RayGen()
     if (any(isnan(finalColor)) || any(isinf(finalColor))) finalColor = float3(0, 0, 0);
 
     if (nrdEnabled > 0.5) {
-        float hitDist = (primarySpecHitDist > 0.0) ? primarySpecHitDist : 1000.0;
+        // RELAX expects sane HDR range for stable moment tracking.
+        float3 nrdColor = min(finalColor, 250.0);
+        // Use primary hit depth as a stable diffuse hit distance proxy.
+        float diffHitDist = (primaryHit && primaryViewZ > 0.0) ? primaryViewZ : 0.0;
+        // Keep sky just inside denoising range to avoid "viewZ < denoisingRange"
+        // rejection paths turning INF/background pixels black.
+        float nrdViewZ = (primaryHit && primaryViewZ > 0.0) ? primaryViewZ : (farZ * 0.999f);
+        // NRD currently relies on camera matrices for reprojection.
+        // Feeding our existing screen-space MVs here causes visible streaking.
+        float2 nrdMv = float2(0.0, 0.0);
+        float3 nrdNormal = primaryHit ? normalize(primaryNormal) : float3(0.0, 1.0, 0.0);
+        float nrdRoughness = primaryHit ? saturate(primaryRoughness) : 1.0;
         // Use Diffuse for the whole combined radiance since we don't decouple them cleanly here
-        g_nrdDiffuseRadianceHitDist[launchIndex.xy] = float4(finalColor, hitDist);
-        g_nrdSpecRadianceHitDist[launchIndex.xy] = float4(0.0, 0.0, 0.0, hitDist);
-        g_nrdViewZ[launchIndex.xy] = primaryViewZ;
-        g_nrdNormalRoughness[launchIndex.xy] = float4(normalize(primaryNormal), saturate(primaryRoughness));
-        g_nrdMv[launchIndex.xy] = g_motionVectors[launchIndex.xy];
+        g_nrdDiffuseRadianceHitDist[launchIndex.xy] = float4(nrdColor, diffHitDist);
+        g_nrdSpecRadianceHitDist[launchIndex.xy] = float4(0.0, 0.0, 0.0, 0.0);
+        g_nrdViewZ[launchIndex.xy] = nrdViewZ;
+        g_nrdNormalRoughness[launchIndex.xy] = float4(nrdNormal, nrdRoughness);
+        g_nrdMv[launchIndex.xy] = nrdMv;
         g_nrdEmission[launchIndex.xy] = float4(0.0, 0.0, 0.0, 1.0);
     }
 

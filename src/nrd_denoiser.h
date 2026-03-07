@@ -5,7 +5,7 @@
 #include <cstdint>
 
 namespace nrd {
-    class Integration;
+    struct Integration;
 }
 namespace nri {
     struct Device;
@@ -48,6 +48,10 @@ private:
 
     ID3D12Device* m_d3dDevice = nullptr;
     ID3D12CommandQueue* m_d3dQueue = nullptr;
+    uint32_t m_frameIndex = 0;
+    float m_prevJitterX = 0.0f;
+    float m_prevJitterY = 0.0f;
+    bool m_hasPrevJitter = false;
 
     nrd::Integration* m_nrdIntegration = nullptr;
     nri::Device* m_nriDevice = nullptr;
