@@ -230,6 +230,17 @@ void NrdDenoiser::Denoise(ID3D12GraphicsCommandList* cmdList,
     relaxSettings.enableAntiFirefly = true;
     relaxSettings.luminanceEdgeStoppingRelaxation = 0.5f;
     relaxSettings.normalEdgeStoppingRelaxation    = 0.3f;
+    // Ensure a minimum floor of spatial blur always happens in specular passes.
+    // The default (0.0) lets RELAX completely stop filtering at bright highlights,
+    // leaving isolated noisy pixels that even antiFirefly cannot clean up because
+    // neighbouring pixels differ too much in luminance for RELAX to accept them.
+    relaxSettings.specularMinLuminanceWeight = 0.05f;
+    // Widen the specular lobe angle acceptance slack used in the normal-based
+    // rejection of A-Trous passes.  The default 0.15 deg is extremely tight for
+    // 1-spp: in practice almost no neighbours qualify, so each noisy pixel is
+    // mostly filtering itself.  1.5 deg significantly improves neighbour reuse
+    // on glossy (medium-roughness) surfaces without over-blurring mirrors.
+    relaxSettings.specularLobeAngleSlack = 1.5f;
     // Inject extra variance into low-confidence specular reprojection areas so
     // RELAX detects they need more filtering instead of locking onto noisy history.
     relaxSettings.specularVarianceBoost = 0.3f;
