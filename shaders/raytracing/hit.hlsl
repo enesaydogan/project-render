@@ -131,10 +131,12 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     int texOcc  = UnpackTextureIndexHigh(mat.packedTextures.y);
     int texEmis = UnpackTextureIndexLow(mat.packedTextures.z);
 
-    float4 arch0 = matExtra.archvizParams0;
+    float4 arch0 = matExtra.coatLayerParams;
     float4 uvXf = matExtra.uvTransform;
     float4 triP = matExtra.triPlanarParams;
+    float3 transmissionColor = saturate(matExtra.transmissionColor.rgb);
     float emissiveIntensity = max(0.0, matExtra.shadingParams.x);
+    float specularWeight = saturate(matExtra.shadingParams.y);
 
 #ifdef HIT_DEBUG
     // Encode primitive index into color for debugging
@@ -231,12 +233,17 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     // This removes the "tint" or "solid" look from glass.
     float transmission = saturate(pbr.z) * (1.0 - metalness);
     float3 DiffuseAlbedo = BaseColor * (1.0 - metalness) * (1.0 - transmission);
+    float clearcoat = saturate(arch0.x);
+    float clearcoatRoughness = max(arch0.y, 0.02);
 
     // Standard PBR Model (dielectric F0 from IOR)
     float ior = max(emisColor.w, 1.0);
     float f0s = (ior - 1.0) / (ior + 1.0);
     f0s = f0s * f0s;
-    float3 F0 = lerp(float3(f0s, f0s, f0s), BaseColor, metalness);
+    float3 dielectricF0 = float3(f0s * specularWeight,
+                                 f0s * specularWeight,
+                                 f0s * specularWeight);
+    float3 F0 = lerp(dielectricF0, BaseColor, metalness);
     
     // Normal mapping
     float3 N = triPlanar ? SampleTriPlanarNormal(texNorm, P, worldNormal, triScale, triSharp, triNormStrength, textureLod, dominantTriPlanar)
@@ -305,11 +312,13 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
 
             RayPayload shadowPayload;
             shadowPayload.t = 1.0;
+            shadowPayload.packedColor1 = 0u;
             PayloadSetColor(shadowPayload, float3(0.0, 0.0, 0.0));
             shadowPayload.packedNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
             shadowPayload.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
             shadowPayload.packedSurface = PackPayloadSurface(1.0, 0.0, 0.0, 0.0);
-            shadowPayload.packedIorType = PackPayloadIorType(1.0, RAY_TYPE_SHADOW, false);
+            shadowPayload.packedIorType = PackPayloadIorType(1.0, RAY_TYPE_SHADOW, false, 1.0);
+            shadowPayload.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
             TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
 
             if (shadowPayload.t < 0.0) { // Miss = not occluded
@@ -326,8 +335,18 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
 
                 float3 SpecularBRDF = D * V_vis * F;
                 float3 DiffuseBRDF = (DiffuseAlbedo / PI) * (1.0 - F);
-                
-                Lo = (DiffuseBRDF + SpecularBRDF) * radiance * NdotL;
+                float3 BaseBRDF = DiffuseBRDF + SpecularBRDF;
+                float3 CoatBRDF = float3(0.0, 0.0, 0.0);
+                if (clearcoat > 0.001) {
+                    float3 F0c = float3(0.04, 0.04, 0.04);
+                    float3 Fc = F_Schlick(VdotH, F0c);
+                    float Dc = D_GGX(NdotH, clearcoatRoughness);
+                    float Vc = V_SmithCorrelated(NdotV, NdotL, clearcoatRoughness);
+                    CoatBRDF = Dc * Vc * Fc;
+                }
+
+                Lo = ((BaseBRDF * (1.0 - clearcoat)) + CoatBRDF * clearcoat) *
+                     radiance * NdotL;
             }
         }
 
@@ -355,10 +374,12 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     PayloadSetColor(payload, color);
     payload.t = RayTCurrent();
     payload.packedNormal = PackNormalOctahedron(N);
-    payload.packedAlbedo = PackPayloadAlbedo(BaseColor);
+    payload.packedAlbedo = PackPayloadAlbedoCoat(BaseColor, clearcoat);
+    PayloadSetCoatRoughness(payload, clearcoatRoughness);
     bool thinWalled = ((matFlags & MATERIAL_FLAG_THIN_WALLED) != 0) || (arch0.z > 0.5);
     payload.packedSurface = PackPayloadSurface(roughness, metalness, transmission, translucency);
-    payload.packedIorType = PackPayloadIorType(emisColor.w, rayType, thinWalled);
+    payload.packedIorType = PackPayloadIorType(emisColor.w, rayType, thinWalled, specularWeight);
+    payload.packedTransmission = PackPayloadTransmissionColor(transmissionColor);
 }
 
 [shader("anyhit")]

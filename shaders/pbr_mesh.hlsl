@@ -52,13 +52,13 @@ cbuffer WorldCB : register(b2)
 cbuffer MaterialCB : register(b1)
 {
     float4 diffuseColor;        // rgb, a=opacity
-    float4 reflectionColor;     // rgb, w=reflectionGlossiness
-    float4 refractionColor;     // rgb, w=refractionGlossiness
+    float4 surfaceParams;       // x=roughness, y=metalness, z=specularWeight
+    float4 transmissionParams;  // rgb=transmissionColor, a=transmissionWeight
     float4 emissiveColor;       // rgb, w=ior
-    int4 textureIndices;        // x=diffuse, y=reflect, z=normal, w=refract
+    int4 textureIndices;        // x=diffuse, z=normal
     int4 emissiveAndPad;        // x=emissive, y=occlusion, z=metalRough
-    float4 extraParams;         // x=metalness, y=emissiveIntensity
-    float4 archvizParams0;      // x=clearcoat, y=clearcoatRoughness, z=thinWalled, w=translucency
+    float4 extraParams;         // x=emissiveIntensity
+    float4 coatLayerParams;     // x=coatWeight, y=coatRoughness, z=thinWalled, w=translucency
     float4 uvTransform;         // xy=uvScale, zw=uvOffset
     float4 triPlanarParams;     // x=enabled, y=scale, z=sharpness, w=normalStrength
 };
@@ -309,9 +309,8 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
         alpha *= diffSample.a;
     }
 
-    float metalness = extraParams.x;
-    float roughnessFactor = saturate(1.0 - reflectionColor.w);
-    float roughness = roughnessFactor;
+    float roughness = saturate(surfaceParams.x);
+    float metalness = saturate(surfaceParams.y);
     
     // Metal/Roughness Logic: factor * texture
     // G = Roughness, B = Metalness
@@ -322,11 +321,13 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
         metalness *= mrSample.b;
     }
     
-    // Standard PBR Model (dielectric F0 from IOR)
+    // OpenPBR subset: dielectric F0 from IOR scaled by specular weight.
     float ior = max(emissiveColor.w, 1.0);
+    float specularWeight = saturate(surfaceParams.z);
     float f0s = (ior - 1.0) / (ior + 1.0);
     f0s = f0s * f0s;
-    float3 F0 = lerp(float3(f0s, f0s, f0s), BaseColor, metalness);
+    float3 dielectricF0 = float3(f0s, f0s, f0s) * specularWeight;
+    float3 F0 = lerp(dielectricF0, BaseColor, metalness);
     float3 DiffuseAlbedo = BaseColor * (1.0 - metalness);
     
     // Normal
@@ -334,7 +335,7 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
                          : GetNormalFromMap(uv, worldNormal, input.tangent, textureIndices.z);
 
     // Emissive with user-defined intensity
-    float3 emiss = emissiveColor.rgb * extraParams.y;
+    float3 emiss = emissiveColor.rgb * extraParams.x;
     if (emissiveAndPad.x >= 0) {
         float3 e = triPlanar ? SampleTriPlanar(emissiveAndPad.x, worldPos, worldNormal, triScale, triSharp).rgb
                              : textures[emissiveAndPad.x].Sample(linearSampler, uv).rgb;
@@ -359,9 +360,9 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     // Clamp to reduce fireflies / unstable highlights in archviz scenes
     roughness = max(roughness, 0.02);
 
-    float clearcoat = saturate(archvizParams0.x);
-    float clearcoatRoughness = max(archvizParams0.y, 0.02);
-    float translucency = saturate(archvizParams0.w);
+    float clearcoat = saturate(coatLayerParams.x);
+    float clearcoatRoughness = max(coatLayerParams.y, 0.02);
+    float translucency = saturate(coatLayerParams.w);
 
     // Cook-Torrance BRDF
     float NDF = DistributionGGX(N, H, roughness);

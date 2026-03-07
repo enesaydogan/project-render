@@ -1,4 +1,6 @@
 #pragma once
+#include <algorithm>
+#include <cstdint>
 #include <d3d12.h>
 #include <functional>
 #include <string>
@@ -46,21 +48,15 @@ struct Texture {
 };
 
 struct Material {
+  static constexpr uint32_t kSchemaVersionOpenPbrSubset = 3;
+
   char name[64] = "Material";
   float diffuseColor[4] = {1, 1, 1, 1};
-  float reflectionColor[4] = {0, 0, 0, 1};
-  float reflectionGlossiness = 0.8f;
   float metalness = 0.0f; // Added for PBR support
-  float refractionColor[4] = {0, 0, 0, 1};
-  float refractionGlossiness = 1.0f;
   float ior = 1.6f;
   float emissiveColor[4] = {0, 0, 0, 1};
   float emissiveIntensity = 1.0f; // Multiplier for emissive
 
-  // --- Archviz extensions (engine-side lookdev controls) ---
-  // Clearcoat (varnish / lacquer) secondary specular lobe
-  float clearcoat = 0.0f;          // [0..1]
-  float clearcoatRoughness = 0.1f; // [0..1]
   // Thin-walled transmission model (window glass, leaves)
   float thinWalled = 0.0f; // 0/1
   // Diffuse-like translucency (leaves/fabric approximation)
@@ -76,11 +72,7 @@ struct Material {
   float triPlanarNormalStrength =
       1.0f; // normal intensity for tri-planar normal maps
 
-  // V-Ray / Glossiness workflow texture mapping
   int diffuseTexture = -1; // Was baseColor
-  int reflectionTexture =
-      -1; // Was metallicRoughness (re-used often) or specular
-  int refractionTexture = -1;
   int normalTexture = -1;
   int emissiveTexture = -1;
   int occlusionTexture = -1;
@@ -95,6 +87,15 @@ struct Material {
   float grassBladeSize = 1.0f;
   float grassBladeCount = 8.0f; // density in blades per square meter
   float grassBladeVariation = 1.0f; // 0=no randomness, 1=full random scale/yaw
+
+  // Canonical OpenPBR runtime subset fields.
+  uint32_t schemaVersion = kSchemaVersionOpenPbrSubset;
+  float roughness = 0.2f;
+  float specularWeight = 1.0f;
+  float transmissionWeight = 0.0f;
+  float transmissionColor[3] = {1.0f, 1.0f, 1.0f};
+  float coatWeight = 0.0f;
+  float coatRoughness = 0.1f;
 };
 
 // Initialize the loader with a device and command queue for GPU uploads.

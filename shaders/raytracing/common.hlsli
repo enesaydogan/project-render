@@ -186,10 +186,11 @@ struct MaterialData
 
 struct MaterialExtraData
 {
-    float4 archvizParams0;      // x=clearcoat, y=clearcoatRoughness, z=thinWalled, w=translucency
+    float4 coatLayerParams;     // x=coatWeight, y=coatRoughness, z=thinWalled, w=translucency
     float4 uvTransform;         // xy=uvScale, zw=uvOffset
     float4 triPlanarParams;     // x=enabled, y=scale, z=sharpness, w=normalStrength
     float4 shadingParams;       // x=emissiveIntensity, yzw=reserved
+    float4 transmissionColor;   // rgb=tinted transmission color
 };
 
 inline int UnpackTextureIndexLow(uint packedPair)
@@ -243,6 +244,7 @@ struct RayPayload
     uint packedAlbedo;    // 3x8 UNORM base color
     uint packedSurface;   // 4x8 UNORM: roughness/metallic/transmission/translucency
     uint packedIorType;   // 16-bit half IOR + 8-bit rayType + thin-walled bit
+    uint packedTransmission; // 3x8 UNORM transmission color
 };
 
 inline uint PackNormalOctahedron(float3 n)
@@ -276,7 +278,7 @@ inline void PayloadSetColor(inout RayPayload p, float3 c)
 {
     uint3 h = uint3(f32tof16(max(c, 0.0)));
     p.packedColor0 = (h.x & 0xFFFFu) | ((h.y & 0xFFFFu) << 16);
-    p.packedColor1 = (h.z & 0xFFFFu);
+    p.packedColor1 = (p.packedColor1 & 0xFFFF0000u) | (h.z & 0xFFFFu);
 }
 
 inline float3 PayloadGetColor(RayPayload p)
@@ -287,10 +289,29 @@ inline float3 PayloadGetColor(RayPayload p)
     return max(float3(f16tof32(hr), f16tof32(hg), f16tof32(hb)), 0.0);
 }
 
+inline void PayloadSetCoatRoughness(inout RayPayload p, float coatRoughness)
+{
+    uint h = f32tof16(saturate(coatRoughness)) & 0xFFFFu;
+    p.packedColor1 = (p.packedColor1 & 0x0000FFFFu) | (h << 16);
+}
+
+inline float PayloadGetCoatRoughness(RayPayload p)
+{
+    uint h = (p.packedColor1 >> 16) & 0xFFFFu;
+    return saturate(f16tof32(h));
+}
+
 inline uint PackPayloadAlbedo(float3 c)
 {
     uint3 q = (uint3)round(saturate(c) * 255.0);
     return (q.x) | (q.y << 8) | (q.z << 16);
+}
+
+inline uint PackPayloadAlbedoCoat(float3 c, float coatWeight)
+{
+    uint3 q = (uint3)round(saturate(c) * 255.0);
+    uint coat = (uint)round(saturate(coatWeight) * 255.0);
+    return (q.x) | (q.y << 8) | (q.z << 16) | (coat << 24);
 }
 
 inline float3 UnpackPayloadAlbedo(uint packed)
@@ -300,6 +321,11 @@ inline float3 UnpackPayloadAlbedo(uint packed)
         (packed >> 8) & 0xFFu,
         (packed >> 16) & 0xFFu);
     return q / 255.0;
+}
+
+inline float UnpackPayloadCoatWeight(uint packed)
+{
+    return ((packed >> 24) & 0xFFu) / 255.0;
 }
 
 inline uint PackPayloadSurface(float roughness, float metallic,
@@ -319,11 +345,12 @@ inline float4 UnpackPayloadSurface(uint packed)
     return q / 255.0;
 }
 
-inline uint PackPayloadIorType(float ior, uint rayType, bool thinWalled)
+inline uint PackPayloadIorType(float ior, uint rayType, bool thinWalled, float specularWeight)
 {
     uint hIor = f32tof16(clamp(ior, 1.0, 8.0)) & 0xFFFFu;
     uint thin = thinWalled ? (1u << 24) : 0u;
-    return hIor | ((rayType & 0xFFu) << 16) | thin;
+    uint spec = (((uint)round(saturate(specularWeight) * 127.0)) & 0x7Fu) << 25;
+    return hIor | ((rayType & 0xFFu) << 16) | thin | spec;
 }
 
 inline float UnpackPayloadIor(uint packed)
@@ -339,6 +366,21 @@ inline uint UnpackPayloadRayType(uint packed)
 inline bool UnpackPayloadThinWalled(uint packed)
 {
     return (packed & (1u << 24)) != 0;
+}
+
+inline float UnpackPayloadSpecularWeight(uint packed)
+{
+    return ((packed >> 25) & 0x7Fu) / 127.0;
+}
+
+inline uint PackPayloadTransmissionColor(float3 c)
+{
+    return PackPayloadAlbedo(c);
+}
+
+inline float3 UnpackPayloadTransmissionColor(uint packed)
+{
+    return UnpackPayloadAlbedo(packed);
 }
 
 #endif // RAYTRACING_COMMON_H

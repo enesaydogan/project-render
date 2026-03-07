@@ -36,6 +36,87 @@ float3 SampleCone(float3 dir, float cosThetaMax, float2 u)
     return normalize(T * x + B * y + dir * z);
 }
 
+float3 ComputeSurfaceF0(float3 albedo, float metallic, float ior, float specularWeight)
+{
+    float f0s = (ior - 1.0) / (ior + 1.0);
+    f0s = f0s * f0s;
+    float3 dielectricF0 = float3(f0s, f0s, f0s) * saturate(specularWeight);
+    return lerp(dielectricF0, albedo, metallic);
+}
+
+float3 EvaluateCoatSpecular(float3 N, float3 V, float3 L, float coatRoughness)
+{
+    float NdotL = saturate(dot(N, L));
+    float NdotV = saturate(dot(N, V));
+    if (NdotL <= 0.0 || NdotV <= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    float3 H = normalize(L + V);
+    float NdotH = saturate(dot(N, H));
+    float VdotH = saturate(dot(V, H));
+    float3 F0c = float3(0.04, 0.04, 0.04);
+    float3 Fc = F_Schlick(VdotH, F0c);
+    float Dc = D_GGX(NdotH, coatRoughness);
+    float Vc = V_SmithCorrelated(NdotV, NdotL, coatRoughness);
+    return Dc * Vc * Fc;
+}
+
+float3 EvaluateSurfaceBrdf(float3 N, float3 V, float3 L,
+                           float3 albedo, float3 diffuseAlbedo,
+                           float metallic, float roughness,
+                           float ior, float specularWeight,
+                           float coatWeight, float coatRoughness)
+{
+    float NdotL = saturate(dot(N, L));
+    float NdotV = saturate(dot(N, V));
+    if (NdotL <= 0.0 || NdotV <= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    float3 H = normalize(L + V);
+    float VdotH = saturate(dot(V, H));
+    float NdotH = saturate(dot(N, H));
+    float3 F0 = ComputeSurfaceF0(albedo, metallic, ior, specularWeight);
+    float3 F = F_Schlick(VdotH, F0);
+    float3 spec = D_GGX(NdotH, roughness) * V_SmithCorrelated(NdotV, NdotL, roughness) * F;
+    float3 baseBrdf = (diffuseAlbedo / PI) * (1.0 - F) + spec;
+
+    float clearcoat = saturate(coatWeight);
+    if (clearcoat <= 0.0) {
+        return baseBrdf;
+    }
+
+    float3 coatBrdf = EvaluateCoatSpecular(N, V, L, coatRoughness);
+    return baseBrdf * (1.0 - clearcoat) + coatBrdf * clearcoat;
+}
+
+void ComputeLobeProbabilities(float3 N, float3 V,
+                              float3 albedo,
+                              float metallic, float transmission,
+                              float translucency,
+                              float ior, float specularWeight,
+                              float coatWeight,
+                              out float coatProb,
+                              out float specProb,
+                              out float diffProb,
+                              out float transProb,
+                              out float totalProb)
+{
+    float3 F0 = ComputeSurfaceF0(albedo, metallic, ior, specularWeight);
+    float3 F = F_Schlick(saturate(dot(N, V)), F0);
+    float clearcoat = saturate(coatWeight);
+    float coatF = F_Schlick(saturate(dot(N, V)), float3(0.04, 0.04, 0.04)).x;
+
+    coatProb = clearcoat * coatF;
+    specProb = (1.0 - clearcoat) * max(F.x, max(F.y, F.z));
+
+    float baseDiffProb = (1.0 - clearcoat) * (1.0 - specProb) * (1.0 - metallic) * (1.0 - transmission);
+    transProb = baseDiffProb * saturate(translucency);
+    diffProb = max(0.0, baseDiffProb - transProb);
+    totalProb = max(1e-6, coatProb + specProb + diffProb + transProb);
+}
+
 GI_Reservoir unpack_gi_reservoir(float4 d0, float4 d1, float4 d2) {
     GI_Reservoir r;
     r.hitPos = d0.xyz;
@@ -89,11 +170,13 @@ RayPayload InitRayPayload(uint rayType)
 {
     RayPayload p;
     p.t = -1.0;
+    p.packedColor1 = 0u;
     PayloadSetColor(p, float3(0.0, 0.0, 0.0));
     p.packedNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
     p.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
     p.packedSurface = PackPayloadSurface(1.0, 0.0, 0.0, 0.0);
-    p.packedIorType = PackPayloadIorType(1.0, rayType, false);
+    p.packedIorType = PackPayloadIorType(1.0, rayType, false, 1.0);
+    p.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
     return p;
 }
 
@@ -193,12 +276,16 @@ void RayGen()
 
         float3 payloadColor = PayloadGetColor(payload);
         float3 payloadAlbedo = UnpackPayloadAlbedo(payload.packedAlbedo);
+        float payloadCoatWeight = UnpackPayloadCoatWeight(payload.packedAlbedo);
         float4 payloadSurface = UnpackPayloadSurface(payload.packedSurface);
         float payloadRoughness = max(0.001, payloadSurface.x);
         float payloadMetalness = payloadSurface.y;
         float payloadTransmission = payloadSurface.z;
         float payloadTranslucency = payloadSurface.w;
+        float payloadCoatRoughness = max(0.02, PayloadGetCoatRoughness(payload));
         float payloadIor = UnpackPayloadIor(payload.packedIorType);
+        float payloadSpecularWeight = UnpackPayloadSpecularWeight(payload.packedIorType);
+        float3 payloadTransmissionColor = UnpackPayloadTransmissionColor(payload.packedTransmission);
         bool payloadThinWalled = UnpackPayloadThinWalled(payload.packedIorType);
 
         if (bounce == 0) {
@@ -215,7 +302,8 @@ void RayGen()
                 primaryViewZ = dot(toHit, forward); 
 
                 // Specular Albedo calculation for DLSS-RR
-                float3 F0_primary = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, payloadMetalness);
+                float3 F0_primary = ComputeSurfaceF0(payloadAlbedo, payloadMetalness,
+                                                    payloadIor, payloadSpecularWeight);
                 float NdotV_primary = saturate(dot(primaryNormal, -rayDir));
                 primarySpecAlbedo = EnvBRDFApprox2(F0_primary, primaryRoughness * primaryRoughness, NdotV_primary);
 
@@ -464,12 +552,12 @@ void RayGen()
             {
                 LightSample ls = evaluate_directional_light(lightDir.xyz, lightColor.rgb, lightColor.w);
                 float NdotL = saturate(dot(N, ls.L));
-                
-                float3 F0 = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, metallic);
-                float3 H = normalize(ls.L + V);
-                float3 F = F_Schlick(max(0.0, dot(H, V)), F0);
-                float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL, roughness) * F;
-                float3 brdf = (diffuseAlbedo / PI) * (1.0 - F) + spec;
+
+                float3 brdf = EvaluateSurfaceBrdf(N, V, ls.L,
+                                                 payloadAlbedo, diffuseAlbedo,
+                                                 metallic, roughness,
+                                                 payloadIor, payloadSpecularWeight,
+                                                 payloadCoatWeight, payloadCoatRoughness);
 
                 float p_target = calculate_p_target(ls.radiance, payloadAlbedo, brdf, NdotL);
                 update_reservoir(res, 0xFFFFFFFF, p_target, rng);
@@ -489,11 +577,11 @@ void RayGen()
                 }
                 
                 float NdotL = saturate(dot(N, ls.L));
-                float3 F0 = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, metallic);
-                float3 H = normalize(ls.L + V);
-                float3 F = F_Schlick(max(0.0, dot(H, V)), F0);
-                float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL, roughness) * F;
-                float3 brdf = (diffuseAlbedo / PI) * (1.0 - F) + spec;
+                float3 brdf = EvaluateSurfaceBrdf(N, V, ls.L,
+                                                 payloadAlbedo, diffuseAlbedo,
+                                                 metallic, roughness,
+                                                 payloadIor, payloadSpecularWeight,
+                                                 payloadCoatWeight, payloadCoatRoughness);
 
                 float p_target = calculate_p_target(ls.radiance, payloadAlbedo, brdf, NdotL) * (float)numLights;
                 if (l.type == LIGHT_TYPE_AREA_RECT || l.type == LIGHT_TYPE_AREA_DISK) {
@@ -529,11 +617,12 @@ void RayGen()
             }
 
             float NdotL_final = saturate(dot(N, L_final));
-            float3 F0 = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, metallic);
             float3 H_f = normalize(L_final + V);
-            float3 F_f = F_Schlick(max(0.0, dot(H_f, V)), F0);
-            float3 spec_f = D_GGX(max(0.0, dot(N, H_f)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL_final, roughness) * F_f;
-            float3 brdf_f = (diffuseAlbedo / PI) * (1.0 - F_f) + spec_f;
+            float3 brdf_f = EvaluateSurfaceBrdf(N, V, L_final,
+                                               payloadAlbedo, diffuseAlbedo,
+                                               metallic, roughness,
+                                               payloadIor, payloadSpecularWeight,
+                                               payloadCoatWeight, payloadCoatRoughness);
 
             float p_target_final = calculate_p_target(radiance_final, payloadAlbedo, brdf_f, NdotL_final);
             
@@ -553,28 +642,38 @@ void RayGen()
                 } else {
                      shadowRay.Direction = L_final;
                 }
-                
                 shadowRay.TMin = 0.001;
                 shadowRay.TMax = max(0.001, dist_final - 0.002);
-                
+
                 RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
                 q.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, shadowRay);
+
                 // Drain the query so non-opaque candidates (e.g. glass) do not
                 // early-out visibility before opaque blockers behind them.
                 while (q.Proceed()) {}
                 
                 if (q.CommittedStatus() == COMMITTED_NOTHING) {
                     float pdfLight = (res.W > 0.0) ? (1.0 / res.W) : 0.0;
-                    
-                    float specProb = max(F_f.x, max(F_f.y, F_f.z));
-                    float baseDiffProb = (1.0 - specProb) * (1.0 - metallic) * (1.0 - transmission);
-                    float transProb = baseDiffProb * saturate(payloadTranslucency);
-                    float diffProb = max(0.0, baseDiffProb - transProb);
-                    float totalProb = max(1e-6, specProb + diffProb + transProb);
+
+                    float coatProb = 0.0;
+                    float specProb = 0.0;
+                    float diffProb = 0.0;
+                    float transProb = 0.0;
+                    float totalProb = 1.0;
+                    ComputeLobeProbabilities(N, V, payloadAlbedo,
+                                             metallic, transmission,
+                                             payloadTranslucency,
+                                             payloadIor, payloadSpecularWeight,
+                                             payloadCoatWeight,
+                                             coatProb, specProb, diffProb, transProb, totalProb);
 
                     float NdotH_final = saturate(dot(N, H_f));
                     float VdotH_final = saturate(dot(V, H_f));
-                    
+
+                    float pdfCoat = 0.0;
+                    if (coatProb > 0.0 && NdotH_final > 0.0 && VdotH_final > 0.0) {
+                        pdfCoat = (PDF_GGX(NdotH_final, VdotH_final, payloadCoatRoughness) * coatProb) / totalProb;
+                    }
                     float pdfSpec = 0.0;
                     if (specProb > 0.0 && NdotH_final > 0.0 && VdotH_final > 0.0) {
                         pdfSpec = (PDF_GGX(NdotH_final, VdotH_final, roughness) * specProb) / totalProb;
@@ -584,7 +683,7 @@ void RayGen()
                         pdfDiff = (PDF_Lambert(NdotL_final) * diffProb) / totalProb;
                     }
                     
-                    float pdfBrdf = pdfSpec + pdfDiff;
+                    float pdfBrdf = pdfCoat + pdfSpec + pdfDiff;
                     float misW = (pdfLight * pdfLight) / (pdfLight * pdfLight + pdfBrdf * pdfBrdf + 1e-12);
                     
                     directLighting = radiance_final * brdf_f * NdotL_final * res.W * misW;
@@ -711,11 +810,11 @@ void RayGen()
                 SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                 SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
                 if (q_nee.CommittedStatus() == COMMITTED_NOTHING) {
-                     float3 F0 = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, metallic);
-                     float3 H = normalize(L_nee + V);
-                     float3 F_val = F_Schlick(max(0.0, dot(H, V)), F0);
-                     float3 spec = D_GGX(max(0.0, dot(N, H)), roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL_nee, roughness) * F_val;
-                     float3 brdf = (diffuseAlbedo / PI) * (1.0 - F_val) + spec;
+                     float3 brdf = EvaluateSurfaceBrdf(N, V, L_nee,
+                                                payloadAlbedo, diffuseAlbedo,
+                                                metallic, roughness,
+                                                payloadIor, payloadSpecularWeight,
+                                                payloadCoatWeight, payloadCoatRoughness);
                      
                      // Trial 2: MIS for NEE
                      float distanceSquared = dist_nee * dist_nee + 1.0;
@@ -754,26 +853,35 @@ void RayGen()
                 SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
 
                 if (q_env.CommittedStatus() == COMMITTED_NOTHING) {
-                    float3 F0_env = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, metallic);
                     float3 H_env = normalize(envLs.L + V);
-                    float3 F_env_val = F_Schlick(max(0.0, dot(H_env, V)), F0_env);
-                    float3 spec_env = D_GGX(max(0.0, dot(N, H_env)), roughness) *
-                                      V_SmithCorrelated(max(0.0, dot(N, V)), NdotL_env, roughness) *
-                                      F_env_val;
-                    float3 brdf_env = (diffuseAlbedo / PI) * (1.0 - F_env_val) + spec_env;
+                    float3 brdf_env = EvaluateSurfaceBrdf(N, V, envLs.L,
+                                                          payloadAlbedo, diffuseAlbedo,
+                                                          metallic, roughness,
+                                                          payloadIor, payloadSpecularWeight,
+                                                          payloadCoatWeight, payloadCoatRoughness);
 
                     // MIS: compare environment-light sampling PDF against
                     // the BRDF sampling PDF for this same direction.
-                    float3 F_env = F_Schlick(max(0.0, dot(N, V)), F0_env);
-                    float specProbEnv = max(F_env.x, max(F_env.y, F_env.z));
-                    float baseDiffProbEnv =
-                        (1.0 - specProbEnv) * (1.0 - metallic) * (1.0 - transmission);
-                    float transProbEnv = baseDiffProbEnv * saturate(payloadTranslucency);
-                    float diffProbEnv = max(0.0, baseDiffProbEnv - transProbEnv);
-                    float totalProbEnv = max(1e-6, specProbEnv + diffProbEnv + transProbEnv);
+                    float coatProbEnv = 0.0;
+                    float specProbEnv = 0.0;
+                    float diffProbEnv = 0.0;
+                    float transProbEnv = 0.0;
+                    float totalProbEnv = 1.0;
+                    ComputeLobeProbabilities(N, V, payloadAlbedo,
+                                             metallic, transmission,
+                                             payloadTranslucency,
+                                             payloadIor, payloadSpecularWeight,
+                                             payloadCoatWeight,
+                                             coatProbEnv, specProbEnv, diffProbEnv, transProbEnv, totalProbEnv);
 
                     float NdotH_env = saturate(dot(N, H_env));
                     float VdotH_env = saturate(dot(V, H_env));
+                    float pdfCoatEnv = 0.0;
+                    if (coatProbEnv > 0.0 && NdotH_env > 0.0 && VdotH_env > 0.0) {
+                        pdfCoatEnv =
+                            (PDF_GGX(NdotH_env, VdotH_env, payloadCoatRoughness) * coatProbEnv) /
+                            totalProbEnv;
+                    }
                     float pdfSpecEnv = 0.0;
                     if (specProbEnv > 0.0 && NdotH_env > 0.0 && VdotH_env > 0.0) {
                         pdfSpecEnv =
@@ -784,7 +892,7 @@ void RayGen()
                     if (diffProbEnv > 0.0) {
                         pdfDiffEnv = (PDF_Lambert(NdotL_env) * diffProbEnv) / totalProbEnv;
                     }
-                    float pdfBrdfEnv = max(0.0, pdfSpecEnv + pdfDiffEnv);
+                    float pdfBrdfEnv = max(0.0, pdfCoatEnv + pdfSpecEnv + pdfDiffEnv);
 
                     float pdfLightEnv = max(1e-8, envLs.pdf);
                     float misW = (pdfLightEnv * pdfLightEnv) /
@@ -850,7 +958,7 @@ void RayGen()
                 if (refractiveBounces >= (int)maxRefractiveBounces) break;
                 refractiveBounces++;
                 nextDir = glassL;
-                f_brdf = float3(payloadTransmission, payloadTransmission, payloadTransmission);
+                f_brdf = max(payloadTransmissionColor, float3(0.0, 0.0, 0.0)) * payloadTransmission;
                 currentRayType = RAY_TYPE_REFRACTION;
             } else {
                 if (specularBounces >= (int)maxSpecularBounces) break;
@@ -871,19 +979,37 @@ void RayGen()
             continue; 
         } else {
             // Metallic / Diffuse PBR sampling (+ optional diffuse translucency)
-            float3 F0 = lerp(float3(0.04, 0.04, 0.04), payloadAlbedo, metallic);
-            float3 F = F_Schlick(max(0.0, dot(N, V)), F0);
-
-            float specProb = max(F.x, max(F.y, F.z));
-            float baseDiffProb = (1.0 - specProb) * (1.0 - metallic) * (1.0 - transmission);
-            float transProb = baseDiffProb * saturate(payloadTranslucency);
-            float diffProb = max(0.0, baseDiffProb - transProb);
-            float totalProb = specProb + diffProb + transProb;
+            float coatProb = 0.0;
+            float specProb = 0.0;
+            float diffProb = 0.0;
+            float transProb = 0.0;
+            float totalProb = 1.0;
+            ComputeLobeProbabilities(N, V, payloadAlbedo,
+                                     metallic, transmission,
+                                     payloadTranslucency,
+                                     payloadIor, payloadSpecularWeight,
+                                     payloadCoatWeight,
+                                     coatProb, specProb, diffProb, transProb, totalProb);
 
             float pick = next_float(rng) * totalProb;
             float cosineTerm = 1.0;
 
-            if (pick < specProb) {
+            if (pick < coatProb) {
+                if (specularBounces >= (int)maxSpecularBounces) break;
+                specularBounces++;
+
+                float3 H = SampleGGX(u, N, payloadCoatRoughness);
+                nextDir = reflect(-V, H);
+                float NdotL = saturate(dot(N, nextDir));
+                float NdotH = saturate(dot(N, H));
+                float VdotH = saturate(dot(V, H));
+
+                pdf = (PDF_GGX(NdotH, VdotH, payloadCoatRoughness) * coatProb) / totalProb;
+                f_brdf = EvaluateCoatSpecular(N, V, nextDir, payloadCoatRoughness);
+                rayOrigin = P + N * 0.002;
+                cosineTerm = NdotL;
+                currentRayType = RAY_TYPE_REFLECTION;
+            } else if (pick < (coatProb + specProb)) {
                 // Specular GGX
                 if (specularBounces >= (int)maxSpecularBounces) break;
                 specularBounces++;
@@ -893,13 +1019,14 @@ void RayGen()
                 float NdotL = saturate(dot(N, nextDir));
                 float NdotH = saturate(dot(N, H));
                 float VdotH = saturate(dot(V, H));
+                float3 F0 = ComputeSurfaceF0(payloadAlbedo, metallic, payloadIor, payloadSpecularWeight);
 
                 pdf = (PDF_GGX(NdotH, VdotH, roughness) * specProb) / totalProb;
                 f_brdf = D_GGX(NdotH, roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL, roughness) * F_Schlick(VdotH, F0);
                 rayOrigin = P + N * 0.002;
                 cosineTerm = NdotL;
                 currentRayType = RAY_TYPE_REFLECTION;
-            } else if (pick < (specProb + diffProb)) {
+            } else if (pick < (coatProb + specProb + diffProb)) {
                 // Diffuse Lambert
                 if (giBounces >= (int)maxGIBounces) break;
                 giBounces++;
@@ -937,7 +1064,7 @@ void RayGen()
                 // Additionally factor in the current surface's theoretical max contribution (albedo + specular). 
                 // A dark surface shouldn't spawn a ray just because previous throughput was high.
                 float maxAlbedo = max(payloadAlbedo.x, max(payloadAlbedo.y, payloadAlbedo.z));
-                float maxSpec = max(specProb, 0.04);
+                float maxSpec = max(max(specProb, coatProb), 0.04);
                 float surfaceMax = max(maxAlbedo, maxSpec);
                 
                 // Effective power remaining in the path.
