@@ -696,7 +696,7 @@ static void EnsureNrdCompositePipeline() {
 
   D3D12_DESCRIPTOR_RANGE srvRange{};
   srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-  srvRange.NumDescriptors = 6; // t0..t5 (added t5 = albedo for demodulation)
+  srvRange.NumDescriptors = 7; // t0..t6 (t5=diffuse albedo, t6=specular albedo)
   srvRange.BaseShaderRegister = 0;
   srvRange.RegisterSpace = 0;
 
@@ -760,7 +760,7 @@ static void EnsureNrdCompositePipeline() {
       &psoDesc, IID_PPV_ARGS(&s_nrdCompositePSO)));
 
   D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-  heapDesc.NumDescriptors = 7; // 6 SRVs (t0..t5) + 1 UAV (u0)
+  heapDesc.NumDescriptors = 8; // 7 SRVs (t0..t6) + 1 UAV (u0)
   heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
   heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
   ThrowIfFailed(s_device->CreateDescriptorHeap(
@@ -4035,15 +4035,22 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       s_device->CreateShaderResourceView(s_nrdEmissionUAV.Get(), &srv,
              stableInputSrv);
 
-      // t5: primary-hit albedo for demodulation remodulation in the composite
+      // t5: primary-hit diffuse albedo for demodulation round-trip
       if (s_albedoUAV) {
         D3D12_CPU_DESCRIPTOR_HANDLE albedoSrv = cpuStart;
         albedoSrv.ptr += descInc * 5;
         s_device->CreateShaderResourceView(s_albedoUAV.Get(), &srv, albedoSrv);
       }
 
+      // t6: primary-hit specular albedo (F_env) for specular demodulation round-trip
+      if (s_specularAlbedoUAV) {
+        D3D12_CPU_DESCRIPTOR_HANDLE specAlbedoSrv = cpuStart;
+        specAlbedoSrv.ptr += descInc * 6;
+        s_device->CreateShaderResourceView(s_specularAlbedoUAV.Get(), &srv, specAlbedoSrv);
+      }
+
       D3D12_CPU_DESCRIPTOR_HANDLE outUav = cpuStart;
-      outUav.ptr += descInc * 6; // UAV is now at slot 6 (after 6 SRVs)
+      outUav.ptr += descInc * 7; // UAV is now at slot 7 (after 7 SRVs)
       D3D12_UNORDERED_ACCESS_VIEW_DESC uav = {};
       uav.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
       uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
@@ -4071,6 +4078,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         TransitionResource(dxrList.Get(), s_albedoUAV.Get(),
                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+      if (s_specularAlbedoUAV)
+        TransitionResource(dxrList.Get(), s_specularAlbedoUAV.Get(),
+               D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
       ID3D12DescriptorHeap *compHeaps[] = {s_nrdCompositeHeap.Get()};
       dxrList->SetDescriptorHeaps(1, compHeaps);
@@ -4081,7 +4092,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
           s_nrdCompositeHeap->GetGPUDescriptorHandleForHeapStart();
       dxrList->SetComputeRootDescriptorTable(0, gpuStart);
       D3D12_GPU_DESCRIPTOR_HANDLE gpuUav = gpuStart;
-        gpuUav.ptr += descInc * 6; // UAV is at slot 6
+        gpuUav.ptr += descInc * 7; // UAV is at slot 7
       dxrList->SetComputeRootDescriptorTable(1, gpuUav);
 
       const UINT gx = (s_outputWidth + 7) / 8;
@@ -4105,6 +4116,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
              D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
       if (s_albedoUAV)
         TransitionResource(dxrList.Get(), s_albedoUAV.Get(),
+               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+               D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+      if (s_specularAlbedoUAV)
+        TransitionResource(dxrList.Get(), s_specularAlbedoUAV.Get(),
                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 

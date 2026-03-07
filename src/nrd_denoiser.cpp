@@ -230,6 +230,20 @@ void NrdDenoiser::Denoise(ID3D12GraphicsCommandList* cmdList,
     relaxSettings.enableAntiFirefly = true;
     relaxSettings.luminanceEdgeStoppingRelaxation = 0.5f;
     relaxSettings.normalEdgeStoppingRelaxation    = 0.3f;
+    // Inject extra variance into low-confidence specular reprojection areas so
+    // RELAX detects they need more filtering instead of locking onto noisy history.
+    relaxSettings.specularVarianceBoost = 0.3f;
+    // Allow a wider luminance box when clamping slow history to fast history —
+    // reduces temporal flickering (ghosting pop) on moving glossy surfaces.
+    relaxSettings.fastHistoryClampingSigmaScale = 3.0f;
+    // More relaxed luminance edge-stopping for specular: 1-spp specular variance
+    // is too high for the default (1.0) to converge cleanly on glossy surfaces.
+    relaxSettings.specularPhiLuminance = 2.0f;
+    // Antilag: be less aggressive about discarding history on disocclusion.
+    // Smaller accelerationAmount/resetAmount gives smoother recovery rather
+    // than the abrupt reset that shows as brightening/darkening pops.
+    relaxSettings.antilagSettings.accelerationAmount = 0.1f;
+    relaxSettings.antilagSettings.resetAmount        = 0.3f;
     m_nrdIntegration->SetDenoiserSettings(nrd::Identifier(0), &relaxSettings);
 
     nrd::ResourceSnapshot resourceSnapshot = {};
