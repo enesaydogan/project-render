@@ -282,6 +282,7 @@ static ComPtr<ID3D12Resource> s_nrdMvUAV;
 static ComPtr<ID3D12Resource> s_nrdOutDiffuseUAV;
 static ComPtr<ID3D12Resource> s_nrdOutSpecularUAV;
 static ComPtr<ID3D12Resource> s_nrdEmissionUAV;
+static ComPtr<ID3D12Resource> s_nrdCompositeUAV;
 
 static UINT s_outputUAVDescriptorSize = 0;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_outputUAVGpuHandle = {0};
@@ -296,6 +297,9 @@ static ComPtr<ID3D12RootSignature> s_tonemapRootSig;
 static ComPtr<ID3D12PipelineState> s_tonemapPSO;
 static ComPtr<ID3D12Resource> s_tonemapCB;
 static ComPtr<ID3D12DescriptorHeap> s_tonemapHeap;
+static ComPtr<ID3D12RootSignature> s_nrdCompositeRootSig;
+static ComPtr<ID3D12PipelineState> s_nrdCompositePSO;
+static ComPtr<ID3D12DescriptorHeap> s_nrdCompositeHeap;
 
 struct ShaderTableEntry {
   void *id;
@@ -573,6 +577,7 @@ static void EnsureNoiseStatsPipeline();
 static void EnsureAvgLumPipeline();
 static void EnsureRestirSpatialPipeline();
 static void EnsureRestirGiSpatialPipeline();
+static void EnsureNrdCompositePipeline();
 
 struct TonemapConstants {
   uint32_t outWidth;
@@ -681,6 +686,85 @@ static void EnsureTonemapPipeline() {
       D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&s_tonemapCB)));
   if (s_tonemapCB)
     s_tonemapCB->SetName(L"Tonemap Constants");
+}
+
+static void EnsureNrdCompositePipeline() {
+  if (s_nrdCompositePSO && s_nrdCompositeRootSig && s_nrdCompositeHeap)
+    return;
+  if (!s_device)
+    return;
+
+  D3D12_DESCRIPTOR_RANGE srvRange{};
+  srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+  srvRange.NumDescriptors = 2;
+  srvRange.BaseShaderRegister = 0;
+  srvRange.RegisterSpace = 0;
+
+  D3D12_DESCRIPTOR_RANGE uavRange{};
+  uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+  uavRange.NumDescriptors = 1;
+  uavRange.BaseShaderRegister = 0;
+  uavRange.RegisterSpace = 0;
+
+  D3D12_ROOT_PARAMETER params[2] = {};
+  params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[0].DescriptorTable.NumDescriptorRanges = 1;
+  params[0].DescriptorTable.pDescriptorRanges = &srvRange;
+  params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[1].DescriptorTable.NumDescriptorRanges = 1;
+  params[1].DescriptorTable.pDescriptorRanges = &uavRange;
+  params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+  rsDesc.NumParameters = _countof(params);
+  rsDesc.pParameters = params;
+  rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+  ComPtr<ID3DBlob> sig;
+  ComPtr<ID3DBlob> err;
+  HRESULT hrSerialize = D3D12SerializeRootSignature(
+      &rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err);
+  if (FAILED(hrSerialize)) {
+    if (err) {
+      fprintf(stderr, "DxrRenderer: NRD composite root signature error: %s\n",
+              (char *)err->GetBufferPointer());
+    }
+    return;
+  }
+  ThrowIfFailed(s_device->CreateRootSignature(
+      0, sig->GetBufferPointer(), sig->GetBufferSize(),
+      IID_PPV_ARGS(&s_nrdCompositeRootSig)));
+
+  ComPtr<IDxcBlob> cs;
+  try {
+    std::vector<std::wstring> defines;
+    cs = s_dxcHelper.Compile(L"shaders/nrd_composite_cs.hlsl", L"CSMain",
+                             L"cs_6_3", defines);
+  } catch (const std::exception &e) {
+    fprintf(stderr, "DxrRenderer: NRD composite CS compile failed: %s\n",
+            e.what());
+    return;
+  }
+  if (!cs) {
+    fprintf(stderr, "DxrRenderer: NRD composite CS blob null\n");
+    return;
+  }
+
+  D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+  psoDesc.pRootSignature = s_nrdCompositeRootSig.Get();
+  psoDesc.CS.pShaderBytecode = cs->GetBufferPointer();
+  psoDesc.CS.BytecodeLength = cs->GetBufferSize();
+  ThrowIfFailed(s_device->CreateComputePipelineState(
+      &psoDesc, IID_PPV_ARGS(&s_nrdCompositePSO)));
+
+  D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+  heapDesc.NumDescriptors = 3;
+  heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+  heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+  ThrowIfFailed(s_device->CreateDescriptorHeap(
+      &heapDesc, IID_PPV_ARGS(&s_nrdCompositeHeap)));
 }
 
 static void EnsureRestirSpatialPipeline() {
@@ -2018,6 +2102,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   s_nrdOutDiffuseUAV.Reset();
   s_nrdOutSpecularUAV.Reset();
   s_nrdEmissionUAV.Reset();
+  s_nrdCompositeUAV.Reset();
   s_dlssOutputUAV.Reset();
   s_tonemapOutputUAV.Reset();
   // Enable SHARED flag for OIDN interop (and potentially DLSS/Streamline)
@@ -2071,6 +2156,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   CreateUavTexture(s_nrdOutDiffuseUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD Out Diffuse");
   CreateUavTexture(s_nrdOutSpecularUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD Out Specular");
   CreateUavTexture(s_nrdEmissionUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD Emission");
+  CreateUavTexture(s_nrdCompositeUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD Composite");
 
   // DLSS output is output-size in linear HDR (pre-tonemap).
   CreateUavTexture(s_dlssOutputUAV, outDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
@@ -2153,6 +2239,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
 
   // Prepare tonemap pipeline resources.
   EnsureTonemapPipeline();
+  EnsureNrdCompositePipeline();
 
   // Initialize NRD wrapper
   NrdDenoiser::Get().Recreate(s_outputWidth, s_outputHeight);
@@ -3872,7 +3959,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                         5); // Start Denoise
     }
 
-    const bool resetHistory = s_streamlineResetHistory || (currSpp == 0) || !s_accumulation.IsAccumulating();
+    const bool resetHistory =
+        s_streamlineResetHistory || (currSpp == 0) ||
+        !s_accumulation.IsAccumulating();
 
     NrdDenoiser::Get().Denoise(
         dxrList.Get(),
@@ -3887,8 +3976,74 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         jitterX, jitterY,
         resetHistory
     );
+    s_streamlineResetHistory = false;
 
     postColor = s_nrdOutDiffuseUAV.Get();
+    if (s_nrdCompositeUAV && s_nrdCompositePSO && s_nrdCompositeRootSig &&
+        s_nrdCompositeHeap && s_nrdDiffuseRadianceHitDistUAV) {
+      const UINT descInc = s_device->GetDescriptorHandleIncrementSize(
+          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+      D3D12_CPU_DESCRIPTOR_HANDLE cpuStart =
+          s_nrdCompositeHeap->GetCPUDescriptorHandleForHeapStart();
+
+      D3D12_SHADER_RESOURCE_VIEW_DESC srv = {};
+      srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+      srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+      srv.Texture2D.MostDetailedMip = 0;
+      srv.Texture2D.MipLevels = 1;
+      srv.Texture2D.ResourceMinLODClamp = 0.0f;
+
+      srv.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+      s_device->CreateShaderResourceView(s_nrdDiffuseRadianceHitDistUAV.Get(),
+                                         &srv, cpuStart);
+
+      D3D12_CPU_DESCRIPTOR_HANDLE denoisedSrv = cpuStart;
+      denoisedSrv.ptr += descInc;
+      s_device->CreateShaderResourceView(s_nrdOutDiffuseUAV.Get(), &srv,
+                                         denoisedSrv);
+
+      D3D12_CPU_DESCRIPTOR_HANDLE outUav = cpuStart;
+      outUav.ptr += descInc * 2;
+      D3D12_UNORDERED_ACCESS_VIEW_DESC uav = {};
+      uav.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+      uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+      uav.Texture2D.MipSlice = 0;
+      uav.Texture2D.PlaneSlice = 0;
+      s_device->CreateUnorderedAccessView(s_nrdCompositeUAV.Get(), nullptr,
+                                          &uav, outUav);
+
+      TransitionResource(dxrList.Get(), s_nrdDiffuseRadianceHitDistUAV.Get(),
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+      TransitionResource(dxrList.Get(), s_nrdOutDiffuseUAV.Get(),
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+      ID3D12DescriptorHeap *compHeaps[] = {s_nrdCompositeHeap.Get()};
+      dxrList->SetDescriptorHeaps(1, compHeaps);
+      dxrList->SetPipelineState(s_nrdCompositePSO.Get());
+      dxrList->SetComputeRootSignature(s_nrdCompositeRootSig.Get());
+
+      D3D12_GPU_DESCRIPTOR_HANDLE gpuStart =
+          s_nrdCompositeHeap->GetGPUDescriptorHandleForHeapStart();
+      dxrList->SetComputeRootDescriptorTable(0, gpuStart);
+      D3D12_GPU_DESCRIPTOR_HANDLE gpuUav = gpuStart;
+      gpuUav.ptr += descInc * 2;
+      dxrList->SetComputeRootDescriptorTable(1, gpuUav);
+
+      const UINT gx = (s_outputWidth + 7) / 8;
+      const UINT gy = (s_outputHeight + 7) / 8;
+      dxrList->Dispatch(gx, gy, 1);
+
+      TransitionResource(dxrList.Get(), s_nrdDiffuseRadianceHitDistUAV.Get(),
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+      TransitionResource(dxrList.Get(), s_nrdOutDiffuseUAV.Get(),
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+      postColor = s_nrdCompositeUAV.Get();
+    }
 
     if (s_queryHeap) {
       dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
