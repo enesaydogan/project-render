@@ -35,6 +35,8 @@ RWTexture2D<float4> g_normalRoughnessOut : register(u13);
 RWTexture2D<float4> g_specularAlbedo : register(u16);
 RWTexture2D<float> g_specHitDistance : register(u17);
 RWTexture2D<float2> g_specularMotionVectors : register(u18);
+RWTexture2D<float4> g_transmissionAccumulation : register(u19);
+RWTexture2D<float> g_transmissionVariance : register(u20);
 
 // NRD inputs (u25+)
 RWTexture2D<float4> g_nrdDiffuseRadianceHitDist : register(u25);

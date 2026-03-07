@@ -91,14 +91,46 @@ float3 EvaluateSurfaceBrdf(float3 N, float3 V, float3 L,
     return baseBrdf * (1.0 - clearcoat) + coatBrdf * clearcoat;
 }
 
-bool IsDeltaLikeThinTransmission(bool thinWalled, float roughness, float metallic,
-                                 float transmission, float3 transmissionColor)
+float DielectricF0FromIor(float ior)
 {
-    return thinWalled &&
-           (metallic <= 0.05) &&
-           (roughness <= 0.02) &&
-           (transmission >= 0.95) &&
-           all(transmissionColor >= float3(0.98, 0.98, 0.98));
+    float safeIor = max(ior, 1.0 + 1e-4);
+    float f0 = (safeIor - 1.0) / (safeIor + 1.0);
+    return f0 * f0;
+}
+
+bool ShouldResolveSmoothTransmission(float roughness, float metallic,
+                                     float transmission, float ior)
+{
+    if ((metallic > 0.05) || (roughness > 0.02) || (transmission <= 0.1)) {
+        return false;
+    }
+
+    // Use lobe dominance instead of a hard transmission cutoff. If the smooth
+    // transmitted lobe carries at least as much energy as the smooth reflected
+    // lobe at normal incidence, resolve guides/primary through transmission.
+    float f0 = DielectricF0FromIor(ior);
+    float transmissionLobe = transmission * (1.0 - f0);
+    float reflectionLobe = f0;
+    return transmissionLobe >= reflectionLobe;
+}
+
+bool RefractDeterministic(float3 V, float3 N, float ior, out float3 L)
+{
+    float cosTheta = dot(V, N);
+    float eta = cosTheta > 0.0 ? (1.0 / ior) : ior;
+    float3 outwardN = cosTheta > 0.0 ? N : -N;
+    cosTheta = abs(cosTheta);
+
+    float sin2ThetaI = max(0.0, 1.0 - cosTheta * cosTheta);
+    float sin2ThetaT = eta * eta * sin2ThetaI;
+    if (sin2ThetaT >= 1.0) {
+        L = reflect(-V, outwardN);
+        return false;
+    }
+
+    float cosThetaT = sqrt(1.0 - sin2ThetaT);
+    L = normalize(eta * (-V) + (eta * cosTheta - cosThetaT) * outwardN);
+    return true;
 }
 
 void ComputeLobeProbabilities(float3 N, float3 V,
@@ -280,9 +312,66 @@ void RayGen()
     float prevPdf = 1.0;
     bool prevIsDelta = false;
 
+    float3 primaryGuideOrigin = camPos;
+    float3 primaryGuideDir = rayDirCenter;
+    uint primaryGuideRayType = RAY_TYPE_PRIMARY;
+    RayPayload primaryGuidePayload = InitRayPayload(RAY_TYPE_PRIMARY);
+    bool primaryGuideResolved = false;
+    bool primaryGuideThroughTransmission = false;
+
     RayPayload pretracedPrimaryPayload = InitRayPayload(RAY_TYPE_PRIMARY);
     bool hasPretracedPrimaryPayload = false;
     const int maxPrimaryDeltaSteps = 8;
+
+    for (int deltaStep = 0; deltaStep < maxPrimaryDeltaSteps; ++deltaStep)
+    {
+        RayDesc guideResolveRay;
+        guideResolveRay.Origin = primaryGuideOrigin;
+        guideResolveRay.Direction = primaryGuideDir;
+        guideResolveRay.TMin = 0.002;
+        guideResolveRay.TMax = 10000.0;
+
+        RayPayload guideResolvePayload = InitRayPayload(primaryGuideRayType);
+        TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, guideResolveRay, guideResolvePayload);
+        SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
+
+        if (guideResolvePayload.t < 0.0) {
+            primaryGuidePayload = guideResolvePayload;
+            primaryGuideResolved = true;
+            break;
+        }
+
+        float4 guideSurface = UnpackPayloadSurface(guideResolvePayload.packedSurface);
+        float guideRoughness = max(0.001, guideSurface.x);
+        float guideMetalness = guideSurface.y;
+        float guideTransmission = guideSurface.z;
+        float guideIor = UnpackPayloadIor(guideResolvePayload.packedIorType);
+        bool guideThinWalled = UnpackPayloadThinWalled(guideResolvePayload.packedIorType);
+
+        if (!ShouldResolveSmoothTransmission(guideRoughness, guideMetalness,
+                                            guideTransmission, guideIor)) {
+            primaryGuidePayload = guideResolvePayload;
+            primaryGuideResolved = true;
+            break;
+        }
+
+        float3 guideP = primaryGuideOrigin + primaryGuideDir * guideResolvePayload.t;
+        float3 guideNextDir = primaryGuideDir;
+        if (!guideThinWalled) {
+            float3 guideN = UnpackNormalOctahedron(guideResolvePayload.packedNormal);
+            float3 guideV = -primaryGuideDir;
+            if (!RefractDeterministic(guideV, guideN, guideIor, guideNextDir)) {
+                primaryGuidePayload = guideResolvePayload;
+                primaryGuideResolved = true;
+                break;
+            }
+        }
+
+        primaryGuideOrigin = guideP + guideNextDir * 0.002;
+        primaryGuideDir = guideNextDir;
+        primaryGuideRayType = RAY_TYPE_REFRACTION;
+        primaryGuideThroughTransmission = true;
+    }
 
     for (int deltaStep = 0; deltaStep < maxPrimaryDeltaSteps; ++deltaStep)
     {
@@ -306,13 +395,19 @@ void RayGen()
         float resolveRoughness = max(0.001, resolveSurface.x);
         float resolveMetalness = resolveSurface.y;
         float resolveTransmission = resolveSurface.z;
+        float resolveIor = UnpackPayloadIor(primaryResolvePayload.packedIorType);
         float3 resolveTransmissionColor =
             UnpackPayloadTransmissionColor(primaryResolvePayload.packedTransmission);
         bool resolveThinWalled = UnpackPayloadThinWalled(primaryResolvePayload.packedIorType);
 
-        if (!IsDeltaLikeThinTransmission(resolveThinWalled, resolveRoughness,
-                                         resolveMetalness, resolveTransmission,
-                                         resolveTransmissionColor)) {
+        if (!ShouldResolveSmoothTransmission(resolveRoughness, resolveMetalness,
+                                            resolveTransmission, resolveIor)) {
+            pretracedPrimaryPayload = primaryResolvePayload;
+            hasPretracedPrimaryPayload = true;
+            break;
+        }
+
+        if (refractiveBounces >= (int)maxRefractiveBounces) {
             pretracedPrimaryPayload = primaryResolvePayload;
             hasPretracedPrimaryPayload = true;
             break;
@@ -320,11 +415,46 @@ void RayGen()
 
         float3 resolveP = rayOrigin + rayDir * primaryResolvePayload.t;
         throughput *= max(resolveTransmissionColor, float3(0.0, 0.0, 0.0)) * resolveTransmission;
-        rayOrigin = resolveP + rayDir * 0.002;
+        float3 resolveNextDir = rayDir;
+        if (!resolveThinWalled) {
+            float3 resolveN = UnpackNormalOctahedron(primaryResolvePayload.packedNormal);
+            float3 resolveV = -rayDir;
+            if (!RefractDeterministic(resolveV, resolveN, resolveIor, resolveNextDir)) {
+                pretracedPrimaryPayload = primaryResolvePayload;
+                hasPretracedPrimaryPayload = true;
+                break;
+            }
+        }
+
+        rayOrigin = resolveP + resolveNextDir * 0.002;
+        rayDir = resolveNextDir;
+        currentRayType = RAY_TYPE_REFRACTION;
+        refractiveBounces++;
+        prevPdf = 1.0;
+        prevIsDelta = true;
+    }
+
+    if (!primaryGuideResolved) {
+        RayDesc guideResolveRay;
+        guideResolveRay.Origin = primaryGuideOrigin;
+        guideResolveRay.Direction = primaryGuideDir;
+        guideResolveRay.TMin = 0.002;
+        guideResolveRay.TMax = 10000.0;
+        primaryGuidePayload = InitRayPayload(primaryGuideRayType);
+        TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, guideResolveRay, primaryGuidePayload);
+        SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
+        primaryGuideResolved = true;
     }
 
     if (!hasPretracedPrimaryPayload) {
+        RayDesc primaryResolveRay;
+        primaryResolveRay.Origin = rayOrigin;
+        primaryResolveRay.Direction = rayDir;
+        primaryResolveRay.TMin = 0.002;
+        primaryResolveRay.TMax = 10000.0;
         pretracedPrimaryPayload = InitRayPayload(currentRayType);
+        TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, primaryResolveRay, pretracedPrimaryPayload);
+        SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
     }
 
     for (int bounce = 0; bounce < 32; ++bounce) 
@@ -359,24 +489,37 @@ void RayGen()
         bool payloadThinWalled = UnpackPayloadThinWalled(payload.packedIorType);
 
         if (bounce == 0) {
-            if (payload.t >= 0.0) {
+            RayPayload guidePayload = payload;
+            if (primaryGuideResolved) {
+                guidePayload = primaryGuidePayload;
+            }
+            float3 guideAlbedo = UnpackPayloadAlbedo(guidePayload.packedAlbedo);
+            float guideCoatWeight = UnpackPayloadCoatWeight(guidePayload.packedAlbedo);
+            float4 guideSurface = UnpackPayloadSurface(guidePayload.packedSurface);
+            float guideRoughness = max(0.001, guideSurface.x);
+            float guideMetalness = guideSurface.y;
+            float guideTransmission = guideSurface.z;
+            float guideTranslucency = guideSurface.w;
+            float guideIor = UnpackPayloadIor(guidePayload.packedIorType);
+            float guideSpecularWeight = UnpackPayloadSpecularWeight(guidePayload.packedIorType);
+
+            if (guidePayload.t >= 0.0) {
                 primaryHit = true;
-                primaryPos = rayOrigin + rayDir * payload.t;
-                primaryNormal = UnpackNormalOctahedron(payload.packedNormal);
-                primaryAlbedo = payloadAlbedo;
-                primaryRoughness = max(0.04, payloadRoughness); // Increased min roughness for archviz stability
-                // Flag glass/refractive primaries so they bypass NRD denoising.
-                primaryIsRefractive = (payloadTransmission > 0.1f);
+                float3 guideOrigin = primaryGuideResolved ? primaryGuideOrigin : rayOrigin;
+                float3 guideDir = primaryGuideResolved ? primaryGuideDir : rayDir;
+                primaryPos = guideOrigin + guideDir * guidePayload.t;
+                primaryNormal = UnpackNormalOctahedron(guidePayload.packedNormal);
+                primaryAlbedo = guideAlbedo;
+                primaryRoughness = max(0.04, guideRoughness); // Increased min roughness for archviz stability
+                primaryIsRefractive = primaryGuideThroughTransmission || (guideTransmission > 0.1f);
                 
-                // For DLSS-RR, use the distance along the center ray to avoid depth jitter
-                // but use the actual hit position for coordinates.
                 float3 toHit = primaryPos - camPos;
                 primaryViewZ = dot(toHit, forward); 
 
                 // Specular Albedo calculation for DLSS-RR
-                float3 F0_primary = ComputeSurfaceF0(payloadAlbedo, payloadMetalness,
-                                                    payloadIor, payloadSpecularWeight);
-                float NdotV_primary = saturate(dot(primaryNormal, -rayDir));
+                float3 F0_primary = ComputeSurfaceF0(guideAlbedo, guideMetalness,
+                                                    guideIor, guideSpecularWeight);
+                float NdotV_primary = saturate(dot(primaryNormal, -guideDir));
                 primarySpecAlbedo = EnvBRDFApprox2(F0_primary, primaryRoughness * primaryRoughness, NdotV_primary);
 
                 float coatProbPrimary = 0.0;
@@ -384,12 +527,12 @@ void RayGen()
                 float diffProbPrimary = 0.0;
                 float transProbPrimary = 0.0;
                 float totalProbPrimary = 1.0;
-                ComputeLobeProbabilities(primaryNormal, -rayDir,
-                                         payloadAlbedo,
-                                         payloadMetalness, payloadTransmission,
-                                         payloadTranslucency,
-                                         payloadIor, payloadSpecularWeight,
-                                         payloadCoatWeight,
+                ComputeLobeProbabilities(primaryNormal, -guideDir,
+                                         guideAlbedo,
+                                         guideMetalness, guideTransmission,
+                                         guideTranslucency,
+                                         guideIor, guideSpecularWeight,
+                                         guideCoatWeight,
                                          coatProbPrimary, specProbPrimary,
                                          diffProbPrimary, transProbPrimary,
                                          totalProbPrimary);
@@ -403,8 +546,10 @@ void RayGen()
                 // NRD's RELAX uses this distance to scale its spatial A-Trous filter per-pixel —
                 // without it, all specular pixels get the same fixed blur radius regardless of
                 // how close or far the reflected geometry is, causing noise on glossy surfaces.
-                if ((dlssRayReconstruction > 0.5 || nrdActive) && max(primarySpecAlbedo.r, max(primarySpecAlbedo.g, primarySpecAlbedo.b)) > 0.01) {
-                    float3 R_spec = reflect(rayDir, primaryNormal);
+                if (!primaryIsRefractive &&
+                    (dlssRayReconstruction > 0.5 || nrdActive) &&
+                    max(primarySpecAlbedo.r, max(primarySpecAlbedo.g, primarySpecAlbedo.b)) > 0.01) {
+                    float3 R_spec = reflect(guideDir, primaryNormal);
                     RayDesc specHitRay;
                     specHitRay.Origin = primaryPos + primaryNormal * 0.002;
                     specHitRay.Direction = R_spec;
@@ -424,13 +569,14 @@ void RayGen()
                 g_depth[launchIndex.xy] = (dlssRayReconstruction > 0.5) ? farZ : 1.0;
                 float2 mvecSky = float2(0.0, 0.0);
                 if (prevValid > 0.5) {
+                    float3 guideSkyDir = primaryGuideResolved ? primaryGuideDir : rayDirCenter;
                     float3 forwardP = normalize(prevForward);
                     float3 Rp = normalize(cross(forwardP, prevUp));
                     float3 Up = normalize(cross(Rp, forwardP));
                     float f_inv_p = tan(radians(prevFov) * 0.5);
-                    float vxP = dot(rayDirCenter, Rp);
-                    float vyP = dot(rayDirCenter, Up);
-                    float vzP = dot(rayDirCenter, forwardP);
+                    float vxP = dot(guideSkyDir, Rp);
+                    float vyP = dot(guideSkyDir, Up);
+                    float vzP = dot(guideSkyDir, forwardP);
                     if (vzP > 0.001) {
                         float ndcXP = vxP / (vzP * prevAspect * f_inv_p);
                         float ndcYP = -vyP / (vzP * f_inv_p);
@@ -462,9 +608,7 @@ void RayGen()
                     float3 Rp = normalize(cross(forwardP, prevUp));
                     float3 Up = normalize(cross(Rp, forwardP));
                     float f_inv_p = tan(radians(prevFov) * 0.5);
-                    float viewZc = primaryViewZ;
-                    float3 P_world = camPos + R * (x_view_center * viewZc) + U * (y_view_center * viewZc) + forward * viewZc;
-                    float3 relP = P_world - prevPos;
+                    float3 relP = primaryPos - prevPos;
                     float vxP = dot(relP, Rp);
                     float vyP = dot(relP, Up);
                     float vzP = dot(relP, forwardP);
@@ -1043,8 +1187,8 @@ void RayGen()
             bool deterministicThinGlass =
                 payloadThinWalled &&
                 (bounce == 0) &&
-                (roughness <= 0.02) &&
-                (payloadTransmission >= 0.95);
+                ShouldResolveSmoothTransmission(roughness, metallic,
+                                                payloadTransmission, payloadIor);
             if (deterministicThinGlass) {
                 refracted = true;
                 glassL = rayDir;
@@ -1255,35 +1399,13 @@ void RayGen()
         // A floor of 0.15 prevents this without biasing the actual BRDF (which still uses
         // the real primaryRoughness for lighting).  High-roughness surfaces are unaffected.
         float nrdRoughness = primaryHit ? max(saturate(primaryRoughness), 0.15f) : 1.0;
-        if (primaryIsRefractive) {
-            // Route refracted radiance through RELAX's SPECULAR channel at roughness=0.
-            //
-            // Why NOT the diffuse channel: RELAX's diffuse path applies a fixed
-            // 30-pixel prepass blur + 5 A-Trous passes regardless of per-pixel
-            // roughness -- there is no per-pixel dial, so all glass pixels get the
-            // same heavy spatial blur that makes the sky behind a window look foggy.
-            //
-            // Why the specular channel at roughness=0: RELAX's specular A-Trous
-            // spatial kernel collapses to near-zero width at roughness=0 (the lobe is
-            // a delta function).  The denoiser still applies full temporal accumulation
-            // (history reprojection over up to 32 frames), which is all we need to
-            // clean up 1-spp refraction noise -- just no spatial blur.
-            //
-            // Identity specular albedo trick: overwrite g_specularAlbedo with (1,1,1)
-            // so the composite's remodulation step is a no-op (denoised * 1.0).
-            // The raw refracted color already contains the correct colour from what's
-            // behind the glass; we don't want any additional albedo multiplication.
-            float3 refrColor = min(max(finalColor, 0.0), float3(250.0, 250.0, 250.0));
+        if (primaryGuideThroughTransmission) {
             g_nrdDiffuseRadianceHitDist[launchIndex.xy] = float4(0.0, 0.0, 0.0, 0.0);
-            g_nrdSpecRadianceHitDist[launchIndex.xy]    = float4(refrColor, 0.0);
-            g_nrdViewZ[launchIndex.xy] = nrdViewZ;
-            // roughness = 0: minimal specular spatial blur (temporal-only denoising).
-            g_nrdNormalRoughness[launchIndex.xy] = float4(nrdNormal, 0.0f);
-            g_nrdMv[launchIndex.xy] = nrdMv;
+            g_nrdSpecRadianceHitDist[launchIndex.xy] = float4(0.0, 0.0, 0.0, 0.0);
+            g_nrdViewZ[launchIndex.xy] = farZ * 0.999f;
+            g_nrdNormalRoughness[launchIndex.xy] = float4(0.0, 1.0, 0.0, 1.0);
+            g_nrdMv[launchIndex.xy] = float2(0.0, 0.0);
             g_nrdEmission[launchIndex.xy] = float4(0.0, 0.0, 0.0, 0.0);
-            // Identity albedos so composite round-trips multiply by 1.0.
-            g_albedoOut[launchIndex.xy]     = float4(1.0, 1.0, 1.0, 1.0);
-            g_specularAlbedo[launchIndex.xy] = float4(1.0, 1.0, 1.0, 1.0);
         } else {
             g_nrdDiffuseRadianceHitDist[launchIndex.xy] = float4(nrdDiffDemod, diffHitDist);
             g_nrdSpecRadianceHitDist[launchIndex.xy] = float4(nrdSpecDemod, specHitDist);
@@ -1354,6 +1476,35 @@ void RayGen()
     float lum = dot(finalColor, kLumaWeights);
     if (!isfinite(lum)) lum = 0.0;
     bool historyRepairedThisFrame = false;
+
+    if (nrdEnabled > 0.5) {
+        if (primaryGuideThroughTransmission) {
+            float4 prevTransAccum = g_transmissionAccumulation[launchIndex.xy];
+            float prevTransN = prevTransAccum.a;
+            float3 prevTransSum = prevTransAccum.rgb;
+            bool invalidTransHistory =
+                !isfinite(prevTransN) || (prevTransN < 1.0) || any(!isfinite(prevTransSum));
+
+            if (accumFrame == 0 || invalidTransHistory) {
+                g_transmissionAccumulation[launchIndex.xy] = float4(finalColor, 1.0);
+                g_transmissionVariance[launchIndex.xy] = 0.0;
+            } else {
+                float safeTransN = max(prevTransN, 1.0);
+                float oldTransMeanLum = dot(prevTransSum / safeTransN, kLumaWeights);
+                float nextTransN = safeTransN + 1.0;
+                float3 nextTransSum = prevTransSum + finalColor;
+                float nextTransMeanLum = dot(nextTransSum / nextTransN, kLumaWeights);
+                float prevTransM2 = g_transmissionVariance[launchIndex.xy];
+                float nextTransM2 = prevTransM2 + (lum - oldTransMeanLum) * (lum - nextTransMeanLum);
+                if (!isfinite(nextTransM2)) nextTransM2 = 0.0;
+                g_transmissionAccumulation[launchIndex.xy] = float4(nextTransSum, nextTransN);
+                g_transmissionVariance[launchIndex.xy] = max(0.0, nextTransM2);
+            }
+        } else {
+            g_transmissionAccumulation[launchIndex.xy] = float4(0.0, 0.0, 0.0, 0.0);
+            g_transmissionVariance[launchIndex.xy] = 0.0;
+        }
+    }
 
     if (accumFrame == 0) {
         g_accumulation[launchIndex.xy] = float4(finalColor, 1.0);

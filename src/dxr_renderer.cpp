@@ -111,6 +111,7 @@ bool g_rayTracingSupported = false; // defined here
 // DXR-specific state kept internal to this module
 static ComPtr<ID3D12Device5> s_dxrDevice;
 static DxrAccumulation s_accumulation;
+static DxrAccumulation s_transmissionAccumulation;
 
 // Descriptor heaps for DXR
 static ComPtr<ID3D12DescriptorHeap>
@@ -121,6 +122,8 @@ static D3D12_GPU_DESCRIPTOR_HANDLE s_ibTableGpu;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_outputUAVGpu;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_accumUAVGpu;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_varianceUAVGpu;
+static D3D12_GPU_DESCRIPTOR_HANDLE s_transmissionAccumUAVGpu;
+static D3D12_GPU_DESCRIPTOR_HANDLE s_transmissionVarianceUAVGpu;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_reservoirGpuHandle[2];
 static D3D12_GPU_DESCRIPTOR_HANDLE s_gi_reservoirGpuHandle[6];
 static D3D12_GPU_DESCRIPTOR_HANDLE s_iblGpuHandle;
@@ -161,7 +164,10 @@ static const UINT DXR_HEAP_DLSS_OUT_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 14;
 static const UINT DXR_HEAP_SPEC_ALBEDO_OFFSET = DXR_HEAP_UAV_OFFSET + 16;
 static const UINT DXR_HEAP_SPEC_HITDIST_OFFSET = DXR_HEAP_UAV_OFFSET + 17;
 static const UINT DXR_HEAP_SPEC_MVEC_OFFSET = DXR_HEAP_UAV_OFFSET + 18;
-// u19..u20 currently unused.
+static const UINT DXR_HEAP_TRANSMISSION_ACCUM_OFFSET =
+    DXR_HEAP_UAV_OFFSET + 19;
+static const UINT DXR_HEAP_TRANSMISSION_VARIANCE_OFFSET =
+    DXR_HEAP_UAV_OFFSET + 20;
 static const UINT DXR_HEAP_OIDN_OUT_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 21;
 static const UINT DXR_HEAP_VARIANCE_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 22;
 // Extra debug UAV: shader counters (readback) at u24
@@ -696,7 +702,7 @@ static void EnsureNrdCompositePipeline() {
 
   D3D12_DESCRIPTOR_RANGE srvRange{};
   srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-  srvRange.NumDescriptors = 7; // t0..t6 (t5=diffuse albedo, t6=specular albedo)
+  srvRange.NumDescriptors = 8; // t0..t7
   srvRange.BaseShaderRegister = 0;
   srvRange.RegisterSpace = 0;
 
@@ -760,7 +766,7 @@ static void EnsureNrdCompositePipeline() {
       &psoDesc, IID_PPV_ARGS(&s_nrdCompositePSO)));
 
   D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-  heapDesc.NumDescriptors = 8; // 7 SRVs (t0..t6) + 1 UAV (u0)
+  heapDesc.NumDescriptors = 9; // 8 SRVs (t0..t7) + 1 UAV (u0)
   heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
   heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
   ThrowIfFailed(s_device->CreateDescriptorHeap(
@@ -1618,6 +1624,8 @@ void Initialize(ID3D12Device *device) {
     g_rayTracingSupported = true;
     s_dxrDevice = dev5;
     s_accumulation.Initialize(s_device, s_outputWidth, s_outputHeight);
+    s_transmissionAccumulation.Initialize(s_device, s_outputWidth,
+                                          s_outputHeight);
     fprintf(stderr, "DxrRenderer: DXR supported on device\n");
   } else {
     g_rayTracingSupported = false;
@@ -1685,6 +1693,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
 
   // Resize accumulation buffer to match new render size
   s_accumulation.Resize(s_outputWidth, s_outputHeight);
+  s_transmissionAccumulation.Resize(s_outputWidth, s_outputHeight);
   s_textureTableDirty = true;
   s_cloudDescriptorsDone = false;
   s_asyncRestirPending = false;
@@ -1724,6 +1733,11 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
         gpuStart.ptr + (UINT64)DXR_HEAP_ACCUM_UAV_OFFSET * descSize;
     s_varianceUAVGpu.ptr =
         gpuStart.ptr + (UINT64)DXR_HEAP_VARIANCE_UAV_OFFSET * descSize;
+    s_transmissionAccumUAVGpu.ptr =
+        gpuStart.ptr + (UINT64)DXR_HEAP_TRANSMISSION_ACCUM_OFFSET * descSize;
+    s_transmissionVarianceUAVGpu.ptr =
+        gpuStart.ptr +
+        (UINT64)DXR_HEAP_TRANSMISSION_VARIANCE_OFFSET * descSize;
     s_reservoirGpuHandle[0].ptr =
         gpuStart.ptr + (UINT64)DXR_HEAP_RESERVOIR_0_OFFSET * descSize;
     s_reservoirGpuHandle[1].ptr =
@@ -2246,6 +2260,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
 
   // Create Accumulation UAV
   s_accumulation.Resize(s_outputWidth, s_outputHeight);
+  s_transmissionAccumulation.Resize(s_outputWidth, s_outputHeight);
   D3D12_CPU_DESCRIPTOR_HANDLE accumUavCpu =
       s_srvHeap->GetCPUDescriptorHandleForHeapStart();
   accumUavCpu.ptr += (SIZE_T)DXR_HEAP_ACCUM_UAV_OFFSET *
@@ -2274,6 +2289,26 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   varUavDesc.Texture2D.PlaneSlice = 0;
   s_device->CreateUnorderedAccessView(s_accumulation.GetVarianceBuffer(),
                                       nullptr, &varUavDesc, varUavCpu);
+
+  D3D12_CPU_DESCRIPTOR_HANDLE transAccumUavCpu =
+      s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+  transAccumUavCpu.ptr +=
+      (SIZE_T)DXR_HEAP_TRANSMISSION_ACCUM_OFFSET *
+      s_device->GetDescriptorHandleIncrementSize(
+          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+  s_device->CreateUnorderedAccessView(
+      s_transmissionAccumulation.GetAccumulationBuffer(), nullptr,
+      &accumUavDesc, transAccumUavCpu);
+
+  D3D12_CPU_DESCRIPTOR_HANDLE transVarUavCpu =
+      s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+  transVarUavCpu.ptr +=
+      (SIZE_T)DXR_HEAP_TRANSMISSION_VARIANCE_OFFSET *
+      s_device->GetDescriptorHandleIncrementSize(
+          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+  s_device->CreateUnorderedAccessView(
+      s_transmissionAccumulation.GetVarianceBuffer(), nullptr, &varUavDesc,
+      transVarUavCpu);
 
   // Create Reservoir UAVs
   for (int i = 0; i < 2; ++i) {
@@ -3252,6 +3287,7 @@ void UpdateLights(const std::vector<Light> &lights) {
 
 void ResetAccumulation() {
   s_accumulation.Reset();
+  s_transmissionAccumulation.Reset();
   s_rrStillFrameSpp = 0;
   s_lastNoiseLevel = 0.0f; // Reset noise level so rendering restarts
   s_hasNoiseEstimate = false;
@@ -3781,6 +3817,21 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
     s_accumulation.Clear(dxrList.Get(), s_accumUAVGpu, accumCpu,
                          s_varianceUAVGpu, varCpu);
+    D3D12_CPU_DESCRIPTOR_HANDLE transAccumCpu =
+        s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+    transAccumCpu.ptr +=
+        (SIZE_T)DXR_HEAP_TRANSMISSION_ACCUM_OFFSET *
+        s_device->GetDescriptorHandleIncrementSize(
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_CPU_DESCRIPTOR_HANDLE transVarCpu =
+        s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+    transVarCpu.ptr +=
+        (SIZE_T)DXR_HEAP_TRANSMISSION_VARIANCE_OFFSET *
+        s_device->GetDescriptorHandleIncrementSize(
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    s_transmissionAccumulation.Clear(
+        dxrList.Get(), s_transmissionAccumUAVGpu, transAccumCpu,
+        s_transmissionVarianceUAVGpu, transVarCpu);
 
     // Also clear reservoir buffers to prevent artifacts from stale data
     // Important: lightIndex should be cleared to 0xFFFFFFFF (invalid)
@@ -3863,6 +3914,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     }
 
     s_accumulation.SetNeedsClear(false);
+    s_transmissionAccumulation.SetNeedsClear(false);
   }
 
   D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
@@ -3923,6 +3975,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     // condition.
     if (!rrActive && !reachedEndCondition)
       s_accumulation.IncrementFrame();
+    if (!rrActive && !reachedEndCondition)
+      s_transmissionAccumulation.IncrementFrame();
     else if (rrActive && !reachedEndCondition)
       s_rrStillFrameSpp++;
   } else {
@@ -3996,9 +4050,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
     postColor = s_nrdOutDiffuseUAV.Get();
     if (s_nrdCompositeUAV && s_nrdCompositePSO && s_nrdCompositeRootSig &&
-      s_nrdCompositeHeap && s_nrdDiffuseRadianceHitDistUAV &&
-      s_nrdSpecRadianceHitDistUAV && s_nrdOutDiffuseUAV &&
-      s_nrdOutSpecularUAV && s_nrdEmissionUAV) {
+        s_nrdCompositeHeap && s_nrdDiffuseRadianceHitDistUAV &&
+        s_nrdSpecRadianceHitDistUAV && s_nrdOutDiffuseUAV &&
+        s_nrdOutSpecularUAV && s_nrdEmissionUAV &&
+        s_transmissionAccumulation.GetAccumulationBuffer()) {
       const UINT descInc = s_device->GetDescriptorHandleIncrementSize(
           D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
       D3D12_CPU_DESCRIPTOR_HANDLE cpuStart =
@@ -4046,11 +4101,21 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       if (s_specularAlbedoUAV) {
         D3D12_CPU_DESCRIPTOR_HANDLE specAlbedoSrv = cpuStart;
         specAlbedoSrv.ptr += descInc * 6;
-        s_device->CreateShaderResourceView(s_specularAlbedoUAV.Get(), &srv, specAlbedoSrv);
+        s_device->CreateShaderResourceView(s_specularAlbedoUAV.Get(), &srv,
+                                           specAlbedoSrv);
       }
 
+      D3D12_SHADER_RESOURCE_VIEW_DESC transmissionSrvDesc = srv;
+      transmissionSrvDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+      D3D12_CPU_DESCRIPTOR_HANDLE transmissionSrv = cpuStart;
+      transmissionSrv.ptr += descInc * 7;
+      s_device->CreateShaderResourceView(
+          s_transmissionAccumulation.GetAccumulationBuffer(),
+          &transmissionSrvDesc,
+          transmissionSrv);
+
       D3D12_CPU_DESCRIPTOR_HANDLE outUav = cpuStart;
-      outUav.ptr += descInc * 7; // UAV is now at slot 7 (after 7 SRVs)
+      outUav.ptr += descInc * 8; // UAV is at slot 8 (after 8 SRVs)
       D3D12_UNORDERED_ACCESS_VIEW_DESC uav = {};
       uav.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
       uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
@@ -4082,6 +4147,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         TransitionResource(dxrList.Get(), s_specularAlbedoUAV.Get(),
                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+      TransitionResource(dxrList.Get(),
+                         s_transmissionAccumulation.GetAccumulationBuffer(),
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
       ID3D12DescriptorHeap *compHeaps[] = {s_nrdCompositeHeap.Get()};
       dxrList->SetDescriptorHeaps(1, compHeaps);
@@ -4092,7 +4161,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
           s_nrdCompositeHeap->GetGPUDescriptorHandleForHeapStart();
       dxrList->SetComputeRootDescriptorTable(0, gpuStart);
       D3D12_GPU_DESCRIPTOR_HANDLE gpuUav = gpuStart;
-        gpuUav.ptr += descInc * 7; // UAV is at slot 7
+      gpuUav.ptr += descInc * 8; // UAV is at slot 8
       dxrList->SetComputeRootDescriptorTable(1, gpuUav);
 
       const UINT gx = (s_outputWidth + 7) / 8;
@@ -4122,6 +4191,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         TransitionResource(dxrList.Get(), s_specularAlbedoUAV.Get(),
                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+      TransitionResource(dxrList.Get(),
+                         s_transmissionAccumulation.GetAccumulationBuffer(),
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
       postColor = s_nrdCompositeUAV.Get();
     }
