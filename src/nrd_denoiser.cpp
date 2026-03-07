@@ -77,10 +77,7 @@ void NrdDenoiser::Recreate(uint32_t width, uint32_t height) {
     // Setup instance creation desc
     nrd::DenoiserDesc denoisers[1] = {};
     denoisers[0].identifier = 0;
-    // Current shader integration provides a single combined radiance signal.
-    // Use diffuse-only RELAX to avoid specular tracking artifacts from incomplete
-    // split-signal inputs.
-    denoisers[0].denoiser = nrd::Denoiser::RELAX_DIFFUSE;
+    denoisers[0].denoiser = nrd::Denoiser::RELAX_DIFFUSE_SPECULAR;
 
     nrd::InstanceCreationDesc instanceDesc = {};
     instanceDesc.denoisers = denoisers;
@@ -115,9 +112,6 @@ void NrdDenoiser::Denoise(ID3D12GraphicsCommandList* cmdList,
                  bool resetHistory) {
 
     if (!m_initialized || !m_nrdIntegration) return;
-    (void)inSpecRadianceHitDist;
-    (void)outSpecular;
-
     m_nrdIntegration->NewFrame();
 
     nrd::CommonSettings commonSettings = {};
@@ -200,12 +194,12 @@ void NrdDenoiser::Denoise(ID3D12GraphicsCommandList* cmdList,
     commonSettings.cameraJitter[1] = jitterY;
     commonSettings.cameraJitterPrev[0] = m_hasPrevJitter ? m_prevJitterX : jitterX;
     commonSettings.cameraJitterPrev[1] = m_hasPrevJitter ? m_prevJitterY : jitterY;
-    // Initial safe path: let NRD derive camera motion from matrices only.
-    // Application-provided per-pixel motion can be re-enabled once world-space
-    // or fully validated screen-space motion is available for NRD specifically.
-    commonSettings.isMotionVectorInWorldSpace = true;
-    commonSettings.motionVectorScale[0] = 1.0f;
-    commonSettings.motionVectorScale[1] = 1.0f;
+    // Screen-space motion vectors in pixel units; NRD normalizes them with the
+    // scale below.  World-space mode is NOT used because our MV texture is
+    // RG16F (2-channel) and NRD would read garbage for the third component.
+    commonSettings.isMotionVectorInWorldSpace = false;
+    commonSettings.motionVectorScale[0] = (m_width  > 0) ? (1.0f / static_cast<float>(m_width))  : 1.0f;
+    commonSettings.motionVectorScale[1] = (m_height > 0) ? (1.0f / static_cast<float>(m_height)) : 1.0f;
     commonSettings.motionVectorScale[2] = 0.0f;
     commonSettings.frameIndex = m_frameIndex++;
     commonSettings.accumulationMode = resetHistory ? nrd::AccumulationMode::CLEAR_AND_RESTART : nrd::AccumulationMode::CONTINUE;
@@ -216,15 +210,26 @@ void NrdDenoiser::Denoise(ID3D12GraphicsCommandList* cmdList,
     m_prevJitterY = jitterY;
     m_hasPrevJitter = true;
 
-    // Setup relax settings
+    // RELAX settings tuned for 1-spp realtime path tracing WITH albedo demodulation.
+    // Albedo is now stripped from the diffuse input, so NRD operates on irradiance
+    // which is much smoother scene-to-scene.  Moderate aggressiveness gives clean
+    // output without over-blurring fine detail.
     nrd::RelaxSettings relaxSettings = {};
-    // The current integration still feeds a combined beauty-like signal, so
-    // bias RELAX toward stability while keeping spatial blur modest.
-    relaxSettings.diffuseMaxAccumulatedFrameNum = 24;
-    relaxSettings.diffuseMaxFastAccumulatedFrameNum = 6;
-    relaxSettings.historyFixFrameNum = 3;
-    relaxSettings.diffusePrepassBlurRadius = 4.0f;
-    relaxSettings.atrousIterationNum = 4;
+    relaxSettings.diffuseMaxAccumulatedFrameNum  = 32;
+    relaxSettings.specularMaxAccumulatedFrameNum = 32;
+    relaxSettings.diffuseMaxFastAccumulatedFrameNum  = 6;
+    relaxSettings.specularMaxFastAccumulatedFrameNum = 6;
+    relaxSettings.historyFixFrameNum = 4;
+    // Prepass Gaussian helps gather energy from sparse 1-spp traces.
+    // With demodulated irradiance these values preserve texture edges well.
+    relaxSettings.diffusePrepassBlurRadius  = 30.0f;
+    relaxSettings.specularPrepassBlurRadius = 50.0f;
+    relaxSettings.minHitDistanceWeight = 0.05f;
+    // 5 A-Trous passes = ~32px effective spatial radius; appropriate for 1-spp.
+    relaxSettings.atrousIterationNum = 5;
+    relaxSettings.enableAntiFirefly = true;
+    relaxSettings.luminanceEdgeStoppingRelaxation = 0.5f;
+    relaxSettings.normalEdgeStoppingRelaxation    = 0.3f;
     m_nrdIntegration->SetDenoiserSettings(nrd::Identifier(0), &relaxSettings);
 
     nrd::ResourceSnapshot resourceSnapshot = {};
@@ -242,10 +247,12 @@ void NrdDenoiser::Denoise(ID3D12GraphicsCommandList* cmdList,
     };
 
     SetResource(nrd::ResourceType::IN_DIFF_RADIANCE_HITDIST, inDiffuseRadianceHitDist);
+    SetResource(nrd::ResourceType::IN_SPEC_RADIANCE_HITDIST, inSpecRadianceHitDist);
     SetResource(nrd::ResourceType::IN_VIEWZ, inViewZ);
     SetResource(nrd::ResourceType::IN_NORMAL_ROUGHNESS, inNormalRoughness);
     SetResource(nrd::ResourceType::IN_MV, inMv);
     SetResource(nrd::ResourceType::OUT_DIFF_RADIANCE_HITDIST, outDiffuse);
+    SetResource(nrd::ResourceType::OUT_SPEC_RADIANCE_HITDIST, outSpecular);
 
     nrd::Identifier denoisers[] = { 0 };
 

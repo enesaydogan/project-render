@@ -696,7 +696,7 @@ static void EnsureNrdCompositePipeline() {
 
   D3D12_DESCRIPTOR_RANGE srvRange{};
   srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-  srvRange.NumDescriptors = 2;
+  srvRange.NumDescriptors = 6; // t0..t5 (added t5 = albedo for demodulation)
   srvRange.BaseShaderRegister = 0;
   srvRange.RegisterSpace = 0;
 
@@ -760,7 +760,7 @@ static void EnsureNrdCompositePipeline() {
       &psoDesc, IID_PPV_ARGS(&s_nrdCompositePSO)));
 
   D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-  heapDesc.NumDescriptors = 3;
+  heapDesc.NumDescriptors = 7; // 6 SRVs (t0..t5) + 1 UAV (u0)
   heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
   heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
   ThrowIfFailed(s_device->CreateDescriptorHeap(
@@ -3964,6 +3964,17 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                         5); // Start Denoise
     }
 
+    // Ensure all UAV writes from DispatchRays (and optional async ReSTIR flushes
+    // via its own barriers) are visible to NRD's compute shaders before we read
+    // the NRD input textures. Without this barrier the denoiser reads stale
+    // ray-generation output causing dark blobs / disocclusion artifacts.
+    {
+      D3D12_RESOURCE_BARRIER nrdUavFlush = {};
+      nrdUavFlush.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+      nrdUavFlush.UAV.pResource = nullptr; // global UAV barrier
+      dxrList->ResourceBarrier(1, &nrdUavFlush);
+    }
+
     const bool resetHistory =
         s_streamlineResetHistory || (currSpp == 0) ||
         !s_accumulation.IsAccumulating();
@@ -3985,7 +3996,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
     postColor = s_nrdOutDiffuseUAV.Get();
     if (s_nrdCompositeUAV && s_nrdCompositePSO && s_nrdCompositeRootSig &&
-        s_nrdCompositeHeap && s_nrdDiffuseRadianceHitDistUAV) {
+      s_nrdCompositeHeap && s_nrdDiffuseRadianceHitDistUAV &&
+      s_nrdSpecRadianceHitDistUAV && s_nrdOutDiffuseUAV &&
+      s_nrdOutSpecularUAV && s_nrdEmissionUAV) {
       const UINT descInc = s_device->GetDescriptorHandleIncrementSize(
           D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
       D3D12_CPU_DESCRIPTOR_HANDLE cpuStart =
@@ -3999,16 +4012,38 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       srv.Texture2D.ResourceMinLODClamp = 0.0f;
 
       srv.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-      s_device->CreateShaderResourceView(s_nrdDiffuseRadianceHitDistUAV.Get(),
-                                         &srv, cpuStart);
-
-      D3D12_CPU_DESCRIPTOR_HANDLE denoisedSrv = cpuStart;
-      denoisedSrv.ptr += descInc;
       s_device->CreateShaderResourceView(s_nrdOutDiffuseUAV.Get(), &srv,
-                                         denoisedSrv);
+                     cpuStart);
+
+      D3D12_CPU_DESCRIPTOR_HANDLE specularSrv = cpuStart;
+      specularSrv.ptr += descInc;
+      s_device->CreateShaderResourceView(s_nrdOutSpecularUAV.Get(), &srv,
+                     specularSrv);
+
+      D3D12_CPU_DESCRIPTOR_HANDLE stableSrv = cpuStart;
+      stableSrv.ptr += descInc * 2;
+      s_device->CreateShaderResourceView(s_nrdDiffuseRadianceHitDistUAV.Get(),
+             &srv, stableSrv);
+
+      D3D12_CPU_DESCRIPTOR_HANDLE rawSpecularSrv = cpuStart;
+      rawSpecularSrv.ptr += descInc * 3;
+      s_device->CreateShaderResourceView(s_nrdSpecRadianceHitDistUAV.Get(),
+             &srv, rawSpecularSrv);
+
+      D3D12_CPU_DESCRIPTOR_HANDLE stableInputSrv = cpuStart;
+      stableInputSrv.ptr += descInc * 4;
+      s_device->CreateShaderResourceView(s_nrdEmissionUAV.Get(), &srv,
+             stableInputSrv);
+
+      // t5: primary-hit albedo for demodulation remodulation in the composite
+      if (s_albedoUAV) {
+        D3D12_CPU_DESCRIPTOR_HANDLE albedoSrv = cpuStart;
+        albedoSrv.ptr += descInc * 5;
+        s_device->CreateShaderResourceView(s_albedoUAV.Get(), &srv, albedoSrv);
+      }
 
       D3D12_CPU_DESCRIPTOR_HANDLE outUav = cpuStart;
-      outUav.ptr += descInc * 2;
+      outUav.ptr += descInc * 6; // UAV is now at slot 6 (after 6 SRVs)
       D3D12_UNORDERED_ACCESS_VIEW_DESC uav = {};
       uav.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
       uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
@@ -4017,12 +4052,25 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       s_device->CreateUnorderedAccessView(s_nrdCompositeUAV.Get(), nullptr,
                                           &uav, outUav);
 
-      TransitionResource(dxrList.Get(), s_nrdDiffuseRadianceHitDistUAV.Get(),
-                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
       TransitionResource(dxrList.Get(), s_nrdOutDiffuseUAV.Get(),
+             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+      TransitionResource(dxrList.Get(), s_nrdOutSpecularUAV.Get(),
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            TransitionResource(dxrList.Get(), s_nrdDiffuseRadianceHitDistUAV.Get(),
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            TransitionResource(dxrList.Get(), s_nrdSpecRadianceHitDistUAV.Get(),
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+      TransitionResource(dxrList.Get(), s_nrdEmissionUAV.Get(),
+             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+      if (s_albedoUAV)
+        TransitionResource(dxrList.Get(), s_albedoUAV.Get(),
+               D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
       ID3D12DescriptorHeap *compHeaps[] = {s_nrdCompositeHeap.Get()};
       dxrList->SetDescriptorHeaps(1, compHeaps);
@@ -4033,19 +4081,32 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
           s_nrdCompositeHeap->GetGPUDescriptorHandleForHeapStart();
       dxrList->SetComputeRootDescriptorTable(0, gpuStart);
       D3D12_GPU_DESCRIPTOR_HANDLE gpuUav = gpuStart;
-      gpuUav.ptr += descInc * 2;
+        gpuUav.ptr += descInc * 6; // UAV is at slot 6
       dxrList->SetComputeRootDescriptorTable(1, gpuUav);
 
       const UINT gx = (s_outputWidth + 7) / 8;
       const UINT gy = (s_outputHeight + 7) / 8;
       dxrList->Dispatch(gx, gy, 1);
 
-      TransitionResource(dxrList.Get(), s_nrdDiffuseRadianceHitDistUAV.Get(),
-                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
       TransitionResource(dxrList.Get(), s_nrdOutDiffuseUAV.Get(),
                          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+      TransitionResource(dxrList.Get(), s_nrdOutSpecularUAV.Get(),
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+      TransitionResource(dxrList.Get(), s_nrdDiffuseRadianceHitDistUAV.Get(),
+             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+      TransitionResource(dxrList.Get(), s_nrdSpecRadianceHitDistUAV.Get(),
+             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+      TransitionResource(dxrList.Get(), s_nrdEmissionUAV.Get(),
+             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+      if (s_albedoUAV)
+        TransitionResource(dxrList.Get(), s_albedoUAV.Get(),
+               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+               D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
       postColor = s_nrdCompositeUAV.Get();
     }
