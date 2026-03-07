@@ -247,6 +247,11 @@ void RayGen()
     float primaryDiffuseSplit = 1.0;
     float primarySpecularSplit = 0.0;
     bool nrdPrimarySurface = false;
+    // True when the primary hit is a transmissive (glass/refractive) surface.
+    // Refracted sky/environment energy must NOT be sent to RELAX — NRD treats it
+    // as specular reflection and heavily suppresses it, making glass appear black.
+    // Instead we route the full final colour through the stable/emission channel.
+    bool primaryIsRefractive = false;
 
     // Primary hit info for DLSS inputs
     bool primaryHit = false;
@@ -299,6 +304,8 @@ void RayGen()
                 primaryNormal = UnpackNormalOctahedron(payload.packedNormal);
                 primaryAlbedo = payloadAlbedo;
                 primaryRoughness = max(0.04, payloadRoughness); // Increased min roughness for archviz stability
+                // Flag glass/refractive primaries so they bypass NRD denoising.
+                primaryIsRefractive = (payloadTransmission > 0.1f);
                 
                 // For DLSS-RR, use the distance along the center ray to avoid depth jitter
                 // but use the actual hit position for coordinates.
@@ -1168,14 +1175,51 @@ void RayGen()
         float2 nrdMv = g_motionVectors[launchIndex.xy];
         if (abs(nrdMv.x) > 1e5 || abs(nrdMv.y) > 1e5) nrdMv = float2(0.0, 0.0);
         float3 nrdNormal = primaryHit ? normalize(primaryNormal) : float3(0.0, 1.0, 0.0);
-        float nrdRoughness = primaryHit ? saturate(primaryRoughness) : 1.0;
-        g_nrdDiffuseRadianceHitDist[launchIndex.xy] = float4(nrdDiffDemod, diffHitDist);
-        g_nrdSpecRadianceHitDist[launchIndex.xy] = float4(nrdSpecDemod, specHitDist);
-        g_nrdViewZ[launchIndex.xy] = nrdViewZ;
-        g_nrdNormalRoughness[launchIndex.xy] = float4(nrdNormal, nrdRoughness);
-        g_nrdMv[launchIndex.xy] = nrdMv;
-        g_nrdEmission[launchIndex.xy] = float4(stableColor,
-                                               nrdPrimarySurface ? 1.0 : 0.0);
+        // For NRD's roughness-based edge-stopping, use a floored roughness instead of
+        // the raw per-texel value.  When a metalRoughness texture produces roughness << 0.1
+        // (e.g. polished ceramic spots), those pixels become isolated islands that RELAX
+        // cannot help because no neighbour has roughness within the acceptance window.
+        // A floor of 0.15 prevents this without biasing the actual BRDF (which still uses
+        // the real primaryRoughness for lighting).  High-roughness surfaces are unaffected.
+        float nrdRoughness = primaryHit ? max(saturate(primaryRoughness), 0.15f) : 1.0;
+        if (primaryIsRefractive) {
+            // Route refracted radiance through RELAX's SPECULAR channel at roughness=0.
+            //
+            // Why NOT the diffuse channel: RELAX's diffuse path applies a fixed
+            // 30-pixel prepass blur + 5 A-Trous passes regardless of per-pixel
+            // roughness -- there is no per-pixel dial, so all glass pixels get the
+            // same heavy spatial blur that makes the sky behind a window look foggy.
+            //
+            // Why the specular channel at roughness=0: RELAX's specular A-Trous
+            // spatial kernel collapses to near-zero width at roughness=0 (the lobe is
+            // a delta function).  The denoiser still applies full temporal accumulation
+            // (history reprojection over up to 32 frames), which is all we need to
+            // clean up 1-spp refraction noise -- just no spatial blur.
+            //
+            // Identity specular albedo trick: overwrite g_specularAlbedo with (1,1,1)
+            // so the composite's remodulation step is a no-op (denoised * 1.0).
+            // The raw refracted color already contains the correct colour from what's
+            // behind the glass; we don't want any additional albedo multiplication.
+            float3 refrColor = min(max(finalColor, 0.0), float3(250.0, 250.0, 250.0));
+            g_nrdDiffuseRadianceHitDist[launchIndex.xy] = float4(0.0, 0.0, 0.0, 0.0);
+            g_nrdSpecRadianceHitDist[launchIndex.xy]    = float4(refrColor, 0.0);
+            g_nrdViewZ[launchIndex.xy] = nrdViewZ;
+            // roughness = 0: minimal specular spatial blur (temporal-only denoising).
+            g_nrdNormalRoughness[launchIndex.xy] = float4(nrdNormal, 0.0f);
+            g_nrdMv[launchIndex.xy] = nrdMv;
+            g_nrdEmission[launchIndex.xy] = float4(0.0, 0.0, 0.0, 0.0);
+            // Identity albedos so composite round-trips multiply by 1.0.
+            g_albedoOut[launchIndex.xy]     = float4(1.0, 1.0, 1.0, 1.0);
+            g_specularAlbedo[launchIndex.xy] = float4(1.0, 1.0, 1.0, 1.0);
+        } else {
+            g_nrdDiffuseRadianceHitDist[launchIndex.xy] = float4(nrdDiffDemod, diffHitDist);
+            g_nrdSpecRadianceHitDist[launchIndex.xy] = float4(nrdSpecDemod, specHitDist);
+            g_nrdViewZ[launchIndex.xy] = nrdViewZ;
+            g_nrdNormalRoughness[launchIndex.xy] = float4(nrdNormal, nrdRoughness);
+            g_nrdMv[launchIndex.xy] = nrdMv;
+            g_nrdEmission[launchIndex.xy] = float4(stableColor,
+                                                   nrdPrimarySurface ? 1.0 : 0.0);
+        }
     }
 
     // Write DLSS inputs
