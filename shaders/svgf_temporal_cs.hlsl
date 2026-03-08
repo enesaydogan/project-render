@@ -106,13 +106,12 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         float prevLen = max(g_prevHistoryLength.Load(int3(prevPixel, 0)), 1.0);
         prevColor = clamp(prevColor, clampMin, clampMax);
 
-        float historyAlpha = 1.0 / min(prevLen + 1.0, 32.0);
-        float colorAlpha = historyAlpha;
-        float momentsAlpha = historyAlpha;
+        float colorAlpha = max(g_temporalAlpha, 1.0 / (prevLen + 1.0));
+        float momentsAlpha = max(g_momentsAlpha, 1.0 / (prevLen + 1.0));
         historyColor = lerp(prevColor, noisy, saturate(colorAlpha));
         historyMoments = lerp(prevMoments, float2(currLum, currLum * currLum),
                               saturate(momentsAlpha));
-        historyLength = min(max(prevLen, 1.0) + 1.0, 32.0);
+        historyLength = min(prevLen + 1.0, 255.0);
     }
 
     g_temporalColorOut[pixel] = float4(historyColor, 1.0);

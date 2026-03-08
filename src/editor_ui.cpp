@@ -1430,6 +1430,16 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
             DxrRenderer::ResetRealtimeDenoiserHistory();
             uiChanged = true;
           }
+          static std::string s_svgfDumpStatus;
+          if (ImGui::Button("Dump SVGF Buffers")) {
+            const bool ok = DxrRenderer::ExportSvgfDebugBuffersToPng(L"run");
+            s_svgfDumpStatus =
+                ok ? "Saved SVGF debug PNGs to run/"
+                   : "SVGF buffer dump failed";
+          }
+          if (!s_svgfDumpStatus.empty()) {
+            ImGui::TextWrapped("%s", s_svgfDumpStatus.c_str());
+          }
         } else if (DxrRenderer::GetRealtimeDenoiserMode() ==
                    DxrRenderer::RealtimeDenoiserMode::NRD) {
           static std::string s_nrdDumpStatus;
