@@ -69,13 +69,30 @@ float GetGPUFrameTimeMs();
 // available)
 void GetShaderCounters(UINT *outCounters, UINT maxCount);
 
-// Denoiser mode control (Off, OIDN CPU, OIDN GPU, NRD ReLAX)
-enum class DenoiserMode { Off = 0, OIDN_CPU = 1, OIDN_GPU = 2, NRD_RELAX = 3 };
+struct SvgfSettings {
+  float temporalAlpha = 0.2f;
+  float momentsAlpha = 0.2f;
+  int atrousIterations = 5;
+  float phiColor = 4.0f;
+  float phiNormal = 128.0f;
+  float phiDepth = 1.0f;
+};
+
+// Final denoiser mode control (Off, OIDN CPU, OIDN GPU).
+enum class DenoiserMode { Off = 0, OIDN_CPU = 1, OIDN_GPU = 2 };
 void SetDenoiserMode(DenoiserMode m);
 DenoiserMode GetDenoiserMode();
 
 void SetOidnQuality(OidnDenoiser::Quality q);
 OidnDenoiser::Quality GetOidnQuality();
+
+// Realtime denoiser control (Off, SVGF, NRD ReLAX).
+enum class RealtimeDenoiserMode { Off = 0, SVGF = 1, NRD = 2 };
+void SetRealtimeDenoiserMode(RealtimeDenoiserMode m);
+RealtimeDenoiserMode GetRealtimeDenoiserMode();
+void SetSvgfSettings(const SvgfSettings &settings);
+SvgfSettings GetSvgfSettings();
+void ResetRealtimeDenoiserHistory();
 
 // Get number of lights transferred to GPU
 UINT GetLightCount();

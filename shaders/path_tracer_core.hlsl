@@ -632,7 +632,11 @@ void RayGen()
             // --- Adaptive Sampling Early Exit (Now after G-buffers are fresh) ---
             if (!nrdActive && !debugViewActive && maxSPP > 0.0 && accumFrame >= (uint)maxSPP) {
                 float4 total = g_accumulation[launchIndex.xy];
-                if (total.a > 0.0) g_output[launchIndex.xy] = float4(total.rgb / total.a, 1.0);
+                if (total.a > 0.0) {
+                    float3 meanColor = total.rgb / total.a;
+                    g_svgfNoisyInput[launchIndex.xy] = float4(meanColor, 1.0);
+                    g_output[launchIndex.xy] = float4(meanColor, 1.0);
+                }
                 return;
             }
 
@@ -685,6 +689,7 @@ void RayGen()
                                 g_gi_reservoir_b2[launchIndex.xy] = g_gi_reservoir_a2[launchIndex.xy];
                             }
                             SHADER_COUNTER_ADD(SHADER_COUNTER_RESERVOIR_WRITES, 1);
+                            g_svgfNoisyInput[launchIndex.xy] = float4(meanColor, 1.0);
                             if (SHADER_DEBUG_VIS_MODE == 1.0) g_output[launchIndex.xy] = float4(0.0, 1.0, 0.0, 1.0);
                             else g_output[launchIndex.xy] = float4(meanColor, 1.0);
                             return;
@@ -1465,6 +1470,7 @@ void RayGen()
     // bright sky/sun values do not desaturate toward gray/white.
     if (!any(isfinite(finalColor))) finalColor = float3(0,0,0);
     finalColor = max(finalColor, 0.0);
+    g_svgfNoisyInput[launchIndex.xy] = float4(finalColor, 1.0);
 
     const float3 kLumaWeights = float3(0.2126, 0.7152, 0.0722);
     const float kMaxSampleLuminance = 10000.0; //enes  10 x boost for the better sun

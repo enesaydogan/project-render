@@ -238,8 +238,6 @@ static DxrRenderer::DenoiserMode DenoiserModeFromIndex(int idx) {
     return DxrRenderer::DenoiserMode::OIDN_CPU;
   if (idx == 2)
     return DxrRenderer::DenoiserMode::OIDN_GPU;
-  if (idx == 3)
-    return DxrRenderer::DenoiserMode::NRD_RELAX;
   return DxrRenderer::DenoiserMode::Off;
 }
 
@@ -249,8 +247,26 @@ static int DenoiserIndexFromMode(DxrRenderer::DenoiserMode mode) {
     return 1;
   case DxrRenderer::DenoiserMode::OIDN_GPU:
     return 2;
-  case DxrRenderer::DenoiserMode::NRD_RELAX:
-    return 3;
+  default:
+    return 0;
+  }
+}
+
+static DxrRenderer::RealtimeDenoiserMode RealtimeDenoiserModeFromIndex(int idx) {
+  if (idx == 1)
+    return DxrRenderer::RealtimeDenoiserMode::SVGF;
+  if (idx == 2)
+    return DxrRenderer::RealtimeDenoiserMode::NRD;
+  return DxrRenderer::RealtimeDenoiserMode::Off;
+}
+
+static int RealtimeDenoiserIndexFromMode(
+    DxrRenderer::RealtimeDenoiserMode mode) {
+  switch (mode) {
+  case DxrRenderer::RealtimeDenoiserMode::SVGF:
+    return 1;
+  case DxrRenderer::RealtimeDenoiserMode::NRD:
+    return 2;
   default:
     return 0;
   }
@@ -733,7 +749,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
       ImGui::SliderFloat("Noise %", &g_renderExportSettings.noisePercent, 0.1f,
                          30.0f, "%.2f%%");
 
-      const char *denoisers[] = {"Off", "OIDN (CPU)", "OIDN (GPU)", "NRD (ReLAX)"};
+      const char *denoisers[] = {"Off", "OIDN (CPU)", "OIDN (GPU)"};
       ImGui::Combo("Denoiser", &g_renderExportSettings.denoiserIndex, denoisers,
                    IM_ARRAYSIZE(denoisers));
 
@@ -1286,25 +1302,6 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
       }
 
       if (g_currentRenderMode == RenderMode::DXR) {
-        static std::string s_nrdDumpStatus;
-        const bool nrdActive =
-            (DxrRenderer::GetDenoiserMode() == DxrRenderer::DenoiserMode::NRD_RELAX);
-
-        ImGui::BeginDisabled(!nrdActive);
-        if (ImGui::Button("Dump NRD Buffers")) {
-          const bool ok = DxrRenderer::ExportNrdDebugBuffersToPng(L"run");
-          s_nrdDumpStatus =
-              ok ? "Saved NRD debug PNGs to run/" : "NRD buffer dump failed";
-        }
-        ImGui::EndDisabled();
-        if (!nrdActive) {
-          ImGui::SameLine();
-          ImGui::TextUnformatted("Enable NRD to dump current NRD textures");
-        } else if (!s_nrdDumpStatus.empty()) {
-          ImGui::TextWrapped("%s", s_nrdDumpStatus.c_str());
-        }
-        ImGui::Separator();
-
         if (ImGui::SliderFloat("Reflection Bounces",
                                &g_cameraData.maxSpecularBounces, 0.0f, 16.0f,
                                "%.0f")) {
@@ -1372,6 +1369,78 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
 #else
           g_cameraData.debugVisualizationMode = 0.0f;
 #endif
+        }
+
+        ImGui::Separator();
+        ImGui::Text("Realtime Denoiser");
+        const char *realtimeDenoisers[] = {"Off", "SVGF", "NRD (ReLAX)"};
+        int realtimeIdx = RealtimeDenoiserIndexFromMode(
+            DxrRenderer::GetRealtimeDenoiserMode());
+        if (ImGui::Combo("Mode##RealtimeDenoiser", &realtimeIdx, realtimeDenoisers,
+                         IM_ARRAYSIZE(realtimeDenoisers))) {
+          DxrRenderer::SetRealtimeDenoiserMode(
+              RealtimeDenoiserModeFromIndex(realtimeIdx));
+          DxrRenderer::ResetAccumulation();
+          RecreateDxrPipelineSafe(g_windowWidth, g_windowHeight,
+                                  "Realtime denoiser mode change");
+          uiChanged = true;
+        }
+        if (DX12Context::g_streamline.GetMode() ==
+                StreamlineManager::Mode::DLSS_RayReconstruction &&
+            DxrRenderer::GetRealtimeDenoiserMode() !=
+                DxrRenderer::RealtimeDenoiserMode::Off) {
+          ImGui::TextWrapped("Realtime denoisers are skipped while DLSS Ray "
+                             "Reconstruction is active.");
+        }
+
+        if (DxrRenderer::GetRealtimeDenoiserMode() ==
+            DxrRenderer::RealtimeDenoiserMode::SVGF) {
+          DxrRenderer::SvgfSettings svgf = DxrRenderer::GetSvgfSettings();
+          if (ImGui::SliderFloat("Temporal Alpha", &svgf.temporalAlpha, 0.01f,
+                                 1.0f, "%.3f")) {
+            DxrRenderer::SetSvgfSettings(svgf);
+            uiChanged = true;
+          }
+          if (ImGui::SliderFloat("Moments Alpha", &svgf.momentsAlpha, 0.01f,
+                                 1.0f, "%.3f")) {
+            DxrRenderer::SetSvgfSettings(svgf);
+            uiChanged = true;
+          }
+          if (ImGui::SliderInt("A-Trous Iterations", &svgf.atrousIterations, 1,
+                               8)) {
+            DxrRenderer::SetSvgfSettings(svgf);
+            uiChanged = true;
+          }
+          if (ImGui::SliderFloat("Color Phi", &svgf.phiColor, 0.1f, 16.0f,
+                                 "%.2f")) {
+            DxrRenderer::SetSvgfSettings(svgf);
+            uiChanged = true;
+          }
+          if (ImGui::SliderFloat("Normal Phi", &svgf.phiNormal, 1.0f, 256.0f,
+                                 "%.1f")) {
+            DxrRenderer::SetSvgfSettings(svgf);
+            uiChanged = true;
+          }
+          if (ImGui::SliderFloat("Depth Phi", &svgf.phiDepth, 0.01f, 8.0f,
+                                 "%.3f")) {
+            DxrRenderer::SetSvgfSettings(svgf);
+            uiChanged = true;
+          }
+          if (ImGui::Button("Reset History")) {
+            DxrRenderer::ResetRealtimeDenoiserHistory();
+            uiChanged = true;
+          }
+        } else if (DxrRenderer::GetRealtimeDenoiserMode() ==
+                   DxrRenderer::RealtimeDenoiserMode::NRD) {
+          static std::string s_nrdDumpStatus;
+          if (ImGui::Button("Dump NRD Buffers")) {
+            const bool ok = DxrRenderer::ExportNrdDebugBuffersToPng(L"run");
+            s_nrdDumpStatus =
+                ok ? "Saved NRD debug PNGs to run/" : "NRD buffer dump failed";
+          }
+          if (!s_nrdDumpStatus.empty()) {
+            ImGui::TextWrapped("%s", s_nrdDumpStatus.c_str());
+          }
         }
 
         ImGui::Separator();
@@ -1492,8 +1561,9 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
                              "may reduce DLSS-RR reconstruction/AA quality.");
         }
 
-        // Denoiser selection
-        const char *denoisers[] = {"Off", "OIDN (CPU)", "OIDN (GPU)", "NRD (ReLAX)"};
+        ImGui::Separator();
+        ImGui::Text("Final / Export Denoiser");
+        const char *denoisers[] = {"Off", "OIDN (CPU)", "OIDN (GPU)"};
         int denoiserIdx = 0;
         switch (DxrRenderer::GetDenoiserMode()) {
         case DxrRenderer::DenoiserMode::Off:
@@ -1505,19 +1575,14 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
         case DxrRenderer::DenoiserMode::OIDN_GPU:
           denoiserIdx = 2;
           break;
-        case DxrRenderer::DenoiserMode::NRD_RELAX:
-          denoiserIdx = 3;
-          break;
         }
-        if (ImGui::Combo("Denoiser", &denoiserIdx, denoisers,
+        if (ImGui::Combo("Denoiser##Final", &denoiserIdx, denoisers,
                          IM_ARRAYSIZE(denoisers))) {
           DxrRenderer::DenoiserMode newMode = DxrRenderer::DenoiserMode::Off;
           if (denoiserIdx == 1)
             newMode = DxrRenderer::DenoiserMode::OIDN_CPU;
           if (denoiserIdx == 2)
             newMode = DxrRenderer::DenoiserMode::OIDN_GPU;
-          if (denoiserIdx == 3)
-            newMode = DxrRenderer::DenoiserMode::NRD_RELAX;
           DxrRenderer::SetDenoiserMode(newMode);
           // Recreate pipeline/resources to account for any mode-specific
           // resources and reset accumulation for stable rendering.
