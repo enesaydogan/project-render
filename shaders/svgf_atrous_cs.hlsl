@@ -14,17 +14,18 @@ cbuffer SvgfConstants : register(b0)
     float g_phiDepth;
     float g_normalRejectCos;
     float g_depthRejectScale;
-    float g_pad0;
+    uint g_remodulateAlbedo;
 };
 
 Texture2D<float4> g_inputColor : register(t0);
 Texture2D<float> g_variance : register(t1);
 Texture2D<float4> g_normalRoughness : register(t2);
 Texture2D<float> g_depth : register(t3);
+Texture2D<float4> g_albedo : register(t4);
 
 RWTexture2D<float4> g_outputColor : register(u0);
 
-static const float kKernel[5] = {1.0, 2.0, 4.0, 2.0, 1.0};
+static const float kKernel[3] = { 0.375, 0.25, 0.0625 };
 static const float3 kLuma = float3(0.2126, 0.7152, 0.0722);
 
 [numthreads(GROUP_SIZE_X, GROUP_SIZE_Y, 1)]
@@ -37,10 +38,11 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     float3 centerColor = g_inputColor.Load(int3(pixel, 0)).rgb;
     float centerDepth = g_depth.Load(int3(pixel, 0));
     float3 centerNormal = normalize(g_normalRoughness.Load(int3(pixel, 0)).xyz);
-    float centerVariance = max(g_variance.Load(int3(pixel, 0)), 1e-5);
+    float centerVariance = g_stepWidth == 1 ? max(g_variance.Load(int3(pixel, 0)), 1e-5) : max(g_inputColor.Load(int3(pixel, 0)).a, 1e-5);
     float centerLuma = dot(centerColor, kLuma);
 
     float3 accumColor = 0.0;
+    float accumVariance = 0.0;
     float accumWeight = 0.0;
 
     [unroll]
@@ -56,23 +58,30 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             float3 sampleColor = g_inputColor.Load(int3(samplePixel, 0)).rgb;
             float sampleDepth = g_depth.Load(int3(samplePixel, 0));
             float3 sampleNormal = normalize(g_normalRoughness.Load(int3(samplePixel, 0)).xyz);
+            float sampleVariance = g_stepWidth == 1 ? max(g_variance.Load(int3(samplePixel, 0)), 1e-5) : max(g_inputColor.Load(int3(samplePixel, 0)).a, 1e-5);
             float sampleLuma = dot(sampleColor, kLuma);
 
             float kernelWeight = kKernel[abs(kx)] * kKernel[abs(ky)];
             float colorWeight = exp(-abs(sampleLuma - centerLuma) /
                                     max(0.75 * g_phiColor * sqrt(centerVariance), 1e-4));
-            float normalWeight = pow(saturate(dot(centerNormal, sampleNormal)), g_phiNormal / 24.0);
-            float depthWeight = exp(-abs(sampleDepth - centerDepth) /
-                                    max(0.75 * g_phiDepth, 1e-4));
+            float normalWeight = exp(-max(0.0, 1.0 - dot(centerNormal, sampleNormal)) * g_phiNormal);
+            float depthTolerance = max(g_phiDepth, 1e-4) * max(float(g_stepWidth), 1.0) * max(abs(centerDepth) * 0.1, 1.0);
+            float depthWeight = exp(-abs(sampleDepth - centerDepth) / depthTolerance);
             float weight = kernelWeight * colorWeight * normalWeight * depthWeight;
 
             accumColor += sampleColor * weight;
+            accumVariance += sampleVariance * weight;
             accumWeight += weight;
         }
     }
 
+    float3 finalColor = accumColor / max(accumWeight, 1e-5);
+    float finalVariance = accumVariance / max(accumWeight, 1e-5);
     if (accumWeight <= 1e-5)
-        g_outputColor[pixel] = float4(centerColor, 1.0);
-    else
-        g_outputColor[pixel] = float4(accumColor / accumWeight, 1.0);
+    {
+        finalColor = centerColor;
+        finalVariance = centerVariance;
+    }
+
+    g_outputColor[pixel] = float4(finalColor, finalVariance);
 }

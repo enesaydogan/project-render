@@ -23,7 +23,7 @@ Texture2D<float> g_historyLength : register(t2);
 
 RWTexture2D<float> g_varianceOut : register(u0);
 
-static const float kKernel[3] = {1.0, 2.0, 1.0};
+static const float kKernel[2] = { 0.5, 0.25 };
 
 [numthreads(GROUP_SIZE_X, GROUP_SIZE_Y, 1)]
 void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)

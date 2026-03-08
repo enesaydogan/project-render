@@ -144,6 +144,7 @@ float GetPhysicalCameraEV100();
 // The PNG is lossless (maximum quality by format design).
 bool ExportTonemappedFrameToPng(const std::wstring &filePath);
 bool ExportNrdDebugBuffersToPng(const std::wstring &directoryPath);
+bool ExportSvgfDebugBuffersToPng(const std::wstring &directoryPath);
 } // namespace DxrRenderer
 
 extern bool g_rayTracingSupported;
