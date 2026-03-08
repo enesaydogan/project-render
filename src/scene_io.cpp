@@ -441,10 +441,22 @@ static json BuildMetadata() {
 
   // DXR
   j["dxr"] = {
-    {"dm", (int)DxrRenderer::GetDenoiserMode()},
+    {"fdm", (int)DxrRenderer::GetDenoiserMode()},
+    {"rdm", (int)DxrRenderer::GetRealtimeDenoiserMode()},
     {"oq", (int)DxrRenderer::GetOidnQuality()},
     {"rj", DxrRenderer::GetRrJitterScale()}
   };
+  {
+    const auto svgf = DxrRenderer::GetSvgfSettings();
+    j["dxr"]["svgf"] = {
+      {"ta", svgf.temporalAlpha},
+      {"ma", svgf.momentsAlpha},
+      {"it", svgf.atrousIterations},
+      {"pc", svgf.phiColor},
+      {"pn", svgf.phiNormal},
+      {"pd", svgf.phiDepth}
+    };
+  }
 
   // Lighting
   j["lit"]["ld"] = {g_cameraData.lightDir[0], g_cameraData.lightDir[1],
@@ -594,9 +606,29 @@ static void ApplyMetadataPRS(const json &j) {
   }
   if (j.contains("dxr")) {
     auto &d = j["dxr"];
-    DxrRenderer::SetDenoiserMode((DxrRenderer::DenoiserMode)d.value("dm", (int)DxrRenderer::GetDenoiserMode()));
+    const int legacyDm = d.value("dm", 0);
+    DxrRenderer::SetDenoiserMode(
+        (DxrRenderer::DenoiserMode)d.value("fdm",
+                                           (legacyDm <= 2) ? legacyDm
+                                                           : (int)DxrRenderer::GetDenoiserMode()));
+    DxrRenderer::SetRealtimeDenoiserMode(
+        (DxrRenderer::RealtimeDenoiserMode)d.value(
+            "rdm",
+            (legacyDm == 3) ? (int)DxrRenderer::RealtimeDenoiserMode::NRD
+                            : (int)DxrRenderer::GetRealtimeDenoiserMode()));
     DxrRenderer::SetOidnQuality((OidnDenoiser::Quality)d.value("oq", (int)DxrRenderer::GetOidnQuality()));
     DxrRenderer::SetRrJitterScale(d.value("rj", DxrRenderer::GetRrJitterScale()));
+    if (d.contains("svgf")) {
+      auto &s = d["svgf"];
+      DxrRenderer::SvgfSettings svgf = DxrRenderer::GetSvgfSettings();
+      svgf.temporalAlpha = s.value("ta", svgf.temporalAlpha);
+      svgf.momentsAlpha = s.value("ma", svgf.momentsAlpha);
+      svgf.atrousIterations = s.value("it", svgf.atrousIterations);
+      svgf.phiColor = s.value("pc", svgf.phiColor);
+      svgf.phiNormal = s.value("pn", svgf.phiNormal);
+      svgf.phiDepth = s.value("pd", svgf.phiDepth);
+      DxrRenderer::SetSvgfSettings(svgf);
+    }
   }
   if (j.contains("lit")) {
     auto &l = j["lit"];
