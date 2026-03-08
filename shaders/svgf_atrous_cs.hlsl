@@ -62,9 +62,11 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             float sampleLuma = dot(sampleColor, kLuma);
 
             float kernelWeight = kKernel[abs(kx)] * kKernel[abs(ky)];
+            float varianceEstimate = max(0.5 * (centerVariance + sampleVariance), 1e-5);
             float colorWeight = exp(-abs(sampleLuma - centerLuma) /
-                                    max(0.75 * g_phiColor * sqrt(centerVariance), 1e-4));
-            float normalWeight = exp(-max(0.0, 1.0 - dot(centerNormal, sampleNormal)) * g_phiNormal);
+                                    max(0.75 * g_phiColor * sqrt(varianceEstimate), 1e-4));
+            float normalWeight = pow(saturate(dot(centerNormal, sampleNormal)),
+                                     g_phiNormal / 24.0);
             float depthTolerance = max(g_phiDepth, 1e-4) * max(float(g_stepWidth), 1.0) * max(abs(centerDepth) * 0.1, 1.0);
             float depthWeight = exp(-abs(sampleDepth - centerDepth) / depthTolerance);
             float weight = kernelWeight * colorWeight * normalWeight * depthWeight;

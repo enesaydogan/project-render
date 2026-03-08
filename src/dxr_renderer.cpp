@@ -4023,17 +4023,18 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
   SvgfConstants cbRemod = WriteConstants(0u, false, true);
-  CreateSrvAt(s_svgfAtrousHeap.Get(), 0, atrousInput,
+  const UINT remodOffset = (UINT)s_svgfSettings.atrousIterations * 6u;
+  CreateSrvAt(s_svgfAtrousHeap.Get(), remodOffset + 0, atrousInput,
               DXGI_FORMAT_R16G16B16A16_FLOAT);
-  CreateSrvAt(s_svgfAtrousHeap.Get(), 1, s_svgfVarianceUAV.Get(),
+  CreateSrvAt(s_svgfAtrousHeap.Get(), remodOffset + 1, s_svgfVarianceUAV.Get(),
               DXGI_FORMAT_R16_FLOAT);
-  CreateSrvAt(s_svgfAtrousHeap.Get(), 2, s_normalRoughnessUAV.Get(),
+  CreateSrvAt(s_svgfAtrousHeap.Get(), remodOffset + 2, s_normalRoughnessUAV.Get(),
               DXGI_FORMAT_R16G16B16A16_FLOAT);
-  CreateSrvAt(s_svgfAtrousHeap.Get(), 3, s_depthUAV.Get(),
+  CreateSrvAt(s_svgfAtrousHeap.Get(), remodOffset + 3, s_depthUAV.Get(),
               DXGI_FORMAT_R32_FLOAT);
-  CreateSrvAt(s_svgfAtrousHeap.Get(), 4, s_albedoUAV.Get(),
+  CreateSrvAt(s_svgfAtrousHeap.Get(), remodOffset + 4, s_albedoUAV.Get(),
               DXGI_FORMAT_R16G16B16A16_FLOAT);
-  CreateUavAt(s_svgfAtrousHeap.Get(), 5, atrousOutput,
+  CreateUavAt(s_svgfAtrousHeap.Get(), remodOffset + 5, atrousOutput,
               DXGI_FORMAT_R16G16B16A16_FLOAT);
 
   ID3D12DescriptorHeap* finalAtrousHeaps[] = {s_svgfAtrousHeap.Get()};
@@ -4043,6 +4044,8 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
   dxrList->SetComputeRoot32BitConstants(0, sizeof(SvgfConstants) / 4, &cbRemod, 0);
   D3D12_GPU_DESCRIPTOR_HANDLE atrousGpuFinal =
       s_svgfAtrousHeap->GetGPUDescriptorHandleForHeapStart();
+  atrousGpuFinal.ptr += remodOffset * s_device->GetDescriptorHandleIncrementSize(
+                              D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
   dxrList->SetComputeRootDescriptorTable(1, atrousGpuFinal);
   D3D12_GPU_DESCRIPTOR_HANDLE atrousUavGpuFinal = atrousGpuFinal;
   atrousUavGpuFinal.ptr += 5ull * s_device->GetDescriptorHandleIncrementSize(
