@@ -3864,7 +3864,7 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
     cb.phiColor = s_svgfSettings.phiColor;
     cb.phiNormal = s_svgfSettings.phiNormal;
     cb.phiDepth = s_svgfSettings.phiDepth;
-    cb.normalRejectCos = 0.95f;
+    cb.normalRejectCos = 0.90f; // Loosened from 0.95 to preserve more history
     cb.depthRejectScale = 0.02f;
     cb.remodulateAlbedo = remodulate ? 1u : 0u;
     return cb;
