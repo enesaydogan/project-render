@@ -62,39 +62,6 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     float3 currNormal = normalize(g_normalRoughness.Load(int3(pixel, 0)).xyz);
     float currLum = dot(noisy, kLuma);
 
-    float3 neighborhoodMin = noisy;
-    float3 neighborhoodMax = noisy;
-    float3 neighborhoodSum = 0.0;
-    float3 neighborhoodSumSq = 0.0;
-    uint neighborhoodCount = 0;
-
-    [unroll]
-    for (int oy = -1; oy <= 1; ++oy)
-    {
-        [unroll]
-        for (int ox = -1; ox <= 1; ++ox)
-        {
-            int2 samplePixel = clamp(pixel + int2(ox, oy), int2(0, 0),
-                                     int2(int(g_width) - 1, int(g_height) - 1));
-            float3 sampleColor = g_noisyInput.Load(int3(samplePixel, 0)).rgb;
-            float3 sampleAlbedo = g_albedo.Load(int3(samplePixel, 0)).rgb;
-            sampleColor = DemodulateByAlbedo(sampleColor, sampleAlbedo);
-            neighborhoodMin = min(neighborhoodMin, sampleColor);
-            neighborhoodMax = max(neighborhoodMax, sampleColor);
-            neighborhoodSum += sampleColor;
-            neighborhoodSumSq += sampleColor * sampleColor;
-            neighborhoodCount++;
-        }
-    }
-
-    float invNeighborhoodCount = 1.0 / max(float(neighborhoodCount), 1.0);
-    float3 neighborhoodMean = neighborhoodSum * invNeighborhoodCount;
-    float3 neighborhoodVariance =
-        max(neighborhoodSumSq * invNeighborhoodCount - neighborhoodMean * neighborhoodMean, 0.0);
-    float3 neighborhoodSigma = sqrt(neighborhoodVariance);
-    float3 clampMin = max(neighborhoodMin, neighborhoodMean - 3.0 * neighborhoodSigma);
-    float3 clampMax = min(neighborhoodMax, neighborhoodMean + 3.0 * neighborhoodSigma);
-
     bool validHistory = (g_resetHistory == 0);
     float2 mv = g_motionVectors.Load(int3(pixel, 0));
     if (abs(mv.x) > 1e5 || abs(mv.y) > 1e5)
@@ -125,15 +92,14 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         float3 prevColor = g_prevHistoryColor.Load(int3(prevPixel, 0)).rgb;
         float2 prevMoments = g_prevMoments.Load(int3(prevPixel, 0));
         float prevLen = max(g_prevHistoryLength.Load(int3(prevPixel, 0)), 1.0);
-        prevColor = clamp(prevColor, clampMin, clampMax);
 
-        float historyAlpha = 1.0 / min(prevLen + 1.0, 32.0);
+        float historyAlpha = 1.0 / min(prevLen + 1.0, 128.0);
         float colorAlpha = max(g_temporalAlpha, historyAlpha);
         float momentsAlpha = max(g_momentsAlpha, historyAlpha);
         historyColor = lerp(prevColor, noisy, saturate(colorAlpha));
         historyMoments = lerp(prevMoments, float2(currLum, currLum * currLum),
                               saturate(momentsAlpha));
-        historyLength = min(prevLen + 1.0, 32.0);
+        historyLength = min(prevLen + 1.0, 128.0);
     }
 
     g_temporalColorOut[pixel] = float4(historyColor, 1.0);

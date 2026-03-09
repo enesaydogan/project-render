@@ -1396,12 +1396,12 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
         if (DxrRenderer::GetRealtimeDenoiserMode() ==
             DxrRenderer::RealtimeDenoiserMode::SVGF) {
           DxrRenderer::SvgfSettings svgf = DxrRenderer::GetSvgfSettings();
-          if (ImGui::SliderFloat("Temporal Alpha", &svgf.temporalAlpha, 0.01f,
+          if (ImGui::SliderFloat("Temporal Alpha", &svgf.temporalAlpha, 0.0f,
                                  1.0f, "%.3f")) {
             DxrRenderer::SetSvgfSettings(svgf);
             uiChanged = true;
           }
-          if (ImGui::SliderFloat("Moments Alpha", &svgf.momentsAlpha, 0.01f,
+          if (ImGui::SliderFloat("Moments Alpha", &svgf.momentsAlpha, 0.0f,
                                  1.0f, "%.3f")) {
             DxrRenderer::SetSvgfSettings(svgf);
             uiChanged = true;

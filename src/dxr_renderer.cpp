@@ -3781,9 +3781,9 @@ RealtimeDenoiserMode GetRealtimeDenoiserMode() {
 
 void SetSvgfSettings(const SvgfSettings &settings) {
   s_svgfSettings.temporalAlpha =
-      (std::clamp)(settings.temporalAlpha, 0.001f, 1.0f);
+      (std::clamp)(settings.temporalAlpha, 0.0f, 1.0f);
   s_svgfSettings.momentsAlpha =
-      (std::clamp)(settings.momentsAlpha, 0.001f, 1.0f);
+      (std::clamp)(settings.momentsAlpha, 0.0f, 1.0f);
   s_svgfSettings.atrousIterations =
       (std::clamp)(settings.atrousIterations, 1, 8);
   s_svgfSettings.phiColor = (std::max)(settings.phiColor, 0.01f);
