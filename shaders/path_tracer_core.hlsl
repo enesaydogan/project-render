@@ -567,6 +567,7 @@ void RayGen()
             // --- G-Buffer & Motion Vector Writing (Mandatory for every frame) ---
             if (!primaryHit || primaryViewZ <= 0.0) {
                 g_depth[launchIndex.xy] = (dlssRayReconstruction > 0.5) ? farZ : 1.0;
+                g_svgfLinearDepth[launchIndex.xy] = farZ;
                 float2 mvecSky = float2(0.0, 0.0);
                 if (prevValid > 0.5) {
                     float3 guideSkyDir = primaryGuideResolved ? primaryGuideDir : rayDirCenter;
@@ -592,6 +593,7 @@ void RayGen()
                 g_specHitDistance[launchIndex.xy] = 0.0;
                 g_specularMotionVectors[launchIndex.xy] = mvecSky;
             } else {
+                g_svgfLinearDepth[launchIndex.xy] = primaryViewZ;
                 if (dlssRayReconstruction > 0.5) g_depth[launchIndex.xy] = primaryViewZ;
                 else {
                     float nearZc = nearZ;

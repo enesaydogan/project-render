@@ -163,7 +163,8 @@ static const UINT DXR_HEAP_ALBEDO_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 12;
 static const UINT DXR_HEAP_NORMAL_ROUGHNESS_UAV_OFFSET =
     DXR_HEAP_UAV_OFFSET + 13;
 static const UINT DXR_HEAP_DLSS_OUT_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 14;
-// u15 intentionally unused.
+static const UINT DXR_HEAP_SVGF_LINEAR_DEPTH_UAV_OFFSET =
+    DXR_HEAP_UAV_OFFSET + 15;
 static const UINT DXR_HEAP_SPEC_ALBEDO_OFFSET = DXR_HEAP_UAV_OFFSET + 16;
 static const UINT DXR_HEAP_SPEC_HITDIST_OFFSET = DXR_HEAP_UAV_OFFSET + 17;
 static const UINT DXR_HEAP_SPEC_MVEC_OFFSET = DXR_HEAP_UAV_OFFSET + 18;
@@ -276,6 +277,7 @@ static ComPtr<ID3D12Resource> s_depthUAV;
 static ComPtr<ID3D12Resource> s_mvecUAV;
 static ComPtr<ID3D12Resource> s_albedoUAV;
 static ComPtr<ID3D12Resource> s_normalRoughnessUAV;
+static ComPtr<ID3D12Resource> s_svgfLinearDepthUAV;
 static ComPtr<ID3D12Resource> s_dlssOutputUAV;
 static ComPtr<ID3D12Resource> s_oidnOutputUAV;
 static ComPtr<ID3D12Resource> s_tonemapOutputUAV;
@@ -332,6 +334,9 @@ static ComPtr<ID3D12DescriptorHeap> s_svgfVarianceHeap;
 static ComPtr<ID3D12RootSignature> s_svgfAtrousRootSig;
 static ComPtr<ID3D12PipelineState> s_svgfAtrousPSO;
 static ComPtr<ID3D12DescriptorHeap> s_svgfAtrousHeap;
+static ComPtr<ID3D12RootSignature> s_svgfCompositeRootSig;
+static ComPtr<ID3D12PipelineState> s_svgfCompositePSO;
+static ComPtr<ID3D12DescriptorHeap> s_svgfCompositeHeap;
 static ComPtr<ID3D12Resource> s_svgfConstantsCB;
 
 struct ShaderTableEntry {
@@ -856,7 +861,7 @@ static void EnsureSvgfTemporalPipeline() {
 
   D3D12_DESCRIPTOR_RANGE srvRange = {};
   srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-  srvRange.NumDescriptors = 9;
+  srvRange.NumDescriptors = 10;
   srvRange.BaseShaderRegister = 0;
 
   D3D12_DESCRIPTOR_RANGE uavRange = {};
@@ -913,7 +918,7 @@ static void EnsureSvgfTemporalPipeline() {
       &psoDesc, IID_PPV_ARGS(&s_svgfTemporalPSO)));
 
   D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-  heapDesc.NumDescriptors = 12;
+  heapDesc.NumDescriptors = 13;
   heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
   heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
   ThrowIfFailed(s_device->CreateDescriptorHeap(
@@ -1068,6 +1073,76 @@ static void EnsureSvgfAtrousPipeline() {
   heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
   ThrowIfFailed(s_device->CreateDescriptorHeap(
       &heapDesc, IID_PPV_ARGS(&s_svgfAtrousHeap)));
+}
+
+static void EnsureSvgfCompositePipeline() {
+  if (s_svgfCompositePSO && s_svgfCompositeRootSig && s_svgfCompositeHeap) {
+    return;
+  }
+  if (!s_device) {
+    return;
+  }
+
+  D3D12_DESCRIPTOR_RANGE srvRange = {};
+  srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+  srvRange.NumDescriptors = 2;
+  srvRange.BaseShaderRegister = 0;
+
+  D3D12_DESCRIPTOR_RANGE uavRange = {};
+  uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+  uavRange.NumDescriptors = 1;
+  uavRange.BaseShaderRegister = 0;
+
+  D3D12_ROOT_PARAMETER params[2] = {};
+  params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[0].DescriptorTable.NumDescriptorRanges = 1;
+  params[0].DescriptorTable.pDescriptorRanges = &srvRange;
+  params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[1].DescriptorTable.NumDescriptorRanges = 1;
+  params[1].DescriptorTable.pDescriptorRanges = &uavRange;
+
+  D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
+  rsDesc.NumParameters = _countof(params);
+  rsDesc.pParameters = params;
+
+  ComPtr<ID3DBlob> sig;
+  ComPtr<ID3DBlob> err;
+  HRESULT hrSerialize = D3D12SerializeRootSignature(
+      &rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err);
+  if (FAILED(hrSerialize)) {
+    if (err) {
+      fprintf(stderr, "DxrRenderer: SVGF composite root signature error: %s\n",
+              (char *)err->GetBufferPointer());
+    }
+    return;
+  }
+  ThrowIfFailed(s_device->CreateRootSignature(
+      0, sig->GetBufferPointer(), sig->GetBufferSize(),
+      IID_PPV_ARGS(&s_svgfCompositeRootSig)));
+
+  ComPtr<IDxcBlob> cs;
+  try {
+    std::vector<std::wstring> defines;
+    cs = s_dxcHelper.Compile(L"shaders/svgf_composite_cs.hlsl", L"CSMain",
+                             L"cs_6_3", defines);
+  } catch (const std::exception &e) {
+    fprintf(stderr, "DxrRenderer: SVGF composite CS compile failed: %s\n",
+            e.what());
+    return;
+  }
+
+  D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
+  psoDesc.pRootSignature = s_svgfCompositeRootSig.Get();
+  psoDesc.CS = {cs->GetBufferPointer(), cs->GetBufferSize()};
+  ThrowIfFailed(s_device->CreateComputePipelineState(
+      &psoDesc, IID_PPV_ARGS(&s_svgfCompositePSO)));
+
+  D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
+  heapDesc.NumDescriptors = 3;
+  heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+  heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+  ThrowIfFailed(s_device->CreateDescriptorHeap(
+      &heapDesc, IID_PPV_ARGS(&s_svgfCompositeHeap)));
 }
 
 static void EnsureRestirSpatialPipeline() {
@@ -2401,6 +2476,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   s_depthUAV.Reset();
   s_mvecUAV.Reset();
   s_albedoUAV.Reset();
+  s_svgfLinearDepthUAV.Reset();
   s_specularAlbedoUAV.Reset();
   s_specHitDistanceUAV.Reset();
   s_specularMotionVectorsUAV.Reset();
@@ -2496,6 +2572,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
                    L"RT Tonemap Output");
   CreateUavTexture(s_svgfNoisyInputUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
                    L"SVGF Noisy Input");
+  CreateUavTexture(s_svgfLinearDepthUAV, texDesc, DXGI_FORMAT_R32_FLOAT,
+                   L"SVGF Linear Depth");
   CreateUavTexture(s_svgfTemporalUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
                    L"SVGF Temporal");
   CreateUavTexture(s_svgfVarianceUAV, texDesc, DXGI_FORMAT_R16_FLOAT,
@@ -2564,6 +2642,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
               DXR_HEAP_NORMAL_ROUGHNESS_UAV_OFFSET);
   CreateUavAt(s_dlssOutputUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
               DXR_HEAP_DLSS_OUT_UAV_OFFSET);
+  CreateUavAt(s_svgfLinearDepthUAV.Get(), DXGI_FORMAT_R32_FLOAT,
+              DXR_HEAP_SVGF_LINEAR_DEPTH_UAV_OFFSET);
   CreateUavAt(s_oidnOutputUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
               DXR_HEAP_OIDN_OUT_UAV_OFFSET);
   CreateUavAt(s_svgfNoisyInputUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
@@ -3752,7 +3832,7 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
                                bool resetHistory,
                                ID3D12Resource **outPostColor) {
   if (!dxrList || !outPostColor || !s_device || !s_svgfNoisyInputUAV ||
-      !s_depthUAV || !s_normalRoughnessUAV || !s_mvecUAV ||
+      !s_svgfLinearDepthUAV || !s_normalRoughnessUAV || !s_mvecUAV ||
       !s_svgfTemporalUAV || !s_svgfVarianceUAV || !s_svgfAtrousPingUAV ||
       !s_svgfAtrousPongUAV) {
     return false;
@@ -3761,8 +3841,10 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
   EnsureSvgfTemporalPipeline();
   EnsureSvgfVariancePipeline();
   EnsureSvgfAtrousPipeline();
+  EnsureSvgfCompositePipeline();
   if (!s_svgfTemporalPSO || !s_svgfVariancePSO || !s_svgfAtrousPSO ||
-      !s_svgfTemporalHeap || !s_svgfVarianceHeap || !s_svgfAtrousHeap ||
+      !s_svgfCompositePSO || !s_svgfTemporalHeap || !s_svgfVarianceHeap ||
+      !s_svgfAtrousHeap || !s_svgfCompositeHeap ||
       !s_svgfConstantsCB) {
     return false;
   }
@@ -3817,7 +3899,7 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
   TransitionResource(dxrList, s_svgfNoisyInputUAV.Get(),
                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-  TransitionResource(dxrList, s_depthUAV.Get(),
+  TransitionResource(dxrList, s_svgfLinearDepthUAV.Get(),
                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
   TransitionResource(dxrList, s_normalRoughnessUAV.Get(),
@@ -3848,7 +3930,8 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
   SvgfConstants cbTemp1 = WriteConstants(1u, !hasHistory, false);
   CreateSrvAt(s_svgfTemporalHeap.Get(), 0, s_svgfNoisyInputUAV.Get(),
               DXGI_FORMAT_R16G16B16A16_FLOAT);
-  CreateSrvAt(s_svgfTemporalHeap.Get(), 1, s_depthUAV.Get(), DXGI_FORMAT_R32_FLOAT);
+  CreateSrvAt(s_svgfTemporalHeap.Get(), 1, s_svgfLinearDepthUAV.Get(),
+              DXGI_FORMAT_R32_FLOAT);
   CreateSrvAt(s_svgfTemporalHeap.Get(), 2, s_normalRoughnessUAV.Get(),
               DXGI_FORMAT_R16G16B16A16_FLOAT);
   CreateSrvAt(s_svgfTemporalHeap.Get(), 3, s_mvecUAV.Get(), DXGI_FORMAT_R16G16_FLOAT);
@@ -3867,11 +3950,13 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
   CreateSrvAt(s_svgfTemporalHeap.Get(), 8,
               s_svgfHistoryNormal[prev].Get(),
               DXGI_FORMAT_R16G16B16A16_FLOAT);
-  CreateUavAt(s_svgfTemporalHeap.Get(), 9, s_svgfTemporalUAV.Get(),
+  CreateSrvAt(s_svgfTemporalHeap.Get(), 9, s_albedoUAV.Get(),
               DXGI_FORMAT_R16G16B16A16_FLOAT);
-  CreateUavAt(s_svgfTemporalHeap.Get(), 10, s_svgfHistoryMoments[curr].Get(),
+  CreateUavAt(s_svgfTemporalHeap.Get(), 10, s_svgfTemporalUAV.Get(),
+              DXGI_FORMAT_R16G16B16A16_FLOAT);
+  CreateUavAt(s_svgfTemporalHeap.Get(), 11, s_svgfHistoryMoments[curr].Get(),
               DXGI_FORMAT_R16G16_FLOAT);
-  CreateUavAt(s_svgfTemporalHeap.Get(), 11, s_svgfHistoryLength[curr].Get(),
+  CreateUavAt(s_svgfTemporalHeap.Get(), 12, s_svgfHistoryLength[curr].Get(),
               DXGI_FORMAT_R16_FLOAT);
 
   ID3D12DescriptorHeap *temporalHeaps[] = {s_svgfTemporalHeap.Get()};
@@ -3883,7 +3968,7 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
       s_svgfTemporalHeap->GetGPUDescriptorHandleForHeapStart();
   dxrList->SetComputeRootDescriptorTable(1, temporalGpu);
   D3D12_GPU_DESCRIPTOR_HANDLE temporalUavGpu = temporalGpu;
-  temporalUavGpu.ptr += 9ull * s_device->GetDescriptorHandleIncrementSize(
+  temporalUavGpu.ptr += 10ull * s_device->GetDescriptorHandleIncrementSize(
                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
   dxrList->SetComputeRootDescriptorTable(2, temporalUavGpu);
   dxrList->Dispatch((s_outputWidth + 7) / 8, (s_outputHeight + 7) / 8, 1);
@@ -3939,7 +4024,7 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
                 DXGI_FORMAT_R16_FLOAT);
     CreateSrvAt(s_svgfAtrousHeap.Get(), offset + 2, s_normalRoughnessUAV.Get(),
                 DXGI_FORMAT_R16G16B16A16_FLOAT);
-    CreateSrvAt(s_svgfAtrousHeap.Get(), offset + 3, s_depthUAV.Get(),
+    CreateSrvAt(s_svgfAtrousHeap.Get(), offset + 3, s_svgfLinearDepthUAV.Get(),
                 DXGI_FORMAT_R32_FLOAT);
     CreateSrvAt(s_svgfAtrousHeap.Get(), offset + 4, s_albedoUAV.Get(),
                 DXGI_FORMAT_R16G16B16A16_FLOAT);
@@ -3975,14 +4060,15 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
     }
   }
 
-  // Final output is in atrousOutput
+  // Final filtered illumination is in atrousOutput. Copy that to history
+  // before remodulating so disocclusions never depend on previous-frame albedo.
   TransitionResource(dxrList, atrousOutput,
                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                      D3D12_RESOURCE_STATE_COPY_SOURCE);
   TransitionResource(dxrList, s_svgfHistoryColor[curr].Get(),
                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                      D3D12_RESOURCE_STATE_COPY_DEST);
-  TransitionResource(dxrList, s_depthUAV.Get(),
+  TransitionResource(dxrList, s_svgfLinearDepthUAV.Get(),
                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                      D3D12_RESOURCE_STATE_COPY_SOURCE);
   TransitionResource(dxrList, s_svgfHistoryDepth[curr].Get(),
@@ -3997,80 +4083,61 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
 
   dxrList->CopyResource(s_svgfHistoryColor[curr].Get(),
                         atrousOutput);
-  dxrList->CopyResource(s_svgfHistoryDepth[curr].Get(), s_depthUAV.Get());
+  dxrList->CopyResource(s_svgfHistoryDepth[curr].Get(),
+                        s_svgfLinearDepthUAV.Get());
   dxrList->CopyResource(s_svgfHistoryNormal[curr].Get(), s_normalRoughnessUAV.Get());
 
   TransitionResource(dxrList, s_svgfHistoryColor[curr].Get(),
                      D3D12_RESOURCE_STATE_COPY_DEST,
                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-  TransitionResource(dxrList, atrousOutput,
-                     D3D12_RESOURCE_STATE_COPY_SOURCE,
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-
-  std::swap(atrousInput, atrousOutput);
-
-  TransitionResource(dxrList, atrousOutput,
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-
-  // Transition depth & normal from COPY_SOURCE to NPS so the remodulation
-  // pass can read them as SRVs without undefined behavior.
-  TransitionResource(dxrList, s_depthUAV.Get(),
-                     D3D12_RESOURCE_STATE_COPY_SOURCE,
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-  TransitionResource(dxrList, s_normalRoughnessUAV.Get(),
-                     D3D12_RESOURCE_STATE_COPY_SOURCE,
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-
-  SvgfConstants cbRemod = WriteConstants(0u, false, true);
-  const UINT remodOffset = (UINT)s_svgfSettings.atrousIterations * 6u;
-  CreateSrvAt(s_svgfAtrousHeap.Get(), remodOffset + 0, atrousInput,
-              DXGI_FORMAT_R16G16B16A16_FLOAT);
-  CreateSrvAt(s_svgfAtrousHeap.Get(), remodOffset + 1, s_svgfVarianceUAV.Get(),
-              DXGI_FORMAT_R16_FLOAT);
-  CreateSrvAt(s_svgfAtrousHeap.Get(), remodOffset + 2, s_normalRoughnessUAV.Get(),
-              DXGI_FORMAT_R16G16B16A16_FLOAT);
-  CreateSrvAt(s_svgfAtrousHeap.Get(), remodOffset + 3, s_depthUAV.Get(),
-              DXGI_FORMAT_R32_FLOAT);
-  CreateSrvAt(s_svgfAtrousHeap.Get(), remodOffset + 4, s_albedoUAV.Get(),
-              DXGI_FORMAT_R16G16B16A16_FLOAT);
-  CreateUavAt(s_svgfAtrousHeap.Get(), remodOffset + 5, atrousOutput,
-              DXGI_FORMAT_R16G16B16A16_FLOAT);
-
-  ID3D12DescriptorHeap* finalAtrousHeaps[] = {s_svgfAtrousHeap.Get()};
-  dxrList->SetDescriptorHeaps(1, finalAtrousHeaps);
-  dxrList->SetPipelineState(s_svgfAtrousPSO.Get());
-  dxrList->SetComputeRootSignature(s_svgfAtrousRootSig.Get());
-  dxrList->SetComputeRoot32BitConstants(0, sizeof(SvgfConstants) / 4, &cbRemod, 0);
-  D3D12_GPU_DESCRIPTOR_HANDLE atrousGpuFinal =
-      s_svgfAtrousHeap->GetGPUDescriptorHandleForHeapStart();
-  atrousGpuFinal.ptr += remodOffset * s_device->GetDescriptorHandleIncrementSize(
-                              D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-  dxrList->SetComputeRootDescriptorTable(1, atrousGpuFinal);
-  D3D12_GPU_DESCRIPTOR_HANDLE atrousUavGpuFinal = atrousGpuFinal;
-  atrousUavGpuFinal.ptr += 5ull * s_device->GetDescriptorHandleIncrementSize(
-                                      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-  dxrList->SetComputeRootDescriptorTable(2, atrousUavGpuFinal);
-  dxrList->Dispatch((s_outputWidth + 7) / 8, (s_outputHeight + 7) / 8, 1);
-
-  // Restore the demodulated input scratch texture so it can be reused next
-  // frame regardless of iteration parity.
-  TransitionResource(dxrList, atrousInput,
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-
-  TransitionResource(dxrList, s_depthUAV.Get(),
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
   TransitionResource(dxrList, s_svgfHistoryDepth[curr].Get(),
                      D3D12_RESOURCE_STATE_COPY_DEST,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-  TransitionResource(dxrList, s_normalRoughnessUAV.Get(),
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
   TransitionResource(dxrList, s_svgfHistoryNormal[curr].Get(),
                      D3D12_RESOURCE_STATE_COPY_DEST,
                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+  TransitionResource(dxrList, atrousOutput,
+                     D3D12_RESOURCE_STATE_COPY_SOURCE,
+                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+  TransitionResource(dxrList, s_svgfLinearDepthUAV.Get(),
+                     D3D12_RESOURCE_STATE_COPY_SOURCE,
+                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+  TransitionResource(dxrList, s_normalRoughnessUAV.Get(),
+                     D3D12_RESOURCE_STATE_COPY_SOURCE,
+                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+  ID3D12Resource *compositeOutput = atrousInput;
+  TransitionResource(dxrList, compositeOutput,
+                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+  CreateSrvAt(s_svgfCompositeHeap.Get(), 0, atrousOutput,
+              DXGI_FORMAT_R16G16B16A16_FLOAT);
+  CreateSrvAt(s_svgfCompositeHeap.Get(), 1, s_albedoUAV.Get(),
+              DXGI_FORMAT_R16G16B16A16_FLOAT);
+  CreateUavAt(s_svgfCompositeHeap.Get(), 2, compositeOutput,
+              DXGI_FORMAT_R16G16B16A16_FLOAT);
+
+  ID3D12DescriptorHeap *compositeHeaps[] = {s_svgfCompositeHeap.Get()};
+  dxrList->SetDescriptorHeaps(1, compositeHeaps);
+  dxrList->SetPipelineState(s_svgfCompositePSO.Get());
+  dxrList->SetComputeRootSignature(s_svgfCompositeRootSig.Get());
+  D3D12_GPU_DESCRIPTOR_HANDLE compositeGpu =
+      s_svgfCompositeHeap->GetGPUDescriptorHandleForHeapStart();
+  dxrList->SetComputeRootDescriptorTable(0, compositeGpu);
+  D3D12_GPU_DESCRIPTOR_HANDLE compositeUavGpu = compositeGpu;
+  compositeUavGpu.ptr += 2ull * s_device->GetDescriptorHandleIncrementSize(
+                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+  dxrList->SetComputeRootDescriptorTable(1, compositeUavGpu);
+  dxrList->Dispatch((s_outputWidth + 7) / 8, (s_outputHeight + 7) / 8, 1);
+
+  TransitionResource(dxrList, atrousOutput,
+                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+
+
+
   // s_svgfTemporalUAV is already back in UAV via the atrousInput/atrousOutput
   // cleanup transitions above — no separate transition needed.
   TransitionResource(dxrList, s_svgfHistoryMoments[curr].Get(),
@@ -4108,9 +4175,26 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
   TransitionResource(dxrList, s_albedoUAV.Get(),
                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+  TransitionResource(dxrList, s_svgfTemporalUAV.Get(),
+                     (compositeOutput == s_svgfTemporalUAV.Get())
+                         ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS
+                         : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+  TransitionResource(dxrList, s_svgfAtrousPingUAV.Get(),
+                     (compositeOutput == s_svgfAtrousPingUAV.Get() ||
+                      atrousOutput == s_svgfAtrousPingUAV.Get())
+                         ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS
+                         : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+  TransitionResource(dxrList, s_svgfAtrousPongUAV.Get(),
+                     (compositeOutput == s_svgfAtrousPongUAV.Get() ||
+                      atrousOutput == s_svgfAtrousPongUAV.Get())
+                         ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS
+                         : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-  *outPostColor = atrousOutput;
-  s_svgfLatestOutput = atrousOutput;
+  *outPostColor = compositeOutput;
+  s_svgfLatestOutput = compositeOutput;
   s_svgfHistoryValid = true;
   s_svgfHistoryWriteIndex = prev;
   return true;
@@ -6654,7 +6738,8 @@ bool ExportSvgfDebugBuffersToPng(const std::wstring &directoryPath) {
                                 s_svgfHistoryLength[0].Get(), false);
   ok &= ExportHalfScalarTexture(directoryPath, L"svgf_history_length_1",
                                 s_svgfHistoryLength[1].Get(), false);
-  ok &= ExportNrdViewZTexture(directoryPath, L"svgf_depth", s_depthUAV.Get());
+  ok &= ExportNrdViewZTexture(directoryPath, L"svgf_depth",
+                              s_svgfLinearDepthUAV.Get());
   ok &= ExportNrdNormalRoughnessTexture(directoryPath, L"svgf_normal_roughness",
                                         s_normalRoughnessUAV.Get());
   ok &= ExportNrdMotionTexture(directoryPath, L"svgf_motion", s_mvecUAV.Get());

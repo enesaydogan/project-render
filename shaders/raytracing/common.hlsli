@@ -32,6 +32,7 @@ RWTexture2D<float> g_depth : register(u10);
 RWTexture2D<float2> g_motionVectors : register(u11);
 RWTexture2D<float4> g_albedoOut : register(u12);
 RWTexture2D<float4> g_normalRoughnessOut : register(u13);
+RWTexture2D<float> g_svgfLinearDepth : register(u15);
 RWTexture2D<float4> g_specularAlbedo : register(u16);
 RWTexture2D<float> g_specHitDistance : register(u17);
 RWTexture2D<float2> g_specularMotionVectors : register(u18);
