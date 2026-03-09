@@ -23,7 +23,7 @@ Texture2D<float> g_historyLength : register(t2);
 
 RWTexture2D<float> g_varianceOut : register(u0);
 
-static const float kKernel[2] = { 0.5, 0.25 };
+static const float kKernel[4] = { 0.25, 0.1875, 0.125, 0.0625 }; // 7x7 weights
 
 [numthreads(GROUP_SIZE_X, GROUP_SIZE_Y, 1)]
 void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
@@ -37,11 +37,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     float accumVariance = 0.0;
     float accumWeight = 0.0;
 
-    [unroll]
-    for (int oy = -1; oy <= 1; ++oy)
+    for (int oy = -3; oy <= 3; ++oy)
     {
-        [unroll]
-        for (int ox = -1; ox <= 1; ++ox)
+        for (int ox = -3; ox <= 3; ++ox)
         {
             int2 samplePixel = clamp(pixel + int2(ox, oy), int2(0, 0),
                                      int2(int(g_width) - 1, int(g_height) - 1));
@@ -52,7 +50,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 max(sampleMoments.y - sampleMoments.x * sampleMoments.x, 0.0);
 
             float kernelWeight = kKernel[abs(ox)] * kKernel[abs(oy)];
-            float historyWeight = min(sampleHistoryLength, 4.0);
+            // Give more weight to samples with more history
+            float historyWeight = sqrt(max(sampleHistoryLength, 1.0));
             float weight = kernelWeight * historyWeight;
 
             accumVariance += sampleVariance * weight;

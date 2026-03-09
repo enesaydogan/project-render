@@ -62,16 +62,26 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             float sampleLuma = dot(sampleColor, kLuma);
 
             float kernelWeight = kKernel[abs(kx)] * kKernel[abs(ky)];
-            float varianceEstimate = max(0.5 * (centerVariance + sampleVariance), 1e-5);
-            float colorWeight = exp(-abs(sampleLuma - centerLuma) /
-                                    max(0.75 * g_phiColor * sqrt(varianceEstimate), 1e-4));
+            // Add a small epsilon to variance to prevent it from going to zero and causing boiling
+            float varianceEstimate = max(0.5 * (centerVariance + sampleVariance), 1e-6);
+            
+            // Relative color weight: Use the maximum of center and sample luma 
+            // to make the edge detection brightness-independent.
+            float lumaDiff = abs(sampleLuma - centerLuma);
+            // Dynamic Phi: Boost phi in dark areas to gather more light (reduces energy loss)
+            float dynamicPhi = g_phiColor * (1.0 + 1.0 / (max(centerLuma, 0.05)));
+            
+            float colorWeight = exp(-lumaDiff /
+                                    max(dynamicPhi * sqrt(varianceEstimate) + 1e-2, 1e-3));
+            
+            // Stronger normal weight exponent for better edge preservation
             float normalWeight = pow(saturate(dot(centerNormal, sampleNormal)),
-                                     g_phiNormal / 24.0);
-            float maxDepth = max(max(abs(centerDepth), abs(sampleDepth)), 1.0);
+                                     g_phiNormal);
+            float maxDepth = max(max(abs(centerDepth), abs(sampleDepth)), 1e-4);
             float depthTolerance =
                 max(0.01,
                     g_phiDepth * g_depthRejectScale * maxDepth *
-                        max(float(g_stepWidth), 1.0));
+                        max(float(g_stepWidth), 0.5));
             float depthWeight = exp(-abs(sampleDepth - centerDepth) / depthTolerance);
             float weight = kernelWeight * colorWeight * normalWeight * depthWeight;
 
@@ -81,22 +91,14 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         }
     }
 
-    float3 finalColor = accumColor / max(accumWeight, 1e-5);
-    float finalVariance = accumVariance / max(accumWeight, 1e-5);
-    if (accumWeight <= 1e-5)
-    {
-        finalColor = centerColor;
-        finalVariance = centerVariance;
-    }
+    float3 finalColor = accumColor / max(accumWeight, 1e-4);
+    float finalVariance = accumVariance / max(accumWeight * accumWeight, 1e-4);
 
-    // Remodulate by albedo if requested and albedo > 0
     if (g_remodulateAlbedo)
     {
         float3 albedo = g_albedo.Load(int3(pixel, 0)).rgb;
-        if (any(albedo > 0))
-        {
-            finalColor *= albedo;
-        }
+        // Boost albedo floor even more for energy preservation on ceilings
+        finalColor *= max(albedo, 0.1);
     }
 
     g_outputColor[pixel] = float4(finalColor, finalVariance);
