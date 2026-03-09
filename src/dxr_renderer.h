@@ -70,8 +70,8 @@ float GetGPUFrameTimeMs();
 void GetShaderCounters(UINT *outCounters, UINT maxCount);
 
 struct SvgfSettings {
-  float temporalAlpha = 0.05f;
-  float momentsAlpha = 0.2f;
+  float temporalAlpha = 0.0f;
+  float momentsAlpha = 0.0f;
   int atrousIterations = 5;
   float phiColor = 10.0f;
   float phiNormal = 32.0f;
