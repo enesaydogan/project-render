@@ -26,12 +26,25 @@ Texture2D<float2> g_prevMoments : register(t5);
 Texture2D<float> g_prevHistoryLength : register(t6);
 Texture2D<float> g_prevDepth : register(t7);
 Texture2D<float4> g_prevNormalRoughness : register(t8);
+Texture2D<float4> g_albedo : register(t9);
 
 RWTexture2D<float4> g_temporalColorOut : register(u0);
 RWTexture2D<float2> g_momentsOut : register(u1);
 RWTexture2D<float> g_historyLengthOut : register(u2);
 
 static const float3 kLuma = float3(0.2126, 0.7152, 0.0722);
+
+float3 DemodulateByAlbedo(float3 color, float3 albedo)
+{
+    if (!any(albedo > 0.0))
+        return color;
+
+    float3 safeAlbedo = float3(
+        (albedo.x > 0.0) ? albedo.x : 1.0,
+        (albedo.y > 0.0) ? albedo.y : 1.0,
+        (albedo.z > 0.0) ? albedo.z : 1.0);
+    return color / safeAlbedo;
+}
 
 [numthreads(GROUP_SIZE_X, GROUP_SIZE_Y, 1)]
 void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
@@ -41,6 +54,10 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     int2 pixel = int2(dispatchThreadID.xy);
     float3 noisy = g_noisyInput.Load(int3(pixel, 0)).rgb;
+    float3 albedo = g_albedo.Load(int3(pixel, 0)).rgb;
+    // History is accumulated in illumination space to avoid reprojecting with
+    // the wrong material albedo after disocclusions.
+    noisy = DemodulateByAlbedo(noisy, albedo);
     float currDepth = g_depth.Load(int3(pixel, 0));
     float3 currNormal = normalize(g_normalRoughness.Load(int3(pixel, 0)).xyz);
     float currLum = dot(noisy, kLuma);
@@ -60,6 +77,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             int2 samplePixel = clamp(pixel + int2(ox, oy), int2(0, 0),
                                      int2(int(g_width) - 1, int(g_height) - 1));
             float3 sampleColor = g_noisyInput.Load(int3(samplePixel, 0)).rgb;
+            float3 sampleAlbedo = g_albedo.Load(int3(samplePixel, 0)).rgb;
+            sampleColor = DemodulateByAlbedo(sampleColor, sampleAlbedo);
             neighborhoodMin = min(neighborhoodMin, sampleColor);
             neighborhoodMax = max(neighborhoodMax, sampleColor);
             neighborhoodSum += sampleColor;
@@ -95,8 +114,10 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         float3 prevNormal = normalize(g_prevNormalRoughness.Load(int3(prevPixel, 0)).xyz);
         float depthDelta = abs(prevDepth - currDepth);
         float normalDot = dot(prevNormal, currNormal);
+        float depthTolerance =
+            max(0.01, max(abs(currDepth), abs(prevDepth)) * g_depthRejectScale);
         validHistory = normalDot >= g_normalRejectCos &&
-                       depthDelta <= max(0.001, abs(currDepth) * g_depthRejectScale);
+                       depthDelta <= depthTolerance;
     }
 
     if (validHistory)

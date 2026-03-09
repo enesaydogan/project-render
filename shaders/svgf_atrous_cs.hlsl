@@ -67,7 +67,11 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                                     max(0.75 * g_phiColor * sqrt(varianceEstimate), 1e-4));
             float normalWeight = pow(saturate(dot(centerNormal, sampleNormal)),
                                      g_phiNormal / 24.0);
-            float depthTolerance = max(g_phiDepth, 1e-4) * max(float(g_stepWidth), 1.0) * max(abs(centerDepth) * 0.1, 1.0);
+            float maxDepth = max(max(abs(centerDepth), abs(sampleDepth)), 1.0);
+            float depthTolerance =
+                max(0.01,
+                    g_phiDepth * g_depthRejectScale * maxDepth *
+                        max(float(g_stepWidth), 1.0));
             float depthWeight = exp(-abs(sampleDepth - centerDepth) / depthTolerance);
             float weight = kernelWeight * colorWeight * normalWeight * depthWeight;
 
@@ -83,6 +87,16 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     {
         finalColor = centerColor;
         finalVariance = centerVariance;
+    }
+
+    // Remodulate by albedo if requested and albedo > 0
+    if (g_remodulateAlbedo)
+    {
+        float3 albedo = g_albedo.Load(int3(pixel, 0)).rgb;
+        if (any(albedo > 0))
+        {
+            finalColor *= albedo;
+        }
     }
 
     g_outputColor[pixel] = float4(finalColor, finalVariance);
