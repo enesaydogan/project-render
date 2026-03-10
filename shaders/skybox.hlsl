@@ -116,10 +116,10 @@ float4 PSMain(PSInput input) : SV_TARGET {
          const float PI = 3.14159265f;
          float sunSolidAngle = 2.0f * PI * (1.0f - cosSunRadius);
          float3 sunRadiance = (lightColor.rgb * lightColor.w) / max(sunSolidAngle, 1e-7f);
-         color = sunRadiance * intensity;
+         color = sunRadiance;
     } else {
          // Apply sky intensity scaling and camera exposure
-         color = baseSky * intensity;
+         color = baseSky;
     }
 
     // Use baked lat-long clouds when available (much cheaper than raymarching each pixel)

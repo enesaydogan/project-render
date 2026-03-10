@@ -41,7 +41,10 @@ cbuffer CameraCB : register(b0)
     float iblRotationDegrees;
     float sampleEnvSolidAngle;
     float nrdEnabled;
-    float _cameraPadEnd;
+    float _pad3;
+    float4x4 shadowMatrix;
+    float4x4 viewProj;
+    float4x4 invViewProj;
 };
 
 cbuffer WorldCB : register(b2)
@@ -66,7 +69,10 @@ cbuffer MaterialCB : register(b1)
 // Texture array - bonded as an unbounded array in SM 6.x
 Texture2D textures[] : register(t0);
 Texture2D envMap : register(t0, space1);
+Texture2D shadowMap : register(t1, space1);
+
 SamplerState linearSampler : register(s0);
+SamplerComparisonState shadowSampler : register(s1, space1);
 
 float2 DirectionToUV(float3 dir) {
     float2 uv;
@@ -274,20 +280,58 @@ float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent, int 
     return normalize(mul(tangentNormal, TBN));
 }
 
-float4 PSMainMesh(PSInputMesh input) : SV_TARGET
+float CalculateShadow(float3 worldPos)
+{
+    float4 shadowPos = mul(shadowMatrix, float4(worldPos, 1.0));
+    shadowPos.xyz /= shadowPos.w;
+    
+    // Transform to [0,1] range for UV sampling
+    float2 shadowUV = shadowPos.xy * 0.5 + 0.5;
+    shadowUV.y = 1.0 - shadowUV.y;
+
+    if (shadowUV.x < 0 || shadowUV.x > 1 || shadowUV.y < 0 || shadowUV.y > 1) return 1.0;
+    
+    float currentDepth = shadowPos.z;
+    if (currentDepth > 1.0) return 1.0;
+
+    // 3x3 PCF
+    float shadow = 0.0;
+    float2 texelSize = 1.0 / 2048.0;
+    for(int x = -1; x <= 1; ++x)
+    {
+        for(int y = -1; y <= 1; ++y)
+        {
+            shadow += shadowMap.SampleCmpLevelZero(shadowSampler, shadowUV + float2(x, y) * texelSize, currentDepth - 0.0005).r;
+        }
+    }
+    return shadow / 9.0;
+}
+
+struct PSOutput {
+    float4 color : SV_Target0;
+    float4 normal : SV_Target1;
+};
+
+PSOutput PSMainMesh(PSInputMesh input)
 {
 #ifdef RASTER_DEBUG_DEPTH
     // Output clip-space depth as grayscale for debugging
     float clipW = input.position.w;
-    float depth = 0.0f;
+    float depthVal = 0.0f;
     if (abs(clipW) > 1e-6) {
-        depth = saturate(input.position.z / clipW);
+        depthVal = saturate(input.position.z / clipW);
     }
-    return float4(depth, depth, depth, 1.0);
+    PSOutput o_depth;
+    o_depth.color = float4(depthVal, depthVal, depthVal, 1.0);
+    o_depth.normal = float4(0,0,0,1);
+    return o_depth;
 #endif
 #ifdef RASTER_DEBUG_UV
     // Debug mode: output UVs in RGB for quick comparison with RayGen UV output
-    return float4(input.uv.xy, 0.0, 1.0);
+    PSOutput o;
+    o.color = float4(input.uv.xy, 0.0, 1.0);
+    o.normal = float4(0,0,0,1);
+    return o;
 #endif
 
     // --- Texture Lookups ---
@@ -393,14 +437,19 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     
     float NdotL = saturate(dot(N, L));
     float3 radiance = lightColor.rgb * lightColor.w;
+    
     float3 baseDirect = (diffuseTerm + spec) * radiance * NdotL;
     float3 coatDirect = coatSpec * radiance * NdotL;
     float3 directLight = baseDirect * (1.0 - clearcoat) + coatDirect * clearcoat;
 
+    // Modulate direct light by shadow
+    float shadow = CalculateShadow(input.worldPos);
+    directLight *= shadow;
+
     // Backlighting translucency approximation
     if (translucency > 0.001) {
         float NdotL_back = saturate(dot(-N, L));
-        directLight += (DiffuseAlbedo / PI) * radiance * NdotL_back * translucency;
+        directLight += (DiffuseAlbedo / PI) * radiance * NdotL_back * translucency * shadow;
     }
     
     // IBL (Image Based Lighting)
@@ -410,17 +459,16 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     float3 kD_ibl = 1.0 - kS_ibl;
 
     float2 envUV_diff = DirectionToUV(N);
-    // Use mips now that they are available! Level 6-8 is good for diffuse
     float3 irradiance = envMap.SampleLevel(linearSampler, envUV_diff, 7.0).rgb; 
     float3 diffuse_ibl = kD_ibl * irradiance * DiffuseAlbedo;
 
     float2 envUV_spec = DirectionToUV(R);
-    // Prefiltered reflection using mips based on roughness
     float3 prefilteredColor = envMap.SampleLevel(linearSampler, envUV_spec, roughness * 7.0).rgb;
     float3 specular_ibl = kS_ibl * prefilteredColor;
 
     float3 coat_ibl = float3(0.0, 0.0, 0.0);
     if (clearcoat > 0.001) {
+        float2 envUV_spec = DirectionToUV(R);
         float3 prefilteredCoat = envMap.SampleLevel(linearSampler, envUV_spec, clearcoatRoughness * 7.0).rgb;
         float3 F0c = float3(0.04, 0.04, 0.04);
         float3 Fc_ibl = FresnelSchlickRoughness(max(dot(N, V), 0.0), F0c, clearcoatRoughness);
@@ -444,19 +492,27 @@ float4 PSMainMesh(PSInputMesh input) : SV_TARGET
     
     float3 color = directLight + ambient + emiss;
     
-    // Exposure & Tone Map
-    color *= intensity;
+    // Exposure handling moved to tonemapping pass
+    // color *= intensity;
     
     // DEBUG PASS
     int mode = (int)debugMode;
-    // Mode 1: Albedo
-    if (mode == 1) return float4(BaseColor, 1.0);
-    if (mode == 2) return float4(N * 0.5 + 0.5, 1.0); // Normal
-    if (mode == 3) return float4(emiss, 1.0); // Emissive
-    if (mode == 4) return float4(1.0 - roughness, 1.0 - roughness, 1.0 - roughness, 1.0); // Glossiness
-    if (mode == 5) return float4(F0, 1.0); // F0
-    if (mode == 6) return float4(metalness, metalness, metalness, 1.0); // Metalness
-    if (mode == 7) return float4(ao, ao, ao, 1.0); // AO
+    if (mode > 0) {
+        PSOutput o_dbg;
+        o_dbg.normal = float4(N * 0.5 + 0.5, 1.0);
+        if (mode == 1) o_dbg.color = float4(BaseColor, 1.0);
+        else if (mode == 2) o_dbg.color = float4(N * 0.5 + 0.5, 1.0);
+        else if (mode == 3) o_dbg.color = float4(emiss, 1.0);
+        else if (mode == 4) o_dbg.color = float4(1.0 - roughness, 1.0 - roughness, 1.0 - roughness, 1.0);
+        else if (mode == 5) o_dbg.color = float4(F0, 1.0);
+        else if (mode == 6) o_dbg.color = float4(metalness, metalness, metalness, 1.0);
+        else if (mode == 7) o_dbg.color = float4(ao, ao, ao, 1.0);
+        else o_dbg.color = float4(0,0,0,1);
+        return o_dbg;
+    }
 
-    return float4(color, alpha);
+    PSOutput o;
+    o.color = float4(color, alpha);
+    o.normal = float4(N * 0.5 + 0.5, 1.0);
+    return o;
 }

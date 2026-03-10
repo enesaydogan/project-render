@@ -4,6 +4,12 @@
     <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\avg_luminance_cs_CSMain_cs_6_5.cso.rule">
       <Filter>CMake Rules</Filter>
     </CustomBuild>
+    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\bloom_extract_cs_CSMain_cs_6_5.cso.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\blur_cs_CSMain_cs_6_5.cso.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
     <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\grass_cull_cs_CSMain_cs_6_5.cso.rule">
       <Filter>CMake Rules</Filter>
     </CustomBuild>
@@ -50,6 +56,12 @@
       <Filter>CMake Rules</Filter>
     </CustomBuild>
     <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\skybox_VSMain_vs_6_0.cso.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\ssao_cs_CSMain_cs_6_5.cso.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\ssr_cs_CSMain_cs_6_5.cso.rule">
       <Filter>CMake Rules</Filter>
     </CustomBuild>
     <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\svgf_atrous_cs_CSMain_cs_6_5.cso.rule">

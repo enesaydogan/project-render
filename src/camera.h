@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <d3d12.h>
 #include <windows.h>
 #include <wrl.h>
@@ -50,7 +50,10 @@ struct CameraCB {
   // be useful for debugging or comparing the two approaches.
   float sampleEnvSolidAngle;
   float nrdEnabled;
-  float _cameraPadEnd;
+  float _pad3;
+  float shadowMatrix[16];
+  float viewProj[16];
+  float invViewProj[16];
 };
 // Camera state (defined in camera.cpp)
 extern CameraCB g_initialCameraData;
