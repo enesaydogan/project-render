@@ -6,35 +6,38 @@
 
 ## ✨ Key Features
 
-### 🌌 Advanced Rendering
+### 🌌 Advanced Path Tracing
 - **Unified DXR Path Tracer**: Progressive path tracing with high-precision accumulation (R32G32B32A32_FLOAT).
-- **ReSTIR DI & GI**: Reservoir-based Spatio-Temporal Importance Resampling for both direct lighting and many-bounce indirect global illumination.
-- **Image-Based Lighting (IBL)**: Physics-based Rayleigh/Mie atmospheric scattering and HDR environment map support with pre-filtered importance sampling.
-- **Microfacet PBR BRDF**: Physically-based rendering using GGX distribution, Smith geometry, and Schlick Fresnel, shared between raster and raytracing paths for visual parity.
+- **Multiple Importance Sampling (MIS)**: Power Heuristic-based MIS combining BRDF and Light sampling to eliminate fireflies on glossy surfaces.
+- **ReSTIR DI & GI**: Reservoir-based Spatio-Temporal Importance Resampling.
+  - **Indirect GI**: Indirect path resampling with Reconnection Shift Mapping for stable multi-bounce global illumination.
+  - **Direct DI**: Many-light sampling with temporal and spatial reservoir reuse.
+- **Efficiency Optimizations**:
+  - **Russian Roulette**: Adaptive path termination based on throughput to maximize MegaRays/second.
+  - **64-Byte Material Struct**: GPU-cache optimized material data layout for reduced memory bandwidth.
+  - **Opaque Hardware Fast-Path**: Dynamic BLAS flagging for non-alpha-tested geometry.
 
-### 🧠 Intelligent Denoising & Upscaling
-- **NVIDIA DLSS Ray Reconstruction (DLSS-D)**: Integrated via Streamline for high-quality real-time denoising of complex lighting and reflections. Fully stable with physically correct specular motion vectors and jittered reprojection.
-- **Intel Open Image Denoise (OIDN) 2.x**: Integrated for high-quality final-frame cleanup via GPU zero-copy shared handles.
-- **DLSS Super Resolution (DLSS-SR)**: High-performance upscaling for fluid interaction even at 4K.
+### 🧠 Intelligent Denoising Stack
+- **NVIDIA DLSS Ray Reconstruction (DLSS-RR)**: State-of-the-art denoising via Streamline. Includes custom jitter-aligned motion vectors and specular virtual point reprojection for perfect reflections.
+- **NVIDIA NRD (ReLAX)**: Real-time denoising for diffuse and specular signals, ideal for dynamic scenes.
+- **SVGF (Spatio-Temporal Variance-Guided Filtering)**: Integrated temporal filtering with A-Trous spatial passes for immediate feedback.
+- **Intel Open Image Denoise (OIDN) 2.x**: AI-accelerated "Final Frame" denoising via GPU zero-copy shared handles for ultra-high quality exports.
 
-### 🏗 Asset & Material System
-- **Universal Model Import**: Robust support for **glTF 2.0 (GLB/GLTF)**, FBX, OBJ, STL, and more via Assimp.
-- **ArchViz Material Editor**: Real-time material tweaking with support for:
+### 🏗 Asset & ArchViz System
+- **Universal Model Import**: Robust support for **glTF 2.0**, FBX, OBJ, and STL via Assimp.
+- **ArchViz Material Editor**: 
   - Metallic-Roughness & Specular-Glossiness workflows.
-  - Clearcoat and secondary specular lobes.
-  - Thin-walled transmission (glass/leaves).
-  - Tri-planar mapping and local UV transforms.
-- **Procedural Grass System**: Optimized grass generation and rendering for large-scale environments.
+  - **Clearcoat & Transmission**: Specialized lobes for glass, automotive finishes, and thin-walled foliage.
+- **Physical Camera & Lighting**:
+  - **IES Light Profiles**: Support for industry-standard photometric light data.
+  - **Advanced Sky Models**: Integrated **Prague Sky Model** for physically accurate daylighting.
+  - **Physical Exposure**: Control via ISO, Shutter Speed, and Aperture.
+  - **Auto-Exposure**: Real-time luminance histogram evaluation for stable EV100 calculation.
 
-### 🖥️ Editor & UI
-- **Advanced Workspace**: Full ImGui docking and multi-viewport support for multi-monitor setups.
-- **Persistent Layouts**: Automatic saving and restoration of panel states and window positions.
-- **Custom Theming**: Tailored ArchViz-focused dark theme for comfortable long-term use.
-
-### ⚡ Performance & Optimizations
-- **Multi-Threading**: Highly parallelized procedural cloud noise generation and sky model evaluation.
-- **SIMD Acceleration**: AVX2-optimized math routines for CPU-side sky and atmospheric calculations.
-- **Precise Timing**: Accurate frame and raster timing mechanisms for smooth profiling and rendering.
+### 🖥️ Editor & Workflow
+- **Docking Workspace**: Full ImGui docking support with persistent layouts.
+- **High-Quality Export**: One-click lossless PNG export of tonemapped frames.
+- **Performance Profiling**: Real-time GPU/CPU timing, SPP counters, and noise level estimation.
 
 ---
 
@@ -42,7 +45,7 @@
 
 ### Prerequisites
 - Windows 10/11
-- NVIDIA RTX GPU (for DXR and DLSS features)
+- NVIDIA RTX GPU (DXR 1.1 + Ray Reconstruction support recommended)
 - Visual Studio 2022
 - CMake 3.20+
 
@@ -54,11 +57,7 @@
    ```
 
 2. **Full Feature Build (glTF + vcpkg)**:
-   Ensure `vcpkg` is installed and run:
    ```powershell
-   # Install tinygltf dependency
-   vcpkg install tinygltf:x64-windows
-
    # Configure with vcpkg toolchain
    cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
          -DCMAKE_TOOLCHAIN_FILE="C:/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake" `
@@ -68,20 +67,20 @@
 
 ---
 
-## 🛠 Advanced Features & Troubleshooting
+## 🛠 Advanced Configuration
 
 ### DLSS / DLSS Ray Reconstruction
-- **AppID requirement**: DLSS requires an NVIDIA AppID. Set the environment variable `SL_APPLICATION_ID` or create `sl_appid.txt` next to the executable.
-- **Development DLLs**: Production builds require whitelisted AppIDs. Debug builds automatically use "Development" DLLs which bypass whitelist checks but display an onscreen watermark.
+- **AppID**: DLSS requires an NVIDIA AppID. Set the environment variable `SL_APPLICATION_ID` or create `sl_appid.txt` in the root.
+- **Development Mode**: Debug builds automatically use "Development" DLLs (watermarked) to bypass whitelist checks.
 
 ### NVIDIA Streamline (SL)
-- **Logging**: Streamline logs are written to the `sl_logs` directory. Logging behavior can be customized by placing `sl.interposer.json` next to the executable.
-- **Ray Reconstruction**: Throttled by default to optimize for quality vs frequency. See `src/dxr_renderer.cpp` for evaluation logic.
+- **Reflections**: Specular motion vectors are calculated using virtual reflection points to ensure DLSS-RR stability on curved surfaces.
+- **Jitter**: Jittered motion vectors are enabled by default for maximum clarity during accumulation.
 
 ### Troubleshooting
-- **Grey Viewport**: Usually indicates a missing HDRI or an empty scene. Import a model or load an environment map via the UI.
-- **DLSS Watermark**: Indicates you are using development NGX binaries. This is normal for non-production environments.
+- **Grey Viewport**: Ensure a sky model is selected or an HDRI is loaded in the Environment panel.
+- **Low Performance**: Check that `D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE` is being correctly applied to non-transparent meshes.
 
 ---
 
-*This project was initialized and developed in collaboration with an AI coding assistant as a starting scaffold and evolved into a feature-rich renderer.*
+*This project is a high-performance rendering scaffold evolved into a feature-rich ArchViz tool in collaboration with an AI coding assistant.*
