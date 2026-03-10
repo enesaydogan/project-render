@@ -547,7 +547,7 @@ void RayGen()
                 // without it, all specular pixels get the same fixed blur radius regardless of
                 // how close or far the reflected geometry is, causing noise on glossy surfaces.
                 if (!primaryIsRefractive &&
-                    (dlssRayReconstruction > 0.5 || nrdActive) &&
+                    (dlssRayReconstruction > 0.5 || (nrdActive && primaryRoughness < 0.6)) &&
                     max(primarySpecAlbedo.r, max(primarySpecAlbedo.g, primarySpecAlbedo.b)) > 0.01) {
                     float3 R_spec = reflect(guideDir, primaryNormal);
                     RayDesc specHitRay;
