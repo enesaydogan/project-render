@@ -8,13 +8,8 @@ RWTexture2D<float4> g_outputColor : register(u0);
 
 float3 RemodulateByAlbedo(float3 illumination, float3 albedo)
 {
-    if (!any(albedo > 0.0))
-        return illumination;
-
-    float3 safeAlbedo = float3(
-        (albedo.x > 0.0) ? albedo.x : 1.0,
-        (albedo.y > 0.0) ? albedo.y : 1.0,
-        (albedo.z > 0.0) ? albedo.z : 1.0);
+    // Perfection: Mirror of temporal demodulation
+    float3 safeAlbedo = max(albedo, 0.01);
     return illumination * safeAlbedo;
 }
 
