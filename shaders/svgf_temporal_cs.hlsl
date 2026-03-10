@@ -36,7 +36,9 @@ static const float3 kLuma = float3(0.2126, 0.7152, 0.0722);
 
 float3 DemodulateByAlbedo(float3 color, float3 albedo)
 {
-    return color / max(albedo, 0.01);
+    // Perfection: Identical logic to composite pass
+    float3 safeAlbedo = max(albedo, 0.01);
+    return color / safeAlbedo;
 }
 
 [numthreads(GROUP_SIZE_X, GROUP_SIZE_Y, 1)]
@@ -103,19 +105,19 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         float2 prevMoments = historyMoments / totalWeight;
         float prevLen = historyLength / totalWeight;
 
-        // Outlier rejection: be very careful not to kill valid new light
         float historyMean = prevMoments.x;
         float historyVar = max(0.0, prevMoments.y - historyMean * historyMean);
-        float sigma = sqrt(historyVar);
+        // Minimum sigma to prevent clamping window from collapsing to zero
+        float sigma = sqrt(max(historyVar, 1e-4));
         float colorLuma = dot(noisy, kLuma);
         
-        // Only clamp if we have significant history (> 8 frames)
-        if (prevLen > 8.0)
+        // Perfection Tune: Very Wide Symmetric Clamping
+        // Using 6-sigma is extremely permissive but catches the "true" fireflies
+        // without affecting the statistical mean of the signal.
+        if (prevLen > 32.0) 
         {
-            // Be more permissive with bright pixels (lumaMax) than dark ones (lumaMin)
-            // This prevents darkening of valid bright signals like sun or ceiling bounce
-            float lumaMin = historyMean - 2.0 * sigma;
-            float lumaMax = historyMean + 5.0 * sigma; // Increased to 5-sigma for light preservation
+            float lumaMin = historyMean - 6.0 * sigma;
+            float lumaMax = historyMean + 6.0 * sigma;
             
             if (colorLuma < lumaMin || colorLuma > lumaMax)
             {
@@ -125,6 +127,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             }
         }
 
+        // Use a faster ramp-up for history to reach stable state quicker
         float alpha = 1.0 / min(prevLen + 1.0, 128.0);
         float colorAlpha = max(g_temporalAlpha, alpha);
         float momentsAlpha = max(g_momentsAlpha, alpha);

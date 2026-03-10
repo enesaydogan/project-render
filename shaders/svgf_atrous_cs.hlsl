@@ -91,15 +91,12 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         }
     }
 
+    // Final Normalization: Strict weight compensation to prevent energy leak
     float3 finalColor = accumColor / max(accumWeight, 1e-4);
     float finalVariance = accumVariance / max(accumWeight * accumWeight, 1e-4);
 
-    if (g_remodulateAlbedo)
-    {
-        float3 albedo = g_albedo.Load(int3(pixel, 0)).rgb;
-        // Boost albedo floor even more for energy preservation on ceilings
-        finalColor *= max(albedo, 0.1);
-    }
+    // REMOVED: g_remodulateAlbedo logic. 
+    // This must NOT be here because Atrous runs in multiple iterations.
 
     g_outputColor[pixel] = float4(finalColor, finalVariance);
 }

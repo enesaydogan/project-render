@@ -2570,24 +2570,24 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   // Not shared (only used by internal CS and Copy)
   CreateUavTexture(s_tonemapOutputUAV, outDesc, DXGI_FORMAT_R10G10B10A2_UNORM,
                    L"RT Tonemap Output");
-  CreateUavTexture(s_svgfNoisyInputUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
+  CreateUavTexture(s_svgfNoisyInputUAV, texDesc, DXGI_FORMAT_R32G32B32A32_FLOAT,
                    L"SVGF Noisy Input");
   CreateUavTexture(s_svgfLinearDepthUAV, texDesc, DXGI_FORMAT_R32_FLOAT,
                    L"SVGF Linear Depth");
-  CreateUavTexture(s_svgfTemporalUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
+  CreateUavTexture(s_svgfTemporalUAV, texDesc, DXGI_FORMAT_R32G32B32A32_FLOAT,
                    L"SVGF Temporal");
-  CreateUavTexture(s_svgfVarianceUAV, texDesc, DXGI_FORMAT_R16_FLOAT,
+  CreateUavTexture(s_svgfVarianceUAV, texDesc, DXGI_FORMAT_R32_FLOAT,
                    L"SVGF Variance");
-  CreateUavTexture(s_svgfAtrousPingUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
+  CreateUavTexture(s_svgfAtrousPingUAV, texDesc, DXGI_FORMAT_R32G32B32A32_FLOAT,
                    L"SVGF A-Trous Ping");
-  CreateUavTexture(s_svgfAtrousPongUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
+  CreateUavTexture(s_svgfAtrousPongUAV, texDesc, DXGI_FORMAT_R32G32B32A32_FLOAT,
                    L"SVGF A-Trous Pong");
   for (UINT i = 0; i < 2; ++i) {
     CreateUavTexture(s_svgfHistoryColor[i], texDesc,
-                     DXGI_FORMAT_R16G16B16A16_FLOAT, L"SVGF History Color");
-    CreateUavTexture(s_svgfHistoryMoments[i], texDesc, DXGI_FORMAT_R16G16_FLOAT,
+                     DXGI_FORMAT_R32G32B32A32_FLOAT, L"SVGF History Color");
+    CreateUavTexture(s_svgfHistoryMoments[i], texDesc, DXGI_FORMAT_R32G32_FLOAT,
                      L"SVGF History Moments");
-    CreateUavTexture(s_svgfHistoryLength[i], texDesc, DXGI_FORMAT_R16_FLOAT,
+    CreateUavTexture(s_svgfHistoryLength[i], texDesc, DXGI_FORMAT_R32_FLOAT,
                      L"SVGF History Length");
     CreateUavTexture(s_svgfHistoryDepth[i], texDesc, DXGI_FORMAT_R32_FLOAT,
                      L"SVGF History Depth");
@@ -2646,7 +2646,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
               DXR_HEAP_SVGF_LINEAR_DEPTH_UAV_OFFSET);
   CreateUavAt(s_oidnOutputUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
               DXR_HEAP_OIDN_OUT_UAV_OFFSET);
-  CreateUavAt(s_svgfNoisyInputUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
+  CreateUavAt(s_svgfNoisyInputUAV.Get(), DXGI_FORMAT_R32G32B32A32_FLOAT,
               DXR_HEAP_SVGF_NOISY_OFFSET);
   CreateUavAt(s_nrdDiffuseRadianceHitDistUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
               DXR_HEAP_NRD_DIFFUSE_RADIANCE_HITDIST_OFFSET);
@@ -3929,7 +3929,7 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
 
   SvgfConstants cbTemp1 = WriteConstants(1u, !hasHistory, false);
   CreateSrvAt(s_svgfTemporalHeap.Get(), 0, s_svgfNoisyInputUAV.Get(),
-              DXGI_FORMAT_R16G16B16A16_FLOAT);
+              DXGI_FORMAT_R32G32B32A32_FLOAT);
   CreateSrvAt(s_svgfTemporalHeap.Get(), 1, s_svgfLinearDepthUAV.Get(),
               DXGI_FORMAT_R32_FLOAT);
   CreateSrvAt(s_svgfTemporalHeap.Get(), 2, s_normalRoughnessUAV.Get(),
@@ -3937,13 +3937,13 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
   CreateSrvAt(s_svgfTemporalHeap.Get(), 3, s_mvecUAV.Get(), DXGI_FORMAT_R16G16_FLOAT);
   CreateSrvAt(s_svgfTemporalHeap.Get(), 4,
               s_svgfHistoryColor[prev].Get(),
-              DXGI_FORMAT_R16G16B16A16_FLOAT);
+              DXGI_FORMAT_R32G32B32A32_FLOAT);
   CreateSrvAt(s_svgfTemporalHeap.Get(), 5,
               s_svgfHistoryMoments[prev].Get(),
-              DXGI_FORMAT_R16G16_FLOAT);
+              DXGI_FORMAT_R32G32_FLOAT);
   CreateSrvAt(s_svgfTemporalHeap.Get(), 6,
               s_svgfHistoryLength[prev].Get(),
-              DXGI_FORMAT_R16_FLOAT);
+              DXGI_FORMAT_R32_FLOAT);
   CreateSrvAt(s_svgfTemporalHeap.Get(), 7,
               s_svgfHistoryDepth[prev].Get(),
               DXGI_FORMAT_R32_FLOAT);
@@ -3953,11 +3953,11 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
   CreateSrvAt(s_svgfTemporalHeap.Get(), 9, s_albedoUAV.Get(),
               DXGI_FORMAT_R16G16B16A16_FLOAT);
   CreateUavAt(s_svgfTemporalHeap.Get(), 10, s_svgfTemporalUAV.Get(),
-              DXGI_FORMAT_R16G16B16A16_FLOAT);
+              DXGI_FORMAT_R32G32B32A32_FLOAT);
   CreateUavAt(s_svgfTemporalHeap.Get(), 11, s_svgfHistoryMoments[curr].Get(),
-              DXGI_FORMAT_R16G16_FLOAT);
+              DXGI_FORMAT_R32G32_FLOAT);
   CreateUavAt(s_svgfTemporalHeap.Get(), 12, s_svgfHistoryLength[curr].Get(),
-              DXGI_FORMAT_R16_FLOAT);
+              DXGI_FORMAT_R32_FLOAT);
 
   ID3D12DescriptorHeap *temporalHeaps[] = {s_svgfTemporalHeap.Get()};
   dxrList->SetDescriptorHeaps(1, temporalHeaps);
@@ -3984,13 +3984,13 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
   CreateSrvAt(s_svgfVarianceHeap.Get(), 0, s_svgfTemporalUAV.Get(),
-              DXGI_FORMAT_R16G16B16A16_FLOAT);
+              DXGI_FORMAT_R32G32B32A32_FLOAT);
   CreateSrvAt(s_svgfVarianceHeap.Get(), 1, s_svgfHistoryMoments[curr].Get(),
-              DXGI_FORMAT_R16G16_FLOAT);
+              DXGI_FORMAT_R32G32_FLOAT);
   CreateSrvAt(s_svgfVarianceHeap.Get(), 2, s_svgfHistoryLength[curr].Get(),
-              DXGI_FORMAT_R16_FLOAT);
+              DXGI_FORMAT_R32_FLOAT);
   CreateUavAt(s_svgfVarianceHeap.Get(), 3, s_svgfVarianceUAV.Get(),
-              DXGI_FORMAT_R16_FLOAT);
+              DXGI_FORMAT_R32_FLOAT);
 
   ID3D12DescriptorHeap *varianceHeaps[] = {s_svgfVarianceHeap.Get()};
   dxrList->SetDescriptorHeaps(1, varianceHeaps);
@@ -4019,9 +4019,9 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
     SvgfConstants cbTemp2 = WriteConstants(stepWidth, false, false);
     UINT offset = iteration * 6;
     CreateSrvAt(s_svgfAtrousHeap.Get(), offset + 0, atrousInput,
-                DXGI_FORMAT_R16G16B16A16_FLOAT);
+                DXGI_FORMAT_R32G32B32A32_FLOAT);
     CreateSrvAt(s_svgfAtrousHeap.Get(), offset + 1, s_svgfVarianceUAV.Get(),
-                DXGI_FORMAT_R16_FLOAT);
+                DXGI_FORMAT_R32_FLOAT);
     CreateSrvAt(s_svgfAtrousHeap.Get(), offset + 2, s_normalRoughnessUAV.Get(),
                 DXGI_FORMAT_R16G16B16A16_FLOAT);
     CreateSrvAt(s_svgfAtrousHeap.Get(), offset + 3, s_svgfLinearDepthUAV.Get(),
@@ -4029,7 +4029,7 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
     CreateSrvAt(s_svgfAtrousHeap.Get(), offset + 4, s_albedoUAV.Get(),
                 DXGI_FORMAT_R16G16B16A16_FLOAT);
     CreateUavAt(s_svgfAtrousHeap.Get(), offset + 5, atrousOutput,
-                DXGI_FORMAT_R16G16B16A16_FLOAT);
+                DXGI_FORMAT_R32G32B32A32_FLOAT);
 
     ID3D12DescriptorHeap *atrousHeaps[] = {s_svgfAtrousHeap.Get()};
     dxrList->SetDescriptorHeaps(1, atrousHeaps);
@@ -4112,11 +4112,11 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
   CreateSrvAt(s_svgfCompositeHeap.Get(), 0, atrousOutput,
-              DXGI_FORMAT_R16G16B16A16_FLOAT);
+              DXGI_FORMAT_R32G32B32A32_FLOAT);
   CreateSrvAt(s_svgfCompositeHeap.Get(), 1, s_albedoUAV.Get(),
               DXGI_FORMAT_R16G16B16A16_FLOAT);
   CreateUavAt(s_svgfCompositeHeap.Get(), 2, compositeOutput,
-              DXGI_FORMAT_R16G16B16A16_FLOAT);
+              DXGI_FORMAT_R32G32B32A32_FLOAT);
 
   ID3D12DescriptorHeap *compositeHeaps[] = {s_svgfCompositeHeap.Get()};
   dxrList->SetDescriptorHeaps(1, compositeHeaps);
@@ -5587,7 +5587,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
           s_avgLumHeap->GetCPUDescriptorHandleForHeapStart();
 
       D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
-      srv.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+      srv.Format = exposureSource->GetDesc().Format;
       srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
       srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
       srv.Texture2D.MipLevels = 1;
@@ -5718,7 +5718,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         s_tonemapHeap->GetCPUDescriptorHandleForHeapStart();
 
     D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
-    srv.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    srv.Format = postColor->GetDesc().Format;
     srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     srv.Texture2D.MipLevels = 1;
@@ -6342,16 +6342,28 @@ static bool ExportNrdRadianceHitDistTexture(const std::wstring &directoryPath,
   float lumMax = 0.0f;
   float alphaMin = (std::numeric_limits<float>::max)();
   float alphaMax = 0.0f;
+  const DXGI_FORMAT format = resource->GetDesc().Format;
+  const bool isFloat32 = (format == DXGI_FORMAT_R32G32B32A32_FLOAT);
 
   for (UINT y = 0; y < height; ++y) {
-    const uint16_t *srcRow = (const uint16_t *)(raw.data() + footprint.Offset +
-                                                (size_t)y * footprint.Footprint.RowPitch);
+    const uint8_t *srcRow = raw.data() + footprint.Offset +
+                            (size_t)y * footprint.Footprint.RowPitch;
     for (UINT x = 0; x < width; ++x) {
       const size_t idx = (size_t)y * width + x;
-      const float r = HalfToFloat(srcRow[x * 4 + 0]);
-      const float g = HalfToFloat(srcRow[x * 4 + 1]);
-      const float b = HalfToFloat(srcRow[x * 4 + 2]);
-      const float a = HalfToFloat(srcRow[x * 4 + 3]);
+      float r, g, b, a;
+      if (isFloat32) {
+        const float *src = reinterpret_cast<const float *>(srcRow) + x * 4;
+        r = src[0];
+        g = src[1];
+        b = src[2];
+        a = src[3];
+      } else {
+        const uint16_t *src = reinterpret_cast<const uint16_t *>(srcRow) + x * 4;
+        r = HalfToFloat(src[0]);
+        g = HalfToFloat(src[1]);
+        b = HalfToFloat(src[2]);
+        a = HalfToFloat(src[3]);
+      }
       const float lum = (std::max)(0.0f, 0.2126f * r + 0.7152f * g + 0.0722f * b);
       lumMin = (std::min)(lumMin, lum);
       lumMax = (std::max)(lumMax, lum);
@@ -6566,11 +6578,14 @@ static bool ExportHalfScalarTexture(const std::wstring &directoryPath,
   std::vector<float> values((size_t)width * (size_t)height, 0.0f);
   float minV = (std::numeric_limits<float>::max)();
   float maxV = 0.0f;
+  const DXGI_FORMAT format = resource->GetDesc().Format;
+  const bool isFloat32 = (format == DXGI_FORMAT_R32_FLOAT);
   for (UINT y = 0; y < height; ++y) {
-    const uint16_t *srcRow = (const uint16_t *)(raw.data() + footprint.Offset +
-                                                (size_t)y * footprint.Footprint.RowPitch);
+    const uint8_t *srcRow = raw.data() + footprint.Offset +
+                            (size_t)y * footprint.Footprint.RowPitch;
     for (UINT x = 0; x < width; ++x) {
-      const float v = HalfToFloat(srcRow[x]);
+      const float v = isFloat32 ? reinterpret_cast<const float *>(srcRow)[x]
+                                : HalfToFloat(reinterpret_cast<const uint16_t *>(srcRow)[x]);
       values[(size_t)y * width + x] = v;
       if (std::isfinite(v)) {
         minV = (std::min)(minV, v);
@@ -6612,13 +6627,23 @@ static bool ExportHalf2Texture(const std::wstring &directoryPath,
   float maxX = 0.0f;
   float minY = (std::numeric_limits<float>::max)();
   float maxY = 0.0f;
+  const DXGI_FORMAT format = resource->GetDesc().Format;
+  const bool isFloat32 = (format == DXGI_FORMAT_R32G32_FLOAT);
   for (UINT y = 0; y < height; ++y) {
-    const uint16_t *srcRow = (const uint16_t *)(raw.data() + footprint.Offset +
-                                                (size_t)y * footprint.Footprint.RowPitch);
+    const uint8_t *srcRow = raw.data() + footprint.Offset +
+                            (size_t)y * footprint.Footprint.RowPitch;
     for (UINT x = 0; x < width; ++x) {
       const size_t idx = (size_t)y * width + x;
-      const float vx = HalfToFloat(srcRow[x * 2 + 0]);
-      const float vy = HalfToFloat(srcRow[x * 2 + 1]);
+      float vx, vy;
+      if (isFloat32) {
+        const float *src = reinterpret_cast<const float *>(srcRow) + x * 2;
+        vx = src[0];
+        vy = src[1];
+      } else {
+        const uint16_t *src = reinterpret_cast<const uint16_t *>(srcRow) + x * 2;
+        vx = HalfToFloat(src[0]);
+        vy = HalfToFloat(src[1]);
+      }
       xVals[idx] = vx;
       yVals[idx] = vy;
       if (std::isfinite(vx)) {
