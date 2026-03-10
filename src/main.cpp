@@ -8,6 +8,7 @@
 #include "dxr_renderer.h"
 #include "editor_ui.h"
 #include "file_import.h"
+#include "grass_manager.h"
 #include "ibl_manager.h"
 #include "imgui.h"
 #include "imgui_impl_dx12.h"
@@ -21,7 +22,6 @@
 #include "resource.h"
 #include "scene.h"
 #include "scene_io.h"
-#include "grass_manager.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -35,7 +35,6 @@
 #include <string>
 #include <vector>
 
-
 // Forward-declare ImGui Win32 WndProc handler (imgui_impl_win32.h documents
 // this should be declared by user)
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd,
@@ -45,7 +44,8 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd,
 
 namespace fs = std::filesystem;
 
-// Instanced blade data generated from meshes that have materials marked as grass.
+// Instanced blade data generated from meshes that have materials marked as
+// grass.
 static std::vector<FGrassBlade> g_grassBlades;
 static Asset::GpuMesh g_proceduralGrassBladeMesh;
 static bool g_proceduralGrassBladeReady = false;
@@ -74,23 +74,20 @@ static bool EnsureProceduralGrassBladeMesh() {
 
   // Crossed cards (2 quads) with double-sided indices for robust visibility.
   std::vector<Asset::Vertex> vertices(8);
-  vertices[0] = {{-0.09f, 0.00f,  0.00f}, {0, 0, 1}, {1, 0, 0, 1}, {0, 1}};
-  vertices[1] = {{ 0.09f, 0.00f,  0.00f}, {0, 0, 1}, {1, 0, 0, 1}, {1, 1}};
-  vertices[2] = {{-0.06f, 0.95f,  0.00f}, {0, 0, 1}, {1, 0, 0, 1}, {0, 0}};
-  vertices[3] = {{ 0.06f, 0.95f,  0.00f}, {0, 0, 1}, {1, 0, 0, 1}, {1, 0}};
+  vertices[0] = {{-0.09f, 0.00f, 0.00f}, {0, 0, 1}, {1, 0, 0, 1}, {0, 1}};
+  vertices[1] = {{0.09f, 0.00f, 0.00f}, {0, 0, 1}, {1, 0, 0, 1}, {1, 1}};
+  vertices[2] = {{-0.06f, 0.95f, 0.00f}, {0, 0, 1}, {1, 0, 0, 1}, {0, 0}};
+  vertices[3] = {{0.06f, 0.95f, 0.00f}, {0, 0, 1}, {1, 0, 0, 1}, {1, 0}};
 
-  vertices[4] = {{ 0.00f, 0.00f, -0.09f}, {1, 0, 0}, {0, 0, 1, 1}, {0, 1}};
-  vertices[5] = {{ 0.00f, 0.00f,  0.09f}, {1, 0, 0}, {0, 0, 1, 1}, {1, 1}};
-  vertices[6] = {{ 0.00f, 0.95f, -0.06f}, {1, 0, 0}, {0, 0, 1, 1}, {0, 0}};
-  vertices[7] = {{ 0.00f, 0.95f,  0.06f}, {1, 0, 0}, {0, 0, 1, 1}, {1, 0}};
+  vertices[4] = {{0.00f, 0.00f, -0.09f}, {1, 0, 0}, {0, 0, 1, 1}, {0, 1}};
+  vertices[5] = {{0.00f, 0.00f, 0.09f}, {1, 0, 0}, {0, 0, 1, 1}, {1, 1}};
+  vertices[6] = {{0.00f, 0.95f, -0.06f}, {1, 0, 0}, {0, 0, 1, 1}, {0, 0}};
+  vertices[7] = {{0.00f, 0.95f, 0.06f}, {1, 0, 0}, {0, 0, 1, 1}, {1, 0}};
 
-  std::vector<uint32_t> indices = {
-      // quad 1 front + back
-      0, 1, 2, 2, 1, 3,
-      2, 1, 0, 3, 1, 2,
-      // quad 2 front + back
-      4, 5, 6, 6, 5, 7,
-      6, 5, 4, 7, 5, 6};
+  std::vector<uint32_t> indices = {// quad 1 front + back
+                                   0, 1, 2, 2, 1, 3, 2, 1, 0, 3, 1, 2,
+                                   // quad 2 front + back
+                                   4, 5, 6, 6, 5, 7, 6, 5, 4, 7, 5, 6};
 
   Asset::GpuMesh gm = Asset::LoadMeshFromMemory(vertices, indices);
   if (!gm.vertexBuffer || !gm.indexBuffer || gm.indexCount == 0) {
@@ -136,8 +133,7 @@ static void AppendGrassBladesFromInstance(const Scene::Instance &inst,
     return;
   }
   const int computedCount = (int)std::round(area * density);
-  const int bladeCount =
-      std::clamp((std::max)(50, computedCount), 50, 16384);
+  const int bladeCount = std::clamp((std::max)(50, computedCount), 50, 16384);
   if (bladeCount <= 0) {
     return;
   }
@@ -165,7 +161,8 @@ static void AppendGrassBladesFromInstance(const Scene::Instance &inst,
     FGrassBlade blade = {};
     DirectX::XMStoreFloat3(&blade.position, worldPos);
     const float baseSize = (std::clamp)(grassMat.grassBladeSize, 0.05f, 5.0f);
-    const float variation = (std::clamp)(grassMat.grassBladeVariation, 0.0f, 1.0f);
+    const float variation =
+        (std::clamp)(grassMat.grassBladeVariation, 0.0f, 1.0f);
     const float randScale = 0.75f + 0.5f * Hash01(baseSeed ^ 0x1f123bb5U);
     blade.scale = baseSize * (1.0f + (randScale - 1.0f) * variation);
     blade.normal = normal;
@@ -531,7 +528,8 @@ void CreateTestTexture() {
       D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&texture)));
 
   if (g_texturesCpuStart.ptr == 0 || g_textureDescriptorCapacity == 0) {
-    fprintf(stderr, "CreateTestTexture: texture descriptor table unavailable\n");
+    fprintf(stderr,
+            "CreateTestTexture: texture descriptor table unavailable\n");
     return;
   }
   const UINT newIndex = (UINT)g_loadedTextures.size();
@@ -635,6 +633,8 @@ bool InitApplication(HWND hwnd) {
   g_cbvSrvAllocator.Init(DX12Context::g_device.Get(),
                          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 65536,
                          FrameCount);
+  RasterRenderer::CreateShadowResources(DX12Context::g_device.Get());
+
   // Reserve a dedicated contiguous descriptor range for scene textures.
   // Texture indices in materials/shaders directly index into this table.
   {
@@ -690,7 +690,7 @@ bool InitApplication(HWND hwnd) {
   // t0, space1 - Environment Map Descriptor Table (Texture2D)
   static D3D12_DESCRIPTOR_RANGE envMapRange = {};
   envMapRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-  envMapRange.NumDescriptors = 1;
+  envMapRange.NumDescriptors = 2; // Env Map (t0) + Shadow Map (t1)
   envMapRange.BaseShaderRegister = 0;
   envMapRange.RegisterSpace = 1;
   envMapRange.OffsetInDescriptorsFromTableStart =
@@ -723,7 +723,7 @@ bool InitApplication(HWND hwnd) {
   rootParameters[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
   // static sampler for textures
-  D3D12_STATIC_SAMPLER_DESC samplers[2] = {};
+  D3D12_STATIC_SAMPLER_DESC samplers[3] = {};
   // Default sampler (space 0, register 0)
   samplers[0].Filter = D3D12_FILTER_ANISOTROPIC;
   samplers[0].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -746,11 +746,20 @@ bool InitApplication(HWND hwnd) {
   samplers[1].ShaderRegister = 0;
   samplers[1].RegisterSpace = 2;
   samplers[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+  // Shadow sampler (space 1, register 1)
+  samplers[2].Filter = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+  samplers[2].AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+  samplers[2].AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+  samplers[2].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+  samplers[2].ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+  samplers[2].ShaderRegister = 1;
+  samplers[2].RegisterSpace = 1;
+  samplers[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
   D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc = {};
   rootSignatureDesc.NumParameters = _countof(rootParameters);
   rootSignatureDesc.pParameters = rootParameters;
-  rootSignatureDesc.NumStaticSamplers = _countof(samplers);
+  rootSignatureDesc.NumStaticSamplers = 3;
   rootSignatureDesc.pStaticSamplers = samplers;
   rootSignatureDesc.Flags =
       D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
@@ -876,7 +885,7 @@ bool InitApplication(HWND hwnd) {
   psoDesc.SampleMask = UINT_MAX;
   psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
   psoDesc.NumRenderTargets = 1;
-  psoDesc.RTVFormats[0] = DXGI_FORMAT_R10G10B10A2_UNORM;
+  psoDesc.RTVFormats[0] = DXGI_FORMAT_R16G16B16A16_FLOAT;
   psoDesc.SampleDesc.Count = 1;
 
   ThrowIfFailed(DX12Context::g_device->CreateGraphicsPipelineState(
@@ -905,6 +914,9 @@ bool InitApplication(HWND hwnd) {
                     vsMeshBlob->GetBufferSize()};
   meshPsoDesc.PS = {psMeshBlob->GetBufferPointer(),
                     psMeshBlob->GetBufferSize()};
+  meshPsoDesc.NumRenderTargets = 2; // Color + Normal
+  meshPsoDesc.RTVFormats[1] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+  meshPsoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
 
   // Enable depth testing for mesh rendering
   meshPsoDesc.DepthStencilState.DepthEnable = TRUE;
@@ -1121,12 +1133,12 @@ bool InitApplication(HWND hwnd) {
     float surfaceParams[4];      // x=roughness, y=metalness, z=specularWeight
     float transmissionParams[4]; // rgb=transmissionColor, a=transmissionWeight
     float emissiveColor[4];
-    int textureIndices[4];       // x=diffuse, z=normal
-    int emissiveAndPad[4];       // x=emissive, y=occlusion, z=metalRough
-    float extraParams[4];        // x=emissiveIntensity
-    float coatLayerParams[4];    // x=coatWeight, y=coatRoughness, z=thinWalled,
-                                 // w=translucency
-    float uvTransform[4];    // xy=uvScale, zw=uvOffset
+    int textureIndices[4];    // x=diffuse, z=normal
+    int emissiveAndPad[4];    // x=emissive, y=occlusion, z=metalRough
+    float extraParams[4];     // x=emissiveIntensity
+    float coatLayerParams[4]; // x=coatWeight, y=coatRoughness, z=thinWalled,
+                              // w=translucency
+    float uvTransform[4];     // xy=uvScale, zw=uvOffset
     float
         triPlanarParams[4]; // x=enabled, y=scale, z=sharpness, w=normalStrength
   };
@@ -1389,7 +1401,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
   fprintf(stderr, "InitApplication returned OK\n");
 
-
   // Scene Setup
   if (!sceneToLoad.empty()) {
     if (fs::exists(sceneToLoad)) {
@@ -1535,6 +1546,39 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       g_cameraData.iblRotationDegrees =
           IBLManager::Get().GetIblRotationDegrees();
 
+      // Calculate Shadow Matrix
+      {
+        using namespace DirectX;
+        XMVECTOR lightDir =
+            XMVectorSet(g_cameraData.lightDir[0], g_cameraData.lightDir[1],
+                        g_cameraData.lightDir[2], 0.0f);
+        XMVECTOR camPos = XMLoadFloat3((XMFLOAT3 *)g_cameraData.pos);
+        XMVECTOR camFwd = XMLoadFloat3((XMFLOAT3 *)g_cameraData.forward);
+        XMVECTOR target = camPos + camFwd * 10.0f; // Look ahead
+        XMVECTOR lightPos = target + lightDir * 50.0f;
+
+        XMMATRIX view =
+            XMMatrixLookAtRH(lightPos, target, XMVectorSet(0, 1, 0, 0));
+        XMMATRIX proj = XMMatrixOrthographicRH(60.0f, 60.0f, 0.1f, 150.0f);
+        XMMATRIX shadowMat = view * proj;
+        XMStoreFloat4x4((XMFLOAT4X4 *)g_cameraData.shadowMatrix,
+                        XMMatrixTranspose(shadowMat));
+
+        // ViewProj and InvViewProj for SSR/SSAO
+        XMVECTOR camUp = XMLoadFloat3((XMFLOAT3 *)g_cameraData.up);
+        XMMATRIX camView = XMMatrixLookToRH(camPos, camFwd, camUp);
+        XMMATRIX camProj = XMMatrixPerspectiveFovRH(
+            XMConvertToRadians(g_cameraData.fov), g_cameraData.aspect,
+            g_cameraData.nearZ, g_cameraData.farZ);
+        XMMATRIX vp = camView * camProj;
+        XMVECTOR det;
+        XMMATRIX invVp = XMMatrixInverse(&det, vp);
+        XMStoreFloat4x4((XMFLOAT4X4 *)g_cameraData.viewProj,
+                        XMMatrixTranspose(vp));
+        XMStoreFloat4x4((XMFLOAT4X4 *)g_cameraData.invViewProj,
+                        XMMatrixTranspose(invVp));
+      }
+
       UpdateCameraCB();
     }
 
@@ -1585,8 +1629,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       DX12Context::g_commandList->ClearRenderTargetView(rtvHandle, clearColor,
                                                         0, nullptr);
     } else {
-      // --- Rebuild grass instance list every frame (shared by DXR & Raster) ---
-    {
+      // --- Rebuild grass instance list every frame (shared by DXR & Raster)
+      // ---
+      {
         static UINT s_prevGrassBladeCount = (UINT)-1;
         static int s_prevGrassMaterial = -2;
         auto sceneInstances_grass = Scene::GetInstances();
@@ -1594,542 +1639,589 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         uint32_t grassSourceId = 0;
         int firstGrassMatIdx = -1;
         for (const auto &inst : sceneInstances_grass) {
-            if (!inst.mesh)
-                continue;
-            int matIdx = inst.mesh->materialIndex;
-            if (matIdx < 0 || matIdx >= (int)g_loadedMaterials.size())
-                continue;
-            const auto &mat = g_loadedMaterials[matIdx];
-            if (!mat.isGrass)
-                continue;
-            if (firstGrassMatIdx < 0)
-                firstGrassMatIdx = matIdx;
-            AppendGrassBladesFromInstance(inst, grassSourceId++, mat,
-                                          g_grassBlades);
+          if (!inst.mesh)
+            continue;
+          int matIdx = inst.mesh->materialIndex;
+          if (matIdx < 0 || matIdx >= (int)g_loadedMaterials.size())
+            continue;
+          const auto &mat = g_loadedMaterials[matIdx];
+          if (!mat.isGrass)
+            continue;
+          if (firstGrassMatIdx < 0)
+            firstGrassMatIdx = matIdx;
+          AppendGrassBladesFromInstance(inst, grassSourceId++, mat,
+                                        g_grassBlades);
         }
         GrassManager::SetBlades(g_grassBlades);
         // Grass always instances a dedicated procedural blade mesh.
         if (EnsureProceduralGrassBladeMesh()) {
-            if (firstGrassMatIdx >= 0) {
-                g_proceduralGrassBladeMesh.materialIndex = firstGrassMatIdx;
-            }
-            GrassManager::SetPatchMesh(&g_proceduralGrassBladeMesh);
+          if (firstGrassMatIdx >= 0) {
+            g_proceduralGrassBladeMesh.materialIndex = firstGrassMatIdx;
+          }
+          GrassManager::SetPatchMesh(&g_proceduralGrassBladeMesh);
         }
         const UINT currentBladeCount = (UINT)g_grassBlades.size();
         if (currentBladeCount != s_prevGrassBladeCount ||
             firstGrassMatIdx != s_prevGrassMaterial) {
-            DxrRenderer::RequestAccelerationStructureRebuild();
-            DxrRenderer::ResetAccumulation();
-            s_prevGrassBladeCount = currentBladeCount;
-            s_prevGrassMaterial = firstGrassMatIdx;
-        }
-    }
-
-    // Render based on current mode
-    switch (g_currentRenderMode) {
-    case RenderMode::DXR: {
-      if (!DxrRenderer::IsReady()) {
-        try {
-          DX12Context::WaitGPUIdle();
-          DxrRenderer::CreateRayTracingPipeline(DX12Context::g_windowWidth,
-                                                DX12Context::g_windowHeight);
-        } catch (const std::exception &e) {
-          fprintf(stderr,
-                  "DXR lazy pipeline create failed during mode switch: %s\n",
-                  e.what());
-        } catch (...) {
-          fprintf(stderr,
-                  "DXR lazy pipeline create failed during mode switch: unknown "
-                  "exception\n");
+          DxrRenderer::RequestAccelerationStructureRebuild();
+          DxrRenderer::ResetAccumulation();
+          s_prevGrassBladeCount = currentBladeCount;
+          s_prevGrassMaterial = firstGrassMatIdx;
         }
       }
 
-      // Use DXR module to perform ray dispatch and copy to backbuffer
-      if (DxrRenderer::IsReady()) {
-        // Update Structured Material Buffers for DXR.
-        // Core material data stays at 64 bytes; heavy/conditional values live
-        // in a secondary buffer.
-        if (g_materialStructuredBuffer && g_materialExtraStructuredBuffer &&
-            !g_loadedMaterials.empty()) {
-          struct DxrMaterialData {
-            float baseColor_opacity[4];
-            float emissive_ior[4];
-            float pbrParams_flags[4];
-            UINT packedTextures[4];
-          };
-          struct DxrMaterialExtraData {
-            float coatLayerParams[4];
-            float uvTransform[4];
-            float triPlanarParams[4];
-            float shadingParams[4];
-            float transmissionColor[4];
-          };
+      // Render based on current mode
+      switch (g_currentRenderMode) {
+      case RenderMode::DXR: {
+        if (!DxrRenderer::IsReady()) {
+          try {
+            DX12Context::WaitGPUIdle();
+            DxrRenderer::CreateRayTracingPipeline(DX12Context::g_windowWidth,
+                                                  DX12Context::g_windowHeight);
+          } catch (const std::exception &e) {
+            fprintf(stderr,
+                    "DXR lazy pipeline create failed during mode switch: %s\n",
+                    e.what());
+          } catch (...) {
+            fprintf(
+                stderr,
+                "DXR lazy pipeline create failed during mode switch: unknown "
+                "exception\n");
+          }
+        }
 
-          static constexpr UINT kMaterialFlagAlphaTested = 1u << 0;
-          static constexpr UINT kMaterialFlagThinWalled = 1u << 1;
-          static constexpr UINT kMaterialFlagTranslucent = 1u << 2;
-          static constexpr UINT kMaterialFlagTriPlanar = 1u << 3;
-          static constexpr UINT kMaterialFlagUvTransform = 1u << 4;
-          static constexpr UINT kMaterialFlagGlass = 1u << 5;
-          static constexpr UINT kMaterialFlagDoubleSided = 1u << 6;
+        // Use DXR module to perform ray dispatch and copy to backbuffer
+        if (DxrRenderer::IsReady()) {
+          // Update Structured Material Buffers for DXR.
+          // Core material data stays at 64 bytes; heavy/conditional values live
+          // in a secondary buffer.
+          if (g_materialStructuredBuffer && g_materialExtraStructuredBuffer &&
+              !g_loadedMaterials.empty()) {
+            struct DxrMaterialData {
+              float baseColor_opacity[4];
+              float emissive_ior[4];
+              float pbrParams_flags[4];
+              UINT packedTextures[4];
+            };
+            struct DxrMaterialExtraData {
+              float coatLayerParams[4];
+              float uvTransform[4];
+              float triPlanarParams[4];
+              float shadingParams[4];
+              float transmissionColor[4];
+            };
 
-          auto PackTexPair = [](int lo, int hi) -> UINT {
-            const UINT lo16 = (lo >= 0) ? ((UINT)lo & 0xFFFFu) : 0xFFFFu;
-            const UINT hi16 = (hi >= 0) ? ((UINT)hi & 0xFFFFu) : 0xFFFFu;
-            return lo16 | (hi16 << 16);
-          };
+            static constexpr UINT kMaterialFlagAlphaTested = 1u << 0;
+            static constexpr UINT kMaterialFlagThinWalled = 1u << 1;
+            static constexpr UINT kMaterialFlagTranslucent = 1u << 2;
+            static constexpr UINT kMaterialFlagTriPlanar = 1u << 3;
+            static constexpr UINT kMaterialFlagUvTransform = 1u << 4;
+            static constexpr UINT kMaterialFlagGlass = 1u << 5;
+            static constexpr UINT kMaterialFlagDoubleSided = 1u << 6;
 
-          UINT8 *pCore = nullptr;
-          UINT8 *pExtra = nullptr;
-          D3D12_RANGE readRange = {0, 0};
-          const bool coreMapped = SUCCEEDED(g_materialStructuredBuffer->Map(
-              0, &readRange, reinterpret_cast<void **>(&pCore)));
-          const bool extraMapped =
-              SUCCEEDED(g_materialExtraStructuredBuffer->Map(
-                  0, &readRange, reinterpret_cast<void **>(&pExtra)));
-          if (coreMapped && extraMapped) {
-            for (size_t i = 0; i < g_loadedMaterials.size() && i < 16384; ++i) {
-              const auto &srcMat = g_loadedMaterials[i];
+            auto PackTexPair = [](int lo, int hi) -> UINT {
+              const UINT lo16 = (lo >= 0) ? ((UINT)lo & 0xFFFFu) : 0xFFFFu;
+              const UINT hi16 = (hi >= 0) ? ((UINT)hi & 0xFFFFu) : 0xFFFFu;
+              return lo16 | (hi16 << 16);
+            };
 
-              DxrMaterialData mat = {};
-              memcpy(mat.baseColor_opacity, srcMat.diffuseColor,
-                     sizeof(float) * 4);
-              memcpy(mat.emissive_ior, srcMat.emissiveColor, sizeof(float) * 3);
-              mat.emissive_ior[3] = srcMat.ior;
+            UINT8 *pCore = nullptr;
+            UINT8 *pExtra = nullptr;
+            D3D12_RANGE readRange = {0, 0};
+            const bool coreMapped = SUCCEEDED(g_materialStructuredBuffer->Map(
+                0, &readRange, reinterpret_cast<void **>(&pCore)));
+            const bool extraMapped =
+                SUCCEEDED(g_materialExtraStructuredBuffer->Map(
+                    0, &readRange, reinterpret_cast<void **>(&pExtra)));
+            if (coreMapped && extraMapped) {
+              for (size_t i = 0; i < g_loadedMaterials.size() && i < 16384;
+                   ++i) {
+                const auto &srcMat = g_loadedMaterials[i];
 
-              float roughness = (std::clamp)(srcMat.roughness, 0.0f, 1.0f);
-              const float metalness =
-                  (std::clamp)(srcMat.metalness, 0.0f, 1.0f);
-              float transmission =
-                  (std::clamp)(srcMat.transmissionWeight, 0.0f, 1.0f);
-              transmission *= (1.0f - metalness);
+                DxrMaterialData mat = {};
+                memcpy(mat.baseColor_opacity, srcMat.diffuseColor,
+                       sizeof(float) * 4);
+                memcpy(mat.emissive_ior, srcMat.emissiveColor,
+                       sizeof(float) * 3);
+                mat.emissive_ior[3] = srcMat.ior;
 
-              UINT flags = 0;
-              if (srcMat.alphaMode != "OPAQUE" ||
-                  srcMat.diffuseColor[3] < 0.999f) {
-                flags |= kMaterialFlagAlphaTested;
-              }
-              if (srcMat.thinWalled > 0.5f) {
-                flags |= kMaterialFlagThinWalled;
-              }
-              if (srcMat.translucency > 0.01f) {
-                flags |= kMaterialFlagTranslucent;
-              }
-              if (srcMat.triPlanarEnabled > 0.5f) {
-                flags |= kMaterialFlagTriPlanar;
-              }
-              if (fabsf(srcMat.uvScale[0] - 1.0f) > 1e-5f ||
-                  fabsf(srcMat.uvScale[1] - 1.0f) > 1e-5f ||
-                  fabsf(srcMat.uvOffset[0]) > 1e-5f ||
-                  fabsf(srcMat.uvOffset[1]) > 1e-5f) {
-                flags |= kMaterialFlagUvTransform;
-              }
-              if (transmission > 0.01f || srcMat.thinWalled > 0.5f) {
-                flags |= kMaterialFlagGlass;
-              }
-              if (srcMat.doubleSided) {
-                flags |= kMaterialFlagDoubleSided;
-              }
+                float roughness = (std::clamp)(srcMat.roughness, 0.0f, 1.0f);
+                const float metalness =
+                    (std::clamp)(srcMat.metalness, 0.0f, 1.0f);
+                float transmission =
+                    (std::clamp)(srcMat.transmissionWeight, 0.0f, 1.0f);
+                transmission *= (1.0f - metalness);
 
-              float flagsAsFloat = 0.0f;
-              memcpy(&flagsAsFloat, &flags, sizeof(flags));
-              mat.pbrParams_flags[0] = metalness;
-              mat.pbrParams_flags[1] = roughness;
-              mat.pbrParams_flags[2] = transmission;
-              mat.pbrParams_flags[3] = flagsAsFloat;
+                UINT flags = 0;
+                if (srcMat.alphaMode != "OPAQUE" ||
+                    srcMat.diffuseColor[3] < 0.999f) {
+                  flags |= kMaterialFlagAlphaTested;
+                }
+                if (srcMat.thinWalled > 0.5f) {
+                  flags |= kMaterialFlagThinWalled;
+                }
+                if (srcMat.translucency > 0.01f) {
+                  flags |= kMaterialFlagTranslucent;
+                }
+                if (srcMat.triPlanarEnabled > 0.5f) {
+                  flags |= kMaterialFlagTriPlanar;
+                }
+                if (fabsf(srcMat.uvScale[0] - 1.0f) > 1e-5f ||
+                    fabsf(srcMat.uvScale[1] - 1.0f) > 1e-5f ||
+                    fabsf(srcMat.uvOffset[0]) > 1e-5f ||
+                    fabsf(srcMat.uvOffset[1]) > 1e-5f) {
+                  flags |= kMaterialFlagUvTransform;
+                }
+                if (transmission > 0.01f || srcMat.thinWalled > 0.5f) {
+                  flags |= kMaterialFlagGlass;
+                }
+                if (srcMat.doubleSided) {
+                  flags |= kMaterialFlagDoubleSided;
+                }
 
-              mat.packedTextures[0] =
-                  PackTexPair(srcMat.diffuseTexture, srcMat.normalTexture);
-              mat.packedTextures[1] = PackTexPair(srcMat.metalRoughTexture,
-                                                  srcMat.occlusionTexture);
-              mat.packedTextures[2] =
-                  PackTexPair(srcMat.emissiveTexture, -1);
+                float flagsAsFloat = 0.0f;
+                memcpy(&flagsAsFloat, &flags, sizeof(flags));
+                mat.pbrParams_flags[0] = metalness;
+                mat.pbrParams_flags[1] = roughness;
+                mat.pbrParams_flags[2] = transmission;
+                mat.pbrParams_flags[3] = flagsAsFloat;
+
+                mat.packedTextures[0] =
+                    PackTexPair(srcMat.diffuseTexture, srcMat.normalTexture);
+                mat.packedTextures[1] = PackTexPair(srcMat.metalRoughTexture,
+                                                    srcMat.occlusionTexture);
+                mat.packedTextures[2] = PackTexPair(srcMat.emissiveTexture, -1);
                 mat.packedTextures[3] = PackTexPair(-1, -1);
 
-              DxrMaterialExtraData extra = {};
-              float coatWeight = (std::clamp)(srcMat.coatWeight, 0.0f, 1.0f);
-              float coatRoughness =
-                  (std::clamp)(srcMat.coatRoughness, 0.0f, 1.0f);
+                DxrMaterialExtraData extra = {};
+                float coatWeight = (std::clamp)(srcMat.coatWeight, 0.0f, 1.0f);
+                float coatRoughness =
+                    (std::clamp)(srcMat.coatRoughness, 0.0f, 1.0f);
                 extra.coatLayerParams[0] = coatWeight;
                 extra.coatLayerParams[1] = coatRoughness;
                 extra.coatLayerParams[2] = srcMat.thinWalled;
                 extra.coatLayerParams[3] = srcMat.translucency;
-              extra.uvTransform[0] = srcMat.uvScale[0];
-              extra.uvTransform[1] = srcMat.uvScale[1];
-              extra.uvTransform[2] = srcMat.uvOffset[0];
-              extra.uvTransform[3] = srcMat.uvOffset[1];
-              extra.triPlanarParams[0] = srcMat.triPlanarEnabled;
-              extra.triPlanarParams[1] = srcMat.triPlanarScale;
-              extra.triPlanarParams[2] = srcMat.triPlanarSharpness;
-              extra.triPlanarParams[3] = srcMat.triPlanarNormalStrength;
-              extra.shadingParams[0] = (std::max)(0.0f, srcMat.emissiveIntensity);
-              extra.shadingParams[1] = (std::clamp)(srcMat.specularWeight, 0.0f, 1.0f);
+                extra.uvTransform[0] = srcMat.uvScale[0];
+                extra.uvTransform[1] = srcMat.uvScale[1];
+                extra.uvTransform[2] = srcMat.uvOffset[0];
+                extra.uvTransform[3] = srcMat.uvOffset[1];
+                extra.triPlanarParams[0] = srcMat.triPlanarEnabled;
+                extra.triPlanarParams[1] = srcMat.triPlanarScale;
+                extra.triPlanarParams[2] = srcMat.triPlanarSharpness;
+                extra.triPlanarParams[3] = srcMat.triPlanarNormalStrength;
+                extra.shadingParams[0] =
+                    (std::max)(0.0f, srcMat.emissiveIntensity);
+                extra.shadingParams[1] =
+                    (std::clamp)(srcMat.specularWeight, 0.0f, 1.0f);
                 extra.transmissionColor[0] =
-                  (std::clamp)(srcMat.transmissionColor[0], 0.0f, 1.0f);
+                    (std::clamp)(srcMat.transmissionColor[0], 0.0f, 1.0f);
                 extra.transmissionColor[1] =
-                  (std::clamp)(srcMat.transmissionColor[1], 0.0f, 1.0f);
+                    (std::clamp)(srcMat.transmissionColor[1], 0.0f, 1.0f);
                 extra.transmissionColor[2] =
-                  (std::clamp)(srcMat.transmissionColor[2], 0.0f, 1.0f);
+                    (std::clamp)(srcMat.transmissionColor[2], 0.0f, 1.0f);
                 extra.transmissionColor[3] = 1.0f;
 
-              memcpy(pCore + i * sizeof(DxrMaterialData), &mat, sizeof(mat));
-              memcpy(pExtra + i * sizeof(DxrMaterialExtraData), &extra,
-                     sizeof(extra));
+                memcpy(pCore + i * sizeof(DxrMaterialData), &mat, sizeof(mat));
+                memcpy(pExtra + i * sizeof(DxrMaterialExtraData), &extra,
+                       sizeof(extra));
+              }
+            }
+            if (coreMapped) {
+              g_materialStructuredBuffer->Unmap(0, nullptr);
+            }
+            if (extraMapped) {
+              g_materialExtraStructuredBuffer->Unmap(0, nullptr);
             }
           }
-          if (coreMapped) {
-            g_materialStructuredBuffer->Unmap(0, nullptr);
-          }
-          if (extraMapped) {
-            g_materialExtraStructuredBuffer->Unmap(0, nullptr);
-          }
-        }
 
-        // Update Mesh Structured Buffer for DXR
-        auto activeMeshes = Scene::GetActiveMeshes();
-        auto sceneInstances = Scene::GetInstances();
-        const Asset::GpuMesh *patchMesh = GrassManager::GetPatchMesh();
-        if (patchMesh && patchMesh->vertexBuffer && patchMesh->indexBuffer) {
-          const bool alreadyPresent = std::any_of(
-              activeMeshes.begin(), activeMeshes.end(),
-              [patchMesh](const Asset::GpuMesh *m) {
-                return m && m->vertexBuffer.Get() == patchMesh->vertexBuffer.Get();
-              });
-          if (!alreadyPresent) {
-            activeMeshes.push_back(patchMesh);
-          }
-        }
-        if (g_meshStructuredBuffer && !activeMeshes.empty()) {
-          struct MeshData {
-            int materialIndex;
-            int vbIndex;
-            int ibIndex;
-            int pad;
-          };
-          UINT8 *pData = nullptr;
-          D3D12_RANGE readRange = {0, 0};
-          if (SUCCEEDED(g_meshStructuredBuffer->Map(
-                  0, &readRange, reinterpret_cast<void **>(&pData)))) {
-            // We use global indices for vertices/indices in DXR
-            for (size_t i = 0; i < activeMeshes.size() && i < 16384; ++i) {
-              MeshData m = {};
-              m.materialIndex = activeMeshes[i]->materialIndex;
-              m.vbIndex = (int)i;
-              m.ibIndex = (int)i;
-              memcpy(pData + i * sizeof(MeshData), &m, sizeof(MeshData));
+          // Update Mesh Structured Buffer for DXR
+          auto activeMeshes = Scene::GetActiveMeshes();
+          auto sceneInstances = Scene::GetInstances();
+          const Asset::GpuMesh *patchMesh = GrassManager::GetPatchMesh();
+          if (patchMesh && patchMesh->vertexBuffer && patchMesh->indexBuffer) {
+            const bool alreadyPresent =
+                std::any_of(activeMeshes.begin(), activeMeshes.end(),
+                            [patchMesh](const Asset::GpuMesh *m) {
+                              return m && m->vertexBuffer.Get() ==
+                                              patchMesh->vertexBuffer.Get();
+                            });
+            if (!alreadyPresent) {
+              activeMeshes.push_back(patchMesh);
             }
-            g_meshStructuredBuffer->Unmap(0, nullptr);
           }
-        }
-
-        ID3D12Resource *dxrTarget =
-            DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get();
-        D3D12_CPU_DESCRIPTOR_HANDLE dxrRtv = rtvHandle;
-        if (g_renderExportJob.active && g_exportRenderTarget &&
-            g_exportRtvHeap) {
-          dxrTarget = g_exportRenderTarget.Get();
-          dxrRtv = g_exportRtvHeap->GetCPUDescriptorHandleForHeapStart();
-        }
-
-        bool dxrOk = DxrRenderer::RenderFrame(
-            DX12Context::g_commandList.Get(),
-            DX12Context::g_frameResources[DX12Context::g_frameIndex]
-                .commandAllocator.Get(),
-            DX12Context::g_frameIndex, dxrTarget, dxrRtv,
-            g_cameraConstantBuffer.Get(), g_materialStructuredBuffer.Get(),
-            g_texturesGpuStart, g_textureDescriptorCount, activeMeshes,
-            g_meshStructuredBuffer.Get(),
-            g_materialExtraStructuredBuffer.Get());
-        if (dxrOk) {
-          if (g_renderExportJob.active &&
-              dxrTarget == g_exportRenderTarget.Get()) {
-            g_exportRenderTargetState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+          if (g_meshStructuredBuffer && !activeMeshes.empty()) {
+            struct MeshData {
+              int materialIndex;
+              int vbIndex;
+              int ibIndex;
+              int pad;
+            };
+            UINT8 *pData = nullptr;
+            D3D12_RANGE readRange = {0, 0};
+            if (SUCCEEDED(g_meshStructuredBuffer->Map(
+                    0, &readRange, reinterpret_cast<void **>(&pData)))) {
+              // We use global indices for vertices/indices in DXR
+              for (size_t i = 0; i < activeMeshes.size() && i < 16384; ++i) {
+                MeshData m = {};
+                m.materialIndex = activeMeshes[i]->materialIndex;
+                m.vbIndex = (int)i;
+                m.ibIndex = (int)i;
+                memcpy(pData + i * sizeof(MeshData), &m, sizeof(MeshData));
+              }
+              g_meshStructuredBuffer->Unmap(0, nullptr);
+            }
           }
-          // Success DXR render - Draw Grid with depth checks
-          if (!g_renderExportJob.active && g_drawGrid) {
-            D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle =
-                DX12Context::g_dsvHeap->GetCPUDescriptorHandleForHeapStart();
-            DX12Context::g_commandList->ClearDepthStencilView(
-                dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
-            // 1. Scene Depth Pre-pass (populate depth buffer for grid
-            // occlusion)
-            DX12Context::g_commandList->OMSetRenderTargets(0, nullptr, FALSE,
-                                                           &dsvHandle);
-            DX12Context::g_commandList->SetGraphicsRootSignature(
-                g_rootSignature.Get());
-            RasterRenderer::DrawSceneDepthOnly(DX12Context::g_commandList.Get(),
-                                               g_cameraConstantBuffer.Get(),
-                                               sceneInstances);
-
-            // 2. Draw Grid (test against the populated depth buffer)
-            DX12Context::g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE,
-                                                           &dsvHandle);
-            RasterRenderer::DrawGrid(DX12Context::g_commandList.Get(),
-                                     g_cameraConstantBuffer.Get());
+          ID3D12Resource *dxrTarget =
+              DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get();
+          D3D12_CPU_DESCRIPTOR_HANDLE dxrRtv = rtvHandle;
+          if (g_renderExportJob.active && g_exportRenderTarget &&
+              g_exportRtvHeap) {
+            dxrTarget = g_exportRenderTarget.Get();
+            dxrRtv = g_exportRtvHeap->GetCPUDescriptorHandleForHeapStart();
           }
-          if (g_renderExportJob.active) {
+
+          bool dxrOk = DxrRenderer::RenderFrame(
+              DX12Context::g_commandList.Get(),
+              DX12Context::g_frameResources[DX12Context::g_frameIndex]
+                  .commandAllocator.Get(),
+              DX12Context::g_frameIndex, dxrTarget, dxrRtv,
+              g_cameraConstantBuffer.Get(), g_materialStructuredBuffer.Get(),
+              g_texturesGpuStart, g_textureDescriptorCount, activeMeshes,
+              g_meshStructuredBuffer.Get(),
+              g_materialExtraStructuredBuffer.Get());
+          if (dxrOk) {
+            if (g_renderExportJob.active &&
+                dxrTarget == g_exportRenderTarget.Get()) {
+              g_exportRenderTargetState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            }
+            // Success DXR render - Draw Grid with depth checks
+            if (!g_renderExportJob.active && g_drawGrid) {
+              D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle =
+                  DX12Context::g_dsvHeap->GetCPUDescriptorHandleForHeapStart();
+              DX12Context::g_commandList->ClearDepthStencilView(
+                  dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+
+              // 1. Scene Depth Pre-pass (populate depth buffer for grid
+              // occlusion)
+              DX12Context::g_commandList->OMSetRenderTargets(0, nullptr, FALSE,
+                                                             &dsvHandle);
+              DX12Context::g_commandList->SetGraphicsRootSignature(
+                  g_rootSignature.Get());
+              RasterRenderer::DrawSceneDepthOnly(
+                  DX12Context::g_commandList.Get(),
+                  g_cameraConstantBuffer.Get(), sceneInstances);
+
+              // 2. Draw Grid (test against the populated depth buffer)
+              DX12Context::g_commandList->OMSetRenderTargets(1, &rtvHandle,
+                                                             FALSE, &dsvHandle);
+              RasterRenderer::DrawGrid(DX12Context::g_commandList.Get(),
+                                       g_cameraConstantBuffer.Get());
+            }
+            if (g_renderExportJob.active) {
+              TR(DX12Context::g_commandList.Get(),
+                 DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),
+                 D3D12_RESOURCE_STATE_PRESENT,
+                 D3D12_RESOURCE_STATE_RENDER_TARGET);
+              FLOAT clearColor[] = {0.08f, 0.08f, 0.09f, 1.0f};
+              DX12Context::g_commandList->ClearRenderTargetView(
+                  rtvHandle, clearColor, 0, nullptr);
+              DX12Context::g_commandList->OMSetRenderTargets(1, &rtvHandle,
+                                                             FALSE, nullptr);
+            }
+          } else {
+            // If RenderFrame failed, fall back to red clear
             TR(DX12Context::g_commandList.Get(),
                DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),
                D3D12_RESOURCE_STATE_PRESENT,
                D3D12_RESOURCE_STATE_RENDER_TARGET);
-            FLOAT clearColor[] = {0.08f, 0.08f, 0.09f, 1.0f};
+
+            FLOAT clearColor[] = {0.8f, 0.2f, 0.2f,
+                                  1.0f}; // Red to indicate fallback
             DX12Context::g_commandList->ClearRenderTargetView(
                 rtvHandle, clearColor, 0, nullptr);
             DX12Context::g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE,
                                                            nullptr);
           }
         } else {
-          // If RenderFrame failed, fall back to red clear
+          // DXR mode was selected but the renderer isn't ready yet (missing
+          // TLAS or state object).  Avoid leaving the previous raster frame
+          // sitting on the screen by clearing to red and logging.
+          if (g_verboseRenderLogs)
+            fprintf(stderr, "Main: DXR path selected but IsReady()==false\n");
           TR(DX12Context::g_commandList.Get(),
              DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),
              D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
-
-          FLOAT clearColor[] = {0.8f, 0.2f, 0.2f,
-                                1.0f}; // Red to indicate fallback
+          FLOAT clearColor[] = {0.8f, 0.2f, 0.2f, 1.0f};
           DX12Context::g_commandList->ClearRenderTargetView(
               rtvHandle, clearColor, 0, nullptr);
           DX12Context::g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE,
                                                          nullptr);
         }
-      } else {
-        // DXR mode was selected but the renderer isn't ready yet (missing
-        // TLAS or state object).  Avoid leaving the previous raster frame
-        // sitting on the screen by clearing to red and logging.
+        break;
+      }
+
+      case RenderMode::Raster: {
+        // Fast Rasterization Path
+        // Log to stderr only (controlled by verbose flag)
         if (g_verboseRenderLogs)
-          fprintf(stderr, "Main: DXR path selected but IsReady()==false\n");
+          fprintf(stderr, "Entering Raster Path\n");
+
         TR(DX12Context::g_commandList.Get(),
            DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),
            D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
-        FLOAT clearColor[] = {0.8f, 0.2f, 0.2f, 1.0f};
-        DX12Context::g_commandList->ClearRenderTargetView(rtvHandle, clearColor,
-                                                          0, nullptr);
-        DX12Context::g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE,
-                                                       nullptr);
-      }
-      break;
-    }
 
-    case RenderMode::Raster: {
-      // Fast Rasterization Path
-      // Log to stderr only (controlled by verbose flag)
-      if (g_verboseRenderLogs)
-        fprintf(stderr, "Entering Raster Path\n");
+        D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle =
+            DX12Context::g_dsvHeap->GetCPUDescriptorHandleForHeapStart();
+        D3D12_CPU_DESCRIPTOR_HANDLE rasterRtv = rtvHandle;
+        bool rasterHdrReady = RasterRenderer::PrepareHdrRenderTarget(
+            DX12Context::g_device.Get(), DX12Context::g_commandList.Get(),
+            DX12Context::g_windowWidth, DX12Context::g_windowHeight, dsvHandle);
 
-      TR(DX12Context::g_commandList.Get(),
-         DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),
-         D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        if (!rasterHdrReady) {
+          // Fallback: bind backbuffer directly
+          DX12Context::g_commandList->OMSetRenderTargets(1, &rasterRtv, FALSE,
+                                                         &dsvHandle);
+          FLOAT clearColor[] = {0.0f, 0.0f, 0.0f, 1.0f};
+          DX12Context::g_commandList->ClearRenderTargetView(
+              rasterRtv, clearColor, 0, nullptr);
+          DX12Context::g_commandList->ClearDepthStencilView(
+              dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+        }
 
-      D3D12_CPU_DESCRIPTOR_HANDLE rasterRtv = rtvHandle;
-      bool rasterHdrReady = RasterRenderer::PrepareHdrRenderTarget(
-          DX12Context::g_device.Get(), DX12Context::g_commandList.Get(),
-          DX12Context::g_windowWidth, DX12Context::g_windowHeight, &rasterRtv);
-
-      FLOAT clearColor[] = {0.0f, 0.0f, 0.0f, 1.0f};
-      DX12Context::g_commandList->ClearRenderTargetView(rasterRtv, clearColor,
-                                                        0, nullptr);
-
-      // Clear depth buffer
-      D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle =
-          DX12Context::g_dsvHeap->GetCPUDescriptorHandleForHeapStart();
-      DX12Context::g_commandList->ClearDepthStencilView(
-          dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
-
-      DX12Context::g_commandList->SetGraphicsRootSignature(
-          g_rootSignature.Get());
-      // Use camera constant buffer for proper camera movement
-      if (g_cameraConstantBuffer) {
-        DX12Context::g_commandList->SetGraphicsRootConstantBufferView(
-            0, g_cameraConstantBuffer->GetGPUVirtualAddress());
-      }
-
-      // No demo triangle; ensure render target is bound for subsequent draws
-      DX12Context::g_commandList->OMSetRenderTargets(1, &rasterRtv, FALSE,
-                                                     &dsvHandle);
-
-      // Bind global descriptor heap once for all raster calls
-      ID3D12DescriptorHeap *heaps[] = {g_cbvSrvAllocator.Heap()};
-      DX12Context::g_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
-
-      // Draw Skybox (Always passes depth, but doesn't write depth)
-      if (g_cloudManager.NeedsBake()) {
-        fprintf(stderr,
-                "Main: calling g_cloudManager.BakeSky() before DrawSkybox\n");
-        g_cloudManager.BakeSky(DX12Context::g_commandList.Get(),
-                               g_cameraConstantBuffer.Get());
-        fprintf(stderr, "Main: returned from g_cloudManager.BakeSky()\n");
-      }
-      RasterRenderer::DrawSkybox(DX12Context::g_commandList.Get(),
-                                 g_cameraConstantBuffer.Get());
-
-      // Draw ground grid (optional) via raster module
-      if (g_drawGrid) {
-        RasterRenderer::DrawGrid(DX12Context::g_commandList.Get(),
-                                 g_cameraConstantBuffer.Get());
-      }
-
-      // Draw loaded meshes
-      auto sceneInstances = Scene::GetInstances();
-      if (!sceneInstances.empty() && RasterRenderer::g_meshPipelineState) {
-        // Log to stderr only (controlled by verbose flag)
-        if (g_verboseRenderLogs)
-          fprintf(stderr, "Drawing %zu instances\n", sceneInstances.size());
-        // Use the RasterRenderer mesh PSO (may output debug depth/uv depending
-        // on compile defines)
-        DX12Context::g_commandList->SetPipelineState(
-            RasterRenderer::g_meshPipelineState.Get());
-        DX12Context::g_commandList->IASetPrimitiveTopology(
-            D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        // Ensure render targets are set for mesh rendering
-        DX12Context::g_commandList->OMSetRenderTargets(1, &rasterRtv, FALSE,
-                                                       &dsvHandle);
-        // Use camera constant buffer for mesh rendering
+        DX12Context::g_commandList->SetGraphicsRootSignature(
+            g_rootSignature.Get());
+        // Use camera constant buffer for proper camera movement
         if (g_cameraConstantBuffer) {
           DX12Context::g_commandList->SetGraphicsRootConstantBufferView(
               0, g_cameraConstantBuffer->GetGPUVirtualAddress());
         }
 
-        // Bind common textures and IBL once for all instances
-        if (g_textureDescriptorCount > 0) {
-          DX12Context::g_commandList->SetGraphicsRootDescriptorTable(
-              1, g_texturesGpuStart);
+        // HDR render targets already bound by PrepareHdrRenderTarget above
+
+        // Bind global descriptor heap once for all raster calls
+        ID3D12DescriptorHeap *heaps[] = {g_cbvSrvAllocator.Heap()};
+        DX12Context::g_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
+
+        // Draw Skybox (Always passes depth, but doesn't write depth)
+        if (g_cloudManager.NeedsBake()) {
+          fprintf(stderr,
+                  "Main: calling g_cloudManager.BakeSky() before DrawSkybox\n");
+          g_cloudManager.BakeSky(DX12Context::g_commandList.Get(),
+                                 g_cameraConstantBuffer.Get());
+          fprintf(stderr, "Main: returned from g_cloudManager.BakeSky()\n");
         }
-        if (IBLManager::Get().IsLoaded()) {
-          DX12Context::g_commandList->SetGraphicsRootDescriptorTable(
-              4, IBLManager::Get().GetGPUHandle());
+        RasterRenderer::DrawSkybox(DX12Context::g_commandList.Get(),
+                                   g_cameraConstantBuffer.Get());
+
+        // Draw ground grid (optional) via raster module
+        if (g_drawGrid) {
+          RasterRenderer::DrawGrid(DX12Context::g_commandList.Get(),
+                                   g_cameraConstantBuffer.Get());
         }
 
-        // Draw all instances
-        int lastMaterialIndex = -2;
-        ID3D12Resource *lastVB = nullptr;
-        ID3D12Resource *lastIB = nullptr;
+        // Draw loaded meshes
+        auto sceneInstances = Scene::GetInstances();
+        if (!sceneInstances.empty() && RasterRenderer::g_meshPipelineState) {
+          // Log to stderr only (controlled by verbose flag)
+          if (g_verboseRenderLogs)
+            fprintf(stderr, "Drawing %zu instances\n", sceneInstances.size());
 
-        for (size_t i = 0; i < sceneInstances.size(); ++i) {
-          const auto &inst = sceneInstances[i];
-          const auto &gm = *inst.mesh;
-          // Skip meshes that have been deleted or not properly initialized
-          if (!gm.vertexBuffer || !gm.indexBuffer || gm.ibView.SizeInBytes == 0)
-            continue;
+          // Shadow Pass
+          RasterRenderer::DrawShadowMap(DX12Context::g_commandList.Get(),
+                                        g_cameraConstantBuffer.Get(),
+                                        sceneInstances);
+        
+          // Re-bind HDR render targets for main pass
+          RasterRenderer::BindHdrRenderTarget(DX12Context::g_device.Get(), DX12Context::g_commandList.Get(), dsvHandle);
 
-          // Set instance transform
-          DX12Context::g_commandList->SetGraphicsRoot32BitConstants(
-              3, 16, &inst.transform, 0);
+          // Use the RasterRenderer mesh PSO (may output debug depth/uv
+          // depending on compile defines)
+          DX12Context::g_commandList->SetPipelineState(
+              RasterRenderer::g_meshPipelineState.Get());
+          DX12Context::g_commandList->IASetPrimitiveTopology(
+              D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+          // HDR render targets already bound by PrepareHdrRenderTarget
+          // Use camera constant buffer for mesh rendering
+          if (g_cameraConstantBuffer) {
+            DX12Context::g_commandList->SetGraphicsRootConstantBufferView(
+                0, g_cameraConstantBuffer->GetGPUVirtualAddress());
+          }
 
-          // material binding...
-          if (gm.materialIndex >= 0 &&
-              gm.materialIndex < (int)g_loadedMaterials.size()) {
+          // Bind common textures and IBL once for all instances
+          if (g_textureDescriptorCount > 0) {
+            DX12Context::g_commandList->SetGraphicsRootDescriptorTable(
+                1, g_texturesGpuStart);
+          }
 
-            if (gm.materialIndex != lastMaterialIndex) {
-              struct MaterialCB {
-                float diffuseColor[4];
-                float surfaceParams[4];
-                float transmissionParams[4];
-                float emissiveColor[4];
-                int textureIndices[4];
-                int emissiveAndPad[4];
-                float extraParams[4];
-                float coatLayerParams[4];
-                float uvTransform[4];
-                float triPlanarParams[4];
-              } matCB;
+          // Bind Env Map + Shadow Map at root index 4 (space 1)
+          if (IBLManager::Get().IsLoaded()) {
+            auto alloc =
+                g_cbvSrvAllocator.Allocate(DX12Context::g_frameIndex % 2, 2);
+            auto device = DX12Context::g_device.Get();
 
-              const auto &srcMat = g_loadedMaterials[gm.materialIndex];
-              memcpy(matCB.diffuseColor, srcMat.diffuseColor, 16);
-              float rasterRoughness = (std::clamp)(srcMat.roughness, 0.0f, 1.0f);
-        matCB.surfaceParams[0] = rasterRoughness;
-        matCB.surfaceParams[1] = srcMat.metalness;
-        matCB.surfaceParams[2] =
-          (std::clamp)(srcMat.specularWeight, 0.0f, 1.0f);
-        matCB.surfaceParams[3] = 0.0f;
+            // Copy Env Map (t0, space 1)
+            device->CopyDescriptorsSimple(
+                1, alloc.cpu, IBLManager::Get().GetCPUHandle(),
+                D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-        matCB.transmissionParams[0] = srcMat.transmissionColor[0];
-        matCB.transmissionParams[1] = srcMat.transmissionColor[1];
-        matCB.transmissionParams[2] = srcMat.transmissionColor[2];
-        matCB.transmissionParams[3] =
-          (std::clamp)(srcMat.transmissionWeight, 0.0f, 1.0f);
+            // Copy Shadow Map (t1, space 1)
+            D3D12_CPU_DESCRIPTOR_HANDLE shadowCpu = alloc.cpu;
+            shadowCpu.ptr += device->GetDescriptorHandleIncrementSize(
+                D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            device->CopyDescriptorsSimple(
+                1, shadowCpu, RasterRenderer::GetShadowMapSrvCpu(),
+                D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-              memcpy(matCB.emissiveColor, srcMat.emissiveColor, 12);
-              matCB.emissiveColor[3] = srcMat.ior;
+            DX12Context::g_commandList->SetGraphicsRootDescriptorTable(
+                4, alloc.gpu);
+          }
 
-              matCB.textureIndices[0] = srcMat.diffuseTexture;
-        matCB.textureIndices[1] = -1;
-              matCB.textureIndices[2] = srcMat.normalTexture;
-        matCB.textureIndices[3] = -1;
+          // Draw all instances
+          int lastMaterialIndex = -2;
+          ID3D12Resource *lastVB = nullptr;
+          ID3D12Resource *lastIB = nullptr;
 
-              matCB.emissiveAndPad[0] = srcMat.emissiveTexture;
-              matCB.emissiveAndPad[1] = srcMat.occlusionTexture;
-              matCB.emissiveAndPad[2] = srcMat.metalRoughTexture;
-              matCB.emissiveAndPad[3] = 0;
+          for (size_t i = 0; i < sceneInstances.size(); ++i) {
+            const auto &inst = sceneInstances[i];
+            if (!inst.mesh)
+              continue;
+            const auto &gm = *inst.mesh;
+            // Skip meshes that have been deleted or not properly initialized
+            if (!gm.vertexBuffer || !gm.indexBuffer ||
+                gm.ibView.SizeInBytes == 0)
+              continue;
+
+            // Set instance transform
+            DX12Context::g_commandList->SetGraphicsRoot32BitConstants(
+                3, 16, &inst.transform, 0);
+
+            if (gm.materialIndex >= 0 &&
+                gm.materialIndex < (int)g_loadedMaterials.size()) {
+              if (gm.materialIndex != lastMaterialIndex) {
+                struct MaterialCB {
+                  float diffuseColor[4];
+                  float surfaceParams[4];
+                  float transmissionParams[4];
+                  float emissiveColor[4];
+                  int textureIndices[4];
+                  int emissiveAndPad[4];
+                  float extraParams[4];
+                  float coatLayerParams[4];
+                  float uvTransform[4];
+                  float triPlanarParams[4];
+                } matCB;
+
+                const auto &srcMat = g_loadedMaterials[gm.materialIndex];
+                memcpy(matCB.diffuseColor, srcMat.diffuseColor, 16);
+                float rasterRoughness =
+                    (std::clamp)(srcMat.roughness, 0.0f, 1.0f);
+                matCB.surfaceParams[0] = rasterRoughness;
+                matCB.surfaceParams[1] = srcMat.metalness;
+                matCB.surfaceParams[2] =
+                    (std::clamp)(srcMat.specularWeight, 0.0f, 1.0f);
+                matCB.surfaceParams[3] = 0.0f;
+
+                matCB.transmissionParams[0] = srcMat.transmissionColor[0];
+                matCB.transmissionParams[1] = srcMat.transmissionColor[1];
+                matCB.transmissionParams[2] = srcMat.transmissionColor[2];
+                matCB.transmissionParams[3] =
+                    (std::clamp)(srcMat.transmissionWeight, 0.0f, 1.0f);
+
+                memcpy(matCB.emissiveColor, srcMat.emissiveColor, 12);
+                matCB.emissiveColor[3] = srcMat.ior;
+
+                matCB.textureIndices[0] = srcMat.diffuseTexture;
+                matCB.textureIndices[1] = -1;
+                matCB.textureIndices[2] = srcMat.normalTexture;
+                matCB.textureIndices[3] = -1;
+
+                matCB.emissiveAndPad[0] = srcMat.emissiveTexture;
+                matCB.emissiveAndPad[1] = srcMat.occlusionTexture;
+                matCB.emissiveAndPad[2] = srcMat.metalRoughTexture;
+                matCB.emissiveAndPad[3] = 0;
 
                 matCB.extraParams[0] = srcMat.emissiveIntensity;
                 matCB.extraParams[1] = 0.0f;
                 matCB.extraParams[2] = 0.0f;
-              matCB.extraParams[3] = 0.0f;
+                matCB.extraParams[3] = 0.0f;
 
-              float rasterCoatWeight =
-                  (std::clamp)(srcMat.coatWeight, 0.0f, 1.0f);
-              float rasterCoatRoughness =
-                  (std::clamp)(srcMat.coatRoughness, 0.0f, 1.0f);
+                float rasterCoatWeight =
+                    (std::clamp)(srcMat.coatWeight, 0.0f, 1.0f);
+                float rasterCoatRoughness =
+                    (std::clamp)(srcMat.coatRoughness, 0.0f, 1.0f);
                 matCB.coatLayerParams[0] = rasterCoatWeight;
                 matCB.coatLayerParams[1] = rasterCoatRoughness;
                 matCB.coatLayerParams[2] = srcMat.thinWalled;
                 matCB.coatLayerParams[3] = srcMat.translucency;
 
-              matCB.uvTransform[0] = srcMat.uvScale[0];
-              matCB.uvTransform[1] = srcMat.uvScale[1];
-              matCB.uvTransform[2] = srcMat.uvOffset[0];
-              matCB.uvTransform[3] = srcMat.uvOffset[1];
+                matCB.uvTransform[0] = srcMat.uvScale[0];
+                matCB.uvTransform[1] = srcMat.uvScale[1];
+                matCB.uvTransform[2] = srcMat.uvOffset[0];
+                matCB.uvTransform[3] = srcMat.uvOffset[1];
 
-              matCB.triPlanarParams[0] = srcMat.triPlanarEnabled;
-              matCB.triPlanarParams[1] = srcMat.triPlanarScale;
-              matCB.triPlanarParams[2] = srcMat.triPlanarSharpness;
-              matCB.triPlanarParams[3] = srcMat.triPlanarNormalStrength;
+                matCB.triPlanarParams[0] = srcMat.triPlanarEnabled;
+                matCB.triPlanarParams[1] = srcMat.triPlanarScale;
+                matCB.triPlanarParams[2] = srcMat.triPlanarSharpness;
+                matCB.triPlanarParams[3] = srcMat.triPlanarNormalStrength;
 
-              if (g_materialCbMappedData) {
-                const UINT64 matSlotSize = (sizeof(MaterialCB) + 255) & ~255;
-                // Use material index based slotting to capitalize on shared
-                // materials
-                UINT64 offset = (gm.materialIndex % 16384) * matSlotSize;
-                memcpy((uint8_t *)g_materialCbMappedData + offset, &matCB,
-                       sizeof(matCB));
-                DX12Context::g_commandList->SetGraphicsRootConstantBufferView(
-                    2,
-                    g_materialConstantBuffer->GetGPUVirtualAddress() + offset);
+                if (g_materialCbMappedData) {
+                  const UINT64 matSlotSize = (sizeof(MaterialCB) + 255) & ~255;
+                  // Use material index based slotting to capitalize on shared
+                  // materials
+                  UINT64 offset = (gm.materialIndex % 16384) * matSlotSize;
+                  memcpy((uint8_t *)g_materialCbMappedData + offset, &matCB,
+                         sizeof(matCB));
+                  DX12Context::g_commandList->SetGraphicsRootConstantBufferView(
+                      2, g_materialConstantBuffer->GetGPUVirtualAddress() +
+                             offset);
+                }
+                lastMaterialIndex = gm.materialIndex;
               }
-              lastMaterialIndex = gm.materialIndex;
+            }
+
+            if (gm.vertexBuffer.Get() != lastVB) {
+              DX12Context::g_commandList->IASetVertexBuffers(0, 1, &gm.vbView);
+              lastVB = gm.vertexBuffer.Get();
+            }
+            if (gm.indexBuffer.Get() != lastIB) {
+              DX12Context::g_commandList->IASetIndexBuffer(&gm.ibView);
+              lastIB = gm.indexBuffer.Get();
+            }
+
+            if (gm.ibView.SizeInBytes > 0) {
+              DX12Context::g_commandList->DrawIndexedInstanced(
+                  gm.ibView.SizeInBytes / 4, 1, 0, 0, 0);
             }
           }
 
-          if (gm.vertexBuffer.Get() != lastVB) {
-            DX12Context::g_commandList->IASetVertexBuffers(0, 1, &gm.vbView);
-            lastVB = gm.vertexBuffer.Get();
-          }
-          if (gm.indexBuffer.Get() != lastIB) {
-            DX12Context::g_commandList->IASetIndexBuffer(&gm.ibView);
-            lastIB = gm.indexBuffer.Get();
-          }
+          // Run SSR Pass
+          RasterRenderer::RunSSR(
+              DX12Context::g_device.Get(), DX12Context::g_commandList.Get(),
+              g_cameraConstantBuffer.Get(), DX12Context::g_depthBuffer.Get());
 
-          if (gm.ibView.SizeInBytes > 0) {
-            DX12Context::g_commandList->DrawIndexedInstanced(
-                gm.ibView.SizeInBytes / 4, 1, 0, 0, 0);
-          }
+          // Run SSAO Pass
+          RasterRenderer::RunSSAO(
+              DX12Context::g_device.Get(), DX12Context::g_commandList.Get(),
+              g_cameraConstantBuffer.Get(), DX12Context::g_depthBuffer.Get());
         }
+
+        // Raster grass pass is temporarily disabled; DXR path handles grass via
+        // TLAS. This avoids running a secondary GPU path while debugging DXR
+        // stability.
+
+        if (rasterHdrReady) {
+          RasterRenderer::TonemapHdrToBackbuffer(
+              DX12Context::g_device.Get(), DX12Context::g_commandList.Get(),
+              DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),
+              DX12Context::g_windowWidth, DX12Context::g_windowHeight,
+              g_cameraConstantBuffer.Get(), DX12Context::g_depthBuffer.Get());
+        }
+
+        DxrRenderer::EndFrameProfiling(DX12Context::g_commandList.Get());
+        break;
       }
-
-      // Raster grass pass is temporarily disabled; DXR path handles grass via TLAS.
-      // This avoids running a secondary GPU path while debugging DXR stability.
-
-      if (rasterHdrReady) {
-        RasterRenderer::TonemapHdrToBackbuffer(
-            DX12Context::g_device.Get(), DX12Context::g_commandList.Get(),
-            DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),
-            DX12Context::g_windowWidth, DX12Context::g_windowHeight);
       }
-
-      DxrRenderer::EndFrameProfiling(DX12Context::g_commandList.Get());
-      break;
-    }
-    }
     } // End else !IsSceneLoadInProgress()
 
     // Render ImGui (Overlay on top of whatever was drawn)

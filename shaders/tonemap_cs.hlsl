@@ -2,6 +2,8 @@
 // Simple tonemap + gamma pass: linear HDR (FP16) -> display LDR (R10G10B10A2_UNORM)
 
 Texture2D<float4> g_hdrInput : register(t0);
+Texture2D<float> g_ssaoTexture : register(t1);
+Texture2D<float4> g_bloomTexture : register(t2);
 RWTexture2D<float4> g_out : register(u0);
 
 cbuffer TonemapCB : register(b0)
@@ -9,7 +11,10 @@ cbuffer TonemapCB : register(b0)
     uint outWidth;
     uint outHeight;
     float exposure;
-    float _pad;
+    float vignette;  // 0 to 1
+    float saturation; // 1.0 is neutral
+    float contrast;   // 1.0 is neutral
+    float _pad[2];
 };
 
 float3 ToneMapFilmic(float3 x)
@@ -30,9 +35,28 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         return;
 
     float3 hdr = g_hdrInput.Load(int3(id.xy, 0)).rgb;
+    float ssao = g_ssaoTexture.Load(int3(id.xy, 0)).r;
+    // Default SSAO to 1.0 if texture is 0.0 (unbound / missing)
+    if (ssao == 0.0) ssao = 1.0;
+    
+    float3 bloom = g_bloomTexture.Load(int3(id.xy, 0)).rgb;
+    hdr = hdr * ssao + bloom;
     hdr *= exposure;
 
     float3 mapped = ToneMapFilmic(hdr);
+
+    // Contrast
+    mapped = saturate((mapped - 0.5) * contrast + 0.5);
+
+    // Saturation
+    float luma = dot(mapped, float3(0.2126, 0.7152, 0.0722));
+    mapped = lerp(luma.xxx, mapped, saturation);
+
+    // Vignette
+    float2 centerUV = (float2(id.xy) + 0.5) / float2(outWidth, outHeight);
+    float d = distance(centerUV, float2(0.5, 0.5));
+    float v = smoothstep(0.8, 0.8 - vignette * 0.5, d);
+    mapped *= v;
 
     // Gamma to match existing LinearToSRGB() (approx).
     float3 srgb = pow(max(mapped, 0.0), 1.0 / 2.2);
