@@ -78,8 +78,8 @@ void NrdDenoiser::Recreate(uint32_t width, uint32_t height) {
   integrationDesc.resourceHeight =
       static_cast<uint16_t>((std::min)(height, 65535u));
   integrationDesc.queuedFrameNum = 2; // match our render pipeline
-  integrationDesc.enableWholeLifetimeDescriptorCaching = false;
-  integrationDesc.demoteFloat32to16 = false;
+  integrationDesc.enableWholeLifetimeDescriptorCaching = true;
+  integrationDesc.demoteFloat32to16 = true;
 
   // Setup instance creation desc
   nrd::DenoiserDesc denoisers[1] = {};
@@ -256,21 +256,21 @@ void NrdDenoiser::Denoise(ID3D12GraphicsCommandList *cmdList,
   // operates on irradiance which is much smoother scene-to-scene.  Moderate
   // aggressiveness gives clean output without over-blurring fine detail.
   nrd::RelaxSettings relaxSettings = {};
-  relaxSettings.diffuseMaxAccumulatedFrameNum = 32;
-  relaxSettings.specularMaxAccumulatedFrameNum = 32;
-  relaxSettings.diffuseMaxFastAccumulatedFrameNum = 6;
-  relaxSettings.specularMaxFastAccumulatedFrameNum = 6;
+  relaxSettings.diffuseMaxAccumulatedFrameNum = 48;
+  relaxSettings.specularMaxAccumulatedFrameNum = 48;
+  relaxSettings.diffuseMaxFastAccumulatedFrameNum = 8;
+  relaxSettings.specularMaxFastAccumulatedFrameNum = 8;
   relaxSettings.historyFixFrameNum = 0; // Disabled to prevent heavy 5x5 spatial
                                         // blur on refraction history resets
   // Prepass Gaussian helps gather energy from sparse 1-spp traces.
   // With demodulated irradiance these values preserve texture edges well.
-  relaxSettings.diffusePrepassBlurRadius = 30.0f;
+  relaxSettings.diffusePrepassBlurRadius = 16.0f;
   relaxSettings.specularPrepassBlurRadius =
       0.0f; // Disabled to prevent glass and low roughness surfaces from
             // becoming blurry
   relaxSettings.minHitDistanceWeight = 0.05f;
   // 5 A-Trous passes = ~32px effective spatial radius; appropriate for 1-spp.
-  relaxSettings.atrousIterationNum = 5;
+  relaxSettings.atrousIterationNum = 4;
   relaxSettings.enableAntiFirefly = true;
   relaxSettings.luminanceEdgeStoppingRelaxation =
       0.0f; // Disabled so glass refraction doesn't spatially smear when history
