@@ -224,7 +224,7 @@ VSOutputShadow VSMainShadow(VSInputMesh input)
 {
     VSOutputShadow o;
     float4 worldPos = mul(world, float4(input.position, 1.0f));
-    o.position = mul(shadowMatrix, worldPos);
+    o.position = mul(worldPos, shadowMatrix);
     return o;
 }
 
@@ -292,9 +292,13 @@ float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent, int 
     return normalize(mul(tangentNormal, TBN));
 }
 
-float CalculateShadow(float3 worldPos)
+float CalculateShadow(float3 worldPos, float3 N)
 {
-    float4 shadowPos = mul(shadowMatrix, float4(worldPos, 1.0));
+    float3 L = normalize(lightDir.xyz);
+    float normalOffset = 0.02 * (1.0 - saturate(dot(N, L))) + 0.002;
+    float3 biasedWorldPos = worldPos + N * normalOffset;
+
+    float4 shadowPos = mul(float4(biasedWorldPos, 1.0), shadowMatrix);
     shadowPos.xyz /= shadowPos.w;
     
     // Transform to [0,1] range for UV sampling
@@ -304,7 +308,9 @@ float CalculateShadow(float3 worldPos)
     if (shadowUV.x < 0 || shadowUV.x > 1 || shadowUV.y < 0 || shadowUV.y > 1) return 1.0;
     
     float currentDepth = shadowPos.z;
-    if (currentDepth > 1.0) return 1.0;
+        if (currentDepth < 0.0 || currentDepth > 1.0) return 1.0;
+
+    float receiverBias = max(0.0002, 0.0015 * (1.0 - saturate(dot(N, L))));
 
     // 3x3 PCF
     float shadow = 0.0;
@@ -313,7 +319,10 @@ float CalculateShadow(float3 worldPos)
     {
         for(int y = -1; y <= 1; ++y)
         {
-            shadow += shadowMap.SampleCmpLevelZero(shadowSampler, shadowUV + float2(x, y) * texelSize, currentDepth - 0.0005).r;
+                shadow += shadowMap.SampleCmpLevelZero(
+                    shadowSampler,
+                    shadowUV + float2(x, y) * texelSize,
+                    currentDepth - receiverBias).r;
         }
     }
     return shadow / 9.0;
@@ -456,7 +465,7 @@ PSOutput PSMainMesh(PSInputMesh input)
     float3 directLight = baseDirect * (1.0 - clearcoat) + coatDirect * clearcoat;
 
     // Modulate direct light by shadow
-    float shadow = CalculateShadow(input.worldPos);
+    float shadow = CalculateShadow(input.worldPos, N);
     directLight *= shadow;
 
     // Backlighting translucency approximation
@@ -489,7 +498,7 @@ PSOutput PSMainMesh(PSInputMesh input)
     }
 
     // Raster has no true GI, but full env energy here reads too hot versus the scene.
-    const float kRasterAmbientScale = 0.35;
+    const float kRasterAmbientScale = 0.18;
     float3 envIBL = (diffuse_ibl + specular_ibl) * (ao * kRasterAmbientScale);
     float3 ambient = envIBL * (1.0 - clearcoat);
     if (clearcoat > 0.001) {
@@ -521,6 +530,7 @@ PSOutput PSMainMesh(PSInputMesh input)
         else if (mode == 5) o_dbg.color = float4(F0, 1.0);
         else if (mode == 6) o_dbg.color = float4(metalness, metalness, metalness, 1.0);
         else if (mode == 7) o_dbg.color = float4(ao, ao, ao, 1.0);
+        else if (mode == 8) o_dbg.color = float4(shadow, shadow, shadow, 1.0);
         else o_dbg.color = float4(0,0,0,1);
         return o_dbg;
     }
