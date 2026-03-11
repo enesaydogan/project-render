@@ -90,6 +90,12 @@ bool g_showMaterialEditor = false;
 bool g_showControlsWindow = false;
 bool g_forceUncollapse = false;
 
+// Master toggle: when false the entire ImGui frame is skipped and no UI
+// elements are drawn.  Controlled via F5 key in input_handler.cpp.
+namespace Input {
+  bool g_imguiEnabled = true;
+}
+
 int g_debugMode = 0; // 0=None, 1=Albedo, 2=Normal, 3=Emissive, ...
 
 struct SceneIoJobState {
@@ -560,6 +566,16 @@ static bool RecreateDxrPipelineSafe(UINT width, UINT height,
 
 void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
                   float &latitudeDeg, float &dayOfYear) {
+  if (!Input::g_imguiEnabled) {
+    // Submit an empty frame so stale draw data from the previous frame is not
+    // rendered again.
+    ImGui_ImplDX12_NewFrame();
+    ImGui_ImplWin32_NewFrame();
+    ImGui::NewFrame();
+    ImGui::Render();
+    return;
+  }
+
   UpdateSceneIoJob();
 
   // Start ImGui frame

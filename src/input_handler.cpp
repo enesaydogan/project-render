@@ -171,10 +171,10 @@ void Update(float dt) {
       move.z -= worldUp.z;
     }
 
-    // TAB: Toggle between Raster and Raytracing modes
-    static bool tabDown = false;
-    if (GetAsyncKeyState(VK_TAB) & 0x8000) {
-      if (!tabDown) {
+    // F4: Toggle between Raster and Raytracing modes (used to be TAB)
+    static bool f4Down = false;
+    if (GetAsyncKeyState(VK_F4) & 0x8000) {
+      if (!f4Down) {
         if (g_currentRenderMode == RenderMode::Raster) {
           g_currentRenderMode = RenderMode::DXR;
           DX12Context::WaitGPUIdle();
@@ -189,10 +189,22 @@ void Update(float dt) {
         } else {
           g_currentRenderMode = RenderMode::Raster;
         }
-        tabDown = true;
+        f4Down = true;
       }
     } else {
-      tabDown = false;
+      f4Down = false;
+    }
+
+    // F5: toggle ImGui UI on/off
+    static bool f5Down = false;
+    if (GetAsyncKeyState(VK_F5) & 0x8000) {
+      if (!f5Down) {
+        Input::g_imguiEnabled = !Input::g_imguiEnabled;
+        fprintf(stderr, "F5 pressed: imguiEnabled = %d\n", Input::g_imguiEnabled);
+        f5Down = true;
+      }
+    } else {
+      f5Down = false;
     }
 
     // Selection: LBUTTON
