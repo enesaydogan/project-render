@@ -22,6 +22,7 @@ namespace RasterRenderer {
     float ssaoBias = 0.025f;
     float ssaoStrength = 1.0f;
     int ssaoSamples = 16;
+    float ssaoCompositeWeight = 0.25f;
 
     bool enableBloom = true;
     float bloomThreshold = 1.0f;

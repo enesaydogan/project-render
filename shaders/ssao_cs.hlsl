@@ -61,6 +61,16 @@ RWTexture2D<float> OutputTex : register(u0);
 
 SamplerState linearSampler : register(s0);
 
+float LoadDepth(uint2 coord)
+{
+    return DepthTex.Load(int3(coord, 0));
+}
+
+float3 LoadNormal(uint2 coord)
+{
+    return NormalTex.Load(int3(coord, 0)).xyz * 2.0 - 1.0;
+}
+
 float3 GetWorldPos(float2 uv, float depth)
 {
     float4 clipPos = float4(uv.x * 2.0 - 1.0, (1.0 - uv.y) * 2.0 - 1.0, depth, 1.0);
@@ -101,14 +111,14 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     if (id.x >= width || id.y >= height) return;
 
     float2 uv = (float2(id.xy) + 0.5) / float2(width, height);
-    float depth = DepthTex.SampleLevel(linearSampler, uv, 0);
+    float depth = LoadDepth(id.xy);
     if (depth >= 1.0) {
         OutputTex[id.xy] = 1.0;
         return;
     }
 
     float3 worldPos = GetWorldPos(uv, depth);
-    float3 N = normalize(NormalTex.SampleLevel(linearSampler, uv, 0).xyz * 2.0 - 1.0);
+    float3 N = normalize(LoadNormal(id.xy));
     float randomAngle = Hash1(float2(id.xy)) * 6.28318530718;
     float2 randomDir = float2(cos(randomAngle), sin(randomAngle));
     
@@ -120,6 +130,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     float3x3 TBN = float3x3(tangent, bitangent, N);
 
     float occlusion = 0.0;
+    float validSampleCount = 0.0;
     uint count = max(sampleCount, 1u);
     for (uint i = 0; i < count; ++i)
     {
@@ -142,26 +153,40 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         {
             continue;
         }
+
+        uint2 sampleCoord = min(uint2(sampleUV * float2(width, height)), uint2(width - 1, height - 1));
+        float2 sampleCenterUV = (float2(sampleCoord) + 0.5) / float2(width, height);
         
-        float sampledDepth = DepthTex.SampleLevel(linearSampler, sampleUV, 0);
+        float sampledDepth = LoadDepth(sampleCoord);
         if (sampledDepth >= 1.0)
         {
             continue;
         }
 
-        float3 sampledWorldPos = GetWorldPos(sampleUV, sampledDepth);
+        validSampleCount += 1.0;
+
+        float3 sampledWorldPos = GetWorldPos(sampleCenterUV, sampledDepth);
+        float3 sampledNormal = normalize(LoadNormal(sampleCoord));
 
         float expectedDistance = dot(samplePos - worldPos, N);
         float actualDistance = dot(sampledWorldPos - worldPos, N);
         float worldDistance = distance(worldPos, sampledWorldPos);
         float rangeWeight = 1.0 - smoothstep(radius, radius * 1.5, worldDistance);
+        float normalWeight = saturate(dot(N, sampledNormal));
+        normalWeight *= normalWeight;
+        float thickness = expectedDistance - actualDistance;
+        float thicknessWeight = 1.0 - smoothstep(bias, max(radius * 0.5, bias + 1e-4), thickness);
 
         if (actualDistance + bias < expectedDistance)
         {
-            occlusion += rangeWeight;
+            occlusion += rangeWeight * normalWeight * thicknessWeight;
         }
     }
 
-    float ao = 1.0 - (occlusion / float(count));
+    float sampleNorm = max(validSampleCount, 1.0);
+    float ao = 1.0 - (occlusion / sampleNorm);
+    float2 edgeDistance = min(float2(id.xy) + 0.5, float2(width, height) - (float2(id.xy) + 0.5));
+    float edgeFade = saturate(min(edgeDistance.x, edgeDistance.y) / 24.0);
+    ao = lerp(1.0, ao, edgeFade);
     OutputTex[id.xy] = saturate(1.0 - (1.0 - ao) * strength);
 }
