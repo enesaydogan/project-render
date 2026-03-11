@@ -459,17 +459,20 @@ PSOutput PSMainMesh(PSInputMesh input)
     float3 kD_ibl = 1.0 - kS_ibl;
 
     float2 envUV_diff = DirectionToUV(N);
-    float3 irradiance = envMap.SampleLevel(linearSampler, envUV_diff, 7.0).rgb; 
+    float3 irradiance = envMap.SampleLevel(linearSampler, envUV_diff, 7.0).rgb;
+    irradiance *= intensity; // apply camera exposure to IBL
     float3 diffuse_ibl = kD_ibl * irradiance * (DiffuseAlbedo / PI);
 
     float2 envUV_spec = DirectionToUV(R);
     float3 prefilteredColor = envMap.SampleLevel(linearSampler, envUV_spec, roughness * 7.0).rgb;
+    prefilteredColor *= intensity;
     float3 specular_ibl = kS_ibl * prefilteredColor;
 
     float3 coat_ibl = float3(0.0, 0.0, 0.0);
     if (clearcoat > 0.001) {
         float2 envUV_spec = DirectionToUV(R);
         float3 prefilteredCoat = envMap.SampleLevel(linearSampler, envUV_spec, clearcoatRoughness * 7.0).rgb;
+        prefilteredCoat *= intensity;
         float3 F0c = float3(0.04, 0.04, 0.04);
         float3 Fc_ibl = FresnelSchlickRoughness(max(dot(N, V), 0.0), F0c, clearcoatRoughness);
         coat_ibl = Fc_ibl * prefilteredCoat;
@@ -486,6 +489,7 @@ PSOutput PSMainMesh(PSInputMesh input)
     if (translucency > 0.001) {
         float2 envUV_back = DirectionToUV(-N);
         float3 irradianceBack = envMap.SampleLevel(linearSampler, envUV_back, 7.0).rgb;
+        irradianceBack *= intensity;
         float3 envBack = (DiffuseAlbedo * irradianceBack) * ao;
         ambient += envBack * translucency;
     }
