@@ -68,6 +68,10 @@ static D3D12_RESOURCE_STATES s_normalState = D3D12_RESOURCE_STATE_RENDER_TARGET;
 static ComPtr<ID3D12Resource> s_tonemapOutput;
 static D3D12_RESOURCE_STATES s_tonemapOutputState =
     D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+static D3D12_RESOURCE_STATES s_hdrColorCopyState =
+  D3D12_RESOURCE_STATE_COPY_DEST;
+static D3D12_RESOURCE_STATES s_ssaoState =
+  D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 static ComPtr<ID3D12RootSignature> s_tonemapRootSig;
 static ComPtr<ID3D12PipelineState> s_tonemapPSO;
 static ComPtr<ID3D12Resource> s_tonemapCB;
@@ -100,6 +104,7 @@ static UINT s_avgLumCapacity = 0;
 static float s_avgLuminanceCdM2 = 0.0f;
 static float s_lastEV100 = -10.0f;
 static float s_smoothedExposure = 0.02f;
+static RasterRenderer::RenderSettings s_renderSettings;
 
 namespace RasterRenderer {
 static bool EnsureTonemapPipeline(ID3D12Device *device);
@@ -305,10 +310,13 @@ void RecreateMeshPipeline(ID3D12Device *device, ID3D12RootSignature *rootSig) {
     }
 
     ComPtr<IDxcBlob> vsMeshBlob;
+    ComPtr<IDxcBlob> vsShadowBlob;
     ComPtr<IDxcBlob> psMeshBlob;
 
     vsMeshBlob = s_dxcHelper.Compile(pbrShaderPath, L"VSMainMesh", L"vs_6_0",
                                      compileDefines);
+    vsShadowBlob = s_dxcHelper.Compile(pbrShaderPath, L"VSMainShadow",
+                       L"vs_6_0", compileDefines);
     psMeshBlob = s_dxcHelper.Compile(pbrShaderPath, L"PSMainMesh", L"ps_6_0",
                                      compileDefines);
 
@@ -431,6 +439,8 @@ void RecreateMeshPipeline(ID3D12Device *device, ID3D12RootSignature *rootSig) {
 
     // Shadow PSO
     D3D12_GRAPHICS_PIPELINE_STATE_DESC shadowPsoDesc = depthPsoDesc;
+    shadowPsoDesc.VS = {vsShadowBlob->GetBufferPointer(),
+              vsShadowBlob->GetBufferSize()};
     shadowPsoDesc.RasterizerState.DepthBias = 1000;
     shadowPsoDesc.RasterizerState.DepthBiasClamp = 0.0f;
     shadowPsoDesc.RasterizerState.SlopeScaledDepthBias = 1.25f;
@@ -559,7 +569,7 @@ void CreateShadowResources(ID3D12Device *device) {
   desc.Height = s_shadowMapSize;
   desc.DepthOrArraySize = 1;
   desc.MipLevels = 1;
-  desc.Format = DXGI_FORMAT_D32_FLOAT;
+  desc.Format = DXGI_FORMAT_R32_TYPELESS;
   desc.SampleDesc.Count = 1;
   desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
   desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
@@ -578,8 +588,12 @@ void CreateShadowResources(ID3D12Device *device) {
   dsvHeapDesc.NumDescriptors = 1;
   dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
   ThrowIfFailed(device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&s_shadowDsvHeap)));
-  
-  device->CreateDepthStencilView(s_shadowMap.Get(), nullptr, s_shadowDsvHeap->GetCPUDescriptorHandleForHeapStart());
+
+  D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+  dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
+  dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+  device->CreateDepthStencilView(s_shadowMap.Get(), &dsvDesc,
+                                 s_shadowDsvHeap->GetCPUDescriptorHandleForHeapStart());
 
   if (!s_shadowSrvAllocated) {
     auto alloc = g_cbvSrvAllocator.AllocatePersistent(1);
@@ -815,6 +829,10 @@ static bool EnsureHdrResources(ID3D12Device *device, UINT width, UINT height) {
   s_hdrRtvHeap.Reset();
   s_hdrWidth = width;
   s_hdrHeight = height;
+  s_hdrColorCopy.Reset();
+  s_ssaoMap.Reset();
+  s_hdrColorCopyState = D3D12_RESOURCE_STATE_COPY_DEST;
+  s_ssaoState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
   D3D12_RESOURCE_DESC hdrDesc{};
   hdrDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -916,6 +934,8 @@ bool PrepareHdrRenderTarget(ID3D12Device *device,
 
 float GetCurrentAvgLuminance() { return s_avgLuminanceCdM2; }
 float GetCurrentEV100() { return s_lastEV100; }
+RenderSettings &GetRenderSettings() { return s_renderSettings; }
+void ResetRenderSettings() { s_renderSettings = RenderSettings{}; }
 
 void BindHdrRenderTarget(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList, D3D12_CPU_DESCRIPTOR_HANDLE dsv) {
   D3D12_CPU_DESCRIPTOR_HANDLE rtvs[2];
@@ -941,8 +961,12 @@ bool TonemapHdrToBackbuffer(ID3D12Device *device, ID3D12GraphicsCommandList *cmd
 
   // Run SSR and SSAO before Tonemapping
   // These modify s_hdrColor (SSR) or generate s_ssaoMap (SSAO)
-  RunSSR(device, cmdList, cameraCB, depthBuffer);
-  RunSSAO(device, cmdList, cameraCB, depthBuffer);
+  if (s_renderSettings.enableSSR) {
+    RunSSR(device, cmdList, cameraCB, depthBuffer);
+  }
+  if (s_renderSettings.enableSSAO) {
+    RunSSAO(device, cmdList, cameraCB, depthBuffer);
+  }
 
   float *data = nullptr;
   if (SUCCEEDED(s_avgLumReadbackBuffer->Map(0, nullptr, (void **)&data))) {
@@ -1081,16 +1105,18 @@ bool TonemapHdrToBackbuffer(ID3D12Device *device, ID3D12GraphicsCommandList *cmd
   tc.outWidth = width;
   tc.outHeight = height;
   tc.exposure = exposure;
-  tc.vignette = 0.15f;
-  tc.saturation = 1.05f;
-  tc.contrast = 1.05f;
-  tc._pad[0] = s_ssaoMap ? 1.0f : 0.0f;
+  tc.vignette = s_renderSettings.tonemapVignette;
+  tc.saturation = s_renderSettings.tonemapSaturation;
+  tc.contrast = s_renderSettings.tonemapContrast;
+  tc.ssaoEnabled = (s_renderSettings.enableSSAO && s_ssaoMap) ? 1.0f : 0.0f;
   if (SUCCEEDED(s_tonemapCB->Map(0, nullptr, &p))) {
     memcpy(p, &tc, sizeof(tc));
     s_tonemapCB->Unmap(0, nullptr);
   }
 
-  RunBloom(device, cmdList, s_hdrColor.Get());
+  if (s_renderSettings.enableBloom) {
+    RunBloom(device, cmdList, s_hdrColor.Get());
+  }
 
   D3D12_CPU_DESCRIPTOR_HANDLE tmCpu =
       s_tonemapHeap->GetCPUDescriptorHandleForHeapStart();
@@ -1103,21 +1129,30 @@ bool TonemapHdrToBackbuffer(ID3D12Device *device, ID3D12GraphicsCommandList *cmd
 
   tmCpu.ptr += descSize;
   // SSAO Map SRV
-  if (s_ssaoMap) {
-     device->CreateShaderResourceView(s_ssaoMap.Get(), nullptr, tmCpu);
+  if (s_renderSettings.enableSSAO && s_ssaoMap) {
+    device->CreateShaderResourceView(s_ssaoMap.Get(), nullptr, tmCpu);
   } else {
-     // Create a dummy 1x1 white texture or just a null SRV with white?
-     // For now, I'll just skip or handle in shader.
-     // Better create a dummy SRV.
-     device->CreateShaderResourceView(nullptr, nullptr, tmCpu); // Actually this might fail without a desc.
+    D3D12_SHADER_RESOURCE_VIEW_DESC nullSsaoSrv{};
+    nullSsaoSrv.Format = DXGI_FORMAT_R8_UNORM;
+    nullSsaoSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    nullSsaoSrv.Shader4ComponentMapping =
+        D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    nullSsaoSrv.Texture2D.MipLevels = 1;
+    device->CreateShaderResourceView(nullptr, &nullSsaoSrv, tmCpu);
   }
 
   tmCpu.ptr += descSize;
   // Bloom Map SRV
-  if (s_bloomBuffers[0]) {
-      device->CreateShaderResourceView(s_bloomBuffers[0].Get(), nullptr, tmCpu);
+  if (s_renderSettings.enableBloom && s_bloomBuffers[0]) {
+    device->CreateShaderResourceView(s_bloomBuffers[0].Get(), nullptr, tmCpu);
   } else {
-      device->CreateShaderResourceView(nullptr, nullptr, tmCpu);
+    D3D12_SHADER_RESOURCE_VIEW_DESC nullBloomSrv{};
+    nullBloomSrv.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    nullBloomSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    nullBloomSrv.Shader4ComponentMapping =
+        D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    nullBloomSrv.Texture2D.MipLevels = 1;
+    device->CreateShaderResourceView(nullptr, &nullBloomSrv, tmCpu);
   }
 
   D3D12_CPU_DESCRIPTOR_HANDLE tmUavCpu = tmCpu;
@@ -1171,17 +1206,21 @@ static bool EnsureSSRPipeline(ID3D12Device *device) {
     ranges[1].NumDescriptors = 1;
     ranges[1].BaseShaderRegister = 0;
 
-    D3D12_ROOT_PARAMETER params[3] = {};
+    D3D12_ROOT_PARAMETER params[4] = {};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     params[0].Descriptor.ShaderRegister = 0;
-    
-    params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    params[1].DescriptorTable.NumDescriptorRanges = 1;
-    params[1].DescriptorTable.pDescriptorRanges = &ranges[0];
 
+    params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    params[1].Constants.ShaderRegister = 1;
+    params[1].Constants.Num32BitValues = 8;
+    
     params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     params[2].DescriptorTable.NumDescriptorRanges = 1;
-    params[2].DescriptorTable.pDescriptorRanges = &ranges[1];
+    params[2].DescriptorTable.pDescriptorRanges = &ranges[0];
+
+    params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[3].DescriptorTable.NumDescriptorRanges = 1;
+    params[3].DescriptorTable.pDescriptorRanges = &ranges[1];
 
     D3D12_STATIC_SAMPLER_DESC sampler = {};
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -1191,7 +1230,7 @@ static bool EnsureSSRPipeline(ID3D12Device *device) {
     sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
-    rsDesc.NumParameters = 3;
+    rsDesc.NumParameters = 4;
     rsDesc.pParameters = params;
     rsDesc.NumStaticSamplers = 1;
     rsDesc.pStaticSamplers = &sampler;
@@ -1213,7 +1252,7 @@ static bool EnsureSSRPipeline(ID3D12Device *device) {
 }
 
 void RunSSR(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB, ID3D12Resource* depthBuffer) {
-  if (!s_ssrPSO || !s_hdrColor || !s_hdrNormal) return;
+  if (!s_renderSettings.enableSSR || !s_ssrPSO || !s_hdrColor || !s_hdrNormal) return;
 
   // 1. Create Color Copy for sampling
   if (!s_hdrColorCopy || s_hdrColorCopy->GetDesc().Width != s_hdrWidth ||
@@ -1242,29 +1281,58 @@ void RunSSR(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList, ID3D12Reso
     device->CreateUnorderedAccessView(s_hdrColor.Get(), nullptr, nullptr, cpu);
   }
 
-  TransitionResource(cmdList, s_hdrColor.Get(), s_hdrState, D3D12_RESOURCE_STATE_COPY_SOURCE);
-  TransitionResource(cmdList, s_hdrColorCopy.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+  TransitionResource(cmdList, s_hdrColor.Get(), s_hdrState,
+                     D3D12_RESOURCE_STATE_COPY_SOURCE);
+  TransitionResource(cmdList, s_hdrColorCopy.Get(), s_hdrColorCopyState,
+                     D3D12_RESOURCE_STATE_COPY_DEST);
   cmdList->CopyResource(s_hdrColorCopy.Get(), s_hdrColor.Get());
-  TransitionResource(cmdList, s_hdrColor.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-  TransitionResource(cmdList, s_hdrColorCopy.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-  TransitionResource(cmdList, s_hdrNormal.Get(), s_normalState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-  TransitionResource(cmdList, depthBuffer, D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+  TransitionResource(cmdList, s_hdrColor.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+  TransitionResource(cmdList, s_hdrColorCopy.Get(),
+                     D3D12_RESOURCE_STATE_COPY_DEST,
+                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+  TransitionResource(cmdList, s_hdrNormal.Get(), s_normalState,
+                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+  TransitionResource(cmdList, depthBuffer, D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+  s_hdrColorCopyState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
   cmdList->SetPipelineState(s_ssrPSO.Get());
   cmdList->SetComputeRootSignature(s_ssrRootSig.Get());
   cmdList->SetDescriptorHeaps(1, s_ssrHeap.GetAddressOf());
   cmdList->SetComputeRootConstantBufferView(0, cameraCB->GetGPUVirtualAddress());
-  cmdList->SetComputeRootDescriptorTable(1, s_ssrHeap->GetGPUDescriptorHandleForHeapStart());
+  struct {
+    float stepSize;
+    float thickness;
+    float intensity;
+    float minSmoothness;
+    uint32_t maxSteps;
+    float pad[3];
+  } ssrParams = {
+      s_renderSettings.ssrStepSize,
+      s_renderSettings.ssrThickness,
+      s_renderSettings.ssrIntensity,
+      s_renderSettings.ssrMinSmoothness,
+      (uint32_t)(std::max)(1, s_renderSettings.ssrMaxSteps),
+      {0.0f, 0.0f, 0.0f}};
+  cmdList->SetComputeRoot32BitConstants(1, 8, &ssrParams, 0);
+  cmdList->SetComputeRootDescriptorTable(2, s_ssrHeap->GetGPUDescriptorHandleForHeapStart());
   
   D3D12_GPU_DESCRIPTOR_HANDLE uavGpu = s_ssrHeap->GetGPUDescriptorHandleForHeapStart();
   uavGpu.ptr += 3 * device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-  cmdList->SetComputeRootDescriptorTable(2, uavGpu);
+  cmdList->SetComputeRootDescriptorTable(3, uavGpu);
 
   cmdList->Dispatch((s_hdrWidth + 7) / 8, (s_hdrHeight + 7) / 8, 1);
 
-  TransitionResource(cmdList, s_hdrColor.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RENDER_TARGET);
-  TransitionResource(cmdList, s_hdrNormal.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
-  TransitionResource(cmdList, depthBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+  TransitionResource(cmdList, s_hdrColor.Get(),
+                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                     D3D12_RESOURCE_STATE_RENDER_TARGET);
+  TransitionResource(cmdList, s_hdrNormal.Get(),
+                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                     D3D12_RESOURCE_STATE_RENDER_TARGET);
+  TransitionResource(cmdList, depthBuffer,
+                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                     D3D12_RESOURCE_STATE_DEPTH_WRITE);
   s_hdrState = D3D12_RESOURCE_STATE_RENDER_TARGET;
   s_normalState = D3D12_RESOURCE_STATE_RENDER_TARGET;
 }
@@ -1284,20 +1352,24 @@ static bool EnsureSSAOPipeline(ID3D12Device *device) {
     ranges[1].NumDescriptors = 1;
     ranges[1].BaseShaderRegister = 0;
 
-    D3D12_ROOT_PARAMETER params[3] = {};
+    D3D12_ROOT_PARAMETER params[4] = {};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     params[0].Descriptor.ShaderRegister = 0;
-    
-    params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    params[1].DescriptorTable.NumDescriptorRanges = 1;
-    params[1].DescriptorTable.pDescriptorRanges = &ranges[0];
 
+    params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    params[1].Constants.ShaderRegister = 1;
+    params[1].Constants.Num32BitValues = 4;
+    
     params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     params[2].DescriptorTable.NumDescriptorRanges = 1;
-    params[2].DescriptorTable.pDescriptorRanges = &ranges[1];
+    params[2].DescriptorTable.pDescriptorRanges = &ranges[0];
+
+    params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[3].DescriptorTable.NumDescriptorRanges = 1;
+    params[3].DescriptorTable.pDescriptorRanges = &ranges[1];
 
     D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
-    rsDesc.NumParameters = 3;
+    rsDesc.NumParameters = 4;
     rsDesc.pParameters = params;
     rsDesc.NumStaticSamplers = 1;
     D3D12_STATIC_SAMPLER_DESC sampler = {};
@@ -1321,7 +1393,7 @@ static bool EnsureSSAOPipeline(ID3D12Device *device) {
 }
 
 void RunSSAO(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB, ID3D12Resource* depthBuffer) {
-  if (!s_ssaoPSO || !s_hdrNormal) return;
+  if (!s_renderSettings.enableSSAO || !s_ssaoPSO || !s_hdrNormal) return;
 
   if (!s_ssaoMap || s_ssaoMap->GetDesc().Width != s_hdrWidth ||
       s_ssaoMap->GetDesc().Height != s_hdrHeight) {
@@ -1338,6 +1410,7 @@ void RunSSAO(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList, ID3D12Res
     
     D3D12_HEAP_PROPERTIES prop = {D3D12_HEAP_TYPE_DEFAULT};
     ThrowIfFailed(device->CreateCommittedResource(&prop, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&s_ssaoMap)));
+    s_ssaoState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     
     D3D12_DESCRIPTOR_HEAP_DESC ssaodehpDesc = {D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 4, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE};
     ThrowIfFailed(device->CreateDescriptorHeap(&ssaodehpDesc, IID_PPV_ARGS(&s_ssaoHeap)));
@@ -1356,23 +1429,46 @@ void RunSSAO(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList, ID3D12Res
     device->CreateUnorderedAccessView(s_ssaoMap.Get(), nullptr, nullptr, cpu);
   }
 
-  TransitionResource(cmdList, s_hdrNormal.Get(), s_normalState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-  TransitionResource(cmdList, depthBuffer, D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+  TransitionResource(cmdList, s_ssaoMap.Get(), s_ssaoState,
+                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+  TransitionResource(cmdList, s_hdrNormal.Get(), s_normalState,
+                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+  TransitionResource(cmdList, depthBuffer, D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
   cmdList->SetPipelineState(s_ssaoPSO.Get());
   cmdList->SetComputeRootSignature(s_ssaoRootSig.Get());
   cmdList->SetDescriptorHeaps(1, s_ssaoHeap.GetAddressOf());
   cmdList->SetComputeRootConstantBufferView(0, cameraCB->GetGPUVirtualAddress());
-  cmdList->SetComputeRootDescriptorTable(1, s_ssaoHeap->GetGPUDescriptorHandleForHeapStart());
+  struct {
+    float radius;
+    float bias;
+    float strength;
+    uint32_t sampleCount;
+  } ssaoParams = {
+      s_renderSettings.ssaoRadius,
+      s_renderSettings.ssaoBias,
+      s_renderSettings.ssaoStrength,
+      (uint32_t)(std::max)(1, s_renderSettings.ssaoSamples)};
+  cmdList->SetComputeRoot32BitConstants(1, 4, &ssaoParams, 0);
+  cmdList->SetComputeRootDescriptorTable(2, s_ssaoHeap->GetGPUDescriptorHandleForHeapStart());
   
   D3D12_GPU_DESCRIPTOR_HANDLE uavGpu = s_ssaoHeap->GetGPUDescriptorHandleForHeapStart();
   uavGpu.ptr += 2 * device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-  cmdList->SetComputeRootDescriptorTable(2, uavGpu);
+  cmdList->SetComputeRootDescriptorTable(3, uavGpu);
 
   cmdList->Dispatch((s_hdrWidth + 7) / 8, (s_hdrHeight + 7) / 8, 1);
 
-  TransitionResource(cmdList, s_hdrNormal.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, s_normalState);
-  TransitionResource(cmdList, depthBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+  TransitionResource(cmdList, s_ssaoMap.Get(),
+                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+  TransitionResource(cmdList, s_hdrNormal.Get(),
+                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                     s_normalState);
+  TransitionResource(cmdList, depthBuffer,
+                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                     D3D12_RESOURCE_STATE_DEPTH_WRITE);
+  s_ssaoState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
   
   // Now multiply color by SSAO map
   // To keep it simple, I'll update the tonemapper to sample the SSAO map if it exists.
@@ -1429,7 +1525,7 @@ static bool EnsureBloomPipeline(ID3D12Device *device) {
 }
 
 void RunBloom(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList, ID3D12Resource* inputHdr) {
-  if (!EnsureBloomPipeline(device)) return;
+  if (!s_renderSettings.enableBloom || !EnsureBloomPipeline(device)) return;
 
   UINT width = s_hdrWidth / 2; // Bloom at half res
   UINT height = s_hdrHeight / 2;
@@ -1486,7 +1582,8 @@ void RunBloom(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList, ID3D12Re
   TransitionResource(cmdList, inputHdr, s_hdrState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
   cmdList->SetPipelineState(s_bloomExtractPSO.Get());
   cmdList->SetDescriptorHeaps(1, s_bloomHeaps[0].GetAddressOf());
-  struct { float t; float i; float p[2]; } params = { 1.0f, 0.5f, {0,0} };
+  struct { float t; float i; float p[2]; } params = {
+      s_renderSettings.bloomThreshold, s_renderSettings.bloomIntensity, {0,0}};
   cmdList->SetComputeRoot32BitConstants(0, 4, &params, 0);
   cmdList->SetComputeRootDescriptorTable(1, s_bloomHeaps[0]->GetGPUDescriptorHandleForHeapStart());
   D3D12_GPU_DESCRIPTOR_HANDLE uavGpu = s_bloomHeaps[0]->GetGPUDescriptorHandleForHeapStart();

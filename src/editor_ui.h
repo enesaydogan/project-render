@@ -56,6 +56,7 @@ extern bool g_showRenderModeWindow;
 extern bool g_showAssetsWindow;
 extern bool g_showMaterialEditor;
 extern bool g_showControlsWindow;
+extern bool g_showRenderSettingsWindow;
 extern bool g_forceUncollapse;
 
 // Debug mode (defined in editor_ui.cpp)

@@ -1,7 +1,3 @@
-#define SAMPLES 16
-#define RADIUS 0.5
-#define BIAS 0.025
-
 cbuffer CameraCB : register(b0)
 {
     float3 pos;
@@ -51,6 +47,14 @@ cbuffer CameraCB : register(b0)
     float4x4 invViewProj;
 };
 
+cbuffer SSAOSettings : register(b1)
+{
+    float radius;
+    float bias;
+    float strength;
+    uint sampleCount;
+};
+
 Texture2D<float4> NormalTex : register(t0);
 Texture2D<float> DepthTex : register(t1);
 RWTexture2D<float> OutputTex : register(u0);
@@ -64,11 +68,29 @@ float3 GetWorldPos(float2 uv, float depth)
     return worldPos.xyz / worldPos.w;
 }
 
-float3 GetRandom(float2 uv)
+float Hash1(float2 uv)
 {
-   // Simple hash
-   float f = sin(dot(uv, float2(12.9898, 78.233))) * 43758.5453;
-   return normalize(float3(frac(f), frac(f*1.21), frac(f*1.54)) * 2.0 - 1.0);
+    float f = sin(dot(uv, float2(12.9898, 78.233))) * 43758.5453;
+    return frac(f);
+}
+
+float2 Hammersley(uint i, uint n)
+{
+    uint bits = (i << 16u) | (i >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    float radicalInverse = float(bits) * 2.3283064365386963e-10;
+    return float2((float(i) + 0.5) / float(n), radicalInverse);
+}
+
+float3 SampleHemisphere(float2 xi)
+{
+    float phi = 6.28318530718 * xi.x;
+    float cosTheta = sqrt(1.0 - xi.y);
+    float sinTheta = sqrt(xi.y);
+    return float3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);
 }
 
 [numthreads(8, 8, 1)]
@@ -87,38 +109,59 @@ void CSMain(uint3 id : SV_DispatchThreadID)
 
     float3 worldPos = GetWorldPos(uv, depth);
     float3 N = normalize(NormalTex.SampleLevel(linearSampler, uv, 0).xyz * 2.0 - 1.0);
-    float3 rand = GetRandom(uv);
+    float randomAngle = Hash1(float2(id.xy)) * 6.28318530718;
+    float2 randomDir = float2(cos(randomAngle), sin(randomAngle));
     
-    float3 tangent = normalize(rand - N * dot(rand, N));
+    float3 tangent = normalize(abs(N.z) < 0.999 ? cross(float3(0.0, 0.0, 1.0), N)
+                                               : cross(float3(0.0, 1.0, 0.0), N));
     float3 bitangent = cross(N, tangent);
+    tangent = tangent * randomDir.x + bitangent * randomDir.y;
+    bitangent = cross(N, tangent);
     float3x3 TBN = float3x3(tangent, bitangent, N);
 
     float occlusion = 0.0;
-    for (int i = 0; i < SAMPLES; i++)
+    uint count = max(sampleCount, 1u);
+    for (uint i = 0; i < count; ++i)
     {
-        // Simple hemispherical sample (could use a kernel)
-        float3 sampleDir = GetRandom(uv + float(i) * 0.1);
-        if (dot(sampleDir, N) < 0) sampleDir = -sampleDir;
+        float2 xi = Hammersley(i, count);
+        float3 sampleDir = mul(SampleHemisphere(xi), TBN);
+        float sampleScale = lerp(0.15, 1.0, xi.x * xi.x);
         
-        float3 samplePos = worldPos + sampleDir * RADIUS;
+        float3 samplePos = worldPos + sampleDir * (radius * sampleScale);
         
         float4 clipPos = mul(viewProj, float4(samplePos, 1.0));
+        if (clipPos.w <= 1e-5)
+        {
+            continue;
+        }
+
         clipPos.xyz /= clipPos.w;
         float2 sampleUV = float2(clipPos.x * 0.5 + 0.5, 0.5 - clipPos.y * 0.5);
-        
-        sampleUV = saturate(sampleUV);
+
+        if (any(sampleUV < 0.0) || any(sampleUV > 1.0))
+        {
+            continue;
+        }
         
         float sampledDepth = DepthTex.SampleLevel(linearSampler, sampleUV, 0);
-        float3 sampledWorldPos = GetWorldPos(sampleUV, sampledDepth);
-        
-        float dist = distance(pos, samplePos);
-        float sampledDist = distance(pos, sampledWorldPos);
-        
-        if (sampledDist + BIAS < dist && distance(worldPos, sampledWorldPos) < RADIUS * 2.0)
+        if (sampledDepth >= 1.0)
         {
-            occlusion += 1.0;
+            continue;
+        }
+
+        float3 sampledWorldPos = GetWorldPos(sampleUV, sampledDepth);
+
+        float expectedDistance = dot(samplePos - worldPos, N);
+        float actualDistance = dot(sampledWorldPos - worldPos, N);
+        float worldDistance = distance(worldPos, sampledWorldPos);
+        float rangeWeight = 1.0 - smoothstep(radius, radius * 1.5, worldDistance);
+
+        if (actualDistance + bias < expectedDistance)
+        {
+            occlusion += rangeWeight;
         }
     }
 
-    OutputTex[id.xy] = 1.0 - (occlusion / float(SAMPLES));
+    float ao = 1.0 - (occlusion / float(count));
+    OutputTex[id.xy] = saturate(1.0 - (1.0 - ao) * strength);
 }

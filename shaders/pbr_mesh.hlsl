@@ -176,6 +176,10 @@ struct PSInputMesh {
     float2 uv : TEXCOORD0;
 };
 
+struct VSOutputShadow {
+    float4 position : SV_POSITION;
+};
+
 PSInputMesh VSMainMesh(VSInputMesh input)
 {
     PSInputMesh o;
@@ -213,6 +217,14 @@ PSInputMesh VSMainMesh(VSInputMesh input)
     o.normal = mul((float3x3)world, input.normal);
     o.tangent = float4(mul((float3x3)world, input.tangent.xyz), input.tangent.w);
     o.uv = input.uv;
+    return o;
+}
+
+VSOutputShadow VSMainShadow(VSInputMesh input)
+{
+    VSOutputShadow o;
+    float4 worldPos = mul(world, float4(input.position, 1.0f));
+    o.position = mul(shadowMatrix, worldPos);
     return o;
 }
 
@@ -355,6 +367,7 @@ PSOutput PSMainMesh(PSInputMesh input)
 
     float roughness = saturate(surfaceParams.x);
     float metalness = saturate(surfaceParams.y);
+    float transmission = saturate(transmissionParams.a) * (1.0 - metalness);
     
     // Metal/Roughness Logic: factor * texture
     // G = Roughness, B = Metalness
@@ -372,7 +385,7 @@ PSOutput PSMainMesh(PSInputMesh input)
     f0s = f0s * f0s;
     float3 dielectricF0 = float3(f0s, f0s, f0s) * specularWeight;
     float3 F0 = lerp(dielectricF0, BaseColor, metalness);
-    float3 DiffuseAlbedo = BaseColor * (1.0 - metalness);
+    float3 DiffuseAlbedo = BaseColor * (1.0 - metalness) * (1.0 - transmission);
     
     // Normal
     float3 N = triPlanar ? SampleTriPlanarNormal(textureIndices.z, worldPos, worldNormal, triScale, triSharp, triNormStrength)
@@ -398,7 +411,7 @@ PSOutput PSMainMesh(PSInputMesh input)
     // Two-sided shading guard for assets with inconsistent face orientation.
     if (dot(N, V) < 0.0) N = -N;
     float3 L = normalize(lightDir.xyz);
-    if (length(lightDir.xyz) < 0.001) L = float3(0, 1, 0); 
+    if (length(lightDir.xyz) < 0.001) L = float3(0, 1, 0);
     float3 H = normalize(V + L);
 
     // Clamp to reduce fireflies / unstable highlights in archviz scenes
@@ -409,12 +422,17 @@ PSOutput PSMainMesh(PSInputMesh input)
     float translucency = saturate(coatLayerParams.w);
 
     // Cook-Torrance BRDF
+    float NdotV = saturate(dot(N, V));
+    float NdotL = saturate(dot(N, L));
+    float NdotH = saturate(dot(N, H));
+    float VdotH = saturate(dot(V, H));
+
     float NDF = DistributionGGX(N, H, roughness);
     float G = GeometrySmith(N, V, L, roughness);
-    float3 F = FresnelSchlick(max(dot(H, V), 0.0), F0);
-    
+    float3 F = FresnelSchlick(VdotH, F0);
+
     float3 numerator = NDF * G * F;
-    float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
+    float denominator = 4.0 * NdotV * NdotL + 0.0001;
     float3 spec = numerator / denominator;
 
     // Clearcoat (secondary GGX lobe)
@@ -423,19 +441,14 @@ PSOutput PSMainMesh(PSInputMesh input)
         float3 F0c = float3(0.04, 0.04, 0.04);
         float NDFc = DistributionGGX(N, H, clearcoatRoughness);
         float Gc = GeometrySmith(N, V, L, clearcoatRoughness);
-        float3 Fc = FresnelSchlick(max(dot(H, V), 0.0), F0c);
+        float3 Fc = FresnelSchlick(VdotH, F0c);
         float3 numc = NDFc * Gc * Fc;
-        float denc = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
+        float denc = 4.0 * NdotV * NdotL + 0.0001;
         coatSpec = numc / denc;
     }
     
-    // Energy Preservation
-    float3 kS = F;
-    float3 kD = 1.0 - kS;
-    
-    float3 diffuseTerm = kD * DiffuseAlbedo / PI;
-    
-    float NdotL = saturate(dot(N, L));
+    float3 diffuseTerm = (DiffuseAlbedo / PI) * (1.0 - F);
+
     float3 radiance = lightColor.rgb * lightColor.w;
     
     float3 baseDirect = (diffuseTerm + spec) * radiance * NdotL;
@@ -454,43 +467,40 @@ PSOutput PSMainMesh(PSInputMesh input)
     
     // IBL (Image Based Lighting)
     float3 R = reflect(-V, N);
-    float3 F_ibl = FresnelSchlickRoughness(max(dot(N, V), 0.0), F0, roughness);
+    float3 F_ibl = FresnelSchlickRoughness(NdotV, F0, roughness);
     float3 kS_ibl = F_ibl;
     float3 kD_ibl = 1.0 - kS_ibl;
 
     float2 envUV_diff = DirectionToUV(N);
     float3 irradiance = envMap.SampleLevel(linearSampler, envUV_diff, 7.0).rgb;
-    irradiance *= intensity; // apply camera exposure to IBL
     float3 diffuse_ibl = kD_ibl * irradiance * (DiffuseAlbedo / PI);
 
     float2 envUV_spec = DirectionToUV(R);
     float3 prefilteredColor = envMap.SampleLevel(linearSampler, envUV_spec, roughness * 7.0).rgb;
-    prefilteredColor *= intensity;
     float3 specular_ibl = kS_ibl * prefilteredColor;
 
     float3 coat_ibl = float3(0.0, 0.0, 0.0);
     if (clearcoat > 0.001) {
         float2 envUV_spec = DirectionToUV(R);
         float3 prefilteredCoat = envMap.SampleLevel(linearSampler, envUV_spec, clearcoatRoughness * 7.0).rgb;
-        prefilteredCoat *= intensity;
         float3 F0c = float3(0.04, 0.04, 0.04);
-        float3 Fc_ibl = FresnelSchlickRoughness(max(dot(N, V), 0.0), F0c, clearcoatRoughness);
+        float3 Fc_ibl = FresnelSchlickRoughness(NdotV, F0c, clearcoatRoughness);
         coat_ibl = Fc_ibl * prefilteredCoat;
     }
 
-    // IBL ambient from env/prague sky only (legacy global ambient blending removed).
-    float3 envIBL = (diffuse_ibl + specular_ibl) * ao;
+    // Raster has no true GI, but full env energy here reads too hot versus the scene.
+    const float kRasterAmbientScale = 0.35;
+    float3 envIBL = (diffuse_ibl + specular_ibl) * (ao * kRasterAmbientScale);
     float3 ambient = envIBL * (1.0 - clearcoat);
     if (clearcoat > 0.001) {
-        float3 ambCoat = coat_ibl * ao;
+        float3 ambCoat = coat_ibl * (ao * kRasterAmbientScale);
         ambient += ambCoat * clearcoat;
     }
 
     if (translucency > 0.001) {
         float2 envUV_back = DirectionToUV(-N);
         float3 irradianceBack = envMap.SampleLevel(linearSampler, envUV_back, 7.0).rgb;
-        irradianceBack *= intensity;
-        float3 envBack = (DiffuseAlbedo * irradianceBack) * ao;
+        float3 envBack = (DiffuseAlbedo * irradianceBack) * (ao * kRasterAmbientScale);
         ambient += envBack * translucency;
     }
     

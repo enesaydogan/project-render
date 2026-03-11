@@ -195,7 +195,7 @@ bool InitD3D12(HWND hwnd) {
   depthBufferDesc.Height = g_windowHeight;
   depthBufferDesc.DepthOrArraySize = 1;
   depthBufferDesc.MipLevels = 1;
-  depthBufferDesc.Format = DXGI_FORMAT_D32_FLOAT;
+  depthBufferDesc.Format = DXGI_FORMAT_R32_TYPELESS;
   depthBufferDesc.SampleDesc.Count = 1;
   depthBufferDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
@@ -333,7 +333,7 @@ void ResizeSwapChain(UINT width, UINT height) {
   depthDesc.Height = height;
   depthDesc.DepthOrArraySize = 1;
   depthDesc.MipLevels = 1;
-  depthDesc.Format = DXGI_FORMAT_D32_FLOAT;
+  depthDesc.Format = DXGI_FORMAT_R32_TYPELESS;
   depthDesc.SampleDesc.Count = 1;
   depthDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 

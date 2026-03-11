@@ -88,6 +88,7 @@ bool g_showAssetsWindow = false;
 bool g_showLightsWindow = false;
 bool g_showMaterialEditor = false;
 bool g_showControlsWindow = false;
+bool g_showRenderSettingsWindow = false;
 bool g_forceUncollapse = false;
 
 // Master toggle: when false the entire ImGui frame is skipped and no UI
@@ -708,6 +709,10 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
     ImGui::SameLine();
     ImGui::Text("Render Mode");
     ImGui::SameLine();
+    ImGui::Checkbox("##RenderSettingsToggle", &g_showRenderSettingsWindow);
+    ImGui::SameLine();
+    ImGui::Text("Render Settings");
+    ImGui::SameLine();
     ImGui::Checkbox("##MaterialEditorToggle", &g_showMaterialEditor);
     ImGui::SameLine();
     ImGui::Text("Material Editor");
@@ -1282,6 +1287,73 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
     ImGui::End();
   }
 
+  ImGui::SetNextWindowSize(ImVec2(360, 460), ImGuiCond_FirstUseEver);
+  if (g_showRenderSettingsWindow) {
+    if (ImGui::Begin("Render Settings", &g_showRenderSettingsWindow,
+                     ImGuiWindowFlags_NoCollapse)) {
+      auto &rs = RasterRenderer::GetRenderSettings();
+
+      if (g_currentRenderMode != RenderMode::Raster) {
+        ImGui::TextWrapped(
+            "These controls affect the raster renderer and will apply the next "
+            "time Raster mode is active.");
+        ImGui::Separator();
+      }
+
+      if (ImGui::Button("Reset Raster Settings")) {
+        RasterRenderer::ResetRenderSettings();
+      }
+
+      ImGui::Separator();
+      ImGui::Text("Reflections (SSR)");
+      ImGui::Checkbox("Enable SSR", &rs.enableSSR);
+      if (rs.enableSSR) {
+        ImGui::SliderFloat("SSR Step Size", &rs.ssrStepSize, 0.02f, 2.0f,
+                           "%.3f", ImGuiSliderFlags_Logarithmic);
+        ImGui::SliderFloat("SSR Thickness", &rs.ssrThickness, 0.001f, 1.0f,
+                           "%.3f", ImGuiSliderFlags_Logarithmic);
+        ImGui::SliderFloat("SSR Intensity", &rs.ssrIntensity, 0.0f, 2.0f,
+                           "%.2f");
+        ImGui::SliderFloat("SSR Min Smoothness", &rs.ssrMinSmoothness, 0.0f,
+                           1.0f, "%.2f");
+        ImGui::SliderInt("SSR Max Steps", &rs.ssrMaxSteps, 1, 256);
+      }
+
+      ImGui::Separator();
+      ImGui::Text("Ambient Occlusion (SSAO)");
+      ImGui::Checkbox("Enable SSAO", &rs.enableSSAO);
+      if (rs.enableSSAO) {
+        ImGui::SliderFloat("SSAO Radius", &rs.ssaoRadius, 0.01f, 5.0f,
+                           "%.3f", ImGuiSliderFlags_Logarithmic);
+        ImGui::SliderFloat("SSAO Bias", &rs.ssaoBias, 0.0001f, 0.25f,
+                           "%.4f", ImGuiSliderFlags_Logarithmic);
+        ImGui::SliderFloat("SSAO Strength", &rs.ssaoStrength, 0.0f, 4.0f,
+                           "%.2f");
+        ImGui::SliderInt("SSAO Samples", &rs.ssaoSamples, 1, 32);
+      }
+
+      ImGui::Separator();
+      ImGui::Text("Bloom");
+      ImGui::Checkbox("Enable Bloom", &rs.enableBloom);
+      if (rs.enableBloom) {
+        ImGui::SliderFloat("Bloom Threshold", &rs.bloomThreshold, 0.0f,
+                           10.0f, "%.2f");
+        ImGui::SliderFloat("Bloom Intensity", &rs.bloomIntensity, 0.0f,
+                           4.0f, "%.2f");
+      }
+
+      ImGui::Separator();
+      ImGui::Text("Tonemap");
+      ImGui::SliderFloat("Vignette", &rs.tonemapVignette, 0.0f, 1.0f,
+                         "%.2f");
+      ImGui::SliderFloat("Saturation", &rs.tonemapSaturation, 0.0f, 2.0f,
+                         "%.2f");
+      ImGui::SliderFloat("Contrast", &rs.tonemapContrast, 0.0f, 2.0f,
+                         "%.2f");
+    }
+    ImGui::End();
+  }
+
   // Render Mode Selector
   ImGui::SetNextWindowSize(ImVec2(300, 150), ImGuiCond_FirstUseEver);
   if (g_showRenderModeWindow) {
@@ -1820,6 +1892,8 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
             g_showAssetsWindow = (atoi(line.c_str() + 6) != 0);
           } else if (line.rfind("RenderMode=", 0) == 0) {
             g_showRenderModeWindow = (atoi(line.c_str() + 11) != 0);
+          } else if (line.rfind("RenderSettings=", 0) == 0) {
+            g_showRenderSettingsWindow = (atoi(line.c_str() + 15) != 0);
           } else if (line.rfind("MaterialEditor=", 0) == 0) {
             g_showMaterialEditor = (atoi(line.c_str() + 15) != 0);
           } else if (line.rfind("Controls=", 0) == 0) {
@@ -1860,6 +1934,10 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
           int renderCollapsed = readCollapsed("Render Mode");
           if (renderCollapsed >= 0) {
             g_showRenderModeWindow = (renderCollapsed == 0);
+          }
+          int renderSettingsCollapsed = readCollapsed("Render Settings");
+          if (renderSettingsCollapsed >= 0) {
+            g_showRenderSettingsWindow = (renderSettingsCollapsed == 0);
           }
           int lightsCollapsed = readCollapsed("Global Lights");
           if (lightsCollapsed >= 0) {
@@ -1910,6 +1988,7 @@ void SavePanelVisibility() {
   fprintf(f, "[PanelVisibility]\n");
   fprintf(f, "Scene=%d\n", g_showAssetsWindow ? 1 : 0);
   fprintf(f, "RenderMode=%d\n", g_showRenderModeWindow ? 1 : 0);
+  fprintf(f, "RenderSettings=%d\n", g_showRenderSettingsWindow ? 1 : 0);
   fprintf(f, "MaterialEditor=%d\n", g_showMaterialEditor ? 1 : 0);
   fprintf(f, "Controls=%d\n", g_showControlsWindow ? 1 : 0);
   fprintf(f, "Lights=%d\n", g_showLightsWindow ? 1 : 0);
