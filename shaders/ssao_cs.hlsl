@@ -106,7 +106,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         clipPos.xyz /= clipPos.w;
         float2 sampleUV = float2(clipPos.x * 0.5 + 0.5, 0.5 - clipPos.y * 0.5);
         
-        if (any(sampleUV < 0) || any(sampleUV > 1)) continue;
+        sampleUV = saturate(sampleUV);
         
         float sampledDepth = DepthTex.SampleLevel(linearSampler, sampleUV, 0);
         float3 sampledWorldPos = GetWorldPos(sampleUV, sampledDepth);

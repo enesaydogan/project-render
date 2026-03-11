@@ -460,7 +460,7 @@ PSOutput PSMainMesh(PSInputMesh input)
 
     float2 envUV_diff = DirectionToUV(N);
     float3 irradiance = envMap.SampleLevel(linearSampler, envUV_diff, 7.0).rgb; 
-    float3 diffuse_ibl = kD_ibl * irradiance * DiffuseAlbedo;
+    float3 diffuse_ibl = kD_ibl * irradiance * (DiffuseAlbedo / PI);
 
     float2 envUV_spec = DirectionToUV(R);
     float3 prefilteredColor = envMap.SampleLevel(linearSampler, envUV_spec, roughness * 7.0).rgb;

@@ -627,7 +627,11 @@ struct TonemapConstants {
   uint32_t outWidth;
   uint32_t outHeight;
   float exposure;
-  float _pad;
+  float vignette;
+  float saturation;
+  float contrast;
+  float ssaoEnabled;
+  float _pad[1];
 };
 
 struct SvgfConstants {
