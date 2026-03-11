@@ -635,7 +635,8 @@ struct TonemapConstants {
   float vignette;
   float saturation;
   float contrast;
-  float _pad[2];
+  float ssaoEnabled;
+  float _pad[1];
 };
 
 static bool EnsureTonemapPipeline(ID3D12Device *device) {
@@ -1083,6 +1084,7 @@ bool TonemapHdrToBackbuffer(ID3D12Device *device, ID3D12GraphicsCommandList *cmd
   tc.vignette = 0.15f;
   tc.saturation = 1.05f;
   tc.contrast = 1.05f;
+  tc._pad[0] = s_ssaoMap ? 1.0f : 0.0f;
   if (SUCCEEDED(s_tonemapCB->Map(0, nullptr, &p))) {
     memcpy(p, &tc, sizeof(tc));
     s_tonemapCB->Unmap(0, nullptr);

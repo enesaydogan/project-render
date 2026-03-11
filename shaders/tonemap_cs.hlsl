@@ -14,7 +14,8 @@ cbuffer TonemapCB : register(b0)
     float vignette;  // 0 to 1
     float saturation; // 1.0 is neutral
     float contrast;   // 1.0 is neutral
-    float _pad[2];
+    float ssaoEnabled; // mapped to _pad[0]
+    float _pad[1];
 };
 
 float3 ToneMapFilmic(float3 x)
@@ -36,8 +37,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
 
     float3 hdr = g_hdrInput.Load(int3(id.xy, 0)).rgb;
     float ssao = g_ssaoTexture.Load(int3(id.xy, 0)).r;
-    // Default SSAO to 1.0 if texture is 0.0 (unbound / missing)
-    if (ssao == 0.0) ssao = 1.0;
+    if (ssaoEnabled == 0.0) ssao = 1.0;
     
     float3 bloom = g_bloomTexture.Load(int3(id.xy, 0)).rgb;
     hdr = hdr * ssao + bloom;
