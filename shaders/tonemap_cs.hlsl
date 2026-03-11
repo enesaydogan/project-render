@@ -35,11 +35,23 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     if (id.x >= outWidth || id.y >= outHeight)
         return;
 
+    uint bloomWidth = 0;
+    uint bloomHeight = 0;
+    g_bloomTexture.GetDimensions(bloomWidth, bloomHeight);
+
     float3 hdr = g_hdrInput.Load(int3(id.xy, 0)).rgb;
     float ssao = g_ssaoTexture.Load(int3(id.xy, 0)).r;
     if (ssaoEnabled == 0.0) ssao = 1.0;
-    
-    float3 bloom = g_bloomTexture.Load(int3(id.xy, 0)).rgb;
+
+    float3 bloom = 0.0.xxx;
+    if (bloomWidth > 0 && bloomHeight > 0)
+    {
+        float2 uv = (float2(id.xy) + 0.5) / float2(outWidth, outHeight);
+        uint2 bloomCoord = min(uint2(uv * float2(bloomWidth, bloomHeight)),
+                               uint2(bloomWidth - 1, bloomHeight - 1));
+        bloom = g_bloomTexture.Load(int3(bloomCoord, 0)).rgb;
+    }
+
     hdr = hdr * ssao + bloom;
     hdr *= exposure;
 

@@ -1216,7 +1216,8 @@ void RunSSR(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList, ID3D12Reso
   if (!s_ssrPSO || !s_hdrColor || !s_hdrNormal) return;
 
   // 1. Create Color Copy for sampling
-  if (!s_hdrColorCopy || s_hdrColorCopy->GetDesc().Width != s_hdrWidth) {
+  if (!s_hdrColorCopy || s_hdrColorCopy->GetDesc().Width != s_hdrWidth ||
+      s_hdrColorCopy->GetDesc().Height != s_hdrHeight) {
     D3D12_RESOURCE_DESC desc = s_hdrColor->GetDesc();
     desc.Flags = D3D12_RESOURCE_FLAG_NONE;
     D3D12_HEAP_PROPERTIES prop = {D3D12_HEAP_TYPE_DEFAULT};
@@ -1322,7 +1323,8 @@ static bool EnsureSSAOPipeline(ID3D12Device *device) {
 void RunSSAO(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB, ID3D12Resource* depthBuffer) {
   if (!s_ssaoPSO || !s_hdrNormal) return;
 
-  if (!s_ssaoMap || s_ssaoMap->GetDesc().Width != s_hdrWidth) {
+  if (!s_ssaoMap || s_ssaoMap->GetDesc().Width != s_hdrWidth ||
+      s_ssaoMap->GetDesc().Height != s_hdrHeight) {
     D3D12_RESOURCE_DESC desc = {};
     desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     desc.Width = s_hdrWidth;
@@ -1434,7 +1436,8 @@ void RunBloom(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList, ID3D12Re
   if (width < 1) width = 1;
   if (height < 1) height = 1;
 
-  if (!s_bloomBuffers[0] || s_bloomBuffers[0]->GetDesc().Width != width) {
+  if (!s_bloomBuffers[0] || s_bloomBuffers[0]->GetDesc().Width != width ||
+      s_bloomBuffers[0]->GetDesc().Height != height) {
     D3D12_RESOURCE_DESC desc = {};
     desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     desc.Width = width;
