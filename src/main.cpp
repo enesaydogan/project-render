@@ -1565,10 +1565,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         XMStoreFloat4x4((XMFLOAT4X4 *)g_cameraData.shadowMatrix,
                         XMMatrixTranspose(shadowMat));
 
-        // ViewProj and InvViewProj for SSR/SSAO
+        // ViewProj and InvViewProj for SSR/SSAO.
+        // Raster mesh VS projects with positive forward Z, so these matrices
+        // must use the same left-handed convention or screen-space effects
+        // reconstruct from a different camera basis.
         XMVECTOR camUp = XMLoadFloat3((XMFLOAT3 *)g_cameraData.up);
-        XMMATRIX camView = XMMatrixLookToRH(camPos, camFwd, camUp);
-        XMMATRIX camProj = XMMatrixPerspectiveFovRH(
+        XMMATRIX camView = XMMatrixLookToLH(camPos, camFwd, camUp);
+        XMMATRIX camProj = XMMatrixPerspectiveFovLH(
             XMConvertToRadians(g_cameraData.fov), g_cameraData.aspect,
             g_cameraData.nearZ, g_cameraData.farZ);
         XMMATRIX vp = camView * camProj;
@@ -2195,16 +2198,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                   gm.ibView.SizeInBytes / 4, 1, 0, 0, 0);
             }
           }
-
-          // Run SSR Pass
-          RasterRenderer::RunSSR(
-              DX12Context::g_device.Get(), DX12Context::g_commandList.Get(),
-              g_cameraConstantBuffer.Get(), DX12Context::g_depthBuffer.Get());
-
-          // Run SSAO Pass
-          RasterRenderer::RunSSAO(
-              DX12Context::g_device.Get(), DX12Context::g_commandList.Get(),
-              g_cameraConstantBuffer.Get(), DX12Context::g_depthBuffer.Get());
         }
 
         // Raster grass pass is temporarily disabled; DXR path handles grass via

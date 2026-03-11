@@ -126,7 +126,10 @@ float4 PSMain(PSInput input) : SV_TARGET {
 
     // Use baked lat-long clouds when available (much cheaper than raymarching each pixel)
     float3 composed = color;
-    if (cloudRenderingEnabled > 0.5f) {
+    // The baked cloud lat-long contains the full spherical atmosphere.
+    // In raster sky view we only want to composite it into the visible sky,
+    // not the lower hemisphere below the horizon.
+    if (cloudRenderingEnabled > 0.5f && dir.y > 0.0f) {
         float4 baked = bakedClouds.SampleLevel(linearSampler, uv, 0);
         baked.a = saturate(baked.a);
         baked.rgb = max(baked.rgb, 0.0);

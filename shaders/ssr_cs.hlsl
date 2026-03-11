@@ -83,9 +83,17 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     float4 sceneColor = ColorTex[id.xy];
     float4 normalData = NormalTex.SampleLevel(linearSampler, uv, 0);
     float3 N = normalize(normalData.xyz * 2.0 - 1.0);
+    float roughness = saturate(normalData.w);
+    float smoothness = 1.0 - roughness;
     float depth = DepthTex.SampleLevel(linearSampler, uv, 0);
 
     if (depth >= 1.0) {
+        OutputTex[id.xy] = sceneColor;
+        return;
+    }
+
+    if (smoothness <= 0.15)
+    {
         OutputTex[id.xy] = sceneColor;
         return;
     }
@@ -124,7 +132,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
 
     // Blend SSR with scene color using a basic fresnel
     float fresnel = pow(1.0 - saturate(dot(N, -V)), 5.0);
-    float reflectionAmount = 0.5 * fresnel * hitWeight;
+    float reflectionAmount = 0.5 * fresnel * hitWeight * smoothness * smoothness;
     
     OutputTex[id.xy] = float4(lerp(sceneColor.rgb, hitColor, reflectionAmount), 1.0);
 }

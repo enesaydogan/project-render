@@ -517,6 +517,6 @@ PSOutput PSMainMesh(PSInputMesh input)
 
     PSOutput o;
     o.color = float4(color, alpha);
-    o.normal = float4(N * 0.5 + 0.5, 1.0);
+    o.normal = float4(N * 0.5 + 0.5, roughness);
     return o;
 }
