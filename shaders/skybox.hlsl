@@ -116,10 +116,12 @@ float4 PSMain(PSInput input) : SV_TARGET {
          const float PI = 3.14159265f;
          float sunSolidAngle = 2.0f * PI * (1.0f - cosSunRadius);
          float3 sunRadiance = (lightColor.rgb * lightColor.w) / max(sunSolidAngle, 1e-7f);
-         color = sunRadiance;
+         // match DXR sun disc brightness for consistency
+         const float dxrSunDiscMatchGain = 1.12f;
+         color = sunRadiance * intensity * dxrSunDiscMatchGain;
     } else {
-         // Apply sky intensity scaling and camera exposure
-         color = baseSky;
+         // Apply sky intensity scaling (camera exposure is baked into intensity)
+         color = baseSky * intensity;
     }
 
     // Use baked lat-long clouds when available (much cheaper than raymarching each pixel)
@@ -128,6 +130,9 @@ float4 PSMain(PSInput input) : SV_TARGET {
         float4 baked = bakedClouds.SampleLevel(linearSampler, uv, 0);
         baked.a = saturate(baked.a);
         baked.rgb = max(baked.rgb, 0.0);
+        // apply same intensity/exposure scaling to the baked clouds so they
+        // respond to camera intensity changes the same way the sky does
+        baked.rgb *= intensity;
         // If debug view selected, show baked cloud color directly
         float opacity = 1.0 - baked.a;
         float denseCore = pow(saturate(opacity), 2.2);
