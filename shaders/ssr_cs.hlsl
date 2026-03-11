@@ -1,7 +1,3 @@
-#define MAX_STEPS 64
-#define STEP_SIZE 0.2
-#define THICKNESS 0.1
-
 cbuffer CameraCB : register(b0)
 {
     float3 pos;
@@ -51,6 +47,16 @@ cbuffer CameraCB : register(b0)
     float4x4 invViewProj;
 };
 
+cbuffer SSRSettings : register(b1)
+{
+    float stepSize;
+    float thickness;
+    float ssrIntensity;
+    float minSmoothness;
+    uint maxSteps;
+    float3 _ssrPad;
+};
+
 Texture2D<float4> ColorTex : register(t0);
 Texture2D<float4> NormalTex : register(t1);
 Texture2D<float> DepthTex : register(t2);
@@ -92,7 +98,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         return;
     }
 
-    if (smoothness <= 0.15)
+    if (smoothness <= minSmoothness)
     {
         OutputTex[id.xy] = sceneColor;
         return;
@@ -107,9 +113,10 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     float hitWeight = 0.0;
     
     float3 currentPos = worldPos + R * 0.1;
-    for (int i = 0; i < MAX_STEPS; i++)
+    uint steps = max(maxSteps, 1u);
+    for (uint i = 0; i < steps; ++i)
     {
-        currentPos += R * STEP_SIZE;
+        currentPos += R * stepSize;
         float2 currentUV = GetUV(currentPos);
         
         if (any(currentUV < 0) || any(currentUV > 1)) break;
@@ -119,7 +126,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         
         float depthDiff = distance(pos, currentPos) - distance(pos, sampledWorldPos);
         
-        if (depthDiff > 0 && depthDiff < THICKNESS)
+        if (depthDiff > 0 && depthDiff < thickness)
         {
             hitColor = ColorTex.SampleLevel(linearSampler, currentUV, 0).rgb;
             hitWeight = 1.0;
@@ -132,7 +139,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
 
     // Blend SSR with scene color using a basic fresnel
     float fresnel = pow(1.0 - saturate(dot(N, -V)), 5.0);
-    float reflectionAmount = 0.5 * fresnel * hitWeight * smoothness * smoothness;
+    float reflectionAmount = 0.5 * ssrIntensity * fresnel * hitWeight * smoothness * smoothness;
     
     OutputTex[id.xy] = float4(lerp(sceneColor.rgb, hitColor, reflectionAmount), 1.0);
 }

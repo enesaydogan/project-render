@@ -9,6 +9,29 @@ namespace Scene { struct Instance; }
 using Microsoft::WRL::ComPtr;
 
 namespace RasterRenderer {
+  struct RenderSettings {
+    bool enableSSR = true;
+    float ssrStepSize = 0.2f;
+    float ssrThickness = 0.1f;
+    float ssrIntensity = 1.0f;
+    float ssrMinSmoothness = 0.15f;
+    int ssrMaxSteps = 64;
+
+    bool enableSSAO = true;
+    float ssaoRadius = 0.5f;
+    float ssaoBias = 0.025f;
+    float ssaoStrength = 1.0f;
+    int ssaoSamples = 16;
+
+    bool enableBloom = true;
+    float bloomThreshold = 1.0f;
+    float bloomIntensity = 0.5f;
+
+    float tonemapVignette = 0.15f;
+    float tonemapSaturation = 1.05f;
+    float tonemapContrast = 1.05f;
+  };
+
   // Raster module API
   void CreateGridResources(ID3D12Device* device, float gridThickness);
   void RecreateMeshPipeline(ID3D12Device* device, ID3D12RootSignature* rootSig);
@@ -31,6 +54,8 @@ namespace RasterRenderer {
                               ID3D12Resource *depthBuffer);
   float GetCurrentAvgLuminance();
   float GetCurrentEV100();
+  RenderSettings &GetRenderSettings();
+  void ResetRenderSettings();
   
   void RunSSR(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB, ID3D12Resource* depthBuffer);
   void RunSSAO(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB, ID3D12Resource* depthBuffer);
