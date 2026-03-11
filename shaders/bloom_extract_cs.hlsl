@@ -11,11 +11,17 @@ cbuffer BloomParams : register(b0)
 [numthreads(8, 8, 1)]
 void CSMain(uint3 id : SV_DispatchThreadID)
 {
-    uint width, height;
-    InputTex.GetDimensions(width, height);
-    if (id.x >= width || id.y >= height) return;
+    uint inputWidth, inputHeight;
+    uint outputWidth, outputHeight;
+    InputTex.GetDimensions(inputWidth, inputHeight);
+    OutputTex.GetDimensions(outputWidth, outputHeight);
+    if (id.x >= outputWidth || id.y >= outputHeight) return;
 
-    float4 color = InputTex[id.xy];
+    float2 uv = (float2(id.xy) + 0.5) / float2(outputWidth, outputHeight);
+    uint2 srcCoord = min(uint2(uv * float2(inputWidth, inputHeight)),
+                         uint2(inputWidth - 1, inputHeight - 1));
+
+    float4 color = InputTex[srcCoord];
     float brightness = dot(color.rgb, float3(0.2126, 0.7152, 0.0722));
     
     if (brightness > threshold) {
