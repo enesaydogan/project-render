@@ -1330,6 +1330,8 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
         ImGui::SliderFloat("SSAO Strength", &rs.ssaoStrength, 0.0f, 4.0f,
                            "%.2f");
         ImGui::SliderInt("SSAO Samples", &rs.ssaoSamples, 1, 32);
+        ImGui::SliderFloat("SSAO Composite", &rs.ssaoCompositeWeight, 0.0f,
+                           1.0f, "%.2f");
       }
 
       ImGui::Separator();

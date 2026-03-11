@@ -14,8 +14,8 @@ cbuffer TonemapCB : register(b0)
     float vignette;  // 0 to 1
     float saturation; // 1.0 is neutral
     float contrast;   // 1.0 is neutral
-    float ssaoEnabled; // mapped to _pad[0]
-    float _pad[1];
+    float ssaoEnabled;
+    float ssaoCompositeWeight;
 };
 
 float3 ToneMapFilmic(float3 x)
@@ -42,6 +42,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     float3 hdr = g_hdrInput.Load(int3(id.xy, 0)).rgb;
     float ssao = g_ssaoTexture.Load(int3(id.xy, 0)).r;
     if (ssaoEnabled == 0.0) ssao = 1.0;
+    float aoTerm = lerp(1.0, saturate(ssao), saturate(ssaoCompositeWeight));
 
     float3 bloom = 0.0.xxx;
     if (bloomWidth > 0 && bloomHeight > 0)
@@ -52,7 +53,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         bloom = g_bloomTexture.Load(int3(bloomCoord, 0)).rgb;
     }
 
-    hdr = hdr * ssao + bloom;
+    hdr = hdr * aoTerm + bloom;
     hdr *= exposure;
 
     float3 mapped = ToneMapFilmic(hdr);
