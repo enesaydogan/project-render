@@ -442,9 +442,10 @@ void RecreateMeshPipeline(ID3D12Device *device, ID3D12RootSignature *rootSig) {
     D3D12_GRAPHICS_PIPELINE_STATE_DESC shadowPsoDesc = depthPsoDesc;
     shadowPsoDesc.VS = {vsShadowBlob->GetBufferPointer(),
               vsShadowBlob->GetBufferSize()};
-    shadowPsoDesc.RasterizerState.DepthBias = 1000;
-    shadowPsoDesc.RasterizerState.DepthBiasClamp = 0.0f;
-    shadowPsoDesc.RasterizerState.SlopeScaledDepthBias = 1.25f;
+    shadowPsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    shadowPsoDesc.RasterizerState.DepthBias = 64;
+    shadowPsoDesc.RasterizerState.DepthBiasClamp = 0.001f;
+    shadowPsoDesc.RasterizerState.SlopeScaledDepthBias = 2.0f;
     
     ComPtr<ID3D12PipelineState> newShadowPSO;
     HRESULT hrShadow = device->CreateGraphicsPipelineState(

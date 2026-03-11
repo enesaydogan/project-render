@@ -1551,16 +1551,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       {
         using namespace DirectX;
         XMVECTOR lightDir =
-            XMVectorSet(g_cameraData.lightDir[0], g_cameraData.lightDir[1],
-                        g_cameraData.lightDir[2], 0.0f);
+            XMVector3Normalize(XMVectorSet(g_cameraData.lightDir[0],
+                                           g_cameraData.lightDir[1],
+                                           g_cameraData.lightDir[2], 0.0f));
         XMVECTOR camPos = XMLoadFloat3((XMFLOAT3 *)g_cameraData.pos);
         XMVECTOR camFwd = XMLoadFloat3((XMFLOAT3 *)g_cameraData.forward);
-        XMVECTOR target = camPos + camFwd * 10.0f; // Look ahead
-        XMVECTOR lightPos = target + lightDir * 50.0f;
+        XMVECTOR target = camPos + camFwd * 18.0f;
+        XMVECTOR lightForward = XMVectorNegate(lightDir);
+        XMVECTOR lightPos = target - lightForward * 70.0f;
+        XMVECTOR lightUp = XMVectorSet(0, 1, 0, 0);
+        if (fabsf(XMVectorGetX(XMVector3Dot(lightForward, lightUp))) > 0.98f) {
+          lightUp = XMVectorSet(0, 0, 1, 0);
+        }
 
-        XMMATRIX view =
-            XMMatrixLookAtRH(lightPos, target, XMVectorSet(0, 1, 0, 0));
-        XMMATRIX proj = XMMatrixOrthographicRH(60.0f, 60.0f, 0.1f, 150.0f);
+        XMMATRIX view = XMMatrixLookToLH(lightPos, lightForward, lightUp);
+        XMMATRIX proj = XMMatrixOrthographicLH(56.0f, 56.0f, 1.0f, 140.0f);
         XMMATRIX shadowMat = view * proj;
         XMStoreFloat4x4((XMFLOAT4X4 *)g_cameraData.shadowMatrix,
                         XMMatrixTranspose(shadowMat));
