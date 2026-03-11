@@ -64,16 +64,35 @@ RWTexture2D<float4> OutputTex : register(u0);
 
 SamplerState linearSampler : register(s0);
 
+float LoadDepth(uint2 coord)
+{
+    return DepthTex.Load(int3(coord, 0));
+}
+
+float4 LoadColor(uint2 coord)
+{
+    return ColorTex.Load(int3(coord, 0));
+}
+
+float4 LoadNormalData(uint2 coord)
+{
+    return NormalTex.Load(int3(coord, 0));
+}
+
 float3 GetWorldPos(float2 uv, float depth)
 {
     float4 clipPos = float4(uv.x * 2.0 - 1.0, (1.0 - uv.y) * 2.0 - 1.0, depth, 1.0);
-    float4 worldPos = mul(invViewProj, clipPos);
+    float4 worldPos = mul(clipPos, invViewProj);
     return worldPos.xyz / worldPos.w;
 }
 
 float2 GetUV(float3 worldPos)
 {
-    float4 clipPos = mul(viewProj, float4(worldPos, 1.0));
+    float4 clipPos = mul(float4(worldPos, 1.0), viewProj);
+    if (clipPos.w <= 1e-5)
+    {
+        return float2(-1.0, -1.0);
+    }
     clipPos.xyz /= clipPos.w;
     return float2(clipPos.x * 0.5 + 0.5, 0.5 - clipPos.y * 0.5);
 }
@@ -86,12 +105,12 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     if (id.x >= width || id.y >= height) return;
 
     float2 uv = (float2(id.xy) + 0.5) / float2(width, height);
-    float4 sceneColor = ColorTex[id.xy];
-    float4 normalData = NormalTex.SampleLevel(linearSampler, uv, 0);
+    float4 sceneColor = LoadColor(id.xy);
+    float4 normalData = LoadNormalData(id.xy);
     float3 N = normalize(normalData.xyz * 2.0 - 1.0);
     float roughness = saturate(normalData.w);
     float smoothness = 1.0 - roughness;
-    float depth = DepthTex.SampleLevel(linearSampler, uv, 0);
+    float depth = LoadDepth(id.xy);
 
     if (depth >= 1.0) {
         OutputTex[id.xy] = sceneColor;
@@ -107,12 +126,17 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     float3 worldPos = GetWorldPos(uv, depth);
     float3 V = normalize(worldPos - pos);
     float3 R = reflect(V, N);
+    if (dot(R, N) <= 1e-4)
+    {
+        OutputTex[id.xy] = sceneColor;
+        return;
+    }
 
     // Simple ray march
     float3 hitColor = float3(0,0,0);
     float hitWeight = 0.0;
     
-    float3 currentPos = worldPos + R * 0.1;
+    float3 currentPos = worldPos + N * max(thickness, 0.01) * 2.0 + R * max(stepSize, 0.02);
     uint steps = max(maxSteps, 1u);
     for (uint i = 0; i < steps; ++i)
     {
@@ -121,25 +145,38 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         
         if (any(currentUV < 0) || any(currentUV > 1)) break;
         
-        float sampledDepth = DepthTex.SampleLevel(linearSampler, currentUV, 0);
-        float3 sampledWorldPos = GetWorldPos(currentUV, sampledDepth);
-        
-        float depthDiff = distance(pos, currentPos) - distance(pos, sampledWorldPos);
-        
-        if (depthDiff > 0 && depthDiff < thickness)
+        uint2 sampleCoord = min(uint2(currentUV * float2(width, height)), uint2(width - 1, height - 1));
+        float sampledDepth = LoadDepth(sampleCoord);
+        if (sampledDepth >= 1.0)
         {
-            hitColor = ColorTex.SampleLevel(linearSampler, currentUV, 0).rgb;
+            continue;
+        }
+
+        float2 sampleCenterUV = (float2(sampleCoord) + 0.5) / float2(width, height);
+        float3 sampledWorldPos = GetWorldPos(sampleCenterUV, sampledDepth);
+        float3 toSample = sampledWorldPos - worldPos;
+        float alongRay = dot(toSample, R);
+        float hitDistance = distance(currentPos, sampledWorldPos);
+
+        if (alongRay > 0.0 && hitDistance < max(thickness, stepSize * 1.5))
+        {
+            hitColor = LoadColor(sampleCoord).rgb;
             hitWeight = 1.0;
-            // Fade out near edges
-            float edgeFade = 1.0 - saturate(length(currentUV - 0.5) * 2.0);
+            // Fade only very close to the screen border. A radial center fade
+            // suppresses exactly the floor reflections we want near the bottom.
+            float2 borderDistance = min(sampleCenterUV, 1.0 - sampleCenterUV);
+            float edgeFade = saturate(min(borderDistance.x, borderDistance.y) / 0.03);
             hitWeight *= edgeFade;
             break;
         }
     }
 
-    // Blend SSR with scene color using a basic fresnel
+    // The raster path only stores roughness in the GBuffer, so use a stronger
+    // practical reflection response here instead of a tiny dielectric-only term.
     float fresnel = pow(1.0 - saturate(dot(N, -V)), 5.0);
-    float reflectionAmount = 0.5 * ssrIntensity * fresnel * hitWeight * smoothness * smoothness;
+    float smoothWeight = saturate((smoothness - minSmoothness) / max(1e-3, 1.0 - minSmoothness));
+    float reflectionAmount = ssrIntensity * hitWeight * smoothWeight * lerp(0.35, 1.0, fresnel);
+    reflectionAmount = saturate(reflectionAmount);
     
     OutputTex[id.xy] = float4(lerp(sceneColor.rgb, hitColor, reflectionAmount), 1.0);
 }
