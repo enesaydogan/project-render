@@ -89,6 +89,12 @@ std::vector<const Asset::GpuMesh *> GetActiveMeshes();
 // Status message to display in UI
 const std::string &LastStatus();
 
+// Import progress for async model import
+bool IsImportInProgress();
+float GetImportProgress();
+std::string GetImportStatus();
+void ProcessPendingImport();
+
 // Register textures with the descriptor heap (create SRVs)
 void RegisterTextures(const std::vector<Asset::Texture> &textures);
 

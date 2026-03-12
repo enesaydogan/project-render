@@ -1,10 +1,12 @@
 #include "ScenePanel.h"
 
+#include "../editor_ui.h"
 #include "../scene.h"
 
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -27,6 +29,17 @@ ScenePanel::ScenePanel(QWidget *parent)
 void ScenePanel::createUi()
 {
     auto *layout = new QVBoxLayout(this);
+
+    m_importProgress = new QProgressBar(this);
+    m_importProgress->setRange(0, 100);
+    m_importProgress->setTextVisible(false);
+    m_importProgress->hide();
+    layout->addWidget(m_importProgress);
+
+    m_importStatusLabel = new QLabel(this);
+    m_importStatusLabel->setWordWrap(true);
+    m_importStatusLabel->hide();
+    layout->addWidget(m_importStatusLabel);
 
     auto *buttonRow = new QHBoxLayout();
     m_importButton = new QPushButton(tr("Import Model"), this);
@@ -72,6 +85,42 @@ void ScenePanel::createUi()
 void ScenePanel::refreshSceneList()
 {
     m_syncing = true;
+
+    if (IsSceneLoadInProgress()) {
+        m_importProgress->hide();
+        m_importStatusLabel->hide();
+        m_importButton->setEnabled(false);
+        m_addPlaneButton->setEnabled(false);
+        m_deleteButton->setEnabled(false);
+        m_nodeList->setEnabled(false);
+        m_statusLabel->setText(tr("Scene load in progress..."));
+        m_syncing = false;
+        return;
+    }
+
+    Scene::ProcessPendingImport();
+
+    m_importButton->setEnabled(true);
+    m_addPlaneButton->setEnabled(true);
+    m_nodeList->setEnabled(true);
+
+    const bool importing = Scene::IsImportInProgress();
+    if (importing) {
+        float progress = Scene::GetImportProgress();
+        if (progress < 0.0f) {
+            progress = 0.0f;
+        } else if (progress > 1.0f) {
+            progress = 1.0f;
+        }
+        m_importProgress->setValue(static_cast<int>(progress * 100.0f + 0.5f));
+        m_importStatusLabel->setText(
+            QString::fromStdString(Scene::GetImportStatus()));
+        m_importProgress->show();
+        m_importStatusLabel->show();
+    } else {
+        m_importProgress->hide();
+        m_importStatusLabel->hide();
+    }
 
     const auto &nodes = Scene::GetNodes();
     int selectedRow = -1;

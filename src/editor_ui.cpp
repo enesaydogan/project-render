@@ -124,7 +124,7 @@ static void SceneIoProgressSink(float progress01, const char *stage) {
   g_sceneIoTickAtomic.fetch_add(1, std::memory_order_relaxed);
 }
 
-static void StartSceneIoJob(bool isSave, const std::string &utf8Path) {
+void StartSceneIoJob(bool isSave, const std::string &utf8Path) {
   if (g_sceneIoJob.active || utf8Path.empty()) {
     return;
   }
@@ -155,6 +155,22 @@ static void StartSceneIoJob(bool isSave, const std::string &utf8Path) {
 
 bool IsSceneLoadInProgress() {
   return g_sceneIoJob.active && !g_sceneIoJob.isSave;
+}
+
+bool IsSceneIoJobActive() {
+  return g_sceneIoJob.active;
+}
+
+bool IsSceneIoSaveJob() {
+  return g_sceneIoJob.active && g_sceneIoJob.isSave;
+}
+
+float GetSceneIoProgress() {
+  return g_sceneIoJob.progress;
+}
+
+std::string GetSceneIoStage() {
+  return g_sceneIoJob.stage;
 }
 
 static void UpdateSceneIoJob() {
@@ -567,20 +583,21 @@ static bool RecreateDxrPipelineSafe(UINT width, UINT height,
 
 void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
                   float &latitudeDeg, float &dayOfYear) {
+  UpdateSceneIoJob();
   if (!Input::g_imguiEnabled) {
     // Keep a minimal ImGui frame alive so viewport gizmos continue to work
     // even when debug windows are hidden with F5.
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
-    ImGuizmo::BeginFrame();
-    Scene::DrawGizmo();
-    Scene::DrawLightGizmo();
+    if (!IsSceneLoadInProgress()) {
+      ImGuizmo::BeginFrame();
+      Scene::DrawGizmo();
+      Scene::DrawLightGizmo();
+    }
     ImGui::Render();
     return;
   }
-
-  UpdateSceneIoJob();
 
   // Start ImGui frame
   ImGui_ImplDX12_NewFrame();
