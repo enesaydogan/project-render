@@ -2,6 +2,7 @@
 #include "../dx12_context.h" // adapt include path
 #include "../input_handler.h"
 #include "../imgui.h"
+#include "../scene.h"
 #include <cfloat>
 #include <QFocusEvent>
 #include <QKeyEvent>
@@ -151,6 +152,10 @@ void DX12View::keyPressEvent(QKeyEvent *e)
         io.AddKeyEvent(imguiKey, true);
         io.SetKeyEventNativeData(imguiKey, static_cast<int>(e->nativeVirtualKey()),
                                  static_cast<int>(e->nativeScanCode()));
+    }
+    if (e->key() == Qt::Key_Escape && !e->isAutoRepeat()) {
+        Scene::SelectNode(static_cast<size_t>(-1));
+        Scene::SelectLight(-1);
     }
     QWidget::keyPressEvent(e);
 }

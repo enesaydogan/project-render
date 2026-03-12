@@ -974,6 +974,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="D:\project-render\src\qt\RenderSettingsPanel.cpp" />
     <ClCompile Include="D:\project-render\src\qt\RenderModePanel.cpp" />
     <ClCompile Include="D:\project-render\src\qt\ScenePanel.cpp" />
+    <ClCompile Include="D:\project-render\src\qt\LightsPanel.cpp" />
     <ResourceCompile Include="D:\project-render\resources\app.rc" />
     <ClInclude Include="D:\project-render\thirdparty\NRD\Integration\NRDIntegration.h" />
     <ClInclude Include="D:\project-render\thirdparty\NRD\Integration\NRDIntegration.hpp" />
