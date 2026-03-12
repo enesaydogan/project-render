@@ -94,7 +94,7 @@ bool g_forceUncollapse = false;
 // Master toggle: when false the entire ImGui frame is skipped and no UI
 // elements are drawn.  Controlled via F5 key in input_handler.cpp.
 namespace Input {
-  bool g_imguiEnabled = true;
+  bool g_imguiEnabled = false;
 }
 
 int g_debugMode = 0; // 0=None, 1=Albedo, 2=Normal, 3=Emissive, ...
@@ -568,11 +568,14 @@ static bool RecreateDxrPipelineSafe(UINT width, UINT height,
 void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
                   float &latitudeDeg, float &dayOfYear) {
   if (!Input::g_imguiEnabled) {
-    // Submit an empty frame so stale draw data from the previous frame is not
-    // rendered again.
+    // Keep a minimal ImGui frame alive so viewport gizmos continue to work
+    // even when debug windows are hidden with F5.
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
+    ImGuizmo::BeginFrame();
+    Scene::DrawGizmo();
+    Scene::DrawLightGizmo();
     ImGui::Render();
     return;
   }

@@ -54,6 +54,15 @@ static std::mutex s_pendingMutex;
 static ImGuizmo::OPERATION g_currentGizmoOp = ImGuizmo::TRANSLATE;
 static ImGuizmo::MODE g_currentGizmoMode = ImGuizmo::WORLD;
 
+static ImGuizmo::OPERATION GetActiveGizmoOperation() {
+  if (g_currentGizmoOp == ImGuizmo::ROTATE) {
+    return static_cast<ImGuizmo::OPERATION>(ImGuizmo::ROTATE_X |
+                                            ImGuizmo::ROTATE_Y |
+                                            ImGuizmo::ROTATE_Z);
+  }
+  return g_currentGizmoOp;
+}
+
 static bool GetTextureDescriptorCpuHandle(UINT textureIndex,
                                           D3D12_CPU_DESCRIPTOR_HANDLE *outCpu) {
   if (!outCpu || !g_device || g_texturesCpuStart.ptr == 0 ||
@@ -1041,7 +1050,7 @@ void DrawLightGizmo() {
   // Only allow uniform scale mode for lights if T is pressed
   ImGuizmo::OPERATION op = (g_currentGizmoOp == ImGuizmo::SCALE)
                                ? ImGuizmo::SCALE
-                               : g_currentGizmoOp;
+                               : GetActiveGizmoOperation();
 
   ImGuizmo::SetID(10000 + s_selectedLightIdx);
   ImGuizmo::SetOrthographic(false);
@@ -1188,7 +1197,9 @@ void DrawGizmo() {
                               1};
   MatMul(pivotMatrix, translationMat, pivotMatrix);
 
-  if (ImGuizmo::Manipulate(view, proj, g_currentGizmoOp, actualMode,
+  ImGuizmo::OPERATION op = GetActiveGizmoOperation();
+
+  if (ImGuizmo::Manipulate(view, proj, op, actualMode,
                            pivotMatrix)) {
     // NodeTransform = pivotMatrix * Translation(-localCenter)
     float invTranslationMat[16] = {1,

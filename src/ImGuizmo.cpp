@@ -2030,10 +2030,12 @@ namespace IMGUIZMO_NAMESPACE
 
       ImGuiIO& io = ImGui::GetIO();
       int type = MT_NONE;
+      const float rotationHitPadding = ImMax(10.0f, gContext.mStyle.RotationLineThickness * 2.0f);
+      const float screenRotatePadding = ImMax(6.0f, rotationHitPadding * 0.5f);
 
       vec_t deltaScreen = { io.MousePos.x - gContext.mScreenSquareCenter.x, io.MousePos.y - gContext.mScreenSquareCenter.y, 0.f, 0.f };
       float dist = deltaScreen.Length();
-      if (Intersects(op, ROTATE_SCREEN) && dist >= (gContext.mRadiusSquareCenter - 4.0f) && dist < (gContext.mRadiusSquareCenter + 4.0f))
+      if (Intersects(op, ROTATE_SCREEN) && dist >= (gContext.mRadiusSquareCenter - screenRotatePadding) && dist < (gContext.mRadiusSquareCenter + screenRotatePadding))
       {
          if (!isNoAxesMasked)
             return MT_NONE;
@@ -2074,7 +2076,7 @@ namespace IMGUIZMO_NAMESPACE
          const ImVec2 distanceOnScreen = idealPosOnCircleScreen - io.MousePos;
 
          const float distance = makeVect(distanceOnScreen).Length();
-         if (distance < 8.f) // pixel size
+         if (distance < rotationHitPadding)
          {
             if ((!isAxisMasked || isMultipleAxesMasked) && !isNoAxesMasked)
                break;
