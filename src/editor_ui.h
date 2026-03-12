@@ -78,6 +78,13 @@ void RestoreRenderExportState();
 // Utility
 std::string WStringToUtf8(const std::wstring &ws);
 
+// Scene I/O job helpers (shared by ImGui + Qt)
+void StartSceneIoJob(bool isSave, const std::string &utf8Path);
+bool IsSceneIoJobActive();
+bool IsSceneIoSaveJob();
+float GetSceneIoProgress();
+std::string GetSceneIoStage();
+
 bool IsSceneLoadInProgress();
 
 // Persist panel visibility across runs (written to panels_state.ini)

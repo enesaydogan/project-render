@@ -229,6 +229,103 @@ static void EnsureGpuBuffersForMeshes(std::vector<Asset::GpuMesh> &meshes) {
 
 const std::string &LastStatus() { return s_lastStatus; }
 
+bool IsImportInProgress() { return s_importInProgress.load(); }
+
+float GetImportProgress() { return s_importProgress.load(); }
+
+std::string GetImportStatus() {
+  std::lock_guard<std::mutex> lg(s_importStatusMutex);
+  return s_importStatus;
+}
+
+void ProcessPendingImport() {
+  if (!s_pendingReady.load()) {
+    return;
+  }
+
+  std::vector<Asset::GpuMesh> meshes;
+  std::vector<Asset::Material> materials;
+  std::vector<Asset::Texture> textures;
+  std::string srcPath;
+  {
+    std::lock_guard<std::mutex> lg(s_pendingMutex);
+    meshes = std::move(s_pendingMeshes);
+    materials = std::move(s_pendingMaterials);
+    textures = std::move(s_pendingTextures);
+    srcPath = std::move(s_pendingPath);
+    s_pendingMeshes.clear();
+    s_pendingMaterials.clear();
+    s_pendingTextures.clear();
+    s_pendingPath.clear();
+  }
+  s_pendingReady = false;
+  EnsureGpuBuffersForMeshes(meshes);
+
+  // Merge into global lists (same logic as ImportModel)
+  size_t meshBase = g_loadedMeshes.size();
+  size_t materialBase = g_loadedMaterials.size();
+  size_t textureBase = g_loadedTextures.size();
+
+  g_loadedMeshes.insert(g_loadedMeshes.end(), meshes.begin(), meshes.end());
+  g_loadedMaterials.insert(g_loadedMaterials.end(), materials.begin(),
+                           materials.end());
+  g_loadedTextures.insert(g_loadedTextures.end(), textures.begin(),
+                          textures.end());
+
+  for (size_t i = 0; i < meshes.size(); ++i) {
+    int &mi = g_loadedMeshes[meshBase + i].materialIndex;
+    if (mi >= 0)
+      mi = mi + (int)materialBase;
+  }
+
+  for (size_t i = 0; i < materials.size(); ++i) {
+    Asset::Material &m = g_loadedMaterials[materialBase + i];
+    if (m.diffuseTexture >= 0)
+      m.diffuseTexture += (int)textureBase;
+    if (m.normalTexture >= 0)
+      m.normalTexture += (int)textureBase;
+    if (m.occlusionTexture >= 0)
+      m.occlusionTexture += (int)textureBase;
+    if (m.emissiveTexture >= 0)
+      m.emissiveTexture += (int)textureBase;
+    if (m.metalRoughTexture >= 0)
+      m.metalRoughTexture += (int)textureBase;
+  }
+
+  RegisterTextures(textures);
+
+  // Create a scene node for this import
+  Node node;
+  node.name = fs::path(srcPath).filename().string();
+  node.sourcePath = srcPath;
+  for (size_t i = 0; i < meshes.size(); ++i)
+    node.meshIndices.push_back(meshBase + i);
+  s_nodes.push_back(node);
+
+  s_lastStatus = std::string("Loaded: ") + srcPath;
+  fprintf(stderr, "%s\n", s_lastStatus.c_str());
+
+  // Rebuild AS and pipeline on main thread
+  fprintf(stderr, "RebuildAccelerationStructures: start\n");
+  fflush(stderr);
+  RebuildAccelerationStructures();
+  fprintf(stderr, "RebuildAccelerationStructures: done\n");
+  fflush(stderr);
+  fprintf(stderr, "CreateRayTracingPipeline: start\n");
+  fflush(stderr);
+  DxrRenderer::CreateRayTracingPipeline(0, 0);
+  fprintf(stderr, "CreateRayTracingPipeline: done\n");
+  fflush(stderr);
+
+  // Clear import-in-progress flag
+  s_importInProgress = false;
+  s_importProgress = 1.0f;
+  {
+    std::lock_guard<std::mutex> lg(s_importStatusMutex);
+    s_importStatus = "Import finished";
+  }
+}
+
 bool ImportModel(const std::string &utf8path, const float *rootTranslation) {
   try {
     fprintf(stderr, "Scene::ImportModel: importing %s\n", utf8path.c_str());

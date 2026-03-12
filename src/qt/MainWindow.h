@@ -3,6 +3,10 @@
 #include <QMainWindow>
 
 class DX12View;
+class QAction;
+class QLabel;
+class QProgressBar;
+class QTimer;
 
 class MainWindow : public QMainWindow
 {
@@ -22,6 +26,14 @@ private:
     void createMenus();
     void createToolBar();
     void createDocks();
+    void startSaveScene();
+    void startLoadScene();
+    void updateSceneIoUi();
 
     DX12View *m_view;
+    QAction *m_saveSceneAction = nullptr;
+    QAction *m_loadSceneAction = nullptr;
+    QProgressBar *m_sceneIoProgress = nullptr;
+    QLabel *m_sceneIoLabel = nullptr;
+    QTimer *m_sceneIoTimer = nullptr;
 };
