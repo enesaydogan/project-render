@@ -85,6 +85,11 @@ if(USE_QT_UI)
         COMMAND "${QT_WINDEPLOYQT_EXECUTABLE}" --no-translations --no-opengl-sw "$<TARGET_FILE:project-render>"
         COMMENT "Deploying Qt runtime..."
       )
+      add_custom_command(TARGET project-render POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E remove_directory "$<TARGET_FILE_DIR:project-render>/networkinformation"
+        COMMAND "${CMAKE_COMMAND}" -E remove_directory "$<TARGET_FILE_DIR:project-render>/tls"
+        COMMENT "Removing unused Qt plugins (networkinformation, tls)"
+      )
     else()
       message(WARNING "Qt UI is enabled but windeployqt.exe was not found. Qt runtime deployment will need to be handled manually.")
     endif()
