@@ -791,6 +791,18 @@ std::vector<Light> &GetLights() { return s_lights; }
 
 void UpdateLights() { DxrRenderer::UpdateLights(s_lights); }
 
+int GetSelectedLightIndex() { return s_selectedLightIdx; }
+
+void SelectLight(int index) {
+  if (index < 0 || index >= (int)s_lights.size()) {
+    s_selectedLightIdx = -1;
+    return;
+  }
+  s_selectedLightIdx = index;
+  for (auto &n : s_nodes)
+    n.selected = false;
+}
+
 void AddLight(LightType type) {
   Light l = {};
   memset(&l, 0, sizeof(Light));

@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include "DX12View.h"
+#include "LightsPanel.h"
 #include "RenderSettingsPanel.h"
 #include "ScenePanel.h"
 #include "../dx12_context.h"
@@ -339,9 +340,11 @@ void MainWindow::createDocks()
     renderDock->setAllowedAreas(Qt::AllDockWidgetAreas);
     renderDock->setWidget(new RenderSettingsPanel(renderDock));
     addDockWidget(Qt::RightDockWidgetArea, renderDock);
-    QDockWidget *lightsDock = createDock(
-        tr("Lights"), Qt::BottomDockWidgetArea,
-        tr("Light list and parameters will live here."));
+    auto *lightsDock = new QDockWidget(tr("Lights"), this);
+    lightsDock->setObjectName(tr("Lights"));
+    lightsDock->setAllowedAreas(Qt::AllDockWidgetAreas);
+    lightsDock->setWidget(new LightsPanel(lightsDock));
+    addDockWidget(Qt::BottomDockWidgetArea, lightsDock);
 
     splitDockWidget(materialsDock, renderDock, Qt::Vertical);
     tabifyDockWidget(sceneDock, lightsDock);

@@ -74,6 +74,8 @@ std::vector<Light> &GetLights();
 void AddLight(LightType type);
 void RemoveLight(size_t index);
 void UpdateLights();
+int GetSelectedLightIndex();
+void SelectLight(int index);
 
 // Ray-cast selection from mouse. Returns the global material index of the hit
 // submesh, or -1.
