@@ -1,6 +1,9 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
+    <ClCompile Include="D:\project-render\build\thirdparty\NRD\NRD_autogen\mocs_compilation_Debug.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="D:\project-render\thirdparty\NRD\Source\InstanceImpl.cpp">
       <Filter>Source</Filter>
     </ClCompile>
@@ -21,6 +24,15 @@
     </ClCompile>
     <ClCompile Include="D:\project-render\thirdparty\NRD\Source\Wrapper.cpp">
       <Filter>Source</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\project-render\build\thirdparty\NRD\NRD_autogen\mocs_compilation_Release.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\project-render\build\thirdparty\NRD\NRD_autogen\mocs_compilation_MinSizeRel.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\project-render\build\thirdparty\NRD\NRD_autogen\mocs_compilation_RelWithDebInfo.cpp">
+      <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -123,6 +135,9 @@
     </Filter>
     <Filter Include="Source">
       <UniqueIdentifier>{EC729C0B-7FA8-3593-8829-D0ED7DC49D8E}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{9569D824-A87A-3709-8E90-D3714CA14A7B}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>

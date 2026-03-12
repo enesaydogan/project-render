@@ -23,6 +23,13 @@
 #include "scene.h"
 #include "scene_io.h"
 #include <algorithm>
+
+#ifdef USE_QT_UI
+#include <QApplication>
+#include <QMessageBox>
+#include "qt/DX12View.h"
+#include "qt/MainWindow.h"
+#endif
 #include <chrono>
 #include <cmath>
 #include <codecvt>
@@ -1318,6 +1325,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   // Parse command line for flags and optional custom glTF file
   std::string customGltfPath;
   std::string sceneToLoad;
+
+  // window handle (Qt path will obtain from widget, Win32 path from CreateWindow)
+  HWND hwnd = nullptr;
   if (lpCmdLine && *lpCmdLine) {
     std::string cmd = lpCmdLine;
     std::istringstream iss(cmd);
@@ -1354,6 +1364,24 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     }
   }
 
+#ifdef USE_QT_UI
+  int qtArgc = 0;
+  char *qtArgv[] = { nullptr };
+  QApplication app(qtArgc, qtArgv);
+
+  EnforceReleaseDebugFlags();
+
+  MainWindow w;
+  w.show();
+
+  // obtain native handle from DX12View inside MainWindow
+  hwnd = reinterpret_cast<HWND>(w.view()->winId());
+
+  if (!InitApplication(hwnd)) {
+    QMessageBox::critical(nullptr, "Error", "Failed to initialize application");
+    return -1;
+  }
+#else
   const wchar_t CLASS_NAME[] = L"ProjectRenderWndClass";
 
   // use the extended version so we can set a small icon directly
@@ -1375,7 +1403,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
   RegisterClassExW(&wcx);
 
-  HWND hwnd = CreateWindowExW(0, CLASS_NAME, kMainWindowTitle,
+  hwnd = CreateWindowExW(0, CLASS_NAME, kMainWindowTitle,
                               WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
                               1920, 1080, nullptr, nullptr, hInstance, nullptr);
 
@@ -1401,6 +1429,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   SetWindowTextW(hwnd, kMainWindowTitle);
 
   fprintf(stderr, "InitApplication returned OK\n");
+#endif
 
   // Scene Setup
   if (!sceneToLoad.empty()) {
@@ -2309,6 +2338,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   while (msg.message != WM_QUIT) {
     // fprintf(stderr, "MainLoop: start iteration\n");
     fflush(stderr);
+ #ifdef USE_QT_UI
+    app.processEvents();
+    if (!w.isVisible() || g_appClosing)
+      break;
+ #else
     EnsureMainWindowTitle(hwnd);
     if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
       TranslateMessage(&msg);
@@ -2317,6 +2351,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         break;
       continue;
     }
+ #endif
     if (g_appClosing)
       break;
 

@@ -27,9 +27,49 @@ struct Vec3 {
 
 namespace Input {
 
+static bool s_qtWidgetFocused = false;
+static bool s_qtKeyStates[256] = {};
+static bool s_qtMouseStates[256] = {};
+static float s_qtMouseDeltaX = 0.0f;
+static float s_qtMouseDeltaY = 0.0f;
+
+void SetQtWidgetFocused(bool focused) { s_qtWidgetFocused = focused; }
+
+void SetQtKeyState(int virtualKey, bool down) {
+  if (virtualKey >= 0 && virtualKey < 256) {
+    s_qtKeyStates[virtualKey] = down;
+  }
+}
+
+void SetQtMouseButtonState(int virtualKey, bool down) {
+  if (virtualKey >= 0 && virtualKey < 256) {
+    s_qtMouseStates[virtualKey] = down;
+  }
+}
+
+void AddQtMouseDelta(float dx, float dy) {
+  s_qtMouseDeltaX += dx;
+  s_qtMouseDeltaY += dy;
+}
+
+static bool IsKeyDown(int virtualKey) {
+  const bool qtDown =
+      (virtualKey >= 0 && virtualKey < 256) ? s_qtKeyStates[virtualKey] : false;
+  return qtDown || ((GetAsyncKeyState(virtualKey) & 0x8000) != 0);
+}
+
+static bool IsMouseButtonDown(int virtualKey) {
+  const bool qtDown =
+      (virtualKey >= 0 && virtualKey < 256) ? s_qtMouseStates[virtualKey] : false;
+  return qtDown || ((GetAsyncKeyState(virtualKey) & 0x8000) != 0);
+}
+
 void Update(float dt) {
   // Input handling guarded by application focus
-  bool appFocused = (GetForegroundWindow() == g_hwnd);
+  HWND foreground = GetForegroundWindow();
+  HWND rootWindow = g_hwnd ? GetAncestor(g_hwnd, GA_ROOT) : nullptr;
+  bool appFocused = s_qtWidgetFocused || (foreground == g_hwnd) ||
+                    (rootWindow && foreground == rootWindow);
 
   // Handle mouse rotation when RMB is pressed (only when the app is focused)
   // Use FPS-style capture: confine cursor and recenter each frame for smooth
@@ -39,21 +79,32 @@ void Update(float dt) {
   POINT centerScreen = {clientRect.right / 2, clientRect.bottom / 2};
   ClientToScreen(g_hwnd, &centerScreen);
 
-  if (appFocused && (GetAsyncKeyState(VK_RBUTTON) & 0x8000)) {
+  if (appFocused && IsMouseButtonDown(VK_RBUTTON)) {
     if (!g_mouseCaptured) {
       // Enter capture mode
-      SetCursorPos(centerScreen.x, centerScreen.y);
       ShowCursor(FALSE);
-      RECT winRect;
-      GetWindowRect(g_hwnd, &winRect);
-      ClipCursor(&winRect);
+      if (!s_qtWidgetFocused) {
+        SetCursorPos(centerScreen.x, centerScreen.y);
+        RECT winRect;
+        GetWindowRect(g_hwnd, &winRect);
+        ClipCursor(&winRect);
+      }
       g_mouseCaptured = true;
     }
 
-    POINT curPos;
-    GetCursorPos(&curPos);
-    int dx = curPos.x - centerScreen.x;
-    int dy = curPos.y - centerScreen.y;
+    int dx = 0;
+    int dy = 0;
+    if (s_qtWidgetFocused) {
+      dx = static_cast<int>(s_qtMouseDeltaX);
+      dy = static_cast<int>(s_qtMouseDeltaY);
+      s_qtMouseDeltaX = 0.0f;
+      s_qtMouseDeltaY = 0.0f;
+    } else {
+      POINT curPos;
+      GetCursorPos(&curPos);
+      dx = curPos.x - centerScreen.x;
+      dy = curPos.y - centerScreen.y;
+    }
 
     const float sensitivity = g_mouseSensitivity; // radians per pixel
     // Update yaw/pitch directly (FPS-style mouse look)
@@ -77,7 +128,9 @@ void Update(float dt) {
     DxrRenderer::ResetAccumulation();
 
     // Recenter cursor for next delta
-    SetCursorPos(centerScreen.x, centerScreen.y);
+    if (!s_qtWidgetFocused) {
+      SetCursorPos(centerScreen.x, centerScreen.y);
+    }
   } else {
     if (g_mouseCaptured) {
       ShowCursor(TRUE);
@@ -93,7 +146,7 @@ void Update(float dt) {
   // Movement: WASD (only when app is focused)
   float moveSpeed = g_camSpeed;
   if (appFocused) {
-    if (GetAsyncKeyState(VK_SHIFT) & 0x8000)
+    if (IsKeyDown(VK_SHIFT))
       moveSpeed *= 3.0f;
   }
 
@@ -138,34 +191,34 @@ void Update(float dt) {
   Vec3 move = {0, 0, 0};
   if (appFocused) {
     // W/S forward/back (horizontal)
-    if (GetAsyncKeyState('W') & 0x8000) {
+    if (IsKeyDown('W')) {
       move.x += moveF.x;
       move.y += moveF.y;
       move.z += moveF.z;
     }
-    if (GetAsyncKeyState('S') & 0x8000) {
+    if (IsKeyDown('S')) {
       move.x -= moveF.x;
       move.y -= moveF.y;
       move.z -= moveF.z;
     }
     // A/D strafing (standard FPS: A=left, D=right)
-    if (GetAsyncKeyState('A') & 0x8000) {
+    if (IsKeyDown('A')) {
       move.x -= moveR.x;
       move.y -= moveR.y;
       move.z -= moveR.z;
     }
-    if (GetAsyncKeyState('D') & 0x8000) {
+    if (IsKeyDown('D')) {
       move.x += moveR.x;
       move.y += moveR.y;
       move.z += moveR.z;
     }
     // Vertical movement: Q up, E down (world up)
-    if (GetAsyncKeyState('Q') & 0x8000) {
+    if (IsKeyDown('Q')) {
       move.x += worldUp.x;
       move.y += worldUp.y;
       move.z += worldUp.z;
     }
-    if (GetAsyncKeyState('E') & 0x8000) {
+    if (IsKeyDown('E')) {
       move.x -= worldUp.x;
       move.y -= worldUp.y;
       move.z -= worldUp.z;
@@ -173,7 +226,7 @@ void Update(float dt) {
 
     // F4: Toggle between Raster and Raytracing modes (used to be TAB)
     static bool f4Down = false;
-    if (GetAsyncKeyState(VK_F4) & 0x8000) {
+    if (IsKeyDown(VK_F4)) {
       if (!f4Down) {
         if (g_currentRenderMode == RenderMode::Raster) {
           g_currentRenderMode = RenderMode::DXR;
@@ -197,7 +250,7 @@ void Update(float dt) {
 
     // F5: toggle ImGui UI on/off
     static bool f5Down = false;
-    if (GetAsyncKeyState(VK_F5) & 0x8000) {
+    if (IsKeyDown(VK_F5)) {
       if (!f5Down) {
         Input::g_imguiEnabled = !Input::g_imguiEnabled;
         fprintf(stderr, "F5 pressed: imguiEnabled = %d\n", Input::g_imguiEnabled);
@@ -209,7 +262,7 @@ void Update(float dt) {
 
     // Selection: LBUTTON
     static bool lbtnDown = false;
-    if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000)) {
+    if (IsMouseButtonDown(VK_LBUTTON)) {
       if (!lbtnDown) {
         // Always run selection logic to allow selecting nodes
         int pickedMaterial =

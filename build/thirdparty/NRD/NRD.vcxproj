@@ -92,6 +92,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /external:I "D:/project-render/build/thirdparty/NRD/NRD_autogen/include_Debug"</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <BufferSecurityCheck></BufferSecurityCheck>
@@ -99,6 +100,7 @@
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <DisableSpecificWarnings>4324</DisableSpecificWarnings>
       <ExceptionHandling>Sync</ExceptionHandling>
+      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
       <FloatingPointModel></FloatingPointModel>
       <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
       <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
@@ -113,22 +115,39 @@
       <TreatWarningAsError>true</TreatWarningAsError>
       <UseFullPaths>false</UseFullPaths>
       <WarningLevel>Level4</WarningLevel>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NRD_API=extern "C" __declspec(dllexport);WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;NRD_EMBEDS_SPIRV_SHADERS=0;NRD_EMBEDS_DXIL_SHADERS=1;NRD_EMBEDS_DXBC_SHADERS=0;SPIRV_SREG_OFFSET=0;SPIRV_BREG_OFFSET=2;SPIRV_UREG_OFFSET=3;SPIRV_TREG_OFFSET=20;NRD_SUPPORTS_VIEWPORT_OFFSET=0;NRD_SUPPORTS_CHECKERBOARD=1;NRD_SUPPORTS_HISTORY_CONFIDENCE=1;NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX=1;NRD_SUPPORTS_BASECOLOR_METALNESS=1;NRD_SUPPORTS_ANTIFIREFLY=1;REBLUR_PERFORMANCE_MODE=0;NRD_STATIC_LIBRARY=0;CMAKE_INTDIR="Debug";NRD_EXPORTS</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NRD_API=extern "C" __declspec(dllexport);WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;NRD_EMBEDS_SPIRV_SHADERS=0;NRD_EMBEDS_DXIL_SHADERS=1;NRD_EMBEDS_DXBC_SHADERS=0;SPIRV_SREG_OFFSET=0;SPIRV_BREG_OFFSET=2;SPIRV_UREG_OFFSET=3;SPIRV_TREG_OFFSET=20;NRD_SUPPORTS_VIEWPORT_OFFSET=0;NRD_SUPPORTS_CHECKERBOARD=1;NRD_SUPPORTS_HISTORY_CONFIDENCE=1;NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX=1;NRD_SUPPORTS_BASECOLOR_METALNESS=1;NRD_SUPPORTS_ANTIFIREFLY=1;REBLUR_PERFORMANCE_MODE=0;NRD_STATIC_LIBRARY=0;USE_QT_UI=1;CMAKE_INTDIR="Debug";NRD_EXPORTS</PreprocessorDefinitions>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <ScanSourceForModuleDependencies>true</ScanSourceForModuleDependencies>
     </ClCompile>
     <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;NRD_API=extern \"C\" __declspec(dllexport);WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;NRD_EMBEDS_SPIRV_SHADERS=0;NRD_EMBEDS_DXIL_SHADERS=1;NRD_EMBEDS_DXBC_SHADERS=0;SPIRV_SREG_OFFSET=0;SPIRV_BREG_OFFSET=2;SPIRV_UREG_OFFSET=3;SPIRV_TREG_OFFSET=20;NRD_SUPPORTS_VIEWPORT_OFFSET=0;NRD_SUPPORTS_CHECKERBOARD=1;NRD_SUPPORTS_HISTORY_CONFIDENCE=1;NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX=1;NRD_SUPPORTS_BASECOLOR_METALNESS=1;NRD_SUPPORTS_ANTIFIREFLY=1;REBLUR_PERFORMANCE_MODE=0;NRD_STATIC_LIBRARY=0;CMAKE_INTDIR=\"Debug\";NRD_EXPORTS</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;NRD_API=extern \"C\" __declspec(dllexport);WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;NRD_EMBEDS_SPIRV_SHADERS=0;NRD_EMBEDS_DXIL_SHADERS=1;NRD_EMBEDS_DXBC_SHADERS=0;SPIRV_SREG_OFFSET=0;SPIRV_BREG_OFFSET=2;SPIRV_UREG_OFFSET=3;SPIRV_TREG_OFFSET=20;NRD_SUPPORTS_VIEWPORT_OFFSET=0;NRD_SUPPORTS_CHECKERBOARD=1;NRD_SUPPORTS_HISTORY_CONFIDENCE=1;NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX=1;NRD_SUPPORTS_BASECOLOR_METALNESS=1;NRD_SUPPORTS_ANTIFIREFLY=1;REBLUR_PERFORMANCE_MODE=0;NRD_STATIC_LIBRARY=0;USE_QT_UI=1;CMAKE_INTDIR=\"Debug\";NRD_EXPORTS</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;D:\project-render\build\thirdparty\NRD\NRD_autogen\include_Debug;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;D:\project-render\build\thirdparty\NRD\NRD_autogen\include_Debug;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
       <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
+    <PreBuildEvent>
+      <UseUtf8Encoding>Always</UseUtf8Encoding>
+      <Message>Automatic MOC and UIC for target NRD</Message>
+      <Command>setlocal
+cd D:\project-render\build\thirdparty\NRD
+if %errorlevel% neq 0 goto :cmEnd
+D:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E cmake_autogen D:/project-render/build/thirdparty/NRD/CMakeFiles/NRD_autogen.dir/AutogenInfo.json Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+    </PreBuildEvent>
     <Link>
       <AdditionalDependencies>..\..\_deps\shadermake-build\Debug\ShaderMakeBlobd.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
@@ -150,6 +169,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /external:I "D:/project-render/build/thirdparty/NRD/NRD_autogen/include_Release"</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <BufferSecurityCheck></BufferSecurityCheck>
@@ -157,6 +177,7 @@
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <DisableSpecificWarnings>4324</DisableSpecificWarnings>
       <ExceptionHandling>Sync</ExceptionHandling>
+      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
       <FloatingPointModel></FloatingPointModel>
       <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
       <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
@@ -171,22 +192,39 @@
       <TreatWarningAsError>true</TreatWarningAsError>
       <UseFullPaths>false</UseFullPaths>
       <WarningLevel>Level4</WarningLevel>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;NRD_API=extern "C" __declspec(dllexport);WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;NRD_EMBEDS_SPIRV_SHADERS=0;NRD_EMBEDS_DXIL_SHADERS=1;NRD_EMBEDS_DXBC_SHADERS=0;SPIRV_SREG_OFFSET=0;SPIRV_BREG_OFFSET=2;SPIRV_UREG_OFFSET=3;SPIRV_TREG_OFFSET=20;NRD_SUPPORTS_VIEWPORT_OFFSET=0;NRD_SUPPORTS_CHECKERBOARD=1;NRD_SUPPORTS_HISTORY_CONFIDENCE=1;NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX=1;NRD_SUPPORTS_BASECOLOR_METALNESS=1;NRD_SUPPORTS_ANTIFIREFLY=1;REBLUR_PERFORMANCE_MODE=0;NRD_STATIC_LIBRARY=0;CMAKE_INTDIR="Release";NRD_EXPORTS</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;NRD_API=extern "C" __declspec(dllexport);WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;NRD_EMBEDS_SPIRV_SHADERS=0;NRD_EMBEDS_DXIL_SHADERS=1;NRD_EMBEDS_DXBC_SHADERS=0;SPIRV_SREG_OFFSET=0;SPIRV_BREG_OFFSET=2;SPIRV_UREG_OFFSET=3;SPIRV_TREG_OFFSET=20;NRD_SUPPORTS_VIEWPORT_OFFSET=0;NRD_SUPPORTS_CHECKERBOARD=1;NRD_SUPPORTS_HISTORY_CONFIDENCE=1;NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX=1;NRD_SUPPORTS_BASECOLOR_METALNESS=1;NRD_SUPPORTS_ANTIFIREFLY=1;REBLUR_PERFORMANCE_MODE=0;NRD_STATIC_LIBRARY=0;USE_QT_UI=1;CMAKE_INTDIR="Release";NRD_EXPORTS</PreprocessorDefinitions>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <ScanSourceForModuleDependencies>true</ScanSourceForModuleDependencies>
     </ClCompile>
     <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;NRD_API=extern \"C\" __declspec(dllexport);WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;NRD_EMBEDS_SPIRV_SHADERS=0;NRD_EMBEDS_DXIL_SHADERS=1;NRD_EMBEDS_DXBC_SHADERS=0;SPIRV_SREG_OFFSET=0;SPIRV_BREG_OFFSET=2;SPIRV_UREG_OFFSET=3;SPIRV_TREG_OFFSET=20;NRD_SUPPORTS_VIEWPORT_OFFSET=0;NRD_SUPPORTS_CHECKERBOARD=1;NRD_SUPPORTS_HISTORY_CONFIDENCE=1;NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX=1;NRD_SUPPORTS_BASECOLOR_METALNESS=1;NRD_SUPPORTS_ANTIFIREFLY=1;REBLUR_PERFORMANCE_MODE=0;NRD_STATIC_LIBRARY=0;CMAKE_INTDIR=\"Release\";NRD_EXPORTS</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;NRD_API=extern \"C\" __declspec(dllexport);WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;NRD_EMBEDS_SPIRV_SHADERS=0;NRD_EMBEDS_DXIL_SHADERS=1;NRD_EMBEDS_DXBC_SHADERS=0;SPIRV_SREG_OFFSET=0;SPIRV_BREG_OFFSET=2;SPIRV_UREG_OFFSET=3;SPIRV_TREG_OFFSET=20;NRD_SUPPORTS_VIEWPORT_OFFSET=0;NRD_SUPPORTS_CHECKERBOARD=1;NRD_SUPPORTS_HISTORY_CONFIDENCE=1;NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX=1;NRD_SUPPORTS_BASECOLOR_METALNESS=1;NRD_SUPPORTS_ANTIFIREFLY=1;REBLUR_PERFORMANCE_MODE=0;NRD_STATIC_LIBRARY=0;USE_QT_UI=1;CMAKE_INTDIR=\"Release\";NRD_EXPORTS</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;D:\project-render\build\thirdparty\NRD\NRD_autogen\include_Release;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;D:\project-render\build\thirdparty\NRD\NRD_autogen\include_Release;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
       <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
+    <PreBuildEvent>
+      <UseUtf8Encoding>Always</UseUtf8Encoding>
+      <Message>Automatic MOC and UIC for target NRD</Message>
+      <Command>setlocal
+cd D:\project-render\build\thirdparty\NRD
+if %errorlevel% neq 0 goto :cmEnd
+D:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E cmake_autogen D:/project-render/build/thirdparty/NRD/CMakeFiles/NRD_autogen.dir/AutogenInfo.json Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+    </PreBuildEvent>
     <Link>
       <AdditionalDependencies>..\..\_deps\shadermake-build\Release\ShaderMakeBlob.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
@@ -209,12 +247,14 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
     <ClCompile>
       <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /external:I "D:/project-render/build/thirdparty/NRD/NRD_autogen/include_MinSizeRel"</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <BufferSecurityCheck></BufferSecurityCheck>
       <CallingConvention></CallingConvention>
       <DisableSpecificWarnings>4324</DisableSpecificWarnings>
       <ExceptionHandling>Sync</ExceptionHandling>
+      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
       <FloatingPointModel></FloatingPointModel>
       <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
       <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
@@ -229,24 +269,41 @@
       <TreatWarningAsError>true</TreatWarningAsError>
       <UseFullPaths>false</UseFullPaths>
       <WarningLevel>Level4</WarningLevel>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;NRD_API=extern "C" __declspec(dllexport);WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;NRD_EMBEDS_SPIRV_SHADERS=0;NRD_EMBEDS_DXIL_SHADERS=1;NRD_EMBEDS_DXBC_SHADERS=0;SPIRV_SREG_OFFSET=0;SPIRV_BREG_OFFSET=2;SPIRV_UREG_OFFSET=3;SPIRV_TREG_OFFSET=20;NRD_SUPPORTS_VIEWPORT_OFFSET=0;NRD_SUPPORTS_CHECKERBOARD=1;NRD_SUPPORTS_HISTORY_CONFIDENCE=1;NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX=1;NRD_SUPPORTS_BASECOLOR_METALNESS=1;NRD_SUPPORTS_ANTIFIREFLY=1;REBLUR_PERFORMANCE_MODE=0;NRD_STATIC_LIBRARY=0;CMAKE_INTDIR="MinSizeRel";NRD_EXPORTS</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;NRD_API=extern "C" __declspec(dllexport);WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;NRD_EMBEDS_SPIRV_SHADERS=0;NRD_EMBEDS_DXIL_SHADERS=1;NRD_EMBEDS_DXBC_SHADERS=0;SPIRV_SREG_OFFSET=0;SPIRV_BREG_OFFSET=2;SPIRV_UREG_OFFSET=3;SPIRV_TREG_OFFSET=20;NRD_SUPPORTS_VIEWPORT_OFFSET=0;NRD_SUPPORTS_CHECKERBOARD=1;NRD_SUPPORTS_HISTORY_CONFIDENCE=1;NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX=1;NRD_SUPPORTS_BASECOLOR_METALNESS=1;NRD_SUPPORTS_ANTIFIREFLY=1;REBLUR_PERFORMANCE_MODE=0;NRD_STATIC_LIBRARY=0;USE_QT_UI=1;CMAKE_INTDIR="MinSizeRel";NRD_EXPORTS</PreprocessorDefinitions>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <DebugInformationFormat>
       </DebugInformationFormat>
       <ScanSourceForModuleDependencies>true</ScanSourceForModuleDependencies>
     </ClCompile>
     <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;NRD_API=extern \"C\" __declspec(dllexport);WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;NRD_EMBEDS_SPIRV_SHADERS=0;NRD_EMBEDS_DXIL_SHADERS=1;NRD_EMBEDS_DXBC_SHADERS=0;SPIRV_SREG_OFFSET=0;SPIRV_BREG_OFFSET=2;SPIRV_UREG_OFFSET=3;SPIRV_TREG_OFFSET=20;NRD_SUPPORTS_VIEWPORT_OFFSET=0;NRD_SUPPORTS_CHECKERBOARD=1;NRD_SUPPORTS_HISTORY_CONFIDENCE=1;NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX=1;NRD_SUPPORTS_BASECOLOR_METALNESS=1;NRD_SUPPORTS_ANTIFIREFLY=1;REBLUR_PERFORMANCE_MODE=0;NRD_STATIC_LIBRARY=0;CMAKE_INTDIR=\"MinSizeRel\";NRD_EXPORTS</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;NRD_API=extern \"C\" __declspec(dllexport);WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;NRD_EMBEDS_SPIRV_SHADERS=0;NRD_EMBEDS_DXIL_SHADERS=1;NRD_EMBEDS_DXBC_SHADERS=0;SPIRV_SREG_OFFSET=0;SPIRV_BREG_OFFSET=2;SPIRV_UREG_OFFSET=3;SPIRV_TREG_OFFSET=20;NRD_SUPPORTS_VIEWPORT_OFFSET=0;NRD_SUPPORTS_CHECKERBOARD=1;NRD_SUPPORTS_HISTORY_CONFIDENCE=1;NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX=1;NRD_SUPPORTS_BASECOLOR_METALNESS=1;NRD_SUPPORTS_ANTIFIREFLY=1;REBLUR_PERFORMANCE_MODE=0;NRD_STATIC_LIBRARY=0;USE_QT_UI=1;CMAKE_INTDIR=\"MinSizeRel\";NRD_EXPORTS</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;D:\project-render\build\thirdparty\NRD\NRD_autogen\include_MinSizeRel;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;D:\project-render\build\thirdparty\NRD\NRD_autogen\include_MinSizeRel;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
       <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
+    <PreBuildEvent>
+      <UseUtf8Encoding>Always</UseUtf8Encoding>
+      <Message>Automatic MOC and UIC for target NRD</Message>
+      <Command>setlocal
+cd D:\project-render\build\thirdparty\NRD
+if %errorlevel% neq 0 goto :cmEnd
+D:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E cmake_autogen D:/project-render/build/thirdparty/NRD/CMakeFiles/NRD_autogen.dir/AutogenInfo.json MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+    </PreBuildEvent>
     <Link>
       <AdditionalDependencies>..\..\_deps\shadermake-build\MinSizeRel\ShaderMakeBlob.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
@@ -268,6 +325,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
     <ClCompile>
       <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /external:I "D:/project-render/build/thirdparty/NRD/NRD_autogen/include_RelWithDebInfo"</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <BufferSecurityCheck></BufferSecurityCheck>
@@ -275,6 +333,7 @@
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <DisableSpecificWarnings>4324</DisableSpecificWarnings>
       <ExceptionHandling>Sync</ExceptionHandling>
+      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
       <FloatingPointModel></FloatingPointModel>
       <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
       <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
@@ -289,22 +348,39 @@
       <TreatWarningAsError>true</TreatWarningAsError>
       <UseFullPaths>false</UseFullPaths>
       <WarningLevel>Level4</WarningLevel>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;NRD_API=extern "C" __declspec(dllexport);WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;NRD_EMBEDS_SPIRV_SHADERS=0;NRD_EMBEDS_DXIL_SHADERS=1;NRD_EMBEDS_DXBC_SHADERS=0;SPIRV_SREG_OFFSET=0;SPIRV_BREG_OFFSET=2;SPIRV_UREG_OFFSET=3;SPIRV_TREG_OFFSET=20;NRD_SUPPORTS_VIEWPORT_OFFSET=0;NRD_SUPPORTS_CHECKERBOARD=1;NRD_SUPPORTS_HISTORY_CONFIDENCE=1;NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX=1;NRD_SUPPORTS_BASECOLOR_METALNESS=1;NRD_SUPPORTS_ANTIFIREFLY=1;REBLUR_PERFORMANCE_MODE=0;NRD_STATIC_LIBRARY=0;CMAKE_INTDIR="RelWithDebInfo";NRD_EXPORTS</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;NRD_API=extern "C" __declspec(dllexport);WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;NRD_EMBEDS_SPIRV_SHADERS=0;NRD_EMBEDS_DXIL_SHADERS=1;NRD_EMBEDS_DXBC_SHADERS=0;SPIRV_SREG_OFFSET=0;SPIRV_BREG_OFFSET=2;SPIRV_UREG_OFFSET=3;SPIRV_TREG_OFFSET=20;NRD_SUPPORTS_VIEWPORT_OFFSET=0;NRD_SUPPORTS_CHECKERBOARD=1;NRD_SUPPORTS_HISTORY_CONFIDENCE=1;NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX=1;NRD_SUPPORTS_BASECOLOR_METALNESS=1;NRD_SUPPORTS_ANTIFIREFLY=1;REBLUR_PERFORMANCE_MODE=0;NRD_STATIC_LIBRARY=0;USE_QT_UI=1;CMAKE_INTDIR="RelWithDebInfo";NRD_EXPORTS</PreprocessorDefinitions>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <ScanSourceForModuleDependencies>true</ScanSourceForModuleDependencies>
     </ClCompile>
     <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;NRD_API=extern \"C\" __declspec(dllexport);WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;NRD_EMBEDS_SPIRV_SHADERS=0;NRD_EMBEDS_DXIL_SHADERS=1;NRD_EMBEDS_DXBC_SHADERS=0;SPIRV_SREG_OFFSET=0;SPIRV_BREG_OFFSET=2;SPIRV_UREG_OFFSET=3;SPIRV_TREG_OFFSET=20;NRD_SUPPORTS_VIEWPORT_OFFSET=0;NRD_SUPPORTS_CHECKERBOARD=1;NRD_SUPPORTS_HISTORY_CONFIDENCE=1;NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX=1;NRD_SUPPORTS_BASECOLOR_METALNESS=1;NRD_SUPPORTS_ANTIFIREFLY=1;REBLUR_PERFORMANCE_MODE=0;NRD_STATIC_LIBRARY=0;CMAKE_INTDIR=\"RelWithDebInfo\";NRD_EXPORTS</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;NRD_API=extern \"C\" __declspec(dllexport);WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;NRD_EMBEDS_SPIRV_SHADERS=0;NRD_EMBEDS_DXIL_SHADERS=1;NRD_EMBEDS_DXBC_SHADERS=0;SPIRV_SREG_OFFSET=0;SPIRV_BREG_OFFSET=2;SPIRV_UREG_OFFSET=3;SPIRV_TREG_OFFSET=20;NRD_SUPPORTS_VIEWPORT_OFFSET=0;NRD_SUPPORTS_CHECKERBOARD=1;NRD_SUPPORTS_HISTORY_CONFIDENCE=1;NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX=1;NRD_SUPPORTS_BASECOLOR_METALNESS=1;NRD_SUPPORTS_ANTIFIREFLY=1;REBLUR_PERFORMANCE_MODE=0;NRD_STATIC_LIBRARY=0;USE_QT_UI=1;CMAKE_INTDIR=\"RelWithDebInfo\";NRD_EXPORTS</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;D:\project-render\build\thirdparty\NRD\NRD_autogen\include_RelWithDebInfo;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\_Shaders;D:\project-render\build\_deps\mathlib-src\.;D:\project-render\build\_deps\shadermake-src;D:\project-render\build\thirdparty\NRD\NRD_autogen\include_RelWithDebInfo;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
       <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
+    <PreBuildEvent>
+      <UseUtf8Encoding>Always</UseUtf8Encoding>
+      <Message>Automatic MOC and UIC for target NRD</Message>
+      <Command>setlocal
+cd D:\project-render\build\thirdparty\NRD
+if %errorlevel% neq 0 goto :cmEnd
+D:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E cmake_autogen D:/project-render/build/thirdparty/NRD/CMakeFiles/NRD_autogen.dir/AutogenInfo.json RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+    </PreBuildEvent>
     <Link>
       <AdditionalDependencies>..\..\_deps\shadermake-build\RelWithDebInfo\ShaderMakeBlob.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
@@ -381,6 +457,15 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="D:\project-render\build\thirdparty\NRD\NRD_autogen\mocs_compilation_Debug.cpp">
+      <ScanSourceForModuleDependencies Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ScanSourceForModuleDependencies>
+      <ScanSourceForModuleDependencies Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ScanSourceForModuleDependencies>
+      <ScanSourceForModuleDependencies Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</ScanSourceForModuleDependencies>
+      <ScanSourceForModuleDependencies Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</ScanSourceForModuleDependencies>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">true</ExcludedFromBuild>
+    </ClCompile>
     <ClCompile Include="D:\project-render\thirdparty\NRD\Source\InstanceImpl.cpp" />
     <ClInclude Include="D:\project-render\thirdparty\NRD\Source\InstanceImpl.h" />
     <ClCompile Include="D:\project-render\thirdparty\NRD\Source\Reblur.cpp" />
@@ -420,6 +505,33 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClInclude Include="D:\project-render\thirdparty\NRD\Include\NRD.h" />
     <ClInclude Include="D:\project-render\thirdparty\NRD\Include\NRDDescs.h" />
     <ClInclude Include="D:\project-render\thirdparty\NRD\Include\NRDSettings.h" />
+    <ClCompile Include="D:\project-render\build\thirdparty\NRD\NRD_autogen\mocs_compilation_Release.cpp">
+      <ScanSourceForModuleDependencies Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ScanSourceForModuleDependencies>
+      <ScanSourceForModuleDependencies Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ScanSourceForModuleDependencies>
+      <ScanSourceForModuleDependencies Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</ScanSourceForModuleDependencies>
+      <ScanSourceForModuleDependencies Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</ScanSourceForModuleDependencies>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">true</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="D:\project-render\build\thirdparty\NRD\NRD_autogen\mocs_compilation_MinSizeRel.cpp">
+      <ScanSourceForModuleDependencies Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ScanSourceForModuleDependencies>
+      <ScanSourceForModuleDependencies Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ScanSourceForModuleDependencies>
+      <ScanSourceForModuleDependencies Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</ScanSourceForModuleDependencies>
+      <ScanSourceForModuleDependencies Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</ScanSourceForModuleDependencies>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">true</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="D:\project-render\build\thirdparty\NRD\NRD_autogen\mocs_compilation_RelWithDebInfo.cpp">
+      <ScanSourceForModuleDependencies Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ScanSourceForModuleDependencies>
+      <ScanSourceForModuleDependencies Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ScanSourceForModuleDependencies>
+      <ScanSourceForModuleDependencies Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</ScanSourceForModuleDependencies>
+      <ScanSourceForModuleDependencies Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</ScanSourceForModuleDependencies>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">true</ExcludedFromBuild>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup />
   <ItemGroup>

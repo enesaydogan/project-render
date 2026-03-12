@@ -4,7 +4,29 @@ project(project-render VERSION 0.0.1 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Qt UI integration option
+option(USE_QT_UI "Enable Qt-based user interface" OFF)
+
+if(USE_QT_UI)
+  # attempt to locate Qt; if not found we disable the option gracefully
+  find_package(Qt6 COMPONENTS Widgets)
+  if(NOT Qt6_FOUND)
+    message(WARNING "USE_QT_UI is ON but Qt6 not found. Disabling Qt UI.")
+    set(USE_QT_UI OFF CACHE BOOL "Enable Qt-based user interface" FORCE)
+  else()
+    set(CMAKE_AUTOMOC ON)
+    set(CMAKE_AUTOUIC ON)
+    set(CMAKE_AUTORCC ON)
+    add_compile_definitions(USE_QT_UI=1)
+    message(STATUS "Qt UI enabled")
+  endif()
+else()
+  message(STATUS "Qt UI disabled (USE_QT_UI=OFF)")
+endif()
+
 add_executable(project-render src/main.cpp)
+
+# when Qt is enabled, additional source files will be added later
 
 # expose version information to the code as a preprocessor macro
 # PROJECT_VERSION is automatically populated from project(... VERSION ...)
@@ -35,6 +57,39 @@ target_sources(project-render PRIVATE
     src/scene_io.cpp
     src/grass_manager.cpp
 )
+
+if(USE_QT_UI)
+  target_sources(project-render PRIVATE
+      src/qt/MainWindow.cpp
+      src/qt/DX12View.cpp
+      src/qt/RenderSettingsPanel.cpp
+      src/qt/RenderModePanel.cpp
+      src/qt/ScenePanel.cpp
+      # additional panel widgets will be added here later
+  )
+  target_link_libraries(project-render PRIVATE Qt6::Widgets)
+  target_include_directories(project-render PRIVATE ${CMAKE_SOURCE_DIR}/src/qt)
+
+  if(WIN32)
+    if(TARGET Qt6::qmake)
+      get_target_property(QT_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
+      get_filename_component(QT_WINDEPLOYQT_DIR "${QT_QMAKE_EXECUTABLE}" DIRECTORY)
+      set(QT_WINDEPLOYQT_EXECUTABLE "${QT_WINDEPLOYQT_DIR}/windeployqt.exe")
+    else()
+      get_filename_component(QT_INSTALL_PREFIX "${Qt6_DIR}/../../.." ABSOLUTE)
+      set(QT_WINDEPLOYQT_EXECUTABLE "${QT_INSTALL_PREFIX}/bin/windeployqt.exe")
+    endif()
+
+    if(EXISTS "${QT_WINDEPLOYQT_EXECUTABLE}")
+      add_custom_command(TARGET project-render POST_BUILD
+        COMMAND "${QT_WINDEPLOYQT_EXECUTABLE}" --no-translations --no-opengl-sw "$<TARGET_FILE:project-render>"
+        COMMENT "Deploying Qt runtime..."
+      )
+    else()
+      message(WARNING "Qt UI is enabled but windeployqt.exe was not found. Qt runtime deployment will need to be handled manually.")
+    endif()
+  endif()
+endif()
 
 if (MSVC)
   target_compile_options(project-render PRIVATE /W4 /permissive-)
