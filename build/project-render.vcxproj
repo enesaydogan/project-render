@@ -143,9 +143,20 @@ exit /b %1
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PreBuildEvent>
     <PostBuildEvent>
-      <Message>Deploying Qt runtime...	Copying OpenImageDenoise runtime binaries...	Copying NRD and NRI runtime binaries...		Copying SketchUp SDK runtime DLL...	Copying SketchUpCommonPreferences.dll to output...	Copying vcpkg runtime binaries (miniz.dll)...	Copying compiled shader blobs...	Copying assets folder...</Message>
+      <Message>Deploying Qt runtime...	Removing unused Qt plugins (networkinformation, tls)	Copying OpenImageDenoise runtime binaries...	Copying NRD and NRI runtime binaries...		Copying SketchUp SDK runtime DLL...	Copying SketchUpCommonPreferences.dll to output...	Copying vcpkg runtime binaries (miniz.dll)...	Copying compiled shader blobs...	Copying assets folder...</Message>
       <Command>setlocal
 D:\Qt\6.10.2\msvc2022_64\bin\windeployqt.exe --no-translations --no-opengl-sw D:/project-render/build/Debug/bin/project-render.exe
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E remove_directory D:/project-render/build/Debug/bin/networkinformation
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E remove_directory D:/project-render/build/Debug/bin/tls
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -336,9 +347,20 @@ exit /b %1
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PreBuildEvent>
     <PostBuildEvent>
-      <Message>Deploying Qt runtime...	Copying OpenImageDenoise runtime binaries...	Copying NRD and NRI runtime binaries...		Copying SketchUp SDK runtime DLL...	Copying SketchUpCommonPreferences.dll to output...	Copying vcpkg runtime binaries (miniz.dll)...	Copying compiled shader blobs...	Copying assets folder...</Message>
+      <Message>Deploying Qt runtime...	Removing unused Qt plugins (networkinformation, tls)	Copying OpenImageDenoise runtime binaries...	Copying NRD and NRI runtime binaries...		Copying SketchUp SDK runtime DLL...	Copying SketchUpCommonPreferences.dll to output...	Copying vcpkg runtime binaries (miniz.dll)...	Copying compiled shader blobs...	Copying assets folder...</Message>
       <Command>setlocal
 D:\Qt\6.10.2\msvc2022_64\bin\windeployqt.exe --no-translations --no-opengl-sw D:/project-render/build/Release/bin/project-render.exe
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E remove_directory D:/project-render/build/Release/bin/networkinformation
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E remove_directory D:/project-render/build/Release/bin/tls
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -525,9 +547,20 @@ exit /b %1
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PreBuildEvent>
     <PostBuildEvent>
-      <Message>Deploying Qt runtime...	Copying OpenImageDenoise runtime binaries...	Copying NRD and NRI runtime binaries...		Copying SketchUp SDK runtime DLL...	Copying SketchUpCommonPreferences.dll to output...	Copying vcpkg runtime binaries (miniz.dll)...	Copying compiled shader blobs...	Copying assets folder...</Message>
+      <Message>Deploying Qt runtime...	Removing unused Qt plugins (networkinformation, tls)	Copying OpenImageDenoise runtime binaries...	Copying NRD and NRI runtime binaries...		Copying SketchUp SDK runtime DLL...	Copying SketchUpCommonPreferences.dll to output...	Copying vcpkg runtime binaries (miniz.dll)...	Copying compiled shader blobs...	Copying assets folder...</Message>
       <Command>setlocal
 D:\Qt\6.10.2\msvc2022_64\bin\windeployqt.exe --no-translations --no-opengl-sw D:/project-render/build/bin/MinSizeRel/project-render.exe
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E remove_directory D:/project-render/build/bin/MinSizeRel/networkinformation
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E remove_directory D:/project-render/build/bin/MinSizeRel/tls
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -712,9 +745,20 @@ exit /b %1
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PreBuildEvent>
     <PostBuildEvent>
-      <Message>Deploying Qt runtime...	Copying OpenImageDenoise runtime binaries...	Copying NRD and NRI runtime binaries...		Copying SketchUp SDK runtime DLL...	Copying SketchUpCommonPreferences.dll to output...	Copying vcpkg runtime binaries (miniz.dll)...	Copying compiled shader blobs...	Copying assets folder...</Message>
+      <Message>Deploying Qt runtime...	Removing unused Qt plugins (networkinformation, tls)	Copying OpenImageDenoise runtime binaries...	Copying NRD and NRI runtime binaries...		Copying SketchUp SDK runtime DLL...	Copying SketchUpCommonPreferences.dll to output...	Copying vcpkg runtime binaries (miniz.dll)...	Copying compiled shader blobs...	Copying assets folder...</Message>
       <Command>setlocal
 D:\Qt\6.10.2\msvc2022_64\bin\windeployqt.exe --no-translations --no-opengl-sw D:/project-render/build/bin/RelWithDebInfo/project-render.exe
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E remove_directory D:/project-render/build/bin/RelWithDebInfo/networkinformation
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E remove_directory D:/project-render/build/bin/RelWithDebInfo/tls
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
