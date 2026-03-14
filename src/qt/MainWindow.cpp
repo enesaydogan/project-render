@@ -1,5 +1,7 @@
 #include "MainWindow.h"
+#include "CameraPanel.h"
 #include "DX12View.h"
+#include "EnvironmentPanel.h"
 #include "LightsPanel.h"
 #include "MaterialEditorPanel.h"
 #include "RenderSettingsPanel.h"
@@ -421,6 +423,16 @@ void MainWindow::createDocks()
         renderDock->setWidget(wrapScroll(renderPanel, renderDock));
     }
     addDockWidget(Qt::RightDockWidgetArea, renderDock);
+    auto *environmentDock = new QDockWidget(tr("Environment"), this);
+    environmentDock->setObjectName(tr("Environment"));
+    environmentDock->setAllowedAreas(Qt::AllDockWidgetAreas);
+    environmentDock->setWidget(wrapScroll(new EnvironmentPanel(environmentDock), environmentDock));
+    addDockWidget(Qt::RightDockWidgetArea, environmentDock);
+    auto *cameraDock = new QDockWidget(tr("Camera"), this);
+    cameraDock->setObjectName(tr("Camera"));
+    cameraDock->setAllowedAreas(Qt::AllDockWidgetAreas);
+    cameraDock->setWidget(wrapScroll(new CameraPanel(cameraDock), cameraDock));
+    addDockWidget(Qt::RightDockWidgetArea, cameraDock);
     auto *lightsDock = new QDockWidget(tr("Lights"), this);
     lightsDock->setObjectName(tr("Lights"));
     lightsDock->setAllowedAreas(Qt::AllDockWidgetAreas);
@@ -428,6 +440,9 @@ void MainWindow::createDocks()
     addDockWidget(Qt::BottomDockWidgetArea, lightsDock);
 
     splitDockWidget(materialsDock, renderDock, Qt::Vertical);
+    splitDockWidget(renderDock, environmentDock, Qt::Vertical);
+    tabifyDockWidget(environmentDock, cameraDock);
+    environmentDock->raise();
     tabifyDockWidget(sceneDock, lightsDock);
     sceneDock->raise();
 }

@@ -53,7 +53,7 @@ static bool s_streamlineResetHistory = true;
 static DxrRenderer::DenoiserMode s_denoiserMode =
     DxrRenderer::DenoiserMode::OIDN_GPU;
 static DxrRenderer::RealtimeDenoiserMode s_realtimeDenoiserMode =
-    DxrRenderer::RealtimeDenoiserMode::NRD;
+  DxrRenderer::RealtimeDenoiserMode::Off;
 static OidnDenoiser s_oidnDenoiser;
 static OidnDenoiser::Quality s_oidnQuality = OidnDenoiser::Quality::High;
 static DxrRenderer::SvgfSettings s_svgfSettings;
@@ -4397,9 +4397,6 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   float jitterY = Halton(frameIdx, 3) - 0.5f;
   const bool realtimeDenoiserActive =
       (s_realtimeDenoiserMode != RealtimeDenoiserMode::Off) && !dlssActive;
-    const bool preserveJitterForFinalOfflineDenoiser =
-      realtimeDenoiserActive &&
-      (s_denoiserMode != DxrRenderer::DenoiserMode::Off);
 
   // DLSS-RR can shimmer at silhouettes because pixel jitter causes much larger
   // ray-direction changes near the screen edges in a perspective camera.
@@ -4407,7 +4404,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   if (rrActive) {
     jitterX *= s_rrJitterScale;
     jitterY *= s_rrJitterScale;
-  } else if (realtimeDenoiserActive && !preserveJitterForFinalOfflineDenoiser) {
+  } else if (realtimeDenoiserActive) {
     // Realtime denoisers operate on their own temporal history. Keeping Halton
     // jitter in this path adds silhouette crawl without helping reconstruction.
     jitterX = 0.0f;

@@ -71,10 +71,6 @@ private:
     QDoubleSpinBox *m_bloomThreshold = nullptr;
     QDoubleSpinBox *m_bloomIntensity = nullptr;
 
-    QDoubleSpinBox *m_tonemapVignette = nullptr;
-    QDoubleSpinBox *m_tonemapSaturation = nullptr;
-    QDoubleSpinBox *m_tonemapContrast = nullptr;
-
     QPushButton *m_resetButton = nullptr;
     QTimer *m_refreshTimer = nullptr;
 };

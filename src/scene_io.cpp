@@ -602,7 +602,7 @@ static void ApplyMetadataPRS(const json &j) {
     auto &s = j["stl"];
     DX12Context::g_streamline.SetEnabled(
         s.value("en", DX12Context::g_streamline.IsEnabled()));
-    DX12Context::g_streamline.SetMode((StreamlineManager::Mode)s.value("mo", (int)StreamlineManager::Mode::Off));
+    DX12Context::g_streamline.SetMode((StreamlineManager::Mode)s.value("mo", (int)DX12Context::g_streamline.GetMode()));
     DX12Context::g_streamline.SetQuality((StreamlineManager::Quality)s.value("qu", (int)StreamlineManager::Quality::Balanced));
   }
   if (j.contains("dxr")) {
