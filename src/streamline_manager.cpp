@@ -199,8 +199,6 @@ void StreamlineManager::SetMirrorLogsToStderr(bool enabled) {
 }
 
 bool StreamlineManager::InitializeEarly() {
-  if (!m_enabled)
-    return false;
   if (m_initialized)
     return true;
 

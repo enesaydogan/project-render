@@ -6,6 +6,7 @@ class DX12View;
 class QAction;
 class QLabel;
 class QProgressBar;
+class QFrame;
 class QTimer;
 
 class MainWindow : public QMainWindow
@@ -35,5 +36,7 @@ private:
     QAction *m_loadSceneAction = nullptr;
     QProgressBar *m_sceneIoProgress = nullptr;
     QLabel *m_sceneIoLabel = nullptr;
+    QLabel *m_statusStatsLabel = nullptr;
+    QFrame *m_statusDivider = nullptr;
     QTimer *m_sceneIoTimer = nullptr;
 };
