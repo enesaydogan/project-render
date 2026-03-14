@@ -165,7 +165,7 @@ private:
 
   HMODULE m_interposerModule = nullptr;
 
-  bool m_enabled = true;
+  bool m_enabled = false;
   bool m_initialized = false;
   bool m_deviceSet = false;
   bool m_featureFunctionsReady = false;

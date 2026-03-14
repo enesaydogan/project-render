@@ -46,6 +46,8 @@ bool InitD3D12(HWND hwnd);
 void ResizeSwapChain(UINT width, UINT height);
 void WaitForPreviousFrame();
 void WaitGPUIdle();
+void QueueResize(UINT width, UINT height);
+bool ConsumePendingResize(UINT &width, UINT &height);
 
 // GPU Adapter query
 void GetHardwareAdapter(IDXGIFactory4 *pFactory, IDXGIAdapter1 **ppAdapter);

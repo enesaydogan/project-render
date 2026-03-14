@@ -45,7 +45,7 @@ CameraCB g_initialCameraData = {
     1.0f,                           // cloudRenderingEnabled (default ON)
     0.0f,                           // iblRotationDegrees
     1.0f,                          // sampleEnvSolidAngle (default true)
-    0.0f,                          // nrdEnabled
+    1.0f,                          // nrdEnabled
     0.0f                           // _cameraPadEnd
 };
 CameraCB g_cameraData = g_initialCameraData;

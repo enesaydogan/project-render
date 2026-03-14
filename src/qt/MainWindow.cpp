@@ -21,6 +21,7 @@
 #include <QVBoxLayout>
 #include <QMenuBar>
 #include <QProgressBar>
+#include <QScrollArea>
 #include <QToolBar>
 #include <QStatusBar>
 #include <QTimer>
@@ -311,7 +312,17 @@ void MainWindow::createToolBar()
 
 void MainWindow::createDocks()
 {
-    auto createDock = [this](const QString &title,
+    auto wrapScroll = [](QWidget *content, QWidget *parent) {
+        auto *scroll = new QScrollArea(parent);
+        scroll->setWidget(content);
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        scroll->setSizeAdjustPolicy(QAbstractScrollArea::AdjustIgnored);
+        return scroll;
+    };
+
+    auto createDock = [this, &wrapScroll](const QString &title,
                              Qt::DockWidgetArea area,
                              const QString &text) {
         auto *dock = new QDockWidget(title, this);
@@ -321,7 +332,7 @@ void MainWindow::createDocks()
         auto *label = new QLabel(text, dock);
         label->setWordWrap(true);
         label->setMargin(12);
-        dock->setWidget(label);
+        dock->setWidget(wrapScroll(label, dock));
 
         addDockWidget(area, dock);
         return dock;
@@ -330,7 +341,7 @@ void MainWindow::createDocks()
     auto *sceneDock = new QDockWidget(tr("Scene"), this);
     sceneDock->setObjectName(tr("Scene"));
     sceneDock->setAllowedAreas(Qt::AllDockWidgetAreas);
-    sceneDock->setWidget(new ScenePanel(sceneDock));
+    sceneDock->setWidget(wrapScroll(new ScenePanel(sceneDock), sceneDock));
     addDockWidget(Qt::LeftDockWidgetArea, sceneDock);
     QDockWidget *materialsDock = createDock(
         tr("Materials"), Qt::RightDockWidgetArea,
@@ -338,12 +349,15 @@ void MainWindow::createDocks()
     auto *renderDock = new QDockWidget(tr("Render Settings"), this);
     renderDock->setObjectName(tr("Render Settings"));
     renderDock->setAllowedAreas(Qt::AllDockWidgetAreas);
-    renderDock->setWidget(new RenderSettingsPanel(renderDock));
+    {
+        auto *renderPanel = new RenderSettingsPanel(renderDock);
+        renderDock->setWidget(wrapScroll(renderPanel, renderDock));
+    }
     addDockWidget(Qt::RightDockWidgetArea, renderDock);
     auto *lightsDock = new QDockWidget(tr("Lights"), this);
     lightsDock->setObjectName(tr("Lights"));
     lightsDock->setAllowedAreas(Qt::AllDockWidgetAreas);
-    lightsDock->setWidget(new LightsPanel(lightsDock));
+    lightsDock->setWidget(wrapScroll(new LightsPanel(lightsDock), lightsDock));
     addDockWidget(Qt::BottomDockWidgetArea, lightsDock);
 
     splitDockWidget(materialsDock, renderDock, Qt::Vertical);

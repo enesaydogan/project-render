@@ -33,6 +33,10 @@ FrameResource g_frameResources[FrameCount] = {};
 UINT g_windowWidth = 1280;
 UINT g_windowHeight = 720;
 
+static bool g_hasPendingResize = false;
+static UINT g_pendingResizeWidth = 0;
+static UINT g_pendingResizeHeight = 0;
+
 // Need external reference to StreamlineManager to initialize early
 
 static void EnableD3D12DebugLayer() {
@@ -286,6 +290,26 @@ void WaitGPUIdle() {
   for (UINT i = 0; i < FrameCount; ++i) {
     g_fenceValues[i] = waitValue + 1;
   }
+}
+
+void QueueResize(UINT width, UINT height) {
+  if (width == 0 || height == 0)
+    return;
+  if (!g_hasPendingResize && width == g_windowWidth &&
+      height == g_windowHeight)
+    return;
+  g_pendingResizeWidth = width;
+  g_pendingResizeHeight = height;
+  g_hasPendingResize = true;
+}
+
+bool ConsumePendingResize(UINT &width, UINT &height) {
+  if (!g_hasPendingResize)
+    return false;
+  width = g_pendingResizeWidth;
+  height = g_pendingResizeHeight;
+  g_hasPendingResize = false;
+  return true;
 }
 
 void ResizeSwapChain(UINT width, UINT height) {
