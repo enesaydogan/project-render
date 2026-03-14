@@ -70,6 +70,12 @@
     <ClCompile Include="D:\project-render\src\grass_manager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\project-render\src\qt\CameraPanel.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\project-render\src\qt\EnvironmentPanel.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="D:\project-render\src\qt\MainWindow.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

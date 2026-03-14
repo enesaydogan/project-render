@@ -60,6 +60,8 @@ target_sources(project-render PRIVATE
 
 if(USE_QT_UI)
   target_sources(project-render PRIVATE
+  src/qt/CameraPanel.cpp
+  src/qt/EnvironmentPanel.cpp
       src/qt/MainWindow.cpp
       src/qt/DX12View.cpp
       src/qt/RenderSettingsPanel.cpp

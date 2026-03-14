@@ -165,14 +165,14 @@ private:
 
   HMODULE m_interposerModule = nullptr;
 
-  bool m_enabled = false;
+  bool m_enabled = true;
   bool m_initialized = false;
   bool m_deviceSet = false;
   bool m_featureFunctionsReady = false;
 
   uint32_t m_applicationId = 24;
 
-  Mode m_mode = Mode::Off;
+  Mode m_mode = Mode::DLSS_RayReconstruction;
   Quality m_quality = Quality::Balanced;
 
   sl::ViewportHandle m_viewport{123};

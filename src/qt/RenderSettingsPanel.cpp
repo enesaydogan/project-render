@@ -187,6 +187,9 @@ void RenderSettingsPanel::createUi()
     auto *realtimeForm = new QFormLayout(realtimeGroup);
     m_realtimeDenoiser = new QComboBox(realtimeGroup);
     m_realtimeDenoiser->addItems({tr("Off"), tr("SVGF"), tr("NRD (ReLAX)")});
+    m_realtimeDenoiser->setEnabled(false);
+    m_realtimeDenoiser->setToolTip(
+        tr("Realtime denoisers are temporarily disabled in the Qt UI."));
     m_resetRealtimeHistory = new QPushButton(tr("Reset History"), realtimeGroup);
     realtimeForm->addRow(tr("Mode"), m_realtimeDenoiser);
     realtimeForm->addRow(m_resetRealtimeHistory);
@@ -274,16 +277,6 @@ void RenderSettingsPanel::createUi()
     bloomForm->addRow(tr("Threshold"), m_bloomThreshold);
     bloomForm->addRow(tr("Intensity"), m_bloomIntensity);
     rasterLayout->addWidget(bloomGroup);
-
-    auto *tonemapGroup = new QGroupBox(tr("Tonemap"), m_rasterSection);
-    auto *tonemapForm = new QFormLayout(tonemapGroup);
-    m_tonemapVignette = CreateDoubleSpinBox(0.0, 1.0, 0.01, 2);
-    m_tonemapSaturation = CreateDoubleSpinBox(0.0, 2.0, 0.01, 2);
-    m_tonemapContrast = CreateDoubleSpinBox(0.0, 2.0, 0.01, 2);
-    tonemapForm->addRow(tr("Vignette"), m_tonemapVignette);
-    tonemapForm->addRow(tr("Saturation"), m_tonemapSaturation);
-    tonemapForm->addRow(tr("Contrast"), m_tonemapContrast);
-    rasterLayout->addWidget(tonemapGroup);
 
     layout->addWidget(m_rasterSection);
     layout->addStretch(1);
@@ -396,10 +389,6 @@ void RenderSettingsPanel::createUi()
         rs.enableBloom = m_enableBloom->isChecked();
         rs.bloomThreshold = static_cast<float>(m_bloomThreshold->value());
         rs.bloomIntensity = static_cast<float>(m_bloomIntensity->value());
-
-        rs.tonemapVignette = static_cast<float>(m_tonemapVignette->value());
-        rs.tonemapSaturation = static_cast<float>(m_tonemapSaturation->value());
-        rs.tonemapContrast = static_cast<float>(m_tonemapContrast->value());
     };
 
     connect(m_resetButton, &QPushButton::clicked, this, [this]() {
@@ -425,9 +414,6 @@ void RenderSettingsPanel::createUi()
     connect(m_bloomThreshold, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
     connect(m_bloomIntensity, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
 
-    connect(m_tonemapVignette, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
-    connect(m_tonemapSaturation, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
-    connect(m_tonemapContrast, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
 }
 
 void RenderSettingsPanel::syncFromRenderer()
@@ -464,6 +450,7 @@ void RenderSettingsPanel::syncFromRenderer()
 
     m_realtimeDenoiser->setCurrentIndex(
         RealtimeDenoiserIndexFromMode(DxrRenderer::GetRealtimeDenoiserMode()));
+    m_realtimeDenoiser->setEnabled(false);
 
     m_dlssEnabled->setChecked(DX12Context::g_streamline.IsEnabled());
     m_dlssMode->setCurrentIndex(StreamlineModeIndex(DX12Context::g_streamline.GetMode()));
@@ -506,10 +493,6 @@ void RenderSettingsPanel::syncFromRenderer()
     m_bloomThreshold->setValue(rs.bloomThreshold);
     m_bloomIntensity->setValue(rs.bloomIntensity);
 
-    m_tonemapVignette->setValue(rs.tonemapVignette);
-    m_tonemapSaturation->setValue(rs.tonemapSaturation);
-    m_tonemapContrast->setValue(rs.tonemapContrast);
-
     m_ssrStepSize->setEnabled(rs.enableSSR);
     m_ssrThickness->setEnabled(rs.enableSSR);
     m_ssrIntensity->setEnabled(rs.enableSSR);
@@ -547,6 +530,7 @@ void RenderSettingsPanel::applyCameraSettings()
     }
     g_cameraData.noiseThreshold = static_cast<float>(m_targetNoise->value() / 100.0);
     UpdateCameraCB();
+    DxrRenderer::ResetAccumulation();
 }
 
 void RenderSettingsPanel::recreateDxrPipeline(const char *context)
