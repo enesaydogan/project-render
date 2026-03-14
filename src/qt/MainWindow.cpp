@@ -4,8 +4,11 @@
 #include "RenderSettingsPanel.h"
 #include "ScenePanel.h"
 #include "../dx12_context.h"
+#include "../dxr_renderer.h"
 #include "../editor_ui.h"
 #include "../file_import.h"
+#include "../scene.h"
+#include "../streamline_manager.h"
 #include <QAction>
 #include <QCloseEvent>
 #include <QDockWidget>
@@ -16,6 +19,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QFrame>
 #include <QProcess>
 #include <QPushButton>
 #include <QVBoxLayout>
@@ -37,8 +41,84 @@
 
 extern bool g_appClosing;
 extern HWND g_hwnd;
+extern RenderMode g_currentRenderMode;
 
 namespace {
+
+struct MemoryStats {
+    double usedGb = 0.0;
+    double totalGb = 0.0;
+    bool valid = false;
+};
+
+double BytesToGb(UINT64 bytes)
+{
+    return static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0);
+}
+
+MemoryStats ReadRamStats()
+{
+    MEMORYSTATUSEX statex = {};
+    statex.dwLength = sizeof(statex);
+    if (!GlobalMemoryStatusEx(&statex)) {
+        return {};
+    }
+    MemoryStats stats;
+    const UINT64 total = statex.ullTotalPhys;
+    const UINT64 avail = statex.ullAvailPhys;
+    stats.usedGb = BytesToGb(total - avail);
+    stats.totalGb = BytesToGb(total);
+    stats.valid = true;
+    return stats;
+}
+
+MemoryStats ReadGpuMemoryStats()
+{
+    if (!DX12Context::g_device) {
+        return {};
+    }
+
+    const LUID luid = DX12Context::g_device->GetAdapterLuid();
+    ComPtr<IDXGIAdapter1> adapter;
+    if (DX12Context::g_factory) {
+        DX12Context::g_factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&adapter));
+    }
+    if (!adapter) {
+        ComPtr<IDXGIFactory4> factory;
+        if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
+            factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&adapter));
+        }
+    }
+    if (!adapter) {
+        return {};
+    }
+
+    ComPtr<IDXGIAdapter3> adapter3;
+    if (FAILED(adapter.As(&adapter3)) || !adapter3) {
+        return {};
+    }
+
+    MemoryStats stats;
+    DXGI_QUERY_VIDEO_MEMORY_INFO info = {};
+    HRESULT hr = adapter3->QueryVideoMemoryInfo(
+        0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info);
+    if (SUCCEEDED(hr) && info.Budget > 0) {
+        stats.usedGb = BytesToGb(info.CurrentUsage);
+        stats.totalGb = BytesToGb(info.Budget);
+        stats.valid = true;
+        return stats;
+    }
+
+    hr = adapter3->QueryVideoMemoryInfo(
+        0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &info);
+    if (SUCCEEDED(hr) && info.Budget > 0) {
+        stats.usedGb = BytesToGb(info.CurrentUsage);
+        stats.totalGb = BytesToGb(info.Budget);
+        stats.valid = true;
+    }
+
+    return stats;
+}
 
 QString ReadGitHash()
 {
@@ -402,14 +482,76 @@ void MainWindow::updateSceneIoUi()
         m_sceneIoProgress->setRange(0, 100);
         m_sceneIoProgress->setTextVisible(false);
         m_sceneIoProgress->setMinimumWidth(180);
-        statusBar()->addPermanentWidget(m_sceneIoProgress);
+        statusBar()->addWidget(m_sceneIoProgress);
         m_sceneIoProgress->hide();
     }
     if (!m_sceneIoLabel) {
         m_sceneIoLabel = new QLabel(this);
         m_sceneIoLabel->setMinimumWidth(260);
-        statusBar()->addPermanentWidget(m_sceneIoLabel);
+        statusBar()->addWidget(m_sceneIoLabel);
         m_sceneIoLabel->hide();
+    }
+    if (!m_statusDivider) {
+        m_statusDivider = new QFrame(this);
+        m_statusDivider->setFrameShape(QFrame::VLine);
+        m_statusDivider->setFrameShadow(QFrame::Sunken);
+        statusBar()->addPermanentWidget(m_statusDivider);
+    }
+    if (!m_statusStatsLabel) {
+        m_statusStatsLabel = new QLabel(this);
+        m_statusStatsLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        statusBar()->addPermanentWidget(m_statusStatsLabel);
+    }
+
+    {
+        QStringList parts;
+        const bool dxrMode = (g_currentRenderMode == RenderMode::DXR);
+        if (dxrMode) {
+            parts << tr("SPP %1").arg(DxrRenderer::GetDisplayedSampleCount());
+            const float gpuMs = DxrRenderer::GetGPUFrameTimeMs();
+            if (gpuMs > 0.01f) {
+                parts << tr("GPU %1 ms").arg(QString::number(gpuMs, 'f', 2));
+            } else {
+                parts << tr("GPU n/a");
+            }
+        } else {
+            parts << tr("SPP -");
+            parts << tr("GPU -");
+        }
+
+        const UINT outW = DX12Context::g_windowWidth;
+        const UINT outH = DX12Context::g_windowHeight;
+        if (outW > 0 && outH > 0) {
+            const auto rec =
+                DX12Context::g_streamline.GetRecommendedRenderSize(outW, outH);
+            parts << tr("Res %1x%2 -> %3x%4")
+                         .arg(rec.renderWidth)
+                         .arg(rec.renderHeight)
+                         .arg(outW)
+                         .arg(outH);
+        } else {
+            parts << tr("Res n/a");
+        }
+
+        const MemoryStats vram = ReadGpuMemoryStats();
+        if (vram.valid && vram.totalGb > 0.1) {
+            parts << tr("VRAM %1/%2 GB")
+                         .arg(vram.usedGb, 0, 'f', 1)
+                         .arg(vram.totalGb, 0, 'f', 1);
+        } else {
+            parts << tr("VRAM n/a");
+        }
+
+        const MemoryStats ram = ReadRamStats();
+        if (ram.valid && ram.totalGb > 0.1) {
+            parts << tr("RAM %1/%2 GB")
+                         .arg(ram.usedGb, 0, 'f', 1)
+                         .arg(ram.totalGb, 0, 'f', 1);
+        } else {
+            parts << tr("RAM n/a");
+        }
+
+        m_statusStatsLabel->setText(parts.join(QStringLiteral(" | ")));
     }
 
     const bool active = IsSceneIoJobActive();
