@@ -51,6 +51,12 @@ void SelectMaterial(int materialIndex) {
   s_pendingMaterialSelect = materialIndex;
 }
 
+int ConsumePendingMaterialSelect() {
+  const int pending = s_pendingMaterialSelect;
+  s_pendingMaterialSelect = -1;
+  return pending;
+}
+
 static std::string WStringToUtf8Local(const std::wstring &ws) {
   if (ws.empty())
     return {};
@@ -176,10 +182,11 @@ void Draw(HWND hwnd, bool &visible) {
     };
 
     // Handle external selection request (picking)
-    if (s_pendingMaterialSelect != -1) {
-      if (s_pendingMaterialSelect >= 0 &&
-          s_pendingMaterialSelect < (int)g_loadedMaterials.size()) {
-        s_selectedMaterial = s_pendingMaterialSelect;
+    const int pendingSelect = ConsumePendingMaterialSelect();
+    if (pendingSelect != -1) {
+      if (pendingSelect >= 0 &&
+          pendingSelect < (int)g_loadedMaterials.size()) {
+        s_selectedMaterial = pendingSelect;
         // If we're scoped to the selected node and the picked material isn't in
         // it, auto-switch to all.
         if (!s_showAllMaterials && selectedNode) {
@@ -196,7 +203,6 @@ void Draw(HWND hwnd, bool &visible) {
         fprintf(stderr, "MaterialEditor: picked material index %d\n",
                 s_selectedMaterial);
       }
-      s_pendingMaterialSelect = -1;
     }
 
     // If node changed and we're scoped, keep selection stable if possible.
