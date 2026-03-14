@@ -4,6 +4,7 @@
 #include "../scene.h"
 
 #include <QHBoxLayout>
+#include <QFileInfo>
 #include <QLabel>
 #include <QListWidget>
 #include <QProgressBar>
@@ -43,12 +44,21 @@ void ScenePanel::createUi()
 
     auto *buttonRow = new QHBoxLayout();
     m_importButton = new QPushButton(tr("Import Model"), this);
+    m_reimportButton = new QPushButton(tr("Reimport Selected"), this);
     m_addPlaneButton = new QPushButton(tr("Add Ground Plane"), this);
     m_deleteButton = new QPushButton(tr("Delete Selected"), this);
     buttonRow->addWidget(m_importButton);
+    buttonRow->addWidget(m_reimportButton);
     buttonRow->addWidget(m_addPlaneButton);
     buttonRow->addWidget(m_deleteButton);
     layout->addLayout(buttonRow);
+
+    m_sourceLabel = new QLabel(this);
+    m_sourceLabel->setWordWrap(true);
+    m_sourceLabel->setTextFormat(Qt::RichText);
+    m_sourceLabel->setTextInteractionFlags(Qt::TextBrowserInteraction);
+    m_sourceLabel->setOpenExternalLinks(false);
+    layout->addWidget(m_sourceLabel);
 
     m_nodeList = new QListWidget(this);
     layout->addWidget(m_nodeList);
@@ -63,6 +73,13 @@ void ScenePanel::createUi()
             owner = g_hwnd;
         }
         Scene::ImportModelWithDialog(owner);
+    });
+    connect(m_reimportButton, &QPushButton::clicked, this, [this]() {
+        const int row = m_nodeList->currentRow();
+        if (row >= 0) {
+            Scene::ReimportNode(static_cast<size_t>(row));
+            refreshSceneList();
+        }
     });
     connect(m_addPlaneButton, &QPushButton::clicked, this, []() {
         Scene::AddDefaultPlane(0.0f);
@@ -79,6 +96,16 @@ void ScenePanel::createUi()
             return;
         }
         Scene::SelectNode(static_cast<size_t>(row));
+    });
+    connect(m_sourceLabel, &QLabel::linkActivated, this, [this](const QString &link) {
+        if (link != QStringLiteral("reimport")) {
+            return;
+        }
+        const int row = m_nodeList->currentRow();
+        if (row >= 0) {
+            Scene::ReimportNode(static_cast<size_t>(row));
+            refreshSceneList();
+        }
     });
 }
 
@@ -143,6 +170,20 @@ void ScenePanel::refreshSceneList()
 
     if (selectedRow >= 0 && selectedRow < m_nodeList->count()) {
         m_nodeList->setCurrentRow(selectedRow);
+    }
+
+    if (selectedRow >= 0 && selectedRow < static_cast<int>(nodes.size()) &&
+        Scene::CanReimportNode(static_cast<size_t>(selectedRow))) {
+        const QString sourcePath = QString::fromStdString(nodes[static_cast<size_t>(selectedRow)].sourcePath);
+        const QString fileName = QFileInfo(sourcePath).fileName().toHtmlEscaped();
+        m_sourceLabel->setText(tr("Linked source: <a href=\"reimport\">%1</a>").arg(fileName));
+        m_sourceLabel->setToolTip(sourcePath);
+        m_sourceLabel->show();
+        m_reimportButton->setEnabled(!importing);
+    } else {
+        m_sourceLabel->hide();
+        m_sourceLabel->clear();
+        m_reimportButton->setEnabled(false);
     }
 
     m_statusLabel->setText(

@@ -54,6 +54,8 @@ static std::mutex s_pendingMutex;
 static ImGuizmo::OPERATION g_currentGizmoOp = ImGuizmo::TRANSLATE;
 static ImGuizmo::MODE g_currentGizmoMode = ImGuizmo::WORLD;
 
+static void EnsureGpuBuffersForMeshes(std::vector<Asset::GpuMesh> &meshes);
+
 static ImGuizmo::OPERATION GetActiveGizmoOperation() {
   if (g_currentGizmoOp == ImGuizmo::ROTATE) {
     return static_cast<ImGuizmo::OPERATION>(ImGuizmo::ROTATE_X |
@@ -203,6 +205,142 @@ void BuildProjectionMatrix(float *mat) {
 
 static std::string s_lastStatus;
 
+static void AdjustMaterialTextureIndices(std::vector<Asset::Material> &materials,
+                                         size_t textureBase) {
+  for (size_t i = 0; i < materials.size(); ++i) {
+    Asset::Material &m = materials[i];
+    if (m.diffuseTexture >= 0)
+      m.diffuseTexture += (int)textureBase;
+    if (m.normalTexture >= 0)
+      m.normalTexture += (int)textureBase;
+    if (m.occlusionTexture >= 0)
+      m.occlusionTexture += (int)textureBase;
+    if (m.emissiveTexture >= 0)
+      m.emissiveTexture += (int)textureBase;
+    if (m.metalRoughTexture >= 0)
+      m.metalRoughTexture += (int)textureBase;
+  }
+}
+
+static void InitializeNodeImportLinkage(Node &node,
+                                        size_t materialBase,
+                                        const std::vector<Asset::Material> &materials) {
+  node.linkedMaterialIndices.clear();
+  node.linkedMaterialSourceNames.clear();
+  node.linkedMaterialIndices.reserve(materials.size());
+  node.linkedMaterialSourceNames.reserve(materials.size());
+  for (size_t i = 0; i < materials.size(); ++i) {
+    node.linkedMaterialIndices.push_back((int)(materialBase + i));
+    node.linkedMaterialSourceNames.emplace_back(materials[i].name);
+  }
+}
+
+static std::vector<int> BuildLegacyLinkedMaterialIndices(const Node &node) {
+  std::vector<int> indices;
+  for (size_t meshIndex : node.meshIndices) {
+    if (meshIndex >= g_loadedMeshes.size()) {
+      continue;
+    }
+    const int materialIndex = g_loadedMeshes[meshIndex].materialIndex;
+    if (materialIndex < 0) {
+      continue;
+    }
+    if (std::find(indices.begin(), indices.end(), materialIndex) == indices.end()) {
+      indices.push_back(materialIndex);
+    }
+  }
+  std::sort(indices.begin(), indices.end());
+  return indices;
+}
+
+static std::vector<std::string> BuildLegacyLinkedMaterialNames(const std::vector<int> &indices) {
+  std::vector<std::string> names;
+  names.reserve(indices.size());
+  for (int index : indices) {
+    if (index >= 0 && index < (int)g_loadedMaterials.size()) {
+      names.emplace_back(g_loadedMaterials[index].name);
+    } else {
+      names.emplace_back();
+    }
+  }
+  return names;
+}
+
+static void ClearNodeMeshes(const Node &node) {
+  for (size_t meshIndex : node.meshIndices) {
+    if (meshIndex >= g_loadedMeshes.size()) {
+      continue;
+    }
+    g_loadedMeshes[meshIndex].vertexBuffer.Reset();
+    g_loadedMeshes[meshIndex].indexBuffer.Reset();
+    g_loadedMeshes[meshIndex].vertexCount = 0;
+    g_loadedMeshes[meshIndex].indexCount = 0;
+  }
+}
+
+static bool FinalizeImportedNode(const std::string &srcPath,
+                                 std::vector<Asset::GpuMesh> meshes,
+                                 std::vector<Asset::Material> materials,
+                                 std::vector<Asset::Texture> textures) {
+  EnsureGpuBuffersForMeshes(meshes);
+
+  const size_t meshBase = g_loadedMeshes.size();
+  const size_t materialBase = g_loadedMaterials.size();
+  const size_t textureBase = g_loadedTextures.size();
+
+  AdjustMaterialTextureIndices(materials, textureBase);
+
+  g_loadedMeshes.insert(g_loadedMeshes.end(), meshes.begin(), meshes.end());
+  g_loadedMaterials.insert(g_loadedMaterials.end(), materials.begin(), materials.end());
+  g_loadedTextures.insert(g_loadedTextures.end(), textures.begin(), textures.end());
+
+  for (size_t i = 0; i < meshes.size(); ++i) {
+    int &materialIndex = g_loadedMeshes[meshBase + i].materialIndex;
+    if (materialIndex >= 0) {
+      materialIndex += (int)materialBase;
+    }
+  }
+
+  RegisterTextures(textures);
+
+  Node node;
+  node.name = fs::path(srcPath).filename().string();
+  node.sourcePath = srcPath;
+  for (size_t i = 0; i < meshes.size(); ++i) {
+    node.meshIndices.push_back(meshBase + i);
+  }
+  InitializeNodeImportLinkage(node, materialBase, materials);
+  s_nodes.push_back(std::move(node));
+
+  s_lastStatus = std::string("Loaded: ") + srcPath;
+  fprintf(stderr, "%s\n", s_lastStatus.c_str());
+
+  RebuildAccelerationStructures();
+  DxrRenderer::CreateRayTracingPipeline(0, 0);
+  DxrRenderer::ResetAccumulation();
+  return true;
+}
+
+static int FindLinkedMaterialByName(const std::vector<std::string> &sourceNames,
+                                    const std::vector<int> &globalIndices,
+                                    const std::string &name,
+                                    std::vector<bool> *used) {
+  if (!used) {
+    return -1;
+  }
+  for (size_t i = 0; i < sourceNames.size() && i < globalIndices.size(); ++i) {
+    if ((*used)[i]) {
+      continue;
+    }
+    if (sourceNames[i] == name && globalIndices[i] >= 0 &&
+        globalIndices[i] < (int)g_loadedMaterials.size()) {
+      (*used)[i] = true;
+      return globalIndices[i];
+    }
+  }
+  return -1;
+}
+
 Node::Node() {
   name = "New Node";
   // Identity matrix
@@ -259,63 +397,8 @@ void ProcessPendingImport() {
     s_pendingPath.clear();
   }
   s_pendingReady = false;
-  EnsureGpuBuffersForMeshes(meshes);
-
-  // Merge into global lists (same logic as ImportModel)
-  size_t meshBase = g_loadedMeshes.size();
-  size_t materialBase = g_loadedMaterials.size();
-  size_t textureBase = g_loadedTextures.size();
-
-  g_loadedMeshes.insert(g_loadedMeshes.end(), meshes.begin(), meshes.end());
-  g_loadedMaterials.insert(g_loadedMaterials.end(), materials.begin(),
-                           materials.end());
-  g_loadedTextures.insert(g_loadedTextures.end(), textures.begin(),
-                          textures.end());
-
-  for (size_t i = 0; i < meshes.size(); ++i) {
-    int &mi = g_loadedMeshes[meshBase + i].materialIndex;
-    if (mi >= 0)
-      mi = mi + (int)materialBase;
-  }
-
-  for (size_t i = 0; i < materials.size(); ++i) {
-    Asset::Material &m = g_loadedMaterials[materialBase + i];
-    if (m.diffuseTexture >= 0)
-      m.diffuseTexture += (int)textureBase;
-    if (m.normalTexture >= 0)
-      m.normalTexture += (int)textureBase;
-    if (m.occlusionTexture >= 0)
-      m.occlusionTexture += (int)textureBase;
-    if (m.emissiveTexture >= 0)
-      m.emissiveTexture += (int)textureBase;
-    if (m.metalRoughTexture >= 0)
-      m.metalRoughTexture += (int)textureBase;
-  }
-
-  RegisterTextures(textures);
-
-  // Create a scene node for this import
-  Node node;
-  node.name = fs::path(srcPath).filename().string();
-  node.sourcePath = srcPath;
-  for (size_t i = 0; i < meshes.size(); ++i)
-    node.meshIndices.push_back(meshBase + i);
-  s_nodes.push_back(node);
-
-  s_lastStatus = std::string("Loaded: ") + srcPath;
-  fprintf(stderr, "%s\n", s_lastStatus.c_str());
-
-  // Rebuild AS and pipeline on main thread
-  fprintf(stderr, "RebuildAccelerationStructures: start\n");
-  fflush(stderr);
-  RebuildAccelerationStructures();
-  fprintf(stderr, "RebuildAccelerationStructures: done\n");
-  fflush(stderr);
-  fprintf(stderr, "CreateRayTracingPipeline: start\n");
-  fflush(stderr);
-  DxrRenderer::CreateRayTracingPipeline(0, 0);
-  fprintf(stderr, "CreateRayTracingPipeline: done\n");
-  fflush(stderr);
+  FinalizeImportedNode(srcPath, std::move(meshes), std::move(materials),
+                       std::move(textures));
 
   // Clear import-in-progress flag
   s_importInProgress = false;
@@ -348,67 +431,8 @@ bool ImportModel(const std::string &utf8path, const float *rootTranslation) {
       fprintf(stderr, "%s\n", s_lastStatus.c_str());
       return false;
     }
-    EnsureGpuBuffersForMeshes(meshes);
-
-    size_t meshBase = g_loadedMeshes.size();
-    size_t materialBase = g_loadedMaterials.size();
-    size_t textureBase = g_loadedTextures.size();
-
-    g_loadedMeshes.insert(g_loadedMeshes.end(), meshes.begin(), meshes.end());
-    g_loadedMaterials.insert(g_loadedMaterials.end(), materials.begin(),
-                             materials.end());
-    g_loadedTextures.insert(g_loadedTextures.end(), textures.begin(),
-                            textures.end());
-
-    // Adjust newly-inserted meshes' material indices to global material base
-    for (size_t i = 0; i < meshes.size(); ++i) {
-      int &mi = g_loadedMeshes[meshBase + i].materialIndex;
-      if (mi >= 0)
-        mi = mi + (int)materialBase;
-    }
-
-    // Adjust newly-inserted materials to reference global texture indices
-    for (size_t i = 0; i < materials.size(); ++i) {
-      Asset::Material &m = g_loadedMaterials[materialBase + i];
-      if (m.diffuseTexture >= 0)
-        m.diffuseTexture += (int)textureBase;
-      if (m.normalTexture >= 0)
-        m.normalTexture += (int)textureBase;
-      if (m.occlusionTexture >= 0)
-        m.occlusionTexture += (int)textureBase;
-      if (m.emissiveTexture >= 0)
-        m.emissiveTexture += (int)textureBase;
-      if (m.metalRoughTexture >= 0)
-        m.metalRoughTexture += (int)textureBase;
-    }
-
-    RegisterTextures(textures);
-
-    // Create a single parent node for this import, named after the source
-    // file. All imported meshes are attached to this node.
-    Node node;
-    node.name = std::filesystem::path(utf8path).filename().string();
-    node.sourcePath = utf8path;
-    for (size_t i = 0; i < meshes.size(); ++i)
-      node.meshIndices.push_back(meshBase + i);
-    s_nodes.push_back(node);
-
-    s_lastStatus = std::string("Loaded: ") + utf8path;
-    fprintf(stderr, "%s\n", s_lastStatus.c_str());
-
-    // Rebuild AS for current active meshes
-    fprintf(stderr, "RebuildAccelerationStructures: start\n");
-    fflush(stderr);
-    RebuildAccelerationStructures();
-    fprintf(stderr, "RebuildAccelerationStructures: done\n");
-    fflush(stderr);
-    // Recreate DXR pipeline so it can merge texture descriptors (if any)
-    fprintf(stderr, "CreateRayTracingPipeline: start\n");
-    fflush(stderr);
-    DxrRenderer::CreateRayTracingPipeline(0, 0);
-    fprintf(stderr, "CreateRayTracingPipeline: done\n");
-    fflush(stderr);
-    return true;
+    return FinalizeImportedNode(utf8path, std::move(meshes),
+                                std::move(materials), std::move(textures));
   } catch (const std::exception &e) {
     s_lastStatus = std::string("Import exception: ") + e.what();
     fprintf(stderr, "%s\n", s_lastStatus.c_str());
@@ -580,6 +604,118 @@ bool ImportHDRWithDialog(HWND hwnd) {
 }
 
 const std::vector<Node> &GetNodes() { return s_nodes; }
+
+bool CanReimportNode(size_t index) {
+  return index < s_nodes.size() && !s_nodes[index].sourcePath.empty();
+}
+
+bool ReimportNode(size_t index) {
+  if (!CanReimportNode(index)) {
+    s_lastStatus = "Reimport failed: node has no linked source.";
+    return false;
+  }
+
+  Node &node = s_nodes[index];
+  const std::string srcPath = node.sourcePath;
+  if (!fs::exists(fs::path(srcPath))) {
+    s_lastStatus = std::string("Reimport failed: source missing: ") + srcPath;
+    fprintf(stderr, "%s\n", s_lastStatus.c_str());
+    return false;
+  }
+
+  try {
+    WaitGPUIdle();
+
+    std::vector<Asset::GpuMesh> meshes;
+    std::vector<Asset::Material> materials;
+    std::vector<Asset::Texture> textures;
+    if (!Asset::LoadModel(srcPath, meshes, &materials, &textures, nullptr) ||
+        meshes.empty()) {
+      s_lastStatus = std::string("Reimport failed: ") + srcPath;
+      fprintf(stderr, "%s\n", s_lastStatus.c_str());
+      return false;
+    }
+
+    EnsureGpuBuffersForMeshes(meshes);
+
+    std::vector<int> linkedMaterialIndices = node.linkedMaterialIndices;
+    std::vector<std::string> linkedMaterialNames = node.linkedMaterialSourceNames;
+    if (linkedMaterialIndices.empty()) {
+      linkedMaterialIndices = BuildLegacyLinkedMaterialIndices(node);
+    }
+    if (linkedMaterialNames.size() != linkedMaterialIndices.size()) {
+      linkedMaterialNames = BuildLegacyLinkedMaterialNames(linkedMaterialIndices);
+    }
+
+    std::vector<bool> reused(linkedMaterialIndices.size(), false);
+    std::vector<int> localToGlobal(materials.size(), -1);
+
+    const size_t textureBase = g_loadedTextures.size();
+    AdjustMaterialTextureIndices(materials, textureBase);
+    g_loadedTextures.insert(g_loadedTextures.end(), textures.begin(), textures.end());
+    RegisterTextures(textures);
+
+    for (size_t i = 0; i < materials.size(); ++i) {
+      const std::string importedName = materials[i].name;
+      int globalMaterialIndex =
+          FindLinkedMaterialByName(linkedMaterialNames, linkedMaterialIndices,
+                                   importedName, &reused);
+
+      if (globalMaterialIndex < 0 && i < linkedMaterialIndices.size()) {
+        const int fallbackIndex = linkedMaterialIndices[i];
+        if (fallbackIndex >= 0 && fallbackIndex < (int)g_loadedMaterials.size()) {
+          globalMaterialIndex = fallbackIndex;
+          reused[i] = true;
+        }
+      }
+
+      if (globalMaterialIndex < 0) {
+        globalMaterialIndex = (int)g_loadedMaterials.size();
+        g_loadedMaterials.push_back(materials[i]);
+      }
+
+      localToGlobal[i] = globalMaterialIndex;
+    }
+
+    const size_t meshBase = g_loadedMeshes.size();
+    for (size_t i = 0; i < meshes.size(); ++i) {
+      int &materialIndex = meshes[i].materialIndex;
+      if (materialIndex >= 0 && materialIndex < (int)localToGlobal.size()) {
+        materialIndex = localToGlobal[(size_t)materialIndex];
+      } else {
+        materialIndex = -1;
+      }
+    }
+
+    ClearNodeMeshes(node);
+    g_loadedMeshes.insert(g_loadedMeshes.end(), meshes.begin(), meshes.end());
+
+    node.meshIndices.clear();
+    node.meshIndices.reserve(meshes.size());
+    for (size_t i = 0; i < meshes.size(); ++i) {
+      node.meshIndices.push_back(meshBase + i);
+    }
+    node.name = fs::path(srcPath).filename().string();
+    node.linkedMaterialIndices = std::move(localToGlobal);
+    node.linkedMaterialSourceNames.clear();
+    node.linkedMaterialSourceNames.reserve(materials.size());
+    for (const Asset::Material &material : materials) {
+      node.linkedMaterialSourceNames.emplace_back(material.name);
+    }
+
+    RebuildAccelerationStructures();
+    DxrRenderer::CreateRayTracingPipeline(0, 0);
+    DxrRenderer::ResetAccumulation();
+
+    s_lastStatus = std::string("Reimported: ") + srcPath;
+    fprintf(stderr, "%s\n", s_lastStatus.c_str());
+    return true;
+  } catch (const std::exception &e) {
+    s_lastStatus = std::string("Reimport exception: ") + e.what();
+    fprintf(stderr, "%s\n", s_lastStatus.c_str());
+    return false;
+  }
+}
 
 void SelectNode(size_t index) {
   for (size_t i = 0; i < s_nodes.size(); ++i)

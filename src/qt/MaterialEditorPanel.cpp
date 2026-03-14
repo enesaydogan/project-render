@@ -1,5 +1,7 @@
 #include "MaterialEditorPanel.h"
 
+#include "SliderControl.h"
+
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -42,21 +44,16 @@ extern std::vector<Asset::Texture> g_loadedTextures;
 
 namespace {
 
-QDoubleSpinBox *CreateDoubleSpinBox(double minValue,
-                                    double maxValue,
-                                    double step,
-                                    int decimals)
+SliderControl *CreateSliderControl(double minValue,
+                                   double maxValue,
+                                   double step,
+                                   int decimals)
 {
-    auto *spinBox = new QDoubleSpinBox();
-    spinBox->setRange(minValue, maxValue);
-    spinBox->setSingleStep(step);
-    spinBox->setDecimals(decimals);
-    spinBox->setAccelerated(true);
-    return spinBox;
+    return new SliderControl(minValue, maxValue, step, decimals);
 }
 
-QWidget *CreateVec2Row(QDoubleSpinBox **outX,
-                       QDoubleSpinBox **outY,
+QWidget *CreateVec2Row(SliderControl **outX,
+                       SliderControl **outY,
                        double minValue,
                        double maxValue,
                        double step,
@@ -66,8 +63,8 @@ QWidget *CreateVec2Row(QDoubleSpinBox **outX,
     auto *layout = new QHBoxLayout(widget);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(6);
-    *outX = CreateDoubleSpinBox(minValue, maxValue, step, decimals);
-    *outY = CreateDoubleSpinBox(minValue, maxValue, step, decimals);
+    *outX = CreateSliderControl(minValue, maxValue, step, decimals);
+    *outY = CreateSliderControl(minValue, maxValue, step, decimals);
     layout->addWidget(*outX);
     layout->addWidget(*outY);
     return widget;
@@ -375,13 +372,14 @@ void MaterialEditorPanel::createUi()
     auto *surfaceForm = new QFormLayout(surfaceTab);
     m_baseColorButton = new QPushButton(tr("Pick"), surfaceTab);
     surfaceForm->addRow(tr("Base Color"), m_baseColorButton);
-    m_roughness = CreateDoubleSpinBox(0.0, 1.0, 0.01, 3);
+    m_roughness = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(tr("Roughness"), m_roughness);
-    m_metalness = CreateDoubleSpinBox(0.0, 1.0, 0.01, 3);
+    m_metalness = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(tr("Metalness"), m_metalness);
-    m_specularWeight = CreateDoubleSpinBox(0.0, 1.0, 0.01, 3);
+    m_specularWeight = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(tr("Specular Weight"), m_specularWeight);
-    m_ior = CreateDoubleSpinBox(0.01, 10.0, 0.01, 3);
+    m_ior = CreateSliderControl(0.01, 10.0, 0.01, 3);
+    m_ior->setLogarithmic(true);
     surfaceForm->addRow(tr("IOR"), m_ior);
 
     auto *transmissionDivider = new QFrame(surfaceTab);
@@ -389,15 +387,15 @@ void MaterialEditorPanel::createUi()
     transmissionDivider->setFrameShadow(QFrame::Sunken);
     surfaceForm->addRow(transmissionDivider);
 
-    m_transmission = CreateDoubleSpinBox(0.0, 1.0, 0.01, 3);
+    m_transmission = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(tr("Transmission"), m_transmission);
     m_transmissionColorButton = new QPushButton(tr("Pick"), surfaceTab);
     surfaceForm->addRow(tr("Transmission Color"), m_transmissionColorButton);
-    m_coatWeight = CreateDoubleSpinBox(0.0, 1.0, 0.01, 3);
+    m_coatWeight = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(tr("Coat"), m_coatWeight);
-    m_coatRoughness = CreateDoubleSpinBox(0.0, 1.0, 0.01, 3);
+    m_coatRoughness = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(tr("Coat Roughness"), m_coatRoughness);
-    m_translucency = CreateDoubleSpinBox(0.0, 1.0, 0.01, 3);
+    m_translucency = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(tr("Translucency"), m_translucency);
     m_thinWalled = new QCheckBox(tr("Thin Walled"), surfaceTab);
     surfaceForm->addRow(m_thinWalled);
@@ -417,11 +415,11 @@ void MaterialEditorPanel::createUi()
     auto *grassForm = new QFormLayout();
     m_grassColorButton = new QPushButton(tr("Pick"), grassTab);
     grassForm->addRow(tr("Grass Color"), m_grassColorButton);
-    m_grassBladeSize = CreateDoubleSpinBox(0.05, 5.0, 0.05, 2);
+    m_grassBladeSize = CreateSliderControl(0.05, 5.0, 0.05, 2);
     grassForm->addRow(tr("Blade Size"), m_grassBladeSize);
-    m_grassBladeCount = CreateDoubleSpinBox(0.0, 256.0, 0.5, 1);
+    m_grassBladeCount = CreateSliderControl(0.0, 256.0, 0.5, 1);
     grassForm->addRow(tr("Blade Count / m2"), m_grassBladeCount);
-    m_grassBladeVariation = CreateDoubleSpinBox(0.0, 1.0, 0.01, 2);
+    m_grassBladeVariation = CreateSliderControl(0.0, 1.0, 0.01, 2);
     grassForm->addRow(tr("Blade Variation"), m_grassBladeVariation);
     grassLayout->addLayout(grassForm);
     grassLayout->addStretch(1);
@@ -483,11 +481,12 @@ void MaterialEditorPanel::createUi()
 
     m_triPlanarEnabled = new QCheckBox(tr("Enable Tri-Planar"), mappingTab);
     mappingForm->addRow(m_triPlanarEnabled);
-    m_triPlanarScale = CreateDoubleSpinBox(0.001, 50.0, 0.05, 3);
+    m_triPlanarScale = CreateSliderControl(0.001, 50.0, 0.05, 3);
+    m_triPlanarScale->setLogarithmic(true);
     mappingForm->addRow(tr("Scale"), m_triPlanarScale);
-    m_triPlanarSharpness = CreateDoubleSpinBox(0.25, 16.0, 0.1, 2);
+    m_triPlanarSharpness = CreateSliderControl(0.25, 16.0, 0.1, 2);
     mappingForm->addRow(tr("Sharpness"), m_triPlanarSharpness);
-    m_triPlanarNormalStrength = CreateDoubleSpinBox(0.0, 4.0, 0.05, 2);
+    m_triPlanarNormalStrength = CreateSliderControl(0.0, 4.0, 0.05, 2);
     mappingForm->addRow(tr("Normal Strength"), m_triPlanarNormalStrength);
 
     m_tabs->addTab(mappingTab, tr("Mapping"));
@@ -496,7 +495,7 @@ void MaterialEditorPanel::createUi()
     auto *emissionForm = new QFormLayout(emissionTab);
     m_emissiveColorButton = new QPushButton(tr("Pick"), emissionTab);
     emissionForm->addRow(tr("Emissive Color"), m_emissiveColorButton);
-    m_emissiveIntensity = CreateDoubleSpinBox(0.0, 1000000.0, 1.0, 1);
+    m_emissiveIntensity = CreateSliderControl(0.0, 1000000.0, 1.0, 1);
     emissionForm->addRow(tr("Emissive Intensity"), m_emissiveIntensity);
     m_tabs->addTab(emissionTab, tr("Emission"));
 
@@ -693,7 +692,7 @@ void MaterialEditorPanel::createUi()
         });
     });
 
-    connect(m_roughness, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+    connect(m_roughness->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
         }
@@ -707,7 +706,7 @@ void MaterialEditorPanel::createUi()
             m.roughness = v;
         });
     });
-    connect(m_metalness, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+    connect(m_metalness->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
         }
@@ -715,7 +714,7 @@ void MaterialEditorPanel::createUi()
             m.metalness = static_cast<float>(value);
         });
     });
-    connect(m_specularWeight, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+    connect(m_specularWeight->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
         }
@@ -723,7 +722,7 @@ void MaterialEditorPanel::createUi()
             m.specularWeight = static_cast<float>(value);
         });
     });
-    connect(m_ior, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+    connect(m_ior->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
         }
@@ -731,7 +730,7 @@ void MaterialEditorPanel::createUi()
             m.ior = static_cast<float>(value);
         });
     });
-    connect(m_transmission, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+    connect(m_transmission->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
         }
@@ -739,7 +738,7 @@ void MaterialEditorPanel::createUi()
             m.transmissionWeight = static_cast<float>(value);
         }, true);
     });
-    connect(m_coatWeight, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+    connect(m_coatWeight->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
         }
@@ -747,7 +746,7 @@ void MaterialEditorPanel::createUi()
             m.coatWeight = static_cast<float>(value);
         });
     });
-    connect(m_coatRoughness, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+    connect(m_coatRoughness->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
         }
@@ -755,7 +754,7 @@ void MaterialEditorPanel::createUi()
             m.coatRoughness = static_cast<float>(value);
         });
     });
-    connect(m_translucency, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+    connect(m_translucency->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
         }
@@ -785,7 +784,7 @@ void MaterialEditorPanel::createUi()
             }
         }, false, true);
     });
-    connect(m_grassBladeSize, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+    connect(m_grassBladeSize->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
         }
@@ -793,7 +792,7 @@ void MaterialEditorPanel::createUi()
             m.grassBladeSize = static_cast<float>(value);
         }, false, true);
     });
-    connect(m_grassBladeCount, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+    connect(m_grassBladeCount->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
         }
@@ -801,7 +800,7 @@ void MaterialEditorPanel::createUi()
             m.grassBladeCount = static_cast<float>(value);
         }, false, true);
     });
-    connect(m_grassBladeVariation, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+    connect(m_grassBladeVariation->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
         }
@@ -810,7 +809,7 @@ void MaterialEditorPanel::createUi()
         }, false, true);
     });
 
-    connect(m_uvScaleX, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+    connect(m_uvScaleX->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
         }
@@ -818,7 +817,7 @@ void MaterialEditorPanel::createUi()
             m.uvScale[0] = static_cast<float>(value);
         });
     });
-    connect(m_uvScaleY, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+    connect(m_uvScaleY->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
         }
@@ -826,7 +825,7 @@ void MaterialEditorPanel::createUi()
             m.uvScale[1] = static_cast<float>(value);
         });
     });
-    connect(m_uvOffsetX, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+    connect(m_uvOffsetX->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
         }
@@ -834,7 +833,7 @@ void MaterialEditorPanel::createUi()
             m.uvOffset[0] = static_cast<float>(value);
         });
     });
-    connect(m_uvOffsetY, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+    connect(m_uvOffsetY->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
         }
@@ -850,7 +849,7 @@ void MaterialEditorPanel::createUi()
             m.triPlanarEnabled = enabled ? 1.0f : 0.0f;
         });
     });
-    connect(m_triPlanarScale, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+    connect(m_triPlanarScale->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
         }
@@ -858,7 +857,7 @@ void MaterialEditorPanel::createUi()
             m.triPlanarScale = static_cast<float>(value);
         });
     });
-    connect(m_triPlanarSharpness, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+    connect(m_triPlanarSharpness->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
         }
@@ -866,7 +865,7 @@ void MaterialEditorPanel::createUi()
             m.triPlanarSharpness = static_cast<float>(value);
         });
     });
-    connect(m_triPlanarNormalStrength, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+    connect(m_triPlanarNormalStrength->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
         }
@@ -875,7 +874,7 @@ void MaterialEditorPanel::createUi()
         });
     });
 
-    connect(m_emissiveIntensity, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+    connect(m_emissiveIntensity->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
         }

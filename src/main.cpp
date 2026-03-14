@@ -2437,9 +2437,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     g_cameraData.forward[1] = sinf(g_camPitch);
     g_cameraData.forward[2] = (cosf(g_camPitch) * -cosf(g_camYaw));
 
-    // Ensure aspect matches the window and update camera CB on GPU
-    g_cameraData.aspect =
-        (float)DX12Context::g_windowWidth / (float)DX12Context::g_windowHeight;
+    // Match the projection aspect to the actual render target. Export jobs use
+    // an offscreen target that can differ from the viewport size.
+    const bool usingExportAspect =
+        g_renderExportJob.active && g_renderExportJob.targetWidth > 0 &&
+        g_renderExportJob.targetHeight > 0;
+    const float targetWidth = usingExportAspect
+                                  ? (float)g_renderExportJob.targetWidth
+                                  : (float)DX12Context::g_windowWidth;
+    const float targetHeight = usingExportAspect
+                                   ? (float)g_renderExportJob.targetHeight
+                                   : (float)DX12Context::g_windowHeight;
+    if (targetHeight > 0.0f) {
+      g_cameraData.aspect = targetWidth / targetHeight;
+    }
 #ifdef _DEBUG
     g_cameraData.debugMode = (float)g_debugMode;
 #else
