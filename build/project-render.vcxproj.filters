@@ -82,6 +82,9 @@
     <ClCompile Include="D:\project-render\src\qt\DX12View.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\project-render\src\qt\RenderPanel.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="D:\project-render\src\qt\RenderSettingsPanel.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

@@ -973,6 +973,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="D:\project-render\src\qt\EnvironmentPanel.cpp" />
     <ClCompile Include="D:\project-render\src\qt\MainWindow.cpp" />
     <ClCompile Include="D:\project-render\src\qt\DX12View.cpp" />
+    <ClCompile Include="D:\project-render\src\qt\RenderPanel.cpp" />
     <ClCompile Include="D:\project-render\src\qt\RenderSettingsPanel.cpp" />
     <ClCompile Include="D:\project-render\src\qt\RenderModePanel.cpp" />
     <ClCompile Include="D:\project-render\src\qt\ScenePanel.cpp" />

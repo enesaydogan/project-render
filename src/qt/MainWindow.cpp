@@ -4,6 +4,7 @@
 #include "EnvironmentPanel.h"
 #include "LightsPanel.h"
 #include "MaterialEditorPanel.h"
+#include "RenderPanel.h"
 #include "RenderSettingsPanel.h"
 #include "ScenePanel.h"
 #include "../dx12_context.h"
@@ -414,7 +415,7 @@ void MainWindow::createDocks()
     materialsDock->setObjectName(tr("Materials"));
     materialsDock->setAllowedAreas(Qt::AllDockWidgetAreas);
     materialsDock->setWidget(wrapScroll(new MaterialEditorPanel(materialsDock), materialsDock));
-    addDockWidget(Qt::RightDockWidgetArea, materialsDock);
+    addDockWidget(Qt::LeftDockWidgetArea, materialsDock);
     auto *renderDock = new QDockWidget(tr("Render Settings"), this);
     renderDock->setObjectName(tr("Render Settings"));
     renderDock->setAllowedAreas(Qt::AllDockWidgetAreas);
@@ -423,6 +424,11 @@ void MainWindow::createDocks()
         renderDock->setWidget(wrapScroll(renderPanel, renderDock));
     }
     addDockWidget(Qt::RightDockWidgetArea, renderDock);
+    auto *renderExportDock = new QDockWidget(tr("Render"), this);
+    renderExportDock->setObjectName(tr("Render"));
+    renderExportDock->setAllowedAreas(Qt::AllDockWidgetAreas);
+    renderExportDock->setWidget(wrapScroll(new RenderPanel(renderExportDock), renderExportDock));
+    addDockWidget(Qt::RightDockWidgetArea, renderExportDock);
     auto *environmentDock = new QDockWidget(tr("Environment"), this);
     environmentDock->setObjectName(tr("Environment"));
     environmentDock->setAllowedAreas(Qt::AllDockWidgetAreas);
@@ -439,12 +445,14 @@ void MainWindow::createDocks()
     lightsDock->setWidget(wrapScroll(new LightsPanel(lightsDock), lightsDock));
     addDockWidget(Qt::BottomDockWidgetArea, lightsDock);
 
-    splitDockWidget(materialsDock, renderDock, Qt::Vertical);
+    tabifyDockWidget(sceneDock, materialsDock);
+    tabifyDockWidget(sceneDock, lightsDock);
+    sceneDock->raise();
+    tabifyDockWidget(renderDock, renderExportDock);
+    renderDock->raise();
     splitDockWidget(renderDock, environmentDock, Qt::Vertical);
     tabifyDockWidget(environmentDock, cameraDock);
     environmentDock->raise();
-    tabifyDockWidget(sceneDock, lightsDock);
-    sceneDock->raise();
 }
 
 void MainWindow::startSaveScene()

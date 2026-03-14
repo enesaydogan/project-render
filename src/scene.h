@@ -19,6 +19,8 @@ struct Node {
   std::vector<size_t> meshIndices; // indices into global g_loadedMeshes
   float transform[16];             // 4x4 column-major matrix
   std::string sourcePath;          // Path to the asset file for re-loading
+  std::vector<int> linkedMaterialIndices; // global material indices per import slot
+  std::vector<std::string> linkedMaterialSourceNames; // original imported names per slot
   bool selected = false;
   bool visible = true;
 
@@ -36,6 +38,8 @@ struct Instance {
 // Import a model (glTF, OBJ, STL) file into the scene. Returns true on success.
 bool ImportModel(const std::string &utf8path,
                  const float *rootTranslation = nullptr);
+bool ReimportNode(size_t index);
+bool CanReimportNode(size_t index);
 // Open file dialog and import selected model
 bool ImportModelWithDialog(HWND hwnd);
 // Open file dialog and import selected HDR/EXR

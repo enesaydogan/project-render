@@ -6,5 +6,6 @@
 #include <R3WADQZVW2/moc_MainWindow.cpp>
 #include <R3WADQZVW2/moc_MaterialEditorPanel.cpp>
 #include <R3WADQZVW2/moc_RenderModePanel.cpp>
+#include <R3WADQZVW2/moc_RenderPanel.cpp>
 #include <R3WADQZVW2/moc_RenderSettingsPanel.cpp>
 #include <R3WADQZVW2/moc_ScenePanel.cpp>

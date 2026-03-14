@@ -23,7 +23,9 @@ private:
     QProgressBar *m_importProgress = nullptr;
     QLabel *m_importStatusLabel = nullptr;
     QLabel *m_statusLabel = nullptr;
+    QLabel *m_sourceLabel = nullptr;
     QPushButton *m_importButton = nullptr;
+    QPushButton *m_reimportButton = nullptr;
     QPushButton *m_addPlaneButton = nullptr;
     QPushButton *m_deleteButton = nullptr;
     QTimer *m_refreshTimer = nullptr;
