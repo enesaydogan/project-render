@@ -66,6 +66,7 @@ if(USE_QT_UI)
       src/qt/RenderModePanel.cpp
       src/qt/ScenePanel.cpp
       src/qt/LightsPanel.cpp
+      src/qt/MaterialEditorPanel.cpp
       # additional panel widgets will be added here later
   )
   target_link_libraries(project-render PRIVATE Qt6::Widgets)

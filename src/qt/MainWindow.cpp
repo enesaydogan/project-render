@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "DX12View.h"
 #include "LightsPanel.h"
+#include "MaterialEditorPanel.h"
 #include "RenderSettingsPanel.h"
 #include "ScenePanel.h"
 #include "../dx12_context.h"
@@ -402,30 +403,16 @@ void MainWindow::createDocks()
         return scroll;
     };
 
-    auto createDock = [this, &wrapScroll](const QString &title,
-                             Qt::DockWidgetArea area,
-                             const QString &text) {
-        auto *dock = new QDockWidget(title, this);
-        dock->setObjectName(title);
-        dock->setAllowedAreas(Qt::AllDockWidgetAreas);
-
-        auto *label = new QLabel(text, dock);
-        label->setWordWrap(true);
-        label->setMargin(12);
-        dock->setWidget(wrapScroll(label, dock));
-
-        addDockWidget(area, dock);
-        return dock;
-    };
-
     auto *sceneDock = new QDockWidget(tr("Scene"), this);
     sceneDock->setObjectName(tr("Scene"));
     sceneDock->setAllowedAreas(Qt::AllDockWidgetAreas);
     sceneDock->setWidget(wrapScroll(new ScenePanel(sceneDock), sceneDock));
     addDockWidget(Qt::LeftDockWidgetArea, sceneDock);
-    QDockWidget *materialsDock = createDock(
-        tr("Materials"), Qt::RightDockWidgetArea,
-        tr("Material editor controls will live here."));
+    auto *materialsDock = new QDockWidget(tr("Materials"), this);
+    materialsDock->setObjectName(tr("Materials"));
+    materialsDock->setAllowedAreas(Qt::AllDockWidgetAreas);
+    materialsDock->setWidget(wrapScroll(new MaterialEditorPanel(materialsDock), materialsDock));
+    addDockWidget(Qt::RightDockWidgetArea, materialsDock);
     auto *renderDock = new QDockWidget(tr("Render Settings"), this);
     renderDock->setObjectName(tr("Render Settings"));
     renderDock->setAllowedAreas(Qt::AllDockWidgetAreas);

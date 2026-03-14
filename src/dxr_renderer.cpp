@@ -4397,6 +4397,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   float jitterY = Halton(frameIdx, 3) - 0.5f;
   const bool realtimeDenoiserActive =
       (s_realtimeDenoiserMode != RealtimeDenoiserMode::Off) && !dlssActive;
+    const bool preserveJitterForFinalOfflineDenoiser =
+      realtimeDenoiserActive &&
+      (s_denoiserMode != DxrRenderer::DenoiserMode::Off);
 
   // DLSS-RR can shimmer at silhouettes because pixel jitter causes much larger
   // ray-direction changes near the screen edges in a perspective camera.
@@ -4404,7 +4407,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   if (rrActive) {
     jitterX *= s_rrJitterScale;
     jitterY *= s_rrJitterScale;
-  } else if (realtimeDenoiserActive) {
+  } else if (realtimeDenoiserActive && !preserveJitterForFinalOfflineDenoiser) {
     // Realtime denoisers operate on their own temporal history. Keeping Halton
     // jitter in this path adds silhouette crawl without helping reconstruction.
     jitterX = 0.0f;
@@ -4844,10 +4847,16 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
   // Optional Streamline / DLSS evaluation
   ID3D12Resource *postColor = s_outputUAV.Get();
+  // Final OIDN should always denoise the resolved DXR accumulation color,
+  // never the realtime NRD/SVGF composites.
+  ID3D12Resource *oidnInput = s_outputUAV.Get();
+  const bool bypassRealtimeDenoiserForFinalOidn =
+      isOidnMode && (doDenoise || (reachedEndCondition && s_hasDenoised));
 
   // Evaluate realtime denoiser
   if (!debugViewActive && !rrActive && didDispatchRays &&
-      s_realtimeDenoiserMode != RealtimeDenoiserMode::Off) {
+      s_realtimeDenoiserMode != RealtimeDenoiserMode::Off &&
+      !bypassRealtimeDenoiserForFinalOidn) {
     if (s_queryHeap) {
       dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
                         5); // Start Denoise
@@ -5045,6 +5054,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   }
 
   if (!debugViewActive && !rrActive && !didDispatchRays &&
+      !bypassRealtimeDenoiserForFinalOidn &&
       s_realtimeDenoiserMode == RealtimeDenoiserMode::SVGF &&
       s_svgfHistoryValid) {
     if (s_svgfLatestOutput) {
@@ -5370,7 +5380,22 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   // produces invalid results. Keep OIDN gated to the non-DLSS path.
   bool shouldRunOidn = doDenoise && !usedDlss;
 
-  if (shouldRunOidn && s_oidnOutputUAV && postColor) {
+  if (shouldRunOidn && s_oidnOutputUAV && oidnInput) {
+    const D3D12_RESOURCE_DESC oidnInDesc = oidnInput->GetDesc();
+    const D3D12_RESOURCE_DESC oidnOutDesc = s_oidnOutputUAV->GetDesc();
+    if (oidnInDesc.Width != oidnOutDesc.Width ||
+        oidnInDesc.Height != oidnOutDesc.Height) {
+      fprintf(stderr,
+              "DxrRenderer: OIDN skipped (input %ux%u, output %ux%u).\n",
+              (unsigned)oidnInDesc.Width,
+              (unsigned)oidnInDesc.Height,
+              (unsigned)oidnOutDesc.Width,
+              (unsigned)oidnOutDesc.Height);
+      shouldRunOidn = false;
+    }
+  }
+
+  if (shouldRunOidn && s_oidnOutputUAV && oidnInput) {
     // Start denoising timer
     if (s_queryHeap) {
       dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
@@ -5381,10 +5406,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
             "DxrRenderer: MaxSPP reached. Auto-triggering OIDN denoise.\n");
     s_oidnDenoiser.Initialize(s_device);
 
-    // Ensure input is in COMMON state for interop
-    // postColor is currently in UAV state (either s_outputUAV or
-    // s_dlssOutputUAV)
-    TransitionResource(dxrList.Get(), postColor,
+    // Ensure input is in COMMON state for interop.
+    // oidnInput is the resolved DXR accumulation color (s_outputUAV).
+    TransitionResource(dxrList.Get(), oidnInput,
                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, // Assumed state
                        D3D12_RESOURCE_STATE_COMMON);
 
@@ -5435,11 +5459,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       // copy-execute-sync cycle to handle Tiled <-> Linear layout conversion
       // for D3D12 interop.
       bool ran = s_oidnDenoiser.RunDenoise(
-          dxrList.Get(), s_commandQueue, postColor, s_albedoUAV.Get(),
+          dxrList.Get(), s_commandQueue, oidnInput, s_albedoUAV.Get(),
           s_normalRoughnessUAV.Get(), s_oidnOutputUAV.Get(), false);
 
       // Restore Resource States from COMMON to what the engine expects.
-      TransitionResource(dxrList.Get(), postColor, D3D12_RESOURCE_STATE_COMMON,
+      TransitionResource(dxrList.Get(), oidnInput, D3D12_RESOURCE_STATE_COMMON,
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
       if (s_albedoUAV) {
         TransitionResource(dxrList.Get(), s_albedoUAV.Get(),
@@ -5482,10 +5506,15 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     EnsureAvgLumPipeline();
     if (s_avgLumPSO && s_avgLumRootSig && s_avgLumCB && s_avgLumBuffer &&
         s_avgLumReadbackBuffer && s_avgLumHeap) {
-      ID3D12Resource *exposureSource =
-          (s_realtimeDenoiserMode != RealtimeDenoiserMode::Off && s_outputUAV)
-              ? s_outputUAV.Get()
-              : postColor;
+        const bool useDisplayedPostColorForExposure =
+          usedOidn ||
+          (reachedEndCondition && isOidnMode && s_hasDenoised &&
+           postColor == s_oidnOutputUAV.Get());
+        ID3D12Resource *exposureSource =
+          (!useDisplayedPostColorForExposure &&
+           s_realtimeDenoiserMode != RealtimeDenoiserMode::Off && s_outputUAV)
+            ? s_outputUAV.Get()
+            : postColor;
       bool exposureSourceMatchesPostColor = (exposureSource == postColor);
 
       // 1. Read previous results

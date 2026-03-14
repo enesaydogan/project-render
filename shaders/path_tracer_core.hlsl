@@ -632,7 +632,7 @@ void RayGen()
             }
 
             // --- Adaptive Sampling Early Exit (Now after G-buffers are fresh) ---
-            if (!nrdActive && !debugViewActive && maxSPP > 0.0 && accumFrame >= (uint)maxSPP) {
+            if (!debugViewActive && maxSPP > 0.0 && accumFrame >= (uint)maxSPP) {
                 float4 total = g_accumulation[launchIndex.xy];
                 if (total.a > 0.0) {
                     float3 meanColor = total.rgb / total.a;
@@ -642,7 +642,7 @@ void RayGen()
                 return;
             }
 
-            if (!nrdActive && accumFrame > kAdaptiveStartSpp && useAdaptiveSampling > 0.5) {
+            if (accumFrame > kAdaptiveStartSpp && useAdaptiveSampling > 0.5) {
                 float4 acc = g_accumulation[launchIndex.xy];
                 float accM2 = g_variance[launchIndex.xy];
                 if (acc.a > (float)kAdaptiveMinPerPixelSpp) {
