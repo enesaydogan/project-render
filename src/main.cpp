@@ -244,9 +244,6 @@ static constexpr wchar_t kMainWindowTitle[] = L"Project-Render";
 
 // Window dimensions
 bool g_appClosing = false;
-static bool g_hasPendingResize = false;
-static UINT g_pendingResizeWidth = 0;
-static UINT g_pendingResizeHeight = 0;
 
 // Loaded meshes from Asset loader
 std::vector<Asset::GpuMesh> g_loadedMeshes;
@@ -1295,9 +1292,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
     return 0;
   case WM_SIZE:
     if (!g_appClosing && DX12Context::g_swapChain && wParam != SIZE_MINIMIZED) {
-      g_pendingResizeWidth = LOWORD(lParam);
-      g_pendingResizeHeight = HIWORD(lParam);
-      g_hasPendingResize = true;
+      DX12Context::QueueResize(LOWORD(lParam), HIWORD(lParam));
     }
     return 0;
   case WM_DESTROY:
@@ -2355,10 +2350,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     if (g_appClosing)
       break;
 
-    if (g_hasPendingResize && g_pendingResizeWidth > 0 &&
-        g_pendingResizeHeight > 0 && DX12Context::g_swapChain) {
-      DX12Context::ResizeSwapChain(g_pendingResizeWidth, g_pendingResizeHeight);
-      g_hasPendingResize = false;
+    if (DX12Context::g_swapChain) {
+      UINT resizeW = 0;
+      UINT resizeH = 0;
+      if (DX12Context::ConsumePendingResize(resizeW, resizeH)) {
+        DX12Context::ResizeSwapChain(resizeW, resizeH);
+      }
     }
 
     // Compute delta time

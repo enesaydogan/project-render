@@ -242,7 +242,6 @@ void DX12View::wheelEvent(QWheelEvent *e)
 void DX12View::resizeEvent(QResizeEvent *e)
 {
     QWidget::resizeEvent(e);
-    if (DX12Context::g_swapChain) {
-        DX12Context::ResizeSwapChain(width(), height());
-    }
+    DX12Context::QueueResize(static_cast<UINT>(width()),
+                             static_cast<UINT>(height()));
 }

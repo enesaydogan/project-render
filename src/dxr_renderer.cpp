@@ -51,11 +51,11 @@ static StreamlineManager *s_streamline = nullptr;
 static bool s_streamlineResetHistory = true;
 // Final / export denoiser mode & wrapper
 static DxrRenderer::DenoiserMode s_denoiserMode =
-    DxrRenderer::DenoiserMode::Off;
+    DxrRenderer::DenoiserMode::OIDN_GPU;
 static DxrRenderer::RealtimeDenoiserMode s_realtimeDenoiserMode =
-    DxrRenderer::RealtimeDenoiserMode::Off;
+    DxrRenderer::RealtimeDenoiserMode::NRD;
 static OidnDenoiser s_oidnDenoiser;
-static OidnDenoiser::Quality s_oidnQuality = OidnDenoiser::Quality::Balanced;
+static OidnDenoiser::Quality s_oidnQuality = OidnDenoiser::Quality::High;
 static DxrRenderer::SvgfSettings s_svgfSettings;
 static float s_rrJitterScale = 0.5f;
 

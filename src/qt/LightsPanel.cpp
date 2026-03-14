@@ -6,6 +6,7 @@
 #include <QColorDialog>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -78,16 +79,16 @@ void LightsPanel::createUi()
     m_loadNotice->hide();
     layout->addWidget(m_loadNotice);
 
-    auto *buttonRow = new QHBoxLayout();
+    auto *buttonGrid = new QGridLayout();
     m_addPointButton = new QPushButton(tr("Add Point Light"), this);
     m_addSpotButton = new QPushButton(tr("Add Spot Light"), this);
     m_addRectButton = new QPushButton(tr("Add Rect Area"), this);
     m_addDiskButton = new QPushButton(tr("Add Disk Area"), this);
-    buttonRow->addWidget(m_addPointButton);
-    buttonRow->addWidget(m_addSpotButton);
-    buttonRow->addWidget(m_addRectButton);
-    buttonRow->addWidget(m_addDiskButton);
-    layout->addLayout(buttonRow);
+    buttonGrid->addWidget(m_addPointButton, 0, 0);
+    buttonGrid->addWidget(m_addSpotButton, 0, 1);
+    buttonGrid->addWidget(m_addRectButton, 1, 0);
+    buttonGrid->addWidget(m_addDiskButton, 1, 1);
+    layout->addLayout(buttonGrid);
 
     m_listGroup = new QGroupBox(tr("Lights"), this);
     auto *listLayout = new QVBoxLayout(m_listGroup);
@@ -148,9 +149,11 @@ void LightsPanel::createUi()
     actionRow->addWidget(m_removeButton);
     propertiesLayout->addLayout(actionRow);
 
-    auto *splitLayout = new QHBoxLayout();
-    splitLayout->addWidget(m_listGroup, 1);
-    splitLayout->addWidget(m_propertiesGroup, 2);
+    auto *splitLayout = new QVBoxLayout();
+    splitLayout->addWidget(m_listGroup);
+    splitLayout->addWidget(m_propertiesGroup);
+    splitLayout->setStretch(0, 1);
+    splitLayout->setStretch(1, 2);
     layout->addLayout(splitLayout);
     layout->addStretch(1);
 
