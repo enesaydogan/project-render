@@ -254,6 +254,36 @@ static void DrawSceneIoOverlay() {
   ImGui::End();
 }
 
+static void DrawRenderExportViewportPreview() {
+  if (!g_renderExportJob.active || g_exportPreviewSrvGpu.ptr == 0 ||
+      g_renderExportJob.targetHeight <= 0) {
+    return;
+  }
+
+  ImGuiViewport *vp = ImGui::GetMainViewport();
+  if (!vp) {
+    return;
+  }
+
+  const float srcAspect =
+      (float)g_renderExportJob.targetWidth / (float)g_renderExportJob.targetHeight;
+  float drawW = vp->Size.x;
+  float drawH = drawW / srcAspect;
+  if (drawH > vp->Size.y) {
+    drawH = vp->Size.y;
+    drawW = drawH * srcAspect;
+  }
+  if (drawW <= 0.0f || drawH <= 0.0f) {
+    return;
+  }
+
+  const ImVec2 pMin(vp->Pos.x + (vp->Size.x - drawW) * 0.5f,
+                    vp->Pos.y + (vp->Size.y - drawH) * 0.5f);
+  const ImVec2 pMax(pMin.x + drawW, pMin.y + drawH);
+  ImGui::GetBackgroundDrawList()->AddImage(
+      (ImTextureID)g_exportPreviewSrvGpu.ptr, pMin, pMax);
+}
+
 // ── helper lambdas/functions that were local to WinMain ─────────────────────
 
 static DxrRenderer::DenoiserMode DenoiserModeFromIndex(int idx) {
@@ -590,6 +620,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
+    DrawRenderExportViewportPreview();
     if (!IsSceneLoadInProgress()) {
       ImGuizmo::BeginFrame();
       Scene::DrawGizmo();
@@ -649,27 +680,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
 
   // Draw export preview directly into the main viewport (scaled to fit),
   // so users can track render progress without opening a separate panel.
-  if (g_renderExportJob.active && g_exportPreviewSrvGpu.ptr != 0 &&
-      g_renderExportJob.targetHeight > 0) {
-    ImGuiViewport *vp = ImGui::GetMainViewport();
-    if (vp) {
-      const float srcAspect = (float)g_renderExportJob.targetWidth /
-                              (float)g_renderExportJob.targetHeight;
-      float drawW = vp->Size.x;
-      float drawH = drawW / srcAspect;
-      if (drawH > vp->Size.y) {
-        drawH = vp->Size.y;
-        drawW = drawH * srcAspect;
-      }
-      if (drawW > 0.0f && drawH > 0.0f) {
-        const ImVec2 pMin(vp->Pos.x + (vp->Size.x - drawW) * 0.5f,
-                          vp->Pos.y + (vp->Size.y - drawH) * 0.5f);
-        const ImVec2 pMax(pMin.x + drawW, pMin.y + drawH);
-        ImGui::GetBackgroundDrawList()->AddImage(
-            (ImTextureID)g_exportPreviewSrvGpu.ptr, pMin, pMax);
-      }
-    }
-  }
+  DrawRenderExportViewportPreview();
 
   // Main menu bar: Window menu + quick panel toggles on the bar for fast
   // access
