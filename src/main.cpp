@@ -29,6 +29,7 @@
 #include <QMessageBox>
 #include "qt/DX12View.h"
 #include "qt/MainWindow.h"
+#include "qt/QtTheme.h"
 #endif
 #include <chrono>
 #include <cmath>
@@ -1363,6 +1364,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   int qtArgc = 0;
   char *qtArgv[] = { nullptr };
   QApplication app(qtArgc, qtArgv);
+  ApplyQtTheme(app);
 
   EnforceReleaseDebugFlags();
 
