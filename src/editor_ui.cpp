@@ -423,6 +423,7 @@ void RestoreRenderExportState() {
   g_cameraData.maxSPP = g_renderExportJob.previousMaxSpp;
   g_cameraData.noiseThreshold = g_renderExportJob.previousNoiseThreshold;
   g_cameraData.useAdaptiveSampling = g_renderExportJob.previousAdaptiveSampling;
+  g_cameraData.exportRendering = 0.0f;
   DxrRenderer::SetDenoiserMode(
       DenoiserModeFromIndex(g_renderExportJob.previousDenoiserIndex));
   g_currentRenderMode = g_renderExportJob.previousMode;
@@ -513,7 +514,8 @@ void StartRenderExportJob(const std::wstring &outputPath) {
   g_currentRenderMode = RenderMode::DXR;
   g_cameraData.maxSPP = (float)g_renderExportJob.targetMaxSpp;
   g_cameraData.noiseThreshold = g_renderExportJob.targetNoiseThreshold;
-  g_cameraData.useAdaptiveSampling = 0.0f;
+  g_cameraData.useAdaptiveSampling = 1.0f;
+  g_cameraData.exportRendering = 1.0f;
   DxrRenderer::SetDenoiserMode(
       DenoiserModeFromIndex(g_renderExportSettings.denoiserIndex));
 
@@ -524,6 +526,7 @@ void StartRenderExportJob(const std::wstring &outputPath) {
     g_cameraData.noiseThreshold = g_renderExportJob.previousNoiseThreshold;
     g_cameraData.useAdaptiveSampling =
         g_renderExportJob.previousAdaptiveSampling;
+    g_cameraData.exportRendering = 0.0f;
     DxrRenderer::SetDenoiserMode(
         DenoiserModeFromIndex(g_renderExportJob.previousDenoiserIndex));
     g_currentRenderMode = g_renderExportJob.previousMode;
@@ -548,6 +551,7 @@ void StartRenderExportJob(const std::wstring &outputPath) {
     g_cameraData.noiseThreshold = g_renderExportJob.previousNoiseThreshold;
     g_cameraData.useAdaptiveSampling =
         g_renderExportJob.previousAdaptiveSampling;
+    g_cameraData.exportRendering = 0.0f;
     DxrRenderer::SetDenoiserMode(
         DenoiserModeFromIndex(g_renderExportJob.previousDenoiserIndex));
     g_currentRenderMode = g_renderExportJob.previousMode;

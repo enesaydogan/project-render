@@ -41,7 +41,7 @@ cbuffer CameraCB : register(b0)
     float iblRotationDegrees;
     float sampleEnvSolidAngle;
     float nrdEnabled;
-    float _pad3;
+    float exportRendering;
     float4x4 shadowMatrix;
     float4x4 viewProj;
     float4x4 invViewProj;

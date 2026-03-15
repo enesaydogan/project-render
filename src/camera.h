@@ -50,7 +50,7 @@ struct CameraCB {
   // be useful for debugging or comparing the two approaches.
   float sampleEnvSolidAngle;
   float nrdEnabled;
-  float _pad3;
+  float exportRendering;
   float shadowMatrix[16];
   float viewProj[16];
   float invViewProj[16];

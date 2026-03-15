@@ -244,6 +244,7 @@ void RayGen()
     const float kAdaptiveEdgeContrastThreshold = 0.012;
     const float kAdaptiveMinExpectedRatio = 0.15;
     const float kAdaptiveLagKeepScale = 1.00;
+    const bool exportAdaptiveMode = (exportRendering > 0.5);
     // Artistic control: boost environment contribution to scene lighting
     // (DI/GI transport) without making the visible sky dome brighter.
     const float kEnvLightingBoost = 3.0;
@@ -672,13 +673,20 @@ void RayGen()
                     float relThreshold = max(0.001, noiseThreshold * (isEdgeRegion ? kAdaptiveEdgeRelScale : kAdaptiveRelScale));
                     float absSemThreshold = max(kAdaptiveAbsSemFloor, noiseThreshold * (isEdgeRegion ? kAdaptiveEdgeAbsSemScale : kAdaptiveAbsSemScale));
                     if (noise < relThreshold || sem < absSemThreshold) {
-                         RNG adaptiveRng = init_rng(launchIndex.xy + uint2(0x9e37u, 0x7f4au), frame ^ 0xA511E9B3u);
-                         float proximity = min(saturate(noise / relThreshold), saturate(sem / absSemThreshold));
-                         float keepProb = max(isEdgeRegion ? kAdaptiveEdgeMinKeepProb : kAdaptiveMinKeepProb, proximity);
-                         if (n_acc < (float)accumFrame * kAdaptiveMinExpectedRatio) keepProb = 1.0;
-                         else keepProb = max(keepProb, saturate(((float)accumFrame - n_acc) / (float)accumFrame) * kAdaptiveLagKeepScale);
-                         
-                         if (next_float(adaptiveRng) > keepProb) {
+                                 bool keepSampling = true;
+                                 if (n_acc < (float)accumFrame * kAdaptiveMinExpectedRatio) {
+                                     keepSampling = true;
+                                 } else if (exportAdaptiveMode) {
+                                     keepSampling = false;
+                                 } else {
+                                     RNG adaptiveRng = init_rng(launchIndex.xy + uint2(0x9e37u, 0x7f4au), frame ^ 0xA511E9B3u);
+                                     float proximity = min(saturate(noise / relThreshold), saturate(sem / absSemThreshold));
+                                     float keepProb = max(isEdgeRegion ? kAdaptiveEdgeMinKeepProb : kAdaptiveMinKeepProb, proximity);
+                                     keepProb = max(keepProb, saturate(((float)accumFrame - n_acc) / (float)accumFrame) * kAdaptiveLagKeepScale);
+                                     keepSampling = next_float(adaptiveRng) <= keepProb;
+                                 }
+
+                                 if (!keepSampling) {
                             if (flip) {
                                 g_reservoir1[launchIndex.xy] = g_reservoir0[launchIndex.xy];
                                 g_gi_reservoir_a0[launchIndex.xy] = g_gi_reservoir_b0[launchIndex.xy];
