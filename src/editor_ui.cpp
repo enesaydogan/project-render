@@ -513,7 +513,7 @@ void StartRenderExportJob(const std::wstring &outputPath) {
   g_currentRenderMode = RenderMode::DXR;
   g_cameraData.maxSPP = (float)g_renderExportJob.targetMaxSpp;
   g_cameraData.noiseThreshold = g_renderExportJob.targetNoiseThreshold;
-  g_cameraData.useAdaptiveSampling = 1.0f;
+  g_cameraData.useAdaptiveSampling = 0.0f;
   DxrRenderer::SetDenoiserMode(
       DenoiserModeFromIndex(g_renderExportSettings.denoiserIndex));
 
