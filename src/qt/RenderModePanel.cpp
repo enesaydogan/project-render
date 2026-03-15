@@ -217,7 +217,7 @@ void RenderModePanel::createUi()
     connect(m_switchModeButton, &QPushButton::clicked, this, [this]() {
         if (g_currentRenderMode == RenderMode::Raster) {
             g_currentRenderMode = RenderMode::DXR;
-            Scene::RebuildAccelerationStructures();
+            Scene::RequestRendererFullRebuild();
             recreateDxrPipeline("Qt render mode switch");
         } else {
             g_currentRenderMode = RenderMode::Raster;

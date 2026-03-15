@@ -359,6 +359,7 @@ static std::vector<uint8_t> s_dirtyMaterialFlags;
 static std::vector<const Asset::GpuMesh *> s_cachedTlasMeshOrder;
 static bool s_tlasSupportsUpdate = false;
 static bool s_forceAsRebuild = false;
+static bool s_forceTlasUpdate = false;
 
 // Async compute execution for decoupled ReSTIR DI/GI.
 static ComPtr<ID3D12CommandQueue> s_asyncComputeQueue;
@@ -2951,6 +2952,8 @@ void MarkMaterialDirty(int materialIndex) {
 
 void RequestAccelerationStructureRebuild() { s_forceAsRebuild = true; }
 
+void RequestAccelerationStructureUpdate() { s_forceTlasUpdate = true; }
+
 static void ClearDirtyMaterialsForMeshes(
     const std::vector<const Asset::GpuMesh *> &meshes) {
   if (s_dirtyMaterialFlags.empty()) {
@@ -4299,7 +4302,19 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     return ReturnFail(2, "renderTarget is null");
   }
 
-  // Handle empty scene or missing TLAS gracefully
+  // Material edits only require AS rebuild when opaque-vs-nonopaque state
+  // changes (affects BLAS geometry flags / AnyHit path).
+  if (s_forceAsRebuild || s_forceTlasUpdate) {
+    BuildAccelerationStructures(meshes, Scene::GetInstances());
+    s_forceAsRebuild = false;
+    s_forceTlasUpdate = false;
+    if (!s_tlas.result) {
+      return ReturnFail(16, "TLAS missing after forced rebuild");
+    }
+  }
+
+  // Handle empty scene or missing TLAS gracefully after honoring any pending
+  // rebuild/update request, so deferred invalidation can bootstrap DXR.
   if (meshes.empty() || !s_tlas.result) {
     s_lastRenderFrameFailReason = -1;
     TransitionResource(commandListBase, renderTarget,
@@ -4309,16 +4324,6 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     commandListBase->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
     commandListBase->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
     return true;
-  }
-
-  // Material edits only require AS rebuild when opaque-vs-nonopaque state
-  // changes (affects BLAS geometry flags / AnyHit path).
-  if (s_forceAsRebuild) {
-    BuildAccelerationStructures(meshes, Scene::GetInstances());
-    s_forceAsRebuild = false;
-    if (!s_tlas.result) {
-      return ReturnFail(16, "TLAS missing after forced rebuild");
-    }
   }
 
   if (HasDirtyMaterialsForMeshes(meshes)) {

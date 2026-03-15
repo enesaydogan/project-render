@@ -104,6 +104,10 @@ void DeleteNode(size_t index);
 
 // Rebuild acceleration structures using active meshes
 void RebuildAccelerationStructures();
+// Request a deferred full renderer scene rebuild on the next DXR frame.
+void RequestRendererFullRebuild();
+// Request a deferred TLAS refresh on the next DXR frame.
+void RequestRendererTlasRefresh();
 
 // Return vector of pointers to active meshes for rendering / DXR dispatch
 std::vector<const Asset::GpuMesh *> GetActiveMeshes();

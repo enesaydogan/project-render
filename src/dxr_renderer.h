@@ -34,6 +34,9 @@ void BuildAccelerationStructures(
     const std::vector<Scene::Instance> &instances);
 // Request a full BLAS/TLAS rebuild on the next RenderFrame call.
 void RequestAccelerationStructureRebuild();
+// Request a TLAS refresh on the next RenderFrame call. If mesh identity is
+// unchanged, DXR will refit/update TLAS instead of rebuilding BLAS.
+void RequestAccelerationStructureUpdate();
 // Mark a material as changed in a way that can affect DXR traversal flags
 // (alpha/blend/transmission). The next render frame will rebuild BLAS/TLAS as
 // needed.
