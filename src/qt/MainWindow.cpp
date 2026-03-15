@@ -14,6 +14,7 @@
 #include "../scene.h"
 #include "../streamline_manager.h"
 #include <QAction>
+#include <QKeySequence>
 #include <QCloseEvent>
 #include <QDockWidget>
 #include <QDialog>
@@ -318,12 +319,21 @@ MainWindow::~MainWindow()
 void MainWindow::createMenus()
 {
     QMenu *fileMenu = menuBar()->addMenu(tr("&File"));
-    m_saveSceneAction = fileMenu->addAction(tr("Save Scene..."), this, [this]() {
+    m_saveSceneAction = fileMenu->addAction(tr("Save Scene"), this, [this]() {
         startSaveScene();
     });
+    m_saveSceneAction->setShortcut(QKeySequence::Save);
+    m_saveSceneAction->setShortcutContext(Qt::ApplicationShortcut);
+    m_saveSceneAsAction = fileMenu->addAction(tr("Save Scene As..."), this, [this]() {
+        startSaveSceneAs();
+    });
+    m_saveSceneAsAction->setShortcut(QKeySequence::SaveAs);
+    m_saveSceneAsAction->setShortcutContext(Qt::ApplicationShortcut);
     m_loadSceneAction = fileMenu->addAction(tr("Load Scene..."), this, [this]() {
         startLoadScene();
     });
+    m_loadSceneAction->setShortcut(QKeySequence::Open);
+    m_loadSceneAction->setShortcutContext(Qt::ApplicationShortcut);
     fileMenu->addSeparator();
     fileMenu->addAction(tr("E&xit"), this, &QWidget::close);
 
@@ -390,8 +400,17 @@ void MainWindow::createMenus()
 
 void MainWindow::createToolBar()
 {
-    addToolBar(tr("Main"));
-    // toolbar actions will be added later
+    auto *toolbar = addToolBar(tr("Main"));
+    toolbar->setObjectName(tr("MainToolbar"));
+    if (m_saveSceneAction) {
+        toolbar->addAction(m_saveSceneAction);
+    }
+    if (m_saveSceneAsAction) {
+        toolbar->addAction(m_saveSceneAsAction);
+    }
+    if (m_loadSceneAction) {
+        toolbar->addAction(m_loadSceneAction);
+    }
 }
 
 void MainWindow::createDocks()
@@ -456,6 +475,18 @@ void MainWindow::createDocks()
 }
 
 void MainWindow::startSaveScene()
+{
+    if (IsSceneIoJobActive()) {
+        return;
+    }
+    if (HasCurrentScenePath()) {
+        StartSceneIoJob(true, GetCurrentScenePath());
+        return;
+    }
+    startSaveSceneAs();
+}
+
+void MainWindow::startSaveSceneAs()
 {
     if (IsSceneIoJobActive()) {
         return;
@@ -571,6 +602,9 @@ void MainWindow::updateSceneIoUi()
     const bool active = IsSceneIoJobActive();
     if (m_saveSceneAction) {
         m_saveSceneAction->setEnabled(!active);
+    }
+    if (m_saveSceneAsAction) {
+        m_saveSceneAsAction->setEnabled(!active);
     }
     if (m_loadSceneAction) {
         m_loadSceneAction->setEnabled(!active);

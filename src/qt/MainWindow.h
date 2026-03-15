@@ -28,11 +28,13 @@ private:
     void createToolBar();
     void createDocks();
     void startSaveScene();
+    void startSaveSceneAs();
     void startLoadScene();
     void updateSceneIoUi();
 
     DX12View *m_view;
     QAction *m_saveSceneAction = nullptr;
+    QAction *m_saveSceneAsAction = nullptr;
     QAction *m_loadSceneAction = nullptr;
     QProgressBar *m_sceneIoProgress = nullptr;
     QLabel *m_sceneIoLabel = nullptr;
