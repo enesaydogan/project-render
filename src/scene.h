@@ -91,11 +91,18 @@ std::vector<Instance> GetInstances();
 
 // Light manipulation
 std::vector<Light> &GetLights();
-void AddLight(LightType type);
+size_t AddLight(LightType type);
+bool UpdateLight(size_t index, const Light &light);
 void RemoveLight(size_t index);
 void UpdateLights();
 int GetSelectedLightIndex();
 void SelectLight(int index);
+
+// Material manipulation
+size_t GetMaterialCount();
+int FindMaterialByName(const std::string &name);
+bool GetMaterial(size_t index, Asset::Material *outMaterial);
+bool UpdateMaterial(size_t index, const Asset::Material &material);
 
 // Ray-cast selection from mouse. Returns the global material index of the hit
 // submesh, or -1.

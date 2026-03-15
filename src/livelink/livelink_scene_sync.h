@@ -17,6 +17,8 @@ private:
   enum class EngineHandleKind {
     Unknown,
     SceneNode,
+    SceneLight,
+    SceneMaterial,
     MainCamera,
     Environment,
   };
@@ -40,6 +42,9 @@ private:
                                  const SceneDelta &delta);
   bool ApplyNodeVisibilityChanged(const SceneDeltaBatch &batch,
                                   const SceneDelta &delta);
+  bool ApplyMaterialChanged(const SceneDeltaBatch &batch,
+                            const SceneDelta &delta);
+  bool ApplyLightChanged(const SceneDeltaBatch &batch, const SceneDelta &delta);
   bool ApplySelectionChanged(const SceneDeltaBatch &batch,
                              const SceneDelta &delta);
   bool ApplyCameraChanged(const SceneDeltaBatch &batch, const SceneDelta &delta);
@@ -55,8 +60,14 @@ private:
   bool EnsureNodeBinding(const SceneDeltaBatch &batch, const SceneDelta &delta,
                          const std::string &preferredName,
                          ObjectBinding **outBinding = nullptr);
+  bool EnsureLightBinding(const SceneDeltaBatch &batch, const SceneDelta &delta,
+                          ObjectBinding **outBinding = nullptr);
+  bool EnsureMaterialBinding(const SceneDeltaBatch &batch,
+                             const SceneDelta &delta,
+                             ObjectBinding **outBinding = nullptr);
   void RemoveBindingsForSession(const std::string &sessionId);
   void ReindexSceneNodeBindingsAfterRemoval(size_t removedIndex);
+  void ReindexSceneLightBindingsAfterRemoval(size_t removedIndex);
   void ClearAllBindings();
   void LogValidationIssue(const ValidationIssue &issue) const;
   void LogApplyIssue(const char *level, const std::string &providerName,

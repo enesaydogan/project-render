@@ -24,7 +24,6 @@ Completed so far:
 Not implemented yet:
 
 - fine-grained renderer dirty-state classification beyond the current coarse buckets
-- mock provider
 - 3ds Max provider
 - live-link UI panel/status controls
 - mesh/material/light delta application beyond the current supported subset
@@ -455,13 +454,69 @@ So Phase 4 is implemented in a practical repo-wide first pass, but not yet at th
 
 ---
 
+## Phase 6 Status
+
+### Goal
+
+Exercise the host-side live-link architecture without requiring a real DCC plugin.
+
+### Implemented
+
+Added a procedural mock provider:
+
+- `src/livelink/livelink_mock_provider.h`
+- `src/livelink/livelink_mock_provider.cpp`
+
+### What Phase 6 Adds
+
+The mock provider can be enabled at startup with:
+
+- `--mock-livelink`
+
+Current mock behavior:
+
+- opens a mock session
+- emits a non-destructive full-scene sync marker
+- adds two mock nodes
+- animates one node transform over time
+- toggles visibility on the second node before removing it
+- emits selection updates
+- emits camera FOV updates
+
+### Current Purpose
+
+This provider is for host-runtime validation, not production transport.
+
+It proves:
+
+- provider registration and connection
+- queued-batch validation
+- main-thread batch application
+- object-ID mapping stability across repeated updates
+- node removal reindex handling
+
+### Files Touched In Phase 6
+
+- `src/livelink/livelink_mock_provider.h`
+- `src/livelink/livelink_mock_provider.cpp`
+- `src/main.cpp`
+- `CMakeLists.txt`
+
+### Phase 6 Result
+
+Result:
+
+- the repo can now exercise the live-link runtime end to end without a real DCC bridge
+- Phase 3 and Phase 4 behavior can be tested with deterministic synthetic deltas
+
+---
+
 ## What Is Still Missing Before A Real LiveLink Path Exists
 
 ### High-priority missing pieces
 
 - richer mesh/material/light scene application
 - finer renderer invalidation classification
-- mock provider for testing host behavior
 - diagnostics UI for live-link state
 
 ### Important technical gap
@@ -499,16 +554,15 @@ That means:
 
 Best next implementation phase:
 
-- mock provider and unsupported-delta expansion
+- unsupported-delta expansion
 
 Reason:
 
-- the engine can now accept and apply a subset of deltas
-- the next bottleneck is verifying real batch behavior and filling in unsupported mesh/material/light delta types
-- a mock provider will exercise the Phase 3 and Phase 4 runtime paths without 3ds Max SDK overhead
+- the engine can now accept and replay synthetic batches end to end
+- the next bottleneck is filling in unsupported mesh/material/light delta types against real scene content
 
 ---
 
 ## Short Status Line
 
-The repo now has a real live-link core, external-ID mapping, a main-thread delta apply path, and a first renderer invalidation pass, but mesh/material/light live application and finer invalidation still remain.
+The repo now has a real live-link core, external-ID mapping, a main-thread delta apply path, a first renderer invalidation pass, and a mock provider, but mesh/material/light live application and finer invalidation still remain.

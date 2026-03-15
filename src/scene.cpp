@@ -1086,7 +1086,7 @@ void SelectLight(int index) {
     n.selected = false;
 }
 
-void AddLight(LightType type) {
+size_t AddLight(LightType type) {
   Light l = {};
   memset(&l, 0, sizeof(Light));
   l.type = (uint32_t)type;
@@ -1107,6 +1107,53 @@ void AddLight(LightType type) {
   l.iesAtlasIndex = -1;
   s_lights.push_back(l);
   UpdateLights();
+  return s_lights.empty() ? (size_t)-1 : (s_lights.size() - 1);
+}
+
+bool UpdateLight(size_t index, const Light &light) {
+  if (index >= s_lights.size()) {
+    return false;
+  }
+  if (memcmp(&s_lights[index], &light, sizeof(Light)) == 0) {
+    return true;
+  }
+  s_lights[index] = light;
+  UpdateLights();
+  return true;
+}
+
+size_t GetMaterialCount() { return g_loadedMaterials.size(); }
+
+int FindMaterialByName(const std::string &name) {
+  if (name.empty()) {
+    return -1;
+  }
+  for (size_t index = 0; index < g_loadedMaterials.size(); ++index) {
+    if (name == g_loadedMaterials[index].name) {
+      return static_cast<int>(index);
+    }
+  }
+  return -1;
+}
+
+bool GetMaterial(size_t index, Asset::Material *outMaterial) {
+  if (!outMaterial || index >= g_loadedMaterials.size()) {
+    return false;
+  }
+  *outMaterial = g_loadedMaterials[index];
+  return true;
+}
+
+bool UpdateMaterial(size_t index, const Asset::Material &material) {
+  if (index >= g_loadedMaterials.size()) {
+    return false;
+  }
+
+  Asset::Material &dst = g_loadedMaterials[index];
+  dst = material;
+  DxrRenderer::MarkMaterialDirty(static_cast<int>(index));
+  DxrRenderer::ResetAccumulation();
+  return true;
 }
 
 void RemoveLight(size_t index) {

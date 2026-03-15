@@ -39,6 +39,7 @@ private:
     QProgressBar *m_sceneIoProgress = nullptr;
     QLabel *m_sceneIoLabel = nullptr;
     QLabel *m_statusStatsLabel = nullptr;
+    QLabel *m_liveLinkLabel = nullptr;
     QFrame *m_statusDivider = nullptr;
     QTimer *m_sceneIoTimer = nullptr;
 };
