@@ -6,12 +6,24 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace LiveLink {
+
+struct LiveLinkDiagnosticEntry {
+  uint64_t sequence = 0;
+  std::string level;
+  std::string providerName;
+  std::string sessionId;
+  std::string deltaKind;
+  std::string targetId;
+  std::string message;
+};
 
 class LiveLinkSceneSync {
 public:
   void ApplyQueuedBatches(LiveLinkCoordinator &coordinator);
+  std::vector<LiveLinkDiagnosticEntry> GetRecentDiagnostics() const;
 
 private:
   enum class EngineHandleKind {
@@ -42,6 +54,8 @@ private:
                                  const SceneDelta &delta);
   bool ApplyNodeVisibilityChanged(const SceneDeltaBatch &batch,
                                   const SceneDelta &delta);
+  bool ApplyMeshPayloadChanged(const SceneDeltaBatch &batch,
+                               const SceneDelta &delta);
   bool ApplyMaterialChanged(const SceneDeltaBatch &batch,
                             const SceneDelta &delta);
   bool ApplyLightChanged(const SceneDeltaBatch &batch, const SceneDelta &delta);
@@ -53,6 +67,8 @@ private:
 
   ObjectBinding *FindBinding(const ObjectId &objectId);
   const ObjectBinding *FindBinding(const ObjectId &objectId) const;
+  ObjectBinding *FindRelatedBinding(const ObjectId &objectId,
+                                    EngineHandleKind handleKind);
   ObjectBinding &BindObject(const ObjectId &objectId,
                             const std::string &sessionId,
                             EngineHandleKind handleKind,
@@ -69,12 +85,19 @@ private:
   void ReindexSceneNodeBindingsAfterRemoval(size_t removedIndex);
   void ReindexSceneLightBindingsAfterRemoval(size_t removedIndex);
   void ClearAllBindings();
+  void AppendDiagnosticEntry(const char *level, const std::string &providerName,
+                             const std::string &sessionId,
+                             const std::string &deltaKind,
+                             const std::string &targetId,
+                             const std::string &message) const;
   void LogValidationIssue(const ValidationIssue &issue) const;
   void LogApplyIssue(const char *level, const std::string &providerName,
                      const std::string &sessionId, const SceneDelta *delta,
                      const std::string &message) const;
 
   std::unordered_map<ObjectId, ObjectBinding, ObjectIdHash> m_bindings;
+  mutable uint64_t m_nextDiagnosticSequence = 1;
+  mutable std::vector<LiveLinkDiagnosticEntry> m_recentDiagnostics;
 };
 
 LiveLinkSceneSync &GetSceneSync();

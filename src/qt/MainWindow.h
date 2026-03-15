@@ -5,6 +5,7 @@
 class DX12View;
 class QAction;
 class QLabel;
+class QPlainTextEdit;
 class QProgressBar;
 class QFrame;
 class QTimer;
@@ -40,6 +41,8 @@ private:
     QLabel *m_sceneIoLabel = nullptr;
     QLabel *m_statusStatsLabel = nullptr;
     QLabel *m_liveLinkLabel = nullptr;
+    QLabel *m_liveLinkSummaryLabel = nullptr;
+    QPlainTextEdit *m_liveLinkDiagnosticsView = nullptr;
     QFrame *m_statusDivider = nullptr;
     QTimer *m_sceneIoTimer = nullptr;
 };
