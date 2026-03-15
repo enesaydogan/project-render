@@ -12,6 +12,11 @@
     <CustomBuild Include="D:\project-render\tools\3dsmax2025\CMakeLists.txt" />
   </ItemGroup>
   <ItemGroup>
+    <ResourceCompile Include="D:\project-render\tools\3dsmax2025\src\max_livelink_utility.rc">
+      <Filter>Source Files</Filter>
+    </ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
     <Filter Include="Source Files">
       <UniqueIdentifier>{3158816C-DAEC-3C19-8C76-6DD7FAE3F3C5}</UniqueIdentifier>
     </Filter>

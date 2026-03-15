@@ -263,7 +263,10 @@ SceneDelta MockLiveLinkProvider::MakeCameraDelta(uint64_t revision,
   delta.target = MakeObjectId(ObjectType::Camera, kCameraId);
   delta.revision = revision;
   delta.debugLabel = "Mock camera";
-  delta.payload = CameraChangedPayload{fovDegrees, 0.05f, 1500.0f};
+  delta.payload = CameraChangedPayload{{0.0f, 1.0f, -5.0f},
+                                       {0.0f, 0.0f, 1.0f},
+                                       {0.0f, 1.0f, 0.0f},
+                                       fovDegrees, 0.05f, 1500.0f};
   return delta;
 }
 

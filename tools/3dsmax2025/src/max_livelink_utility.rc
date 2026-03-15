@@ -1,0 +1,11 @@
+#include <windows.h>
+
+101 DIALOGEX 0, 0, 228, 76
+STYLE DS_SETFONT | WS_CHILD | WS_VISIBLE
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "Background sync is inactive.", 1001, 8, 8, 210, 18
+    PUSHBUTTON "Start Sync", 1002, 8, 30, 100, 14
+    PUSHBUTTON "Stop Sync", 1003, 118, 30, 100, 14
+    LTEXT "Once started, sync keeps running after you close this utility.", -1, 8, 52, 210, 16
+END

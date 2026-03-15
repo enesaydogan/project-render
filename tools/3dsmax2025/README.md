@@ -1,4 +1,4 @@
-# 3ds Max 2025 LiveLink Bootstrap
+# 3ds Max 2025 LiveLink
 
 This folder contains the first real 3ds Max-side LiveLink project for project-render.
 
@@ -12,14 +12,22 @@ Current scope:
   - `NodeAdded`
   - `NodeTransformChanged`
   - `NodeVisibilityChanged`
+- exports geometry nodes to temporary `.obj` files and sends `MeshPayloadChanged`
+- polls the scene while the utility is active and sends incremental:
+  - `NodeAdded`
+  - `NodeRemoved`
+  - `NodeTransformChanged`
+  - `NodeVisibilityChanged`
+  - `SelectionChanged`
+  - `MeshPayloadChanged` when detected geometry changes require a fresh payload
 - sends `SessionClosed` when the utility is closed
 
 What it does not do yet:
 
-- live incremental change tracking from Max notifications
-- camera, light, material, or mesh export from Max
+- camera, light, or material export from Max
 - UI controls inside the utility panel
-- reconnect or resend logic beyond the first snapshot path
+- robust topology/material dependency tracking beyond the current mesh fingerprint pass
+- cleanup of temporary mesh payload files
 
 ## Engine side
 
@@ -67,7 +75,14 @@ Then:
 
 1. start `project-render` with `--max-livelink-pipe`
 2. open the utility in 3ds Max
-3. the plugin will send one initial scene snapshot into the running renderer
+3. the plugin will send an initial scene snapshot into the running renderer
+4. keep the utility open while editing if you want incremental sync to continue
+
+Geometry notes:
+
+- renderable Max geometry is currently exported as temporary `.obj` payloads under the system temp directory
+- node-only deltas create scene nodes in the engine, but visible meshes depend on `MeshPayloadChanged`
+- this path is intentionally minimal and does not yet preserve Max materials
 
 ## Wire format
 

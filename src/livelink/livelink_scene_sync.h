@@ -81,7 +81,7 @@ private:
   bool EnsureMaterialBinding(const SceneDeltaBatch &batch,
                              const SceneDelta &delta,
                              ObjectBinding **outBinding = nullptr);
-  void RemoveBindingsForSession(const std::string &sessionId);
+  void RemoveSessionContent(const std::string &sessionId);
   void ReindexSceneNodeBindingsAfterRemoval(size_t removedIndex);
   void ReindexSceneLightBindingsAfterRemoval(size_t removedIndex);
   void ClearAllBindings();

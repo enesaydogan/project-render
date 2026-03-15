@@ -241,6 +241,15 @@ bool ParsePayload(const SceneDeltaKind kind, const json &payloadJson,
   }
   case SceneDeltaKind::CameraChanged: {
     CameraChangedPayload payload;
+    if (payloadJson.contains("position")) {
+      FillFloatArray(payloadJson.at("position"), &payload.position);
+    }
+    if (payloadJson.contains("forward")) {
+      FillFloatArray(payloadJson.at("forward"), &payload.forward);
+    }
+    if (payloadJson.contains("up")) {
+      FillFloatArray(payloadJson.at("up"), &payload.up);
+    }
     payload.fovDegrees = payloadJson.value("fovDegrees", 60.0f);
     payload.nearPlane = payloadJson.value("nearPlane", 0.01f);
     payload.farPlane = payloadJson.value("farPlane", 1000.0f);

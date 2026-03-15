@@ -853,7 +853,7 @@ bool InitApplication(HWND hwnd) {
 
   D3D12_RASTERIZER_DESC rasterDesc = {};
   rasterDesc.FillMode = D3D12_FILL_MODE_SOLID;
-  rasterDesc.CullMode = D3D12_CULL_MODE_BACK;
+  rasterDesc.CullMode = D3D12_CULL_MODE_NONE;
   rasterDesc.FrontCounterClockwise = FALSE;
   rasterDesc.DepthBias = 0;
   rasterDesc.DepthBiasClamp = 0.0f;

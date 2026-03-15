@@ -341,8 +341,7 @@ void RecreateMeshPipeline(ID3D12Device *device, ID3D12RootSignature *rootSig) {
     D3D12_RASTERIZER_DESC rasterDesc = {};
     rasterDesc.FillMode =
         g_rasterWireframe ? D3D12_FILL_MODE_WIREFRAME : D3D12_FILL_MODE_SOLID;
-    rasterDesc.CullMode =
-        g_rasterWireframe ? D3D12_CULL_MODE_NONE : D3D12_CULL_MODE_BACK;
+    rasterDesc.CullMode = D3D12_CULL_MODE_NONE;
     rasterDesc.FrontCounterClockwise = TRUE;
     rasterDesc.DepthClipEnable = TRUE;
 
