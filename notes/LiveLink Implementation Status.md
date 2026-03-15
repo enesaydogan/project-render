@@ -18,16 +18,16 @@ Completed so far:
 
 - Phase 1: engine-side live-link core
 - Phase 2: reusable scene mutation API extracted from import-heavy flows
+- Phase 3: external-ID mapping and main-thread scene apply bridge
 - Phase 4: first renderer invalidation pass integrated across current scene mutation and scene-load/mode-switch paths
 
 Not implemented yet:
 
-- external-ID mapping between DCC objects and engine objects
 - fine-grained renderer dirty-state classification beyond the current coarse buckets
-- main-thread delta apply path from queued live-link batches into `Scene`
 - mock provider
 - 3ds Max provider
 - live-link UI panel/status controls
+- mesh/material/light delta application beyond the current supported subset
 
 ---
 
@@ -116,7 +116,7 @@ Implemented:
 
 Current integration point:
 
-- `main.cpp` calls `LiveLink::TickCoordinator()` after input update
+- `main.cpp` calls `LiveLink::TickRuntime()` after input update
 
 ### Behavior Impact
 
@@ -125,7 +125,7 @@ Phase 1 is intentionally infrastructure-only.
 Current behavior:
 
 - no provider is registered by default
-- no scene deltas are applied yet
+- validated batches are now consumed on the main thread and applied to the supported scene/runtime targets
 - rendering and scene behavior remain unchanged
 
 ### Files Touched In Phase 1
@@ -255,6 +255,124 @@ Result:
 
 ---
 
+## Phase 3 Status
+
+### Goal
+
+Support stable synchronization between external DCC object identity and engine-side runtime objects, and apply validated batches on the main thread.
+
+### Implemented
+
+Added a scene-sync runtime under `src/livelink/`:
+
+- `livelink_scene_sync.h`
+- `livelink_scene_sync.cpp`
+
+Also updated runtime integration so queued batches are consumed each frame on the main thread.
+
+### What Phase 3 Added
+
+#### 1. External-ID mapping table
+
+Implemented a persistent mapping from canonical `ObjectId` values to engine-side runtime handles.
+
+Current handle kinds:
+
+- scene node
+- main camera
+- environment
+
+The mapping also stores:
+
+- owning session ID
+- last applied revision per object
+
+#### 2. Main-thread batch application
+
+Queued batches from the coordinator are now consumed on the engine main thread.
+
+Current runtime flow:
+
+- poll providers
+- consume validation issues
+- consume queued batches
+- apply supported deltas into `Scene`, camera state, and environment state
+
+#### 3. Validation issue draining
+
+Coordinator validation issues are now drained and logged so they do not accumulate silently forever.
+
+#### 4. Stable node binding maintenance
+
+Implemented:
+
+- binding creation for new external node IDs
+- binding cleanup on session close
+- binding cleanup on full scene reset
+- node-index reindexing after node removal
+- stale per-object revision rejection during apply
+
+### Supported Delta Application In Phase 3
+
+Currently applied:
+
+- `SessionOpened`
+- `SessionClosed`
+- `FullSceneSync`
+- `NodeAdded`
+- `NodeRemoved`
+- `NodeTransformChanged`
+- `NodeVisibilityChanged`
+- `SelectionChanged`
+- `CameraChanged`
+- `EnvironmentChanged`
+
+Current behavior details:
+
+- node deltas target the Phase 2 scene mutation API
+- node transforms and visibility use the Phase 4 invalidation path
+- camera deltas update `g_cameraData` and push through `UpdateCameraCB()`
+- environment deltas can load a file IBL and reset DXR state as needed
+
+### Current Unsupported Delta Application
+
+Queued but not yet meaningfully applied:
+
+- `MeshPayloadChanged`
+- `MaterialChanged`
+- `LightChanged`
+
+These currently log an apply warning instead of mutating the runtime scene.
+
+### Files Touched In Phase 3
+
+- `src/livelink/livelink_scene_sync.h`
+- `src/livelink/livelink_scene_sync.cpp`
+- `src/livelink/livelink_runtime.h`
+- `src/livelink/livelink_runtime.cpp`
+- `src/main.cpp`
+- `CMakeLists.txt`
+
+### Phase 3 Result
+
+Result:
+
+- the repo now has a real external-ID mapping layer near the live-link runtime
+- validated queued batches are now applied on the engine main thread
+- live-link is no longer structurally inert even without a real DCC provider
+
+### Phase 3 Remaining Gaps
+
+Still missing:
+
+- mesh payload replacement against real imported content
+- material delta application
+- light delta application
+- broader engine-handle coverage beyond nodes, camera, and environment
+- conflict resolution beyond the current revision and binding checks
+
+---
+
 ## Phase 4 Status
 
 ### Goal
@@ -341,9 +459,8 @@ So Phase 4 is implemented in a practical repo-wide first pass, but not yet at th
 
 ### High-priority missing pieces
 
-- external object ID to engine object mapping
-- delta-to-scene apply layer using the live-link queue
-- renderer invalidation classification
+- richer mesh/material/light scene application
+- finer renderer invalidation classification
 - mock provider for testing host behavior
 - diagnostics UI for live-link state
 
@@ -364,13 +481,15 @@ That means:
 
 - define and receive provider-neutral delta batches
 - validate and queue live-link batches safely
+- map external object identity to engine runtime objects
+- apply a supported subset of live-link deltas on the main thread
 - build future providers against a stable host-side API
 - call scene mutation through explicit engine functions instead of import-only code
 
 ### Not ready yet
 
-- apply live-link deltas into the runtime scene
-- preserve stable identity across repeated live edits
+- apply mesh/material/light live deltas into the runtime scene
+- preserve stable identity across repeated live edits for every supported runtime object type
 - update only the minimum renderer state for each kind of scene change
 - run a real 3ds Max session against the engine
 
@@ -380,16 +499,16 @@ That means:
 
 Best next implementation phase:
 
-- renderer invalidation classification
+- mock provider and unsupported-delta expansion
 
 Reason:
 
-- the scene mutation API now exists
-- but transform, visibility, mesh, and material changes still pay too much rebuild cost
-- before real live-link deltas are applied, the renderer needs finer invalidation rules
+- the engine can now accept and apply a subset of deltas
+- the next bottleneck is verifying real batch behavior and filling in unsupported mesh/material/light delta types
+- a mock provider will exercise the Phase 3 and Phase 4 runtime paths without 3ds Max SDK overhead
 
 ---
 
 ## Short Status Line
 
-The repo now has a real live-link core and a real scene mutation seam, but it does not yet have a delta apply path or efficient renderer invalidation.
+The repo now has a real live-link core, external-ID mapping, a main-thread delta apply path, and a first renderer invalidation pass, but mesh/material/light live application and finer invalidation still remain.
