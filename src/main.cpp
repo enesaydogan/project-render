@@ -2340,14 +2340,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     if (!w.isVisible() || g_appClosing)
       break;
  #else
+    bool handledWindowMessage = false;
     EnsureMainWindowTitle(hwnd);
-    if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+    while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+      handledWindowMessage = true;
       TranslateMessage(&msg);
       DispatchMessage(&msg);
       if (msg.message == WM_QUIT || g_appClosing)
         break;
-      continue;
     }
+    if (msg.message == WM_QUIT || g_appClosing)
+      break;
  #endif
     if (g_appClosing)
       break;
@@ -2474,6 +2477,23 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
     // Editor UI (moved to editor_ui.cpp)
     DrawEditorUI(g_fps, g_timeOfDay, g_northOffset, g_latitudeDeg, g_dayOfYear);
+
+  #ifdef USE_QT_UI
+    const bool canIdleDxr =
+      !g_renderExportJob.active && g_currentRenderMode == RenderMode::DXR &&
+      DxrRenderer::IsReady() && DxrRenderer::CanIdleWithoutRendering();
+  #else
+    const bool canIdleDxr =
+      !handledWindowMessage && !g_renderExportJob.active &&
+      g_currentRenderMode == RenderMode::DXR && DxrRenderer::IsReady() &&
+      DxrRenderer::CanIdleWithoutRendering();
+  #endif
+    if (canIdleDxr) {
+      prevTime = std::chrono::high_resolution_clock::now();
+      WaitMessage();
+      prevTime = std::chrono::high_resolution_clock::now();
+      continue;
+    }
 
     // fprintf(stderr, "MainLoop: PopulateCommandList start\n");
     PopulateCommandList();

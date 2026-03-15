@@ -517,7 +517,11 @@ void MainWindow::updateSceneIoUi()
         QStringList parts;
         const bool dxrMode = (g_currentRenderMode == RenderMode::DXR);
         if (dxrMode) {
-            parts << tr("SPP %1").arg(DxrRenderer::GetDisplayedSampleCount());
+            parts << tr("SPP %1 (%2)")
+                         .arg(DxrRenderer::GetDisplayedSampleCount())
+                         .arg(DxrRenderer::CanIdleWithoutRendering()
+                                  ? tr("Idle")
+                                  : tr("Rendering"));
             const float gpuMs = DxrRenderer::GetGPUFrameTimeMs();
             if (gpuMs > 0.01f) {
                 parts << tr("GPU %1 ms").arg(QString::number(gpuMs, 'f', 2));

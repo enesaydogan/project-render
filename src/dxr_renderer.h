@@ -53,6 +53,10 @@ UINT GetAccumulationFrameCount();
 // Get effective sample count shown to UI (RR uses its own still-frame counter).
 UINT GetDisplayedSampleCount();
 
+// Returns true when DXR has reached a stable end condition and the host can
+// stop submitting frames until user input or another state change occurs.
+bool CanIdleWithoutRendering();
+
 // Profiling functions
 void BeginFrameProfiling(ID3D12GraphicsCommandList *commandList);
 void EndFrameProfiling(ID3D12GraphicsCommandList *commandList);
