@@ -24,6 +24,8 @@ class LiveLinkSceneSync {
 public:
   void ApplyQueuedBatches(LiveLinkCoordinator &coordinator);
   std::vector<LiveLinkDiagnosticEntry> GetRecentDiagnostics() const;
+  void DetachCameraControl();
+  bool IsCameraControlDetached() const;
 
 private:
   enum class EngineHandleKind {
@@ -41,6 +43,14 @@ private:
     EngineHandleKind handleKind = EngineHandleKind::Unknown;
     size_t handleIndex = static_cast<size_t>(-1);
     uint64_t lastAppliedRevision = 0;
+  };
+
+  struct CachedCameraState {
+    bool valid = false;
+    ObjectId objectId;
+    std::string sessionId;
+    uint64_t revision = 0;
+    CameraChangedPayload payload;
   };
 
   bool ApplyBatch(const SceneDeltaBatch &batch);
@@ -64,6 +74,7 @@ private:
   bool ApplyCameraChanged(const SceneDeltaBatch &batch, const SceneDelta &delta);
   bool ApplyEnvironmentChanged(const SceneDeltaBatch &batch,
                                const SceneDelta &delta);
+  void ApplyCachedCameraState(const CachedCameraState &state);
 
   ObjectBinding *FindBinding(const ObjectId &objectId);
   const ObjectBinding *FindBinding(const ObjectId &objectId) const;
@@ -96,6 +107,8 @@ private:
                      const std::string &message) const;
 
   std::unordered_map<ObjectId, ObjectBinding, ObjectIdHash> m_bindings;
+  CachedCameraState m_cachedExternalCamera;
+  bool m_cameraControlDetached = false;
   mutable uint64_t m_nextDiagnosticSequence = 1;
   mutable std::vector<LiveLinkDiagnosticEntry> m_recentDiagnostics;
 };
