@@ -56,6 +56,9 @@ target_sources(project-render PRIVATE
     src/imgui_theme.cpp
     src/scene_io.cpp
     src/grass_manager.cpp
+    src/livelink/livelink_types.cpp
+    src/livelink/livelink_coordinator.cpp
+    src/livelink/livelink_runtime.cpp
 )
 
 if(USE_QT_UI)

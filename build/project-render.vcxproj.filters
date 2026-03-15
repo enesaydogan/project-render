@@ -70,6 +70,15 @@
     <ClCompile Include="D:\project-render\src\grass_manager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\project-render\src\livelink\livelink_types.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\project-render\src\livelink\livelink_coordinator.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\project-render\src\livelink\livelink_runtime.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="D:\project-render\src\qt\CameraPanel.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
