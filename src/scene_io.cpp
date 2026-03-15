@@ -1007,12 +1007,10 @@ bool LoadScenePRS(const std::string &path) {
         int old = g_loadedMeshes[i].materialIndex;
         if (old >= 0 && old < (int)remap.size()) g_loadedMeshes[i].materialIndex = remap[old];
       }
-      Scene::RebuildAccelerationStructures();
-      DxrRenderer::CreateRayTracingPipeline(0, 0);
+      Scene::RequestRendererFullRebuild();
     }
 
     UpdateCameraCB();
-    DxrRenderer::ResetAccumulation();
     fprintf(stderr, "PRS: Scene loaded OK\n");
     ReportProgress(1.0f, "Load complete");
     return true;

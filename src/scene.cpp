@@ -253,18 +253,38 @@ static std::string ResolveNodeDisplayName(const ImportedNodePayload &payload) {
   return "Imported Node";
 }
 
-static void ApplySceneMutationPostProcess(bool rebuildAccelerationStructures,
-                                          bool recreateRayTracingPipeline,
-                                          bool resetAccumulation) {
-  if (rebuildAccelerationStructures) {
-    RebuildAccelerationStructures();
-  }
-  if (recreateRayTracingPipeline) {
-    DxrRenderer::CreateRayTracingPipeline(0, 0);
-  }
-  if (resetAccumulation) {
+enum class RendererInvalidationPlan {
+  None,
+  AccumulationOnly,
+  TlasRefresh,
+  FullAccelerationStructureRebuild,
+};
+
+static void ApplyRendererInvalidation(RendererInvalidationPlan plan) {
+  switch (plan) {
+  case RendererInvalidationPlan::None:
+    return;
+  case RendererInvalidationPlan::AccumulationOnly:
     DxrRenderer::ResetAccumulation();
+    return;
+  case RendererInvalidationPlan::TlasRefresh:
+    DxrRenderer::RequestAccelerationStructureUpdate();
+    DxrRenderer::ResetAccumulation();
+    return;
+  case RendererInvalidationPlan::FullAccelerationStructureRebuild:
+    DxrRenderer::RequestAccelerationStructureRebuild();
+    DxrRenderer::ResetAccumulation();
+    return;
   }
+}
+
+void RequestRendererFullRebuild() {
+  ApplyRendererInvalidation(
+      RendererInvalidationPlan::FullAccelerationStructureRebuild);
+}
+
+void RequestRendererTlasRefresh() {
+  ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
 }
 
 static std::vector<int> ResolveReplacementMaterialIndices(
@@ -456,7 +476,8 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
                                              : payload.sourcePath);
   fprintf(stderr, "%s\n", s_lastStatus.c_str());
 
-  ApplySceneMutationPostProcess(true, true, true);
+  ApplyRendererInvalidation(
+      RendererInvalidationPlan::FullAccelerationStructureRebuild);
   if (outNodeIndex) {
     *outNodeIndex = nodeIndex;
   }
@@ -517,7 +538,8 @@ bool ReplaceNodeImportedContent(size_t index, ImportedNodePayload payload) {
     node.linkedMaterialSourceNames.emplace_back(material.name);
   }
 
-  ApplySceneMutationPostProcess(true, true, true);
+  ApplyRendererInvalidation(
+      RendererInvalidationPlan::FullAccelerationStructureRebuild);
 
   s_lastStatus = std::string("Reimported: ") +
                  (effectiveSourcePath.empty() ? node.name : effectiveSourcePath);
@@ -543,7 +565,7 @@ bool UpdateNodeTransform(size_t index, const float *columnMajor4x4) {
   }
   memcpy(s_nodes[index].transform, columnMajor4x4,
          sizeof(s_nodes[index].transform));
-  ApplySceneMutationPostProcess(true, false, true);
+  ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
   return true;
 }
 
@@ -555,7 +577,7 @@ bool SetNodeVisibility(size_t index, bool visible) {
     return true;
   }
   s_nodes[index].visible = visible;
-  ApplySceneMutationPostProcess(true, false, true);
+  ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
   return true;
 }
 
@@ -865,7 +887,8 @@ bool RemoveNode(size_t index) {
   }
   s_nodes.erase(s_nodes.begin() + index);
 
-  ApplySceneMutationPostProcess(true, false, true);
+  ApplyRendererInvalidation(
+      RendererInvalidationPlan::FullAccelerationStructureRebuild);
   return true;
 }
 
@@ -991,8 +1014,8 @@ void AddDefaultPlane(float offset_y) {
     fprintf(stderr, "AddDefaultPlane: added plane (10x10) with material %d\n",
             matIndex);
 
-    // Rebuild AS
-    RebuildAccelerationStructures();
+    ApplyRendererInvalidation(
+        RendererInvalidationPlan::FullAccelerationStructureRebuild);
   } catch (const std::exception &e) {
     fprintf(stderr, "AddDefaultPlane: exception: %s\n", e.what());
   }
@@ -1589,10 +1612,7 @@ void DrawGizmo() {
                                    1};
     MatMul(pivotMatrix, invTranslationMat, node.transform);
 
-    // Ensure raytracing acceleration structures are updated to reflect
-    // transform changes
-    RebuildAccelerationStructures();
-    DxrRenderer::ResetAccumulation();
+    ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
   }
 }
 
@@ -2024,8 +2044,6 @@ void DrawScenePanel(HWND hwnd, bool &visible) {
                                 ImVec4(0.7f, 0.1f, 0.1f, 1.0f));
           if (ImGui::Button("Delete", ImVec2(-FLT_MIN, 0))) {
             DeleteNode(i);
-            // Ensure accumulation is reset immediately for delete operations
-            DxrRenderer::ResetAccumulation();
             ImGui::PopStyleColor(2);
             ImGui::PopID();
             ImGui::EndTable();

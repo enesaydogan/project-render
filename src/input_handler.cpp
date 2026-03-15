@@ -235,8 +235,8 @@ void Update(float dt) {
                                                 DX12Context::g_windowHeight);
           // ensure acceleration structures are fresh when we switch modes;
           // sometimes the TLAS can be cleared if the scene was momentarily
-          // empty, so rebuild here to guarantee IsReady() will succeed.
-          Scene::RebuildAccelerationStructures();
+          // empty, so request a rebuild before the next DXR frame.
+          Scene::RequestRendererFullRebuild();
           if (g_verboseRenderLogs)
             fprintf(stderr, "InputHandler: switched to DXR, rebuilt TLAS\n");
         } else {
