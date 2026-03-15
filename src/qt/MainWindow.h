@@ -47,6 +47,7 @@ private:
     QPushButton *m_liveLinkConnectButton = nullptr;
     QPushButton *m_liveLinkDisconnectButton = nullptr;
     QPushButton *m_liveLinkReconnectButton = nullptr;
+    QPushButton *m_liveLinkTakeCameraButton = nullptr;
     QFrame *m_statusDivider = nullptr;
     QTimer *m_sceneIoTimer = nullptr;
 };

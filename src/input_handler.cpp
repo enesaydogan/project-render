@@ -2,6 +2,7 @@
 #include "camera.h"
 #include "dx12_context.h"
 #include "dxr_renderer.h"
+#include "livelink/livelink_scene_sync.h"
 #include "material_editor.h"
 #include "scene.h"
 #include <cmath>
@@ -108,8 +109,11 @@ void Update(float dt) {
 
     const float sensitivity = g_mouseSensitivity; // radians per pixel
     // Update yaw/pitch directly (FPS-style mouse look)
-    g_camYaw += dx * sensitivity;
-    g_camPitch -= dy * sensitivity;
+    if (dx != 0 || dy != 0) {
+      LiveLink::GetSceneSync().DetachCameraControl();
+      g_camYaw += dx * sensitivity;
+      g_camPitch -= dy * sensitivity;
+    }
 
     // Clamp pitch to avoid flipping
     const float maxPitch = 3.14159265f * 0.5f - 0.01f;
@@ -286,6 +290,7 @@ void Update(float dt) {
 
   if (move.x != 0 || move.y != 0 || move.z != 0) {
     normalize3(move);
+    LiveLink::GetSceneSync().DetachCameraControl();
     g_cameraData.pos[0] += move.x * moveSpeed * dt;
     g_cameraData.pos[1] += move.y * moveSpeed * dt;
     g_cameraData.pos[2] += move.z * moveSpeed * dt;

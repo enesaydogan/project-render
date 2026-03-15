@@ -512,6 +512,13 @@ void MainWindow::createDocks()
             }
         });
         buttonRow->addWidget(m_liveLinkReconnectButton);
+
+        m_liveLinkTakeCameraButton = new QPushButton(tr("Take Camera"), panel);
+        connect(m_liveLinkTakeCameraButton, &QPushButton::clicked, this, []() {
+            LiveLink::GetSceneSync().DetachCameraControl();
+        });
+        buttonRow->addWidget(m_liveLinkTakeCameraButton);
+
         buttonRow->addStretch(1);
         layout->addLayout(buttonRow);
 
@@ -740,6 +747,10 @@ void MainWindow::updateSceneIoUi()
             summary << tr("Rejected %1 batches / %2 deltas")
                            .arg(static_cast<qulonglong>(stats.batchesRejected))
                            .arg(static_cast<qulonglong>(stats.deltasRejected));
+            summary << tr("Camera %1")
+                           .arg(LiveLink::GetSceneSync().IsCameraControlDetached()
+                                    ? tr("engine override until dcc moves")
+                                    : tr("dcc linked"));
             summary << tr("Recent issues %1 warnings / %2 errors")
                            .arg(warningCount)
                            .arg(errorCount);
@@ -747,7 +758,7 @@ void MainWindow::updateSceneIoUi()
         }
 
         if (m_liveLinkConnectButton && m_liveLinkDisconnectButton &&
-            m_liveLinkReconnectButton) {
+            m_liveLinkReconnectButton && m_liveLinkTakeCameraButton) {
             const bool hasProviders = !providers.empty();
             bool anyConnected = false;
             bool anyDisconnected = false;
@@ -761,6 +772,8 @@ void MainWindow::updateSceneIoUi()
             m_liveLinkConnectButton->setEnabled(hasProviders && anyDisconnected);
             m_liveLinkDisconnectButton->setEnabled(hasProviders && anyConnected);
             m_liveLinkReconnectButton->setEnabled(hasProviders);
+            m_liveLinkTakeCameraButton->setEnabled(
+                anyConnected && !LiveLink::GetSceneSync().IsCameraControlDetached());
         }
 
         if (m_liveLinkDiagnosticsView) {

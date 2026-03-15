@@ -170,6 +170,12 @@ LiveLinkSceneSync &GetSceneSync() {
   return s_sceneSync;
 }
 
+void LiveLinkSceneSync::DetachCameraControl() { m_cameraControlDetached = true; }
+
+bool LiveLinkSceneSync::IsCameraControlDetached() const {
+  return m_cameraControlDetached;
+}
+
 std::vector<LiveLinkDiagnosticEntry>
 LiveLinkSceneSync::GetRecentDiagnostics() const {
   return m_recentDiagnostics;
@@ -248,6 +254,10 @@ bool LiveLinkSceneSync::ApplySessionOpened(const SceneDeltaBatch &batch,
 bool LiveLinkSceneSync::ApplySessionClosed(const SceneDeltaBatch &batch,
                                            const SceneDelta &delta) {
   RemoveSessionContent(batch.sessionId);
+  if (m_cachedExternalCamera.valid &&
+      m_cachedExternalCamera.sessionId == batch.sessionId) {
+    m_cachedExternalCamera = CachedCameraState{};
+  }
   const SessionClosedPayload *payload = FindPayload<SessionClosedPayload>(delta);
   if (payload && !payload->reason.empty()) {
     fprintf(stderr, "LiveLink: session closed provider='%s' session='%s' reason='%s'\n",
@@ -264,6 +274,7 @@ bool LiveLinkSceneSync::ApplyFullSceneSync(const SceneDeltaBatch &batch,
     Scene::ResetScene();
     Scene::SelectNode(kInvalidHandle);
     ClearAllBindings();
+    m_cachedExternalCamera = CachedCameraState{};
     fprintf(stderr,
             "LiveLink: full scene sync reset provider='%s' session='%s'\n",
             batch.providerName.c_str(), batch.sessionId.c_str());
@@ -631,15 +642,36 @@ bool LiveLinkSceneSync::ApplyCameraChanged(const SceneDeltaBatch &batch,
       binding ? *binding
               : BindObject(delta.target, batch.sessionId,
                            EngineHandleKind::MainCamera, kInvalidHandle);
-  g_cameraData.pos[0] = payload->position[0];
-  g_cameraData.pos[1] = payload->position[1];
-  g_cameraData.pos[2] = payload->position[2];
-  g_cameraData.forward[0] = payload->forward[0];
-  g_cameraData.forward[1] = payload->forward[1];
-  g_cameraData.forward[2] = payload->forward[2];
-  g_cameraData.up[0] = payload->up[0];
-  g_cameraData.up[1] = payload->up[1];
-  g_cameraData.up[2] = payload->up[2];
+  m_cachedExternalCamera.valid = true;
+  m_cachedExternalCamera.objectId = delta.target;
+  m_cachedExternalCamera.sessionId = batch.sessionId;
+  m_cachedExternalCamera.revision = delta.revision;
+  m_cachedExternalCamera.payload = *payload;
+
+  if (m_cameraControlDetached) {
+    m_cameraControlDetached = false;
+  }
+
+  ApplyCachedCameraState(m_cachedExternalCamera);
+  cameraBinding.lastAppliedRevision = delta.revision;
+  return true;
+}
+
+void LiveLinkSceneSync::ApplyCachedCameraState(const CachedCameraState &state) {
+  if (!state.valid) {
+    return;
+  }
+
+  const CameraChangedPayload &payload = state.payload;
+  g_cameraData.pos[0] = payload.position[0];
+  g_cameraData.pos[1] = payload.position[1];
+  g_cameraData.pos[2] = payload.position[2];
+  g_cameraData.forward[0] = payload.forward[0];
+  g_cameraData.forward[1] = payload.forward[1];
+  g_cameraData.forward[2] = payload.forward[2];
+  g_cameraData.up[0] = payload.up[0];
+  g_cameraData.up[1] = payload.up[1];
+  g_cameraData.up[2] = payload.up[2];
   const float fallbackForward[3] = {0.0f, 0.0f, 1.0f};
   const float fallbackUp[3] = {0.0f, 1.0f, 0.0f};
   Normalize3(g_cameraData.forward, fallbackForward);
@@ -651,14 +683,12 @@ bool LiveLinkSceneSync::ApplyCameraChanged(const SceneDeltaBatch &batch,
   g_cameraData.up[1] -= dot * g_cameraData.forward[1];
   g_cameraData.up[2] -= dot * g_cameraData.forward[2];
   Normalize3(g_cameraData.up, fallbackUp);
-  g_cameraData.fov = payload->fovDegrees;
-  g_cameraData.nearZ = payload->nearPlane;
-  g_cameraData.farZ = payload->farPlane;
+  g_cameraData.fov = payload.fovDegrees;
+  g_cameraData.nearZ = payload.nearPlane;
+  g_cameraData.farZ = payload.farPlane;
   g_camYaw = atan2f(g_cameraData.forward[0], -g_cameraData.forward[2]);
   g_camPitch = asinf(std::clamp(g_cameraData.forward[1], -1.0f, 1.0f));
   UpdateCameraCB();
-  cameraBinding.lastAppliedRevision = delta.revision;
-  return true;
 }
 
 bool LiveLinkSceneSync::ApplyEnvironmentChanged(const SceneDeltaBatch &batch,
@@ -896,6 +926,9 @@ void LiveLinkSceneSync::RemoveSessionContent(const std::string &sessionId) {
       ++it;
     }
   }
+  if (m_cachedExternalCamera.valid && m_cachedExternalCamera.sessionId == sessionId) {
+    m_cachedExternalCamera = CachedCameraState{};
+  }
 }
 
 void LiveLinkSceneSync::ReindexSceneNodeBindingsAfterRemoval(size_t removedIndex) {
@@ -922,7 +955,10 @@ void LiveLinkSceneSync::ReindexSceneLightBindingsAfterRemoval(size_t removedInde
   }
 }
 
-void LiveLinkSceneSync::ClearAllBindings() { m_bindings.clear(); }
+void LiveLinkSceneSync::ClearAllBindings() {
+  m_bindings.clear();
+  m_cachedExternalCamera = CachedCameraState{};
+}
 
 void LiveLinkSceneSync::AppendDiagnosticEntry(
     const char *level, const std::string &providerName,
