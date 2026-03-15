@@ -260,7 +260,17 @@ enum class RendererInvalidationPlan {
   FullAccelerationStructureRebuild,
 };
 
-static void ApplyRendererInvalidation(RendererInvalidationPlan plan) {
+static int s_batchedUpdateDepth = 0;
+static RendererInvalidationPlan s_batchedInvalidationPlan =
+    RendererInvalidationPlan::None;
+static bool s_batchedLightsDirty = false;
+
+static RendererInvalidationPlan MergeRendererInvalidationPlan(
+    RendererInvalidationPlan lhs, RendererInvalidationPlan rhs) {
+  return static_cast<int>(rhs) > static_cast<int>(lhs) ? rhs : lhs;
+}
+
+static void ExecuteRendererInvalidation(RendererInvalidationPlan plan) {
   switch (plan) {
   case RendererInvalidationPlan::None:
     return;
@@ -275,6 +285,43 @@ static void ApplyRendererInvalidation(RendererInvalidationPlan plan) {
     DxrRenderer::RequestAccelerationStructureRebuild();
     DxrRenderer::ResetAccumulation();
     return;
+  }
+}
+
+static void FlushBatchedRendererUpdates() {
+  if (s_batchedLightsDirty) {
+    const bool resetAccumulation =
+        s_batchedInvalidationPlan == RendererInvalidationPlan::None;
+    DxrRenderer::UpdateLights(s_lights, resetAccumulation);
+    s_batchedLightsDirty = false;
+  }
+
+  if (s_batchedInvalidationPlan != RendererInvalidationPlan::None) {
+    ExecuteRendererInvalidation(s_batchedInvalidationPlan);
+    s_batchedInvalidationPlan = RendererInvalidationPlan::None;
+  }
+}
+
+static void ApplyRendererInvalidation(RendererInvalidationPlan plan) {
+  if (s_batchedUpdateDepth > 0) {
+    s_batchedInvalidationPlan =
+        MergeRendererInvalidationPlan(s_batchedInvalidationPlan, plan);
+    return;
+  }
+  ExecuteRendererInvalidation(plan);
+}
+
+void BeginBatchedUpdates() { ++s_batchedUpdateDepth; }
+
+void EndBatchedUpdates() {
+  if (s_batchedUpdateDepth <= 0) {
+    s_batchedUpdateDepth = 0;
+    return;
+  }
+
+  --s_batchedUpdateDepth;
+  if (s_batchedUpdateDepth == 0) {
+    FlushBatchedRendererUpdates();
   }
 }
 
@@ -1072,7 +1119,13 @@ std::vector<Instance> GetInstances() {
 
 std::vector<Light> &GetLights() { return s_lights; }
 
-void UpdateLights() { DxrRenderer::UpdateLights(s_lights); }
+void UpdateLights() {
+  if (s_batchedUpdateDepth > 0) {
+    s_batchedLightsDirty = true;
+    return;
+  }
+  DxrRenderer::UpdateLights(s_lights);
+}
 
 int GetSelectedLightIndex() { return s_selectedLightIdx; }
 
@@ -1150,9 +1203,12 @@ bool UpdateMaterial(size_t index, const Asset::Material &material) {
   }
 
   Asset::Material &dst = g_loadedMaterials[index];
+  if (memcmp(&dst, &material, sizeof(Asset::Material)) == 0) {
+    return true;
+  }
   dst = material;
   DxrRenderer::MarkMaterialDirty(static_cast<int>(index));
-  DxrRenderer::ResetAccumulation();
+  ApplyRendererInvalidation(RendererInvalidationPlan::AccumulationOnly);
   return true;
 }
 

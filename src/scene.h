@@ -103,6 +103,8 @@ size_t GetMaterialCount();
 int FindMaterialByName(const std::string &name);
 bool GetMaterial(size_t index, Asset::Material *outMaterial);
 bool UpdateMaterial(size_t index, const Asset::Material &material);
+void BeginBatchedUpdates();
+void EndBatchedUpdates();
 
 // Ray-cast selection from mouse. Returns the global material index of the hit
 // submesh, or -1.

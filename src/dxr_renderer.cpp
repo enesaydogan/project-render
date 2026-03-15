@@ -3647,14 +3647,16 @@ void BuildAccelerationStructures(
   }
 }
 
-void UpdateLights(const std::vector<Light> &lights) {
+void UpdateLights(const std::vector<Light> &lights, bool resetAccumulation) {
   WaitForAsyncRestirIdleForLightUpdates();
 
   if (lights.empty()) {
     if (s_lightCount != 0) {
       s_lightCount = 0;
       s_lastLightsCpu.clear();
-      ResetAccumulation();
+      if (resetAccumulation) {
+        ResetAccumulation();
+      }
     }
     return;
   }
@@ -3709,7 +3711,9 @@ void UpdateLights(const std::vector<Light> &lights) {
 
   s_lastLightsCpu = lights;
 
-  ResetAccumulation();
+  if (resetAccumulation) {
+    ResetAccumulation();
+  }
 }
 
 void ResetAccumulation() {

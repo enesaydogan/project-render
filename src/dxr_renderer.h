@@ -19,7 +19,6 @@ class StreamlineManager;
 
 // Update light buffer for ReSTIR
 namespace DxrRenderer {
-void UpdateLights(const std::vector<Light> &lights);
 // Initialize probe (device required). Call this early to detect support.
 void Initialize(ID3D12Device *device);
 // Attach command queue and synchronization primitives once created
@@ -41,8 +40,10 @@ void RequestAccelerationStructureUpdate();
 // (alpha/blend/transmission). The next render frame will rebuild BLAS/TLAS as
 // needed.
 void MarkMaterialDirty(int materialIndex);
-// Update light buffer for ReSTIR
-void UpdateLights(const std::vector<Light> &lights);
+// Update light buffer for ReSTIR. Callers that are already issuing a broader
+// renderer invalidation can pass false to avoid duplicate accumulation resets.
+void UpdateLights(const std::vector<Light> &lights,
+                  bool resetAccumulation = true);
 // Reset accumulation for path tracing
 void ResetAccumulation();
 // Attach Streamline manager (optional) for DLSS-SR / DLSS-RR evaluation.
