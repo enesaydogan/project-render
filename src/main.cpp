@@ -16,6 +16,7 @@
 #include "imgui_theme.h"
 #include "input_handler.h"
 #include "light.h"
+#include "livelink/livelink_runtime.h"
 #include "material_editor.h"
 #include "oidn_denoiser.h"
 #include "raster_renderer.h"
@@ -2383,6 +2384,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     }
 
     Input::Update(dt);
+    LiveLink::TickCoordinator();
 
     if (g_renderExportJob.active) {
       g_currentRenderMode = RenderMode::DXR;
