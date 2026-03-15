@@ -33,7 +33,7 @@ std::atomic<bool> g_exportInProgress{false};
 constexpr const char *kPipeName = "project-render-max-livelink";
 constexpr const char *kSourceApp = "3dsMax2025";
 constexpr UINT_PTR kPollTimerId = 0x5052;
-constexpr UINT kPollIntervalMs = 250;
+constexpr UINT kPollIntervalMs = 16; // ~60fps LiveLink loop
 constexpr int kUtilityDialogId = 101;
 constexpr int kStatusControlId = 1001;
 constexpr int kStartControlId = 1002;
@@ -192,11 +192,11 @@ float GetMaxUnitsToMetersScale() {
 
 Point3 ConvertMaxPointToEngine(const Point3 &point) {
   const float unitScale = GetMaxUnitsToMetersScale();
-  return Point3(point.x * unitScale, point.z * unitScale, point.y * unitScale);
+  return Point3(-point.x * unitScale, point.z * unitScale, point.y * unitScale);
 }
 
 Point3 ConvertMaxVectorToEngine(const Point3 &vector) {
-  return Point3(vector.x, vector.z, vector.y);
+  return Point3(-vector.x, vector.z, vector.y);
 }
 
 std::array<float, 3> Point3ToArray(const Point3 &point) {
@@ -315,7 +315,7 @@ std::array<float, 16> MultiplyColumnMajor4x4(const std::array<float, 16> &lhs,
 std::array<float, 16> MakeMaxToEngineBasisMatrix() {
   const float unitScale = GetMaxUnitsToMetersScale();
   return {
-      unitScale, 0.0f,      0.0f,      0.0f,
+      -unitScale, 0.0f,      0.0f,      0.0f,
       0.0f,      0.0f,      unitScale, 0.0f,
       0.0f,      unitScale, 0.0f,      0.0f,
       0.0f,      0.0f,      0.0f,      1.0f,
@@ -326,7 +326,7 @@ std::array<float, 16> MakeEngineToMaxBasisMatrix() {
   const float unitScale = GetMaxUnitsToMetersScale();
   const float inverseScale = unitScale > 0.0f ? 1.0f / unitScale : 1.0f;
   return {
-      inverseScale, 0.0f,         0.0f,         0.0f,
+      -inverseScale, 0.0f,         0.0f,         0.0f,
       0.0f,         0.0f,         inverseScale, 0.0f,
       0.0f,         inverseScale, 0.0f,         0.0f,
       0.0f,         0.0f,         0.0f,         1.0f,
@@ -562,7 +562,7 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
         ConvertMaxPointToEngine(mesh.verts[face.getVert(1)]),
         ConvertMaxPointToEngine(mesh.verts[face.getVert(2)]),
     };
-    const int vertexOrder[3] = {0, 2, 1};
+    const int vertexOrder[3] = {0, 1, 2};
     for (int corner = 0; corner < 3; ++corner) {
       NativeMeshPayloadVertex vertex;
       const int sourceCorner = vertexOrder[corner];
@@ -776,8 +776,9 @@ bool CaptureActiveCameraSnapshot(Interface *ip, CameraSnapshot *outSnapshot) {
   view.GetAffineTM(viewAffine);
   const Matrix3 worldTM = Inverse(viewAffine);
   Point3 position = ConvertMaxPointToEngine(worldTM.GetRow(3));
-  Point3 forward = ConvertMaxVectorToEngine(worldTM.GetRow(2));
+  Point3 forward = ConvertMaxVectorToEngine(-worldTM.GetRow(2));
   Point3 up = ConvertMaxVectorToEngine(worldTM.GetRow(1));
+
   NormalizePoint3(&forward, Point3(0.0f, 0.0f, -1.0f));
   NormalizePoint3(&up, Point3(0.0f, 1.0f, 0.0f));
 

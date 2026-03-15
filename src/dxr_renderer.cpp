@@ -4271,8 +4271,7 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
 }
 
 bool IsReady() {
-  return g_rayTracingSupported && s_rtStateObject != nullptr &&
-         s_tlas.result != nullptr;
+  return g_rayTracingSupported && s_rtStateObject != nullptr;
 }
 
 bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
@@ -4304,7 +4303,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
   // Material edits only require AS rebuild when opaque-vs-nonopaque state
   // changes (affects BLAS geometry flags / AnyHit path).
-  if (s_forceAsRebuild || s_forceTlasUpdate) {
+  if (s_forceAsRebuild || s_forceTlasUpdate || (!s_tlas.result && !meshes.empty())) {
     BuildAccelerationStructures(meshes, Scene::GetInstances());
     s_forceAsRebuild = false;
     s_forceTlasUpdate = false;
