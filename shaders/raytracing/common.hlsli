@@ -162,7 +162,7 @@ cbuffer Camera : register(b0)
     // comparisons/debugging.
     float sampleEnvSolidAngle;
     float nrdEnabled;
-    float _cameraPadEnd;
+    float exportRendering;
 }
 
 inline float2 DirectionToUVRotated(float3 dir) {
