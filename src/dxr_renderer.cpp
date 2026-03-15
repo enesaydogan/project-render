@@ -3819,6 +3819,69 @@ UINT GetDisplayedSampleCount() {
   return rrActive ? s_rrStillFrameSpp : s_accumulation.GetFrameCount();
 }
 
+bool CanIdleWithoutRendering() {
+  if (!s_outputUAV || !s_tonemapOutputUAV) {
+    return false;
+  }
+
+  const bool dlssActive =
+      (s_streamline && s_streamline->IsInitialized() &&
+       s_streamline->IsDeviceSet() && s_streamline->IsEnabled() &&
+       s_streamline->GetMode() != StreamlineManager::Mode::Off);
+  const bool rrActive =
+      dlssActive && (s_streamline->GetMode() ==
+                     StreamlineManager::Mode::DLSS_RayReconstruction);
+
+  const UINT currSpp = GetDisplayedSampleCount();
+  const UINT maxSpp =
+      (g_cameraData.maxSPP > 0.0f) ? (UINT)g_cameraData.maxSPP : 0u;
+
+  bool isConverged = false;
+  if (s_hasNoiseEstimate) {
+    const bool adaptiveEnabled = (g_cameraData.useAdaptiveSampling > 0.5f);
+    const UINT minNoiseStopSpp = adaptiveEnabled ? 32u : 24u;
+    const float stopThreshold = g_cameraData.noiseThreshold * 0.90f;
+    const float resumeThreshold = g_cameraData.noiseThreshold * 1.20f;
+    if (currSpp >= minNoiseStopSpp) {
+      if (s_noiseConvergedLatched) {
+        if (s_lastNoiseLevel > resumeThreshold) {
+          isConverged = false;
+        } else {
+          isConverged = true;
+        }
+      } else if (s_lastNoiseLevel <= stopThreshold) {
+        isConverged = true;
+      }
+    }
+  }
+
+  const bool reachedEndCondition =
+      ((maxSpp > 0 && currSpp >= maxSpp) || isConverged);
+  if (!reachedEndCondition) {
+    return false;
+  }
+
+  const bool isOidnMode =
+      (s_denoiserMode != DxrRenderer::DenoiserMode::Off && !dlssActive);
+  if (isOidnMode && !s_hasDenoised) {
+    return false;
+  }
+
+  if (!s_hasTonemappedFrame) {
+    return false;
+  }
+
+  if (s_asyncRestirPending || s_asyncComputePendingFenceWait > 0) {
+    return false;
+  }
+
+  if (rrActive && s_streamlineResetHistory) {
+    return false;
+  }
+
+  return true;
+}
+
 UINT GetLightCount() { return s_lightCount; }
 
 // RR jitter scale accessors
