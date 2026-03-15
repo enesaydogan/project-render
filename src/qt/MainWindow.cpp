@@ -476,6 +476,45 @@ void MainWindow::createDocks()
         layout->setContentsMargins(8, 8, 8, 8);
         layout->setSpacing(6);
 
+        auto *buttonRow = new QHBoxLayout();
+        buttonRow->setContentsMargins(0, 0, 0, 0);
+        buttonRow->setSpacing(6);
+
+        m_liveLinkConnectButton = new QPushButton(tr("Connect All"), panel);
+        connect(m_liveLinkConnectButton, &QPushButton::clicked, this, []() {
+            auto &coordinator = LiveLink::GetCoordinator();
+            const auto providers = coordinator.GetProviderSnapshots();
+            for (const auto &provider : providers) {
+                coordinator.ConnectProvider(provider.providerId);
+            }
+        });
+        buttonRow->addWidget(m_liveLinkConnectButton);
+
+        m_liveLinkDisconnectButton = new QPushButton(tr("Disconnect All"), panel);
+        connect(m_liveLinkDisconnectButton, &QPushButton::clicked, this, []() {
+            auto &coordinator = LiveLink::GetCoordinator();
+            const auto providers = coordinator.GetProviderSnapshots();
+            for (const auto &provider : providers) {
+                coordinator.DisconnectProvider(provider.providerId);
+            }
+        });
+        buttonRow->addWidget(m_liveLinkDisconnectButton);
+
+        m_liveLinkReconnectButton = new QPushButton(tr("Reconnect All"), panel);
+        connect(m_liveLinkReconnectButton, &QPushButton::clicked, this, []() {
+            auto &coordinator = LiveLink::GetCoordinator();
+            const auto providers = coordinator.GetProviderSnapshots();
+            for (const auto &provider : providers) {
+                coordinator.DisconnectProvider(provider.providerId);
+            }
+            for (const auto &provider : providers) {
+                coordinator.ConnectProvider(provider.providerId);
+            }
+        });
+        buttonRow->addWidget(m_liveLinkReconnectButton);
+        buttonRow->addStretch(1);
+        layout->addLayout(buttonRow);
+
         m_liveLinkSummaryLabel = new QLabel(panel);
         m_liveLinkSummaryLabel->setWordWrap(true);
         m_liveLinkSummaryLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -674,6 +713,27 @@ void MainWindow::updateSceneIoUi()
             summary << tr("Providers %1 connected of %2")
                            .arg(static_cast<qulonglong>(stats.connectedProviderCount))
                            .arg(static_cast<qulonglong>(stats.providerCount));
+            if (!providers.empty()) {
+                QStringList providerLines;
+                for (const auto &provider : providers) {
+                    QStringList sessions;
+                    for (const auto &session : provider.sessions) {
+                        const std::string sessionLabel =
+                            session.displayName.empty() ? session.documentId
+                                                        : session.displayName;
+                        sessions << QStringLiteral("%1 (%2)")
+                                        .arg(QString::fromStdString(sessionLabel),
+                                             QString::fromStdString(session.sessionId));
+                    }
+                    providerLines << QStringLiteral("%1 [%2] caps=%3 err=%4 sessions=%5")
+                                         .arg(QString::fromStdString(provider.providerName),
+                                              QString::fromLatin1(LiveLink::ToString(provider.connectionState)),
+                                              QString::fromStdString(LiveLink::ToString(provider.capabilities)),
+                                              QString::fromStdString(provider.lastError.empty() ? std::string("-") : provider.lastError),
+                                              sessions.isEmpty() ? tr("none") : sessions.join(QStringLiteral(", ")));
+                }
+                summary << providerLines.join(QStringLiteral("\n"));
+            }
             summary << tr("Accepted %1 batches / %2 deltas")
                            .arg(static_cast<qulonglong>(stats.batchesAccepted))
                            .arg(static_cast<qulonglong>(stats.deltasAccepted));
@@ -684,6 +744,23 @@ void MainWindow::updateSceneIoUi()
                            .arg(warningCount)
                            .arg(errorCount);
             m_liveLinkSummaryLabel->setText(summary.join(QStringLiteral(" | ")));
+        }
+
+        if (m_liveLinkConnectButton && m_liveLinkDisconnectButton &&
+            m_liveLinkReconnectButton) {
+            const bool hasProviders = !providers.empty();
+            bool anyConnected = false;
+            bool anyDisconnected = false;
+            for (const auto &provider : providers) {
+                if (provider.connectionState == LiveLink::ConnectionState::Connected) {
+                    anyConnected = true;
+                } else {
+                    anyDisconnected = true;
+                }
+            }
+            m_liveLinkConnectButton->setEnabled(hasProviders && anyDisconnected);
+            m_liveLinkDisconnectButton->setEnabled(hasProviders && anyConnected);
+            m_liveLinkReconnectButton->setEnabled(hasProviders);
         }
 
         if (m_liveLinkDiagnosticsView) {

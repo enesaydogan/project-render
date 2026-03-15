@@ -128,6 +128,25 @@ void Normalize3(float value[3], const float fallback[3]) {
   value[2] *= invLen;
 }
 
+LightType ParseEngineLightType(std::string_view value) {
+  if (value == "Directional") {
+    return LightType::Directional;
+  }
+  if (value == "Spot") {
+    return LightType::Spot;
+  }
+  if (value == "AreaRect") {
+    return LightType::AreaRect;
+  }
+  if (value == "AreaDisk") {
+    return LightType::AreaDisk;
+  }
+  if (value == "IES") {
+    return LightType::IES;
+  }
+  return LightType::Omni;
+}
+
 
 } // namespace
 
@@ -405,6 +424,16 @@ bool LiveLinkSceneSync::ApplyMeshPayloadChanged(const SceneDeltaBatch &batch,
     return false;
   }
 
+  if (extension == ".prmesh") {
+    Asset::Material defaultMaterial;
+    const std::string materialName = std::string("material:") + delta.target.objectId;
+    strncpy_s(defaultMaterial.name, materialName.c_str(), _TRUNCATE);
+    materials.push_back(defaultMaterial);
+    for (Asset::GpuMesh &mesh : meshes) {
+      mesh.materialIndex = 0;
+    }
+  }
+
   Scene::ImportedNodePayload importedPayload;
   importedPayload.sourcePath = payload->payloadUri;
   importedPayload.displayName = ResolveNodeName(delta, delta.debugLabel);
@@ -501,9 +530,27 @@ bool LiveLinkSceneSync::ApplyLightChanged(const SceneDeltaBatch &batch,
   }
 
   Light light = Scene::GetLights()[binding->handleIndex];
+  light.type = static_cast<uint32_t>(ParseEngineLightType(payload->lightType));
+  light.position[0] = payload->position[0];
+  light.position[1] = payload->position[1];
+  light.position[2] = payload->position[2];
   light.emission[0] = payload->color[0] * payload->intensity;
   light.emission[1] = payload->color[1] * payload->intensity;
   light.emission[2] = payload->color[2] * payload->intensity;
+  light.direction[0] = payload->direction[0];
+  light.direction[1] = payload->direction[1];
+  light.direction[2] = payload->direction[2];
+  {
+    const float fallbackDirection[3] = {0.0f, -1.0f, 0.0f};
+    Normalize3(light.direction, fallbackDirection);
+  }
+  light.radius = payload->radius;
+  light.innerConeAngle =
+      cosf(DirectX::XMConvertToRadians(payload->innerConeDegrees));
+  light.outerConeAngle =
+      cosf(DirectX::XMConvertToRadians(payload->outerConeDegrees));
+  light.areaExtents[0] = payload->areaExtents[0];
+  light.areaExtents[1] = payload->areaExtents[1];
 
   if (!Scene::UpdateLight(binding->handleIndex, light)) {
     LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,

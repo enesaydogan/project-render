@@ -122,6 +122,19 @@ std::string MakeNodeObjectId(INode *node) {
   return "node:" + std::to_string(static_cast<unsigned long long>(node->GetHandle()));
 }
 
+std::string MakeMaterialObjectId(ULONG_PTR nodeHandle) {
+  return "material:node:" +
+         std::to_string(static_cast<unsigned long long>(nodeHandle));
+}
+
+std::string MakeLightObjectId(INode *node) {
+  if (!node) {
+    return {};
+  }
+  return "light:" +
+         std::to_string(static_cast<unsigned long long>(node->GetHandle()));
+}
+
 std::vector<std::string> GatherSelectedObjectIds(Interface *ip) {
   std::vector<std::string> selectedObjectIds;
   if (!ip) {
@@ -158,6 +171,37 @@ struct CameraSnapshot {
   float fovDegrees = 60.0f;
   float nearPlane = 0.01f;
   float farPlane = 1000.0f;
+};
+
+struct MaterialSnapshot {
+  bool valid = false;
+  ULONG_PTR nodeHandle = 0;
+  std::string objectId;
+  std::string name;
+  std::array<float, 4> baseColor = {1.0f, 1.0f, 1.0f, 1.0f};
+  std::array<float, 4> emissiveColor = {0.0f, 0.0f, 0.0f, 1.0f};
+  float emissiveIntensity = 0.0f;
+  float roughness = 0.5f;
+  float metalness = 0.0f;
+  float transmissionWeight = 0.0f;
+  bool doubleSided = false;
+  std::string alphaMode = "OPAQUE";
+};
+
+struct LightSnapshot {
+  bool valid = false;
+  ULONG_PTR handle = 0;
+  std::string objectId;
+  std::string name;
+  std::string lightType = "Omni";
+  std::array<float, 3> position = {0.0f, 2.0f, 0.0f};
+  std::array<float, 3> direction = {0.0f, -1.0f, 0.0f};
+  std::array<float, 3> color = {1.0f, 1.0f, 1.0f};
+  float intensity = 0.0f;
+  float radius = 0.1f;
+  float innerConeDegrees = 30.0f;
+  float outerConeDegrees = 45.0f;
+  std::array<float, 2> areaExtents = {1.0f, 1.0f};
 };
 
 struct NativeMeshPayloadHeader {
@@ -287,6 +331,42 @@ bool NearlyEqual(float a, float b) {
   return std::fabs(a - b) <= 1.0e-4f;
 }
 
+bool SameVector2(const std::array<float, 2> &lhs, const std::array<float, 2> &rhs) {
+  return std::fabs(lhs[0] - rhs[0]) <= 1.0e-4f &&
+         std::fabs(lhs[1] - rhs[1]) <= 1.0e-4f;
+}
+
+bool SameVector4(const std::array<float, 4> &lhs, const std::array<float, 4> &rhs) {
+  return std::fabs(lhs[0] - rhs[0]) <= 1.0e-4f &&
+         std::fabs(lhs[1] - rhs[1]) <= 1.0e-4f &&
+         std::fabs(lhs[2] - rhs[2]) <= 1.0e-4f &&
+         std::fabs(lhs[3] - rhs[3]) <= 1.0e-4f;
+}
+
+bool SameMaterial(const MaterialSnapshot &lhs, const MaterialSnapshot &rhs) {
+  return lhs.valid == rhs.valid && lhs.objectId == rhs.objectId &&
+         lhs.name == rhs.name && SameVector4(lhs.baseColor, rhs.baseColor) &&
+         SameVector4(lhs.emissiveColor, rhs.emissiveColor) &&
+         NearlyEqual(lhs.emissiveIntensity, rhs.emissiveIntensity) &&
+         NearlyEqual(lhs.roughness, rhs.roughness) &&
+         NearlyEqual(lhs.metalness, rhs.metalness) &&
+         NearlyEqual(lhs.transmissionWeight, rhs.transmissionWeight) &&
+         lhs.doubleSided == rhs.doubleSided && lhs.alphaMode == rhs.alphaMode;
+}
+
+bool SameLight(const LightSnapshot &lhs, const LightSnapshot &rhs) {
+  return lhs.valid == rhs.valid && lhs.objectId == rhs.objectId &&
+         lhs.name == rhs.name && lhs.lightType == rhs.lightType &&
+         SameVector3(lhs.position, rhs.position) &&
+         SameVector3(lhs.direction, rhs.direction) &&
+         SameVector3(lhs.color, rhs.color) &&
+         NearlyEqual(lhs.intensity, rhs.intensity) &&
+         NearlyEqual(lhs.radius, rhs.radius) &&
+         NearlyEqual(lhs.innerConeDegrees, rhs.innerConeDegrees) &&
+         NearlyEqual(lhs.outerConeDegrees, rhs.outerConeDegrees) &&
+         SameVector2(lhs.areaExtents, rhs.areaExtents);
+}
+
 bool SameMatrix(const std::array<float, 16> &lhs,
                 const std::array<float, 16> &rhs) {
   for (size_t index = 0; index < lhs.size(); ++index) {
@@ -410,6 +490,147 @@ INode *FindNodeByHandle(Interface *ip, ULONG_PTR handle) {
     }
   }
   return nullptr;
+}
+
+std::array<float, 4> ColorToArray4(const Color &color, float alpha) {
+  return {color.r, color.g, color.b, alpha};
+}
+
+bool CaptureMaterialSnapshot(INode *node, MaterialSnapshot *outSnapshot) {
+  if (!node || !outSnapshot) {
+    return false;
+  }
+
+  Mtl *material = node->GetMtl();
+  if (!material) {
+    return false;
+  }
+  if (material->NumSubMtls() > 0 && material->GetSubMtl(0)) {
+    material = material->GetSubMtl(0);
+  }
+
+  const float transparency = (std::clamp)(material->GetXParency(), 0.0f, 1.0f);
+  const float shininess = (std::clamp)(material->GetShininess(), 0.0f, 1.0f);
+  const float selfIllum = (std::max)(0.0f, material->GetSelfIllum());
+  const bool selfIllumColorOn = material->GetSelfIllumColorOn() != FALSE;
+  const Color emissive = selfIllumColorOn
+                             ? material->GetSelfIllumColor()
+                             : Color(selfIllum, selfIllum, selfIllum);
+
+  MaterialSnapshot snapshot;
+  snapshot.valid = true;
+  snapshot.nodeHandle = node->GetHandle();
+  snapshot.objectId = MakeMaterialObjectId(snapshot.nodeHandle);
+  snapshot.name = ToUtf8(material->GetName());
+  if (snapshot.name.empty()) {
+    snapshot.name = ToUtf8(node->GetName());
+  }
+  snapshot.baseColor = ColorToArray4(material->GetDiffuse(), 1.0f - transparency);
+  snapshot.emissiveColor = ColorToArray4(emissive, 1.0f);
+  snapshot.emissiveIntensity = selfIllumColorOn ? 1.0f : selfIllum;
+  snapshot.roughness = (std::clamp)(1.0f - shininess, 0.04f, 1.0f);
+  snapshot.metalness = 0.0f;
+  snapshot.transmissionWeight = transparency;
+  snapshot.doubleSided = false;
+  snapshot.alphaMode = transparency > 1.0e-3f ? "BLEND" : "OPAQUE";
+  *outSnapshot = snapshot;
+  return true;
+}
+
+void GatherMaterialSnapshots(
+    Interface *ip, const std::unordered_map<ULONG_PTR, NodeSnapshot> &nodeState,
+    std::unordered_map<ULONG_PTR, MaterialSnapshot> *outState) {
+  if (!ip || !outState) {
+    return;
+  }
+
+  for (const auto &[handle, nodeSnapshot] : nodeState) {
+    if (!nodeSnapshot.hasMesh) {
+      continue;
+    }
+    INode *node = FindNodeByHandle(ip, handle);
+    if (!node) {
+      continue;
+    }
+    MaterialSnapshot materialSnapshot;
+    if (CaptureMaterialSnapshot(node, &materialSnapshot)) {
+      outState->insert_or_assign(handle, materialSnapshot);
+    }
+  }
+}
+
+bool CaptureLightSnapshot(Interface *ip, INode *node, LightSnapshot *outSnapshot) {
+  if (!ip || !node || !outSnapshot) {
+    return false;
+  }
+
+  ObjectState objectState = node->EvalWorldState(ip->GetTime());
+  if (!objectState.obj || objectState.obj->SuperClassID() != LIGHT_CLASS_ID) {
+    return false;
+  }
+
+  LightObject *lightObject = static_cast<LightObject *>(objectState.obj);
+  LightState lightState;
+  if (lightObject->EvalLightState(ip->GetTime(), &lightState) != REF_SUCCEED ||
+      !lightState.on) {
+    return false;
+  }
+
+  LightSnapshot snapshot;
+  snapshot.valid = true;
+  snapshot.handle = node->GetHandle();
+  snapshot.objectId = MakeLightObjectId(node);
+  snapshot.name = ToUtf8(node->GetName());
+  switch (lightState.type) {
+  case DIRECT_LGT:
+    snapshot.lightType = "Directional";
+    break;
+  case SPOT_LGT:
+    snapshot.lightType = "Spot";
+    break;
+  case OMNI_LGT:
+    if (lightState.shape == RECT_LIGHT) {
+      snapshot.lightType = "AreaRect";
+    } else if (lightState.shape == CIRCLE_LIGHT) {
+      snapshot.lightType = "AreaDisk";
+    } else {
+      snapshot.lightType = "Omni";
+    }
+    break;
+  default:
+    snapshot.lightType = "Omni";
+    break;
+  }
+
+  const Point3 position = ConvertMaxPointToEngine(lightState.tm.GetRow(3));
+  Point3 direction = ConvertMaxVectorToEngine(-lightState.tm.GetRow(2));
+  NormalizePoint3(&direction, Point3(0.0f, -1.0f, 0.0f));
+  snapshot.position = Point3ToArray(position);
+  snapshot.direction = Point3ToArray(direction);
+  snapshot.color = {lightState.color.r, lightState.color.g, lightState.color.b};
+  snapshot.intensity = (std::max)(0.0f, lightState.intens);
+  snapshot.radius = 0.1f;
+  snapshot.innerConeDegrees = lightState.hotsize;
+  snapshot.outerConeDegrees = lightState.fallsize > 0.0f ? lightState.fallsize
+                                                          : lightState.hotsize;
+  snapshot.areaExtents = {1.0f, (std::max)(1.0f, lightState.aspect)};
+  *outSnapshot = snapshot;
+  return true;
+}
+
+void GatherLightSnapshots(Interface *ip, INode *node,
+                          std::unordered_map<ULONG_PTR, LightSnapshot> *outState) {
+  if (!ip || !node || !outState) {
+    return;
+  }
+
+  LightSnapshot snapshot;
+  if (CaptureLightSnapshot(ip, node, &snapshot)) {
+    outState->insert_or_assign(snapshot.handle, snapshot);
+  }
+  for (int childIndex = 0; childIndex < node->NumberOfChildren(); ++childIndex) {
+    GatherLightSnapshots(ip, node->GetChildNode(childIndex), outState);
+  }
 }
 
 bool GetTriObjectForNode(Interface *ip, INode *node, TriObject **outTriObject,
@@ -811,6 +1032,80 @@ void AppendCameraDelta(const std::string &documentId,
                                               {"farPlane", snapshot.farPlane}}}});
 }
 
+void AppendMaterialDelta(const std::string &documentId,
+                         const MaterialSnapshot &snapshot, uint64_t *revision,
+                         json *outDeltas) {
+  if (!revision || !outDeltas || !snapshot.valid) {
+    return;
+  }
+
+  outDeltas->push_back(json{{"kind", "MaterialChanged"},
+                            {"target", MakeObjectId(documentId, snapshot.objectId, "Material")},
+                            {"revision", (*revision)++},
+                            {"debugLabel", snapshot.name},
+                            {"payload", json{{"parametersChanged", true},
+                                              {"texturesChanged", false},
+                                              {"materialModel", "OpenPBR"},
+                                              {"baseColor", snapshot.baseColor},
+                                              {"emissiveColor", snapshot.emissiveColor},
+                                              {"emissiveIntensity", snapshot.emissiveIntensity},
+                                              {"roughness", snapshot.roughness},
+                                              {"metalness", snapshot.metalness},
+                                              {"transmissionWeight", snapshot.transmissionWeight},
+                                              {"doubleSided", snapshot.doubleSided},
+                                              {"alphaMode", snapshot.alphaMode}}}});
+}
+
+void AppendMaterialRemovedDelta(const std::string &documentId,
+                                const MaterialSnapshot &snapshot,
+                                uint64_t *revision, json *outDeltas) {
+  if (!revision || !outDeltas || !snapshot.valid) {
+    return;
+  }
+
+  outDeltas->push_back(json{{"kind", "NodeRemoved"},
+                            {"target", MakeObjectId(documentId, snapshot.objectId, "Material")},
+                            {"revision", (*revision)++},
+                            {"debugLabel", snapshot.name},
+                            {"payload", json{{"removeChildren", true}}}});
+}
+
+void AppendLightDelta(const std::string &documentId,
+                      const LightSnapshot &snapshot, uint64_t *revision,
+                      json *outDeltas) {
+  if (!revision || !outDeltas || !snapshot.valid) {
+    return;
+  }
+
+  outDeltas->push_back(json{{"kind", "LightChanged"},
+                            {"target", MakeObjectId(documentId, snapshot.objectId, "Light")},
+                            {"revision", (*revision)++},
+                            {"debugLabel", snapshot.name},
+                            {"payload", json{{"lightType", snapshot.lightType},
+                                              {"intensity", snapshot.intensity},
+                                              {"color", snapshot.color},
+                                              {"position", snapshot.position},
+                                              {"direction", snapshot.direction},
+                                              {"radius", snapshot.radius},
+                                              {"innerConeDegrees", snapshot.innerConeDegrees},
+                                              {"outerConeDegrees", snapshot.outerConeDegrees},
+                                              {"areaExtents", snapshot.areaExtents}}}});
+}
+
+void AppendLightRemovedDelta(const std::string &documentId,
+                             const LightSnapshot &snapshot, uint64_t *revision,
+                             json *outDeltas) {
+  if (!revision || !outDeltas || !snapshot.valid) {
+    return;
+  }
+
+  outDeltas->push_back(json{{"kind", "NodeRemoved"},
+                            {"target", MakeObjectId(documentId, snapshot.objectId, "Light")},
+                            {"revision", (*revision)++},
+                            {"debugLabel", snapshot.name},
+                            {"payload", json{{"removeChildren", true}}}});
+}
+
 bool EnsurePipeConnected() {
   return g_pipeClient.IsConnected() || g_pipeClient.Connect(kPipeName);
 }
@@ -832,6 +1127,8 @@ bool SendBatch(const std::string &sessionId, uint64_t sequence, bool fullSync,
 
 bool SendInitialSnapshot(Interface *ip,
                          std::unordered_map<ULONG_PTR, NodeSnapshot> *outState,
+                         std::unordered_map<ULONG_PTR, MaterialSnapshot> *outMaterialState,
+                         std::unordered_map<ULONG_PTR, LightSnapshot> *outLightState,
                          std::string *outSessionId,
                          std::string *outDocumentId,
                          uint64_t *outNextSequence,
@@ -844,11 +1141,15 @@ bool SendInitialSnapshot(Interface *ip,
   const std::string sessionId = MakeSessionId();
 
   std::unordered_map<ULONG_PTR, NodeSnapshot> state;
+  std::unordered_map<ULONG_PTR, MaterialSnapshot> materialState;
+  std::unordered_map<ULONG_PTR, LightSnapshot> lightState;
   if (INode *root = ip->GetRootNode()) {
     for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
       GatherNodeSnapshots(ip, root->GetChildNode(childIndex), &state);
+      GatherLightSnapshots(ip, root->GetChildNode(childIndex), &lightState);
     }
   }
+  GatherMaterialSnapshots(ip, state, &materialState);
 
   json deltas = json::array();
   deltas.push_back(json{
@@ -874,6 +1175,13 @@ bool SendInitialSnapshot(Interface *ip,
     AppendNodeVisibilityDelta(documentId, snapshot, &revision, &deltas);
     AppendMeshPayloadDeltaIfAvailable(ip, sessionId, documentId, snapshot,
                                       &revision, &deltas);
+    const auto materialIt = materialState.find(snapshot.handle);
+    if (materialIt != materialState.end()) {
+      AppendMaterialDelta(documentId, materialIt->second, &revision, &deltas);
+    }
+  }
+  for (const auto &[_, snapshot] : lightState) {
+    AppendLightDelta(documentId, snapshot, &revision, &deltas);
   }
   AppendCameraDelta(documentId, cameraSnapshot, &revision, &deltas);
 
@@ -883,6 +1191,12 @@ bool SendInitialSnapshot(Interface *ip,
 
   if (outState) {
     *outState = std::move(state);
+  }
+  if (outMaterialState) {
+    *outMaterialState = std::move(materialState);
+  }
+  if (outLightState) {
+    *outLightState = std::move(lightState);
   }
   if (outSessionId) {
     *outSessionId = sessionId;
@@ -1017,6 +1331,31 @@ private:
     RefreshRollupUI_NoLock();
   }
 
+  bool EnsureConnectedSession(Interface *ip) {
+    if (!ip) {
+      return false;
+    }
+
+    const bool hadPipeConnection = g_pipeClient.IsConnected();
+    if (!EnsurePipeConnected()) {
+      return false;
+    }
+
+    if (hadPipeConnection && !m_sessionId.empty() && !m_documentId.empty()) {
+      return true;
+    }
+
+    if (!SendInitialSnapshot(ip, &m_lastNodeState, &m_lastMaterialState,
+                             &m_lastLightState, &m_sessionId, &m_documentId,
+                             &m_nextSequence, &m_nextRevision)) {
+      return false;
+    }
+
+    m_lastSelectedObjectIds = GatherSelectedObjectIds(ip);
+    CaptureActiveCameraSnapshot(ip, &m_lastCameraSnapshot);
+    return true;
+  }
+
   bool StartLiveSync() {
     std::lock_guard<std::mutex> lock(m_sendMutex);
     if (m_syncActive) {
@@ -1030,14 +1369,11 @@ private:
       return false;
     }
 
-    if (!SendInitialSnapshot(ip, &m_lastNodeState, &m_sessionId, &m_documentId,
-                             &m_nextSequence, &m_nextRevision)) {
+    if (!EnsureConnectedSession(ip)) {
       RefreshRollupUI_NoLock();
       return false;
     }
 
-    m_lastSelectedObjectIds = GatherSelectedObjectIds(ip);
-    CaptureActiveCameraSnapshot(ip, &m_lastCameraSnapshot);
     if (m_pollTimer == 0) {
       m_pollTimer = SetTimer(nullptr, kPollTimerId, kPollIntervalMs,
                              &ProjectRenderLiveLinkUtility::PollTimerProc);
@@ -1061,6 +1397,8 @@ private:
     SendSessionClosed(m_sessionId, m_nextSequence++);
     g_pipeClient.Disconnect();
     m_lastNodeState.clear();
+    m_lastMaterialState.clear();
+    m_lastLightState.clear();
     m_lastSelectedObjectIds.clear();
     m_lastCameraSnapshot = CameraSnapshot{};
     m_sessionId.clear();
@@ -1087,17 +1425,20 @@ private:
   void PollSceneChanges() {
     std::lock_guard<std::mutex> lock(m_sendMutex);
     Interface *ip = GetLiveInterface();
-    if (!m_syncActive || !ip || m_sessionId.empty() || m_documentId.empty() ||
-        !EnsurePipeConnected()) {
+    if (!m_syncActive || !ip || !EnsureConnectedSession(ip)) {
       return;
     }
 
     std::unordered_map<ULONG_PTR, NodeSnapshot> currentState;
+    std::unordered_map<ULONG_PTR, MaterialSnapshot> currentMaterialState;
+    std::unordered_map<ULONG_PTR, LightSnapshot> currentLightState;
     if (INode *root = ip->GetRootNode()) {
       for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
         GatherNodeSnapshots(ip, root->GetChildNode(childIndex), &currentState);
+        GatherLightSnapshots(ip, root->GetChildNode(childIndex), &currentLightState);
       }
     }
+    GatherMaterialSnapshots(ip, currentState, &currentMaterialState);
 
     json deltas = json::array();
     CameraSnapshot currentCamera;
@@ -1129,11 +1470,42 @@ private:
         AppendMeshPayloadDeltaIfAvailable(ip, m_sessionId, m_documentId,
                                           snapshot, &m_nextRevision, &deltas);
       }
+
+      const auto currentMaterialIt = currentMaterialState.find(handle);
+      const auto previousMaterialIt = m_lastMaterialState.find(handle);
+      if (currentMaterialIt != currentMaterialState.end() &&
+          (previousMaterialIt == m_lastMaterialState.end() ||
+           !SameMaterial(currentMaterialIt->second, previousMaterialIt->second))) {
+        AppendMaterialDelta(m_documentId, currentMaterialIt->second,
+                            &m_nextRevision, &deltas);
+      }
     }
 
     for (const auto &[handle, _] : m_lastNodeState) {
       if (currentState.find(handle) == currentState.end()) {
         AppendNodeRemovedDelta(m_documentId, handle, &m_nextRevision, &deltas);
+      }
+    }
+
+    for (const auto &[handle, snapshot] : m_lastMaterialState) {
+      if (currentMaterialState.find(handle) == currentMaterialState.end()) {
+        AppendMaterialRemovedDelta(m_documentId, snapshot, &m_nextRevision,
+                                   &deltas);
+      }
+    }
+
+    for (const auto &[handle, snapshot] : currentLightState) {
+      const auto previousIt = m_lastLightState.find(handle);
+      if (previousIt == m_lastLightState.end() ||
+          !SameLight(previousIt->second, snapshot)) {
+        AppendLightDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
+      }
+    }
+
+    for (const auto &[handle, snapshot] : m_lastLightState) {
+      if (currentLightState.find(handle) == currentLightState.end()) {
+        AppendLightRemovedDelta(m_documentId, snapshot, &m_nextRevision,
+                                &deltas);
       }
     }
 
@@ -1149,10 +1521,14 @@ private:
     if (!deltas.empty() && SendBatch(m_sessionId, m_nextSequence, false, deltas)) {
       ++m_nextSequence;
       m_lastNodeState = std::move(currentState);
+      m_lastMaterialState = std::move(currentMaterialState);
+      m_lastLightState = std::move(currentLightState);
       m_lastSelectedObjectIds = selectedObjectIds;
       m_lastCameraSnapshot = currentCamera;
     } else if (deltas.empty()) {
       m_lastNodeState = std::move(currentState);
+      m_lastMaterialState = std::move(currentMaterialState);
+      m_lastLightState = std::move(currentLightState);
       m_lastSelectedObjectIds = selectedObjectIds;
       m_lastCameraSnapshot = currentCamera;
     }
@@ -1163,8 +1539,7 @@ private:
   void SendSelectionDeltaIfNeeded() {
     std::lock_guard<std::mutex> lock(m_sendMutex);
     Interface *ip = GetLiveInterface();
-    if (!m_syncActive || !ip || m_sessionId.empty() || m_documentId.empty() ||
-        !EnsurePipeConnected()) {
+    if (!m_syncActive || !ip || !EnsureConnectedSession(ip)) {
       return;
     }
 
@@ -1190,6 +1565,8 @@ private:
   bool m_syncActive = false;
   UINT_PTR m_pollTimer = 0;
   std::unordered_map<ULONG_PTR, NodeSnapshot> m_lastNodeState;
+  std::unordered_map<ULONG_PTR, MaterialSnapshot> m_lastMaterialState;
+  std::unordered_map<ULONG_PTR, LightSnapshot> m_lastLightState;
   std::vector<std::string> m_lastSelectedObjectIds;
   CameraSnapshot m_lastCameraSnapshot;
   std::string m_sessionId;

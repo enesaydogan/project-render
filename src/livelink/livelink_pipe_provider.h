@@ -27,7 +27,12 @@ private:
   Capability m_capabilities = Capability::FullSceneSync |
                               Capability::IncrementalNodeSync |
                               Capability::TransformSync |
-                              Capability::VisibilitySync;
+                              Capability::VisibilitySync |
+                              Capability::MeshPayloadSync |
+                              Capability::MaterialSync |
+                              Capability::LightSync |
+                              Capability::CameraSync |
+                              Capability::SelectionSync;
   ConnectionState m_state = ConnectionState::Disconnected;
   std::string m_lastError;
   Impl *m_impl = nullptr;

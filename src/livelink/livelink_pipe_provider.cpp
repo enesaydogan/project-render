@@ -232,9 +232,24 @@ bool ParsePayload(const SceneDeltaKind kind, const json &payloadJson,
   }
   case SceneDeltaKind::LightChanged: {
     LightChangedPayload payload;
+    payload.lightType = payloadJson.value("lightType", "Omni");
     payload.intensity = payloadJson.value("intensity", 0.0f);
     if (payloadJson.contains("color")) {
       FillFloatArray(payloadJson.at("color"), &payload.color);
+    }
+    if (payloadJson.contains("position")) {
+      FillFloatArray(payloadJson.at("position"), &payload.position);
+    }
+    if (payloadJson.contains("direction")) {
+      FillFloatArray(payloadJson.at("direction"), &payload.direction);
+    }
+    payload.radius = payloadJson.value("radius", 0.1f);
+    payload.innerConeDegrees =
+        payloadJson.value("innerConeDegrees", 30.0f);
+    payload.outerConeDegrees =
+        payloadJson.value("outerConeDegrees", 45.0f);
+    if (payloadJson.contains("areaExtents")) {
+      FillFloatArray(payloadJson.at("areaExtents"), &payload.areaExtents);
     }
     *outPayload = std::move(payload);
     return true;
