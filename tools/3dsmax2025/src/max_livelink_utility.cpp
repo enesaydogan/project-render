@@ -431,29 +431,41 @@ std::array<float, 16> Matrix3ToColumnMajor4x4(const Matrix3 &matrix) {
         basisChange, MultiplyColumnMajor4x4(maxMatrix, inverseBasisChange));
 }
 
-std::string PathToUtf8(const std::filesystem::path &path) {
-  return WStringToUtf8(path.wstring());
+Matrix3 ComputeObjectToNodeTransform(Interface *ip, INode *node) {
+  if (!ip || !node) {
+    return Matrix3();
+  }
+
+  const TimeValue time = ip->GetTime();
+  const Matrix3 nodeTm = node->GetNodeTM(time);
+  const Matrix3 objectTm = node->GetObjectTM(time);
+  return objectTm * Inverse(nodeTm);
 }
 
-std::string SanitizeFileComponent(std::string value) {
-  for (char &ch : value) {
-    switch (ch) {
-    case '\\':
-    case '/':
-    case ':':
-    case '*':
-    case '?':
-    case '"':
-    case '<':
-    case '>':
-    case '|':
-      ch = '_';
-      break;
-    default:
-      break;
-    }
-  }
-  return value.empty() ? std::string("node") : value;
+Point3 TransformPointByMatrix3(const Matrix3 &matrix, const Point3 &point) {
+  const Point3 row0 = matrix.GetRow(0);
+  const Point3 row1 = matrix.GetRow(1);
+  const Point3 row2 = matrix.GetRow(2);
+  const Point3 translation = matrix.GetTrans();
+  return Point3(point.x * row0.x + point.y * row1.x + point.z * row2.x +
+                    translation.x,
+                point.x * row0.y + point.y * row1.y + point.z * row2.y +
+                    translation.y,
+                point.x * row0.z + point.y * row1.z + point.z * row2.z +
+                    translation.z);
+}
+
+Point3 TransformVectorByMatrix3(const Matrix3 &matrix, const Point3 &vector) {
+  const Point3 row0 = matrix.GetRow(0);
+  const Point3 row1 = matrix.GetRow(1);
+  const Point3 row2 = matrix.GetRow(2);
+  return Point3(vector.x * row0.x + vector.y * row1.x + vector.z * row2.x,
+                vector.x * row0.y + vector.y * row1.y + vector.z * row2.y,
+                vector.x * row0.z + vector.y * row1.z + vector.z * row2.z);
+}
+
+std::string PathToUtf8(const std::filesystem::path &path) {
+  return WStringToUtf8(path.wstring());
 }
 
 std::string MakeCameraObjectId() {
@@ -680,6 +692,7 @@ void CaptureMeshSnapshot(Interface *ip, INode *node, NodeSnapshot *snapshot) {
 
   mesh.buildBoundingBox();
   const Box3 bounds = mesh.getBoundingBox();
+  const Matrix3 objectToNode = ComputeObjectToNodeTransform(ip, node);
 
   snapshot->hasMesh = true;
   snapshot->vertexCount = vertexCount;
@@ -695,6 +708,22 @@ void CaptureMeshSnapshot(Interface *ip, INode *node, NodeSnapshot *snapshot) {
   fingerprint = HashCombine(fingerprint, HashFloat(bounds.Max().x));
   fingerprint = HashCombine(fingerprint, HashFloat(bounds.Max().y));
   fingerprint = HashCombine(fingerprint, HashFloat(bounds.Max().z));
+  const Point3 row0 = objectToNode.GetRow(0);
+  const Point3 row1 = objectToNode.GetRow(1);
+  const Point3 row2 = objectToNode.GetRow(2);
+  const Point3 translation = objectToNode.GetTrans();
+  fingerprint = HashCombine(fingerprint, HashFloat(row0.x));
+  fingerprint = HashCombine(fingerprint, HashFloat(row0.y));
+  fingerprint = HashCombine(fingerprint, HashFloat(row0.z));
+  fingerprint = HashCombine(fingerprint, HashFloat(row1.x));
+  fingerprint = HashCombine(fingerprint, HashFloat(row1.y));
+  fingerprint = HashCombine(fingerprint, HashFloat(row1.z));
+  fingerprint = HashCombine(fingerprint, HashFloat(row2.x));
+  fingerprint = HashCombine(fingerprint, HashFloat(row2.y));
+  fingerprint = HashCombine(fingerprint, HashFloat(row2.z));
+  fingerprint = HashCombine(fingerprint, HashFloat(translation.x));
+  fingerprint = HashCombine(fingerprint, HashFloat(translation.y));
+  fingerprint = HashCombine(fingerprint, HashFloat(translation.z));
   fingerprint =
       HashCombine(fingerprint, static_cast<uint64_t>(node->GetObjectRef() != nullptr));
   snapshot->geometryFingerprint = fingerprint;
@@ -753,10 +782,9 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
     return false;
   }
 
-  const std::string safeName = SanitizeFileComponent(snapshot.name);
   const std::filesystem::path payloadPath =
       sessionDirectory /
-      (safeName + "-" + std::to_string(snapshot.handle) + "-" +
+      (std::string("node-") + std::to_string(snapshot.handle) + "-" +
        std::to_string(snapshot.geometryFingerprint) + ".prmesh");
 
   std::ofstream stream(payloadPath, std::ios::binary | std::ios::trunc);
@@ -769,6 +797,7 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
 
   Mesh &mesh = triObject->GetMesh();
   mesh.checkNormals(TRUE);
+  const Matrix3 objectToNode = ComputeObjectToNodeTransform(ip, node);
   std::vector<NativeMeshPayloadVertex> vertices;
   std::vector<uint32_t> indices;
   vertices.reserve(static_cast<size_t>(mesh.getNumFaces()) * 3);
@@ -779,9 +808,12 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
   for (int faceIndex = 0; faceIndex < mesh.getNumFaces(); ++faceIndex) {
     const Face &face = mesh.faces[faceIndex];
     const Point3 positions[3] = {
-        ConvertMaxPointToEngine(mesh.verts[face.getVert(0)]),
-        ConvertMaxPointToEngine(mesh.verts[face.getVert(1)]),
-        ConvertMaxPointToEngine(mesh.verts[face.getVert(2)]),
+      ConvertMaxPointToEngine(
+        TransformPointByMatrix3(objectToNode, mesh.verts[face.getVert(0)])),
+      ConvertMaxPointToEngine(
+        TransformPointByMatrix3(objectToNode, mesh.verts[face.getVert(1)])),
+      ConvertMaxPointToEngine(
+        TransformPointByMatrix3(objectToNode, mesh.verts[face.getVert(2)])),
     };
     const int vertexOrder[3] = {0, 1, 2};
     for (int corner = 0; corner < 3; ++corner) {
@@ -789,7 +821,8 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
       const int sourceCorner = vertexOrder[corner];
       const Point3 &position = positions[sourceCorner];
       Point3 normal = ConvertMaxVectorToEngine(
-          GetFaceCornerNormal(mesh, faceIndex, sourceCorner));
+        TransformVectorByMatrix3(
+          objectToNode, GetFaceCornerNormal(mesh, faceIndex, sourceCorner)));
       NormalizePoint3(&normal, Point3(0.0f, 1.0f, 0.0f));
       vertex.position[0] = position.x;
       vertex.position[1] = position.y;
