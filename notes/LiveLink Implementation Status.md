@@ -24,7 +24,7 @@ Completed so far:
 Not implemented yet:
 
 - fine-grained renderer dirty-state classification beyond the current coarse buckets
-- 3ds Max provider
+- full 3ds Max provider with live incremental change tracking
 - live-link provider controls
 - broader mesh/material/light delta coverage beyond the current supported subset
 
@@ -542,6 +542,8 @@ That means:
 - apply material parameter deltas onto bound runtime materials
 - apply light intensity/color deltas onto bound runtime lights
 - inspect provider state and recent validation/apply issues in the Qt UI
+- accept external live-link batches over a Windows named pipe
+- build a first 3ds Max 2025 utility plugin that sends an initial full-scene node snapshot
 - build future providers against a stable host-side API
 - call scene mutation through explicit engine functions instead of import-only code
 
@@ -549,7 +551,7 @@ That means:
 
 - preserve stable identity across repeated live edits for every supported runtime object type
 - update only the minimum renderer state for each kind of scene change
-- run a real 3ds Max session against the engine
+- run a full incremental 3ds Max editing session against the engine
 
 ---
 
@@ -557,15 +559,15 @@ That means:
 
 Best next implementation phase:
 
-- provider controls and broader delta coverage
+- provider controls and incremental 3ds Max sync
 
 Reason:
 
-- the engine can now accept and replay synthetic node, mesh, material, light, camera, selection, and environment deltas end to end while surfacing recent issues in the Qt UI
-- the next bottleneck is enabling connect/disconnect or provider-specific controls and broadening delta coverage beyond the current supported subset
+- the engine can now accept both mock-provider batches and external named-pipe batches while surfacing recent issues in the Qt UI
+- the next bottleneck is turning the new 3ds Max bootstrap from one-shot snapshot export into real incremental scene sync with operator controls
 
 ---
 
 ## Short Status Line
 
-The repo now has a real live-link core, external-ID mapping, a main-thread delta apply path, first-pass mesh/material/light live application, a first renderer invalidation pass, a mock provider, and Qt diagnostics, but provider controls and broader delta coverage still remain.
+The repo now has a real live-link core, external-ID mapping, a main-thread delta apply path, first-pass mesh/material/light live application, a first renderer invalidation pass, a mock provider, Qt diagnostics, and a first 3ds Max named-pipe bootstrap, but provider controls and full incremental DCC sync still remain.

@@ -972,6 +972,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="D:\project-render\src\livelink\livelink_types.cpp" />
     <ClCompile Include="D:\project-render\src\livelink\livelink_coordinator.cpp" />
     <ClCompile Include="D:\project-render\src\livelink\livelink_mock_provider.cpp" />
+    <ClCompile Include="D:\project-render\src\livelink\livelink_pipe_provider.cpp" />
     <ClCompile Include="D:\project-render\src\livelink\livelink_scene_sync.cpp" />
     <ClCompile Include="D:\project-render\src\livelink\livelink_runtime.cpp" />
     <ClCompile Include="D:\project-render\src\qt\CameraPanel.cpp" />

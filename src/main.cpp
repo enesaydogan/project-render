@@ -17,6 +17,7 @@
 #include "input_handler.h"
 #include "light.h"
 #include "livelink/livelink_mock_provider.h"
+#include "livelink/livelink_pipe_provider.h"
 #include "livelink/livelink_runtime.h"
 #include "material_editor.h"
 #include "oidn_denoiser.h"
@@ -1324,6 +1325,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   std::string customGltfPath;
   std::string sceneToLoad;
   bool enableMockLiveLink = false;
+  bool enableMaxLiveLinkPipe = false;
+  std::string maxLiveLinkPipeName = "project-render-max-livelink";
 
   // window handle (Qt path will obtain from widget, Win32 path from CreateWindow)
   HWND hwnd = nullptr;
@@ -1351,6 +1354,22 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         }
       } else if (token == "--mock-livelink") {
         enableMockLiveLink = true;
+      } else if (token == "--max-livelink-pipe") {
+        enableMaxLiveLinkPipe = true;
+        if (iss.good()) {
+          std::streampos rewindPos = iss.tellg();
+          std::string nextToken;
+          if (iss >> nextToken) {
+            if (!nextToken.empty() && nextToken[0] != '-') {
+              maxLiveLinkPipeName = nextToken;
+            } else if (rewindPos != std::streampos(-1)) {
+              iss.clear();
+              iss.seekg(rewindPos);
+            }
+          } else {
+            iss.clear();
+          }
+        }
       } else {
         // first non-flag token is interpreted as a path
         if (customGltfPath.empty()) {
@@ -1477,6 +1496,27 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     } catch (const std::exception &e) {
       fprintf(stderr,
               "Startup: failed to initialize mock live-link provider: %s\n",
+              e.what());
+    }
+  }
+
+  if (enableMaxLiveLinkPipe) {
+    try {
+      auto provider =
+          std::make_unique<LiveLink::NamedPipeLiveLinkProvider>(maxLiveLinkPipeName);
+      const auto providerId =
+          LiveLink::GetCoordinator().RegisterProvider(std::move(provider));
+      if (LiveLink::GetCoordinator().ConnectProvider(providerId)) {
+        fprintf(stderr,
+                "Startup: max live-link pipe enabled (--max-livelink-pipe %s)\n",
+                maxLiveLinkPipeName.c_str());
+      } else {
+        fprintf(stderr,
+                "Startup: failed to connect max live-link pipe provider\n");
+      }
+    } catch (const std::exception &e) {
+      fprintf(stderr,
+              "Startup: failed to initialize max live-link pipe provider: %s\n",
               e.what());
     }
   }
