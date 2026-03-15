@@ -302,7 +302,17 @@ SceneDelta MockLiveLinkProvider::MakeLightDelta(uint64_t revision,
   delta.target = MakeObjectId(ObjectType::Light, kLightId);
   delta.revision = revision;
   delta.debugLabel = "Mock light";
-  delta.payload = LightChangedPayload{intensity, {r, g, b}};
+  LightChangedPayload payload;
+  payload.lightType = "Omni";
+  payload.intensity = intensity;
+  payload.color = {r, g, b};
+  payload.position = {0.0f, 2.0f, 0.0f};
+  payload.direction = {0.0f, -1.0f, 0.0f};
+  payload.radius = 0.1f;
+  payload.innerConeDegrees = 30.0f;
+  payload.outerConeDegrees = 45.0f;
+  payload.areaExtents = {1.0f, 1.0f};
+  delta.payload = payload;
   return delta;
 }
 

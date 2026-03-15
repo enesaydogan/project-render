@@ -157,8 +157,15 @@ struct MaterialChangedPayload {
 };
 
 struct LightChangedPayload {
+  std::string lightType = "Omni";
   float intensity = 0.0f;
   std::array<float, 3> color = {1.0f, 1.0f, 1.0f};
+  std::array<float, 3> position = {0.0f, 2.0f, 0.0f};
+  std::array<float, 3> direction = {0.0f, -1.0f, 0.0f};
+  float radius = 0.1f;
+  float innerConeDegrees = 30.0f;
+  float outerConeDegrees = 45.0f;
+  std::array<float, 2> areaExtents = {1.0f, 1.0f};
 };
 
 struct CameraChangedPayload {

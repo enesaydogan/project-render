@@ -9,6 +9,7 @@ class QPlainTextEdit;
 class QProgressBar;
 class QFrame;
 class QTimer;
+class QPushButton;
 
 class MainWindow : public QMainWindow
 {
@@ -43,6 +44,9 @@ private:
     QLabel *m_liveLinkLabel = nullptr;
     QLabel *m_liveLinkSummaryLabel = nullptr;
     QPlainTextEdit *m_liveLinkDiagnosticsView = nullptr;
+    QPushButton *m_liveLinkConnectButton = nullptr;
+    QPushButton *m_liveLinkDisconnectButton = nullptr;
+    QPushButton *m_liveLinkReconnectButton = nullptr;
     QFrame *m_statusDivider = nullptr;
     QTimer *m_sceneIoTimer = nullptr;
 };
