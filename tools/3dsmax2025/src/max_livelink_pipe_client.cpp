@@ -1,7 +1,5 @@
 #include "max_livelink_pipe_client.h"
 
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
 #include <windows.h>
 
 namespace {
@@ -47,14 +45,15 @@ bool MaxLiveLinkPipeClient::Connect(const std::string &pipeName) {
   const std::string pipePath = MakePipePath(pipeName);
   if (!WaitNamedPipeA(pipePath.c_str(), 2000)) {
     m_lastError = "WaitNamedPipeA failed: " +
-                  FormatWindowsError(GetLastError());
+                  FormatWindowsError(::GetLastError());
     return false;
   }
 
   HANDLE handle = CreateFileA(pipePath.c_str(), GENERIC_WRITE, 0, nullptr,
                               OPEN_EXISTING, 0, nullptr);
   if (handle == INVALID_HANDLE_VALUE) {
-    m_lastError = "CreateFileA failed: " + FormatWindowsError(GetLastError());
+    m_lastError = "CreateFileA failed: " +
+                  FormatWindowsError(::GetLastError());
     return false;
   }
 
@@ -89,7 +88,8 @@ bool MaxLiveLinkPipeClient::SendJsonLine(const std::string &line) {
   DWORD bytesWritten = 0;
   if (!WriteFile(static_cast<HANDLE>(m_pipe), payload.data(),
                  static_cast<DWORD>(payload.size()), &bytesWritten, nullptr)) {
-    m_lastError = "WriteFile failed: " + FormatWindowsError(GetLastError());
+    m_lastError = "WriteFile failed: " +
+                  FormatWindowsError(::GetLastError());
     Disconnect();
     return false;
   }
