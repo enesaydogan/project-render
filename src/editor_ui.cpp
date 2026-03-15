@@ -113,6 +113,7 @@ static std::mutex g_sceneIoUiMutex;
 static std::atomic<float> g_sceneIoProgressAtomic{0.0f};
 static std::atomic<uint32_t> g_sceneIoTickAtomic{0};
 static std::string g_sceneIoStageAtomic;
+static std::string g_currentScenePath;
 
 static void SceneIoProgressSink(float progress01, const char *stage) {
   g_sceneIoProgressAtomic.store((std::clamp)(progress01, 0.0f, 1.0f),
@@ -173,6 +174,18 @@ std::string GetSceneIoStage() {
   return g_sceneIoJob.stage;
 }
 
+bool HasCurrentScenePath() {
+  return !g_currentScenePath.empty();
+}
+
+std::string GetCurrentScenePath() {
+  return g_currentScenePath;
+}
+
+void SetCurrentScenePath(const std::string &utf8Path) {
+  g_currentScenePath = utf8Path;
+}
+
 static void UpdateSceneIoJob() {
   if (!g_sceneIoJob.active) {
     return;
@@ -210,6 +223,7 @@ static void UpdateSceneIoJob() {
                                                    : "Load failed");
 
     if (ok) {
+      g_currentScenePath = g_sceneIoJob.path;
       fprintf(stderr, "%s scene %s\n",
               g_sceneIoJob.isSave ? "Saved" : "Loaded", g_sceneIoJob.path.c_str());
     } else {
@@ -693,14 +707,26 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
       if (g_sceneIoJob.active) {
         ImGui::BeginDisabled();
       }
-      if (ImGui::MenuItem("Save Scene...")) {
+      const bool hasCurrentScene = HasCurrentScenePath();
+      if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {
+        if (hasCurrentScene) {
+          StartSceneIoJob(true, GetCurrentScenePath());
+        } else {
+          std::wstring chosen;
+          if (SaveSceneFileDialog(g_hwnd, chosen)) {
+            std::string utf8 = WStringToUtf8(chosen);
+            StartSceneIoJob(true, utf8);
+          }
+        }
+      }
+      if (ImGui::MenuItem("Save Scene As...", "Ctrl+Shift+S")) {
         std::wstring chosen;
         if (SaveSceneFileDialog(g_hwnd, chosen)) {
           std::string utf8 = WStringToUtf8(chosen);
           StartSceneIoJob(true, utf8);
         }
       }
-      if (ImGui::MenuItem("Load Scene...")) {
+      if (ImGui::MenuItem("Load Scene...", "Ctrl+O")) {
         std::wstring chosen;
         if (OpenSceneFileDialog(g_hwnd, chosen)) {
           std::string utf8 = WStringToUtf8(chosen);

@@ -84,6 +84,9 @@ bool IsSceneIoJobActive();
 bool IsSceneIoSaveJob();
 float GetSceneIoProgress();
 std::string GetSceneIoStage();
+bool HasCurrentScenePath();
+std::string GetCurrentScenePath();
+void SetCurrentScenePath(const std::string &utf8Path);
 
 bool IsSceneLoadInProgress();
 

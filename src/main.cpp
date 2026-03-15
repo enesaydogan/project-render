@@ -1432,6 +1432,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   if (!sceneToLoad.empty()) {
     if (fs::exists(sceneToLoad)) {
       if (SceneIO::LoadScene(sceneToLoad)) {
+        SetCurrentScenePath(sceneToLoad);
         fprintf(stderr, "Startup: loaded scene %s\n", sceneToLoad.c_str());
       } else {
         fprintf(stderr, "Startup: failed to load scene %s\n",
