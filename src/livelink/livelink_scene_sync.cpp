@@ -17,6 +17,11 @@ namespace LiveLink {
 
 namespace {
 
+struct ScopedSceneBatchUpdates {
+  ScopedSceneBatchUpdates() { Scene::BeginBatchedUpdates(); }
+  ~ScopedSceneBatchUpdates() { Scene::EndBatchedUpdates(); }
+};
+
 template <typename T>
 const T *FindPayload(const SceneDelta &delta) {
   return std::get_if<T>(&delta.payload);
@@ -173,6 +178,7 @@ void LiveLinkSceneSync::ApplyQueuedBatches(LiveLinkCoordinator &coordinator) {
 }
 
 bool LiveLinkSceneSync::ApplyBatch(const SceneDeltaBatch &batch) {
+  ScopedSceneBatchUpdates scopedBatchUpdates;
   bool appliedAny = false;
   for (const SceneDelta &delta : batch.deltas) {
     appliedAny = ApplyDelta(batch, delta) || appliedAny;

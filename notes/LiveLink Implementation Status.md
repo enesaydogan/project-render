@@ -20,6 +20,7 @@ Completed so far:
 - Phase 2: reusable scene mutation API extracted from import-heavy flows
 - Phase 3: external-ID mapping and main-thread scene apply bridge
 - Phase 4: first renderer invalidation pass integrated across current scene mutation and scene-load/mode-switch paths
+- Phase 5: batch-scoped invalidation and light-update coalescing for LiveLink apply passes
 - Phase 7: Real-time 3ds Max parity, coordinate basis mapping, and DXR stabilization
 - 3ds Max 2025 named-pipe provider bootstrap
 - 3ds Max 2025 incremental node, camera, material, light, and selection sync at 60fps
@@ -28,7 +29,6 @@ Completed so far:
 
 Not implemented yet:
 
-- fine-grained renderer dirty-state classification beyond the current coarse buckets
 - richer 3ds Max material graph extraction beyond the current single-material-per-node OpenPBR-style subset
 - stronger geometry change detection and payload lifecycle management for exported Max meshes
 
