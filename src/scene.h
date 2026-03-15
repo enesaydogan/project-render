@@ -35,6 +35,14 @@ struct Instance {
   const Asset::GpuMesh *mesh;
 };
 
+struct ImportedNodePayload {
+  std::string sourcePath;
+  std::string displayName;
+  std::vector<Asset::GpuMesh> meshes;
+  std::vector<Asset::Material> materials;
+  std::vector<Asset::Texture> textures;
+};
+
 // Import a model (glTF, OBJ, STL) file into the scene. Returns true on success.
 bool ImportModel(const std::string &utf8path,
                  const float *rootTranslation = nullptr);
@@ -70,6 +78,14 @@ void DrawLightGizmo();
 
 // Node manipulation
 const std::vector<Node> &GetNodes();
+size_t AddNode(Node node);
+bool AddImportedNode(ImportedNodePayload payload,
+                     size_t *outNodeIndex = nullptr);
+bool ReplaceNodeImportedContent(size_t index, ImportedNodePayload payload);
+bool RenameNode(size_t index, const std::string &name);
+bool UpdateNodeTransform(size_t index, const float *columnMajor4x4);
+bool SetNodeVisibility(size_t index, bool visible);
+bool RemoveNode(size_t index);
 void SelectNode(size_t index);
 std::vector<Instance> GetInstances();
 
