@@ -53,6 +53,15 @@ std::string ResolveMaterialName(const SceneDelta &delta) {
   return "Material";
 }
 
+std::filesystem::path Utf8PathFromString(const std::string &value) {
+  std::u8string wideBytes;
+  wideBytes.reserve(value.size());
+  for (unsigned char ch : value) {
+    wideBytes.push_back(static_cast<char8_t>(ch));
+  }
+  return std::filesystem::path(wideBytes);
+}
+
 struct NativeMeshPayloadHeader {
   uint32_t magic = 0;
   uint32_t version = 0;
@@ -73,7 +82,8 @@ bool LoadNativeMeshPayload(const std::string &path,
     return false;
   }
 
-  std::ifstream stream(path, std::ios::binary);
+  const std::filesystem::path payloadPath = Utf8PathFromString(path);
+  std::ifstream stream(payloadPath, std::ios::binary);
   if (!stream) {
     return false;
   }
@@ -412,8 +422,9 @@ bool LiveLinkSceneSync::ApplyMeshPayloadChanged(const SceneDeltaBatch &batch,
   std::vector<Asset::GpuMesh> meshes;
   std::vector<Asset::Material> materials;
   std::vector<Asset::Texture> textures;
-  const std::string extension =
-      std::filesystem::path(payload->payloadUri).extension().string();
+      const std::filesystem::path payloadPath =
+        Utf8PathFromString(payload->payloadUri);
+    const std::string extension = payloadPath.extension().string();
   const bool loaded = extension == ".prmesh"
                           ? LoadNativeMeshPayload(payload->payloadUri, &meshes)
                           : Asset::LoadModel(payload->payloadUri, meshes,
