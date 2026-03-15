@@ -1,5 +1,6 @@
 #include "camera.h"
 #include "d3d12_helpers.h"
+#include "editor_ui.h"
 #include <math.h>
 
 // Forward declare for accumulation reset
@@ -71,7 +72,9 @@ static bool CameraChanged(const CameraCB &a, const CameraCB &b) {
     return true;
   if (a.up[0] != b.up[0] || a.up[1] != b.up[1] || a.up[2] != b.up[2])
     return true;
-  if (a.fov != b.fov || a.aspect != b.aspect || a.nearZ != b.nearZ ||
+  const bool ignoreAspectChange = g_renderExportJob.active;
+  if (a.fov != b.fov || (!ignoreAspectChange && a.aspect != b.aspect) ||
+      a.nearZ != b.nearZ ||
       a.farZ != b.farZ)
     return true;
   if (a.debugMode != b.debugMode ||
