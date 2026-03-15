@@ -25,8 +25,8 @@ Not implemented yet:
 
 - fine-grained renderer dirty-state classification beyond the current coarse buckets
 - 3ds Max provider
-- live-link UI panel/status controls
-- mesh/material/light delta application beyond the current supported subset
+- live-link provider controls
+- broader mesh/material/light delta coverage beyond the current supported subset
 
 ---
 
@@ -515,9 +515,9 @@ Result:
 
 ### High-priority missing pieces
 
-- richer mesh/material/light scene application
+- broader mesh/material/light scene application coverage
 - finer renderer invalidation classification
-- diagnostics UI for live-link state
+- live-link provider controls
 
 ### Important technical gap
 
@@ -538,12 +538,15 @@ That means:
 - validate and queue live-link batches safely
 - map external object identity to engine runtime objects
 - apply a supported subset of live-link deltas on the main thread
+- apply mesh payload replacement from URI-backed assets on bound scene nodes
+- apply material parameter deltas onto bound runtime materials
+- apply light intensity/color deltas onto bound runtime lights
+- inspect provider state and recent validation/apply issues in the Qt UI
 - build future providers against a stable host-side API
 - call scene mutation through explicit engine functions instead of import-only code
 
 ### Not ready yet
 
-- apply mesh/material/light live deltas into the runtime scene
 - preserve stable identity across repeated live edits for every supported runtime object type
 - update only the minimum renderer state for each kind of scene change
 - run a real 3ds Max session against the engine
@@ -554,15 +557,15 @@ That means:
 
 Best next implementation phase:
 
-- unsupported-delta expansion
+- provider controls and broader delta coverage
 
 Reason:
 
-- the engine can now accept and replay synthetic batches end to end
-- the next bottleneck is filling in unsupported mesh/material/light delta types against real scene content
+- the engine can now accept and replay synthetic node, mesh, material, light, camera, selection, and environment deltas end to end while surfacing recent issues in the Qt UI
+- the next bottleneck is enabling connect/disconnect or provider-specific controls and broadening delta coverage beyond the current supported subset
 
 ---
 
 ## Short Status Line
 
-The repo now has a real live-link core, external-ID mapping, a main-thread delta apply path, a first renderer invalidation pass, and a mock provider, but mesh/material/light live application and finer invalidation still remain.
+The repo now has a real live-link core, external-ID mapping, a main-thread delta apply path, first-pass mesh/material/light live application, a first renderer invalidation pass, a mock provider, and Qt diagnostics, but provider controls and broader delta coverage still remain.

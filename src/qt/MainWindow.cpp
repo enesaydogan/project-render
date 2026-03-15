@@ -12,6 +12,7 @@
 #include "../editor_ui.h"
 #include "../file_import.h"
 #include "../livelink/livelink_runtime.h"
+#include "../livelink/livelink_scene_sync.h"
 #include "../scene.h"
 #include "../streamline_manager.h"
 #include <QAction>
@@ -30,7 +31,9 @@
 #include <QPushButton>
 #include <QVBoxLayout>
 #include <QMenuBar>
+#include <QPlainTextEdit>
 #include <QProgressBar>
+#include <QScrollBar>
 #include <QScrollArea>
 #include <QToolBar>
 #include <QStatusBar>
@@ -464,10 +467,34 @@ void MainWindow::createDocks()
     lightsDock->setAllowedAreas(Qt::AllDockWidgetAreas);
     lightsDock->setWidget(wrapScroll(new LightsPanel(lightsDock), lightsDock));
     addDockWidget(Qt::BottomDockWidgetArea, lightsDock);
+    auto *liveLinkDock = new QDockWidget(tr("LiveLink"), this);
+    liveLinkDock->setObjectName(tr("LiveLink"));
+    liveLinkDock->setAllowedAreas(Qt::AllDockWidgetAreas);
+    {
+        auto *panel = new QWidget(liveLinkDock);
+        auto *layout = new QVBoxLayout(panel);
+        layout->setContentsMargins(8, 8, 8, 8);
+        layout->setSpacing(6);
+
+        m_liveLinkSummaryLabel = new QLabel(panel);
+        m_liveLinkSummaryLabel->setWordWrap(true);
+        m_liveLinkSummaryLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        layout->addWidget(m_liveLinkSummaryLabel);
+
+        m_liveLinkDiagnosticsView = new QPlainTextEdit(panel);
+        m_liveLinkDiagnosticsView->setReadOnly(true);
+        m_liveLinkDiagnosticsView->setLineWrapMode(QPlainTextEdit::NoWrap);
+        m_liveLinkDiagnosticsView->setMinimumHeight(160);
+        layout->addWidget(m_liveLinkDiagnosticsView, 1);
+
+        liveLinkDock->setWidget(panel);
+    }
+    addDockWidget(Qt::BottomDockWidgetArea, liveLinkDock);
 
     tabifyDockWidget(sceneDock, materialsDock);
     tabifyDockWidget(sceneDock, lightsDock);
     sceneDock->raise();
+    tabifyDockWidget(lightsDock, liveLinkDock);
     tabifyDockWidget(renderDock, renderExportDock);
     renderDock->raise();
     splitDockWidget(renderDock, environmentDock, Qt::Vertical);
@@ -608,6 +635,7 @@ void MainWindow::updateSceneIoUi()
     {
         const auto stats = LiveLink::GetCoordinator().GetStatsSnapshot();
         const auto providers = LiveLink::GetCoordinator().GetProviderSnapshots();
+        const auto diagnostics = LiveLink::GetSceneSync().GetRecentDiagnostics();
         QString liveLinkText = tr("LL off");
         if (!providers.empty()) {
             QStringList providerParts;
@@ -630,6 +658,57 @@ void MainWindow::updateSceneIoUi()
             liveLinkText = providerParts.join(QStringLiteral(" | "));
         }
         m_liveLinkLabel->setText(liveLinkText);
+
+        if (m_liveLinkSummaryLabel) {
+            int warningCount = 0;
+            int errorCount = 0;
+            for (const auto &entry : diagnostics) {
+                if (entry.level == "Error") {
+                    ++errorCount;
+                } else if (entry.level == "Warning") {
+                    ++warningCount;
+                }
+            }
+
+            QStringList summary;
+            summary << tr("Providers %1 connected of %2")
+                           .arg(static_cast<qulonglong>(stats.connectedProviderCount))
+                           .arg(static_cast<qulonglong>(stats.providerCount));
+            summary << tr("Accepted %1 batches / %2 deltas")
+                           .arg(static_cast<qulonglong>(stats.batchesAccepted))
+                           .arg(static_cast<qulonglong>(stats.deltasAccepted));
+            summary << tr("Rejected %1 batches / %2 deltas")
+                           .arg(static_cast<qulonglong>(stats.batchesRejected))
+                           .arg(static_cast<qulonglong>(stats.deltasRejected));
+            summary << tr("Recent issues %1 warnings / %2 errors")
+                           .arg(warningCount)
+                           .arg(errorCount);
+            m_liveLinkSummaryLabel->setText(summary.join(QStringLiteral(" | ")));
+        }
+
+        if (m_liveLinkDiagnosticsView) {
+            QStringList lines;
+            if (diagnostics.empty()) {
+                lines << tr("No live-link validation or apply issues recorded.");
+            } else {
+                for (const auto &entry : diagnostics) {
+                    lines << QStringLiteral("#%1 [%2] provider=%3 session=%4 delta=%5 target=%6 %7")
+                                 .arg(static_cast<qulonglong>(entry.sequence))
+                                 .arg(QString::fromStdString(entry.level))
+                                 .arg(QString::fromStdString(entry.providerName),
+                                      QString::fromStdString(entry.sessionId),
+                                      QString::fromStdString(entry.deltaKind),
+                                      QString::fromStdString(entry.targetId),
+                                      QString::fromStdString(entry.message));
+                }
+            }
+            const QString text = lines.join(QLatin1Char('\n'));
+            if (m_liveLinkDiagnosticsView->toPlainText() != text) {
+                m_liveLinkDiagnosticsView->setPlainText(text);
+                m_liveLinkDiagnosticsView->verticalScrollBar()->setValue(
+                    m_liveLinkDiagnosticsView->verticalScrollBar()->maximum());
+            }
+        }
     }
 
     const bool active = IsSceneIoJobActive();

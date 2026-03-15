@@ -1,5 +1,6 @@
 #include "livelink_scene_sync.h"
 
+#include "../assets/asset_loader.h"
 #include "../camera.h"
 #include "../dxr_renderer.h"
 #include "../ibl_manager.h"
@@ -51,6 +52,11 @@ LiveLinkSceneSync &GetSceneSync() {
   return s_sceneSync;
 }
 
+std::vector<LiveLinkDiagnosticEntry>
+LiveLinkSceneSync::GetRecentDiagnostics() const {
+  return m_recentDiagnostics;
+}
+
 void LiveLinkSceneSync::ApplyQueuedBatches(LiveLinkCoordinator &coordinator) {
   std::vector<ValidationIssue> issues = coordinator.ConsumeValidationIssues();
   for (const ValidationIssue &issue : issues) {
@@ -88,6 +94,8 @@ bool LiveLinkSceneSync::ApplyDelta(const SceneDeltaBatch &batch,
     return ApplyNodeTransformChanged(batch, delta);
   case SceneDeltaKind::NodeVisibilityChanged:
     return ApplyNodeVisibilityChanged(batch, delta);
+  case SceneDeltaKind::MeshPayloadChanged:
+    return ApplyMeshPayloadChanged(batch, delta);
   case SceneDeltaKind::MaterialChanged:
     return ApplyMaterialChanged(batch, delta);
   case SceneDeltaKind::LightChanged:
@@ -98,7 +106,6 @@ bool LiveLinkSceneSync::ApplyDelta(const SceneDeltaBatch &batch,
     return ApplyCameraChanged(batch, delta);
   case SceneDeltaKind::EnvironmentChanged:
     return ApplyEnvironmentChanged(batch, delta);
-  case SceneDeltaKind::MeshPayloadChanged:
   case SceneDeltaKind::Unknown:
     LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
                   "Ignoring unknown delta kind");
@@ -255,6 +262,70 @@ bool LiveLinkSceneSync::ApplyNodeVisibilityChanged(const SceneDeltaBatch &batch,
   if (!Scene::SetNodeVisibility(binding->handleIndex, payload->visible)) {
     LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
                   "Failed to apply node visibility");
+    return false;
+  }
+
+  binding->lastAppliedRevision = delta.revision;
+  return true;
+}
+
+bool LiveLinkSceneSync::ApplyMeshPayloadChanged(const SceneDeltaBatch &batch,
+                                                const SceneDelta &delta) {
+  const MeshPayloadChangedPayload *payload =
+      FindPayload<MeshPayloadChangedPayload>(delta);
+  if (!payload) {
+    LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
+                  "MeshPayloadChanged missing payload");
+    return false;
+  }
+  if (payload->payloadUri.empty()) {
+    LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
+                  "MeshPayloadChanged missing payload URI");
+    return false;
+  }
+
+  ObjectBinding *binding = FindBinding(delta.target);
+  if (!binding) {
+    binding = FindRelatedBinding(delta.target, EngineHandleKind::SceneNode);
+  }
+  if (binding && delta.revision > 0 &&
+      delta.revision <= binding->lastAppliedRevision) {
+    return true;
+  }
+  if (!binding || binding->handleKind != EngineHandleKind::SceneNode ||
+      binding->handleIndex == kInvalidHandle ||
+      binding->handleIndex >= Scene::GetNodes().size()) {
+    LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
+                  "Mesh payload target is not bound to a scene node");
+    return false;
+  }
+
+  std::vector<Asset::GpuMesh> meshes;
+  std::vector<Asset::Material> materials;
+  std::vector<Asset::Texture> textures;
+  if (!Asset::LoadModel(payload->payloadUri, meshes, &materials, &textures)) {
+    LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
+                  std::string("Failed to load mesh payload: ") +
+                      payload->payloadUri);
+    return false;
+  }
+  if (meshes.empty()) {
+    LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
+                  "Loaded mesh payload contained no meshes");
+    return false;
+  }
+
+  Scene::ImportedNodePayload importedPayload;
+  importedPayload.sourcePath = payload->payloadUri;
+  importedPayload.displayName = ResolveNodeName(delta, delta.debugLabel);
+  importedPayload.meshes = std::move(meshes);
+  importedPayload.materials = std::move(materials);
+  importedPayload.textures = std::move(textures);
+
+  if (!Scene::ReplaceNodeImportedContent(binding->handleIndex,
+                                         std::move(importedPayload))) {
+    LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
+                  "Failed to replace node content from mesh payload");
     return false;
   }
 
@@ -474,6 +545,23 @@ LiveLinkSceneSync::FindBinding(const ObjectId &objectId) const {
   return it == m_bindings.end() ? nullptr : &it->second;
 }
 
+LiveLinkSceneSync::ObjectBinding *
+LiveLinkSceneSync::FindRelatedBinding(const ObjectId &objectId,
+                                      EngineHandleKind handleKind) {
+  for (auto &[_, binding] : m_bindings) {
+    if (binding.handleKind != handleKind) {
+      continue;
+    }
+    if (binding.objectId.sourceApp != objectId.sourceApp ||
+        binding.objectId.documentId != objectId.documentId ||
+        binding.objectId.objectId != objectId.objectId) {
+      continue;
+    }
+    return &binding;
+  }
+  return nullptr;
+}
+
 LiveLinkSceneSync::ObjectBinding &
 LiveLinkSceneSync::BindObject(const ObjectId &objectId,
                               const std::string &sessionId,
@@ -627,7 +715,31 @@ void LiveLinkSceneSync::ReindexSceneLightBindingsAfterRemoval(size_t removedInde
 
 void LiveLinkSceneSync::ClearAllBindings() { m_bindings.clear(); }
 
+void LiveLinkSceneSync::AppendDiagnosticEntry(
+    const char *level, const std::string &providerName,
+    const std::string &sessionId, const std::string &deltaKind,
+    const std::string &targetId, const std::string &message) const {
+  LiveLinkDiagnosticEntry entry;
+  entry.sequence = m_nextDiagnosticSequence++;
+  entry.level = level ? level : "Info";
+  entry.providerName = providerName;
+  entry.sessionId = sessionId;
+  entry.deltaKind = deltaKind;
+  entry.targetId = targetId;
+  entry.message = message;
+  m_recentDiagnostics.push_back(std::move(entry));
+  constexpr size_t kMaxDiagnosticEntries = 64;
+  if (m_recentDiagnostics.size() > kMaxDiagnosticEntries) {
+    m_recentDiagnostics.erase(
+        m_recentDiagnostics.begin(),
+        m_recentDiagnostics.begin() +
+            (m_recentDiagnostics.size() - kMaxDiagnosticEntries));
+  }
+}
+
 void LiveLinkSceneSync::LogValidationIssue(const ValidationIssue &issue) const {
+  AppendDiagnosticEntry(ToString(issue.severity), issue.providerName,
+                        issue.sessionId, "Validation", "", issue.message);
   fprintf(stderr,
           "LiveLink: [%s] provider='%s' session='%s' %s\n",
           ToString(issue.severity), issue.providerName.c_str(),
@@ -643,6 +755,8 @@ void LiveLinkSceneSync::LogApplyIssue(const char *level,
   const char *objectId =
       (delta && !delta->target.objectId.empty()) ? delta->target.objectId.c_str()
                                                  : "";
+  AppendDiagnosticEntry(level, providerName, sessionId, kind, objectId,
+                        message);
   fprintf(stderr,
           "LiveLink: [%s] provider='%s' session='%s' delta='%s' target='%s' %s\n",
           level, providerName.c_str(), sessionId.c_str(), kind, objectId,

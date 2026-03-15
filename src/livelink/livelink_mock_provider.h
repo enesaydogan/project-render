@@ -29,6 +29,8 @@ private:
                                      uint64_t revision, bool visible) const;
   SceneDelta MakeNodeRemovedDelta(const ObjectId &target,
                                   uint64_t revision) const;
+  SceneDelta MakeMeshPayloadDelta(const ObjectId &target, uint64_t revision,
+                                  const std::string &payloadUri) const;
   SceneDelta MakeSelectionDelta(uint64_t revision,
                                 const std::string &selectedObjectId) const;
   SceneDelta MakeCameraDelta(uint64_t revision, float fovDegrees) const;
@@ -48,6 +50,7 @@ private:
   uint64_t m_nextRevision = 1;
   bool m_sentInitialBatch = false;
   bool m_sentNodeRemoval = false;
+  bool m_sentInitialMeshPayload = false;
   bool m_mockNodeBVisible = true;
   std::chrono::steady_clock::time_point m_connectTime;
   std::chrono::steady_clock::time_point m_lastTransformAt;

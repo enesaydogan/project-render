@@ -136,6 +136,14 @@ const char *AlphaModeFromIndex(int index)
     }
 }
 
+bool MaterialAffectsRtStructure(const Asset::Material &material)
+{
+    return material.alphaMode != "OPAQUE" ||
+           material.diffuseColor[3] < 0.999f ||
+           material.transmissionWeight > 0.01f ||
+           material.thinWalled > 0.5f;
+}
+
 void ApplyPreset(Asset::Material &m, int presetIdx)
 {
     auto SetRoughness = [&](float r) {
@@ -1314,13 +1322,14 @@ void MaterialEditorPanel::applyMaterialChange(const std::function<void(Asset::Ma
         return;
     }
     Asset::Material &mat = g_loadedMaterials[idx];
+    const Asset::Material before = mat;
     fn(mat);
 
-    if (markOpacityDirty) {
+    const bool structureChanged =
+        MaterialAffectsRtStructure(before) != MaterialAffectsRtStructure(mat);
+
+    if (markOpacityDirty || structureChanged || requestAsRebuild) {
         DxrRenderer::MarkMaterialDirty(idx);
-    }
-    if (requestAsRebuild) {
-        DxrRenderer::RequestAccelerationStructureRebuild();
     }
     DxrRenderer::ResetAccumulation();
     syncInspector();

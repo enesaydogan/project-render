@@ -23,7 +23,8 @@ std::string MockLiveLinkProvider::GetProviderName() const {
 Capability MockLiveLinkProvider::GetCapabilities() const {
   return Capability::FullSceneSync | Capability::IncrementalNodeSync |
          Capability::TransformSync | Capability::VisibilitySync |
-         Capability::MaterialSync | Capability::LightSync |
+         Capability::MeshPayloadSync | Capability::MaterialSync |
+         Capability::LightSync |
          Capability::CameraSync | Capability::SelectionSync;
 }
 
@@ -73,6 +74,9 @@ bool MockLiveLinkProvider::Poll(std::vector<SceneDeltaBatch> &outBatches) {
     batch.deltas.push_back(
         MakeNodeAddedDelta(MakeObjectId(ObjectType::Node, kNodeBId),
                            m_nextRevision++, "Mock Node B"));
+    batch.deltas.push_back(MakeMeshPayloadDelta(
+      MakeObjectId(ObjectType::Mesh, kNodeAId), m_nextRevision++,
+      "assets/Cornell+Box+01.skp"));
     batch.deltas.push_back(MakeCameraDelta(m_nextRevision++, 58.0f));
     batch.deltas.push_back(MakeMaterialDelta(m_nextRevision++, 0.18f, 0.0f,
                          0.0f));
@@ -225,6 +229,19 @@ SceneDelta MockLiveLinkProvider::MakeNodeRemovedDelta(const ObjectId &target,
   delta.revision = revision;
   delta.debugLabel = "Mock node removed";
   delta.payload = NodeRemovedPayload{true};
+  return delta;
+}
+
+SceneDelta MockLiveLinkProvider::MakeMeshPayloadDelta(
+    const ObjectId &target, uint64_t revision,
+    const std::string &payloadUri) const {
+  SceneDelta delta;
+  delta.kind = SceneDeltaKind::MeshPayloadChanged;
+  delta.target = target;
+  delta.revision = revision;
+  delta.debugLabel = "Mock mesh payload";
+  delta.payload = MeshPayloadChangedPayload{revision, 0, 0, true, payloadUri,
+                                            "mock-payload"};
   return delta;
 }
 
