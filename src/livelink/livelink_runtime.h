@@ -6,5 +6,7 @@ namespace LiveLink {
 
 LiveLinkCoordinator &GetCoordinator();
 void TickCoordinator();
+void ApplyQueuedBatches();
+void TickRuntime();
 
 } // namespace LiveLink

@@ -1,5 +1,7 @@
 #include "livelink_runtime.h"
 
+#include "livelink_scene_sync.h"
+
 namespace LiveLink {
 
 LiveLinkCoordinator &GetCoordinator() {
@@ -8,5 +10,12 @@ LiveLinkCoordinator &GetCoordinator() {
 }
 
 void TickCoordinator() { GetCoordinator().PollProviders(); }
+
+void ApplyQueuedBatches() { GetSceneSync().ApplyQueuedBatches(GetCoordinator()); }
+
+void TickRuntime() {
+  TickCoordinator();
+  ApplyQueuedBatches();
+}
 
 } // namespace LiveLink

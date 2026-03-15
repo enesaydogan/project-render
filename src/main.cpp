@@ -2384,7 +2384,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     }
 
     Input::Update(dt);
-    LiveLink::TickCoordinator();
+    LiveLink::TickRuntime();
 
     if (g_renderExportJob.active) {
       g_currentRenderMode = RenderMode::DXR;
