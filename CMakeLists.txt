@@ -58,6 +58,7 @@ target_sources(project-render PRIVATE
     src/grass_manager.cpp
     src/livelink/livelink_types.cpp
     src/livelink/livelink_coordinator.cpp
+    src/livelink/livelink_mock_provider.cpp
     src/livelink/livelink_scene_sync.cpp
     src/livelink/livelink_runtime.cpp
 )

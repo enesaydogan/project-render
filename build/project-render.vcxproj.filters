@@ -76,6 +76,9 @@
     <ClCompile Include="D:\project-render\src\livelink\livelink_coordinator.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\project-render\src\livelink\livelink_mock_provider.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="D:\project-render\src\livelink\livelink_scene_sync.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

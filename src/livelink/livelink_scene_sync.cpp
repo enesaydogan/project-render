@@ -33,6 +33,16 @@ std::string ResolveNodeName(const SceneDelta &delta,
   return "LiveLink Node";
 }
 
+std::string ResolveMaterialName(const SceneDelta &delta) {
+  if (!delta.target.objectId.empty()) {
+    return delta.target.objectId;
+  }
+  if (!delta.debugLabel.empty()) {
+    return delta.debugLabel;
+  }
+  return "Material";
+}
+
 
 } // namespace
 
@@ -78,6 +88,10 @@ bool LiveLinkSceneSync::ApplyDelta(const SceneDeltaBatch &batch,
     return ApplyNodeTransformChanged(batch, delta);
   case SceneDeltaKind::NodeVisibilityChanged:
     return ApplyNodeVisibilityChanged(batch, delta);
+  case SceneDeltaKind::MaterialChanged:
+    return ApplyMaterialChanged(batch, delta);
+  case SceneDeltaKind::LightChanged:
+    return ApplyLightChanged(batch, delta);
   case SceneDeltaKind::SelectionChanged:
     return ApplySelectionChanged(batch, delta);
   case SceneDeltaKind::CameraChanged:
@@ -85,12 +99,6 @@ bool LiveLinkSceneSync::ApplyDelta(const SceneDeltaBatch &batch,
   case SceneDeltaKind::EnvironmentChanged:
     return ApplyEnvironmentChanged(batch, delta);
   case SceneDeltaKind::MeshPayloadChanged:
-  case SceneDeltaKind::MaterialChanged:
-  case SceneDeltaKind::LightChanged:
-    LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
-                  std::string("Delta kind not applied yet: ") +
-                      ToString(delta.kind));
-    return false;
   case SceneDeltaKind::Unknown:
     LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
                   "Ignoring unknown delta kind");
@@ -170,6 +178,15 @@ bool LiveLinkSceneSync::ApplyNodeRemoved(const SceneDeltaBatch &batch,
 
   if (binding->handleKind != EngineHandleKind::SceneNode ||
       binding->handleIndex == kInvalidHandle) {
+    if (binding->handleKind == EngineHandleKind::SceneLight &&
+        binding->handleIndex != kInvalidHandle &&
+        binding->handleIndex < Scene::GetLights().size()) {
+      const size_t removedLightIndex = binding->handleIndex;
+      Scene::RemoveLight(removedLightIndex);
+      m_bindings.erase(delta.target);
+      ReindexSceneLightBindingsAfterRemoval(removedLightIndex);
+      return true;
+    }
     m_bindings.erase(delta.target);
     return true;
   }
@@ -238,6 +255,98 @@ bool LiveLinkSceneSync::ApplyNodeVisibilityChanged(const SceneDeltaBatch &batch,
   if (!Scene::SetNodeVisibility(binding->handleIndex, payload->visible)) {
     LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
                   "Failed to apply node visibility");
+    return false;
+  }
+
+  binding->lastAppliedRevision = delta.revision;
+  return true;
+}
+
+bool LiveLinkSceneSync::ApplyMaterialChanged(const SceneDeltaBatch &batch,
+                                             const SceneDelta &delta) {
+  const MaterialChangedPayload *payload =
+      FindPayload<MaterialChangedPayload>(delta);
+  if (!payload) {
+    LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
+                  "MaterialChanged missing payload");
+    return false;
+  }
+
+  ObjectBinding *binding = FindBinding(delta.target);
+  if (binding && delta.revision > 0 &&
+      delta.revision <= binding->lastAppliedRevision) {
+    return true;
+  }
+
+  if (!EnsureMaterialBinding(batch, delta, &binding) || !binding ||
+      binding->handleIndex == kInvalidHandle ||
+      binding->handleIndex >= Scene::GetMaterialCount()) {
+    return false;
+  }
+
+  Asset::Material material;
+  if (!Scene::GetMaterial(binding->handleIndex, &material)) {
+    LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
+                  "Failed to fetch bound material");
+    return false;
+  }
+
+  for (size_t i = 0; i < payload->baseColor.size(); ++i) {
+    material.diffuseColor[i] = payload->baseColor[i];
+    material.emissiveColor[i] = payload->emissiveColor[i];
+  }
+  material.emissiveIntensity = payload->emissiveIntensity;
+  material.roughness = payload->roughness;
+  material.metalness = payload->metalness;
+  material.transmissionWeight = payload->transmissionWeight;
+  material.doubleSided = payload->doubleSided;
+  material.alphaMode = payload->alphaMode.empty() ? "OPAQUE" : payload->alphaMode;
+  if (!payload->materialModel.empty()) {
+    material.schemaVersion = Asset::Material::kSchemaVersionOpenPbrSubset;
+  }
+
+  const std::string materialName = ResolveMaterialName(delta);
+  strncpy_s(material.name, materialName.c_str(), _TRUNCATE);
+
+  if (!Scene::UpdateMaterial(binding->handleIndex, material)) {
+    LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
+                  "Failed to apply material change");
+    return false;
+  }
+
+  binding->lastAppliedRevision = delta.revision;
+  return true;
+}
+
+bool LiveLinkSceneSync::ApplyLightChanged(const SceneDeltaBatch &batch,
+                                          const SceneDelta &delta) {
+  const LightChangedPayload *payload = FindPayload<LightChangedPayload>(delta);
+  if (!payload) {
+    LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
+                  "LightChanged missing payload");
+    return false;
+  }
+
+  ObjectBinding *binding = FindBinding(delta.target);
+  if (binding && delta.revision > 0 &&
+      delta.revision <= binding->lastAppliedRevision) {
+    return true;
+  }
+
+  if (!EnsureLightBinding(batch, delta, &binding) || !binding ||
+      binding->handleIndex == kInvalidHandle ||
+      binding->handleIndex >= Scene::GetLights().size()) {
+    return false;
+  }
+
+  Light light = Scene::GetLights()[binding->handleIndex];
+  light.emission[0] = payload->color[0] * payload->intensity;
+  light.emission[1] = payload->color[1] * payload->intensity;
+  light.emission[2] = payload->color[2] * payload->intensity;
+
+  if (!Scene::UpdateLight(binding->handleIndex, light)) {
+    LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
+                  "Failed to apply light change");
     return false;
   }
 
@@ -414,6 +523,74 @@ bool LiveLinkSceneSync::EnsureNodeBinding(const SceneDeltaBatch &batch,
   return true;
 }
 
+bool LiveLinkSceneSync::EnsureLightBinding(const SceneDeltaBatch &batch,
+                                           const SceneDelta &delta,
+                                           ObjectBinding **outBinding) {
+  ObjectBinding *binding = FindBinding(delta.target);
+  if (!binding) {
+    const size_t lightIndex = Scene::AddLight(LightType::Omni);
+    binding = &BindObject(delta.target, batch.sessionId,
+                          EngineHandleKind::SceneLight, lightIndex);
+  }
+
+  if (binding->handleKind != EngineHandleKind::SceneLight) {
+    LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
+                  "Object binding exists but is not a scene light");
+    return false;
+  }
+
+  if (binding->handleIndex == kInvalidHandle ||
+      binding->handleIndex >= Scene::GetLights().size()) {
+    binding->handleIndex = Scene::AddLight(LightType::Omni);
+  }
+
+  if (outBinding) {
+    *outBinding = binding;
+  }
+  return true;
+}
+
+bool LiveLinkSceneSync::EnsureMaterialBinding(const SceneDeltaBatch &batch,
+                                              const SceneDelta &delta,
+                                              ObjectBinding **outBinding) {
+  ObjectBinding *binding = FindBinding(delta.target);
+  if (!binding) {
+    const int materialIndex =
+        Scene::FindMaterialByName(ResolveMaterialName(delta));
+    if (materialIndex < 0) {
+      LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
+                    "No scene material matched the live-link target");
+      return false;
+    }
+    binding = &BindObject(delta.target, batch.sessionId,
+                          EngineHandleKind::SceneMaterial,
+                          static_cast<size_t>(materialIndex));
+  }
+
+  if (binding->handleKind != EngineHandleKind::SceneMaterial) {
+    LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
+                  "Object binding exists but is not a scene material");
+    return false;
+  }
+
+  if (binding->handleIndex == kInvalidHandle ||
+      binding->handleIndex >= Scene::GetMaterialCount()) {
+    const int materialIndex =
+        Scene::FindMaterialByName(ResolveMaterialName(delta));
+    if (materialIndex < 0) {
+      LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
+                    "Bound material no longer exists");
+      return false;
+    }
+    binding->handleIndex = static_cast<size_t>(materialIndex);
+  }
+
+  if (outBinding) {
+    *outBinding = binding;
+  }
+  return true;
+}
+
 void LiveLinkSceneSync::RemoveBindingsForSession(const std::string &sessionId) {
   for (auto it = m_bindings.begin(); it != m_bindings.end();) {
     if (it->second.sessionId == sessionId) {
@@ -427,6 +604,18 @@ void LiveLinkSceneSync::RemoveBindingsForSession(const std::string &sessionId) {
 void LiveLinkSceneSync::ReindexSceneNodeBindingsAfterRemoval(size_t removedIndex) {
   for (auto &[_, binding] : m_bindings) {
     if (binding.handleKind != EngineHandleKind::SceneNode ||
+        binding.handleIndex == kInvalidHandle) {
+      continue;
+    }
+    if (binding.handleIndex > removedIndex) {
+      --binding.handleIndex;
+    }
+  }
+}
+
+void LiveLinkSceneSync::ReindexSceneLightBindingsAfterRemoval(size_t removedIndex) {
+  for (auto &[_, binding] : m_bindings) {
+    if (binding.handleKind != EngineHandleKind::SceneLight ||
         binding.handleIndex == kInvalidHandle) {
       continue;
     }

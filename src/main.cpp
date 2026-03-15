@@ -16,6 +16,7 @@
 #include "imgui_theme.h"
 #include "input_handler.h"
 #include "light.h"
+#include "livelink/livelink_mock_provider.h"
 #include "livelink/livelink_runtime.h"
 #include "material_editor.h"
 #include "oidn_denoiser.h"
@@ -1322,6 +1323,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   // Parse command line for flags and optional custom glTF file
   std::string customGltfPath;
   std::string sceneToLoad;
+  bool enableMockLiveLink = false;
 
   // window handle (Qt path will obtain from widget, Win32 path from CreateWindow)
   HWND hwnd = nullptr;
@@ -1347,6 +1349,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             token = token.substr(0, token.size() - 1);
           sceneToLoad = token;
         }
+      } else if (token == "--mock-livelink") {
+        enableMockLiveLink = true;
       } else {
         // first non-flag token is interpreted as a path
         if (customGltfPath.empty()) {
@@ -1456,6 +1460,25 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   } else {
     // Default: Just ground plane, no auto-loaded GLBs anymore
     Scene::AddDefaultPlane(0.0f);
+  }
+
+  if (enableMockLiveLink) {
+    try {
+      auto provider = std::make_unique<LiveLink::MockLiveLinkProvider>();
+      const auto providerId =
+          LiveLink::GetCoordinator().RegisterProvider(std::move(provider));
+      if (LiveLink::GetCoordinator().ConnectProvider(providerId)) {
+        fprintf(stderr,
+                "Startup: mock live-link provider enabled (--mock-livelink)\n");
+      } else {
+        fprintf(stderr,
+                "Startup: failed to connect mock live-link provider\n");
+      }
+    } catch (const std::exception &e) {
+      fprintf(stderr,
+              "Startup: failed to initialize mock live-link provider: %s\n",
+              e.what());
+    }
   }
 
   // ReSTIR DI: Initialize test lights for Phase 2

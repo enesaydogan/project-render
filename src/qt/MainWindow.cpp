@@ -11,6 +11,7 @@
 #include "../dxr_renderer.h"
 #include "../editor_ui.h"
 #include "../file_import.h"
+#include "../livelink/livelink_runtime.h"
 #include "../scene.h"
 #include "../streamline_manager.h"
 #include <QAction>
@@ -543,6 +544,11 @@ void MainWindow::updateSceneIoUi()
         m_statusStatsLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
         statusBar()->addPermanentWidget(m_statusStatsLabel);
     }
+    if (!m_liveLinkLabel) {
+        m_liveLinkLabel = new QLabel(this);
+        m_liveLinkLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        statusBar()->addPermanentWidget(m_liveLinkLabel);
+    }
 
     {
         QStringList parts;
@@ -597,6 +603,33 @@ void MainWindow::updateSceneIoUi()
         }
 
         m_statusStatsLabel->setText(parts.join(QStringLiteral(" | ")));
+    }
+
+    {
+        const auto stats = LiveLink::GetCoordinator().GetStatsSnapshot();
+        const auto providers = LiveLink::GetCoordinator().GetProviderSnapshots();
+        QString liveLinkText = tr("LL off");
+        if (!providers.empty()) {
+            QStringList providerParts;
+            providerParts << tr("LL %1/%2")
+                                 .arg(static_cast<qulonglong>(stats.connectedProviderCount))
+                                 .arg(static_cast<qulonglong>(stats.providerCount));
+            providerParts << tr("Q %1/%2")
+                                 .arg(static_cast<qulonglong>(stats.queuedBatchCount))
+                                 .arg(static_cast<qulonglong>(stats.queuedDeltaCount));
+
+            QStringList providerStates;
+            for (const auto &provider : providers) {
+                providerStates << QStringLiteral("%1:%2")
+                                      .arg(QString::fromStdString(provider.providerName),
+                                           QString::fromLatin1(LiveLink::ToString(provider.connectionState)));
+            }
+            if (!providerStates.isEmpty()) {
+                providerParts << providerStates.join(QStringLiteral(", "));
+            }
+            liveLinkText = providerParts.join(QStringLiteral(" | "));
+        }
+        m_liveLinkLabel->setText(liveLinkText);
     }
 
     const bool active = IsSceneIoJobActive();
