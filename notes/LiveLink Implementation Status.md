@@ -20,13 +20,16 @@ Completed so far:
 - Phase 2: reusable scene mutation API extracted from import-heavy flows
 - Phase 3: external-ID mapping and main-thread scene apply bridge
 - Phase 4: first renderer invalidation pass integrated across current scene mutation and scene-load/mode-switch paths
+- 3ds Max 2025 named-pipe provider bootstrap
+- 3ds Max 2025 incremental node and selection sync
+- 3ds Max 2025 mesh payload export through temporary OBJ files
 
 Not implemented yet:
 
 - fine-grained renderer dirty-state classification beyond the current coarse buckets
-- full 3ds Max provider with live incremental change tracking
 - live-link provider controls
-- broader mesh/material/light delta coverage beyond the current supported subset
+- broader material/light/camera delta coverage from the real 3ds Max provider
+- stronger geometry change detection and payload lifecycle management for exported Max meshes
 
 ---
 

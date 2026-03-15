@@ -6,7 +6,11 @@
 #include "../ibl_manager.h"
 #include "../scene.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <string_view>
 
 namespace LiveLink {
@@ -42,6 +46,86 @@ std::string ResolveMaterialName(const SceneDelta &delta) {
     return delta.debugLabel;
   }
   return "Material";
+}
+
+struct NativeMeshPayloadHeader {
+  uint32_t magic = 0;
+  uint32_t version = 0;
+  uint32_t vertexCount = 0;
+  uint32_t indexCount = 0;
+};
+
+struct NativeMeshPayloadVertex {
+  float position[3];
+  float normal[3];
+  float tangent[4];
+  float uv[2];
+};
+
+bool LoadNativeMeshPayload(const std::string &path,
+                           std::vector<Asset::GpuMesh> *outMeshes) {
+  if (!outMeshes) {
+    return false;
+  }
+
+  std::ifstream stream(path, std::ios::binary);
+  if (!stream) {
+    return false;
+  }
+
+  NativeMeshPayloadHeader header;
+  stream.read(reinterpret_cast<char *>(&header), sizeof(header));
+  if (!stream || header.magic != 0x48534D50 || header.version != 1) {
+    return false;
+  }
+
+  std::vector<NativeMeshPayloadVertex> sourceVertices(header.vertexCount);
+  std::vector<uint32_t> indices(header.indexCount);
+  if (!sourceVertices.empty()) {
+    stream.read(reinterpret_cast<char *>(sourceVertices.data()),
+                static_cast<std::streamsize>(sourceVertices.size() *
+                                             sizeof(sourceVertices[0])));
+  }
+  if (!indices.empty()) {
+    stream.read(reinterpret_cast<char *>(indices.data()),
+                static_cast<std::streamsize>(indices.size() * sizeof(indices[0])));
+  }
+  if (!stream) {
+    return false;
+  }
+
+  std::vector<Asset::Vertex> vertices(header.vertexCount);
+  for (size_t index = 0; index < vertices.size(); ++index) {
+    const NativeMeshPayloadVertex &source = sourceVertices[index];
+    Asset::Vertex vertex{};
+    std::copy(std::begin(source.position), std::end(source.position),
+              std::begin(vertex.pos));
+    std::copy(std::begin(source.normal), std::end(source.normal),
+              std::begin(vertex.normal));
+    std::copy(std::begin(source.tangent), std::end(source.tangent),
+              std::begin(vertex.tangent));
+    std::copy(std::begin(source.uv), std::end(source.uv), std::begin(vertex.uv));
+    vertices[index] = vertex;
+  }
+
+  outMeshes->clear();
+  outMeshes->push_back(Asset::LoadMeshFromMemory(vertices, indices));
+  return outMeshes->front().vertexCount > 0 && outMeshes->front().indexCount > 0;
+}
+
+void Normalize3(float value[3], const float fallback[3]) {
+  const float lenSq = value[0] * value[0] + value[1] * value[1] +
+                      value[2] * value[2];
+  if (lenSq <= 1.0e-12f) {
+    value[0] = fallback[0];
+    value[1] = fallback[1];
+    value[2] = fallback[2];
+    return;
+  }
+  const float invLen = 1.0f / std::sqrt(lenSq);
+  value[0] *= invLen;
+  value[1] *= invLen;
+  value[2] *= invLen;
 }
 
 
@@ -128,7 +212,7 @@ bool LiveLinkSceneSync::ApplySessionOpened(const SceneDeltaBatch &batch,
 
 bool LiveLinkSceneSync::ApplySessionClosed(const SceneDeltaBatch &batch,
                                            const SceneDelta &delta) {
-  RemoveBindingsForSession(batch.sessionId);
+  RemoveSessionContent(batch.sessionId);
   const SessionClosedPayload *payload = FindPayload<SessionClosedPayload>(delta);
   if (payload && !payload->reason.empty()) {
     fprintf(stderr, "LiveLink: session closed provider='%s' session='%s' reason='%s'\n",
@@ -303,7 +387,13 @@ bool LiveLinkSceneSync::ApplyMeshPayloadChanged(const SceneDeltaBatch &batch,
   std::vector<Asset::GpuMesh> meshes;
   std::vector<Asset::Material> materials;
   std::vector<Asset::Texture> textures;
-  if (!Asset::LoadModel(payload->payloadUri, meshes, &materials, &textures)) {
+  const std::string extension =
+      std::filesystem::path(payload->payloadUri).extension().string();
+  const bool loaded = extension == ".prmesh"
+                          ? LoadNativeMeshPayload(payload->payloadUri, &meshes)
+                          : Asset::LoadModel(payload->payloadUri, meshes,
+                                             &materials, &textures);
+  if (!loaded) {
     LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
                   std::string("Failed to load mesh payload: ") +
                       payload->payloadUri);
@@ -477,9 +567,31 @@ bool LiveLinkSceneSync::ApplyCameraChanged(const SceneDeltaBatch &batch,
       binding ? *binding
               : BindObject(delta.target, batch.sessionId,
                            EngineHandleKind::MainCamera, kInvalidHandle);
+  g_cameraData.pos[0] = payload->position[0];
+  g_cameraData.pos[1] = payload->position[1];
+  g_cameraData.pos[2] = payload->position[2];
+  g_cameraData.forward[0] = payload->forward[0];
+  g_cameraData.forward[1] = payload->forward[1];
+  g_cameraData.forward[2] = payload->forward[2];
+  g_cameraData.up[0] = payload->up[0];
+  g_cameraData.up[1] = payload->up[1];
+  g_cameraData.up[2] = payload->up[2];
+  const float fallbackForward[3] = {0.0f, 0.0f, 1.0f};
+  const float fallbackUp[3] = {0.0f, 1.0f, 0.0f};
+  Normalize3(g_cameraData.forward, fallbackForward);
+  Normalize3(g_cameraData.up, fallbackUp);
+  const float dot = g_cameraData.forward[0] * g_cameraData.up[0] +
+                    g_cameraData.forward[1] * g_cameraData.up[1] +
+                    g_cameraData.forward[2] * g_cameraData.up[2];
+  g_cameraData.up[0] -= dot * g_cameraData.forward[0];
+  g_cameraData.up[1] -= dot * g_cameraData.forward[1];
+  g_cameraData.up[2] -= dot * g_cameraData.forward[2];
+  Normalize3(g_cameraData.up, fallbackUp);
   g_cameraData.fov = payload->fovDegrees;
   g_cameraData.nearZ = payload->nearPlane;
   g_cameraData.farZ = payload->farPlane;
+  g_camYaw = atan2f(g_cameraData.forward[0], -g_cameraData.forward[2]);
+  g_camPitch = asinf(std::clamp(g_cameraData.forward[1], -1.0f, 1.0f));
   UpdateCameraCB();
   cameraBinding.lastAppliedRevision = delta.revision;
   return true;
@@ -679,7 +791,40 @@ bool LiveLinkSceneSync::EnsureMaterialBinding(const SceneDeltaBatch &batch,
   return true;
 }
 
-void LiveLinkSceneSync::RemoveBindingsForSession(const std::string &sessionId) {
+void LiveLinkSceneSync::RemoveSessionContent(const std::string &sessionId) {
+  std::vector<size_t> nodeIndices;
+  std::vector<size_t> lightIndices;
+  for (const auto &[_, binding] : m_bindings) {
+    if (binding.sessionId != sessionId || binding.handleIndex == kInvalidHandle) {
+      continue;
+    }
+    if (binding.handleKind == EngineHandleKind::SceneNode) {
+      nodeIndices.push_back(binding.handleIndex);
+    } else if (binding.handleKind == EngineHandleKind::SceneLight) {
+      lightIndices.push_back(binding.handleIndex);
+    }
+  }
+
+  std::sort(nodeIndices.begin(), nodeIndices.end());
+  nodeIndices.erase(std::unique(nodeIndices.begin(), nodeIndices.end()),
+                    nodeIndices.end());
+  for (auto it = nodeIndices.rbegin(); it != nodeIndices.rend(); ++it) {
+    if (*it < Scene::GetNodes().size()) {
+      Scene::RemoveNode(*it);
+      ReindexSceneNodeBindingsAfterRemoval(*it);
+    }
+  }
+
+  std::sort(lightIndices.begin(), lightIndices.end());
+  lightIndices.erase(std::unique(lightIndices.begin(), lightIndices.end()),
+                     lightIndices.end());
+  for (auto it = lightIndices.rbegin(); it != lightIndices.rend(); ++it) {
+    if (*it < Scene::GetLights().size()) {
+      Scene::RemoveLight(*it);
+      ReindexSceneLightBindingsAfterRemoval(*it);
+    }
+  }
+
   for (auto it = m_bindings.begin(); it != m_bindings.end();) {
     if (it->second.sessionId == sessionId) {
       it = m_bindings.erase(it);
