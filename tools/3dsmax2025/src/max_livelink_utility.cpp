@@ -3,14 +3,17 @@
 #include <max.h>
 #include <utilapi.h>
 #include <iparamm2.h>
+#include <notify.h>
 #include <stdmat.h>
 #include <units.h>
+#include <ISceneEventManager.h>
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <cstdint>
@@ -20,6 +23,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <MeshNormalSpec.h>
@@ -207,7 +211,16 @@ std::atomic<bool> g_exportInProgress{false};
 constexpr const char *kPipeName = "project-render-max-livelink";
 constexpr const char *kSourceApp = "3dsMax2025";
 constexpr UINT_PTR kPollTimerId = 0x5052;
-constexpr UINT kPollIntervalMs = 16; // ~60fps LiveLink loop
+constexpr UINT_PTR kCameraPollTimerId = 0x5053;
+constexpr UINT kPollIntervalMs = 50;
+constexpr UINT kCameraPollIntervalMs = 33;
+constexpr uint64_t kActivePollMinIntervalMs = 125;
+constexpr uint64_t kIdlePollMinIntervalMs = 400;
+constexpr uint64_t kHeavyPollMinIntervalMs = 1000;
+constexpr uint64_t kReconnectPollMinIntervalMs = 1000;
+constexpr uint64_t kCameraPollMinIntervalMs = 33;
+constexpr uint64_t kSlowPollThresholdMs = 150;
+constexpr size_t kLargeSceneNodeThreshold = 250;
 constexpr int kUtilityDialogId = 101;
 constexpr int kStatusControlId = 1001;
 constexpr int kStartControlId = 1002;
@@ -2243,6 +2256,35 @@ bool CaptureActiveCameraSnapshot(Interface *ip, CameraSnapshot *outSnapshot) {
   return true;
 }
 
+bool TryCaptureNodeSnapshotByHandle(Interface *ip, ULONG_PTR handle,
+                                    NodeSnapshot *outSnapshot) {
+  if (!ip || handle == 0 || !outSnapshot) {
+    return false;
+  }
+
+  INode *node = FindNodeByHandle(ip, handle);
+  if (!node) {
+    return false;
+  }
+
+  *outSnapshot = CaptureNodeSnapshot(ip, node);
+  return outSnapshot->handle != 0;
+}
+
+bool TryCaptureLightSnapshotByHandle(Interface *ip, ULONG_PTR handle,
+                                     LightSnapshot *outSnapshot) {
+  if (!ip || handle == 0 || !outSnapshot) {
+    return false;
+  }
+
+  INode *node = FindNodeByHandle(ip, handle);
+  if (!node) {
+    return false;
+  }
+
+  return CaptureLightSnapshot(ip, node, outSnapshot);
+}
+
 void AppendCameraDelta(const std::string &documentId,
                        const CameraSnapshot &snapshot, uint64_t *revision,
                        json *outDeltas) {
@@ -2499,6 +2541,84 @@ public:
   void DeleteThis() override {}
 
 private:
+  using Clock = std::chrono::steady_clock;
+  using CallbackKey = SceneEventNamespace::CallbackKey;
+  using NodeKeyTab = NodeEventNamespace::NodeKeyTab;
+
+  enum DirtyFlags : uint32_t {
+    DirtyNone = 0,
+    DirtyNodeState = 1u << 0,
+    DirtyMesh = 1u << 1,
+    DirtyMaterial = 1u << 2,
+    DirtyLight = 1u << 3,
+    DirtySelection = 1u << 4,
+  };
+
+  class LiveLinkNodeEventCallback final : public INodeEventCallback {
+  public:
+    explicit LiveLinkNodeEventCallback(ProjectRenderLiveLinkUtility *owner)
+        : m_owner(owner) {}
+
+    void Added(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh | DirtyMaterial | DirtyLight); }
+    void Deleted(NodeKeyTab & /*nodes*/) override { FullResync(); }
+    void LinkChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState); }
+    void LayerChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState); }
+    void GroupChanged(NodeKeyTab & /*nodes*/) override { FullResync(); }
+    void HierarchyOtherEvent(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState); }
+    void ModelStructured(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh | DirtyLight); }
+    void GeometryChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh); }
+    void TopologyChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh); }
+    void MappingChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh | DirtyMaterial); }
+    void ExtentionChannelChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh); }
+    void ModelOtherEvent(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh | DirtyLight); }
+    void MaterialStructured(NodeKeyTab &nodes) override { Mark(nodes, DirtyMaterial); }
+    void MaterialOtherEvent(NodeKeyTab &nodes) override { Mark(nodes, DirtyMaterial); }
+    void ControllerStructured(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyLight); }
+    void ControllerOtherEvent(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyLight); }
+    void NameChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState); }
+    void WireColorChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState); }
+    void RenderPropertiesChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyLight); }
+    void DisplayPropertiesChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState); }
+    void UserPropertiesChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState); }
+    void PropertiesOtherEvent(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState); }
+    void SelectionChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtySelection); }
+    void HideChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyLight); }
+    void FreezeChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState); }
+    void DisplayOtherEvent(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState); }
+
+  private:
+    void Mark(NodeKeyTab &nodes, uint32_t flags) {
+      if (m_owner) {
+        m_owner->MarkNodeKeysDirty(nodes, flags);
+      }
+    }
+
+    void FullResync() {
+      if (m_owner) {
+        m_owner->MarkFullResyncNeeded();
+      }
+    }
+
+    ProjectRenderLiveLinkUtility *m_owner = nullptr;
+  };
+
+  static Clock::time_point ComputeNextPollDeadline(uint64_t delayMs) {
+    return Clock::now() + std::chrono::milliseconds(delayMs);
+  }
+
+  static uint64_t ComputePollDelayMs(size_t nodeCount, size_t deltaCount,
+                                     uint64_t scanDurationMs) {
+    uint64_t delayMs =
+        deltaCount > 0 ? kActivePollMinIntervalMs : kIdlePollMinIntervalMs;
+    if (scanDurationMs >= kSlowPollThresholdMs) {
+      delayMs = (std::max)(delayMs, kHeavyPollMinIntervalMs);
+    }
+    if (deltaCount == 0 && nodeCount >= kLargeSceneNodeThreshold) {
+      delayMs = (std::max)(delayMs, kHeavyPollMinIntervalMs);
+    }
+    return delayMs;
+  }
+
   static INT_PTR CALLBACK RollupDlgProc(HWND hwnd, UINT message, WPARAM wParam,
                                         LPARAM lParam) {
     ProjectRenderLiveLinkUtility *utility =
@@ -2540,7 +2660,135 @@ private:
     if (g_exportInProgress.load()) {
       return;
     }
-    g_utility.PollSceneChanges();
+    g_utility.TryPollSceneChanges();
+  }
+
+  static void CALLBACK CameraPollTimerProc(HWND, UINT, UINT_PTR, DWORD) {
+    if (g_exportInProgress.load()) {
+      return;
+    }
+    g_utility.TryPollCameraChanges();
+  }
+
+  static void NotificationProc(void *param, NotifyInfo *info) {
+    ProjectRenderLiveLinkUtility *utility =
+        reinterpret_cast<ProjectRenderLiveLinkUtility *>(param);
+    if (!utility || !info) {
+      return;
+    }
+
+    switch (info->intcode) {
+    case NOTIFY_SCENE_PRE_DELETED_NODE:
+    case NOTIFY_SEL_NODES_PRE_DELETE:
+    case NOTIFY_SCENE_UNDO:
+    case NOTIFY_SCENE_REDO:
+    case NOTIFY_SYSTEM_POST_RESET:
+    case NOTIFY_SYSTEM_POST_NEW:
+    case NOTIFY_SCENE_XREF_POST_MERGE:
+    case NOTIFY_PRE_NODES_CLONED:
+    case NOTIFY_POST_NODES_CLONED:
+      utility->MarkFullResyncNeeded();
+      break;
+    case NOTIFY_SELECTIONSET_CHANGED:
+    case NOTIFY_SV_SELECTIONSET_CHANGED:
+      utility->MarkSelectionDirty();
+      break;
+    default:
+      break;
+    }
+  }
+
+  void RegisterSceneCallbacks() {
+    if (m_sceneEventManager == nullptr) {
+      m_sceneEventManager = GetISceneEventManager();
+    }
+    if (m_sceneEventManager != nullptr && m_sceneEventCallbackKey == 0) {
+      m_sceneEventCallbackKey =
+          m_sceneEventManager->RegisterCallback(&m_sceneEventCallback, TRUE);
+    }
+
+    if (m_notificationsRegistered) {
+      return;
+    }
+
+    const int notificationCodes[] = {
+        NOTIFY_SCENE_PRE_DELETED_NODE, NOTIFY_SEL_NODES_PRE_DELETE,
+        NOTIFY_SCENE_UNDO,             NOTIFY_SCENE_REDO,
+        NOTIFY_SYSTEM_POST_RESET,      NOTIFY_SYSTEM_POST_NEW,
+        NOTIFY_SCENE_XREF_POST_MERGE,  NOTIFY_PRE_NODES_CLONED,
+        NOTIFY_POST_NODES_CLONED,      NOTIFY_SELECTIONSET_CHANGED,
+        NOTIFY_SV_SELECTIONSET_CHANGED,
+    };
+    for (int code : notificationCodes) {
+      RegisterNotification(&ProjectRenderLiveLinkUtility::NotificationProc,
+                           this, code);
+    }
+    m_notificationsRegistered = true;
+  }
+
+  void UnregisterSceneCallbacks() {
+    if (m_sceneEventManager != nullptr && m_sceneEventCallbackKey != 0) {
+      m_sceneEventManager->UnRegisterCallback(m_sceneEventCallbackKey);
+      m_sceneEventCallbackKey = 0;
+    }
+
+    if (m_notificationsRegistered) {
+      UnRegisterNotification(&ProjectRenderLiveLinkUtility::NotificationProc,
+                             this);
+      m_notificationsRegistered = false;
+    }
+  }
+
+  void MarkSelectionDirty() { m_selectionDirty = true; }
+
+  void MarkFullResyncNeeded() {
+    m_forceFullResync = true;
+    m_selectionDirty = true;
+  }
+
+  void MarkNodeDirty(ULONG_PTR handle, uint32_t flags) {
+    if (handle == 0) {
+      return;
+    }
+
+    if ((flags & DirtyNodeState) != 0u) {
+      m_dirtyNodeHandles.insert(handle);
+    }
+    if ((flags & DirtyMesh) != 0u) {
+      m_dirtyMeshHandles.insert(handle);
+    }
+    if ((flags & DirtyMaterial) != 0u) {
+      m_dirtyMaterialHandles.insert(handle);
+    }
+    if ((flags & DirtyLight) != 0u) {
+      m_dirtyLightHandles.insert(handle);
+    }
+    if ((flags & DirtySelection) != 0u) {
+      m_selectionDirty = true;
+    }
+  }
+
+  void MarkNodeDirty(INode *node, uint32_t flags) {
+    if (!node) {
+      if ((flags & DirtySelection) != 0u) {
+        m_selectionDirty = true;
+      }
+      return;
+    }
+    MarkNodeDirty(node->GetHandle(), flags);
+  }
+
+  void MarkNodeKeysDirty(const NodeKeyTab &nodes, uint32_t flags) {
+    for (int index = 0; index < nodes.Count(); ++index) {
+      INode *node = NodeEventNamespace::GetNodeByKey(nodes[index]);
+      if (node) {
+        MarkNodeDirty(node, flags);
+      } else if ((flags & DirtySelection) != 0u) {
+        m_selectionDirty = true;
+      } else {
+        m_forceFullResync = true;
+      }
+    }
   }
 
   Interface *GetLiveInterface() const {
@@ -2577,6 +2825,8 @@ private:
       return false;
     }
 
+    RegisterSceneCallbacks();
+
     const bool hadPipeConnection = g_pipeClient.IsConnected();
     if (!EnsurePipeConnected()) {
       return false;
@@ -2594,6 +2844,14 @@ private:
 
     m_lastSelectedObjectIds = GatherSelectedObjectIds(ip);
     CaptureActiveCameraSnapshot(ip, &m_lastCameraSnapshot);
+    m_nextPollDeadline = ComputeNextPollDeadline(kActivePollMinIntervalMs);
+    m_nextCameraPollDeadline = ComputeNextPollDeadline(kCameraPollMinIntervalMs);
+    m_forceFullResync = false;
+    m_selectionDirty = false;
+    m_dirtyNodeHandles.clear();
+    m_dirtyMeshHandles.clear();
+    m_dirtyMaterialHandles.clear();
+    m_dirtyLightHandles.clear();
     return true;
   }
 
@@ -2619,6 +2877,11 @@ private:
       m_pollTimer = SetTimer(nullptr, kPollTimerId, kPollIntervalMs,
                              &ProjectRenderLiveLinkUtility::PollTimerProc);
     }
+    if (m_cameraPollTimer == 0) {
+      m_cameraPollTimer = SetTimer(nullptr, kCameraPollTimerId,
+                                   kCameraPollIntervalMs,
+                                   &ProjectRenderLiveLinkUtility::CameraPollTimerProc);
+    }
     m_syncActive = true;
     RefreshRollupUI_NoLock();
     return true;
@@ -2635,7 +2898,12 @@ private:
       KillTimer(nullptr, m_pollTimer);
       m_pollTimer = 0;
     }
+    if (m_cameraPollTimer != 0) {
+      KillTimer(nullptr, m_cameraPollTimer);
+      m_cameraPollTimer = 0;
+    }
     SendSessionClosed(m_sessionId, m_nextSequence++);
+    UnregisterSceneCallbacks();
     g_pipeClient.Disconnect();
     m_lastNodeState.clear();
     m_lastMaterialState.clear();
@@ -2646,6 +2914,14 @@ private:
     m_documentId.clear();
     m_nextSequence = 1;
     m_nextRevision = 1;
+    m_nextPollDeadline = Clock::time_point{};
+    m_nextCameraPollDeadline = Clock::time_point{};
+    m_forceFullResync = false;
+    m_selectionDirty = false;
+    m_dirtyNodeHandles.clear();
+    m_dirtyMeshHandles.clear();
+    m_dirtyMaterialHandles.clear();
+    m_dirtyLightHandles.clear();
     m_syncActive = false;
     RefreshRollupUI_NoLock();
   }
@@ -2663,115 +2939,367 @@ private:
                               {"payload", json{{"selectedObjectIds", selectedObjectIds}}}});
   }
 
-  void PollSceneChanges() {
-    std::lock_guard<std::mutex> lock(m_sendMutex);
-    Interface *ip = GetLiveInterface();
-    if (!m_syncActive || !ip || !EnsureConnectedSession(ip)) {
+  void TryPollSceneChanges() {
+    std::unique_lock<std::mutex> lock(m_sendMutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+      return;
+    }
+    PollSceneChangesLocked();
+  }
+
+  void TryPollCameraChanges() {
+    std::unique_lock<std::mutex> lock(m_sendMutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+      return;
+    }
+    PollCameraChangesLocked();
+  }
+
+  void ClearDirtyState() {
+    m_forceFullResync = false;
+    m_selectionDirty = false;
+    m_dirtyNodeHandles.clear();
+    m_dirtyMeshHandles.clear();
+    m_dirtyMaterialHandles.clear();
+    m_dirtyLightHandles.clear();
+  }
+
+  void ApplyStagedMaterialState(ULONG_PTR handle,
+                                const MaterialStateMap &materialState) {
+    for (auto it = m_lastMaterialState.begin(); it != m_lastMaterialState.end();) {
+      if (it->second.nodeHandle == handle) {
+        it = m_lastMaterialState.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    for (const auto &[objectId, snapshot] : materialState) {
+      m_lastMaterialState[objectId] = snapshot;
+    }
+  }
+
+  void PollCameraChangesLocked() {
+    const Clock::time_point now = Clock::now();
+    if (m_nextCameraPollDeadline != Clock::time_point{} &&
+        now < m_nextCameraPollDeadline) {
       return;
     }
 
-    std::unordered_map<ULONG_PTR, NodeSnapshot> currentState;
-    MaterialStateMap currentMaterialState;
-    std::unordered_map<ULONG_PTR, LightSnapshot> currentLightState;
-    if (INode *root = ip->GetRootNode()) {
-      for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
-        GatherNodeSnapshots(ip, root->GetChildNode(childIndex), &currentState);
-        GatherLightSnapshots(ip, root->GetChildNode(childIndex), &currentLightState);
-      }
+    Interface *ip = GetLiveInterface();
+    if (!m_syncActive || !ip || !EnsureConnectedSession(ip)) {
+      m_nextCameraPollDeadline =
+          ComputeNextPollDeadline(kReconnectPollMinIntervalMs);
+      return;
     }
-    GatherMaterialSnapshots(ip, currentState, &currentMaterialState);
 
-    json deltas = json::array();
     CameraSnapshot currentCamera;
     CaptureActiveCameraSnapshot(ip, &currentCamera);
-    for (const auto &[handle, snapshot] : currentState) {
-      auto previousIt = m_lastNodeState.find(handle);
+    m_nextCameraPollDeadline =
+        ComputeNextPollDeadline(kCameraPollMinIntervalMs);
+    if (!currentCamera.valid || SameCamera(currentCamera, m_lastCameraSnapshot)) {
+      return;
+    }
+
+    json deltas = json::array();
+    AppendCameraDelta(m_documentId, currentCamera, &m_nextRevision, &deltas);
+    if (SendBatch(m_sessionId, m_nextSequence, false, deltas)) {
+      ++m_nextSequence;
+      m_lastCameraSnapshot = currentCamera;
+    }
+  }
+
+  void PollSceneChangesLocked() {
+    const Clock::time_point now = Clock::now();
+    if (m_nextPollDeadline != Clock::time_point{} && now < m_nextPollDeadline) {
+      return;
+    }
+
+    if (m_sceneEventManager != nullptr && m_sceneEventCallbackKey != 0) {
+      m_sceneEventManager->TriggerMessages(m_sceneEventCallbackKey);
+    }
+
+    Interface *ip = GetLiveInterface();
+    if (!m_syncActive || !ip || !EnsureConnectedSession(ip)) {
+      m_nextPollDeadline = ComputeNextPollDeadline(kReconnectPollMinIntervalMs);
+      return;
+    }
+
+    const Clock::time_point scanStart = Clock::now();
+    json deltas = json::array();
+
+    size_t scannedNodeCount = m_lastNodeState.size();
+    std::vector<std::string> selectedObjectIds = m_lastSelectedObjectIds;
+    std::unordered_map<ULONG_PTR, NodeSnapshot> stagedNodes;
+    std::unordered_map<ULONG_PTR, LightSnapshot> stagedLights;
+    std::vector<ULONG_PTR> removedLightHandles;
+    std::vector<std::pair<ULONG_PTR, MaterialStateMap>> stagedMaterialStates;
+
+    if (m_forceFullResync) {
+      std::unordered_map<ULONG_PTR, NodeSnapshot> currentState;
+      MaterialStateMap currentMaterialState;
+      std::unordered_map<ULONG_PTR, LightSnapshot> currentLightState;
+      if (INode *root = ip->GetRootNode()) {
+        for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
+          GatherNodeSnapshots(ip, root->GetChildNode(childIndex), &currentState);
+          GatherLightSnapshots(ip, root->GetChildNode(childIndex),
+                               &currentLightState);
+        }
+      }
+      GatherMaterialSnapshots(ip, currentState, &currentMaterialState);
+      scannedNodeCount = currentState.size();
+
+      for (const auto &[handle, snapshot] : currentState) {
+        auto previousIt = m_lastNodeState.find(handle);
+        if (previousIt == m_lastNodeState.end()) {
+          AppendNodeAddedDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
+          AppendNodeTransformDelta(m_documentId, snapshot, &m_nextRevision,
+                                   &deltas);
+          AppendNodeVisibilityDelta(m_documentId, snapshot, &m_nextRevision,
+                                    &deltas);
+          AppendMeshPayloadDeltaIfAvailable(ip, m_sessionId, m_documentId,
+                                            snapshot, &m_nextRevision, &deltas);
+          continue;
+        }
+
+        const NodeSnapshot &previous = previousIt->second;
+        if (previous.parentHandle != snapshot.parentHandle ||
+            previous.name != snapshot.name) {
+          AppendNodeAddedDelta(m_documentId, snapshot, &m_nextRevision,
+                               &deltas);
+        }
+        if (!SameMatrix(previous.worldMatrix, snapshot.worldMatrix)) {
+          AppendNodeTransformDelta(m_documentId, snapshot, &m_nextRevision,
+                                   &deltas);
+        }
+        if (previous.visible != snapshot.visible) {
+          AppendNodeVisibilityDelta(m_documentId, snapshot, &m_nextRevision,
+                                    &deltas);
+        }
+        if (snapshot.hasMesh &&
+            (!previous.hasMesh ||
+             previous.geometryFingerprint != snapshot.geometryFingerprint)) {
+          AppendMeshPayloadDeltaIfAvailable(ip, m_sessionId, m_documentId,
+                                            snapshot, &m_nextRevision, &deltas);
+        }
+      }
+
+      for (const auto &[objectId, snapshot] : currentMaterialState) {
+        const auto previousMaterialIt = m_lastMaterialState.find(objectId);
+        if (previousMaterialIt == m_lastMaterialState.end() ||
+            !SameMaterial(snapshot, previousMaterialIt->second)) {
+          AppendMaterialDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
+        }
+      }
+
+      for (const auto &[handle, _] : m_lastNodeState) {
+        if (currentState.find(handle) == currentState.end()) {
+          AppendNodeRemovedDelta(m_documentId, handle, &m_nextRevision, &deltas);
+        }
+      }
+
+      for (const auto &[objectId, snapshot] : m_lastMaterialState) {
+        if (currentMaterialState.find(objectId) == currentMaterialState.end()) {
+          AppendMaterialRemovedDelta(m_documentId, snapshot, &m_nextRevision,
+                                     &deltas);
+        }
+      }
+
+      for (const auto &[handle, snapshot] : currentLightState) {
+        const auto previousIt = m_lastLightState.find(handle);
+        if (previousIt == m_lastLightState.end() ||
+            !SameLight(previousIt->second, snapshot)) {
+          AppendLightDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
+        }
+      }
+
+      for (const auto &[handle, snapshot] : m_lastLightState) {
+        if (currentLightState.find(handle) == currentLightState.end()) {
+          AppendLightRemovedDelta(m_documentId, snapshot, &m_nextRevision,
+                                  &deltas);
+        }
+      }
+
+      selectedObjectIds = GatherSelectedObjectIds(ip);
+      if (selectedObjectIds != m_lastSelectedObjectIds) {
+        AppendSelectionDelta(selectedObjectIds, &deltas);
+      }
+
+      const uint64_t scanDurationMs = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() -
+                                                                scanStart)
+              .count());
+      m_nextPollDeadline = ComputeNextPollDeadline(
+          ComputePollDelayMs(currentState.size(), deltas.size(), scanDurationMs));
+
+      if (!deltas.empty() &&
+          SendBatch(m_sessionId, m_nextSequence, false, deltas)) {
+        ++m_nextSequence;
+        m_lastNodeState = std::move(currentState);
+        m_lastMaterialState = std::move(currentMaterialState);
+        m_lastLightState = std::move(currentLightState);
+        m_lastSelectedObjectIds = selectedObjectIds;
+        ClearDirtyState();
+      } else if (deltas.empty()) {
+        m_lastNodeState = std::move(currentState);
+        m_lastMaterialState = std::move(currentMaterialState);
+        m_lastLightState = std::move(currentLightState);
+        m_lastSelectedObjectIds = selectedObjectIds;
+        ClearDirtyState();
+      }
+
+      RefreshRollupUI_NoLock();
+      return;
+    }
+
+    for (ULONG_PTR handle : m_dirtyNodeHandles) {
+      NodeSnapshot snapshot;
+      if (!TryCaptureNodeSnapshotByHandle(ip, handle, &snapshot)) {
+        continue;
+      }
+      stagedNodes[handle] = snapshot;
+
+      const auto previousIt = m_lastNodeState.find(handle);
       if (previousIt == m_lastNodeState.end()) {
         AppendNodeAddedDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
-        AppendNodeTransformDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
-        AppendNodeVisibilityDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
-        AppendMeshPayloadDeltaIfAvailable(ip, m_sessionId, m_documentId,
-                                          snapshot, &m_nextRevision, &deltas);
+        AppendNodeTransformDelta(m_documentId, snapshot, &m_nextRevision,
+                                 &deltas);
+        AppendNodeVisibilityDelta(m_documentId, snapshot, &m_nextRevision,
+                                  &deltas);
+      } else {
+        const NodeSnapshot &previous = previousIt->second;
+        if (previous.parentHandle != snapshot.parentHandle ||
+            previous.name != snapshot.name) {
+          AppendNodeAddedDelta(m_documentId, snapshot, &m_nextRevision,
+                               &deltas);
+        }
+        if (!SameMatrix(previous.worldMatrix, snapshot.worldMatrix)) {
+          AppendNodeTransformDelta(m_documentId, snapshot, &m_nextRevision,
+                                   &deltas);
+        }
+        if (previous.visible != snapshot.visible) {
+          AppendNodeVisibilityDelta(m_documentId, snapshot, &m_nextRevision,
+                                    &deltas);
+        }
+      }
+
+      if (m_dirtyMeshHandles.find(handle) != m_dirtyMeshHandles.end() &&
+          snapshot.hasMesh) {
+        const auto previousItForMesh = m_lastNodeState.find(handle);
+        if (previousItForMesh == m_lastNodeState.end() ||
+            !previousItForMesh->second.hasMesh ||
+            previousItForMesh->second.geometryFingerprint !=
+                snapshot.geometryFingerprint) {
+          AppendMeshPayloadDeltaIfAvailable(ip, m_sessionId, m_documentId,
+                                            snapshot, &m_nextRevision, &deltas);
+        }
+      }
+    }
+
+    for (ULONG_PTR handle : m_dirtyMaterialHandles) {
+      NodeSnapshot snapshot;
+      auto stagedIt = stagedNodes.find(handle);
+      if (stagedIt != stagedNodes.end()) {
+        snapshot = stagedIt->second;
+      } else if (!TryCaptureNodeSnapshotByHandle(ip, handle, &snapshot)) {
         continue;
       }
 
-      const NodeSnapshot &previous = previousIt->second;
-      if (previous.parentHandle != snapshot.parentHandle ||
-          previous.name != snapshot.name) {
-        AppendNodeAddedDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
-      }
-      if (!SameMatrix(previous.worldMatrix, snapshot.worldMatrix)) {
-        AppendNodeTransformDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
-      }
-      if (previous.visible != snapshot.visible) {
-        AppendNodeVisibilityDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
-      }
-      if (snapshot.hasMesh && (!previous.hasMesh ||
-                               previous.geometryFingerprint != snapshot.geometryFingerprint)) {
-        AppendMeshPayloadDeltaIfAvailable(ip, m_sessionId, m_documentId,
-                                          snapshot, &m_nextRevision, &deltas);
+      MaterialStateMap materialStateForNode;
+      if (snapshot.hasMesh) {
+        std::unordered_map<ULONG_PTR, NodeSnapshot> nodeState;
+        nodeState.emplace(handle, snapshot);
+        GatherMaterialSnapshots(ip, nodeState, &materialStateForNode);
       }
 
+      for (const auto &[objectId, materialSnapshot] : materialStateForNode) {
+        const auto previousMaterialIt = m_lastMaterialState.find(objectId);
+        if (previousMaterialIt == m_lastMaterialState.end() ||
+            !SameMaterial(materialSnapshot, previousMaterialIt->second)) {
+          AppendMaterialDelta(m_documentId, materialSnapshot, &m_nextRevision,
+                              &deltas);
+        }
+      }
+
+      for (const auto &[objectId, previousMaterial] : m_lastMaterialState) {
+        if (previousMaterial.nodeHandle == handle &&
+            materialStateForNode.find(objectId) == materialStateForNode.end()) {
+          AppendMaterialRemovedDelta(m_documentId, previousMaterial,
+                                     &m_nextRevision, &deltas);
+        }
+      }
+
+      stagedMaterialStates.push_back(
+          std::make_pair(handle, std::move(materialStateForNode)));
     }
 
-    for (const auto &[objectId, snapshot] : currentMaterialState) {
-      const auto previousMaterialIt = m_lastMaterialState.find(objectId);
-      if (previousMaterialIt == m_lastMaterialState.end() ||
-          !SameMaterial(snapshot, previousMaterialIt->second)) {
-        AppendMaterialDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
-      }
-    }
-
-    for (const auto &[handle, _] : m_lastNodeState) {
-      if (currentState.find(handle) == currentState.end()) {
-        AppendNodeRemovedDelta(m_documentId, handle, &m_nextRevision, &deltas);
-      }
-    }
-
-    for (const auto &[objectId, snapshot] : m_lastMaterialState) {
-      if (currentMaterialState.find(objectId) == currentMaterialState.end()) {
-        AppendMaterialRemovedDelta(m_documentId, snapshot, &m_nextRevision,
-                                   &deltas);
-      }
-    }
-
-    for (const auto &[handle, snapshot] : currentLightState) {
-      const auto previousIt = m_lastLightState.find(handle);
-      if (previousIt == m_lastLightState.end() ||
-          !SameLight(previousIt->second, snapshot)) {
-        AppendLightDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
-      }
-    }
-
-    for (const auto &[handle, snapshot] : m_lastLightState) {
-      if (currentLightState.find(handle) == currentLightState.end()) {
-        AppendLightRemovedDelta(m_documentId, snapshot, &m_nextRevision,
-                                &deltas);
+    for (ULONG_PTR handle : m_dirtyLightHandles) {
+      LightSnapshot snapshot;
+      if (TryCaptureLightSnapshotByHandle(ip, handle, &snapshot)) {
+        stagedLights[handle] = snapshot;
+        const auto previousIt = m_lastLightState.find(handle);
+        if (previousIt == m_lastLightState.end() ||
+            !SameLight(previousIt->second, snapshot)) {
+          AppendLightDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
+        }
+      } else {
+        const auto previousIt = m_lastLightState.find(handle);
+        if (previousIt != m_lastLightState.end()) {
+          AppendLightRemovedDelta(m_documentId, previousIt->second,
+                                  &m_nextRevision, &deltas);
+          removedLightHandles.push_back(handle);
+        }
       }
     }
 
-    const std::vector<std::string> selectedObjectIds = GatherSelectedObjectIds(ip);
-    const bool selectionChanged = selectedObjectIds != m_lastSelectedObjectIds;
-    if (selectionChanged) {
-      AppendSelectionDelta(selectedObjectIds, &deltas);
+    if (m_selectionDirty) {
+      selectedObjectIds = GatherSelectedObjectIds(ip);
+      if (selectedObjectIds != m_lastSelectedObjectIds) {
+        AppendSelectionDelta(selectedObjectIds, &deltas);
+      }
     }
-    if (currentCamera.valid && !SameCamera(currentCamera, m_lastCameraSnapshot)) {
-      AppendCameraDelta(m_documentId, currentCamera, &m_nextRevision, &deltas);
-    }
+
+    const uint64_t scanDurationMs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() -
+                                                              scanStart)
+            .count());
+    m_nextPollDeadline = ComputeNextPollDeadline(ComputePollDelayMs(
+        scannedNodeCount, deltas.size(), scanDurationMs));
 
     if (!deltas.empty() && SendBatch(m_sessionId, m_nextSequence, false, deltas)) {
       ++m_nextSequence;
-      m_lastNodeState = std::move(currentState);
-      m_lastMaterialState = std::move(currentMaterialState);
-      m_lastLightState = std::move(currentLightState);
-      m_lastSelectedObjectIds = selectedObjectIds;
-      m_lastCameraSnapshot = currentCamera;
+      for (const auto &[handle, snapshot] : stagedNodes) {
+        m_lastNodeState[handle] = snapshot;
+      }
+      for (const auto &[handle, snapshot] : stagedLights) {
+        m_lastLightState[handle] = snapshot;
+      }
+      for (ULONG_PTR handle : removedLightHandles) {
+        m_lastLightState.erase(handle);
+      }
+      for (const auto &[handle, materialState] : stagedMaterialStates) {
+        ApplyStagedMaterialState(handle, materialState);
+      }
+      if (m_selectionDirty) {
+        m_lastSelectedObjectIds = selectedObjectIds;
+      }
+      ClearDirtyState();
     } else if (deltas.empty()) {
-      m_lastNodeState = std::move(currentState);
-      m_lastMaterialState = std::move(currentMaterialState);
-      m_lastLightState = std::move(currentLightState);
-      m_lastSelectedObjectIds = selectedObjectIds;
-      m_lastCameraSnapshot = currentCamera;
+      for (const auto &[handle, snapshot] : stagedNodes) {
+        m_lastNodeState[handle] = snapshot;
+      }
+      for (const auto &[handle, snapshot] : stagedLights) {
+        m_lastLightState[handle] = snapshot;
+      }
+      for (ULONG_PTR handle : removedLightHandles) {
+        m_lastLightState.erase(handle);
+      }
+      for (const auto &[handle, materialState] : stagedMaterialStates) {
+        ApplyStagedMaterialState(handle, materialState);
+      }
+      if (m_selectionDirty) {
+        m_lastSelectedObjectIds = selectedObjectIds;
+      }
+      ClearDirtyState();
     }
 
     RefreshRollupUI_NoLock();
@@ -2805,6 +3333,19 @@ private:
   std::mutex m_sendMutex;
   bool m_syncActive = false;
   UINT_PTR m_pollTimer = 0;
+  UINT_PTR m_cameraPollTimer = 0;
+  Clock::time_point m_nextPollDeadline = Clock::time_point{};
+  Clock::time_point m_nextCameraPollDeadline = Clock::time_point{};
+  ISceneEventManager *m_sceneEventManager = nullptr;
+  CallbackKey m_sceneEventCallbackKey = 0;
+  LiveLinkNodeEventCallback m_sceneEventCallback{this};
+  bool m_notificationsRegistered = false;
+  bool m_forceFullResync = false;
+  bool m_selectionDirty = false;
+  std::unordered_set<ULONG_PTR> m_dirtyNodeHandles;
+  std::unordered_set<ULONG_PTR> m_dirtyMeshHandles;
+  std::unordered_set<ULONG_PTR> m_dirtyMaterialHandles;
+  std::unordered_set<ULONG_PTR> m_dirtyLightHandles;
   std::unordered_map<ULONG_PTR, NodeSnapshot> m_lastNodeState;
   MaterialStateMap m_lastMaterialState;
   std::unordered_map<ULONG_PTR, LightSnapshot> m_lastLightState;
