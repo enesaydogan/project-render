@@ -25,6 +25,7 @@ public:
   void ApplyQueuedBatches(LiveLinkCoordinator &coordinator);
   std::vector<LiveLinkDiagnosticEntry> GetRecentDiagnostics() const;
   void DetachCameraControl();
+  void ResumeCameraControl();
   bool IsCameraControlDetached() const;
 
 private:

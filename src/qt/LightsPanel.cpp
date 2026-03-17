@@ -385,7 +385,12 @@ void LightsPanel::refreshLights()
         case LightType::IES: typeStr = "IES"; break;
         }
         m_lightList->addItem(
-            tr("Light %1 (%2)").arg(static_cast<int>(i)).arg(typeStr));
+            tr("Light %1 (%2)  [%3, %4, %5]")
+                .arg(static_cast<int>(i))
+                .arg(typeStr)
+                .arg(l.position[0], 0, 'f', 2)
+                .arg(l.position[1], 0, 'f', 2)
+                .arg(l.position[2], 0, 'f', 2));
     }
 
     if (selected >= 0 && selected < m_lightList->count()) {

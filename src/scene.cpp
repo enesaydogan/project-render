@@ -29,6 +29,7 @@ extern std::vector<Asset::GpuMesh> g_loadedMeshes;
 extern std::vector<Asset::Material> g_loadedMaterials;
 extern std::vector<Asset::Texture> g_loadedTextures;
 extern UINT g_textureDescriptorCount;
+extern HWND g_hwnd;
 extern D3D12_GPU_DESCRIPTOR_HANDLE g_texturesGpuStart;
 extern D3D12_CPU_DESCRIPTOR_HANDLE g_texturesCpuStart;
 extern UINT g_textureDescriptorCapacity;
@@ -201,6 +202,67 @@ void BuildProjectionMatrix(float *mat) {
   mat[10] = f / (f - n);
   mat[11] = 1.0f;
   mat[14] = -(f * n) / (f - n);
+}
+
+static void GetRenderViewportRect(float *outX, float *outY, float *outWidth,
+                                  float *outHeight) {
+  float x = 0.0f;
+  float y = 0.0f;
+  float width = (float)ImGui::GetIO().DisplaySize.x;
+  float height = (float)ImGui::GetIO().DisplaySize.y;
+
+  if (g_hwnd) {
+    RECT clientRect = {};
+    if (GetClientRect(g_hwnd, &clientRect)) {
+      width = (float)(clientRect.right - clientRect.left);
+      height = (float)(clientRect.bottom - clientRect.top);
+
+      POINT origin = {clientRect.left, clientRect.top};
+      if (ClientToScreen(g_hwnd, &origin)) {
+        x = (float)origin.x;
+        y = (float)origin.y;
+      }
+    }
+  }
+
+  if (width <= 1.0f || height <= 1.0f) {
+    ImGuiViewport *mainVp = ImGui::GetMainViewport();
+    x = mainVp ? mainVp->Pos.x : 0.0f;
+    y = mainVp ? mainVp->Pos.y : 0.0f;
+    width = mainVp ? mainVp->Size.x : (float)ImGui::GetIO().DisplaySize.x;
+    height = mainVp ? mainVp->Size.y : (float)ImGui::GetIO().DisplaySize.y;
+  }
+
+  if (outX)
+    *outX = x;
+  if (outY)
+    *outY = y;
+  if (outWidth)
+    *outWidth = width;
+  if (outHeight)
+    *outHeight = height;
+}
+
+static ImDrawList *BeginRenderOverlayWindow(const char *name, float x, float y,
+                                            float width, float height) {
+  ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
+                           ImGuiWindowFlags_NoInputs |
+                           ImGuiWindowFlags_NoSavedSettings |
+                           ImGuiWindowFlags_NoFocusOnAppearing |
+                           ImGuiWindowFlags_NoBringToFrontOnFocus |
+                           ImGuiWindowFlags_NoNav |
+                           ImGuiWindowFlags_NoDocking;
+  if (ImGuiViewport *mainViewport = ImGui::GetMainViewport()) {
+    ImGui::SetNextWindowViewport(mainViewport->ID);
+  }
+  ImGui::SetNextWindowPos(ImVec2(x, y));
+  ImGui::SetNextWindowSize(ImVec2(width, height));
+  ImGui::SetNextWindowBgAlpha(0.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+  ImGui::Begin(name, nullptr, flags);
+  ImGui::PopStyleVar(2);
+  return ImGui::GetWindowDrawList();
 }
 
 static std::string s_lastStatus;
@@ -1262,7 +1324,7 @@ void DrawLightsPanel(bool &visible) {
         typeStr = "IES";
         break;
       }
-      sprintf(buf, "Light %zu (%s)", i, typeStr);
+      sprintf_s(buf, sizeof(buf), "Light %zu (%s)", i, typeStr);
 
       bool isSelected = (s_selectedLightIdx == (int)i);
       if (isSelected)
@@ -1365,15 +1427,14 @@ void DrawLightGizmo() {
   BuildViewMatrix(view);
   BuildProjectionMatrix(proj);
 
-  ImGuiViewport *mainVp = ImGui::GetMainViewport();
-  float windowX = mainVp ? mainVp->Pos.x : 0.0f;
-  float windowY = mainVp ? mainVp->Pos.y : 0.0f;
-  float windowWidth =
-      mainVp ? mainVp->Size.x : (float)ImGui::GetIO().DisplaySize.x;
-  float windowHeight =
-      mainVp ? mainVp->Size.y : (float)ImGui::GetIO().DisplaySize.y;
-
-  ImDrawList *drawList = ImGui::GetForegroundDrawList();
+  float windowX = 0.0f;
+  float windowY = 0.0f;
+  float windowWidth = 0.0f;
+  float windowHeight = 0.0f;
+  GetRenderViewportRect(&windowX, &windowY, &windowWidth, &windowHeight);
+  ImDrawList *drawList =
+      BeginRenderOverlayWindow("##LightViewportOverlay", windowX, windowY,
+                               windowWidth, windowHeight);
 
   auto WorldToScreen = [&](const float *wp, ImVec2 &outSp) -> bool {
     float viewPos[4];
@@ -1407,6 +1468,11 @@ void DrawLightGizmo() {
 
     // Draw little center circle for the light
     drawList->AddCircleFilled(screenPos, 4.0f, col);
+
+    char label[64];
+    snprintf(label, sizeof(label), "L%zu", i);
+    drawList->AddText(ImVec2(screenPos.x + 8.0f, screenPos.y - 8.0f), col,
+                      label);
 
     if (l.type == (uint32_t)LightType::Omni) {
       drawList->AddCircle(screenPos, l.radius * 5.0f + 10.0f, col, 16, thick);
@@ -1496,8 +1562,10 @@ void DrawLightGizmo() {
   }
 
   // 2. Do ImGuizmo manipulate for the selected light
-  if (s_selectedLightIdx < 0 || s_selectedLightIdx >= (int)s_lights.size())
+  if (s_selectedLightIdx < 0 || s_selectedLightIdx >= (int)s_lights.size()) {
+    ImGui::End();
     return;
+  }
 
   Light &l = s_lights[s_selectedLightIdx];
 
@@ -1583,6 +1651,8 @@ void DrawLightGizmo() {
 
     UpdateLights();
   }
+
+  ImGui::End();
 }
 
 void MatMul(const float *a, const float *b, float *out) {
@@ -1616,6 +1686,14 @@ void DrawGizmo() {
   float view[16], proj[16];
   BuildViewMatrix(view);
   BuildProjectionMatrix(proj);
+  float windowX = 0.0f;
+  float windowY = 0.0f;
+  float windowWidth = 0.0f;
+  float windowHeight = 0.0f;
+  GetRenderViewportRect(&windowX, &windowY, &windowWidth, &windowHeight);
+  ImDrawList *overlayDrawList =
+      BeginRenderOverlayWindow("##SceneViewportOverlay", windowX, windowY,
+                               windowWidth, windowHeight);
 
   if (ImGui::IsKeyPressed(ImGuiKey_G))
     g_currentGizmoOp = ImGuizmo::TRANSLATE;
@@ -1644,15 +1722,7 @@ void DrawGizmo() {
 
   ImGuizmo::SetID((int)selectedIdx);
   ImGuizmo::SetOrthographic(false);
-  ImGuizmo::SetDrawlist(ImGui::GetForegroundDrawList());
-
-  ImGuiViewport *mainVp = ImGui::GetMainViewport();
-  float windowX = mainVp ? mainVp->Pos.x : 0.0f;
-  float windowY = mainVp ? mainVp->Pos.y : 0.0f;
-  float windowWidth =
-      mainVp ? mainVp->Size.x : (float)ImGui::GetIO().DisplaySize.x;
-  float windowHeight =
-      mainVp ? mainVp->Size.y : (float)ImGui::GetIO().DisplaySize.y;
+  ImGuizmo::SetDrawlist(overlayDrawList);
   ImGuizmo::SetRect(windowX, windowY, windowWidth, windowHeight);
 
   // Compute mesh local center to position gizmo at center of the object
@@ -1717,6 +1787,8 @@ void DrawGizmo() {
 
     ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
   }
+
+  ImGui::End();
 }
 
 // Simple Ray-AABB intersection for node selection
@@ -1863,23 +1935,25 @@ int UpdateSelection(float screenWidth, float screenHeight) {
 
   // Use viewport-relative mouse coordinates.
   ImVec2 mposAbs = ImGui::GetIO().MousePos;
-  ImGuiViewport *vp = ImGui::GetMainViewport();
-  float vpX = vp ? vp->Pos.x : 0.0f;
-  float vpY = vp ? vp->Pos.y : 0.0f;
+  float vpX = 0.0f;
+  float vpY = 0.0f;
+  float vpWidth = screenWidth;
+  float vpHeight = screenHeight;
+  GetRenderViewportRect(&vpX, &vpY, &vpWidth, &vpHeight);
   float mx = mposAbs.x - vpX;
   float my = mposAbs.y - vpY;
-  if (mx < 0.0f || my < 0.0f || mx > screenWidth || my > screenHeight)
+  if (mx < 0.0f || my < 0.0f || mx > vpWidth || my > vpHeight)
     return -1;
 
   // NDC [-1, 1]
-  float ndcX = (mx / screenWidth) * 2.0f - 1.0f;
-  float ndcY = 1.0f - (my / screenHeight) * 2.0f;
+  float ndcX = (mx / vpWidth) * 2.0f - 1.0f;
+  float ndcY = 1.0f - (my / vpHeight) * 2.0f;
 
   // Build ray from the same camera basis used by DXR raygen.
   const float kPi = 3.14159265359f;
   float fovRad = g_cameraData.fov * (kPi / 180.0f);
   float tanHalfFov = tanf(fovRad * 0.5f);
-  float aspect = (screenHeight > 0.0f) ? (screenWidth / screenHeight)
+  float aspect = (vpHeight > 0.0f) ? (vpWidth / vpHeight)
                                        : g_cameraData.aspect;
 
   float forward[3] = {g_cameraData.forward[0], g_cameraData.forward[1],

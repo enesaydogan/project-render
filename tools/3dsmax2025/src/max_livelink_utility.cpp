@@ -748,21 +748,16 @@ bool CaptureLightSnapshot(Interface *ip, INode *node, LightSnapshot *outSnapshot
     snapshot.lightType = "Spot";
     break;
   case OMNI_LGT:
-    if (lightState.shape == RECT_LIGHT) {
-      snapshot.lightType = "AreaRect";
-    } else if (lightState.shape == CIRCLE_LIGHT) {
-      snapshot.lightType = "AreaDisk";
-    } else {
-      snapshot.lightType = "Omni";
-    }
+    snapshot.lightType = "Omni";
     break;
   default:
     snapshot.lightType = "Omni";
     break;
   }
 
-  const Point3 position = ConvertMaxPointToEngine(lightState.tm.GetRow(3));
-  Point3 direction = ConvertMaxVectorToEngine(-lightState.tm.GetRow(2));
+  const Matrix3 worldTM = node->GetNodeTM(ip->GetTime());
+  const Point3 position = ConvertMaxPointToEngine(worldTM.GetRow(3));
+  Point3 direction = ConvertMaxVectorToEngine(-worldTM.GetRow(2));
   NormalizePoint3(&direction, Point3(0.0f, -1.0f, 0.0f));
   snapshot.position = Point3ToArray(position);
   snapshot.direction = Point3ToArray(direction);

@@ -202,6 +202,25 @@ void Normalize3(float value[3], const float fallback[3]) {
   value[2] *= invLen;
 }
 
+bool CameraPayloadChanged(const CameraChangedPayload &lhs,
+                          const CameraChangedPayload &rhs) {
+  constexpr float kPositionEpsilon = 0.001f;
+  constexpr float kDirectionEpsilon = 0.0005f;
+  constexpr float kScalarEpsilon = 0.001f;
+  auto changedArray3 = [](const std::array<float, 3> &a,
+                          const std::array<float, 3> &b,
+                          float epsilon) {
+    return fabsf(a[0] - b[0]) > epsilon || fabsf(a[1] - b[1]) > epsilon ||
+           fabsf(a[2] - b[2]) > epsilon;
+  };
+  return changedArray3(lhs.position, rhs.position, kPositionEpsilon) ||
+         changedArray3(lhs.forward, rhs.forward, kDirectionEpsilon) ||
+         changedArray3(lhs.up, rhs.up, kDirectionEpsilon) ||
+         fabsf(lhs.fovDegrees - rhs.fovDegrees) > kScalarEpsilon ||
+         fabsf(lhs.nearPlane - rhs.nearPlane) > kScalarEpsilon ||
+         fabsf(lhs.farPlane - rhs.farPlane) > kScalarEpsilon;
+}
+
 LightType ParseEngineLightType(std::string_view value) {
   if (value == "Directional") {
     return LightType::Directional;
@@ -236,6 +255,11 @@ LiveLinkSceneSync &GetSceneSync() {
 }
 
 void LiveLinkSceneSync::DetachCameraControl() { m_cameraControlDetached = true; }
+
+void LiveLinkSceneSync::ResumeCameraControl() {
+  m_cameraControlDetached = false;
+  ApplyCachedCameraState(m_cachedExternalCamera);
+}
 
 bool LiveLinkSceneSync::IsCameraControlDetached() const {
   return m_cameraControlDetached;
@@ -730,6 +754,7 @@ bool LiveLinkSceneSync::ApplyCameraChanged(const SceneDeltaBatch &batch,
       binding ? *binding
               : BindObject(delta.target, batch.sessionId,
                            EngineHandleKind::MainCamera, kInvalidHandle);
+  const CachedCameraState previousCameraState = m_cachedExternalCamera;
   m_cachedExternalCamera.valid = true;
   m_cachedExternalCamera.objectId = delta.target;
   m_cachedExternalCamera.sessionId = batch.sessionId;
@@ -737,6 +762,17 @@ bool LiveLinkSceneSync::ApplyCameraChanged(const SceneDeltaBatch &batch,
   m_cachedExternalCamera.payload = *payload;
 
   if (m_cameraControlDetached) {
+    const bool sameExternalCamera =
+        previousCameraState.valid &&
+        previousCameraState.sessionId == batch.sessionId &&
+        previousCameraState.objectId == delta.target;
+    const bool dccCameraMoved =
+        !sameExternalCamera ||
+        CameraPayloadChanged(previousCameraState.payload, *payload);
+    if (dccCameraMoved) {
+      m_cameraControlDetached = false;
+      ApplyCachedCameraState(m_cachedExternalCamera);
+    }
     cameraBinding.lastAppliedRevision = delta.revision;
     return true;
   }
