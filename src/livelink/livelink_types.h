@@ -151,7 +151,14 @@ struct MaterialChangedPayload {
   float emissiveIntensity = 1.0f;
   float roughness = 0.2f;
   float metalness = 0.0f;
+  float specularWeight = 1.0f;
+  float ior = 1.5f;
   float transmissionWeight = 0.0f;
+  std::array<float, 3> transmissionColor = {1.0f, 1.0f, 1.0f};
+  float coatWeight = 0.0f;
+  float coatRoughness = 0.1f;
+  float thinWalled = 0.0f;
+  float translucency = 0.0f;
   bool doubleSided = false;
   std::string alphaMode = "OPAQUE";
 };

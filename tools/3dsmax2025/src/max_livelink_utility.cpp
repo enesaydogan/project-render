@@ -122,9 +122,10 @@ std::string MakeNodeObjectId(INode *node) {
   return "node:" + std::to_string(static_cast<unsigned long long>(node->GetHandle()));
 }
 
-std::string MakeMaterialObjectId(ULONG_PTR nodeHandle) {
+std::string MakeMaterialObjectId(ULONG_PTR nodeHandle, int materialSlot) {
   return "material:node:" +
-         std::to_string(static_cast<unsigned long long>(nodeHandle));
+         std::to_string(static_cast<unsigned long long>(nodeHandle)) +
+         ":slot:" + std::to_string((std::max)(0, materialSlot));
 }
 
 std::string MakeLightObjectId(INode *node) {
@@ -176,17 +177,28 @@ struct CameraSnapshot {
 struct MaterialSnapshot {
   bool valid = false;
   ULONG_PTR nodeHandle = 0;
+  int materialSlot = 0;
   std::string objectId;
   std::string name;
+  std::string materialModel = "OpenPBR";
   std::array<float, 4> baseColor = {1.0f, 1.0f, 1.0f, 1.0f};
   std::array<float, 4> emissiveColor = {0.0f, 0.0f, 0.0f, 1.0f};
   float emissiveIntensity = 0.0f;
   float roughness = 0.5f;
   float metalness = 0.0f;
+  float specularWeight = 1.0f;
+  float ior = 1.5f;
   float transmissionWeight = 0.0f;
+  std::array<float, 3> transmissionColor = {1.0f, 1.0f, 1.0f};
+  float coatWeight = 0.0f;
+  float coatRoughness = 0.1f;
+  float thinWalled = 0.0f;
+  float translucency = 0.0f;
   bool doubleSided = false;
   std::string alphaMode = "OPAQUE";
 };
+
+using MaterialStateMap = std::unordered_map<std::string, MaterialSnapshot>;
 
 struct LightSnapshot {
   bool valid = false;
@@ -206,9 +218,16 @@ struct LightSnapshot {
 
 struct NativeMeshPayloadHeader {
   uint32_t magic = 0x48534D50; // PMSH
-  uint32_t version = 1;
+  uint32_t version = 2;
+  uint32_t meshCount = 0;
+  uint32_t reserved = 0;
+};
+
+struct NativeMeshPayloadMeshHeader {
   uint32_t vertexCount = 0;
   uint32_t indexCount = 0;
+  int32_t materialSlot = 0;
+  uint32_t reserved = 0;
 };
 
 struct NativeMeshPayloadVertex {
@@ -227,6 +246,13 @@ uint64_t HashFloat(float value) {
   static_assert(sizeof(bits) == sizeof(value));
   std::memcpy(&bits, &value, sizeof(value));
   return bits;
+}
+
+uint64_t HashPoint3Value(uint64_t seed, const Point3 &value) {
+  seed = HashCombine(seed, HashFloat(value.x));
+  seed = HashCombine(seed, HashFloat(value.y));
+  seed = HashCombine(seed, HashFloat(value.z));
+  return seed;
 }
 
 float GetMaxUnitsToMetersScale() {
@@ -345,12 +371,21 @@ bool SameVector4(const std::array<float, 4> &lhs, const std::array<float, 4> &rh
 
 bool SameMaterial(const MaterialSnapshot &lhs, const MaterialSnapshot &rhs) {
   return lhs.valid == rhs.valid && lhs.objectId == rhs.objectId &&
-         lhs.name == rhs.name && SameVector4(lhs.baseColor, rhs.baseColor) &&
+         lhs.materialSlot == rhs.materialSlot && lhs.name == rhs.name &&
+         lhs.materialModel == rhs.materialModel &&
+         SameVector4(lhs.baseColor, rhs.baseColor) &&
          SameVector4(lhs.emissiveColor, rhs.emissiveColor) &&
          NearlyEqual(lhs.emissiveIntensity, rhs.emissiveIntensity) &&
          NearlyEqual(lhs.roughness, rhs.roughness) &&
          NearlyEqual(lhs.metalness, rhs.metalness) &&
+         NearlyEqual(lhs.specularWeight, rhs.specularWeight) &&
+         NearlyEqual(lhs.ior, rhs.ior) &&
          NearlyEqual(lhs.transmissionWeight, rhs.transmissionWeight) &&
+         SameVector3(lhs.transmissionColor, rhs.transmissionColor) &&
+         NearlyEqual(lhs.coatWeight, rhs.coatWeight) &&
+         NearlyEqual(lhs.coatRoughness, rhs.coatRoughness) &&
+         NearlyEqual(lhs.thinWalled, rhs.thinWalled) &&
+         NearlyEqual(lhs.translucency, rhs.translucency) &&
          lhs.doubleSided == rhs.doubleSided && lhs.alphaMode == rhs.alphaMode;
 }
 
@@ -508,23 +543,112 @@ std::array<float, 4> ColorToArray4(const Color &color, float alpha) {
   return {color.r, color.g, color.b, alpha};
 }
 
-bool CaptureMaterialSnapshot(INode *node, MaterialSnapshot *outSnapshot) {
-  if (!node || !outSnapshot) {
-    return false;
+std::array<float, 3> ColorToArray3(const Color &color) {
+  return {color.r, color.g, color.b};
+}
+
+std::string ResolveMaterialModelName(Mtl *material) {
+  return material ? std::string("3dsMaxMaterial") : std::string("OpenPBR");
+}
+
+Mtl *ResolveLeafMaterial(Mtl *material) {
+  if (!material) {
+    return nullptr;
   }
 
-  Mtl *material = node->GetMtl();
-  if (!material) {
-    return false;
-  }
-  if (material->NumSubMtls() > 0 && material->GetSubMtl(0)) {
+  while (material->NumSubMtls() == 1 && material->GetSubMtl(0)) {
     material = material->GetSubMtl(0);
+  }
+  return material;
+}
+
+bool GetTriObjectForNode(Interface *ip, INode *node, TriObject **outTriObject,
+                         bool *outNeedsDelete);
+
+std::vector<int> GatherUsedMaterialSlots(Interface *ip, INode *node,
+                                         Mtl *rootMaterial) {
+  std::vector<int> usedSlots;
+  if (!node || !rootMaterial) {
+    return usedSlots;
+  }
+
+  const int subMaterialCount = rootMaterial->NumSubMtls();
+  if (subMaterialCount <= 1) {
+    usedSlots.push_back(0);
+    return usedSlots;
+  }
+
+  TriObject *triObject = nullptr;
+  bool needsDelete = false;
+  if (!GetTriObjectForNode(ip, node, &triObject, &needsDelete)) {
+    for (int slot = 0; slot < subMaterialCount; ++slot) {
+      if (rootMaterial->GetSubMtl(slot)) {
+        usedSlots.push_back(slot);
+      }
+    }
+    if (usedSlots.empty()) {
+      usedSlots.push_back(0);
+    }
+    return usedSlots;
+  }
+
+  Mesh &mesh = triObject->GetMesh();
+  std::vector<bool> used(static_cast<size_t>(subMaterialCount), false);
+  for (int faceIndex = 0; faceIndex < mesh.getNumFaces(); ++faceIndex) {
+    int slot = mesh.faces[faceIndex].getMatID();
+    slot = slot > 0 ? (slot - 1) : 0;
+    slot = (std::clamp)(slot, 0, subMaterialCount - 1);
+    used[static_cast<size_t>(slot)] = true;
+  }
+
+  if (needsDelete) {
+    triObject->DeleteThis();
+  }
+
+  for (int slot = 0; slot < subMaterialCount; ++slot) {
+    if (used[static_cast<size_t>(slot)] && rootMaterial->GetSubMtl(slot)) {
+      usedSlots.push_back(slot);
+    }
+  }
+  if (usedSlots.empty()) {
+    usedSlots.push_back(0);
+  }
+  return usedSlots;
+}
+
+Mtl *ResolveMaterialForSlot(Mtl *rootMaterial, int materialSlot) {
+  if (!rootMaterial) {
+    return nullptr;
+  }
+
+  const int subMaterialCount = rootMaterial->NumSubMtls();
+  if (subMaterialCount > 1) {
+    const int clampedSlot = (std::clamp)(materialSlot, 0, subMaterialCount - 1);
+    if (Mtl *slotMaterial = rootMaterial->GetSubMtl(clampedSlot)) {
+      return ResolveLeafMaterial(slotMaterial);
+    }
+  }
+
+  if (subMaterialCount == 1 && rootMaterial->GetSubMtl(0)) {
+    return ResolveLeafMaterial(rootMaterial->GetSubMtl(0));
+  }
+
+  return ResolveLeafMaterial(rootMaterial);
+}
+
+bool CaptureMaterialSnapshot(INode *node, int materialSlot, Mtl *material,
+                             MaterialSnapshot *outSnapshot) {
+  if (!node || !material || !outSnapshot) {
+    return false;
   }
 
   const float transparency = (std::clamp)(material->GetXParency(), 0.0f, 1.0f);
   const float shininess = (std::clamp)(material->GetShininess(), 0.0f, 1.0f);
+  const float shinStrength = (std::clamp)(material->GetShinStr(), 0.0f, 1.0f);
   const float selfIllum = (std::max)(0.0f, material->GetSelfIllum());
   const bool selfIllumColorOn = material->GetSelfIllumColorOn() != FALSE;
+  const Color diffuse = material->GetDiffuse();
+  const Color specular = material->GetSpecular();
   const Color emissive = selfIllumColorOn
                              ? material->GetSelfIllumColor()
                              : Color(selfIllum, selfIllum, selfIllum);
@@ -532,17 +656,30 @@ bool CaptureMaterialSnapshot(INode *node, MaterialSnapshot *outSnapshot) {
   MaterialSnapshot snapshot;
   snapshot.valid = true;
   snapshot.nodeHandle = node->GetHandle();
-  snapshot.objectId = MakeMaterialObjectId(snapshot.nodeHandle);
+  snapshot.materialSlot = (std::max)(0, materialSlot);
+  snapshot.objectId =
+      MakeMaterialObjectId(snapshot.nodeHandle, snapshot.materialSlot);
   snapshot.name = ToUtf8(material->GetName());
   if (snapshot.name.empty()) {
-    snapshot.name = ToUtf8(node->GetName());
+    snapshot.name = ToUtf8(node->GetName()) + " [slot " +
+                    std::to_string(snapshot.materialSlot) + "]";
   }
-  snapshot.baseColor = ColorToArray4(material->GetDiffuse(), 1.0f - transparency);
+  snapshot.materialModel = ResolveMaterialModelName(material);
+  snapshot.baseColor = ColorToArray4(diffuse, 1.0f - transparency);
   snapshot.emissiveColor = ColorToArray4(emissive, 1.0f);
-  snapshot.emissiveIntensity = selfIllumColorOn ? 1.0f : selfIllum;
+  snapshot.emissiveIntensity =
+      selfIllumColorOn ? (std::max)({emissive.r, emissive.g, emissive.b, 0.0f})
+                       : selfIllum;
   snapshot.roughness = (std::clamp)(1.0f - shininess, 0.04f, 1.0f);
   snapshot.metalness = 0.0f;
+  snapshot.specularWeight =
+      (std::clamp)((std::max)({specular.r, specular.g, specular.b, shinStrength}),
+                   0.0f, 1.0f);
+  snapshot.ior = transparency > 1.0e-3f ? 1.52f : 1.5f;
   snapshot.transmissionWeight = transparency;
+  snapshot.transmissionColor = transparency > 1.0e-3f
+                                   ? ColorToArray3(diffuse)
+                                   : std::array<float, 3>{1.0f, 1.0f, 1.0f};
   snapshot.doubleSided = false;
   snapshot.alphaMode = transparency > 1.0e-3f ? "BLEND" : "OPAQUE";
   *outSnapshot = snapshot;
@@ -551,7 +688,7 @@ bool CaptureMaterialSnapshot(INode *node, MaterialSnapshot *outSnapshot) {
 
 void GatherMaterialSnapshots(
     Interface *ip, const std::unordered_map<ULONG_PTR, NodeSnapshot> &nodeState,
-    std::unordered_map<ULONG_PTR, MaterialSnapshot> *outState) {
+    MaterialStateMap *outState) {
   if (!ip || !outState) {
     return;
   }
@@ -564,9 +701,19 @@ void GatherMaterialSnapshots(
     if (!node) {
       continue;
     }
-    MaterialSnapshot materialSnapshot;
-    if (CaptureMaterialSnapshot(node, &materialSnapshot)) {
-      outState->insert_or_assign(handle, materialSnapshot);
+    Mtl *rootMaterial = node->GetMtl();
+    if (!rootMaterial) {
+      continue;
+    }
+
+    const std::vector<int> usedSlots = GatherUsedMaterialSlots(ip, node, rootMaterial);
+    for (int materialSlot : usedSlots) {
+      MaterialSnapshot materialSnapshot;
+      if (CaptureMaterialSnapshot(node, materialSlot,
+                                  ResolveMaterialForSlot(rootMaterial, materialSlot),
+                                  &materialSnapshot)) {
+        outState->insert_or_assign(materialSnapshot.objectId, materialSnapshot);
+      }
     }
   }
 }
@@ -681,6 +828,7 @@ void CaptureMeshSnapshot(Interface *ip, INode *node, NodeSnapshot *snapshot) {
   }
 
   Mesh &mesh = triObject->GetMesh();
+  mesh.checkNormals(TRUE);
   const uint64_t vertexCount = static_cast<uint64_t>(mesh.getNumVerts());
   const uint64_t faceCount = static_cast<uint64_t>(mesh.getNumFaces());
   if (vertexCount == 0 || faceCount == 0) {
@@ -724,6 +872,41 @@ void CaptureMeshSnapshot(Interface *ip, INode *node, NodeSnapshot *snapshot) {
   fingerprint = HashCombine(fingerprint, HashFloat(translation.x));
   fingerprint = HashCombine(fingerprint, HashFloat(translation.y));
   fingerprint = HashCombine(fingerprint, HashFloat(translation.z));
+
+  const bool hasTexcoords = mesh.tvFace != nullptr && mesh.tVerts != nullptr &&
+                            mesh.getNumTVerts() > 0;
+  for (int faceIndex = 0; faceIndex < mesh.getNumFaces(); ++faceIndex) {
+    Face &face = mesh.faces[faceIndex];
+    fingerprint = HashCombine(
+        fingerprint,
+        static_cast<uint64_t>(static_cast<uint32_t>(face.getMatID())));
+
+    for (int corner = 0; corner < 3; ++corner) {
+      const int vertexIndex = face.getVert(corner);
+      if (vertexIndex >= 0 && vertexIndex < mesh.getNumVerts()) {
+        const Point3 position = ConvertMaxPointToEngine(
+            TransformPointByMatrix3(objectToNode, mesh.verts[vertexIndex]));
+        fingerprint = HashPoint3Value(fingerprint, position);
+      }
+
+      Point3 normal = ConvertMaxVectorToEngine(
+          TransformVectorByMatrix3(objectToNode,
+                                   GetFaceCornerNormal(mesh, faceIndex, corner)));
+      NormalizePoint3(&normal, Point3(0.0f, 1.0f, 0.0f));
+      fingerprint = HashPoint3Value(fingerprint, normal);
+
+      if (hasTexcoords) {
+        const TVFace &tvFace = mesh.tvFace[faceIndex];
+        const int texcoordIndex = tvFace.t[corner];
+        if (texcoordIndex >= 0 && texcoordIndex < mesh.getNumTVerts()) {
+          const UVVert &uv = mesh.tVerts[texcoordIndex];
+          fingerprint = HashCombine(fingerprint, HashFloat(uv.x));
+          fingerprint = HashCombine(fingerprint, HashFloat(uv.y));
+          fingerprint = HashCombine(fingerprint, HashFloat(uv.z));
+        }
+      }
+    }
+  }
   fingerprint =
       HashCombine(fingerprint, static_cast<uint64_t>(node->GetObjectRef() != nullptr));
   snapshot->geometryFingerprint = fingerprint;
@@ -798,15 +981,36 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
   Mesh &mesh = triObject->GetMesh();
   mesh.checkNormals(TRUE);
   const Matrix3 objectToNode = ComputeObjectToNodeTransform(ip, node);
-  std::vector<NativeMeshPayloadVertex> vertices;
-  std::vector<uint32_t> indices;
-  vertices.reserve(static_cast<size_t>(mesh.getNumFaces()) * 3);
-  indices.reserve(static_cast<size_t>(mesh.getNumFaces()) * 3);
+  struct ExportSubmesh {
+    int materialSlot = 0;
+    std::vector<NativeMeshPayloadVertex> vertices;
+    std::vector<uint32_t> indices;
+  };
+  std::vector<ExportSubmesh> submeshes;
+  std::unordered_map<int, size_t> submeshBySlot;
 
   const bool hasTexcoords = mesh.tvFace != nullptr && mesh.tVerts != nullptr &&
                             mesh.getNumTVerts() > 0;
+  Mtl *rootMaterial = node->GetMtl();
+  const int subMaterialCount = rootMaterial ? rootMaterial->NumSubMtls() : 0;
   for (int faceIndex = 0; faceIndex < mesh.getNumFaces(); ++faceIndex) {
-    const Face &face = mesh.faces[faceIndex];
+    Face &face = mesh.faces[faceIndex];
+    int materialSlot = 0;
+    if (subMaterialCount > 1) {
+      materialSlot = face.getMatID();
+      materialSlot = materialSlot > 0 ? (materialSlot - 1) : 0;
+      materialSlot = (std::clamp)(materialSlot, 0, subMaterialCount - 1);
+    }
+
+    const auto [submeshIt, inserted] =
+        submeshBySlot.emplace(materialSlot, submeshes.size());
+    if (inserted) {
+      ExportSubmesh submesh;
+      submesh.materialSlot = materialSlot;
+      submeshes.push_back(std::move(submesh));
+    }
+    ExportSubmesh &submesh = submeshes[submeshIt->second];
+
     const Point3 positions[3] = {
       ConvertMaxPointToEngine(
         TransformPointByMatrix3(objectToNode, mesh.verts[face.getVert(0)])),
@@ -836,22 +1040,30 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
         vertex.uv[0] = uv.x;
         vertex.uv[1] = 1.0f - uv.y;
       }
-      indices.push_back(static_cast<uint32_t>(vertices.size()));
-      vertices.push_back(vertex);
+      submesh.indices.push_back(static_cast<uint32_t>(submesh.vertices.size()));
+      submesh.vertices.push_back(vertex);
     }
   }
 
   NativeMeshPayloadHeader header;
-  header.vertexCount = static_cast<uint32_t>(vertices.size());
-  header.indexCount = static_cast<uint32_t>(indices.size());
+  header.meshCount = static_cast<uint32_t>(submeshes.size());
   stream.write(reinterpret_cast<const char *>(&header), sizeof(header));
-  if (!vertices.empty()) {
-    stream.write(reinterpret_cast<const char *>(vertices.data()),
-                 static_cast<std::streamsize>(vertices.size() * sizeof(vertices[0])));
-  }
-  if (!indices.empty()) {
-    stream.write(reinterpret_cast<const char *>(indices.data()),
-                 static_cast<std::streamsize>(indices.size() * sizeof(indices[0])));
+  for (const ExportSubmesh &submesh : submeshes) {
+    NativeMeshPayloadMeshHeader meshHeader;
+    meshHeader.vertexCount = static_cast<uint32_t>(submesh.vertices.size());
+    meshHeader.indexCount = static_cast<uint32_t>(submesh.indices.size());
+    meshHeader.materialSlot = submesh.materialSlot;
+    stream.write(reinterpret_cast<const char *>(&meshHeader), sizeof(meshHeader));
+    if (!submesh.vertices.empty()) {
+      stream.write(reinterpret_cast<const char *>(submesh.vertices.data()),
+                   static_cast<std::streamsize>(submesh.vertices.size() *
+                                                sizeof(submesh.vertices[0])));
+    }
+    if (!submesh.indices.empty()) {
+      stream.write(reinterpret_cast<const char *>(submesh.indices.data()),
+                   static_cast<std::streamsize>(submesh.indices.size() *
+                                                sizeof(submesh.indices[0])));
+    }
   }
 
   if (needsDelete) {
@@ -1078,13 +1290,20 @@ void AppendMaterialDelta(const std::string &documentId,
                             {"debugLabel", snapshot.name},
                             {"payload", json{{"parametersChanged", true},
                                               {"texturesChanged", false},
-                                              {"materialModel", "OpenPBR"},
+                                              {"materialModel", snapshot.materialModel},
                                               {"baseColor", snapshot.baseColor},
                                               {"emissiveColor", snapshot.emissiveColor},
                                               {"emissiveIntensity", snapshot.emissiveIntensity},
                                               {"roughness", snapshot.roughness},
                                               {"metalness", snapshot.metalness},
+                                              {"specularWeight", snapshot.specularWeight},
+                                              {"ior", snapshot.ior},
                                               {"transmissionWeight", snapshot.transmissionWeight},
+                                              {"transmissionColor", snapshot.transmissionColor},
+                                              {"coatWeight", snapshot.coatWeight},
+                                              {"coatRoughness", snapshot.coatRoughness},
+                                              {"thinWalled", snapshot.thinWalled},
+                                              {"translucency", snapshot.translucency},
                                               {"doubleSided", snapshot.doubleSided},
                                               {"alphaMode", snapshot.alphaMode}}}});
 }
@@ -1160,7 +1379,7 @@ bool SendBatch(const std::string &sessionId, uint64_t sequence, bool fullSync,
 
 bool SendInitialSnapshot(Interface *ip,
                          std::unordered_map<ULONG_PTR, NodeSnapshot> *outState,
-                         std::unordered_map<ULONG_PTR, MaterialSnapshot> *outMaterialState,
+                         MaterialStateMap *outMaterialState,
                          std::unordered_map<ULONG_PTR, LightSnapshot> *outLightState,
                          std::string *outSessionId,
                          std::string *outDocumentId,
@@ -1174,7 +1393,7 @@ bool SendInitialSnapshot(Interface *ip,
   const std::string sessionId = MakeSessionId();
 
   std::unordered_map<ULONG_PTR, NodeSnapshot> state;
-  std::unordered_map<ULONG_PTR, MaterialSnapshot> materialState;
+  MaterialStateMap materialState;
   std::unordered_map<ULONG_PTR, LightSnapshot> lightState;
   if (INode *root = ip->GetRootNode()) {
     for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
@@ -1208,10 +1427,9 @@ bool SendInitialSnapshot(Interface *ip,
     AppendNodeVisibilityDelta(documentId, snapshot, &revision, &deltas);
     AppendMeshPayloadDeltaIfAvailable(ip, sessionId, documentId, snapshot,
                                       &revision, &deltas);
-    const auto materialIt = materialState.find(snapshot.handle);
-    if (materialIt != materialState.end()) {
-      AppendMaterialDelta(documentId, materialIt->second, &revision, &deltas);
-    }
+  }
+  for (const auto &[_, snapshot] : materialState) {
+    AppendMaterialDelta(documentId, snapshot, &revision, &deltas);
   }
   for (const auto &[_, snapshot] : lightState) {
     AppendLightDelta(documentId, snapshot, &revision, &deltas);
@@ -1463,7 +1681,7 @@ private:
     }
 
     std::unordered_map<ULONG_PTR, NodeSnapshot> currentState;
-    std::unordered_map<ULONG_PTR, MaterialSnapshot> currentMaterialState;
+    MaterialStateMap currentMaterialState;
     std::unordered_map<ULONG_PTR, LightSnapshot> currentLightState;
     if (INode *root = ip->GetRootNode()) {
       for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
@@ -1504,13 +1722,13 @@ private:
                                           snapshot, &m_nextRevision, &deltas);
       }
 
-      const auto currentMaterialIt = currentMaterialState.find(handle);
-      const auto previousMaterialIt = m_lastMaterialState.find(handle);
-      if (currentMaterialIt != currentMaterialState.end() &&
-          (previousMaterialIt == m_lastMaterialState.end() ||
-           !SameMaterial(currentMaterialIt->second, previousMaterialIt->second))) {
-        AppendMaterialDelta(m_documentId, currentMaterialIt->second,
-                            &m_nextRevision, &deltas);
+    }
+
+    for (const auto &[objectId, snapshot] : currentMaterialState) {
+      const auto previousMaterialIt = m_lastMaterialState.find(objectId);
+      if (previousMaterialIt == m_lastMaterialState.end() ||
+          !SameMaterial(snapshot, previousMaterialIt->second)) {
+        AppendMaterialDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
       }
     }
 
@@ -1520,8 +1738,8 @@ private:
       }
     }
 
-    for (const auto &[handle, snapshot] : m_lastMaterialState) {
-      if (currentMaterialState.find(handle) == currentMaterialState.end()) {
+    for (const auto &[objectId, snapshot] : m_lastMaterialState) {
+      if (currentMaterialState.find(objectId) == currentMaterialState.end()) {
         AppendMaterialRemovedDelta(m_documentId, snapshot, &m_nextRevision,
                                    &deltas);
       }
@@ -1598,7 +1816,7 @@ private:
   bool m_syncActive = false;
   UINT_PTR m_pollTimer = 0;
   std::unordered_map<ULONG_PTR, NodeSnapshot> m_lastNodeState;
-  std::unordered_map<ULONG_PTR, MaterialSnapshot> m_lastMaterialState;
+  MaterialStateMap m_lastMaterialState;
   std::unordered_map<ULONG_PTR, LightSnapshot> m_lastLightState;
   std::vector<std::string> m_lastSelectedObjectIds;
   CameraSnapshot m_lastCameraSnapshot;

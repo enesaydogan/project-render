@@ -65,6 +65,12 @@ static bool IsMouseButtonDown(int virtualKey) {
   return qtDown || ((GetAsyncKeyState(virtualKey) & 0x8000) != 0);
 }
 
+static void RestoreEngineCameraBasis() {
+  g_cameraData.up[0] = 0.0f;
+  g_cameraData.up[1] = 1.0f;
+  g_cameraData.up[2] = 0.0f;
+}
+
 void Update(float dt) {
   // Input handling guarded by application focus
   HWND foreground = GetForegroundWindow();
@@ -110,6 +116,9 @@ void Update(float dt) {
     const float sensitivity = g_mouseSensitivity; // radians per pixel
     // Update yaw/pitch directly (FPS-style mouse look)
     if (dx != 0 || dy != 0) {
+      if (!LiveLink::GetSceneSync().IsCameraControlDetached()) {
+        RestoreEngineCameraBasis();
+      }
       LiveLink::GetSceneSync().DetachCameraControl();
       g_camYaw += dx * sensitivity;
       g_camPitch -= dy * sensitivity;
@@ -290,6 +299,9 @@ void Update(float dt) {
 
   if (move.x != 0 || move.y != 0 || move.z != 0) {
     normalize3(move);
+    if (!LiveLink::GetSceneSync().IsCameraControlDetached()) {
+      RestoreEngineCameraBasis();
+    }
     LiveLink::GetSceneSync().DetachCameraControl();
     g_cameraData.pos[0] += move.x * moveSpeed * dt;
     g_cameraData.pos[1] += move.y * moveSpeed * dt;

@@ -287,7 +287,14 @@ SceneDelta MockLiveLinkProvider::MakeMaterialDelta(uint64_t revision,
   payload.emissiveIntensity = emissionScale;
   payload.roughness = roughness;
   payload.metalness = metalness;
+  payload.specularWeight = 1.0f;
+  payload.ior = 1.5f;
   payload.transmissionWeight = 0.0f;
+  payload.transmissionColor = {1.0f, 1.0f, 1.0f};
+  payload.coatWeight = 0.0f;
+  payload.coatRoughness = 0.1f;
+  payload.thinWalled = 0.0f;
+  payload.translucency = 0.0f;
   payload.doubleSided = false;
   payload.alphaMode = "OPAQUE";
   delta.payload = payload;
