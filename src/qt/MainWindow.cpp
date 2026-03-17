@@ -515,7 +515,12 @@ void MainWindow::createDocks()
 
         m_liveLinkTakeCameraButton = new QPushButton(tr("Take Camera"), panel);
         connect(m_liveLinkTakeCameraButton, &QPushButton::clicked, this, []() {
-            LiveLink::GetSceneSync().DetachCameraControl();
+            auto &sceneSync = LiveLink::GetSceneSync();
+            if (sceneSync.IsCameraControlDetached()) {
+                sceneSync.ResumeCameraControl();
+            } else {
+                sceneSync.DetachCameraControl();
+            }
         });
         buttonRow->addWidget(m_liveLinkTakeCameraButton);
 
@@ -772,8 +777,11 @@ void MainWindow::updateSceneIoUi()
             m_liveLinkConnectButton->setEnabled(hasProviders && anyDisconnected);
             m_liveLinkDisconnectButton->setEnabled(hasProviders && anyConnected);
             m_liveLinkReconnectButton->setEnabled(hasProviders);
-            m_liveLinkTakeCameraButton->setEnabled(
-                anyConnected && !LiveLink::GetSceneSync().IsCameraControlDetached());
+            m_liveLinkTakeCameraButton->setEnabled(anyConnected);
+            m_liveLinkTakeCameraButton->setText(
+                LiveLink::GetSceneSync().IsCameraControlDetached()
+                    ? tr("Return Camera")
+                    : tr("Take Camera"));
         }
 
         if (m_liveLinkDiagnosticsView) {
