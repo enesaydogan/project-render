@@ -87,7 +87,7 @@
   <PropertyGroup />
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\include;D:\project-render\tools\3dsmax2025\..\..\thirdparty\Streamline\external\json\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\include;D:\project-render\tools\3dsmax2025\..\..\thirdparty\Streamline\external\json\include;C:\Program Files\Chaos\V-Ray\3ds Max 2025\include;C:\Program Files\Chaos\V-Ray\3ds Max 2025\include\maxutils;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <BufferSecurityCheck></BufferSecurityCheck>
@@ -108,16 +108,16 @@
       <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
       <UseFullPaths>false</UseFullPaths>
       <WarningLevel>Level4</WarningLevel>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;CMAKE_INTDIR="Debug";project_render_max2025_livelink_EXPORTS</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;PROJECT_RENDER_HAS_VRAY_SDK=1;CMAKE_INTDIR="Debug";project_render_max2025_livelink_EXPORTS</PreprocessorDefinitions>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
     </ClCompile>
     <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;CMAKE_INTDIR=\"Debug\";project_render_max2025_livelink_EXPORTS</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\include;D:\project-render\tools\3dsmax2025\..\..\thirdparty\Streamline\external\json\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;PROJECT_RENDER_HAS_VRAY_SDK=1;CMAKE_INTDIR=\"Debug\";project_render_max2025_livelink_EXPORTS</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\include;D:\project-render\tools\3dsmax2025\..\..\thirdparty\Streamline\external\json\include;C:\Program Files\Chaos\V-Ray\3ds Max 2025\include;C:\Program Files\Chaos\V-Ray\3ds Max 2025\include\maxutils;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\include;D:\project-render\tools\3dsmax2025\..\..\thirdparty\Streamline\external\json\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\include;D:\project-render\tools\3dsmax2025\..\..\thirdparty\Streamline\external\json\include;C:\Program Files\Chaos\V-Ray\3ds Max 2025\include;C:\Program Files\Chaos\V-Ray\3ds Max 2025\include\maxutils;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -125,7 +125,7 @@
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <Link>
-      <AdditionalDependencies>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\core.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\maxutil.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\geom.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\mesh.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\paramblk2.lib;user32.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\core.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\maxutil.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\geom.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\mesh.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\paramblk2.lib;C:\Program Files\Chaos\V-Ray\3ds Max 2025\lib\vutils_s.lib;user32.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
@@ -144,7 +144,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\include;D:\project-render\tools\3dsmax2025\..\..\thirdparty\Streamline\external\json\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\include;D:\project-render\tools\3dsmax2025\..\..\thirdparty\Streamline\external\json\include;C:\Program Files\Chaos\V-Ray\3ds Max 2025\include;C:\Program Files\Chaos\V-Ray\3ds Max 2025\include\maxutils;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <BufferSecurityCheck></BufferSecurityCheck>
@@ -164,18 +164,18 @@
       <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
       <UseFullPaths>false</UseFullPaths>
       <WarningLevel>Level4</WarningLevel>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;CMAKE_INTDIR="Release";project_render_max2025_livelink_EXPORTS</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;PROJECT_RENDER_HAS_VRAY_SDK=1;CMAKE_INTDIR="Release";project_render_max2025_livelink_EXPORTS</PreprocessorDefinitions>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <DebugInformationFormat>
       </DebugInformationFormat>
       <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
     </ClCompile>
     <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;CMAKE_INTDIR=\"Release\";project_render_max2025_livelink_EXPORTS</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\include;D:\project-render\tools\3dsmax2025\..\..\thirdparty\Streamline\external\json\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;PROJECT_RENDER_HAS_VRAY_SDK=1;CMAKE_INTDIR=\"Release\";project_render_max2025_livelink_EXPORTS</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\include;D:\project-render\tools\3dsmax2025\..\..\thirdparty\Streamline\external\json\include;C:\Program Files\Chaos\V-Ray\3ds Max 2025\include;C:\Program Files\Chaos\V-Ray\3ds Max 2025\include\maxutils;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\include;D:\project-render\tools\3dsmax2025\..\..\thirdparty\Streamline\external\json\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\include;D:\project-render\tools\3dsmax2025\..\..\thirdparty\Streamline\external\json\include;C:\Program Files\Chaos\V-Ray\3ds Max 2025\include;C:\Program Files\Chaos\V-Ray\3ds Max 2025\include\maxutils;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -183,7 +183,7 @@
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <Link>
-      <AdditionalDependencies>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\core.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\maxutil.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\geom.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\mesh.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\paramblk2.lib;user32.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\core.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\maxutil.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\geom.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\mesh.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\paramblk2.lib;C:\Program Files\Chaos\V-Ray\3ds Max 2025\lib\vutils_s.lib;user32.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
@@ -202,7 +202,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\include;D:\project-render\tools\3dsmax2025\..\..\thirdparty\Streamline\external\json\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\include;D:\project-render\tools\3dsmax2025\..\..\thirdparty\Streamline\external\json\include;C:\Program Files\Chaos\V-Ray\3ds Max 2025\include;C:\Program Files\Chaos\V-Ray\3ds Max 2025\include\maxutils;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <BufferSecurityCheck></BufferSecurityCheck>
@@ -222,18 +222,18 @@
       <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
       <UseFullPaths>false</UseFullPaths>
       <WarningLevel>Level4</WarningLevel>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;CMAKE_INTDIR="MinSizeRel";project_render_max2025_livelink_EXPORTS</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;PROJECT_RENDER_HAS_VRAY_SDK=1;CMAKE_INTDIR="MinSizeRel";project_render_max2025_livelink_EXPORTS</PreprocessorDefinitions>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <DebugInformationFormat>
       </DebugInformationFormat>
       <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
     </ClCompile>
     <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;CMAKE_INTDIR=\"MinSizeRel\";project_render_max2025_livelink_EXPORTS</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\include;D:\project-render\tools\3dsmax2025\..\..\thirdparty\Streamline\external\json\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;PROJECT_RENDER_HAS_VRAY_SDK=1;CMAKE_INTDIR=\"MinSizeRel\";project_render_max2025_livelink_EXPORTS</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\include;D:\project-render\tools\3dsmax2025\..\..\thirdparty\Streamline\external\json\include;C:\Program Files\Chaos\V-Ray\3ds Max 2025\include;C:\Program Files\Chaos\V-Ray\3ds Max 2025\include\maxutils;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\include;D:\project-render\tools\3dsmax2025\..\..\thirdparty\Streamline\external\json\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\include;D:\project-render\tools\3dsmax2025\..\..\thirdparty\Streamline\external\json\include;C:\Program Files\Chaos\V-Ray\3ds Max 2025\include;C:\Program Files\Chaos\V-Ray\3ds Max 2025\include\maxutils;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -241,7 +241,7 @@
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <Link>
-      <AdditionalDependencies>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\core.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\maxutil.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\geom.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\mesh.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\paramblk2.lib;user32.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\core.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\maxutil.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\geom.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\mesh.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\paramblk2.lib;C:\Program Files\Chaos\V-Ray\3ds Max 2025\lib\vutils_s.lib;user32.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
@@ -260,7 +260,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\include;D:\project-render\tools\3dsmax2025\..\..\thirdparty\Streamline\external\json\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\include;D:\project-render\tools\3dsmax2025\..\..\thirdparty\Streamline\external\json\include;C:\Program Files\Chaos\V-Ray\3ds Max 2025\include;C:\Program Files\Chaos\V-Ray\3ds Max 2025\include\maxutils;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <BufferSecurityCheck></BufferSecurityCheck>
@@ -281,16 +281,16 @@
       <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
       <UseFullPaths>false</UseFullPaths>
       <WarningLevel>Level4</WarningLevel>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;CMAKE_INTDIR="RelWithDebInfo";project_render_max2025_livelink_EXPORTS</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;PROJECT_RENDER_HAS_VRAY_SDK=1;CMAKE_INTDIR="RelWithDebInfo";project_render_max2025_livelink_EXPORTS</PreprocessorDefinitions>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
     </ClCompile>
     <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;CMAKE_INTDIR=\"RelWithDebInfo\";project_render_max2025_livelink_EXPORTS</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\include;D:\project-render\tools\3dsmax2025\..\..\thirdparty\Streamline\external\json\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;PROJECT_RENDER_HAS_VRAY_SDK=1;CMAKE_INTDIR=\"RelWithDebInfo\";project_render_max2025_livelink_EXPORTS</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\include;D:\project-render\tools\3dsmax2025\..\..\thirdparty\Streamline\external\json\include;C:\Program Files\Chaos\V-Ray\3ds Max 2025\include;C:\Program Files\Chaos\V-Ray\3ds Max 2025\include\maxutils;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\include;D:\project-render\tools\3dsmax2025\..\..\thirdparty\Streamline\external\json\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\include;D:\project-render\tools\3dsmax2025\..\..\thirdparty\Streamline\external\json\include;C:\Program Files\Chaos\V-Ray\3ds Max 2025\include;C:\Program Files\Chaos\V-Ray\3ds Max 2025\include\maxutils;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -298,7 +298,7 @@
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <Link>
-      <AdditionalDependencies>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\core.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\maxutil.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\geom.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\mesh.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\paramblk2.lib;user32.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\core.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\maxutil.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\geom.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\mesh.lib;C:\Program Files\Autodesk\3ds Max 2025 SDK\maxsdk\lib\x64\Release\paramblk2.lib;C:\Program Files\Chaos\V-Ray\3ds Max 2025\lib\vutils_s.lib;user32.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
