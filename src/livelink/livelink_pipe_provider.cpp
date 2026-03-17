@@ -218,6 +218,9 @@ bool ParsePayload(const SceneDeltaKind kind, const json &payloadJson,
     if (payloadJson.contains("baseColor")) {
       FillFloatArray(payloadJson.at("baseColor"), &payload.baseColor);
     }
+    payload.baseColorTextureUri = payloadJson.value("baseColorTextureUri", "");
+    payload.normalTextureUri = payloadJson.value("normalTextureUri", "");
+    payload.emissiveTextureUri = payloadJson.value("emissiveTextureUri", "");
     if (payloadJson.contains("emissiveColor")) {
       FillFloatArray(payloadJson.at("emissiveColor"), &payload.emissiveColor);
     }
@@ -235,6 +238,12 @@ bool ParsePayload(const SceneDeltaKind kind, const json &payloadJson,
     payload.coatRoughness = payloadJson.value("coatRoughness", 0.1f);
     payload.thinWalled = payloadJson.value("thinWalled", 0.0f);
     payload.translucency = payloadJson.value("translucency", 0.0f);
+    if (payloadJson.contains("uvScale")) {
+      FillFloatArray(payloadJson.at("uvScale"), &payload.uvScale);
+    }
+    if (payloadJson.contains("uvOffset")) {
+      FillFloatArray(payloadJson.at("uvOffset"), &payload.uvOffset);
+    }
     payload.doubleSided = payloadJson.value("doubleSided", false);
     payload.alphaMode = payloadJson.value("alphaMode", "OPAQUE");
     *outPayload = std::move(payload);

@@ -3,6 +3,7 @@
 #include <max.h>
 #include <utilapi.h>
 #include <iparamm2.h>
+#include <stdmat.h>
 #include <units.h>
 
 #include <nlohmann/json.hpp>
@@ -569,6 +570,28 @@ bool TryGetVrayMtlValue(Mtl *material, ParamID paramId, TimeValue time,
   return false;
 }
 
+bool TryGetVrayMtlTexmap(Mtl *material, ParamID paramId, TimeValue time,
+                        Texmap **outTexmap) {
+  if (!material || !outTexmap) {
+    return false;
+  }
+
+  for (int blockId : kVrayMtlParamBlockIds) {
+    IParamBlock2 *paramBlock = material->GetParamBlockByID(blockId);
+    if (!paramBlock) {
+      continue;
+    }
+
+    Texmap *texmap = paramBlock->GetTexmap(paramId, time);
+    if (texmap) {
+      *outTexmap = texmap;
+      return true;
+    }
+  }
+
+  return false;
+}
+
 float MaxColorComponent(const Color &color) {
   return (std::max)({color.r, color.g, color.b, 0.0f});
 }
@@ -725,6 +748,9 @@ struct MaterialSnapshot {
   std::string name;
   std::string materialModel = "OpenPBR";
   std::array<float, 4> baseColor = {1.0f, 1.0f, 1.0f, 1.0f};
+  std::string baseColorTextureUri;
+  std::string normalTextureUri;
+  std::string emissiveTextureUri;
   std::array<float, 4> emissiveColor = {0.0f, 0.0f, 0.0f, 1.0f};
   float emissiveIntensity = 0.0f;
   float roughness = 0.5f;
@@ -737,8 +763,16 @@ struct MaterialSnapshot {
   float coatRoughness = 0.1f;
   float thinWalled = 0.0f;
   float translucency = 0.0f;
+  std::array<float, 2> uvScale = {1.0f, 1.0f};
+  std::array<float, 2> uvOffset = {0.0f, 0.0f};
   bool doubleSided = false;
   std::string alphaMode = "OPAQUE";
+};
+
+struct TextureBindingSnapshot {
+  std::string uri;
+  std::array<float, 2> uvScale = {1.0f, 1.0f};
+  std::array<float, 2> uvOffset = {0.0f, 0.0f};
 };
 
 using MaterialStateMap = std::unordered_map<std::string, MaterialSnapshot>;
@@ -917,6 +951,9 @@ bool SameMaterial(const MaterialSnapshot &lhs, const MaterialSnapshot &rhs) {
          lhs.materialSlot == rhs.materialSlot && lhs.name == rhs.name &&
          lhs.materialModel == rhs.materialModel &&
          SameVector4(lhs.baseColor, rhs.baseColor) &&
+         lhs.baseColorTextureUri == rhs.baseColorTextureUri &&
+         lhs.normalTextureUri == rhs.normalTextureUri &&
+         lhs.emissiveTextureUri == rhs.emissiveTextureUri &&
          SameVector4(lhs.emissiveColor, rhs.emissiveColor) &&
          NearlyEqual(lhs.emissiveIntensity, rhs.emissiveIntensity) &&
          NearlyEqual(lhs.roughness, rhs.roughness) &&
@@ -929,6 +966,8 @@ bool SameMaterial(const MaterialSnapshot &lhs, const MaterialSnapshot &rhs) {
          NearlyEqual(lhs.coatRoughness, rhs.coatRoughness) &&
          NearlyEqual(lhs.thinWalled, rhs.thinWalled) &&
          NearlyEqual(lhs.translucency, rhs.translucency) &&
+         SameVector2(lhs.uvScale, rhs.uvScale) &&
+         SameVector2(lhs.uvOffset, rhs.uvOffset) &&
          lhs.doubleSided == rhs.doubleSided && lhs.alphaMode == rhs.alphaMode;
 }
 
@@ -1044,6 +1083,142 @@ Point3 TransformVectorByMatrix3(const Matrix3 &matrix, const Point3 &vector) {
 
 std::string PathToUtf8(const std::filesystem::path &path) {
   return WStringToUtf8(path.wstring());
+}
+
+std::string NormalizeTextureUri(Interface *ip, const std::string &rawPath) {
+  if (rawPath.empty()) {
+    return {};
+  }
+
+  std::filesystem::path texturePath(Utf8ToWString(rawPath));
+  if (texturePath.empty()) {
+    return {};
+  }
+
+  if (texturePath.is_relative() && ip) {
+    const std::string scenePathUtf8 = ToUtf8(ip->GetCurFileName());
+    if (!scenePathUtf8.empty()) {
+      const std::filesystem::path scenePath(Utf8ToWString(scenePathUtf8));
+      if (!scenePath.empty()) {
+        texturePath = scenePath.parent_path() / texturePath;
+      }
+    }
+  }
+
+  std::error_code error;
+  if (std::filesystem::exists(texturePath, error)) {
+    const std::filesystem::path canonicalPath =
+        std::filesystem::weakly_canonical(texturePath, error);
+    if (!error && !canonicalPath.empty()) {
+      texturePath = canonicalPath;
+    }
+  }
+
+  return PathToUtf8(texturePath.lexically_normal());
+}
+
+bool TryResolveBitmapTextureBinding(Interface *ip, BitmapTex *bitmapTex,
+                                    TextureBindingSnapshot *outBinding) {
+  if (!bitmapTex || !outBinding) {
+    return false;
+  }
+
+  const std::string textureUri =
+      NormalizeTextureUri(ip, ToUtf8(bitmapTex->GetMapName()));
+  if (textureUri.empty()) {
+    return false;
+  }
+
+  outBinding->uri = textureUri;
+
+  if (StdUVGen *uvGenerator = bitmapTex->GetUVGen()) {
+    const TimeValue time = ip ? ip->GetTime() : 0;
+    outBinding->uvScale[0] = uvGenerator->GetUScl(time);
+    outBinding->uvScale[1] = uvGenerator->GetVScl(time);
+    outBinding->uvOffset[0] = uvGenerator->GetUOffs(time);
+    outBinding->uvOffset[1] = uvGenerator->GetVOffs(time);
+  }
+
+  return true;
+}
+
+bool TryResolveTexmapTextureBinding(Interface *ip, Texmap *texmap,
+                                    TextureBindingSnapshot *outBinding) {
+  if (!texmap || !outBinding) {
+    return false;
+  }
+
+  if (BitmapTex *bitmapTex = dynamic_cast<BitmapTex *>(texmap)) {
+    if (TryResolveBitmapTextureBinding(ip, bitmapTex, outBinding)) {
+      return true;
+    }
+  }
+
+  for (int subTexmapIndex = 0; subTexmapIndex < texmap->NumSubTexmaps(); ++subTexmapIndex) {
+    if (Texmap *subTexmap = texmap->GetSubTexmap(subTexmapIndex)) {
+      if (TryResolveTexmapTextureBinding(ip, subTexmap, outBinding)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+void ApplyTextureBinding(TextureBindingSnapshot binding, std::string *outUri,
+                         MaterialSnapshot *snapshot) {
+  if (!outUri || !snapshot || binding.uri.empty()) {
+    return;
+  }
+
+  *outUri = std::move(binding.uri);
+  if (NearlyEqual(snapshot->uvScale[0], 1.0f) &&
+      NearlyEqual(snapshot->uvScale[1], 1.0f) &&
+      NearlyEqual(snapshot->uvOffset[0], 0.0f) &&
+      NearlyEqual(snapshot->uvOffset[1], 0.0f)) {
+    snapshot->uvScale = binding.uvScale;
+    snapshot->uvOffset = binding.uvOffset;
+  }
+}
+
+void CaptureGenericMaterialTextures(Interface *ip, Mtl *material,
+                                    MaterialSnapshot *snapshot) {
+  if (!ip || !material || !snapshot) {
+    return;
+  }
+
+  for (int subTexmapIndex = 0; subTexmapIndex < material->NumSubTexmaps(); ++subTexmapIndex) {
+    Texmap *texmap = material->GetSubTexmap(subTexmapIndex);
+    if (!texmap) {
+      continue;
+    }
+
+    const MSTR slotName = material->GetSubTexmapSlotName(subTexmapIndex, false);
+    const std::string slotNameLower = ToLowerAscii(ToUtf8(slotName.data()));
+    TextureBindingSnapshot binding;
+    if (!TryResolveTexmapTextureBinding(ip, texmap, &binding)) {
+      continue;
+    }
+
+    if (snapshot->baseColorTextureUri.empty() &&
+        ContainsAnyToken(slotNameLower,
+                         {"diffuse", "albedo", "base color", "basecolor"})) {
+      ApplyTextureBinding(std::move(binding), &snapshot->baseColorTextureUri,
+                          snapshot);
+      continue;
+    }
+    if (snapshot->normalTextureUri.empty() &&
+        ContainsAnyToken(slotNameLower, {"normal", "bump"})) {
+      ApplyTextureBinding(std::move(binding), &snapshot->normalTextureUri,
+                          snapshot);
+      continue;
+    }
+    if (snapshot->emissiveTextureUri.empty() &&
+        ContainsAnyToken(slotNameLower, {"self", "emiss", "illum"})) {
+      ApplyTextureBinding(std::move(binding), &snapshot->emissiveTextureUri,
+                          snapshot);
+    }
+  }
 }
 
 std::string MakeCameraObjectId() {
@@ -1217,6 +1392,40 @@ void ApplyVrayMaterialParameters(Interface *ip, Mtl *material,
   if (TryGetVrayMtlValue(material, ProjectRenderVrayMtlParameters::pb_doubleSided, time,
                          &doubleSided)) {
     snapshot->doubleSided = doubleSided != 0;
+  }
+
+  Texmap *baseColorTexmap = nullptr;
+  if (TryGetVrayMtlTexmap(material,
+                          ProjectRenderVrayMtlParameters::pb_diffuse_color_shortmap,
+                          time, &baseColorTexmap)) {
+    TextureBindingSnapshot binding;
+    if (TryResolveTexmapTextureBinding(ip, baseColorTexmap, &binding)) {
+      ApplyTextureBinding(std::move(binding), &snapshot->baseColorTextureUri,
+                          snapshot);
+    }
+  }
+
+  Texmap *normalTexmap = nullptr;
+  if (TryGetVrayMtlTexmap(material,
+                          ProjectRenderVrayMtlParameters::pb_bump_shortmap,
+                          time, &normalTexmap)) {
+    TextureBindingSnapshot binding;
+    if (TryResolveTexmapTextureBinding(ip, normalTexmap, &binding)) {
+      ApplyTextureBinding(std::move(binding), &snapshot->normalTextureUri,
+                          snapshot);
+    }
+  }
+
+  Texmap *emissiveTexmap = nullptr;
+  if (TryGetVrayMtlTexmap(
+          material,
+          ProjectRenderVrayMtlParameters::pb_selfIllumination_color_shortmap,
+          time, &emissiveTexmap)) {
+    TextureBindingSnapshot binding;
+    if (TryResolveTexmapTextureBinding(ip, emissiveTexmap, &binding)) {
+      ApplyTextureBinding(std::move(binding), &snapshot->emissiveTextureUri,
+                          snapshot);
+    }
   }
 }
 
@@ -1433,6 +1642,7 @@ bool CaptureMaterialSnapshot(Interface *ip, INode *node, int materialSlot, Mtl *
                                    : std::array<float, 3>{1.0f, 1.0f, 1.0f};
   snapshot.doubleSided = false;
   snapshot.alphaMode = transparency > 1.0e-3f ? "BLEND" : "OPAQUE";
+  CaptureGenericMaterialTextures(ip, material, &snapshot);
 #if defined(PROJECT_RENDER_HAS_VRAY_SDK)
   if (IsVrayMaterial(material)) {
     ApplyVrayMaterialParameters(ip, material, &snapshot);
@@ -2064,10 +2274,13 @@ void AppendMaterialDelta(const std::string &documentId,
                             {"revision", (*revision)++},
                             {"debugLabel", snapshot.name},
                             {"payload", json{{"parametersChanged", true},
-                                              {"texturesChanged", false},
+                                              {"texturesChanged", true},
                                               {"materialModel", snapshot.materialModel},
                                               {"baseColor", snapshot.baseColor},
+                                              {"baseColorTextureUri", snapshot.baseColorTextureUri},
                                               {"emissiveColor", snapshot.emissiveColor},
+                                              {"normalTextureUri", snapshot.normalTextureUri},
+                                              {"emissiveTextureUri", snapshot.emissiveTextureUri},
                                               {"emissiveIntensity", snapshot.emissiveIntensity},
                                               {"roughness", snapshot.roughness},
                                               {"metalness", snapshot.metalness},
@@ -2079,6 +2292,8 @@ void AppendMaterialDelta(const std::string &documentId,
                                               {"coatRoughness", snapshot.coatRoughness},
                                               {"thinWalled", snapshot.thinWalled},
                                               {"translucency", snapshot.translucency},
+                                              {"uvScale", snapshot.uvScale},
+                                              {"uvOffset", snapshot.uvOffset},
                                               {"doubleSided", snapshot.doubleSided},
                                               {"alphaMode", snapshot.alphaMode}}}});
 }
