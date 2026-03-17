@@ -224,7 +224,17 @@ bool ParsePayload(const SceneDeltaKind kind, const json &payloadJson,
     payload.emissiveIntensity = payloadJson.value("emissiveIntensity", 1.0f);
     payload.roughness = payloadJson.value("roughness", 0.2f);
     payload.metalness = payloadJson.value("metalness", 0.0f);
+    payload.specularWeight = payloadJson.value("specularWeight", 1.0f);
+    payload.ior = payloadJson.value("ior", 1.5f);
     payload.transmissionWeight = payloadJson.value("transmissionWeight", 0.0f);
+    if (payloadJson.contains("transmissionColor")) {
+      FillFloatArray(payloadJson.at("transmissionColor"),
+                     &payload.transmissionColor);
+    }
+    payload.coatWeight = payloadJson.value("coatWeight", 0.0f);
+    payload.coatRoughness = payloadJson.value("coatRoughness", 0.1f);
+    payload.thinWalled = payloadJson.value("thinWalled", 0.0f);
+    payload.translucency = payloadJson.value("translucency", 0.0f);
     payload.doubleSided = payloadJson.value("doubleSided", false);
     payload.alphaMode = payloadJson.value("alphaMode", "OPAQUE");
     *outPayload = std::move(payload);

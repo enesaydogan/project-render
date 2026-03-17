@@ -65,8 +65,15 @@ std::filesystem::path Utf8PathFromString(const std::string &value) {
 struct NativeMeshPayloadHeader {
   uint32_t magic = 0;
   uint32_t version = 0;
+  uint32_t meshCount = 0;
+  uint32_t reserved = 0;
+};
+
+struct NativeMeshPayloadMeshHeader {
   uint32_t vertexCount = 0;
   uint32_t indexCount = 0;
+  int32_t materialSlot = 0;
+  uint32_t reserved = 0;
 };
 
 struct NativeMeshPayloadVertex {
@@ -90,42 +97,94 @@ bool LoadNativeMeshPayload(const std::string &path,
 
   NativeMeshPayloadHeader header;
   stream.read(reinterpret_cast<char *>(&header), sizeof(header));
-  if (!stream || header.magic != 0x48534D50 || header.version != 1) {
+  if (!stream || header.magic != 0x48534D50) {
     return false;
-  }
-
-  std::vector<NativeMeshPayloadVertex> sourceVertices(header.vertexCount);
-  std::vector<uint32_t> indices(header.indexCount);
-  if (!sourceVertices.empty()) {
-    stream.read(reinterpret_cast<char *>(sourceVertices.data()),
-                static_cast<std::streamsize>(sourceVertices.size() *
-                                             sizeof(sourceVertices[0])));
-  }
-  if (!indices.empty()) {
-    stream.read(reinterpret_cast<char *>(indices.data()),
-                static_cast<std::streamsize>(indices.size() * sizeof(indices[0])));
-  }
-  if (!stream) {
-    return false;
-  }
-
-  std::vector<Asset::Vertex> vertices(header.vertexCount);
-  for (size_t index = 0; index < vertices.size(); ++index) {
-    const NativeMeshPayloadVertex &source = sourceVertices[index];
-    Asset::Vertex vertex{};
-    std::copy(std::begin(source.position), std::end(source.position),
-              std::begin(vertex.pos));
-    std::copy(std::begin(source.normal), std::end(source.normal),
-              std::begin(vertex.normal));
-    std::copy(std::begin(source.tangent), std::end(source.tangent),
-              std::begin(vertex.tangent));
-    std::copy(std::begin(source.uv), std::end(source.uv), std::begin(vertex.uv));
-    vertices[index] = vertex;
   }
 
   outMeshes->clear();
-  outMeshes->push_back(Asset::LoadMeshFromMemory(vertices, indices));
-  return outMeshes->front().vertexCount > 0 && outMeshes->front().indexCount > 0;
+  if (header.version == 1) {
+    std::vector<NativeMeshPayloadVertex> sourceVertices(header.meshCount);
+    std::vector<uint32_t> indices(header.reserved);
+    if (!sourceVertices.empty()) {
+      stream.read(reinterpret_cast<char *>(sourceVertices.data()),
+                  static_cast<std::streamsize>(sourceVertices.size() *
+                                               sizeof(sourceVertices[0])));
+    }
+    if (!indices.empty()) {
+      stream.read(reinterpret_cast<char *>(indices.data()),
+                  static_cast<std::streamsize>(indices.size() * sizeof(indices[0])));
+    }
+    if (!stream) {
+      return false;
+    }
+
+    std::vector<Asset::Vertex> vertices(sourceVertices.size());
+    for (size_t index = 0; index < vertices.size(); ++index) {
+      const NativeMeshPayloadVertex &source = sourceVertices[index];
+      Asset::Vertex vertex{};
+      std::copy(std::begin(source.position), std::end(source.position),
+                std::begin(vertex.pos));
+      std::copy(std::begin(source.normal), std::end(source.normal),
+                std::begin(vertex.normal));
+      std::copy(std::begin(source.tangent), std::end(source.tangent),
+                std::begin(vertex.tangent));
+      std::copy(std::begin(source.uv), std::end(source.uv), std::begin(vertex.uv));
+      vertices[index] = vertex;
+    }
+
+    Asset::GpuMesh mesh = Asset::LoadMeshFromMemory(vertices, indices);
+    mesh.materialIndex = 0;
+    outMeshes->push_back(std::move(mesh));
+    return !outMeshes->empty() && outMeshes->front().vertexCount > 0 &&
+           outMeshes->front().indexCount > 0;
+  }
+
+  if (header.version != 2) {
+    return false;
+  }
+
+  for (uint32_t meshIndex = 0; meshIndex < header.meshCount; ++meshIndex) {
+    NativeMeshPayloadMeshHeader meshHeader;
+    stream.read(reinterpret_cast<char *>(&meshHeader), sizeof(meshHeader));
+    if (!stream) {
+      return false;
+    }
+
+    std::vector<NativeMeshPayloadVertex> sourceVertices(meshHeader.vertexCount);
+    std::vector<uint32_t> indices(meshHeader.indexCount);
+    if (!sourceVertices.empty()) {
+      stream.read(reinterpret_cast<char *>(sourceVertices.data()),
+                  static_cast<std::streamsize>(sourceVertices.size() *
+                                               sizeof(sourceVertices[0])));
+    }
+    if (!indices.empty()) {
+      stream.read(reinterpret_cast<char *>(indices.data()),
+                  static_cast<std::streamsize>(indices.size() * sizeof(indices[0])));
+    }
+    if (!stream) {
+      return false;
+    }
+
+    std::vector<Asset::Vertex> vertices(sourceVertices.size());
+    for (size_t vertexIndex = 0; vertexIndex < vertices.size(); ++vertexIndex) {
+      const NativeMeshPayloadVertex &source = sourceVertices[vertexIndex];
+      Asset::Vertex vertex{};
+      std::copy(std::begin(source.position), std::end(source.position),
+                std::begin(vertex.pos));
+      std::copy(std::begin(source.normal), std::end(source.normal),
+                std::begin(vertex.normal));
+      std::copy(std::begin(source.tangent), std::end(source.tangent),
+                std::begin(vertex.tangent));
+      std::copy(std::begin(source.uv), std::end(source.uv), std::begin(vertex.uv));
+      vertices[vertexIndex] = vertex;
+    }
+
+    Asset::GpuMesh mesh = Asset::LoadMeshFromMemory(vertices, indices);
+    mesh.materialIndex = (std::max)(0, meshHeader.materialSlot);
+    outMeshes->push_back(std::move(mesh));
+  }
+
+  return !outMeshes->empty();
 }
 
 void Normalize3(float value[3], const float fallback[3]) {
@@ -160,6 +219,12 @@ LightType ParseEngineLightType(std::string_view value) {
     return LightType::IES;
   }
   return LightType::Omni;
+}
+
+std::string BuildLiveLinkMaterialName(const std::string &nodeObjectId,
+                                      int materialSlot) {
+  return std::string("material:") + nodeObjectId + ":slot:" +
+         std::to_string((std::max)(0, materialSlot));
 }
 
 
@@ -242,6 +307,7 @@ bool LiveLinkSceneSync::ApplyDelta(const SceneDeltaBatch &batch,
 
 bool LiveLinkSceneSync::ApplySessionOpened(const SceneDeltaBatch &batch,
                                            const SceneDelta &delta) {
+  m_cameraControlDetached = false;
   const SessionOpenedPayload *payload = FindPayload<SessionOpenedPayload>(delta);
   if (payload && !payload->displayName.empty()) {
     fprintf(stderr, "LiveLink: session opened provider='%s' session='%s' document='%s'\n",
@@ -254,6 +320,7 @@ bool LiveLinkSceneSync::ApplySessionOpened(const SceneDeltaBatch &batch,
 bool LiveLinkSceneSync::ApplySessionClosed(const SceneDeltaBatch &batch,
                                            const SceneDelta &delta) {
   RemoveSessionContent(batch.sessionId);
+  m_cameraControlDetached = false;
   if (m_cachedExternalCamera.valid &&
       m_cachedExternalCamera.sessionId == batch.sessionId) {
     m_cachedExternalCamera = CachedCameraState{};
@@ -275,6 +342,7 @@ bool LiveLinkSceneSync::ApplyFullSceneSync(const SceneDeltaBatch &batch,
     Scene::SelectNode(kInvalidHandle);
     ClearAllBindings();
     m_cachedExternalCamera = CachedCameraState{};
+    m_cameraControlDetached = false;
     fprintf(stderr,
             "LiveLink: full scene sync reset provider='%s' session='%s'\n",
             batch.providerName.c_str(), batch.sessionId.c_str());
@@ -453,12 +521,23 @@ bool LiveLinkSceneSync::ApplyMeshPayloadChanged(const SceneDeltaBatch &batch,
   }
 
   if (extension == ".prmesh") {
-    Asset::Material defaultMaterial;
-    const std::string materialName = std::string("material:") + delta.target.objectId;
-    strncpy_s(defaultMaterial.name, materialName.c_str(), _TRUNCATE);
-    materials.push_back(defaultMaterial);
+    std::vector<int> materialSlots;
     for (Asset::GpuMesh &mesh : meshes) {
-      mesh.materialIndex = 0;
+      const int materialSlot = mesh.materialIndex;
+      auto materialIt = std::find(materialSlots.begin(), materialSlots.end(),
+                                  materialSlot);
+      if (materialIt == materialSlots.end()) {
+        Asset::Material material;
+        const std::string materialName =
+            BuildLiveLinkMaterialName(delta.target.objectId, materialSlot);
+        strncpy_s(material.name, materialName.c_str(), _TRUNCATE);
+        materials.push_back(material);
+        materialSlots.push_back(materialSlot);
+        mesh.materialIndex = static_cast<int>(materialSlots.size() - 1);
+      } else {
+        mesh.materialIndex =
+            static_cast<int>(std::distance(materialSlots.begin(), materialIt));
+      }
     }
   }
 
@@ -516,7 +595,16 @@ bool LiveLinkSceneSync::ApplyMaterialChanged(const SceneDeltaBatch &batch,
   material.emissiveIntensity = payload->emissiveIntensity;
   material.roughness = payload->roughness;
   material.metalness = payload->metalness;
+  material.specularWeight = payload->specularWeight;
+  material.ior = payload->ior;
   material.transmissionWeight = payload->transmissionWeight;
+  for (size_t i = 0; i < payload->transmissionColor.size(); ++i) {
+    material.transmissionColor[i] = payload->transmissionColor[i];
+  }
+  material.coatWeight = payload->coatWeight;
+  material.coatRoughness = payload->coatRoughness;
+  material.thinWalled = payload->thinWalled;
+  material.translucency = payload->translucency;
   material.doubleSided = payload->doubleSided;
   material.alphaMode = payload->alphaMode.empty() ? "OPAQUE" : payload->alphaMode;
   if (!payload->materialModel.empty()) {
@@ -649,7 +737,8 @@ bool LiveLinkSceneSync::ApplyCameraChanged(const SceneDeltaBatch &batch,
   m_cachedExternalCamera.payload = *payload;
 
   if (m_cameraControlDetached) {
-    m_cameraControlDetached = false;
+    cameraBinding.lastAppliedRevision = delta.revision;
+    return true;
   }
 
   ApplyCachedCameraState(m_cachedExternalCamera);
@@ -929,6 +1018,7 @@ void LiveLinkSceneSync::RemoveSessionContent(const std::string &sessionId) {
   if (m_cachedExternalCamera.valid && m_cachedExternalCamera.sessionId == sessionId) {
     m_cachedExternalCamera = CachedCameraState{};
   }
+  m_cameraControlDetached = false;
 }
 
 void LiveLinkSceneSync::ReindexSceneNodeBindingsAfterRemoval(size_t removedIndex) {
@@ -958,6 +1048,7 @@ void LiveLinkSceneSync::ReindexSceneLightBindingsAfterRemoval(size_t removedInde
 void LiveLinkSceneSync::ClearAllBindings() {
   m_bindings.clear();
   m_cachedExternalCamera = CachedCameraState{};
+  m_cameraControlDetached = false;
 }
 
 void LiveLinkSceneSync::AppendDiagnosticEntry(

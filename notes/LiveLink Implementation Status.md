@@ -25,11 +25,12 @@ Completed so far:
 - 3ds Max 2025 named-pipe provider bootstrap
 - 3ds Max 2025 incremental node, camera, material, light, and selection sync at 60fps
 - 3ds Max 2025 mesh payload export through optimized native binary (`.prmesh`) files
+- 3ds Max 2025 slot-aware multi-submaterial extraction with multi-submesh `.prmesh` payload preservation
 - Qt host-side live-link provider controls for connect, disconnect, and reconnect/resync
 
 Not implemented yet:
 
-- richer 3ds Max material graph extraction beyond the current single-material-per-node OpenPBR-style subset
+- broader proprietary 3ds Max shader-graph evaluation beyond the current slot-aware OpenPBR-style extraction
 - stronger geometry change detection and payload lifecycle management for exported Max meshes
 
 ---
@@ -546,7 +547,7 @@ Result:
 ### High-priority missing pieces
 
 - finer renderer invalidation classification
-- richer material graph and multi-submaterial extraction from 3ds Max
+- broader proprietary material-graph evaluation from 3ds Max beyond the current slot-aware multi-submaterial support
 
 ### Important technical gap
 
@@ -582,7 +583,7 @@ That means:
 
 - preserve stable identity across repeated live edits for every supported runtime object type
 - update only the minimum renderer state for each kind of scene change
-- fully implement richer multi-material and material-graph LiveLink extraction from 3ds Max
+- fully implement broader proprietary 3ds Max shader-graph evaluation beyond the current slot-aware multi-submaterial path
 
 ---
 
@@ -590,11 +591,11 @@ That means:
 
 Best next implementation phase:
 
-- richer material translation and payload lifecycle management
+- proprietary shader-graph translation and payload lifecycle management
 
 Reason:
 
-- The adapter now streams the core node, mesh, camera, light, and material deltas in real time. The biggest remaining quality gap is deeper material fidelity and stronger mesh payload lifecycle tracking.
+- The adapter now streams slot-aware node, mesh, camera, light, and material deltas in real time. The biggest remaining quality gap is deeper proprietary shader-graph fidelity and stronger mesh payload lifecycle tracking.
 
 ---
 
