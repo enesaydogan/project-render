@@ -34,6 +34,172 @@ using json = nlohmann::json;
 
 namespace {
 
+#if defined(PROJECT_RENDER_HAS_VRAY_SDK)
+#define PROJECT_RENDER_VRAYMTL_CLASS_ID Class_ID(0x37bf3f2f, 0x7034695c)
+
+namespace ProjectRenderVrayMtlParameters {
+enum {
+  vrayMtl_old_id,
+  vrayMtl_basic_id,
+  vrayMtl_BRDF_id,
+  vrayMtl_options_id,
+  vrayMtl_maps_id,
+  vrayMtl_reflIMap_id,
+  vrayMtl_refrIMap_id,
+};
+
+enum {
+  pb_spin,
+  pb_diffuse_color,
+  pb_reflect_color,
+  pb_reflect_glossiness,
+  pb_reflect_subdivs,
+  pb_refract_color,
+  pb_refract_glossiness,
+  pb_refract_subdivs,
+  pb_reflect_fresnel,
+  pb_refract_ior,
+  pb_brdf_type,
+  pb_reflect_trace,
+  pb_refract_trace,
+  pb_doubleSided,
+  pb_reflectOnBack,
+  pb_diffuse_trace,
+  pb_diffuse_subdivs,
+  pb_useIrradMap,
+  pb_diffuseGlossy,
+  pb_traceCaustics,
+  pb_reflect_maxDepth,
+  pb_refract_maxDepth,
+  pb_cutoffThresh,
+  pb_refract_fogColor,
+  pb_refract_fogMult,
+  pb_refract_translucent,
+  pb_refract_thickness,
+  pb_refract_volSubdivs,
+  pb_refract_lightMult_old,
+  pb_refract_scatterCoeff,
+  pb_refract_scatterDir,
+  pb_refract_lightMult,
+  pb_fog_affectShadows,
+  pb_useInterpolation,
+  pb_interpSamples,
+  pb_colorThreshold,
+  pb_preservationMode,
+  pb_translucent_color,
+  pb_translucent_map,
+  pb_reflect_minRate,
+  pb_reflect_maxRate,
+  pb_reflect_clrThresh,
+  pb_reflect_nrmThresh,
+  pb_reflect_interpSamples,
+  pb_reflect_preset,
+  pb_refract_minRate,
+  pb_refract_maxRate,
+  pb_refract_clrThresh,
+  pb_refract_nrmThresh,
+  pb_refract_interpSamples,
+  pb_refract_preset,
+  pb_reflect_exitColor,
+  pb_refract_exitColor,
+  pb_refract_exitColor_on,
+  pb_brdf_anisotropy,
+  pb_brdf_anisotropy_channel,
+  pb_reflect_useInterpolation,
+  pb_refract_useInterpolation,
+  pb_brdf_anisotropy_rotation,
+  pb_brdf_anisotropy_derivation,
+  pb_brdf_anisotropy_axis,
+  pb_refract_affectAlpha,
+  pb_hilight_glossiness,
+  pb_reflect_ior,
+  pb_reflect_glossiness_lock,
+  pb_reflect_ior_lock,
+  pb_refract_fogBias,
+  pb_environment_priority,
+  pb_diffuse_roughness,
+  pb_brdf_soften,
+  pb_clampColors,
+  pb_reflect_dimDistance,
+  pb_reflect_dimDistanceFallOff,
+  pb_reflect_dimDistanceOn,
+  pb_refract_dispersion,
+  pb_refract_dispersionOn,
+  pb_refract_fogUnitScaleOn,
+  pb_brdf_fixDarkEdges,
+  pb_effect_id,
+  pb_override_effect_id,
+  pb_reflect_affectAlpha,
+  pb_selfIllumination_color,
+  pb_selfIllumination_gi,
+  pb_selfIllumination_mult,
+  pb_opacity_mode,
+  pb_reflect_gtr_gamma_not_used,
+  pb_brdf_ggx_tail_falloff,
+  pb_brdf_ggx_tail_oldFalloff,
+  pb_glossyFresnel,
+  pb_brdf_useRoughness,
+  pb_compensate_cam_exposure,
+  pb_reflect_metalness,
+  pb_diffuse_roughness_model,
+  pb_mtl_preset,
+  pb_mtl_sheen_color,
+  pb_mtl_sheen_glossiness,
+  pb_mtl_coat_amount,
+  pb_mtl_coat_color,
+  pb_mtl_coat_glossiness,
+  pb_mtl_coat_ior,
+  pb_mtl_coat_bump_lock,
+  pb_mtl_bump_on,
+  pb_mtl_bump_amount,
+  pb_mtl_coat_bump_on,
+  pb_mtl_coat_bump_amount,
+  pb_refract_translucency_amount,
+  pb_refract_fogDepth,
+  pb_refract_thinWalled,
+  pb_brdf_newGTRAnisotropy,
+  pb_diffuse_color_shortmap,
+  pb_diffuse_roughness_shortmap,
+  pb_bump_shortmap,
+  pb_reflect_color_shortmap,
+  pb_reflect_glossiness_shortmap,
+  pb_reflect_ior_shortmap,
+  pb_reflect_metalness_shortmap,
+  pb_refract_color_shortmap,
+  pb_refract_glossiness_shortmap,
+  pb_refract_ior_shortmap,
+  pb_refract_fogColor_shortmap,
+  pb_translucent_color_shortmap,
+  pb_selfIllumination_color_shortmap,
+  pb_mtl_coat_amount_shortmap,
+  pb_mtl_coat_glossiness_shortmap,
+  pb_mtl_coat_ior_shortmap,
+  pb_mtl_coat_color_shortmap,
+  pb_mtl_coat_bump_shortmap,
+  pb_mtl_sheen_color_shortmap,
+  pb_mtl_sheen_glossiness_shortmap,
+  pb_brdf_ggx_tail_falloff_shortmap,
+  pb_brdf_anisotropy_shortmap,
+  pb_brdf_anisotropy_rotation_shortmap,
+  pb_cosmos_asset_id,
+  pb_gtrEnergyCompensation,
+  pb_translucency_surfaceLighting,
+  pb_refract_fogDepth_shortmap,
+  pb_translucency_amount_shortmap,
+  pb_thinFilm_thickness_min,
+  pb_thinFilm_ior,
+  pb_thinFilm_thickness_shortmap,
+  pb_thinFilm_ior_shortmap,
+  pb_thinFilm_on,
+  pb_thinFilm_thickness_max,
+  pb_cosmos_asset_revision,
+  pb_openpbr_mode,
+  pb_mtl_coat_darkening,
+  pb_reflect_weight,
+};
+} // namespace ProjectRenderVrayMtlParameters
+#endif
+
 HINSTANCE g_instance = nullptr;
 MaxLiveLinkPipeClient g_pipeClient;
 std::atomic<bool> g_exportInProgress{false};
@@ -141,6 +307,11 @@ bool IsVrayLightClassName(const std::string &classNameLower) {
          classNameLower.find("light") != std::string::npos;
 }
 
+bool IsVrayMaterialClassName(const std::string &classNameLower) {
+  return classNameLower.find("vray") != std::string::npos &&
+         classNameLower.find("mtl") != std::string::npos;
+}
+
 std::string GetObjectClassNameLower(Animatable *animatable) {
   return ToLowerAscii(GetAnimatableClassNameUtf8(animatable));
 }
@@ -181,6 +352,10 @@ std::string BuildLightClassNameHints(Object *evaluatedObject, Object *baseObject
 }
 
 struct LightSnapshot;
+struct MaterialSnapshot;
+
+std::array<float, 4> ColorToArray4(const Color &color, float alpha);
+std::array<float, 3> ColorToArray3(const Color &color);
 
 float ConvertMaxDistanceToEngine(float value);
 
@@ -348,6 +523,54 @@ int ResolveVrayLightTypeFlags(Object *evaluatedObject, Object *sourceBaseObject)
     return lightTypeFlags;
   }
   return findWrappedFlags(sourceBaseObject);
+}
+
+constexpr int kVrayMtlParamBlockIds[] = {
+  ProjectRenderVrayMtlParameters::vrayMtl_old_id,
+  ProjectRenderVrayMtlParameters::vrayMtl_basic_id,
+  ProjectRenderVrayMtlParameters::vrayMtl_BRDF_id,
+  ProjectRenderVrayMtlParameters::vrayMtl_options_id,
+  ProjectRenderVrayMtlParameters::vrayMtl_maps_id,
+  ProjectRenderVrayMtlParameters::vrayMtl_reflIMap_id,
+  ProjectRenderVrayMtlParameters::vrayMtl_refrIMap_id,
+};
+
+bool IsVrayMaterial(Mtl *material) {
+  if (!material) {
+    return false;
+  }
+  if (material->ClassID() == PROJECT_RENDER_VRAYMTL_CLASS_ID) {
+    return true;
+  }
+  return IsVrayMaterialClassName(GetObjectClassNameLower(material));
+}
+
+template <typename TValue>
+bool TryGetVrayMtlValue(Mtl *material, ParamID paramId, TimeValue time,
+                        TValue *outValue) {
+  if (!material || !outValue) {
+    return false;
+  }
+
+  for (int blockId : kVrayMtlParamBlockIds) {
+    IParamBlock2 *paramBlock = material->GetParamBlockByID(blockId);
+    if (!paramBlock) {
+      continue;
+    }
+
+    Interval valid = FOREVER;
+    TValue value{};
+    if (paramBlock->GetValue(paramId, time, value, valid)) {
+      *outValue = value;
+      return true;
+    }
+  }
+
+  return false;
+}
+
+float MaxColorComponent(const Color &color) {
+  return (std::max)({color.r, color.g, color.b, 0.0f});
 }
 #endif
 
@@ -872,6 +1095,131 @@ float ConvertMaxDistanceToEngine(float value) {
 }
 
 #if defined(PROJECT_RENDER_HAS_VRAY_SDK)
+void ApplyVrayMaterialParameters(Interface *ip, Mtl *material,
+                                 MaterialSnapshot *snapshot) {
+  if (!ip || !material || !snapshot) {
+    return;
+  }
+
+  const TimeValue time = ip->GetTime();
+  snapshot->materialModel = "VRayMtl";
+
+  Color diffuseColor(1.0f, 1.0f, 1.0f);
+  if (TryGetVrayMtlValue(material, ProjectRenderVrayMtlParameters::pb_diffuse_color, time,
+                         &diffuseColor)) {
+    snapshot->baseColor[0] = diffuseColor.r;
+    snapshot->baseColor[1] = diffuseColor.g;
+    snapshot->baseColor[2] = diffuseColor.b;
+  }
+
+  float reflectGlossiness = 0.8f;
+  if (TryGetVrayMtlValue(material,
+                         ProjectRenderVrayMtlParameters::pb_reflect_glossiness, time,
+                         &reflectGlossiness)) {
+    int useRoughness = 0;
+    TryGetVrayMtlValue(material, ProjectRenderVrayMtlParameters::pb_brdf_useRoughness, time,
+                       &useRoughness);
+    snapshot->roughness =
+        (std::clamp)(useRoughness != 0 ? reflectGlossiness
+                                       : (1.0f - reflectGlossiness),
+                     0.04f, 1.0f);
+  }
+
+  float reflectMetalness = 0.0f;
+  if (TryGetVrayMtlValue(material, ProjectRenderVrayMtlParameters::pb_reflect_metalness,
+                         time, &reflectMetalness)) {
+    snapshot->metalness = (std::clamp)(reflectMetalness, 0.0f, 1.0f);
+  }
+
+  Color reflectColor(1.0f, 1.0f, 1.0f);
+  const bool hasReflectColor =
+      TryGetVrayMtlValue(material, ProjectRenderVrayMtlParameters::pb_reflect_color, time,
+                         &reflectColor);
+  float reflectWeight = 1.0f;
+  const bool hasReflectWeight =
+      TryGetVrayMtlValue(material, ProjectRenderVrayMtlParameters::pb_reflect_weight, time,
+                         &reflectWeight);
+  if (hasReflectColor || hasReflectWeight) {
+    const float colorWeight =
+        hasReflectColor ? MaxColorComponent(reflectColor) : 1.0f;
+    const float layerWeight = hasReflectWeight ? reflectWeight : 1.0f;
+    snapshot->specularWeight =
+        (std::clamp)(colorWeight * layerWeight, 0.0f, 1.0f);
+  }
+
+  Color refractColor(0.0f, 0.0f, 0.0f);
+  if (TryGetVrayMtlValue(material, ProjectRenderVrayMtlParameters::pb_refract_color, time,
+                         &refractColor)) {
+    snapshot->transmissionColor = ColorToArray3(refractColor);
+    snapshot->transmissionWeight =
+        (std::clamp)(MaxColorComponent(refractColor), 0.0f, 1.0f);
+    snapshot->baseColor[3] = 1.0f - snapshot->transmissionWeight;
+    snapshot->alphaMode =
+        snapshot->transmissionWeight > 1.0e-3f ? "BLEND" : "OPAQUE";
+  }
+
+  float refractIor = snapshot->ior;
+  if (TryGetVrayMtlValue(material, ProjectRenderVrayMtlParameters::pb_refract_ior, time,
+                         &refractIor)) {
+    snapshot->ior = (std::max)(1.0f, refractIor);
+  }
+
+  Color selfIllumColor(0.0f, 0.0f, 0.0f);
+  if (TryGetVrayMtlValue(material,
+                         ProjectRenderVrayMtlParameters::pb_selfIllumination_color, time,
+                         &selfIllumColor)) {
+    snapshot->emissiveColor = ColorToArray4(selfIllumColor, 1.0f);
+  }
+
+  float selfIllumMultiplier = 0.0f;
+  if (TryGetVrayMtlValue(material,
+                         ProjectRenderVrayMtlParameters::pb_selfIllumination_mult, time,
+                         &selfIllumMultiplier)) {
+    snapshot->emissiveIntensity = (std::max)(0.0f, selfIllumMultiplier);
+  }
+
+  float coatAmount = 0.0f;
+  if (TryGetVrayMtlValue(material, ProjectRenderVrayMtlParameters::pb_mtl_coat_amount, time,
+                         &coatAmount)) {
+    snapshot->coatWeight = (std::clamp)(coatAmount, 0.0f, 1.0f);
+  }
+
+  float coatGlossiness = 1.0f;
+  if (TryGetVrayMtlValue(material,
+                         ProjectRenderVrayMtlParameters::pb_mtl_coat_glossiness, time,
+                         &coatGlossiness)) {
+    snapshot->coatRoughness =
+        (std::clamp)(1.0f - coatGlossiness, 0.0f, 1.0f);
+  }
+
+  int thinWalled = 0;
+  if (TryGetVrayMtlValue(material,
+                         ProjectRenderVrayMtlParameters::pb_refract_thinWalled, time,
+                         &thinWalled)) {
+    snapshot->thinWalled = thinWalled != 0 ? 1.0f : 0.0f;
+  }
+
+  float translucencyAmount = 0.0f;
+  if (TryGetVrayMtlValue(material,
+                         ProjectRenderVrayMtlParameters::pb_refract_translucency_amount,
+                         time, &translucencyAmount)) {
+    snapshot->translucency = (std::clamp)(translucencyAmount, 0.0f, 1.0f);
+  } else {
+    int translucent = 0;
+    if (TryGetVrayMtlValue(material,
+                           ProjectRenderVrayMtlParameters::pb_refract_translucent, time,
+                           &translucent)) {
+      snapshot->translucency = translucent != 0 ? 1.0f : 0.0f;
+    }
+  }
+
+  int doubleSided = 0;
+  if (TryGetVrayMtlValue(material, ProjectRenderVrayMtlParameters::pb_doubleSided, time,
+                         &doubleSided)) {
+    snapshot->doubleSided = doubleSided != 0;
+  }
+}
+
 void ApplyVrayLightParameters(Interface *ip, IParamBlock2 *paramBlock,
                               const std::string &classNameHintsLower,
                               LightSnapshot *snapshot) {
@@ -943,7 +1291,15 @@ void ApplyVrayLightParameters(Interface *ip, IParamBlock2 *paramBlock,
 #endif
 
 std::string ResolveMaterialModelName(Mtl *material) {
-  return material ? std::string("3dsMaxMaterial") : std::string("OpenPBR");
+  if (!material) {
+    return "OpenPBR";
+  }
+#if defined(PROJECT_RENDER_HAS_VRAY_SDK)
+  if (IsVrayMaterial(material)) {
+    return "VRayMtl";
+  }
+#endif
+  return "3dsMaxMaterial";
 }
 
 Mtl *ResolveLeafMaterial(Mtl *material) {
@@ -1031,9 +1387,9 @@ Mtl *ResolveMaterialForSlot(Mtl *rootMaterial, int materialSlot) {
   return ResolveLeafMaterial(rootMaterial);
 }
 
-bool CaptureMaterialSnapshot(INode *node, int materialSlot, Mtl *material,
+bool CaptureMaterialSnapshot(Interface *ip, INode *node, int materialSlot, Mtl *material,
                              MaterialSnapshot *outSnapshot) {
-  if (!node || !material || !outSnapshot) {
+  if (!ip || !node || !material || !outSnapshot) {
     return false;
   }
 
@@ -1077,6 +1433,11 @@ bool CaptureMaterialSnapshot(INode *node, int materialSlot, Mtl *material,
                                    : std::array<float, 3>{1.0f, 1.0f, 1.0f};
   snapshot.doubleSided = false;
   snapshot.alphaMode = transparency > 1.0e-3f ? "BLEND" : "OPAQUE";
+#if defined(PROJECT_RENDER_HAS_VRAY_SDK)
+  if (IsVrayMaterial(material)) {
+    ApplyVrayMaterialParameters(ip, material, &snapshot);
+  }
+#endif
   *outSnapshot = snapshot;
   return true;
 }
@@ -1104,7 +1465,7 @@ void GatherMaterialSnapshots(
     const std::vector<int> usedSlots = GatherUsedMaterialSlots(ip, node, rootMaterial);
     for (int materialSlot : usedSlots) {
       MaterialSnapshot materialSnapshot;
-      if (CaptureMaterialSnapshot(node, materialSlot,
+      if (CaptureMaterialSnapshot(ip, node, materialSlot,
                                   ResolveMaterialForSlot(rootMaterial, materialSlot),
                                   &materialSnapshot)) {
         outState->insert_or_assign(materialSnapshot.objectId, materialSnapshot);
