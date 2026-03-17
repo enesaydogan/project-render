@@ -7,6 +7,7 @@
 #include "../scene.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -60,6 +61,16 @@ std::filesystem::path Utf8PathFromString(const std::string &value) {
     wideBytes.push_back(static_cast<char8_t>(ch));
   }
   return std::filesystem::path(wideBytes);
+}
+
+bool IsHdrTextureUri(const std::string &value) {
+  const std::filesystem::path path = Utf8PathFromString(value);
+  std::string extension = path.extension().string();
+  std::transform(extension.begin(), extension.end(), extension.begin(),
+                 [](unsigned char ch) {
+                   return static_cast<char>(std::tolower(ch));
+                 });
+  return extension == ".hdr" || extension == ".exr";
 }
 
 struct NativeMeshPayloadHeader {
@@ -616,6 +627,34 @@ bool LiveLinkSceneSync::ApplyMaterialChanged(const SceneDeltaBatch &batch,
     material.diffuseColor[i] = payload->baseColor[i];
     material.emissiveColor[i] = payload->emissiveColor[i];
   }
+
+  auto resolveTextureIndex = [this](const std::string &textureUri) {
+    if (textureUri.empty()) {
+      return -1;
+    }
+
+    auto cached = m_textureIndicesByUri.find(textureUri);
+    if (cached != m_textureIndicesByUri.end()) {
+      return cached->second;
+    }
+
+    const std::filesystem::path texturePath = Utf8PathFromString(textureUri);
+    std::error_code error;
+    if (texturePath.empty() || !std::filesystem::exists(texturePath, error)) {
+      return -1;
+    }
+
+    const int textureIndex =
+        Scene::AddTextureFromFile(textureUri, IsHdrTextureUri(textureUri));
+    if (textureIndex >= 0) {
+      m_textureIndicesByUri.emplace(textureUri, textureIndex);
+    }
+    return textureIndex;
+  };
+
+  material.diffuseTexture = resolveTextureIndex(payload->baseColorTextureUri);
+  material.normalTexture = resolveTextureIndex(payload->normalTextureUri);
+  material.emissiveTexture = resolveTextureIndex(payload->emissiveTextureUri);
   material.emissiveIntensity = payload->emissiveIntensity;
   material.roughness = payload->roughness;
   material.metalness = payload->metalness;
@@ -629,6 +668,10 @@ bool LiveLinkSceneSync::ApplyMaterialChanged(const SceneDeltaBatch &batch,
   material.coatRoughness = payload->coatRoughness;
   material.thinWalled = payload->thinWalled;
   material.translucency = payload->translucency;
+  material.uvScale[0] = fabsf(payload->uvScale[0]) > 1.0e-6f ? payload->uvScale[0] : 1.0f;
+  material.uvScale[1] = fabsf(payload->uvScale[1]) > 1.0e-6f ? payload->uvScale[1] : 1.0f;
+  material.uvOffset[0] = payload->uvOffset[0];
+  material.uvOffset[1] = payload->uvOffset[1];
   material.doubleSided = payload->doubleSided;
   material.alphaMode = payload->alphaMode.empty() ? "OPAQUE" : payload->alphaMode;
   if (!payload->materialModel.empty()) {
@@ -1083,6 +1126,7 @@ void LiveLinkSceneSync::ReindexSceneLightBindingsAfterRemoval(size_t removedInde
 
 void LiveLinkSceneSync::ClearAllBindings() {
   m_bindings.clear();
+  m_textureIndicesByUri.clear();
   m_cachedExternalCamera = CachedCameraState{};
   m_cameraControlDetached = false;
 }

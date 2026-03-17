@@ -147,6 +147,9 @@ struct MaterialChangedPayload {
   bool texturesChanged = false;
   std::string materialModel;
   std::array<float, 4> baseColor = {1.0f, 1.0f, 1.0f, 1.0f};
+  std::string baseColorTextureUri;
+  std::string normalTextureUri;
+  std::string emissiveTextureUri;
   std::array<float, 4> emissiveColor = {0.0f, 0.0f, 0.0f, 1.0f};
   float emissiveIntensity = 1.0f;
   float roughness = 0.2f;
@@ -159,6 +162,8 @@ struct MaterialChangedPayload {
   float coatRoughness = 0.1f;
   float thinWalled = 0.0f;
   float translucency = 0.0f;
+  std::array<float, 2> uvScale = {1.0f, 1.0f};
+  std::array<float, 2> uvOffset = {0.0f, 0.0f};
   bool doubleSided = false;
   std::string alphaMode = "OPAQUE";
 };
