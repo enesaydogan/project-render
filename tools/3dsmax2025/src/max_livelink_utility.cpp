@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -22,6 +23,12 @@
 
 #include <MeshNormalSpec.h>
 #include <triobj.h>
+
+#if defined(PROJECT_RENDER_HAS_VRAY_SDK)
+#include <pb2enum.h>
+#include <vraygeom.h>
+#include <vrayplugins.h>
+#endif
 
 using json = nlohmann::json;
 
@@ -102,6 +109,312 @@ std::string ToUtf8(const MCHAR *text) {
 #endif
 }
 
+std::string ToLowerAscii(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char ch) {
+                   return static_cast<char>(std::tolower(ch));
+                 });
+  return value;
+}
+
+std::string GetAnimatableClassNameUtf8(Animatable *animatable) {
+  if (!animatable) {
+    return {};
+  }
+  MSTR className;
+  animatable->GetClassName(className, FALSE);
+  return ToUtf8(className.data());
+}
+
+bool ContainsAnyToken(const std::string &text,
+                      std::initializer_list<const char *> tokens) {
+  for (const char *token : tokens) {
+    if (token && text.find(token) != std::string::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool IsVrayLightClassName(const std::string &classNameLower) {
+  return classNameLower.find("vray") != std::string::npos &&
+         classNameLower.find("light") != std::string::npos;
+}
+
+std::string GetObjectClassNameLower(Animatable *animatable) {
+  return ToLowerAscii(GetAnimatableClassNameUtf8(animatable));
+}
+
+void AppendClassNameHint(Animatable *animatable,
+                         std::string *classNameHintsLower) {
+  if (!animatable || !classNameHintsLower) {
+    return;
+  }
+  const std::string classNameLower = GetObjectClassNameLower(animatable);
+  if (classNameLower.empty() ||
+      classNameHintsLower->find(classNameLower) != std::string::npos) {
+    return;
+  }
+  if (!classNameHintsLower->empty()) {
+    classNameHintsLower->push_back(' ');
+  }
+  classNameHintsLower->append(classNameLower);
+}
+
+std::string BuildLightClassNameHints(Object *evaluatedObject, Object *baseObject) {
+  std::string classNameHintsLower;
+  AppendClassNameHint(evaluatedObject, &classNameHintsLower);
+  AppendClassNameHint(baseObject, &classNameHintsLower);
+
+  auto appendWrappedLight = [&classNameHintsLower](Object *object) {
+    if (!object || object->NumRefs() <= 0) {
+      return;
+    }
+    RefTargetHandle wrappedHandle = object->GetReference(0);
+    AppendClassNameHint(dynamic_cast<Animatable *>(wrappedHandle),
+                        &classNameHintsLower);
+  };
+
+  appendWrappedLight(evaluatedObject);
+  appendWrappedLight(baseObject);
+  return classNameHintsLower;
+}
+
+struct LightSnapshot;
+
+float ConvertMaxDistanceToEngine(float value);
+
+#if defined(PROJECT_RENDER_HAS_VRAY_SDK)
+IParamBlock2 *GetVrayLightParamBlock(Object *object) {
+  if (!object) {
+    return nullptr;
+  }
+  return object->GetParamBlockByID(VRayLights::vrayLight_params);
+}
+
+IParamBlock2 *FindVrayLightParamBlock(Object *evaluatedObject, Object *baseObject) {
+  if (IParamBlock2 *paramBlock = GetVrayLightParamBlock(evaluatedObject)) {
+    return paramBlock;
+  }
+  if (IParamBlock2 *paramBlock = GetVrayLightParamBlock(baseObject)) {
+    return paramBlock;
+  }
+
+  auto findWrappedParamBlock = [](Object *object) -> IParamBlock2 * {
+    if (!object || object->NumRefs() <= 0) {
+      return nullptr;
+    }
+    RefTargetHandle wrappedHandle = object->GetReference(0);
+    Object *wrappedObject = dynamic_cast<Object *>(wrappedHandle);
+    return GetVrayLightParamBlock(wrappedObject);
+  };
+
+  if (IParamBlock2 *paramBlock = findWrappedParamBlock(evaluatedObject)) {
+    return paramBlock;
+  }
+  return findWrappedParamBlock(baseObject);
+}
+
+bool TryGetVrayInt(IParamBlock2 *paramBlock, ParamID paramId, TimeValue time,
+                   int *outValue) {
+  if (!paramBlock || !outValue) {
+    return false;
+  }
+  Interval valid = FOREVER;
+  int value = 0;
+  if (!paramBlock->GetValue(paramId, time, value, valid)) {
+    return false;
+  }
+  *outValue = value;
+  return true;
+}
+
+std::string ResolveEngineLightTypeFromVrayParam(int vrayLightTypeParam) {
+  switch (vrayLightTypeParam) {
+  case 0:
+    return "AreaRect";
+  case 2:
+    return "Omni";
+  case 4:
+    return "AreaDisk";
+  default:
+    return {};
+  }
+}
+
+bool TryGetVrayFloat(IParamBlock2 *paramBlock, ParamID paramId, TimeValue time,
+                     float *outValue) {
+  if (!paramBlock || !outValue) {
+    return false;
+  }
+  Interval valid = FOREVER;
+  float value = 0.0f;
+  if (!paramBlock->GetValue(paramId, time, value, valid)) {
+    return false;
+  }
+  *outValue = value;
+  return true;
+}
+
+bool TryGetVrayColor(IParamBlock2 *paramBlock, ParamID paramId, TimeValue time,
+                     Color *outValue) {
+  if (!paramBlock || !outValue) {
+    return false;
+  }
+  Interval valid = FOREVER;
+  Color value(1.0f, 1.0f, 1.0f);
+  if (!paramBlock->GetValue(paramId, time, value, valid)) {
+    return false;
+  }
+  *outValue = value;
+  return true;
+}
+
+float GetPreferredVraySize(IParamBlock2 *paramBlock, TimeValue time,
+                           ParamID primaryParamId, ParamID fallbackParamId) {
+  float value = 0.0f;
+  if (TryGetVrayFloat(paramBlock, primaryParamId, time, &value) && value > 0.0f) {
+    return value;
+  }
+  if (TryGetVrayFloat(paramBlock, fallbackParamId, time, &value) && value > 0.0f) {
+    return value;
+  }
+  return 0.0f;
+}
+
+void ApplyVrayLightParameters(Interface *ip, IParamBlock2 *paramBlock,
+                              const std::string &classNameHintsLower,
+                              LightSnapshot *snapshot);
+#endif
+
+bool IsVrayLightObject(Object *object) {
+#if defined(PROJECT_RENDER_HAS_VRAY_SDK)
+  if (!object) {
+    return false;
+  }
+  if (object->ClassID() == VRAYLIGHT_CLASS_ID) {
+    return true;
+  }
+  if (object->GetInterface(VRENDERLIGHT_INTERFACE) != nullptr) {
+    return true;
+  }
+  if (object->SuperClassID() == LIGHT_CLASS_ID && object->NumRefs() > 0) {
+    RefTargetHandle wrappedObject = object->GetReference(0);
+    Object *wrappedLight = dynamic_cast<Object *>(wrappedObject);
+    if (wrappedLight &&
+        (wrappedLight->ClassID() == VRAYLIGHT_CLASS_ID ||
+         wrappedLight->GetInterface(VRENDERLIGHT_INTERFACE) != nullptr)) {
+      return true;
+    }
+  }
+#else
+  (void)object;
+#endif
+  return false;
+}
+
+#if defined(PROJECT_RENDER_HAS_VRAY_SDK)
+int GetVrayLightTypeFlagsForObject(Object *object) {
+  if (!object) {
+    return 0;
+  }
+  VUtils::LightInterface *lightInterface =
+      static_cast<VUtils::LightInterface *>(object->GetInterface(EXT_LIGHT));
+  return lightInterface ? lightInterface->getLightType() : 0;
+}
+
+int ResolveVrayLightTypeFlags(Object *evaluatedObject, Object *sourceBaseObject) {
+  int lightTypeFlags = GetVrayLightTypeFlagsForObject(evaluatedObject);
+  if (lightTypeFlags != 0) {
+    return lightTypeFlags;
+  }
+
+  lightTypeFlags = GetVrayLightTypeFlagsForObject(sourceBaseObject);
+  if (lightTypeFlags != 0) {
+    return lightTypeFlags;
+  }
+
+  auto findWrappedFlags = [](Object *object) {
+    if (!object || object->NumRefs() <= 0) {
+      return 0;
+    }
+    RefTargetHandle wrappedHandle = object->GetReference(0);
+    Object *wrappedObject = dynamic_cast<Object *>(wrappedHandle);
+    return GetVrayLightTypeFlagsForObject(wrappedObject);
+  };
+
+  lightTypeFlags = findWrappedFlags(evaluatedObject);
+  if (lightTypeFlags != 0) {
+    return lightTypeFlags;
+  }
+  return findWrappedFlags(sourceBaseObject);
+}
+#endif
+
+std::string ResolveEngineLightType(const LightState &lightState,
+                                   const std::string &classNameLower,
+                                   bool isVrayLight,
+                                   int vrayLightTypeFlags = 0,
+                                   int vrayLightTypeParam = -1) {
+#if defined(PROJECT_RENDER_HAS_VRAY_SDK)
+  if (isVrayLight) {
+    const std::string lightTypeFromParam =
+        ResolveEngineLightTypeFromVrayParam(vrayLightTypeParam);
+    if (!lightTypeFromParam.empty()) {
+      return lightTypeFromParam;
+    }
+  }
+  if (isVrayLight && (vrayLightTypeFlags & LT_PLANE) != 0) {
+    if (ContainsAnyToken(classNameLower, {"disk", "disc"})) {
+      return "AreaDisk";
+    }
+    return "AreaRect";
+  }
+  if (isVrayLight && (vrayLightTypeFlags & LT_INFINITE) != 0) {
+    if (classNameLower.find("dome") != std::string::npos) {
+      return "Omni";
+    }
+    return "Directional";
+  }
+#else
+  (void)vrayLightTypeFlags;
+  (void)vrayLightTypeParam;
+#endif
+
+  if (isVrayLight && classNameLower.find("sun") != std::string::npos) {
+    return "Directional";
+  }
+  if (isVrayLight && classNameLower.find("ies") != std::string::npos) {
+    return "IES";
+  }
+  if (isVrayLight && ContainsAnyToken(classNameLower, {"spot"})) {
+    return "Spot";
+  }
+  if (isVrayLight &&
+      ContainsAnyToken(classNameLower,
+                       {"rect", "rectangle", "plane", "panel"})) {
+    return "AreaRect";
+  }
+  if (isVrayLight && ContainsAnyToken(classNameLower, {"disk", "disc"})) {
+    return "AreaDisk";
+  }
+  if (isVrayLight &&
+      ContainsAnyToken(classNameLower, {"sphere", "mesh", "dome", "omni"})) {
+    return "Omni";
+  }
+
+  switch (lightState.type) {
+  case DIRECT_LGT:
+    return "Directional";
+  case SPOT_LGT:
+    return "Spot";
+  case OMNI_LGT:
+    return "Omni";
+  default:
+    return "Omni";
+  }
+}
+
 std::string MakeDocumentId(Interface *ip) {
   const std::string currentFile = ip ? ToUtf8(ip->GetCurFileName()) : std::string();
   return currentFile.empty() ? std::string("untitled.max") : currentFile;
@@ -134,6 +447,13 @@ std::string MakeLightObjectId(INode *node) {
   }
   return "light:" +
          std::to_string(static_cast<unsigned long long>(node->GetHandle()));
+}
+
+Object *GetNodeBaseObject(INode *node) {
+  if (!node || !node->GetObjectRef()) {
+    return nullptr;
+  }
+  return node->GetObjectRef()->FindBaseObject();
 }
 
 std::vector<std::string> GatherSelectedObjectIds(Interface *ip) {
@@ -547,6 +867,81 @@ std::array<float, 3> ColorToArray3(const Color &color) {
   return {color.r, color.g, color.b};
 }
 
+float ConvertMaxDistanceToEngine(float value) {
+  return (std::max)(0.0f, value) * GetMaxUnitsToMetersScale();
+}
+
+#if defined(PROJECT_RENDER_HAS_VRAY_SDK)
+void ApplyVrayLightParameters(Interface *ip, IParamBlock2 *paramBlock,
+                              const std::string &classNameHintsLower,
+                              LightSnapshot *snapshot) {
+  if (!ip || !paramBlock || !snapshot) {
+    return;
+  }
+
+  const TimeValue time = ip->GetTime();
+
+  Color vrayColor(1.0f, 1.0f, 1.0f);
+  if (TryGetVrayColor(paramBlock, VRayLights::pb_color, time, &vrayColor)) {
+    snapshot->color = ColorToArray3(vrayColor);
+  }
+
+  float multiplier = 0.0f;
+  if (TryGetVrayFloat(paramBlock, VRayLights::pb_multiplier, time, &multiplier)) {
+    snapshot->intensity = (std::max)(0.0f, multiplier);
+  }
+
+  const float sizeX = GetPreferredVraySize(paramBlock, time,
+                                           VRayLights::pb_size0_new,
+                                           VRayLights::pb_size0);
+  const float sizeY = GetPreferredVraySize(paramBlock, time,
+                                           VRayLights::pb_size1_new,
+                                           VRayLights::pb_size1);
+  const float sizeZ = GetPreferredVraySize(paramBlock, time,
+                                           VRayLights::pb_size2,
+                                           VRayLights::pb_size2);
+  const float extentX = ConvertMaxDistanceToEngine(sizeX);
+  const float extentY = ConvertMaxDistanceToEngine(sizeY > 0.0f ? sizeY : sizeX);
+
+  if (snapshot->lightType == "AreaRect") {
+    snapshot->areaExtents = {(std::max)(0.01f, extentX),
+                             (std::max)(0.01f, extentY)};
+  }
+
+  if (snapshot->lightType == "AreaDisk") {
+    const float diskRadius =
+        ConvertMaxDistanceToEngine(sizeX > 0.0f ? sizeX : sizeY) * 0.5f;
+    snapshot->radius = (std::max)(0.01f, diskRadius);
+  }
+
+  if (snapshot->lightType == "Omni") {
+    if (ContainsAnyToken(classNameHintsLower, {"sphere", "mesh"})) {
+      const float sphereRadius =
+          ConvertMaxDistanceToEngine(sizeX > 0.0f ? sizeX : (sizeY > 0.0f ? sizeY : sizeZ)) *
+          0.5f;
+      if (sphereRadius > 0.0f) {
+        snapshot->radius = (std::max)(0.01f, sphereRadius);
+      }
+    }
+
+    if (ContainsAnyToken(classNameHintsLower, {"dome"})) {
+      int finiteDome = 0;
+      float domeEmitRadius = 0.0f;
+      if (TryGetVrayInt(paramBlock, VRayLights::pb_dome_finite, time,
+                        &finiteDome) &&
+          finiteDome != 0 &&
+          TryGetVrayFloat(paramBlock, VRayLights::pb_dome_emitRadius, time,
+                          &domeEmitRadius)) {
+        const float finiteRadius = ConvertMaxDistanceToEngine(domeEmitRadius);
+        if (finiteRadius > 0.0f) {
+          snapshot->radius = (std::max)(0.01f, finiteRadius);
+        }
+      }
+    }
+  }
+}
+#endif
+
 std::string ResolveMaterialModelName(Mtl *material) {
   return material ? std::string("3dsMaxMaterial") : std::string("OpenPBR");
 }
@@ -724,11 +1119,38 @@ bool CaptureLightSnapshot(Interface *ip, INode *node, LightSnapshot *outSnapshot
   }
 
   ObjectState objectState = node->EvalWorldState(ip->GetTime());
-  if (!objectState.obj || objectState.obj->SuperClassID() != LIGHT_CLASS_ID) {
+  if (!objectState.obj) {
     return false;
   }
 
-  LightObject *lightObject = static_cast<LightObject *>(objectState.obj);
+  Object *baseObject = GetNodeBaseObject(node);
+  if (!baseObject) {
+    baseObject = objectState.obj;
+  }
+  const std::string classNameLower =
+      BuildLightClassNameHints(objectState.obj, baseObject);
+  LightObject *lightObject = dynamic_cast<LightObject *>(objectState.obj);
+  const bool isVrayLight = IsVrayLightObject(baseObject) ||
+                           IsVrayLightClassName(classNameLower);
+  int vrayLightTypeFlags = 0;
+  int vrayLightTypeParam = -1;
+#if defined(PROJECT_RENDER_HAS_VRAY_SDK)
+  if (isVrayLight) {
+    vrayLightTypeFlags =
+        ResolveVrayLightTypeFlags(objectState.obj, baseObject);
+    if (IParamBlock2 *vrayParamBlock =
+            FindVrayLightParamBlock(objectState.obj, baseObject)) {
+      TryGetVrayInt(vrayParamBlock, VRayLights::pb_type, ip->GetTime(),
+                    &vrayLightTypeParam);
+    }
+  }
+#endif
+  const bool allowGenericLightEval =
+      lightObject != nullptr || isVrayLight;
+  if (!allowGenericLightEval || !lightObject) {
+    return false;
+  }
+
   LightState lightState;
   if (lightObject->EvalLightState(ip->GetTime(), &lightState) != REF_SUCCEED ||
       !lightState.on) {
@@ -740,20 +1162,9 @@ bool CaptureLightSnapshot(Interface *ip, INode *node, LightSnapshot *outSnapshot
   snapshot.handle = node->GetHandle();
   snapshot.objectId = MakeLightObjectId(node);
   snapshot.name = ToUtf8(node->GetName());
-  switch (lightState.type) {
-  case DIRECT_LGT:
-    snapshot.lightType = "Directional";
-    break;
-  case SPOT_LGT:
-    snapshot.lightType = "Spot";
-    break;
-  case OMNI_LGT:
-    snapshot.lightType = "Omni";
-    break;
-  default:
-    snapshot.lightType = "Omni";
-    break;
-  }
+  snapshot.lightType =
+      ResolveEngineLightType(lightState, classNameLower, isVrayLight,
+                 vrayLightTypeFlags, vrayLightTypeParam);
 
   const Matrix3 worldTM = node->GetNodeTM(ip->GetTime());
   const Point3 position = ConvertMaxPointToEngine(worldTM.GetRow(3));
@@ -768,6 +1179,14 @@ bool CaptureLightSnapshot(Interface *ip, INode *node, LightSnapshot *outSnapshot
   snapshot.outerConeDegrees = lightState.fallsize > 0.0f ? lightState.fallsize
                                                           : lightState.hotsize;
   snapshot.areaExtents = {1.0f, (std::max)(1.0f, lightState.aspect)};
+#if defined(PROJECT_RENDER_HAS_VRAY_SDK)
+  if (isVrayLight) {
+    if (IParamBlock2 *vrayParamBlock = FindVrayLightParamBlock(objectState.obj,
+                                                               baseObject)) {
+      ApplyVrayLightParameters(ip, vrayParamBlock, classNameLower, &snapshot);
+    }
+  }
+#endif
   *outSnapshot = snapshot;
   return true;
 }
