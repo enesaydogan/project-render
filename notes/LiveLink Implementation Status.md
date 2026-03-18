@@ -23,15 +23,20 @@ Completed so far:
 - Phase 5: batch-scoped invalidation and light-update coalescing for LiveLink apply passes
 - Phase 7: Real-time 3ds Max parity, coordinate basis mapping, and DXR stabilization
 - 3ds Max 2025 named-pipe provider bootstrap
-- 3ds Max 2025 incremental node, camera, material, light, and selection sync at 60fps
+- 3ds Max 2025 incremental node, camera, material, light, and selection sync with event-driven dirty tracking and a dedicated camera timer
 - 3ds Max 2025 mesh payload export through optimized native binary (`.prmesh`) files
 - 3ds Max 2025 slot-aware multi-submaterial extraction with multi-submesh `.prmesh` payload preservation
-- Qt host-side live-link provider controls for connect, disconnect, and reconnect/resync
+- persistent scene GUID and per-node GUID identity in the 3ds Max plugin using Max AppData storage
+- engine-side persisted live-link bindings and non-destructive session close behavior so synced content can be saved and resumed later
+- Live Sync grouping in the scene outline for Qt and ImGui, limited to live-link-managed scene nodes
+- Qt host-side live-link provider controls for connect, disconnect, reconnect/resync, diagnostics, and DCC sync stats
 
 Not implemented yet:
 
 - broader proprietary 3ds Max shader-graph evaluation beyond the current slot-aware OpenPBR-style extraction
 - stronger geometry change detection and payload lifecycle management for exported Max meshes
+- exact live-link parent-child hierarchy reconstruction beyond the current synthetic `Live Sync` grouping root
+- more robust material identity when DCC slot layouts are reordered
 
 ---
 
@@ -283,6 +288,8 @@ Implemented a persistent mapping from canonical `ObjectId` values to engine-side
 Current handle kinds:
 
 - scene node
+- scene light
+- scene material
 - main camera
 - environment
 
@@ -311,10 +318,12 @@ Coordinator validation issues are now drained and logged so they do not accumula
 Implemented:
 
 - binding creation for new external node IDs
-- binding cleanup on session close
+- binding preservation on session close, with session ownership cleared for later resume
 - binding cleanup on full scene reset
 - node-index reindexing after node removal
 - stale per-object revision rejection during apply
+- persisted binding export and restore for scene save/load
+- binding reassignment when a resumed session reuses the same stable object IDs
 
 ### Supported Delta Application In Phase 3
 
@@ -340,13 +349,13 @@ Current behavior details:
 
 ### Current Unsupported Delta Application
 
-Queued but not yet meaningfully applied:
+At the earlier Phase 3 milestone these were not yet implemented:
 
 - `MeshPayloadChanged`
 - `MaterialChanged`
 - `LightChanged`
 
-These currently log an apply warning instead of mutating the runtime scene.
+That gap is now closed in the current repo state. Mesh payload replacement, material updates, and typed light updates are all applied by the engine-side live-link runtime.
 
 ### Files Touched In Phase 3
 
@@ -367,13 +376,12 @@ Result:
 
 ### Phase 3 Remaining Gaps
 
-Still missing:
+Still missing at the Phase 3 milestone:
 
-- mesh payload replacement against real imported content
-- material delta application
-- light delta application
 - broader engine-handle coverage beyond nodes, camera, and environment
 - conflict resolution beyond the current revision and binding checks
+
+Current repo state has since extended handle coverage to scene lights and scene materials.
 
 ---
 
@@ -530,6 +538,11 @@ Achieve seamless, high-frequency, mathematically correct visual synchronization 
 - Incremental light deltas emitted from 3ds Max light nodes with type, color, intensity, position, direction, cone, and area-shape metadata.
 - Automatic reconnect-driven full resync when the named-pipe connection drops and returns.
 - Qt host-side provider controls for connect, disconnect, and reconnect/resync.
+- Qt LiveLink summary diagnostics with per-provider session details, DCC scene path display, and synced object/transport counters.
+- Non-destructive engine-side session closure so stopping live sync no longer deletes imported content.
+- Persisted engine-side binding restore across PRS save/load.
+- Persistent scene and node GUID generation in the 3ds Max plugin, replacing file-path and node-handle identity.
+- Live Sync grouping in the scene outline so live-link-managed scene nodes stay visually separated from normal scene content.
 - Safe DXR pipeline bounding and TLAS initialization allowing DXR geometry to correctly bootstrap on the primary frame after scene clearance (preventing the "red screen" pipeline recreation loops).
 
 ### Phase 7 Result
@@ -539,6 +552,8 @@ Result:
 - The engine now has a practical real-time 3ds Max live-link path for nodes, meshes, camera, materials, lights, and selection.
 - High-frequency tracking allows interactive edits without the old 250ms delay.
 - The host can now explicitly disconnect and reconnect providers and recover with a fresh full sync after transport loss.
+- Synced content can now remain in the engine after disconnect so scenes can be saved and resumed.
+- Stable DCC-side GUID identity now allows resume/rebind to target the same scene and object records across reopen of the same Max scene.
 
 ---
 
@@ -548,6 +563,7 @@ Result:
 
 - finer renderer invalidation classification
 - broader proprietary material-graph evaluation from 3ds Max beyond the current slot-aware multi-submaterial support
+- true parent-child hierarchy reconstruction for resumed live-link content, instead of only a synthetic top-level grouping root
 
 ### Important technical gap
 
@@ -572,18 +588,22 @@ That means:
 - apply material parameter deltas onto bound runtime materials
 - apply typed light deltas with color, intensity, transform, cone, and area-shape data onto bound runtime lights
 - inspect provider state and recent validation/apply issues in the Qt UI
+- inspect DCC sync totals for nodes, meshes, lights, materials, bindings, sessions, and transport queue state in the Qt UI
 - connect, disconnect, and reconnect live-link providers from the Qt UI
 - accept external live-link batches over a Windows named pipe
 - build a first 3ds Max 2025 utility plugin that sends full scene node snapshots, camera, material, light, and selection updates plus native `.prmesh` binary exports
+- preserve stable scene and object identity across reopen of the same Max scene through persisted scene/node GUIDs
+- keep live-link content in the engine when a live session stops, then restore bindings when a saved PRS scene is loaded again
 - build future providers against a stable host-side API
 - call scene mutation through explicit engine functions instead of import-only code
 - run a sustained incremental 3ds Max editing session against the engine with reconnect-driven full resync support
 
 ### Not ready yet
 
-- preserve stable identity across repeated live edits for every supported runtime object type
 - update only the minimum renderer state for each kind of scene change
 - fully implement broader proprietary 3ds Max shader-graph evaluation beyond the current slot-aware multi-submaterial path
+- reconstruct exact resumed DCC parent-child hierarchy rather than only grouping live-sync content under a synthetic root
+- keep material identity stable if DCC material slot ordering changes
 
 ---
 
@@ -591,14 +611,14 @@ That means:
 
 Best next implementation phase:
 
-- proprietary shader-graph translation and payload lifecycle management
+- proprietary shader-graph translation, payload lifecycle management, and hierarchy reconstruction
 
 Reason:
 
-- The adapter now streams slot-aware node, mesh, camera, light, and material deltas in real time. The biggest remaining quality gap is deeper proprietary shader-graph fidelity and stronger mesh payload lifecycle tracking.
+- The adapter now streams slot-aware node, mesh, camera, light, and material deltas in real time with stable persisted scene/object identity and resume-safe bindings. The biggest remaining quality gaps are deeper proprietary shader-graph fidelity, stronger mesh payload lifecycle tracking, and exact hierarchy restoration.
 
 ---
 
 ## Short Status Line
 
-The repo now has a real live-link core, external-ID mapping, a main-thread delta apply path, reconnect-capable named-pipe transport, Qt provider controls, a 60FPS 3ds Max plugin that streams nodes, meshes, camera, materials, lights, and selection, plus first-pass renderer invalidation. The biggest remaining gaps are finer invalidation and deeper 3ds Max material fidelity.
+The repo now has a real live-link core, main-thread delta apply, reconnect-capable named-pipe transport, Qt provider controls and DCC sync stats, persistent scene/object identity in the 3ds Max plugin, resume-safe engine-side binding restore, and a practical real-time 3ds Max path for nodes, meshes, camera, materials, lights, and selection. The biggest remaining gaps are finer invalidation, deeper 3ds Max material fidelity, stronger payload lifecycle management, and exact hierarchy restoration.

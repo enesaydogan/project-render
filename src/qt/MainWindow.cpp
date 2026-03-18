@@ -129,6 +129,28 @@ MemoryStats ReadGpuMemoryStats()
     return stats;
 }
 
+QString FormatLiveLinkSyncStats(const LiveLink::CoordinatorStats& coordinatorStats,
+                                const LiveLink::LiveLinkSceneSync::StatsSnapshot& syncStats,
+                                size_t sessionCount)
+{
+    return QObject::tr("DCC Sync nodes=%1 meshes=%2 lights=%3 materials=%4 bindings=%5 active=%6 sessions=%7 camera=%8 env=%9 | Transport accepted=%10/%11 rejected=%12/%13 queued=%14/%15")
+        .arg(static_cast<qulonglong>(syncStats.nodeCount))
+        .arg(static_cast<qulonglong>(syncStats.meshCount))
+        .arg(static_cast<qulonglong>(syncStats.lightCount))
+        .arg(static_cast<qulonglong>(syncStats.materialCount))
+        .arg(static_cast<qulonglong>(syncStats.totalBindingCount))
+        .arg(static_cast<qulonglong>(syncStats.activeSessionBindingCount))
+        .arg(static_cast<qulonglong>(sessionCount))
+        .arg(syncStats.cameraBound ? QObject::tr("yes") : QObject::tr("no"))
+        .arg(syncStats.environmentBound ? QObject::tr("yes") : QObject::tr("no"))
+        .arg(static_cast<qulonglong>(coordinatorStats.batchesAccepted))
+        .arg(static_cast<qulonglong>(coordinatorStats.deltasAccepted))
+        .arg(static_cast<qulonglong>(coordinatorStats.batchesRejected))
+        .arg(static_cast<qulonglong>(coordinatorStats.deltasRejected))
+        .arg(static_cast<qulonglong>(coordinatorStats.queuedBatchCount))
+        .arg(static_cast<qulonglong>(coordinatorStats.queuedDeltaCount));
+}
+
 QString ReadGitHash()
 {
     QProcess git;
@@ -711,6 +733,8 @@ void MainWindow::updateSceneIoUi()
         m_liveLinkLabel->setText(liveLinkText);
 
         if (m_liveLinkSummaryLabel) {
+            const auto syncStats = LiveLink::GetSceneSync().GetStatsSnapshot();
+            size_t sessionCount = 0;
             int warningCount = 0;
             int errorCount = 0;
             for (const auto &entry : diagnostics) {
@@ -728,14 +752,20 @@ void MainWindow::updateSceneIoUi()
             if (!providers.empty()) {
                 QStringList providerLines;
                 for (const auto &provider : providers) {
+                    sessionCount += provider.sessions.size();
                     QStringList sessions;
                     for (const auto &session : provider.sessions) {
                         const std::string sessionLabel =
                             session.displayName.empty() ? session.documentId
                                                         : session.displayName;
-                        sessions << QStringLiteral("%1 (%2)")
-                                        .arg(QString::fromStdString(sessionLabel),
-                                             QString::fromStdString(session.sessionId));
+                        QString sessionText = QStringLiteral("%1 (%2)")
+                                                  .arg(QString::fromStdString(sessionLabel),
+                                                       QString::fromStdString(session.sessionId));
+                        if (!session.documentPath.empty()) {
+                            sessionText += QStringLiteral(" path=%1")
+                                               .arg(QString::fromStdString(session.documentPath));
+                        }
+                        sessions << sessionText;
                     }
                     providerLines << QStringLiteral("%1 [%2] caps=%3 err=%4 sessions=%5")
                                          .arg(QString::fromStdString(provider.providerName),
@@ -746,12 +776,7 @@ void MainWindow::updateSceneIoUi()
                 }
                 summary << providerLines.join(QStringLiteral("\n"));
             }
-            summary << tr("Accepted %1 batches / %2 deltas")
-                           .arg(static_cast<qulonglong>(stats.batchesAccepted))
-                           .arg(static_cast<qulonglong>(stats.deltasAccepted));
-            summary << tr("Rejected %1 batches / %2 deltas")
-                           .arg(static_cast<qulonglong>(stats.batchesRejected))
-                           .arg(static_cast<qulonglong>(stats.deltasRejected));
+            summary << FormatLiveLinkSyncStats(stats, syncStats, sessionCount);
             summary << tr("Camera %1")
                            .arg(LiveLink::GetSceneSync().IsCameraControlDetached()
                                     ? tr("engine override until dcc moves")

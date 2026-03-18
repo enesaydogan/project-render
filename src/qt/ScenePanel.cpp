@@ -6,13 +6,30 @@
 #include <QHBoxLayout>
 #include <QFileInfo>
 #include <QLabel>
-#include <QListWidget>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QTimer>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
 #include <QVBoxLayout>
 
 extern HWND g_hwnd;
+
+namespace {
+
+constexpr int kNodeIndexRole = Qt::UserRole;
+
+QString BuildNodeLabel(const Scene::Node &node)
+{
+    QString label = QString::fromStdString(node.name);
+    label += QObject::tr(" (%1 meshes)").arg(static_cast<int>(node.meshIndices.size()));
+    if (!node.visible) {
+        label += QObject::tr(" [hidden]");
+    }
+    return label;
+}
+
+}
 
 ScenePanel::ScenePanel(QWidget *parent)
     : QWidget(parent)
@@ -60,7 +77,9 @@ void ScenePanel::createUi()
     m_sourceLabel->setOpenExternalLinks(false);
     layout->addWidget(m_sourceLabel);
 
-    m_nodeList = new QListWidget(this);
+    m_nodeList = new QTreeWidget(this);
+    m_nodeList->setColumnCount(1);
+    m_nodeList->setHeaderHidden(true);
     layout->addWidget(m_nodeList);
 
     m_statusLabel = new QLabel(this);
@@ -75,9 +94,9 @@ void ScenePanel::createUi()
         Scene::ImportModelWithDialog(owner);
     });
     connect(m_reimportButton, &QPushButton::clicked, this, [this]() {
-        const int row = m_nodeList->currentRow();
-        if (row >= 0) {
-            Scene::ReimportNode(static_cast<size_t>(row));
+        const int nodeIndex = selectedNodeIndex();
+        if (nodeIndex >= 0) {
+            Scene::ReimportNode(static_cast<size_t>(nodeIndex));
             refreshSceneList();
         }
     });
@@ -85,28 +104,48 @@ void ScenePanel::createUi()
         Scene::AddDefaultPlane(0.0f);
     });
     connect(m_deleteButton, &QPushButton::clicked, this, [this]() {
-        const int row = m_nodeList->currentRow();
-        if (row >= 0) {
-            Scene::DeleteNode(static_cast<size_t>(row));
+        const int nodeIndex = selectedNodeIndex();
+        if (nodeIndex >= 0) {
+            Scene::DeleteNode(static_cast<size_t>(nodeIndex));
             refreshSceneList();
         }
     });
-    connect(m_nodeList, &QListWidget::currentRowChanged, this, [this](int row) {
-        if (m_syncing || row < 0) {
+    connect(m_nodeList, &QTreeWidget::currentItemChanged, this,
+            [this](QTreeWidgetItem *current, QTreeWidgetItem *) {
+        if (m_syncing || !current) {
             return;
         }
-        Scene::SelectNode(static_cast<size_t>(row));
+        const QVariant nodeIndexData = current->data(0, kNodeIndexRole);
+        if (!nodeIndexData.isValid()) {
+            return;
+        }
+        Scene::SelectNode(static_cast<size_t>(nodeIndexData.toInt()));
     });
     connect(m_sourceLabel, &QLabel::linkActivated, this, [this](const QString &link) {
         if (link != QStringLiteral("reimport")) {
             return;
         }
-        const int row = m_nodeList->currentRow();
-        if (row >= 0) {
-            Scene::ReimportNode(static_cast<size_t>(row));
+        const int nodeIndex = selectedNodeIndex();
+        if (nodeIndex >= 0) {
+            Scene::ReimportNode(static_cast<size_t>(nodeIndex));
             refreshSceneList();
         }
     });
+}
+
+int ScenePanel::selectedNodeIndex() const
+{
+    if (!m_nodeList) {
+        return -1;
+    }
+
+    QTreeWidgetItem *current = m_nodeList->currentItem();
+    if (!current) {
+        return -1;
+    }
+
+    const QVariant nodeIndexData = current->data(0, kNodeIndexRole);
+    return nodeIndexData.isValid() ? nodeIndexData.toInt() : -1;
 }
 
 void ScenePanel::refreshSceneList()
@@ -159,17 +198,31 @@ void ScenePanel::refreshSceneList()
     }
 
     m_nodeList->clear();
-    for (const auto &node : nodes) {
-        QString label = QString::fromStdString(node.name);
-        label += tr(" (%1 meshes)").arg(static_cast<int>(node.meshIndices.size()));
-        if (!node.visible) {
-            label += tr(" [hidden]");
+    auto *liveSyncRoot = new QTreeWidgetItem(m_nodeList);
+    liveSyncRoot->setText(0, tr("Live Sync"));
+    liveSyncRoot->setFlags(liveSyncRoot->flags() & ~Qt::ItemIsSelectable);
+    liveSyncRoot->setExpanded(true);
+
+    QTreeWidgetItem *selectedItem = nullptr;
+    for (size_t index = 0; index < nodes.size(); ++index) {
+        const Scene::Node &node = nodes[index];
+        QTreeWidgetItem *item = nullptr;
+        if (node.liveLinkManaged) {
+            item = new QTreeWidgetItem(liveSyncRoot);
+        } else {
+            item = new QTreeWidgetItem(m_nodeList);
         }
-        m_nodeList->addItem(label);
+        item->setText(0, BuildNodeLabel(node));
+        item->setData(0, kNodeIndexRole, static_cast<int>(index));
+        if (static_cast<int>(index) == selectedRow) {
+            selectedItem = item;
+        }
     }
 
-    if (selectedRow >= 0 && selectedRow < m_nodeList->count()) {
-        m_nodeList->setCurrentRow(selectedRow);
+    if (selectedItem) {
+        m_nodeList->setCurrentItem(selectedItem);
+    } else {
+        m_nodeList->clearSelection();
     }
 
     if (selectedRow >= 0 && selectedRow < static_cast<int>(nodes.size()) &&
@@ -192,6 +245,6 @@ void ScenePanel::refreshSceneList()
             .arg(static_cast<int>(Scene::GetLights().size()))
             .arg(QString::fromStdString(Scene::LastStatus())));
 
-    m_deleteButton->setEnabled(m_nodeList->currentRow() >= 0);
+    m_deleteButton->setEnabled(selectedNodeIndex() >= 0);
     m_syncing = false;
 }

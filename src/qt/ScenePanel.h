@@ -3,10 +3,10 @@
 #include <QWidget>
 
 class QLabel;
-class QListWidget;
 class QProgressBar;
 class QPushButton;
 class QTimer;
+class QTreeWidget;
 
 class ScenePanel : public QWidget
 {
@@ -18,8 +18,9 @@ public:
 private:
     void createUi();
     void refreshSceneList();
+    int selectedNodeIndex() const;
 
-    QListWidget *m_nodeList = nullptr;
+    QTreeWidget *m_nodeList = nullptr;
     QProgressBar *m_importProgress = nullptr;
     QLabel *m_importStatusLabel = nullptr;
     QLabel *m_statusLabel = nullptr;

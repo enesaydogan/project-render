@@ -2,6 +2,7 @@
 #include "camera.h"
 #include "dxr_renderer.h"
 #include "ibl_manager.h"
+#include "livelink/livelink_scene_sync.h"
 #include "scene.h"
 #include <algorithm>
 #include <atomic>
@@ -519,7 +520,7 @@ static json BuildMetadata() {
     j["nod"].push_back({
       {"n", node.name}, {"sp", node.sourcePath},
       {"v", node.visible}, {"s", node.selected},
-      {"mi", node.meshIndices}, {"t", xf}
+      {"ll", node.liveLinkManaged}, {"mi", node.meshIndices}, {"t", xf}
     });
   }
 
@@ -533,6 +534,22 @@ static json BuildMetadata() {
       {"r",  lt.radius}, {"ica", lt.innerConeAngle}, {"oca", lt.outerConeAngle},
       {"ae", {lt.areaExtents[0], lt.areaExtents[1]}},
       {"iai",lt.iesAtlasIndex}
+    });
+  }
+
+  const auto liveLinkBindings = LiveLink::GetSceneSync().ExportPersistedBindings();
+  for (const auto &binding : liveLinkBindings) {
+    const int64_t handleIndex =
+        binding.handleIndex == static_cast<size_t>(-1)
+            ? -1
+            : static_cast<int64_t>(binding.handleIndex);
+    j["llb"].push_back({
+        {"sa", binding.objectId.sourceApp},
+        {"di", binding.objectId.documentId},
+        {"oi", binding.objectId.objectId},
+        {"ot", static_cast<int>(binding.objectId.objectType)},
+        {"hk", static_cast<int>(binding.handleKind)},
+        {"hi", handleIndex},
     });
   }
 
@@ -689,6 +706,7 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
       node.name = n.value("n", "EmbeddedNode");
       node.sourcePath = srcPath;
       node.visible = n.value("v", true);
+      node.liveLinkManaged = n.value("ll", false);
       node.meshIndices = n["mi"].get<std::vector<size_t>>();
       if (n.contains("t")) for (int i=0;i<16;++i) node.transform[i]=n["t"][i];
       node.selected = n.value("s", false);
@@ -701,6 +719,7 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
         auto &nodes = const_cast<std::vector<Scene::Node>&>(Scene::GetNodes());
         if (!nodes.empty()) {
           nodes.back().visible = n.value("v", true);
+          nodes.back().liveLinkManaged = n.value("ll", false);
           if (n.contains("t")) for (int i=0;i<16;++i) nodes.back().transform[i]=n["t"][i];
           nodes.back().selected = n.value("s", false);
         }
@@ -712,11 +731,66 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
       if (!nodes.empty()) {
         nodes.back().name = n.value("n", nodes.back().name);
         nodes.back().visible = n.value("v", true);
+        nodes.back().liveLinkManaged = n.value("ll", false);
         if (n.contains("t")) for (int i=0;i<16;++i) nodes.back().transform[i]=n["t"][i];
         nodes.back().selected = n.value("s", false);
       }
     }
   }
+}
+
+static void RestoreLiveLinkBindingsPRS(const json &j,
+                                       const std::vector<int> &materialRemap) {
+  std::vector<LiveLink::LiveLinkSceneSync::PersistedBinding> bindings;
+  if (j.contains("llb") && j["llb"].is_array()) {
+    for (const auto &entry : j["llb"]) {
+      LiveLink::LiveLinkSceneSync::PersistedBinding binding;
+      binding.objectId.sourceApp = entry.value("sa", std::string());
+      binding.objectId.documentId = entry.value("di", std::string());
+      binding.objectId.objectId = entry.value("oi", std::string());
+      binding.objectId.objectType = static_cast<LiveLink::ObjectType>(
+          entry.value("ot", static_cast<int>(LiveLink::ObjectType::Unknown)));
+      binding.handleKind = static_cast<LiveLink::LiveLinkSceneSync::EngineHandleKind>(
+          entry.value("hk", static_cast<int>(LiveLink::LiveLinkSceneSync::EngineHandleKind::Unknown)));
+
+      const int64_t savedHandleIndex = entry.value("hi", int64_t(-1));
+      binding.handleIndex =
+          savedHandleIndex < 0 ? static_cast<size_t>(-1)
+                               : static_cast<size_t>(savedHandleIndex);
+
+      switch (binding.handleKind) {
+      case LiveLink::LiveLinkSceneSync::EngineHandleKind::SceneNode:
+        if (binding.handleIndex >= Scene::GetNodes().size()) {
+          continue;
+        }
+        break;
+      case LiveLink::LiveLinkSceneSync::EngineHandleKind::SceneLight:
+        if (binding.handleIndex >= Scene::GetLights().size()) {
+          continue;
+        }
+        break;
+      case LiveLink::LiveLinkSceneSync::EngineHandleKind::SceneMaterial:
+        if (binding.handleIndex == static_cast<size_t>(-1) ||
+            binding.handleIndex >= materialRemap.size()) {
+          continue;
+        }
+        if (materialRemap[binding.handleIndex] < 0) {
+          continue;
+        }
+        binding.handleIndex = static_cast<size_t>(materialRemap[binding.handleIndex]);
+        break;
+      default:
+        break;
+      }
+
+      if (binding.objectId.Empty()) {
+        continue;
+      }
+      bindings.push_back(std::move(binding));
+    }
+  }
+
+  LiveLink::GetSceneSync().RestorePersistedBindings(bindings);
 }
 
 // ---------------------------------------------------------------------------
@@ -1001,6 +1075,7 @@ bool LoadScenePRS(const std::string &path) {
 
     std::vector<int> remap;
     RestoreMaterialsPRS(meta, remap);
+    RestoreLiveLinkBindingsPRS(meta, remap);
 
     if (hasEmbedded) {
       for (size_t i = 0; i < embMeshCnt; ++i) {

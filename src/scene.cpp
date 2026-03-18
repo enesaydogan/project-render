@@ -517,6 +517,7 @@ Node::Node() {
   transform[0] = transform[5] = transform[10] = transform[15] = 1.0f;
   selected = false;
   visible = true;
+  liveLinkManaged = false;
 }
 
 static void EnsureGpuBuffersForMeshes(std::vector<Asset::GpuMesh> &meshes) {
@@ -687,6 +688,14 @@ bool SetNodeVisibility(size_t index, bool visible) {
   }
   s_nodes[index].visible = visible;
   ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
+  return true;
+}
+
+bool SetNodeLiveLinkManaged(size_t index, bool liveLinkManaged) {
+  if (index >= s_nodes.size()) {
+    return false;
+  }
+  s_nodes[index].liveLinkManaged = liveLinkManaged;
   return true;
 }
 
@@ -2202,34 +2211,86 @@ void DrawScenePanel(HWND hwnd, bool &visible) {
                                 65.0f);
         // ImGui::TableHeadersRow();
 
-        for (size_t i = 0; i < s_nodes.size(); ++i) {
+        auto drawNodeRow = [&](size_t index, bool indentChild) {
           ImGui::TableNextRow();
           ImGui::TableSetColumnIndex(0);
 
-          ImGui::PushID((int)i);
-          bool selected = s_nodes[i].selected;
-          if (ImGui::Selectable(s_nodes[i].name.c_str(), selected,
+          ImGui::PushID((int)index);
+          if (indentChild) {
+            ImGui::Indent();
+          }
+
+          bool selected = s_nodes[index].selected;
+          if (ImGui::Selectable(s_nodes[index].name.c_str(), selected,
                                 ImGuiSelectableFlags_SpanAllColumns)) {
-            SelectNode(i);
+            SelectNode(index);
+          }
+
+          if (indentChild) {
+            ImGui::Unindent();
           }
 
           ImGui::TableSetColumnIndex(1);
-          // Minimalist red button for deletion
           ImGui::PushStyleColor(ImGuiCol_Button,
                                 ImVec4(0.4f, 0.1f, 0.1f, 1.0f));
           ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
                                 ImVec4(0.7f, 0.1f, 0.1f, 1.0f));
           if (ImGui::Button("Delete", ImVec2(-FLT_MIN, 0))) {
-            DeleteNode(i);
+            DeleteNode(index);
             ImGui::PopStyleColor(2);
             ImGui::PopID();
             ImGui::EndTable();
             ImGui::EndChild();
             ImGui::End();
-            return; // Refresh state next frame
+            return false;
           }
           ImGui::PopStyleColor(2);
           ImGui::PopID();
+          return true;
+        };
+
+        std::vector<size_t> regularNodeIndices;
+        std::vector<size_t> liveLinkNodeIndices;
+        regularNodeIndices.reserve(s_nodes.size());
+        liveLinkNodeIndices.reserve(s_nodes.size());
+        for (size_t i = 0; i < s_nodes.size(); ++i) {
+          if (s_nodes[i].liveLinkManaged) {
+            liveLinkNodeIndices.push_back(i);
+          } else {
+            regularNodeIndices.push_back(i);
+          }
+        }
+
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::PushID("LiveSyncRoot");
+        const std::string rootLabel =
+            "Live Sync (" + std::to_string(liveLinkNodeIndices.size()) + ")";
+        ImGuiTreeNodeFlags rootFlags =
+            ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth;
+        if (liveLinkNodeIndices.empty()) {
+          rootFlags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+        }
+        const bool rootOpen = ImGui::TreeNodeEx(rootLabel.c_str(), rootFlags);
+        ImGui::TableSetColumnIndex(1);
+        ImGui::TextDisabled("Group");
+
+        if (!liveLinkNodeIndices.empty() && rootOpen) {
+          for (size_t index : liveLinkNodeIndices) {
+            if (!drawNodeRow(index, true)) {
+              ImGui::TreePop();
+              ImGui::PopID();
+              return;
+            }
+          }
+          ImGui::TreePop();
+        }
+        ImGui::PopID();
+
+        for (size_t index : regularNodeIndices) {
+          if (!drawNodeRow(index, false)) {
+            return;
+          }
         }
         ImGui::EndTable();
       }

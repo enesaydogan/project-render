@@ -23,6 +23,7 @@ struct Node {
   std::vector<std::string> linkedMaterialSourceNames; // original imported names per slot
   bool selected = false;
   bool visible = true;
+  bool liveLinkManaged = false;
 
   Node();
 };
@@ -85,6 +86,7 @@ bool ReplaceNodeImportedContent(size_t index, ImportedNodePayload payload);
 bool RenameNode(size_t index, const std::string &name);
 bool UpdateNodeTransform(size_t index, const float *columnMajor4x4);
 bool SetNodeVisibility(size_t index, bool visible);
+bool SetNodeLiveLinkManaged(size_t index, bool liveLinkManaged);
 bool RemoveNode(size_t index);
 void SelectNode(size_t index);
 std::vector<Instance> GetInstances();
