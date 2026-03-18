@@ -4,6 +4,7 @@
 #include <utilapi.h>
 #include <iparamm2.h>
 #include <notify.h>
+#include <AppDataChunk.h>
 #include <stdmat.h>
 #include <units.h>
 #include <ISceneEventManager.h>
@@ -21,6 +22,7 @@
 #include <fstream>
 #include <functional>
 #include <mutex>
+#include <objbase.h>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -38,6 +40,10 @@
 using json = nlohmann::json;
 
 namespace {
+
+constexpr Class_ID kPersistentIdAppDataClassId(0x21436f0a, 0x5c7a19d1);
+constexpr DWORD kSceneGuidAppDataSubId = 0x1001;
+constexpr DWORD kNodeGuidAppDataSubId = 0x1002;
 
 #if defined(PROJECT_RENDER_HAS_VRAY_SDK)
 #define PROJECT_RENDER_VRAYMTL_CLASS_ID Class_ID(0x37bf3f2f, 0x7034695c)
@@ -674,9 +680,191 @@ std::string ResolveEngineLightType(const LightState &lightState,
   }
 }
 
+std::string GenerateGuidString() {
+  GUID guid = {};
+  if (CoCreateGuid(&guid) != S_OK) {
+    return {};
+  }
+
+  wchar_t buffer[64] = {};
+  const int length = StringFromGUID2(guid, buffer, static_cast<int>(std::size(buffer)));
+  if (length <= 1) {
+    return {};
+  }
+
+  std::wstring wide(buffer, static_cast<size_t>(length - 1));
+  if (!wide.empty() && wide.front() == L'{') {
+    wide.erase(wide.begin());
+  }
+  if (!wide.empty() && wide.back() == L'}') {
+    wide.pop_back();
+  }
+
+  const int utf8Length = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(),
+                                             static_cast<int>(wide.size()),
+                                             nullptr, 0, nullptr, nullptr);
+  if (utf8Length <= 0) {
+    return {};
+  }
+
+  std::string result(static_cast<size_t>(utf8Length), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()),
+                      result.data(), utf8Length, nullptr, nullptr);
+  std::transform(result.begin(), result.end(), result.begin(),
+                 [](unsigned char ch) {
+                   return static_cast<char>(std::tolower(ch));
+                 });
+  return result;
+}
+
+std::string ReadAppDataString(Animatable *owner, DWORD subId) {
+  if (!owner) {
+    return {};
+  }
+
+  AppDataChunk *chunk =
+      owner->GetAppDataChunk(kPersistentIdAppDataClassId, UTILITY_CLASS_ID, subId);
+  if (!chunk || !chunk->data || chunk->length == 0) {
+    return {};
+  }
+
+  const char *data = static_cast<const char *>(chunk->data);
+  size_t length = 0;
+  while (length < chunk->length && data[length] != '\0') {
+    ++length;
+  }
+  return std::string(data, length);
+}
+
+bool WriteAppDataString(Animatable *owner, DWORD subId, const std::string &value) {
+  if (!owner || value.empty()) {
+    return false;
+  }
+
+  owner->RemoveAppDataChunk(kPersistentIdAppDataClassId, UTILITY_CLASS_ID, subId);
+  void *data = MAX_malloc(static_cast<DWORD>(value.size() + 1));
+  if (!data) {
+    return false;
+  }
+  std::memcpy(data, value.c_str(), value.size() + 1);
+  owner->AddAppDataChunk(kPersistentIdAppDataClassId, UTILITY_CLASS_ID, subId,
+                         static_cast<DWORD>(value.size() + 1), data);
+  return true;
+}
+
+std::string GetOrCreateNodeGuid(INode *node) {
+  if (!node) {
+    return {};
+  }
+
+  std::string guid = ReadAppDataString(node, kNodeGuidAppDataSubId);
+  if (guid.empty()) {
+    guid = GenerateGuidString();
+    if (!guid.empty()) {
+      WriteAppDataString(node, kNodeGuidAppDataSubId, guid);
+    }
+  }
+  return guid.empty() ? std::string("node:missing") : std::string("node:") + guid;
+}
+
+std::string GetOrCreateSceneGuid(Interface *ip) {
+  if (!ip) {
+    return {};
+  }
+
+  Animatable *sceneOwner = ip->GetRootNode();
+  std::string guid = ReadAppDataString(sceneOwner, kSceneGuidAppDataSubId);
+  if (guid.empty()) {
+    guid = GenerateGuidString();
+    if (!guid.empty()) {
+      WriteAppDataString(sceneOwner, kSceneGuidAppDataSubId, guid);
+    }
+  }
+  return guid.empty() ? std::string("scene:unsaved") : std::string("scene:") + guid;
+}
+
+void GatherNodeGuidUsage(INode *node,
+                         std::unordered_map<std::string, size_t> *usageCounts) {
+  if (!node || !usageCounts) {
+    return;
+  }
+
+  std::string guid = ReadAppDataString(node, kNodeGuidAppDataSubId);
+  if (!guid.empty()) {
+    ++(*usageCounts)[guid];
+  }
+  for (int childIndex = 0; childIndex < node->NumberOfChildren(); ++childIndex) {
+    GatherNodeGuidUsage(node->GetChildNode(childIndex), usageCounts);
+  }
+}
+
+void EnsureUniqueNodeGuidsRecursive(
+    INode *node, std::unordered_set<std::string> *seenGuids,
+    const std::unordered_map<std::string, size_t> &usageCounts) {
+  if (!node || !seenGuids) {
+    return;
+  }
+
+  std::string rawGuid = ReadAppDataString(node, kNodeGuidAppDataSubId);
+  const bool duplicatedInScene = !rawGuid.empty() &&
+                                 usageCounts.find(rawGuid) != usageCounts.end() &&
+                                 usageCounts.at(rawGuid) > 1;
+  if (rawGuid.empty() || duplicatedInScene || seenGuids->find(rawGuid) != seenGuids->end()) {
+    do {
+      rawGuid = GenerateGuidString();
+    } while (!rawGuid.empty() && seenGuids->find(rawGuid) != seenGuids->end());
+    if (!rawGuid.empty()) {
+      WriteAppDataString(node, kNodeGuidAppDataSubId, rawGuid);
+    }
+  }
+
+  if (!rawGuid.empty()) {
+    seenGuids->insert(rawGuid);
+  }
+  for (int childIndex = 0; childIndex < node->NumberOfChildren(); ++childIndex) {
+    EnsureUniqueNodeGuidsRecursive(node->GetChildNode(childIndex), seenGuids,
+                                   usageCounts);
+  }
+}
+
+void EnsurePersistentSceneIdentifiers(Interface *ip) {
+  if (!ip) {
+    return;
+  }
+
+  GetOrCreateSceneGuid(ip);
+  INode *root = ip->GetRootNode();
+  if (!root) {
+    return;
+  }
+
+  std::unordered_map<std::string, size_t> usageCounts;
+  for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
+    GatherNodeGuidUsage(root->GetChildNode(childIndex), &usageCounts);
+  }
+
+  std::unordered_set<std::string> seenGuids;
+  for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
+    EnsureUniqueNodeGuidsRecursive(root->GetChildNode(childIndex), &seenGuids,
+                                   usageCounts);
+  }
+}
+
 std::string MakeDocumentId(Interface *ip) {
+  return ip ? GetOrCreateSceneGuid(ip) : std::string("scene:unsaved");
+}
+
+std::string MakeDocumentPath(Interface *ip) {
   const std::string currentFile = ip ? ToUtf8(ip->GetCurFileName()) : std::string();
   return currentFile.empty() ? std::string("untitled.max") : currentFile;
+}
+
+std::string MakeDocumentDisplayName(Interface *ip) {
+  const std::string documentPath = MakeDocumentPath(ip);
+  const size_t separator = documentPath.find_last_of("\\/");
+  const std::string fileName =
+      separator == std::string::npos ? documentPath : documentPath.substr(separator + 1);
+  return fileName.empty() ? std::string("untitled.max") : fileName;
 }
 
 std::string MakeSessionId() {
@@ -691,12 +879,11 @@ std::string MakeNodeObjectId(INode *node) {
   if (!node) {
     return {};
   }
-  return "node:" + std::to_string(static_cast<unsigned long long>(node->GetHandle()));
+  return GetOrCreateNodeGuid(node);
 }
 
-std::string MakeMaterialObjectId(ULONG_PTR nodeHandle, int materialSlot) {
-  return "material:node:" +
-         std::to_string(static_cast<unsigned long long>(nodeHandle)) +
+std::string MakeMaterialObjectId(const std::string &nodeObjectId, int materialSlot) {
+  return "material:" + nodeObjectId +
          ":slot:" + std::to_string((std::max)(0, materialSlot));
 }
 
@@ -704,8 +891,7 @@ std::string MakeLightObjectId(INode *node) {
   if (!node) {
     return {};
   }
-  return "light:" +
-         std::to_string(static_cast<unsigned long long>(node->GetHandle()));
+  return "light:" + GetOrCreateNodeGuid(node);
 }
 
 Object *GetNodeBaseObject(INode *node) {
@@ -734,6 +920,8 @@ std::vector<std::string> GatherSelectedObjectIds(Interface *ip) {
 struct NodeSnapshot {
   ULONG_PTR handle = 0;
   ULONG_PTR parentHandle = 0;
+  std::string objectId;
+  std::string parentObjectId;
   std::string name;
   bool visible = true;
   std::array<float, 16> worldMatrix = {};
@@ -1630,8 +1818,8 @@ bool CaptureMaterialSnapshot(Interface *ip, INode *node, int materialSlot, Mtl *
   snapshot.valid = true;
   snapshot.nodeHandle = node->GetHandle();
   snapshot.materialSlot = (std::max)(0, materialSlot);
-  snapshot.objectId =
-      MakeMaterialObjectId(snapshot.nodeHandle, snapshot.materialSlot);
+  snapshot.objectId = MakeMaterialObjectId(MakeNodeObjectId(node),
+                                           snapshot.materialSlot);
   snapshot.name = ToUtf8(material->GetName());
   if (snapshot.name.empty()) {
     snapshot.name = ToUtf8(node->GetName()) + " [slot " +
@@ -2096,6 +2284,11 @@ NodeSnapshot CaptureNodeSnapshot(Interface *ip, INode *node) {
       (node->GetParentNode() && !node->GetParentNode()->IsRootNode())
           ? node->GetParentNode()->GetHandle()
           : 0;
+    snapshot.objectId = MakeNodeObjectId(node);
+    snapshot.parentObjectId =
+      (node->GetParentNode() && !node->GetParentNode()->IsRootNode())
+        ? MakeNodeObjectId(node->GetParentNode())
+        : std::string();
   snapshot.name = ToUtf8(node->GetName());
   snapshot.visible = !node->IsNodeHidden(TRUE);
   snapshot.worldMatrix = Matrix3ToColumnMajor4x4(node->GetNodeTM(ip->GetTime()));
@@ -2123,15 +2316,11 @@ void AppendNodeAddedDelta(const std::string &documentId,
     return;
   }
 
-  const std::string objectId = "node:" + std::to_string(snapshot.handle);
-  const std::string parentId = snapshot.parentHandle != 0
-                                   ? "node:" + std::to_string(snapshot.parentHandle)
-                                   : std::string();
   outDeltas->push_back(json{{"kind", "NodeAdded"},
-                            {"target", MakeObjectId(documentId, objectId, "Node")},
+                            {"target", MakeObjectId(documentId, snapshot.objectId, "Node")},
                             {"revision", (*revision)++},
                             {"debugLabel", snapshot.name},
-                            {"payload", json{{"parentObjectId", parentId},
+                            {"payload", json{{"parentObjectId", snapshot.parentObjectId},
                                               {"displayName", snapshot.name}}}});
 }
 
@@ -2142,10 +2331,9 @@ void AppendNodeTransformDelta(const std::string &documentId,
     return;
   }
 
-  const std::string objectId = "node:" + std::to_string(snapshot.handle);
   outDeltas->push_back(
       json{{"kind", "NodeTransformChanged"},
-           {"target", MakeObjectId(documentId, objectId, "Node")},
+         {"target", MakeObjectId(documentId, snapshot.objectId, "Node")},
            {"revision", (*revision)++},
            {"debugLabel", snapshot.name},
            {"payload", json{{"worldMatrix", snapshot.worldMatrix}}}});
@@ -2158,27 +2346,26 @@ void AppendNodeVisibilityDelta(const std::string &documentId,
     return;
   }
 
-  const std::string objectId = "node:" + std::to_string(snapshot.handle);
   outDeltas->push_back(
       json{{"kind", "NodeVisibilityChanged"},
-           {"target", MakeObjectId(documentId, objectId, "Node")},
+           {"target", MakeObjectId(documentId, snapshot.objectId, "Node")},
            {"revision", (*revision)++},
            {"debugLabel", snapshot.name},
            {"payload", json{{"visible", snapshot.visible}}}});
 }
 
-void AppendNodeRemovedDelta(const std::string &documentId, ULONG_PTR handle,
+void AppendNodeRemovedDelta(const std::string &documentId,
+                            const NodeSnapshot &snapshot,
                             uint64_t *revision, json *outDeltas) {
   if (!revision || !outDeltas) {
     return;
   }
 
-  const std::string objectId = "node:" + std::to_string(handle);
   outDeltas->push_back(
       json{{"kind", "NodeRemoved"},
-           {"target", MakeObjectId(documentId, objectId, "Node")},
+           {"target", MakeObjectId(documentId, snapshot.objectId, "Node")},
            {"revision", (*revision)++},
-           {"debugLabel", objectId},
+           {"debugLabel", snapshot.name.empty() ? snapshot.objectId : snapshot.name},
            {"payload", json{{"removeChildren", true}}}});
 }
 
@@ -2190,9 +2377,8 @@ void AppendMeshPayloadDelta(const std::string &documentId,
     return;
   }
 
-  const std::string objectId = "node:" + std::to_string(snapshot.handle);
   outDeltas->push_back(json{{"kind", "MeshPayloadChanged"},
-                            {"target", MakeObjectId(documentId, objectId, "Node")},
+                            {"target", MakeObjectId(documentId, snapshot.objectId, "Node")},
                             {"revision", (*revision)++},
                             {"debugLabel", snapshot.name},
                             {"payload", json{{"geometryRevision", snapshot.geometryFingerprint},
@@ -2421,7 +2607,11 @@ bool SendInitialSnapshot(Interface *ip,
     return false;
   }
 
+  EnsurePersistentSceneIdentifiers(ip);
+
   const std::string documentId = MakeDocumentId(ip);
+  const std::string documentPath = MakeDocumentPath(ip);
+  const std::string documentDisplayName = MakeDocumentDisplayName(ip);
   const std::string sessionId = MakeSessionId();
 
   std::unordered_map<ULONG_PTR, NodeSnapshot> state;
@@ -2442,8 +2632,8 @@ bool SendInitialSnapshot(Interface *ip,
                        {"documentId", documentId},
                        {"objectId", "session"},
                        {"objectType", "Unknown"}}},
-      {"payload", json{{"documentPath", documentId},
-                        {"displayName", documentId}}},
+      {"payload", json{{"documentPath", documentPath},
+            {"displayName", documentDisplayName}}},
   });
   deltas.push_back(json{
       {"kind", "FullSceneSync"},
@@ -3035,6 +3225,7 @@ private:
     std::vector<std::pair<ULONG_PTR, MaterialStateMap>> stagedMaterialStates;
 
     if (m_forceFullResync) {
+      EnsurePersistentSceneIdentifiers(ip);
       std::unordered_map<ULONG_PTR, NodeSnapshot> currentState;
       MaterialStateMap currentMaterialState;
       std::unordered_map<ULONG_PTR, LightSnapshot> currentLightState;
@@ -3091,9 +3282,10 @@ private:
         }
       }
 
-      for (const auto &[handle, _] : m_lastNodeState) {
+      for (const auto &[handle, previousSnapshot] : m_lastNodeState) {
         if (currentState.find(handle) == currentState.end()) {
-          AppendNodeRemovedDelta(m_documentId, handle, &m_nextRevision, &deltas);
+          AppendNodeRemovedDelta(m_documentId, previousSnapshot,
+                                 &m_nextRevision, &deltas);
         }
       }
 

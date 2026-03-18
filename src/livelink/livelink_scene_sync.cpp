@@ -276,6 +276,94 @@ bool LiveLinkSceneSync::IsCameraControlDetached() const {
   return m_cameraControlDetached;
 }
 
+LiveLinkSceneSync::StatsSnapshot LiveLinkSceneSync::GetStatsSnapshot() const {
+  StatsSnapshot stats;
+
+  const auto &nodes = Scene::GetNodes();
+  for (const Scene::Node &node : nodes) {
+    if (!node.liveLinkManaged) {
+      continue;
+    }
+    ++stats.nodeCount;
+    stats.meshCount += node.meshIndices.size();
+  }
+
+  const size_t lightLimit = Scene::GetLights().size();
+  const size_t materialLimit = Scene::GetMaterialCount();
+  for (const auto &[_, binding] : m_bindings) {
+    if (binding.objectId.Empty() ||
+        binding.handleKind == EngineHandleKind::Unknown) {
+      continue;
+    }
+
+    ++stats.totalBindingCount;
+    if (!binding.sessionId.empty()) {
+      ++stats.activeSessionBindingCount;
+    }
+
+    switch (binding.handleKind) {
+    case EngineHandleKind::SceneLight:
+      if (binding.handleIndex < lightLimit) {
+        ++stats.lightCount;
+      }
+      break;
+    case EngineHandleKind::SceneMaterial:
+      if (binding.handleIndex < materialLimit) {
+        ++stats.materialCount;
+      }
+      break;
+    case EngineHandleKind::MainCamera:
+      stats.cameraBound = true;
+      break;
+    case EngineHandleKind::Environment:
+      stats.environmentBound = true;
+      break;
+    case EngineHandleKind::SceneNode:
+    case EngineHandleKind::Unknown:
+      break;
+    }
+  }
+
+  return stats;
+}
+
+std::vector<LiveLinkSceneSync::PersistedBinding>
+LiveLinkSceneSync::ExportPersistedBindings() const {
+  std::vector<PersistedBinding> bindings;
+  bindings.reserve(m_bindings.size());
+  for (const auto &[_, binding] : m_bindings) {
+    if (binding.objectId.Empty() ||
+        binding.handleKind == EngineHandleKind::Unknown) {
+      continue;
+    }
+
+    PersistedBinding persistedBinding;
+    persistedBinding.objectId = binding.objectId;
+    persistedBinding.handleKind = binding.handleKind;
+    persistedBinding.handleIndex = binding.handleIndex;
+    bindings.push_back(std::move(persistedBinding));
+  }
+  return bindings;
+}
+
+void LiveLinkSceneSync::RestorePersistedBindings(
+    const std::vector<PersistedBinding> &bindings) {
+  ClearAllBindings();
+  for (const PersistedBinding &persistedBinding : bindings) {
+    if (persistedBinding.objectId.Empty() ||
+        persistedBinding.handleKind == EngineHandleKind::Unknown) {
+      continue;
+    }
+
+    ObjectBinding &binding = m_bindings[persistedBinding.objectId];
+    binding.objectId = persistedBinding.objectId;
+    binding.handleKind = persistedBinding.handleKind;
+    binding.handleIndex = persistedBinding.handleIndex;
+    binding.sessionId.clear();
+    binding.lastAppliedRevision = 0;
+  }
+}
+
 std::vector<LiveLinkDiagnosticEntry>
 LiveLinkSceneSync::GetRecentDiagnostics() const {
   return m_recentDiagnostics;
@@ -797,6 +885,10 @@ bool LiveLinkSceneSync::ApplyCameraChanged(const SceneDeltaBatch &batch,
       binding ? *binding
               : BindObject(delta.target, batch.sessionId,
                            EngineHandleKind::MainCamera, kInvalidHandle);
+  if (cameraBinding.sessionId != batch.sessionId) {
+    cameraBinding.lastAppliedRevision = 0;
+  }
+  cameraBinding.sessionId = batch.sessionId;
   const CachedCameraState previousCameraState = m_cachedExternalCamera;
   m_cachedExternalCamera.valid = true;
   m_cachedExternalCamera.objectId = delta.target;
@@ -879,6 +971,10 @@ bool LiveLinkSceneSync::ApplyEnvironmentChanged(const SceneDeltaBatch &batch,
       binding ? *binding
               : BindObject(delta.target, batch.sessionId,
                            EngineHandleKind::Environment, kInvalidHandle);
+  if (environmentBinding.sessionId != batch.sessionId) {
+    environmentBinding.lastAppliedRevision = 0;
+  }
+  environmentBinding.sessionId = batch.sessionId;
 
   bool changed = false;
   if (!payload->environmentUri.empty() &&
@@ -957,6 +1053,7 @@ bool LiveLinkSceneSync::EnsureNodeBinding(const SceneDeltaBatch &batch,
   if (!binding) {
     Scene::Node node;
     node.name = preferredName;
+    node.liveLinkManaged = true;
     const size_t nodeIndex = Scene::AddNode(std::move(node));
     binding = &BindObject(delta.target, batch.sessionId,
                           EngineHandleKind::SceneNode, nodeIndex);
@@ -972,8 +1069,15 @@ bool LiveLinkSceneSync::EnsureNodeBinding(const SceneDeltaBatch &batch,
       binding->handleIndex >= Scene::GetNodes().size()) {
     Scene::Node node;
     node.name = preferredName;
+    node.liveLinkManaged = true;
     binding->handleIndex = Scene::AddNode(std::move(node));
   }
+
+  if (binding->sessionId != batch.sessionId) {
+    binding->lastAppliedRevision = 0;
+  }
+  binding->sessionId = batch.sessionId;
+  Scene::SetNodeLiveLinkManaged(binding->handleIndex, true);
 
   if (!preferredName.empty() && binding->handleIndex < Scene::GetNodes().size()) {
     Scene::RenameNode(binding->handleIndex, preferredName);
@@ -1006,6 +1110,10 @@ bool LiveLinkSceneSync::EnsureLightBinding(const SceneDeltaBatch &batch,
     binding->handleIndex = Scene::AddLight(LightType::Omni);
   }
 
+  if (binding->sessionId != batch.sessionId) {
+    binding->lastAppliedRevision = 0;
+  }
+  binding->sessionId = batch.sessionId;
   if (outBinding) {
     *outBinding = binding;
   }
@@ -1047,6 +1155,10 @@ bool LiveLinkSceneSync::EnsureMaterialBinding(const SceneDeltaBatch &batch,
     binding->handleIndex = static_cast<size_t>(materialIndex);
   }
 
+  if (binding->sessionId != batch.sessionId) {
+    binding->lastAppliedRevision = 0;
+  }
+  binding->sessionId = batch.sessionId;
   if (outBinding) {
     *outBinding = binding;
   }
@@ -1054,44 +1166,10 @@ bool LiveLinkSceneSync::EnsureMaterialBinding(const SceneDeltaBatch &batch,
 }
 
 void LiveLinkSceneSync::RemoveSessionContent(const std::string &sessionId) {
-  std::vector<size_t> nodeIndices;
-  std::vector<size_t> lightIndices;
-  for (const auto &[_, binding] : m_bindings) {
-    if (binding.sessionId != sessionId || binding.handleIndex == kInvalidHandle) {
-      continue;
-    }
-    if (binding.handleKind == EngineHandleKind::SceneNode) {
-      nodeIndices.push_back(binding.handleIndex);
-    } else if (binding.handleKind == EngineHandleKind::SceneLight) {
-      lightIndices.push_back(binding.handleIndex);
-    }
-  }
-
-  std::sort(nodeIndices.begin(), nodeIndices.end());
-  nodeIndices.erase(std::unique(nodeIndices.begin(), nodeIndices.end()),
-                    nodeIndices.end());
-  for (auto it = nodeIndices.rbegin(); it != nodeIndices.rend(); ++it) {
-    if (*it < Scene::GetNodes().size()) {
-      Scene::RemoveNode(*it);
-      ReindexSceneNodeBindingsAfterRemoval(*it);
-    }
-  }
-
-  std::sort(lightIndices.begin(), lightIndices.end());
-  lightIndices.erase(std::unique(lightIndices.begin(), lightIndices.end()),
-                     lightIndices.end());
-  for (auto it = lightIndices.rbegin(); it != lightIndices.rend(); ++it) {
-    if (*it < Scene::GetLights().size()) {
-      Scene::RemoveLight(*it);
-      ReindexSceneLightBindingsAfterRemoval(*it);
-    }
-  }
-
-  for (auto it = m_bindings.begin(); it != m_bindings.end();) {
-    if (it->second.sessionId == sessionId) {
-      it = m_bindings.erase(it);
-    } else {
-      ++it;
+  for (auto &[_, binding] : m_bindings) {
+    if (binding.sessionId == sessionId) {
+      binding.sessionId.clear();
+      binding.lastAppliedRevision = 0;
     }
   }
   if (m_cachedExternalCamera.valid && m_cachedExternalCamera.sessionId == sessionId) {

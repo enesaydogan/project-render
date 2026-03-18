@@ -22,13 +22,17 @@ struct LiveLinkDiagnosticEntry {
 
 class LiveLinkSceneSync {
 public:
-  void ApplyQueuedBatches(LiveLinkCoordinator &coordinator);
-  std::vector<LiveLinkDiagnosticEntry> GetRecentDiagnostics() const;
-  void DetachCameraControl();
-  void ResumeCameraControl();
-  bool IsCameraControlDetached() const;
+  struct StatsSnapshot {
+    size_t nodeCount = 0;
+    size_t meshCount = 0;
+    size_t lightCount = 0;
+    size_t materialCount = 0;
+    size_t totalBindingCount = 0;
+    size_t activeSessionBindingCount = 0;
+    bool cameraBound = false;
+    bool environmentBound = false;
+  };
 
-private:
   enum class EngineHandleKind {
     Unknown,
     SceneNode,
@@ -38,6 +42,22 @@ private:
     Environment,
   };
 
+  struct PersistedBinding {
+    ObjectId objectId;
+    EngineHandleKind handleKind = EngineHandleKind::Unknown;
+    size_t handleIndex = static_cast<size_t>(-1);
+  };
+
+  void ApplyQueuedBatches(LiveLinkCoordinator &coordinator);
+  std::vector<LiveLinkDiagnosticEntry> GetRecentDiagnostics() const;
+  void DetachCameraControl();
+  void ResumeCameraControl();
+  bool IsCameraControlDetached() const;
+  StatsSnapshot GetStatsSnapshot() const;
+  std::vector<PersistedBinding> ExportPersistedBindings() const;
+  void RestorePersistedBindings(const std::vector<PersistedBinding> &bindings);
+
+private:
   struct ObjectBinding {
     ObjectId objectId;
     std::string sessionId;
