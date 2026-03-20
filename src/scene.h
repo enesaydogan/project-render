@@ -17,6 +17,7 @@ namespace Scene {
 struct Node {
   std::string name;
   std::vector<size_t> meshIndices; // indices into global g_loadedMeshes
+  size_t parentIndex;              // invalid when this is a root node
   float transform[16];             // 4x4 column-major matrix
   std::string sourcePath;          // Path to the asset file for re-loading
   std::vector<int> linkedMaterialIndices; // global material indices per import slot
@@ -87,6 +88,7 @@ bool RenameNode(size_t index, const std::string &name);
 bool UpdateNodeTransform(size_t index, const float *columnMajor4x4);
 bool SetNodeVisibility(size_t index, bool visible);
 bool SetNodeLiveLinkManaged(size_t index, bool liveLinkManaged);
+bool SetNodeParent(size_t index, size_t parentIndex);
 bool RemoveNode(size_t index);
 void SelectNode(size_t index);
 std::vector<Instance> GetInstances();

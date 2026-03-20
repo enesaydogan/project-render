@@ -45,6 +45,7 @@ constexpr Class_ID kPersistentIdAppDataClassId(0x21436f0a, 0x5c7a19d1);
 constexpr DWORD kSceneGuidAppDataSubId = 0x1001;
 constexpr DWORD kNodeGuidAppDataSubId = 0x1002;
 constexpr DWORD kResumeStateAppDataSubId = 0x1003;
+constexpr DWORD kMaterialGuidAppDataSubId = 0x1004;
 
 #if defined(PROJECT_RENDER_HAS_VRAY_SDK)
 #define PROJECT_RENDER_VRAYMTL_CLASS_ID Class_ID(0x37bf3f2f, 0x7034695c)
@@ -232,6 +233,8 @@ constexpr int kUtilityDialogId = 101;
 constexpr int kStatusControlId = 1001;
 constexpr int kStartControlId = 1002;
 constexpr int kStopControlId = 1003;
+constexpr int kStartFullControlId = 1004;
+constexpr int kDetailsControlId = 1005;
 
 class ProjectRenderLiveLinkUtility;
 extern ProjectRenderLiveLinkUtility g_utility;
@@ -895,6 +898,31 @@ std::string MakeMaterialObjectId(const std::string &nodeObjectId, int materialSl
          ":slot:" + std::to_string((std::max)(0, materialSlot));
 }
 
+std::string GetOrCreateMaterialGuid(Mtl *material) {
+  if (!material) {
+    return {};
+  }
+
+  std::string guid = ReadAppDataString(material, kMaterialGuidAppDataSubId);
+  if (guid.empty()) {
+    guid = GenerateGuidString();
+    if (!guid.empty()) {
+      WriteAppDataString(material, kMaterialGuidAppDataSubId, guid);
+    }
+  }
+  return guid.empty() ? std::string("missing") : guid;
+}
+
+std::string MakeMaterialObjectId(const std::string &nodeObjectId,
+                                 int materialSlot,
+                                 const std::string &materialStableId) {
+  if (!materialStableId.empty()) {
+    return "material:" + nodeObjectId + ":id:" + materialStableId;
+  }
+  return "material:" + nodeObjectId +
+         ":slot:" + std::to_string((std::max)(0, materialSlot));
+}
+
 std::string MakeLightObjectId(INode *node) {
   if (!node) {
     return {};
@@ -954,6 +982,7 @@ struct MaterialSnapshot {
   ULONG_PTR nodeHandle = 0;
   int materialSlot = 0;
   std::string nodeObjectId;
+  std::string materialStableId;
   std::string objectId;
   std::string name;
   std::string materialModel = "OpenPBR";
@@ -1162,6 +1191,7 @@ bool SameMaterial(const MaterialSnapshot &lhs, const MaterialSnapshot &rhs) {
   return lhs.valid == rhs.valid && lhs.objectId == rhs.objectId &&
          lhs.materialSlot == rhs.materialSlot && lhs.name == rhs.name &&
          lhs.nodeObjectId == rhs.nodeObjectId &&
+         lhs.materialStableId == rhs.materialStableId &&
          lhs.materialModel == rhs.materialModel &&
          SameVector4(lhs.baseColor, rhs.baseColor) &&
          lhs.baseColorTextureUri == rhs.baseColorTextureUri &&
@@ -1223,6 +1253,7 @@ json SerializeNodeSnapshot(const NodeSnapshot &snapshot) {
 json SerializeMaterialSnapshot(const MaterialSnapshot &snapshot) {
   return json{{"oi", snapshot.objectId},
               {"ni", snapshot.nodeObjectId},
+              {"si", snapshot.materialStableId},
               {"ms", snapshot.materialSlot},
               {"n", snapshot.name},
               {"mm", snapshot.materialModel},
@@ -1305,6 +1336,7 @@ bool DeserializeMaterialSnapshot(const json &value, MaterialSnapshot *outSnapsho
   snapshot.valid = true;
   snapshot.objectId = value.value("oi", std::string());
   snapshot.nodeObjectId = value.value("ni", std::string());
+  snapshot.materialStableId = value.value("si", std::string());
   snapshot.materialSlot = value.value("ms", 0);
   snapshot.name = value.value("n", std::string());
   snapshot.materialModel = value.value("mm", std::string("OpenPBR"));
@@ -2202,8 +2234,10 @@ bool CaptureMaterialSnapshot(Interface *ip, INode *node, int materialSlot, Mtl *
   snapshot.nodeHandle = node->GetHandle();
   snapshot.materialSlot = (std::max)(0, materialSlot);
   snapshot.nodeObjectId = MakeNodeObjectId(node);
+  snapshot.materialStableId = GetOrCreateMaterialGuid(material);
   snapshot.objectId = MakeMaterialObjectId(snapshot.nodeObjectId,
-                                           snapshot.materialSlot);
+                                           snapshot.materialSlot,
+                                           snapshot.materialStableId);
   snapshot.name = ToUtf8(material->GetName());
   if (snapshot.name.empty()) {
     snapshot.name = ToUtf8(node->GetName()) + " [slot " +
@@ -2979,6 +3013,7 @@ void AppendMaterialDelta(const std::string &documentId,
                             {"payload", json{{"parametersChanged", true},
                                               {"texturesChanged", true},
                                               {"nodeObjectId", snapshot.nodeObjectId},
+                                              {"materialStableId", snapshot.materialStableId},
                                               {"materialSlot", snapshot.materialSlot},
                                               {"materialModel", snapshot.materialModel},
                                               {"baseColor", snapshot.baseColor},
@@ -3080,6 +3115,7 @@ bool SendInitialSnapshot(Interface *ip,
                          std::unordered_map<ULONG_PTR, LightSnapshot> *outLightState,
                          std::vector<std::string> *outSelectedObjectIds,
                          CameraSnapshot *outCameraSnapshot,
+                         size_t *outDeltaCount,
                          std::string *outSessionId,
                          std::string *outDocumentId,
                          uint64_t *outNextSequence,
@@ -3165,6 +3201,9 @@ bool SendInitialSnapshot(Interface *ip,
   if (outCameraSnapshot) {
     *outCameraSnapshot = cameraSnapshot;
   }
+  if (outDeltaCount) {
+    *outDeltaCount = deltas.size();
+  }
   if (outSessionId) {
     *outSessionId = sessionId;
   }
@@ -3186,6 +3225,7 @@ bool SendResumeSnapshot(Interface *ip,
                         std::unordered_map<ULONG_PTR, LightSnapshot> *outLightState,
                         std::vector<std::string> *outSelectedObjectIds,
                         CameraSnapshot *outCameraSnapshot,
+                        size_t *outDeltaCount,
                         std::string *outSessionId,
                         std::string *outDocumentId,
                         uint64_t *outNextSequence,
@@ -3336,6 +3376,9 @@ bool SendResumeSnapshot(Interface *ip,
   }
   if (outCameraSnapshot) {
     *outCameraSnapshot = cameraSnapshot;
+  }
+  if (outDeltaCount) {
+    *outDeltaCount = deltas.size();
   }
   if (outSessionId) {
     *outSessionId = sessionId;
@@ -3499,7 +3542,10 @@ private:
     if (message == WM_COMMAND) {
       switch (LOWORD(wParam)) {
       case kStartControlId:
-        utility->StartLiveSync();
+        utility->StartLiveSync(false);
+        return TRUE;
+      case kStartFullControlId:
+        utility->StartLiveSync(true);
         return TRUE;
       case kStopControlId:
         utility->StopLiveSync();
@@ -3662,13 +3708,19 @@ private:
             ? Utf8ToWString(std::string("Background sync is active. Session: ") +
                             m_sessionId)
             : std::wstring(L"Background sync is inactive.");
+    const std::wstring detailsText = Utf8ToWString(
+      m_lastStartupSummary.empty() ? std::string("Last startup: none.")
+                     : m_lastStartupSummary);
 
     EnableWindow(GetDlgItem(rollupHwnd, kStartControlId),
+           m_syncActive ? FALSE : TRUE);
+    EnableWindow(GetDlgItem(rollupHwnd, kStartFullControlId),
            m_syncActive ? FALSE : TRUE);
     EnableWindow(GetDlgItem(rollupHwnd, kStopControlId),
                  m_syncActive ? TRUE : FALSE);
 
     SetDlgItemTextW(rollupHwnd, kStatusControlId, statusText.c_str());
+    SetDlgItemTextW(rollupHwnd, kDetailsControlId, detailsText.c_str());
   }
 
   void RefreshRollupUI() {
@@ -3701,19 +3753,29 @@ private:
       return true;
     }
 
-    if (!SendResumeSnapshot(ip, &m_lastNodeState, &m_lastMaterialState,
-                            &m_lastLightState, &m_lastSelectedObjectIds,
-                            &m_lastCameraSnapshot, &m_sessionId,
-                            &m_documentId, &m_nextSequence,
-                            &m_nextRevision)) {
+    size_t startupDeltaCount = 0;
+    bool usedResumeStartup = false;
+    if (!m_forceFullSnapshotOnConnect &&
+        SendResumeSnapshot(ip, &m_lastNodeState, &m_lastMaterialState,
+                           &m_lastLightState, &m_lastSelectedObjectIds,
+                           &m_lastCameraSnapshot, &startupDeltaCount,
+                           &m_sessionId, &m_documentId, &m_nextSequence,
+                           &m_nextRevision)) {
+      usedResumeStartup = true;
+    } else {
       if (!SendInitialSnapshot(ip, &m_lastNodeState, &m_lastMaterialState,
                                &m_lastLightState, &m_lastSelectedObjectIds,
-                               &m_lastCameraSnapshot, &m_sessionId,
+                               &m_lastCameraSnapshot, &startupDeltaCount,
+                               &m_sessionId,
                                &m_documentId, &m_nextSequence,
                                &m_nextRevision)) {
         return false;
       }
     }
+    m_forceFullSnapshotOnConnect = false;
+    m_lastStartupSummary = std::string("Last startup: ") +
+                           (usedResumeStartup ? "resume sync" : "full snapshot") +
+                           " (deltas=" + std::to_string(startupDeltaCount) + ")";
 
     PersistResumeStateLocked(ip);
     m_nextPollDeadline = ComputeNextPollDeadline(kActivePollMinIntervalMs);
@@ -3727,7 +3789,7 @@ private:
     return true;
   }
 
-  bool StartLiveSync() {
+  bool StartLiveSync(bool forceFullResync) {
     std::lock_guard<std::mutex> lock(m_sendMutex);
     if (m_syncActive) {
       RefreshRollupUI_NoLock();
@@ -3739,6 +3801,8 @@ private:
       RefreshRollupUI_NoLock();
       return false;
     }
+
+    m_forceFullSnapshotOnConnect = forceFullResync;
 
     if (!EnsureConnectedSession(ip)) {
       RefreshRollupUI_NoLock();
@@ -4234,6 +4298,8 @@ private:
   std::unordered_map<ULONG_PTR, LightSnapshot> m_lastLightState;
   std::vector<std::string> m_lastSelectedObjectIds;
   CameraSnapshot m_lastCameraSnapshot;
+  bool m_forceFullSnapshotOnConnect = false;
+  std::string m_lastStartupSummary;
   std::string m_sessionId;
   std::string m_documentId;
   uint64_t m_nextSequence = 1;

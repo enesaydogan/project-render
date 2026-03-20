@@ -18,6 +18,7 @@
 #include <QAction>
 #include <QKeySequence>
 #include <QCloseEvent>
+#include <QComboBox>
 #include <QDockWidget>
 #include <QDialog>
 #include <QHBoxLayout>
@@ -502,36 +503,50 @@ void MainWindow::createDocks()
         buttonRow->setContentsMargins(0, 0, 0, 0);
         buttonRow->setSpacing(6);
 
-        m_liveLinkConnectButton = new QPushButton(tr("Connect All"), panel);
-        connect(m_liveLinkConnectButton, &QPushButton::clicked, this, []() {
-            auto &coordinator = LiveLink::GetCoordinator();
-            const auto providers = coordinator.GetProviderSnapshots();
-            for (const auto &provider : providers) {
-                coordinator.ConnectProvider(provider.providerId);
+        m_liveLinkProviderCombo = new QComboBox(panel);
+        buttonRow->addWidget(m_liveLinkProviderCombo, 1);
+
+        m_liveLinkConnectButton = new QPushButton(tr("Enable"), panel);
+        connect(m_liveLinkConnectButton, &QPushButton::clicked, this, [this]() {
+            if (!m_liveLinkProviderCombo) {
+                return;
             }
+            const QVariant providerIdValue = m_liveLinkProviderCombo->currentData();
+            if (!providerIdValue.isValid()) {
+                return;
+            }
+            auto &coordinator = LiveLink::GetCoordinator();
+            coordinator.ConnectProvider(providerIdValue.toULongLong());
         });
         buttonRow->addWidget(m_liveLinkConnectButton);
 
-        m_liveLinkDisconnectButton = new QPushButton(tr("Disconnect All"), panel);
-        connect(m_liveLinkDisconnectButton, &QPushButton::clicked, this, []() {
-            auto &coordinator = LiveLink::GetCoordinator();
-            const auto providers = coordinator.GetProviderSnapshots();
-            for (const auto &provider : providers) {
-                coordinator.DisconnectProvider(provider.providerId);
+        m_liveLinkDisconnectButton = new QPushButton(tr("Disable"), panel);
+        connect(m_liveLinkDisconnectButton, &QPushButton::clicked, this, [this]() {
+            if (!m_liveLinkProviderCombo) {
+                return;
             }
+            const QVariant providerIdValue = m_liveLinkProviderCombo->currentData();
+            if (!providerIdValue.isValid()) {
+                return;
+            }
+            auto &coordinator = LiveLink::GetCoordinator();
+            coordinator.DisconnectProvider(providerIdValue.toULongLong());
         });
         buttonRow->addWidget(m_liveLinkDisconnectButton);
 
-        m_liveLinkReconnectButton = new QPushButton(tr("Reconnect All"), panel);
-        connect(m_liveLinkReconnectButton, &QPushButton::clicked, this, []() {
+        m_liveLinkReconnectButton = new QPushButton(tr("Reconnect"), panel);
+        connect(m_liveLinkReconnectButton, &QPushButton::clicked, this, [this]() {
+            if (!m_liveLinkProviderCombo) {
+                return;
+            }
+            const QVariant providerIdValue = m_liveLinkProviderCombo->currentData();
+            if (!providerIdValue.isValid()) {
+                return;
+            }
+            const auto providerId = providerIdValue.toULongLong();
             auto &coordinator = LiveLink::GetCoordinator();
-            const auto providers = coordinator.GetProviderSnapshots();
-            for (const auto &provider : providers) {
-                coordinator.DisconnectProvider(provider.providerId);
-            }
-            for (const auto &provider : providers) {
-                coordinator.ConnectProvider(provider.providerId);
-            }
+            coordinator.DisconnectProvider(providerId);
+            coordinator.ConnectProvider(providerId);
         });
         buttonRow->addWidget(m_liveLinkReconnectButton);
 
@@ -789,19 +804,56 @@ void MainWindow::updateSceneIoUi()
 
         if (m_liveLinkConnectButton && m_liveLinkDisconnectButton &&
             m_liveLinkReconnectButton && m_liveLinkTakeCameraButton) {
+            uint64_t selectedProviderId = 0;
+            if (m_liveLinkProviderCombo && m_liveLinkProviderCombo->currentData().isValid()) {
+                selectedProviderId = m_liveLinkProviderCombo->currentData().toULongLong();
+            }
+            if (m_liveLinkProviderCombo) {
+                m_liveLinkProviderCombo->blockSignals(true);
+                m_liveLinkProviderCombo->clear();
+                for (const auto &provider : providers) {
+                    const QString label = QStringLiteral("%1 [%2]")
+                                              .arg(QString::fromStdString(provider.providerName),
+                                                   QString::fromLatin1(LiveLink::ToString(provider.connectionState)));
+                    m_liveLinkProviderCombo->addItem(label,
+                                                     QVariant::fromValue<qulonglong>(provider.providerId));
+                }
+                if (!providers.empty()) {
+                    int selectedIndex = 0;
+                    for (int index = 0; index < m_liveLinkProviderCombo->count(); ++index) {
+                        if (m_liveLinkProviderCombo->itemData(index).toULongLong() == selectedProviderId) {
+                            selectedIndex = index;
+                            break;
+                        }
+                    }
+                    m_liveLinkProviderCombo->setCurrentIndex(selectedIndex);
+                }
+                m_liveLinkProviderCombo->setEnabled(!providers.empty());
+                m_liveLinkProviderCombo->blockSignals(false);
+            }
+
             const bool hasProviders = !providers.empty();
             bool anyConnected = false;
             bool anyDisconnected = false;
+            bool selectedConnected = false;
+            bool selectedDisconnected = false;
             for (const auto &provider : providers) {
                 if (provider.connectionState == LiveLink::ConnectionState::Connected) {
                     anyConnected = true;
                 } else {
                     anyDisconnected = true;
                 }
+                if (provider.providerId == selectedProviderId) {
+                    if (provider.connectionState == LiveLink::ConnectionState::Connected) {
+                        selectedConnected = true;
+                    } else {
+                        selectedDisconnected = true;
+                    }
+                }
             }
-            m_liveLinkConnectButton->setEnabled(hasProviders && anyDisconnected);
-            m_liveLinkDisconnectButton->setEnabled(hasProviders && anyConnected);
-            m_liveLinkReconnectButton->setEnabled(hasProviders);
+            m_liveLinkConnectButton->setEnabled(hasProviders && selectedDisconnected);
+            m_liveLinkDisconnectButton->setEnabled(hasProviders && selectedConnected);
+            m_liveLinkReconnectButton->setEnabled(hasProviders && (selectedConnected || selectedDisconnected));
             m_liveLinkTakeCameraButton->setEnabled(anyConnected);
             m_liveLinkTakeCameraButton->setText(
                 LiveLink::GetSceneSync().IsCameraControlDetached()
