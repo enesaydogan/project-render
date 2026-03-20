@@ -7,6 +7,7 @@
 #include "../scene.h"
 #include "../streamline_manager.h"
 
+#include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
@@ -42,6 +43,17 @@ QSpinBox *CreateSpinBox(int minValue, int maxValue)
     spinBox->setRange(minValue, maxValue);
     spinBox->setAccelerated(true);
     return spinBox;
+}
+
+bool IsWidgetBeingEdited(QWidget *widget)
+{
+    if (!widget) {
+        return false;
+    }
+
+    QWidget *focus = QApplication::focusWidget();
+    return widget->hasFocus() ||
+           (focus && (focus == widget || widget->isAncestorOf(focus)));
 }
 
 int RealtimeDenoiserIndexFromMode(DxrRenderer::RealtimeDenoiserMode mode)
@@ -324,12 +336,24 @@ void RenderModePanel::syncFromRenderer()
     }
     m_statsLabel->setText(stats);
 
-    m_reflectionBounces->setValue(g_cameraData.maxSpecularBounces);
-    m_refractionBounces->setValue(g_cameraData.maxRefractiveBounces);
-    m_giBounces->setValue(g_cameraData.maxGIBounces);
-    m_maxSpp->setValue(static_cast<int>(g_cameraData.maxSPP));
-    m_adaptiveSampling->setChecked(g_cameraData.useAdaptiveSampling > 0.5f);
-    m_targetNoise->setValue(g_cameraData.noiseThreshold * 100.0f);
+    if (!IsWidgetBeingEdited(m_reflectionBounces)) {
+        m_reflectionBounces->setValue(g_cameraData.maxSpecularBounces);
+    }
+    if (!IsWidgetBeingEdited(m_refractionBounces)) {
+        m_refractionBounces->setValue(g_cameraData.maxRefractiveBounces);
+    }
+    if (!IsWidgetBeingEdited(m_giBounces)) {
+        m_giBounces->setValue(g_cameraData.maxGIBounces);
+    }
+    if (!IsWidgetBeingEdited(m_maxSpp)) {
+        m_maxSpp->setValue(static_cast<int>(g_cameraData.maxSPP));
+    }
+    if (!IsWidgetBeingEdited(m_adaptiveSampling)) {
+        m_adaptiveSampling->setChecked(g_cameraData.useAdaptiveSampling > 0.5f);
+    }
+    if (!IsWidgetBeingEdited(m_targetNoise)) {
+        m_targetNoise->setValue(g_cameraData.noiseThreshold * 100.0f);
+    }
     m_targetNoise->setEnabled(m_adaptiveSampling->isChecked());
 
     m_realtimeDenoiser->setCurrentIndex(
