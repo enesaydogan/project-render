@@ -30,6 +30,9 @@ const T *FindPayload(const SceneDelta &delta) {
 
 constexpr size_t kInvalidHandle = static_cast<size_t>(-1);
 
+std::string BuildLiveLinkMaterialName(const std::string &nodeObjectId,
+                                      int materialSlot);
+
 std::string ResolveNodeName(const SceneDelta &delta,
                             std::string_view preferredName) {
   if (!preferredName.empty()) {
@@ -45,13 +48,50 @@ std::string ResolveNodeName(const SceneDelta &delta,
 }
 
 std::string ResolveMaterialName(const SceneDelta &delta) {
-  if (!delta.target.objectId.empty()) {
-    return delta.target.objectId;
-  }
   if (!delta.debugLabel.empty()) {
     return delta.debugLabel;
   }
+  if (!delta.target.objectId.empty()) {
+    return delta.target.objectId;
+  }
   return "Material";
+}
+
+std::string ResolveMaterialDisplayName(const SceneDelta &delta,
+                                       const MaterialChangedPayload *payload) {
+  if (payload && !payload->name.empty()) {
+    return payload->name;
+  }
+  return ResolveMaterialName(delta);
+}
+
+int ResolveMaterialIndexByName(const SceneDelta &delta,
+                               const MaterialChangedPayload *payload) {
+  auto tryFind = [](const std::string &name) {
+    return name.empty() ? -1 : Scene::FindMaterialByName(name);
+  };
+
+  if (payload) {
+    if (!payload->nodeObjectId.empty()) {
+      const int placeholderIndex = tryFind(
+          BuildLiveLinkMaterialName(payload->nodeObjectId, payload->materialSlot));
+      if (placeholderIndex >= 0) {
+        return placeholderIndex;
+      }
+    }
+
+    const int namedIndex = tryFind(payload->name);
+    if (namedIndex >= 0) {
+      return namedIndex;
+    }
+  }
+
+  const int targetIndex = tryFind(delta.target.objectId);
+  if (targetIndex >= 0) {
+    return targetIndex;
+  }
+
+  return tryFind(delta.debugLabel);
 }
 
 std::filesystem::path Utf8PathFromString(const std::string &value) {
@@ -859,7 +899,7 @@ bool LiveLinkSceneSync::ApplyMaterialChanged(const SceneDeltaBatch &batch,
     material.schemaVersion = Asset::Material::kSchemaVersionOpenPbrSubset;
   }
 
-  const std::string materialName = ResolveMaterialName(delta);
+  const std::string materialName = ResolveMaterialDisplayName(delta, payload);
   strncpy_s(material.name, materialName.c_str(), _TRUNCATE);
 
   if (!Scene::UpdateMaterial(binding->handleIndex, material)) {
@@ -1216,11 +1256,11 @@ bool LiveLinkSceneSync::EnsureLightBinding(const SceneDeltaBatch &batch,
 bool LiveLinkSceneSync::EnsureMaterialBinding(const SceneDeltaBatch &batch,
                                               const SceneDelta &delta,
                                               ObjectBinding **outBinding) {
+  const MaterialChangedPayload *payload = FindPayload<MaterialChangedPayload>(delta);
   ObjectBinding *binding = FindBinding(delta.target);
   if (!binding) {
     int materialIndex = -1;
-    if (const MaterialChangedPayload *payload =
-            FindPayload<MaterialChangedPayload>(delta)) {
+    if (payload) {
       if (!payload->nodeObjectId.empty()) {
         ObjectId nodeObjectId = delta.target;
         nodeObjectId.objectId = payload->nodeObjectId;
@@ -1246,7 +1286,7 @@ bool LiveLinkSceneSync::EnsureMaterialBinding(const SceneDeltaBatch &batch,
     }
 
     if (materialIndex < 0) {
-      materialIndex = Scene::FindMaterialByName(ResolveMaterialName(delta));
+      materialIndex = ResolveMaterialIndexByName(delta, payload);
     }
     if (materialIndex < 0) {
       LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
@@ -1266,8 +1306,7 @@ bool LiveLinkSceneSync::EnsureMaterialBinding(const SceneDeltaBatch &batch,
 
   if (binding->handleIndex == kInvalidHandle ||
       binding->handleIndex >= Scene::GetMaterialCount()) {
-    const int materialIndex =
-        Scene::FindMaterialByName(ResolveMaterialName(delta));
+    const int materialIndex = ResolveMaterialIndexByName(delta, payload);
     if (materialIndex < 0) {
       LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
                     "Bound material no longer exists");

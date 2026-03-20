@@ -148,6 +148,7 @@ struct MaterialChangedPayload {
   std::string nodeObjectId;
   std::string materialStableId;
   int materialSlot = 0;
+  std::string name;
   std::string materialModel;
   std::array<float, 4> baseColor = {1.0f, 1.0f, 1.0f, 1.0f};
   std::string baseColorTextureUri;

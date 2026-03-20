@@ -217,6 +217,7 @@ bool ParsePayload(const SceneDeltaKind kind, const json &payloadJson,
     payload.nodeObjectId = payloadJson.value("nodeObjectId", "");
     payload.materialStableId = payloadJson.value("materialStableId", "");
     payload.materialSlot = payloadJson.value("materialSlot", 0);
+    payload.name = payloadJson.value("name", "");
     payload.materialModel = payloadJson.value("materialModel", "");
     if (payloadJson.contains("baseColor")) {
       FillFloatArray(payloadJson.at("baseColor"), &payload.baseColor);
