@@ -506,7 +506,7 @@ bool LiveLinkSceneSync::ApplyNodeAdded(const SceneDeltaBatch &batch,
 
 bool LiveLinkSceneSync::ApplyNodeRemoved(const SceneDeltaBatch &batch,
                                          const SceneDelta &delta) {
-  (void)batch;
+  const NodeRemovedPayload *payload = FindPayload<NodeRemovedPayload>(delta);
   ObjectBinding *binding = FindBinding(delta.target);
   if (!binding) {
     return true;
@@ -533,12 +533,84 @@ bool LiveLinkSceneSync::ApplyNodeRemoved(const SceneDeltaBatch &batch,
   }
 
   const size_t removedIndex = binding->handleIndex;
-  if (removedIndex < Scene::GetNodes().size()) {
-    Scene::RemoveNode(removedIndex);
+  if (removedIndex >= Scene::GetNodes().size()) {
+    m_bindings.erase(delta.target);
+    return true;
   }
 
-  m_bindings.erase(delta.target);
-  ReindexSceneNodeBindingsAfterRemoval(removedIndex);
+  const bool removeChildren = payload ? payload->removeChildren : true;
+  const size_t removedParentIndex = Scene::GetNodes()[removedIndex].parentIndex;
+
+  std::vector<size_t> removedNodeIndices;
+  removedNodeIndices.push_back(removedIndex);
+  if (removeChildren) {
+    for (size_t nodeIndex = 0; nodeIndex < Scene::GetNodes().size(); ++nodeIndex) {
+      if (nodeIndex == removedIndex) {
+        continue;
+      }
+      size_t parentIndex = Scene::GetNodes()[nodeIndex].parentIndex;
+      while (parentIndex != kInvalidHandle && parentIndex < Scene::GetNodes().size()) {
+        if (parentIndex == removedIndex) {
+          removedNodeIndices.push_back(nodeIndex);
+          break;
+        }
+        parentIndex = Scene::GetNodes()[parentIndex].parentIndex;
+      }
+    }
+  } else {
+    for (size_t nodeIndex = 0; nodeIndex < Scene::GetNodes().size(); ++nodeIndex) {
+      if (Scene::GetNodes()[nodeIndex].parentIndex == removedIndex) {
+        Scene::SetNodeParent(nodeIndex, removedParentIndex);
+      }
+    }
+  }
+
+  std::sort(removedNodeIndices.begin(), removedNodeIndices.end());
+  removedNodeIndices.erase(
+      std::unique(removedNodeIndices.begin(), removedNodeIndices.end()),
+      removedNodeIndices.end());
+
+  std::vector<ObjectId> bindingsToErase;
+  std::vector<std::string> removedNodeObjectIds;
+  for (const auto &[objectId, existingBinding] : m_bindings) {
+    if (existingBinding.handleKind != EngineHandleKind::SceneNode ||
+        existingBinding.handleIndex == kInvalidHandle) {
+      continue;
+    }
+    if (!std::binary_search(removedNodeIndices.begin(), removedNodeIndices.end(),
+                            existingBinding.handleIndex)) {
+      continue;
+    }
+    bindingsToErase.push_back(objectId);
+    removedNodeObjectIds.push_back(objectId.objectId);
+  }
+
+  for (const auto &[objectId, existingBinding] : m_bindings) {
+    if (existingBinding.handleKind != EngineHandleKind::SceneMaterial) {
+      continue;
+    }
+    for (const std::string &removedNodeObjectId : removedNodeObjectIds) {
+      const std::string prefix = std::string("material:") + removedNodeObjectId + ":";
+      if (objectId.objectId.rfind(prefix, 0) == 0) {
+        bindingsToErase.push_back(objectId);
+        break;
+      }
+    }
+  }
+
+  for (const ObjectId &objectId : bindingsToErase) {
+    m_bindings.erase(objectId);
+  }
+
+  std::sort(removedNodeIndices.rbegin(), removedNodeIndices.rend());
+  for (size_t nodeIndex : removedNodeIndices) {
+    if (nodeIndex >= Scene::GetNodes().size()) {
+      continue;
+    }
+    Scene::RemoveNode(nodeIndex);
+    ReindexSceneNodeBindingsAfterRemoval(nodeIndex);
+  }
+
   return true;
 }
 

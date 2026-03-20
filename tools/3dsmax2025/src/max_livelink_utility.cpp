@@ -3697,6 +3697,91 @@ private:
     return m_interface ? m_interface : GetCOREInterface();
   }
 
+  size_t CountTrackedMeshNodes_NoLock() const {
+    size_t meshNodeCount = 0;
+    for (const auto &[_, snapshot] : m_lastNodeState) {
+      if (snapshot.hasMesh) {
+        ++meshNodeCount;
+      }
+    }
+    return meshNodeCount;
+  }
+
+  size_t CountTrackedTextureUris_NoLock() const {
+    std::unordered_set<std::string> textureUris;
+    for (const auto &[_, snapshot] : m_lastMaterialState) {
+      if (!snapshot.baseColorTextureUri.empty()) {
+        textureUris.insert(snapshot.baseColorTextureUri);
+      }
+      if (!snapshot.normalTextureUri.empty()) {
+        textureUris.insert(snapshot.normalTextureUri);
+      }
+      if (!snapshot.emissiveTextureUri.empty()) {
+        textureUris.insert(snapshot.emissiveTextureUri);
+      }
+      if (!snapshot.occlusionTextureUri.empty()) {
+        textureUris.insert(snapshot.occlusionTextureUri);
+      }
+      if (!snapshot.metalRoughTextureUri.empty()) {
+        textureUris.insert(snapshot.metalRoughTextureUri);
+      }
+    }
+    return textureUris.size();
+  }
+
+  size_t CountDirtyItems_NoLock() const {
+    size_t dirtyCount = m_dirtyNodeHandles.size() + m_dirtyMeshHandles.size() +
+                        m_dirtyMaterialHandles.size() +
+                        m_dirtyLightHandles.size();
+    if (m_selectionDirty) {
+      ++dirtyCount;
+    }
+    return dirtyCount;
+  }
+
+  const char *GetResyncStatusText_NoLock() const {
+    if (m_forceFullSnapshotOnConnect) {
+      return "full snapshot on connect";
+    }
+    if (m_forceFullResync) {
+      return "full resync pending";
+    }
+    if (m_syncActive) {
+      return "incremental";
+    }
+    return "inactive";
+  }
+
+  void RecordBatchSent_NoLock(size_t deltaCount) {
+    ++m_batchesSent;
+    m_totalDeltasSent += deltaCount;
+    m_lastBatchDeltaCount = deltaCount;
+  }
+
+  void ResetBatchStats_NoLock() {
+    m_batchesSent = 0;
+    m_totalDeltasSent = 0;
+    m_lastBatchDeltaCount = 0;
+  }
+
+  std::string BuildDetailsText_NoLock() const {
+    const std::string startupSummary =
+        m_lastStartupSummary.empty() ? std::string("Last startup: none.")
+                                     : m_lastStartupSummary;
+    return startupSummary +
+           "\r\nSync: " + GetResyncStatusText_NoLock() +
+           " | session=" + (m_sessionId.empty() ? std::string("none") : m_sessionId) +
+           " | dirty=" + std::to_string(CountDirtyItems_NoLock()) +
+           "\r\nScene: nodes=" + std::to_string(m_lastNodeState.size()) +
+           " | meshNodes=" + std::to_string(CountTrackedMeshNodes_NoLock()) +
+           " | lights=" + std::to_string(m_lastLightState.size()) +
+           " | materials=" + std::to_string(m_lastMaterialState.size()) +
+           " | textures=" + std::to_string(CountTrackedTextureUris_NoLock()) +
+           "\r\nBatches: sent=" + std::to_string(m_batchesSent) +
+           " | deltas=" + std::to_string(m_totalDeltasSent) +
+           " | lastBatch=" + std::to_string(m_lastBatchDeltaCount);
+  }
+
   void RefreshRollupUI_NoLock() {
     HWND rollupHwnd = m_rollupHwnd;
     if (!rollupHwnd) {
@@ -3708,9 +3793,7 @@ private:
             ? Utf8ToWString(std::string("Background sync is active. Session: ") +
                             m_sessionId)
             : std::wstring(L"Background sync is inactive.");
-    const std::wstring detailsText = Utf8ToWString(
-      m_lastStartupSummary.empty() ? std::string("Last startup: none.")
-                     : m_lastStartupSummary);
+    const std::wstring detailsText = Utf8ToWString(BuildDetailsText_NoLock());
 
     EnableWindow(GetDlgItem(rollupHwnd, kStartControlId),
            m_syncActive ? FALSE : TRUE);
@@ -3773,6 +3856,8 @@ private:
       }
     }
     m_forceFullSnapshotOnConnect = false;
+    ResetBatchStats_NoLock();
+    RecordBatchSent_NoLock(startupDeltaCount);
     m_lastStartupSummary = std::string("Last startup: ") +
                            (usedResumeStartup ? "resume sync" : "full snapshot") +
                            " (deltas=" + std::to_string(startupDeltaCount) + ")";
@@ -3940,8 +4025,10 @@ private:
     AppendCameraDelta(m_documentId, currentCamera, &m_nextRevision, &deltas);
     if (SendBatch(m_sessionId, m_nextSequence, false, deltas)) {
       ++m_nextSequence;
+      RecordBatchSent_NoLock(deltas.size());
       m_lastCameraSnapshot = currentCamera;
       PersistResumeStateLocked(ip);
+      RefreshRollupUI_NoLock();
     }
   }
 
@@ -4074,6 +4161,7 @@ private:
       if (!deltas.empty() &&
           SendBatch(m_sessionId, m_nextSequence, false, deltas)) {
         ++m_nextSequence;
+        RecordBatchSent_NoLock(deltas.size());
         m_lastNodeState = std::move(currentState);
         m_lastMaterialState = std::move(currentMaterialState);
         m_lastLightState = std::move(currentLightState);
@@ -4211,6 +4299,7 @@ private:
 
     if (!deltas.empty() && SendBatch(m_sessionId, m_nextSequence, false, deltas)) {
       ++m_nextSequence;
+      RecordBatchSent_NoLock(deltas.size());
       for (const auto &[handle, snapshot] : stagedNodes) {
         m_lastNodeState[handle] = snapshot;
       }
@@ -4267,6 +4356,7 @@ private:
     AppendSelectionDelta(selectedObjectIds, &deltas);
     if (SendBatch(m_sessionId, m_nextSequence, false, deltas)) {
       ++m_nextSequence;
+      RecordBatchSent_NoLock(deltas.size());
       m_lastSelectedObjectIds = selectedObjectIds;
       PersistResumeStateLocked(ip);
     }
@@ -4300,6 +4390,9 @@ private:
   CameraSnapshot m_lastCameraSnapshot;
   bool m_forceFullSnapshotOnConnect = false;
   std::string m_lastStartupSummary;
+  uint64_t m_batchesSent = 0;
+  uint64_t m_totalDeltasSent = 0;
+  uint64_t m_lastBatchDeltaCount = 0;
   std::string m_sessionId;
   std::string m_documentId;
   uint64_t m_nextSequence = 1;
