@@ -546,6 +546,7 @@ bool LiveLinkSceneSync::ApplyNodeAdded(const SceneDeltaBatch &batch,
 
 bool LiveLinkSceneSync::ApplyNodeRemoved(const SceneDeltaBatch &batch,
                                          const SceneDelta &delta) {
+  (void)batch;
   const NodeRemovedPayload *payload = FindPayload<NodeRemovedPayload>(delta);
   ObjectBinding *binding = FindBinding(delta.target);
   if (!binding) {
@@ -823,6 +824,33 @@ bool LiveLinkSceneSync::ApplyMaterialChanged(const SceneDeltaBatch &batch,
       binding->handleIndex == kInvalidHandle ||
       binding->handleIndex >= Scene::GetMaterialCount()) {
     return false;
+  }
+
+  auto rebindReference = [&](const std::string &nodeObjectIdValue,
+                             int materialSlotValue) {
+    if (nodeObjectIdValue.empty()) {
+      return;
+    }
+    ObjectId nodeObjectId = delta.target;
+    nodeObjectId.objectId = nodeObjectIdValue;
+    nodeObjectId.objectType = ObjectType::Node;
+    const ObjectBinding *nodeBinding = FindBinding(nodeObjectId);
+    if (!nodeBinding || nodeBinding->handleKind != EngineHandleKind::SceneNode ||
+        nodeBinding->handleIndex >= Scene::GetNodes().size()) {
+      return;
+    }
+    const size_t materialSlot =
+        static_cast<size_t>((std::max)(0, materialSlotValue));
+    Scene::RebindNodeMaterialSlot(nodeBinding->handleIndex, materialSlot,
+                                  static_cast<int>(binding->handleIndex));
+  };
+
+  if (!payload->references.empty()) {
+    for (const MaterialNodeReference &reference : payload->references) {
+      rebindReference(reference.nodeObjectId, reference.materialSlot);
+    }
+  } else if (!payload->nodeObjectId.empty()) {
+    rebindReference(payload->nodeObjectId, payload->materialSlot);
   }
 
   Asset::Material material;
