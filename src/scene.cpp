@@ -1248,6 +1248,8 @@ bool UpdateLight(size_t index, const Light &light) {
 
 size_t GetMaterialCount() { return g_loadedMaterials.size(); }
 
+size_t GetTextureCount() { return g_loadedTextures.size(); }
+
 int FindMaterialByName(const std::string &name) {
   if (name.empty()) {
     return -1;

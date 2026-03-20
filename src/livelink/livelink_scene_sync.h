@@ -114,6 +114,7 @@ private:
                              const SceneDelta &delta,
                              ObjectBinding **outBinding = nullptr);
   void RemoveSessionContent(const std::string &sessionId);
+  void PruneTextureCacheEntries();
   void ReindexSceneNodeBindingsAfterRemoval(size_t removedIndex);
   void ReindexSceneLightBindingsAfterRemoval(size_t removedIndex);
   void ClearAllBindings();
