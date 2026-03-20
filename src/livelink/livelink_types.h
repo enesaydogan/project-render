@@ -169,6 +169,10 @@ struct MaterialChangedPayload {
   float translucency = 0.0f;
   std::array<float, 2> uvScale = {1.0f, 1.0f};
   std::array<float, 2> uvOffset = {0.0f, 0.0f};
+  float triPlanarEnabled = 0.0f;
+  float triPlanarScale = 1.0f;
+  float triPlanarSharpness = 4.0f;
+  float triPlanarNormalStrength = 1.0f;
   bool doubleSided = false;
   std::string alphaMode = "OPAQUE";
 };

@@ -249,6 +249,12 @@ bool ParsePayload(const SceneDeltaKind kind, const json &payloadJson,
     if (payloadJson.contains("uvOffset")) {
       FillFloatArray(payloadJson.at("uvOffset"), &payload.uvOffset);
     }
+    payload.triPlanarEnabled = payloadJson.value("triPlanarEnabled", 0.0f);
+    payload.triPlanarScale = payloadJson.value("triPlanarScale", 1.0f);
+    payload.triPlanarSharpness =
+        payloadJson.value("triPlanarSharpness", 4.0f);
+    payload.triPlanarNormalStrength =
+        payloadJson.value("triPlanarNormalStrength", 1.0f);
     payload.doubleSided = payloadJson.value("doubleSided", false);
     payload.alphaMode = payloadJson.value("alphaMode", "OPAQUE");
     *outPayload = std::move(payload);
