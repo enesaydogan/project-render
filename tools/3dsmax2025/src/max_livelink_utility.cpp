@@ -5,6 +5,7 @@
 #include <iparamm2.h>
 #include <notify.h>
 #include <AppDataChunk.h>
+#include <pbbitmap.h>
 #include <stdmat.h>
 #include <units.h>
 #include <ISceneEventManager.h>
@@ -1652,6 +1653,45 @@ std::string NormalizeTextureUri(Interface *ip, const std::string &rawPath) {
   return PathToUtf8(texturePath.lexically_normal());
 }
 
+bool LooksLikeTexturePath(const std::string &rawPath) {
+  if (rawPath.empty()) {
+    return false;
+  }
+
+  const std::filesystem::path path(Utf8ToWString(rawPath));
+  if (path.empty() || !path.has_extension()) {
+    return false;
+  }
+
+  const std::string extension = ToLowerAscii(path.extension().string());
+  return ContainsAnyToken(
+      extension,
+      {".bmp", ".dds", ".exr", ".gif", ".hdr", ".iff", ".jpg", ".jpeg",
+       ".jp2", ".j2k", ".ktx", ".ktx2", ".png", ".psd", ".pic", ".tga",
+       ".tif", ".tiff", ".tx", ".webp"});
+}
+
+bool TryNormalizeTextureUri(Interface *ip, const std::string &rawPath,
+                            std::string *outUri) {
+  if (!outUri || !LooksLikeTexturePath(rawPath)) {
+    return false;
+  }
+
+  const std::string normalized = NormalizeTextureUri(ip, rawPath);
+  if (normalized.empty()) {
+    return false;
+  }
+
+  *outUri = normalized;
+  return true;
+}
+
+bool ParamNameSuggestsTexturePath(const std::string &paramNameLower) {
+  return ContainsAnyToken(paramNameLower,
+                          {"file", "filename", "filepath", "path", "bitmap",
+                           "bitmapbuffer", "mapname", "asset"});
+}
+
 bool TryResolveBitmapTextureBinding(Interface *ip, BitmapTex *bitmapTex,
                                     TextureBindingSnapshot *outBinding) {
   if (!bitmapTex || !outBinding) {
@@ -1787,6 +1827,107 @@ bool TryGetAnimatableTexmapParamByName(Animatable *animatable, TimeValue time,
   return true;
 }
 
+bool TryResolveAnimatableTextureUriRecursive(
+    Interface *ip, Animatable *animatable, int depthRemaining,
+    std::unordered_set<const Animatable *> *visited, std::string *outUri) {
+  if (!animatable || !visited || !outUri || depthRemaining < 0) {
+    return false;
+  }
+
+  if (!visited->insert(animatable).second) {
+    return false;
+  }
+
+  const TimeValue time = ip ? ip->GetTime() : 0;
+  for (int paramBlockIndex = 0; paramBlockIndex < animatable->NumParamBlocks();
+       ++paramBlockIndex) {
+    IParamBlock2 *paramBlock = animatable->GetParamBlock(paramBlockIndex);
+    if (!paramBlock) {
+      continue;
+    }
+
+    ParamBlockDesc2 *desc = paramBlock->GetDesc();
+    if (!desc) {
+      continue;
+    }
+
+    for (int paramIndex = 0; paramIndex < desc->Count(); ++paramIndex) {
+      const ParamDef *paramDef = desc->GetParamDefByIndex(paramIndex);
+      if (!paramDef) {
+        continue;
+      }
+
+      const ParamID paramId = desc->IndextoID(paramIndex);
+      if (paramId < 0) {
+        continue;
+      }
+
+      const std::string paramNameLower =
+          ToLowerAscii(ToUtf8(paramDef->int_name));
+      const ParamType2 paramType = root_type(paramBlock->GetParameterType(paramId));
+      Interval valid = FOREVER;
+
+      if (paramType == TYPE_FILENAME || paramType == TYPE_STRING) {
+        const MCHAR *rawValue = paramBlock->GetStr(paramId, time, valid);
+        const std::string rawPath = ToUtf8(rawValue);
+        if ((ParamNameSuggestsTexturePath(paramNameLower) ||
+             LooksLikeTexturePath(rawPath)) &&
+            TryNormalizeTextureUri(ip, rawPath, outUri)) {
+          return true;
+        }
+        continue;
+      }
+
+      if (paramType == TYPE_BITMAP) {
+        if (PBBitmap *bitmap = paramBlock->GetBitmap(paramId, time, valid)) {
+          const std::string rawPath = ToUtf8(bitmap->bi.Name());
+          if ((ParamNameSuggestsTexturePath(paramNameLower) ||
+               LooksLikeTexturePath(rawPath)) &&
+              TryNormalizeTextureUri(ip, rawPath, outUri)) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+
+  if (depthRemaining == 0) {
+    return false;
+  }
+
+  if (ReferenceMaker *referenceMaker = dynamic_cast<ReferenceMaker *>(animatable)) {
+    for (int referenceIndex = 0; referenceIndex < referenceMaker->NumRefs();
+         ++referenceIndex) {
+      Animatable *referenceAnimatable =
+          dynamic_cast<Animatable *>(referenceMaker->GetReference(referenceIndex));
+      if (TryResolveAnimatableTextureUriRecursive(
+              ip, referenceAnimatable, depthRemaining - 1, visited, outUri)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+bool TryResolveFileBackedTextureBinding(Interface *ip, Texmap *texmap,
+                                        TextureBindingSnapshot *outBinding) {
+  if (!texmap || !outBinding) {
+    return false;
+  }
+
+  std::unordered_set<const Animatable *> visited;
+  std::string textureUri;
+  if (!TryResolveAnimatableTextureUriRecursive(ip, texmap, 2, &visited,
+                                               &textureUri) ||
+      textureUri.empty()) {
+    return false;
+  }
+
+  outBinding->uri = std::move(textureUri);
+  return true;
+}
+
 bool IsTriPlanarTexmap(Texmap *texmap) {
   if (!texmap) {
     return false;
@@ -1833,11 +1974,6 @@ bool TryResolveTriPlanarTextureBinding(Interface *ip, Texmap *texmap,
     if (!foundPrimaryBinding) {
       primaryBinding = std::move(axisBinding);
       foundPrimaryBinding = true;
-      continue;
-    }
-
-    if (axisBinding.uri != primaryBinding.uri) {
-      return false;
     }
   }
 
@@ -1892,6 +2028,10 @@ bool TryResolveTexmapTextureBinding(Interface *ip, Texmap *texmap,
     }
   }
 
+  if (TryResolveFileBackedTextureBinding(ip, texmap, outBinding)) {
+    return true;
+  }
+
   for (int subTexmapIndex = 0; subTexmapIndex < texmap->NumSubTexmaps(); ++subTexmapIndex) {
     if (Texmap *subTexmap = texmap->GetSubTexmap(subTexmapIndex)) {
       if (TryResolveTexmapTextureBinding(ip, subTexmap, outBinding)) {
@@ -1924,14 +2064,11 @@ void ApplyTextureBinding(TextureBindingSnapshot binding, std::string *outUri,
     return;
   }
 
-  if (snapshot->triPlanarEnabled > 0.5f) {
-    return;
-  }
-
   if (NearlyEqual(snapshot->uvScale[0], 1.0f) &&
       NearlyEqual(snapshot->uvScale[1], 1.0f) &&
       NearlyEqual(snapshot->uvOffset[0], 0.0f) &&
-      NearlyEqual(snapshot->uvOffset[1], 0.0f)) {
+      NearlyEqual(snapshot->uvOffset[1], 0.0f) &&
+      snapshot->triPlanarEnabled <= 0.5f) {
     snapshot->uvScale = binding.uvScale;
     snapshot->uvOffset = binding.uvOffset;
   }
@@ -3258,6 +3395,7 @@ void AppendMaterialDelta(const std::string &documentId,
                                               {"nodeObjectId", snapshot.nodeObjectId},
                                               {"materialStableId", snapshot.materialStableId},
                                               {"materialSlot", snapshot.materialSlot},
+                                              {"name", snapshot.name},
                                               {"materialModel", snapshot.materialModel},
                                               {"baseColor", snapshot.baseColor},
                                               {"baseColorTextureUri", snapshot.baseColorTextureUri},
