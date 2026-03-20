@@ -38,6 +38,7 @@
 - **Docking Workspace**: Full ImGui docking support with persistent layouts.
 - **High-Quality Export**: One-click lossless PNG export of tonemapped frames.
 - **Performance Profiling**: Real-time GPU/CPU timing, SPP counters, and noise level estimation.
+- **3ds Max 2025 LiveLink**: Named-pipe live sync for nodes, native `.prmesh` mesh payloads, materials, lights, camera, selection, Qt-side diagnostics, and saved-scene resume via persistent DCC identity.
 
 ---
 
@@ -68,6 +69,27 @@
 ---
 
 ## 🛠 Advanced Configuration
+
+### 3ds Max LiveLink
+- Engine startup: run the renderer with the named-pipe provider enabled.
+
+```powershell
+./build/Release/bin/project-render.exe --max-livelink-pipe
+```
+
+- Optional custom pipe name:
+
+```powershell
+./build/Release/bin/project-render.exe --max-livelink-pipe my-custom-pipe
+```
+
+- Default pipe name: `project-render-max-livelink`
+- Current scope:
+  - incremental sync for nodes, transforms, visibility, meshes, materials, lights, camera, and selection
+  - slot-aware Multi/Sub material handling with preserved `.prmesh` material slots
+  - non-destructive disconnect plus persisted PRS bindings on the engine side
+  - saved-scene resume by combining persistent Max scene/node GUIDs with a persisted last-synced DCC snapshot
+- Plugin build and install details live in `tools/3dsmax2025/README.md`
 
 ### DLSS / DLSS Ray Reconstruction
 - **AppID**: DLSS requires an NVIDIA AppID. Set the environment variable `SL_APPLICATION_ID` or create `sl_appid.txt` in the root.

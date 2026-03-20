@@ -44,6 +44,7 @@ namespace {
 constexpr Class_ID kPersistentIdAppDataClassId(0x21436f0a, 0x5c7a19d1);
 constexpr DWORD kSceneGuidAppDataSubId = 0x1001;
 constexpr DWORD kNodeGuidAppDataSubId = 0x1002;
+constexpr DWORD kResumeStateAppDataSubId = 0x1003;
 
 #if defined(PROJECT_RENDER_HAS_VRAY_SDK)
 #define PROJECT_RENDER_VRAYMTL_CLASS_ID Class_ID(0x37bf3f2f, 0x7034695c)
@@ -752,6 +753,13 @@ bool WriteAppDataString(Animatable *owner, DWORD subId, const std::string &value
   return true;
 }
 
+void ClearAppDataString(Animatable *owner, DWORD subId) {
+  if (!owner) {
+    return;
+  }
+  owner->RemoveAppDataChunk(kPersistentIdAppDataClassId, UTILITY_CLASS_ID, subId);
+}
+
 std::string GetOrCreateNodeGuid(INode *node) {
   if (!node) {
     return {};
@@ -1189,6 +1197,272 @@ bool SameLight(const LightSnapshot &lhs, const LightSnapshot &rhs) {
          NearlyEqual(lhs.innerConeDegrees, rhs.innerConeDegrees) &&
          NearlyEqual(lhs.outerConeDegrees, rhs.outerConeDegrees) &&
          SameVector2(lhs.areaExtents, rhs.areaExtents);
+}
+
+struct PersistedLiveLinkState {
+  std::string documentId;
+  std::unordered_map<std::string, NodeSnapshot> nodeStateByObjectId;
+  MaterialStateMap materialState;
+  std::unordered_map<std::string, LightSnapshot> lightStateByObjectId;
+  std::vector<std::string> selectedObjectIds;
+  CameraSnapshot cameraSnapshot;
+};
+
+json SerializeNodeSnapshot(const NodeSnapshot &snapshot) {
+  return json{{"oi", snapshot.objectId},
+              {"pi", snapshot.parentObjectId},
+              {"n", snapshot.name},
+              {"v", snapshot.visible},
+              {"wm", snapshot.worldMatrix},
+              {"hm", snapshot.hasMesh},
+              {"vc", snapshot.vertexCount},
+              {"ic", snapshot.indexCount},
+              {"gf", snapshot.geometryFingerprint}};
+}
+
+json SerializeMaterialSnapshot(const MaterialSnapshot &snapshot) {
+  return json{{"oi", snapshot.objectId},
+              {"ni", snapshot.nodeObjectId},
+              {"ms", snapshot.materialSlot},
+              {"n", snapshot.name},
+              {"mm", snapshot.materialModel},
+              {"bc", snapshot.baseColor},
+              {"bct", snapshot.baseColorTextureUri},
+              {"nt", snapshot.normalTextureUri},
+              {"et", snapshot.emissiveTextureUri},
+              {"ot", snapshot.occlusionTextureUri},
+              {"mrt", snapshot.metalRoughTextureUri},
+              {"ec", snapshot.emissiveColor},
+              {"ei", snapshot.emissiveIntensity},
+              {"r", snapshot.roughness},
+              {"m", snapshot.metalness},
+              {"sw", snapshot.specularWeight},
+              {"io", snapshot.ior},
+              {"tw", snapshot.transmissionWeight},
+              {"tc", snapshot.transmissionColor},
+              {"cw", snapshot.coatWeight},
+              {"cr", snapshot.coatRoughness},
+              {"th", snapshot.thinWalled},
+              {"tr", snapshot.translucency},
+              {"us", snapshot.uvScale},
+              {"uo", snapshot.uvOffset},
+              {"ds", snapshot.doubleSided},
+              {"am", snapshot.alphaMode}};
+}
+
+json SerializeLightSnapshot(const LightSnapshot &snapshot) {
+  return json{{"oi", snapshot.objectId},
+              {"n", snapshot.name},
+              {"lt", snapshot.lightType},
+              {"p", snapshot.position},
+              {"d", snapshot.direction},
+              {"c", snapshot.color},
+              {"i", snapshot.intensity},
+              {"r", snapshot.radius},
+              {"ic", snapshot.innerConeDegrees},
+              {"oc", snapshot.outerConeDegrees},
+              {"ae", snapshot.areaExtents}};
+}
+
+json SerializeCameraSnapshot(const CameraSnapshot &snapshot) {
+  return json{{"v", snapshot.valid},
+              {"p", snapshot.position},
+              {"f", snapshot.forward},
+              {"u", snapshot.up},
+              {"fv", snapshot.fovDegrees},
+              {"np", snapshot.nearPlane},
+              {"fp", snapshot.farPlane}};
+}
+
+bool DeserializeNodeSnapshot(const json &value, NodeSnapshot *outSnapshot) {
+  if (!outSnapshot || !value.is_object()) {
+    return false;
+  }
+  NodeSnapshot snapshot;
+  snapshot.objectId = value.value("oi", std::string());
+  snapshot.parentObjectId = value.value("pi", std::string());
+  snapshot.name = value.value("n", std::string());
+  snapshot.visible = value.value("v", true);
+  snapshot.hasMesh = value.value("hm", false);
+  snapshot.vertexCount = value.value("vc", uint64_t(0));
+  snapshot.indexCount = value.value("ic", uint64_t(0));
+  snapshot.geometryFingerprint = value.value("gf", uint64_t(0));
+  if (value.contains("wm") && value["wm"].is_array() && value["wm"].size() == 16) {
+    snapshot.worldMatrix = value["wm"].get<std::array<float, 16>>();
+  }
+  if (snapshot.objectId.empty()) {
+    return false;
+  }
+  *outSnapshot = snapshot;
+  return true;
+}
+
+bool DeserializeMaterialSnapshot(const json &value, MaterialSnapshot *outSnapshot) {
+  if (!outSnapshot || !value.is_object()) {
+    return false;
+  }
+  MaterialSnapshot snapshot;
+  snapshot.valid = true;
+  snapshot.objectId = value.value("oi", std::string());
+  snapshot.nodeObjectId = value.value("ni", std::string());
+  snapshot.materialSlot = value.value("ms", 0);
+  snapshot.name = value.value("n", std::string());
+  snapshot.materialModel = value.value("mm", std::string("OpenPBR"));
+  if (value.contains("bc")) snapshot.baseColor = value["bc"].get<std::array<float, 4>>();
+  snapshot.baseColorTextureUri = value.value("bct", std::string());
+  snapshot.normalTextureUri = value.value("nt", std::string());
+  snapshot.emissiveTextureUri = value.value("et", std::string());
+  snapshot.occlusionTextureUri = value.value("ot", std::string());
+  snapshot.metalRoughTextureUri = value.value("mrt", std::string());
+  if (value.contains("ec")) snapshot.emissiveColor = value["ec"].get<std::array<float, 4>>();
+  snapshot.emissiveIntensity = value.value("ei", 0.0f);
+  snapshot.roughness = value.value("r", 0.5f);
+  snapshot.metalness = value.value("m", 0.0f);
+  snapshot.specularWeight = value.value("sw", 1.0f);
+  snapshot.ior = value.value("io", 1.5f);
+  snapshot.transmissionWeight = value.value("tw", 0.0f);
+  if (value.contains("tc")) snapshot.transmissionColor = value["tc"].get<std::array<float, 3>>();
+  snapshot.coatWeight = value.value("cw", 0.0f);
+  snapshot.coatRoughness = value.value("cr", 0.1f);
+  snapshot.thinWalled = value.value("th", 0.0f);
+  snapshot.translucency = value.value("tr", 0.0f);
+  if (value.contains("us")) snapshot.uvScale = value["us"].get<std::array<float, 2>>();
+  if (value.contains("uo")) snapshot.uvOffset = value["uo"].get<std::array<float, 2>>();
+  snapshot.doubleSided = value.value("ds", false);
+  snapshot.alphaMode = value.value("am", std::string("OPAQUE"));
+  if (snapshot.objectId.empty()) {
+    return false;
+  }
+  *outSnapshot = snapshot;
+  return true;
+}
+
+bool DeserializeLightSnapshot(const json &value, LightSnapshot *outSnapshot) {
+  if (!outSnapshot || !value.is_object()) {
+    return false;
+  }
+  LightSnapshot snapshot;
+  snapshot.valid = true;
+  snapshot.objectId = value.value("oi", std::string());
+  snapshot.name = value.value("n", std::string());
+  snapshot.lightType = value.value("lt", std::string("Omni"));
+  if (value.contains("p")) snapshot.position = value["p"].get<std::array<float, 3>>();
+  if (value.contains("d")) snapshot.direction = value["d"].get<std::array<float, 3>>();
+  if (value.contains("c")) snapshot.color = value["c"].get<std::array<float, 3>>();
+  snapshot.intensity = value.value("i", 0.0f);
+  snapshot.radius = value.value("r", 0.1f);
+  snapshot.innerConeDegrees = value.value("ic", 30.0f);
+  snapshot.outerConeDegrees = value.value("oc", 45.0f);
+  if (value.contains("ae")) snapshot.areaExtents = value["ae"].get<std::array<float, 2>>();
+  if (snapshot.objectId.empty()) {
+    return false;
+  }
+  *outSnapshot = snapshot;
+  return true;
+}
+
+void DeserializeCameraSnapshot(const json &value, CameraSnapshot *outSnapshot) {
+  if (!outSnapshot || !value.is_object()) {
+    return;
+  }
+  outSnapshot->valid = value.value("v", false);
+  if (value.contains("p")) outSnapshot->position = value["p"].get<std::array<float, 3>>();
+  if (value.contains("f")) outSnapshot->forward = value["f"].get<std::array<float, 3>>();
+  if (value.contains("u")) outSnapshot->up = value["u"].get<std::array<float, 3>>();
+  outSnapshot->fovDegrees = value.value("fv", 60.0f);
+  outSnapshot->nearPlane = value.value("np", 0.01f);
+  outSnapshot->farPlane = value.value("fp", 1000.0f);
+}
+
+bool ReadPersistedLiveLinkState(Interface *ip, PersistedLiveLinkState *outState) {
+  if (!ip || !outState) {
+    return false;
+  }
+
+  const std::string raw = ReadAppDataString(ip->GetRootNode(), kResumeStateAppDataSubId);
+  if (raw.empty()) {
+    return false;
+  }
+
+  json value;
+  try {
+    value = json::parse(raw);
+  } catch (...) {
+    return false;
+  }
+  if (!value.is_object() || value.value("version", 0) != 1) {
+    return false;
+  }
+
+  PersistedLiveLinkState state;
+  state.documentId = value.value("documentId", std::string());
+  if (value.contains("nodes") && value["nodes"].is_array()) {
+    for (const auto &nodeValue : value["nodes"]) {
+      NodeSnapshot snapshot;
+      if (DeserializeNodeSnapshot(nodeValue, &snapshot)) {
+        state.nodeStateByObjectId.emplace(snapshot.objectId, std::move(snapshot));
+      }
+    }
+  }
+  if (value.contains("materials") && value["materials"].is_array()) {
+    for (const auto &materialValue : value["materials"]) {
+      MaterialSnapshot snapshot;
+      if (DeserializeMaterialSnapshot(materialValue, &snapshot)) {
+        state.materialState.emplace(snapshot.objectId, std::move(snapshot));
+      }
+    }
+  }
+  if (value.contains("lights") && value["lights"].is_array()) {
+    for (const auto &lightValue : value["lights"]) {
+      LightSnapshot snapshot;
+      if (DeserializeLightSnapshot(lightValue, &snapshot)) {
+        state.lightStateByObjectId.emplace(snapshot.objectId, std::move(snapshot));
+      }
+    }
+  }
+  if (value.contains("selection") && value["selection"].is_array()) {
+    state.selectedObjectIds = value["selection"].get<std::vector<std::string>>();
+  }
+  if (value.contains("camera")) {
+    DeserializeCameraSnapshot(value["camera"], &state.cameraSnapshot);
+  }
+  if (state.documentId.empty()) {
+    return false;
+  }
+  *outState = std::move(state);
+  return true;
+}
+
+void WritePersistedLiveLinkState(
+    Interface *ip, const std::string &documentId,
+    const std::unordered_map<ULONG_PTR, NodeSnapshot> &nodeState,
+    const MaterialStateMap &materialState,
+    const std::unordered_map<ULONG_PTR, LightSnapshot> &lightState,
+    const std::vector<std::string> &selectedObjectIds,
+    const CameraSnapshot &cameraSnapshot) {
+  if (!ip || documentId.empty()) {
+    return;
+  }
+
+  json value;
+  value["version"] = 1;
+  value["documentId"] = documentId;
+  value["nodes"] = json::array();
+  for (const auto &[_, snapshot] : nodeState) {
+    value["nodes"].push_back(SerializeNodeSnapshot(snapshot));
+  }
+  value["materials"] = json::array();
+  for (const auto &[_, snapshot] : materialState) {
+    value["materials"].push_back(SerializeMaterialSnapshot(snapshot));
+  }
+  value["lights"] = json::array();
+  for (const auto &[_, snapshot] : lightState) {
+    value["lights"].push_back(SerializeLightSnapshot(snapshot));
+  }
+  value["selection"] = selectedObjectIds;
+  value["camera"] = SerializeCameraSnapshot(cameraSnapshot);
+
+  WriteAppDataString(ip->GetRootNode(), kResumeStateAppDataSubId, value.dump());
 }
 
 bool SameMatrix(const std::array<float, 16> &lhs,
@@ -2804,6 +3078,8 @@ bool SendInitialSnapshot(Interface *ip,
                          std::unordered_map<ULONG_PTR, NodeSnapshot> *outState,
                          MaterialStateMap *outMaterialState,
                          std::unordered_map<ULONG_PTR, LightSnapshot> *outLightState,
+                         std::vector<std::string> *outSelectedObjectIds,
+                         CameraSnapshot *outCameraSnapshot,
                          std::string *outSessionId,
                          std::string *outDocumentId,
                          uint64_t *outNextSequence,
@@ -2847,6 +3123,7 @@ bool SendInitialSnapshot(Interface *ip,
   });
 
   uint64_t revision = 1;
+  const std::vector<std::string> selectedObjectIds = GatherSelectedObjectIds(ip);
   CameraSnapshot cameraSnapshot;
   CaptureActiveCameraSnapshot(ip, &cameraSnapshot);
   for (const auto &[_, snapshot] : state) {
@@ -2862,6 +3139,11 @@ bool SendInitialSnapshot(Interface *ip,
   for (const auto &[_, snapshot] : lightState) {
     AppendLightDelta(documentId, snapshot, &revision, &deltas);
   }
+  deltas.push_back(json{{"kind", "SelectionChanged"},
+                        {"target", MakeObjectId(documentId, "selection", "Selection")},
+                        {"revision", revision++},
+                        {"debugLabel", "3ds Max selection"},
+                        {"payload", json{{"selectedObjectIds", selectedObjectIds}}}});
   AppendCameraDelta(documentId, cameraSnapshot, &revision, &deltas);
 
   if (!SendBatch(sessionId, 1, true, deltas)) {
@@ -2876,6 +3158,184 @@ bool SendInitialSnapshot(Interface *ip,
   }
   if (outLightState) {
     *outLightState = std::move(lightState);
+  }
+  if (outSelectedObjectIds) {
+    *outSelectedObjectIds = selectedObjectIds;
+  }
+  if (outCameraSnapshot) {
+    *outCameraSnapshot = cameraSnapshot;
+  }
+  if (outSessionId) {
+    *outSessionId = sessionId;
+  }
+  if (outDocumentId) {
+    *outDocumentId = documentId;
+  }
+  if (outNextSequence) {
+    *outNextSequence = 2;
+  }
+  if (outNextRevision) {
+    *outNextRevision = revision;
+  }
+  return true;
+}
+
+bool SendResumeSnapshot(Interface *ip,
+                        std::unordered_map<ULONG_PTR, NodeSnapshot> *outState,
+                        MaterialStateMap *outMaterialState,
+                        std::unordered_map<ULONG_PTR, LightSnapshot> *outLightState,
+                        std::vector<std::string> *outSelectedObjectIds,
+                        CameraSnapshot *outCameraSnapshot,
+                        std::string *outSessionId,
+                        std::string *outDocumentId,
+                        uint64_t *outNextSequence,
+                        uint64_t *outNextRevision) {
+  if (!ip || !EnsurePipeConnected()) {
+    return false;
+  }
+
+  EnsurePersistentSceneIdentifiers(ip);
+  CleanupPayloadRootDirectory();
+
+  const std::string documentId = MakeDocumentId(ip);
+  PersistedLiveLinkState persistedState;
+  if (!ReadPersistedLiveLinkState(ip, &persistedState) ||
+      persistedState.documentId != documentId) {
+    return false;
+  }
+
+  std::unordered_map<ULONG_PTR, NodeSnapshot> currentState;
+  MaterialStateMap currentMaterialState;
+  std::unordered_map<ULONG_PTR, LightSnapshot> currentLightState;
+  if (INode *root = ip->GetRootNode()) {
+    for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
+      GatherNodeSnapshots(ip, root->GetChildNode(childIndex), &currentState);
+      GatherLightSnapshots(ip, root->GetChildNode(childIndex), &currentLightState);
+    }
+  }
+  GatherMaterialSnapshots(ip, currentState, &currentMaterialState);
+  const std::vector<std::string> selectedObjectIds = GatherSelectedObjectIds(ip);
+  CameraSnapshot cameraSnapshot;
+  CaptureActiveCameraSnapshot(ip, &cameraSnapshot);
+
+  std::unordered_map<std::string, NodeSnapshot> currentNodesByObjectId;
+  currentNodesByObjectId.reserve(currentState.size());
+  for (const auto &[_, snapshot] : currentState) {
+    currentNodesByObjectId.emplace(snapshot.objectId, snapshot);
+  }
+
+  std::unordered_map<std::string, LightSnapshot> currentLightsByObjectId;
+  currentLightsByObjectId.reserve(currentLightState.size());
+  for (const auto &[_, snapshot] : currentLightState) {
+    currentLightsByObjectId.emplace(snapshot.objectId, snapshot);
+  }
+
+  const std::string sessionId = MakeSessionId();
+  const std::string documentPath = MakeDocumentPath(ip);
+  const std::string documentDisplayName = MakeDocumentDisplayName(ip);
+  json deltas = json::array();
+  deltas.push_back(json{{"kind", "SessionOpened"},
+                        {"target", json{{"sourceApp", kSourceApp},
+                                          {"documentId", documentId},
+                                          {"objectId", "session"},
+                                          {"objectType", "Unknown"}}},
+                        {"payload", json{{"documentPath", documentPath},
+                                          {"displayName", documentDisplayName}}}});
+
+  uint64_t revision = 1;
+  for (const auto &[objectId, snapshot] : currentNodesByObjectId) {
+    const auto previousIt = persistedState.nodeStateByObjectId.find(objectId);
+    if (previousIt == persistedState.nodeStateByObjectId.end()) {
+      AppendNodeAddedDelta(documentId, snapshot, &revision, &deltas);
+      AppendNodeTransformDelta(documentId, snapshot, &revision, &deltas);
+      AppendNodeVisibilityDelta(documentId, snapshot, &revision, &deltas);
+      AppendMeshPayloadDeltaIfAvailable(ip, documentId, snapshot, &revision, &deltas);
+      continue;
+    }
+
+    const NodeSnapshot &previous = previousIt->second;
+    if (previous.parentObjectId != snapshot.parentObjectId ||
+        previous.name != snapshot.name) {
+      AppendNodeAddedDelta(documentId, snapshot, &revision, &deltas);
+    }
+    if (!SameMatrix(previous.worldMatrix, snapshot.worldMatrix)) {
+      AppendNodeTransformDelta(documentId, snapshot, &revision, &deltas);
+    }
+    if (previous.visible != snapshot.visible) {
+      AppendNodeVisibilityDelta(documentId, snapshot, &revision, &deltas);
+    }
+    if (snapshot.hasMesh &&
+        (!previous.hasMesh ||
+         previous.geometryFingerprint != snapshot.geometryFingerprint)) {
+      AppendMeshPayloadDeltaIfAvailable(ip, documentId, snapshot, &revision, &deltas);
+    }
+  }
+
+  for (const auto &[objectId, snapshot] : persistedState.nodeStateByObjectId) {
+    if (currentNodesByObjectId.find(objectId) == currentNodesByObjectId.end()) {
+      RemoveNodePayloadFile(documentId, snapshot.objectId);
+      AppendNodeRemovedDelta(documentId, snapshot, &revision, &deltas);
+    }
+  }
+
+  for (const auto &[objectId, snapshot] : currentMaterialState) {
+    const auto previousIt = persistedState.materialState.find(objectId);
+    if (previousIt == persistedState.materialState.end() ||
+        !SameMaterial(snapshot, previousIt->second)) {
+      AppendMaterialDelta(documentId, snapshot, &revision, &deltas);
+    }
+  }
+
+  for (const auto &[objectId, snapshot] : persistedState.materialState) {
+    if (currentMaterialState.find(objectId) == currentMaterialState.end()) {
+      AppendMaterialRemovedDelta(documentId, snapshot, &revision, &deltas);
+    }
+  }
+
+  for (const auto &[objectId, snapshot] : currentLightsByObjectId) {
+    const auto previousIt = persistedState.lightStateByObjectId.find(objectId);
+    if (previousIt == persistedState.lightStateByObjectId.end() ||
+        !SameLight(snapshot, previousIt->second)) {
+      AppendLightDelta(documentId, snapshot, &revision, &deltas);
+    }
+  }
+
+  for (const auto &[objectId, snapshot] : persistedState.lightStateByObjectId) {
+    if (currentLightsByObjectId.find(objectId) == currentLightsByObjectId.end()) {
+      AppendLightRemovedDelta(documentId, snapshot, &revision, &deltas);
+    }
+  }
+
+  if (selectedObjectIds != persistedState.selectedObjectIds) {
+    deltas.push_back(json{{"kind", "SelectionChanged"},
+                          {"target", MakeObjectId(documentId, "selection", "Selection")},
+                          {"revision", revision++},
+                          {"debugLabel", "3ds Max selection"},
+                          {"payload", json{{"selectedObjectIds", selectedObjectIds}}}});
+  }
+
+  if (cameraSnapshot.valid && !SameCamera(cameraSnapshot, persistedState.cameraSnapshot)) {
+    AppendCameraDelta(documentId, cameraSnapshot, &revision, &deltas);
+  }
+
+  if (!SendBatch(sessionId, 1, false, deltas)) {
+    return false;
+  }
+
+  if (outState) {
+    *outState = std::move(currentState);
+  }
+  if (outMaterialState) {
+    *outMaterialState = std::move(currentMaterialState);
+  }
+  if (outLightState) {
+    *outLightState = std::move(currentLightState);
+  }
+  if (outSelectedObjectIds) {
+    *outSelectedObjectIds = selectedObjectIds;
+  }
+  if (outCameraSnapshot) {
+    *outCameraSnapshot = cameraSnapshot;
   }
   if (outSessionId) {
     *outSessionId = sessionId;
@@ -3216,6 +3676,15 @@ private:
     RefreshRollupUI_NoLock();
   }
 
+  void PersistResumeStateLocked(Interface *ip) {
+    if (!ip || m_documentId.empty()) {
+      return;
+    }
+    WritePersistedLiveLinkState(ip, m_documentId, m_lastNodeState,
+                                m_lastMaterialState, m_lastLightState,
+                                m_lastSelectedObjectIds, m_lastCameraSnapshot);
+  }
+
   bool EnsureConnectedSession(Interface *ip) {
     if (!ip) {
       return false;
@@ -3232,14 +3701,21 @@ private:
       return true;
     }
 
-    if (!SendInitialSnapshot(ip, &m_lastNodeState, &m_lastMaterialState,
-                             &m_lastLightState, &m_sessionId, &m_documentId,
-                             &m_nextSequence, &m_nextRevision)) {
-      return false;
+    if (!SendResumeSnapshot(ip, &m_lastNodeState, &m_lastMaterialState,
+                            &m_lastLightState, &m_lastSelectedObjectIds,
+                            &m_lastCameraSnapshot, &m_sessionId,
+                            &m_documentId, &m_nextSequence,
+                            &m_nextRevision)) {
+      if (!SendInitialSnapshot(ip, &m_lastNodeState, &m_lastMaterialState,
+                               &m_lastLightState, &m_lastSelectedObjectIds,
+                               &m_lastCameraSnapshot, &m_sessionId,
+                               &m_documentId, &m_nextSequence,
+                               &m_nextRevision)) {
+        return false;
+      }
     }
 
-    m_lastSelectedObjectIds = GatherSelectedObjectIds(ip);
-    CaptureActiveCameraSnapshot(ip, &m_lastCameraSnapshot);
+    PersistResumeStateLocked(ip);
     m_nextPollDeadline = ComputeNextPollDeadline(kActivePollMinIntervalMs);
     m_nextCameraPollDeadline = ComputeNextPollDeadline(kCameraPollMinIntervalMs);
     m_forceFullResync = false;
@@ -3401,6 +3877,7 @@ private:
     if (SendBatch(m_sessionId, m_nextSequence, false, deltas)) {
       ++m_nextSequence;
       m_lastCameraSnapshot = currentCamera;
+      PersistResumeStateLocked(ip);
     }
   }
 
@@ -3537,12 +4014,16 @@ private:
         m_lastMaterialState = std::move(currentMaterialState);
         m_lastLightState = std::move(currentLightState);
         m_lastSelectedObjectIds = selectedObjectIds;
+        CaptureActiveCameraSnapshot(ip, &m_lastCameraSnapshot);
+        PersistResumeStateLocked(ip);
         ClearDirtyState();
       } else if (deltas.empty()) {
         m_lastNodeState = std::move(currentState);
         m_lastMaterialState = std::move(currentMaterialState);
         m_lastLightState = std::move(currentLightState);
         m_lastSelectedObjectIds = selectedObjectIds;
+        CaptureActiveCameraSnapshot(ip, &m_lastCameraSnapshot);
+        PersistResumeStateLocked(ip);
         ClearDirtyState();
       }
 
@@ -3681,6 +4162,7 @@ private:
       if (m_selectionDirty) {
         m_lastSelectedObjectIds = selectedObjectIds;
       }
+      PersistResumeStateLocked(ip);
       ClearDirtyState();
     } else if (deltas.empty()) {
       for (const auto &[handle, snapshot] : stagedNodes) {
@@ -3698,6 +4180,7 @@ private:
       if (m_selectionDirty) {
         m_lastSelectedObjectIds = selectedObjectIds;
       }
+      PersistResumeStateLocked(ip);
       ClearDirtyState();
     }
 
@@ -3721,6 +4204,7 @@ private:
     if (SendBatch(m_sessionId, m_nextSequence, false, deltas)) {
       ++m_nextSequence;
       m_lastSelectedObjectIds = selectedObjectIds;
+      PersistResumeStateLocked(ip);
     }
 
     RefreshRollupUI_NoLock();
