@@ -707,6 +707,8 @@ bool LiveLinkSceneSync::ApplyMaterialChanged(const SceneDeltaBatch &batch,
     return false;
   }
 
+  PruneTextureCacheEntries();
+
   for (size_t i = 0; i < payload->baseColor.size(); ++i) {
     material.diffuseColor[i] = payload->baseColor[i];
     material.emissiveColor[i] = payload->emissiveColor[i];
@@ -1201,7 +1203,28 @@ void LiveLinkSceneSync::RemoveSessionContent(const std::string &sessionId) {
   if (m_cachedExternalCamera.valid && m_cachedExternalCamera.sessionId == sessionId) {
     m_cachedExternalCamera = CachedCameraState{};
   }
+  PruneTextureCacheEntries();
   m_cameraControlDetached = false;
+}
+
+void LiveLinkSceneSync::PruneTextureCacheEntries() {
+  for (auto it = m_textureIndicesByUri.begin(); it != m_textureIndicesByUri.end();) {
+    const int textureIndex = it->second;
+    if (textureIndex < 0 ||
+        textureIndex >= static_cast<int>(Scene::GetTextureCount())) {
+      it = m_textureIndicesByUri.erase(it);
+      continue;
+    }
+
+    std::error_code error;
+    const std::filesystem::path texturePath = Utf8PathFromString(it->first);
+    if (!texturePath.empty() && !std::filesystem::exists(texturePath, error)) {
+      it = m_textureIndicesByUri.erase(it);
+      continue;
+    }
+
+    ++it;
+  }
 }
 
 void LiveLinkSceneSync::ReindexSceneNodeBindingsAfterRemoval(size_t removedIndex) {

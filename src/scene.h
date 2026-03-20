@@ -102,6 +102,7 @@ void SelectLight(int index);
 
 // Material manipulation
 size_t GetMaterialCount();
+size_t GetTextureCount();
 int FindMaterialByName(const std::string &name);
 bool GetMaterial(size_t index, Asset::Material *outMaterial);
 bool UpdateMaterial(size_t index, const Asset::Material &material);

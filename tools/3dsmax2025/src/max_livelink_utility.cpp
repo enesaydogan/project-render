@@ -2227,8 +2227,119 @@ std::filesystem::path GetPayloadRootDirectory() {
   return root;
 }
 
+std::string SanitizePathComponent(std::string value) {
+  for (char &ch : value) {
+    const bool alphaNumeric =
+        (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+        (ch >= '0' && ch <= '9');
+    if (!alphaNumeric && ch != '-' && ch != '_') {
+      ch = '_';
+    }
+  }
+  if (value.empty()) {
+    return "unnamed";
+  }
+  return value;
+}
+
+std::filesystem::path GetDocumentPayloadDirectory(const std::string &documentId) {
+  const std::filesystem::path rootDirectory = GetPayloadRootDirectory();
+  if (rootDirectory.empty()) {
+    return {};
+  }
+
+  std::error_code error;
+  const std::filesystem::path documentDirectory =
+      rootDirectory / "documents" / SanitizePathComponent(documentId);
+  std::filesystem::create_directories(documentDirectory, error);
+  if (error) {
+    return {};
+  }
+  return documentDirectory;
+}
+
+std::filesystem::path GetNodePayloadPath(const std::string &documentId,
+                                         const std::string &nodeObjectId) {
+  const std::filesystem::path documentDirectory =
+      GetDocumentPayloadDirectory(documentId);
+  if (documentDirectory.empty()) {
+    return {};
+  }
+  return documentDirectory /
+         (SanitizePathComponent(nodeObjectId) + std::string(".prmesh"));
+}
+
+void RemoveNodePayloadFile(const std::string &documentId,
+                           const std::string &nodeObjectId) {
+  if (documentId.empty() || nodeObjectId.empty()) {
+    return;
+  }
+
+  std::error_code error;
+  const std::filesystem::path payloadPath =
+      GetNodePayloadPath(documentId, nodeObjectId);
+  if (!payloadPath.empty()) {
+    std::filesystem::remove(payloadPath, error);
+  }
+
+  if (payloadPath.empty()) {
+    return;
+  }
+
+  const std::filesystem::path documentDirectory = payloadPath.parent_path();
+  if (!documentDirectory.empty() && std::filesystem::is_directory(documentDirectory, error) &&
+      std::filesystem::is_empty(documentDirectory, error)) {
+    std::filesystem::remove(documentDirectory, error);
+  }
+}
+
+void CleanupPayloadRootDirectory() {
+  const std::filesystem::path rootDirectory = GetPayloadRootDirectory();
+  if (rootDirectory.empty()) {
+    return;
+  }
+
+  constexpr auto kMaxPayloadAge = std::chrono::hours(24 * 14);
+  const auto now = std::filesystem::file_time_type::clock::now();
+  std::error_code error;
+  for (const auto &entry : std::filesystem::directory_iterator(rootDirectory, error)) {
+    if (error) {
+      break;
+    }
+    const std::filesystem::path entryPath = entry.path();
+    const std::string directoryName = entryPath.filename().string();
+    if (directoryName == "documents") {
+      for (const auto &documentEntry : std::filesystem::directory_iterator(entryPath, error)) {
+        if (error) {
+          break;
+        }
+        const auto lastWriteTime = std::filesystem::last_write_time(documentEntry.path(), error);
+        if (error) {
+          error.clear();
+          continue;
+        }
+        if (now - lastWriteTime > kMaxPayloadAge) {
+          std::filesystem::remove_all(documentEntry.path(), error);
+          error.clear();
+        }
+      }
+      continue;
+    }
+
+    const auto lastWriteTime = std::filesystem::last_write_time(entryPath, error);
+    if (error) {
+      error.clear();
+      continue;
+    }
+    if (now - lastWriteTime > kMaxPayloadAge) {
+      std::filesystem::remove_all(entryPath, error);
+      error.clear();
+    }
+  }
+}
+
 bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
-                                   const std::string &sessionId,
+                                   const std::string &documentId,
                                    const NodeSnapshot &snapshot,
                                    std::string *outPayloadUri) {
   if (!ip || !node || !snapshot.hasMesh || !outPayloadUri) {
@@ -2243,28 +2354,14 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
     return false;
   }
 
-  const std::filesystem::path rootDirectory = GetPayloadRootDirectory();
-  if (rootDirectory.empty()) {
-    if (needsDelete) {
-      triObject->DeleteThis();
-    }
-    return false;
-  }
-
-  std::error_code error;
-  const std::filesystem::path sessionDirectory = rootDirectory / sessionId;
-  std::filesystem::create_directories(sessionDirectory, error);
-  if (error) {
-    if (needsDelete) {
-      triObject->DeleteThis();
-    }
-    return false;
-  }
-
   const std::filesystem::path payloadPath =
-      sessionDirectory /
-      (std::string("node-") + std::to_string(snapshot.handle) + "-" +
-       std::to_string(snapshot.geometryFingerprint) + ".prmesh");
+      GetNodePayloadPath(documentId, snapshot.objectId);
+  if (payloadPath.empty()) {
+    if (needsDelete) {
+      triObject->DeleteThis();
+    }
+    return false;
+  }
 
   std::ofstream stream(payloadPath, std::ios::binary | std::ios::trunc);
   if (!stream) {
@@ -2495,7 +2592,6 @@ void AppendMeshPayloadDelta(const std::string &documentId,
 }
 
 void AppendMeshPayloadDeltaIfAvailable(Interface *ip,
-                                       const std::string &sessionId,
                                        const std::string &documentId,
                                        const NodeSnapshot &snapshot,
                                        uint64_t *revision, json *outDeltas) {
@@ -2509,7 +2605,7 @@ void AppendMeshPayloadDeltaIfAvailable(Interface *ip,
   }
 
   std::string payloadUri;
-  if (!ExportNodeAsNativeMeshPayload(ip, node, sessionId, snapshot,
+  if (!ExportNodeAsNativeMeshPayload(ip, node, documentId, snapshot,
                                      &payloadUri)) {
     return;
   }
@@ -2717,6 +2813,7 @@ bool SendInitialSnapshot(Interface *ip,
   }
 
   EnsurePersistentSceneIdentifiers(ip);
+  CleanupPayloadRootDirectory();
 
   const std::string documentId = MakeDocumentId(ip);
   const std::string documentPath = MakeDocumentPath(ip);
@@ -2756,7 +2853,7 @@ bool SendInitialSnapshot(Interface *ip,
     AppendNodeAddedDelta(documentId, snapshot, &revision, &deltas);
     AppendNodeTransformDelta(documentId, snapshot, &revision, &deltas);
     AppendNodeVisibilityDelta(documentId, snapshot, &revision, &deltas);
-    AppendMeshPayloadDeltaIfAvailable(ip, sessionId, documentId, snapshot,
+    AppendMeshPayloadDeltaIfAvailable(ip, documentId, snapshot,
                                       &revision, &deltas);
   }
   for (const auto &[_, snapshot] : materialState) {
@@ -3356,7 +3453,7 @@ private:
                                    &deltas);
           AppendNodeVisibilityDelta(m_documentId, snapshot, &m_nextRevision,
                                     &deltas);
-          AppendMeshPayloadDeltaIfAvailable(ip, m_sessionId, m_documentId,
+          AppendMeshPayloadDeltaIfAvailable(ip, m_documentId,
                                             snapshot, &m_nextRevision, &deltas);
           continue;
         }
@@ -3378,7 +3475,7 @@ private:
         if (snapshot.hasMesh &&
             (!previous.hasMesh ||
              previous.geometryFingerprint != snapshot.geometryFingerprint)) {
-          AppendMeshPayloadDeltaIfAvailable(ip, m_sessionId, m_documentId,
+          AppendMeshPayloadDeltaIfAvailable(ip, m_documentId,
                                             snapshot, &m_nextRevision, &deltas);
         }
       }
@@ -3393,6 +3490,7 @@ private:
 
       for (const auto &[handle, previousSnapshot] : m_lastNodeState) {
         if (currentState.find(handle) == currentState.end()) {
+          RemoveNodePayloadFile(m_documentId, previousSnapshot.objectId);
           AppendNodeRemovedDelta(m_documentId, previousSnapshot,
                                  &m_nextRevision, &deltas);
         }
@@ -3490,7 +3588,7 @@ private:
             !previousItForMesh->second.hasMesh ||
             previousItForMesh->second.geometryFingerprint !=
                 snapshot.geometryFingerprint) {
-          AppendMeshPayloadDeltaIfAvailable(ip, m_sessionId, m_documentId,
+          AppendMeshPayloadDeltaIfAvailable(ip, m_documentId,
                                             snapshot, &m_nextRevision, &deltas);
         }
       }
