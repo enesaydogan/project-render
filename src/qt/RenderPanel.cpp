@@ -7,6 +7,7 @@
 #include "../file_import.h"
 
 #include <QComboBox>
+#include <QApplication>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QLabel>
@@ -28,6 +29,17 @@ SliderControl *CreateSliderControl(double minValue,
     return new SliderControl(minValue, maxValue, step, decimals);
 }
 
+bool IsWidgetBeingEdited(QWidget *widget)
+{
+    if (!widget) {
+        return false;
+    }
+
+    QWidget *focus = QApplication::focusWidget();
+    return widget->hasFocus() ||
+           (focus && (focus == widget || widget->isAncestorOf(focus)));
+}
+
 int ComputeProgressPercent()
 {
     if (!g_renderExportJob.active || g_renderExportJob.targetMaxSpp <= 0) {
@@ -36,7 +48,7 @@ int ComputeProgressPercent()
 
     const int currentSpp = static_cast<int>(DxrRenderer::GetDisplayedSampleCount());
     const int clamped = std::clamp(currentSpp, 0, g_renderExportJob.targetMaxSpp);
-    return (clamped * 100) / std::max(1, g_renderExportJob.targetMaxSpp);
+    return (clamped * 100) / (std::max)(1, g_renderExportJob.targetMaxSpp);
 }
 
 QString NoiseStatusText()
@@ -146,10 +158,18 @@ void RenderPanel::syncFromRenderer()
         g_renderExportSettings.resolutionPreset = 0;
     }
 
-    m_resolutionPreset->setCurrentIndex(g_renderExportSettings.resolutionPreset);
-    m_maxSpp->setValue(g_renderExportSettings.maxSpp);
-    m_noisePercent->setValue(g_renderExportSettings.noisePercent);
-    m_denoiser->setCurrentIndex(std::clamp(g_renderExportSettings.denoiserIndex, 0, 2));
+    if (!IsWidgetBeingEdited(m_resolutionPreset)) {
+        m_resolutionPreset->setCurrentIndex(g_renderExportSettings.resolutionPreset);
+    }
+    if (!m_maxSpp->isInteracting()) {
+        m_maxSpp->setValue(g_renderExportSettings.maxSpp);
+    }
+    if (!m_noisePercent->isInteracting()) {
+        m_noisePercent->setValue(g_renderExportSettings.noisePercent);
+    }
+    if (!IsWidgetBeingEdited(m_denoiser)) {
+        m_denoiser->setCurrentIndex(std::clamp(g_renderExportSettings.denoiserIndex, 0, 2));
+    }
 
     const RenderResolutionPreset &preset =
         g_renderResolutionPresets[g_renderExportSettings.resolutionPreset];

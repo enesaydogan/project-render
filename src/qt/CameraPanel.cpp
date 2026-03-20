@@ -32,7 +32,7 @@ SliderControl *CreateSliderControl(double minValue,
 
 double CurrentHorizontalFovDegrees()
 {
-    const double aspect = std::max(0.0001, static_cast<double>(g_cameraData.aspect));
+    const double aspect = (std::max)(0.0001, static_cast<double>(g_cameraData.aspect));
     const double currentVHalf = static_cast<double>(g_cameraData.fov) * 0.5 * (kPi / 180.0);
     const double currentH = 2.0 * std::atan(std::tan(currentVHalf) * aspect) * (180.0 / kPi);
     return currentH;
@@ -40,7 +40,7 @@ double CurrentHorizontalFovDegrees()
 
 void SetHorizontalFovDegrees(double horizontalDegrees)
 {
-    const double aspect = std::max(0.0001, static_cast<double>(g_cameraData.aspect));
+    const double aspect = (std::max)(0.0001, static_cast<double>(g_cameraData.aspect));
     const double hHalfRad = horizontalDegrees * 0.5 * (kPi / 180.0);
     const double vHalfRad = std::atan(std::tan(hHalfRad) / aspect);
     g_cameraData.fov = static_cast<float>(2.0 * vHalfRad * (180.0 / kPi));
@@ -207,7 +207,7 @@ void CameraPanel::createUi()
         const float iso = 100.0f;
         const float aperture = 8.0f;
         float shutterSeconds = (aperture * aperture * 100.0f) /
-                               (std::max(0.001f, iso) * std::pow(2.0f, sceneEv));
+                               ((std::max)(0.001f, iso) * std::pow(2.0f, sceneEv));
         shutterSeconds = std::clamp(shutterSeconds, 1.0f / 8000.0f, 30.0f);
         DxrRenderer::SetPhysicalCameraSettings(iso, shutterSeconds, aperture);
         DxrRenderer::ResetAccumulation();

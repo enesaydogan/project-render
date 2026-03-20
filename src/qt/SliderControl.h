@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QAbstractSpinBox>
+#include <QApplication>
 #include <QDoubleSpinBox>
 #include <QHBoxLayout>
 #include <QSignalBlocker>
@@ -77,6 +78,15 @@ public:
     double value() const
     {
         return m_spinBox->value();
+    }
+
+    bool isInteracting() const
+    {
+        QWidget *focus = QApplication::focusWidget();
+        return m_slider->isSliderDown() ||
+               (focus && (focus == m_slider || focus == m_spinBox ||
+                          m_slider->isAncestorOf(focus) ||
+                          m_spinBox->isAncestorOf(focus)));
     }
 
     void setLogarithmic(bool enabled)
