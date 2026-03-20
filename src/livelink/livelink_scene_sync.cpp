@@ -486,6 +486,19 @@ bool LiveLinkSceneSync::ApplyNodeAdded(const SceneDeltaBatch &batch,
 
   if (binding->handleIndex != kInvalidHandle) {
     Scene::RenameNode(binding->handleIndex, preferredName);
+    size_t parentIndex = kInvalidHandle;
+    if (payload && !payload->parentObjectId.empty()) {
+      ObjectId parentObjectId = delta.target;
+      parentObjectId.objectId = payload->parentObjectId;
+      parentObjectId.objectType = ObjectType::Node;
+      if (const ObjectBinding *parentBinding = FindBinding(parentObjectId)) {
+        if (parentBinding->handleKind == EngineHandleKind::SceneNode &&
+            parentBinding->handleIndex < Scene::GetNodes().size()) {
+          parentIndex = parentBinding->handleIndex;
+        }
+      }
+    }
+    Scene::SetNodeParent(binding->handleIndex, parentIndex);
   }
   binding->lastAppliedRevision = delta.revision;
   return true;

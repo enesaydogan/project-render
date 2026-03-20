@@ -215,6 +215,7 @@ bool ParsePayload(const SceneDeltaKind kind, const json &payloadJson,
     payload.parametersChanged = payloadJson.value("parametersChanged", true);
     payload.texturesChanged = payloadJson.value("texturesChanged", false);
     payload.nodeObjectId = payloadJson.value("nodeObjectId", "");
+    payload.materialStableId = payloadJson.value("materialStableId", "");
     payload.materialSlot = payloadJson.value("materialSlot", 0);
     payload.materialModel = payloadJson.value("materialModel", "");
     if (payloadJson.contains("baseColor")) {

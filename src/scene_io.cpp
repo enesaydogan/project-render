@@ -520,7 +520,8 @@ static json BuildMetadata() {
     j["nod"].push_back({
       {"n", node.name}, {"sp", node.sourcePath},
       {"v", node.visible}, {"s", node.selected},
-      {"ll", node.liveLinkManaged}, {"mi", node.meshIndices}, {"t", xf}
+      {"ll", node.liveLinkManaged}, {"pi", node.parentIndex},
+      {"mi", node.meshIndices}, {"t", xf}
     });
   }
 
@@ -707,6 +708,7 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
       node.sourcePath = srcPath;
       node.visible = n.value("v", true);
       node.liveLinkManaged = n.value("ll", false);
+      node.parentIndex = n.value("pi", static_cast<size_t>(-1));
       node.meshIndices = n["mi"].get<std::vector<size_t>>();
       if (n.contains("t")) for (int i=0;i<16;++i) node.transform[i]=n["t"][i];
       node.selected = n.value("s", false);
@@ -720,6 +722,7 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
         if (!nodes.empty()) {
           nodes.back().visible = n.value("v", true);
           nodes.back().liveLinkManaged = n.value("ll", false);
+          nodes.back().parentIndex = n.value("pi", static_cast<size_t>(-1));
           if (n.contains("t")) for (int i=0;i<16;++i) nodes.back().transform[i]=n["t"][i];
           nodes.back().selected = n.value("s", false);
         }
@@ -732,6 +735,7 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
         nodes.back().name = n.value("n", nodes.back().name);
         nodes.back().visible = n.value("v", true);
         nodes.back().liveLinkManaged = n.value("ll", false);
+        nodes.back().parentIndex = n.value("pi", static_cast<size_t>(-1));
         if (n.contains("t")) for (int i=0;i<16;++i) nodes.back().transform[i]=n["t"][i];
         nodes.back().selected = n.value("s", false);
       }

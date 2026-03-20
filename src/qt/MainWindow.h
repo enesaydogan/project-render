@@ -4,6 +4,7 @@
 
 class DX12View;
 class QAction;
+class QComboBox;
 class QLabel;
 class QPlainTextEdit;
 class QProgressBar;
@@ -44,6 +45,7 @@ private:
     QLabel *m_liveLinkLabel = nullptr;
     QLabel *m_liveLinkSummaryLabel = nullptr;
     QPlainTextEdit *m_liveLinkDiagnosticsView = nullptr;
+    QComboBox *m_liveLinkProviderCombo = nullptr;
     QPushButton *m_liveLinkConnectButton = nullptr;
     QPushButton *m_liveLinkDisconnectButton = nullptr;
     QPushButton *m_liveLinkReconnectButton = nullptr;

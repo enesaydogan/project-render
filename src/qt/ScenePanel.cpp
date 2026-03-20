@@ -13,6 +13,8 @@
 #include <QTreeWidgetItem>
 #include <QVBoxLayout>
 
+#include <functional>
+
 extern HWND g_hwnd;
 
 namespace {
@@ -204,18 +206,51 @@ void ScenePanel::refreshSceneList()
     liveSyncRoot->setExpanded(true);
 
     QTreeWidgetItem *selectedItem = nullptr;
-    for (size_t index = 0; index < nodes.size(); ++index) {
+    auto isGroupRoot = [&](size_t index, bool liveLinkGroup) {
+        if (index >= nodes.size() || nodes[index].liveLinkManaged != liveLinkGroup) {
+            return false;
+        }
+        const size_t parentIndex = nodes[index].parentIndex;
+        return parentIndex == static_cast<size_t>(-1) ||
+               parentIndex >= nodes.size() ||
+               nodes[parentIndex].liveLinkManaged != liveLinkGroup;
+    };
+
+    std::function<void(size_t, QTreeWidgetItem *, bool)> addNodeRecursive;
+    addNodeRecursive = [&](size_t index, QTreeWidgetItem *parentItem, bool liveLinkGroup) {
         const Scene::Node &node = nodes[index];
         QTreeWidgetItem *item = nullptr;
-        if (node.liveLinkManaged) {
+        if (parentItem) {
+            item = new QTreeWidgetItem(parentItem);
+        } else if (liveLinkGroup) {
             item = new QTreeWidgetItem(liveSyncRoot);
         } else {
             item = new QTreeWidgetItem(m_nodeList);
         }
+
         item->setText(0, BuildNodeLabel(node));
         item->setData(0, kNodeIndexRole, static_cast<int>(index));
         if (static_cast<int>(index) == selectedRow) {
             selectedItem = item;
+        }
+
+        for (size_t childIndex = 0; childIndex < nodes.size(); ++childIndex) {
+            if (nodes[childIndex].parentIndex != index ||
+                nodes[childIndex].liveLinkManaged != liveLinkGroup) {
+                continue;
+            }
+            addNodeRecursive(childIndex, item, liveLinkGroup);
+        }
+    };
+
+    for (size_t index = 0; index < nodes.size(); ++index) {
+        if (isGroupRoot(index, true)) {
+            addNodeRecursive(index, nullptr, true);
+        }
+    }
+    for (size_t index = 0; index < nodes.size(); ++index) {
+        if (isGroupRoot(index, false)) {
+            addNodeRecursive(index, nullptr, false);
         }
     }
 

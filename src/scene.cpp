@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -511,6 +512,7 @@ static int FindLinkedMaterialByName(const std::vector<std::string> &sourceNames,
 
 Node::Node() {
   name = "New Node";
+  parentIndex = static_cast<size_t>(-1);
   // Identity matrix
   for (int i = 0; i < 16; ++i)
     transform[i] = 0.0f;
@@ -696,6 +698,29 @@ bool SetNodeLiveLinkManaged(size_t index, bool liveLinkManaged) {
     return false;
   }
   s_nodes[index].liveLinkManaged = liveLinkManaged;
+  return true;
+}
+
+bool SetNodeParent(size_t index, size_t parentIndex) {
+  if (index >= s_nodes.size()) {
+    return false;
+  }
+
+  const size_t resolvedParent =
+      parentIndex < s_nodes.size() ? parentIndex : static_cast<size_t>(-1);
+  if (resolvedParent == index) {
+    return false;
+  }
+
+  size_t cursor = resolvedParent;
+  while (cursor != static_cast<size_t>(-1) && cursor < s_nodes.size()) {
+    if (cursor == index) {
+      return false;
+    }
+    cursor = s_nodes[cursor].parentIndex;
+  }
+
+  s_nodes[index].parentIndex = resolvedParent;
   return true;
 }
 
@@ -1004,6 +1029,15 @@ bool RemoveNode(size_t index) {
     }
   }
   s_nodes.erase(s_nodes.begin() + index);
+
+  for (Node &node : s_nodes) {
+    if (node.parentIndex == index) {
+      node.parentIndex = static_cast<size_t>(-1);
+    } else if (node.parentIndex != static_cast<size_t>(-1) &&
+               node.parentIndex > index) {
+      --node.parentIndex;
+    }
+  }
 
   ApplyRendererInvalidation(
       RendererInvalidationPlan::FullAccelerationStructureRebuild);
@@ -2251,14 +2285,43 @@ void DrawScenePanel(HWND hwnd, bool &visible) {
           return true;
         };
 
+        auto isGroupRoot = [&](size_t index, bool liveLinkGroup) {
+          if (index >= s_nodes.size() || s_nodes[index].liveLinkManaged != liveLinkGroup) {
+            return false;
+          }
+          const size_t parentIndex = s_nodes[index].parentIndex;
+          return parentIndex == static_cast<size_t>(-1) ||
+                 parentIndex >= s_nodes.size() ||
+                 s_nodes[parentIndex].liveLinkManaged != liveLinkGroup;
+        };
+
+        std::function<bool(size_t, bool)> drawHierarchyRecursive;
+        drawHierarchyRecursive = [&](size_t index, bool indentChild) {
+          if (!drawNodeRow(index, indentChild)) {
+            return false;
+          }
+          for (size_t childIndex = 0; childIndex < s_nodes.size(); ++childIndex) {
+            if (s_nodes[childIndex].parentIndex != index ||
+                s_nodes[childIndex].liveLinkManaged != s_nodes[index].liveLinkManaged) {
+              continue;
+            }
+            if (!drawHierarchyRecursive(childIndex, true)) {
+              return false;
+            }
+          }
+          return true;
+        };
+
         std::vector<size_t> regularNodeIndices;
         std::vector<size_t> liveLinkNodeIndices;
         regularNodeIndices.reserve(s_nodes.size());
         liveLinkNodeIndices.reserve(s_nodes.size());
         for (size_t i = 0; i < s_nodes.size(); ++i) {
           if (s_nodes[i].liveLinkManaged) {
-            liveLinkNodeIndices.push_back(i);
-          } else {
+            if (isGroupRoot(i, true)) {
+              liveLinkNodeIndices.push_back(i);
+            }
+          } else if (isGroupRoot(i, false)) {
             regularNodeIndices.push_back(i);
           }
         }
@@ -2279,7 +2342,7 @@ void DrawScenePanel(HWND hwnd, bool &visible) {
 
         if (!liveLinkNodeIndices.empty() && rootOpen) {
           for (size_t index : liveLinkNodeIndices) {
-            if (!drawNodeRow(index, true)) {
+            if (!drawHierarchyRecursive(index, true)) {
               ImGui::TreePop();
               ImGui::PopID();
               return;
@@ -2290,7 +2353,7 @@ void DrawScenePanel(HWND hwnd, bool &visible) {
         ImGui::PopID();
 
         for (size_t index : regularNodeIndices) {
-          if (!drawNodeRow(index, false)) {
+          if (!drawHierarchyRecursive(index, false)) {
             return;
           }
         }

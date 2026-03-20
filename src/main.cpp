@@ -1481,11 +1481,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     Scene::AddDefaultPlane(0.0f);
   }
 
-  if (enableMockLiveLink) {
-    try {
-      auto provider = std::make_unique<LiveLink::MockLiveLinkProvider>();
-      const auto providerId =
-          LiveLink::GetCoordinator().RegisterProvider(std::move(provider));
+  try {
+    auto provider = std::make_unique<LiveLink::MockLiveLinkProvider>();
+    const auto providerId =
+        LiveLink::GetCoordinator().RegisterProvider(std::move(provider));
+    if (enableMockLiveLink) {
       if (LiveLink::GetCoordinator().ConnectProvider(providerId)) {
         fprintf(stderr,
                 "Startup: mock live-link provider enabled (--mock-livelink)\n");
@@ -1493,19 +1493,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         fprintf(stderr,
                 "Startup: failed to connect mock live-link provider\n");
       }
-    } catch (const std::exception &e) {
-      fprintf(stderr,
-              "Startup: failed to initialize mock live-link provider: %s\n",
-              e.what());
     }
+  } catch (const std::exception &e) {
+    fprintf(stderr,
+            "Startup: failed to initialize mock live-link provider: %s\n",
+            e.what());
   }
 
-  if (enableMaxLiveLinkPipe) {
-    try {
-      auto provider =
-          std::make_unique<LiveLink::NamedPipeLiveLinkProvider>(maxLiveLinkPipeName);
-      const auto providerId =
-          LiveLink::GetCoordinator().RegisterProvider(std::move(provider));
+  try {
+    auto provider =
+        std::make_unique<LiveLink::NamedPipeLiveLinkProvider>(maxLiveLinkPipeName);
+    const auto providerId =
+        LiveLink::GetCoordinator().RegisterProvider(std::move(provider));
+    if (enableMaxLiveLinkPipe) {
       if (LiveLink::GetCoordinator().ConnectProvider(providerId)) {
         fprintf(stderr,
                 "Startup: max live-link pipe enabled (--max-livelink-pipe %s)\n",
@@ -1514,11 +1514,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         fprintf(stderr,
                 "Startup: failed to connect max live-link pipe provider\n");
       }
-    } catch (const std::exception &e) {
-      fprintf(stderr,
-              "Startup: failed to initialize max live-link pipe provider: %s\n",
-              e.what());
     }
+  } catch (const std::exception &e) {
+    fprintf(stderr,
+            "Startup: failed to initialize max live-link pipe provider: %s\n",
+            e.what());
   }
 
   // ReSTIR DI: Initialize test lights for Phase 2
