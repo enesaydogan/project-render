@@ -920,7 +920,7 @@ std::string MakeMaterialObjectId(const std::string &nodeObjectId,
                                  int materialSlot,
                                  const std::string &materialStableId) {
   if (!materialStableId.empty()) {
-    return "material:" + nodeObjectId + ":id:" + materialStableId;
+    return "material:id:" + materialStableId;
   }
   return "material:" + nodeObjectId +
          ":slot:" + std::to_string((std::max)(0, materialSlot));
@@ -980,12 +980,20 @@ struct CameraSnapshot {
   float farPlane = 1000.0f;
 };
 
+struct MaterialReferenceSnapshot {
+  std::string nodeObjectId;
+  int materialSlot = 0;
+
+  bool operator==(const MaterialReferenceSnapshot &) const = default;
+};
+
 struct MaterialSnapshot {
   bool valid = false;
   ULONG_PTR nodeHandle = 0;
   int materialSlot = 0;
   std::string nodeObjectId;
   std::string materialStableId;
+  std::vector<MaterialReferenceSnapshot> references;
   std::string objectId;
   std::string name;
   std::string materialModel = "OpenPBR";
@@ -1199,10 +1207,33 @@ bool SameVector4(const std::array<float, 4> &lhs, const std::array<float, 4> &rh
 }
 
 bool SameMaterial(const MaterialSnapshot &lhs, const MaterialSnapshot &rhs) {
+  const bool hasStableIdentity =
+      !lhs.materialStableId.empty() && lhs.materialStableId == rhs.materialStableId;
+  auto normalizedReferences = [](const MaterialSnapshot &snapshot) {
+    std::vector<MaterialReferenceSnapshot> references = snapshot.references;
+    if (references.empty() && !snapshot.nodeObjectId.empty()) {
+      references.push_back(MaterialReferenceSnapshot{snapshot.nodeObjectId,
+                                                     snapshot.materialSlot});
+    }
+    std::sort(references.begin(), references.end(),
+              [](const MaterialReferenceSnapshot &lhsRef,
+                 const MaterialReferenceSnapshot &rhsRef) {
+                if (lhsRef.nodeObjectId != rhsRef.nodeObjectId) {
+                  return lhsRef.nodeObjectId < rhsRef.nodeObjectId;
+                }
+                return lhsRef.materialSlot < rhsRef.materialSlot;
+              });
+    references.erase(std::unique(references.begin(), references.end()),
+                     references.end());
+    return references;
+  };
+
   return lhs.valid == rhs.valid && lhs.objectId == rhs.objectId &&
-         lhs.materialSlot == rhs.materialSlot && lhs.name == rhs.name &&
-         lhs.nodeObjectId == rhs.nodeObjectId &&
+         (hasStableIdentity || lhs.materialSlot == rhs.materialSlot) &&
+         lhs.name == rhs.name &&
+         (hasStableIdentity || lhs.nodeObjectId == rhs.nodeObjectId) &&
          lhs.materialStableId == rhs.materialStableId &&
+         normalizedReferences(lhs) == normalizedReferences(rhs) &&
          lhs.materialModel == rhs.materialModel &&
          SameVector4(lhs.baseColor, rhs.baseColor) &&
          lhs.baseColorTextureUri == rhs.baseColorTextureUri &&
@@ -1266,10 +1297,16 @@ json SerializeNodeSnapshot(const NodeSnapshot &snapshot) {
 }
 
 json SerializeMaterialSnapshot(const MaterialSnapshot &snapshot) {
+  json references = json::array();
+  for (const MaterialReferenceSnapshot &reference : snapshot.references) {
+    references.push_back(json{{"ni", reference.nodeObjectId},
+                              {"ms", reference.materialSlot}});
+  }
   return json{{"oi", snapshot.objectId},
               {"ni", snapshot.nodeObjectId},
               {"si", snapshot.materialStableId},
               {"ms", snapshot.materialSlot},
+              {"rf", references},
               {"n", snapshot.name},
               {"mm", snapshot.materialModel},
               {"bc", snapshot.baseColor},
@@ -1357,6 +1394,23 @@ bool DeserializeMaterialSnapshot(const json &value, MaterialSnapshot *outSnapsho
   snapshot.nodeObjectId = value.value("ni", std::string());
   snapshot.materialStableId = value.value("si", std::string());
   snapshot.materialSlot = value.value("ms", 0);
+  if (value.contains("rf") && value["rf"].is_array()) {
+    for (const json &referenceValue : value["rf"]) {
+      if (!referenceValue.is_object()) {
+        continue;
+      }
+      MaterialReferenceSnapshot reference;
+      reference.nodeObjectId = referenceValue.value("ni", std::string());
+      reference.materialSlot = referenceValue.value("ms", 0);
+      if (!reference.nodeObjectId.empty()) {
+        snapshot.references.push_back(std::move(reference));
+      }
+    }
+  }
+  if (snapshot.references.empty() && !snapshot.nodeObjectId.empty()) {
+    snapshot.references.push_back(
+        MaterialReferenceSnapshot{snapshot.nodeObjectId, snapshot.materialSlot});
+  }
   snapshot.name = value.value("n", std::string());
   snapshot.materialModel = value.value("mm", std::string("OpenPBR"));
   if (value.contains("bc")) snapshot.baseColor = value["bc"].get<std::array<float, 4>>();
@@ -2615,6 +2669,8 @@ bool CaptureMaterialSnapshot(Interface *ip, INode *node, int materialSlot, Mtl *
   snapshot.materialSlot = (std::max)(0, materialSlot);
   snapshot.nodeObjectId = MakeNodeObjectId(node);
   snapshot.materialStableId = GetOrCreateMaterialGuid(material);
+  snapshot.references.push_back(
+      MaterialReferenceSnapshot{snapshot.nodeObjectId, snapshot.materialSlot});
   snapshot.objectId = MakeMaterialObjectId(snapshot.nodeObjectId,
                                            snapshot.materialSlot,
                                            snapshot.materialStableId);
@@ -2677,7 +2733,32 @@ void GatherMaterialSnapshots(
       if (CaptureMaterialSnapshot(ip, node, materialSlot,
                                   ResolveMaterialForSlot(rootMaterial, materialSlot),
                                   &materialSnapshot)) {
-        outState->insert_or_assign(materialSnapshot.objectId, materialSnapshot);
+        auto existingIt = outState->find(materialSnapshot.objectId);
+        if (existingIt == outState->end()) {
+          outState->emplace(materialSnapshot.objectId, std::move(materialSnapshot));
+        } else {
+          MaterialSnapshot &existingSnapshot = existingIt->second;
+          std::vector<MaterialReferenceSnapshot> mergedReferences =
+              existingSnapshot.references;
+          existingSnapshot = materialSnapshot;
+          mergedReferences.insert(mergedReferences.end(),
+                                  materialSnapshot.references.begin(),
+                                  materialSnapshot.references.end());
+          existingSnapshot.references = std::move(mergedReferences);
+          std::sort(existingSnapshot.references.begin(),
+                    existingSnapshot.references.end(),
+                    [](const MaterialReferenceSnapshot &lhs,
+                       const MaterialReferenceSnapshot &rhs) {
+                      if (lhs.nodeObjectId != rhs.nodeObjectId) {
+                        return lhs.nodeObjectId < rhs.nodeObjectId;
+                      }
+                      return lhs.materialSlot < rhs.materialSlot;
+                    });
+          existingSnapshot.references.erase(
+              std::unique(existingSnapshot.references.begin(),
+                          existingSnapshot.references.end()),
+              existingSnapshot.references.end());
+        }
       }
     }
   }
@@ -3395,6 +3476,14 @@ void AppendMaterialDelta(const std::string &documentId,
                                               {"nodeObjectId", snapshot.nodeObjectId},
                                               {"materialStableId", snapshot.materialStableId},
                                               {"materialSlot", snapshot.materialSlot},
+                                              {"references", [&snapshot]() {
+                                                 json references = json::array();
+                                                 for (const MaterialReferenceSnapshot &reference : snapshot.references) {
+                                                   references.push_back(json{{"nodeObjectId", reference.nodeObjectId},
+                                                                             {"materialSlot", reference.materialSlot}});
+                                                 }
+                                                 return references;
+                                               }()},
                                               {"name", snapshot.name},
                                               {"materialModel", snapshot.materialModel},
                                               {"baseColor", snapshot.baseColor},

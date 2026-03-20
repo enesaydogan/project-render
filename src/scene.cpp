@@ -1304,6 +1304,37 @@ bool GetMaterial(size_t index, Asset::Material *outMaterial) {
   return true;
 }
 
+bool RebindNodeMaterialSlot(size_t nodeIndex, size_t materialSlot,
+                            int materialIndex) {
+  if (nodeIndex >= s_nodes.size() || materialIndex < 0 ||
+      materialIndex >= static_cast<int>(g_loadedMaterials.size())) {
+    return false;
+  }
+
+  Node &node = s_nodes[nodeIndex];
+  if (materialSlot >= node.linkedMaterialIndices.size()) {
+    return false;
+  }
+
+  const int previousMaterialIndex = node.linkedMaterialIndices[materialSlot];
+  if (previousMaterialIndex == materialIndex) {
+    return true;
+  }
+
+  node.linkedMaterialIndices[materialSlot] = materialIndex;
+  for (size_t meshIndex : node.meshIndices) {
+    if (meshIndex >= g_loadedMeshes.size()) {
+      continue;
+    }
+    if (g_loadedMeshes[meshIndex].materialIndex == previousMaterialIndex) {
+      g_loadedMeshes[meshIndex].materialIndex = materialIndex;
+    }
+  }
+
+  ApplyRendererInvalidation(RendererInvalidationPlan::AccumulationOnly);
+  return true;
+}
+
 bool UpdateMaterial(size_t index, const Asset::Material &material) {
   if (index >= g_loadedMaterials.size()) {
     return false;

@@ -217,6 +217,19 @@ bool ParsePayload(const SceneDeltaKind kind, const json &payloadJson,
     payload.nodeObjectId = payloadJson.value("nodeObjectId", "");
     payload.materialStableId = payloadJson.value("materialStableId", "");
     payload.materialSlot = payloadJson.value("materialSlot", 0);
+    if (payloadJson.contains("references") && payloadJson["references"].is_array()) {
+      for (const json &referenceValue : payloadJson["references"]) {
+        if (!referenceValue.is_object()) {
+          continue;
+        }
+        MaterialNodeReference reference;
+        reference.nodeObjectId = referenceValue.value("nodeObjectId", "");
+        reference.materialSlot = referenceValue.value("materialSlot", 0);
+        if (!reference.nodeObjectId.empty()) {
+          payload.references.push_back(std::move(reference));
+        }
+      }
+    }
     payload.name = payloadJson.value("name", "");
     payload.materialModel = payloadJson.value("materialModel", "");
     if (payloadJson.contains("baseColor")) {

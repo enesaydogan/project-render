@@ -142,12 +142,18 @@ struct MeshPayloadChangedPayload {
   std::string payloadHash;
 };
 
+struct MaterialNodeReference {
+  std::string nodeObjectId;
+  int materialSlot = 0;
+};
+
 struct MaterialChangedPayload {
   bool parametersChanged = true;
   bool texturesChanged = false;
   std::string nodeObjectId;
   std::string materialStableId;
   int materialSlot = 0;
+  std::vector<MaterialNodeReference> references;
   std::string name;
   std::string materialModel;
   std::array<float, 4> baseColor = {1.0f, 1.0f, 1.0f, 1.0f};
