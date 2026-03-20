@@ -21,6 +21,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <initializer_list>
 #include <mutex>
 #include <objbase.h>
 #include <string>
@@ -227,6 +228,7 @@ constexpr uint64_t kIdlePollMinIntervalMs = 400;
 constexpr uint64_t kHeavyPollMinIntervalMs = 1000;
 constexpr uint64_t kReconnectPollMinIntervalMs = 1000;
 constexpr uint64_t kCameraPollMinIntervalMs = 33;
+constexpr uint64_t kVerificationFullResyncIntervalMs = 1500;
 constexpr uint64_t kSlowPollThresholdMs = 150;
 constexpr size_t kLargeSceneNodeThreshold = 250;
 constexpr int kUtilityDialogId = 101;
@@ -1006,6 +1008,10 @@ struct MaterialSnapshot {
   float translucency = 0.0f;
   std::array<float, 2> uvScale = {1.0f, 1.0f};
   std::array<float, 2> uvOffset = {0.0f, 0.0f};
+  float triPlanarEnabled = 0.0f;
+  float triPlanarScale = 1.0f;
+  float triPlanarSharpness = 4.0f;
+  float triPlanarNormalStrength = 1.0f;
   bool doubleSided = false;
   std::string alphaMode = "OPAQUE";
 };
@@ -1014,6 +1020,10 @@ struct TextureBindingSnapshot {
   std::string uri;
   std::array<float, 2> uvScale = {1.0f, 1.0f};
   std::array<float, 2> uvOffset = {0.0f, 0.0f};
+  float triPlanarEnabled = 0.0f;
+  float triPlanarScale = 1.0f;
+  float triPlanarSharpness = 4.0f;
+  float triPlanarNormalStrength = 1.0f;
 };
 
 using MaterialStateMap = std::unordered_map<std::string, MaterialSnapshot>;
@@ -1213,6 +1223,10 @@ bool SameMaterial(const MaterialSnapshot &lhs, const MaterialSnapshot &rhs) {
          NearlyEqual(lhs.translucency, rhs.translucency) &&
          SameVector2(lhs.uvScale, rhs.uvScale) &&
          SameVector2(lhs.uvOffset, rhs.uvOffset) &&
+         NearlyEqual(lhs.triPlanarEnabled, rhs.triPlanarEnabled) &&
+         NearlyEqual(lhs.triPlanarScale, rhs.triPlanarScale) &&
+         NearlyEqual(lhs.triPlanarSharpness, rhs.triPlanarSharpness) &&
+         NearlyEqual(lhs.triPlanarNormalStrength, rhs.triPlanarNormalStrength) &&
          lhs.doubleSided == rhs.doubleSided && lhs.alphaMode == rhs.alphaMode;
 }
 
@@ -1277,6 +1291,10 @@ json SerializeMaterialSnapshot(const MaterialSnapshot &snapshot) {
               {"tr", snapshot.translucency},
               {"us", snapshot.uvScale},
               {"uo", snapshot.uvOffset},
+              {"te", snapshot.triPlanarEnabled},
+              {"ts", snapshot.triPlanarScale},
+              {"ths", snapshot.triPlanarSharpness},
+              {"tns", snapshot.triPlanarNormalStrength},
               {"ds", snapshot.doubleSided},
               {"am", snapshot.alphaMode}};
 }
@@ -1360,6 +1378,10 @@ bool DeserializeMaterialSnapshot(const json &value, MaterialSnapshot *outSnapsho
   snapshot.translucency = value.value("tr", 0.0f);
   if (value.contains("us")) snapshot.uvScale = value["us"].get<std::array<float, 2>>();
   if (value.contains("uo")) snapshot.uvOffset = value["uo"].get<std::array<float, 2>>();
+  snapshot.triPlanarEnabled = value.value("te", 0.0f);
+  snapshot.triPlanarScale = value.value("ts", 1.0f);
+  snapshot.triPlanarSharpness = value.value("ths", 4.0f);
+  snapshot.triPlanarNormalStrength = value.value("tns", 1.0f);
   snapshot.doubleSided = value.value("ds", false);
   snapshot.alphaMode = value.value("am", std::string("OPAQUE"));
   if (snapshot.objectId.empty()) {
@@ -1656,9 +1678,212 @@ bool TryResolveBitmapTextureBinding(Interface *ip, BitmapTex *bitmapTex,
 }
 
 bool TryResolveTexmapTextureBinding(Interface *ip, Texmap *texmap,
+                                    TextureBindingSnapshot *outBinding);
+
+bool TryFindAnimatableParam(Animatable *animatable, const char *paramName,
+                            IParamBlock2 **outParamBlock, ParamID *outParamId) {
+  if (!animatable || !paramName || !outParamBlock || !outParamId) {
+    return false;
+  }
+
+  const std::wstring paramNameWide = Utf8ToWString(paramName);
+  if (paramNameWide.empty()) {
+    return false;
+  }
+
+  for (int paramBlockIndex = 0; paramBlockIndex < animatable->NumParamBlocks();
+       ++paramBlockIndex) {
+    IParamBlock2 *paramBlock = animatable->GetParamBlock(paramBlockIndex);
+    if (!paramBlock) {
+      continue;
+    }
+
+    ParamBlockDesc2 *desc = paramBlock->GetDesc();
+    if (!desc) {
+      continue;
+    }
+
+    const int paramIndex = desc->NameToIndex(paramNameWide.c_str());
+    if (paramIndex < 0) {
+      continue;
+    }
+
+    const ParamID paramId = desc->IndextoID(paramIndex);
+    if (paramId < 0) {
+      continue;
+    }
+
+    *outParamBlock = paramBlock;
+    *outParamId = paramId;
+    return true;
+  }
+
+  return false;
+}
+
+template <typename TValue>
+bool TryGetAnimatableParamValueByName(Animatable *animatable, TimeValue time,
+                                      const char *paramName,
+                                      TValue *outValue) {
+  if (!outValue) {
+    return false;
+  }
+
+  IParamBlock2 *paramBlock = nullptr;
+  ParamID paramId = -1;
+  if (!TryFindAnimatableParam(animatable, paramName, &paramBlock, &paramId) ||
+      !paramBlock) {
+    return false;
+  }
+
+  Interval valid = FOREVER;
+  TValue value{};
+  if (!paramBlock->GetValue(paramId, time, value, valid)) {
+    return false;
+  }
+
+  *outValue = value;
+  return true;
+}
+
+template <typename TValue>
+bool TryGetAnimatableParamValueByNames(
+    Animatable *animatable, TimeValue time,
+    std::initializer_list<const char *> paramNames, TValue *outValue) {
+  if (!outValue) {
+    return false;
+  }
+
+  for (const char *paramName : paramNames) {
+    if (TryGetAnimatableParamValueByName(animatable, time, paramName,
+                                         outValue)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool TryGetAnimatableTexmapParamByName(Animatable *animatable, TimeValue time,
+                                       const char *paramName,
+                                       Texmap **outTexmap) {
+  if (!outTexmap) {
+    return false;
+  }
+
+  IParamBlock2 *paramBlock = nullptr;
+  ParamID paramId = -1;
+  if (!TryFindAnimatableParam(animatable, paramName, &paramBlock, &paramId) ||
+      !paramBlock) {
+    return false;
+  }
+
+  Texmap *texmap = paramBlock->GetTexmap(paramId, time);
+  if (!texmap) {
+    return false;
+  }
+
+  *outTexmap = texmap;
+  return true;
+}
+
+bool IsTriPlanarTexmap(Texmap *texmap) {
+  if (!texmap) {
+    return false;
+  }
+
+  const std::string classNameLower = GetObjectClassNameLower(texmap);
+  return classNameLower.find("triplanar") != std::string::npos ||
+         classNameLower.find("tri planar") != std::string::npos;
+}
+
+float ResolveTriPlanarSharpnessFromBlend(float blend) {
+  const float safeBlend = (std::max)(blend, 1.0f / 16.0f);
+  return (std::clamp)(1.0f / safeBlend, 0.25f, 16.0f);
+}
+
+bool TryResolveTriPlanarTextureBinding(Interface *ip, Texmap *texmap,
+                                       TextureBindingSnapshot *outBinding) {
+  if (!ip || !texmap || !outBinding || !IsTriPlanarTexmap(texmap)) {
+    return false;
+  }
+
+  const TimeValue time = ip->GetTime();
+  const char *axisParamNames[] = {"texture_x", "texture_y", "texture_z",
+                                  "texture_negx", "texture_negy",
+                                  "texture_negz"};
+
+  TextureBindingSnapshot primaryBinding;
+  bool foundPrimaryBinding = false;
+
+  for (const char *axisParamName : axisParamNames) {
+    Texmap *axisTexmap = nullptr;
+    if (!TryGetAnimatableTexmapParamByName(texmap, time, axisParamName,
+                                           &axisTexmap) ||
+        !axisTexmap) {
+      continue;
+    }
+
+    TextureBindingSnapshot axisBinding;
+    if (!TryResolveTexmapTextureBinding(ip, axisTexmap, &axisBinding) ||
+        axisBinding.uri.empty()) {
+      continue;
+    }
+
+    if (!foundPrimaryBinding) {
+      primaryBinding = std::move(axisBinding);
+      foundPrimaryBinding = true;
+      continue;
+    }
+
+    if (axisBinding.uri != primaryBinding.uri) {
+      return false;
+    }
+  }
+
+  if (!foundPrimaryBinding) {
+    return false;
+  }
+
+  float triPlanarScale = 1.0f;
+  float size = 0.0f;
+  if (TryGetAnimatableParamValueByNames(texmap, time, {"size"}, &size) &&
+      size > 1.0e-6f) {
+    const float sizeInMeters = ConvertMaxDistanceToEngine(size);
+    if (sizeInMeters > 1.0e-6f) {
+      triPlanarScale = 1.0f / sizeInMeters;
+    }
+  } else {
+    float scale = 1.0f;
+    if (TryGetAnimatableParamValueByNames(texmap, time, {"scale"}, &scale) &&
+        scale > 1.0e-6f) {
+      triPlanarScale = scale;
+    }
+  }
+
+  float blend = 1.0f;
+  TryGetAnimatableParamValueByNames(texmap, time, {"blend"}, &blend);
+
+  primaryBinding.uvScale = {1.0f, 1.0f};
+  primaryBinding.uvOffset = {0.0f, 0.0f};
+  primaryBinding.triPlanarEnabled = 1.0f;
+  primaryBinding.triPlanarScale = (std::max)(triPlanarScale, 1.0e-3f);
+  primaryBinding.triPlanarSharpness =
+      ResolveTriPlanarSharpnessFromBlend(blend);
+  primaryBinding.triPlanarNormalStrength = 1.0f;
+
+  *outBinding = std::move(primaryBinding);
+  return true;
+}
+
+bool TryResolveTexmapTextureBinding(Interface *ip, Texmap *texmap,
                                     TextureBindingSnapshot *outBinding) {
   if (!texmap || !outBinding) {
     return false;
+  }
+
+  if (TryResolveTriPlanarTextureBinding(ip, texmap, outBinding)) {
+    return true;
   }
 
   if (BitmapTex *bitmapTex = dynamic_cast<BitmapTex *>(texmap)) {
@@ -1685,6 +1910,24 @@ void ApplyTextureBinding(TextureBindingSnapshot binding, std::string *outUri,
   }
 
   *outUri = std::move(binding.uri);
+  if (binding.triPlanarEnabled > 0.5f) {
+    if (snapshot->triPlanarEnabled <= 0.5f) {
+      snapshot->triPlanarEnabled = 1.0f;
+      snapshot->triPlanarScale = (std::max)(binding.triPlanarScale, 1.0e-3f);
+      snapshot->triPlanarSharpness =
+          (std::clamp)(binding.triPlanarSharpness, 0.25f, 16.0f);
+      snapshot->triPlanarNormalStrength =
+          (std::max)(binding.triPlanarNormalStrength, 0.0f);
+      snapshot->uvScale = {1.0f, 1.0f};
+      snapshot->uvOffset = {0.0f, 0.0f};
+    }
+    return;
+  }
+
+  if (snapshot->triPlanarEnabled > 0.5f) {
+    return;
+  }
+
   if (NearlyEqual(snapshot->uvScale[0], 1.0f) &&
       NearlyEqual(snapshot->uvScale[1], 1.0f) &&
       NearlyEqual(snapshot->uvOffset[0], 0.0f) &&
@@ -3036,6 +3279,14 @@ void AppendMaterialDelta(const std::string &documentId,
                                               {"translucency", snapshot.translucency},
                                               {"uvScale", snapshot.uvScale},
                                               {"uvOffset", snapshot.uvOffset},
+                                              {"triPlanarEnabled",
+                                               snapshot.triPlanarEnabled},
+                                              {"triPlanarScale",
+                                               snapshot.triPlanarScale},
+                                              {"triPlanarSharpness",
+                                               snapshot.triPlanarSharpness},
+                                              {"triPlanarNormalStrength",
+                                               snapshot.triPlanarNormalStrength},
                                               {"doubleSided", snapshot.doubleSided},
                                               {"alphaMode", snapshot.alphaMode}}}});
 }
@@ -3472,8 +3723,8 @@ private:
     void ModelOtherEvent(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh | DirtyLight); }
     void MaterialStructured(NodeKeyTab &nodes) override { Mark(nodes, DirtyMaterial); }
     void MaterialOtherEvent(NodeKeyTab &nodes) override { Mark(nodes, DirtyMaterial); }
-    void ControllerStructured(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyLight); }
-    void ControllerOtherEvent(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyLight); }
+    void ControllerStructured(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh | DirtyMaterial | DirtyLight); }
+    void ControllerOtherEvent(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh | DirtyMaterial | DirtyLight); }
     void NameChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState); }
     void WireColorChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState); }
     void RenderPropertiesChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyLight); }
@@ -3764,6 +4015,11 @@ private:
     m_lastBatchDeltaCount = 0;
   }
 
+  void ScheduleVerificationSweep_NoLock() {
+    m_nextVerificationDeadline =
+        ComputeNextPollDeadline(kVerificationFullResyncIntervalMs);
+  }
+
   std::string BuildDetailsText_NoLock() const {
     const std::string startupSummary =
         m_lastStartupSummary.empty() ? std::string("Last startup: none.")
@@ -3865,6 +4121,7 @@ private:
     PersistResumeStateLocked(ip);
     m_nextPollDeadline = ComputeNextPollDeadline(kActivePollMinIntervalMs);
     m_nextCameraPollDeadline = ComputeNextPollDeadline(kCameraPollMinIntervalMs);
+    ScheduleVerificationSweep_NoLock();
     m_forceFullResync = false;
     m_selectionDirty = false;
     m_dirtyNodeHandles.clear();
@@ -3937,6 +4194,7 @@ private:
     m_nextRevision = 1;
     m_nextPollDeadline = Clock::time_point{};
     m_nextCameraPollDeadline = Clock::time_point{};
+    m_nextVerificationDeadline = Clock::time_point{};
     m_forceFullResync = false;
     m_selectionDirty = false;
     m_dirtyNodeHandles.clear();
@@ -4034,7 +4292,16 @@ private:
 
   void PollSceneChangesLocked() {
     const Clock::time_point now = Clock::now();
-    if (m_nextPollDeadline != Clock::time_point{} && now < m_nextPollDeadline) {
+    if (!m_forceFullResync &&
+        m_nextVerificationDeadline != Clock::time_point{} &&
+        now >= m_nextVerificationDeadline && !m_selectionDirty &&
+        m_dirtyNodeHandles.empty() && m_dirtyMeshHandles.empty() &&
+        m_dirtyMaterialHandles.empty() && m_dirtyLightHandles.empty()) {
+      m_forceFullResync = true;
+    }
+
+    if (!m_forceFullResync && m_nextPollDeadline != Clock::time_point{} &&
+        now < m_nextPollDeadline) {
       return;
     }
 
@@ -4168,6 +4435,7 @@ private:
         m_lastSelectedObjectIds = selectedObjectIds;
         CaptureActiveCameraSnapshot(ip, &m_lastCameraSnapshot);
         PersistResumeStateLocked(ip);
+        ScheduleVerificationSweep_NoLock();
         ClearDirtyState();
       } else if (deltas.empty()) {
         m_lastNodeState = std::move(currentState);
@@ -4176,6 +4444,7 @@ private:
         m_lastSelectedObjectIds = selectedObjectIds;
         CaptureActiveCameraSnapshot(ip, &m_lastCameraSnapshot);
         PersistResumeStateLocked(ip);
+        ScheduleVerificationSweep_NoLock();
         ClearDirtyState();
       }
 
@@ -4373,6 +4642,7 @@ private:
   UINT_PTR m_cameraPollTimer = 0;
   Clock::time_point m_nextPollDeadline = Clock::time_point{};
   Clock::time_point m_nextCameraPollDeadline = Clock::time_point{};
+  Clock::time_point m_nextVerificationDeadline = Clock::time_point{};
   ISceneEventManager *m_sceneEventManager = nullptr;
   CallbackKey m_sceneEventCallbackKey = 0;
   LiveLinkNodeEventCallback m_sceneEventCallback{this};

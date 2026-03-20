@@ -2,10 +2,10 @@
 <Project>
   <ProjectOutputs>
     <ProjectOutput>
-      <FullPath>D:\project-render\build-max2025\x64\Release\ZERO_CHECK</FullPath>
+      <FullPath>D:\project-render\build-max2025-linked\Release\ZERO_CHECK</FullPath>
     </ProjectOutput>
     <ProjectOutput>
-      <FullPath>D:\project-render\build-max2025\Release\ProjectRenderLiveLink.dlu</FullPath>
+      <FullPath>D:\project-render\build-max2025-linked\Release\ProjectRenderLiveLink.dlu</FullPath>
     </ProjectOutput>
   </ProjectOutputs>
   <ContentFiles />

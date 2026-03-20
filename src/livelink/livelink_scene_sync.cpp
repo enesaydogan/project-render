@@ -845,6 +845,14 @@ bool LiveLinkSceneSync::ApplyMaterialChanged(const SceneDeltaBatch &batch,
   material.uvScale[1] = fabsf(payload->uvScale[1]) > 1.0e-6f ? payload->uvScale[1] : 1.0f;
   material.uvOffset[0] = payload->uvOffset[0];
   material.uvOffset[1] = payload->uvOffset[1];
+  material.triPlanarEnabled = payload->triPlanarEnabled > 0.5f ? 1.0f : 0.0f;
+  material.triPlanarScale =
+      fabsf(payload->triPlanarScale) > 1.0e-6f ? fabsf(payload->triPlanarScale)
+                                               : 1.0f;
+  material.triPlanarSharpness =
+      std::clamp(payload->triPlanarSharpness, 0.25f, 16.0f);
+  material.triPlanarNormalStrength =
+      (std::max)(0.0f, payload->triPlanarNormalStrength);
   material.doubleSided = payload->doubleSided;
   material.alphaMode = payload->alphaMode.empty() ? "OPAQUE" : payload->alphaMode;
   if (!payload->materialModel.empty()) {
