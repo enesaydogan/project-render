@@ -945,6 +945,7 @@ struct MaterialSnapshot {
   bool valid = false;
   ULONG_PTR nodeHandle = 0;
   int materialSlot = 0;
+  std::string nodeObjectId;
   std::string objectId;
   std::string name;
   std::string materialModel = "OpenPBR";
@@ -952,6 +953,8 @@ struct MaterialSnapshot {
   std::string baseColorTextureUri;
   std::string normalTextureUri;
   std::string emissiveTextureUri;
+  std::string occlusionTextureUri;
+  std::string metalRoughTextureUri;
   std::array<float, 4> emissiveColor = {0.0f, 0.0f, 0.0f, 1.0f};
   float emissiveIntensity = 0.0f;
   float roughness = 0.5f;
@@ -1150,11 +1153,14 @@ bool SameVector4(const std::array<float, 4> &lhs, const std::array<float, 4> &rh
 bool SameMaterial(const MaterialSnapshot &lhs, const MaterialSnapshot &rhs) {
   return lhs.valid == rhs.valid && lhs.objectId == rhs.objectId &&
          lhs.materialSlot == rhs.materialSlot && lhs.name == rhs.name &&
+         lhs.nodeObjectId == rhs.nodeObjectId &&
          lhs.materialModel == rhs.materialModel &&
          SameVector4(lhs.baseColor, rhs.baseColor) &&
          lhs.baseColorTextureUri == rhs.baseColorTextureUri &&
          lhs.normalTextureUri == rhs.normalTextureUri &&
          lhs.emissiveTextureUri == rhs.emissiveTextureUri &&
+         lhs.occlusionTextureUri == rhs.occlusionTextureUri &&
+         lhs.metalRoughTextureUri == rhs.metalRoughTextureUri &&
          SameVector4(lhs.emissiveColor, rhs.emissiveColor) &&
          NearlyEqual(lhs.emissiveIntensity, rhs.emissiveIntensity) &&
          NearlyEqual(lhs.roughness, rhs.roughness) &&
@@ -1418,6 +1424,19 @@ void CaptureGenericMaterialTextures(Interface *ip, Mtl *material,
         ContainsAnyToken(slotNameLower, {"self", "emiss", "illum"})) {
       ApplyTextureBinding(std::move(binding), &snapshot->emissiveTextureUri,
                           snapshot);
+      continue;
+    }
+    if (snapshot->occlusionTextureUri.empty() &&
+        ContainsAnyToken(slotNameLower, {"occlusion", "ambient occlusion", "ao"})) {
+      ApplyTextureBinding(std::move(binding), &snapshot->occlusionTextureUri,
+                          snapshot);
+      continue;
+    }
+    if (snapshot->metalRoughTextureUri.empty() &&
+        ContainsAnyToken(slotNameLower,
+                         {"metal", "metallic", "metalness", "rough", "gloss"})) {
+      ApplyTextureBinding(std::move(binding), &snapshot->metalRoughTextureUri,
+                          snapshot);
     }
   }
 }
@@ -1617,6 +1636,30 @@ void ApplyVrayMaterialParameters(Interface *ip, Mtl *material,
     }
   }
 
+  Texmap *metalnessTexmap = nullptr;
+  if (TryGetVrayMtlTexmap(material,
+                          ProjectRenderVrayMtlParameters::pb_reflect_metalness_shortmap,
+                          time, &metalnessTexmap)) {
+    TextureBindingSnapshot binding;
+    if (TryResolveTexmapTextureBinding(ip, metalnessTexmap, &binding)) {
+      ApplyTextureBinding(std::move(binding), &snapshot->metalRoughTextureUri,
+                          snapshot);
+    }
+  }
+
+  if (snapshot->metalRoughTextureUri.empty()) {
+    Texmap *roughnessTexmap = nullptr;
+    if (TryGetVrayMtlTexmap(material,
+                            ProjectRenderVrayMtlParameters::pb_reflect_glossiness_shortmap,
+                            time, &roughnessTexmap)) {
+      TextureBindingSnapshot binding;
+      if (TryResolveTexmapTextureBinding(ip, roughnessTexmap, &binding)) {
+        ApplyTextureBinding(std::move(binding), &snapshot->metalRoughTextureUri,
+                            snapshot);
+      }
+    }
+  }
+
   Texmap *emissiveTexmap = nullptr;
   if (TryGetVrayMtlTexmap(
           material,
@@ -1723,6 +1766,55 @@ Mtl *ResolveLeafMaterial(Mtl *material) {
   return material;
 }
 
+constexpr BlockID kMultiMaterialParamBlockId = 0;
+constexpr ParamID kMultiMaterialIdsParamId = 3;
+
+bool TryGetMultiMaterialIds(Mtl *material, std::vector<int> *outMaterialIds) {
+  if (!material || !outMaterialIds || !material->IsMultiMtl()) {
+    return false;
+  }
+
+  IParamBlock2 *paramBlock = material->GetParamBlockByID(kMultiMaterialParamBlockId);
+  if (!paramBlock) {
+    return false;
+  }
+
+  const int count = paramBlock->Count(kMultiMaterialIdsParamId);
+  if (count <= 0) {
+    return false;
+  }
+
+  outMaterialIds->clear();
+  outMaterialIds->reserve(static_cast<size_t>(count));
+  for (int index = 0; index < count; ++index) {
+    int materialId = 0;
+    Interval interval;
+    paramBlock->GetValue(kMultiMaterialIdsParamId, 0, materialId, interval, index);
+    outMaterialIds->push_back(materialId);
+  }
+  return true;
+}
+
+int ResolveFaceMaterialSlot(Mtl *rootMaterial, int faceMaterialId) {
+  if (!rootMaterial) {
+    return 0;
+  }
+
+  if (rootMaterial->IsMultiMtl()) {
+    return (std::max)(0, faceMaterialId);
+  }
+
+  const int subMaterialCount = rootMaterial->NumSubMtls();
+  if (subMaterialCount > 1) {
+    int slot = faceMaterialId;
+    slot = slot > 0 ? (slot - 1) : 0;
+    slot = (std::clamp)(slot, 0, subMaterialCount - 1);
+    return slot;
+  }
+
+  return 0;
+}
+
 bool GetTriObjectForNode(Interface *ip, INode *node, TriObject **outTriObject,
                          bool *outNeedsDelete);
 
@@ -1742,9 +1834,18 @@ std::vector<int> GatherUsedMaterialSlots(Interface *ip, INode *node,
   TriObject *triObject = nullptr;
   bool needsDelete = false;
   if (!GetTriObjectForNode(ip, node, &triObject, &needsDelete)) {
-    for (int slot = 0; slot < subMaterialCount; ++slot) {
-      if (rootMaterial->GetSubMtl(slot)) {
-        usedSlots.push_back(slot);
+    std::vector<int> explicitMaterialIds;
+    if (TryGetMultiMaterialIds(rootMaterial, &explicitMaterialIds)) {
+      for (int materialId : explicitMaterialIds) {
+        if (rootMaterial->GetSubMtl(materialId)) {
+          usedSlots.push_back(materialId);
+        }
+      }
+    } else {
+      for (int slot = 0; slot < subMaterialCount; ++slot) {
+        if (rootMaterial->GetSubMtl(slot)) {
+          usedSlots.push_back(slot);
+        }
       }
     }
     if (usedSlots.empty()) {
@@ -1754,23 +1855,24 @@ std::vector<int> GatherUsedMaterialSlots(Interface *ip, INode *node,
   }
 
   Mesh &mesh = triObject->GetMesh();
-  std::vector<bool> used(static_cast<size_t>(subMaterialCount), false);
   for (int faceIndex = 0; faceIndex < mesh.getNumFaces(); ++faceIndex) {
-    int slot = mesh.faces[faceIndex].getMatID();
-    slot = slot > 0 ? (slot - 1) : 0;
-    slot = (std::clamp)(slot, 0, subMaterialCount - 1);
-    used[static_cast<size_t>(slot)] = true;
+    const int slot = ResolveFaceMaterialSlot(rootMaterial,
+                                             mesh.faces[faceIndex].getMatID());
+    if (std::find(usedSlots.begin(), usedSlots.end(), slot) == usedSlots.end()) {
+      usedSlots.push_back(slot);
+    }
   }
 
   if (needsDelete) {
     triObject->DeleteThis();
   }
 
-  for (int slot = 0; slot < subMaterialCount; ++slot) {
-    if (used[static_cast<size_t>(slot)] && rootMaterial->GetSubMtl(slot)) {
-      usedSlots.push_back(slot);
-    }
-  }
+  usedSlots.erase(std::remove_if(usedSlots.begin(), usedSlots.end(),
+                                 [rootMaterial](int slot) {
+                                   return rootMaterial->GetSubMtl(slot) == nullptr;
+                                 }),
+                  usedSlots.end());
+  std::sort(usedSlots.begin(), usedSlots.end());
   if (usedSlots.empty()) {
     usedSlots.push_back(0);
   }
@@ -1779,6 +1881,13 @@ std::vector<int> GatherUsedMaterialSlots(Interface *ip, INode *node,
 
 Mtl *ResolveMaterialForSlot(Mtl *rootMaterial, int materialSlot) {
   if (!rootMaterial) {
+    return nullptr;
+  }
+
+  if (rootMaterial->IsMultiMtl()) {
+    if (Mtl *slotMaterial = rootMaterial->GetSubMtl((std::max)(0, materialSlot))) {
+      return ResolveLeafMaterial(slotMaterial);
+    }
     return nullptr;
   }
 
@@ -1818,7 +1927,8 @@ bool CaptureMaterialSnapshot(Interface *ip, INode *node, int materialSlot, Mtl *
   snapshot.valid = true;
   snapshot.nodeHandle = node->GetHandle();
   snapshot.materialSlot = (std::max)(0, materialSlot);
-  snapshot.objectId = MakeMaterialObjectId(MakeNodeObjectId(node),
+  snapshot.nodeObjectId = MakeNodeObjectId(node);
+  snapshot.objectId = MakeMaterialObjectId(snapshot.nodeObjectId,
                                            snapshot.materialSlot);
   snapshot.name = ToUtf8(material->GetName());
   if (snapshot.name.empty()) {
@@ -2178,15 +2288,10 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
   const bool hasTexcoords = mesh.tvFace != nullptr && mesh.tVerts != nullptr &&
                             mesh.getNumTVerts() > 0;
   Mtl *rootMaterial = node->GetMtl();
-  const int subMaterialCount = rootMaterial ? rootMaterial->NumSubMtls() : 0;
   for (int faceIndex = 0; faceIndex < mesh.getNumFaces(); ++faceIndex) {
     Face &face = mesh.faces[faceIndex];
-    int materialSlot = 0;
-    if (subMaterialCount > 1) {
-      materialSlot = face.getMatID();
-      materialSlot = materialSlot > 0 ? (materialSlot - 1) : 0;
-      materialSlot = (std::clamp)(materialSlot, 0, subMaterialCount - 1);
-    }
+    const int materialSlot = ResolveFaceMaterialSlot(rootMaterial,
+                                                     face.getMatID());
 
     const auto [submeshIt, inserted] =
         submeshBySlot.emplace(materialSlot, submeshes.size());
@@ -2503,12 +2608,16 @@ void AppendMaterialDelta(const std::string &documentId,
                             {"debugLabel", snapshot.name},
                             {"payload", json{{"parametersChanged", true},
                                               {"texturesChanged", true},
+                                              {"nodeObjectId", snapshot.nodeObjectId},
+                                              {"materialSlot", snapshot.materialSlot},
                                               {"materialModel", snapshot.materialModel},
                                               {"baseColor", snapshot.baseColor},
                                               {"baseColorTextureUri", snapshot.baseColorTextureUri},
                                               {"emissiveColor", snapshot.emissiveColor},
                                               {"normalTextureUri", snapshot.normalTextureUri},
                                               {"emissiveTextureUri", snapshot.emissiveTextureUri},
+                                              {"occlusionTextureUri", snapshot.occlusionTextureUri},
+                                              {"metalRoughTextureUri", snapshot.metalRoughTextureUri},
                                               {"emissiveIntensity", snapshot.emissiveIntensity},
                                               {"roughness", snapshot.roughness},
                                               {"metalness", snapshot.metalness},

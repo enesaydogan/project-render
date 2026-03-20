@@ -214,6 +214,8 @@ bool ParsePayload(const SceneDeltaKind kind, const json &payloadJson,
     MaterialChangedPayload payload;
     payload.parametersChanged = payloadJson.value("parametersChanged", true);
     payload.texturesChanged = payloadJson.value("texturesChanged", false);
+    payload.nodeObjectId = payloadJson.value("nodeObjectId", "");
+    payload.materialSlot = payloadJson.value("materialSlot", 0);
     payload.materialModel = payloadJson.value("materialModel", "");
     if (payloadJson.contains("baseColor")) {
       FillFloatArray(payloadJson.at("baseColor"), &payload.baseColor);
@@ -221,6 +223,8 @@ bool ParsePayload(const SceneDeltaKind kind, const json &payloadJson,
     payload.baseColorTextureUri = payloadJson.value("baseColorTextureUri", "");
     payload.normalTextureUri = payloadJson.value("normalTextureUri", "");
     payload.emissiveTextureUri = payloadJson.value("emissiveTextureUri", "");
+    payload.occlusionTextureUri = payloadJson.value("occlusionTextureUri", "");
+    payload.metalRoughTextureUri = payloadJson.value("metalRoughTextureUri", "");
     if (payloadJson.contains("emissiveColor")) {
       FillFloatArray(payloadJson.at("emissiveColor"), &payload.emissiveColor);
     }
