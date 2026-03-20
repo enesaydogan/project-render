@@ -145,11 +145,15 @@ struct MeshPayloadChangedPayload {
 struct MaterialChangedPayload {
   bool parametersChanged = true;
   bool texturesChanged = false;
+  std::string nodeObjectId;
+  int materialSlot = 0;
   std::string materialModel;
   std::array<float, 4> baseColor = {1.0f, 1.0f, 1.0f, 1.0f};
   std::string baseColorTextureUri;
   std::string normalTextureUri;
   std::string emissiveTextureUri;
+  std::string occlusionTextureUri;
+  std::string metalRoughTextureUri;
   std::array<float, 4> emissiveColor = {0.0f, 0.0f, 0.0f, 1.0f};
   float emissiveIntensity = 1.0f;
   float roughness = 0.2f;

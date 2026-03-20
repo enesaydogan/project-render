@@ -644,22 +644,18 @@ bool LiveLinkSceneSync::ApplyMeshPayloadChanged(const SceneDeltaBatch &batch,
   }
 
   if (extension == ".prmesh") {
-    std::vector<int> materialSlots;
+    int maxMaterialSlot = -1;
     for (Asset::GpuMesh &mesh : meshes) {
-      const int materialSlot = mesh.materialIndex;
-      auto materialIt = std::find(materialSlots.begin(), materialSlots.end(),
-                                  materialSlot);
-      if (materialIt == materialSlots.end()) {
-        Asset::Material material;
+      maxMaterialSlot = (std::max)(maxMaterialSlot, mesh.materialIndex);
+    }
+
+    if (maxMaterialSlot >= 0) {
+      materials.resize(static_cast<size_t>(maxMaterialSlot) + 1);
+      for (int materialSlot = 0; materialSlot <= maxMaterialSlot; ++materialSlot) {
+        Asset::Material &material = materials[static_cast<size_t>(materialSlot)];
         const std::string materialName =
             BuildLiveLinkMaterialName(delta.target.objectId, materialSlot);
         strncpy_s(material.name, materialName.c_str(), _TRUNCATE);
-        materials.push_back(material);
-        materialSlots.push_back(materialSlot);
-        mesh.materialIndex = static_cast<int>(materialSlots.size() - 1);
-      } else {
-        mesh.materialIndex =
-            static_cast<int>(std::distance(materialSlots.begin(), materialIt));
       }
     }
   }
@@ -743,6 +739,8 @@ bool LiveLinkSceneSync::ApplyMaterialChanged(const SceneDeltaBatch &batch,
   material.diffuseTexture = resolveTextureIndex(payload->baseColorTextureUri);
   material.normalTexture = resolveTextureIndex(payload->normalTextureUri);
   material.emissiveTexture = resolveTextureIndex(payload->emissiveTextureUri);
+  material.occlusionTexture = resolveTextureIndex(payload->occlusionTextureUri);
+  material.metalRoughTexture = resolveTextureIndex(payload->metalRoughTextureUri);
   material.emissiveIntensity = payload->emissiveIntensity;
   material.roughness = payload->roughness;
   material.metalness = payload->metalness;
@@ -1125,8 +1123,36 @@ bool LiveLinkSceneSync::EnsureMaterialBinding(const SceneDeltaBatch &batch,
                                               ObjectBinding **outBinding) {
   ObjectBinding *binding = FindBinding(delta.target);
   if (!binding) {
-    const int materialIndex =
-        Scene::FindMaterialByName(ResolveMaterialName(delta));
+    int materialIndex = -1;
+    if (const MaterialChangedPayload *payload =
+            FindPayload<MaterialChangedPayload>(delta)) {
+      if (!payload->nodeObjectId.empty()) {
+        ObjectId nodeObjectId = delta.target;
+        nodeObjectId.objectId = payload->nodeObjectId;
+        nodeObjectId.objectType = ObjectType::Node;
+        if (const ObjectBinding *nodeBinding = FindBinding(nodeObjectId)) {
+          if (nodeBinding->handleKind == EngineHandleKind::SceneNode &&
+              nodeBinding->handleIndex < Scene::GetNodes().size()) {
+            const Scene::Node &node =
+                Scene::GetNodes()[nodeBinding->handleIndex];
+            const int materialSlot = (std::max)(0, payload->materialSlot);
+            if (materialSlot <
+                static_cast<int>(node.linkedMaterialIndices.size())) {
+              const int candidate =
+                  node.linkedMaterialIndices[static_cast<size_t>(materialSlot)];
+              if (candidate >= 0 &&
+                  candidate < static_cast<int>(Scene::GetMaterialCount())) {
+                materialIndex = candidate;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (materialIndex < 0) {
+      materialIndex = Scene::FindMaterialByName(ResolveMaterialName(delta));
+    }
     if (materialIndex < 0) {
       LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
                     "No scene material matched the live-link target");
