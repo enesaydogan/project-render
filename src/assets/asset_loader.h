@@ -83,10 +83,10 @@ struct Material {
 
   // Grass controls (UI driven).
   bool isGrass = false;
-  float grassColor[3] = {0.28f, 0.68f, 0.24f};
-  float grassBladeSize = 1.0f;
-  float grassBladeCount = 8.0f; // density in blades per square meter
-  float grassBladeVariation = 1.0f; // 0=no randomness, 1=full random scale/yaw
+  float grassColor[3] = {0.34f, 0.52f, 0.21f};
+  float grassBladeSize = 0.6f;
+  float grassBladeCount = 48.0f; // density in blades per square meter
+  float grassBladeVariation = 0.45f; // 0=no randomness, 1=full random scale/yaw
 
   // Canonical OpenPBR runtime subset fields.
   uint32_t schemaVersion = kSchemaVersionOpenPbrSubset;
@@ -97,6 +97,31 @@ struct Material {
   float coatWeight = 0.0f;
   float coatRoughness = 0.1f;
 };
+
+inline void ApplyDefaultGrassLook(Material &m) {
+  const bool hasDiffuseTexture = m.diffuseTexture >= 0;
+  const float defaultTint[3] = {0.34f, 0.52f, 0.21f};
+  const float texturedTint[3] = {1.0f, 1.0f, 1.0f};
+  const float *tint = hasDiffuseTexture ? texturedTint : defaultTint;
+
+  m.isGrass = true;
+  m.grassColor[0] = tint[0];
+  m.grassColor[1] = tint[1];
+  m.grassColor[2] = tint[2];
+  m.diffuseColor[0] = tint[0];
+  m.diffuseColor[1] = tint[1];
+  m.diffuseColor[2] = tint[2];
+  m.diffuseColor[3] = 1.0f;
+  m.metalness = 0.0f;
+  m.roughness = 0.82f;
+  m.specularWeight = 0.35f;
+  m.thinWalled = 1.0f;
+  m.translucency = 0.45f;
+  m.doubleSided = true;
+  m.grassBladeSize = 0.6f;
+  m.grassBladeCount = 48.0f;
+  m.grassBladeVariation = 0.45f;
+}
 
 // Initialize the loader with a device and command queue for GPU uploads.
 void Initialize(ID3D12Device *device, ID3D12CommandQueue *queue);

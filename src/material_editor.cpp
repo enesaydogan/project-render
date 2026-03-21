@@ -578,10 +578,7 @@ void Draw(HWND hwnd, bool &visible) {
 
             if (ImGui::Checkbox("Enable Grass", &mat.isGrass)) {
               if (mat.isGrass) {
-                // Initialize grass tint from the current material albedo.
-                mat.grassColor[0] = mat.diffuseColor[0];
-                mat.grassColor[1] = mat.diffuseColor[1];
-                mat.grassColor[2] = mat.diffuseColor[2];
+                Asset::ApplyDefaultGrassLook(mat);
               }
               grassChanged = true;
             }

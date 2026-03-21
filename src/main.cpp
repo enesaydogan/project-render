@@ -97,22 +97,58 @@ static bool EnsureProceduralGrassBladeMesh() {
     return true;
   }
 
-  // Crossed cards (2 quads) with double-sided indices for robust visibility.
-  std::vector<Asset::Vertex> vertices(8);
-  vertices[0] = {{-0.09f, 0.00f, 0.00f}, {0, 0, 1}, {1, 0, 0, 1}, {0, 1}};
-  vertices[1] = {{0.09f, 0.00f, 0.00f}, {0, 0, 1}, {1, 0, 0, 1}, {1, 1}};
-  vertices[2] = {{-0.06f, 0.95f, 0.00f}, {0, 0, 1}, {1, 0, 0, 1}, {0, 0}};
-  vertices[3] = {{0.06f, 0.95f, 0.00f}, {0, 0, 1}, {1, 0, 0, 1}, {1, 0}};
+  // Crossed tapered cards with a slight bend so the blade silhouette and UV
+  // flow feel closer to foliage than a flat rectangle.
+  std::vector<Asset::Vertex> vertices;
+  std::vector<uint32_t> indices;
+  vertices.reserve(12);
+  indices.reserve(48);
 
-  vertices[4] = {{0.00f, 0.00f, -0.09f}, {1, 0, 0}, {0, 0, 1, 1}, {0, 1}};
-  vertices[5] = {{0.00f, 0.00f, 0.09f}, {1, 0, 0}, {0, 0, 1, 1}, {1, 1}};
-  vertices[6] = {{0.00f, 0.95f, -0.06f}, {1, 0, 0}, {0, 0, 1, 1}, {0, 0}};
-  vertices[7] = {{0.00f, 0.95f, 0.06f}, {1, 0, 0}, {0, 0, 1, 1}, {1, 0}};
+  auto addBladePlane = [&](bool rotate90) {
+    const uint32_t base = static_cast<uint32_t>(vertices.size());
+    const float halfWidths[3] = {0.055f, 0.032f, 0.008f};
+    const float heights[3] = {0.00f, 0.52f, 1.00f};
+    const float curve[3] = {0.000f, 0.016f, 0.042f};
+    const float uvsV[3] = {1.00f, 0.42f, 0.00f};
 
-  std::vector<uint32_t> indices = {// quad 1 front + back
-                                   0, 1, 2, 2, 1, 3, 2, 1, 0, 3, 1, 2,
-                                   // quad 2 front + back
-                                   4, 5, 6, 6, 5, 7, 6, 5, 4, 7, 5, 6};
+    for (int row = 0; row < 3; ++row) {
+      Asset::Vertex left = {};
+      Asset::Vertex right = {};
+      if (!rotate90) {
+        left = {{-halfWidths[row], heights[row], curve[row]},
+                {0, 0, 1},
+                {1, 0, 0, 1},
+                {0, uvsV[row]}};
+        right = {{halfWidths[row], heights[row], curve[row]},
+                 {0, 0, 1},
+                 {1, 0, 0, 1},
+                 {1, uvsV[row]}};
+      } else {
+        left = {{curve[row], heights[row], -halfWidths[row]},
+                {1, 0, 0},
+                {0, 0, 1, 1},
+                {0, uvsV[row]}};
+        right = {{curve[row], heights[row], halfWidths[row]},
+                 {1, 0, 0},
+                 {0, 0, 1, 1},
+                 {1, uvsV[row]}};
+      }
+      vertices.push_back(left);
+      vertices.push_back(right);
+    }
+
+    for (uint32_t row = 0; row < 2; ++row) {
+      const uint32_t i0 = base + row * 2;
+      const uint32_t i1 = i0 + 1;
+      const uint32_t i2 = i0 + 2;
+      const uint32_t i3 = i0 + 3;
+      indices.insert(indices.end(), {i0, i1, i2, i2, i1, i3, i2, i1, i0,
+                                     i3, i1, i2});
+    }
+  };
+
+  addBladePlane(false);
+  addBladePlane(true);
 
   Asset::GpuMesh gm = Asset::LoadMeshFromMemory(vertices, indices);
   if (!gm.vertexBuffer || !gm.indexBuffer || gm.indexCount == 0) {
@@ -120,12 +156,12 @@ static bool EnsureProceduralGrassBladeMesh() {
     return false;
   }
   gm.materialIndex = -1;
-  gm.minBound[0] = -0.09f;
+  gm.minBound[0] = -0.06f;
   gm.minBound[1] = 0.0f;
-  gm.minBound[2] = -0.09f;
-  gm.maxBound[0] = 0.09f;
-  gm.maxBound[1] = 0.95f;
-  gm.maxBound[2] = 0.09f;
+  gm.minBound[2] = -0.06f;
+  gm.maxBound[0] = 0.06f;
+  gm.maxBound[1] = 1.0f;
+  gm.maxBound[2] = 0.06f;
 
   g_proceduralGrassBladeMesh = std::move(gm);
   g_proceduralGrassBladeReady = true;
@@ -1802,7 +1838,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         static uint64_t s_prevGrassSceneHash = 0;
         auto sceneInstances_grass = Scene::GetInstances();
         const uint64_t grassSceneHash = ComputeGrassSceneHash(sceneInstances_grass);
-        if (grassSceneHash != s_prevGrassSceneHash) {
+        const bool grassSceneChanged = (grassSceneHash != s_prevGrassSceneHash);
+        if (grassSceneChanged) {
           g_grassBlades.clear();
           uint32_t grassSourceId = 0;
           for (const auto &inst : sceneInstances_grass) {
@@ -1842,9 +1879,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           GrassManager::SetPatchMesh(&g_proceduralGrassBladeMesh);
         }
         const UINT currentBladeCount = (UINT)g_grassBlades.size();
-        if (currentBladeCount != s_prevGrassBladeCount ||
-            activeGrassMaterialIndex != s_prevGrassMaterial) {
-          DxrRenderer::RequestAccelerationStructureRebuild();
+        const bool grassTopologyChanged =
+            (currentBladeCount != s_prevGrassBladeCount) ||
+            (activeGrassMaterialIndex != s_prevGrassMaterial);
+        if (grassSceneChanged || grassTopologyChanged) {
+          if (grassTopologyChanged) {
+            DxrRenderer::RequestAccelerationStructureRebuild();
+          } else {
+            DxrRenderer::RequestAccelerationStructureUpdate();
+          }
           DxrRenderer::ResetAccumulation();
           s_prevGrassBladeCount = currentBladeCount;
           s_prevGrassMaterial = activeGrassMaterialIndex;
