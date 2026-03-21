@@ -784,11 +784,10 @@ void MaterialEditorPanel::createUi()
             return;
         }
         applyMaterialChange([enabled](Asset::Material &m) {
-            m.isGrass = enabled;
             if (enabled) {
-                m.grassColor[0] = m.diffuseColor[0];
-                m.grassColor[1] = m.diffuseColor[1];
-                m.grassColor[2] = m.diffuseColor[2];
+                Asset::ApplyDefaultGrassLook(m);
+            } else {
+                m.isGrass = false;
             }
         }, false, true);
     });
