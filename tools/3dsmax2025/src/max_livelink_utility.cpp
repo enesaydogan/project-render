@@ -48,7 +48,6 @@ constexpr DWORD kSceneGuidAppDataSubId = 0x1001;
 constexpr DWORD kNodeGuidAppDataSubId = 0x1002;
 constexpr DWORD kResumeStateAppDataSubId = 0x1003;
 constexpr DWORD kMaterialGuidAppDataSubId = 0x1004;
-
 #if defined(PROJECT_RENDER_HAS_VRAY_SDK)
 #define PROJECT_RENDER_VRAYMTL_CLASS_ID Class_ID(0x37bf3f2f, 0x7034695c)
 
@@ -1881,6 +1880,71 @@ bool TryGetAnimatableTexmapParamByName(Animatable *animatable, TimeValue time,
   return true;
 }
 
+template <typename TVisitor>
+bool VisitAnimatableChildTexmaps(Animatable *animatable, TimeValue time,
+                                 TVisitor &&visitor) {
+  if (!animatable) {
+    return false;
+  }
+
+  bool visitedAny = false;
+
+  auto visitTexmap = [&](Texmap *texmap) {
+    if (!texmap) {
+      return false;
+    }
+    visitedAny = true;
+    return visitor(texmap);
+  };
+
+  if (Texmap *texmap = dynamic_cast<Texmap *>(animatable)) {
+    for (int subTexmapIndex = 0; subTexmapIndex < texmap->NumSubTexmaps();
+         ++subTexmapIndex) {
+      if (visitTexmap(texmap->GetSubTexmap(subTexmapIndex))) {
+        return true;
+      }
+    }
+  }
+
+  for (int paramBlockIndex = 0; paramBlockIndex < animatable->NumParamBlocks();
+       ++paramBlockIndex) {
+    IParamBlock2 *paramBlock = animatable->GetParamBlock(paramBlockIndex);
+    if (!paramBlock) {
+      continue;
+    }
+
+    ParamBlockDesc2 *desc = paramBlock->GetDesc();
+    if (!desc) {
+      continue;
+    }
+
+    for (int paramIndex = 0; paramIndex < desc->Count(); ++paramIndex) {
+      const ParamID paramId = desc->IndextoID(paramIndex);
+      if (paramId < 0) {
+        continue;
+      }
+
+      const ParamType2 paramType = paramBlock->GetParameterType(paramId);
+      if (root_type(paramType) != TYPE_TEXMAP) {
+        continue;
+      }
+
+      const int count = is_tab(paramType) ? (std::max)(0, paramBlock->Count(paramId))
+                                          : 1;
+      Interval valid = FOREVER;
+      for (int elementIndex = 0; elementIndex < count; ++elementIndex) {
+        Texmap *childTexmap =
+            paramBlock->GetTexmap(paramId, time, valid, elementIndex);
+        if (visitTexmap(childTexmap)) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return visitedAny;
+}
+
 bool TryResolveAnimatableTextureUriRecursive(
     Interface *ip, Animatable *animatable, int depthRemaining,
     std::unordered_set<const Animatable *> *visited, std::string *outUri) {
@@ -1949,6 +2013,16 @@ bool TryResolveAnimatableTextureUriRecursive(
     return false;
   }
 
+  VisitAnimatableChildTexmaps(
+      animatable, time,
+      [&](Texmap *childTexmap) {
+        return TryResolveAnimatableTextureUriRecursive(
+            ip, childTexmap, depthRemaining - 1, visited, outUri);
+      });
+  if (!outUri->empty()) {
+    return true;
+  }
+
   if (ReferenceMaker *referenceMaker = dynamic_cast<ReferenceMaker *>(animatable)) {
     for (int referenceIndex = 0; referenceIndex < referenceMaker->NumRefs();
          ++referenceIndex) {
@@ -1997,6 +2071,113 @@ float ResolveTriPlanarSharpnessFromBlend(float blend) {
   return (std::clamp)(1.0f / safeBlend, 0.25f, 16.0f);
 }
 
+bool TryGetTriPlanarParameters(Interface *ip, Texmap *texmap,
+                               float *outScale, float *outSharpness,
+                               float *outNormalStrength) {
+  if (!ip || !texmap || !outScale || !outSharpness || !outNormalStrength ||
+      !IsTriPlanarTexmap(texmap)) {
+    return false;
+  }
+
+  const TimeValue time = ip->GetTime();
+  float triPlanarScale = 1.0f;
+  float size = 0.0f;
+  if (TryGetAnimatableParamValueByNames(texmap, time, {"size"}, &size) &&
+      size > 1.0e-6f) {
+    const float sizeInMeters = ConvertMaxDistanceToEngine(size);
+    if (sizeInMeters > 1.0e-6f) {
+      triPlanarScale = 1.0f / sizeInMeters;
+    }
+  } else {
+    float scale = 1.0f;
+    if (TryGetAnimatableParamValueByNames(texmap, time, {"scale"}, &scale) &&
+        scale > 1.0e-6f) {
+      triPlanarScale = scale;
+    }
+  }
+
+  float blend = 1.0f;
+  TryGetAnimatableParamValueByNames(texmap, time, {"blend"}, &blend);
+
+  *outScale = (std::max)(triPlanarScale, 1.0e-3f);
+  *outSharpness = ResolveTriPlanarSharpnessFromBlend(blend);
+  *outNormalStrength = 1.0f;
+  return true;
+}
+
+bool TryApplyTriPlanarSettingsToSnapshot(Interface *ip, Texmap *texmap,
+                                         MaterialSnapshot *snapshot) {
+  if (!snapshot) {
+    return false;
+  }
+
+  float triPlanarScale = 1.0f;
+  float triPlanarSharpness = 4.0f;
+  float triPlanarNormalStrength = 1.0f;
+  if (!TryGetTriPlanarParameters(ip, texmap, &triPlanarScale,
+                                 &triPlanarSharpness,
+                                 &triPlanarNormalStrength)) {
+    return false;
+  }
+
+  snapshot->triPlanarEnabled = 1.0f;
+  snapshot->triPlanarScale = triPlanarScale;
+  snapshot->triPlanarSharpness = triPlanarSharpness;
+  snapshot->triPlanarNormalStrength = triPlanarNormalStrength;
+  snapshot->uvScale = {1.0f, 1.0f};
+  snapshot->uvOffset = {0.0f, 0.0f};
+  return true;
+}
+
+bool TryFindTriPlanarTexmapRecursive(
+    Animatable *animatable, int depthRemaining,
+    std::unordered_set<const Animatable *> *visited, Texmap **outTexmap) {
+  if (!animatable || !visited || !outTexmap || depthRemaining < 0) {
+    return false;
+  }
+
+  if (!visited->insert(animatable).second) {
+    return false;
+  }
+
+  if (Texmap *texmap = dynamic_cast<Texmap *>(animatable)) {
+    if (IsTriPlanarTexmap(texmap)) {
+      *outTexmap = texmap;
+      return true;
+    }
+  }
+
+  if (depthRemaining == 0) {
+    return false;
+  }
+
+  const TimeValue time = 0;
+  if (VisitAnimatableChildTexmaps(
+          animatable, time,
+          [&](Texmap *childTexmap) {
+            return TryFindTriPlanarTexmapRecursive(
+                childTexmap, depthRemaining - 1, visited, outTexmap);
+          })) {
+    if (*outTexmap) {
+      return true;
+    }
+  }
+
+  if (ReferenceMaker *referenceMaker = dynamic_cast<ReferenceMaker *>(animatable)) {
+    for (int referenceIndex = 0; referenceIndex < referenceMaker->NumRefs();
+         ++referenceIndex) {
+      if (TryFindTriPlanarTexmapRecursive(
+              dynamic_cast<Animatable *>(
+                  referenceMaker->GetReference(referenceIndex)),
+              depthRemaining - 1, visited, outTexmap)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 bool TryResolveTriPlanarTextureBinding(Interface *ip, Texmap *texmap,
                                        TextureBindingSnapshot *outBinding) {
   if (!ip || !texmap || !outBinding || !IsTriPlanarTexmap(texmap)) {
@@ -2032,35 +2213,53 @@ bool TryResolveTriPlanarTextureBinding(Interface *ip, Texmap *texmap,
   }
 
   if (!foundPrimaryBinding) {
+    TextureBindingSnapshot fallbackBinding;
+    if (TryResolveFileBackedTextureBinding(ip, texmap, &fallbackBinding) &&
+        !fallbackBinding.uri.empty()) {
+      primaryBinding = std::move(fallbackBinding);
+      foundPrimaryBinding = true;
+    }
+  }
+
+  if (!foundPrimaryBinding) {
+    for (int subTexmapIndex = 0; subTexmapIndex < texmap->NumSubTexmaps();
+         ++subTexmapIndex) {
+      Texmap *subTexmap = texmap->GetSubTexmap(subTexmapIndex);
+      if (!subTexmap) {
+        continue;
+      }
+
+      TextureBindingSnapshot subBinding;
+      if (!TryResolveTexmapTextureBinding(ip, subTexmap, &subBinding) ||
+          subBinding.uri.empty()) {
+        continue;
+      }
+
+      primaryBinding = std::move(subBinding);
+      foundPrimaryBinding = true;
+      break;
+    }
+  }
+
+  if (!foundPrimaryBinding || primaryBinding.uri.empty()) {
     return false;
   }
 
   float triPlanarScale = 1.0f;
-  float size = 0.0f;
-  if (TryGetAnimatableParamValueByNames(texmap, time, {"size"}, &size) &&
-      size > 1.0e-6f) {
-    const float sizeInMeters = ConvertMaxDistanceToEngine(size);
-    if (sizeInMeters > 1.0e-6f) {
-      triPlanarScale = 1.0f / sizeInMeters;
-    }
-  } else {
-    float scale = 1.0f;
-    if (TryGetAnimatableParamValueByNames(texmap, time, {"scale"}, &scale) &&
-        scale > 1.0e-6f) {
-      triPlanarScale = scale;
-    }
+  float triPlanarSharpness = 4.0f;
+  float triPlanarNormalStrength = 1.0f;
+  if (!TryGetTriPlanarParameters(ip, texmap, &triPlanarScale,
+                                 &triPlanarSharpness,
+                                 &triPlanarNormalStrength)) {
+    return false;
   }
-
-  float blend = 1.0f;
-  TryGetAnimatableParamValueByNames(texmap, time, {"blend"}, &blend);
 
   primaryBinding.uvScale = {1.0f, 1.0f};
   primaryBinding.uvOffset = {0.0f, 0.0f};
   primaryBinding.triPlanarEnabled = 1.0f;
-  primaryBinding.triPlanarScale = (std::max)(triPlanarScale, 1.0e-3f);
-  primaryBinding.triPlanarSharpness =
-      ResolveTriPlanarSharpnessFromBlend(blend);
-  primaryBinding.triPlanarNormalStrength = 1.0f;
+  primaryBinding.triPlanarScale = triPlanarScale;
+  primaryBinding.triPlanarSharpness = triPlanarSharpness;
+  primaryBinding.triPlanarNormalStrength = triPlanarNormalStrength;
 
   *outBinding = std::move(primaryBinding);
   return true;
@@ -2086,11 +2285,14 @@ bool TryResolveTexmapTextureBinding(Interface *ip, Texmap *texmap,
     return true;
   }
 
-  for (int subTexmapIndex = 0; subTexmapIndex < texmap->NumSubTexmaps(); ++subTexmapIndex) {
-    if (Texmap *subTexmap = texmap->GetSubTexmap(subTexmapIndex)) {
-      if (TryResolveTexmapTextureBinding(ip, subTexmap, outBinding)) {
-        return true;
-      }
+  const TimeValue time = ip ? ip->GetTime() : 0;
+  if (VisitAnimatableChildTexmaps(
+          texmap, time,
+          [&](Texmap *childTexmap) {
+            return TryResolveTexmapTextureBinding(ip, childTexmap, outBinding);
+          })) {
+    if (!outBinding->uri.empty()) {
+      return true;
     }
   }
 
@@ -2703,6 +2905,19 @@ bool CaptureMaterialSnapshot(Interface *ip, INode *node, int materialSlot, Mtl *
     ApplyVrayMaterialParameters(ip, material, &snapshot);
   }
 #endif
+  if (snapshot.triPlanarEnabled <= 0.5f &&
+      (!snapshot.baseColorTextureUri.empty() ||
+       !snapshot.normalTextureUri.empty() ||
+       !snapshot.emissiveTextureUri.empty() ||
+       !snapshot.occlusionTextureUri.empty() ||
+       !snapshot.metalRoughTextureUri.empty())) {
+    std::unordered_set<const Animatable *> visited;
+    Texmap *triPlanarTexmap = nullptr;
+    if (TryFindTriPlanarTexmapRecursive(material, 4, &visited,
+                                        &triPlanarTexmap)) {
+      TryApplyTriPlanarSettingsToSnapshot(ip, triPlanarTexmap, &snapshot);
+    }
+  }
   *outSnapshot = snapshot;
   return true;
 }
