@@ -686,6 +686,12 @@ void IBLManager::UpdateTextureFromSkyModel() {
   const double albedo = m_albedo;
   const float skyIntensity =
       m_physicalCalibrationEnabled ? kPhysicalSkyIntensity : m_skyIntensity;
+  const float sunIntensityLux =
+      m_physicalCalibrationEnabled ? kPhysicalSunIntensityLux : m_sunIntensity;
+  const DirectX::XMFLOAT3 sunColor = GetSunColor();
+  const float sunGroundIlluminance =
+      (std::max)(0.0f, std::sinf((float)solarElev)) *
+      (std::max)(0.0f, sunIntensityLux);
 
   double globalSkyLumSum = 0.0;
   double globalSkyLumMax = 0.0;
@@ -724,12 +730,21 @@ void IBLManager::UpdateTextureFromSkyModel() {
 
           PragueSkyModel::Vector3 viewDir = {dx, dz, dy};
 
-          // For lower hemisphere, mirror the direction across the horizon so
-          // we can derive physically plausible ground illumination from sky
-          // radiance instead of using a black/constant placeholder.
+          // For lower hemisphere, bend the sampling direction upward toward
+          // the horizon instead of mirroring straight to the zenith. That
+          // gives the ground dome a brighter, more renderer-like base before
+          // we add reflected sky and direct-sun bounce.
           PragueSkyModel::Vector3 sampleDir = viewDir;
           if (sampleDir.z < 0.0) {
-            sampleDir.z = -sampleDir.z;
+            sampleDir.z = (std::max)(-sampleDir.z, 0.18);
+            const double sampleLen = std::sqrt(
+                sampleDir.x * sampleDir.x + sampleDir.y * sampleDir.y +
+                sampleDir.z * sampleDir.z);
+            if (sampleLen > 1.0e-8) {
+              sampleDir.x /= sampleLen;
+              sampleDir.y /= sampleLen;
+              sampleDir.z /= sampleLen;
+            }
           }
 
           auto params = skyModel->computeParameters(
@@ -776,13 +791,26 @@ void IBLManager::UpdateTextureFromSkyModel() {
             const float earthG = 0.30f;
             const float earthB = 0.24f;
             const float tintStrength = 0.65f;
+            const float horizonFactor =
+                std::pow(std::clamp(1.0f + (float)dy, 0.0f, 1.0f), 0.35f);
+            const float ambientBoost = 1.0f + 0.35f * horizonFactor;
+            const float sunBounce =
+                sunGroundIlluminance * reflectance *
+                (0.35f + 0.65f * horizonFactor);
 
-            float gr = std::max(0.0f, r) * reflectance *
+            float gr = std::max(0.0f, r) * reflectance * ambientBoost *
                        ((1.0f - tintStrength) + tintStrength * earthR);
-            float gg = std::max(0.0f, g) * reflectance *
+            float gg = std::max(0.0f, g) * reflectance * ambientBoost *
                        ((1.0f - tintStrength) + tintStrength * earthG);
-            float gb = std::max(0.0f, b) * reflectance *
+            float gb = std::max(0.0f, b) * reflectance * ambientBoost *
                        ((1.0f - tintStrength) + tintStrength * earthB);
+
+            gr += sunColor.x * sunBounce *
+                  ((1.0f - tintStrength) + tintStrength * earthR);
+            gg += sunColor.y * sunBounce *
+                  ((1.0f - tintStrength) + tintStrength * earthG);
+            gb += sunColor.z * sunBounce *
+                  ((1.0f - tintStrength) + tintStrength * earthB);
 
             // Smooth blend around the horizon to avoid a hard seam.
             float horizonBlend = std::clamp((float)(-dy) / 0.08f, 0.0f, 1.0f);
