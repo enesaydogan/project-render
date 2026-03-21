@@ -70,6 +70,19 @@ cbuffer MaterialCB : register(b1)
 Texture2D textures[] : register(t0);
 Texture2D envMap : register(t0, space1);
 Texture2D shadowMap : register(t1, space1);
+struct FGrassBlade
+{
+    float3 position;
+    float scale;
+    float3 normal;
+    float yawRadians;
+    uint colorVariation;
+    uint sourceMeshId;
+    uint pad0;
+    uint pad1;
+};
+StructuredBuffer<FGrassBlade> g_grassInstances : register(t0, space3);
+StructuredBuffer<uint4> g_grassVisible : register(t1, space3);
 
 SamplerState linearSampler : register(s0);
 SamplerComparisonState shadowSampler : register(s1, space1);
@@ -180,6 +193,25 @@ struct VSOutputShadow {
     float4 position : SV_POSITION;
 };
 
+void BuildGrassBasis(FGrassBlade blade, out float3 right, out float3 upDir,
+                     out float3 forwardDir)
+{
+    upDir = normalize((dot(blade.normal, blade.normal) > 1e-6)
+                      ? blade.normal
+                      : float3(0.0, 1.0, 0.0));
+    float3 helper = (abs(upDir.y) > 0.9) ? float3(1.0, 0.0, 0.0)
+                                         : float3(0.0, 1.0, 0.0);
+    right = normalize(cross(helper, upDir));
+    forwardDir = normalize(cross(upDir, right));
+
+    float s, c;
+    sincos(blade.yawRadians, s, c);
+    float3 yawRight = right * c - forwardDir * s;
+    float3 yawForward = right * s + forwardDir * c;
+    right = yawRight;
+    forwardDir = yawForward;
+}
+
 PSInputMesh VSMainMesh(VSInputMesh input)
 {
     PSInputMesh o;
@@ -216,6 +248,56 @@ PSInputMesh VSMainMesh(VSInputMesh input)
     o.worldPos = outWorldPos;
     o.normal = mul((float3x3)world, input.normal);
     o.tangent = float4(mul((float3x3)world, input.tangent.xyz), input.tangent.w);
+    o.uv = input.uv;
+    return o;
+}
+
+PSInputMesh VSMainGrass(VSInputMesh input, uint instanceId : SV_InstanceID)
+{
+    PSInputMesh o;
+
+    uint bladeIndex = g_grassVisible[instanceId + 1].x;
+    FGrassBlade blade = g_grassInstances[bladeIndex];
+    float bladeScale = max(blade.scale, 1e-3);
+
+    float3 right;
+    float3 upDir;
+    float3 forwardDir;
+    BuildGrassBasis(blade, right, upDir, forwardDir);
+
+    float3 localPos = input.position * bladeScale;
+    float3 outWorldPos = blade.position + right * localPos.x +
+                         upDir * localPos.y + forwardDir * localPos.z;
+
+    float3 worldNormal = normalize(right * input.normal.x +
+                                   upDir * input.normal.y +
+                                   forwardDir * input.normal.z);
+    float3 worldTangent = normalize(right * input.tangent.x +
+                                    upDir * input.tangent.y +
+                                    forwardDir * input.tangent.z);
+
+    float3 R = normalize(cross(forward, up));
+    float3 U = normalize(cross(R, forward));
+
+    float3 rel = outWorldPos - pos;
+    float3 viewPos;
+    viewPos.x = dot(rel, R);
+    viewPos.y = dot(rel, U);
+    viewPos.z = dot(rel, forward);
+
+    float f = 1.0f / tan(radians(fov) * 0.5f);
+    float A = farZ / (farZ - nearZ);
+    float B = -nearZ * farZ / (farZ - nearZ);
+    o.position = float4(
+        viewPos.x * f / aspect,
+        viewPos.y * f,
+        viewPos.z * A + B,
+        viewPos.z
+    );
+
+    o.worldPos = outWorldPos;
+    o.normal = worldNormal;
+    o.tangent = float4(worldTangent, input.tangent.w);
     o.uv = input.uv;
     return o;
 }

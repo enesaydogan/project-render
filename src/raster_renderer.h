@@ -67,6 +67,7 @@ namespace RasterRenderer {
   extern UINT g_gridVertexCount;
   extern ComPtr<ID3D12PipelineState> g_gridPipelineState;
   extern ComPtr<ID3D12PipelineState> g_meshPipelineState;
+  extern ComPtr<ID3D12PipelineState> g_grassPipelineState;
   extern ComPtr<ID3D12PipelineState> g_skyboxPipelineState;
   extern ComPtr<ID3D12PipelineState> g_depthOnlyPipelineState;
   extern ComPtr<ID3D12PipelineState> g_shadowPipelineState;

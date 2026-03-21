@@ -43,22 +43,35 @@ void StoreTransform(uint baseIdx, float4x4 m) {
     g_tlasDescs[baseIdx +11] = asuint(m[2][3]);
 }
 
+float3 SafeNormalize(float3 v, float3 fallback) {
+    float lenSq = dot(v, v);
+    return (lenSq > 1e-8) ? normalize(v) : fallback;
+}
+
 [numthreads(64,1,1)]
 void CSMain(uint3 tid : SV_DispatchThreadID) {
     uint idx = tid.x;
     if (idx >= params.instanceCount) return;
     FGrassBlade blade = g_grassBlades[idx];
 
-    // simple blade transform: yaw around up-axis + uniform scale + translation
+    // Build a stable basis aligned to the emitter normal, then apply yaw around
+    // that local up axis so raster/DXR use the same orientation rules.
     float s;
     float c;
     sincos(blade.yawRadians, s, c);
     float scale = max(blade.scale, 1e-3);
+    float3 up = SafeNormalize(blade.normal, float3(0.0, 1.0, 0.0));
+    float3 helper = (abs(up.y) > 0.9) ? float3(1.0, 0.0, 0.0) : float3(0.0, 1.0, 0.0);
+    float3 right = SafeNormalize(cross(helper, up), float3(1.0, 0.0, 0.0));
+    float3 forward = SafeNormalize(cross(up, right), float3(0.0, 0.0, 1.0));
+    float3 yawRight = right * c - forward * s;
+    float3 yawForward = right * s + forward * c;
+
     float4x4 xform = float4x4(
-         c * scale, 0, -s * scale, blade.position.x,
-         0,         scale, 0,      blade.position.y,
-         s * scale, 0,  c * scale, blade.position.z,
-        0,0,0,1);
+         yawRight.x * scale, up.x * scale, yawForward.x * scale, blade.position.x,
+         yawRight.y * scale, up.y * scale, yawForward.y * scale, blade.position.y,
+         yawRight.z * scale, up.z * scale, yawForward.z * scale, blade.position.z,
+         0, 0, 0, 1);
 
     // each instance descriptor is 64 bytes = 16 uints
     uint descBase = (params.startIndex + idx) * 16;

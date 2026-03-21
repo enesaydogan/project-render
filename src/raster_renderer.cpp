@@ -29,6 +29,7 @@ D3D12_VERTEX_BUFFER_VIEW RasterRenderer::g_gridVBView = {};
 UINT RasterRenderer::g_gridVertexCount = 0;
 ComPtr<ID3D12PipelineState> RasterRenderer::g_gridPipelineState;
 ComPtr<ID3D12PipelineState> RasterRenderer::g_meshPipelineState;
+ComPtr<ID3D12PipelineState> RasterRenderer::g_grassPipelineState;
 ComPtr<ID3D12PipelineState> RasterRenderer::g_skyboxPipelineState;
 ComPtr<ID3D12PipelineState> RasterRenderer::g_depthOnlyPipelineState;
 ComPtr<ID3D12PipelineState> RasterRenderer::g_shadowPipelineState;
@@ -311,11 +312,14 @@ void RecreateMeshPipeline(ID3D12Device *device, ID3D12RootSignature *rootSig) {
     }
 
     ComPtr<IDxcBlob> vsMeshBlob;
+    ComPtr<IDxcBlob> vsGrassBlob;
     ComPtr<IDxcBlob> vsShadowBlob;
     ComPtr<IDxcBlob> psMeshBlob;
 
     vsMeshBlob = s_dxcHelper.Compile(pbrShaderPath, L"VSMainMesh", L"vs_6_0",
                                      compileDefines);
+    vsGrassBlob = s_dxcHelper.Compile(pbrShaderPath, L"VSMainGrass", L"vs_6_0",
+                                      compileDefines);
     vsShadowBlob = s_dxcHelper.Compile(pbrShaderPath, L"VSMainShadow",
                        L"vs_6_0", compileDefines);
     psMeshBlob = s_dxcHelper.Compile(pbrShaderPath, L"PSMainMesh", L"ps_6_0",
@@ -403,6 +407,21 @@ void RecreateMeshPipeline(ID3D12Device *device, ID3D12RootSignature *rootSig) {
       ThrowIfFailed(hrMesh);
     }
     g_meshPipelineState = newMeshPSO;
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC grassPsoDesc = meshPsoDesc;
+    grassPsoDesc.VS = {vsGrassBlob->GetBufferPointer(),
+                       vsGrassBlob->GetBufferSize()};
+    ComPtr<ID3D12PipelineState> newGrassPSO;
+    HRESULT hrGrass = device->CreateGraphicsPipelineState(
+        &grassPsoDesc, IID_PPV_ARGS(&newGrassPSO));
+    if (FAILED(hrGrass)) {
+      fprintf(stderr,
+              "RasterRenderer: CreateGraphicsPipelineState (grass) failed: "
+              "0x%08x\n",
+              (unsigned)hrGrass);
+      ThrowIfFailed(hrGrass);
+    }
+    g_grassPipelineState = newGrassPSO;
 
     // Depth-only PSO (same as mesh but no color writes)
     D3D12_GRAPHICS_PIPELINE_STATE_DESC depthPsoDesc = meshPsoDesc;
