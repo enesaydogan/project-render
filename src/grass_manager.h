@@ -35,7 +35,8 @@ public:
     // called from the rasterization path once per frame right before
     // drawing the scene.  "cameraCB" should contain whatever frustum
     // parameters the culling shader expects (view/proj or 6 planes).
-    static void CullingAndPrepareIndirect(ID3D12GraphicsCommandList *cmdList);
+    static void CullingAndPrepareIndirect(ID3D12GraphicsCommandList *cmdList,
+                                          ID3D12Resource *cameraCB);
 
     // execute the indirect draw generated in the culling pass.  This
     // assumes the vertex/index buffers for the grass patch have already
@@ -58,6 +59,8 @@ public:
     // helpers for the DXR build code
     static UINT GetInstanceCount();
     static const std::vector<FGrassBlade> &GetBlades();
+    static D3D12_GPU_VIRTUAL_ADDRESS GetInstanceBufferGpuAddress();
+    static D3D12_GPU_VIRTUAL_ADDRESS GetVisibleBufferGpuAddress();
 
     // inform the manager which BLAS/mesh will be used as the grass patch.
     // the mesh's vertex/index buffers are bound once when drawing during

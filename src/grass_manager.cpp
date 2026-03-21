@@ -31,6 +31,14 @@ const Asset::GpuMesh *GrassManager::GetPatchMesh() {
 }
 
 namespace {
+static UINT NextGrassCapacity(UINT requested) {
+    UINT capacity = 256;
+    while (capacity < requested && capacity < (1u << 30)) {
+        capacity <<= 1;
+    }
+    return capacity;
+}
+
 // helpers to compile compute shaders (duplicate code from dxr_renderer)
 static ComPtr<IDxcBlob> CompileCS(const wchar_t *path) {
     // each TU keeps its own DXC helper instance
@@ -52,8 +60,9 @@ void GrassManager::Initialize(ID3D12Device *device) {
         return;
     // create pipelines for culling and TLAS generation if not already done
     if (!s_cullPSO) {
-        // root signature: b0 instance count (32-bit constant), t0 instance buffer, u0 visible, u1 indirect args
-        D3D12_ROOT_PARAMETER params[4] = {};
+        // root signature: b0 instance count (32-bit constant), t0 instance
+        // buffer, u0 visible, u1 indirect args, b1 camera
+        D3D12_ROOT_PARAMETER params[5] = {};
         params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
         params[0].Constants.ShaderRegister = 0;
         params[0].Constants.RegisterSpace = 0;
@@ -74,6 +83,11 @@ void GrassManager::Initialize(ID3D12Device *device) {
         params[3].Descriptor.ShaderRegister = 1;
         params[3].Descriptor.RegisterSpace = 0;
         params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+        params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        params[4].Descriptor.ShaderRegister = 1;
+        params[4].Descriptor.RegisterSpace = 0;
+        params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
         D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
         rsDesc.NumParameters = _countof(params);
@@ -181,7 +195,7 @@ void GrassManager::SetBlades(const std::vector<FGrassBlade> &blades) {
     s_currentInstanceCount = (UINT)blades.size();
     if (s_currentInstanceCount > s_maxInstances) {
         // reallocate buffers to accommodate
-        s_maxInstances = s_currentInstanceCount;
+        s_maxInstances = NextGrassCapacity(s_currentInstanceCount);
         UINT64 byteSize = (UINT64)s_maxInstances * sizeof(FGrassBlade);
         AllocateUploadBuffer(DX12Context::g_device.Get(),
                              nullptr, byteSize, &s_instanceBuffer,
@@ -215,7 +229,8 @@ void GrassManager::SetInstances(const std::vector<FGrassBlade> &instances) {
     SetBlades(instances);
 }
 
-void GrassManager::CullingAndPrepareIndirect(ID3D12GraphicsCommandList *cmdList) {
+void GrassManager::CullingAndPrepareIndirect(ID3D12GraphicsCommandList *cmdList,
+                                             ID3D12Resource *cameraCB) {
     if (!cmdList || !s_cullPSO || s_currentInstanceCount == 0)
         return;
     if (!s_resetBuffer || !s_visibleBuffer || !s_indirectArgsBuffer)
@@ -268,6 +283,9 @@ void GrassManager::CullingAndPrepareIndirect(ID3D12GraphicsCommandList *cmdList)
     cmdList->SetComputeRootShaderResourceView(1, s_instanceBuffer->GetGPUVirtualAddress());
     cmdList->SetComputeRootUnorderedAccessView(2, s_visibleBuffer->GetGPUVirtualAddress());
     cmdList->SetComputeRootUnorderedAccessView(3, s_indirectArgsBuffer->GetGPUVirtualAddress());
+    if (cameraCB) {
+        cmdList->SetComputeRootConstantBufferView(4, cameraCB->GetGPUVirtualAddress());
+    }
 
     UINT groups = (s_currentInstanceCount + 63) / 64;
     cmdList->Dispatch(groups, 1, 1);
@@ -295,6 +313,16 @@ void GrassManager::DrawVisible(ID3D12GraphicsCommandList *cmdList) {
     // culling compute shader.  do nothing if the command signature hasn't been
     // created yet (patch mesh hasn't been set).
     if (s_drawCommandSignature && s_indirectArgsBuffer) {
+        if (s_visibleBufferState != D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE) {
+            D3D12_RESOURCE_BARRIER bar = {};
+            bar.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            bar.Transition.pResource = s_visibleBuffer.Get();
+            bar.Transition.StateBefore = s_visibleBufferState;
+            bar.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            bar.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            cmdList->ResourceBarrier(1, &bar);
+            s_visibleBufferState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        }
         // Transition indirect args to INDIRECT_ARGUMENT state for ExecuteIndirect
         if (s_indirectArgsState != D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT) {
             D3D12_RESOURCE_BARRIER bar = {};
@@ -354,6 +382,14 @@ void GrassManager::AppendTlasInstances(ID3D12GraphicsCommandList *cmdList,
 UINT GrassManager::GetInstanceCount() { return s_currentInstanceCount; }
 
 const std::vector<FGrassBlade> &GrassManager::GetBlades() { return s_cpuBlades; }
+
+D3D12_GPU_VIRTUAL_ADDRESS GrassManager::GetInstanceBufferGpuAddress() {
+    return s_instanceBuffer ? s_instanceBuffer->GetGPUVirtualAddress() : 0;
+}
+
+D3D12_GPU_VIRTUAL_ADDRESS GrassManager::GetVisibleBufferGpuAddress() {
+    return s_visibleBuffer ? s_visibleBuffer->GetGPUVirtualAddress() : 0;
+}
 
 void GrassManager::SetPatchMesh(const Asset::GpuMesh *mesh) {
     if (!mesh || !mesh->indexBuffer)
