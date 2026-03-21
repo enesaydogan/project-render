@@ -10,21 +10,21 @@ using Microsoft::WRL::ComPtr;
 
 namespace RasterRenderer {
   struct RenderSettings {
-    bool enableSSR = true;
+    bool enableSSR = false;
     float ssrStepSize = 0.2f;
     float ssrThickness = 0.1f;
     float ssrIntensity = 1.0f;
     float ssrMinSmoothness = 0.15f;
     int ssrMaxSteps = 64;
 
-    bool enableSSAO = true;
+    bool enableSSAO = false;
     float ssaoRadius = 0.5f;
     float ssaoBias = 0.025f;
     float ssaoStrength = 1.0f;
     int ssaoSamples = 16;
     float ssaoCompositeWeight = 0.25f;
 
-    bool enableBloom = true;
+    bool enableBloom = false;
     float bloomThreshold = 1.0f;
     float bloomIntensity = 0.5f;
 
