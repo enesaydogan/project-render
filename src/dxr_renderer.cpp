@@ -218,6 +218,13 @@ static UINT s_outputHeight = 720;
 // Output (swapchain) dimensions last requested by the host
 static UINT s_presentWidth = 1280;
 static UINT s_presentHeight = 720;
+enum ResourceFeatureBits : uint32_t {
+  ResourceFeature_Dlss = 1u << 0,
+  ResourceFeature_DlssRayReconstruction = 1u << 1,
+  ResourceFeature_FinalOidn = 1u << 2,
+  ResourceFeature_Svgf = 1u << 3,
+  ResourceFeature_Nrd = 1u << 4,
+};
 
 // Halton sequence helper for CPU-side jitter
 static float Halton(uint32_t index, uint32_t base) {
@@ -229,6 +236,71 @@ static float Halton(uint32_t index, uint32_t base) {
     index /= base;
   }
   return r;
+}
+
+static bool IsDlssActive() {
+  return s_streamline && s_streamline->IsInitialized() &&
+         s_streamline->IsDeviceSet() && s_streamline->IsEnabled() &&
+         s_streamline->GetMode() != StreamlineManager::Mode::Off;
+}
+
+static bool IsDlssRayReconstructionActive() {
+  return IsDlssActive() &&
+         s_streamline->GetMode() ==
+             StreamlineManager::Mode::DLSS_RayReconstruction;
+}
+
+static uint32_t ComputeResourceFeatureMask() {
+  uint32_t mask = 0;
+  if (IsDlssActive()) {
+    mask |= ResourceFeature_Dlss;
+  }
+  if (IsDlssRayReconstructionActive()) {
+    mask |= ResourceFeature_DlssRayReconstruction;
+  }
+  if (s_denoiserMode != DxrRenderer::DenoiserMode::Off && !IsDlssActive()) {
+    mask |= ResourceFeature_FinalOidn;
+  }
+  if (s_realtimeDenoiserMode == DxrRenderer::RealtimeDenoiserMode::SVGF &&
+      !IsDlssActive()) {
+    mask |= ResourceFeature_Svgf;
+  }
+  if (s_realtimeDenoiserMode == DxrRenderer::RealtimeDenoiserMode::NRD &&
+      !IsDlssActive()) {
+    mask |= ResourceFeature_Nrd;
+  }
+  return mask;
+}
+
+static bool NeedsDepthAndMotionBuffers(uint32_t mask) {
+  return (mask & (ResourceFeature_Dlss | ResourceFeature_Svgf |
+                  ResourceFeature_Nrd)) != 0;
+}
+
+static bool NeedsSurfaceDataBuffers(uint32_t mask) {
+  return (mask & (ResourceFeature_Dlss | ResourceFeature_FinalOidn |
+                  ResourceFeature_Svgf | ResourceFeature_Nrd)) != 0;
+}
+
+static bool NeedsSvgfResources(uint32_t mask) {
+  return (mask & ResourceFeature_Svgf) != 0;
+}
+
+static bool NeedsNrdResources(uint32_t mask) {
+  return (mask & ResourceFeature_Nrd) != 0;
+}
+
+static bool NeedsSpecularAuxBuffers(uint32_t mask) {
+  return (mask & (ResourceFeature_DlssRayReconstruction |
+                  ResourceFeature_Nrd)) != 0;
+}
+
+static bool NeedsDlssOutputBuffer(uint32_t mask) {
+  return (mask & ResourceFeature_Dlss) != 0;
+}
+
+static bool NeedsOidnOutputBuffer(uint32_t mask) {
+  return (mask & ResourceFeature_FinalOidn) != 0;
 }
 
 inline void TransitionResource(ID3D12GraphicsCommandList *cmdList,
@@ -360,6 +432,7 @@ static std::vector<const Asset::GpuMesh *> s_cachedTlasMeshOrder;
 static bool s_tlasSupportsUpdate = false;
 static bool s_forceAsRebuild = false;
 static bool s_forceTlasUpdate = false;
+static uint32_t s_resourceFeatureMask = 0;
 
 // Async compute execution for decoupled ReSTIR DI/GI.
 static ComPtr<ID3D12CommandQueue> s_asyncComputeQueue;
@@ -2038,6 +2111,22 @@ void SetCommandQueue(ID3D12CommandQueue *commandQueue, ID3D12Fence *fence,
   EnsureAsyncComputeContext();
 }
 
+static void EnsureCurrentFeatureResources() {
+  const uint32_t desiredMask = ComputeResourceFeatureMask();
+  if (desiredMask == s_resourceFeatureMask) {
+    return;
+  }
+
+  if (g_verboseRenderLogs) {
+    fprintf(stderr,
+            "DxrRenderer: Feature mask changed (old=0x%X new=0x%X), "
+            "recreating feature-owned DXR resources.\n",
+            s_resourceFeatureMask, desiredMask);
+  }
+
+  CreateRayTracingPipeline(s_presentWidth, s_presentHeight);
+}
+
 void CreateRayTracingPipeline(UINT width, UINT height) {
   if (!g_rayTracingSupported || !s_dxrDevice)
     return;
@@ -2050,13 +2139,24 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
 
   const UINT outW = s_presentWidth;
   const UINT outH = s_presentHeight;
+  const uint32_t resourceFeatureMask = ComputeResourceFeatureMask();
+  const bool needsDepthAndMotionBuffers =
+      NeedsDepthAndMotionBuffers(resourceFeatureMask);
+  const bool needsSurfaceDataBuffers =
+      NeedsSurfaceDataBuffers(resourceFeatureMask);
+  const bool needsSvgfResources = NeedsSvgfResources(resourceFeatureMask);
+  const bool needsNrdResources = NeedsNrdResources(resourceFeatureMask);
+  const bool needsSpecularAuxBuffers =
+      NeedsSpecularAuxBuffers(resourceFeatureMask);
+  const bool needsDlssOutputBuffer =
+      NeedsDlssOutputBuffer(resourceFeatureMask);
+  const bool needsOidnOutputBuffer =
+      NeedsOidnOutputBuffer(resourceFeatureMask);
 
   // Compute internal render size (DLSS wants us to render smaller and upscale).
   UINT renderW = outW;
   UINT renderH = outH;
-  if (s_streamline && s_streamline->IsInitialized() &&
-      s_streamline->IsDeviceSet() && s_streamline->IsEnabled() &&
-      s_streamline->GetMode() != StreamlineManager::Mode::Off) {
+  if (IsDlssActive()) {
     auto rec = s_streamline->GetRecommendedRenderSize(outW, outH);
     if (rec.renderWidth > 0 && rec.renderHeight > 0) {
       renderW = rec.renderWidth;
@@ -2078,8 +2178,9 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
 
   if (g_verboseRenderLogs) {
     fprintf(stderr,
-            "DxrRenderer: Creating Ray Tracing Pipeline (size=%u x %u)...\n",
-            s_outputWidth, s_outputHeight);
+            "DxrRenderer: Creating Ray Tracing Pipeline (size=%u x %u, "
+            "features=0x%X)...\n",
+            s_outputWidth, s_outputHeight, resourceFeatureMask);
   }
 
   // Create a large shader-visible heap for all DXR resources early,
@@ -2536,68 +2637,96 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
           out->SetName(name);
       };
 
-  // DLSS/Streamline inputs for DXR
-  CreateUavTexture(s_depthUAV, texDesc, DXGI_FORMAT_R32_FLOAT, L"RT Depth");
-  CreateUavTexture(s_mvecUAV, texDesc, DXGI_FORMAT_R16G16_FLOAT,
-                   L"RT Motion Vectors");
-  CreateUavTexture(s_albedoUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
-                   L"RT Albedo", true); // Shared for OIDN
-  CreateUavTexture(s_specularAlbedoUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
-                   L"RT Specular Albedo");
-  CreateUavTexture(s_specHitDistanceUAV, texDesc, DXGI_FORMAT_R32_FLOAT,
-                   L"RT Specular HitDistance");
-  CreateUavTexture(s_specularMotionVectorsUAV, texDesc,
-                   DXGI_FORMAT_R16G16_FLOAT, L"RT Specular MotionVectors");
-  CreateUavTexture(s_normalRoughnessUAV, texDesc,
-                   DXGI_FORMAT_R16G16B16A16_FLOAT, L"RT NormalRoughness",
-                   true); // Shared for OIDN
+  // DXR auxiliary inputs used by DLSS and denoisers.
+  if (needsDepthAndMotionBuffers) {
+    CreateUavTexture(s_depthUAV, texDesc, DXGI_FORMAT_R32_FLOAT, L"RT Depth");
+    CreateUavTexture(s_mvecUAV, texDesc, DXGI_FORMAT_R16G16_FLOAT,
+                     L"RT Motion Vectors");
+  }
+  if (needsSurfaceDataBuffers) {
+    CreateUavTexture(s_albedoUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                     L"RT Albedo", true); // Shared for OIDN
+    CreateUavTexture(s_normalRoughnessUAV, texDesc,
+                     DXGI_FORMAT_R16G16B16A16_FLOAT, L"RT NormalRoughness",
+                     true); // Shared for OIDN
+  }
+  if (needsSpecularAuxBuffers) {
+    CreateUavTexture(s_specularAlbedoUAV, texDesc,
+                     DXGI_FORMAT_R16G16B16A16_FLOAT, L"RT Specular Albedo");
+    CreateUavTexture(s_specHitDistanceUAV, texDesc, DXGI_FORMAT_R32_FLOAT,
+                     L"RT Specular HitDistance");
+    CreateUavTexture(s_specularMotionVectorsUAV, texDesc,
+                     DXGI_FORMAT_R16G16_FLOAT, L"RT Specular MotionVectors");
+  }
 
   // NRD required resources (all are full window bounds, mostly FP16 or FP32)
-  CreateUavTexture(s_nrdDiffuseRadianceHitDistUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD DiffRadiance HitDist");
-  CreateUavTexture(s_nrdSpecRadianceHitDistUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD SpecRadiance HitDist");
-  CreateUavTexture(s_nrdViewZUAV, texDesc, DXGI_FORMAT_R32_FLOAT, L"NRD ViewZ");
-  CreateUavTexture(s_nrdNormalRoughnessUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD NormalRoughness");
-  CreateUavTexture(s_nrdMvUAV, texDesc, DXGI_FORMAT_R16G16_FLOAT, L"NRD MotionVectors");
-  CreateUavTexture(s_nrdOutDiffuseUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD Out Diffuse");
-  CreateUavTexture(s_nrdOutSpecularUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD Out Specular");
-  CreateUavTexture(s_nrdEmissionUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD Emission");
-  CreateUavTexture(s_nrdCompositeUAV, texDesc, DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD Composite");
+  if (needsNrdResources) {
+    CreateUavTexture(s_nrdDiffuseRadianceHitDistUAV, texDesc,
+                     DXGI_FORMAT_R16G16B16A16_FLOAT,
+                     L"NRD DiffRadiance HitDist");
+    CreateUavTexture(s_nrdSpecRadianceHitDistUAV, texDesc,
+                     DXGI_FORMAT_R16G16B16A16_FLOAT,
+                     L"NRD SpecRadiance HitDist");
+    CreateUavTexture(s_nrdViewZUAV, texDesc, DXGI_FORMAT_R32_FLOAT,
+                     L"NRD ViewZ");
+    CreateUavTexture(s_nrdNormalRoughnessUAV, texDesc,
+                     DXGI_FORMAT_R16G16B16A16_FLOAT,
+                     L"NRD NormalRoughness");
+    CreateUavTexture(s_nrdMvUAV, texDesc, DXGI_FORMAT_R16G16_FLOAT,
+                     L"NRD MotionVectors");
+    CreateUavTexture(s_nrdOutDiffuseUAV, texDesc,
+                     DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD Out Diffuse");
+    CreateUavTexture(s_nrdOutSpecularUAV, texDesc,
+                     DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD Out Specular");
+    CreateUavTexture(s_nrdEmissionUAV, texDesc,
+                     DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD Emission");
+    CreateUavTexture(s_nrdCompositeUAV, texDesc,
+                     DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD Composite");
+  }
 
   // DLSS output is output-size in linear HDR (pre-tonemap).
-  CreateUavTexture(s_dlssOutputUAV, outDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
-                   L"RT DLSS Output (HDR)");
+  if (needsDlssOutputBuffer) {
+    CreateUavTexture(s_dlssOutputUAV, outDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                     L"RT DLSS Output (HDR)");
+  }
 
   // OIDN output (HDR) - same format as DLSS output for tonemapping.
-  CreateUavTexture(s_oidnOutputUAV, outDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
-                   L"RT OIDN Output (HDR)", true); // Shared for OIDN
+  if (needsOidnOutputBuffer) {
+    CreateUavTexture(s_oidnOutputUAV, outDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                     L"RT OIDN Output (HDR)", true); // Shared for OIDN
+  }
 
   // Tonemap output is swapchain-format (output-size) for easy CopyResource.
   // Not shared (only used by internal CS and Copy)
   CreateUavTexture(s_tonemapOutputUAV, outDesc, DXGI_FORMAT_R10G10B10A2_UNORM,
                    L"RT Tonemap Output");
-  CreateUavTexture(s_svgfNoisyInputUAV, texDesc, DXGI_FORMAT_R32G32B32A32_FLOAT,
-                   L"SVGF Noisy Input");
-  CreateUavTexture(s_svgfLinearDepthUAV, texDesc, DXGI_FORMAT_R32_FLOAT,
-                   L"SVGF Linear Depth");
-  CreateUavTexture(s_svgfTemporalUAV, texDesc, DXGI_FORMAT_R32G32B32A32_FLOAT,
-                   L"SVGF Temporal");
-  CreateUavTexture(s_svgfVarianceUAV, texDesc, DXGI_FORMAT_R32_FLOAT,
-                   L"SVGF Variance");
-  CreateUavTexture(s_svgfAtrousPingUAV, texDesc, DXGI_FORMAT_R32G32B32A32_FLOAT,
-                   L"SVGF A-Trous Ping");
-  CreateUavTexture(s_svgfAtrousPongUAV, texDesc, DXGI_FORMAT_R32G32B32A32_FLOAT,
-                   L"SVGF A-Trous Pong");
-  for (UINT i = 0; i < 2; ++i) {
-    CreateUavTexture(s_svgfHistoryColor[i], texDesc,
-                     DXGI_FORMAT_R32G32B32A32_FLOAT, L"SVGF History Color");
-    CreateUavTexture(s_svgfHistoryMoments[i], texDesc, DXGI_FORMAT_R32G32_FLOAT,
-                     L"SVGF History Moments");
-    CreateUavTexture(s_svgfHistoryLength[i], texDesc, DXGI_FORMAT_R32_FLOAT,
-                     L"SVGF History Length");
-    CreateUavTexture(s_svgfHistoryDepth[i], texDesc, DXGI_FORMAT_R32_FLOAT,
-                     L"SVGF History Depth");
-    CreateUavTexture(s_svgfHistoryNormal[i], texDesc,
-                     DXGI_FORMAT_R16G16B16A16_FLOAT, L"SVGF History Normal");
+  if (needsSvgfResources) {
+    CreateUavTexture(s_svgfNoisyInputUAV, texDesc,
+                     DXGI_FORMAT_R16G16B16A16_FLOAT, L"SVGF Noisy Input");
+    CreateUavTexture(s_svgfLinearDepthUAV, texDesc, DXGI_FORMAT_R32_FLOAT,
+                     L"SVGF Linear Depth");
+    CreateUavTexture(s_svgfTemporalUAV, texDesc,
+                     DXGI_FORMAT_R16G16B16A16_FLOAT, L"SVGF Temporal");
+    CreateUavTexture(s_svgfVarianceUAV, texDesc, DXGI_FORMAT_R32_FLOAT,
+                     L"SVGF Variance");
+    CreateUavTexture(s_svgfAtrousPingUAV, texDesc,
+                     DXGI_FORMAT_R16G16B16A16_FLOAT, L"SVGF A-Trous Ping");
+    CreateUavTexture(s_svgfAtrousPongUAV, texDesc,
+                     DXGI_FORMAT_R16G16B16A16_FLOAT, L"SVGF A-Trous Pong");
+    for (UINT i = 0; i < 2; ++i) {
+      CreateUavTexture(s_svgfHistoryColor[i], texDesc,
+                       DXGI_FORMAT_R16G16B16A16_FLOAT,
+                       L"SVGF History Color");
+      CreateUavTexture(s_svgfHistoryMoments[i], texDesc,
+                       DXGI_FORMAT_R32G32_FLOAT, L"SVGF History Moments");
+      CreateUavTexture(s_svgfHistoryLength[i], texDesc, DXGI_FORMAT_R32_FLOAT,
+                       L"SVGF History Length");
+      CreateUavTexture(s_svgfHistoryDepth[i], texDesc, DXGI_FORMAT_R32_FLOAT,
+                       L"SVGF History Depth");
+      CreateUavTexture(s_svgfHistoryNormal[i], texDesc,
+                       DXGI_FORMAT_R16G16B16A16_FLOAT,
+                       L"SVGF History Normal");
+    }
   }
 
   D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
@@ -2651,7 +2780,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
               DXR_HEAP_SVGF_LINEAR_DEPTH_UAV_OFFSET);
   CreateUavAt(s_oidnOutputUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
               DXR_HEAP_OIDN_OUT_UAV_OFFSET);
-  CreateUavAt(s_svgfNoisyInputUAV.Get(), DXGI_FORMAT_R32G32B32A32_FLOAT,
+  CreateUavAt(s_svgfNoisyInputUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
               DXR_HEAP_SVGF_NOISY_OFFSET);
   CreateUavAt(s_nrdDiffuseRadianceHitDistUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
               DXR_HEAP_NRD_DIFFUSE_RADIANCE_HITDIST_OFFSET);
@@ -2677,8 +2806,13 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   EnsureSvgfVariancePipeline();
   EnsureSvgfAtrousPipeline();
 
-  // Initialize NRD wrapper
-  NrdDenoiser::Get().Recreate(s_outputWidth, s_outputHeight);
+  if (needsNrdResources) {
+    NrdDenoiser::Get().Initialize(s_device, s_commandQueue);
+    NrdDenoiser::Get().Recreate(s_outputWidth, s_outputHeight);
+  } else {
+    NrdDenoiser::Get().Shutdown();
+  }
+  s_resourceFeatureMask = resourceFeatureMask;
   s_svgfHistoryValid = false;
   s_svgfHistoryWriteIndex = 0;
   s_svgfLatestOutput = nullptr;
@@ -2950,9 +3084,16 @@ void MarkMaterialDirty(int materialIndex) {
   s_dirtyMaterialFlags[idx] = 1;
 }
 
-void RequestAccelerationStructureRebuild() { s_forceAsRebuild = true; }
+void RequestAccelerationStructureRebuild() {
+  s_forceAsRebuild = true;
+  s_forceTlasUpdate = false;
+}
 
-void RequestAccelerationStructureUpdate() { s_forceTlasUpdate = true; }
+void RequestAccelerationStructureUpdate() {
+  if (!s_forceAsRebuild) {
+    s_forceTlasUpdate = true;
+  }
+}
 
 static void ClearDirtyMaterialsForMeshes(
     const std::vector<const Asset::GpuMesh *> &meshes) {
@@ -4003,7 +4144,7 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
 
   SvgfConstants cbTemp1 = WriteConstants(1u, !hasHistory, false);
   CreateSrvAt(s_svgfTemporalHeap.Get(), 0, s_svgfNoisyInputUAV.Get(),
-              DXGI_FORMAT_R32G32B32A32_FLOAT);
+              DXGI_FORMAT_R16G16B16A16_FLOAT);
   CreateSrvAt(s_svgfTemporalHeap.Get(), 1, s_svgfLinearDepthUAV.Get(),
               DXGI_FORMAT_R32_FLOAT);
   CreateSrvAt(s_svgfTemporalHeap.Get(), 2, s_normalRoughnessUAV.Get(),
@@ -4011,7 +4152,7 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
   CreateSrvAt(s_svgfTemporalHeap.Get(), 3, s_mvecUAV.Get(), DXGI_FORMAT_R16G16_FLOAT);
   CreateSrvAt(s_svgfTemporalHeap.Get(), 4,
               s_svgfHistoryColor[prev].Get(),
-              DXGI_FORMAT_R32G32B32A32_FLOAT);
+              DXGI_FORMAT_R16G16B16A16_FLOAT);
   CreateSrvAt(s_svgfTemporalHeap.Get(), 5,
               s_svgfHistoryMoments[prev].Get(),
               DXGI_FORMAT_R32G32_FLOAT);
@@ -4027,7 +4168,7 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
   CreateSrvAt(s_svgfTemporalHeap.Get(), 9, s_albedoUAV.Get(),
               DXGI_FORMAT_R16G16B16A16_FLOAT);
   CreateUavAt(s_svgfTemporalHeap.Get(), 10, s_svgfTemporalUAV.Get(),
-              DXGI_FORMAT_R32G32B32A32_FLOAT);
+              DXGI_FORMAT_R16G16B16A16_FLOAT);
   CreateUavAt(s_svgfTemporalHeap.Get(), 11, s_svgfHistoryMoments[curr].Get(),
               DXGI_FORMAT_R32G32_FLOAT);
   CreateUavAt(s_svgfTemporalHeap.Get(), 12, s_svgfHistoryLength[curr].Get(),
@@ -4058,7 +4199,7 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
   CreateSrvAt(s_svgfVarianceHeap.Get(), 0, s_svgfTemporalUAV.Get(),
-              DXGI_FORMAT_R32G32B32A32_FLOAT);
+              DXGI_FORMAT_R16G16B16A16_FLOAT);
   CreateSrvAt(s_svgfVarianceHeap.Get(), 1, s_svgfHistoryMoments[curr].Get(),
               DXGI_FORMAT_R32G32_FLOAT);
   CreateSrvAt(s_svgfVarianceHeap.Get(), 2, s_svgfHistoryLength[curr].Get(),
@@ -4093,7 +4234,7 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
     SvgfConstants cbTemp2 = WriteConstants(stepWidth, false, false);
     UINT offset = iteration * 6;
     CreateSrvAt(s_svgfAtrousHeap.Get(), offset + 0, atrousInput,
-                DXGI_FORMAT_R32G32B32A32_FLOAT);
+                DXGI_FORMAT_R16G16B16A16_FLOAT);
     CreateSrvAt(s_svgfAtrousHeap.Get(), offset + 1, s_svgfVarianceUAV.Get(),
                 DXGI_FORMAT_R32_FLOAT);
     CreateSrvAt(s_svgfAtrousHeap.Get(), offset + 2, s_normalRoughnessUAV.Get(),
@@ -4103,7 +4244,7 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
     CreateSrvAt(s_svgfAtrousHeap.Get(), offset + 4, s_albedoUAV.Get(),
                 DXGI_FORMAT_R16G16B16A16_FLOAT);
     CreateUavAt(s_svgfAtrousHeap.Get(), offset + 5, atrousOutput,
-                DXGI_FORMAT_R32G32B32A32_FLOAT);
+                DXGI_FORMAT_R16G16B16A16_FLOAT);
 
     ID3D12DescriptorHeap *atrousHeaps[] = {s_svgfAtrousHeap.Get()};
     dxrList->SetDescriptorHeaps(1, atrousHeaps);
@@ -4186,11 +4327,11 @@ static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
   CreateSrvAt(s_svgfCompositeHeap.Get(), 0, atrousOutput,
-              DXGI_FORMAT_R32G32B32A32_FLOAT);
+              DXGI_FORMAT_R16G16B16A16_FLOAT);
   CreateSrvAt(s_svgfCompositeHeap.Get(), 1, s_albedoUAV.Get(),
               DXGI_FORMAT_R16G16B16A16_FLOAT);
   CreateUavAt(s_svgfCompositeHeap.Get(), 2, compositeOutput,
-              DXGI_FORMAT_R32G32B32A32_FLOAT);
+              DXGI_FORMAT_R16G16B16A16_FLOAT);
 
   ID3D12DescriptorHeap *compositeHeaps[] = {s_svgfCompositeHeap.Get()};
   dxrList->SetDescriptorHeaps(1, compositeHeaps);
@@ -4301,19 +4442,21 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     return ReturnFail(1,
                       "DXR core state missing (support/stateObject/srvHeap)");
   }
+  EnsureCurrentFeatureResources();
   if (!renderTarget) {
     return ReturnFail(2, "renderTarget is null");
   }
 
   // Material edits only require AS rebuild when opaque-vs-nonopaque state
   // changes (affects BLAS geometry flags / AnyHit path).
-  if (s_forceAsRebuild || s_forceTlasUpdate || (!s_tlas.result && !meshes.empty())) {
+  if (s_forceAsRebuild || s_forceTlasUpdate ||
+      (!s_tlas.result && !meshes.empty())) {
     BuildAccelerationStructures(meshes, Scene::GetInstances());
-    s_forceAsRebuild = false;
-    s_forceTlasUpdate = false;
     if (!s_tlas.result) {
       return ReturnFail(16, "TLAS missing after forced rebuild");
     }
+    s_forceAsRebuild = false;
+    s_forceTlasUpdate = false;
   }
 
   // Handle empty scene or missing TLAS gracefully after honoring any pending
