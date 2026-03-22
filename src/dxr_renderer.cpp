@@ -3634,24 +3634,54 @@ void BuildAccelerationStructures(
             const float s = sinf(b.yawRadians);
             const float c = cosf(b.yawRadians);
             const float sc = (std::max)(b.scale, 1e-3f);
+            DirectX::XMVECTOR up =
+                DirectX::XMLoadFloat3(&b.normal);
+            if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(up)) < 1e-8f) {
+              up = DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+            }
+            up = DirectX::XMVector3Normalize(up);
+            DirectX::XMVECTOR helper =
+                (fabsf(DirectX::XMVectorGetY(up)) > 0.9f)
+                    ? DirectX::XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f)
+                    : DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+            DirectX::XMVECTOR right = DirectX::XMVector3Cross(helper, up);
+            if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(right)) < 1e-8f) {
+              right = DirectX::XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f);
+            }
+            right = DirectX::XMVector3Normalize(right);
+            DirectX::XMVECTOR forward =
+                DirectX::XMVector3Normalize(DirectX::XMVector3Cross(up, right));
+            DirectX::XMVECTOR yawRight = DirectX::XMVectorSubtract(
+                DirectX::XMVectorScale(right, c),
+                DirectX::XMVectorScale(forward, s));
+            DirectX::XMVECTOR yawForward = DirectX::XMVectorAdd(
+                DirectX::XMVectorScale(right, s),
+                DirectX::XMVectorScale(forward, c));
+
+            DirectX::XMFLOAT3 rightF = {};
+            DirectX::XMFLOAT3 upF = {};
+            DirectX::XMFLOAT3 forwardF = {};
+            DirectX::XMStoreFloat3(&rightF, yawRight);
+            DirectX::XMStoreFloat3(&upF, up);
+            DirectX::XMStoreFloat3(&forwardF, yawForward);
 
             D3D12_RAYTRACING_INSTANCE_DESC inst = {};
-            inst.Transform[0][0] = c * sc;
-            inst.Transform[0][1] = 0.0f;
-            inst.Transform[0][2] = -s * sc;
+            inst.Transform[0][0] = rightF.x * sc;
+            inst.Transform[0][1] = upF.x * sc;
+            inst.Transform[0][2] = forwardF.x * sc;
             inst.Transform[0][3] = b.position.x;
-            inst.Transform[1][0] = 0.0f;
-            inst.Transform[1][1] = sc;
-            inst.Transform[1][2] = 0.0f;
+            inst.Transform[1][0] = rightF.y * sc;
+            inst.Transform[1][1] = upF.y * sc;
+            inst.Transform[1][2] = forwardF.y * sc;
             inst.Transform[1][3] = b.position.y;
-            inst.Transform[2][0] = s * sc;
-            inst.Transform[2][1] = 0.0f;
-            inst.Transform[2][2] = c * sc;
+            inst.Transform[2][0] = rightF.z * sc;
+            inst.Transform[2][1] = upF.z * sc;
+            inst.Transform[2][2] = forwardF.z * sc;
             inst.Transform[2][3] = b.position.z;
             inst.InstanceID = patchMeshIndex;
             inst.InstanceMask = 0xFF;
             inst.InstanceContributionToHitGroupIndex = 0;
-            inst.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_OPAQUE;
+            inst.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
             inst.AccelerationStructure = patchBlasAddr;
             instanceDescs.push_back(inst);
             instanceMeshOrder.push_back(patchMesh);

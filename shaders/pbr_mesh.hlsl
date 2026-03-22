@@ -99,6 +99,41 @@ float3 sRGBToLinear(float3 sRGB) {
     return pow(max(sRGB, 0.0), 2.2);
 }
 
+float Hash12(float2 p)
+{
+    float3 p3 = frac(float3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return frac((p3.x + p3.y) * p3.z);
+}
+
+float ValueNoise2D(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = frac(p);
+    float2 u = f * f * (3.0 - 2.0 * f);
+    float a = Hash12(i);
+    float b = Hash12(i + float2(1.0, 0.0));
+    float c = Hash12(i + float2(0.0, 1.0));
+    float d = Hash12(i + float2(1.0, 1.0));
+    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+}
+
+float GrassFieldNoise(float2 p)
+{
+    float v = 0.0;
+    float w = 0.58;
+    float n = 0.0;
+    float2 q = p;
+    [unroll]
+    for (int octave = 0; octave < 3; ++octave) {
+        v += ValueNoise2D(q) * w;
+        n += w;
+        q = q * 2.13 + 11.7;
+        w *= 0.5;
+    }
+    return (n > 1e-5) ? (v / n) : 0.0;
+}
+
 float3 TriPlanarWeights(float3 n, float sharpness)
 {
     float3 an = abs(n);
@@ -187,6 +222,7 @@ struct PSInputMesh {
     float3 normal : NORMAL;
     float4 tangent : TANGENT0;
     float2 uv : TEXCOORD0;
+    float grassVariation : TEXCOORD1;
 };
 
 struct VSOutputShadow {
@@ -249,6 +285,7 @@ PSInputMesh VSMainMesh(VSInputMesh input)
     o.normal = mul((float3x3)world, input.normal);
     o.tangent = float4(mul((float3x3)world, input.tangent.xyz), input.tangent.w);
     o.uv = input.uv;
+    o.grassVariation = 0.5;
     return o;
 }
 
@@ -299,6 +336,7 @@ PSInputMesh VSMainGrass(VSInputMesh input, uint instanceId : SV_InstanceID)
     o.normal = worldNormal;
     o.tangent = float4(worldTangent, input.tangent.w);
     o.uv = input.uv;
+    o.grassVariation = (blade.colorVariation & 0xFFFFu) / 65535.0;
     return o;
 }
 
@@ -456,6 +494,13 @@ PSOutput PSMainMesh(PSInputMesh input)
         alpha *= diffSample.a;
     }
 
+    float alphaCutoff = extraParams.y;
+    bool alphaMasked = extraParams.z > 0.5;
+    bool isGrassMaterial = extraParams.w > 0.5;
+    if (alphaMasked && alphaCutoff >= 0.0) {
+        clip(alpha - alphaCutoff);
+    }
+
     float roughness = saturate(surfaceParams.x);
     float metalness = saturate(surfaceParams.y);
     float transmission = saturate(transmissionParams.a) * (1.0 - metalness);
@@ -511,6 +556,21 @@ PSOutput PSMainMesh(PSInputMesh input)
     float clearcoat = saturate(coatLayerParams.x);
     float clearcoatRoughness = max(coatLayerParams.y, 0.02);
     float translucency = saturate(coatLayerParams.w);
+
+    if (isGrassMaterial) {
+        float tip = saturate(1.0 - input.uv.y);
+        float field = GrassFieldNoise(worldPos.xz * 0.82 + input.grassVariation * 5.7);
+        float hueMix = saturate(field * 0.85 + input.grassVariation * 0.35);
+        float3 lushTint = float3(0.92, 1.08, 0.90);
+        float3 dryTint = float3(1.10, 0.98, 0.72);
+        float3 tint = lerp(lushTint, dryTint, hueMix * 0.38);
+        float rootDarken = lerp(0.62, 1.08, tip);
+        BaseColor *= tint * rootDarken;
+        DiffuseAlbedo = BaseColor * (1.0 - metalness) * (1.0 - transmission);
+        roughness = lerp(roughness, 0.92, 0.45);
+        clearcoat = 0.0;
+        translucency = max(translucency, lerp(0.38, 0.72, tip));
+    }
 
     // Cook-Torrance BRDF
     float NdotV = saturate(dot(N, V));
