@@ -33,6 +33,59 @@ constexpr size_t kInvalidHandle = static_cast<size_t>(-1);
 std::string BuildLiveLinkMaterialName(const std::string &nodeObjectId,
                                       int materialSlot);
 
+void ComputeLiveLinkTangents(std::vector<Asset::Vertex> &vertices,
+                             const std::vector<uint32_t> &indices) {
+  if (indices.size() % 3 != 0) return;
+  for (size_t i = 0; i < indices.size(); i += 3) {
+    Asset::Vertex &v0 = vertices[indices[i]];
+    Asset::Vertex &v1 = vertices[indices[i + 1]];
+    Asset::Vertex &v2 = vertices[indices[i + 2]];
+
+    float dx1 = v1.pos[0] - v0.pos[0];
+    float dy1 = v1.pos[1] - v0.pos[1];
+    float dz1 = v1.pos[2] - v0.pos[2];
+
+    float dx2 = v2.pos[0] - v0.pos[0];
+    float dy2 = v2.pos[1] - v0.pos[1];
+    float dz2 = v2.pos[2] - v0.pos[2];
+
+    float du1 = v1.uv[0] - v0.uv[0];
+    float dv1 = v1.uv[1] - v0.uv[1];
+
+    float du2 = v2.uv[0] - v0.uv[0];
+    float dv2 = v2.uv[1] - v0.uv[1];
+
+    float r = 1.0f / (du1 * dv2 - dv1 * du2);
+    if (std::isnan(r) || std::isinf(r)) {
+      r = 1.0f;
+    }
+
+    float tx = (dv2 * dx1 - dv1 * dx2) * r;
+    float ty = (dv2 * dy1 - dv1 * dy2) * r;
+    float tz = (dv2 * dz1 - dv1 * dz2) * r;
+
+    auto applyTangent = [&](Asset::Vertex &v) {
+      float nx = v.normal[0], ny = v.normal[1], nz = v.normal[2];
+      float dot = nx * tx + ny * ty + nz * tz;
+      float ox = tx - nx * dot;
+      float oy = ty - ny * dot;
+      float oz = tz - nz * dot;
+
+      float len = std::sqrt(ox * ox + oy * oy + oz * oz);
+      if (len > 0.0001f) {
+        v.tangent[0] = ox / len;
+        v.tangent[1] = oy / len;
+        v.tangent[2] = oz / len;
+        v.tangent[3] = 1.0f;
+      }
+    };
+
+    applyTangent(v0);
+    applyTangent(v1);
+    applyTangent(v2);
+  }
+}
+
 std::string ResolveNodeName(const SceneDelta &delta,
                             std::string_view preferredName) {
   if (!preferredName.empty()) {
@@ -183,6 +236,7 @@ bool LoadNativeMeshPayload(const std::string &path,
       vertices[index] = vertex;
     }
 
+    ComputeLiveLinkTangents(vertices, indices);
     Asset::GpuMesh mesh = Asset::LoadMeshFromMemory(vertices, indices);
     mesh.materialIndex = 0;
     outMeshes->push_back(std::move(mesh));
@@ -230,6 +284,7 @@ bool LoadNativeMeshPayload(const std::string &path,
       vertices[vertexIndex] = vertex;
     }
 
+    ComputeLiveLinkTangents(vertices, indices);
     Asset::GpuMesh mesh = Asset::LoadMeshFromMemory(vertices, indices);
     mesh.materialIndex = (std::max)(0, meshHeader.materialSlot);
     outMeshes->push_back(std::move(mesh));
