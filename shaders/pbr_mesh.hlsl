@@ -76,6 +76,9 @@ struct FGrassBlade
     float scale;
     float3 normal;
     float yawRadians;
+    float2 emitterUv;
+    int emitterDiffuseTexture;
+    uint emitterPad;
     uint colorVariation;
     uint sourceMeshId;
     uint pad0;
@@ -223,6 +226,7 @@ struct PSInputMesh {
     float4 tangent : TANGENT0;
     float2 uv : TEXCOORD0;
     float grassVariation : TEXCOORD1;
+    float2 emitterUv : TEXCOORD2;
 };
 
 struct VSOutputShadow {
@@ -286,6 +290,7 @@ PSInputMesh VSMainMesh(VSInputMesh input)
     o.tangent = float4(mul((float3x3)world, input.tangent.xyz), input.tangent.w);
     o.uv = input.uv;
     o.grassVariation = 0.5;
+    o.emitterUv = input.uv;
     return o;
 }
 
@@ -337,6 +342,7 @@ PSInputMesh VSMainGrass(VSInputMesh input, uint instanceId : SV_InstanceID)
     o.tangent = float4(worldTangent, input.tangent.w);
     o.uv = input.uv;
     o.grassVariation = (blade.colorVariation & 0xFFFFu) / 65535.0;
+    o.emitterUv = blade.emitterUv;
     return o;
 }
 
@@ -564,6 +570,13 @@ PSOutput PSMainMesh(PSInputMesh input)
     if (isGrassMaterial) {
         float tip = saturate(1.0 - input.uv.y);
         grassRootAmount = saturate(pow(input.uv.y, 1.65));
+        if (!triPlanar && textureIndices.x >= 0) {
+            float2 emitterUv = input.emitterUv * uvTransform.xy + uvTransform.zw;
+            float3 groundTint =
+                sRGBToLinear(textures[textureIndices.x].Sample(linearSampler, emitterUv).rgb);
+            float groundInfluence = lerp(0.70, 0.18, tip);
+            BaseColor = lerp(BaseColor, groundTint, groundInfluence);
+        }
         float field = GrassFieldNoise(worldPos.xz * 0.82 + input.grassVariation * 5.7);
         float clump = GrassFieldNoise(worldPos.xz * 4.6 + input.grassVariation * 13.1);
         float hueMix = saturate(field * 0.85 + input.grassVariation * 0.35);

@@ -13,12 +13,15 @@ struct FGrassBlade {
     float scale;
     DirectX::XMFLOAT3 normal;
     float yawRadians;
+    DirectX::XMFLOAT2 emitterUv;
+    int32_t emitterDiffuseTexture = -1;
+    uint32_t _padEmitter = 0;
     uint32_t colorVariation;
     uint32_t sourceMeshId;
     uint32_t _pad0 = 0;
     uint32_t _pad1 = 0;
 };
-static_assert(sizeof(FGrassBlade) == 48, "FGrassBlade layout must match HLSL.");
+static_assert(sizeof(FGrassBlade) == 64, "FGrassBlade layout must match HLSL.");
 
 class GrassManager {
 public:

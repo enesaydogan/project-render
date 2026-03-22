@@ -278,6 +278,16 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     float3 grassSoilBounce = float3(0.0, 0.0, 0.0);
 
     if (isGrassMaterial) {
+        if (!triPlanar && texDiff >= 0 && grassTlasStartIndex != 0xFFFFFFFFu &&
+            InstanceIndex() >= grassTlasStartIndex) {
+            uint grassBladeIndex = InstanceIndex() - grassTlasStartIndex;
+            float2 emitterUv =
+                grassBlades[grassBladeIndex].emitterUv * uvXf.xy + uvXf.zw;
+            float3 groundTint =
+                sRGBToLinear(textures[texDiff].SampleLevel(linearSampler, emitterUv, textureLod).rgb);
+            float groundInfluence = lerp(0.70, 0.18, saturate(1.0 - uv.y));
+            BaseColor = lerp(BaseColor, groundTint, groundInfluence);
+        }
         float field = GrassFieldNoise(P.xz * 0.82 + (float)matIdx * 0.37);
         float tip = saturate(1.0 - uv.y);
         grassRootAmount = saturate(pow(uv.y, 1.65));

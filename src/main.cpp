@@ -269,6 +269,9 @@ static void AppendGrassBladesFromInstance(const Scene::Instance &inst,
     DirectX::XMFLOAT3 n0;
     DirectX::XMFLOAT3 n1;
     DirectX::XMFLOAT3 n2;
+    DirectX::XMFLOAT2 uv0;
+    DirectX::XMFLOAT2 uv1;
+    DirectX::XMFLOAT2 uv2;
     float weight = 0.0f;
   };
 
@@ -338,6 +341,9 @@ static void AppendGrassBladesFromInstance(const Scene::Instance &inst,
       DirectX::XMStoreFloat3(&gt.n0, n0);
       DirectX::XMStoreFloat3(&gt.n1, n1);
       DirectX::XMStoreFloat3(&gt.n2, n2);
+      gt.uv0 = {v0.uv[0], v0.uv[1]};
+      gt.uv1 = {v1.uv[0], v1.uv[1]};
+      gt.uv2 = {v2.uv[0], v2.uv[1]};
 
       const float slopeWeight = (upDot - 0.15f) / 0.85f;
       gt.weight = area * (std::clamp)(slopeWeight, 0.0f, 1.0f);
@@ -370,6 +376,7 @@ static void AppendGrassBladesFromInstance(const Scene::Instance &inst,
   auto emitBladeFromSeed = [&](uint32_t baseSeed) {
     DirectX::XMFLOAT3 position = {};
     DirectX::XMFLOAT3 normal = {0.0f, 1.0f, 0.0f};
+    DirectX::XMFLOAT2 emitterUv = {0.0f, 0.0f};
     float patchWeight = 1.0f;
 
     if (!triangles.empty()) {
@@ -394,6 +401,8 @@ static void AppendGrassBladesFromInstance(const Scene::Instance &inst,
       position.x = chosen->p0.x * b0 + chosen->p1.x * b1 + chosen->p2.x * b2;
       position.y = chosen->p0.y * b0 + chosen->p1.y * b1 + chosen->p2.y * b2;
       position.z = chosen->p0.z * b0 + chosen->p1.z * b1 + chosen->p2.z * b2;
+      emitterUv.x = chosen->uv0.x * b0 + chosen->uv1.x * b1 + chosen->uv2.x * b2;
+      emitterUv.y = chosen->uv0.y * b0 + chosen->uv1.y * b1 + chosen->uv2.y * b2;
       normal.x = chosen->n0.x * b0 + chosen->n1.x * b1 + chosen->n2.x * b2;
       normal.y = chosen->n0.y * b0 + chosen->n1.y * b1 + chosen->n2.y * b2;
       normal.z = chosen->n0.z * b0 + chosen->n1.z * b1 + chosen->n2.z * b2;
@@ -418,6 +427,7 @@ static void AppendGrassBladesFromInstance(const Scene::Instance &inst,
       const float localX = minX + width * u;
       const float localZ = minZ + depth * v;
       const float localY = maxY;
+      emitterUv = {u, v};
 
       DirectX::XMVECTOR worldPos = DirectX::XMVector3TransformCoord(
           DirectX::XMVectorSet(localX, localY, localZ, 1.0f), inst.transform);
@@ -442,6 +452,8 @@ static void AppendGrassBladesFromInstance(const Scene::Instance &inst,
     blade.normal = normal;
     const float randYaw = Hash01(baseSeed ^ 0x0f1bbcdcU) * kTwoPi;
     blade.yawRadians = randYaw;
+    blade.emitterUv = emitterUv;
+    blade.emitterDiffuseTexture = grassMat.diffuseTexture;
     blade.colorVariation = HashU32(baseSeed ^ 0xdeadbeefU);
     blade.sourceMeshId = sourceMeshId;
     outBlades.push_back(blade);

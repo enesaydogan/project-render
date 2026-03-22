@@ -110,6 +110,7 @@ static UINT *s_frameIndexPtr = nullptr;
 static HANDLE s_fenceEvent = nullptr;
 
 bool g_rayTracingSupported = false; // defined here
+static UINT s_grassTlasStartIndex = 0xFFFFFFFFu;
 
 // DXR-specific state kept internal to this module
 static ComPtr<ID3D12Device5> s_dxrDevice;
@@ -2262,8 +2263,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   }
 
   // Create global root signature
-  D3D12_ROOT_PARAMETER params[13] =
-      {}; // Increased for Lights, material extras, and cloud resources
+  D3D12_ROOT_PARAMETER params[15] =
+      {}; // Increased for Lights, material extras, grass data, and cloud resources
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
   params[0].Descriptor.ShaderRegister = 0;
   params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -2342,6 +2343,18 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   params[12].Descriptor.ShaderRegister = 4099;
   params[12].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
+  // Grass blade instance buffer (t4100)
+  params[13].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[13].Descriptor.ShaderRegister = 4100;
+  params[13].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  // Grass TLAS append start index (b11)
+  params[14].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+  params[14].Constants.ShaderRegister = 11;
+  params[14].Constants.RegisterSpace = 0;
+  params[14].Constants.Num32BitValues = 1;
+  params[14].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
   // Lights SB (t5000)
   params[9].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
   params[9].Descriptor.ShaderRegister = 5000;
@@ -2370,7 +2383,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   params[11].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
   D3D12_ROOT_SIGNATURE_DESC rootDesc = {};
-  rootDesc.NumParameters = 13;
+  rootDesc.NumParameters = 15;
   rootDesc.pParameters = params;
   rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
@@ -3114,6 +3127,7 @@ static void ClearDirtyMaterialsForMeshes(
 void BuildAccelerationStructures(
     const std::vector<const Asset::GpuMesh *> &meshes,
     const std::vector<Scene::Instance> &instances) {
+  s_grassTlasStartIndex = 0xFFFFFFFFu;
   if (g_debugLog) {
     std::ostringstream _oss;
     _oss << "DxrRenderer::BuildAccelerationStructures: ENTRY meshes="
@@ -3608,6 +3622,7 @@ void BuildAccelerationStructures(
 
     // --- append grass TLAS instances on CPU (stable fallback path) ---
     {
+      s_grassTlasStartIndex = 0xFFFFFFFFu;
       const UINT grassRequested = GrassManager::GetInstanceCount();
       if (grassRequested > 0) {
         const Asset::GpuMesh *patchMesh = GrassManager::GetPatchMesh();
@@ -3628,6 +3643,7 @@ void BuildAccelerationStructures(
 
         if (patchBlasAddr != 0) {
           const auto &blades = GrassManager::GetBlades();
+          s_grassTlasStartIndex = (UINT)instanceDescs.size();
           instanceDescs.reserve(instanceDescs.size() + blades.size());
           instanceMeshOrder.reserve(instanceMeshOrder.size() + blades.size());
           for (const FGrassBlade &b : blades) {
@@ -4701,6 +4717,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   if (materialExtraSB)
     dxrList->SetComputeRootShaderResourceView(
         12, materialExtraSB->GetGPUVirtualAddress());
+  D3D12_GPU_VIRTUAL_ADDRESS grassBladesGpu =
+      GrassManager::GetInstanceBufferGpuAddress();
+  dxrList->SetComputeRootShaderResourceView(13, grassBladesGpu);
+  dxrList->SetComputeRoot32BitConstants(14, 1, &s_grassTlasStartIndex, 0);
 
   // --- Bind Cloud Resources (Slot 10) ---
   if (g_cloudManager.GetBaseTexture() && g_cloudManager.GetDetailTexture()) {
