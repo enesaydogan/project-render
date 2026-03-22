@@ -78,6 +78,65 @@ static float Hash01(uint32_t x) {
   return (float)(HashU32(x) & 0x00FFFFFFU) / 16777215.0f;
 }
 
+static float SmoothStep01(float t) {
+  t = (std::clamp)(t, 0.0f, 1.0f);
+  return t * t * (3.0f - 2.0f * t);
+}
+
+static float ValueNoise2D(float x, float y, uint32_t seed) {
+  const int ix = (int)std::floor(x);
+  const int iy = (int)std::floor(y);
+  const float fx = x - (float)ix;
+  const float fy = y - (float)iy;
+
+  const auto corner = [seed](int cx, int cy) {
+    const uint32_t packed = (uint32_t)cx * 0x1f123bb5U ^
+                            (uint32_t)cy * 0x9e3779b9U ^ seed;
+    return Hash01(packed);
+  };
+
+  const float v00 = corner(ix, iy);
+  const float v10 = corner(ix + 1, iy);
+  const float v01 = corner(ix, iy + 1);
+  const float v11 = corner(ix + 1, iy + 1);
+  const float sx = SmoothStep01(fx);
+  const float sy = SmoothStep01(fy);
+  const float vx0 = v00 + (v10 - v00) * sx;
+  const float vx1 = v01 + (v11 - v01) * sx;
+  return vx0 + (vx1 - vx0) * sy;
+}
+
+static float FractalNoise2D(float x, float y, uint32_t seed) {
+  float value = 0.0f;
+  float amplitude = 0.55f;
+  float frequency = 1.0f;
+  float normalization = 0.0f;
+  for (int octave = 0; octave < 3; ++octave) {
+    value += ValueNoise2D(x * frequency, y * frequency,
+                          seed + 0x9e3779b9U * (uint32_t)(octave + 1)) *
+             amplitude;
+    normalization += amplitude;
+    amplitude *= 0.5f;
+    frequency *= 2.17f;
+  }
+  return (normalization > 1e-5f) ? (value / normalization) : 0.0f;
+}
+
+static float ComputeGrassPatchWeight(const DirectX::XMFLOAT3 &position,
+                                     uint32_t sourceMeshId) {
+  const float seedOffset = (float)(sourceMeshId & 1023u) * 0.173f;
+  const float macro = FractalNoise2D(position.x * 0.22f + seedOffset,
+                                     position.z * 0.22f - seedOffset,
+                                     sourceMeshId ^ 0x4f1bbcdcU);
+  const float micro = FractalNoise2D(position.x * 1.05f - seedOffset * 0.5f,
+                                     position.z * 1.05f + seedOffset * 0.5f,
+                                     sourceMeshId ^ 0xa54ff53aU);
+  const float macroMask =
+      0.18f + 0.82f * SmoothStep01((macro - 0.26f) / 0.54f);
+  const float microMask = 0.82f + 0.28f * micro;
+  return (std::clamp)(macroMask * microMask, 0.14f, 1.0f);
+}
+
 static uint64_t HashU64(uint64_t x) {
   x ^= x >> 30;
   x *= 0xbf58476d1ce4e5b9ULL;
@@ -97,47 +156,59 @@ static bool EnsureProceduralGrassBladeMesh() {
     return true;
   }
 
-  // Crossed tapered cards with a slight bend so the blade silhouette and UV
-  // flow feel closer to foliage than a flat rectangle.
+  // Build a compact grass tuft so each instance reads more like a clump than
+  // a single crossed billboard.
   std::vector<Asset::Vertex> vertices;
   std::vector<uint32_t> indices;
-  vertices.reserve(12);
-  indices.reserve(48);
+  vertices.reserve(40);
+  indices.reserve(180);
 
-  auto addBladePlane = [&](bool rotate90) {
+  auto addBladePlane = [&](float yawRadians, float baseOffsetX,
+                           float baseOffsetZ, float widthScale,
+                           float heightScale, float sideLean) {
     const uint32_t base = static_cast<uint32_t>(vertices.size());
-    const float halfWidths[3] = {0.055f, 0.032f, 0.008f};
-    const float heights[3] = {0.00f, 0.52f, 1.00f};
-    const float curve[3] = {0.000f, 0.016f, 0.042f};
-    const float uvsV[3] = {1.00f, 0.42f, 0.00f};
+    const float c = std::cos(yawRadians);
+    const float s = std::sin(yawRadians);
+    const float halfWidths[4] = {0.072f, 0.052f, 0.026f, 0.006f};
+    const float heights[4] = {0.00f, 0.32f, 0.71f, 1.00f};
+    const float curve[4] = {0.000f, 0.018f, 0.056f, 0.105f};
+    const float uvsV[4] = {1.00f, 0.64f, 0.22f, 0.00f};
 
-    for (int row = 0; row < 3; ++row) {
+    for (int row = 0; row < 4; ++row) {
+      const float width = halfWidths[row] * widthScale;
+      const float height = heights[row] * heightScale;
+      const float bend = curve[row] * heightScale;
+      const float lateral = sideLean * heights[row];
+
+      auto makeVertex = [&](float side, float u) {
+        const float localX = baseOffsetX + side * width + lateral;
+        const float localY = height;
+        const float localZ = baseOffsetZ + bend;
+        Asset::Vertex v = {};
+        v.pos[0] = localX * c - localZ * s;
+        v.pos[1] = localY;
+        v.pos[2] = localX * s + localZ * c;
+        v.normal[0] = c;
+        v.normal[1] = 0.18f;
+        v.normal[2] = s;
+        v.tangent[0] = -s;
+        v.tangent[1] = 0.0f;
+        v.tangent[2] = c;
+        v.tangent[3] = 1.0f;
+        v.uv[0] = u;
+        v.uv[1] = uvsV[row];
+        return v;
+      };
+
       Asset::Vertex left = {};
       Asset::Vertex right = {};
-      if (!rotate90) {
-        left = {{-halfWidths[row], heights[row], curve[row]},
-                {0, 0, 1},
-                {1, 0, 0, 1},
-                {0, uvsV[row]}};
-        right = {{halfWidths[row], heights[row], curve[row]},
-                 {0, 0, 1},
-                 {1, 0, 0, 1},
-                 {1, uvsV[row]}};
-      } else {
-        left = {{curve[row], heights[row], -halfWidths[row]},
-                {1, 0, 0},
-                {0, 0, 1, 1},
-                {0, uvsV[row]}};
-        right = {{curve[row], heights[row], halfWidths[row]},
-                 {1, 0, 0},
-                 {0, 0, 1, 1},
-                 {1, uvsV[row]}};
-      }
+      left = makeVertex(-1.0f, 0.0f);
+      right = makeVertex(1.0f, 1.0f);
       vertices.push_back(left);
       vertices.push_back(right);
     }
 
-    for (uint32_t row = 0; row < 2; ++row) {
+    for (uint32_t row = 0; row < 3; ++row) {
       const uint32_t i0 = base + row * 2;
       const uint32_t i1 = i0 + 1;
       const uint32_t i2 = i0 + 2;
@@ -147,8 +218,11 @@ static bool EnsureProceduralGrassBladeMesh() {
     }
   };
 
-  addBladePlane(false);
-  addBladePlane(true);
+  addBladePlane(0.12f, -0.030f, -0.014f, 1.00f, 1.00f, -0.012f);
+  addBladePlane(1.11f, 0.024f, -0.008f, 0.88f, 0.93f, 0.015f);
+  addBladePlane(2.24f, 0.008f, 0.022f, 0.76f, 0.84f, -0.008f);
+  addBladePlane(3.51f, -0.020f, 0.016f, 0.70f, 0.78f, 0.006f);
+  addBladePlane(4.67f, 0.018f, 0.006f, 0.64f, 0.73f, -0.004f);
 
   Asset::GpuMesh gm = Asset::LoadMeshFromMemory(vertices, indices);
   if (!gm.vertexBuffer || !gm.indexBuffer || gm.indexCount == 0) {
@@ -156,12 +230,12 @@ static bool EnsureProceduralGrassBladeMesh() {
     return false;
   }
   gm.materialIndex = -1;
-  gm.minBound[0] = -0.06f;
+  gm.minBound[0] = -0.12f;
   gm.minBound[1] = 0.0f;
-  gm.minBound[2] = -0.06f;
-  gm.maxBound[0] = 0.06f;
+  gm.minBound[2] = -0.11f;
+  gm.maxBound[0] = 0.12f;
   gm.maxBound[1] = 1.0f;
-  gm.maxBound[2] = 0.06f;
+  gm.maxBound[2] = 0.12f;
 
   g_proceduralGrassBladeMesh = std::move(gm);
   g_proceduralGrassBladeReady = true;
@@ -279,7 +353,6 @@ static void AppendGrassBladesFromInstance(const Scene::Instance &inst,
     const float minX = mesh.minBound[0];
     const float minZ = mesh.minBound[2];
     const float maxX = mesh.maxBound[0];
-    const float maxY = mesh.maxBound[1];
     const float maxZ = mesh.maxBound[2];
     const float width = (std::max)(maxX - minX, 0.01f);
     const float depth = (std::max)(maxZ - minZ, 0.01f);
@@ -294,10 +367,10 @@ static void AppendGrassBladesFromInstance(const Scene::Instance &inst,
     return;
   }
 
-  for (int i = 0; i < bladeCount; ++i) {
-    const uint32_t baseSeed = sourceMeshId * 0x9e3779b9U + (uint32_t)i;
+  auto emitBladeFromSeed = [&](uint32_t baseSeed) {
     DirectX::XMFLOAT3 position = {};
     DirectX::XMFLOAT3 normal = {0.0f, 1.0f, 0.0f};
+    float patchWeight = 1.0f;
 
     if (!triangles.empty()) {
       const float triPick = Hash01(baseSeed ^ 0x3c6ef372U) * weightedArea;
@@ -328,6 +401,7 @@ static void AppendGrassBladesFromInstance(const Scene::Instance &inst,
       DirectX::XMVECTOR n = DirectX::XMVector3Normalize(
           DirectX::XMLoadFloat3(&normal));
       DirectX::XMStoreFloat3(&normal, n);
+      patchWeight = ComputeGrassPatchWeight(position, sourceMeshId);
       position.x += normal.x * 0.0025f;
       position.y += normal.y * 0.0025f;
       position.z += normal.z * 0.0025f;
@@ -356,18 +430,87 @@ static void AppendGrassBladesFromInstance(const Scene::Instance &inst,
       }
       upWorld = DirectX::XMVector3Normalize(upWorld);
       DirectX::XMStoreFloat3(&normal, upWorld);
+      patchWeight = ComputeGrassPatchWeight(position, sourceMeshId);
     }
 
     FGrassBlade blade = {};
     blade.position = position;
     const float randScale = 0.75f + 0.5f * Hash01(baseSeed ^ 0x1f123bb5U);
-    blade.scale = baseSize * (1.0f + (randScale - 1.0f) * variation);
+    const float patchScale = 0.82f + 0.36f * patchWeight;
+    blade.scale =
+        baseSize * (1.0f + (randScale - 1.0f) * variation) * patchScale;
     blade.normal = normal;
     const float randYaw = Hash01(baseSeed ^ 0x0f1bbcdcU) * kTwoPi;
-    blade.yawRadians = randYaw * variation;
+    blade.yawRadians = randYaw;
     blade.colorVariation = HashU32(baseSeed ^ 0xdeadbeefU);
     blade.sourceMeshId = sourceMeshId;
     outBlades.push_back(blade);
+  };
+
+  int emitted = 0;
+  const int maxAttempts = (std::max)(bladeCount * 7, 96);
+  for (int attempt = 0; attempt < maxAttempts && emitted < bladeCount;
+       ++attempt) {
+    const uint32_t baseSeed =
+        sourceMeshId * 0x9e3779b9U + (uint32_t)attempt * 0x85ebca6bU;
+    DirectX::XMFLOAT3 candidatePosition = {};
+    if (!triangles.empty()) {
+      const float triPick = Hash01(baseSeed ^ 0x3c6ef372U) * weightedArea;
+      float accum = 0.0f;
+      const GrassTriangle *chosen = &triangles.back();
+      for (const auto &tri : triangles) {
+        accum += tri.weight;
+        if (triPick <= accum) {
+          chosen = &tri;
+          break;
+        }
+      }
+      const float u = Hash01(baseSeed ^ 0xa54ff53aU);
+      const float v = Hash01(baseSeed ^ 0x7f4a7c15U);
+      const float su = std::sqrt(u);
+      const float b0 = 1.0f - su;
+      const float b1 = su * (1.0f - v);
+      const float b2 = su * v;
+      candidatePosition.x =
+          chosen->p0.x * b0 + chosen->p1.x * b1 + chosen->p2.x * b2;
+      candidatePosition.y =
+          chosen->p0.y * b0 + chosen->p1.y * b1 + chosen->p2.y * b2;
+      candidatePosition.z =
+          chosen->p0.z * b0 + chosen->p1.z * b1 + chosen->p2.z * b2;
+    } else {
+      const float minX = mesh.minBound[0];
+      const float minZ = mesh.minBound[2];
+      const float maxX = mesh.maxBound[0];
+      const float maxY = mesh.maxBound[1];
+      const float maxZ = mesh.maxBound[2];
+      const float width = (std::max)(maxX - minX, 0.01f);
+      const float depth = (std::max)(maxZ - minZ, 0.01f);
+      const float u = Hash01(baseSeed ^ 0x3c6ef372U);
+      const float v = Hash01(baseSeed ^ 0xa54ff53aU);
+      const float localX = minX + width * u;
+      const float localZ = minZ + depth * v;
+      const float localY = maxY;
+      DirectX::XMVECTOR worldPos = DirectX::XMVector3TransformCoord(
+          DirectX::XMVectorSet(localX, localY, localZ, 1.0f), inst.transform);
+      DirectX::XMStoreFloat3(&candidatePosition, worldPos);
+    }
+
+    const float patchWeight =
+        ComputeGrassPatchWeight(candidatePosition, sourceMeshId);
+    const float acceptProbability =
+        (std::clamp)(0.22f + patchWeight * 0.92f, 0.0f, 1.0f);
+    if (Hash01(baseSeed ^ 0xc2b2ae35U) > acceptProbability &&
+        (bladeCount - emitted) < (maxAttempts - attempt)) {
+      continue;
+    }
+    emitBladeFromSeed(baseSeed);
+    ++emitted;
+  }
+
+  for (int filler = emitted; filler < bladeCount; ++filler) {
+    const uint32_t baseSeed = sourceMeshId * 0x9e3779b9U +
+                              (uint32_t)(maxAttempts + filler) * 0x27d4eb2dU;
+    emitBladeFromSeed(baseSeed);
   }
 }
 
@@ -1379,7 +1522,8 @@ bool InitApplication(HWND hwnd) {
     float emissiveColor[4];
     int textureIndices[4];    // x=diffuse, z=normal
     int emissiveAndPad[4];    // x=emissive, y=occlusion, z=metalRough
-    float extraParams[4];     // x=emissiveIntensity
+    float extraParams[4];     // x=emissiveIntensity, y=alphaCutoff,
+                              // z=alphaMaskEnabled, w=isGrass
     float coatLayerParams[4]; // x=coatWeight, y=coatRoughness, z=thinWalled,
                               // w=translucency
     float uvTransform[4];     // xy=uvScale, zw=uvOffset
@@ -1396,7 +1540,8 @@ bool InitApplication(HWND hwnd) {
     float coatLayerParams[4];
     float uvTransform[4];
     float triPlanarParams[4];
-    float shadingParams[4];
+    float shadingParams[4]; // x=emissiveIntensity, y=specularWeight,
+                            // z=alphaCutoff, w=isGrass
     float transmissionColor[4];
   };
   const UINT64 matCbSizeSingle = (sizeof(MaterialCB) + 255) & ~255;
@@ -2173,6 +2318,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                     (std::max)(0.0f, srcMat.emissiveIntensity);
                 extra.shadingParams[1] =
                     (std::clamp)(srcMat.specularWeight, 0.0f, 1.0f);
+                extra.shadingParams[2] =
+                    (srcMat.alphaMode == "MASK") ? 0.35f : -1.0f;
+                extra.shadingParams[3] = srcMat.isGrass ? 1.0f : 0.0f;
                 extra.transmissionColor[0] =
                     (std::clamp)(srcMat.transmissionColor[0], 0.0f, 1.0f);
                 extra.transmissionColor[1] =
@@ -2502,9 +2650,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                 matCB.emissiveAndPad[3] = 0;
 
                 matCB.extraParams[0] = srcMat.emissiveIntensity;
-                matCB.extraParams[1] = 0.0f;
-                matCB.extraParams[2] = 0.0f;
-                matCB.extraParams[3] = 0.0f;
+                matCB.extraParams[1] =
+                    (srcMat.alphaMode == "MASK") ? 0.35f : -1.0f;
+                matCB.extraParams[2] =
+                    (srcMat.alphaMode == "MASK") ? 1.0f : 0.0f;
+                matCB.extraParams[3] = srcMat.isGrass ? 1.0f : 0.0f;
 
                 float rasterCoatWeight =
                     (std::clamp)(srcMat.coatWeight, 0.0f, 1.0f);
@@ -2629,6 +2779,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           grassMatCB.emissiveAndPad[1] = srcMat.occlusionTexture;
           grassMatCB.emissiveAndPad[2] = srcMat.metalRoughTexture;
           grassMatCB.extraParams[0] = srcMat.emissiveIntensity;
+          grassMatCB.extraParams[1] =
+              (srcMat.alphaMode == "MASK") ? 0.35f : -1.0f;
+          grassMatCB.extraParams[2] =
+              (srcMat.alphaMode == "MASK") ? 1.0f : 0.0f;
+          grassMatCB.extraParams[3] = srcMat.isGrass ? 1.0f : 0.0f;
           grassMatCB.coatLayerParams[0] =
               (std::clamp)(srcMat.coatWeight, 0.0f, 1.0f);
           grassMatCB.coatLayerParams[1] =

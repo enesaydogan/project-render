@@ -14,6 +14,41 @@ float3 TriPlanarWeights(float3 n, float sharpness)
     return (s > 1e-5) ? (an / s) : float3(0.3333, 0.3333, 0.3333);
 }
 
+float Hash12(float2 p)
+{
+    float3 p3 = frac(float3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return frac((p3.x + p3.y) * p3.z);
+}
+
+float ValueNoise2D(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = frac(p);
+    float2 u = f * f * (3.0 - 2.0 * f);
+    float a = Hash12(i);
+    float b = Hash12(i + float2(1.0, 0.0));
+    float c = Hash12(i + float2(0.0, 1.0));
+    float d = Hash12(i + float2(1.0, 1.0));
+    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+}
+
+float GrassFieldNoise(float2 p)
+{
+    float v = 0.0;
+    float w = 0.58;
+    float n = 0.0;
+    float2 q = p;
+    [unroll]
+    for (int octave = 0; octave < 3; ++octave) {
+        v += ValueNoise2D(q) * w;
+        n += w;
+        q = q * 2.13 + 11.7;
+        w *= 0.5;
+    }
+    return (n > 1e-5) ? (v / n) : 0.0;
+}
+
 float2 TriPlanarUV_X(float3 p, float scale) { return float2(p.y, p.z) * scale; }
 float2 TriPlanarUV_Y(float3 p, float scale) { return float2(p.z, p.x) * scale; }
 float2 TriPlanarUV_Z(float3 p, float scale) { return float2(p.x, p.y) * scale; }
@@ -137,6 +172,8 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     float3 transmissionColor = saturate(matExtra.transmissionColor.rgb);
     float emissiveIntensity = max(0.0, matExtra.shadingParams.x);
     float specularWeight = saturate(matExtra.shadingParams.y);
+    float alphaCutoff = matExtra.shadingParams.z;
+    bool isGrassMaterial = matExtra.shadingParams.w > 0.5;
 
 #ifdef HIT_DEBUG
     // Encode primitive index into color for debugging
@@ -236,6 +273,18 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     float clearcoat = saturate(arch0.x);
     float clearcoatRoughness = max(arch0.y, 0.02);
 
+    if (isGrassMaterial) {
+        float field = GrassFieldNoise(P.xz * 0.82 + (float)matIdx * 0.37);
+        float tip = saturate(1.0 - uv.y);
+        float3 lushTint = float3(0.92, 1.08, 0.90);
+        float3 dryTint = float3(1.10, 0.98, 0.72);
+        float3 tint = lerp(lushTint, dryTint, saturate(field * 0.38));
+        BaseColor *= tint * lerp(0.62, 1.08, tip);
+        DiffuseAlbedo = BaseColor * (1.0 - metalness) * (1.0 - transmission);
+        roughness = lerp(roughness, 0.92, 0.45);
+        clearcoat = 0.0;
+    }
+
     // Standard PBR Model (dielectric F0 from IOR)
     float ior = max(emisColor.w, 1.0);
     float f0s = (ior - 1.0) / (ior + 1.0);
@@ -285,6 +334,9 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
 
     // Archviz extensions
     float translucency = saturate(arch0.w);
+    if (isGrassMaterial) {
+        translucency = max(translucency, lerp(0.38, 0.72, saturate(1.0 - uv.y)));
+    }
     
     float3 Lo = float3(0,0,0);
     float3 ambient = float3(0,0,0);
@@ -386,20 +438,65 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
 void AnyHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes attr)
 {
     uint rayType = UnpackPayloadRayType(payload.packedIorType);
+    uint meshIdx = InstanceID();
+    MeshData mesh = meshData[meshIdx];
+    uint matIdx = (uint)max(0, mesh.materialIndex);
+    MaterialData mat = materials[matIdx];
+    MaterialExtraData matExtra = materialExtras[matIdx];
+    uint matFlags = asuint(mat.pbrParams_flags.w);
+    bool alphaTested = (matFlags & MATERIAL_FLAG_ALPHA_TESTED) != 0;
+    float alphaCutoff = matExtra.shadingParams.z;
+
+    if (alphaTested && alphaCutoff >= 0.0) {
+        uint primIndex = PrimitiveIndex();
+        uint baseIndex = primIndex * 3;
+        uint i0 = indices[mesh.ibIndex].Load(baseIndex);
+        uint i1 = indices[mesh.ibIndex].Load(baseIndex + 1);
+        uint i2 = indices[mesh.ibIndex].Load(baseIndex + 2);
+
+        float2 bary2 = attr.barycentrics;
+        float3 bary = float3(1.0 - bary2.x - bary2.y, bary2.x, bary2.y);
+        float2 uv0 = vertices[mesh.vbIndex][i0].uv;
+        float2 uv1 = vertices[mesh.vbIndex][i1].uv;
+        float2 uv2 = vertices[mesh.vbIndex][i2].uv;
+        float2 uv = uv0 * bary.x + uv1 * bary.y + uv2 * bary.z;
+        if ((matFlags & MATERIAL_FLAG_UV_TRANSFORM) != 0) {
+            uv = uv * matExtra.uvTransform.xy + matExtra.uvTransform.zw;
+        }
+
+        float alpha = mat.baseColor_opacity.a;
+        int texDiff = UnpackTextureIndexLow(mat.packedTextures.x);
+        if (texDiff >= 0) {
+            float3 n0 = vertices[mesh.vbIndex][i0].normal;
+            float3 n1 = vertices[mesh.vbIndex][i1].normal;
+            float3 n2 = vertices[mesh.vbIndex][i2].normal;
+            float3 localNormal = normalize(n0 * bary.x + n1 * bary.y + n2 * bary.z);
+            float3 worldNormal = normalize(mul(localNormal, (float3x3)WorldToObject3x4()));
+            float3 P = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+            bool triPlanar = ((matFlags & MATERIAL_FLAG_TRI_PLANAR) != 0) && (matExtra.triPlanarParams.x > 0.5);
+            float textureLod = CalculateTextureLod(rayType, P);
+            bool dominantTriPlanar = triPlanar && (rayType != RAY_TYPE_PRIMARY);
+            float alphaSample = triPlanar
+                ? SampleTriPlanar(texDiff, P, worldNormal,
+                                  max(matExtra.triPlanarParams.y, 1e-6),
+                                  max(matExtra.triPlanarParams.z, 0.01),
+                                  textureLod, dominantTriPlanar).a
+                : textures[texDiff].SampleLevel(linearSampler, uv, textureLod).a;
+            alpha *= alphaSample;
+        }
+
+        if (alpha < alphaCutoff) {
+            IgnoreHit();
+        }
+    }
+
     // For shadow or diffuse (GI visibility) rays hitting glass or thin-walled materials, we want to let light through.
     // This is a critical optimization for interior scenes with windows.
     if (rayType == RAY_TYPE_SHADOW || rayType == RAY_TYPE_DIFFUSE || rayType == RAY_TYPE_GI_EVAL) {
-        uint meshIdx = InstanceID();
-        MeshData mesh = meshData[meshIdx];
-        uint matIdx = (uint)max(0, mesh.materialIndex);
-        MaterialData mat = materials[matIdx];
-        uint matFlags = asuint(mat.pbrParams_flags.w);
-        
-        // Let light through if it's a glass-like material:
-        // 1. Glass flag
-        // 2. Thin-walled flag
-        // 3. Translucency flag
-        if ((matFlags & (MATERIAL_FLAG_GLASS | MATERIAL_FLAG_THIN_WALLED | MATERIAL_FLAG_TRANSLUCENT)) != 0) {
+        const bool transmissiveVisibility =
+            ((matFlags & (MATERIAL_FLAG_GLASS | MATERIAL_FLAG_THIN_WALLED | MATERIAL_FLAG_TRANSLUCENT)) != 0) &&
+            !alphaTested;
+        if (transmissiveVisibility) {
             IgnoreHit();
         }
     }

@@ -100,8 +100,8 @@ struct Material {
 
 inline void ApplyDefaultGrassLook(Material &m) {
   const bool hasDiffuseTexture = m.diffuseTexture >= 0;
-  const float defaultTint[3] = {0.34f, 0.52f, 0.21f};
-  const float texturedTint[3] = {1.0f, 1.0f, 1.0f};
+  const float defaultTint[3] = {0.30f, 0.47f, 0.18f};
+  const float texturedTint[3] = {0.94f, 0.98f, 0.92f};
   const float *tint = hasDiffuseTexture ? texturedTint : defaultTint;
 
   m.isGrass = true;
@@ -113,14 +113,15 @@ inline void ApplyDefaultGrassLook(Material &m) {
   m.diffuseColor[2] = tint[2];
   m.diffuseColor[3] = 1.0f;
   m.metalness = 0.0f;
-  m.roughness = 0.82f;
-  m.specularWeight = 0.35f;
+  m.roughness = 0.88f;
+  m.specularWeight = 0.22f;
   m.thinWalled = 1.0f;
-  m.translucency = 0.45f;
+  m.translucency = 0.58f;
   m.doubleSided = true;
-  m.grassBladeSize = 0.6f;
-  m.grassBladeCount = 48.0f;
-  m.grassBladeVariation = 0.45f;
+  m.alphaMode = hasDiffuseTexture ? "MASK" : "OPAQUE";
+  m.grassBladeSize = 0.55f;
+  m.grassBladeCount = 56.0f;
+  m.grassBladeVariation = 0.62f;
 }
 
 // Initialize the loader with a device and command queue for GPU uploads.
