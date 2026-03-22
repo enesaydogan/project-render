@@ -1138,6 +1138,10 @@ Point3 GetFaceCornerNormal(Mesh &mesh, int faceIndex, int corner) {
   }
 
   const Face &face = mesh.faces[faceIndex];
+  if (face.smGroup == 0) {
+    return mesh.getFaceNormal(faceIndex);
+  }
+
   RVertex *renderVertex = mesh.getRVertPtr(face.getVert(corner));
   if (!renderVertex) {
     return mesh.getFaceNormal(faceIndex);
@@ -1163,7 +1167,7 @@ Point3 GetFaceCornerNormal(Mesh &mesh, int faceIndex, int corner) {
     }
   }
 
-  return renderVertex->ern[0].getNormal();
+  return mesh.getFaceNormal(faceIndex);
 }
 
 Point3 BuildStableCameraUp(const Point3 &forward) {
@@ -3108,7 +3112,12 @@ void CaptureMeshSnapshot(Interface *ip, INode *node, NodeSnapshot *snapshot) {
   }
 
   Mesh &mesh = triObject->GetMesh();
-  mesh.checkNormals(TRUE);
+  mesh.buildNormals();
+  mesh.buildRenderNormals();
+  MeshNormalSpec *specNormals = mesh.GetSpecifiedNormals();
+  if (specNormals) {
+    specNormals->CheckNormals();
+  }
   const uint64_t vertexCount = static_cast<uint64_t>(mesh.getNumVerts());
   const uint64_t faceCount = static_cast<uint64_t>(mesh.getNumFaces());
   if (vertexCount == 0 || faceCount == 0) {
@@ -3356,7 +3365,12 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
   }
 
   Mesh &mesh = triObject->GetMesh();
-  mesh.checkNormals(TRUE);
+  mesh.buildNormals();
+  mesh.buildRenderNormals();
+  MeshNormalSpec *specNormals = mesh.GetSpecifiedNormals();
+  if (specNormals) {
+    specNormals->CheckNormals();
+  }
   const Matrix3 objectToNode = ComputeObjectToNodeTransform(ip, node);
   struct ExportSubmesh {
     int materialSlot = 0;
