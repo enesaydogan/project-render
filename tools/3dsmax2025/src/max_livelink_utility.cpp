@@ -812,17 +812,13 @@ void GatherNodeGuidUsage(INode *node,
 }
 
 void EnsureUniqueNodeGuidsRecursive(
-    INode *node, std::unordered_set<std::string> *seenGuids,
-    const std::unordered_map<std::string, size_t> &usageCounts) {
+    INode *node, std::unordered_set<std::string> *seenGuids) {
   if (!node || !seenGuids) {
     return;
   }
 
   std::string rawGuid = ReadAppDataString(node, kNodeGuidAppDataSubId);
-  const bool duplicatedInScene = !rawGuid.empty() &&
-                                 usageCounts.find(rawGuid) != usageCounts.end() &&
-                                 usageCounts.at(rawGuid) > 1;
-  if (rawGuid.empty() || duplicatedInScene || seenGuids->find(rawGuid) != seenGuids->end()) {
+  if (rawGuid.empty() || seenGuids->find(rawGuid) != seenGuids->end()) {
     do {
       rawGuid = GenerateGuidString();
     } while (!rawGuid.empty() && seenGuids->find(rawGuid) != seenGuids->end());
@@ -835,8 +831,7 @@ void EnsureUniqueNodeGuidsRecursive(
     seenGuids->insert(rawGuid);
   }
   for (int childIndex = 0; childIndex < node->NumberOfChildren(); ++childIndex) {
-    EnsureUniqueNodeGuidsRecursive(node->GetChildNode(childIndex), seenGuids,
-                                   usageCounts);
+    EnsureUniqueNodeGuidsRecursive(node->GetChildNode(childIndex), seenGuids);
   }
 }
 
@@ -851,15 +846,9 @@ void EnsurePersistentSceneIdentifiers(Interface *ip) {
     return;
   }
 
-  std::unordered_map<std::string, size_t> usageCounts;
-  for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
-    GatherNodeGuidUsage(root->GetChildNode(childIndex), &usageCounts);
-  }
-
   std::unordered_set<std::string> seenGuids;
   for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
-    EnsureUniqueNodeGuidsRecursive(root->GetChildNode(childIndex), &seenGuids,
-                                   usageCounts);
+    EnsureUniqueNodeGuidsRecursive(root->GetChildNode(childIndex), &seenGuids);
   }
 }
 
@@ -4810,6 +4799,15 @@ private:
         }
 
         const NodeSnapshot &previous = previousIt->second;
+        if (previous.objectId != snapshot.objectId) {
+          RemoveNodePayloadFile(m_documentId, previous.objectId);
+          AppendNodeRemovedDelta(m_documentId, previous, &m_nextRevision, &deltas);
+          AppendNodeAddedDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
+          AppendNodeTransformDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
+          AppendNodeVisibilityDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
+          AppendMeshPayloadDeltaIfAvailable(ip, m_documentId, snapshot, &m_nextRevision, &deltas);
+          continue;
+        }
         if (previous.parentHandle != snapshot.parentHandle ||
             previous.name != snapshot.name) {
           AppendNodeAddedDelta(m_documentId, snapshot, &m_nextRevision,
@@ -4924,6 +4922,15 @@ private:
                                   &deltas);
       } else {
         const NodeSnapshot &previous = previousIt->second;
+        if (previous.objectId != snapshot.objectId) {
+          RemoveNodePayloadFile(m_documentId, previous.objectId);
+          AppendNodeRemovedDelta(m_documentId, previous, &m_nextRevision, &deltas);
+          AppendNodeAddedDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
+          AppendNodeTransformDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
+          AppendNodeVisibilityDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
+          AppendMeshPayloadDeltaIfAvailable(ip, m_documentId, snapshot, &m_nextRevision, &deltas);
+          continue;
+        }
         if (previous.parentHandle != snapshot.parentHandle ||
             previous.name != snapshot.name) {
           AppendNodeAddedDelta(m_documentId, snapshot, &m_nextRevision,
@@ -5007,6 +5014,40 @@ private:
         }
       }
     }
+
+      // INodeEventCallback can miss transform updates during interactive manipulations,
+      // IK evaluation, or playback. We perform a fast O(N) sweep over all nodes in the
+      // scene to robustly catch any unnotified matrix changes and stream them.
+      if (INode *root = ip->GetRootNode()) {
+        std::vector<INode*> traversalStack;
+        for (int i = 0; i < root->NumberOfChildren(); ++i) {
+          traversalStack.push_back(root->GetChildNode(i));
+        }
+        while (!traversalStack.empty()) {
+          INode *node = traversalStack.back();
+          traversalStack.pop_back();
+          if (node) {
+            ULONG_PTR handle = node->GetHandle();
+            if (stagedNodes.find(handle) == stagedNodes.end()) {
+              auto it = m_lastNodeState.find(handle);
+              if (it != m_lastNodeState.end()) {
+                std::array<float, 16> currentMatrix =
+                    Matrix3ToColumnMajor4x4(node->GetNodeTM(ip->GetTime()));
+                if (!SameMatrix(it->second.worldMatrix, currentMatrix)) {
+                  NodeSnapshot updatedSnapshot = it->second;
+                  updatedSnapshot.worldMatrix = currentMatrix;
+                  stagedNodes[handle] = updatedSnapshot;
+                  AppendNodeTransformDelta(m_documentId, updatedSnapshot,
+                                           &m_nextRevision, &deltas);
+                }
+              }
+            }
+            for (int i = 0; i < node->NumberOfChildren(); ++i) {
+              traversalStack.push_back(node->GetChildNode(i));
+            }
+          }
+        }
+      }
 
     if (m_selectionDirty) {
       selectedObjectIds = GatherSelectedObjectIds(ip);
