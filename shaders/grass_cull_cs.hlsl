@@ -11,6 +11,9 @@ struct FGrassBlade {
     float scale;
     float3 normal;
     float yawRadians;
+    float2 emitterUv;
+    int emitterDiffuseTexture;
+    uint emitterPad;
     uint colorVariation;
     uint sourceMeshId;
     uint pad0;
