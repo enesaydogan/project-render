@@ -179,6 +179,7 @@ static const uint MATERIAL_FLAG_TRI_PLANAR   = 1u << 3;
 static const uint MATERIAL_FLAG_UV_TRANSFORM = 1u << 4;
 static const uint MATERIAL_FLAG_GLASS        = 1u << 5;
 static const uint MATERIAL_FLAG_DOUBLE_SIDED = 1u << 6;
+static const uint MATERIAL_FLAG_INVERT_ROUGHNESS = 1u << 7;
 
 struct MaterialData
 {

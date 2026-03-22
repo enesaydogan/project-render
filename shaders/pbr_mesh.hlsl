@@ -516,10 +516,15 @@ PSOutput PSMainMesh(PSInputMesh input)
     if (emissiveAndPad.z >= 0) {
         float4 mrSample = triPlanar ? SampleTriPlanar(emissiveAndPad.z, worldPos, worldNormal, triScale, triSharp)
                                     : textures[emissiveAndPad.z].Sample(linearSampler, uv);
-        roughness *= mrSample.g; 
+        
+        if (emissiveAndPad.w > 0) {
+            roughness *= max(1.0 - mrSample.g, 0.0);
+        } else {
+            roughness *= mrSample.g;
+        }
         metalness *= mrSample.b;
     }
-    
+
     // OpenPBR subset: dielectric F0 from IOR scaled by specular weight.
     float ior = max(emissiveColor.w, 1.0);
     float specularWeight = saturate(surfaceParams.z);

@@ -2235,6 +2235,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             static constexpr UINT kMaterialFlagUvTransform = 1u << 4;
             static constexpr UINT kMaterialFlagGlass = 1u << 5;
             static constexpr UINT kMaterialFlagDoubleSided = 1u << 6;
+            static constexpr UINT kMaterialFlagInvertRoughness = 1u << 7;
 
             auto PackTexPair = [](int lo, int hi) -> UINT {
               const UINT lo16 = (lo >= 0) ? ((UINT)lo & 0xFFFFu) : 0xFFFFu;
@@ -2294,6 +2295,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                 }
                 if (srcMat.doubleSided) {
                   flags |= kMaterialFlagDoubleSided;
+                }
+                if (srcMat.invertRoughnessTexture) {
+                  flags |= kMaterialFlagInvertRoughness;
                 }
 
                 float flagsAsFloat = 0.0f;
@@ -2659,7 +2663,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                 matCB.emissiveAndPad[0] = srcMat.emissiveTexture;
                 matCB.emissiveAndPad[1] = srcMat.occlusionTexture;
                 matCB.emissiveAndPad[2] = srcMat.metalRoughTexture;
-                matCB.emissiveAndPad[3] = 0;
+                matCB.emissiveAndPad[3] = srcMat.invertRoughnessTexture ? 1 : 0;
 
                 matCB.extraParams[0] = srcMat.emissiveIntensity;
                 matCB.extraParams[1] =
@@ -2790,6 +2794,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           grassMatCB.emissiveAndPad[0] = srcMat.emissiveTexture;
           grassMatCB.emissiveAndPad[1] = srcMat.occlusionTexture;
           grassMatCB.emissiveAndPad[2] = srcMat.metalRoughTexture;
+          grassMatCB.emissiveAndPad[3] = srcMat.invertRoughnessTexture ? 1 : 0;
           grassMatCB.extraParams[0] = srcMat.emissiveIntensity;
           grassMatCB.extraParams[1] =
               (srcMat.alphaMode == "MASK") ? 0.35f : -1.0f;

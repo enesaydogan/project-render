@@ -1011,6 +1011,7 @@ struct MaterialSnapshot {
   float triPlanarNormalStrength = 1.0f;
   bool doubleSided = false;
   std::string alphaMode = "OPAQUE";
+  bool invertRoughnessTexture = false;
 };
 
 struct TextureBindingSnapshot {
@@ -1251,7 +1252,8 @@ bool SameMaterial(const MaterialSnapshot &lhs, const MaterialSnapshot &rhs) {
          NearlyEqual(lhs.triPlanarScale, rhs.triPlanarScale) &&
          NearlyEqual(lhs.triPlanarSharpness, rhs.triPlanarSharpness) &&
          NearlyEqual(lhs.triPlanarNormalStrength, rhs.triPlanarNormalStrength) &&
-         lhs.doubleSided == rhs.doubleSided && lhs.alphaMode == rhs.alphaMode;
+         lhs.doubleSided == rhs.doubleSided && lhs.alphaMode == rhs.alphaMode &&
+         lhs.invertRoughnessTexture == rhs.invertRoughnessTexture;
 }
 
 bool SameLight(const LightSnapshot &lhs, const LightSnapshot &rhs) {
@@ -1326,7 +1328,8 @@ json SerializeMaterialSnapshot(const MaterialSnapshot &snapshot) {
               {"ths", snapshot.triPlanarSharpness},
               {"tns", snapshot.triPlanarNormalStrength},
               {"ds", snapshot.doubleSided},
-              {"am", snapshot.alphaMode}};
+              {"am", snapshot.alphaMode},
+              {"irt", snapshot.invertRoughnessTexture}};
 }
 
 json SerializeLightSnapshot(const LightSnapshot &snapshot) {
@@ -1431,6 +1434,7 @@ bool DeserializeMaterialSnapshot(const json &value, MaterialSnapshot *outSnapsho
   snapshot.triPlanarNormalStrength = value.value("tns", 1.0f);
   snapshot.doubleSided = value.value("ds", false);
   snapshot.alphaMode = value.value("am", std::string("OPAQUE"));
+  snapshot.invertRoughnessTexture = value.value("irt", false);
   if (snapshot.objectId.empty()) {
     return false;
   }
@@ -2595,6 +2599,10 @@ void ApplyVrayMaterialParameters(Interface *ip, Mtl *material,
     }
   }
 
+  int useRoughness = 0;
+  TryGetVrayMtlValue(material, ProjectRenderVrayMtlParameters::pb_brdf_useRoughness, time, &useRoughness);
+  snapshot->invertRoughnessTexture = (useRoughness == 0);
+
   Texmap *emissiveTexmap = nullptr;
   if (TryGetVrayMtlTexmap(
           material,
@@ -3733,7 +3741,8 @@ void AppendMaterialDelta(const std::string &documentId,
                                               {"triPlanarNormalStrength",
                                                snapshot.triPlanarNormalStrength},
                                               {"doubleSided", snapshot.doubleSided},
-                                              {"alphaMode", snapshot.alphaMode}}}});
+                                              {"alphaMode", snapshot.alphaMode},
+                                              {"invertRoughnessTexture", snapshot.invertRoughnessTexture}}}});
 }
 
 void AppendMaterialRemovedDelta(const std::string &documentId,

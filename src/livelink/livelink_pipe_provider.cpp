@@ -270,8 +270,7 @@ bool ParsePayload(const SceneDeltaKind kind, const json &payloadJson,
     payload.triPlanarNormalStrength =
         payloadJson.value("triPlanarNormalStrength", 1.0f);
     payload.doubleSided = payloadJson.value("doubleSided", false);
-    payload.alphaMode = payloadJson.value("alphaMode", "OPAQUE");
-    *outPayload = std::move(payload);
+    payload.alphaMode = payloadJson.value("alphaMode", "OPAQUE");      payload.invertRoughnessTexture = payloadJson.value("invertRoughnessTexture", false);    *outPayload = std::move(payload);
     return true;
   }
   case SceneDeltaKind::LightChanged: {
