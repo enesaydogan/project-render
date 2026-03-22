@@ -6,6 +6,7 @@
 #include "d3d12_helpers.h"
 #include "dx12_context.h"
 #include "dxr_renderer.h"
+#include "livelink/livelink_scene_sync.h"
 #include "file_import.h"
 #include "grass_manager.h"
 #include "ibl_manager.h"
@@ -1039,8 +1040,7 @@ bool RemoveNode(size_t index) {
     }
   }
 
-  ApplyRendererInvalidation(
-      RendererInvalidationPlan::FullAccelerationStructureRebuild);
+  LiveLink::GetSceneSync().ReindexSceneNodeBindingsAfterRemoval(index);
   return true;
 }
 
@@ -1353,7 +1353,7 @@ bool UpdateMaterial(size_t index, const Asset::Material &material) {
 void RemoveLight(size_t index) {
   if (index < s_lights.size()) {
     s_lights.erase(s_lights.begin() + index);
-    UpdateLights();
+    LiveLink::GetSceneSync().ReindexSceneLightBindingsAfterRemoval(index);
   }
 }
 

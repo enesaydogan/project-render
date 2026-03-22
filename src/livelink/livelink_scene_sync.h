@@ -56,6 +56,8 @@ public:
   StatsSnapshot GetStatsSnapshot() const;
   std::vector<PersistedBinding> ExportPersistedBindings() const;
   void RestorePersistedBindings(const std::vector<PersistedBinding> &bindings);
+  void ReindexSceneNodeBindingsAfterRemoval(size_t removedIndex);
+  void ReindexSceneLightBindingsAfterRemoval(size_t removedIndex);
 
 private:
   struct ObjectBinding {
@@ -115,8 +117,7 @@ private:
                              ObjectBinding **outBinding = nullptr);
   void RemoveSessionContent(const std::string &sessionId);
   void PruneTextureCacheEntries();
-  void ReindexSceneNodeBindingsAfterRemoval(size_t removedIndex);
-  void ReindexSceneLightBindingsAfterRemoval(size_t removedIndex);
+
   void ClearAllBindings();
   void AppendDiagnosticEntry(const char *level, const std::string &providerName,
                              const std::string &sessionId,
