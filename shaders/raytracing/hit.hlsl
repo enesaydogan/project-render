@@ -272,17 +272,32 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     float3 DiffuseAlbedo = BaseColor * (1.0 - metalness) * (1.0 - transmission);
     float clearcoat = saturate(arch0.x);
     float clearcoatRoughness = max(arch0.y, 0.02);
+    float grassRootAmount = 0.0;
+    float grassDirectContact = 1.0;
+    float grassAmbientContact = 1.0;
+    float3 grassSoilBounce = float3(0.0, 0.0, 0.0);
 
     if (isGrassMaterial) {
         float field = GrassFieldNoise(P.xz * 0.82 + (float)matIdx * 0.37);
         float tip = saturate(1.0 - uv.y);
+        grassRootAmount = saturate(pow(uv.y, 1.65));
+        float clump = GrassFieldNoise(P.xz * 4.6 + (float)matIdx * 1.31);
         float3 lushTint = float3(0.92, 1.08, 0.90);
         float3 dryTint = float3(1.10, 0.98, 0.72);
         float3 tint = lerp(lushTint, dryTint, saturate(field * 0.38));
+        float3 soilTint = lerp(float3(0.44, 0.35, 0.18),
+                               float3(0.30, 0.25, 0.14),
+                               saturate(field * 0.85 + clump * 0.2));
         BaseColor *= tint * lerp(0.62, 1.08, tip);
+        BaseColor = lerp(BaseColor, BaseColor * soilTint,
+                         grassRootAmount * (0.18 + 0.18 * (1.0 - field)));
         DiffuseAlbedo = BaseColor * (1.0 - metalness) * (1.0 - transmission);
         roughness = lerp(roughness, 0.92, 0.45);
         clearcoat = 0.0;
+        grassDirectContact = lerp(1.0, 0.68 + 0.10 * clump, grassRootAmount);
+        grassAmbientContact = lerp(1.0, 0.46 + 0.18 * field, grassRootAmount);
+        grassSoilBounce = DiffuseAlbedo * soilTint *
+                          (grassRootAmount * (0.05 + 0.03 * (1.0 - field)));
     }
 
     // Standard PBR Model (dielectric F0 from IOR)
@@ -308,6 +323,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
                        : textures[texOcc].SampleLevel(linearSampler, uv, textureLod).r;
         SHADER_COUNTER_ADD(SHADER_COUNTER_TEXTURE_SAMPLES, 1);
     }
+    ao *= grassAmbientContact;
     
     // Emissive with a conservative default boost.
     const float baseEmissiveBoost = 5.0f;
@@ -399,6 +415,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
 
                 Lo = ((BaseBRDF * (1.0 - clearcoat)) + CoatBRDF * clearcoat) *
                      radiance * NdotL;
+                Lo *= grassDirectContact;
             }
         }
 
@@ -413,6 +430,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     
     // Apply AO to diffuse and ambient lighting
     Lo *= ao;
+    Lo += grassSoilBounce * ao;
     
     // Keep payload color compact and purpose-specific:
     // - regular path rays carry emissive only (direct/indirect handled in raygen)

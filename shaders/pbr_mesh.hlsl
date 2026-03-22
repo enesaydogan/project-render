@@ -556,20 +556,35 @@ PSOutput PSMainMesh(PSInputMesh input)
     float clearcoat = saturate(coatLayerParams.x);
     float clearcoatRoughness = max(coatLayerParams.y, 0.02);
     float translucency = saturate(coatLayerParams.w);
+    float grassRootAmount = 0.0;
+    float grassDirectContact = 1.0;
+    float grassAmbientContact = 1.0;
+    float3 grassSoilBounce = float3(0.0, 0.0, 0.0);
 
     if (isGrassMaterial) {
         float tip = saturate(1.0 - input.uv.y);
+        grassRootAmount = saturate(pow(input.uv.y, 1.65));
         float field = GrassFieldNoise(worldPos.xz * 0.82 + input.grassVariation * 5.7);
+        float clump = GrassFieldNoise(worldPos.xz * 4.6 + input.grassVariation * 13.1);
         float hueMix = saturate(field * 0.85 + input.grassVariation * 0.35);
         float3 lushTint = float3(0.92, 1.08, 0.90);
         float3 dryTint = float3(1.10, 0.98, 0.72);
         float3 tint = lerp(lushTint, dryTint, hueMix * 0.38);
+        float3 soilTint = lerp(float3(0.44, 0.35, 0.18),
+                               float3(0.30, 0.25, 0.14),
+                               saturate(field * 0.85 + clump * 0.2));
         float rootDarken = lerp(0.62, 1.08, tip);
         BaseColor *= tint * rootDarken;
+        BaseColor = lerp(BaseColor, BaseColor * soilTint,
+                         grassRootAmount * (0.18 + 0.18 * (1.0 - field)));
         DiffuseAlbedo = BaseColor * (1.0 - metalness) * (1.0 - transmission);
         roughness = lerp(roughness, 0.92, 0.45);
         clearcoat = 0.0;
         translucency = max(translucency, lerp(0.38, 0.72, tip));
+        grassDirectContact = lerp(1.0, 0.68 + 0.10 * clump, grassRootAmount);
+        grassAmbientContact = lerp(1.0, 0.46 + 0.18 * field, grassRootAmount);
+        grassSoilBounce = DiffuseAlbedo * soilTint *
+                          (grassRootAmount * (0.05 + 0.03 * (1.0 - field)));
     }
 
     // Cook-Torrance BRDF
@@ -609,6 +624,7 @@ PSOutput PSMainMesh(PSInputMesh input)
     // Modulate direct light by shadow
     float shadow = CalculateShadow(input.worldPos, N);
     directLight *= shadow;
+    directLight *= grassDirectContact;
 
     // Backlighting translucency approximation
     if (translucency > 0.001) {
@@ -654,6 +670,7 @@ PSOutput PSMainMesh(PSInputMesh input)
         float3 envBack = (DiffuseAlbedo * irradianceBack) * (ao * kRasterAmbientScale);
         ambient += envBack * translucency;
     }
+    ambient = ambient * grassAmbientContact + grassSoilBounce;
     
     float3 color = directLight + ambient + emiss;
     
