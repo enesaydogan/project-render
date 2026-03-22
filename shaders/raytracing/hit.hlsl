@@ -258,7 +258,11 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     if (texMR >= 0) {
         float4 mrSample = triPlanar ? SampleTriPlanar(texMR, P, worldNormal, triScale, triSharp, textureLod, dominantTriPlanar)
                                     : textures[texMR].SampleLevel(linearSampler, uv, textureLod);
-        roughness *= mrSample.g; 
+          if ((matFlags & MATERIAL_FLAG_INVERT_ROUGHNESS) != 0) {
+              roughness *= max(1.0 - mrSample.g, 0.0);
+          } else {
+              roughness *= mrSample.g;
+          }
         metalness *= mrSample.b;
         SHADER_COUNTER_ADD(SHADER_COUNTER_TEXTURE_SAMPLES, 1);
     }

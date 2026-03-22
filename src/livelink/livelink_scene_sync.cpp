@@ -978,6 +978,7 @@ bool LiveLinkSceneSync::ApplyMaterialChanged(const SceneDeltaBatch &batch,
       (std::max)(0.0f, payload->triPlanarNormalStrength);
   material.doubleSided = payload->doubleSided;
   material.alphaMode = payload->alphaMode.empty() ? "OPAQUE" : payload->alphaMode;
+  material.invertRoughnessTexture = payload->invertRoughnessTexture;
   if (!payload->materialModel.empty()) {
     material.schemaVersion = Asset::Material::kSchemaVersionOpenPbrSubset;
   }

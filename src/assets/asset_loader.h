@@ -80,6 +80,7 @@ struct Material {
 
   bool doubleSided = false;
   std::string alphaMode = "OPAQUE";
+  bool invertRoughnessTexture = false;
 
   // Grass controls (UI driven).
   bool isGrass = false;

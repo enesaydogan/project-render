@@ -182,6 +182,7 @@ struct MaterialChangedPayload {
   float triPlanarNormalStrength = 1.0f;
   bool doubleSided = false;
   std::string alphaMode = "OPAQUE";
+  bool invertRoughnessTexture = false;
 };
 
 struct LightChangedPayload {
