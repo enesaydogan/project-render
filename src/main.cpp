@@ -178,52 +178,188 @@ static void AppendGrassBladesFromInstance(const Scene::Instance &inst,
   if (!inst.mesh)
     return;
   const Asset::GpuMesh &mesh = *inst.mesh;
-
-  const float minX = mesh.minBound[0];
-  const float minZ = mesh.minBound[2];
-  const float maxX = mesh.maxBound[0];
-  const float maxY = mesh.maxBound[1];
-  const float maxZ = mesh.maxBound[2];
-
-  const float width = (std::max)(maxX - minX, 0.01f);
-  const float depth = (std::max)(maxZ - minZ, 0.01f);
-  const float area = (std::max)(width * depth, 0.01f);
-
   const float density = (std::clamp)(grassMat.grassBladeCount, 0.0f, 256.0f);
   if (density <= 0.0f) {
     return;
   }
-  const int computedCount = (int)std::round(area * density);
+  const float baseSize = (std::clamp)(grassMat.grassBladeSize, 0.05f, 5.0f);
+  const float variation =
+      (std::clamp)(grassMat.grassBladeVariation, 0.0f, 1.0f);
+  const float densityCompensation =
+      (std::clamp)(0.6f / baseSize, 1.0f, 6.0f);
+
+  struct GrassTriangle {
+    DirectX::XMFLOAT3 p0;
+    DirectX::XMFLOAT3 p1;
+    DirectX::XMFLOAT3 p2;
+    DirectX::XMFLOAT3 n0;
+    DirectX::XMFLOAT3 n1;
+    DirectX::XMFLOAT3 n2;
+    float weight = 0.0f;
+  };
+
+  std::vector<GrassTriangle> triangles;
+  triangles.reserve(mesh.cpuIndices.size() / 3);
+  float weightedArea = 0.0f;
+
+  if (!mesh.cpuVertices.empty() && mesh.cpuIndices.size() >= 3) {
+    const DirectX::XMVECTOR worldUp =
+        DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+    for (size_t tri = 0; tri + 2 < mesh.cpuIndices.size(); tri += 3) {
+      const uint32_t i0 = mesh.cpuIndices[tri];
+      const uint32_t i1 = mesh.cpuIndices[tri + 1];
+      const uint32_t i2 = mesh.cpuIndices[tri + 2];
+      if (i0 >= mesh.cpuVertices.size() || i1 >= mesh.cpuVertices.size() ||
+          i2 >= mesh.cpuVertices.size()) {
+        continue;
+      }
+
+      const auto &v0 = mesh.cpuVertices[i0];
+      const auto &v1 = mesh.cpuVertices[i1];
+      const auto &v2 = mesh.cpuVertices[i2];
+
+      const DirectX::XMVECTOR p0 = DirectX::XMVector3TransformCoord(
+          DirectX::XMLoadFloat3(reinterpret_cast<const DirectX::XMFLOAT3 *>(v0.pos)),
+          inst.transform);
+      const DirectX::XMVECTOR p1 = DirectX::XMVector3TransformCoord(
+          DirectX::XMLoadFloat3(reinterpret_cast<const DirectX::XMFLOAT3 *>(v1.pos)),
+          inst.transform);
+      const DirectX::XMVECTOR p2 = DirectX::XMVector3TransformCoord(
+          DirectX::XMLoadFloat3(reinterpret_cast<const DirectX::XMFLOAT3 *>(v2.pos)),
+          inst.transform);
+
+      const DirectX::XMVECTOR e0 = DirectX::XMVectorSubtract(p1, p0);
+      const DirectX::XMVECTOR e1 = DirectX::XMVectorSubtract(p2, p0);
+      const DirectX::XMVECTOR faceNormal = DirectX::XMVector3Cross(e0, e1);
+      const float area =
+          0.5f * DirectX::XMVectorGetX(DirectX::XMVector3Length(faceNormal));
+      if (area <= 1e-6f) {
+        continue;
+      }
+
+      const DirectX::XMVECTOR normalWorld = DirectX::XMVector3Normalize(faceNormal);
+      const float upDot =
+          DirectX::XMVectorGetX(DirectX::XMVector3Dot(normalWorld, worldUp));
+      if (upDot <= 0.15f) {
+        continue;
+      }
+
+      GrassTriangle gt = {};
+      DirectX::XMStoreFloat3(&gt.p0, p0);
+      DirectX::XMStoreFloat3(&gt.p1, p1);
+      DirectX::XMStoreFloat3(&gt.p2, p2);
+
+      const DirectX::XMVECTOR n0 = DirectX::XMVector3Normalize(
+          DirectX::XMVector3TransformNormal(
+              DirectX::XMLoadFloat3(reinterpret_cast<const DirectX::XMFLOAT3 *>(v0.normal)),
+              inst.transform));
+      const DirectX::XMVECTOR n1 = DirectX::XMVector3Normalize(
+          DirectX::XMVector3TransformNormal(
+              DirectX::XMLoadFloat3(reinterpret_cast<const DirectX::XMFLOAT3 *>(v1.normal)),
+              inst.transform));
+      const DirectX::XMVECTOR n2 = DirectX::XMVector3Normalize(
+          DirectX::XMVector3TransformNormal(
+              DirectX::XMLoadFloat3(reinterpret_cast<const DirectX::XMFLOAT3 *>(v2.normal)),
+              inst.transform));
+      DirectX::XMStoreFloat3(&gt.n0, n0);
+      DirectX::XMStoreFloat3(&gt.n1, n1);
+      DirectX::XMStoreFloat3(&gt.n2, n2);
+
+      const float slopeWeight = (upDot - 0.15f) / 0.85f;
+      gt.weight = area * (std::clamp)(slopeWeight, 0.0f, 1.0f);
+      if (gt.weight <= 1e-6f) {
+        continue;
+      }
+      weightedArea += gt.weight;
+      triangles.push_back(gt);
+    }
+  }
+
+  if (triangles.empty()) {
+    const float minX = mesh.minBound[0];
+    const float minZ = mesh.minBound[2];
+    const float maxX = mesh.maxBound[0];
+    const float maxY = mesh.maxBound[1];
+    const float maxZ = mesh.maxBound[2];
+    const float width = (std::max)(maxX - minX, 0.01f);
+    const float depth = (std::max)(maxZ - minZ, 0.01f);
+    weightedArea = (std::max)(width * depth, 0.01f);
+  }
+
+  const int computedCount =
+      (int)std::round((std::max)(weightedArea, 0.01f) * density *
+                      densityCompensation);
   const int bladeCount = std::clamp((std::max)(1, computedCount), 1, 16384);
   if (bladeCount <= 0) {
     return;
   }
 
-  DirectX::XMVECTOR upWorld = DirectX::XMVector3TransformNormal(
-      DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f), inst.transform);
-  if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(upWorld)) < 1e-8f) {
-    upWorld = DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
-  }
-  upWorld = DirectX::XMVector3Normalize(upWorld);
-  DirectX::XMFLOAT3 normal;
-  DirectX::XMStoreFloat3(&normal, upWorld);
-
   for (int i = 0; i < bladeCount; ++i) {
     const uint32_t baseSeed = sourceMeshId * 0x9e3779b9U + (uint32_t)i;
-    const float u = Hash01(baseSeed ^ 0x3c6ef372U);
-    const float v = Hash01(baseSeed ^ 0xa54ff53aU);
-    const float localX = minX + width * u;
-    const float localZ = minZ + depth * v;
-    const float localY = maxY + 0.02f;
+    DirectX::XMFLOAT3 position = {};
+    DirectX::XMFLOAT3 normal = {0.0f, 1.0f, 0.0f};
 
-    DirectX::XMVECTOR worldPos = DirectX::XMVector3TransformCoord(
-        DirectX::XMVectorSet(localX, localY, localZ, 1.0f), inst.transform);
+    if (!triangles.empty()) {
+      const float triPick = Hash01(baseSeed ^ 0x3c6ef372U) * weightedArea;
+      float accum = 0.0f;
+      const GrassTriangle *chosen = &triangles.back();
+      for (const auto &tri : triangles) {
+        accum += tri.weight;
+        if (triPick <= accum) {
+          chosen = &tri;
+          break;
+        }
+      }
+
+      const float u = Hash01(baseSeed ^ 0xa54ff53aU);
+      const float v = Hash01(baseSeed ^ 0x7f4a7c15U);
+      const float su = std::sqrt(u);
+      const float b0 = 1.0f - su;
+      const float b1 = su * (1.0f - v);
+      const float b2 = su * v;
+
+      position.x = chosen->p0.x * b0 + chosen->p1.x * b1 + chosen->p2.x * b2;
+      position.y = chosen->p0.y * b0 + chosen->p1.y * b1 + chosen->p2.y * b2;
+      position.z = chosen->p0.z * b0 + chosen->p1.z * b1 + chosen->p2.z * b2;
+      normal.x = chosen->n0.x * b0 + chosen->n1.x * b1 + chosen->n2.x * b2;
+      normal.y = chosen->n0.y * b0 + chosen->n1.y * b1 + chosen->n2.y * b2;
+      normal.z = chosen->n0.z * b0 + chosen->n1.z * b1 + chosen->n2.z * b2;
+
+      DirectX::XMVECTOR n = DirectX::XMVector3Normalize(
+          DirectX::XMLoadFloat3(&normal));
+      DirectX::XMStoreFloat3(&normal, n);
+      position.x += normal.x * 0.0025f;
+      position.y += normal.y * 0.0025f;
+      position.z += normal.z * 0.0025f;
+    } else {
+      const float minX = mesh.minBound[0];
+      const float minZ = mesh.minBound[2];
+      const float maxX = mesh.maxBound[0];
+      const float maxY = mesh.maxBound[1];
+      const float maxZ = mesh.maxBound[2];
+      const float width = (std::max)(maxX - minX, 0.01f);
+      const float depth = (std::max)(maxZ - minZ, 0.01f);
+      const float u = Hash01(baseSeed ^ 0x3c6ef372U);
+      const float v = Hash01(baseSeed ^ 0xa54ff53aU);
+      const float localX = minX + width * u;
+      const float localZ = minZ + depth * v;
+      const float localY = maxY;
+
+      DirectX::XMVECTOR worldPos = DirectX::XMVector3TransformCoord(
+          DirectX::XMVectorSet(localX, localY, localZ, 1.0f), inst.transform);
+      DirectX::XMStoreFloat3(&position, worldPos);
+
+      DirectX::XMVECTOR upWorld = DirectX::XMVector3TransformNormal(
+          DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f), inst.transform);
+      if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(upWorld)) < 1e-8f) {
+        upWorld = DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+      }
+      upWorld = DirectX::XMVector3Normalize(upWorld);
+      DirectX::XMStoreFloat3(&normal, upWorld);
+    }
 
     FGrassBlade blade = {};
-    DirectX::XMStoreFloat3(&blade.position, worldPos);
-    const float baseSize = (std::clamp)(grassMat.grassBladeSize, 0.05f, 5.0f);
-    const float variation =
-        (std::clamp)(grassMat.grassBladeVariation, 0.0f, 1.0f);
+    blade.position = position;
     const float randScale = 0.75f + 0.5f * Hash01(baseSeed ^ 0x1f123bb5U);
     blade.scale = baseSize * (1.0f + (randScale - 1.0f) * variation);
     blade.normal = normal;
