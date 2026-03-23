@@ -109,6 +109,8 @@ int FindMaterialByName(const std::string &name);
 bool GetMaterial(size_t index, Asset::Material *outMaterial);
 bool RebindNodeMaterialSlot(size_t nodeIndex, size_t materialSlot,
                             int materialIndex);
+bool UpdateNodeMaterialSourceName(size_t nodeIndex, size_t materialSlot,
+                                  const std::string &materialName);
 bool UpdateMaterial(size_t index, const Asset::Material &material);
 void BeginBatchedUpdates();
 void EndBatchedUpdates();

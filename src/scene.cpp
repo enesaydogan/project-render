@@ -1335,6 +1335,29 @@ bool RebindNodeMaterialSlot(size_t nodeIndex, size_t materialSlot,
   return true;
 }
 
+bool UpdateNodeMaterialSourceName(size_t nodeIndex, size_t materialSlot,
+                                  const std::string &materialName) {
+  if (nodeIndex >= s_nodes.size()) {
+    return false;
+  }
+
+  Node &node = s_nodes[nodeIndex];
+  if (materialSlot >= node.linkedMaterialIndices.size()) {
+    return false;
+  }
+
+  if (node.linkedMaterialSourceNames.size() < node.linkedMaterialIndices.size()) {
+    node.linkedMaterialSourceNames.resize(node.linkedMaterialIndices.size());
+  }
+
+  if (node.linkedMaterialSourceNames[materialSlot] == materialName) {
+    return true;
+  }
+
+  node.linkedMaterialSourceNames[materialSlot] = materialName;
+  return true;
+}
+
 bool UpdateMaterial(size_t index, const Asset::Material &material) {
   if (index >= g_loadedMaterials.size()) {
     return false;

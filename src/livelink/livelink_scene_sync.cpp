@@ -881,23 +881,54 @@ bool LiveLinkSceneSync::ApplyMaterialChanged(const SceneDeltaBatch &batch,
     return false;
   }
 
-  auto rebindReference = [&](const std::string &nodeObjectIdValue,
-                             int materialSlotValue) {
-    if (nodeObjectIdValue.empty()) {
-      return;
+  const std::string materialName = ResolveMaterialDisplayName(delta, payload);
+
+  auto resolveReference = [&](const std::string &nodeObjectIdValue,
+                              int materialSlotValue, size_t *outNodeIndex,
+                              size_t *outMaterialSlot) {
+    if (!outNodeIndex || !outMaterialSlot || nodeObjectIdValue.empty()) {
+      return false;
     }
+
     ObjectId nodeObjectId = delta.target;
     nodeObjectId.objectId = nodeObjectIdValue;
     nodeObjectId.objectType = ObjectType::Node;
     const ObjectBinding *nodeBinding = FindBinding(nodeObjectId);
     if (!nodeBinding || nodeBinding->handleKind != EngineHandleKind::SceneNode ||
         nodeBinding->handleIndex >= Scene::GetNodes().size()) {
-      return;
+      return false;
     }
+
     const size_t materialSlot =
         static_cast<size_t>((std::max)(0, materialSlotValue));
-    Scene::RebindNodeMaterialSlot(nodeBinding->handleIndex, materialSlot,
+    *outNodeIndex = nodeBinding->handleIndex;
+    *outMaterialSlot = materialSlot;
+    return true;
+  };
+
+  auto rebindReference = [&](const std::string &nodeObjectIdValue,
+                             int materialSlotValue) {
+    size_t nodeIndex = kInvalidHandle;
+    size_t materialSlot = 0;
+    if (!resolveReference(nodeObjectIdValue, materialSlotValue, &nodeIndex,
+                          &materialSlot)) {
+      return;
+    }
+
+    Scene::RebindNodeMaterialSlot(nodeIndex, materialSlot,
                                   static_cast<int>(binding->handleIndex));
+  };
+
+  auto updateReferenceName = [&](const std::string &nodeObjectIdValue,
+                                 int materialSlotValue) {
+    size_t nodeIndex = kInvalidHandle;
+    size_t materialSlot = 0;
+    if (!resolveReference(nodeObjectIdValue, materialSlotValue, &nodeIndex,
+                          &materialSlot)) {
+      return;
+    }
+
+    Scene::UpdateNodeMaterialSourceName(nodeIndex, materialSlot, materialName);
   };
 
   if (!payload->references.empty()) {
@@ -983,13 +1014,20 @@ bool LiveLinkSceneSync::ApplyMaterialChanged(const SceneDeltaBatch &batch,
     material.schemaVersion = Asset::Material::kSchemaVersionOpenPbrSubset;
   }
 
-  const std::string materialName = ResolveMaterialDisplayName(delta, payload);
   strncpy_s(material.name, materialName.c_str(), _TRUNCATE);
 
   if (!Scene::UpdateMaterial(binding->handleIndex, material)) {
     LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
                   "Failed to apply material change");
     return false;
+  }
+
+  if (!payload->references.empty()) {
+    for (const MaterialNodeReference &reference : payload->references) {
+      updateReferenceName(reference.nodeObjectId, reference.materialSlot);
+    }
+  } else if (!payload->nodeObjectId.empty()) {
+    updateReferenceName(payload->nodeObjectId, payload->materialSlot);
   }
 
   binding->lastAppliedRevision = delta.revision;
