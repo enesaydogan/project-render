@@ -17,7 +17,8 @@ namespace {
 
 using json = nlohmann::json;
 
-constexpr const char *kDefaultProviderName = "3dsMax2025Pipe";
+constexpr const char *kDefaultProviderName = "NamedPipeLiveLink";
+constexpr const char *kDefaultPipeName = "project-render-livelink";
 
 std::string MakePipePath(const std::string &pipeName) {
   if (pipeName.rfind(R"(\\.\pipe\)", 0) == 0) {
@@ -411,9 +412,12 @@ struct NamedPipeLiveLinkProvider::Impl {
   std::string readBuffer;
 };
 
-NamedPipeLiveLinkProvider::NamedPipeLiveLinkProvider(std::string pipeName)
-    : m_pipeName(pipeName.empty() ? "project-render-max-livelink" : std::move(pipeName)),
-      m_providerName(kDefaultProviderName), m_impl(new Impl()) {}
+NamedPipeLiveLinkProvider::NamedPipeLiveLinkProvider(std::string pipeName,
+                                                     std::string providerName)
+    : m_pipeName(pipeName.empty() ? kDefaultPipeName : std::move(pipeName)),
+      m_providerName(providerName.empty() ? kDefaultProviderName
+                                          : std::move(providerName)),
+      m_impl(new Impl()) {}
 
 NamedPipeLiveLinkProvider::~NamedPipeLiveLinkProvider() {
   Disconnect();

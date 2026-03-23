@@ -5,9 +5,17 @@
 }
 
 'STR#' 32500 "Menu Description" {
-    "Window"
+    "Project Render"
     "project-render LiveLink"
-      "Start"
-      "Start Full Sync"
-      "Stop"
+      "Start Session^ES^EE^EI^E3^ED^EW^EL"
+      "Sync Scene Now^ES^EE^EI^E3^ED^EW^EL"
+      "Stop Session^ES^EE^EI^E3^ED^EW^EL"
+}
+
+'STR#' 32600 "Menu Prompt Strings" {
+    "Project Render"
+    "project-render LiveLink"
+      "Start project-render LiveLink session"
+      "Send the current Archicad scene to project-render now"
+      "Stop project-render LiveLink session"
 }

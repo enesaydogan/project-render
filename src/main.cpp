@@ -1718,8 +1718,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   std::string customGltfPath;
   std::string sceneToLoad;
   bool enableMockLiveLink = false;
-  bool enableMaxLiveLinkPipe = false;
+  bool autoConnectMaxLiveLinkPipe = false;
+  bool autoConnectArchicadLiveLinkPipe = false;
   std::string maxLiveLinkPipeName = "project-render-max-livelink";
+  std::string archicadLiveLinkPipeName = "project-render-archicad-livelink";
 
   // window handle (Qt path will obtain from widget, Win32 path from CreateWindow)
   HWND hwnd = nullptr;
@@ -1748,13 +1750,29 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       } else if (token == "--mock-livelink") {
         enableMockLiveLink = true;
       } else if (token == "--max-livelink-pipe") {
-        enableMaxLiveLinkPipe = true;
+        autoConnectMaxLiveLinkPipe = true;
         if (iss.good()) {
           std::streampos rewindPos = iss.tellg();
           std::string nextToken;
           if (iss >> nextToken) {
             if (!nextToken.empty() && nextToken[0] != '-') {
               maxLiveLinkPipeName = nextToken;
+            } else if (rewindPos != std::streampos(-1)) {
+              iss.clear();
+              iss.seekg(rewindPos);
+            }
+          } else {
+            iss.clear();
+          }
+        }
+      } else if (token == "--archicad-livelink-pipe") {
+        autoConnectArchicadLiveLinkPipe = true;
+        if (iss.good()) {
+          std::streampos rewindPos = iss.tellg();
+          std::string nextToken;
+          if (iss >> nextToken) {
+            if (!nextToken.empty() && nextToken[0] != '-') {
+              archicadLiveLinkPipeName = nextToken;
             } else if (rewindPos != std::streampos(-1)) {
               iss.clear();
               iss.seekg(rewindPos);
@@ -1894,11 +1912,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   }
 
   try {
-    auto provider =
-        std::make_unique<LiveLink::NamedPipeLiveLinkProvider>(maxLiveLinkPipeName);
+    auto provider = std::make_unique<LiveLink::NamedPipeLiveLinkProvider>(
+        maxLiveLinkPipeName, "3dsMax2025Pipe");
     const auto providerId =
         LiveLink::GetCoordinator().RegisterProvider(std::move(provider));
-    if (enableMaxLiveLinkPipe) {
+    if (autoConnectMaxLiveLinkPipe) {
       if (LiveLink::GetCoordinator().ConnectProvider(providerId)) {
         fprintf(stderr,
                 "Startup: max live-link pipe enabled (--max-livelink-pipe %s)\n",
@@ -1911,6 +1929,27 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   } catch (const std::exception &e) {
     fprintf(stderr,
             "Startup: failed to initialize max live-link pipe provider: %s\n",
+            e.what());
+  }
+
+  try {
+    auto provider = std::make_unique<LiveLink::NamedPipeLiveLinkProvider>(
+        archicadLiveLinkPipeName, "Archicad28Pipe");
+    const auto providerId =
+        LiveLink::GetCoordinator().RegisterProvider(std::move(provider));
+    if (autoConnectArchicadLiveLinkPipe) {
+      if (LiveLink::GetCoordinator().ConnectProvider(providerId)) {
+        fprintf(stderr,
+                "Startup: archicad live-link pipe enabled (--archicad-livelink-pipe %s)\n",
+                archicadLiveLinkPipeName.c_str());
+      } else {
+        fprintf(stderr,
+                "Startup: failed to connect archicad live-link pipe provider\n");
+      }
+    }
+  } catch (const std::exception &e) {
+    fprintf(stderr,
+            "Startup: failed to initialize archicad live-link pipe provider: %s\n",
             e.what());
   }
 

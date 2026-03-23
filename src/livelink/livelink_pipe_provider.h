@@ -8,7 +8,8 @@ namespace LiveLink {
 
 class NamedPipeLiveLinkProvider : public ILiveLinkProvider {
 public:
-  explicit NamedPipeLiveLinkProvider(std::string pipeName);
+  explicit NamedPipeLiveLinkProvider(std::string pipeName,
+                                     std::string providerName = {});
   ~NamedPipeLiveLinkProvider() override;
 
   std::string GetProviderName() const override;
