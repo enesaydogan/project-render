@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+	 viewBox="0 0 36 24" style="enable-background:new 0 0 36 24;" xml:space="preserve">
+<style type="text/css">
+	.st0{fill:#FAFAFA;stroke:#92989B;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:10;}
+	.st1{fill:#FAFAFA;stroke:#263238;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:10;}
+	.st2{fill:none;stroke:#263238;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:10;}
+</style>
+<g>
+	<g>
+		<g>
+			<path class="st0" d="M17.5,4.7l9.4-1.1c0.4,0,0.6,0.2,0.6,0.6v9.7c0,0.4-0.3,0.7-0.6,0.8l-9.4,3.1"/>
+			<path class="st1" d="M17.5,17.9l-7.4,2.5c-0.3,0.1-0.6-0.1-0.6-0.4V6.2l0,0c0-0.4,0.4-0.7,0.7-0.7l7.3-0.8"/>
+		</g>
+	</g>
+</g>
+<g>
+	<line class="st2" x1="17.5" y1="5" x2="17.5" y2="17.5"/>
+</g>
+</svg>

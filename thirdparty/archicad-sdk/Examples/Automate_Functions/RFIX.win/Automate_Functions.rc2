@@ -1,0 +1,9 @@
+/* *****************************************************************************
+// Resource description for the Automate Functions Add-On
+// ****************************************************************************/
+
+#include "Automate_Functions.grc.rc2"
+#include "Automate_FunctionsFix.grc.rc2"
+
+
+1		ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

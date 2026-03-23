@@ -1,0 +1,27 @@
+﻿/* *****************************************************************************
+// Localizable resource description for the FormatRegisterTest Add-On
+// ****************************************************************************/
+
+#include "Resources.hpp"
+
+'STR#' FORMATREGISTER_ADDONINFO_STR_ID "Add-on Name and Description" {
+/* [  1] */		"FormatRegisterTest"
+/* [  2] */		"FormatRegisterTest Add-On"
+}
+
+
+'GDLG'  FORMATOPTION_DIALOG_ID  Modal | noGrow     300  300  280  80  "Format Option Dialog" {
+/* [  1] */ Button			  195   46   70   24	LargePlain  "OK"
+/* [  2] */ Button			  110   46   70   24	LargePlain  "Cancel"
+/* [  3] */ LeftText		   15   10  120   21	LargePlain	vCenter	"Publish with Translator:"
+/* [  4] */ PopupControl	  140    9  125   23	100  3
+/* [  5] */ Separator		   15   38  250    2
+}
+
+'DLGH'  FORMATOPTION_DIALOG_ID DLG_Format_Option_Dialog {
+1	""							Button_0
+2	""							Button_1
+3	""							LeftText_0
+4	""							PopupControl_0
+5	""							CheckBox_0
+}

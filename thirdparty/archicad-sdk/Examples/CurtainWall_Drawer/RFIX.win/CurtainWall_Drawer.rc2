@@ -1,0 +1,8 @@
+/* *****************************************************************************
+// Resource description for the CurtainWall_Drawer Add-On
+// ****************************************************************************/
+
+#include "CurtainWall_Drawer.grc.rc2"
+#include "CurtainWall_DrawerFix.grc.rc2"
+
+1	ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

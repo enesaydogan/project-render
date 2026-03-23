@@ -1,0 +1,64 @@
+﻿// *****************************************************************************
+// Localizable resource description for the SSA Test Add-On
+// *****************************************************************************
+
+#include "ProtectionTestResIDs.hpp"
+
+/* Add-On Information */
+
+'STR#' PROTECTIONTEST_ABOUT_STRINGSID "Menu strings" {
+/* [  1] */		"Protection Test"
+/* [  2] */		"API Test Add-On"
+}
+
+/* Text appearing in the menu */
+
+'STR#' PROTECTIONTEST_MENU_STRINGSID "Menu strings" {
+/* [   ] */		"Test"
+/* [   ] */		"Protection test"
+/* [  1] */			"Forward-only command"
+/* [  2] */			"Partner ID dependent command"
+/* [  3] */			"Display protection info"
+}
+
+
+'STR#' PROTECTIONTEST_PROMPT_STRINGSID "Prompt strings" {
+/* [   ] */		"Test"
+/* [   ] */		"Protection test"
+/* [  1] */			"Test command requiring a Forward subscription"
+/* [  2] */			"Test command requiring a certain partner ID"
+/* [  3] */			"Displays protection info"
+}
+
+
+
+/* Preprocessor directive for the GRC compiler
+	-- should appear before the first dialog/palette */
+
+/* Localizable dialog resource(s) with the accompanying help resource(s) */
+
+'GALR' PROTECTIONTEST_ALERT_COMMAND_OK_RESID Information "Protection Test Command Result" {
+/* largeText */		"Command successful"
+/* smallText */		""
+/* button1   */     "OK"
+/* button2   */		""
+/* button3   */		""
+}
+
+'GALR' PROTECTIONTEST_ALERT_COMMAND_ERROR_RESID Error "Protection Test Command Result" {
+/* largeText */		"Command failed"
+/* smallText */		""
+/* button1   */     "OK"
+/* button2   */		""
+/* button3   */		""
+}
+
+'GALR' PROTECTIONTEST_ALERT_PROTECTION_INFO_RESID Information "Protection information" {
+/* largeText */		""
+/* smallText */		"IsNetworkLicense: %s\nSerialNumber: %s\nAuthorized to use Add-On: %s"
+/* button1   */     "OK"
+/* button2   */		""
+/* button3   */		""
+}
+
+

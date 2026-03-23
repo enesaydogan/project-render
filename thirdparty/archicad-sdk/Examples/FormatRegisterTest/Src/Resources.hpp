@@ -1,0 +1,8 @@
+#if !defined (RESOURCES_HPP)
+#define RESOURCES_HPP
+
+#define	FORMATREGISTER_ADDONINFO_STR_ID		32000	//'STR#'
+
+#define	FORMATOPTION_DIALOG_ID				32500	//'GDLG'
+
+#endif

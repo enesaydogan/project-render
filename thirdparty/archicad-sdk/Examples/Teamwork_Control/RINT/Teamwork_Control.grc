@@ -1,0 +1,105 @@
+﻿/* *****************************************************************************
+// Localizable resource description for the Teamwork Control Add-On
+// ****************************************************************************/
+
+#include "TWControlResourceIds.hpp"
+
+'STR#' ADD_ON_STRINGS_RES_ID "Add-on Name and Description" {
+/* [  1] */		"Teamwork Control"
+/* [  2] */		"API Test Add-on"
+}
+
+
+/* Text appearing in the menu
+	-- same as the name of the folder without underscore(s) */
+
+'STR#' TEAMWORK_CONTROL_MENU_STRINGS_RES_ID "Strings for the Menu" {
+/* [   ] */		"Test"
+/* [   ] */		"Teamwork Control"
+/* [  1] */			"Reserve/Release Layer Settings^E3^ES^EE^ED^EW^EL"
+/* [  2] */			"Reserve/Release Line Types^E3^ES^EE^ED^EW^EL"
+/* [  3] */			"Reserve/Release Fill Types^E3^ES^EE^ED^EW^EL"
+/* [  4] */			"Reserve/Release Composites^E3^ES^EE^ED^EW^EL"
+/* [  5] */			"Reserve/Release Pen Sets^E3^ES^EE^ED^EW^EL"
+/* [  6] */			"Reserve/Release Surfaces^E3^ES^EE^ED^EW^EL"
+/* [  7] */			"Reserve/Release Building Materials^E3^ES^EE^ED^EW^EL"
+/* [  8] */			"Reserve/Release Zone Categories^E3^ES^EE^ED^EW^EL"
+/* [  9] */			"Reserve/Release Issue Tags^E3^ES^EE^ED^EW^EL"
+/* [ 10] */			"Reserve/Release Profiles^E3^ES^EE^ED^EW^EL"
+/* [ 11] */			"Reserve/Release Favorites^E3^ES^EE^ED^EW^EL"
+/* [ 12] */			"Reserve/Release Classifications and Properties^E3^ES^EE^ED^EW^EL"
+/* [ 13] */			"Reserve/Release MEP Systems^E3^ES^EE^ED^EW^EL"
+/* [ 14] */			"Reserve/Release Model View Options^E3^ES^EE^ED^EW^EL"
+/* [ 15] */			"Reserve/Release Operation Profiles^E3^ES^EE^ED^EW^EL"
+/* [ 16] */			"Reserve/Release Project Info^E3^ES^EE^ED^EW^EL"
+/* [ 17] */			"Reserve/Release Preferences Dialog^E3^ES^EE^ED^EW^EL"
+/* [ 18] */			"Reserve/Release Project Library List^E3^ES^EE^ED^EW^EL"
+/* [ 19] */			"Reserve/Release Graphic Overrides List^E3^ES^EE^ED^EW^EL"
+/* [ 20] */			"-"
+/* [ 21] */			"Reserve Selected Elements^S^E3^ES^EE^ED^EW^EL"
+/* [ 22] */			"Release Selected Elements^S^E3^ES^EE^ED^EW^EL"
+/* [ 23] */			"Reserve Selected Elements Silently^S^E3^ES^EE^ED^EW^EL"
+/* [ 24] */			"Release Selected Elements Silently^S^E3^ES^EE^ED^EW^EL"
+/* [ 25] */			"-"
+/* [ 26] */			"Watch Reservation of Selected Elements^E3^ES^EE^ED^EW^EL"
+/* [ 27] */			"Watch Attribute Reservation^E3^ES^EE^ED^EW^EL"
+/* [ 28] */			"-"
+/* [ 29] */			"Reserve/Release Embedded Library Folder^E3^ES^EE^ED^EW^EL"
+/* [ 30] */			"-"
+/* [ 31] */			"Receive Changes^E3^ES^EE^ED^EW^EL"
+/* [ 32] */			"Send Changes^E3^ES^EE^ED^EW^EL"
+}
+
+
+'STR#' TEAMWORK_CONTROL_STATUS_BAR_STRINGS_RES_ID "Status Bar Strings for the Menu" {
+/* [   ] */		"Test"
+/* [   ] */		"Teamwork Control functions"
+/* [  1] */			"Reserves or Releases Layer Settings."
+/* [  2] */			"Reserves or Releases Line Types."
+/* [  3] */			"Reserves or Releases Fill Types."
+/* [  4] */			"Reserves or Releases Composites."
+/* [  5] */			"Reserves or Releases Pen Sets."
+/* [  6] */			"Reserves or Releases Surfaces."
+/* [  7] */			"Reserves or Releases Building Materials."
+/* [  8] */			"Reserves or Releases Zone Categories."
+/* [  9] */			"Reserves or Releases Issue Tags."
+/* [ 10] */			"Reserves or Releases Profiles."
+/* [ 11] */			"Reserves or Releases Favorites."
+/* [ 12] */			"Reserves or Releases Classifications and Properties."
+/* [ 13] */			"Reserves or Releases MEP Systems."
+/* [ 14] */			"Reserves or Releases Model View Options."
+/* [ 15] */			"Reserves or Releases Operation Profiles."
+/* [ 16] */			"Reserves or Releases Project Info."
+/* [ 17] */			"Reserves or Releases Preferences Dialog."
+/* [ 18] */			"Reserves or Releases Project Library List."
+/* [ 19] */			"Reserves or Releases Graphic Overrides."
+/* [ 20] */			"-"
+/* [ 21] */			"Reserves the Selected Elements."
+/* [ 22] */			"Releases the Selected Elements."
+/* [ 23] */			"Reserves the Selected Elements silently."
+/* [ 24] */			"Releases the Selected Elements silently."
+/* [ 25] */			"-"
+/* [ 26] */			"Watches the Reservation of currently Selected Elements, and tries to Reserve them when they become free."
+/* [ 27] */			"Watches the Reservation of Layer Settings, Line Types, Fills, Composites and Surfaces, and tries to Reserve them when they become free."
+/* [ 28] */			"-"
+/* [ 29] */			"Reserve/Release Embedded Library Folder"
+/* [ 30] */			"-"
+/* [ 31] */			"Executes Receive changes command."
+/* [ 32] */			"Executes Send changes command."
+}
+
+'STR#' EMBEDDED_LIBRARY_MENU_STRINGS_RES_ID "Strings for the Menu" {
+/* [   ] */		"Test"
+/* [   ] */		"Teamwork Control - Embedded Library Utility"
+/* [  1] */			"Create Embedded Library Parts into a New Folder^E3^ES^EE^ED^EW^EL"
+/* [  2] */			"Delete Embedded Library Part^E3^ES^EE^ED^EW^EL"
+/* [  3] */			"Delete Embedded Library Parts^E3^ES^EE^ED^EW^EL"
+}
+
+
+'STR#' EMBEDDED_LIBRARY_STATUS_BAR_STRINGS_RES_ID "Status Bar Strings for the Menu" {
+/* [   ] */		"Test"
+/* [   ] */		"Teamwork Control - Embedded Library Utility functions"
+/* [  1] */			"Create Embedded Library Part"
+/* [  2] */			"Delete Embedded Library Part"
+}

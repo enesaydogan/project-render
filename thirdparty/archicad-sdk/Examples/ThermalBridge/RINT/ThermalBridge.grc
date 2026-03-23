@@ -1,0 +1,20 @@
+﻿'STR#' 32000 "Add-on Name and Description" {
+/* [  1] */		"Thermal Bridge"
+/* [  2] */		"Thermal Bridge Add-On"
+}
+
+'STR#' 32300 "Add-on Strings" {
+/* [  1] */		"OK"			/* This is a dummy string to be localized.*/
+}
+
+'STR#' 32500 "Menu Description" {
+/* [   ] */		"Test"
+/* [   ] */		"Thermal Bridge"
+/* [  1] */		"Dump Thermal Bridge"
+}
+
+'STR#' 32600 "Menu Prompt Strings" {
+/* [   ] */		"Test"
+/* [   ] */		"Thermal Bridge"
+/* [  1] */		"Dump Thermal Bridge"
+}

@@ -1,0 +1,52 @@
+﻿/* *****************************************************************************
+// Localizable resource description for the CurtainWall_Drawer Add-On
+// ****************************************************************************/
+
+'STR#' 32000 "Add-on Name and Description" {
+/* [  1] */		"Curtain Wall Drawer"
+/* [  2] */		"Add-On for drawing or modifying Curtain Walls with lines"
+}
+
+'STR#' 32500 "Menu strings" {
+/* [   ] */		"Curtain Wall Drawer"
+/* [  1] */			"Create Curtain Wall from Selection^S^10000"
+/* [  2] */			"Modify Curtain Wall from Selection^S^10000"
+/* [  3] */			"-"
+/* [  4] */			"Create Hatch and Lines from Curtain Wall^S^10000"
+/* [  5] */			"Modify Hatch and Lines from Curtain Wall^S^10000"
+/* [  6] */			"-"
+/* [  7] */			"Select Line Type ID"
+}
+
+
+'STR#' 33000 "Undoable command" {
+/* [  1] */		"Create Curtain Wall from Selection"
+/* [  2] */		"Modify Curtain Wall from Selection"
+/* [  3] */		"Create Hatch and Lines from Curtain Wall"
+/* [  4] */		"Modify Hatch and Lines from Curtain Wall"
+}
+
+'STR#' 33500 "Error messages" {
+/* [  1] */		"Please select a hatch (and any lines from inside)"
+/* [  2] */		"Please select a curtain wall"
+/* [  3] */		"Please select a hatch (and any lines from inside) and a curtain wall"
+/* [  4] */		"Nothing to modify"
+}
+
+'GDLG'  32500  Modal        40   40  360  120  "Select Line Type" {
+/* [  1] */ Button				  155   87   90   23	LargePlain  "OK"
+/* [  2] */ Button				  255   87   90   23	LargePlain  "Cancel"
+/* [  3] */ LeftText			   15   10  135   28	LargePlain  vCenter  "Basic Line Type:"
+/* [  4] */ LeftText			   15   45  135   28	LargePlain  vCenter  "Hidden Line Type:"
+/* [  5] */ PushCheck			  155   10  190   28	LargePlain  ""
+/* [  6] */ PushCheck			  155   45  190   28	LargePlain  ""
+}
+
+'DLGH'  32500  DLG_32500 {
+1	"OK Button"					Button_0
+2	"Cancel Button"				Button_1
+3	"Basic Line Type Label"		LeftText_0
+4	"Hidden Line Type Label"	LeftText_1
+5	""							PushCheck_0
+6	""							PushCheck_1
+}

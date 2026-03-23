@@ -1,0 +1,139 @@
+﻿/* *****************************************************************************
+// Localizable resource description for the MEP_Test Add-On
+// ****************************************************************************/
+
+#include "Resources.hpp"
+
+'STR#' 32000 "Add-on Name and Description" {
+/* [  1] */		"MEP_Test"
+/* [  2] */		"MEP_Test Add-On"
+}
+
+'STR#' 32500 "Menu Description" {
+/* [   ] */		"Test"
+/* [   ] */		"New MEP"
+/* [  1] */		"Place MEP Elements based on current defaults^E3^ES^EE"
+/* [  2] */		"Place a copy of selected Terminals^E3^ES^EE"
+/* [  3] */		"-"
+/* [  4] */		"Place and connect two continuous Routing Elements^E3^ES^EE"
+/* [  5] */		"Place and connect two Routing Elements in a T shape^E3^ES^EE"
+/* [  6] */		"Place and connect three Routing Elements in a T shape^E3^ES^EE"
+/* [  7] */		"Place and connect two MEP Elements to a Routing Element^E3^ES^EE"
+/* [  8] */		"Place and connect Routing Elements with Tee and Cross^E3^ES^EE"
+/* [  9] */		"Place and connect two Routing Elements with Accessory^E3^ES^EE"
+/* [ 10] */		"Place polyline FlexibleSegments^E3^ES^EE"
+/* [ 11] */		"-"
+/* [ 12] */		"Query details of selected MEP Elements^E3^ES^EE"
+/* [ 13] */		"Query details of Branch defaults^E3^ES^EE"
+/* [ 14] */		"-"
+/* [ 15] */		"Modify selected Branches and their ports^E3^ES^EE"
+/* [ 16] */		"Modify selected Routing Elements^E3^ES^EE"
+/* [ 17] */		"Modify selected Flexible Segments^E3^ES^EE"
+/* [ 18] */		"Modify Selected Take-off^E3^ES^EE"
+/* [ 19] */		"Modify (shift and reorient) selected MEP Elements^E3^ES^EE"
+/* [ 20] */		"Modify Selected Element General Parameters^E3^ES^EE"
+/* [ 21] */		"Modify Selected Pipe Fitting GDL Parameters^E3^ES^EE"
+/* [ 22] */		"Modify Selected Routing Element GDL Parameters^E3^ES^EE"
+/* [ 23] */		"Modify Pipe Fitting Default Parameters^E3^ES^EE"
+/* [ 24] */		"Modify Routing Element Default Parameters^E3^ES^EE"
+/* [ 25] */		"Modify Library Part of Selected Pipe Terminal^E3^ES^EE"
+/* [ 26] */		"Modify Library Part of Default Pipe Terminal Then Place^E3^ES^EE"
+/* [ 27] */		"Modify Library Part of Selected Cable Carrier Route's First Rigid Segment^E3^ES^EE"
+/* [ 28] */		"Modify Library Part of Selected Cable Carrier Route's Default Rigid Segment^E3^ES^EE"
+/* [ 29] */		"Modify Library Part of Default Cable Carrier Route's Rigid Segment^E3^ES^EE"
+/* [ 30] */		"-"
+/* [ 31] */		"Delete selected MEP and Routing Elements^E3^ES^EE"
+/* [ 32] */		"-"
+/* [ 33] */		"List details of MEP Preferences^E3^ES^EE"
+/* [ 34] */		"Modify Duct Segment Preferences^E3^ES^EE"
+/* [ 35] */		"Modify Pipe Elbow Preferences^E3^ES^EE"
+/* [ 36] */		"Modify Pipe Branch Preferences^E3^ES^EE"
+/* [ 37] */		"Modify Duct Transition Preferences^E3^ES^EE"
+/* [ 38] */		"Modify Pipe Reference Set^E3^ES^EE"
+/* [ 39] */		"-"
+/* [ 40] */		"Create element set from selected Elements^E3^ES^EE"
+/* [ 41] */		"Create links between selected Elements^E3^ES^EE"
+/* [ 42] */		"Label Subelements of Selected Routing Elements^E3^ES^EE"
+/* [ 43] */		"Label Selected MEP Elements^E3^ES^EE"
+/* [ 44] */		"DistributionSystemsGraph: Label connections in graph^E3^ES^EE"
+/* [ 45] */		"GraphCalculationInterface: Test registration and use of interface^E3^ES^EE"
+}
+
+'STR#' 32600 "Menu Prompt Strings" {
+/* [   ] */		"Test"
+/* [   ] */		"New MEP"
+/* [  1] */		"Place MEP Elements based on current defaults"
+/* [  2] */		"Place a copy of selected Terminals"
+/* [  3] */		"-"
+/* [  4] */		"Place and connect two continuous Routing Elements"
+/* [  5] */		"Place and connect two Routing Elements in a T shape"
+/* [  6] */		"Place and connect three Routing Elements in a T shape"
+/* [  7] */		"Place and connect two MEP Elements to a Routing Element"
+/* [  8] */		"Place and connect Routing Elements with Tee and Cross"
+/* [  9] */		"Place and connect two Routing Elements with Accessory"
+/* [ 10] */		"Place polyline FlexibleSegments"
+/* [ 11] */		"-"
+/* [ 12] */		"Query details of selected MEP Elements"
+/* [ 13] */		"Query details of Branch defaults"
+/* [ 14] */		"-"
+/* [ 15] */		"Modify selected Branches and their ports"
+/* [ 16] */		"Modify selected Routing Elements"
+/* [ 17] */		"Modify selected Flexible Segments"
+/* [ 18] */		"Modify Selected Take-off"
+/* [ 19] */		"Modify (shift and reorient) selected MEP Elements"
+/* [ 20] */		"Modify Selected Element General Parameters"
+/* [ 21] */		"Modify Selected Pipe Fitting GDL Parameters"
+/* [ 22] */		"Modify Selected Routing Element GDL Parameters"
+/* [ 23] */		"Modify Pipe Fitting Default Parameters"
+/* [ 24] */		"Modify Routing Element Default Parameters"
+/* [ 25] */		"Modify Library Part of Selected Pipe Terminal"
+/* [ 26] */		"Modify Library Part of Default Pipe Terminal Then Place"
+/* [ 27] */		"Modify Library Part of Selected Cable Carrier Route's First Rigid Segment"
+/* [ 28] */		"Modify Library Part of Selected Cable Carrier Route's Default Rigid Segment"
+/* [ 29] */		"Modify Library Part of Default Cable Carrier Route's Rigid Segment"
+/* [ 30] */		"-"
+/* [ 31] */		"Delete selected MEP and Routing Elements"
+/* [ 32] */		"-"
+/* [ 33] */		"List details of MEP Preferences"
+/* [ 34] */		"Modify Duct Segment Preferences"
+/* [ 35] */		"Modify Pipe Elbow Preferences"
+/* [ 36] */		"Modify Pipe Branch Preferences"
+/* [ 37] */		"Modify Pipe Reference Set"
+/* [ 38] */		"-"
+/* [ 39] */		"Create element set from selected Elements"
+/* [ 40] */		"Create links between selected Elements"
+/* [ 41] */		"Label Subelements of Selected Routing Elements"
+/* [ 42] */		"Label Selected MEP Elements"
+/* [ 43] */		"DistributionSystemsGraph: Label connections in graph"
+/* [ 44] */		"GraphCalculationInterface: Test registration and use of interface"
+}
+
+'STR#' IDS_SETTINGSPAGE_NAME "MEP test settings page" {
+/* [  1] */		"MEP test settings page"
+}
+
+'GDLG'  SettingsPageId  TabPage 0    0   444	152		"MEP test settings page" {
+/* [  1] */ LeftText            0    8   110	16		LargePlain  vCenter  "Diameter:"
+/* [  2] */ MMInchEdit		  120    8   70		23		LargePlain  "0" "1e5"
+/* [  3] */ LeftText            0   38   110	16		LargePlain  vCenter  "Custom Text:"
+/* [  4] */ TextEdit		  120   38   70		23		LargePlain  255
+/* [  5] */ LeftText            0   68   110	16		LargePlain  vCenter  "Custom Value:"
+/* [  6] */ RealEdit		  120   68   70		23		LargePlain  noFrame  ""  ""
+/* [  7] */ LeftText            0   98   110	16		LargePlain  vCenter  "Perimeter:"
+/* [  8] */ MMInchEdit		  120   98   70		23		LargePlain  "0" "1e5"
+/* [  9] */ LeftText            0   128  110	16		LargePlain  vCenter  "Cross Section Area:"
+/* [  10] */ AreaEdit		  120   128  70		23		LargePlain  "0" "1e5"
+}
+
+'DLGH'  SettingsPageId  DLG_SettingsPageId_MEP_test_settings_page {
+1	""							LeftText_0
+2	""							MMInchEdit_0
+3	""							LeftText_1
+4	""							TextEdit_0
+5	""							LeftText_2
+6	""							RealEdit_0
+7	""							LeftText_3
+8	""							MMInchEdit_1
+9	""							LeftText_4
+10	""							AreaEdit_0
+}

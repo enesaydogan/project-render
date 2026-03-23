@@ -1,0 +1,58 @@
+﻿/* *****************************************************************************
+// Description:		Localizable resource description for the Issue Manager Add-On
+// ****************************************************************************/
+
+
+'STR#' 32000 "Add-on Name and Description" {
+/* [  1] */		"Issue Manager Test AddOn"
+/* [  2] */		"API Test Add-on"
+}
+
+
+'STR#' 32500 "Strings for the Menu" {
+/* [   ] */		"Test"
+/* [   ] */		"Issue Manager AddOn"
+/* [  1] */			"Create Test Issue^ES^EE^EI^ED^EW^EL^E3^ET"
+/* [  2] */			"Delete Test Issue (Accept pending modifications)^ES^EE^EI^ED^EW^EL^E3^ET"
+/* [  3] */			"Delete Test Issue (Cancel pending modifications)^ES^EE^EI^ED^EW^EL^E3^ET"
+/* [  4] */			"-"
+/* [  5] */			"Add Selected Elements to Test Issue as Creation^ES^EE^EI^ED^EW^EL^E3^ET"
+/* [  6] */			"Add Selected Elements to Test Issue as Highlight^ES^EE^EI^ED^EW^EL^E3^ET"
+/* [  7] */			"Add Selected Elements to Test Issue as Deletion^ES^EE^EI^ED^EW^EL^E3^ET"
+/* [  8] */			"Add Selected Elements to Test Issue as Modification (new elements will be created as modified elements)^ES^EE^EI^ED^EW^EL^E3^ET"
+/* [  9] */			"Add Selected Elements to Test Issue as Modification Pairs^ES^EE^EI^ED^EW^EL^E3^ET"
+/* [ 10] */			"Remove Selected Elements from Test Issue^ES^EE^EI^ED^EW^EL^E3^ET"
+/* [ 11] */			"-"
+/* [ 12] */			"Add Comment to Test Issue^ES^EE^EI^ED^EW^EL^E3^ET"
+/* [ 13] */			"Dump Test Issue^ES^EE^EI^ED^EW^EL^E3^ET"
+/* [ 14] */			"Dump Issue Info for Selected Elements^ES^EE^EI^ED^EW^EL^E3^ET"
+/* [ 15] */			"Zoom to the Elements of Test Issue^ES^EE^EI^ED^EW^EL^E3^ET"
+/* [ 16] */			"-"
+/* [ 17] */			"Import BCFFile and open Issue Palette^ES^EE^EI^ED^EW^EL^E3^ET"
+/* [ 18] */			"Import BCFFile in Silent Mode^ES^EE^EI^ED^EW^EL^E3^ET"
+/* [ 19] */			"Export BCFFile^ES^EE^EI^ED^EW^EL^E3^ET"
+}
+
+'STR#' 32510 "Menu prompt strings for Menu 32500" {
+/* [   ] */		""
+/* [   ] */		""
+/* [  1] */		"Creates Issue with name - Test Issue -"
+/* [  2] */		"Deletes Issue with name - Test Issue -  (Accept pending modifications)"
+/* [  3] */		"Deletes Issue with name - Test Issue -  (Cancel pending modifications)"
+/* [  4] */		""
+/* [  5] */		"Adds selected elements as creation to the Issue named - Test Issue -"
+/* [  6] */		"Adds selected elements as highlight to the Issue named - Test Issue -"
+/* [  7] */		"Adds selected elements as deletion to the Issue named - Test Issue -"
+/* [  8] */		"Adds selected elements as modification to the Issue named - Test Issue -"
+/* [  9] */		"Adds selected elements as modification pairs to the Issue named - Test Issue -"
+/* [ 10] */		"Removes selected elements from the Issue named - Test Issue -"
+/* [ 11] */		""
+/* [ 12] */		"Adds Comment to the Issue named - Test Issue -"
+/* [ 13] */		"Dumps data of Issue named - Test Issue -"
+/* [ 14] */		"Dumps data of all Issues associated with the selected elements"
+/* [ 15] */		"Zooms to the elements associated with the Issue named - Test Issue -"
+/* [ 16] */		""
+/* [ 17] */		"Import BCF File Silent Mode False and showing BCF Palette - Test Issue -"
+/* [ 18] */		"Import BCF File Silent Mode True  - Test Issue -"
+/* [ 19] */		"Export BCF File - Test Issue -"
+}

@@ -1,0 +1,18 @@
+﻿/* *****************************************************************************
+// Localizable resource description for the Action Center Example Add-On
+// ****************************************************************************/
+
+/* Text appearing in the menu */
+
+#include "ResourceIDs.hpp"
+
+'STR#' ID_ADDON_INFO "Add-on Name and Description" {
+/* [  1] */		"Action Center"
+/* [  2] */		"API examples for Action Center usability"
+}
+
+'STR#' ID_MENU_STRINGS "Strings for the Menu" {
+/* [   ] */		"Test"
+/* [   ] */		"Action Center"
+/* [  1] */			"Check hotlinks^E3^ES^EE^EI^ED^EL^EW^ET^EM"
+}

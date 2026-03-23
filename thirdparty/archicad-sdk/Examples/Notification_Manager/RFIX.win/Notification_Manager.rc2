@@ -1,0 +1,9 @@
+/* *****************************************************************************
+// Resource description for the Notification Manager Add-On
+// ****************************************************************************/
+
+#include "Notification_Manager.grc.rc2"
+#include "Notification_ManagerFix.grc.rc2"
+
+
+1		ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

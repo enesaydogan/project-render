@@ -1,0 +1,105 @@
+﻿/* *****************************************************************************
+// Localizable resource description for the ModulData Manager Add-On
+// ****************************************************************************/
+
+'STR#' 32000 "Add-on Name and Description" {
+/* [  1] */		"AddOnObject Manager"
+/* [  2] */		"API Test Add-on"
+}
+
+
+/* Text appearing in the menu
+	-- same as the name of the folder without underscore(s) */
+
+'STR#' 32500 "Strings for the Menu" {
+/* [   ] */		"Test"
+/* [   ] */		"AddOnObject Manager"
+/* [  1] */			"Manage Customer Data..."
+/* [  2] */			"Manage Client Only Data..."
+}
+
+'STR#' 32501 "Strings for AddOnObject" {
+/* [  1] */		"Customer Information"
+/* [  2] */		"Settings 1"
+/* [  3] */		"Settings 2"
+/* [  4] */		"Settings 3"
+/* [  5] */		"Settings 4"
+/* [  6] */		"Settings 5"
+}
+
+/* Localizable dialog resource(s) with the accompanying help resource(s) */
+
+'GDLG' 32500  Modal			 40	   0  504  400		"Customer Manager" {
+/* [  1] */ Button			412  370   70   24		LargePlain	"OK"
+/* [  2] */ Button			332  370   70   24		LargePlain	"Cancel"
+
+/* [  3] */ SingleSelList	 12   42  492  120		SmallPlain  NoPartialItems  16
+/* [  4] */ LeftText		 12   12  220   20      SmallPlain  vCenter  "\"Customer Information\" (non-unique)"
+/* [  5] */ Button			252   10   70   24		LargePlain	"New"
+/* [  6] */ Button			332   10   70   24		LargePlain	"Modify"
+/* [  7] */ Button			412   10   70   24		LargePlain	"Delete"
+
+/* [  8] */ Button			 12  163   70   24		LargePlain	"Reserve"
+/* [  9] */ Button			 92  163   70   24		LargePlain	"Release"
+/* [ 10] */ SplitButton		172  163   70   24		LargePlain	NoIcon "Grant"
+/* [ 11] */ Button			252  163   70   24		LargePlain	"Request"
+
+/* [ 12] */ Separator		 12  195  492    2
+
+/* [ 13] */ SingleSelList	 12  240  492  120		SmallPlain  NoPartialItems  16
+/* [ 14] */ LeftText		 12  210  150   20      SmallPlain  vCenter  "Unique settings"
+/* [ 15] */ SplitButton		252  208   70   24		LargePlain	NoIcon "New"
+/* [ 16] */ Button			332  208   70   24		LargePlain	"Modify"
+/* [ 17] */ Button			412  208   70   24		LargePlain	"Delete"
+
+/* [ 18] */ Button			 12  370   70   24		LargePlain	"Reserve"
+/* [ 19] */ Button			 92  370   70   24		LargePlain	"Release"
+/* [ 20] */ SplitButton		172  370   70   24		LargePlain	NoIcon "Grant"
+/* [ 21] */ Button			252  370   70   24		LargePlain	"Request"
+}
+
+'DLGH'  32500  DLG_32500_AddOnObject_Manager {
+1	""							Button_0
+2	""							Button_1
+3	""							SingleSelListBox_0
+4	""							LeftText_0
+5	""							Button_2
+6	""							Button_3
+7	""							Button_4
+8	""							Button_5
+9	""							Button_6
+10	""							Button_7
+11	""							Button_8
+12	""							Separator_0
+13	""							SingleSelListBox_1
+14	""							LeftText_1
+15	""							Button_9
+16	""							Button_10
+17	""							Button_11
+18	""							Button_12
+19	""							Button_13
+20	""							Button_14
+21	""							Button_15
+}
+
+'GDLG' 32502  Modal			 40	   0  504  200		"Client only objects Manager" {
+/* [  1] */ Button			412  168   70   24		LargePlain	"OK"
+/* [  2] */ Button			332  168   70   24		LargePlain	"Cancel"
+
+/* [  3] */ SingleSelList	 12   42  492  120		SmallPlain  NoPartialItems  16
+/* [  4] */ LeftText		 12   12  220   20      SmallPlain  vCenter  "\"Client Only objects Information\" "
+/* [  5] */ Button			252   10   70   24		LargePlain	"New"
+/* [  6] */ Button			332   10   70   24		LargePlain	"Modify"
+/* [  7] */ Button			412   10   70   24		LargePlain	"Delete"
+
+}
+
+'DLGH'  32502  DLG_32502_AddOnObject_Manager {
+1	""							Button_0
+2	""							Button_1
+3	""							SingleSelListBox_0
+4	""							LeftText_0
+5	""							Button_2
+6	""							Button_3
+7	""							Button_4
+}

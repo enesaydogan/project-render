@@ -1,0 +1,8 @@
+/* *****************************************************************************
+// Resource description for the StructuralAnalyticalModel_Test Add-On
+// ****************************************************************************/
+
+#include "StructuralAnalyticalModel_Test.grc.rc2"
+#include "StructuralAnalyticalModel_TestFix.grc.rc2"
+
+1	ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

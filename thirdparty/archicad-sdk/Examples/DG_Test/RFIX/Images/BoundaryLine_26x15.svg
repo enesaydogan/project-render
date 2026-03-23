@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+	 viewBox="0 0 26 15" style="enable-background:new 0 0 26 15;" xml:space="preserve">
+<style type="text/css">
+	.st0{fill:#263238;stroke:#92989B;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:10;}
+	.st1{fill:none;stroke:#92989B;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:10;}
+	.st2{fill:none;stroke:#263238;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:10;}
+	.st3{fill:#92989B;stroke:#263238;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:10;}
+</style>
+<path class="st0" d="M6.5,9.5"/>
+<polyline class="st1" points="0.5,13.5 0.5,14.5 1.5,14.5 "/>
+<line class="st1" x1="0.5" y1="4.5" x2="0.5" y2="5.5"/>
+<line class="st1" x1="6.5" y1="5.5" x2="6.5" y2="4.5"/>
+<path class="st2" d="M10.5,10.5"/>
+<line class="st2" x1="6.5" y1="14.5" x2="10.5" y2="10.5"/>
+<path class="st2" d="M6.5,9.5"/>
+<line class="st1" x1="6.5" y1="4.5" x2="7.5" y2="3.5"/>
+<line class="st1" x1="10.5" y1="1.5" x2="10.5" y2="0.5"/>
+<line class="st1" x1="3.5" y1="1.5" x2="4.5" y2="0.5"/>
+<line class="st1" x1="0.5" y1="4.5" x2="2" y2="3"/>
+<line class="st1" x1="8.5" y1="0.5" x2="10.5" y2="0.5"/>
+<path class="st3" d="M10.5,5.5"/>
+<path class="st3" d="M10.5,10.5"/>
+<path class="st1" d="M10.5,5.5"/>
+<line class="st1" x1="3.5" y1="14.5" x2="4.5" y2="14.5"/>
+<line class="st1" x1="0.5" y1="11.5" x2="0.5" y2="10.5"/>
+<line class="st1" x1="0.5" y1="4.5" x2="2.5" y2="4.5"/>
+<line class="st1" x1="4.5" y1="4.5" x2="6.5" y2="4.5"/>
+<line class="st1" x1="0.5" y1="8.5" x2="0.5" y2="7.5"/>
+<line class="st1" x1="6.5" y1="9.5" x2="6.5" y2="7.5"/>
+<line class="st1" x1="1.5" y1="9.5" x2="2.5" y2="9.5"/>
+<line class="st1" x1="4.5" y1="9.5" x2="6.5" y2="9.5"/>
+<line class="st2" x1="10.5" y1="5.5" x2="6.5" y2="9.5"/>
+<line class="st1" x1="10.5" y1="5.5" x2="10.5" y2="3.5"/>
+<line class="st1" x1="9" y1="2" x2="10" y2="1"/>
+<line class="st1" x1="4.5" y1="0.5" x2="6.5" y2="0.5"/>
+<line class="st2" x1="6.5" y1="9.5" x2="6.5" y2="14.5"/>
+<line class="st2" x1="10.5" y1="10.5" x2="10.5" y2="5.5"/>
+<line class="st2" x1="25.5" y1="2.5" x2="15.5" y2="12.5"/>
+</svg>

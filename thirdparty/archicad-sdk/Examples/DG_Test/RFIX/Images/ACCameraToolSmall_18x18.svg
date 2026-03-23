@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+	 viewBox="0 0 18 18" style="enable-background:new 0 0 18 18;" xml:space="preserve">
+<style type="text/css">
+	.st0{fill:none;stroke:#263238;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:10;}
+</style>
+<g>
+	<g>
+		<path class="st0" d="M1.5,8.3c0,0.6,0.6,1.2,1.2,1.2h8.7c0.6,0,1.2-0.6,1.2-1.2V3.7c0-0.6-0.6-1.2-1.2-1.2H2.7
+			c-0.6,0-1.2,0.6-1.2,1.2V8.3z"/>
+	</g>
+	<line class="st0" x1="7.5" y1="9.5" x2="1.5" y2="15.5"/>
+	<line class="st0" x1="7.5" y1="9.5" x2="13.5" y2="15.5"/>
+	<line class="st0" x1="7.5" y1="9.5" x2="7.5" y2="15.5"/>
+	<polygon class="st0" points="16.5,9.5 12.5,6 16.5,2.5 	"/>
+</g>
+</svg>

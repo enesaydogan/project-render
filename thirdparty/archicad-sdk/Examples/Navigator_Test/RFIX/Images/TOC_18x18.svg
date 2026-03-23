@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+	 viewBox="0 0 18 18" enable-background="new 0 0 18 18" xml:space="preserve">
+<g>
+	<g>
+		<g>
+			<g>
+ <path fill="#ECECEC" d="M17.5,13.5c0,0.6-0.4,1-1,1h-15c-0.6,0-1-0.4-1-1v-10c0-0.6,0.4-1,1-1h15c0.6,0,1,0.4,1,1V13.5z"/>
+ <path fill="none" stroke="#263238" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" d="M17.5,13.5
+					c0,0.6-0.5,1-1,1h-15c-0.6,0-1-0.4-1-1v-10c0-0.5,0.4-1,1-1h15c0.5,0,1,0.5,1,1V13.5z"/>
+			</g>
+		</g>
+	</g>
+ <polygon fill="#263238" stroke="#263238" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" points="3.5,4.5
+		6.5,4.5 5,6.5 	"/>
+</g>
+<line fill="none" stroke="#263238" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" x1="6" y1="8.5" x2="3.5" y2="8.5"/>
+<line fill="none" stroke="#263238" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" x1="6" y1="10.5" x2="3.5" y2="10.5"/>
+<line fill="none" stroke="#263238" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" x1="6" y1="12.5" x2="3.5" y2="12.5"/>
+<line fill="none" stroke="#263238" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" x1="14.5" y1="12.5" x2="8.5" y2="12.5"/>
+<line fill="none" stroke="#263238" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" x1="14.5" y1="10.5" x2="8.5" y2="10.5"/>
+<line fill="none" stroke="#263238" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" x1="14.5" y1="8.5" x2="8.5" y2="8.5"/>
+</svg>

@@ -1,0 +1,8 @@
+/* *****************************************************************************
+// Resource description for the Database Control Add-On
+// ****************************************************************************/
+
+#include "Database_Control.grc.rc2"
+#include "Database_ControlFix.grc.rc2"
+
+1		ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

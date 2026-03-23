@@ -1,0 +1,10 @@
+/* *****************************************************************************
+// Description:		Resource description for the MarkUp Manager Add-On
+// ****************************************************************************/
+
+
+#include "MarkUp_Manager.grc.rc2"
+#include "MarkUp_ManagerFix.grc.rc2"
+
+
+1	ICON	LOADONCALL MOVEABLE IMPURE  ACAP.ico

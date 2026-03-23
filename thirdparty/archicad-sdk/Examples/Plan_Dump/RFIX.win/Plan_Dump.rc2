@@ -1,0 +1,9 @@
+/* *****************************************************************************
+// Resource description for the Plan Dump Add-On
+// ****************************************************************************/
+
+#include "Plan_Dump.grc.rc2"
+#include "Plan_DumpFix.grc.rc2"
+
+
+1		ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

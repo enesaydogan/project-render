@@ -1,0 +1,21 @@
+﻿/* *****************************************************************************
+// Localizable resource description for the TrackerManager_Test Add-On
+// ****************************************************************************/
+
+'STR#' 32000 "Add-on Name and Description" {
+/* [  1] */		"TrackerManager_Test"
+/* [  2] */		"TrackerManager_Test Add-On"
+}
+
+'STR#' 32500 "Menu Description" {
+/* [   ] */		"Test"
+/* [   ] */		"Tracker Manager"
+/* [  1] */			"Is the Main Tracker Visible?"
+}
+
+'STR#' 32600 "Menu Prompt Strings" {
+/* [   ] */		"Test"
+/* [   ] */		"Tracker Manager"
+/* [  1] */			"Is the Main Tracker Visible?"
+}
+

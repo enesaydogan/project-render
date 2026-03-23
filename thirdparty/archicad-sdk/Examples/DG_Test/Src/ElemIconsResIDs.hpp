@@ -1,0 +1,92 @@
+#ifndef _ELEMICON_RESIDS_HPP_
+#define _ELEMICON_RESIDS_HPP_
+
+#define ACWallToolLarge_IconId			10000
+#define ACWallToolSmall_IconId			10001
+#define ACDoorToolLarge_IconId			10002
+#define ACDoorToolSmall_IconId			10003
+#define ACWindowToolLarge_IconId		10004
+#define ACWindowToolSmall_IconId		10005
+#define ACColumnToolLarge_IconId		10006
+#define ACColumnToolSmall_IconId		10007
+#define ACBeamToolLarge_IconId			10008
+#define ACBeamToolSmall_IconId			10009
+#define ACSlabToolLarge_IconId			10010
+#define ACSlabToolSmall_IconId			10011
+#define ACStairToolLarge_IconId			10012
+#define ACStairToolSmall_IconId			10013
+#define ACRoofToolLarge_IconId			10014
+#define ACRoofToolSmall_IconId			10015
+#define ACShellToolLarge_IconId			10016
+#define ACShellToolSmall_IconId			10017
+#define ACSkylightToolLarge_IconId		10018
+#define ACSkylightToolSmall_IconId		10019
+#define ACCWToolLarge_IconId			10020
+#define ACCWToolSmall_IconId			10021
+#define ACMorphToolLarge_IconId			10022
+#define ACMorphToolSmall_IconId			10023
+#define ACObjectToolLarge_IconId		10024
+#define ACObjectToolSmall_IconId		10025
+#define ACZoneToolLarge_IconId			10026
+#define ACZoneToolSmall_IconId			10027
+#define ACMeshToolLarge_IconId			10028
+#define ACMeshToolSmall_IconId			10029
+
+#define ACLinDimToolLarge_IconId		10030
+#define ACLinDimToolSmall_IconId		10031
+#define ACLevelDimToolLarge_IconId		10032
+#define ACLevelDimToolSmall_IconId		10033
+#define ACTextToolLarge_IconId			10034
+#define ACTextToolSmall_IconId			10035
+#define ACLabelToolLarge_IconId			10036
+#define ACLabelToolSmall_IconId			10037
+#define ACFillToolLarge_IconId			10038
+#define ACFillToolSmall_IconId			10039
+#define ACLineToolLarge_IconId			10040
+#define ACLineToolSmall_IconId			10041
+#define ACCircleToolLarge_IconId		10042
+#define ACCircleToolSmall_IconId		10043
+#define ACPolylineToolLarge_IconId		10044
+#define ACPolylineToolSmall_IconId		10045
+#define ACDrawingToolLarge_IconId		10046
+#define ACDrawingToolSmall_IconId		10047
+#define ACSectionToolLarge_IconId		10048
+#define ACSectionToolSmall_IconId		10049
+#define ACElevationToolLarge_IconId		10050
+#define ACElevationToolSmall_IconId		10051
+#define ACIntElevToolLarge_IconId		10052
+#define ACIntElevToolSmall_IconId		10053
+#define ACWorksheetToolLarge_IconId		10054
+#define ACWorksheetToolSmall_IconId		10055
+#define ACDetailToolLarge_IconId		10056
+#define ACDetailToolSmall_IconId		10057
+#define ACChangeMarkerToolLarge_IconId	10058
+#define ACChangeMarkerToolSmall_IconId	10059
+
+#define ACGridToolLarge_IconId			10060
+#define ACGridToolSmall_IconId			10061
+#define ACWallendToolLarge_IconId		10062
+#define ACWallendToolSmall_IconId		10063
+#define ACCornerwindowToolLarge_IconId	10064
+#define ACCornerwindowToolSmall_IconId	10065
+#define ACLampToolLarge_IconId			10066
+#define ACLampToolSmall_IconId			10067
+#define ACRadDimToolLarge_IconId		10068
+#define ACRadDimToolSmall_IconId		10069
+#define ACAngDimToolLarge_IconId		10070
+#define ACAngDimToolSmall_IconId		10071
+#define ACSplineToolLarge_IconId		10072
+#define ACSplineToolSmall_IconId		10073
+#define ACHotspotToolLarge_IconId		10074
+#define ACHotspotToolSmall_IconId		10075
+#define ACFigureToolLarge_IconId		10076
+#define ACFigureToolSmall_IconId		10077
+#define ACCameraToolLarge_IconId		10078
+#define ACCameraToolSmall_IconId		10079
+
+#define ACArrowToolLarge_IconId			10080
+#define ACArrowToolSmall_IconId			10081
+#define ACMarqueeToolLarge_IconId		10082
+#define ACMarqueeToolSmall_IconId		10083
+
+#endif //_ELEMICON_RESIDS_HPP_

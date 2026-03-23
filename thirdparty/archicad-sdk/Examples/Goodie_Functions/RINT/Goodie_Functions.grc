@@ -1,0 +1,68 @@
+﻿/* *****************************************************************************
+// Localizable resource description for the Goodie Functions Add-On
+// ****************************************************************************/
+
+/* Add-On Information */
+
+'STR#' 32000 "Add-on Info strings" {
+/* [  1] */		"Goodie Functions"
+/* [  2] */		"API Test Add-On"
+}
+
+/* Text appearing in the menu */
+
+'STR#' 32500 "Menu strings" {
+/* [   ] */		"Test"
+/* [   ] */		"Goodie Functions"
+/* [  1] */			"Convert BMP to GIF"
+/* [  2] */			"Select topmost Slab"
+/* [  3] */			"Triangulate a Slab"
+/* [  4] */			"Approximate a Spline^EL"
+/* [  5] */			"Context dependent autotext^EL"
+/* [  6] */			"Dump autotexts^EL"
+/* [  7] */			"Set some autotexts^EL"
+/* [  8] */			"Create an autotext^EL"
+/* [  9] */			"Delete an autotext^EL"
+/* [ 10] */			"Get library part unID of element"
+/* [ 11] */			"-"
+/* [ 12] */			"JSON Test"
+/* [ 13] */			"-"
+/* [ 14] */			"Download Webpage"
+/* [ 15] */			"Download Webpage Async"
+/* [ 16] */			"Download Weather Data"
+/* [ 17] */			"Get NBS Token"
+/* [ 18] */			"-"
+/* [ 19] */			"Write test XML to the Desktop^ES^EE^EI^ED^EW^E3^EL"
+/* [ 20] */			"Read test XML from the Desktop^ES^EE^EI^ED^EW^E3^EL"
+/* [ 21] */			"Parse XML from a string^ES^EE^EI^ED^EW^E3^EL"
+/* [ 22] */			"-"
+/* [ 23] */			"Get Room Images^ES^EE^EI^ED^EW^E3^EL"
+}
+
+'STR#' 32520 "Prompt strings" {
+/* [   ] */		"Test"
+/* [   ] */		"Goodie Functions"
+/* [  1] */			"Convert BMP to GIF"
+/* [  2] */			"Select topmost Slab"
+/* [  3] */			"Triangulate a Slab"
+/* [  4] */			"Approximate a Spline"
+/* [  5] */			"Context dependent autotext"
+/* [  6] */			"Dump autotexts"
+/* [  7] */			"Set some autotexts"
+/* [  8] */			"Create an autotext"
+/* [  9] */			"Delete an autotext"
+/* [ 10] */			"Get library part unID of element"
+/* [ 11] */			"-"
+/* [ 12] */			"JSON Test"
+/* [ 13] */			"-"
+/* [ 14] */			"Download Webpage"
+/* [ 15] */			"Download Webpage Async"
+/* [ 16] */			"Download Weather Data"
+/* [ 17] */			"Get NBS Token"
+/* [ 18] */			"-"
+/* [ 19] */			"Write test XML to the Desktop"
+/* [ 20] */			"Read test XML from the Desktop"
+/* [ 21] */			"Parse XML from a string"
+/* [ 22] */			"-"
+/* [ 23] */			"Get Room Images"
+}

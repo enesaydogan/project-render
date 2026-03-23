@@ -1,0 +1,11 @@
+/* *****************************************************************************
+// Resource description for the Interface Functions Add-On
+// ****************************************************************************/
+
+#include "DGDefs.h"
+
+#include "Interface_Functions.grc.rc2"
+#include "Interface_FunctionsFix.grc.rc2"
+
+
+1	ICON	LOADONCALL MOVEABLE IMPURE  ACAP.ico

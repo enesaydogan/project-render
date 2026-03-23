@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+	 viewBox="0 0 36 24" style="enable-background:new 0 0 36 24;" xml:space="preserve">
+<style type="text/css">
+	.st0{fill:none;stroke:#263238;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:10;}
+	.st1{fill:#FAFAFA;}
+</style>
+<g>
+	<line id="XMLID_2_" class="st0" x1="12.5" y1="5.3" x2="12.5" y2="17.9"/>
+	<path class="st0" d="M16.5,6.1V19c0,0.4-0.2,0.6-0.4,0.5l-7.2-3.4c-0.2-0.2-0.4-0.5-0.4-0.9V5.1c0-0.4,0.2-0.6,0.4-0.6l7.2,0.9
+		C16.3,5.4,16.5,5.7,16.5,6.1L16.5,6.1z"/>
+	<line id="XMLID_1_" class="st0" x1="8.5" y1="10.4" x2="16.5" y2="12.8"/>
+</g>
+<g id="XMLID_705_">
+	<g>
+		<g id="XMLID_8_">
+			<path class="st1" d="M16.6,6.2c0-0.4,0.3-0.7,0.6-0.7l11.7-0.9c0.4,0,0.6,0.2,0.6,0.6v10.2c0,0.4-0.3,0.7-0.6,0.8l-11.8,3.2
+				c-0.3,0.1-0.6-0.1-0.6-0.5L16.6,6.2L16.6,6.2z"/>
+			<path class="st0" d="M16.5,6.2c0-0.4,0.4-0.7,0.7-0.7l11.7-0.9c0.4,0,0.6,0.2,0.6,0.6v10.2c0,0.4-0.3,0.7-0.6,0.8l-11.8,3.2
+				c-0.3,0.1-0.6-0.1-0.6-0.5L16.5,6.2L16.5,6.2z"/>
+		</g>
+	</g>
+</g>
+<line id="XMLID_704_" class="st0" x1="23.6" y1="17.1" x2="23.6" y2="5.6"/>
+<line id="XMLID_703_" class="st0" x1="16.5" y1="12.6" x2="29.5" y2="10.6"/>
+</svg>

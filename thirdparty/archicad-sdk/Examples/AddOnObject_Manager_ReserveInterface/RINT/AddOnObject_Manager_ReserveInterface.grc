@@ -1,0 +1,147 @@
+﻿/* *****************************************************************************
+// Localizable resource description for the ModulData Manager Add-On
+// ****************************************************************************/
+
+'STR#' 32000 "Add-on Name and Description" {
+/* [  1] */		"AddOnObject Manager ReserveInterface"
+/* [  2] */		"API Test Add-on"
+}
+
+
+/* Text appearing in the menu
+	-- same as the name of the folder without underscore(s) */
+
+'STR#' 32500 "Strings for the Menu" {
+/* [   ] */		"Test"
+/* [   ] */		"AddOnObject Manager ReserveInterface"
+/* [  1] */			"Manage Customer Data..."
+}
+
+'STR#' 32501 "Strings for AddOnObjects" {
+/* [  1] */		"Customer Information"
+/* [  2] */		"Settings 1"
+/* [  3] */		"Settings 2"
+/* [  4] */		"Settings 3"
+/* [  5] */		"Settings 4"
+/* [  6] */		"Settings 5"
+}
+
+/* Localizable dialog resource(s) with the accompanying help resource(s) */
+
+'GDLG' 32500  Modal			 40	   0  504  400		"Customer Manager (ReserveInterface)" {
+/* [  1] */ Button			412  370   70   24		LargePlain	"OK"
+/* [  2] */ Button			332  370   70   24		LargePlain	"Cancel"
+
+/* [  3] */ SingleSelList	 12   42  492  120		SmallPlain  NoPartialItems  16
+/* [  4] */ LeftText		 12   12  220   20      SmallPlain  vCenter  "\"Customer Information\" (non-unique)"
+/* [  5] */ Button			252   10   70   24		LargePlain	"New"
+/* [  6] */ Button			332   10   70   24		LargePlain	"Modify"
+/* [  7] */ Button			412   10   70   24		LargePlain	"Delete"
+
+/* [  8] */ Button			 12  163   70   24		LargePlain	"Reserve"
+/* [  9] */ Button			 92  163   70   24		LargePlain	"Release"
+/* [ 10] */ SplitButton		172  163   70   24		LargePlain	NoIcon "Grant"
+/* [ 11] */ Button			252  163   70   24		LargePlain	"Request"
+
+/* [ 12] */ Separator		 12  195  492    2
+
+/* [ 13] */ SingleSelList	 12  240  492  120		SmallPlain  NoPartialItems  16
+/* [ 14] */ LeftText		 12  210  150   20      SmallPlain  vCenter  "Unique settings"
+/* [ 15] */ SplitButton		252  208   70   24		LargePlain	NoIcon "New"
+/* [ 16] */ Button			332  208   70   24		LargePlain	"Modify"
+/* [ 17] */ Button			412  208   70   24		LargePlain	"Delete"
+
+/* [ 18] */ Button			 12  370   70   24		LargePlain	"Reserve"
+/* [ 19] */ Button			 92  370   70   24		LargePlain	"Release"
+/* [ 20] */ SplitButton		172  370   70   24		LargePlain	NoIcon "Grant"
+/* [ 21] */ Button			252  370   70   24		LargePlain	"Request"
+}
+
+'DLGH'  32500  DLG_32500_AddOnObject_Manager_ReserveInterface {
+1	""							Button_0
+2	""							Button_1
+3	""							SingleSelListBox_0
+4	""							LeftText_0
+5	""							Button_2
+6	""							Button_3
+7	""							Button_4
+8	""							Button_5
+9	""							Button_6
+10	""							Button_7
+11	""							Button_8
+12	""							Separator_0
+13	""							SingleSelListBox_1
+14	""							LeftText_1
+15	""							Button_9
+16	""							Button_10
+17	""							Button_11
+18	""							Button_12
+19	""							Button_13
+20	""							Button_14
+21	""							Button_15
+}
+
+/* Localizable dialog resource(s) with the accompanying help resource(s) */
+
+'GDLG' 32501  Modal			 40	   0  480  102		"Edit Customer" {
+/* [  1] */ Button			392   65   70   24		LargePlain	"OK"
+/* [  2] */ Button			312   65   70   24		LargePlain	"Cancel"
+/* [  3] */ LeftText		 12   12  250   22		SmallPlain	""
+/* [  4] */ Button			392   10   70   24		LargePlain	"Modify"
+/* [  5] */  SimpleTab		  7   40  460	50		noFrame
+													32502
+/* [  6] */ Separator		  5   40  460   2
+}
+
+'DLGH'  32501  DLG_32501_Edit_Customer {
+1	""							Button_0
+2	""							Button_1
+3	""							LeftText_0
+4	""							Button_2
+5	""							SimpleTab_1
+6	""							Separator_0
+}
+
+/* ------------------------------------------------------------------------ New Teamwork Dialogs Page */
+
+'GDLG'  32502  TabPage        0    0  460   50  "Teamwork Status" {
+/* [  1] */ Button				  306   24   70   24	LargePlain  "OK"
+/* [  2] */ Icon				    0   24   24   24	2701
+/* [  3] */ LeftText			   28   18  150   32	LargeBold  vCenter  "Free for Reservation"
+/* [  4] */ LeftText			   28   18  150   16	LargeBold  vCenter  "Reserved"
+/* [  5] */ Button				  386   24   70   24	LargePlain  "Cancel"
+/* [  6] */ LeftText			    0    0  180   16	LargePlain  vCenter  "Teamwork Status:"
+#ifdef WINDOWS
+/* [  7] */ Separator			  291    2    2   48
+/* [  8] */ LeftText			   28   34  150   16	LargePlain  vCenter | truncEnd  "You are Offline" /*comment text*/
+#else
+/* [  7] */ Separator			  293    2    2   48
+/* [  8] */ LeftText			   28   34  150   16	SmallPlain  vCenter | truncEnd  "You are Offline" /*comment text*/
+#endif
+/* [  9] */ Button				  203   24   80   24	LargePlain  "Reserve"
+#ifdef WINDOWS
+/* [ 10] */ SplitButton			  203   24   80   24	LargePlain  NoIcon  "Release"
+#else
+/* [ 10] */ SplitButton			  203   24   80   24	LargePlain  RoundedBevelEdge  NoIcon  "Release"
+#endif
+/* [ 11] */ Button				  203   25   80   24	LargePlain  "Request"
+}
+
+
+'DLGH'  32502  DLG_32502_Teamwork_Status {
+1	""							Button_0
+2	""							IconItem_0
+3	""							LeftText_0
+4	""							LeftText_1
+5	""							Button_1
+6	""							LeftText_2
+7	""							Separator_0
+8	""							LeftText_3
+9	""							Button_2
+10	""							SplitButton_0
+11	""							Button_3
+}
+
+'STR#' 32503 "Teamwork strings" {
+/* [  1] */		"Request: Please grant me AddOnObject Manager Reserver Interface."
+}

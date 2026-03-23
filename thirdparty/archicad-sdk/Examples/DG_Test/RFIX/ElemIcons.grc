@@ -1,0 +1,348 @@
+﻿/* *****************************************************************************
+// Non-localizable resource description for basic element icons
+// ****************************************************************************/
+
+#include "ElemIconsResIDs.hpp"
+
+
+'GICN' ACArrowToolLarge_IconId  "ACArrowToolLarge" {
+	"ACArrowToolLarge"
+}
+
+'GICN' ACArrowToolSmall_IconId  "ACArrowToolSmall" {
+	"ACArrowToolSmall"
+}
+
+'GICN' ACMarqueeToolLarge_IconId  "ACMarqueeToolLarge" {
+	"ACMarqueeToolLarge"
+}
+
+'GICN' ACMarqueeToolSmall_IconId  "ACMarqueeToolSmall" {
+	"ACMarqueeToolSmall"
+}
+
+// -------------------- Design --------------------
+
+'GICN' ACWallToolLarge_IconId  "ACWallToolLarge" {
+	"ACWallToolLarge"
+}
+
+'GICN' ACWallToolSmall_IconId  "ACWallToolSmall" {
+	"ACWallToolSmall"
+}
+
+'GICN' ACDoorToolLarge_IconId  "ACDoorToolLarge" {
+	"ACDoorToolLarge"
+}
+
+'GICN' ACDoorToolSmall_IconId  "ACDoorToolSmall" {
+	"ACDoorToolSmall"
+}
+
+'GICN' ACWindowToolLarge_IconId  "ACWindowToolLarge" {
+	"ACWindowToolLarge"
+}
+
+'GICN' ACWindowToolSmall_IconId  "ACWindowToolSmall" {
+	"ACWindowToolSmall"
+}
+
+'GICN' ACColumnToolLarge_IconId  "ACColumnToolLarge" {
+	"ACColumnToolLarge"
+}
+
+'GICN' ACColumnToolSmall_IconId  "ACColumnToolSmall" {
+	"ACColumnToolSmall"
+}
+
+'GICN' ACBeamToolLarge_IconId  "ACBeamToolLarge" {
+	"ACBeamToolLarge"
+}
+
+'GICN' ACBeamToolSmall_IconId  "ACBeamToolSmall" {
+	"ACBeamToolSmall"
+}
+
+'GICN' ACSlabToolLarge_IconId  "ACSlabToolLarge" {
+	"ACSlabToolLarge"
+}
+
+'GICN' ACSlabToolSmall_IconId  "ACSlabToolSmall" {
+	"ACSlabToolSmall"
+}
+
+'GICN' ACStairToolLarge_IconId  "ACStairToolLarge" {
+	"ACStairToolLarge"
+}
+
+'GICN' ACStairToolSmall_IconId  "ACStairToolSmall" {
+	"ACStairToolSmall"
+}
+
+'GICN' ACRoofToolLarge_IconId  "ACRoofToolLarge" {
+	"ACRoofToolLarge"
+}
+
+'GICN' ACRoofToolSmall_IconId  "ACRoofToolSmall" {
+	"ACRoofToolSmall"
+}
+
+'GICN' ACShellToolLarge_IconId  "ACShellToolLarge" {
+	"ACShellToolLarge"
+}
+
+'GICN' ACShellToolSmall_IconId  "ACShellToolSmall" {
+	"ACShellToolSmall"
+}
+
+'GICN' ACSkylightToolLarge_IconId  "ACSkylightToolLarge" {
+	"ACSkylightToolLarge"
+}
+
+'GICN' ACSkylightToolSmall_IconId  "ACSkylightToolSmall" {
+	"ACSkylightToolSmall"
+}
+
+'GICN' ACCWToolLarge_IconId  "ACCWToolLarge" {
+	"ACCWToolLarge"
+}
+
+'GICN' ACCWToolSmall_IconId  "ACCWToolSmall" {
+	"ACCWToolSmall"
+}
+
+'GICN' ACMorphToolLarge_IconId  "ACMorphToolLarge" {
+	"ACMorphToolLarge"
+}
+
+'GICN' ACMorphToolSmall_IconId  "ACMorphToolSmall" {
+	"ACMorphToolSmall"
+}
+
+'GICN' ACObjectToolLarge_IconId  "ACObjectToolLarge" {
+	"ACObjectToolLarge"
+}
+
+'GICN' ACObjectToolSmall_IconId  "ACObjectToolSmall" {
+	"ACObjectToolSmall"
+}
+
+'GICN' ACZoneToolLarge_IconId  "ACZoneToolLarge" {
+	"ACZoneToolLarge"
+}
+
+'GICN' ACZoneToolSmall_IconId  "ACZoneToolSmall" {
+	"ACZoneToolSmall"
+}
+
+'GICN' ACMeshToolLarge_IconId  "ACMeshToolLarge" {
+	"ACMeshToolLarge"
+}
+
+'GICN' ACMeshToolSmall_IconId  "ACMeshToolSmall" {
+	"ACMeshToolSmall"
+}
+
+// -------------------- Document --------------------
+
+'GICN' ACLinDimToolLarge_IconId  "ACLinDimToolLarge" {
+	"ACLinDimToolLarge"
+}
+
+'GICN' ACLinDimToolSmall_IconId  "ACLinDimToolSmall" {
+	"ACLinDimToolSmall"
+}
+
+'GICN' ACLevelDimToolLarge_IconId  "ACLevelDimToolLarge" {
+	"ACLevelDimToolLarge"
+}
+
+'GICN' ACLevelDimToolSmall_IconId  "ACLevelDimToolSmall" {
+	"ACLevelDimToolSmall"
+}
+
+'GICN' ACTextToolLarge_IconId  "ACTextToolLarge" {
+	"ACTextToolLarge"
+}
+
+'GICN' ACTextToolSmall_IconId  "ACTextToolSmall" {
+	"ACTextToolSmall"
+}
+
+'GICN' ACLabelToolLarge_IconId  "ACLabelToolLarge" {
+	"ACLabelToolLarge"
+}
+
+'GICN' ACLabelToolSmall_IconId  "ACLabelToolSmall" {
+	"ACLabelToolSmall"
+}
+
+'GICN' ACFillToolLarge_IconId  "ACFillToolLarge" {
+	"ACFillToolLarge"
+}
+
+'GICN' ACFillToolSmall_IconId  "ACFillToolSmall" {
+	"ACFillToolSmall"
+}
+
+'GICN' ACLineToolLarge_IconId  "ACLineToolLarge" {
+	"ACLineToolLarge"
+}
+
+'GICN' ACLineToolSmall_IconId  "ACLineToolSmall" {
+	"ACLineToolSmall"
+}
+
+'GICN' ACCircleToolLarge_IconId  "ACCircleToolLarge" {
+	"ACCircleToolLarge"
+}
+
+'GICN' ACCircleToolSmall_IconId  "ACCircleToolSmall" {
+	"ACCircleToolSmall"
+}
+
+'GICN' ACPolylineToolLarge_IconId  "ACPolylineToolLarge" {
+	"ACPolylineToolLarge"
+}
+
+'GICN' ACPolylineToolSmall_IconId  "ACPolylineToolSmall" {
+	"ACPolylineToolSmall"
+}
+
+'GICN' ACDrawingToolLarge_IconId  "ACDrawingToolLarge" {
+	"ACDrawingToolLarge"
+}
+
+'GICN' ACDrawingToolSmall_IconId  "ACDrawingToolSmall" {
+	"ACDrawingToolSmall"
+}
+
+'GICN' ACSectionToolLarge_IconId  "ACSectionToolLarge" {
+	"ACSectionToolLarge"
+}
+
+'GICN' ACSectionToolSmall_IconId  "ACSectionToolSmall" {
+	"ACSectionToolSmall"
+}
+
+'GICN' ACElevationToolLarge_IconId  "ACElevationToolLarge" {
+	"ACElevationToolLarge"
+}
+
+'GICN' ACElevationToolSmall_IconId  "ACElevationToolSmall" {
+	"ACElevationToolSmall"
+}
+
+'GICN' ACIntElevToolLarge_IconId  "ACIntElevToolLarge" {
+	"ACIntElevToolLarge"
+}
+
+'GICN' ACIntElevToolSmall_IconId  "ACIntElevToolSmall" {
+	"ACIntElevToolSmall"
+}
+
+'GICN' ACWorksheetToolLarge_IconId  "ACWorksheetToolLarge" {
+	"ACWorksheetToolLarge"
+}
+
+'GICN' ACWorksheetToolSmall_IconId  "ACWorksheetToolSmall" {
+	"ACWorksheetToolSmall"
+}
+
+'GICN' ACDetailToolLarge_IconId  "ACDetailToolLarge" {
+	"ACDetailToolLarge"
+}
+
+'GICN' ACDetailToolSmall_IconId  "ACDetailToolSmall" {
+	"ACDetailToolSmall"
+}
+
+'GICN' ACChangeMarkerToolLarge_IconId  "ACChangeMarkerToolLarge" {
+	"ACChangeMarkerToolLarge"
+}
+
+'GICN' ACChangeMarkerToolSmall_IconId  "ACChangeMarkerToolSmall" {
+	"ACChangeMarkerToolSmall"
+}
+
+// -------------------- More --------------------
+
+'GICN' ACGridToolLarge_IconId  "ACGridToolLarge" {
+	"ACGridToolLarge"
+}
+
+'GICN' ACGridToolSmall_IconId  "ACGridToolSmall" {
+	"ACGridToolSmall"
+}
+
+'GICN' ACWallendToolLarge_IconId  "ACWallendToolLarge" {
+	"ACWallendToolLarge"
+}
+
+'GICN' ACWallendToolSmall_IconId  "ACWallendToolSmall" {
+	"ACWallendToolSmall"
+}
+
+'GICN' ACCornerwindowToolLarge_IconId  "ACCornerwindowToolLarge" {
+	"ACCornerwindowToolLarge"
+}
+
+'GICN' ACCornerwindowToolSmall_IconId  "ACCornerwindowToolSmall" {
+	"ACCornerwindowToolSmall"
+}
+
+'GICN' ACLampToolLarge_IconId  "ACLampToolLarge" {
+	"ACLampToolLarge"
+}
+
+'GICN' ACLampToolSmall_IconId  "ACLampToolSmall" {
+	"ACLampToolSmall"
+}
+
+'GICN' ACRadDimToolLarge_IconId  "ACRadDimToolLarge" {
+	"ACRadDimToolLarge"
+}
+
+'GICN' ACRadDimToolSmall_IconId  "ACRadDimToolSmall" {
+	"ACRadDimToolSmall"
+}
+
+'GICN' ACAngDimToolLarge_IconId  "ACAngDimToolLarge" {
+	"ACAngDimToolLarge"
+}
+
+'GICN' ACAngDimToolSmall_IconId  "ACAngDimToolSmall" {
+	"ACAngDimToolSmall"
+}
+
+'GICN' ACSplineToolLarge_IconId  "ACSplineToolLarge" {
+	"ACSplineToolLarge"
+}
+
+'GICN' ACSplineToolSmall_IconId  "ACSplineToolSmall" {
+	"ACSplineToolSmall"
+}
+
+'GICN' ACHotspotToolLarge_IconId  "ACHotspotToolLarge" {
+	"ACHotspotToolLarge"
+}
+
+'GICN' ACHotspotToolSmall_IconId  "ACHotspotToolSmall" {
+	"ACHotspotToolSmall"
+}
+
+'GICN' ACFigureToolLarge_IconId  "ACFigureToolLarge" {
+	"ACFigureToolLarge"
+}
+
+'GICN' ACFigureToolSmall_IconId  "ACFigureToolSmall" {
+	"ACFigureToolSmall"
+}
+
+'GICN' ACCameraToolLarge_IconId  "ACCameraToolLarge" {
+	"ACCameraToolLarge"
+}
+
+'GICN' ACCameraToolSmall_IconId  "ACCameraToolSmall" {
+	"ACCameraToolSmall"
+}

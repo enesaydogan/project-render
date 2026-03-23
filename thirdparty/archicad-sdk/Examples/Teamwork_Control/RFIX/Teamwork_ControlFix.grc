@@ -1,0 +1,11 @@
+﻿/* *****************************************************************************
+// Non-localizable resource description for the Teamwork Control Add-On
+// ****************************************************************************/
+
+#include "MDIDs_APICD.h"
+#include "TWControlResourceIds.hpp"
+
+'MDID' MDID_RES_ID "Add-On Identifier" {
+	MDID_APICD
+	MDID_APICD_TeamworkControl
+}

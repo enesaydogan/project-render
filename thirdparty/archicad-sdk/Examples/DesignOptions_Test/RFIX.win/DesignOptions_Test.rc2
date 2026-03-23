@@ -1,0 +1,8 @@
+/* *****************************************************************************
+// Resource description for the DesignOptions_Test Add-On
+// ****************************************************************************/
+
+#include "DesignOptions_Test.grc.rc2"
+#include "DesignOptions_TestFix.grc.rc2"
+
+1	ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

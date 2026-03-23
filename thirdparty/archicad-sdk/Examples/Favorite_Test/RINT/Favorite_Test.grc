@@ -1,0 +1,43 @@
+﻿/* *****************************************************************************
+// Localizable resource description for the Favorite Test Add-On
+// ****************************************************************************/
+
+/* Add-On Information */
+
+'STR#' 32000 "Add-on Info strings" {
+/* [  1] */		"Favorite Test"
+/* [  2] */		"API Test Add-On"
+}
+
+/* Text appearing in the menu */
+
+'STR#' 32500 "Menu strings" {
+/* [   ] */		"Test"
+/* [   ] */		"Favorite Functions"
+/* [  1] */			"List All Favorites^ES^EE^EI^ED^EW^EL^E3"
+/* [  2] */			"Place Favorite Columns^ES^EE^EI^ED^EW^EL^E3"
+/* [  3] */			"Place Favorite Column Segments as Columns^ES^EE^EI^ED^EW^EL^E3"
+/* [  4] */			"Create Favorite^ES^EE^EI^ED^EW^EL^E3"
+/* [  5] */			"Change Favorite^ES^EE^EI^ED^EW^EL^E3"
+/* [  6] */			"Rename Favorite^ES^EE^EI^ED^EW^EL^E3"
+/* [  7] */			"Delete Favorite^ES^EE^EI^ED^EW^EL^E3"
+/* [  8] */			"List Favorite SubElements^ES^EE^EI^ED^EW^EL^E3"
+/* [  9] */			"Export and Reimport Favorites^ES^EE^EI^ED^EW^EL^E3"
+/* [ 10] */			"Export, Read and Create Favorites^ES^EE^EI^ED^EW^EL^E3"
+/* [ 11] */			"Get Preview Images of Favorite^ES^EE^EI^ED^EW^EL^E3"
+/* [ 12] */			"Place Favorite Opening^ES^EE^EI^ED^EW^EL^E3"
+}
+
+'STR#' 32520 "Prompt strings" {
+/* [   ] */		"Test"
+/* [   ] */		"Favorite Functions"
+/* [  1] */			"List All Favorites"
+/* [  2] */			"Place Favorite Columns"
+/* [  3] */			"Create Favorite"
+/* [  4] */			"Change Favorite"
+/* [  5] */			"Rename Favorite"
+/* [  6] */			"Delete Favorite"
+/* [  7] */			"Export and Reimport Favorites"
+/* [  8] */			"Export, Read and Create Favorites"
+/* [  9] */			"Get Preview Images of Favorite"
+}

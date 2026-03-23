@@ -1,0 +1,45 @@
+﻿/****************************************************************************/
+/*																			*/
+/*			GRC resources for "Property_Visibility_Test" API tool			*/
+/*																			*/
+/****************************************************************************/
+
+'STR#' 32000 "Add-on Name and Description" {
+/* [  1] */		"Classification and Property Visibility Test"
+/* [  2] */		"API Test Add-on"
+}
+
+'STR#' 32500 "Menu" {
+/* [   ] */		"Test"
+/* [   ] */		"Classification and Property Visibility"
+/* [  1] */			"Set Classification Visibility...^EL"
+/* [  2] */			"Set Property Visibility...^EL"
+}
+
+'GDLG'  32510  Modal         0    0  420  465  "Classification Visibility Handler" {
+/* [  1] */ Button				  340  428   70   24	LargePlain  "OK"
+/* [  2] */ Button				  265  428   70   24	LargePlain  "Cancel"
+/* [  3] */ CheckBox			   10   10  400   18	LargePlain  "Enable Classification Visibility Handling"
+/* [  4] */ SingleSelTreeView	   10   40  400  380	LargePlain  16  16  0  0  noLabelEdit  noDragDrop  25
+}
+
+'DLGH'  32510  DLG_ClassificationVisibilitySelector {
+1	""							Button_0
+2	""							Button_1
+3	""							CheckBox_0
+4	""							SingleSelTreeView_0
+}
+
+'GDLG'  32511  Modal         0    0  420  465  "Property Visibility Handler" {
+/* [  1] */ Button				  340  428   70   24	LargePlain  "OK"
+/* [  2] */ Button				  265  428   70   24	LargePlain  "Cancel"
+/* [  3] */ CheckBox			   10   10  400   18	LargePlain  "Enable Property Visibility Handling"
+/* [  4] */ SingleSelTreeView	   10   40  400  380	LargePlain  16  16  0  0  noLabelEdit  noDragDrop  25
+}
+
+'DLGH'  32511  DLG_PropertyVisibilitySelector {
+1	""							Button_0
+2	""							Button_1
+3	""							CheckBox_0
+4	""							SingleSelTreeView_0
+}

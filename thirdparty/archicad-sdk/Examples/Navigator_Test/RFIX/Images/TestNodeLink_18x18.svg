@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+	 viewBox="0 0 18 18" enable-background="new 0 0 18 18" xml:space="preserve">
+<path fill="#FFFFFF" stroke="#297FFF" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" d="M15.5,16.5
+	c0,0.5-0.4,1-1,1h-10c-0.5,0-1-0.5-1-1v-14c0-0.5,0.5-1,1-1h10c0.6,0,1,0.5,1,1V16.5z"/>
+<line fill="none" stroke="#297FFF" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" x1="7.5" y1="1.5" x2="7.5" y2="17.5"/>
+<line fill="none" stroke="#297FFF" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" x1="11.5" y1="1.5" x2="11.5" y2="17.5"/>
+<line fill="none" stroke="#297FFF" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" x1="3.5" y1="7.5" x2="15.5" y2="7.5"/>
+<line fill="none" stroke="#297FFF" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" x1="3.5" y1="12.5" x2="15.5" y2="12.5"/>
+<line fill="none" stroke="#297FFF" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" x1="3.5" y1="2.5" x2="15.5" y2="2.5"/>
+</svg>

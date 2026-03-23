@@ -1,0 +1,12 @@
+/****************************************************************************/
+/*																			*/
+/*			Win resources for "Property_Visibility_Test" API tool			*/
+/*																			*/
+/****************************************************************************/
+
+#include "DGDefs.h"
+
+#include "Property_Visibility_Test.grc.rc2"
+#include "Property_Visibility_TestFix.grc.rc2"
+
+1	ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ICO

@@ -1,0 +1,8 @@
+/* *****************************************************************************
+// Resource description for the Selection Manager Add-On
+// ****************************************************************************/
+
+#include "Selection_Manager.grc.rc2"
+#include "Selection_ManagerFix.grc.rc2"
+
+1		ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

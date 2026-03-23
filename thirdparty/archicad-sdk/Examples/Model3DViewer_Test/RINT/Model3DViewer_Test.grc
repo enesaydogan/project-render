@@ -1,0 +1,21 @@
+﻿'STR#' 32000 "Add-on Name and Description" {
+/* [  1] */		"Model3DViewerTest"
+/* [  2] */		"Model3DViewerTest Add-On"
+}
+
+'STR#' 32500 "Menu Description" {
+/* [   ] */		"Test"
+/* [   ] */		"Model3DViewer"
+/* [  1] */			"Create and Render a 3D model with a fixed perspective camera"
+/* [  2] */			"Create and Render a 3D model with a moveable perspective camera"
+}
+
+'GDLG'  32600  Modal | noGrow     0    0   800   600	"Model3DViewer Test Dialog" {
+/* [  1] */ Button			  700  565    95    30	LargePlain  "Close"
+/* [  2] */ UserItem			0    0   800   560
+}
+
+'DLGH'  32600  DLG_Model3DViewer_Test_Dialog {
+1	""									Button_0
+2	""									UserItem_0
+}

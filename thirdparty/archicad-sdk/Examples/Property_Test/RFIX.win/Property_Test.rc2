@@ -1,0 +1,12 @@
+/****************************************************************************/
+/*																			*/
+/*				Win resources for "Property_Test" API tool					*/
+/*																			*/
+/****************************************************************************/
+
+#include "DGDefs.h"
+
+#include "Property_Test.grc.rc2"
+#include "Property_TestFix.grc.rc2"
+
+1	ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ICO

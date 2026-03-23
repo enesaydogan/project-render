@@ -1,0 +1,9 @@
+/* *****************************************************************************
+// Resource description for the ModulData Manager Add-On
+// ****************************************************************************/
+
+#include "AddOnObject_Manager_ReserveInterface.grc.rc2"
+#include "AddOnObject_Manager_ReserveInterfaceFix.grc.rc2"
+
+
+1		ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

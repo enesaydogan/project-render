@@ -1,0 +1,45 @@
+﻿/****************************************************************************/
+/*																			*/
+/*				GRC resources for "Classification_Test"			API tool	*/
+/*																			*/
+/****************************************************************************/
+
+'STR#' 32000 "Add-on Name and Description" {
+/* [  1] */		"Classification Test"
+/* [  2] */		"API Test Add-on"
+}
+
+
+'STR#' 32500 "Menu" {
+/* [   ] */		"Test"
+/* [   ] */		"Classifications"
+/* [  1] */			"Add a random classification for the selected element^EL"
+/* [  2] */			"Remove all classifications from the selected element^EL"
+/* [  3] */			"-"
+/* [  4] */			"List visible classifications of the selected element^EL"
+/* [  5] */			"List all classification items...^EL"
+/* [  6] */			"-"
+/* [  7] */			"Watch classification changes of the selected element^EL"
+/* [  8] */			"Unwatch classification changes of the selected element^EL"
+/* [  9] */			"-"
+/* [ 10] */			"Run classification tests on the selected element^EL"
+/* [ 11] */			"-"
+/* [ 12] */			"Run classification tests on a building material^EL"
+}
+
+'STR#' 32600 "Menu Prompt string" {
+/* [   ] */		"Test"
+/* [   ] */		"Classifications"
+/* [  1] */			"Add a random classification for the selected element"
+/* [  2] */			"Remove all classifications from the selected element"
+/* [  3] */			"-"
+/* [  4] */			"List visible classifications of the selected element"
+/* [  5] */			"List all classification items..."
+/* [  6] */			"-"
+/* [  7] */			"Watch classification changes of the selected element"
+/* [  8] */			"Unwatch classification changes of the selected element"
+/* [  9] */			"-"
+/* [ 10] */			"Run classification tests on the selected element"
+/* [ 11] */			"-"
+/* [ 12] */			"Run classification tests on a building material"
+}

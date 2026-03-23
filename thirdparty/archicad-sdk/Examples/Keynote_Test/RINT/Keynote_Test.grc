@@ -1,0 +1,35 @@
+﻿/* *****************************************************************************
+// Localizable resource description for the Keynote_Test Add-On
+// ****************************************************************************/
+
+'STR#' 32000 "Add-on Name and Description" {
+/* [  1] */		"Keynote_Test"
+/* [  2] */		"Keynote_Test Add-On"
+}
+
+'STR#' 32500 "Menu Description" {
+/* [   ] */		"Test"
+/* [   ] */		"Keynote"
+/* [  1] */			"Dump Keynote Tree"
+/* [  2] */			"Modify Folder"
+/* [  3] */			"Modify Item"
+/* [  4] */			"Add Folder"
+/* [  5] */			"Add Item"
+/* [  6] */			"Remove Folder"
+/* [  7] */			"Remove Item"
+/* [  8] */			"Place Keynote Label"
+}
+
+'STR#' 32600 "Menu Prompt Strings" {
+/* [   ] */		"Test"
+/* [   ] */		"Keynote"
+/* [  1] */			"Dump Keynote Tree"
+/* [  2] */			"Modify Folder"
+/* [  3] */			"Modify Item"
+/* [  4] */			"Add Folder"
+/* [  5] */			"Add Item"
+/* [  6] */			"Remove Folder"
+/* [  7] */			"Remove Item"
+/* [  8] */			"Place Keynote Label"
+}
+

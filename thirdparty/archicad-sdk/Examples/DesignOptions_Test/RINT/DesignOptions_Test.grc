@@ -1,0 +1,27 @@
+﻿/* *****************************************************************************
+// Localizable resource description for the DesignOptions_Test Add-On
+// ****************************************************************************/
+
+'STR#' 32000 "Add-on Name and Description" {
+/* [  1] */		"DesignOptions_Test"
+/* [  2] */		"DesignOptions_Test Add-On"
+}
+
+'STR#' 32500 "Menu Description" {
+/* [   ] */		"Test"
+/* [   ] */		"Design Options"
+/* [  1] */			"Dump design option combination of view map items"
+/* [  2] */			"Set all design option combination to main model only"
+/* [  3] */			"Dump available design option combinations"
+/* [  4] */			"Dump design option related info for selected elements"
+}
+
+'STR#' 32600 "Menu Prompt Strings" {
+/* [   ] */		"Test"
+/* [   ] */		"Design Options"
+/* [  1] */			"Dump design option combination of view map items"
+/* [  2] */			"Set all design option combination to main model only"
+/* [  3] */			"Dump available design option combinations"
+/* [  4] */			"Dump design option related info for selected elements"
+}
+

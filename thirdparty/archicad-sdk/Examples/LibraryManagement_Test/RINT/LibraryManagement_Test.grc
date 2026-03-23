@@ -1,0 +1,38 @@
+﻿/* *****************************************************************************
+// Localizable resource description for the LibraryManagement_Test Add-On
+// ****************************************************************************/
+
+'STR#' 32000 "Add-on Name and Description" {
+/* [  1] */		"LibraryManagement_Test"
+/* [  2] */		"LibraryManagement_Test Add-On"
+}
+
+'STR#' 32500 "Menu Description" {
+/* [   ] */		"Test"
+/* [   ] */		"Library Management"
+/* [  1] */			"Add Selected Library^E3^ES^EE"
+/* [  2] */			"Add Server Library^E3^ES^EE"
+/* [  3] */			"Remove All Libraries^E3^ES^EE"
+/* [  4] */			"Dump Library List^E3^ES^EE"
+/* [  5] */			"Dump All Library Parts^E3^ES^EE"
+/* [  6] */			"Duplicate Selection To Embedded^E3^ES^EE"
+/* [  7] */			"Create New Object from Selection To Embedded^E3^ES^EE"
+/* [  8] */			"Add Selected Libraries^E3^ES^EE"
+/* [  9] */			"Upload Selected Libraries To Server^E3^ES^EE"
+/* [ 10] */			"Remove Selected Libraries From Server^E3^ES^EE"
+}
+
+'STR#' 32600 "Menu Prompt Strings" {
+/* [   ] */		"Test"
+/* [   ] */		"Library Management"
+/* [  1] */			"Add Selected Library"
+/* [  2] */			"Add Server Library"
+/* [  3] */			"Remove All Libraries"
+/* [  4] */			"Dump Library List"
+/* [  5] */			"Dump All Library Parts"
+/* [  6] */			"Duplicate Selection To Embedded"
+/* [  8] */			"Add Selected Libraries"
+/* [  9] */			"Upload Selected Libraries To Server"
+/* [ 10] */			"Remove Selected Libraries From Server"
+}
+

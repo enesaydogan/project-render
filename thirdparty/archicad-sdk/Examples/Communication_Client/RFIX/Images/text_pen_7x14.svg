@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+	 width="7px" height="14px" viewBox="-417 291.3 7 14" enable-background="new -417 291.3 7 14" xml:space="preserve">
+<line fill="none" stroke="#263238" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" x1="-411.5" y1="300.8" x2="-413.5" y2="304.8"/>
+<line fill="none" stroke="#263238" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" x1="-413.5" y1="304.8" x2="-415.5" y2="300.8"/>
+<g>
+ <path fill="none" stroke="#263238" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" d="M-416.5,291.8v8
+		c0,0.5,0.5,1,1,1h4c0.5,0,1-0.5,1-1v-8"/>
+</g>
+</svg>

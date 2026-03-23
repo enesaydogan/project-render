@@ -1,0 +1,45 @@
+﻿/****************************************************************************/
+/*																			*/
+/*				GRC resources for "Override_Test"			API tool		*/
+/*																			*/
+/****************************************************************************/
+
+'STR#' 32000 "Add-on Name and Description" {
+/* [  1] */		"Override Test"
+/* [  2] */		"API Test Add-on"
+}
+
+
+'STR#' 32500 "Menu" {
+/* [   ] */		"Test"
+/* [   ] */		"Override"
+/* [  1] */			"Run Override test...^EL"
+/* [  2] */			"Dump Element override style"
+/* [  3] */			"Set Perspective View's Override Combination^E3"
+/* [  4] */			"Create clicked element's visual overridden images^E3"
+}
+
+'STR#' 32600 "Menu Prompt string" {
+/* [   ] */		"Test"
+/* [   ] */		"Override"
+/* [  1] */			"Run Override test..."
+/* [  2] */			"Dump Element override style"
+/* [  3] */			"Set Perspective View's Override Combination"
+/* [  4] */			"Create clicked element's visual overridden images"
+}
+
+/* ---------------------------------------------------------- UserItem Dialog */
+
+'GDLG'  32500  Modal		        0    0  790  300  "UserItem Dialog" {
+/* [  1] */ Button				   10  268  770   24	LargePlain  "OK"
+/* [  2] */ UserItem			   10   10  250  250
+/* [  3] */ UserItem			  270   10  250  250
+/* [  4] */ UserItem			  530   10  250  250
+}
+
+'DLGH'  32500  DLG_32500_UserItem_Dialog {
+1	""							Button_0
+2	""							UserItem_0
+3	""							UserItem_1
+4	""							UserItem_2
+}

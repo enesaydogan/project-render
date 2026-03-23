@@ -1,0 +1,20 @@
+﻿/* *****************************************************************************
+// Localizable resource description for the IFCHook Test Add-On
+// ****************************************************************************/
+
+/* Add-On Information */
+
+'STR#' 32000 "Add-on Info strings" {
+/* [  1] */		"IFC Hook Test"
+/* [  2] */		"API Test Add-On"
+}
+
+'STR#' 32500 "Strings for the Menu" {
+/* [   ] */		"Test"
+/* [   ] */		"IFC"
+/* [  1] */			"IFC Hook Test Add-On"
+}
+
+'STR#' 32501 "Test Strings" {
+/* [  1] */		"Archicad Layer"
+}

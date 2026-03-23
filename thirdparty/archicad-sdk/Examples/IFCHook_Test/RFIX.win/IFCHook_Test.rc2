@@ -1,0 +1,6 @@
+/* *****************************************************************************
+// Resource description for the IFCHook Test Add-On
+// ****************************************************************************/
+
+#include "IFCHook_Test.grc.rc2"
+#include "IFCHook_TestFix.grc.rc2"

@@ -1,0 +1,8 @@
+/* *****************************************************************************
+// Resource description for the Geometry Test Add-On
+// ****************************************************************************/
+
+#include "Geometry_Test.grc.rc2"
+#include "Geometry_TestFix.grc.rc2"
+
+1	ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

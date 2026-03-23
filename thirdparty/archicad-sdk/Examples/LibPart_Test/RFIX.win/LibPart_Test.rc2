@@ -1,0 +1,8 @@
+/* *****************************************************************************
+// Resource description for the LibPart Test Add-On
+// ****************************************************************************/
+
+#include "LibPart_Test.grc.rc2"
+#include "LibPart_TestFix.grc.rc2"
+
+1	ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

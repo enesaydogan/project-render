@@ -1,0 +1,23 @@
+﻿/* *****************************************************************************
+// Localizable resource description for the StructuralAnalyticalModel_Test Add-On
+// ****************************************************************************/
+
+'STR#' 32000 "Add-on Name and Description" {
+/* [  1] */		"StructuralAnalyticalModel_Test"
+/* [  2] */		"StructuralAnalyticalModel_Test Add-On"
+}
+
+'STR#' 32500 "Menu Description" {
+/* [   ] */		"Test"
+/* [   ] */		"Structural Analytical Model"
+/* [  1] */			"Create Test Plan"
+/* [  2] */			"List Structural Analytical Elements"
+}
+
+'STR#' 32600 "Menu Prompt Strings" {
+/* [   ] */		"Test"
+/* [   ] */		"Structural Analytical Model"
+/* [  1] */			"Create Test Plan"
+/* [  2] */			"List Structural Analytical Elements"
+}
+

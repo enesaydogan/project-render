@@ -1,0 +1,29 @@
+﻿/* *****************************************************************************
+// Localizable resource description for the IFC Test Add-On
+// ****************************************************************************/
+
+#include "Resources.hpp"
+
+'STR#' IFC_TEST_ADDON_NAME "Add-on Name and Description" {
+/* [  1] */		"IFC Test"
+/* [  2] */		"IFC Test Add-On"
+}
+
+
+'STR#' IFCAPI_TEST_MENU_STRINGS "IFC Test Menu" {
+/* [   ] */		"Test"
+/* [   ] */		"IFC Test"
+/* [  1] */		"Get Assignment Tree...^E2^E3"
+/* [  2] */		"Get Containing Groups of Selection...^E2^E3"
+/* [  3] */		"Get Stories...^E2^E3"
+/* [  4] */		"Get Local Properties of all IFC Objects...^E2^E3"
+/* [  5] */		"Get Preview Properties of all IFC Objects...^E2^E3"
+/* [  6] */		"Find Elements by IFC GlobalId...^E2^E3"
+}
+
+
+'STR#' IFCAPI_TEST_MENU_PROMPT_STRINGS "Menu Prompt Strings" {
+/* [   ] */		""
+/* [   ] */		""
+/* [  1] */		"Test ACAPI_Element_GetIFCIdentifier and ACAPI_Element_GetElemListByIFCIdentifier functions."
+}

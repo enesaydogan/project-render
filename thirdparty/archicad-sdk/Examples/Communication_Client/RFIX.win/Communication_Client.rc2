@@ -1,0 +1,10 @@
+/* *****************************************************************************
+// Resource description for the Communication Client Add-On
+// ****************************************************************************/
+
+#include "DGDefs.h"
+
+#include "Communication_Client.grc.rc2"
+#include "Communication_ClientFix.grc.rc2"
+
+1		ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

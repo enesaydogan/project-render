@@ -1,0 +1,9 @@
+/* *****************************************************************************
+// Resource description for the Teamwork Control Add-On
+// ****************************************************************************/
+
+#include "Teamwork_Control.grc.rc2"
+#include "Teamwork_ControlFix.grc.rc2"
+
+
+1		ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

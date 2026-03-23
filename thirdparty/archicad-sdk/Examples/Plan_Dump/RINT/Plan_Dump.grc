@@ -1,0 +1,23 @@
+﻿/* *****************************************************************************
+// Localizable resource description for the Plan Dump Add-On
+// ****************************************************************************/
+
+'STR#' 32500 "Add-on description" {
+/* [  1] */	"Plan Dump add-on"
+/* [  2] */	"Plan Dump demonstrates some funcions of the AC API."
+}
+
+/* Text appearing in the menu
+	-- same as the name of the folder without underscore(s) */
+
+'STR#' 32501 "Strings for menu #32501" {
+/* [   ] */		"Test"
+/* [   ] */		"PlanDump"
+/* [  1] */			"PlanDump^EL"
+/* [  2] */			"Store Actual Project For Compare"
+/* [  3] */			"Compare Actual Project to the Stored"
+/* [  4] */			"Store Actual Model For Compare^D2^E3"
+/* [  5] */			"Compare Actual Model to the Stored^D2^E3"
+/* [  6] */			"Store Actual Context For Compare^E2^E3"
+/* [  7] */			"Compare Actual Context to the Stored^E2^E3"
+}

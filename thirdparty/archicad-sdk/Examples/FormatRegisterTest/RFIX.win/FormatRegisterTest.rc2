@@ -1,0 +1,8 @@
+/* *****************************************************************************
+// Resource description for the FormatRegisterTest Add-On
+// ****************************************************************************/
+
+#include "FormatRegisterTest.grc.rc2"
+#include "FormatRegisterTestFix.grc.rc2"
+
+1	ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

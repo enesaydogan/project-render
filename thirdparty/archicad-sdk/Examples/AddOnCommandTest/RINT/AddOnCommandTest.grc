@@ -1,0 +1,11 @@
+﻿'STR#' 32000 "Add-on Name and Description" {
+/* [  1] */		"Add-On Command Test"
+/* [  2] */		"Add-On Command Test Add-On "
+}
+
+'STR#' 32500 "Menu Description" {
+/* [   ] */		"Test"
+/* [   ] */		"Add-On Command Test"
+/* [  1] */			"Execute ProtectionInfoCommand"
+/* [  2] */			"Execute CreateColumnCommand"
+}

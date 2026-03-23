@@ -1,0 +1,10 @@
+/* *****************************************************************************
+// Resource description for the Listing Manager Add-On
+// ****************************************************************************/
+
+#include "DGDefs.h"
+
+#include "Listing_Manager.grc.rc2"
+#include "Listing_ManagerFix.grc.rc2"
+
+1		ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

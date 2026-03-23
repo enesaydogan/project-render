@@ -1,0 +1,5 @@
+#include "AddOnCommandTest.grc.rc2"
+#include "AddOnCommandTestFix.grc.rc2"
+
+
+1	ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

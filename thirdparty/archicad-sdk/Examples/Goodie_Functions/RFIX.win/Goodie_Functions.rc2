@@ -1,0 +1,9 @@
+/* *****************************************************************************
+// Resource description for the Goodie Functions Add-On
+// ****************************************************************************/
+
+#include "Goodie_Functions.grc.rc2"
+#include "Goodie_FunctionsFix.grc.rc2"
+
+
+1		ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

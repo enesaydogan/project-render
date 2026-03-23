@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+	 viewBox="0 0 36 24" enable-background="new 0 0 36 24" xml:space="preserve">
+<path fill="#FAFAFA" d="M8.6,20.9c0,0.4,0.3,0.6,0.6,0.5l18.7-3.7c0.3-0.1,0.6-0.4,0.6-0.8V3c0-0.4-0.2-0.5-0.5-0.5l-18.8,1
+	c-0.4,0-0.6,0.3-0.6,0.7C8.6,4.2,8.6,20.9,8.6,20.9z"/>
+<path fill="none" stroke="#263238" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" d="M8.5,20.9
+	c0,0.4,0.3,0.6,0.6,0.5l18.7-3.7c0.3-0.1,0.7-0.4,0.7-0.8V3c0-0.4-0.4-0.5-0.7-0.5l-18.7,1c-0.4,0-0.6,0.3-0.6,0.7V20.9z"/>
+<line id="XMLID_508_" fill="none" stroke="#263238" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" x1="8.5" y1="8.4" x2="28.5" y2="6.5"/>
+<line id="XMLID_506_" fill="none" stroke="#263238" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" x1="8.5" y1="16.5" x2="28.5" y2="13.5"/>
+<line id="XMLID_505_" fill="none" stroke="#263238" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" x1="23.5" y1="2.8" x2="23.5" y2="18.5"/>
+<line id="XMLID_504_" fill="none" stroke="#263238" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" x1="16.5" y1="3.5" x2="16.5" y2="19.5"/>
+</svg>

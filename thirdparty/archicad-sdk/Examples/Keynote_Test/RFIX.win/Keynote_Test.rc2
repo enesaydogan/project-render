@@ -1,0 +1,8 @@
+/* *****************************************************************************
+// Resource description for the Keynote_Test Add-On
+// ****************************************************************************/
+
+#include "Keynote_Test.grc.rc2"
+#include "Keynote_TestFix.grc.rc2"
+
+1	ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

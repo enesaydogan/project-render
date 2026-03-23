@@ -1,0 +1,91 @@
+
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN">
+<html>
+<head>
+	<title>Selection Test</title>
+
+	<script type="text/javascript">
+		function UpdateSelectedElements () {
+			ACAPI.GetSelectedElements ().then (function (elemInfos) {
+				var selectionTable = document.getElementById ('selection');
+				while (selectionTable.firstChild) {
+					selectionTable.removeChild (selectionTable.firstChild);
+				}
+
+				var index, len;
+				for (index = 0, len = elemInfos.length; index < len; ++index) {
+					console.log(elemInfos[index]);
+					var tr = document.createElement ('tr');
+					selectionTable.appendChild (tr);
+
+					var guidStr = document.createElement ('td');
+					guidStr.innerHTML = elemInfos[index][0];
+					tr.appendChild (guidStr);
+
+					var typeName = document.createElement ('td');
+					typeName.innerHTML = elemInfos[index][1];
+					tr.appendChild (typeName);
+
+					var elemID = document.createElement ('td');
+					elemID.innerHTML = elemInfos[index][2];
+					tr.appendChild (elemID);
+
+					var removeButton = document.createElement ('button');
+					removeButton.innerHTML = '-';
+					removeButton.guidStr = guidStr.innerHTML;
+					removeButton.onclick = function (e) {
+						ACAPI.RemoveElementFromSelection (e.currentTarget.guidStr).then (function (res) {
+						});
+					};
+					tr.appendChild (removeButton);
+				}
+				if (len == 0) {
+					var tr = document.createElement ('tr');
+					selectionTable.appendChild (tr);
+
+					var dummy = document.createElement ('td');
+					dummy.innerHTML = 'Empty Selection';
+					dummy.setAttribute ('colspan', '3');
+					tr.appendChild (dummy);
+				}
+			});
+		}
+
+		function AddElementToSelection () {
+			var elemGuidToAddInput = document.getElementById ('elemGuidToAdd');
+
+			ACAPI.AddElementToSelection (elemGuidToAddInput.value).then (function (res) {
+				elemGuidToAddInput.value = '';
+			});
+		}
+	</script>
+</head>
+
+<body align="center">
+	<table align="center" style="text-align: center;">
+		<thead>
+			<tr>
+				<td colspan="3">Selected Elements:</td>
+			</tr>
+			<tr>
+				<td>GUID</td>
+				<td>Type</td>
+				<td>Element ID</td>
+			</tr>
+		</thead>
+		<tbody id="selection">
+			<tr>
+				<td colspan="3">Empty Selection</td>
+			</tr>
+		</tbody>
+	</table>
+	<br>
+	<form id="frm1" action="/action_page.php">
+		<input type="text" id="elemGuidToAdd" size="40">
+		<input type="button" onclick="AddElementToSelection ()" value="+">
+	</form>
+	<br>
+	<a href="https://www.graphisoft.com">www.graphisoft.com</a>
+</body>
+
+</html>

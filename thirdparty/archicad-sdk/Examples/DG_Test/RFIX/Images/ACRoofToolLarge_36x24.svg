@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+	 viewBox="0 0 36 24" style="enable-background:new 0 0 36 24;" xml:space="preserve">
+<style type="text/css">
+	.st0{fill:#FAFAFA;}
+	.st1{fill:none;stroke:#263238;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:10;}
+</style>
+<g>
+	<g>
+		<path class="st0" d="M9.1,4.1C9.3,3.8,9.7,3.5,10,3.5h14.8c0.4,0,0.5,0.3,0.3,0.6l-9.4,16.1c-0.2,0.3-0.6,0.4-0.9,0.2l-10-6.5
+			c-0.3-0.2-0.4-0.6-0.3-0.9L9.1,4.1z"/>
+		<path class="st1" d="M9.1,4.1C9.3,3.8,9.7,3.5,10,3.5h14.8c0.4,0,0.5,0.3,0.3,0.6l-9.4,16.1c-0.2,0.3-0.6,0.4-0.9,0.2l-10-6.5
+			c-0.3-0.2-0.4-0.6-0.3-0.9L9.1,4.1z"/>
+	</g>
+	<polyline class="st1" points="25.5,3.5 31.5,13.6 20.7,11.6 	"/>
+	<line class="st1" x1="25.5" y1="3.5" x2="23" y2="3.5"/>
+</g>
+</svg>

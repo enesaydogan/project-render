@@ -1,0 +1,14 @@
+/* *****************************************************************************
+// Resource description for the Thermal Bridge Add-On
+// API Development Kit 23; Windows resources
+//
+// Namespaces:		Contact person:
+//		-None-			None
+//
+// [SG compatible] - Yes
+// ****************************************************************************/
+
+#include "ThermalBridge.grc.rc2"
+#include "ThermalBridgeFix.grc.rc2"
+
+1	ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

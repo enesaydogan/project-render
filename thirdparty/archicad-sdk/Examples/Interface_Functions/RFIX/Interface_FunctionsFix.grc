@@ -1,0 +1,86 @@
+﻿/* *****************************************************************************
+// Non-localizable resource description for the Interface Functions Add-On
+// ****************************************************************************/
+
+#include "MDIDs_APICD.h"
+'MDID' 32500 "Add-On Identifier" {
+	MDID_APICD
+	MDID_APICD_InterfaceFunctions
+}
+
+
+/*	Icons */
+'GICN' 32100 "Get A Point" {
+			"Point"
+}
+
+'GICN' 32101 "Get A Line" {
+			"Line"
+}
+
+'GICN' 32102 "Get An Arc" {
+			"Arc"
+}
+
+'GICN' 32103 "Get A Rect" {
+			"Rect"
+}
+
+'GICN' 32104 "Get A RotRect" {
+			"RotRect"
+}
+
+'GICN' 32105 "Get A Poly" {
+			"Poly"
+}
+
+
+'GICN' 32106 "Cylindrical Column" {
+			"CylindType"
+}
+
+'GICN' 32107 "Rectangular Column" {
+			"RectType"
+}
+
+'GICN' 32108 "Draw Rubber Line" {
+			"RubberLine"
+}
+
+'GICN' 32109 "Cursor Sensitivity" {
+			"Cursor"
+}
+
+'GICN' 32110 "Disable Default Feedback" {
+			"DefaultFeedback"
+}
+
+
+'GICN' 32111 "Column Spacing" {
+			"Spacing"
+}
+
+
+'GICN' 32201 "Pet Item 1" {
+			"PetItem1"
+}
+
+
+'GICN' 32202 "Pet Item 2" {
+			"PetItem2"
+}
+
+
+'GICN' 32203 "Pet Item 3" {
+			"PetItem3"
+}
+
+
+'GICN' 32204 "Pet Item 4" {
+			"PetItem4"
+}
+
+
+'GICN' 32205 "Pet Item 5" {
+			"PetItem5"
+}

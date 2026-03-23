@@ -1,0 +1,8 @@
+/* *****************************************************************************
+// Resource description for the MEP_Test Add-On
+// ****************************************************************************/
+
+#include "MEP_Test.grc.rc2"
+#include "MEP_TestFix.grc.rc2"
+
+1	ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

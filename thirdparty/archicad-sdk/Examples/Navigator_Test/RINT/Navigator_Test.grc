@@ -1,0 +1,193 @@
+﻿/*
+// *****************************************************************************
+// AddOn to Navigator_ the API interface
+//
+// Resources to be localized
+//
+// [SG compatible]
+// *****************************************************************************
+*/
+
+
+'STR#' 32000 "Add-on Name and Description" {
+/* [  1] */		"Navigator Functions"
+/* [  2] */		"API Test Add-on"
+}
+
+'STR#' 32300 "Add-on Strings" {
+/* [  1] */		"API Root Group"
+/* [  2] */		"API Child Group"
+}
+
+'STR#' 32500 "Strings for the Navigator test menu" {
+/* [   ] */		"Test"
+/* [   ] */		"Navigator Test"
+/* [  1] */		"Open Navigator Test"
+/* [  2] */		"Create child Group..."
+/* [  3] */		"Clone Project map item to View map"
+}
+
+'STR#' 32501 "Strings for the Navigator Test Dialog" {
+/* [  1] */		"Id"
+/* [  2] */		"Name"
+}
+
+'GDLG'  32420  Palette | grow      0    0  350  432  "Navigator Test" {
+/* [  1] */ Button				  260  398   70   24	LargePlain  "Close"
+/* [  2] */ Button				  180  398   70   24	LargePlain  "Update"
+/* [  3] */ Button				  100  398   70   24	LargePlain  "Delete"
+/* [  4] */ Button				   20  398   70   24	LargePlain  "Publish"
+/* [  5] */ MultiSelTreeView	    8   28  334  233	SmallPlain  18  18  0  0  noLabelEdit  dragDrop  0
+/* [  6] */ LeftText			    8  269  334   17	SmallPlain  vCenter  StaticEdge  "" /* Layer combinations */
+/* [  7] */ LeftText			    8  287  334   17	SmallPlain  vCenter  StaticEdge  "" /* Scale */
+/* [  8] */ LeftText			    8  305  334   17	SmallPlain  vCenter  StaticEdge  "" /* Zooming */
+/* [  9] */ LeftText			    8  323  334   17	SmallPlain  vCenter  StaticEdge  "" /* Generate in */
+/* [ 10] */ LeftText			    8  341  334   17	SmallPlain  vCenter  StaticEdge  "" /* 3D Window Style */
+/* [ 11] */ PopupControl		    8    4  334   18	80  3
+															NoIcon  "Project Map"
+															NoIcon  "View Map"
+															NoIcon  "Layout Map"
+															NoIcon  "Publisher Sets"
+/* [ 12] */ TextEdit			    8  363  259   23	LargePlain  255
+/* [ 13] */ Button				  271  362   70   24	LargePlain  "Rename"
+}
+
+'DLGH'  32420  DLG_32420_Navigator_Test {
+1	""							Button_0
+2	""							Button_1
+3	""							Button_2
+4	""							Button_3
+5	""							MultiSelTreeView_0
+6	""							LeftText_0
+7	""							LeftText_1
+8	""							LeftText_2
+9	""							LeftText_3
+10	""							LeftText_4
+11	""							PopUp_0
+12	""							TextEdit_0
+13	""							Button_4
+}
+
+/* --- Dialogs -------------------------------------------------------------- */
+
+/* --- Navigator Test Dialog ------------------------------------------------ */
+
+'GDLG'  32600  Modal | grow      0    0  426  256  "Navigator Test" {
+/* [  1] */ Button				  334  222   80   24	LargePlain  "OK"	/* in TW replaced by the OK button from the SimpleTab */
+/* [  2] */ Button				  247  222   80   24	LargePlain  "Cancel" /* in TW replaced by the OK button from the SimpleTab */
+/* [  3] */ TextEdit			  106  302  123   19	SmallPlain  noFrame | noUpdate  1024
+/* [  4] */ TextEdit			  230  302   94   19	SmallPlain  noFrame | noUpdate  1024
+/* [  5] */ SingleSelList		   10   12  310  100	LargePlain  PartialItems  16  HasHeader  16
+/* [  6] */ Button				  332   10   80   24	LargePlain  "New..."
+/* [  7] */ Button				  332   44   80   24	LargePlain  "Delete"
+/* [  8] */ LeftText			   10  122  122   20	LargePlain  vCenter  "Listing element type:"
+/* [  9] */ PopupControl		  156  123  164   22	80  3
+															NoIcon  "Line"
+															NoIcon  "Arc"
+															NoIcon  "Polyline"
+															NoIcon  "Fill"
+/* [ 10] */ LeftText			    7  155  141   18	LargePlain  vCenter  "Number of listed elements:"
+/* [ 11] */ IntEdit				  157  155  163   23	LargePlain  "1"  "10"
+/* [ 12] */ Separator			    5  188  409    2
+/* [ 13] */ SimpleTab			    6  200  414   52  noFrame
+                 32601
+}
+
+'DLGH'  32600  DLG_32600_Navigator_Test {
+1	""							Button_0
+2	""							Button_1
+3	""							TextEdit_0
+4	""							TextEdit_1
+5	""							SingleSelListBox_0
+6	""							Button_2
+7	""							Button_3
+8	""							LeftText_0
+9	""							PopUp_0
+10	""							LeftText_1
+11	""							IntEdit_0
+12	""							Separator_1
+13	""							SimpleTab_0
+}
+
+/* --- Teamwork TabPage ----------------------------------------------------- */
+
+'GDLG'  32601  TabPage       0    0  412   52  "Teamwork Status Page" {
+/* [  1] */ Button				  324   24   80   24	LargePlain  "OK"
+/* [  2] */ Icon				    0   24   24   24	2701
+/* [  3] */ LeftText			   28   18  122   32	LargeBold  vCenter  "Free for Reservation"
+/* [  4] */ LeftText			   28   18  122   16	LargeBold  vCenter  "Reserved"
+/* [  5] */ Button				  248   23   70   24	LargePlain  "Cancel"
+/* [  6] */ LeftText			    0    0  150   16	LargePlain  vCenter  "Teamwork Status:"
+#ifdef WINDOWS
+/* [  7] */ Separator			  240    2    2   48
+/* [  8] */ LeftText			   28   34  122   16	LargePlain  vCenter | truncEnd  "You are Offline" /*comment text*/
+#else
+/* [  7] */ Separator			  242    2    2   48
+/* [  8] */ LeftText			   28   34  122   16	SmallPlain  vCenter | truncEnd  "You are Offline" /*comment text*/
+#endif
+/* [  9] */ Button				  154   24   80   24	LargePlain  "Reserve"
+#ifdef WINDOWS
+/* [ 10] */ SplitButton			  154   24   80   24	LargePlain  NoIcon  "Release"
+#else
+/* [ 10] */ SplitButton			  154   24   80   24	LargePlain  RoundedBevelEdge  NoIcon  "Release"
+#endif
+/* [ 11] */ Button				  154   24   80   24	LargePlain  "Request"
+}
+
+'DLGH'  32601  DLG_32601_Teamwork_Status_Page {
+1	""							Button_0
+2	""							IconItem_0
+3	""							LeftText_0
+4	""							LeftText_1
+5	""							Button_1
+6	""							LeftText_2
+7	""							Separator_0
+8	""							LeftText_3
+9	""							Button_2
+10	""							SplitButton_0
+11	""							Button_3
+}
+
+'STR#' 32604 "Teamwork strings" {
+/* [  1] */		"Request: Please grant me Navigator Test."
+}
+
+/*--- New Item Dialog --------------------------------------------------------*/
+
+'GDLG'  32602  Modal | grow      0    0  200  114  "New item" {
+/* [  1] */ Button				  120   82   70   22	LargePlain  "OK"
+/* [  2] */ Button				   40   82   70   22	LargePlain  "Cancel"
+/* [  3] */ LeftText			   10   12   80   20	LargePlain  vCenter  "Id:"
+/* [  4] */ TextEdit			   90   12  100   23	LargePlain  255
+/* [  5] */ LeftText			   10   45   63   18	LargePlain  vCenter  "Name:"
+/* [  6] */ TextEdit			   90   46  100   23	LargePlain  255
+}
+
+'DLGH'  32602  32602_New_item {
+1	""			Button_0
+2	""			Button_1
+3	""			LeftText_0
+4	""			TextEdit_0
+5	""			LeftText_1
+6	""			TextEdit_1
+}
+
+/*--- Rename Item Dialog -----------------------------------------------------*/
+
+'GDLG'  32603  Modal | hGrow    100   60  360   99  "Rename Settings" {
+/* [  1] */ Button				  280   67   70   26	LargePlain  "OK"
+/* [  2] */ Button				  200   67   70   26	LargePlain  "Cancel"
+/* [  3] */ LeftText			   10   10  120   18	LargePlain  "ID:"
+/* [  4] */ TextEdit			   10   28  120   23	LargePlain  0
+/* [  5] */ LeftText			  140   10  210   18	LargePlain  "Name:"
+/* [  6] */ TextEdit			  140   28  210   23	LargePlain  0
+}
+
+'DLGH'  32603  DLG_32603_RenameItemSettings {
+1	""							Button_0
+2	""							Button_1
+3	""							LeftText_0
+4	""							TextEdit_0
+5	""							LeftText_1
+6	""							TextEdit_1
+}

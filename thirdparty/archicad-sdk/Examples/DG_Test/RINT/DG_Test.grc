@@ -1,0 +1,618 @@
+﻿/* *****************************************************************************
+// Localizable resource description for the DG Test Add-On
+// ****************************************************************************/
+
+#include "ElemIconsResIDs.hpp"
+#include "DGTestResIDs.hpp"
+
+/* Add-On Information */
+
+'STR#' DGTEST_ABOUT_STRINGSID "Menu strings" {
+/* [  1] */		"DG Test"
+/* [  2] */		"API Test Add-On"
+}
+
+/* Text appearing in the menu */
+
+'STR#' DGTEST_MENU_STRINGSID "Menu strings" {
+/* [   ] */		"Test"
+/* [   ] */		"DG Functions"
+/* [  1] */			"Fill Settings^EL"
+/* [  2] */			"Library Browser^EL"
+/* [  3] */			"User item drawing^EL"
+/* [  4] */			"Tree view test^EL"
+/* [  5] */			"Custom surfaces^EL"
+/* [  6] */			"Progress window^EL"
+/* [  7] */			"UC test^EL"
+/* [  8] */			"Profile Controls^EL"
+/* [  9] */			"Surface Browser^EL"
+/* [ 10] */			"Building Material Dialog^EL"
+/* [ 11] */			"AttributeList Control^E3^EL"
+/* [ 12] */			"Layer Selection Dialog"
+/* [ 13] */			"Basic Element Icons RollDownDialog^E3^EL"
+/* [ 14] */			"FontPopUp Example Dialog^E3^EL"
+/* [ 15] */			"Split Button Example Dialog^E3^EL"
+/* [ 16] */			"-"
+/* [ 17] */			"Owner Drawn ListBox Example^E3^EL"
+/* [ 18] */			"Delete last item from the Owner Drawn ListBox^E3^EL"
+/* [ 19] */			"Instant Resource Loading^E3^EL"
+}
+
+'STR#' DGTEST_PROMPT_STRINGSID "Prompt strings" {
+/* [   ] */		"Test"
+/* [   ] */		"DG Functions"
+/* [  1] */			"Fill Settings"
+/* [  2] */			"Library Browser"
+/* [  3] */			"User item drawing"
+/* [  4] */			"Tree view test"
+/* [  5] */			"Custom surfaces"
+/* [  6] */			"Progress window"
+/* [  7] */			"UC Test"
+/* [  8] */			"Profile Controls"
+/* [  9] */			"Surface Browser"
+/* [ 10] */			"Building Material Dialog"
+/* [ 11] */			"AttributeList Control"
+/* [ 12] */			"Layer Selection Dialog"
+/* [ 13] */			"Basic Element Icons RollDownDialog"
+/* [ 14] */			"Shows a new style font dialog"
+/* [ 15] */			"Split Button"
+/* [ 16] */			"-"
+/* [ 17] */			"Owner Drawn ListBox Example"
+/* [ 18] */			"Delete last item from the Owner Drawn ListBox"
+/* [ 19] */			"Enable or disable Instant Resource Loading Mode"
+}
+
+
+/* Preprocessor directive for the GRC compiler
+	-- should appear before the first dialog/palette */
+
+/* Localizable dialog resource(s) with the accompanying help resource(s) */
+/* ------------------------------------------------------------ Fill Settings */
+
+'GDLG'	32500	Modal		 40  40 266 463		"Fill Settings" {
+/* [  1] */ Button				188  432   70   24  LargePlain		"OK"
+/* [  2] */ Button				108  432   70   24  LargePlain		"Cancel"
+/* [  3] */ RightText			  8    3  250   13  SmallPlain		""
+/* [  4] */ IconPushRadio		  8   29   52   52  1	32501						/* Floor Plan Attributes*/
+/* [  5] */ SimpleTab			  8   82  250  307			noFrame
+				32501		/* Fill - Floor Plan Attributes	*/
+/* [  6] */ Icon				 22  400   29   14  				32502			/* Layer BMP */
+/* [  7] */ PushCheck			 55  397  188   20  LargePlain		""			/* Layer Control */
+/* [  8] */ Separator			  0   19  266    2
+/* [  9] */ Separator			  0  424  266    2
+}
+
+'DLGH'  32500  DLG_32500_Fill_Settings {
+1	""							Button_0
+2	""							Button_1
+3	""							RightText_0
+4	""							IconPushRadio_0
+5	""							SimpleTab_0
+6	""							IconItem_0
+7	""							UC257_0
+8	""							Separator_0
+9	""							Separator_1
+}
+
+
+
+'GDLG'  32501    TabPage    0    0 250  307  "" {
+/* [  1] */ GroupBox		  0    5  250  301	LargePlain	Primary	"Floor Plan Attributes"
+/* [  2] */ UserControl		 55   33  180   40	261		0x0100							/* Fill Line type 0x0200	0x0100 */
+/* [  3] */ Icon			 24   84   27   14  				32510					/* Fill Border Pen BMP */
+/* [  4] */ PosIntEdit		 55   82   30   19	SmallPlain		noFrame "1"		"255"	/* Line Pen Number	*/
+/* [  5] */ UserControl		 87   82   33   19	257		0x0001  0x1100  0				/* Line Pen Setting	*/
+/* [  6] */ IconRadioButton	140   85   40   16	2	32513								/* Fill without Border */
+/* [  7] */ IconRadioButton	188   85   40   16	2	32514								/* Fill with Border */
+/* [  8] */ UserControl		 55  127  180   40  257		0x0002  0x1100  0				/* Fill CDEF */
+/* [  9] */ Icon			 24  178   27   14  				32511					/* Fill Pen BMP */
+/* [ 10] */ PosIntEdit		 55  176   30   19	SmallPlain		"1"		"255"			/* Fill Pen Number	*/
+/* [ 11] */ UserControl		 88  176   33   19	257		0x0001  0x1100  0				/* Fill Pen Setting	*/
+/* [ 12] */ Icon			139  178   27   14  				32512					/* Fill BG Pen BMP */
+/* [ 13] */ PosIntEdit		170  176   30   19	SmallPlain		"0"		"255"			/* Fill BG Pen Number	*/
+/* [ 14] */ UserControl		202  176   33   19	257		0x0001  0x1100  0				/* Fill BG Pen Setting	*/
+/* [ 15] */ CheckBox		 23  222  122   20	LargePlain		"Show Area Text"
+/* [ 16] */ RadioButton		 50  250  163   16	LargePlain	1	"Link to Project Origin"
+/* [ 17] */ RadioButton		 50  271  139   16	LargePlain	1	"Link To Fill Origin"
+/* [ 18] */ Icon			 25  250   17   36  				32515
+/* [ 19] */ Icon			 12   43   36   21					32516					/* Fill Line Type */
+/* [ 20] */ Icon			 12  137   36   21					32517					/* Fill Pattern Type */
+}	/* 32501 */
+
+'DLGH'  32501  DLG_32501 {
+1	""							GroupBox_0
+2	""							UC261_0
+3	""							IconItem_0
+4	"PosIntEdit without frame"	PosIntEdit_0
+5	""							UC257_0
+6	""							IconRadioButton_0
+7	""							IconRadioButton_1
+8	""							UC257_1
+9	""							IconItem_1
+10	"PosIntEdit with frame"		PosIntEdit_1
+11	""							UC257_2
+12	""							IconItem_2
+13	"PosIntEdit with frame"		PosIntEdit_2
+14	""							UC257_3
+15	""							CheckBox_0
+16	""							RadioButton_0
+17	""							RadioButton_1
+18	""							IconItem_3
+19	""							IconItem_4
+20	""							IconItem_5
+}
+
+/* ---------------------------------------------------------- Library Browser */
+
+'GDLG' 32510  Modal | grow   0    0  516  186  "Library browser" {
+/* [  1] */ Button				430  152   70   24  LargePlain      "OK"
+/* [  2] */ UserControl			 12    8   66   22	259  1  3  0  0  32520
+/* [  3] */ SingleSelListView	  8   36  500  100	SmallPlain  64  64  96  96  bottomText
+}
+
+'DLGH'  32510  DLG_32510_Library_browser {
+1	""							Button_0
+2	""							UC259_0
+3	""							SingleSelListView_0
+}
+
+/* ---------------------------------------------------------- User item test */
+
+'GDLG' 32520  Modal   0    0  130  118  "User item example" {
+/* [  1] */ Button				 48   88   70   24  LargePlain      "OK"
+/* [  2] */ UserItem			 12   12  106   66	PartialUpdate  ClientEdge
+}
+
+'DLGH'  32520  DLG_32520_User_item_example {
+1	""							Button_0
+2	""							UserItem_0
+}
+
+
+/* ---------------------------------------------------------- Treeview test */
+
+'GDLG'  32530    Modal    0    0  420  460  "TreeView Dialog"  {
+/* [  1] */ Button             340  423   70   24  LargePlain     "OK"
+/* [  2] */ Button             260  423   70   24  LargePlain     "Cancel"
+/* [  3] */ Button              10  423  100   24  LargePlain	noFrame		"Folder Content"
+/* [  4] */ Button             120  423  100   24  LargePlain   noFrame		"Change icon"
+/* [  5] */ SingleSelTreeView   10   10  400  400  LargePlain  16  16  18  15 noLabelEdit noDragDrop 64
+}
+
+'DLGH'  32530  DLG_32530_TreeView_Dialog {
+1	"Button with frame"			Button_0
+2	"Button with frame"			Button_1
+3	"Button without frame"		Button_2
+4	"Button without frame"		Button_3_1
+	""							Button_3_2
+5	""							SingleSelTreeView_0
+}
+
+/* ---------------------------------------------------------- Custom surfaces */
+
+'GDLG'  32540  Modal       192   86  217  107  "Custom surfaces" {
+/* [  1] */ Button            130   61   70   24  LargePlain  "OK"
+/* [  2] */ Button             13   61   70   24  LargePlain  "Cancel"
+/* [  3] */ UserControl        12   20  188   20  257  0x0004  0x1100  0		/* Material control	*/
+}
+
+'DLGH'  32540  DLG_32540_Custom_surfaces {
+1	""							Button_0
+2	""							Button_1
+3	""							UC257_0
+}
+
+/* ---------------------------------------------------------- Progress window */
+
+'GDLG'  32550  Modal    0    0  220  60  "Progress" {
+/* [  1] */ Button            140   18   70   24  LargePlain  "Cancel"
+/* [  2] */ LeftText           10   25  120   16  LargeBold	  ""
+}
+
+'DLGH'  32550  DLG_32550_Progress {
+1	""							Button_0
+2	""							LeftText_0
+}
+
+/* ---------------------------------------------------------- UC Test */
+
+'GDLG'  32560  Modal    0    0  244  106  "Choose library part" {
+/* [  1] */ Button            140   76   70   24  LargePlain  "OK"
+/* [  2] */ UserControl		    8    8  150   22	263
+/* [  3] */ UserItem          170    4   64   64
+}
+
+'DLGH'  32560  DLG_32560_Choose_library_part {
+1	""							Button_0
+2	""							Popup_0
+3	""							UserItem_0
+}
+
+/* ---------------------------------------------------------- Profile Controls */
+
+'GDLG'  32570  Modal       0  0  306  202  "Profile Controls" {
+/* [  1] */ Button             10  170   70   24  LargePlain  "OK"
+/* [  2] */ Button            216  170   70   24  LargePlain  "Cancel"
+/* [  3] */ LeftText           10   20   80   16  LargePlain  "Wall Profiles:"
+/* [  4] */ LeftText           10   42   80   16  LargePlain  "Beam Profiles:"
+/* [  5] */ LeftText           10   64   80   16  LargePlain  "Column Profiles:"
+/* [  6] */ LeftText           10   86   80   16  LargePlain  "Handrail Profiles:"
+/* [  7] */ LeftText           10   108  80   16  LargePlain  "Other GDL Object Profiles:"
+/* [  8] */ LeftText           10   130  80   16  LargePlain  "All Profiles:"
+/* [  9] */ PushCheck		   98   20  188   20  LargePlain ""
+/* [ 10] */ PushCheck          98   42  188   20  LargePlain ""
+/* [ 11] */ PushCheck          98   64  188   20  LargePlain ""
+/* [ 12] */ PushCheck          98   86  188   20  LargePlain ""
+/* [ 13] */ PushCheck          98   108 188   20  LargePlain ""
+/* [ 14] */ PushCheck          98   130 188   20  LargePlain ""
+}
+
+'DLGH'  32570  DLG_32570_Profile_Controls {
+1	""							Button_0
+2	""							Button_1
+3	""							LeftText_0
+4	""							LeftText_1
+5	""							LeftText_2
+6	""							LeftText_3
+7	""							LeftText_4
+8	""							LeftText_5
+9	""							PushCheck_0
+10	""							PushCheck_1
+11	""							PushCheck_2
+12	""							PushCheck_3
+13	""							PushCheck_4
+14	""							PushCheck_5
+}
+
+/* ---------------------------------------------------------- Building Material Dialog */
+
+'GDLG'  32580  Modal | vGrow	    0    0  510  300  "Test Building Material List" {
+/* [  1] */ Button				  360  268  140   24	LargePlain  "OK"
+/* [  2] */ UserControl			    0    0   15   15	257  0x000B  0x1300  0
+/* [  3] */ UserControl			 	0    0   33   19	257	 0x0001  0x1100	 0
+/* [  4] */ SingleSelList		   10   10  490  250	LargePlain  PartialItems  21  HasHeader  21
+}
+
+'DLGH'  32580  DLG_32580_Test_Building_Material_List {
+1	""							Button_0
+2	"Building Material Control"	UC257_0
+3	"Pen Control"				UC257_1
+4	""							SingleSelListBox_0
+}
+
+/* ---------------------------------------------------------- AttributeList Example Dialog */
+
+'GDLG'  32590  Modal | grow         0    0  510  270  "AttributeList Example Dialog" {
+/* [  1] */ Button				    0  238  510   24	LargePlain  "OK"
+/* [  2] */ SingleSelList		    0    0  510  230	LargePlain  PartialItems  21
+}
+
+'DLGH'  32590  DLG_32590_AttributeList_Example_Dialog {
+1	""							Button_0
+2	""							SingleSelList_0
+}
+
+/* ---------------------------------------------------------- Layers Dialog */
+
+'GDLG'  32591  Modal | vGrow	    0    0  510  330  "Layer Filter Setting" {
+/* [  1] */ Button				  400  298  100   24	LargePlain  "OK"
+/* [  2] */ Button				  280  298  100   24	LargePlain  "Cancel"
+/* [  3] */ RightText			  160   10   80   20  	LargePlain	vCenter  "Find layer"
+/* [  4] */ TextEdit 			  260	9	120	  23	LargePlain	255
+/* [  5] */ Button				  400   8  100   24	LargePlain  "Search"
+/* [  6] */ UserControl			    0    0   18   18	257  0x0005  0x1600  0
+/* [  7] */ MultiSelList		   10   40  490  250	LargePlain  PartialItems  21 HasHeader  21
+}
+
+'DLGH'  32591  DLG_32591_Test_Building_Material_List {
+1	""							Button_0
+2	""							Button_1
+3	""							RightText_0
+4	""							TextEdit_0
+5	""							Button_2
+6	""							UserControl_0
+7	""							MultiSelListBox_0
+}
+
+
+'STR#' 32591 "Conversion strings" {
+/* [  1] */		"Convert"
+/* [  2] */		"Don't Convert"
+/* [  3] */		"LoadBearing"
+/* [  4] */		"Non-LoadBearing"
+}
+
+'STR#' 32592 "Flag strings" {
+/* [  1] */		"Hidden"
+/* [  2] */		"Locked"
+/* [  3] */		"Not mine"
+/* [  4] */		"From XRef"
+}
+
+'STR#' 32593 "List Box Header strings" {
+/* [  1] */		"Name"
+/* [  2] */		"Status"
+/* [  3] */		"Filter status"
+}
+
+/* ---------------------------------------------------------- BasicElementIconsRollDownDialog */
+
+'STR#' 32600 "BasicElementIconsRollDownDialog Strings" {
+/* [  1] */			"Basic Element Icons"
+/* [  2] */			"Design"
+/* [  3] */			"Document"
+/* [  4] */			"More"
+}
+
+/* ---------------------------------------------------------- BasicElementIconsRollDownDialog HeaderTabPage */
+
+'GDLG'  32600  TabPage			    0    0   91   54  "BasicElementIconsRollDownDialog Header" {
+/* [  1] */ IconPushRadio		    5    0   46   27	1  ACArrowToolLarge_IconId
+/* [  2] */ IconPushRadio		   52    0   34   20	1  ACArrowToolSmall_IconId
+/* [  3] */ IconPushRadio		    5   27   46   27	1  ACMarqueeToolLarge_IconId
+/* [  4] */ IconPushRadio		   52   27   34   20	1  ACMarqueeToolSmall_IconId
+}
+
+'DLGH'  32600  DLG_32600_BasicElementIconsRollDownDialog_Header {
+1	""							IconPushRadio_1
+2	""							IconPushRadio_2
+3	""							IconPushRadio_3
+4	""							IconPushRadio_4
+}
+
+/* ---------------------------------------------------------- BasicElementIconsRollDownDialog FirstRollDownTabPage */
+
+'GDLG'  32610  TabPage			    0    0   81  405  "BasicElementIconsRollDownDialog FirstRollDown" {
+/* [  1] */ IconPushRadio		    0    0   46   27	1  ACWallToolLarge_IconId
+/* [  2] */ IconPushRadio		   47    0   34   20	1  ACWallToolSmall_IconId
+/* [  3] */ IconPushRadio		    0   27   46   27	1  ACDoorToolLarge_IconId
+/* [  4] */ IconPushRadio		   47   27   34   20	1  ACDoorToolSmall_IconId
+/* [  5] */ IconPushRadio		    0   54   46   27	1  ACWindowToolLarge_IconId
+/* [  6] */ IconPushRadio		   47   54   34   20	1  ACWindowToolSmall_IconId
+/* [  7] */ IconPushRadio		    0   81   46   27	1  ACColumnToolLarge_IconId
+/* [  8] */ IconPushRadio		   47   81   34   20	1  ACColumnToolSmall_IconId
+/* [  9] */ IconPushRadio		    0  108   46   27	1  ACBeamToolLarge_IconId
+/* [ 10] */ IconPushRadio		   47  108   34   20	1  ACBeamToolSmall_IconId
+/* [ 11] */ IconPushRadio		    0  135   46   27	1  ACSlabToolLarge_IconId
+/* [ 12] */ IconPushRadio		   47  135   34   20	1  ACSlabToolSmall_IconId
+/* [ 13] */ IconPushRadio		    0  162   46   27	1  ACStairToolLarge_IconId
+/* [ 14] */ IconPushRadio		   47  162   34   20	1  ACStairToolSmall_IconId
+/* [ 15] */ IconPushRadio		    0  189   46   27	1  ACRoofToolLarge_IconId
+/* [ 16] */ IconPushRadio		   47  189   34   20	1  ACRoofToolSmall_IconId
+/* [ 17] */ IconPushRadio		    0  216   46   27	1  ACShellToolLarge_IconId
+/* [ 18] */ IconPushRadio		   47  216   34   20	1  ACShellToolSmall_IconId
+/* [ 19] */ IconPushRadio		    0  243   46   27	1  ACSkylightToolLarge_IconId
+/* [ 20] */ IconPushRadio		   47  243   34   20	1  ACSkylightToolSmall_IconId
+/* [ 21] */ IconPushRadio		    0  270   46   27	1  ACCWToolLarge_IconId
+/* [ 22] */ IconPushRadio		   47  270   34   20	1  ACCWToolSmall_IconId
+/* [ 23] */ IconPushRadio		    0  297   46   27	1  ACMorphToolLarge_IconId
+/* [ 24] */ IconPushRadio		   47  297   34   20	1  ACMorphToolSmall_IconId
+/* [ 25] */ IconPushRadio		    0  324   46   27	1  ACObjectToolLarge_IconId
+/* [ 26] */ IconPushRadio		   47  324   34   20	1  ACObjectToolSmall_IconId
+/* [ 27] */ IconPushRadio		    0  351   46   27	1  ACZoneToolLarge_IconId
+/* [ 28] */ IconPushRadio		   47  351   34   20	1  ACZoneToolSmall_IconId
+/* [ 29] */ IconPushRadio		    0  378   46   27	1  ACMeshToolLarge_IconId
+/* [ 30] */ IconPushRadio		   47  378   34   20	1  ACMeshToolSmall_IconId
+}
+
+'DLGH'  32610  DLG_32610_BasicElementIconsRollDownDialog_FirstRollDown {
+1	""							IconPushRadio_1
+2	""							IconPushRadio_2
+3	""							IconPushRadio_3
+4	""							IconPushRadio_4
+5	""							IconPushRadio_5
+6	""							IconPushRadio_6
+7	""							IconPushRadio_7
+8	""							IconPushRadio_8
+9	""							IconPushRadio_9
+10	""							IconPushRadio_10
+11	""							IconPushRadio_11
+12	""							IconPushRadio_12
+13	""							IconPushRadio_13
+14	""							IconPushRadio_14
+15	""							IconPushRadio_15
+16	""							IconPushRadio_16
+17	""							IconPushRadio_17
+18	""							IconPushRadio_18
+19	""							IconPushRadio_19
+20	""							IconPushRadio_20
+21	""							IconPushRadio_21
+22	""							IconPushRadio_22
+23	""							IconPushRadio_23
+24	""							IconPushRadio_24
+25	""							IconPushRadio_25
+26	""							IconPushRadio_26
+27	""							IconPushRadio_27
+28	""							IconPushRadio_28
+29	""							IconPushRadio_29
+30	""							IconPushRadio_30
+}
+
+/* ---------------------------------------------------------- BasicElementIconsRollDownDialog SecondRollDownTabPage */
+
+'GDLG'  32620  TabPage			    0    0   81  405  "BasicElementIconsRollDownDialog SecondRollDown" {
+/* [  1] */ IconPushRadio		    0    0   46   27	1  ACLinDimToolLarge_IconId
+/* [  2] */ IconPushRadio		   47    0   34   20	1  ACLinDimToolSmall_IconId
+/* [  3] */ IconPushRadio		    0   27   46   27	1  ACLevelDimToolLarge_IconId
+/* [  4] */ IconPushRadio		   47   27   34   20	1  ACLevelDimToolSmall_IconId
+/* [  5] */ IconPushRadio		    0   54   46   27	1  ACTextToolLarge_IconId
+/* [  6] */ IconPushRadio		   47   54   34   20	1  ACTextToolSmall_IconId
+/* [  7] */ IconPushRadio		    0   81   46   27	1  ACLabelToolLarge_IconId
+/* [  8] */ IconPushRadio		   47   81   34   20	1  ACLabelToolSmall_IconId
+/* [  9] */ IconPushRadio		    0  108   46   27	1  ACFillToolLarge_IconId
+/* [ 10] */ IconPushRadio		   47  108   34   20	1  ACFillToolSmall_IconId
+/* [ 11] */ IconPushRadio		    0  135   46   27	1  ACLineToolLarge_IconId
+/* [ 12] */ IconPushRadio		   47  135   34   20	1  ACLineToolSmall_IconId
+/* [ 13] */ IconPushRadio		    0  162   46   27	1  ACCircleToolLarge_IconId
+/* [ 14] */ IconPushRadio		   47  162   34   20	1  ACCircleToolSmall_IconId
+/* [ 15] */ IconPushRadio		    0  189   46   27	1  ACPolylineToolLarge_IconId
+/* [ 16] */ IconPushRadio		   47  189   34   20	1  ACPolylineToolSmall_IconId
+/* [ 17] */ IconPushRadio		    0  216   46   27	1  ACDrawingToolLarge_IconId
+/* [ 18] */ IconPushRadio		   47  216   34   20	1  ACDrawingToolSmall_IconId
+/* [ 19] */ IconPushRadio		    0  243   46   27	1  ACSectionToolLarge_IconId
+/* [ 20] */ IconPushRadio		   47  243   34   20	1  ACSectionToolSmall_IconId
+/* [ 21] */ IconPushRadio		    0  270   46   27	1  ACElevationToolLarge_IconId
+/* [ 22] */ IconPushRadio		   47  270   34   20	1  ACElevationToolSmall_IconId
+/* [ 23] */ IconPushRadio		    0  297   46   27	1  ACIntElevToolLarge_IconId
+/* [ 24] */ IconPushRadio		   47  297   34   20	1  ACIntElevToolSmall_IconId
+/* [ 25] */ IconPushRadio		    0  324   46   27	1  ACWorksheetToolLarge_IconId
+/* [ 26] */ IconPushRadio		   47  324   34   20	1  ACWorksheetToolSmall_IconId
+/* [ 27] */ IconPushRadio		    0  351   46   27	1  ACDetailToolLarge_IconId
+/* [ 28] */ IconPushRadio		   47  351   34   20	1  ACDetailToolSmall_IconId
+/* [ 29] */ IconPushRadio		    0  378   46   27	1  ACChangeMarkerToolLarge_IconId
+/* [ 30] */ IconPushRadio		   47  378   34   20	1  ACChangeMarkerToolSmall_IconId
+}
+
+'DLGH'  32620  DLG_32620_BasicElementIconsRollDownDialog_SecondRollDown {
+1	""							IconPushRadio_1
+2	""							IconPushRadio_2
+3	""							IconPushRadio_3
+4	""							IconPushRadio_4
+5	""							IconPushRadio_5
+6	""							IconPushRadio_6
+7	""							IconPushRadio_7
+8	""							IconPushRadio_8
+9	""							IconPushRadio_9
+10	""							IconPushRadio_10
+11	""							IconPushRadio_11
+12	""							IconPushRadio_12
+13	""							IconPushRadio_13
+14	""							IconPushRadio_14
+15	""							IconPushRadio_15
+16	""							IconPushRadio_16
+17	""							IconPushRadio_17
+18	""							IconPushRadio_18
+19	""							IconPushRadio_19
+20	""							IconPushRadio_20
+21	""							IconPushRadio_21
+22	""							IconPushRadio_22
+23	""							IconPushRadio_23
+24	""							IconPushRadio_24
+25	""							IconPushRadio_25
+26	""							IconPushRadio_26
+27	""							IconPushRadio_27
+28	""							IconPushRadio_28
+29	""							IconPushRadio_29
+30	""							IconPushRadio_30
+}
+
+/* ---------------------------------------------------------- BasicElementIconsRollDownDialog ThirdRollDownTabPage */
+
+'GDLG'  32630  TabPage			    0    0   81  270  "BasicElementIconsRollDownDialog ThirdRollDown" {
+/* [  1] */ IconPushRadio		    0    0   46   27	1  ACGridToolLarge_IconId
+/* [  2] */ IconPushRadio		   47    0   34   20	1  ACGridToolSmall_IconId
+/* [  3] */ IconPushRadio		    0   27   46   27	1  ACWallendToolLarge_IconId
+/* [  4] */ IconPushRadio		   47   27   34   20	1  ACWallendToolSmall_IconId
+/* [  5] */ IconPushRadio		    0   54   46   27	1  ACCornerwindowToolLarge_IconId
+/* [  6] */ IconPushRadio		   47   54   34   20	1  ACCornerwindowToolSmall_IconId
+/* [  7] */ IconPushRadio		    0   81   46   27	1  ACLampToolLarge_IconId
+/* [  8] */ IconPushRadio		   47   81   34   20	1  ACLampToolSmall_IconId
+/* [  9] */ IconPushRadio		    0  108   46   27	1  ACRadDimToolLarge_IconId
+/* [ 10] */ IconPushRadio		   47  108   34   20	1  ACRadDimToolSmall_IconId
+/* [ 11] */ IconPushRadio		    0  135   46   27	1  ACAngDimToolLarge_IconId
+/* [ 12] */ IconPushRadio		   47  135   34   20	1  ACAngDimToolSmall_IconId
+/* [ 13] */ IconPushRadio		    0  162   46   27	1  ACSplineToolLarge_IconId
+/* [ 14] */ IconPushRadio		   47  162   34   20	1  ACSplineToolSmall_IconId
+/* [ 15] */ IconPushRadio		    0  189   46   27	1  ACHotspotToolLarge_IconId
+/* [ 16] */ IconPushRadio		   47  189   34   20	1  ACHotspotToolSmall_IconId
+/* [ 17] */ IconPushRadio		    0  216   46   27	1  ACFigureToolLarge_IconId
+/* [ 18] */ IconPushRadio		   47  216   34   20	1  ACFigureToolSmall_IconId
+/* [ 19] */ IconPushRadio		    0  243   46   27	1  ACCameraToolLarge_IconId
+/* [ 20] */ IconPushRadio		   47  243   34   20	1  ACCameraToolSmall_IconId
+}
+
+'DLGH'  32630  DLG_32630_BasicElementIconsRollDownDialog_ThirdRollDown {
+1	""							IconPushRadio_1
+2	""							IconPushRadio_2
+3	""							IconPushRadio_3
+4	""							IconPushRadio_4
+5	""							IconPushRadio_5
+6	""							IconPushRadio_6
+7	""							IconPushRadio_7
+8	""							IconPushRadio_8
+9	""							IconPushRadio_9
+10	""							IconPushRadio_10
+11	""							IconPushRadio_11
+12	""							IconPushRadio_12
+13	""							IconPushRadio_13
+14	""							IconPushRadio_14
+15	""							IconPushRadio_15
+16	""							IconPushRadio_16
+17	""							IconPushRadio_17
+18	""							IconPushRadio_18
+19	""							IconPushRadio_19
+20	""							IconPushRadio_20
+}
+
+/* ---------------------------------------------------------- BasicElementIconsRollDownDialog BottomTabPage */
+
+'GDLG'  32640  TabPage			    0    0   81   30  "BasicElementIconsRollDownDialog Bottom" {
+/* [  1] */ Button			        5    3   71   24  LargePlain  "Close"
+}
+
+'DLGH'  32640  DLG_32640_ExampleRollDownDialog_Bottom {
+1	""							Button_0
+}
+
+/* ---------------------------------------------------------- FontPopupDialog */
+
+'STR#' DGTEST_FONTPOPUPDIALOG_RESID "Context Menu strings" {
+	/* [  1] */		"Restore formatting"
+	/* [  2] */		"Close"
+}
+
+'GDLG'  DGTEST_FONTPOPUPDIALOG_RESID  Modal | noGrow    316   89  316  120  "FontPopup Example Dialog" {
+/* [  1] */ PopupControl		    5    5  221   22	80  3																/* will be FontPopUp */
+/* [  2] */ RichEdit			    5   35  307   50	LargePlain  NoScroll
+/* [  3] */ PushCheck			  231    5   25   22	LargeBold	noFrame  	"B"
+/* [  4] */ PushCheck			  259    5   25   22	LargeItalic noFrame		"I"
+/* [  5] */ PushCheck			  287    5   25   22	LargeUnderline 	noFrame	"U"
+/* [  6] */ Button				  242   90   70   24	LargePlain  "Close"
+}
+
+'DLGH'  DGTEST_FONTPOPUPDIALOG_RESID  DLG_FontPopupt_Example_Dialog {
+1	"Select the font family"	FontPopup_0
+2	"Example text"				RichEd_0
+3	"Boldface"					PushCheck_3
+4	"Italic"					PushCheck_0
+5	"Underlined"				PushCheck_1
+6	""							Button_0
+}
+
+/* ---------------------------------------------------------- SpliButtonDialog */
+
+'GDLG'  DGTEST_SPLITBUTTONDIALOG_RESID  Modal  0    0   320   190  "Split Button Dialog" {
+/* [  1] */ Button				  240  158   70   24	LargePlain  "Close"
+/* [  2] */ LeftText			   20   48  300   18	LargePlain  vCenter  "Alignment, font style and font size of the split button:"
+/* [  3] */ RadioButton			   20   78  250   18	LargePlain  1  "left, plain, extra small"
+/* [  4] */ RadioButton			   20  104  250   18	LargePlain  1  "center, bold, large"
+/* [  5] */ RadioButton			   20  130  250   18	LargePlain  1  "right, italic, small"
+/* [  6] */ SplitButton			   60   8  200   24	LargePlain  6 "SplitButton"
+}
+
+'DLGH'  DGTEST_SPLITBUTTONDIALOG_RESID  DLG_SplitButton_Dialog {
+1	""							Button_0
+2	""							Text_0
+3	""							RadioButton_0
+4	""							RadioButton_1
+5	""							RadioButton_2
+6	""							SplitButton_0
+}
+
+/* ---------------------------------------------------------- Owner Drawn ListBox Example Palette */
+
+'GDLG'  DGTEST_OWNERDRAWNLISTBOXPLT_RESID  Palette | grow | close	    0    0  680  620  "Owner Drawn ListBox Example" {
+/* [  1] */ Button				  530  588  140   24	LargePlain  "OK"
+/* [  2] */ Button				  320  588  200   24	LargePlain  "Switch Images"
+/* [  3] */ Button				  110  588  200   24	LargePlain  "Get all objects"
+/* [  4] */ SingleSelList		   10   10  660  570	LargePlain  PartialItems  HVScroll  150
+}
+
+'DLGH'  DGTEST_OWNERDRAWNLISTBOXPLT_RESID  Owner_Drawn_ListBox_Example {
+1	""							Button_0
+2	""							Button_1
+3	""							Button_2
+4	""							SingleSelListBox_0
+}
+
+

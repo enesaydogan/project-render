@@ -1,0 +1,19 @@
+﻿/* *****************************************************************************
+// Localizable resource description for the CommunicationClient_Test Add-On
+// API Development Kit 25; Mac/Win
+//
+// [SG compatible] - Yes
+// ****************************************************************************/
+
+#include "Resources.h"
+
+'STR#' COMMUNICATION_CLIENT_TEST_ADDON_NAME "Add-on Name and Description" {
+/* [  1] */		"CommunicationClient Test"
+/* [  2] */		"CommunicationClient Test Add-On"
+}
+
+'STR#' COMMUNICATION_CLIENT_TEST_MENU_STRINGS "Communication Client Test Menu" {
+/* [   ] */		"Test"
+/* [   ] */		"CommunicationClient Test"
+/* [  1] */		"HTTP Client Connection Test"
+}

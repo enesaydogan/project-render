@@ -1,0 +1,10 @@
+/* *****************************************************************************
+// Resource description for the ModelAccess Test Add-On
+// ****************************************************************************/
+
+#include "Win32ResourceDefinitions.h"
+
+#include "ModelAccess_Test.grc.rc2"
+#include "ModelAccess_TestFix.grc.rc2"
+
+1	ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

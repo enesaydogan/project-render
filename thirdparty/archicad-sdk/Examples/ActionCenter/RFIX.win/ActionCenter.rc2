@@ -1,0 +1,8 @@
+/* *****************************************************************************
+// Resource description for the Action Center Example Add-On
+// ****************************************************************************/
+
+#include "ActionCenter.grc.rc2"
+#include "ActionCenterFix.grc.rc2"
+
+1		ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generator: Adobe Illustrator 21.0.2, SVG Export Plug-In . SVG Version: 6.00 Build 0)  -->
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+	 viewBox="0 0 24 24" style="enable-background:new 0 0 24 24;" xml:space="preserve">
+<style type="text/css">
+	.st0{display:none;}
+	.st1{display:inline;}
+	.st2{fill:#FFE214;stroke:#263238;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:10;}
+	.st3{fill:none;stroke:#263238;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:10;}
+	.st4{fill:none;stroke:#727677;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:10;}
+	.st5{fill:#263238;stroke:#263238;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:10;}
+</style>
+<g id="original" class="st0">
+	<g id="Original_Picture" class="st1">
+		<image style="overflow:visible;enable-background:new    ;" width="24" height="24" xlink:href="Spacing.png" >
+		</image>
+	</g>
+</g>
+<g id="drawing">
+	<circle class="st2" cx="10.5" cy="3.5" r="3"/>
+	<circle class="st2" cx="10.5" cy="3.5" r="3"/>
+	<line class="st3" x1="8.5" y1="1.5" x2="12.5" y2="5.5"/>
+	<line class="st3" x1="8.5" y1="5.5" x2="12.5" y2="1.5"/>
+	<circle class="st2" cx="10.5" cy="20.5" r="3"/>
+	<circle class="st2" cx="10.5" cy="20.5" r="3"/>
+	<line class="st3" x1="8.5" y1="18.5" x2="12.5" y2="22.5"/>
+	<line class="st3" x1="8.5" y1="22.5" x2="12.5" y2="18.5"/>
+</g>
+<g id="dimension">
+	<line class="st4" x1="20.5" y1="6.5" x2="19.5" y2="6.5"/>
+	<line class="st4" x1="17.5" y1="6.5" x2="16.5" y2="6.5"/>
+	<line class="st4" x1="14.5" y1="6.5" x2="13.5" y2="6.5"/>
+	<line class="st4" x1="20.5" y1="17.5" x2="19.5" y2="17.5"/>
+	<line class="st4" x1="17.5" y1="17.5" x2="16.5" y2="17.5"/>
+	<line class="st4" x1="14.5" y1="17.5" x2="13.5" y2="17.5"/>
+	<line class="st4" x1="21.5" y1="9.5" x2="21.5" y2="14.5"/>
+	<polygon class="st5" points="21.5,7.5 23.5,9.5 19.5,9.5 	"/>
+	<polygon class="st5" points="21.5,16.5 23.5,14.5 19.5,14.5 	"/>
+</g>
+</svg>

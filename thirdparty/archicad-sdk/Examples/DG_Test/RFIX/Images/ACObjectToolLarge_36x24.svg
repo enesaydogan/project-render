@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+	 viewBox="0 0 36 24" style="enable-background:new 0 0 36 24;" xml:space="preserve">
+<style type="text/css">
+	.st0{fill:none;stroke:#263238;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:10;}
+	.st1{fill:#FAFAFA;stroke:#263238;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:10;}
+</style>
+<g id="XMLID_787_">
+	<line id="XMLID_789_" class="st0" x1="26.5" y1="12.5" x2="26.5" y2="19.5"/>
+</g>
+<g id="XMLID_778_">
+	<line id="XMLID_780_" class="st0" x1="18.5" y1="22.5" x2="18.5" y2="15.5"/>
+</g>
+<path class="st0" d="M20.5,0.5"/>
+<g>
+	<path class="st0" d="M11.5,12.3V5c0-0.8,0.6-1.7,1.4-1.9L17,1.9c0.8-0.2,1.4,0.3,1.4,1.1v7"/>
+	<path class="st0" d="M11.5,19.5v-7.2"/>
+</g>
+<g id="XMLID_715_">
+	<path id="XMLID_746_" class="st1" d="M18.5,10.5l-7,2l7,3l8-3L18.5,10.5z"/>
+</g>
+</svg>

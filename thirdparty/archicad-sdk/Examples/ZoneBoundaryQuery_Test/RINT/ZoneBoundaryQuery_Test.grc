@@ -1,0 +1,12 @@
+﻿'STR#' 32000 "Add-on Name and Description" {
+/* [  1] */ "ZoneBoundaryQuery Test"
+/* [  2] */ "Testing the ZoneBoundaryQuery API"
+}
+
+
+'STR#' 32500 "Menu Description" {
+/* [   ] */	"Test"
+/* [   ] */	"ZoneBoundaryQueryTest"
+/* [  1] */		"Dump Zone Boundaries (Session Report)^E3"
+/* [  2] */		"Dump Zone Boundaries (File)^E3"
+}

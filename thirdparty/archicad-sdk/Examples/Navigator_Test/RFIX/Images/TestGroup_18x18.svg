@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+	 viewBox="0 0 18 18" enable-background="new 0 0 18 18" xml:space="preserve">
+<g>
+ <rect x="0.5" y="5.5" fill="#ECECEC" stroke="#263238" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" width="17" height="7"/>
+</g>
+<line fill="none" stroke="#263238" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" x1="0.5" y1="9.5" x2="4.5" y2="5.5"/>
+<line fill="none" stroke="#263238" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" x1="1.5" y1="12.5" x2="8.5" y2="5.5"/>
+<line fill="none" stroke="#263238" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" x1="5.5" y1="12.5" x2="12.5" y2="5.5"/>
+<line fill="none" stroke="#263238" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" x1="9.5" y1="12.5" x2="16.5" y2="5.5"/>
+<line fill="none" stroke="#263238" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" x1="13.5" y1="12.5" x2="17.5" y2="8.5"/>
+</svg>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+	 viewBox="0 0 36 24" style="enable-background:new 0 0 36 24;" xml:space="preserve">
+<style type="text/css">
+	.st0{fill:none;stroke:#263238;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:10;}
+</style>
+<g>
+	<rect x="9.5" y="3.5" class="st0" width="17" height="17"/>
+	<line class="st0" x1="9.5" y1="17.5" x2="15.5" y2="11.5"/>
+	<line class="st0" x1="15.5" y1="11.5" x2="20.5" y2="16.5"/>
+	<line class="st0" x1="26.5" y1="10.5" x2="16.5" y2="20.5"/>
+	<circle class="st0" cx="21" cy="8" r="2.5"/>
+</g>
+</svg>

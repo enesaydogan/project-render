@@ -1,0 +1,9 @@
+/* *****************************************************************************
+// Resource description for the Environment Control Add-On
+// ****************************************************************************/
+
+#include "Environment_Control.grc.rc2"
+#include "Environment_ControlFix.grc.rc2"
+
+
+1		ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

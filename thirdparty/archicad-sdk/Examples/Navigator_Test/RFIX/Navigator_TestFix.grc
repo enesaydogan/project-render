@@ -1,0 +1,162 @@
+﻿/*
+// *****************************************************************************
+// AddOn to Navigator_Test the API interface
+//
+// Fixed resources
+//
+// [SG compatible]
+// *****************************************************************************
+*/
+
+
+/*====================================== HISTORY ======================================
+**
+**	1.00:		- original development
+**
+**=====================================================================================*/
+
+#include "MDIDs_APICD.h"
+'MDID' 32500 "Add-On Identifier" {
+	MDID_APICD
+	MDID_APICD_NavigatorTest
+}
+
+/* Test icons */
+
+'GICN' 32408 "Book" {
+          "Book"
+}
+
+'GICN' 32409 "Project" {
+          "Project"
+}
+
+'GICN' 32410 "Story Link" {
+          "StoryLink"
+}
+
+'GICN' 32411 "Section Link" {
+          "SectionLink"
+}
+
+'GICN' 32412 "Detail Link" {
+          "DetailLink"
+}
+
+'GICN' 32413 "Layout Link" {
+          "LayoutLink"
+}
+
+'GICN' 32414 "Master Layout Link" {
+          "MasterLink"
+}
+
+'GICN' 32415 "3D Axonometric Link" {
+          "Axon3DLink"
+}
+
+'GICN' 32416 "3D Perspective Link" {
+          "Persp3DLink"
+}
+
+'GICN' 32417 "Schedule Link" {
+          "ScheduleLink"
+}
+
+'GICN' 32418 "List" {
+          "List"
+}
+
+'GICN' 32419 "Help" {
+          "Help"
+}
+
+'GICN' 32420 "Other" {
+          "Other"
+}
+
+'GICN' 32421 "MasterFolder" {
+          "MasterFolder"
+}
+
+'GICN' 32422 "Worksheet Link" {
+          "WorksheetLink"
+}
+
+'GICN' 32423 "Subset" {
+          "Subset"
+}
+
+'GICN' 32424 "TOC" {
+          "TOC"
+}
+
+'GICN' 32425 "Camera" {
+          "Camera"
+}
+
+'GICN' 32426 "Camera Set" {
+          "CameraSet"
+}
+
+'GICN' 32427 "Info" {
+          "Info"
+}
+
+'GICN' 32428 "Elevation" {
+          "Elevation"
+}
+
+'GICN' 32429 "Interior Elevation" {
+          "IntElevation"
+}
+
+'GICN' 32430 "DocumentFrom3D" {
+          "DocumentFrom3D"
+}
+
+
+'GICN' 2701 "TW 2.0 On-demand Free" {
+		"2701_TW20_OndemandFree"
+}
+
+'GICN' 32600 "TestNode" {
+	"TestNode"
+}
+
+'GICN' 32601 "TestNodeLink" {
+	"TestNodeLink"
+}
+
+'GICN' 32602 "TestGroup" {
+	"TestGroup"
+}
+
+'GICN' 32603 "TestGroupLink" {
+	"TestGroupLink"
+}
+
+'GICN' 32604 "TestNodeReservedTW" {
+	"TestNodeReservedTW"
+}
+
+'GICN' 32605 "TestGroupReservedTW" {
+	"TestGroupReservedTW"
+}
+
+'GICN' 32606 "TestNodeBeforeSend" {
+	"TestNodeBeforeSend"
+}
+
+'GICN' 32607 "TestGroupBeforeSend" {
+	"TestGroupBeforeSend"
+}
+
+'GICN' 32608 "TestNodeLinkTW" {
+	"TestNodeLinkTW"
+}
+
+'GICN' 32609 "TestGroupLinkTW" {
+	"TestGroupLinkTW"
+}
+

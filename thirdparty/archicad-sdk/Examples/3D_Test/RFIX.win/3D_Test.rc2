@@ -1,0 +1,8 @@
+/* *****************************************************************************
+// Resource description for the 3D Test Add-On
+// ****************************************************************************/
+
+#include "3D_Test.grc.rc2"
+#include "3D_TestFix.grc.rc2"
+
+1	ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

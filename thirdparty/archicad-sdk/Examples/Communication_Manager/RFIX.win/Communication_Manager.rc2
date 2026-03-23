@@ -1,0 +1,9 @@
+/* *****************************************************************************
+// Resource description for the Communication Manager Add-On
+// ****************************************************************************/
+
+#include "Communication_Manager.grc.rc2"
+#include "Communication_ManagerFix.grc.rc2"
+
+
+1		ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

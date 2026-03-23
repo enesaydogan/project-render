@@ -1,0 +1,8 @@
+/* *****************************************************************************
+// Resource description for the TrackerManager_Test Add-On
+// ****************************************************************************/
+
+#include "TrackerManager_Test.grc.rc2"
+#include "TrackerManager_TestFix.grc.rc2"
+
+1	ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico
