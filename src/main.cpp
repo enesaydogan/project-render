@@ -252,7 +252,7 @@ static void AppendGrassBladesFromInstance(const Scene::Instance &inst,
   if (!inst.mesh)
     return;
   const Asset::GpuMesh &mesh = *inst.mesh;
-  const float density = (std::clamp)(grassMat.grassBladeCount, 0.0f, 256.0f);
+  const float density = (std::clamp)(grassMat.grassBladeCount, 0.0f, 1024.0f);
   if (density <= 0.0f) {
     return;
   }
@@ -260,7 +260,7 @@ static void AppendGrassBladesFromInstance(const Scene::Instance &inst,
   const float variation =
       (std::clamp)(grassMat.grassBladeVariation, 0.0f, 1.0f);
   const float densityCompensation =
-      (std::clamp)(0.6f / baseSize, 1.0f, 6.0f);
+      (std::clamp)(0.6f / baseSize, 1.0f, 12.0f);
 
   struct GrassTriangle {
     DirectX::XMFLOAT3 p0;
@@ -368,7 +368,7 @@ static void AppendGrassBladesFromInstance(const Scene::Instance &inst,
   const int computedCount =
       (int)std::round((std::max)(weightedArea, 0.01f) * density *
                       densityCompensation);
-  const int bladeCount = std::clamp((std::max)(1, computedCount), 1, 16384);
+  const int bladeCount = std::clamp((std::max)(1, computedCount), 1, 1048576);
   if (bladeCount <= 0) {
     return;
   }

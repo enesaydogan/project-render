@@ -598,7 +598,7 @@ void Draw(HWND hwnd, bool &visible) {
                 grassChanged = true;
               }
               if (ImGui::SliderFloat("Blade Count / m2", &mat.grassBladeCount,
-                                     0.0f, 256.0f, "%.1f")) {
+                                     0.0f, 1024.0f, "%.1f")) {
                 grassChanged = true;
               }
               if (ImGui::SliderFloat("Blade Variation",

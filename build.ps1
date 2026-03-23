@@ -14,7 +14,7 @@ cmake -S $scriptDir -B $buildDir -G "Visual Studio 17 2022" -DUSE_TINYGLTF=ON
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "Building ($Configuration)..."
-cmake --build $buildDir --config $Configuration
+cmake --build $buildDir --config $Configuration -j 8
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "Build complete. Output in: $buildDir"
