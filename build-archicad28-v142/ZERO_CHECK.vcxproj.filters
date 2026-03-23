@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\project-render\build-archicad28-v142\CMakeFiles\45212a37e36dd7431a90f4e5d9cf0c74\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{90770FEC-35D6-3A03-AAA6-72F3BF5F48F3}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

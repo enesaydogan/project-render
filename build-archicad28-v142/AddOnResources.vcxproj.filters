@@ -1,0 +1,23 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\project-render\build-archicad28-v142\CMakeFiles\5a5136cd2ff21d579c97e8e8c295b99f\AddOnResources.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\project-render\build-archicad28-v142\CMakeFiles\45212a37e36dd7431a90f4e5d9cf0c74\AddOnResources.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\project-render\tools\archicad28\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="D:\project-render\tools\archicad28\RFIX.win\ProjectRenderArchicad28LiveLink.rc2" />
+    <None Include="D:\project-render\tools\archicad28\RFIX\ProjectRenderArchicad28LiveLinkFix.grc" />
+    <None Include="D:\project-render\tools\archicad28\RINT\ProjectRenderArchicad28LiveLink.grc" />
+    <None Include="D:\project-render\build-archicad28-v142\CMakeFiles\AddOnResources" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{90770FEC-35D6-3A03-AAA6-72F3BF5F48F3}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
