@@ -189,13 +189,13 @@ void EnvironmentPanel::createUi()
         applyLightingSettings(false, true);
     });
     connect(m_analyticSunIntensity->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) {
-        applyLightingSettings(false, false);
+        applyLightingSettings(false, true);
     });
     connect(m_fileSunIntensity->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) {
-        applyLightingSettings(false, false);
+        applyLightingSettings(false, true);
     });
     connect(m_fileSunSize->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) {
-        applyLightingSettings(false, false);
+        applyLightingSettings(false, true);
     });
 
     auto connectSkyControl = [this](SliderControl *control) {
@@ -310,6 +310,7 @@ void EnvironmentPanel::syncFromRenderer()
     m_sunSize->setEnabled(proceduralControls && !physicalSky);
     m_fileSunIntensity->setEnabled(usingFileIbl && ibl.HasFileSun());
     m_fileSunSize->setEnabled(usingFileIbl && ibl.HasFileSun());
+    m_analyticSunIntensity->setEnabled(usingFileIbl && ibl.HasFileSun());
 
     CloudParams &cp = g_cloudManager.GetParams();
     m_cloudEnabled->setChecked(g_cloudRenderingEnabled);
