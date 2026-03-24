@@ -4,6 +4,7 @@
 #include "../editor_ui.h"
 #include "../saved_views.h"
 
+#include <QApplication>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QElapsedTimer>
@@ -77,7 +78,7 @@ AnimationPanel::AnimationPanel(QWidget *parent)
             m_previewPlaying = false;
             m_playbackTimer->stop();
         }
-        applyScrubPosition();
+        applyPreviewTime(true);
         syncFromAnimation();
     });
     m_playbackTimer->setInterval(33);
@@ -265,16 +266,29 @@ void AnimationPanel::createUi()
         }
         m_previewPlaying = false;
         m_playbackTimer->stop();
-        applyScrubPosition();
+        const float totalDuration = AnimationSequence::GetTotalDurationSeconds();
+        if (totalDuration <= 0.0f) {
+            m_previewSeconds = 0.0f;
+        } else {
+            m_previewSeconds = totalDuration *
+                (static_cast<float>(m_scrubSlider->value()) / static_cast<float>(kScrubResolution));
+        }
+        applyPreviewTime(false);
         syncFromAnimation();
     });
     connect(m_playButton, &QPushButton::clicked, this, [this]() {
-        if (AnimationSequence::GetTotalDurationSeconds() <= 0.0f) {
+        const float totalDuration = AnimationSequence::GetTotalDurationSeconds();
+        if (totalDuration <= 0.0f) {
             return;
+        }
+        if (m_previewSeconds >= totalDuration) {
+            m_previewSeconds = 0.0f;
+            applyPreviewTime(true);
         }
         m_previewPlaying = true;
         m_playbackElapsed->restart();
         m_playbackTimer->start();
+        syncFromAnimation();
     });
     connect(m_stopButton, &QPushButton::clicked, this, [this]() {
         m_previewPlaying = false;
@@ -314,7 +328,54 @@ int AnimationPanel::selectedKeyframeIndex() const
     return m_keyframeList->currentItem()->data(kKeyframeIndexRole).toInt();
 }
 
-void AnimationPanel::applyScrubPosition()
+QString AnimationPanel::buildModelSignature() const
+{
+    QString signature;
+    const auto &keyframes = AnimationSequence::GetKeyframes();
+    signature.reserve(static_cast<int>(keyframes.size() * 48 + 64));
+    signature += QString::number(static_cast<int>(keyframes.size()));
+    signature += QLatin1Char(';');
+    for (const auto &keyframe : keyframes) {
+        signature += QString::fromUtf8(keyframe.label.c_str());
+        signature += QLatin1Char('|');
+        signature += QString::number(keyframe.durationToNextSeconds, 'f', 4);
+        signature += QLatin1Char('|');
+        signature += QString::number(keyframe.easing);
+        signature += QLatin1Char(';');
+    }
+
+    const auto &settings = AnimationSequence::GetExportSettings();
+    signature += QStringLiteral("res=%1;fps=%2;spp=%3;base=%4;view=%5;render=%6;batch=%7;anim=%8")
+        .arg(settings.resolutionPreset)
+        .arg(settings.fps)
+        .arg(settings.maxSpp)
+        .arg(QString::fromUtf8(settings.baseName.c_str()))
+        .arg(SavedViews::GetSelectedViewIndex())
+        .arg(g_renderExportJob.active ? 1 : 0)
+        .arg(g_renderBatchExport.active ? 1 : 0)
+        .arg(g_renderAnimationExport.active ? 1 : 0);
+    return signature;
+}
+
+bool AnimationPanel::hasInteractiveFocus() const
+{
+    QWidget *focus = QApplication::focusWidget();
+    if (!focus || !isAncestorOf(focus)) {
+        return false;
+    }
+
+    return focus == m_keyframeName ||
+           focus == m_baseName ||
+           focus == m_durationToNext ||
+           focus == m_fps ||
+           focus == m_maxSpp ||
+           focus == m_easingMode ||
+           focus == m_resolutionPreset ||
+           focus == m_keyframeList ||
+           m_scrubSlider->isSliderDown();
+}
+
+void AnimationPanel::applyPreviewTime(bool updateSlider)
 {
     const float totalDuration = AnimationSequence::GetTotalDurationSeconds();
     if (AnimationSequence::GetKeyframes().empty()) {
@@ -323,11 +384,24 @@ void AnimationPanel::applyScrubPosition()
     if (totalDuration <= 0.0f) {
         AnimationSequence::ApplyAtFrame(0, 1);
         m_previewSeconds = 0.0f;
+        if (updateSlider) {
+            const bool wasSyncing = m_syncing;
+            m_syncing = true;
+            m_scrubSlider->setValue(0);
+            m_syncing = wasSyncing;
+        }
         return;
     }
 
-    m_previewSeconds = totalDuration *
-        (static_cast<float>(m_scrubSlider->value()) / static_cast<float>(kScrubResolution));
+    m_previewSeconds = (std::clamp)(m_previewSeconds, 0.0f, totalDuration);
+    if (updateSlider) {
+        const int scrubValue = static_cast<int>(std::round(
+            (m_previewSeconds / totalDuration) * static_cast<float>(kScrubResolution)));
+        const bool wasSyncing = m_syncing;
+        m_syncing = true;
+        m_scrubSlider->setValue(scrubValue);
+        m_syncing = wasSyncing;
+    }
     AnimationSequence::ApplyAtTime(m_previewSeconds);
 }
 
@@ -378,26 +452,38 @@ void AnimationPanel::updateSelectedKeyframeControls()
 
 void AnimationPanel::syncFromAnimation()
 {
-    m_syncing = true;
-
     const auto &keyframes = AnimationSequence::GetKeyframes();
     const auto &settings = AnimationSequence::GetExportSettings();
-    const int previousSelection = selectedKeyframeIndex();
-    m_keyframeList->clear();
-    for (size_t index = 0; index < keyframes.size(); ++index) {
-        auto *item = new QListWidgetItem(
-            KeyframeSummary(keyframes[index], index, index + 1 == keyframes.size()),
-            m_keyframeList);
-        item->setData(kKeyframeIndexRole, static_cast<int>(index));
-    }
-    if (previousSelection >= 0 && previousSelection < m_keyframeList->count()) {
-        m_keyframeList->setCurrentRow(previousSelection);
-    }
+    const QString signature = buildModelSignature();
+    const bool modelChanged = signature != m_lastModelSignature;
+    const bool canRebuildModelUi = !hasInteractiveFocus() && !m_previewPlaying;
 
-    m_resolutionPreset->setCurrentIndex(settings.resolutionPreset);
-    m_fps->setValue(settings.fps);
-    m_maxSpp->setValue(settings.maxSpp);
-    m_baseName->setText(QString::fromUtf8(settings.baseName.c_str()));
+    if (modelChanged && canRebuildModelUi) {
+        m_syncing = true;
+
+        const int previousSelection = selectedKeyframeIndex();
+        m_keyframeList->clear();
+        for (size_t index = 0; index < keyframes.size(); ++index) {
+            auto *item = new QListWidgetItem(
+                KeyframeSummary(keyframes[index], index, index + 1 == keyframes.size()),
+                m_keyframeList);
+            item->setData(kKeyframeIndexRole, static_cast<int>(index));
+        }
+        if (previousSelection >= 0 && previousSelection < m_keyframeList->count()) {
+            m_keyframeList->setCurrentRow(previousSelection);
+        } else if (!keyframes.empty() && m_keyframeList->currentRow() < 0) {
+            m_keyframeList->setCurrentRow(0);
+        }
+
+        m_resolutionPreset->setCurrentIndex(settings.resolutionPreset);
+        m_fps->setValue(settings.fps);
+        m_maxSpp->setValue(settings.maxSpp);
+        m_baseName->setText(QString::fromUtf8(settings.baseName.c_str()));
+
+        updateSelectedKeyframeControls();
+        m_lastModelSignature = signature;
+        m_syncing = false;
+    }
 
     const float totalDuration = AnimationSequence::GetTotalDurationSeconds();
     const int totalFrames = AnimationSequence::GetTotalFrameCount(settings.fps);
@@ -420,7 +506,11 @@ void AnimationPanel::syncFromAnimation()
         scrubValue = static_cast<int>(std::round((std::clamp)(m_previewSeconds / totalDuration, 0.0f, 1.0f) * kScrubResolution));
     }
     m_scrubSlider->setEnabled(!keyframes.empty());
-    m_scrubSlider->setValue(scrubValue);
+    if (!m_scrubSlider->isSliderDown()) {
+        m_syncing = true;
+        m_scrubSlider->setValue(scrubValue);
+        m_syncing = false;
+    }
     m_previewLabel->setText(
         tr("%1 s / %2 s")
             .arg(QString::number(m_previewSeconds, 'f', 2))
@@ -436,7 +526,4 @@ void AnimationPanel::syncFromAnimation()
         statusText = QString::fromUtf8(g_renderExportStatus.c_str());
     }
     m_statusLabel->setText(statusText);
-
-    updateSelectedKeyframeControls();
-    m_syncing = false;
 }
