@@ -1326,7 +1326,7 @@ bool RebindNodeMaterialSlot(size_t nodeIndex, size_t materialSlot,
     if (meshIndex >= g_loadedMeshes.size()) {
       continue;
     }
-    if (g_loadedMeshes[meshIndex].materialIndex == previousMaterialIndex) {
+    if (g_loadedMeshes[meshIndex].materialSlot == static_cast<int>(materialSlot)) {
       g_loadedMeshes[meshIndex].materialIndex = materialIndex;
     }
   }
@@ -1350,11 +1350,14 @@ bool UpdateNodeMaterialSourceName(size_t nodeIndex, size_t materialSlot,
     node.linkedMaterialSourceNames.resize(node.linkedMaterialIndices.size());
   }
 
+  if (node.linkedMaterialSourceNames[materialSlot].empty()) {
+    node.linkedMaterialSourceNames[materialSlot] = materialName;
+  }
+
   if (node.linkedMaterialSourceNames[materialSlot] == materialName) {
     return true;
   }
 
-  node.linkedMaterialSourceNames[materialSlot] = materialName;
   return true;
 }
 

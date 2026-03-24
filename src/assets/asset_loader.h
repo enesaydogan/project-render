@@ -20,6 +20,7 @@ struct GpuMesh {
   UINT vertexCount = 0;
   UINT indexCount = 0;
   int materialIndex = -1; // index into materials array if provided
+  int materialSlot = -1; // Source material slot for the mesh
 
   // Bounding box
   float minBound[3] = {0, 0, 0};
