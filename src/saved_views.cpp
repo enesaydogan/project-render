@@ -21,6 +21,7 @@ constexpr uint32_t kThumbnailHeight = 108;
 
 std::vector<SavedView> g_savedViews;
 std::string g_lastStatus;
+int g_selectedViewIndex = -1;
 
 void TransitionResourceForReadback(ID3D12GraphicsCommandList *commandList,
                                    ID3D12Resource *resource,
@@ -310,6 +311,10 @@ const std::vector<SavedView> &GetViews() { return g_savedViews; }
 
 const std::string &GetLastStatus() { return g_lastStatus; }
 
+int GetSelectedViewIndex() { return g_selectedViewIndex; }
+
+void SetSelectedViewIndex(int index) { g_selectedViewIndex = index; }
+
 SavedView CaptureCurrentState() {
   SavedView view;
   CaptureCurrentCameraState(view);
@@ -323,6 +328,7 @@ size_t AddCurrentView(const std::string &preferredName) {
   CaptureThumbnail(view.thumbnailRgba, view.thumbnailWidth,
                    view.thumbnailHeight);
   g_savedViews.push_back(std::move(view));
+  g_selectedViewIndex = static_cast<int>(g_savedViews.size()) - 1;
   g_lastStatus = "Saved view: " + g_savedViews.back().name;
   return g_savedViews.size() - 1;
 }
@@ -333,6 +339,11 @@ bool RemoveView(size_t index) {
   }
   g_lastStatus = "Deleted view: " + g_savedViews[index].name;
   g_savedViews.erase(g_savedViews.begin() + static_cast<std::ptrdiff_t>(index));
+  if (g_savedViews.empty()) {
+    g_selectedViewIndex = -1;
+  } else if (g_selectedViewIndex >= static_cast<int>(g_savedViews.size())) {
+    g_selectedViewIndex = static_cast<int>(g_savedViews.size()) - 1;
+  }
   return true;
 }
 
@@ -351,11 +362,13 @@ bool ApplyView(size_t index) {
 
 void Clear() {
   g_savedViews.clear();
+  g_selectedViewIndex = -1;
   g_lastStatus = "Views cleared";
 }
 
 void SetViews(std::vector<SavedView> views) {
   g_savedViews = std::move(views);
+  g_selectedViewIndex = g_savedViews.empty() ? -1 : 0;
   g_lastStatus = g_savedViews.empty() ? "No saved views" : "Saved views loaded";
 }
 

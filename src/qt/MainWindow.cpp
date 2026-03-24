@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "AnimationPanel.h"
 #include "CameraPanel.h"
 #include "DX12View.h"
 #include "EnvironmentPanel.h"
@@ -491,6 +492,15 @@ void MainWindow::createDocks()
     viewsDock->setAllowedAreas(Qt::AllDockWidgetAreas);
     viewsDock->setWidget(wrapScroll(new ViewsPanel(viewsDock), viewsDock));
     addDockWidget(Qt::RightDockWidgetArea, viewsDock);
+    m_animationDock = new QDockWidget(tr("Animation"), this);
+    m_animationDock->setObjectName(tr("Animation"));
+    m_animationDock->setAllowedAreas(Qt::AllDockWidgetAreas);
+    m_animationDock->setFeatures(QDockWidget::DockWidgetClosable |
+                                 QDockWidget::DockWidgetMovable |
+                                 QDockWidget::DockWidgetFloatable);
+    m_animationDock->setWidget(new AnimationPanel(m_animationDock));
+    addDockWidget(Qt::BottomDockWidgetArea, m_animationDock);
+    m_animationDock->setMinimumHeight(170);
     auto *lightsDock = new QDockWidget(tr("Lights"), this);
     lightsDock->setObjectName(tr("Lights"));
     lightsDock->setAllowedAreas(Qt::AllDockWidgetAreas);

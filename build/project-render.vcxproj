@@ -968,6 +968,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="D:\project-render\src\clouds.cpp" />
     <ClCompile Include="D:\project-render\src\imgui_theme.cpp" />
     <ClCompile Include="D:\project-render\src\scene_io.cpp" />
+    <ClCompile Include="D:\project-render\src\animation_sequence.cpp" />
     <ClCompile Include="D:\project-render\src\saved_views.cpp" />
     <ClCompile Include="D:\project-render\src\grass_manager.cpp" />
     <ClCompile Include="D:\project-render\src\livelink\livelink_types.cpp" />
@@ -976,6 +977,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="D:\project-render\src\livelink\livelink_pipe_provider.cpp" />
     <ClCompile Include="D:\project-render\src\livelink\livelink_scene_sync.cpp" />
     <ClCompile Include="D:\project-render\src\livelink\livelink_runtime.cpp" />
+    <ClCompile Include="D:\project-render\src\qt\AnimationPanel.cpp" />
     <ClCompile Include="D:\project-render\src\qt\CameraPanel.cpp" />
     <ClCompile Include="D:\project-render\src\qt\EnvironmentPanel.cpp" />
     <ClCompile Include="D:\project-render\src\qt\MainWindow.cpp" />

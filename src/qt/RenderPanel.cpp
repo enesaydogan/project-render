@@ -161,6 +161,7 @@ void RenderPanel::createUi()
             g_renderExportStatus = "Render canceled.";
             RestoreRenderExportState();
             CancelBatchRenderExport();
+            CancelAnimationRenderExport();
         }
     });
 }

@@ -1,5 +1,6 @@
 #include "ViewsPanel.h"
 
+#include "../animation_sequence.h"
 #include "../saved_views.h"
 
 #include <QHBoxLayout>
@@ -61,6 +62,9 @@ void ViewsPanel::createUi()
     buttonRow->addWidget(m_deleteButton);
     layout->addLayout(buttonRow);
 
+    m_addToAnimationButton = new QPushButton(tr("Add Selected To Animation"), this);
+    layout->addWidget(m_addToAnimationButton);
+
     m_viewList = new QListWidget(this);
     m_viewList->setIconSize(QSize(192, 108));
     m_viewList->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -94,6 +98,12 @@ void ViewsPanel::createUi()
             syncFromViews();
         }
     });
+    connect(m_addToAnimationButton, &QPushButton::clicked, this, [this]() {
+        const int index = selectedViewIndex();
+        if (index >= 0) {
+            AnimationSequence::AddKeyframeFromSavedView(static_cast<size_t>(index));
+        }
+    });
     connect(m_viewList, &QListWidget::currentItemChanged, this,
             [this](QListWidgetItem *current, QListWidgetItem *) {
         if (m_syncing || !current) {
@@ -103,6 +113,7 @@ void ViewsPanel::createUi()
         if (!viewIndex.isValid()) {
             return;
         }
+        SavedViews::SetSelectedViewIndex(viewIndex.toInt());
         SavedViews::ApplyView(static_cast<size_t>(viewIndex.toInt()));
         syncFromViews();
     });
@@ -144,7 +155,9 @@ void ViewsPanel::syncFromViews()
         m_viewList->clearSelection();
     }
 
+    SavedViews::SetSelectedViewIndex(selectedViewIndex());
     m_deleteButton->setEnabled(selectedViewIndex() >= 0);
+    m_addToAnimationButton->setEnabled(selectedViewIndex() >= 0);
     if (views.empty()) {
         m_statusLabel->setText(tr("No saved views. Create one from the current viewport."));
     } else {

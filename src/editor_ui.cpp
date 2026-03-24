@@ -84,6 +84,7 @@ const int g_renderResolutionPresetCount =
 RenderExportSettings g_renderExportSettings;
 RenderExportJobState g_renderExportJob;
 RenderBatchExportState g_renderBatchExport;
+RenderAnimationExportState g_renderAnimationExport;
 std::string g_renderExportStatus;
 
 bool g_showRenderModeWindow = false;
@@ -404,6 +405,40 @@ static std::wstring BuildBatchOutputPath(const std::wstring &directory,
   return (fs::path(directory) / fs::path(stem + L".png")).wstring();
 }
 
+static std::wstring BuildAnimationOutputPath(const std::wstring &directory,
+                                             const std::string &baseName,
+                                             int frameIndex,
+                                             int totalFrames) {
+  namespace fs = std::filesystem;
+
+  const int digits =
+      (std::max)(4, static_cast<int>(std::to_string((std::max)(1, totalFrames)).size()));
+  std::wstring stem = SanitizeFileStem(Utf8ToWString(baseName));
+  if (stem.empty()) {
+    stem = L"final";
+  }
+  std::wstring frameSuffix = std::to_wstring(frameIndex + 1);
+  if (frameSuffix.size() < static_cast<size_t>(digits)) {
+    frameSuffix.insert(frameSuffix.begin(), digits - frameSuffix.size(), L'0');
+  }
+  return (fs::path(directory) /
+          fs::path(stem + L"-" + frameSuffix + L".png"))
+      .wstring();
+}
+
+struct RenderExportLaunchSettings {
+  int resolutionPreset = 0;
+  int maxSpp = 1;
+  float noisePercent = 0.0f;
+  int denoiserIndex = 0;
+  bool allowNoiseThresholdStop = true;
+};
+
+static void StartRenderExportJobWithSettings(
+    const std::wstring &outputPath,
+    const RenderExportLaunchSettings &settings);
+static bool StartNextAnimationRenderJob();
+
 static bool StartNextBatchRenderJob() {
   if (!g_renderBatchExport.active) {
     return false;
@@ -450,6 +485,48 @@ static bool StartNextBatchRenderJob() {
   }
 
   return false;
+}
+
+static bool StartNextAnimationRenderJob() {
+  if (!g_renderAnimationExport.active) {
+    return false;
+  }
+  if (g_renderAnimationExport.currentFrameIndex >=
+      g_renderAnimationExport.totalFrames) {
+    return false;
+  }
+
+  const int frameIndex = g_renderAnimationExport.currentFrameIndex;
+  const int fps = (std::max)(1, g_renderAnimationExport.fps);
+  SavedViews::SavedView frameCamera =
+      AnimationSequence::EvaluateAtFrame(frameIndex, fps);
+  SavedViews::ApplyView(frameCamera);
+
+  const auto &animationSettings = AnimationSequence::GetExportSettings();
+  g_renderAnimationExport.currentLabel = frameCamera.name;
+  g_renderAnimationExport.currentOutputPath = BuildAnimationOutputPath(
+      g_renderAnimationExport.outputDirectory, animationSettings.baseName,
+      frameIndex, g_renderAnimationExport.totalFrames);
+
+  RenderExportLaunchSettings launchSettings = {};
+  launchSettings.resolutionPreset = g_renderAnimationExport.resolutionPreset;
+  launchSettings.maxSpp = g_renderAnimationExport.maxSpp;
+  launchSettings.noisePercent = 0.0f;
+  launchSettings.denoiserIndex = g_renderExportSettings.denoiserIndex;
+  launchSettings.allowNoiseThresholdStop = false;
+  StartRenderExportJobWithSettings(g_renderAnimationExport.currentOutputPath,
+                                   launchSettings);
+  if (!g_renderExportJob.active) {
+    g_renderAnimationExport.failed = true;
+    return false;
+  }
+
+  g_renderExportStatus = "Rendering animation frame " +
+                         std::to_string(frameIndex + 1) + "/" +
+                         std::to_string(g_renderAnimationExport.totalFrames) +
+                         " (" + g_renderAnimationExport.currentLabel + ")";
+  ++g_renderAnimationExport.currentFrameIndex;
+  return true;
 }
 
 // Forward declarations for helpers also used by the export job logic in
@@ -539,6 +616,115 @@ static bool EnsureExportRenderTarget(UINT width, UINT height) {
   return true;
 }
 
+  static void StartRenderExportJobWithSettings(
+    const std::wstring &outputPath,
+    const RenderExportLaunchSettings &settings) {
+    if (g_renderExportJob.active || outputPath.empty() || !g_rayTracingSupported) {
+    return;
+    }
+
+    int presetIndex = settings.resolutionPreset;
+    if (presetIndex < 0 || presetIndex >= g_renderResolutionPresetCount) {
+    presetIndex = 0;
+    }
+
+    g_renderExportJob.active = true;
+    g_renderExportJob.outputPath = outputPath;
+    g_renderExportJob.targetWidth = g_renderResolutionPresets[presetIndex].width;
+    g_renderExportJob.targetHeight =
+      g_renderResolutionPresets[presetIndex].height;
+    g_renderExportJob.targetMaxSpp = (settings.maxSpp < 1) ? 1 : settings.maxSpp;
+    g_renderExportJob.targetNoiseThreshold =
+      (settings.noisePercent <= 0.0f) ? 0.001f : (settings.noisePercent / 100.0f);
+    g_renderExportJob.allowNoiseThresholdStop = settings.allowNoiseThresholdStop;
+    g_renderExportJob.minSppBeforeNoiseStop =
+      (g_renderExportJob.targetMaxSpp < 32)
+        ? (UINT)g_renderExportJob.targetMaxSpp
+        : 32u;
+    if (g_renderExportJob.minSppBeforeNoiseStop < 8u) {
+    g_renderExportJob.minSppBeforeNoiseStop = 8u;
+    }
+    g_renderExportJob.completionArmed = false;
+    g_renderExportJob.completionFrames = 0;
+    g_renderExportJob.settleFramesRemaining = 0;
+    g_renderExportJob.previousMode = g_currentRenderMode;
+    g_renderExportJob.previousMaxSpp = g_cameraData.maxSPP;
+    g_renderExportJob.previousNoiseThreshold = g_cameraData.noiseThreshold;
+    g_renderExportJob.previousAdaptiveSampling = g_cameraData.useAdaptiveSampling;
+    g_renderExportJob.previousDenoiserIndex =
+      DenoiserIndexFromMode(DxrRenderer::GetDenoiserMode());
+
+    g_renderExportJob.previousStreamlineEnabled =
+      DX12Context::g_streamline.IsEnabled();
+    g_renderExportJob.previousStreamlineMode =
+      (int)DX12Context::g_streamline.GetMode();
+    g_renderExportJob.previousStreamlineQuality =
+      (int)DX12Context::g_streamline.GetQuality();
+    if (g_renderExportJob.previousStreamlineEnabled) {
+    DX12Context::g_streamline.SetEnabled(false);
+    }
+
+    g_currentRenderMode = RenderMode::DXR;
+    g_cameraData.maxSPP = (float)g_renderExportJob.targetMaxSpp;
+    g_cameraData.noiseThreshold = g_renderExportJob.targetNoiseThreshold;
+    g_cameraData.useAdaptiveSampling =
+      settings.allowNoiseThresholdStop ? 1.0f : 0.0f;
+    g_cameraData.exportRendering = 1.0f;
+    DxrRenderer::SetDenoiserMode(
+      DenoiserModeFromIndex((std::clamp)(settings.denoiserIndex, 0, 2)));
+
+    if (!EnsureExportRenderTarget(g_renderExportJob.targetWidth,
+                  g_renderExportJob.targetHeight)) {
+    g_renderExportStatus = "Failed to allocate export render target.";
+    g_cameraData.maxSPP = g_renderExportJob.previousMaxSpp;
+    g_cameraData.noiseThreshold = g_renderExportJob.previousNoiseThreshold;
+    g_cameraData.useAdaptiveSampling =
+      g_renderExportJob.previousAdaptiveSampling;
+    g_cameraData.exportRendering = 0.0f;
+    DxrRenderer::SetDenoiserMode(
+      DenoiserModeFromIndex(g_renderExportJob.previousDenoiserIndex));
+    g_currentRenderMode = g_renderExportJob.previousMode;
+    DX12Context::g_streamline.SetMode(
+      (StreamlineManager::Mode)g_renderExportJob.previousStreamlineMode);
+    DX12Context::g_streamline.SetQuality(
+      (StreamlineManager::Quality)
+        g_renderExportJob.previousStreamlineQuality);
+    DX12Context::g_streamline.SetEnabled(
+      g_renderExportJob.previousStreamlineEnabled);
+    g_renderExportJob.active = false;
+    UpdateCameraCB();
+    return;
+    }
+
+    if (!RecreateDxrPipelineSafe(g_renderExportJob.targetWidth,
+                   g_renderExportJob.targetHeight,
+                   "StartRenderExportJobWithSettings")) {
+    g_renderExportStatus = "Failed to create DXR pipeline for export.";
+    g_cameraData.maxSPP = g_renderExportJob.previousMaxSpp;
+    g_cameraData.noiseThreshold = g_renderExportJob.previousNoiseThreshold;
+    g_cameraData.useAdaptiveSampling =
+      g_renderExportJob.previousAdaptiveSampling;
+    g_cameraData.exportRendering = 0.0f;
+    DxrRenderer::SetDenoiserMode(
+      DenoiserModeFromIndex(g_renderExportJob.previousDenoiserIndex));
+    g_currentRenderMode = g_renderExportJob.previousMode;
+    DX12Context::g_streamline.SetMode(
+      (StreamlineManager::Mode)g_renderExportJob.previousStreamlineMode);
+    DX12Context::g_streamline.SetQuality(
+      (StreamlineManager::Quality)
+        g_renderExportJob.previousStreamlineQuality);
+    DX12Context::g_streamline.SetEnabled(
+      g_renderExportJob.previousStreamlineEnabled);
+    g_renderExportJob.active = false;
+    UpdateCameraCB();
+    return;
+    }
+
+    DxrRenderer::ResetAccumulation();
+    UpdateCameraCB();
+    g_renderExportStatus = "Rendering...";
+  }
+
 void RestoreRenderExportState() {
   if (!g_renderExportJob.active) {
     return;
@@ -571,6 +757,7 @@ void RestoreRenderExportState() {
   g_renderExportJob.completionArmed = false;
   g_renderExportJob.completionFrames = 0;
   g_renderExportJob.settleFramesRemaining = 0;
+  g_renderExportJob.allowNoiseThresholdStop = true;
   g_exportRenderTarget.Reset();
   g_exportRtvHeap.Reset();
   g_exportRenderTargetWidth = 0;
@@ -653,121 +840,85 @@ void CancelBatchRenderExport() {
   g_renderExportStatus = "Batch render canceled.";
 }
 
-void StartRenderExportJob(const std::wstring &outputPath) {
-  if (g_renderExportJob.active || outputPath.empty() ||
+bool StartAnimationRenderExport(const std::wstring &outputDirectory) {
+  if (g_renderExportJob.active || g_renderBatchExport.active ||
+      g_renderAnimationExport.active || outputDirectory.empty() ||
       !g_rayTracingSupported) {
+    return false;
+  }
+
+  const auto &settings = AnimationSequence::GetExportSettings();
+  const int totalFrames = AnimationSequence::GetTotalFrameCount(settings.fps);
+  if (totalFrames <= 0) {
+    g_renderExportStatus = "Animation has no keyframes.";
+    return false;
+  }
+
+  g_renderAnimationExport = {};
+  g_renderAnimationExport.active = true;
+  g_renderAnimationExport.outputDirectory = outputDirectory;
+  g_renderAnimationExport.totalFrames = totalFrames;
+  g_renderAnimationExport.fps = settings.fps;
+  g_renderAnimationExport.resolutionPreset = settings.resolutionPreset;
+  g_renderAnimationExport.maxSpp = settings.maxSpp;
+  g_renderAnimationExport.previousCamera = SavedViews::CaptureCurrentState();
+  g_renderAnimationExport.previousCameraCaptured = true;
+
+  if (!StartNextAnimationRenderJob()) {
+    if (g_renderAnimationExport.previousCameraCaptured) {
+      SavedViews::ApplyView(g_renderAnimationExport.previousCamera);
+    }
+    g_renderAnimationExport = {};
+    g_renderExportStatus = "Failed to start animation export.";
+    return false;
+  }
+  return true;
+}
+
+void AdvanceAnimationRenderExport(bool previousExportSucceeded) {
+  if (!g_renderAnimationExport.active) {
     return;
   }
 
-  int presetIndex = g_renderExportSettings.resolutionPreset;
-  if (presetIndex < 0 || presetIndex >= g_renderResolutionPresetCount) {
-    presetIndex = 0;
+  if (!previousExportSucceeded) {
+    g_renderAnimationExport.failed = true;
   }
 
-  g_renderExportJob.active = true;
-  g_renderExportJob.outputPath = outputPath;
-  g_renderExportJob.targetWidth = g_renderResolutionPresets[presetIndex].width;
-  g_renderExportJob.targetHeight =
-      g_renderResolutionPresets[presetIndex].height;
-  g_renderExportJob.targetMaxSpp =
-      (g_renderExportSettings.maxSpp < 1) ? 1 : g_renderExportSettings.maxSpp;
-  g_renderExportJob.targetNoiseThreshold =
-      (g_renderExportSettings.noisePercent <= 0.0f)
-          ? 0.001f
-          : (g_renderExportSettings.noisePercent / 100.0f);
-  g_renderExportJob.minSppBeforeNoiseStop =
-      (g_renderExportJob.targetMaxSpp < 32)
-          ? (UINT)g_renderExportJob.targetMaxSpp
-          : 32u;
-  if (g_renderExportJob.minSppBeforeNoiseStop < 8u) {
-    g_renderExportJob.minSppBeforeNoiseStop = 8u;
+  if (g_renderAnimationExport.failed || !StartNextAnimationRenderJob()) {
+    const bool failed = g_renderAnimationExport.failed;
+    const int totalFrames = g_renderAnimationExport.totalFrames;
+    if (g_renderAnimationExport.previousCameraCaptured) {
+      SavedViews::ApplyView(g_renderAnimationExport.previousCamera);
+    }
+    g_renderAnimationExport = {};
+    if (failed) {
+      g_renderExportStatus = "Animation export failed.";
+    } else {
+      g_renderExportStatus = "Animation export finished: " +
+                             std::to_string(totalFrames) + " frames.";
+    }
   }
-  g_renderExportJob.completionArmed = false;
-  g_renderExportJob.completionFrames = 0;
-  g_renderExportJob.settleFramesRemaining = 0;
-  if (g_renderExportSettings.denoiserIndex < 0 ||
-      g_renderExportSettings.denoiserIndex > 2) {
-    g_renderExportSettings.denoiserIndex = 0;
-  }
-  g_renderExportJob.previousMode = g_currentRenderMode;
-  g_renderExportJob.previousMaxSpp = g_cameraData.maxSPP;
-  g_renderExportJob.previousNoiseThreshold = g_cameraData.noiseThreshold;
-  g_renderExportJob.previousAdaptiveSampling = g_cameraData.useAdaptiveSampling;
-  g_renderExportJob.previousDenoiserIndex =
-      DenoiserIndexFromMode(DxrRenderer::GetDenoiserMode());
+}
 
-  // Save Streamline/DLSS state so we can disable it for the export (this
-  // allows noise statistics to be computed even when DLSS-RR would normally
-  // bypass accumulation). We'll restore these in RestoreRenderExportState().
-  g_renderExportJob.previousStreamlineEnabled =
-      DX12Context::g_streamline.IsEnabled();
-  g_renderExportJob.previousStreamlineMode =
-      (int)DX12Context::g_streamline.GetMode();
-  g_renderExportJob.previousStreamlineQuality =
-      (int)DX12Context::g_streamline.GetQuality();
-  if (g_renderExportJob.previousStreamlineEnabled) {
-    DX12Context::g_streamline.SetEnabled(false);
-  }
-
-  g_currentRenderMode = RenderMode::DXR;
-  g_cameraData.maxSPP = (float)g_renderExportJob.targetMaxSpp;
-  g_cameraData.noiseThreshold = g_renderExportJob.targetNoiseThreshold;
-  g_cameraData.useAdaptiveSampling = 1.0f;
-  g_cameraData.exportRendering = 1.0f;
-  DxrRenderer::SetDenoiserMode(
-      DenoiserModeFromIndex(g_renderExportSettings.denoiserIndex));
-
-  if (!EnsureExportRenderTarget(g_renderExportJob.targetWidth,
-                                g_renderExportJob.targetHeight)) {
-    g_renderExportStatus = "Failed to allocate export render target.";
-    g_cameraData.maxSPP = g_renderExportJob.previousMaxSpp;
-    g_cameraData.noiseThreshold = g_renderExportJob.previousNoiseThreshold;
-    g_cameraData.useAdaptiveSampling =
-        g_renderExportJob.previousAdaptiveSampling;
-    g_cameraData.exportRendering = 0.0f;
-    DxrRenderer::SetDenoiserMode(
-        DenoiserModeFromIndex(g_renderExportJob.previousDenoiserIndex));
-    g_currentRenderMode = g_renderExportJob.previousMode;
-    // Restore Streamline/DLSS state if we disabled it earlier
-    DX12Context::g_streamline.SetMode(
-        (StreamlineManager::Mode)g_renderExportJob.previousStreamlineMode);
-    DX12Context::g_streamline.SetQuality(
-        (StreamlineManager::Quality)
-            g_renderExportJob.previousStreamlineQuality);
-    DX12Context::g_streamline.SetEnabled(
-        g_renderExportJob.previousStreamlineEnabled);
-    g_renderExportJob.active = false;
-    UpdateCameraCB();
+void CancelAnimationRenderExport() {
+  if (!g_renderAnimationExport.active) {
     return;
   }
-
-  if (!RecreateDxrPipelineSafe(g_renderExportJob.targetWidth,
-                               g_renderExportJob.targetHeight,
-                               "StartRenderExportJob")) {
-    g_renderExportStatus = "Failed to create DXR pipeline for export.";
-    g_cameraData.maxSPP = g_renderExportJob.previousMaxSpp;
-    g_cameraData.noiseThreshold = g_renderExportJob.previousNoiseThreshold;
-    g_cameraData.useAdaptiveSampling =
-        g_renderExportJob.previousAdaptiveSampling;
-    g_cameraData.exportRendering = 0.0f;
-    DxrRenderer::SetDenoiserMode(
-        DenoiserModeFromIndex(g_renderExportJob.previousDenoiserIndex));
-    g_currentRenderMode = g_renderExportJob.previousMode;
-    DX12Context::g_streamline.SetMode(
-        (StreamlineManager::Mode)g_renderExportJob.previousStreamlineMode);
-    DX12Context::g_streamline.SetQuality(
-        (StreamlineManager::Quality)
-            g_renderExportJob.previousStreamlineQuality);
-    DX12Context::g_streamline.SetEnabled(
-        g_renderExportJob.previousStreamlineEnabled);
-    g_renderExportJob.active = false;
-    UpdateCameraCB();
-    return;
+  if (g_renderAnimationExport.previousCameraCaptured) {
+    SavedViews::ApplyView(g_renderAnimationExport.previousCamera);
   }
-  DxrRenderer::ResetAccumulation();
-  UpdateCameraCB();
+  g_renderAnimationExport = {};
+  g_renderExportStatus = "Animation export canceled.";
+}
 
-  g_renderExportStatus = "Rendering...";
+void StartRenderExportJob(const std::wstring &outputPath) {
+  RenderExportLaunchSettings settings = {};
+  settings.resolutionPreset = g_renderExportSettings.resolutionPreset;
+  settings.maxSpp = g_renderExportSettings.maxSpp;
+  settings.noisePercent = g_renderExportSettings.noisePercent;
+  settings.denoiserIndex = g_renderExportSettings.denoiserIndex;
+  settings.allowNoiseThresholdStop = true;
+  StartRenderExportJobWithSettings(outputPath, settings);
   fprintf(stderr,
           "Render export started: %ux%u, maxSPP=%d, noise=%.3f, "
           "denoiser=%d\n",
