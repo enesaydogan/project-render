@@ -253,15 +253,12 @@ int AppendNativePayloadTexture(const std::string &textureUri,
     return cached->second;
   }
 
-  const std::filesystem::path texturePath = Utf8PathFromString(textureUri);
-  std::error_code error;
-  if (texturePath.empty() || !std::filesystem::exists(texturePath, error)) {
-    return -1;
-  }
-
   Asset::Texture texture =
       Asset::LoadTextureFromFile(textureUri, IsHdrTextureUri(textureUri));
   if (!texture.resource) {
+    fprintf(stderr,
+            "LiveLink: failed to load payload texture '%s'\n",
+            textureUri.c_str());
     return -1;
   }
 
@@ -1161,16 +1158,14 @@ bool LiveLinkSceneSync::ApplyMaterialChanged(const SceneDeltaBatch &batch,
       return cached->second;
     }
 
-    const std::filesystem::path texturePath = Utf8PathFromString(textureUri);
-    std::error_code error;
-    if (texturePath.empty() || !std::filesystem::exists(texturePath, error)) {
-      return -1;
-    }
-
     const int textureIndex =
         Scene::AddTextureFromFile(textureUri, IsHdrTextureUri(textureUri));
     if (textureIndex >= 0) {
       m_textureIndicesByUri.emplace(textureUri, textureIndex);
+    } else {
+      fprintf(stderr,
+              "LiveLink: failed to bind material texture '%s'\n",
+              textureUri.c_str());
     }
     return textureIndex;
   };

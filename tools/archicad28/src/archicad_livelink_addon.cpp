@@ -11,6 +11,8 @@
 #include "Polygon.hpp"
 #include "TextureCoordinate.hpp"
 #include "CH.hpp"
+#include "GXImage.hpp"
+#include "IOUtilitiesPublic.hpp"
 #include "UniString.hpp"
 
 #include <nlohmann/json.hpp>
@@ -18,6 +20,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -294,6 +297,129 @@ std::string PathToUtf8(const std::filesystem::path &path) {
   return utf8;
 }
 
+std::string LocationToUtf8Path(const IO::Location &location) {
+  GS::UniString pathText;
+  if (location.ToPath(&pathText) != NoError) {
+    return {};
+  }
+
+  const std::filesystem::path path(ToUtf8(pathText));
+  if (path.empty()) {
+    return {};
+  }
+
+  return PathToUtf8(path.lexically_normal());
+}
+
+std::string GetLocationDisplayText(const IO::Location &location) {
+  return ToUtf8(location.ToDisplayText());
+}
+
+bool IsDirectFilesystemTexturePath(const std::string &path) {
+  if (path.empty()) {
+    return false;
+  }
+
+  const auto containsVirtualLibrarySegment =
+      [&path](const char *segment) { return path.find(segment) != std::string::npos; };
+  if (containsVirtualLibrarySegment(".libpack\\") ||
+      containsVirtualLibrarySegment(".libpack/") ||
+      containsVirtualLibrarySegment(".lcf\\") ||
+      containsVirtualLibrarySegment(".lcf/")) {
+    return false;
+  }
+
+  if (path.size() >= 3 && std::isalpha(static_cast<unsigned char>(path[0])) &&
+      path[1] == ':' && (path[2] == '\\' || path[2] == '/')) {
+    return true;
+  }
+
+  if (path.size() >= 2 && path[0] == '\\' && path[1] == '\\') {
+    return true;
+  }
+
+  return !path.empty() && path[0] == '/';
+}
+
+std::string SanitizeTextureCacheExtension(const std::string &locationText) {
+  std::string extension = std::filesystem::path(locationText).extension().string();
+  std::transform(extension.begin(), extension.end(), extension.begin(),
+                 [](unsigned char ch) {
+                   return static_cast<char>(std::tolower(ch));
+                 });
+
+  if (extension.empty() || extension.size() > 8) {
+    return ".png";
+  }
+
+  for (size_t index = 1; index < extension.size(); ++index) {
+    const unsigned char ch = static_cast<unsigned char>(extension[index]);
+    if (!std::isalnum(ch)) {
+      return ".png";
+    }
+  }
+
+  return extension[0] == '.' ? extension : std::string(".") + extension;
+}
+
+FTM::TypeID ResolveTextureCacheFileType(const std::string &extension) {
+  const std::string extensionWithoutDot =
+      !extension.empty() && extension[0] == '.' ? extension.substr(1) : extension;
+  if (extensionWithoutDot.empty()) {
+    return FTM::UnknownType;
+  }
+
+  const FTM::FileType fileType(nullptr, extensionWithoutDot.c_str(), 0, 0, 0);
+  return FTM::FileTypeManager::SearchForType(fileType);
+}
+
+std::string ExportTextureLocationToCache(const IO::Location &location) {
+  const std::string locationPath = LocationToUtf8Path(location);
+  const std::string locationText =
+      !locationPath.empty() ? locationPath : GetLocationDisplayText(location);
+  if (locationText.empty()) {
+    return {};
+  }
+
+  std::string extension = SanitizeTextureCacheExtension(locationText);
+  FTM::TypeID fileType = ResolveTextureCacheFileType(extension);
+  if (fileType == FTM::UnknownType) {
+    extension = ".png";
+    fileType = ResolveTextureCacheFileType(extension);
+  }
+  if (fileType == FTM::UnknownType) {
+    return {};
+  }
+
+  const size_t textureHash = std::hash<std::string>{}(locationText);
+  const std::filesystem::path cachePath =
+      GetPayloadRootDirectory() / "textures" /
+      (std::to_string(textureHash) + extension);
+
+  std::error_code error;
+  std::filesystem::create_directories(cachePath.parent_path(), error);
+  if (error) {
+    return {};
+  }
+
+  if (std::filesystem::exists(cachePath, error) && !error) {
+    return PathToUtf8(cachePath);
+  }
+
+  GX::Image image(location);
+  if (image.IsEmpty()) {
+    return {};
+  }
+
+  IO::Location cacheLocation(GS::UniString(PathToUtf8(cachePath).c_str(), CC_UTF8));
+  if (image.WriteToFile(cacheLocation, fileType) != NoError ||
+      !IOUtil::FileExists(cacheLocation)) {
+    return {};
+  }
+
+  return PathToUtf8(cachePath);
+}
+
 void ConvertArchicadPointToEngine(double x, double y, double z, float out[3]) {
   out[0] = static_cast<float>(x);
   out[1] = static_cast<float>(z);
@@ -346,7 +472,18 @@ std::string ResolveTextureUri(const API_Texture &texture) {
       texture.fileLoc->GetLocalLength() == 0) {
     return {};
   }
-  return ToUtf8(texture.fileLoc->ToDisplayText());
+
+  const std::string locationPath = LocationToUtf8Path(*texture.fileLoc);
+  if (IsDirectFilesystemTexturePath(locationPath)) {
+    return locationPath;
+  }
+
+  const std::string cachedPath = ExportTextureLocationToCache(*texture.fileLoc);
+  if (!cachedPath.empty()) {
+    return cachedPath;
+  }
+
+  return locationPath;
 }
 
 bool PopulateMaterialExportRecord(int materialKey,
@@ -1270,7 +1407,7 @@ DocumentInfo LiveLinkSessionController::ReadDocumentInfo() const {
   }
 
   if (!projectInfo.teamwork && projectInfo.location != nullptr) {
-    info.documentPath = ToUtf8(projectInfo.location->ToDisplayText());
+    info.documentPath = LocationToUtf8Path(*projectInfo.location);
   } else if (projectInfo.location_team != nullptr) {
     info.documentPath = ToUtf8(projectInfo.location_team->ToLogText());
   }
