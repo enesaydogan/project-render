@@ -1,4 +1,5 @@
 D:/project-render/build/project-render_autogen/include_Release/R3WADQZVW2/moc_AnimationPanel.cpp: D:/project-render/src/qt/AnimationPanel.h \
+  D:/Qt/6.10.2/msvc2022_64/include/QtCore/QString \
   D:/Qt/6.10.2/msvc2022_64/include/QtCore/q17memory.h \
   D:/Qt/6.10.2/msvc2022_64/include/QtCore/q20functional.h \
   D:/Qt/6.10.2/msvc2022_64/include/QtCore/q20iterator.h \

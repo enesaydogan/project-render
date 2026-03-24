@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QString>
 #include <QWidget>
 
 class QComboBox;
@@ -25,12 +26,15 @@ private:
     void syncFromAnimation();
     void updateSelectedKeyframeControls();
     void updateAnimationSettings();
-    void applyScrubPosition();
+    void applyPreviewTime(bool updateSlider);
+    QString buildModelSignature() const;
+    bool hasInteractiveFocus() const;
     int selectedKeyframeIndex() const;
 
     bool m_syncing = false;
     bool m_previewPlaying = false;
     float m_previewSeconds = 0.0f;
+    QString m_lastModelSignature;
 
     QListWidget *m_keyframeList = nullptr;
     QLabel *m_summaryLabel = nullptr;
