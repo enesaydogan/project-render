@@ -1,6 +1,9 @@
 #pragma once
 
 #include <string>
+#include <vector>
+
+#include "saved_views.h"
 
 // Forward declarations for types used by the editor UI
 struct RenderResolutionPreset {
@@ -14,6 +17,8 @@ struct RenderExportSettings {
   int maxSpp = 200;
   float noisePercent = 5.0f;
   int denoiserIndex = 2; // 0=Off, 1=OIDN CPU, 2=OIDN GPU
+  bool batchSavedViews = false;
+  std::string batchBaseName = "final";
 };
 
 // NOTE: RenderMode is defined in scene.h
@@ -42,6 +47,19 @@ struct RenderExportJobState {
   int previousStreamlineQuality = 1;
 };
 
+struct RenderBatchExportState {
+  bool active = false;
+  bool failed = false;
+  std::wstring outputDirectory;
+  std::wstring baseName;
+  std::vector<size_t> viewIndices;
+  size_t currentViewListIndex = 0;
+  SavedViews::SavedView previousCamera;
+  bool previousCameraCaptured = false;
+  std::wstring currentOutputPath;
+  std::string currentViewName;
+};
+
 // Resolution presets (defined in editor_ui.cpp)
 extern const RenderResolutionPreset g_renderResolutionPresets[];
 extern const int g_renderResolutionPresetCount;
@@ -49,6 +67,7 @@ extern const int g_renderResolutionPresetCount;
 // Editor UI state (defined in editor_ui.cpp)
 extern RenderExportSettings g_renderExportSettings;
 extern RenderExportJobState g_renderExportJob;
+extern RenderBatchExportState g_renderBatchExport;
 extern std::string g_renderExportStatus;
 
 // Panel visibility toggles (defined in editor_ui.cpp)
@@ -74,6 +93,10 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
 // Helper: start / restore / cancel a render export job
 void StartRenderExportJob(const std::wstring &outputPath);
 void RestoreRenderExportState();
+bool StartBatchRenderExportJobs(const std::wstring &outputDirectory,
+                                const std::wstring &baseName);
+void AdvanceBatchRenderExport(bool previousExportSucceeded);
+void CancelBatchRenderExport();
 
 // Utility
 std::string WStringToUtf8(const std::wstring &ws);

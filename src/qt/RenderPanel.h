@@ -3,6 +3,8 @@
 #include <QWidget>
 
 class QComboBox;
+class QCheckBox;
+class QLineEdit;
 class QLabel;
 class QPushButton;
 class QProgressBar;
@@ -33,6 +35,8 @@ private:
     SliderControl *m_maxSpp = nullptr;
     SliderControl *m_noisePercent = nullptr;
     QComboBox *m_denoiser = nullptr;
+    QCheckBox *m_batchSavedViews = nullptr;
+    QLineEdit *m_batchBaseName = nullptr;
 
     QProgressBar *m_progressBar = nullptr;
     QPushButton *m_renderButton = nullptr;

@@ -55,6 +55,7 @@ target_sources(project-render PRIVATE
     src/clouds.cpp
     src/imgui_theme.cpp
     src/scene_io.cpp
+    src/saved_views.cpp
     src/grass_manager.cpp
     src/livelink/livelink_types.cpp
     src/livelink/livelink_coordinator.cpp
@@ -77,6 +78,7 @@ if(USE_QT_UI)
       src/qt/ScenePanel.cpp
       src/qt/LightsPanel.cpp
       src/qt/MaterialEditorPanel.cpp
+        src/qt/ViewsPanel.cpp
       # additional panel widgets will be added here later
   )
   target_link_libraries(project-render PRIVATE Qt6::Widgets)

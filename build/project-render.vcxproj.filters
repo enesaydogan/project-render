@@ -67,6 +67,9 @@
     <ClCompile Include="D:\project-render\src\scene_io.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\project-render\src\saved_views.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="D:\project-render\src\grass_manager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -119,6 +122,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="D:\project-render\src\qt\MaterialEditorPanel.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\project-render\src\qt\ViewsPanel.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="D:\project-render\build\project-render_autogen\mocs_compilation_Release.cpp">

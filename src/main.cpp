@@ -2139,13 +2139,28 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
     D3D12_RECT presentationRect = {0, 0, (LONG)DX12Context::g_windowWidth,
                      (LONG)DX12Context::g_windowHeight};
-    const bool safeFramePreviewActive = GetSafeFramePreviewRect(
-      DX12Context::g_windowWidth, DX12Context::g_windowHeight,
-      presentationRect);
-    const UINT previewWidth = (std::max)(
-      1u, static_cast<UINT>(presentationRect.right - presentationRect.left));
-    const UINT previewHeight = (std::max)(
-      1u, static_cast<UINT>(presentationRect.bottom - presentationRect.top));
+    bool safeFramePreviewActive = false;
+    UINT previewWidth = 0;
+    UINT previewHeight = 0;
+    if (g_renderExportJob.active && g_renderExportJob.targetWidth > 0 &&
+        g_renderExportJob.targetHeight > 0) {
+      presentationRect.left = 0;
+      presentationRect.top = 0;
+      presentationRect.right = (LONG)g_renderExportJob.targetWidth;
+      presentationRect.bottom = (LONG)g_renderExportJob.targetHeight;
+      previewWidth = g_renderExportJob.targetWidth;
+      previewHeight = g_renderExportJob.targetHeight;
+    } else {
+      safeFramePreviewActive = GetSafeFramePreviewRect(
+          DX12Context::g_windowWidth, DX12Context::g_windowHeight,
+          presentationRect);
+      previewWidth =
+          (std::max)(1u, static_cast<UINT>(presentationRect.right -
+                                           presentationRect.left));
+      previewHeight =
+          (std::max)(1u, static_cast<UINT>(presentationRect.bottom -
+                                           presentationRect.top));
+    }
     if (!g_renderExportJob.active && g_rayTracingSupported) {
       static UINT s_lastPreviewWidth = 0;
       static UINT s_lastPreviewHeight = 0;
@@ -3121,6 +3136,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                       outPathUtf8.c_str());
             }
             RestoreRenderExportState();
+            AdvanceBatchRenderExport(exported);
           }
         }
       }

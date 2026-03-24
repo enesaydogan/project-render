@@ -968,6 +968,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="D:\project-render\src\clouds.cpp" />
     <ClCompile Include="D:\project-render\src\imgui_theme.cpp" />
     <ClCompile Include="D:\project-render\src\scene_io.cpp" />
+    <ClCompile Include="D:\project-render\src\saved_views.cpp" />
     <ClCompile Include="D:\project-render\src\grass_manager.cpp" />
     <ClCompile Include="D:\project-render\src\livelink\livelink_types.cpp" />
     <ClCompile Include="D:\project-render\src\livelink\livelink_coordinator.cpp" />
@@ -986,6 +987,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="D:\project-render\src\qt\ScenePanel.cpp" />
     <ClCompile Include="D:\project-render\src\qt\LightsPanel.cpp" />
     <ClCompile Include="D:\project-render\src\qt\MaterialEditorPanel.cpp" />
+    <ClCompile Include="D:\project-render\src\qt\ViewsPanel.cpp" />
     <ResourceCompile Include="D:\project-render\resources\app.rc" />
     <ClInclude Include="D:\project-render\thirdparty\NRD\Integration\NRDIntegration.h" />
     <ClInclude Include="D:\project-render\thirdparty\NRD\Integration\NRDIntegration.hpp" />

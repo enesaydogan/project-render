@@ -9,3 +9,4 @@
 #include <R3WADQZVW2/moc_RenderPanel.cpp>
 #include <R3WADQZVW2/moc_RenderSettingsPanel.cpp>
 #include <R3WADQZVW2/moc_ScenePanel.cpp>
+#include <R3WADQZVW2/moc_ViewsPanel.cpp>

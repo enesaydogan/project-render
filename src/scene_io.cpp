@@ -3,6 +3,7 @@
 #include "dxr_renderer.h"
 #include "ibl_manager.h"
 #include "livelink/livelink_scene_sync.h"
+#include "saved_views.h"
 #include "scene.h"
 #include <algorithm>
 #include <atomic>
@@ -408,6 +409,44 @@ static json BuildMetadata() {
   j["cam"]["ss"]  = shut;
   j["cam"]["apt"] = apt;
 
+  j["vws"] = json::array();
+  for (const auto &view : SavedViews::GetViews()) {
+    json entry = {
+        {"n", view.name},
+        {"p", {view.pos[0], view.pos[1], view.pos[2]}},
+        {"f", {view.forward[0], view.forward[1], view.forward[2]}},
+        {"u", {view.up[0], view.up[1], view.up[2]}},
+        {"fov", view.fov},
+        {"nz", view.nearZ},
+        {"fz", view.farZ},
+        {"int", view.intensity},
+        {"msb", view.maxSpecularBounces},
+        {"mrb", view.maxRefractiveBounces},
+        {"mgb", view.maxGIBounces},
+        {"spp", view.maxSPP},
+        {"yaw", view.yaw},
+        {"pit", view.pitch},
+        {"as", view.useAdaptiveSampling},
+        {"nt", view.noiseThreshold},
+        {"dvm", view.debugVisualizationMode},
+        {"sea", view.sampleEnvSolidAngle},
+        {"ae", view.autoExposure},
+        {"pce", view.physicalCameraExposure},
+        {"sf", view.safeFrameEnabled},
+        {"ec", view.exposureCompensation},
+        {"iso", view.iso},
+        {"ss", view.shutterSeconds},
+        {"apt", view.aperture},
+    };
+    if (!view.thumbnailRgba.empty() && view.thumbnailWidth > 0 &&
+        view.thumbnailHeight > 0) {
+      entry["tw"] = view.thumbnailWidth;
+      entry["th"] = view.thumbnailHeight;
+      entry["tb"] = json::binary(view.thumbnailRgba);
+    }
+    j["vws"].push_back(std::move(entry));
+  }
+
   // Settings
   j["set"]["cr"] = g_cloudRenderingEnabled;
   j["set"]["cs"] = g_camSpeed;
@@ -585,6 +624,52 @@ static void ApplyMetadataPRS(const json &j) {
     DxrRenderer::SetPhysicalCameraSettings(c.value("iso",100.0f), c.value("ss",1.0f/125.0f), c.value("apt",16.0f));
     DxrRenderer::SetExposureCompensation(c.value("ec", DxrRenderer::GetExposureCompensation()));
   }
+  std::vector<SavedViews::SavedView> loadedViews;
+  if (j.contains("vws") && j["vws"].is_array()) {
+    for (const auto &entry : j["vws"]) {
+      SavedViews::SavedView view;
+      view.name = entry.value("n", std::string("View"));
+      if (entry.contains("p") && entry["p"].size() >= 3) {
+        for (int i = 0; i < 3; ++i) view.pos[i] = entry["p"][i];
+      }
+      if (entry.contains("f") && entry["f"].size() >= 3) {
+        for (int i = 0; i < 3; ++i) view.forward[i] = entry["f"][i];
+      }
+      if (entry.contains("u") && entry["u"].size() >= 3) {
+        for (int i = 0; i < 3; ++i) view.up[i] = entry["u"][i];
+      }
+      view.fov = entry.value("fov", view.fov);
+      view.nearZ = entry.value("nz", view.nearZ);
+      view.farZ = entry.value("fz", view.farZ);
+      view.intensity = entry.value("int", view.intensity);
+      view.maxSpecularBounces = entry.value("msb", view.maxSpecularBounces);
+      view.maxRefractiveBounces = entry.value("mrb", view.maxRefractiveBounces);
+      view.maxGIBounces = entry.value("mgb", view.maxGIBounces);
+      view.maxSPP = entry.value("spp", view.maxSPP);
+      view.yaw = entry.value("yaw", view.yaw);
+      view.pitch = entry.value("pit", view.pitch);
+      view.useAdaptiveSampling = entry.value("as", view.useAdaptiveSampling);
+      view.noiseThreshold = entry.value("nt", view.noiseThreshold);
+      view.debugVisualizationMode = entry.value("dvm", view.debugVisualizationMode);
+      view.sampleEnvSolidAngle = entry.value("sea", view.sampleEnvSolidAngle);
+      view.autoExposure = entry.value("ae", view.autoExposure);
+      view.physicalCameraExposure = entry.value("pce", view.physicalCameraExposure);
+      view.safeFrameEnabled = entry.value("sf", view.safeFrameEnabled);
+      view.exposureCompensation = entry.value("ec", view.exposureCompensation);
+      view.iso = entry.value("iso", view.iso);
+      view.shutterSeconds = entry.value("ss", view.shutterSeconds);
+      view.aperture = entry.value("apt", view.aperture);
+      view.thumbnailWidth = entry.value("tw", 0u);
+      view.thumbnailHeight = entry.value("th", 0u);
+      if (entry.contains("tb") && entry["tb"].is_binary()) {
+        const auto &thumbnailBinary = entry["tb"].get_binary();
+        view.thumbnailRgba.assign(thumbnailBinary.begin(),
+                                  thumbnailBinary.end());
+      }
+      loadedViews.push_back(std::move(view));
+    }
+  }
+  SavedViews::SetViews(std::move(loadedViews));
   if (j.contains("set")) {
     auto &s = j["set"];
     g_cloudRenderingEnabled = s.value("cr", true);
