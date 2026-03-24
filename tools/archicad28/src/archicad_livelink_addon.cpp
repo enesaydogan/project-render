@@ -682,14 +682,14 @@ json MakeNodeRemovedDelta(const std::string &documentId,
               {"payload", json{{"removeChildren", true}}}};
 }
 
-bool ExportElementMeshPayload(const std::string &documentId,
-                              const ElementExportRecord &record,
-                              const ModelerAPI::Element &element,
-                              std::vector<ElementExportRecord::MaterialBinding>
-                                  *outMaterialBindings,
-                              std::string *outPayloadUri,
-                              uint64_t *outVertexCount,
-                              uint64_t *outIndexCount) {
+bool ExportElementsMeshPayload(const std::string &documentId,
+                               const ElementExportRecord &record,
+                               const std::vector<ModelerAPI::Element> &elements,
+                               std::vector<ElementExportRecord::MaterialBinding>
+                                   *outMaterialBindings,
+                               std::string *outPayloadUri,
+                               uint64_t *outVertexCount,
+                               uint64_t *outIndexCount) {
   if (outPayloadUri == nullptr || outVertexCount == nullptr ||
       outIndexCount == nullptr) {
     return false;
@@ -706,87 +706,89 @@ bool ExportElementMeshPayload(const std::string &documentId,
   std::vector<ExportSubmesh> submeshes;
   std::unordered_map<int, size_t> submeshByMaterialKey;
 
-  const int bodyCount = element.GetTessellatedBodyCount();
-  for (int bodyIndex = 1; bodyIndex <= bodyCount; ++bodyIndex) {
-    ModelerAPI::MeshBody body;
-    element.GetTessellatedBody(bodyIndex, &body);
+  for (const ModelerAPI::Element &element : elements) {
+    const int bodyCount = element.GetTessellatedBodyCount();
+    for (int bodyIndex = 1; bodyIndex <= bodyCount; ++bodyIndex) {
+      ModelerAPI::MeshBody body;
+      element.GetTessellatedBody(bodyIndex, &body);
 
-    const int polygonCount = body.GetPolygonCount();
-    for (int polygonIndex = 1; polygonIndex <= polygonCount; ++polygonIndex) {
-      ModelerAPI::Polygon polygon;
-      body.GetPolygon(polygonIndex, &polygon);
-      if (polygon.IsInvisible()) {
-        continue;
-      }
+      const int polygonCount = body.GetPolygonCount();
+      for (int polygonIndex = 1; polygonIndex <= polygonCount; ++polygonIndex) {
+        ModelerAPI::Polygon polygon;
+        body.GetPolygon(polygonIndex, &polygon);
+        if (polygon.IsInvisible()) {
+          continue;
+        }
 
-      ModelerAPI::AttributeIndex materialIndex(
-          ModelerAPI::AttributeIndex::MaterialIndex);
-      polygon.GetMaterialIndex(materialIndex);
-      const int materialKey =
-          materialIndex.IsValid() ? materialIndex.GetIndex() : 0;
+        ModelerAPI::AttributeIndex materialIndex(
+            ModelerAPI::AttributeIndex::MaterialIndex);
+        polygon.GetMaterialIndex(materialIndex);
+        const int materialKey =
+            materialIndex.IsValid() ? materialIndex.GetIndex() : 0;
 
-      auto [slotIt, inserted] =
-          submeshByMaterialKey.emplace(materialKey, submeshes.size());
-      if (inserted) {
-        ExportSubmesh submesh;
-        submesh.materialSlot = static_cast<int>(submeshes.size());
-        submeshes.push_back(std::move(submesh));
-      }
-      ExportSubmesh &submesh = submeshes[slotIt->second];
+        auto [slotIt, inserted] =
+            submeshByMaterialKey.emplace(materialKey, submeshes.size());
+        if (inserted) {
+          ExportSubmesh submesh;
+          submesh.materialSlot = static_cast<int>(submeshes.size());
+          submeshes.push_back(std::move(submesh));
+        }
+        ExportSubmesh &submesh = submeshes[slotIt->second];
 
-      try {
-        const int convexPolygonCount = polygon.GetConvexPolygonCount();
-        for (int convexPolygonIndex = 1; convexPolygonIndex <= convexPolygonCount;
-             ++convexPolygonIndex) {
-          ModelerAPI::ConvexPolygon convexPolygon;
-          polygon.GetConvexPolygon(convexPolygonIndex, &convexPolygon);
-          const int polygonVertexCount = convexPolygon.GetVertexCount();
-          if (polygonVertexCount < 3) {
-            continue;
-          }
-
-          std::vector<uint32_t> polygonVertexIndices;
-          polygonVertexIndices.reserve(static_cast<size_t>(polygonVertexCount));
-
-          for (int vertexIndex = 1; vertexIndex <= polygonVertexCount;
-               ++vertexIndex) {
-            ModelerAPI::Vertex vertex;
-            body.GetVertex(convexPolygon.GetVertexIndex(vertexIndex), &vertex,
-                           ModelerAPI::CoordinateSystem::World);
-            ModelerAPI::Vector normal = convexPolygon.GetNormalVectorByVertex(
-                vertexIndex, ModelerAPI::CoordinateSystem::World);
-
-            NativeMeshPayloadVertex payloadVertex;
-            ConvertArchicadPointToEngine(vertex.x, vertex.y, vertex.z,
-                                         payloadVertex.position);
-            ConvertArchicadVectorToEngine(normal.x, normal.y, normal.z,
-                                          payloadVertex.normal);
-            Normalize3(payloadVertex.normal, kUpFallback);
-            if (polygon.HasMaterialTexture() || polygon.HasPolygonTexture()) {
-              try {
-                ModelerAPI::TextureCoordinate texCoord;
-                polygon.GetTextureCoordinate(&vertex, &texCoord);
-                payloadVertex.uv[0] = static_cast<float>(texCoord.u);
-                payloadVertex.uv[1] = static_cast<float>(texCoord.v);
-              } catch (...) {
-              }
+        try {
+          const int convexPolygonCount = polygon.GetConvexPolygonCount();
+          for (int convexPolygonIndex = 1; convexPolygonIndex <= convexPolygonCount;
+               ++convexPolygonIndex) {
+            ModelerAPI::ConvexPolygon convexPolygon;
+            polygon.GetConvexPolygon(convexPolygonIndex, &convexPolygon);
+            const int polygonVertexCount = convexPolygon.GetVertexCount();
+            if (polygonVertexCount < 3) {
+              continue;
             }
 
-            const uint32_t appendedIndex =
-                static_cast<uint32_t>(submesh.vertices.size());
-            submesh.vertices.push_back(payloadVertex);
-            polygonVertexIndices.push_back(appendedIndex);
-          }
+            std::vector<uint32_t> polygonVertexIndices;
+            polygonVertexIndices.reserve(static_cast<size_t>(polygonVertexCount));
 
-          for (size_t triangleIndex = 1;
-               triangleIndex + 1 < polygonVertexIndices.size(); ++triangleIndex) {
-            submesh.indices.push_back(polygonVertexIndices[0]);
-            submesh.indices.push_back(polygonVertexIndices[triangleIndex]);
-            submesh.indices.push_back(polygonVertexIndices[triangleIndex + 1]);
+            for (int vertexIndex = 1; vertexIndex <= polygonVertexCount;
+                 ++vertexIndex) {
+              ModelerAPI::Vertex vertex;
+              body.GetVertex(convexPolygon.GetVertexIndex(vertexIndex), &vertex,
+                             ModelerAPI::CoordinateSystem::World);
+              ModelerAPI::Vector normal = convexPolygon.GetNormalVectorByVertex(
+                  vertexIndex, ModelerAPI::CoordinateSystem::World);
+
+              NativeMeshPayloadVertex payloadVertex;
+              ConvertArchicadPointToEngine(vertex.x, vertex.y, vertex.z,
+                                           payloadVertex.position);
+              ConvertArchicadVectorToEngine(normal.x, normal.y, normal.z,
+                                            payloadVertex.normal);
+              Normalize3(payloadVertex.normal, kUpFallback);
+              if (polygon.HasMaterialTexture() || polygon.HasPolygonTexture()) {
+                try {
+                  ModelerAPI::TextureCoordinate texCoord;
+                  polygon.GetTextureCoordinate(&vertex, &texCoord);
+                  payloadVertex.uv[0] = static_cast<float>(texCoord.u);
+                  payloadVertex.uv[1] = static_cast<float>(texCoord.v);
+                } catch (...) {
+                }
+              }
+
+              const uint32_t appendedIndex =
+                  static_cast<uint32_t>(submesh.vertices.size());
+              submesh.vertices.push_back(payloadVertex);
+              polygonVertexIndices.push_back(appendedIndex);
+            }
+
+            for (size_t triangleIndex = 1;
+                 triangleIndex + 1 < polygonVertexIndices.size(); ++triangleIndex) {
+              submesh.indices.push_back(polygonVertexIndices[0]);
+              submesh.indices.push_back(polygonVertexIndices[triangleIndex]);
+              submesh.indices.push_back(polygonVertexIndices[triangleIndex + 1]);
+            }
           }
+        } catch (...) {
+          continue;
         }
-      } catch (...) {
-        continue;
       }
     }
   }
@@ -992,19 +994,56 @@ bool ExportSceneElements(const DocumentInfo &documentInfo,
   std::unordered_map<int, MaterialExportRecord> materialTemplatesByKey;
   std::vector<MaterialExportRecord> exportedMaterials;
   const int elementCount = model.GetElementCount();
-  exportedElements.reserve(static_cast<size_t>(elementCount));
-  exportedMaterials.reserve(static_cast<size_t>(elementCount));
+
+  std::unordered_set<std::string> assignedObjectIds;
+  assignedObjectIds.reserve(static_cast<size_t>(elementCount));
+
+  struct ExportGroup {
+    API_Guid guid;
+    std::string objectId;
+    std::vector<ModelerAPI::Element> elements;
+  };
+  std::vector<ExportGroup> exportGroups;
+  std::unordered_map<std::string, size_t> groupIndexByObjectId;
+
   for (int elementIndex = 1; elementIndex <= elementCount; ++elementIndex) {
     ModelerAPI::Element element;
     model.GetElement(elementIndex, &element);
 
-    const API_Guid guid = GSGuid2APIGuid(element.GetElemGuid());
-    ElementExportRecord record;
-    record.guid = guid;
-    record.objectId = MakeObjectId(guid);
-    record.displayName = GetElementDisplayName(guid);
+    API_Guid guid = GSGuid2APIGuid(element.GetElemGuid());
 
-    if (!ExportElementMeshPayload(documentInfo.documentId, record, element,
+    API_HierarchicalOwnerType ownerType = API_RootHierarchicalOwner;
+    API_HierarchicalElemType elemType = API_UnknownElemType;
+    API_Guid rootGuid = APINULLGuid;
+    if (ACAPI_HierarchicalEditing_GetHierarchicalElementOwner(
+            &guid, &ownerType, &elemType, &rootGuid) == NoError) {
+      if (elemType == API_ChildElemInMultipleElem && rootGuid != APINULLGuid) {
+        guid = rootGuid;
+      }
+    }
+
+    const std::string objectId = MakeObjectId(guid);
+    assignedObjectIds.insert(objectId);
+
+    auto it = groupIndexByObjectId.find(objectId);
+    if (it == groupIndexByObjectId.end()) {
+      ExportGroup group;
+      group.guid = guid;
+      group.objectId = objectId;
+      exportGroups.push_back(std::move(group));
+      it = groupIndexByObjectId.emplace(objectId, exportGroups.size() - 1).first;
+    }
+    exportGroups[it->second].elements.push_back(element);
+  }
+
+  exportedElements.reserve(exportGroups.size());
+  for (const ExportGroup &group : exportGroups) {
+    ElementExportRecord record;
+    record.guid = group.guid;
+    record.objectId = group.objectId;
+    record.displayName = GetElementDisplayName(group.guid);
+
+    if (!ExportElementsMeshPayload(documentInfo.documentId, record, group.elements,
                                   &record.materialBindings,
                                   &record.payloadUri, &record.vertexCount,
                                   &record.indexCount)) {
@@ -1974,6 +2013,9 @@ void LiveLinkSessionController::OnElementNotification(
   case APINotifyElement_Redo_Created:
   case APINotifyElement_PropertyValueChange:
   case APINotifyElement_ClassificationChange:
+    if (parentGuid != APINULLGuid && parentGuid != currentGuid) {
+      MarkElementDirty(parentGuid);
+    }
     MarkElementDirty(currentGuid);
     break;
   case APINotifyElement_Change:
@@ -1981,13 +2023,16 @@ void LiveLinkSessionController::OnElementNotification(
   case APINotifyElement_Undo_Modified:
   case APINotifyElement_Redo_Modified:
     if (parentGuid != APINULLGuid && parentGuid != currentGuid) {
-      MarkElementRemoved(parentGuid);
+      MarkElementDirty(parentGuid);
     }
     MarkElementDirty(currentGuid);
     break;
   case APINotifyElement_Delete:
   case APINotifyElement_Undo_Created:
   case APINotifyElement_Redo_Deleted:
+    if (parentGuid != APINULLGuid && parentGuid != currentGuid) {
+      MarkElementDirty(parentGuid);
+    }
     MarkElementRemoved(currentGuid);
     break;
   default:
