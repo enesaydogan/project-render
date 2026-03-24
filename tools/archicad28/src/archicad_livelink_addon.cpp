@@ -1110,7 +1110,6 @@ private:
       std::vector<MaterialExportRecord> *outMaterials) const;
   void UpdateMaterialStateCache(
       const std::vector<MaterialExportRecord> &materials);
-    void UpdateElementStateCache(const std::vector<ElementExportRecord> &elements);
   void SyncObservedElements();
   void ResetTrackedSceneState(bool detachObservers);
   void MarkElementDirty(const API_Guid &guid);
@@ -1134,7 +1133,6 @@ private:
   uint64_t m_nextRevision = 1;
   CameraExportRecord m_lastCamera = {};
   std::unordered_map<std::string, ElementExportRecord> m_exportedElements;
-  std::unordered_map<std::string, uint64_t> m_elementFingerprints;
   std::unordered_map<int, MaterialExportRecord> m_materialStateByKey;
   std::unordered_set<std::string> m_observedElementObjectIds;
   std::unordered_set<std::string> m_dirtyElementObjectIds;
@@ -1184,7 +1182,6 @@ void LiveLinkSessionController::ResetTrackedSceneState(bool detachObservers) {
   }
 
   m_exportedElements.clear();
-  m_elementFingerprints.clear();
   m_materialStateByKey.clear();
   m_observedElementObjectIds.clear();
   m_dirtyElementObjectIds.clear();
@@ -1513,18 +1510,6 @@ void LiveLinkSessionController::UpdateMaterialStateCache(
   }
 }
 
-void LiveLinkSessionController::UpdateElementStateCache(
-    const std::vector<ElementExportRecord> &elements) {
-  for (const ElementExportRecord &element : elements) {
-    uint64_t fingerprint = 0;
-    if (ComputeElementHeaderFingerprint(element.guid, &fingerprint)) {
-      m_elementFingerprints[element.objectId] = fingerprint;
-    } else {
-      m_elementFingerprints.erase(element.objectId);
-    }
-  }
-}
-
 void LiveLinkSessionController::SyncObservedElements() {
   std::unordered_set<std::string> desiredObjectIds;
   desiredObjectIds.reserve(m_exportedElements.size());
@@ -1666,7 +1651,6 @@ bool LiveLinkSessionController::ExportFullScene(bool startingSession,
   for (const ElementExportRecord &element : elements) {
     m_exportedElements[element.objectId] = element;
   }
-  UpdateElementStateCache(elements);
   UpdateMaterialStateCache(materials);
   m_dirtyElementObjectIds.clear();
   m_removedElementObjectIds.clear();
@@ -1692,41 +1676,6 @@ bool LiveLinkSessionController::ExportDirtyElements(bool reportSuccess,
     return false;
   }
 
-  GS::Array<API_Guid> currentSceneGuids;
-  const GSErrCode listErr =
-      ACAPI_Element_GetElemList(API_ZombieElemID, &currentSceneGuids,
-                                APIFilt_In3D);
-  if (listErr == NoError) {
-    std::unordered_set<std::string> currentSceneObjectIds;
-    currentSceneObjectIds.reserve(static_cast<size_t>(currentSceneGuids.GetSize()));
-    for (const API_Guid &guid : currentSceneGuids) {
-      const std::string objectId = MakeObjectId(guid);
-      currentSceneObjectIds.insert(objectId);
-      if (!m_exportedElements.contains(objectId)) {
-        m_removedElementObjectIds.erase(objectId);
-        m_dirtyElementObjectIds.insert(objectId);
-        continue;
-      }
-
-      uint64_t fingerprint = 0;
-      if (ComputeElementHeaderFingerprint(guid, &fingerprint)) {
-        const auto cached = m_elementFingerprints.find(objectId);
-        if (cached == m_elementFingerprints.end() || cached->second != fingerprint) {
-          m_removedElementObjectIds.erase(objectId);
-          m_dirtyElementObjectIds.insert(objectId);
-        }
-      }
-    }
-
-    for (const auto &[objectId, _] : m_exportedElements) {
-      if (!currentSceneObjectIds.contains(objectId)) {
-        m_dirtyElementObjectIds.erase(objectId);
-        m_removedElementObjectIds.insert(objectId);
-        m_elementFingerprints.erase(objectId);
-      }
-    }
-  }
-
   if (m_dirtyElementObjectIds.empty() && m_removedElementObjectIds.empty()) {
     m_sceneDirty = false;
     ClearPendingSceneSync();
@@ -1745,7 +1694,6 @@ bool LiveLinkSessionController::ExportDirtyElements(bool reportSuccess,
       continue;
     }
     m_exportedElements.erase(existingIt);
-    m_elementFingerprints.erase(objectId);
   }
 
   GS::Array<API_Guid> dirtyGuids;
@@ -1764,7 +1712,6 @@ bool LiveLinkSessionController::ExportDirtyElements(bool reportSuccess,
     auto existingIt = m_exportedElements.find(objectId);
     if (existingIt != m_exportedElements.end()) {
       m_exportedElements.erase(existingIt);
-      m_elementFingerprints.erase(objectId);
     }
     removedObjectIds.push_back(objectId);
   }
@@ -1791,7 +1738,6 @@ bool LiveLinkSessionController::ExportDirtyElements(bool reportSuccess,
     exportedChangedObjectIds.insert(element.objectId);
     m_exportedElements[element.objectId] = element;
   }
-  UpdateElementStateCache(changedElements);
 
   for (const std::string &objectId : dirtyObjectIds) {
     if (exportedChangedObjectIds.contains(objectId) ||
@@ -1805,7 +1751,6 @@ bool LiveLinkSessionController::ExportDirtyElements(bool reportSuccess,
     }
     removedObjectIds.push_back(objectId);
     m_exportedElements.erase(existingIt);
-    m_elementFingerprints.erase(objectId);
   }
 
   std::sort(removedObjectIds.begin(), removedObjectIds.end());
