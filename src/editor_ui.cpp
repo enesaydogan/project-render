@@ -1505,7 +1505,16 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
       ImGui::EndMenu();
     }
 
-    // Keep Window menu for non-toggle commands
+    if (ImGui::BeginMenu("Window")) {
+      ImGui::MenuItem("Scene", nullptr, &g_showAssetsWindow);
+      ImGui::MenuItem("Lights", nullptr, &g_showLightsWindow);
+      ImGui::MenuItem("Controls", nullptr, &g_showControlsWindow);
+      ImGui::MenuItem("Render Mode", nullptr, &g_showRenderModeWindow);
+      ImGui::MenuItem("Render Settings", nullptr,
+                      &g_showRenderSettingsWindow);
+      ImGui::MenuItem("Material Editor", nullptr, &g_showMaterialEditor);
+      ImGui::EndMenu();
+    }
 
     // Quick access toggles (side-by-side) for panels
     ImGui::SameLine();
