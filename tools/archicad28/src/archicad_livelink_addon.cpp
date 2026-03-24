@@ -1676,6 +1676,20 @@ bool LiveLinkSessionController::ExportDirtyElements(bool reportSuccess,
     return false;
   }
 
+  GS::Array<API_Guid> currentSceneGuids;
+  if (ACAPI_Element_GetElemList(API_ZombieElemID, &currentSceneGuids, APIFilt_In3D) == NoError) {
+    std::unordered_set<std::string> currentSceneObjectIds;
+    currentSceneObjectIds.reserve(static_cast<size_t>(currentSceneGuids.GetSize()));
+    for (const API_Guid &guid : currentSceneGuids) {
+      currentSceneObjectIds.insert(MakeObjectId(guid));
+    }
+    for (const auto &[objectId, _] : m_exportedElements) {
+      if (!currentSceneObjectIds.contains(objectId)) {
+        m_removedElementObjectIds.insert(objectId);
+      }
+    }
+  }
+
   if (m_dirtyElementObjectIds.empty() && m_removedElementObjectIds.empty()) {
     m_sceneDirty = false;
     ClearPendingSceneSync();
