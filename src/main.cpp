@@ -3099,7 +3099,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           hasNoiseEstimate &&
           (currentNoise <= g_renderExportJob.targetNoiseThreshold * 0.90f);
 
-      const bool reachedEnd = sppDone || noiseDone;
+        const bool reachedEnd =
+          sppDone || (g_renderExportJob.allowNoiseThresholdStop && noiseDone);
 
       if (reachedEnd && !g_renderExportJob.completionArmed) {
         g_renderExportJob.completionArmed = true;

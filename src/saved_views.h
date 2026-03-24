@@ -39,6 +39,8 @@ struct SavedView {
 
 const std::vector<SavedView> &GetViews();
 const std::string &GetLastStatus();
+int GetSelectedViewIndex();
+void SetSelectedViewIndex(int index);
 
 SavedView CaptureCurrentState();
 size_t AddCurrentView(const std::string &preferredName = std::string());

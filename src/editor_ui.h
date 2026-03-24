@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 
+#include "animation_sequence.h"
 #include "saved_views.h"
 
 // Forward declarations for types used by the editor UI
@@ -45,6 +46,7 @@ struct RenderExportJobState {
   bool previousStreamlineEnabled = false;
   int previousStreamlineMode = 0;
   int previousStreamlineQuality = 1;
+  bool allowNoiseThresholdStop = true;
 };
 
 struct RenderBatchExportState {
@@ -60,6 +62,21 @@ struct RenderBatchExportState {
   std::string currentViewName;
 };
 
+struct RenderAnimationExportState {
+  bool active = false;
+  bool failed = false;
+  std::wstring outputDirectory;
+  std::wstring currentOutputPath;
+  std::string currentLabel;
+  int totalFrames = 0;
+  int currentFrameIndex = 0;
+  int fps = 30;
+  int resolutionPreset = 1;
+  int maxSpp = 64;
+  SavedViews::SavedView previousCamera;
+  bool previousCameraCaptured = false;
+};
+
 // Resolution presets (defined in editor_ui.cpp)
 extern const RenderResolutionPreset g_renderResolutionPresets[];
 extern const int g_renderResolutionPresetCount;
@@ -68,6 +85,7 @@ extern const int g_renderResolutionPresetCount;
 extern RenderExportSettings g_renderExportSettings;
 extern RenderExportJobState g_renderExportJob;
 extern RenderBatchExportState g_renderBatchExport;
+extern RenderAnimationExportState g_renderAnimationExport;
 extern std::string g_renderExportStatus;
 
 // Panel visibility toggles (defined in editor_ui.cpp)
@@ -97,6 +115,9 @@ bool StartBatchRenderExportJobs(const std::wstring &outputDirectory,
                                 const std::wstring &baseName);
 void AdvanceBatchRenderExport(bool previousExportSucceeded);
 void CancelBatchRenderExport();
+bool StartAnimationRenderExport(const std::wstring &outputDirectory);
+void AdvanceAnimationRenderExport(bool previousExportSucceeded);
+void CancelAnimationRenderExport();
 
 // Utility
 std::string WStringToUtf8(const std::wstring &ws);

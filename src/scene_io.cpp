@@ -3,6 +3,7 @@
 #include "dxr_renderer.h"
 #include "ibl_manager.h"
 #include "livelink/livelink_scene_sync.h"
+#include "animation_sequence.h"
 #include "saved_views.h"
 #include "scene.h"
 #include <algorithm>
@@ -447,6 +448,45 @@ static json BuildMetadata() {
     j["vws"].push_back(std::move(entry));
   }
 
+  j["anm"]["set"] = {
+      {"rp", AnimationSequence::GetExportSettings().resolutionPreset},
+      {"fps", AnimationSequence::GetExportSettings().fps},
+      {"spp", AnimationSequence::GetExportSettings().maxSpp},
+      {"bn", AnimationSequence::GetExportSettings().baseName},
+  };
+  j["anm"]["kfs"] = json::array();
+  for (const auto &keyframe : AnimationSequence::GetKeyframes()) {
+    j["anm"]["kfs"].push_back({
+        {"n", keyframe.label},
+        {"dur", keyframe.durationToNextSeconds},
+        {"ez", keyframe.easing},
+        {"p", {keyframe.camera.pos[0], keyframe.camera.pos[1], keyframe.camera.pos[2]}},
+        {"f", {keyframe.camera.forward[0], keyframe.camera.forward[1], keyframe.camera.forward[2]}},
+        {"u", {keyframe.camera.up[0], keyframe.camera.up[1], keyframe.camera.up[2]}},
+        {"fov", keyframe.camera.fov},
+        {"nz", keyframe.camera.nearZ},
+        {"fz", keyframe.camera.farZ},
+        {"int", keyframe.camera.intensity},
+        {"msb", keyframe.camera.maxSpecularBounces},
+        {"mrb", keyframe.camera.maxRefractiveBounces},
+        {"mgb", keyframe.camera.maxGIBounces},
+        {"spp", keyframe.camera.maxSPP},
+        {"yaw", keyframe.camera.yaw},
+        {"pit", keyframe.camera.pitch},
+        {"as", keyframe.camera.useAdaptiveSampling},
+        {"nt", keyframe.camera.noiseThreshold},
+        {"dvm", keyframe.camera.debugVisualizationMode},
+        {"sea", keyframe.camera.sampleEnvSolidAngle},
+        {"ae", keyframe.camera.autoExposure},
+        {"pce", keyframe.camera.physicalCameraExposure},
+        {"sf", keyframe.camera.safeFrameEnabled},
+        {"ec", keyframe.camera.exposureCompensation},
+        {"iso", keyframe.camera.iso},
+        {"ss", keyframe.camera.shutterSeconds},
+        {"apt", keyframe.camera.aperture},
+    });
+  }
+
   // Settings
   j["set"]["cr"] = g_cloudRenderingEnabled;
   j["set"]["cs"] = g_camSpeed;
@@ -670,6 +710,62 @@ static void ApplyMetadataPRS(const json &j) {
     }
   }
   SavedViews::SetViews(std::move(loadedViews));
+  AnimationSequence::ExportSettings animationSettings =
+      AnimationSequence::GetExportSettings();
+  std::vector<AnimationSequence::Keyframe> animationKeyframes;
+  if (j.contains("anm") && j["anm"].is_object()) {
+    const auto &animation = j["anm"];
+    if (animation.contains("set") && animation["set"].is_object()) {
+      const auto &settings = animation["set"];
+      animationSettings.resolutionPreset =
+          settings.value("rp", animationSettings.resolutionPreset);
+      animationSettings.fps = settings.value("fps", animationSettings.fps);
+      animationSettings.maxSpp = settings.value("spp", animationSettings.maxSpp);
+      animationSettings.baseName = settings.value("bn", animationSettings.baseName);
+    }
+    if (animation.contains("kfs") && animation["kfs"].is_array()) {
+      for (const auto &entry : animation["kfs"]) {
+        AnimationSequence::Keyframe keyframe;
+        keyframe.label = entry.value("n", std::string("Keyframe"));
+        keyframe.durationToNextSeconds = entry.value("dur", 2.0f);
+        keyframe.easing = entry.value("ez", keyframe.easing);
+        if (entry.contains("p") && entry["p"].size() >= 3) {
+          for (int i = 0; i < 3; ++i) keyframe.camera.pos[i] = entry["p"][i];
+        }
+        if (entry.contains("f") && entry["f"].size() >= 3) {
+          for (int i = 0; i < 3; ++i) keyframe.camera.forward[i] = entry["f"][i];
+        }
+        if (entry.contains("u") && entry["u"].size() >= 3) {
+          for (int i = 0; i < 3; ++i) keyframe.camera.up[i] = entry["u"][i];
+        }
+        keyframe.camera.name = keyframe.label;
+        keyframe.camera.fov = entry.value("fov", keyframe.camera.fov);
+        keyframe.camera.nearZ = entry.value("nz", keyframe.camera.nearZ);
+        keyframe.camera.farZ = entry.value("fz", keyframe.camera.farZ);
+        keyframe.camera.intensity = entry.value("int", keyframe.camera.intensity);
+        keyframe.camera.maxSpecularBounces = entry.value("msb", keyframe.camera.maxSpecularBounces);
+        keyframe.camera.maxRefractiveBounces = entry.value("mrb", keyframe.camera.maxRefractiveBounces);
+        keyframe.camera.maxGIBounces = entry.value("mgb", keyframe.camera.maxGIBounces);
+        keyframe.camera.maxSPP = entry.value("spp", keyframe.camera.maxSPP);
+        keyframe.camera.yaw = entry.value("yaw", keyframe.camera.yaw);
+        keyframe.camera.pitch = entry.value("pit", keyframe.camera.pitch);
+        keyframe.camera.useAdaptiveSampling = entry.value("as", keyframe.camera.useAdaptiveSampling);
+        keyframe.camera.noiseThreshold = entry.value("nt", keyframe.camera.noiseThreshold);
+        keyframe.camera.debugVisualizationMode = entry.value("dvm", keyframe.camera.debugVisualizationMode);
+        keyframe.camera.sampleEnvSolidAngle = entry.value("sea", keyframe.camera.sampleEnvSolidAngle);
+        keyframe.camera.autoExposure = entry.value("ae", keyframe.camera.autoExposure);
+        keyframe.camera.physicalCameraExposure = entry.value("pce", keyframe.camera.physicalCameraExposure);
+        keyframe.camera.safeFrameEnabled = entry.value("sf", keyframe.camera.safeFrameEnabled);
+        keyframe.camera.exposureCompensation = entry.value("ec", keyframe.camera.exposureCompensation);
+        keyframe.camera.iso = entry.value("iso", keyframe.camera.iso);
+        keyframe.camera.shutterSeconds = entry.value("ss", keyframe.camera.shutterSeconds);
+        keyframe.camera.aperture = entry.value("apt", keyframe.camera.aperture);
+        animationKeyframes.push_back(std::move(keyframe));
+      }
+    }
+  }
+  AnimationSequence::SetExportSettings(animationSettings);
+  AnimationSequence::SetKeyframes(std::move(animationKeyframes));
   if (j.contains("set")) {
     auto &s = j["set"];
     g_cloudRenderingEnabled = s.value("cr", true);
