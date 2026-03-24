@@ -454,14 +454,7 @@ bool ReadCurrentCamera(CameraExportRecord *outCamera) {
   camera.forward = {forward[0], forward[1], forward[2]};
   camera.up = {up[0], up[1], up[2]};
 
-  // Archicad's projection settings come from plan-space camera data. Flipping
-  // X here keeps the exported camera handedness aligned with the renderer view.
-  camera.position[0] = -camera.position[0];
-  camera.forward[0] = -camera.forward[0];
-  camera.up[0] = -camera.up[0];
-
-  camera.fovDegrees =
-      static_cast<float>(persp.viewCone * (180.0 / 3.14159265358979323846));
+  camera.fovDegrees = static_cast<float>(persp.viewCone);
   camera.nearPlane = 0.01f;
   camera.farPlane =
       (std::max)(1000.0f, static_cast<float>(persp.distance * 4.0));
