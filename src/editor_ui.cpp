@@ -1294,15 +1294,47 @@ void CancelAnimationRenderExport() {
   if (!g_renderAnimationExport.active) {
     return;
   }
+  const bool exportMp4 = g_renderAnimationExport.exportMode ==
+                         static_cast<int>(AnimationSequence::ExportMode::Mp4);
+  const int completedFrames = (std::max)(0, g_renderAnimationExport.currentFrameIndex - 1);
+  const std::wstring outputDirectory = g_renderAnimationExport.outputDirectory;
+  const std::wstring tempFrameDirectory = g_renderAnimationExport.temporaryFrameDirectory;
   if (g_renderAnimationExport.encoding) {
-    g_renderExportStatus = "MP4 encoding is already running and cannot be canceled yet.";
+    g_renderExportStatus = "MP4 encoding is already running and will finish with rendered frames.";
     return;
   }
+
   if (g_renderAnimationExport.previousCameraCaptured) {
     SavedViews::ApplyView(g_renderAnimationExport.previousCamera);
   }
+
+  if (exportMp4 && completedFrames > 0) {
+    g_renderAnimationExport.totalFrames = completedFrames;
+    g_renderAnimationExport.currentFrameIndex = completedFrames;
+    g_renderExportStatus = "Cancel requested. Encoding MP4 from " +
+                           std::to_string(completedFrames) +
+                           " rendered frames.";
+    if (!StartAnimationMp4Encode()) {
+      g_renderAnimationExport = {};
+      g_renderExportStatus = tempFrameDirectory.empty()
+                                 ? "Animation export canceled. Failed to start MP4 encoding."
+                                 : "Animation export canceled. Failed to start MP4 encoding. PNG frames kept in: " +
+                                       WStringToUtf8(tempFrameDirectory);
+    }
+    return;
+  }
+
   g_renderAnimationExport = {};
-  g_renderExportStatus = "Animation export canceled.";
+  if (exportMp4 && completedFrames <= 0) {
+    g_renderExportStatus = "Animation export canceled before any frames were rendered.";
+  } else if (!exportMp4 && completedFrames > 0) {
+    g_renderExportStatus = "Animation export canceled. Kept " +
+                           std::to_string(completedFrames) +
+                           " rendered frames in: " +
+                           WStringToUtf8(outputDirectory);
+  } else {
+    g_renderExportStatus = "Animation export canceled.";
+  }
 }
 
 void StartRenderExportJob(const std::wstring &outputPath) {

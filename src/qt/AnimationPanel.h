@@ -48,6 +48,7 @@ private:
     QPushButton *m_playButton = nullptr;
     QPushButton *m_stopButton = nullptr;
     QPushButton *m_renderButton = nullptr;
+    QPushButton *m_cancelRenderButton = nullptr;
     QLineEdit *m_keyframeName = nullptr;
     QDoubleSpinBox *m_durationToNext = nullptr;
     QComboBox *m_easeInMode = nullptr;
