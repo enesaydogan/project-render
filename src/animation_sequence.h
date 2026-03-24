@@ -9,10 +9,7 @@ namespace AnimationSequence {
 
 enum class EasingMode : int {
   Linear = 0,
-  EaseIn = 1,
-  EaseOut = 2,
-  EaseInOut = 3,
-  SmoothStep = 4,
+  Ease = 1,
 };
 
 enum class ExportMode : int {
@@ -24,7 +21,8 @@ struct Keyframe {
   std::string label;
   SavedViews::SavedView camera;
   float durationToNextSeconds = 2.0f;
-  int easing = static_cast<int>(EasingMode::EaseInOut);
+  int easeIn = static_cast<int>(EasingMode::Ease);
+  int easeOut = static_cast<int>(EasingMode::Ease);
 };
 
 struct ExportSettings {
@@ -48,7 +46,7 @@ size_t AddKeyframeFromView(const SavedViews::SavedView &view,
 bool AddKeyframeFromSavedView(size_t savedViewIndex);
 bool RemoveKeyframe(size_t index);
 bool MoveKeyframe(size_t index, int direction);
-bool UpdateKeyframe(size_t index, float durationToNextSeconds, int easing);
+bool UpdateKeyframe(size_t index, float durationToNextSeconds, int easeIn, int easeOut);
 bool RenameKeyframe(size_t index, const std::string &label);
 
 float GetTotalDurationSeconds();

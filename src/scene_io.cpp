@@ -460,7 +460,8 @@ static json BuildMetadata() {
     j["anm"]["kfs"].push_back({
         {"n", keyframe.label},
         {"dur", keyframe.durationToNextSeconds},
-        {"ez", keyframe.easing},
+        {"ein", keyframe.easeIn},
+        {"eout", keyframe.easeOut},
         {"p", {keyframe.camera.pos[0], keyframe.camera.pos[1], keyframe.camera.pos[2]}},
         {"f", {keyframe.camera.forward[0], keyframe.camera.forward[1], keyframe.camera.forward[2]}},
         {"u", {keyframe.camera.up[0], keyframe.camera.up[1], keyframe.camera.up[2]}},
@@ -730,7 +731,9 @@ static void ApplyMetadataPRS(const json &j) {
         AnimationSequence::Keyframe keyframe;
         keyframe.label = entry.value("n", std::string("Keyframe"));
         keyframe.durationToNextSeconds = entry.value("dur", 2.0f);
-        keyframe.easing = entry.value("ez", keyframe.easing);
+        const int legacyEase = entry.value("ez", static_cast<int>(AnimationSequence::EasingMode::Ease));
+        keyframe.easeIn = entry.value("ein", legacyEase);
+        keyframe.easeOut = entry.value("eout", legacyEase);
         if (entry.contains("p") && entry["p"].size() >= 3) {
           for (int i = 0; i < 3; ++i) keyframe.camera.pos[i] = entry["p"][i];
         }

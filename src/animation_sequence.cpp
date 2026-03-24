@@ -59,20 +59,35 @@ void NormalizeVec3(float *value) {
 float ApplyEasing(float t, int easing) {
   const float clamped = Clamp01(t);
   switch (static_cast<EasingMode>(easing)) {
-  case EasingMode::EaseIn:
+  case EasingMode::Ease:
     return clamped * clamped;
-  case EasingMode::EaseOut:
-    return 1.0f - (1.0f - clamped) * (1.0f - clamped);
-  case EasingMode::EaseInOut:
-    return (clamped < 0.5f)
-               ? (2.0f * clamped * clamped)
-               : (1.0f - std::pow(-2.0f * clamped + 2.0f, 2.0f) * 0.5f);
-  case EasingMode::SmoothStep:
-    return clamped * clamped * (3.0f - 2.0f * clamped);
   case EasingMode::Linear:
   default:
     return clamped;
   }
+}
+
+float ApplyIncomingEasing(float t, int easing) {
+  const float clamped = Clamp01(t);
+  switch (static_cast<EasingMode>(easing)) {
+  case EasingMode::Ease:
+    return 1.0f - (1.0f - clamped) * (1.0f - clamped);
+  case EasingMode::Linear:
+  default:
+    return clamped;
+  }
+}
+
+float ApplyOutgoingEasing(float t, int easing) {
+  return ApplyEasing(t, easing);
+}
+
+float ApplySegmentEasing(float t, int easeIn, int easeOut) {
+  const float clamped = Clamp01(t);
+  if (clamped <= 0.5f) {
+    return 0.5f * ApplyOutgoingEasing(clamped * 2.0f, easeIn);
+  }
+  return 0.5f + 0.5f * ApplyIncomingEasing((clamped - 0.5f) * 2.0f, easeOut);
 }
 
 SavedViews::SavedView InterpolateView(const Keyframe &from, const Keyframe &to,
@@ -208,13 +223,16 @@ bool MoveKeyframe(size_t index, int direction) {
   return true;
 }
 
-bool UpdateKeyframe(size_t index, float durationToNextSeconds, int easing) {
+bool UpdateKeyframe(size_t index, float durationToNextSeconds, int easeIn, int easeOut) {
   if (index >= g_keyframes.size()) {
     return false;
   }
   g_keyframes[index].durationToNextSeconds =
       (std::max)(0.0f, durationToNextSeconds);
-  g_keyframes[index].easing = (std::clamp)(easing, 0, GetEasingModeCount() - 1);
+  g_keyframes[index].easeIn =
+      (std::clamp)(easeIn, 0, GetEasingModeCount() - 1);
+  g_keyframes[index].easeOut =
+      (std::clamp)(easeOut, 0, GetEasingModeCount() - 1);
   g_lastStatus = "Updated animation transition";
   return true;
 }
@@ -268,7 +286,9 @@ SavedViews::SavedView EvaluateAtTime(float seconds) {
         index + 2 == g_keyframes.size()) {
       const float localT = (clampedTime - elapsed) / segmentDuration;
       return InterpolateView(g_keyframes[index], g_keyframes[index + 1],
-                             ApplyEasing(localT, g_keyframes[index].easing));
+                             ApplySegmentEasing(localT,
+                                                g_keyframes[index].easeIn,
+                                                g_keyframes[index + 1].easeOut));
     }
     elapsed += segmentDuration;
   }
@@ -303,18 +323,12 @@ bool ApplyAtFrame(int frameIndex, int fps) {
   return SavedViews::ApplyView(EvaluateAtFrame(frameIndex, fps));
 }
 
-int GetEasingModeCount() { return 5; }
+int GetEasingModeCount() { return 2; }
 
 const char *GetEasingModeLabel(int index) {
   switch (static_cast<EasingMode>(index)) {
-  case EasingMode::EaseIn:
-    return "Ease In";
-  case EasingMode::EaseOut:
-    return "Ease Out";
-  case EasingMode::EaseInOut:
-    return "Ease In Out";
-  case EasingMode::SmoothStep:
-    return "Smooth Step";
+  case EasingMode::Ease:
+    return "Ease";
   case EasingMode::Linear:
   default:
     return "Linear";
