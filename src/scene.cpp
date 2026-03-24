@@ -425,6 +425,13 @@ static std::vector<int> ResolveReplacementMaterialIndices(
       }
     }
 
+    if (globalMaterialIndex < 0 && !importedName.empty()) {
+      const int sharedIndex = FindMaterialByName(importedName);
+      if (sharedIndex >= 0 && sharedIndex < (int)g_loadedMaterials.size()) {
+        globalMaterialIndex = sharedIndex;
+      }
+    }
+
     if (globalMaterialIndex < 0) {
       globalMaterialIndex = (int)g_loadedMaterials.size();
       g_loadedMaterials.push_back(materials[i]);
@@ -553,22 +560,24 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
   EnsureGpuBuffersForMeshes(payload.meshes);
 
   const size_t textureBase = g_loadedTextures.size();
-  const size_t materialBase = g_loadedMaterials.size();
   const size_t meshBase = g_loadedMeshes.size();
 
   AdjustMaterialTextureIndices(payload.materials, textureBase);
 
   g_loadedTextures.insert(g_loadedTextures.end(), payload.textures.begin(),
                           payload.textures.end());
-  g_loadedMaterials.insert(g_loadedMaterials.end(), payload.materials.begin(),
-                           payload.materials.end());
+  Node importNodeProbe;
+  std::vector<int> localToGlobal =
+      ResolveReplacementMaterialIndices(importNodeProbe, payload.materials);
   g_loadedMeshes.insert(g_loadedMeshes.end(), payload.meshes.begin(),
                         payload.meshes.end());
 
   for (size_t i = 0; i < payload.meshes.size(); ++i) {
     int &materialIndex = g_loadedMeshes[meshBase + i].materialIndex;
-    if (materialIndex >= 0) {
-      materialIndex += (int)materialBase;
+    if (materialIndex >= 0 && materialIndex < (int)localToGlobal.size()) {
+      materialIndex = localToGlobal[(size_t)materialIndex];
+    } else {
+      materialIndex = -1;
     }
   }
 
@@ -581,7 +590,12 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
   for (size_t i = 0; i < payload.meshes.size(); ++i) {
     node.meshIndices.push_back(meshBase + i);
   }
-  InitializeNodeImportLinkage(node, materialBase, payload.materials);
+  node.linkedMaterialIndices = std::move(localToGlobal);
+  node.linkedMaterialSourceNames.clear();
+  node.linkedMaterialSourceNames.reserve(payload.materials.size());
+  for (const Asset::Material &material : payload.materials) {
+    node.linkedMaterialSourceNames.emplace_back(material.name);
+  }
   const size_t nodeIndex = AddNode(std::move(node));
 
   s_lastStatus = std::string("Loaded: ") +
