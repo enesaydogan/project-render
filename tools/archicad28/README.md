@@ -10,13 +10,14 @@ Current scope:
   - `Start Session`
   - `Sync Scene Now`
   - `Stop Session`
-- sends protocol-compatible `SessionOpened`, `FullSceneSync`, `NodeAdded`, `NodeTransformChanged`, `NodeVisibilityChanged`, `MeshPayloadChanged`, and `SessionClosed` batches
+- sends protocol-compatible `SessionOpened`, `FullSceneSync`, `NodeAdded`, `NodeTransformChanged`, `NodeVisibilityChanged`, `MeshPayloadChanged`, `MaterialChanged`, `CameraChanged`, and `SessionClosed` batches
 - exports visible Archicad 3D elements into `.prmesh` payloads before sending them to the renderer
+- converts Archicad mesh coordinates into the renderer's Y-up space and exports per-vertex UVs
 - includes Archicad project metadata in the opened session payload
 
 What it does not do yet:
 
-- material, camera, light, and incremental change export from Archicad
+- light and incremental change export from Archicad
 - incremental scene monitoring
 - UI panel or pipe-name preferences inside Archicad
 

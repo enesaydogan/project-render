@@ -9,6 +9,8 @@
 #include "ModelElement.hpp"
 #include "ModelMeshBody.hpp"
 #include "Polygon.hpp"
+#include "TextureCoordinate.hpp"
+#include "CH.hpp"
 #include "UniString.hpp"
 
 #include <nlohmann/json.hpp>
@@ -22,6 +24,7 @@
 #include <fstream>
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -32,10 +35,22 @@ using json = nlohmann::json;
 
 namespace {
 
+void SetMenuItemEnabled(Int32 itemIndex, bool enabled);
+void Normalize3(float value[3], const float fallback[3]);
+void CALLBACK ScenePollTimerProc(HWND, UINT, UINT_PTR, DWORD);
+void CALLBACK CameraPollTimerProc(HWND, UINT, UINT_PTR, DWORD);
+GSErrCode ProjectEventHandler(API_NotifyEventID notifID, Int32 param);
+
 constexpr const char *kPipeName = "project-render-archicad-livelink";
 constexpr const char *kProviderName = "Archicad28Pipe";
 constexpr const char *kSourceApp = "Archicad28";
 constexpr size_t kMaxDeltasPerBatch = 96;
+constexpr UINT_PTR kScenePollTimerId = 0xA281;
+constexpr UINT_PTR kCameraPollTimerId = 0xA282;
+constexpr UINT kScenePollIntervalMs = 250;
+constexpr UINT kCameraPollIntervalMs = 33;
+constexpr auto kSceneResyncDebounce = std::chrono::milliseconds(900);
+constexpr auto kReconnectRetryInterval = std::chrono::milliseconds(1000);
 
 struct NativeMeshPayloadHeader {
   uint32_t magic = 0x48534D50;
@@ -71,6 +86,51 @@ struct ElementExportRecord {
   uint64_t vertexCount = 0;
   uint64_t indexCount = 0;
   bool visible = true;
+  struct MaterialBinding {
+    int materialKey = 0;
+    int materialSlot = 0;
+  };
+  std::vector<MaterialBinding> materialBindings;
+};
+
+struct MaterialExportRecord {
+  struct Reference {
+    std::string nodeObjectId;
+    int materialSlot = 0;
+
+    bool operator==(const Reference &) const = default;
+  };
+
+  int materialKey = 0;
+  std::string objectId;
+  std::string materialStableId;
+  std::string name;
+  std::string nodeObjectId;
+  int materialSlot = 0;
+  std::vector<Reference> references;
+  std::string materialModel = "ArchicadSurface";
+  std::array<float, 4> baseColor = {0.8f, 0.8f, 0.8f, 1.0f};
+  std::string baseColorTextureUri;
+  std::array<float, 4> emissiveColor = {0.0f, 0.0f, 0.0f, 1.0f};
+  float emissiveIntensity = 0.0f;
+  float roughness = 0.5f;
+  float metalness = 0.0f;
+  float specularWeight = 0.5f;
+  float ior = 1.5f;
+  float transmissionWeight = 0.0f;
+  std::array<float, 3> transmissionColor = {1.0f, 1.0f, 1.0f};
+  bool doubleSided = false;
+  std::string alphaMode = "OPAQUE";
+};
+
+struct CameraExportRecord {
+  bool valid = false;
+  std::array<float, 3> position = {0.0f, 1.0f, -5.0f};
+  std::array<float, 3> forward = {0.0f, 0.0f, 1.0f};
+  std::array<float, 3> up = {0.0f, 1.0f, 0.0f};
+  float fovDegrees = 60.0f;
+  float nearPlane = 0.01f;
+  float farPlane = 1000.0f;
 };
 
 struct ScopedElementMemo : API_ElementMemo {
@@ -166,6 +226,8 @@ std::string GuidToString(API_Guid guid) {
 
 std::string MakeObjectId(API_Guid guid) { return GuidToString(guid); }
 
+std::string MakeCameraObjectId() { return "camera:active"; }
+
 std::filesystem::path GetPayloadRootDirectory() {
   wchar_t tempPath[MAX_PATH] = {};
   const DWORD length =
@@ -189,6 +251,222 @@ std::string PathToUtf8(const std::filesystem::path &path) {
     utf8.push_back(static_cast<char>(ch));
   }
   return utf8;
+}
+
+void ConvertArchicadPointToEngine(double x, double y, double z, float out[3]) {
+  out[0] = static_cast<float>(x);
+  out[1] = static_cast<float>(z);
+  out[2] = static_cast<float>(-y);
+}
+
+void ConvertArchicadVectorToEngine(double x, double y, double z, float out[3]) {
+  out[0] = static_cast<float>(x);
+  out[1] = static_cast<float>(z);
+  out[2] = static_cast<float>(-y);
+}
+
+std::array<float, 3> ConvertArchicadPointToEngine(const API_Coord3D &value) {
+  std::array<float, 3> result = {};
+  ConvertArchicadPointToEngine(value.x, value.y, value.z, result.data());
+  return result;
+}
+
+void Cross3(const float lhs[3], const float rhs[3], float out[3]) {
+  out[0] = lhs[1] * rhs[2] - lhs[2] * rhs[1];
+  out[1] = lhs[2] * rhs[0] - lhs[0] * rhs[2];
+  out[2] = lhs[0] * rhs[1] - lhs[1] * rhs[0];
+}
+
+float Clamp01(double value) {
+  return static_cast<float>(std::clamp(value, 0.0, 1.0));
+}
+
+std::string MakeMaterialObjectId(const std::string &materialStableId,
+                                 int materialKey) {
+  if (!materialStableId.empty()) {
+    return "material:id:" + materialStableId;
+  }
+  return "material:index:" + std::to_string(materialKey);
+}
+
+std::string ResolveTextureUri(const API_Texture &texture) {
+  if (texture.status == 0 || texture.fileLoc == nullptr ||
+      texture.fileLoc->GetLocalLength() == 0) {
+    return {};
+  }
+  return ToUtf8(texture.fileLoc->ToDisplayText());
+}
+
+bool PopulateMaterialExportRecord(int materialKey,
+                                  MaterialExportRecord *outMaterial) {
+  if (outMaterial == nullptr) {
+    return false;
+  }
+
+  MaterialExportRecord material;
+  material.materialKey = materialKey;
+
+  API_Component3D component = {};
+  component.header.typeID = API_UmatID;
+  component.header.index = materialKey;
+  const GSErrCode err = ACAPI_ModelAccess_GetComponent(&component);
+  if (err == NoError) {
+    const API_MaterialType &source = component.umat.mater;
+    if (source.head.guid != APINULLGuid) {
+      material.materialStableId = GuidToString(source.head.guid);
+    }
+    material.objectId =
+        MakeMaterialObjectId(material.materialStableId, materialKey);
+    material.name = source.head.name;
+    if (material.name.empty()) {
+      material.name = std::string("Surface ") + std::to_string(materialKey);
+    }
+    material.baseColor = {Clamp01(source.surfaceRGB.f_red),
+                          Clamp01(source.surfaceRGB.f_green),
+                          Clamp01(source.surfaceRGB.f_blue),
+                          1.0f - Clamp01(static_cast<double>(source.transpPc) /
+                                         100.0)};
+    material.baseColorTextureUri = ResolveTextureUri(source.texture);
+    material.emissiveColor = {Clamp01(source.emissionRGB.f_red),
+                              Clamp01(source.emissionRGB.f_green),
+                              Clamp01(source.emissionRGB.f_blue), 1.0f};
+    material.emissiveIntensity =
+        Clamp01(static_cast<double>(source.emissionAtt) / 100.0);
+    material.roughness =
+        1.0f - Clamp01(static_cast<double>(source.shine) / 10000.0);
+    material.specularWeight =
+        Clamp01(static_cast<double>(source.specularPc) / 100.0);
+    material.transmissionWeight =
+        Clamp01(static_cast<double>(source.transpPc) / 100.0);
+    material.transmissionColor = {
+        material.baseColor[0], material.baseColor[1], material.baseColor[2]};
+    material.alphaMode =
+        material.transmissionWeight > 1.0e-3f ? "BLEND" : "OPAQUE";
+
+    switch (source.mtype) {
+    case APIMater_MetalID:
+      material.metalness = 1.0f;
+      material.specularWeight = 1.0f;
+      material.ior = 2.0f;
+      break;
+    case APIMater_GlassID:
+      material.roughness = 0.02f;
+      material.specularWeight = 1.0f;
+      material.ior = 1.52f;
+      material.transmissionWeight =
+          (std::max)(material.transmissionWeight, 0.85f);
+      material.alphaMode = "BLEND";
+      break;
+    case APIMater_GlowingID:
+      material.emissiveIntensity =
+          (std::max)(material.emissiveIntensity, 1.0f);
+      break;
+    default:
+      break;
+    }
+  }
+
+  if (component.umat.mater.texture.fileLoc != nullptr) {
+    delete component.umat.mater.texture.fileLoc;
+    component.umat.mater.texture.fileLoc = nullptr;
+  }
+
+  if (material.objectId.empty()) {
+    material.objectId = MakeMaterialObjectId({}, materialKey);
+  }
+  if (material.name.empty()) {
+    material.name = std::string("Surface ") + std::to_string(materialKey);
+  }
+
+  *outMaterial = std::move(material);
+  return true;
+}
+
+void DeduplicateMaterialReferences(MaterialExportRecord *material) {
+  if (material == nullptr) {
+    return;
+  }
+
+  std::sort(material->references.begin(), material->references.end(),
+            [](const MaterialExportRecord::Reference &lhs,
+               const MaterialExportRecord::Reference &rhs) {
+              if (lhs.nodeObjectId != rhs.nodeObjectId) {
+                return lhs.nodeObjectId < rhs.nodeObjectId;
+              }
+              return lhs.materialSlot < rhs.materialSlot;
+            });
+  material->references.erase(
+      std::unique(material->references.begin(), material->references.end()),
+      material->references.end());
+}
+
+bool ReadCurrentCamera(CameraExportRecord *outCamera) {
+  if (outCamera == nullptr) {
+    return false;
+  }
+
+  API_3DProjectionInfo projectionInfo = {};
+  if (ACAPI_View_Get3DProjectionSets(&projectionInfo) != NoError ||
+      !projectionInfo.isPersp) {
+    return false;
+  }
+
+  const API_PerspPars &persp = projectionInfo.u.persp;
+  const API_Coord3D cameraPos = {persp.pos.x, persp.pos.y, persp.cameraZ};
+  const API_Coord3D targetPos = {persp.target.x, persp.target.y, persp.targetZ};
+
+  CameraExportRecord camera;
+  camera.valid = true;
+  camera.position = ConvertArchicadPointToEngine(cameraPos);
+
+  float forward[3] = {};
+  ConvertArchicadVectorToEngine(targetPos.x - cameraPos.x,
+                                targetPos.y - cameraPos.y,
+                                targetPos.z - cameraPos.z, forward);
+  const float upWorld[3] = {0.0f, 1.0f, 0.0f};
+  const float fallbackForward[3] = {0.0f, 0.0f, 1.0f};
+  Normalize3(forward, fallbackForward);
+
+  float right[3] = {};
+  Cross3(upWorld, forward, right);
+  const float fallbackRight[3] = {1.0f, 0.0f, 0.0f};
+  Normalize3(right, fallbackRight);
+
+  float up[3] = {};
+  Cross3(forward, right, up);
+  Normalize3(up, upWorld);
+
+  if (std::fabs(persp.rollAngle) > 1.0e-6) {
+    const float cosAngle = static_cast<float>(std::cos(persp.rollAngle));
+    const float sinAngle = static_cast<float>(std::sin(persp.rollAngle));
+    float rolledRight[3] = {};
+    float rolledUp[3] = {};
+    for (size_t i = 0; i < 3; ++i) {
+      rolledRight[i] = right[i] * cosAngle + up[i] * sinAngle;
+      rolledUp[i] = up[i] * cosAngle - right[i] * sinAngle;
+    }
+    std::copy(std::begin(rolledRight), std::end(rolledRight), std::begin(right));
+    std::copy(std::begin(rolledUp), std::end(rolledUp), std::begin(up));
+    Normalize3(right, fallbackRight);
+    Normalize3(up, upWorld);
+  }
+
+  camera.forward = {forward[0], forward[1], forward[2]};
+  camera.up = {up[0], up[1], up[2]};
+
+  // Archicad's projection settings come from plan-space camera data. Flipping
+  // X here keeps the exported camera handedness aligned with the renderer view.
+  camera.position[0] = -camera.position[0];
+  camera.forward[0] = -camera.forward[0];
+  camera.up[0] = -camera.up[0];
+
+  camera.fovDegrees =
+      static_cast<float>(persp.viewCone * (180.0 / 3.14159265358979323846));
+  camera.nearPlane = 0.01f;
+  camera.farPlane =
+      (std::max)(1000.0f, static_cast<float>(persp.distance * 4.0));
+  *outCamera = camera;
+  return true;
 }
 
 std::string GetElementInfoString(API_Guid guid) {
@@ -243,6 +521,22 @@ void Normalize3(float value[3], const float fallback[3]) {
   value[2] *= inverseLength;
 }
 
+bool SameVector3(const std::array<float, 3> &lhs,
+                 const std::array<float, 3> &rhs) {
+  return std::fabs(lhs[0] - rhs[0]) <= 1.0e-4f &&
+         std::fabs(lhs[1] - rhs[1]) <= 1.0e-4f &&
+         std::fabs(lhs[2] - rhs[2]) <= 1.0e-4f;
+}
+
+bool SameCamera(const CameraExportRecord &lhs, const CameraExportRecord &rhs) {
+  return lhs.valid == rhs.valid && SameVector3(lhs.position, rhs.position) &&
+         SameVector3(lhs.forward, rhs.forward) &&
+         SameVector3(lhs.up, rhs.up) &&
+         std::fabs(lhs.fovDegrees - rhs.fovDegrees) <= 1.0e-4f &&
+         std::fabs(lhs.nearPlane - rhs.nearPlane) <= 1.0e-4f &&
+         std::fabs(lhs.farPlane - rhs.farPlane) <= 1.0e-4f;
+}
+
 json MakeObjectIdJson(const std::string &documentId, const std::string &objectId,
                       const char *objectType) {
   return json{{"sourceApp", kSourceApp},
@@ -251,9 +545,27 @@ json MakeObjectIdJson(const std::string &documentId, const std::string &objectId
               {"objectType", objectType}};
 }
 
+json MakeCameraDelta(const std::string &documentId,
+                     const CameraExportRecord &camera, uint64_t revision) {
+  return json{{"kind", "CameraChanged"},
+              {"target",
+               MakeObjectIdJson(documentId, MakeCameraObjectId(), "Camera")},
+              {"revision", revision},
+              {"debugLabel", "Archicad active 3D camera"},
+              {"payload",
+               json{{"position", camera.position},
+                    {"forward", camera.forward},
+                    {"up", camera.up},
+                    {"fovDegrees", camera.fovDegrees},
+                    {"nearPlane", camera.nearPlane},
+                    {"farPlane", camera.farPlane}}}};
+}
+
 bool ExportElementMeshPayload(const std::string &documentId,
                               const ElementExportRecord &record,
                               const ModelerAPI::Element &element,
+                              std::vector<ElementExportRecord::MaterialBinding>
+                                  *outMaterialBindings,
                               std::string *outPayloadUri,
                               uint64_t *outVertexCount,
                               uint64_t *outIndexCount) {
@@ -288,8 +600,9 @@ bool ExportElementMeshPayload(const std::string &documentId,
 
       ModelerAPI::AttributeIndex materialIndex(
           ModelerAPI::AttributeIndex::MaterialIndex);
-        polygon.GetMaterialIndex(materialIndex);
-      const int materialKey = materialIndex.IsValid() ? materialIndex.GetIndex() : 0;
+      polygon.GetMaterialIndex(materialIndex);
+      const int materialKey =
+          materialIndex.IsValid() ? materialIndex.GetIndex() : 0;
 
       auto [slotIt, inserted] =
           submeshByMaterialKey.emplace(materialKey, submeshes.size());
@@ -323,13 +636,20 @@ bool ExportElementMeshPayload(const std::string &documentId,
                 vertexIndex, ModelerAPI::CoordinateSystem::World);
 
             NativeMeshPayloadVertex payloadVertex;
-            payloadVertex.position[0] = static_cast<float>(vertex.x);
-            payloadVertex.position[1] = static_cast<float>(vertex.y);
-            payloadVertex.position[2] = static_cast<float>(vertex.z);
-            payloadVertex.normal[0] = static_cast<float>(normal.x);
-            payloadVertex.normal[1] = static_cast<float>(normal.y);
-            payloadVertex.normal[2] = static_cast<float>(normal.z);
+            ConvertArchicadPointToEngine(vertex.x, vertex.y, vertex.z,
+                                         payloadVertex.position);
+            ConvertArchicadVectorToEngine(normal.x, normal.y, normal.z,
+                                          payloadVertex.normal);
             Normalize3(payloadVertex.normal, kUpFallback);
+            if (polygon.HasMaterialTexture() || polygon.HasPolygonTexture()) {
+              try {
+                ModelerAPI::TextureCoordinate texCoord;
+                polygon.GetTextureCoordinate(&vertex, &texCoord);
+                payloadVertex.uv[0] = static_cast<float>(texCoord.u);
+                payloadVertex.uv[1] = static_cast<float>(texCoord.v);
+              } catch (...) {
+              }
+            }
 
             const uint32_t appendedIndex =
                 static_cast<uint32_t>(submesh.vertices.size());
@@ -402,6 +722,22 @@ bool ExportElementMeshPayload(const std::string &documentId,
     return false;
   }
 
+  if (outMaterialBindings != nullptr) {
+    outMaterialBindings->clear();
+    outMaterialBindings->reserve(submeshes.size());
+    for (const auto &[materialKey, submeshIndex] : submeshByMaterialKey) {
+      ElementExportRecord::MaterialBinding binding;
+      binding.materialKey = materialKey;
+      binding.materialSlot = submeshes[submeshIndex].materialSlot;
+      outMaterialBindings->push_back(binding);
+    }
+    std::sort(outMaterialBindings->begin(), outMaterialBindings->end(),
+              [](const ElementExportRecord::MaterialBinding &lhs,
+                 const ElementExportRecord::MaterialBinding &rhs) {
+                return lhs.materialSlot < rhs.materialSlot;
+              });
+  }
+
   *outPayloadUri = PathToUtf8(payloadPath);
   *outVertexCount = totalVertexCount;
   *outIndexCount = totalIndexCount;
@@ -410,8 +746,9 @@ bool ExportElementMeshPayload(const std::string &documentId,
 
 bool ExportSceneElements(const DocumentInfo &documentInfo,
                          std::vector<ElementExportRecord> *outElements,
+                         std::vector<MaterialExportRecord> *outMaterials,
                          std::string *outError) {
-  if (outElements == nullptr) {
+  if (outElements == nullptr || outMaterials == nullptr) {
     return false;
   }
 
@@ -427,6 +764,7 @@ bool ExportSceneElements(const DocumentInfo &documentInfo,
   }
   if (elementGuids.IsEmpty()) {
     outElements->clear();
+    outMaterials->clear();
     return true;
   }
 
@@ -457,6 +795,7 @@ bool ExportSceneElements(const DocumentInfo &documentInfo,
   }
 
   std::vector<ElementExportRecord> exportedElements;
+  std::unordered_map<int, MaterialExportRecord> materialsByKey;
   const int elementCount = model.GetElementCount();
   exportedElements.reserve(static_cast<size_t>(elementCount));
   for (int elementIndex = 1; elementIndex <= elementCount; ++elementIndex) {
@@ -469,15 +808,39 @@ bool ExportSceneElements(const DocumentInfo &documentInfo,
     record.displayName = GetElementDisplayName(guid);
 
     if (!ExportElementMeshPayload(documentInfo.documentId, record, element,
+                                  &record.materialBindings,
                                   &record.payloadUri, &record.vertexCount,
                                   &record.indexCount)) {
       continue;
     }
 
+    for (const ElementExportRecord::MaterialBinding &binding :
+         record.materialBindings) {
+      auto [it, inserted] =
+          materialsByKey.emplace(binding.materialKey, MaterialExportRecord{});
+      MaterialExportRecord &material = it->second;
+      if (inserted) {
+        PopulateMaterialExportRecord(binding.materialKey, &material);
+      }
+      if (material.nodeObjectId.empty()) {
+        material.nodeObjectId = record.objectId;
+        material.materialSlot = binding.materialSlot;
+      }
+      material.references.push_back({record.objectId, binding.materialSlot});
+    }
+
     exportedElements.push_back(std::move(record));
   }
 
+  std::vector<MaterialExportRecord> exportedMaterials;
+  exportedMaterials.reserve(materialsByKey.size());
+  for (auto &[_, material] : materialsByKey) {
+    DeduplicateMaterialReferences(&material);
+    exportedMaterials.push_back(std::move(material));
+  }
+
   *outElements = std::move(exportedElements);
+  *outMaterials = std::move(exportedMaterials);
   return true;
 }
 
@@ -486,45 +849,135 @@ public:
   bool Start();
   bool SyncNow();
   bool Stop(bool silent = false);
+  void RefreshMenuState() const;
+  void OnScenePollTimer();
+  void OnCameraPollTimer();
+  void MarkSceneDirty(API_NotifyEventID notifID);
 
 private:
-  bool EnsureConnected();
-  bool EnsureSessionOpened();
-  bool BeginNewSession(bool reportOnSuccess);
-  bool SendBatch(bool fullSync, json deltas);
-  bool SendSessionOpened();
-  bool SendSessionClosed();
-  bool ExportFullScene(bool startingSession);
+  using Clock = std::chrono::steady_clock;
+
+  bool EnsureConnected(bool withDialog = true);
+  bool EnsureSessionOpened(bool reportOnSuccess = true,
+                           bool withDialog = true);
+  bool BeginNewSession(bool reportOnSuccess, bool withDialog);
+  bool SendBatch(bool fullSync, json deltas, bool withDialog = true);
+  bool SendSessionOpened(bool withDialog = true);
+  bool SendSessionClosed(bool withDialog = true);
+  bool ExportFullScene(bool startingSession, bool reportSuccess = true,
+                       bool withDialog = true);
+  bool SendCameraDeltaIfChanged(bool withDialog);
   DocumentInfo ReadDocumentInfo() const;
   std::string MakeSessionId() const;
   void AppendExportDeltas(const std::vector<ElementExportRecord> &elements,
+                          const std::vector<MaterialExportRecord> &materials,
+                          const CameraExportRecord *camera,
                           std::vector<json> *outDeltas,
                           uint64_t *ioRevision) const;
-  bool SendDeltaChunks(const std::vector<json> &deltas, bool firstBatchFullSync);
+  bool SendDeltaChunks(const std::vector<json> &deltas,
+                       bool firstBatchFullSync, bool withDialog = true);
+  void ResetSessionState(bool disconnectPipe);
+  void HandleSessionLost(std::chrono::milliseconds retryDelay);
+  void StartTimers();
+  void StopTimers();
+  void ScheduleSceneSync(std::chrono::milliseconds delay);
+  void ClearPendingSceneSync();
   static void Report(const std::string &message, bool withDialog = false);
 
+  bool m_syncActive = false;
   bool m_sessionOpen = false;
+  bool m_commandInProgress = false;
+  bool m_sceneDirty = false;
+  bool m_fullSceneResyncNeeded = true;
   std::string m_sessionId;
   DocumentInfo m_documentInfo;
   uint64_t m_nextSequence = 1;
   uint64_t m_nextRevision = 1;
+  CameraExportRecord m_lastCamera = {};
+  Clock::time_point m_nextSceneSyncDeadline = Clock::time_point{};
+  UINT_PTR m_scenePollTimer = 0;
+  UINT_PTR m_cameraPollTimer = 0;
 };
 
 LiveLinkSessionController g_controller;
 
 void LiveLinkSessionController::Report(const std::string &message,
                                        bool withDialog) {
-  ACAPI_WriteReport(GS::UniString(message.c_str()), withDialog);
+  ACAPI_WriteReport(GS::UniString(message.c_str(), CC_UTF8), withDialog);
 }
 
-bool LiveLinkSessionController::EnsureConnected() {
+void LiveLinkSessionController::RefreshMenuState() const {
+  const bool commandAvailable = !m_commandInProgress;
+  SetMenuItemEnabled(1, commandAvailable && !m_syncActive);
+  SetMenuItemEnabled(2, commandAvailable && m_syncActive);
+  SetMenuItemEnabled(3, commandAvailable && m_syncActive);
+}
+
+void LiveLinkSessionController::ResetSessionState(bool disconnectPipe) {
+  if (disconnectPipe) {
+    g_pipeClient.Disconnect();
+  }
+  m_sessionOpen = false;
+  m_sessionId.clear();
+  m_documentInfo = {};
+  m_nextSequence = 1;
+  m_nextRevision = 1;
+  m_lastCamera = {};
+}
+
+void LiveLinkSessionController::HandleSessionLost(
+    std::chrono::milliseconds retryDelay) {
+  ResetSessionState(false);
+  m_fullSceneResyncNeeded = true;
+  m_sceneDirty = true;
+  if (m_syncActive) {
+    ScheduleSceneSync(retryDelay);
+  } else {
+    ClearPendingSceneSync();
+  }
+}
+
+void LiveLinkSessionController::ScheduleSceneSync(
+    std::chrono::milliseconds delay) {
+  m_nextSceneSyncDeadline = Clock::now() + delay;
+}
+
+void LiveLinkSessionController::ClearPendingSceneSync() {
+  m_nextSceneSyncDeadline = Clock::time_point{};
+}
+
+void LiveLinkSessionController::StartTimers() {
+  if (m_scenePollTimer == 0) {
+    m_scenePollTimer =
+        SetTimer(nullptr, kScenePollTimerId, kScenePollIntervalMs,
+                 &ScenePollTimerProc);
+  }
+  if (m_cameraPollTimer == 0) {
+    m_cameraPollTimer =
+        SetTimer(nullptr, kCameraPollTimerId, kCameraPollIntervalMs,
+                 &CameraPollTimerProc);
+  }
+}
+
+void LiveLinkSessionController::StopTimers() {
+  if (m_scenePollTimer != 0) {
+    KillTimer(nullptr, m_scenePollTimer);
+    m_scenePollTimer = 0;
+  }
+  if (m_cameraPollTimer != 0) {
+    KillTimer(nullptr, m_cameraPollTimer);
+    m_cameraPollTimer = 0;
+  }
+}
+
+bool LiveLinkSessionController::EnsureConnected(bool withDialog) {
   if (g_pipeClient.IsConnected()) {
     return true;
   }
   if (!g_pipeClient.Connect(kPipeName)) {
     Report("project-render LiveLink: failed to connect to pipe '" +
                std::string(kPipeName) + "': " + g_pipeClient.GetLastError(),
-           true);
+           withDialog);
     return false;
   }
   return true;
@@ -575,12 +1028,13 @@ DocumentInfo LiveLinkSessionController::ReadDocumentInfo() const {
   return info;
 }
 
-bool LiveLinkSessionController::SendBatch(bool fullSync, json deltas) {
-  if (!EnsureConnected()) {
+bool LiveLinkSessionController::SendBatch(bool fullSync, json deltas,
+                                          bool withDialog) {
+  if (!EnsureConnected(withDialog)) {
     return false;
   }
   if (m_sessionId.empty()) {
-    Report("project-render LiveLink: no active session id", true);
+    Report("project-render LiveLink: no active session id", withDialog);
     return false;
   }
 
@@ -594,14 +1048,14 @@ bool LiveLinkSessionController::SendBatch(bool fullSync, json deltas) {
   if (!g_pipeClient.SendJsonLine(batch.dump())) {
     Report("project-render LiveLink: failed to send batch: " +
                g_pipeClient.GetLastError(),
-           true);
+           withDialog);
     return false;
   }
 
   return true;
 }
 
-bool LiveLinkSessionController::SendSessionOpened() {
+bool LiveLinkSessionController::SendSessionOpened(bool withDialog) {
   json deltas = json::array();
   deltas.push_back(json{{"kind", "SessionOpened"},
                         {"target",
@@ -612,20 +1066,21 @@ bool LiveLinkSessionController::SendSessionOpened() {
                         {"payload",
                          json{{"documentPath", m_documentInfo.documentPath},
                               {"displayName", m_documentInfo.displayName}}}});
-  return SendBatch(false, std::move(deltas));
+  return SendBatch(false, std::move(deltas), withDialog);
 }
 
-bool LiveLinkSessionController::SendSessionClosed() {
+bool LiveLinkSessionController::SendSessionClosed(bool withDialog) {
   json deltas = json::array();
   deltas.push_back(json{{"kind", "SessionClosed"},
                         {"payload",
                          json{{"reason", "User stopped Archicad LiveLink"},
                               {"graceful", true}}}});
-  return SendBatch(false, std::move(deltas));
+  return SendBatch(false, std::move(deltas), withDialog);
 }
 
-bool LiveLinkSessionController::BeginNewSession(bool reportOnSuccess) {
-  if (!EnsureConnected()) {
+bool LiveLinkSessionController::BeginNewSession(bool reportOnSuccess,
+                                                bool withDialog) {
+  if (!EnsureConnected(withDialog)) {
     return false;
   }
 
@@ -634,8 +1089,8 @@ bool LiveLinkSessionController::BeginNewSession(bool reportOnSuccess) {
   m_nextSequence = 1;
   m_nextRevision = 1;
 
-  if (!SendSessionOpened()) {
-    m_sessionId.clear();
+  if (!SendSessionOpened(withDialog)) {
+    ResetSessionState(false);
     return false;
   }
 
@@ -647,16 +1102,24 @@ bool LiveLinkSessionController::BeginNewSession(bool reportOnSuccess) {
   return true;
 }
 
-bool LiveLinkSessionController::EnsureSessionOpened() {
+bool LiveLinkSessionController::EnsureSessionOpened(bool reportOnSuccess,
+                                                    bool withDialog) {
+  if (m_sessionOpen &&
+      (!g_pipeClient.IsConnected() || m_sessionId.empty())) {
+    ResetSessionState(false);
+  }
+
   if (m_sessionOpen) {
     return true;
   }
-  return BeginNewSession(true);
+  return BeginNewSession(reportOnSuccess, withDialog);
 }
 
 void LiveLinkSessionController::AppendExportDeltas(
-    const std::vector<ElementExportRecord> &elements, std::vector<json> *outDeltas,
-    uint64_t *ioRevision) const {
+    const std::vector<ElementExportRecord> &elements,
+    const std::vector<MaterialExportRecord> &materials,
+    const CameraExportRecord *camera,
+    std::vector<json> *outDeltas, uint64_t *ioRevision) const {
   if (outDeltas == nullptr || ioRevision == nullptr) {
     return;
   }
@@ -712,10 +1175,53 @@ void LiveLinkSessionController::AppendExportDeltas(
                                      std::to_string(element.vertexCount) + ":" +
                                          std::to_string(element.indexCount)}}}});
   }
+
+  for (const MaterialExportRecord &material : materials) {
+    json references = json::array();
+    for (const auto &reference : material.references) {
+      references.push_back(
+          json{{"nodeObjectId", reference.nodeObjectId},
+               {"materialSlot", reference.materialSlot}});
+    }
+
+    outDeltas->push_back(json{
+        {"kind", "MaterialChanged"},
+        {"target", MakeObjectIdJson(m_documentInfo.documentId, material.objectId,
+                                     "Material")},
+        {"revision", (*ioRevision)++},
+        {"debugLabel", material.name},
+        {"payload",
+         json{{"parametersChanged", true},
+              {"texturesChanged", !material.baseColorTextureUri.empty()},
+              {"nodeObjectId", material.nodeObjectId},
+              {"materialStableId", material.materialStableId},
+              {"materialSlot", material.materialSlot},
+              {"references", std::move(references)},
+              {"name", material.name},
+              {"materialModel", material.materialModel},
+              {"baseColor", material.baseColor},
+              {"baseColorTextureUri", material.baseColorTextureUri},
+              {"emissiveColor", material.emissiveColor},
+              {"emissiveIntensity", material.emissiveIntensity},
+              {"roughness", material.roughness},
+              {"metalness", material.metalness},
+              {"specularWeight", material.specularWeight},
+              {"ior", material.ior},
+              {"transmissionWeight", material.transmissionWeight},
+              {"transmissionColor", material.transmissionColor},
+              {"doubleSided", material.doubleSided},
+              {"alphaMode", material.alphaMode}}}});
+  }
+
+  if (camera != nullptr && camera->valid) {
+    outDeltas->push_back(
+        MakeCameraDelta(m_documentInfo.documentId, *camera, (*ioRevision)++));
+  }
 }
 
 bool LiveLinkSessionController::SendDeltaChunks(const std::vector<json> &deltas,
-                                                bool firstBatchFullSync) {
+                                                bool firstBatchFullSync,
+                                                bool withDialog) {
   if (deltas.empty()) {
     return true;
   }
@@ -728,7 +1234,8 @@ bool LiveLinkSessionController::SendDeltaChunks(const std::vector<json> &deltas,
     for (size_t index = offset; index < end; ++index) {
       chunk.push_back(deltas[index]);
     }
-    if (!SendBatch(firstBatch && firstBatchFullSync, std::move(chunk))) {
+    if (!SendBatch(firstBatch && firstBatchFullSync, std::move(chunk),
+                   withDialog)) {
       return false;
     }
     firstBatch = false;
@@ -738,74 +1245,217 @@ bool LiveLinkSessionController::SendDeltaChunks(const std::vector<json> &deltas,
   return true;
 }
 
-bool LiveLinkSessionController::ExportFullScene(bool startingSession) {
-  if (!EnsureSessionOpened()) {
+bool LiveLinkSessionController::SendCameraDeltaIfChanged(bool withDialog) {
+  if (!m_sessionOpen) {
+    return false;
+  }
+
+  CameraExportRecord camera;
+  if (!ReadCurrentCamera(&camera)) {
+    return true;
+  }
+  if (SameCamera(camera, m_lastCamera)) {
+    return true;
+  }
+
+  json deltas = json::array();
+  deltas.push_back(
+      MakeCameraDelta(m_documentInfo.documentId, camera, m_nextRevision++));
+  if (!SendBatch(false, std::move(deltas), withDialog)) {
+    HandleSessionLost(kReconnectRetryInterval);
+    return false;
+  }
+
+  m_lastCamera = camera;
+  return true;
+}
+
+bool LiveLinkSessionController::ExportFullScene(bool startingSession,
+                                                bool reportSuccess,
+                                                bool withDialog) {
+  if (!EnsureSessionOpened(false, withDialog)) {
+    if (m_syncActive) {
+      ScheduleSceneSync(kReconnectRetryInterval);
+    }
     return false;
   }
 
   std::vector<ElementExportRecord> elements;
+  std::vector<MaterialExportRecord> materials;
   std::string exportError;
-  if (!ExportSceneElements(m_documentInfo, &elements, &exportError)) {
+  if (!ExportSceneElements(m_documentInfo, &elements, &materials,
+                           &exportError)) {
+    if (startingSession) {
+      ResetSessionState(true);
+    }
+    if (m_syncActive) {
+      m_fullSceneResyncNeeded = true;
+      m_sceneDirty = true;
+      ScheduleSceneSync(kReconnectRetryInterval);
+    }
     Report("project-render LiveLink: failed to export Archicad scene: " +
                exportError,
-           true);
+           withDialog);
     return false;
   }
 
   std::vector<json> deltas;
-  deltas.reserve(elements.size() * 4 + 1);
+  deltas.reserve(elements.size() * 4 + materials.size() + 2);
   deltas.push_back(json{{"kind", "FullSceneSync"},
                         {"payload", json{{"clearsExistingScene", true}}}});
 
+  CameraExportRecord exportedCamera = {};
+  const bool hasExportedCamera = ReadCurrentCamera(&exportedCamera);
   uint64_t revision = m_nextRevision;
-  AppendExportDeltas(elements, &deltas, &revision);
-  if (!SendDeltaChunks(deltas, true)) {
+  AppendExportDeltas(elements, materials,
+                     hasExportedCamera ? &exportedCamera : nullptr, &deltas,
+                     &revision);
+  if (!SendDeltaChunks(deltas, true, withDialog)) {
+    HandleSessionLost(kReconnectRetryInterval);
     return false;
   }
   m_nextRevision = revision;
+  m_fullSceneResyncNeeded = false;
+  m_sceneDirty = false;
+  ClearPendingSceneSync();
+  m_lastCamera = hasExportedCamera ? exportedCamera : CameraExportRecord{};
 
-  Report("project-render LiveLink: exported " + std::to_string(elements.size()) +
-         " Archicad elements" +
-         (startingSession ? std::string(" for '") + m_documentInfo.displayName +
-                                "'"
-                          : std::string()));
+  if (reportSuccess) {
+    Report("project-render LiveLink: exported " +
+           std::to_string(elements.size()) + " Archicad elements" +
+           (startingSession ? std::string(" for '") + m_documentInfo.displayName +
+                                  "'"
+                            : std::string()));
+  }
   return true;
 }
 
 bool LiveLinkSessionController::Start() {
-  if (m_sessionOpen) {
+  if (m_syncActive) {
     Report("project-render LiveLink: session is already active");
+    RefreshMenuState();
     return true;
   }
-  if (!BeginNewSession(false)) {
-    return false;
+
+  m_commandInProgress = true;
+  RefreshMenuState();
+  m_fullSceneResyncNeeded = true;
+  m_sceneDirty = true;
+  ClearPendingSceneSync();
+
+  const bool ok = ExportFullScene(true, true, true);
+  if (ok) {
+    m_syncActive = true;
+    StartTimers();
+    m_lastCamera = {};
+    SendCameraDeltaIfChanged(false);
+  } else {
+    StopTimers();
+    ResetSessionState(true);
+    m_syncActive = false;
+    m_sceneDirty = false;
+    m_fullSceneResyncNeeded = true;
+    ClearPendingSceneSync();
   }
-  return ExportFullScene(true);
+  m_commandInProgress = false;
+  RefreshMenuState();
+  return ok;
 }
 
-bool LiveLinkSessionController::SyncNow() { return ExportFullScene(false); }
+bool LiveLinkSessionController::SyncNow() {
+  if (!m_syncActive) {
+    Report("project-render LiveLink: start a LiveLink session first", true);
+    return false;
+  }
+
+  m_commandInProgress = true;
+  RefreshMenuState();
+  m_fullSceneResyncNeeded = true;
+  m_sceneDirty = true;
+  ClearPendingSceneSync();
+
+  const bool ok = ExportFullScene(!m_sessionOpen, true, true);
+  m_commandInProgress = false;
+  RefreshMenuState();
+  return ok;
+}
 
 bool LiveLinkSessionController::Stop(bool silent) {
+  const bool hadSyncActive = m_syncActive;
+  m_commandInProgress = true;
+  RefreshMenuState();
+  StopTimers();
+  m_syncActive = false;
+
   if (!m_sessionOpen) {
     g_pipeClient.Disconnect();
-    if (!silent) {
+    m_commandInProgress = false;
+    m_sceneDirty = false;
+    m_fullSceneResyncNeeded = true;
+    ClearPendingSceneSync();
+    RefreshMenuState();
+    if (!silent && hadSyncActive) {
+      Report("project-render LiveLink: session stopped");
+    } else if (!silent) {
       Report("project-render LiveLink: no active session to stop");
     }
     return true;
   }
 
-  const bool sent = SendSessionClosed();
-  g_pipeClient.Disconnect();
-  m_sessionOpen = false;
-  m_sessionId.clear();
-  m_documentInfo = {};
-  m_nextSequence = 1;
-  m_nextRevision = 1;
+  const bool sent = SendSessionClosed(!silent);
+  ResetSessionState(true);
+  m_commandInProgress = false;
+  m_sceneDirty = false;
+  m_fullSceneResyncNeeded = true;
+  ClearPendingSceneSync();
+  RefreshMenuState();
 
-  if (sent) {
+  if (sent && !silent) {
     Report("project-render LiveLink: session stopped");
   }
   return sent;
+}
+
+void LiveLinkSessionController::OnScenePollTimer() {
+  if (!m_syncActive || m_commandInProgress) {
+    return;
+  }
+  if (!m_fullSceneResyncNeeded && !m_sceneDirty) {
+    return;
+  }
+  if (m_nextSceneSyncDeadline != Clock::time_point{} &&
+      Clock::now() < m_nextSceneSyncDeadline) {
+    return;
+  }
+
+  if (!ExportFullScene(!m_sessionOpen, false, false)) {
+    ScheduleSceneSync(kReconnectRetryInterval);
+  }
+}
+
+void LiveLinkSessionController::OnCameraPollTimer() {
+  if (!m_syncActive || m_commandInProgress || !m_sessionOpen ||
+      m_fullSceneResyncNeeded) {
+    return;
+  }
+
+  SendCameraDeltaIfChanged(false);
+}
+
+void LiveLinkSessionController::MarkSceneDirty(API_NotifyEventID notifID) {
+  if (!m_syncActive || m_commandInProgress) {
+    return;
+  }
+
+  switch (notifID) {
+  case APINotify_AllInputFinished:
+  case APINotify_ReceiveChanges:
+    m_sceneDirty = true;
+    ScheduleSceneSync(kSceneResyncDebounce);
+    break;
+  default:
+    break;
+  }
 }
 
 void SetMenuItemEnabled(Int32 itemIndex, bool enabled) {
@@ -849,6 +1499,19 @@ GSErrCode MenuCommandHandler(const API_MenuParams *menuParams) {
   return NoError;
 }
 
+void CALLBACK ScenePollTimerProc(HWND, UINT, UINT_PTR, DWORD) {
+  g_controller.OnScenePollTimer();
+}
+
+void CALLBACK CameraPollTimerProc(HWND, UINT, UINT_PTR, DWORD) {
+  g_controller.OnCameraPollTimer();
+}
+
+GSErrCode ProjectEventHandler(API_NotifyEventID notifID, Int32) {
+  g_controller.MarkSceneDirty(notifID);
+  return NoError;
+}
+
 } // namespace
 
 API_AddonType CheckEnvironment(API_EnvirParams *envir) {
@@ -877,11 +1540,17 @@ GSErrCode Initialize(void) {
     return err;
   }
 
-  // Explicitly enable menu items. 
-  // ArchiCAD may require these to be set after registration to avoid being greyed out by default.
-  SetMenuItemEnabled(1, true);
-  SetMenuItemEnabled(2, true);
-  SetMenuItemEnabled(3, true);
+  const GSErrCode notifyErr = ACAPI_ProjectOperation_CatchProjectEvent(
+      APINotify_AllInputFinished | APINotify_ReceiveChanges,
+      ProjectEventHandler);
+  if (notifyErr != NoError) {
+    ACAPI_WriteReport(
+        GS::UniString("project-render LiveLink: failed to register project "
+                      "change notifications"),
+        false);
+  }
+
+  g_controller.RefreshMenuState();
 
   ACAPI_WriteReport(GS::UniString("project-render LiveLink: initialized"), false);
 
@@ -890,5 +1559,7 @@ GSErrCode Initialize(void) {
 
 GSErrCode FreeData(void) {
   g_controller.Stop(true);
+  ACAPI_ProjectOperation_CatchProjectEvent(
+      APINotify_AllInputFinished | APINotify_ReceiveChanges, nullptr);
   return NoError;
 }

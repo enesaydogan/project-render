@@ -4,6 +4,23 @@
 
 namespace {
 
+std::string WideToUtf8(const wchar_t *text, size_t length) {
+  if (text == nullptr || length == 0) {
+    return {};
+  }
+
+  const int utf8Length = WideCharToMultiByte(
+      CP_UTF8, 0, text, static_cast<int>(length), nullptr, 0, nullptr, nullptr);
+  if (utf8Length <= 0) {
+    return {};
+  }
+
+  std::string utf8(static_cast<size_t>(utf8Length), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, text, static_cast<int>(length), utf8.data(),
+                      utf8Length, nullptr, nullptr);
+  return utf8;
+}
+
 std::string MakePipePath(const std::string &pipeName) {
   if (pipeName.rfind(R"(\\.\pipe\)", 0) == 0) {
     return pipeName;
@@ -12,16 +29,17 @@ std::string MakePipePath(const std::string &pipeName) {
 }
 
 std::string FormatWindowsError(DWORD error) {
-  LPSTR buffer = nullptr;
+  LPWSTR buffer = nullptr;
   const DWORD flags = FORMAT_MESSAGE_ALLOCATE_BUFFER |
                       FORMAT_MESSAGE_FROM_SYSTEM |
                       FORMAT_MESSAGE_IGNORE_INSERTS;
-  const DWORD length = FormatMessageA(flags, nullptr, error, 0,
-                                      reinterpret_cast<LPSTR>(&buffer), 0,
+  const DWORD length = FormatMessageW(flags, nullptr, error,
+                                      MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                                      reinterpret_cast<LPWSTR>(&buffer), 0,
                                       nullptr);
   std::string message;
   if (length != 0 && buffer != nullptr) {
-    message.assign(buffer, length);
+    message = WideToUtf8(buffer, length);
     while (!message.empty() &&
            (message.back() == '\r' || message.back() == '\n')) {
       message.pop_back();
