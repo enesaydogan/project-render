@@ -40,6 +40,7 @@ void Normalize3(float value[3], const float fallback[3]);
 void CALLBACK ScenePollTimerProc(HWND, UINT, UINT_PTR, DWORD);
 void CALLBACK CameraPollTimerProc(HWND, UINT, UINT_PTR, DWORD);
 GSErrCode ProjectEventHandler(API_NotifyEventID notifID, Int32 param);
+GSErrCode ElementEventHandler(const API_NotifyElementType *elemType);
 
 constexpr const char *kPipeName = "project-render-archicad-livelink";
 constexpr const char *kProviderName = "Archicad28Pipe";
@@ -80,6 +81,7 @@ struct DocumentInfo {
 };
 
 struct ElementExportRecord {
+  API_Guid guid = APINULLGuid;
   std::string objectId;
   std::string displayName;
   std::string payloadUri;
@@ -554,6 +556,15 @@ json MakeCameraDelta(const std::string &documentId,
                     {"farPlane", camera.farPlane}}}};
 }
 
+json MakeNodeRemovedDelta(const std::string &documentId,
+                          const std::string &objectId, uint64_t revision) {
+  return json{{"kind", "NodeRemoved"},
+              {"target", MakeObjectIdJson(documentId, objectId, "Node")},
+              {"revision", revision},
+              {"debugLabel", objectId},
+              {"payload", json{{"removeChildren", true}}}};
+}
+
 bool ExportElementMeshPayload(const std::string &documentId,
                               const ElementExportRecord &record,
                               const ModelerAPI::Element &element,
@@ -738,6 +749,7 @@ bool ExportElementMeshPayload(const std::string &documentId,
 }
 
 bool ExportSceneElements(const DocumentInfo &documentInfo,
+                         const GS::Array<API_Guid> *requestedElementGuids,
                          std::vector<ElementExportRecord> *outElements,
                          std::vector<MaterialExportRecord> *outMaterials,
                          std::string *outError) {
@@ -746,14 +758,19 @@ bool ExportSceneElements(const DocumentInfo &documentInfo,
   }
 
   GS::Array<API_Guid> elementGuids;
-  const GSErrCode listErr =
-      ACAPI_Element_GetElemList(API_ZombieElemID, &elementGuids, APIFilt_In3D);
-  if (listErr != NoError) {
-    if (outError != nullptr) {
-      *outError = "ACAPI_Element_GetElemList failed (" +
-                  std::to_string(static_cast<int>(listErr)) + ")";
+  if (requestedElementGuids != nullptr) {
+    elementGuids = *requestedElementGuids;
+  } else {
+    const GSErrCode listErr = ACAPI_Element_GetElemList(API_ZombieElemID,
+                                                        &elementGuids,
+                                                        APIFilt_In3D);
+    if (listErr != NoError) {
+      if (outError != nullptr) {
+        *outError = "ACAPI_Element_GetElemList failed (" +
+                    std::to_string(static_cast<int>(listErr)) + ")";
+      }
+      return false;
     }
-    return false;
   }
   if (elementGuids.IsEmpty()) {
     outElements->clear();
@@ -797,6 +814,7 @@ bool ExportSceneElements(const DocumentInfo &documentInfo,
 
     const API_Guid guid = GSGuid2APIGuid(element.GetElemGuid());
     ElementExportRecord record;
+    record.guid = guid;
     record.objectId = MakeObjectId(guid);
     record.displayName = GetElementDisplayName(guid);
 
@@ -846,6 +864,7 @@ public:
   void OnScenePollTimer();
   void OnCameraPollTimer();
   void MarkSceneDirty(API_NotifyEventID notifID);
+  void OnElementNotification(const API_NotifyElementType *elemType);
 
 private:
   using Clock = std::chrono::steady_clock;
@@ -859,6 +878,8 @@ private:
   bool SendSessionClosed(bool withDialog = true);
   bool ExportFullScene(bool startingSession, bool reportSuccess = true,
                        bool withDialog = true);
+  bool ExportDirtyElements(bool reportSuccess = true,
+                           bool withDialog = true);
   bool SendCameraDeltaIfChanged(bool withDialog);
   DocumentInfo ReadDocumentInfo() const;
   std::string MakeSessionId() const;
@@ -869,6 +890,13 @@ private:
                           uint64_t *ioRevision) const;
   bool SendDeltaChunks(const std::vector<json> &deltas,
                        bool firstBatchFullSync, bool withDialog = true);
+  void BuildMaterialRecordsForKeys(
+      const std::unordered_set<int> &materialKeys,
+      std::vector<MaterialExportRecord> *outMaterials) const;
+  void SyncObservedElements();
+  void ResetTrackedSceneState(bool detachObservers);
+  void MarkElementDirty(const API_Guid &guid);
+  void MarkElementRemoved(const API_Guid &guid);
   void ResetSessionState(bool disconnectPipe);
   void HandleSessionLost(std::chrono::milliseconds retryDelay);
   void StartTimers();
@@ -887,6 +915,10 @@ private:
   uint64_t m_nextSequence = 1;
   uint64_t m_nextRevision = 1;
   CameraExportRecord m_lastCamera = {};
+  std::unordered_map<std::string, ElementExportRecord> m_exportedElements;
+  std::unordered_set<std::string> m_observedElementObjectIds;
+  std::unordered_set<std::string> m_dirtyElementObjectIds;
+  std::unordered_set<std::string> m_removedElementObjectIds;
   Clock::time_point m_nextSceneSyncDeadline = Clock::time_point{};
   UINT_PTR m_scenePollTimer = 0;
   UINT_PTR m_cameraPollTimer = 0;
@@ -916,6 +948,25 @@ void LiveLinkSessionController::ResetSessionState(bool disconnectPipe) {
   m_nextSequence = 1;
   m_nextRevision = 1;
   m_lastCamera = {};
+}
+
+void LiveLinkSessionController::ResetTrackedSceneState(bool detachObservers) {
+  if (detachObservers) {
+    for (const std::string &objectId : m_observedElementObjectIds) {
+      const GSErrCode err = ACAPI_Element_DetachObserver(
+          APIGuidFromString(objectId.c_str()));
+      if (err != NoError && err != APIERR_BADID) {
+        Report("project-render LiveLink: failed to detach Archicad element "
+               "observer for " +
+               objectId + " (" + std::to_string(static_cast<int>(err)) + ")");
+      }
+    }
+  }
+
+  m_exportedElements.clear();
+  m_observedElementObjectIds.clear();
+  m_dirtyElementObjectIds.clear();
+  m_removedElementObjectIds.clear();
 }
 
 void LiveLinkSessionController::HandleSessionLost(
@@ -1238,6 +1289,111 @@ bool LiveLinkSessionController::SendDeltaChunks(const std::vector<json> &deltas,
   return true;
 }
 
+void LiveLinkSessionController::BuildMaterialRecordsForKeys(
+    const std::unordered_set<int> &materialKeys,
+    std::vector<MaterialExportRecord> *outMaterials) const {
+  if (outMaterials == nullptr) {
+    return;
+  }
+
+  outMaterials->clear();
+  if (materialKeys.empty()) {
+    return;
+  }
+
+  std::vector<int> sortedMaterialKeys(materialKeys.begin(), materialKeys.end());
+  std::sort(sortedMaterialKeys.begin(), sortedMaterialKeys.end());
+  outMaterials->reserve(sortedMaterialKeys.size());
+
+  for (int materialKey : sortedMaterialKeys) {
+    MaterialExportRecord material;
+    PopulateMaterialExportRecord(materialKey, &material);
+
+    for (const auto &[_, element] : m_exportedElements) {
+      for (const ElementExportRecord::MaterialBinding &binding :
+           element.materialBindings) {
+        if (binding.materialKey != materialKey) {
+          continue;
+        }
+        if (material.nodeObjectId.empty()) {
+          material.nodeObjectId = element.objectId;
+          material.materialSlot = binding.materialSlot;
+        }
+        material.references.push_back({element.objectId, binding.materialSlot});
+      }
+    }
+
+    if (material.references.empty()) {
+      continue;
+    }
+
+    DeduplicateMaterialReferences(&material);
+    outMaterials->push_back(std::move(material));
+  }
+}
+
+void LiveLinkSessionController::SyncObservedElements() {
+  std::unordered_set<std::string> desiredObjectIds;
+  desiredObjectIds.reserve(m_exportedElements.size());
+
+  for (const auto &[objectId, element] : m_exportedElements) {
+    desiredObjectIds.insert(objectId);
+    if (m_observedElementObjectIds.contains(objectId)) {
+      continue;
+    }
+
+    const GSErrCode err = ACAPI_Element_AttachObserver(element.guid);
+    if (err == NoError || err == APIERR_LINKEXIST) {
+      m_observedElementObjectIds.insert(objectId);
+      continue;
+    }
+
+    Report("project-render LiveLink: failed to observe Archicad element " +
+           objectId + " (" + std::to_string(static_cast<int>(err)) + ")");
+  }
+
+  std::vector<std::string> staleObservedObjectIds;
+  staleObservedObjectIds.reserve(m_observedElementObjectIds.size());
+  for (const std::string &objectId : m_observedElementObjectIds) {
+    if (!desiredObjectIds.contains(objectId)) {
+      staleObservedObjectIds.push_back(objectId);
+    }
+  }
+
+  for (const std::string &objectId : staleObservedObjectIds) {
+    const GSErrCode err =
+        ACAPI_Element_DetachObserver(APIGuidFromString(objectId.c_str()));
+    if (err != NoError && err != APIERR_BADID) {
+      Report("project-render LiveLink: failed to stop observing Archicad "
+             "element " +
+             objectId + " (" + std::to_string(static_cast<int>(err)) + ")");
+    }
+    m_observedElementObjectIds.erase(objectId);
+  }
+}
+
+void LiveLinkSessionController::MarkElementDirty(const API_Guid &guid) {
+  if (guid == APINULLGuid) {
+    return;
+  }
+
+  const std::string objectId = MakeObjectId(guid);
+  m_removedElementObjectIds.erase(objectId);
+  m_dirtyElementObjectIds.insert(objectId);
+  m_sceneDirty = true;
+}
+
+void LiveLinkSessionController::MarkElementRemoved(const API_Guid &guid) {
+  if (guid == APINULLGuid) {
+    return;
+  }
+
+  const std::string objectId = MakeObjectId(guid);
+  m_dirtyElementObjectIds.erase(objectId);
+  m_removedElementObjectIds.insert(objectId);
+  m_sceneDirty = true;
+}
+
 bool LiveLinkSessionController::SendCameraDeltaIfChanged(bool withDialog) {
   if (!m_sessionOpen) {
     return false;
@@ -1276,7 +1432,7 @@ bool LiveLinkSessionController::ExportFullScene(bool startingSession,
   std::vector<ElementExportRecord> elements;
   std::vector<MaterialExportRecord> materials;
   std::string exportError;
-  if (!ExportSceneElements(m_documentInfo, &elements, &materials,
+  if (!ExportSceneElements(m_documentInfo, nullptr, &elements, &materials,
                            &exportError)) {
     if (startingSession) {
       ResetSessionState(true);
@@ -1311,6 +1467,14 @@ bool LiveLinkSessionController::ExportFullScene(bool startingSession,
   m_fullSceneResyncNeeded = false;
   m_sceneDirty = false;
   ClearPendingSceneSync();
+  m_exportedElements.clear();
+  m_exportedElements.reserve(elements.size());
+  for (const ElementExportRecord &element : elements) {
+    m_exportedElements[element.objectId] = element;
+  }
+  m_dirtyElementObjectIds.clear();
+  m_removedElementObjectIds.clear();
+  SyncObservedElements();
   m_lastCamera = hasExportedCamera ? exportedCamera : CameraExportRecord{};
 
   if (reportSuccess) {
@@ -1319,6 +1483,167 @@ bool LiveLinkSessionController::ExportFullScene(bool startingSession,
            (startingSession ? std::string(" for '") + m_documentInfo.displayName +
                                   "'"
                             : std::string()));
+  }
+  return true;
+}
+
+bool LiveLinkSessionController::ExportDirtyElements(bool reportSuccess,
+                                                    bool withDialog) {
+  if (!EnsureSessionOpened(false, withDialog)) {
+    if (m_syncActive) {
+      ScheduleSceneSync(kReconnectRetryInterval);
+    }
+    return false;
+  }
+
+  if (m_dirtyElementObjectIds.empty() && m_removedElementObjectIds.empty()) {
+    m_sceneDirty = false;
+    ClearPendingSceneSync();
+    return true;
+  }
+
+  std::vector<std::string> removedObjectIds(m_removedElementObjectIds.begin(),
+                                            m_removedElementObjectIds.end());
+  std::vector<std::string> dirtyObjectIds(m_dirtyElementObjectIds.begin(),
+                                          m_dirtyElementObjectIds.end());
+  std::sort(removedObjectIds.begin(), removedObjectIds.end());
+  std::sort(dirtyObjectIds.begin(), dirtyObjectIds.end());
+
+  std::unordered_set<int> affectedMaterialKeys;
+  for (const std::string &objectId : removedObjectIds) {
+    auto existingIt = m_exportedElements.find(objectId);
+    if (existingIt == m_exportedElements.end()) {
+      continue;
+    }
+    for (const ElementExportRecord::MaterialBinding &binding :
+         existingIt->second.materialBindings) {
+      affectedMaterialKeys.insert(binding.materialKey);
+    }
+    m_exportedElements.erase(existingIt);
+  }
+
+  GS::Array<API_Guid> dirtyGuids;
+  for (const std::string &objectId : dirtyObjectIds) {
+    if (m_removedElementObjectIds.contains(objectId)) {
+      continue;
+    }
+    const API_Guid guid = APIGuidFromString(objectId.c_str());
+    API_Elem_Head header = {};
+    header.guid = guid;
+    if (ACAPI_Element_GetHeader(&header) == NoError) {
+      dirtyGuids.Push(guid);
+      continue;
+    }
+
+    auto existingIt = m_exportedElements.find(objectId);
+    if (existingIt != m_exportedElements.end()) {
+      for (const ElementExportRecord::MaterialBinding &binding :
+           existingIt->second.materialBindings) {
+        affectedMaterialKeys.insert(binding.materialKey);
+      }
+      m_exportedElements.erase(existingIt);
+    }
+    removedObjectIds.push_back(objectId);
+  }
+
+  std::vector<ElementExportRecord> changedElements;
+  if (!dirtyGuids.IsEmpty()) {
+    std::vector<MaterialExportRecord> ignoredMaterials;
+    std::string exportError;
+    if (!ExportSceneElements(m_documentInfo, &dirtyGuids, &changedElements,
+                             &ignoredMaterials, &exportError)) {
+      m_fullSceneResyncNeeded = true;
+      m_sceneDirty = true;
+      ScheduleSceneSync(kReconnectRetryInterval);
+      Report("project-render LiveLink: failed to export Archicad deltas: " +
+                 exportError,
+             withDialog);
+      return false;
+    }
+  }
+
+  std::unordered_set<std::string> exportedChangedObjectIds;
+  exportedChangedObjectIds.reserve(changedElements.size());
+  for (const ElementExportRecord &element : changedElements) {
+    exportedChangedObjectIds.insert(element.objectId);
+
+    auto existingIt = m_exportedElements.find(element.objectId);
+    if (existingIt != m_exportedElements.end()) {
+      for (const ElementExportRecord::MaterialBinding &binding :
+           existingIt->second.materialBindings) {
+        affectedMaterialKeys.insert(binding.materialKey);
+      }
+    }
+    for (const ElementExportRecord::MaterialBinding &binding :
+         element.materialBindings) {
+      affectedMaterialKeys.insert(binding.materialKey);
+    }
+    m_exportedElements[element.objectId] = element;
+  }
+
+  for (const std::string &objectId : dirtyObjectIds) {
+    if (exportedChangedObjectIds.contains(objectId) ||
+        m_removedElementObjectIds.contains(objectId)) {
+      continue;
+    }
+
+    auto existingIt = m_exportedElements.find(objectId);
+    if (existingIt == m_exportedElements.end()) {
+      continue;
+    }
+
+    for (const ElementExportRecord::MaterialBinding &binding :
+         existingIt->second.materialBindings) {
+      affectedMaterialKeys.insert(binding.materialKey);
+    }
+    removedObjectIds.push_back(objectId);
+    m_exportedElements.erase(existingIt);
+  }
+
+  std::sort(removedObjectIds.begin(), removedObjectIds.end());
+  removedObjectIds.erase(
+      std::unique(removedObjectIds.begin(), removedObjectIds.end()),
+      removedObjectIds.end());
+
+  std::vector<MaterialExportRecord> materials;
+  BuildMaterialRecordsForKeys(affectedMaterialKeys, &materials);
+
+  std::vector<json> deltas;
+  deltas.reserve(removedObjectIds.size() + changedElements.size() * 4 +
+                 materials.size());
+  uint64_t revision = m_nextRevision;
+  for (const std::string &objectId : removedObjectIds) {
+    deltas.push_back(
+        MakeNodeRemovedDelta(m_documentInfo.documentId, objectId, revision++));
+  }
+  AppendExportDeltas(changedElements, materials, nullptr, &deltas, &revision);
+
+  if (!deltas.empty() && !SendDeltaChunks(deltas, false, withDialog)) {
+    HandleSessionLost(kReconnectRetryInterval);
+    return false;
+  }
+
+  m_nextRevision = revision;
+  for (const std::string &objectId : removedObjectIds) {
+    m_removedElementObjectIds.erase(objectId);
+    m_dirtyElementObjectIds.erase(objectId);
+  }
+  for (const std::string &objectId : dirtyObjectIds) {
+    m_dirtyElementObjectIds.erase(objectId);
+  }
+  m_sceneDirty = !m_fullSceneResyncNeeded &&
+                 (!m_dirtyElementObjectIds.empty() ||
+                  !m_removedElementObjectIds.empty());
+  if (!m_sceneDirty) {
+    ClearPendingSceneSync();
+  }
+  SyncObservedElements();
+
+  if (reportSuccess) {
+    Report("project-render LiveLink: synced " +
+           std::to_string(changedElements.size()) + " changed Archicad "
+           "elements and removed " + std::to_string(removedObjectIds.size()) +
+           " elements");
   }
   return true;
 }
@@ -1345,6 +1670,7 @@ bool LiveLinkSessionController::Start() {
   } else {
     StopTimers();
     ResetSessionState(true);
+    ResetTrackedSceneState(true);
     m_syncActive = false;
     m_sceneDirty = false;
     m_fullSceneResyncNeeded = true;
@@ -1382,6 +1708,7 @@ bool LiveLinkSessionController::Stop(bool silent) {
 
   if (!m_sessionOpen) {
     g_pipeClient.Disconnect();
+    ResetTrackedSceneState(true);
     m_commandInProgress = false;
     m_sceneDirty = false;
     m_fullSceneResyncNeeded = true;
@@ -1397,6 +1724,7 @@ bool LiveLinkSessionController::Stop(bool silent) {
 
   const bool sent = SendSessionClosed(!silent);
   ResetSessionState(true);
+  ResetTrackedSceneState(true);
   m_commandInProgress = false;
   m_sceneDirty = false;
   m_fullSceneResyncNeeded = true;
@@ -1413,7 +1741,8 @@ void LiveLinkSessionController::OnScenePollTimer() {
   if (!m_syncActive || m_commandInProgress) {
     return;
   }
-  if (!m_fullSceneResyncNeeded && !m_sceneDirty) {
+  if (!m_fullSceneResyncNeeded && !m_sceneDirty &&
+      m_dirtyElementObjectIds.empty() && m_removedElementObjectIds.empty()) {
     return;
   }
   if (m_nextSceneSyncDeadline != Clock::time_point{} &&
@@ -1421,7 +1750,10 @@ void LiveLinkSessionController::OnScenePollTimer() {
     return;
   }
 
-  if (!ExportFullScene(!m_sessionOpen, false, false)) {
+  const bool ok = m_fullSceneResyncNeeded
+                      ? ExportFullScene(!m_sessionOpen, false, false)
+                      : ExportDirtyElements(false, false);
+  if (!ok) {
     ScheduleSceneSync(kReconnectRetryInterval);
   }
 }
@@ -1442,13 +1774,50 @@ void LiveLinkSessionController::MarkSceneDirty(API_NotifyEventID notifID) {
 
   switch (notifID) {
   case APINotify_AllInputFinished:
+    if (!m_dirtyElementObjectIds.empty() || !m_removedElementObjectIds.empty()) {
+      m_sceneDirty = true;
+      ScheduleSceneSync(kSceneResyncDebounce);
+    }
+    break;
   case APINotify_ReceiveChanges:
     m_sceneDirty = true;
+    m_fullSceneResyncNeeded = true;
     ScheduleSceneSync(kSceneResyncDebounce);
     break;
   default:
     break;
   }
+}
+
+void LiveLinkSessionController::OnElementNotification(
+    const API_NotifyElementType *elemType) {
+  if (!m_syncActive || m_commandInProgress || elemType == nullptr) {
+    return;
+  }
+
+  switch (elemType->notifID) {
+  case APINotifyElement_New:
+  case APINotifyElement_Copy:
+  case APINotifyElement_Change:
+  case APINotifyElement_Edit:
+  case APINotifyElement_Undo_Modified:
+  case APINotifyElement_Undo_Deleted:
+  case APINotifyElement_Redo_Created:
+  case APINotifyElement_Redo_Modified:
+  case APINotifyElement_PropertyValueChange:
+  case APINotifyElement_ClassificationChange:
+    MarkElementDirty(elemType->elemHead.guid);
+    break;
+  case APINotifyElement_Delete:
+  case APINotifyElement_Undo_Created:
+  case APINotifyElement_Redo_Deleted:
+    MarkElementRemoved(elemType->elemHead.guid);
+    break;
+  default:
+    return;
+  }
+
+  ScheduleSceneSync(kSceneResyncDebounce);
 }
 
 void SetMenuItemEnabled(Int32 itemIndex, bool enabled) {
@@ -1505,6 +1874,11 @@ GSErrCode ProjectEventHandler(API_NotifyEventID notifID, Int32) {
   return NoError;
 }
 
+GSErrCode ElementEventHandler(const API_NotifyElementType *elemType) {
+  g_controller.OnElementNotification(elemType);
+  return NoError;
+}
+
 } // namespace
 
 API_AddonType CheckEnvironment(API_EnvirParams *envir) {
@@ -1543,6 +1917,24 @@ GSErrCode Initialize(void) {
         false);
   }
 
+  const GSErrCode catchNewErr =
+      ACAPI_Element_CatchNewElement(nullptr, ElementEventHandler);
+  if (catchNewErr != NoError) {
+    ACAPI_WriteReport(
+        GS::UniString("project-render LiveLink: failed to register new "
+                      "element notifications"),
+        false);
+  }
+
+  const GSErrCode observerErr =
+      ACAPI_Element_InstallElementObserver(ElementEventHandler);
+  if (observerErr != NoError) {
+    ACAPI_WriteReport(
+        GS::UniString("project-render LiveLink: failed to install element "
+                      "observer"),
+        false);
+  }
+
   g_controller.RefreshMenuState();
 
   ACAPI_WriteReport(GS::UniString("project-render LiveLink: initialized"), false);
@@ -1552,6 +1944,8 @@ GSErrCode Initialize(void) {
 
 GSErrCode FreeData(void) {
   g_controller.Stop(true);
+  ACAPI_Element_CatchNewElement(nullptr, nullptr);
+  ACAPI_Element_InstallElementObserver(nullptr);
   ACAPI_ProjectOperation_CatchProjectEvent(
       APINotify_AllInputFinished | APINotify_ReceiveChanges, nullptr);
   return NoError;
