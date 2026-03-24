@@ -399,7 +399,9 @@ void RequestRendererTlasRefresh() {
 }
 
 static std::vector<int> ResolveReplacementMaterialIndices(
-    const Node &node, std::vector<Asset::Material> &materials) {
+    const Node &node, std::vector<Asset::Material> &materials,
+    bool allowSharedByNameReuse = true,
+    bool overwriteResolvedMaterials = false) {
   std::vector<int> linkedMaterialIndices = node.linkedMaterialIndices;
   std::vector<std::string> linkedMaterialNames = node.linkedMaterialSourceNames;
   if (linkedMaterialIndices.empty()) {
@@ -425,7 +427,7 @@ static std::vector<int> ResolveReplacementMaterialIndices(
       }
     }
 
-    if (globalMaterialIndex < 0 && !importedName.empty()) {
+    if (allowSharedByNameReuse && globalMaterialIndex < 0 && !importedName.empty()) {
       const int sharedIndex = FindMaterialByName(importedName);
       if (sharedIndex >= 0 && sharedIndex < (int)g_loadedMaterials.size()) {
         globalMaterialIndex = sharedIndex;
@@ -435,6 +437,9 @@ static std::vector<int> ResolveReplacementMaterialIndices(
     if (globalMaterialIndex < 0) {
       globalMaterialIndex = (int)g_loadedMaterials.size();
       g_loadedMaterials.push_back(materials[i]);
+    } else if (overwriteResolvedMaterials &&
+               globalMaterialIndex < (int)g_loadedMaterials.size()) {
+      g_loadedMaterials[(size_t)globalMaterialIndex] = materials[i];
     }
 
     localToGlobal[i] = globalMaterialIndex;
@@ -566,9 +571,13 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
 
   g_loadedTextures.insert(g_loadedTextures.end(), payload.textures.begin(),
                           payload.textures.end());
+    const bool isLiveLinkPayload =
+      fs::path(payload.sourcePath).extension() == ".prmesh";
   Node importNodeProbe;
   std::vector<int> localToGlobal =
-      ResolveReplacementMaterialIndices(importNodeProbe, payload.materials);
+      ResolveReplacementMaterialIndices(importNodeProbe, payload.materials,
+                       !isLiveLinkPayload,
+                       isLiveLinkPayload);
   g_loadedMeshes.insert(g_loadedMeshes.end(), payload.meshes.begin(),
                         payload.meshes.end());
 
@@ -628,6 +637,8 @@ bool ReplaceNodeImportedContent(size_t index, ImportedNodePayload payload) {
   const std::string effectiveSourcePath =
       payload.sourcePath.empty() ? node.sourcePath : payload.sourcePath;
   const size_t textureBase = g_loadedTextures.size();
+    const bool isLiveLinkPayload =
+      node.liveLinkManaged || fs::path(effectiveSourcePath).extension() == ".prmesh";
 
   AdjustMaterialTextureIndices(payload.materials, textureBase);
   g_loadedTextures.insert(g_loadedTextures.end(), payload.textures.begin(),
@@ -635,7 +646,9 @@ bool ReplaceNodeImportedContent(size_t index, ImportedNodePayload payload) {
   RegisterTextures(payload.textures);
 
   std::vector<int> localToGlobal =
-      ResolveReplacementMaterialIndices(node, payload.materials);
+      ResolveReplacementMaterialIndices(node, payload.materials,
+                       !isLiveLinkPayload,
+                       isLiveLinkPayload);
 
   const size_t meshBase = g_loadedMeshes.size();
   for (size_t i = 0; i < payload.meshes.size(); ++i) {
