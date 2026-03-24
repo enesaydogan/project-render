@@ -893,6 +893,8 @@ private:
   void BuildMaterialRecordsForKeys(
       const std::unordered_set<int> &materialKeys,
       std::vector<MaterialExportRecord> *outMaterials) const;
+  void UpdateMaterialStateCache(
+      const std::vector<MaterialExportRecord> &materials);
   void SyncObservedElements();
   void ResetTrackedSceneState(bool detachObservers);
   void MarkElementDirty(const API_Guid &guid);
@@ -916,6 +918,7 @@ private:
   uint64_t m_nextRevision = 1;
   CameraExportRecord m_lastCamera = {};
   std::unordered_map<std::string, ElementExportRecord> m_exportedElements;
+  std::unordered_map<int, MaterialExportRecord> m_materialStateByKey;
   std::unordered_set<std::string> m_observedElementObjectIds;
   std::unordered_set<std::string> m_dirtyElementObjectIds;
   std::unordered_set<std::string> m_removedElementObjectIds;
@@ -964,6 +967,7 @@ void LiveLinkSessionController::ResetTrackedSceneState(bool detachObservers) {
   }
 
   m_exportedElements.clear();
+  m_materialStateByKey.clear();
   m_observedElementObjectIds.clear();
   m_dirtyElementObjectIds.clear();
   m_removedElementObjectIds.clear();
@@ -1307,7 +1311,15 @@ void LiveLinkSessionController::BuildMaterialRecordsForKeys(
 
   for (int materialKey : sortedMaterialKeys) {
     MaterialExportRecord material;
-    PopulateMaterialExportRecord(materialKey, &material);
+    auto cachedIt = m_materialStateByKey.find(materialKey);
+    if (cachedIt != m_materialStateByKey.end()) {
+      material = cachedIt->second;
+      material.references.clear();
+      material.nodeObjectId.clear();
+      material.materialSlot = 0;
+    } else {
+      PopulateMaterialExportRecord(materialKey, &material);
+    }
 
     for (const auto &[_, element] : m_exportedElements) {
       for (const ElementExportRecord::MaterialBinding &binding :
@@ -1329,6 +1341,13 @@ void LiveLinkSessionController::BuildMaterialRecordsForKeys(
 
     DeduplicateMaterialReferences(&material);
     outMaterials->push_back(std::move(material));
+  }
+}
+
+void LiveLinkSessionController::UpdateMaterialStateCache(
+    const std::vector<MaterialExportRecord> &materials) {
+  for (const MaterialExportRecord &material : materials) {
+    m_materialStateByKey[material.materialKey] = material;
   }
 }
 
@@ -1468,10 +1487,12 @@ bool LiveLinkSessionController::ExportFullScene(bool startingSession,
   m_sceneDirty = false;
   ClearPendingSceneSync();
   m_exportedElements.clear();
+  m_materialStateByKey.clear();
   m_exportedElements.reserve(elements.size());
   for (const ElementExportRecord &element : elements) {
     m_exportedElements[element.objectId] = element;
   }
+  UpdateMaterialStateCache(materials);
   m_dirtyElementObjectIds.clear();
   m_removedElementObjectIds.clear();
   SyncObservedElements();
@@ -1547,11 +1568,11 @@ bool LiveLinkSessionController::ExportDirtyElements(bool reportSuccess,
   }
 
   std::vector<ElementExportRecord> changedElements;
+  std::vector<MaterialExportRecord> changedMaterials;
   if (!dirtyGuids.IsEmpty()) {
-    std::vector<MaterialExportRecord> ignoredMaterials;
     std::string exportError;
     if (!ExportSceneElements(m_documentInfo, &dirtyGuids, &changedElements,
-                             &ignoredMaterials, &exportError)) {
+                             &changedMaterials, &exportError)) {
       m_fullSceneResyncNeeded = true;
       m_sceneDirty = true;
       ScheduleSceneSync(kReconnectRetryInterval);
@@ -1561,6 +1582,7 @@ bool LiveLinkSessionController::ExportDirtyElements(bool reportSuccess,
       return false;
     }
   }
+  UpdateMaterialStateCache(changedMaterials);
 
   std::unordered_set<std::string> exportedChangedObjectIds;
   exportedChangedObjectIds.reserve(changedElements.size());
@@ -1795,23 +1817,37 @@ void LiveLinkSessionController::OnElementNotification(
     return;
   }
 
+  API_Element parentElement = {};
+  ScopedElementMemo parentMemo;
+  API_ElementUserData parentUserData = {};
+  ACAPI_Notification_GetParentElement(&parentElement, &parentMemo, 0,
+                                      &parentUserData);
+  BMKillHandle(&parentUserData.dataHdl);
+  const API_Guid parentGuid = parentElement.header.guid;
+  const API_Guid currentGuid = elemType->elemHead.guid;
+
   switch (elemType->notifID) {
   case APINotifyElement_New:
   case APINotifyElement_Copy:
+  case APINotifyElement_Undo_Deleted:
+  case APINotifyElement_Redo_Created:
+  case APINotifyElement_PropertyValueChange:
+  case APINotifyElement_ClassificationChange:
+    MarkElementDirty(currentGuid);
+    break;
   case APINotifyElement_Change:
   case APINotifyElement_Edit:
   case APINotifyElement_Undo_Modified:
-  case APINotifyElement_Undo_Deleted:
-  case APINotifyElement_Redo_Created:
   case APINotifyElement_Redo_Modified:
-  case APINotifyElement_PropertyValueChange:
-  case APINotifyElement_ClassificationChange:
-    MarkElementDirty(elemType->elemHead.guid);
+    if (parentGuid != APINULLGuid && parentGuid != currentGuid) {
+      MarkElementRemoved(parentGuid);
+    }
+    MarkElementDirty(currentGuid);
     break;
   case APINotifyElement_Delete:
   case APINotifyElement_Undo_Created:
   case APINotifyElement_Redo_Deleted:
-    MarkElementRemoved(elemType->elemHead.guid);
+    MarkElementRemoved(currentGuid);
     break;
   default:
     return;
