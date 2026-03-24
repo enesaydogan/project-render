@@ -4473,7 +4473,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                  D3D12_GPU_DESCRIPTOR_HANDLE texturesGpuStart,
                  UINT textureDescriptorCount,
                  const std::vector<const Asset::GpuMesh *> &meshes,
-                 ID3D12Resource *meshDataSB, ID3D12Resource *materialExtraSB) {
+                 ID3D12Resource *meshDataSB,
+                 ID3D12Resource *materialExtraSB, UINT presentationX,
+                 UINT presentationY, UINT presentationWidth,
+                 UINT presentationHeight) {
   auto ReturnFail = [&](int reason, const char *message) -> bool {
     if (s_lastRenderFrameFailReason != reason) {
       fprintf(stderr, "DxrRenderer::RenderFrame FAIL[%d]: %s\n", reason,
@@ -5330,8 +5333,61 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   }
   bool usedDlss = false;
   const D3D12_RESOURCE_DESC dstDesc = renderTarget->GetDesc();
-  const uint32_t outW = (uint32_t)dstDesc.Width;
-  const uint32_t outH = (uint32_t)dstDesc.Height;
+  const uint32_t targetWidth = static_cast<uint32_t>(dstDesc.Width);
+  const uint32_t targetHeight = dstDesc.Height;
+  const uint32_t outX = (presentationX < targetWidth) ? presentationX : 0u;
+  const uint32_t outY = (presentationY < targetHeight) ? presentationY : 0u;
+  uint32_t outW = (presentationWidth > 0) ? presentationWidth : targetWidth;
+  uint32_t outH = (presentationHeight > 0) ? presentationHeight : targetHeight;
+  outW = (std::min)(outW, (targetWidth > outX) ? (targetWidth - outX) : 0u);
+  outH = (std::min)(outH, (targetHeight > outY) ? (targetHeight - outY) : 0u);
+  if (outW == 0 || outH == 0) {
+    return ReturnFail(17, "presentation rect is empty");
+  }
+  const bool partialPresent =
+      outX != 0 || outY != 0 || outW != targetWidth || outH != targetHeight;
+  auto CopyPresentedTexture = [&](ID3D12Resource *source,
+                                  D3D12_RESOURCE_STATES sourceState) {
+    TransitionResource(dxrList.Get(), source, sourceState,
+                       D3D12_RESOURCE_STATE_COPY_SOURCE);
+    if (partialPresent) {
+      TransitionResource(dxrList.Get(), renderTarget,
+                         D3D12_RESOURCE_STATE_PRESENT,
+                         D3D12_RESOURCE_STATE_RENDER_TARGET);
+      const FLOAT clearColor[] = {0.0f, 0.0f, 0.0f, 1.0f};
+      dxrList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+      TransitionResource(dxrList.Get(), renderTarget,
+                         D3D12_RESOURCE_STATE_RENDER_TARGET,
+                         D3D12_RESOURCE_STATE_COPY_DEST);
+
+      D3D12_TEXTURE_COPY_LOCATION dstLoc = {};
+      dstLoc.pResource = renderTarget;
+      dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+      dstLoc.SubresourceIndex = 0;
+
+      D3D12_TEXTURE_COPY_LOCATION srcLoc = {};
+      srcLoc.pResource = source;
+      srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+      srcLoc.SubresourceIndex = 0;
+
+      D3D12_BOX srcBox = {0, 0, 0, outW, outH, 1};
+      dxrList->CopyTextureRegion(&dstLoc, outX, outY, 0, &srcLoc, &srcBox);
+
+      TransitionResource(dxrList.Get(), renderTarget,
+                         D3D12_RESOURCE_STATE_COPY_DEST,
+                         D3D12_RESOURCE_STATE_RENDER_TARGET);
+    } else {
+      TransitionResource(dxrList.Get(), renderTarget,
+                         D3D12_RESOURCE_STATE_PRESENT,
+                         D3D12_RESOURCE_STATE_COPY_DEST);
+      dxrList->CopyResource(renderTarget, source);
+      TransitionResource(dxrList.Get(), renderTarget,
+                         D3D12_RESOURCE_STATE_COPY_DEST,
+                         D3D12_RESOURCE_STATE_RENDER_TARGET);
+    }
+    TransitionResource(dxrList.Get(), source, D3D12_RESOURCE_STATE_COPY_SOURCE,
+                       sourceState);
+  };
 
   // If a shader debug view is active, do not run DLSS/DLSS-RR.
   // DLSS is temporal and will "process" the debug visualization itself,
@@ -6054,21 +6110,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     dxrList->Dispatch(gx, gy, 1);
 
     // Copy tonemapped output to the render target
-    TransitionResource(dxrList.Get(), s_tonemapOutputUAV.Get(),
-                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                       D3D12_RESOURCE_STATE_COPY_SOURCE);
-    TransitionResource(dxrList.Get(), renderTarget,
-                       D3D12_RESOURCE_STATE_PRESENT,
-                       D3D12_RESOURCE_STATE_COPY_DEST);
-    dxrList->CopyResource(renderTarget, s_tonemapOutputUAV.Get());
-
-    // Transition back
-    TransitionResource(dxrList.Get(), renderTarget,
-                       D3D12_RESOURCE_STATE_COPY_DEST,
-                       D3D12_RESOURCE_STATE_RENDER_TARGET);
-    TransitionResource(dxrList.Get(), s_tonemapOutputUAV.Get(),
-                       D3D12_RESOURCE_STATE_COPY_SOURCE,
-                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    CopyPresentedTexture(s_tonemapOutputUAV.Get(),
+               D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     TransitionResource(dxrList.Get(), postColor,
                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -6114,21 +6157,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     }
 
     if (freezeSrc) {
-      TransitionResource(dxrList.Get(), freezeSrc,
-                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                         D3D12_RESOURCE_STATE_COPY_SOURCE);
-      TransitionResource(dxrList.Get(), renderTarget,
-                         D3D12_RESOURCE_STATE_PRESENT,
-                         D3D12_RESOURCE_STATE_COPY_DEST);
-      dxrList->CopyResource(renderTarget, freezeSrc);
-
+      CopyPresentedTexture(freezeSrc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
       s_hasTonemappedFrame = true;
-      TransitionResource(dxrList.Get(), renderTarget,
-                         D3D12_RESOURCE_STATE_COPY_DEST,
-                         D3D12_RESOURCE_STATE_RENDER_TARGET);
-      TransitionResource(dxrList.Get(), freezeSrc,
-                         D3D12_RESOURCE_STATE_COPY_SOURCE,
-                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
   }
 

@@ -74,10 +74,15 @@ void CameraPanel::createUi()
     m_horizontalFov = CreateSliderControl(20.0, 160.0, 1.0, 1);
     m_moveSpeed = CreateSliderControl(0.1, 20.0, 0.1, 2);
     m_mouseSensitivity = CreateSliderControl(0.001, 0.05, 0.001, 3);
+    m_safeFrameEnabled = new QCheckBox(tr("Show Safe Frame"), lensGroup);
+    m_safeFrameInfo = new QLabel(lensGroup);
+    m_safeFrameInfo->setWordWrap(true);
     m_resetCameraButton = new QPushButton(tr("Reset Camera"), lensGroup);
     lensForm->addRow(tr("Horizontal FOV"), m_horizontalFov);
     lensForm->addRow(tr("Move Speed"), m_moveSpeed);
     lensForm->addRow(tr("Mouse Sensitivity"), m_mouseSensitivity);
+    lensForm->addRow(m_safeFrameEnabled);
+    lensForm->addRow(tr("Target Frame"), m_safeFrameInfo);
     lensForm->addRow(m_resetCameraButton);
     layout->addWidget(lensGroup);
 
@@ -144,6 +149,9 @@ void CameraPanel::createUi()
         applyLensSettings();
     });
     connect(m_mouseSensitivity->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) {
+        applyLensSettings();
+    });
+    connect(m_safeFrameEnabled, &QCheckBox::toggled, this, [this](bool) {
         applyLensSettings();
     });
     connect(m_resetCameraButton, &QPushButton::clicked, this, [this]() {
@@ -242,6 +250,18 @@ void CameraPanel::syncFromRenderer()
     m_horizontalFov->setValue(CurrentHorizontalFovDegrees());
     m_moveSpeed->setValue(g_camSpeed);
     m_mouseSensitivity->setValue(g_mouseSensitivity);
+    m_safeFrameEnabled->setChecked(g_safeFrameEnabled);
+
+    UINT safeFrameWidth = 0;
+    UINT safeFrameHeight = 0;
+    if (GetSafeFrameTargetSize(safeFrameWidth, safeFrameHeight)) {
+        m_safeFrameInfo->setText(
+            tr("%1 x %2 final frame aspect")
+                .arg(safeFrameWidth)
+                .arg(safeFrameHeight));
+    } else {
+        m_safeFrameInfo->setText(tr("Unavailable"));
+    }
 
     m_autoExposure->setChecked(autoExposure);
     m_physicalCamera->setChecked(physicalCamera);
@@ -285,6 +305,7 @@ void CameraPanel::applyLensSettings()
     SetHorizontalFovDegrees(m_horizontalFov->value());
     g_camSpeed = static_cast<float>(m_moveSpeed->value());
     g_mouseSensitivity = static_cast<float>(m_mouseSensitivity->value());
+    g_safeFrameEnabled = m_safeFrameEnabled->isChecked();
     UpdateCameraCB();
     DxrRenderer::ResetAccumulation();
 }

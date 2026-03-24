@@ -2137,6 +2137,26 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     rtvHandle.ptr = rtvHandle.ptr + (SIZE_T)(DX12Context::g_frameIndex *
                                              DX12Context::g_rtvDescriptorSize);
 
+    D3D12_RECT presentationRect = {0, 0, (LONG)DX12Context::g_windowWidth,
+                     (LONG)DX12Context::g_windowHeight};
+    const bool safeFramePreviewActive = GetSafeFramePreviewRect(
+      DX12Context::g_windowWidth, DX12Context::g_windowHeight,
+      presentationRect);
+    const UINT previewWidth = (std::max)(
+      1u, static_cast<UINT>(presentationRect.right - presentationRect.left));
+    const UINT previewHeight = (std::max)(
+      1u, static_cast<UINT>(presentationRect.bottom - presentationRect.top));
+    if (!g_renderExportJob.active && g_rayTracingSupported) {
+      static UINT s_lastPreviewWidth = 0;
+      static UINT s_lastPreviewHeight = 0;
+      if (previewWidth != s_lastPreviewWidth ||
+          previewHeight != s_lastPreviewHeight) {
+        DxrRenderer::CreateRayTracingPipeline(previewWidth, previewHeight);
+        s_lastPreviewWidth = previewWidth;
+        s_lastPreviewHeight = previewHeight;
+      }
+    }
+
     // Set viewport and scissor
     D3D12_VIEWPORT viewport = {};
     viewport.TopLeftX = 0;
@@ -2232,8 +2252,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         if (!DxrRenderer::IsReady()) {
           try {
             DX12Context::WaitGPUIdle();
-            DxrRenderer::CreateRayTracingPipeline(DX12Context::g_windowWidth,
-                                                  DX12Context::g_windowHeight);
+            DxrRenderer::CreateRayTracingPipeline(previewWidth,
+                                                  previewHeight);
           } catch (const std::exception &e) {
             fprintf(stderr,
                     "DXR lazy pipeline create failed during mode switch: %s\n",
@@ -2452,7 +2472,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
               g_cameraConstantBuffer.Get(), g_materialStructuredBuffer.Get(),
               g_texturesGpuStart, g_textureDescriptorCount, activeMeshes,
               g_meshStructuredBuffer.Get(),
-              g_materialExtraStructuredBuffer.Get());
+              g_materialExtraStructuredBuffer.Get(),
+              static_cast<UINT>(presentationRect.left),
+              static_cast<UINT>(presentationRect.top), previewWidth,
+              previewHeight);
           if (dxrOk) {
             if (g_renderExportJob.active &&
                 dxrTarget == g_exportRenderTarget.Get()) {
@@ -2460,6 +2483,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             }
             // Success DXR render - Draw Grid with depth checks
             if (!g_renderExportJob.active && g_drawGrid) {
+              if (safeFramePreviewActive) {
+                D3D12_VIEWPORT safeViewport = {
+                    static_cast<float>(presentationRect.left),
+                    static_cast<float>(presentationRect.top),
+                    static_cast<float>(previewWidth),
+                    static_cast<float>(previewHeight), 0.0f, 1.0f};
+                DX12Context::g_commandList->RSSetViewports(1, &safeViewport);
+                DX12Context::g_commandList->RSSetScissorRects(1,
+                                                              &presentationRect);
+              }
               D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle =
                   DX12Context::g_dsvHeap->GetCPUDescriptorHandleForHeapStart();
               DX12Context::g_commandList->ClearDepthStencilView(
@@ -2480,6 +2513,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                                                              FALSE, &dsvHandle);
               RasterRenderer::DrawGrid(DX12Context::g_commandList.Get(),
                                        g_cameraConstantBuffer.Get());
+              if (safeFramePreviewActive) {
+                DX12Context::g_commandList->RSSetViewports(1, &viewport);
+                DX12Context::g_commandList->RSSetScissorRects(1, &scissorRect);
+              }
             }
             if (g_renderExportJob.active) {
               TR(DX12Context::g_commandList.Get(),
@@ -2539,7 +2576,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         D3D12_CPU_DESCRIPTOR_HANDLE rasterRtv = rtvHandle;
         bool rasterHdrReady = RasterRenderer::PrepareHdrRenderTarget(
             DX12Context::g_device.Get(), DX12Context::g_commandList.Get(),
-            DX12Context::g_windowWidth, DX12Context::g_windowHeight, dsvHandle);
+          previewWidth, previewHeight, dsvHandle);
 
         if (!rasterHdrReady) {
           // Fallback: bind backbuffer directly
@@ -2879,8 +2916,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           RasterRenderer::TonemapHdrToBackbuffer(
               DX12Context::g_device.Get(), DX12Context::g_commandList.Get(),
               DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),
-              DX12Context::g_windowWidth, DX12Context::g_windowHeight,
-              g_cameraConstantBuffer.Get(), DX12Context::g_depthBuffer.Get());
+              previewWidth, previewHeight, g_cameraConstantBuffer.Get(),
+              DX12Context::g_depthBuffer.Get(),
+              static_cast<UINT>(presentationRect.left),
+              static_cast<UINT>(presentationRect.top));
         }
 
         DxrRenderer::EndFrameProfiling(DX12Context::g_commandList.Get());
@@ -3024,6 +3063,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     Input::Update(dt);
     LiveLink::TickRuntime();
 
+    D3D12_RECT previewRect = {0, 0, (LONG)DX12Context::g_windowWidth,
+                  (LONG)DX12Context::g_windowHeight};
+    GetSafeFramePreviewRect(DX12Context::g_windowWidth,
+                DX12Context::g_windowHeight, previewRect);
+    const UINT previewWidth =
+      (std::max)(1u, static_cast<UINT>(previewRect.right - previewRect.left));
+    const UINT previewHeight =
+      (std::max)(1u, static_cast<UINT>(previewRect.bottom - previewRect.top));
+
     if (g_renderExportJob.active) {
       g_currentRenderMode = RenderMode::DXR;
 
@@ -3090,10 +3138,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         g_renderExportJob.targetHeight > 0;
     const float targetWidth = usingExportAspect
                                   ? (float)g_renderExportJob.targetWidth
-                                  : (float)DX12Context::g_windowWidth;
+                    : (float)previewWidth;
     const float targetHeight = usingExportAspect
                                    ? (float)g_renderExportJob.targetHeight
-                                   : (float)DX12Context::g_windowHeight;
+                     : (float)previewHeight;
     if (targetHeight > 0.0f) {
       g_cameraData.aspect = targetWidth / targetHeight;
     }
