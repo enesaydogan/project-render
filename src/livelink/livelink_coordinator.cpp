@@ -112,11 +112,7 @@ void LiveLinkCoordinator::PollProviders() {
       continue;
     }
 
-    const ConnectionState providerState = record.provider->GetConnectionState();
-    if (providerState == ConnectionState::Connected) {
-      ++connectedProviderCount;
-    }
-
+    ConnectionState providerState = record.provider->GetConnectionState();
     if (providerState == ConnectionState::Disconnected ||
         providerState == ConnectionState::Error) {
       continue;
@@ -130,6 +126,11 @@ void LiveLinkCoordinator::PollProviders() {
                       ? "Provider poll failed"
                       : record.provider->GetLastError());
       continue;
+    }
+
+    providerState = record.provider->GetConnectionState();
+    if (providerState == ConnectionState::Connected) {
+      ++connectedProviderCount;
     }
 
     for (const SceneDeltaBatch &batch : batches) {
