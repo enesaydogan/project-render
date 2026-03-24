@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <unordered_map>
 #include <string_view>
 
 namespace LiveLink {
@@ -187,10 +188,102 @@ struct NativeMeshPayloadVertex {
   float uv[2];
 };
 
+enum : uint32_t {
+  kNativeMaterialFlagDoubleSided = 1u << 0,
+  kNativeMaterialFlagInvertRoughnessTexture = 1u << 1,
+};
+
+struct NativeMeshPayloadMaterialHeader {
+  int32_t materialSlot = 0;
+  uint32_t flags = 0;
+  float baseColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+  float emissiveColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+  float emissiveIntensity = 1.0f;
+  float roughness = 0.5f;
+  float metalness = 0.0f;
+  float specularWeight = 1.0f;
+  float ior = 1.5f;
+  float transmissionWeight = 0.0f;
+  float transmissionColor[3] = {1.0f, 1.0f, 1.0f};
+  float coatWeight = 0.0f;
+  float coatRoughness = 0.1f;
+  float thinWalled = 0.0f;
+  float translucency = 0.0f;
+  float uvScale[2] = {1.0f, 1.0f};
+  float uvOffset[2] = {0.0f, 0.0f};
+  float triPlanarEnabled = 0.0f;
+  float triPlanarScale = 1.0f;
+  float triPlanarSharpness = 4.0f;
+  float triPlanarNormalStrength = 1.0f;
+  uint32_t nameLength = 0;
+  uint32_t materialModelLength = 0;
+  uint32_t alphaModeLength = 0;
+  uint32_t baseColorTextureUriLength = 0;
+  uint32_t normalTextureUriLength = 0;
+  uint32_t emissiveTextureUriLength = 0;
+  uint32_t occlusionTextureUriLength = 0;
+  uint32_t metalRoughTextureUriLength = 0;
+};
+
+bool ReadNativePayloadString(std::ifstream &stream, uint32_t length,
+                             std::string *outValue) {
+  if (!outValue) {
+    return false;
+  }
+
+  outValue->clear();
+  if (length == 0) {
+    return true;
+  }
+
+  outValue->resize(length);
+  stream.read(outValue->data(), static_cast<std::streamsize>(length));
+  return static_cast<bool>(stream);
+}
+
+int AppendNativePayloadTexture(const std::string &textureUri,
+                               std::unordered_map<std::string, int> *cache,
+                               std::vector<Asset::Texture> *outTextures) {
+  if (!cache || !outTextures || textureUri.empty()) {
+    return -1;
+  }
+
+  const auto cached = cache->find(textureUri);
+  if (cached != cache->end()) {
+    return cached->second;
+  }
+
+  const std::filesystem::path texturePath = Utf8PathFromString(textureUri);
+  std::error_code error;
+  if (texturePath.empty() || !std::filesystem::exists(texturePath, error)) {
+    return -1;
+  }
+
+  Asset::Texture texture =
+      Asset::LoadTextureFromFile(textureUri, IsHdrTextureUri(textureUri));
+  if (!texture.resource) {
+    return -1;
+  }
+
+  const int index = static_cast<int>(outTextures->size());
+  outTextures->push_back(std::move(texture));
+  cache->emplace(textureUri, index);
+  return index;
+}
+
 bool LoadNativeMeshPayload(const std::string &path,
-                           std::vector<Asset::GpuMesh> *outMeshes) {
+                           std::vector<Asset::GpuMesh> *outMeshes,
+                           std::vector<Asset::Material> *outMaterials,
+                           std::vector<Asset::Texture> *outTextures) {
   if (!outMeshes) {
     return false;
+  }
+
+  if (outMaterials) {
+    outMaterials->clear();
+  }
+  if (outTextures) {
+    outTextures->clear();
   }
 
   const std::filesystem::path payloadPath = Utf8PathFromString(path);
@@ -245,7 +338,7 @@ bool LoadNativeMeshPayload(const std::string &path,
            outMeshes->front().indexCount > 0;
   }
 
-  if (header.version != 2) {
+  if (header.version != 2 && header.version != 3) {
     return false;
   }
 
@@ -290,6 +383,108 @@ bool LoadNativeMeshPayload(const std::string &path,
     mesh.materialIndex = (std::max)(0, meshHeader.materialSlot);
     mesh.materialSlot = meshHeader.materialSlot;
     outMeshes->push_back(std::move(mesh));
+  }
+
+  if (header.version == 3 && outMaterials) {
+    std::unordered_map<std::string, int> textureIndicesByUri;
+    const uint32_t materialCount = header.reserved;
+    outMaterials->reserve(materialCount);
+
+    for (uint32_t materialIndex = 0; materialIndex < materialCount;
+         ++materialIndex) {
+      NativeMeshPayloadMaterialHeader materialHeader;
+      stream.read(reinterpret_cast<char *>(&materialHeader), sizeof(materialHeader));
+      if (!stream) {
+        return false;
+      }
+
+      std::string name;
+      std::string materialModel;
+      std::string alphaMode;
+      std::string baseColorTextureUri;
+      std::string normalTextureUri;
+      std::string emissiveTextureUri;
+      std::string occlusionTextureUri;
+      std::string metalRoughTextureUri;
+      if (!ReadNativePayloadString(stream, materialHeader.nameLength, &name) ||
+          !ReadNativePayloadString(stream, materialHeader.materialModelLength,
+                                   &materialModel) ||
+          !ReadNativePayloadString(stream, materialHeader.alphaModeLength,
+                                   &alphaMode) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.baseColorTextureUriLength,
+                                   &baseColorTextureUri) ||
+          !ReadNativePayloadString(stream, materialHeader.normalTextureUriLength,
+                                   &normalTextureUri) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.emissiveTextureUriLength,
+                                   &emissiveTextureUri) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.occlusionTextureUriLength,
+                                   &occlusionTextureUri) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.metalRoughTextureUriLength,
+                                   &metalRoughTextureUri)) {
+        return false;
+      }
+
+      Asset::Material material{};
+      strncpy_s(material.name, name.c_str(), _TRUNCATE);
+      std::copy(std::begin(materialHeader.baseColor),
+                std::end(materialHeader.baseColor),
+                std::begin(material.diffuseColor));
+      std::copy(std::begin(materialHeader.emissiveColor),
+                std::end(materialHeader.emissiveColor),
+                std::begin(material.emissiveColor));
+      material.emissiveIntensity = materialHeader.emissiveIntensity;
+      material.roughness = materialHeader.roughness;
+      material.metalness = materialHeader.metalness;
+      material.specularWeight = materialHeader.specularWeight;
+      material.ior = materialHeader.ior;
+      material.transmissionWeight = materialHeader.transmissionWeight;
+      std::copy(std::begin(materialHeader.transmissionColor),
+                std::end(materialHeader.transmissionColor),
+                std::begin(material.transmissionColor));
+      material.coatWeight = materialHeader.coatWeight;
+      material.coatRoughness = materialHeader.coatRoughness;
+      material.thinWalled = materialHeader.thinWalled;
+      material.translucency = materialHeader.translucency;
+      material.uvScale[0] = materialHeader.uvScale[0];
+      material.uvScale[1] = materialHeader.uvScale[1];
+      material.uvOffset[0] = materialHeader.uvOffset[0];
+      material.uvOffset[1] = materialHeader.uvOffset[1];
+      material.triPlanarEnabled = materialHeader.triPlanarEnabled;
+      material.triPlanarScale = materialHeader.triPlanarScale;
+      material.triPlanarSharpness = materialHeader.triPlanarSharpness;
+      material.triPlanarNormalStrength = materialHeader.triPlanarNormalStrength;
+      material.doubleSided =
+          (materialHeader.flags & kNativeMaterialFlagDoubleSided) != 0;
+      material.alphaMode = alphaMode.empty() ? "OPAQUE" : alphaMode;
+      material.invertRoughnessTexture =
+          (materialHeader.flags & kNativeMaterialFlagInvertRoughnessTexture) !=
+          0;
+      if (!materialModel.empty()) {
+        material.schemaVersion = Asset::Material::kSchemaVersionOpenPbrSubset;
+      }
+
+      material.diffuseTexture = AppendNativePayloadTexture(
+          baseColorTextureUri, &textureIndicesByUri, outTextures);
+      material.normalTexture = AppendNativePayloadTexture(
+          normalTextureUri, &textureIndicesByUri, outTextures);
+      material.emissiveTexture = AppendNativePayloadTexture(
+          emissiveTextureUri, &textureIndicesByUri, outTextures);
+      material.occlusionTexture = AppendNativePayloadTexture(
+          occlusionTextureUri, &textureIndicesByUri, outTextures);
+      material.metalRoughTexture = AppendNativePayloadTexture(
+          metalRoughTextureUri, &textureIndicesByUri, outTextures);
+
+      const size_t slot =
+          static_cast<size_t>((std::max)(0, materialHeader.materialSlot));
+      if (outMaterials->size() <= slot) {
+        outMaterials->resize(slot + 1);
+      }
+      (*outMaterials)[slot] = std::move(material);
+    }
   }
 
   return !outMeshes->empty();
@@ -807,11 +1002,12 @@ bool LiveLinkSceneSync::ApplyMeshPayloadChanged(const SceneDeltaBatch &batch,
   std::vector<Asset::GpuMesh> meshes;
   std::vector<Asset::Material> materials;
   std::vector<Asset::Texture> textures;
-      const std::filesystem::path payloadPath =
-        Utf8PathFromString(payload->payloadUri);
-    const std::string extension = payloadPath.extension().string();
+  const std::filesystem::path payloadPath =
+      Utf8PathFromString(payload->payloadUri);
+  const std::string extension = payloadPath.extension().string();
   const bool loaded = extension == ".prmesh"
-                          ? LoadNativeMeshPayload(payload->payloadUri, &meshes)
+                          ? LoadNativeMeshPayload(payload->payloadUri, &meshes,
+                                                  &materials, &textures)
                           : Asset::LoadModel(payload->payloadUri, meshes,
                                              &materials, &textures);
   if (!loaded) {
@@ -826,7 +1022,7 @@ bool LiveLinkSceneSync::ApplyMeshPayloadChanged(const SceneDeltaBatch &batch,
     return false;
   }
 
-  if (extension == ".prmesh") {
+  if (extension == ".prmesh" && materials.empty()) {
     int maxMaterialSlot = -1;
     for (Asset::GpuMesh &mesh : meshes) {
       maxMaterialSlot = (std::max)(maxMaterialSlot, mesh.materialIndex);
@@ -1381,37 +1577,43 @@ bool LiveLinkSceneSync::EnsureMaterialBinding(const SceneDeltaBatch &batch,
                                               const SceneDelta &delta,
                                               ObjectBinding **outBinding) {
   const MaterialChangedPayload *payload = FindPayload<MaterialChangedPayload>(delta);
-  ObjectBinding *binding = FindBinding(delta.target);
-  if (!binding) {
-    int materialIndex = -1;
-    if (payload) {
-      if (!payload->nodeObjectId.empty()) {
-        ObjectId nodeObjectId = delta.target;
-        nodeObjectId.objectId = payload->nodeObjectId;
-        nodeObjectId.objectType = ObjectType::Node;
-        if (const ObjectBinding *nodeBinding = FindBinding(nodeObjectId)) {
-          if (nodeBinding->handleKind == EngineHandleKind::SceneNode &&
-              nodeBinding->handleIndex < Scene::GetNodes().size()) {
-            const Scene::Node &node =
-                Scene::GetNodes()[nodeBinding->handleIndex];
-            const int materialSlot = (std::max)(0, payload->materialSlot);
-            if (materialSlot <
-                static_cast<int>(node.linkedMaterialIndices.size())) {
-              const int candidate =
-                  node.linkedMaterialIndices[static_cast<size_t>(materialSlot)];
-              if (candidate >= 0 &&
-                  candidate < static_cast<int>(Scene::GetMaterialCount())) {
-                materialIndex = candidate;
-              }
-            }
-          }
-        }
-      }
+  auto resolveMaterialIndexFromNodeSlot = [&]() {
+    if (!payload || payload->nodeObjectId.empty()) {
+      return -1;
     }
 
-    if (materialIndex < 0) {
-      materialIndex = ResolveMaterialIndexByName(delta, payload);
+    ObjectId nodeObjectId = delta.target;
+    nodeObjectId.objectId = payload->nodeObjectId;
+    nodeObjectId.objectType = ObjectType::Node;
+    const ObjectBinding *nodeBinding = FindBinding(nodeObjectId);
+    if (!nodeBinding || nodeBinding->handleKind != EngineHandleKind::SceneNode ||
+        nodeBinding->handleIndex >= Scene::GetNodes().size()) {
+      return -1;
     }
+
+    const Scene::Node &node = Scene::GetNodes()[nodeBinding->handleIndex];
+    const int materialSlot = (std::max)(0, payload->materialSlot);
+    if (materialSlot >= static_cast<int>(node.linkedMaterialIndices.size())) {
+      return -1;
+    }
+
+    const int candidate =
+        node.linkedMaterialIndices[static_cast<size_t>(materialSlot)];
+    if (candidate < 0 ||
+        candidate >= static_cast<int>(Scene::GetMaterialCount())) {
+      return -1;
+    }
+
+    return candidate;
+  };
+
+  ObjectBinding *binding = FindBinding(delta.target);
+  int materialIndex = resolveMaterialIndexFromNodeSlot();
+  if (materialIndex < 0) {
+    materialIndex = ResolveMaterialIndexByName(delta, payload);
+  }
+
+  if (!binding) {
     if (materialIndex < 0) {
       LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
                     "No scene material matched the live-link target");
@@ -1428,9 +1630,13 @@ bool LiveLinkSceneSync::EnsureMaterialBinding(const SceneDeltaBatch &batch,
     return false;
   }
 
+  if (materialIndex >= 0) {
+    binding->handleIndex = static_cast<size_t>(materialIndex);
+  }
+
   if (binding->handleIndex == kInvalidHandle ||
       binding->handleIndex >= Scene::GetMaterialCount()) {
-    const int materialIndex = ResolveMaterialIndexByName(delta, payload);
+    materialIndex = ResolveMaterialIndexByName(delta, payload);
     if (materialIndex < 0) {
       LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
                     "Bound material no longer exists");
