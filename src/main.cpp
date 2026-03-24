@@ -3138,6 +3138,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             }
             RestoreRenderExportState();
             AdvanceBatchRenderExport(exported);
+            AdvanceAnimationRenderExport(exported);
           }
         }
       }

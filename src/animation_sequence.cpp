@@ -145,6 +145,8 @@ void SetExportSettings(const ExportSettings &settings) {
   g_exportSettings = settings;
   g_exportSettings.fps = (std::max)(1, g_exportSettings.fps);
   g_exportSettings.maxSpp = (std::max)(1, g_exportSettings.maxSpp);
+  g_exportSettings.exportMode =
+      (std::clamp)(g_exportSettings.exportMode, 0, GetExportModeCount() - 1);
   if (g_exportSettings.baseName.empty()) {
     g_exportSettings.baseName = "final";
   }
@@ -316,6 +318,18 @@ const char *GetEasingModeLabel(int index) {
   case EasingMode::Linear:
   default:
     return "Linear";
+  }
+}
+
+int GetExportModeCount() { return 2; }
+
+const char *GetExportModeLabel(int index) {
+  switch (static_cast<ExportMode>(index)) {
+  case ExportMode::Mp4:
+    return "MP4";
+  case ExportMode::Frames:
+  default:
+    return "Frames";
   }
 }
 

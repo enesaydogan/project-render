@@ -118,6 +118,13 @@ static std::atomic<float> g_sceneIoProgressAtomic{0.0f};
 static std::atomic<uint32_t> g_sceneIoTickAtomic{0};
 static std::string g_sceneIoStageAtomic;
 static std::string g_currentScenePath;
+struct HiddenProcessResult {
+  int exitCode = -1;
+  DWORD launchError = 0;
+  std::string output;
+};
+static std::future<HiddenProcessResult> g_animationEncodeWorker;
+static std::string g_animationEncodeMessage;
 
 static void SceneIoProgressSink(float progress01, const char *stage) {
   g_sceneIoProgressAtomic.store((std::clamp)(progress01, 0.0f, 1.0f),
@@ -426,6 +433,339 @@ static std::wstring BuildAnimationOutputPath(const std::wstring &directory,
       .wstring();
 }
 
+static int GetAnimationFrameDigits(int totalFrames) {
+  return (std::max)(4,
+                    static_cast<int>(std::to_string((std::max)(1, totalFrames)).size()));
+}
+
+static std::wstring BuildAnimationFramePattern(const std::wstring &directory,
+                                               const std::string &baseName,
+                                               int totalFrames) {
+  namespace fs = std::filesystem;
+
+  const int digits = GetAnimationFrameDigits(totalFrames);
+  std::wstring stem = SanitizeFileStem(Utf8ToWString(baseName));
+  if (stem.empty()) {
+    stem = L"final";
+  }
+  return (fs::path(directory) /
+          fs::path(stem + L"-%0" + std::to_wstring(digits) + L"d.png"))
+      .wstring();
+}
+
+static std::wstring BuildAnimationVideoOutputPath(const std::wstring &directory,
+                                                  const std::string &baseName) {
+  namespace fs = std::filesystem;
+
+  std::wstring stem = SanitizeFileStem(Utf8ToWString(baseName));
+  if (stem.empty()) {
+    stem = L"final";
+  }
+  return (fs::path(directory) / fs::path(stem + L".mp4")).wstring();
+}
+
+static std::wstring BuildAnimationTempDirectory(const std::wstring &directory,
+                                                const std::string &baseName) {
+  namespace fs = std::filesystem;
+
+  std::wstring stem = SanitizeFileStem(Utf8ToWString(baseName));
+  if (stem.empty()) {
+    stem = L"final";
+  }
+  return (fs::path(directory) /
+          fs::path(L".project-render-" + stem + L"-frames-" +
+                   std::to_wstring(GetTickCount64())))
+      .wstring();
+}
+
+static std::wstring SearchExecutablePath(const wchar_t *fileName) {
+  const DWORD required = SearchPathW(nullptr, fileName, nullptr, 0, nullptr, nullptr);
+  if (required == 0) {
+    return {};
+  }
+  std::wstring path(required, L'\0');
+  const DWORD written = SearchPathW(nullptr, fileName, nullptr,
+                                    static_cast<DWORD>(path.size()),
+                                    path.data(), nullptr);
+  if (written == 0) {
+    return {};
+  }
+  if (!path.empty() && path.back() == L'\0') {
+    path.pop_back();
+  } else {
+    path.resize(written);
+  }
+  return path;
+}
+
+static std::wstring FindFfmpegExecutable() {
+  wchar_t modulePath[MAX_PATH] = {};
+  if (GetModuleFileNameW(nullptr, modulePath, MAX_PATH) != 0) {
+    const std::filesystem::path appDir = std::filesystem::path(modulePath).parent_path();
+    const std::filesystem::path localFfmpeg = appDir / L"ffmpeg.exe";
+    if (std::filesystem::exists(localFfmpeg)) {
+      return localFfmpeg.wstring();
+    }
+  }
+  return SearchExecutablePath(L"ffmpeg.exe");
+}
+
+static std::wstring QuoteCommandLineArg(const std::wstring &arg) {
+  if (arg.empty()) {
+    return L"\"\"";
+  }
+
+  bool needsQuotes = false;
+  for (wchar_t ch : arg) {
+    if (ch == L' ' || ch == L'\t' || ch == L'"') {
+      needsQuotes = true;
+      break;
+    }
+  }
+  if (!needsQuotes) {
+    return arg;
+  }
+
+  std::wstring quoted;
+  quoted.push_back(L'"');
+  int backslashCount = 0;
+  for (wchar_t ch : arg) {
+    if (ch == L'\\') {
+      ++backslashCount;
+      continue;
+    }
+    if (ch == L'"') {
+      quoted.append(backslashCount * 2 + 1, L'\\');
+      quoted.push_back(ch);
+      backslashCount = 0;
+      continue;
+    }
+    if (backslashCount > 0) {
+      quoted.append(backslashCount, L'\\');
+      backslashCount = 0;
+    }
+    quoted.push_back(ch);
+  }
+  if (backslashCount > 0) {
+    quoted.append(backslashCount * 2, L'\\');
+  }
+  quoted.push_back(L'"');
+  return quoted;
+}
+
+static std::string FormatDurationHms(double totalSeconds) {
+  if (totalSeconds < 0.0) {
+    totalSeconds = 0.0;
+  }
+  const int roundedSeconds = static_cast<int>(std::round(totalSeconds));
+  const int hours = roundedSeconds / 3600;
+  const int minutes = (roundedSeconds / 60) % 60;
+  const int seconds = roundedSeconds % 60;
+  char buffer[32] = {};
+  if (hours > 0) {
+    snprintf(buffer, sizeof(buffer), "%d:%02d:%02d", hours, minutes, seconds);
+  } else {
+    snprintf(buffer, sizeof(buffer), "%02d:%02d", minutes, seconds);
+  }
+  return buffer;
+}
+
+static std::string TrimProcessOutput(std::string text) {
+  constexpr size_t kMaxLength = 600;
+  while (!text.empty() &&
+         (text.back() == '\r' || text.back() == '\n' || text.back() == ' ')) {
+    text.pop_back();
+  }
+  if (text.size() <= kMaxLength) {
+    return text;
+  }
+  return text.substr(text.size() - kMaxLength);
+}
+
+static HiddenProcessResult RunHiddenProcessCapture(
+    const std::wstring &commandLine,
+    const std::wstring &workingDirectory) {
+  HiddenProcessResult result;
+  SECURITY_ATTRIBUTES securityAttributes = {};
+  securityAttributes.nLength = sizeof(securityAttributes);
+  securityAttributes.bInheritHandle = TRUE;
+
+  HANDLE readPipe = nullptr;
+  HANDLE writePipe = nullptr;
+  if (!CreatePipe(&readPipe, &writePipe, &securityAttributes, 0)) {
+    result.launchError = GetLastError();
+    return result;
+  }
+  SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
+
+  STARTUPINFOW startupInfo = {};
+  startupInfo.cb = sizeof(startupInfo);
+  startupInfo.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
+  startupInfo.wShowWindow = SW_HIDE;
+  startupInfo.hStdOutput = writePipe;
+  startupInfo.hStdError = writePipe;
+  startupInfo.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+
+  PROCESS_INFORMATION processInfo = {};
+  std::wstring mutableCommandLine = commandLine;
+  const wchar_t *workingDir = workingDirectory.empty() ? nullptr : workingDirectory.c_str();
+  if (!CreateProcessW(nullptr, mutableCommandLine.data(), nullptr, nullptr, FALSE,
+                      CREATE_NO_WINDOW, nullptr, workingDir,
+                      &startupInfo, &processInfo)) {
+    result.launchError = GetLastError();
+    CloseHandle(readPipe);
+    CloseHandle(writePipe);
+    return result;
+  }
+
+  CloseHandle(writePipe);
+
+  char buffer[4096] = {};
+  DWORD bytesRead = 0;
+  while (ReadFile(readPipe, buffer, sizeof(buffer), &bytesRead, nullptr) &&
+         bytesRead > 0) {
+    result.output.append(buffer, buffer + bytesRead);
+  }
+  CloseHandle(readPipe);
+
+  WaitForSingleObject(processInfo.hProcess, INFINITE);
+  DWORD exitCode = 1;
+  GetExitCodeProcess(processInfo.hProcess, &exitCode);
+  CloseHandle(processInfo.hThread);
+  CloseHandle(processInfo.hProcess);
+  result.exitCode = static_cast<int>(exitCode);
+  return result;
+}
+
+std::string GetAnimationExportProgressText() {
+  if (!g_renderAnimationExport.active) {
+    return g_renderExportStatus;
+  }
+
+  const ULONGLONG nowMs = GetTickCount64();
+  const double elapsedSeconds =
+      (g_renderAnimationExport.startedTickMs > 0 &&
+       nowMs >= g_renderAnimationExport.startedTickMs)
+          ? static_cast<double>(nowMs - g_renderAnimationExport.startedTickMs) /
+                1000.0
+          : 0.0;
+
+  if (g_renderAnimationExport.encoding) {
+    const double encodingElapsedSeconds =
+        (g_renderAnimationExport.encodingStartedTickMs > 0 &&
+         nowMs >= g_renderAnimationExport.encodingStartedTickMs)
+            ? static_cast<double>(nowMs -
+                                  g_renderAnimationExport.encodingStartedTickMs) /
+                  1000.0
+            : 0.0;
+    return "Encoding MP4 | elapsed " + FormatDurationHms(elapsedSeconds) +
+           " | encode " + FormatDurationHms(encodingElapsedSeconds);
+  }
+
+  const int totalFrames = (std::max)(1, g_renderAnimationExport.totalFrames);
+  const int currentFrame =
+      (std::clamp)(g_renderAnimationExport.currentFrameIndex, 1, totalFrames);
+  const double averageSecondsPerFrame =
+      elapsedSeconds / static_cast<double>((std::max)(1, currentFrame));
+  const double estimatedTotalSeconds =
+      averageSecondsPerFrame * static_cast<double>(totalFrames);
+  const double remainingSeconds =
+      (std::max)(0.0, estimatedTotalSeconds - elapsedSeconds);
+
+  return "Rendering animation frame " + std::to_string(currentFrame) + "/" +
+         std::to_string(totalFrames) + " | elapsed " +
+         FormatDurationHms(elapsedSeconds) + " | left " +
+         FormatDurationHms(remainingSeconds) + " | total " +
+         FormatDurationHms(estimatedTotalSeconds);
+}
+
+static bool StartAnimationMp4Encode() {
+  if (!g_renderAnimationExport.active || g_renderAnimationExport.encoding) {
+    return false;
+  }
+
+  const auto &animationSettings = AnimationSequence::GetExportSettings();
+  const std::wstring inputPattern = BuildAnimationFramePattern(
+      g_renderAnimationExport.frameOutputDirectory,
+      animationSettings.baseName,
+      g_renderAnimationExport.totalFrames);
+  const std::wstring outputPath = g_renderAnimationExport.finalOutputPath;
+  const std::wstring ffmpegPath = g_renderAnimationExport.ffmpegExecutable;
+  const int fps = (std::max)(1, g_renderAnimationExport.fps);
+  const std::wstring workingDirectory = g_renderAnimationExport.outputDirectory;
+
+  if (ffmpegPath.empty() || inputPattern.empty() || outputPath.empty()) {
+    return false;
+  }
+
+  g_renderAnimationExport.encoding = true;
+  g_renderAnimationExport.encodingStartedTickMs = GetTickCount64();
+  g_renderExportStatus = GetAnimationExportProgressText();
+  g_animationEncodeMessage.clear();
+  g_animationEncodeWorker = std::async(
+      std::launch::async,
+      [ffmpegPath, inputPattern, outputPath, fps, workingDirectory]() -> HiddenProcessResult {
+        const std::wstring commandLine =
+            QuoteCommandLineArg(ffmpegPath) +
+            L" -y -loglevel error -framerate " + std::to_wstring(fps) +
+            L" -start_number 1 -i " + QuoteCommandLineArg(inputPattern) +
+            L" -c:v libx264 -pix_fmt yuv420p -movflags +faststart " +
+            QuoteCommandLineArg(outputPath);
+        HiddenProcessResult result =
+            RunHiddenProcessCapture(commandLine, workingDirectory);
+        if (result.launchError != 0) {
+          result.output = "CreateProcess failed with error " +
+                          std::to_string(result.launchError);
+        }
+        return result;
+      });
+  return true;
+}
+
+static void UpdateAnimationEncodingJob() {
+  if (!g_renderAnimationExport.active || !g_renderAnimationExport.encoding ||
+      !g_animationEncodeWorker.valid()) {
+    return;
+  }
+
+  if (g_animationEncodeWorker.wait_for(std::chrono::milliseconds(0)) !=
+      std::future_status::ready) {
+    return;
+  }
+
+  const HiddenProcessResult processResult = g_animationEncodeWorker.get();
+  const bool success = (processResult.exitCode == 0) &&
+                       !g_renderAnimationExport.finalOutputPath.empty() &&
+                       std::filesystem::exists(g_renderAnimationExport.finalOutputPath);
+  const std::wstring finalOutputPath = g_renderAnimationExport.finalOutputPath;
+  const std::wstring tempFrameDirectory = g_renderAnimationExport.temporaryFrameDirectory;
+  g_animationEncodeMessage = TrimProcessOutput(processResult.output);
+  if (success && !tempFrameDirectory.empty()) {
+    std::error_code ec;
+    std::filesystem::remove_all(tempFrameDirectory, ec);
+  }
+
+  g_renderAnimationExport.encoding = false;
+  g_renderAnimationExport.active = false;
+  if (success) {
+    g_renderExportStatus = "Saved MP4: " + WStringToUtf8(finalOutputPath);
+  } else {
+    g_renderExportStatus = "MP4 encoding failed";
+    if (processResult.exitCode >= 0) {
+      g_renderExportStatus +=
+          " (exit " + std::to_string(processResult.exitCode) + ")";
+    }
+    if (!g_animationEncodeMessage.empty()) {
+      g_renderExportStatus += ": " + g_animationEncodeMessage;
+    }
+    if (!tempFrameDirectory.empty()) {
+      g_renderExportStatus += " | PNG frames kept in: " +
+                              WStringToUtf8(tempFrameDirectory);
+    }
+  }
+  g_renderAnimationExport = {};
+}
+
 struct RenderExportLaunchSettings {
   int resolutionPreset = 0;
   int maxSpp = 1;
@@ -491,6 +831,9 @@ static bool StartNextAnimationRenderJob() {
   if (!g_renderAnimationExport.active) {
     return false;
   }
+  if (g_renderAnimationExport.encoding) {
+    return false;
+  }
   if (g_renderAnimationExport.currentFrameIndex >=
       g_renderAnimationExport.totalFrames) {
     return false;
@@ -505,7 +848,7 @@ static bool StartNextAnimationRenderJob() {
   const auto &animationSettings = AnimationSequence::GetExportSettings();
   g_renderAnimationExport.currentLabel = frameCamera.name;
   g_renderAnimationExport.currentOutputPath = BuildAnimationOutputPath(
-      g_renderAnimationExport.outputDirectory, animationSettings.baseName,
+      g_renderAnimationExport.frameOutputDirectory, animationSettings.baseName,
       frameIndex, g_renderAnimationExport.totalFrames);
 
   RenderExportLaunchSettings launchSettings = {};
@@ -521,11 +864,8 @@ static bool StartNextAnimationRenderJob() {
     return false;
   }
 
-  g_renderExportStatus = "Rendering animation frame " +
-                         std::to_string(frameIndex + 1) + "/" +
-                         std::to_string(g_renderAnimationExport.totalFrames) +
-                         " (" + g_renderAnimationExport.currentLabel + ")";
   ++g_renderAnimationExport.currentFrameIndex;
+  g_renderExportStatus = GetAnimationExportProgressText();
   return true;
 }
 
@@ -861,8 +1201,43 @@ bool StartAnimationRenderExport(const std::wstring &outputDirectory) {
   g_renderAnimationExport.fps = settings.fps;
   g_renderAnimationExport.resolutionPreset = settings.resolutionPreset;
   g_renderAnimationExport.maxSpp = settings.maxSpp;
+  g_renderAnimationExport.exportMode = settings.exportMode;
+  g_renderAnimationExport.frameDigits = GetAnimationFrameDigits(totalFrames);
+  g_renderAnimationExport.startedTickMs = GetTickCount64();
+  g_renderAnimationExport.encodingStartedTickMs = 0;
   g_renderAnimationExport.previousCamera = SavedViews::CaptureCurrentState();
   g_renderAnimationExport.previousCameraCaptured = true;
+  g_animationEncodeMessage.clear();
+
+  if (!std::filesystem::create_directories(outputDirectory) &&
+      !std::filesystem::exists(outputDirectory)) {
+    g_renderAnimationExport = {};
+    g_renderExportStatus = "Failed to create animation export folder.";
+    return false;
+  }
+
+  if (settings.exportMode == static_cast<int>(AnimationSequence::ExportMode::Mp4)) {
+    g_renderAnimationExport.ffmpegExecutable = FindFfmpegExecutable();
+    if (g_renderAnimationExport.ffmpegExecutable.empty()) {
+      g_renderAnimationExport = {};
+      g_renderExportStatus = "MP4 export requires ffmpeg.exe in PATH or next to the app.";
+      return false;
+    }
+    g_renderAnimationExport.finalOutputPath =
+        BuildAnimationVideoOutputPath(outputDirectory, settings.baseName);
+    g_renderAnimationExport.temporaryFrameDirectory =
+        BuildAnimationTempDirectory(outputDirectory, settings.baseName);
+    g_renderAnimationExport.frameOutputDirectory =
+        g_renderAnimationExport.temporaryFrameDirectory;
+    if (!std::filesystem::create_directories(g_renderAnimationExport.temporaryFrameDirectory) &&
+        !std::filesystem::exists(g_renderAnimationExport.temporaryFrameDirectory)) {
+      g_renderAnimationExport = {};
+      g_renderExportStatus = "Failed to create temporary frame folder for MP4 export.";
+      return false;
+    }
+  } else {
+    g_renderAnimationExport.frameOutputDirectory = outputDirectory;
+  }
 
   if (!StartNextAnimationRenderJob()) {
     if (g_renderAnimationExport.previousCameraCaptured) {
@@ -879,6 +1254,9 @@ void AdvanceAnimationRenderExport(bool previousExportSucceeded) {
   if (!g_renderAnimationExport.active) {
     return;
   }
+  if (g_renderAnimationExport.encoding) {
+    return;
+  }
 
   if (!previousExportSucceeded) {
     g_renderAnimationExport.failed = true;
@@ -887,13 +1265,25 @@ void AdvanceAnimationRenderExport(bool previousExportSucceeded) {
   if (g_renderAnimationExport.failed || !StartNextAnimationRenderJob()) {
     const bool failed = g_renderAnimationExport.failed;
     const int totalFrames = g_renderAnimationExport.totalFrames;
+    const bool exportMp4 = g_renderAnimationExport.exportMode ==
+                           static_cast<int>(AnimationSequence::ExportMode::Mp4);
+    const std::wstring tempFrameDirectory = g_renderAnimationExport.temporaryFrameDirectory;
     if (g_renderAnimationExport.previousCameraCaptured) {
       SavedViews::ApplyView(g_renderAnimationExport.previousCamera);
     }
-    g_renderAnimationExport = {};
     if (failed) {
-      g_renderExportStatus = "Animation export failed.";
+      g_renderAnimationExport = {};
+      g_renderExportStatus = exportMp4 && !tempFrameDirectory.empty()
+                                 ? "Animation export failed. Frames kept in: " +
+                                       WStringToUtf8(tempFrameDirectory)
+                                 : "Animation export failed.";
+    } else if (exportMp4) {
+      if (!StartAnimationMp4Encode()) {
+        g_renderExportStatus = "Failed to start MP4 encoding.";
+        g_renderAnimationExport = {};
+      }
     } else {
+      g_renderAnimationExport = {};
       g_renderExportStatus = "Animation export finished: " +
                              std::to_string(totalFrames) + " frames.";
     }
@@ -902,6 +1292,10 @@ void AdvanceAnimationRenderExport(bool previousExportSucceeded) {
 
 void CancelAnimationRenderExport() {
   if (!g_renderAnimationExport.active) {
+    return;
+  }
+  if (g_renderAnimationExport.encoding) {
+    g_renderExportStatus = "MP4 encoding is already running and cannot be canceled yet.";
     return;
   }
   if (g_renderAnimationExport.previousCameraCaptured) {
@@ -967,6 +1361,7 @@ static bool RecreateDxrPipelineSafe(UINT width, UINT height,
 void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
                   float &latitudeDeg, float &dayOfYear) {
   UpdateSceneIoJob();
+  UpdateAnimationEncodingJob();
   if (!Input::g_imguiEnabled) {
     // Keep a minimal ImGui frame alive so viewport gizmos continue to work
     // even when debug windows are hidden with F5.

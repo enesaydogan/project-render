@@ -65,14 +65,23 @@ struct RenderBatchExportState {
 struct RenderAnimationExportState {
   bool active = false;
   bool failed = false;
+  bool encoding = false;
   std::wstring outputDirectory;
+  std::wstring frameOutputDirectory;
+  std::wstring temporaryFrameDirectory;
   std::wstring currentOutputPath;
+  std::wstring finalOutputPath;
+  std::wstring ffmpegExecutable;
   std::string currentLabel;
   int totalFrames = 0;
   int currentFrameIndex = 0;
   int fps = 30;
   int resolutionPreset = 1;
   int maxSpp = 64;
+  int exportMode = static_cast<int>(AnimationSequence::ExportMode::Frames);
+  int frameDigits = 4;
+  unsigned long long startedTickMs = 0;
+  unsigned long long encodingStartedTickMs = 0;
   SavedViews::SavedView previousCamera;
   bool previousCameraCaptured = false;
 };
@@ -118,6 +127,7 @@ void CancelBatchRenderExport();
 bool StartAnimationRenderExport(const std::wstring &outputDirectory);
 void AdvanceAnimationRenderExport(bool previousExportSucceeded);
 void CancelAnimationRenderExport();
+std::string GetAnimationExportProgressText();
 
 // Utility
 std::string WStringToUtf8(const std::wstring &ws);

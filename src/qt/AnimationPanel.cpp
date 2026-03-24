@@ -159,6 +159,10 @@ void AnimationPanel::createUi()
     for (int i = 0; i < g_renderResolutionPresetCount; ++i) {
         m_resolutionPreset->addItem(QString::fromUtf8(g_renderResolutionPresets[i].label));
     }
+    m_exportMode = new QComboBox(this);
+    for (int index = 0; index < AnimationSequence::GetExportModeCount(); ++index) {
+        m_exportMode->addItem(QString::fromUtf8(AnimationSequence::GetExportModeLabel(index)));
+    }
     m_fps = new QSpinBox(this);
     m_fps->setRange(1, 240);
     m_maxSpp = new QSpinBox(this);
@@ -178,12 +182,14 @@ void AnimationPanel::createUi()
     settingsGrid->addWidget(m_fps, 1, 1);
     settingsGrid->addWidget(new QLabel(tr("Max SPP"), this), 1, 2);
     settingsGrid->addWidget(m_maxSpp, 1, 3);
-    settingsGrid->addWidget(new QLabel(tr("Base"), this), 1, 4);
-    settingsGrid->addWidget(m_baseName, 1, 5, 1, 2);
-    settingsGrid->addWidget(m_renderButton, 1, 7);
+    settingsGrid->addWidget(new QLabel(tr("Output"), this), 1, 4);
+    settingsGrid->addWidget(m_exportMode, 1, 5);
+    settingsGrid->addWidget(new QLabel(tr("Base"), this), 1, 6);
+    settingsGrid->addWidget(m_baseName, 1, 7);
     settingsGrid->setColumnStretch(1, 1);
     settingsGrid->setColumnStretch(5, 1);
     settingsGrid->setColumnStretch(7, 1);
+    settingsGrid->addWidget(m_renderButton, 0, 8, 2, 1);
     layout->addLayout(settingsGrid);
 
     m_statusLabel = new QLabel(this);
@@ -303,13 +309,20 @@ void AnimationPanel::createUi()
     connect(m_maxSpp, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
         updateAnimationSettings();
     });
+    connect(m_exportMode, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+        updateAnimationSettings();
+    });
     connect(m_baseName, &QLineEdit::editingFinished, this, [this]() {
         updateAnimationSettings();
     });
     connect(m_renderButton, &QPushButton::clicked, this, [this]() {
+        const int exportMode = m_exportMode ? m_exportMode->currentIndex()
+                                            : static_cast<int>(AnimationSequence::ExportMode::Frames);
         const QString outputDir = QFileDialog::getExistingDirectory(
             this,
-            tr("Choose Output Folder For Animation Frames"),
+            exportMode == static_cast<int>(AnimationSequence::ExportMode::Mp4)
+                ? tr("Choose Output Folder For MP4 Export")
+                : tr("Choose Output Folder For Frame Export"),
             QString(),
             QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
         if (!outputDir.isEmpty()) {
@@ -345,15 +358,17 @@ QString AnimationPanel::buildModelSignature() const
     }
 
     const auto &settings = AnimationSequence::GetExportSettings();
-    signature += QStringLiteral("res=%1;fps=%2;spp=%3;base=%4;view=%5;render=%6;batch=%7;anim=%8")
+    signature += QStringLiteral("res=%1;fps=%2;spp=%3;base=%4;mode=%5;view=%6;render=%7;batch=%8;anim=%9;enc=%10")
         .arg(settings.resolutionPreset)
         .arg(settings.fps)
         .arg(settings.maxSpp)
         .arg(QString::fromUtf8(settings.baseName.c_str()))
+        .arg(settings.exportMode)
         .arg(SavedViews::GetSelectedViewIndex())
         .arg(g_renderExportJob.active ? 1 : 0)
         .arg(g_renderBatchExport.active ? 1 : 0)
-        .arg(g_renderAnimationExport.active ? 1 : 0);
+        .arg(g_renderAnimationExport.active ? 1 : 0)
+        .arg(g_renderAnimationExport.encoding ? 1 : 0);
     return signature;
 }
 
@@ -370,6 +385,7 @@ bool AnimationPanel::hasInteractiveFocus() const
            focus == m_fps ||
            focus == m_maxSpp ||
            focus == m_easingMode ||
+           focus == m_exportMode ||
            focus == m_resolutionPreset ||
            focus == m_keyframeList ||
            m_scrubSlider->isSliderDown();
@@ -414,6 +430,7 @@ void AnimationPanel::updateAnimationSettings()
     settings.resolutionPreset = m_resolutionPreset->currentIndex();
     settings.fps = m_fps->value();
     settings.maxSpp = m_maxSpp->value();
+    settings.exportMode = m_exportMode->currentIndex();
     settings.baseName = m_baseName->text().trimmed().toUtf8().constData();
     if (settings.baseName.empty()) {
         settings.baseName = "final";
@@ -478,6 +495,7 @@ void AnimationPanel::syncFromAnimation()
         m_resolutionPreset->setCurrentIndex(settings.resolutionPreset);
         m_fps->setValue(settings.fps);
         m_maxSpp->setValue(settings.maxSpp);
+        m_exportMode->setCurrentIndex(settings.exportMode);
         m_baseName->setText(QString::fromUtf8(settings.baseName.c_str()));
 
         updateSelectedKeyframeControls();
@@ -497,6 +515,9 @@ void AnimationPanel::syncFromAnimation()
     const bool canRender = !keyframes.empty() && !g_renderExportJob.active &&
                            !g_renderBatchExport.active && !g_renderAnimationExport.active;
     m_renderButton->setEnabled(canRender);
+    m_renderButton->setText(settings.exportMode == static_cast<int>(AnimationSequence::ExportMode::Mp4)
+                                ? tr("Export MP4...")
+                                : tr("Export Frames..."));
     m_addSelectedViewButton->setEnabled(SavedViews::GetSelectedViewIndex() >= 0);
     m_playButton->setEnabled(totalDuration > 0.0f);
     m_stopButton->setEnabled(m_previewPlaying);
@@ -517,11 +538,18 @@ void AnimationPanel::syncFromAnimation()
             .arg(QString::number(totalDuration, 'f', 2)));
 
     QString statusText = QString::fromUtf8(AnimationSequence::GetLastStatus().c_str());
-    if (g_renderAnimationExport.active) {
-        statusText = tr("Rendering frame %1 / %2\n%3")
-                         .arg(g_renderAnimationExport.currentFrameIndex)
-                         .arg(g_renderAnimationExport.totalFrames)
-                         .arg(QString::fromUtf8(g_renderExportStatus.c_str()));
+    if (g_renderAnimationExport.active && g_renderAnimationExport.encoding) {
+        const QString progressText = QString::fromUtf8(GetAnimationExportProgressText().c_str());
+        statusText = progressText;
+        if (!g_renderExportStatus.empty()) {
+            const QString detailText = QString::fromUtf8(g_renderExportStatus.c_str());
+            if (detailText != progressText) {
+                statusText += QLatin1Char('\n');
+                statusText += detailText;
+            }
+        }
+    } else if (g_renderAnimationExport.active) {
+        statusText = QString::fromUtf8(GetAnimationExportProgressText().c_str());
     } else if (!g_renderExportStatus.empty()) {
         statusText = QString::fromUtf8(g_renderExportStatus.c_str());
     }

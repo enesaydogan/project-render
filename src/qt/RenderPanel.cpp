@@ -260,6 +260,16 @@ void RenderPanel::syncFromRenderer()
     QString statusText;
     if (!g_rayTracingSupported) {
         statusText = tr("DXR is not supported on this device.");
+    } else if (g_renderAnimationExport.active) {
+        const QString progressText = QString::fromUtf8(GetAnimationExportProgressText().c_str());
+        statusText = progressText;
+        if (g_renderAnimationExport.encoding && !g_renderExportStatus.empty()) {
+            const QString detailText = QString::fromUtf8(g_renderExportStatus.c_str());
+            if (detailText != progressText) {
+                statusText += QLatin1Char('\n');
+                statusText += detailText;
+            }
+        }
     } else if (!g_renderExportStatus.empty()) {
         statusText = QString::fromUtf8(g_renderExportStatus.c_str());
     } else {

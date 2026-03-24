@@ -51,6 +51,7 @@ private:
     QLineEdit *m_keyframeName = nullptr;
     QDoubleSpinBox *m_durationToNext = nullptr;
     QComboBox *m_easingMode = nullptr;
+    QComboBox *m_exportMode = nullptr;
     QComboBox *m_resolutionPreset = nullptr;
     QSpinBox *m_fps = nullptr;
     QSpinBox *m_maxSpp = nullptr;
