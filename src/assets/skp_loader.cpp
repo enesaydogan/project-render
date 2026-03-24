@@ -744,6 +744,7 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
       continue;
     GpuMesh gm = LoadMeshFromMemory(kv.second.vertices, kv.second.indices);
     gm.materialIndex = kv.first;
+    gm.materialSlot = kv.first;
     outMeshes.push_back(std::move(gm));
   }
 

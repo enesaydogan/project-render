@@ -239,6 +239,7 @@ bool LoadNativeMeshPayload(const std::string &path,
     ComputeLiveLinkTangents(vertices, indices);
     Asset::GpuMesh mesh = Asset::LoadMeshFromMemory(vertices, indices);
     mesh.materialIndex = 0;
+    mesh.materialSlot = 0;
     outMeshes->push_back(std::move(mesh));
     return !outMeshes->empty() && outMeshes->front().vertexCount > 0 &&
            outMeshes->front().indexCount > 0;
@@ -287,6 +288,7 @@ bool LoadNativeMeshPayload(const std::string &path,
     ComputeLiveLinkTangents(vertices, indices);
     Asset::GpuMesh mesh = Asset::LoadMeshFromMemory(vertices, indices);
     mesh.materialIndex = (std::max)(0, meshHeader.materialSlot);
+    mesh.materialSlot = meshHeader.materialSlot;
     outMeshes->push_back(std::move(mesh));
   }
 

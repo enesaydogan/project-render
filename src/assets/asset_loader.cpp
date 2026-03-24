@@ -1194,6 +1194,7 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
       // Use provided material index or reserve a default slot if none.
       if (prim.material >= 0) {
         gm.materialIndex = prim.material;
+        gm.materialSlot = prim.material;
       } else if (wantMaterials) {
         // generate a blank default material and append to tmpMaterials
         Material def;
@@ -1201,8 +1202,10 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
         def.diffuseColor[3] = 1.0f;
         tmpMaterials.push_back(def);
         gm.materialIndex = (int)tmpMaterials.size() - 1;
+        gm.materialSlot = gm.materialIndex;
       } else {
         gm.materialIndex = -1;
+        gm.materialSlot = -1;
       }
 
       // Keep CPU copies for raypicking
@@ -1614,6 +1617,7 @@ bool LoadWithAssimp(const std::string &path, std::vector<GpuMesh> &outMeshes,
             gm.maxBound[c] = maxB[c];
           }
           gm.materialIndex = mesh->mMaterialIndex;
+          gm.materialSlot = mesh->mMaterialIndex;
 
           outMeshes.push_back(std::move(gm));
           // Update progress after each mesh

@@ -291,6 +291,17 @@ std::string MakeMaterialObjectId(const std::string &materialStableId,
   return "material:index:" + std::to_string(materialKey);
 }
 
+std::string MakeMaterialObjectId(const std::string &nodeObjectId,
+                                 int materialSlot,
+                                 const std::string &materialStableId) {
+  std::string objectId =
+      "material:" + nodeObjectId + ":slot:" + std::to_string((std::max)(0, materialSlot));
+  if (!materialStableId.empty()) {
+    objectId += ":id:" + materialStableId;
+  }
+  return objectId;
+}
+
 std::string ResolveTextureUri(const API_Texture &texture) {
   if (texture.status == 0 || texture.fileLoc == nullptr ||
       texture.fileLoc->GetLocalLength() == 0) {
@@ -317,8 +328,6 @@ bool PopulateMaterialExportRecord(int materialKey,
     if (source.head.guid != APINULLGuid) {
       material.materialStableId = GuidToString(source.head.guid);
     }
-    material.objectId =
-        MakeMaterialObjectId(material.materialStableId, materialKey);
     material.name = source.head.name;
     if (material.name.empty()) {
       material.name = std::string("Surface ") + std::to_string(materialKey);
@@ -373,9 +382,6 @@ bool PopulateMaterialExportRecord(int materialKey,
     component.umat.mater.texture.fileLoc = nullptr;
   }
 
-  if (material.objectId.empty()) {
-    material.objectId = MakeMaterialObjectId({}, materialKey);
-  }
   if (material.name.empty()) {
     material.name = std::string("Surface ") + std::to_string(materialKey);
   }
@@ -400,6 +406,23 @@ void DeduplicateMaterialReferences(MaterialExportRecord *material) {
   material->references.erase(
       std::unique(material->references.begin(), material->references.end()),
       material->references.end());
+}
+
+void AssignMaterialBindingIdentity(
+    const ElementExportRecord &element,
+    const ElementExportRecord::MaterialBinding &binding,
+    MaterialExportRecord *material) {
+  if (material == nullptr) {
+    return;
+  }
+
+  material->objectId =
+      MakeMaterialObjectId(element.objectId, binding.materialSlot,
+                           material->materialStableId);
+  material->nodeObjectId = element.objectId;
+  material->materialSlot = binding.materialSlot;
+  material->references.clear();
+  material->references.push_back({element.objectId, binding.materialSlot});
 }
 
 bool ReadCurrentCamera(CameraExportRecord *outCamera) {
@@ -684,6 +707,21 @@ bool ExportElementMeshPayload(const std::string &documentId,
     return false;
   }
 
+  std::vector<int> sortedMaterialKeys;
+  sortedMaterialKeys.reserve(submeshByMaterialKey.size());
+  for (const auto &[materialKey, _] : submeshByMaterialKey) {
+    sortedMaterialKeys.push_back(materialKey);
+  }
+  std::sort(sortedMaterialKeys.begin(), sortedMaterialKeys.end());
+  for (size_t stableSlot = 0; stableSlot < sortedMaterialKeys.size(); ++stableSlot) {
+    const auto submeshIt =
+        submeshByMaterialKey.find(sortedMaterialKeys[stableSlot]);
+    if (submeshIt == submeshByMaterialKey.end()) {
+      continue;
+    }
+    submeshes[submeshIt->second].materialSlot = static_cast<int>(stableSlot);
+  }
+
   const std::filesystem::path payloadDirectory = GetPayloadDirectory(documentId);
   std::error_code error;
   std::filesystem::create_directories(payloadDirectory, error);
@@ -805,9 +843,11 @@ bool ExportSceneElements(const DocumentInfo &documentInfo,
   }
 
   std::vector<ElementExportRecord> exportedElements;
-  std::unordered_map<int, MaterialExportRecord> materialsByKey;
+  std::unordered_map<int, MaterialExportRecord> materialTemplatesByKey;
+  std::vector<MaterialExportRecord> exportedMaterials;
   const int elementCount = model.GetElementCount();
   exportedElements.reserve(static_cast<size_t>(elementCount));
+  exportedMaterials.reserve(static_cast<size_t>(elementCount));
   for (int elementIndex = 1; elementIndex <= elementCount; ++elementIndex) {
     ModelerAPI::Element element;
     model.GetElement(elementIndex, &element);
@@ -827,27 +867,18 @@ bool ExportSceneElements(const DocumentInfo &documentInfo,
 
     for (const ElementExportRecord::MaterialBinding &binding :
          record.materialBindings) {
-      auto [it, inserted] =
-          materialsByKey.emplace(binding.materialKey, MaterialExportRecord{});
-      MaterialExportRecord &material = it->second;
+      auto [it, inserted] = materialTemplatesByKey.emplace(
+          binding.materialKey, MaterialExportRecord{});
+      MaterialExportRecord material;
       if (inserted) {
-        PopulateMaterialExportRecord(binding.materialKey, &material);
+        PopulateMaterialExportRecord(binding.materialKey, &it->second);
       }
-      if (material.nodeObjectId.empty()) {
-        material.nodeObjectId = record.objectId;
-        material.materialSlot = binding.materialSlot;
-      }
-      material.references.push_back({record.objectId, binding.materialSlot});
+      material = it->second;
+      AssignMaterialBindingIdentity(record, binding, &material);
+      exportedMaterials.push_back(std::move(material));
     }
 
     exportedElements.push_back(std::move(record));
-  }
-
-  std::vector<MaterialExportRecord> exportedMaterials;
-  exportedMaterials.reserve(materialsByKey.size());
-  for (auto &[_, material] : materialsByKey) {
-    DeduplicateMaterialReferences(&material);
-    exportedMaterials.push_back(std::move(material));
   }
 
   *outElements = std::move(exportedElements);
@@ -1305,42 +1336,24 @@ void LiveLinkSessionController::BuildMaterialRecordsForKeys(
     return;
   }
 
-  std::vector<int> sortedMaterialKeys(materialKeys.begin(), materialKeys.end());
-  std::sort(sortedMaterialKeys.begin(), sortedMaterialKeys.end());
-  outMaterials->reserve(sortedMaterialKeys.size());
-
-  for (int materialKey : sortedMaterialKeys) {
-    MaterialExportRecord material;
-    auto cachedIt = m_materialStateByKey.find(materialKey);
-    if (cachedIt != m_materialStateByKey.end()) {
-      material = cachedIt->second;
-      material.references.clear();
-      material.nodeObjectId.clear();
-      material.materialSlot = 0;
-    } else {
-      PopulateMaterialExportRecord(materialKey, &material);
-    }
-
-    for (const auto &[_, element] : m_exportedElements) {
-      for (const ElementExportRecord::MaterialBinding &binding :
-           element.materialBindings) {
-        if (binding.materialKey != materialKey) {
-          continue;
-        }
-        if (material.nodeObjectId.empty()) {
-          material.nodeObjectId = element.objectId;
-          material.materialSlot = binding.materialSlot;
-        }
-        material.references.push_back({element.objectId, binding.materialSlot});
+  for (const auto &[_, element] : m_exportedElements) {
+    for (const ElementExportRecord::MaterialBinding &binding :
+         element.materialBindings) {
+      if (!materialKeys.contains(binding.materialKey)) {
+        continue;
       }
-    }
 
-    if (material.references.empty()) {
-      continue;
-    }
+      MaterialExportRecord material;
+      auto cachedIt = m_materialStateByKey.find(binding.materialKey);
+      if (cachedIt != m_materialStateByKey.end()) {
+        material = cachedIt->second;
+      } else {
+        PopulateMaterialExportRecord(binding.materialKey, &material);
+      }
 
-    DeduplicateMaterialReferences(&material);
-    outMaterials->push_back(std::move(material));
+      AssignMaterialBindingIdentity(element, binding, &material);
+      outMaterials->push_back(std::move(material));
+    }
   }
 }
 
