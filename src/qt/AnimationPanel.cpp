@@ -33,16 +33,18 @@ constexpr int kScrubResolution = 1000;
 QString KeyframeSummary(const AnimationSequence::Keyframe &keyframe, size_t index, bool isLast)
 {
     if (isLast) {
-        return QObject::tr("%1. %2 | Final")
+        return QObject::tr("%1. %2 | In %3 | Final")
             .arg(static_cast<int>(index + 1))
-            .arg(QString::fromUtf8(keyframe.label.c_str()));
+            .arg(QString::fromUtf8(keyframe.label.c_str()))
+            .arg(QString::fromUtf8(AnimationSequence::GetEasingModeLabel(keyframe.easeIn)));
     }
 
-    return QObject::tr("%1. %2 | %3 s | %4")
+    return QObject::tr("%1. %2 | %3 s | In %4 | Out %5")
         .arg(static_cast<int>(index + 1))
         .arg(QString::fromUtf8(keyframe.label.c_str()))
         .arg(QString::number(keyframe.durationToNextSeconds, 'f', 2))
-        .arg(QString::fromUtf8(AnimationSequence::GetEasingModeLabel(keyframe.easing)));
+        .arg(QString::fromUtf8(AnimationSequence::GetEasingModeLabel(keyframe.easeIn)))
+        .arg(QString::fromUtf8(AnimationSequence::GetEasingModeLabel(keyframe.easeOut)));
 }
 
 } // namespace
@@ -151,9 +153,12 @@ void AnimationPanel::createUi()
     m_durationToNext->setRange(0.0, 60.0);
     m_durationToNext->setDecimals(2);
     m_durationToNext->setSingleStep(0.1);
-    m_easingMode = new QComboBox(this);
+    m_easeInMode = new QComboBox(this);
+    m_easeOutMode = new QComboBox(this);
     for (int index = 0; index < AnimationSequence::GetEasingModeCount(); ++index) {
-        m_easingMode->addItem(QString::fromUtf8(AnimationSequence::GetEasingModeLabel(index)));
+        const QString label = QString::fromUtf8(AnimationSequence::GetEasingModeLabel(index));
+        m_easeInMode->addItem(label);
+        m_easeOutMode->addItem(label);
     }
     m_resolutionPreset = new QComboBox(this);
     for (int i = 0; i < g_renderResolutionPresetCount; ++i) {
@@ -174,22 +179,25 @@ void AnimationPanel::createUi()
     settingsGrid->addWidget(m_keyframeName, 0, 1);
     settingsGrid->addWidget(new QLabel(tr("To Next"), this), 0, 2);
     settingsGrid->addWidget(m_durationToNext, 0, 3);
-    settingsGrid->addWidget(new QLabel(tr("Ease"), this), 0, 4);
-    settingsGrid->addWidget(m_easingMode, 0, 5);
-    settingsGrid->addWidget(new QLabel(tr("Resolution"), this), 0, 6);
-    settingsGrid->addWidget(m_resolutionPreset, 0, 7);
+    settingsGrid->addWidget(new QLabel(tr("In"), this), 0, 4);
+    settingsGrid->addWidget(m_easeInMode, 0, 5);
+    settingsGrid->addWidget(new QLabel(tr("Out"), this), 0, 6);
+    settingsGrid->addWidget(m_easeOutMode, 0, 7);
     settingsGrid->addWidget(new QLabel(tr("FPS"), this), 1, 0);
     settingsGrid->addWidget(m_fps, 1, 1);
     settingsGrid->addWidget(new QLabel(tr("Max SPP"), this), 1, 2);
     settingsGrid->addWidget(m_maxSpp, 1, 3);
-    settingsGrid->addWidget(new QLabel(tr("Output"), this), 1, 4);
-    settingsGrid->addWidget(m_exportMode, 1, 5);
-    settingsGrid->addWidget(new QLabel(tr("Base"), this), 1, 6);
-    settingsGrid->addWidget(m_baseName, 1, 7);
+    settingsGrid->addWidget(new QLabel(tr("Resolution"), this), 1, 4);
+    settingsGrid->addWidget(m_resolutionPreset, 1, 5);
+    settingsGrid->addWidget(new QLabel(tr("Output"), this), 1, 6);
+    settingsGrid->addWidget(m_exportMode, 1, 7);
+    settingsGrid->addWidget(new QLabel(tr("Base"), this), 1, 8);
+    settingsGrid->addWidget(m_baseName, 1, 9);
     settingsGrid->setColumnStretch(1, 1);
     settingsGrid->setColumnStretch(5, 1);
     settingsGrid->setColumnStretch(7, 1);
-    settingsGrid->addWidget(m_renderButton, 0, 8, 2, 1);
+    settingsGrid->setColumnStretch(9, 1);
+    settingsGrid->addWidget(m_renderButton, 0, 10, 2, 1);
     layout->addLayout(settingsGrid);
 
     m_statusLabel = new QLabel(this);
@@ -252,17 +260,36 @@ void AnimationPanel::createUi()
         }
         const int index = selectedKeyframeIndex();
         if (index >= 0) {
-            AnimationSequence::UpdateKeyframe(static_cast<size_t>(index), static_cast<float>(value), m_easingMode->currentIndex());
+            AnimationSequence::UpdateKeyframe(static_cast<size_t>(index),
+                                              static_cast<float>(value),
+                                              m_easeInMode->currentIndex(),
+                                              m_easeOutMode->currentIndex());
             syncFromAnimation();
         }
     });
-    connect(m_easingMode, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int value) {
+    connect(m_easeInMode, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
         if (m_syncing) {
             return;
         }
         const int index = selectedKeyframeIndex();
         if (index >= 0) {
-            AnimationSequence::UpdateKeyframe(static_cast<size_t>(index), static_cast<float>(m_durationToNext->value()), value);
+            AnimationSequence::UpdateKeyframe(static_cast<size_t>(index),
+                                              static_cast<float>(m_durationToNext->value()),
+                                              m_easeInMode->currentIndex(),
+                                              m_easeOutMode->currentIndex());
+            syncFromAnimation();
+        }
+    });
+    connect(m_easeOutMode, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+        if (m_syncing) {
+            return;
+        }
+        const int index = selectedKeyframeIndex();
+        if (index >= 0) {
+            AnimationSequence::UpdateKeyframe(static_cast<size_t>(index),
+                                              static_cast<float>(m_durationToNext->value()),
+                                              m_easeInMode->currentIndex(),
+                                              m_easeOutMode->currentIndex());
             syncFromAnimation();
         }
     });
@@ -353,7 +380,9 @@ QString AnimationPanel::buildModelSignature() const
         signature += QLatin1Char('|');
         signature += QString::number(keyframe.durationToNextSeconds, 'f', 4);
         signature += QLatin1Char('|');
-        signature += QString::number(keyframe.easing);
+        signature += QString::number(keyframe.easeIn);
+        signature += QLatin1Char('|');
+        signature += QString::number(keyframe.easeOut);
         signature += QLatin1Char(';');
     }
 
@@ -384,7 +413,8 @@ bool AnimationPanel::hasInteractiveFocus() const
            focus == m_durationToNext ||
            focus == m_fps ||
            focus == m_maxSpp ||
-           focus == m_easingMode ||
+           focus == m_easeInMode ||
+           focus == m_easeOutMode ||
            focus == m_exportMode ||
            focus == m_resolutionPreset ||
            focus == m_keyframeList ||
@@ -446,10 +476,12 @@ void AnimationPanel::updateSelectedKeyframeControls()
     const int index = selectedKeyframeIndex();
     const auto &keyframes = AnimationSequence::GetKeyframes();
     const bool valid = index >= 0 && index < static_cast<int>(keyframes.size());
+    const bool hasPreviousSegment = valid && index > 0;
     const bool hasNextSegment = valid && index + 1 < static_cast<int>(keyframes.size());
     m_keyframeName->setEnabled(valid);
     m_durationToNext->setEnabled(hasNextSegment);
-    m_easingMode->setEnabled(hasNextSegment);
+    m_easeInMode->setEnabled(hasNextSegment);
+    m_easeOutMode->setEnabled(hasPreviousSegment);
     m_removeKeyframeButton->setEnabled(valid);
     m_moveUpButton->setEnabled(valid && index > 0);
     m_moveDownButton->setEnabled(valid && index + 1 < static_cast<int>(keyframes.size()));
@@ -457,11 +489,13 @@ void AnimationPanel::updateSelectedKeyframeControls()
     if (valid) {
         m_keyframeName->setText(QString::fromUtf8(keyframes[static_cast<size_t>(index)].label.c_str()));
         m_durationToNext->setValue(keyframes[static_cast<size_t>(index)].durationToNextSeconds);
-        m_easingMode->setCurrentIndex(keyframes[static_cast<size_t>(index)].easing);
+        m_easeInMode->setCurrentIndex(keyframes[static_cast<size_t>(index)].easeIn);
+        m_easeOutMode->setCurrentIndex(keyframes[static_cast<size_t>(index)].easeOut);
     } else {
         m_keyframeName->clear();
         m_durationToNext->setValue(0.0);
-        m_easingMode->setCurrentIndex(0);
+        m_easeInMode->setCurrentIndex(0);
+        m_easeOutMode->setCurrentIndex(0);
     }
 
     m_syncing = false;

@@ -50,7 +50,8 @@ private:
     QPushButton *m_renderButton = nullptr;
     QLineEdit *m_keyframeName = nullptr;
     QDoubleSpinBox *m_durationToNext = nullptr;
-    QComboBox *m_easingMode = nullptr;
+    QComboBox *m_easeInMode = nullptr;
+    QComboBox *m_easeOutMode = nullptr;
     QComboBox *m_exportMode = nullptr;
     QComboBox *m_resolutionPreset = nullptr;
     QSpinBox *m_fps = nullptr;
