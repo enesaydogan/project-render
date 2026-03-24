@@ -243,7 +243,8 @@ bool ReadNativePayloadString(std::ifstream &stream, uint32_t length,
 
 int AppendNativePayloadTexture(const std::string &textureUri,
                                std::unordered_map<std::string, int> *cache,
-                               std::vector<Asset::Texture> *outTextures) {
+                               std::vector<Asset::Texture> *outTextures,
+                               std::vector<std::string> *outTextureSourceUris) {
   if (!cache || !outTextures || textureUri.empty()) {
     return -1;
   }
@@ -264,6 +265,9 @@ int AppendNativePayloadTexture(const std::string &textureUri,
 
   const int index = static_cast<int>(outTextures->size());
   outTextures->push_back(std::move(texture));
+  if (outTextureSourceUris) {
+    outTextureSourceUris->push_back(textureUri);
+  }
   cache->emplace(textureUri, index);
   return index;
 }
@@ -271,7 +275,8 @@ int AppendNativePayloadTexture(const std::string &textureUri,
 bool LoadNativeMeshPayload(const std::string &path,
                            std::vector<Asset::GpuMesh> *outMeshes,
                            std::vector<Asset::Material> *outMaterials,
-                           std::vector<Asset::Texture> *outTextures) {
+                           std::vector<Asset::Texture> *outTextures,
+                           std::vector<std::string> *outTextureSourceUris) {
   if (!outMeshes) {
     return false;
   }
@@ -281,6 +286,9 @@ bool LoadNativeMeshPayload(const std::string &path,
   }
   if (outTextures) {
     outTextures->clear();
+  }
+  if (outTextureSourceUris) {
+    outTextureSourceUris->clear();
   }
 
   const std::filesystem::path payloadPath = Utf8PathFromString(path);
@@ -465,15 +473,20 @@ bool LoadNativeMeshPayload(const std::string &path,
       }
 
       material.diffuseTexture = AppendNativePayloadTexture(
-          baseColorTextureUri, &textureIndicesByUri, outTextures);
+          baseColorTextureUri, &textureIndicesByUri, outTextures,
+          outTextureSourceUris);
       material.normalTexture = AppendNativePayloadTexture(
-          normalTextureUri, &textureIndicesByUri, outTextures);
+          normalTextureUri, &textureIndicesByUri, outTextures,
+          outTextureSourceUris);
       material.emissiveTexture = AppendNativePayloadTexture(
-          emissiveTextureUri, &textureIndicesByUri, outTextures);
+          emissiveTextureUri, &textureIndicesByUri, outTextures,
+          outTextureSourceUris);
       material.occlusionTexture = AppendNativePayloadTexture(
-          occlusionTextureUri, &textureIndicesByUri, outTextures);
+          occlusionTextureUri, &textureIndicesByUri, outTextures,
+          outTextureSourceUris);
       material.metalRoughTexture = AppendNativePayloadTexture(
-          metalRoughTextureUri, &textureIndicesByUri, outTextures);
+          metalRoughTextureUri, &textureIndicesByUri, outTextures,
+          outTextureSourceUris);
 
       const size_t slot =
           static_cast<size_t>((std::max)(0, materialHeader.materialSlot));
@@ -999,12 +1012,14 @@ bool LiveLinkSceneSync::ApplyMeshPayloadChanged(const SceneDeltaBatch &batch,
   std::vector<Asset::GpuMesh> meshes;
   std::vector<Asset::Material> materials;
   std::vector<Asset::Texture> textures;
+  std::vector<std::string> textureSourceUris;
   const std::filesystem::path payloadPath =
       Utf8PathFromString(payload->payloadUri);
   const std::string extension = payloadPath.extension().string();
   const bool loaded = extension == ".prmesh"
                           ? LoadNativeMeshPayload(payload->payloadUri, &meshes,
-                                                  &materials, &textures)
+                                                  &materials, &textures,
+                                                  &textureSourceUris)
                           : Asset::LoadModel(payload->payloadUri, meshes,
                                              &materials, &textures);
   if (!loaded) {
@@ -1042,6 +1057,7 @@ bool LiveLinkSceneSync::ApplyMeshPayloadChanged(const SceneDeltaBatch &batch,
   importedPayload.meshes = std::move(meshes);
   importedPayload.materials = std::move(materials);
   importedPayload.textures = std::move(textures);
+  importedPayload.textureSourceUris = std::move(textureSourceUris);
 
   if (!Scene::ReplaceNodeImportedContent(binding->handleIndex,
                                          std::move(importedPayload))) {

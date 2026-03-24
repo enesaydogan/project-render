@@ -20,6 +20,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 #include <wrl.h>
 
@@ -51,6 +52,7 @@ static std::mutex s_importStatusMutex;
 static std::vector<Asset::GpuMesh> s_pendingMeshes;
 static std::vector<Asset::Material> s_pendingMaterials;
 static std::vector<Asset::Texture> s_pendingTextures;
+static std::unordered_map<std::string, int> s_textureIndicesBySourceUri;
 static std::string s_pendingPath;
 static std::atomic<bool> s_pendingReady(false);
 static std::mutex s_pendingMutex;
@@ -284,6 +286,79 @@ static void AdjustMaterialTextureIndices(std::vector<Asset::Material> &materials
     if (m.metalRoughTexture >= 0)
       m.metalRoughTexture += (int)textureBase;
   }
+}
+
+static std::string NormalizeTextureSourceUriKey(const std::string &uri) {
+  std::string key = uri;
+  std::replace(key.begin(), key.end(), '/', '\\');
+  std::transform(key.begin(), key.end(), key.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  return key;
+}
+
+static void RemapMaterialTextureIndex(int &textureIndex,
+                                      const std::vector<int> &textureRemap) {
+  if (textureIndex < 0) {
+    return;
+  }
+  if (textureIndex >= static_cast<int>(textureRemap.size())) {
+    textureIndex = -1;
+    return;
+  }
+  textureIndex = textureRemap[static_cast<size_t>(textureIndex)];
+}
+
+static void RemapMaterialTextureIndices(std::vector<Asset::Material> &materials,
+                                        const std::vector<int> &textureRemap) {
+  for (Asset::Material &material : materials) {
+    RemapMaterialTextureIndex(material.diffuseTexture, textureRemap);
+    RemapMaterialTextureIndex(material.normalTexture, textureRemap);
+    RemapMaterialTextureIndex(material.occlusionTexture, textureRemap);
+    RemapMaterialTextureIndex(material.emissiveTexture, textureRemap);
+    RemapMaterialTextureIndex(material.metalRoughTexture, textureRemap);
+  }
+}
+
+static std::vector<int> RegisterImportedTextures(
+    std::vector<Asset::Texture> &textures,
+    const std::vector<std::string> &textureSourceUris) {
+  std::vector<int> textureRemap(textures.size(), -1);
+  if (textures.empty()) {
+    return textureRemap;
+  }
+
+  std::vector<Asset::Texture> texturesToAppend;
+  texturesToAppend.reserve(textures.size());
+
+  for (size_t textureIndex = 0; textureIndex < textures.size(); ++textureIndex) {
+    const bool hasSourceUri = textureIndex < textureSourceUris.size() &&
+                              !textureSourceUris[textureIndex].empty();
+    if (hasSourceUri) {
+      const std::string key =
+          NormalizeTextureSourceUriKey(textureSourceUris[textureIndex]);
+      const auto cached = s_textureIndicesBySourceUri.find(key);
+      if (cached != s_textureIndicesBySourceUri.end() && cached->second >= 0 &&
+          cached->second < static_cast<int>(g_loadedTextures.size())) {
+        textureRemap[textureIndex] = cached->second;
+        continue;
+      }
+    }
+
+    const int globalTextureIndex = static_cast<int>(g_loadedTextures.size());
+    g_loadedTextures.push_back(std::move(textures[textureIndex]));
+    texturesToAppend.push_back(g_loadedTextures.back());
+    textureRemap[textureIndex] = globalTextureIndex;
+
+    if (hasSourceUri) {
+      s_textureIndicesBySourceUri.emplace(
+          NormalizeTextureSourceUriKey(textureSourceUris[textureIndex]),
+          globalTextureIndex);
+    }
+  }
+
+  RegisterTextures(texturesToAppend);
+  return textureRemap;
 }
 
 static void InitializeNodeImportLinkage(Node &node,
@@ -564,13 +639,10 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
 
   EnsureGpuBuffersForMeshes(payload.meshes);
 
-  const size_t textureBase = g_loadedTextures.size();
   const size_t meshBase = g_loadedMeshes.size();
-
-  AdjustMaterialTextureIndices(payload.materials, textureBase);
-
-  g_loadedTextures.insert(g_loadedTextures.end(), payload.textures.begin(),
-                          payload.textures.end());
+  const std::vector<int> textureRemap =
+      RegisterImportedTextures(payload.textures, payload.textureSourceUris);
+  RemapMaterialTextureIndices(payload.materials, textureRemap);
     const bool isLiveLinkPayload =
       fs::path(payload.sourcePath).extension() == ".prmesh";
   Node importNodeProbe;
@@ -589,8 +661,6 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
       materialIndex = -1;
     }
   }
-
-  RegisterTextures(payload.textures);
 
   Node node;
   node.name = ResolveNodeDisplayName(payload);
@@ -636,14 +706,11 @@ bool ReplaceNodeImportedContent(size_t index, ImportedNodePayload payload) {
   Node &node = s_nodes[index];
   const std::string effectiveSourcePath =
       payload.sourcePath.empty() ? node.sourcePath : payload.sourcePath;
-  const size_t textureBase = g_loadedTextures.size();
     const bool isLiveLinkPayload =
       node.liveLinkManaged || fs::path(effectiveSourcePath).extension() == ".prmesh";
-
-  AdjustMaterialTextureIndices(payload.materials, textureBase);
-  g_loadedTextures.insert(g_loadedTextures.end(), payload.textures.begin(),
-                          payload.textures.end());
-  RegisterTextures(payload.textures);
+  const std::vector<int> textureRemap =
+      RegisterImportedTextures(payload.textures, payload.textureSourceUris);
+  RemapMaterialTextureIndices(payload.materials, textureRemap);
 
   std::vector<int> localToGlobal =
       ResolveReplacementMaterialIndices(node, payload.materials,

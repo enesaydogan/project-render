@@ -43,6 +43,7 @@ struct ImportedNodePayload {
   std::vector<Asset::GpuMesh> meshes;
   std::vector<Asset::Material> materials;
   std::vector<Asset::Texture> textures;
+  std::vector<std::string> textureSourceUris;
 };
 
 // Import a model (glTF, OBJ, STL) file into the scene. Returns true on success.
