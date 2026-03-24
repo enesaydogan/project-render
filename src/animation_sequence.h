@@ -15,6 +15,11 @@ enum class EasingMode : int {
   SmoothStep = 4,
 };
 
+enum class ExportMode : int {
+  Frames = 0,
+  Mp4 = 1,
+};
+
 struct Keyframe {
   std::string label;
   SavedViews::SavedView camera;
@@ -27,6 +32,7 @@ struct ExportSettings {
   int fps = 30;
   int maxSpp = 64;
   std::string baseName = "final";
+  int exportMode = static_cast<int>(ExportMode::Frames);
 };
 
 const std::vector<Keyframe> &GetKeyframes();
@@ -55,5 +61,7 @@ bool ApplyAtFrame(int frameIndex, int fps);
 
 int GetEasingModeCount();
 const char *GetEasingModeLabel(int index);
+int GetExportModeCount();
+const char *GetExportModeLabel(int index);
 
 } // namespace AnimationSequence

@@ -453,6 +453,7 @@ static json BuildMetadata() {
       {"fps", AnimationSequence::GetExportSettings().fps},
       {"spp", AnimationSequence::GetExportSettings().maxSpp},
       {"bn", AnimationSequence::GetExportSettings().baseName},
+      {"em", AnimationSequence::GetExportSettings().exportMode},
   };
   j["anm"]["kfs"] = json::array();
   for (const auto &keyframe : AnimationSequence::GetKeyframes()) {
@@ -722,6 +723,7 @@ static void ApplyMetadataPRS(const json &j) {
       animationSettings.fps = settings.value("fps", animationSettings.fps);
       animationSettings.maxSpp = settings.value("spp", animationSettings.maxSpp);
       animationSettings.baseName = settings.value("bn", animationSettings.baseName);
+      animationSettings.exportMode = settings.value("em", animationSettings.exportMode);
     }
     if (animation.contains("kfs") && animation["kfs"].is_array()) {
       for (const auto &entry : animation["kfs"]) {
