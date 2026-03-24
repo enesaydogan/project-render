@@ -175,6 +175,7 @@ void AnimationPanel::createUi()
     m_baseName = new QLineEdit(this);
     m_baseName->setMinimumWidth(120);
     m_renderButton = new QPushButton(tr("Render Frames..."), this);
+    m_cancelRenderButton = new QPushButton(tr("Cancel Export"), this);
     settingsGrid->addWidget(new QLabel(tr("Name"), this), 0, 0);
     settingsGrid->addWidget(m_keyframeName, 0, 1);
     settingsGrid->addWidget(new QLabel(tr("To Next"), this), 0, 2);
@@ -198,6 +199,7 @@ void AnimationPanel::createUi()
     settingsGrid->setColumnStretch(7, 1);
     settingsGrid->setColumnStretch(9, 1);
     settingsGrid->addWidget(m_renderButton, 0, 10, 2, 1);
+    settingsGrid->addWidget(m_cancelRenderButton, 0, 11, 2, 1);
     layout->addLayout(settingsGrid);
 
     m_statusLabel = new QLabel(this);
@@ -357,6 +359,16 @@ void AnimationPanel::createUi()
             StartAnimationRenderExport(outputDir.toStdWString());
             syncFromAnimation();
         }
+    });
+    connect(m_cancelRenderButton, &QPushButton::clicked, this, [this]() {
+        if (!g_renderAnimationExport.active) {
+            return;
+        }
+        if (g_renderExportJob.active) {
+            RestoreRenderExportState();
+        }
+        CancelAnimationRenderExport();
+        syncFromAnimation();
     });
 }
 
@@ -548,10 +560,13 @@ void AnimationPanel::syncFromAnimation()
 
     const bool canRender = !keyframes.empty() && !g_renderExportJob.active &&
                            !g_renderBatchExport.active && !g_renderAnimationExport.active;
+    const bool animationActive = g_renderAnimationExport.active;
     m_renderButton->setEnabled(canRender);
     m_renderButton->setText(settings.exportMode == static_cast<int>(AnimationSequence::ExportMode::Mp4)
                                 ? tr("Export MP4...")
                                 : tr("Export Frames..."));
+    m_cancelRenderButton->setVisible(animationActive);
+    m_cancelRenderButton->setEnabled(animationActive);
     m_addSelectedViewButton->setEnabled(SavedViews::GetSelectedViewIndex() >= 0);
     m_playButton->setEnabled(totalDuration > 0.0f);
     m_stopButton->setEnabled(m_previewPlaying);
