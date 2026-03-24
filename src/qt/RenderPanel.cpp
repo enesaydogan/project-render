@@ -8,13 +8,18 @@
 
 #include <QComboBox>
 #include <QApplication>
+#include <QCheckBox>
+#include <QFileDialog>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QLabel>
+#include <QLineEdit>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QTimer>
 #include <QVBoxLayout>
+
+#include "../saved_views.h"
 
 extern HWND g_hwnd;
 extern bool g_rayTracingSupported;
@@ -112,10 +117,14 @@ void RenderPanel::createUi()
     m_noisePercent = CreateSliderControl(0.1, 30.0, 0.1, 2);
     m_denoiser = new QComboBox(settingsGroup);
     m_denoiser->addItems({tr("Off"), tr("OIDN (CPU)"), tr("OIDN (GPU)")});
+    m_batchSavedViews = new QCheckBox(tr("Batch Render Saved Views"), settingsGroup);
+    m_batchBaseName = new QLineEdit(settingsGroup);
     settingsForm->addRow(tr("Render Resolution"), m_resolutionPreset);
     settingsForm->addRow(tr("Max SPP"), m_maxSpp);
     settingsForm->addRow(tr("Noise %"), m_noisePercent);
     settingsForm->addRow(tr("Denoiser"), m_denoiser);
+    settingsForm->addRow(QString(), m_batchSavedViews);
+    settingsForm->addRow(tr("Batch Base Name"), m_batchBaseName);
     layout->addWidget(settingsGroup);
 
     auto *statusGroup = new QGroupBox(tr("Status"), this);
@@ -138,6 +147,12 @@ void RenderPanel::createUi()
     connect(m_denoiser, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
         updateExportSettings();
     });
+    connect(m_batchSavedViews, &QCheckBox::toggled, this, [this](bool) {
+        updateExportSettings();
+    });
+    connect(m_batchBaseName, &QLineEdit::editingFinished, this, [this]() {
+        updateExportSettings();
+    });
     connect(m_renderButton, &QPushButton::clicked, this, [this]() {
         startRenderExport();
     });
@@ -145,6 +160,7 @@ void RenderPanel::createUi()
         if (g_renderExportJob.active) {
             g_renderExportStatus = "Render canceled.";
             RestoreRenderExportState();
+            CancelBatchRenderExport();
         }
     });
 }
@@ -170,6 +186,12 @@ void RenderPanel::syncFromRenderer()
     if (!IsWidgetBeingEdited(m_denoiser)) {
         m_denoiser->setCurrentIndex(std::clamp(g_renderExportSettings.denoiserIndex, 0, 2));
     }
+    if (!IsWidgetBeingEdited(m_batchSavedViews)) {
+        m_batchSavedViews->setChecked(g_renderExportSettings.batchSavedViews);
+    }
+    if (!IsWidgetBeingEdited(m_batchBaseName)) {
+        m_batchBaseName->setText(QString::fromUtf8(g_renderExportSettings.batchBaseName.c_str()));
+    }
 
     const RenderResolutionPreset &preset =
         g_renderResolutionPresets[g_renderExportSettings.resolutionPreset];
@@ -181,15 +203,22 @@ void RenderPanel::syncFromRenderer()
             .arg(preset.height));
 
     const bool active = g_renderExportJob.active;
+    const bool batchEnabled = g_renderExportSettings.batchSavedViews;
+    const int savedViewCount = static_cast<int>(SavedViews::GetViews().size());
     m_progressBar->setValue(active ? ComputeProgressPercent() : 0);
     m_progressBar->setVisible(active);
     m_cancelButton->setVisible(active);
     m_cancelButton->setEnabled(active);
-    m_renderButton->setEnabled(g_rayTracingSupported && !active);
+    m_renderButton->setEnabled(g_rayTracingSupported && !active &&
+                               (!batchEnabled || savedViewCount > 0));
     m_resolutionPreset->setEnabled(!active);
     m_maxSpp->setEnabled(!active);
     m_noisePercent->setEnabled(!active);
     m_denoiser->setEnabled(!active);
+    m_batchSavedViews->setEnabled(!active);
+    m_batchBaseName->setEnabled(!active && batchEnabled);
+    m_renderButton->setText(batchEnabled ? tr("Render Saved Views...")
+                                         : tr("Render And Export PNG..."));
 
     if (active) {
         const bool denoiserEnabled = (g_renderExportSettings.denoiserIndex != 0);
@@ -211,9 +240,20 @@ void RenderPanel::syncFromRenderer()
             lines << tr("Finalizing... (%1)")
                          .arg(g_renderExportJob.settleFramesRemaining);
         }
+        if (g_renderBatchExport.active) {
+            lines << tr("Batch view: %1")
+                         .arg(QString::fromUtf8(g_renderBatchExport.currentViewName.c_str()));
+        }
         m_progressDetailLabel->setText(lines.join('\n'));
     } else {
-        m_progressDetailLabel->setText(tr("Ready to start a PNG render export."));
+        if (batchEnabled) {
+            m_progressDetailLabel->setText(
+                tr("Ready to batch render %1 saved views as %2-viewname.png")
+                    .arg(savedViewCount)
+                    .arg(QString::fromUtf8(g_renderExportSettings.batchBaseName.c_str())));
+        } else {
+            m_progressDetailLabel->setText(tr("Ready to start a PNG render export."));
+        }
     }
 
     QString statusText;
@@ -239,6 +279,11 @@ void RenderPanel::updateExportSettings()
     g_renderExportSettings.maxSpp = static_cast<int>(m_maxSpp->value());
     g_renderExportSettings.noisePercent = static_cast<float>(m_noisePercent->value());
     g_renderExportSettings.denoiserIndex = m_denoiser->currentIndex();
+    g_renderExportSettings.batchSavedViews = m_batchSavedViews->isChecked();
+    g_renderExportSettings.batchBaseName = m_batchBaseName->text().trimmed().toUtf8().constData();
+    if (g_renderExportSettings.batchBaseName.empty()) {
+        g_renderExportSettings.batchBaseName = "final";
+    }
     syncFromRenderer();
 }
 
@@ -248,9 +293,22 @@ void RenderPanel::startRenderExport()
         return;
     }
 
-    std::wstring chosenPath;
-    if (SaveRenderImageFileDialog(g_hwnd, chosenPath)) {
-        StartRenderExportJob(chosenPath);
-        syncFromRenderer();
+    if (g_renderExportSettings.batchSavedViews) {
+        const QString outputDir = QFileDialog::getExistingDirectory(
+            this,
+            tr("Choose Output Folder For Saved Views"),
+            QString(),
+            QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
+        if (!outputDir.isEmpty()) {
+            StartBatchRenderExportJobs(outputDir.toStdWString(),
+                                       QString::fromUtf8(g_renderExportSettings.batchBaseName.c_str()).toStdWString());
+            syncFromRenderer();
+        }
+    } else {
+        std::wstring chosenPath;
+        if (SaveRenderImageFileDialog(g_hwnd, chosenPath)) {
+            StartRenderExportJob(chosenPath);
+            syncFromRenderer();
+        }
     }
 }

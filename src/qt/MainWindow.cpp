@@ -7,6 +7,7 @@
 #include "RenderPanel.h"
 #include "RenderSettingsPanel.h"
 #include "ScenePanel.h"
+#include "ViewsPanel.h"
 #include "../dx12_context.h"
 #include "../dxr_renderer.h"
 #include "../editor_ui.h"
@@ -485,6 +486,11 @@ void MainWindow::createDocks()
     cameraDock->setAllowedAreas(Qt::AllDockWidgetAreas);
     cameraDock->setWidget(wrapScroll(new CameraPanel(cameraDock), cameraDock));
     addDockWidget(Qt::RightDockWidgetArea, cameraDock);
+    auto *viewsDock = new QDockWidget(tr("Views"), this);
+    viewsDock->setObjectName(tr("Views"));
+    viewsDock->setAllowedAreas(Qt::AllDockWidgetAreas);
+    viewsDock->setWidget(wrapScroll(new ViewsPanel(viewsDock), viewsDock));
+    addDockWidget(Qt::RightDockWidgetArea, viewsDock);
     auto *lightsDock = new QDockWidget(tr("Lights"), this);
     lightsDock->setObjectName(tr("Lights"));
     lightsDock->setAllowedAreas(Qt::AllDockWidgetAreas);
@@ -587,6 +593,7 @@ void MainWindow::createDocks()
     renderDock->raise();
     splitDockWidget(renderDock, environmentDock, Qt::Vertical);
     tabifyDockWidget(environmentDock, cameraDock);
+    tabifyDockWidget(cameraDock, viewsDock);
     environmentDock->raise();
 }
 

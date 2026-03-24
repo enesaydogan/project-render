@@ -1,5 +1,6 @@
 #define NOMINMAX
 #include "scene.h"
+#include "saved_views.h"
 #include "ImGuizmo.h"
 #include "assets/asset_loader.h"
 #include "camera.h"
@@ -2533,6 +2534,7 @@ void ResetScene() {
   g_loadedMeshes.clear();
   g_loadedMaterials.clear();
   g_loadedTextures.clear();
+  SavedViews::Clear();
   g_textureDescriptorCount = 0;
   // Note: In a full implementation, we should also release GPU
   // resources/descriptors and reset the IBL manager, but for now this clears

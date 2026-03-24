@@ -26,9 +26,11 @@
 #include <atomic>
 #include <cmath>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <future>
 #include <mutex>
+#include <unordered_set>
 #include <string>
 
 using Microsoft::WRL::ComPtr;
@@ -81,6 +83,7 @@ const int g_renderResolutionPresetCount =
 
 RenderExportSettings g_renderExportSettings;
 RenderExportJobState g_renderExportJob;
+RenderBatchExportState g_renderBatchExport;
 std::string g_renderExportStatus;
 
 bool g_showRenderModeWindow = false;
@@ -342,6 +345,113 @@ static int RealtimeDenoiserIndexFromMode(
 static bool RecreateDxrPipelineSafe(UINT width, UINT height,
                                     const char *context);
 
+static std::wstring Utf8ToWString(const std::string &utf8) {
+  if (utf8.empty()) {
+    return {};
+  }
+  const int sizeNeeded = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(),
+                                             (int)utf8.size(), nullptr, 0);
+  if (sizeNeeded <= 0) {
+    return {};
+  }
+  std::wstring wide(sizeNeeded, L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), wide.data(),
+                      sizeNeeded);
+  return wide;
+}
+
+static std::wstring SanitizeFileStem(const std::wstring &input) {
+  std::wstring sanitized;
+  sanitized.reserve(input.size());
+  for (wchar_t ch : input) {
+    const bool invalid = ch < 32 || ch == L'<' || ch == L'>' || ch == L':' ||
+                         ch == L'"' || ch == L'/' || ch == L'\\' || ch == L'|' ||
+                         ch == L'?' || ch == L'*';
+    sanitized.push_back(invalid ? L'_' : ch);
+  }
+  while (!sanitized.empty() &&
+         (sanitized.back() == L' ' || sanitized.back() == L'.')) {
+    sanitized.pop_back();
+  }
+  size_t firstValid = 0;
+  while (firstValid < sanitized.size() && sanitized[firstValid] == L' ') {
+    ++firstValid;
+  }
+  sanitized.erase(0, firstValid);
+  if (sanitized.empty()) {
+    sanitized = L"view";
+  }
+  return sanitized;
+}
+
+static std::wstring BuildBatchOutputPath(const std::wstring &directory,
+                                         const std::wstring &baseName,
+                                         const std::string &viewName,
+                                         size_t viewOrdinal,
+                                         std::unordered_set<std::wstring>
+                                             &usedStems) {
+  namespace fs = std::filesystem;
+
+  std::wstring viewStem = SanitizeFileStem(Utf8ToWString(viewName));
+  if (viewStem.empty()) {
+    viewStem = L"view" + std::to_wstring(viewOrdinal + 1);
+  }
+
+  std::wstring stem = SanitizeFileStem(baseName) + L"-" + viewStem;
+  if (!usedStems.insert(stem).second) {
+    stem += L"-" + std::to_wstring(viewOrdinal + 1);
+  }
+  return (fs::path(directory) / fs::path(stem + L".png")).wstring();
+}
+
+static bool StartNextBatchRenderJob() {
+  if (!g_renderBatchExport.active) {
+    return false;
+  }
+
+  const auto &views = SavedViews::GetViews();
+  while (g_renderBatchExport.currentViewListIndex <
+         g_renderBatchExport.viewIndices.size()) {
+    const size_t queueIndex = g_renderBatchExport.currentViewListIndex;
+    const size_t viewIndex = g_renderBatchExport.viewIndices[queueIndex];
+    ++g_renderBatchExport.currentViewListIndex;
+    if (viewIndex >= views.size()) {
+      continue;
+    }
+
+    std::unordered_set<std::wstring> usedStems;
+    for (size_t i = 0; i < queueIndex; ++i) {
+      const size_t priorViewIndex = g_renderBatchExport.viewIndices[i];
+      if (priorViewIndex >= views.size()) {
+        continue;
+      }
+      BuildBatchOutputPath(g_renderBatchExport.outputDirectory,
+                           g_renderBatchExport.baseName,
+                           views[priorViewIndex].name, i, usedStems);
+    }
+
+    g_renderBatchExport.currentViewName = views[viewIndex].name;
+    g_renderBatchExport.currentOutputPath = BuildBatchOutputPath(
+        g_renderBatchExport.outputDirectory, g_renderBatchExport.baseName,
+        g_renderBatchExport.currentViewName, queueIndex, usedStems);
+
+    SavedViews::ApplyView(views[viewIndex]);
+    StartRenderExportJob(g_renderBatchExport.currentOutputPath);
+    if (!g_renderExportJob.active) {
+      g_renderBatchExport.failed = true;
+      return false;
+    }
+
+    g_renderExportStatus = "Batch rendering " + g_renderBatchExport.currentViewName +
+                           " (" + std::to_string(queueIndex + 1) + "/" +
+                           std::to_string(g_renderBatchExport.viewIndices.size()) +
+                           ")";
+    return true;
+  }
+
+  return false;
+}
+
 // Forward declarations for helpers also used by the export job logic in
 // main.cpp
 
@@ -467,6 +577,80 @@ void RestoreRenderExportState() {
   g_exportRenderTargetHeight = 0;
   g_exportRenderTargetState = D3D12_RESOURCE_STATE_PRESENT;
   UpdateCameraCB();
+}
+
+bool StartBatchRenderExportJobs(const std::wstring &outputDirectory,
+                                const std::wstring &baseName) {
+  if (g_renderExportJob.active || g_renderBatchExport.active ||
+      outputDirectory.empty() || baseName.empty() || !g_rayTracingSupported) {
+    return false;
+  }
+
+  const auto &views = SavedViews::GetViews();
+  if (views.empty()) {
+    g_renderExportStatus = "No saved views available for batch export.";
+    return false;
+  }
+
+  g_renderBatchExport = {};
+  g_renderBatchExport.active = true;
+  g_renderBatchExport.outputDirectory = outputDirectory;
+  g_renderBatchExport.baseName = baseName;
+  g_renderBatchExport.previousCamera = SavedViews::CaptureCurrentState();
+  g_renderBatchExport.previousCameraCaptured = true;
+  g_renderBatchExport.viewIndices.resize(views.size());
+  for (size_t index = 0; index < views.size(); ++index) {
+    g_renderBatchExport.viewIndices[index] = index;
+  }
+
+  if (!StartNextBatchRenderJob()) {
+    if (g_renderBatchExport.previousCameraCaptured) {
+      SavedViews::ApplyView(g_renderBatchExport.previousCamera);
+    }
+    g_renderBatchExport.active = false;
+    g_renderExportStatus = "Failed to start batch render export.";
+    return false;
+  }
+
+  return true;
+}
+
+void AdvanceBatchRenderExport(bool previousExportSucceeded) {
+  if (!g_renderBatchExport.active) {
+    return;
+  }
+
+  if (!previousExportSucceeded) {
+    g_renderBatchExport.failed = true;
+  }
+
+  if (g_renderBatchExport.failed ||
+      !StartNextBatchRenderJob()) {
+    const size_t totalCount = g_renderBatchExport.viewIndices.size();
+    const bool batchFailed = g_renderBatchExport.failed;
+    if (g_renderBatchExport.previousCameraCaptured) {
+      SavedViews::ApplyView(g_renderBatchExport.previousCamera);
+    }
+    g_renderBatchExport = {};
+    if (batchFailed) {
+      g_renderExportStatus = "Batch render failed.";
+    } else {
+      g_renderExportStatus = "Batch render finished: " +
+                             std::to_string(totalCount) + " images.";
+    }
+  }
+}
+
+void CancelBatchRenderExport() {
+  if (!g_renderBatchExport.active) {
+    return;
+  }
+
+  if (g_renderBatchExport.previousCameraCaptured) {
+    SavedViews::ApplyView(g_renderBatchExport.previousCamera);
+  }
+  g_renderBatchExport = {};
+  g_renderExportStatus = "Batch render canceled.";
 }
 
 void StartRenderExportJob(const std::wstring &outputPath) {
