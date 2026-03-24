@@ -1,6 +1,7 @@
 #include "camera.h"
 #include "d3d12_helpers.h"
 #include "editor_ui.h"
+#include <algorithm>
 #include <math.h>
 
 // Forward declare for accumulation reset
@@ -57,12 +58,34 @@ float g_camSpeed = 0.8f;           // units/sec
 float g_mouseSensitivity = 0.002f; // radians per pixel
 POINT g_prevMousePos = {0, 0};
 bool g_mouseCaptured = false;
+bool g_safeFrameEnabled = false;
 float g_cameraTarget[3] = {0.0f, 0.0f, 0.0f};
 float g_cameraTargetDistance = 1.0f;
 
 static CameraCB s_lastCameraData = {};
 static CameraCB s_prevFrameCameraData = {};
 static bool s_prevFrameValid = false;
+
+static void ResolveSafeFrameTargetSize(UINT &width, UINT &height) {
+  if (g_renderExportJob.active && g_renderExportJob.targetWidth > 0 &&
+      g_renderExportJob.targetHeight > 0) {
+    width = g_renderExportJob.targetWidth;
+    height = g_renderExportJob.targetHeight;
+    return;
+  }
+
+  if (g_renderResolutionPresetCount > 0) {
+    const int presetIndex =
+        (std::clamp)(g_renderExportSettings.resolutionPreset, 0,
+                     g_renderResolutionPresetCount - 1);
+    width = g_renderResolutionPresets[presetIndex].width;
+    height = g_renderResolutionPresets[presetIndex].height;
+    return;
+  }
+
+  width = 1920;
+  height = 1080;
+}
 
 static bool CameraChanged(const CameraCB &a, const CameraCB &b) {
   if (a.pos[0] != b.pos[0] || a.pos[1] != b.pos[1] || a.pos[2] != b.pos[2])
@@ -152,4 +175,51 @@ void UpdateCameraCB() {
   // Update prev-frame data for the next frame.
   s_prevFrameCameraData = g_cameraData;
   s_prevFrameValid = true;
+}
+
+bool GetSafeFrameTargetSize(UINT &width, UINT &height) {
+  ResolveSafeFrameTargetSize(width, height);
+  return width > 0 && height > 0;
+}
+
+bool GetSafeFramePreviewRect(UINT availableWidth, UINT availableHeight,
+                             D3D12_RECT &outRect) {
+  outRect.left = 0;
+  outRect.top = 0;
+  outRect.right = static_cast<LONG>(availableWidth);
+  outRect.bottom = static_cast<LONG>(availableHeight);
+
+  if (!g_safeFrameEnabled || g_renderExportJob.active || availableWidth == 0 ||
+      availableHeight == 0) {
+    return false;
+  }
+
+  UINT targetWidth = 0;
+  UINT targetHeight = 0;
+  if (!GetSafeFrameTargetSize(targetWidth, targetHeight)) {
+    return false;
+  }
+
+  const double targetAspect = static_cast<double>(targetWidth) /
+                              static_cast<double>(targetHeight);
+  const double availableAspect = static_cast<double>(availableWidth) /
+                                 static_cast<double>(availableHeight);
+
+  UINT previewWidth = availableWidth;
+  UINT previewHeight = availableHeight;
+  if (availableAspect > targetAspect) {
+    previewWidth = (std::max)(1u, static_cast<UINT>(
+                                      std::lround(availableHeight * targetAspect)));
+  } else if (availableAspect < targetAspect) {
+    previewHeight = (std::max)(1u, static_cast<UINT>(
+                                       std::lround(availableWidth / targetAspect)));
+  }
+
+  const UINT offsetX = (availableWidth - previewWidth) / 2;
+  const UINT offsetY = (availableHeight - previewHeight) / 2;
+  outRect.left = static_cast<LONG>(offsetX);
+  outRect.top = static_cast<LONG>(offsetY);
+  outRect.right = static_cast<LONG>(offsetX + previewWidth);
+  outRect.bottom = static_cast<LONG>(offsetY + previewHeight);
+  return true;
 }

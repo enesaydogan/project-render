@@ -66,6 +66,7 @@ extern float g_mouseSensitivity;
 extern POINT g_prevMousePos;
 extern bool g_mouseCaptured;
 extern bool g_cloudRenderingEnabled;
+extern bool g_safeFrameEnabled;
 extern float g_cameraTarget[3];
 extern float g_cameraTargetDistance;
 
@@ -74,3 +75,11 @@ void ResetCamera();
 
 // Update the GPU camera constant buffer if present
 void UpdateCameraCB();
+
+// Returns the current final-render target size used for framing decisions.
+bool GetSafeFrameTargetSize(UINT &width, UINT &height);
+
+// Computes a centered preview rect that matches the current final-render aspect.
+// Returns true when safe frame preview is active for the interactive viewport.
+bool GetSafeFramePreviewRect(UINT availableWidth, UINT availableHeight,
+                             D3D12_RECT &outRect);

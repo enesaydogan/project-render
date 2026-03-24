@@ -52,7 +52,9 @@ namespace RasterRenderer {
   bool TonemapHdrToBackbuffer(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList,
                               ID3D12Resource *backbuffer, UINT width,
                               UINT height, ID3D12Resource *cameraCB,
-                              ID3D12Resource *depthBuffer);
+                              ID3D12Resource *depthBuffer,
+                              UINT presentationX = 0,
+                              UINT presentationY = 0);
   float GetCurrentAvgLuminance();
   float GetCurrentEV100();
   RenderSettings &GetRenderSettings();

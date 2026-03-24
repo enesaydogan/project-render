@@ -975,7 +975,9 @@ void BindHdrRenderTarget(ID3D12Device *device, ID3D12GraphicsCommandList *cmdLis
 bool TonemapHdrToBackbuffer(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList,
                             ID3D12Resource *backbuffer, UINT width,
                             UINT height, ID3D12Resource *cameraCB,
-                            ID3D12Resource *depthBuffer) {
+                            ID3D12Resource *depthBuffer,
+                            UINT presentationX,
+                            UINT presentationY) {
   if (!EnsureHdrResources(device, width, height) || !backbuffer || !cameraCB || !depthBuffer)
     return false;
 
@@ -1198,14 +1200,48 @@ bool TonemapHdrToBackbuffer(ID3D12Device *device, ID3D12GraphicsCommandList *cmd
   cmdList->SetComputeRootDescriptorTable(2, tmGpu);
   cmdList->Dispatch((width + 7) / 8, (height + 7) / 8, 1);
 
+  const D3D12_RESOURCE_DESC backbufferDesc = backbuffer->GetDesc();
+  const UINT backbufferWidth = static_cast<UINT>(backbufferDesc.Width);
+  const UINT backbufferHeight = backbufferDesc.Height;
+  const bool partialPresent =
+      presentationX != 0 || presentationY != 0 || width != backbufferWidth ||
+      height != backbufferHeight;
+
   TransitionResource(cmdList, s_tonemapOutput.Get(), s_tonemapOutputState,
                      D3D12_RESOURCE_STATE_COPY_SOURCE);
   s_tonemapOutputState = D3D12_RESOURCE_STATE_COPY_SOURCE;
-  TransitionResource(cmdList, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET,
-                     D3D12_RESOURCE_STATE_COPY_DEST);
-  cmdList->CopyResource(backbuffer, s_tonemapOutput.Get());
-  TransitionResource(cmdList, backbuffer, D3D12_RESOURCE_STATE_COPY_DEST,
-                     D3D12_RESOURCE_STATE_RENDER_TARGET);
+  if (partialPresent) {
+    const FLOAT clearColor[] = {0.0f, 0.0f, 0.0f, 1.0f};
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv =
+        DX12Context::g_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    rtv.ptr += static_cast<SIZE_T>(DX12Context::g_frameIndex *
+                                   DX12Context::g_rtvDescriptorSize);
+    cmdList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
+    TransitionResource(cmdList, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET,
+                       D3D12_RESOURCE_STATE_COPY_DEST);
+
+    D3D12_TEXTURE_COPY_LOCATION dstLoc = {};
+    dstLoc.pResource = backbuffer;
+    dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    dstLoc.SubresourceIndex = 0;
+
+    D3D12_TEXTURE_COPY_LOCATION srcLoc = {};
+    srcLoc.pResource = s_tonemapOutput.Get();
+    srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    srcLoc.SubresourceIndex = 0;
+
+    D3D12_BOX srcBox = {0, 0, 0, width, height, 1};
+    cmdList->CopyTextureRegion(&dstLoc, presentationX, presentationY, 0,
+                               &srcLoc, &srcBox);
+    TransitionResource(cmdList, backbuffer, D3D12_RESOURCE_STATE_COPY_DEST,
+                       D3D12_RESOURCE_STATE_RENDER_TARGET);
+  } else {
+    TransitionResource(cmdList, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET,
+                       D3D12_RESOURCE_STATE_COPY_DEST);
+    cmdList->CopyResource(backbuffer, s_tonemapOutput.Get());
+    TransitionResource(cmdList, backbuffer, D3D12_RESOURCE_STATE_COPY_DEST,
+                       D3D12_RESOURCE_STATE_RENDER_TARGET);
+  }
   TransitionResource(cmdList, s_tonemapOutput.Get(), s_tonemapOutputState,
                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
   s_tonemapOutputState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;

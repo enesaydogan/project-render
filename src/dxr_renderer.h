@@ -119,7 +119,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandList,
                  UINT textureDescriptorCount,
                  const std::vector<const Asset::GpuMesh *> &meshes,
                  ID3D12Resource *meshDataSB = nullptr,
-                 ID3D12Resource *materialExtraSB = nullptr);
+                 ID3D12Resource *materialExtraSB = nullptr,
+                 UINT presentationX = 0, UINT presentationY = 0,
+                 UINT presentationWidth = 0, UINT presentationHeight = 0);
 
 // Submit pending ReSTIR DI/GI compute work on the async compute queue after
 // the frame's direct queue work has been submitted.
