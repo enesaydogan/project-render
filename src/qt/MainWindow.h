@@ -2,6 +2,8 @@
 
 #include <QMainWindow>
 
+#include <vector>
+
 class DX12View;
 class QAction;
 class QComboBox;
@@ -12,6 +14,7 @@ class QProgressBar;
 class QFrame;
 class QTimer;
 class QPushButton;
+class QWidget;
 
 class MainWindow : public QMainWindow
 {
@@ -34,6 +37,7 @@ private:
     void startSaveScene();
     void startSaveSceneAs();
     void startLoadScene();
+    void toggleQtUiVisibility();
     void updateSceneIoUi();
 
     DX12View *m_view;
@@ -54,4 +58,6 @@ private:
     QFrame *m_statusDivider = nullptr;
     QTimer *m_sceneIoTimer = nullptr;
     QDockWidget *m_animationDock = nullptr;
+    bool m_qtUiHidden = false;
+    std::vector<QWidget *> m_hiddenQtUiWidgets;
 };
