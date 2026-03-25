@@ -36,6 +36,7 @@
 #include <QMenuBar>
 #include <QPlainTextEdit>
 #include <QProgressBar>
+#include <QShortcut>
 #include <QScrollBar>
 #include <QScrollArea>
 #include <QToolBar>
@@ -332,6 +333,11 @@ MainWindow::MainWindow(QWidget *parent)
     createMenus();
     createToolBar();
     createDocks();
+    auto *toggleQtUiShortcut = new QShortcut(QKeySequence(Qt::Key_F1), this);
+    toggleQtUiShortcut->setContext(Qt::ApplicationShortcut);
+    connect(toggleQtUiShortcut, &QShortcut::activated, this, [this]() {
+        toggleQtUiVisibility();
+    });
     updateSceneIoUi();
     m_sceneIoTimer = new QTimer(this);
     connect(m_sceneIoTimer, &QTimer::timeout, this, [this]() {
@@ -647,6 +653,45 @@ void MainWindow::startLoadScene()
     if (OpenSceneFileDialog(owner, chosen)) {
         StartSceneIoJob(false, WStringToUtf8(chosen));
     }
+}
+
+void MainWindow::toggleQtUiVisibility()
+{
+    if (!m_qtUiHidden) {
+        m_hiddenQtUiWidgets.clear();
+
+        const auto rememberVisible = [this](QWidget *widget) {
+            if (!widget || !widget->isVisible()) {
+                return;
+            }
+            m_hiddenQtUiWidgets.push_back(widget);
+            widget->hide();
+        };
+
+        rememberVisible(menuBar());
+        rememberVisible(statusBar());
+
+        const auto toolBars = findChildren<QToolBar *>();
+        for (QToolBar *toolBar : toolBars) {
+            rememberVisible(toolBar);
+        }
+
+        const auto dockWidgets = findChildren<QDockWidget *>();
+        for (QDockWidget *dockWidget : dockWidgets) {
+            rememberVisible(dockWidget);
+        }
+
+        m_qtUiHidden = true;
+        return;
+    }
+
+    for (QWidget *widget : m_hiddenQtUiWidgets) {
+        if (widget) {
+            widget->show();
+        }
+    }
+    m_hiddenQtUiWidgets.clear();
+    m_qtUiHidden = false;
 }
 
 void MainWindow::updateSceneIoUi()

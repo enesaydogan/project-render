@@ -1044,7 +1044,7 @@ struct LightSnapshot {
 
 struct NativeMeshPayloadHeader {
   uint32_t magic = 0x48534D50; // PMSH
-  uint32_t version = 2;
+  uint32_t version = 3;
   uint32_t meshCount = 0;
   uint32_t reserved = 0;
 };
@@ -1062,6 +1062,52 @@ struct NativeMeshPayloadVertex {
   float tangent[4] = {1.0f, 0.0f, 0.0f, 1.0f};
   float uv[2] = {0.0f, 0.0f};
 };
+
+enum : uint32_t {
+  kNativeMaterialFlagDoubleSided = 1u << 0,
+  kNativeMaterialFlagInvertRoughnessTexture = 1u << 1,
+};
+
+struct NativeMeshPayloadMaterialHeader {
+  int32_t materialSlot = 0;
+  uint32_t flags = 0;
+  float baseColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+  float emissiveColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+  float emissiveIntensity = 1.0f;
+  float roughness = 0.5f;
+  float metalness = 0.0f;
+  float specularWeight = 1.0f;
+  float ior = 1.5f;
+  float transmissionWeight = 0.0f;
+  float transmissionColor[3] = {1.0f, 1.0f, 1.0f};
+  float coatWeight = 0.0f;
+  float coatRoughness = 0.1f;
+  float thinWalled = 0.0f;
+  float translucency = 0.0f;
+  float uvScale[2] = {1.0f, 1.0f};
+  float uvOffset[2] = {0.0f, 0.0f};
+  float triPlanarEnabled = 0.0f;
+  float triPlanarScale = 1.0f;
+  float triPlanarSharpness = 4.0f;
+  float triPlanarNormalStrength = 1.0f;
+  uint32_t nameLength = 0;
+  uint32_t materialModelLength = 0;
+  uint32_t alphaModeLength = 0;
+  uint32_t baseColorTextureUriLength = 0;
+  uint32_t normalTextureUriLength = 0;
+  uint32_t emissiveTextureUriLength = 0;
+  uint32_t occlusionTextureUriLength = 0;
+  uint32_t metalRoughTextureUriLength = 0;
+};
+
+bool WriteNativePayloadString(std::ofstream &stream, const std::string &value) {
+  if (value.empty()) {
+    return true;
+  }
+
+  stream.write(value.data(), static_cast<std::streamsize>(value.size()));
+  return static_cast<bool>(stream);
+}
 
 uint64_t HashCombine(uint64_t seed, uint64_t value) {
   return seed ^ (value + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2));
@@ -3376,6 +3422,7 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
   };
   std::vector<ExportSubmesh> submeshes;
   std::unordered_map<int, size_t> submeshBySlot;
+  std::vector<MaterialSnapshot> serializedMaterials;
 
   const bool hasTexcoords = mesh.tvFace != nullptr && mesh.tVerts != nullptr &&
                             mesh.getNumTVerts() > 0;
@@ -3428,8 +3475,34 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
     }
   }
 
+  if (rootMaterial) {
+    std::vector<int> usedSlots;
+    usedSlots.reserve(submeshBySlot.size());
+    for (const auto &[materialSlot, _] : submeshBySlot) {
+      usedSlots.push_back(materialSlot);
+    }
+    std::sort(usedSlots.begin(), usedSlots.end());
+
+    serializedMaterials.reserve(usedSlots.size());
+    for (const int materialSlot : usedSlots) {
+      Mtl *slotMaterial = ResolveMaterialForSlot(rootMaterial, materialSlot);
+      if (!slotMaterial) {
+        continue;
+      }
+
+      MaterialSnapshot materialSnapshot;
+      if (!CaptureMaterialSnapshot(ip, node, materialSlot, slotMaterial,
+                                   &materialSnapshot)) {
+        continue;
+      }
+
+      serializedMaterials.push_back(std::move(materialSnapshot));
+    }
+  }
+
   NativeMeshPayloadHeader header;
   header.meshCount = static_cast<uint32_t>(submeshes.size());
+  header.reserved = static_cast<uint32_t>(serializedMaterials.size());
   stream.write(reinterpret_cast<const char *>(&header), sizeof(header));
   for (const ExportSubmesh &submesh : submeshes) {
     NativeMeshPayloadMeshHeader meshHeader;
@@ -3446,6 +3519,68 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
       stream.write(reinterpret_cast<const char *>(submesh.indices.data()),
                    static_cast<std::streamsize>(submesh.indices.size() *
                                                 sizeof(submesh.indices[0])));
+    }
+  }
+
+  for (const MaterialSnapshot &material : serializedMaterials) {
+    NativeMeshPayloadMaterialHeader materialHeader;
+    materialHeader.materialSlot = material.materialSlot;
+    materialHeader.flags = material.doubleSided ? kNativeMaterialFlagDoubleSided : 0u;
+    if (material.invertRoughnessTexture) {
+      materialHeader.flags |= kNativeMaterialFlagInvertRoughnessTexture;
+    }
+    std::copy(material.baseColor.begin(), material.baseColor.end(),
+              std::begin(materialHeader.baseColor));
+    std::copy(material.emissiveColor.begin(), material.emissiveColor.end(),
+              std::begin(materialHeader.emissiveColor));
+    materialHeader.emissiveIntensity = material.emissiveIntensity;
+    materialHeader.roughness = material.roughness;
+    materialHeader.metalness = material.metalness;
+    materialHeader.specularWeight = material.specularWeight;
+    materialHeader.ior = material.ior;
+    materialHeader.transmissionWeight = material.transmissionWeight;
+    std::copy(material.transmissionColor.begin(), material.transmissionColor.end(),
+              std::begin(materialHeader.transmissionColor));
+    materialHeader.coatWeight = material.coatWeight;
+    materialHeader.coatRoughness = material.coatRoughness;
+    materialHeader.thinWalled = material.thinWalled;
+    materialHeader.translucency = material.translucency;
+    materialHeader.uvScale[0] = material.uvScale[0];
+    materialHeader.uvScale[1] = material.uvScale[1];
+    materialHeader.uvOffset[0] = material.uvOffset[0];
+    materialHeader.uvOffset[1] = material.uvOffset[1];
+    materialHeader.triPlanarEnabled = material.triPlanarEnabled;
+    materialHeader.triPlanarScale = material.triPlanarScale;
+    materialHeader.triPlanarSharpness = material.triPlanarSharpness;
+    materialHeader.triPlanarNormalStrength = material.triPlanarNormalStrength;
+    materialHeader.nameLength = static_cast<uint32_t>(material.name.size());
+    materialHeader.materialModelLength =
+        static_cast<uint32_t>(material.materialModel.size());
+    materialHeader.alphaModeLength = static_cast<uint32_t>(material.alphaMode.size());
+    materialHeader.baseColorTextureUriLength =
+        static_cast<uint32_t>(material.baseColorTextureUri.size());
+    materialHeader.normalTextureUriLength =
+        static_cast<uint32_t>(material.normalTextureUri.size());
+    materialHeader.emissiveTextureUriLength =
+        static_cast<uint32_t>(material.emissiveTextureUri.size());
+    materialHeader.occlusionTextureUriLength =
+        static_cast<uint32_t>(material.occlusionTextureUri.size());
+    materialHeader.metalRoughTextureUriLength =
+        static_cast<uint32_t>(material.metalRoughTextureUri.size());
+    stream.write(reinterpret_cast<const char *>(&materialHeader),
+                 sizeof(materialHeader));
+    if (!WriteNativePayloadString(stream, material.name) ||
+        !WriteNativePayloadString(stream, material.materialModel) ||
+        !WriteNativePayloadString(stream, material.alphaMode) ||
+        !WriteNativePayloadString(stream, material.baseColorTextureUri) ||
+        !WriteNativePayloadString(stream, material.normalTextureUri) ||
+        !WriteNativePayloadString(stream, material.emissiveTextureUri) ||
+        !WriteNativePayloadString(stream, material.occlusionTextureUri) ||
+        !WriteNativePayloadString(stream, material.metalRoughTextureUri)) {
+      if (needsDelete) {
+        triObject->DeleteThis();
+      }
+      return false;
     }
   }
 
