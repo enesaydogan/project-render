@@ -2483,6 +2483,9 @@ void ApplyVrayMaterialParameters(Interface *ip, Mtl *material,
 
   const TimeValue time = ip->GetTime();
   snapshot->materialModel = "VRayMtl";
+  snapshot->emissiveColor = {0.0f, 0.0f, 0.0f, 1.0f};
+  snapshot->emissiveIntensity = 0.0f;
+  snapshot->translucency = 0.0f;
 
   Color diffuseColor(1.0f, 1.0f, 1.0f);
   if (TryGetVrayMtlValue(material, ProjectRenderVrayMtlParameters::pb_diffuse_color, time,
@@ -2544,19 +2547,22 @@ void ApplyVrayMaterialParameters(Interface *ip, Mtl *material,
     snapshot->ior = (std::max)(1.0f, refractIor);
   }
 
+  const bool genericEmissionEnabled =
+      material->GetSelfIllumColorOn() != FALSE || material->GetSelfIllum() > 1.0e-3f;
+  int selfIllumGi = 0;
+  TryGetVrayMtlValue(material,
+                     ProjectRenderVrayMtlParameters::pb_selfIllumination_gi, time,
+                     &selfIllumGi);
   Color selfIllumColor(0.0f, 0.0f, 0.0f);
-  if (TryGetVrayMtlValue(material,
+  const bool hasSelfIllumColor =
+      TryGetVrayMtlValue(material,
                          ProjectRenderVrayMtlParameters::pb_selfIllumination_color, time,
-                         &selfIllumColor)) {
-    snapshot->emissiveColor = ColorToArray4(selfIllumColor, 1.0f);
-  }
-
+                         &selfIllumColor);
   float selfIllumMultiplier = 0.0f;
-  if (TryGetVrayMtlValue(material,
+  const bool hasSelfIllumMultiplier =
+      TryGetVrayMtlValue(material,
                          ProjectRenderVrayMtlParameters::pb_selfIllumination_mult, time,
-                         &selfIllumMultiplier)) {
-    snapshot->emissiveIntensity = (std::max)(0.0f, selfIllumMultiplier);
-  }
+                         &selfIllumMultiplier);
 
   float coatAmount = 0.0f;
   if (TryGetVrayMtlValue(material, ProjectRenderVrayMtlParameters::pb_mtl_coat_amount, time,
@@ -2579,18 +2585,21 @@ void ApplyVrayMaterialParameters(Interface *ip, Mtl *material,
     snapshot->thinWalled = thinWalled != 0 ? 1.0f : 0.0f;
   }
 
+  int translucent = 0;
+  const bool hasTranslucentToggle =
+      TryGetVrayMtlValue(material,
+                         ProjectRenderVrayMtlParameters::pb_refract_translucent, time,
+                         &translucent);
   float translucencyAmount = 0.0f;
-  if (TryGetVrayMtlValue(material,
+  const bool hasTranslucencyAmount =
+      TryGetVrayMtlValue(material,
                          ProjectRenderVrayMtlParameters::pb_refract_translucency_amount,
-                         time, &translucencyAmount)) {
-    snapshot->translucency = (std::clamp)(translucencyAmount, 0.0f, 1.0f);
-  } else {
-    int translucent = 0;
-    if (TryGetVrayMtlValue(material,
-                           ProjectRenderVrayMtlParameters::pb_refract_translucent, time,
-                           &translucent)) {
-      snapshot->translucency = translucent != 0 ? 1.0f : 0.0f;
-    }
+                         time, &translucencyAmount);
+  if ((hasTranslucentToggle && translucent != 0) ||
+      (!hasTranslucentToggle && hasTranslucencyAmount && translucencyAmount > 1.0e-3f)) {
+    snapshot->translucency =
+        hasTranslucencyAmount ? (std::clamp)(translucencyAmount, 0.0f, 1.0f)
+                              : 1.0f;
   }
 
   int doubleSided = 0;
@@ -2650,14 +2659,26 @@ void ApplyVrayMaterialParameters(Interface *ip, Mtl *material,
   snapshot->invertRoughnessTexture = (useRoughness == 0);
 
   Texmap *emissiveTexmap = nullptr;
-  if (TryGetVrayMtlTexmap(
+  const bool hasEmissiveTexmap = TryGetVrayMtlTexmap(
           material,
           ProjectRenderVrayMtlParameters::pb_selfIllumination_color_shortmap,
-          time, &emissiveTexmap)) {
+          time, &emissiveTexmap);
+  if (hasEmissiveTexmap) {
     TextureBindingSnapshot binding;
     if (TryResolveTexmapTextureBinding(ip, emissiveTexmap, &binding)) {
       ApplyTextureBinding(std::move(binding), &snapshot->emissiveTextureUri,
                           snapshot);
+    }
+  }
+
+  if (genericEmissionEnabled || selfIllumGi != 0 || hasEmissiveTexmap) {
+    if (hasSelfIllumColor) {
+      snapshot->emissiveColor = ColorToArray4(selfIllumColor, 1.0f);
+    }
+    if (hasSelfIllumMultiplier) {
+      snapshot->emissiveIntensity = (std::max)(0.0f, selfIllumMultiplier);
+    } else if (hasSelfIllumColor && MaxColorComponent(selfIllumColor) > 1.0e-3f) {
+      snapshot->emissiveIntensity = 1.0f;
     }
   }
 }
@@ -3420,6 +3441,21 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
     std::vector<NativeMeshPayloadVertex> vertices;
     std::vector<uint32_t> indices;
   };
+  struct TrianglePositionKey {
+    std::array<uint32_t, 9> bits{};
+
+    bool operator==(const TrianglePositionKey &) const = default;
+  };
+  struct TrianglePositionKeyHasher {
+    size_t operator()(const TrianglePositionKey &key) const noexcept {
+      size_t hash = 1469598103934665603ull;
+      for (uint32_t value : key.bits) {
+        hash ^= static_cast<size_t>(value);
+        hash *= 1099511628211ull;
+      }
+      return hash;
+    }
+  };
   std::vector<ExportSubmesh> submeshes;
   std::unordered_map<int, size_t> submeshBySlot;
   std::vector<MaterialSnapshot> serializedMaterials;
@@ -3473,6 +3509,69 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
       submesh.indices.push_back(static_cast<uint32_t>(submesh.vertices.size()));
       submesh.vertices.push_back(vertex);
     }
+  }
+
+  auto makeTrianglePositionKey =
+      [](const NativeMeshPayloadVertex &v0, const NativeMeshPayloadVertex &v1,
+         const NativeMeshPayloadVertex &v2) {
+        std::array<std::array<uint32_t, 3>, 3> positions = {};
+        const NativeMeshPayloadVertex *triangleVertices[3] = {&v0, &v1, &v2};
+        for (size_t vertexIndex = 0; vertexIndex < 3; ++vertexIndex) {
+          for (size_t axis = 0; axis < 3; ++axis) {
+            std::memcpy(&positions[vertexIndex][axis],
+                        &triangleVertices[vertexIndex]->position[axis],
+                        sizeof(uint32_t));
+          }
+        }
+        std::sort(positions.begin(), positions.end());
+
+        TrianglePositionKey key;
+        size_t bitIndex = 0;
+        for (const auto &position : positions) {
+          for (uint32_t component : position) {
+            key.bits[bitIndex++] = component;
+          }
+        }
+        return key;
+      };
+
+  for (ExportSubmesh &submesh : submeshes) {
+    if (submesh.indices.size() < 6 || submesh.indices.size() % 3 != 0) {
+      continue;
+    }
+
+    std::unordered_set<TrianglePositionKey, TrianglePositionKeyHasher>
+        seenTriangles;
+    ExportSubmesh deduplicatedSubmesh;
+    deduplicatedSubmesh.materialSlot = submesh.materialSlot;
+    deduplicatedSubmesh.vertices.reserve(submesh.vertices.size());
+    deduplicatedSubmesh.indices.reserve(submesh.indices.size());
+
+    for (size_t triangleBase = 0; triangleBase < submesh.indices.size();
+         triangleBase += 3) {
+      const NativeMeshPayloadVertex &v0 =
+          submesh.vertices[submesh.indices[triangleBase + 0]];
+      const NativeMeshPayloadVertex &v1 =
+          submesh.vertices[submesh.indices[triangleBase + 1]];
+      const NativeMeshPayloadVertex &v2 =
+          submesh.vertices[submesh.indices[triangleBase + 2]];
+      const TrianglePositionKey key = makeTrianglePositionKey(v0, v1, v2);
+      if (!seenTriangles.insert(key).second) {
+        continue;
+      }
+
+      deduplicatedSubmesh.indices.push_back(
+          static_cast<uint32_t>(deduplicatedSubmesh.vertices.size()));
+      deduplicatedSubmesh.vertices.push_back(v0);
+      deduplicatedSubmesh.indices.push_back(
+          static_cast<uint32_t>(deduplicatedSubmesh.vertices.size()));
+      deduplicatedSubmesh.vertices.push_back(v1);
+      deduplicatedSubmesh.indices.push_back(
+          static_cast<uint32_t>(deduplicatedSubmesh.vertices.size()));
+      deduplicatedSubmesh.vertices.push_back(v2);
+    }
+
+    submesh = std::move(deduplicatedSubmesh);
   }
 
   if (rootMaterial) {
