@@ -19,7 +19,8 @@ void Miss(inout RayPayload payload)
     float cloudLod = isViewLikeRay ? 0.0 : min(10.0, envLod + 0.5);
 
     // Sample environment map and apply camera exposure scale.
-    float3 color = envMap.SampleLevel(linearSampler, uv, envLod).rgb * intensity;
+    float3 color = envMap.SampleLevel(linearSampler, uv, envLod).rgb *
+                   GetDxrProceduralSkyBoost() * intensity;
 
     // Add Analytic Sun Disc
     float3 L = normalize(lightDir.xyz);

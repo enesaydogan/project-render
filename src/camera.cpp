@@ -46,9 +46,10 @@ CameraCB g_initialCameraData = {
     0.0f,                           // debugVisualizationMode
     1.0f,                           // cloudRenderingEnabled (default ON)
     0.0f,                           // iblRotationDegrees
-    1.0f,                          // sampleEnvSolidAngle (default true)
-    0.0f,                          // nrdEnabled
-    0.0f                           // _cameraPadEnd
+    1.0f,                           // sampleEnvSolidAngle (default true)
+    0.0f,                           // nrdEnabled
+    0.0f,                           // exportRendering
+    1.0f                            // dxrProceduralSkyBoost
 };
 CameraCB g_cameraData = g_initialCameraData;
 ComPtr<ID3D12Resource> g_cameraConstantBuffer;
@@ -114,6 +115,8 @@ static bool CameraChanged(const CameraCB &a, const CameraCB &b) {
   if (a.iblRotationDegrees != b.iblRotationDegrees)
     return true;
   if (a.sampleEnvSolidAngle != b.sampleEnvSolidAngle)
+    return true;
+  if (a.dxrProceduralSkyBoost != b.dxrProceduralSkyBoost)
     return true;
   return false;
 }

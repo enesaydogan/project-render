@@ -245,7 +245,7 @@ LightSample sample_env_map(Texture2D env,
     }
 
     ls.L = worldDir;
-    ls.radiance = env.SampleLevel(s, uvRot, sampleLod).rgb;
+    ls.radiance = env.SampleLevel(s, uvRot, sampleLod).rgb * GetDxrProceduralSkyBoost();
     ls.pdf = max(0.0, pdf);
     return ls;
 }

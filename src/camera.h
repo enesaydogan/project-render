@@ -51,6 +51,7 @@ struct CameraCB {
   float sampleEnvSolidAngle;
   float nrdEnabled;
   float exportRendering;
+  float dxrProceduralSkyBoost;
   float shadowMatrix[16];
   float viewProj[16];
   float invViewProj[16];
