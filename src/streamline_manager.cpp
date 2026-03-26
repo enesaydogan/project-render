@@ -258,7 +258,11 @@ bool StreamlineManager::InitializeEarly() {
   // NGX-backed features (DLSS/DLSS-RR) require an application id.
   pref.applicationId = m_applicationId;
   pref.engine = sl::EngineType::eCustom;
-  pref.engineVersion = "1.0.0";
+#ifdef APP_VERSION
+  pref.engineVersion = APP_VERSION;
+#else
+  pref.engineVersion = "0.1.0";
+#endif
   pref.projectId = "a0f57b54-1daf-4934-90ae-c4035c19df04";
   pref.flags = sl::PreferenceFlags::eDisableCLStateTracking |
                sl::PreferenceFlags::eAllowOTA |
