@@ -25,7 +25,15 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     if (x >= width || y >= height)
         return;
 
-    float3 color = g_input.Load(int3(x, y, 0)).rgb;
+    float4 sampleValue = g_input.Load(int3(x, y, 0));
+    if (sampleValue.a < 0.5f) {
+        uint gridW = (width + stride - 1) / stride;
+        uint idx = dispatchThreadID.y * gridW + dispatchThreadID.x;
+        g_output[idx] = float2(0.0f, 0.0f);
+        return;
+    }
+
+    float3 color = sampleValue.rgb;
     
     // Log-luminance for geometric mean (log-average).
     // Using max(..., 1e-4) to avoid log(0) and provide a floor for dark pixels.

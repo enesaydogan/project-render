@@ -403,6 +403,15 @@ float3 FresnelSchlickRoughness(float cosTheta, float3 F0, float roughness)
     return F0 + (max(float3(1.0 - roughness, 1.0 - roughness, 1.0 - roughness), F0) - F0) * pow(saturate(1.0 - cosTheta), 5.0);
 }
 
+float2 EnvBRDFApprox(float3 F0, float roughness, float NdotV)
+{
+    float4 c0 = float4(-1.0, -0.0275, -0.572, 0.022);
+    float4 c1 = float4(1.0, 0.0425, 1.04, -0.04);
+    float4 r = roughness * c0 + c1;
+    float a004 = min(r.x * r.x, exp2(-9.28 * NdotV)) * r.x + r.y;
+    return float2(-1.04, 1.04) * a004 + r.zw;
+}
+
 // Extract normal from normal map and transform to world space
 float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent, int normalTexIndex)
 {
@@ -656,38 +665,56 @@ PSOutput PSMainMesh(PSInputMesh input)
     float3 kS_ibl = F_ibl;
     float3 kD_ibl = 1.0 - kS_ibl;
 
+    // Raster does not have a preconvolved irradiance map yet. A single blurred
+    // env lookup overestimates Prague sky energy on upward-facing diffuse
+    // surfaces, so keep the fake irradiance both blurrier and much lower-energy
+    // until a proper irradiance/prefilter path exists.
+    const float kRasterDiffuseIrradianceScale = 0.08;
+    const float kRasterDiffuseAmbientScale = 0.18;
+    const float kRasterSpecularAmbientScale = 0.10;
     float2 envUV_diff = DirectionToUV(N);
-    float3 irradiance = envMap.SampleLevel(linearSampler, envUV_diff, 7.0).rgb;
+    float3 irradiance = envMap.SampleLevel(linearSampler, envUV_diff, 9.0).rgb *
+                        kRasterDiffuseIrradianceScale;
     float3 diffuse_ibl = kD_ibl * irradiance * (DiffuseAlbedo / PI);
 
     float2 envUV_spec = DirectionToUV(R);
     float3 prefilteredColor = envMap.SampleLevel(linearSampler, envUV_spec, roughness * 7.0).rgb;
-    float3 specular_ibl = kS_ibl * prefilteredColor;
+    float2 envBrdf = EnvBRDFApprox(F0, roughness, NdotV);
+    float3 specular_ibl = prefilteredColor * (F0 * envBrdf.x + envBrdf.y);
 
     float3 coat_ibl = float3(0.0, 0.0, 0.0);
     if (clearcoat > 0.001) {
         float2 envUV_spec = DirectionToUV(R);
         float3 prefilteredCoat = envMap.SampleLevel(linearSampler, envUV_spec, clearcoatRoughness * 7.0).rgb;
         float3 F0c = float3(0.04, 0.04, 0.04);
-        float3 Fc_ibl = FresnelSchlickRoughness(NdotV, F0c, clearcoatRoughness);
-        coat_ibl = Fc_ibl * prefilteredCoat;
+        float2 envBrdfCoat = EnvBRDFApprox(F0c, clearcoatRoughness, NdotV);
+        coat_ibl = prefilteredCoat * (F0c * envBrdfCoat.x + envBrdfCoat.y);
     }
 
-    // Raster has no true GI, but full env energy here reads too hot versus the scene.
-    const float kRasterAmbientScale = 0.18;
-    float3 envIBL = (diffuse_ibl + specular_ibl) * (ao * kRasterAmbientScale);
+    // Raster has no true GI, so keep the environment contribution conservative
+    // to avoid blowing out simple procedural-sky scenes.
+    float3 envIBL = (diffuse_ibl * kRasterDiffuseAmbientScale +
+                     specular_ibl * kRasterSpecularAmbientScale) * ao;
     float3 ambient = envIBL * (1.0 - clearcoat);
     if (clearcoat > 0.001) {
-        float3 ambCoat = coat_ibl * (ao * kRasterAmbientScale);
+        float3 ambCoat = coat_ibl * (ao * kRasterSpecularAmbientScale);
         ambient += ambCoat * clearcoat;
     }
 
     if (translucency > 0.001) {
         float2 envUV_back = DirectionToUV(-N);
-        float3 irradianceBack = envMap.SampleLevel(linearSampler, envUV_back, 7.0).rgb;
-        float3 envBack = (DiffuseAlbedo * irradianceBack) * (ao * kRasterAmbientScale);
+        float3 irradianceBack = envMap.SampleLevel(linearSampler, envUV_back, 9.0).rgb *
+                     kRasterDiffuseIrradianceScale;
+        float3 envBack = (DiffuseAlbedo * irradianceBack) * (ao * kRasterDiffuseAmbientScale);
         ambient += envBack * translucency;
     }
+
+    float skyHemi = saturate(N.y * 0.5 + 0.5);
+    float envLuma = dot(irradiance + prefilteredColor, float3(0.2126, 0.7152, 0.0722));
+    float fallbackWeight = saturate(1.0 - envLuma * 2.0);
+    float3 skyFill = DiffuseAlbedo * radiance * ao * (0.008 + 0.018 * skyHemi);
+    ambient += skyFill * fallbackWeight;
+
     ambient = ambient * grassAmbientContact + grassSoilBounce;
     
     float3 color = directLight + ambient + emiss;

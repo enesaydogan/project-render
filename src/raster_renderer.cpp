@@ -105,7 +105,7 @@ static UINT s_avgLumCapacity = 0;
 static float s_avgLuminanceCdM2 = 0.0f;
 static float s_lastEV100 = -10.0f;
 static float s_smoothedExposure = 0.02f;
-static constexpr float kRasterExposureCalibration = 0.05f; // hack but i can figure this out
+static constexpr float kRasterExposureCalibration = 1.0f;
 static RasterRenderer::RenderSettings s_renderSettings;
 
 namespace RasterRenderer {
