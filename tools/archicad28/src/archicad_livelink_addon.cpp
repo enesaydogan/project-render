@@ -58,7 +58,7 @@ constexpr auto kReconnectRetryInterval = std::chrono::milliseconds(1000);
 
 struct NativeMeshPayloadHeader {
   uint32_t magic = 0x48534D50;
-  uint32_t version = 3;
+  uint32_t version = 4;
   uint32_t meshCount = 0;
   uint32_t reserved = 0;
 };
@@ -105,6 +105,7 @@ struct NativeMeshPayloadMaterialHeader {
   float triPlanarSharpness = 4.0f;
   float triPlanarNormalStrength = 1.0f;
   uint32_t nameLength = 0;
+  uint32_t materialStableIdLength = 0;
   uint32_t materialModelLength = 0;
   uint32_t alphaModeLength = 0;
   uint32_t baseColorTextureUriLength = 0;
@@ -593,12 +594,13 @@ void AssignMaterialBindingIdentity(
   }
 
   material->objectId =
-      MakeMaterialObjectId(element.objectId, binding.materialSlot,
-                           material->materialStableId);
-  material->nodeObjectId = element.objectId;
-  material->materialSlot = binding.materialSlot;
-  material->references.clear();
+      MakeMaterialObjectId(material->materialStableId, material->materialKey);
+  if (material->nodeObjectId.empty()) {
+    material->nodeObjectId = element.objectId;
+    material->materialSlot = binding.materialSlot;
+  }
   material->references.push_back({element.objectId, binding.materialSlot});
+  DeduplicateMaterialReferences(material);
 }
 
 bool WriteNativePayloadString(std::ofstream &stream, const std::string &value) {
@@ -819,6 +821,58 @@ json MakeNodeRemovedDelta(const std::string &documentId,
               {"payload", json{{"removeChildren", true}}}};
 }
 
+json MakeMaterialDelta(const std::string &documentId,
+                       const MaterialExportRecord &material,
+                       uint64_t revision) {
+  json references = json::array();
+  for (const MaterialExportRecord::Reference &reference : material.references) {
+    references.push_back(json{{"nodeObjectId", reference.nodeObjectId},
+                              {"materialSlot", reference.materialSlot}});
+  }
+
+  return json{{"kind", "MaterialChanged"},
+              {"target",
+               MakeObjectIdJson(documentId, material.objectId, "Material")},
+              {"revision", revision},
+              {"debugLabel", material.name},
+              {"payload",
+               json{{"parametersChanged", true},
+                    {"texturesChanged", true},
+                    {"nodeObjectId", material.nodeObjectId},
+                    {"materialStableId", material.materialStableId},
+                    {"materialSlot", material.materialSlot},
+                    {"references", std::move(references)},
+                    {"name", material.name},
+                    {"materialModel", material.materialModel},
+                    {"baseColor", material.baseColor},
+                    {"baseColorTextureUri", material.baseColorTextureUri},
+                    {"emissiveColor", material.emissiveColor},
+                    {"normalTextureUri", ""},
+                    {"emissiveTextureUri", ""},
+                    {"occlusionTextureUri", ""},
+                    {"metalRoughTextureUri", ""},
+                    {"emissiveIntensity", material.emissiveIntensity},
+                    {"roughness", material.roughness},
+                    {"metalness", material.metalness},
+                    {"specularWeight", material.specularWeight},
+                    {"ior", material.ior},
+                    {"transmissionWeight", material.transmissionWeight},
+                    {"transmissionColor", material.transmissionColor},
+                    {"coatWeight", material.coatWeight},
+                    {"coatRoughness", material.coatRoughness},
+                    {"thinWalled", false},
+                    {"translucency", 0.0f},
+                    {"uvScale", json::array({1.0f, 1.0f})},
+                    {"uvOffset", json::array({0.0f, 0.0f})},
+                    {"triPlanarEnabled", 0.0f},
+                    {"triPlanarScale", 1.0f},
+                    {"triPlanarSharpness", 4.0f},
+                    {"triPlanarNormalStrength", 1.0f},
+                    {"doubleSided", material.doubleSided},
+                    {"alphaMode", material.alphaMode},
+                    {"invertRoughnessTexture", false}}}};
+}
+
 bool ExportElementsMeshPayload(const std::string &documentId,
                                const ElementExportRecord &record,
                                const std::vector<ModelerAPI::Element> &elements,
@@ -1027,6 +1081,8 @@ bool ExportElementsMeshPayload(const std::string &documentId,
     materialHeader.thinWalled = 0.0f;
     materialHeader.translucency = 0.0f;
     materialHeader.nameLength = static_cast<uint32_t>(material.name.size());
+    materialHeader.materialStableIdLength =
+      static_cast<uint32_t>(material.materialStableId.size());
     materialHeader.materialModelLength = static_cast<uint32_t>(material.materialModel.size());
     materialHeader.alphaModeLength = static_cast<uint32_t>(material.alphaMode.size());
     materialHeader.baseColorTextureUriLength =
@@ -1034,6 +1090,7 @@ bool ExportElementsMeshPayload(const std::string &documentId,
     stream.write(reinterpret_cast<const char *>(&materialHeader),
                  sizeof(materialHeader));
     if (!WriteNativePayloadString(stream, material.name) ||
+      !WriteNativePayloadString(stream, material.materialStableId) ||
         !WriteNativePayloadString(stream, material.materialModel) ||
         !WriteNativePayloadString(stream, material.alphaMode) ||
         !WriteNativePayloadString(stream, material.baseColorTextureUri) ||
@@ -1129,7 +1186,7 @@ bool ExportSceneElements(const DocumentInfo &documentInfo,
 
   std::vector<ElementExportRecord> exportedElements;
   std::unordered_map<int, MaterialExportRecord> materialTemplatesByKey;
-  std::vector<MaterialExportRecord> exportedMaterials;
+  std::unordered_map<std::string, MaterialExportRecord> exportedMaterialsByObjectId;
   const int elementCount = model.GetElementCount();
 
   std::unordered_set<std::string> assignedObjectIds;
@@ -1191,17 +1248,44 @@ bool ExportSceneElements(const DocumentInfo &documentInfo,
          record.materialBindings) {
       auto [it, inserted] = materialTemplatesByKey.emplace(
           binding.materialKey, MaterialExportRecord{});
-      MaterialExportRecord material;
       if (inserted) {
         PopulateMaterialExportRecord(binding.materialKey, &it->second);
       }
-      material = it->second;
-      AssignMaterialBindingIdentity(record, binding, &material);
-      exportedMaterials.push_back(std::move(material));
+      const MaterialExportRecord &materialTemplate = it->second;
+      const std::string materialObjectId =
+          MakeMaterialObjectId(materialTemplate.materialStableId,
+                               materialTemplate.materialKey);
+      auto mergedIt = exportedMaterialsByObjectId.find(materialObjectId);
+      if (mergedIt == exportedMaterialsByObjectId.end()) {
+        MaterialExportRecord material = materialTemplate;
+        material.objectId = materialObjectId;
+        material.nodeObjectId.clear();
+        material.materialSlot = binding.materialSlot;
+        material.references.clear();
+        mergedIt = exportedMaterialsByObjectId
+                       .emplace(materialObjectId, std::move(material))
+                       .first;
+      }
+      AssignMaterialBindingIdentity(record, binding, &mergedIt->second);
     }
 
     exportedElements.push_back(std::move(record));
   }
+
+  std::vector<MaterialExportRecord> exportedMaterials;
+  exportedMaterials.reserve(exportedMaterialsByObjectId.size());
+  for (auto &[_, material] : exportedMaterialsByObjectId) {
+    DeduplicateMaterialReferences(&material);
+    exportedMaterials.push_back(std::move(material));
+  }
+  std::sort(exportedMaterials.begin(), exportedMaterials.end(),
+            [](const MaterialExportRecord &lhs,
+               const MaterialExportRecord &rhs) {
+              if (lhs.name != rhs.name) {
+                return lhs.name < rhs.name;
+              }
+              return lhs.objectId < rhs.objectId;
+            });
 
   *outElements = std::move(exportedElements);
   *outMaterials = std::move(exportedMaterials);
@@ -1237,6 +1321,7 @@ private:
   DocumentInfo ReadDocumentInfo() const;
   std::string MakeSessionId() const;
   void AppendExportDeltas(const std::vector<ElementExportRecord> &elements,
+                          const std::vector<MaterialExportRecord> &materials,
                           const CameraExportRecord *camera,
                           std::vector<json> *outDeltas,
                           uint64_t *ioRevision) const;
@@ -1517,6 +1602,7 @@ bool LiveLinkSessionController::EnsureSessionOpened(bool reportOnSuccess,
 
 void LiveLinkSessionController::AppendExportDeltas(
     const std::vector<ElementExportRecord> &elements,
+  const std::vector<MaterialExportRecord> &materials,
     const CameraExportRecord *camera,
     std::vector<json> *outDeltas, uint64_t *ioRevision) const {
   if (outDeltas == nullptr || ioRevision == nullptr) {
@@ -1575,6 +1661,11 @@ void LiveLinkSessionController::AppendExportDeltas(
                                          std::to_string(element.indexCount)}}}});
   }
 
+  for (const MaterialExportRecord &material : materials) {
+    outDeltas->push_back(
+        MakeMaterialDelta(m_documentInfo.documentId, material, (*ioRevision)++));
+  }
+
   if (camera != nullptr && camera->valid) {
     outDeltas->push_back(
         MakeCameraDelta(m_documentInfo.documentId, *camera, (*ioRevision)++));
@@ -1619,6 +1710,7 @@ void LiveLinkSessionController::BuildMaterialRecordsForKeys(
     return;
   }
 
+  std::unordered_map<std::string, MaterialExportRecord> mergedMaterials;
   for (const auto &[_, element] : m_exportedElements) {
     for (const ElementExportRecord::MaterialBinding &binding :
          element.materialBindings) {
@@ -1634,10 +1726,34 @@ void LiveLinkSessionController::BuildMaterialRecordsForKeys(
         PopulateMaterialExportRecord(binding.materialKey, &material);
       }
 
-      AssignMaterialBindingIdentity(element, binding, &material);
-      outMaterials->push_back(std::move(material));
+      const std::string materialObjectId =
+          MakeMaterialObjectId(material.materialStableId, material.materialKey);
+      auto mergedIt = mergedMaterials.find(materialObjectId);
+      if (mergedIt == mergedMaterials.end()) {
+        material.objectId = materialObjectId;
+        material.nodeObjectId.clear();
+        material.materialSlot = binding.materialSlot;
+        material.references.clear();
+        mergedIt =
+            mergedMaterials.emplace(materialObjectId, std::move(material)).first;
+      }
+      AssignMaterialBindingIdentity(element, binding, &mergedIt->second);
     }
   }
+
+  outMaterials->reserve(mergedMaterials.size());
+  for (auto &[_, material] : mergedMaterials) {
+    DeduplicateMaterialReferences(&material);
+    outMaterials->push_back(std::move(material));
+  }
+  std::sort(outMaterials->begin(), outMaterials->end(),
+            [](const MaterialExportRecord &lhs,
+               const MaterialExportRecord &rhs) {
+              if (lhs.name != rhs.name) {
+                return lhs.name < rhs.name;
+              }
+              return lhs.objectId < rhs.objectId;
+            });
 }
 
 void LiveLinkSessionController::UpdateMaterialStateCache(
@@ -1771,7 +1887,7 @@ bool LiveLinkSessionController::ExportFullScene(bool startingSession,
   CameraExportRecord exportedCamera = {};
   const bool hasExportedCamera = ReadCurrentCamera(&exportedCamera);
   uint64_t revision = m_nextRevision;
-  AppendExportDeltas(elements,
+  AppendExportDeltas(elements, materials,
                      hasExportedCamera ? &exportedCamera : nullptr, &deltas,
                      &revision);
   if (!SendDeltaChunks(deltas, true, withDialog)) {
@@ -1916,7 +2032,8 @@ bool LiveLinkSessionController::ExportDirtyElements(bool reportSuccess,
     deltas.push_back(
         MakeNodeRemovedDelta(m_documentInfo.documentId, objectId, revision++));
   }
-  AppendExportDeltas(changedElements, nullptr, &deltas, &revision);
+  AppendExportDeltas(changedElements, changedMaterials, nullptr, &deltas,
+                     &revision);
 
   if (!deltas.empty() && !SendDeltaChunks(deltas, false, withDialog)) {
     HandleSessionLost(kReconnectRetryInterval);
@@ -1924,6 +2041,7 @@ bool LiveLinkSessionController::ExportDirtyElements(bool reportSuccess,
   }
 
   m_nextRevision = revision;
+  UpdateMaterialStateCache(changedMaterials);
   for (const std::string &objectId : removedObjectIds) {
     m_removedElementObjectIds.erase(objectId);
     m_dirtyElementObjectIds.erase(objectId);

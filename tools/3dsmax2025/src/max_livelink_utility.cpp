@@ -1044,7 +1044,7 @@ struct LightSnapshot {
 
 struct NativeMeshPayloadHeader {
   uint32_t magic = 0x48534D50; // PMSH
-  uint32_t version = 3;
+  uint32_t version = 4;
   uint32_t meshCount = 0;
   uint32_t reserved = 0;
 };
@@ -1091,6 +1091,7 @@ struct NativeMeshPayloadMaterialHeader {
   float triPlanarSharpness = 4.0f;
   float triPlanarNormalStrength = 1.0f;
   uint32_t nameLength = 0;
+  uint32_t materialStableIdLength = 0;
   uint32_t materialModelLength = 0;
   uint32_t alphaModeLength = 0;
   uint32_t baseColorTextureUriLength = 0;
@@ -3653,6 +3654,8 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
     materialHeader.triPlanarSharpness = material.triPlanarSharpness;
     materialHeader.triPlanarNormalStrength = material.triPlanarNormalStrength;
     materialHeader.nameLength = static_cast<uint32_t>(material.name.size());
+    materialHeader.materialStableIdLength =
+      static_cast<uint32_t>(material.materialStableId.size());
     materialHeader.materialModelLength =
         static_cast<uint32_t>(material.materialModel.size());
     materialHeader.alphaModeLength = static_cast<uint32_t>(material.alphaMode.size());
@@ -3669,6 +3672,7 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
     stream.write(reinterpret_cast<const char *>(&materialHeader),
                  sizeof(materialHeader));
     if (!WriteNativePayloadString(stream, material.name) ||
+      !WriteNativePayloadString(stream, material.materialStableId) ||
         !WriteNativePayloadString(stream, material.materialModel) ||
         !WriteNativePayloadString(stream, material.alphaMode) ||
         !WriteNativePayloadString(stream, material.baseColorTextureUri) ||

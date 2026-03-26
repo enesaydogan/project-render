@@ -55,6 +55,8 @@ static std::vector<Asset::GpuMesh> s_pendingMeshes;
 static std::vector<Asset::Material> s_pendingMaterials;
 static std::vector<Asset::Texture> s_pendingTextures;
 static std::unordered_map<std::string, int> s_textureIndicesBySourceUri;
+static std::vector<std::string> s_materialStableIds;
+static std::unordered_map<std::string, int> s_materialIndicesByStableId;
 static std::string s_pendingPath;
 static std::atomic<bool> s_pendingReady(false);
 static std::mutex s_pendingMutex;
@@ -62,6 +64,34 @@ static ImGuizmo::OPERATION g_currentGizmoOp = ImGuizmo::TRANSLATE;
 static ImGuizmo::MODE g_currentGizmoMode = ImGuizmo::WORLD;
 
 static void EnsureGpuBuffersForMeshes(std::vector<Asset::GpuMesh> &meshes);
+
+static void EnsureMaterialMetadataStorage() {
+  if (s_materialStableIds.size() < g_loadedMaterials.size()) {
+    s_materialStableIds.resize(g_loadedMaterials.size());
+  } else if (s_materialStableIds.size() > g_loadedMaterials.size()) {
+    s_materialStableIds.resize(g_loadedMaterials.size());
+  }
+
+  s_materialIndicesByStableId.clear();
+  for (size_t materialIndex = 0; materialIndex < s_materialStableIds.size();
+       ++materialIndex) {
+    const std::string &stableId = s_materialStableIds[materialIndex];
+    if (stableId.empty()) {
+      continue;
+    }
+    s_materialIndicesByStableId[stableId] = static_cast<int>(materialIndex);
+  }
+}
+
+static std::string NormalizeMaterialStableId(const std::string &stableId) {
+  if (stableId.empty()) {
+    return {};
+  }
+  if (stableId.rfind("material:id:", 0) == 0) {
+    return stableId.substr(strlen("material:id:"));
+  }
+  return stableId;
+}
 
 static ImGuizmo::OPERATION GetActiveGizmoOperation() {
   if (g_currentGizmoOp == ImGuizmo::ROTATE) {
@@ -477,8 +507,10 @@ void RequestRendererTlasRefresh() {
 
 static std::vector<int> ResolveReplacementMaterialIndices(
     const Node &node, std::vector<Asset::Material> &materials,
+    const std::vector<std::string> *materialStableIds = nullptr,
     bool allowSharedByNameReuse = true,
     bool overwriteResolvedMaterials = false) {
+  EnsureMaterialMetadataStorage();
   std::vector<int> linkedMaterialIndices = node.linkedMaterialIndices;
   std::vector<std::string> linkedMaterialNames = node.linkedMaterialSourceNames;
   if (linkedMaterialIndices.empty()) {
@@ -492,9 +524,20 @@ static std::vector<int> ResolveReplacementMaterialIndices(
   std::vector<int> localToGlobal(materials.size(), -1);
   for (size_t i = 0; i < materials.size(); ++i) {
     const std::string importedName = materials[i].name;
+    const std::string stableId =
+        materialStableIds && i < materialStableIds->size()
+            ? NormalizeMaterialStableId((*materialStableIds)[i])
+            : std::string();
     int globalMaterialIndex =
         FindLinkedMaterialByName(linkedMaterialNames, linkedMaterialIndices,
                                  importedName, &reused);
+
+    if (globalMaterialIndex < 0 && !stableId.empty()) {
+      const auto existingStable = s_materialIndicesByStableId.find(stableId);
+      if (existingStable != s_materialIndicesByStableId.end()) {
+        globalMaterialIndex = existingStable->second;
+      }
+    }
 
     if (globalMaterialIndex < 0 && i < linkedMaterialIndices.size()) {
       const int fallbackIndex = linkedMaterialIndices[i];
@@ -514,9 +557,23 @@ static std::vector<int> ResolveReplacementMaterialIndices(
     if (globalMaterialIndex < 0) {
       globalMaterialIndex = (int)g_loadedMaterials.size();
       g_loadedMaterials.push_back(materials[i]);
+      if (s_materialStableIds.size() < g_loadedMaterials.size()) {
+        s_materialStableIds.resize(g_loadedMaterials.size());
+      }
     } else if (overwriteResolvedMaterials &&
                globalMaterialIndex < (int)g_loadedMaterials.size()) {
       g_loadedMaterials[(size_t)globalMaterialIndex] = materials[i];
+    }
+
+    if (globalMaterialIndex >= 0 &&
+        globalMaterialIndex < static_cast<int>(g_loadedMaterials.size())) {
+      if (s_materialStableIds.size() < g_loadedMaterials.size()) {
+        s_materialStableIds.resize(g_loadedMaterials.size());
+      }
+      if (!stableId.empty()) {
+        s_materialStableIds[static_cast<size_t>(globalMaterialIndex)] = stableId;
+        s_materialIndicesByStableId[stableId] = globalMaterialIndex;
+      }
     }
 
     localToGlobal[i] = globalMaterialIndex;
@@ -650,6 +707,7 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
   Node importNodeProbe;
   std::vector<int> localToGlobal =
       ResolveReplacementMaterialIndices(importNodeProbe, payload.materials,
+               &payload.materialStableIds,
                        !isLiveLinkPayload,
                        isLiveLinkPayload);
   g_loadedMeshes.insert(g_loadedMeshes.end(), payload.meshes.begin(),
@@ -716,6 +774,7 @@ bool ReplaceNodeImportedContent(size_t index, ImportedNodePayload payload) {
 
   std::vector<int> localToGlobal =
       ResolveReplacementMaterialIndices(node, payload.materials,
+               &payload.materialStableIds,
                        !isLiveLinkPayload,
                        isLiveLinkPayload);
 
@@ -1392,11 +1451,47 @@ int FindMaterialByName(const std::string &name) {
   return -1;
 }
 
+int FindMaterialByStableId(const std::string &stableId) {
+  const std::string normalized = NormalizeMaterialStableId(stableId);
+  if (normalized.empty()) {
+    return -1;
+  }
+  EnsureMaterialMetadataStorage();
+  const auto it = s_materialIndicesByStableId.find(normalized);
+  if (it == s_materialIndicesByStableId.end()) {
+    return -1;
+  }
+  return it->second;
+}
+
 bool GetMaterial(size_t index, Asset::Material *outMaterial) {
   if (!outMaterial || index >= g_loadedMaterials.size()) {
     return false;
   }
   *outMaterial = g_loadedMaterials[index];
+  return true;
+}
+
+bool SetMaterialStableId(size_t index, const std::string &stableId) {
+  if (index >= g_loadedMaterials.size()) {
+    return false;
+  }
+
+  EnsureMaterialMetadataStorage();
+  const std::string normalized = NormalizeMaterialStableId(stableId);
+  if (normalized.empty()) {
+    if (index < s_materialStableIds.size()) {
+      s_materialStableIds[index].clear();
+    }
+    EnsureMaterialMetadataStorage();
+    return true;
+  }
+
+  if (s_materialStableIds.size() < g_loadedMaterials.size()) {
+    s_materialStableIds.resize(g_loadedMaterials.size());
+  }
+  s_materialStableIds[index] = normalized;
+  s_materialIndicesByStableId[normalized] = static_cast<int>(index);
   return true;
 }
 
@@ -2535,6 +2630,9 @@ void ResetScene() {
   g_loadedMeshes.clear();
   g_loadedMaterials.clear();
   g_loadedTextures.clear();
+  s_materialStableIds.clear();
+  s_materialIndicesByStableId.clear();
+  s_textureIndicesBySourceUri.clear();
   AnimationSequence::Clear();
   SavedViews::Clear();
   g_textureDescriptorCount = 0;
