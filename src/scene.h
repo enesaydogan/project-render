@@ -42,6 +42,7 @@ struct ImportedNodePayload {
   std::string displayName;
   std::vector<Asset::GpuMesh> meshes;
   std::vector<Asset::Material> materials;
+  std::vector<std::string> materialStableIds;
   std::vector<Asset::Texture> textures;
   std::vector<std::string> textureSourceUris;
 };
@@ -107,7 +108,9 @@ void SelectLight(int index);
 size_t GetMaterialCount();
 size_t GetTextureCount();
 int FindMaterialByName(const std::string &name);
+int FindMaterialByStableId(const std::string &stableId);
 bool GetMaterial(size_t index, Asset::Material *outMaterial);
+bool SetMaterialStableId(size_t index, const std::string &stableId);
 bool RebindNodeMaterialSlot(size_t nodeIndex, size_t materialSlot,
                             int materialIndex);
 bool UpdateNodeMaterialSourceName(size_t nodeIndex, size_t materialSlot,

@@ -216,6 +216,7 @@ struct NativeMeshPayloadMaterialHeader {
   float triPlanarSharpness = 4.0f;
   float triPlanarNormalStrength = 1.0f;
   uint32_t nameLength = 0;
+  uint32_t materialStableIdLength = 0;
   uint32_t materialModelLength = 0;
   uint32_t alphaModeLength = 0;
   uint32_t baseColorTextureUriLength = 0;
@@ -275,6 +276,7 @@ int AppendNativePayloadTexture(const std::string &textureUri,
 bool LoadNativeMeshPayload(const std::string &path,
                            std::vector<Asset::GpuMesh> *outMeshes,
                            std::vector<Asset::Material> *outMaterials,
+                           std::vector<std::string> *outMaterialStableIds,
                            std::vector<Asset::Texture> *outTextures,
                            std::vector<std::string> *outTextureSourceUris) {
   if (!outMeshes) {
@@ -286,6 +288,9 @@ bool LoadNativeMeshPayload(const std::string &path,
   }
   if (outTextures) {
     outTextures->clear();
+  }
+  if (outMaterialStableIds) {
+    outMaterialStableIds->clear();
   }
   if (outTextureSourceUris) {
     outTextureSourceUris->clear();
@@ -343,7 +348,7 @@ bool LoadNativeMeshPayload(const std::string &path,
            outMeshes->front().indexCount > 0;
   }
 
-  if (header.version != 2 && header.version != 3) {
+  if (header.version != 2 && header.version != 3 && header.version != 4) {
     return false;
   }
 
@@ -390,10 +395,13 @@ bool LoadNativeMeshPayload(const std::string &path,
     outMeshes->push_back(std::move(mesh));
   }
 
-  if (header.version == 3 && outMaterials) {
+  if ((header.version == 3 || header.version == 4) && outMaterials) {
     std::unordered_map<std::string, int> textureIndicesByUri;
     const uint32_t materialCount = header.reserved;
     outMaterials->reserve(materialCount);
+    if (outMaterialStableIds) {
+      outMaterialStableIds->reserve(materialCount);
+    }
 
     for (uint32_t materialIndex = 0; materialIndex < materialCount;
          ++materialIndex) {
@@ -404,6 +412,7 @@ bool LoadNativeMeshPayload(const std::string &path,
       }
 
       std::string name;
+  std::string materialStableId;
       std::string materialModel;
       std::string alphaMode;
       std::string baseColorTextureUri;
@@ -411,7 +420,10 @@ bool LoadNativeMeshPayload(const std::string &path,
       std::string emissiveTextureUri;
       std::string occlusionTextureUri;
       std::string metalRoughTextureUri;
-      if (!ReadNativePayloadString(stream, materialHeader.nameLength, &name) ||
+        if (!ReadNativePayloadString(stream, materialHeader.nameLength, &name) ||
+          (header.version >= 4 &&
+           !ReadNativePayloadString(stream, materialHeader.materialStableIdLength,
+                      &materialStableId)) ||
           !ReadNativePayloadString(stream, materialHeader.materialModelLength,
                                    &materialModel) ||
           !ReadNativePayloadString(stream, materialHeader.alphaModeLength,
@@ -494,6 +506,12 @@ bool LoadNativeMeshPayload(const std::string &path,
         outMaterials->resize(slot + 1);
       }
       (*outMaterials)[slot] = std::move(material);
+      if (outMaterialStableIds) {
+        if (outMaterialStableIds->size() <= slot) {
+          outMaterialStableIds->resize(slot + 1);
+        }
+        (*outMaterialStableIds)[slot] = std::move(materialStableId);
+      }
     }
   }
 
@@ -1011,6 +1029,7 @@ bool LiveLinkSceneSync::ApplyMeshPayloadChanged(const SceneDeltaBatch &batch,
 
   std::vector<Asset::GpuMesh> meshes;
   std::vector<Asset::Material> materials;
+  std::vector<std::string> materialStableIds;
   std::vector<Asset::Texture> textures;
   std::vector<std::string> textureSourceUris;
   const std::filesystem::path payloadPath =
@@ -1018,7 +1037,9 @@ bool LiveLinkSceneSync::ApplyMeshPayloadChanged(const SceneDeltaBatch &batch,
   const std::string extension = payloadPath.extension().string();
   const bool loaded = extension == ".prmesh"
                           ? LoadNativeMeshPayload(payload->payloadUri, &meshes,
-                                                  &materials, &textures,
+                                                  &materials,
+                                                  &materialStableIds,
+                                                  &textures,
                                                   &textureSourceUris)
                           : Asset::LoadModel(payload->payloadUri, meshes,
                                              &materials, &textures);
@@ -1056,6 +1077,7 @@ bool LiveLinkSceneSync::ApplyMeshPayloadChanged(const SceneDeltaBatch &batch,
   importedPayload.displayName = ResolveNodeName(delta, delta.debugLabel);
   importedPayload.meshes = std::move(meshes);
   importedPayload.materials = std::move(materials);
+  importedPayload.materialStableIds = std::move(materialStableIds);
   importedPayload.textures = std::move(textures);
   importedPayload.textureSourceUris = std::move(textureSourceUris);
 
@@ -1093,6 +1115,9 @@ bool LiveLinkSceneSync::ApplyMaterialChanged(const SceneDeltaBatch &batch,
   }
 
   const std::string materialName = ResolveMaterialDisplayName(delta, payload);
+  if (!payload->materialStableId.empty()) {
+    Scene::SetMaterialStableId(binding->handleIndex, payload->materialStableId);
+  }
 
   auto resolveReference = [&](const std::string &nodeObjectIdValue,
                               int materialSlotValue, size_t *outNodeIndex,
@@ -1620,6 +1645,9 @@ bool LiveLinkSceneSync::EnsureMaterialBinding(const SceneDeltaBatch &batch,
 
   ObjectBinding *binding = FindBinding(delta.target);
   int materialIndex = resolveMaterialIndexFromNodeSlot();
+  if (materialIndex < 0 && payload && !payload->materialStableId.empty()) {
+    materialIndex = Scene::FindMaterialByStableId(payload->materialStableId);
+  }
   if (materialIndex < 0) {
     materialIndex = ResolveMaterialIndexByName(delta, payload);
   }

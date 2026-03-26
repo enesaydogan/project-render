@@ -1044,11 +1044,26 @@ void MaterialEditorPanel::rebuildMaterialList()
 
     const bool showAll = m_showAllCheck->isChecked();
     std::vector<int> scopeIndices;
-    if (showAll || !selectedNode) {
-        scopeIndices.reserve(g_loadedMaterials.size());
-        for (int i = 0; i < static_cast<int>(g_loadedMaterials.size()); ++i) {
-            scopeIndices.push_back(i);
+    auto gatherSceneMaterialIndices = [&]() {
+        std::vector<int> indices;
+        for (const Scene::Node &node : nodes) {
+            for (size_t meshIndex : node.meshIndices) {
+                if (meshIndex >= g_loadedMeshes.size()) {
+                    continue;
+                }
+                const int matIdx = g_loadedMeshes[meshIndex].materialIndex;
+                if (matIdx < 0 || matIdx >= static_cast<int>(g_loadedMaterials.size())) {
+                    continue;
+                }
+                if (std::find(indices.begin(), indices.end(), matIdx) == indices.end()) {
+                    indices.push_back(matIdx);
+                }
+            }
         }
+        return indices;
+    };
+    if (showAll || !selectedNode) {
+        scopeIndices = gatherSceneMaterialIndices();
     } else {
         for (size_t i = 0; i < selectedNode->meshIndices.size(); ++i) {
             const size_t meshIndex = selectedNode->meshIndices[i];

@@ -106,8 +106,8 @@ void Draw(HWND hwnd, bool &visible) {
             "Pick material by clicking the surface in the viewport");
     }
     ImGui::SameLine();
-    ImGui::TextDisabled("|  Loaded: %d materials, %d textures",
-                        (int)g_loadedMaterials.size(),
+    ImGui::TextDisabled("|  Scene materials: %d, textures: %d",
+              (int)g_loadedMaterials.size(),
                         (int)g_loadedTextures.size());
     ImGui::Separator();
 
@@ -130,10 +130,23 @@ void Draw(HWND hwnd, bool &visible) {
     static int s_lastSelectedNodeIndex = -2;
 
     std::vector<int> materialIndices;
+    auto gatherSceneMaterialIndices = [&]() {
+      std::vector<int> indices;
+      for (const Scene::Node &node : nodes) {
+        for (size_t meshIndex : node.meshIndices) {
+          if (meshIndex >= g_loadedMeshes.size())
+            continue;
+          const int matIdx = g_loadedMeshes[meshIndex].materialIndex;
+          if (matIdx < 0 || matIdx >= (int)g_loadedMaterials.size())
+            continue;
+          if (std::find(indices.begin(), indices.end(), matIdx) == indices.end())
+            indices.push_back(matIdx);
+        }
+      }
+      return indices;
+    };
     if (s_showAllMaterials || !selectedNode) {
-      materialIndices.reserve(g_loadedMaterials.size());
-      for (int i = 0; i < (int)g_loadedMaterials.size(); ++i)
-        materialIndices.push_back(i);
+      materialIndices = gatherSceneMaterialIndices();
     } else {
       // Unique materials used by the selected node
       for (size_t i = 0; i < selectedNode->meshIndices.size(); ++i) {
