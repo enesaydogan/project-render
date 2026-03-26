@@ -19,9 +19,9 @@ class QLabel;
 class QLineEdit;
 class QListWidget;
 class QPushButton;
+class QShowEvent;
 class SliderControl;
 class QTabWidget;
-class QTimer;
 
 class MaterialEditorPanel : public QWidget
 {
@@ -52,6 +52,7 @@ private:
 
     void createUi();
     void refreshMaterials();
+    void scheduleRefresh();
     void rebuildMaterialList();
     void syncInspector();
     void updateQa();
@@ -71,12 +72,15 @@ private:
 
     int currentMaterialIndex() const;
     void setSelectedMaterial(int materialIndex, bool ensureVisible);
+    void showEvent(QShowEvent *event) override;
 
     bool m_syncing = false;
+    bool m_refreshQueued = false;
     int m_selectedMaterial = -1;
     int m_lastSelectedNodeIndex = -2;
+    size_t m_sceneChangeListenerId = 0;
+    size_t m_editorStateListenerId = 0;
 
-    QTimer *m_refreshTimer = nullptr;
     std::vector<int> m_materialIndices;
 
     QPushButton *m_pickButton = nullptr;

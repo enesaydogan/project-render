@@ -3,6 +3,7 @@
 #include "assets/asset_loader.h"
 #include "light.h"
 #include <DirectXMath.h>
+#include <functional>
 #include <string>
 #include <vector>
 #include <windows.h>
@@ -93,6 +94,8 @@ bool SetNodeLiveLinkManaged(size_t index, bool liveLinkManaged);
 bool SetNodeParent(size_t index, size_t parentIndex);
 bool RemoveNode(size_t index);
 void SelectNode(size_t index);
+size_t RegisterChangeListener(std::function<void()> callback);
+void UnregisterChangeListener(size_t listenerId);
 std::vector<Instance> GetInstances();
 
 // Light manipulation

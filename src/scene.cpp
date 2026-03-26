@@ -57,6 +57,8 @@ static std::vector<Asset::Texture> s_pendingTextures;
 static std::unordered_map<std::string, int> s_textureIndicesBySourceUri;
 static std::vector<std::string> s_materialStableIds;
 static std::unordered_map<std::string, int> s_materialIndicesByStableId;
+static size_t s_nextChangeListenerId = 1;
+static std::unordered_map<size_t, std::function<void()>> s_changeListeners;
 static std::string s_pendingPath;
 static std::atomic<bool> s_pendingReady(false);
 static std::mutex s_pendingMutex;
@@ -64,6 +66,24 @@ static ImGuizmo::OPERATION g_currentGizmoOp = ImGuizmo::TRANSLATE;
 static ImGuizmo::MODE g_currentGizmoMode = ImGuizmo::WORLD;
 
 static void EnsureGpuBuffersForMeshes(std::vector<Asset::GpuMesh> &meshes);
+
+static void NotifySceneChanged() {
+  if (s_changeListeners.empty()) {
+    return;
+  }
+
+  std::vector<std::function<void()>> callbacks;
+  callbacks.reserve(s_changeListeners.size());
+  for (const auto &[_, callback] : s_changeListeners) {
+    if (callback) {
+      callbacks.push_back(callback);
+    }
+  }
+
+  for (const auto &callback : callbacks) {
+    callback();
+  }
+}
 
 static void EnsureMaterialMetadataStorage() {
   if (s_materialStableIds.size() < g_loadedMaterials.size()) {
@@ -687,6 +707,7 @@ const std::string &LastStatus() { return s_lastStatus; }
 
 size_t AddNode(Node node) {
   s_nodes.push_back(std::move(node));
+  NotifySceneChanged();
   return s_nodes.empty() ? (size_t)-1 : (s_nodes.size() - 1);
 }
 
@@ -744,6 +765,7 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
 
   ApplyRendererInvalidation(
       RendererInvalidationPlan::FullAccelerationStructureRebuild);
+  NotifySceneChanged();
   if (outNodeIndex) {
     *outNodeIndex = nodeIndex;
   }
@@ -808,6 +830,7 @@ bool ReplaceNodeImportedContent(size_t index, ImportedNodePayload payload) {
 
   ApplyRendererInvalidation(
       RendererInvalidationPlan::FullAccelerationStructureRebuild);
+  NotifySceneChanged();
 
   s_lastStatus = std::string("Reimported: ") +
                  (effectiveSourcePath.empty() ? node.name : effectiveSourcePath);
@@ -820,6 +843,7 @@ bool RenameNode(size_t index, const std::string &name) {
     return false;
   }
   s_nodes[index].name = name;
+  NotifySceneChanged();
   return true;
 }
 
@@ -1168,6 +1192,17 @@ void SelectNode(size_t index) {
   s_selectedLightIdx = -1;
   if (index < s_nodes.size())
     s_nodes[index].selected = true;
+  NotifySceneChanged();
+}
+
+size_t RegisterChangeListener(std::function<void()> callback) {
+  const size_t listenerId = s_nextChangeListenerId++;
+  s_changeListeners.emplace(listenerId, std::move(callback));
+  return listenerId;
+}
+
+void UnregisterChangeListener(size_t listenerId) {
+  s_changeListeners.erase(listenerId);
 }
 
 bool RemoveNode(size_t index) {
@@ -1196,6 +1231,7 @@ bool RemoveNode(size_t index) {
   }
 
   LiveLink::GetSceneSync().ReindexSceneNodeBindingsAfterRemoval(index);
+  NotifySceneChanged();
   return true;
 }
 
@@ -1392,11 +1428,13 @@ int GetSelectedLightIndex() { return s_selectedLightIdx; }
 void SelectLight(int index) {
   if (index < 0 || index >= (int)s_lights.size()) {
     s_selectedLightIdx = -1;
+    NotifySceneChanged();
     return;
   }
   s_selectedLightIdx = index;
   for (auto &n : s_nodes)
     n.selected = false;
+  NotifySceneChanged();
 }
 
 size_t AddLight(LightType type) {
@@ -1523,6 +1561,7 @@ bool RebindNodeMaterialSlot(size_t nodeIndex, size_t materialSlot,
   }
 
   ApplyRendererInvalidation(RendererInvalidationPlan::AccumulationOnly);
+  NotifySceneChanged();
   return true;
 }
 
@@ -1564,6 +1603,7 @@ bool UpdateMaterial(size_t index, const Asset::Material &material) {
   dst = material;
   DxrRenderer::MarkMaterialDirty(static_cast<int>(index));
   ApplyRendererInvalidation(RendererInvalidationPlan::AccumulationOnly);
+  NotifySceneChanged();
   return true;
 }
 
@@ -1571,6 +1611,7 @@ void RemoveLight(size_t index) {
   if (index < s_lights.size()) {
     s_lights.erase(s_lights.begin() + index);
     LiveLink::GetSceneSync().ReindexSceneLightBindingsAfterRemoval(index);
+    NotifySceneChanged();
   }
 }
 
@@ -2646,6 +2687,7 @@ void ResetScene() {
   DxrRenderer::SetAutoExposure(false);
   DxrRenderer::SetPhysicalCameraExposure(true);
   DxrRenderer::SetPhysicalCameraSettings(100.0f, 1.0f / 30.0f, 2.8f);
+  NotifySceneChanged();
 }
 
 } // namespace Scene

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+#include <functional>
 #include <windows.h>
 
 namespace MaterialEditor {
@@ -16,4 +18,8 @@ namespace MaterialEditor {
     // Picking Tool State
     bool IsPickingEnabled();
     void SetPickingEnabled(bool enabled);
+
+    // Register for picked-material or picking-state changes.
+    size_t RegisterStateListener(std::function<void()> callback);
+    void UnregisterStateListener(size_t listenerId);
 }
