@@ -1231,6 +1231,8 @@ bool RemoveNode(size_t index) {
   }
 
   LiveLink::GetSceneSync().ReindexSceneNodeBindingsAfterRemoval(index);
+  ApplyRendererInvalidation(
+      RendererInvalidationPlan::FullAccelerationStructureRebuild);
   NotifySceneChanged();
   return true;
 }
