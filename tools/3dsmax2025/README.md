@@ -1,6 +1,6 @@
 # 3ds Max 2025 LiveLink
 
-This folder contains the first real 3ds Max-side LiveLink project for project-render.
+This folder contains the 3ds Max 2025 LiveLink project for project-render.
 
 Current scope:
 
@@ -12,7 +12,9 @@ Current scope:
   - `NodeAdded`
   - `NodeTransformChanged`
   - `NodeVisibilityChanged`
-- exports geometry nodes to temporary `.obj` files and sends `MeshPayloadChanged`
+- exports geometry nodes to native `.prmesh` payloads and sends `MeshPayloadChanged`
+- exports material state and sends `MaterialChanged`
+- exports camera and supported light state
 - polls the scene while the utility is active and sends incremental:
   - `NodeAdded`
   - `NodeRemoved`
@@ -20,14 +22,21 @@ Current scope:
   - `NodeVisibilityChanged`
   - `SelectionChanged`
   - `MeshPayloadChanged` when detected geometry changes require a fresh payload
+  - `MaterialChanged` when supported material state changes
 - sends `SessionClosed` when the utility is closed
+
+Material behavior:
+
+- `.prmesh` payloads now carry stable material IDs
+- shared scene materials are reused by stable ID instead of spawning duplicates per node slot
+- Multi/Sub slots stay bound to the correct faces while still resolving to one logical scene material when the DCC identity is shared
+- editing one shared material in the engine updates every surface bound to that Max material
 
 What it does not do yet:
 
-- camera, light, or material export from Max
 - UI controls inside the utility panel
 - robust topology/material dependency tracking beyond the current mesh fingerprint pass
-- cleanup of temporary mesh payload files
+- advanced dependency-driven partial export beyond the current polling and fingerprint pipeline
 
 ## Engine side
 
@@ -80,9 +89,9 @@ Then:
 
 Geometry notes:
 
-- renderable Max geometry is currently exported as temporary `.obj` payloads under the system temp directory
+- renderable Max geometry is currently exported as temporary `.prmesh` payloads under the system temp directory
 - node-only deltas create scene nodes in the engine, but visible meshes depend on `MeshPayloadChanged`
-- this path is intentionally minimal and does not yet preserve Max materials
+- material identity is preserved across resyncs so the engine can collapse repeated Max materials into shared scene materials
 
 ## Wire format
 
