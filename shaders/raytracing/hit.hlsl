@@ -14,22 +14,22 @@ float3 TriPlanarWeights(float3 n, float sharpness)
     return (s > 1e-5) ? (an / s) : float3(0.3333, 0.3333, 0.3333);
 }
 
-float Hash12(float2 p)
+float HitHash12(float2 p)
 {
     float3 p3 = frac(float3(p.xyx) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
     return frac((p3.x + p3.y) * p3.z);
 }
 
-float ValueNoise2D(float2 p)
+float HitValueNoise2D(float2 p)
 {
     float2 i = floor(p);
     float2 f = frac(p);
     float2 u = f * f * (3.0 - 2.0 * f);
-    float a = Hash12(i);
-    float b = Hash12(i + float2(1.0, 0.0));
-    float c = Hash12(i + float2(0.0, 1.0));
-    float d = Hash12(i + float2(1.0, 1.0));
+    float a = HitHash12(i);
+    float b = HitHash12(i + float2(1.0, 0.0));
+    float c = HitHash12(i + float2(0.0, 1.0));
+    float d = HitHash12(i + float2(1.0, 1.0));
     return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
 }
 
@@ -41,7 +41,7 @@ float GrassFieldNoise(float2 p)
     float2 q = p;
     [unroll]
     for (int octave = 0; octave < 3; ++octave) {
-        v += ValueNoise2D(q) * w;
+        v += HitValueNoise2D(q) * w;
         n += w;
         q = q * 2.13 + 11.7;
         w *= 0.5;
