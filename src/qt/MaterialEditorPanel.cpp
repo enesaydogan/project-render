@@ -28,7 +28,8 @@
 #include <QPushButton>
 #include <QStringList>
 #include <QTabWidget>
-#include <QTimer>
+#include <QMetaObject>
+#include <QShowEvent>
 #include <QVBoxLayout>
 #include <QSignalBlocker>
 
@@ -276,14 +277,33 @@ MaterialEditorPanel::MaterialEditorPanel(QWidget *parent)
     createUi();
     refreshMaterials();
 
-    m_refreshTimer = new QTimer(this);
-    connect(m_refreshTimer, &QTimer::timeout, this, [this]() {
-        refreshMaterials();
+    m_sceneChangeListenerId = Scene::RegisterChangeListener([this]() {
+        QMetaObject::invokeMethod(this, [this]() {
+            scheduleRefresh();
+        }, Qt::QueuedConnection);
     });
-    m_refreshTimer->start(250);
+    m_editorStateListenerId = MaterialEditor::RegisterStateListener([this]() {
+        QMetaObject::invokeMethod(this, [this]() {
+            scheduleRefresh();
+        }, Qt::QueuedConnection);
+    });
 }
 
-MaterialEditorPanel::~MaterialEditorPanel() = default;
+MaterialEditorPanel::~MaterialEditorPanel()
+{
+    if (m_sceneChangeListenerId != 0) {
+        Scene::UnregisterChangeListener(m_sceneChangeListenerId);
+    }
+    if (m_editorStateListenerId != 0) {
+        MaterialEditor::UnregisterStateListener(m_editorStateListenerId);
+    }
+}
+
+void MaterialEditorPanel::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event);
+    scheduleRefresh();
+}
 
 void MaterialEditorPanel::createUi()
 {
@@ -978,6 +998,7 @@ void MaterialEditorPanel::createUi()
 }
 void MaterialEditorPanel::refreshMaterials()
 {
+    m_refreshQueued = false;
     Scene::ProcessPendingImport();
     updateCounts();
     updatePickUi();
@@ -1019,6 +1040,17 @@ void MaterialEditorPanel::refreshMaterials()
 
     rebuildMaterialList();
     syncInspector();
+}
+
+void MaterialEditorPanel::scheduleRefresh()
+{
+    if (m_refreshQueued) {
+        return;
+    }
+    m_refreshQueued = true;
+    QMetaObject::invokeMethod(this, [this]() {
+        refreshMaterials();
+    }, Qt::QueuedConnection);
 }
 
 void MaterialEditorPanel::rebuildMaterialList()

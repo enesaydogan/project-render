@@ -6,6 +6,8 @@
 #include "imgui.h"
 #include "scene.h"
 #include <cmath>
+#include <functional>
+#include <unordered_map>
 #include <vector>
 #include <wrl.h>
 
@@ -23,6 +25,23 @@ namespace MaterialEditor {
 
 static int s_pendingMaterialSelect = -1;
 static bool s_pickingEnabled = false;
+static size_t s_nextStateListenerId = 1;
+static std::unordered_map<size_t, std::function<void()>> s_stateListeners;
+
+static void NotifyStateListeners() {
+  if (s_stateListeners.empty())
+    return;
+
+  std::vector<std::function<void()>> callbacks;
+  callbacks.reserve(s_stateListeners.size());
+  for (const auto &[_, callback] : s_stateListeners) {
+    if (callback)
+      callbacks.push_back(callback);
+  }
+
+  for (const auto &callback : callbacks)
+    callback();
+}
 
 static ImTextureID GetImGuiTexIDForTextureIndex(int textureIndex) {
   if (textureIndex < 0)
@@ -45,10 +64,26 @@ static ImTextureID GetImGuiTexIDForTextureIndex(int textureIndex) {
 }
 
 bool IsPickingEnabled() { return s_pickingEnabled; }
-void SetPickingEnabled(bool enabled) { s_pickingEnabled = enabled; }
+void SetPickingEnabled(bool enabled) {
+  if (s_pickingEnabled == enabled)
+    return;
+  s_pickingEnabled = enabled;
+  NotifyStateListeners();
+}
 
 void SelectMaterial(int materialIndex) {
   s_pendingMaterialSelect = materialIndex;
+  NotifyStateListeners();
+}
+
+size_t RegisterStateListener(std::function<void()> callback) {
+  const size_t listenerId = s_nextStateListenerId++;
+  s_stateListeners.emplace(listenerId, std::move(callback));
+  return listenerId;
+}
+
+void UnregisterStateListener(size_t listenerId) {
+  s_stateListeners.erase(listenerId);
 }
 
 int ConsumePendingMaterialSelect() {
