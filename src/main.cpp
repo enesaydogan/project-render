@@ -2669,28 +2669,39 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                 1, g_texturesGpuStart);
           }
 
-          // Bind Env Map + Shadow Map at root index 4 (space 1)
-          if (IBLManager::Get().IsLoaded()) {
+            // Bind Env Map + Shadow Map at root index 4 (space 1).
+            // When no IBL is loaded, bind a null env SRV so raster shading stays
+            // defined instead of sampling an unbound descriptor.
+            {
             auto alloc =
-                g_cbvSrvAllocator.Allocate(DX12Context::g_frameIndex % 2, 2);
+              g_cbvSrvAllocator.Allocate(DX12Context::g_frameIndex % 2, 2);
             auto device = DX12Context::g_device.Get();
 
-            // Copy Env Map (t0, space 1)
-            device->CopyDescriptorsSimple(
+            if (IBLManager::Get().IsLoaded()) {
+              device->CopyDescriptorsSimple(
                 1, alloc.cpu, IBLManager::Get().GetCPUHandle(),
                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            } else {
+              D3D12_SHADER_RESOURCE_VIEW_DESC nullEnvSrv = {};
+              nullEnvSrv.Shader4ComponentMapping =
+                D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+              nullEnvSrv.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+              nullEnvSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+              nullEnvSrv.Texture2D.MipLevels = 1;
+              device->CreateShaderResourceView(nullptr, &nullEnvSrv,
+                               alloc.cpu);
+            }
 
-            // Copy Shadow Map (t1, space 1)
             D3D12_CPU_DESCRIPTOR_HANDLE shadowCpu = alloc.cpu;
             shadowCpu.ptr += device->GetDescriptorHandleIncrementSize(
-                D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+              D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
             device->CopyDescriptorsSimple(
-                1, shadowCpu, RasterRenderer::GetShadowMapSrvCpu(),
-                D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+              1, shadowCpu, RasterRenderer::GetShadowMapSrvCpu(),
+              D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
             DX12Context::g_commandList->SetGraphicsRootDescriptorTable(
-                4, alloc.gpu);
-          }
+              4, alloc.gpu);
+            }
 
           // Draw all instances
           int lastMaterialIndex = -2;
@@ -2834,22 +2845,33 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             DX12Context::g_commandList->SetGraphicsRootDescriptorTable(
                 1, g_texturesGpuStart);
           }
-          if (IBLManager::Get().IsLoaded()) {
+            {
             auto alloc =
-                g_cbvSrvAllocator.Allocate(DX12Context::g_frameIndex % 2, 2);
+              g_cbvSrvAllocator.Allocate(DX12Context::g_frameIndex % 2, 2);
             auto device = DX12Context::g_device.Get();
-            device->CopyDescriptorsSimple(
+            if (IBLManager::Get().IsLoaded()) {
+              device->CopyDescriptorsSimple(
                 1, alloc.cpu, IBLManager::Get().GetCPUHandle(),
                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            } else {
+              D3D12_SHADER_RESOURCE_VIEW_DESC nullEnvSrv = {};
+              nullEnvSrv.Shader4ComponentMapping =
+                D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+              nullEnvSrv.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+              nullEnvSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+              nullEnvSrv.Texture2D.MipLevels = 1;
+              device->CreateShaderResourceView(nullptr, &nullEnvSrv,
+                               alloc.cpu);
+            }
             D3D12_CPU_DESCRIPTOR_HANDLE shadowCpu = alloc.cpu;
             shadowCpu.ptr += device->GetDescriptorHandleIncrementSize(
-                D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+              D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
             device->CopyDescriptorsSimple(
-                1, shadowCpu, RasterRenderer::GetShadowMapSrvCpu(),
-                D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+              1, shadowCpu, RasterRenderer::GetShadowMapSrvCpu(),
+              D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
             DX12Context::g_commandList->SetGraphicsRootDescriptorTable(
-                4, alloc.gpu);
-          }
+              4, alloc.gpu);
+            }
 
           struct MaterialCB {
             float diffuseColor[4];

@@ -99,7 +99,11 @@ PSInput VSMain(VSInput input) {
 #include "clouds.hlsl"
 
 float4 PSMain(PSInput input) : SV_TARGET {
-    const float kRasterSkyEnergyScale = 0.15f;
+    // Keep the visible raster sky noticeably dimmer than the lighting sky.
+    // Surface lighting already uses the full procedural sky energy, while the
+    // sky dome is only a background plate for SDR presentation.
+    const float kRasterVisibleSkyScale = 0.007f;
+    const float kRasterVisibleSunScale = 0.05f;
     float3 dir = normalize(input.viewDir);
     float2 uv = DirectionToUV(dir);
     float3 baseSky = envMap.SampleLevel(linearSampler, uv, 0).rgb;
@@ -119,9 +123,9 @@ float4 PSMain(PSInput input) : SV_TARGET {
          float3 sunRadiance = (lightColor.rgb * lightColor.w) / max(sunSolidAngle, 1e-7f);
          // match DXR sun disc brightness for consistency
          const float dxrSunDiscMatchGain = 1.12f;
-            color = sunRadiance * dxrSunDiscMatchGain * kRasterSkyEnergyScale;
+            color = sunRadiance * dxrSunDiscMatchGain * kRasterVisibleSunScale;
     } else {
-            color = baseSky * kRasterSkyEnergyScale;
+            color = baseSky * kRasterVisibleSkyScale;
     }
 
     // Use baked lat-long clouds when available (much cheaper than raymarching each pixel)
@@ -137,10 +141,12 @@ float4 PSMain(PSInput input) : SV_TARGET {
         float opacity = 1.0 - baked.a;
         float denseCore = pow(saturate(opacity), 2.2);
         float skyLeak = 0.10 * denseCore;
-        composed = baked.rgb * kRasterSkyEnergyScale +
+        composed = baked.rgb * kRasterVisibleSkyScale +
                    color * (baked.a + skyLeak);
         composed += color * (0.025 * denseCore);
     }
 
-    return float4(composed, 1.0);
+    // Mark sky pixels separately so raster auto-exposure can ignore the
+    // background plate and meter from scene geometry instead.
+    return float4(composed, 0.0);
 }
