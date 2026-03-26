@@ -64,6 +64,7 @@ cbuffer CameraCB : register(b1)
     float sampleEnvSolidAngle;
     float nrdEnabled;
     float exportRendering;
+    float dxrProceduralSkyBoost;
     float4x4 shadowMatrix;
     float4x4 viewProj;
     float4x4 invViewProj;

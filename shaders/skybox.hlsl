@@ -43,6 +43,7 @@ cbuffer CameraCB : register(b0)
     float sampleEnvSolidAngle;
     float nrdEnabled;
     float exportRendering;
+    float dxrProceduralSkyBoost;
 };
 
 Texture2D envMap : register(t0, space1);

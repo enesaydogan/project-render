@@ -163,6 +163,12 @@ cbuffer Camera : register(b0)
     float sampleEnvSolidAngle;
     float nrdEnabled;
     float exportRendering;
+    float dxrProceduralSkyBoost;
+}
+
+inline float GetDxrProceduralSkyBoost()
+{
+    return max(dxrProceduralSkyBoost, 0.0);
 }
 
 inline float2 DirectionToUVRotated(float3 dir) {
