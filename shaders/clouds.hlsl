@@ -68,6 +68,45 @@ float Remap(float x, float a, float b, float c, float d) {
     return c + (saturate((x - a) / (b - a))) * (d - c);
 }
 
+float CloudHash12(float2 p)
+{
+    float3 p3 = frac(float3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return frac((p3.x + p3.y) * p3.z);
+}
+
+float CloudValueNoise2D(float2 p)
+{
+    float2 cell = floor(p);
+    float2 fracPart = frac(p);
+    float2 smooth = fracPart * fracPart * (3.0 - 2.0 * fracPart);
+
+    float a = CloudHash12(cell);
+    float b = CloudHash12(cell + float2(1.0, 0.0));
+    float c = CloudHash12(cell + float2(0.0, 1.0));
+    float d = CloudHash12(cell + float2(1.0, 1.0));
+
+    return lerp(lerp(a, b, smooth.x), lerp(c, d, smooth.x), smooth.y);
+}
+
+float CloudWeatherNoise2D(float2 p)
+{
+    float value = 0.0;
+    float weight = 0.55;
+    float totalWeight = 0.0;
+    float2 q = p;
+
+    [unroll]
+    for (int octave = 0; octave < 4; ++octave) {
+        value += CloudValueNoise2D(q) * weight;
+        totalWeight += weight;
+        q = q * 2.07 + float2(19.31, 7.17);
+        weight *= 0.5;
+    }
+
+    return (totalWeight > 1e-5) ? (value / totalWeight) : 0.0;
+}
+
 // Small hash for jitter (works in raytracing shaders when common.hlsli is present)
 float InterleavedGradientNoise(uint2 pix, float frame) {
     // https://www.iryoku.com/next-generation-post-processing-in-call-of-duty-advanced-warfare
@@ -189,13 +228,20 @@ float SampleDensity(float3 p, float lod) {
     
     // 5. Cloud Type / Weather variation (simulated by large scale noise)
     // Acts as a "probability to spawn cloud here"
-    float3 coveragePos = p * CloudCB.coverageScale + float3(CloudCB.timeSeconds * CloudCB.windSpeed * 0.005, 0, 0);
-    
-    // Use 2D noise for weather map to prevent vertical streaking artifacts from 3D sampling
-    // 3D noise at large scales can look like vertical columns if the Z variation is slow
+    float3 coveragePos = p * CloudCB.coverageScale +
+                         float3(CloudCB.timeSeconds * CloudCB.windSpeed * 0.005, 0, 0);
+
+    // Use non-periodic procedural 2D weather noise instead of the wrapping
+    // tiled 3D texture slice. This avoids large repeating cloud blocks in the
+    // visible sky bake while keeping the weather field stable in world space.
     float2 weatherUV = coveragePos.xz;
-    // Map weatherUV to spherical cap? For now, large scale planar offset is fine locally.
-    float weatherNoise = NoiseTex.SampleLevel(LinearWrapSampler, float3(weatherUV, 0.5f), lod + 2.0).r;
+    float2 weatherUvA = float2(weatherUV.x * 0.82f - weatherUV.y * 0.57f,
+                               weatherUV.x * 0.57f + weatherUV.y * 0.82f);
+    float2 weatherUvB = float2(weatherUV.x * 1.13f + weatherUV.y * 0.41f,
+                              -weatherUV.x * 0.41f + weatherUV.y * 1.13f);
+    float weatherNoiseA = CloudWeatherNoise2D(weatherUvA + float2(11.7f, 3.1f));
+    float weatherNoiseB = CloudWeatherNoise2D(weatherUvB * 0.53f + float2(-5.2f, 8.4f));
+    float weatherNoise = lerp(weatherNoiseA, weatherNoiseB, 0.35f);
     
     // Sync weather mask with coverage so we don't punch holes in "full" coverage
     // Use remapped coverage here for consistent visual response.
