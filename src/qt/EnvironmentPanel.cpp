@@ -262,6 +262,7 @@ void EnvironmentPanel::syncFromRenderer()
     auto &ibl = IBLManager::Get();
     const bool usingFileIbl = ibl.GetIBLSource() == IBLManager::IBLSource::File;
     const bool physicalSky = ibl.IsPhysicalCalibrationEnabled();
+    const bool hasFileSun = usingFileIbl && ibl.HasFileSun();
 
     m_summaryLabel->setText(
         tr("Active source: %1\nSky avg luminance: %2 cd/m²")
@@ -275,7 +276,8 @@ void EnvironmentPanel::syncFromRenderer()
     m_iblSource->setCurrentIndex(usingFileIbl ? 0 : 1);
     m_iblRotation->setValue(ibl.GetIblRotationDegrees());
     m_solidAngleSampling->setChecked(g_cameraData.sampleEnvSolidAngle > 0.5f);
-    m_analyticSunIntensity->setValue(ibl.GetSunIntensity());
+    m_analyticSunIntensity->setValue(hasFileSun ? ibl.GetFileSunIntensity()
+                                                : ibl.GetSunIntensity());
     m_fileSunIntensity->setValue(ibl.GetFileSunIntensity());
     m_fileSunSize->setValue(ibl.GetFileSunRadiusDeg());
 
@@ -368,20 +370,37 @@ void EnvironmentPanel::applyLightingSettings(bool updateSkyModel, bool updateCam
     ibl.SetIBLSource(m_iblSource->currentIndex() == 0
                          ? IBLManager::IBLSource::File
                          : IBLManager::IBLSource::PragueSkyModel);
+    const bool usingFileIbl = ibl.GetIBLSource() == IBLManager::IBLSource::File;
+    const bool hasFileSun = usingFileIbl && ibl.HasFileSun();
     ibl.SetIblRotationDegrees(static_cast<float>(m_iblRotation->value()));
     g_cameraData.iblRotationDegrees = static_cast<float>(m_iblRotation->value());
     ibl.SetEnvSolidAngleSampling(m_solidAngleSampling->isChecked());
     g_cameraData.sampleEnvSolidAngle = m_solidAngleSampling->isChecked() ? 1.0f : 0.0f;
-    ibl.SetSunIntensity(static_cast<float>(m_analyticSunIntensity->value()));
 
     ibl.SetPhysicalCalibrationEnabled(m_physicalCalibration->isChecked());
     ibl.SetSkyVisibility(static_cast<float>(m_visibility->value()));
     ibl.SetSkyAlbedo(static_cast<float>(m_albedo->value()));
     ibl.SetObserverAltitude(static_cast<float>(m_altitude->value()));
     ibl.SetSkyIntensity(static_cast<float>(m_skyIntensity->value()));
-    ibl.SetSunIntensity(static_cast<float>(m_sunIntensity->value()));
+    if (hasFileSun) {
+        float fileSunIntensity = static_cast<float>(m_fileSunIntensity->value());
+        if (m_analyticSunIntensity->isInteracting() ||
+            !m_fileSunIntensity->isInteracting()) {
+            fileSunIntensity = static_cast<float>(m_analyticSunIntensity->value());
+        }
+        ibl.SetFileSunIntensity(fileSunIntensity);
+    } else {
+        float sunIntensity = static_cast<float>(m_sunIntensity->value());
+        if (m_analyticSunIntensity->isInteracting() ||
+            !m_sunIntensity->isInteracting()) {
+            sunIntensity = static_cast<float>(m_analyticSunIntensity->value());
+        }
+        ibl.SetSunIntensity(sunIntensity);
+    }
     ibl.SetSunSize(static_cast<float>(m_sunSize->value()));
-    ibl.SetFileSunIntensity(static_cast<float>(m_fileSunIntensity->value()));
+    if (!hasFileSun) {
+        ibl.SetFileSunIntensity(static_cast<float>(m_fileSunIntensity->value()));
+    }
     ibl.SetFileSunRadiusDeg(static_cast<float>(m_fileSunSize->value()));
 
     g_timeOfDay = static_cast<float>(m_timeOfDay->value());
