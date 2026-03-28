@@ -4,6 +4,8 @@
 
 namespace {
 
+constexpr DWORD kPipeConnectTimeoutMs = 25;
+
 std::string MakePipePath(const std::string &pipeName) {
   if (pipeName.rfind(R"(\\.\pipe\)", 0) == 0) {
     return pipeName;
@@ -43,7 +45,7 @@ bool MaxLiveLinkPipeClient::Connect(const std::string &pipeName) {
   Disconnect();
 
   const std::string pipePath = MakePipePath(pipeName);
-  if (!WaitNamedPipeA(pipePath.c_str(), 2000)) {
+  if (!WaitNamedPipeA(pipePath.c_str(), kPipeConnectTimeoutMs)) {
     m_lastError = "WaitNamedPipeA failed: " +
                   FormatWindowsError(::GetLastError());
     return false;
