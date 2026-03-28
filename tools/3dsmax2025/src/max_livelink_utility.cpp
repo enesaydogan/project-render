@@ -818,8 +818,7 @@ void GatherNodeGuidUsage(INode *node,
   }
 }
 
-void EnsureUniqueNodeGuidsRecursive(
-    INode *node, std::unordered_set<std::string> *seenGuids) {
+void EnsureUniqueNodeGuid(INode *node, std::unordered_set<std::string> *seenGuids) {
   if (!node || !seenGuids) {
     return;
   }
@@ -837,8 +836,101 @@ void EnsureUniqueNodeGuidsRecursive(
   if (!rawGuid.empty()) {
     seenGuids->insert(rawGuid);
   }
+}
+
+void EnsureUniqueNodeGuidsRecursive(
+    INode *node, std::unordered_set<std::string> *seenGuids) {
+  if (!node || !seenGuids) {
+    return;
+  }
+
+  EnsureUniqueNodeGuid(node, seenGuids);
   for (int childIndex = 0; childIndex < node->NumberOfChildren(); ++childIndex) {
     EnsureUniqueNodeGuidsRecursive(node->GetChildNode(childIndex), seenGuids);
+  }
+}
+
+void EnsureUniqueMaterialGuidsRecursive(
+    Mtl *material, std::unordered_map<std::string, Mtl *> *owners,
+    std::unordered_set<Mtl *> *visited) {
+  if (!material || !owners || !visited || !visited->insert(material).second) {
+    return;
+  }
+
+  std::string rawGuid = ReadAppDataString(material, kMaterialGuidAppDataSubId);
+  auto needsNewGuid = [&]() {
+    if (rawGuid.empty()) {
+      return true;
+    }
+    const auto it = owners->find(rawGuid);
+    return it != owners->end() && it->second != material;
+  };
+
+  while (needsNewGuid()) {
+    rawGuid = GenerateGuidString();
+  }
+  if (!rawGuid.empty()) {
+    WriteAppDataString(material, kMaterialGuidAppDataSubId, rawGuid);
+    (*owners)[rawGuid] = material;
+  }
+
+  for (int subMaterialIndex = 0; subMaterialIndex < material->NumSubMtls();
+       ++subMaterialIndex) {
+    EnsureUniqueMaterialGuidsRecursive(material->GetSubMtl(subMaterialIndex),
+                                       owners, visited);
+  }
+}
+
+void EnsureUniqueSharedObjectGuid(
+    Object *object, std::unordered_map<std::string, Object *> *owners) {
+  if (!object || !owners) {
+    return;
+  }
+
+  std::string rawGuid =
+      ReadAppDataString(object, kSharedObjectGuidAppDataSubId);
+  auto needsNewGuid = [&]() {
+    if (rawGuid.empty()) {
+      return true;
+    }
+    const auto it = owners->find(rawGuid);
+    return it != owners->end() && it->second != object;
+  };
+
+  while (needsNewGuid()) {
+    rawGuid = GenerateGuidString();
+  }
+  if (!rawGuid.empty()) {
+    WriteAppDataString(object, kSharedObjectGuidAppDataSubId, rawGuid);
+    (*owners)[rawGuid] = object;
+  }
+}
+
+void EnsurePersistentIdentifiersRecursive(
+    INode *node, std::unordered_set<std::string> *seenNodeGuids,
+    std::unordered_map<std::string, Mtl *> *materialGuidOwners,
+    std::unordered_set<Mtl *> *visitedMaterials,
+    std::unordered_map<std::string, Object *> *sharedObjectGuidOwners) {
+  if (!node || !seenNodeGuids || !materialGuidOwners || !visitedMaterials ||
+      !sharedObjectGuidOwners) {
+    return;
+  }
+
+  EnsureUniqueNodeGuid(node, seenNodeGuids);
+  if (Mtl *material = node->GetMtl()) {
+    EnsureUniqueMaterialGuidsRecursive(material, materialGuidOwners,
+                                       visitedMaterials);
+  }
+  if (Object *objectRef = node->GetObjectRef()) {
+    Object *baseObject = objectRef->FindBaseObject();
+    EnsureUniqueSharedObjectGuid(baseObject, sharedObjectGuidOwners);
+  }
+
+  for (int childIndex = 0; childIndex < node->NumberOfChildren(); ++childIndex) {
+    EnsurePersistentIdentifiersRecursive(node->GetChildNode(childIndex),
+                                         seenNodeGuids, materialGuidOwners,
+                                         visitedMaterials,
+                                         sharedObjectGuidOwners);
   }
 }
 
@@ -853,9 +945,15 @@ void EnsurePersistentSceneIdentifiers(Interface *ip) {
     return;
   }
 
-  std::unordered_set<std::string> seenGuids;
+  std::unordered_set<std::string> seenNodeGuids;
+  std::unordered_map<std::string, Mtl *> materialGuidOwners;
+  std::unordered_set<Mtl *> visitedMaterials;
+  std::unordered_map<std::string, Object *> sharedObjectGuidOwners;
   for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
-    EnsureUniqueNodeGuidsRecursive(root->GetChildNode(childIndex), &seenGuids);
+    EnsurePersistentIdentifiersRecursive(root->GetChildNode(childIndex),
+                                         &seenNodeGuids, &materialGuidOwners,
+                                         &visitedMaterials,
+                                         &sharedObjectGuidOwners);
   }
 }
 
@@ -4609,6 +4707,17 @@ private:
     }
 
     switch (info->intcode) {
+    case NOTIFY_FILE_POST_MERGE3:
+      if (info->callParam != nullptr) {
+        const NotifyPostMerge3Param *mergeParam =
+            static_cast<const NotifyPostMerge3Param *>(info->callParam);
+        if (mergeParam->mergeSuccess) {
+          utility->MarkFullResyncNeeded();
+        }
+      } else {
+        utility->MarkFullResyncNeeded();
+      }
+      break;
     case NOTIFY_SCENE_PRE_DELETED_NODE:
       if (info->callParam != nullptr) {
         utility->MarkNodeDirty(static_cast<INode *>(info->callParam),
@@ -4667,7 +4776,8 @@ private:
         NOTIFY_SCENE_PRE_DELETED_NODE, NOTIFY_SEL_NODES_PRE_DELETE,
         NOTIFY_SCENE_UNDO,             NOTIFY_SCENE_REDO,
         NOTIFY_SYSTEM_POST_RESET,      NOTIFY_SYSTEM_POST_NEW,
-        NOTIFY_SCENE_XREF_POST_MERGE,  NOTIFY_PRE_NODES_CLONED,
+        NOTIFY_SCENE_XREF_POST_MERGE,  NOTIFY_FILE_POST_MERGE3,
+        NOTIFY_PRE_NODES_CLONED,
         NOTIFY_POST_NODES_CLONED,      NOTIFY_SELECTIONSET_CHANGED,
         NOTIFY_SV_SELECTIONSET_CHANGED,
     };
