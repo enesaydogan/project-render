@@ -230,9 +230,14 @@ constexpr uint64_t kHeavyPollMinIntervalMs = 1000;
 constexpr uint64_t kReconnectPollMinIntervalMs = 1000;
 constexpr uint64_t kCameraPollMinIntervalMs = 33;
 constexpr uint64_t kTransformVerificationMinIntervalMs = 1500;
+constexpr uint64_t kLargeSceneTransformVerificationMinIntervalMs = 4000;
+constexpr uint64_t kHugeSceneTransformVerificationMinIntervalMs = 8000;
 constexpr uint64_t kSceneOperationSettleDelayMs = 350;
+constexpr uint64_t kResumeStatePersistDelayMs = 2500;
+constexpr size_t kPayloadRemovalBatchSize = 64;
 constexpr uint64_t kSlowPollThresholdMs = 150;
 constexpr size_t kLargeSceneNodeThreshold = 250;
+constexpr size_t kHugeSceneNodeThreshold = 1500;
 constexpr int kUtilityDialogId = 101;
 constexpr int kStatusControlId = 1001;
 constexpr int kStartControlId = 1002;
@@ -3384,16 +3389,32 @@ void RemoveNodePayloadFile(const std::string &documentId,
   if (!payloadPath.empty()) {
     std::filesystem::remove(payloadPath, error);
   }
+}
 
-  if (payloadPath.empty()) {
+void RemoveDocumentPayloadDirectoryIfEmpty(const std::string &documentId) {
+  if (documentId.empty()) {
     return;
   }
 
-  const std::filesystem::path documentDirectory = payloadPath.parent_path();
-  if (!documentDirectory.empty() && std::filesystem::is_directory(documentDirectory, error) &&
+  std::error_code error;
+  const std::filesystem::path documentDirectory =
+      GetDocumentPayloadDirectory(documentId);
+  if (!documentDirectory.empty() &&
+      std::filesystem::is_directory(documentDirectory, error) &&
       std::filesystem::is_empty(documentDirectory, error)) {
     std::filesystem::remove(documentDirectory, error);
   }
+}
+
+void RemoveNodePayloadFileAndMaybeCleanupDirectory(const std::string &documentId,
+                                                   const std::string &nodeObjectId) {
+  RemoveNodePayloadFile(documentId, nodeObjectId);
+  const std::filesystem::path payloadPath =
+      GetNodePayloadPath(documentId, nodeObjectId);
+  if (payloadPath.empty()) {
+    return;
+  }
+  RemoveDocumentPayloadDirectoryIfEmpty(documentId);
 }
 
 void CleanupPayloadRootDirectory() {
@@ -4453,7 +4474,7 @@ private:
         : m_owner(owner) {}
 
     void Added(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh | DirtyMaterial | DirtyLight); }
-    void Deleted(NodeKeyTab & /*nodes*/) override { FullResync(); }
+    void Deleted(NodeKeyTab & /*nodes*/) override {}
     void LinkChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState); }
     void LayerChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState); }
     void GroupChanged(NodeKeyTab & /*nodes*/) override { FullResync(); }
@@ -4514,6 +4535,16 @@ private:
       delayMs = (std::max)(delayMs, kHeavyPollMinIntervalMs);
     }
     return delayMs;
+  }
+
+  static uint64_t ComputeVerificationDelayMs(size_t nodeCount) {
+    if (nodeCount >= kHugeSceneNodeThreshold) {
+      return kHugeSceneTransformVerificationMinIntervalMs;
+    }
+    if (nodeCount >= kLargeSceneNodeThreshold) {
+      return kLargeSceneTransformVerificationMinIntervalMs;
+    }
+    return kTransformVerificationMinIntervalMs;
   }
 
   static INT_PTR CALLBACK RollupDlgProc(HWND hwnd, UINT message, WPARAM wParam,
@@ -4579,14 +4610,35 @@ private:
 
     switch (info->intcode) {
     case NOTIFY_SCENE_PRE_DELETED_NODE:
+      if (info->callParam != nullptr) {
+        utility->MarkNodeDirty(static_cast<INode *>(info->callParam),
+                               DirtyNodeState | DirtyMesh | DirtyMaterial |
+                                   DirtyLight | DirtySelection);
+      } else {
+        utility->MarkSelectionDirty();
+      }
+      utility->DeferSceneProcessing(kSceneOperationSettleDelayMs);
+      break;
     case NOTIFY_SEL_NODES_PRE_DELETE:
+      if (info->callParam != nullptr) {
+        utility->MarkNodesDirty(*static_cast<Tab<INode *> *>(info->callParam),
+                                DirtyNodeState | DirtyMesh | DirtyMaterial |
+                                    DirtyLight | DirtySelection);
+      } else {
+        utility->MarkSelectionDirty();
+      }
+      utility->DeferSceneProcessing(kSceneOperationSettleDelayMs);
+      break;
     case NOTIFY_SCENE_UNDO:
     case NOTIFY_SCENE_REDO:
+    case NOTIFY_PRE_NODES_CLONED:
+    case NOTIFY_POST_NODES_CLONED:
+      utility->MarkSelectionDirty();
+      utility->DeferSceneProcessing(kSceneOperationSettleDelayMs);
+      break;
     case NOTIFY_SYSTEM_POST_RESET:
     case NOTIFY_SYSTEM_POST_NEW:
     case NOTIFY_SCENE_XREF_POST_MERGE:
-    case NOTIFY_PRE_NODES_CLONED:
-    case NOTIFY_POST_NODES_CLONED:
       utility->MarkFullResyncNeeded();
       break;
     case NOTIFY_SELECTIONSET_CHANGED:
@@ -4640,6 +4692,12 @@ private:
   }
 
   void MarkSelectionDirty() { m_selectionDirty = true; }
+
+  void MarkNodesDirty(const Tab<INode *> &nodes, uint32_t flags) {
+    for (int index = 0; index < nodes.Count(); ++index) {
+      MarkNodeDirty(nodes[index], flags);
+    }
+  }
 
   void MarkFullResyncNeeded() {
     m_forceFullResync = true;
@@ -4778,7 +4836,7 @@ private:
 
   void ScheduleVerificationSweep_NoLock() {
     m_nextVerificationDeadline =
-        ComputeNextPollDeadline(kTransformVerificationMinIntervalMs);
+        ComputeNextPollDeadline(ComputeVerificationDelayMs(m_lastNodeState.size()));
   }
 
   std::string BuildDetailsText_NoLock() const {
@@ -4837,6 +4895,25 @@ private:
                                 m_lastSelectedObjectIds, m_lastCameraSnapshot);
   }
 
+  void MarkResumeStateDirty_NoLock(uint64_t delayMs = kResumeStatePersistDelayMs) {
+    m_resumeStateDirty = true;
+    m_nextResumePersistDeadline = ComputeNextPollDeadline(delayMs);
+  }
+
+  void MaybePersistResumeStateLocked(Interface *ip, bool force) {
+    if (!m_resumeStateDirty || !ip || m_documentId.empty()) {
+      return;
+    }
+    if (!force &&
+        m_nextResumePersistDeadline != Clock::time_point{} &&
+        Clock::now() < m_nextResumePersistDeadline) {
+      return;
+    }
+    PersistResumeStateLocked(ip);
+    m_resumeStateDirty = false;
+    m_nextResumePersistDeadline = Clock::time_point{};
+  }
+
   bool EnsureConnectedSession(Interface *ip) {
     if (!ip) {
       return false;
@@ -4880,6 +4957,8 @@ private:
                            " (deltas=" + std::to_string(startupDeltaCount) + ")";
 
     PersistResumeStateLocked(ip);
+    m_resumeStateDirty = false;
+    m_nextResumePersistDeadline = Clock::time_point{};
     m_nextPollDeadline = ComputeNextPollDeadline(kActivePollMinIntervalMs);
     m_nextCameraPollDeadline = ComputeNextPollDeadline(kCameraPollMinIntervalMs);
     ScheduleVerificationSweep_NoLock();
@@ -4932,6 +5011,7 @@ private:
       RefreshRollupUI_NoLock();
       return;
     }
+    Interface *ip = GetLiveInterface();
 
     if (m_pollTimer != 0) {
       KillTimer(nullptr, m_pollTimer);
@@ -4942,6 +5022,8 @@ private:
       m_cameraPollTimer = 0;
     }
     SendSessionClosed(m_sessionId, m_nextSequence++);
+    MaybePersistResumeStateLocked(ip, true);
+    FlushQueuedPayloadRemovals_NoLock(true);
     UnregisterSceneCallbacks();
     g_pipeClient.Disconnect();
     m_lastNodeState.clear();
@@ -4956,12 +5038,15 @@ private:
     m_nextPollDeadline = Clock::time_point{};
     m_nextCameraPollDeadline = Clock::time_point{};
     m_nextVerificationDeadline = Clock::time_point{};
+    m_nextResumePersistDeadline = Clock::time_point{};
     m_forceFullResync = false;
     m_selectionDirty = false;
+    m_resumeStateDirty = false;
     m_dirtyNodeHandles.clear();
     m_dirtyMeshHandles.clear();
     m_dirtyMaterialHandles.clear();
     m_dirtyLightHandles.clear();
+    m_pendingPayloadRemovals.clear();
     m_syncActive = false;
     RefreshRollupUI_NoLock();
   }
@@ -5046,9 +5131,37 @@ private:
       ++m_nextSequence;
       RecordBatchSent_NoLock(deltas.size());
       m_lastCameraSnapshot = currentCamera;
-      PersistResumeStateLocked(ip);
+      MarkResumeStateDirty_NoLock();
       RefreshRollupUI_NoLock();
     }
+  }
+
+  void QueuePayloadRemoval_NoLock(const std::string &nodeObjectId) {
+    if (m_documentId.empty() || nodeObjectId.empty()) {
+      return;
+    }
+    m_pendingPayloadRemovals.insert(nodeObjectId);
+  }
+
+  bool FlushQueuedPayloadRemovals_NoLock(bool force) {
+    if (m_documentId.empty() || m_pendingPayloadRemovals.empty()) {
+      return false;
+    }
+
+    size_t removedCount = 0;
+    const size_t maxCount =
+        force ? m_pendingPayloadRemovals.size() : kPayloadRemovalBatchSize;
+    for (auto it = m_pendingPayloadRemovals.begin();
+         it != m_pendingPayloadRemovals.end() && removedCount < maxCount;) {
+      RemoveNodePayloadFile(m_documentId, *it);
+      it = m_pendingPayloadRemovals.erase(it);
+      ++removedCount;
+    }
+
+    if (force || m_pendingPayloadRemovals.empty()) {
+      RemoveDocumentPayloadDirectoryIfEmpty(m_documentId);
+    }
+    return removedCount > 0;
   }
 
   void PollSceneChangesLocked() {
@@ -5062,8 +5175,12 @@ private:
         !m_forceFullResync &&
         m_nextVerificationDeadline != Clock::time_point{} &&
         now >= m_nextVerificationDeadline;
+    const bool resumePersistDue =
+        m_resumeStateDirty &&
+        m_nextResumePersistDeadline != Clock::time_point{} &&
+        now >= m_nextResumePersistDeadline;
 
-    if (!m_forceFullResync && !transformVerificationDue &&
+    if (!m_forceFullResync && !transformVerificationDue && !resumePersistDue &&
         m_nextPollDeadline != Clock::time_point{} &&
         now < m_nextPollDeadline) {
       return;
@@ -5076,6 +5193,22 @@ private:
     Interface *ip = GetLiveInterface();
     if (!m_syncActive || !ip || !EnsureConnectedSession(ip)) {
       m_nextPollDeadline = ComputeNextPollDeadline(kReconnectPollMinIntervalMs);
+      return;
+    }
+
+    const bool hasDirtyWorkPending =
+        m_forceFullResync || transformVerificationDue || m_selectionDirty ||
+        !m_dirtyNodeHandles.empty() || !m_dirtyMeshHandles.empty() ||
+        !m_dirtyMaterialHandles.empty() || !m_dirtyLightHandles.empty();
+    if (resumePersistDue && !hasDirtyWorkPending) {
+      MaybePersistResumeStateLocked(ip, false);
+      m_nextPollDeadline = ComputeNextPollDeadline(kIdlePollMinIntervalMs);
+      RefreshRollupUI_NoLock();
+      return;
+    }
+    if (!hasDirtyWorkPending && FlushQueuedPayloadRemovals_NoLock(false)) {
+      m_nextPollDeadline = ComputeNextPollDeadline(kIdlePollMinIntervalMs);
+      RefreshRollupUI_NoLock();
       return;
     }
 
@@ -5119,7 +5252,7 @@ private:
 
         const NodeSnapshot &previous = previousIt->second;
         if (previous.objectId != snapshot.objectId) {
-          RemoveNodePayloadFile(m_documentId, previous.objectId);
+          QueuePayloadRemoval_NoLock(previous.objectId);
           AppendNodeRemovedDelta(m_documentId, previous, &m_nextRevision, &deltas);
           AppendNodeAddedDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
           AppendNodeTransformDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
@@ -5158,7 +5291,7 @@ private:
 
       for (const auto &[handle, previousSnapshot] : m_lastNodeState) {
         if (currentState.find(handle) == currentState.end()) {
-          RemoveNodePayloadFile(m_documentId, previousSnapshot.objectId);
+          QueuePayloadRemoval_NoLock(previousSnapshot.objectId);
           AppendNodeRemovedDelta(m_documentId, previousSnapshot,
                                  &m_nextRevision, &deltas);
         }
@@ -5207,7 +5340,7 @@ private:
         m_lastLightState = std::move(currentLightState);
         m_lastSelectedObjectIds = selectedObjectIds;
         CaptureActiveCameraSnapshot(ip, &m_lastCameraSnapshot);
-        PersistResumeStateLocked(ip);
+        MarkResumeStateDirty_NoLock();
         ScheduleVerificationSweep_NoLock();
         ClearDirtyState();
       } else if (deltas.empty()) {
@@ -5216,11 +5349,12 @@ private:
         m_lastLightState = std::move(currentLightState);
         m_lastSelectedObjectIds = selectedObjectIds;
         CaptureActiveCameraSnapshot(ip, &m_lastCameraSnapshot);
-        PersistResumeStateLocked(ip);
+        MarkResumeStateDirty_NoLock();
         ScheduleVerificationSweep_NoLock();
         ClearDirtyState();
       }
 
+      MaybePersistResumeStateLocked(ip, false);
       RefreshRollupUI_NoLock();
       return;
     }
@@ -5242,7 +5376,7 @@ private:
       } else {
         const NodeSnapshot &previous = previousIt->second;
         if (previous.objectId != snapshot.objectId) {
-          RemoveNodePayloadFile(m_documentId, previous.objectId);
+          QueuePayloadRemoval_NoLock(previous.objectId);
           AppendNodeRemovedDelta(m_documentId, previous, &m_nextRevision, &deltas);
           AppendNodeAddedDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
           AppendNodeTransformDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
@@ -5414,7 +5548,7 @@ private:
       if (m_selectionDirty) {
         m_lastSelectedObjectIds = selectedObjectIds;
       }
-      PersistResumeStateLocked(ip);
+      MarkResumeStateDirty_NoLock();
       ClearDirtyState();
     } else if (deltas.empty() && (hasIncrementalStateUpdates || hadPendingDirtyWork)) {
       for (const auto &[handle, snapshot] : stagedNodes) {
@@ -5433,11 +5567,12 @@ private:
         m_lastSelectedObjectIds = selectedObjectIds;
       }
       if (hasIncrementalStateUpdates) {
-        PersistResumeStateLocked(ip);
+        MarkResumeStateDirty_NoLock();
       }
       ClearDirtyState();
     }
 
+    MaybePersistResumeStateLocked(ip, false);
     RefreshRollupUI_NoLock();
   }
 
@@ -5459,9 +5594,10 @@ private:
       ++m_nextSequence;
       RecordBatchSent_NoLock(deltas.size());
       m_lastSelectedObjectIds = selectedObjectIds;
-      PersistResumeStateLocked(ip);
+      MarkResumeStateDirty_NoLock();
     }
 
+    MaybePersistResumeStateLocked(ip, false);
     RefreshRollupUI_NoLock();
   }
 
@@ -5476,16 +5612,19 @@ private:
   Clock::time_point m_nextCameraPollDeadline = Clock::time_point{};
   Clock::time_point m_nextVerificationDeadline = Clock::time_point{};
   Clock::time_point m_sceneOperationSettleDeadline = Clock::time_point{};
+  Clock::time_point m_nextResumePersistDeadline = Clock::time_point{};
   ISceneEventManager *m_sceneEventManager = nullptr;
   CallbackKey m_sceneEventCallbackKey = 0;
   LiveLinkNodeEventCallback m_sceneEventCallback{this};
   bool m_notificationsRegistered = false;
   bool m_forceFullResync = false;
   bool m_selectionDirty = false;
+  bool m_resumeStateDirty = false;
   std::unordered_set<ULONG_PTR> m_dirtyNodeHandles;
   std::unordered_set<ULONG_PTR> m_dirtyMeshHandles;
   std::unordered_set<ULONG_PTR> m_dirtyMaterialHandles;
   std::unordered_set<ULONG_PTR> m_dirtyLightHandles;
+  std::unordered_set<std::string> m_pendingPayloadRemovals;
   std::unordered_map<ULONG_PTR, NodeSnapshot> m_lastNodeState;
   MaterialStateMap m_lastMaterialState;
   std::unordered_map<ULONG_PTR, LightSnapshot> m_lastLightState;

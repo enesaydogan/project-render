@@ -5,6 +5,8 @@
 namespace {
 
 constexpr DWORD kPipeConnectTimeoutMs = 25;
+constexpr DWORD kPipeWriteTimeoutMs = 8;
+constexpr DWORD kPipeCancelWaitTimeoutMs = 8;
 
 std::string MakePipePath(const std::string &pipeName) {
   if (pipeName.rfind(R"(\\.\pipe\)", 0) == 0) {
@@ -52,7 +54,7 @@ bool MaxLiveLinkPipeClient::Connect(const std::string &pipeName) {
   }
 
   HANDLE handle = CreateFileA(pipePath.c_str(), GENERIC_WRITE, 0, nullptr,
-                              OPEN_EXISTING, 0, nullptr);
+                              OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
   if (handle == INVALID_HANDLE_VALUE) {
     m_lastError = "CreateFileA failed: " +
                   FormatWindowsError(::GetLastError());
@@ -87,14 +89,50 @@ bool MaxLiveLinkPipeClient::SendJsonLine(const std::string &line) {
   std::string payload = line;
   payload.push_back('\n');
 
-  DWORD bytesWritten = 0;
-  if (!WriteFile(static_cast<HANDLE>(m_pipe), payload.data(),
-                 static_cast<DWORD>(payload.size()), &bytesWritten, nullptr)) {
-    m_lastError = "WriteFile failed: " +
+  HANDLE pipe = static_cast<HANDLE>(m_pipe);
+  HANDLE eventHandle = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+  if (!eventHandle) {
+    m_lastError = "CreateEventA failed: " +
                   FormatWindowsError(::GetLastError());
     Disconnect();
     return false;
   }
+
+  OVERLAPPED overlapped = {};
+  overlapped.hEvent = eventHandle;
+  DWORD bytesWritten = 0;
+  if (!WriteFile(pipe, payload.data(), static_cast<DWORD>(payload.size()),
+                 &bytesWritten, &overlapped)) {
+    const DWORD writeError = ::GetLastError();
+    if (writeError != ERROR_IO_PENDING) {
+      CloseHandle(eventHandle);
+      m_lastError = "WriteFile failed: " + FormatWindowsError(writeError);
+      Disconnect();
+      return false;
+    }
+
+    const DWORD waitResult =
+        WaitForSingleObject(eventHandle, kPipeWriteTimeoutMs);
+    if (waitResult == WAIT_TIMEOUT) {
+      CancelIoEx(pipe, &overlapped);
+      WaitForSingleObject(eventHandle, kPipeCancelWaitTimeoutMs);
+      CloseHandle(eventHandle);
+      m_lastError = "WriteFile timed out after " +
+                    std::to_string(kPipeWriteTimeoutMs) + " ms";
+      Disconnect();
+      return false;
+    }
+    if (waitResult != WAIT_OBJECT_0 ||
+        !GetOverlappedResult(pipe, &overlapped, &bytesWritten, FALSE)) {
+      const DWORD resultError = ::GetLastError();
+      CloseHandle(eventHandle);
+      m_lastError = "GetOverlappedResult failed: " +
+                    FormatWindowsError(resultError);
+      Disconnect();
+      return false;
+    }
+  }
+  CloseHandle(eventHandle);
 
   if (bytesWritten != payload.size()) {
     m_lastError = "Named pipe write was truncated";
