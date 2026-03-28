@@ -3239,7 +3239,28 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     // fprintf(stderr, "MainLoop: ExecuteCommandLists done\n");
 
     // fprintf(stderr, "MainLoop: Present start\n");
-    ThrowIfFailed(DX12Context::g_swapChain->Present(1, 0));
+    const HRESULT presentHr = DX12Context::g_swapChain->Present(1, 0);
+    if (FAILED(presentHr)) {
+      fprintf(stderr, "MainLoop: Present failed with hr=0x%08x\n",
+              static_cast<unsigned>(presentHr));
+      if (presentHr == DXGI_ERROR_DEVICE_REMOVED ||
+          presentHr == DXGI_ERROR_DEVICE_RESET ||
+          presentHr == DXGI_ERROR_DEVICE_HUNG) {
+        RecreateDevice();
+        prevTime = std::chrono::high_resolution_clock::now();
+        continue;
+      }
+      if (presentHr == E_ABORT || presentHr == DXGI_ERROR_ACCESS_LOST) {
+        if (CheckDeviceRemoved()) {
+          prevTime = std::chrono::high_resolution_clock::now();
+          continue;
+        }
+        Sleep(16);
+        prevTime = std::chrono::high_resolution_clock::now();
+        continue;
+      }
+      ThrowIfFailed(presentHr);
+    }
     // fprintf(stderr, "MainLoop: Present done\n");
     //  Signal and increment the fence value.
     const UINT64 currentFenceValue =
