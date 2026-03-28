@@ -230,6 +230,7 @@ constexpr uint64_t kHeavyPollMinIntervalMs = 1000;
 constexpr uint64_t kReconnectPollMinIntervalMs = 1000;
 constexpr uint64_t kCameraPollMinIntervalMs = 33;
 constexpr uint64_t kTransformVerificationMinIntervalMs = 1500;
+constexpr uint64_t kSceneOperationSettleDelayMs = 350;
 constexpr uint64_t kSlowPollThresholdMs = 150;
 constexpr size_t kLargeSceneNodeThreshold = 250;
 constexpr int kUtilityDialogId = 101;
@@ -4482,12 +4483,16 @@ private:
     void Mark(NodeKeyTab &nodes, uint32_t flags) {
       if (m_owner) {
         m_owner->MarkNodeKeysDirty(nodes, flags);
+        if (flags != DirtySelection) {
+          m_owner->DeferSceneProcessing(kSceneOperationSettleDelayMs);
+        }
       }
     }
 
     void FullResync() {
       if (m_owner) {
         m_owner->MarkFullResyncNeeded();
+        m_owner->DeferSceneProcessing(kSceneOperationSettleDelayMs);
       }
     }
 
@@ -4639,6 +4644,20 @@ private:
   void MarkFullResyncNeeded() {
     m_forceFullResync = true;
     m_selectionDirty = true;
+    DeferSceneProcessing(kSceneOperationSettleDelayMs);
+  }
+
+  void DeferSceneProcessing(uint64_t delayMs) {
+    const Clock::time_point deadline = ComputeNextPollDeadline(delayMs);
+    if (deadline > m_nextPollDeadline) {
+      m_nextPollDeadline = deadline;
+    }
+    if (deadline > m_nextVerificationDeadline) {
+      m_nextVerificationDeadline = deadline;
+    }
+    if (deadline > m_sceneOperationSettleDeadline) {
+      m_sceneOperationSettleDeadline = deadline;
+    }
   }
 
   void MarkNodeDirty(ULONG_PTR handle, uint32_t flags) {
@@ -5034,6 +5053,11 @@ private:
 
   void PollSceneChangesLocked() {
     const Clock::time_point now = Clock::now();
+    if (m_sceneOperationSettleDeadline != Clock::time_point{} &&
+        now < m_sceneOperationSettleDeadline) {
+      return;
+    }
+    m_sceneOperationSettleDeadline = Clock::time_point{};
     const bool transformVerificationDue =
         !m_forceFullResync &&
         m_nextVerificationDeadline != Clock::time_point{} &&
@@ -5451,6 +5475,7 @@ private:
   Clock::time_point m_nextPollDeadline = Clock::time_point{};
   Clock::time_point m_nextCameraPollDeadline = Clock::time_point{};
   Clock::time_point m_nextVerificationDeadline = Clock::time_point{};
+  Clock::time_point m_sceneOperationSettleDeadline = Clock::time_point{};
   ISceneEventManager *m_sceneEventManager = nullptr;
   CallbackKey m_sceneEventCallbackKey = 0;
   LiveLinkNodeEventCallback m_sceneEventCallback{this};
