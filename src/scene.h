@@ -21,11 +21,13 @@ struct Node {
   size_t parentIndex;              // invalid when this is a root node
   float transform[16];             // 4x4 column-major matrix
   std::string sourcePath;          // Path to the asset file for re-loading
+  std::string importGroupKey;      // Shared key for imported multi-node groups
   std::vector<int> linkedMaterialIndices; // global material indices per import slot
   std::vector<std::string> linkedMaterialSourceNames; // original imported names per slot
   bool selected = false;
   bool visible = true;
   bool liveLinkManaged = false;
+  bool importGroupRoot = false;
 
   Node();
 };
@@ -41,7 +43,9 @@ struct Instance {
 struct ImportedNodePayload {
   std::string sourcePath;
   std::string displayName;
+  std::string importGroupKey;
   std::vector<Asset::GpuMesh> meshes;
+  std::vector<Asset::ImportedSceneNode> sceneNodes;
   std::vector<Asset::Material> materials;
   std::vector<std::string> materialStableIds;
   std::vector<Asset::Texture> textures;

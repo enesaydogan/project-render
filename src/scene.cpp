@@ -54,6 +54,7 @@ static std::mutex s_importStatusMutex;
 static std::vector<Asset::GpuMesh> s_pendingMeshes;
 static std::vector<Asset::Material> s_pendingMaterials;
 static std::vector<Asset::Texture> s_pendingTextures;
+static std::vector<Asset::ImportedSceneNode> s_pendingSceneNodes;
 static std::unordered_map<std::string, int> s_textureIndicesBySourceUri;
 static std::vector<std::string> s_materialStableIds;
 static std::unordered_map<std::string, int> s_materialIndicesByStableId;
@@ -65,6 +66,7 @@ struct SharedImportedMeshEntry {
 };
 static std::unordered_map<std::string, SharedImportedMeshEntry>
     s_sharedImportedMeshesBySourcePath;
+static size_t s_nextImportGroupId = 1;
 static size_t s_nextChangeListenerId = 1;
 static std::unordered_map<size_t, std::function<void()>> s_changeListeners;
 static std::string s_pendingPath;
@@ -441,6 +443,8 @@ static int FindLinkedMaterialByName(const std::vector<std::string> &sourceNames,
                                     const std::vector<int> &globalIndices,
                                     const std::string &name,
                                     std::vector<bool> *used);
+static bool IsShareableLiveLinkPayloadPath(const std::string &sourcePath);
+static void ReleaseSharedImportedMeshEntry(const std::string &sourcePath);
 
 static std::string ResolveNodeDisplayName(const ImportedNodePayload &payload) {
   if (!payload.displayName.empty()) {
@@ -653,6 +657,108 @@ static void ClearNodeMeshes(const Node &node) {
   }
 }
 
+static void ClearMeshIndices(const std::vector<size_t> &meshIndices) {
+  for (size_t meshIndex : meshIndices) {
+    if (meshIndex >= g_loadedMeshes.size()) {
+      continue;
+    }
+    g_loadedMeshes[meshIndex].vertexBuffer.Reset();
+    g_loadedMeshes[meshIndex].indexBuffer.Reset();
+    g_loadedMeshes[meshIndex].vertexCount = 0;
+    g_loadedMeshes[meshIndex].indexCount = 0;
+  }
+}
+
+static std::string GenerateImportGroupKey(const std::string &sourcePath) {
+  const std::string base = sourcePath.empty() ? "imported-scene" : sourcePath;
+  return base + "#group-" + std::to_string(s_nextImportGroupId++);
+}
+
+static bool IsImportedSceneGroupNode(const Node &node) {
+  return !node.importGroupKey.empty();
+}
+
+static size_t FindImportGroupRootIndex(const std::string &groupKey) {
+  if (groupKey.empty()) {
+    return static_cast<size_t>(-1);
+  }
+  for (size_t index = 0; index < s_nodes.size(); ++index) {
+    if (s_nodes[index].importGroupKey == groupKey &&
+        s_nodes[index].importGroupRoot) {
+      return index;
+    }
+  }
+  return static_cast<size_t>(-1);
+}
+
+static std::vector<size_t> CollectImportGroupNodeIndices(
+    const std::string &groupKey) {
+  std::vector<size_t> indices;
+  if (groupKey.empty()) {
+    return indices;
+  }
+  for (size_t index = 0; index < s_nodes.size(); ++index) {
+    if (s_nodes[index].importGroupKey == groupKey) {
+      indices.push_back(index);
+    }
+  }
+  return indices;
+}
+
+static void RemoveNodesByIndexSet(std::vector<size_t> indices,
+                                  bool notifyScene = true) {
+  if (indices.empty()) {
+    return;
+  }
+
+  std::sort(indices.begin(), indices.end());
+  indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
+
+  std::vector<size_t> uniqueMeshIndices;
+  for (size_t nodeIndex : indices) {
+    if (nodeIndex >= s_nodes.size()) {
+      continue;
+    }
+    if (IsShareableLiveLinkPayloadPath(s_nodes[nodeIndex].sourcePath)) {
+      continue;
+    }
+    for (size_t meshIndex : s_nodes[nodeIndex].meshIndices) {
+      if (std::find(uniqueMeshIndices.begin(), uniqueMeshIndices.end(),
+                    meshIndex) == uniqueMeshIndices.end()) {
+        uniqueMeshIndices.push_back(meshIndex);
+      }
+    }
+  }
+  ClearMeshIndices(uniqueMeshIndices);
+
+  for (auto it = indices.rbegin(); it != indices.rend(); ++it) {
+    const size_t nodeIndex = *it;
+    if (nodeIndex >= s_nodes.size()) {
+      continue;
+    }
+    if (IsShareableLiveLinkPayloadPath(s_nodes[nodeIndex].sourcePath)) {
+      ReleaseSharedImportedMeshEntry(s_nodes[nodeIndex].sourcePath);
+    }
+    s_nodes.erase(s_nodes.begin() + nodeIndex);
+
+    for (Node &node : s_nodes) {
+      if (node.parentIndex == nodeIndex) {
+        node.parentIndex = static_cast<size_t>(-1);
+      } else if (node.parentIndex != static_cast<size_t>(-1) &&
+                 node.parentIndex > nodeIndex) {
+        --node.parentIndex;
+      }
+    }
+    LiveLink::GetSceneSync().ReindexSceneNodeBindingsAfterRemoval(nodeIndex);
+  }
+
+  if (notifyScene) {
+    DxrRenderer::RequestAccelerationStructureRebuild();
+    DxrRenderer::ResetAccumulation();
+    NotifySceneChanged();
+  }
+}
+
 static bool IsShareableLiveLinkPayloadPath(const std::string &sourcePath) {
   return !sourcePath.empty() && fs::path(sourcePath).extension() == ".prmesh";
 }
@@ -689,18 +795,23 @@ static void ReleaseNodeMeshes(const Node &node) {
     ReleaseSharedImportedMeshEntry(node.sourcePath);
     return;
   }
+  if (IsImportedSceneGroupNode(node)) {
+    return;
+  }
   ClearNodeMeshes(node);
 }
 
 static bool FinalizeImportedNode(const std::string &srcPath,
                                  std::vector<Asset::GpuMesh> meshes,
                                  std::vector<Asset::Material> materials,
-                                 std::vector<Asset::Texture> textures) {
+                                 std::vector<Asset::Texture> textures,
+                                 std::vector<Asset::ImportedSceneNode> sceneNodes) {
   ImportedNodePayload payload;
   payload.sourcePath = srcPath;
   payload.meshes = std::move(meshes);
   payload.materials = std::move(materials);
   payload.textures = std::move(textures);
+  payload.sceneNodes = std::move(sceneNodes);
   return AddImportedNode(std::move(payload));
 }
 
@@ -762,6 +873,102 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
   if (payload.meshes.empty()) {
     s_lastStatus = "AddImportedNode failed: no meshes provided";
     return false;
+  }
+
+  if (!payload.sceneNodes.empty()) {
+    EnsureGpuBuffersForMeshes(payload.meshes);
+
+    const std::vector<int> textureRemap =
+        RegisterImportedTextures(payload.textures, payload.textureSourceUris);
+    RemapMaterialTextureIndices(payload.materials, textureRemap);
+
+    Node importNodeProbe;
+    std::vector<int> localToGlobal =
+        ResolveReplacementMaterialIndices(importNodeProbe, payload.materials,
+                                          &payload.materialStableIds, true,
+                                          false);
+
+    const size_t meshBase = g_loadedMeshes.size();
+    g_loadedMeshes.insert(g_loadedMeshes.end(), payload.meshes.begin(),
+                          payload.meshes.end());
+    for (size_t meshOffset = 0; meshOffset < payload.meshes.size();
+         ++meshOffset) {
+      int &materialIndex = g_loadedMeshes[meshBase + meshOffset].materialIndex;
+      if (materialIndex >= 0 &&
+          materialIndex < static_cast<int>(localToGlobal.size())) {
+        materialIndex = localToGlobal[(size_t)materialIndex];
+      } else {
+        materialIndex = -1;
+      }
+    }
+
+    const std::string groupKey =
+        payload.importGroupKey.empty()
+            ? GenerateImportGroupKey(payload.sourcePath)
+            : payload.importGroupKey;
+
+    Node rootNode;
+    rootNode.name = ResolveNodeDisplayName(payload);
+    rootNode.sourcePath = payload.sourcePath;
+    rootNode.importGroupKey = groupKey;
+    rootNode.importGroupRoot = true;
+    rootNode.linkedMaterialIndices = localToGlobal;
+    rootNode.linkedMaterialSourceNames.reserve(payload.materials.size());
+    for (const Asset::Material &material : payload.materials) {
+      rootNode.linkedMaterialSourceNames.emplace_back(material.name);
+    }
+
+    const size_t rootIndex = s_nodes.size();
+    s_nodes.push_back(std::move(rootNode));
+
+    std::vector<size_t> importedToSceneIndex(payload.sceneNodes.size(),
+                                             static_cast<size_t>(-1));
+    for (size_t importedIndex = 0; importedIndex < payload.sceneNodes.size();
+         ++importedIndex) {
+      const Asset::ImportedSceneNode &importedNode =
+          payload.sceneNodes[importedIndex];
+      Node sceneNode;
+      sceneNode.name =
+          importedNode.name.empty() ? "Imported Node" : importedNode.name;
+      sceneNode.importGroupKey = groupKey;
+      sceneNode.linkedMaterialIndices = localToGlobal;
+      sceneNode.linkedMaterialSourceNames =
+          s_nodes[rootIndex].linkedMaterialSourceNames;
+      memcpy(sceneNode.transform, importedNode.transform,
+             sizeof(sceneNode.transform));
+
+      const size_t importedParentIndex = importedNode.parentIndex;
+      if (importedParentIndex != static_cast<size_t>(-1) &&
+          importedParentIndex < importedToSceneIndex.size() &&
+          importedToSceneIndex[importedParentIndex] !=
+              static_cast<size_t>(-1)) {
+        sceneNode.parentIndex = importedToSceneIndex[importedParentIndex];
+      } else {
+        sceneNode.parentIndex = rootIndex;
+      }
+
+      sceneNode.meshIndices.reserve(importedNode.meshIndices.size());
+      for (size_t localMeshIndex : importedNode.meshIndices) {
+        if (localMeshIndex < payload.meshes.size()) {
+          sceneNode.meshIndices.push_back(meshBase + localMeshIndex);
+        }
+      }
+
+      importedToSceneIndex[importedIndex] = s_nodes.size();
+      s_nodes.push_back(std::move(sceneNode));
+    }
+
+    s_lastStatus = std::string("Loaded instanced: ") +
+                   (payload.sourcePath.empty() ? ResolveNodeDisplayName(payload)
+                                               : payload.sourcePath);
+    fprintf(stderr, "%s\n", s_lastStatus.c_str());
+    ApplyRendererInvalidation(
+        RendererInvalidationPlan::FullAccelerationStructureRebuild);
+    NotifySceneChanged();
+    if (outNodeIndex) {
+      *outNodeIndex = rootIndex;
+    }
+    return true;
   }
 
   const bool isLiveLinkPayload =
@@ -878,6 +1085,32 @@ bool ReplaceNodeImportedContent(size_t index, ImportedNodePayload payload) {
   const std::string previousSourcePath = node.sourcePath;
   const std::string effectiveSourcePath =
       payload.sourcePath.empty() ? node.sourcePath : payload.sourcePath;
+
+  if (!payload.sceneNodes.empty()) {
+    std::string groupKey = payload.importGroupKey;
+    if (groupKey.empty() && IsImportedSceneGroupNode(node)) {
+      groupKey = node.importGroupKey;
+    }
+    payload.sourcePath = effectiveSourcePath;
+    payload.importGroupKey =
+        groupKey.empty() ? GenerateImportGroupKey(effectiveSourcePath)
+                         : groupKey;
+
+    std::vector<size_t> nodesToRemove =
+        IsImportedSceneGroupNode(node)
+            ? CollectImportGroupNodeIndices(node.importGroupKey)
+            : std::vector<size_t>{index};
+    RemoveNodesByIndexSet(std::move(nodesToRemove), false);
+
+    size_t newRootIndex = static_cast<size_t>(-1);
+    const bool ok = AddImportedNode(std::move(payload), &newRootIndex);
+    if (!ok) {
+      s_lastStatus =
+          "ReplaceNodeImportedContent failed: unable to rebuild import group";
+    }
+    return ok;
+  }
+
   const bool isLiveLinkPayload =
       node.liveLinkManaged || IsShareableLiveLinkPayloadPath(effectiveSourcePath);
   const bool useSharedImportedMesh =
@@ -1078,21 +1311,24 @@ void ProcessPendingImport() {
   std::vector<Asset::GpuMesh> meshes;
   std::vector<Asset::Material> materials;
   std::vector<Asset::Texture> textures;
+  std::vector<Asset::ImportedSceneNode> sceneNodes;
   std::string srcPath;
   {
     std::lock_guard<std::mutex> lg(s_pendingMutex);
     meshes = std::move(s_pendingMeshes);
     materials = std::move(s_pendingMaterials);
     textures = std::move(s_pendingTextures);
+    sceneNodes = std::move(s_pendingSceneNodes);
     srcPath = std::move(s_pendingPath);
     s_pendingMeshes.clear();
     s_pendingMaterials.clear();
     s_pendingTextures.clear();
+    s_pendingSceneNodes.clear();
     s_pendingPath.clear();
   }
   s_pendingReady = false;
   FinalizeImportedNode(srcPath, std::move(meshes), std::move(materials),
-                       std::move(textures));
+                       std::move(textures), std::move(sceneNodes));
 
   // Clear import-in-progress flag
   s_importInProgress = false;
@@ -1109,8 +1345,9 @@ bool ImportModel(const std::string &utf8path, const float *rootTranslation) {
     std::vector<Asset::GpuMesh> meshes;
     std::vector<Asset::Material> materials;
     std::vector<Asset::Texture> textures;
+    std::vector<Asset::ImportedSceneNode> sceneNodes;
     bool ok = Asset::LoadModel(utf8path, meshes, &materials, &textures,
-                               rootTranslation);
+                               rootTranslation, &sceneNodes);
     if (!ok) {
       s_lastStatus = std::string("Load failed: ") + utf8path;
       fprintf(stderr, "%s\n", s_lastStatus.c_str());
@@ -1126,7 +1363,8 @@ bool ImportModel(const std::string &utf8path, const float *rootTranslation) {
       return false;
     }
     return FinalizeImportedNode(utf8path, std::move(meshes),
-                                std::move(materials), std::move(textures));
+                                std::move(materials), std::move(textures),
+                                std::move(sceneNodes));
   } catch (const std::exception &e) {
     s_lastStatus = std::string("Import exception: ") + e.what();
     fprintf(stderr, "%s\n", s_lastStatus.c_str());
@@ -1225,9 +1463,11 @@ bool ImportModelWithDialog(HWND hwnd) {
       std::vector<Asset::GpuMesh> meshes;
       std::vector<Asset::Material> materials;
       std::vector<Asset::Texture> textures;
+      std::vector<Asset::ImportedSceneNode> sceneNodes;
       Asset::SetDeferGpuUpload(true);
       bool ok =
-          Asset::LoadModel(utf8path, meshes, &materials, &textures, nullptr);
+          Asset::LoadModel(utf8path, meshes, &materials, &textures, nullptr,
+                           &sceneNodes);
       Asset::SetDeferGpuUpload(false);
 
       // If the loader failed or produced no meshes, report error and do not
@@ -1253,6 +1493,7 @@ bool ImportModelWithDialog(HWND hwnd) {
         s_pendingMeshes = std::move(meshes);
         s_pendingMaterials = std::move(materials);
         s_pendingTextures = std::move(textures);
+        s_pendingSceneNodes = std::move(sceneNodes);
         s_pendingPath = utf8path;
       }
       s_pendingReady = true;
@@ -1300,13 +1541,29 @@ bool ImportHDRWithDialog(HWND hwnd) {
 const std::vector<Node> &GetNodes() { return s_nodes; }
 
 bool CanReimportNode(size_t index) {
-  return index < s_nodes.size() && !s_nodes[index].sourcePath.empty();
+  if (index >= s_nodes.size()) {
+    return false;
+  }
+  if (!s_nodes[index].importGroupKey.empty()) {
+    const size_t rootIndex =
+        FindImportGroupRootIndex(s_nodes[index].importGroupKey);
+    return rootIndex < s_nodes.size() && !s_nodes[rootIndex].sourcePath.empty();
+  }
+  return !s_nodes[index].sourcePath.empty();
 }
 
 bool ReimportNode(size_t index) {
   if (!CanReimportNode(index)) {
     s_lastStatus = "Reimport failed: node has no linked source.";
     return false;
+  }
+
+  if (!s_nodes[index].importGroupKey.empty()) {
+    const size_t rootIndex =
+        FindImportGroupRootIndex(s_nodes[index].importGroupKey);
+    if (rootIndex < s_nodes.size()) {
+      index = rootIndex;
+    }
   }
 
   Node &node = s_nodes[index];
@@ -1323,7 +1580,9 @@ bool ReimportNode(size_t index) {
     std::vector<Asset::GpuMesh> meshes;
     std::vector<Asset::Material> materials;
     std::vector<Asset::Texture> textures;
-    if (!Asset::LoadModel(srcPath, meshes, &materials, &textures, nullptr) ||
+    std::vector<Asset::ImportedSceneNode> sceneNodes;
+    if (!Asset::LoadModel(srcPath, meshes, &materials, &textures, nullptr,
+                          &sceneNodes) ||
         meshes.empty()) {
       s_lastStatus = std::string("Reimport failed: ") + srcPath;
       fprintf(stderr, "%s\n", s_lastStatus.c_str());
@@ -1332,7 +1591,9 @@ bool ReimportNode(size_t index) {
 
     ImportedNodePayload payload;
     payload.sourcePath = srcPath;
+    payload.importGroupKey = node.importGroupKey;
     payload.meshes = std::move(meshes);
+    payload.sceneNodes = std::move(sceneNodes);
     payload.materials = std::move(materials);
     payload.textures = std::move(textures);
     return ReplaceNodeImportedContent(index, std::move(payload));
@@ -1367,6 +1628,12 @@ bool RemoveNode(size_t index) {
     return false;
 
   WaitGPUIdle();
+
+  if (IsImportedSceneGroupNode(s_nodes[index])) {
+    RemoveNodesByIndexSet(
+        CollectImportGroupNodeIndices(s_nodes[index].importGroupKey), true);
+    return true;
+  }
 
   ReleaseNodeMeshes(s_nodes[index]);
   s_nodes.erase(s_nodes.begin() + index);
@@ -2611,22 +2878,26 @@ void DrawScenePanel(HWND hwnd, bool &visible) {
       std::vector<Asset::GpuMesh> meshes;
       std::vector<Asset::Material> materials;
       std::vector<Asset::Texture> textures;
+      std::vector<Asset::ImportedSceneNode> sceneNodes;
       std::string srcPath;
       {
         std::lock_guard<std::mutex> lg(s_pendingMutex);
         meshes = std::move(s_pendingMeshes);
         materials = std::move(s_pendingMaterials);
         textures = std::move(s_pendingTextures);
+        sceneNodes = std::move(s_pendingSceneNodes);
         srcPath = std::move(s_pendingPath);
         s_pendingMeshes.clear();
         s_pendingMaterials.clear();
         s_pendingTextures.clear();
+        s_pendingSceneNodes.clear();
         s_pendingPath.clear();
       }
       s_pendingReady = false;
       ImportedNodePayload payload;
       payload.sourcePath = srcPath;
       payload.meshes = std::move(meshes);
+      payload.sceneNodes = std::move(sceneNodes);
       payload.materials = std::move(materials);
       payload.textures = std::move(textures);
       AddImportedNode(std::move(payload));

@@ -100,6 +100,20 @@ struct Material {
   float coatRoughness = 0.1f;
 };
 
+struct ImportedSceneNode {
+  std::string name;
+  std::vector<size_t> meshIndices;
+  size_t parentIndex = static_cast<size_t>(-1);
+  float transform[16] = {0.0f};
+
+  ImportedSceneNode() {
+    transform[0] = 1.0f;
+    transform[5] = 1.0f;
+    transform[10] = 1.0f;
+    transform[15] = 1.0f;
+  }
+};
+
 inline void ApplyDefaultGrassLook(Material &m) {
   const bool hasDiffuseTexture = m.diffuseTexture >= 0;
   const float defaultTint[3] = {0.30f, 0.47f, 0.18f};
@@ -148,31 +162,36 @@ extern std::function<void(float, const std::string &)> s_progressCb;
 bool LoadModel(const std::string &path, std::vector<GpuMesh> &outMeshes,
                std::vector<Material> *outMaterials = nullptr,
                std::vector<Texture> *outTextures = nullptr,
-               const float *rootTranslation = nullptr);
+               const float *rootTranslation = nullptr,
+               std::vector<ImportedSceneNode> *outSceneNodes = nullptr);
 
 // Load a glTF file. Returns true on success.
 bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
               std::vector<Material> *outMaterials = nullptr,
               std::vector<Texture> *outTextures = nullptr,
-              const float *rootTranslation = nullptr);
+              const float *rootTranslation = nullptr,
+              std::vector<ImportedSceneNode> *outSceneNodes = nullptr);
 
 // Load an OBJ file. Returns true on success.
 bool LoadOBJ(const std::string &path, std::vector<GpuMesh> &outMeshes,
              std::vector<Material> *outMaterials = nullptr,
              std::vector<Texture> *outTextures = nullptr,
-             const float *rootTranslation = nullptr);
+             const float *rootTranslation = nullptr,
+             std::vector<ImportedSceneNode> *outSceneNodes = nullptr);
 
 // Load an STL file. Returns true on success.
 bool LoadSTL(const std::string &path, std::vector<GpuMesh> &outMeshes,
              std::vector<Material> *outMaterials = nullptr,
              std::vector<Texture> *outTextures = nullptr,
-             const float *rootTranslation = nullptr);
+             const float *rootTranslation = nullptr,
+             std::vector<ImportedSceneNode> *outSceneNodes = nullptr);
 
 // Load a SketchUp (.skp) file. Requires BUILD option USE_SKETCHUP_SDK to be ON.
 bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
              std::vector<Material> *outMaterials = nullptr,
              std::vector<Texture> *outTextures = nullptr,
-             const float *rootTranslation = nullptr);
+             const float *rootTranslation = nullptr,
+             std::vector<ImportedSceneNode> *outSceneNodes = nullptr);
 
 // Load a single texture from file.
 Texture LoadTextureFromFile(const std::string &path, bool isHDR = false);
