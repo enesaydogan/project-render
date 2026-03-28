@@ -48,6 +48,7 @@ constexpr DWORD kSceneGuidAppDataSubId = 0x1001;
 constexpr DWORD kNodeGuidAppDataSubId = 0x1002;
 constexpr DWORD kResumeStateAppDataSubId = 0x1003;
 constexpr DWORD kMaterialGuidAppDataSubId = 0x1004;
+constexpr DWORD kSharedObjectGuidAppDataSubId = 0x1005;
 #if defined(PROJECT_RENDER_HAS_VRAY_SDK)
 #define PROJECT_RENDER_VRAYMTL_CLASS_ID Class_ID(0x37bf3f2f, 0x7034695c)
 
@@ -899,6 +900,21 @@ std::string GetOrCreateMaterialGuid(Mtl *material) {
     guid = GenerateGuidString();
     if (!guid.empty()) {
       WriteAppDataString(material, kMaterialGuidAppDataSubId, guid);
+    }
+  }
+  return guid.empty() ? std::string("missing") : guid;
+}
+
+std::string GetOrCreateSharedObjectGuid(Object *object) {
+  if (!object) {
+    return {};
+  }
+
+  std::string guid = ReadAppDataString(object, kSharedObjectGuidAppDataSubId);
+  if (guid.empty()) {
+    guid = GenerateGuidString();
+    if (!guid.empty()) {
+      WriteAppDataString(object, kSharedObjectGuidAppDataSubId, guid);
     }
   }
   return guid.empty() ? std::string("missing") : guid;
@@ -3327,6 +3343,34 @@ std::filesystem::path GetNodePayloadPath(const std::string &documentId,
          (SanitizePathComponent(nodeObjectId) + std::string(".prmesh"));
 }
 
+std::string BuildSharedPayloadKey(INode *node) {
+  if (!node || !node->GetObjectRef()) {
+    return {};
+  }
+
+  const std::string objectGuid =
+      GetOrCreateSharedObjectGuid(node->GetObjectRef());
+  if (objectGuid.empty()) {
+    return {};
+  }
+
+  Mtl *rootMaterial = node->GetMtl();
+  const std::string materialGuid =
+      rootMaterial ? GetOrCreateMaterialGuid(rootMaterial) : std::string("nomtl");
+  return std::string("shared_") + objectGuid + "_" + materialGuid;
+}
+
+std::filesystem::path GetSharedPayloadPath(const std::string &documentId,
+                                           const std::string &payloadKey) {
+  const std::filesystem::path documentDirectory =
+      GetDocumentPayloadDirectory(documentId);
+  if (documentDirectory.empty() || payloadKey.empty()) {
+    return {};
+  }
+  return documentDirectory /
+         (SanitizePathComponent(payloadKey) + std::string(".prmesh"));
+}
+
 void RemoveNodePayloadFile(const std::string &documentId,
                            const std::string &nodeObjectId) {
   if (documentId.empty() || nodeObjectId.empty()) {
@@ -3412,8 +3456,14 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
     return false;
   }
 
-  const std::filesystem::path payloadPath =
-      GetNodePayloadPath(documentId, snapshot.objectId);
+  std::filesystem::path payloadPath;
+  const std::string sharedPayloadKey = BuildSharedPayloadKey(node);
+  if (!sharedPayloadKey.empty()) {
+    payloadPath = GetSharedPayloadPath(documentId, sharedPayloadKey);
+  }
+  if (payloadPath.empty()) {
+    payloadPath = GetNodePayloadPath(documentId, snapshot.objectId);
+  }
   if (payloadPath.empty()) {
     if (needsDelete) {
       triObject->DeleteThis();

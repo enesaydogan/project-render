@@ -57,6 +57,14 @@ static std::vector<Asset::Texture> s_pendingTextures;
 static std::unordered_map<std::string, int> s_textureIndicesBySourceUri;
 static std::vector<std::string> s_materialStableIds;
 static std::unordered_map<std::string, int> s_materialIndicesByStableId;
+struct SharedImportedMeshEntry {
+  std::vector<size_t> meshIndices;
+  std::vector<int> linkedMaterialIndices;
+  std::vector<std::string> linkedMaterialSourceNames;
+  size_t refCount = 0;
+};
+static std::unordered_map<std::string, SharedImportedMeshEntry>
+    s_sharedImportedMeshesBySourcePath;
 static size_t s_nextChangeListenerId = 1;
 static std::unordered_map<size_t, std::function<void()>> s_changeListeners;
 static std::string s_pendingPath;
@@ -645,6 +653,45 @@ static void ClearNodeMeshes(const Node &node) {
   }
 }
 
+static bool IsShareableLiveLinkPayloadPath(const std::string &sourcePath) {
+  return !sourcePath.empty() && fs::path(sourcePath).extension() == ".prmesh";
+}
+
+static void ReleaseSharedImportedMeshEntry(const std::string &sourcePath) {
+  auto entryIt = s_sharedImportedMeshesBySourcePath.find(sourcePath);
+  if (entryIt == s_sharedImportedMeshesBySourcePath.end()) {
+    return;
+  }
+
+  SharedImportedMeshEntry &entry = entryIt->second;
+  if (entry.refCount > 0) {
+    --entry.refCount;
+  }
+  if (entry.refCount != 0) {
+    return;
+  }
+
+  for (size_t meshIndex : entry.meshIndices) {
+    if (meshIndex >= g_loadedMeshes.size()) {
+      continue;
+    }
+    g_loadedMeshes[meshIndex].vertexBuffer.Reset();
+    g_loadedMeshes[meshIndex].indexBuffer.Reset();
+    g_loadedMeshes[meshIndex].vertexCount = 0;
+    g_loadedMeshes[meshIndex].indexCount = 0;
+  }
+
+  s_sharedImportedMeshesBySourcePath.erase(entryIt);
+}
+
+static void ReleaseNodeMeshes(const Node &node) {
+  if (IsShareableLiveLinkPayloadPath(node.sourcePath)) {
+    ReleaseSharedImportedMeshEntry(node.sourcePath);
+    return;
+  }
+  ClearNodeMeshes(node);
+}
+
 static bool FinalizeImportedNode(const std::string &srcPath,
                                  std::vector<Asset::GpuMesh> meshes,
                                  std::vector<Asset::Material> materials,
@@ -717,14 +764,41 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
     return false;
   }
 
+  const bool isLiveLinkPayload =
+      IsShareableLiveLinkPayloadPath(payload.sourcePath);
+  if (isLiveLinkPayload) {
+    auto sharedEntryIt =
+        s_sharedImportedMeshesBySourcePath.find(payload.sourcePath);
+    if (sharedEntryIt != s_sharedImportedMeshesBySourcePath.end()) {
+      ++sharedEntryIt->second.refCount;
+
+      Node node;
+      node.name = ResolveNodeDisplayName(payload);
+      node.sourcePath = payload.sourcePath;
+      node.meshIndices = sharedEntryIt->second.meshIndices;
+      node.linkedMaterialIndices = sharedEntryIt->second.linkedMaterialIndices;
+      node.linkedMaterialSourceNames =
+          sharedEntryIt->second.linkedMaterialSourceNames;
+      const size_t nodeIndex = AddNode(std::move(node));
+
+      s_lastStatus = std::string("Loaded shared: ") + payload.sourcePath;
+      fprintf(stderr, "%s\n", s_lastStatus.c_str());
+      ApplyRendererInvalidation(
+          RendererInvalidationPlan::FullAccelerationStructureRebuild);
+      NotifySceneChanged();
+      if (outNodeIndex) {
+        *outNodeIndex = nodeIndex;
+      }
+      return true;
+    }
+  }
+
   EnsureGpuBuffersForMeshes(payload.meshes);
 
   const size_t meshBase = g_loadedMeshes.size();
   const std::vector<int> textureRemap =
       RegisterImportedTextures(payload.textures, payload.textureSourceUris);
   RemapMaterialTextureIndices(payload.materials, textureRemap);
-    const bool isLiveLinkPayload =
-      fs::path(payload.sourcePath).extension() == ".prmesh";
   Node importNodeProbe;
   std::vector<int> localToGlobal =
       ResolveReplacementMaterialIndices(importNodeProbe, payload.materials,
@@ -758,6 +832,21 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
   }
   const size_t nodeIndex = AddNode(std::move(node));
 
+  if (isLiveLinkPayload) {
+    SharedImportedMeshEntry entry;
+    entry.refCount = 1;
+    entry.meshIndices.reserve(payload.meshes.size());
+    for (size_t i = 0; i < payload.meshes.size(); ++i) {
+      entry.meshIndices.push_back(meshBase + i);
+    }
+    if (nodeIndex < s_nodes.size()) {
+      entry.linkedMaterialIndices = s_nodes[nodeIndex].linkedMaterialIndices;
+      entry.linkedMaterialSourceNames =
+          s_nodes[nodeIndex].linkedMaterialSourceNames;
+    }
+    s_sharedImportedMeshesBySourcePath[payload.sourcePath] = std::move(entry);
+  }
+
   s_lastStatus = std::string("Loaded: ") +
                  (payload.sourcePath.empty() ? ResolveNodeDisplayName(payload)
                                              : payload.sourcePath);
@@ -786,10 +875,13 @@ bool ReplaceNodeImportedContent(size_t index, ImportedNodePayload payload) {
   EnsureGpuBuffersForMeshes(payload.meshes);
 
   Node &node = s_nodes[index];
+  const std::string previousSourcePath = node.sourcePath;
   const std::string effectiveSourcePath =
       payload.sourcePath.empty() ? node.sourcePath : payload.sourcePath;
-    const bool isLiveLinkPayload =
-      node.liveLinkManaged || fs::path(effectiveSourcePath).extension() == ".prmesh";
+  const bool isLiveLinkPayload =
+      node.liveLinkManaged || IsShareableLiveLinkPayloadPath(effectiveSourcePath);
+  const bool useSharedImportedMesh =
+      IsShareableLiveLinkPayloadPath(effectiveSourcePath);
   const std::vector<int> textureRemap =
       RegisterImportedTextures(payload.textures, payload.textureSourceUris);
   RemapMaterialTextureIndices(payload.materials, textureRemap);
@@ -810,22 +902,87 @@ bool ReplaceNodeImportedContent(size_t index, ImportedNodePayload payload) {
     }
   }
 
-  ClearNodeMeshes(node);
-  g_loadedMeshes.insert(g_loadedMeshes.end(), payload.meshes.begin(),
-                        payload.meshes.end());
+  if (useSharedImportedMesh) {
+    auto sharedEntryIt =
+        s_sharedImportedMeshesBySourcePath.find(effectiveSourcePath);
+    const size_t previousRefCount =
+        sharedEntryIt != s_sharedImportedMeshesBySourcePath.end()
+            ? sharedEntryIt->second.refCount
+            : 0;
+    std::vector<size_t> previousMeshIndices;
+    if (sharedEntryIt != s_sharedImportedMeshesBySourcePath.end()) {
+      previousMeshIndices = sharedEntryIt->second.meshIndices;
+    }
 
-  node.meshIndices.clear();
-  node.meshIndices.reserve(payload.meshes.size());
-  for (size_t i = 0; i < payload.meshes.size(); ++i) {
-    node.meshIndices.push_back(meshBase + i);
-  }
-  node.name = ResolveNodeDisplayName(payload);
-  node.sourcePath = effectiveSourcePath;
-  node.linkedMaterialIndices = std::move(localToGlobal);
-  node.linkedMaterialSourceNames.clear();
-  node.linkedMaterialSourceNames.reserve(payload.materials.size());
-  for (const Asset::Material &material : payload.materials) {
-    node.linkedMaterialSourceNames.emplace_back(material.name);
+    if (previousSourcePath != effectiveSourcePath) {
+      ReleaseNodeMeshes(node);
+    }
+
+    g_loadedMeshes.insert(g_loadedMeshes.end(), payload.meshes.begin(),
+                          payload.meshes.end());
+
+    SharedImportedMeshEntry entry;
+    entry.refCount =
+        previousSourcePath == effectiveSourcePath
+            ? (std::max)(size_t(1), previousRefCount)
+            : (std::max)(size_t(1), previousRefCount + 1);
+    entry.linkedMaterialIndices = localToGlobal;
+    entry.linkedMaterialSourceNames.reserve(payload.materials.size());
+    for (const Asset::Material &material : payload.materials) {
+      entry.linkedMaterialSourceNames.emplace_back(material.name);
+    }
+    entry.meshIndices.reserve(payload.meshes.size());
+    for (size_t i = 0; i < payload.meshes.size(); ++i) {
+      entry.meshIndices.push_back(meshBase + i);
+    }
+
+    s_sharedImportedMeshesBySourcePath[effectiveSourcePath] = entry;
+
+    for (size_t meshIndex : previousMeshIndices) {
+      if (meshIndex >= g_loadedMeshes.size()) {
+        continue;
+      }
+      g_loadedMeshes[meshIndex].vertexBuffer.Reset();
+      g_loadedMeshes[meshIndex].indexBuffer.Reset();
+      g_loadedMeshes[meshIndex].vertexCount = 0;
+      g_loadedMeshes[meshIndex].indexCount = 0;
+    }
+
+    for (Node &sceneNode : s_nodes) {
+      if (sceneNode.sourcePath != effectiveSourcePath &&
+          &sceneNode != &node) {
+        continue;
+      }
+      sceneNode.name = (&sceneNode == &node) ? ResolveNodeDisplayName(payload)
+                                             : sceneNode.name;
+      sceneNode.sourcePath = effectiveSourcePath;
+      sceneNode.meshIndices =
+          s_sharedImportedMeshesBySourcePath[effectiveSourcePath].meshIndices;
+      sceneNode.linkedMaterialIndices =
+          s_sharedImportedMeshesBySourcePath[effectiveSourcePath]
+              .linkedMaterialIndices;
+      sceneNode.linkedMaterialSourceNames =
+          s_sharedImportedMeshesBySourcePath[effectiveSourcePath]
+              .linkedMaterialSourceNames;
+    }
+  } else {
+    ReleaseNodeMeshes(node);
+    g_loadedMeshes.insert(g_loadedMeshes.end(), payload.meshes.begin(),
+                          payload.meshes.end());
+
+    node.meshIndices.clear();
+    node.meshIndices.reserve(payload.meshes.size());
+    for (size_t i = 0; i < payload.meshes.size(); ++i) {
+      node.meshIndices.push_back(meshBase + i);
+    }
+    node.name = ResolveNodeDisplayName(payload);
+    node.sourcePath = effectiveSourcePath;
+    node.linkedMaterialIndices = std::move(localToGlobal);
+    node.linkedMaterialSourceNames.clear();
+    node.linkedMaterialSourceNames.reserve(payload.materials.size());
+    for (const Asset::Material &material : payload.materials) {
+      node.linkedMaterialSourceNames.emplace_back(material.name);
+    }
   }
 
   ApplyRendererInvalidation(
@@ -1211,14 +1368,7 @@ bool RemoveNode(size_t index) {
 
   WaitGPUIdle();
 
-  for (size_t mi : s_nodes[index].meshIndices) {
-    if (mi < g_loadedMeshes.size()) {
-      g_loadedMeshes[mi].vertexBuffer.Reset();
-      g_loadedMeshes[mi].indexBuffer.Reset();
-      g_loadedMeshes[mi].vertexCount = 0;
-      g_loadedMeshes[mi].indexCount = 0;
-    }
-  }
+  ReleaseNodeMeshes(s_nodes[index]);
   s_nodes.erase(s_nodes.begin() + index);
 
   for (Node &node : s_nodes) {
@@ -2675,6 +2825,7 @@ void ResetScene() {
   g_loadedTextures.clear();
   s_materialStableIds.clear();
   s_materialIndicesByStableId.clear();
+  s_sharedImportedMeshesBySourcePath.clear();
   s_textureIndicesBySourceUri.clear();
   AnimationSequence::Clear();
   SavedViews::Clear();
