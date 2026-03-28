@@ -224,7 +224,9 @@ static SUMaterialRef ResolveFaceMaterial(SUFaceRef face, bool preferBackSide,
 
 bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
              std::vector<Material> *outMaterials,
-             std::vector<Texture> *outTextures, const float *rootTranslation) {
+             std::vector<Texture> *outTextures, const float *rootTranslation,
+             std::vector<ImportedSceneNode> *outSceneNodes) {
+  (void)outSceneNodes;
   if (s_progressCb)
     s_progressCb(0.0f, std::string("Importing SKP: ") + path);
 
@@ -777,8 +779,9 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
 
 bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
              std::vector<Material> *outMaterials,
-             std::vector<Texture> *outTextures, const float *rootTranslation) {
-  (void)path; (void)outMeshes; (void)outMaterials; (void)outTextures; (void)rootTranslation;
+             std::vector<Texture> *outTextures, const float *rootTranslation,
+             std::vector<ImportedSceneNode> *outSceneNodes) {
+  (void)path; (void)outMeshes; (void)outMaterials; (void)outTextures; (void)rootTranslation; (void)outSceneNodes;
   fprintf(stderr, "LoadSkp: SketchUp SDK support not compiled in (USE_SKETCHUP_SDK=OFF).\n");
   return false;
 }

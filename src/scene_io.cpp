@@ -600,6 +600,7 @@ static json BuildMetadata() {
     for (int i = 0; i < 16; ++i) xf[i] = node.transform[i];
     j["nod"].push_back({
       {"n", node.name}, {"sp", node.sourcePath},
+      {"igk", node.importGroupKey}, {"igr", node.importGroupRoot},
       {"v", node.visible}, {"s", node.selected},
       {"ll", node.liveLinkManaged}, {"pi", node.parentIndex},
       {"mi", node.meshIndices}, {"t", xf}
@@ -892,6 +893,8 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
       Scene::Node node;
       node.name = n.value("n", "EmbeddedNode");
       node.sourcePath = srcPath;
+      node.importGroupKey = n.value("igk", std::string());
+      node.importGroupRoot = n.value("igr", false);
       node.visible = n.value("v", true);
       node.liveLinkManaged = n.value("ll", false);
       node.parentIndex = n.value("pi", static_cast<size_t>(-1));
@@ -917,13 +920,25 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
     }
     if (fs::exists(srcPath) && Scene::ImportModel(srcPath)) {
       auto &nodes = const_cast<std::vector<Scene::Node>&>(Scene::GetNodes());
-      if (!nodes.empty()) {
-        nodes.back().name = n.value("n", nodes.back().name);
-        nodes.back().visible = n.value("v", true);
-        nodes.back().liveLinkManaged = n.value("ll", false);
-        nodes.back().parentIndex = n.value("pi", static_cast<size_t>(-1));
-        if (n.contains("t")) for (int i=0;i<16;++i) nodes.back().transform[i]=n["t"][i];
-        nodes.back().selected = n.value("s", false);
+      size_t restoredIndex = static_cast<size_t>(-1);
+      if (n.value("igr", false)) {
+        for (size_t i = nodes.size(); i-- > 0;) {
+          if (nodes[i].sourcePath == srcPath && nodes[i].importGroupRoot) {
+            restoredIndex = i;
+            break;
+          }
+        }
+      } else if (!nodes.empty()) {
+        restoredIndex = nodes.size() - 1;
+      }
+      if (restoredIndex < nodes.size()) {
+        nodes[restoredIndex].name = n.value("n", nodes[restoredIndex].name);
+        nodes[restoredIndex].visible = n.value("v", true);
+        nodes[restoredIndex].liveLinkManaged = n.value("ll", false);
+        nodes[restoredIndex].parentIndex =
+            n.value("pi", static_cast<size_t>(-1));
+        if (n.contains("t")) for (int i=0;i<16;++i) nodes[restoredIndex].transform[i]=n["t"][i];
+        nodes[restoredIndex].selected = n.value("s", false);
       }
     }
   }

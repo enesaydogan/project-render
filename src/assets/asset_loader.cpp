@@ -55,6 +55,56 @@ static ComPtr<ID3D12CommandQueue> s_queue;
 std::function<void(float, const std::string &)> s_progressCb;
 static thread_local bool s_deferGpuUpload = false;
 
+static void SetIdentityMatrix(float out[16]) {
+  if (!out) {
+    return;
+  }
+  for (int index = 0; index < 16; ++index) {
+    out[index] = 0.0f;
+  }
+  out[0] = 1.0f;
+  out[5] = 1.0f;
+  out[10] = 1.0f;
+  out[15] = 1.0f;
+}
+
+static void MultiplyColumnMajor(const float lhs[16], const float rhs[16],
+                                float out[16]) {
+  float result[16] = {0.0f};
+  for (int row = 0; row < 4; ++row) {
+    for (int col = 0; col < 4; ++col) {
+      float sum = 0.0f;
+      for (int k = 0; k < 4; ++k) {
+        sum += lhs[k * 4 + row] * rhs[col * 4 + k];
+      }
+      result[col * 4 + row] = sum;
+    }
+  }
+  memcpy(out, result, sizeof(result));
+}
+
+static void CopyAiMatrixToColumnMajor(const aiMatrix4x4 &matrix, float out[16]) {
+  if (!out) {
+    return;
+  }
+  out[0] = matrix.a1;
+  out[1] = matrix.b1;
+  out[2] = matrix.c1;
+  out[3] = matrix.d1;
+  out[4] = matrix.a2;
+  out[5] = matrix.b2;
+  out[6] = matrix.c2;
+  out[7] = matrix.d2;
+  out[8] = matrix.a3;
+  out[9] = matrix.b3;
+  out[10] = matrix.c3;
+  out[11] = matrix.d3;
+  out[12] = matrix.a4;
+  out[13] = matrix.b4;
+  out[14] = matrix.c4;
+  out[15] = matrix.d4;
+}
+
 void Initialize(ID3D12Device *device, ID3D12CommandQueue *queue) {
   s_device = device;
   s_queue = queue;
@@ -463,7 +513,8 @@ static void CreateDefaultBuffer(
 
 bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
               std::vector<Material> *outMaterials,
-              std::vector<Texture> *outTextures, const float *rootTranslation) {
+              std::vector<Texture> *outTextures, const float *rootTranslation,
+              std::vector<ImportedSceneNode> *outSceneNodes) {
   std::ostringstream oss;
   oss << "Asset::LoadGltf (tinygltf) requested: " << path << "\n";
   fprintf(stderr, "%s", oss.str().c_str());
@@ -880,6 +931,337 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
     }
   };
 
+  auto BuildNodeTransform = [](const tinygltf::Node &node, float out[16]) {
+    SetIdentityMatrix(out);
+    if (node.matrix.size() == 16) {
+      for (int i = 0; i < 16; ++i) {
+        out[i] = (float)node.matrix[i];
+      }
+      return;
+    }
+
+    float scaleX = 1.0f;
+    float scaleY = 1.0f;
+    float scaleZ = 1.0f;
+    if (node.scale.size() == 3) {
+      scaleX = (float)node.scale[0];
+      scaleY = (float)node.scale[1];
+      scaleZ = (float)node.scale[2];
+    }
+
+    float rotation[9] = {1.0f, 0.0f, 0.0f,
+                         0.0f, 1.0f, 0.0f,
+                         0.0f, 0.0f, 1.0f};
+    if (node.rotation.size() == 4) {
+      const float qx = (float)node.rotation[0];
+      const float qy = (float)node.rotation[1];
+      const float qz = (float)node.rotation[2];
+      const float qw = (float)node.rotation[3];
+      rotation[0] = 1.0f - 2.0f * qy * qy - 2.0f * qz * qz;
+      rotation[1] = 2.0f * qx * qy - 2.0f * qz * qw;
+      rotation[2] = 2.0f * qx * qz + 2.0f * qy * qw;
+      rotation[3] = 2.0f * qx * qy + 2.0f * qz * qw;
+      rotation[4] = 1.0f - 2.0f * qx * qx - 2.0f * qz * qz;
+      rotation[5] = 2.0f * qy * qz - 2.0f * qx * qw;
+      rotation[6] = 2.0f * qx * qz - 2.0f * qy * qw;
+      rotation[7] = 2.0f * qy * qz + 2.0f * qx * qw;
+      rotation[8] = 1.0f - 2.0f * qx * qx - 2.0f * qy * qy;
+    }
+
+    out[0] = rotation[0] * scaleX;
+    out[1] = rotation[3] * scaleX;
+    out[2] = rotation[6] * scaleX;
+    out[4] = rotation[1] * scaleY;
+    out[5] = rotation[4] * scaleY;
+    out[6] = rotation[7] * scaleY;
+    out[8] = rotation[2] * scaleZ;
+    out[9] = rotation[5] * scaleZ;
+    out[10] = rotation[8] * scaleZ;
+
+    if (node.translation.size() == 3) {
+      out[12] = (float)node.translation[0];
+      out[13] = (float)node.translation[1];
+      out[14] = (float)node.translation[2];
+    }
+  };
+
+  if (outSceneNodes) {
+    outSceneNodes->clear();
+
+    std::vector<std::vector<size_t>> meshPrimitiveRemap(model.meshes.size());
+    for (size_t meshIndex = 0; meshIndex < model.meshes.size(); ++meshIndex) {
+      const auto &mesh = model.meshes[meshIndex];
+      meshPrimitiveRemap[meshIndex].reserve(mesh.primitives.size());
+      for (size_t primitiveIndex = 0; primitiveIndex < mesh.primitives.size();
+           ++primitiveIndex) {
+        const auto &prim = mesh.primitives[primitiveIndex];
+        if (prim.mode != TINYGLTF_MODE_TRIANGLES &&
+            prim.mode != TINYGLTF_MODE_TRIANGLE_STRIP &&
+            prim.mode != TINYGLTF_MODE_TRIANGLE_FAN) {
+          meshPrimitiveRemap[meshIndex].push_back(static_cast<size_t>(-1));
+          continue;
+        }
+
+        const unsigned char *posData = nullptr;
+        const unsigned char *normData = nullptr;
+        const unsigned char *uvData = nullptr;
+        const unsigned char *tanData = nullptr;
+        size_t posStride = 0;
+        size_t normStride = 0;
+        size_t uvStride = 0;
+        size_t tanStride = 0;
+        size_t vertexCount = 0;
+        int posType = 0;
+        int posComp = 0;
+        int normType = 0;
+        int normComp = 0;
+        int uvType = 0;
+        int uvComp = 0;
+        int tanType = 0;
+        int tanComp = 0;
+
+        auto posIt = prim.attributes.find("POSITION");
+        if (posIt == prim.attributes.end() ||
+            !GetAccessorData(posIt->second, posData, posStride, vertexCount,
+                             posType, posComp)) {
+          meshPrimitiveRemap[meshIndex].push_back(static_cast<size_t>(-1));
+          continue;
+        }
+        if (posStride == 0) {
+          posStride = sizeof(float) * 3;
+        }
+
+        bool hasNormal = false;
+        auto normIt = prim.attributes.find("NORMAL");
+        if (normIt != prim.attributes.end() &&
+            GetAccessorData(normIt->second, normData, normStride, vertexCount,
+                            normType, normComp)) {
+          if (normStride == 0) {
+            normStride = sizeof(float) * 3;
+          }
+          hasNormal = true;
+        }
+
+        bool hasUv = false;
+        auto uvIt = prim.attributes.find("TEXCOORD_0");
+        if (uvIt != prim.attributes.end() &&
+            GetAccessorData(uvIt->second, uvData, uvStride, vertexCount, uvType,
+                            uvComp)) {
+          if (uvStride == 0) {
+            uvStride = sizeof(float) * 2;
+          }
+          hasUv = true;
+        }
+
+        bool hasTangent = false;
+        auto tanIt = prim.attributes.find("TANGENT");
+        if (tanIt != prim.attributes.end() &&
+            GetAccessorData(tanIt->second, tanData, tanStride, vertexCount,
+                            tanType, tanComp)) {
+          if (tanStride == 0) {
+            tanStride = sizeof(float) * 4;
+          }
+          hasTangent = true;
+        }
+
+        std::vector<Vertex> vertices;
+        vertices.reserve(vertexCount);
+        float minBound[3] = {FLT_MAX, FLT_MAX, FLT_MAX};
+        float maxBound[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
+        for (size_t vertexIndex = 0; vertexIndex < vertexCount; ++vertexIndex) {
+          float position[3] = {0.0f, 0.0f, 0.0f};
+          ReadVec3(posData + vertexIndex * posStride, posComp, position);
+
+          Vertex vertex = {};
+          vertex.pos[0] = position[0];
+          vertex.pos[1] = position[1];
+          vertex.pos[2] = position[2];
+          for (int axis = 0; axis < 3; ++axis) {
+            minBound[axis] = (std::min)(minBound[axis], vertex.pos[axis]);
+            maxBound[axis] = (std::max)(maxBound[axis], vertex.pos[axis]);
+          }
+
+          if (hasNormal) {
+            ReadVec3(normData + vertexIndex * normStride, normComp,
+                     vertex.normal);
+          } else {
+            vertex.normal[1] = 1.0f;
+          }
+
+          if (hasUv) {
+            ReadVec2(uvData + vertexIndex * uvStride, uvComp, vertex.uv);
+          }
+
+          if (hasTangent) {
+            ReadVec4(tanData + vertexIndex * tanStride, tanComp,
+                     vertex.tangent);
+          } else {
+            vertex.tangent[0] = 1.0f;
+            vertex.tangent[3] = 1.0f;
+          }
+
+          vertices.push_back(vertex);
+        }
+
+        std::vector<uint32_t> indices;
+        if (prim.indices >= 0) {
+          const unsigned char *idxData = nullptr;
+          size_t idxStride = 0;
+          size_t idxCount = 0;
+          int idxType = 0;
+          int idxComp = 0;
+          if (GetAccessorData(prim.indices, idxData, idxStride, idxCount,
+                              idxType, idxComp)) {
+            indices.resize(idxCount);
+            for (size_t index = 0; index < idxCount; ++index) {
+              if (idxComp == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) {
+                indices[index] =
+                    *reinterpret_cast<const uint16_t *>(idxData + index * 2);
+              } else if (idxComp == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT) {
+                indices[index] =
+                    *reinterpret_cast<const uint32_t *>(idxData + index * 4);
+              } else if (idxComp == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE) {
+                indices[index] = idxData[index];
+              }
+            }
+          }
+        } else {
+          indices.resize(vertexCount);
+          for (uint32_t index = 0; index < static_cast<uint32_t>(vertexCount);
+               ++index) {
+            indices[index] = index;
+          }
+        }
+
+        if (vertices.empty() || indices.empty()) {
+          meshPrimitiveRemap[meshIndex].push_back(static_cast<size_t>(-1));
+          continue;
+        }
+
+        GpuMesh gpuMesh = LoadMeshFromMemory(vertices, indices);
+        gpuMesh.materialIndex = prim.material;
+        gpuMesh.materialSlot = prim.material;
+        for (int axis = 0; axis < 3; ++axis) {
+          gpuMesh.minBound[axis] = minBound[axis];
+          gpuMesh.maxBound[axis] = maxBound[axis];
+        }
+        const size_t loadedIndex = outMeshes.size();
+        outMeshes.push_back(std::move(gpuMesh));
+        meshPrimitiveRemap[meshIndex].push_back(loadedIndex);
+      }
+    }
+
+    std::vector<int> parentIndices(model.nodes.size(), -1);
+    for (size_t nodeIndex = 0; nodeIndex < model.nodes.size(); ++nodeIndex) {
+      for (int childIndex : model.nodes[nodeIndex].children) {
+        if (childIndex >= 0 && childIndex < static_cast<int>(model.nodes.size())) {
+          parentIndices[(size_t)childIndex] = static_cast<int>(nodeIndex);
+        }
+      }
+    }
+
+    std::vector<float> identity(16, 0.0f);
+    for (int index = 0; index < 4; ++index) {
+      identity[index * 4 + index] = 1.0f;
+    }
+    if (rootTranslation) {
+      identity[12] = rootTranslation[0];
+      identity[13] = rootTranslation[1];
+      identity[14] = rootTranslation[2];
+    }
+
+    std::vector<std::vector<float>> worldTransforms(model.nodes.size(),
+                                                    std::vector<float>(16, 0.0f));
+    std::vector<bool> visited(model.nodes.size(), false);
+    auto traverseNode = [&](auto self, int nodeIndex,
+                            const std::vector<float> &parentTransform) -> void {
+      if (nodeIndex < 0 || nodeIndex >= static_cast<int>(model.nodes.size())) {
+        return;
+      }
+      const tinygltf::Node &node = model.nodes[(size_t)nodeIndex];
+      float localTransform[16];
+      BuildNodeTransform(node, localTransform);
+      float worldTransform[16];
+      MultiplyColumnMajor(parentTransform.data(), localTransform,
+                          worldTransform);
+      worldTransforms[(size_t)nodeIndex].assign(worldTransform,
+                                                worldTransform + 16);
+      visited[(size_t)nodeIndex] = true;
+      for (int childIndex : node.children) {
+        self(self, childIndex, worldTransforms[(size_t)nodeIndex]);
+      }
+    };
+
+    bool traversedSceneRoots = false;
+    if (!model.scenes.empty()) {
+      const int defaultSceneIndex =
+          model.defaultScene >= 0 &&
+                  model.defaultScene < static_cast<int>(model.scenes.size())
+              ? model.defaultScene
+              : 0;
+      for (int nodeIndex : model.scenes[(size_t)defaultSceneIndex].nodes) {
+        traverseNode(traverseNode, nodeIndex, identity);
+        traversedSceneRoots = true;
+      }
+    }
+    if (!traversedSceneRoots) {
+      for (size_t nodeIndex = 0; nodeIndex < model.nodes.size(); ++nodeIndex) {
+        if (parentIndices[nodeIndex] >= 0) {
+          continue;
+        }
+        traverseNode(traverseNode, static_cast<int>(nodeIndex), identity);
+      }
+    }
+
+    std::vector<size_t> importedNodeRemap(model.nodes.size(),
+                                          static_cast<size_t>(-1));
+    for (size_t nodeIndex = 0; nodeIndex < model.nodes.size(); ++nodeIndex) {
+      if (!visited[nodeIndex]) {
+        continue;
+      }
+
+      ImportedSceneNode sceneNode;
+      const tinygltf::Node &node = model.nodes[nodeIndex];
+      if (!node.name.empty()) {
+        sceneNode.name = node.name;
+      } else if (node.mesh >= 0 &&
+                 node.mesh < static_cast<int>(model.meshes.size()) &&
+                 !model.meshes[(size_t)node.mesh].name.empty()) {
+        sceneNode.name = model.meshes[(size_t)node.mesh].name;
+      } else {
+        sceneNode.name = "Node " + std::to_string(nodeIndex);
+      }
+      memcpy(sceneNode.transform, worldTransforms[nodeIndex].data(),
+             sizeof(sceneNode.transform));
+
+      const int parentNodeIndex = parentIndices[nodeIndex];
+      if (parentNodeIndex >= 0 &&
+          parentNodeIndex < static_cast<int>(importedNodeRemap.size())) {
+        sceneNode.parentIndex = importedNodeRemap[(size_t)parentNodeIndex];
+      }
+
+      if (node.mesh >= 0 &&
+          node.mesh < static_cast<int>(meshPrimitiveRemap.size())) {
+        for (size_t meshIndex : meshPrimitiveRemap[(size_t)node.mesh]) {
+          if (meshIndex != static_cast<size_t>(-1)) {
+            sceneNode.meshIndices.push_back(meshIndex);
+          }
+        }
+      }
+
+      importedNodeRemap[nodeIndex] = outSceneNodes->size();
+      outSceneNodes->push_back(std::move(sceneNode));
+    }
+
+    if (outTextures) {
+      *outTextures = std::move(tmpTextures);
+    }
+    if (outMaterials) {
+      *outMaterials = std::move(tmpMaterials);
+    }
+    return !outMeshes.empty() && !outSceneNodes->empty();
+  }
+
   // --- Node traversal to bake transforms into vertices ---
   struct NodeTransform {
     int meshIdx;
@@ -1239,7 +1621,8 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
 
 bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
               std::vector<Material> *outMaterials,
-              std::vector<Texture> *outTextures, const float *rootTranslation) {
+              std::vector<Texture> *outTextures, const float *rootTranslation,
+              std::vector<ImportedSceneNode> *outSceneNodes) {
   std::ostringstream oss;
   oss << "Asset::LoadGltf requested: " << path << "\n";
   fprintf(stderr, "%s", oss.str().c_str());
@@ -1249,6 +1632,7 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
     return false;
   }
 
+  (void)outSceneNodes;
   fprintf(stderr, "Found file but loader is stubbed. Enable USE_TINYGLTF in "
                   "CMake to use tinygltf.\n");
   return true;
@@ -1289,8 +1673,10 @@ private:
 bool LoadWithAssimp(const std::string &path, std::vector<GpuMesh> &outMeshes,
                     std::vector<Material> *outMaterials,
                     std::vector<Texture> *outTextures,
-                    const float *rootTranslation) {
+                    const float *rootTranslation,
+                    std::vector<ImportedSceneNode> *outSceneNodes) {
   Assimp::Importer importer;
+  const bool preserveSceneNodes = outSceneNodes != nullptr;
   // Hook up progress handler.
   // NOTE: Assimp Importer takes ownership of the progress handler and deletes
   // it in its destructor. Therefore, we must allocate it on the heap.
@@ -1309,11 +1695,14 @@ bool LoadWithAssimp(const std::string &path, std::vector<GpuMesh> &outMeshes,
       aiProcess_GlobalScale;
 
   if (g_fastImport) {
-    // Aggressively optimize: Join vertices, Improve Cache, etc. (Can be slow to
-    // load!)
     assimpFlags |= aiProcess_JoinIdenticalVertices |
-                   aiProcess_PreTransformVertices | aiProcess_OptimizeMeshes |
-                   aiProcess_OptimizeGraph | aiProcess_ImproveCacheLocality;
+                   aiProcess_ImproveCacheLocality;
+    if (!preserveSceneNodes) {
+      // The legacy path bakes node transforms into vertex data, so graph
+      // flattening is still useful there.
+      assimpFlags |= aiProcess_PreTransformVertices | aiProcess_OptimizeMeshes |
+                     aiProcess_OptimizeGraph;
+    }
   }
 
   const aiScene *scene = importer.ReadFile(path, assimpFlags);
@@ -1504,6 +1893,125 @@ bool LoadWithAssimp(const std::string &path, std::vector<GpuMesh> &outMeshes,
     s_progressCb(0.15f, std::string("Processing meshes: 0/") +
                             std::to_string(totalMeshes));
 
+  if (preserveSceneNodes) {
+    outSceneNodes->clear();
+    outMeshes.reserve(scene->mNumMeshes);
+    for (unsigned int meshIndex = 0; meshIndex < scene->mNumMeshes;
+         ++meshIndex) {
+      aiMesh *mesh = scene->mMeshes[meshIndex];
+      std::vector<Vertex> vertices;
+      std::vector<uint32_t> indices;
+      vertices.reserve(mesh->mNumVertices);
+      float minBound[3] = {FLT_MAX, FLT_MAX, FLT_MAX};
+      float maxBound[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
+
+      for (unsigned int vertexIndex = 0; vertexIndex < mesh->mNumVertices;
+           ++vertexIndex) {
+        Vertex vertex = {};
+        const aiVector3D p = mesh->mVertices[vertexIndex];
+        vertex.pos[0] = p.x;
+        vertex.pos[1] = p.y;
+        vertex.pos[2] = p.z;
+        for (int axis = 0; axis < 3; ++axis) {
+          minBound[axis] = (std::min)(minBound[axis], vertex.pos[axis]);
+          maxBound[axis] = (std::max)(maxBound[axis], vertex.pos[axis]);
+        }
+
+        if (mesh->HasNormals()) {
+          const aiVector3D n = mesh->mNormals[vertexIndex];
+          vertex.normal[0] = n.x;
+          vertex.normal[1] = n.y;
+          vertex.normal[2] = n.z;
+        } else {
+          vertex.normal[1] = 1.0f;
+        }
+
+        if (mesh->HasTextureCoords(0)) {
+          vertex.uv[0] = mesh->mTextureCoords[0][vertexIndex].x;
+          vertex.uv[1] = mesh->mTextureCoords[0][vertexIndex].y;
+        }
+
+        if (mesh->HasTangentsAndBitangents()) {
+          const aiVector3D tangent = mesh->mTangents[vertexIndex];
+          vertex.tangent[0] = tangent.x;
+          vertex.tangent[1] = tangent.y;
+          vertex.tangent[2] = tangent.z;
+          vertex.tangent[3] = 1.0f;
+        } else {
+          vertex.tangent[0] = 1.0f;
+          vertex.tangent[3] = 1.0f;
+        }
+
+        vertices.push_back(vertex);
+      }
+
+      for (unsigned int faceIndex = 0; faceIndex < mesh->mNumFaces;
+           ++faceIndex) {
+        const aiFace &face = mesh->mFaces[faceIndex];
+        for (unsigned int index = 0; index < face.mNumIndices; ++index) {
+          indices.push_back(face.mIndices[index]);
+        }
+      }
+
+      GpuMesh gpuMesh = LoadMeshFromMemory(vertices, indices);
+      gpuMesh.materialIndex = mesh->mMaterialIndex;
+      gpuMesh.materialSlot = mesh->mMaterialIndex;
+      for (int axis = 0; axis < 3; ++axis) {
+        gpuMesh.minBound[axis] = minBound[axis];
+        gpuMesh.maxBound[axis] = maxBound[axis];
+      }
+      outMeshes.push_back(std::move(gpuMesh));
+
+      ++processedMeshes;
+      if (s_progressCb && totalMeshes > 0) {
+        float p = 0.15f + 0.6f * (processedMeshes / (float)totalMeshes);
+        if (p > 0.82f)
+          p = 0.82f;
+        char buf[256];
+        sprintf_s(buf, "Importing shared meshes: %d/%d", processedMeshes,
+                  totalMeshes);
+        s_progressCb(p, std::string(buf));
+      }
+    }
+
+    aiMatrix4x4 rootTransform;
+    if (rootTranslation) {
+      rootTransform.a4 = rootTranslation[0];
+      rootTransform.b4 = rootTranslation[1];
+      rootTransform.c4 = rootTranslation[2];
+    }
+
+    std::function<void(aiNode *, aiMatrix4x4, size_t)> captureNode =
+        [&](aiNode *node, aiMatrix4x4 parentTransform,
+            size_t parentImportedIndex) {
+          aiMatrix4x4 currentTransform = parentTransform * node->mTransformation;
+
+          ImportedSceneNode sceneNode;
+          sceneNode.name =
+              node->mName.length > 0 ? node->mName.C_Str() : "Imported Node";
+          sceneNode.parentIndex = parentImportedIndex;
+          CopyAiMatrixToColumnMajor(currentTransform, sceneNode.transform);
+          sceneNode.meshIndices.reserve(node->mNumMeshes);
+          for (unsigned int meshRefIndex = 0; meshRefIndex < node->mNumMeshes;
+               ++meshRefIndex) {
+            sceneNode.meshIndices.push_back(node->mMeshes[meshRefIndex]);
+          }
+
+          const size_t thisImportedIndex = outSceneNodes->size();
+          outSceneNodes->push_back(std::move(sceneNode));
+          for (unsigned int childIndex = 0; childIndex < node->mNumChildren;
+               ++childIndex) {
+            captureNode(node->mChildren[childIndex], currentTransform,
+                        thisImportedIndex);
+          }
+        };
+
+    captureNode(scene->mRootNode, rootTransform, static_cast<size_t>(-1));
+    if (s_progressCb)
+      s_progressCb(1.0f, std::string("Import complete: ") + path);
+    return !outMeshes.empty() && !outSceneNodes->empty();
+  }
+
   std::function<void(aiNode *, aiMatrix4x4)> processNode =
       [&](aiNode *node, aiMatrix4x4 parentTransform) {
         aiMatrix4x4 currentTransform = parentTransform * node->mTransformation;
@@ -1645,33 +2153,37 @@ bool LoadWithAssimp(const std::string &path, std::vector<GpuMesh> &outMeshes,
 
 bool LoadOBJ(const std::string &path, std::vector<GpuMesh> &outMeshes,
              std::vector<Material> *outMaterials,
-             std::vector<Texture> *outTextures, const float *rootTranslation) {
+             std::vector<Texture> *outTextures, const float *rootTranslation,
+             std::vector<ImportedSceneNode> *outSceneNodes) {
   return LoadWithAssimp(path, outMeshes, outMaterials, outTextures,
-                        rootTranslation);
+                        rootTranslation, outSceneNodes);
 }
 
 bool LoadSTL(const std::string &path, std::vector<GpuMesh> &outMeshes,
              std::vector<Material> *outMaterials,
-             std::vector<Texture> *outTextures, const float *rootTranslation) {
+             std::vector<Texture> *outTextures, const float *rootTranslation,
+             std::vector<ImportedSceneNode> *outSceneNodes) {
   return LoadWithAssimp(path, outMeshes, outMaterials, outTextures,
-                        rootTranslation);
+                        rootTranslation, outSceneNodes);
 }
 
 bool LoadModel(const std::string &path, std::vector<GpuMesh> &outMeshes,
                std::vector<Material> *outMaterials,
                std::vector<Texture> *outTextures,
-               const float *rootTranslation) {
+               const float *rootTranslation,
+               std::vector<ImportedSceneNode> *outSceneNodes) {
   std::string ext = std::filesystem::path(path).extension().string();
   std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
   if (ext == ".skp") {
-    return LoadSkp(path, outMeshes, outMaterials, outTextures, rootTranslation);
+    return LoadSkp(path, outMeshes, outMaterials, outTextures, rootTranslation,
+                   outSceneNodes);
   } else if (ext == ".gltf" || ext == ".glb") {
     return LoadGltf(path, outMeshes, outMaterials, outTextures,
-                    rootTranslation);
+                    rootTranslation, outSceneNodes);
   } else {
     return LoadWithAssimp(path, outMeshes, outMaterials, outTextures,
-                          rootTranslation);
+                          rootTranslation, outSceneNodes);
   }
 }
 
