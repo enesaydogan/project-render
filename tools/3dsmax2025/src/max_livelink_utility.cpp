@@ -228,7 +228,7 @@ constexpr uint64_t kIdlePollMinIntervalMs = 400;
 constexpr uint64_t kHeavyPollMinIntervalMs = 1000;
 constexpr uint64_t kReconnectPollMinIntervalMs = 1000;
 constexpr uint64_t kCameraPollMinIntervalMs = 33;
-constexpr uint64_t kVerificationFullResyncIntervalMs = 1500;
+constexpr uint64_t kTransformVerificationMinIntervalMs = 1500;
 constexpr uint64_t kSlowPollThresholdMs = 150;
 constexpr size_t kLargeSceneNodeThreshold = 250;
 constexpr int kUtilityDialogId = 101;
@@ -4377,7 +4377,7 @@ public:
       return;
     }
     UtilityObj::SelectionSetChanged(ip, iu);
-    SendSelectionDeltaIfNeeded();
+    MarkSelectionDirty();
   }
 
   void DeleteThis() override {}
@@ -4709,7 +4709,7 @@ private:
 
   void ScheduleVerificationSweep_NoLock() {
     m_nextVerificationDeadline =
-        ComputeNextPollDeadline(kVerificationFullResyncIntervalMs);
+        ComputeNextPollDeadline(kTransformVerificationMinIntervalMs);
   }
 
   std::string BuildDetailsText_NoLock() const {
@@ -4984,15 +4984,13 @@ private:
 
   void PollSceneChangesLocked() {
     const Clock::time_point now = Clock::now();
-    if (!m_forceFullResync &&
+    const bool transformVerificationDue =
+        !m_forceFullResync &&
         m_nextVerificationDeadline != Clock::time_point{} &&
-        now >= m_nextVerificationDeadline && !m_selectionDirty &&
-        m_dirtyNodeHandles.empty() && m_dirtyMeshHandles.empty() &&
-        m_dirtyMaterialHandles.empty() && m_dirtyLightHandles.empty()) {
-      m_forceFullResync = true;
-    }
+        now >= m_nextVerificationDeadline;
 
-    if (!m_forceFullResync && m_nextPollDeadline != Clock::time_point{} &&
+    if (!m_forceFullResync && !transformVerificationDue &&
+        m_nextPollDeadline != Clock::time_point{} &&
         now < m_nextPollDeadline) {
       return;
     }
@@ -5262,11 +5260,12 @@ private:
       }
     }
 
-      // INodeEventCallback can miss transform updates during interactive manipulations,
-      // IK evaluation, or playback. We perform a fast O(N) sweep over all nodes in the
-      // scene to robustly catch any unnotified matrix changes and stream them.
+    if (transformVerificationDue) {
+      // INodeEventCallback can miss transform updates during interactive
+      // manipulations, IK evaluation, or playback, so verify transforms on a
+      // slower cadence instead of every poll.
       if (INode *root = ip->GetRootNode()) {
-        std::vector<INode*> traversalStack;
+        std::vector<INode *> traversalStack;
         for (int i = 0; i < root->NumberOfChildren(); ++i) {
           traversalStack.push_back(root->GetChildNode(i));
         }
@@ -5295,6 +5294,8 @@ private:
           }
         }
       }
+      ScheduleVerificationSweep_NoLock();
+    }
 
     if (m_selectionDirty) {
       selectedObjectIds = GatherSelectedObjectIds(ip);
@@ -5309,6 +5310,17 @@ private:
             .count());
     m_nextPollDeadline = ComputeNextPollDeadline(ComputePollDelayMs(
         scannedNodeCount, deltas.size(), scanDurationMs));
+
+    const bool selectionChanged =
+        m_selectionDirty && selectedObjectIds != m_lastSelectedObjectIds;
+    const bool hadPendingDirtyWork =
+        m_selectionDirty || !m_dirtyNodeHandles.empty() ||
+        !m_dirtyMeshHandles.empty() || !m_dirtyMaterialHandles.empty() ||
+        !m_dirtyLightHandles.empty();
+    const bool hasIncrementalStateUpdates =
+        !stagedNodes.empty() || !stagedLights.empty() ||
+        !removedLightHandles.empty() || !stagedMaterialStates.empty() ||
+        selectionChanged;
 
     if (!deltas.empty() && SendBatch(m_sessionId, m_nextSequence, false, deltas)) {
       ++m_nextSequence;
@@ -5330,7 +5342,7 @@ private:
       }
       PersistResumeStateLocked(ip);
       ClearDirtyState();
-    } else if (deltas.empty()) {
+    } else if (deltas.empty() && (hasIncrementalStateUpdates || hadPendingDirtyWork)) {
       for (const auto &[handle, snapshot] : stagedNodes) {
         m_lastNodeState[handle] = snapshot;
       }
@@ -5346,7 +5358,9 @@ private:
       if (m_selectionDirty) {
         m_lastSelectedObjectIds = selectedObjectIds;
       }
-      PersistResumeStateLocked(ip);
+      if (hasIncrementalStateUpdates) {
+        PersistResumeStateLocked(ip);
+      }
       ClearDirtyState();
     }
 
