@@ -1737,6 +1737,13 @@ void WritePersistedLiveLinkState(
   WriteAppDataString(ip->GetRootNode(), kResumeStateAppDataSubId, value.dump());
 }
 
+void ClearPersistedLiveLinkState(Interface *ip) {
+  if (!ip) {
+    return;
+  }
+  ClearAppDataString(ip->GetRootNode(), kResumeStateAppDataSubId);
+}
+
 bool SameMatrix(const std::array<float, 16> &lhs,
                 const std::array<float, 16> &rhs) {
   for (size_t index = 0; index < lhs.size(); ++index) {
@@ -1810,6 +1817,27 @@ Matrix3 ComputeObjectToNodeTransform(Interface *ip, INode *node) {
   const Matrix3 nodeTm = node->GetNodeTM(time);
   const Matrix3 objectTm = node->GetObjectTM(time);
   return objectTm * Inverse(nodeTm);
+}
+
+uint64_t HashMatrix3Value(const Matrix3 &matrix) {
+  uint64_t hash = 1469598103934665603ull;
+  const Point3 row0 = matrix.GetRow(0);
+  const Point3 row1 = matrix.GetRow(1);
+  const Point3 row2 = matrix.GetRow(2);
+  const Point3 translation = matrix.GetTrans();
+  hash = HashCombine(hash, HashFloat(row0.x));
+  hash = HashCombine(hash, HashFloat(row0.y));
+  hash = HashCombine(hash, HashFloat(row0.z));
+  hash = HashCombine(hash, HashFloat(row1.x));
+  hash = HashCombine(hash, HashFloat(row1.y));
+  hash = HashCombine(hash, HashFloat(row1.z));
+  hash = HashCombine(hash, HashFloat(row2.x));
+  hash = HashCombine(hash, HashFloat(row2.y));
+  hash = HashCombine(hash, HashFloat(row2.z));
+  hash = HashCombine(hash, HashFloat(translation.x));
+  hash = HashCombine(hash, HashFloat(translation.y));
+  hash = HashCombine(hash, HashFloat(translation.z));
+  return hash;
 }
 
 Point3 TransformPointByMatrix3(const Matrix3 &matrix, const Point3 &point) {
@@ -3447,8 +3475,8 @@ std::filesystem::path GetNodePayloadPath(const std::string &documentId,
          (SanitizePathComponent(nodeObjectId) + std::string(".prmesh"));
 }
 
-std::string BuildSharedPayloadKey(INode *node) {
-  if (!node || !node->GetObjectRef()) {
+std::string BuildSharedPayloadKey(Interface *ip, INode *node) {
+  if (!ip || !node || !node->GetObjectRef()) {
     return {};
   }
 
@@ -3461,7 +3489,10 @@ std::string BuildSharedPayloadKey(INode *node) {
   Mtl *rootMaterial = node->GetMtl();
   const std::string materialGuid =
       rootMaterial ? GetOrCreateMaterialGuid(rootMaterial) : std::string("nomtl");
-  return std::string("shared_") + objectGuid + "_" + materialGuid;
+  const uint64_t objectToNodeHash =
+      HashMatrix3Value(ComputeObjectToNodeTransform(ip, node));
+  return std::string("shared_") + objectGuid + "_" + materialGuid + "_" +
+         std::to_string(objectToNodeHash);
 }
 
 std::filesystem::path GetSharedPayloadPath(const std::string &documentId,
@@ -3500,7 +3531,20 @@ void RemoveDocumentPayloadDirectoryIfEmpty(const std::string &documentId) {
   if (!documentDirectory.empty() &&
       std::filesystem::is_directory(documentDirectory, error) &&
       std::filesystem::is_empty(documentDirectory, error)) {
-    std::filesystem::remove(documentDirectory, error);
+      std::filesystem::remove(documentDirectory, error);
+  }
+}
+
+void RemoveDocumentPayloadDirectory(const std::string &documentId) {
+  if (documentId.empty()) {
+    return;
+  }
+
+  std::error_code error;
+  const std::filesystem::path documentDirectory =
+      GetDocumentPayloadDirectory(documentId);
+  if (!documentDirectory.empty()) {
+    std::filesystem::remove_all(documentDirectory, error);
   }
 }
 
@@ -3577,7 +3621,7 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
   }
 
   std::filesystem::path payloadPath;
-  const std::string sharedPayloadKey = BuildSharedPayloadKey(node);
+  const std::string sharedPayloadKey = BuildSharedPayloadKey(ip, node);
   if (!sharedPayloadKey.empty()) {
     payloadPath = GetSharedPayloadPath(documentId, sharedPayloadKey);
   }
@@ -4219,7 +4263,19 @@ bool SendBatch(const std::string &sessionId, uint64_t sequence, bool fullSync,
   batch["sequence"] = sequence;
   batch["fullSync"] = fullSync;
   batch["deltas"] = deltas;
-  return g_pipeClient.SendJsonLine(batch.dump());
+  const std::string payload = batch.dump();
+  if (g_pipeClient.SendJsonLine(payload)) {
+    return true;
+  }
+
+  // Max can keep a stale write handle when the engine process exits and
+  // reopens. Reconnect once and retry the batch so a fresh startup/resync
+  // works on the first button press.
+  g_pipeClient.Disconnect();
+  if (!EnsurePipeConnected()) {
+    return false;
+  }
+  return g_pipeClient.SendJsonLine(payload);
 }
 
 bool SendInitialSnapshot(Interface *ip,
@@ -4232,7 +4288,8 @@ bool SendInitialSnapshot(Interface *ip,
                          std::string *outSessionId,
                          std::string *outDocumentId,
                          uint64_t *outNextSequence,
-                         uint64_t *outNextRevision) {
+                         uint64_t *outNextRevision,
+                         bool clearsExistingScene = false) {
   if (!ip || !EnsurePipeConnected()) {
     return false;
   }
@@ -4268,7 +4325,7 @@ bool SendInitialSnapshot(Interface *ip,
   });
   deltas.push_back(json{
       {"kind", "FullSceneSync"},
-      {"payload", json{{"clearsExistingScene", false}}},
+      {"payload", json{{"clearsExistingScene", clearsExistingScene}}},
   });
 
   uint64_t revision = 1;
@@ -5005,6 +5062,30 @@ private:
                                 m_lastSelectedObjectIds, m_lastCameraSnapshot);
   }
 
+  void ResetTrackedState_NoLock() {
+    m_lastNodeState.clear();
+    m_lastMaterialState.clear();
+    m_lastLightState.clear();
+    m_lastSelectedObjectIds.clear();
+    m_lastCameraSnapshot = CameraSnapshot{};
+    m_sessionId.clear();
+    m_documentId.clear();
+    m_nextSequence = 1;
+    m_nextRevision = 1;
+    m_nextPollDeadline = Clock::time_point{};
+    m_nextCameraPollDeadline = Clock::time_point{};
+    m_nextVerificationDeadline = Clock::time_point{};
+    m_nextResumePersistDeadline = Clock::time_point{};
+    m_forceFullResync = false;
+    m_selectionDirty = false;
+    m_resumeStateDirty = false;
+    m_dirtyNodeHandles.clear();
+    m_dirtyMeshHandles.clear();
+    m_dirtyMaterialHandles.clear();
+    m_dirtyLightHandles.clear();
+    m_pendingPayloadRemovals.clear();
+  }
+
   void MarkResumeStateDirty_NoLock(uint64_t delayMs = kResumeStatePersistDelayMs) {
     m_resumeStateDirty = true;
     m_nextResumePersistDeadline = ComputeNextPollDeadline(delayMs);
@@ -5042,6 +5123,7 @@ private:
 
     size_t startupDeltaCount = 0;
     bool usedResumeStartup = false;
+    const bool clearsExistingScene = m_forceFullSnapshotOnConnect;
     if (!m_forceFullSnapshotOnConnect &&
         SendResumeSnapshot(ip, &m_lastNodeState, &m_lastMaterialState,
                            &m_lastLightState, &m_lastSelectedObjectIds,
@@ -5055,7 +5137,7 @@ private:
                                &m_lastCameraSnapshot, &startupDeltaCount,
                                &m_sessionId,
                                &m_documentId, &m_nextSequence,
-                               &m_nextRevision)) {
+                               &m_nextRevision, clearsExistingScene)) {
         return false;
       }
     }
@@ -5063,7 +5145,10 @@ private:
     ResetBatchStats_NoLock();
     RecordBatchSent_NoLock(startupDeltaCount);
     m_lastStartupSummary = std::string("Last startup: ") +
-                           (usedResumeStartup ? "resume sync" : "full snapshot") +
+                           (usedResumeStartup
+                                ? "resume sync"
+                                : (clearsExistingScene ? "full resync"
+                                                       : "full snapshot")) +
                            " (deltas=" + std::to_string(startupDeltaCount) + ")";
 
     PersistResumeStateLocked(ip);
@@ -5092,6 +5177,17 @@ private:
     if (!ip) {
       RefreshRollupUI_NoLock();
       return false;
+    }
+
+    if (forceFullResync) {
+      if (!m_sessionId.empty()) {
+        SendSessionClosed(m_sessionId, m_nextSequence++);
+      }
+      FlushQueuedPayloadRemovals_NoLock(true);
+      ClearPersistedLiveLinkState(ip);
+      RemoveDocumentPayloadDirectory(MakeDocumentId(ip));
+      g_pipeClient.Disconnect();
+      ResetTrackedState_NoLock();
     }
 
     m_forceFullSnapshotOnConnect = forceFullResync;
@@ -5136,27 +5232,7 @@ private:
     FlushQueuedPayloadRemovals_NoLock(true);
     UnregisterSceneCallbacks();
     g_pipeClient.Disconnect();
-    m_lastNodeState.clear();
-    m_lastMaterialState.clear();
-    m_lastLightState.clear();
-    m_lastSelectedObjectIds.clear();
-    m_lastCameraSnapshot = CameraSnapshot{};
-    m_sessionId.clear();
-    m_documentId.clear();
-    m_nextSequence = 1;
-    m_nextRevision = 1;
-    m_nextPollDeadline = Clock::time_point{};
-    m_nextCameraPollDeadline = Clock::time_point{};
-    m_nextVerificationDeadline = Clock::time_point{};
-    m_nextResumePersistDeadline = Clock::time_point{};
-    m_forceFullResync = false;
-    m_selectionDirty = false;
-    m_resumeStateDirty = false;
-    m_dirtyNodeHandles.clear();
-    m_dirtyMeshHandles.clear();
-    m_dirtyMaterialHandles.clear();
-    m_dirtyLightHandles.clear();
-    m_pendingPayloadRemovals.clear();
+    ResetTrackedState_NoLock();
     m_syncActive = false;
     RefreshRollupUI_NoLock();
   }
