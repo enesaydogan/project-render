@@ -5,8 +5,10 @@
 #include "../camera.h"
 #include "../dxr_renderer.h"
 #include "../raster_renderer.h"
+#include "../scene.h"
 
 #include <QCheckBox>
+#include <QComboBox>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -47,6 +49,8 @@ void SetHorizontalFovDegrees(double horizontalDegrees)
 }
 
 } // namespace
+
+extern RenderMode g_currentRenderMode;
 
 CameraPanel::CameraPanel(QWidget *parent)
     : QWidget(parent)
@@ -135,9 +139,21 @@ void CameraPanel::createUi()
     m_tonemapVignette = CreateSliderControl(0.0, 1.0, 0.01, 2);
     m_tonemapSaturation = CreateSliderControl(0.0, 2.0, 0.01, 2);
     m_tonemapContrast = CreateSliderControl(0.0, 2.0, 0.01, 2);
+    m_dxrAoNote = new QLabel(tr("DXR-only ambient occlusion is applied in the tone-map pass."), tonemapGroup);
+    m_dxrAoNote->setWordWrap(true);
+    m_dxrAoMode = new QComboBox(tonemapGroup);
+    m_dxrAoMode->addItem(tr("Inward"), static_cast<int>(DxrRenderer::TonemapAmbientOcclusionMode::Inward));
+    m_dxrAoMode->addItem(tr("Outward"), static_cast<int>(DxrRenderer::TonemapAmbientOcclusionMode::Outward));
+    m_dxrAoMode->addItem(tr("Both"), static_cast<int>(DxrRenderer::TonemapAmbientOcclusionMode::Both));
+    m_dxrAoIntensity = CreateSliderControl(0.0, 2.0, 0.01, 2);
+    m_dxrAoLengthCm = CreateSliderControl(0.0, 200.0, 1.0, 0);
     tonemapForm->addRow(tr("Vignette"), m_tonemapVignette);
     tonemapForm->addRow(tr("Saturation"), m_tonemapSaturation);
     tonemapForm->addRow(tr("Contrast"), m_tonemapContrast);
+    tonemapForm->addRow(m_dxrAoNote);
+    tonemapForm->addRow(tr("DXR AO Mode"), m_dxrAoMode);
+    tonemapForm->addRow(tr("DXR AO Intensity"), m_dxrAoIntensity);
+    tonemapForm->addRow(tr("DXR AO Length (cm)"), m_dxrAoLengthCm);
     layout->addWidget(tonemapGroup);
 
     layout->addStretch(1);
@@ -231,6 +247,15 @@ void CameraPanel::createUi()
     connect(m_tonemapContrast->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) {
         applyTonemapSettings();
     });
+    connect(m_dxrAoMode, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+        applyTonemapSettings();
+    });
+    connect(m_dxrAoIntensity->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) {
+        applyTonemapSettings();
+    });
+    connect(m_dxrAoLengthCm->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) {
+        applyTonemapSettings();
+    });
 }
 
 void CameraPanel::syncFromRenderer()
@@ -292,6 +317,18 @@ void CameraPanel::syncFromRenderer()
     m_tonemapVignette->setValue(rs.tonemapVignette);
     m_tonemapSaturation->setValue(rs.tonemapSaturation);
     m_tonemapContrast->setValue(rs.tonemapContrast);
+    const int aoMode = static_cast<int>(DxrRenderer::GetTonemapAmbientOcclusionMode());
+    const int aoModeIndex = m_dxrAoMode->findData(aoMode);
+    if (aoModeIndex >= 0) {
+        m_dxrAoMode->setCurrentIndex(aoModeIndex);
+    }
+    m_dxrAoIntensity->setValue(DxrRenderer::GetTonemapAmbientOcclusionIntensity());
+    m_dxrAoLengthCm->setValue(DxrRenderer::GetTonemapAmbientOcclusionLengthCm());
+    const bool dxrMode = (g_currentRenderMode == RenderMode::DXR);
+    m_dxrAoNote->setEnabled(dxrMode);
+    m_dxrAoMode->setEnabled(dxrMode);
+    m_dxrAoIntensity->setEnabled(dxrMode);
+    m_dxrAoLengthCm->setEnabled(dxrMode);
 
     m_syncing = false;
 }
@@ -340,4 +377,11 @@ void CameraPanel::applyTonemapSettings()
     rs.tonemapVignette = static_cast<float>(m_tonemapVignette->value());
     rs.tonemapSaturation = static_cast<float>(m_tonemapSaturation->value());
     rs.tonemapContrast = static_cast<float>(m_tonemapContrast->value());
+    DxrRenderer::SetTonemapAmbientOcclusionIntensity(
+        static_cast<float>(m_dxrAoIntensity->value()));
+    DxrRenderer::SetTonemapAmbientOcclusionLengthCm(
+        static_cast<float>(m_dxrAoLengthCm->value()));
+    DxrRenderer::SetTonemapAmbientOcclusionMode(
+        static_cast<DxrRenderer::TonemapAmbientOcclusionMode>(
+            m_dxrAoMode->currentData().toInt()));
 }

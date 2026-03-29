@@ -3,6 +3,7 @@
 #include <QWidget>
 
 class QCheckBox;
+class QComboBox;
 class QLabel;
 class QPushButton;
 class QTimer;
@@ -49,6 +50,10 @@ private:
     SliderControl *m_tonemapVignette = nullptr;
     SliderControl *m_tonemapSaturation = nullptr;
     SliderControl *m_tonemapContrast = nullptr;
+    QLabel *m_dxrAoNote = nullptr;
+    QComboBox *m_dxrAoMode = nullptr;
+    SliderControl *m_dxrAoIntensity = nullptr;
+    SliderControl *m_dxrAoLengthCm = nullptr;
 
     QTimer *m_refreshTimer = nullptr;
 };

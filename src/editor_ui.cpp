@@ -1814,6 +1814,55 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
           }
         }
       }
+
+      {
+        auto &rs = RasterRenderer::GetRenderSettings();
+        ImGui::Separator();
+        ImGui::Text("Tone Map");
+        if (ImGui::SliderFloat("Vignette", &rs.tonemapVignette, 0.0f, 1.0f,
+                               "%.2f")) {
+          uiChanged = true;
+        }
+        if (ImGui::SliderFloat("Saturation", &rs.tonemapSaturation, 0.0f,
+                               2.0f, "%.2f")) {
+          uiChanged = true;
+        }
+        if (ImGui::SliderFloat("Contrast", &rs.tonemapContrast, 0.0f, 2.0f,
+                               "%.2f")) {
+          uiChanged = true;
+        }
+
+        if (g_currentRenderMode == RenderMode::DXR) {
+          static const char *kAoModeLabels[] = {"Inward", "Outward", "Both"};
+          int aoMode =
+              static_cast<int>(DxrRenderer::GetTonemapAmbientOcclusionMode());
+          if (ImGui::Combo("DXR AO Mode", &aoMode, kAoModeLabels,
+                           IM_ARRAYSIZE(kAoModeLabels))) {
+            DxrRenderer::SetTonemapAmbientOcclusionMode(
+                static_cast<DxrRenderer::TonemapAmbientOcclusionMode>(
+                    std::clamp(aoMode, 0, 2)));
+            uiChanged = true;
+          }
+
+          float aoIntensity =
+              DxrRenderer::GetTonemapAmbientOcclusionIntensity();
+          if (ImGui::SliderFloat("DXR AO Intensity", &aoIntensity, 0.0f, 2.0f,
+                                 "%.2f")) {
+            DxrRenderer::SetTonemapAmbientOcclusionIntensity(aoIntensity);
+            uiChanged = true;
+          }
+
+          float aoLengthCm = DxrRenderer::GetTonemapAmbientOcclusionLengthCm();
+          if (ImGui::SliderFloat("DXR AO Length (cm)", &aoLengthCm, 0.0f,
+                                 200.0f, "%.0f cm")) {
+            DxrRenderer::SetTonemapAmbientOcclusionLengthCm(aoLengthCm);
+            uiChanged = true;
+          }
+        } else {
+          ImGui::TextDisabled("DXR AO is available only in DXR mode.");
+        }
+      }
+
       if (ImGui::Button("Reset Camera")) {
         ResetCamera();
         UpdateCameraCB();

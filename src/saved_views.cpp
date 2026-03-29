@@ -80,6 +80,10 @@ void CaptureCurrentCameraState(SavedView &view) {
   view.exposureCompensation = DxrRenderer::GetExposureCompensation();
   DxrRenderer::GetPhysicalCameraSettings(view.iso, view.shutterSeconds,
                                          view.aperture);
+  view.tonemapAoIntensity = DxrRenderer::GetTonemapAmbientOcclusionIntensity();
+  view.tonemapAoLengthCm = DxrRenderer::GetTonemapAmbientOcclusionLengthCm();
+  view.tonemapAoMode =
+      static_cast<int>(DxrRenderer::GetTonemapAmbientOcclusionMode());
 }
 
 void ApplyCameraState(const SavedView &view) {
@@ -106,6 +110,11 @@ void ApplyCameraState(const SavedView &view) {
   DxrRenderer::SetExposureCompensation(view.exposureCompensation);
   DxrRenderer::SetPhysicalCameraSettings(view.iso, view.shutterSeconds,
                                          view.aperture);
+  DxrRenderer::SetTonemapAmbientOcclusionIntensity(view.tonemapAoIntensity);
+  DxrRenderer::SetTonemapAmbientOcclusionLengthCm(view.tonemapAoLengthCm);
+  DxrRenderer::SetTonemapAmbientOcclusionMode(
+      static_cast<DxrRenderer::TonemapAmbientOcclusionMode>(
+          std::clamp(view.tonemapAoMode, 0, 2)));
   UpdateCameraCB();
   DxrRenderer::ResetAccumulation();
 }
