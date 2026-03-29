@@ -10,6 +10,12 @@
     <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\blur_cs_CSMain_cs_6_5.cso.rule">
       <Filter>CMake Rules</Filter>
     </CustomBuild>
+    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\dxr_tonemap_cs_CSMain_cs_6_3.cso.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\dxr_tonemap_cs_CSMain_cs_6_5.cso.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
     <CustomBuild Include="D:\project-render\build\CMakeFiles\4b793c0678c4e8a641d80e0d8d7d81b1\grass_cull_cs_CSMain_cs_6_5.cso.rule">
       <Filter>CMake Rules</Filter>
     </CustomBuild>

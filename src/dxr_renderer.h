@@ -102,6 +102,18 @@ void SetSvgfSettings(const SvgfSettings &settings);
 SvgfSettings GetSvgfSettings();
 void ResetRealtimeDenoiserHistory();
 
+enum class TonemapAmbientOcclusionMode {
+  Inward = 0,
+  Outward = 1,
+  Both = 2,
+};
+void SetTonemapAmbientOcclusionMode(TonemapAmbientOcclusionMode mode);
+TonemapAmbientOcclusionMode GetTonemapAmbientOcclusionMode();
+void SetTonemapAmbientOcclusionIntensity(float intensity);
+float GetTonemapAmbientOcclusionIntensity();
+void SetTonemapAmbientOcclusionLengthCm(float lengthCm);
+float GetTonemapAmbientOcclusionLengthCm();
+
 // Get number of lights transferred to GPU
 UINT GetLightCount();
 // Camera jitter scale applied only when DLSS-RR is active.

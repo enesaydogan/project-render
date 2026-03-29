@@ -32,6 +32,9 @@ struct SavedView {
   float iso = 100.0f;
   float shutterSeconds = 1.0f / 30.0f;
   float aperture = 2.8f;
+  float tonemapAoIntensity = 0.0f;
+  float tonemapAoLengthCm = 25.0f;
+  int tonemapAoMode = 2;
   uint32_t thumbnailWidth = 0;
   uint32_t thumbnailHeight = 0;
   std::vector<uint8_t> thumbnailRgba;

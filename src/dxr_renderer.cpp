@@ -10,6 +10,7 @@
 #include "ibl_manager.h"
 #include "oidn_denoiser.h"
 #include "nrd_denoiser.h"
+#include "raster_renderer.h"
 #include "scene.h"
 #include "streamline_manager.h"
 #include <algorithm>
@@ -68,6 +69,10 @@ static bool s_physicalCameraExposure = true;
 static float s_cameraIso = 100.0f;
 static float s_cameraShutterSeconds = 1.0f / 30.0f;
 static float s_cameraApertureFNumber = 2.8f;
+static DxrRenderer::TonemapAmbientOcclusionMode s_tonemapAoMode =
+    DxrRenderer::TonemapAmbientOcclusionMode::Both;
+static float s_tonemapAoIntensity = 0.0f;
+static float s_tonemapAoLengthCm = 25.0f;
 
 // When DLSS-RR is active we don't use the accumulation buffer; track a
 // still-frame SPP count separately so maxSPP can still freeze rendering.
@@ -225,6 +230,7 @@ enum ResourceFeatureBits : uint32_t {
   ResourceFeature_FinalOidn = 1u << 2,
   ResourceFeature_Svgf = 1u << 3,
   ResourceFeature_Nrd = 1u << 4,
+  ResourceFeature_TonemapAo = 1u << 5,
 };
 
 // Halton sequence helper for CPU-side jitter
@@ -270,6 +276,9 @@ static uint32_t ComputeResourceFeatureMask() {
       !IsDlssActive()) {
     mask |= ResourceFeature_Nrd;
   }
+  if (s_tonemapAoIntensity > 1.0e-4f) {
+    mask |= ResourceFeature_TonemapAo;
+  }
   return mask;
 }
 
@@ -280,7 +289,12 @@ static bool NeedsDepthAndMotionBuffers(uint32_t mask) {
 
 static bool NeedsSurfaceDataBuffers(uint32_t mask) {
   return (mask & (ResourceFeature_Dlss | ResourceFeature_FinalOidn |
-                  ResourceFeature_Svgf | ResourceFeature_Nrd)) != 0;
+                  ResourceFeature_Svgf | ResourceFeature_Nrd |
+                  ResourceFeature_TonemapAo)) != 0;
+}
+
+static bool NeedsLinearDepthBuffer(uint32_t mask) {
+  return (mask & (ResourceFeature_Svgf | ResourceFeature_TonemapAo)) != 0;
 }
 
 static bool NeedsSvgfResources(uint32_t mask) {
@@ -652,6 +666,31 @@ bool HasDenoisedOutput() { return s_hasDenoised; }
 
 void SetAutoExposure(bool enable) { s_autoExposure = enable; }
 bool GetAutoExposure() { return s_autoExposure; }
+void SetTonemapAmbientOcclusionMode(TonemapAmbientOcclusionMode mode) {
+  if (s_tonemapAoMode != mode) {
+    s_tonemapAoMode = mode;
+    s_hasTonemappedFrame = false;
+  }
+}
+TonemapAmbientOcclusionMode GetTonemapAmbientOcclusionMode() {
+  return s_tonemapAoMode;
+}
+void SetTonemapAmbientOcclusionIntensity(float intensity) {
+  const float clamped = (std::clamp)(intensity, 0.0f, 4.0f);
+  if (std::abs(s_tonemapAoIntensity - clamped) > 1.0e-6f) {
+    s_tonemapAoIntensity = clamped;
+    s_hasTonemappedFrame = false;
+  }
+}
+float GetTonemapAmbientOcclusionIntensity() { return s_tonemapAoIntensity; }
+void SetTonemapAmbientOcclusionLengthCm(float lengthCm) {
+  const float clamped = (std::clamp)(lengthCm, 0.0f, 500.0f);
+  if (std::abs(s_tonemapAoLengthCm - clamped) > 1.0e-6f) {
+    s_tonemapAoLengthCm = clamped;
+    s_hasTonemappedFrame = false;
+  }
+}
+float GetTonemapAmbientOcclusionLengthCm() { return s_tonemapAoLengthCm; }
 void SetExposureCompensation(float comp) {
   if (s_exposureCompensation != comp) {
     s_exposureCompensation = comp;
@@ -705,8 +744,10 @@ struct TonemapConstants {
   float vignette;
   float saturation;
   float contrast;
-  float ssaoEnabled;
-  float _pad[1];
+  float aoIntensity;
+  float aoRadiusMeters;
+  uint32_t aoMode;
+  float _pad0;
 };
 
 struct SvgfConstants {
@@ -730,10 +771,10 @@ static void EnsureTonemapPipeline() {
   if (!s_device)
     return;
 
-  // Root signature: b0 constants, t0 SRV, u0 UAV
+  // Root signature: b0 constants, t0..t2 SRVs, u0 UAV
   D3D12_DESCRIPTOR_RANGE srvRange{};
   srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-  srvRange.NumDescriptors = 1;
+  srvRange.NumDescriptors = 3;
   srvRange.BaseShaderRegister = 0;
   srvRange.RegisterSpace = 0;
 
@@ -782,8 +823,8 @@ static void EnsureTonemapPipeline() {
   ComPtr<IDxcBlob> cs;
   try {
     std::vector<std::wstring> defines;
-    cs = s_dxcHelper.Compile(L"shaders/tonemap_cs.hlsl", L"CSMain", L"cs_6_3",
-                             defines);
+    cs = s_dxcHelper.Compile(L"shaders/dxr_tonemap_cs.hlsl", L"CSMain",
+                             L"cs_6_3", defines);
   } catch (const std::exception &e) {
     fprintf(stderr, "DxrRenderer: Tonemap CS compile failed: %s\n", e.what());
     return;
@@ -800,9 +841,9 @@ static void EnsureTonemapPipeline() {
   ThrowIfFailed(s_device->CreateComputePipelineState(
       &psoDesc, IID_PPV_ARGS(&s_tonemapPSO)));
 
-  // Descriptor heap: SRV + UAV
+  // Descriptor heap: HDR SRV, depth SRV, normal SRV, UAV
   D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-  heapDesc.NumDescriptors = 2;
+  heapDesc.NumDescriptors = 4;
   heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
   heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
   ThrowIfFailed(
@@ -2145,6 +2186,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
       NeedsDepthAndMotionBuffers(resourceFeatureMask);
   const bool needsSurfaceDataBuffers =
       NeedsSurfaceDataBuffers(resourceFeatureMask);
+  const bool needsLinearDepthBuffer =
+      NeedsLinearDepthBuffer(resourceFeatureMask);
   const bool needsSvgfResources = NeedsSvgfResources(resourceFeatureMask);
   const bool needsNrdResources = NeedsNrdResources(resourceFeatureMask);
   const bool needsSpecularAuxBuffers =
@@ -2713,11 +2756,13 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   // Not shared (only used by internal CS and Copy)
   CreateUavTexture(s_tonemapOutputUAV, outDesc, DXGI_FORMAT_R10G10B10A2_UNORM,
                    L"RT Tonemap Output");
+  if (needsLinearDepthBuffer) {
+    CreateUavTexture(s_svgfLinearDepthUAV, texDesc, DXGI_FORMAT_R32_FLOAT,
+                     L"SVGF Linear Depth");
+  }
   if (needsSvgfResources) {
     CreateUavTexture(s_svgfNoisyInputUAV, texDesc,
                      DXGI_FORMAT_R16G16B16A16_FLOAT, L"SVGF Noisy Input");
-    CreateUavTexture(s_svgfLinearDepthUAV, texDesc, DXGI_FORMAT_R32_FLOAT,
-                     L"SVGF Linear Depth");
     CreateUavTexture(s_svgfTemporalUAV, texDesc,
                      DXGI_FORMAT_R16G16B16A16_FLOAT, L"SVGF Temporal");
     CreateUavTexture(s_svgfVarianceUAV, texDesc, DXGI_FORMAT_R32_FLOAT,
@@ -6053,6 +6098,16 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     }
 
     tc.exposure = targetExposure;
+    const auto &rs = RasterRenderer::GetRenderSettings();
+    tc.vignette = rs.tonemapVignette;
+    tc.saturation = rs.tonemapSaturation;
+    tc.contrast = rs.tonemapContrast;
+    tc.aoIntensity = s_tonemapAoIntensity;
+    tc.aoRadiusMeters = s_tonemapAoLengthCm * 0.01f;
+    tc.aoMode = static_cast<uint32_t>(s_tonemapAoMode);
+    const bool useTonemapAo =
+        tc.aoIntensity > 1.0e-4f && tc.aoRadiusMeters > 1.0e-4f &&
+        s_svgfLinearDepthUAV && s_normalRoughnessUAV;
 
     void *p = nullptr;
     D3D12_RANGE readRange = {0, 0};
@@ -6061,7 +6116,16 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       s_tonemapCB->Unmap(0, nullptr);
     }
 
-    // Create SRV (slot 0) and UAV (slot 1)
+    if (useTonemapAo) {
+      TransitionResource(dxrList.Get(), s_svgfLinearDepthUAV.Get(),
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+      TransitionResource(dxrList.Get(), s_normalRoughnessUAV.Get(),
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
+
+    // Create SRVs (HDR, depth, normal) and the UAV output.
     const UINT descInc = s_device->GetDescriptorHandleIncrementSize(
         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     D3D12_CPU_DESCRIPTOR_HANDLE cpuStart =
@@ -6074,7 +6138,49 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     srv.Texture2D.MipLevels = 1;
     s_device->CreateShaderResourceView(postColor, &srv, cpuStart);
 
-    D3D12_CPU_DESCRIPTOR_HANDLE uavCpu = cpuStart;
+    D3D12_CPU_DESCRIPTOR_HANDLE depthCpu = cpuStart;
+    depthCpu.ptr += descInc;
+    if (useTonemapAo) {
+      D3D12_SHADER_RESOURCE_VIEW_DESC depthSrv{};
+      depthSrv.Format = DXGI_FORMAT_R32_FLOAT;
+      depthSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+      depthSrv.Shader4ComponentMapping =
+          D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+      depthSrv.Texture2D.MipLevels = 1;
+      s_device->CreateShaderResourceView(s_svgfLinearDepthUAV.Get(), &depthSrv,
+                                         depthCpu);
+    } else {
+      D3D12_SHADER_RESOURCE_VIEW_DESC nullDepthSrv{};
+      nullDepthSrv.Format = DXGI_FORMAT_R32_FLOAT;
+      nullDepthSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+      nullDepthSrv.Shader4ComponentMapping =
+          D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+      nullDepthSrv.Texture2D.MipLevels = 1;
+      s_device->CreateShaderResourceView(nullptr, &nullDepthSrv, depthCpu);
+    }
+
+    D3D12_CPU_DESCRIPTOR_HANDLE normalCpu = depthCpu;
+    normalCpu.ptr += descInc;
+    if (useTonemapAo) {
+      D3D12_SHADER_RESOURCE_VIEW_DESC normalSrv{};
+      normalSrv.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+      normalSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+      normalSrv.Shader4ComponentMapping =
+          D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+      normalSrv.Texture2D.MipLevels = 1;
+      s_device->CreateShaderResourceView(s_normalRoughnessUAV.Get(), &normalSrv,
+                                         normalCpu);
+    } else {
+      D3D12_SHADER_RESOURCE_VIEW_DESC nullNormalSrv{};
+      nullNormalSrv.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+      nullNormalSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+      nullNormalSrv.Shader4ComponentMapping =
+          D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+      nullNormalSrv.Texture2D.MipLevels = 1;
+      s_device->CreateShaderResourceView(nullptr, &nullNormalSrv, normalCpu);
+    }
+
+    D3D12_CPU_DESCRIPTOR_HANDLE uavCpu = normalCpu;
     uavCpu.ptr += descInc;
     D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
     uav.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
@@ -6102,7 +6208,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         s_tonemapHeap->GetGPUDescriptorHandleForHeapStart();
     dxrList->SetComputeRootDescriptorTable(1, gpuStart);
     D3D12_GPU_DESCRIPTOR_HANDLE gpuUav = gpuStart;
-    gpuUav.ptr += descInc;
+    gpuUav.ptr += 3 * descInc;
     dxrList->SetComputeRootDescriptorTable(2, gpuUav);
 
     const UINT gx = (outW + 7) / 8;
@@ -6115,6 +6221,14 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     TransitionResource(dxrList.Get(), postColor,
                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    if (useTonemapAo) {
+      TransitionResource(dxrList.Get(), s_svgfLinearDepthUAV.Get(),
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+      TransitionResource(dxrList.Get(), s_normalRoughnessUAV.Get(),
+                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
 
     if (usedOidn) {
       // If we just ran a one-shot or continuous OIDN pass, we can mark the
