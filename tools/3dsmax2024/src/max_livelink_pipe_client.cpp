@@ -4,9 +4,9 @@
 
 namespace {
 
-constexpr DWORD kPipeConnectTimeoutMs = 2000;
-constexpr DWORD kPipeWriteTimeoutMs = 500;
-constexpr DWORD kPipeCancelWaitTimeoutMs = 100;
+constexpr DWORD kPipeConnectTimeoutMs = 25;
+constexpr DWORD kPipeWriteTimeoutMs = 8;
+constexpr DWORD kPipeCancelWaitTimeoutMs = 8;
 
 std::string MakePipePath(const std::string &pipeName) {
   if (pipeName.rfind(R"(\\.\pipe\)", 0) == 0) {
@@ -47,20 +47,14 @@ bool MaxLiveLinkPipeClient::Connect(const std::string &pipeName) {
   Disconnect();
 
   const std::string pipePath = MakePipePath(pipeName);
-  HANDLE handle = CreateFileA(pipePath.c_str(), GENERIC_WRITE, 0, nullptr,
-                              OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
-  if (handle == INVALID_HANDLE_VALUE) {
-    if (::GetLastError() == ERROR_PIPE_BUSY) {
-      if (!WaitNamedPipeA(pipePath.c_str(), kPipeConnectTimeoutMs)) {
-        m_lastError = "WaitNamedPipeA failed: " +
-                      FormatWindowsError(::GetLastError());
-        return false;
-      }
-      handle = CreateFileA(pipePath.c_str(), GENERIC_WRITE, 0, nullptr,
-                           OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
-    }
+  if (!WaitNamedPipeA(pipePath.c_str(), kPipeConnectTimeoutMs)) {
+    m_lastError = "WaitNamedPipeA failed: " +
+                  FormatWindowsError(::GetLastError());
+    return false;
   }
 
+  HANDLE handle = CreateFileA(pipePath.c_str(), GENERIC_WRITE, 0, nullptr,
+                              OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
   if (handle == INVALID_HANDLE_VALUE) {
     m_lastError = "CreateFileA failed: " +
                   FormatWindowsError(::GetLastError());
