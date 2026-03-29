@@ -52,6 +52,10 @@ struct CameraCB {
   float nrdEnabled;
   float exportRendering;
   float dxrProceduralSkyBoost;
+  float tonemapAoIntensity;
+  float tonemapAoRadiusMeters;
+  float tonemapAoMode;
+  float tonemapAoPad0;
   float shadowMatrix[16];
   float viewProj[16];
   float invViewProj[16];
