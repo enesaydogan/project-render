@@ -669,6 +669,8 @@ bool GetAutoExposure() { return s_autoExposure; }
 void SetTonemapAmbientOcclusionMode(TonemapAmbientOcclusionMode mode) {
   if (s_tonemapAoMode != mode) {
     s_tonemapAoMode = mode;
+    g_cameraData.tonemapAoMode = static_cast<float>(static_cast<int>(mode));
+    ResetAccumulation();
     s_hasTonemappedFrame = false;
   }
 }
@@ -679,6 +681,8 @@ void SetTonemapAmbientOcclusionIntensity(float intensity) {
   const float clamped = (std::clamp)(intensity, 0.0f, 4.0f);
   if (std::abs(s_tonemapAoIntensity - clamped) > 1.0e-6f) {
     s_tonemapAoIntensity = clamped;
+    g_cameraData.tonemapAoIntensity = clamped;
+    ResetAccumulation();
     s_hasTonemappedFrame = false;
   }
 }
@@ -687,6 +691,8 @@ void SetTonemapAmbientOcclusionLengthCm(float lengthCm) {
   const float clamped = (std::clamp)(lengthCm, 0.0f, 500.0f);
   if (std::abs(s_tonemapAoLengthCm - clamped) > 1.0e-6f) {
     s_tonemapAoLengthCm = clamped;
+    g_cameraData.tonemapAoRadiusMeters = clamped * 0.01f;
+    ResetAccumulation();
     s_hasTonemappedFrame = false;
   }
 }
@@ -800,9 +806,26 @@ static void EnsureTonemapPipeline() {
   params[2].DescriptorTable.pDescriptorRanges = &uavRange;
   params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
+  D3D12_STATIC_SAMPLER_DESC sampler{};
+  sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+  sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+  sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+  sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+  sampler.MipLODBias = 0.0f;
+  sampler.MaxAnisotropy = 1;
+  sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+  sampler.BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK;
+  sampler.MinLOD = 0.0f;
+  sampler.MaxLOD = D3D12_FLOAT32_MAX;
+  sampler.ShaderRegister = 0;
+  sampler.RegisterSpace = 0;
+  sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
   D3D12_ROOT_SIGNATURE_DESC rsDesc{};
   rsDesc.NumParameters = _countof(params);
   rsDesc.pParameters = params;
+  rsDesc.NumStaticSamplers = 1;
+  rsDesc.pStaticSamplers = &sampler;
   rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
   ComPtr<ID3DBlob> sig;
@@ -4738,6 +4761,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       // Monotonic frame count for RNG / temporal logic.
       cam->frameCount = (float)s_jitterFrameIndex;
       cam->lightCount = (float)s_lightCount;
+      cam->tonemapAoIntensity = s_tonemapAoIntensity;
+      cam->tonemapAoRadiusMeters = s_tonemapAoLengthCm * 0.01f;
+      cam->tonemapAoMode = static_cast<float>(static_cast<int>(s_tonemapAoMode));
+      cam->tonemapAoPad0 = 0.0f;
 
       // Keep actual still-frame count even for RR so shaders can compute
       // variance/noise for adaptive sampling and diagnostics.
@@ -6102,12 +6129,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     tc.vignette = rs.tonemapVignette;
     tc.saturation = rs.tonemapSaturation;
     tc.contrast = rs.tonemapContrast;
-    tc.aoIntensity = s_tonemapAoIntensity;
-    tc.aoRadiusMeters = s_tonemapAoLengthCm * 0.01f;
+    tc.aoIntensity = 0.0f;
+    tc.aoRadiusMeters = 0.0f;
     tc.aoMode = static_cast<uint32_t>(s_tonemapAoMode);
-    const bool useTonemapAo =
-        tc.aoIntensity > 1.0e-4f && tc.aoRadiusMeters > 1.0e-4f &&
-        s_svgfLinearDepthUAV && s_normalRoughnessUAV;
+    const bool useTonemapAo = false;
 
     void *p = nullptr;
     D3D12_RANGE readRange = {0, 0};

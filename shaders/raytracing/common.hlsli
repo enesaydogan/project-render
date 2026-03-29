@@ -164,6 +164,10 @@ cbuffer Camera : register(b0)
     float nrdEnabled;
     float exportRendering;
     float dxrProceduralSkyBoost;
+    float tonemapAoIntensity;
+    float tonemapAoRadiusMeters;
+    float tonemapAoMode;
+    float tonemapAoPad0;
 }
 
 inline float GetDxrProceduralSkyBoost()

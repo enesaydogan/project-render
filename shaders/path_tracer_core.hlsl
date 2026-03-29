@@ -36,6 +36,89 @@ float3 SampleCone(float3 dir, float cosThetaMax, float2 u)
     return normalize(T * x + B * y + dir * z);
 }
 
+float TraceAoHemisphereVisibility(float3 P, float3 hemisphereNormal,
+                                  float radius, uint sampleCount,
+                                  inout RNG rng)
+{
+    if (sampleCount == 0 || radius <= 1.0e-4) {
+        return 1.0;
+    }
+
+    float3 N = normalize(hemisphereNormal);
+    float eps = max(0.001, radius * 0.02);
+    float visibleCount = 0.0;
+
+    [loop]
+    for (uint sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
+        float2 u = next_float2(rng);
+        float3 dir = normalize(align_to_normal(sample_hemisphere_cosine(u), N));
+
+        RayDesc aoRay;
+        aoRay.Origin = P + N * eps;
+        aoRay.Direction = dir;
+        aoRay.TMin = eps;
+        aoRay.TMax = radius;
+
+        RayPayload aoPayload;
+        aoPayload.t = 1.0;
+        aoPayload.packedColor1 = 0u;
+        PayloadSetColor(aoPayload, float3(0.0, 0.0, 0.0));
+        aoPayload.packedNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
+        aoPayload.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
+        aoPayload.packedSurface = PackPayloadSurface(1.0, 0.0, 0.0, 0.0);
+        aoPayload.packedIorType =
+            PackPayloadIorType(1.0, RAY_TYPE_SHADOW, false, 1.0);
+        aoPayload.packedTransmission =
+            PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
+        TraceRay(g_accel,
+                 RAY_FLAG_SKIP_CLOSEST_HIT_SHADER |
+                 RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+                 0xFF, 0, 0, 0, aoRay, aoPayload);
+        SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
+
+        if (aoPayload.t < 0.0) {
+            visibleCount += 1.0;
+        }
+    }
+
+    return visibleCount / sampleCount;
+}
+
+float ComputePrimaryRayTracedAo(float3 P, float3 N, float radius,
+                                uint aoMode, float aoIntensity,
+                                inout RNG rng)
+{
+    if (aoIntensity <= 1.0e-4 || radius <= 1.0e-4) {
+        return 1.0;
+    }
+
+    float3 normal = normalize(N);
+    if (dot(normal, normal) <= 1.0e-8) {
+        return 1.0;
+    }
+
+    const uint kAoSamplesPerHemisphere = 4;
+    float visibility = 1.0;
+    if (aoMode == 0) {
+        visibility = TraceAoHemisphereVisibility(P, -normal, radius,
+                                                 kAoSamplesPerHemisphere, rng);
+    } else if (aoMode == 1) {
+        visibility = TraceAoHemisphereVisibility(P, normal, radius,
+                                                 kAoSamplesPerHemisphere, rng);
+    } else {
+        float outwardVisibility =
+            TraceAoHemisphereVisibility(P, normal, radius,
+                                        kAoSamplesPerHemisphere, rng);
+        float inwardVisibility =
+            TraceAoHemisphereVisibility(P, -normal, radius,
+                                        kAoSamplesPerHemisphere, rng);
+        visibility = min(outwardVisibility, inwardVisibility);
+    }
+
+    float occlusion = saturate(1.0 - visibility);
+    return saturate(1.0 - occlusion * aoIntensity);
+}
+
 float3 ComputeSurfaceF0(float3 albedo, float metallic, float ior, float specularWeight)
 {
     float f0s = (ior - 1.0) / (ior + 1.0);
@@ -305,6 +388,7 @@ void RayGen()
     float primaryViewZ = -1.0;
     float3 primarySpecAlbedo = float3(0, 0, 0);
     float primarySpecHitDist = -1.0;
+    float primaryTonemapAoFactor = 1.0;
 
     int specularBounces = 0;
     int refractiveBounces = 0;
@@ -563,6 +647,15 @@ void RayGen()
                 } else {
                     primarySpecHitDist = 0.0;
                 }
+
+                if (!primaryGuideThroughTransmission &&
+                    tonemapAoIntensity > 1.0e-4 &&
+                    tonemapAoRadiusMeters > 1.0e-4) {
+                    uint aoMode = (uint)clamp(tonemapAoMode, 0.0, 2.0);
+                    primaryTonemapAoFactor = ComputePrimaryRayTracedAo(
+                        primaryPos, primaryNormal, tonemapAoRadiusMeters,
+                        aoMode, tonemapAoIntensity, rng);
+                }
             }
 
             // --- G-Buffer & Motion Vector Writing (Mandatory for every frame) ---
@@ -626,7 +719,8 @@ void RayGen()
                 }
                 g_motionVectors[launchIndex.xy] = mvec;
                 g_specularMotionVectors[launchIndex.xy] = specMvec;
-                g_albedoOut[launchIndex.xy] = float4(primaryAlbedo, 1.0);
+                g_albedoOut[launchIndex.xy] =
+                    float4(primaryAlbedo, primaryTonemapAoFactor);
                 g_normalRoughnessOut[launchIndex.xy] = float4(normalize(primaryNormal), primaryRoughness);
                 g_specularAlbedo[launchIndex.xy] = float4(primarySpecAlbedo, 1.0);
                 g_specHitDistance[launchIndex.xy] = primarySpecHitDist;
@@ -1365,9 +1459,10 @@ void RayGen()
     // Radiance must be non-negative. Clamp numerical underflow/instability.
     float3 finalColor = clamp(accumulatedColor, 0.0, 1000.0);
     if (any(isnan(finalColor)) || any(isinf(finalColor))) finalColor = float3(0, 0, 0);
+    finalColor *= primaryTonemapAoFactor;
 
     if (nrdEnabled > 0.5) {
-        float3 stableColor = max(nrdStablePrimary, 0.0);
+        float3 stableColor = max(nrdStablePrimary * primaryTonemapAoFactor, 0.0);
         float3 surfaceColor = nrdPrimarySurface ? max(finalColor - stableColor, 0.0) : float3(0.0, 0.0, 0.0);
         float splitSum = max(primaryDiffuseSplit + primarySpecularSplit, 1e-5);
         float3 nrdDiffuseColor = min(surfaceColor * (primaryDiffuseSplit / splitSum), 250.0);

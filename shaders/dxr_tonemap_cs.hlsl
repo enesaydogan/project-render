@@ -2,6 +2,7 @@ Texture2D<float4> g_hdrInput : register(t0);
 Texture2D<float> g_depthTexture : register(t1);
 Texture2D<float4> g_normalRoughnessTexture : register(t2);
 RWTexture2D<float4> g_out : register(u0);
+SamplerState g_linearClampSampler : register(s0);
 
 cbuffer TonemapCB : register(b0)
 {
@@ -27,6 +28,22 @@ float3 ToneMapFilmic(float3 x)
     return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
 }
 
+float SampleDepthUv(float2 uv)
+{
+    return g_depthTexture.SampleLevel(g_linearClampSampler, saturate(uv), 0.0f);
+}
+
+float3 SampleUnitNormalUv(float2 uv)
+{
+    float3 n = g_normalRoughnessTexture.SampleLevel(
+        g_linearClampSampler, saturate(uv), 0.0f).xyz;
+    float lenSq = dot(n, n);
+    if (lenSq <= 1.0e-8f) {
+        return float3(0.0f, 0.0f, 0.0f);
+    }
+    return n * rsqrt(lenSq);
+}
+
 float ComputeDxrTonemapAo(uint2 pixel)
 {
     if (aoIntensity <= 1.0e-4f || aoRadiusMeters <= 1.0e-4f) {
@@ -45,24 +62,57 @@ float ComputeDxrTonemapAo(uint2 pixel)
     }
 
     float2 uv = (float2(pixel) + 0.5f) / float2(outWidth, outHeight);
-    uint2 depthCoord = min(uint2(uv * float2(depthWidth, depthHeight)),
-                           uint2(depthWidth - 1, depthHeight - 1));
-    uint2 normalCoord = min(uint2(uv * float2(normalWidth, normalHeight)),
-                            uint2(normalWidth - 1, normalHeight - 1));
-
-    float centerDepth = g_depthTexture.Load(int3(depthCoord, 0));
-    float3 centerNormal = g_normalRoughnessTexture.Load(int3(normalCoord, 0)).xyz;
-    float centerNormalLen = length(centerNormal);
-    if (centerDepth <= 1.0e-5f || centerNormalLen <= 1.0e-5f) {
+    float centerDepth = SampleDepthUv(uv);
+    float3 centerNormal = SampleUnitNormalUv(uv);
+    if (centerDepth <= 1.0e-5f || dot(centerNormal, centerNormal) <= 1.0e-8f) {
         return 1.0f;
     }
-    centerNormal /= centerNormalLen;
 
     float sampleRadiusPixels = clamp((aoRadiusMeters / max(centerDepth, 0.1f)) *
                                          180.0f,
                                      1.0f, 48.0f);
     int radius = (int)ceil(sampleRadiusPixels);
     float depthBias = max(aoRadiusMeters * 0.05f, 0.001f);
+    float planeFitNormalCos = 0.92f;
+    float minSampleNormalCos = 0.35f;
+    float2 depthTexelUv = 1.0f / float2(depthWidth, depthHeight);
+    float2 normalTexelUv = 1.0f / float2(normalWidth, normalHeight);
+
+    float leftDepth = SampleDepthUv(uv + float2(-depthTexelUv.x, 0.0f));
+    float rightDepth = SampleDepthUv(uv + float2(depthTexelUv.x, 0.0f));
+    float upDepth = SampleDepthUv(uv + float2(0.0f, -depthTexelUv.y));
+    float downDepth = SampleDepthUv(uv + float2(0.0f, depthTexelUv.y));
+
+    float3 leftNormal = SampleUnitNormalUv(uv + float2(-normalTexelUv.x, 0.0f));
+    float3 rightNormal = SampleUnitNormalUv(uv + float2(normalTexelUv.x, 0.0f));
+    float3 upNormal = SampleUnitNormalUv(uv + float2(0.0f, -normalTexelUv.y));
+    float3 downNormal = SampleUnitNormalUv(uv + float2(0.0f, normalTexelUv.y));
+
+    float gradX = 0.0f;
+    float gradY = 0.0f;
+    float gradXWeight = 0.0f;
+    float gradYWeight = 0.0f;
+
+    if (leftDepth > 1.0e-5f && dot(centerNormal, leftNormal) >= planeFitNormalCos) {
+        gradX += centerDepth - leftDepth;
+        gradXWeight += 1.0f;
+    }
+    if (rightDepth > 1.0e-5f && dot(centerNormal, rightNormal) >= planeFitNormalCos) {
+        gradX += rightDepth - centerDepth;
+        gradXWeight += 1.0f;
+    }
+    if (upDepth > 1.0e-5f && dot(centerNormal, upNormal) >= planeFitNormalCos) {
+        gradY += centerDepth - upDepth;
+        gradYWeight += 1.0f;
+    }
+    if (downDepth > 1.0e-5f && dot(centerNormal, downNormal) >= planeFitNormalCos) {
+        gradY += downDepth - centerDepth;
+        gradYWeight += 1.0f;
+    }
+
+    gradX = gradXWeight > 0.0f ? gradX / gradXWeight : 0.0f;
+    gradY = gradYWeight > 0.0f ? gradY / gradYWeight : 0.0f;
+
     float accumulation = 0.0f;
     float weightSum = 0.0f;
 
@@ -87,22 +137,25 @@ float ComputeDxrTonemapAo(uint2 pixel)
                 continue;
             }
 
-            uint2 sampleDepthCoord = min(uint2(sampleUv * float2(depthWidth, depthHeight)),
-                                         uint2(depthWidth - 1, depthHeight - 1));
-            uint2 sampleNormalCoord = min(uint2(sampleUv * float2(normalWidth, normalHeight)),
-                                          uint2(normalWidth - 1, normalHeight - 1));
-
-            float sampleDepth = g_depthTexture.Load(int3(sampleDepthCoord, 0));
-            float3 sampleNormal = g_normalRoughnessTexture.Load(int3(sampleNormalCoord, 0)).xyz;
-            float sampleNormalLen = length(sampleNormal);
-            if (sampleDepth <= 1.0e-5f || sampleNormalLen <= 1.0e-5f) {
+            float sampleDepth = SampleDepthUv(sampleUv);
+            float3 sampleNormal = SampleUnitNormalUv(sampleUv);
+            float normalSimilarity = dot(centerNormal, sampleNormal);
+            if (sampleDepth <= 1.0e-5f || dot(sampleNormal, sampleNormal) <= 1.0e-8f ||
+                normalSimilarity <= minSampleNormalCos) {
                 continue;
             }
-            sampleNormal /= sampleNormalLen;
 
-            float delta = sampleDepth - centerDepth;
-            float inward = saturate((-delta - depthBias) / max(aoRadiusMeters, 1.0e-4f));
-            float outward = saturate((delta - depthBias) / max(aoRadiusMeters, 1.0e-4f));
+            float planeBlend = saturate((normalSimilarity - planeFitNormalCos) /
+                                        max(1.0f - planeFitNormalCos, 1.0e-3f));
+            float expectedDepth = lerp(centerDepth,
+                                       centerDepth + gradX * offset.x + gradY * offset.y,
+                                       planeBlend);
+            float delta = sampleDepth - expectedDepth;
+            float slopeBias =
+                (abs(gradX) + abs(gradY)) * dist * 0.5f;
+            float localBias = max(depthBias, slopeBias);
+            float inward = saturate((-delta - localBias) / max(aoRadiusMeters, 1.0e-4f));
+            float outward = saturate((delta - localBias) / max(aoRadiusMeters, 1.0e-4f));
 
             float response = 0.0f;
             if (aoMode == 0) {
@@ -113,9 +166,15 @@ float ComputeDxrTonemapAo(uint2 pixel)
                 response = max(inward, outward);
             }
 
-            float normalWeight = saturate(dot(centerNormal, sampleNormal));
-            float distanceWeight = 1.0f - saturate(dist / max(sampleRadiusPixels, 1.0f));
+            float normalWeight = saturate((normalSimilarity - minSampleNormalCos) /
+                                          max(1.0f - minSampleNormalCos, 1.0e-3f));
+            normalWeight = lerp(0.35f, 1.0f, normalWeight * normalWeight);
+            float edgeBoost = lerp(1.25f, 1.0f, planeBlend);
+            float distanceWeight =
+                1.0f - saturate(dist / max(sampleRadiusPixels, 1.0f));
+            distanceWeight *= distanceWeight;
             float weight = normalWeight * distanceWeight;
+            response *= edgeBoost;
             accumulation += response * weight;
             weightSum += weight;
         }
