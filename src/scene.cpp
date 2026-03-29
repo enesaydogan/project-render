@@ -77,7 +77,21 @@ static ImGuizmo::MODE g_currentGizmoMode = ImGuizmo::WORLD;
 
 static void EnsureGpuBuffersForMeshes(std::vector<Asset::GpuMesh> &meshes);
 
-static void NotifySceneChanged() {
+enum class RendererInvalidationPlan {
+  None,
+  AccumulationOnly,
+  TlasRefresh,
+  FullAccelerationStructureRebuild,
+};
+
+static int s_batchedUpdateDepth = 0;
+static RendererInvalidationPlan s_batchedInvalidationPlan =
+    RendererInvalidationPlan::None;
+static bool s_batchedLightsDirty = false;
+static bool s_batchedSceneChanged = false;
+static bool s_batchedGpuIdleSatisfied = false;
+
+static void DispatchSceneChanged() {
   if (s_changeListeners.empty()) {
     return;
   }
@@ -93,6 +107,26 @@ static void NotifySceneChanged() {
   for (const auto &callback : callbacks) {
     callback();
   }
+}
+
+static void NotifySceneChanged() {
+  if (s_batchedUpdateDepth > 0) {
+    s_batchedSceneChanged = true;
+    return;
+  }
+  DispatchSceneChanged();
+}
+
+static void PrepareForDestructiveMeshMutation() {
+  if (s_batchedUpdateDepth > 0) {
+    if (!s_batchedGpuIdleSatisfied) {
+      WaitGPUIdle();
+      s_batchedGpuIdleSatisfied = true;
+    }
+    return;
+  }
+
+  WaitGPUIdle();
 }
 
 static void EnsureMaterialMetadataStorage() {
@@ -456,18 +490,6 @@ static std::string ResolveNodeDisplayName(const ImportedNodePayload &payload) {
   return "Imported Node";
 }
 
-enum class RendererInvalidationPlan {
-  None,
-  AccumulationOnly,
-  TlasRefresh,
-  FullAccelerationStructureRebuild,
-};
-
-static int s_batchedUpdateDepth = 0;
-static RendererInvalidationPlan s_batchedInvalidationPlan =
-    RendererInvalidationPlan::None;
-static bool s_batchedLightsDirty = false;
-
 static RendererInvalidationPlan MergeRendererInvalidationPlan(
     RendererInvalidationPlan lhs, RendererInvalidationPlan rhs) {
   return static_cast<int>(rhs) > static_cast<int>(lhs) ? rhs : lhs;
@@ -514,17 +536,31 @@ static void ApplyRendererInvalidation(RendererInvalidationPlan plan) {
   ExecuteRendererInvalidation(plan);
 }
 
-void BeginBatchedUpdates() { ++s_batchedUpdateDepth; }
+void BeginBatchedUpdates() {
+  if (s_batchedUpdateDepth == 0) {
+    s_batchedSceneChanged = false;
+    s_batchedGpuIdleSatisfied = false;
+  }
+  ++s_batchedUpdateDepth;
+}
 
 void EndBatchedUpdates() {
   if (s_batchedUpdateDepth <= 0) {
     s_batchedUpdateDepth = 0;
+    s_batchedSceneChanged = false;
+    s_batchedGpuIdleSatisfied = false;
     return;
   }
 
   --s_batchedUpdateDepth;
   if (s_batchedUpdateDepth == 0) {
     FlushBatchedRendererUpdates();
+    const bool sceneChanged = s_batchedSceneChanged;
+    s_batchedSceneChanged = false;
+    s_batchedGpuIdleSatisfied = false;
+    if (sceneChanged) {
+      DispatchSceneChanged();
+    }
   }
 }
 
@@ -710,6 +746,8 @@ static void RemoveNodesByIndexSet(std::vector<size_t> indices,
   if (indices.empty()) {
     return;
   }
+
+  PrepareForDestructiveMeshMutation();
 
   std::sort(indices.begin(), indices.end());
   indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
@@ -1078,7 +1116,7 @@ bool ReplaceNodeImportedContent(size_t index, ImportedNodePayload payload) {
     return false;
   }
 
-  WaitGPUIdle();
+  PrepareForDestructiveMeshMutation();
   EnsureGpuBuffersForMeshes(payload.meshes);
 
   Node &node = s_nodes[index];
@@ -1575,8 +1613,6 @@ bool ReimportNode(size_t index) {
   }
 
   try {
-    WaitGPUIdle();
-
     std::vector<Asset::GpuMesh> meshes;
     std::vector<Asset::Material> materials;
     std::vector<Asset::Texture> textures;
@@ -1627,7 +1663,7 @@ bool RemoveNode(size_t index) {
   if (index >= s_nodes.size())
     return false;
 
-  WaitGPUIdle();
+  PrepareForDestructiveMeshMutation();
 
   if (IsImportedSceneGroupNode(s_nodes[index])) {
     RemoveNodesByIndexSet(
@@ -3089,7 +3125,7 @@ void DrawScenePanel(HWND hwnd, bool &visible) {
 }
 
 void ResetScene() {
-  WaitGPUIdle();
+  PrepareForDestructiveMeshMutation();
   s_nodes.clear();
   g_loadedMeshes.clear();
   g_loadedMaterials.clear();

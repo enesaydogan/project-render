@@ -3098,6 +3098,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     }
 
     Input::Update(dt);
+
     LiveLink::TickRuntime();
 
     D3D12_RECT previewRect = {0, 0, (LONG)DX12Context::g_windowWidth,
