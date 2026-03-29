@@ -4639,14 +4639,14 @@ private:
         : m_owner(owner) {}
 
     void Added(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh | DirtyMaterial | DirtyLight); }
-    void Deleted(NodeKeyTab & /*nodes*/) override {}
+    void Deleted(NodeKeyTab & /*nodes*/) override { FullResync(); }
     void LinkChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState); }
     void LayerChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState); }
     void GroupChanged(NodeKeyTab & /*nodes*/) override { FullResync(); }
     void HierarchyOtherEvent(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState); }
-    void ModelStructured(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh | DirtyLight); }
-    void GeometryChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh); }
-    void TopologyChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh); }
+    void ModelStructured(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh | DirtyMaterial | DirtyLight); }
+    void GeometryChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh | DirtyMaterial); }
+    void TopologyChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh | DirtyMaterial); }
     void MappingChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh | DirtyMaterial); }
     void ExtentionChannelChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh); }
     void ModelOtherEvent(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh | DirtyLight); }
@@ -5420,7 +5420,69 @@ private:
     std::unordered_map<ULONG_PTR, NodeSnapshot> stagedNodes;
     std::unordered_map<ULONG_PTR, LightSnapshot> stagedLights;
     std::vector<ULONG_PTR> removedLightHandles;
+    std::unordered_set<ULONG_PTR> removedLightHandleSet;
     std::vector<std::pair<ULONG_PTR, MaterialStateMap>> stagedMaterialStates;
+    std::unordered_set<ULONG_PTR> stagedMaterialHandles;
+
+    const auto captureMaterialStateForSnapshot =
+        [&](const NodeSnapshot &snapshot) -> MaterialStateMap {
+      MaterialStateMap materialStateForNode;
+      if (!snapshot.hasMesh) {
+        return materialStateForNode;
+      }
+
+      std::unordered_map<ULONG_PTR, NodeSnapshot> nodeState;
+      nodeState.emplace(snapshot.handle, snapshot);
+      GatherMaterialSnapshots(ip, nodeState, &materialStateForNode);
+      return materialStateForNode;
+    };
+
+    const auto appendMaterialStateDiff =
+        [&](const MaterialStateMap &materialStateForNode) {
+      for (const auto &[objectId, materialSnapshot] : materialStateForNode) {
+        const auto previousMaterialIt = m_lastMaterialState.find(objectId);
+        if (previousMaterialIt == m_lastMaterialState.end() ||
+            !SameMaterial(materialSnapshot, previousMaterialIt->second)) {
+          AppendMaterialDelta(m_documentId, materialSnapshot, &m_nextRevision,
+                              &deltas);
+        }
+      }
+    };
+
+    const auto appendTrackedMaterialRemovals =
+        [&](ULONG_PTR handle, const MaterialStateMap *replacementState) {
+      for (const auto &[objectId, previousMaterial] : m_lastMaterialState) {
+        if (previousMaterial.nodeHandle != handle) {
+          continue;
+        }
+        if (replacementState != nullptr &&
+            replacementState->find(objectId) != replacementState->end()) {
+          continue;
+        }
+        AppendMaterialRemovedDelta(m_documentId, previousMaterial,
+                                   &m_nextRevision, &deltas);
+      }
+    };
+
+    const auto stageMaterialState =
+        [&](ULONG_PTR handle, MaterialStateMap materialStateForNode) {
+      if (!stagedMaterialHandles.insert(handle).second) {
+        return;
+      }
+      stagedMaterialStates.push_back(
+          std::make_pair(handle, std::move(materialStateForNode)));
+    };
+
+    const auto appendTrackedLightRemoval = [&](ULONG_PTR handle) {
+      const auto previousIt = m_lastLightState.find(handle);
+      if (previousIt == m_lastLightState.end() ||
+          !removedLightHandleSet.insert(handle).second) {
+        return;
+      }
+      AppendLightRemovedDelta(m_documentId, previousIt->second, &m_nextRevision,
+                              &deltas);
+      removedLightHandles.push_back(handle);
+    };
 
     if (m_forceFullResync) {
       EnsurePersistentSceneIdentifiers(ip);
@@ -5560,13 +5622,21 @@ private:
     }
 
     for (ULONG_PTR handle : m_dirtyNodeHandles) {
+      const auto previousIt = m_lastNodeState.find(handle);
       NodeSnapshot snapshot;
       if (!TryCaptureNodeSnapshotByHandle(ip, handle, &snapshot)) {
+        if (previousIt != m_lastNodeState.end()) {
+          QueuePayloadRemoval_NoLock(previousIt->second.objectId);
+          AppendNodeRemovedDelta(m_documentId, previousIt->second,
+                                 &m_nextRevision, &deltas);
+          appendTrackedMaterialRemovals(handle, nullptr);
+          stageMaterialState(handle, MaterialStateMap{});
+          appendTrackedLightRemoval(handle);
+        }
         continue;
       }
       stagedNodes[handle] = snapshot;
 
-      const auto previousIt = m_lastNodeState.find(handle);
       if (previousIt == m_lastNodeState.end()) {
         AppendNodeAddedDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
         AppendNodeTransformDelta(m_documentId, snapshot, &m_nextRevision,
@@ -5575,13 +5645,20 @@ private:
                                   &deltas);
       } else {
         const NodeSnapshot &previous = previousIt->second;
-        if (previous.objectId != snapshot.objectId) {
+        const bool nodeIdentityChanged = previous.objectId != snapshot.objectId;
+        const bool meshWasRemoved = previous.hasMesh && !snapshot.hasMesh;
+        if (nodeIdentityChanged || meshWasRemoved) {
+          const MaterialStateMap replacementMaterialState =
+              captureMaterialStateForSnapshot(snapshot);
           QueuePayloadRemoval_NoLock(previous.objectId);
           AppendNodeRemovedDelta(m_documentId, previous, &m_nextRevision, &deltas);
+          appendTrackedMaterialRemovals(handle, &replacementMaterialState);
+          stageMaterialState(handle, MaterialStateMap(replacementMaterialState));
           AppendNodeAddedDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
           AppendNodeTransformDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
           AppendNodeVisibilityDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
           AppendMeshPayloadDeltaIfAvailable(ip, m_documentId, snapshot, &m_nextRevision, &deltas);
+          appendMaterialStateDiff(replacementMaterialState);
           continue;
         }
         if (previous.parentHandle != snapshot.parentHandle ||
@@ -5613,43 +5690,32 @@ private:
     }
 
     for (ULONG_PTR handle : m_dirtyMaterialHandles) {
+      if (stagedMaterialHandles.find(handle) != stagedMaterialHandles.end()) {
+        continue;
+      }
+
       NodeSnapshot snapshot;
       auto stagedIt = stagedNodes.find(handle);
       if (stagedIt != stagedNodes.end()) {
         snapshot = stagedIt->second;
       } else if (!TryCaptureNodeSnapshotByHandle(ip, handle, &snapshot)) {
+        appendTrackedMaterialRemovals(handle, nullptr);
+        stageMaterialState(handle, MaterialStateMap{});
         continue;
       }
 
-      MaterialStateMap materialStateForNode;
-      if (snapshot.hasMesh) {
-        std::unordered_map<ULONG_PTR, NodeSnapshot> nodeState;
-        nodeState.emplace(handle, snapshot);
-        GatherMaterialSnapshots(ip, nodeState, &materialStateForNode);
-      }
-
-      for (const auto &[objectId, materialSnapshot] : materialStateForNode) {
-        const auto previousMaterialIt = m_lastMaterialState.find(objectId);
-        if (previousMaterialIt == m_lastMaterialState.end() ||
-            !SameMaterial(materialSnapshot, previousMaterialIt->second)) {
-          AppendMaterialDelta(m_documentId, materialSnapshot, &m_nextRevision,
-                              &deltas);
-        }
-      }
-
-      for (const auto &[objectId, previousMaterial] : m_lastMaterialState) {
-        if (previousMaterial.nodeHandle == handle &&
-            materialStateForNode.find(objectId) == materialStateForNode.end()) {
-          AppendMaterialRemovedDelta(m_documentId, previousMaterial,
-                                     &m_nextRevision, &deltas);
-        }
-      }
-
-      stagedMaterialStates.push_back(
-          std::make_pair(handle, std::move(materialStateForNode)));
+      MaterialStateMap materialStateForNode =
+          captureMaterialStateForSnapshot(snapshot);
+      appendMaterialStateDiff(materialStateForNode);
+      appendTrackedMaterialRemovals(handle, &materialStateForNode);
+      stageMaterialState(handle, std::move(materialStateForNode));
     }
 
     for (ULONG_PTR handle : m_dirtyLightHandles) {
+      if (removedLightHandleSet.find(handle) != removedLightHandleSet.end()) {
+        continue;
+      }
+
       LightSnapshot snapshot;
       if (TryCaptureLightSnapshotByHandle(ip, handle, &snapshot)) {
         stagedLights[handle] = snapshot;
@@ -5661,9 +5727,7 @@ private:
       } else {
         const auto previousIt = m_lastLightState.find(handle);
         if (previousIt != m_lastLightState.end()) {
-          AppendLightRemovedDelta(m_documentId, previousIt->second,
-                                  &m_nextRevision, &deltas);
-          removedLightHandles.push_back(handle);
+          appendTrackedLightRemoval(handle);
         }
       }
     }
