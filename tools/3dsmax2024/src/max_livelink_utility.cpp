@@ -219,7 +219,7 @@ HINSTANCE g_instance = nullptr;
 MaxLiveLinkPipeClient g_pipeClient;
 std::atomic<bool> g_exportInProgress{false};
 constexpr const char *kPipeName = "project-render-max-livelink";
-constexpr const char *kSourceApp = "3dsMax2025";
+constexpr const char *kSourceApp = "3dsMax2024";
 constexpr UINT_PTR kPollTimerId = 0x5052;
 constexpr UINT_PTR kCameraPollTimerId = 0x5053;
 constexpr UINT kPollIntervalMs = 50;
@@ -977,7 +977,7 @@ std::string MakeDocumentDisplayName(Interface *ip) {
 std::string MakeSessionId() {
   static std::atomic<uint64_t> s_sessionCounter{1};
   const uint64_t sessionOrdinal = s_sessionCounter.fetch_add(1);
-  return "3dsmax2025-" + std::to_string(GetCurrentProcessId()) + "-" +
+  return "3dsmax2024-" + std::to_string(GetCurrentProcessId()) + "-" +
          std::to_string(GetTickCount64()) + "-" +
          std::to_string(sessionOrdinal);
 }
@@ -4268,7 +4268,7 @@ bool SendBatch(const std::string &sessionId, uint64_t sequence, bool fullSync,
   }
 
   json batch;
-  batch["providerName"] = "3dsMax2025Pipe";
+  batch["providerName"] = "3dsMax2024Pipe";
   batch["sessionId"] = sessionId;
   batch["sequence"] = sequence;
   batch["fullSync"] = fullSync;
@@ -5020,11 +5020,7 @@ private:
     const std::string startupSummary =
         m_lastStartupSummary.empty() ? std::string("Last startup: none.")
                                      : m_lastStartupSummary;
-    std::string errText = g_pipeClient.GetLastError();
-    if (!errText.empty()) {
-      errText = "\r\nPipe Error: " + errText;
-    }
-    return startupSummary + errText +
+    return startupSummary +
            "\r\nSync: " + GetResyncStatusText_NoLock() +
            " | session=" + (m_sessionId.empty() ? std::string("none") : m_sessionId) +
            " | dirty=" + std::to_string(CountDirtyItems_NoLock()) +
@@ -5207,15 +5203,15 @@ private:
     m_forceFullSnapshotOnConnect = forceFullResync;
 
     if (!EnsureConnectedSession(ip)) {
-      std::string err = "Failed to connect LiveLink.\nPipe Error: " + g_pipeClient.GetLastError();
-      MessageBoxA(m_rollupHwnd, err.c_str(), "Project Render LiveLink", MB_ICONERROR | MB_OK);
       RefreshRollupUI_NoLock();
       return false;
     }
 
     if (m_pollTimer == 0) {
       m_pollTimer = SetTimer(nullptr, kPollTimerId, kPollIntervalMs,
-                               &ProjectRenderLiveLinkUtility::PollTimerProc);
+                             &ProjectRenderLiveLinkUtility::PollTimerProc);
+    }
+    if (m_cameraPollTimer == 0) {
       m_cameraPollTimer = SetTimer(nullptr, kCameraPollTimerId,
                                    kCameraPollIntervalMs,
                                    &ProjectRenderLiveLinkUtility::CameraPollTimerProc);
@@ -5871,7 +5867,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, ULONG fdwReason, LPVOID /*lpvReserved*/)
 }
 
 extern "C" __declspec(dllexport) const TCHAR *LibDescription() {
-  return _T("project-render LiveLink for 3ds Max 2025");
+  return _T("project-render LiveLink for 3ds Max 2024");
 }
 
 extern "C" __declspec(dllexport) int LibNumberClasses() { return 1; }
