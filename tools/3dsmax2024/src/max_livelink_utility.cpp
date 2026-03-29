@@ -3486,23 +3486,13 @@ std::filesystem::path GetNodePayloadPath(const std::string &documentId,
 }
 
 std::string BuildSharedPayloadKey(Interface *ip, INode *node) {
-  if (!ip || !node || !node->GetObjectRef()) {
-    return {};
-  }
-
-  const std::string objectGuid =
-      GetOrCreateSharedObjectGuid(node->GetObjectRef());
-  if (objectGuid.empty()) {
-    return {};
-  }
-
-  Mtl *rootMaterial = node->GetMtl();
-  const std::string materialGuid =
-      rootMaterial ? GetOrCreateMaterialGuid(rootMaterial) : std::string("nomtl");
-  const uint64_t objectToNodeHash =
-      HashMatrix3Value(ComputeObjectToNodeTransform(ip, node));
-  return std::string("shared_") + objectGuid + "_" + materialGuid + "_" +
-         std::to_string(objectToNodeHash);
+  (void)ip;
+  (void)node;
+  // Keep LiveLink payloads node-local. Sharing .prmesh files across different
+  // Max nodes can let one node's freshly exported local-space mesh replace
+  // another node's content, which shows up in-engine as random teleports or
+  // rotations after material/topology edits.
+  return {};
 }
 
 std::filesystem::path GetSharedPayloadPath(const std::string &documentId,
