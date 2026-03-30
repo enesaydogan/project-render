@@ -71,13 +71,19 @@ float TraceAoHemisphereVisibility(float3 P, float3 hemisphereNormal,
         aoPayload.packedTransmission =
             PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
         TraceRay(g_accel,
-                 RAY_FLAG_SKIP_CLOSEST_HIT_SHADER |
-                 RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+                 RAY_FLAG_NONE,
                  0xFF, 0, 0, 0, aoRay, aoPayload);
         SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
 
+        // Use a distance-normalized visibility contribution so AO behaves
+        // as a smooth function of ray distance, not just a binary hit/no-hit.
+        // This gives better control in low radius values and avoids "whole mesh"
+        // blackening when the radius is relatively large.
         if (aoPayload.t < 0.0) {
             visibleCount += 1.0;
+        } else {
+            float hitDist = saturate(aoPayload.t / radius);
+            visibleCount += hitDist;
         }
     }
 
@@ -91,6 +97,9 @@ float ComputePrimaryRayTracedAo(float3 P, float3 N, float radius,
     if (aoIntensity <= 1.0e-4 || radius <= 1.0e-4) {
         return 1.0;
     }
+
+    // UI value is in mm and converted to actual meters in CPU.
+    // The exact physical simulation radius is used.
 
     float3 normal = normalize(N);
     if (dot(normal, normal) <= 1.0e-8) {

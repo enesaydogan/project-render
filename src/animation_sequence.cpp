@@ -136,8 +136,8 @@ SavedViews::SavedView InterpolateView(const Keyframe &from, const Keyframe &to,
   result.aperture = Lerp(from.camera.aperture, to.camera.aperture, t);
   result.tonemapAoIntensity =
       Lerp(from.camera.tonemapAoIntensity, to.camera.tonemapAoIntensity, t);
-  result.tonemapAoLengthCm =
-      Lerp(from.camera.tonemapAoLengthCm, to.camera.tonemapAoLengthCm, t);
+  result.tonemapAoLengthMm =
+      Lerp(from.camera.tonemapAoLengthMm, to.camera.tonemapAoLengthMm, t);
   result.tonemapAoMode =
       (t < 0.5f) ? from.camera.tonemapAoMode : to.camera.tonemapAoMode;
   result.thumbnailWidth = 0;

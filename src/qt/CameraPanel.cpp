@@ -146,14 +146,14 @@ void CameraPanel::createUi()
     m_dxrAoMode->addItem(tr("Outward"), static_cast<int>(DxrRenderer::TonemapAmbientOcclusionMode::Outward));
     m_dxrAoMode->addItem(tr("Both"), static_cast<int>(DxrRenderer::TonemapAmbientOcclusionMode::Both));
     m_dxrAoIntensity = CreateSliderControl(0.0, 2.0, 0.01, 2);
-    m_dxrAoLengthCm = CreateSliderControl(0.0, 200.0, 1.0, 0);
+    m_dxrAoLengthMm = CreateSliderControl(0.0, 5000.0, 1.0, 0);
     tonemapForm->addRow(tr("Vignette"), m_tonemapVignette);
     tonemapForm->addRow(tr("Saturation"), m_tonemapSaturation);
     tonemapForm->addRow(tr("Contrast"), m_tonemapContrast);
     tonemapForm->addRow(m_dxrAoNote);
     tonemapForm->addRow(tr("DXR AO Mode"), m_dxrAoMode);
     tonemapForm->addRow(tr("DXR AO Intensity"), m_dxrAoIntensity);
-    tonemapForm->addRow(tr("DXR AO Length (cm)"), m_dxrAoLengthCm);
+    tonemapForm->addRow(tr("DXR AO Length (mm)"), m_dxrAoLengthMm);
     layout->addWidget(tonemapGroup);
 
     layout->addStretch(1);
@@ -253,7 +253,7 @@ void CameraPanel::createUi()
     connect(m_dxrAoIntensity->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) {
         applyTonemapSettings();
     });
-    connect(m_dxrAoLengthCm->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) {
+    connect(m_dxrAoLengthMm->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) {
         applyTonemapSettings();
     });
 }
@@ -323,12 +323,12 @@ void CameraPanel::syncFromRenderer()
         m_dxrAoMode->setCurrentIndex(aoModeIndex);
     }
     m_dxrAoIntensity->setValue(DxrRenderer::GetTonemapAmbientOcclusionIntensity());
-    m_dxrAoLengthCm->setValue(DxrRenderer::GetTonemapAmbientOcclusionLengthCm());
+    m_dxrAoLengthMm->setValue(DxrRenderer::GetTonemapAmbientOcclusionLengthMm());
     const bool dxrMode = (g_currentRenderMode == RenderMode::DXR);
     m_dxrAoNote->setEnabled(dxrMode);
     m_dxrAoMode->setEnabled(dxrMode);
     m_dxrAoIntensity->setEnabled(dxrMode);
-    m_dxrAoLengthCm->setEnabled(dxrMode);
+    m_dxrAoLengthMm->setEnabled(dxrMode);
 
     m_syncing = false;
 }
@@ -379,8 +379,8 @@ void CameraPanel::applyTonemapSettings()
     rs.tonemapContrast = static_cast<float>(m_tonemapContrast->value());
     DxrRenderer::SetTonemapAmbientOcclusionIntensity(
         static_cast<float>(m_dxrAoIntensity->value()));
-    DxrRenderer::SetTonemapAmbientOcclusionLengthCm(
-        static_cast<float>(m_dxrAoLengthCm->value()));
+    DxrRenderer::SetTonemapAmbientOcclusionLengthMm(
+        static_cast<float>(m_dxrAoLengthMm->value()));
     DxrRenderer::SetTonemapAmbientOcclusionMode(
         static_cast<DxrRenderer::TonemapAmbientOcclusionMode>(
             m_dxrAoMode->currentData().toInt()));
