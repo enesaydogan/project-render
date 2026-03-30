@@ -45,7 +45,7 @@ float TraceAoHemisphereVisibility(float3 P, float3 hemisphereNormal,
     }
 
     float3 N = normalize(hemisphereNormal);
-    float eps = max(0.001, radius * 0.02);
+    float eps = max(0.0001, radius * 0.02);
     float visibleCount = 0.0;
 
     [loop]
@@ -71,7 +71,7 @@ float TraceAoHemisphereVisibility(float3 P, float3 hemisphereNormal,
         aoPayload.packedTransmission =
             PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
         TraceRay(g_accel,
-                 RAY_FLAG_NONE,
+                 RAY_FLAG_CULL_BACK_FACING_TRIANGLES,
                  0xFF, 0, 0, 0, aoRay, aoPayload);
         SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
 
@@ -83,7 +83,8 @@ float TraceAoHemisphereVisibility(float3 P, float3 hemisphereNormal,
             visibleCount += 1.0;
         } else {
             float hitDist = saturate(aoPayload.t / radius);
-            visibleCount += hitDist;
+            // Non-linear falloff so nearby hits don't instantly plunge to black
+            visibleCount += hitDist * hitDist;
         }
     }
 
