@@ -509,6 +509,56 @@ static void CreateDefaultBuffer(
   ExecuteCommandListAndWait(cmdList.Get());
 }
 
+static void CreateDefaultBufferQueued(
+    const void *initData, UINT64 byteSize, ID3D12GraphicsCommandList *cmdList,
+    ComPtr<ID3D12Resource> &defaultBuffer, ComPtr<ID3D12Resource> &uploadBuffer,
+    D3D12_RESOURCE_STATES finalState = D3D12_RESOURCE_STATE_GENERIC_READ) {
+  if (byteSize == 0 || !cmdList)
+    return;
+
+  D3D12_HEAP_PROPERTIES defaultHeapProps = {};
+  defaultHeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+  D3D12_RESOURCE_DESC bufferDesc = {};
+  bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+  bufferDesc.Width = byteSize;
+  bufferDesc.Height = 1;
+  bufferDesc.DepthOrArraySize = 1;
+  bufferDesc.MipLevels = 1;
+  bufferDesc.Format = DXGI_FORMAT_UNKNOWN;
+  bufferDesc.SampleDesc.Count = 1;
+  bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+  ThrowIfFailed(s_device->CreateCommittedResource(
+      &defaultHeapProps, D3D12_HEAP_FLAG_NONE, &bufferDesc,
+      D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&defaultBuffer)));
+
+  D3D12_HEAP_PROPERTIES uploadHeapProps = {};
+  uploadHeapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+  ThrowIfFailed(s_device->CreateCommittedResource(
+      &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &bufferDesc,
+      D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadBuffer)));
+
+  UINT8 *mapped = nullptr;
+  D3D12_RANGE readRange = {0, 0};
+  ThrowIfFailed(
+      uploadBuffer->Map(0, &readRange, reinterpret_cast<void **>(&mapped)));
+  memcpy(mapped, initData, static_cast<size_t>(byteSize));
+  uploadBuffer->Unmap(0, nullptr);
+
+  cmdList->CopyBufferRegion(defaultBuffer.Get(), 0, uploadBuffer.Get(), 0,
+                            byteSize);
+
+  D3D12_RESOURCE_BARRIER barrier = {};
+  barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+  barrier.Transition.pResource = defaultBuffer.Get();
+  barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+  barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+  barrier.Transition.StateAfter = finalState;
+  cmdList->ResourceBarrier(1, &barrier);
+}
+
 #ifdef USE_TINYGLTF
 
 bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
@@ -2237,6 +2287,70 @@ GpuMesh LoadMeshFromMemory(const std::vector<Vertex> &vertices,
   }
 
   return mesh;
+}
+
+void UploadMeshes(std::vector<GpuMesh> &meshes) {
+  if (!s_device || !s_queue || meshes.empty()) {
+    return;
+  }
+
+  std::vector<size_t> pendingMeshIndices;
+  pendingMeshIndices.reserve(meshes.size());
+  for (size_t meshIndex = 0; meshIndex < meshes.size(); ++meshIndex) {
+    const GpuMesh &mesh = meshes[meshIndex];
+    if (mesh.vertexBuffer || mesh.indexBuffer) {
+      continue;
+    }
+    if (mesh.cpuVertices.empty() || mesh.cpuIndices.empty()) {
+      continue;
+    }
+    pendingMeshIndices.push_back(meshIndex);
+  }
+
+  if (pendingMeshIndices.empty()) {
+    return;
+  }
+
+  ComPtr<ID3D12CommandAllocator> allocator;
+  ComPtr<ID3D12GraphicsCommandList> cmdList;
+  ThrowIfFailed(s_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                                 IID_PPV_ARGS(&allocator)));
+  ThrowIfFailed(s_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                            allocator.Get(), nullptr,
+                                            IID_PPV_ARGS(&cmdList)));
+
+  std::vector<ComPtr<ID3D12Resource>> uploadBuffers;
+  uploadBuffers.reserve(pendingMeshIndices.size() * 2);
+
+  for (size_t meshIndex : pendingMeshIndices) {
+    GpuMesh &mesh = meshes[meshIndex];
+    ComPtr<ID3D12Resource> vUpload;
+    ComPtr<ID3D12Resource> iUpload;
+
+    CreateDefaultBufferQueued(mesh.cpuVertices.data(),
+                              mesh.cpuVertices.size() * sizeof(Vertex),
+                              cmdList.Get(), mesh.vertexBuffer, vUpload,
+                              D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    CreateDefaultBufferQueued(mesh.cpuIndices.data(),
+                              mesh.cpuIndices.size() * sizeof(uint32_t),
+                              cmdList.Get(), mesh.indexBuffer, iUpload,
+                              D3D12_RESOURCE_STATE_INDEX_BUFFER);
+
+    uploadBuffers.push_back(vUpload);
+    uploadBuffers.push_back(iUpload);
+
+    mesh.vbView.BufferLocation = mesh.vertexBuffer->GetGPUVirtualAddress();
+    mesh.vbView.StrideInBytes = sizeof(Vertex);
+    mesh.vbView.SizeInBytes =
+        static_cast<UINT>(mesh.cpuVertices.size() * sizeof(Vertex));
+
+    mesh.ibView.BufferLocation = mesh.indexBuffer->GetGPUVirtualAddress();
+    mesh.ibView.Format = DXGI_FORMAT_R32_UINT;
+    mesh.ibView.SizeInBytes =
+        static_cast<UINT>(mesh.cpuIndices.size() * sizeof(uint32_t));
+  }
+
+  ExecuteCommandListAndWait(cmdList.Get());
 }
 
 inline float lerp(float a, float b, float t) { return a + t * (b - a); }

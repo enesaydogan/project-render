@@ -255,17 +255,8 @@ int AppendNativePayloadTexture(const std::string &textureUri,
     return cached->second;
   }
 
-  Asset::Texture texture =
-      Asset::LoadTextureFromFile(textureUri, IsHdrTextureUri(textureUri));
-  if (!texture.resource) {
-    fprintf(stderr,
-            "LiveLink: failed to load payload texture '%s'\n",
-            textureUri.c_str());
-    return -1;
-  }
-
   const int index = static_cast<int>(outTextures->size());
-  outTextures->push_back(std::move(texture));
+  outTextures->push_back(Asset::Texture{});
   if (outTextureSourceUris) {
     outTextureSourceUris->push_back(textureUri);
   }
@@ -282,6 +273,14 @@ bool LoadNativeMeshPayload(const std::string &path,
   if (!outMeshes) {
     return false;
   }
+
+  struct ScopedDeferredGpuUpload {
+    bool previous = false;
+    ScopedDeferredGpuUpload() : previous(Asset::GetDeferGpuUpload()) {
+      Asset::SetDeferGpuUpload(true);
+    }
+    ~ScopedDeferredGpuUpload() { Asset::SetDeferGpuUpload(previous); }
+  } scopedDeferredGpuUpload;
 
   if (outMaterials) {
     outMaterials->clear();
@@ -696,6 +695,7 @@ void LiveLinkSceneSync::ApplyQueuedBatches(LiveLinkCoordinator &coordinator) {
   }
 
   std::vector<SceneDeltaBatch> batches = coordinator.ConsumeQueuedBatches();
+  ScopedSceneBatchUpdates scopedBatchUpdates;
   for (const SceneDeltaBatch &batch : batches) {
     ApplyBatch(batch);
   }
