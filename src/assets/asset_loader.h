@@ -203,4 +203,6 @@ Texture LoadTextureFromMemory(const void *src, int width, int height,
 // Load a single mesh from memory.
 GpuMesh LoadMeshFromMemory(const std::vector<Vertex> &vertices,
                            const std::vector<uint32_t> &indices);
+// Upload any meshes that still only have CPU geometry to the GPU in one batch.
+void UploadMeshes(std::vector<GpuMesh> &meshes);
 } // namespace Asset

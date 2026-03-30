@@ -3425,8 +3425,13 @@ void BuildAccelerationStructures(
     // Pipelining:
     // Create separate allocators for each batch so we can submit them without
     // blocking/waiting on the CPU. We only wait once at the very end.
-    const size_t BLAS_BATCH_SIZE = 500;
-    const bool enableBlasCompaction = meshes.size() <= 1500;
+    const bool conservativeBlasBuild =
+        s_forceAsRebuild || IsDlssActive() || meshes.size() > 1500;
+    const size_t BLAS_BATCH_SIZE = conservativeBlasBuild ? 64 : 500;
+    // Avoid compaction ramps and extra peak VRAM when rebuilding from
+    // live-update paths or when DLSS/Streamline is active.
+    const bool enableBlasCompaction =
+        (meshes.size() <= 1500) && !conservativeBlasBuild;
     size_t batchCount = 0;
 
     std::vector<ComPtr<ID3D12CommandAllocator>> submittedBatchAllocators;
@@ -3439,59 +3444,139 @@ void BuildAccelerationStructures(
       s_tlasSupportsUpdate = false;
       s_cachedTlasMeshOrder.clear();
       try {
-        for (size_t i = 0; i < meshes.size(); ++i) {
-          const auto &mesh = *meshes[i];
-          if (!mesh.vertexBuffer || !mesh.indexBuffer)
-            continue;
-
-          auto vbAddr = mesh.vertexBuffer->GetGPUVirtualAddress();
-          auto ibAddr = mesh.indexBuffer->GetGPUVirtualAddress();
-
-            auto bl =
-              BuildBLAS(s_dxrDevice.Get(), cmdList.Get(), vbAddr,
-                  mesh.vertexCount, sizeof(Asset::Vertex), ibAddr,
-                  mesh.indexCount, meshOpaqueStates[i] != 0, false,
-                  enableBlasCompaction);
-          if (bl.result && bl.scratch) {
-            s_allBLAS.push_back({bl, (UINT64)i});
-            s_cachedMeshBuffersForBlas.push_back(mesh.vertexBuffer.Get());
-            s_cachedMeshOpaqueForBlas.push_back(meshOpaqueStates[i]);
-          }
-
-          batchCount++;
-          if (batchCount >= BLAS_BATCH_SIZE) {
-            fprintf(stderr,
-                    "DxrRenderer: Submitting BLAS batch (mesh %zu/%zu)...\n", i,
-                    meshes.size());
-            ThrowIfFailed(cmdList->Close());
-            ID3D12CommandList *lists[] = {cmdList.Get()};
-            s_commandQueue->ExecuteCommandLists(1, lists);
-
-            // DO NOT WAIT. Create new allocator and continue recording.
-            ComPtr<ID3D12CommandAllocator> nextAlloc;
-            ThrowIfFailed(s_device->CreateCommandAllocator(
-                D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&nextAlloc)));
-            submittedBatchAllocators.push_back(nextAlloc);
-
-            // Reset same list with new allocator
-            ThrowIfFailed(cmdList->Reset(nextAlloc.Get(), nullptr));
-            batchCount = 0;
-          }
+        if (conservativeBlasBuild && g_verboseRenderLogs) {
+          fprintf(stderr,
+                  "DxrRenderer: Using conservative BLAS build mode (%zu meshes, DLSS=%s, forceRebuild=%s).\n",
+                  meshes.size(), IsDlssActive() ? "on" : "off",
+                  s_forceAsRebuild ? "yes" : "no");
         }
 
-        // Final flush if any remaining (and ensure list is closed regardless)
-        ThrowIfFailed(cmdList->Close());
-        ID3D12CommandList *lists[] = {cmdList.Get()};
-        s_commandQueue->ExecuteCommandLists(1, lists);
+        size_t batchBlasStartIndex = 0;
+        auto submitCurrentBatch = [&](bool reopenList, const char *timeoutMsg) {
+          ThrowIfFailed(cmdList->Close());
+          ID3D12CommandList *lists[] = {cmdList.Get()};
+          s_commandQueue->ExecuteCommandLists(1, lists);
 
-        // NOW we wait for everything to finish (Single Wait)
-        const UINT64 fenceVal = s_fenceValues[*s_frameIndexPtr];
-        s_commandQueue->Signal(s_fence, fenceVal);
-        s_fenceValues[*s_frameIndexPtr]++;
-        if (!WaitForFenceWithTimeout(
-                fenceVal, 10000,
-                "DxrRenderer: Timeout waiting for BLAS build batch (10s). Aborting AS rebuild for this frame.")) {
-          return;
+          const UINT64 fenceVal = s_fenceValues[*s_frameIndexPtr];
+          s_commandQueue->Signal(s_fence, fenceVal);
+          s_fenceValues[*s_frameIndexPtr]++;
+          if (!WaitForFenceWithTimeout(fenceVal, 10000, timeoutMsg)) {
+            return false;
+          }
+
+          if (!enableBlasCompaction) {
+            for (size_t k = batchBlasStartIndex; k < s_allBLAS.size(); ++k) {
+              s_allBLAS[k].buffers.scratch.Reset();
+              s_allBLAS[k].buffers.compactedSizeBuffer.Reset();
+              s_allBLAS[k].buffers.compactedSizeReadback.Reset();
+            }
+          }
+          batchBlasStartIndex = s_allBLAS.size();
+
+          if (reopenList) {
+            ThrowIfFailed(cmdAlloc->Reset());
+            ThrowIfFailed(cmdList->Reset(cmdAlloc.Get(), nullptr));
+          }
+          return true;
+        };
+
+        if (conservativeBlasBuild) {
+          for (size_t i = 0; i < meshes.size(); ++i) {
+            const auto &mesh = *meshes[i];
+            if (!mesh.vertexBuffer || !mesh.indexBuffer) {
+              continue;
+            }
+
+            auto vbAddr = mesh.vertexBuffer->GetGPUVirtualAddress();
+            auto ibAddr = mesh.indexBuffer->GetGPUVirtualAddress();
+
+            auto bl = BuildBLAS(s_dxrDevice.Get(), cmdList.Get(), vbAddr,
+                                mesh.vertexCount, sizeof(Asset::Vertex), ibAddr,
+                                mesh.indexCount, meshOpaqueStates[i] != 0, false,
+                                enableBlasCompaction);
+            if (bl.result && bl.scratch) {
+              s_allBLAS.push_back({bl, (UINT64)i});
+              s_cachedMeshBuffersForBlas.push_back(mesh.vertexBuffer.Get());
+              s_cachedMeshOpaqueForBlas.push_back(meshOpaqueStates[i]);
+            }
+
+            batchCount++;
+            if (batchCount >= BLAS_BATCH_SIZE) {
+              fprintf(stderr,
+                      "DxrRenderer: Submitting conservative BLAS batch (mesh %zu/%zu)...\n",
+                      i, meshes.size());
+              if (!submitCurrentBatch(
+                      true,
+                      "DxrRenderer: Timeout waiting for conservative BLAS build batch (10s). Aborting AS rebuild for this frame.")) {
+                return;
+              }
+              batchCount = 0;
+            }
+          }
+
+          if (batchCount > 0) {
+            if (!submitCurrentBatch(
+                    false,
+                    "DxrRenderer: Timeout waiting for conservative BLAS build batch (10s). Aborting AS rebuild for this frame.")) {
+              return;
+            }
+            batchCount = 0;
+          }
+        } else {
+          for (size_t i = 0; i < meshes.size(); ++i) {
+            const auto &mesh = *meshes[i];
+            if (!mesh.vertexBuffer || !mesh.indexBuffer)
+              continue;
+
+            auto vbAddr = mesh.vertexBuffer->GetGPUVirtualAddress();
+            auto ibAddr = mesh.indexBuffer->GetGPUVirtualAddress();
+
+            auto bl =
+                BuildBLAS(s_dxrDevice.Get(), cmdList.Get(), vbAddr,
+                          mesh.vertexCount, sizeof(Asset::Vertex), ibAddr,
+                          mesh.indexCount, meshOpaqueStates[i] != 0, false,
+                          enableBlasCompaction);
+            if (bl.result && bl.scratch) {
+              s_allBLAS.push_back({bl, (UINT64)i});
+              s_cachedMeshBuffersForBlas.push_back(mesh.vertexBuffer.Get());
+              s_cachedMeshOpaqueForBlas.push_back(meshOpaqueStates[i]);
+            }
+
+            batchCount++;
+            if (batchCount >= BLAS_BATCH_SIZE) {
+              fprintf(stderr,
+                      "DxrRenderer: Submitting BLAS batch (mesh %zu/%zu)...\n",
+                      i, meshes.size());
+              ThrowIfFailed(cmdList->Close());
+              ID3D12CommandList *lists[] = {cmdList.Get()};
+              s_commandQueue->ExecuteCommandLists(1, lists);
+
+              // DO NOT WAIT. Create new allocator and continue recording.
+              ComPtr<ID3D12CommandAllocator> nextAlloc;
+              ThrowIfFailed(s_device->CreateCommandAllocator(
+                  D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&nextAlloc)));
+              submittedBatchAllocators.push_back(nextAlloc);
+
+              // Reset same list with new allocator
+              ThrowIfFailed(cmdList->Reset(nextAlloc.Get(), nullptr));
+              batchCount = 0;
+            }
+          }
+
+          // Final flush if any remaining (and ensure list is closed regardless)
+          ThrowIfFailed(cmdList->Close());
+          ID3D12CommandList *lists[] = {cmdList.Get()};
+          s_commandQueue->ExecuteCommandLists(1, lists);
+
+          // NOW we wait for everything to finish (Single Wait)
+          const UINT64 fenceVal = s_fenceValues[*s_frameIndexPtr];
+          s_commandQueue->Signal(s_fence, fenceVal);
+          s_fenceValues[*s_frameIndexPtr]++;
+          if (!WaitForFenceWithTimeout(
+                  fenceVal, 10000,
+                  "DxrRenderer: Timeout waiting for BLAS build batch (10s). Aborting AS rebuild for this frame.")) {
+            return;
+          }
         }
 
         submittedBatchAllocators.clear();
