@@ -410,7 +410,7 @@ static json BuildMetadata() {
   j["cam"]["ss"]  = shut;
   j["cam"]["apt"] = apt;
   j["cam"]["tai"] = DxrRenderer::GetTonemapAmbientOcclusionIntensity();
-  j["cam"]["tal"] = DxrRenderer::GetTonemapAmbientOcclusionLengthCm();
+  j["cam"]["tal"] = DxrRenderer::GetTonemapAmbientOcclusionLengthMm();
   j["cam"]["tam"] =
       static_cast<int>(DxrRenderer::GetTonemapAmbientOcclusionMode());
 
@@ -443,7 +443,7 @@ static json BuildMetadata() {
         {"ss", view.shutterSeconds},
         {"apt", view.aperture},
         {"tai", view.tonemapAoIntensity},
-        {"tal", view.tonemapAoLengthCm},
+        {"tal", view.tonemapAoLengthMm},
         {"tam", view.tonemapAoMode},
     };
     if (!view.thumbnailRgba.empty() && view.thumbnailWidth > 0 &&
@@ -494,7 +494,7 @@ static json BuildMetadata() {
         {"ss", keyframe.camera.shutterSeconds},
         {"apt", keyframe.camera.aperture},
         {"tai", keyframe.camera.tonemapAoIntensity},
-        {"tal", keyframe.camera.tonemapAoLengthCm},
+        {"tal", keyframe.camera.tonemapAoLengthMm},
         {"tam", keyframe.camera.tonemapAoMode},
     });
   }
@@ -678,8 +678,8 @@ static void ApplyMetadataPRS(const json &j) {
     DxrRenderer::SetExposureCompensation(c.value("ec", DxrRenderer::GetExposureCompensation()));
     DxrRenderer::SetTonemapAmbientOcclusionIntensity(
         c.value("tai", DxrRenderer::GetTonemapAmbientOcclusionIntensity()));
-    DxrRenderer::SetTonemapAmbientOcclusionLengthCm(
-        c.value("tal", DxrRenderer::GetTonemapAmbientOcclusionLengthCm()));
+    DxrRenderer::SetTonemapAmbientOcclusionLengthMm(
+        c.value("tal", DxrRenderer::GetTonemapAmbientOcclusionLengthMm()));
     DxrRenderer::SetTonemapAmbientOcclusionMode(
         static_cast<DxrRenderer::TonemapAmbientOcclusionMode>(
             std::clamp(c.value("tam",
@@ -723,7 +723,7 @@ static void ApplyMetadataPRS(const json &j) {
       view.shutterSeconds = entry.value("ss", view.shutterSeconds);
       view.aperture = entry.value("apt", view.aperture);
       view.tonemapAoIntensity = entry.value("tai", view.tonemapAoIntensity);
-      view.tonemapAoLengthCm = entry.value("tal", view.tonemapAoLengthCm);
+      view.tonemapAoLengthMm = entry.value("tal", view.tonemapAoLengthMm);
       view.tonemapAoMode = std::clamp(entry.value("tam", view.tonemapAoMode), 0, 2);
       view.thumbnailWidth = entry.value("tw", 0u);
       view.thumbnailHeight = entry.value("th", 0u);
@@ -790,7 +790,7 @@ static void ApplyMetadataPRS(const json &j) {
         keyframe.camera.shutterSeconds = entry.value("ss", keyframe.camera.shutterSeconds);
         keyframe.camera.aperture = entry.value("apt", keyframe.camera.aperture);
         keyframe.camera.tonemapAoIntensity = entry.value("tai", keyframe.camera.tonemapAoIntensity);
-        keyframe.camera.tonemapAoLengthCm = entry.value("tal", keyframe.camera.tonemapAoLengthCm);
+        keyframe.camera.tonemapAoLengthMm = entry.value("tal", keyframe.camera.tonemapAoLengthMm);
         keyframe.camera.tonemapAoMode = std::clamp(entry.value("tam", keyframe.camera.tonemapAoMode), 0, 2);
         animationKeyframes.push_back(std::move(keyframe));
       }

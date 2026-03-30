@@ -1851,11 +1851,10 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
             DxrRenderer::SetTonemapAmbientOcclusionIntensity(aoIntensity);
             uiChanged = true;
           }
-
-          float aoLengthCm = DxrRenderer::GetTonemapAmbientOcclusionLengthCm();
-          if (ImGui::SliderFloat("DXR AO Length (cm)", &aoLengthCm, 0.0f,
-                                 200.0f, "%.0f cm")) {
-            DxrRenderer::SetTonemapAmbientOcclusionLengthCm(aoLengthCm);
+          float aoLengthMm = DxrRenderer::GetTonemapAmbientOcclusionLengthMm();
+          if (ImGui::SliderFloat("DXR AO Length (mm)", &aoLengthMm, 0.0f,
+                                 5000.0f, "%.0f mm")) {
+            DxrRenderer::SetTonemapAmbientOcclusionLengthMm(aoLengthMm);
             uiChanged = true;
           }
         } else {

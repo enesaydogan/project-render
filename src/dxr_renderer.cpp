@@ -72,7 +72,7 @@ static float s_cameraApertureFNumber = 2.8f;
 static DxrRenderer::TonemapAmbientOcclusionMode s_tonemapAoMode =
     DxrRenderer::TonemapAmbientOcclusionMode::Both;
 static float s_tonemapAoIntensity = 0.0f;
-static float s_tonemapAoLengthCm = 25.0f;
+static float s_tonemapAoLengthMm = 250.0f;
 
 // When DLSS-RR is active we don't use the accumulation buffer; track a
 // still-frame SPP count separately so maxSPP can still freeze rendering.
@@ -687,16 +687,18 @@ void SetTonemapAmbientOcclusionIntensity(float intensity) {
   }
 }
 float GetTonemapAmbientOcclusionIntensity() { return s_tonemapAoIntensity; }
-void SetTonemapAmbientOcclusionLengthCm(float lengthCm) {
-  const float clamped = (std::clamp)(lengthCm, 0.0f, 500.0f);
-  if (std::abs(s_tonemapAoLengthCm - clamped) > 1.0e-6f) {
-    s_tonemapAoLengthCm = clamped;
-    g_cameraData.tonemapAoRadiusMeters = clamped * 0.01f;
+void SetTonemapAmbientOcclusionLengthMm(float lengthMm) {
+  const float clamped = (std::clamp)(lengthMm, 0.0f, 5000.0f);
+  if (std::abs(s_tonemapAoLengthMm - clamped) > 1.0e-6f) {
+    s_tonemapAoLengthMm = clamped;
+    // Use standard mm-to-m conversion for world radius: 1 mm = 0.001 m.
+    // If this still feels too large, adjust slider range / effective ray scale.
+    g_cameraData.tonemapAoRadiusMeters = clamped * 0.001f;
     ResetAccumulation();
     s_hasTonemappedFrame = false;
   }
 }
-float GetTonemapAmbientOcclusionLengthCm() { return s_tonemapAoLengthCm; }
+float GetTonemapAmbientOcclusionLengthMm() { return s_tonemapAoLengthMm; }
 void SetExposureCompensation(float comp) {
   if (s_exposureCompensation != comp) {
     s_exposureCompensation = comp;
@@ -4762,7 +4764,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       cam->frameCount = (float)s_jitterFrameIndex;
       cam->lightCount = (float)s_lightCount;
       cam->tonemapAoIntensity = s_tonemapAoIntensity;
-      cam->tonemapAoRadiusMeters = s_tonemapAoLengthCm * 0.01f;
+      cam->tonemapAoRadiusMeters = s_tonemapAoLengthMm * 0.001f;
       cam->tonemapAoMode = static_cast<float>(static_cast<int>(s_tonemapAoMode));
       cam->tonemapAoPad0 = 0.0f;
 
@@ -6129,6 +6131,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     tc.vignette = rs.tonemapVignette;
     tc.saturation = rs.tonemapSaturation;
     tc.contrast = rs.tonemapContrast;
+
+    // DXR path: Secondary ray traced AO is computed in path_tracer_core via
+    // ComputePrimaryRayTracedAo and encoded in the primary color output.
+    // Disable tonemap post-process AO entirely in this path, to avoid double
+    // AO application.
     tc.aoIntensity = 0.0f;
     tc.aoRadiusMeters = 0.0f;
     tc.aoMode = static_cast<uint32_t>(s_tonemapAoMode);

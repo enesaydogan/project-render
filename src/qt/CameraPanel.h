@@ -53,7 +53,7 @@ private:
     QLabel *m_dxrAoNote = nullptr;
     QComboBox *m_dxrAoMode = nullptr;
     SliderControl *m_dxrAoIntensity = nullptr;
-    SliderControl *m_dxrAoLengthCm = nullptr;
+    SliderControl *m_dxrAoLengthMm = nullptr;
 
     QTimer *m_refreshTimer = nullptr;
 };

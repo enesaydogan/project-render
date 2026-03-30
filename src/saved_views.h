@@ -33,7 +33,7 @@ struct SavedView {
   float shutterSeconds = 1.0f / 30.0f;
   float aperture = 2.8f;
   float tonemapAoIntensity = 0.0f;
-  float tonemapAoLengthCm = 25.0f;
+  float tonemapAoLengthMm = 250.0f;
   int tonemapAoMode = 2;
   uint32_t thumbnailWidth = 0;
   uint32_t thumbnailHeight = 0;

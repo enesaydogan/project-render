@@ -111,8 +111,8 @@ void SetTonemapAmbientOcclusionMode(TonemapAmbientOcclusionMode mode);
 TonemapAmbientOcclusionMode GetTonemapAmbientOcclusionMode();
 void SetTonemapAmbientOcclusionIntensity(float intensity);
 float GetTonemapAmbientOcclusionIntensity();
-void SetTonemapAmbientOcclusionLengthCm(float lengthCm);
-float GetTonemapAmbientOcclusionLengthCm();
+void SetTonemapAmbientOcclusionLengthMm(float lengthMm);
+float GetTonemapAmbientOcclusionLengthMm();
 
 // Get number of lights transferred to GPU
 UINT GetLightCount();

@@ -147,6 +147,11 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
 {
     uint rayType = UnpackPayloadRayType(payload.packedIorType);
 
+    if (rayType == RAY_TYPE_SHADOW) {
+        payload.t = RayTCurrent();
+        return;
+    }
+
     // Access mesh and material for this instance
     uint meshIdx = InstanceID();
     MeshData mesh = meshData[meshIdx];
