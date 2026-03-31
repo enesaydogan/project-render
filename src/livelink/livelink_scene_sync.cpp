@@ -338,7 +338,8 @@ bool LoadNativeMeshPayload(const std::string &path,
                            std::vector<Asset::Material> *outMaterials,
                            std::vector<std::string> *outMaterialStableIds,
                            std::vector<Asset::Texture> *outTextures,
-                           std::vector<std::string> *outTextureSourceUris) {
+                           std::vector<std::string> *outTextureSourceUris,
+                           bool *outHasFullMaterialDefinitions = nullptr) {
   if (!outMeshes) {
     return false;
   }
@@ -374,6 +375,9 @@ bool LoadNativeMeshPayload(const std::string &path,
   stream.read(reinterpret_cast<char *>(&header), sizeof(header));
   if (!stream || header.magic != 0x48534D50) {
     return false;
+  }
+  if (outHasFullMaterialDefinitions) {
+    *outHasFullMaterialDefinitions = header.version < 5;
   }
 
   outMeshes->clear();
@@ -1265,6 +1269,7 @@ bool LiveLinkSceneSync::ApplyMeshPayloadChanged(const SceneDeltaBatch &batch,
   std::vector<std::string> materialStableIds;
   std::vector<Asset::Texture> textures;
   std::vector<std::string> textureSourceUris;
+  bool meshPayloadHasFullMaterialDefinitions = true;
   const std::filesystem::path payloadPath =
       Utf8PathFromString(payload->payloadUri);
   const std::string extension = payloadPath.extension().string();
@@ -1273,7 +1278,8 @@ bool LiveLinkSceneSync::ApplyMeshPayloadChanged(const SceneDeltaBatch &batch,
                                                   &materials,
                                                   &materialStableIds,
                                                   &textures,
-                                                  &textureSourceUris)
+                                                  &textureSourceUris,
+                                                  &meshPayloadHasFullMaterialDefinitions)
                           : Asset::LoadModel(payload->payloadUri, meshes,
                                              &materials, &textures);
   if (!loaded) {
@@ -1313,6 +1319,8 @@ bool LiveLinkSceneSync::ApplyMeshPayloadChanged(const SceneDeltaBatch &batch,
   importedPayload.materialStableIds = std::move(materialStableIds);
   importedPayload.textures = std::move(textures);
   importedPayload.textureSourceUris = std::move(textureSourceUris);
+  importedPayload.materialsContainFullDefinitions =
+      extension != ".prmesh" || meshPayloadHasFullMaterialDefinitions;
 
   if (!Scene::ReplaceNodeImportedContent(binding->handleIndex,
                                          std::move(importedPayload))) {
