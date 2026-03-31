@@ -133,6 +133,7 @@ private:
 
   std::unordered_map<ObjectId, ObjectBinding, ObjectIdHash> m_bindings;
   std::unordered_map<std::string, int> m_textureIndicesByUri;
+  std::unordered_map<std::string, int> m_textureIndicesByBlobHash;
   CachedCameraState m_cachedExternalCamera;
   bool m_cameraControlDetached = false;
   mutable uint64_t m_nextDiagnosticSequence = 1;

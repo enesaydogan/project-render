@@ -2237,6 +2237,77 @@ bool LoadModel(const std::string &path, std::vector<GpuMesh> &outMeshes,
   }
 }
 
+Texture LoadTextureFromEncodedMemory(const void *src, size_t size,
+                                     bool isHDRHint) {
+  if (!s_device || !src || size == 0) {
+    return {};
+  }
+
+  const auto *bytes = static_cast<const unsigned char *>(src);
+  int width = 0;
+  int height = 0;
+  int comp = 0;
+
+  EXRVersion exrVersion;
+  if (ParseEXRVersionFromMemory(&exrVersion, bytes, size) == TINYEXR_SUCCESS) {
+    float *data = nullptr;
+    const char *err = nullptr;
+    if (LoadEXRFromMemory(&data, &width, &height, bytes, size, &err) ==
+        TINYEXR_SUCCESS) {
+      Texture tex;
+      CreateGpuTexture(data, width, height, 4, DXGI_FORMAT_R32G32B32A32_FLOAT,
+                       tex);
+      free(data);
+      return tex;
+    }
+    if (err) {
+      fprintf(stderr, "tinyexr error: %s\n", err);
+      FreeEXRErrorMessage(err);
+    }
+  }
+
+  auto loadHdr = [&]() -> Texture {
+    float *fdata =
+        stbi_loadf_from_memory(bytes, static_cast<int>(size), &width, &height,
+                               &comp, 4);
+    if (!fdata) {
+      return {};
+    }
+    Texture tex;
+    CreateGpuTexture(fdata, width, height, 4, DXGI_FORMAT_R32G32B32A32_FLOAT,
+                     tex);
+    stbi_image_free(fdata);
+    return tex;
+  };
+
+  auto loadLdr = [&]() -> Texture {
+    unsigned char *data =
+        stbi_load_from_memory(bytes, static_cast<int>(size), &width, &height,
+                              &comp, 4);
+    if (!data) {
+      return {};
+    }
+    Texture tex;
+    CreateGpuTexture(data, width, height, 4, DXGI_FORMAT_R8G8B8A8_UNORM, tex);
+    stbi_image_free(data);
+    return tex;
+  };
+
+  if (isHDRHint) {
+    Texture tex = loadHdr();
+    if (tex.resource) {
+      return tex;
+    }
+    return loadLdr();
+  }
+
+  Texture tex = loadLdr();
+  if (tex.resource) {
+    return tex;
+  }
+  return loadHdr();
+}
+
 Texture LoadTextureFromMemory(const void *src, int width, int height,
                               DXGI_FORMAT format) {
   Texture tex;

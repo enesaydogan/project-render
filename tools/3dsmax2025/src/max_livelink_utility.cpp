@@ -9,7 +9,6 @@
 #include <stdmat.h>
 #include <units.h>
 #include <ISceneEventManager.h>
-
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -1098,6 +1097,24 @@ struct MaterialReferenceSnapshot {
   bool operator==(const MaterialReferenceSnapshot &) const = default;
 };
 
+enum class EmbeddedTextureEncoding : uint32_t {
+  None = 0,
+  RawRgba8 = 1,
+  RawRgba32Float = 2,
+  EncodedLdr = 3,
+  EncodedHdr = 4,
+};
+
+struct EmbeddedTexturePayload {
+  std::string contentHash;
+  EmbeddedTextureEncoding encoding = EmbeddedTextureEncoding::None;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  std::vector<uint8_t> data;
+
+  bool IsValid() const { return !contentHash.empty() && !data.empty(); }
+};
+
 struct MaterialSnapshot {
   bool valid = false;
   ULONG_PTR nodeHandle = 0;
@@ -1110,10 +1127,15 @@ struct MaterialSnapshot {
   std::string materialModel = "OpenPBR";
   std::array<float, 4> baseColor = {1.0f, 1.0f, 1.0f, 1.0f};
   std::string baseColorTextureUri;
+  EmbeddedTexturePayload baseColorTexturePayload;
   std::string normalTextureUri;
+  EmbeddedTexturePayload normalTexturePayload;
   std::string emissiveTextureUri;
+  EmbeddedTexturePayload emissiveTexturePayload;
   std::string occlusionTextureUri;
+  EmbeddedTexturePayload occlusionTexturePayload;
   std::string metalRoughTextureUri;
+  EmbeddedTexturePayload metalRoughTexturePayload;
   std::array<float, 4> emissiveColor = {0.0f, 0.0f, 0.0f, 1.0f};
   float emissiveIntensity = 0.0f;
   float roughness = 0.5f;
@@ -1139,6 +1161,7 @@ struct MaterialSnapshot {
 
 struct TextureBindingSnapshot {
   std::string uri;
+  EmbeddedTexturePayload payload;
   std::array<float, 2> uvScale = {1.0f, 1.0f};
   std::array<float, 2> uvOffset = {0.0f, 0.0f};
   float triPlanarEnabled = 0.0f;
@@ -1233,9 +1256,17 @@ struct NativeMeshPayloadMaterialBindingHeader {
 
 struct NativeMaterialLibraryHeader {
   uint32_t magic = 0x54414D50; // PMAT
-  uint32_t version = 1;
+  uint32_t version = 2;
   uint32_t materialCount = 0;
   uint32_t reserved = 0;
+};
+
+struct NativeMaterialLibraryTextureBlobHeader {
+  uint32_t hashLength = 0;
+  uint32_t encoding = 0;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint32_t dataSize = 0;
 };
 
 struct NativeMaterialLibraryReferenceHeader {
@@ -1274,6 +1305,45 @@ struct NativeMaterialLibraryMaterialHeader {
   uint32_t emissiveTextureUriLength = 0;
   uint32_t occlusionTextureUriLength = 0;
   uint32_t metalRoughTextureUriLength = 0;
+  uint32_t referenceCount = 0;
+};
+
+struct NativeMaterialLibraryMaterialHeaderV2 {
+  uint32_t flags = 0;
+  float baseColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+  float emissiveColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+  float emissiveIntensity = 1.0f;
+  float roughness = 0.5f;
+  float metalness = 0.0f;
+  float specularWeight = 1.0f;
+  float ior = 1.5f;
+  float transmissionWeight = 0.0f;
+  float transmissionColor[3] = {1.0f, 1.0f, 1.0f};
+  float coatWeight = 0.0f;
+  float coatRoughness = 0.1f;
+  float thinWalled = 0.0f;
+  float translucency = 0.0f;
+  float uvScale[2] = {1.0f, 1.0f};
+  float uvOffset[2] = {0.0f, 0.0f};
+  float triPlanarEnabled = 0.0f;
+  float triPlanarScale = 1.0f;
+  float triPlanarSharpness = 4.0f;
+  float triPlanarNormalStrength = 1.0f;
+  uint32_t objectIdLength = 0;
+  uint32_t nameLength = 0;
+  uint32_t materialStableIdLength = 0;
+  uint32_t materialModelLength = 0;
+  uint32_t alphaModeLength = 0;
+  uint32_t baseColorTextureUriLength = 0;
+  uint32_t baseColorTextureBlobHashLength = 0;
+  uint32_t normalTextureUriLength = 0;
+  uint32_t normalTextureBlobHashLength = 0;
+  uint32_t emissiveTextureUriLength = 0;
+  uint32_t emissiveTextureBlobHashLength = 0;
+  uint32_t occlusionTextureUriLength = 0;
+  uint32_t occlusionTextureBlobHashLength = 0;
+  uint32_t metalRoughTextureUriLength = 0;
+  uint32_t metalRoughTextureBlobHashLength = 0;
   uint32_t referenceCount = 0;
 };
 
@@ -1422,6 +1492,11 @@ bool SameVector4(const std::array<float, 4> &lhs, const std::array<float, 4> &rh
          std::fabs(lhs[3] - rhs[3]) <= 1.0e-4f;
 }
 
+bool SameEmbeddedTexturePayload(const EmbeddedTexturePayload &lhs,
+                                const EmbeddedTexturePayload &rhs) {
+  return lhs.contentHash == rhs.contentHash;
+}
+
 bool SameMaterial(const MaterialSnapshot &lhs, const MaterialSnapshot &rhs) {
   const bool hasStableIdentity =
       !lhs.materialStableId.empty() && lhs.materialStableId == rhs.materialStableId;
@@ -1453,10 +1528,20 @@ bool SameMaterial(const MaterialSnapshot &lhs, const MaterialSnapshot &rhs) {
          lhs.materialModel == rhs.materialModel &&
          SameVector4(lhs.baseColor, rhs.baseColor) &&
          lhs.baseColorTextureUri == rhs.baseColorTextureUri &&
+         SameEmbeddedTexturePayload(lhs.baseColorTexturePayload,
+                                    rhs.baseColorTexturePayload) &&
          lhs.normalTextureUri == rhs.normalTextureUri &&
+         SameEmbeddedTexturePayload(lhs.normalTexturePayload,
+                                    rhs.normalTexturePayload) &&
          lhs.emissiveTextureUri == rhs.emissiveTextureUri &&
+         SameEmbeddedTexturePayload(lhs.emissiveTexturePayload,
+                                    rhs.emissiveTexturePayload) &&
          lhs.occlusionTextureUri == rhs.occlusionTextureUri &&
+         SameEmbeddedTexturePayload(lhs.occlusionTexturePayload,
+                                    rhs.occlusionTexturePayload) &&
          lhs.metalRoughTextureUri == rhs.metalRoughTextureUri &&
+         SameEmbeddedTexturePayload(lhs.metalRoughTexturePayload,
+                                    rhs.metalRoughTexturePayload) &&
          SameVector4(lhs.emissiveColor, rhs.emissiveColor) &&
          NearlyEqual(lhs.emissiveIntensity, rhs.emissiveIntensity) &&
          NearlyEqual(lhs.roughness, rhs.roughness) &&
@@ -1528,10 +1613,15 @@ json SerializeMaterialSnapshot(const MaterialSnapshot &snapshot) {
               {"mm", snapshot.materialModel},
               {"bc", snapshot.baseColor},
               {"bct", snapshot.baseColorTextureUri},
+              {"bck", snapshot.baseColorTexturePayload.contentHash},
               {"nt", snapshot.normalTextureUri},
+              {"ntk", snapshot.normalTexturePayload.contentHash},
               {"et", snapshot.emissiveTextureUri},
+              {"etk", snapshot.emissiveTexturePayload.contentHash},
               {"ot", snapshot.occlusionTextureUri},
+              {"otk", snapshot.occlusionTexturePayload.contentHash},
               {"mrt", snapshot.metalRoughTextureUri},
+              {"mrtk", snapshot.metalRoughTexturePayload.contentHash},
               {"ec", snapshot.emissiveColor},
               {"ei", snapshot.emissiveIntensity},
               {"r", snapshot.roughness},
@@ -1633,10 +1723,20 @@ bool DeserializeMaterialSnapshot(const json &value, MaterialSnapshot *outSnapsho
   snapshot.materialModel = value.value("mm", std::string("OpenPBR"));
   if (value.contains("bc")) snapshot.baseColor = value["bc"].get<std::array<float, 4>>();
   snapshot.baseColorTextureUri = value.value("bct", std::string());
+  snapshot.baseColorTexturePayload.contentHash =
+      value.value("bck", std::string());
   snapshot.normalTextureUri = value.value("nt", std::string());
+  snapshot.normalTexturePayload.contentHash =
+      value.value("ntk", std::string());
   snapshot.emissiveTextureUri = value.value("et", std::string());
+  snapshot.emissiveTexturePayload.contentHash =
+      value.value("etk", std::string());
   snapshot.occlusionTextureUri = value.value("ot", std::string());
+  snapshot.occlusionTexturePayload.contentHash =
+      value.value("otk", std::string());
   snapshot.metalRoughTextureUri = value.value("mrt", std::string());
+  snapshot.metalRoughTexturePayload.contentHash =
+      value.value("mrtk", std::string());
   if (value.contains("ec")) snapshot.emissiveColor = value["ec"].get<std::array<float, 4>>();
   snapshot.emissiveIntensity = value.value("ei", 0.0f);
   snapshot.roughness = value.value("r", 0.5f);
@@ -1987,6 +2087,390 @@ bool TryNormalizeTextureUri(Interface *ip, const std::string &rawPath,
   return true;
 }
 
+bool IsHdrTextureUri(const std::string &uri) {
+  const std::string extension =
+      ToLowerAscii(std::filesystem::path(Utf8ToWString(uri)).extension().string());
+  return extension == ".hdr" || extension == ".exr";
+}
+
+uint64_t HashBytesFnv1a64(const void *data, size_t size) {
+  const auto *bytes = static_cast<const uint8_t *>(data);
+  uint64_t hash = 1469598103934665603ull;
+  for (size_t index = 0; index < size; ++index) {
+    hash ^= static_cast<uint64_t>(bytes[index]);
+    hash *= 1099511628211ull;
+  }
+  return hash;
+}
+
+std::string MakeEmbeddedTextureContentHash(EmbeddedTextureEncoding encoding,
+                                           uint32_t width, uint32_t height,
+                                           const std::vector<uint8_t> &data) {
+  uint64_t hash = 1469598103934665603ull;
+  auto mix = [&](const void *ptr, size_t size) {
+    hash ^= HashBytesFnv1a64(ptr, size);
+    hash *= 1099511628211ull;
+  };
+  const uint32_t encodingValue = static_cast<uint32_t>(encoding);
+  mix(&encodingValue, sizeof(encodingValue));
+  mix(&width, sizeof(width));
+  mix(&height, sizeof(height));
+  if (!data.empty()) {
+    mix(data.data(), data.size());
+  }
+
+  char buffer[17] = {};
+  sprintf_s(buffer, "%016llx", static_cast<unsigned long long>(hash));
+  return buffer;
+}
+
+bool TryReadFileBytes(const std::string &path, std::vector<uint8_t> *outBytes) {
+  if (!outBytes || path.empty()) {
+    return false;
+  }
+
+  std::ifstream stream(std::filesystem::path(Utf8ToWString(path)),
+                       std::ios::binary | std::ios::ate);
+  if (!stream) {
+    return false;
+  }
+
+  const std::streamsize size = stream.tellg();
+  if (size <= 0) {
+    return false;
+  }
+  stream.seekg(0, std::ios::beg);
+
+  outBytes->resize(static_cast<size_t>(size));
+  stream.read(reinterpret_cast<char *>(outBytes->data()), size);
+  return static_cast<bool>(stream);
+}
+
+void SetEncodedTexturePayload(const std::vector<uint8_t> &bytes,
+                              const std::string &sourceUri,
+                              EmbeddedTextureEncoding encoding,
+                              EmbeddedTexturePayload *outPayload) {
+  if (!outPayload) {
+    return;
+  }
+
+  outPayload->encoding = encoding;
+  outPayload->width = 0;
+  outPayload->height = 0;
+  outPayload->data = bytes;
+  outPayload->contentHash =
+      MakeEmbeddedTextureContentHash(encoding, 0, 0, outPayload->data);
+  (void)sourceUri;
+}
+
+void SetRawTexturePayload(const std::vector<uint8_t> &bytes, uint32_t width,
+                          uint32_t height, EmbeddedTextureEncoding encoding,
+                          EmbeddedTexturePayload *outPayload) {
+  if (!outPayload) {
+    return;
+  }
+
+  outPayload->encoding = encoding;
+  outPayload->width = width;
+  outPayload->height = height;
+  outPayload->data = bytes;
+  outPayload->contentHash =
+      MakeEmbeddedTextureContentHash(encoding, width, height, outPayload->data);
+}
+
+bool SetTexturePayloadFromLinearPixels(const BMM_Color_fl *pixels,
+                                       size_t pixelCount, uint32_t width,
+                                       uint32_t height,
+                                       EmbeddedTexturePayload *outPayload) {
+  if (!pixels || pixelCount == 0 || width == 0 || height == 0 || !outPayload) {
+    return false;
+  }
+
+  bool requiresFloat = false;
+  for (size_t pixelIndex = 0; pixelIndex < pixelCount; ++pixelIndex) {
+    const BMM_Color_fl &pixel = pixels[pixelIndex];
+    if (pixel.r < -1.0e-4f || pixel.r > 1.0001f || pixel.g < -1.0e-4f ||
+        pixel.g > 1.0001f || pixel.b < -1.0e-4f || pixel.b > 1.0001f ||
+        pixel.a < -1.0e-4f || pixel.a > 1.0001f) {
+      requiresFloat = true;
+      break;
+    }
+  }
+
+  if (requiresFloat) {
+    std::vector<uint8_t> rawBytes(pixelCount * sizeof(float) * 4);
+    float *dst = reinterpret_cast<float *>(rawBytes.data());
+    for (size_t pixelIndex = 0; pixelIndex < pixelCount; ++pixelIndex) {
+      dst[pixelIndex * 4 + 0] = pixels[pixelIndex].r;
+      dst[pixelIndex * 4 + 1] = pixels[pixelIndex].g;
+      dst[pixelIndex * 4 + 2] = pixels[pixelIndex].b;
+      dst[pixelIndex * 4 + 3] = pixels[pixelIndex].a;
+    }
+    SetRawTexturePayload(rawBytes, width, height,
+                         EmbeddedTextureEncoding::RawRgba32Float, outPayload);
+    return outPayload->IsValid();
+  }
+
+  std::vector<uint8_t> rawBytes(pixelCount * 4);
+  for (size_t pixelIndex = 0; pixelIndex < pixelCount; ++pixelIndex) {
+    rawBytes[pixelIndex * 4 + 0] = static_cast<uint8_t>(
+        std::clamp(pixels[pixelIndex].r, 0.0f, 1.0f) * 255.0f + 0.5f);
+    rawBytes[pixelIndex * 4 + 1] = static_cast<uint8_t>(
+        std::clamp(pixels[pixelIndex].g, 0.0f, 1.0f) * 255.0f + 0.5f);
+    rawBytes[pixelIndex * 4 + 2] = static_cast<uint8_t>(
+        std::clamp(pixels[pixelIndex].b, 0.0f, 1.0f) * 255.0f + 0.5f);
+    rawBytes[pixelIndex * 4 + 3] = static_cast<uint8_t>(
+        std::clamp(pixels[pixelIndex].a, 0.0f, 1.0f) * 255.0f + 0.5f);
+  }
+
+  SetRawTexturePayload(rawBytes, width, height, EmbeddedTextureEncoding::RawRgba8,
+                       outPayload);
+  return outPayload->IsValid();
+}
+
+class TextureBakeHandleMaker final : public TexHandleMaker {
+ public:
+  explicit TextureBakeHandleMaker(int size) : m_size(std::max(1, size)) {}
+
+  TexHandle *CreateHandle(Bitmap * /*bm*/, int /*symflags*/ = 0,
+                          int /*extraFlags*/ = 0) override {
+    return nullptr;
+  }
+
+  TexHandle *CreateHandle(BITMAPINFO * /*bminf*/, int /*symflags*/ = 0,
+                          int /*extraFlags*/ = 0) override {
+    return nullptr;
+  }
+
+  BITMAPINFO *BitmapToDIB(Bitmap *bm, int /*symflags*/, int /*extraFlags*/,
+                          BOOL forceW = 0, BOOL forceH = 0) override {
+    if (!bm) {
+      return nullptr;
+    }
+
+    const int sourceWidth = bm->Width();
+    const int sourceHeight = bm->Height();
+    const int targetWidth = forceW > 0 ? static_cast<int>(forceW) : sourceWidth;
+    const int targetHeight =
+        forceH > 0 ? static_cast<int>(forceH) : sourceHeight;
+    if (sourceWidth <= 0 || sourceHeight <= 0 || targetWidth <= 0 ||
+        targetHeight <= 0) {
+      return nullptr;
+    }
+
+    std::vector<BMM_Color_fl> sourcePixels(static_cast<size_t>(sourceWidth) *
+                                           static_cast<size_t>(sourceHeight));
+    for (int y = 0; y < sourceHeight; ++y) {
+      if (!bm->GetLinearPixels(0, y, sourceWidth,
+                               sourcePixels.data() +
+                                   static_cast<size_t>(y) * sourceWidth)) {
+        return nullptr;
+      }
+    }
+
+    const size_t dstPixelCount = static_cast<size_t>(targetWidth) *
+                                 static_cast<size_t>(targetHeight);
+    const size_t dibSize =
+        sizeof(BITMAPINFOHEADER) + dstPixelCount * sizeof(uint32_t);
+    uint8_t *storage = new (std::nothrow) uint8_t[dibSize];
+    if (!storage) {
+      return nullptr;
+    }
+
+    std::memset(storage, 0, dibSize);
+    BITMAPINFO *dib = reinterpret_cast<BITMAPINFO *>(storage);
+    dib->bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    dib->bmiHeader.biWidth = targetWidth;
+    dib->bmiHeader.biHeight = -targetHeight;
+    dib->bmiHeader.biPlanes = 1;
+    dib->bmiHeader.biBitCount = 32;
+    dib->bmiHeader.biCompression = BI_RGB;
+    dib->bmiHeader.biSizeImage = static_cast<DWORD>(dstPixelCount * 4);
+
+    uint8_t *dst = storage + sizeof(BITMAPINFOHEADER);
+    for (int y = 0; y < targetHeight; ++y) {
+      const int sourceY =
+          std::min(sourceHeight - 1, (y * sourceHeight) / targetHeight);
+      for (int x = 0; x < targetWidth; ++x) {
+        const int sourceX =
+            std::min(sourceWidth - 1, (x * sourceWidth) / targetWidth);
+        const BMM_Color_fl &pixel =
+            sourcePixels[static_cast<size_t>(sourceY) * sourceWidth + sourceX];
+        const size_t dstIndex =
+            (static_cast<size_t>(y) * targetWidth + x) * 4;
+        dst[dstIndex + 0] = static_cast<uint8_t>(
+            std::clamp(pixel.b, 0.0f, 1.0f) * 255.0f + 0.5f);
+        dst[dstIndex + 1] = static_cast<uint8_t>(
+            std::clamp(pixel.g, 0.0f, 1.0f) * 255.0f + 0.5f);
+        dst[dstIndex + 2] = static_cast<uint8_t>(
+            std::clamp(pixel.r, 0.0f, 1.0f) * 255.0f + 0.5f);
+        dst[dstIndex + 3] = static_cast<uint8_t>(
+            std::clamp(pixel.a, 0.0f, 1.0f) * 255.0f + 0.5f);
+      }
+    }
+
+    m_ownedDibs.insert(dib);
+    return dib;
+  }
+
+  TexHandle *MakeHandle(BITMAPINFO *bminf) override {
+    ReleaseDib(bminf);
+    return nullptr;
+  }
+
+  BOOL UseClosestPowerOf2() override { return TRUE; }
+
+  int Size() override { return m_size; }
+
+  void ReleaseDib(BITMAPINFO *dib) {
+    if (!dib) {
+      return;
+    }
+    const auto it = m_ownedDibs.find(dib);
+    if (it != m_ownedDibs.end()) {
+      delete[] reinterpret_cast<uint8_t *>(dib);
+      m_ownedDibs.erase(it);
+    }
+  }
+
+ private:
+  int m_size = 1;
+  std::unordered_set<BITMAPINFO *> m_ownedDibs;
+};
+
+bool TryCaptureTexturePayloadFromDib(const BITMAPINFO *dib,
+                                     EmbeddedTexturePayload *outPayload) {
+  if (!dib || !outPayload) {
+    return false;
+  }
+
+  const BITMAPINFOHEADER &header = dib->bmiHeader;
+  if (header.biWidth <= 0 || header.biHeight == 0 || header.biPlanes != 1 ||
+      (header.biBitCount != 24 && header.biBitCount != 32)) {
+    return false;
+  }
+
+  const uint32_t width = static_cast<uint32_t>(header.biWidth);
+  const uint32_t height =
+      static_cast<uint32_t>(header.biHeight < 0 ? -header.biHeight
+                                                : header.biHeight);
+  const size_t rowStride =
+      ((static_cast<size_t>(header.biBitCount) * width + 31u) / 32u) * 4u;
+  const size_t paletteBytes =
+      header.biBitCount <= 8
+          ? ((header.biClrUsed != 0 ? header.biClrUsed
+                                    : (1u << header.biBitCount)) *
+             sizeof(RGBQUAD))
+          : 0u;
+  const size_t maskBytes =
+      header.biCompression == BI_BITFIELDS ? sizeof(DWORD) * 3u : 0u;
+  const uint8_t *src =
+      reinterpret_cast<const uint8_t *>(dib) + header.biSize + paletteBytes +
+      maskBytes;
+
+  std::vector<uint8_t> rawBytes(static_cast<size_t>(width) * height * 4u);
+  for (uint32_t y = 0; y < height; ++y) {
+    const uint32_t srcY = header.biHeight < 0 ? y : (height - 1u - y);
+    const uint8_t *srcRow = src + static_cast<size_t>(srcY) * rowStride;
+    uint8_t *dstRow = rawBytes.data() + static_cast<size_t>(y) * width * 4u;
+    for (uint32_t x = 0; x < width; ++x) {
+      const uint8_t *srcPixel =
+          srcRow + static_cast<size_t>(x) * (header.biBitCount / 8u);
+      dstRow[x * 4u + 0] = srcPixel[2];
+      dstRow[x * 4u + 1] = srcPixel[1];
+      dstRow[x * 4u + 2] = srcPixel[0];
+      dstRow[x * 4u + 3] = header.biBitCount == 32 ? srcPixel[3] : 255u;
+    }
+  }
+
+  SetRawTexturePayload(rawBytes, width, height, EmbeddedTextureEncoding::RawRgba8,
+                       outPayload);
+  return outPayload->IsValid();
+}
+
+bool TryCaptureTexturePayloadFromUri(const std::string &textureUri,
+                                     EmbeddedTexturePayload *outPayload) {
+  if (!outPayload || textureUri.empty()) {
+    return false;
+  }
+
+  std::vector<uint8_t> encodedBytes;
+  if (!TryReadFileBytes(textureUri, &encodedBytes) || encodedBytes.empty()) {
+    return false;
+  }
+
+  SetEncodedTexturePayload(encodedBytes, textureUri,
+                           IsHdrTextureUri(textureUri)
+                               ? EmbeddedTextureEncoding::EncodedHdr
+                               : EmbeddedTextureEncoding::EncodedLdr,
+                           outPayload);
+  return outPayload->IsValid();
+}
+
+bool TryCaptureTexturePayloadFromBitmap(Bitmap *bitmap,
+                                        EmbeddedTexturePayload *outPayload) {
+  if (!bitmap || !outPayload) {
+    return false;
+  }
+
+  const int width = bitmap->Width();
+  const int height = bitmap->Height();
+  if (width <= 0 || height <= 0) {
+    return false;
+  }
+
+  std::vector<BMM_Color_fl> pixels(static_cast<size_t>(width) *
+                                   static_cast<size_t>(height));
+  for (int y = 0; y < height; ++y) {
+    if (!bitmap->GetLinearPixels(0, y, width,
+                                 pixels.data() +
+                                     static_cast<size_t>(y) * width)) {
+      return false;
+    }
+  }
+
+  return SetTexturePayloadFromLinearPixels(
+      pixels.data(), pixels.size(), static_cast<uint32_t>(width),
+      static_cast<uint32_t>(height), outPayload);
+}
+
+bool TryCaptureEmbeddedTexturePayload(Interface *ip, Texmap *texmap,
+                                      const std::string &textureUri,
+                                      EmbeddedTexturePayload *outPayload) {
+  if (!texmap || !outPayload) {
+    return false;
+  }
+
+  if (!textureUri.empty() && TryCaptureTexturePayloadFromUri(textureUri, outPayload)) {
+    return true;
+  }
+
+  if (BitmapTex *bitmapTex = dynamic_cast<BitmapTex *>(texmap)) {
+    const TimeValue time = ip ? ip->GetTime() : 0;
+    if (Bitmap *bitmap = bitmapTex->GetBitmap(time)) {
+      return TryCaptureTexturePayloadFromBitmap(bitmap, outPayload);
+    }
+  }
+
+  constexpr int kEmbeddedBakeResolution = 1024;
+  const TimeValue time = ip ? ip->GetTime() : 0;
+  Interval validity = FOREVER;
+  texmap->LoadMapFiles(time);
+  texmap->Update(time, validity);
+
+  TextureBakeHandleMaker handleMaker(kEmbeddedBakeResolution);
+  BITMAPINFO *dib = texmap->GetVPDisplayDIB(time, handleMaker, validity, FALSE,
+                                            kEmbeddedBakeResolution,
+                                            kEmbeddedBakeResolution);
+  if (!dib) {
+    return false;
+  }
+
+  const bool captured = TryCaptureTexturePayloadFromDib(dib, outPayload);
+  handleMaker.ReleaseDib(dib);
+  return captured;
+}
+
 bool ParamNameSuggestsTexturePath(const std::string &paramNameLower) {
   return ContainsAnyToken(paramNameLower,
                           {"file", "filename", "filepath", "path", "bitmap",
@@ -2006,6 +2490,7 @@ bool TryResolveBitmapTextureBinding(Interface *ip, BitmapTex *bitmapTex,
   }
 
   outBinding->uri = textureUri;
+  TryCaptureEmbeddedTexturePayload(ip, bitmapTex, textureUri, &outBinding->payload);
 
   if (StdUVGen *uvGenerator = bitmapTex->GetUVGen()) {
     const TimeValue time = ip ? ip->GetTime() : 0;
@@ -2301,6 +2786,7 @@ bool TryResolveFileBackedTextureBinding(Interface *ip, Texmap *texmap,
   }
 
   outBinding->uri = std::move(textureUri);
+  TryCaptureTexturePayloadFromUri(outBinding->uri, &outBinding->payload);
   return true;
 }
 
@@ -2529,7 +3015,18 @@ bool TryResolveTexmapTextureBinding(Interface *ip, Texmap *texmap,
     }
   }
 
-  if (TryResolveFileBackedTextureBinding(ip, texmap, outBinding)) {
+  TextureBindingSnapshot fallbackBinding;
+  if (TryResolveFileBackedTextureBinding(ip, texmap, &fallbackBinding)) {
+    outBinding->uri = fallbackBinding.uri;
+  }
+
+  if (TryCaptureEmbeddedTexturePayload(ip, texmap, std::string(),
+                                       &outBinding->payload)) {
+    return true;
+  }
+
+  if (!fallbackBinding.uri.empty()) {
+    *outBinding = std::move(fallbackBinding);
     return true;
   }
 
@@ -2548,12 +3045,15 @@ bool TryResolveTexmapTextureBinding(Interface *ip, Texmap *texmap,
 }
 
 void ApplyTextureBinding(TextureBindingSnapshot binding, std::string *outUri,
+                         EmbeddedTexturePayload *outPayload,
                          MaterialSnapshot *snapshot) {
-  if (!outUri || !snapshot || binding.uri.empty()) {
+  if (!outUri || !outPayload || !snapshot ||
+      (binding.uri.empty() && !binding.payload.IsValid())) {
     return;
   }
 
   *outUri = std::move(binding.uri);
+  *outPayload = std::move(binding.payload);
   if (binding.triPlanarEnabled > 0.5f) {
     if (snapshot->triPlanarEnabled <= 0.5f) {
       snapshot->triPlanarEnabled = 1.0f;
@@ -2601,24 +3101,28 @@ void CaptureGenericMaterialTextures(Interface *ip, Mtl *material,
         ContainsAnyToken(slotNameLower,
                          {"diffuse", "albedo", "base color", "basecolor"})) {
       ApplyTextureBinding(std::move(binding), &snapshot->baseColorTextureUri,
+                          &snapshot->baseColorTexturePayload,
                           snapshot);
       continue;
     }
     if (snapshot->normalTextureUri.empty() &&
         ContainsAnyToken(slotNameLower, {"normal", "bump"})) {
       ApplyTextureBinding(std::move(binding), &snapshot->normalTextureUri,
+                          &snapshot->normalTexturePayload,
                           snapshot);
       continue;
     }
     if (snapshot->emissiveTextureUri.empty() &&
         ContainsAnyToken(slotNameLower, {"self", "emiss", "illum"})) {
       ApplyTextureBinding(std::move(binding), &snapshot->emissiveTextureUri,
+                          &snapshot->emissiveTexturePayload,
                           snapshot);
       continue;
     }
     if (snapshot->occlusionTextureUri.empty() &&
         ContainsAnyToken(slotNameLower, {"occlusion", "ambient occlusion", "ao"})) {
       ApplyTextureBinding(std::move(binding), &snapshot->occlusionTextureUri,
+                          &snapshot->occlusionTexturePayload,
                           snapshot);
       continue;
     }
@@ -2626,6 +3130,7 @@ void CaptureGenericMaterialTextures(Interface *ip, Mtl *material,
         ContainsAnyToken(slotNameLower,
                          {"metal", "metallic", "metalness", "rough", "gloss"})) {
       ApplyTextureBinding(std::move(binding), &snapshot->metalRoughTextureUri,
+                          &snapshot->metalRoughTexturePayload,
                           snapshot);
     }
   }
@@ -2820,6 +3325,7 @@ void ApplyVrayMaterialParameters(Interface *ip, Mtl *material,
     TextureBindingSnapshot binding;
     if (TryResolveTexmapTextureBinding(ip, baseColorTexmap, &binding)) {
       ApplyTextureBinding(std::move(binding), &snapshot->baseColorTextureUri,
+                          &snapshot->baseColorTexturePayload,
                           snapshot);
     }
   }
@@ -2831,6 +3337,7 @@ void ApplyVrayMaterialParameters(Interface *ip, Mtl *material,
     TextureBindingSnapshot binding;
     if (TryResolveTexmapTextureBinding(ip, normalTexmap, &binding)) {
       ApplyTextureBinding(std::move(binding), &snapshot->normalTextureUri,
+                          &snapshot->normalTexturePayload,
                           snapshot);
     }
   }
@@ -2842,6 +3349,7 @@ void ApplyVrayMaterialParameters(Interface *ip, Mtl *material,
     TextureBindingSnapshot binding;
     if (TryResolveTexmapTextureBinding(ip, metalnessTexmap, &binding)) {
       ApplyTextureBinding(std::move(binding), &snapshot->metalRoughTextureUri,
+                          &snapshot->metalRoughTexturePayload,
                           snapshot);
     }
   }
@@ -2854,6 +3362,7 @@ void ApplyVrayMaterialParameters(Interface *ip, Mtl *material,
       TextureBindingSnapshot binding;
       if (TryResolveTexmapTextureBinding(ip, roughnessTexmap, &binding)) {
         ApplyTextureBinding(std::move(binding), &snapshot->metalRoughTextureUri,
+                            &snapshot->metalRoughTexturePayload,
                             snapshot);
       }
     }
@@ -2872,6 +3381,7 @@ void ApplyVrayMaterialParameters(Interface *ip, Mtl *material,
     TextureBindingSnapshot binding;
     if (TryResolveTexmapTextureBinding(ip, emissiveTexmap, &binding)) {
       ApplyTextureBinding(std::move(binding), &snapshot->emissiveTextureUri,
+                          &snapshot->emissiveTexturePayload,
                           snapshot);
     }
   }
@@ -3617,12 +4127,54 @@ bool WriteMaterialLibraryPayload(const std::string &documentId,
               return lhs.objectId < rhs.objectId;
             });
 
+  std::vector<const EmbeddedTexturePayload *> serializedTextureBlobs;
+  std::unordered_map<std::string, const EmbeddedTexturePayload *> textureBlobsByHash;
+  auto collectTextureBlob = [&](const EmbeddedTexturePayload &payload) {
+    if (!payload.IsValid()) {
+      return;
+    }
+    if (textureBlobsByHash.emplace(payload.contentHash, &payload).second) {
+      serializedTextureBlobs.push_back(&payload);
+    }
+  };
+  for (const MaterialSnapshot &material : serializedMaterials) {
+    collectTextureBlob(material.baseColorTexturePayload);
+    collectTextureBlob(material.normalTexturePayload);
+    collectTextureBlob(material.emissiveTexturePayload);
+    collectTextureBlob(material.occlusionTexturePayload);
+    collectTextureBlob(material.metalRoughTexturePayload);
+  }
+
   NativeMaterialLibraryHeader header;
   header.materialCount = static_cast<uint32_t>(serializedMaterials.size());
+  header.reserved = static_cast<uint32_t>(serializedTextureBlobs.size());
   stream.write(reinterpret_cast<const char *>(&header), sizeof(header));
 
+  for (const EmbeddedTexturePayload *payload : serializedTextureBlobs) {
+    if (!payload) {
+      continue;
+    }
+    NativeMaterialLibraryTextureBlobHeader blobHeader;
+    blobHeader.hashLength = static_cast<uint32_t>(payload->contentHash.size());
+    blobHeader.encoding = static_cast<uint32_t>(payload->encoding);
+    blobHeader.width = payload->width;
+    blobHeader.height = payload->height;
+    blobHeader.dataSize = static_cast<uint32_t>(payload->data.size());
+    stream.write(reinterpret_cast<const char *>(&blobHeader), sizeof(blobHeader));
+    if (!WriteNativePayloadString(stream, payload->contentHash)) {
+      return false;
+    }
+    if (!payload->data.empty()) {
+      stream.write(reinterpret_cast<const char *>(payload->data.data()),
+                   static_cast<std::streamsize>(payload->data.size()));
+      if (!stream) {
+        return false;
+      }
+    }
+  }
+
   for (const MaterialSnapshot &material : serializedMaterials) {
-    NativeMaterialLibraryMaterialHeader materialHeader;
+    NativeMaterialLibraryMaterialHeaderV2 materialHeader;
     materialHeader.flags =
         material.doubleSided ? kNativeMaterialFlagDoubleSided : 0u;
     if (material.invertRoughnessTexture) {
@@ -3662,14 +4214,24 @@ bool WriteMaterialLibraryPayload(const std::string &documentId,
         static_cast<uint32_t>(material.alphaMode.size());
     materialHeader.baseColorTextureUriLength =
         static_cast<uint32_t>(material.baseColorTextureUri.size());
+    materialHeader.baseColorTextureBlobHashLength = static_cast<uint32_t>(
+        material.baseColorTexturePayload.contentHash.size());
     materialHeader.normalTextureUriLength =
         static_cast<uint32_t>(material.normalTextureUri.size());
+    materialHeader.normalTextureBlobHashLength = static_cast<uint32_t>(
+        material.normalTexturePayload.contentHash.size());
     materialHeader.emissiveTextureUriLength =
         static_cast<uint32_t>(material.emissiveTextureUri.size());
+    materialHeader.emissiveTextureBlobHashLength = static_cast<uint32_t>(
+        material.emissiveTexturePayload.contentHash.size());
     materialHeader.occlusionTextureUriLength =
         static_cast<uint32_t>(material.occlusionTextureUri.size());
+    materialHeader.occlusionTextureBlobHashLength = static_cast<uint32_t>(
+        material.occlusionTexturePayload.contentHash.size());
     materialHeader.metalRoughTextureUriLength =
         static_cast<uint32_t>(material.metalRoughTextureUri.size());
+    materialHeader.metalRoughTextureBlobHashLength = static_cast<uint32_t>(
+        material.metalRoughTexturePayload.contentHash.size());
     materialHeader.referenceCount =
         static_cast<uint32_t>(material.references.size());
     stream.write(reinterpret_cast<const char *>(&materialHeader),
@@ -3680,10 +4242,20 @@ bool WriteMaterialLibraryPayload(const std::string &documentId,
         !WriteNativePayloadString(stream, material.materialModel) ||
         !WriteNativePayloadString(stream, material.alphaMode) ||
         !WriteNativePayloadString(stream, material.baseColorTextureUri) ||
+        !WriteNativePayloadString(stream,
+                                  material.baseColorTexturePayload.contentHash) ||
         !WriteNativePayloadString(stream, material.normalTextureUri) ||
+        !WriteNativePayloadString(stream,
+                                  material.normalTexturePayload.contentHash) ||
         !WriteNativePayloadString(stream, material.emissiveTextureUri) ||
+        !WriteNativePayloadString(stream,
+                                  material.emissiveTexturePayload.contentHash) ||
         !WriteNativePayloadString(stream, material.occlusionTextureUri) ||
-        !WriteNativePayloadString(stream, material.metalRoughTextureUri)) {
+        !WriteNativePayloadString(
+            stream, material.occlusionTexturePayload.contentHash) ||
+        !WriteNativePayloadString(stream, material.metalRoughTextureUri) ||
+        !WriteNativePayloadString(stream,
+                                  material.metalRoughTexturePayload.contentHash)) {
       return false;
     }
 
@@ -3722,6 +4294,24 @@ void AppendMaterialLibraryDelta(const std::string &documentId,
            {"debugLabel", "Scene material library"},
            {"payload", json{{"payloadUri", payloadUri},
                             {"payloadHash", payloadUri}}}});
+}
+
+bool AppendMaterialLibraryDeltaForState(const std::string &documentId,
+                                        const MaterialStateMap &materialState,
+                                        uint64_t *revision,
+                                        json *outDeltas) {
+  if (!revision || !outDeltas || materialState.empty()) {
+    return false;
+  }
+
+  std::string payloadUri;
+  if (!WriteMaterialLibraryPayload(documentId, materialState, &payloadUri) ||
+      payloadUri.empty()) {
+    return false;
+  }
+
+  AppendMaterialLibraryDelta(documentId, payloadUri, revision, outDeltas);
+  return true;
 }
 
 void RemoveDocumentPayloadDirectoryIfEmpty(const std::string &documentId) {
@@ -4663,10 +5253,18 @@ bool SendResumeSnapshot(Interface *ip,
   }
 
   if (!wroteMaterialLibrary || materialLibraryPayloadUri.empty()) {
+    MaterialStateMap changedMaterialState;
     for (const auto &[objectId, snapshot] : currentMaterialState) {
       const auto previousIt = persistedState.materialState.find(objectId);
       if (previousIt == persistedState.materialState.end() ||
           !SameMaterial(snapshot, previousIt->second)) {
+        changedMaterialState.emplace(objectId, snapshot);
+      }
+    }
+
+    if (!AppendMaterialLibraryDeltaForState(documentId, changedMaterialState,
+                                            &revision, &deltas)) {
+      for (const auto &[_, snapshot] : changedMaterialState) {
         AppendMaterialDelta(documentId, snapshot, &revision, &deltas);
       }
     }
@@ -5605,13 +6203,27 @@ private:
 
     const auto appendMaterialStateDiff =
         [&](const MaterialStateMap &materialStateForNode) {
+      MaterialStateMap changedMaterialState;
       for (const auto &[objectId, materialSnapshot] : materialStateForNode) {
         const auto previousMaterialIt = m_lastMaterialState.find(objectId);
         if (previousMaterialIt == m_lastMaterialState.end() ||
             !SameMaterial(materialSnapshot, previousMaterialIt->second)) {
-          AppendMaterialDelta(m_documentId, materialSnapshot, &m_nextRevision,
-                              &deltas);
+          changedMaterialState.emplace(objectId, materialSnapshot);
         }
+      }
+
+      if (changedMaterialState.empty()) {
+        return;
+      }
+
+      if (AppendMaterialLibraryDeltaForState(m_documentId, changedMaterialState,
+                                             &m_nextRevision, &deltas)) {
+        return;
+      }
+
+      for (const auto &[_, materialSnapshot] : changedMaterialState) {
+        AppendMaterialDelta(m_documentId, materialSnapshot, &m_nextRevision,
+                            &deltas);
       }
     };
 
@@ -5718,10 +6330,19 @@ private:
       }
 
       if (!wroteMaterialLibrary || materialLibraryPayloadUri.empty()) {
+        MaterialStateMap changedMaterialState;
         for (const auto &[objectId, snapshot] : currentMaterialState) {
           const auto previousMaterialIt = m_lastMaterialState.find(objectId);
           if (previousMaterialIt == m_lastMaterialState.end() ||
               !SameMaterial(snapshot, previousMaterialIt->second)) {
+            changedMaterialState.emplace(objectId, snapshot);
+          }
+        }
+
+        if (!AppendMaterialLibraryDeltaForState(m_documentId,
+                                                changedMaterialState,
+                                                &m_nextRevision, &deltas)) {
+          for (const auto &[_, snapshot] : changedMaterialState) {
             AppendMaterialDelta(m_documentId, snapshot, &m_nextRevision,
                                 &deltas);
           }

@@ -124,9 +124,17 @@ struct NativeMeshPayloadMaterialBindingHeader {
 
 struct NativeMaterialLibraryHeader {
   uint32_t magic = 0x54414D50;
-  uint32_t version = 1;
+  uint32_t version = 2;
   uint32_t materialCount = 0;
   uint32_t reserved = 0;
+};
+
+struct NativeMaterialLibraryTextureBlobHeader {
+  uint32_t hashLength = 0;
+  uint32_t encoding = 0;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint32_t dataSize = 0;
 };
 
 struct NativeMaterialLibraryReferenceHeader {
@@ -168,6 +176,63 @@ struct NativeMaterialLibraryMaterialHeader {
   uint32_t referenceCount = 0;
 };
 
+struct NativeMaterialLibraryMaterialHeaderV2 {
+  uint32_t flags = 0;
+  float baseColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+  float emissiveColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+  float emissiveIntensity = 1.0f;
+  float roughness = 0.5f;
+  float metalness = 0.0f;
+  float specularWeight = 1.0f;
+  float ior = 1.5f;
+  float transmissionWeight = 0.0f;
+  float transmissionColor[3] = {1.0f, 1.0f, 1.0f};
+  float coatWeight = 0.0f;
+  float coatRoughness = 0.1f;
+  float thinWalled = 0.0f;
+  float translucency = 0.0f;
+  float uvScale[2] = {1.0f, 1.0f};
+  float uvOffset[2] = {0.0f, 0.0f};
+  float triPlanarEnabled = 0.0f;
+  float triPlanarScale = 1.0f;
+  float triPlanarSharpness = 4.0f;
+  float triPlanarNormalStrength = 1.0f;
+  uint32_t objectIdLength = 0;
+  uint32_t nameLength = 0;
+  uint32_t materialStableIdLength = 0;
+  uint32_t materialModelLength = 0;
+  uint32_t alphaModeLength = 0;
+  uint32_t baseColorTextureUriLength = 0;
+  uint32_t baseColorTextureBlobHashLength = 0;
+  uint32_t normalTextureUriLength = 0;
+  uint32_t normalTextureBlobHashLength = 0;
+  uint32_t emissiveTextureUriLength = 0;
+  uint32_t emissiveTextureBlobHashLength = 0;
+  uint32_t occlusionTextureUriLength = 0;
+  uint32_t occlusionTextureBlobHashLength = 0;
+  uint32_t metalRoughTextureUriLength = 0;
+  uint32_t metalRoughTextureBlobHashLength = 0;
+  uint32_t referenceCount = 0;
+};
+
+enum class EmbeddedTextureEncoding : uint32_t {
+  None = 0,
+  RawRgba8 = 1,
+  RawRgba32Float = 2,
+  EncodedLdr = 3,
+  EncodedHdr = 4,
+};
+
+struct EmbeddedTexturePayload {
+  std::string contentHash;
+  EmbeddedTextureEncoding encoding = EmbeddedTextureEncoding::None;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  std::vector<uint8_t> data;
+
+  bool IsValid() const { return !contentHash.empty() && !data.empty(); }
+};
+
 struct DocumentInfo {
   std::string documentId;
   std::string documentPath;
@@ -207,6 +272,7 @@ struct MaterialExportRecord {
   std::string materialModel = "ArchicadSurface";
   std::array<float, 4> baseColor = {0.8f, 0.8f, 0.8f, 1.0f};
   std::string baseColorTextureUri;
+  EmbeddedTexturePayload baseColorTexturePayload;
   std::array<float, 4> emissiveColor = {0.0f, 0.0f, 0.0f, 1.0f};
   float emissiveIntensity = 0.0f;
   float roughness = 0.5f;
@@ -545,6 +611,100 @@ std::string ResolveTextureUri(const API_Texture &texture) {
   return locationPath;
 }
 
+uint64_t HashBytesFnv1a64(const void *data, size_t size);
+
+bool IsHdrTextureUri(const std::string &textureUri) {
+  if (textureUri.empty()) {
+    return false;
+  }
+
+  const std::filesystem::path extensionPath(textureUri);
+  std::string extension = extensionPath.extension().string();
+  std::transform(extension.begin(), extension.end(), extension.begin(),
+                 [](unsigned char ch) {
+                   return static_cast<char>(std::tolower(ch));
+                 });
+  return extension == ".hdr" || extension == ".exr";
+}
+
+std::string MakeEmbeddedTextureContentHash(EmbeddedTextureEncoding encoding,
+                                           uint32_t width, uint32_t height,
+                                           const std::vector<uint8_t> &data) {
+  uint64_t hash = 1469598103934665603ull;
+  const auto mix = [&](const void *ptr, size_t size) {
+    hash ^= HashBytesFnv1a64(ptr, size);
+    hash *= 1099511628211ull;
+  };
+
+  const uint32_t encodingValue = static_cast<uint32_t>(encoding);
+  mix(&encodingValue, sizeof(encodingValue));
+  mix(&width, sizeof(width));
+  mix(&height, sizeof(height));
+  if (!data.empty()) {
+    mix(data.data(), data.size());
+  }
+
+  char buffer[17] = {};
+  sprintf_s(buffer, "%016llx", static_cast<unsigned long long>(hash));
+  return buffer;
+}
+
+bool TryReadFileBytes(const std::string &path, std::vector<uint8_t> *outBytes) {
+  if (!outBytes || path.empty()) {
+    return false;
+  }
+
+  std::ifstream stream(std::filesystem::u8path(path),
+                       std::ios::binary | std::ios::ate);
+  if (!stream) {
+    return false;
+  }
+
+  const std::streamsize size = stream.tellg();
+  if (size <= 0) {
+    return false;
+  }
+  stream.seekg(0, std::ios::beg);
+
+  outBytes->resize(static_cast<size_t>(size));
+  stream.read(reinterpret_cast<char *>(outBytes->data()), size);
+  return static_cast<bool>(stream);
+}
+
+void SetEncodedTexturePayload(const std::vector<uint8_t> &bytes,
+                              EmbeddedTextureEncoding encoding,
+                              EmbeddedTexturePayload *outPayload) {
+  if (!outPayload) {
+    return;
+  }
+
+  outPayload->encoding = encoding;
+  outPayload->width = 0;
+  outPayload->height = 0;
+  outPayload->data = bytes;
+  outPayload->contentHash =
+      MakeEmbeddedTextureContentHash(encoding, 0, 0, outPayload->data);
+}
+
+bool TryCaptureTexturePayloadFromUri(const std::string &textureUri,
+                                     EmbeddedTexturePayload *outPayload) {
+  if (!outPayload || textureUri.empty()) {
+    return false;
+  }
+
+  std::vector<uint8_t> encodedBytes;
+  if (!TryReadFileBytes(textureUri, &encodedBytes) || encodedBytes.empty()) {
+    return false;
+  }
+
+  SetEncodedTexturePayload(encodedBytes,
+                           IsHdrTextureUri(textureUri)
+                               ? EmbeddedTextureEncoding::EncodedHdr
+                               : EmbeddedTextureEncoding::EncodedLdr,
+                           outPayload);
+  return outPayload->IsValid();
+}
+
 bool PopulateMaterialExportRecord(int materialKey,
                                   MaterialExportRecord *outMaterial) {
   if (outMaterial == nullptr) {
@@ -573,6 +733,8 @@ bool PopulateMaterialExportRecord(int materialKey,
                           1.0f - Clamp01(static_cast<double>(source.transpPc) /
                                          100.0)};
     material.baseColorTextureUri = ResolveTextureUri(source.texture);
+    TryCaptureTexturePayloadFromUri(material.baseColorTextureUri,
+                                    &material.baseColorTexturePayload);
     material.emissiveColor = {Clamp01(source.emissionRGB.f_red),
                               Clamp01(source.emissionRGB.f_green),
                               Clamp01(source.emissionRGB.f_blue), 1.0f};
@@ -692,10 +854,49 @@ bool WriteMaterialLibraryPayload(const std::string &documentId,
 
   NativeMaterialLibraryHeader header;
   header.materialCount = static_cast<uint32_t>(materials.size());
+  std::vector<const EmbeddedTexturePayload *> serializedTextureBlobs;
+  std::unordered_map<std::string, const EmbeddedTexturePayload *> textureBlobsByHash;
+  auto collectTextureBlob = [&](const EmbeddedTexturePayload &payload) {
+    if (!payload.IsValid()) {
+      return;
+    }
+    if (textureBlobsByHash.emplace(payload.contentHash, &payload).second) {
+      serializedTextureBlobs.push_back(&payload);
+    }
+  };
+  for (const MaterialExportRecord &material : materials) {
+    collectTextureBlob(material.baseColorTexturePayload);
+  }
+
+  header.reserved = static_cast<uint32_t>(serializedTextureBlobs.size());
   stream.write(reinterpret_cast<const char *>(&header), sizeof(header));
 
+  for (const EmbeddedTexturePayload *payload : serializedTextureBlobs) {
+    if (!payload) {
+      continue;
+    }
+
+    NativeMaterialLibraryTextureBlobHeader blobHeader;
+    blobHeader.hashLength = static_cast<uint32_t>(payload->contentHash.size());
+    blobHeader.encoding = static_cast<uint32_t>(payload->encoding);
+    blobHeader.width = payload->width;
+    blobHeader.height = payload->height;
+    blobHeader.dataSize = static_cast<uint32_t>(payload->data.size());
+    stream.write(reinterpret_cast<const char *>(&blobHeader), sizeof(blobHeader));
+    if (!WriteNativePayloadString(stream, payload->contentHash)) {
+      return false;
+    }
+    if (!payload->data.empty()) {
+      stream.write(reinterpret_cast<const char *>(payload->data.data()),
+                   static_cast<std::streamsize>(payload->data.size()));
+      if (!stream.good()) {
+        return false;
+      }
+    }
+  }
+
   for (const MaterialExportRecord &material : materials) {
-    NativeMaterialLibraryMaterialHeader materialHeader;
+    NativeMaterialLibraryMaterialHeaderV2 materialHeader;
     materialHeader.flags = material.doubleSided ? kNativeMaterialFlagDoubleSided
                                                 : 0u;
     std::copy(material.baseColor.begin(), material.baseColor.end(),
@@ -722,6 +923,8 @@ bool WriteMaterialLibraryPayload(const std::string &documentId,
         static_cast<uint32_t>(material.alphaMode.size());
     materialHeader.baseColorTextureUriLength =
         static_cast<uint32_t>(material.baseColorTextureUri.size());
+    materialHeader.baseColorTextureBlobHashLength = static_cast<uint32_t>(
+        material.baseColorTexturePayload.contentHash.size());
     materialHeader.referenceCount =
         static_cast<uint32_t>(material.references.size());
     stream.write(reinterpret_cast<const char *>(&materialHeader),
@@ -732,6 +935,12 @@ bool WriteMaterialLibraryPayload(const std::string &documentId,
         !WriteNativePayloadString(stream, material.materialModel) ||
         !WriteNativePayloadString(stream, material.alphaMode) ||
         !WriteNativePayloadString(stream, material.baseColorTextureUri) ||
+        !WriteNativePayloadString(stream,
+                                  material.baseColorTexturePayload.contentHash) ||
+        !WriteNativePayloadString(stream, std::string()) ||
+        !WriteNativePayloadString(stream, std::string()) ||
+        !WriteNativePayloadString(stream, std::string()) ||
+        !WriteNativePayloadString(stream, std::string()) ||
         !WriteNativePayloadString(stream, std::string()) ||
         !WriteNativePayloadString(stream, std::string()) ||
         !WriteNativePayloadString(stream, std::string()) ||
@@ -2177,8 +2386,23 @@ bool LiveLinkSessionController::ExportDirtyElements(bool reportSuccess,
     deltas.push_back(
         MakeNodeRemovedDelta(m_documentInfo.documentId, objectId, revision++));
   }
+
+  bool includeMaterialDeltas = true;
+  if (!changedMaterials.empty()) {
+    std::string materialLibraryPayloadUri;
+    const bool wroteMaterialLibrary =
+        WriteMaterialLibraryPayload(m_documentInfo.documentId, changedMaterials,
+                                    &materialLibraryPayloadUri);
+    if (wroteMaterialLibrary && !materialLibraryPayloadUri.empty()) {
+      deltas.push_back(MakeMaterialLibraryDelta(m_documentInfo.documentId,
+                                                materialLibraryPayloadUri,
+                                                revision++));
+      includeMaterialDeltas = false;
+    }
+  }
+
   AppendExportDeltas(changedElements, changedMaterials, nullptr, &deltas,
-                     &revision, true);
+                     &revision, includeMaterialDeltas);
 
   if (!deltas.empty() && !SendDeltaChunks(deltas, false, withDialog)) {
     HandleSessionLost(kReconnectRetryInterval);
