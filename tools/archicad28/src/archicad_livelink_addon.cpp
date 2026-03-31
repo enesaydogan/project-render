@@ -58,7 +58,7 @@ constexpr auto kReconnectRetryInterval = std::chrono::milliseconds(1000);
 
 struct NativeMeshPayloadHeader {
   uint32_t magic = 0x48534D50;
-  uint32_t version = 4;
+  uint32_t version = 5;
   uint32_t meshCount = 0;
   uint32_t reserved = 0;
 };
@@ -113,6 +113,59 @@ struct NativeMeshPayloadMaterialHeader {
   uint32_t emissiveTextureUriLength = 0;
   uint32_t occlusionTextureUriLength = 0;
   uint32_t metalRoughTextureUriLength = 0;
+};
+
+struct NativeMeshPayloadMaterialBindingHeader {
+  int32_t materialSlot = 0;
+  uint32_t materialStableIdLength = 0;
+  uint32_t nameLength = 0;
+  uint32_t reserved = 0;
+};
+
+struct NativeMaterialLibraryHeader {
+  uint32_t magic = 0x54414D50;
+  uint32_t version = 1;
+  uint32_t materialCount = 0;
+  uint32_t reserved = 0;
+};
+
+struct NativeMaterialLibraryReferenceHeader {
+  int32_t materialSlot = 0;
+  uint32_t nodeObjectIdLength = 0;
+};
+
+struct NativeMaterialLibraryMaterialHeader {
+  uint32_t flags = 0;
+  float baseColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+  float emissiveColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+  float emissiveIntensity = 1.0f;
+  float roughness = 0.5f;
+  float metalness = 0.0f;
+  float specularWeight = 1.0f;
+  float ior = 1.5f;
+  float transmissionWeight = 0.0f;
+  float transmissionColor[3] = {1.0f, 1.0f, 1.0f};
+  float coatWeight = 0.0f;
+  float coatRoughness = 0.1f;
+  float thinWalled = 0.0f;
+  float translucency = 0.0f;
+  float uvScale[2] = {1.0f, 1.0f};
+  float uvOffset[2] = {0.0f, 0.0f};
+  float triPlanarEnabled = 0.0f;
+  float triPlanarScale = 1.0f;
+  float triPlanarSharpness = 4.0f;
+  float triPlanarNormalStrength = 1.0f;
+  uint32_t objectIdLength = 0;
+  uint32_t nameLength = 0;
+  uint32_t materialStableIdLength = 0;
+  uint32_t materialModelLength = 0;
+  uint32_t alphaModeLength = 0;
+  uint32_t baseColorTextureUriLength = 0;
+  uint32_t normalTextureUriLength = 0;
+  uint32_t emissiveTextureUriLength = 0;
+  uint32_t occlusionTextureUriLength = 0;
+  uint32_t metalRoughTextureUriLength = 0;
+  uint32_t referenceCount = 0;
 };
 
 struct DocumentInfo {
@@ -286,6 +339,11 @@ std::filesystem::path GetPayloadRootDirectory() {
 
 std::filesystem::path GetPayloadDirectory(const std::string &documentId) {
   return GetPayloadRootDirectory() / SanitizeDocumentId(documentId);
+}
+
+std::filesystem::path GetMaterialLibraryPayloadPath(
+    const std::string &documentId) {
+  return GetPayloadDirectory(documentId) / "_scene_materials.prmat";
 }
 
 std::string PathToUtf8(const std::filesystem::path &path) {
@@ -612,6 +670,96 @@ bool WriteNativePayloadString(std::ofstream &stream, const std::string &value) {
   return stream.good();
 }
 
+bool WriteMaterialLibraryPayload(const std::string &documentId,
+                                 const std::vector<MaterialExportRecord> &materials,
+                                 std::string *outPayloadUri) {
+  if (!outPayloadUri) {
+    return false;
+  }
+
+  const std::filesystem::path payloadPath =
+      GetMaterialLibraryPayloadPath(documentId);
+  std::error_code error;
+  std::filesystem::create_directories(payloadPath.parent_path(), error);
+  if (error) {
+    return false;
+  }
+
+  std::ofstream stream(payloadPath, std::ios::binary | std::ios::trunc);
+  if (!stream) {
+    return false;
+  }
+
+  NativeMaterialLibraryHeader header;
+  header.materialCount = static_cast<uint32_t>(materials.size());
+  stream.write(reinterpret_cast<const char *>(&header), sizeof(header));
+
+  for (const MaterialExportRecord &material : materials) {
+    NativeMaterialLibraryMaterialHeader materialHeader;
+    materialHeader.flags = material.doubleSided ? kNativeMaterialFlagDoubleSided
+                                                : 0u;
+    std::copy(material.baseColor.begin(), material.baseColor.end(),
+              std::begin(materialHeader.baseColor));
+    std::copy(material.emissiveColor.begin(), material.emissiveColor.end(),
+              std::begin(materialHeader.emissiveColor));
+    materialHeader.emissiveIntensity = material.emissiveIntensity;
+    materialHeader.roughness = material.roughness;
+    materialHeader.metalness = material.metalness;
+    materialHeader.specularWeight = material.specularWeight;
+    materialHeader.ior = material.ior;
+    materialHeader.transmissionWeight = material.transmissionWeight;
+    std::copy(material.transmissionColor.begin(), material.transmissionColor.end(),
+              std::begin(materialHeader.transmissionColor));
+    materialHeader.coatWeight = material.coatWeight;
+    materialHeader.coatRoughness = material.coatRoughness;
+    materialHeader.objectIdLength = static_cast<uint32_t>(material.objectId.size());
+    materialHeader.nameLength = static_cast<uint32_t>(material.name.size());
+    materialHeader.materialStableIdLength =
+        static_cast<uint32_t>(material.materialStableId.size());
+    materialHeader.materialModelLength =
+        static_cast<uint32_t>(material.materialModel.size());
+    materialHeader.alphaModeLength =
+        static_cast<uint32_t>(material.alphaMode.size());
+    materialHeader.baseColorTextureUriLength =
+        static_cast<uint32_t>(material.baseColorTextureUri.size());
+    materialHeader.referenceCount =
+        static_cast<uint32_t>(material.references.size());
+    stream.write(reinterpret_cast<const char *>(&materialHeader),
+                 sizeof(materialHeader));
+    if (!WriteNativePayloadString(stream, material.objectId) ||
+        !WriteNativePayloadString(stream, material.name) ||
+        !WriteNativePayloadString(stream, material.materialStableId) ||
+        !WriteNativePayloadString(stream, material.materialModel) ||
+        !WriteNativePayloadString(stream, material.alphaMode) ||
+        !WriteNativePayloadString(stream, material.baseColorTextureUri) ||
+        !WriteNativePayloadString(stream, std::string()) ||
+        !WriteNativePayloadString(stream, std::string()) ||
+        !WriteNativePayloadString(stream, std::string()) ||
+        !WriteNativePayloadString(stream, std::string())) {
+      return false;
+    }
+
+    for (const MaterialExportRecord::Reference &reference : material.references) {
+      NativeMaterialLibraryReferenceHeader referenceHeader;
+      referenceHeader.materialSlot = reference.materialSlot;
+      referenceHeader.nodeObjectIdLength =
+          static_cast<uint32_t>(reference.nodeObjectId.size());
+      stream.write(reinterpret_cast<const char *>(&referenceHeader),
+                   sizeof(referenceHeader));
+      if (!WriteNativePayloadString(stream, reference.nodeObjectId)) {
+        return false;
+      }
+    }
+  }
+
+  if (!stream.good()) {
+    return false;
+  }
+
+  *outPayloadUri = PathToUtf8(payloadPath);
+  return true;
+}
+
 bool ReadCurrentCamera(CameraExportRecord *outCamera) {
   if (outCamera == nullptr) {
     return false;
@@ -794,6 +942,18 @@ json MakeObjectIdJson(const std::string &documentId, const std::string &objectId
               {"documentId", documentId},
               {"objectId", objectId},
               {"objectType", objectType}};
+}
+
+json MakeMaterialLibraryDelta(const std::string &documentId,
+                              const std::string &payloadUri,
+                              uint64_t revision) {
+  return json{{"kind", "MaterialLibraryChanged"},
+              {"target",
+               MakeObjectIdJson(documentId, "material-library", "Material")},
+              {"revision", revision},
+              {"debugLabel", "Scene material library"},
+              {"payload", json{{"payloadUri", payloadUri},
+                               {"payloadHash", payloadUri}}}};
 }
 
 json MakeCameraDelta(const std::string &documentId,
@@ -1061,43 +1221,15 @@ bool ExportElementsMeshPayload(const std::string &documentId,
   }
 
   for (const MaterialExportRecord &material : serializedMaterials) {
-    NativeMeshPayloadMaterialHeader materialHeader;
-    materialHeader.materialSlot = material.materialSlot;
-    materialHeader.flags = material.doubleSided ? kNativeMaterialFlagDoubleSided : 0u;
-    std::copy(material.baseColor.begin(), material.baseColor.end(),
-              std::begin(materialHeader.baseColor));
-    std::copy(material.emissiveColor.begin(), material.emissiveColor.end(),
-              std::begin(materialHeader.emissiveColor));
-    materialHeader.emissiveIntensity = material.emissiveIntensity;
-    materialHeader.roughness = material.roughness;
-    materialHeader.metalness = material.metalness;
-    materialHeader.specularWeight = material.specularWeight;
-    materialHeader.ior = material.ior;
-    materialHeader.transmissionWeight = material.transmissionWeight;
-    std::copy(material.transmissionColor.begin(), material.transmissionColor.end(),
-              std::begin(materialHeader.transmissionColor));
-    materialHeader.coatWeight = material.coatWeight;
-    materialHeader.coatRoughness = material.coatRoughness;
-    materialHeader.thinWalled = 0.0f;
-    materialHeader.translucency = 0.0f;
-    materialHeader.nameLength = static_cast<uint32_t>(material.name.size());
-    materialHeader.materialStableIdLength =
-      static_cast<uint32_t>(material.materialStableId.size());
-    materialHeader.materialModelLength = static_cast<uint32_t>(material.materialModel.size());
-    materialHeader.alphaModeLength = static_cast<uint32_t>(material.alphaMode.size());
-    materialHeader.baseColorTextureUriLength =
-        static_cast<uint32_t>(material.baseColorTextureUri.size());
-    stream.write(reinterpret_cast<const char *>(&materialHeader),
-                 sizeof(materialHeader));
-    if (!WriteNativePayloadString(stream, material.name) ||
-      !WriteNativePayloadString(stream, material.materialStableId) ||
-        !WriteNativePayloadString(stream, material.materialModel) ||
-        !WriteNativePayloadString(stream, material.alphaMode) ||
-        !WriteNativePayloadString(stream, material.baseColorTextureUri) ||
-        !WriteNativePayloadString(stream, std::string()) ||
-        !WriteNativePayloadString(stream, std::string()) ||
-        !WriteNativePayloadString(stream, std::string()) ||
-        !WriteNativePayloadString(stream, std::string())) {
+    NativeMeshPayloadMaterialBindingHeader bindingHeader;
+    bindingHeader.materialSlot = material.materialSlot;
+    bindingHeader.materialStableIdLength =
+        static_cast<uint32_t>(material.materialStableId.size());
+    bindingHeader.nameLength = static_cast<uint32_t>(material.name.size());
+    stream.write(reinterpret_cast<const char *>(&bindingHeader),
+                 sizeof(bindingHeader));
+    if (!WriteNativePayloadString(stream, material.materialStableId) ||
+        !WriteNativePayloadString(stream, material.name)) {
       return false;
     }
   }
@@ -1324,7 +1456,8 @@ private:
                           const std::vector<MaterialExportRecord> &materials,
                           const CameraExportRecord *camera,
                           std::vector<json> *outDeltas,
-                          uint64_t *ioRevision) const;
+                          uint64_t *ioRevision,
+                          bool includeMaterialDeltas = true) const;
   bool SendDeltaChunks(const std::vector<json> &deltas,
                        bool firstBatchFullSync, bool withDialog = true);
   void BuildMaterialRecordsForKeys(
@@ -1604,7 +1737,8 @@ void LiveLinkSessionController::AppendExportDeltas(
     const std::vector<ElementExportRecord> &elements,
   const std::vector<MaterialExportRecord> &materials,
     const CameraExportRecord *camera,
-    std::vector<json> *outDeltas, uint64_t *ioRevision) const {
+    std::vector<json> *outDeltas, uint64_t *ioRevision,
+    bool includeMaterialDeltas) const {
   if (outDeltas == nullptr || ioRevision == nullptr) {
     return;
   }
@@ -1661,9 +1795,11 @@ void LiveLinkSessionController::AppendExportDeltas(
                                          std::to_string(element.indexCount)}}}});
   }
 
-  for (const MaterialExportRecord &material : materials) {
-    outDeltas->push_back(
-        MakeMaterialDelta(m_documentInfo.documentId, material, (*ioRevision)++));
+  if (includeMaterialDeltas) {
+    for (const MaterialExportRecord &material : materials) {
+      outDeltas->push_back(
+          MakeMaterialDelta(m_documentInfo.documentId, material, (*ioRevision)++));
+    }
   }
 
   if (camera != nullptr && camera->valid) {
@@ -1883,13 +2019,22 @@ bool LiveLinkSessionController::ExportFullScene(bool startingSession,
   deltas.reserve(elements.size() * 4 + 2);
   deltas.push_back(json{{"kind", "FullSceneSync"},
                         {"payload", json{{"clearsExistingScene", true}}}});
+  std::string materialLibraryPayloadUri;
+  const bool wroteMaterialLibrary =
+      WriteMaterialLibraryPayload(m_documentInfo.documentId, materials,
+                                  &materialLibraryPayloadUri);
 
   CameraExportRecord exportedCamera = {};
   const bool hasExportedCamera = ReadCurrentCamera(&exportedCamera);
   uint64_t revision = m_nextRevision;
+  if (wroteMaterialLibrary && !materialLibraryPayloadUri.empty()) {
+    deltas.push_back(MakeMaterialLibraryDelta(m_documentInfo.documentId,
+                                              materialLibraryPayloadUri,
+                                              revision++));
+  }
   AppendExportDeltas(elements, materials,
                      hasExportedCamera ? &exportedCamera : nullptr, &deltas,
-                     &revision);
+                     &revision, !wroteMaterialLibrary);
   if (!SendDeltaChunks(deltas, true, withDialog)) {
     HandleSessionLost(kReconnectRetryInterval);
     return false;
@@ -2033,7 +2178,7 @@ bool LiveLinkSessionController::ExportDirtyElements(bool reportSuccess,
         MakeNodeRemovedDelta(m_documentInfo.documentId, objectId, revision++));
   }
   AppendExportDeltas(changedElements, changedMaterials, nullptr, &deltas,
-                     &revision);
+                     &revision, true);
 
   if (!deltas.empty() && !SendDeltaChunks(deltas, false, withDialog)) {
     HandleSessionLost(kReconnectRetryInterval);

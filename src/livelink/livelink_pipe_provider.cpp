@@ -101,6 +101,9 @@ SceneDeltaKind ParseSceneDeltaKind(std::string_view value) {
   if (value == "MeshPayloadChanged") {
     return SceneDeltaKind::MeshPayloadChanged;
   }
+  if (value == "MaterialLibraryChanged") {
+    return SceneDeltaKind::MaterialLibraryChanged;
+  }
   if (value == "MaterialChanged") {
     return SceneDeltaKind::MaterialChanged;
   }
@@ -206,6 +209,13 @@ bool ParsePayload(const SceneDeltaKind kind, const json &payloadJson,
     payload.vertexCount = payloadJson.value("vertexCount", 0ull);
     payload.indexCount = payloadJson.value("indexCount", 0ull);
     payload.topologyChanged = payloadJson.value("topologyChanged", true);
+    payload.payloadUri = payloadJson.value("payloadUri", "");
+    payload.payloadHash = payloadJson.value("payloadHash", "");
+    *outPayload = std::move(payload);
+    return true;
+  }
+  case SceneDeltaKind::MaterialLibraryChanged: {
+    MaterialLibraryChangedPayload payload;
     payload.payloadUri = payloadJson.value("payloadUri", "");
     payload.payloadHash = payloadJson.value("payloadHash", "");
     *outPayload = std::move(payload);

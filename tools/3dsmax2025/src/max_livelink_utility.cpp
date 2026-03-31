@@ -387,6 +387,9 @@ std::string BuildLightClassNameHints(Object *evaluatedObject, Object *baseObject
 struct LightSnapshot;
 struct MaterialSnapshot;
 
+json MakeObjectId(const std::string &documentId, const std::string &objectId,
+                  const char *objectType);
+
 std::array<float, 4> ColorToArray4(const Color &color, float alpha);
 std::array<float, 3> ColorToArray3(const Color &color);
 
@@ -1164,7 +1167,7 @@ struct LightSnapshot {
 
 struct NativeMeshPayloadHeader {
   uint32_t magic = 0x48534D50; // PMSH
-  uint32_t version = 4;
+  uint32_t version = 5;
   uint32_t meshCount = 0;
   uint32_t reserved = 0;
 };
@@ -1219,6 +1222,59 @@ struct NativeMeshPayloadMaterialHeader {
   uint32_t emissiveTextureUriLength = 0;
   uint32_t occlusionTextureUriLength = 0;
   uint32_t metalRoughTextureUriLength = 0;
+};
+
+struct NativeMeshPayloadMaterialBindingHeader {
+  int32_t materialSlot = 0;
+  uint32_t materialStableIdLength = 0;
+  uint32_t nameLength = 0;
+  uint32_t reserved = 0;
+};
+
+struct NativeMaterialLibraryHeader {
+  uint32_t magic = 0x54414D50; // PMAT
+  uint32_t version = 1;
+  uint32_t materialCount = 0;
+  uint32_t reserved = 0;
+};
+
+struct NativeMaterialLibraryReferenceHeader {
+  int32_t materialSlot = 0;
+  uint32_t nodeObjectIdLength = 0;
+};
+
+struct NativeMaterialLibraryMaterialHeader {
+  uint32_t flags = 0;
+  float baseColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+  float emissiveColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+  float emissiveIntensity = 1.0f;
+  float roughness = 0.5f;
+  float metalness = 0.0f;
+  float specularWeight = 1.0f;
+  float ior = 1.5f;
+  float transmissionWeight = 0.0f;
+  float transmissionColor[3] = {1.0f, 1.0f, 1.0f};
+  float coatWeight = 0.0f;
+  float coatRoughness = 0.1f;
+  float thinWalled = 0.0f;
+  float translucency = 0.0f;
+  float uvScale[2] = {1.0f, 1.0f};
+  float uvOffset[2] = {0.0f, 0.0f};
+  float triPlanarEnabled = 0.0f;
+  float triPlanarScale = 1.0f;
+  float triPlanarSharpness = 4.0f;
+  float triPlanarNormalStrength = 1.0f;
+  uint32_t objectIdLength = 0;
+  uint32_t nameLength = 0;
+  uint32_t materialStableIdLength = 0;
+  uint32_t materialModelLength = 0;
+  uint32_t alphaModeLength = 0;
+  uint32_t baseColorTextureUriLength = 0;
+  uint32_t normalTextureUriLength = 0;
+  uint32_t emissiveTextureUriLength = 0;
+  uint32_t occlusionTextureUriLength = 0;
+  uint32_t metalRoughTextureUriLength = 0;
+  uint32_t referenceCount = 0;
 };
 
 bool WriteNativePayloadString(std::ofstream &stream, const std::string &value) {
@@ -3485,6 +3541,16 @@ std::filesystem::path GetNodePayloadPath(const std::string &documentId,
          (SanitizePathComponent(nodeObjectId) + std::string(".prmesh"));
 }
 
+std::filesystem::path GetMaterialLibraryPayloadPath(
+    const std::string &documentId) {
+  const std::filesystem::path documentDirectory =
+      GetDocumentPayloadDirectory(documentId);
+  if (documentDirectory.empty()) {
+    return {};
+  }
+  return documentDirectory / "_scene_materials.prmat";
+}
+
 std::string BuildSharedPayloadKey(Interface *ip, INode *node) {
   (void)ip;
   (void)node;
@@ -3518,6 +3584,144 @@ void RemoveNodePayloadFile(const std::string &documentId,
   if (!payloadPath.empty()) {
     std::filesystem::remove(payloadPath, error);
   }
+}
+
+bool WriteMaterialLibraryPayload(const std::string &documentId,
+                                 const MaterialStateMap &materialState,
+                                 std::string *outPayloadUri) {
+  if (!outPayloadUri) {
+    return false;
+  }
+
+  const std::filesystem::path payloadPath =
+      GetMaterialLibraryPayloadPath(documentId);
+  if (payloadPath.empty()) {
+    return false;
+  }
+
+  std::ofstream stream(payloadPath, std::ios::binary | std::ios::trunc);
+  if (!stream) {
+    return false;
+  }
+
+  std::vector<MaterialSnapshot> serializedMaterials;
+  serializedMaterials.reserve(materialState.size());
+  for (const auto &[_, snapshot] : materialState) {
+    serializedMaterials.push_back(snapshot);
+  }
+  std::sort(serializedMaterials.begin(), serializedMaterials.end(),
+            [](const MaterialSnapshot &lhs, const MaterialSnapshot &rhs) {
+              if (lhs.name != rhs.name) {
+                return lhs.name < rhs.name;
+              }
+              return lhs.objectId < rhs.objectId;
+            });
+
+  NativeMaterialLibraryHeader header;
+  header.materialCount = static_cast<uint32_t>(serializedMaterials.size());
+  stream.write(reinterpret_cast<const char *>(&header), sizeof(header));
+
+  for (const MaterialSnapshot &material : serializedMaterials) {
+    NativeMaterialLibraryMaterialHeader materialHeader;
+    materialHeader.flags =
+        material.doubleSided ? kNativeMaterialFlagDoubleSided : 0u;
+    if (material.invertRoughnessTexture) {
+      materialHeader.flags |= kNativeMaterialFlagInvertRoughnessTexture;
+    }
+    std::copy(material.baseColor.begin(), material.baseColor.end(),
+              std::begin(materialHeader.baseColor));
+    std::copy(material.emissiveColor.begin(), material.emissiveColor.end(),
+              std::begin(materialHeader.emissiveColor));
+    materialHeader.emissiveIntensity = material.emissiveIntensity;
+    materialHeader.roughness = material.roughness;
+    materialHeader.metalness = material.metalness;
+    materialHeader.specularWeight = material.specularWeight;
+    materialHeader.ior = material.ior;
+    materialHeader.transmissionWeight = material.transmissionWeight;
+    std::copy(material.transmissionColor.begin(), material.transmissionColor.end(),
+              std::begin(materialHeader.transmissionColor));
+    materialHeader.coatWeight = material.coatWeight;
+    materialHeader.coatRoughness = material.coatRoughness;
+    materialHeader.thinWalled = material.thinWalled;
+    materialHeader.translucency = material.translucency;
+    materialHeader.uvScale[0] = material.uvScale[0];
+    materialHeader.uvScale[1] = material.uvScale[1];
+    materialHeader.uvOffset[0] = material.uvOffset[0];
+    materialHeader.uvOffset[1] = material.uvOffset[1];
+    materialHeader.triPlanarEnabled = material.triPlanarEnabled;
+    materialHeader.triPlanarScale = material.triPlanarScale;
+    materialHeader.triPlanarSharpness = material.triPlanarSharpness;
+    materialHeader.triPlanarNormalStrength = material.triPlanarNormalStrength;
+    materialHeader.objectIdLength = static_cast<uint32_t>(material.objectId.size());
+    materialHeader.nameLength = static_cast<uint32_t>(material.name.size());
+    materialHeader.materialStableIdLength =
+        static_cast<uint32_t>(material.materialStableId.size());
+    materialHeader.materialModelLength =
+        static_cast<uint32_t>(material.materialModel.size());
+    materialHeader.alphaModeLength =
+        static_cast<uint32_t>(material.alphaMode.size());
+    materialHeader.baseColorTextureUriLength =
+        static_cast<uint32_t>(material.baseColorTextureUri.size());
+    materialHeader.normalTextureUriLength =
+        static_cast<uint32_t>(material.normalTextureUri.size());
+    materialHeader.emissiveTextureUriLength =
+        static_cast<uint32_t>(material.emissiveTextureUri.size());
+    materialHeader.occlusionTextureUriLength =
+        static_cast<uint32_t>(material.occlusionTextureUri.size());
+    materialHeader.metalRoughTextureUriLength =
+        static_cast<uint32_t>(material.metalRoughTextureUri.size());
+    materialHeader.referenceCount =
+        static_cast<uint32_t>(material.references.size());
+    stream.write(reinterpret_cast<const char *>(&materialHeader),
+                 sizeof(materialHeader));
+    if (!WriteNativePayloadString(stream, material.objectId) ||
+        !WriteNativePayloadString(stream, material.name) ||
+        !WriteNativePayloadString(stream, material.materialStableId) ||
+        !WriteNativePayloadString(stream, material.materialModel) ||
+        !WriteNativePayloadString(stream, material.alphaMode) ||
+        !WriteNativePayloadString(stream, material.baseColorTextureUri) ||
+        !WriteNativePayloadString(stream, material.normalTextureUri) ||
+        !WriteNativePayloadString(stream, material.emissiveTextureUri) ||
+        !WriteNativePayloadString(stream, material.occlusionTextureUri) ||
+        !WriteNativePayloadString(stream, material.metalRoughTextureUri)) {
+      return false;
+    }
+
+    for (const MaterialReferenceSnapshot &reference : material.references) {
+      NativeMaterialLibraryReferenceHeader referenceHeader;
+      referenceHeader.materialSlot = reference.materialSlot;
+      referenceHeader.nodeObjectIdLength =
+          static_cast<uint32_t>(reference.nodeObjectId.size());
+      stream.write(reinterpret_cast<const char *>(&referenceHeader),
+                   sizeof(referenceHeader));
+      if (!WriteNativePayloadString(stream, reference.nodeObjectId)) {
+        return false;
+      }
+    }
+  }
+
+  if (!stream.good()) {
+    return false;
+  }
+
+  *outPayloadUri = PathToUtf8(payloadPath);
+  return true;
+}
+
+void AppendMaterialLibraryDelta(const std::string &documentId,
+                                const std::string &payloadUri,
+                                uint64_t *revision, json *outDeltas) {
+  if (!revision || !outDeltas || payloadUri.empty()) {
+    return;
+  }
+
+  outDeltas->push_back(
+      json{{"kind", "MaterialLibraryChanged"},
+           {"target", MakeObjectId(documentId, "material-library", "Material")},
+           {"revision", (*revision)++},
+           {"debugLabel", "Scene material library"},
+           {"payload", json{{"payloadUri", payloadUri},
+                            {"payloadHash", payloadUri}}}});
 }
 
 void RemoveDocumentPayloadDirectoryIfEmpty(const std::string &documentId) {
@@ -3837,63 +4041,15 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
   }
 
   for (const MaterialSnapshot &material : serializedMaterials) {
-    NativeMeshPayloadMaterialHeader materialHeader;
-    materialHeader.materialSlot = material.materialSlot;
-    materialHeader.flags = material.doubleSided ? kNativeMaterialFlagDoubleSided : 0u;
-    if (material.invertRoughnessTexture) {
-      materialHeader.flags |= kNativeMaterialFlagInvertRoughnessTexture;
-    }
-    std::copy(material.baseColor.begin(), material.baseColor.end(),
-              std::begin(materialHeader.baseColor));
-    std::copy(material.emissiveColor.begin(), material.emissiveColor.end(),
-              std::begin(materialHeader.emissiveColor));
-    materialHeader.emissiveIntensity = material.emissiveIntensity;
-    materialHeader.roughness = material.roughness;
-    materialHeader.metalness = material.metalness;
-    materialHeader.specularWeight = material.specularWeight;
-    materialHeader.ior = material.ior;
-    materialHeader.transmissionWeight = material.transmissionWeight;
-    std::copy(material.transmissionColor.begin(), material.transmissionColor.end(),
-              std::begin(materialHeader.transmissionColor));
-    materialHeader.coatWeight = material.coatWeight;
-    materialHeader.coatRoughness = material.coatRoughness;
-    materialHeader.thinWalled = material.thinWalled;
-    materialHeader.translucency = material.translucency;
-    materialHeader.uvScale[0] = material.uvScale[0];
-    materialHeader.uvScale[1] = material.uvScale[1];
-    materialHeader.uvOffset[0] = material.uvOffset[0];
-    materialHeader.uvOffset[1] = material.uvOffset[1];
-    materialHeader.triPlanarEnabled = material.triPlanarEnabled;
-    materialHeader.triPlanarScale = material.triPlanarScale;
-    materialHeader.triPlanarSharpness = material.triPlanarSharpness;
-    materialHeader.triPlanarNormalStrength = material.triPlanarNormalStrength;
-    materialHeader.nameLength = static_cast<uint32_t>(material.name.size());
-    materialHeader.materialStableIdLength =
-      static_cast<uint32_t>(material.materialStableId.size());
-    materialHeader.materialModelLength =
-        static_cast<uint32_t>(material.materialModel.size());
-    materialHeader.alphaModeLength = static_cast<uint32_t>(material.alphaMode.size());
-    materialHeader.baseColorTextureUriLength =
-        static_cast<uint32_t>(material.baseColorTextureUri.size());
-    materialHeader.normalTextureUriLength =
-        static_cast<uint32_t>(material.normalTextureUri.size());
-    materialHeader.emissiveTextureUriLength =
-        static_cast<uint32_t>(material.emissiveTextureUri.size());
-    materialHeader.occlusionTextureUriLength =
-        static_cast<uint32_t>(material.occlusionTextureUri.size());
-    materialHeader.metalRoughTextureUriLength =
-        static_cast<uint32_t>(material.metalRoughTextureUri.size());
-    stream.write(reinterpret_cast<const char *>(&materialHeader),
-                 sizeof(materialHeader));
-    if (!WriteNativePayloadString(stream, material.name) ||
-      !WriteNativePayloadString(stream, material.materialStableId) ||
-        !WriteNativePayloadString(stream, material.materialModel) ||
-        !WriteNativePayloadString(stream, material.alphaMode) ||
-        !WriteNativePayloadString(stream, material.baseColorTextureUri) ||
-        !WriteNativePayloadString(stream, material.normalTextureUri) ||
-        !WriteNativePayloadString(stream, material.emissiveTextureUri) ||
-        !WriteNativePayloadString(stream, material.occlusionTextureUri) ||
-        !WriteNativePayloadString(stream, material.metalRoughTextureUri)) {
+    NativeMeshPayloadMaterialBindingHeader bindingHeader;
+    bindingHeader.materialSlot = material.materialSlot;
+    bindingHeader.materialStableIdLength =
+        static_cast<uint32_t>(material.materialStableId.size());
+    bindingHeader.nameLength = static_cast<uint32_t>(material.name.size());
+    stream.write(reinterpret_cast<const char *>(&bindingHeader),
+                 sizeof(bindingHeader));
+    if (!WriteNativePayloadString(stream, material.materialStableId) ||
+        !WriteNativePayloadString(stream, material.name)) {
       if (needsDelete) {
         triObject->DeleteThis();
       }
@@ -4329,6 +4485,14 @@ bool SendInitialSnapshot(Interface *ip,
   });
 
   uint64_t revision = 1;
+  std::string materialLibraryPayloadUri;
+  const bool wroteMaterialLibrary =
+      WriteMaterialLibraryPayload(documentId, materialState,
+                                  &materialLibraryPayloadUri);
+  if (wroteMaterialLibrary && !materialLibraryPayloadUri.empty()) {
+    AppendMaterialLibraryDelta(documentId, materialLibraryPayloadUri, &revision,
+                               &deltas);
+  }
   const std::vector<std::string> selectedObjectIds = GatherSelectedObjectIds(ip);
   CameraSnapshot cameraSnapshot;
   CaptureActiveCameraSnapshot(ip, &cameraSnapshot);
@@ -4339,8 +4503,10 @@ bool SendInitialSnapshot(Interface *ip,
     AppendMeshPayloadDeltaIfAvailable(ip, documentId, snapshot,
                                       &revision, &deltas);
   }
-  for (const auto &[_, snapshot] : materialState) {
-    AppendMaterialDelta(documentId, snapshot, &revision, &deltas);
+  if (!wroteMaterialLibrary || materialLibraryPayloadUri.empty()) {
+    for (const auto &[_, snapshot] : materialState) {
+      AppendMaterialDelta(documentId, snapshot, &revision, &deltas);
+    }
   }
   for (const auto &[_, snapshot] : lightState) {
     AppendLightDelta(documentId, snapshot, &revision, &deltas);
@@ -4453,6 +4619,14 @@ bool SendResumeSnapshot(Interface *ip,
                                           {"displayName", documentDisplayName}}}});
 
   uint64_t revision = 1;
+  std::string materialLibraryPayloadUri;
+  const bool wroteMaterialLibrary =
+      WriteMaterialLibraryPayload(documentId, currentMaterialState,
+                                  &materialLibraryPayloadUri);
+  if (wroteMaterialLibrary && !materialLibraryPayloadUri.empty()) {
+    AppendMaterialLibraryDelta(documentId, materialLibraryPayloadUri, &revision,
+                               &deltas);
+  }
   for (const auto &[objectId, snapshot] : currentNodesByObjectId) {
     const auto previousIt = persistedState.nodeStateByObjectId.find(objectId);
     if (previousIt == persistedState.nodeStateByObjectId.end()) {
@@ -4488,17 +4662,19 @@ bool SendResumeSnapshot(Interface *ip,
     }
   }
 
-  for (const auto &[objectId, snapshot] : currentMaterialState) {
-    const auto previousIt = persistedState.materialState.find(objectId);
-    if (previousIt == persistedState.materialState.end() ||
-        !SameMaterial(snapshot, previousIt->second)) {
-      AppendMaterialDelta(documentId, snapshot, &revision, &deltas);
+  if (!wroteMaterialLibrary || materialLibraryPayloadUri.empty()) {
+    for (const auto &[objectId, snapshot] : currentMaterialState) {
+      const auto previousIt = persistedState.materialState.find(objectId);
+      if (previousIt == persistedState.materialState.end() ||
+          !SameMaterial(snapshot, previousIt->second)) {
+        AppendMaterialDelta(documentId, snapshot, &revision, &deltas);
+      }
     }
-  }
 
-  for (const auto &[objectId, snapshot] : persistedState.materialState) {
-    if (currentMaterialState.find(objectId) == currentMaterialState.end()) {
-      AppendMaterialRemovedDelta(documentId, snapshot, &revision, &deltas);
+    for (const auto &[objectId, snapshot] : persistedState.materialState) {
+      if (currentMaterialState.find(objectId) == currentMaterialState.end()) {
+        AppendMaterialRemovedDelta(documentId, snapshot, &revision, &deltas);
+      }
     }
   }
 
@@ -5488,6 +5664,14 @@ private:
       }
       GatherMaterialSnapshots(ip, currentState, &currentMaterialState);
       scannedNodeCount = currentState.size();
+      std::string materialLibraryPayloadUri;
+      const bool wroteMaterialLibrary =
+          WriteMaterialLibraryPayload(m_documentId, currentMaterialState,
+                                      &materialLibraryPayloadUri);
+      if (wroteMaterialLibrary && !materialLibraryPayloadUri.empty()) {
+        AppendMaterialLibraryDelta(m_documentId, materialLibraryPayloadUri,
+                                   &m_nextRevision, &deltas);
+      }
 
       for (const auto &[handle, snapshot] : currentState) {
         auto previousIt = m_lastNodeState.find(handle);
@@ -5533,11 +5717,21 @@ private:
         }
       }
 
-      for (const auto &[objectId, snapshot] : currentMaterialState) {
-        const auto previousMaterialIt = m_lastMaterialState.find(objectId);
-        if (previousMaterialIt == m_lastMaterialState.end() ||
-            !SameMaterial(snapshot, previousMaterialIt->second)) {
-          AppendMaterialDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
+      if (!wroteMaterialLibrary || materialLibraryPayloadUri.empty()) {
+        for (const auto &[objectId, snapshot] : currentMaterialState) {
+          const auto previousMaterialIt = m_lastMaterialState.find(objectId);
+          if (previousMaterialIt == m_lastMaterialState.end() ||
+              !SameMaterial(snapshot, previousMaterialIt->second)) {
+            AppendMaterialDelta(m_documentId, snapshot, &m_nextRevision,
+                                &deltas);
+          }
+        }
+
+        for (const auto &[objectId, snapshot] : m_lastMaterialState) {
+          if (currentMaterialState.find(objectId) == currentMaterialState.end()) {
+            AppendMaterialRemovedDelta(m_documentId, snapshot, &m_nextRevision,
+                                       &deltas);
+          }
         }
       }
 
@@ -5546,13 +5740,6 @@ private:
           QueuePayloadRemoval_NoLock(previousSnapshot.objectId);
           AppendNodeRemovedDelta(m_documentId, previousSnapshot,
                                  &m_nextRevision, &deltas);
-        }
-      }
-
-      for (const auto &[objectId, snapshot] : m_lastMaterialState) {
-        if (currentMaterialState.find(objectId) == currentMaterialState.end()) {
-          AppendMaterialRemovedDelta(m_documentId, snapshot, &m_nextRevision,
-                                     &deltas);
         }
       }
 
