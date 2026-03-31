@@ -226,6 +226,75 @@ struct NativeMeshPayloadMaterialHeader {
   uint32_t metalRoughTextureUriLength = 0;
 };
 
+struct NativeMeshPayloadMaterialBindingHeader {
+  int32_t materialSlot = 0;
+  uint32_t materialStableIdLength = 0;
+  uint32_t nameLength = 0;
+  uint32_t reserved = 0;
+};
+
+struct NativeMaterialLibraryHeader {
+  uint32_t magic = 0;
+  uint32_t version = 0;
+  uint32_t materialCount = 0;
+  uint32_t reserved = 0;
+};
+
+struct NativeMaterialLibraryReferenceHeader {
+  int32_t materialSlot = 0;
+  uint32_t nodeObjectIdLength = 0;
+};
+
+struct NativeMaterialLibraryMaterialHeader {
+  uint32_t flags = 0;
+  float baseColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+  float emissiveColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+  float emissiveIntensity = 1.0f;
+  float roughness = 0.5f;
+  float metalness = 0.0f;
+  float specularWeight = 1.0f;
+  float ior = 1.5f;
+  float transmissionWeight = 0.0f;
+  float transmissionColor[3] = {1.0f, 1.0f, 1.0f};
+  float coatWeight = 0.0f;
+  float coatRoughness = 0.1f;
+  float thinWalled = 0.0f;
+  float translucency = 0.0f;
+  float uvScale[2] = {1.0f, 1.0f};
+  float uvOffset[2] = {0.0f, 0.0f};
+  float triPlanarEnabled = 0.0f;
+  float triPlanarScale = 1.0f;
+  float triPlanarSharpness = 4.0f;
+  float triPlanarNormalStrength = 1.0f;
+  uint32_t objectIdLength = 0;
+  uint32_t nameLength = 0;
+  uint32_t materialStableIdLength = 0;
+  uint32_t materialModelLength = 0;
+  uint32_t alphaModeLength = 0;
+  uint32_t baseColorTextureUriLength = 0;
+  uint32_t normalTextureUriLength = 0;
+  uint32_t emissiveTextureUriLength = 0;
+  uint32_t occlusionTextureUriLength = 0;
+  uint32_t metalRoughTextureUriLength = 0;
+  uint32_t referenceCount = 0;
+};
+
+struct NativeMaterialLibraryRecord {
+  std::string objectId;
+  MaterialChangedPayload payload;
+};
+
+static Asset::Material BuildPlaceholderMaterialRecord(const std::string &name,
+                                                      int materialSlot) {
+  Asset::Material material{};
+  std::string resolvedName = name;
+  if (resolvedName.empty()) {
+    resolvedName = "Material Slot " + std::to_string((std::max)(0, materialSlot));
+  }
+  strncpy_s(material.name, resolvedName.c_str(), _TRUNCATE);
+  return material;
+}
+
 bool ReadNativePayloadString(std::ifstream &stream, uint32_t length,
                              std::string *outValue) {
   if (!outValue) {
@@ -347,7 +416,8 @@ bool LoadNativeMeshPayload(const std::string &path,
            outMeshes->front().indexCount > 0;
   }
 
-  if (header.version != 2 && header.version != 3 && header.version != 4) {
+  if (header.version != 2 && header.version != 3 && header.version != 4 &&
+      header.version != 5) {
     return false;
   }
 
@@ -394,7 +464,48 @@ bool LoadNativeMeshPayload(const std::string &path,
     outMeshes->push_back(std::move(mesh));
   }
 
-  if ((header.version == 3 || header.version == 4) && outMaterials) {
+  if (header.version == 5) {
+    const uint32_t bindingCount = header.reserved;
+    if (outMaterials) {
+      outMaterials->clear();
+    }
+    if (outMaterialStableIds) {
+      outMaterialStableIds->clear();
+    }
+
+    for (uint32_t bindingIndex = 0; bindingIndex < bindingCount; ++bindingIndex) {
+      NativeMeshPayloadMaterialBindingHeader bindingHeader;
+      stream.read(reinterpret_cast<char *>(&bindingHeader), sizeof(bindingHeader));
+      if (!stream) {
+        return false;
+      }
+
+      std::string materialStableId;
+      std::string materialName;
+      if (!ReadNativePayloadString(stream, bindingHeader.materialStableIdLength,
+                                   &materialStableId) ||
+          !ReadNativePayloadString(stream, bindingHeader.nameLength,
+                                   &materialName)) {
+        return false;
+      }
+
+      const size_t slot =
+          static_cast<size_t>((std::max)(0, bindingHeader.materialSlot));
+      if (outMaterials) {
+        if (outMaterials->size() <= slot) {
+          outMaterials->resize(slot + 1);
+        }
+        (*outMaterials)[slot] =
+            BuildPlaceholderMaterialRecord(materialName, bindingHeader.materialSlot);
+      }
+      if (outMaterialStableIds) {
+        if (outMaterialStableIds->size() <= slot) {
+          outMaterialStableIds->resize(slot + 1);
+        }
+        (*outMaterialStableIds)[slot] = std::move(materialStableId);
+      }
+    }
+  } else if ((header.version == 3 || header.version == 4) && outMaterials) {
     std::unordered_map<std::string, int> textureIndicesByUri;
     const uint32_t materialCount = header.reserved;
     outMaterials->reserve(materialCount);
@@ -515,6 +626,126 @@ bool LoadNativeMeshPayload(const std::string &path,
   }
 
   return !outMeshes->empty();
+}
+
+bool LoadNativeMaterialLibraryPayload(
+    const std::string &path,
+    std::vector<NativeMaterialLibraryRecord> *outRecords) {
+  if (!outRecords) {
+    return false;
+  }
+  outRecords->clear();
+
+  const std::filesystem::path payloadPath = Utf8PathFromString(path);
+  std::ifstream stream(payloadPath, std::ios::binary);
+  if (!stream) {
+    return false;
+  }
+
+  NativeMaterialLibraryHeader header;
+  stream.read(reinterpret_cast<char *>(&header), sizeof(header));
+  if (!stream || header.magic != 0x54414D50 || header.version != 1) {
+    return false;
+  }
+
+  outRecords->reserve(header.materialCount);
+  for (uint32_t materialIndex = 0; materialIndex < header.materialCount;
+       ++materialIndex) {
+    NativeMaterialLibraryMaterialHeader materialHeader;
+    stream.read(reinterpret_cast<char *>(&materialHeader), sizeof(materialHeader));
+    if (!stream) {
+      return false;
+    }
+
+    NativeMaterialLibraryRecord record;
+    if (!ReadNativePayloadString(stream, materialHeader.objectIdLength,
+                                 &record.objectId) ||
+        !ReadNativePayloadString(stream, materialHeader.nameLength,
+                                 &record.payload.name) ||
+        !ReadNativePayloadString(stream, materialHeader.materialStableIdLength,
+                                 &record.payload.materialStableId) ||
+        !ReadNativePayloadString(stream, materialHeader.materialModelLength,
+                                 &record.payload.materialModel) ||
+        !ReadNativePayloadString(stream, materialHeader.alphaModeLength,
+                                 &record.payload.alphaMode) ||
+        !ReadNativePayloadString(stream,
+                                 materialHeader.baseColorTextureUriLength,
+                                 &record.payload.baseColorTextureUri) ||
+        !ReadNativePayloadString(stream,
+                                 materialHeader.normalTextureUriLength,
+                                 &record.payload.normalTextureUri) ||
+        !ReadNativePayloadString(stream,
+                                 materialHeader.emissiveTextureUriLength,
+                                 &record.payload.emissiveTextureUri) ||
+        !ReadNativePayloadString(stream,
+                                 materialHeader.occlusionTextureUriLength,
+                                 &record.payload.occlusionTextureUri) ||
+        !ReadNativePayloadString(stream,
+                                 materialHeader.metalRoughTextureUriLength,
+                                 &record.payload.metalRoughTextureUri)) {
+      return false;
+    }
+
+    record.payload.parametersChanged = true;
+    record.payload.texturesChanged = true;
+    std::copy(std::begin(materialHeader.baseColor),
+              std::end(materialHeader.baseColor),
+              std::begin(record.payload.baseColor));
+    std::copy(std::begin(materialHeader.emissiveColor),
+              std::end(materialHeader.emissiveColor),
+              std::begin(record.payload.emissiveColor));
+    record.payload.emissiveIntensity = materialHeader.emissiveIntensity;
+    record.payload.roughness = materialHeader.roughness;
+    record.payload.metalness = materialHeader.metalness;
+    record.payload.specularWeight = materialHeader.specularWeight;
+    record.payload.ior = materialHeader.ior;
+    record.payload.transmissionWeight = materialHeader.transmissionWeight;
+    std::copy(std::begin(materialHeader.transmissionColor),
+              std::end(materialHeader.transmissionColor),
+              std::begin(record.payload.transmissionColor));
+    record.payload.coatWeight = materialHeader.coatWeight;
+    record.payload.coatRoughness = materialHeader.coatRoughness;
+    record.payload.thinWalled = materialHeader.thinWalled;
+    record.payload.translucency = materialHeader.translucency;
+    record.payload.uvScale[0] = materialHeader.uvScale[0];
+    record.payload.uvScale[1] = materialHeader.uvScale[1];
+    record.payload.uvOffset[0] = materialHeader.uvOffset[0];
+    record.payload.uvOffset[1] = materialHeader.uvOffset[1];
+    record.payload.triPlanarEnabled = materialHeader.triPlanarEnabled;
+    record.payload.triPlanarScale = materialHeader.triPlanarScale;
+    record.payload.triPlanarSharpness = materialHeader.triPlanarSharpness;
+    record.payload.triPlanarNormalStrength =
+        materialHeader.triPlanarNormalStrength;
+    record.payload.doubleSided =
+        (materialHeader.flags & kNativeMaterialFlagDoubleSided) != 0;
+    record.payload.invertRoughnessTexture =
+        (materialHeader.flags & kNativeMaterialFlagInvertRoughnessTexture) != 0;
+
+    record.payload.references.reserve(materialHeader.referenceCount);
+    for (uint32_t referenceIndex = 0;
+         referenceIndex < materialHeader.referenceCount; ++referenceIndex) {
+      NativeMaterialLibraryReferenceHeader referenceHeader;
+      stream.read(reinterpret_cast<char *>(&referenceHeader),
+                  sizeof(referenceHeader));
+      if (!stream) {
+        return false;
+      }
+
+      MaterialNodeReference reference;
+      reference.materialSlot = referenceHeader.materialSlot;
+      if (!ReadNativePayloadString(stream, referenceHeader.nodeObjectIdLength,
+                                   &reference.nodeObjectId)) {
+        return false;
+      }
+      if (!reference.nodeObjectId.empty()) {
+        record.payload.references.push_back(std::move(reference));
+      }
+    }
+
+    outRecords->push_back(std::move(record));
+  }
+
+  return true;
 }
 
 void Normalize3(float value[3], const float fallback[3]) {
@@ -729,6 +960,8 @@ bool LiveLinkSceneSync::ApplyDelta(const SceneDeltaBatch &batch,
     return ApplyNodeVisibilityChanged(batch, delta);
   case SceneDeltaKind::MeshPayloadChanged:
     return ApplyMeshPayloadChanged(batch, delta);
+  case SceneDeltaKind::MaterialLibraryChanged:
+    return ApplyMaterialLibraryChanged(batch, delta);
   case SceneDeltaKind::MaterialChanged:
     return ApplyMaterialChanged(batch, delta);
   case SceneDeltaKind::LightChanged:
@@ -1090,6 +1323,50 @@ bool LiveLinkSceneSync::ApplyMeshPayloadChanged(const SceneDeltaBatch &batch,
 
   binding->lastAppliedRevision = delta.revision;
   return true;
+}
+
+bool LiveLinkSceneSync::ApplyMaterialLibraryChanged(const SceneDeltaBatch &batch,
+                                                    const SceneDelta &delta) {
+  const MaterialLibraryChangedPayload *payload =
+      FindPayload<MaterialLibraryChangedPayload>(delta);
+  if (!payload) {
+    LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
+                  "MaterialLibraryChanged missing payload");
+    return false;
+  }
+  if (payload->payloadUri.empty()) {
+    LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
+                  "MaterialLibraryChanged missing payload URI");
+    return false;
+  }
+
+  std::vector<NativeMaterialLibraryRecord> records;
+  if (!LoadNativeMaterialLibraryPayload(payload->payloadUri, &records)) {
+    LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
+                  std::string("Failed to load material library payload: ") +
+                      payload->payloadUri);
+    return false;
+  }
+
+  bool appliedAny = false;
+  for (const NativeMaterialLibraryRecord &record : records) {
+    if (record.objectId.empty()) {
+      continue;
+    }
+
+    SceneDelta materialDelta;
+    materialDelta.kind = SceneDeltaKind::MaterialChanged;
+    materialDelta.target = delta.target;
+    materialDelta.target.objectId = record.objectId;
+    materialDelta.target.objectType = ObjectType::Material;
+    materialDelta.revision = delta.revision;
+    materialDelta.debugLabel = record.payload.name;
+    materialDelta.payload = record.payload;
+
+    appliedAny = ApplyMaterialChanged(batch, materialDelta) || appliedAny;
+  }
+
+  return appliedAny;
 }
 
 bool LiveLinkSceneSync::ApplyMaterialChanged(const SceneDeltaBatch &batch,
@@ -1654,9 +1931,20 @@ bool LiveLinkSceneSync::EnsureMaterialBinding(const SceneDeltaBatch &batch,
 
   if (!binding) {
     if (materialIndex < 0) {
-      LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
-                    "No scene material matched the live-link target");
-      return false;
+      Asset::Material placeholder{};
+      const std::string materialName = ResolveMaterialDisplayName(delta, payload);
+      if (!materialName.empty()) {
+        strncpy_s(placeholder.name, materialName.c_str(), _TRUNCATE);
+      }
+      materialIndex =
+          Scene::FindOrCreateMaterial(placeholder,
+                                      payload ? payload->materialStableId
+                                              : std::string());
+      if (materialIndex < 0) {
+        LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
+                      "No scene material matched the live-link target");
+        return false;
+      }
     }
     binding = &BindObject(delta.target, batch.sessionId,
                           EngineHandleKind::SceneMaterial,

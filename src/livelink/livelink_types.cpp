@@ -139,6 +139,8 @@ const char *ToString(SceneDeltaKind kind) {
     return "NodeVisibilityChanged";
   case SceneDeltaKind::MeshPayloadChanged:
     return "MeshPayloadChanged";
+  case SceneDeltaKind::MaterialLibraryChanged:
+    return "MaterialLibraryChanged";
   case SceneDeltaKind::MaterialChanged:
     return "MaterialChanged";
   case SceneDeltaKind::LightChanged:

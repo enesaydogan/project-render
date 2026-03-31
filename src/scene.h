@@ -117,6 +117,8 @@ size_t GetTextureCount();
 int FindMaterialByName(const std::string &name);
 int FindMaterialByStableId(const std::string &stableId);
 bool GetMaterial(size_t index, Asset::Material *outMaterial);
+int FindOrCreateMaterial(const Asset::Material &material,
+                         const std::string &stableId = {});
 bool SetMaterialStableId(size_t index, const std::string &stableId);
 bool RebindNodeMaterialSlot(size_t nodeIndex, size_t materialSlot,
                             int materialIndex);

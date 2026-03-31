@@ -2095,6 +2095,41 @@ bool GetMaterial(size_t index, Asset::Material *outMaterial) {
   return true;
 }
 
+int FindOrCreateMaterial(const Asset::Material &material,
+                         const std::string &stableId) {
+  EnsureMaterialMetadataStorage();
+
+  const std::string normalizedStableId = NormalizeMaterialStableId(stableId);
+  if (!normalizedStableId.empty()) {
+    const auto stableIt = s_materialIndicesByStableId.find(normalizedStableId);
+    if (stableIt != s_materialIndicesByStableId.end()) {
+      return stableIt->second;
+    }
+  }
+
+  const std::string materialName = material.name;
+  if (!materialName.empty()) {
+    const auto nameIt = s_materialIndicesByName.find(materialName);
+    if (nameIt != s_materialIndicesByName.end()) {
+      return nameIt->second;
+    }
+  }
+
+  const int materialIndex = static_cast<int>(g_loadedMaterials.size());
+  g_loadedMaterials.push_back(material);
+  if (s_materialStableIds.size() < g_loadedMaterials.size()) {
+    s_materialStableIds.resize(g_loadedMaterials.size());
+  }
+  if (!materialName.empty()) {
+    s_materialIndicesByName[materialName] = materialIndex;
+  }
+  if (!normalizedStableId.empty()) {
+    s_materialStableIds[static_cast<size_t>(materialIndex)] = normalizedStableId;
+    s_materialIndicesByStableId[normalizedStableId] = materialIndex;
+  }
+  return materialIndex;
+}
+
 bool SetMaterialStableId(size_t index, const std::string &stableId) {
   if (index >= g_loadedMaterials.size()) {
     return false;

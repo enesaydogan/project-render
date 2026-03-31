@@ -72,6 +72,7 @@ enum class SceneDeltaKind {
   NodeTransformChanged,
   NodeVisibilityChanged,
   MeshPayloadChanged,
+  MaterialLibraryChanged,
   MaterialChanged,
   LightChanged,
   CameraChanged,
@@ -138,6 +139,11 @@ struct MeshPayloadChangedPayload {
   uint64_t vertexCount = 0;
   uint64_t indexCount = 0;
   bool topologyChanged = true;
+  std::string payloadUri;
+  std::string payloadHash;
+};
+
+struct MaterialLibraryChangedPayload {
   std::string payloadUri;
   std::string payloadHash;
 };
@@ -219,7 +225,8 @@ using SceneDeltaPayload =
     std::variant<std::monostate, SessionOpenedPayload, SessionClosedPayload,
                  FullSceneSyncPayload, NodeAddedPayload, NodeRemovedPayload,
                  NodeTransformPayload, NodeVisibilityPayload,
-                 MeshPayloadChangedPayload, MaterialChangedPayload,
+                 MeshPayloadChangedPayload, MaterialLibraryChangedPayload,
+                 MaterialChangedPayload,
                  LightChangedPayload, CameraChangedPayload,
                  EnvironmentChangedPayload, SelectionChangedPayload>;
 

@@ -89,6 +89,8 @@ private:
                                   const SceneDelta &delta);
   bool ApplyMeshPayloadChanged(const SceneDeltaBatch &batch,
                                const SceneDelta &delta);
+  bool ApplyMaterialLibraryChanged(const SceneDeltaBatch &batch,
+                                   const SceneDelta &delta);
   bool ApplyMaterialChanged(const SceneDeltaBatch &batch,
                             const SceneDelta &delta);
   bool ApplyLightChanged(const SceneDeltaBatch &batch, const SceneDelta &delta);
