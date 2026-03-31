@@ -240,6 +240,21 @@ struct NativeMaterialLibraryHeader {
   uint32_t reserved = 0;
 };
 
+enum class NativeMaterialLibraryTextureBlobEncoding : uint32_t {
+  RawRgba8 = 1,
+  RawRgba32Float = 2,
+  EncodedLdr = 3,
+  EncodedHdr = 4,
+};
+
+struct NativeMaterialLibraryTextureBlobHeader {
+  uint32_t hashLength = 0;
+  uint32_t encoding = 0;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint32_t dataSize = 0;
+};
+
 struct NativeMaterialLibraryReferenceHeader {
   int32_t materialSlot = 0;
   uint32_t nodeObjectIdLength = 0;
@@ -277,6 +292,54 @@ struct NativeMaterialLibraryMaterialHeader {
   uint32_t occlusionTextureUriLength = 0;
   uint32_t metalRoughTextureUriLength = 0;
   uint32_t referenceCount = 0;
+};
+
+struct NativeMaterialLibraryMaterialHeaderV2 {
+  uint32_t flags = 0;
+  float baseColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+  float emissiveColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+  float emissiveIntensity = 1.0f;
+  float roughness = 0.5f;
+  float metalness = 0.0f;
+  float specularWeight = 1.0f;
+  float ior = 1.5f;
+  float transmissionWeight = 0.0f;
+  float transmissionColor[3] = {1.0f, 1.0f, 1.0f};
+  float coatWeight = 0.0f;
+  float coatRoughness = 0.1f;
+  float thinWalled = 0.0f;
+  float translucency = 0.0f;
+  float uvScale[2] = {1.0f, 1.0f};
+  float uvOffset[2] = {0.0f, 0.0f};
+  float triPlanarEnabled = 0.0f;
+  float triPlanarScale = 1.0f;
+  float triPlanarSharpness = 4.0f;
+  float triPlanarNormalStrength = 1.0f;
+  uint32_t objectIdLength = 0;
+  uint32_t nameLength = 0;
+  uint32_t materialStableIdLength = 0;
+  uint32_t materialModelLength = 0;
+  uint32_t alphaModeLength = 0;
+  uint32_t baseColorTextureUriLength = 0;
+  uint32_t baseColorTextureBlobHashLength = 0;
+  uint32_t normalTextureUriLength = 0;
+  uint32_t normalTextureBlobHashLength = 0;
+  uint32_t emissiveTextureUriLength = 0;
+  uint32_t emissiveTextureBlobHashLength = 0;
+  uint32_t occlusionTextureUriLength = 0;
+  uint32_t occlusionTextureBlobHashLength = 0;
+  uint32_t metalRoughTextureUriLength = 0;
+  uint32_t metalRoughTextureBlobHashLength = 0;
+  uint32_t referenceCount = 0;
+};
+
+struct NativeMaterialLibraryTextureBlob {
+  std::string hash;
+  NativeMaterialLibraryTextureBlobEncoding encoding =
+      NativeMaterialLibraryTextureBlobEncoding::EncodedLdr;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  std::vector<uint8_t> data;
 };
 
 struct NativeMaterialLibraryRecord {
@@ -634,11 +697,16 @@ bool LoadNativeMeshPayload(const std::string &path,
 
 bool LoadNativeMaterialLibraryPayload(
     const std::string &path,
-    std::vector<NativeMaterialLibraryRecord> *outRecords) {
+    std::vector<NativeMaterialLibraryRecord> *outRecords,
+    std::unordered_map<std::string, NativeMaterialLibraryTextureBlob>
+        *outTextureBlobs = nullptr) {
   if (!outRecords) {
     return false;
   }
   outRecords->clear();
+  if (outTextureBlobs) {
+    outTextureBlobs->clear();
+  }
 
   const std::filesystem::path payloadPath = Utf8PathFromString(path);
   std::ifstream stream(payloadPath, std::ios::binary);
@@ -648,101 +716,205 @@ bool LoadNativeMaterialLibraryPayload(
 
   NativeMaterialLibraryHeader header;
   stream.read(reinterpret_cast<char *>(&header), sizeof(header));
-  if (!stream || header.magic != 0x54414D50 || header.version != 1) {
+  if (!stream || header.magic != 0x54414D50 ||
+      (header.version != 1 && header.version != 2)) {
     return false;
+  }
+
+  if (header.version >= 2) {
+    const uint32_t textureBlobCount = header.reserved;
+    if (outTextureBlobs) {
+      outTextureBlobs->reserve(textureBlobCount);
+    }
+    for (uint32_t blobIndex = 0; blobIndex < textureBlobCount; ++blobIndex) {
+      NativeMaterialLibraryTextureBlobHeader blobHeader;
+      stream.read(reinterpret_cast<char *>(&blobHeader), sizeof(blobHeader));
+      if (!stream) {
+        return false;
+      }
+
+      NativeMaterialLibraryTextureBlob blob;
+      blob.encoding =
+          static_cast<NativeMaterialLibraryTextureBlobEncoding>(
+              blobHeader.encoding);
+      blob.width = blobHeader.width;
+      blob.height = blobHeader.height;
+      if (!ReadNativePayloadString(stream, blobHeader.hashLength, &blob.hash)) {
+        return false;
+      }
+      blob.data.resize(blobHeader.dataSize);
+      if (!blob.data.empty()) {
+        stream.read(reinterpret_cast<char *>(blob.data.data()),
+                    static_cast<std::streamsize>(blob.data.size()));
+        if (!stream) {
+          return false;
+        }
+      }
+
+      if (outTextureBlobs && !blob.hash.empty() && !blob.data.empty()) {
+        outTextureBlobs->emplace(blob.hash, std::move(blob));
+      }
+    }
   }
 
   outRecords->reserve(header.materialCount);
   for (uint32_t materialIndex = 0; materialIndex < header.materialCount;
        ++materialIndex) {
-    NativeMaterialLibraryMaterialHeader materialHeader;
-    stream.read(reinterpret_cast<char *>(&materialHeader), sizeof(materialHeader));
-    if (!stream) {
-      return false;
-    }
-
     NativeMaterialLibraryRecord record;
-    if (!ReadNativePayloadString(stream, materialHeader.objectIdLength,
-                                 &record.objectId) ||
-        !ReadNativePayloadString(stream, materialHeader.nameLength,
-                                 &record.payload.name) ||
-        !ReadNativePayloadString(stream, materialHeader.materialStableIdLength,
-                                 &record.payload.materialStableId) ||
-        !ReadNativePayloadString(stream, materialHeader.materialModelLength,
-                                 &record.payload.materialModel) ||
-        !ReadNativePayloadString(stream, materialHeader.alphaModeLength,
-                                 &record.payload.alphaMode) ||
-        !ReadNativePayloadString(stream,
-                                 materialHeader.baseColorTextureUriLength,
-                                 &record.payload.baseColorTextureUri) ||
-        !ReadNativePayloadString(stream,
-                                 materialHeader.normalTextureUriLength,
-                                 &record.payload.normalTextureUri) ||
-        !ReadNativePayloadString(stream,
-                                 materialHeader.emissiveTextureUriLength,
-                                 &record.payload.emissiveTextureUri) ||
-        !ReadNativePayloadString(stream,
-                                 materialHeader.occlusionTextureUriLength,
-                                 &record.payload.occlusionTextureUri) ||
-        !ReadNativePayloadString(stream,
-                                 materialHeader.metalRoughTextureUriLength,
-                                 &record.payload.metalRoughTextureUri)) {
-      return false;
-    }
 
-    record.payload.parametersChanged = true;
-    record.payload.texturesChanged = true;
-    std::copy(std::begin(materialHeader.baseColor),
-              std::end(materialHeader.baseColor),
-              std::begin(record.payload.baseColor));
-    std::copy(std::begin(materialHeader.emissiveColor),
-              std::end(materialHeader.emissiveColor),
-              std::begin(record.payload.emissiveColor));
-    record.payload.emissiveIntensity = materialHeader.emissiveIntensity;
-    record.payload.roughness = materialHeader.roughness;
-    record.payload.metalness = materialHeader.metalness;
-    record.payload.specularWeight = materialHeader.specularWeight;
-    record.payload.ior = materialHeader.ior;
-    record.payload.transmissionWeight = materialHeader.transmissionWeight;
-    std::copy(std::begin(materialHeader.transmissionColor),
-              std::end(materialHeader.transmissionColor),
-              std::begin(record.payload.transmissionColor));
-    record.payload.coatWeight = materialHeader.coatWeight;
-    record.payload.coatRoughness = materialHeader.coatRoughness;
-    record.payload.thinWalled = materialHeader.thinWalled;
-    record.payload.translucency = materialHeader.translucency;
-    record.payload.uvScale[0] = materialHeader.uvScale[0];
-    record.payload.uvScale[1] = materialHeader.uvScale[1];
-    record.payload.uvOffset[0] = materialHeader.uvOffset[0];
-    record.payload.uvOffset[1] = materialHeader.uvOffset[1];
-    record.payload.triPlanarEnabled = materialHeader.triPlanarEnabled;
-    record.payload.triPlanarScale = materialHeader.triPlanarScale;
-    record.payload.triPlanarSharpness = materialHeader.triPlanarSharpness;
-    record.payload.triPlanarNormalStrength =
-        materialHeader.triPlanarNormalStrength;
-    record.payload.doubleSided =
-        (materialHeader.flags & kNativeMaterialFlagDoubleSided) != 0;
-    record.payload.invertRoughnessTexture =
-        (materialHeader.flags & kNativeMaterialFlagInvertRoughnessTexture) != 0;
+    auto applyCommonFields = [&](auto const &materialHeader,
+                                 uint32_t referenceCount) {
+      record.payload.parametersChanged = true;
+      record.payload.texturesChanged = true;
+      std::copy(std::begin(materialHeader.baseColor),
+                std::end(materialHeader.baseColor),
+                std::begin(record.payload.baseColor));
+      std::copy(std::begin(materialHeader.emissiveColor),
+                std::end(materialHeader.emissiveColor),
+                std::begin(record.payload.emissiveColor));
+      record.payload.emissiveIntensity = materialHeader.emissiveIntensity;
+      record.payload.roughness = materialHeader.roughness;
+      record.payload.metalness = materialHeader.metalness;
+      record.payload.specularWeight = materialHeader.specularWeight;
+      record.payload.ior = materialHeader.ior;
+      record.payload.transmissionWeight = materialHeader.transmissionWeight;
+      std::copy(std::begin(materialHeader.transmissionColor),
+                std::end(materialHeader.transmissionColor),
+                std::begin(record.payload.transmissionColor));
+      record.payload.coatWeight = materialHeader.coatWeight;
+      record.payload.coatRoughness = materialHeader.coatRoughness;
+      record.payload.thinWalled = materialHeader.thinWalled;
+      record.payload.translucency = materialHeader.translucency;
+      record.payload.uvScale[0] = materialHeader.uvScale[0];
+      record.payload.uvScale[1] = materialHeader.uvScale[1];
+      record.payload.uvOffset[0] = materialHeader.uvOffset[0];
+      record.payload.uvOffset[1] = materialHeader.uvOffset[1];
+      record.payload.triPlanarEnabled = materialHeader.triPlanarEnabled;
+      record.payload.triPlanarScale = materialHeader.triPlanarScale;
+      record.payload.triPlanarSharpness = materialHeader.triPlanarSharpness;
+      record.payload.triPlanarNormalStrength =
+          materialHeader.triPlanarNormalStrength;
+      record.payload.doubleSided =
+          (materialHeader.flags & kNativeMaterialFlagDoubleSided) != 0;
+      record.payload.invertRoughnessTexture =
+          (materialHeader.flags & kNativeMaterialFlagInvertRoughnessTexture) !=
+          0;
 
-    record.payload.references.reserve(materialHeader.referenceCount);
-    for (uint32_t referenceIndex = 0;
-         referenceIndex < materialHeader.referenceCount; ++referenceIndex) {
-      NativeMaterialLibraryReferenceHeader referenceHeader;
-      stream.read(reinterpret_cast<char *>(&referenceHeader),
-                  sizeof(referenceHeader));
+      record.payload.references.reserve(referenceCount);
+      for (uint32_t referenceIndex = 0; referenceIndex < referenceCount;
+           ++referenceIndex) {
+        NativeMaterialLibraryReferenceHeader referenceHeader;
+        stream.read(reinterpret_cast<char *>(&referenceHeader),
+                    sizeof(referenceHeader));
+        if (!stream) {
+          return false;
+        }
+
+        MaterialNodeReference reference;
+        reference.materialSlot = referenceHeader.materialSlot;
+        if (!ReadNativePayloadString(stream, referenceHeader.nodeObjectIdLength,
+                                     &reference.nodeObjectId)) {
+          return false;
+        }
+        if (!reference.nodeObjectId.empty()) {
+          record.payload.references.push_back(std::move(reference));
+        }
+      }
+      return true;
+    };
+
+    if (header.version == 1) {
+      NativeMaterialLibraryMaterialHeader materialHeader;
+      stream.read(reinterpret_cast<char *>(&materialHeader), sizeof(materialHeader));
       if (!stream) {
         return false;
       }
 
-      MaterialNodeReference reference;
-      reference.materialSlot = referenceHeader.materialSlot;
-      if (!ReadNativePayloadString(stream, referenceHeader.nodeObjectIdLength,
-                                   &reference.nodeObjectId)) {
+      if (!ReadNativePayloadString(stream, materialHeader.objectIdLength,
+                                   &record.objectId) ||
+          !ReadNativePayloadString(stream, materialHeader.nameLength,
+                                   &record.payload.name) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.materialStableIdLength,
+                                   &record.payload.materialStableId) ||
+          !ReadNativePayloadString(stream, materialHeader.materialModelLength,
+                                   &record.payload.materialModel) ||
+          !ReadNativePayloadString(stream, materialHeader.alphaModeLength,
+                                   &record.payload.alphaMode) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.baseColorTextureUriLength,
+                                   &record.payload.baseColorTextureUri) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.normalTextureUriLength,
+                                   &record.payload.normalTextureUri) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.emissiveTextureUriLength,
+                                   &record.payload.emissiveTextureUri) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.occlusionTextureUriLength,
+                                   &record.payload.occlusionTextureUri) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.metalRoughTextureUriLength,
+                                   &record.payload.metalRoughTextureUri)) {
         return false;
       }
-      if (!reference.nodeObjectId.empty()) {
-        record.payload.references.push_back(std::move(reference));
+
+      if (!applyCommonFields(materialHeader, materialHeader.referenceCount)) {
+        return false;
+      }
+    } else {
+      NativeMaterialLibraryMaterialHeaderV2 materialHeader;
+      stream.read(reinterpret_cast<char *>(&materialHeader), sizeof(materialHeader));
+      if (!stream) {
+        return false;
+      }
+
+      if (!ReadNativePayloadString(stream, materialHeader.objectIdLength,
+                                   &record.objectId) ||
+          !ReadNativePayloadString(stream, materialHeader.nameLength,
+                                   &record.payload.name) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.materialStableIdLength,
+                                   &record.payload.materialStableId) ||
+          !ReadNativePayloadString(stream, materialHeader.materialModelLength,
+                                   &record.payload.materialModel) ||
+          !ReadNativePayloadString(stream, materialHeader.alphaModeLength,
+                                   &record.payload.alphaMode) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.baseColorTextureUriLength,
+                                   &record.payload.baseColorTextureUri) ||
+          !ReadNativePayloadString(
+              stream, materialHeader.baseColorTextureBlobHashLength,
+              &record.payload.baseColorTextureBlobHash) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.normalTextureUriLength,
+                                   &record.payload.normalTextureUri) ||
+          !ReadNativePayloadString(
+              stream, materialHeader.normalTextureBlobHashLength,
+              &record.payload.normalTextureBlobHash) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.emissiveTextureUriLength,
+                                   &record.payload.emissiveTextureUri) ||
+          !ReadNativePayloadString(
+              stream, materialHeader.emissiveTextureBlobHashLength,
+              &record.payload.emissiveTextureBlobHash) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.occlusionTextureUriLength,
+                                   &record.payload.occlusionTextureUri) ||
+          !ReadNativePayloadString(
+              stream, materialHeader.occlusionTextureBlobHashLength,
+              &record.payload.occlusionTextureBlobHash) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.metalRoughTextureUriLength,
+                                   &record.payload.metalRoughTextureUri) ||
+          !ReadNativePayloadString(
+              stream, materialHeader.metalRoughTextureBlobHashLength,
+              &record.payload.metalRoughTextureBlobHash)) {
+        return false;
+      }
+
+      if (!applyCommonFields(materialHeader, materialHeader.referenceCount)) {
+        return false;
       }
     }
 
@@ -1349,11 +1521,69 @@ bool LiveLinkSceneSync::ApplyMaterialLibraryChanged(const SceneDeltaBatch &batch
   }
 
   std::vector<NativeMaterialLibraryRecord> records;
-  if (!LoadNativeMaterialLibraryPayload(payload->payloadUri, &records)) {
+  std::unordered_map<std::string, NativeMaterialLibraryTextureBlob> textureBlobs;
+  if (!LoadNativeMaterialLibraryPayload(payload->payloadUri, &records,
+                                        &textureBlobs)) {
     LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
                   std::string("Failed to load material library payload: ") +
                       payload->payloadUri);
     return false;
+  }
+
+  PruneTextureCacheEntries();
+  for (const auto &[blobHash, blob] : textureBlobs) {
+    if (blobHash.empty()) {
+      continue;
+    }
+    const auto cached = m_textureIndicesByBlobHash.find(blobHash);
+    if (cached != m_textureIndicesByBlobHash.end()) {
+      continue;
+    }
+
+    Asset::Texture texture;
+    switch (blob.encoding) {
+    case NativeMaterialLibraryTextureBlobEncoding::RawRgba8:
+      if (blob.width == 0 || blob.height == 0) {
+        continue;
+      }
+      texture = Asset::LoadTextureFromMemory(blob.data.data(),
+                                             static_cast<int>(blob.width),
+                                             static_cast<int>(blob.height),
+                                             DXGI_FORMAT_R8G8B8A8_UNORM);
+      break;
+    case NativeMaterialLibraryTextureBlobEncoding::RawRgba32Float:
+      if (blob.width == 0 || blob.height == 0) {
+        continue;
+      }
+      texture = Asset::LoadTextureFromMemory(blob.data.data(),
+                                             static_cast<int>(blob.width),
+                                             static_cast<int>(blob.height),
+                                             DXGI_FORMAT_R32G32B32A32_FLOAT);
+      break;
+    case NativeMaterialLibraryTextureBlobEncoding::EncodedHdr:
+      texture =
+          Asset::LoadTextureFromEncodedMemory(blob.data.data(), blob.data.size(),
+                                              true);
+      break;
+    case NativeMaterialLibraryTextureBlobEncoding::EncodedLdr:
+    default:
+      texture =
+          Asset::LoadTextureFromEncodedMemory(blob.data.data(), blob.data.size(),
+                                              false);
+      break;
+    }
+
+    if (!texture.resource) {
+      fprintf(stderr,
+              "LiveLink: failed to decode embedded material texture '%s'\n",
+              blobHash.c_str());
+      continue;
+    }
+
+    const int textureIndex = Scene::AddTexture(std::move(texture));
+    if (textureIndex >= 0) {
+      m_textureIndicesByBlobHash.emplace(blobHash, textureIndex);
+    }
   }
 
   bool appliedAny = false;
@@ -1474,33 +1704,47 @@ bool LiveLinkSceneSync::ApplyMaterialChanged(const SceneDeltaBatch &batch,
     material.emissiveColor[i] = payload->emissiveColor[i];
   }
 
-  auto resolveTextureIndex = [this](const std::string &textureUri) {
-    if (textureUri.empty()) {
-      return -1;
-    }
+  auto resolveEmbeddedOrUriTextureIndex =
+      [this](const std::string &textureBlobHash,
+             const std::string &textureUri) {
+        if (!textureBlobHash.empty()) {
+          const auto cachedBlob = m_textureIndicesByBlobHash.find(textureBlobHash);
+          if (cachedBlob != m_textureIndicesByBlobHash.end()) {
+            return cachedBlob->second;
+          }
+        }
 
-    auto cached = m_textureIndicesByUri.find(textureUri);
-    if (cached != m_textureIndicesByUri.end()) {
-      return cached->second;
-    }
+        if (textureUri.empty()) {
+          return -1;
+        }
 
-    const int textureIndex =
-        Scene::AddTextureFromFile(textureUri, IsHdrTextureUri(textureUri));
-    if (textureIndex >= 0) {
-      m_textureIndicesByUri.emplace(textureUri, textureIndex);
-    } else {
-      fprintf(stderr,
-              "LiveLink: failed to bind material texture '%s'\n",
-              textureUri.c_str());
-    }
-    return textureIndex;
-  };
+        const auto cachedUri = m_textureIndicesByUri.find(textureUri);
+        if (cachedUri != m_textureIndicesByUri.end()) {
+          return cachedUri->second;
+        }
 
-  material.diffuseTexture = resolveTextureIndex(payload->baseColorTextureUri);
-  material.normalTexture = resolveTextureIndex(payload->normalTextureUri);
-  material.emissiveTexture = resolveTextureIndex(payload->emissiveTextureUri);
-  material.occlusionTexture = resolveTextureIndex(payload->occlusionTextureUri);
-  material.metalRoughTexture = resolveTextureIndex(payload->metalRoughTextureUri);
+        const int textureIndex =
+            Scene::AddTextureFromFile(textureUri, IsHdrTextureUri(textureUri));
+        if (textureIndex >= 0) {
+          m_textureIndicesByUri.emplace(textureUri, textureIndex);
+        } else {
+          fprintf(stderr,
+                  "LiveLink: failed to bind material texture '%s'\n",
+                  textureUri.c_str());
+        }
+        return textureIndex;
+      };
+
+  material.diffuseTexture = resolveEmbeddedOrUriTextureIndex(
+      payload->baseColorTextureBlobHash, payload->baseColorTextureUri);
+  material.normalTexture = resolveEmbeddedOrUriTextureIndex(
+      payload->normalTextureBlobHash, payload->normalTextureUri);
+  material.emissiveTexture = resolveEmbeddedOrUriTextureIndex(
+      payload->emissiveTextureBlobHash, payload->emissiveTextureUri);
+  material.occlusionTexture = resolveEmbeddedOrUriTextureIndex(
+      payload->occlusionTextureBlobHash, payload->occlusionTextureUri);
+  material.metalRoughTexture = resolveEmbeddedOrUriTextureIndex(
+      payload->metalRoughTextureBlobHash, payload->metalRoughTextureUri);
   material.emissiveIntensity = payload->emissiveIntensity;
   material.roughness = payload->roughness;
   material.metalness = payload->metalness;
@@ -2022,6 +2266,17 @@ void LiveLinkSceneSync::PruneTextureCacheEntries() {
 
     ++it;
   }
+
+  for (auto it = m_textureIndicesByBlobHash.begin();
+       it != m_textureIndicesByBlobHash.end();) {
+    const int textureIndex = it->second;
+    if (textureIndex < 0 ||
+        textureIndex >= static_cast<int>(Scene::GetTextureCount())) {
+      it = m_textureIndicesByBlobHash.erase(it);
+      continue;
+    }
+    ++it;
+  }
 }
 
 void LiveLinkSceneSync::ReindexSceneNodeBindingsAfterRemoval(size_t removedIndex) {
@@ -2051,6 +2306,7 @@ void LiveLinkSceneSync::ReindexSceneLightBindingsAfterRemoval(size_t removedInde
 void LiveLinkSceneSync::ClearAllBindings() {
   m_bindings.clear();
   m_textureIndicesByUri.clear();
+  m_textureIndicesByBlobHash.clear();
   m_cachedExternalCamera = CachedCameraState{};
   m_cameraControlDetached = false;
 }

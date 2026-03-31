@@ -251,6 +251,41 @@ static bool WriteTextureSrv(UINT textureIndex, const Asset::Texture &tex) {
   return true;
 }
 
+int AddTexture(Asset::Texture texture) {
+  if (!g_device) {
+    fprintf(stderr, "AddTexture: no device\n");
+    return -1;
+  }
+  if (!texture.resource) {
+    fprintf(stderr, "AddTexture: invalid texture resource\n");
+    return -1;
+  }
+
+  WaitGPUIdle();
+
+  const int newIndex = static_cast<int>(g_loadedTextures.size());
+  if (static_cast<UINT>(newIndex) >= g_textureDescriptorCapacity) {
+    fprintf(stderr, "AddTexture: descriptor capacity exceeded (%u)\n",
+            g_textureDescriptorCapacity);
+    return -1;
+  }
+
+  g_loadedTextures.push_back(std::move(texture));
+  const Asset::Texture &registeredTexture = g_loadedTextures.back();
+  if (!WriteTextureSrv(static_cast<UINT>(newIndex), registeredTexture)) {
+    g_loadedTextures.pop_back();
+    fprintf(stderr, "AddTexture: failed to create SRV for texture #%d\n",
+            newIndex);
+    return -1;
+  }
+
+  g_textureDescriptorCount = static_cast<UINT>(g_loadedTextures.size());
+  fprintf(stderr, "AddTexture: added texture #%d (w=%u h=%u mips=%u)\n",
+          newIndex, registeredTexture.width, registeredTexture.height,
+          registeredTexture.mipLevels);
+  return newIndex;
+}
+
 int AddTextureFromFile(const std::string &utf8path, bool isHDR) {
   if (!g_device) {
     fprintf(stderr, "AddTextureFromFile: no device\n");
@@ -266,25 +301,13 @@ int AddTextureFromFile(const std::string &utf8path, bool isHDR) {
             utf8path.c_str());
     return -1;
   }
-
-  const int newIndex = (int)g_loadedTextures.size();
-  if ((UINT)newIndex >= g_textureDescriptorCapacity) {
-    fprintf(stderr,
-            "AddTextureFromFile: descriptor capacity exceeded (%u) for '%s'\n",
-            g_textureDescriptorCapacity, utf8path.c_str());
-    return -1;
-  }
-  g_loadedTextures.push_back(std::move(tex));
-
-  const Asset::Texture &t = g_loadedTextures.back();
-  if (!WriteTextureSrv((UINT)newIndex, t)) {
-    g_loadedTextures.pop_back();
-    fprintf(stderr, "AddTextureFromFile: failed to create SRV for '%s'\n",
+  const int newIndex = AddTexture(std::move(tex));
+  if (newIndex < 0) {
+    fprintf(stderr, "AddTextureFromFile: failed to register '%s'\n",
             utf8path.c_str());
     return -1;
   }
-
-  g_textureDescriptorCount = (UINT)g_loadedTextures.size();
+  const Asset::Texture &t = g_loadedTextures[static_cast<size_t>(newIndex)];
   fprintf(stderr,
           "AddTextureFromFile: added texture #%d '%s' (w=%u h=%u mips=%u)\n",
           newIndex, utf8path.c_str(), t.width, t.height, t.mipLevels);

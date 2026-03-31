@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <d3d12.h>
 #include <functional>
@@ -195,6 +196,10 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
 
 // Load a single texture from file.
 Texture LoadTextureFromFile(const std::string &path, bool isHDR = false);
+
+// Load a single texture from encoded image bytes (png/jpg/hdr/exr).
+Texture LoadTextureFromEncodedMemory(const void *src, size_t size,
+                                     bool isHDRHint = false);
 
 // Load a single texture from memory.
 Texture LoadTextureFromMemory(const void *src, int width, int height,
