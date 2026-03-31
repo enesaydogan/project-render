@@ -1022,10 +1022,12 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
     RemapMaterialTextureIndices(payload.materials, textureRemap);
 
     Node importNodeProbe;
+    const bool overwriteResolvedMaterials =
+        payload.materialsContainFullDefinitions;
     std::vector<int> localToGlobal =
         ResolveReplacementMaterialIndices(importNodeProbe, payload.materials,
                                           &payload.materialStableIds, true,
-                                          false);
+                                          overwriteResolvedMaterials);
 
     const size_t meshBase = g_loadedMeshes.size();
     g_loadedMeshes.insert(g_loadedMeshes.end(), payload.meshes.begin(),
@@ -1146,11 +1148,13 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
       RegisterImportedTextures(payload.textures, payload.textureSourceUris);
   RemapMaterialTextureIndices(payload.materials, textureRemap);
   Node importNodeProbe;
+  const bool overwriteResolvedMaterials =
+      isLiveLinkPayload && payload.materialsContainFullDefinitions;
   std::vector<int> localToGlobal =
       ResolveReplacementMaterialIndices(importNodeProbe, payload.materials,
                &payload.materialStableIds,
                        !isLiveLinkPayload,
-                       isLiveLinkPayload);
+                       overwriteResolvedMaterials);
   g_loadedMeshes.insert(g_loadedMeshes.end(), payload.meshes.begin(),
                         payload.meshes.end());
 
@@ -1257,12 +1261,14 @@ bool ReplaceNodeImportedContent(size_t index, ImportedNodePayload payload) {
   const std::vector<int> textureRemap =
       RegisterImportedTextures(payload.textures, payload.textureSourceUris);
   RemapMaterialTextureIndices(payload.materials, textureRemap);
+  const bool overwriteResolvedMaterials =
+      isLiveLinkPayload && payload.materialsContainFullDefinitions;
 
   std::vector<int> localToGlobal =
       ResolveReplacementMaterialIndices(node, payload.materials,
                &payload.materialStableIds,
                        !isLiveLinkPayload,
-                       isLiveLinkPayload);
+                       overwriteResolvedMaterials);
 
   const size_t meshBase = g_loadedMeshes.size();
   for (size_t i = 0; i < payload.meshes.size(); ++i) {
