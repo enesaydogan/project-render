@@ -2452,7 +2452,7 @@ bool TryCaptureEmbeddedTexturePayload(Interface *ip, Texmap *texmap,
     }
   }
 
-  constexpr int kEmbeddedBakeResolution = 1024;
+  constexpr int kEmbeddedBakeResolution = 512;
   const TimeValue time = ip ? ip->GetTime() : 0;
   Interval validity = FOREVER;
   texmap->LoadMapFiles(time);
@@ -2475,6 +2475,15 @@ bool ParamNameSuggestsTexturePath(const std::string &paramNameLower) {
   return ContainsAnyToken(paramNameLower,
                           {"file", "filename", "filepath", "path", "bitmap",
                            "bitmapbuffer", "mapname", "asset"});
+}
+
+bool IsTextureBindingResolved(const TextureBindingSnapshot &binding) {
+  return !binding.uri.empty() || binding.payload.IsValid();
+}
+
+bool HasMaterialTexture(const std::string &uri,
+                        const EmbeddedTexturePayload &payload) {
+  return !uri.empty() || payload.IsValid();
 }
 
 bool TryResolveBitmapTextureBinding(Interface *ip, BitmapTex *bitmapTex,
@@ -2936,20 +2945,28 @@ bool TryResolveTriPlanarTextureBinding(Interface *ip, Texmap *texmap,
 
     TextureBindingSnapshot axisBinding;
     if (!TryResolveTexmapTextureBinding(ip, axisTexmap, &axisBinding) ||
-        axisBinding.uri.empty()) {
+        !IsTextureBindingResolved(axisBinding)) {
       continue;
     }
 
     if (!foundPrimaryBinding) {
       primaryBinding = std::move(axisBinding);
       foundPrimaryBinding = true;
+      continue;
+    }
+
+    if (primaryBinding.uri.empty() && !axisBinding.uri.empty()) {
+      primaryBinding.uri = std::move(axisBinding.uri);
+    }
+    if (!primaryBinding.payload.IsValid() && axisBinding.payload.IsValid()) {
+      primaryBinding.payload = std::move(axisBinding.payload);
     }
   }
 
   if (!foundPrimaryBinding) {
     TextureBindingSnapshot fallbackBinding;
     if (TryResolveFileBackedTextureBinding(ip, texmap, &fallbackBinding) &&
-        !fallbackBinding.uri.empty()) {
+        IsTextureBindingResolved(fallbackBinding)) {
       primaryBinding = std::move(fallbackBinding);
       foundPrimaryBinding = true;
     }
@@ -2965,7 +2982,7 @@ bool TryResolveTriPlanarTextureBinding(Interface *ip, Texmap *texmap,
 
       TextureBindingSnapshot subBinding;
       if (!TryResolveTexmapTextureBinding(ip, subTexmap, &subBinding) ||
-          subBinding.uri.empty()) {
+          !IsTextureBindingResolved(subBinding)) {
         continue;
       }
 
@@ -2975,7 +2992,7 @@ bool TryResolveTriPlanarTextureBinding(Interface *ip, Texmap *texmap,
     }
   }
 
-  if (!foundPrimaryBinding || primaryBinding.uri.empty()) {
+  if (!foundPrimaryBinding || !IsTextureBindingResolved(primaryBinding)) {
     return false;
   }
 
@@ -3036,7 +3053,7 @@ bool TryResolveTexmapTextureBinding(Interface *ip, Texmap *texmap,
           [&](Texmap *childTexmap) {
             return TryResolveTexmapTextureBinding(ip, childTexmap, outBinding);
           })) {
-    if (!outBinding->uri.empty()) {
+    if (IsTextureBindingResolved(*outBinding)) {
       return true;
     }
   }
@@ -3097,7 +3114,8 @@ void CaptureGenericMaterialTextures(Interface *ip, Mtl *material,
       continue;
     }
 
-    if (snapshot->baseColorTextureUri.empty() &&
+    if (!HasMaterialTexture(snapshot->baseColorTextureUri,
+                            snapshot->baseColorTexturePayload) &&
         ContainsAnyToken(slotNameLower,
                          {"diffuse", "albedo", "base color", "basecolor"})) {
       ApplyTextureBinding(std::move(binding), &snapshot->baseColorTextureUri,
@@ -3105,28 +3123,32 @@ void CaptureGenericMaterialTextures(Interface *ip, Mtl *material,
                           snapshot);
       continue;
     }
-    if (snapshot->normalTextureUri.empty() &&
+    if (!HasMaterialTexture(snapshot->normalTextureUri,
+                            snapshot->normalTexturePayload) &&
         ContainsAnyToken(slotNameLower, {"normal", "bump"})) {
       ApplyTextureBinding(std::move(binding), &snapshot->normalTextureUri,
                           &snapshot->normalTexturePayload,
                           snapshot);
       continue;
     }
-    if (snapshot->emissiveTextureUri.empty() &&
+    if (!HasMaterialTexture(snapshot->emissiveTextureUri,
+                            snapshot->emissiveTexturePayload) &&
         ContainsAnyToken(slotNameLower, {"self", "emiss", "illum"})) {
       ApplyTextureBinding(std::move(binding), &snapshot->emissiveTextureUri,
                           &snapshot->emissiveTexturePayload,
                           snapshot);
       continue;
     }
-    if (snapshot->occlusionTextureUri.empty() &&
+    if (!HasMaterialTexture(snapshot->occlusionTextureUri,
+                            snapshot->occlusionTexturePayload) &&
         ContainsAnyToken(slotNameLower, {"occlusion", "ambient occlusion", "ao"})) {
       ApplyTextureBinding(std::move(binding), &snapshot->occlusionTextureUri,
                           &snapshot->occlusionTexturePayload,
                           snapshot);
       continue;
     }
-    if (snapshot->metalRoughTextureUri.empty() &&
+    if (!HasMaterialTexture(snapshot->metalRoughTextureUri,
+                            snapshot->metalRoughTexturePayload) &&
         ContainsAnyToken(slotNameLower,
                          {"metal", "metallic", "metalness", "rough", "gloss"})) {
       ApplyTextureBinding(std::move(binding), &snapshot->metalRoughTextureUri,
@@ -3354,7 +3376,8 @@ void ApplyVrayMaterialParameters(Interface *ip, Mtl *material,
     }
   }
 
-  if (snapshot->metalRoughTextureUri.empty()) {
+  if (!HasMaterialTexture(snapshot->metalRoughTextureUri,
+                          snapshot->metalRoughTexturePayload)) {
     Texmap *roughnessTexmap = nullptr;
     if (TryGetVrayMtlTexmap(material,
                             ProjectRenderVrayMtlParameters::pb_reflect_glossiness_shortmap,
