@@ -2477,6 +2477,8 @@ bool ParamNameSuggestsTexturePath(const std::string &paramNameLower) {
                            "bitmapbuffer", "mapname", "asset"});
 }
 
+bool IsTriPlanarTexmap(Texmap *texmap);
+
 bool IsTextureBindingResolved(const TextureBindingSnapshot &binding) {
   return !binding.uri.empty() || binding.payload.IsValid();
 }
@@ -2484,6 +2486,33 @@ bool IsTextureBindingResolved(const TextureBindingSnapshot &binding) {
 bool HasMaterialTexture(const std::string &uri,
                         const EmbeddedTexturePayload &payload) {
   return !uri.empty() || payload.IsValid();
+}
+
+bool IsMaskSlotName(const std::string &slotNameLower) {
+  return ContainsAnyToken(slotNameLower, {"mask", "matte", "blend mask"});
+}
+
+bool ShouldAttemptEmbeddedBakeForTexmap(Texmap *texmap) {
+  if (!texmap || dynamic_cast<BitmapTex *>(texmap) != nullptr ||
+      IsTriPlanarTexmap(texmap)) {
+    return false;
+  }
+
+  const std::string classNameLower = GetObjectClassNameLower(texmap);
+  return ContainsAnyToken(
+      classNameLower,
+      {"composite", "mix", "blend", "tiles", "tile", "checker", "noise",
+       "cellular", "gradient", "falloff", "colorcorrect", "color correction",
+       "output", "procedural"});
+}
+
+bool IsLayeredCompositeTexmap(Texmap *texmap) {
+  if (!texmap) {
+    return false;
+  }
+
+  const std::string classNameLower = GetObjectClassNameLower(texmap);
+  return ContainsAnyToken(classNameLower, {"composite", "mix", "blend"});
 }
 
 bool TryResolveBitmapTextureBinding(Interface *ip, BitmapTex *bitmapTex,
@@ -3032,17 +3061,37 @@ bool TryResolveTexmapTextureBinding(Interface *ip, Texmap *texmap,
     }
   }
 
-  TextureBindingSnapshot fallbackBinding;
-  if (TryResolveFileBackedTextureBinding(ip, texmap, &fallbackBinding)) {
-    outBinding->uri = fallbackBinding.uri;
-  }
-
-  if (TryCaptureEmbeddedTexturePayload(ip, texmap, std::string(),
+  if (ShouldAttemptEmbeddedBakeForTexmap(texmap) &&
+      TryCaptureEmbeddedTexturePayload(ip, texmap, std::string(),
                                        &outBinding->payload)) {
     return true;
   }
 
-  if (!fallbackBinding.uri.empty()) {
+  if (IsLayeredCompositeTexmap(texmap)) {
+    for (int subTexmapIndex = texmap->NumSubTexmaps() - 1; subTexmapIndex >= 0;
+         --subTexmapIndex) {
+      Texmap *subTexmap = texmap->GetSubTexmap(subTexmapIndex);
+      if (!subTexmap) {
+        continue;
+      }
+
+      const MSTR slotName = texmap->GetSubTexmapSlotName(subTexmapIndex, false);
+      const std::string slotNameLower = ToLowerAscii(ToUtf8(slotName.data()));
+      if (IsMaskSlotName(slotNameLower)) {
+        continue;
+      }
+
+      TextureBindingSnapshot subBinding;
+      if (TryResolveTexmapTextureBinding(ip, subTexmap, &subBinding) &&
+          IsTextureBindingResolved(subBinding)) {
+        *outBinding = std::move(subBinding);
+        return true;
+      }
+    }
+  }
+
+  TextureBindingSnapshot fallbackBinding;
+  if (TryResolveFileBackedTextureBinding(ip, texmap, &fallbackBinding)) {
     *outBinding = std::move(fallbackBinding);
     return true;
   }

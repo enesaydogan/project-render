@@ -48,6 +48,8 @@ struct ImportedNodePayload {
   std::vector<Asset::ImportedSceneNode> sceneNodes;
   std::vector<Asset::Material> materials;
   std::vector<std::string> materialStableIds;
+  std::vector<int> preferredLinkedMaterialIndices;
+  std::vector<std::string> preferredLinkedMaterialSourceNames;
   std::vector<Asset::Texture> textures;
   std::vector<std::string> textureSourceUris;
   bool materialsContainFullDefinitions = true;
