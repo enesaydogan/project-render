@@ -51,6 +51,11 @@ static std::atomic<float> s_importProgress(0.0f);
 static std::string s_importStatus;
 static std::mutex s_importStatusMutex;
 
+enum class PendingImportAction {
+  Import,
+  Reimport,
+};
+
 static std::vector<Asset::GpuMesh> s_pendingMeshes;
 static std::vector<Asset::Material> s_pendingMaterials;
 static std::vector<Asset::Texture> s_pendingTextures;
@@ -72,6 +77,9 @@ static size_t s_nextImportGroupId = 1;
 static size_t s_nextChangeListenerId = 1;
 static std::unordered_map<size_t, std::function<void()>> s_changeListeners;
 static std::string s_pendingPath;
+static PendingImportAction s_pendingAction = PendingImportAction::Import;
+static size_t s_pendingTargetNodeIndex = static_cast<size_t>(-1);
+static std::string s_pendingTargetImportGroupKey;
 static std::atomic<bool> s_pendingReady(false);
 static std::mutex s_pendingMutex;
 static ImGuizmo::OPERATION g_currentGizmoOp = ImGuizmo::TRANSLATE;
@@ -573,6 +581,13 @@ static void InitializeNodeImportLinkage(Node &node,
   }
 }
 
+static Node BuildImportMaterialProbe(const ImportedNodePayload &payload) {
+  Node probe;
+  probe.linkedMaterialIndices = payload.preferredLinkedMaterialIndices;
+  probe.linkedMaterialSourceNames = payload.preferredLinkedMaterialSourceNames;
+  return probe;
+}
+
 static std::vector<int> BuildLegacyLinkedMaterialIndices(const Node &node);
 static std::vector<std::string>
 BuildLegacyLinkedMaterialNames(const std::vector<int> &indices);
@@ -987,6 +1002,115 @@ static bool FinalizeImportedNode(const std::string &srcPath,
   return AddImportedNode(std::move(payload));
 }
 
+static std::string BuildSceneLoadStatusPrefix(PendingImportAction action) {
+  return action == PendingImportAction::Reimport ? "Reimporting "
+                                                 : "Importing ";
+}
+
+static std::string BuildSceneLoadStartStatus(PendingImportAction action) {
+  return action == PendingImportAction::Reimport ? "Starting reimport..."
+                                                 : "Starting import...";
+}
+
+static std::string BuildSceneLoadFinishedStatus(PendingImportAction action) {
+  return action == PendingImportAction::Reimport ? "Reimport finished"
+                                                 : "Import finished";
+}
+
+static std::string BuildSceneLoadFailedStatus(PendingImportAction action,
+                                              const std::string &path,
+                                              bool producedNoMeshes) {
+  const char *verb = action == PendingImportAction::Reimport ? "Reimport"
+                                                              : "Import";
+  return producedNoMeshes
+             ? (std::string(verb) + " produced no meshes: " + path)
+             : (std::string(verb) + " failed: " + path);
+}
+
+static std::string FormatSceneLoadProgressStatus(PendingImportAction action,
+                                                 const std::string &message,
+                                                 const std::string &path) {
+  if (action != PendingImportAction::Reimport) {
+    return message;
+  }
+
+  const std::string importPrefix = "Importing ";
+  if (message.rfind(importPrefix, 0) == 0) {
+    return BuildSceneLoadStatusPrefix(action) + message.substr(importPrefix.size());
+  }
+  if (message.empty()) {
+    return BuildSceneLoadStatusPrefix(action) + path + "...";
+  }
+  return message;
+}
+
+static bool StartAsyncSceneLoadJob(const std::string &path,
+                                   PendingImportAction action,
+                                   size_t targetNodeIndex =
+                                       static_cast<size_t>(-1),
+                                   const std::string &targetImportGroupKey = {}) {
+  if (s_importInProgress.load()) {
+    s_lastStatus = "Import already in progress";
+    return false;
+  }
+
+  s_importInProgress = true;
+  s_importProgress = 0.0f;
+  {
+    std::lock_guard<std::mutex> lg(s_importStatusMutex);
+    s_importStatus = BuildSceneLoadStartStatus(action);
+  }
+
+  Asset::SetProgressCallback([action, path](float progress,
+                                            const std::string &message) {
+    s_importProgress = progress;
+    std::lock_guard<std::mutex> lg(s_importStatusMutex);
+    s_importStatus = FormatSceneLoadProgressStatus(action, message, path);
+  });
+
+  std::thread([path, action, targetNodeIndex, targetImportGroupKey]() {
+    std::vector<Asset::GpuMesh> meshes;
+    std::vector<Asset::Material> materials;
+    std::vector<Asset::Texture> textures;
+    std::vector<Asset::ImportedSceneNode> sceneNodes;
+    Asset::SetDeferGpuUpload(true);
+    const bool ok =
+        Asset::LoadModel(path, meshes, &materials, &textures, nullptr, &sceneNodes);
+    Asset::SetDeferGpuUpload(false);
+
+    if (!ok || meshes.empty()) {
+      const std::string msg =
+          BuildSceneLoadFailedStatus(action, path, ok && meshes.empty());
+      fprintf(stderr, "Scene::StartAsyncSceneLoadJob: %s\n", msg.c_str());
+      s_lastStatus = msg;
+      {
+        std::lock_guard<std::mutex> lg(s_importStatusMutex);
+        s_importStatus = msg;
+      }
+      s_importInProgress = false;
+      s_importProgress = 0.0f;
+      Asset::ClearProgressCallback();
+      return;
+    }
+
+    {
+      std::lock_guard<std::mutex> lg(s_pendingMutex);
+      s_pendingMeshes = std::move(meshes);
+      s_pendingMaterials = std::move(materials);
+      s_pendingTextures = std::move(textures);
+      s_pendingSceneNodes = std::move(sceneNodes);
+      s_pendingPath = path;
+      s_pendingAction = action;
+      s_pendingTargetNodeIndex = targetNodeIndex;
+      s_pendingTargetImportGroupKey = targetImportGroupKey;
+    }
+    s_pendingReady = true;
+    Asset::ClearProgressCallback();
+  }).detach();
+
+  return true;
+}
+
 static int FindLinkedMaterialByName(const std::vector<std::string> &sourceNames,
                                     const std::vector<int> &globalIndices,
                                     const std::string &name,
@@ -1037,6 +1161,9 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
     return false;
   }
 
+  const bool isLiveLinkPayload =
+      IsShareableLiveLinkPayloadPath(payload.sourcePath);
+
   if (!payload.sceneNodes.empty()) {
     EnsureGpuBuffersForMeshes(payload.meshes);
 
@@ -1044,12 +1171,13 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
         RegisterImportedTextures(payload.textures, payload.textureSourceUris);
     RemapMaterialTextureIndices(payload.materials, textureRemap);
 
-    Node importNodeProbe;
+    Node importNodeProbe = BuildImportMaterialProbe(payload);
     const bool overwriteResolvedMaterials =
-        payload.materialsContainFullDefinitions;
+        isLiveLinkPayload && payload.materialsContainFullDefinitions;
     std::vector<int> localToGlobal =
         ResolveReplacementMaterialIndices(importNodeProbe, payload.materials,
-                                          &payload.materialStableIds, true,
+                                          &payload.materialStableIds,
+                                          !isLiveLinkPayload,
                                           overwriteResolvedMaterials);
 
     const size_t meshBase = g_loadedMeshes.size();
@@ -1135,8 +1263,6 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
     return true;
   }
 
-  const bool isLiveLinkPayload =
-      IsShareableLiveLinkPayloadPath(payload.sourcePath);
   if (isLiveLinkPayload) {
     auto sharedEntryIt =
         s_sharedImportedMeshesBySourcePath.find(payload.sourcePath);
@@ -1170,7 +1296,7 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
   const std::vector<int> textureRemap =
       RegisterImportedTextures(payload.textures, payload.textureSourceUris);
   RemapMaterialTextureIndices(payload.materials, textureRemap);
-  Node importNodeProbe;
+    Node importNodeProbe = BuildImportMaterialProbe(payload);
   const bool overwriteResolvedMaterials =
       isLiveLinkPayload && payload.materialsContainFullDefinitions;
   std::vector<int> localToGlobal =
@@ -1261,6 +1387,16 @@ bool ReplaceNodeImportedContent(size_t index, ImportedNodePayload payload) {
     payload.importGroupKey =
         groupKey.empty() ? GenerateImportGroupKey(effectiveSourcePath)
                          : groupKey;
+    payload.preferredLinkedMaterialIndices = node.linkedMaterialIndices;
+    if (payload.preferredLinkedMaterialIndices.empty()) {
+      payload.preferredLinkedMaterialIndices = BuildLegacyLinkedMaterialIndices(node);
+    }
+    payload.preferredLinkedMaterialSourceNames = node.linkedMaterialSourceNames;
+    if (payload.preferredLinkedMaterialSourceNames.size() !=
+        payload.preferredLinkedMaterialIndices.size()) {
+      payload.preferredLinkedMaterialSourceNames =
+          BuildLegacyLinkedMaterialNames(payload.preferredLinkedMaterialIndices);
+    }
 
     std::vector<size_t> nodesToRemove =
         IsImportedSceneGroupNode(node)
@@ -1497,6 +1633,9 @@ void ProcessPendingImport() {
   std::vector<Asset::Texture> textures;
   std::vector<Asset::ImportedSceneNode> sceneNodes;
   std::string srcPath;
+  PendingImportAction action = PendingImportAction::Import;
+  size_t targetNodeIndex = static_cast<size_t>(-1);
+  std::string targetImportGroupKey;
   {
     std::lock_guard<std::mutex> lg(s_pendingMutex);
     meshes = std::move(s_pendingMeshes);
@@ -1504,22 +1643,49 @@ void ProcessPendingImport() {
     textures = std::move(s_pendingTextures);
     sceneNodes = std::move(s_pendingSceneNodes);
     srcPath = std::move(s_pendingPath);
+    action = s_pendingAction;
+    targetNodeIndex = s_pendingTargetNodeIndex;
+    targetImportGroupKey = std::move(s_pendingTargetImportGroupKey);
     s_pendingMeshes.clear();
     s_pendingMaterials.clear();
     s_pendingTextures.clear();
     s_pendingSceneNodes.clear();
     s_pendingPath.clear();
+    s_pendingAction = PendingImportAction::Import;
+    s_pendingTargetNodeIndex = static_cast<size_t>(-1);
+    s_pendingTargetImportGroupKey.clear();
   }
   s_pendingReady = false;
-  FinalizeImportedNode(srcPath, std::move(meshes), std::move(materials),
-                       std::move(textures), std::move(sceneNodes));
+
+  bool ok = false;
+  if (action == PendingImportAction::Import) {
+    ok = FinalizeImportedNode(srcPath, std::move(meshes), std::move(materials),
+                              std::move(textures), std::move(sceneNodes));
+  } else {
+    if (!targetImportGroupKey.empty()) {
+      targetNodeIndex = FindImportGroupRootIndex(targetImportGroupKey);
+    }
+
+    if (targetNodeIndex >= s_nodes.size()) {
+      s_lastStatus = "Reimport failed: target node no longer exists.";
+    } else {
+      ImportedNodePayload payload;
+      payload.sourcePath = srcPath;
+      payload.importGroupKey = targetImportGroupKey;
+      payload.meshes = std::move(meshes);
+      payload.materials = std::move(materials);
+      payload.textures = std::move(textures);
+      payload.sceneNodes = std::move(sceneNodes);
+      ok = ReplaceNodeImportedContent(targetNodeIndex, std::move(payload));
+    }
+  }
 
   // Clear import-in-progress flag
   s_importInProgress = false;
-  s_importProgress = 1.0f;
+  s_importProgress = ok ? 1.0f : 0.0f;
   {
     std::lock_guard<std::mutex> lg(s_importStatusMutex);
-    s_importStatus = "Import finished";
+    s_importStatus = ok ? BuildSceneLoadFinishedStatus(action) : s_lastStatus;
   }
 }
 
@@ -1627,66 +1793,7 @@ bool ImportModelWithDialog(HWND hwnd) {
       return false;
     }
 
-    // Reset progress state and set callback
-    s_importInProgress = true;
-    s_importProgress = 0.0f;
-    {
-      std::lock_guard<std::mutex> lg(s_importStatusMutex);
-      s_importStatus = "Starting import...";
-    }
-
-    Asset::SetProgressCallback([&](float p, const std::string &msg) {
-      s_importProgress = p;
-      std::lock_guard<std::mutex> lg(s_importStatusMutex);
-      s_importStatus = msg;
-    });
-
-    // Launch background thread to do CPU-side import. The main thread will
-    // merge results when ready.
-    std::thread([utf8path]() {
-      std::vector<Asset::GpuMesh> meshes;
-      std::vector<Asset::Material> materials;
-      std::vector<Asset::Texture> textures;
-      std::vector<Asset::ImportedSceneNode> sceneNodes;
-      Asset::SetDeferGpuUpload(true);
-      bool ok =
-          Asset::LoadModel(utf8path, meshes, &materials, &textures, nullptr,
-                           &sceneNodes);
-      Asset::SetDeferGpuUpload(false);
-
-      // If the loader failed or produced no meshes, report error and do not
-      // queue pending results for the main thread to merge.
-      if (!ok || meshes.empty()) {
-        std::string msg =
-            !ok ? (std::string("Import failed: ") + utf8path)
-                : (std::string("Import produced no meshes: ") + utf8path);
-        fprintf(stderr, "Scene::ImportModel (async): %s\n", msg.c_str());
-        {
-          std::lock_guard<std::mutex> lg(s_importStatusMutex);
-          s_importStatus = msg;
-        }
-        s_importInProgress = false;
-        s_importProgress = 0.0f;
-        Asset::ClearProgressCallback();
-        return; // abort thread — nothing to merge
-      }
-
-      // Store pending results for main thread to pick up
-      {
-        std::lock_guard<std::mutex> lg(s_pendingMutex);
-        s_pendingMeshes = std::move(meshes);
-        s_pendingMaterials = std::move(materials);
-        s_pendingTextures = std::move(textures);
-        s_pendingSceneNodes = std::move(sceneNodes);
-        s_pendingPath = utf8path;
-      }
-      s_pendingReady = true;
-      // Keep progress callback until main thread merges, but clear loader
-      // callback now
-      Asset::ClearProgressCallback();
-    }).detach();
-
-    return true;
+    return StartAsyncSceneLoadJob(utf8path, PendingImportAction::Import);
   }
   s_lastStatus = "Open cancelled";
   return false;
@@ -1758,32 +1865,8 @@ bool ReimportNode(size_t index) {
     return false;
   }
 
-  try {
-    std::vector<Asset::GpuMesh> meshes;
-    std::vector<Asset::Material> materials;
-    std::vector<Asset::Texture> textures;
-    std::vector<Asset::ImportedSceneNode> sceneNodes;
-    if (!Asset::LoadModel(srcPath, meshes, &materials, &textures, nullptr,
-                          &sceneNodes) ||
-        meshes.empty()) {
-      s_lastStatus = std::string("Reimport failed: ") + srcPath;
-      fprintf(stderr, "%s\n", s_lastStatus.c_str());
-      return false;
-    }
-
-    ImportedNodePayload payload;
-    payload.sourcePath = srcPath;
-    payload.importGroupKey = node.importGroupKey;
-    payload.meshes = std::move(meshes);
-    payload.sceneNodes = std::move(sceneNodes);
-    payload.materials = std::move(materials);
-    payload.textures = std::move(textures);
-    return ReplaceNodeImportedContent(index, std::move(payload));
-  } catch (const std::exception &e) {
-    s_lastStatus = std::string("Reimport exception: ") + e.what();
-    fprintf(stderr, "%s\n", s_lastStatus.c_str());
-    return false;
-  }
+  return StartAsyncSceneLoadJob(srcPath, PendingImportAction::Reimport, index,
+                                node.importGroupKey);
 }
 
 void SelectNode(size_t index) {
@@ -3122,44 +3205,7 @@ void DrawScenePanel(HWND hwnd, bool &visible) {
     return;
   if (ImGui::Begin("Scene", &visible)) {
     bool uiChanged = false;
-    // If background import finished CPU-side, merge results on main thread (GPU
-    // uploads, descriptors, AS rebuild)
-    if (s_pendingReady.load()) {
-      std::vector<Asset::GpuMesh> meshes;
-      std::vector<Asset::Material> materials;
-      std::vector<Asset::Texture> textures;
-      std::vector<Asset::ImportedSceneNode> sceneNodes;
-      std::string srcPath;
-      {
-        std::lock_guard<std::mutex> lg(s_pendingMutex);
-        meshes = std::move(s_pendingMeshes);
-        materials = std::move(s_pendingMaterials);
-        textures = std::move(s_pendingTextures);
-        sceneNodes = std::move(s_pendingSceneNodes);
-        srcPath = std::move(s_pendingPath);
-        s_pendingMeshes.clear();
-        s_pendingMaterials.clear();
-        s_pendingTextures.clear();
-        s_pendingSceneNodes.clear();
-        s_pendingPath.clear();
-      }
-      s_pendingReady = false;
-      ImportedNodePayload payload;
-      payload.sourcePath = srcPath;
-      payload.meshes = std::move(meshes);
-      payload.sceneNodes = std::move(sceneNodes);
-      payload.materials = std::move(materials);
-      payload.textures = std::move(textures);
-      AddImportedNode(std::move(payload));
-
-      // Clear import-in-progress flag
-      s_importInProgress = false;
-      s_importProgress = 1.0f;
-      {
-        std::lock_guard<std::mutex> lg(s_importStatusMutex);
-        s_importStatus = "Import finished";
-      }
-    }
+    ProcessPendingImport();
 
     // Show progress bar if an import is in progress
     if (s_importInProgress.load()) {
