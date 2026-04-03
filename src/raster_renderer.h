@@ -29,8 +29,8 @@ namespace RasterRenderer {
     float bloomIntensity = 0.5f;
 
     float tonemapVignette = 0.15f;
-    float tonemapSaturation = 1.05f;
-    float tonemapContrast = 1.05f;
+    float tonemapSaturation = 1.0f;
+    float tonemapContrast = 1.0f;
   };
 
   // Raster module API
