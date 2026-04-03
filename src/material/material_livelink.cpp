@@ -35,6 +35,21 @@ void ApplyPayloadToMaterial(const LiveLink::MaterialChangedPayload &payload,
         payload.roughnessGlossTextureUri);
   }
 
+  material->diffuseTextureAmount =
+      std::clamp(payload.baseColorTextureAmount, 0.0f, 1.0f);
+  material->metalRoughTextureAmount =
+      std::clamp(payload.packedSurfaceTextureAmount, 0.0f, 1.0f);
+  material->metalnessTextureAmount =
+      std::clamp(payload.metalnessTextureAmount, 0.0f, 1.0f);
+  material->roughnessGlossTextureAmount =
+      std::clamp(payload.roughnessGlossTextureAmount, 0.0f, 1.0f);
+  material->normalTextureAmount =
+      std::clamp(payload.normalTextureAmount, 0.0f, 1.0f);
+  material->occlusionTextureAmount =
+      std::clamp(payload.occlusionTextureAmount, 0.0f, 1.0f);
+  material->emissiveTextureAmount =
+      std::clamp(payload.emissiveTextureAmount, 0.0f, 1.0f);
+
   material->emissiveIntensity = payload.emissiveIntensity;
   material->roughness = payload.roughness;
   material->metalness = payload.metalness;

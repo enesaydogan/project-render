@@ -43,6 +43,10 @@ cbuffer CameraCB : register(b0)
     float nrdEnabled;
     float exportRendering;
     float dxrProceduralSkyBoost;
+    float tonemapAoIntensity;
+    float tonemapAoRadiusMeters;
+    float tonemapAoMode;
+    float triPlanarWorldRotationDegrees;
     float4x4 shadowMatrix;
     float4x4 viewProj;
     float4x4 invViewProj;
@@ -65,6 +69,9 @@ cbuffer MaterialCB : register(b1)
     float4 coatLayerParams;     // x=coatWeight, y=coatRoughness, z=thinWalled, w=translucency
     float4 uvTransform;         // xy=uvScale, zw=uvOffset
     float4 triPlanarParams;     // x=enabled, y=scale, z=sharpness, w=normalStrength
+    float4 mappingVariationParams; // x=mode, y=offsetJitter, z=materialRotationDegrees, w=reserved
+    float4 textureWeight0;      // x=baseColor, y=packedSurface, z=metalness, w=roughnessGloss
+    float4 textureWeight1;      // x=normal, y=occlusion, z=emissive
 };
 
 // Texture array - bonded as an unbounded array in SM 6.x
@@ -146,17 +153,130 @@ float3 TriPlanarWeights(float3 n, float sharpness)
     return (s > 1e-5) ? (an / s) : float3(0.3333, 0.3333, 0.3333);
 }
 
-float2 TriPlanarUV_X(float3 p, float scale) { return float2(p.y, p.z) * scale; }
-float2 TriPlanarUV_Y(float3 p, float scale) { return float2(p.z, p.x) * scale; }
-float2 TriPlanarUV_Z(float3 p, float scale) { return float2(p.x, p.y) * scale; }
+uint HashTriPlanarU32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
 
-float4 SampleTriPlanar(int texIndex, float3 worldPos, float3 worldNormal, float scale, float sharpness)
+float HashTriPlanar01(uint x)
+{
+    return (HashTriPlanarU32(x) & 0x00FFFFFFu) / 16777215.0;
+}
+
+float GetTriPlanarRotationDegrees()
+{
+    return triPlanarWorldRotationDegrees + mappingVariationParams.z;
+}
+
+float2 RotateAroundSceneUp(float2 xz, float degrees)
+{
+    float s, c;
+    sincos(radians(degrees), s, c);
+    return float2(xz.x * c - xz.y * s,
+                  xz.x * s + xz.y * c);
+}
+
+float3 RotateTriPlanarPosition(float3 worldPos)
+{
+    float2 rotatedXZ = RotateAroundSceneUp(worldPos.xz,
+                                           GetTriPlanarRotationDegrees());
+    return float3(rotatedXZ.x, worldPos.y, rotatedXZ.y);
+}
+
+float3 RotateTriPlanarAxis(float3 axis)
+{
+    float2 rotatedXZ = RotateAroundSceneUp(axis.xz,
+                                           GetTriPlanarRotationDegrees());
+    return normalize(float3(rotatedXZ.x, axis.y, rotatedXZ.y));
+}
+
+uint ComputeTriPlanarVariationSeed(float3 objectOrigin, uint primitiveId)
+{
+    uint mode = (uint)round(mappingVariationParams.x);
+    if (mode == 0u) {
+        return 0u;
+    }
+
+    int3 quantizedOrigin = int3(round(objectOrigin * 100.0));
+    uint seed = HashTriPlanarU32(
+        asuint(quantizedOrigin.x) * 73856093u ^
+        asuint(quantizedOrigin.y) * 19349663u ^
+        asuint(quantizedOrigin.z) * 83492791u);
+    if (mode >= 2u) {
+        seed = HashTriPlanarU32(seed ^ ((primitiveId + 1u) * 0x9e3779b9u));
+    }
+    return seed;
+}
+
+float2 ComputeTriPlanarVariationOffset(float3 objectOrigin, float3 objectPos,
+                                       float3 worldNormal)
+{
+    if (mappingVariationParams.x < 0.5 || mappingVariationParams.y <= 1.0e-4) {
+        return float2(0.0, 0.0);
+    }
+
+    uint mode = (uint)round(mappingVariationParams.x);
+    int3 quantizedOrigin = int3(round(objectOrigin * 100.0));
+    uint seed = HashTriPlanarU32(
+        asuint(quantizedOrigin.x) * 73856093u ^
+        asuint(quantizedOrigin.y) * 19349663u ^
+        asuint(quantizedOrigin.z) * 83492791u);
+    if (mode >= 2u) {
+        float3 an = abs(worldNormal);
+        uint dominantAxis = (an.x >= an.y && an.x >= an.z) ? 0u :
+                            ((an.y >= an.z) ? 1u : 2u);
+        float planeValue = (dominantAxis == 0u) ? objectPos.x :
+                           ((dominantAxis == 1u) ? objectPos.y : objectPos.z);
+        int quantizedPlane = (int)round(planeValue * 100.0);
+        seed = HashTriPlanarU32(seed ^ ((dominantAxis + 1u) * 0x9e3779b9u) ^
+                                (asuint(quantizedPlane) * 0x85ebca6bu));
+    }
+    return (float2(HashTriPlanar01(seed ^ 0x68bc21ebu),
+                   HashTriPlanar01(seed ^ 0x02e5be93u)) * 2.0 - 1.0) *
+           mappingVariationParams.y;
+}
+
+float2 TriPlanarUV_X(float3 p, float3 n, float scale, float2 offset)
+{
+    float signX = (n.x >= 0.0) ? 1.0 : -1.0;
+    return (float2(-signX * p.z, p.y) + offset) * scale;
+}
+
+float2 TriPlanarUV_Y(float3 p, float3 n, float scale, float2 offset)
+{
+    float signY = (n.y >= 0.0) ? 1.0 : -1.0;
+    return (float2(p.x, -signY * p.z) + offset) * scale;
+}
+
+float2 TriPlanarUV_Z(float3 p, float3 n, float scale, float2 offset)
+{
+    float signZ = (n.z >= 0.0) ? 1.0 : -1.0;
+    return (float2(signZ * p.x, p.y) + offset) * scale;
+}
+
+float4 SampleTriPlanar(int texIndex, float3 worldPos, float3 worldNormal,
+                       float scale, float sharpness, float3 objectOrigin,
+                       float3 objectPos)
 {
     if (texIndex < 0) return float4(1,1,1,1);
+    float3 rotatedPos = RotateTriPlanarPosition(worldPos);
+    float2 variationOffset =
+        ComputeTriPlanarVariationOffset(objectOrigin, objectPos, worldNormal);
     float3 w = TriPlanarWeights(worldNormal, sharpness);
-    float4 sx = textures[texIndex].Sample(linearSampler, TriPlanarUV_X(worldPos, scale));
-    float4 sy = textures[texIndex].Sample(linearSampler, TriPlanarUV_Y(worldPos, scale));
-    float4 sz = textures[texIndex].Sample(linearSampler, TriPlanarUV_Z(worldPos, scale));
+    float4 sx = textures[texIndex].Sample(
+        linearSampler,
+        TriPlanarUV_X(rotatedPos, worldNormal, scale, variationOffset));
+    float4 sy = textures[texIndex].Sample(
+        linearSampler,
+        TriPlanarUV_Y(rotatedPos, worldNormal, scale, variationOffset));
+    float4 sz = textures[texIndex].Sample(
+        linearSampler,
+        TriPlanarUV_Z(rotatedPos, worldNormal, scale, variationOffset));
     return sx * w.x + sy * w.y + sz * w.z;
 }
 
@@ -165,15 +285,46 @@ float3 UnpackNormal(float4 n)
     return n.xyz * 2.0 - 1.0;
 }
 
-float3 SampleTriPlanarNormal(int texIndex, float3 worldPos, float3 worldNormal, float scale, float sharpness, float strength)
+float3 BlendTextureRgb(float3 sampleValue, float amount)
 {
-    if (texIndex < 0) return normalize(worldNormal);
+    return lerp(float3(1.0, 1.0, 1.0), sampleValue, saturate(amount));
+}
+
+float BlendTextureScalar(float sampleValue, float amount)
+{
+    return lerp(1.0, sampleValue, saturate(amount));
+}
+
+float3 BlendNormalSample(float3 tangentNormal, float amount)
+{
+    return normalize(lerp(float3(0.0, 0.0, 1.0), tangentNormal,
+                          saturate(amount)));
+}
+
+float3 SampleTriPlanarNormal(int texIndex, float3 worldPos, float3 worldNormal,
+                             float scale, float sharpness, float strength,
+                             float amount, float3 objectOrigin,
+                             float3 objectPos)
+{
+    if (texIndex < 0 || amount <= 0.0) return normalize(worldNormal);
     float3 Nw = normalize(worldNormal);
+    float3 rotatedPos = RotateTriPlanarPosition(worldPos);
+    float2 variationOffset =
+        ComputeTriPlanarVariationOffset(objectOrigin, objectPos, Nw);
     float3 w = TriPlanarWeights(Nw, sharpness);
 
-    float3 nx = UnpackNormal(textures[texIndex].Sample(linearSampler, TriPlanarUV_X(worldPos, scale)));
-    float3 ny = UnpackNormal(textures[texIndex].Sample(linearSampler, TriPlanarUV_Y(worldPos, scale)));
-    float3 nz = UnpackNormal(textures[texIndex].Sample(linearSampler, TriPlanarUV_Z(worldPos, scale)));
+    float3 nx = UnpackNormal(textures[texIndex].Sample(
+        linearSampler,
+        TriPlanarUV_X(rotatedPos, Nw, scale, variationOffset)));
+    float3 ny = UnpackNormal(textures[texIndex].Sample(
+        linearSampler,
+        TriPlanarUV_Y(rotatedPos, Nw, scale, variationOffset)));
+    float3 nz = UnpackNormal(textures[texIndex].Sample(
+        linearSampler,
+        TriPlanarUV_Z(rotatedPos, Nw, scale, variationOffset)));
+    nx = BlendNormalSample(nx, amount);
+    ny = BlendNormalSample(ny, amount);
+    nz = BlendNormalSample(nz, amount);
     nx.xy *= strength; ny.xy *= strength; nz.xy *= strength;
     nx = normalize(nx); ny = normalize(ny); nz = normalize(nz);
 
@@ -181,19 +332,22 @@ float3 SampleTriPlanarNormal(int texIndex, float3 worldPos, float3 worldNormal, 
     float sy = (Nw.y >= 0.0) ? 1.0 : -1.0;
     float sz = (Nw.z >= 0.0) ? 1.0 : -1.0;
 
-    float3 Tx = float3(0,1,0);
-    float3 Bx = float3(0,0,sx);
-    float3 Nx = float3(sx,0,0);
+    float3 axisX = RotateTriPlanarAxis(float3(1,0,0));
+    float3 axisZ = RotateTriPlanarAxis(float3(0,0,1));
+
+    float3 Tx = -axisZ * sx;
+    float3 Bx = float3(0,1,0);
+    float3 Nx = axisX * sx;
     float3x3 TBNx = float3x3(Tx, Bx, Nx);
 
-    float3 Ty = float3(0,0,1);
-    float3 By = float3(sy,0,0);
+    float3 Ty = axisX;
+    float3 By = -axisZ * sy;
     float3 Ny = float3(0,sy,0);
     float3x3 TBNy = float3x3(Ty, By, Ny);
 
-    float3 Tz = float3(1,0,0);
-    float3 Bz = float3(0,sz,0);
-    float3 Nz = float3(0,0,sz);
+    float3 Tz = axisX * sz;
+    float3 Bz = float3(0,1,0);
+    float3 Nz = axisZ * sz;
     float3x3 TBNz = float3x3(Tz, Bz, Nz);
 
     float3 wx = normalize(mul(nx, TBNx));
@@ -223,6 +377,7 @@ struct VSInputMesh {
 struct PSInputMesh {
     float4 position : SV_POSITION;
     float3 worldPos : POSITION0;
+    float3 objectPos : POSITION1;
     float3 normal : NORMAL;
     float4 tangent : TANGENT0;
     float2 uv : TEXCOORD0;
@@ -287,6 +442,7 @@ PSInputMesh VSMainMesh(VSInputMesh input)
     );
 
     o.worldPos = outWorldPos;
+    o.objectPos = input.position;
     o.normal = mul((float3x3)world, input.normal);
     o.tangent = float4(mul((float3x3)world, input.tangent.xyz), input.tangent.w);
     o.uv = input.uv;
@@ -339,6 +495,7 @@ PSInputMesh VSMainGrass(VSInputMesh input, uint instanceId : SV_InstanceID)
     );
 
     o.worldPos = outWorldPos;
+    o.objectPos = input.position;
     o.normal = worldNormal;
     o.tangent = float4(worldTangent, input.tangent.w);
     o.uv = input.uv;
@@ -414,11 +571,14 @@ float2 EnvBRDFApprox(float3 F0, float roughness, float NdotV)
 }
 
 // Extract normal from normal map and transform to world space
-float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent, int normalTexIndex)
+float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent,
+                        int normalTexIndex, float amount)
 {
-    if (normalTexIndex < 0 || length(worldTangent.xyz) < 0.001) return normalize(worldNormal);
+    if (normalTexIndex < 0 || amount <= 0.0 ||
+        length(worldTangent.xyz) < 0.001) return normalize(worldNormal);
     
     float3 tangentNormal = textures[normalTexIndex].Sample(linearSampler, uv).xyz * 2.0 - 1.0;
+    tangentNormal = BlendNormalSample(tangentNormal, amount);
     
     float3 N = normalize(worldNormal);
     float3 T = normalize(worldTangent.xyz);
@@ -494,7 +654,9 @@ PSOutput PSMainMesh(PSInputMesh input)
     // --- Texture Lookups ---
     float2 uv = input.uv * uvTransform.xy + uvTransform.zw;
     float3 worldPos = input.worldPos;
+    float3 objectPos = input.objectPos;
     float3 worldNormal = normalize(input.normal);
+    float3 objectOrigin = mul(world, float4(0.0, 0.0, 0.0, 1.0)).xyz;
 
     bool triPlanar = (triPlanarParams.x > 0.5);
     float triScale = max(triPlanarParams.y, 1e-6);
@@ -504,10 +666,10 @@ PSOutput PSMainMesh(PSInputMesh input)
     float3 BaseColor = diffuseColor.rgb;
     float alpha = diffuseColor.a;
     if (textureIndices.x >= 0) {
-        float4 diffSample = triPlanar ? SampleTriPlanar(textureIndices.x, worldPos, worldNormal, triScale, triSharp)
+        float4 diffSample = triPlanar ? SampleTriPlanar(textureIndices.x, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos)
                                       : textures[textureIndices.x].Sample(linearSampler, uv);
-        BaseColor *= sRGBToLinear(diffSample.rgb);
-        alpha *= diffSample.a;
+        BaseColor *= BlendTextureRgb(sRGBToLinear(diffSample.rgb), textureWeight0.x);
+        alpha *= BlendTextureScalar(diffSample.a, textureWeight0.x);
     }
 
     float alphaCutoff = extraParams.y;
@@ -524,15 +686,14 @@ PSOutput PSMainMesh(PSInputMesh input)
     // Metal/Roughness Logic: factor * texture
     // G = Roughness, B = Metalness
     if (emissiveAndPad.z >= 0) {
-        float4 mrSample = triPlanar ? SampleTriPlanar(emissiveAndPad.z, worldPos, worldNormal, triScale, triSharp)
+        float4 mrSample = triPlanar ? SampleTriPlanar(emissiveAndPad.z, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos)
                                     : textures[emissiveAndPad.z].Sample(linearSampler, uv);
-        
-        if (emissiveAndPad.w > 0) {
-            roughness *= max(1.0 - mrSample.g, 0.0);
-        } else {
-            roughness *= mrSample.g;
-        }
-        metalness *= mrSample.b;
+
+        float roughnessFactor = (emissiveAndPad.w > 0)
+                                    ? max(1.0 - mrSample.g, 0.0)
+                                    : mrSample.g;
+        roughness *= BlendTextureScalar(roughnessFactor, textureWeight0.y);
+        metalness *= BlendTextureScalar(mrSample.b, textureWeight0.y);
     }
 
     // OpenPBR subset: dielectric F0 from IOR scaled by specular weight.
@@ -545,22 +706,23 @@ PSOutput PSMainMesh(PSInputMesh input)
     float3 DiffuseAlbedo = BaseColor * (1.0 - metalness) * (1.0 - transmission);
     
     // Normal
-    float3 N = triPlanar ? SampleTriPlanarNormal(textureIndices.z, worldPos, worldNormal, triScale, triSharp, triNormStrength)
-                         : GetNormalFromMap(uv, worldNormal, input.tangent, textureIndices.z);
+    float3 N = triPlanar ? SampleTriPlanarNormal(textureIndices.z, worldPos, worldNormal, triScale, triSharp, triNormStrength, textureWeight1.x, objectOrigin, objectPos)
+                         : GetNormalFromMap(uv, worldNormal, input.tangent, textureIndices.z, textureWeight1.x);
 
     // Emissive with user-defined intensity
     float3 emiss = emissiveColor.rgb * extraParams.x;
     if (emissiveAndPad.x >= 0) {
-        float3 e = triPlanar ? SampleTriPlanar(emissiveAndPad.x, worldPos, worldNormal, triScale, triSharp).rgb
+        float3 e = triPlanar ? SampleTriPlanar(emissiveAndPad.x, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos).rgb
                              : textures[emissiveAndPad.x].Sample(linearSampler, uv).rgb;
-        emiss *= sRGBToLinear(e);
+        emiss *= BlendTextureRgb(sRGBToLinear(e), textureWeight1.z);
     } 
 
     // Occlusion
     float ao = 1.0;
     if (emissiveAndPad.y >= 0) {
-        ao = triPlanar ? SampleTriPlanar(emissiveAndPad.y, worldPos, worldNormal, triScale, triSharp).r
-                       : textures[emissiveAndPad.y].Sample(linearSampler, uv).r;
+        float aoSample = triPlanar ? SampleTriPlanar(emissiveAndPad.y, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos).r
+                                   : textures[emissiveAndPad.y].Sample(linearSampler, uv).r;
+        ao = BlendTextureScalar(aoSample, textureWeight1.y);
     }
 
     // Lighting
@@ -588,7 +750,20 @@ PSOutput PSMainMesh(PSInputMesh input)
         if (!triPlanar && textureIndices.x >= 0) {
             float2 emitterUv = input.emitterUv * uvTransform.xy + uvTransform.zw;
             float3 groundTint =
-                sRGBToLinear(textures[textureIndices.x].Sample(linearSampler, emitterUv).rgb);
+                BlendTextureRgb(
+                    sRGBToLinear(textures[textureIndices.x].Sample(linearSampler, emitterUv).rgb),
+                    textureWeight0.x);
+            float groundInfluence = lerp(0.70, 0.18, tip);
+            BaseColor = lerp(BaseColor, groundTint, groundInfluence);
+        } else if (triPlanar && textureIndices.x >= 0) {
+            float3 groundTint =
+                BlendTextureRgb(
+                    sRGBToLinear(SampleTriPlanar(textureIndices.x, worldPos,
+                                                worldNormal, triScale,
+                                                triSharp, objectOrigin,
+                                                objectPos)
+                                     .rgb),
+                    textureWeight0.x);
             float groundInfluence = lerp(0.70, 0.18, tip);
             BaseColor = lerp(BaseColor, groundTint, groundInfluence);
         }

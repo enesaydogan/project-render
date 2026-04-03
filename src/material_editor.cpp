@@ -388,6 +388,13 @@ void Draw(HWND hwnd, bool &visible) {
           int mr = mat.metalRoughTexture;
           int mt = mat.metalnessTexture;
           int rg = mat.roughnessGlossTexture;
+          float da = mat.diffuseTextureAmount;
+          float na = mat.normalTextureAmount;
+          float ea = mat.emissiveTextureAmount;
+          float oa = mat.occlusionTextureAmount;
+          float mra = mat.metalRoughTextureAmount;
+          float mta = mat.metalnessTextureAmount;
+          float rga = mat.roughnessGlossTextureAmount;
 
           mat = def;
           strncpy_s(mat.name, nameBuf, _TRUNCATE);
@@ -399,6 +406,13 @@ void Draw(HWND hwnd, bool &visible) {
             mat.metalRoughTexture = mr;
             mat.metalnessTexture = mt;
             mat.roughnessGlossTexture = rg;
+            mat.diffuseTextureAmount = da;
+            mat.normalTextureAmount = na;
+            mat.emissiveTextureAmount = ea;
+            mat.occlusionTextureAmount = oa;
+            mat.metalRoughTextureAmount = mra;
+            mat.metalnessTextureAmount = mta;
+            mat.roughnessGlossTextureAmount = rga;
           }
         };
 
@@ -592,8 +606,12 @@ void Draw(HWND hwnd, bool &visible) {
           }
 
           if (ImGui::BeginTabItem("Textures")) {
-            auto DrawTextureSlot = [&](const char *label, int &idx) {
+            auto DrawTextureSlot = [&](const char *label,
+                                       MaterialSystem::TextureSlot slot) {
               ImGui::PushID(label);
+
+              int idx = MaterialSystem::GetTextureIndex(mat, slot);
+              float amount = MaterialSystem::GetTextureAmount(mat, slot);
 
               static std::vector<std::string> names;
               static std::vector<const char *> cstr;
@@ -664,16 +682,29 @@ void Draw(HWND hwnd, bool &visible) {
                     comboIdx - 1 < (int)visibleTextureIndices.size()) {
                   newIdx = visibleTextureIndices[(size_t)comboIdx - 1];
                 }
-                idx = newIdx;
+                MaterialSystem::SetTextureIndex(mat, slot, newIdx);
+                DxrRenderer::ResetAccumulation();
+                idx = MaterialSystem::GetTextureIndex(mat, slot);
+              }
+
+              ImGui::SameLine();
+              ImGui::SetNextItemWidth(180.0f);
+              const bool hasTexture = idx >= 0;
+              ImGui::BeginDisabled(!hasTexture);
+              if (ImGui::SliderFloat("##amount", &amount, 0.0f, 1.0f,
+                                     "Amount %.2f")) {
+                MaterialSystem::SetTextureAmount(mat, slot, amount);
                 DxrRenderer::ResetAccumulation();
               }
+              ImGui::EndDisabled();
 
               // Buttons on their own line to avoid horizontally wide layout
               ImGui::NewLine();
               ImGui::SameLine(120 + thumbSize + 10);
               if (ImGui::Button("Clear")) {
-                idx = -1;
+                MaterialSystem::SetTextureIndex(mat, slot, -1);
                 DxrRenderer::ResetAccumulation();
+                idx = -1;
               }
               ImGui::SameLine();
               if (ImGui::Button("Load...")) {
@@ -683,8 +714,9 @@ void Draw(HWND hwnd, bool &visible) {
                   int newTex = Scene::AddTextureFromFile(
                       WStringToUtf8Local(chosen), isHDR);
                   if (newTex >= 0) {
-                    idx = newTex;
+                    MaterialSystem::SetTextureIndex(mat, slot, newTex);
                     DxrRenderer::ResetAccumulation();
+                    idx = newTex;
                   }
                 }
               }
@@ -700,7 +732,7 @@ void Draw(HWND hwnd, bool &visible) {
                     tmp = -1;
                   if (tmp >= 0 && !g_loadedTextures[tmp].resource)
                     tmp = -1;
-                  idx = tmp;
+                  MaterialSystem::SetTextureIndex(mat, slot, tmp);
                   DxrRenderer::ResetAccumulation();
                 }
                 ImGui::TreePop();
@@ -709,16 +741,17 @@ void Draw(HWND hwnd, bool &visible) {
               ImGui::PopID();
             };
 
-            DrawTextureSlot("Albedo", mat.diffuseTexture);
+            DrawTextureSlot("Albedo", MaterialSystem::TextureSlot::BaseColor);
             DrawTextureSlot("Packed Metal/Rough (Legacy)",
-                            mat.metalRoughTexture);
+                            MaterialSystem::TextureSlot::PackedSurface);
             if (!IsReflectionGlossinessWorkflow(mat))
-              DrawTextureSlot("Metalness", mat.metalnessTexture);
+              DrawTextureSlot("Metalness",
+                              MaterialSystem::TextureSlot::Metalness);
             DrawTextureSlot(GetRoughnessTextureLabel(mat),
-                            mat.roughnessGlossTexture);
-            DrawTextureSlot("Normal", mat.normalTexture);
-            DrawTextureSlot("Occlusion", mat.occlusionTexture);
-            DrawTextureSlot("Emissive", mat.emissiveTexture);
+                            MaterialSystem::TextureSlot::RoughnessOrGlossiness);
+            DrawTextureSlot("Normal", MaterialSystem::TextureSlot::Normal);
+            DrawTextureSlot("Occlusion", MaterialSystem::TextureSlot::Occlusion);
+            DrawTextureSlot("Emissive", MaterialSystem::TextureSlot::Emissive);
 
             ImGui::EndTabItem();
           }
@@ -745,6 +778,24 @@ void Draw(HWND hwnd, bool &visible) {
                                    &mat.triPlanarNormalStrength, 0.0f, 4.0f,
                                    "%.2f"))
               DxrRenderer::ResetAccumulation();
+            if (ImGui::SliderFloat("Rotation (deg)",
+                                   &mat.triPlanarRotationDegrees, 0.0f,
+                                   360.0f, "%.1f"))
+              DxrRenderer::ResetAccumulation();
+            const char *variationModes[] = {"Off", "Per Mesh", "Per Surface"};
+            int variationMode = static_cast<int>(mat.triPlanarVariationMode);
+            ImGui::BeginDisabled(!tri);
+            if (ImGui::Combo("Variation", &variationMode, variationModes,
+                             IM_ARRAYSIZE(variationModes))) {
+              mat.triPlanarVariationMode =
+                  static_cast<uint32_t>((std::clamp)(variationMode, 0, 2));
+              DxrRenderer::ResetAccumulation();
+            }
+            if (ImGui::SliderFloat("Variation Offset",
+                                   &mat.triPlanarVariationOffset, 0.0f, 1.0f,
+                                   "%.2f"))
+              DxrRenderer::ResetAccumulation();
+            ImGui::EndDisabled();
 
             ImGui::EndTabItem();
           }

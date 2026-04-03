@@ -58,6 +58,9 @@ nlohmann::json BuildMaterialsMetadata(
         {"ts", mat.triPlanarScale},
         {"ths", mat.triPlanarSharpness},
         {"tns", mat.triPlanarNormalStrength},
+        {"trd", mat.triPlanarRotationDegrees},
+        {"tvm", mat.triPlanarVariationMode},
+        {"tvo", mat.triPlanarVariationOffset},
         {"wf", mat.workflow},
         {"txd", MapSavedTextureIndex(textureSaveRemap, mat.diffuseTexture)},
         {"txn", MapSavedTextureIndex(textureSaveRemap, mat.normalTexture)},
@@ -69,6 +72,13 @@ nlohmann::json BuildMaterialsMetadata(
          MapSavedTextureIndex(textureSaveRemap, mat.metalnessTexture)},
         {"txrg",
          MapSavedTextureIndex(textureSaveRemap, mat.roughnessGlossTexture)},
+        {"tad", mat.diffuseTextureAmount},
+        {"tamr", mat.metalRoughTextureAmount},
+        {"tamt", mat.metalnessTextureAmount},
+        {"targ", mat.roughnessGlossTextureAmount},
+        {"tan", mat.normalTextureAmount},
+        {"tao", mat.occlusionTextureAmount},
+        {"tae", mat.emissiveTextureAmount},
         {"ds", mat.doubleSided},
         {"am", mat.alphaMode},
         {"gr", mat.isGrass},
@@ -164,6 +174,12 @@ void RestoreMaterialsFromMetadata(const nlohmann::json &materialsJson,
         savedMaterial.value("ths", material.triPlanarSharpness);
     material.triPlanarNormalStrength =
         savedMaterial.value("tns", material.triPlanarNormalStrength);
+    material.triPlanarRotationDegrees =
+      savedMaterial.value("trd", material.triPlanarRotationDegrees);
+    material.triPlanarVariationMode = savedMaterial.value(
+      "tvm", material.triPlanarVariationMode);
+    material.triPlanarVariationOffset =
+      savedMaterial.value("tvo", material.triPlanarVariationOffset);
     material.isGrass = savedMaterial.value("gr", material.isGrass);
     if (savedMaterial.contains("gc")) {
       for (int channel = 0; channel < 3; ++channel) {
@@ -199,6 +215,20 @@ void RestoreMaterialsFromMetadata(const nlohmann::json &materialsJson,
     restoreTextureIndex("txm", &material.metalRoughTexture);
     restoreTextureIndex("txmt", &material.metalnessTexture);
     restoreTextureIndex("txrg", &material.roughnessGlossTexture);
+    material.diffuseTextureAmount =
+      savedMaterial.value("tad", material.diffuseTextureAmount);
+    material.metalRoughTextureAmount =
+      savedMaterial.value("tamr", material.metalRoughTextureAmount);
+    material.metalnessTextureAmount =
+      savedMaterial.value("tamt", material.metalnessTextureAmount);
+    material.roughnessGlossTextureAmount =
+      savedMaterial.value("targ", material.roughnessGlossTextureAmount);
+    material.normalTextureAmount =
+      savedMaterial.value("tan", material.normalTextureAmount);
+    material.occlusionTextureAmount =
+      savedMaterial.value("tao", material.occlusionTextureAmount);
+    material.emissiveTextureAmount =
+      savedMaterial.value("tae", material.emissiveTextureAmount);
 
     material.runtimeMetalRoughTexture = -1;
     material.doubleSided = savedMaterial.value("ds", material.doubleSided);

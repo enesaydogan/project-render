@@ -1894,6 +1894,13 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
         uiChanged = true;
       }
 
+      if (ImGui::SliderFloat("Tri-Planar Scene Rotation (deg)",
+                             &g_cameraData.triPlanarWorldRotationDegrees,
+                             0.0f, 360.0f, "%.1f")) {
+        UpdateCameraCB();
+        uiChanged = true;
+      }
+
       // analytic sun intensity. For file IBL, this drives the extracted
       // analytic sun created from the HDR; for Prague sky it drives the
       // procedural sun.

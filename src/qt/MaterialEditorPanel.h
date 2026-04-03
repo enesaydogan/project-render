@@ -47,6 +47,7 @@ private:
         QLabel *previewLabel = nullptr;
         QLabel *label = nullptr;
         QComboBox *combo = nullptr;
+        SliderControl *amount = nullptr;
         QPushButton *clearButton = nullptr;
         QPushButton *loadButton = nullptr;
         QPushButton *editButton = nullptr;
@@ -147,6 +148,9 @@ private:
     SliderControl *m_triPlanarScale = nullptr;
     SliderControl *m_triPlanarSharpness = nullptr;
     SliderControl *m_triPlanarNormalStrength = nullptr;
+    SliderControl *m_triPlanarRotationDegrees = nullptr;
+    QComboBox *m_triPlanarVariationMode = nullptr;
+    SliderControl *m_triPlanarVariationOffset = nullptr;
 
     // Emission tab
     QPushButton *m_emissiveColorButton = nullptr;

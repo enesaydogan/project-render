@@ -51,9 +51,12 @@ struct Texture {
 };
 
 struct Material {
-  static constexpr uint32_t kSchemaVersionOpenPbrSubset = 4;
+  static constexpr uint32_t kSchemaVersionOpenPbrSubset = 7;
   static constexpr uint32_t kWorkflowMetalRoughness = 0;
   static constexpr uint32_t kWorkflowReflectionGlossiness = 1;
+  static constexpr uint32_t kTriPlanarVariationOff = 0;
+  static constexpr uint32_t kTriPlanarVariationPerMesh = 1;
+  static constexpr uint32_t kTriPlanarVariationPerSurface = 2;
 
   char name[64] = "Material";
   float diffuseColor[4] = {1, 1, 1, 1};
@@ -76,6 +79,10 @@ struct Material {
   float triPlanarSharpness = 4.0f; // blending exponent (higher = sharper)
   float triPlanarNormalStrength =
       1.0f; // normal intensity for tri-planar normal maps
+  float triPlanarRotationDegrees = 0.0f;
+  uint32_t triPlanarVariationMode = kTriPlanarVariationOff;
+  float triPlanarVariationOffset =
+      0.0f; // random offset in tile units for tri-planar projection
 
   int diffuseTexture = -1; // Was baseColor
   int normalTexture = -1;
@@ -85,6 +92,13 @@ struct Material {
   int runtimeMetalRoughTexture = -1; // Internal derived packed runtime map.
   int metalnessTexture = -1;
   int roughnessGlossTexture = -1;
+  float diffuseTextureAmount = 1.0f;
+  float metalRoughTextureAmount = 1.0f;
+  float metalnessTextureAmount = 1.0f;
+  float roughnessGlossTextureAmount = 1.0f;
+  float normalTextureAmount = 1.0f;
+  float occlusionTextureAmount = 1.0f;
+  float emissiveTextureAmount = 1.0f;
 
   bool doubleSided = false;
   std::string alphaMode = "OPAQUE";

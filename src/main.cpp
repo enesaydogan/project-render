@@ -1071,12 +1071,12 @@ bool InitApplication(HWND hwnd) {
   rootParameters[2].Descriptor.ShaderRegister = 1;
   rootParameters[2].Descriptor.RegisterSpace = 0;
   rootParameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-  // b2 - world matrix as root constants for vertex shader
+  // b2 - world matrix as root constants for vertex and pixel shaders
   rootParameters[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
   rootParameters[3].Constants.ShaderRegister = 2;
   rootParameters[3].Constants.RegisterSpace = 0;
   rootParameters[3].Constants.Num32BitValues = 16;
-  rootParameters[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+  rootParameters[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
   // t0, space1 - Environment Map Descriptor Table (Texture2D)
   static D3D12_DESCRIPTOR_RANGE envMapRange = {};

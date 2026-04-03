@@ -74,6 +74,17 @@ void InitializeRasterConstants(RuntimeRasterMaterialConstants *outConstants) {
   outConstants->emissiveAndPad[1] = -1;
   outConstants->emissiveAndPad[2] = -1;
   outConstants->emissiveAndPad[3] = 0;
+  outConstants->mappingVariationParams[0] =
+      static_cast<float>(Asset::Material::kTriPlanarVariationOff);
+  outConstants->mappingVariationParams[1] = 0.0f;
+  outConstants->mappingVariationParams[2] = 0.0f;
+  outConstants->mappingVariationParams[3] = 0.0f;
+  for (float &textureWeight : outConstants->textureWeight0) {
+    textureWeight = 1.0f;
+  }
+  for (float &textureWeight : outConstants->textureWeight1) {
+    textureWeight = 1.0f;
+  }
 }
 
 } // namespace
@@ -113,6 +124,9 @@ void ApplyPreset(Asset::Material &m, int presetIndex) {
   m.triPlanarScale = 1.0f;
   m.triPlanarSharpness = 4.0f;
   m.triPlanarNormalStrength = 1.0f;
+  m.triPlanarRotationDegrees = 0.0f;
+  m.triPlanarVariationMode = Asset::Material::kTriPlanarVariationOff;
+  m.triPlanarVariationOffset = 0.0f;
   m.transmissionColor[0] = 1.0f;
   m.transmissionColor[1] = 1.0f;
   m.transmissionColor[2] = 1.0f;
@@ -238,6 +252,26 @@ int GetTextureIndex(const Asset::Material &material, TextureSlot slot) {
   return -1;
 }
 
+float GetTextureAmount(const Asset::Material &material, TextureSlot slot) {
+  switch (slot) {
+  case TextureSlot::BaseColor:
+    return material.diffuseTextureAmount;
+  case TextureSlot::PackedSurface:
+    return material.metalRoughTextureAmount;
+  case TextureSlot::Metalness:
+    return material.metalnessTextureAmount;
+  case TextureSlot::RoughnessOrGlossiness:
+    return material.roughnessGlossTextureAmount;
+  case TextureSlot::Normal:
+    return material.normalTextureAmount;
+  case TextureSlot::Occlusion:
+    return material.occlusionTextureAmount;
+  case TextureSlot::Emissive:
+    return material.emissiveTextureAmount;
+  }
+  return 1.0f;
+}
+
 void SetTextureIndex(Asset::Material &material, TextureSlot slot,
                      int textureIndex) {
   switch (slot) {
@@ -261,6 +295,34 @@ void SetTextureIndex(Asset::Material &material, TextureSlot slot,
     break;
   case TextureSlot::Emissive:
     material.emissiveTexture = textureIndex;
+    break;
+  }
+}
+
+void SetTextureAmount(Asset::Material &material, TextureSlot slot,
+                      float textureAmount) {
+  const float clampedAmount = (std::clamp)(textureAmount, 0.0f, 1.0f);
+  switch (slot) {
+  case TextureSlot::BaseColor:
+    material.diffuseTextureAmount = clampedAmount;
+    break;
+  case TextureSlot::PackedSurface:
+    material.metalRoughTextureAmount = clampedAmount;
+    break;
+  case TextureSlot::Metalness:
+    material.metalnessTextureAmount = clampedAmount;
+    break;
+  case TextureSlot::RoughnessOrGlossiness:
+    material.roughnessGlossTextureAmount = clampedAmount;
+    break;
+  case TextureSlot::Normal:
+    material.normalTextureAmount = clampedAmount;
+    break;
+  case TextureSlot::Occlusion:
+    material.occlusionTextureAmount = clampedAmount;
+    break;
+  case TextureSlot::Emissive:
+    material.emissiveTextureAmount = clampedAmount;
     break;
   }
 }
@@ -294,28 +356,37 @@ bool BuildDerivedPackedSurfaceTexture(
     return false;
   }
 
-  const uint8_t scalarMetalness =
-      UsesReflectionGlossiness(material) ? 0 : FloatToByte(material.metalness);
-  const uint8_t scalarRoughness = FloatToByte(material.roughness);
-
   std::vector<uint8_t> packed(static_cast<size_t>(width) * height * 4, 255);
   for (uint32_t y = 0; y < height; ++y) {
     for (uint32_t x = 0; x < width; ++x) {
       const size_t base = (static_cast<size_t>(y) * width + x) * 4;
 
-      uint8_t metalness = scalarMetalness;
+      uint8_t metalness = 255;
       if (!UsesReflectionGlossiness(material) && metalnessTexture) {
-        metalness =
-            SampleTextureMono8(*metalnessTexture, x, y, width, height);
+        const float sampledMetalness =
+            static_cast<float>(SampleTextureMono8(*metalnessTexture, x, y,
+                                                  width, height)) /
+            255.0f;
+        metalness = FloatToByte((std::lerp)(1.0f, sampledMetalness,
+                                            (std::clamp)(
+                                                material.metalnessTextureAmount,
+                                                0.0f, 1.0f)));
       }
 
-      uint8_t roughness = scalarRoughness;
+      uint8_t roughness = 255;
       if (roughnessOrGlossinessTexture) {
-        roughness = SampleTextureMono8(*roughnessOrGlossinessTexture, x, y,
-                                       width, height);
+        float sampledMicrosurface =
+            static_cast<float>(SampleTextureMono8(*roughnessOrGlossinessTexture,
+                                                  x, y, width, height)) /
+            255.0f;
         if (UsesReflectionGlossiness(material)) {
-          roughness = static_cast<uint8_t>(255u - roughness);
+          sampledMicrosurface = 1.0f - sampledMicrosurface;
         }
+        roughness = FloatToByte((std::lerp)(1.0f, sampledMicrosurface,
+                                            (std::clamp)(
+                                                material
+                                                    .roughnessGlossTextureAmount,
+                                                0.0f, 1.0f)));
       }
 
       packed[base + 0] = 255;
@@ -376,6 +447,12 @@ int GetEffectivePackedSurfaceTextureIndex(const Asset::Material &material) {
   return material.runtimeMetalRoughTexture >= 0
              ? material.runtimeMetalRoughTexture
              : material.metalRoughTexture;
+}
+
+float GetEffectivePackedSurfaceTextureAmount(const Asset::Material &material) {
+  return material.runtimeMetalRoughTexture >= 0
+             ? 1.0f
+             : (std::clamp)(material.metalRoughTextureAmount, 0.0f, 1.0f);
 }
 
 uint32_t PackTexturePair(int lowTextureIndex, int highTextureIndex) {
@@ -440,6 +517,14 @@ void BuildRuntimeDxrMaterialData(const Asset::Material &material,
   outExtra->triPlanarParams[1] = material.triPlanarScale;
   outExtra->triPlanarParams[2] = material.triPlanarSharpness;
   outExtra->triPlanarParams[3] = material.triPlanarNormalStrength;
+  outExtra->mappingVariationParams[0] = static_cast<float>(
+      (std::clamp)(material.triPlanarVariationMode,
+                   Asset::Material::kTriPlanarVariationOff,
+                   Asset::Material::kTriPlanarVariationPerSurface));
+  outExtra->mappingVariationParams[1] =
+      (std::clamp)(material.triPlanarVariationOffset, 0.0f, 1.0f);
+  outExtra->mappingVariationParams[2] = material.triPlanarRotationDegrees;
+  outExtra->mappingVariationParams[3] = 0.0f;
 
   outExtra->shadingParams[0] = (std::max)(0.0f, material.emissiveIntensity);
   outExtra->shadingParams[1] =
@@ -454,6 +539,21 @@ void BuildRuntimeDxrMaterialData(const Asset::Material &material,
   outExtra->transmissionColor[2] =
       (std::clamp)(material.transmissionColor[2], 0.0f, 1.0f);
   outExtra->transmissionColor[3] = 1.0f;
+
+    outExtra->textureWeight0[0] =
+      (std::clamp)(material.diffuseTextureAmount, 0.0f, 1.0f);
+    outExtra->textureWeight0[1] = GetEffectivePackedSurfaceTextureAmount(material);
+    outExtra->textureWeight0[2] =
+      (std::clamp)(material.metalnessTextureAmount, 0.0f, 1.0f);
+    outExtra->textureWeight0[3] =
+      (std::clamp)(material.roughnessGlossTextureAmount, 0.0f, 1.0f);
+    outExtra->textureWeight1[0] =
+      (std::clamp)(material.normalTextureAmount, 0.0f, 1.0f);
+    outExtra->textureWeight1[1] =
+      (std::clamp)(material.occlusionTextureAmount, 0.0f, 1.0f);
+    outExtra->textureWeight1[2] =
+      (std::clamp)(material.emissiveTextureAmount, 0.0f, 1.0f);
+    outExtra->textureWeight1[3] = 0.0f;
 }
 
 void BuildRuntimeRasterMaterialConstants(
@@ -514,6 +614,30 @@ void BuildRuntimeRasterMaterialConstants(
   outConstants->triPlanarParams[1] = material.triPlanarScale;
   outConstants->triPlanarParams[2] = material.triPlanarSharpness;
   outConstants->triPlanarParams[3] = material.triPlanarNormalStrength;
+  outConstants->mappingVariationParams[0] = static_cast<float>(
+      (std::clamp)(material.triPlanarVariationMode,
+                   Asset::Material::kTriPlanarVariationOff,
+                   Asset::Material::kTriPlanarVariationPerSurface));
+  outConstants->mappingVariationParams[1] =
+      (std::clamp)(material.triPlanarVariationOffset, 0.0f, 1.0f);
+  outConstants->mappingVariationParams[2] = material.triPlanarRotationDegrees;
+  outConstants->mappingVariationParams[3] = 0.0f;
+
+  outConstants->textureWeight0[0] =
+      (std::clamp)(material.diffuseTextureAmount, 0.0f, 1.0f);
+  outConstants->textureWeight0[1] =
+      GetEffectivePackedSurfaceTextureAmount(material);
+  outConstants->textureWeight0[2] =
+      (std::clamp)(material.metalnessTextureAmount, 0.0f, 1.0f);
+  outConstants->textureWeight0[3] =
+      (std::clamp)(material.roughnessGlossTextureAmount, 0.0f, 1.0f);
+  outConstants->textureWeight1[0] =
+      (std::clamp)(material.normalTextureAmount, 0.0f, 1.0f);
+  outConstants->textureWeight1[1] =
+      (std::clamp)(material.occlusionTextureAmount, 0.0f, 1.0f);
+  outConstants->textureWeight1[2] =
+      (std::clamp)(material.emissiveTextureAmount, 0.0f, 1.0f);
+  outConstants->textureWeight1[3] = 0.0f;
 }
 
 } // namespace MaterialSystem
