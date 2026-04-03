@@ -21,10 +21,12 @@
 #include <QFrame>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QImage>
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QPixmap>
 #include <QPushButton>
 #include <QStringList>
 #include <QTabWidget>
@@ -135,6 +137,32 @@ const char *AlphaModeFromIndex(int index)
     case 2: return "BLEND";
     default: return "OPAQUE";
     }
+}
+
+bool IsReflectionGlossinessWorkflow(const Asset::Material &material)
+{
+    return material.workflow == Asset::Material::kWorkflowReflectionGlossiness;
+}
+
+QString RoughnessLabelForMaterial(const Asset::Material &material)
+{
+    return IsReflectionGlossinessWorkflow(material)
+               ? QObject::tr("Glossiness")
+               : QObject::tr("Roughness");
+}
+
+QString SecondaryLabelForMaterial(const Asset::Material &material)
+{
+    return IsReflectionGlossinessWorkflow(material)
+               ? QObject::tr("Reflection Weight")
+               : QObject::tr("Metalness");
+}
+
+QString RoughnessTextureTitleForMaterial(const Asset::Material &material)
+{
+    return IsReflectionGlossinessWorkflow(material)
+               ? QObject::tr("Glossiness")
+               : QObject::tr("Roughness");
 }
 
 bool MaterialAffectsRtStructure(const Asset::Material &material)
@@ -400,10 +428,18 @@ void MaterialEditorPanel::createUi()
     auto *surfaceForm = new QFormLayout(surfaceTab);
     m_baseColorButton = new QPushButton(tr("Pick"), surfaceTab);
     surfaceForm->addRow(tr("Base Color"), m_baseColorButton);
+    m_workflowCombo = new QComboBox(surfaceTab);
+    m_workflowCombo->addItems({
+        tr("Metalness / Roughness"),
+        tr("Reflection / Glossiness"),
+    });
+    surfaceForm->addRow(tr("Workflow"), m_workflowCombo);
+    m_roughnessSurfaceLabel = new QLabel(tr("Roughness"), surfaceTab);
     m_roughness = CreateSliderControl(0.0, 1.0, 0.01, 3);
-    surfaceForm->addRow(tr("Roughness"), m_roughness);
+    surfaceForm->addRow(m_roughnessSurfaceLabel, m_roughness);
+    m_secondarySurfaceLabel = new QLabel(tr("Metalness"), surfaceTab);
     m_metalness = CreateSliderControl(0.0, 1.0, 0.01, 3);
-    surfaceForm->addRow(tr("Metalness"), m_metalness);
+    surfaceForm->addRow(m_secondarySurfaceLabel, m_metalness);
     m_specularWeight = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(tr("Specular Weight"), m_specularWeight);
     m_ior = CreateSliderControl(0.01, 10.0, 0.01, 3);
@@ -459,6 +495,14 @@ void MaterialEditorPanel::createUi()
     auto createTextureSlot = [this, texturesLayout](TextureSlot slot, const QString &title) {
         auto *group = new QGroupBox(title, this);
         auto *groupLayout = new QVBoxLayout(group);
+
+        auto *previewLabel = new QLabel(tr("No Preview"), group);
+        previewLabel->setAlignment(Qt::AlignCenter);
+        previewLabel->setMinimumSize(84, 84);
+        previewLabel->setFrameShape(QFrame::StyledPanel);
+        previewLabel->setStyleSheet(QStringLiteral("color:#777;background:#1f1f1f;"));
+        groupLayout->addWidget(previewLabel);
+
         auto *combo = new QComboBox(group);
         combo->setSizeAdjustPolicy(QComboBox::AdjustToContentsOnFirstShow);
         groupLayout->addWidget(combo);
@@ -480,6 +524,8 @@ void MaterialEditorPanel::createUi()
 
         texturesLayout->addWidget(group);
 
+        m_textureSlots[slot].group = group;
+        m_textureSlots[slot].previewLabel = previewLabel;
         m_textureSlots[slot].combo = combo;
         m_textureSlots[slot].clearButton = clearButton;
         m_textureSlots[slot].loadButton = loadButton;
@@ -488,7 +534,9 @@ void MaterialEditorPanel::createUi()
     };
 
     createTextureSlot(Albedo, tr("Albedo"));
-    createTextureSlot(MetalRough, tr("Metal / Roughness"));
+    createTextureSlot(PackedMetalRough, tr("Packed Metal / Roughness (Legacy)"));
+    createTextureSlot(Metalness, tr("Metalness"));
+    createTextureSlot(RoughnessGlossiness, tr("Roughness"));
     createTextureSlot(Normal, tr("Normal"));
     createTextureSlot(Occlusion, tr("Occlusion"));
     createTextureSlot(Emissive, tr("Emissive"));
@@ -619,6 +667,8 @@ void MaterialEditorPanel::createUi()
             const int e = mat.emissiveTexture;
             const int o = mat.occlusionTexture;
             const int mr = mat.metalRoughTexture;
+            const int mt = mat.metalnessTexture;
+            const int rg = mat.roughnessGlossTexture;
             mat = def;
             strncpy_s(mat.name, nameBuf, _TRUNCATE);
             mat.diffuseTexture = d;
@@ -626,6 +676,8 @@ void MaterialEditorPanel::createUi()
             mat.emissiveTexture = e;
             mat.occlusionTexture = o;
             mat.metalRoughTexture = mr;
+            mat.metalnessTexture = mt;
+            mat.roughnessGlossTexture = rg;
         }, true);
     });
     connect(m_resetNoTexButton, &QPushButton::clicked, this, [this]() {
@@ -720,6 +772,18 @@ void MaterialEditorPanel::createUi()
         });
     });
 
+    connect(m_workflowCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([index](Asset::Material &m) {
+            m.workflow = static_cast<uint32_t>(std::clamp(index, 0, 1));
+            if (m.workflow == Asset::Material::kWorkflowReflectionGlossiness) {
+                m.metalness = 0.0f;
+            }
+        });
+    });
+
     connect(m_roughness->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
@@ -731,7 +795,7 @@ void MaterialEditorPanel::createUi()
             } else if (v > 1.0f) {
                 v = 1.0f;
             }
-            m.roughness = v;
+            m.roughness = IsReflectionGlossinessWorkflow(m) ? (1.0f - v) : v;
         });
     });
     connect(m_metalness->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
@@ -739,7 +803,13 @@ void MaterialEditorPanel::createUi()
             return;
         }
         applyMaterialChange([value](Asset::Material &m) {
-            m.metalness = static_cast<float>(value);
+            const float v = static_cast<float>(value);
+            if (IsReflectionGlossinessWorkflow(m)) {
+                m.specularWeight = v;
+                m.metalness = 0.0f;
+            } else {
+                m.metalness = v;
+            }
         });
     });
     connect(m_specularWeight->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
@@ -937,11 +1007,7 @@ void MaterialEditorPanel::createUi()
                 return;
             }
             applyMaterialChange([this, index, slot](Asset::Material &m) {
-                int newIdx = index - 1;
-                if (newIdx >= 0 && newIdx < static_cast<int>(g_loadedTextures.size()) &&
-                    !g_loadedTextures[newIdx].resource) {
-                    newIdx = -1;
-                }
+                int newIdx = textureIndexFromVisibleCombo(index);
                 setTextureIndexForSlot(m, static_cast<TextureSlot>(slot), newIdx);
             });
         });
@@ -1198,8 +1264,14 @@ void MaterialEditorPanel::syncInspector()
     m_pasteButton->setEnabled(static_cast<bool>(m_clipboard));
 
     setColorButton(m_baseColorButton, getColorFromMaterial(mat.diffuseColor));
-    m_roughness->setValue(mat.roughness);
-    m_metalness->setValue(mat.metalness);
+    m_workflowCombo->setCurrentIndex(static_cast<int>(std::clamp(mat.workflow, 0u, 1u)));
+    updateWorkflowUi(mat);
+    m_roughness->setValue(IsReflectionGlossinessWorkflow(mat)
+                              ? (1.0f - mat.roughness)
+                              : mat.roughness);
+    m_metalness->setValue(IsReflectionGlossinessWorkflow(mat)
+                              ? mat.specularWeight
+                              : mat.metalness);
     m_specularWeight->setValue(mat.specularWeight);
     m_ior->setValue(mat.ior);
     m_transmission->setValue(mat.transmissionWeight);
@@ -1264,7 +1336,9 @@ void MaterialEditorPanel::updateQa()
         warnings << tr("Dielectric albedo is outside typical range (avoid near-black/white).");
     }
     if (rough < 0.02f) {
-        warnings << tr("Roughness < 0.02 can cause fireflies (shader clamps to 0.02).");
+        warnings << (IsReflectionGlossinessWorkflow(mat)
+                         ? tr("Glossiness > 0.98 can cause fireflies (converted roughness clamps to 0.02).")
+                         : tr("Roughness < 0.02 can cause fireflies (shader clamps to 0.02)."));
     }
     if (mat.coatWeight > 0.01f && mat.coatRoughness < 0.02f) {
         warnings << tr("Coat roughness very low; may sparkle.");
@@ -1299,10 +1373,16 @@ void MaterialEditorPanel::updatePickUi()
 
 void MaterialEditorPanel::updateCounts()
 {
+    int visibleTextureCount = 0;
+    for (const auto &texture : g_loadedTextures) {
+        if (!texture.hiddenInEditor) {
+            ++visibleTextureCount;
+        }
+    }
     m_countsLabel->setText(
         tr("Loaded: %1 materials, %2 textures")
             .arg(static_cast<int>(g_loadedMaterials.size()))
-            .arg(static_cast<int>(g_loadedTextures.size())));
+            .arg(visibleTextureCount));
 }
 
 void MaterialEditorPanel::updateTextureOptions()
@@ -1312,9 +1392,14 @@ void MaterialEditorPanel::updateTextureOptions()
         return;
     }
 
+    m_visibleTextureIndices.clear();
     QStringList options;
     options << tr("None");
     for (int i = 0; i < static_cast<int>(g_loadedTextures.size()); ++i) {
+        if (g_loadedTextures[i].hiddenInEditor) {
+            continue;
+        }
+        m_visibleTextureIndices.push_back(i);
         options << TextureLabel(g_loadedTextures[i], i);
     }
 
@@ -1327,7 +1412,7 @@ void MaterialEditorPanel::updateTextureOptions()
         widgets.combo->clear();
         widgets.combo->addItems(options);
         const int texIdx = textureIndexForSlot(g_loadedMaterials[idx], static_cast<TextureSlot>(slot));
-        int comboIndex = texIdx < 0 ? 0 : (texIdx + 1);
+        int comboIndex = visibleComboIndexForTexture(texIdx);
         if (comboIndex < 0 || comboIndex >= widgets.combo->count()) {
             comboIndex = 0;
         }
@@ -1339,7 +1424,9 @@ int MaterialEditorPanel::textureIndexForSlot(const Asset::Material &mat, Texture
 {
     switch (slot) {
     case Albedo: return mat.diffuseTexture;
-    case MetalRough: return mat.metalRoughTexture;
+    case PackedMetalRough: return mat.metalRoughTexture;
+    case Metalness: return mat.metalnessTexture;
+    case RoughnessGlossiness: return mat.roughnessGlossTexture;
     case Normal: return mat.normalTexture;
     case Occlusion: return mat.occlusionTexture;
     case Emissive: return mat.emissiveTexture;
@@ -1351,12 +1438,97 @@ void MaterialEditorPanel::setTextureIndexForSlot(Asset::Material &mat, TextureSl
 {
     switch (slot) {
     case Albedo: mat.diffuseTexture = index; break;
-    case MetalRough: mat.metalRoughTexture = index; break;
+    case PackedMetalRough: mat.metalRoughTexture = index; break;
+    case Metalness: mat.metalnessTexture = index; break;
+    case RoughnessGlossiness: mat.roughnessGlossTexture = index; break;
     case Normal: mat.normalTexture = index; break;
     case Occlusion: mat.occlusionTexture = index; break;
     case Emissive: mat.emissiveTexture = index; break;
     default: break;
     }
+}
+
+int MaterialEditorPanel::textureIndexFromVisibleCombo(int comboIndex) const
+{
+    if (comboIndex <= 0) {
+        return -1;
+    }
+    const int visibleIndex = comboIndex - 1;
+    if (visibleIndex < 0 || visibleIndex >= static_cast<int>(m_visibleTextureIndices.size())) {
+        return -1;
+    }
+    return m_visibleTextureIndices[visibleIndex];
+}
+
+int MaterialEditorPanel::visibleComboIndexForTexture(int textureIndex) const
+{
+    if (textureIndex < 0) {
+        return 0;
+    }
+    for (size_t i = 0; i < m_visibleTextureIndices.size(); ++i) {
+        if (m_visibleTextureIndices[i] == textureIndex) {
+            return static_cast<int>(i) + 1;
+        }
+    }
+    return 0;
+}
+
+void MaterialEditorPanel::updateWorkflowUi(const Asset::Material &mat)
+{
+    if (m_roughnessSurfaceLabel) {
+        m_roughnessSurfaceLabel->setText(RoughnessLabelForMaterial(mat));
+    }
+    if (m_secondarySurfaceLabel) {
+        m_secondarySurfaceLabel->setText(SecondaryLabelForMaterial(mat));
+    }
+
+    const bool reflectionWorkflow = IsReflectionGlossinessWorkflow(mat);
+    if (m_textureSlots[Metalness].group) {
+        m_textureSlots[Metalness].group->setVisible(!reflectionWorkflow);
+    }
+    if (m_textureSlots[RoughnessGlossiness].group) {
+        m_textureSlots[RoughnessGlossiness].group->setTitle(
+            RoughnessTextureTitleForMaterial(mat));
+    }
+}
+
+QPixmap MaterialEditorPanel::createTexturePreview(const Asset::Texture &tex, const QSize &size) const
+{
+    if (tex.width == 0 || tex.height == 0 || tex.cpuData.empty()) {
+        return QPixmap();
+    }
+
+    if ((tex.format == DXGI_FORMAT_R8G8B8A8_UNORM ||
+         tex.format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB) &&
+        tex.cpuData.size() >= static_cast<size_t>(tex.width) * tex.height * 4) {
+        QImage image(tex.cpuData.data(),
+                     static_cast<int>(tex.width),
+                     static_cast<int>(tex.height),
+                     QImage::Format_RGBA8888);
+        return QPixmap::fromImage(image.copy()).scaled(
+            size, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+
+    if (tex.format == DXGI_FORMAT_R32G32B32A32_FLOAT &&
+        tex.cpuData.size() >= static_cast<size_t>(tex.width) * tex.height * 16) {
+        QImage image(static_cast<int>(tex.width),
+                     static_cast<int>(tex.height),
+                     QImage::Format_RGBA8888);
+        const float *pixels = reinterpret_cast<const float *>(tex.cpuData.data());
+        for (int y = 0; y < static_cast<int>(tex.height); ++y) {
+            for (int x = 0; x < static_cast<int>(tex.width); ++x) {
+                const size_t base = (static_cast<size_t>(y) * tex.width + x) * 4;
+                const float r = std::clamp(pixels[base + 0], 0.0f, 1.0f);
+                const float g = std::clamp(pixels[base + 1], 0.0f, 1.0f);
+                const float b = std::clamp(pixels[base + 2], 0.0f, 1.0f);
+                image.setPixelColor(x, y, QColor::fromRgbF(r, g, b, 1.0f));
+            }
+        }
+        return QPixmap::fromImage(image).scaled(
+            size, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+
+    return QPixmap();
 }
 
 void MaterialEditorPanel::applyMaterialChange(const std::function<void(Asset::Material &)> &fn,
@@ -1439,16 +1611,20 @@ void MaterialEditorPanel::setSelectedMaterial(int materialIndex, bool ensureVisi
 void MaterialEditorPanel::updateTextureSlotUi(TextureSlot slot, const Asset::Material &mat)
 {
     auto &widgets = m_textureSlots[slot];
-    if (!widgets.infoLabel) {
+    if (!widgets.infoLabel || !widgets.previewLabel) {
         return;
     }
     const int texIdx = textureIndexForSlot(mat, slot);
     if (texIdx < 0) {
         widgets.infoLabel->setText(tr("No texture bound"));
+        widgets.previewLabel->setPixmap(QPixmap());
+        widgets.previewLabel->setText(tr("No Preview"));
         return;
     }
     if (texIdx >= static_cast<int>(g_loadedTextures.size())) {
         widgets.infoLabel->setText(tr("Texture #%1 (missing)").arg(texIdx));
+        widgets.previewLabel->setPixmap(QPixmap());
+        widgets.previewLabel->setText(tr("Missing"));
         return;
     }
 
@@ -1464,4 +1640,13 @@ void MaterialEditorPanel::updateTextureSlotUi(TextureSlot slot, const Asset::Mat
         info += tr(" [missing]");
     }
     widgets.infoLabel->setText(info);
+
+    const QPixmap preview = createTexturePreview(tex, widgets.previewLabel->size());
+    if (preview.isNull()) {
+        widgets.previewLabel->setPixmap(QPixmap());
+        widgets.previewLabel->setText(tr("No Preview"));
+    } else {
+        widgets.previewLabel->setText(QString());
+        widgets.previewLabel->setPixmap(preview);
+    }
 }

@@ -259,6 +259,182 @@ static bool WriteTextureSrv(UINT textureIndex, const Asset::Texture &tex) {
   return true;
 }
 
+static bool IsTextureIndexValid(int textureIndex) {
+  return textureIndex >= 0 &&
+         textureIndex < static_cast<int>(g_loadedTextures.size()) &&
+         g_loadedTextures[static_cast<size_t>(textureIndex)].resource != nullptr;
+}
+
+static bool IsSupportedPackedTextureFormat(DXGI_FORMAT format) {
+  return format == DXGI_FORMAT_R8G8B8A8_UNORM ||
+         format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB ||
+         format == DXGI_FORMAT_R32G32B32A32_FLOAT;
+}
+
+static uint8_t FloatToByte(float value) {
+  const float clamped = (std::clamp)(value, 0.0f, 1.0f);
+  return static_cast<uint8_t>(clamped * 255.0f + 0.5f);
+}
+
+static uint8_t SampleTextureMono8(const Asset::Texture &texture, uint32_t dstX,
+                                  uint32_t dstY, uint32_t dstWidth,
+                                  uint32_t dstHeight) {
+  if (texture.width == 0 || texture.height == 0 || texture.cpuData.empty() ||
+      !IsSupportedPackedTextureFormat(texture.format)) {
+    return 255;
+  }
+
+  const uint32_t srcX = dstWidth > 0
+                            ? (std::min)(texture.width - 1,
+                                         (dstX * texture.width) / dstWidth)
+                            : 0;
+  const uint32_t srcY = dstHeight > 0
+                            ? (std::min)(texture.height - 1,
+                                         (dstY * texture.height) / dstHeight)
+                            : 0;
+  const size_t pixelIndex = static_cast<size_t>(srcY) * texture.width + srcX;
+
+  if (texture.format == DXGI_FORMAT_R32G32B32A32_FLOAT) {
+    const size_t base = pixelIndex * 4;
+    const size_t floatCount = texture.cpuData.size() / sizeof(float);
+    if (base + 2 >= floatCount) {
+      return 255;
+    }
+    const float *pixels =
+        reinterpret_cast<const float *>(texture.cpuData.data());
+    const float mono = ((std::clamp)(pixels[base + 0], 0.0f, 1.0f) +
+                        (std::clamp)(pixels[base + 1], 0.0f, 1.0f) +
+                        (std::clamp)(pixels[base + 2], 0.0f, 1.0f)) /
+                       3.0f;
+    return FloatToByte(mono);
+  }
+
+  const size_t base = pixelIndex * 4;
+  if (base + 2 >= texture.cpuData.size()) {
+    return 255;
+  }
+  const uint32_t mono = static_cast<uint32_t>(texture.cpuData[base + 0]) +
+                        static_cast<uint32_t>(texture.cpuData[base + 1]) +
+                        static_cast<uint32_t>(texture.cpuData[base + 2]);
+  return static_cast<uint8_t>(mono / 3u);
+}
+
+static bool MaterialUsesDerivedPackedTexture(const Asset::Material &material) {
+  return IsTextureIndexValid(material.metalnessTexture) ||
+         IsTextureIndexValid(material.roughnessGlossTexture);
+}
+
+static bool BuildDerivedPackedTexture(const Asset::Material &material,
+                                      Asset::Texture *outTexture) {
+  if (!outTexture || !MaterialUsesDerivedPackedTexture(material)) {
+    return false;
+  }
+
+  uint32_t width = 0;
+  uint32_t height = 0;
+  const auto considerTexture = [&](int textureIndex) {
+    if (!IsTextureIndexValid(textureIndex)) {
+      return;
+    }
+    const Asset::Texture &texture =
+        g_loadedTextures[static_cast<size_t>(textureIndex)];
+    if (!texture.cpuData.empty() && IsSupportedPackedTextureFormat(texture.format)) {
+      width = (std::max)(width, texture.width);
+      height = (std::max)(height, texture.height);
+    }
+  };
+
+  considerTexture(material.metalnessTexture);
+  considerTexture(material.roughnessGlossTexture);
+  if (width == 0 || height == 0) {
+    return false;
+  }
+
+  const uint8_t scalarMetalness =
+      material.workflow == Asset::Material::kWorkflowReflectionGlossiness
+          ? 0
+          : FloatToByte(material.metalness);
+  const uint8_t scalarRoughness = FloatToByte(material.roughness);
+  const bool useGlossinessSource =
+      material.workflow == Asset::Material::kWorkflowReflectionGlossiness;
+
+  std::vector<uint8_t> packed(static_cast<size_t>(width) * height * 4, 255);
+  for (uint32_t y = 0; y < height; ++y) {
+    for (uint32_t x = 0; x < width; ++x) {
+      const size_t base = (static_cast<size_t>(y) * width + x) * 4;
+      uint8_t metalness = scalarMetalness;
+      if (material.workflow == Asset::Material::kWorkflowMetalRoughness &&
+          IsTextureIndexValid(material.metalnessTexture)) {
+        metalness = SampleTextureMono8(
+            g_loadedTextures[static_cast<size_t>(material.metalnessTexture)],
+            x, y, width, height);
+      }
+
+      uint8_t roughness = scalarRoughness;
+      if (IsTextureIndexValid(material.roughnessGlossTexture)) {
+        roughness = SampleTextureMono8(
+            g_loadedTextures[static_cast<size_t>(material.roughnessGlossTexture)],
+            x, y, width, height);
+        if (useGlossinessSource) {
+          roughness = static_cast<uint8_t>(255u - roughness);
+        }
+      }
+
+      packed[base + 0] = 255;
+      packed[base + 1] = roughness;
+      packed[base + 2] = metalness;
+      packed[base + 3] = 255;
+    }
+  }
+
+  Asset::Texture derived = Asset::LoadTextureFromMemory(
+      packed.data(), static_cast<int>(width), static_cast<int>(height),
+      DXGI_FORMAT_R8G8B8A8_UNORM);
+  if (!derived.resource) {
+    return false;
+  }
+  derived.hiddenInEditor = true;
+  *outTexture = std::move(derived);
+  return true;
+}
+
+static void RefreshMaterialRuntimeTexture(Asset::Material &material) {
+  if (!MaterialUsesDerivedPackedTexture(material)) {
+    material.runtimeMetalRoughTexture = -1;
+    return;
+  }
+
+  Asset::Texture derived;
+  if (!BuildDerivedPackedTexture(material, &derived)) {
+    material.runtimeMetalRoughTexture = -1;
+    return;
+  }
+
+  if (material.runtimeMetalRoughTexture >= 0 &&
+      material.runtimeMetalRoughTexture <
+          static_cast<int>(g_loadedTextures.size()) &&
+      g_loadedTextures[static_cast<size_t>(material.runtimeMetalRoughTexture)]
+          .hiddenInEditor) {
+    WaitGPUIdle();
+    g_loadedTextures[static_cast<size_t>(material.runtimeMetalRoughTexture)] =
+        std::move(derived);
+    g_loadedTextures[static_cast<size_t>(material.runtimeMetalRoughTexture)]
+        .hiddenInEditor = true;
+    WriteTextureSrv(static_cast<UINT>(material.runtimeMetalRoughTexture),
+                    g_loadedTextures[static_cast<size_t>(
+                        material.runtimeMetalRoughTexture)]);
+    return;
+  }
+
+  const int newTextureIndex = AddTexture(std::move(derived));
+  material.runtimeMetalRoughTexture = newTextureIndex;
+  if (newTextureIndex >= 0 &&
+      newTextureIndex < static_cast<int>(g_loadedTextures.size())) {
+    g_loadedTextures[static_cast<size_t>(newTextureIndex)].hiddenInEditor =
+        true;
+  }
+}
+
 int AddTexture(Asset::Texture texture) {
   if (!g_device) {
     fprintf(stderr, "AddTexture: no device\n");
@@ -463,6 +639,12 @@ static void AdjustMaterialTextureIndices(std::vector<Asset::Material> &materials
       m.emissiveTexture += (int)textureBase;
     if (m.metalRoughTexture >= 0)
       m.metalRoughTexture += (int)textureBase;
+    if (m.runtimeMetalRoughTexture >= 0)
+      m.runtimeMetalRoughTexture += (int)textureBase;
+    if (m.metalnessTexture >= 0)
+      m.metalnessTexture += (int)textureBase;
+    if (m.roughnessGlossTexture >= 0)
+      m.roughnessGlossTexture += (int)textureBase;
   }
 }
 
@@ -507,6 +689,9 @@ static void RemapMaterialTextureIndices(std::vector<Asset::Material> &materials,
     RemapMaterialTextureIndex(material.occlusionTexture, textureRemap);
     RemapMaterialTextureIndex(material.emissiveTexture, textureRemap);
     RemapMaterialTextureIndex(material.metalRoughTexture, textureRemap);
+    RemapMaterialTextureIndex(material.runtimeMetalRoughTexture, textureRemap);
+    RemapMaterialTextureIndex(material.metalnessTexture, textureRemap);
+    RemapMaterialTextureIndex(material.roughnessGlossTexture, textureRemap);
   }
 }
 
@@ -2228,7 +2413,9 @@ int FindOrCreateMaterial(const Asset::Material &material,
   }
 
   const int materialIndex = static_cast<int>(g_loadedMaterials.size());
-  g_loadedMaterials.push_back(material);
+  Asset::Material storedMaterial = material;
+  RefreshMaterialRuntimeTexture(storedMaterial);
+  g_loadedMaterials.push_back(std::move(storedMaterial));
   if (s_materialStableIds.size() < g_loadedMaterials.size()) {
     s_materialStableIds.resize(g_loadedMaterials.size());
   }
@@ -2336,11 +2523,13 @@ bool UpdateMaterial(size_t index, const Asset::Material &material) {
   }
 
   Asset::Material &dst = g_loadedMaterials[index];
-  if (memcmp(&dst, &material, sizeof(Asset::Material)) == 0) {
+  Asset::Material updatedMaterial = material;
+  RefreshMaterialRuntimeTexture(updatedMaterial);
+  if (memcmp(&dst, &updatedMaterial, sizeof(Asset::Material)) == 0) {
     return true;
   }
   const std::string previousName = dst.name;
-  dst = material;
+  dst = std::move(updatedMaterial);
   EnsureMaterialMetadataStorage();
   if (!previousName.empty()) {
     const auto previousNameIt = s_materialIndicesByName.find(previousName);
@@ -2357,6 +2546,12 @@ bool UpdateMaterial(size_t index, const Asset::Material &material) {
   ApplyRendererInvalidation(RendererInvalidationPlan::AccumulationOnly);
   NotifySceneChanged();
   return true;
+}
+
+void RefreshAllMaterialRuntimeTextures() {
+  for (Asset::Material &material : g_loadedMaterials) {
+    RefreshMaterialRuntimeTexture(material);
+  }
 }
 
 void RemoveLight(size_t index) {

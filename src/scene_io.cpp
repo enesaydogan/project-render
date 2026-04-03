@@ -378,7 +378,29 @@ static bool DecompressLZMSAny(const uint8_t *comp, size_t compSize,
 // ---------------------------------------------------------------------------
 // Build compact metadata (msgpack-friendly short keys for smallest size)
 // ---------------------------------------------------------------------------
-static json BuildMetadata() {
+static std::vector<int> BuildSavedTextureRemap() {
+  std::vector<int> remap(g_loadedTextures.size(), -1);
+  int nextIndex = 0;
+  for (size_t textureIndex = 0; textureIndex < g_loadedTextures.size();
+       ++textureIndex) {
+    if (g_loadedTextures[textureIndex].hiddenInEditor) {
+      continue;
+    }
+    remap[textureIndex] = nextIndex++;
+  }
+  return remap;
+}
+
+static int MapSavedTextureIndex(const std::vector<int> &remap,
+                                int textureIndex) {
+  if (textureIndex < 0 ||
+      textureIndex >= static_cast<int>(remap.size())) {
+    return -1;
+  }
+  return remap[static_cast<size_t>(textureIndex)];
+}
+
+static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
   json j;
   j["matv"] = Asset::Material::kSchemaVersionOpenPbrSubset;
   j["matModel"] = "openpbr-runtime";
@@ -593,9 +615,14 @@ static json BuildMetadata() {
       {"uo", {mat.uvOffset[0], mat.uvOffset[1]}},
       {"te", mat.triPlanarEnabled}, {"ts", mat.triPlanarScale},
       {"ths", mat.triPlanarSharpness}, {"tns", mat.triPlanarNormalStrength},
-      {"txd", mat.diffuseTexture}, {"txn", mat.normalTexture},
-      {"txe", mat.emissiveTexture}, {"txo", mat.occlusionTexture},
-      {"txm", mat.metalRoughTexture},
+      {"wf", mat.workflow},
+      {"txd", MapSavedTextureIndex(textureSaveRemap, mat.diffuseTexture)},
+      {"txn", MapSavedTextureIndex(textureSaveRemap, mat.normalTexture)},
+      {"txe", MapSavedTextureIndex(textureSaveRemap, mat.emissiveTexture)},
+      {"txo", MapSavedTextureIndex(textureSaveRemap, mat.occlusionTexture)},
+      {"txm", MapSavedTextureIndex(textureSaveRemap, mat.metalRoughTexture)},
+      {"txmt", MapSavedTextureIndex(textureSaveRemap, mat.metalnessTexture)},
+      {"txrg", MapSavedTextureIndex(textureSaveRemap, mat.roughnessGlossTexture)},
       {"ds", mat.doubleSided}, {"am", mat.alphaMode},
       {"gr", mat.isGrass},
       {"gc", {mat.grassColor[0], mat.grassColor[1], mat.grassColor[2]}},
@@ -1057,6 +1084,7 @@ static void RestoreMaterialsPRS(const json &j, std::vector<int> &remap) {
     mat.coatRoughness = sm.value("cr", mat.coatRoughness);
     mat.thinWalled = sm.value("th", mat.thinWalled);
     mat.translucency = sm.value("tl", mat.translucency);
+    mat.workflow = sm.value("wf", mat.workflow);
     if (sm.contains("us")) for (int k=0;k<2;k++) mat.uvScale[k]=sm["us"][k];
     if (sm.contains("uo")) for (int k=0;k<2;k++) mat.uvOffset[k]=sm["uo"][k];
     mat.triPlanarEnabled = sm.value("te", mat.triPlanarEnabled);
@@ -1075,6 +1103,9 @@ static void RestoreMaterialsPRS(const json &j, std::vector<int> &remap) {
     setTex("txd",mat.diffuseTexture); setTex("txn",mat.normalTexture);
     setTex("txe",mat.emissiveTexture); setTex("txo",mat.occlusionTexture);
     setTex("txm",mat.metalRoughTexture);
+    setTex("txmt",mat.metalnessTexture);
+    setTex("txrg",mat.roughnessGlossTexture);
+    mat.runtimeMetalRoughTexture = -1;
     mat.doubleSided = sm.value("ds", mat.doubleSided);
     mat.alphaMode = sm.value("am", mat.alphaMode);
     mat.schemaVersion = Asset::Material::kSchemaVersionOpenPbrSubset;
@@ -1099,8 +1130,10 @@ bool SaveScene(const std::string &path) {
     ReportProgress(0.01f, "Preparing scene metadata");
     fprintf(stderr, "PRS: Saving scene to %s\n", path.c_str());
 
+    const std::vector<int> textureSaveRemap = BuildSavedTextureRemap();
+
     // 1. Build metadata as msgpack
-    json metadata = BuildMetadata();
+    json metadata = BuildMetadata(textureSaveRemap);
     std::vector<uint8_t> msgpack = json::to_msgpack(metadata);
     ReportProgress(0.08f, "Packing metadata");
     fprintf(stderr, "PRS: Metadata: %zu bytes (msgpack)\n", msgpack.size());
@@ -1111,7 +1144,10 @@ bool SaveScene(const std::string &path) {
       // Pre-estimate size
       size_t est = 4 + msgpack.size() + 4 + 4;
       for (auto &m : g_loadedMeshes) est += 40 + m.cpuVertices.size()*sizeof(Asset::Vertex) + m.cpuIndices.size()*sizeof(uint32_t);
-      for (auto &t : g_loadedTextures) est += 16 + t.cpuData.size();
+      for (size_t textureIndex = 0; textureIndex < g_loadedTextures.size();
+           ++textureIndex)
+        if (textureSaveRemap[textureIndex] >= 0)
+          est += 16 + g_loadedTextures[textureIndex].cpuData.size();
       payload.reserve(est);
     }
 
@@ -1140,8 +1176,17 @@ bool SaveScene(const std::string &path) {
     }
 
     // Textures — raw binary
-    w.writeU32((uint32_t)g_loadedTextures.size());
-    for (const auto &tex : g_loadedTextures) {
+    uint32_t savedTextureCount = 0;
+    for (int mappedIndex : textureSaveRemap)
+      if (mappedIndex >= 0)
+        ++savedTextureCount;
+    w.writeU32(savedTextureCount);
+    for (size_t textureIndex = 0; textureIndex < g_loadedTextures.size();
+         ++textureIndex) {
+      if (textureSaveRemap[textureIndex] < 0) {
+        continue;
+      }
+      const auto &tex = g_loadedTextures[textureIndex];
       w.writeU32(tex.width);
       w.writeU32(tex.height);
       w.writeU32((uint32_t)tex.format);
@@ -1306,6 +1351,7 @@ bool LoadScenePRS(const std::string &path) {
 
     std::vector<int> remap;
     RestoreMaterialsPRS(meta, remap);
+    Scene::RefreshAllMaterialRuntimeTextures();
     RestoreLiveLinkBindingsPRS(meta, remap);
 
     if (hasEmbedded) {

@@ -1,14 +1,13 @@
 #pragma once
 
+#include "../assets/asset_loader.h"
+#include <QPixmap>
+#include <QSize>
 #include <QWidget>
 #include <array>
 #include <functional>
 #include <memory>
 #include <vector>
-
-namespace Asset {
-struct Material;
-}
 
 class QCheckBox;
 class QComboBox;
@@ -34,14 +33,18 @@ public:
 private:
     enum TextureSlot {
         Albedo = 0,
-        MetalRough = 1,
-        Normal = 2,
-        Occlusion = 3,
-        Emissive = 4,
-        TextureSlotCount = 5
+        PackedMetalRough = 1,
+        Metalness = 2,
+        RoughnessGlossiness = 3,
+        Normal = 4,
+        Occlusion = 5,
+        Emissive = 6,
+        TextureSlotCount = 7
     };
 
     struct TextureSlotWidgets {
+        QGroupBox *group = nullptr;
+        QLabel *previewLabel = nullptr;
         QLabel *label = nullptr;
         QComboBox *combo = nullptr;
         QPushButton *clearButton = nullptr;
@@ -60,8 +63,12 @@ private:
     void updateCounts();
     void updateTextureOptions();
     void updateTextureSlotUi(TextureSlot slot, const Asset::Material &mat);
+    void updateWorkflowUi(const Asset::Material &mat);
     int textureIndexForSlot(const Asset::Material &mat, TextureSlot slot) const;
     void setTextureIndexForSlot(Asset::Material &mat, TextureSlot slot, int index);
+    int textureIndexFromVisibleCombo(int comboIndex) const;
+    int visibleComboIndexForTexture(int textureIndex) const;
+    QPixmap createTexturePreview(const Asset::Texture &tex, const QSize &size) const;
 
     void applyMaterialChange(const std::function<void(Asset::Material &)> &fn,
                              bool markOpacityDirty = false,
@@ -106,6 +113,9 @@ private:
 
     // Surface tab
     QPushButton *m_baseColorButton = nullptr;
+    QComboBox *m_workflowCombo = nullptr;
+    QLabel *m_secondarySurfaceLabel = nullptr;
+    QLabel *m_roughnessSurfaceLabel = nullptr;
     SliderControl *m_roughness = nullptr;
     SliderControl *m_metalness = nullptr;
     SliderControl *m_specularWeight = nullptr;
@@ -151,4 +161,5 @@ private:
 
     // Clipboard
     std::unique_ptr<Asset::Material> m_clipboard;
+    std::vector<int> m_visibleTextureIndices;
 };

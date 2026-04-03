@@ -47,10 +47,13 @@ struct Texture {
   UINT mipLevels = 1;
   DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM;
   std::vector<uint8_t> cpuData; // Added for serialization
+  bool hiddenInEditor = false;
 };
 
 struct Material {
-  static constexpr uint32_t kSchemaVersionOpenPbrSubset = 3;
+  static constexpr uint32_t kSchemaVersionOpenPbrSubset = 4;
+  static constexpr uint32_t kWorkflowMetalRoughness = 0;
+  static constexpr uint32_t kWorkflowReflectionGlossiness = 1;
 
   char name[64] = "Material";
   float diffuseColor[4] = {1, 1, 1, 1};
@@ -78,7 +81,10 @@ struct Material {
   int normalTexture = -1;
   int emissiveTexture = -1;
   int occlusionTexture = -1;
-  int metalRoughTexture = -1; // Added for GLTF PBR support
+  int metalRoughTexture = -1; // User-authored packed metal/rough map.
+  int runtimeMetalRoughTexture = -1; // Internal derived packed runtime map.
+  int metalnessTexture = -1;
+  int roughnessGlossTexture = -1;
 
   bool doubleSided = false;
   std::string alphaMode = "OPAQUE";
@@ -93,6 +99,7 @@ struct Material {
 
   // Canonical OpenPBR runtime subset fields.
   uint32_t schemaVersion = kSchemaVersionOpenPbrSubset;
+  uint32_t workflow = kWorkflowMetalRoughness;
   float roughness = 0.2f;
   float specularWeight = 1.0f;
   float transmissionWeight = 0.0f;
