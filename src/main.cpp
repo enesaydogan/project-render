@@ -20,6 +20,7 @@
 #include "livelink/livelink_pipe_provider.h"
 #include "livelink/livelink_runtime.h"
 #include "material_editor.h"
+#include "material/material_system.h"
 #include "oidn_denoiser.h"
 #include "raster_renderer.h"
 #include "resource.h"
@@ -54,6 +55,10 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd,
                                                              LPARAM lParam);
 
 namespace fs = std::filesystem;
+
+using MaterialCB = MaterialSystem::RuntimeRasterMaterialConstants;
+using DxrMaterialData = MaterialSystem::RuntimeDxrMaterialData;
+using DxrMaterialExtraData = MaterialSystem::RuntimeDxrMaterialExtraData;
 
 // Instanced blade data generated from meshes that have materials marked as
 // grass.
@@ -1527,35 +1532,9 @@ bool InitApplication(HWND hwnd) {
 
   // --- Create persistent material constant buffer ---
   // Large enough to hold many unique material instances per frame
-  struct MaterialCB {
-    float diffuseColor[4];
-    float surfaceParams[4];      // x=roughness, y=metalness, z=specularWeight
-    float transmissionParams[4]; // rgb=transmissionColor, a=transmissionWeight
-    float emissiveColor[4];
-    int textureIndices[4];    // x=diffuse, z=normal
-    int emissiveAndPad[4];    // x=emissive, y=occlusion, z=metalRough
-    float extraParams[4];     // x=emissiveIntensity, y=alphaCutoff,
-                              // z=alphaMaskEnabled, w=isGrass
-    float coatLayerParams[4]; // x=coatWeight, y=coatRoughness, z=thinWalled,
-                              // w=translucency
-    float uvTransform[4];     // xy=uvScale, zw=uvOffset
-    float
-        triPlanarParams[4]; // x=enabled, y=scale, z=sharpness, w=normalStrength
-  };
-  struct DxrMaterialData {
-    float baseColor_opacity[4];
-    float emissive_ior[4];
-    float pbrParams_flags[4];
-    UINT packedTextures[4];
-  };
-  struct DxrMaterialExtraData {
-    float coatLayerParams[4];
-    float uvTransform[4];
-    float triPlanarParams[4];
-    float shadingParams[4]; // x=emissiveIntensity, y=specularWeight,
-                            // z=alphaCutoff, w=isGrass
-    float transmissionColor[4];
-  };
+  using MaterialCB = MaterialSystem::RuntimeRasterMaterialConstants;
+  using DxrMaterialData = MaterialSystem::RuntimeDxrMaterialData;
+  using DxrMaterialExtraData = MaterialSystem::RuntimeDxrMaterialExtraData;
   const UINT64 matCbSizeSingle = (sizeof(MaterialCB) + 255) & ~255;
   const UINT64 matCbSize = matCbSizeSingle * 16384; // Support up to 16384 calls
   D3D12_RESOURCE_DESC matCbDesc = {};
@@ -2288,35 +2267,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           // in a secondary buffer.
           if (g_materialStructuredBuffer && g_materialExtraStructuredBuffer &&
               !g_loadedMaterials.empty()) {
-            struct DxrMaterialData {
-              float baseColor_opacity[4];
-              float emissive_ior[4];
-              float pbrParams_flags[4];
-              UINT packedTextures[4];
-            };
-            struct DxrMaterialExtraData {
-              float coatLayerParams[4];
-              float uvTransform[4];
-              float triPlanarParams[4];
-              float shadingParams[4];
-              float transmissionColor[4];
-            };
-
-            static constexpr UINT kMaterialFlagAlphaTested = 1u << 0;
-            static constexpr UINT kMaterialFlagThinWalled = 1u << 1;
-            static constexpr UINT kMaterialFlagTranslucent = 1u << 2;
-            static constexpr UINT kMaterialFlagTriPlanar = 1u << 3;
-            static constexpr UINT kMaterialFlagUvTransform = 1u << 4;
-            static constexpr UINT kMaterialFlagGlass = 1u << 5;
-            static constexpr UINT kMaterialFlagDoubleSided = 1u << 6;
-            static constexpr UINT kMaterialFlagInvertRoughness = 1u << 7;
-
-            auto PackTexPair = [](int lo, int hi) -> UINT {
-              const UINT lo16 = (lo >= 0) ? ((UINT)lo & 0xFFFFu) : 0xFFFFu;
-              const UINT hi16 = (hi >= 0) ? ((UINT)hi & 0xFFFFu) : 0xFFFFu;
-              return lo16 | (hi16 << 16);
-            };
-
             UINT8 *pCore = nullptr;
             UINT8 *pExtra = nullptr;
             D3D12_RANGE readRange = {0, 0};
@@ -2331,101 +2281,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                 const auto &srcMat = g_loadedMaterials[i];
 
                 DxrMaterialData mat = {};
-                memcpy(mat.baseColor_opacity, srcMat.diffuseColor,
-                       sizeof(float) * 4);
-                memcpy(mat.emissive_ior, srcMat.emissiveColor,
-                       sizeof(float) * 3);
-                mat.emissive_ior[3] = srcMat.ior;
-
-                float roughness = (std::clamp)(srcMat.roughness, 0.0f, 1.0f);
-                const float metalness =
-                    (std::clamp)(srcMat.metalness, 0.0f, 1.0f);
-                float transmission =
-                    (std::clamp)(srcMat.transmissionWeight, 0.0f, 1.0f);
-                transmission *= (1.0f - metalness);
-
-                UINT flags = 0;
-                if (srcMat.alphaMode != "OPAQUE" ||
-                    srcMat.diffuseColor[3] < 0.999f) {
-                  flags |= kMaterialFlagAlphaTested;
-                }
-                if (srcMat.thinWalled > 0.5f) {
-                  flags |= kMaterialFlagThinWalled;
-                }
-                if (srcMat.translucency > 0.01f) {
-                  flags |= kMaterialFlagTranslucent;
-                }
-                if (srcMat.triPlanarEnabled > 0.5f) {
-                  flags |= kMaterialFlagTriPlanar;
-                }
-                if (fabsf(srcMat.uvScale[0] - 1.0f) > 1e-5f ||
-                    fabsf(srcMat.uvScale[1] - 1.0f) > 1e-5f ||
-                    fabsf(srcMat.uvOffset[0]) > 1e-5f ||
-                    fabsf(srcMat.uvOffset[1]) > 1e-5f) {
-                  flags |= kMaterialFlagUvTransform;
-                }
-                if (transmission > 0.01f || srcMat.thinWalled > 0.5f) {
-                  flags |= kMaterialFlagGlass;
-                }
-                if (srcMat.doubleSided) {
-                  flags |= kMaterialFlagDoubleSided;
-                }
-                if (srcMat.invertRoughnessTexture) {
-                  flags |= kMaterialFlagInvertRoughness;
-                }
-
-                float flagsAsFloat = 0.0f;
-                memcpy(&flagsAsFloat, &flags, sizeof(flags));
-                mat.pbrParams_flags[0] = metalness;
-                mat.pbrParams_flags[1] = roughness;
-                mat.pbrParams_flags[2] = transmission;
-                mat.pbrParams_flags[3] = flagsAsFloat;
-
-                mat.packedTextures[0] =
-                    PackTexPair(srcMat.diffuseTexture, srcMat.normalTexture);
-                const int runtimeMetalRoughTexture =
-                  srcMat.runtimeMetalRoughTexture >= 0
-                    ? srcMat.runtimeMetalRoughTexture
-                    : srcMat.metalRoughTexture;
-                mat.packedTextures[1] = PackTexPair(runtimeMetalRoughTexture,
-                                                    srcMat.occlusionTexture);
-                mat.packedTextures[2] = PackTexPair(srcMat.emissiveTexture, -1);
-                mat.packedTextures[3] = PackTexPair(-1, -1);
-
                 DxrMaterialExtraData extra = {};
-                float coatWeight = (std::clamp)(srcMat.coatWeight, 0.0f, 1.0f);
-                float coatRoughness =
-                    (std::clamp)(srcMat.coatRoughness, 0.0f, 1.0f);
-                extra.coatLayerParams[0] = coatWeight;
-                extra.coatLayerParams[1] = coatRoughness;
-                extra.coatLayerParams[2] = srcMat.thinWalled;
-                extra.coatLayerParams[3] = srcMat.translucency;
-                extra.uvTransform[0] = srcMat.uvScale[0];
-                extra.uvTransform[1] = srcMat.uvScale[1];
-                extra.uvTransform[2] = srcMat.uvOffset[0];
-                extra.uvTransform[3] = srcMat.uvOffset[1];
-                extra.triPlanarParams[0] = srcMat.triPlanarEnabled;
-                extra.triPlanarParams[1] = srcMat.triPlanarScale;
-                extra.triPlanarParams[2] = srcMat.triPlanarSharpness;
-                extra.triPlanarParams[3] = srcMat.triPlanarNormalStrength;
-                extra.shadingParams[0] =
-                    (std::max)(0.0f, srcMat.emissiveIntensity);
-                extra.shadingParams[1] =
-                    (std::clamp)(srcMat.specularWeight, 0.0f, 1.0f);
-                extra.shadingParams[2] =
-                    (srcMat.alphaMode == "MASK") ? 0.35f : -1.0f;
-                extra.shadingParams[3] = srcMat.isGrass ? 1.0f : 0.0f;
-                extra.transmissionColor[0] =
-                    (std::clamp)(srcMat.transmissionColor[0], 0.0f, 1.0f);
-                extra.transmissionColor[1] =
-                    (std::clamp)(srcMat.transmissionColor[1], 0.0f, 1.0f);
-                extra.transmissionColor[2] =
-                    (std::clamp)(srcMat.transmissionColor[2], 0.0f, 1.0f);
-                extra.transmissionColor[3] = 1.0f;
+                MaterialSystem::BuildRuntimeDxrMaterialData(srcMat, &mat,
+                                                           &extra);
 
-                memcpy(pCore + i * sizeof(DxrMaterialData), &mat, sizeof(mat));
+                memcpy(pCore + i * sizeof(DxrMaterialData), &mat,
+                       sizeof(DxrMaterialData));
                 memcpy(pExtra + i * sizeof(DxrMaterialExtraData), &extra,
-                       sizeof(extra));
+                       sizeof(DxrMaterialExtraData));
               }
             }
             if (coreMapped) {
@@ -2502,6 +2365,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             }
             // Success DXR render - Draw Grid with depth checks
             if (!g_renderExportJob.active && g_drawGrid) {
+              D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle =
+                  DX12Context::g_dsvHeap->GetCPUDescriptorHandleForHeapStart();
               if (safeFramePreviewActive) {
                 D3D12_VIEWPORT safeViewport = {
                     static_cast<float>(presentationRect.left),
@@ -2512,13 +2377,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                 DX12Context::g_commandList->RSSetScissorRects(1,
                                                               &presentationRect);
               }
-              D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle =
-                  DX12Context::g_dsvHeap->GetCPUDescriptorHandleForHeapStart();
               DX12Context::g_commandList->ClearDepthStencilView(
                   dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
-              // 1. Scene Depth Pre-pass (populate depth buffer for grid
-              // occlusion)
+              // 1. Scene depth pre-pass for grid occlusion.
               DX12Context::g_commandList->OMSetRenderTargets(0, nullptr, FALSE,
                                                              &dsvHandle);
               DX12Context::g_commandList->SetGraphicsRootSignature(
@@ -2527,7 +2389,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                   DX12Context::g_commandList.Get(),
                   g_cameraConstantBuffer.Get(), sceneInstances);
 
-              // 2. Draw Grid (test against the populated depth buffer)
+              // 2. Draw the grid against the populated depth buffer.
               DX12Context::g_commandList->OMSetRenderTargets(1, &rtvHandle,
                                                              FALSE, &dsvHandle);
               RasterRenderer::DrawGrid(DX12Context::g_commandList.Get(),
@@ -2549,23 +2411,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                                                              FALSE, nullptr);
             }
           } else {
-            // If RenderFrame failed, fall back to red clear
+            // If RenderFrame failed, fall back to red clear.
             TR(DX12Context::g_commandList.Get(),
                DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),
                D3D12_RESOURCE_STATE_PRESENT,
                D3D12_RESOURCE_STATE_RENDER_TARGET);
 
-            FLOAT clearColor[] = {0.8f, 0.2f, 0.2f,
-                                  1.0f}; // Red to indicate fallback
+            FLOAT clearColor[] = {0.8f, 0.2f, 0.2f, 1.0f};
             DX12Context::g_commandList->ClearRenderTargetView(
                 rtvHandle, clearColor, 0, nullptr);
-            DX12Context::g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE,
-                                                           nullptr);
+            DX12Context::g_commandList->OMSetRenderTargets(1, &rtvHandle,
+                                                           FALSE, nullptr);
           }
         } else {
-          // DXR mode was selected but the renderer isn't ready yet (missing
-          // TLAS or state object).  Avoid leaving the previous raster frame
-          // sitting on the screen by clearing to red and logging.
+          // DXR mode was selected but the renderer isn't ready yet. Avoid
+          // leaving the previous raster frame onscreen.
           if (g_verboseRenderLogs)
             fprintf(stderr, "Main: DXR path selected but IsReady()==false\n");
           TR(DX12Context::g_commandList.Get(),
@@ -2729,76 +2589,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             if (gm.materialIndex >= 0 &&
                 gm.materialIndex < (int)g_loadedMaterials.size()) {
               if (gm.materialIndex != lastMaterialIndex) {
-                struct MaterialCB {
-                  float diffuseColor[4];
-                  float surfaceParams[4];
-                  float transmissionParams[4];
-                  float emissiveColor[4];
-                  int textureIndices[4];
-                  int emissiveAndPad[4];
-                  float extraParams[4];
-                  float coatLayerParams[4];
-                  float uvTransform[4];
-                  float triPlanarParams[4];
-                } matCB;
+              MaterialCB matCB = {};
 
                 const auto &srcMat = g_loadedMaterials[gm.materialIndex];
-                memcpy(matCB.diffuseColor, srcMat.diffuseColor, 16);
-                float rasterRoughness =
-                    (std::clamp)(srcMat.roughness, 0.0f, 1.0f);
-                matCB.surfaceParams[0] = rasterRoughness;
-                matCB.surfaceParams[1] = srcMat.metalness;
-                matCB.surfaceParams[2] =
-                    (std::clamp)(srcMat.specularWeight, 0.0f, 1.0f);
-                matCB.surfaceParams[3] = 0.0f;
-
-                matCB.transmissionParams[0] = srcMat.transmissionColor[0];
-                matCB.transmissionParams[1] = srcMat.transmissionColor[1];
-                matCB.transmissionParams[2] = srcMat.transmissionColor[2];
-                matCB.transmissionParams[3] =
-                    (std::clamp)(srcMat.transmissionWeight, 0.0f, 1.0f);
-
-                memcpy(matCB.emissiveColor, srcMat.emissiveColor, 12);
-                matCB.emissiveColor[3] = srcMat.ior;
-
-                matCB.textureIndices[0] = srcMat.diffuseTexture;
-                matCB.textureIndices[1] = -1;
-                matCB.textureIndices[2] = srcMat.normalTexture;
-                matCB.textureIndices[3] = -1;
-
-                matCB.emissiveAndPad[0] = srcMat.emissiveTexture;
-                matCB.emissiveAndPad[1] = srcMat.occlusionTexture;
-                matCB.emissiveAndPad[2] =
-                  srcMat.runtimeMetalRoughTexture >= 0
-                    ? srcMat.runtimeMetalRoughTexture
-                    : srcMat.metalRoughTexture;
-                matCB.emissiveAndPad[3] = srcMat.invertRoughnessTexture ? 1 : 0;
-
-                matCB.extraParams[0] = srcMat.emissiveIntensity;
-                matCB.extraParams[1] =
-                    (srcMat.alphaMode == "MASK") ? 0.35f : -1.0f;
-                matCB.extraParams[2] =
-                    (srcMat.alphaMode == "MASK") ? 1.0f : 0.0f;
-                matCB.extraParams[3] = srcMat.isGrass ? 1.0f : 0.0f;
-
-                float rasterCoatWeight =
-                    (std::clamp)(srcMat.coatWeight, 0.0f, 1.0f);
-                float rasterCoatRoughness =
-                    (std::clamp)(srcMat.coatRoughness, 0.0f, 1.0f);
-                matCB.coatLayerParams[0] = rasterCoatWeight;
-                matCB.coatLayerParams[1] = rasterCoatRoughness;
-                matCB.coatLayerParams[2] = srcMat.thinWalled;
-                matCB.coatLayerParams[3] = srcMat.translucency;
-
-                matCB.uvTransform[0] = srcMat.uvScale[0];
-                matCB.uvTransform[1] = srcMat.uvScale[1];
-                matCB.uvTransform[2] = srcMat.uvOffset[0];
-                matCB.uvTransform[3] = srcMat.uvOffset[1];
-
-                matCB.triPlanarParams[0] = srcMat.triPlanarEnabled;
-                matCB.triPlanarParams[1] = srcMat.triPlanarScale;
-                matCB.triPlanarParams[2] = srcMat.triPlanarSharpness;
-                matCB.triPlanarParams[3] = srcMat.triPlanarNormalStrength;
+              MaterialSystem::BuildRuntimeRasterMaterialConstants(srcMat,
+                                        &matCB);
 
                 if (g_materialCbMappedData) {
                   const UINT64 matSlotSize = (sizeof(MaterialCB) + 255) & ~255;
@@ -2880,64 +2675,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
               4, alloc.gpu);
             }
 
-          struct MaterialCB {
-            float diffuseColor[4];
-            float surfaceParams[4];
-            float transmissionParams[4];
-            float emissiveColor[4];
-            int textureIndices[4];
-            int emissiveAndPad[4];
-            float extraParams[4];
-            float coatLayerParams[4];
-            float uvTransform[4];
-            float triPlanarParams[4];
-          } grassMatCB = {};
+            MaterialCB grassMatCB = {};
 
           const auto &srcMat = g_loadedMaterials[activeGrassMaterialIndex];
-          memcpy(grassMatCB.diffuseColor, srcMat.diffuseColor, 16);
-          grassMatCB.surfaceParams[0] =
-              (std::clamp)(srcMat.roughness, 0.0f, 1.0f);
-          grassMatCB.surfaceParams[1] = srcMat.metalness;
-          grassMatCB.surfaceParams[2] =
-              (std::clamp)(srcMat.specularWeight, 0.0f, 1.0f);
-          grassMatCB.transmissionParams[0] = srcMat.transmissionColor[0];
-          grassMatCB.transmissionParams[1] = srcMat.transmissionColor[1];
-          grassMatCB.transmissionParams[2] = srcMat.transmissionColor[2];
-          grassMatCB.transmissionParams[3] =
-              (std::clamp)(srcMat.transmissionWeight, 0.0f, 1.0f);
-          memcpy(grassMatCB.emissiveColor, srcMat.emissiveColor, 12);
-          grassMatCB.emissiveColor[3] = srcMat.ior;
-          grassMatCB.textureIndices[0] = srcMat.diffuseTexture;
-          grassMatCB.textureIndices[1] = -1;
-          grassMatCB.textureIndices[2] = srcMat.normalTexture;
-          grassMatCB.textureIndices[3] = -1;
-          grassMatCB.emissiveAndPad[0] = srcMat.emissiveTexture;
-          grassMatCB.emissiveAndPad[1] = srcMat.occlusionTexture;
-            grassMatCB.emissiveAndPad[2] =
-              srcMat.runtimeMetalRoughTexture >= 0
-                ? srcMat.runtimeMetalRoughTexture
-                : srcMat.metalRoughTexture;
-          grassMatCB.emissiveAndPad[3] = srcMat.invertRoughnessTexture ? 1 : 0;
-          grassMatCB.extraParams[0] = srcMat.emissiveIntensity;
-          grassMatCB.extraParams[1] =
-              (srcMat.alphaMode == "MASK") ? 0.35f : -1.0f;
-          grassMatCB.extraParams[2] =
-              (srcMat.alphaMode == "MASK") ? 1.0f : 0.0f;
-          grassMatCB.extraParams[3] = srcMat.isGrass ? 1.0f : 0.0f;
-          grassMatCB.coatLayerParams[0] =
-              (std::clamp)(srcMat.coatWeight, 0.0f, 1.0f);
-          grassMatCB.coatLayerParams[1] =
-              (std::clamp)(srcMat.coatRoughness, 0.0f, 1.0f);
-          grassMatCB.coatLayerParams[2] = srcMat.thinWalled;
-          grassMatCB.coatLayerParams[3] = srcMat.translucency;
-          grassMatCB.uvTransform[0] = srcMat.uvScale[0];
-          grassMatCB.uvTransform[1] = srcMat.uvScale[1];
-          grassMatCB.uvTransform[2] = srcMat.uvOffset[0];
-          grassMatCB.uvTransform[3] = srcMat.uvOffset[1];
-          grassMatCB.triPlanarParams[0] = srcMat.triPlanarEnabled;
-          grassMatCB.triPlanarParams[1] = srcMat.triPlanarScale;
-          grassMatCB.triPlanarParams[2] = srcMat.triPlanarSharpness;
-          grassMatCB.triPlanarParams[3] = srcMat.triPlanarNormalStrength;
+            MaterialSystem::BuildRuntimeRasterMaterialConstants(srcMat,
+                                      &grassMatCB);
 
           if (g_materialCbMappedData) {
             const UINT64 matSlotSize = (sizeof(MaterialCB) + 255) & ~255;

@@ -4,6 +4,7 @@
 #include "dxr_renderer.h"
 #include "file_import.h"
 #include "imgui.h"
+#include "material/material_system.h"
 #include "scene.h"
 #include <cmath>
 #include <functional>
@@ -64,22 +65,19 @@ static ImTextureID GetImGuiTexIDForTextureIndex(int textureIndex) {
 }
 
 static bool IsReflectionGlossinessWorkflow(const Asset::Material &material) {
-  return material.workflow == Asset::Material::kWorkflowReflectionGlossiness;
+  return MaterialSystem::UsesReflectionGlossiness(material);
 }
 
 static const char *GetRoughnessLabel(const Asset::Material &material) {
-  return IsReflectionGlossinessWorkflow(material) ? "Glossiness"
-                                                  : "Roughness";
+  return MaterialSystem::GetMicrosurfaceLabel(material);
 }
 
 static const char *GetSecondarySurfaceLabel(const Asset::Material &material) {
-  return IsReflectionGlossinessWorkflow(material) ? "Reflection Weight"
-                                                  : "Metalness";
+  return MaterialSystem::GetSecondarySurfaceLabel(material);
 }
 
 static const char *GetRoughnessTextureLabel(const Asset::Material &material) {
-  return IsReflectionGlossinessWorkflow(material) ? "Glossiness"
-                                                  : "Roughness";
+  return MaterialSystem::GetMicrosurfaceTextureLabel(material);
 }
 
 bool IsPickingEnabled() { return s_pickingEnabled; }
@@ -404,133 +402,6 @@ void Draw(HWND hwnd, bool &visible) {
           }
         };
 
-        auto ApplyPreset = [](Asset::Material &m, int presetIdx) {
-          auto SetRoughness = [&](float r) {
-            r = (r < 0.0f) ? 0.0f : (r > 1.0f ? 1.0f : r);
-            m.roughness = r;
-          };
-
-          // Defaults that keep behavior stable
-          m.coatWeight = 0.0f;
-          m.coatRoughness = 0.1f;
-          m.thinWalled = 0.0f;
-          m.translucency = 0.0f;
-          m.uvScale[0] = 1.0f;
-          m.uvScale[1] = 1.0f;
-          m.uvOffset[0] = 0.0f;
-          m.uvOffset[1] = 0.0f;
-
-          m.triPlanarEnabled = 0.0f;
-          m.triPlanarScale = 1.0f;
-          m.triPlanarSharpness = 4.0f;
-          m.triPlanarNormalStrength = 1.0f;
-
-          // Keep refraction off unless preset wants it
-          m.transmissionColor[0] = 1.0f;
-          m.transmissionColor[1] = 1.0f;
-          m.transmissionColor[2] = 1.0f;
-          m.transmissionWeight = 0.0f;
-
-          // Corona-like archviz presets (engine approximation)
-          switch (presetIdx) {
-          default:
-          case 0: // Dielectric Generic
-            m.metalness = 0.0f;
-            m.ior = 1.5f;
-            SetRoughness(0.5f);
-            break;
-          case 1: // Paint / Plaster
-            m.metalness = 0.0f;
-            m.ior = 1.45f;
-            SetRoughness(0.75f);
-            break;
-          case 2: // Concrete
-            m.metalness = 0.0f;
-            m.ior = 1.5f;
-            SetRoughness(0.85f);
-            break;
-          case 3: // Wood (Raw)
-            m.metalness = 0.0f;
-            m.ior = 1.5f;
-            SetRoughness(0.6f);
-            break;
-          case 4: // Wood (Varnished)
-            m.metalness = 0.0f;
-            m.ior = 1.5f;
-            SetRoughness(0.35f);
-            m.coatWeight = 0.8f;
-            m.coatRoughness = 0.08f;
-            break;
-          case 5: // Tile (Ceramic)
-            m.metalness = 0.0f;
-            m.ior = 1.52f;
-            SetRoughness(0.25f);
-            m.coatWeight = 0.6f;
-            m.coatRoughness = 0.12f;
-            break;
-          case 6: // Metal (Brushed)
-            m.metalness = 1.0f;
-            m.ior = 1.0f;
-            SetRoughness(0.35f);
-            break;
-          case 7: // Metal (Polished)
-            m.metalness = 1.0f;
-            m.ior = 1.0f;
-            SetRoughness(0.08f);
-            break;
-          case 8: // Plastic
-            m.metalness = 0.0f;
-            m.ior = 1.45f;
-            SetRoughness(0.35f);
-            m.coatWeight = 0.25f;
-            m.coatRoughness = 0.15f;
-            break;
-          case 9: // Glass (Clear Window, Thin)
-            m.metalness = 0.0f;
-            m.ior = 1.52f;
-            SetRoughness(0.02f);
-            m.transmissionColor[0] = 1.0f;
-            m.transmissionColor[1] = 1.0f;
-            m.transmissionColor[2] = 1.0f;
-            m.transmissionWeight = 1.0f;
-            m.thinWalled = 1.0f;
-            break;
-          case 10: // Glass (Frosted, Thin)
-            m.metalness = 0.0f;
-            m.ior = 1.52f;
-            SetRoughness(0.35f);
-            m.transmissionColor[0] = 1.0f;
-            m.transmissionColor[1] = 1.0f;
-            m.transmissionColor[2] = 1.0f;
-            m.transmissionWeight = 1.0f;
-            m.thinWalled = 1.0f;
-            break;
-          case 11: // Glass (Tinted, Thin)
-            m.metalness = 0.0f;
-            m.ior = 1.52f;
-            SetRoughness(0.05f);
-            m.transmissionColor[0] = 0.85f;
-            m.transmissionColor[1] = 0.95f;
-            m.transmissionColor[2] = 1.0f;
-            m.transmissionWeight = 1.0f;
-            m.thinWalled = 1.0f;
-            break;
-          case 12: // Fabric (Approx)
-            m.metalness = 0.0f;
-            m.ior = 1.4f;
-            SetRoughness(0.8f);
-            m.translucency = 0.15f;
-            break;
-          case 13: // Vegetation Leaf (Approx)
-            m.metalness = 0.0f;
-            m.ior = 1.4f;
-            SetRoughness(0.65f);
-            m.translucency = 0.6f;
-            m.thinWalled = 1.0f;
-            break;
-          }
-        };
-
         // Inspector header
         ImGui::Text("Material: %s", mat.name);
         ImGui::SameLine();
@@ -587,7 +458,7 @@ void Draw(HWND hwnd, bool &visible) {
                      (int)(sizeof(presets) / sizeof(presets[0])));
         ImGui::SameLine();
         if (ImGui::Button("Apply")) {
-          ApplyPreset(mat, presetIdx);
+          MaterialSystem::ApplyPreset(mat, presetIdx);
           MarkOpacityDirty();
         }
 

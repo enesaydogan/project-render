@@ -173,10 +173,15 @@ struct MaterialChangedPayload {
   std::string occlusionTextureBlobHash;
   std::string metalRoughTextureUri;
   std::string metalRoughTextureBlobHash;
+  std::string metalnessTextureUri;
+  std::string metalnessTextureBlobHash;
+  std::string roughnessGlossTextureUri;
+  std::string roughnessGlossTextureBlobHash;
   std::array<float, 4> emissiveColor = {0.0f, 0.0f, 0.0f, 1.0f};
   float emissiveIntensity = 1.0f;
   float roughness = 0.2f;
   float metalness = 0.0f;
+  uint32_t workflow = 0;
   float specularWeight = 1.0f;
   float ior = 1.5f;
   float transmissionWeight = 0.0f;

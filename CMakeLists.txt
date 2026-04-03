@@ -47,6 +47,9 @@ target_sources(project-render PRIVATE
     src/file_import.cpp 
     src/scene.cpp 
     src/material_editor.cpp
+    src/material/material_io.cpp
+    src/material/material_livelink.cpp
+    src/material/material_system.cpp
     src/light.cpp
     src/ibl_manager.cpp
     src/PragueSkyModel.cpp
