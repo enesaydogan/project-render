@@ -369,48 +369,59 @@ void MaterialEditorPanel::createUi()
 
     auto *texturesTab = new QWidget(m_tabs);
     auto *texturesLayout = new QVBoxLayout(texturesTab);
+    texturesLayout->setSpacing(8);
 
     auto createTextureSlot = [this, texturesLayout](TextureSlot slot, const QString &title) {
-        auto *group = new QGroupBox(title, this);
-        auto *groupLayout = new QVBoxLayout(group);
+        auto *group = new QWidget(this);
+        group->setStyleSheet(QStringLiteral("QWidget { background: #232325; border-radius: 6px; } QLabel { background: transparent; } QPushButton { padding: 4px; }"));
+        
+        auto *groupLayout = new QGridLayout(group);
+        groupLayout->setContentsMargins(8, 8, 8, 8);
+        groupLayout->setSpacing(6);
 
-        auto *previewLabel = new QLabel(tr("No Preview"), group);
+        auto *previewLabel = new QLabel(tr("None"), group);
         previewLabel->setAlignment(Qt::AlignCenter);
-        previewLabel->setMinimumSize(84, 84);
-        previewLabel->setFrameShape(QFrame::StyledPanel);
-        previewLabel->setStyleSheet(QStringLiteral("color:#777;background:#1f1f1f;"));
-        groupLayout->addWidget(previewLabel);
+        previewLabel->setFixedSize(72, 72);
+        previewLabel->setStyleSheet(QStringLiteral("color:#777;background:#1a1a1a; border-radius: 4px;"));
+        groupLayout->addWidget(previewLabel, 0, 0, 3, 1);
+
+        auto *titleLabel = new QLabel(title, group);
+        titleLabel->setStyleSheet(QStringLiteral("font-weight: 600; color: #007acc;"));
+        groupLayout->addWidget(titleLabel, 0, 1);
+
+        auto *infoLabel = new QLabel(tr("-"), group);
+        infoLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        infoLabel->setStyleSheet(QStringLiteral("color: #777; font-size: 11px;"));
+        groupLayout->addWidget(infoLabel, 0, 2);
 
         auto *combo = new QComboBox(group);
         combo->setSizeAdjustPolicy(QComboBox::AdjustToContentsOnFirstShow);
-        groupLayout->addWidget(combo);
+        groupLayout->addWidget(combo, 1, 1, 1, 2);
 
-        auto *amountRow = new QHBoxLayout();
-        auto *amountLabel = new QLabel(tr("Amount"), group);
+        auto *controlsLayout = new QHBoxLayout();
+        controlsLayout->setSpacing(4);
+        
         auto *amount = CreateSliderControl(0.0, 1.0, 0.01, 3);
-        amountRow->addWidget(amountLabel);
-        amountRow->addWidget(amount, 1);
-        groupLayout->addLayout(amountRow);
-
-        auto *buttonRow = new QHBoxLayout();
+        controlsLayout->addWidget(amount, 1);
+        
+        auto *loadButton = new QPushButton(tr("Load"), group);
         auto *clearButton = new QPushButton(tr("Clear"), group);
-        auto *loadButton = new QPushButton(tr("Load..."), group);
-        auto *editButton = new QPushButton(tr("Edit Index"), group);
-        buttonRow->addWidget(clearButton);
-        buttonRow->addWidget(loadButton);
-        buttonRow->addWidget(editButton);
-        buttonRow->addStretch(1);
-        groupLayout->addLayout(buttonRow);
-
-        auto *infoLabel = new QLabel(tr("No texture bound"), group);
-        infoLabel->setWordWrap(true);
-        infoLabel->setStyleSheet(QStringLiteral("color: #777;"));
-        groupLayout->addWidget(infoLabel);
+        auto *editButton = new QPushButton(tr("Id"), group);
+        loadButton->setFixedWidth(46);
+        clearButton->setFixedWidth(46);
+        editButton->setFixedWidth(36);
+        
+        controlsLayout->addWidget(loadButton);
+        controlsLayout->addWidget(clearButton);
+        controlsLayout->addWidget(editButton);
+        
+        groupLayout->addLayout(controlsLayout, 2, 1, 1, 2);
 
         texturesLayout->addWidget(group);
 
         m_textureSlots[slot].group = group;
         m_textureSlots[slot].previewLabel = previewLabel;
+        m_textureSlots[slot].label = titleLabel;
         m_textureSlots[slot].combo = combo;
         m_textureSlots[slot].amount = amount;
         m_textureSlots[slot].clearButton = clearButton;
@@ -1458,8 +1469,8 @@ void MaterialEditorPanel::updateWorkflowUi(const Asset::Material &mat)
     if (m_textureSlots[Metalness].group) {
         m_textureSlots[Metalness].group->setVisible(!reflectionWorkflow);
     }
-    if (m_textureSlots[RoughnessGlossiness].group) {
-        m_textureSlots[RoughnessGlossiness].group->setTitle(
+    if (m_textureSlots[RoughnessGlossiness].label) {
+        m_textureSlots[RoughnessGlossiness].label->setText(
             RoughnessTextureTitleForMaterial(mat));
     }
 }

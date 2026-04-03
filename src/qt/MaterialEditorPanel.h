@@ -43,7 +43,7 @@ private:
     };
 
     struct TextureSlotWidgets {
-        QGroupBox *group = nullptr;
+        QWidget *group = nullptr;
         QLabel *previewLabel = nullptr;
         QLabel *label = nullptr;
         QComboBox *combo = nullptr;
