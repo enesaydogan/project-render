@@ -46,9 +46,13 @@ QWidget *CreateVec3Editor(QDoubleSpinBox *&x,
     auto *row = new QWidget();
     auto *layout = new QHBoxLayout(row);
     layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(4);
     x = CreateDoubleSpinBox(minValue, maxValue, step, decimals);
     y = CreateDoubleSpinBox(minValue, maxValue, step, decimals);
     z = CreateDoubleSpinBox(minValue, maxValue, step, decimals);
+    x->setPrefix((QStringLiteral("X: ")));
+    y->setPrefix((QStringLiteral("Y: ")));
+    z->setPrefix((QStringLiteral("Z: ")));
     layout->addWidget(x);
     layout->addWidget(y);
     layout->addWidget(z);
@@ -73,6 +77,8 @@ LightsPanel::LightsPanel(QWidget *parent)
 void LightsPanel::createUi()
 {
     auto *layout = new QVBoxLayout(this);
+    layout->setContentsMargins(8, 8, 8, 8);
+    layout->setSpacing(8);
 
     m_loadNotice = new QLabel(tr("Scene load in progress..."), this);
     m_loadNotice->setWordWrap(true);
@@ -80,48 +86,75 @@ void LightsPanel::createUi()
     layout->addWidget(m_loadNotice);
 
     auto *buttonGrid = new QGridLayout();
-    m_addPointButton = new QPushButton(tr("Add Point Light"), this);
-    m_addSpotButton = new QPushButton(tr("Add Spot Light"), this);
-    m_addRectButton = new QPushButton(tr("Add Rect Area"), this);
-    m_addDiskButton = new QPushButton(tr("Add Disk Area"), this);
+    buttonGrid->setContentsMargins(0, 0, 0, 0);
+    buttonGrid->setSpacing(4);
+    m_addPointButton = new QPushButton(tr("Point"), this);
+    m_addSpotButton = new QPushButton(tr("Spot"), this);
+    m_addRectButton = new QPushButton(tr("Rect"), this);
+    m_addDiskButton = new QPushButton(tr("Disk"), this);
+    
+    // Icon fonts or symbols can be added here if desired.
+    m_addPointButton->setToolTip(tr("Add Point Light"));
+    m_addSpotButton->setToolTip(tr("Add Spot Light"));
+    m_addRectButton->setToolTip(tr("Add Rect Area Light"));
+    m_addDiskButton->setToolTip(tr("Add Disk Area Light"));
+    
     buttonGrid->addWidget(m_addPointButton, 0, 0);
     buttonGrid->addWidget(m_addSpotButton, 0, 1);
-    buttonGrid->addWidget(m_addRectButton, 1, 0);
-    buttonGrid->addWidget(m_addDiskButton, 1, 1);
+    buttonGrid->addWidget(m_addRectButton, 0, 2);
+    buttonGrid->addWidget(m_addDiskButton, 0, 3);
     layout->addLayout(buttonGrid);
 
     m_listGroup = new QGroupBox(tr("Lights"), this);
     auto *listLayout = new QVBoxLayout(m_listGroup);
+    listLayout->setContentsMargins(8, 12, 8, 8);
+    listLayout->setSpacing(4);
     m_lightList = new QListWidget(m_listGroup);
+    m_lightList->setMinimumHeight(100);
     listLayout->addWidget(m_lightList);
 
-    m_propertiesGroup = new QGroupBox(tr("Selected Light"), this);
+    m_propertiesGroup = new QGroupBox(tr("Properties"), this);
     auto *propertiesLayout = new QVBoxLayout(m_propertiesGroup);
+    propertiesLayout->setContentsMargins(8, 12, 8, 8);
+    propertiesLayout->setSpacing(8);
+
     auto *form = new QFormLayout();
+    form->setContentsMargins(0, 0, 0, 0);
+    form->setSpacing(6);
 
     m_typeLabel = new QLabel(tr("None"), m_propertiesGroup);
+    m_typeLabel->setStyleSheet(QStringLiteral("color: #007acc; font-weight: bold;"));
     form->addRow(tr("Type"), m_typeLabel);
 
     auto *posRow = CreateVec3Editor(m_posX, m_posY, m_posZ, -10000.0, 10000.0, 0.1, 2);
-    form->addRow(tr("Position"), posRow);
+    // Put vec3 editors on a new row to save horizontal space
+    auto *posLabel = new QLabel(tr("Position"), m_propertiesGroup);
+    propertiesLayout->addLayout(form);
+    propertiesLayout->addWidget(posLabel);
+    propertiesLayout->addWidget(posRow);
 
+    auto *form2 = new QFormLayout();
+    form2->setContentsMargins(0, 0, 0, 0);
+    form2->setSpacing(6);
     m_colorButton = new QPushButton(tr("Pick Color"), m_propertiesGroup);
-    form->addRow(tr("Color"), m_colorButton);
+    form2->addRow(tr("Color"), m_colorButton);
 
     m_intensity = CreateDoubleSpinBox(0.0, 1000000.0, 10.0, 2);
-    form->addRow(tr("Intensity"), m_intensity);
+    form2->addRow(tr("Intensity"), m_intensity);
+    
+    m_radius = CreateDoubleSpinBox(0.0, 10.0, 0.01, 3);
+    form2->addRow(tr("Radius"), m_radius);
+    propertiesLayout->addLayout(form2);
 
     m_directionLabel = new QLabel(tr("Direction"), m_propertiesGroup);
     m_directionRow = CreateVec3Editor(m_dirX, m_dirY, m_dirZ, -1000.0, 1000.0, 0.01, 3);
-    form->addRow(m_directionLabel, m_directionRow);
-
-    m_radius = CreateDoubleSpinBox(0.0, 10.0, 0.01, 3);
-    form->addRow(tr("Radius"), m_radius);
-
-    propertiesLayout->addLayout(form);
+    propertiesLayout->addWidget(m_directionLabel);
+    propertiesLayout->addWidget(m_directionRow);
 
     m_spotGroup = new QGroupBox(tr("Spot Light"), m_propertiesGroup);
     auto *spotForm = new QFormLayout(m_spotGroup);
+    spotForm->setContentsMargins(8, 12, 8, 8);
+    spotForm->setSpacing(6);
     m_innerAngle = CreateDoubleSpinBox(0.0, 90.0, 0.1, 1);
     m_outerAngle = CreateDoubleSpinBox(0.0, 90.0, 0.1, 1);
     spotForm->addRow(tr("Inner Angle"), m_innerAngle);
@@ -130,6 +163,8 @@ void LightsPanel::createUi()
 
     m_areaGroup = new QGroupBox(tr("Area Light"), m_propertiesGroup);
     auto *areaForm = new QFormLayout(m_areaGroup);
+    areaForm->setContentsMargins(8, 12, 8, 8);
+    areaForm->setSpacing(6);
     m_areaWidth = CreateDoubleSpinBox(0.01, 50.0, 0.1, 2);
     m_areaHeight = CreateDoubleSpinBox(0.01, 50.0, 0.1, 2);
     areaForm->addRow(tr("Width"), m_areaWidth);
@@ -138,24 +173,27 @@ void LightsPanel::createUi()
 
     m_iesGroup = new QGroupBox(tr("IES"), m_propertiesGroup);
     auto *iesLayout = new QVBoxLayout(m_iesGroup);
+    iesLayout->setContentsMargins(8, 12, 8, 8);
     m_iesLabel = new QLabel(tr("IES Atlas Index: -1"), m_iesGroup);
     iesLayout->addWidget(m_iesLabel);
     propertiesLayout->addWidget(m_iesGroup);
 
     auto *actionRow = new QHBoxLayout();
-    m_selectButton = new QPushButton(tr("Select for Gizmo"), m_propertiesGroup);
+    actionRow->setSpacing(4);
+    m_selectButton = new QPushButton(tr("Select Gizmo"), m_propertiesGroup);
     m_removeButton = new QPushButton(tr("Remove"), m_propertiesGroup);
     actionRow->addWidget(m_selectButton);
     actionRow->addWidget(m_removeButton);
     propertiesLayout->addLayout(actionRow);
 
     auto *splitLayout = new QVBoxLayout();
-    splitLayout->addWidget(m_listGroup);
-    splitLayout->addWidget(m_propertiesGroup);
-    splitLayout->setStretch(0, 1);
-    splitLayout->setStretch(1, 2);
+    splitLayout->setSpacing(8);
+    splitLayout->addWidget(m_listGroup, 1);
+    splitLayout->addWidget(m_propertiesGroup, 2);
     layout->addLayout(splitLayout);
-    layout->addStretch(1);
+    
+    // Since properties can take up space, no generic stretch at the bottom 
+    // helps keep the UI anchored properly without floating loosely.
 
     connect(m_addPointButton, &QPushButton::clicked, this, [this]() {
         Scene::AddLight(LightType::Omni);
