@@ -43,6 +43,15 @@
     <ClCompile Include="D:\project-render\src\material_editor.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\project-render\src\material\material_io.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\project-render\src\material\material_livelink.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\project-render\src\material\material_system.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="D:\project-render\src\light.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

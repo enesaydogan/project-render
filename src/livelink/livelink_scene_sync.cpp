@@ -4,6 +4,7 @@
 #include "../camera.h"
 #include "../dxr_renderer.h"
 #include "../ibl_manager.h"
+#include "../material/material_livelink.h"
 #include "../scene.h"
 
 #include <algorithm>
@@ -1699,11 +1700,6 @@ bool LiveLinkSceneSync::ApplyMaterialChanged(const SceneDeltaBatch &batch,
 
   PruneTextureCacheEntries();
 
-  for (size_t i = 0; i < payload->baseColor.size(); ++i) {
-    material.diffuseColor[i] = payload->baseColor[i];
-    material.emissiveColor[i] = payload->emissiveColor[i];
-  }
-
   auto resolveEmbeddedOrUriTextureIndex =
       [this](const std::string &textureBlobHash,
              const std::string &textureUri) {
@@ -1734,48 +1730,9 @@ bool LiveLinkSceneSync::ApplyMaterialChanged(const SceneDeltaBatch &batch,
         }
         return textureIndex;
       };
-
-  material.diffuseTexture = resolveEmbeddedOrUriTextureIndex(
-      payload->baseColorTextureBlobHash, payload->baseColorTextureUri);
-  material.normalTexture = resolveEmbeddedOrUriTextureIndex(
-      payload->normalTextureBlobHash, payload->normalTextureUri);
-  material.emissiveTexture = resolveEmbeddedOrUriTextureIndex(
-      payload->emissiveTextureBlobHash, payload->emissiveTextureUri);
-  material.occlusionTexture = resolveEmbeddedOrUriTextureIndex(
-      payload->occlusionTextureBlobHash, payload->occlusionTextureUri);
-  material.metalRoughTexture = resolveEmbeddedOrUriTextureIndex(
-      payload->metalRoughTextureBlobHash, payload->metalRoughTextureUri);
-  material.emissiveIntensity = payload->emissiveIntensity;
-  material.roughness = payload->roughness;
-  material.metalness = payload->metalness;
-  material.specularWeight = payload->specularWeight;
-  material.ior = payload->ior;
-  material.transmissionWeight = payload->transmissionWeight;
-  for (size_t i = 0; i < payload->transmissionColor.size(); ++i) {
-    material.transmissionColor[i] = payload->transmissionColor[i];
-  }
-  material.coatWeight = payload->coatWeight;
-  material.coatRoughness = payload->coatRoughness;
-  material.thinWalled = payload->thinWalled;
-  material.translucency = payload->translucency;
-  material.uvScale[0] = fabsf(payload->uvScale[0]) > 1.0e-6f ? payload->uvScale[0] : 1.0f;
-  material.uvScale[1] = fabsf(payload->uvScale[1]) > 1.0e-6f ? payload->uvScale[1] : 1.0f;
-  material.uvOffset[0] = payload->uvOffset[0];
-  material.uvOffset[1] = payload->uvOffset[1];
-  material.triPlanarEnabled = payload->triPlanarEnabled > 0.5f ? 1.0f : 0.0f;
-  material.triPlanarScale =
-      fabsf(payload->triPlanarScale) > 1.0e-6f ? fabsf(payload->triPlanarScale)
-                                               : 1.0f;
-  material.triPlanarSharpness =
-      std::clamp(payload->triPlanarSharpness, 0.25f, 16.0f);
-  material.triPlanarNormalStrength =
-      (std::max)(0.0f, payload->triPlanarNormalStrength);
-  material.doubleSided = payload->doubleSided;
-  material.alphaMode = payload->alphaMode.empty() ? "OPAQUE" : payload->alphaMode;
-  material.invertRoughnessTexture = payload->invertRoughnessTexture;
-  if (!payload->materialModel.empty()) {
-    material.schemaVersion = Asset::Material::kSchemaVersionOpenPbrSubset;
-  }
+      MaterialLiveLink::ApplyPayloadToMaterial(*payload,
+                           resolveEmbeddedOrUriTextureIndex,
+                           &material);
 
   strncpy_s(material.name, materialName.c_str(), _TRUNCATE);
 

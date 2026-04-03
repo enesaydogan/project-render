@@ -3,6 +3,7 @@
 #include "dxr_renderer.h"
 #include "ibl_manager.h"
 #include "livelink/livelink_scene_sync.h"
+#include "material/material_io.h"
 #include "animation_sequence.h"
 #include "saved_views.h"
 #include "scene.h"
@@ -375,31 +376,6 @@ static bool DecompressLZMSAny(const uint8_t *comp, size_t compSize,
   return DecompressLZMSLegacy(comp, compSize, output, uncompSize);
 }
 
-// ---------------------------------------------------------------------------
-// Build compact metadata (msgpack-friendly short keys for smallest size)
-// ---------------------------------------------------------------------------
-static std::vector<int> BuildSavedTextureRemap() {
-  std::vector<int> remap(g_loadedTextures.size(), -1);
-  int nextIndex = 0;
-  for (size_t textureIndex = 0; textureIndex < g_loadedTextures.size();
-       ++textureIndex) {
-    if (g_loadedTextures[textureIndex].hiddenInEditor) {
-      continue;
-    }
-    remap[textureIndex] = nextIndex++;
-  }
-  return remap;
-}
-
-static int MapSavedTextureIndex(const std::vector<int> &remap,
-                                int textureIndex) {
-  if (textureIndex < 0 ||
-      textureIndex >= static_cast<int>(remap.size())) {
-    return -1;
-  }
-  return remap[static_cast<size_t>(textureIndex)];
-}
-
 static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
   json j;
   j["matv"] = Asset::Material::kSchemaVersionOpenPbrSubset;
@@ -597,39 +573,8 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
   };
 
   // Materials
-  for (const auto &mat : g_loadedMaterials) {
-    j["mat"].push_back({
-      {"n",  std::string(mat.name)},
-      {"sv", mat.schemaVersion},
-      {"bc", {mat.diffuseColor[0], mat.diffuseColor[1], mat.diffuseColor[2], mat.diffuseColor[3]}},
-      {"mt", mat.metalness},
-      {"rg", mat.roughness}, {"sw", mat.specularWeight},
-      {"tc", {mat.transmissionColor[0], mat.transmissionColor[1], mat.transmissionColor[2]}},
-      {"tr", mat.transmissionWeight},
-      {"io", mat.ior},
-      {"ec", {mat.emissiveColor[0], mat.emissiveColor[1], mat.emissiveColor[2], mat.emissiveColor[3]}},
-      {"ei", mat.emissiveIntensity},
-      {"cw", mat.coatWeight}, {"cr", mat.coatRoughness},
-      {"th", mat.thinWalled}, {"tl", mat.translucency},
-      {"us", {mat.uvScale[0], mat.uvScale[1]}},
-      {"uo", {mat.uvOffset[0], mat.uvOffset[1]}},
-      {"te", mat.triPlanarEnabled}, {"ts", mat.triPlanarScale},
-      {"ths", mat.triPlanarSharpness}, {"tns", mat.triPlanarNormalStrength},
-      {"wf", mat.workflow},
-      {"txd", MapSavedTextureIndex(textureSaveRemap, mat.diffuseTexture)},
-      {"txn", MapSavedTextureIndex(textureSaveRemap, mat.normalTexture)},
-      {"txe", MapSavedTextureIndex(textureSaveRemap, mat.emissiveTexture)},
-      {"txo", MapSavedTextureIndex(textureSaveRemap, mat.occlusionTexture)},
-      {"txm", MapSavedTextureIndex(textureSaveRemap, mat.metalRoughTexture)},
-      {"txmt", MapSavedTextureIndex(textureSaveRemap, mat.metalnessTexture)},
-      {"txrg", MapSavedTextureIndex(textureSaveRemap, mat.roughnessGlossTexture)},
-      {"ds", mat.doubleSided}, {"am", mat.alphaMode},
-      {"gr", mat.isGrass},
-      {"gc", {mat.grassColor[0], mat.grassColor[1], mat.grassColor[2]}},
-      {"gs", mat.grassBladeSize}, {"gn", mat.grassBladeCount},
-      {"gv", mat.grassBladeVariation}
-    });
-  }
+  j["mat"] = MaterialIO::BuildMaterialsMetadata(g_loadedMaterials,
+                                                 textureSaveRemap);
 
   // Nodes
   for (const auto &node : Scene::GetNodes()) {
@@ -1051,67 +996,6 @@ static void RestoreLiveLinkBindingsPRS(const json &j,
   LiveLink::GetSceneSync().RestorePersistedBindings(bindings);
 }
 
-// ---------------------------------------------------------------------------
-// Restore materials from PRS metadata
-// ---------------------------------------------------------------------------
-static void RestoreMaterialsPRS(const json &j, std::vector<int> &remap) {
-  if (!j.contains("mat")) return;
-  auto &mats = j["mat"];
-  remap.resize(mats.size(), -1);
-  for (size_t ji = 0; ji < mats.size(); ++ji) {
-    const auto &sm = mats[ji];
-    std::string name = sm.value("n", "Material");
-    int idx = -1;
-    for (size_t mi = 0; mi < g_loadedMaterials.size(); ++mi)
-      if (std::string(g_loadedMaterials[mi].name) == name) { idx=(int)mi; break; }
-    if (idx == -1) {
-      Asset::Material nm; strncpy_s(nm.name, name.c_str(), sizeof(nm.name)-1);
-      g_loadedMaterials.push_back(nm); idx=(int)g_loadedMaterials.size()-1;
-    }
-    remap[ji] = idx;
-    auto &mat = g_loadedMaterials[idx];
-    mat.schemaVersion = sm.value("sv", Asset::Material::kSchemaVersionOpenPbrSubset);
-    if (sm.contains("bc"))  for (int k=0;k<4;k++) mat.diffuseColor[k]=sm["bc"][k];
-    mat.metalness = sm.value("mt", mat.metalness);
-    mat.roughness = sm.value("rg", mat.roughness);
-    mat.specularWeight = sm.value("sw", mat.specularWeight);
-    if (sm.contains("tc")) for (int k=0;k<3;k++) mat.transmissionColor[k]=sm["tc"][k];
-    mat.transmissionWeight = sm.value("tr", mat.transmissionWeight);
-    mat.ior = sm.value("io", mat.ior);
-    if (sm.contains("ec"))  for (int k=0;k<4;k++) mat.emissiveColor[k]=sm["ec"][k];
-    mat.emissiveIntensity = sm.value("ei", mat.emissiveIntensity);
-    mat.coatWeight = sm.value("cw", mat.coatWeight);
-    mat.coatRoughness = sm.value("cr", mat.coatRoughness);
-    mat.thinWalled = sm.value("th", mat.thinWalled);
-    mat.translucency = sm.value("tl", mat.translucency);
-    mat.workflow = sm.value("wf", mat.workflow);
-    if (sm.contains("us")) for (int k=0;k<2;k++) mat.uvScale[k]=sm["us"][k];
-    if (sm.contains("uo")) for (int k=0;k<2;k++) mat.uvOffset[k]=sm["uo"][k];
-    mat.triPlanarEnabled = sm.value("te", mat.triPlanarEnabled);
-    mat.triPlanarScale = sm.value("ts", mat.triPlanarScale);
-    mat.triPlanarSharpness = sm.value("ths", mat.triPlanarSharpness);
-    mat.triPlanarNormalStrength = sm.value("tns", mat.triPlanarNormalStrength);
-    mat.isGrass = sm.value("gr", mat.isGrass);
-    if (sm.contains("gc")) for (int k=0;k<3;k++) mat.grassColor[k]=sm["gc"][k];
-    else if (mat.isGrass) { mat.grassColor[0]=mat.diffuseColor[0]; mat.grassColor[1]=mat.diffuseColor[1]; mat.grassColor[2]=mat.diffuseColor[2]; }
-    mat.grassBladeSize = sm.value("gs", mat.grassBladeSize);
-    mat.grassBladeCount = sm.value("gn", mat.grassBladeCount);
-    mat.grassBladeVariation = sm.value("gv", mat.grassBladeVariation);
-    auto setTex = [&](const char *key, int &field) {
-      if (sm.contains(key)) { int t=sm[key]; field=(t>=0 && t<(int)g_loadedTextures.size())?t:-1; }
-    };
-    setTex("txd",mat.diffuseTexture); setTex("txn",mat.normalTexture);
-    setTex("txe",mat.emissiveTexture); setTex("txo",mat.occlusionTexture);
-    setTex("txm",mat.metalRoughTexture);
-    setTex("txmt",mat.metalnessTexture);
-    setTex("txrg",mat.roughnessGlossTexture);
-    mat.runtimeMetalRoughTexture = -1;
-    mat.doubleSided = sm.value("ds", mat.doubleSided);
-    mat.alphaMode = sm.value("am", mat.alphaMode);
-    mat.schemaVersion = Asset::Material::kSchemaVersionOpenPbrSubset;
-  }
-}
-
 // ===========================================================================
 //  Public API
 // ===========================================================================
@@ -1130,7 +1014,8 @@ bool SaveScene(const std::string &path) {
     ReportProgress(0.01f, "Preparing scene metadata");
     fprintf(stderr, "PRS: Saving scene to %s\n", path.c_str());
 
-    const std::vector<int> textureSaveRemap = BuildSavedTextureRemap();
+    const std::vector<int> textureSaveRemap =
+      MaterialIO::BuildTextureSaveRemap(g_loadedTextures);
 
     // 1. Build metadata as msgpack
     json metadata = BuildMetadata(textureSaveRemap);
@@ -1350,7 +1235,11 @@ bool LoadScenePRS(const std::string &path) {
     RestoreNodesPRS(meta, hasEmbedded);
 
     std::vector<int> remap;
-    RestoreMaterialsPRS(meta, remap);
+    if (meta.contains("mat")) {
+      MaterialIO::RestoreMaterialsFromMetadata(meta["mat"],
+                                               &g_loadedMaterials,
+                                               g_loadedTextures, &remap);
+    }
     Scene::RefreshAllMaterialRuntimeTextures();
     RestoreLiveLinkBindingsPRS(meta, remap);
 

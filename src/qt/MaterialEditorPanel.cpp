@@ -10,6 +10,7 @@
 #include "../dxr_renderer.h"
 #include "../editor_ui.h"
 #include "../file_import.h"
+#include "../material/material_system.h"
 #include "../material_editor.h"
 #include "../scene.h"
 
@@ -141,7 +142,7 @@ const char *AlphaModeFromIndex(int index)
 
 bool IsReflectionGlossinessWorkflow(const Asset::Material &material)
 {
-    return material.workflow == Asset::Material::kWorkflowReflectionGlossiness;
+    return MaterialSystem::UsesReflectionGlossiness(material);
 }
 
 QString RoughnessLabelForMaterial(const Asset::Material &material)
@@ -167,135 +168,12 @@ QString RoughnessTextureTitleForMaterial(const Asset::Material &material)
 
 bool MaterialAffectsRtStructure(const Asset::Material &material)
 {
-    return material.alphaMode != "OPAQUE" ||
-           material.diffuseColor[3] < 0.999f ||
-           material.transmissionWeight > 0.01f ||
-           material.thinWalled > 0.5f;
+    return MaterialSystem::MaterialAffectsRtStructure(material);
 }
 
 void ApplyPreset(Asset::Material &m, int presetIdx)
 {
-    auto SetRoughness = [&](float r) {
-        r = (r < 0.0f) ? 0.0f : (r > 1.0f ? 1.0f : r);
-        m.roughness = r;
-    };
-
-    m.coatWeight = 0.0f;
-    m.coatRoughness = 0.1f;
-    m.thinWalled = 0.0f;
-    m.translucency = 0.0f;
-    m.uvScale[0] = 1.0f;
-    m.uvScale[1] = 1.0f;
-    m.uvOffset[0] = 0.0f;
-    m.uvOffset[1] = 0.0f;
-
-    m.triPlanarEnabled = 0.0f;
-    m.triPlanarScale = 1.0f;
-    m.triPlanarSharpness = 4.0f;
-    m.triPlanarNormalStrength = 1.0f;
-
-    m.transmissionColor[0] = 1.0f;
-    m.transmissionColor[1] = 1.0f;
-    m.transmissionColor[2] = 1.0f;
-    m.transmissionWeight = 0.0f;
-
-    switch (presetIdx) {
-    default:
-    case 0: // Dielectric Generic
-        m.metalness = 0.0f;
-        m.ior = 1.5f;
-        SetRoughness(0.5f);
-        break;
-    case 1: // Paint / Plaster
-        m.metalness = 0.0f;
-        m.ior = 1.45f;
-        SetRoughness(0.75f);
-        break;
-    case 2: // Concrete
-        m.metalness = 0.0f;
-        m.ior = 1.5f;
-        SetRoughness(0.85f);
-        break;
-    case 3: // Wood (Raw)
-        m.metalness = 0.0f;
-        m.ior = 1.5f;
-        SetRoughness(0.6f);
-        break;
-    case 4: // Wood (Varnished)
-        m.metalness = 0.0f;
-        m.ior = 1.5f;
-        SetRoughness(0.35f);
-        m.coatWeight = 0.8f;
-        m.coatRoughness = 0.08f;
-        break;
-    case 5: // Tile (Ceramic)
-        m.metalness = 0.0f;
-        m.ior = 1.52f;
-        SetRoughness(0.25f);
-        m.coatWeight = 0.6f;
-        m.coatRoughness = 0.12f;
-        break;
-    case 6: // Metal (Brushed)
-        m.metalness = 1.0f;
-        m.ior = 1.0f;
-        SetRoughness(0.35f);
-        break;
-    case 7: // Metal (Polished)
-        m.metalness = 1.0f;
-        m.ior = 1.0f;
-        SetRoughness(0.08f);
-        break;
-    case 8: // Plastic
-        m.metalness = 0.0f;
-        m.ior = 1.45f;
-        SetRoughness(0.35f);
-        m.coatWeight = 0.25f;
-        m.coatRoughness = 0.15f;
-        break;
-    case 9: // Glass (Clear Window, Thin)
-        m.metalness = 0.0f;
-        m.ior = 1.52f;
-        SetRoughness(0.02f);
-        m.transmissionColor[0] = 1.0f;
-        m.transmissionColor[1] = 1.0f;
-        m.transmissionColor[2] = 1.0f;
-        m.transmissionWeight = 1.0f;
-        m.thinWalled = 1.0f;
-        break;
-    case 10: // Glass (Frosted, Thin)
-        m.metalness = 0.0f;
-        m.ior = 1.52f;
-        SetRoughness(0.35f);
-        m.transmissionColor[0] = 1.0f;
-        m.transmissionColor[1] = 1.0f;
-        m.transmissionColor[2] = 1.0f;
-        m.transmissionWeight = 1.0f;
-        m.thinWalled = 1.0f;
-        break;
-    case 11: // Glass (Tinted, Thin)
-        m.metalness = 0.0f;
-        m.ior = 1.52f;
-        SetRoughness(0.05f);
-        m.transmissionColor[0] = 0.85f;
-        m.transmissionColor[1] = 0.95f;
-        m.transmissionColor[2] = 1.0f;
-        m.transmissionWeight = 1.0f;
-        m.thinWalled = 1.0f;
-        break;
-    case 12: // Fabric (Approx)
-        m.metalness = 0.0f;
-        m.ior = 1.4f;
-        SetRoughness(0.8f);
-        m.translucency = 0.15f;
-        break;
-    case 13: // Vegetation Leaf (Approx)
-        m.metalness = 0.0f;
-        m.ior = 1.4f;
-        SetRoughness(0.65f);
-        m.translucency = 0.6f;
-        m.thinWalled = 1.0f;
-        break;
-    }
+    MaterialSystem::ApplyPreset(m, presetIdx);
 }
 
 } // namespace
@@ -1423,27 +1301,49 @@ void MaterialEditorPanel::updateTextureOptions()
 int MaterialEditorPanel::textureIndexForSlot(const Asset::Material &mat, TextureSlot slot) const
 {
     switch (slot) {
-    case Albedo: return mat.diffuseTexture;
-    case PackedMetalRough: return mat.metalRoughTexture;
-    case Metalness: return mat.metalnessTexture;
-    case RoughnessGlossiness: return mat.roughnessGlossTexture;
-    case Normal: return mat.normalTexture;
-    case Occlusion: return mat.occlusionTexture;
-    case Emissive: return mat.emissiveTexture;
-    default: return -1;
+    case Albedo:
+        return MaterialSystem::GetTextureIndex(mat, MaterialSystem::TextureSlot::BaseColor);
+    case PackedMetalRough:
+        return MaterialSystem::GetTextureIndex(mat, MaterialSystem::TextureSlot::PackedSurface);
+    case Metalness:
+        return MaterialSystem::GetTextureIndex(mat, MaterialSystem::TextureSlot::Metalness);
+    case RoughnessGlossiness:
+        return MaterialSystem::GetTextureIndex(mat, MaterialSystem::TextureSlot::RoughnessOrGlossiness);
+    case Normal:
+        return MaterialSystem::GetTextureIndex(mat, MaterialSystem::TextureSlot::Normal);
+    case Occlusion:
+        return MaterialSystem::GetTextureIndex(mat, MaterialSystem::TextureSlot::Occlusion);
+    case Emissive:
+        return MaterialSystem::GetTextureIndex(mat, MaterialSystem::TextureSlot::Emissive);
+    default:
+        return -1;
     }
 }
 
 void MaterialEditorPanel::setTextureIndexForSlot(Asset::Material &mat, TextureSlot slot, int index)
 {
     switch (slot) {
-    case Albedo: mat.diffuseTexture = index; break;
-    case PackedMetalRough: mat.metalRoughTexture = index; break;
-    case Metalness: mat.metalnessTexture = index; break;
-    case RoughnessGlossiness: mat.roughnessGlossTexture = index; break;
-    case Normal: mat.normalTexture = index; break;
-    case Occlusion: mat.occlusionTexture = index; break;
-    case Emissive: mat.emissiveTexture = index; break;
+    case Albedo:
+        MaterialSystem::SetTextureIndex(mat, MaterialSystem::TextureSlot::BaseColor, index);
+        break;
+    case PackedMetalRough:
+        MaterialSystem::SetTextureIndex(mat, MaterialSystem::TextureSlot::PackedSurface, index);
+        break;
+    case Metalness:
+        MaterialSystem::SetTextureIndex(mat, MaterialSystem::TextureSlot::Metalness, index);
+        break;
+    case RoughnessGlossiness:
+        MaterialSystem::SetTextureIndex(mat, MaterialSystem::TextureSlot::RoughnessOrGlossiness, index);
+        break;
+    case Normal:
+        MaterialSystem::SetTextureIndex(mat, MaterialSystem::TextureSlot::Normal, index);
+        break;
+    case Occlusion:
+        MaterialSystem::SetTextureIndex(mat, MaterialSystem::TextureSlot::Occlusion, index);
+        break;
+    case Emissive:
+        MaterialSystem::SetTextureIndex(mat, MaterialSystem::TextureSlot::Emissive, index);
+        break;
     default: break;
     }
 }

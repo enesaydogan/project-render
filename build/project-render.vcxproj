@@ -960,6 +960,9 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="D:\project-render\src\file_import.cpp" />
     <ClCompile Include="D:\project-render\src\scene.cpp" />
     <ClCompile Include="D:\project-render\src\material_editor.cpp" />
+    <ClCompile Include="D:\project-render\src\material\material_io.cpp" />
+    <ClCompile Include="D:\project-render\src\material\material_livelink.cpp" />
+    <ClCompile Include="D:\project-render\src\material\material_system.cpp" />
     <ClCompile Include="D:\project-render\src\light.cpp" />
     <ClCompile Include="D:\project-render\src\ibl_manager.cpp" />
     <ClCompile Include="D:\project-render\src\PragueSkyModel.cpp" />
