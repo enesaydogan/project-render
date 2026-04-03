@@ -55,7 +55,7 @@ struct CameraCB {
   float tonemapAoIntensity;
   float tonemapAoRadiusMeters;
   float tonemapAoMode;
-  float tonemapAoPad0;
+  float triPlanarWorldRotationDegrees;
   float shadowMatrix[16];
   float viewProj[16];
   float invViewProj[16];

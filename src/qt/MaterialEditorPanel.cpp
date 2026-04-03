@@ -385,6 +385,13 @@ void MaterialEditorPanel::createUi()
         combo->setSizeAdjustPolicy(QComboBox::AdjustToContentsOnFirstShow);
         groupLayout->addWidget(combo);
 
+        auto *amountRow = new QHBoxLayout();
+        auto *amountLabel = new QLabel(tr("Amount"), group);
+        auto *amount = CreateSliderControl(0.0, 1.0, 0.01, 3);
+        amountRow->addWidget(amountLabel);
+        amountRow->addWidget(amount, 1);
+        groupLayout->addLayout(amountRow);
+
         auto *buttonRow = new QHBoxLayout();
         auto *clearButton = new QPushButton(tr("Clear"), group);
         auto *loadButton = new QPushButton(tr("Load..."), group);
@@ -405,6 +412,7 @@ void MaterialEditorPanel::createUi()
         m_textureSlots[slot].group = group;
         m_textureSlots[slot].previewLabel = previewLabel;
         m_textureSlots[slot].combo = combo;
+        m_textureSlots[slot].amount = amount;
         m_textureSlots[slot].clearButton = clearButton;
         m_textureSlots[slot].loadButton = loadButton;
         m_textureSlots[slot].editButton = editButton;
@@ -442,6 +450,13 @@ void MaterialEditorPanel::createUi()
     mappingForm->addRow(tr("Sharpness"), m_triPlanarSharpness);
     m_triPlanarNormalStrength = CreateSliderControl(0.0, 4.0, 0.05, 2);
     mappingForm->addRow(tr("Normal Strength"), m_triPlanarNormalStrength);
+    m_triPlanarRotationDegrees = CreateSliderControl(0.0, 360.0, 1.0, 1);
+    mappingForm->addRow(tr("Rotation (deg)"), m_triPlanarRotationDegrees);
+    m_triPlanarVariationMode = new QComboBox(mappingTab);
+    m_triPlanarVariationMode->addItems({tr("Off"), tr("Per Mesh"), tr("Per Surface")});
+    mappingForm->addRow(tr("Variation"), m_triPlanarVariationMode);
+    m_triPlanarVariationOffset = CreateSliderControl(0.0, 1.0, 0.01, 2);
+    mappingForm->addRow(tr("Variation Offset"), m_triPlanarVariationOffset);
 
     m_tabs->addTab(mappingTab, tr("Mapping"));
 
@@ -547,6 +562,13 @@ void MaterialEditorPanel::createUi()
             const int mr = mat.metalRoughTexture;
             const int mt = mat.metalnessTexture;
             const int rg = mat.roughnessGlossTexture;
+            const float da = mat.diffuseTextureAmount;
+            const float na = mat.normalTextureAmount;
+            const float ea = mat.emissiveTextureAmount;
+            const float oa = mat.occlusionTextureAmount;
+            const float mra = mat.metalRoughTextureAmount;
+            const float mta = mat.metalnessTextureAmount;
+            const float rga = mat.roughnessGlossTextureAmount;
             mat = def;
             strncpy_s(mat.name, nameBuf, _TRUNCATE);
             mat.diffuseTexture = d;
@@ -556,6 +578,13 @@ void MaterialEditorPanel::createUi()
             mat.metalRoughTexture = mr;
             mat.metalnessTexture = mt;
             mat.roughnessGlossTexture = rg;
+            mat.diffuseTextureAmount = da;
+            mat.normalTextureAmount = na;
+            mat.emissiveTextureAmount = ea;
+            mat.occlusionTextureAmount = oa;
+            mat.metalRoughTextureAmount = mra;
+            mat.metalnessTextureAmount = mta;
+            mat.roughnessGlossTextureAmount = rga;
         }, true);
     });
     connect(m_resetNoTexButton, &QPushButton::clicked, this, [this]() {
@@ -848,6 +877,30 @@ void MaterialEditorPanel::createUi()
             m.triPlanarNormalStrength = static_cast<float>(value);
         });
     });
+    connect(m_triPlanarRotationDegrees->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            m.triPlanarRotationDegrees = static_cast<float>(value);
+        });
+    });
+    connect(m_triPlanarVariationMode, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([index](Asset::Material &m) {
+            m.triPlanarVariationMode = static_cast<uint32_t>(std::clamp(index, 0, 2));
+        });
+    });
+    connect(m_triPlanarVariationOffset->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            m.triPlanarVariationOffset = static_cast<float>(value);
+        });
+    });
 
     connect(m_emissiveIntensity->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
@@ -887,6 +940,17 @@ void MaterialEditorPanel::createUi()
             applyMaterialChange([this, index, slot](Asset::Material &m) {
                 int newIdx = textureIndexFromVisibleCombo(index);
                 setTextureIndexForSlot(m, static_cast<TextureSlot>(slot), newIdx);
+            });
+        });
+        connect(widgets.amount->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this, slot](double value) {
+            if (m_syncing) {
+                return;
+            }
+            applyMaterialChange([slot, value](Asset::Material &m) {
+                MaterialSystem::SetTextureAmount(
+                    m,
+                    static_cast<MaterialSystem::TextureSlot>(slot),
+                    static_cast<float>(value));
             });
         });
         connect(widgets.clearButton, &QPushButton::clicked, this, [this, slot]() {
@@ -1178,6 +1242,14 @@ void MaterialEditorPanel::syncInspector()
     m_triPlanarScale->setValue(mat.triPlanarScale);
     m_triPlanarSharpness->setValue(mat.triPlanarSharpness);
     m_triPlanarNormalStrength->setValue(mat.triPlanarNormalStrength);
+    m_triPlanarRotationDegrees->setValue(mat.triPlanarRotationDegrees);
+    m_triPlanarVariationMode->setCurrentIndex(
+        static_cast<int>(std::clamp(mat.triPlanarVariationMode, 0u, 2u)));
+    m_triPlanarVariationOffset->setValue(mat.triPlanarVariationOffset);
+    const bool triPlanarActive = mat.triPlanarEnabled > 0.5f;
+    m_triPlanarRotationDegrees->setEnabled(triPlanarActive);
+    m_triPlanarVariationMode->setEnabled(triPlanarActive);
+    m_triPlanarVariationOffset->setEnabled(triPlanarActive);
 
     setColorButton(m_emissiveColorButton, getColorFromMaterial(mat.emissiveColor));
     m_emissiveIntensity->setValue(mat.emissiveIntensity);
@@ -1511,10 +1583,13 @@ void MaterialEditorPanel::setSelectedMaterial(int materialIndex, bool ensureVisi
 void MaterialEditorPanel::updateTextureSlotUi(TextureSlot slot, const Asset::Material &mat)
 {
     auto &widgets = m_textureSlots[slot];
-    if (!widgets.infoLabel || !widgets.previewLabel) {
+    if (!widgets.infoLabel || !widgets.previewLabel || !widgets.amount) {
         return;
     }
     const int texIdx = textureIndexForSlot(mat, slot);
+    widgets.amount->setValue(MaterialSystem::GetTextureAmount(
+        mat, static_cast<MaterialSystem::TextureSlot>(slot)));
+    widgets.amount->setEnabled(texIdx >= 0);
     if (texIdx < 0) {
         widgets.infoLabel->setText(tr("No texture bound"));
         widgets.previewLabel->setPixmap(QPixmap());

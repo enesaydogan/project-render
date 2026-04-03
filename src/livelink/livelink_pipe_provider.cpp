@@ -268,6 +268,20 @@ bool ParsePayload(const SceneDeltaKind kind, const json &payloadJson,
       payloadJson.value("roughnessGlossTextureUri", "");
     payload.roughnessGlossTextureBlobHash =
       payloadJson.value("roughnessGlossTextureBlobHash", "");
+    payload.baseColorTextureAmount =
+      payloadJson.value("baseColorTextureAmount", 1.0f);
+    payload.packedSurfaceTextureAmount =
+      payloadJson.value("packedSurfaceTextureAmount", 1.0f);
+    payload.metalnessTextureAmount =
+      payloadJson.value("metalnessTextureAmount", 1.0f);
+    payload.roughnessGlossTextureAmount =
+      payloadJson.value("roughnessGlossTextureAmount", 1.0f);
+    payload.normalTextureAmount =
+      payloadJson.value("normalTextureAmount", 1.0f);
+    payload.occlusionTextureAmount =
+      payloadJson.value("occlusionTextureAmount", 1.0f);
+    payload.emissiveTextureAmount =
+      payloadJson.value("emissiveTextureAmount", 1.0f);
     if (payloadJson.contains("emissiveColor")) {
       FillFloatArray(payloadJson.at("emissiveColor"), &payload.emissiveColor);
     }

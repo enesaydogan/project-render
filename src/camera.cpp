@@ -53,7 +53,7 @@ CameraCB g_initialCameraData = {
     0.0f,                           // tonemapAoIntensity
     0.25f,                          // tonemapAoRadiusMeters
     2.0f,                           // tonemapAoMode (Both)
-    0.0f                            // tonemapAoPad0
+    0.0f                            // triPlanarWorldRotationDegrees
 };
 CameraCB g_cameraData = g_initialCameraData;
 ComPtr<ID3D12Resource> g_cameraConstantBuffer;
@@ -126,11 +126,16 @@ static bool CameraChanged(const CameraCB &a, const CameraCB &b) {
       a.tonemapAoRadiusMeters != b.tonemapAoRadiusMeters ||
       a.tonemapAoMode != b.tonemapAoMode)
     return true;
+  if (a.triPlanarWorldRotationDegrees != b.triPlanarWorldRotationDegrees)
+    return true;
   return false;
 }
 
 void ResetCamera() {
+  const float triPlanarWorldRotationDegrees =
+      g_cameraData.triPlanarWorldRotationDegrees;
   g_cameraData = g_initialCameraData;
+  g_cameraData.triPlanarWorldRotationDegrees = triPlanarWorldRotationDegrees;
   // Initialize yaw/pitch from forward so mouse-look feels consistent after
   // reset
   float fx = g_cameraData.forward[0];

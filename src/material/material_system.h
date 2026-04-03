@@ -38,6 +38,9 @@ struct RuntimeRasterMaterialConstants {
   float coatLayerParams[4];
   float uvTransform[4];
   float triPlanarParams[4];
+  float mappingVariationParams[4];
+  float textureWeight0[4];
+  float textureWeight1[4];
 };
 
 struct RuntimeDxrMaterialData {
@@ -51,8 +54,11 @@ struct RuntimeDxrMaterialExtraData {
   float coatLayerParams[4];
   float uvTransform[4];
   float triPlanarParams[4];
+  float mappingVariationParams[4];
   float shadingParams[4];
   float transmissionColor[4];
+  float textureWeight0[4];
+  float textureWeight1[4];
 };
 
 bool UsesReflectionGlossiness(const Asset::Material &material);
@@ -65,6 +71,9 @@ bool MaterialAffectsRtStructure(const Asset::Material &material);
 
 int GetTextureIndex(const Asset::Material &material, TextureSlot slot);
 void SetTextureIndex(Asset::Material &material, TextureSlot slot, int textureIndex);
+float GetTextureAmount(const Asset::Material &material, TextureSlot slot);
+void SetTextureAmount(Asset::Material &material, TextureSlot slot,
+                      float textureAmount);
 
 bool NeedsDerivedPackedSurfaceTexture(const Asset::Material &material);
 bool BuildDerivedPackedSurfaceTexture(const Asset::Material &material,
@@ -74,6 +83,7 @@ bool BuildDerivedPackedSurfaceTexture(const Asset::Material &material,
 
 uint32_t BuildRuntimeMaterialFlags(const Asset::Material &material);
 int GetEffectivePackedSurfaceTextureIndex(const Asset::Material &material);
+float GetEffectivePackedSurfaceTextureAmount(const Asset::Material &material);
 uint32_t PackTexturePair(int lowTextureIndex, int highTextureIndex);
 
 void BuildRuntimeDxrMaterialData(const Asset::Material &material,

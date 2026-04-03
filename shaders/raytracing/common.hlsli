@@ -167,7 +167,7 @@ cbuffer Camera : register(b0)
     float tonemapAoIntensity;
     float tonemapAoRadiusMeters;
     float tonemapAoMode;
-    float tonemapAoPad0;
+    float triPlanarWorldRotationDegrees;
 }
 
 inline float GetDxrProceduralSkyBoost()
@@ -204,8 +204,11 @@ struct MaterialExtraData
     float4 coatLayerParams;     // x=coatWeight, y=coatRoughness, z=thinWalled, w=translucency
     float4 uvTransform;         // xy=uvScale, zw=uvOffset
     float4 triPlanarParams;     // x=enabled, y=scale, z=sharpness, w=normalStrength
+    float4 mappingVariationParams; // x=mode, y=offsetJitter, z=materialRotationDegrees, w=reserved
     float4 shadingParams;       // x=emissiveIntensity, yzw=reserved
     float4 transmissionColor;   // rgb=tinted transmission color
+    float4 textureWeight0;      // x=baseColor, y=packedSurface, z=metalness, w=roughnessGloss
+    float4 textureWeight1;      // x=normal, y=occlusion, z=emissive
 };
 
 inline int UnpackTextureIndexLow(uint packedPair)

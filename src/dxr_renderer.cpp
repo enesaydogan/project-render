@@ -4851,7 +4851,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       cam->tonemapAoIntensity = s_tonemapAoIntensity;
       cam->tonemapAoRadiusMeters = s_tonemapAoLengthMm * 0.001f;
       cam->tonemapAoMode = static_cast<float>(static_cast<int>(s_tonemapAoMode));
-      cam->tonemapAoPad0 = 0.0f;
+        cam->triPlanarWorldRotationDegrees =
+          g_cameraData.triPlanarWorldRotationDegrees;
 
       // Keep actual still-frame count even for RR so shaders can compute
       // variance/noise for adaptive sampling and diagnostics.

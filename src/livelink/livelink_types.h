@@ -177,6 +177,13 @@ struct MaterialChangedPayload {
   std::string metalnessTextureBlobHash;
   std::string roughnessGlossTextureUri;
   std::string roughnessGlossTextureBlobHash;
+  float baseColorTextureAmount = 1.0f;
+  float packedSurfaceTextureAmount = 1.0f;
+  float metalnessTextureAmount = 1.0f;
+  float roughnessGlossTextureAmount = 1.0f;
+  float normalTextureAmount = 1.0f;
+  float occlusionTextureAmount = 1.0f;
+  float emissiveTextureAmount = 1.0f;
   std::array<float, 4> emissiveColor = {0.0f, 0.0f, 0.0f, 1.0f};
   float emissiveIntensity = 1.0f;
   float roughness = 0.2f;
