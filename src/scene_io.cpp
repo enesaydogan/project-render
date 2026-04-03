@@ -7,6 +7,7 @@
 #include "animation_sequence.h"
 #include "saved_views.h"
 #include "scene.h"
+#include "raster_renderer.h"
 #include <algorithm>
 #include <atomic>
 #include <filesystem>
@@ -549,6 +550,31 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
     };
   }
 
+  // Raster post-process
+  {
+    const auto &rs = RasterRenderer::GetRenderSettings();
+    j["rps"] = {
+      {"esr", rs.enableSSR},
+      {"sss", rs.ssrStepSize},
+      {"sst", rs.ssrThickness},
+      {"ssi", rs.ssrIntensity},
+      {"sms", rs.ssrMinSmoothness},
+      {"smx", rs.ssrMaxSteps},
+      {"eao", rs.enableSSAO},
+      {"sar", rs.ssaoRadius},
+      {"sab", rs.ssaoBias},
+      {"sas", rs.ssaoStrength},
+      {"san", rs.ssaoSamples},
+      {"sac", rs.ssaoCompositeWeight},
+      {"ebl", rs.enableBloom},
+      {"bth", rs.bloomThreshold},
+      {"bin", rs.bloomIntensity},
+      {"vig", rs.tonemapVignette},
+      {"sat", rs.tonemapSaturation},
+      {"con", rs.tonemapContrast}
+    };
+  }
+
   // Lighting
   j["lit"]["ld"] = {g_cameraData.lightDir[0], g_cameraData.lightDir[1],
                     g_cameraData.lightDir[2], g_cameraData.lightDir[3]};
@@ -836,6 +862,32 @@ static void ApplyMetadataPRS(const json &j) {
       svgf.phiDepth = s.value("pd", svgf.phiDepth);
       DxrRenderer::SetSvgfSettings(svgf);
     }
+  }
+  if (j.contains("rps") && j["rps"].is_object()) {
+    auto &r = j["rps"];
+    auto &rs = RasterRenderer::GetRenderSettings();
+    rs.enableSSR = r.value("esr", rs.enableSSR);
+    rs.ssrStepSize = (std::clamp)(r.value("sss", rs.ssrStepSize), 0.02f, 2.0f);
+    rs.ssrThickness = (std::clamp)(r.value("sst", rs.ssrThickness), 0.001f, 1.0f);
+    rs.ssrIntensity = (std::clamp)(r.value("ssi", rs.ssrIntensity), 0.0f, 2.0f);
+    rs.ssrMinSmoothness = (std::clamp)(r.value("sms", rs.ssrMinSmoothness), 0.0f, 1.0f);
+    rs.ssrMaxSteps = (std::clamp)(r.value("smx", rs.ssrMaxSteps), 1, 256);
+
+    rs.enableSSAO = r.value("eao", rs.enableSSAO);
+    rs.ssaoRadius = (std::clamp)(r.value("sar", rs.ssaoRadius), 0.01f, 5.0f);
+    rs.ssaoBias = (std::clamp)(r.value("sab", rs.ssaoBias), 0.0001f, 0.25f);
+    rs.ssaoStrength = (std::clamp)(r.value("sas", rs.ssaoStrength), 0.0f, 4.0f);
+    rs.ssaoSamples = (std::clamp)(r.value("san", rs.ssaoSamples), 1, 32);
+    rs.ssaoCompositeWeight =
+        (std::clamp)(r.value("sac", rs.ssaoCompositeWeight), 0.0f, 1.0f);
+
+    rs.enableBloom = r.value("ebl", rs.enableBloom);
+    rs.bloomThreshold = (std::clamp)(r.value("bth", rs.bloomThreshold), 0.0f, 10.0f);
+    rs.bloomIntensity = (std::clamp)(r.value("bin", rs.bloomIntensity), 0.0f, 4.0f);
+
+    rs.tonemapVignette = (std::clamp)(r.value("vig", rs.tonemapVignette), 0.0f, 1.0f);
+    rs.tonemapSaturation = (std::clamp)(r.value("sat", rs.tonemapSaturation), 0.0f, 2.0f);
+    rs.tonemapContrast = (std::clamp)(r.value("con", rs.tonemapContrast), 0.0f, 2.0f);
   }
   if (j.contains("lit")) {
     auto &l = j["lit"];
