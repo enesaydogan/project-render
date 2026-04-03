@@ -1,4 +1,5 @@
 D:/project-render/build/project-render_autogen/include_Release/R3WADQZVW2/moc_MaterialEditorPanel.cpp: D:/project-render/src/qt/MaterialEditorPanel.h \
+  D:/Qt/6.10.2/msvc2022_64/include/QtCore/QSize \
   D:/Qt/6.10.2/msvc2022_64/include/QtCore/q17memory.h \
   D:/Qt/6.10.2/msvc2022_64/include/QtCore/q20functional.h \
   D:/Qt/6.10.2/msvc2022_64/include/QtCore/q20iterator.h \
@@ -126,6 +127,7 @@ D:/project-render/build/project-render_autogen/include_Release/R3WADQZVW2/moc_Ma
   D:/Qt/6.10.2/msvc2022_64/include/QtCore/qversiontagging.h \
   D:/Qt/6.10.2/msvc2022_64/include/QtCore/qxptype_traits.h \
   D:/Qt/6.10.2/msvc2022_64/include/QtCore/qyieldcpu.h \
+  D:/Qt/6.10.2/msvc2022_64/include/QtGui/QPixmap \
   D:/Qt/6.10.2/msvc2022_64/include/QtGui/qaction.h \
   D:/Qt/6.10.2/msvc2022_64/include/QtGui/qbitmap.h \
   D:/Qt/6.10.2/msvc2022_64/include/QtGui/qbrush.h \
@@ -157,4 +159,8 @@ D:/project-render/build/project-render_autogen/include_Release/R3WADQZVW2/moc_Ma
   D:/Qt/6.10.2/msvc2022_64/include/QtWidgets/qtwidgets-config.h \
   D:/Qt/6.10.2/msvc2022_64/include/QtWidgets/qtwidgetsexports.h \
   D:/Qt/6.10.2/msvc2022_64/include/QtWidgets/qtwidgetsglobal.h \
-  D:/Qt/6.10.2/msvc2022_64/include/QtWidgets/qwidget.h
+  D:/Qt/6.10.2/msvc2022_64/include/QtWidgets/qwidget.h \
+  D:/project-render/src/assets/asset_loader.h \
+  D:/project-render/thirdparty/Streamline/external/dx-agility-sdk-headers-1.714.0-preview/include/d3d12.h \
+  D:/project-render/thirdparty/Streamline/external/dx-agility-sdk-headers-1.714.0-preview/include/d3dcommon.h \
+  D:/project-render/thirdparty/Streamline/external/dx-agility-sdk-headers-1.714.0-preview/include/dxgiformat.h

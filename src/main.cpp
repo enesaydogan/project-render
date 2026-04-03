@@ -2383,7 +2383,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
                 mat.packedTextures[0] =
                     PackTexPair(srcMat.diffuseTexture, srcMat.normalTexture);
-                mat.packedTextures[1] = PackTexPair(srcMat.metalRoughTexture,
+                const int runtimeMetalRoughTexture =
+                  srcMat.runtimeMetalRoughTexture >= 0
+                    ? srcMat.runtimeMetalRoughTexture
+                    : srcMat.metalRoughTexture;
+                mat.packedTextures[1] = PackTexPair(runtimeMetalRoughTexture,
                                                     srcMat.occlusionTexture);
                 mat.packedTextures[2] = PackTexPair(srcMat.emissiveTexture, -1);
                 mat.packedTextures[3] = PackTexPair(-1, -1);
@@ -2764,7 +2768,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
                 matCB.emissiveAndPad[0] = srcMat.emissiveTexture;
                 matCB.emissiveAndPad[1] = srcMat.occlusionTexture;
-                matCB.emissiveAndPad[2] = srcMat.metalRoughTexture;
+                matCB.emissiveAndPad[2] =
+                  srcMat.runtimeMetalRoughTexture >= 0
+                    ? srcMat.runtimeMetalRoughTexture
+                    : srcMat.metalRoughTexture;
                 matCB.emissiveAndPad[3] = srcMat.invertRoughnessTexture ? 1 : 0;
 
                 matCB.extraParams[0] = srcMat.emissiveIntensity;
@@ -2906,7 +2913,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           grassMatCB.textureIndices[3] = -1;
           grassMatCB.emissiveAndPad[0] = srcMat.emissiveTexture;
           grassMatCB.emissiveAndPad[1] = srcMat.occlusionTexture;
-          grassMatCB.emissiveAndPad[2] = srcMat.metalRoughTexture;
+            grassMatCB.emissiveAndPad[2] =
+              srcMat.runtimeMetalRoughTexture >= 0
+                ? srcMat.runtimeMetalRoughTexture
+                : srcMat.metalRoughTexture;
           grassMatCB.emissiveAndPad[3] = srcMat.invertRoughnessTexture ? 1 : 0;
           grassMatCB.extraParams[0] = srcMat.emissiveIntensity;
           grassMatCB.extraParams[1] =

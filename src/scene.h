@@ -129,6 +129,7 @@ bool RebindNodeMaterialSlot(size_t nodeIndex, size_t materialSlot,
 bool UpdateNodeMaterialSourceName(size_t nodeIndex, size_t materialSlot,
                                   const std::string &materialName);
 bool UpdateMaterial(size_t index, const Asset::Material &material);
+void RefreshAllMaterialRuntimeTextures();
 void BeginBatchedUpdates();
 void EndBatchedUpdates();
 

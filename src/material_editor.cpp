@@ -63,6 +63,25 @@ static ImTextureID GetImGuiTexIDForTextureIndex(int textureIndex) {
   return (ImTextureID)h.ptr;
 }
 
+static bool IsReflectionGlossinessWorkflow(const Asset::Material &material) {
+  return material.workflow == Asset::Material::kWorkflowReflectionGlossiness;
+}
+
+static const char *GetRoughnessLabel(const Asset::Material &material) {
+  return IsReflectionGlossinessWorkflow(material) ? "Glossiness"
+                                                  : "Roughness";
+}
+
+static const char *GetSecondarySurfaceLabel(const Asset::Material &material) {
+  return IsReflectionGlossinessWorkflow(material) ? "Reflection Weight"
+                                                  : "Metalness";
+}
+
+static const char *GetRoughnessTextureLabel(const Asset::Material &material) {
+  return IsReflectionGlossinessWorkflow(material) ? "Glossiness"
+                                                  : "Roughness";
+}
+
 bool IsPickingEnabled() { return s_pickingEnabled; }
 void SetPickingEnabled(bool enabled) {
   if (s_pickingEnabled == enabled)
@@ -121,6 +140,11 @@ void Draw(HWND hwnd, bool &visible) {
     return;
   if (ImGui::Begin("Material Editor", &visible)) {
     bool uiChanged = false;
+    int visibleTextureCount = 0;
+    for (const auto &texture : g_loadedTextures) {
+      if (!texture.hiddenInEditor)
+        ++visibleTextureCount;
+    }
     // --- Header / toolbar ---
     if (s_pickingEnabled) {
       ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 1.0f));
@@ -143,7 +167,7 @@ void Draw(HWND hwnd, bool &visible) {
     ImGui::SameLine();
     ImGui::TextDisabled("|  Scene materials: %d, textures: %d",
               (int)g_loadedMaterials.size(),
-                        (int)g_loadedTextures.size());
+                        visibleTextureCount);
     ImGui::Separator();
 
     // --- Determine currently selected node ---
@@ -364,6 +388,8 @@ void Draw(HWND hwnd, bool &visible) {
           int e = mat.emissiveTexture;
           int o = mat.occlusionTexture;
           int mr = mat.metalRoughTexture;
+          int mt = mat.metalnessTexture;
+          int rg = mat.roughnessGlossTexture;
 
           mat = def;
           strncpy_s(mat.name, nameBuf, _TRUNCATE);
@@ -373,6 +399,8 @@ void Draw(HWND hwnd, bool &visible) {
             mat.emissiveTexture = e;
             mat.occlusionTexture = o;
             mat.metalRoughTexture = mr;
+            mat.metalnessTexture = mt;
+            mat.roughnessGlossTexture = rg;
           }
         };
 
@@ -571,13 +599,41 @@ void Draw(HWND hwnd, bool &visible) {
             if (ImGui::ColorEdit3("Base Color", mat.diffuseColor))
               DxrRenderer::ResetAccumulation();
 
-            float roughness = mat.roughness;
-            if (ImGui::SliderFloat("Roughness", &roughness, 0.0f, 1.0f)) {
-              SetRoughness(roughness);
+            int workflow = (int)mat.workflow;
+            const char *workflows[] = {"Metalness / Roughness",
+                                       "Reflection / Glossiness"};
+            if (ImGui::Combo("Workflow", &workflow, workflows,
+                             IM_ARRAYSIZE(workflows))) {
+              mat.workflow = (uint32_t)workflow;
+              if (IsReflectionGlossinessWorkflow(mat))
+                mat.metalness = 0.0f;
               DxrRenderer::ResetAccumulation();
             }
-            if (ImGui::SliderFloat("Metalness", &mat.metalness, 0.0f, 1.0f))
+
+            float roughnessValue = IsReflectionGlossinessWorkflow(mat)
+                                       ? (1.0f - mat.roughness)
+                                       : mat.roughness;
+            if (ImGui::SliderFloat(GetRoughnessLabel(mat), &roughnessValue,
+                                   0.0f, 1.0f)) {
+              SetRoughness(IsReflectionGlossinessWorkflow(mat)
+                               ? (1.0f - roughnessValue)
+                               : roughnessValue);
               DxrRenderer::ResetAccumulation();
+            }
+
+            float secondaryValue = IsReflectionGlossinessWorkflow(mat)
+                                       ? mat.specularWeight
+                                       : mat.metalness;
+            if (ImGui::SliderFloat(GetSecondarySurfaceLabel(mat),
+                                   &secondaryValue, 0.0f, 1.0f)) {
+              if (IsReflectionGlossinessWorkflow(mat)) {
+                mat.specularWeight = secondaryValue;
+                mat.metalness = 0.0f;
+              } else {
+                mat.metalness = secondaryValue;
+              }
+              DxrRenderer::ResetAccumulation();
+            }
 
             if (ImGui::SliderFloat("Specular Weight", &mat.specularWeight,
                                    0.0f, 1.0f))
@@ -670,11 +726,15 @@ void Draw(HWND hwnd, bool &visible) {
 
               static std::vector<std::string> names;
               static std::vector<const char *> cstr;
+              static std::vector<int> visibleTextureIndices;
               names.clear();
               cstr.clear();
+              visibleTextureIndices.clear();
               names.emplace_back("None");
               for (size_t ti = 0; ti < g_loadedTextures.size(); ++ti) {
                 const auto &t = g_loadedTextures[ti];
+                if (t.hiddenInEditor)
+                  continue;
                 std::string s = "#" + std::to_string((int)ti);
                 if (t.width > 0 && t.height > 0) {
                   s += " (" + std::to_string(t.width) + "x" +
@@ -683,14 +743,23 @@ void Draw(HWND hwnd, bool &visible) {
                 if (!t.resource) {
                   s += " [missing]";
                 }
+                visibleTextureIndices.push_back((int)ti);
                 names.emplace_back(std::move(s));
               }
               for (auto &s : names)
                 cstr.push_back(s.c_str());
 
-              int comboIdx = (idx < 0) ? 0 : (idx + 1);
-              if (comboIdx < 0 || comboIdx >= (int)cstr.size())
-                comboIdx = 0;
+              int comboIdx = 0;
+              if (idx >= 0) {
+                for (size_t visibleIndex = 0;
+                     visibleIndex < visibleTextureIndices.size();
+                     ++visibleIndex) {
+                  if (visibleTextureIndices[visibleIndex] == idx) {
+                    comboIdx = (int)visibleIndex + 1;
+                    break;
+                  }
+                }
+              }
 
               ImGui::AlignTextToFramePadding();
               ImGui::TextUnformatted(label);
@@ -719,10 +788,11 @@ void Draw(HWND hwnd, bool &visible) {
               ImGui::SetNextItemWidth(260.0f);
               if (ImGui::Combo("##tex", &comboIdx, cstr.data(),
                                (int)cstr.size())) {
-                int newIdx = comboIdx - 1;
-                if (newIdx >= 0 && newIdx < (int)g_loadedTextures.size() &&
-                    !g_loadedTextures[newIdx].resource)
-                  newIdx = -1;
+                int newIdx = -1;
+                if (comboIdx > 0 &&
+                    comboIdx - 1 < (int)visibleTextureIndices.size()) {
+                  newIdx = visibleTextureIndices[(size_t)comboIdx - 1];
+                }
                 idx = newIdx;
                 DxrRenderer::ResetAccumulation();
               }
@@ -769,7 +839,12 @@ void Draw(HWND hwnd, bool &visible) {
             };
 
             DrawTextureSlot("Albedo", mat.diffuseTexture);
-            DrawTextureSlot("MetalRough", mat.metalRoughTexture);
+            DrawTextureSlot("Packed Metal/Rough (Legacy)",
+                            mat.metalRoughTexture);
+            if (!IsReflectionGlossinessWorkflow(mat))
+              DrawTextureSlot("Metalness", mat.metalnessTexture);
+            DrawTextureSlot(GetRoughnessTextureLabel(mat),
+                            mat.roughnessGlossTexture);
             DrawTextureSlot("Normal", mat.normalTexture);
             DrawTextureSlot("Occlusion", mat.occlusionTexture);
             DrawTextureSlot("Emissive", mat.emissiveTexture);
