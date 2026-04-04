@@ -63,7 +63,7 @@ void ApplyQtTheme(QApplication &app)
             background-color: #252526;
             color: #ffffff;
             text-align: left;
-            padding: 8px 10px;
+            padding: 4px 8px;
             font-weight: 600;
             border-bottom: 1px solid #3c3c3c;
         }
@@ -72,14 +72,15 @@ void ApplyQtTheme(QApplication &app)
             background-color: #252526;
             border: 1px solid #3c3c3c;
             border-radius: 4px;
-            margin-top: 1.5em;
-            padding: 12px 10px 10px 10px;
+            margin-top: 16px;
+            padding: 8px 4px 4px 4px;
         }
 
         QGroupBox::title {
             subcontrol-origin: margin;
             subcontrol-position: top left;
-            left: 10px;
+            left: 8px;
+            top: 0px;
             padding: 0 4px;
             color: #007acc;
             background-color: transparent;
@@ -94,8 +95,8 @@ void ApplyQtTheme(QApplication &app)
             background-color: #2d2d30;
             color: #cccccc;
             border: 1px solid #3c3c3c;
-            border-radius: 4px;
-            padding: 4px 6px;
+            border-radius: 3px;
+            padding: 2px 4px;
             selection-background-color: #007acc;
             selection-color: #ffffff;
         }
@@ -110,7 +111,7 @@ void ApplyQtTheme(QApplication &app)
         }
 
         QListWidget::item {
-            padding: 4px 6px;
+            padding: 2px 4px;
             border-radius: 2px;
         }
 
@@ -128,8 +129,8 @@ void ApplyQtTheme(QApplication &app)
             background-color: #333333;
             color: #ffffff;
             border: 1px solid #3c3c3c;
-            border-radius: 4px;
-            padding: 6px 12px;
+            border-radius: 3px;
+            padding: 4px 10px;
             outline: none;
         }
 

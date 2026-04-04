@@ -61,16 +61,20 @@ void ScenePanel::createUi()
     m_importStatusLabel->hide();
     layout->addWidget(m_importStatusLabel);
 
-    auto *buttonRow = new QHBoxLayout();
+    auto *buttonGrid = new QGridLayout();
+    buttonGrid->setContentsMargins(0, 0, 0, 0);
+    buttonGrid->setSpacing(4);
+    
     m_importButton = new QPushButton(tr("Import Model"), this);
     m_reimportButton = new QPushButton(tr("Reimport Selected"), this);
     m_addPlaneButton = new QPushButton(tr("Add Ground Plane"), this);
     m_deleteButton = new QPushButton(tr("Delete Selected"), this);
-    buttonRow->addWidget(m_importButton);
-    buttonRow->addWidget(m_reimportButton);
-    buttonRow->addWidget(m_addPlaneButton);
-    buttonRow->addWidget(m_deleteButton);
-    layout->addLayout(buttonRow);
+    
+    buttonGrid->addWidget(m_importButton, 0, 0);
+    buttonGrid->addWidget(m_reimportButton, 0, 1);
+    buttonGrid->addWidget(m_addPlaneButton, 1, 0);
+    buttonGrid->addWidget(m_deleteButton, 1, 1);
+    layout->addLayout(buttonGrid);
 
     m_sourceLabel = new QLabel(this);
     m_sourceLabel->setWordWrap(true);
