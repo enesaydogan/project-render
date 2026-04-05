@@ -67,17 +67,29 @@ bool MaxLiveLinkPipeClient::Connect(const std::string &pipeName) {
     return false;
   }
 
+  HANDLE writeEvent = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+  if (!writeEvent) {
+    m_lastError = "CreateEventA failed: " +
+                  FormatWindowsError(::GetLastError());
+    CloseHandle(handle);
+    return false;
+  }
+
   m_pipe = handle;
+  m_writeEvent = writeEvent;
   m_lastError.clear();
   return true;
 }
 
 void MaxLiveLinkPipeClient::Disconnect() {
-  if (!m_pipe) {
-    return;
+  if (m_writeEvent) {
+    CloseHandle(static_cast<HANDLE>(m_writeEvent));
+    m_writeEvent = nullptr;
   }
-  CloseHandle(static_cast<HANDLE>(m_pipe));
-  m_pipe = nullptr;
+  if (m_pipe) {
+    CloseHandle(static_cast<HANDLE>(m_pipe));
+    m_pipe = nullptr;
+  }
 }
 
 bool MaxLiveLinkPipeClient::IsConnected() const { return m_pipe != nullptr; }
@@ -96,13 +108,13 @@ bool MaxLiveLinkPipeClient::SendJsonLine(const std::string &line) {
   payload.push_back('\n');
 
   HANDLE pipe = static_cast<HANDLE>(m_pipe);
-  HANDLE eventHandle = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+  HANDLE eventHandle = static_cast<HANDLE>(m_writeEvent);
   if (!eventHandle) {
-    m_lastError = "CreateEventA failed: " +
-                  FormatWindowsError(::GetLastError());
+    m_lastError = "Pipe write event is not initialized";
     Disconnect();
     return false;
   }
+  ResetEvent(eventHandle);
 
   OVERLAPPED overlapped = {};
   overlapped.hEvent = eventHandle;
@@ -111,7 +123,6 @@ bool MaxLiveLinkPipeClient::SendJsonLine(const std::string &line) {
                  &bytesWritten, &overlapped)) {
     const DWORD writeError = ::GetLastError();
     if (writeError != ERROR_IO_PENDING) {
-      CloseHandle(eventHandle);
       m_lastError = "WriteFile failed: " + FormatWindowsError(writeError);
       Disconnect();
       return false;
@@ -122,7 +133,6 @@ bool MaxLiveLinkPipeClient::SendJsonLine(const std::string &line) {
     if (waitResult == WAIT_TIMEOUT) {
       CancelIoEx(pipe, &overlapped);
       WaitForSingleObject(eventHandle, kPipeCancelWaitTimeoutMs);
-      CloseHandle(eventHandle);
       m_lastError = "WriteFile timed out after " +
                     std::to_string(kPipeWriteTimeoutMs) + " ms";
       Disconnect();
@@ -131,14 +141,12 @@ bool MaxLiveLinkPipeClient::SendJsonLine(const std::string &line) {
     if (waitResult != WAIT_OBJECT_0 ||
         !GetOverlappedResult(pipe, &overlapped, &bytesWritten, FALSE)) {
       const DWORD resultError = ::GetLastError();
-      CloseHandle(eventHandle);
       m_lastError = "GetOverlappedResult failed: " +
                     FormatWindowsError(resultError);
       Disconnect();
       return false;
     }
   }
-  CloseHandle(eventHandle);
 
   if (bytesWritten != payload.size()) {
     m_lastError = "Named pipe write was truncated";

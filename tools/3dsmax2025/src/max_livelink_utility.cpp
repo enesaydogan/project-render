@@ -7,6 +7,7 @@
 #include <AppDataChunk.h>
 #include <pbbitmap.h>
 #include <stdmat.h>
+#include <object.h>
 #include <units.h>
 #include <ISceneEventManager.h>
 #include <nlohmann/json.hpp>
@@ -1106,8 +1107,21 @@ struct MaterialReferenceSnapshot {
   bool operator==(const MaterialReferenceSnapshot &) const = default;
 };
 
+class LiveLinkNullView : public View {
+public:
+  Point2 ViewToScreen(Point3 p) override { return Point2(p.x, p.y); }
+
+  LiveLinkNullView() {
+    worldToView.IdentityMatrix();
+    screenW = 640.0f;
+    screenH = 480.0f;
+  }
+};
+
 struct SharedPayloadCacheEntry {
   uint64_t geometryFingerprint = 0;
+  uint64_t vertexCount = 0;
+  uint64_t indexCount = 0;
   std::string payloadUri;
 };
 
@@ -1130,10 +1144,19 @@ struct CapturedMeshPayloadJob {
   std::vector<UVVert> texcoords;
   std::vector<CapturedMeshFace> faces;
   std::vector<MaterialSnapshot> serializedMaterials;
+  bool usedRenderMesh = false;
   uint64_t triObjectCaptureMs = 0;
   uint64_t normalsBuildMs = 0;
   uint64_t faceCopyMs = 0;
   uint64_t materialCaptureMs = 0;
+};
+
+struct NodeMeshAccess {
+  Mesh *mesh = nullptr;
+  TriObject *triObject = nullptr;
+  bool deleteMesh = false;
+  bool deleteTriObject = false;
+  bool fromRenderMesh = false;
 };
 
 struct AsyncMeshPayloadResult {
@@ -1142,6 +1165,7 @@ struct AsyncMeshPayloadResult {
   std::string sharedPayloadKey;
   std::string payloadUri;
   bool success = false;
+  bool usedRenderMesh = false;
   uint64_t triObjectCaptureMs = 0;
   uint64_t normalsBuildMs = 0;
   uint64_t faceCopyMs = 0;
@@ -1157,18 +1181,55 @@ struct InFlightMeshPayloadExport {
 
 struct MeshExportTimingStats {
   uint64_t completedCount = 0;
+  uint64_t renderMeshCount = 0;
+  uint64_t triObjectFallbackCount = 0;
   uint64_t lastCaptureMs = 0;
   uint64_t lastTriObjectCaptureMs = 0;
   uint64_t lastNormalsBuildMs = 0;
   uint64_t lastFaceCopyMs = 0;
   uint64_t lastMaterialCaptureMs = 0;
   uint64_t lastSerializeMs = 0;
+  bool lastUsedRenderMesh = false;
   uint64_t totalCaptureMs = 0;
   uint64_t totalTriObjectCaptureMs = 0;
   uint64_t totalNormalsBuildMs = 0;
   uint64_t totalFaceCopyMs = 0;
   uint64_t totalMaterialCaptureMs = 0;
   uint64_t totalSerializeMs = 0;
+};
+
+struct MaterialGatherTimingStats {
+  uint64_t snapshotMs = 0;
+  uint64_t textureExtractMs = 0;
+  uint64_t triPlanarSearchMs = 0;
+  uint64_t vrayMaterialMs = 0;
+  uint64_t materialCount = 0;
+  uint64_t texturedMaterialCount = 0;
+  uint64_t triPlanarSearchCount = 0;
+  uint64_t triPlanarHitCount = 0;
+};
+
+struct FullResyncTimingStats {
+  bool valid = false;
+  uint64_t totalMs = 0;
+  uint64_t identifierPrepMs = 0;
+  uint64_t nodeGatherMs = 0;
+  uint64_t lightGatherMs = 0;
+  uint64_t sceneCameraGatherMs = 0;
+  uint64_t materialGatherMs = 0;
+  uint64_t materialLibraryWriteMs = 0;
+  uint64_t selectionGatherMs = 0;
+  uint64_t deltaBuildMs = 0;
+  uint64_t batchSendMs = 0;
+  size_t nodeCount = 0;
+  size_t meshNodeCount = 0;
+  size_t materialCount = 0;
+  size_t textureCount = 0;
+  size_t lightCount = 0;
+  size_t cameraCount = 0;
+  uint64_t slowestNodeMs = 0;
+  std::string slowestNodeName;
+  MaterialGatherTimingStats materialStats;
 };
 
 enum class EmbeddedTextureEncoding : uint32_t {
@@ -3716,9 +3777,17 @@ int ResolveFaceMaterialSlot(Mtl *rootMaterial, int faceMaterialId) {
 
 bool GetTriObjectForNode(Interface *ip, INode *node, TriObject **outTriObject,
                          bool *outNeedsDelete);
+bool GetNodeMeshAccess(Interface *ip, INode *node, NodeMeshAccess *outAccess);
+void ReleaseNodeMeshAccess(NodeMeshAccess *access);
+bool NodeCanPotentiallyProduceMesh(Interface *ip, INode *node);
+void PopulateSnapshotMeshMetadata(Interface *ip, INode *node, Mesh &mesh,
+                                  NodeSnapshot *snapshot);
+bool MaterialSnapshotHasAnyTexture(const MaterialSnapshot &snapshot);
+size_t CountTextureUrisForState(const MaterialStateMap &materialState);
 
 std::vector<int> GatherUsedMaterialSlots(Interface *ip, INode *node,
-                                         Mtl *rootMaterial) {
+                                         Mtl *rootMaterial,
+                                         bool preferExplicitSlotsOnly = false) {
   std::vector<int> usedSlots;
   if (!node || !rootMaterial) {
     return usedSlots;
@@ -3730,9 +3799,7 @@ std::vector<int> GatherUsedMaterialSlots(Interface *ip, INode *node,
     return usedSlots;
   }
 
-  TriObject *triObject = nullptr;
-  bool needsDelete = false;
-  if (!GetTriObjectForNode(ip, node, &triObject, &needsDelete)) {
+  if (preferExplicitSlotsOnly) {
     std::vector<int> explicitMaterialIds;
     if (TryGetMultiMaterialIds(rootMaterial, &explicitMaterialIds)) {
       for (int materialId : explicitMaterialIds) {
@@ -3753,7 +3820,29 @@ std::vector<int> GatherUsedMaterialSlots(Interface *ip, INode *node,
     return usedSlots;
   }
 
-  Mesh &mesh = triObject->GetMesh();
+  NodeMeshAccess meshAccess;
+  if (!GetNodeMeshAccess(ip, node, &meshAccess) || !meshAccess.mesh) {
+    std::vector<int> explicitMaterialIds;
+    if (TryGetMultiMaterialIds(rootMaterial, &explicitMaterialIds)) {
+      for (int materialId : explicitMaterialIds) {
+        if (rootMaterial->GetSubMtl(materialId)) {
+          usedSlots.push_back(materialId);
+        }
+      }
+    } else {
+      for (int slot = 0; slot < subMaterialCount; ++slot) {
+        if (rootMaterial->GetSubMtl(slot)) {
+          usedSlots.push_back(slot);
+        }
+      }
+    }
+    if (usedSlots.empty()) {
+      usedSlots.push_back(0);
+    }
+    return usedSlots;
+  }
+
+  Mesh &mesh = *meshAccess.mesh;
   for (int faceIndex = 0; faceIndex < mesh.getNumFaces(); ++faceIndex) {
     const int slot = ResolveFaceMaterialSlot(rootMaterial,
                                              mesh.faces[faceIndex].getMatID());
@@ -3762,9 +3851,7 @@ std::vector<int> GatherUsedMaterialSlots(Interface *ip, INode *node,
     }
   }
 
-  if (needsDelete) {
-    triObject->DeleteThis();
-  }
+  ReleaseNodeMeshAccess(&meshAccess);
 
   usedSlots.erase(std::remove_if(usedSlots.begin(), usedSlots.end(),
                                  [rootMaterial](int slot) {
@@ -3805,8 +3892,9 @@ Mtl *ResolveMaterialForSlot(Mtl *rootMaterial, int materialSlot) {
   return ResolveLeafMaterial(rootMaterial);
 }
 
-bool CaptureMaterialSnapshot(Interface *ip, INode *node, int materialSlot, Mtl *material,
-                             MaterialSnapshot *outSnapshot) {
+bool CaptureMaterialSnapshot(Interface *ip, INode *node, int materialSlot,
+                             Mtl *material, MaterialSnapshot *outSnapshot,
+                             MaterialGatherTimingStats *timingStats = nullptr) {
   if (!ip || !node || !material || !outSnapshot) {
     return false;
   }
@@ -3822,6 +3910,7 @@ bool CaptureMaterialSnapshot(Interface *ip, INode *node, int materialSlot, Mtl *
                              ? material->GetSelfIllumColor()
                              : Color(selfIllum, selfIllum, selfIllum);
 
+  const auto snapshotStart = std::chrono::steady_clock::now();
   MaterialSnapshot snapshot;
   snapshot.valid = true;
   snapshot.nodeHandle = node->GetHandle();
@@ -3856,10 +3945,24 @@ bool CaptureMaterialSnapshot(Interface *ip, INode *node, int materialSlot, Mtl *
                                    : std::array<float, 3>{1.0f, 1.0f, 1.0f};
   snapshot.doubleSided = false;
   snapshot.alphaMode = transparency > 1.0e-3f ? "BLEND" : "OPAQUE";
+  const auto textureExtractStart = std::chrono::steady_clock::now();
   CaptureGenericMaterialTextures(ip, material, &snapshot);
+  if (timingStats) {
+    timingStats->textureExtractMs += static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - textureExtractStart)
+            .count());
+  }
 #if defined(PROJECT_RENDER_HAS_VRAY_SDK)
   if (IsVrayMaterial(material)) {
+    const auto vrayStart = std::chrono::steady_clock::now();
     ApplyVrayMaterialParameters(ip, material, &snapshot);
+    if (timingStats) {
+      timingStats->vrayMaterialMs += static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::steady_clock::now() - vrayStart)
+              .count());
+    }
   }
 #endif
   if (snapshot.triPlanarEnabled <= 0.5f &&
@@ -3868,12 +3971,35 @@ bool CaptureMaterialSnapshot(Interface *ip, INode *node, int materialSlot, Mtl *
        !snapshot.emissiveTextureUri.empty() ||
        !snapshot.occlusionTextureUri.empty() ||
        !snapshot.metalRoughTextureUri.empty())) {
+    if (timingStats) {
+      ++timingStats->triPlanarSearchCount;
+    }
     std::unordered_set<const Animatable *> visited;
     Texmap *triPlanarTexmap = nullptr;
+    const auto triPlanarStart = std::chrono::steady_clock::now();
     if (TryFindTriPlanarTexmapRecursive(material, 4, &visited,
                                         &triPlanarTexmap)) {
       TryApplyTriPlanarSettingsToSnapshot(ip, triPlanarTexmap, &snapshot);
+      if (timingStats) {
+        ++timingStats->triPlanarHitCount;
+      }
     }
+    if (timingStats) {
+      timingStats->triPlanarSearchMs += static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::steady_clock::now() - triPlanarStart)
+              .count());
+    }
+  }
+  if (timingStats) {
+    ++timingStats->materialCount;
+    if (MaterialSnapshotHasAnyTexture(snapshot)) {
+      ++timingStats->texturedMaterialCount;
+    }
+    timingStats->snapshotMs += static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - snapshotStart)
+            .count());
   }
   *outSnapshot = snapshot;
   return true;
@@ -3881,7 +4007,10 @@ bool CaptureMaterialSnapshot(Interface *ip, INode *node, int materialSlot, Mtl *
 
 void GatherMaterialSnapshots(
     Interface *ip, const std::unordered_map<ULONG_PTR, NodeSnapshot> &nodeState,
-    MaterialStateMap *outState) {
+    MaterialStateMap *outState,
+    const std::unordered_map<ULONG_PTR, INode *> *nodeLookup = nullptr,
+    bool preferExplicitSlotsOnly = false,
+    MaterialGatherTimingStats *timingStats = nullptr) {
   if (!ip || !outState) {
     return;
   }
@@ -3890,7 +4019,16 @@ void GatherMaterialSnapshots(
     if (!nodeSnapshot.hasMesh) {
       continue;
     }
-    INode *node = FindNodeByHandle(ip, handle);
+    INode *node = nullptr;
+    if (nodeLookup) {
+      const auto nodeIt = nodeLookup->find(handle);
+      if (nodeIt != nodeLookup->end()) {
+        node = nodeIt->second;
+      }
+    }
+    if (!node) {
+      node = FindNodeByHandle(ip, handle);
+    }
     if (!node) {
       continue;
     }
@@ -3899,12 +4037,13 @@ void GatherMaterialSnapshots(
       continue;
     }
 
-    const std::vector<int> usedSlots = GatherUsedMaterialSlots(ip, node, rootMaterial);
+    const std::vector<int> usedSlots =
+        GatherUsedMaterialSlots(ip, node, rootMaterial, preferExplicitSlotsOnly);
     for (int materialSlot : usedSlots) {
       MaterialSnapshot materialSnapshot;
       if (CaptureMaterialSnapshot(ip, node, materialSlot,
                                   ResolveMaterialForSlot(rootMaterial, materialSlot),
-                                  &materialSnapshot)) {
+                                  &materialSnapshot, timingStats)) {
         auto existingIt = outState->find(materialSnapshot.objectId);
         if (existingIt == outState->end()) {
           outState->emplace(materialSnapshot.objectId, std::move(materialSnapshot));
@@ -4053,30 +4192,119 @@ bool GetTriObjectForNode(Interface *ip, INode *node, TriObject **outTriObject,
   return true;
 }
 
-void CaptureMeshSnapshot(Interface *ip, INode *node, NodeSnapshot *snapshot) {
-  if (!ip || !node || !snapshot) {
-    return;
+bool GetNodeMeshAccess(Interface *ip, INode *node, NodeMeshAccess *outAccess) {
+  if (!ip || !node || !outAccess) {
+    return false;
+  }
+
+  NodeMeshAccess access;
+  ObjectState objectState = node->EvalWorldState(ip->GetTime());
+  if (objectState.obj && objectState.obj->SuperClassID() == GEOMOBJECT_CLASS_ID) {
+    GeomObject *geomObject = static_cast<GeomObject *>(objectState.obj);
+    if (geomObject->NumberOfRenderMeshes() <= 0) {
+      LiveLinkNullView view;
+      BOOL needDelete = FALSE;
+      Mesh *renderMesh = geomObject->GetRenderMesh(ip->GetTime(), node, view,
+                                                   needDelete);
+      if (renderMesh != nullptr) {
+        access.mesh = renderMesh;
+        access.deleteMesh = needDelete != FALSE;
+        access.fromRenderMesh = true;
+        *outAccess = access;
+        return true;
+      }
+    }
   }
 
   TriObject *triObject = nullptr;
   bool needsDelete = false;
-  if (!GetTriObjectForNode(ip, node, &triObject, &needsDelete)) {
+  if (!GetTriObjectForNode(ip, node, &triObject, &needsDelete) || !triObject) {
+    return false;
+  }
+
+  access.mesh = &triObject->GetMesh();
+  access.triObject = triObject;
+  access.deleteTriObject = needsDelete;
+  *outAccess = access;
+  return true;
+}
+
+void ReleaseNodeMeshAccess(NodeMeshAccess *access) {
+  if (!access) {
+    return;
+  }
+  if (access->deleteMesh && access->mesh) {
+    delete access->mesh;
+  }
+  if (access->deleteTriObject && access->triObject) {
+    access->triObject->DeleteThis();
+  }
+  *access = NodeMeshAccess{};
+}
+
+bool MaterialSnapshotHasAnyTexture(const MaterialSnapshot &snapshot) {
+  return !snapshot.baseColorTextureUri.empty() ||
+         !snapshot.normalTextureUri.empty() ||
+         !snapshot.emissiveTextureUri.empty() ||
+         !snapshot.occlusionTextureUri.empty() ||
+         !snapshot.metalRoughTextureUri.empty();
+}
+
+size_t CountTextureUrisForState(const MaterialStateMap &materialState) {
+  std::unordered_set<std::string> textureUris;
+  for (const auto &[_, snapshot] : materialState) {
+    if (!snapshot.baseColorTextureUri.empty()) {
+      textureUris.insert(snapshot.baseColorTextureUri);
+    }
+    if (!snapshot.normalTextureUri.empty()) {
+      textureUris.insert(snapshot.normalTextureUri);
+    }
+    if (!snapshot.emissiveTextureUri.empty()) {
+      textureUris.insert(snapshot.emissiveTextureUri);
+    }
+    if (!snapshot.occlusionTextureUri.empty()) {
+      textureUris.insert(snapshot.occlusionTextureUri);
+    }
+    if (!snapshot.metalRoughTextureUri.empty()) {
+      textureUris.insert(snapshot.metalRoughTextureUri);
+    }
+  }
+  return textureUris.size();
+}
+
+bool NodeCanPotentiallyProduceMesh(Interface *ip, INode *node) {
+  if (!ip || !node) {
+    return false;
+  }
+
+  Object *objectRef = node->GetObjectRef();
+  if (!objectRef) {
+    return false;
+  }
+
+  Object *baseObject = objectRef->FindBaseObject();
+  Object *typeObject = baseObject ? baseObject : objectRef;
+  if (!typeObject) {
+    return false;
+  }
+
+  const SClass_ID superClass = typeObject->SuperClassID();
+  if (superClass == GEOMOBJECT_CLASS_ID || superClass == SHAPE_CLASS_ID) {
+    return true;
+  }
+
+  return false;
+}
+
+void PopulateSnapshotMeshMetadata(Interface *ip, INode *node, Mesh &mesh,
+                                  NodeSnapshot *snapshot) {
+  if (!ip || !node || !snapshot) {
     return;
   }
 
-  Mesh &mesh = triObject->GetMesh();
-  mesh.buildNormals();
-  mesh.buildRenderNormals();
-  MeshNormalSpec *specNormals = mesh.GetSpecifiedNormals();
-  if (specNormals) {
-    specNormals->CheckNormals();
-  }
   const uint64_t vertexCount = static_cast<uint64_t>(mesh.getNumVerts());
   const uint64_t faceCount = static_cast<uint64_t>(mesh.getNumFaces());
   if (vertexCount == 0 || faceCount == 0) {
-    if (needsDelete) {
-      triObject->DeleteThis();
-    }
     return;
   }
 
@@ -4152,20 +4380,42 @@ void CaptureMeshSnapshot(Interface *ip, INode *node, NodeSnapshot *snapshot) {
   fingerprint =
       HashCombine(fingerprint, static_cast<uint64_t>(node->GetObjectRef() != nullptr));
 
-    Mtl *rootMaterial = node->GetMtl();
-    if (rootMaterial) {
-      const std::string materialGuid = GetOrCreateMaterialGuid(rootMaterial);
-      for (char c : materialGuid) {
-        fingerprint = HashCombine(fingerprint, static_cast<uint64_t>(c));
-      }
-    } else {
-      fingerprint = HashCombine(fingerprint, 0x01010101ull);
+  Mtl *rootMaterial = node->GetMtl();
+  if (rootMaterial) {
+    const std::string materialGuid = GetOrCreateMaterialGuid(rootMaterial);
+    for (char c : materialGuid) {
+      fingerprint = HashCombine(fingerprint, static_cast<uint64_t>(c));
     }
-  snapshot->geometryFingerprint = fingerprint;
-
-  if (needsDelete) {
-    triObject->DeleteThis();
+  } else {
+    fingerprint = HashCombine(fingerprint, 0x01010101ull);
   }
+  snapshot->geometryFingerprint = fingerprint;
+}
+
+void CaptureMeshSnapshot(Interface *ip, INode *node, NodeSnapshot *snapshot) {
+  if (!ip || !node || !snapshot) {
+    return;
+  }
+
+  NodeMeshAccess meshAccess;
+  if (!GetNodeMeshAccess(ip, node, &meshAccess) || !meshAccess.mesh) {
+    return;
+  }
+
+  Mesh &mesh = *meshAccess.mesh;
+  mesh.buildNormals();
+  mesh.buildRenderNormals();
+  MeshNormalSpec *specNormals = mesh.GetSpecifiedNormals();
+  if (specNormals) {
+    specNormals->CheckNormals();
+  }
+  PopulateSnapshotMeshMetadata(ip, node, mesh, snapshot);
+  if (!snapshot->hasMesh) {
+    ReleaseNodeMeshAccess(&meshAccess);
+    return;
+  }
+
+  ReleaseNodeMeshAccess(&meshAccess);
 }
 
 std::filesystem::path GetPayloadRootDirectory() {
@@ -4610,9 +4860,8 @@ bool CaptureNodeMeshPayloadJob(Interface *ip, INode *node,
   }
 
   const auto captureStart = std::chrono::steady_clock::now();
-  TriObject *triObject = nullptr;
-  bool needsDelete = false;
-  if (!GetTriObjectForNode(ip, node, &triObject, &needsDelete)) {
+  NodeMeshAccess meshAccess;
+  if (!GetNodeMeshAccess(ip, node, &meshAccess) || !meshAccess.mesh) {
     return false;
   }
   const auto triObjectReady = std::chrono::steady_clock::now();
@@ -4628,19 +4877,23 @@ bool CaptureNodeMeshPayloadJob(Interface *ip, INode *node,
     job.payloadPath = GetNodePayloadPath(documentId, snapshot.objectId);
   }
   if (job.payloadPath.empty()) {
-    if (needsDelete) {
-      triObject->DeleteThis();
-    }
+    ReleaseNodeMeshAccess(&meshAccess);
     return false;
   }
   job.payloadUri = PathToUtf8(job.payloadPath);
 
-  Mesh &mesh = triObject->GetMesh();
+  Mesh &mesh = *meshAccess.mesh;
+  job.usedRenderMesh = meshAccess.fromRenderMesh;
   mesh.buildNormals();
   mesh.buildRenderNormals();
   MeshNormalSpec *specNormals = mesh.GetSpecifiedNormals();
   if (specNormals) {
     specNormals->CheckNormals();
+  }
+  PopulateSnapshotMeshMetadata(ip, node, mesh, &job.snapshot);
+  if (!job.snapshot.hasMesh) {
+    ReleaseNodeMeshAccess(&meshAccess);
+    return false;
   }
   const auto normalsReady = std::chrono::steady_clock::now();
 
@@ -4705,9 +4958,7 @@ bool CaptureNodeMeshPayloadJob(Interface *ip, INode *node,
   }
   const auto materialsReady = std::chrono::steady_clock::now();
 
-  if (needsDelete) {
-    triObject->DeleteThis();
-  }
+  ReleaseNodeMeshAccess(&meshAccess);
   job.triObjectCaptureMs = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(triObjectReady -
                                                             captureStart)
@@ -4736,6 +4987,7 @@ AsyncMeshPayloadResult SerializeCapturedMeshPayload(
   result.snapshot = job.snapshot;
   result.sharedPayloadKey = job.sharedPayloadKey;
   result.payloadUri = job.payloadUri;
+  result.usedRenderMesh = job.usedRenderMesh;
   result.triObjectCaptureMs = job.triObjectCaptureMs;
   result.normalsBuildMs = job.normalsBuildMs;
   result.faceCopyMs = job.faceCopyMs;
@@ -4943,7 +5195,8 @@ json MakeObjectId(const std::string &documentId, const std::string &objectId,
   };
 }
 
-NodeSnapshot CaptureNodeSnapshot(Interface *ip, INode *node) {
+NodeSnapshot CaptureNodeSnapshot(Interface *ip, INode *node,
+                                 bool captureMeshDetails = true) {
   NodeSnapshot snapshot;
   if (!ip || !node) {
     return snapshot;
@@ -4962,20 +5215,45 @@ NodeSnapshot CaptureNodeSnapshot(Interface *ip, INode *node) {
   snapshot.name = ToUtf8(node->GetName());
   snapshot.visible = !node->IsNodeHidden(TRUE);
   snapshot.worldMatrix = Matrix3ToColumnMajor4x4(node->GetNodeTM(ip->GetTime()));
-  CaptureMeshSnapshot(ip, node, &snapshot);
+  if (captureMeshDetails) {
+    CaptureMeshSnapshot(ip, node, &snapshot);
+  } else {
+    snapshot.hasMesh = NodeCanPotentiallyProduceMesh(ip, node);
+  }
   return snapshot;
 }
 
-void GatherNodeSnapshots(Interface *ip, INode *node,
-                         std::unordered_map<ULONG_PTR, NodeSnapshot> *outState) {
+void GatherNodeSnapshots(
+    Interface *ip, INode *node,
+    std::unordered_map<ULONG_PTR, NodeSnapshot> *outState,
+    std::unordered_map<ULONG_PTR, INode *> *outNodeLookup = nullptr,
+    bool captureMeshDetails = true,
+    FullResyncTimingStats *timingStats = nullptr) {
   if (!ip || !node || !outState) {
     return;
   }
 
-  NodeSnapshot snapshot = CaptureNodeSnapshot(ip, node);
+  const auto captureStart = std::chrono::steady_clock::now();
+  NodeSnapshot snapshot = CaptureNodeSnapshot(ip, node, captureMeshDetails);
+  if (timingStats) {
+    const uint64_t captureMs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - captureStart)
+            .count());
+    if (captureMs > timingStats->slowestNodeMs) {
+      timingStats->slowestNodeMs = captureMs;
+      timingStats->slowestNodeName = snapshot.name.empty()
+                                         ? snapshot.objectId
+                                         : snapshot.name;
+    }
+  }
   outState->insert_or_assign(snapshot.handle, snapshot);
+  if (outNodeLookup) {
+    outNodeLookup->insert_or_assign(snapshot.handle, node);
+  }
   for (int childIndex = 0; childIndex < node->NumberOfChildren(); ++childIndex) {
-    GatherNodeSnapshots(ip, node->GetChildNode(childIndex), outState);
+    GatherNodeSnapshots(ip, node->GetChildNode(childIndex), outState,
+                        outNodeLookup, captureMeshDetails, timingStats);
   }
 }
 
@@ -5409,18 +5687,20 @@ bool SendInitialSnapshot(Interface *ip,
   const std::string sessionId = MakeSessionId();
 
   std::unordered_map<ULONG_PTR, NodeSnapshot> state;
+  std::unordered_map<ULONG_PTR, INode *> nodeLookup;
   MaterialStateMap materialState;
   std::unordered_map<ULONG_PTR, LightSnapshot> lightState;
   std::unordered_map<ULONG_PTR, CameraSnapshot> sceneCameraState;
   if (INode *root = ip->GetRootNode()) {
     for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
-      GatherNodeSnapshots(ip, root->GetChildNode(childIndex), &state);
+      GatherNodeSnapshots(ip, root->GetChildNode(childIndex), &state,
+                          &nodeLookup, false);
       GatherLightSnapshots(ip, root->GetChildNode(childIndex), &lightState);
       GatherSceneCameraSnapshots(ip, root->GetChildNode(childIndex),
                                  &sceneCameraState);
     }
   }
-  GatherMaterialSnapshots(ip, state, &materialState);
+  GatherMaterialSnapshots(ip, state, &materialState, &nodeLookup, true);
 
   json deltas = json::array();
   deltas.push_back(json{
@@ -5536,9 +5816,6 @@ bool SendResumeSnapshot(Interface *ip,
     return false;
   }
 
-  EnsurePersistentSceneIdentifiers(ip);
-  CleanupPayloadRootDirectory();
-
   const std::string documentId = MakeDocumentId(ip);
   PersistedLiveLinkState persistedState;
   if (!ReadPersistedLiveLinkState(ip, &persistedState) ||
@@ -5546,19 +5823,25 @@ bool SendResumeSnapshot(Interface *ip,
     return false;
   }
 
+  EnsurePersistentSceneIdentifiers(ip);
+  CleanupPayloadRootDirectory();
+
   std::unordered_map<ULONG_PTR, NodeSnapshot> currentState;
+  std::unordered_map<ULONG_PTR, INode *> nodeLookup;
   MaterialStateMap currentMaterialState;
   std::unordered_map<ULONG_PTR, LightSnapshot> currentLightState;
   std::unordered_map<ULONG_PTR, CameraSnapshot> currentSceneCameraState;
   if (INode *root = ip->GetRootNode()) {
     for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
-      GatherNodeSnapshots(ip, root->GetChildNode(childIndex), &currentState);
+      GatherNodeSnapshots(ip, root->GetChildNode(childIndex), &currentState,
+                          &nodeLookup, false);
       GatherLightSnapshots(ip, root->GetChildNode(childIndex), &currentLightState);
       GatherSceneCameraSnapshots(ip, root->GetChildNode(childIndex),
                                  &currentSceneCameraState);
     }
   }
-  GatherMaterialSnapshots(ip, currentState, &currentMaterialState);
+  GatherMaterialSnapshots(ip, currentState, &currentMaterialState, &nodeLookup,
+                          true);
   const std::vector<std::string> selectedObjectIds = GatherSelectedObjectIds(ip);
   CameraSnapshot cameraSnapshot;
   CaptureActiveCameraSnapshot(ip, &cameraSnapshot);
@@ -6203,6 +6486,62 @@ private:
     const std::string startupSummary =
         m_lastStartupSummary.empty() ? std::string("Last startup: none.")
                                      : m_lastStartupSummary;
+    std::string fullResyncDetails = "\r\nFull Resync: none.";
+    if (m_lastFullResyncTimingStats.valid) {
+      fullResyncDetails =
+          "\r\nFull Resync: total=" +
+          std::to_string(m_lastFullResyncTimingStats.totalMs) +
+          "ms | ids=" +
+          std::to_string(m_lastFullResyncTimingStats.identifierPrepMs) +
+          "ms | nodes=" +
+          std::to_string(m_lastFullResyncTimingStats.nodeGatherMs) +
+          "ms | lights=" +
+          std::to_string(m_lastFullResyncTimingStats.lightGatherMs) +
+          "ms | cameras=" +
+          std::to_string(m_lastFullResyncTimingStats.sceneCameraGatherMs) +
+          "ms | mats=" +
+          std::to_string(m_lastFullResyncTimingStats.materialGatherMs) +
+          "ms | matLib=" +
+          std::to_string(m_lastFullResyncTimingStats.materialLibraryWriteMs) +
+          "ms | send=" +
+          std::to_string(m_lastFullResyncTimingStats.batchSendMs) +
+          "ms" +
+          "\r\nFull Resync Detail: matShots=" +
+          std::to_string(m_lastFullResyncTimingStats.materialStats.snapshotMs) +
+          "ms | tex=" +
+          std::to_string(
+              m_lastFullResyncTimingStats.materialStats.textureExtractMs) +
+          "ms | triPlanar=" +
+          std::to_string(
+              m_lastFullResyncTimingStats.materialStats.triPlanarSearchMs) +
+          "ms | vray=" +
+          std::to_string(m_lastFullResyncTimingStats.materialStats.vrayMaterialMs) +
+          "ms | selection=" +
+          std::to_string(m_lastFullResyncTimingStats.selectionGatherMs) +
+          "ms | deltas=" +
+          std::to_string(m_lastFullResyncTimingStats.deltaBuildMs) +
+          "ms" +
+          "\r\nFull Resync Stats: nodes=" +
+          std::to_string(m_lastFullResyncTimingStats.nodeCount) +
+          " | meshNodes=" +
+          std::to_string(m_lastFullResyncTimingStats.meshNodeCount) +
+          " | materials=" +
+          std::to_string(m_lastFullResyncTimingStats.materialCount) +
+          " | texturedMats=" +
+          std::to_string(
+              m_lastFullResyncTimingStats.materialStats.texturedMaterialCount) +
+          " | textures=" +
+          std::to_string(m_lastFullResyncTimingStats.textureCount) +
+          " | triHits=" +
+          std::to_string(m_lastFullResyncTimingStats.materialStats.triPlanarHitCount) +
+          "\r\nSlowest Node: " +
+          (m_lastFullResyncTimingStats.slowestNodeName.empty()
+               ? std::string("<none>")
+               : m_lastFullResyncTimingStats.slowestNodeName) +
+          " | " +
+          std::to_string(m_lastFullResyncTimingStats.slowestNodeMs) +
+          "ms";
+    }
     std::string errText = g_pipeClient.GetLastError();
     if (!errText.empty()) {
       errText = "\r\nPipe Error: " + errText;
@@ -6224,6 +6563,9 @@ private:
            " | lastBatch=" + std::to_string(m_lastBatchDeltaCount) +
            "\r\nMesh Export: done=" +
            std::to_string(m_meshExportTimingStats.completedCount) +
+           " | source=" +
+           std::string(m_meshExportTimingStats.lastUsedRenderMesh ? "render"
+                                                                  : "tri") +
            " | lastCapture=" +
            std::to_string(m_meshExportTimingStats.lastCaptureMs) + "ms" +
            " | lastSerialize=" +
@@ -6236,6 +6578,10 @@ private:
            std::to_string(m_meshExportTimingStats.lastFaceCopyMs) + "ms" +
            " | mats=" +
            std::to_string(m_meshExportTimingStats.lastMaterialCaptureMs) + "ms" +
+           " | render=" +
+           std::to_string(m_meshExportTimingStats.renderMeshCount) +
+           " | triFallback=" +
+           std::to_string(m_meshExportTimingStats.triObjectFallbackCount) +
            " | avgCapture=" +
            std::to_string(
                m_meshExportTimingStats.completedCount == 0
@@ -6248,7 +6594,7 @@ private:
                    ? 0
                    : (m_meshExportTimingStats.totalSerializeMs /
                       m_meshExportTimingStats.completedCount)) +
-           "ms";
+           "ms" + fullResyncDetails;
   }
 
   void RefreshRollupUI_NoLock() {
@@ -6546,6 +6892,12 @@ private:
 
   void RecordMeshExportTiming_NoLock(const AsyncMeshPayloadResult &result) {
     ++m_meshExportTimingStats.completedCount;
+    m_meshExportTimingStats.lastUsedRenderMesh = result.usedRenderMesh;
+    if (result.usedRenderMesh) {
+      ++m_meshExportTimingStats.renderMeshCount;
+    } else {
+      ++m_meshExportTimingStats.triObjectFallbackCount;
+    }
     m_meshExportTimingStats.lastTriObjectCaptureMs = result.triObjectCaptureMs;
     m_meshExportTimingStats.lastNormalsBuildMs = result.normalsBuildMs;
     m_meshExportTimingStats.lastFaceCopyMs = result.faceCopyMs;
@@ -6667,11 +7019,17 @@ private:
     const size_t maxExports =
         force ? m_completedMeshExports.size() : kCompletedMeshExportBatchSize;
     while (!m_completedMeshExports.empty() && flushedCount < maxExports) {
-      const AsyncMeshPayloadResult &result = m_completedMeshExports.front();
-      if (result.success && result.snapshot.hasMesh && !result.payloadUri.empty()) {
+    const AsyncMeshPayloadResult &result = m_completedMeshExports.front();
+    if (result.success && result.snapshot.hasMesh && !result.payloadUri.empty()) {
+      auto snapshotIt = m_lastNodeState.find(result.handle);
+      if (snapshotIt != m_lastNodeState.end()) {
+        snapshotIt->second = result.snapshot;
+      }
         if (!result.sharedPayloadKey.empty()) {
           m_sharedPayloadCache[result.sharedPayloadKey] =
               SharedPayloadCacheEntry{result.snapshot.geometryFingerprint,
+                                      result.snapshot.vertexCount,
+                                      result.snapshot.indexCount,
                                       result.payloadUri};
         }
         AppendMeshPayloadDelta(m_documentId, result.snapshot, result.payloadUri,
@@ -6724,10 +7082,21 @@ private:
       const std::string sharedPayloadKey = BuildSharedPayloadKey(ip, node);
       const auto cacheIt = m_sharedPayloadCache.find(sharedPayloadKey);
       if (!sharedPayloadKey.empty() && cacheIt != m_sharedPayloadCache.end() &&
-          cacheIt->second.geometryFingerprint == snapshot.geometryFingerprint &&
+          (snapshot.geometryFingerprint == 0 ||
+           cacheIt->second.geometryFingerprint == snapshot.geometryFingerprint) &&
           !cacheIt->second.payloadUri.empty()) {
-        AppendMeshPayloadDelta(m_documentId, snapshot, cacheIt->second.payloadUri,
-                               &m_nextRevision, &cachedDeltas);
+        NodeSnapshot cachedSnapshot = snapshot;
+        cachedSnapshot.hasMesh = true;
+        cachedSnapshot.geometryFingerprint = cacheIt->second.geometryFingerprint;
+        cachedSnapshot.vertexCount = cacheIt->second.vertexCount;
+        cachedSnapshot.indexCount = cacheIt->second.indexCount;
+        AppendMeshPayloadDelta(m_documentId, cachedSnapshot,
+                               cacheIt->second.payloadUri, &m_nextRevision,
+                               &cachedDeltas);
+        auto snapshotIt = m_lastNodeState.find(snapshot.handle);
+        if (snapshotIt != m_lastNodeState.end()) {
+          snapshotIt->second = cachedSnapshot;
+        }
         it = m_pendingMeshExports.erase(it);
         ++dispatchCount;
         continue;
@@ -7021,26 +7390,73 @@ private:
     };
 
     if (m_forceFullResync) {
+      FullResyncTimingStats fullResyncTiming;
+      const auto fullResyncStart = Clock::now();
+      const auto identifierPrepStart = Clock::now();
       EnsurePersistentSceneIdentifiers(ip);
+      fullResyncTiming.identifierPrepMs = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              Clock::now() - identifierPrepStart)
+              .count());
       std::unordered_map<ULONG_PTR, NodeSnapshot> currentState;
+      std::unordered_map<ULONG_PTR, INode *> nodeLookup;
       MaterialStateMap currentMaterialState;
       std::unordered_map<ULONG_PTR, LightSnapshot> currentLightState;
       std::unordered_map<ULONG_PTR, CameraSnapshot> currentSceneCameraState;
       if (INode *root = ip->GetRootNode()) {
         for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
-          GatherNodeSnapshots(ip, root->GetChildNode(childIndex), &currentState);
+          const auto nodeGatherStart = Clock::now();
+          GatherNodeSnapshots(ip, root->GetChildNode(childIndex), &currentState,
+                              &nodeLookup, true, &fullResyncTiming);
+          fullResyncTiming.nodeGatherMs += static_cast<uint64_t>(
+              std::chrono::duration_cast<std::chrono::milliseconds>(
+                  Clock::now() - nodeGatherStart)
+                  .count());
+          const auto lightGatherStart = Clock::now();
           GatherLightSnapshots(ip, root->GetChildNode(childIndex),
                                &currentLightState);
+          fullResyncTiming.lightGatherMs += static_cast<uint64_t>(
+              std::chrono::duration_cast<std::chrono::milliseconds>(
+                  Clock::now() - lightGatherStart)
+                  .count());
+          const auto cameraGatherStart = Clock::now();
           GatherSceneCameraSnapshots(ip, root->GetChildNode(childIndex),
                                      &currentSceneCameraState);
+          fullResyncTiming.sceneCameraGatherMs += static_cast<uint64_t>(
+              std::chrono::duration_cast<std::chrono::milliseconds>(
+                  Clock::now() - cameraGatherStart)
+                  .count());
         }
       }
-      GatherMaterialSnapshots(ip, currentState, &currentMaterialState);
+      const auto materialGatherStart = Clock::now();
+      GatherMaterialSnapshots(ip, currentState, &currentMaterialState,
+                              &nodeLookup, false,
+                              &fullResyncTiming.materialStats);
+      fullResyncTiming.materialGatherMs = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              Clock::now() - materialGatherStart)
+              .count());
       scannedNodeCount = currentState.size();
+      fullResyncTiming.nodeCount = currentState.size();
+      fullResyncTiming.lightCount = currentLightState.size();
+      fullResyncTiming.cameraCount = currentSceneCameraState.size();
+      fullResyncTiming.materialCount = currentMaterialState.size();
+      fullResyncTiming.textureCount = CountTextureUrisForState(currentMaterialState);
+      for (const auto &[_, snapshot] : currentState) {
+        if (snapshot.hasMesh) {
+          ++fullResyncTiming.meshNodeCount;
+        }
+      }
       std::string materialLibraryPayloadUri;
+      const auto materialLibraryWriteStart = Clock::now();
       const bool wroteMaterialLibrary =
           WriteMaterialLibraryPayload(m_documentId, currentMaterialState,
                                       &materialLibraryPayloadUri);
+      fullResyncTiming.materialLibraryWriteMs = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              Clock::now() - materialLibraryWriteStart)
+              .count());
+      const auto deltaBuildStart = Clock::now();
       if (wroteMaterialLibrary && !materialLibraryPayloadUri.empty()) {
         AppendMaterialLibraryDelta(m_documentId, materialLibraryPayloadUri,
                                    &m_nextRevision, &deltas);
@@ -7159,10 +7575,20 @@ private:
         }
       }
 
+      const auto selectionGatherStart = Clock::now();
       selectedObjectIds = GatherSelectedObjectIds(ip);
+      fullResyncTiming.selectionGatherMs = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              Clock::now() - selectionGatherStart)
+              .count());
       if (selectedObjectIds != m_lastSelectedObjectIds) {
         AppendSelectionDelta(selectedObjectIds, &deltas);
       }
+
+      fullResyncTiming.deltaBuildMs = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              Clock::now() - deltaBuildStart)
+              .count());
 
       const uint64_t scanDurationMs = static_cast<uint64_t>(
           std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() -
@@ -7171,8 +7597,17 @@ private:
       m_nextPollDeadline = ComputeNextPollDeadline(
           ComputePollDelayMs(currentState.size(), deltas.size(), scanDurationMs));
 
-      if (!deltas.empty() &&
-          SendBatch(m_sessionId, m_nextSequence, false, deltas)) {
+      bool batchSent = false;
+      if (!deltas.empty()) {
+        const auto batchSendStart = Clock::now();
+        batchSent = SendBatch(m_sessionId, m_nextSequence, false, deltas);
+        fullResyncTiming.batchSendMs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                Clock::now() - batchSendStart)
+                .count());
+      }
+
+      if (!deltas.empty() && batchSent) {
         ++m_nextSequence;
         RecordBatchSent_NoLock(deltas.size());
         m_lastNodeState = std::move(currentState);
@@ -7196,6 +7631,12 @@ private:
         ClearDirtyState();
       }
 
+      fullResyncTiming.totalMs = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              Clock::now() - fullResyncStart)
+              .count());
+      fullResyncTiming.valid = true;
+      m_lastFullResyncTimingStats = std::move(fullResyncTiming);
       MaybePersistResumeStateLocked(ip, false);
       RefreshRollupUI_NoLock();
       return;
@@ -7519,6 +7960,7 @@ private:
   bool m_meshWorkersStopping = false;
   std::unordered_map<std::string, SharedPayloadCacheEntry> m_sharedPayloadCache;
   MeshExportTimingStats m_meshExportTimingStats;
+  FullResyncTimingStats m_lastFullResyncTimingStats;
   std::unordered_map<ULONG_PTR, NodeSnapshot> m_lastNodeState;
   MaterialStateMap m_lastMaterialState;
   std::unordered_map<ULONG_PTR, LightSnapshot> m_lastLightState;
