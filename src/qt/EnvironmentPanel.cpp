@@ -64,7 +64,7 @@ void EnvironmentPanel::createUi()
     auto *lightingTab = new QWidget(tabs);
     auto *lightingLayout = new QVBoxLayout(lightingTab);
 
-    auto *sourceGroup = new QGroupBox(tr("IBL & Sky"), lightingTab);
+    auto *sourceGroup = new QGroupBox(tr("IBL & Sky2"), lightingTab);
     auto *sourceForm = new QFormLayout(sourceGroup);
     m_iblSource = new QComboBox(sourceGroup);
     m_iblSource->addItems({tr("File IBL"), tr("Prague Sky")});
