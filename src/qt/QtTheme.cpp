@@ -72,8 +72,8 @@ void ApplyQtTheme(QApplication &app)
             background-color: #252526;
             border: 1px solid #3c3c3c;
             border-radius: 4px;
-            margin-top: 16px;
-            padding: 8px 4px 4px 4px;
+            margin-top: 12px;
+            padding: 16px 4px 4px 4px;
         }
 
         QGroupBox::title {
@@ -83,7 +83,7 @@ void ApplyQtTheme(QApplication &app)
             top: 0px;
             padding: 0 4px;
             color: #007acc;
-            background-color: transparent;
+            background-color: #252526;
             font-weight: bold;
         }
 
