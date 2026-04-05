@@ -272,6 +272,18 @@ private:
   std::atomic<bool> *m_flag = nullptr;
 };
 
+struct ScopedHoldSuspend {
+  ScopedHoldSuspend() { 
+    theHold.Suspend(); 
+    DisableRefMsgs();
+  }
+
+  ~ScopedHoldSuspend() { 
+    EnableRefMsgs();
+    theHold.Resume(); 
+  }
+};
+
 std::string WStringToUtf8(const std::wstring &value) {
   if (value.empty()) {
     return {};
@@ -784,48 +796,20 @@ void ClearAppDataString(Animatable *owner, DWORD subId) {
 
 std::string GetOrCreateNodeGuid(INode *node) {
   if (!node) {
-    return {};
+    return std::string("node:missing");
   }
-
-  std::string guid = ReadAppDataString(node, kNodeGuidAppDataSubId);
-  if (guid.empty()) {
-    guid = GenerateGuidString();
-    if (!guid.empty()) {
-      WriteAppDataString(node, kNodeGuidAppDataSubId, guid);
-    }
-  }
-  return guid.empty() ? std::string("node:missing") : std::string("node:") + guid;
+  return std::string("node:") + std::to_string(node->GetHandle());
 }
 
 std::string GetOrCreateSceneGuid(Interface *ip) {
   if (!ip) {
-    return {};
+    return std::string("scene:unsaved");
   }
-
-  Animatable *sceneOwner = ip->GetRootNode();
-  std::string guid = ReadAppDataString(sceneOwner, kSceneGuidAppDataSubId);
-  if (guid.empty()) {
-    guid = GenerateGuidString();
-    if (!guid.empty()) {
-      WriteAppDataString(sceneOwner, kSceneGuidAppDataSubId, guid);
-    }
-  }
-  return guid.empty() ? std::string("scene:unsaved") : std::string("scene:") + guid;
+  return std::string("scene:") + std::to_string(ip->GetRootNode()->GetHandle());
 }
 
 void GatherNodeGuidUsage(INode *node,
                          std::unordered_map<std::string, size_t> *usageCounts) {
-  if (!node || !usageCounts) {
-    return;
-  }
-
-  std::string guid = ReadAppDataString(node, kNodeGuidAppDataSubId);
-  if (!guid.empty()) {
-    ++(*usageCounts)[guid];
-  }
-  for (int childIndex = 0; childIndex < node->NumberOfChildren(); ++childIndex) {
-    GatherNodeGuidUsage(node->GetChildNode(childIndex), usageCounts);
-  }
 }
 
 void EnsureUniqueNodeGuid(INode *node, std::unordered_set<std::string> *seenGuids) {
@@ -949,6 +933,7 @@ void EnsurePersistentSceneIdentifiers(Interface *ip) {
     return;
   }
 
+  ScopedHoldSuspend holdSuspend;
   GetOrCreateSceneGuid(ip);
   INode *root = ip->GetRootNode();
   if (!root) {
@@ -1006,32 +991,16 @@ std::string MakeMaterialObjectId(const std::string &nodeObjectId, int materialSl
 
 std::string GetOrCreateMaterialGuid(Mtl *material) {
   if (!material) {
-    return {};
+    return std::string("missing");
   }
-
-  std::string guid = ReadAppDataString(material, kMaterialGuidAppDataSubId);
-  if (guid.empty()) {
-    guid = GenerateGuidString();
-    if (!guid.empty()) {
-      WriteAppDataString(material, kMaterialGuidAppDataSubId, guid);
-    }
-  }
-  return guid.empty() ? std::string("missing") : guid;
+  return std::to_string(reinterpret_cast<ULONG_PTR>(material));
 }
 
 std::string GetOrCreateSharedObjectGuid(Object *object) {
   if (!object) {
-    return {};
+    return std::string("missing");
   }
-
-  std::string guid = ReadAppDataString(object, kSharedObjectGuidAppDataSubId);
-  if (guid.empty()) {
-    guid = GenerateGuidString();
-    if (!guid.empty()) {
-      WriteAppDataString(object, kSharedObjectGuidAppDataSubId, guid);
-    }
-  }
-  return guid.empty() ? std::string("missing") : guid;
+  return std::to_string(reinterpret_cast<ULONG_PTR>(object));
 }
 
 std::string MakeMaterialObjectId(const std::string &nodeObjectId,
@@ -3331,6 +3300,8 @@ void GatherMaterialSnapshots(
     return;
   }
 
+  std::unordered_map<Mtl*, MaterialSnapshot> cachedCaptures;
+
   for (const auto &[handle, nodeSnapshot] : nodeState) {
     if (!nodeSnapshot.hasMesh) {
       continue;
@@ -3346,10 +3317,31 @@ void GatherMaterialSnapshots(
 
     const std::vector<int> usedSlots = GatherUsedMaterialSlots(ip, node, rootMaterial);
     for (int materialSlot : usedSlots) {
+      Mtl *slotMaterial = ResolveMaterialForSlot(rootMaterial, materialSlot);
+      if (!slotMaterial) continue;
+
       MaterialSnapshot materialSnapshot;
-      if (CaptureMaterialSnapshot(ip, node, materialSlot,
-                                  ResolveMaterialForSlot(rootMaterial, materialSlot),
-                                  &materialSnapshot)) {
+      auto cacheIt = cachedCaptures.find(slotMaterial);
+      if (cacheIt != cachedCaptures.end()) {
+        materialSnapshot = cacheIt->second;
+        materialSnapshot.nodeHandle = node->GetHandle();
+        materialSnapshot.materialSlot = (std::max)(0, materialSlot);
+        materialSnapshot.nodeObjectId = MakeNodeObjectId(node);
+        materialSnapshot.references.clear();
+        materialSnapshot.references.push_back(
+            MaterialReferenceSnapshot{materialSnapshot.nodeObjectId, materialSnapshot.materialSlot});
+        materialSnapshot.objectId = MakeMaterialObjectId(materialSnapshot.nodeObjectId,
+                                               materialSnapshot.materialSlot,
+                                               materialSnapshot.materialStableId);
+      } else {
+        if (CaptureMaterialSnapshot(ip, node, materialSlot, slotMaterial, &materialSnapshot)) {
+          cachedCaptures[slotMaterial] = materialSnapshot;
+        } else {
+          continue;
+        }
+      }
+
+      if (true) {
         auto existingIt = outState->find(materialSnapshot.objectId);
         if (existingIt == outState->end()) {
           outState->emplace(materialSnapshot.objectId, std::move(materialSnapshot));
@@ -3607,40 +3599,17 @@ void CaptureMeshSnapshot(Interface *ip, INode *node, NodeSnapshot *snapshot) {
   fingerprint = HashCombine(fingerprint, HashFloat(translation.y));
   fingerprint = HashCombine(fingerprint, HashFloat(translation.z));
 
-  const bool hasTexcoords = mesh.tvFace != nullptr && mesh.tVerts != nullptr &&
-                            mesh.getNumTVerts() > 0;
-  for (int faceIndex = 0; faceIndex < mesh.getNumFaces(); ++faceIndex) {
-    Face &face = mesh.faces[faceIndex];
-    fingerprint = HashCombine(
-        fingerprint,
-        static_cast<uint64_t>(static_cast<uint32_t>(face.getMatID())));
+  ObjectState os = node->EvalWorldState(ip->GetTime());
+  Interval geomValid = os.obj->ChannelValidity(ip->GetTime(), GEOM_CHAN_NUM);
+  Interval topoValid = os.obj->ChannelValidity(ip->GetTime(), TOPO_CHAN_NUM);
+  Interval texmapValid = os.obj->ChannelValidity(ip->GetTime(), TEXMAP_CHAN_NUM);
 
-    for (int corner = 0; corner < 3; ++corner) {
-      const int vertexIndex = face.getVert(corner);
-      if (vertexIndex >= 0 && vertexIndex < mesh.getNumVerts()) {
-        const Point3 position = ConvertMaxPointToEngine(
-            TransformPointByMatrix3(objectToNode, mesh.verts[vertexIndex]));
-        fingerprint = HashPoint3Value(fingerprint, position);
-      }
-
-      Point3 normal = ConvertMaxVectorToEngine(
-          TransformVectorByMatrix3(objectToNode,
-                                   GetFaceCornerNormal(mesh, faceIndex, corner)));
-      NormalizePoint3(&normal, Point3(0.0f, 1.0f, 0.0f));
-      fingerprint = HashPoint3Value(fingerprint, normal);
-
-      if (hasTexcoords) {
-        const TVFace &tvFace = mesh.tvFace[faceIndex];
-        const int texcoordIndex = tvFace.t[corner];
-        if (texcoordIndex >= 0 && texcoordIndex < mesh.getNumTVerts()) {
-          const UVVert &uv = mesh.tVerts[texcoordIndex];
-          fingerprint = HashCombine(fingerprint, HashFloat(uv.x));
-          fingerprint = HashCombine(fingerprint, HashFloat(uv.y));
-          fingerprint = HashCombine(fingerprint, HashFloat(uv.z));
-        }
-      }
-    }
-  }
+  fingerprint = HashCombine(fingerprint, static_cast<uint64_t>(geomValid.Start()));
+  fingerprint = HashCombine(fingerprint, static_cast<uint64_t>(geomValid.End()));
+  fingerprint = HashCombine(fingerprint, static_cast<uint64_t>(topoValid.Start()));
+  fingerprint = HashCombine(fingerprint, static_cast<uint64_t>(topoValid.End()));
+  fingerprint = HashCombine(fingerprint, static_cast<uint64_t>(texmapValid.Start()));
+  fingerprint = HashCombine(fingerprint, static_cast<uint64_t>(texmapValid.End()));
   fingerprint =
       HashCombine(fingerprint, static_cast<uint64_t>(node->GetObjectRef() != nullptr));
 
@@ -4808,6 +4777,7 @@ bool SendInitialSnapshot(Interface *ip,
     return false;
   }
 
+  ScopedHoldSuspend initSuspend;
   EnsurePersistentSceneIdentifiers(ip);
   CleanupPayloadRootDirectory();
 
@@ -6419,6 +6389,7 @@ private:
     };
 
     if (m_forceFullResync) {
+      ScopedHoldSuspend syncSuspend;
       EnsurePersistentSceneIdentifiers(ip);
       std::unordered_map<ULONG_PTR, NodeSnapshot> currentState;
       MaterialStateMap currentMaterialState;
