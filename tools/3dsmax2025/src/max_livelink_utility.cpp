@@ -8,6 +8,7 @@
 #include <pbbitmap.h>
 #include <stdmat.h>
 #include <object.h>
+#include <hold.h>
 #include <units.h>
 #include <ISceneEventManager.h>
 #include <nlohmann/json.hpp>
@@ -269,6 +270,12 @@ struct ScopedFlag {
 
 private:
   std::atomic<bool> *m_flag = nullptr;
+};
+
+struct ScopedHoldSuspend {
+  ScopedHoldSuspend() { theHold.Suspend(); }
+
+  ~ScopedHoldSuspend() { theHold.Resume(); }
 };
 
 std::string WStringToUtf8(const std::wstring &value) {
@@ -948,6 +955,7 @@ void EnsurePersistentSceneIdentifiers(Interface *ip) {
     return;
   }
 
+  ScopedHoldSuspend holdSuspend;
   GetOrCreateSceneGuid(ip);
   INode *root = ip->GetRootNode();
   if (!root) {
@@ -7407,7 +7415,7 @@ private:
         for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
           const auto nodeGatherStart = Clock::now();
           GatherNodeSnapshots(ip, root->GetChildNode(childIndex), &currentState,
-                              &nodeLookup, true, &fullResyncTiming);
+                              &nodeLookup, false, &fullResyncTiming);
           fullResyncTiming.nodeGatherMs += static_cast<uint64_t>(
               std::chrono::duration_cast<std::chrono::milliseconds>(
                   Clock::now() - nodeGatherStart)
@@ -7430,7 +7438,7 @@ private:
       }
       const auto materialGatherStart = Clock::now();
       GatherMaterialSnapshots(ip, currentState, &currentMaterialState,
-                              &nodeLookup, false,
+                              &nodeLookup, true,
                               &fullResyncTiming.materialStats);
       fullResyncTiming.materialGatherMs = static_cast<uint64_t>(
           std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -7497,9 +7505,11 @@ private:
           AppendNodeVisibilityDelta(m_documentId, snapshot, &m_nextRevision,
                                     &deltas);
         }
-        if (snapshot.hasMesh &&
-            (!previous.hasMesh ||
-             previous.geometryFingerprint != snapshot.geometryFingerprint)) {
+        if (!snapshot.hasMesh && previous.hasMesh) {
+          CancelQueuedMeshPayloadExport_NoLock(handle);
+          QueuePayloadRemoval_NoLock(previous.objectId);
+        }
+        if (snapshot.hasMesh) {
           QueueMeshPayloadExport_NoLock(snapshot);
         }
       }
