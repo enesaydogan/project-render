@@ -39,6 +39,7 @@ public:
     SceneLight,
     SceneMaterial,
     MainCamera,
+    SavedView,
     Environment,
   };
 
@@ -58,6 +59,7 @@ public:
   void RestorePersistedBindings(const std::vector<PersistedBinding> &bindings);
   void ReindexSceneNodeBindingsAfterRemoval(size_t removedIndex);
   void ReindexSceneLightBindingsAfterRemoval(size_t removedIndex);
+  void ReindexSavedViewBindingsAfterRemoval(size_t removedIndex);
 
 private:
   struct ObjectBinding {

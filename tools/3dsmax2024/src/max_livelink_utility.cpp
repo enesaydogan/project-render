@@ -1083,6 +1083,9 @@ struct NodeSnapshot {
 
 struct CameraSnapshot {
   bool valid = false;
+  ULONG_PTR handle = 0;
+  std::string objectId;
+  std::string name;
   std::array<float, 3> position = {0.0f, 1.0f, -5.0f};
   std::array<float, 3> forward = {0.0f, 0.0f, 1.0f};
   std::array<float, 3> up = {0.0f, 1.0f, 0.0f};
@@ -1399,7 +1402,8 @@ bool SameVector3(const std::array<float, 3> &lhs, const std::array<float, 3> &rh
 }
 
 bool SameCamera(const CameraSnapshot &lhs, const CameraSnapshot &rhs) {
-  return lhs.valid == rhs.valid && SameVector3(lhs.position, rhs.position) &&
+  return lhs.valid == rhs.valid && lhs.name == rhs.name &&
+         SameVector3(lhs.position, rhs.position) &&
          SameVector3(lhs.forward, rhs.forward) && SameVector3(lhs.up, rhs.up) &&
          std::fabs(lhs.fovDegrees - rhs.fovDegrees) <= 1.0e-4f &&
          std::fabs(lhs.nearPlane - rhs.nearPlane) <= 1.0e-4f &&
@@ -1497,6 +1501,7 @@ struct PersistedLiveLinkState {
   std::unordered_map<std::string, NodeSnapshot> nodeStateByObjectId;
   MaterialStateMap materialState;
   std::unordered_map<std::string, LightSnapshot> lightStateByObjectId;
+  std::unordered_map<std::string, CameraSnapshot> sceneCameraStateByObjectId;
   std::vector<std::string> selectedObjectIds;
   CameraSnapshot cameraSnapshot;
 };
@@ -1571,6 +1576,8 @@ json SerializeLightSnapshot(const LightSnapshot &snapshot) {
 
 json SerializeCameraSnapshot(const CameraSnapshot &snapshot) {
   return json{{"v", snapshot.valid},
+              {"oi", snapshot.objectId},
+              {"n", snapshot.name},
               {"p", snapshot.position},
               {"f", snapshot.forward},
               {"u", snapshot.up},
@@ -1694,6 +1701,8 @@ void DeserializeCameraSnapshot(const json &value, CameraSnapshot *outSnapshot) {
     return;
   }
   outSnapshot->valid = value.value("v", false);
+  outSnapshot->objectId = value.value("oi", std::string());
+  outSnapshot->name = value.value("n", std::string());
   if (value.contains("p")) outSnapshot->position = value["p"].get<std::array<float, 3>>();
   if (value.contains("f")) outSnapshot->forward = value["f"].get<std::array<float, 3>>();
   if (value.contains("u")) outSnapshot->up = value["u"].get<std::array<float, 3>>();
@@ -1748,6 +1757,16 @@ bool ReadPersistedLiveLinkState(Interface *ip, PersistedLiveLinkState *outState)
       }
     }
   }
+  if (value.contains("sceneCameras") && value["sceneCameras"].is_array()) {
+    for (const auto &cameraValue : value["sceneCameras"]) {
+      CameraSnapshot snapshot;
+      DeserializeCameraSnapshot(cameraValue, &snapshot);
+      if (snapshot.valid && !snapshot.objectId.empty()) {
+        state.sceneCameraStateByObjectId.emplace(snapshot.objectId,
+                                                 std::move(snapshot));
+      }
+    }
+  }
   if (value.contains("selection") && value["selection"].is_array()) {
     state.selectedObjectIds = value["selection"].get<std::vector<std::string>>();
   }
@@ -1766,6 +1785,7 @@ void WritePersistedLiveLinkState(
     const std::unordered_map<ULONG_PTR, NodeSnapshot> &nodeState,
     const MaterialStateMap &materialState,
     const std::unordered_map<ULONG_PTR, LightSnapshot> &lightState,
+    const std::unordered_map<ULONG_PTR, CameraSnapshot> &sceneCameraState,
     const std::vector<std::string> &selectedObjectIds,
     const CameraSnapshot &cameraSnapshot) {
   if (!ip || documentId.empty()) {
@@ -1786,6 +1806,10 @@ void WritePersistedLiveLinkState(
   value["lights"] = json::array();
   for (const auto &[_, snapshot] : lightState) {
     value["lights"].push_back(SerializeLightSnapshot(snapshot));
+  }
+  value["sceneCameras"] = json::array();
+  for (const auto &[_, snapshot] : sceneCameraState) {
+    value["sceneCameras"].push_back(SerializeCameraSnapshot(snapshot));
   }
   value["selection"] = selectedObjectIds;
   value["camera"] = SerializeCameraSnapshot(cameraSnapshot);
@@ -2631,8 +2655,15 @@ void CaptureGenericMaterialTextures(Interface *ip, Mtl *material,
   }
 }
 
-std::string MakeCameraObjectId() {
+std::string MakeActiveCameraObjectId() {
   return "camera:active";
+}
+
+std::string MakeSceneCameraObjectId(INode *node) {
+  if (!node) {
+    return {};
+  }
+  return "camera:" + GetOrCreateNodeGuid(node);
 }
 
 INode *FindNodeByHandleRecursive(INode *node, ULONG_PTR handle) {
@@ -4225,6 +4256,8 @@ bool CaptureActiveCameraSnapshot(Interface *ip, CameraSnapshot *outSnapshot) {
 
   CameraSnapshot snapshot;
   snapshot.valid = true;
+  snapshot.objectId = MakeActiveCameraObjectId();
+  snapshot.name = "Active Camera";
 
   Matrix3 viewAffine;
   view.GetAffineTM(viewAffine);
@@ -4244,6 +4277,86 @@ bool CaptureActiveCameraSnapshot(Interface *ip, CameraSnapshot *outSnapshot) {
   snapshot.farPlane = 1000.0f;
   *outSnapshot = snapshot;
   return true;
+}
+
+bool CaptureSceneCameraSnapshot(Interface *ip, INode *node,
+                                CameraSnapshot *outSnapshot) {
+  if (!ip || !node || !outSnapshot) {
+    return false;
+  }
+
+  ObjectState objectState = node->EvalWorldState(ip->GetTime());
+  CameraObject *cameraObject = dynamic_cast<CameraObject *>(objectState.obj);
+  if (!cameraObject) {
+    return false;
+  }
+
+  CameraSnapshot snapshot;
+  snapshot.valid = true;
+  snapshot.handle = node->GetHandle();
+  snapshot.objectId = MakeSceneCameraObjectId(node);
+  snapshot.name = ToUtf8(node->GetName());
+
+  const Matrix3 worldTM = node->GetNodeTM(ip->GetTime());
+  Point3 position = ConvertMaxPointToEngine(worldTM.GetRow(3));
+  Point3 forward = ConvertMaxVectorToEngine(-worldTM.GetRow(2));
+  Point3 up = ConvertMaxVectorToEngine(worldTM.GetRow(1));
+  NormalizePoint3(&forward, Point3(0.0f, 0.0f, -1.0f));
+  NormalizePoint3(&up, Point3(0.0f, 1.0f, 0.0f));
+
+  snapshot.position = Point3ToArray(position);
+  snapshot.forward = Point3ToArray(forward);
+  snapshot.up = Point3ToArray(up);
+
+  Interval valid = FOREVER;
+  CameraState cameraState;
+  if (cameraObject->EvalCameraState(ip->GetTime(), valid, &cameraState) ==
+      REF_SUCCEED) {
+    snapshot.fovDegrees = cameraState.fov * (180.0f / 3.14159265359f);
+    snapshot.nearPlane =
+        cameraState.hither > 0.0f ? cameraState.hither : 0.01f;
+    snapshot.farPlane = cameraState.yon > snapshot.nearPlane
+                            ? cameraState.yon
+                            : 1000.0f;
+  } else {
+    snapshot.fovDegrees =
+        cameraObject->GetFOV(ip->GetTime()) * (180.0f / 3.14159265359f);
+    snapshot.nearPlane = 0.01f;
+    snapshot.farPlane = 1000.0f;
+  }
+
+  *outSnapshot = snapshot;
+  return true;
+}
+
+bool TryCaptureSceneCameraSnapshotByHandle(Interface *ip, ULONG_PTR handle,
+                                           CameraSnapshot *outSnapshot) {
+  if (!ip || handle == 0 || !outSnapshot) {
+    return false;
+  }
+
+  INode *node = FindNodeByHandle(ip, handle);
+  if (!node) {
+    return false;
+  }
+
+  return CaptureSceneCameraSnapshot(ip, node, outSnapshot);
+}
+
+void GatherSceneCameraSnapshots(
+    Interface *ip, INode *node,
+    std::unordered_map<ULONG_PTR, CameraSnapshot> *outState) {
+  if (!ip || !node || !outState) {
+    return;
+  }
+
+  CameraSnapshot snapshot;
+  if (CaptureSceneCameraSnapshot(ip, node, &snapshot)) {
+    outState->insert_or_assign(snapshot.handle, snapshot);
+  }
+  for (int childIndex = 0; childIndex < node->NumberOfChildren(); ++childIndex) {
+    GatherSceneCameraSnapshots(ip, node->GetChildNode(childIndex), outState);
+  }
 }
 
 bool TryCaptureNodeSnapshotByHandle(Interface *ip, ULONG_PTR handle,
@@ -4283,10 +4396,11 @@ void AppendCameraDelta(const std::string &documentId,
   }
 
   outDeltas->push_back(json{{"kind", "CameraChanged"},
-                            {"target", MakeObjectId(documentId, MakeCameraObjectId(), "Camera")},
+                            {"target", MakeObjectId(documentId, snapshot.objectId, "Camera")},
                             {"revision", (*revision)++},
-                            {"debugLabel", "3ds Max active camera"},
+                            {"debugLabel", snapshot.name},
                             {"payload", json{{"position", snapshot.position},
+                                              {"displayName", snapshot.name},
                                               {"forward", snapshot.forward},
                                               {"up", snapshot.up},
                                               {"fovDegrees", snapshot.fovDegrees},
@@ -4438,6 +4552,7 @@ bool SendInitialSnapshot(Interface *ip,
                          std::unordered_map<ULONG_PTR, NodeSnapshot> *outState,
                          MaterialStateMap *outMaterialState,
                          std::unordered_map<ULONG_PTR, LightSnapshot> *outLightState,
+                         std::unordered_map<ULONG_PTR, CameraSnapshot> *outSceneCameraState,
                          std::vector<std::string> *outSelectedObjectIds,
                          CameraSnapshot *outCameraSnapshot,
                          size_t *outDeltaCount,
@@ -4461,10 +4576,13 @@ bool SendInitialSnapshot(Interface *ip,
   std::unordered_map<ULONG_PTR, NodeSnapshot> state;
   MaterialStateMap materialState;
   std::unordered_map<ULONG_PTR, LightSnapshot> lightState;
+  std::unordered_map<ULONG_PTR, CameraSnapshot> sceneCameraState;
   if (INode *root = ip->GetRootNode()) {
     for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
       GatherNodeSnapshots(ip, root->GetChildNode(childIndex), &state);
       GatherLightSnapshots(ip, root->GetChildNode(childIndex), &lightState);
+      GatherSceneCameraSnapshots(ip, root->GetChildNode(childIndex),
+                                 &sceneCameraState);
     }
   }
   GatherMaterialSnapshots(ip, state, &materialState);
@@ -4511,6 +4629,9 @@ bool SendInitialSnapshot(Interface *ip,
   for (const auto &[_, snapshot] : lightState) {
     AppendLightDelta(documentId, snapshot, &revision, &deltas);
   }
+  for (const auto &[_, snapshot] : sceneCameraState) {
+    AppendCameraDelta(documentId, snapshot, &revision, &deltas);
+  }
   deltas.push_back(json{{"kind", "SelectionChanged"},
                         {"target", MakeObjectId(documentId, "selection", "Selection")},
                         {"revision", revision++},
@@ -4530,6 +4651,9 @@ bool SendInitialSnapshot(Interface *ip,
   }
   if (outLightState) {
     *outLightState = std::move(lightState);
+  }
+  if (outSceneCameraState) {
+    *outSceneCameraState = std::move(sceneCameraState);
   }
   if (outSelectedObjectIds) {
     *outSelectedObjectIds = selectedObjectIds;
@@ -4559,6 +4683,7 @@ bool SendResumeSnapshot(Interface *ip,
                         std::unordered_map<ULONG_PTR, NodeSnapshot> *outState,
                         MaterialStateMap *outMaterialState,
                         std::unordered_map<ULONG_PTR, LightSnapshot> *outLightState,
+                        std::unordered_map<ULONG_PTR, CameraSnapshot> *outSceneCameraState,
                         std::vector<std::string> *outSelectedObjectIds,
                         CameraSnapshot *outCameraSnapshot,
                         size_t *outDeltaCount,
@@ -4583,10 +4708,13 @@ bool SendResumeSnapshot(Interface *ip,
   std::unordered_map<ULONG_PTR, NodeSnapshot> currentState;
   MaterialStateMap currentMaterialState;
   std::unordered_map<ULONG_PTR, LightSnapshot> currentLightState;
+  std::unordered_map<ULONG_PTR, CameraSnapshot> currentSceneCameraState;
   if (INode *root = ip->GetRootNode()) {
     for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
       GatherNodeSnapshots(ip, root->GetChildNode(childIndex), &currentState);
       GatherLightSnapshots(ip, root->GetChildNode(childIndex), &currentLightState);
+      GatherSceneCameraSnapshots(ip, root->GetChildNode(childIndex),
+                                 &currentSceneCameraState);
     }
   }
   GatherMaterialSnapshots(ip, currentState, &currentMaterialState);
@@ -4604,6 +4732,12 @@ bool SendResumeSnapshot(Interface *ip,
   currentLightsByObjectId.reserve(currentLightState.size());
   for (const auto &[_, snapshot] : currentLightState) {
     currentLightsByObjectId.emplace(snapshot.objectId, snapshot);
+  }
+
+  std::unordered_map<std::string, CameraSnapshot> currentSceneCamerasByObjectId;
+  currentSceneCamerasByObjectId.reserve(currentSceneCameraState.size());
+  for (const auto &[_, snapshot] : currentSceneCameraState) {
+    currentSceneCamerasByObjectId.emplace(snapshot.objectId, snapshot);
   }
 
   const std::string sessionId = MakeSessionId();
@@ -4692,6 +4826,27 @@ bool SendResumeSnapshot(Interface *ip,
     }
   }
 
+  for (const auto &[objectId, snapshot] : currentSceneCamerasByObjectId) {
+    const auto previousIt =
+        persistedState.sceneCameraStateByObjectId.find(objectId);
+    if (previousIt == persistedState.sceneCameraStateByObjectId.end() ||
+        !SameCamera(snapshot, previousIt->second)) {
+      AppendCameraDelta(documentId, snapshot, &revision, &deltas);
+    }
+  }
+
+  for (const auto &[objectId, snapshot] : persistedState.sceneCameraStateByObjectId) {
+    if (currentSceneCamerasByObjectId.find(objectId) ==
+        currentSceneCamerasByObjectId.end()) {
+      deltas.push_back(json{{"kind", "NodeRemoved"},
+                            {"target", MakeObjectId(documentId, snapshot.objectId,
+                                                    "Camera")},
+                            {"revision", revision++},
+                            {"debugLabel", snapshot.name},
+                            {"payload", json{{"removeChildren", false}}}});
+    }
+  }
+
   if (selectedObjectIds != persistedState.selectedObjectIds) {
     deltas.push_back(json{{"kind", "SelectionChanged"},
                           {"target", MakeObjectId(documentId, "selection", "Selection")},
@@ -4716,6 +4871,9 @@ bool SendResumeSnapshot(Interface *ip,
   }
   if (outLightState) {
     *outLightState = std::move(currentLightState);
+  }
+  if (outSceneCameraState) {
+    *outSceneCameraState = std::move(currentSceneCameraState);
   }
   if (outSelectedObjectIds) {
     *outSelectedObjectIds = selectedObjectIds;
@@ -5193,6 +5351,7 @@ private:
            "\r\nScene: nodes=" + std::to_string(m_lastNodeState.size()) +
            " | meshNodes=" + std::to_string(CountTrackedMeshNodes_NoLock()) +
            " | lights=" + std::to_string(m_lastLightState.size()) +
+           " | cameras=" + std::to_string(m_lastSceneCameraState.size()) +
            " | materials=" + std::to_string(m_lastMaterialState.size()) +
            " | textures=" + std::to_string(CountTrackedTextureUris_NoLock()) +
            "\r\nBatches: sent=" + std::to_string(m_batchesSent) +
@@ -5235,6 +5394,7 @@ private:
     }
     WritePersistedLiveLinkState(ip, m_documentId, m_lastNodeState,
                                 m_lastMaterialState, m_lastLightState,
+                                m_lastSceneCameraState,
                                 m_lastSelectedObjectIds, m_lastCameraSnapshot);
   }
 
@@ -5242,6 +5402,7 @@ private:
     m_lastNodeState.clear();
     m_lastMaterialState.clear();
     m_lastLightState.clear();
+    m_lastSceneCameraState.clear();
     m_lastSelectedObjectIds.clear();
     m_lastCameraSnapshot = CameraSnapshot{};
     m_sessionId.clear();
@@ -5302,14 +5463,16 @@ private:
     const bool clearsExistingScene = m_forceFullSnapshotOnConnect;
     if (!m_forceFullSnapshotOnConnect &&
         SendResumeSnapshot(ip, &m_lastNodeState, &m_lastMaterialState,
-                           &m_lastLightState, &m_lastSelectedObjectIds,
+                           &m_lastLightState, &m_lastSceneCameraState,
+                           &m_lastSelectedObjectIds,
                            &m_lastCameraSnapshot, &startupDeltaCount,
                            &m_sessionId, &m_documentId, &m_nextSequence,
                            &m_nextRevision)) {
       usedResumeStartup = true;
     } else {
       if (!SendInitialSnapshot(ip, &m_lastNodeState, &m_lastMaterialState,
-                               &m_lastLightState, &m_lastSelectedObjectIds,
+                               &m_lastLightState, &m_lastSceneCameraState,
+                               &m_lastSelectedObjectIds,
                                &m_lastCameraSnapshot, &startupDeltaCount,
                                &m_sessionId,
                                &m_documentId, &m_nextSequence,
@@ -5581,8 +5744,11 @@ private:
     std::vector<std::string> selectedObjectIds = m_lastSelectedObjectIds;
     std::unordered_map<ULONG_PTR, NodeSnapshot> stagedNodes;
     std::unordered_map<ULONG_PTR, LightSnapshot> stagedLights;
+    std::unordered_map<ULONG_PTR, CameraSnapshot> stagedSceneCameras;
     std::vector<ULONG_PTR> removedLightHandles;
     std::unordered_set<ULONG_PTR> removedLightHandleSet;
+    std::vector<ULONG_PTR> removedSceneCameraHandles;
+    std::unordered_set<ULONG_PTR> removedSceneCameraHandleSet;
     std::vector<std::pair<ULONG_PTR, MaterialStateMap>> stagedMaterialStates;
     std::unordered_set<ULONG_PTR> stagedMaterialHandles;
 
@@ -5646,16 +5812,35 @@ private:
       removedLightHandles.push_back(handle);
     };
 
+    const auto appendTrackedSceneCameraRemoval = [&](ULONG_PTR handle) {
+      const auto previousIt = m_lastSceneCameraState.find(handle);
+      if (previousIt == m_lastSceneCameraState.end() ||
+          !removedSceneCameraHandleSet.insert(handle).second) {
+        return;
+      }
+      deltas.push_back(json{{"kind", "NodeRemoved"},
+                            {"target", MakeObjectId(m_documentId,
+                                                    previousIt->second.objectId,
+                                                    "Camera")},
+                            {"revision", m_nextRevision++},
+                            {"debugLabel", previousIt->second.name},
+                            {"payload", json{{"removeChildren", false}}}});
+      removedSceneCameraHandles.push_back(handle);
+    };
+
     if (m_forceFullResync) {
       EnsurePersistentSceneIdentifiers(ip);
       std::unordered_map<ULONG_PTR, NodeSnapshot> currentState;
       MaterialStateMap currentMaterialState;
       std::unordered_map<ULONG_PTR, LightSnapshot> currentLightState;
+      std::unordered_map<ULONG_PTR, CameraSnapshot> currentSceneCameraState;
       if (INode *root = ip->GetRootNode()) {
         for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
           GatherNodeSnapshots(ip, root->GetChildNode(childIndex), &currentState);
           GatherLightSnapshots(ip, root->GetChildNode(childIndex),
                                &currentLightState);
+          GatherSceneCameraSnapshots(ip, root->GetChildNode(childIndex),
+                                     &currentSceneCameraState);
         }
       }
       GatherMaterialSnapshots(ip, currentState, &currentMaterialState);
@@ -5754,6 +5939,26 @@ private:
         }
       }
 
+      for (const auto &[handle, snapshot] : currentSceneCameraState) {
+        const auto previousIt = m_lastSceneCameraState.find(handle);
+        if (previousIt == m_lastSceneCameraState.end() ||
+            !SameCamera(previousIt->second, snapshot)) {
+          AppendCameraDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
+        }
+      }
+
+      for (const auto &[handle, snapshot] : m_lastSceneCameraState) {
+        if (currentSceneCameraState.find(handle) == currentSceneCameraState.end()) {
+          deltas.push_back(json{{"kind", "NodeRemoved"},
+                                {"target", MakeObjectId(m_documentId,
+                                                        snapshot.objectId,
+                                                        "Camera")},
+                                {"revision", m_nextRevision++},
+                                {"debugLabel", snapshot.name},
+                                {"payload", json{{"removeChildren", false}}}});
+        }
+      }
+
       selectedObjectIds = GatherSelectedObjectIds(ip);
       if (selectedObjectIds != m_lastSelectedObjectIds) {
         AppendSelectionDelta(selectedObjectIds, &deltas);
@@ -5773,6 +5978,7 @@ private:
         m_lastNodeState = std::move(currentState);
         m_lastMaterialState = std::move(currentMaterialState);
         m_lastLightState = std::move(currentLightState);
+        m_lastSceneCameraState = std::move(currentSceneCameraState);
         m_lastSelectedObjectIds = selectedObjectIds;
         CaptureActiveCameraSnapshot(ip, &m_lastCameraSnapshot);
         MarkResumeStateDirty_NoLock();
@@ -5782,6 +5988,7 @@ private:
         m_lastNodeState = std::move(currentState);
         m_lastMaterialState = std::move(currentMaterialState);
         m_lastLightState = std::move(currentLightState);
+        m_lastSceneCameraState = std::move(currentSceneCameraState);
         m_lastSelectedObjectIds = selectedObjectIds;
         CaptureActiveCameraSnapshot(ip, &m_lastCameraSnapshot);
         MarkResumeStateDirty_NoLock();
@@ -5805,6 +6012,7 @@ private:
           appendTrackedMaterialRemovals(handle, nullptr);
           stageMaterialState(handle, MaterialStateMap{});
           appendTrackedLightRemoval(handle);
+          appendTrackedSceneCameraRemoval(handle);
         }
         continue;
       }
@@ -5905,6 +6113,26 @@ private:
       }
     }
 
+    for (ULONG_PTR handle : m_dirtyNodeHandles) {
+      if (removedSceneCameraHandleSet.find(handle) !=
+          removedSceneCameraHandleSet.end()) {
+        continue;
+      }
+
+      CameraSnapshot snapshot;
+      if (TryCaptureSceneCameraSnapshotByHandle(ip, handle, &snapshot)) {
+        stagedSceneCameras[handle] = snapshot;
+        const auto previousIt = m_lastSceneCameraState.find(handle);
+        if (previousIt == m_lastSceneCameraState.end() ||
+            !SameCamera(previousIt->second, snapshot)) {
+          AppendCameraDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
+        }
+      } else if (m_lastSceneCameraState.find(handle) !=
+                 m_lastSceneCameraState.end()) {
+        appendTrackedSceneCameraRemoval(handle);
+      }
+    }
+
     if (transformVerificationDue) {
       // INodeEventCallback can miss transform updates during interactive
       // manipulations, IK evaluation, or playback, so verify transforms on a
@@ -5964,7 +6192,8 @@ private:
         !m_dirtyLightHandles.empty();
     const bool hasIncrementalStateUpdates =
         !stagedNodes.empty() || !stagedLights.empty() ||
-        !removedLightHandles.empty() || !stagedMaterialStates.empty() ||
+        !stagedSceneCameras.empty() || !removedLightHandles.empty() ||
+        !removedSceneCameraHandles.empty() || !stagedMaterialStates.empty() ||
         selectionChanged;
 
     if (!deltas.empty() && SendBatch(m_sessionId, m_nextSequence, false, deltas)) {
@@ -5976,8 +6205,14 @@ private:
       for (const auto &[handle, snapshot] : stagedLights) {
         m_lastLightState[handle] = snapshot;
       }
+      for (const auto &[handle, snapshot] : stagedSceneCameras) {
+        m_lastSceneCameraState[handle] = snapshot;
+      }
       for (ULONG_PTR handle : removedLightHandles) {
         m_lastLightState.erase(handle);
+      }
+      for (ULONG_PTR handle : removedSceneCameraHandles) {
+        m_lastSceneCameraState.erase(handle);
       }
       for (const auto &[handle, materialState] : stagedMaterialStates) {
         ApplyStagedMaterialState(handle, materialState);
@@ -5994,8 +6229,14 @@ private:
       for (const auto &[handle, snapshot] : stagedLights) {
         m_lastLightState[handle] = snapshot;
       }
+      for (const auto &[handle, snapshot] : stagedSceneCameras) {
+        m_lastSceneCameraState[handle] = snapshot;
+      }
       for (ULONG_PTR handle : removedLightHandles) {
         m_lastLightState.erase(handle);
+      }
+      for (ULONG_PTR handle : removedSceneCameraHandles) {
+        m_lastSceneCameraState.erase(handle);
       }
       for (const auto &[handle, materialState] : stagedMaterialStates) {
         ApplyStagedMaterialState(handle, materialState);
@@ -6065,6 +6306,7 @@ private:
   std::unordered_map<ULONG_PTR, NodeSnapshot> m_lastNodeState;
   MaterialStateMap m_lastMaterialState;
   std::unordered_map<ULONG_PTR, LightSnapshot> m_lastLightState;
+  std::unordered_map<ULONG_PTR, CameraSnapshot> m_lastSceneCameraState;
   std::vector<std::string> m_lastSelectedObjectIds;
   CameraSnapshot m_lastCameraSnapshot;
   bool m_forceFullSnapshotOnConnect = false;

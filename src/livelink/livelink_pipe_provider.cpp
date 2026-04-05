@@ -345,6 +345,7 @@ bool ParsePayload(const SceneDeltaKind kind, const json &payloadJson,
   }
   case SceneDeltaKind::CameraChanged: {
     CameraChangedPayload payload;
+    payload.displayName = payloadJson.value("displayName", "");
     if (payloadJson.contains("position")) {
       FillFloatArray(payloadJson.at("position"), &payload.position);
     }

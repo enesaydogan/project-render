@@ -23,6 +23,35 @@ std::vector<SavedView> g_savedViews;
 std::string g_lastStatus;
 int g_selectedViewIndex = -1;
 
+int FindExternalViewIndex(const std::string &sessionId,
+                          const std::string &objectId) {
+  for (size_t index = 0; index < g_savedViews.size(); ++index) {
+    const SavedView &view = g_savedViews[index];
+    if (!view.external || view.sourceSessionId != sessionId ||
+        view.sourceObjectId != objectId) {
+      continue;
+    }
+    return static_cast<int>(index);
+  }
+  return -1;
+}
+
+void AdjustSelectionAfterErase(size_t removedIndex) {
+  if (g_savedViews.empty()) {
+    g_selectedViewIndex = -1;
+    return;
+  }
+  if (g_selectedViewIndex == static_cast<int>(removedIndex)) {
+    if (removedIndex >= g_savedViews.size()) {
+      g_selectedViewIndex = static_cast<int>(g_savedViews.size()) - 1;
+    }
+    return;
+  }
+  if (g_selectedViewIndex > static_cast<int>(removedIndex)) {
+    --g_selectedViewIndex;
+  }
+}
+
 void TransitionResourceForReadback(ID3D12GraphicsCommandList *commandList,
                                    ID3D12Resource *resource,
                                    D3D12_RESOURCE_STATES before,
@@ -348,11 +377,7 @@ bool RemoveView(size_t index) {
   }
   g_lastStatus = "Deleted view: " + g_savedViews[index].name;
   g_savedViews.erase(g_savedViews.begin() + static_cast<std::ptrdiff_t>(index));
-  if (g_savedViews.empty()) {
-    g_selectedViewIndex = -1;
-  } else if (g_selectedViewIndex >= static_cast<int>(g_savedViews.size())) {
-    g_selectedViewIndex = static_cast<int>(g_savedViews.size()) - 1;
-  }
+  AdjustSelectionAfterErase(index);
   return true;
 }
 
@@ -367,6 +392,66 @@ bool ApplyView(size_t index) {
     return false;
   }
   return ApplyView(g_savedViews[index]);
+}
+
+size_t UpsertExternalView(const SavedView &view) {
+  SavedView externalView = view;
+  externalView.external = true;
+  externalView.thumbnailRgba.clear();
+  externalView.thumbnailWidth = 0;
+  externalView.thumbnailHeight = 0;
+
+  const int existingIndex = FindExternalViewIndex(externalView.sourceSessionId,
+                                                  externalView.sourceObjectId);
+  if (existingIndex >= 0) {
+    g_savedViews[existingIndex] = std::move(externalView);
+    g_lastStatus = "Updated external view: " + g_savedViews[existingIndex].name;
+    return static_cast<size_t>(existingIndex);
+  }
+
+  g_savedViews.push_back(std::move(externalView));
+  g_lastStatus = "Added external view: " + g_savedViews.back().name;
+  return g_savedViews.size() - 1;
+}
+
+bool RemoveExternalView(const std::string &sessionId,
+                        const std::string &objectId) {
+  const int index = FindExternalViewIndex(sessionId, objectId);
+  if (index < 0) {
+    return false;
+  }
+
+  g_lastStatus = "Removed external view: " + g_savedViews[index].name;
+  g_savedViews.erase(g_savedViews.begin() + index);
+  AdjustSelectionAfterErase(static_cast<size_t>(index));
+  return true;
+}
+
+void RemoveExternalViewsForSession(const std::string &sessionId) {
+  for (size_t index = g_savedViews.size(); index > 0; --index) {
+    const SavedView &view = g_savedViews[index - 1];
+    if (!view.external || view.sourceSessionId != sessionId) {
+      continue;
+    }
+    g_lastStatus = "Removed external view: " + view.name;
+    g_savedViews.erase(g_savedViews.begin() +
+                       static_cast<std::ptrdiff_t>(index - 1));
+    AdjustSelectionAfterErase(index - 1);
+  }
+}
+
+void RemoveAllExternalViews() {
+  for (size_t index = g_savedViews.size(); index > 0; --index) {
+    if (!g_savedViews[index - 1].external) {
+      continue;
+    }
+    g_savedViews.erase(g_savedViews.begin() +
+                       static_cast<std::ptrdiff_t>(index - 1));
+    AdjustSelectionAfterErase(index - 1);
+  }
+  if (g_lastStatus.empty()) {
+    g_lastStatus = "Views cleared";
+  }
 }
 
 void Clear() {
