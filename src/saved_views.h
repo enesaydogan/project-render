@@ -8,6 +8,9 @@ namespace SavedViews {
 
 struct SavedView {
   std::string name;
+  std::string sourceSessionId;
+  std::string sourceObjectId;
+  bool external = false;
   float pos[3] = {0.0f, 0.0f, 0.0f};
   float forward[3] = {0.0f, 0.0f, -1.0f};
   float up[3] = {0.0f, 1.0f, 0.0f};
@@ -50,6 +53,11 @@ size_t AddCurrentView(const std::string &preferredName = std::string());
 bool RemoveView(size_t index);
 bool ApplyView(const SavedView &view);
 bool ApplyView(size_t index);
+size_t UpsertExternalView(const SavedView &view);
+bool RemoveExternalView(const std::string &sessionId,
+                        const std::string &objectId);
+void RemoveExternalViewsForSession(const std::string &sessionId);
+void RemoveAllExternalViews();
 void Clear();
 void SetViews(std::vector<SavedView> views);
 

@@ -5,6 +5,7 @@
 #include "../dxr_renderer.h"
 #include "../ibl_manager.h"
 #include "../material/material_livelink.h"
+#include "../saved_views.h"
 #include "../scene.h"
 
 #include <algorithm>
@@ -952,11 +953,52 @@ bool CameraPayloadChanged(const CameraChangedPayload &lhs,
            fabsf(a[2] - b[2]) > epsilon;
   };
   return changedArray3(lhs.position, rhs.position, kPositionEpsilon) ||
+         lhs.displayName != rhs.displayName ||
          changedArray3(lhs.forward, rhs.forward, kDirectionEpsilon) ||
          changedArray3(lhs.up, rhs.up, kDirectionEpsilon) ||
          fabsf(lhs.fovDegrees - rhs.fovDegrees) > kScalarEpsilon ||
          fabsf(lhs.nearPlane - rhs.nearPlane) > kScalarEpsilon ||
          fabsf(lhs.farPlane - rhs.farPlane) > kScalarEpsilon;
+}
+
+SavedViews::SavedView BuildExternalSavedView(const SceneDelta &delta,
+                                             const CameraChangedPayload &payload,
+                                             const std::string &sessionId) {
+  SavedViews::SavedView view = SavedViews::CaptureCurrentState();
+  view.name = ResolveNodeName(delta, payload.displayName);
+  view.sourceSessionId = sessionId;
+  view.sourceObjectId = delta.target.objectId;
+  view.external = true;
+  view.thumbnailRgba.clear();
+  view.thumbnailWidth = 0;
+  view.thumbnailHeight = 0;
+
+  view.pos[0] = payload.position[0];
+  view.pos[1] = payload.position[1];
+  view.pos[2] = payload.position[2];
+  view.forward[0] = payload.forward[0];
+  view.forward[1] = payload.forward[1];
+  view.forward[2] = payload.forward[2];
+  view.up[0] = payload.up[0];
+  view.up[1] = payload.up[1];
+  view.up[2] = payload.up[2];
+  const float fallbackForward[3] = {0.0f, 0.0f, 1.0f};
+  const float fallbackUp[3] = {0.0f, 1.0f, 0.0f};
+  Normalize3(view.forward, fallbackForward);
+  Normalize3(view.up, fallbackUp);
+  const float dot = view.forward[0] * view.up[0] +
+                    view.forward[1] * view.up[1] +
+                    view.forward[2] * view.up[2];
+  view.up[0] -= dot * view.forward[0];
+  view.up[1] -= dot * view.forward[1];
+  view.up[2] -= dot * view.forward[2];
+  Normalize3(view.up, fallbackUp);
+  view.fov = payload.fovDegrees;
+  view.nearZ = payload.nearPlane;
+  view.farZ = payload.farPlane;
+  view.yaw = atan2f(view.forward[0], -view.forward[2]);
+  view.pitch = asinf(std::clamp(view.forward[1], -1.0f, 1.0f));
+  return view;
 }
 
 LightType ParseEngineLightType(std::string_view value) {
@@ -1236,7 +1278,6 @@ bool LiveLinkSceneSync::ApplyNodeAdded(const SceneDeltaBatch &batch,
 
 bool LiveLinkSceneSync::ApplyNodeRemoved(const SceneDeltaBatch &batch,
                                          const SceneDelta &delta) {
-  (void)batch;
   const NodeRemovedPayload *payload = FindPayload<NodeRemovedPayload>(delta);
   ObjectBinding *binding = FindBinding(delta.target);
   if (!binding) {
@@ -1257,6 +1298,14 @@ bool LiveLinkSceneSync::ApplyNodeRemoved(const SceneDeltaBatch &batch,
       Scene::RemoveLight(removedLightIndex);
       m_bindings.erase(delta.target);
       ReindexSceneLightBindingsAfterRemoval(removedLightIndex);
+      return true;
+    }
+    if (binding->handleKind == EngineHandleKind::SavedView &&
+        binding->handleIndex != kInvalidHandle) {
+      const size_t removedViewIndex = binding->handleIndex;
+      SavedViews::RemoveExternalView(batch.sessionId, delta.target.objectId);
+      m_bindings.erase(delta.target);
+      ReindexSavedViewBindingsAfterRemoval(removedViewIndex);
       return true;
     }
     m_bindings.erase(delta.target);
@@ -1856,6 +1905,21 @@ bool LiveLinkSceneSync::ApplyCameraChanged(const SceneDeltaBatch &batch,
     return true;
   }
 
+  if (delta.target.objectId != "camera:active") {
+    SavedViews::SavedView externalView =
+        BuildExternalSavedView(delta, *payload, batch.sessionId);
+    const size_t savedViewIndex = SavedViews::UpsertExternalView(externalView);
+    ObjectBinding &savedViewBinding =
+        binding ? *binding
+                : BindObject(delta.target, batch.sessionId,
+                             EngineHandleKind::SavedView, savedViewIndex);
+    savedViewBinding.sessionId = batch.sessionId;
+    savedViewBinding.handleKind = EngineHandleKind::SavedView;
+    savedViewBinding.handleIndex = savedViewIndex;
+    savedViewBinding.lastAppliedRevision = delta.revision;
+    return true;
+  }
+
   ObjectBinding &cameraBinding =
       binding ? *binding
               : BindObject(delta.target, batch.sessionId,
@@ -2192,12 +2256,20 @@ bool LiveLinkSceneSync::EnsureMaterialBinding(const SceneDeltaBatch &batch,
 }
 
 void LiveLinkSceneSync::RemoveSessionContent(const std::string &sessionId) {
-  for (auto &[_, binding] : m_bindings) {
-    if (binding.sessionId == sessionId) {
-      binding.sessionId.clear();
-      binding.lastAppliedRevision = 0;
+  for (auto it = m_bindings.begin(); it != m_bindings.end();) {
+    if (it->second.sessionId != sessionId) {
+      ++it;
+      continue;
     }
+    if (it->second.handleKind == EngineHandleKind::SavedView) {
+      it = m_bindings.erase(it);
+      continue;
+    }
+    it->second.sessionId.clear();
+    it->second.lastAppliedRevision = 0;
+    ++it;
   }
+  SavedViews::RemoveExternalViewsForSession(sessionId);
   if (m_cachedExternalCamera.valid && m_cachedExternalCamera.sessionId == sessionId) {
     m_cachedExternalCamera = CachedCameraState{};
   }
@@ -2260,12 +2332,25 @@ void LiveLinkSceneSync::ReindexSceneLightBindingsAfterRemoval(size_t removedInde
   }
 }
 
+void LiveLinkSceneSync::ReindexSavedViewBindingsAfterRemoval(size_t removedIndex) {
+  for (auto &[_, binding] : m_bindings) {
+    if (binding.handleKind != EngineHandleKind::SavedView ||
+        binding.handleIndex == kInvalidHandle) {
+      continue;
+    }
+    if (binding.handleIndex > removedIndex) {
+      --binding.handleIndex;
+    }
+  }
+}
+
 void LiveLinkSceneSync::ClearAllBindings() {
   m_bindings.clear();
   m_textureIndicesByUri.clear();
   m_textureIndicesByBlobHash.clear();
   m_cachedExternalCamera = CachedCameraState{};
   m_cameraControlDetached = false;
+  SavedViews::RemoveAllExternalViews();
 }
 
 void LiveLinkSceneSync::AppendDiagnosticEntry(

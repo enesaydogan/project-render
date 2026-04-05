@@ -221,6 +221,7 @@ struct LightChangedPayload {
 };
 
 struct CameraChangedPayload {
+  std::string displayName;
   std::array<float, 3> position = {0.0f, 1.0f, -5.0f};
   std::array<float, 3> forward = {0.0f, 0.0f, 1.0f};
   std::array<float, 3> up = {0.0f, 1.0f, 0.0f};
