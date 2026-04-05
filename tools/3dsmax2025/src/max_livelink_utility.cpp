@@ -240,8 +240,8 @@ constexpr uint64_t kHugeSceneTransformVerificationMinIntervalMs = 8000;
 constexpr uint64_t kSceneOperationSettleDelayMs = 350;
 constexpr uint64_t kResumeStatePersistDelayMs = 2500;
 constexpr size_t kPayloadRemovalBatchSize = 64;
-constexpr size_t kQueuedMeshExportBatchSize = 2;
-constexpr size_t kCompletedMeshExportBatchSize = 8;
+constexpr size_t kQueuedMeshExportBatchSize = 15;
+constexpr size_t kCompletedMeshExportBatchSize = 16;
 constexpr uint64_t kSlowPollThresholdMs = 150;
 constexpr size_t kLargeSceneNodeThreshold = 250;
 constexpr size_t kHugeSceneNodeThreshold = 1500;
@@ -3813,9 +3813,20 @@ std::vector<int> GatherUsedMaterialSlots(Interface *ip, INode *node,
   }
 
   Mesh &mesh = *meshAccess.mesh;
+  const bool isMultiMtl = rootMaterial && rootMaterial->IsMultiMtl();
+  const int rootSubCount = rootMaterial ? rootMaterial->NumSubMtls() : 0;
   for (int faceIndex = 0; faceIndex < mesh.getNumFaces(); ++faceIndex) {
-    const int slot = ResolveFaceMaterialSlot(rootMaterial,
-                                             mesh.faces[faceIndex].getMatID());
+    int slot = 0;
+    if (rootMaterial) {
+      const int matID = mesh.faces[faceIndex].getMatID();
+      if (isMultiMtl) {
+        slot = (std::max)(0, matID);
+      } else if (rootSubCount > 1) {
+        int s = matID;
+        s = s > 0 ? (s - 1) : 0;
+        slot = (std::clamp)(s, 0, rootSubCount - 1);
+      }
+    }
     if (std::find(usedSlots.begin(), usedSlots.end(), slot) == usedSlots.end()) {
       usedSlots.push_back(slot);
     }
@@ -4191,24 +4202,6 @@ bool GetNodeMeshAccess(Interface *ip, INode *node, NodeMeshAccess *outAccess) {
   }
 
   NodeMeshAccess access;
-  ObjectState objectState = node->EvalWorldState(ip->GetTime());
-  if (objectState.obj && objectState.obj->SuperClassID() == GEOMOBJECT_CLASS_ID) {
-    GeomObject *geomObject = static_cast<GeomObject *>(objectState.obj);
-    if (geomObject->NumberOfRenderMeshes() <= 0) {
-      LiveLinkNullView view;
-      BOOL needDelete = FALSE;
-      Mesh *renderMesh = geomObject->GetRenderMesh(ip->GetTime(), node, view,
-                                                   needDelete);
-      if (renderMesh != nullptr) {
-        access.mesh = renderMesh;
-        access.deleteMesh = needDelete != FALSE;
-        access.fromRenderMesh = true;
-        *outAccess = access;
-        return true;
-      }
-    }
-  }
-
   TriObject *triObject = nullptr;
   bool needsDelete = false;
   if (!GetTriObjectForNode(ip, node, &triObject, &needsDelete) || !triObject) {
@@ -4218,6 +4211,8 @@ bool GetNodeMeshAccess(Interface *ip, INode *node, NodeMeshAccess *outAccess) {
   access.mesh = &triObject->GetMesh();
   access.triObject = triObject;
   access.deleteTriObject = needsDelete;
+  access.deleteMesh = false;
+  access.fromRenderMesh = false;
   *outAccess = access;
   return true;
 }
@@ -4373,11 +4368,10 @@ void CaptureMeshSnapshot(Interface *ip, INode *node, NodeSnapshot *snapshot) {
   }
 
   Mesh &mesh = *meshAccess.mesh;
-  mesh.buildNormals();
-  mesh.buildRenderNormals();
+  mesh.checkNormals(TRUE);
   MeshNormalSpec *specNormals = mesh.GetSpecifiedNormals();
-  if (specNormals) {
-    specNormals->CheckNormals();
+  if (specNormals && specNormals->GetNumNormals() == 0) {
+    specNormals->BuildNormals();
   }
   PopulateSnapshotMeshMetadata(ip, node, mesh, snapshot);
   if (!snapshot->hasMesh) {
@@ -4854,11 +4848,10 @@ bool CaptureNodeMeshPayloadJob(Interface *ip, INode *node,
 
   Mesh &mesh = *meshAccess.mesh;
   job.usedRenderMesh = meshAccess.fromRenderMesh;
-  mesh.buildNormals();
-  mesh.buildRenderNormals();
+  mesh.checkNormals(TRUE);
   MeshNormalSpec *specNormals = mesh.GetSpecifiedNormals();
-  if (specNormals) {
-    specNormals->CheckNormals();
+  if (specNormals && specNormals->GetNumNormals() == 0) {
+    specNormals->BuildNormals();
   }
   PopulateSnapshotMeshMetadata(ip, node, mesh, &job.snapshot);
   if (!job.snapshot.hasMesh) {
@@ -4885,11 +4878,24 @@ bool CaptureNodeMeshPayloadJob(Interface *ip, INode *node,
   Mtl *rootMaterial = node->GetMtl();
   job.faces.reserve(static_cast<size_t>(mesh.getNumFaces()));
   std::unordered_set<int> usedMaterialSlots;
+  const bool isMultiMtl = rootMaterial && rootMaterial->IsMultiMtl();
+  const int subMaterialCount = rootMaterial ? rootMaterial->NumSubMtls() : 0;
   for (int faceIndex = 0; faceIndex < mesh.getNumFaces(); ++faceIndex) {
     Face &face = mesh.faces[faceIndex];
     CapturedMeshFace capturedFace;
-    capturedFace.materialSlot =
-        ResolveFaceMaterialSlot(rootMaterial, face.getMatID());
+    
+    int materialSlot = 0;
+    if (rootMaterial) {
+      if (isMultiMtl) {
+        materialSlot = (std::max)(0, static_cast<int>(face.getMatID()));
+      } else if (subMaterialCount > 1) {
+        int slot = face.getMatID();
+        slot = slot > 0 ? (slot - 1) : 0;
+        materialSlot = (std::clamp)(slot, 0, subMaterialCount - 1);
+      }
+    }
+    
+    capturedFace.materialSlot = materialSlot;
     usedMaterialSlots.insert(capturedFace.materialSlot);
     for (int corner = 0; corner < 3; ++corner) {
       capturedFace.vertexIndices[corner] =
