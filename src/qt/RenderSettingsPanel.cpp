@@ -174,13 +174,16 @@ void RenderSettingsPanel::createUi()
 
     m_dxrSection = new QWidget(this);
     auto *dxrLayout = new QVBoxLayout(m_dxrSection);
-    dxrLayout->setContentsMargins(0, 0, 0, 0);
+    dxrLayout->setContentsMargins(8, 8, 8, 8);
+    dxrLayout->setSpacing(8);
     auto *dxrHeader = new QLabel(tr("DXR Settings"), m_dxrSection);
     dxrHeader->setStyleSheet("font-weight: 600;");
     dxrLayout->addWidget(dxrHeader);
 
     auto *pathGroup = new QGroupBox(tr("DXR Path Tracing"), m_dxrSection);
     auto *pathForm = new QFormLayout(pathGroup);
+    pathForm->setContentsMargins(8, 16, 8, 8);
+    pathForm->setVerticalSpacing(6);
     m_reflectionBounces = CreateDoubleSpinBox(0.0, 16.0, 1.0, 0);
     m_refractionBounces = CreateDoubleSpinBox(0.0, 16.0, 1.0, 0);
     m_giBounces = CreateDoubleSpinBox(0.0, 16.0, 1.0, 0);
@@ -240,7 +243,8 @@ void RenderSettingsPanel::createUi()
 
     m_rasterSection = new QWidget(this);
     auto *rasterLayout = new QVBoxLayout(m_rasterSection);
-    rasterLayout->setContentsMargins(0, 0, 0, 0);
+    rasterLayout->setContentsMargins(8, 8, 8, 8);
+    rasterLayout->setSpacing(8);
     auto *rasterHeader = new QLabel(tr("Raster Settings"), m_rasterSection);
     rasterHeader->setStyleSheet("font-weight: 600;");
     rasterLayout->addWidget(rasterHeader);

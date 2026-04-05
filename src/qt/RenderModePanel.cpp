@@ -169,6 +169,8 @@ void RenderModePanel::createUi()
 
     auto *pathGroup = new QGroupBox(tr("DXR Path Tracing"), this);
     auto *pathForm = new QFormLayout(pathGroup);
+    pathForm->setContentsMargins(8, 16, 8, 8);
+    pathForm->setVerticalSpacing(6);
     m_reflectionBounces = CreateDoubleSpinBox(0.0, 16.0, 1.0, 0);
     m_refractionBounces = CreateDoubleSpinBox(0.0, 16.0, 1.0, 0);
     m_giBounces = CreateDoubleSpinBox(0.0, 16.0, 1.0, 0);

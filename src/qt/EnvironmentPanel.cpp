@@ -63,9 +63,13 @@ void EnvironmentPanel::createUi()
     auto *tabs = new QTabWidget(this);
     auto *lightingTab = new QWidget(tabs);
     auto *lightingLayout = new QVBoxLayout(lightingTab);
+    lightingLayout->setContentsMargins(8, 8, 8, 8);
+    lightingLayout->setSpacing(8);
 
     auto *sourceGroup = new QGroupBox(tr("IBL & Sky2"), lightingTab);
     auto *sourceForm = new QFormLayout(sourceGroup);
+    sourceForm->setContentsMargins(8, 16, 8, 8);
+    sourceForm->setVerticalSpacing(6);
     m_iblSource = new QComboBox(sourceGroup);
     m_iblSource->addItems({tr("File IBL"), tr("Prague Sky")});
     m_loadHdrButton = new QPushButton(tr("Load HDR / EXR"), sourceGroup);
@@ -92,6 +96,8 @@ void EnvironmentPanel::createUi()
 
     auto *skyGroup = new QGroupBox(tr("Procedural Sky"), lightingTab);
     auto *skyForm = new QFormLayout(skyGroup);
+    skyForm->setContentsMargins(8, 16, 8, 8);
+    skyForm->setVerticalSpacing(6);
     m_physicalCalibration = new QCheckBox(tr("Physical Calibration"), skyGroup);
     m_visibility = CreateSliderControl(10.0, 120.0, 1.0, 1);
     m_albedo = CreateSliderControl(0.0, 1.0, 0.01, 2);
@@ -122,8 +128,13 @@ void EnvironmentPanel::createUi()
 
     auto *cloudTab = new QWidget(tabs);
     auto *cloudLayout = new QVBoxLayout(cloudTab);
+    cloudLayout->setContentsMargins(8, 8, 8, 8);
+    cloudLayout->setSpacing(8);
+    
     auto *cloudGroup = new QGroupBox(tr("Clouds"), cloudTab);
     auto *cloudForm = new QFormLayout(cloudGroup);
+    cloudForm->setContentsMargins(8, 16, 8, 8);
+    cloudForm->setVerticalSpacing(6);
     m_cloudEnabled = new QCheckBox(tr("Enable Cloud Rendering"), cloudGroup);
     m_resetCloudsButton = new QPushButton(tr("Reset To Defaults"), cloudGroup);
     m_cloudDensity = CreateSliderControl(0.0, 5.0, 0.05, 2);

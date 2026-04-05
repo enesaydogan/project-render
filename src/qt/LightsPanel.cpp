@@ -107,7 +107,8 @@ void LightsPanel::createUi()
 
     m_listGroup = new QGroupBox(tr("Lights"), this);
     auto *listLayout = new QVBoxLayout(m_listGroup);
-    listLayout->setContentsMargins(8, 12, 8, 8);
+    listLayout->setContentsMargins(8, 16, 8, 8);
+    listLayout->setSpacing(6);
     listLayout->setSpacing(4);
     m_lightList = new QListWidget(m_listGroup);
     m_lightList->setMinimumHeight(100);
@@ -115,7 +116,8 @@ void LightsPanel::createUi()
 
     m_propertiesGroup = new QGroupBox(tr("Properties"), this);
     auto *propertiesLayout = new QVBoxLayout(m_propertiesGroup);
-    propertiesLayout->setContentsMargins(8, 12, 8, 8);
+    propertiesLayout->setContentsMargins(8, 16, 8, 8);
+    propertiesLayout->setSpacing(6);
     propertiesLayout->setSpacing(8);
 
     auto *form = new QFormLayout();
@@ -153,7 +155,8 @@ void LightsPanel::createUi()
 
     m_spotGroup = new QGroupBox(tr("Spot Light"), m_propertiesGroup);
     auto *spotForm = new QFormLayout(m_spotGroup);
-    spotForm->setContentsMargins(8, 12, 8, 8);
+    spotForm->setContentsMargins(8, 16, 8, 8);
+    spotForm->setVerticalSpacing(6);
     spotForm->setSpacing(6);
     m_innerAngle = CreateDoubleSpinBox(0.0, 90.0, 0.1, 1);
     m_outerAngle = CreateDoubleSpinBox(0.0, 90.0, 0.1, 1);
@@ -163,7 +166,8 @@ void LightsPanel::createUi()
 
     m_areaGroup = new QGroupBox(tr("Area Light"), m_propertiesGroup);
     auto *areaForm = new QFormLayout(m_areaGroup);
-    areaForm->setContentsMargins(8, 12, 8, 8);
+    areaForm->setContentsMargins(8, 16, 8, 8);
+    areaForm->setVerticalSpacing(6);
     areaForm->setSpacing(6);
     m_areaWidth = CreateDoubleSpinBox(0.01, 50.0, 0.1, 2);
     m_areaHeight = CreateDoubleSpinBox(0.01, 50.0, 0.1, 2);
@@ -173,7 +177,8 @@ void LightsPanel::createUi()
 
     m_iesGroup = new QGroupBox(tr("IES"), m_propertiesGroup);
     auto *iesLayout = new QVBoxLayout(m_iesGroup);
-    iesLayout->setContentsMargins(8, 12, 8, 8);
+    iesLayout->setContentsMargins(8, 16, 8, 8);
+    iesLayout->setSpacing(6);
     m_iesLabel = new QLabel(tr("IES Atlas Index: -1"), m_iesGroup);
     iesLayout->addWidget(m_iesLabel);
     propertiesLayout->addWidget(m_iesGroup);
