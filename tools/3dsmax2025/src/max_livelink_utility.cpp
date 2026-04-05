@@ -16,15 +16,19 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstring>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <functional>
 #include <initializer_list>
 #include <mutex>
 #include <objbase.h>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -234,6 +238,8 @@ constexpr uint64_t kHugeSceneTransformVerificationMinIntervalMs = 8000;
 constexpr uint64_t kSceneOperationSettleDelayMs = 350;
 constexpr uint64_t kResumeStatePersistDelayMs = 2500;
 constexpr size_t kPayloadRemovalBatchSize = 64;
+constexpr size_t kQueuedMeshExportBatchSize = 2;
+constexpr size_t kCompletedMeshExportBatchSize = 8;
 constexpr uint64_t kSlowPollThresholdMs = 150;
 constexpr size_t kLargeSceneNodeThreshold = 250;
 constexpr size_t kHugeSceneNodeThreshold = 1500;
@@ -1098,6 +1104,71 @@ struct MaterialReferenceSnapshot {
   int materialSlot = 0;
 
   bool operator==(const MaterialReferenceSnapshot &) const = default;
+};
+
+struct SharedPayloadCacheEntry {
+  uint64_t geometryFingerprint = 0;
+  std::string payloadUri;
+};
+
+struct CapturedMeshFace {
+  int materialSlot = 0;
+  std::array<uint32_t, 3> vertexIndices = {0, 0, 0};
+  std::array<uint32_t, 3> texcoordIndices = {0, 0, 0};
+  std::array<Point3, 3> normals = {};
+  bool hasTexcoords = false;
+};
+
+struct CapturedMeshPayloadJob {
+  NodeSnapshot snapshot;
+  std::string documentId;
+  std::string sharedPayloadKey;
+  std::filesystem::path payloadPath;
+  std::string payloadUri;
+  Matrix3 objectToNode;
+  std::vector<Point3> positions;
+  std::vector<UVVert> texcoords;
+  std::vector<CapturedMeshFace> faces;
+  std::vector<MaterialSnapshot> serializedMaterials;
+  uint64_t triObjectCaptureMs = 0;
+  uint64_t normalsBuildMs = 0;
+  uint64_t faceCopyMs = 0;
+  uint64_t materialCaptureMs = 0;
+};
+
+struct AsyncMeshPayloadResult {
+  ULONG_PTR handle = 0;
+  NodeSnapshot snapshot;
+  std::string sharedPayloadKey;
+  std::string payloadUri;
+  bool success = false;
+  uint64_t triObjectCaptureMs = 0;
+  uint64_t normalsBuildMs = 0;
+  uint64_t faceCopyMs = 0;
+  uint64_t materialCaptureMs = 0;
+  uint64_t serializeMs = 0;
+};
+
+struct InFlightMeshPayloadExport {
+  ULONG_PTR handle = 0;
+  std::string sharedPayloadKey;
+  uint64_t geometryFingerprint = 0;
+};
+
+struct MeshExportTimingStats {
+  uint64_t completedCount = 0;
+  uint64_t lastCaptureMs = 0;
+  uint64_t lastTriObjectCaptureMs = 0;
+  uint64_t lastNormalsBuildMs = 0;
+  uint64_t lastFaceCopyMs = 0;
+  uint64_t lastMaterialCaptureMs = 0;
+  uint64_t lastSerializeMs = 0;
+  uint64_t totalCaptureMs = 0;
+  uint64_t totalTriObjectCaptureMs = 0;
+  uint64_t totalNormalsBuildMs = 0;
+  uint64_t totalFaceCopyMs = 0;
+  uint64_t totalMaterialCaptureMs = 0;
+  uint64_t totalSerializeMs = 0;
 };
 
 enum class EmbeddedTextureEncoding : uint32_t {
@@ -4501,6 +4572,13 @@ void CleanupPayloadRootDirectory() {
   }
 }
 
+bool CaptureNodeMeshPayloadJob(Interface *ip, INode *node,
+                               const std::string &documentId,
+                               const NodeSnapshot &snapshot,
+                               CapturedMeshPayloadJob *outJob);
+AsyncMeshPayloadResult SerializeCapturedMeshPayload(
+    const CapturedMeshPayloadJob &job);
+
 bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
                                    const std::string &documentId,
                                    const NodeSnapshot &snapshot,
@@ -4511,34 +4589,51 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
 
   ScopedFlag exportGuard(&g_exportInProgress);
 
+  CapturedMeshPayloadJob job;
+  if (!CaptureNodeMeshPayloadJob(ip, node, documentId, snapshot, &job)) {
+    return false;
+  }
+  AsyncMeshPayloadResult result = SerializeCapturedMeshPayload(job);
+  if (!result.success || result.payloadUri.empty()) {
+    return false;
+  }
+  *outPayloadUri = result.payloadUri;
+  return true;
+}
+
+bool CaptureNodeMeshPayloadJob(Interface *ip, INode *node,
+                               const std::string &documentId,
+                               const NodeSnapshot &snapshot,
+                               CapturedMeshPayloadJob *outJob) {
+  if (!ip || !node || !snapshot.hasMesh || !outJob) {
+    return false;
+  }
+
+  const auto captureStart = std::chrono::steady_clock::now();
   TriObject *triObject = nullptr;
   bool needsDelete = false;
   if (!GetTriObjectForNode(ip, node, &triObject, &needsDelete)) {
     return false;
   }
+  const auto triObjectReady = std::chrono::steady_clock::now();
 
-  std::filesystem::path payloadPath;
-  const std::string sharedPayloadKey = BuildSharedPayloadKey(ip, node);
-  if (!sharedPayloadKey.empty()) {
-    payloadPath = GetSharedPayloadPath(documentId, sharedPayloadKey);
+  CapturedMeshPayloadJob job;
+  job.snapshot = snapshot;
+  job.documentId = documentId;
+  job.sharedPayloadKey = BuildSharedPayloadKey(ip, node);
+  if (!job.sharedPayloadKey.empty()) {
+    job.payloadPath = GetSharedPayloadPath(documentId, job.sharedPayloadKey);
   }
-  if (payloadPath.empty()) {
-    payloadPath = GetNodePayloadPath(documentId, snapshot.objectId);
+  if (job.payloadPath.empty()) {
+    job.payloadPath = GetNodePayloadPath(documentId, snapshot.objectId);
   }
-  if (payloadPath.empty()) {
+  if (job.payloadPath.empty()) {
     if (needsDelete) {
       triObject->DeleteThis();
     }
     return false;
   }
-
-  std::ofstream stream(payloadPath, std::ios::binary | std::ios::trunc);
-  if (!stream) {
-    if (needsDelete) {
-      triObject->DeleteThis();
-    }
-    return false;
-  }
+  job.payloadUri = PathToUtf8(job.payloadPath);
 
   Mesh &mesh = triObject->GetMesh();
   mesh.buildNormals();
@@ -4547,7 +4642,116 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
   if (specNormals) {
     specNormals->CheckNormals();
   }
-  const Matrix3 objectToNode = ComputeObjectToNodeTransform(ip, node);
+  const auto normalsReady = std::chrono::steady_clock::now();
+
+  job.objectToNode = ComputeObjectToNodeTransform(ip, node);
+  job.positions.reserve(static_cast<size_t>(mesh.getNumVerts()));
+  for (int vertexIndex = 0; vertexIndex < mesh.getNumVerts(); ++vertexIndex) {
+    job.positions.push_back(mesh.verts[vertexIndex]);
+  }
+
+  const bool hasTexcoords = mesh.tvFace != nullptr && mesh.tVerts != nullptr &&
+                            mesh.getNumTVerts() > 0;
+  if (hasTexcoords) {
+    job.texcoords.reserve(static_cast<size_t>(mesh.getNumTVerts()));
+    for (int uvIndex = 0; uvIndex < mesh.getNumTVerts(); ++uvIndex) {
+      job.texcoords.push_back(mesh.tVerts[uvIndex]);
+    }
+  }
+
+  Mtl *rootMaterial = node->GetMtl();
+  job.faces.reserve(static_cast<size_t>(mesh.getNumFaces()));
+  std::unordered_set<int> usedMaterialSlots;
+  for (int faceIndex = 0; faceIndex < mesh.getNumFaces(); ++faceIndex) {
+    Face &face = mesh.faces[faceIndex];
+    CapturedMeshFace capturedFace;
+    capturedFace.materialSlot =
+        ResolveFaceMaterialSlot(rootMaterial, face.getMatID());
+    usedMaterialSlots.insert(capturedFace.materialSlot);
+    for (int corner = 0; corner < 3; ++corner) {
+      capturedFace.vertexIndices[corner] =
+          static_cast<uint32_t>(face.getVert(corner));
+      if (hasTexcoords) {
+        const TVFace &tvFace = mesh.tvFace[faceIndex];
+        capturedFace.texcoordIndices[corner] =
+            static_cast<uint32_t>(tvFace.t[corner]);
+        capturedFace.hasTexcoords = true;
+      }
+      capturedFace.normals[corner] = GetFaceCornerNormal(mesh, faceIndex, corner);
+    }
+    job.faces.push_back(std::move(capturedFace));
+  }
+  const auto facesReady = std::chrono::steady_clock::now();
+
+  if (rootMaterial && !usedMaterialSlots.empty()) {
+    std::vector<int> sortedMaterialSlots(usedMaterialSlots.begin(),
+                                         usedMaterialSlots.end());
+    std::sort(sortedMaterialSlots.begin(), sortedMaterialSlots.end());
+    job.serializedMaterials.reserve(sortedMaterialSlots.size());
+    for (const int materialSlot : sortedMaterialSlots) {
+      Mtl *slotMaterial = ResolveMaterialForSlot(rootMaterial, materialSlot);
+      if (!slotMaterial) {
+        continue;
+      }
+
+      MaterialSnapshot materialSnapshot;
+      if (!CaptureMaterialSnapshot(ip, node, materialSlot, slotMaterial,
+                                   &materialSnapshot)) {
+        continue;
+      }
+
+      job.serializedMaterials.push_back(std::move(materialSnapshot));
+    }
+  }
+  const auto materialsReady = std::chrono::steady_clock::now();
+
+  if (needsDelete) {
+    triObject->DeleteThis();
+  }
+  job.triObjectCaptureMs = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(triObjectReady -
+                                                            captureStart)
+          .count());
+  job.normalsBuildMs = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(normalsReady -
+                                                            triObjectReady)
+          .count());
+  job.faceCopyMs = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(facesReady -
+                                                            normalsReady)
+          .count());
+  job.materialCaptureMs = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(materialsReady -
+                                                            facesReady)
+          .count());
+  *outJob = std::move(job);
+  return true;
+}
+
+AsyncMeshPayloadResult SerializeCapturedMeshPayload(
+    const CapturedMeshPayloadJob &job) {
+  const auto serializeStart = std::chrono::steady_clock::now();
+  AsyncMeshPayloadResult result;
+  result.handle = job.snapshot.handle;
+  result.snapshot = job.snapshot;
+  result.sharedPayloadKey = job.sharedPayloadKey;
+  result.payloadUri = job.payloadUri;
+  result.triObjectCaptureMs = job.triObjectCaptureMs;
+  result.normalsBuildMs = job.normalsBuildMs;
+  result.faceCopyMs = job.faceCopyMs;
+  result.materialCaptureMs = job.materialCaptureMs;
+
+  std::filesystem::path payloadPath;
+  payloadPath = job.payloadPath;
+  if (payloadPath.empty()) {
+    return result;
+  }
+
+  std::ofstream stream(payloadPath, std::ios::binary | std::ios::trunc);
+  if (!stream) {
+    return result;
+  }
+
   struct ExportSubmesh {
     int materialSlot = 0;
     std::vector<NativeMeshPayloadVertex> vertices;
@@ -4570,15 +4774,8 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
   };
   std::vector<ExportSubmesh> submeshes;
   std::unordered_map<int, size_t> submeshBySlot;
-  std::vector<MaterialSnapshot> serializedMaterials;
-
-  const bool hasTexcoords = mesh.tvFace != nullptr && mesh.tVerts != nullptr &&
-                            mesh.getNumTVerts() > 0;
-  Mtl *rootMaterial = node->GetMtl();
-  for (int faceIndex = 0; faceIndex < mesh.getNumFaces(); ++faceIndex) {
-    Face &face = mesh.faces[faceIndex];
-    const int materialSlot = ResolveFaceMaterialSlot(rootMaterial,
-                                                     face.getMatID());
+  for (const CapturedMeshFace &face : job.faces) {
+    const int materialSlot = face.materialSlot;
 
     const auto [submeshIt, inserted] =
         submeshBySlot.emplace(materialSlot, submeshes.size());
@@ -4591,11 +4788,14 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
 
     const Point3 positions[3] = {
       ConvertMaxPointToEngine(
-        TransformPointByMatrix3(objectToNode, mesh.verts[face.getVert(0)])),
+        TransformPointByMatrix3(job.objectToNode,
+                                job.positions[face.vertexIndices[0]])),
       ConvertMaxPointToEngine(
-        TransformPointByMatrix3(objectToNode, mesh.verts[face.getVert(1)])),
+        TransformPointByMatrix3(job.objectToNode,
+                                job.positions[face.vertexIndices[1]])),
       ConvertMaxPointToEngine(
-        TransformPointByMatrix3(objectToNode, mesh.verts[face.getVert(2)])),
+        TransformPointByMatrix3(job.objectToNode,
+                                job.positions[face.vertexIndices[2]])),
     };
     const int vertexOrder[3] = {0, 1, 2};
     for (int corner = 0; corner < 3; ++corner) {
@@ -4604,7 +4804,7 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
       const Point3 &position = positions[sourceCorner];
       Point3 normal = ConvertMaxVectorToEngine(
         TransformVectorByMatrix3(
-          objectToNode, GetFaceCornerNormal(mesh, faceIndex, sourceCorner)));
+          job.objectToNode, face.normals[sourceCorner]));
       NormalizePoint3(&normal, Point3(0.0f, 1.0f, 0.0f));
       vertex.position[0] = position.x;
       vertex.position[1] = position.y;
@@ -4612,9 +4812,9 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
       vertex.normal[0] = normal.x;
       vertex.normal[1] = normal.y;
       vertex.normal[2] = normal.z;
-      if (hasTexcoords) {
-        const TVFace &tvFace = mesh.tvFace[faceIndex];
-        const UVVert &uv = mesh.tVerts[tvFace.t[sourceCorner]];
+      if (face.hasTexcoords &&
+          face.texcoordIndices[sourceCorner] < job.texcoords.size()) {
+        const UVVert &uv = job.texcoords[face.texcoordIndices[sourceCorner]];
         vertex.uv[0] = uv.x;
         vertex.uv[1] = 1.0f - uv.y;
       }
@@ -4686,34 +4886,9 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
     submesh = std::move(deduplicatedSubmesh);
   }
 
-  if (rootMaterial) {
-    std::vector<int> usedSlots;
-    usedSlots.reserve(submeshBySlot.size());
-    for (const auto &[materialSlot, _] : submeshBySlot) {
-      usedSlots.push_back(materialSlot);
-    }
-    std::sort(usedSlots.begin(), usedSlots.end());
-
-    serializedMaterials.reserve(usedSlots.size());
-    for (const int materialSlot : usedSlots) {
-      Mtl *slotMaterial = ResolveMaterialForSlot(rootMaterial, materialSlot);
-      if (!slotMaterial) {
-        continue;
-      }
-
-      MaterialSnapshot materialSnapshot;
-      if (!CaptureMaterialSnapshot(ip, node, materialSlot, slotMaterial,
-                                   &materialSnapshot)) {
-        continue;
-      }
-
-      serializedMaterials.push_back(std::move(materialSnapshot));
-    }
-  }
-
   NativeMeshPayloadHeader header;
   header.meshCount = static_cast<uint32_t>(submeshes.size());
-  header.reserved = static_cast<uint32_t>(serializedMaterials.size());
+  header.reserved = static_cast<uint32_t>(job.serializedMaterials.size());
   stream.write(reinterpret_cast<const char *>(&header), sizeof(header));
   for (const ExportSubmesh &submesh : submeshes) {
     NativeMeshPayloadMeshHeader meshHeader;
@@ -4733,7 +4908,7 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
     }
   }
 
-  for (const MaterialSnapshot &material : serializedMaterials) {
+  for (const MaterialSnapshot &material : job.serializedMaterials) {
     NativeMeshPayloadMaterialBindingHeader bindingHeader;
     bindingHeader.materialSlot = material.materialSlot;
     bindingHeader.materialStableIdLength =
@@ -4743,22 +4918,19 @@ bool ExportNodeAsNativeMeshPayload(Interface *ip, INode *node,
                  sizeof(bindingHeader));
     if (!WriteNativePayloadString(stream, material.materialStableId) ||
         !WriteNativePayloadString(stream, material.name)) {
-      if (needsDelete) {
-        triObject->DeleteThis();
-      }
-      return false;
+      return result;
     }
   }
-
-  if (needsDelete) {
-    triObject->DeleteThis();
-  }
   if (!stream.good()) {
-    return false;
+    return result;
   }
 
-  *outPayloadUri = PathToUtf8(payloadPath);
-  return true;
+  result.serializeMs = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - serializeStart)
+          .count());
+  result.success = true;
+  return result;
 }
 
 json MakeObjectId(const std::string &documentId, const std::string &objectId,
@@ -5215,6 +5387,7 @@ bool SendInitialSnapshot(Interface *ip,
                          MaterialStateMap *outMaterialState,
                          std::unordered_map<ULONG_PTR, LightSnapshot> *outLightState,
                          std::unordered_map<ULONG_PTR, CameraSnapshot> *outSceneCameraState,
+                         std::unordered_map<ULONG_PTR, NodeSnapshot> *outQueuedMeshExports,
                          std::vector<std::string> *outSelectedObjectIds,
                          CameraSnapshot *outCameraSnapshot,
                          size_t *outDeltaCount,
@@ -5276,12 +5449,14 @@ bool SendInitialSnapshot(Interface *ip,
   const std::vector<std::string> selectedObjectIds = GatherSelectedObjectIds(ip);
   CameraSnapshot cameraSnapshot;
   CaptureActiveCameraSnapshot(ip, &cameraSnapshot);
+  std::unordered_map<ULONG_PTR, NodeSnapshot> queuedMeshExports;
   for (const auto &[_, snapshot] : state) {
     AppendNodeAddedDelta(documentId, snapshot, &revision, &deltas);
     AppendNodeTransformDelta(documentId, snapshot, &revision, &deltas);
     AppendNodeVisibilityDelta(documentId, snapshot, &revision, &deltas);
-    AppendMeshPayloadDeltaIfAvailable(ip, documentId, snapshot,
-                                      &revision, &deltas);
+    if (snapshot.hasMesh) {
+      queuedMeshExports.insert_or_assign(snapshot.handle, snapshot);
+    }
   }
   if (!wroteMaterialLibrary || materialLibraryPayloadUri.empty()) {
     for (const auto &[_, snapshot] : materialState) {
@@ -5317,6 +5492,9 @@ bool SendInitialSnapshot(Interface *ip,
   if (outSceneCameraState) {
     *outSceneCameraState = std::move(sceneCameraState);
   }
+  if (outQueuedMeshExports) {
+    *outQueuedMeshExports = std::move(queuedMeshExports);
+  }
   if (outSelectedObjectIds) {
     *outSelectedObjectIds = selectedObjectIds;
   }
@@ -5346,6 +5524,7 @@ bool SendResumeSnapshot(Interface *ip,
                         MaterialStateMap *outMaterialState,
                         std::unordered_map<ULONG_PTR, LightSnapshot> *outLightState,
                         std::unordered_map<ULONG_PTR, CameraSnapshot> *outSceneCameraState,
+                        std::unordered_map<ULONG_PTR, NodeSnapshot> *outQueuedMeshExports,
                         std::vector<std::string> *outSelectedObjectIds,
                         CameraSnapshot *outCameraSnapshot,
                         size_t *outDeltaCount,
@@ -5415,6 +5594,7 @@ bool SendResumeSnapshot(Interface *ip,
                                           {"displayName", documentDisplayName}}}});
 
   uint64_t revision = 1;
+  std::unordered_map<ULONG_PTR, NodeSnapshot> queuedMeshExports;
   std::string materialLibraryPayloadUri;
   const bool wroteMaterialLibrary =
       WriteMaterialLibraryPayload(documentId, currentMaterialState,
@@ -5429,7 +5609,9 @@ bool SendResumeSnapshot(Interface *ip,
       AppendNodeAddedDelta(documentId, snapshot, &revision, &deltas);
       AppendNodeTransformDelta(documentId, snapshot, &revision, &deltas);
       AppendNodeVisibilityDelta(documentId, snapshot, &revision, &deltas);
-      AppendMeshPayloadDeltaIfAvailable(ip, documentId, snapshot, &revision, &deltas);
+      if (snapshot.hasMesh) {
+        queuedMeshExports.insert_or_assign(snapshot.handle, snapshot);
+      }
       continue;
     }
 
@@ -5447,7 +5629,7 @@ bool SendResumeSnapshot(Interface *ip,
     if (snapshot.hasMesh &&
         (!previous.hasMesh ||
          previous.geometryFingerprint != snapshot.geometryFingerprint)) {
-      AppendMeshPayloadDeltaIfAvailable(ip, documentId, snapshot, &revision, &deltas);
+      queuedMeshExports.insert_or_assign(snapshot.handle, snapshot);
     }
   }
 
@@ -5544,6 +5726,9 @@ bool SendResumeSnapshot(Interface *ip,
   }
   if (outSceneCameraState) {
     *outSceneCameraState = std::move(currentSceneCameraState);
+  }
+  if (outQueuedMeshExports) {
+    *outQueuedMeshExports = std::move(queuedMeshExports);
   }
   if (outSelectedObjectIds) {
     *outSelectedObjectIds = selectedObjectIds;
@@ -5977,6 +6162,9 @@ private:
     if (m_selectionDirty) {
       ++dirtyCount;
     }
+    dirtyCount += m_pendingMeshExports.size();
+    dirtyCount += m_inFlightMeshExports.size();
+    dirtyCount += m_completedMeshExports.size();
     return dirtyCount;
   }
 
@@ -6003,6 +6191,7 @@ private:
     m_batchesSent = 0;
     m_totalDeltasSent = 0;
     m_lastBatchDeltaCount = 0;
+    ResetMeshExportTimingStats_NoLock();
   }
 
   void ScheduleVerificationSweep_NoLock() {
@@ -6024,13 +6213,42 @@ private:
            " | dirty=" + std::to_string(CountDirtyItems_NoLock()) +
            "\r\nScene: nodes=" + std::to_string(m_lastNodeState.size()) +
            " | meshNodes=" + std::to_string(CountTrackedMeshNodes_NoLock()) +
+           " | queuedMeshes=" + std::to_string(m_pendingMeshExports.size()) +
+           " | activeExports=" + std::to_string(m_inFlightMeshExports.size()) +
            " | lights=" + std::to_string(m_lastLightState.size()) +
            " | cameras=" + std::to_string(m_lastSceneCameraState.size()) +
            " | materials=" + std::to_string(m_lastMaterialState.size()) +
            " | textures=" + std::to_string(CountTrackedTextureUris_NoLock()) +
            "\r\nBatches: sent=" + std::to_string(m_batchesSent) +
            " | deltas=" + std::to_string(m_totalDeltasSent) +
-           " | lastBatch=" + std::to_string(m_lastBatchDeltaCount);
+           " | lastBatch=" + std::to_string(m_lastBatchDeltaCount) +
+           "\r\nMesh Export: done=" +
+           std::to_string(m_meshExportTimingStats.completedCount) +
+           " | lastCapture=" +
+           std::to_string(m_meshExportTimingStats.lastCaptureMs) + "ms" +
+           " | lastSerialize=" +
+           std::to_string(m_meshExportTimingStats.lastSerializeMs) + "ms" +
+           "\r\nMesh Export Detail: tri=" +
+           std::to_string(m_meshExportTimingStats.lastTriObjectCaptureMs) + "ms" +
+           " | normals=" +
+           std::to_string(m_meshExportTimingStats.lastNormalsBuildMs) + "ms" +
+           " | faces=" +
+           std::to_string(m_meshExportTimingStats.lastFaceCopyMs) + "ms" +
+           " | mats=" +
+           std::to_string(m_meshExportTimingStats.lastMaterialCaptureMs) + "ms" +
+           " | avgCapture=" +
+           std::to_string(
+               m_meshExportTimingStats.completedCount == 0
+                   ? 0
+                   : (m_meshExportTimingStats.totalCaptureMs /
+                      m_meshExportTimingStats.completedCount)) +
+           "ms | avgSerialize=" +
+           std::to_string(
+               m_meshExportTimingStats.completedCount == 0
+                   ? 0
+                   : (m_meshExportTimingStats.totalSerializeMs /
+                      m_meshExportTimingStats.completedCount)) +
+           "ms";
   }
 
   void RefreshRollupUI_NoLock() {
@@ -6073,6 +6291,7 @@ private:
   }
 
   void ResetTrackedState_NoLock() {
+    WaitForAllMeshPayloadExports_NoLock();
     m_lastNodeState.clear();
     m_lastMaterialState.clear();
     m_lastLightState.clear();
@@ -6095,6 +6314,11 @@ private:
     m_dirtyMaterialHandles.clear();
     m_dirtyLightHandles.clear();
     m_pendingPayloadRemovals.clear();
+    m_pendingMeshExports.clear();
+    m_completedMeshExports.clear();
+    m_inFlightMeshExports.clear();
+    m_inFlightSharedPayloads.clear();
+    m_sharedPayloadCache.clear();
   }
 
   void MarkResumeStateDirty_NoLock(uint64_t delayMs = kResumeStatePersistDelayMs) {
@@ -6135,9 +6359,12 @@ private:
     size_t startupDeltaCount = 0;
     bool usedResumeStartup = false;
     const bool clearsExistingScene = m_forceFullSnapshotOnConnect;
+    m_pendingMeshExports.clear();
+    m_sharedPayloadCache.clear();
     if (!m_forceFullSnapshotOnConnect &&
         SendResumeSnapshot(ip, &m_lastNodeState, &m_lastMaterialState,
                            &m_lastLightState, &m_lastSceneCameraState,
+                           &m_pendingMeshExports,
                            &m_lastSelectedObjectIds,
                            &m_lastCameraSnapshot, &startupDeltaCount,
                            &m_sessionId, &m_documentId, &m_nextSequence,
@@ -6146,6 +6373,7 @@ private:
     } else {
       if (!SendInitialSnapshot(ip, &m_lastNodeState, &m_lastMaterialState,
                                &m_lastLightState, &m_lastSceneCameraState,
+                               &m_pendingMeshExports,
                                &m_lastSelectedObjectIds,
                                &m_lastCameraSnapshot, &startupDeltaCount,
                                &m_sessionId,
@@ -6246,6 +6474,7 @@ private:
     UnregisterSceneCallbacks();
     g_pipeClient.Disconnect();
     ResetTrackedState_NoLock();
+    ShutdownMeshWorkerPool_NoLock();
     m_syncActive = false;
     RefreshRollupUI_NoLock();
   }
@@ -6286,6 +6515,275 @@ private:
     m_dirtyMeshHandles.clear();
     m_dirtyMaterialHandles.clear();
     m_dirtyLightHandles.clear();
+  }
+
+  void QueueMeshPayloadExport_NoLock(const NodeSnapshot &snapshot) {
+    if (!snapshot.hasMesh) {
+      m_pendingMeshExports.erase(snapshot.handle);
+      return;
+    }
+    m_pendingMeshExports.insert_or_assign(snapshot.handle, snapshot);
+  }
+
+  void CancelQueuedMeshPayloadExport_NoLock(ULONG_PTR handle) {
+    m_pendingMeshExports.erase(handle);
+  }
+
+  static size_t MaxAsyncMeshExportJobs() {
+    const unsigned hw = std::thread::hardware_concurrency();
+    const size_t workerCount = hw == 0 ? 4 : static_cast<size_t>(hw);
+    return (std::max)(static_cast<size_t>(2),
+                      (std::min)(static_cast<size_t>(8), workerCount));
+  }
+
+  static size_t MaxQueuedCapturedMeshJobs() {
+    return MaxAsyncMeshExportJobs() * 4;
+  }
+
+  void ResetMeshExportTimingStats_NoLock() {
+    m_meshExportTimingStats = MeshExportTimingStats{};
+  }
+
+  void RecordMeshExportTiming_NoLock(const AsyncMeshPayloadResult &result) {
+    ++m_meshExportTimingStats.completedCount;
+    m_meshExportTimingStats.lastTriObjectCaptureMs = result.triObjectCaptureMs;
+    m_meshExportTimingStats.lastNormalsBuildMs = result.normalsBuildMs;
+    m_meshExportTimingStats.lastFaceCopyMs = result.faceCopyMs;
+    m_meshExportTimingStats.lastMaterialCaptureMs = result.materialCaptureMs;
+    m_meshExportTimingStats.lastSerializeMs = result.serializeMs;
+    m_meshExportTimingStats.lastCaptureMs =
+        result.triObjectCaptureMs + result.normalsBuildMs +
+        result.faceCopyMs + result.materialCaptureMs;
+    m_meshExportTimingStats.totalTriObjectCaptureMs += result.triObjectCaptureMs;
+    m_meshExportTimingStats.totalNormalsBuildMs += result.normalsBuildMs;
+    m_meshExportTimingStats.totalFaceCopyMs += result.faceCopyMs;
+    m_meshExportTimingStats.totalMaterialCaptureMs += result.materialCaptureMs;
+    m_meshExportTimingStats.totalSerializeMs += result.serializeMs;
+    m_meshExportTimingStats.totalCaptureMs +=
+        m_meshExportTimingStats.lastCaptureMs;
+  }
+
+  void EnsureMeshWorkerPool_NoLock() {
+    if (!m_meshWorkerThreads.empty()) {
+      return;
+    }
+    m_meshWorkersStopping = false;
+    const size_t workerCount = MaxAsyncMeshExportJobs();
+    m_meshWorkerThreads.reserve(workerCount);
+    for (size_t workerIndex = 0; workerIndex < workerCount; ++workerIndex) {
+      m_meshWorkerThreads.emplace_back([this]() {
+        for (;;) {
+          CapturedMeshPayloadJob job;
+          {
+            std::unique_lock<std::mutex> workerLock(m_meshWorkerMutex);
+            m_meshWorkerCv.wait(workerLock, [this]() {
+              return m_meshWorkersStopping || !m_meshWorkerQueue.empty();
+            });
+            if (m_meshWorkersStopping && m_meshWorkerQueue.empty()) {
+              return;
+            }
+            job = std::move(m_meshWorkerQueue.front());
+            m_meshWorkerQueue.pop_front();
+            ++m_meshWorkerActiveCount;
+          }
+
+          AsyncMeshPayloadResult result = SerializeCapturedMeshPayload(job);
+
+          {
+            std::lock_guard<std::mutex> workerLock(m_meshWorkerMutex);
+            m_meshWorkerFinishedResults.push_back(std::move(result));
+            if (m_meshWorkerActiveCount > 0) {
+              --m_meshWorkerActiveCount;
+            }
+          }
+          m_meshWorkerCv.notify_all();
+        }
+      });
+    }
+  }
+
+  void ShutdownMeshWorkerPool_NoLock() {
+    {
+      std::lock_guard<std::mutex> workerLock(m_meshWorkerMutex);
+      m_meshWorkersStopping = true;
+    }
+    m_meshWorkerCv.notify_all();
+    for (std::thread &worker : m_meshWorkerThreads) {
+      if (worker.joinable()) {
+        worker.join();
+      }
+    }
+    m_meshWorkerThreads.clear();
+    m_meshWorkersStopping = false;
+    m_meshWorkerQueue.clear();
+    m_meshWorkerFinishedResults.clear();
+    m_meshWorkerActiveCount = 0;
+  }
+
+  void HarvestCompletedMeshPayloadExports_NoLock() {
+    std::deque<AsyncMeshPayloadResult> finishedResults;
+    {
+      std::lock_guard<std::mutex> workerLock(m_meshWorkerMutex);
+      finishedResults.swap(m_meshWorkerFinishedResults);
+    }
+    while (!finishedResults.empty()) {
+      AsyncMeshPayloadResult result = std::move(finishedResults.front());
+      finishedResults.pop_front();
+      auto it = std::find_if(
+          m_inFlightMeshExports.begin(), m_inFlightMeshExports.end(),
+          [&result](const InFlightMeshPayloadExport &exportJob) {
+            return exportJob.handle == result.handle;
+          });
+      if (it != m_inFlightMeshExports.end()) {
+        if (!it->sharedPayloadKey.empty()) {
+          m_inFlightSharedPayloads.erase(it->sharedPayloadKey);
+        }
+        m_inFlightMeshExports.erase(it);
+      }
+      m_completedMeshExports.push_back(std::move(result));
+    }
+  }
+
+  void WaitForAllMeshPayloadExports_NoLock() {
+    while (!m_inFlightMeshExports.empty()) {
+      HarvestCompletedMeshPayloadExports_NoLock();
+      if (m_inFlightMeshExports.empty()) {
+        break;
+      }
+      std::unique_lock<std::mutex> workerLock(m_meshWorkerMutex);
+      m_meshWorkerCv.wait_for(workerLock, std::chrono::milliseconds(10));
+    }
+    HarvestCompletedMeshPayloadExports_NoLock();
+    m_inFlightSharedPayloads.clear();
+  }
+
+  bool FlushCompletedMeshPayloadExports_NoLock(bool force) {
+    if (m_documentId.empty() || m_completedMeshExports.empty()) {
+      return false;
+    }
+
+    json deltas = json::array();
+    size_t flushedCount = 0;
+    const size_t maxExports =
+        force ? m_completedMeshExports.size() : kCompletedMeshExportBatchSize;
+    while (!m_completedMeshExports.empty() && flushedCount < maxExports) {
+      const AsyncMeshPayloadResult &result = m_completedMeshExports.front();
+      if (result.success && result.snapshot.hasMesh && !result.payloadUri.empty()) {
+        if (!result.sharedPayloadKey.empty()) {
+          m_sharedPayloadCache[result.sharedPayloadKey] =
+              SharedPayloadCacheEntry{result.snapshot.geometryFingerprint,
+                                      result.payloadUri};
+        }
+        AppendMeshPayloadDelta(m_documentId, result.snapshot, result.payloadUri,
+                               &m_nextRevision, &deltas);
+      }
+      RecordMeshExportTiming_NoLock(result);
+      m_completedMeshExports.pop_front();
+      ++flushedCount;
+    }
+
+    if (deltas.empty()) {
+      return flushedCount > 0;
+    }
+
+    if (!SendBatch(m_sessionId, m_nextSequence, false, deltas)) {
+      return false;
+    }
+
+    ++m_nextSequence;
+    RecordBatchSent_NoLock(deltas.size());
+    MarkResumeStateDirty_NoLock();
+    return true;
+  }
+
+  bool DispatchQueuedMeshPayloadExports_NoLock(Interface *ip, bool force) {
+    if (!ip || m_documentId.empty()) {
+      return false;
+    }
+    EnsureMeshWorkerPool_NoLock();
+
+    json cachedDeltas = json::array();
+    size_t dispatchCount = 0;
+    const size_t maxDispatchCount =
+        force ? m_pendingMeshExports.size() : MaxQueuedCapturedMeshJobs();
+    auto it = m_pendingMeshExports.begin();
+    while (it != m_pendingMeshExports.end()) {
+      if (!force && m_inFlightMeshExports.size() >= MaxQueuedCapturedMeshJobs()) {
+        break;
+      }
+      if (!force && dispatchCount >= maxDispatchCount) {
+        break;
+      }
+      const NodeSnapshot snapshot = it->second;
+      INode *node = FindNodeByHandle(ip, snapshot.handle);
+      if (!node) {
+        it = m_pendingMeshExports.erase(it);
+        continue;
+      }
+
+      const std::string sharedPayloadKey = BuildSharedPayloadKey(ip, node);
+      const auto cacheIt = m_sharedPayloadCache.find(sharedPayloadKey);
+      if (!sharedPayloadKey.empty() && cacheIt != m_sharedPayloadCache.end() &&
+          cacheIt->second.geometryFingerprint == snapshot.geometryFingerprint &&
+          !cacheIt->second.payloadUri.empty()) {
+        AppendMeshPayloadDelta(m_documentId, snapshot, cacheIt->second.payloadUri,
+                               &m_nextRevision, &cachedDeltas);
+        it = m_pendingMeshExports.erase(it);
+        ++dispatchCount;
+        continue;
+      }
+
+      const auto inFlightSharedIt = m_inFlightSharedPayloads.find(sharedPayloadKey);
+      if (!sharedPayloadKey.empty() &&
+          inFlightSharedIt != m_inFlightSharedPayloads.end() &&
+          inFlightSharedIt->second == snapshot.geometryFingerprint) {
+        ++it;
+        continue;
+      }
+
+      CapturedMeshPayloadJob job;
+      {
+        ScopedFlag exportGuard(&g_exportInProgress);
+        if (!CaptureNodeMeshPayloadJob(ip, node, m_documentId, snapshot, &job)) {
+          it = m_pendingMeshExports.erase(it);
+          continue;
+        }
+      }
+
+      InFlightMeshPayloadExport exportTask;
+      exportTask.handle = snapshot.handle;
+      exportTask.sharedPayloadKey = job.sharedPayloadKey;
+      exportTask.geometryFingerprint = snapshot.geometryFingerprint;
+      if (!exportTask.sharedPayloadKey.empty()) {
+        m_inFlightSharedPayloads[exportTask.sharedPayloadKey] =
+            exportTask.geometryFingerprint;
+      }
+      m_inFlightMeshExports.push_back(std::move(exportTask));
+      {
+        std::lock_guard<std::mutex> workerLock(m_meshWorkerMutex);
+        m_meshWorkerQueue.push_back(std::move(job));
+      }
+      m_meshWorkerCv.notify_one();
+      it = m_pendingMeshExports.erase(it);
+      ++dispatchCount;
+    }
+
+    if (!cachedDeltas.empty() &&
+        SendBatch(m_sessionId, m_nextSequence, false, cachedDeltas)) {
+      ++m_nextSequence;
+      RecordBatchSent_NoLock(cachedDeltas.size());
+      MarkResumeStateDirty_NoLock();
+      return true;
+    }
+    return dispatchCount > 0;
+  }
+
+  bool FlushQueuedMeshPayloadExports_NoLock(Interface *ip, bool force) {
+    HarvestCompletedMeshPayloadExports_NoLock();
+    const bool flushedCompleted = FlushCompletedMeshPayloadExports_NoLock(force);
+    const bool dispatchedQueued = DispatchQueuedMeshPayloadExports_NoLock(ip, force);
+    HarvestCompletedMeshPayloadExports_NoLock();
+    return flushedCompleted || dispatchedQueued;
   }
 
   void ApplyStagedMaterialState(ULONG_PTR handle,
@@ -6407,6 +6905,12 @@ private:
     }
     if (!hasDirtyWorkPending && FlushQueuedPayloadRemovals_NoLock(false)) {
       m_nextPollDeadline = ComputeNextPollDeadline(kIdlePollMinIntervalMs);
+      RefreshRollupUI_NoLock();
+      return;
+    }
+    if (!hasDirtyWorkPending &&
+        FlushQueuedMeshPayloadExports_NoLock(ip, false)) {
+      m_nextPollDeadline = ComputeNextPollDeadline(kActivePollMinIntervalMs);
       RefreshRollupUI_NoLock();
       return;
     }
@@ -6550,8 +7054,7 @@ private:
                                    &deltas);
           AppendNodeVisibilityDelta(m_documentId, snapshot, &m_nextRevision,
                                     &deltas);
-          AppendMeshPayloadDeltaIfAvailable(ip, m_documentId,
-                                            snapshot, &m_nextRevision, &deltas);
+          QueueMeshPayloadExport_NoLock(snapshot);
           continue;
         }
 
@@ -6562,7 +7065,7 @@ private:
           AppendNodeAddedDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
           AppendNodeTransformDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
           AppendNodeVisibilityDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
-          AppendMeshPayloadDeltaIfAvailable(ip, m_documentId, snapshot, &m_nextRevision, &deltas);
+          QueueMeshPayloadExport_NoLock(snapshot);
           continue;
         }
         if (previous.parentHandle != snapshot.parentHandle ||
@@ -6581,8 +7084,7 @@ private:
         if (snapshot.hasMesh &&
             (!previous.hasMesh ||
              previous.geometryFingerprint != snapshot.geometryFingerprint)) {
-          AppendMeshPayloadDeltaIfAvailable(ip, m_documentId,
-                                            snapshot, &m_nextRevision, &deltas);
+          QueueMeshPayloadExport_NoLock(snapshot);
         }
       }
 
@@ -6615,6 +7117,7 @@ private:
 
       for (const auto &[handle, previousSnapshot] : m_lastNodeState) {
         if (currentState.find(handle) == currentState.end()) {
+          CancelQueuedMeshPayloadExport_NoLock(handle);
           QueuePayloadRemoval_NoLock(previousSnapshot.objectId);
           AppendNodeRemovedDelta(m_documentId, previousSnapshot,
                                  &m_nextRevision, &deltas);
@@ -6703,6 +7206,7 @@ private:
       NodeSnapshot snapshot;
       if (!TryCaptureNodeSnapshotByHandle(ip, handle, &snapshot)) {
         if (previousIt != m_lastNodeState.end()) {
+          CancelQueuedMeshPayloadExport_NoLock(handle);
           QueuePayloadRemoval_NoLock(previousIt->second.objectId);
           AppendNodeRemovedDelta(m_documentId, previousIt->second,
                                  &m_nextRevision, &deltas);
@@ -6728,6 +7232,7 @@ private:
         if (nodeIdentityChanged || meshWasRemoved) {
           const MaterialStateMap replacementMaterialState =
               captureMaterialStateForSnapshot(snapshot);
+          CancelQueuedMeshPayloadExport_NoLock(handle);
           QueuePayloadRemoval_NoLock(previous.objectId);
           AppendNodeRemovedDelta(m_documentId, previous, &m_nextRevision, &deltas);
           appendTrackedMaterialRemovals(handle, &replacementMaterialState);
@@ -6735,7 +7240,7 @@ private:
           AppendNodeAddedDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
           AppendNodeTransformDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
           AppendNodeVisibilityDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
-          AppendMeshPayloadDeltaIfAvailable(ip, m_documentId, snapshot, &m_nextRevision, &deltas);
+          QueueMeshPayloadExport_NoLock(snapshot);
           appendMaterialStateDiff(replacementMaterialState);
           continue;
         }
@@ -6761,8 +7266,7 @@ private:
             !previousItForMesh->second.hasMesh ||
             previousItForMesh->second.geometryFingerprint !=
                 snapshot.geometryFingerprint) {
-          AppendMeshPayloadDeltaIfAvailable(ip, m_documentId,
-                                            snapshot, &m_nextRevision, &deltas);
+          QueueMeshPayloadExport_NoLock(snapshot);
         }
       }
     }
@@ -6919,6 +7423,7 @@ private:
       }
       MarkResumeStateDirty_NoLock();
       ClearDirtyState();
+      FlushQueuedMeshPayloadExports_NoLock(ip, false);
     } else if (deltas.empty() && (hasIncrementalStateUpdates || hadPendingDirtyWork)) {
       for (const auto &[handle, snapshot] : stagedNodes) {
         m_lastNodeState[handle] = snapshot;
@@ -6945,6 +7450,7 @@ private:
         MarkResumeStateDirty_NoLock();
       }
       ClearDirtyState();
+      FlushQueuedMeshPayloadExports_NoLock(ip, false);
     }
 
     MaybePersistResumeStateLocked(ip, false);
@@ -6980,6 +7486,8 @@ private:
   IUtil *m_iu = nullptr;
   HWND m_rollupHwnd = nullptr;
   std::mutex m_sendMutex;
+  std::mutex m_meshWorkerMutex;
+  std::condition_variable m_meshWorkerCv;
   bool m_syncActive = false;
   UINT_PTR m_pollTimer = 0;
   UINT_PTR m_cameraPollTimer = 0;
@@ -7000,6 +7508,17 @@ private:
   std::unordered_set<ULONG_PTR> m_dirtyMaterialHandles;
   std::unordered_set<ULONG_PTR> m_dirtyLightHandles;
   std::unordered_set<std::string> m_pendingPayloadRemovals;
+  std::unordered_map<ULONG_PTR, NodeSnapshot> m_pendingMeshExports;
+  std::vector<InFlightMeshPayloadExport> m_inFlightMeshExports;
+  std::deque<AsyncMeshPayloadResult> m_completedMeshExports;
+  std::unordered_map<std::string, uint64_t> m_inFlightSharedPayloads;
+  std::vector<std::thread> m_meshWorkerThreads;
+  std::deque<CapturedMeshPayloadJob> m_meshWorkerQueue;
+  std::deque<AsyncMeshPayloadResult> m_meshWorkerFinishedResults;
+  size_t m_meshWorkerActiveCount = 0;
+  bool m_meshWorkersStopping = false;
+  std::unordered_map<std::string, SharedPayloadCacheEntry> m_sharedPayloadCache;
+  MeshExportTimingStats m_meshExportTimingStats;
   std::unordered_map<ULONG_PTR, NodeSnapshot> m_lastNodeState;
   MaterialStateMap m_lastMaterialState;
   std::unordered_map<ULONG_PTR, LightSnapshot> m_lastLightState;
