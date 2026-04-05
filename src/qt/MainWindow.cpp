@@ -155,6 +155,43 @@ QString FormatLiveLinkSyncStats(const LiveLink::CoordinatorStats& coordinatorSta
         .arg(static_cast<qulonglong>(coordinatorStats.queuedDeltaCount));
 }
 
+QString FormatLiveLinkProviderDisplayName(const std::string &providerName)
+{
+    if (providerName == "3dsMax2025Pipe") {
+        return QObject::tr("3ds Max");
+    }
+    if (providerName == "Archicad28Pipe") {
+        return QObject::tr("Archicad");
+    }
+    if (providerName == "MockLiveLink") {
+        return QObject::tr("Mock");
+    }
+    return QString::fromStdString(providerName);
+}
+
+QString FormatCompactLiveLinkStatus(
+    const std::vector<LiveLink::ProviderSnapshot> &providers)
+{
+    if (providers.empty()) {
+        return QObject::tr("LiveLink: None");
+    }
+
+    QStringList connectedProviders;
+    for (const auto &provider : providers) {
+        if (provider.connectionState == LiveLink::ConnectionState::Connected) {
+            connectedProviders << FormatLiveLinkProviderDisplayName(
+                provider.providerName);
+        }
+    }
+
+    if (connectedProviders.isEmpty()) {
+        return QObject::tr("LiveLink: None");
+    }
+
+    return QObject::tr("LiveLink: %1 Connected")
+        .arg(connectedProviders.join(QStringLiteral(", ")));
+}
+
 QString ReadGitHash()
 {
     QProcess git;
@@ -611,6 +648,16 @@ void MainWindow::createDocks()
     tabifyDockWidget(environmentDock, cameraDock);
     tabifyDockWidget(cameraDock, viewsDock);
     environmentDock->raise();
+
+    QTimer::singleShot(0, this, [this, sceneDock, renderDock, environmentDock]() {
+        resizeDocks({sceneDock, renderDock},
+                    {300, 340},
+                    Qt::Horizontal);
+        resizeDocks({renderDock, environmentDock},
+                    {320, 760},
+                    Qt::Vertical);
+        sceneDock->raise();
+    });
 }
 
 void MainWindow::startSaveScene()
@@ -786,28 +833,7 @@ void MainWindow::updateSceneIoUi()
         const auto stats = LiveLink::GetCoordinator().GetStatsSnapshot();
         const auto providers = LiveLink::GetCoordinator().GetProviderSnapshots();
         const auto diagnostics = LiveLink::GetSceneSync().GetRecentDiagnostics();
-        QString liveLinkText = tr("LL off");
-        if (!providers.empty()) {
-            QStringList providerParts;
-            providerParts << tr("LL %1/%2")
-                                 .arg(static_cast<qulonglong>(stats.connectedProviderCount))
-                                 .arg(static_cast<qulonglong>(stats.providerCount));
-            providerParts << tr("Q %1/%2")
-                                 .arg(static_cast<qulonglong>(stats.queuedBatchCount))
-                                 .arg(static_cast<qulonglong>(stats.queuedDeltaCount));
-
-            QStringList providerStates;
-            for (const auto &provider : providers) {
-                providerStates << QStringLiteral("%1:%2")
-                                      .arg(QString::fromStdString(provider.providerName),
-                                           QString::fromLatin1(LiveLink::ToString(provider.connectionState)));
-            }
-            if (!providerStates.isEmpty()) {
-                providerParts << providerStates.join(QStringLiteral(", "));
-            }
-            liveLinkText = providerParts.join(QStringLiteral(" | "));
-        }
-        m_liveLinkLabel->setText(liveLinkText);
+        m_liveLinkLabel->setText(FormatCompactLiveLinkStatus(providers));
 
         if (m_liveLinkSummaryLabel) {
             const auto syncStats = LiveLink::GetSceneSync().GetStatsSnapshot();
