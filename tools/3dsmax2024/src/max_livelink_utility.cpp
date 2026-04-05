@@ -7,6 +7,7 @@
 #include <AppDataChunk.h>
 #include <pbbitmap.h>
 #include <stdmat.h>
+#include <object.h>
 #include <units.h>
 #include <ISceneEventManager.h>
 
@@ -1107,6 +1108,17 @@ struct MaterialReferenceSnapshot {
   bool operator==(const MaterialReferenceSnapshot &) const = default;
 };
 
+class LiveLinkNullView : public View {
+public:
+  Point2 ViewToScreen(Point3 p) override { return Point2(p.x, p.y); }
+
+  LiveLinkNullView() {
+    worldToView.IdentityMatrix();
+    screenW = 640.0f;
+    screenH = 480.0f;
+  }
+};
+
 struct MaterialSnapshot {
   bool valid = false;
   ULONG_PTR nodeHandle = 0;
@@ -1205,10 +1217,19 @@ struct CapturedMeshPayloadJob {
   std::vector<UVVert> texcoords;
   std::vector<CapturedMeshFace> faces;
   std::vector<MaterialSnapshot> serializedMaterials;
+  bool usedRenderMesh = false;
   uint64_t triObjectCaptureMs = 0;
   uint64_t normalsBuildMs = 0;
   uint64_t faceCopyMs = 0;
   uint64_t materialCaptureMs = 0;
+};
+
+struct NodeMeshAccess {
+  Mesh *mesh = nullptr;
+  TriObject *triObject = nullptr;
+  bool deleteMesh = false;
+  bool deleteTriObject = false;
+  bool fromRenderMesh = false;
 };
 
 struct AsyncMeshPayloadResult {
@@ -1217,6 +1238,7 @@ struct AsyncMeshPayloadResult {
   std::string sharedPayloadKey;
   std::string payloadUri;
   bool success = false;
+  bool usedRenderMesh = false;
   uint64_t triObjectCaptureMs = 0;
   uint64_t normalsBuildMs = 0;
   uint64_t faceCopyMs = 0;
@@ -1232,12 +1254,15 @@ struct InFlightMeshPayloadExport {
 
 struct MeshExportTimingStats {
   uint64_t completedCount = 0;
+  uint64_t renderMeshCount = 0;
+  uint64_t triObjectFallbackCount = 0;
   uint64_t lastCaptureMs = 0;
   uint64_t lastTriObjectCaptureMs = 0;
   uint64_t lastNormalsBuildMs = 0;
   uint64_t lastFaceCopyMs = 0;
   uint64_t lastMaterialCaptureMs = 0;
   uint64_t lastSerializeMs = 0;
+  bool lastUsedRenderMesh = false;
   uint64_t totalCaptureMs = 0;
   uint64_t totalTriObjectCaptureMs = 0;
   uint64_t totalNormalsBuildMs = 0;
@@ -3134,6 +3159,8 @@ int ResolveFaceMaterialSlot(Mtl *rootMaterial, int faceMaterialId) {
 
 bool GetTriObjectForNode(Interface *ip, INode *node, TriObject **outTriObject,
                          bool *outNeedsDelete);
+bool GetNodeMeshAccess(Interface *ip, INode *node, NodeMeshAccess *outAccess);
+void ReleaseNodeMeshAccess(NodeMeshAccess *access);
 
 std::vector<int> GatherUsedMaterialSlots(Interface *ip, INode *node,
                                          Mtl *rootMaterial) {
@@ -3471,18 +3498,67 @@ bool GetTriObjectForNode(Interface *ip, INode *node, TriObject **outTriObject,
   return true;
 }
 
+bool GetNodeMeshAccess(Interface *ip, INode *node, NodeMeshAccess *outAccess) {
+  if (!ip || !node || !outAccess) {
+    return false;
+  }
+
+  NodeMeshAccess access;
+  ObjectState objectState = node->EvalWorldState(ip->GetTime());
+  if (objectState.obj && objectState.obj->SuperClassID() == GEOMOBJECT_CLASS_ID) {
+    GeomObject *geomObject = static_cast<GeomObject *>(objectState.obj);
+    if (geomObject->NumberOfRenderMeshes() <= 0) {
+      LiveLinkNullView view;
+      BOOL needDelete = FALSE;
+      Mesh *renderMesh = geomObject->GetRenderMesh(ip->GetTime(), node, view,
+                                                   needDelete);
+      if (renderMesh != nullptr) {
+        access.mesh = renderMesh;
+        access.deleteMesh = needDelete != FALSE;
+        access.fromRenderMesh = true;
+        *outAccess = access;
+        return true;
+      }
+    }
+  }
+
+  TriObject *triObject = nullptr;
+  bool needsDelete = false;
+  if (!GetTriObjectForNode(ip, node, &triObject, &needsDelete) || !triObject) {
+    return false;
+  }
+
+  access.mesh = &triObject->GetMesh();
+  access.triObject = triObject;
+  access.deleteTriObject = needsDelete;
+  *outAccess = access;
+  return true;
+}
+
+void ReleaseNodeMeshAccess(NodeMeshAccess *access) {
+  if (!access) {
+    return;
+  }
+  if (access->deleteMesh && access->mesh) {
+    delete access->mesh;
+  }
+  if (access->deleteTriObject && access->triObject) {
+    access->triObject->DeleteThis();
+  }
+  *access = NodeMeshAccess{};
+}
+
 void CaptureMeshSnapshot(Interface *ip, INode *node, NodeSnapshot *snapshot) {
   if (!ip || !node || !snapshot) {
     return;
   }
 
-  TriObject *triObject = nullptr;
-  bool needsDelete = false;
-  if (!GetTriObjectForNode(ip, node, &triObject, &needsDelete)) {
+  NodeMeshAccess meshAccess;
+  if (!GetNodeMeshAccess(ip, node, &meshAccess) || !meshAccess.mesh) {
     return;
   }
 
-  Mesh &mesh = triObject->GetMesh();
+  Mesh &mesh = *meshAccess.mesh;
   mesh.buildNormals();
   mesh.buildRenderNormals();
   MeshNormalSpec *specNormals = mesh.GetSpecifiedNormals();
@@ -3492,9 +3568,7 @@ void CaptureMeshSnapshot(Interface *ip, INode *node, NodeSnapshot *snapshot) {
   const uint64_t vertexCount = static_cast<uint64_t>(mesh.getNumVerts());
   const uint64_t faceCount = static_cast<uint64_t>(mesh.getNumFaces());
   if (vertexCount == 0 || faceCount == 0) {
-    if (needsDelete) {
-      triObject->DeleteThis();
-    }
+    ReleaseNodeMeshAccess(&meshAccess);
     return;
   }
 
@@ -3581,9 +3655,7 @@ void CaptureMeshSnapshot(Interface *ip, INode *node, NodeSnapshot *snapshot) {
     }
   snapshot->geometryFingerprint = fingerprint;
 
-  if (needsDelete) {
-    triObject->DeleteThis();
-  }
+  ReleaseNodeMeshAccess(&meshAccess);
 }
 
 std::filesystem::path GetPayloadRootDirectory() {
@@ -3948,9 +4020,8 @@ bool CaptureNodeMeshPayloadJob(Interface *ip, INode *node,
   }
 
   const auto captureStart = std::chrono::steady_clock::now();
-  TriObject *triObject = nullptr;
-  bool needsDelete = false;
-  if (!GetTriObjectForNode(ip, node, &triObject, &needsDelete)) {
+  NodeMeshAccess meshAccess;
+  if (!GetNodeMeshAccess(ip, node, &meshAccess) || !meshAccess.mesh) {
     return false;
   }
   const auto triObjectReady = std::chrono::steady_clock::now();
@@ -3966,14 +4037,13 @@ bool CaptureNodeMeshPayloadJob(Interface *ip, INode *node,
     job.payloadPath = GetNodePayloadPath(documentId, snapshot.objectId);
   }
   if (job.payloadPath.empty()) {
-    if (needsDelete) {
-      triObject->DeleteThis();
-    }
+    ReleaseNodeMeshAccess(&meshAccess);
     return false;
   }
   job.payloadUri = PathToUtf8(job.payloadPath);
 
-  Mesh &mesh = triObject->GetMesh();
+  Mesh &mesh = *meshAccess.mesh;
+  job.usedRenderMesh = meshAccess.fromRenderMesh;
   mesh.buildNormals();
   mesh.buildRenderNormals();
   MeshNormalSpec *specNormals = mesh.GetSpecifiedNormals();
@@ -4043,9 +4113,7 @@ bool CaptureNodeMeshPayloadJob(Interface *ip, INode *node,
   }
   const auto materialsReady = std::chrono::steady_clock::now();
 
-  if (needsDelete) {
-    triObject->DeleteThis();
-  }
+  ReleaseNodeMeshAccess(&meshAccess);
   job.triObjectCaptureMs = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(triObjectReady -
                                                             captureStart)
@@ -4074,6 +4142,7 @@ AsyncMeshPayloadResult SerializeCapturedMeshPayload(
   result.snapshot = job.snapshot;
   result.sharedPayloadKey = job.sharedPayloadKey;
   result.payloadUri = job.payloadUri;
+  result.usedRenderMesh = job.usedRenderMesh;
   result.triObjectCaptureMs = job.triObjectCaptureMs;
   result.normalsBuildMs = job.normalsBuildMs;
   result.faceCopyMs = job.faceCopyMs;
@@ -5551,6 +5620,9 @@ private:
            " | lastBatch=" + std::to_string(m_lastBatchDeltaCount) +
            "\r\nMesh Export: done=" +
            std::to_string(m_meshExportTimingStats.completedCount) +
+           " | source=" +
+           std::string(m_meshExportTimingStats.lastUsedRenderMesh ? "render"
+                                                                  : "tri") +
            " | lastCapture=" +
            std::to_string(m_meshExportTimingStats.lastCaptureMs) + "ms" +
            " | lastSerialize=" +
@@ -5563,6 +5635,10 @@ private:
            std::to_string(m_meshExportTimingStats.lastFaceCopyMs) + "ms" +
            " | mats=" +
            std::to_string(m_meshExportTimingStats.lastMaterialCaptureMs) + "ms" +
+           " | render=" +
+           std::to_string(m_meshExportTimingStats.renderMeshCount) +
+           " | triFallback=" +
+           std::to_string(m_meshExportTimingStats.triObjectFallbackCount) +
            " | avgCapture=" +
            std::to_string(
                m_meshExportTimingStats.completedCount == 0
@@ -5876,6 +5952,12 @@ private:
 
   void RecordMeshExportTiming_NoLock(const AsyncMeshPayloadResult &result) {
     ++m_meshExportTimingStats.completedCount;
+    m_meshExportTimingStats.lastUsedRenderMesh = result.usedRenderMesh;
+    if (result.usedRenderMesh) {
+      ++m_meshExportTimingStats.renderMeshCount;
+    } else {
+      ++m_meshExportTimingStats.triObjectFallbackCount;
+    }
     m_meshExportTimingStats.lastTriObjectCaptureMs = result.triObjectCaptureMs;
     m_meshExportTimingStats.lastNormalsBuildMs = result.normalsBuildMs;
     m_meshExportTimingStats.lastFaceCopyMs = result.faceCopyMs;

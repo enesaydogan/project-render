@@ -1,6 +1,6 @@
 #include <windows.h>
 
-101 DIALOGEX 0, 0, 228, 152
+101 DIALOGEX 0, 0, 228, 206
 STYLE DS_SETFONT | WS_CHILD | WS_VISIBLE
 FONT 8, "MS Shell Dlg"
 BEGIN
@@ -8,6 +8,6 @@ BEGIN
     PUSHBUTTON "Start Sync", 1002, 8, 30, 68, 14
     PUSHBUTTON "Start Full Resync", 1004, 80, 30, 68, 14
     PUSHBUTTON "Stop Sync", 1003, 152, 30, 68, 14
-    LTEXT "Last startup: none.", 1005, 8, 50, 210, 72
-    LTEXT "Once started, sync keeps running after you close this utility.", -1, 8, 126, 210, 16
+    LTEXT "Last startup: none.", 1005, 8, 50, 210, 126
+    LTEXT "Once started, sync keeps running after you close this utility.", -1, 8, 180, 210, 16
 END

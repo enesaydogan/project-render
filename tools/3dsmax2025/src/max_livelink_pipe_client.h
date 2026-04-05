@@ -17,5 +17,6 @@ public:
 
 private:
   void *m_pipe = nullptr;
+  void *m_writeEvent = nullptr;
   std::string m_lastError;
 };
