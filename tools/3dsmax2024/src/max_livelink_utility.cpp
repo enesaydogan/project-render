@@ -3188,7 +3188,7 @@ std::vector<int> GatherUsedMaterialSlots(Interface *ip, INode *node,
   }
 
   if (needsDelete) {
-    triObject->DeleteThis();
+    triObject->DeleteMe();
   }
 
   usedSlots.erase(std::remove_if(usedSlots.begin(), usedSlots.end(),
@@ -3530,7 +3530,7 @@ void ReleaseNodeMeshAccess(NodeMeshAccess *access) {
     delete access->mesh;
   }
   if (access->deleteTriObject && access->triObject) {
-    access->triObject->DeleteThis();
+    access->triObject->DeleteMe();
   }
   *access = NodeMeshAccess{};
 }
@@ -3689,13 +3689,14 @@ std::filesystem::path GetMaterialLibraryPayloadPath(
 }
 
 std::string BuildSharedPayloadKey(Interface *ip, INode *node) {
-  (void)ip;
-  (void)node;
-  // Keep LiveLink payloads node-local. Sharing .prmesh files across different
-  // Max nodes can let one node's freshly exported local-space mesh replace
-  // another node's content, which shows up in-engine as random teleports or
-  // rotations after material/topology edits.
-  return {};
+  if (!node) return {};
+  Object* baseObj = node->GetObjectRef();
+  if (!baseObj) return {};
+
+  uintptr_t objId = reinterpret_cast<uintptr_t>(baseObj);
+  char buffer[32];
+  snprintf(buffer, sizeof(buffer), "inst_%llx", static_cast<unsigned long long>(objId));
+  return std::string(buffer);
 }
 
 std::filesystem::path GetSharedPayloadPath(const std::string &documentId,
