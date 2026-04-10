@@ -64,6 +64,10 @@ cbuffer CameraCB : register(b1)
     float nrdEnabled;
     float exportRendering;
     float dxrProceduralSkyBoost;
+    float tonemapAoIntensity;
+    float tonemapAoRadiusMeters;
+    float tonemapAoMode;
+    float triPlanarWorldRotationDegrees;
     float4x4 shadowMatrix;
     float4x4 viewProj;
     float4x4 invViewProj;
@@ -84,23 +88,31 @@ void CSMain(uint3 tid : SV_DispatchThreadID) {
     FGrassPatch patch = g_grassPatches[idx];
 
     float radius = max(0.10, patch.scale * 0.90);
-    float4 clip = mul(float4(patch.position, 1.0), viewProj);
-    bool visible = (clip.w > 1e-4);
+    float3 camForward = normalize(forward);
+    float3 camRight = normalize(cross(camForward, up));
+    float3 camUp = normalize(cross(camRight, camForward));
+    float3 rel = patch.position - pos;
+
+    float3 viewPos;
+    viewPos.x = dot(rel, camRight);
+    viewPos.y = dot(rel, camUp);
+    viewPos.z = dot(rel, camForward);
+
+    bool visible = (viewPos.z + radius >= nearZ) && (viewPos.z - radius <= farZ);
     if (visible) {
-        float margin = clip.w * 0.15 + radius;
-        visible = (clip.x >= -clip.w - margin) && (clip.x <= clip.w + margin) &&
-                  (clip.y >= -clip.w - margin) && (clip.y <= clip.w + margin) &&
-                  (clip.z >= -margin) && (clip.z <= clip.w + margin);
+        float halfTanY = tan(radians(fov) * 0.5);
+        float halfTanX = halfTanY * aspect;
+        float limitX = viewPos.z * halfTanX + radius;
+        float limitY = viewPos.z * halfTanY + radius;
+        visible = (abs(viewPos.x) <= limitX) &&
+                  (abs(viewPos.y) <= limitY);
     }
 
     if (visible) {
         float3 toPatch = patch.position - pos;
         float distSq = dot(toPatch, toPatch);
         bool nearBand = distSq <= nearDistanceSq;
-        bool midBand = (!nearBand) && (distSq <= midDistanceSq);
-        if (!nearBand && !midBand) {
-            return;
-        }
+        bool midBand = !nearBand;
 
         uint oldCount;
         if (nearBand) {
