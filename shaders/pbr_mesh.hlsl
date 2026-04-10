@@ -78,21 +78,17 @@ cbuffer MaterialCB : register(b1)
 Texture2D textures[] : register(t0);
 Texture2D envMap : register(t0, space1);
 Texture2D shadowMap : register(t1, space1);
-struct FGrassBlade
+struct FGrassPatch
 {
     float3 position;
     float scale;
     float3 normal;
     float yawRadians;
     float2 emitterUv;
-    int emitterDiffuseTexture;
-    uint emitterPad;
     uint colorVariation;
-    uint sourceMeshId;
-    uint pad0;
-    uint pad1;
+    uint packedData;
 };
-StructuredBuffer<FGrassBlade> g_grassInstances : register(t0, space3);
+StructuredBuffer<FGrassPatch> g_grassInstances : register(t0, space3);
 StructuredBuffer<uint4> g_grassVisible : register(t1, space3);
 
 SamplerState linearSampler : register(s0);
@@ -389,7 +385,7 @@ struct VSOutputShadow {
     float4 position : SV_POSITION;
 };
 
-void BuildGrassBasis(FGrassBlade blade, out float3 right, out float3 upDir,
+void BuildGrassBasis(FGrassPatch blade, out float3 right, out float3 upDir,
                      out float3 forwardDir)
 {
     upDir = normalize((dot(blade.normal, blade.normal) > 1e-6)
@@ -456,7 +452,7 @@ PSInputMesh VSMainGrass(VSInputMesh input, uint instanceId : SV_InstanceID)
     PSInputMesh o;
 
     uint bladeIndex = g_grassVisible[instanceId + 1].x;
-    FGrassBlade blade = g_grassInstances[bladeIndex];
+    FGrassPatch blade = g_grassInstances[bladeIndex];
     float bladeScale = max(blade.scale, 1e-3);
 
     float3 right;
