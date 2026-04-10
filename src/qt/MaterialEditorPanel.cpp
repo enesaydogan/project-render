@@ -360,7 +360,7 @@ void MaterialEditorPanel::createUi()
     m_grassBladeSize = CreateSliderControl(0.05, 5.0, 0.05, 2);
     grassForm->addRow(tr("Blade Size"), m_grassBladeSize);
     m_grassBladeCount = CreateSliderControl(0.0, 1024.0, 0.5, 1);
-    grassForm->addRow(tr("Blade Count / m2"), m_grassBladeCount);
+    grassForm->addRow(tr("Patch Density / m2"), m_grassBladeCount);
     m_grassBladeVariation = CreateSliderControl(0.0, 1.0, 0.01, 2);
     grassForm->addRow(tr("Blade Variation"), m_grassBladeVariation);
     grassLayout->addLayout(grassForm);

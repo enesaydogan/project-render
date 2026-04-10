@@ -3778,7 +3778,7 @@ void BuildAccelerationStructures(
     // --- append grass TLAS instances on CPU (stable fallback path) ---
     {
       s_grassTlasStartIndex = 0xFFFFFFFFu;
-      const UINT grassRequested = GrassManager::GetInstanceCount();
+      const UINT grassRequested = GrassManager::GetPatchCount();
       if (grassRequested > 0) {
         const Asset::GpuMesh *patchMesh = GrassManager::GetPatchMesh();
         UINT64 patchBlasAddr = 0;
@@ -3797,11 +3797,27 @@ void BuildAccelerationStructures(
         }
 
         if (patchBlasAddr != 0) {
-          const auto &blades = GrassManager::GetBlades();
-          s_grassTlasStartIndex = (UINT)instanceDescs.size();
-          instanceDescs.reserve(instanceDescs.size() + blades.size());
-          instanceMeshOrder.reserve(instanceMeshOrder.size() + blades.size());
-          for (const FGrassBlade &b : blades) {
+          const auto &patches = GrassManager::GetPatches();
+          std::vector<FGrassPatch> rtPatches;
+          rtPatches.reserve(patches.size());
+          const float nearDistance = GrassManager::GetNearDistance();
+          const float nearDistanceSq = nearDistance * nearDistance;
+          const DirectX::XMFLOAT3 cameraPos = {g_cameraData.pos[0],
+                                               g_cameraData.pos[1],
+                                               g_cameraData.pos[2]};
+          for (const FGrassPatch &b : patches) {
+            const float dx = b.position.x - cameraPos.x;
+            const float dy = b.position.y - cameraPos.y;
+            const float dz = b.position.z - cameraPos.z;
+            const float distSq = dx * dx + dy * dy + dz * dz;
+            if (distSq > nearDistanceSq) {
+              continue;
+            }
+
+            if (rtPatches.empty()) {
+              s_grassTlasStartIndex = (UINT)instanceDescs.size();
+            }
+            rtPatches.push_back(b);
             const float s = sinf(b.yawRadians);
             const float c = cosf(b.yawRadians);
             const float sc = (std::max)(b.scale, 1e-3f);
@@ -3857,6 +3873,7 @@ void BuildAccelerationStructures(
             instanceDescs.push_back(inst);
             instanceMeshOrder.push_back(patchMesh);
           }
+          GrassManager::UploadRayTracingPatches(cmdList.Get(), rtPatches);
         } else if (g_verboseRenderLogs) {
           fprintf(stderr,
                   "DxrRenderer: grass instances present but no valid patch BLAS;"
@@ -4881,7 +4898,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     dxrList->SetComputeRootShaderResourceView(
         12, materialExtraSB->GetGPUVirtualAddress());
   D3D12_GPU_VIRTUAL_ADDRESS grassBladesGpu =
-      GrassManager::GetInstanceBufferGpuAddress();
+      GrassManager::GetRayTracingInstanceBufferGpuAddress();
   dxrList->SetComputeRootShaderResourceView(13, grassBladesGpu);
   dxrList->SetComputeRoot32BitConstants(14, 1, &s_grassTlasStartIndex, 0);
 

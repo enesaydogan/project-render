@@ -3,18 +3,14 @@
 // RWStructuredBuffer<D3D12_RAYTRACING_INSTANCE_DESC> starting at a
 // caller-specified offset.
 
-struct FGrassBlade {
+struct FGrassPatch {
     float3 position;
     float scale;
     float3 normal;
     float yawRadians;
     float2 emitterUv;
-    int emitterDiffuseTexture;
-    uint emitterPad;
     uint colorVariation;
-    uint sourceMeshId;
-    uint pad0;
-    uint pad1;
+    uint packedData;
 };
 
 struct TLASParams {
@@ -25,7 +21,7 @@ struct TLASParams {
     uint patchMeshIndex;
 };
 
-StructuredBuffer<FGrassBlade> g_grassBlades : register(t0);
+StructuredBuffer<FGrassPatch> g_grassPatches : register(t0);
 RWStructuredBuffer<uint> g_tlasDescs : register(u0); // raw access, 4 uints per desc
 cbuffer Params : register(b0) { TLASParams params; };
 
@@ -55,7 +51,7 @@ float3 SafeNormalize(float3 v, float3 fallback) {
 void CSMain(uint3 tid : SV_DispatchThreadID) {
     uint idx = tid.x;
     if (idx >= params.instanceCount) return;
-    FGrassBlade blade = g_grassBlades[idx];
+    FGrassPatch blade = g_grassPatches[idx];
 
     // Build a stable basis aligned to the emitter normal, then apply yaw around
     // that local up axis so raster/DXR use the same orientation rules.

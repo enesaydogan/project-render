@@ -234,21 +234,17 @@ struct MeshData {
     int pad;
 };
 StructuredBuffer<MeshData> meshData : register(t4098);
-struct FGrassBlade
+struct FGrassPatch
 {
     float3 position;
     float scale;
     float3 normal;
     float yawRadians;
     float2 emitterUv;
-    int emitterDiffuseTexture;
-    uint emitterPad;
     uint colorVariation;
-    uint sourceMeshId;
-    uint pad0;
-    uint pad1;
+    uint packedData;
 };
-StructuredBuffer<FGrassBlade> grassBlades : register(t4100);
+StructuredBuffer<FGrassPatch> grassBlades : register(t4100);
 cbuffer GrassRtParams : register(b11)
 {
     uint grassTlasStartIndex;

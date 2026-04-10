@@ -109,12 +109,12 @@
       <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
       <UseFullPaths>false</UseFullPaths>
       <WarningLevel>Level4</WarningLevel>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;APP_VERSION="0.1.0";USE_OIDN=1;USE_NRD=1;USE_QT_UI=1;QT_WIDGETS_LIB;QT_CORE_LIB;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;_WIN64;UNICODE;_UNICODE;QT_GUI_LIB;NRD_STATIC_LIBRARY=0;USE_SKETCHUP_SDK=1;USE_TINYGLTF=1;CMAKE_INTDIR="Debug"</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;APP_VERSION="0.1.5";USE_OIDN=1;USE_NRD=1;USE_QT_UI=1;QT_WIDGETS_LIB;QT_CORE_LIB;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;_WIN64;UNICODE;_UNICODE;QT_GUI_LIB;NRD_STATIC_LIBRARY=0;USE_SKETCHUP_SDK=1;USE_TINYGLTF=1;CMAKE_INTDIR="Debug"</PreprocessorDefinitions>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
     </ClCompile>
     <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;APP_VERSION=\"0.1.0\";USE_OIDN=1;USE_NRD=1;USE_QT_UI=1;QT_WIDGETS_LIB;QT_CORE_LIB;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;_WIN64;UNICODE;_UNICODE;QT_GUI_LIB;NRD_STATIC_LIBRARY=0;USE_SKETCHUP_SDK=1;USE_TINYGLTF=1;CMAKE_INTDIR=\"Debug\"</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;APP_VERSION=\"0.1.5\";USE_OIDN=1;USE_NRD=1;USE_QT_UI=1;QT_WIDGETS_LIB;QT_CORE_LIB;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;_WIN64;UNICODE;_UNICODE;QT_GUI_LIB;NRD_STATIC_LIBRARY=0;USE_SKETCHUP_SDK=1;USE_TINYGLTF=1;CMAKE_INTDIR=\"Debug\"</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>D:\project-render\build\project-render_autogen\include_Debug;D:\project-render\src\qt;D:\project-render\resources;D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\Integration;D:\project-render\build\_deps\nri-src\Include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\thirdparty\sketchup_sdk\headers;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\Qt\6.10.2\msvc2022_64\include\QtWidgets;D:\Qt\6.10.2\msvc2022_64\include;D:\Qt\6.10.2\msvc2022_64\include\QtCore;D:\Qt\6.10.2\msvc2022_64\mkspecs\win32-msvc;D:\Qt\6.10.2\msvc2022_64\include\QtGui;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
@@ -311,14 +311,14 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <UseFullPaths>false</UseFullPaths>
       <WarningLevel>Level4</WarningLevel>
       <WholeProgramOptimization>true</WholeProgramOptimization>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;APP_VERSION="0.1.0";USE_OIDN=1;USE_NRD=1;USE_QT_UI=1;QT_WIDGETS_LIB;QT_CORE_LIB;QT_NO_DEBUG;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;_WIN64;UNICODE;_UNICODE;QT_GUI_LIB;NRD_STATIC_LIBRARY=0;USE_SKETCHUP_SDK=1;USE_TINYGLTF=1;CMAKE_INTDIR="Release"</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;APP_VERSION="0.1.5";USE_OIDN=1;USE_NRD=1;USE_QT_UI=1;QT_WIDGETS_LIB;QT_CORE_LIB;QT_NO_DEBUG;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;_WIN64;UNICODE;_UNICODE;QT_GUI_LIB;NRD_STATIC_LIBRARY=0;USE_SKETCHUP_SDK=1;USE_TINYGLTF=1;CMAKE_INTDIR="Release"</PreprocessorDefinitions>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <DebugInformationFormat>
       </DebugInformationFormat>
       <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
     </ClCompile>
     <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;APP_VERSION=\"0.1.0\";USE_OIDN=1;USE_NRD=1;USE_QT_UI=1;QT_WIDGETS_LIB;QT_CORE_LIB;QT_NO_DEBUG;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;_WIN64;UNICODE;_UNICODE;QT_GUI_LIB;NRD_STATIC_LIBRARY=0;USE_SKETCHUP_SDK=1;USE_TINYGLTF=1;CMAKE_INTDIR=\"Release\"</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;APP_VERSION=\"0.1.5\";USE_OIDN=1;USE_NRD=1;USE_QT_UI=1;QT_WIDGETS_LIB;QT_CORE_LIB;QT_NO_DEBUG;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;_WIN64;UNICODE;_UNICODE;QT_GUI_LIB;NRD_STATIC_LIBRARY=0;USE_SKETCHUP_SDK=1;USE_TINYGLTF=1;CMAKE_INTDIR=\"Release\"</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>D:\project-render\build\project-render_autogen\include_Release;D:\project-render\src\qt;D:\project-render\resources;D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\Integration;D:\project-render\build\_deps\nri-src\Include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\thirdparty\sketchup_sdk\headers;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\Qt\6.10.2\msvc2022_64\include\QtWidgets;D:\Qt\6.10.2\msvc2022_64\include;D:\Qt\6.10.2\msvc2022_64\include\QtCore;D:\Qt\6.10.2\msvc2022_64\mkspecs\win32-msvc;D:\Qt\6.10.2\msvc2022_64\include\QtGui;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
@@ -511,14 +511,14 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
       <UseFullPaths>false</UseFullPaths>
       <WarningLevel>Level4</WarningLevel>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;APP_VERSION="0.1.0";USE_OIDN=1;USE_NRD=1;USE_QT_UI=1;QT_WIDGETS_LIB;QT_CORE_LIB;QT_NO_DEBUG;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;_WIN64;UNICODE;_UNICODE;QT_GUI_LIB;NRD_STATIC_LIBRARY=0;USE_SKETCHUP_SDK=1;USE_TINYGLTF=1;CMAKE_INTDIR="MinSizeRel"</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;APP_VERSION="0.1.5";USE_OIDN=1;USE_NRD=1;USE_QT_UI=1;QT_WIDGETS_LIB;QT_CORE_LIB;QT_NO_DEBUG;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;_WIN64;UNICODE;_UNICODE;QT_GUI_LIB;NRD_STATIC_LIBRARY=0;USE_SKETCHUP_SDK=1;USE_TINYGLTF=1;CMAKE_INTDIR="MinSizeRel"</PreprocessorDefinitions>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <DebugInformationFormat>
       </DebugInformationFormat>
       <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
     </ClCompile>
     <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;APP_VERSION=\"0.1.0\";USE_OIDN=1;USE_NRD=1;USE_QT_UI=1;QT_WIDGETS_LIB;QT_CORE_LIB;QT_NO_DEBUG;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;_WIN64;UNICODE;_UNICODE;QT_GUI_LIB;NRD_STATIC_LIBRARY=0;USE_SKETCHUP_SDK=1;USE_TINYGLTF=1;CMAKE_INTDIR=\"MinSizeRel\"</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;APP_VERSION=\"0.1.5\";USE_OIDN=1;USE_NRD=1;USE_QT_UI=1;QT_WIDGETS_LIB;QT_CORE_LIB;QT_NO_DEBUG;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;_WIN64;UNICODE;_UNICODE;QT_GUI_LIB;NRD_STATIC_LIBRARY=0;USE_SKETCHUP_SDK=1;USE_TINYGLTF=1;CMAKE_INTDIR=\"MinSizeRel\"</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>D:\project-render\build\project-render_autogen\include_MinSizeRel;D:\project-render\src\qt;D:\project-render\resources;D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\Integration;D:\project-render\build\_deps\nri-src\Include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\thirdparty\sketchup_sdk\headers;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\Qt\6.10.2\msvc2022_64\include\QtWidgets;D:\Qt\6.10.2\msvc2022_64\include;D:\Qt\6.10.2\msvc2022_64\include\QtCore;D:\Qt\6.10.2\msvc2022_64\mkspecs\win32-msvc;D:\Qt\6.10.2\msvc2022_64\include\QtGui;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
@@ -711,12 +711,12 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
       <UseFullPaths>false</UseFullPaths>
       <WarningLevel>Level4</WarningLevel>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;APP_VERSION="0.1.0";USE_OIDN=1;USE_NRD=1;USE_QT_UI=1;QT_WIDGETS_LIB;QT_CORE_LIB;QT_NO_DEBUG;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;_WIN64;UNICODE;_UNICODE;QT_GUI_LIB;NRD_STATIC_LIBRARY=0;USE_SKETCHUP_SDK=1;USE_TINYGLTF=1;CMAKE_INTDIR="RelWithDebInfo"</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;APP_VERSION="0.1.5";USE_OIDN=1;USE_NRD=1;USE_QT_UI=1;QT_WIDGETS_LIB;QT_CORE_LIB;QT_NO_DEBUG;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;_WIN64;UNICODE;_UNICODE;QT_GUI_LIB;NRD_STATIC_LIBRARY=0;USE_SKETCHUP_SDK=1;USE_TINYGLTF=1;CMAKE_INTDIR="RelWithDebInfo"</PreprocessorDefinitions>
       <ObjectFileName>$(IntDir)</ObjectFileName>
       <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
     </ClCompile>
     <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;APP_VERSION=\"0.1.0\";USE_OIDN=1;USE_NRD=1;USE_QT_UI=1;QT_WIDGETS_LIB;QT_CORE_LIB;QT_NO_DEBUG;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;_WIN64;UNICODE;_UNICODE;QT_GUI_LIB;NRD_STATIC_LIBRARY=0;USE_SKETCHUP_SDK=1;USE_TINYGLTF=1;CMAKE_INTDIR=\"RelWithDebInfo\"</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;APP_VERSION=\"0.1.5\";USE_OIDN=1;USE_NRD=1;USE_QT_UI=1;QT_WIDGETS_LIB;QT_CORE_LIB;QT_NO_DEBUG;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;_WIN64;UNICODE;_UNICODE;QT_GUI_LIB;NRD_STATIC_LIBRARY=0;USE_SKETCHUP_SDK=1;USE_TINYGLTF=1;CMAKE_INTDIR=\"RelWithDebInfo\"</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>D:\project-render\build\project-render_autogen\include_RelWithDebInfo;D:\project-render\src\qt;D:\project-render\resources;D:\project-render\thirdparty\Streamline\external\dx-agility-sdk-headers-1.714.0-preview\include;D:\project-render\thirdparty\Streamline\include;D:\project-render\thirdparty\Streamline\external\json\include;D:\project-render\thirdparty\NRD\Include;D:\project-render\thirdparty\NRD\Integration;D:\project-render\build\_deps\nri-src\Include;D:\project-render\build\_deps\imgui-src;D:\project-render\build\_deps\imgui-src\backends;D:\project-render\thirdparty\sketchup_sdk\headers;D:\project-render\src\assets;D:\project-render\repos\vcpkg\installed\x64-windows\include;D:\project-render\repos\vcpkg\installed\x64-windows\include\miniz;D:\Qt\6.10.2\msvc2022_64\include\QtWidgets;D:\Qt\6.10.2\msvc2022_64\include;D:\Qt\6.10.2\msvc2022_64\include\QtCore;D:\Qt\6.10.2\msvc2022_64\mkspecs\win32-msvc;D:\Qt\6.10.2\msvc2022_64\include\QtGui;D:\project-render\thirdparty\oidn\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>

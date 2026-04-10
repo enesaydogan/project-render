@@ -108,7 +108,7 @@ struct Material {
   bool isGrass = false;
   float grassColor[3] = {0.34f, 0.52f, 0.21f};
   float grassBladeSize = 0.6f;
-  float grassBladeCount = 48.0f; // density in blades per square meter
+  float grassBladeCount = 48.0f; // density in grass patches per square meter
   float grassBladeVariation = 0.45f; // 0=no randomness, 1=full random scale/yaw
 
   // Canonical OpenPBR runtime subset fields.
