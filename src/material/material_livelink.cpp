@@ -20,8 +20,12 @@ void ApplyPayloadToMaterial(const LiveLink::MaterialChangedPayload &payload,
   if (resolveTextureIndex) {
     material->diffuseTexture = resolveTextureIndex(
         payload.baseColorTextureBlobHash, payload.baseColorTextureUri);
+    material->opacityTexture = resolveTextureIndex(
+        payload.opacityTextureBlobHash, payload.opacityTextureUri);
     material->normalTexture = resolveTextureIndex(
         payload.normalTextureBlobHash, payload.normalTextureUri);
+    material->coatNormalTexture = resolveTextureIndex(
+        payload.coatNormalTextureBlobHash, payload.coatNormalTextureUri);
     material->emissiveTexture = resolveTextureIndex(
         payload.emissiveTextureBlobHash, payload.emissiveTextureUri);
     material->occlusionTexture = resolveTextureIndex(
@@ -33,10 +37,16 @@ void ApplyPayloadToMaterial(const LiveLink::MaterialChangedPayload &payload,
     material->roughnessGlossTexture = resolveTextureIndex(
         payload.roughnessGlossTextureBlobHash,
         payload.roughnessGlossTextureUri);
+    material->specularColorTexture = resolveTextureIndex(
+        payload.specularColorTextureBlobHash, payload.specularColorTextureUri);
+    material->thicknessTexture = resolveTextureIndex(
+        payload.thicknessTextureBlobHash, payload.thicknessTextureUri);
   }
 
   material->diffuseTextureAmount =
       std::clamp(payload.baseColorTextureAmount, 0.0f, 1.0f);
+  material->opacityTextureAmount =
+      std::clamp(payload.opacityTextureAmount, 0.0f, 1.0f);
   material->metalRoughTextureAmount =
       std::clamp(payload.packedSurfaceTextureAmount, 0.0f, 1.0f);
   material->metalnessTextureAmount =
@@ -45,23 +55,42 @@ void ApplyPayloadToMaterial(const LiveLink::MaterialChangedPayload &payload,
       std::clamp(payload.roughnessGlossTextureAmount, 0.0f, 1.0f);
   material->normalTextureAmount =
       std::clamp(payload.normalTextureAmount, 0.0f, 1.0f);
+  material->coatNormalTextureAmount =
+      std::clamp(payload.coatNormalTextureAmount, 0.0f, 1.0f);
   material->occlusionTextureAmount =
       std::clamp(payload.occlusionTextureAmount, 0.0f, 1.0f);
   material->emissiveTextureAmount =
       std::clamp(payload.emissiveTextureAmount, 0.0f, 1.0f);
+  material->specularColorTextureAmount =
+      std::clamp(payload.specularColorTextureAmount, 0.0f, 1.0f);
+  material->thicknessTextureAmount =
+      std::clamp(payload.thicknessTextureAmount, 0.0f, 1.0f);
 
   material->emissiveIntensity = payload.emissiveIntensity;
   material->roughness = payload.roughness;
   material->metalness = payload.metalness;
   material->specularWeight = payload.specularWeight;
+  for (size_t channel = 0; channel < payload.specularColor.size();
+       ++channel) {
+    material->specularColor[channel] = payload.specularColor[channel];
+  }
   material->ior = payload.ior;
   material->transmissionWeight = payload.transmissionWeight;
   for (size_t channel = 0; channel < payload.transmissionColor.size();
        ++channel) {
     material->transmissionColor[channel] = payload.transmissionColor[channel];
   }
+  material->thickness = payload.thickness;
+  material->attenuationDistance = payload.attenuationDistance;
   material->coatWeight = payload.coatWeight;
   material->coatRoughness = payload.coatRoughness;
+  material->coatIor = payload.coatIor;
+  material->anisotropy = payload.anisotropy;
+  material->anisotropyRotation = payload.anisotropyRotation;
+  material->sheenWeight = payload.sheenWeight;
+  for (size_t channel = 0; channel < payload.sheenColor.size(); ++channel) {
+    material->sheenColor[channel] = payload.sheenColor[channel];
+  }
   material->thinWalled = payload.thinWalled;
   material->translucency = payload.translucency;
   material->uvScale[0] =
@@ -81,6 +110,7 @@ void ApplyPayloadToMaterial(const LiveLink::MaterialChangedPayload &payload,
       (std::max)(0.0f, payload.triPlanarNormalStrength);
   material->doubleSided = payload.doubleSided;
   material->alphaMode = payload.alphaMode.empty() ? "OPAQUE" : payload.alphaMode;
+  material->alphaCutoff = std::clamp(payload.alphaCutoff, 0.0f, 1.0f);
   material->invertRoughnessTexture = payload.invertRoughnessTexture;
   material->workflow = payload.workflow;
   material->runtimeMetalRoughTexture = -1;

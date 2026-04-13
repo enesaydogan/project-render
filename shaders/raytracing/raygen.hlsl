@@ -44,6 +44,7 @@ void RayGen()
     payload.packedSurface = PackPayloadSurface(1.0, 0.0, 0.0, 0.0);
     payload.packedIorType = PackPayloadIorType(1.0, RAY_TYPE_PRIMARY, false, 1.0);
     payload.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
+    payload.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
 
 #ifdef RAYGEN_DEBUG
     // Debug mode: output UV gradient to verify ray generation and output copy

@@ -320,6 +320,8 @@ void MaterialEditorPanel::createUi()
     surfaceForm->addRow(m_secondarySurfaceLabel, m_metalness);
     m_specularWeight = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(tr("Specular Weight"), m_specularWeight);
+    m_specularColorButton = new QPushButton(tr("Pick"), surfaceTab);
+    surfaceForm->addRow(tr("Specular Color"), m_specularColorButton);
     m_ior = CreateSliderControl(0.01, 10.0, 0.01, 3);
     m_ior->setLogarithmic(true);
     surfaceForm->addRow(tr("IOR"), m_ior);
@@ -333,12 +335,26 @@ void MaterialEditorPanel::createUi()
     surfaceForm->addRow(tr("Transmission"), m_transmission);
     m_transmissionColorButton = new QPushButton(tr("Pick"), surfaceTab);
     surfaceForm->addRow(tr("Transmission Color"), m_transmissionColorButton);
+    m_thickness = CreateSliderControl(0.0, 1.0, 0.001, 4);
+    surfaceForm->addRow(tr("Thickness"), m_thickness);
+    m_attenuationDistance = CreateSliderControl(0.0, 100.0, 0.01, 3);
+    surfaceForm->addRow(tr("Attenuation Dist"), m_attenuationDistance);
     m_coatWeight = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(tr("Coat"), m_coatWeight);
     m_coatRoughness = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(tr("Coat Roughness"), m_coatRoughness);
+    m_coatIor = CreateSliderControl(1.0, 3.0, 0.01, 3);
+    surfaceForm->addRow(tr("Coat IOR"), m_coatIor);
     m_translucency = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(tr("Translucency"), m_translucency);
+    m_anisotropy = CreateSliderControl(-1.0, 1.0, 0.01, 3);
+    surfaceForm->addRow(tr("Anisotropy"), m_anisotropy);
+    m_anisotropyRotation = CreateSliderControl(0.0, 360.0, 1.0, 1);
+    surfaceForm->addRow(tr("Aniso Rotation"), m_anisotropyRotation);
+    m_sheenWeight = CreateSliderControl(0.0, 1.0, 0.01, 3);
+    surfaceForm->addRow(tr("Sheen"), m_sheenWeight);
+    m_sheenColorButton = new QPushButton(tr("Pick"), surfaceTab);
+    surfaceForm->addRow(tr("Sheen Color"), m_sheenColorButton);
     m_thinWalled = new QCheckBox(tr("Thin Walled"), surfaceTab);
     surfaceForm->addRow(m_thinWalled);
 
@@ -431,12 +447,16 @@ void MaterialEditorPanel::createUi()
     };
 
     createTextureSlot(Albedo, tr("Albedo"));
+    createTextureSlot(Opacity, tr("Opacity"));
     createTextureSlot(PackedMetalRough, tr("Packed Metal / Roughness (Legacy)"));
     createTextureSlot(Metalness, tr("Metalness"));
     createTextureSlot(RoughnessGlossiness, tr("Roughness"));
     createTextureSlot(Normal, tr("Normal"));
+    createTextureSlot(CoatNormal, tr("Coat Normal"));
     createTextureSlot(Occlusion, tr("Occlusion"));
     createTextureSlot(Emissive, tr("Emissive"));
+    createTextureSlot(SpecularColor, tr("Specular Color"));
+    createTextureSlot(Thickness, tr("Thickness"));
     texturesLayout->addStretch(1);
 
     m_tabs->addTab(texturesTab, tr("Textures"));
@@ -486,6 +506,8 @@ void MaterialEditorPanel::createUi()
     m_alphaMode = new QComboBox(flagsTab);
     m_alphaMode->addItems({tr("OPAQUE"), tr("MASK"), tr("BLEND")});
     flagsForm->addRow(tr("Alpha Mode"), m_alphaMode);
+    m_alphaCutoff = CreateSliderControl(0.0, 1.0, 0.01, 3);
+    flagsForm->addRow(tr("Alpha Cutoff"), m_alphaCutoff);
     m_tabs->addTab(flagsTab, tr("Flags"));
 
     auto *qaTab = new QWidget(m_tabs);
@@ -567,35 +589,51 @@ void MaterialEditorPanel::createUi()
             char nameBuf[64];
             strncpy_s(nameBuf, mat.name, _TRUNCATE);
             const int d = mat.diffuseTexture;
+            const int a = mat.opacityTexture;
             const int n = mat.normalTexture;
+            const int cn = mat.coatNormalTexture;
             const int e = mat.emissiveTexture;
             const int o = mat.occlusionTexture;
             const int mr = mat.metalRoughTexture;
             const int mt = mat.metalnessTexture;
             const int rg = mat.roughnessGlossTexture;
+            const int sc = mat.specularColorTexture;
+            const int tk = mat.thicknessTexture;
             const float da = mat.diffuseTextureAmount;
+            const float aa = mat.opacityTextureAmount;
             const float na = mat.normalTextureAmount;
+            const float cna = mat.coatNormalTextureAmount;
             const float ea = mat.emissiveTextureAmount;
             const float oa = mat.occlusionTextureAmount;
             const float mra = mat.metalRoughTextureAmount;
             const float mta = mat.metalnessTextureAmount;
             const float rga = mat.roughnessGlossTextureAmount;
+            const float sca = mat.specularColorTextureAmount;
+            const float tka = mat.thicknessTextureAmount;
             mat = def;
             strncpy_s(mat.name, nameBuf, _TRUNCATE);
             mat.diffuseTexture = d;
+            mat.opacityTexture = a;
             mat.normalTexture = n;
+            mat.coatNormalTexture = cn;
             mat.emissiveTexture = e;
             mat.occlusionTexture = o;
             mat.metalRoughTexture = mr;
             mat.metalnessTexture = mt;
             mat.roughnessGlossTexture = rg;
+            mat.specularColorTexture = sc;
+            mat.thicknessTexture = tk;
             mat.diffuseTextureAmount = da;
+            mat.opacityTextureAmount = aa;
             mat.normalTextureAmount = na;
+            mat.coatNormalTextureAmount = cna;
             mat.emissiveTextureAmount = ea;
             mat.occlusionTextureAmount = oa;
             mat.metalRoughTextureAmount = mra;
             mat.metalnessTextureAmount = mta;
             mat.roughnessGlossTextureAmount = rga;
+            mat.specularColorTextureAmount = sca;
+            mat.thicknessTextureAmount = tka;
         }, true);
     });
     connect(m_resetNoTexButton, &QPushButton::clicked, this, [this]() {
@@ -632,6 +670,23 @@ void MaterialEditorPanel::createUi()
             m.diffuseColor[2] = static_cast<float>(picked.blueF());
         });
     });
+    connect(m_specularColorButton, &QPushButton::clicked, this, [this]() {
+        const int idx = currentMaterialIndex();
+        if (idx < 0) {
+            return;
+        }
+        Asset::Material &mat = g_loadedMaterials[idx];
+        QColor current = getColorFromMaterial(mat.specularColor);
+        QColor picked = QColorDialog::getColor(current, this, tr("Pick Specular Color"));
+        if (!picked.isValid()) {
+            return;
+        }
+        applyMaterialChange([picked](Asset::Material &m) {
+            m.specularColor[0] = static_cast<float>(picked.redF());
+            m.specularColor[1] = static_cast<float>(picked.greenF());
+            m.specularColor[2] = static_cast<float>(picked.blueF());
+        });
+    });
 
     connect(m_transmissionColorButton, &QPushButton::clicked, this, [this]() {
         const int idx = currentMaterialIndex();
@@ -648,6 +703,23 @@ void MaterialEditorPanel::createUi()
             m.transmissionColor[0] = static_cast<float>(picked.redF());
             m.transmissionColor[1] = static_cast<float>(picked.greenF());
             m.transmissionColor[2] = static_cast<float>(picked.blueF());
+        });
+    });
+    connect(m_sheenColorButton, &QPushButton::clicked, this, [this]() {
+        const int idx = currentMaterialIndex();
+        if (idx < 0) {
+            return;
+        }
+        Asset::Material &mat = g_loadedMaterials[idx];
+        QColor current = getColorFromMaterial(mat.sheenColor);
+        QColor picked = QColorDialog::getColor(current, this, tr("Pick Sheen Color"));
+        if (!picked.isValid()) {
+            return;
+        }
+        applyMaterialChange([picked](Asset::Material &m) {
+            m.sheenColor[0] = static_cast<float>(picked.redF());
+            m.sheenColor[1] = static_cast<float>(picked.greenF());
+            m.sheenColor[2] = static_cast<float>(picked.blueF());
         });
     });
 
@@ -754,6 +826,22 @@ void MaterialEditorPanel::createUi()
             m.transmissionWeight = static_cast<float>(value);
         }, true);
     });
+    connect(m_thickness->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            m.thickness = static_cast<float>(value);
+        });
+    });
+    connect(m_attenuationDistance->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            m.attenuationDistance = static_cast<float>(value);
+        });
+    });
     connect(m_coatWeight->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
@@ -770,6 +858,14 @@ void MaterialEditorPanel::createUi()
             m.coatRoughness = static_cast<float>(value);
         });
     });
+    connect(m_coatIor->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            m.coatIor = static_cast<float>(value);
+        });
+    });
     connect(m_translucency->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
@@ -777,6 +873,30 @@ void MaterialEditorPanel::createUi()
         applyMaterialChange([value](Asset::Material &m) {
             m.translucency = static_cast<float>(value);
         }, true);
+    });
+    connect(m_anisotropy->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            m.anisotropy = static_cast<float>(value);
+        });
+    });
+    connect(m_anisotropyRotation->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            m.anisotropyRotation = static_cast<float>(value);
+        });
+    });
+    connect(m_sheenWeight->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            m.sheenWeight = static_cast<float>(value);
+        });
     });
     connect(m_thinWalled, &QCheckBox::toggled, this, [this](bool enabled) {
         if (m_syncing) {
@@ -936,6 +1056,15 @@ void MaterialEditorPanel::createUi()
         }
         applyMaterialChange([index](Asset::Material &m) {
             m.alphaMode = AlphaModeFromIndex(index);
+        }, true);
+        m_alphaCutoff->setEnabled(index == 1);
+    });
+    connect(m_alphaCutoff->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            m.alphaCutoff = static_cast<float>(value);
         }, true);
     });
 
@@ -1226,12 +1355,20 @@ void MaterialEditorPanel::syncInspector()
                               ? mat.specularWeight
                               : mat.metalness);
     m_specularWeight->setValue(mat.specularWeight);
+    setColorButton(m_specularColorButton, getColorFromMaterial(mat.specularColor));
     m_ior->setValue(mat.ior);
     m_transmission->setValue(mat.transmissionWeight);
     setColorButton(m_transmissionColorButton, getColorFromMaterial(mat.transmissionColor));
+    m_thickness->setValue(mat.thickness);
+    m_attenuationDistance->setValue(mat.attenuationDistance);
     m_coatWeight->setValue(mat.coatWeight);
     m_coatRoughness->setValue(mat.coatRoughness);
+    m_coatIor->setValue(mat.coatIor);
     m_translucency->setValue(mat.translucency);
+    m_anisotropy->setValue(mat.anisotropy);
+    m_anisotropyRotation->setValue(mat.anisotropyRotation);
+    m_sheenWeight->setValue(mat.sheenWeight);
+    setColorButton(m_sheenColorButton, getColorFromMaterial(mat.sheenColor));
     m_thinWalled->setChecked(mat.thinWalled > 0.5f);
 
     m_grassEnabled->setChecked(mat.isGrass);
@@ -1267,6 +1404,8 @@ void MaterialEditorPanel::syncInspector()
 
     m_doubleSided->setChecked(mat.doubleSided);
     m_alphaMode->setCurrentIndex(AlphaModeIndex(mat.alphaMode));
+    m_alphaCutoff->setValue(mat.alphaCutoff);
+    m_alphaCutoff->setEnabled(mat.alphaMode == "MASK");
 
     updateTextureOptions();
     for (int slot = 0; slot < TextureSlotCount; ++slot) {
@@ -1303,6 +1442,13 @@ void MaterialEditorPanel::updateQa()
     }
     if (mat.coatWeight > 0.01f && mat.coatRoughness < 0.02f) {
         warnings << tr("Coat roughness very low; may sparkle.");
+    }
+    if (mat.transmissionWeight > 0.01f && mat.thinWalled <= 0.5f &&
+        mat.thickness <= 1.0e-5f && mat.thicknessTexture < 0) {
+        warnings << tr("Solid transmissive material has no thickness; volume tint will be weak.");
+    }
+    if (mat.opacityTexture >= 0 && mat.alphaMode == "OPAQUE") {
+        warnings << tr("Opacity texture is assigned while alpha mode is OPAQUE.");
     }
 
     if (warnings.isEmpty()) {
@@ -1386,6 +1532,8 @@ int MaterialEditorPanel::textureIndexForSlot(const Asset::Material &mat, Texture
     switch (slot) {
     case Albedo:
         return MaterialSystem::GetTextureIndex(mat, MaterialSystem::TextureSlot::BaseColor);
+    case Opacity:
+        return MaterialSystem::GetTextureIndex(mat, MaterialSystem::TextureSlot::Opacity);
     case PackedMetalRough:
         return MaterialSystem::GetTextureIndex(mat, MaterialSystem::TextureSlot::PackedSurface);
     case Metalness:
@@ -1394,10 +1542,16 @@ int MaterialEditorPanel::textureIndexForSlot(const Asset::Material &mat, Texture
         return MaterialSystem::GetTextureIndex(mat, MaterialSystem::TextureSlot::RoughnessOrGlossiness);
     case Normal:
         return MaterialSystem::GetTextureIndex(mat, MaterialSystem::TextureSlot::Normal);
+    case CoatNormal:
+        return MaterialSystem::GetTextureIndex(mat, MaterialSystem::TextureSlot::CoatNormal);
     case Occlusion:
         return MaterialSystem::GetTextureIndex(mat, MaterialSystem::TextureSlot::Occlusion);
     case Emissive:
         return MaterialSystem::GetTextureIndex(mat, MaterialSystem::TextureSlot::Emissive);
+    case SpecularColor:
+        return MaterialSystem::GetTextureIndex(mat, MaterialSystem::TextureSlot::SpecularColor);
+    case Thickness:
+        return MaterialSystem::GetTextureIndex(mat, MaterialSystem::TextureSlot::Thickness);
     default:
         return -1;
     }
@@ -1408,6 +1562,9 @@ void MaterialEditorPanel::setTextureIndexForSlot(Asset::Material &mat, TextureSl
     switch (slot) {
     case Albedo:
         MaterialSystem::SetTextureIndex(mat, MaterialSystem::TextureSlot::BaseColor, index);
+        break;
+    case Opacity:
+        MaterialSystem::SetTextureIndex(mat, MaterialSystem::TextureSlot::Opacity, index);
         break;
     case PackedMetalRough:
         MaterialSystem::SetTextureIndex(mat, MaterialSystem::TextureSlot::PackedSurface, index);
@@ -1421,11 +1578,20 @@ void MaterialEditorPanel::setTextureIndexForSlot(Asset::Material &mat, TextureSl
     case Normal:
         MaterialSystem::SetTextureIndex(mat, MaterialSystem::TextureSlot::Normal, index);
         break;
+    case CoatNormal:
+        MaterialSystem::SetTextureIndex(mat, MaterialSystem::TextureSlot::CoatNormal, index);
+        break;
     case Occlusion:
         MaterialSystem::SetTextureIndex(mat, MaterialSystem::TextureSlot::Occlusion, index);
         break;
     case Emissive:
         MaterialSystem::SetTextureIndex(mat, MaterialSystem::TextureSlot::Emissive, index);
+        break;
+    case SpecularColor:
+        MaterialSystem::SetTextureIndex(mat, MaterialSystem::TextureSlot::SpecularColor, index);
+        break;
+    case Thickness:
+        MaterialSystem::SetTextureIndex(mat, MaterialSystem::TextureSlot::Thickness, index);
         break;
     default: break;
     }

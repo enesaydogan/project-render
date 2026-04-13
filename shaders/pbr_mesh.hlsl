@@ -63,15 +63,21 @@ cbuffer MaterialCB : register(b1)
     float4 surfaceParams;       // x=roughness, y=metalness, z=specularWeight
     float4 transmissionParams;  // rgb=transmissionColor, a=transmissionWeight
     float4 emissiveColor;       // rgb, w=ior
-    int4 textureIndices;        // x=diffuse, z=normal
+    int4 textureIndices;        // x=diffuse, y=opacity, z=normal, w=specularColor
     int4 emissiveAndPad;        // x=emissive, y=occlusion, z=metalRough
-    float4 extraParams;         // x=emissiveIntensity
+    float4 extraParams;         // x=emissiveIntensity, y=alphaCutoff, z=isMask, w=isGrass
     float4 coatLayerParams;     // x=coatWeight, y=coatRoughness, z=thinWalled, w=translucency
     float4 uvTransform;         // xy=uvScale, zw=uvOffset
     float4 triPlanarParams;     // x=enabled, y=scale, z=sharpness, w=normalStrength
     float4 mappingVariationParams; // x=mode, y=offsetJitter, z=materialRotationDegrees, w=reserved
     float4 textureWeight0;      // x=baseColor, y=packedSurface, z=metalness, w=roughnessGloss
-    float4 textureWeight1;      // x=normal, y=occlusion, z=emissive
+    float4 textureWeight1;      // x=normal, y=occlusion, z=emissive, w=opacity
+    int4 textureIndices2;       // x=coatNormal, y=thickness
+    float4 textureWeight2;      // x=coatNormal, y=thickness, z=specularColor
+    float4 volumeParams;        // x=thickness, y=attenuationDistance, z=alphaCutoff, w=coatIor
+    float4 specularColor;       // rgb=specularColor, a=specularColorTexAmount
+    float4 sheenColor;          // rgb=sheenColor
+    float4 lobeParams;          // x=anisotropy, y=anisoRotation, z=sheenWeight, w=coatNormalAmount
 };
 
 // Texture array - bonded as an unbounded array in SM 6.x
@@ -531,18 +537,62 @@ VSOutputShadow VSMainGrassShadow(VSInputMesh input, uint instanceId : SV_Instanc
 // Improved microfacet BRDF helpers
 static const float PI = 3.14159265359;
 
-// GGX/Trowbridge-Reitz normal distribution with anisotropy support
-float DistributionGGX(float3 N, float3 H, float roughness)
+float DielectricF0FromIor(float ior)
 {
-    float a = roughness * roughness;
-    float a2 = a * a;
+    float safeIor = max(ior, 1.0 + 1.0e-4);
+    float f0 = (safeIor - 1.0) / (safeIor + 1.0);
+    return f0 * f0;
+}
+
+void BuildShadingBasis(float3 N, float4 tangent, float rotationDegrees,
+                       out float3 T, out float3 B)
+{
+    float3 tangentDir = tangent.xyz;
+    if (length(tangentDir) < 1.0e-4) {
+        float3 helper = abs(N.z) < 0.999 ? float3(0.0, 0.0, 1.0)
+                                         : float3(0.0, 1.0, 0.0);
+        tangentDir = normalize(cross(helper, N));
+    } else {
+        tangentDir = normalize(tangentDir - N * dot(N, tangentDir));
+    }
+
+    float handedness = tangent.w >= 0.0 ? 1.0 : -1.0;
+    float3 bitangentDir = normalize(cross(N, tangentDir)) * handedness;
+
+    float rotationRadians = radians(rotationDegrees);
+    float sinR = sin(rotationRadians);
+    float cosR = cos(rotationRadians);
+    T = normalize(tangentDir * cosR + bitangentDir * sinR);
+    B = normalize(cross(N, T)) * handedness;
+}
+
+// GGX/Trowbridge-Reitz normal distribution with anisotropy support
+float DistributionGGX(float3 N, float3 H, float roughness,
+                      float anisotropy, float3 T, float3 B)
+{
+    float a = max(roughness * roughness, 0.02);
     float NdotH = max(dot(N, H), 0.0);
-    float NdotH2 = NdotH * NdotH;
-    
-    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
-    denom = PI * denom * denom;
-    
-    return a2 / max(denom, 0.0001);
+
+    if (abs(anisotropy) <= 1.0e-4 || length(T) <= 1.0e-4 || length(B) <= 1.0e-4) {
+        float a2 = a * a;
+        float NdotH2 = NdotH * NdotH;
+        float denom = (NdotH2 * (a2 - 1.0) + 1.0);
+        denom = PI * denom * denom;
+        return a2 / max(denom, 0.0001);
+    }
+
+    float aspect = sqrt(max(1.0 - 0.85 * min(abs(anisotropy), 0.99), 0.15));
+    float ax = anisotropy >= 0.0 ? a / aspect : a * aspect;
+    float ay = anisotropy >= 0.0 ? a * aspect : a / aspect;
+    ax = max(ax, 1.0e-3);
+    ay = max(ay, 1.0e-3);
+
+    float TdotH = dot(T, H);
+    float BdotH = dot(B, H);
+    float d = (TdotH * TdotH) / (ax * ax) +
+              (BdotH * BdotH) / (ay * ay) +
+              NdotH * NdotH;
+    return 1.0 / max(PI * ax * ay * d * d, 1.0e-4);
 }
 
 // Smith's shadowing-masking function with height-correlated masking
@@ -575,6 +625,18 @@ float3 FresnelSchlick(float cosTheta, float3 F0)
 float3 FresnelSchlickRoughness(float cosTheta, float3 F0, float roughness)
 {
     return F0 + (max(float3(1.0 - roughness, 1.0 - roughness, 1.0 - roughness), F0) - F0) * pow(saturate(1.0 - cosTheta), 5.0);
+}
+
+float3 EvaluateSheen(float3 sheenTint, float sheenWeight, float VdotH,
+                     float metalness)
+{
+    float weight = saturate(sheenWeight) * (1.0 - saturate(metalness));
+    if (weight <= 1.0e-4) {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    float sheenF = pow(saturate(1.0 - VdotH), 5.0);
+    return saturate(sheenTint) * (weight * sheenF);
 }
 
 float2 EnvBRDFApprox(float3 F0, float roughness, float NdotV)
@@ -687,6 +749,11 @@ PSOutput PSMainMesh(PSInputMesh input)
         BaseColor *= BlendTextureRgb(sRGBToLinear(diffSample.rgb), textureWeight0.x);
         alpha *= BlendTextureScalar(diffSample.a, textureWeight0.x);
     }
+    if (textureIndices.y >= 0) {
+        float opacitySample = triPlanar ? SampleTriPlanar(textureIndices.y, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos).r
+                                        : textures[textureIndices.y].Sample(linearSampler, uv).r;
+        alpha *= BlendTextureScalar(opacitySample, textureWeight1.w);
+    }
 
     float alphaCutoff = extraParams.y;
     bool alphaMasked = extraParams.z > 0.5;
@@ -715,15 +782,26 @@ PSOutput PSMainMesh(PSInputMesh input)
     // OpenPBR subset: dielectric F0 from IOR scaled by specular weight.
     float ior = max(emissiveColor.w, 1.0);
     float specularWeight = saturate(surfaceParams.z);
+    float3 specularTint = saturate(specularColor.rgb);
+    if (textureIndices.w >= 0) {
+        float3 specSample = triPlanar ? SampleTriPlanar(textureIndices.w, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos).rgb
+                                      : textures[textureIndices.w].Sample(linearSampler, uv).rgb;
+        specularTint *= BlendTextureRgb(sRGBToLinear(specSample), textureWeight2.z);
+    }
     float f0s = (ior - 1.0) / (ior + 1.0);
     f0s = f0s * f0s;
-    float3 dielectricF0 = float3(f0s, f0s, f0s) * specularWeight;
+    float3 dielectricF0 = float3(f0s, f0s, f0s) * specularWeight * specularTint;
     float3 F0 = lerp(dielectricF0, BaseColor, metalness);
     float3 DiffuseAlbedo = BaseColor * (1.0 - metalness) * (1.0 - transmission);
     
     // Normal
     float3 N = triPlanar ? SampleTriPlanarNormal(textureIndices.z, worldPos, worldNormal, triScale, triSharp, triNormStrength, textureWeight1.x, objectOrigin, objectPos)
                          : GetNormalFromMap(uv, worldNormal, input.tangent, textureIndices.z, textureWeight1.x);
+    if (coatLayerParams.x > 0.001 && textureIndices2.x >= 0 && lobeParams.w > 1.0e-4) {
+        float3 coatN = triPlanar ? SampleTriPlanarNormal(textureIndices2.x, worldPos, worldNormal, triScale, triSharp, triNormStrength, lobeParams.w, objectOrigin, objectPos)
+                                 : GetNormalFromMap(uv, worldNormal, input.tangent, textureIndices2.x, lobeParams.w);
+        N = normalize(lerp(N, coatN, saturate(coatLayerParams.x)));
+    }
 
     // Emissive with user-defined intensity
     float3 emiss = emissiveColor.rgb * extraParams.x;
@@ -812,9 +890,15 @@ PSOutput PSMainMesh(PSInputMesh input)
     float NdotH = saturate(dot(N, H));
     float VdotH = saturate(dot(V, H));
 
-    float NDF = DistributionGGX(N, H, roughness);
+    float anisotropy = clamp(lobeParams.x, -1.0, 1.0);
+    float3 T = float3(0.0, 0.0, 0.0);
+    float3 B = float3(0.0, 0.0, 0.0);
+    BuildShadingBasis(N, input.tangent, lobeParams.y, T, B);
+
+    float NDF = DistributionGGX(N, H, roughness, anisotropy, T, B);
     float G = GeometrySmith(N, V, L, roughness);
     float3 F = FresnelSchlick(VdotH, F0);
+    float3 sheenBrdf = EvaluateSheen(sheenColor.rgb, lobeParams.z, VdotH, metalness);
 
     float3 numerator = NDF * G * F;
     float denominator = 4.0 * NdotV * NdotL + 0.0001;
@@ -823,8 +907,9 @@ PSOutput PSMainMesh(PSInputMesh input)
     // Clearcoat (secondary GGX lobe)
     float3 coatSpec = float3(0.0, 0.0, 0.0);
     if (clearcoat > 0.001) {
-        float3 F0c = float3(0.04, 0.04, 0.04);
-        float NDFc = DistributionGGX(N, H, clearcoatRoughness);
+        float coatF0 = DielectricF0FromIor(volumeParams.w);
+        float3 F0c = float3(coatF0, coatF0, coatF0);
+        float NDFc = DistributionGGX(N, H, clearcoatRoughness, 0.0, T, B);
         float Gc = GeometrySmith(N, V, L, clearcoatRoughness);
         float3 Fc = FresnelSchlick(VdotH, F0c);
         float3 numc = NDFc * Gc * Fc;
@@ -836,7 +921,7 @@ PSOutput PSMainMesh(PSInputMesh input)
 
     float3 radiance = lightColor.rgb * lightColor.w;
     
-    float3 baseDirect = (diffuseTerm + spec) * radiance * NdotL;
+    float3 baseDirect = (diffuseTerm + spec + sheenBrdf) * radiance * NdotL;
     float3 coatDirect = coatSpec * radiance * NdotL;
     float3 directLight = baseDirect * (1.0 - clearcoat) + coatDirect * clearcoat;
 
@@ -878,7 +963,8 @@ PSOutput PSMainMesh(PSInputMesh input)
     if (clearcoat > 0.001) {
         float2 envUV_spec = DirectionToUV(R);
         float3 prefilteredCoat = envMap.SampleLevel(linearSampler, envUV_spec, clearcoatRoughness * 7.0).rgb;
-        float3 F0c = float3(0.04, 0.04, 0.04);
+        float coatF0 = DielectricF0FromIor(volumeParams.w);
+        float3 F0c = float3(coatF0, coatF0, coatF0);
         float2 envBrdfCoat = EnvBRDFApprox(F0c, clearcoatRoughness, NdotV);
         coat_ibl = prefilteredCoat * (F0c * envBrdfCoat.x + envBrdfCoat.y);
     }
@@ -899,6 +985,16 @@ PSOutput PSMainMesh(PSInputMesh input)
                      kRasterDiffuseIrradianceScale;
         float3 envBack = (DiffuseAlbedo * irradianceBack) * (ao * kRasterDiffuseAmbientScale);
         ambient += envBack * translucency;
+    }
+
+    float sheenIblWeight = saturate(lobeParams.z) * (1.0 - metalness);
+    if (sheenIblWeight > 1.0e-4) {
+        float2 envUV_sheen = DirectionToUV(reflect(-V, N));
+        float3 sheenEnv = envMap.SampleLevel(linearSampler, envUV_sheen,
+                                             roughness * 6.0 + 2.0).rgb;
+        float grazing = pow(saturate(1.0 - NdotV), 4.0);
+        ambient += sheenEnv * saturate(sheenColor.rgb) *
+                   (sheenIblWeight * grazing * 0.06 * ao);
     }
 
     float skyHemi = saturate(N.y * 0.5 + 0.5);

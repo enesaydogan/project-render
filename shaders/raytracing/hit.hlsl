@@ -195,6 +195,36 @@ float3 BlendNormalSample(float3 tangentNormal, float amount)
                           saturate(amount)));
 }
 
+float3 ApplyVolumeAttenuation(float3 transmissionColor, float thickness,
+                              float attenuationDistance)
+{
+    if (thickness <= 1.0e-5 || attenuationDistance <= 1.0e-5) {
+        return saturate(transmissionColor);
+    }
+
+    float d = max(thickness / attenuationDistance, 0.0);
+    return saturate(pow(max(transmissionColor, float3(1.0e-4, 1.0e-4, 1.0e-4)), d));
+}
+
+float DielectricF0FromIorLocal(float ior)
+{
+    float safeIor = max(ior, 1.0 + 1.0e-4);
+    float f0 = (safeIor - 1.0) / (safeIor + 1.0);
+    return f0 * f0;
+}
+
+float3 EvaluateSheenBrdf(float3 sheenTint, float sheenWeight, float VdotH,
+                         float metalness)
+{
+    float weight = saturate(sheenWeight) * (1.0 - saturate(metalness));
+    if (weight <= 1.0e-4) {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    float sheenF = pow(saturate(1.0 - VdotH), 5.0);
+    return saturate(sheenTint) * (weight * sheenF);
+}
+
 float3 SampleTriPlanarNormal(int texIndex, float3 worldPos, float3 worldNormal,
                              float scale, float sharpness, float strength,
                              float amount, float4 variationParams,
@@ -299,6 +329,10 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     int texMR   = UnpackTextureIndexLow(mat.packedTextures.y);
     int texOcc  = UnpackTextureIndexHigh(mat.packedTextures.y);
     int texEmis = UnpackTextureIndexLow(mat.packedTextures.z);
+    int texOpacity = UnpackTextureIndexHigh(mat.packedTextures.z);
+    int texSpecular = UnpackTextureIndexLow(mat.packedTextures.w);
+    int texThickness = UnpackTextureIndexHigh(mat.packedTextures.w);
+    int texCoatNormal = UnpackTextureIndexLow(matExtra.extraPackedTextures.x);
 
     float4 arch0 = matExtra.coatLayerParams;
     float4 uvXf = matExtra.uvTransform;
@@ -306,6 +340,10 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     float4 mappingVariation = matExtra.mappingVariationParams;
     float4 texWeight0 = matExtra.textureWeight0;
     float4 texWeight1 = matExtra.textureWeight1;
+    float4 volumeParams = matExtra.volumeParams;
+    float4 specularColorParams = matExtra.specularColor;
+    float4 sheenColorParams = matExtra.sheenColor;
+    float4 lobeParams = matExtra.lobeParams;
     float3 transmissionColor = saturate(matExtra.transmissionColor.rgb);
     float emissiveIntensity = max(0.0, matExtra.shadingParams.x);
     float specularWeight = saturate(matExtra.shadingParams.y);
@@ -381,11 +419,19 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
 
     // Sample textures
     float3 BaseColor = diffColor.rgb;
+    float opacity = diffColor.a;
     int mode = (int)SHADER_DEBUG_MODE;
     if (texDiff >= 0) {
-        float3 bc = triPlanar ? SampleTriPlanar(texDiff, P, worldNormal, triScale, triSharp, mappingVariation, objectOrigin, primIndex, textureLod, dominantTriPlanar).rgb
-                              : textures[texDiff].SampleLevel(linearSampler, uv, textureLod).rgb;
-        BaseColor *= BlendTextureRgb(sRGBToLinear(bc), texWeight0.x);
+        float4 diffSample = triPlanar ? SampleTriPlanar(texDiff, P, worldNormal, triScale, triSharp, mappingVariation, objectOrigin, primIndex, textureLod, dominantTriPlanar)
+                                      : textures[texDiff].SampleLevel(linearSampler, uv, textureLod);
+        BaseColor *= BlendTextureRgb(sRGBToLinear(diffSample.rgb), texWeight0.x);
+        opacity *= BlendTextureScalar(diffSample.a, texWeight0.x);
+        SHADER_COUNTER_ADD(SHADER_COUNTER_TEXTURE_SAMPLES, 1);
+    }
+    if (texOpacity >= 0) {
+        float opacitySample = triPlanar ? SampleTriPlanar(texOpacity, P, worldNormal, triScale, triSharp, mappingVariation, objectOrigin, primIndex, textureLod, dominantTriPlanar).r
+                                        : textures[texOpacity].SampleLevel(linearSampler, uv, textureLod).r;
+        opacity *= BlendTextureScalar(opacitySample, texWeight1.w);
         SHADER_COUNTER_ADD(SHADER_COUNTER_TEXTURE_SAMPLES, 1);
     }
     
@@ -410,7 +456,13 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     // Attenuate diffuse by transmission (refraction) for dielectrics.
     // This removes the "tint" or "solid" look from glass.
     float transmission = saturate(pbr.z) * (1.0 - metalness);
+    if (alphaCutoff < 0.0 && opacity < 0.999) {
+        transmission = max(transmission, 1.0 - saturate(opacity));
+    }
     float3 DiffuseAlbedo = BaseColor * (1.0 - metalness) * (1.0 - transmission);
+    if (alphaCutoff < 0.0) {
+        DiffuseAlbedo *= saturate(opacity);
+    }
     float clearcoat = saturate(arch0.x);
     float clearcoatRoughness = max(arch0.y, 0.02);
     float grassRootAmount = 0.0;
@@ -468,16 +520,28 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
 
     // Standard PBR Model (dielectric F0 from IOR)
     float ior = max(emisColor.w, 1.0);
+    float3 specularColor = saturate(specularColorParams.rgb);
+    if (texSpecular >= 0) {
+        float3 specSample = triPlanar ? SampleTriPlanar(texSpecular, P, worldNormal, triScale, triSharp, mappingVariation, objectOrigin, primIndex, textureLod, dominantTriPlanar).rgb
+                                      : textures[texSpecular].SampleLevel(linearSampler, uv, textureLod).rgb;
+        specularColor *= BlendTextureRgb(sRGBToLinear(specSample), specularColorParams.a);
+        SHADER_COUNTER_ADD(SHADER_COUNTER_TEXTURE_SAMPLES, 1);
+    }
     float f0s = (ior - 1.0) / (ior + 1.0);
     f0s = f0s * f0s;
     float3 dielectricF0 = float3(f0s * specularWeight,
                                  f0s * specularWeight,
-                                 f0s * specularWeight);
+                                 f0s * specularWeight) * specularColor;
     float3 F0 = lerp(dielectricF0, BaseColor, metalness);
     
     // Normal mapping
     float3 N = triPlanar ? SampleTriPlanarNormal(texNorm, P, worldNormal, triScale, triSharp, triNormStrength, texWeight1.x, mappingVariation, objectOrigin, primIndex, textureLod, dominantTriPlanar)
                          : GetNormalFromMap(uv, worldNormal, worldTangent, texNorm, texWeight1.x, textureLod);
+    if (clearcoat > 0.001 && texCoatNormal >= 0 && lobeParams.x > 1.0e-4) {
+        float3 coatN = triPlanar ? SampleTriPlanarNormal(texCoatNormal, P, worldNormal, triScale, triSharp, triNormStrength, lobeParams.x, mappingVariation, objectOrigin, primIndex, textureLod, dominantTriPlanar)
+                                 : GetNormalFromMap(uv, worldNormal, worldTangent, texCoatNormal, lobeParams.x, textureLod);
+        N = normalize(lerp(N, coatN, saturate(clearcoat)));
+    }
     // Two-sided shading guard for reverse-oriented faces.
     float3 viewDirTwoSided = normalize(-WorldRayDirection());
     if (dot(N, viewDirTwoSided) < 0.0) N = -N;
@@ -517,6 +581,15 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
 
     // Archviz extensions
     float translucency = saturate(arch0.w);
+    float thickness = max(volumeParams.x, 0.0);
+    if (texThickness >= 0) {
+        float thicknessSample = triPlanar ? SampleTriPlanar(texThickness, P, worldNormal, triScale, triSharp, mappingVariation, objectOrigin, primIndex, textureLod, dominantTriPlanar).r
+                                          : textures[texThickness].SampleLevel(linearSampler, uv, textureLod).r;
+        thickness *= BlendTextureScalar(thicknessSample, volumeParams.z);
+        SHADER_COUNTER_ADD(SHADER_COUNTER_TEXTURE_SAMPLES, 1);
+    }
+    float3 effectiveTransmissionColor =
+        ApplyVolumeAttenuation(transmissionColor, thickness, volumeParams.y);
     if (isGrassMaterial) {
         translucency = max(translucency, lerp(0.38, 0.72, saturate(1.0 - uv.y)));
     }
@@ -554,6 +627,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
             shadowPayload.packedSurface = PackPayloadSurface(1.0, 0.0, 0.0, 0.0);
             shadowPayload.packedIorType = PackPayloadIorType(1.0, RAY_TYPE_SHADOW, false, 1.0);
             shadowPayload.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
+            shadowPayload.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
             TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
 
             if (shadowPayload.t < 0.0) { // Miss = not occluded
@@ -567,13 +641,17 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
                 float3 F = F_Schlick(VdotH, F0);
                 float D = D_GGX(NdotH, roughness);
                 float V_vis = V_SmithCorrelated(NdotV, NdotL, roughness);
+                float3 sheenBrdf =
+                    EvaluateSheenBrdf(sheenColorParams.rgb, lobeParams.w,
+                                      VdotH, metalness);
 
                 float3 SpecularBRDF = D * V_vis * F;
                 float3 DiffuseBRDF = (DiffuseAlbedo / PI) * (1.0 - F);
-                float3 BaseBRDF = DiffuseBRDF + SpecularBRDF;
+                float3 BaseBRDF = DiffuseBRDF + SpecularBRDF + sheenBrdf;
                 float3 CoatBRDF = float3(0.0, 0.0, 0.0);
                 if (clearcoat > 0.001) {
-                    float3 F0c = float3(0.04, 0.04, 0.04);
+                    float coatF0 = DielectricF0FromIorLocal(volumeParams.w);
+                    float3 F0c = float3(coatF0, coatF0, coatF0);
                     float3 Fc = F_Schlick(VdotH, F0c);
                     float Dc = D_GGX(NdotH, clearcoatRoughness);
                     float Vc = V_SmithCorrelated(NdotV, NdotL, clearcoatRoughness);
@@ -616,7 +694,8 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     bool thinWalled = ((matFlags & MATERIAL_FLAG_THIN_WALLED) != 0) || (arch0.z > 0.5);
     payload.packedSurface = PackPayloadSurface(roughness, metalness, transmission, translucency);
     payload.packedIorType = PackPayloadIorType(emisColor.w, rayType, thinWalled, specularWeight);
-    payload.packedTransmission = PackPayloadTransmissionColor(transmissionColor);
+    payload.packedTransmission = PackPayloadTransmissionColor(effectiveTransmissionColor);
+    payload.packedSpecular = PackPayloadSpecularColor(specularColor);
 }
 
 [shader("anyhit")]
@@ -632,7 +711,7 @@ void AnyHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes a
     bool alphaTested = (matFlags & MATERIAL_FLAG_ALPHA_TESTED) != 0;
     float alphaCutoff = matExtra.shadingParams.z;
 
-    if (alphaTested && alphaCutoff >= 0.0) {
+    if (alphaTested) {
         uint primIndex = PrimitiveIndex();
         uint baseIndex = primIndex * 3;
         uint i0 = indices[mesh.ibIndex].Load(baseIndex);
@@ -673,8 +752,32 @@ void AnyHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes a
                 : textures[texDiff].SampleLevel(linearSampler, uv, textureLod).a;
             alpha *= BlendTextureScalar(alphaSample, matExtra.textureWeight0.x);
         }
+        int texOpacity = UnpackTextureIndexHigh(mat.packedTextures.z);
+        if (texOpacity >= 0) {
+            float3 n0 = vertices[mesh.vbIndex][i0].normal;
+            float3 n1 = vertices[mesh.vbIndex][i1].normal;
+            float3 n2 = vertices[mesh.vbIndex][i2].normal;
+            float3 localNormal = normalize(n0 * bary.x + n1 * bary.y + n2 * bary.z);
+            float3 worldNormal = normalize(mul(localNormal, (float3x3)WorldToObject3x4()));
+            float3 P = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+            float3 objectOrigin = mul(ObjectToWorld3x4(), float4(0.0, 0.0, 0.0, 1.0));
+            bool triPlanar = ((matFlags & MATERIAL_FLAG_TRI_PLANAR) != 0) && (matExtra.triPlanarParams.x > 0.5);
+            float textureLod = CalculateTextureLod(rayType, P);
+            bool dominantTriPlanar = triPlanar && (rayType != RAY_TYPE_PRIMARY);
+            float opacitySample = triPlanar
+                ? SampleTriPlanar(texOpacity, P, worldNormal,
+                                  max(matExtra.triPlanarParams.y, 1e-6),
+                                  max(matExtra.triPlanarParams.z, 0.01),
+                                  matExtra.mappingVariationParams,
+                                  objectOrigin,
+                                  primIndex,
+                                  textureLod, dominantTriPlanar).r
+                : textures[texOpacity].SampleLevel(linearSampler, uv, textureLod).r;
+            alpha *= BlendTextureScalar(opacitySample, matExtra.textureWeight1.w);
+        }
 
-        if (alpha < alphaCutoff) {
+        if ((alphaCutoff >= 0.0 && alpha < alphaCutoff) ||
+            (alphaCutoff < 0.0 && alpha <= 1.0e-3)) {
             IgnoreHit();
         }
     }

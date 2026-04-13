@@ -85,6 +85,20 @@ void InitializeRasterConstants(RuntimeRasterMaterialConstants *outConstants) {
   for (float &textureWeight : outConstants->textureWeight1) {
     textureWeight = 1.0f;
   }
+  for (int &textureIndex : outConstants->textureIndices2) {
+    textureIndex = -1;
+  }
+  for (float &textureWeight : outConstants->textureWeight2) {
+    textureWeight = 1.0f;
+  }
+  outConstants->specularColor[0] = 1.0f;
+  outConstants->specularColor[1] = 1.0f;
+  outConstants->specularColor[2] = 1.0f;
+  outConstants->specularColor[3] = 1.0f;
+  outConstants->sheenColor[0] = 1.0f;
+  outConstants->sheenColor[1] = 1.0f;
+  outConstants->sheenColor[2] = 1.0f;
+  outConstants->sheenColor[3] = 1.0f;
 }
 
 } // namespace
@@ -114,8 +128,21 @@ void ApplyPreset(Asset::Material &m, int presetIndex) {
   m.workflow = Asset::Material::kWorkflowMetalRoughness;
   m.coatWeight = 0.0f;
   m.coatRoughness = 0.1f;
+  m.coatIor = 1.5f;
   m.thinWalled = 0.0f;
   m.translucency = 0.0f;
+  m.thickness = 0.0f;
+  m.attenuationDistance = 0.0f;
+  m.alphaCutoff = 0.35f;
+  m.anisotropy = 0.0f;
+  m.anisotropyRotation = 0.0f;
+  m.sheenWeight = 0.0f;
+  m.specularColor[0] = 1.0f;
+  m.specularColor[1] = 1.0f;
+  m.specularColor[2] = 1.0f;
+  m.sheenColor[0] = 1.0f;
+  m.sheenColor[1] = 1.0f;
+  m.sheenColor[2] = 1.0f;
   m.uvScale[0] = 1.0f;
   m.uvScale[1] = 1.0f;
   m.uvOffset[0] = 0.0f;
@@ -160,6 +187,7 @@ void ApplyPreset(Asset::Material &m, int presetIndex) {
     SetRoughness(0.35f);
     m.coatWeight = 0.8f;
     m.coatRoughness = 0.08f;
+    m.coatIor = 1.52f;
     break;
   case 5:
     m.metalness = 0.0f;
@@ -191,13 +219,17 @@ void ApplyPreset(Asset::Material &m, int presetIndex) {
     SetRoughness(0.02f);
     m.transmissionWeight = 1.0f;
     m.thinWalled = 1.0f;
+    m.alphaMode = "BLEND";
     break;
   case 10:
     m.metalness = 0.0f;
     m.ior = 1.52f;
     SetRoughness(0.35f);
     m.transmissionWeight = 1.0f;
-    m.thinWalled = 1.0f;
+    m.thinWalled = 0.0f;
+    m.thickness = 0.01f;
+    m.attenuationDistance = 0.25f;
+    m.alphaMode = "BLEND";
     break;
   case 11:
     m.metalness = 0.0f;
@@ -207,7 +239,10 @@ void ApplyPreset(Asset::Material &m, int presetIndex) {
     m.transmissionColor[1] = 0.95f;
     m.transmissionColor[2] = 1.0f;
     m.transmissionWeight = 1.0f;
-    m.thinWalled = 1.0f;
+    m.thinWalled = 0.0f;
+    m.thickness = 0.012f;
+    m.attenuationDistance = 0.15f;
+    m.alphaMode = "BLEND";
     break;
   case 12:
     m.metalness = 0.0f;
@@ -228,6 +263,7 @@ void ApplyPreset(Asset::Material &m, int presetIndex) {
 bool MaterialAffectsRtStructure(const Asset::Material &material) {
   return material.alphaMode != "OPAQUE" ||
          material.diffuseColor[3] < 0.999f ||
+         material.opacityTexture >= 0 ||
          material.transmissionWeight > 0.01f ||
          material.thinWalled > 0.5f;
 }
@@ -236,6 +272,8 @@ int GetTextureIndex(const Asset::Material &material, TextureSlot slot) {
   switch (slot) {
   case TextureSlot::BaseColor:
     return material.diffuseTexture;
+  case TextureSlot::Opacity:
+    return material.opacityTexture;
   case TextureSlot::PackedSurface:
     return material.metalRoughTexture;
   case TextureSlot::Metalness:
@@ -244,10 +282,16 @@ int GetTextureIndex(const Asset::Material &material, TextureSlot slot) {
     return material.roughnessGlossTexture;
   case TextureSlot::Normal:
     return material.normalTexture;
+  case TextureSlot::CoatNormal:
+    return material.coatNormalTexture;
   case TextureSlot::Occlusion:
     return material.occlusionTexture;
   case TextureSlot::Emissive:
     return material.emissiveTexture;
+  case TextureSlot::SpecularColor:
+    return material.specularColorTexture;
+  case TextureSlot::Thickness:
+    return material.thicknessTexture;
   }
   return -1;
 }
@@ -256,6 +300,8 @@ float GetTextureAmount(const Asset::Material &material, TextureSlot slot) {
   switch (slot) {
   case TextureSlot::BaseColor:
     return material.diffuseTextureAmount;
+  case TextureSlot::Opacity:
+    return material.opacityTextureAmount;
   case TextureSlot::PackedSurface:
     return material.metalRoughTextureAmount;
   case TextureSlot::Metalness:
@@ -264,10 +310,16 @@ float GetTextureAmount(const Asset::Material &material, TextureSlot slot) {
     return material.roughnessGlossTextureAmount;
   case TextureSlot::Normal:
     return material.normalTextureAmount;
+  case TextureSlot::CoatNormal:
+    return material.coatNormalTextureAmount;
   case TextureSlot::Occlusion:
     return material.occlusionTextureAmount;
   case TextureSlot::Emissive:
     return material.emissiveTextureAmount;
+  case TextureSlot::SpecularColor:
+    return material.specularColorTextureAmount;
+  case TextureSlot::Thickness:
+    return material.thicknessTextureAmount;
   }
   return 1.0f;
 }
@@ -277,6 +329,9 @@ void SetTextureIndex(Asset::Material &material, TextureSlot slot,
   switch (slot) {
   case TextureSlot::BaseColor:
     material.diffuseTexture = textureIndex;
+    break;
+  case TextureSlot::Opacity:
+    material.opacityTexture = textureIndex;
     break;
   case TextureSlot::PackedSurface:
     material.metalRoughTexture = textureIndex;
@@ -290,11 +345,20 @@ void SetTextureIndex(Asset::Material &material, TextureSlot slot,
   case TextureSlot::Normal:
     material.normalTexture = textureIndex;
     break;
+  case TextureSlot::CoatNormal:
+    material.coatNormalTexture = textureIndex;
+    break;
   case TextureSlot::Occlusion:
     material.occlusionTexture = textureIndex;
     break;
   case TextureSlot::Emissive:
     material.emissiveTexture = textureIndex;
+    break;
+  case TextureSlot::SpecularColor:
+    material.specularColorTexture = textureIndex;
+    break;
+  case TextureSlot::Thickness:
+    material.thicknessTexture = textureIndex;
     break;
   }
 }
@@ -305,6 +369,9 @@ void SetTextureAmount(Asset::Material &material, TextureSlot slot,
   switch (slot) {
   case TextureSlot::BaseColor:
     material.diffuseTextureAmount = clampedAmount;
+    break;
+  case TextureSlot::Opacity:
+    material.opacityTextureAmount = clampedAmount;
     break;
   case TextureSlot::PackedSurface:
     material.metalRoughTextureAmount = clampedAmount;
@@ -318,11 +385,20 @@ void SetTextureAmount(Asset::Material &material, TextureSlot slot,
   case TextureSlot::Normal:
     material.normalTextureAmount = clampedAmount;
     break;
+  case TextureSlot::CoatNormal:
+    material.coatNormalTextureAmount = clampedAmount;
+    break;
   case TextureSlot::Occlusion:
     material.occlusionTextureAmount = clampedAmount;
     break;
   case TextureSlot::Emissive:
     material.emissiveTextureAmount = clampedAmount;
+    break;
+  case TextureSlot::SpecularColor:
+    material.specularColorTextureAmount = clampedAmount;
+    break;
+  case TextureSlot::Thickness:
+    material.thicknessTextureAmount = clampedAmount;
     break;
   }
 }
@@ -411,9 +487,18 @@ uint32_t BuildRuntimeMaterialFlags(const Asset::Material &material) {
   const float clampedMetalness = (std::clamp)(material.metalness, 0.0f, 1.0f);
   float transmission = (std::clamp)(material.transmissionWeight, 0.0f, 1.0f);
   transmission *= (1.0f - clampedMetalness);
+  const bool hasSpecularColor =
+      std::fabs(material.specularColor[0] - 1.0f) > 1.0e-5f ||
+      std::fabs(material.specularColor[1] - 1.0f) > 1.0e-5f ||
+      std::fabs(material.specularColor[2] - 1.0f) > 1.0e-5f ||
+      material.specularColorTexture >= 0;
+  const bool hasVolume =
+      material.thickness > 1.0e-5f || material.thicknessTexture >= 0 ||
+      material.attenuationDistance > 1.0e-5f;
 
   uint32_t flags = 0;
-  if (material.alphaMode != "OPAQUE" || material.diffuseColor[3] < 0.999f) {
+  if (material.alphaMode != "OPAQUE" || material.diffuseColor[3] < 0.999f ||
+      material.opacityTexture >= 0) {
     flags |= kRuntimeMaterialFlagAlphaTested;
   }
   if (material.thinWalled > 0.5f) {
@@ -439,6 +524,20 @@ uint32_t BuildRuntimeMaterialFlags(const Asset::Material &material) {
   }
   if (material.invertRoughnessTexture) {
     flags |= kRuntimeMaterialFlagInvertRoughness;
+  }
+  if (material.opacityTexture >= 0) {
+    flags |= kRuntimeMaterialFlagHasOpacityTexture;
+  }
+  if (hasSpecularColor) {
+    flags |= kRuntimeMaterialFlagHasSpecularColor;
+  }
+  if (hasVolume) {
+    flags |= kRuntimeMaterialFlagHasVolume;
+  }
+  if (material.coatNormalTexture >= 0 &&
+      material.coatNormalTextureAmount > 1.0e-5f &&
+      material.coatWeight > 1.0e-5f) {
+    flags |= kRuntimeMaterialFlagHasCoatNormal;
   }
   return flags;
 }
@@ -499,8 +598,10 @@ void BuildRuntimeDxrMaterialData(const Asset::Material &material,
   outCore->packedTextures[1] =
       PackTexturePair(GetEffectivePackedSurfaceTextureIndex(material),
                       material.occlusionTexture);
-  outCore->packedTextures[2] = PackTexturePair(material.emissiveTexture, -1);
-  outCore->packedTextures[3] = PackTexturePair(-1, -1);
+  outCore->packedTextures[2] =
+      PackTexturePair(material.emissiveTexture, material.opacityTexture);
+  outCore->packedTextures[3] =
+      PackTexturePair(material.specularColorTexture, material.thicknessTexture);
 
   outExtra->coatLayerParams[0] = (std::clamp)(material.coatWeight, 0.0f, 1.0f);
   outExtra->coatLayerParams[1] =
@@ -529,7 +630,10 @@ void BuildRuntimeDxrMaterialData(const Asset::Material &material,
   outExtra->shadingParams[0] = (std::max)(0.0f, material.emissiveIntensity);
   outExtra->shadingParams[1] =
       (std::clamp)(material.specularWeight, 0.0f, 1.0f);
-  outExtra->shadingParams[2] = (material.alphaMode == "MASK") ? 0.35f : -1.0f;
+  outExtra->shadingParams[2] =
+      (material.alphaMode == "MASK")
+          ? (std::clamp)(material.alphaCutoff, 0.0f, 1.0f)
+          : -1.0f;
   outExtra->shadingParams[3] = material.isGrass ? 1.0f : 0.0f;
 
   outExtra->transmissionColor[0] =
@@ -549,11 +653,42 @@ void BuildRuntimeDxrMaterialData(const Asset::Material &material,
       (std::clamp)(material.roughnessGlossTextureAmount, 0.0f, 1.0f);
     outExtra->textureWeight1[0] =
       (std::clamp)(material.normalTextureAmount, 0.0f, 1.0f);
-    outExtra->textureWeight1[1] =
+  outExtra->textureWeight1[1] =
       (std::clamp)(material.occlusionTextureAmount, 0.0f, 1.0f);
-    outExtra->textureWeight1[2] =
+  outExtra->textureWeight1[2] =
       (std::clamp)(material.emissiveTextureAmount, 0.0f, 1.0f);
-    outExtra->textureWeight1[3] = 0.0f;
+  outExtra->textureWeight1[3] =
+      (std::clamp)(material.opacityTextureAmount, 0.0f, 1.0f);
+  outExtra->extraPackedTextures[0] =
+      PackTexturePair(material.coatNormalTexture, -1);
+  outExtra->extraPackedTextures[1] = PackTexturePair(-1, -1);
+  outExtra->extraPackedTextures[2] = PackTexturePair(-1, -1);
+  outExtra->extraPackedTextures[3] = PackTexturePair(-1, -1);
+  outExtra->volumeParams[0] = (std::max)(0.0f, material.thickness);
+  outExtra->volumeParams[1] = (std::max)(0.0f, material.attenuationDistance);
+  outExtra->volumeParams[2] = (std::clamp)(material.thicknessTextureAmount,
+                                           0.0f, 1.0f);
+  outExtra->volumeParams[3] = (std::max)(1.0f, material.coatIor);
+  outExtra->specularColor[0] =
+      (std::clamp)(material.specularColor[0], 0.0f, 1.0f);
+  outExtra->specularColor[1] =
+      (std::clamp)(material.specularColor[1], 0.0f, 1.0f);
+  outExtra->specularColor[2] =
+      (std::clamp)(material.specularColor[2], 0.0f, 1.0f);
+  outExtra->specularColor[3] =
+      (std::clamp)(material.specularColorTextureAmount, 0.0f, 1.0f);
+  outExtra->sheenColor[0] =
+      (std::clamp)(material.sheenColor[0], 0.0f, 1.0f);
+  outExtra->sheenColor[1] =
+      (std::clamp)(material.sheenColor[1], 0.0f, 1.0f);
+  outExtra->sheenColor[2] =
+      (std::clamp)(material.sheenColor[2], 0.0f, 1.0f);
+  outExtra->sheenColor[3] = 1.0f;
+  outExtra->lobeParams[0] = (std::clamp)(material.coatNormalTextureAmount,
+                                         0.0f, 1.0f);
+  outExtra->lobeParams[1] = (std::clamp)(material.anisotropy, -1.0f, 1.0f);
+  outExtra->lobeParams[2] = material.anisotropyRotation;
+  outExtra->lobeParams[3] = (std::clamp)(material.sheenWeight, 0.0f, 1.0f);
 }
 
 void BuildRuntimeRasterMaterialConstants(
@@ -584,9 +719,9 @@ void BuildRuntimeRasterMaterialConstants(
   outConstants->emissiveColor[3] = material.ior;
 
   outConstants->textureIndices[0] = material.diffuseTexture;
-  outConstants->textureIndices[1] = -1;
+  outConstants->textureIndices[1] = material.opacityTexture;
   outConstants->textureIndices[2] = material.normalTexture;
-  outConstants->textureIndices[3] = -1;
+  outConstants->textureIndices[3] = material.specularColorTexture;
 
   outConstants->emissiveAndPad[0] = material.emissiveTexture;
   outConstants->emissiveAndPad[1] = material.occlusionTexture;
@@ -594,7 +729,10 @@ void BuildRuntimeRasterMaterialConstants(
   outConstants->emissiveAndPad[3] = material.invertRoughnessTexture ? 1 : 0;
 
   outConstants->extraParams[0] = material.emissiveIntensity;
-  outConstants->extraParams[1] = (material.alphaMode == "MASK") ? 0.35f : -1.0f;
+  outConstants->extraParams[1] =
+      (material.alphaMode == "MASK")
+          ? (std::clamp)(material.alphaCutoff, 0.0f, 1.0f)
+          : -1.0f;
   outConstants->extraParams[2] = (material.alphaMode == "MASK") ? 1.0f : 0.0f;
   outConstants->extraParams[3] = material.isGrass ? 1.0f : 0.0f;
 
@@ -637,7 +775,43 @@ void BuildRuntimeRasterMaterialConstants(
       (std::clamp)(material.occlusionTextureAmount, 0.0f, 1.0f);
   outConstants->textureWeight1[2] =
       (std::clamp)(material.emissiveTextureAmount, 0.0f, 1.0f);
-  outConstants->textureWeight1[3] = 0.0f;
+  outConstants->textureWeight1[3] =
+      (std::clamp)(material.opacityTextureAmount, 0.0f, 1.0f);
+  outConstants->textureIndices2[0] = material.coatNormalTexture;
+  outConstants->textureIndices2[1] = material.thicknessTexture;
+  outConstants->textureIndices2[2] = -1;
+  outConstants->textureIndices2[3] = -1;
+  outConstants->textureWeight2[0] =
+      (std::clamp)(material.coatNormalTextureAmount, 0.0f, 1.0f);
+  outConstants->textureWeight2[1] =
+      (std::clamp)(material.thicknessTextureAmount, 0.0f, 1.0f);
+  outConstants->textureWeight2[2] =
+      (std::clamp)(material.specularColorTextureAmount, 0.0f, 1.0f);
+  outConstants->textureWeight2[3] = 0.0f;
+  outConstants->volumeParams[0] = (std::max)(0.0f, material.thickness);
+  outConstants->volumeParams[1] = (std::max)(0.0f, material.attenuationDistance);
+  outConstants->volumeParams[2] = (std::clamp)(material.alphaCutoff, 0.0f, 1.0f);
+  outConstants->volumeParams[3] = (std::max)(1.0f, material.coatIor);
+  outConstants->specularColor[0] =
+      (std::clamp)(material.specularColor[0], 0.0f, 1.0f);
+  outConstants->specularColor[1] =
+      (std::clamp)(material.specularColor[1], 0.0f, 1.0f);
+  outConstants->specularColor[2] =
+      (std::clamp)(material.specularColor[2], 0.0f, 1.0f);
+  outConstants->specularColor[3] =
+      (std::clamp)(material.specularColorTextureAmount, 0.0f, 1.0f);
+  outConstants->sheenColor[0] =
+      (std::clamp)(material.sheenColor[0], 0.0f, 1.0f);
+  outConstants->sheenColor[1] =
+      (std::clamp)(material.sheenColor[1], 0.0f, 1.0f);
+  outConstants->sheenColor[2] =
+      (std::clamp)(material.sheenColor[2], 0.0f, 1.0f);
+  outConstants->sheenColor[3] = 1.0f;
+  outConstants->lobeParams[0] = (std::clamp)(material.anisotropy, -1.0f, 1.0f);
+  outConstants->lobeParams[1] = material.anisotropyRotation;
+  outConstants->lobeParams[2] = (std::clamp)(material.sheenWeight, 0.0f, 1.0f);
+  outConstants->lobeParams[3] = (std::clamp)(material.coatNormalTextureAmount,
+                                             0.0f, 1.0f);
 }
 
 } // namespace MaterialSystem

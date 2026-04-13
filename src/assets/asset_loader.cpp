@@ -780,15 +780,16 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
 
         if (khrSpecular->second.Has("specularColorFactor")) {
           const auto specColor = khrSpecular->second.Get("specularColorFactor");
-          const float specularColor[3] = {
-              (float)specColor.Get(0).GetNumberAsDouble(),
-              (float)specColor.Get(1).GetNumberAsDouble(),
-              (float)specColor.Get(2).GetNumberAsDouble()};
-          const float specularScale =
-              (std::max)(specularColor[0],
-                         (std::max)(specularColor[1], specularColor[2]));
-          mat.specularWeight =
-              (std::clamp)(mat.specularWeight * specularScale, 0.0f, 1.0f);
+          for (int i = 0; i < 3; ++i) {
+            mat.specularColor[i] =
+                (float)specColor.Get(i).GetNumberAsDouble();
+          }
+        }
+        if (khrSpecular->second.Has("specularColorTexture")) {
+          mat.specularColorTexture = GetImgIdx(
+              khrSpecular->second.Get("specularColorTexture")
+                  .Get("index")
+                  .GetNumberAsInt());
         }
       }
 
@@ -799,6 +800,12 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
         mat.coatRoughness =
             (float)GetExtensionNumber(khrClearcoat->second,
                                       "clearcoatRoughnessFactor", 0.0);
+        if (khrClearcoat->second.Has("clearcoatNormalTexture")) {
+          mat.coatNormalTexture = GetImgIdx(
+              khrClearcoat->second.Get("clearcoatNormalTexture")
+                  .Get("index")
+                  .GetNumberAsInt());
+        }
       }
 
       auto khrEmissiveStrength =
@@ -816,7 +823,11 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
             (float)GetExtensionNumber(khrVolume->second,
                                       "thicknessFactor",
                                       0.0);
+        mat.thickness = (std::max)(0.0f, thicknessFactor);
         mat.thinWalled = (thicknessFactor > 1e-4f) ? 0.0f : 1.0f;
+        mat.attenuationDistance =
+            (float)GetExtensionNumber(khrVolume->second,
+                                      "attenuationDistance", 0.0);
 
         if (khrVolume->second.Has("attenuationColor")) {
           const auto attenuationColor = khrVolume->second.Get("attenuationColor");
@@ -825,9 +836,31 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
                 (float)attenuationColor.Get(i).GetNumberAsDouble();
           }
         }
+        if (khrVolume->second.Has("thicknessTexture")) {
+          mat.thicknessTexture = GetImgIdx(
+              khrVolume->second.Get("thicknessTexture")
+                  .Get("index")
+                  .GetNumberAsInt());
+        }
       } else if (mat.transmissionWeight > 0.01f) {
         // glTF transmission without KHR_materials_volume behaves like thin glass.
         mat.thinWalled = 1.0f;
+      }
+
+      auto khrSheen = m.extensions.find("KHR_materials_sheen");
+      if (khrSheen != m.extensions.end()) {
+        mat.sheenWeight = (float)GetExtensionNumber(khrSheen->second,
+                                                    "sheenRoughnessFactor", 0.0);
+        if (khrSheen->second.Has("sheenColorFactor")) {
+          const auto sheenColor = khrSheen->second.Get("sheenColorFactor");
+          for (int i = 0; i < 3; ++i) {
+            mat.sheenColor[i] = (float)sheenColor.Get(i).GetNumberAsDouble();
+          }
+          mat.sheenWeight = (std::max)(
+              mat.sheenWeight,
+              (std::max)(mat.sheenColor[0],
+                         (std::max)(mat.sheenColor[1], mat.sheenColor[2])));
+        }
       }
 
       int baseColorTexIdx =
@@ -857,10 +890,14 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
       ClearIfInvalid(mat.emissiveTexture);
       ClearIfInvalid(mat.occlusionTexture);
       ClearIfInvalid(mat.metalRoughTexture);
+      ClearIfInvalid(mat.specularColorTexture);
+      ClearIfInvalid(mat.thicknessTexture);
+      ClearIfInvalid(mat.coatNormalTexture);
 
       mat.doubleSided = m.doubleSided;
       if (!m.alphaMode.empty())
         mat.alphaMode = m.alphaMode;
+      mat.alphaCutoff = (std::clamp)((float)m.alphaCutoff, 0.0f, 1.0f);
 
       // Handle KHR_materials_pbrSpecularGlossiness extension - Reference for
       // proper Glossiness workflow
@@ -874,14 +911,15 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
         }
         if (ext.Has("specularFactor")) {
           auto p = ext.Get("specularFactor");
-          const float specularColor[3] = {
-              (float)p.Get(0).GetNumberAsDouble(),
-              (float)p.Get(1).GetNumberAsDouble(),
-              (float)p.Get(2).GetNumberAsDouble()};
-          const float specularScale =
-              (std::max)(specularColor[0],
-                         (std::max)(specularColor[1], specularColor[2]));
-          mat.specularWeight = (std::clamp)(specularScale, 0.0f, 1.0f);
+          for (int i = 0; i < 3; ++i) {
+            mat.specularColor[i] = (float)p.Get(i).GetNumberAsDouble();
+          }
+          mat.specularWeight =
+              (std::clamp)((std::max)(
+                               mat.specularColor[0],
+                               (std::max)(mat.specularColor[1],
+                                          mat.specularColor[2])),
+                           0.0f, 1.0f);
         }
         if (ext.Has("glossinessFactor")) {
           mat.roughness =

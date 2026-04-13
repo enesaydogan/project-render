@@ -70,6 +70,7 @@ float TraceAoHemisphereVisibility(float3 P, float3 hemisphereNormal,
             PackPayloadIorType(1.0, RAY_TYPE_SHADOW, false, 1.0);
         aoPayload.packedTransmission =
             PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
+        aoPayload.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
         TraceRay(g_accel,
                  RAY_FLAG_CULL_BACK_FACING_TRIANGLES,
                  0xFF, 0, 0, 0, aoRay, aoPayload);
@@ -129,11 +130,14 @@ float ComputePrimaryRayTracedAo(float3 P, float3 N, float radius,
     return saturate(1.0 - occlusion * aoIntensity);
 }
 
-float3 ComputeSurfaceF0(float3 albedo, float metallic, float ior, float specularWeight)
+float3 ComputeSurfaceF0(float3 albedo, float metallic, float ior,
+                        float specularWeight, float3 specularColor)
 {
     float f0s = (ior - 1.0) / (ior + 1.0);
     f0s = f0s * f0s;
-    float3 dielectricF0 = float3(f0s, f0s, f0s) * saturate(specularWeight);
+    float3 dielectricF0 =
+        float3(f0s, f0s, f0s) * saturate(specularWeight) *
+        saturate(specularColor);
     return lerp(dielectricF0, albedo, metallic);
 }
 
@@ -159,6 +163,7 @@ float3 EvaluateSurfaceBrdf(float3 N, float3 V, float3 L,
                            float3 albedo, float3 diffuseAlbedo,
                            float metallic, float roughness,
                            float ior, float specularWeight,
+                           float3 specularColor,
                            float coatWeight, float coatRoughness)
 {
     float NdotL = saturate(dot(N, L));
@@ -170,7 +175,8 @@ float3 EvaluateSurfaceBrdf(float3 N, float3 V, float3 L,
     float3 H = normalize(L + V);
     float VdotH = saturate(dot(V, H));
     float NdotH = saturate(dot(N, H));
-    float3 F0 = ComputeSurfaceF0(albedo, metallic, ior, specularWeight);
+    float3 F0 = ComputeSurfaceF0(albedo, metallic, ior, specularWeight,
+                                 specularColor);
     float3 F = F_Schlick(VdotH, F0);
     float3 spec = D_GGX(NdotH, roughness) * V_SmithCorrelated(NdotV, NdotL, roughness) * F;
     float3 baseBrdf = (diffuseAlbedo / PI) * (1.0 - F) + spec;
@@ -231,6 +237,7 @@ void ComputeLobeProbabilities(float3 N, float3 V,
                               float metallic, float transmission,
                               float translucency,
                               float ior, float specularWeight,
+                              float3 specularColor,
                               float coatWeight,
                               out float coatProb,
                               out float specProb,
@@ -238,7 +245,8 @@ void ComputeLobeProbabilities(float3 N, float3 V,
                               out float transProb,
                               out float totalProb)
 {
-    float3 F0 = ComputeSurfaceF0(albedo, metallic, ior, specularWeight);
+    float3 F0 = ComputeSurfaceF0(albedo, metallic, ior, specularWeight,
+                                 specularColor);
     float3 F = F_Schlick(saturate(dot(N, V)), F0);
     float clearcoat = saturate(coatWeight);
     float coatF = F_Schlick(saturate(dot(N, V)), float3(0.04, 0.04, 0.04)).x;
@@ -312,6 +320,7 @@ RayPayload InitRayPayload(uint rayType)
     p.packedSurface = PackPayloadSurface(1.0, 0.0, 0.0, 0.0);
     p.packedIorType = PackPayloadIorType(1.0, rayType, false, 1.0);
     p.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
+    p.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
     return p;
 }
 
@@ -581,6 +590,7 @@ void RayGen()
         float payloadIor = UnpackPayloadIor(payload.packedIorType);
         float payloadSpecularWeight = UnpackPayloadSpecularWeight(payload.packedIorType);
         float3 payloadTransmissionColor = UnpackPayloadTransmissionColor(payload.packedTransmission);
+        float3 payloadSpecularColor = UnpackPayloadSpecularColor(payload.packedSpecular);
         bool payloadThinWalled = UnpackPayloadThinWalled(payload.packedIorType);
 
         if (bounce == 0) {
@@ -597,6 +607,7 @@ void RayGen()
             float guideTranslucency = guideSurface.w;
             float guideIor = UnpackPayloadIor(guidePayload.packedIorType);
             float guideSpecularWeight = UnpackPayloadSpecularWeight(guidePayload.packedIorType);
+            float3 guideSpecularColor = UnpackPayloadSpecularColor(guidePayload.packedSpecular);
 
             if (guidePayload.t >= 0.0) {
                 primaryHit = true;
@@ -613,7 +624,8 @@ void RayGen()
 
                 // Specular Albedo calculation for DLSS-RR
                 float3 F0_primary = ComputeSurfaceF0(guideAlbedo, guideMetalness,
-                                                    guideIor, guideSpecularWeight);
+                                                    guideIor, guideSpecularWeight,
+                                                    guideSpecularColor);
                 float NdotV_primary = saturate(dot(primaryNormal, -guideDir));
                 primarySpecAlbedo = EnvBRDFApprox2(F0_primary, primaryRoughness * primaryRoughness, NdotV_primary);
 
@@ -627,6 +639,7 @@ void RayGen()
                                          guideMetalness, guideTransmission,
                                          guideTranslucency,
                                          guideIor, guideSpecularWeight,
+                                         guideSpecularColor,
                                          guideCoatWeight,
                                          coatProbPrimary, specProbPrimary,
                                          diffProbPrimary, transProbPrimary,
@@ -917,10 +930,11 @@ void RayGen()
                 float NdotL = saturate(dot(N, ls.L));
 
                 float3 brdf = EvaluateSurfaceBrdf(N, V, ls.L,
-                                                 payloadAlbedo, diffuseAlbedo,
-                                                 metallic, roughness,
-                                                 payloadIor, payloadSpecularWeight,
-                                                 payloadCoatWeight, payloadCoatRoughness);
+                                                  payloadAlbedo, diffuseAlbedo,
+                                                  metallic, roughness,
+                                                  payloadIor, payloadSpecularWeight,
+                                                  payloadSpecularColor,
+                                                  payloadCoatWeight, payloadCoatRoughness);
 
                 float p_target = calculate_p_target(ls.radiance, payloadAlbedo, brdf, NdotL);
                 update_reservoir(res, 0xFFFFFFFF, p_target, rng);
@@ -941,10 +955,11 @@ void RayGen()
                 
                 float NdotL = saturate(dot(N, ls.L));
                 float3 brdf = EvaluateSurfaceBrdf(N, V, ls.L,
-                                                 payloadAlbedo, diffuseAlbedo,
-                                                 metallic, roughness,
-                                                 payloadIor, payloadSpecularWeight,
-                                                 payloadCoatWeight, payloadCoatRoughness);
+                                                  payloadAlbedo, diffuseAlbedo,
+                                                  metallic, roughness,
+                                                  payloadIor, payloadSpecularWeight,
+                                                  payloadSpecularColor,
+                                                  payloadCoatWeight, payloadCoatRoughness);
 
                 float p_target = calculate_p_target(ls.radiance, payloadAlbedo, brdf, NdotL) * (float)numLights;
                 if (l.type == LIGHT_TYPE_AREA_RECT || l.type == LIGHT_TYPE_AREA_DISK) {
@@ -985,6 +1000,7 @@ void RayGen()
                                                payloadAlbedo, diffuseAlbedo,
                                                metallic, roughness,
                                                payloadIor, payloadSpecularWeight,
+                                               payloadSpecularColor,
                                                payloadCoatWeight, payloadCoatRoughness);
 
             float p_target_final = calculate_p_target(radiance_final, payloadAlbedo, brdf_f, NdotL_final);
@@ -1027,6 +1043,7 @@ void RayGen()
                                              metallic, transmission,
                                              payloadTranslucency,
                                              payloadIor, payloadSpecularWeight,
+                                             payloadSpecularColor,
                                              payloadCoatWeight,
                                              coatProb, specProb, diffProb, transProb, totalProb);
 
@@ -1177,6 +1194,7 @@ void RayGen()
                                                 payloadAlbedo, diffuseAlbedo,
                                                 metallic, roughness,
                                                 payloadIor, payloadSpecularWeight,
+                                                payloadSpecularColor,
                                                 payloadCoatWeight, payloadCoatRoughness);
                      
                      // Trial 2: MIS for NEE
@@ -1221,6 +1239,7 @@ void RayGen()
                                                           payloadAlbedo, diffuseAlbedo,
                                                           metallic, roughness,
                                                           payloadIor, payloadSpecularWeight,
+                                                          payloadSpecularColor,
                                                           payloadCoatWeight, payloadCoatRoughness);
 
                     // MIS: compare environment-light sampling PDF against
@@ -1234,6 +1253,7 @@ void RayGen()
                                              metallic, transmission,
                                              payloadTranslucency,
                                              payloadIor, payloadSpecularWeight,
+                                             payloadSpecularColor,
                                              payloadCoatWeight,
                                              coatProbEnv, specProbEnv, diffProbEnv, transProbEnv, totalProbEnv);
 
@@ -1368,6 +1388,7 @@ void RayGen()
                                      metallic, transmission,
                                      payloadTranslucency,
                                      payloadIor, payloadSpecularWeight,
+                                     payloadSpecularColor,
                                      payloadCoatWeight,
                                      coatProb, specProb, diffProb, transProb, totalProb);
 
@@ -1399,7 +1420,9 @@ void RayGen()
                 float NdotL = saturate(dot(N, nextDir));
                 float NdotH = saturate(dot(N, H));
                 float VdotH = saturate(dot(V, H));
-                float3 F0 = ComputeSurfaceF0(payloadAlbedo, metallic, payloadIor, payloadSpecularWeight);
+                float3 F0 = ComputeSurfaceF0(payloadAlbedo, metallic, payloadIor,
+                                             payloadSpecularWeight,
+                                             payloadSpecularColor);
 
                 pdf = (PDF_GGX(NdotH, VdotH, roughness) * specProb) / totalProb;
                 f_brdf = D_GGX(NdotH, roughness) * V_SmithCorrelated(max(0.0, dot(N, V)), NdotL, roughness) * F_Schlick(VdotH, F0);

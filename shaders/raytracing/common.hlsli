@@ -190,6 +190,10 @@ static const uint MATERIAL_FLAG_UV_TRANSFORM = 1u << 4;
 static const uint MATERIAL_FLAG_GLASS        = 1u << 5;
 static const uint MATERIAL_FLAG_DOUBLE_SIDED = 1u << 6;
 static const uint MATERIAL_FLAG_INVERT_ROUGHNESS = 1u << 7;
+static const uint MATERIAL_FLAG_HAS_OPACITY_TEXTURE = 1u << 8;
+static const uint MATERIAL_FLAG_HAS_SPECULAR_COLOR = 1u << 9;
+static const uint MATERIAL_FLAG_HAS_VOLUME = 1u << 10;
+static const uint MATERIAL_FLAG_HAS_COAT_NORMAL = 1u << 11;
 
 struct MaterialData
 {
@@ -205,10 +209,15 @@ struct MaterialExtraData
     float4 uvTransform;         // xy=uvScale, zw=uvOffset
     float4 triPlanarParams;     // x=enabled, y=scale, z=sharpness, w=normalStrength
     float4 mappingVariationParams; // x=mode, y=offsetJitter, z=materialRotationDegrees, w=reserved
-    float4 shadingParams;       // x=emissiveIntensity, yzw=reserved
+    float4 shadingParams;       // x=emissiveIntensity, y=specWeight, z=alphaCutoff, w=isGrass
     float4 transmissionColor;   // rgb=tinted transmission color
     float4 textureWeight0;      // x=baseColor, y=packedSurface, z=metalness, w=roughnessGloss
-    float4 textureWeight1;      // x=normal, y=occlusion, z=emissive
+    float4 textureWeight1;      // x=normal, y=occlusion, z=emissive, w=opacity
+    uint4  extraPackedTextures; // x=coatNormal
+    float4 volumeParams;        // x=thickness, y=attenuationDistance, z=thicknessTexAmount, w=coatIor
+    float4 specularColor;       // rgb=specularColor, a=specularColorTexAmount
+    float4 sheenColor;          // rgb=sheenColor
+    float4 lobeParams;          // x=coatNormalAmount, y=anisotropy, z=anisoRotationDeg, w=sheenWeight
 };
 
 inline int UnpackTextureIndexLow(uint packedPair)
@@ -278,6 +287,7 @@ struct RayPayload
     uint packedSurface;   // 4x8 UNORM: roughness/metallic/transmission/translucency
     uint packedIorType;   // 16-bit half IOR + 8-bit rayType + thin-walled bit
     uint packedTransmission; // 3x8 UNORM transmission color
+    uint packedSpecular;  // 3x8 UNORM specular color
 };
 
 inline uint PackNormalOctahedron(float3 n)
@@ -412,6 +422,16 @@ inline uint PackPayloadTransmissionColor(float3 c)
 }
 
 inline float3 UnpackPayloadTransmissionColor(uint packed)
+{
+    return UnpackPayloadAlbedo(packed);
+}
+
+inline uint PackPayloadSpecularColor(float3 c)
+{
+    return PackPayloadAlbedo(c);
+}
+
+inline float3 UnpackPayloadSpecularColor(uint packed)
 {
     return UnpackPayloadAlbedo(packed);
 }
