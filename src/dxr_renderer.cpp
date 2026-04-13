@@ -2539,8 +2539,11 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   hitSub.Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
   hitSub.pDesc = &hitGroupDesc;
 
-  fprintf(stderr, "DxrRenderer: MaxPayloadSizeInBytes=%u\n", 32);
-  shaderConfig.MaxPayloadSizeInBytes = 32;
+  constexpr UINT kRayPayloadSizeInBytes =
+      sizeof(float) + 8u * sizeof(uint32_t);
+  fprintf(stderr, "DxrRenderer: MaxPayloadSizeInBytes=%u\n",
+          kRayPayloadSizeInBytes);
+  shaderConfig.MaxPayloadSizeInBytes = kRayPayloadSizeInBytes;
   shaderConfig.MaxAttributeSizeInBytes = 2 * sizeof(float);
   D3D12_STATE_SUBOBJECT shaderConfigSub = {};
   shaderConfigSub.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG;
