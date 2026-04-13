@@ -193,6 +193,10 @@ void ApplyQtTheme(QApplication &app)
             background: transparent;
         }
 
+        QCheckBox:disabled, QRadioButton:disabled {
+            color: #666666;
+        }
+
         QCheckBox::indicator, QRadioButton::indicator {
             width: 16px;
             height: 16px;
@@ -223,14 +227,14 @@ void ApplyQtTheme(QApplication &app)
         }
 
         QCheckBox::indicator:disabled:unchecked, QRadioButton::indicator:disabled:unchecked {
-            background-color: #252526;
-            border: 1px solid #2d2d2d;
+            background-color: #333333;
+            border: 1px solid #444444;
         }
 
         QCheckBox::indicator:disabled:checked, QRadioButton::indicator:disabled:checked {
-            background-color: #1b4f7a;
-            border: 1px solid #1b4f7a;
-            image: url(data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="%23d9e8f5" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>);
+            background-color: #333333;
+            border: 1px solid #444444;
+            image: url(data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="%23777777" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>);
         }
 
         QRadioButton::indicator {
