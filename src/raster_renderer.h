@@ -41,7 +41,7 @@ namespace RasterRenderer {
   void DrawSceneDepthOnly(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB, const std::vector<Scene::Instance>& instances);
   
   void CreateShadowResources(ID3D12Device* device);
-  void DrawShadowMap(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB, const std::vector<Scene::Instance>& instances);
+  void DrawShadowMap(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB, const std::vector<Scene::Instance>& instances, bool includeGrass = false);
   D3D12_GPU_DESCRIPTOR_HANDLE GetShadowMapSrv();
   D3D12_CPU_DESCRIPTOR_HANDLE GetShadowMapSrvCpu();
   bool PrepareHdrRenderTarget(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList,
