@@ -8,9 +8,9 @@
 #include <pbbitmap.h>
 #include <stdmat.h>
 #include <object.h>
+#include <hold.h>
 #include <units.h>
 #include <ISceneEventManager.h>
-
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -224,7 +224,7 @@ HINSTANCE g_instance = nullptr;
 MaxLiveLinkPipeClient g_pipeClient;
 std::atomic<bool> g_exportInProgress{false};
 constexpr const char *kPipeName = "project-render-max-livelink";
-constexpr const char *kSourceApp = "3dsMax2024";
+constexpr const char *kSourceApp = "3dsMax2025";
 constexpr UINT_PTR kPollTimerId = 0x5052;
 constexpr UINT_PTR kCameraPollTimerId = 0x5053;
 constexpr UINT kPollIntervalMs = 50;
@@ -972,7 +972,7 @@ std::string MakeDocumentDisplayName(Interface *ip) {
 std::string MakeSessionId() {
   static std::atomic<uint64_t> s_sessionCounter{1};
   const uint64_t sessionOrdinal = s_sessionCounter.fetch_add(1);
-  return "3dsmax2024-" + std::to_string(GetCurrentProcessId()) + "-" +
+  return "3dsmax2025-" + std::to_string(GetCurrentProcessId()) + "-" +
          std::to_string(GetTickCount64()) + "-" +
          std::to_string(sessionOrdinal);
 }
@@ -1088,82 +1088,10 @@ public:
   }
 };
 
-struct MaterialSnapshot {
-  bool valid = false;
-  ULONG_PTR nodeHandle = 0;
-  int materialSlot = 0;
-  std::string nodeObjectId;
-  std::string materialStableId;
-  std::vector<MaterialReferenceSnapshot> references;
-  std::string objectId;
-  std::string name;
-  std::string materialModel = "OpenPBR";
-  std::array<float, 4> baseColor = {1.0f, 1.0f, 1.0f, 1.0f};
-  std::string baseColorTextureUri;
-  std::string normalTextureUri;
-  std::string emissiveTextureUri;
-  std::string occlusionTextureUri;
-  std::string metalRoughTextureUri;
-  std::array<float, 4> emissiveColor = {0.0f, 0.0f, 0.0f, 1.0f};
-  float emissiveIntensity = 0.0f;
-  float roughness = 0.5f;
-  float metalness = 0.0f;
-  float specularWeight = 1.0f;
-  float ior = 1.5f;
-  float transmissionWeight = 0.0f;
-  std::array<float, 3> transmissionColor = {1.0f, 1.0f, 1.0f};
-  float coatWeight = 0.0f;
-  float coatRoughness = 0.1f;
-  float thinWalled = 0.0f;
-  float translucency = 0.0f;
-  std::array<float, 2> uvScale = {1.0f, 1.0f};
-  std::array<float, 2> uvOffset = {0.0f, 0.0f};
-  float triPlanarEnabled = 0.0f;
-  float triPlanarScale = 1.0f;
-  float triPlanarSharpness = 4.0f;
-  float triPlanarNormalStrength = 1.0f;
-  bool doubleSided = false;
-  std::string alphaMode = "OPAQUE";
-  bool invertRoughnessTexture = false;
-};
-
-struct TextureBindingSnapshot {
-  std::string uri;
-  std::array<float, 2> uvScale = {1.0f, 1.0f};
-  std::array<float, 2> uvOffset = {0.0f, 0.0f};
-  float triPlanarEnabled = 0.0f;
-  float triPlanarScale = 1.0f;
-  float triPlanarSharpness = 4.0f;
-  float triPlanarNormalStrength = 1.0f;
-};
-
-using MaterialStateMap = std::unordered_map<std::string, MaterialSnapshot>;
-
-struct LightSnapshot {
-  bool valid = false;
-  ULONG_PTR handle = 0;
-  std::string objectId;
-  std::string name;
-  std::string lightType = "Omni";
-  std::array<float, 3> position = {0.0f, 2.0f, 0.0f};
-  std::array<float, 3> direction = {0.0f, -1.0f, 0.0f};
-  std::array<float, 3> color = {1.0f, 1.0f, 1.0f};
-  float intensity = 0.0f;
-  float radius = 0.1f;
-  float innerConeDegrees = 30.0f;
-  float outerConeDegrees = 45.0f;
-  std::array<float, 2> areaExtents = {1.0f, 1.0f};
-};
-
-struct NativeMeshPayloadHeader {
-  uint32_t magic = 0x48534D50; // PMSH
-  uint32_t version = 5;
-  uint32_t meshCount = 0;
-  uint32_t reserved = 0;
-};
-
 struct SharedPayloadCacheEntry {
   uint64_t geometryFingerprint = 0;
+  uint64_t vertexCount = 0;
+  uint64_t indexCount = 0;
   std::string payloadUri;
 };
 
@@ -1240,6 +1168,138 @@ struct MeshExportTimingStats {
   uint64_t totalSerializeMs = 0;
 };
 
+struct MaterialGatherTimingStats {
+  uint64_t snapshotMs = 0;
+  uint64_t textureExtractMs = 0;
+  uint64_t triPlanarSearchMs = 0;
+  uint64_t vrayMaterialMs = 0;
+  uint64_t materialCount = 0;
+  uint64_t texturedMaterialCount = 0;
+  uint64_t triPlanarSearchCount = 0;
+  uint64_t triPlanarHitCount = 0;
+};
+
+struct FullResyncTimingStats {
+  bool valid = false;
+  uint64_t totalMs = 0;
+  uint64_t identifierPrepMs = 0;
+  uint64_t nodeGatherMs = 0;
+  uint64_t lightGatherMs = 0;
+  uint64_t sceneCameraGatherMs = 0;
+  uint64_t materialGatherMs = 0;
+  uint64_t materialLibraryWriteMs = 0;
+  uint64_t selectionGatherMs = 0;
+  uint64_t deltaBuildMs = 0;
+  uint64_t batchSendMs = 0;
+  size_t nodeCount = 0;
+  size_t meshNodeCount = 0;
+  size_t materialCount = 0;
+  size_t textureCount = 0;
+  size_t lightCount = 0;
+  size_t cameraCount = 0;
+  uint64_t slowestNodeMs = 0;
+  std::string slowestNodeName;
+  MaterialGatherTimingStats materialStats;
+};
+
+enum class EmbeddedTextureEncoding : uint32_t {
+  None = 0,
+  RawRgba8 = 1,
+  RawRgba32Float = 2,
+  EncodedLdr = 3,
+  EncodedHdr = 4,
+};
+
+struct EmbeddedTexturePayload {
+  std::string contentHash;
+  EmbeddedTextureEncoding encoding = EmbeddedTextureEncoding::None;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  std::vector<uint8_t> data;
+
+  bool IsValid() const { return !contentHash.empty() && !data.empty(); }
+};
+
+struct MaterialSnapshot {
+  bool valid = false;
+  ULONG_PTR nodeHandle = 0;
+  int materialSlot = 0;
+  std::string nodeObjectId;
+  std::string materialStableId;
+  std::vector<MaterialReferenceSnapshot> references;
+  std::string objectId;
+  std::string name;
+  std::string materialModel = "OpenPBR";
+  std::array<float, 4> baseColor = {1.0f, 1.0f, 1.0f, 1.0f};
+  std::string baseColorTextureUri;
+  EmbeddedTexturePayload baseColorTexturePayload;
+  std::string normalTextureUri;
+  EmbeddedTexturePayload normalTexturePayload;
+  std::string emissiveTextureUri;
+  EmbeddedTexturePayload emissiveTexturePayload;
+  std::string occlusionTextureUri;
+  EmbeddedTexturePayload occlusionTexturePayload;
+  std::string metalRoughTextureUri;
+  EmbeddedTexturePayload metalRoughTexturePayload;
+  std::array<float, 4> emissiveColor = {0.0f, 0.0f, 0.0f, 1.0f};
+  float emissiveIntensity = 0.0f;
+  float roughness = 0.5f;
+  float metalness = 0.0f;
+  float specularWeight = 1.0f;
+  float ior = 1.5f;
+  float transmissionWeight = 0.0f;
+  std::array<float, 3> transmissionColor = {1.0f, 1.0f, 1.0f};
+  float coatWeight = 0.0f;
+  float coatRoughness = 0.1f;
+  float thinWalled = 0.0f;
+  float translucency = 0.0f;
+  std::array<float, 2> uvScale = {1.0f, 1.0f};
+  std::array<float, 2> uvOffset = {0.0f, 0.0f};
+  float triPlanarEnabled = 0.0f;
+  float triPlanarScale = 1.0f;
+  float triPlanarSharpness = 4.0f;
+  float triPlanarNormalStrength = 1.0f;
+  bool doubleSided = false;
+  std::string alphaMode = "OPAQUE";
+  bool invertRoughnessTexture = false;
+};
+
+struct TextureBindingSnapshot {
+  std::string uri;
+  EmbeddedTexturePayload payload;
+  std::array<float, 2> uvScale = {1.0f, 1.0f};
+  std::array<float, 2> uvOffset = {0.0f, 0.0f};
+  float triPlanarEnabled = 0.0f;
+  float triPlanarScale = 1.0f;
+  float triPlanarSharpness = 4.0f;
+  float triPlanarNormalStrength = 1.0f;
+};
+
+using MaterialStateMap = std::unordered_map<std::string, MaterialSnapshot>;
+
+struct LightSnapshot {
+  bool valid = false;
+  ULONG_PTR handle = 0;
+  std::string objectId;
+  std::string name;
+  std::string lightType = "Omni";
+  std::array<float, 3> position = {0.0f, 2.0f, 0.0f};
+  std::array<float, 3> direction = {0.0f, -1.0f, 0.0f};
+  std::array<float, 3> color = {1.0f, 1.0f, 1.0f};
+  float intensity = 0.0f;
+  float radius = 0.1f;
+  float innerConeDegrees = 30.0f;
+  float outerConeDegrees = 45.0f;
+  std::array<float, 2> areaExtents = {1.0f, 1.0f};
+};
+
+struct NativeMeshPayloadHeader {
+  uint32_t magic = 0x48534D50; // PMSH
+  uint32_t version = 5;
+  uint32_t meshCount = 0;
+  uint32_t reserved = 0;
+};
+
 struct NativeMeshPayloadMeshHeader {
   uint32_t vertexCount = 0;
   uint32_t indexCount = 0;
@@ -1301,9 +1361,17 @@ struct NativeMeshPayloadMaterialBindingHeader {
 
 struct NativeMaterialLibraryHeader {
   uint32_t magic = 0x54414D50; // PMAT
-  uint32_t version = 1;
+  uint32_t version = 2;
   uint32_t materialCount = 0;
   uint32_t reserved = 0;
+};
+
+struct NativeMaterialLibraryTextureBlobHeader {
+  uint32_t hashLength = 0;
+  uint32_t encoding = 0;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint32_t dataSize = 0;
 };
 
 struct NativeMaterialLibraryReferenceHeader {
@@ -1342,6 +1410,45 @@ struct NativeMaterialLibraryMaterialHeader {
   uint32_t emissiveTextureUriLength = 0;
   uint32_t occlusionTextureUriLength = 0;
   uint32_t metalRoughTextureUriLength = 0;
+  uint32_t referenceCount = 0;
+};
+
+struct NativeMaterialLibraryMaterialHeaderV2 {
+  uint32_t flags = 0;
+  float baseColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+  float emissiveColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+  float emissiveIntensity = 1.0f;
+  float roughness = 0.5f;
+  float metalness = 0.0f;
+  float specularWeight = 1.0f;
+  float ior = 1.5f;
+  float transmissionWeight = 0.0f;
+  float transmissionColor[3] = {1.0f, 1.0f, 1.0f};
+  float coatWeight = 0.0f;
+  float coatRoughness = 0.1f;
+  float thinWalled = 0.0f;
+  float translucency = 0.0f;
+  float uvScale[2] = {1.0f, 1.0f};
+  float uvOffset[2] = {0.0f, 0.0f};
+  float triPlanarEnabled = 0.0f;
+  float triPlanarScale = 1.0f;
+  float triPlanarSharpness = 4.0f;
+  float triPlanarNormalStrength = 1.0f;
+  uint32_t objectIdLength = 0;
+  uint32_t nameLength = 0;
+  uint32_t materialStableIdLength = 0;
+  uint32_t materialModelLength = 0;
+  uint32_t alphaModeLength = 0;
+  uint32_t baseColorTextureUriLength = 0;
+  uint32_t baseColorTextureBlobHashLength = 0;
+  uint32_t normalTextureUriLength = 0;
+  uint32_t normalTextureBlobHashLength = 0;
+  uint32_t emissiveTextureUriLength = 0;
+  uint32_t emissiveTextureBlobHashLength = 0;
+  uint32_t occlusionTextureUriLength = 0;
+  uint32_t occlusionTextureBlobHashLength = 0;
+  uint32_t metalRoughTextureUriLength = 0;
+  uint32_t metalRoughTextureBlobHashLength = 0;
   uint32_t referenceCount = 0;
 };
 
@@ -1491,6 +1598,11 @@ bool SameVector4(const std::array<float, 4> &lhs, const std::array<float, 4> &rh
          std::fabs(lhs[3] - rhs[3]) <= 1.0e-4f;
 }
 
+bool SameEmbeddedTexturePayload(const EmbeddedTexturePayload &lhs,
+                                const EmbeddedTexturePayload &rhs) {
+  return lhs.contentHash == rhs.contentHash;
+}
+
 bool SameMaterial(const MaterialSnapshot &lhs, const MaterialSnapshot &rhs) {
   const bool hasStableIdentity =
       !lhs.materialStableId.empty() && lhs.materialStableId == rhs.materialStableId;
@@ -1522,10 +1634,20 @@ bool SameMaterial(const MaterialSnapshot &lhs, const MaterialSnapshot &rhs) {
          lhs.materialModel == rhs.materialModel &&
          SameVector4(lhs.baseColor, rhs.baseColor) &&
          lhs.baseColorTextureUri == rhs.baseColorTextureUri &&
+         SameEmbeddedTexturePayload(lhs.baseColorTexturePayload,
+                                    rhs.baseColorTexturePayload) &&
          lhs.normalTextureUri == rhs.normalTextureUri &&
+         SameEmbeddedTexturePayload(lhs.normalTexturePayload,
+                                    rhs.normalTexturePayload) &&
          lhs.emissiveTextureUri == rhs.emissiveTextureUri &&
+         SameEmbeddedTexturePayload(lhs.emissiveTexturePayload,
+                                    rhs.emissiveTexturePayload) &&
          lhs.occlusionTextureUri == rhs.occlusionTextureUri &&
+         SameEmbeddedTexturePayload(lhs.occlusionTexturePayload,
+                                    rhs.occlusionTexturePayload) &&
          lhs.metalRoughTextureUri == rhs.metalRoughTextureUri &&
+         SameEmbeddedTexturePayload(lhs.metalRoughTexturePayload,
+                                    rhs.metalRoughTexturePayload) &&
          SameVector4(lhs.emissiveColor, rhs.emissiveColor) &&
          NearlyEqual(lhs.emissiveIntensity, rhs.emissiveIntensity) &&
          NearlyEqual(lhs.roughness, rhs.roughness) &&
@@ -1598,10 +1720,15 @@ json SerializeMaterialSnapshot(const MaterialSnapshot &snapshot) {
               {"mm", snapshot.materialModel},
               {"bc", snapshot.baseColor},
               {"bct", snapshot.baseColorTextureUri},
+              {"bck", snapshot.baseColorTexturePayload.contentHash},
               {"nt", snapshot.normalTextureUri},
+              {"ntk", snapshot.normalTexturePayload.contentHash},
               {"et", snapshot.emissiveTextureUri},
+              {"etk", snapshot.emissiveTexturePayload.contentHash},
               {"ot", snapshot.occlusionTextureUri},
+              {"otk", snapshot.occlusionTexturePayload.contentHash},
               {"mrt", snapshot.metalRoughTextureUri},
+              {"mrtk", snapshot.metalRoughTexturePayload.contentHash},
               {"ec", snapshot.emissiveColor},
               {"ei", snapshot.emissiveIntensity},
               {"r", snapshot.roughness},
@@ -1705,10 +1832,20 @@ bool DeserializeMaterialSnapshot(const json &value, MaterialSnapshot *outSnapsho
   snapshot.materialModel = value.value("mm", std::string("OpenPBR"));
   if (value.contains("bc")) snapshot.baseColor = value["bc"].get<std::array<float, 4>>();
   snapshot.baseColorTextureUri = value.value("bct", std::string());
+  snapshot.baseColorTexturePayload.contentHash =
+      value.value("bck", std::string());
   snapshot.normalTextureUri = value.value("nt", std::string());
+  snapshot.normalTexturePayload.contentHash =
+      value.value("ntk", std::string());
   snapshot.emissiveTextureUri = value.value("et", std::string());
+  snapshot.emissiveTexturePayload.contentHash =
+      value.value("etk", std::string());
   snapshot.occlusionTextureUri = value.value("ot", std::string());
+  snapshot.occlusionTexturePayload.contentHash =
+      value.value("otk", std::string());
   snapshot.metalRoughTextureUri = value.value("mrt", std::string());
+  snapshot.metalRoughTexturePayload.contentHash =
+      value.value("mrtk", std::string());
   if (value.contains("ec")) snapshot.emissiveColor = value["ec"].get<std::array<float, 4>>();
   snapshot.emissiveIntensity = value.value("ei", 0.0f);
   snapshot.roughness = value.value("r", 0.5f);
@@ -2076,10 +2213,432 @@ bool TryNormalizeTextureUri(Interface *ip, const std::string &rawPath,
   return true;
 }
 
+bool IsHdrTextureUri(const std::string &uri) {
+  const std::string extension =
+      ToLowerAscii(std::filesystem::path(Utf8ToWString(uri)).extension().string());
+  return extension == ".hdr" || extension == ".exr";
+}
+
+uint64_t HashBytesFnv1a64(const void *data, size_t size) {
+  const auto *bytes = static_cast<const uint8_t *>(data);
+  uint64_t hash = 1469598103934665603ull;
+  for (size_t index = 0; index < size; ++index) {
+    hash ^= static_cast<uint64_t>(bytes[index]);
+    hash *= 1099511628211ull;
+  }
+  return hash;
+}
+
+std::string MakeEmbeddedTextureContentHash(EmbeddedTextureEncoding encoding,
+                                           uint32_t width, uint32_t height,
+                                           const std::vector<uint8_t> &data) {
+  uint64_t hash = 1469598103934665603ull;
+  auto mix = [&](const void *ptr, size_t size) {
+    hash ^= HashBytesFnv1a64(ptr, size);
+    hash *= 1099511628211ull;
+  };
+  const uint32_t encodingValue = static_cast<uint32_t>(encoding);
+  mix(&encodingValue, sizeof(encodingValue));
+  mix(&width, sizeof(width));
+  mix(&height, sizeof(height));
+  if (!data.empty()) {
+    mix(data.data(), data.size());
+  }
+
+  char buffer[17] = {};
+  sprintf_s(buffer, "%016llx", static_cast<unsigned long long>(hash));
+  return buffer;
+}
+
+bool TryReadFileBytes(const std::string &path, std::vector<uint8_t> *outBytes) {
+  if (!outBytes || path.empty()) {
+    return false;
+  }
+
+  std::ifstream stream(std::filesystem::path(Utf8ToWString(path)),
+                       std::ios::binary | std::ios::ate);
+  if (!stream) {
+    return false;
+  }
+
+  const std::streamsize size = stream.tellg();
+  if (size <= 0) {
+    return false;
+  }
+  stream.seekg(0, std::ios::beg);
+
+  outBytes->resize(static_cast<size_t>(size));
+  stream.read(reinterpret_cast<char *>(outBytes->data()), size);
+  return static_cast<bool>(stream);
+}
+
+void SetEncodedTexturePayload(const std::vector<uint8_t> &bytes,
+                              const std::string &sourceUri,
+                              EmbeddedTextureEncoding encoding,
+                              EmbeddedTexturePayload *outPayload) {
+  if (!outPayload) {
+    return;
+  }
+
+  outPayload->encoding = encoding;
+  outPayload->width = 0;
+  outPayload->height = 0;
+  outPayload->data = bytes;
+  outPayload->contentHash =
+      MakeEmbeddedTextureContentHash(encoding, 0, 0, outPayload->data);
+  (void)sourceUri;
+}
+
+void SetRawTexturePayload(const std::vector<uint8_t> &bytes, uint32_t width,
+                          uint32_t height, EmbeddedTextureEncoding encoding,
+                          EmbeddedTexturePayload *outPayload) {
+  if (!outPayload) {
+    return;
+  }
+
+  outPayload->encoding = encoding;
+  outPayload->width = width;
+  outPayload->height = height;
+  outPayload->data = bytes;
+  outPayload->contentHash =
+      MakeEmbeddedTextureContentHash(encoding, width, height, outPayload->data);
+}
+
+bool SetTexturePayloadFromLinearPixels(const BMM_Color_fl *pixels,
+                                       size_t pixelCount, uint32_t width,
+                                       uint32_t height,
+                                       EmbeddedTexturePayload *outPayload) {
+  if (!pixels || pixelCount == 0 || width == 0 || height == 0 || !outPayload) {
+    return false;
+  }
+
+  bool requiresFloat = false;
+  for (size_t pixelIndex = 0; pixelIndex < pixelCount; ++pixelIndex) {
+    const BMM_Color_fl &pixel = pixels[pixelIndex];
+    if (pixel.r < -1.0e-4f || pixel.r > 1.0001f || pixel.g < -1.0e-4f ||
+        pixel.g > 1.0001f || pixel.b < -1.0e-4f || pixel.b > 1.0001f ||
+        pixel.a < -1.0e-4f || pixel.a > 1.0001f) {
+      requiresFloat = true;
+      break;
+    }
+  }
+
+  if (requiresFloat) {
+    std::vector<uint8_t> rawBytes(pixelCount * sizeof(float) * 4);
+    float *dst = reinterpret_cast<float *>(rawBytes.data());
+    for (size_t pixelIndex = 0; pixelIndex < pixelCount; ++pixelIndex) {
+      dst[pixelIndex * 4 + 0] = pixels[pixelIndex].r;
+      dst[pixelIndex * 4 + 1] = pixels[pixelIndex].g;
+      dst[pixelIndex * 4 + 2] = pixels[pixelIndex].b;
+      dst[pixelIndex * 4 + 3] = pixels[pixelIndex].a;
+    }
+    SetRawTexturePayload(rawBytes, width, height,
+                         EmbeddedTextureEncoding::RawRgba32Float, outPayload);
+    return outPayload->IsValid();
+  }
+
+  std::vector<uint8_t> rawBytes(pixelCount * 4);
+  for (size_t pixelIndex = 0; pixelIndex < pixelCount; ++pixelIndex) {
+    rawBytes[pixelIndex * 4 + 0] = static_cast<uint8_t>(
+        std::clamp(pixels[pixelIndex].r, 0.0f, 1.0f) * 255.0f + 0.5f);
+    rawBytes[pixelIndex * 4 + 1] = static_cast<uint8_t>(
+        std::clamp(pixels[pixelIndex].g, 0.0f, 1.0f) * 255.0f + 0.5f);
+    rawBytes[pixelIndex * 4 + 2] = static_cast<uint8_t>(
+        std::clamp(pixels[pixelIndex].b, 0.0f, 1.0f) * 255.0f + 0.5f);
+    rawBytes[pixelIndex * 4 + 3] = static_cast<uint8_t>(
+        std::clamp(pixels[pixelIndex].a, 0.0f, 1.0f) * 255.0f + 0.5f);
+  }
+
+  SetRawTexturePayload(rawBytes, width, height, EmbeddedTextureEncoding::RawRgba8,
+                       outPayload);
+  return outPayload->IsValid();
+}
+
+class TextureBakeHandleMaker final : public TexHandleMaker {
+ public:
+  explicit TextureBakeHandleMaker(int size) : m_size(std::max(1, size)) {}
+
+  TexHandle *CreateHandle(Bitmap * /*bm*/, int /*symflags*/ = 0,
+                          int /*extraFlags*/ = 0) override {
+    return nullptr;
+  }
+
+  TexHandle *CreateHandle(BITMAPINFO * /*bminf*/, int /*symflags*/ = 0,
+                          int /*extraFlags*/ = 0) override {
+    return nullptr;
+  }
+
+  BITMAPINFO *BitmapToDIB(Bitmap *bm, int /*symflags*/, int /*extraFlags*/,
+                          BOOL forceW = 0, BOOL forceH = 0) override {
+    if (!bm) {
+      return nullptr;
+    }
+
+    const int sourceWidth = bm->Width();
+    const int sourceHeight = bm->Height();
+    const int targetWidth = forceW > 0 ? static_cast<int>(forceW) : sourceWidth;
+    const int targetHeight =
+        forceH > 0 ? static_cast<int>(forceH) : sourceHeight;
+    if (sourceWidth <= 0 || sourceHeight <= 0 || targetWidth <= 0 ||
+        targetHeight <= 0) {
+      return nullptr;
+    }
+
+    std::vector<BMM_Color_fl> sourcePixels(static_cast<size_t>(sourceWidth) *
+                                           static_cast<size_t>(sourceHeight));
+    for (int y = 0; y < sourceHeight; ++y) {
+      if (!bm->GetLinearPixels(0, y, sourceWidth,
+                               sourcePixels.data() +
+                                   static_cast<size_t>(y) * sourceWidth)) {
+        return nullptr;
+      }
+    }
+
+    const size_t dstPixelCount = static_cast<size_t>(targetWidth) *
+                                 static_cast<size_t>(targetHeight);
+    const size_t dibSize =
+        sizeof(BITMAPINFOHEADER) + dstPixelCount * sizeof(uint32_t);
+    uint8_t *storage = new (std::nothrow) uint8_t[dibSize];
+    if (!storage) {
+      return nullptr;
+    }
+
+    std::memset(storage, 0, dibSize);
+    BITMAPINFO *dib = reinterpret_cast<BITMAPINFO *>(storage);
+    dib->bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    dib->bmiHeader.biWidth = targetWidth;
+    dib->bmiHeader.biHeight = -targetHeight;
+    dib->bmiHeader.biPlanes = 1;
+    dib->bmiHeader.biBitCount = 32;
+    dib->bmiHeader.biCompression = BI_RGB;
+    dib->bmiHeader.biSizeImage = static_cast<DWORD>(dstPixelCount * 4);
+
+    uint8_t *dst = storage + sizeof(BITMAPINFOHEADER);
+    for (int y = 0; y < targetHeight; ++y) {
+      const int sourceY =
+          std::min(sourceHeight - 1, (y * sourceHeight) / targetHeight);
+      for (int x = 0; x < targetWidth; ++x) {
+        const int sourceX =
+            std::min(sourceWidth - 1, (x * sourceWidth) / targetWidth);
+        const BMM_Color_fl &pixel =
+            sourcePixels[static_cast<size_t>(sourceY) * sourceWidth + sourceX];
+        const size_t dstIndex =
+            (static_cast<size_t>(y) * targetWidth + x) * 4;
+        dst[dstIndex + 0] = static_cast<uint8_t>(
+            std::clamp(pixel.b, 0.0f, 1.0f) * 255.0f + 0.5f);
+        dst[dstIndex + 1] = static_cast<uint8_t>(
+            std::clamp(pixel.g, 0.0f, 1.0f) * 255.0f + 0.5f);
+        dst[dstIndex + 2] = static_cast<uint8_t>(
+            std::clamp(pixel.r, 0.0f, 1.0f) * 255.0f + 0.5f);
+        dst[dstIndex + 3] = static_cast<uint8_t>(
+            std::clamp(pixel.a, 0.0f, 1.0f) * 255.0f + 0.5f);
+      }
+    }
+
+    m_ownedDibs.insert(dib);
+    return dib;
+  }
+
+  TexHandle *MakeHandle(BITMAPINFO *bminf) override {
+    ReleaseDib(bminf);
+    return nullptr;
+  }
+
+  BOOL UseClosestPowerOf2() override { return TRUE; }
+
+  int Size() override { return m_size; }
+
+  void ReleaseDib(BITMAPINFO *dib) {
+    if (!dib) {
+      return;
+    }
+    const auto it = m_ownedDibs.find(dib);
+    if (it != m_ownedDibs.end()) {
+      delete[] reinterpret_cast<uint8_t *>(dib);
+      m_ownedDibs.erase(it);
+    }
+  }
+
+ private:
+  int m_size = 1;
+  std::unordered_set<BITMAPINFO *> m_ownedDibs;
+};
+
+bool TryCaptureTexturePayloadFromDib(const BITMAPINFO *dib,
+                                     EmbeddedTexturePayload *outPayload) {
+  if (!dib || !outPayload) {
+    return false;
+  }
+
+  const BITMAPINFOHEADER &header = dib->bmiHeader;
+  if (header.biWidth <= 0 || header.biHeight == 0 || header.biPlanes != 1 ||
+      (header.biBitCount != 24 && header.biBitCount != 32)) {
+    return false;
+  }
+
+  const uint32_t width = static_cast<uint32_t>(header.biWidth);
+  const uint32_t height =
+      static_cast<uint32_t>(header.biHeight < 0 ? -header.biHeight
+                                                : header.biHeight);
+  const size_t rowStride =
+      ((static_cast<size_t>(header.biBitCount) * width + 31u) / 32u) * 4u;
+  const size_t paletteBytes =
+      header.biBitCount <= 8
+          ? ((header.biClrUsed != 0 ? header.biClrUsed
+                                    : (1u << header.biBitCount)) *
+             sizeof(RGBQUAD))
+          : 0u;
+  const size_t maskBytes =
+      header.biCompression == BI_BITFIELDS ? sizeof(DWORD) * 3u : 0u;
+  const uint8_t *src =
+      reinterpret_cast<const uint8_t *>(dib) + header.biSize + paletteBytes +
+      maskBytes;
+
+  std::vector<uint8_t> rawBytes(static_cast<size_t>(width) * height * 4u);
+  for (uint32_t y = 0; y < height; ++y) {
+    const uint32_t srcY = header.biHeight < 0 ? y : (height - 1u - y);
+    const uint8_t *srcRow = src + static_cast<size_t>(srcY) * rowStride;
+    uint8_t *dstRow = rawBytes.data() + static_cast<size_t>(y) * width * 4u;
+    for (uint32_t x = 0; x < width; ++x) {
+      const uint8_t *srcPixel =
+          srcRow + static_cast<size_t>(x) * (header.biBitCount / 8u);
+      dstRow[x * 4u + 0] = srcPixel[2];
+      dstRow[x * 4u + 1] = srcPixel[1];
+      dstRow[x * 4u + 2] = srcPixel[0];
+      dstRow[x * 4u + 3] = header.biBitCount == 32 ? srcPixel[3] : 255u;
+    }
+  }
+
+  SetRawTexturePayload(rawBytes, width, height, EmbeddedTextureEncoding::RawRgba8,
+                       outPayload);
+  return outPayload->IsValid();
+}
+
+bool TryCaptureTexturePayloadFromUri(const std::string &textureUri,
+                                     EmbeddedTexturePayload *outPayload) {
+  if (!outPayload || textureUri.empty()) {
+    return false;
+  }
+
+  std::vector<uint8_t> encodedBytes;
+  if (!TryReadFileBytes(textureUri, &encodedBytes) || encodedBytes.empty()) {
+    return false;
+  }
+
+  SetEncodedTexturePayload(encodedBytes, textureUri,
+                           IsHdrTextureUri(textureUri)
+                               ? EmbeddedTextureEncoding::EncodedHdr
+                               : EmbeddedTextureEncoding::EncodedLdr,
+                           outPayload);
+  return outPayload->IsValid();
+}
+
+bool TryCaptureTexturePayloadFromBitmap(Bitmap *bitmap,
+                                        EmbeddedTexturePayload *outPayload) {
+  if (!bitmap || !outPayload) {
+    return false;
+  }
+
+  const int width = bitmap->Width();
+  const int height = bitmap->Height();
+  if (width <= 0 || height <= 0) {
+    return false;
+  }
+
+  std::vector<BMM_Color_fl> pixels(static_cast<size_t>(width) *
+                                   static_cast<size_t>(height));
+  for (int y = 0; y < height; ++y) {
+    if (!bitmap->GetLinearPixels(0, y, width,
+                                 pixels.data() +
+                                     static_cast<size_t>(y) * width)) {
+      return false;
+    }
+  }
+
+  return SetTexturePayloadFromLinearPixels(
+      pixels.data(), pixels.size(), static_cast<uint32_t>(width),
+      static_cast<uint32_t>(height), outPayload);
+}
+
+bool TryCaptureEmbeddedTexturePayload(Interface *ip, Texmap *texmap,
+                                      const std::string &textureUri,
+                                      EmbeddedTexturePayload *outPayload) {
+  if (!texmap || !outPayload) {
+    return false;
+  }
+
+  if (!textureUri.empty() && TryCaptureTexturePayloadFromUri(textureUri, outPayload)) {
+    return true;
+  }
+
+  if (BitmapTex *bitmapTex = dynamic_cast<BitmapTex *>(texmap)) {
+    const TimeValue time = ip ? ip->GetTime() : 0;
+    if (Bitmap *bitmap = bitmapTex->GetBitmap(time)) {
+      return TryCaptureTexturePayloadFromBitmap(bitmap, outPayload);
+    }
+  }
+
+  constexpr int kEmbeddedBakeResolution = 512;
+  const TimeValue time = ip ? ip->GetTime() : 0;
+  Interval validity = FOREVER;
+  texmap->LoadMapFiles(time);
+  texmap->Update(time, validity);
+
+  TextureBakeHandleMaker handleMaker(kEmbeddedBakeResolution);
+  BITMAPINFO *dib = texmap->GetVPDisplayDIB(time, handleMaker, validity, FALSE,
+                                            kEmbeddedBakeResolution,
+                                            kEmbeddedBakeResolution);
+  if (!dib) {
+    return false;
+  }
+
+  const bool captured = TryCaptureTexturePayloadFromDib(dib, outPayload);
+  handleMaker.ReleaseDib(dib);
+  return captured;
+}
+
 bool ParamNameSuggestsTexturePath(const std::string &paramNameLower) {
   return ContainsAnyToken(paramNameLower,
                           {"file", "filename", "filepath", "path", "bitmap",
                            "bitmapbuffer", "mapname", "asset"});
+}
+
+bool IsTriPlanarTexmap(Texmap *texmap);
+
+bool IsTextureBindingResolved(const TextureBindingSnapshot &binding) {
+  return !binding.uri.empty() || binding.payload.IsValid();
+}
+
+bool HasMaterialTexture(const std::string &uri,
+                        const EmbeddedTexturePayload &payload) {
+  return !uri.empty() || payload.IsValid();
+}
+
+bool IsMaskSlotName(const std::string &slotNameLower) {
+  return ContainsAnyToken(slotNameLower, {"mask", "matte", "blend mask"});
+}
+
+bool ShouldAttemptEmbeddedBakeForTexmap(Texmap *texmap) {
+  if (!texmap || dynamic_cast<BitmapTex *>(texmap) != nullptr ||
+      IsTriPlanarTexmap(texmap)) {
+    return false;
+  }
+
+  const std::string classNameLower = GetObjectClassNameLower(texmap);
+  return ContainsAnyToken(
+      classNameLower,
+      {"composite", "mix", "blend", "tiles", "tile", "checker", "noise",
+       "cellular", "gradient", "falloff", "colorcorrect", "color correction",
+       "output", "procedural"});
+}
+
+bool IsLayeredCompositeTexmap(Texmap *texmap) {
+  if (!texmap) {
+    return false;
+  }
+
+  const std::string classNameLower = GetObjectClassNameLower(texmap);
+  return ContainsAnyToken(classNameLower, {"composite", "mix", "blend"});
 }
 
 bool TryResolveBitmapTextureBinding(Interface *ip, BitmapTex *bitmapTex,
@@ -2095,6 +2654,7 @@ bool TryResolveBitmapTextureBinding(Interface *ip, BitmapTex *bitmapTex,
   }
 
   outBinding->uri = textureUri;
+  TryCaptureEmbeddedTexturePayload(ip, bitmapTex, textureUri, &outBinding->payload);
 
   if (StdUVGen *uvGenerator = bitmapTex->GetUVGen()) {
     const TimeValue time = ip ? ip->GetTime() : 0;
@@ -2390,6 +2950,7 @@ bool TryResolveFileBackedTextureBinding(Interface *ip, Texmap *texmap,
   }
 
   outBinding->uri = std::move(textureUri);
+  TryCaptureTexturePayloadFromUri(outBinding->uri, &outBinding->payload);
   return true;
 }
 
@@ -2539,20 +3100,28 @@ bool TryResolveTriPlanarTextureBinding(Interface *ip, Texmap *texmap,
 
     TextureBindingSnapshot axisBinding;
     if (!TryResolveTexmapTextureBinding(ip, axisTexmap, &axisBinding) ||
-        axisBinding.uri.empty()) {
+        !IsTextureBindingResolved(axisBinding)) {
       continue;
     }
 
     if (!foundPrimaryBinding) {
       primaryBinding = std::move(axisBinding);
       foundPrimaryBinding = true;
+      continue;
+    }
+
+    if (primaryBinding.uri.empty() && !axisBinding.uri.empty()) {
+      primaryBinding.uri = std::move(axisBinding.uri);
+    }
+    if (!primaryBinding.payload.IsValid() && axisBinding.payload.IsValid()) {
+      primaryBinding.payload = std::move(axisBinding.payload);
     }
   }
 
   if (!foundPrimaryBinding) {
     TextureBindingSnapshot fallbackBinding;
     if (TryResolveFileBackedTextureBinding(ip, texmap, &fallbackBinding) &&
-        !fallbackBinding.uri.empty()) {
+        IsTextureBindingResolved(fallbackBinding)) {
       primaryBinding = std::move(fallbackBinding);
       foundPrimaryBinding = true;
     }
@@ -2568,7 +3137,7 @@ bool TryResolveTriPlanarTextureBinding(Interface *ip, Texmap *texmap,
 
       TextureBindingSnapshot subBinding;
       if (!TryResolveTexmapTextureBinding(ip, subTexmap, &subBinding) ||
-          subBinding.uri.empty()) {
+          !IsTextureBindingResolved(subBinding)) {
         continue;
       }
 
@@ -2578,7 +3147,7 @@ bool TryResolveTriPlanarTextureBinding(Interface *ip, Texmap *texmap,
     }
   }
 
-  if (!foundPrimaryBinding || primaryBinding.uri.empty()) {
+  if (!foundPrimaryBinding || !IsTextureBindingResolved(primaryBinding)) {
     return false;
   }
 
@@ -2618,7 +3187,38 @@ bool TryResolveTexmapTextureBinding(Interface *ip, Texmap *texmap,
     }
   }
 
-  if (TryResolveFileBackedTextureBinding(ip, texmap, outBinding)) {
+  if (ShouldAttemptEmbeddedBakeForTexmap(texmap) &&
+      TryCaptureEmbeddedTexturePayload(ip, texmap, std::string(),
+                                       &outBinding->payload)) {
+    return true;
+  }
+
+  if (IsLayeredCompositeTexmap(texmap)) {
+    for (int subTexmapIndex = texmap->NumSubTexmaps() - 1; subTexmapIndex >= 0;
+         --subTexmapIndex) {
+      Texmap *subTexmap = texmap->GetSubTexmap(subTexmapIndex);
+      if (!subTexmap) {
+        continue;
+      }
+
+      const MSTR slotName = texmap->GetSubTexmapSlotName(subTexmapIndex, false);
+      const std::string slotNameLower = ToLowerAscii(ToUtf8(slotName.data()));
+      if (IsMaskSlotName(slotNameLower)) {
+        continue;
+      }
+
+      TextureBindingSnapshot subBinding;
+      if (TryResolveTexmapTextureBinding(ip, subTexmap, &subBinding) &&
+          IsTextureBindingResolved(subBinding)) {
+        *outBinding = std::move(subBinding);
+        return true;
+      }
+    }
+  }
+
+  TextureBindingSnapshot fallbackBinding;
+  if (TryResolveFileBackedTextureBinding(ip, texmap, &fallbackBinding)) {
+    *outBinding = std::move(fallbackBinding);
     return true;
   }
 
@@ -2628,7 +3228,7 @@ bool TryResolveTexmapTextureBinding(Interface *ip, Texmap *texmap,
           [&](Texmap *childTexmap) {
             return TryResolveTexmapTextureBinding(ip, childTexmap, outBinding);
           })) {
-    if (!outBinding->uri.empty()) {
+    if (IsTextureBindingResolved(*outBinding)) {
       return true;
     }
   }
@@ -2637,12 +3237,15 @@ bool TryResolveTexmapTextureBinding(Interface *ip, Texmap *texmap,
 }
 
 void ApplyTextureBinding(TextureBindingSnapshot binding, std::string *outUri,
+                         EmbeddedTexturePayload *outPayload,
                          MaterialSnapshot *snapshot) {
-  if (!outUri || !snapshot || binding.uri.empty()) {
+  if (!outUri || !outPayload || !snapshot ||
+      (binding.uri.empty() && !binding.payload.IsValid())) {
     return;
   }
 
   *outUri = std::move(binding.uri);
+  *outPayload = std::move(binding.payload);
   if (binding.triPlanarEnabled > 0.5f) {
     if (snapshot->triPlanarEnabled <= 0.5f) {
       snapshot->triPlanarEnabled = 1.0f;
@@ -2686,35 +3289,45 @@ void CaptureGenericMaterialTextures(Interface *ip, Mtl *material,
       continue;
     }
 
-    if (snapshot->baseColorTextureUri.empty() &&
+    if (!HasMaterialTexture(snapshot->baseColorTextureUri,
+                            snapshot->baseColorTexturePayload) &&
         ContainsAnyToken(slotNameLower,
                          {"diffuse", "albedo", "base color", "basecolor"})) {
       ApplyTextureBinding(std::move(binding), &snapshot->baseColorTextureUri,
+                          &snapshot->baseColorTexturePayload,
                           snapshot);
       continue;
     }
-    if (snapshot->normalTextureUri.empty() &&
+    if (!HasMaterialTexture(snapshot->normalTextureUri,
+                            snapshot->normalTexturePayload) &&
         ContainsAnyToken(slotNameLower, {"normal", "bump"})) {
       ApplyTextureBinding(std::move(binding), &snapshot->normalTextureUri,
+                          &snapshot->normalTexturePayload,
                           snapshot);
       continue;
     }
-    if (snapshot->emissiveTextureUri.empty() &&
+    if (!HasMaterialTexture(snapshot->emissiveTextureUri,
+                            snapshot->emissiveTexturePayload) &&
         ContainsAnyToken(slotNameLower, {"self", "emiss", "illum"})) {
       ApplyTextureBinding(std::move(binding), &snapshot->emissiveTextureUri,
+                          &snapshot->emissiveTexturePayload,
                           snapshot);
       continue;
     }
-    if (snapshot->occlusionTextureUri.empty() &&
+    if (!HasMaterialTexture(snapshot->occlusionTextureUri,
+                            snapshot->occlusionTexturePayload) &&
         ContainsAnyToken(slotNameLower, {"occlusion", "ambient occlusion", "ao"})) {
       ApplyTextureBinding(std::move(binding), &snapshot->occlusionTextureUri,
+                          &snapshot->occlusionTexturePayload,
                           snapshot);
       continue;
     }
-    if (snapshot->metalRoughTextureUri.empty() &&
+    if (!HasMaterialTexture(snapshot->metalRoughTextureUri,
+                            snapshot->metalRoughTexturePayload) &&
         ContainsAnyToken(slotNameLower,
                          {"metal", "metallic", "metalness", "rough", "gloss"})) {
       ApplyTextureBinding(std::move(binding), &snapshot->metalRoughTextureUri,
+                          &snapshot->metalRoughTexturePayload,
                           snapshot);
     }
   }
@@ -2916,6 +3529,7 @@ void ApplyVrayMaterialParameters(Interface *ip, Mtl *material,
     TextureBindingSnapshot binding;
     if (TryResolveTexmapTextureBinding(ip, baseColorTexmap, &binding)) {
       ApplyTextureBinding(std::move(binding), &snapshot->baseColorTextureUri,
+                          &snapshot->baseColorTexturePayload,
                           snapshot);
     }
   }
@@ -2927,6 +3541,7 @@ void ApplyVrayMaterialParameters(Interface *ip, Mtl *material,
     TextureBindingSnapshot binding;
     if (TryResolveTexmapTextureBinding(ip, normalTexmap, &binding)) {
       ApplyTextureBinding(std::move(binding), &snapshot->normalTextureUri,
+                          &snapshot->normalTexturePayload,
                           snapshot);
     }
   }
@@ -2938,11 +3553,13 @@ void ApplyVrayMaterialParameters(Interface *ip, Mtl *material,
     TextureBindingSnapshot binding;
     if (TryResolveTexmapTextureBinding(ip, metalnessTexmap, &binding)) {
       ApplyTextureBinding(std::move(binding), &snapshot->metalRoughTextureUri,
+                          &snapshot->metalRoughTexturePayload,
                           snapshot);
     }
   }
 
-  if (snapshot->metalRoughTextureUri.empty()) {
+  if (!HasMaterialTexture(snapshot->metalRoughTextureUri,
+                          snapshot->metalRoughTexturePayload)) {
     Texmap *roughnessTexmap = nullptr;
     if (TryGetVrayMtlTexmap(material,
                             ProjectRenderVrayMtlParameters::pb_reflect_glossiness_shortmap,
@@ -2950,6 +3567,7 @@ void ApplyVrayMaterialParameters(Interface *ip, Mtl *material,
       TextureBindingSnapshot binding;
       if (TryResolveTexmapTextureBinding(ip, roughnessTexmap, &binding)) {
         ApplyTextureBinding(std::move(binding), &snapshot->metalRoughTextureUri,
+                            &snapshot->metalRoughTexturePayload,
                             snapshot);
       }
     }
@@ -2968,6 +3586,7 @@ void ApplyVrayMaterialParameters(Interface *ip, Mtl *material,
     TextureBindingSnapshot binding;
     if (TryResolveTexmapTextureBinding(ip, emissiveTexmap, &binding)) {
       ApplyTextureBinding(std::move(binding), &snapshot->emissiveTextureUri,
+                          &snapshot->emissiveTexturePayload,
                           snapshot);
     }
   }
@@ -3130,9 +3749,15 @@ bool GetTriObjectForNode(Interface *ip, INode *node, TriObject **outTriObject,
                          bool *outNeedsDelete);
 bool GetNodeMeshAccess(Interface *ip, INode *node, NodeMeshAccess *outAccess);
 void ReleaseNodeMeshAccess(NodeMeshAccess *access);
+bool NodeCanPotentiallyProduceMesh(Interface *ip, INode *node);
+void PopulateSnapshotMeshMetadata(Interface *ip, INode *node, Mesh &mesh,
+                                  NodeSnapshot *snapshot);
+bool MaterialSnapshotHasAnyTexture(const MaterialSnapshot &snapshot);
+size_t CountTextureUrisForState(const MaterialStateMap &materialState);
 
 std::vector<int> GatherUsedMaterialSlots(Interface *ip, INode *node,
-                                         Mtl *rootMaterial) {
+                                         Mtl *rootMaterial,
+                                         bool preferExplicitSlotsOnly = false) {
   std::vector<int> usedSlots;
   if (!node || !rootMaterial) {
     return usedSlots;
@@ -3144,9 +3769,7 @@ std::vector<int> GatherUsedMaterialSlots(Interface *ip, INode *node,
     return usedSlots;
   }
 
-  TriObject *triObject = nullptr;
-  bool needsDelete = false;
-  if (!GetTriObjectForNode(ip, node, &triObject, &needsDelete)) {
+  if (preferExplicitSlotsOnly) {
     std::vector<int> explicitMaterialIds;
     if (TryGetMultiMaterialIds(rootMaterial, &explicitMaterialIds)) {
       for (int materialId : explicitMaterialIds) {
@@ -3167,7 +3790,29 @@ std::vector<int> GatherUsedMaterialSlots(Interface *ip, INode *node,
     return usedSlots;
   }
 
-  Mesh &mesh = triObject->GetMesh();
+  NodeMeshAccess meshAccess;
+  if (!GetNodeMeshAccess(ip, node, &meshAccess) || !meshAccess.mesh) {
+    std::vector<int> explicitMaterialIds;
+    if (TryGetMultiMaterialIds(rootMaterial, &explicitMaterialIds)) {
+      for (int materialId : explicitMaterialIds) {
+        if (rootMaterial->GetSubMtl(materialId)) {
+          usedSlots.push_back(materialId);
+        }
+      }
+    } else {
+      for (int slot = 0; slot < subMaterialCount; ++slot) {
+        if (rootMaterial->GetSubMtl(slot)) {
+          usedSlots.push_back(slot);
+        }
+      }
+    }
+    if (usedSlots.empty()) {
+      usedSlots.push_back(0);
+    }
+    return usedSlots;
+  }
+
+  Mesh &mesh = *meshAccess.mesh;
   const bool isMultiMtl = rootMaterial && rootMaterial->IsMultiMtl();
   const int rootSubCount = rootMaterial ? rootMaterial->NumSubMtls() : 0;
   for (int faceIndex = 0; faceIndex < mesh.getNumFaces(); ++faceIndex) {
@@ -3187,9 +3832,7 @@ std::vector<int> GatherUsedMaterialSlots(Interface *ip, INode *node,
     }
   }
 
-  if (needsDelete) {
-    triObject->DeleteMe();
-  }
+  ReleaseNodeMeshAccess(&meshAccess);
 
   usedSlots.erase(std::remove_if(usedSlots.begin(), usedSlots.end(),
                                  [rootMaterial](int slot) {
@@ -3230,8 +3873,9 @@ Mtl *ResolveMaterialForSlot(Mtl *rootMaterial, int materialSlot) {
   return ResolveLeafMaterial(rootMaterial);
 }
 
-bool CaptureMaterialSnapshot(Interface *ip, INode *node, int materialSlot, Mtl *material,
-                             MaterialSnapshot *outSnapshot) {
+bool CaptureMaterialSnapshot(Interface *ip, INode *node, int materialSlot,
+                             Mtl *material, MaterialSnapshot *outSnapshot,
+                             MaterialGatherTimingStats *timingStats = nullptr) {
   if (!ip || !node || !material || !outSnapshot) {
     return false;
   }
@@ -3247,6 +3891,7 @@ bool CaptureMaterialSnapshot(Interface *ip, INode *node, int materialSlot, Mtl *
                              ? material->GetSelfIllumColor()
                              : Color(selfIllum, selfIllum, selfIllum);
 
+  const auto snapshotStart = std::chrono::steady_clock::now();
   MaterialSnapshot snapshot;
   snapshot.valid = true;
   snapshot.nodeHandle = node->GetHandle();
@@ -3281,10 +3926,24 @@ bool CaptureMaterialSnapshot(Interface *ip, INode *node, int materialSlot, Mtl *
                                    : std::array<float, 3>{1.0f, 1.0f, 1.0f};
   snapshot.doubleSided = false;
   snapshot.alphaMode = transparency > 1.0e-3f ? "BLEND" : "OPAQUE";
+  const auto textureExtractStart = std::chrono::steady_clock::now();
   CaptureGenericMaterialTextures(ip, material, &snapshot);
+  if (timingStats) {
+    timingStats->textureExtractMs += static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - textureExtractStart)
+            .count());
+  }
 #if defined(PROJECT_RENDER_HAS_VRAY_SDK)
   if (IsVrayMaterial(material)) {
+    const auto vrayStart = std::chrono::steady_clock::now();
     ApplyVrayMaterialParameters(ip, material, &snapshot);
+    if (timingStats) {
+      timingStats->vrayMaterialMs += static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::steady_clock::now() - vrayStart)
+              .count());
+    }
   }
 #endif
   if (snapshot.triPlanarEnabled <= 0.5f &&
@@ -3293,12 +3952,35 @@ bool CaptureMaterialSnapshot(Interface *ip, INode *node, int materialSlot, Mtl *
        !snapshot.emissiveTextureUri.empty() ||
        !snapshot.occlusionTextureUri.empty() ||
        !snapshot.metalRoughTextureUri.empty())) {
+    if (timingStats) {
+      ++timingStats->triPlanarSearchCount;
+    }
     std::unordered_set<const Animatable *> visited;
     Texmap *triPlanarTexmap = nullptr;
+    const auto triPlanarStart = std::chrono::steady_clock::now();
     if (TryFindTriPlanarTexmapRecursive(material, 4, &visited,
                                         &triPlanarTexmap)) {
       TryApplyTriPlanarSettingsToSnapshot(ip, triPlanarTexmap, &snapshot);
+      if (timingStats) {
+        ++timingStats->triPlanarHitCount;
+      }
     }
+    if (timingStats) {
+      timingStats->triPlanarSearchMs += static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::steady_clock::now() - triPlanarStart)
+              .count());
+    }
+  }
+  if (timingStats) {
+    ++timingStats->materialCount;
+    if (MaterialSnapshotHasAnyTexture(snapshot)) {
+      ++timingStats->texturedMaterialCount;
+    }
+    timingStats->snapshotMs += static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - snapshotStart)
+            .count());
   }
   *outSnapshot = snapshot;
   return true;
@@ -3306,7 +3988,10 @@ bool CaptureMaterialSnapshot(Interface *ip, INode *node, int materialSlot, Mtl *
 
 void GatherMaterialSnapshots(
     Interface *ip, const std::unordered_map<ULONG_PTR, NodeSnapshot> &nodeState,
-    MaterialStateMap *outState) {
+    MaterialStateMap *outState,
+    const std::unordered_map<ULONG_PTR, INode *> *nodeLookup = nullptr,
+    bool preferExplicitSlotsOnly = false,
+    MaterialGatherTimingStats *timingStats = nullptr) {
   if (!ip || !outState) {
     return;
   }
@@ -3317,7 +4002,16 @@ void GatherMaterialSnapshots(
     if (!nodeSnapshot.hasMesh) {
       continue;
     }
-    INode *node = FindNodeByHandle(ip, handle);
+    INode *node = nullptr;
+    if (nodeLookup) {
+      const auto nodeIt = nodeLookup->find(handle);
+      if (nodeIt != nodeLookup->end()) {
+        node = nodeIt->second;
+      }
+    }
+    if (!node) {
+      node = FindNodeByHandle(ip, handle);
+    }
     if (!node) {
       continue;
     }
@@ -3326,7 +4020,8 @@ void GatherMaterialSnapshots(
       continue;
     }
 
-    const std::vector<int> usedSlots = GatherUsedMaterialSlots(ip, node, rootMaterial);
+    const std::vector<int> usedSlots =
+        GatherUsedMaterialSlots(ip, node, rootMaterial, preferExplicitSlotsOnly);
     for (int materialSlot : usedSlots) {
       Mtl *slotMaterial = ResolveMaterialForSlot(rootMaterial, materialSlot);
       if (!slotMaterial) continue;
@@ -3345,7 +4040,7 @@ void GatherMaterialSnapshots(
                                                materialSnapshot.materialSlot,
                                                materialSnapshot.materialStableId);
       } else {
-        if (CaptureMaterialSnapshot(ip, node, materialSlot, slotMaterial, &materialSnapshot)) {
+        if (CaptureMaterialSnapshot(ip, node, materialSlot, slotMaterial, &materialSnapshot, timingStats)) {
           cachedCaptures[slotMaterial] = materialSnapshot;
         } else {
           continue;
@@ -3535,26 +4230,69 @@ void ReleaseNodeMeshAccess(NodeMeshAccess *access) {
   *access = NodeMeshAccess{};
 }
 
-void CaptureMeshSnapshot(Interface *ip, INode *node, NodeSnapshot *snapshot) {
+bool MaterialSnapshotHasAnyTexture(const MaterialSnapshot &snapshot) {
+  return !snapshot.baseColorTextureUri.empty() ||
+         !snapshot.normalTextureUri.empty() ||
+         !snapshot.emissiveTextureUri.empty() ||
+         !snapshot.occlusionTextureUri.empty() ||
+         !snapshot.metalRoughTextureUri.empty();
+}
+
+size_t CountTextureUrisForState(const MaterialStateMap &materialState) {
+  std::unordered_set<std::string> textureUris;
+  for (const auto &[_, snapshot] : materialState) {
+    if (!snapshot.baseColorTextureUri.empty()) {
+      textureUris.insert(snapshot.baseColorTextureUri);
+    }
+    if (!snapshot.normalTextureUri.empty()) {
+      textureUris.insert(snapshot.normalTextureUri);
+    }
+    if (!snapshot.emissiveTextureUri.empty()) {
+      textureUris.insert(snapshot.emissiveTextureUri);
+    }
+    if (!snapshot.occlusionTextureUri.empty()) {
+      textureUris.insert(snapshot.occlusionTextureUri);
+    }
+    if (!snapshot.metalRoughTextureUri.empty()) {
+      textureUris.insert(snapshot.metalRoughTextureUri);
+    }
+  }
+  return textureUris.size();
+}
+
+bool NodeCanPotentiallyProduceMesh(Interface *ip, INode *node) {
+  if (!ip || !node) {
+    return false;
+  }
+
+  Object *objectRef = node->GetObjectRef();
+  if (!objectRef) {
+    return false;
+  }
+
+  Object *baseObject = objectRef->FindBaseObject();
+  Object *typeObject = baseObject ? baseObject : objectRef;
+  if (!typeObject) {
+    return false;
+  }
+
+  const SClass_ID superClass = typeObject->SuperClassID();
+  if (superClass == GEOMOBJECT_CLASS_ID || superClass == SHAPE_CLASS_ID) {
+    return true;
+  }
+
+  return false;
+}
+
+void PopulateSnapshotMeshMetadata(Interface *ip, INode *node, Mesh &mesh,
+                                  NodeSnapshot *snapshot) {
   if (!ip || !node || !snapshot) {
     return;
   }
 
-  NodeMeshAccess meshAccess;
-  if (!GetNodeMeshAccess(ip, node, &meshAccess) || !meshAccess.mesh) {
-    return;
-  }
-
-  Mesh &mesh = *meshAccess.mesh;
-  mesh.checkNormals(TRUE);
-  MeshNormalSpec *specNormals = mesh.GetSpecifiedNormals();
-  if (specNormals && specNormals->GetNumNormals() == 0) {
-    specNormals->BuildNormals();
-  }
   const uint64_t vertexCount = static_cast<uint64_t>(mesh.getNumVerts());
   const uint64_t faceCount = static_cast<uint64_t>(mesh.getNumFaces());
   if (vertexCount == 0 || faceCount == 0) {
-    ReleaseNodeMeshAccess(&meshAccess);
     return;
   }
 
@@ -3607,16 +4345,39 @@ void CaptureMeshSnapshot(Interface *ip, INode *node, NodeSnapshot *snapshot) {
   fingerprint =
       HashCombine(fingerprint, static_cast<uint64_t>(node->GetObjectRef() != nullptr));
 
-    Mtl *rootMaterial = node->GetMtl();
-    if (rootMaterial) {
-      const std::string materialGuid = GetOrCreateMaterialGuid(rootMaterial);
-      for (char c : materialGuid) {
-        fingerprint = HashCombine(fingerprint, static_cast<uint64_t>(c));
-      }
-    } else {
-      fingerprint = HashCombine(fingerprint, 0x01010101ull);
+  Mtl *rootMaterial = node->GetMtl();
+  if (rootMaterial) {
+    const std::string materialGuid = GetOrCreateMaterialGuid(rootMaterial);
+    for (char c : materialGuid) {
+      fingerprint = HashCombine(fingerprint, static_cast<uint64_t>(c));
     }
+  } else {
+    fingerprint = HashCombine(fingerprint, 0x01010101ull);
+  }
   snapshot->geometryFingerprint = fingerprint;
+}
+
+void CaptureMeshSnapshot(Interface *ip, INode *node, NodeSnapshot *snapshot) {
+  if (!ip || !node || !snapshot) {
+    return;
+  }
+
+  NodeMeshAccess meshAccess;
+  if (!GetNodeMeshAccess(ip, node, &meshAccess) || !meshAccess.mesh) {
+    return;
+  }
+
+  Mesh &mesh = *meshAccess.mesh;
+  mesh.checkNormals(TRUE);
+  MeshNormalSpec *specNormals = mesh.GetSpecifiedNormals();
+  if (specNormals && specNormals->GetNumNormals() == 0) {
+    specNormals->BuildNormals();
+  }
+  PopulateSnapshotMeshMetadata(ip, node, mesh, snapshot);
+  if (!snapshot->hasMesh) {
+    ReleaseNodeMeshAccess(&meshAccess);
+    return;
+  }
 
   ReleaseNodeMeshAccess(&meshAccess);
 }
@@ -3755,12 +4516,54 @@ bool WriteMaterialLibraryPayload(const std::string &documentId,
               return lhs.objectId < rhs.objectId;
             });
 
+  std::vector<const EmbeddedTexturePayload *> serializedTextureBlobs;
+  std::unordered_map<std::string, const EmbeddedTexturePayload *> textureBlobsByHash;
+  auto collectTextureBlob = [&](const EmbeddedTexturePayload &payload) {
+    if (!payload.IsValid()) {
+      return;
+    }
+    if (textureBlobsByHash.emplace(payload.contentHash, &payload).second) {
+      serializedTextureBlobs.push_back(&payload);
+    }
+  };
+  for (const MaterialSnapshot &material : serializedMaterials) {
+    collectTextureBlob(material.baseColorTexturePayload);
+    collectTextureBlob(material.normalTexturePayload);
+    collectTextureBlob(material.emissiveTexturePayload);
+    collectTextureBlob(material.occlusionTexturePayload);
+    collectTextureBlob(material.metalRoughTexturePayload);
+  }
+
   NativeMaterialLibraryHeader header;
   header.materialCount = static_cast<uint32_t>(serializedMaterials.size());
+  header.reserved = static_cast<uint32_t>(serializedTextureBlobs.size());
   stream.write(reinterpret_cast<const char *>(&header), sizeof(header));
 
+  for (const EmbeddedTexturePayload *payload : serializedTextureBlobs) {
+    if (!payload) {
+      continue;
+    }
+    NativeMaterialLibraryTextureBlobHeader blobHeader;
+    blobHeader.hashLength = static_cast<uint32_t>(payload->contentHash.size());
+    blobHeader.encoding = static_cast<uint32_t>(payload->encoding);
+    blobHeader.width = payload->width;
+    blobHeader.height = payload->height;
+    blobHeader.dataSize = static_cast<uint32_t>(payload->data.size());
+    stream.write(reinterpret_cast<const char *>(&blobHeader), sizeof(blobHeader));
+    if (!WriteNativePayloadString(stream, payload->contentHash)) {
+      return false;
+    }
+    if (!payload->data.empty()) {
+      stream.write(reinterpret_cast<const char *>(payload->data.data()),
+                   static_cast<std::streamsize>(payload->data.size()));
+      if (!stream) {
+        return false;
+      }
+    }
+  }
+
   for (const MaterialSnapshot &material : serializedMaterials) {
-    NativeMaterialLibraryMaterialHeader materialHeader;
+    NativeMaterialLibraryMaterialHeaderV2 materialHeader;
     materialHeader.flags =
         material.doubleSided ? kNativeMaterialFlagDoubleSided : 0u;
     if (material.invertRoughnessTexture) {
@@ -3800,14 +4603,24 @@ bool WriteMaterialLibraryPayload(const std::string &documentId,
         static_cast<uint32_t>(material.alphaMode.size());
     materialHeader.baseColorTextureUriLength =
         static_cast<uint32_t>(material.baseColorTextureUri.size());
+    materialHeader.baseColorTextureBlobHashLength = static_cast<uint32_t>(
+        material.baseColorTexturePayload.contentHash.size());
     materialHeader.normalTextureUriLength =
         static_cast<uint32_t>(material.normalTextureUri.size());
+    materialHeader.normalTextureBlobHashLength = static_cast<uint32_t>(
+        material.normalTexturePayload.contentHash.size());
     materialHeader.emissiveTextureUriLength =
         static_cast<uint32_t>(material.emissiveTextureUri.size());
+    materialHeader.emissiveTextureBlobHashLength = static_cast<uint32_t>(
+        material.emissiveTexturePayload.contentHash.size());
     materialHeader.occlusionTextureUriLength =
         static_cast<uint32_t>(material.occlusionTextureUri.size());
+    materialHeader.occlusionTextureBlobHashLength = static_cast<uint32_t>(
+        material.occlusionTexturePayload.contentHash.size());
     materialHeader.metalRoughTextureUriLength =
         static_cast<uint32_t>(material.metalRoughTextureUri.size());
+    materialHeader.metalRoughTextureBlobHashLength = static_cast<uint32_t>(
+        material.metalRoughTexturePayload.contentHash.size());
     materialHeader.referenceCount =
         static_cast<uint32_t>(material.references.size());
     stream.write(reinterpret_cast<const char *>(&materialHeader),
@@ -3818,10 +4631,20 @@ bool WriteMaterialLibraryPayload(const std::string &documentId,
         !WriteNativePayloadString(stream, material.materialModel) ||
         !WriteNativePayloadString(stream, material.alphaMode) ||
         !WriteNativePayloadString(stream, material.baseColorTextureUri) ||
+        !WriteNativePayloadString(stream,
+                                  material.baseColorTexturePayload.contentHash) ||
         !WriteNativePayloadString(stream, material.normalTextureUri) ||
+        !WriteNativePayloadString(stream,
+                                  material.normalTexturePayload.contentHash) ||
         !WriteNativePayloadString(stream, material.emissiveTextureUri) ||
+        !WriteNativePayloadString(stream,
+                                  material.emissiveTexturePayload.contentHash) ||
         !WriteNativePayloadString(stream, material.occlusionTextureUri) ||
-        !WriteNativePayloadString(stream, material.metalRoughTextureUri)) {
+        !WriteNativePayloadString(
+            stream, material.occlusionTexturePayload.contentHash) ||
+        !WriteNativePayloadString(stream, material.metalRoughTextureUri) ||
+        !WriteNativePayloadString(stream,
+                                  material.metalRoughTexturePayload.contentHash)) {
       return false;
     }
 
@@ -3860,6 +4683,24 @@ void AppendMaterialLibraryDelta(const std::string &documentId,
            {"debugLabel", "Scene material library"},
            {"payload", json{{"payloadUri", payloadUri},
                             {"payloadHash", payloadUri}}}});
+}
+
+bool AppendMaterialLibraryDeltaForState(const std::string &documentId,
+                                        const MaterialStateMap &materialState,
+                                        uint64_t *revision,
+                                        json *outDeltas) {
+  if (!revision || !outDeltas || materialState.empty()) {
+    return false;
+  }
+
+  std::string payloadUri;
+  if (!WriteMaterialLibraryPayload(documentId, materialState, &payloadUri) ||
+      payloadUri.empty()) {
+    return false;
+  }
+
+  AppendMaterialLibraryDelta(documentId, payloadUri, revision, outDeltas);
+  return true;
 }
 
 void RemoveDocumentPayloadDirectoryIfEmpty(const std::string &documentId) {
@@ -4012,6 +4853,11 @@ bool CaptureNodeMeshPayloadJob(Interface *ip, INode *node,
   MeshNormalSpec *specNormals = mesh.GetSpecifiedNormals();
   if (specNormals && specNormals->GetNumNormals() == 0) {
     specNormals->BuildNormals();
+  }
+  PopulateSnapshotMeshMetadata(ip, node, mesh, &job.snapshot);
+  if (!job.snapshot.hasMesh) {
+    ReleaseNodeMeshAccess(&meshAccess);
+    return false;
   }
   const auto normalsReady = std::chrono::steady_clock::now();
 
@@ -4304,7 +5150,6 @@ AsyncMeshPayloadResult SerializeCapturedMeshPayload(
       return result;
     }
   }
-
   if (!stream.good()) {
     return result;
   }
@@ -4327,7 +5172,8 @@ json MakeObjectId(const std::string &documentId, const std::string &objectId,
   };
 }
 
-NodeSnapshot CaptureNodeSnapshot(Interface *ip, INode *node) {
+NodeSnapshot CaptureNodeSnapshot(Interface *ip, INode *node,
+                                 bool captureMeshDetails = true) {
   NodeSnapshot snapshot;
   if (!ip || !node) {
     return snapshot;
@@ -4346,20 +5192,45 @@ NodeSnapshot CaptureNodeSnapshot(Interface *ip, INode *node) {
   snapshot.name = ToUtf8(node->GetName());
   snapshot.visible = !node->IsNodeHidden(TRUE);
   snapshot.worldMatrix = Matrix3ToColumnMajor4x4(node->GetNodeTM(ip->GetTime()));
-  CaptureMeshSnapshot(ip, node, &snapshot);
+  if (captureMeshDetails) {
+    CaptureMeshSnapshot(ip, node, &snapshot);
+  } else {
+    snapshot.hasMesh = NodeCanPotentiallyProduceMesh(ip, node);
+  }
   return snapshot;
 }
 
-void GatherNodeSnapshots(Interface *ip, INode *node,
-                         std::unordered_map<ULONG_PTR, NodeSnapshot> *outState) {
+void GatherNodeSnapshots(
+    Interface *ip, INode *node,
+    std::unordered_map<ULONG_PTR, NodeSnapshot> *outState,
+    std::unordered_map<ULONG_PTR, INode *> *outNodeLookup = nullptr,
+    bool captureMeshDetails = true,
+    FullResyncTimingStats *timingStats = nullptr) {
   if (!ip || !node || !outState) {
     return;
   }
 
-  NodeSnapshot snapshot = CaptureNodeSnapshot(ip, node);
+  const auto captureStart = std::chrono::steady_clock::now();
+  NodeSnapshot snapshot = CaptureNodeSnapshot(ip, node, captureMeshDetails);
+  if (timingStats) {
+    const uint64_t captureMs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - captureStart)
+            .count());
+    if (captureMs > timingStats->slowestNodeMs) {
+      timingStats->slowestNodeMs = captureMs;
+      timingStats->slowestNodeName = snapshot.name.empty()
+                                         ? snapshot.objectId
+                                         : snapshot.name;
+    }
+  }
   outState->insert_or_assign(snapshot.handle, snapshot);
+  if (outNodeLookup) {
+    outNodeLookup->insert_or_assign(snapshot.handle, node);
+  }
   for (int childIndex = 0; childIndex < node->NumberOfChildren(); ++childIndex) {
-    GatherNodeSnapshots(ip, node->GetChildNode(childIndex), outState);
+    GatherNodeSnapshots(ip, node->GetChildNode(childIndex), outState,
+                        outNodeLookup, captureMeshDetails, timingStats);
   }
 }
 
@@ -4746,7 +5617,7 @@ bool SendBatch(const std::string &sessionId, uint64_t sequence, bool fullSync,
   }
 
   json batch;
-  batch["providerName"] = "3dsMax2024Pipe";
+  batch["providerName"] = "3dsMax2025Pipe";
   batch["sessionId"] = sessionId;
   batch["sequence"] = sequence;
   batch["fullSync"] = fullSync;
@@ -4794,18 +5665,20 @@ bool SendInitialSnapshot(Interface *ip,
   const std::string sessionId = MakeSessionId();
 
   std::unordered_map<ULONG_PTR, NodeSnapshot> state;
+  std::unordered_map<ULONG_PTR, INode *> nodeLookup;
   MaterialStateMap materialState;
   std::unordered_map<ULONG_PTR, LightSnapshot> lightState;
   std::unordered_map<ULONG_PTR, CameraSnapshot> sceneCameraState;
   if (INode *root = ip->GetRootNode()) {
     for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
-      GatherNodeSnapshots(ip, root->GetChildNode(childIndex), &state);
+      GatherNodeSnapshots(ip, root->GetChildNode(childIndex), &state,
+                          &nodeLookup, false);
       GatherLightSnapshots(ip, root->GetChildNode(childIndex), &lightState);
       GatherSceneCameraSnapshots(ip, root->GetChildNode(childIndex),
                                  &sceneCameraState);
     }
   }
-  GatherMaterialSnapshots(ip, state, &materialState);
+  GatherMaterialSnapshots(ip, state, &materialState, &nodeLookup, true);
 
   json deltas = json::array();
   deltas.push_back(json{
@@ -4921,9 +5794,6 @@ bool SendResumeSnapshot(Interface *ip,
     return false;
   }
 
-  EnsurePersistentSceneIdentifiers(ip);
-  CleanupPayloadRootDirectory();
-
   const std::string documentId = MakeDocumentId(ip);
   PersistedLiveLinkState persistedState;
   if (!ReadPersistedLiveLinkState(ip, &persistedState) ||
@@ -4931,19 +5801,25 @@ bool SendResumeSnapshot(Interface *ip,
     return false;
   }
 
+  EnsurePersistentSceneIdentifiers(ip);
+  CleanupPayloadRootDirectory();
+
   std::unordered_map<ULONG_PTR, NodeSnapshot> currentState;
+  std::unordered_map<ULONG_PTR, INode *> nodeLookup;
   MaterialStateMap currentMaterialState;
   std::unordered_map<ULONG_PTR, LightSnapshot> currentLightState;
   std::unordered_map<ULONG_PTR, CameraSnapshot> currentSceneCameraState;
   if (INode *root = ip->GetRootNode()) {
     for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
-      GatherNodeSnapshots(ip, root->GetChildNode(childIndex), &currentState);
+      GatherNodeSnapshots(ip, root->GetChildNode(childIndex), &currentState,
+                          &nodeLookup, false);
       GatherLightSnapshots(ip, root->GetChildNode(childIndex), &currentLightState);
       GatherSceneCameraSnapshots(ip, root->GetChildNode(childIndex),
                                  &currentSceneCameraState);
     }
   }
-  GatherMaterialSnapshots(ip, currentState, &currentMaterialState);
+  GatherMaterialSnapshots(ip, currentState, &currentMaterialState, &nodeLookup,
+                          true);
   const std::vector<std::string> selectedObjectIds = GatherSelectedObjectIds(ip);
   CameraSnapshot cameraSnapshot;
   CaptureActiveCameraSnapshot(ip, &cameraSnapshot);
@@ -5026,10 +5902,18 @@ bool SendResumeSnapshot(Interface *ip,
   }
 
   if (!wroteMaterialLibrary || materialLibraryPayloadUri.empty()) {
+    MaterialStateMap changedMaterialState;
     for (const auto &[objectId, snapshot] : currentMaterialState) {
       const auto previousIt = persistedState.materialState.find(objectId);
       if (previousIt == persistedState.materialState.end() ||
           !SameMaterial(snapshot, previousIt->second)) {
+        changedMaterialState.emplace(objectId, snapshot);
+      }
+    }
+
+    if (!AppendMaterialLibraryDeltaForState(documentId, changedMaterialState,
+                                            &revision, &deltas)) {
+      for (const auto &[_, snapshot] : changedMaterialState) {
         AppendMaterialDelta(documentId, snapshot, &revision, &deltas);
       }
     }
@@ -5580,7 +6464,67 @@ private:
     const std::string startupSummary =
         m_lastStartupSummary.empty() ? std::string("Last startup: none.")
                                      : m_lastStartupSummary;
-    return startupSummary +
+    std::string fullResyncDetails = "\r\nFull Resync: none.";
+    if (m_lastFullResyncTimingStats.valid) {
+      fullResyncDetails =
+          "\r\nFull Resync: total=" +
+          std::to_string(m_lastFullResyncTimingStats.totalMs) +
+          "ms | ids=" +
+          std::to_string(m_lastFullResyncTimingStats.identifierPrepMs) +
+          "ms | nodes=" +
+          std::to_string(m_lastFullResyncTimingStats.nodeGatherMs) +
+          "ms | lights=" +
+          std::to_string(m_lastFullResyncTimingStats.lightGatherMs) +
+          "ms | cameras=" +
+          std::to_string(m_lastFullResyncTimingStats.sceneCameraGatherMs) +
+          "ms | mats=" +
+          std::to_string(m_lastFullResyncTimingStats.materialGatherMs) +
+          "ms | matLib=" +
+          std::to_string(m_lastFullResyncTimingStats.materialLibraryWriteMs) +
+          "ms | send=" +
+          std::to_string(m_lastFullResyncTimingStats.batchSendMs) +
+          "ms" +
+          "\r\nFull Resync Detail: matShots=" +
+          std::to_string(m_lastFullResyncTimingStats.materialStats.snapshotMs) +
+          "ms | tex=" +
+          std::to_string(
+              m_lastFullResyncTimingStats.materialStats.textureExtractMs) +
+          "ms | triPlanar=" +
+          std::to_string(
+              m_lastFullResyncTimingStats.materialStats.triPlanarSearchMs) +
+          "ms | vray=" +
+          std::to_string(m_lastFullResyncTimingStats.materialStats.vrayMaterialMs) +
+          "ms | selection=" +
+          std::to_string(m_lastFullResyncTimingStats.selectionGatherMs) +
+          "ms | deltas=" +
+          std::to_string(m_lastFullResyncTimingStats.deltaBuildMs) +
+          "ms" +
+          "\r\nFull Resync Stats: nodes=" +
+          std::to_string(m_lastFullResyncTimingStats.nodeCount) +
+          " | meshNodes=" +
+          std::to_string(m_lastFullResyncTimingStats.meshNodeCount) +
+          " | materials=" +
+          std::to_string(m_lastFullResyncTimingStats.materialCount) +
+          " | texturedMats=" +
+          std::to_string(
+              m_lastFullResyncTimingStats.materialStats.texturedMaterialCount) +
+          " | textures=" +
+          std::to_string(m_lastFullResyncTimingStats.textureCount) +
+          " | triHits=" +
+          std::to_string(m_lastFullResyncTimingStats.materialStats.triPlanarHitCount) +
+          "\r\nSlowest Node: " +
+          (m_lastFullResyncTimingStats.slowestNodeName.empty()
+               ? std::string("<none>")
+               : m_lastFullResyncTimingStats.slowestNodeName) +
+          " | " +
+          std::to_string(m_lastFullResyncTimingStats.slowestNodeMs) +
+          "ms";
+    }
+    std::string errText = g_pipeClient.GetLastError();
+    if (!errText.empty()) {
+      errText = "\r\nPipe Error: " + errText;
+    }
+    return startupSummary + errText +
            "\r\nSync: " + GetResyncStatusText_NoLock() +
            " | session=" + (m_sessionId.empty() ? std::string("none") : m_sessionId) +
            " | dirty=" + std::to_string(CountDirtyItems_NoLock()) +
@@ -5628,7 +6572,7 @@ private:
                    ? 0
                    : (m_meshExportTimingStats.totalSerializeMs /
                       m_meshExportTimingStats.completedCount)) +
-           "ms";
+           "ms" + fullResyncDetails;
   }
 
   void RefreshRollupUI_NoLock() {
@@ -5698,9 +6642,6 @@ private:
     m_completedMeshExports.clear();
     m_inFlightMeshExports.clear();
     m_inFlightSharedPayloads.clear();
-    m_meshWorkerQueue.clear();
-    m_meshWorkerFinishedResults.clear();
-    m_meshWorkerActiveCount = 0;
     m_sharedPayloadCache.clear();
   }
 
@@ -5817,15 +6758,15 @@ private:
     m_forceFullSnapshotOnConnect = forceFullResync;
 
     if (!EnsureConnectedSession(ip)) {
+      std::string err = "Failed to connect LiveLink.\nPipe Error: " + g_pipeClient.GetLastError();
+      MessageBoxA(m_rollupHwnd, err.c_str(), "Project Render LiveLink", MB_ICONERROR | MB_OK);
       RefreshRollupUI_NoLock();
       return false;
     }
 
     if (m_pollTimer == 0) {
       m_pollTimer = SetTimer(nullptr, kPollTimerId, kPollIntervalMs,
-                             &ProjectRenderLiveLinkUtility::PollTimerProc);
-    }
-    if (m_cameraPollTimer == 0) {
+                               &ProjectRenderLiveLinkUtility::PollTimerProc);
       m_cameraPollTimer = SetTimer(nullptr, kCameraPollTimerId,
                                    kCameraPollIntervalMs,
                                    &ProjectRenderLiveLinkUtility::CameraPollTimerProc);
@@ -6056,11 +6997,17 @@ private:
     const size_t maxExports =
         force ? m_completedMeshExports.size() : kCompletedMeshExportBatchSize;
     while (!m_completedMeshExports.empty() && flushedCount < maxExports) {
-      const AsyncMeshPayloadResult &result = m_completedMeshExports.front();
-      if (result.success && result.snapshot.hasMesh && !result.payloadUri.empty()) {
+    const AsyncMeshPayloadResult &result = m_completedMeshExports.front();
+    if (result.success && result.snapshot.hasMesh && !result.payloadUri.empty()) {
+      auto snapshotIt = m_lastNodeState.find(result.handle);
+      if (snapshotIt != m_lastNodeState.end()) {
+        snapshotIt->second = result.snapshot;
+      }
         if (!result.sharedPayloadKey.empty()) {
           m_sharedPayloadCache[result.sharedPayloadKey] =
               SharedPayloadCacheEntry{result.snapshot.geometryFingerprint,
+                                      result.snapshot.vertexCount,
+                                      result.snapshot.indexCount,
                                       result.payloadUri};
         }
         AppendMeshPayloadDelta(m_documentId, result.snapshot, result.payloadUri,
@@ -6113,10 +7060,21 @@ private:
       const std::string sharedPayloadKey = BuildSharedPayloadKey(ip, node);
       const auto cacheIt = m_sharedPayloadCache.find(sharedPayloadKey);
       if (!sharedPayloadKey.empty() && cacheIt != m_sharedPayloadCache.end() &&
-          cacheIt->second.geometryFingerprint == snapshot.geometryFingerprint &&
+          (snapshot.geometryFingerprint == 0 ||
+           cacheIt->second.geometryFingerprint == snapshot.geometryFingerprint) &&
           !cacheIt->second.payloadUri.empty()) {
-        AppendMeshPayloadDelta(m_documentId, snapshot, cacheIt->second.payloadUri,
-                               &m_nextRevision, &cachedDeltas);
+        NodeSnapshot cachedSnapshot = snapshot;
+        cachedSnapshot.hasMesh = true;
+        cachedSnapshot.geometryFingerprint = cacheIt->second.geometryFingerprint;
+        cachedSnapshot.vertexCount = cacheIt->second.vertexCount;
+        cachedSnapshot.indexCount = cacheIt->second.indexCount;
+        AppendMeshPayloadDelta(m_documentId, cachedSnapshot,
+                               cacheIt->second.payloadUri, &m_nextRevision,
+                               &cachedDeltas);
+        auto snapshotIt = m_lastNodeState.find(snapshot.handle);
+        if (snapshotIt != m_lastNodeState.end()) {
+          snapshotIt->second = cachedSnapshot;
+        }
         it = m_pendingMeshExports.erase(it);
         ++dispatchCount;
         continue;
@@ -6334,13 +7292,27 @@ private:
 
     const auto appendMaterialStateDiff =
         [&](const MaterialStateMap &materialStateForNode) {
+      MaterialStateMap changedMaterialState;
       for (const auto &[objectId, materialSnapshot] : materialStateForNode) {
         const auto previousMaterialIt = m_lastMaterialState.find(objectId);
         if (previousMaterialIt == m_lastMaterialState.end() ||
             !SameMaterial(materialSnapshot, previousMaterialIt->second)) {
-          AppendMaterialDelta(m_documentId, materialSnapshot, &m_nextRevision,
-                              &deltas);
+          changedMaterialState.emplace(objectId, materialSnapshot);
         }
+      }
+
+      if (changedMaterialState.empty()) {
+        return;
+      }
+
+      if (AppendMaterialLibraryDeltaForState(m_documentId, changedMaterialState,
+                                             &m_nextRevision, &deltas)) {
+        return;
+      }
+
+      for (const auto &[_, materialSnapshot] : changedMaterialState) {
+        AppendMaterialDelta(m_documentId, materialSnapshot, &m_nextRevision,
+                            &deltas);
       }
     };
 
@@ -6397,26 +7369,73 @@ private:
 
     if (m_forceFullResync) {
       ScopedHoldSuspend syncSuspend;
+      FullResyncTimingStats fullResyncTiming;
+      const auto fullResyncStart = Clock::now();
+      const auto identifierPrepStart = Clock::now();
       EnsurePersistentSceneIdentifiers(ip);
+      fullResyncTiming.identifierPrepMs = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              Clock::now() - identifierPrepStart)
+              .count());
       std::unordered_map<ULONG_PTR, NodeSnapshot> currentState;
+      std::unordered_map<ULONG_PTR, INode *> nodeLookup;
       MaterialStateMap currentMaterialState;
       std::unordered_map<ULONG_PTR, LightSnapshot> currentLightState;
       std::unordered_map<ULONG_PTR, CameraSnapshot> currentSceneCameraState;
       if (INode *root = ip->GetRootNode()) {
         for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
-          GatherNodeSnapshots(ip, root->GetChildNode(childIndex), &currentState);
+          const auto nodeGatherStart = Clock::now();
+          GatherNodeSnapshots(ip, root->GetChildNode(childIndex), &currentState,
+                              &nodeLookup, false, &fullResyncTiming);
+          fullResyncTiming.nodeGatherMs += static_cast<uint64_t>(
+              std::chrono::duration_cast<std::chrono::milliseconds>(
+                  Clock::now() - nodeGatherStart)
+                  .count());
+          const auto lightGatherStart = Clock::now();
           GatherLightSnapshots(ip, root->GetChildNode(childIndex),
                                &currentLightState);
+          fullResyncTiming.lightGatherMs += static_cast<uint64_t>(
+              std::chrono::duration_cast<std::chrono::milliseconds>(
+                  Clock::now() - lightGatherStart)
+                  .count());
+          const auto cameraGatherStart = Clock::now();
           GatherSceneCameraSnapshots(ip, root->GetChildNode(childIndex),
                                      &currentSceneCameraState);
+          fullResyncTiming.sceneCameraGatherMs += static_cast<uint64_t>(
+              std::chrono::duration_cast<std::chrono::milliseconds>(
+                  Clock::now() - cameraGatherStart)
+                  .count());
         }
       }
-      GatherMaterialSnapshots(ip, currentState, &currentMaterialState);
+      const auto materialGatherStart = Clock::now();
+      GatherMaterialSnapshots(ip, currentState, &currentMaterialState,
+                              &nodeLookup, true,
+                              &fullResyncTiming.materialStats);
+      fullResyncTiming.materialGatherMs = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              Clock::now() - materialGatherStart)
+              .count());
       scannedNodeCount = currentState.size();
+      fullResyncTiming.nodeCount = currentState.size();
+      fullResyncTiming.lightCount = currentLightState.size();
+      fullResyncTiming.cameraCount = currentSceneCameraState.size();
+      fullResyncTiming.materialCount = currentMaterialState.size();
+      fullResyncTiming.textureCount = CountTextureUrisForState(currentMaterialState);
+      for (const auto &[_, snapshot] : currentState) {
+        if (snapshot.hasMesh) {
+          ++fullResyncTiming.meshNodeCount;
+        }
+      }
       std::string materialLibraryPayloadUri;
+      const auto materialLibraryWriteStart = Clock::now();
       const bool wroteMaterialLibrary =
           WriteMaterialLibraryPayload(m_documentId, currentMaterialState,
                                       &materialLibraryPayloadUri);
+      fullResyncTiming.materialLibraryWriteMs = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              Clock::now() - materialLibraryWriteStart)
+              .count());
+      const auto deltaBuildStart = Clock::now();
       if (wroteMaterialLibrary && !materialLibraryPayloadUri.empty()) {
         AppendMaterialLibraryDelta(m_documentId, materialLibraryPayloadUri,
                                    &m_nextRevision, &deltas);
@@ -6457,18 +7476,29 @@ private:
           AppendNodeVisibilityDelta(m_documentId, snapshot, &m_nextRevision,
                                     &deltas);
         }
-        if (snapshot.hasMesh &&
-            (!previous.hasMesh ||
-             previous.geometryFingerprint != snapshot.geometryFingerprint)) {
+        if (!snapshot.hasMesh && previous.hasMesh) {
+          CancelQueuedMeshPayloadExport_NoLock(handle);
+          QueuePayloadRemoval_NoLock(previous.objectId);
+        }
+        if (snapshot.hasMesh) {
           QueueMeshPayloadExport_NoLock(snapshot);
         }
       }
 
       if (!wroteMaterialLibrary || materialLibraryPayloadUri.empty()) {
+        MaterialStateMap changedMaterialState;
         for (const auto &[objectId, snapshot] : currentMaterialState) {
           const auto previousMaterialIt = m_lastMaterialState.find(objectId);
           if (previousMaterialIt == m_lastMaterialState.end() ||
               !SameMaterial(snapshot, previousMaterialIt->second)) {
+            changedMaterialState.emplace(objectId, snapshot);
+          }
+        }
+
+        if (!AppendMaterialLibraryDeltaForState(m_documentId,
+                                                changedMaterialState,
+                                                &m_nextRevision, &deltas)) {
+          for (const auto &[_, snapshot] : changedMaterialState) {
             AppendMaterialDelta(m_documentId, snapshot, &m_nextRevision,
                                 &deltas);
           }
@@ -6526,10 +7556,20 @@ private:
         }
       }
 
+      const auto selectionGatherStart = Clock::now();
       selectedObjectIds = GatherSelectedObjectIds(ip);
+      fullResyncTiming.selectionGatherMs = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              Clock::now() - selectionGatherStart)
+              .count());
       if (selectedObjectIds != m_lastSelectedObjectIds) {
         AppendSelectionDelta(selectedObjectIds, &deltas);
       }
+
+      fullResyncTiming.deltaBuildMs = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              Clock::now() - deltaBuildStart)
+              .count());
 
       const uint64_t scanDurationMs = static_cast<uint64_t>(
           std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() -
@@ -6538,8 +7578,17 @@ private:
       m_nextPollDeadline = ComputeNextPollDeadline(
           ComputePollDelayMs(currentState.size(), deltas.size(), scanDurationMs));
 
-      if (!deltas.empty() &&
-          SendBatch(m_sessionId, m_nextSequence, false, deltas)) {
+      bool batchSent = false;
+      if (!deltas.empty()) {
+        const auto batchSendStart = Clock::now();
+        batchSent = SendBatch(m_sessionId, m_nextSequence, false, deltas);
+        fullResyncTiming.batchSendMs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                Clock::now() - batchSendStart)
+                .count());
+      }
+
+      if (!deltas.empty() && batchSent) {
         ++m_nextSequence;
         RecordBatchSent_NoLock(deltas.size());
         m_lastNodeState = std::move(currentState);
@@ -6563,6 +7612,12 @@ private:
         ClearDirtyState();
       }
 
+      fullResyncTiming.totalMs = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              Clock::now() - fullResyncStart)
+              .count());
+      fullResyncTiming.valid = true;
+      m_lastFullResyncTimingStats = std::move(fullResyncTiming);
       MaybePersistResumeStateLocked(ip, false);
       RefreshRollupUI_NoLock();
       return;
@@ -6886,6 +7941,7 @@ private:
   bool m_meshWorkersStopping = false;
   std::unordered_map<std::string, SharedPayloadCacheEntry> m_sharedPayloadCache;
   MeshExportTimingStats m_meshExportTimingStats;
+  FullResyncTimingStats m_lastFullResyncTimingStats;
   std::unordered_map<ULONG_PTR, NodeSnapshot> m_lastNodeState;
   MaterialStateMap m_lastMaterialState;
   std::unordered_map<ULONG_PTR, LightSnapshot> m_lastLightState;
@@ -6933,7 +7989,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, ULONG fdwReason, LPVOID /*lpvReserved*/)
 }
 
 extern "C" __declspec(dllexport) const TCHAR *LibDescription() {
-  return _T("project-render LiveLink for 3ds Max 2024");
+  return _T("project-render LiveLink for 3ds Max 2025");
 }
 
 extern "C" __declspec(dllexport) int LibNumberClasses() { return 1; }
