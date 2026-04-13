@@ -2583,19 +2583,37 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
         // Draw loaded meshes
         auto sceneInstances = Scene::GetInstances();
-        if (!sceneInstances.empty() && RasterRenderer::g_meshPipelineState) {
+        const bool rasterGrassReady =
+            activeGrassMaterialIndex >= 0 &&
+            activeGrassMaterialIndex < (int)g_loadedMaterials.size() &&
+            RasterRenderer::g_grassPipelineState &&
+            GrassManager::GetPatchCount() > 0 &&
+            GrassManager::GetPatchMesh() &&
+            GrassManager::GetPatchMesh()->vertexBuffer &&
+            GrassManager::GetPatchMesh()->indexBuffer;
+        if (rasterGrassReady) {
+          GrassManager::CullingAndPrepareIndirect(
+              DX12Context::g_commandList.Get(), g_cameraConstantBuffer.Get());
+        }
+
+        if (((!sceneInstances.empty() && RasterRenderer::g_meshPipelineState) ||
+             rasterGrassReady)) {
           // Log to stderr only (controlled by verbose flag)
-          if (g_verboseRenderLogs)
+          if (g_verboseRenderLogs && !sceneInstances.empty())
             fprintf(stderr, "Drawing %zu instances\n", sceneInstances.size());
 
           // Shadow Pass
           RasterRenderer::DrawShadowMap(DX12Context::g_commandList.Get(),
                                         g_cameraConstantBuffer.Get(),
-                                        sceneInstances);
+                                        sceneInstances,
+                                        rasterGrassReady);
         
           // Re-bind HDR render targets for main pass
           RasterRenderer::BindHdrRenderTarget(DX12Context::g_device.Get(), DX12Context::g_commandList.Get(), dsvHandle);
 
+        }
+
+        if (!sceneInstances.empty() && RasterRenderer::g_meshPipelineState) {
           // Use the RasterRenderer mesh PSO (may output debug depth/uv
           // depending on compile defines)
           DX12Context::g_commandList->SetPipelineState(
@@ -2708,15 +2726,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           }
         }
 
-        if (activeGrassMaterialIndex >= 0 &&
-            activeGrassMaterialIndex < (int)g_loadedMaterials.size() &&
-            RasterRenderer::g_grassPipelineState &&
-            GrassManager::GetPatchCount() > 0 &&
-            g_proceduralGrassBladeMesh.vertexBuffer &&
-            g_proceduralGrassBladeMesh.indexBuffer) {
-          GrassManager::CullingAndPrepareIndirect(DX12Context::g_commandList.Get(),
-                                                  g_cameraConstantBuffer.Get());
-
+        if (rasterGrassReady) {
           DX12Context::g_commandList->SetPipelineState(
               RasterRenderer::g_grassPipelineState.Get());
           DX12Context::g_commandList->IASetPrimitiveTopology(

@@ -499,6 +499,7 @@ if(DXC_COMPILER)
   # discovery in existing build trees; keep it explicit so Explorer launches do
   # not fall back to loading source HLSL from the current working directory.
   list(APPEND SHADER_COMPILE_LIST "pbr_mesh.hlsl|VSMainGrass|vs_6_0")
+  list(APPEND SHADER_COMPILE_LIST "pbr_mesh.hlsl|VSMainGrassShadow|vs_6_0")
   list(REMOVE_DUPLICATES SHADER_COMPILE_LIST)
 
   set(COMPILED_SHADERS)

@@ -508,6 +508,26 @@ VSOutputShadow VSMainShadow(VSInputMesh input)
     return o;
 }
 
+VSOutputShadow VSMainGrassShadow(VSInputMesh input, uint instanceId : SV_InstanceID)
+{
+    VSOutputShadow o;
+
+    uint bladeIndex = g_grassVisible[instanceId + 1].x;
+    FGrassPatch blade = g_grassInstances[bladeIndex];
+    float bladeScale = max(blade.scale, 1e-3);
+
+    float3 right;
+    float3 upDir;
+    float3 forwardDir;
+    BuildGrassBasis(blade, right, upDir, forwardDir);
+
+    float3 localPos = input.position * bladeScale;
+    float3 worldPos = blade.position + right * localPos.x +
+                      upDir * localPos.y + forwardDir * localPos.z;
+    o.position = mul(float4(worldPos, 1.0f), shadowMatrix);
+    return o;
+}
+
 // Improved microfacet BRDF helpers
 static const float PI = 3.14159265359;
 

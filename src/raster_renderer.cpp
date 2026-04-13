@@ -6,6 +6,7 @@
 #include "dx12_context.h"
 #include "dxr_renderer.h"
 #include "dxc_wrapper.h"
+#include "grass_manager.h"
 #include "ibl_manager.h"
 #include "scene.h"
 #include <fstream>
@@ -33,6 +34,7 @@ ComPtr<ID3D12PipelineState> RasterRenderer::g_grassPipelineState;
 ComPtr<ID3D12PipelineState> RasterRenderer::g_skyboxPipelineState;
 ComPtr<ID3D12PipelineState> RasterRenderer::g_depthOnlyPipelineState;
 ComPtr<ID3D12PipelineState> RasterRenderer::g_shadowPipelineState;
+static ComPtr<ID3D12PipelineState> s_grassShadowPipelineState;
 
 static ComPtr<ID3D12Resource> s_shadowMap;
 static ComPtr<ID3D12DescriptorHeap> s_shadowDsvHeap;
@@ -314,6 +316,7 @@ void RecreateMeshPipeline(ID3D12Device *device, ID3D12RootSignature *rootSig) {
     ComPtr<IDxcBlob> vsMeshBlob;
     ComPtr<IDxcBlob> vsGrassBlob;
     ComPtr<IDxcBlob> vsShadowBlob;
+    ComPtr<IDxcBlob> vsGrassShadowBlob;
     ComPtr<IDxcBlob> psMeshBlob;
 
     vsMeshBlob = s_dxcHelper.Compile(pbrShaderPath, L"VSMainMesh", L"vs_6_0",
@@ -322,6 +325,8 @@ void RecreateMeshPipeline(ID3D12Device *device, ID3D12RootSignature *rootSig) {
                                       compileDefines);
     vsShadowBlob = s_dxcHelper.Compile(pbrShaderPath, L"VSMainShadow",
                        L"vs_6_0", compileDefines);
+    vsGrassShadowBlob = s_dxcHelper.Compile(pbrShaderPath, L"VSMainGrassShadow",
+                                            L"vs_6_0", compileDefines);
     psMeshBlob = s_dxcHelper.Compile(pbrShaderPath, L"PSMainMesh", L"ps_6_0",
                                      compileDefines);
 
@@ -488,6 +493,23 @@ void RecreateMeshPipeline(ID3D12Device *device, ID3D12RootSignature *rootSig) {
     }
     g_shadowPipelineState = newShadowPSO;
 
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC grassShadowPsoDesc = shadowPsoDesc;
+    grassShadowPsoDesc.VS = {vsGrassShadowBlob->GetBufferPointer(),
+                             vsGrassShadowBlob->GetBufferSize()};
+    grassShadowPsoDesc.RasterizerState.DepthBias = 32;
+    grassShadowPsoDesc.RasterizerState.DepthBiasClamp = 0.0005f;
+    grassShadowPsoDesc.RasterizerState.SlopeScaledDepthBias = 1.5f;
+
+    ComPtr<ID3D12PipelineState> newGrassShadowPSO;
+    HRESULT hrGrassShadow = device->CreateGraphicsPipelineState(
+        &grassShadowPsoDesc, IID_PPV_ARGS(&newGrassShadowPSO));
+    if (FAILED(hrGrassShadow)) {
+      fprintf(stderr, "RasterRenderer: CreateGraphicsPipelineState (grass shadow) failed: 0x%08x\n",
+              (unsigned)hrGrassShadow);
+      ThrowIfFailed(hrGrassShadow);
+    }
+    s_grassShadowPipelineState = newGrassShadowPSO;
+
     // --- Skybox PSO ---
     try {
       std::wstring skyboxPath = FindShaderFileLocal(L"shaders\\skybox.hlsl");
@@ -630,7 +652,10 @@ void CreateShadowResources(ID3D12Device *device) {
   }
 }
 
-void DrawShadowMap(ID3D12GraphicsCommandList *cmdList, ID3D12Resource *cameraCB, const std::vector<Scene::Instance> &instances) {
+void DrawShadowMap(ID3D12GraphicsCommandList *cmdList,
+                   ID3D12Resource *cameraCB,
+                   const std::vector<Scene::Instance> &instances,
+                   bool includeGrass) {
   if (!s_shadowMap || !g_shadowPipelineState) return;
 
   TransitionResource(cmdList, s_shadowMap.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_DEPTH_WRITE);
@@ -654,6 +679,35 @@ void DrawShadowMap(ID3D12GraphicsCommandList *cmdList, ID3D12Resource *cameraCB,
     cmdList->IASetVertexBuffers(0, 1, &inst.mesh->vbView);
     cmdList->IASetIndexBuffer(&inst.mesh->ibView);
     cmdList->DrawIndexedInstanced(inst.mesh->indexCount, 1, 0, 0, 0);
+  }
+
+  if (includeGrass && s_grassShadowPipelineState &&
+      GrassManager::GetPatchCount() > 0 &&
+      GrassManager::GetInstanceBufferGpuAddress() != 0) {
+    const Asset::GpuMesh *nearMesh = GrassManager::GetPatchMesh();
+    const Asset::GpuMesh *midMesh = GrassManager::GetMidPatchMesh();
+
+    cmdList->SetPipelineState(s_grassShadowPipelineState.Get());
+    if (cameraCB) {
+      cmdList->SetGraphicsRootConstantBufferView(
+          0, cameraCB->GetGPUVirtualAddress());
+    }
+    cmdList->SetGraphicsRootShaderResourceView(
+        6, GrassManager::GetInstanceBufferGpuAddress());
+
+    if (nearMesh && nearMesh->vertexBuffer && nearMesh->indexBuffer) {
+      cmdList->SetGraphicsRootShaderResourceView(
+          7, GrassManager::GetVisibleBufferGpuAddress(
+                 GrassManager::LodBand::Near));
+      GrassManager::DrawVisible(cmdList, GrassManager::LodBand::Near);
+    }
+
+    if (midMesh && midMesh->vertexBuffer && midMesh->indexBuffer) {
+      cmdList->SetGraphicsRootShaderResourceView(
+          7, GrassManager::GetVisibleBufferGpuAddress(
+                 GrassManager::LodBand::Mid));
+      GrassManager::DrawVisible(cmdList, GrassManager::LodBand::Mid);
+    }
   }
 
   TransitionResource(cmdList, s_shadowMap.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
