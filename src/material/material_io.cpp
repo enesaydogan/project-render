@@ -39,10 +39,14 @@ nlohmann::json BuildMaterialsMetadata(
         {"mt", mat.metalness},
         {"rg", mat.roughness},
         {"sw", mat.specularWeight},
+        {"sc",
+         {mat.specularColor[0], mat.specularColor[1], mat.specularColor[2]}},
         {"tc",
          {mat.transmissionColor[0], mat.transmissionColor[1],
           mat.transmissionColor[2]}},
         {"tr", mat.transmissionWeight},
+        {"tk", mat.thickness},
+        {"ad", mat.attenuationDistance},
         {"io", mat.ior},
         {"ec",
          {mat.emissiveColor[0], mat.emissiveColor[1], mat.emissiveColor[2],
@@ -50,6 +54,11 @@ nlohmann::json BuildMaterialsMetadata(
         {"ei", mat.emissiveIntensity},
         {"cw", mat.coatWeight},
         {"cr", mat.coatRoughness},
+        {"ci", mat.coatIor},
+        {"an", mat.anisotropy},
+        {"ar", mat.anisotropyRotation},
+        {"shw", mat.sheenWeight},
+        {"shc", {mat.sheenColor[0], mat.sheenColor[1], mat.sheenColor[2]}},
         {"th", mat.thinWalled},
         {"tl", mat.translucency},
         {"us", {mat.uvScale[0], mat.uvScale[1]}},
@@ -63,7 +72,9 @@ nlohmann::json BuildMaterialsMetadata(
         {"tvo", mat.triPlanarVariationOffset},
         {"wf", mat.workflow},
         {"txd", MapSavedTextureIndex(textureSaveRemap, mat.diffuseTexture)},
+        {"txa", MapSavedTextureIndex(textureSaveRemap, mat.opacityTexture)},
         {"txn", MapSavedTextureIndex(textureSaveRemap, mat.normalTexture)},
+        {"txcn", MapSavedTextureIndex(textureSaveRemap, mat.coatNormalTexture)},
         {"txe", MapSavedTextureIndex(textureSaveRemap, mat.emissiveTexture)},
         {"txo", MapSavedTextureIndex(textureSaveRemap, mat.occlusionTexture)},
         {"txm",
@@ -72,15 +83,23 @@ nlohmann::json BuildMaterialsMetadata(
          MapSavedTextureIndex(textureSaveRemap, mat.metalnessTexture)},
         {"txrg",
          MapSavedTextureIndex(textureSaveRemap, mat.roughnessGlossTexture)},
+        {"txsc",
+         MapSavedTextureIndex(textureSaveRemap, mat.specularColorTexture)},
+        {"txtk", MapSavedTextureIndex(textureSaveRemap, mat.thicknessTexture)},
         {"tad", mat.diffuseTextureAmount},
+        {"taa", mat.opacityTextureAmount},
         {"tamr", mat.metalRoughTextureAmount},
         {"tamt", mat.metalnessTextureAmount},
         {"targ", mat.roughnessGlossTextureAmount},
         {"tan", mat.normalTextureAmount},
+        {"tacn", mat.coatNormalTextureAmount},
         {"tao", mat.occlusionTextureAmount},
         {"tae", mat.emissiveTextureAmount},
+        {"tasc", mat.specularColorTextureAmount},
+        {"tatk", mat.thicknessTextureAmount},
         {"ds", mat.doubleSided},
         {"am", mat.alphaMode},
+        {"ac", mat.alphaCutoff},
         {"gr", mat.isGrass},
         {"gc", {mat.grassColor[0], mat.grassColor[1], mat.grassColor[2]}},
         {"gs", mat.grassBladeSize},
@@ -134,6 +153,11 @@ void RestoreMaterialsFromMetadata(const nlohmann::json &materialsJson,
     material.roughness = savedMaterial.value("rg", material.roughness);
     material.specularWeight =
         savedMaterial.value("sw", material.specularWeight);
+    if (savedMaterial.contains("sc")) {
+      for (int channel = 0; channel < 3; ++channel) {
+        material.specularColor[channel] = savedMaterial["sc"][channel];
+      }
+    }
     if (savedMaterial.contains("tc")) {
       for (int channel = 0; channel < 3; ++channel) {
         material.transmissionColor[channel] = savedMaterial["tc"][channel];
@@ -141,6 +165,9 @@ void RestoreMaterialsFromMetadata(const nlohmann::json &materialsJson,
     }
     material.transmissionWeight =
         savedMaterial.value("tr", material.transmissionWeight);
+    material.thickness = savedMaterial.value("tk", material.thickness);
+    material.attenuationDistance =
+        savedMaterial.value("ad", material.attenuationDistance);
     material.ior = savedMaterial.value("io", material.ior);
     if (savedMaterial.contains("ec")) {
       for (int channel = 0; channel < 4; ++channel) {
@@ -152,6 +179,16 @@ void RestoreMaterialsFromMetadata(const nlohmann::json &materialsJson,
     material.coatWeight = savedMaterial.value("cw", material.coatWeight);
     material.coatRoughness =
         savedMaterial.value("cr", material.coatRoughness);
+    material.coatIor = savedMaterial.value("ci", material.coatIor);
+    material.anisotropy = savedMaterial.value("an", material.anisotropy);
+    material.anisotropyRotation =
+        savedMaterial.value("ar", material.anisotropyRotation);
+    material.sheenWeight = savedMaterial.value("shw", material.sheenWeight);
+    if (savedMaterial.contains("shc")) {
+      for (int channel = 0; channel < 3; ++channel) {
+        material.sheenColor[channel] = savedMaterial["shc"][channel];
+      }
+    }
     material.thinWalled = savedMaterial.value("th", material.thinWalled);
     material.translucency =
         savedMaterial.value("tl", material.translucency);
@@ -209,14 +246,20 @@ void RestoreMaterialsFromMetadata(const nlohmann::json &materialsJson,
     };
 
     restoreTextureIndex("txd", &material.diffuseTexture);
+    restoreTextureIndex("txa", &material.opacityTexture);
     restoreTextureIndex("txn", &material.normalTexture);
+    restoreTextureIndex("txcn", &material.coatNormalTexture);
     restoreTextureIndex("txe", &material.emissiveTexture);
     restoreTextureIndex("txo", &material.occlusionTexture);
     restoreTextureIndex("txm", &material.metalRoughTexture);
     restoreTextureIndex("txmt", &material.metalnessTexture);
     restoreTextureIndex("txrg", &material.roughnessGlossTexture);
+    restoreTextureIndex("txsc", &material.specularColorTexture);
+    restoreTextureIndex("txtk", &material.thicknessTexture);
     material.diffuseTextureAmount =
       savedMaterial.value("tad", material.diffuseTextureAmount);
+    material.opacityTextureAmount =
+      savedMaterial.value("taa", material.opacityTextureAmount);
     material.metalRoughTextureAmount =
       savedMaterial.value("tamr", material.metalRoughTextureAmount);
     material.metalnessTextureAmount =
@@ -225,14 +268,21 @@ void RestoreMaterialsFromMetadata(const nlohmann::json &materialsJson,
       savedMaterial.value("targ", material.roughnessGlossTextureAmount);
     material.normalTextureAmount =
       savedMaterial.value("tan", material.normalTextureAmount);
+    material.coatNormalTextureAmount =
+      savedMaterial.value("tacn", material.coatNormalTextureAmount);
     material.occlusionTextureAmount =
       savedMaterial.value("tao", material.occlusionTextureAmount);
     material.emissiveTextureAmount =
       savedMaterial.value("tae", material.emissiveTextureAmount);
+    material.specularColorTextureAmount =
+      savedMaterial.value("tasc", material.specularColorTextureAmount);
+    material.thicknessTextureAmount =
+      savedMaterial.value("tatk", material.thicknessTextureAmount);
 
     material.runtimeMetalRoughTexture = -1;
     material.doubleSided = savedMaterial.value("ds", material.doubleSided);
     material.alphaMode = savedMaterial.value("am", material.alphaMode);
+    material.alphaCutoff = savedMaterial.value("ac", material.alphaCutoff);
     material.schemaVersion = Asset::Material::kSchemaVersionOpenPbrSubset;
   }
 }

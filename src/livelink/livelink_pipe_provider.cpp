@@ -249,9 +249,16 @@ bool ParsePayload(const SceneDeltaKind kind, const json &payloadJson,
     payload.baseColorTextureUri = payloadJson.value("baseColorTextureUri", "");
     payload.baseColorTextureBlobHash =
       payloadJson.value("baseColorTextureBlobHash", "");
+    payload.opacityTextureUri = payloadJson.value("opacityTextureUri", "");
+    payload.opacityTextureBlobHash =
+      payloadJson.value("opacityTextureBlobHash", "");
     payload.normalTextureUri = payloadJson.value("normalTextureUri", "");
     payload.normalTextureBlobHash =
       payloadJson.value("normalTextureBlobHash", "");
+    payload.coatNormalTextureUri =
+      payloadJson.value("coatNormalTextureUri", "");
+    payload.coatNormalTextureBlobHash =
+      payloadJson.value("coatNormalTextureBlobHash", "");
     payload.emissiveTextureUri = payloadJson.value("emissiveTextureUri", "");
     payload.emissiveTextureBlobHash =
       payloadJson.value("emissiveTextureBlobHash", "");
@@ -268,8 +275,17 @@ bool ParsePayload(const SceneDeltaKind kind, const json &payloadJson,
       payloadJson.value("roughnessGlossTextureUri", "");
     payload.roughnessGlossTextureBlobHash =
       payloadJson.value("roughnessGlossTextureBlobHash", "");
+    payload.specularColorTextureUri =
+      payloadJson.value("specularColorTextureUri", "");
+    payload.specularColorTextureBlobHash =
+      payloadJson.value("specularColorTextureBlobHash", "");
+    payload.thicknessTextureUri = payloadJson.value("thicknessTextureUri", "");
+    payload.thicknessTextureBlobHash =
+      payloadJson.value("thicknessTextureBlobHash", "");
     payload.baseColorTextureAmount =
       payloadJson.value("baseColorTextureAmount", 1.0f);
+    payload.opacityTextureAmount =
+      payloadJson.value("opacityTextureAmount", 1.0f);
     payload.packedSurfaceTextureAmount =
       payloadJson.value("packedSurfaceTextureAmount", 1.0f);
     payload.metalnessTextureAmount =
@@ -278,10 +294,16 @@ bool ParsePayload(const SceneDeltaKind kind, const json &payloadJson,
       payloadJson.value("roughnessGlossTextureAmount", 1.0f);
     payload.normalTextureAmount =
       payloadJson.value("normalTextureAmount", 1.0f);
+    payload.coatNormalTextureAmount =
+      payloadJson.value("coatNormalTextureAmount", 1.0f);
     payload.occlusionTextureAmount =
       payloadJson.value("occlusionTextureAmount", 1.0f);
     payload.emissiveTextureAmount =
       payloadJson.value("emissiveTextureAmount", 1.0f);
+    payload.specularColorTextureAmount =
+      payloadJson.value("specularColorTextureAmount", 1.0f);
+    payload.thicknessTextureAmount =
+      payloadJson.value("thicknessTextureAmount", 1.0f);
     if (payloadJson.contains("emissiveColor")) {
       FillFloatArray(payloadJson.at("emissiveColor"), &payload.emissiveColor);
     }
@@ -290,14 +312,29 @@ bool ParsePayload(const SceneDeltaKind kind, const json &payloadJson,
     payload.metalness = payloadJson.value("metalness", 0.0f);
     payload.workflow = payloadJson.value("workflow", 0u);
     payload.specularWeight = payloadJson.value("specularWeight", 1.0f);
+    if (payloadJson.contains("specularColor")) {
+      FillFloatArray(payloadJson.at("specularColor"),
+                     &payload.specularColor);
+    }
     payload.ior = payloadJson.value("ior", 1.5f);
     payload.transmissionWeight = payloadJson.value("transmissionWeight", 0.0f);
     if (payloadJson.contains("transmissionColor")) {
       FillFloatArray(payloadJson.at("transmissionColor"),
                      &payload.transmissionColor);
     }
+    payload.thickness = payloadJson.value("thickness", 0.0f);
+    payload.attenuationDistance =
+      payloadJson.value("attenuationDistance", 0.0f);
     payload.coatWeight = payloadJson.value("coatWeight", 0.0f);
     payload.coatRoughness = payloadJson.value("coatRoughness", 0.1f);
+    payload.coatIor = payloadJson.value("coatIor", 1.5f);
+    payload.anisotropy = payloadJson.value("anisotropy", 0.0f);
+    payload.anisotropyRotation =
+      payloadJson.value("anisotropyRotation", 0.0f);
+    payload.sheenWeight = payloadJson.value("sheenWeight", 0.0f);
+    if (payloadJson.contains("sheenColor")) {
+      FillFloatArray(payloadJson.at("sheenColor"), &payload.sheenColor);
+    }
     payload.thinWalled = payloadJson.value("thinWalled", 0.0f);
     payload.translucency = payloadJson.value("translucency", 0.0f);
     if (payloadJson.contains("uvScale")) {
@@ -314,6 +351,7 @@ bool ParsePayload(const SceneDeltaKind kind, const json &payloadJson,
         payloadJson.value("triPlanarNormalStrength", 1.0f);
     payload.doubleSided = payloadJson.value("doubleSided", false);
     payload.alphaMode = payloadJson.value("alphaMode", "OPAQUE");
+    payload.alphaCutoff = payloadJson.value("alphaCutoff", 0.35f);
     payload.invertRoughnessTexture =
       payloadJson.value("invertRoughnessTexture", false);
     *outPayload = std::move(payload);

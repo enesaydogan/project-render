@@ -51,7 +51,7 @@ struct Texture {
 };
 
 struct Material {
-  static constexpr uint32_t kSchemaVersionOpenPbrSubset = 7;
+  static constexpr uint32_t kSchemaVersionOpenPbrSubset = 8;
   static constexpr uint32_t kWorkflowMetalRoughness = 0;
   static constexpr uint32_t kWorkflowReflectionGlossiness = 1;
   static constexpr uint32_t kTriPlanarVariationOff = 0;
@@ -86,23 +86,32 @@ struct Material {
 
   int diffuseTexture = -1; // Was baseColor
   int normalTexture = -1;
+  int opacityTexture = -1;
   int emissiveTexture = -1;
   int occlusionTexture = -1;
   int metalRoughTexture = -1; // User-authored packed metal/rough map.
   int runtimeMetalRoughTexture = -1; // Internal derived packed runtime map.
   int metalnessTexture = -1;
   int roughnessGlossTexture = -1;
+  int specularColorTexture = -1;
+  int thicknessTexture = -1;
+  int coatNormalTexture = -1;
   float diffuseTextureAmount = 1.0f;
+  float opacityTextureAmount = 1.0f;
   float metalRoughTextureAmount = 1.0f;
   float metalnessTextureAmount = 1.0f;
   float roughnessGlossTextureAmount = 1.0f;
   float normalTextureAmount = 1.0f;
   float occlusionTextureAmount = 1.0f;
   float emissiveTextureAmount = 1.0f;
+  float specularColorTextureAmount = 1.0f;
+  float thicknessTextureAmount = 1.0f;
+  float coatNormalTextureAmount = 1.0f;
 
   bool doubleSided = false;
   std::string alphaMode = "OPAQUE";
   bool invertRoughnessTexture = false;
+  float alphaCutoff = 0.35f;
 
   // Grass controls (UI driven).
   bool isGrass = false;
@@ -116,10 +125,18 @@ struct Material {
   uint32_t workflow = kWorkflowMetalRoughness;
   float roughness = 0.2f;
   float specularWeight = 1.0f;
+  float specularColor[3] = {1.0f, 1.0f, 1.0f};
   float transmissionWeight = 0.0f;
   float transmissionColor[3] = {1.0f, 1.0f, 1.0f};
+  float thickness = 0.0f;
+  float attenuationDistance = 0.0f; // 0 = disabled / infinite
   float coatWeight = 0.0f;
   float coatRoughness = 0.1f;
+  float coatIor = 1.5f;
+  float anisotropy = 0.0f;
+  float anisotropyRotation = 0.0f;
+  float sheenWeight = 0.0f;
+  float sheenColor[3] = {1.0f, 1.0f, 1.0f};
 };
 
 struct ImportedSceneNode {

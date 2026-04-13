@@ -83,4 +83,5 @@ void Miss(inout RayPayload payload)
     payload.packedSurface = PackPayloadSurface(0.0, 0.0, 0.0, 0.0);
     payload.packedIorType = PackPayloadIorType(1.0, rayType, false, 1.0);
     payload.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
+    payload.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
 }

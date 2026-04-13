@@ -33,13 +33,17 @@ public:
 private:
     enum TextureSlot {
         Albedo = 0,
-        PackedMetalRough = 1,
-        Metalness = 2,
-        RoughnessGlossiness = 3,
-        Normal = 4,
-        Occlusion = 5,
-        Emissive = 6,
-        TextureSlotCount = 7
+        Opacity = 1,
+        PackedMetalRough = 2,
+        Metalness = 3,
+        RoughnessGlossiness = 4,
+        Normal = 5,
+        CoatNormal = 6,
+        Occlusion = 7,
+        Emissive = 8,
+        SpecularColor = 9,
+        Thickness = 10,
+        TextureSlotCount = 11
     };
 
     struct TextureSlotWidgets {
@@ -120,12 +124,20 @@ private:
     SliderControl *m_roughness = nullptr;
     SliderControl *m_metalness = nullptr;
     SliderControl *m_specularWeight = nullptr;
+    QPushButton *m_specularColorButton = nullptr;
     SliderControl *m_ior = nullptr;
     SliderControl *m_transmission = nullptr;
     QPushButton *m_transmissionColorButton = nullptr;
+    SliderControl *m_thickness = nullptr;
+    SliderControl *m_attenuationDistance = nullptr;
     SliderControl *m_coatWeight = nullptr;
     SliderControl *m_coatRoughness = nullptr;
+    SliderControl *m_coatIor = nullptr;
     SliderControl *m_translucency = nullptr;
+    SliderControl *m_anisotropy = nullptr;
+    SliderControl *m_anisotropyRotation = nullptr;
+    SliderControl *m_sheenWeight = nullptr;
+    QPushButton *m_sheenColorButton = nullptr;
     QCheckBox *m_thinWalled = nullptr;
 
     // Grass tab
@@ -159,6 +171,7 @@ private:
     // Flags tab
     QCheckBox *m_doubleSided = nullptr;
     QComboBox *m_alphaMode = nullptr;
+    SliderControl *m_alphaCutoff = nullptr;
 
     // QA tab
     QLabel *m_qaLabel = nullptr;

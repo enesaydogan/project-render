@@ -382,37 +382,53 @@ void Draw(HWND hwnd, bool &visible) {
           char nameBuf[64];
           strncpy_s(nameBuf, mat.name, _TRUNCATE);
           int d = mat.diffuseTexture;
+          int a = mat.opacityTexture;
           int n = mat.normalTexture;
+          int cn = mat.coatNormalTexture;
           int e = mat.emissiveTexture;
           int o = mat.occlusionTexture;
           int mr = mat.metalRoughTexture;
           int mt = mat.metalnessTexture;
           int rg = mat.roughnessGlossTexture;
+          int sc = mat.specularColorTexture;
+          int tk = mat.thicknessTexture;
           float da = mat.diffuseTextureAmount;
+          float aa = mat.opacityTextureAmount;
           float na = mat.normalTextureAmount;
+          float cna = mat.coatNormalTextureAmount;
           float ea = mat.emissiveTextureAmount;
           float oa = mat.occlusionTextureAmount;
           float mra = mat.metalRoughTextureAmount;
           float mta = mat.metalnessTextureAmount;
           float rga = mat.roughnessGlossTextureAmount;
+          float sca = mat.specularColorTextureAmount;
+          float tka = mat.thicknessTextureAmount;
 
           mat = def;
           strncpy_s(mat.name, nameBuf, _TRUNCATE);
           if (keepTextures) {
             mat.diffuseTexture = d;
+            mat.opacityTexture = a;
             mat.normalTexture = n;
+            mat.coatNormalTexture = cn;
             mat.emissiveTexture = e;
             mat.occlusionTexture = o;
             mat.metalRoughTexture = mr;
             mat.metalnessTexture = mt;
             mat.roughnessGlossTexture = rg;
+            mat.specularColorTexture = sc;
+            mat.thicknessTexture = tk;
             mat.diffuseTextureAmount = da;
+            mat.opacityTextureAmount = aa;
             mat.normalTextureAmount = na;
+            mat.coatNormalTextureAmount = cna;
             mat.emissiveTextureAmount = ea;
             mat.occlusionTextureAmount = oa;
             mat.metalRoughTextureAmount = mra;
             mat.metalnessTextureAmount = mta;
             mat.roughnessGlossTextureAmount = rga;
+            mat.specularColorTextureAmount = sca;
+            mat.thicknessTextureAmount = tka;
           }
         };
 
@@ -523,6 +539,8 @@ void Draw(HWND hwnd, bool &visible) {
             if (ImGui::SliderFloat("Specular Weight", &mat.specularWeight,
                                    0.0f, 1.0f))
               DxrRenderer::ResetAccumulation();
+            if (ImGui::ColorEdit3("Specular Color", mat.specularColor))
+              DxrRenderer::ResetAccumulation();
 
             if (ImGui::InputFloat("IOR", &mat.ior, 0.01f, 0.1f, "%.3f"))
               DxrRenderer::ResetAccumulation();
@@ -537,6 +555,13 @@ void Draw(HWND hwnd, bool &visible) {
             if (ImGui::ColorEdit3("Transmission Color", mat.transmissionColor)) {
               DxrRenderer::ResetAccumulation();
             }
+            if (ImGui::SliderFloat("Thickness", &mat.thickness, 0.0f, 1.0f,
+                                   "%.4f"))
+              DxrRenderer::ResetAccumulation();
+            if (ImGui::SliderFloat("Attenuation Distance",
+                                   &mat.attenuationDistance, 0.0f, 100.0f,
+                                   "%.3f"))
+              DxrRenderer::ResetAccumulation();
             float coatWeight = mat.coatWeight;
             if (ImGui::SliderFloat("Coat", &coatWeight, 0.0f, 1.0f)) {
               mat.coatWeight = coatWeight;
@@ -548,9 +573,20 @@ void Draw(HWND hwnd, bool &visible) {
               mat.coatRoughness = coatRoughness;
               DxrRenderer::ResetAccumulation();
             }
+            if (ImGui::InputFloat("Coat IOR", &mat.coatIor, 0.01f, 0.1f, "%.3f"))
+              DxrRenderer::ResetAccumulation();
             if (ImGui::SliderFloat("Translucency", &mat.translucency, 0.0f,
                                    1.0f))
               MarkOpacityDirty();
+            if (ImGui::SliderFloat("Anisotropy", &mat.anisotropy, -1.0f, 1.0f))
+              DxrRenderer::ResetAccumulation();
+            if (ImGui::SliderFloat("Aniso Rotation", &mat.anisotropyRotation,
+                                   0.0f, 360.0f, "%.1f"))
+              DxrRenderer::ResetAccumulation();
+            if (ImGui::SliderFloat("Sheen", &mat.sheenWeight, 0.0f, 1.0f))
+              DxrRenderer::ResetAccumulation();
+            if (ImGui::ColorEdit3("Sheen Color", mat.sheenColor))
+              DxrRenderer::ResetAccumulation();
             {
               bool thin = mat.thinWalled > 0.5f;
               if (ImGui::Checkbox("Thin Walled", &thin)) {
@@ -742,6 +778,7 @@ void Draw(HWND hwnd, bool &visible) {
             };
 
             DrawTextureSlot("Albedo", MaterialSystem::TextureSlot::BaseColor);
+            DrawTextureSlot("Opacity", MaterialSystem::TextureSlot::Opacity);
             DrawTextureSlot("Packed Metal/Rough (Legacy)",
                             MaterialSystem::TextureSlot::PackedSurface);
             if (!IsReflectionGlossinessWorkflow(mat))
@@ -750,8 +787,12 @@ void Draw(HWND hwnd, bool &visible) {
             DrawTextureSlot(GetRoughnessTextureLabel(mat),
                             MaterialSystem::TextureSlot::RoughnessOrGlossiness);
             DrawTextureSlot("Normal", MaterialSystem::TextureSlot::Normal);
+            DrawTextureSlot("Coat Normal", MaterialSystem::TextureSlot::CoatNormal);
             DrawTextureSlot("Occlusion", MaterialSystem::TextureSlot::Occlusion);
             DrawTextureSlot("Emissive", MaterialSystem::TextureSlot::Emissive);
+            DrawTextureSlot("Specular Color",
+                            MaterialSystem::TextureSlot::SpecularColor);
+            DrawTextureSlot("Thickness", MaterialSystem::TextureSlot::Thickness);
 
             ImGui::EndTabItem();
           }
@@ -821,6 +862,11 @@ void Draw(HWND hwnd, bool &visible) {
             if (ImGui::Combo("Alpha Mode", &mode, alphaModes, 3)) {
               mat.alphaMode = alphaModes[mode];
               MarkOpacityDirty();
+            }
+            if (mat.alphaMode == "MASK") {
+              if (ImGui::SliderFloat("Alpha Cutoff", &mat.alphaCutoff, 0.0f,
+                                     1.0f))
+                MarkOpacityDirty();
             }
             ImGui::EndTabItem();
           }

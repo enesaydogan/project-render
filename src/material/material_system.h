@@ -8,12 +8,16 @@ namespace MaterialSystem {
 
 enum class TextureSlot {
   BaseColor = 0,
-  PackedSurface = 1,
-  Metalness = 2,
-  RoughnessOrGlossiness = 3,
-  Normal = 4,
-  Occlusion = 5,
-  Emissive = 6,
+  Opacity = 1,
+  PackedSurface = 2,
+  Metalness = 3,
+  RoughnessOrGlossiness = 4,
+  Normal = 5,
+  CoatNormal = 6,
+  Occlusion = 7,
+  Emissive = 8,
+  SpecularColor = 9,
+  Thickness = 10,
 };
 
 enum RuntimeMaterialFlags : uint32_t {
@@ -25,6 +29,10 @@ enum RuntimeMaterialFlags : uint32_t {
   kRuntimeMaterialFlagGlass = 1u << 5,
   kRuntimeMaterialFlagDoubleSided = 1u << 6,
   kRuntimeMaterialFlagInvertRoughness = 1u << 7,
+  kRuntimeMaterialFlagHasOpacityTexture = 1u << 8,
+  kRuntimeMaterialFlagHasSpecularColor = 1u << 9,
+  kRuntimeMaterialFlagHasVolume = 1u << 10,
+  kRuntimeMaterialFlagHasCoatNormal = 1u << 11,
 };
 
 struct RuntimeRasterMaterialConstants {
@@ -41,6 +49,12 @@ struct RuntimeRasterMaterialConstants {
   float mappingVariationParams[4];
   float textureWeight0[4];
   float textureWeight1[4];
+  int textureIndices2[4];
+  float textureWeight2[4];
+  float volumeParams[4];
+  float specularColor[4];
+  float sheenColor[4];
+  float lobeParams[4];
 };
 
 struct RuntimeDxrMaterialData {
@@ -59,6 +73,11 @@ struct RuntimeDxrMaterialExtraData {
   float transmissionColor[4];
   float textureWeight0[4];
   float textureWeight1[4];
+  uint32_t extraPackedTextures[4];
+  float volumeParams[4];
+  float specularColor[4];
+  float sheenColor[4];
+  float lobeParams[4];
 };
 
 bool UsesReflectionGlossiness(const Asset::Material &material);
