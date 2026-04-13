@@ -201,14 +201,36 @@ void ApplyQtTheme(QApplication &app)
             background-color: #2d2d30;
         }
 
-        QCheckBox::indicator:hover, QRadioButton::indicator:hover {
+        QCheckBox::indicator:unchecked, QRadioButton::indicator:unchecked {
+            background-color: #2d2d30;
+            border: 1px solid #3c3c3c;
+        }
+
+        QCheckBox::indicator:hover:unchecked, QRadioButton::indicator:hover:unchecked {
             border: 1px solid #007acc;
+            background-color: #333337;
         }
 
         QCheckBox::indicator:checked, QRadioButton::indicator:checked {
             background-color: #007acc;
             border: 1px solid #007acc;
             image: url(data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="%23ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>);
+        }
+
+        QCheckBox::indicator:hover:checked, QRadioButton::indicator:hover:checked {
+            background-color: #1392ff;
+            border: 1px solid #1392ff;
+        }
+
+        QCheckBox::indicator:disabled:unchecked, QRadioButton::indicator:disabled:unchecked {
+            background-color: #252526;
+            border: 1px solid #2d2d2d;
+        }
+
+        QCheckBox::indicator:disabled:checked, QRadioButton::indicator:disabled:checked {
+            background-color: #1b4f7a;
+            border: 1px solid #1b4f7a;
+            image: url(data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="%23d9e8f5" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>);
         }
 
         QRadioButton::indicator {
