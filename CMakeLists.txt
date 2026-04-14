@@ -196,18 +196,10 @@ endif()
   set(NRD_ROUGHNESS_ENCODING "1" CACHE STRING "" FORCE)
   set(NRD_NRI ON CACHE BOOL "" FORCE)
   add_subdirectory(thirdparty/NRD)
+  
   target_link_libraries(project-render PRIVATE NRD NRDIntegration NRI)
   target_compile_definitions(project-render PRIVATE USE_NRD=1)
 
-  add_custom_command(TARGET project-render POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      $<TARGET_FILE:NRD>
-      "$<TARGET_FILE_DIR:project-render>/"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      $<TARGET_FILE:NRI>
-      "$<TARGET_FILE_DIR:project-render>/"
-    COMMENT "Copying NRD and NRI runtime binaries..."
-  )
 # Copy Streamline + NGX runtime files next to the executable.
 
 # optional windows resources (icon + version info)
@@ -425,7 +417,7 @@ endif()
 # Place build outputs into dedicated folders to avoid spilling .lib/.exp into
 # the top-level build directory. This keeps asset_loader.lib, imgui_static.lib,
 # project-render.lib and project-render.exp out of the build root.
-set_target_properties(project-render asset_loader imgui_static PROPERTIES
+set_target_properties(project-render asset_loader imgui_static NRD NRI NRDIntegration PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
   RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/Debug/bin"
   RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/Release/bin"
@@ -435,6 +427,12 @@ set_target_properties(project-render asset_loader imgui_static PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
   LIBRARY_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/Debug/lib"
   LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/Release/lib"
+  PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+  PDB_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/Debug/lib"
+  PDB_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/Release/lib"
+  COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+  COMPILE_PDB_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/Debug/lib"
+  COMPILE_PDB_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/Release/lib"
 )
 
 # Instead of shipping plain text HLSL, compile shaders to bytecode
