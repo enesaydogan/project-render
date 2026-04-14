@@ -197,22 +197,14 @@ void ApplyQtTheme(QApplication &app)
             color: #666666;
         }
 
-        QCheckBox::indicator, QRadioButton::indicator {
-            width: 16px;
-            height: 16px;
-            border: 1px solid #3c3c3c;
-            border-radius: 3px;
-            background-color: #2d2d30;
-        }
-
         QCheckBox::indicator:unchecked, QRadioButton::indicator:unchecked {
-            background-color: #2d2d30;
-            border: 1px solid #3c3c3c;
+            background-color: #0f2537;
+            border: 1px solid #173f61;
         }
 
         QCheckBox::indicator:hover:unchecked, QRadioButton::indicator:hover:unchecked {
-            border: 1px solid #007acc;
-            background-color: #333337;
+            border: 1px solid #1392ff;
+            background-color: #ffffff;
         }
 
         QCheckBox::indicator:checked, QRadioButton::indicator:checked {
@@ -227,14 +219,14 @@ void ApplyQtTheme(QApplication &app)
         }
 
         QCheckBox::indicator:disabled:unchecked, QRadioButton::indicator:disabled:unchecked {
-            background-color: #333333;
-            border: 1px solid #444444;
+            background-color: #252526;
+            border: 1px solid #3c3c3c;
         }
 
         QCheckBox::indicator:disabled:checked, QRadioButton::indicator:disabled:checked {
-            background-color: #333333;
-            border: 1px solid #444444;
-            image: url(data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="%23777777" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>);
+            background-color: #252526;
+            border: 1px solid #3c3c3c;
+            image: url(data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="%23555555" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>);
         }
 
         QRadioButton::indicator {
