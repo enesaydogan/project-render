@@ -5,6 +5,20 @@
 /build/_deps/*
 /build/Debug/*
 
+# Ignore all build directories (VS, CMake, Archicad, Max)
+build/
+build-*/
+out/
+bin/
+.vs/
+_deps/
+_CPack_Packages/
+
+# Ignore compiled binaries and installers
+*.dll
+*.exe
+*.msi
+
 # CMake generated files
 CMakeCache.txt
 CMakeFiles/

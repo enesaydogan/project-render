@@ -592,3 +592,80 @@ add_custom_command(TARGET project-render POST_BUILD
 if (MSVC)
   target_link_options(project-render PRIVATE /ENTRY:"WinMainCRTStartup")
 endif()
+
+# ==============================================================================
+# Installer and Component Setup (CPack)
+# ==============================================================================
+
+# Core Application
+install(TARGETS project-render 
+  RUNTIME DESTINATION bin 
+  COMPONENT CoreApp
+)
+
+# Install dependent DLLs, shaders, and generated files in the bin folder
+# This will catch Qt, NRD, OpenImageDenoise, shaders/, miniz.dll, etc.
+install(DIRECTORY "$<TARGET_FILE_DIR:project-render>/" 
+  DESTINATION bin
+  COMPONENT CoreApp
+  PATTERN "assets" EXCLUDE # Do not pack the heavy assets folder in the installer
+  PATTERN "assets/*" EXCLUDE
+  PATTERN "*.pdb" EXCLUDE # Exclude debug symbols
+  PATTERN "*.lib" EXCLUDE # Exclude static/import libraries
+  PATTERN "*.exp" EXCLUDE # Exclude exports
+)
+
+# Optional Plugin: 3ds Max 2024 Live Link
+if(EXISTS "${CMAKE_SOURCE_DIR}/build-max2024/Release/ProjectRenderLiveLink.dlu")
+  install(FILES "${CMAKE_SOURCE_DIR}/build-max2024/Release/ProjectRenderLiveLink.dlu"
+    DESTINATION plugins/max2024
+    COMPONENT Max2024Plugin
+  )
+endif()
+
+# Optional Plugin: 3ds Max 2025 Live Link
+if(EXISTS "${CMAKE_SOURCE_DIR}/build-max2025/Release/ProjectRenderLiveLink.dlu")
+  install(FILES "${CMAKE_SOURCE_DIR}/build-max2025/Release/ProjectRenderLiveLink.dlu"
+    DESTINATION plugins/max2025
+    COMPONENT Max2025Plugin
+  )
+endif()
+
+# Optional Plugin: Archicad 28 Live Link
+if(EXISTS "${CMAKE_SOURCE_DIR}/build-archicad28-v142/Release/ProjectRenderArchicad28LiveLink.apx")
+  install(FILES "${CMAKE_SOURCE_DIR}/build-archicad28-v142/Release/ProjectRenderArchicad28LiveLink.apx"
+    DESTINATION plugins/archicad28
+    COMPONENT Archicad28Plugin
+  )
+endif()
+
+# Configure CPack using NSIS generator
+set(CPACK_GENERATOR "NSIS")
+set(CPACK_PACKAGE_NAME "Project Render")
+set(CPACK_PACKAGE_VENDOR "Project Render Team")
+set(CPACK_PACKAGE_VERSION_MAJOR "0")
+set(CPACK_PACKAGE_VERSION_MINOR "1")
+set(CPACK_PACKAGE_VERSION_PATCH "5")
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "Project Render")
+
+# Explicitly limit the installer to only our components (ignore 3rd party components like assimp)
+set(CPACK_COMPONENTS_ALL CoreApp Max2024Plugin Max2025Plugin Archicad28Plugin)
+
+# Component display names and descriptions
+set(CPACK_COMPONENT_COREAPP_DISPLAY_NAME "Project Render (Core Engine)")
+set(CPACK_COMPONENT_COREAPP_REQUIRED ON)
+set(CPACK_COMPONENT_COREAPP_DESCRIPTION "The main standalone rendering application and its required dependencies.")
+
+set(CPACK_COMPONENT_MAX2024PLUGIN_DISPLAY_NAME "3ds Max 2024 Live Link")
+set(CPACK_COMPONENT_MAX2024PLUGIN_DESCRIPTION "Installs the Live Link plugin for Autodesk 3ds Max 2024.")
+
+set(CPACK_COMPONENT_MAX2025PLUGIN_DISPLAY_NAME "3ds Max 2025 Live Link")
+set(CPACK_COMPONENT_MAX2025PLUGIN_DESCRIPTION "Installs the Live Link plugin for Autodesk 3ds Max 2025.")
+
+set(CPACK_COMPONENT_ARCHICAD28PLUGIN_DISPLAY_NAME "Archicad 28 Live Link")
+set(CPACK_COMPONENT_ARCHICAD28PLUGIN_DESCRIPTION "Installs the Live Link plugin for Graphisoft Archicad 28.")
+
+# Explicitly tell CPack where NSIS is installed
+set(CPACK_MAKENSIS_EXECUTABLE "C:/Program Files (x86)/NSIS/makensis.exe")
+
+include(CPack)
