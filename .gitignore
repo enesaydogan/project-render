@@ -71,6 +71,11 @@ repos/vcpkg/packages/*/build/
 # Runtime-generated assets
 assets/*.glb
 
+# Proprietary SDKs
+thirdparty/archicad-sdk/
+thirdparty/sketchup_sdk/
+# Add any other proprietary SDKs here
+
 # Backup files
 *~
 *.bak
