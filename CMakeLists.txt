@@ -285,6 +285,14 @@ endif()
   set(NRI_ENABLE_DEBUG_NAMES_AND_ANNOTATIONS ON CACHE BOOL "" FORCE)
   set(NRI_ENABLE_AGILITY_SDK_SUPPORT OFF CACHE BOOL "" FORCE)
   add_subdirectory(thirdparty/NRD)
+
+  if(TARGET NRI_D3D12)
+    target_compile_definitions(NRI_D3D12 PRIVATE
+      D3D12_MS_DISPATCH_MAX_THREAD_GROUPS_PER_GRID=4194303
+      D3D12_AS_TGSM_BYTES_MINIMUM_SUPPORT=32768
+      D3D12_MS_TGSM_BYTES_MINIMUM_SUPPORT=28672
+    )
+  endif()
   
   target_link_libraries(project-render PRIVATE NRD NRDIntegration NRI)
   target_compile_definitions(project-render PRIVATE USE_NRD=1)
