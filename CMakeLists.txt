@@ -4,6 +4,85 @@ project(project-render VERSION 0.1.5 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Prefer vendored or already-populated FetchContent sources before attempting
+# fresh downloads. This keeps clean configure working on machines that already
+# have dependencies staged locally and reduces TLS/network-related failures.
+function(project_render_prefer_fetchcontent_source dep_name candidate_dir)
+  string(TOUPPER "${dep_name}" dep_name_upper)
+  if(EXISTS "${candidate_dir}/CMakeLists.txt")
+    set(FETCHCONTENT_SOURCE_DIR_${dep_name_upper}
+        "${candidate_dir}"
+        CACHE PATH "Local source override for ${dep_name}" FORCE)
+    message(STATUS "Using local ${dep_name} source: ${candidate_dir}")
+  endif()
+endfunction()
+
+project_render_prefer_fetchcontent_source("imgui"      "${CMAKE_SOURCE_DIR}/build/_deps/imgui-src")
+project_render_prefer_fetchcontent_source("assimp"     "${CMAKE_SOURCE_DIR}/build/_deps/assimp-src")
+project_render_prefer_fetchcontent_source("shadermake" "${CMAKE_SOURCE_DIR}/build/_deps/shadermake-src")
+project_render_prefer_fetchcontent_source("mathlib"    "${CMAKE_SOURCE_DIR}/build/_deps/mathlib-src")
+project_render_prefer_fetchcontent_source("nri"        "${CMAKE_SOURCE_DIR}/build/_deps/nri-src")
+project_render_prefer_fetchcontent_source("d3d12ma"    "${CMAKE_SOURCE_DIR}/build/_deps/d3d12ma-src")
+project_render_prefer_fetchcontent_source("shadermake" "${CMAKE_SOURCE_DIR}/thirdparty/ShaderMake")
+project_render_prefer_fetchcontent_source("mathlib"    "${CMAKE_SOURCE_DIR}/thirdparty/MathLib")
+project_render_prefer_fetchcontent_source("nri"        "${CMAKE_SOURCE_DIR}/thirdparty/NRI")
+
+if(WIN32)
+  if(DEFINED CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION)
+    set(PROJECT_RENDER_WINDOWS_SDK_VERSION "${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}")
+  elseif(DEFINED ENV{WindowsSDKLibVersion})
+    string(REGEX REPLACE "\\\\$" "" PROJECT_RENDER_WINDOWS_SDK_VERSION "$ENV{WindowsSDKLibVersion}")
+  endif()
+
+  get_filename_component(PROJECT_RENDER_WINDOWS_SDK_ROOT
+    "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows Kits\\Installed Roots;KitsRoot10]"
+    ABSOLUTE)
+
+  set(PROJECT_RENDER_SDK_DXC "")
+  set(PROJECT_RENDER_SDK_FXC "")
+
+  if(PROJECT_RENDER_WINDOWS_SDK_ROOT AND PROJECT_RENDER_WINDOWS_SDK_VERSION)
+    if(IS_DIRECTORY "${PROJECT_RENDER_WINDOWS_SDK_ROOT}/bin/${PROJECT_RENDER_WINDOWS_SDK_VERSION}.0")
+      set(PROJECT_RENDER_WINDOWS_SDK_VERSION "${PROJECT_RENDER_WINDOWS_SDK_VERSION}.0")
+    endif()
+
+    set(PROJECT_RENDER_WINDOWS_SDK_BIN
+      "${PROJECT_RENDER_WINDOWS_SDK_ROOT}/bin/${PROJECT_RENDER_WINDOWS_SDK_VERSION}/x64")
+    find_program(PROJECT_RENDER_SDK_DXC NAMES dxc HINTS "${PROJECT_RENDER_WINDOWS_SDK_BIN}" NO_DEFAULT_PATH)
+    find_program(PROJECT_RENDER_SDK_FXC NAMES fxc HINTS "${PROJECT_RENDER_WINDOWS_SDK_BIN}" NO_DEFAULT_PATH)
+  endif()
+
+  if(NOT PROJECT_RENDER_SDK_DXC)
+    file(GLOB PROJECT_RENDER_WINDOWS_DXC_CANDIDATES
+      "C:/Program Files (x86)/Windows Kits/10/bin/*/x64/dxc.exe")
+    if(PROJECT_RENDER_WINDOWS_DXC_CANDIDATES)
+      list(SORT PROJECT_RENDER_WINDOWS_DXC_CANDIDATES COMPARE NATURAL ORDER DESCENDING)
+      list(GET PROJECT_RENDER_WINDOWS_DXC_CANDIDATES 0 PROJECT_RENDER_SDK_DXC)
+    endif()
+  endif()
+
+  if(NOT PROJECT_RENDER_SDK_FXC)
+    file(GLOB PROJECT_RENDER_WINDOWS_FXC_CANDIDATES
+      "C:/Program Files (x86)/Windows Kits/10/bin/*/x64/fxc.exe")
+    if(PROJECT_RENDER_WINDOWS_FXC_CANDIDATES)
+      list(SORT PROJECT_RENDER_WINDOWS_FXC_CANDIDATES COMPARE NATURAL ORDER DESCENDING)
+      list(GET PROJECT_RENDER_WINDOWS_FXC_CANDIDATES 0 PROJECT_RENDER_SDK_FXC)
+    endif()
+  endif()
+
+  if(PROJECT_RENDER_SDK_DXC)
+    set(SHADERMAKE_FIND_DXC OFF CACHE BOOL "" FORCE)
+    set(SHADERMAKE_DXC_PATH "${PROJECT_RENDER_SDK_DXC}" CACHE FILEPATH "" FORCE)
+    message(STATUS "Using DXC from Windows SDK for ShaderMake: ${PROJECT_RENDER_SDK_DXC}")
+  endif()
+
+  if(PROJECT_RENDER_SDK_FXC)
+    set(SHADERMAKE_FIND_FXC OFF CACHE BOOL "" FORCE)
+    set(SHADERMAKE_FXC_PATH "${PROJECT_RENDER_SDK_FXC}" CACHE FILEPATH "" FORCE)
+    message(STATUS "Using FXC from Windows SDK for ShaderMake: ${PROJECT_RENDER_SDK_FXC}")
+  endif()
+endif()
+
 # Qt UI integration option
 option(USE_QT_UI "Enable Qt-based user interface" OFF)
 
@@ -195,6 +274,16 @@ endif()
   set(NRD_NORMAL_ENCODING "4" CACHE STRING "" FORCE)
   set(NRD_ROUGHNESS_ENCODING "1" CACHE STRING "" FORCE)
   set(NRD_NRI ON CACHE BOOL "" FORCE)
+  set(NRD_EMBEDS_SPIRV_SHADERS OFF CACHE BOOL "" FORCE)
+  set(NRD_EMBEDS_DXBC_SHADERS OFF CACHE BOOL "" FORCE)
+  set(NRD_EMBEDS_DXIL_SHADERS ON CACHE BOOL "" FORCE)
+  set(NRI_STATIC_LIBRARY ON CACHE BOOL "" FORCE)
+  set(NRI_ENABLE_D3D12_SUPPORT ON CACHE BOOL "" FORCE)
+  set(NRI_ENABLE_D3D11_SUPPORT OFF CACHE BOOL "" FORCE)
+  set(NRI_ENABLE_VK_SUPPORT OFF CACHE BOOL "" FORCE)
+  set(NRI_ENABLE_VALIDATION_SUPPORT OFF CACHE BOOL "" FORCE)
+  set(NRI_ENABLE_DEBUG_NAMES_AND_ANNOTATIONS ON CACHE BOOL "" FORCE)
+  set(NRI_ENABLE_AGILITY_SDK_SUPPORT OFF CACHE BOOL "" FORCE)
   add_subdirectory(thirdparty/NRD)
   
   target_link_libraries(project-render PRIVATE NRD NRDIntegration NRI)
@@ -446,9 +535,12 @@ file(GLOB_RECURSE SHADER_ALL_INPUTS CONFIGURE_DEPENDS
     "${SHADER_SOURCE_DIR}/*.hlsli"
 )
 
-# Locate DXC on the path and build a handful of known entrypoint/profile
-# combinations.
-find_program(DXC_COMPILER dxc HINTS ENV PATH)
+# Locate DXC and build a handful of known entrypoint/profile combinations.
+if(PROJECT_RENDER_SDK_DXC)
+  set(DXC_COMPILER "${PROJECT_RENDER_SDK_DXC}")
+else()
+  find_program(DXC_COMPILER dxc HINTS ENV PATH)
+endif()
 if(DXC_COMPILER)
   message(STATUS "Found DXC compiler: ${DXC_COMPILER}")
   # Determine the directory containing the DXC executable so we can copy
@@ -604,12 +696,10 @@ install(TARGETS project-render
 )
 
 # Install dependent DLLs, shaders, and generated files in the bin folder
-# This will catch Qt, NRD, OpenImageDenoise, shaders/, miniz.dll, etc.
+# This will catch Qt, NRD, OpenImageDenoise, shaders/, miniz.dll, assets, etc.
 install(DIRECTORY "$<TARGET_FILE_DIR:project-render>/" 
   DESTINATION bin
   COMPONENT CoreApp
-  PATTERN "assets" EXCLUDE # Do not pack the heavy assets folder in the installer
-  PATTERN "assets/*" EXCLUDE
   PATTERN "*.pdb" EXCLUDE # Exclude debug symbols
   PATTERN "*.lib" EXCLUDE # Exclude static/import libraries
   PATTERN "*.exp" EXCLUDE # Exclude exports
