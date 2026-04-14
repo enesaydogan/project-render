@@ -335,6 +335,66 @@ struct NativeMaterialLibraryMaterialHeaderV2 {
   uint32_t referenceCount = 0;
 };
 
+struct NativeMaterialLibraryMaterialHeaderV3 {
+  uint32_t flags = 0;
+  float baseColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+  float emissiveColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+  float emissiveIntensity = 1.0f;
+  float roughness = 0.5f;
+  float metalness = 0.0f;
+  float specularWeight = 1.0f;
+  float specularColor[3] = {1.0f, 1.0f, 1.0f};
+  float ior = 1.5f;
+  float transmissionWeight = 0.0f;
+  float transmissionColor[3] = {1.0f, 1.0f, 1.0f};
+  float thickness = 0.0f;
+  float attenuationDistance = 0.0f;
+  float coatWeight = 0.0f;
+  float coatRoughness = 0.1f;
+  float coatIor = 1.5f;
+  float anisotropy = 0.0f;
+  float anisotropyRotation = 0.0f;
+  float sheenWeight = 0.0f;
+  float sheenColor[3] = {1.0f, 1.0f, 1.0f};
+  float thinWalled = 0.0f;
+  float translucency = 0.0f;
+  float uvScale[2] = {1.0f, 1.0f};
+  float uvOffset[2] = {0.0f, 0.0f};
+  float triPlanarEnabled = 0.0f;
+  float triPlanarScale = 1.0f;
+  float triPlanarSharpness = 4.0f;
+  float triPlanarNormalStrength = 1.0f;
+  float opacityTextureAmount = 1.0f;
+  float coatNormalTextureAmount = 1.0f;
+  float specularColorTextureAmount = 1.0f;
+  float thicknessTextureAmount = 1.0f;
+  float alphaCutoff = 0.35f;
+  uint32_t objectIdLength = 0;
+  uint32_t nameLength = 0;
+  uint32_t materialStableIdLength = 0;
+  uint32_t materialModelLength = 0;
+  uint32_t alphaModeLength = 0;
+  uint32_t baseColorTextureUriLength = 0;
+  uint32_t baseColorTextureBlobHashLength = 0;
+  uint32_t opacityTextureUriLength = 0;
+  uint32_t opacityTextureBlobHashLength = 0;
+  uint32_t normalTextureUriLength = 0;
+  uint32_t normalTextureBlobHashLength = 0;
+  uint32_t coatNormalTextureUriLength = 0;
+  uint32_t coatNormalTextureBlobHashLength = 0;
+  uint32_t emissiveTextureUriLength = 0;
+  uint32_t emissiveTextureBlobHashLength = 0;
+  uint32_t occlusionTextureUriLength = 0;
+  uint32_t occlusionTextureBlobHashLength = 0;
+  uint32_t metalRoughTextureUriLength = 0;
+  uint32_t metalRoughTextureBlobHashLength = 0;
+  uint32_t specularColorTextureUriLength = 0;
+  uint32_t specularColorTextureBlobHashLength = 0;
+  uint32_t thicknessTextureUriLength = 0;
+  uint32_t thicknessTextureBlobHashLength = 0;
+  uint32_t referenceCount = 0;
+};
+
 struct NativeMaterialLibraryTextureBlob {
   std::string hash;
   NativeMaterialLibraryTextureBlobEncoding encoding =
@@ -719,7 +779,7 @@ bool LoadNativeMaterialLibraryPayload(
   NativeMaterialLibraryHeader header;
   stream.read(reinterpret_cast<char *>(&header), sizeof(header));
   if (!stream || header.magic != 0x54414D50 ||
-      (header.version != 1 && header.version != 2)) {
+      (header.version != 1 && header.version != 2 && header.version != 3)) {
     return false;
   }
 
@@ -864,7 +924,7 @@ bool LoadNativeMaterialLibraryPayload(
       if (!applyCommonFields(materialHeader, materialHeader.referenceCount)) {
         return false;
       }
-    } else {
+    } else if (header.version == 2) {
       NativeMaterialLibraryMaterialHeaderV2 materialHeader;
       stream.read(reinterpret_cast<char *>(&materialHeader), sizeof(materialHeader));
       if (!stream) {
@@ -914,6 +974,105 @@ bool LoadNativeMaterialLibraryPayload(
               &record.payload.metalRoughTextureBlobHash)) {
         return false;
       }
+
+      if (!applyCommonFields(materialHeader, materialHeader.referenceCount)) {
+        return false;
+      }
+    } else {
+      NativeMaterialLibraryMaterialHeaderV3 materialHeader;
+      stream.read(reinterpret_cast<char *>(&materialHeader), sizeof(materialHeader));
+      if (!stream) {
+        return false;
+      }
+
+      if (!ReadNativePayloadString(stream, materialHeader.objectIdLength,
+                                   &record.objectId) ||
+          !ReadNativePayloadString(stream, materialHeader.nameLength,
+                                   &record.payload.name) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.materialStableIdLength,
+                                   &record.payload.materialStableId) ||
+          !ReadNativePayloadString(stream, materialHeader.materialModelLength,
+                                   &record.payload.materialModel) ||
+          !ReadNativePayloadString(stream, materialHeader.alphaModeLength,
+                                   &record.payload.alphaMode) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.baseColorTextureUriLength,
+                                   &record.payload.baseColorTextureUri) ||
+          !ReadNativePayloadString(
+              stream, materialHeader.baseColorTextureBlobHashLength,
+              &record.payload.baseColorTextureBlobHash) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.opacityTextureUriLength,
+                                   &record.payload.opacityTextureUri) ||
+          !ReadNativePayloadString(
+              stream, materialHeader.opacityTextureBlobHashLength,
+              &record.payload.opacityTextureBlobHash) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.normalTextureUriLength,
+                                   &record.payload.normalTextureUri) ||
+          !ReadNativePayloadString(
+              stream, materialHeader.normalTextureBlobHashLength,
+              &record.payload.normalTextureBlobHash) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.coatNormalTextureUriLength,
+                                   &record.payload.coatNormalTextureUri) ||
+          !ReadNativePayloadString(
+              stream, materialHeader.coatNormalTextureBlobHashLength,
+              &record.payload.coatNormalTextureBlobHash) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.emissiveTextureUriLength,
+                                   &record.payload.emissiveTextureUri) ||
+          !ReadNativePayloadString(
+              stream, materialHeader.emissiveTextureBlobHashLength,
+              &record.payload.emissiveTextureBlobHash) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.occlusionTextureUriLength,
+                                   &record.payload.occlusionTextureUri) ||
+          !ReadNativePayloadString(
+              stream, materialHeader.occlusionTextureBlobHashLength,
+              &record.payload.occlusionTextureBlobHash) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.metalRoughTextureUriLength,
+                                   &record.payload.metalRoughTextureUri) ||
+          !ReadNativePayloadString(
+              stream, materialHeader.metalRoughTextureBlobHashLength,
+              &record.payload.metalRoughTextureBlobHash) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.specularColorTextureUriLength,
+                                   &record.payload.specularColorTextureUri) ||
+          !ReadNativePayloadString(
+              stream, materialHeader.specularColorTextureBlobHashLength,
+              &record.payload.specularColorTextureBlobHash) ||
+          !ReadNativePayloadString(stream,
+                                   materialHeader.thicknessTextureUriLength,
+                                   &record.payload.thicknessTextureUri) ||
+          !ReadNativePayloadString(
+              stream, materialHeader.thicknessTextureBlobHashLength,
+              &record.payload.thicknessTextureBlobHash)) {
+        return false;
+      }
+
+      std::copy(std::begin(materialHeader.specularColor),
+                std::end(materialHeader.specularColor),
+                std::begin(record.payload.specularColor));
+      record.payload.thickness = materialHeader.thickness;
+      record.payload.attenuationDistance = materialHeader.attenuationDistance;
+      record.payload.coatIor = materialHeader.coatIor;
+      record.payload.anisotropy = materialHeader.anisotropy;
+      record.payload.anisotropyRotation = materialHeader.anisotropyRotation;
+      record.payload.sheenWeight = materialHeader.sheenWeight;
+      std::copy(std::begin(materialHeader.sheenColor),
+                std::end(materialHeader.sheenColor),
+                std::begin(record.payload.sheenColor));
+      record.payload.opacityTextureAmount = materialHeader.opacityTextureAmount;
+      record.payload.coatNormalTextureAmount =
+          materialHeader.coatNormalTextureAmount;
+      record.payload.specularColorTextureAmount =
+          materialHeader.specularColorTextureAmount;
+      record.payload.thicknessTextureAmount =
+          materialHeader.thicknessTextureAmount;
+      record.payload.alphaCutoff = materialHeader.alphaCutoff;
 
       if (!applyCommonFields(materialHeader, materialHeader.referenceCount)) {
         return false;
