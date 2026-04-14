@@ -7,9 +7,9 @@ class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
 class QPushButton;
-class QSpinBox;
 class QTimer;
 class QWidget;
+class SliderControl;
 
 class RenderSettingsPanel : public QWidget
 {
@@ -33,12 +33,12 @@ private:
     QWidget *m_dxrSection = nullptr;
     QWidget *m_rasterSection = nullptr;
 
-    QDoubleSpinBox *m_reflectionBounces = nullptr;
-    QDoubleSpinBox *m_refractionBounces = nullptr;
-    QDoubleSpinBox *m_giBounces = nullptr;
-    QSpinBox *m_maxSpp = nullptr;
+    SliderControl *m_reflectionBounces = nullptr;
+    SliderControl *m_refractionBounces = nullptr;
+    SliderControl *m_giBounces = nullptr;
+    SliderControl *m_maxSpp = nullptr;
     QCheckBox *m_adaptiveSampling = nullptr;
-    QDoubleSpinBox *m_targetNoise = nullptr;
+    SliderControl *m_targetNoise = nullptr;
 
     QComboBox *m_realtimeDenoiser = nullptr;
     QPushButton *m_resetRealtimeHistory = nullptr;
@@ -46,7 +46,7 @@ private:
     QCheckBox *m_dlssEnabled = nullptr;
     QComboBox *m_dlssMode = nullptr;
     QComboBox *m_dlssQuality = nullptr;
-    QDoubleSpinBox *m_rrJitterScale = nullptr;
+    SliderControl *m_rrJitterScale = nullptr;
     QPushButton *m_resetDlssHistory = nullptr;
     QLabel *m_renderSizeLabel = nullptr;
 
@@ -54,22 +54,22 @@ private:
     QComboBox *m_oidnQuality = nullptr;
 
     QCheckBox *m_enableSsr = nullptr;
-    QDoubleSpinBox *m_ssrStepSize = nullptr;
-    QDoubleSpinBox *m_ssrThickness = nullptr;
-    QDoubleSpinBox *m_ssrIntensity = nullptr;
-    QDoubleSpinBox *m_ssrMinSmoothness = nullptr;
-    QSpinBox *m_ssrMaxSteps = nullptr;
+    SliderControl *m_ssrStepSize = nullptr;
+    SliderControl *m_ssrThickness = nullptr;
+    SliderControl *m_ssrIntensity = nullptr;
+    SliderControl *m_ssrMinSmoothness = nullptr;
+    SliderControl *m_ssrMaxSteps = nullptr;
 
     QCheckBox *m_enableSsao = nullptr;
-    QDoubleSpinBox *m_ssaoRadius = nullptr;
-    QDoubleSpinBox *m_ssaoBias = nullptr;
-    QDoubleSpinBox *m_ssaoStrength = nullptr;
-    QSpinBox *m_ssaoSamples = nullptr;
-    QDoubleSpinBox *m_ssaoCompositeWeight = nullptr;
+    SliderControl *m_ssaoRadius = nullptr;
+    SliderControl *m_ssaoBias = nullptr;
+    SliderControl *m_ssaoStrength = nullptr;
+    SliderControl *m_ssaoSamples = nullptr;
+    SliderControl *m_ssaoCompositeWeight = nullptr;
 
     QCheckBox *m_enableBloom = nullptr;
-    QDoubleSpinBox *m_bloomThreshold = nullptr;
-    QDoubleSpinBox *m_bloomIntensity = nullptr;
+    SliderControl *m_bloomThreshold = nullptr;
+    SliderControl *m_bloomIntensity = nullptr;
 
     QPushButton *m_resetButton = nullptr;
     QTimer *m_refreshTimer = nullptr;

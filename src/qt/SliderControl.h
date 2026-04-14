@@ -38,6 +38,9 @@ public:
         m_spinBox->setDecimals(decimals);
         m_spinBox->setAccelerated(true);
         m_spinBox->setButtonSymbols(QAbstractSpinBox::NoButtons);
+        m_spinBox->setMinimumWidth(60);
+        m_spinBox->setMaximumWidth(80);
+        m_slider->setMinimumWidth(100);
 
         layout->addWidget(m_slider, 1);
         layout->addWidget(m_spinBox);
