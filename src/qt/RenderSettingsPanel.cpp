@@ -1,5 +1,7 @@
 #include "RenderSettingsPanel.h"
 
+#include "SliderControl.h"
+
 #include "../camera.h"
 #include "../dx12_context.h"
 #include "../dxr_renderer.h"
@@ -25,25 +27,12 @@ extern bool g_rayTracingSupported;
 
 namespace {
 
-QDoubleSpinBox *CreateDoubleSpinBox(double minValue,
-                                    double maxValue,
-                                    double step,
-                                    int decimals)
+SliderControl *CreateSliderControl(double minValue,
+                                   double maxValue,
+                                   double step,
+                                   int decimals)
 {
-    auto *spinBox = new QDoubleSpinBox();
-    spinBox->setRange(minValue, maxValue);
-    spinBox->setSingleStep(step);
-    spinBox->setDecimals(decimals);
-    spinBox->setAccelerated(true);
-    return spinBox;
-}
-
-QSpinBox *CreateSpinBox(int minValue, int maxValue)
-{
-    auto *spinBox = new QSpinBox();
-    spinBox->setRange(minValue, maxValue);
-    spinBox->setAccelerated(true);
-    return spinBox;
+    return new SliderControl(minValue, maxValue, step, decimals);
 }
 
 bool IsWidgetBeingEdited(QWidget *widget)
@@ -184,12 +173,12 @@ void RenderSettingsPanel::createUi()
     auto *pathForm = new QFormLayout(pathGroup);
     pathForm->setContentsMargins(8, 16, 8, 8);
     pathForm->setVerticalSpacing(6);
-    m_reflectionBounces = CreateDoubleSpinBox(0.0, 16.0, 1.0, 0);
-    m_refractionBounces = CreateDoubleSpinBox(0.0, 16.0, 1.0, 0);
-    m_giBounces = CreateDoubleSpinBox(0.0, 16.0, 1.0, 0);
-    m_maxSpp = CreateSpinBox(10, 1000);
+    m_reflectionBounces = CreateSliderControl(0.0, 16.0, 1.0, 0);
+    m_refractionBounces = CreateSliderControl(0.0, 16.0, 1.0, 0);
+    m_giBounces = CreateSliderControl(0.0, 16.0, 1.0, 0);
+    m_maxSpp = CreateSliderControl(10.0, 1000.0, 1.0, 0);
     m_adaptiveSampling = new QCheckBox(tr("Enable Adaptive Sampling"), pathGroup);
-    m_targetNoise = CreateDoubleSpinBox(1.0, 30.0, 0.1, 1);
+    m_targetNoise = CreateSliderControl(1.0, 30.0, 0.1, 1);
     pathForm->addRow(tr("Reflection Bounces"), m_reflectionBounces);
     pathForm->addRow(tr("Refraction Bounces"), m_refractionBounces);
     pathForm->addRow(tr("GI Bounces"), m_giBounces);
@@ -217,7 +206,7 @@ void RenderSettingsPanel::createUi()
     m_dlssMode->addItems({tr("Off"), tr("DLSS Super Resolution"), tr("DLSS Ray Reconstruction")});
     m_dlssQuality = new QComboBox(dlssGroup);
     m_dlssQuality->addItems({tr("Max Performance"), tr("Balanced"), tr("Max Quality"), tr("Ultra Performance"), tr("DLAA")});
-    m_rrJitterScale = CreateDoubleSpinBox(0.0, 1.0, 0.01, 2);
+    m_rrJitterScale = CreateSliderControl(0.0, 1.0, 0.01, 2);
     m_resetDlssHistory = new QPushButton(tr("Reset DLSS History"), dlssGroup);
     m_renderSizeLabel = new QLabel(dlssGroup);
     m_renderSizeLabel->setWordWrap(true);
@@ -255,11 +244,11 @@ void RenderSettingsPanel::createUi()
     auto *ssrGroup = new QGroupBox(tr("Reflections (SSR)"), m_rasterSection);
     auto *ssrForm = new QFormLayout(ssrGroup);
     m_enableSsr = new QCheckBox(tr("Enable SSR"), ssrGroup);
-    m_ssrStepSize = CreateDoubleSpinBox(0.02, 2.0, 0.01, 3);
-    m_ssrThickness = CreateDoubleSpinBox(0.001, 1.0, 0.001, 3);
-    m_ssrIntensity = CreateDoubleSpinBox(0.0, 2.0, 0.05, 2);
-    m_ssrMinSmoothness = CreateDoubleSpinBox(0.0, 1.0, 0.01, 2);
-    m_ssrMaxSteps = CreateSpinBox(1, 256);
+    m_ssrStepSize = CreateSliderControl(0.02, 2.0, 0.01, 3);
+    m_ssrThickness = CreateSliderControl(0.001, 1.0, 0.001, 3);
+    m_ssrIntensity = CreateSliderControl(0.0, 2.0, 0.05, 2);
+    m_ssrMinSmoothness = CreateSliderControl(0.0, 1.0, 0.01, 2);
+    m_ssrMaxSteps = CreateSliderControl(1.0, 256.0, 1.0, 0);
     ssrForm->addRow(m_enableSsr);
     ssrForm->addRow(tr("Step Size"), m_ssrStepSize);
     ssrForm->addRow(tr("Thickness"), m_ssrThickness);
@@ -271,11 +260,11 @@ void RenderSettingsPanel::createUi()
     auto *ssaoGroup = new QGroupBox(tr("Ambient Occlusion (SSAO)"), m_rasterSection);
     auto *ssaoForm = new QFormLayout(ssaoGroup);
     m_enableSsao = new QCheckBox(tr("Enable SSAO"), ssaoGroup);
-    m_ssaoRadius = CreateDoubleSpinBox(0.01, 5.0, 0.01, 3);
-    m_ssaoBias = CreateDoubleSpinBox(0.0001, 0.25, 0.0005, 4);
-    m_ssaoStrength = CreateDoubleSpinBox(0.0, 4.0, 0.05, 2);
-    m_ssaoSamples = CreateSpinBox(1, 32);
-    m_ssaoCompositeWeight = CreateDoubleSpinBox(0.0, 1.0, 0.01, 2);
+    m_ssaoRadius = CreateSliderControl(0.01, 5.0, 0.01, 3);
+    m_ssaoBias = CreateSliderControl(0.0001, 0.25, 0.0005, 4);
+    m_ssaoStrength = CreateSliderControl(0.0, 4.0, 0.05, 2);
+    m_ssaoSamples = CreateSliderControl(1.0, 32.0, 1.0, 0);
+    m_ssaoCompositeWeight = CreateSliderControl(0.0, 1.0, 0.01, 2);
     ssaoForm->addRow(m_enableSsao);
     ssaoForm->addRow(tr("Radius"), m_ssaoRadius);
     ssaoForm->addRow(tr("Bias"), m_ssaoBias);
@@ -287,8 +276,8 @@ void RenderSettingsPanel::createUi()
     auto *bloomGroup = new QGroupBox(tr("Bloom"), m_rasterSection);
     auto *bloomForm = new QFormLayout(bloomGroup);
     m_enableBloom = new QCheckBox(tr("Enable Bloom"), bloomGroup);
-    m_bloomThreshold = CreateDoubleSpinBox(0.0, 10.0, 0.05, 2);
-    m_bloomIntensity = CreateDoubleSpinBox(0.0, 4.0, 0.05, 2);
+    m_bloomThreshold = CreateSliderControl(0.0, 10.0, 0.05, 2);
+    m_bloomIntensity = CreateSliderControl(0.0, 4.0, 0.05, 2);
     bloomForm->addRow(m_enableBloom);
     bloomForm->addRow(tr("Threshold"), m_bloomThreshold);
     bloomForm->addRow(tr("Intensity"), m_bloomIntensity);
@@ -309,12 +298,12 @@ void RenderSettingsPanel::createUi()
     });
 
     auto applyCamera = [this]() { applyCameraSettings(); };
-    connect(m_reflectionBounces, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyCamera](double) { applyCamera(); });
-    connect(m_refractionBounces, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyCamera](double) { applyCamera(); });
-    connect(m_giBounces, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyCamera](double) { applyCamera(); });
-    connect(m_maxSpp, qOverload<int>(&QSpinBox::valueChanged), this, [applyCamera](int) { applyCamera(); });
+    connect(m_reflectionBounces->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyCamera](double) { applyCamera(); });
+    connect(m_refractionBounces->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyCamera](double) { applyCamera(); });
+    connect(m_giBounces->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyCamera](double) { applyCamera(); });
+    connect(m_maxSpp->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyCamera](double) { applyCamera(); });
     connect(m_adaptiveSampling, &QCheckBox::toggled, this, [applyCamera](bool) { applyCamera(); });
-    connect(m_targetNoise, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyCamera](double) { applyCamera(); });
+    connect(m_targetNoise->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyCamera](double) { applyCamera(); });
 
     connect(m_realtimeDenoiser, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
         if (m_syncing) {
@@ -356,7 +345,7 @@ void RenderSettingsPanel::createUi()
         DxrRenderer::ResetStreamlineHistory();
         recreateDxrPipeline("Qt DLSS quality change");
     });
-    connect(m_rrJitterScale, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+    connect(m_rrJitterScale->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
         }
@@ -393,13 +382,13 @@ void RenderSettingsPanel::createUi()
         rs.ssrThickness = static_cast<float>(m_ssrThickness->value());
         rs.ssrIntensity = static_cast<float>(m_ssrIntensity->value());
         rs.ssrMinSmoothness = static_cast<float>(m_ssrMinSmoothness->value());
-        rs.ssrMaxSteps = m_ssrMaxSteps->value();
+        rs.ssrMaxSteps = static_cast<int>(m_ssrMaxSteps->value());
 
         rs.enableSSAO = m_enableSsao->isChecked();
         rs.ssaoRadius = static_cast<float>(m_ssaoRadius->value());
         rs.ssaoBias = static_cast<float>(m_ssaoBias->value());
         rs.ssaoStrength = static_cast<float>(m_ssaoStrength->value());
-        rs.ssaoSamples = m_ssaoSamples->value();
+        rs.ssaoSamples = static_cast<int>(m_ssaoSamples->value());
         rs.ssaoCompositeWeight = static_cast<float>(m_ssaoCompositeWeight->value());
 
         rs.enableBloom = m_enableBloom->isChecked();
@@ -413,22 +402,22 @@ void RenderSettingsPanel::createUi()
     });
 
     connect(m_enableSsr, &QCheckBox::toggled, this, [applyChange](bool) { applyChange(); });
-    connect(m_ssrStepSize, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
-    connect(m_ssrThickness, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
-    connect(m_ssrIntensity, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
-    connect(m_ssrMinSmoothness, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
-    connect(m_ssrMaxSteps, qOverload<int>(&QSpinBox::valueChanged), this, [applyChange](int) { applyChange(); });
+    connect(m_ssrStepSize->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
+    connect(m_ssrThickness->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
+    connect(m_ssrIntensity->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
+    connect(m_ssrMinSmoothness->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
+    connect(m_ssrMaxSteps->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
 
     connect(m_enableSsao, &QCheckBox::toggled, this, [applyChange](bool) { applyChange(); });
-    connect(m_ssaoRadius, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
-    connect(m_ssaoBias, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
-    connect(m_ssaoStrength, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
-    connect(m_ssaoSamples, qOverload<int>(&QSpinBox::valueChanged), this, [applyChange](int) { applyChange(); });
-    connect(m_ssaoCompositeWeight, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
+    connect(m_ssaoRadius->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
+    connect(m_ssaoBias->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
+    connect(m_ssaoStrength->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
+    connect(m_ssaoSamples->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
+    connect(m_ssaoCompositeWeight->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
 
     connect(m_enableBloom, &QCheckBox::toggled, this, [applyChange](bool) { applyChange(); });
-    connect(m_bloomThreshold, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
-    connect(m_bloomIntensity, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
+    connect(m_bloomThreshold->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
+    connect(m_bloomIntensity->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyChange](double) { applyChange(); });
 
 }
 

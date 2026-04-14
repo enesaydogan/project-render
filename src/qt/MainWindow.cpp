@@ -651,7 +651,7 @@ void MainWindow::createDocks()
 
     QTimer::singleShot(0, this, [this, sceneDock, renderDock, environmentDock]() {
         resizeDocks({sceneDock, renderDock},
-                    {300, 340},
+                    {300, 420},
                     Qt::Horizontal);
         resizeDocks({renderDock, environmentDock},
                     {320, 760},
