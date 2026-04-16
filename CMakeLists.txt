@@ -744,15 +744,38 @@ set(CPACK_PACKAGE_VENDOR "Project Render Team")
 set(CPACK_PACKAGE_VERSION_MAJOR "0")
 set(CPACK_PACKAGE_VERSION_MINOR "1")
 set(CPACK_PACKAGE_VERSION_PATCH "5")
+set(CPACK_VERBATIM_VARIABLES TRUE)
 set(CPACK_PACKAGE_INSTALL_DIRECTORY "Project Render")
 set(CPACK_NSIS_EXECUTABLES_DIRECTORY "bin")
 set(CPACK_PACKAGE_EXECUTABLES "project-render" "Project Render")
-set(CPACK_NSIS_CREATE_ICONS_EXTRA
-  "CreateShortCut \\\"$DESKTOP\\\\Project Render.lnk\\\" \\\"$INSTDIR\\\\bin\\\\project-render.exe\\\""
-)
-set(CPACK_NSIS_DELETE_ICONS_EXTRA
-  "Delete \\\"$DESKTOP\\\\Project Render.lnk\\\""
-)
+# CPack's default NSIS shortcut generation points the executable at bin/, but the
+# shortcut working directory ("Start in") still ends up as $INSTDIR. We add the
+# desktop shortcut ourselves, then patch both shortcuts so they start in bin/.
+set(_project_render_desktop_shortcut_cmd [=[
+CreateShortCut "$DESKTOP\Project Render.lnk" "$INSTDIR\bin\project-render.exe"
+]=])
+
+set(_project_render_remove_desktop_shortcut_cmd [=[
+Delete "$DESKTOP\Project Render.lnk"
+]=])
+
+set(_project_render_fix_shortcuts_cmd [=[
+FileOpen $0 "$TEMP\project_render_fix_shortcuts.vbs" w
+FileWrite $0 "Set oWS = CreateObject($\"WScript.Shell$\")$\r$\n"
+FileWrite $0 "Set oLink = oWS.CreateShortcut($\"$SMPROGRAMS\$STARTMENU_FOLDER\Project Render.lnk$\")$\r$\n"
+FileWrite $0 "oLink.WorkingDirectory = $\"$INSTDIR\bin$\"$\r$\n"
+FileWrite $0 "oLink.Save$\r$\n"
+FileWrite $0 "Set oLink = oWS.CreateShortcut($\"$DESKTOP\Project Render.lnk$\")$\r$\n"
+FileWrite $0 "oLink.WorkingDirectory = $\"$INSTDIR\bin$\"$\r$\n"
+FileWrite $0 "oLink.Save$\r$\n"
+FileClose $0
+ExecWait '"$SYSDIR\wscript.exe" "$TEMP\project_render_fix_shortcuts.vbs"'
+Delete "$TEMP\project_render_fix_shortcuts.vbs"
+]=])
+
+set(CPACK_NSIS_CREATE_ICONS_EXTRA "${_project_render_desktop_shortcut_cmd}")
+set(CPACK_NSIS_DELETE_ICONS_EXTRA "${_project_render_remove_desktop_shortcut_cmd}")
+set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS "${_project_render_fix_shortcuts_cmd}")
 
 # Explicitly limit the installer to only our components (ignore 3rd party components like assimp)
 set(CPACK_COMPONENTS_ALL CoreApp Max2024Plugin Max2025Plugin Archicad28Plugin)
