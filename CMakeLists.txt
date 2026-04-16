@@ -745,6 +745,14 @@ set(CPACK_PACKAGE_VERSION_MAJOR "0")
 set(CPACK_PACKAGE_VERSION_MINOR "1")
 set(CPACK_PACKAGE_VERSION_PATCH "5")
 set(CPACK_PACKAGE_INSTALL_DIRECTORY "Project Render")
+set(CPACK_NSIS_EXECUTABLES_DIRECTORY "bin")
+set(CPACK_PACKAGE_EXECUTABLES "project-render" "Project Render")
+set(CPACK_NSIS_CREATE_ICONS_EXTRA
+  "CreateShortCut \\\"$DESKTOP\\\\Project Render.lnk\\\" \\\"$INSTDIR\\\\bin\\\\project-render.exe\\\""
+)
+set(CPACK_NSIS_DELETE_ICONS_EXTRA
+  "Delete \\\"$DESKTOP\\\\Project Render.lnk\\\""
+)
 
 # Explicitly limit the installer to only our components (ignore 3rd party components like assimp)
 set(CPACK_COMPONENTS_ALL CoreApp Max2024Plugin Max2025Plugin Archicad28Plugin)
