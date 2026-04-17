@@ -43,6 +43,10 @@ cbuffer CameraCB : register(b0)
     float nrdEnabled;
     float exportRendering;
     float dxrProceduralSkyBoost;
+    float tonemapAoIntensity;
+    float tonemapAoRadiusMeters;
+    float tonemapAoMode;
+    float triPlanarWorldRotationDegrees;
     float4x4 shadowMatrix;
     float4x4 viewProj;
     float4x4 invViewProj;
@@ -75,7 +79,7 @@ float3 LoadNormal(uint2 coord)
 float3 GetWorldPos(float2 uv, float depth)
 {
     float4 clipPos = float4(uv.x * 2.0 - 1.0, (1.0 - uv.y) * 2.0 - 1.0, depth, 1.0);
-    float4 worldPos = mul(invViewProj, clipPos);
+    float4 worldPos = mul(clipPos, invViewProj);
     return worldPos.xyz / worldPos.w;
 }
 
@@ -141,7 +145,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         
         float3 samplePos = worldPos + sampleDir * (radius * sampleScale);
         
-        float4 clipPos = mul(viewProj, float4(samplePos, 1.0));
+        float4 clipPos = mul(float4(samplePos, 1.0), viewProj);
         if (clipPos.w <= 1e-5)
         {
             continue;

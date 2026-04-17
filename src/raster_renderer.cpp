@@ -466,8 +466,8 @@ void RecreateMeshPipeline(ID3D12Device *device, ID3D12RootSignature *rootSig) {
     shadowPsoDesc.VS = {vsShadowBlob->GetBufferPointer(),
               vsShadowBlob->GetBufferSize()};
     shadowPsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-    shadowPsoDesc.RasterizerState.DepthBias = 64;
-    shadowPsoDesc.RasterizerState.DepthBiasClamp = 0.001f;
+    shadowPsoDesc.RasterizerState.DepthBias = 4000;
+    shadowPsoDesc.RasterizerState.DepthBiasClamp = 0.005f;
     shadowPsoDesc.RasterizerState.SlopeScaledDepthBias = 2.0f;
     
     ComPtr<ID3D12PipelineState> newShadowPSO;
@@ -496,9 +496,9 @@ void RecreateMeshPipeline(ID3D12Device *device, ID3D12RootSignature *rootSig) {
     D3D12_GRAPHICS_PIPELINE_STATE_DESC grassShadowPsoDesc = shadowPsoDesc;
     grassShadowPsoDesc.VS = {vsGrassShadowBlob->GetBufferPointer(),
                              vsGrassShadowBlob->GetBufferSize()};
-    grassShadowPsoDesc.RasterizerState.DepthBias = 32;
-    grassShadowPsoDesc.RasterizerState.DepthBiasClamp = 0.0005f;
-    grassShadowPsoDesc.RasterizerState.SlopeScaledDepthBias = 1.5f;
+    grassShadowPsoDesc.RasterizerState.DepthBias = 0;
+    grassShadowPsoDesc.RasterizerState.DepthBiasClamp = 0.0f;
+    grassShadowPsoDesc.RasterizerState.SlopeScaledDepthBias = 0.0f;
 
     ComPtr<ID3D12PipelineState> newGrassShadowPSO;
     HRESULT hrGrassShadow = device->CreateGraphicsPipelineState(
@@ -715,6 +715,7 @@ void DrawShadowMap(ID3D12GraphicsCommandList *cmdList,
 
 D3D12_GPU_DESCRIPTOR_HANDLE GetShadowMapSrv() { return s_shadowSrvGpu; }
 D3D12_CPU_DESCRIPTOR_HANDLE GetShadowMapSrvCpu() { return s_shadowSrvCpu; }
+UINT GetShadowMapSize() { return s_shadowMapSize; }
 
 struct TonemapConstants {
   uint32_t outWidth;

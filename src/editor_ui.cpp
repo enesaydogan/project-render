@@ -2635,16 +2635,15 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
                                   "Debug: History Validity",
                                   "Debug: Per-Pixel Noise",
                                   "Debug: Sample Deficit",
-                                  "Debug: Recent Reset Mask"};
-#ifdef _DEBUG
+                                  "Debug: Recent Reset Mask",
+                                  "Raster: Shadow",
+                                  "Raster: Shadow UV/Depth",
+                                  "Raster: Shadow Map Depth"};
       if (ImGui::Combo("Debug View", &g_debugMode, debugModes,
                        IM_ARRAYSIZE(debugModes))) {
         // Keep history when switching diagnostics so comparisons are from the
         // same accumulated frame state.
       }
-#else
-      g_debugMode = 0;
-#endif
 
       // Reset accumulation once per window when any UI widget changed
       if (uiChanged) {

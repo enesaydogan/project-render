@@ -50,6 +50,11 @@ cbuffer CameraCB : register(b0)
     float4x4 shadowMatrix;
     float4x4 viewProj;
     float4x4 invViewProj;
+    float4 shadowViewRow0;
+    float4 shadowViewRow1;
+    float4 shadowViewRow2;
+    float4 shadowProjParams0;
+    float4 shadowProjParams1;
 };
 
 cbuffer WorldCB : register(b2)
@@ -99,6 +104,16 @@ StructuredBuffer<uint4> g_grassVisible : register(t1, space3);
 
 SamplerState linearSampler : register(s0);
 SamplerComparisonState shadowSampler : register(s1, space1);
+
+struct ShadowData
+{
+    float factor;
+    float2 uv;
+    float currentDepth;
+    float rawDepth;
+    float valid;
+    float invalidReason;
+};
 
 float2 DirectionToUV(float3 dir) {
     float2 uv;
@@ -391,6 +406,20 @@ struct VSOutputShadow {
     float4 position : SV_POSITION;
 };
 
+float4 ComputeShadowClipPosition(float3 worldPos)
+{
+    float3 lightSpacePos;
+    lightSpacePos.x = dot(shadowViewRow0.xyz, worldPos) + shadowViewRow0.w;
+    lightSpacePos.y = dot(shadowViewRow1.xyz, worldPos) + shadowViewRow1.w;
+    lightSpacePos.z = dot(shadowViewRow2.xyz, worldPos) + shadowViewRow2.w;
+
+    return float4(
+        lightSpacePos.x * shadowProjParams0.x + shadowProjParams0.w,
+        lightSpacePos.y * shadowProjParams0.y + shadowProjParams1.x,
+        lightSpacePos.z * shadowProjParams0.z + shadowProjParams1.y,
+        1.0f);
+}
+
 void BuildGrassBasis(FGrassPatch blade, out float3 right, out float3 upDir,
                      out float3 forwardDir)
 {
@@ -510,7 +539,7 @@ VSOutputShadow VSMainShadow(VSInputMesh input)
 {
     VSOutputShadow o;
     float4 worldPos = mul(world, float4(input.position, 1.0f));
-    o.position = mul(worldPos, shadowMatrix);
+    o.position = ComputeShadowClipPosition(worldPos.xyz);
     return o;
 }
 
@@ -530,7 +559,7 @@ VSOutputShadow VSMainGrassShadow(VSInputMesh input, uint instanceId : SV_Instanc
     float3 localPos = input.position * bladeScale;
     float3 worldPos = blade.position + right * localPos.x +
                       upDir * localPos.y + forwardDir * localPos.z;
-    o.position = mul(float4(worldPos, 1.0f), shadowMatrix);
+    o.position = ComputeShadowClipPosition(worldPos);
     return o;
 }
 
@@ -666,40 +695,81 @@ float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent,
     return normalize(mul(tangentNormal, TBN));
 }
 
-float CalculateShadow(float3 worldPos, float3 N)
+ShadowData EvaluateShadow(float3 worldPos, float3 N)
 {
+    ShadowData result;
+    result.factor = 1.0;
+    result.uv = float2(0.0, 0.0);
+    result.currentDepth = 0.0;
+    result.rawDepth = 1.0;
+    result.valid = 0.0;
+    result.invalidReason = 0.0;
+
     float3 L = normalize(lightDir.xyz);
-    float normalOffset = 0.02 * (1.0 - saturate(dot(N, L))) + 0.002;
+    float ndotl = saturate(dot(N, L));
+    float normalOffset = 0.0002 * (1.0 - ndotl) + 0.00005;
     float3 biasedWorldPos = worldPos + N * normalOffset;
 
-    float4 shadowPos = mul(float4(biasedWorldPos, 1.0), shadowMatrix);
+    float4 shadowPos = ComputeShadowClipPosition(biasedWorldPos);
+    if (abs(shadowPos.w) < 1.0e-6)
+    {
+        result.invalidReason = 3.0;
+        return result;
+    }
     shadowPos.xyz /= shadowPos.w;
     
     // Transform to [0,1] range for UV sampling
     float2 shadowUV = shadowPos.xy * 0.5 + 0.5;
     shadowUV.y = 1.0 - shadowUV.y;
+    result.uv = shadowUV;
 
-    if (shadowUV.x < 0 || shadowUV.x > 1 || shadowUV.y < 0 || shadowUV.y > 1) return 1.0;
+    if (shadowUV.x < 0 || shadowUV.x > 1 || shadowUV.y < 0 || shadowUV.y > 1)
+    {
+        result.invalidReason = 1.0;
+        return result;
+    }
     
     float currentDepth = shadowPos.z;
-        if (currentDepth < 0.0 || currentDepth > 1.0) return 1.0;
-
-    float receiverBias = max(0.0002, 0.0015 * (1.0 - saturate(dot(N, L))));
-
-    // 3x3 PCF
-    float shadow = 0.0;
-    float2 texelSize = 1.0 / 2048.0;
-    for(int x = -1; x <= 1; ++x)
+    result.currentDepth = currentDepth;
+    if (currentDepth < 0.0 || currentDepth > 1.0)
     {
-        for(int y = -1; y <= 1; ++y)
+        result.invalidReason = 2.0;
+        return result;
+    }
+
+    uint shadowWidth;
+    uint shadowHeight;
+    shadowMap.GetDimensions(shadowWidth, shadowHeight);
+    float2 texelSize = 1.0 / float2(max(shadowWidth, 1u), max(shadowHeight, 1u));
+    uint2 shadowCoord = min(uint2(shadowUV * float2(shadowWidth, shadowHeight)),
+                            uint2(max(shadowWidth, 1u) - 1u,
+                                  max(shadowHeight, 1u) - 1u));
+    result.rawDepth = shadowMap.Load(int3(shadowCoord, 0)).r;
+    result.valid = 1.0;
+
+    float depthSlope = max(abs(ddx(currentDepth)), abs(ddy(currentDepth)));
+    float receiverBias = max(0.000005, depthSlope * 0.25 + 0.00002 * (1.0 - ndotl));
+
+    // Manual 3x3 PCF to avoid driver/API comparison-sampler mismatches.
+    float shadow = 0.0;
+    const float compareDepth = currentDepth - receiverBias;
+    for (int x = -1; x <= 1; ++x)
+    {
+        for (int y = -1; y <= 1; ++y)
         {
-                shadow += shadowMap.SampleCmpLevelZero(
-                    shadowSampler,
-                    shadowUV + float2(x, y) * texelSize,
-                    currentDepth - receiverBias).r;
+            int sampleX = clamp((int)shadowCoord.x + x, 0, (int)shadowWidth - 1);
+            int sampleY = clamp((int)shadowCoord.y + y, 0, (int)shadowHeight - 1);
+            float sampleDepth = shadowMap.Load(int3(sampleX, sampleY, 0)).r;
+            shadow += (compareDepth <= sampleDepth) ? 1.0 : 0.0;
         }
     }
-    return shadow / 9.0;
+    result.factor = shadow / 9.0;
+    return result;
+}
+
+float CalculateShadow(float3 worldPos, float3 N)
+{
+    return EvaluateShadow(worldPos, N).factor;
 }
 
 struct PSOutput {
@@ -926,7 +996,8 @@ PSOutput PSMainMesh(PSInputMesh input)
     float3 directLight = baseDirect * (1.0 - clearcoat) + coatDirect * clearcoat;
 
     // Modulate direct light by shadow
-    float shadow = CalculateShadow(input.worldPos, N);
+    ShadowData shadowData = EvaluateShadow(input.worldPos, N);
+    float shadow = shadowData.factor;
     directLight *= shadow;
     directLight *= grassDirectContact;
 
@@ -1014,15 +1085,41 @@ PSOutput PSMainMesh(PSInputMesh input)
     int mode = (int)debugMode;
     if (mode > 0) {
         PSOutput o_dbg;
+        // Raster debug views are shown through the HDR tonemap path, so boost
+        // them back into a visible range instead of letting exposure crush
+        // ordinary 0..1 diagnostic colors to near-black.
+        float debugExposureComp = 1.0 / max(intensity, 0.02);
         o_dbg.normal = float4(N * 0.5 + 0.5, 1.0);
-        if (mode == 1) o_dbg.color = float4(BaseColor, 1.0);
-        else if (mode == 2) o_dbg.color = float4(N * 0.5 + 0.5, 1.0);
-        else if (mode == 3) o_dbg.color = float4(emiss, 1.0);
-        else if (mode == 4) o_dbg.color = float4(1.0 - roughness, 1.0 - roughness, 1.0 - roughness, 1.0);
-        else if (mode == 5) o_dbg.color = float4(F0, 1.0);
-        else if (mode == 6) o_dbg.color = float4(metalness, metalness, metalness, 1.0);
-        else if (mode == 7) o_dbg.color = float4(ao, ao, ao, 1.0);
-        else if (mode == 8) o_dbg.color = float4(shadow, shadow, shadow, 1.0);
+        if (mode == 1) o_dbg.color = float4(BaseColor * debugExposureComp, 1.0);
+        else if (mode == 2) o_dbg.color = float4((N * 0.5 + 0.5) * debugExposureComp, 1.0);
+        else if (mode == 3) o_dbg.color = float4(emiss * debugExposureComp, 1.0);
+        else if (mode == 4) o_dbg.color = float4((1.0 - roughness).xxx * debugExposureComp, 1.0);
+        else if (mode == 5) o_dbg.color = float4(F0 * debugExposureComp, 1.0);
+        else if (mode == 6) o_dbg.color = float4(metalness.xxx * debugExposureComp, 1.0);
+        else if (mode == 7) o_dbg.color = float4(ao.xxx * debugExposureComp, 1.0);
+        else if (mode == 8) o_dbg.color = float4(float3(1.0 - shadow, shadow, 0.0) * debugExposureComp, 1.0);
+        else if (mode == 22) o_dbg.color = float4(float3(1.0 - shadow, shadow, 0.0) * debugExposureComp, 1.0);
+        else if (mode == 23) o_dbg.color = (shadowData.valid > 0.5)
+            ? float4(float3(shadowData.uv.x,
+                            shadowData.uv.y,
+                            0.2 + 0.8 * saturate(shadowData.currentDepth)) * debugExposureComp, 1.0)
+            : (shadowData.invalidReason < 1.5
+                ? float4(float3(1.0, 0.0, 0.0) * debugExposureComp, 1.0)
+                : (shadowData.invalidReason < 2.5
+                    ? float4(float3(0.0, 0.0, 1.0) * debugExposureComp, 1.0)
+                    : float4(float3(1.0, 1.0, 0.0) * debugExposureComp, 1.0)));
+        else if (mode == 24) {
+            float diff = saturate(0.5 + (shadowData.rawDepth - shadowData.currentDepth) * 200.0);
+            o_dbg.color = (shadowData.valid > 0.5)
+                ? float4(float3(0.2 + 0.8 * shadowData.rawDepth,
+                                0.2 + 0.8 * saturate(shadowData.currentDepth),
+                                diff) * debugExposureComp, 1.0)
+                : (shadowData.invalidReason < 1.5
+                    ? float4(float3(1.0, 0.0, 0.0) * debugExposureComp, 1.0)
+                    : (shadowData.invalidReason < 2.5
+                        ? float4(float3(0.0, 0.0, 1.0) * debugExposureComp, 1.0)
+                        : float4(float3(1.0, 1.0, 0.0) * debugExposureComp, 1.0)));
+        }
         else o_dbg.color = float4(0,0,0,1);
         return o_dbg;
     }

@@ -2124,34 +2124,223 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       g_cameraData.iblRotationDegrees =
           IBLManager::Get().GetIblRotationDegrees();
 
+      const auto &shadowNodes = Scene::GetNodes();
+
       // Calculate Shadow Matrix
       {
         using namespace DirectX;
+        const float shadowMapSize =
+            (float)(std::max)(1u, RasterRenderer::GetShadowMapSize());
+
         XMVECTOR lightDir =
             XMVector3Normalize(XMVectorSet(g_cameraData.lightDir[0],
                                            g_cameraData.lightDir[1],
                                            g_cameraData.lightDir[2], 0.0f));
         XMVECTOR camPos = XMLoadFloat3((XMFLOAT3 *)g_cameraData.pos);
         XMVECTOR camFwd = XMLoadFloat3((XMFLOAT3 *)g_cameraData.forward);
-        XMVECTOR target = camPos + camFwd * 18.0f;
+        XMVECTOR camUp = XMLoadFloat3((XMFLOAT3 *)g_cameraData.up);
+        XMVECTOR camRight = XMVector3Normalize(XMVector3Cross(camUp, camFwd));
         XMVECTOR lightForward = XMVectorNegate(lightDir);
-        XMVECTOR lightPos = target - lightForward * 70.0f;
         XMVECTOR lightUp = XMVectorSet(0, 1, 0, 0);
         if (fabsf(XMVectorGetX(XMVector3Dot(lightForward, lightUp))) > 0.98f) {
           lightUp = XMVectorSet(0, 0, 1, 0);
         }
 
-        XMMATRIX view = XMMatrixLookToLH(lightPos, lightForward, lightUp);
-        XMMATRIX proj = XMMatrixOrthographicLH(56.0f, 56.0f, 1.0f, 140.0f);
+        const float shadowNear = (std::max)(g_cameraData.nearZ, 0.5f);
+        const float shadowFar =
+            (std::max)(shadowNear + 1.0f,
+                       (std::min)(g_cameraData.farZ, 120.0f));
+        const float tanHalfFov =
+            tanf(XMConvertToRadians(g_cameraData.fov) * 0.5f);
+        const float nearHalfY = shadowNear * tanHalfFov;
+        const float nearHalfX = nearHalfY * g_cameraData.aspect;
+        const float farHalfY = shadowFar * tanHalfFov;
+        const float farHalfX = farHalfY * g_cameraData.aspect;
+        const XMVECTOR nearCenter = camPos + camFwd * shadowNear;
+        const XMVECTOR farCenter = camPos + camFwd * shadowFar;
+        const XMVECTOR nearRight = camRight * nearHalfX;
+        const XMVECTOR nearUp = camUp * nearHalfY;
+        const XMVECTOR farRight = camRight * farHalfX;
+        const XMVECTOR farUp = camUp * farHalfY;
+
+        XMVECTOR frustumCorners[8] = {
+            nearCenter - nearRight - nearUp, nearCenter + nearRight - nearUp,
+            nearCenter - nearRight + nearUp, nearCenter + nearRight + nearUp,
+            farCenter - farRight - farUp,   farCenter + farRight - farUp,
+            farCenter - farRight + farUp,   farCenter + farRight + farUp,
+        };
+
+        XMVECTOR shadowTarget = XMVectorZero();
+        bool haveSceneBounds = false;
+        XMVECTOR sceneBoundsMin = XMVectorReplicate(FLT_MAX);
+        XMVECTOR sceneBoundsMax = XMVectorReplicate(-FLT_MAX);
+        std::vector<XMVECTOR> sceneWorldCorners;
+        sceneWorldCorners.reserve(256);
+        auto transformNodePoint = [](const float m[16], const float p[3]) {
+          return XMVectorSet(
+              p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12],
+              p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13],
+              p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14], 1.0f);
+        };
+
+        for (const auto &node : shadowNodes) {
+          if (!node.visible)
+            continue;
+
+          for (size_t meshIndex : node.meshIndices) {
+            if (meshIndex >= g_loadedMeshes.size())
+              continue;
+
+            const auto &mesh = g_loadedMeshes[meshIndex];
+            const float boundsMinX = mesh.minBound[0];
+            const float boundsMinY = mesh.minBound[1];
+            const float boundsMinZ = mesh.minBound[2];
+            const float boundsMaxX = mesh.maxBound[0];
+            const float boundsMaxY = mesh.maxBound[1];
+            const float boundsMaxZ = mesh.maxBound[2];
+            const float localBounds[8][3] = {
+                {boundsMinX, boundsMinY, boundsMinZ},
+                {boundsMaxX, boundsMinY, boundsMinZ},
+                {boundsMinX, boundsMaxY, boundsMinZ},
+                {boundsMaxX, boundsMaxY, boundsMinZ},
+                {boundsMinX, boundsMinY, boundsMaxZ},
+                {boundsMaxX, boundsMinY, boundsMaxZ},
+                {boundsMinX, boundsMaxY, boundsMaxZ},
+                {boundsMaxX, boundsMaxY, boundsMaxZ},
+            };
+
+            for (const auto &localCorner : localBounds) {
+              XMVECTOR worldCorner =
+                  transformNodePoint(node.transform, localCorner);
+              sceneBoundsMin = XMVectorMin(sceneBoundsMin, worldCorner);
+              sceneBoundsMax = XMVectorMax(sceneBoundsMax, worldCorner);
+              sceneWorldCorners.push_back(worldCorner);
+              haveSceneBounds = true;
+            }
+          }
+        }
+
+        if (haveSceneBounds) {
+          shadowTarget = (sceneBoundsMin + sceneBoundsMax) * 0.5f;
+        } else {
+          for (const XMVECTOR &corner : frustumCorners) {
+            shadowTarget += corner;
+          }
+          shadowTarget *= (1.0f / 8.0f);
+        }
+
+        float shadowPaddingXY = 6.0f;
+        float shadowPaddingZ = 80.0f;
+        if (haveSceneBounds) {
+          const XMVECTOR sceneExtent = sceneBoundsMax - sceneBoundsMin;
+          const float extentX = fabsf(XMVectorGetX(sceneExtent));
+          const float extentY = fabsf(XMVectorGetY(sceneExtent));
+          const float extentZ = fabsf(XMVectorGetZ(sceneExtent));
+          const float sceneRadius =
+              0.5f * sqrtf(extentX * extentX + extentY * extentY +
+                           extentZ * extentZ);
+          shadowPaddingXY = (std::max)(6.0f, sceneRadius * 0.35f);
+          shadowPaddingZ = (std::max)(80.0f, sceneRadius * 2.0f);
+        }
+
+        XMVECTOR lightPos = shadowTarget - lightForward * shadowPaddingZ;
+        XMVECTOR lightRight =
+            XMVector3Normalize(XMVector3Cross(lightUp, lightForward));
+        XMVECTOR lightBasisUp =
+            XMVector3Normalize(XMVector3Cross(lightForward, lightRight));
+
+        float minX = FLT_MAX;
+        float minY = FLT_MAX;
+        float minZ = FLT_MAX;
+        float maxX = -FLT_MAX;
+        float maxY = -FLT_MAX;
+        float maxZ = -FLT_MAX;
+        auto expandShadowBounds = [&](FXMVECTOR worldPoint) {
+          const XMVECTOR rel = worldPoint - lightPos;
+          XMVECTOR lightSpacePoint = XMVectorSet(
+              XMVectorGetX(XMVector3Dot(rel, lightRight)),
+              XMVectorGetX(XMVector3Dot(rel, lightBasisUp)),
+              XMVectorGetX(XMVector3Dot(rel, lightForward)), 1.0f);
+          minX = (std::min)(minX, XMVectorGetX(lightSpacePoint));
+          minY = (std::min)(minY, XMVectorGetY(lightSpacePoint));
+          minZ = (std::min)(minZ, XMVectorGetZ(lightSpacePoint));
+          maxX = (std::max)(maxX, XMVectorGetX(lightSpacePoint));
+          maxY = (std::max)(maxY, XMVectorGetY(lightSpacePoint));
+          maxZ = (std::max)(maxZ, XMVectorGetZ(lightSpacePoint));
+        };
+        if (!haveSceneBounds) {
+          for (const XMVECTOR &corner : frustumCorners) {
+            expandShadowBounds(corner);
+          }
+        }
+
+        for (const XMVECTOR &worldCorner : sceneWorldCorners) {
+          expandShadowBounds(worldCorner);
+        }
+
+        minX -= shadowPaddingXY;
+        minY -= shadowPaddingXY;
+        maxX += shadowPaddingXY;
+        maxY += shadowPaddingXY;
+
+        float orthoWidth = (std::max)(maxX - minX, 1.0f);
+        float orthoHeight = (std::max)(maxY - minY, 1.0f);
+        float centerX = 0.5f * (minX + maxX);
+        float centerY = 0.5f * (minY + maxY);
+        const float texelSizeX = orthoWidth / shadowMapSize;
+        const float texelSizeY = orthoHeight / shadowMapSize;
+        centerX = roundf(centerX / texelSizeX) * texelSizeX;
+        centerY = roundf(centerY / texelSizeY) * texelSizeY;
+
+        minX = centerX - orthoWidth * 0.5f;
+        maxX = centerX + orthoWidth * 0.5f;
+        minY = centerY - orthoHeight * 0.5f;
+        maxY = centerY + orthoHeight * 0.5f;
+
+        const float nearPlane = (std::max)(0.1f, minZ - shadowPaddingZ);
+        const float farPlane = (std::max)(nearPlane + 1.0f, maxZ + shadowPaddingZ);
+        XMMATRIX view = XMMatrixLookToLH(lightPos, lightForward, lightBasisUp);
+        XMMATRIX proj = XMMatrixOrthographicOffCenterLH(
+            minX, maxX, minY, maxY, nearPlane, farPlane);
         XMMATRIX shadowMat = view * proj;
-        XMStoreFloat4x4((XMFLOAT4X4 *)g_cameraData.shadowMatrix,
-                        XMMatrixTranspose(shadowMat));
+        XMStoreFloat4x4((XMFLOAT4X4 *)g_cameraData.shadowMatrix, shadowMat);
+        const float invWidth =
+            2.0f / (std::max)(maxX - minX, 1.0e-4f);
+        const float invHeight =
+            2.0f / (std::max)(maxY - minY, 1.0e-4f);
+        const float invDepth =
+            1.0f / (std::max)(farPlane - nearPlane, 1.0e-4f);
+        const float biasX = -(maxX + minX) / (std::max)(maxX - minX, 1.0e-4f);
+        const float biasY = -(maxY + minY) / (std::max)(maxY - minY, 1.0e-4f);
+        const float biasZ = -nearPlane * invDepth;
+        g_cameraData.shadowViewRow0[0] = XMVectorGetX(lightRight);
+        g_cameraData.shadowViewRow0[1] = XMVectorGetY(lightRight);
+        g_cameraData.shadowViewRow0[2] = XMVectorGetZ(lightRight);
+        g_cameraData.shadowViewRow0[3] =
+            -XMVectorGetX(XMVector3Dot(lightPos, lightRight));
+        g_cameraData.shadowViewRow1[0] = XMVectorGetX(lightBasisUp);
+        g_cameraData.shadowViewRow1[1] = XMVectorGetY(lightBasisUp);
+        g_cameraData.shadowViewRow1[2] = XMVectorGetZ(lightBasisUp);
+        g_cameraData.shadowViewRow1[3] =
+            -XMVectorGetX(XMVector3Dot(lightPos, lightBasisUp));
+        g_cameraData.shadowViewRow2[0] = XMVectorGetX(lightForward);
+        g_cameraData.shadowViewRow2[1] = XMVectorGetY(lightForward);
+        g_cameraData.shadowViewRow2[2] = XMVectorGetZ(lightForward);
+        g_cameraData.shadowViewRow2[3] =
+            -XMVectorGetX(XMVector3Dot(lightPos, lightForward));
+        g_cameraData.shadowProjParams0[0] = invWidth;
+        g_cameraData.shadowProjParams0[1] = invHeight;
+        g_cameraData.shadowProjParams0[2] = invDepth;
+        g_cameraData.shadowProjParams0[3] = biasX;
+        g_cameraData.shadowProjParams1[0] = biasY;
+        g_cameraData.shadowProjParams1[1] = biasZ;
+        g_cameraData.shadowProjParams1[2] = 0.0f;
+        g_cameraData.shadowProjParams1[3] = 0.0f;
 
         // ViewProj and InvViewProj for SSR/SSAO.
         // Raster mesh VS projects with positive forward Z, so these matrices
         // must use the same left-handed convention or screen-space effects
         // reconstruct from a different camera basis.
-        XMVECTOR camUp = XMLoadFloat3((XMFLOAT3 *)g_cameraData.up);
         XMMATRIX camView = XMMatrixLookToLH(camPos, camFwd, camUp);
         XMMATRIX camProj = XMMatrixPerspectiveFovLH(
             XMConvertToRadians(g_cameraData.fov), g_cameraData.aspect,
@@ -3036,13 +3225,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     if (targetHeight > 0.0f) {
       g_cameraData.aspect = targetWidth / targetHeight;
     }
-#ifdef _DEBUG
     g_cameraData.debugMode = (float)g_debugMode;
-#else
-    g_debugMode = 0;
-    g_cameraData.debugMode = 0.0f;
-    g_cameraData.debugVisualizationMode = 0.0f;
-#endif
     g_cameraData.lightCount = (float)DxrRenderer::GetLightCount();
     g_cameraData.frameCount = (float)DxrRenderer::GetDisplayedSampleCount();
     const bool fileIblActive =

@@ -56,9 +56,15 @@ struct CameraCB {
   float tonemapAoRadiusMeters;
   float tonemapAoMode;
   float triPlanarWorldRotationDegrees;
+  float _padShadowAlign[3]; // Align shadowMatrix to 16-byte boundary (HLSL float4x4 requirement)
   float shadowMatrix[16];
   float viewProj[16];
   float invViewProj[16];
+  float shadowViewRow0[4];
+  float shadowViewRow1[4];
+  float shadowViewRow2[4];
+  float shadowProjParams0[4];
+  float shadowProjParams1[4];
 };
 // Camera state (defined in camera.cpp)
 extern CameraCB g_initialCameraData;

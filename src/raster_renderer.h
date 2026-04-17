@@ -44,6 +44,7 @@ namespace RasterRenderer {
   void DrawShadowMap(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB, const std::vector<Scene::Instance>& instances, bool includeGrass = false);
   D3D12_GPU_DESCRIPTOR_HANDLE GetShadowMapSrv();
   D3D12_CPU_DESCRIPTOR_HANDLE GetShadowMapSrvCpu();
+  UINT GetShadowMapSize();
   bool PrepareHdrRenderTarget(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList,
                               UINT width, UINT height,
                               D3D12_CPU_DESCRIPTOR_HANDLE dsv);
