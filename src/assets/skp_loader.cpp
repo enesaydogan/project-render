@@ -362,6 +362,49 @@ static SUMaterialRef ResolveFaceMaterial(SUFaceRef face, bool preferBackSide,
   return inheritedMaterial;
 }
 
+static bool MaterialHasTextureSlot(SUMaterialRef material) {
+  if (SUIsInvalid(material))
+    return false;
+
+  SUMaterialType materialType = SUMaterialType_Colored;
+  if (SU_ERROR_NONE == SUMaterialGetType(material, &materialType) &&
+      (materialType == SUMaterialType_Textured ||
+       materialType == SUMaterialType_ColorizedTexture)) {
+    return true;
+  }
+
+  SUMaterialWorkflow workflow = SUMaterialWorkflow_Classic;
+  if (SU_ERROR_NONE != SUMaterialGetWorkflow(material, &workflow) ||
+      workflow != SUMaterialWorkflow_PBRMetallicRoughness) {
+    return false;
+  }
+
+  SUTextureRef texture = SU_INVALID;
+  return (SU_ERROR_NONE == SUMaterialGetMetallicTexture(material, &texture) &&
+          !SUIsInvalid(texture)) ||
+         (SU_ERROR_NONE == SUMaterialGetRoughnessTexture(material, &texture) &&
+          !SUIsInvalid(texture)) ||
+         (SU_ERROR_NONE == SUMaterialGetNormalTexture(material, &texture) &&
+          !SUIsInvalid(texture)) ||
+         (SU_ERROR_NONE == SUMaterialGetAOTexture(material, &texture) &&
+          !SUIsInvalid(texture));
+}
+
+static bool FaceMayNeedTextureWriter(SUFaceRef face,
+                                     SUMaterialRef inheritedMaterial) {
+  SUMaterialRef front = SU_INVALID;
+  SUMaterialRef back = SU_INVALID;
+  if (SU_ERROR_NONE == SUFaceGetFrontMaterial(face, &front) &&
+      MaterialHasTextureSlot(front)) {
+    return true;
+  }
+  if (SU_ERROR_NONE == SUFaceGetBackMaterial(face, &back) &&
+      MaterialHasTextureSlot(back)) {
+    return true;
+  }
+  return MaterialHasTextureSlot(inheritedMaterial);
+}
+
 bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
              std::vector<Material> *outMaterials,
              std::vector<Texture> *outTextures, const float *rootTranslation,
@@ -424,15 +467,41 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
     SUMaterialRef inheritedMaterial = SU_INVALID;
   };
   std::vector<FaceJob> faceJobs;
+  std::unordered_map<int64_t, bool> seenFaceIds;
   const int statFaceCount =
       modelStats.entity_counts[SUModelStatistics::SUEntityType_Face];
   if (statFaceCount > 0) {
     faceJobs.reserve(static_cast<size_t>(statFaceCount));
+    seenFaceIds.reserve(static_cast<size_t>(statFaceCount));
   }
 
-  std::function<void(SUEntitiesRef, const SUTransformation *, SUMaterialRef)> collectRec;
+  auto addFaceJob = [&](SUFaceRef face, const SUTransformation *parentTrans,
+                        SUMaterialRef inheritedMaterial,
+                        bool dedupeExistingFace) {
+    if (SUIsInvalid(face))
+      return;
+
+    int64_t facePid = 0;
+    SUEntityGetPersistentID(SUFaceToEntity(face), &facePid);
+    if (facePid != 0) {
+      const bool alreadySeen = seenFaceIds.find(facePid) != seenFaceIds.end();
+      if (dedupeExistingFace && alreadySeen) {
+        return;
+      }
+      seenFaceIds[facePid] = true;
+    }
+
+    FaceJob job;
+    job.face = face;
+    job.transform = parentTrans ? *parentTrans : MakeIdentityTransform();
+    job.inheritedMaterial = inheritedMaterial;
+    faceJobs.emplace_back(job);
+  };
+
+  std::function<void(SUEntitiesRef, const SUTransformation *, SUMaterialRef, bool)>
+      collectRec;
   collectRec = [&](SUEntitiesRef ents, const SUTransformation *parentTrans,
-                   SUMaterialRef inheritedMaterial) {
+                   SUMaterialRef inheritedMaterial, bool dedupeExistingFaces) {
     if (SUIsInvalid(ents))
       return;
 
@@ -446,11 +515,8 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
         localFaceCount = 0;
       }
       for (size_t i = 0; i < localFaceCount; ++i) {
-        FaceJob job;
-        job.face = localFaces[i];
-        job.transform = parentTrans ? *parentTrans : MakeIdentityTransform();
-        job.inheritedMaterial = inheritedMaterial;
-        faceJobs.emplace_back(job);
+        addFaceJob(localFaces[i], parentTrans, inheritedMaterial,
+                   dedupeExistingFaces);
       }
     } else {
       SUEntityListRef faceList = SU_INVALID;
@@ -469,12 +535,8 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
                   if (SU_ERROR_NONE == SUEntityListIteratorGetEntity(it, &ent)) {
                     SUFaceRef faceRef = SUFaceFromEntity(ent);
                     if (!SUIsInvalid(faceRef)) {
-                      FaceJob job;
-                      job.face = faceRef;
-                      job.transform =
-                          parentTrans ? *parentTrans : MakeIdentityTransform();
-                      job.inheritedMaterial = inheritedMaterial;
-                      faceJobs.emplace_back(job);
+                      addFaceJob(faceRef, parentTrans, inheritedMaterial,
+                                 dedupeExistingFaces);
                     }
                   }
                   if (SU_ERROR_NONE != SUEntityListIteratorNext(it))
@@ -522,7 +584,7 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
             !SUIsInvalid(groupMaterial)) {
           childInherited = groupMaterial;
         }
-        collectRec(groupEnts, &combined, childInherited);
+        collectRec(groupEnts, &combined, childInherited, dedupeExistingFaces);
       }
     }
 
@@ -566,13 +628,13 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
             !SUIsInvalid(instanceMaterial)) {
           childInherited = instanceMaterial;
         }
-        collectRec(defEnts, &combined, childInherited);
+        collectRec(defEnts, &combined, childInherited, dedupeExistingFaces);
       }
     }
   };
 
-  collectRec(entities, nullptr, SU_INVALID);
-  if (faceJobs.empty()) {
+  collectRec(entities, nullptr, SU_INVALID, false);
+  auto collectAllDefinitions = [&]() {
     auto collectDefinitions = [&](auto getNumFn, auto getFn) {
       size_t defCount = 0;
       if (SU_ERROR_NONE != getNumFn(model, &defCount) || defCount == 0)
@@ -586,13 +648,24 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
         SUEntitiesRef defEnts = SU_INVALID;
         if (SU_ERROR_NONE != SUComponentDefinitionGetEntities(defs[i], &defEnts))
           continue;
-        collectRec(defEnts, nullptr, SU_INVALID);
+        collectRec(defEnts, nullptr, SU_INVALID, true);
       }
     };
     collectDefinitions(SUModelGetNumComponentDefinitions,
                        SUModelGetComponentDefinitions);
     collectDefinitions(SUModelGetNumGroupDefinitions, SUModelGetGroupDefinitions);
     collectDefinitions(SUModelGetNumImageDefinitions, SUModelGetImageDefinitions);
+  };
+  if (faceJobs.empty() ||
+      (statFaceCount > 0 && faceJobs.size() < static_cast<size_t>(statFaceCount))) {
+    const size_t beforeDefinitionSweep = faceJobs.size();
+    collectAllDefinitions();
+    if (faceJobs.size() > beforeDefinitionSweep) {
+      fprintf(stderr,
+              "LoadSkp: definition sweep recovered %zu faces (traversal=%zu stats=%d)\n",
+              faceJobs.size() - beforeDefinitionSweep, beforeDefinitionSweep,
+              statFaceCount);
+    }
   }
 
   const size_t faceCount = faceJobs.size();
@@ -610,7 +683,10 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
 
     SUMeshHelperRef meshRef = SU_INVALID;
     SUResult meshCreate = SU_ERROR_INVALID_INPUT;
-    if (textureWriterValid) {
+    const bool useTextureWriterForFace =
+        textureWriterValid && outTextures &&
+        FaceMayNeedTextureWriter(face, faceJobs[fi].inheritedMaterial);
+    if (useTextureWriterForFace) {
       meshCreate = SUMeshHelperCreateWithTextureWriter(&meshRef, face, texWriter);
     }
     if (meshCreate != SU_ERROR_NONE) {
@@ -801,7 +877,7 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
         if (materialType == SUMaterialType_Textured ||
             materialType == SUMaterialType_ColorizedTexture) {
           long texId = 0;
-          if (textureWriterValid) {
+          if (useTextureWriterForFace) {
             SUResult texResult = SUTextureWriterGetTextureIdForFace(
                 texWriter, face, !useBackSide, &texId);
             if (texResult != SU_ERROR_NONE || texId == 0) {
