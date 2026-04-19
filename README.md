@@ -1,4 +1,4 @@
-﻿# project-render 0.1.5 — High-End ArchViz Real-Time Engine
+﻿# project-render 0.1.6 — High-End ArchViz Real-Time Engine
 
 `project-render` is a state-of-the-art real-time rendering engine designed for high-fidelity Architectural Visualization (ArchViz). It leverages DirectX 12, DXR Ray Tracing, and NVIDIA Streamline to deliver physically accurate lighting and cinematic results.
 
@@ -105,7 +105,7 @@ cmake --build build-max2025 --config Release
 
 ---
 
-*This project is a high-performance rendering scaffold evolved into a feature-rich ArchViz tool in collaboration with an AI coding assistant.*# project-render 0.1.5  High-End ArchViz Real-Time Engine
+*This project is a high-performance rendering scaffold evolved into a feature-rich ArchViz tool in collaboration with an AI coding assistant.*# project-render 0.1.6  High-End ArchViz Real-Time Engine
 
 project-render is a state-of-the-art real-time rendering engine designed for high-fidelity Architectural Visualization (ArchViz). It leverages DirectX 12, DXR Ray Tracing, and NVIDIA Streamline to deliver physically accurate lighting and cinematic results.
 
