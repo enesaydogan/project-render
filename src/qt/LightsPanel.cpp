@@ -395,15 +395,15 @@ void LightsPanel::refreshLights()
 {
     m_syncing = true;
 
-    const bool loading = IsSceneLoadInProgress();
-    m_loadNotice->setVisible(loading);
-    m_listGroup->setEnabled(!loading);
-    m_propertiesGroup->setEnabled(!loading);
-    m_addPointButton->setEnabled(!loading);
-    m_addSpotButton->setEnabled(!loading);
-    m_addRectButton->setEnabled(!loading);
-    m_addDiskButton->setEnabled(!loading);
-    if (loading) {
+    const bool sceneIoActive = IsSceneIoJobActive();
+    m_loadNotice->setVisible(sceneIoActive);
+    m_listGroup->setEnabled(!sceneIoActive);
+    m_propertiesGroup->setEnabled(!sceneIoActive);
+    m_addPointButton->setEnabled(!sceneIoActive);
+    m_addSpotButton->setEnabled(!sceneIoActive);
+    m_addRectButton->setEnabled(!sceneIoActive);
+    m_addDiskButton->setEnabled(!sceneIoActive);
+    if (sceneIoActive) {
         m_syncing = false;
         return;
     }

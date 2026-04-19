@@ -158,14 +158,14 @@ void ScenePanel::refreshSceneList()
 {
     m_syncing = true;
 
-    if (IsSceneLoadInProgress()) {
+    if (IsSceneIoJobActive()) {
         m_importProgress->hide();
         m_importStatusLabel->hide();
         m_importButton->setEnabled(false);
         m_addPlaneButton->setEnabled(false);
         m_deleteButton->setEnabled(false);
         m_nodeList->setEnabled(false);
-        m_statusLabel->setText(tr("Scene load in progress..."));
+        m_statusLabel->setText(tr("Scene I/O in progress..."));
         m_syncing = false;
         return;
     }

@@ -2430,7 +2430,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     DX12Context::g_commandList->RSSetViewports(1, &viewport);
     DX12Context::g_commandList->RSSetScissorRects(1, &scissorRect);
 
-    if (IsSceneLoadInProgress()) {
+    if (IsSceneIoJobActive()) {
       TR(DX12Context::g_commandList.Get(),
          DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),
          D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -3015,7 +3015,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         break;
       }
       }
-    } // End else !IsSceneLoadInProgress()
+    } // End else !IsSceneIoJobActive()
 
     // Render ImGui (Overlay on top of whatever was drawn)
     if ((g_renderExportJob.active || HasPreviewRenderImage()) && g_exportRenderTarget &&
@@ -3149,9 +3149,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       g_fpsTimer = 0.0f;
     }
 
-    Input::Update(dt);
-
-    LiveLink::TickRuntime();
+    const bool sceneIoActive = IsSceneIoJobActive();
+    if (!sceneIoActive) {
+      Input::Update(dt);
+      LiveLink::TickRuntime();
+    } else {
+      LiveLink::TickCoordinator();
+    }
 
     D3D12_RECT previewRect = {0, 0, (LONG)DX12Context::g_windowWidth,
                   (LONG)DX12Context::g_windowHeight};

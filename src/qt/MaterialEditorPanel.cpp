@@ -1147,6 +1147,9 @@ void MaterialEditorPanel::createUi()
 void MaterialEditorPanel::refreshMaterials()
 {
     m_refreshQueued = false;
+    if (IsSceneIoJobActive()) {
+        return;
+    }
     Scene::ProcessPendingImport();
     updateCounts();
     updatePickUi();

@@ -221,10 +221,9 @@ void StartSceneIoJob(bool isSave, const std::string &utf8Path) {
     return;
   }
 
-  // Safety: loading a scene mutates global mesh/material/texture arrays and
-  // rebuilds DXR resources. Previously, doing that from a worker thread raced
-  // with RenderFrame and triggered device removal. Now, the main thread will
-  // skip rendering the scene while `IsSceneLoadInProgress` is true.
+  // Scene I/O reads or mutates global mesh/material/texture arrays and DXR
+  // resources. The main thread pauses scene rendering and editing while any job
+  // is active so async saves cannot serialize half-applied scene edits.
 
   g_sceneIoJob.active = true;
   g_sceneIoJob.isSave = isSave;
@@ -1561,7 +1560,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
     DrawRenderExportViewportPreview();
-    if (!IsSceneLoadInProgress()) {
+    if (!IsSceneIoJobActive()) {
       ImGuizmo::BeginFrame();
       Scene::DrawGizmo();
       Scene::DrawLightGizmo();
@@ -1611,9 +1610,9 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
 
   DrawSceneIoOverlay();
 
-  if (IsSceneLoadInProgress()) {
-    // A scene load is mutating global engine state! Skip all other Editor UI 
-    // rendering so we don't race/crash parsing materials/mesh arrays.
+  if (IsSceneIoJobActive()) {
+    // Scene I/O owns the scene state. Keep only the overlay alive until the
+    // worker has finished.
     ImGui::Render();
     return;
   }

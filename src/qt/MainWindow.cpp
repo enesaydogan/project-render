@@ -758,9 +758,11 @@ void MainWindow::toggleQtUiVisibility()
 
 void MainWindow::updateSceneIoUi()
 {
+    const bool active = IsSceneIoJobActive();
     if (m_previewRenderAction) {
         m_previewRenderAction->setEnabled(g_rayTracingSupported &&
-                                          !g_renderExportJob.active);
+                                          !g_renderExportJob.active &&
+                                          !active);
     }
 
     if (!m_sceneIoProgress) {
@@ -936,7 +938,7 @@ void MainWindow::updateSceneIoUi()
                     }
                     m_liveLinkProviderCombo->setCurrentIndex(selectedIndex);
                 }
-                m_liveLinkProviderCombo->setEnabled(!providers.empty());
+                m_liveLinkProviderCombo->setEnabled(!providers.empty() && !active);
                 m_liveLinkProviderCombo->blockSignals(false);
             }
 
@@ -959,10 +961,10 @@ void MainWindow::updateSceneIoUi()
                     }
                 }
             }
-            m_liveLinkConnectButton->setEnabled(hasProviders && selectedDisconnected);
-            m_liveLinkDisconnectButton->setEnabled(hasProviders && selectedConnected);
-            m_liveLinkReconnectButton->setEnabled(hasProviders && (selectedConnected || selectedDisconnected));
-            m_liveLinkTakeCameraButton->setEnabled(anyConnected);
+            m_liveLinkConnectButton->setEnabled(hasProviders && selectedDisconnected && !active);
+            m_liveLinkDisconnectButton->setEnabled(hasProviders && selectedConnected && !active);
+            m_liveLinkReconnectButton->setEnabled(hasProviders && (selectedConnected || selectedDisconnected) && !active);
+            m_liveLinkTakeCameraButton->setEnabled(anyConnected && !active);
             m_liveLinkTakeCameraButton->setText(
                 LiveLink::GetSceneSync().IsCameraControlDetached()
                     ? tr("Return Camera")
@@ -994,7 +996,6 @@ void MainWindow::updateSceneIoUi()
         }
     }
 
-    const bool active = IsSceneIoJobActive();
     if (m_saveSceneAction) {
         m_saveSceneAction->setEnabled(!active);
     }
@@ -1003,6 +1004,16 @@ void MainWindow::updateSceneIoUi()
     }
     if (m_loadSceneAction) {
         m_loadSceneAction->setEnabled(!active);
+    }
+
+    const auto dockWidgets = findChildren<QDockWidget *>();
+    for (QDockWidget *dockWidget : dockWidgets) {
+        if (!dockWidget || dockWidget->objectName() == tr("LiveLink")) {
+            continue;
+        }
+        if (QWidget *dockContent = dockWidget->widget()) {
+            dockContent->setEnabled(!active);
+        }
     }
 
     if (!active) {

@@ -3465,6 +3465,8 @@ void ResetScene() {
   s_materialMetadataDirty = false;
   s_sharedImportedMeshesBySourcePath.clear();
   s_textureIndicesBySourceUri.clear();
+  s_lights.clear();
+  s_selectedLightIdx = -1;
   AnimationSequence::Clear();
   SavedViews::Clear();
   g_textureDescriptorCount = 0;
@@ -3473,6 +3475,7 @@ void ResetScene() {
   // the CPU state which is then rebuilt by LoadScene.
 
   // Reset DXR state if it's active
+  UpdateLights();
   DxrRenderer::ResetAccumulation();
   // Ensure camera/exposure defaults are restored when starting a fresh scene
   DxrRenderer::SetAutoExposure(false);

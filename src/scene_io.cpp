@@ -617,6 +617,7 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
   }
 
   // Lights
+  j["lgt"] = json::array();
   for (const auto &lt : Scene::GetLights()) {
     j["lgt"].push_back({
       {"ty", lt.type},
