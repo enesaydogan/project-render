@@ -1678,6 +1678,10 @@ static void WaitForAsyncRestirIdleForLightUpdates() {
   s_asyncComputePendingFenceWait = 0;
 }
 
+void WaitForAsyncRestirIdle() {
+  WaitForAsyncRestirIdleForLightUpdates();
+}
+
 static void DispatchRestirSpatialPasses(ID3D12GraphicsCommandList4 *list,
                                         ID3D12Resource *cameraCB) {
   if (!list || !cameraCB || !s_srvHeap || !s_device) {

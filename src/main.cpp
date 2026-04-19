@@ -2611,11 +2611,25 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           ID3D12Resource *dxrTarget =
               DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get();
           D3D12_CPU_DESCRIPTOR_HANDLE dxrRtv = rtvHandle;
+            const bool renderingToOffscreenTarget =
+              g_renderExportJob.active && g_exportRenderTarget && g_exportRtvHeap;
           if (g_renderExportJob.active && g_exportRenderTarget &&
               g_exportRtvHeap) {
             dxrTarget = g_exportRenderTarget.Get();
             dxrRtv = g_exportRtvHeap->GetCPUDescriptorHandleForHeapStart();
           }
+            const UINT dxrPresentationX = renderingToOffscreenTarget
+                            ? 0u
+                            : static_cast<UINT>(presentationRect.left);
+            const UINT dxrPresentationY = renderingToOffscreenTarget
+                            ? 0u
+                            : static_cast<UINT>(presentationRect.top);
+            const UINT dxrPresentationWidth = renderingToOffscreenTarget
+                              ? g_renderExportJob.targetWidth
+                              : previewWidth;
+            const UINT dxrPresentationHeight = renderingToOffscreenTarget
+                               ? g_renderExportJob.targetHeight
+                               : previewHeight;
 
           bool dxrOk = DxrRenderer::RenderFrame(
               DX12Context::g_commandList.Get(),
@@ -2625,10 +2639,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
               g_cameraConstantBuffer.Get(), g_materialStructuredBuffer.Get(),
               g_texturesGpuStart, g_textureDescriptorCount, activeMeshes,
               g_meshStructuredBuffer.Get(),
-              g_materialExtraStructuredBuffer.Get(),
-              static_cast<UINT>(presentationRect.left),
-              static_cast<UINT>(presentationRect.top), previewWidth,
-              previewHeight);
+              g_materialExtraStructuredBuffer.Get(), dxrPresentationX,
+              dxrPresentationY, dxrPresentationWidth,
+              dxrPresentationHeight);
           if (dxrOk) {
             if (g_renderExportJob.active &&
                 dxrTarget == g_exportRenderTarget.Get()) {
@@ -3005,7 +3018,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     } // End else !IsSceneLoadInProgress()
 
     // Render ImGui (Overlay on top of whatever was drawn)
-    if (g_renderExportJob.active && g_exportRenderTarget &&
+    if ((g_renderExportJob.active || HasPreviewRenderImage()) && g_exportRenderTarget &&
         g_exportPreviewSrvGpu.ptr != 0 &&
         g_exportRenderTargetState !=
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE) {
@@ -3149,6 +3162,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     const UINT previewHeight =
       (std::max)(1u, static_cast<UINT>(previewRect.bottom - previewRect.top));
 
+    // Deferred preview restore: the previous frame latched the preview image
+    // and recorded its final CopyPresentedTexture.  Now that the GPU has
+    // executed that copy, it is safe to tear down the export-sized DXR
+    // pipeline and recreate it at viewport size.
+    if (g_renderExportJob.active && g_renderExportJob.previewRestorePending) {
+      g_renderExportJob.previewRestorePending = false;
+      RestoreRenderExportState(true);
+    }
+
     if (g_renderExportJob.active) {
       g_currentRenderMode = RenderMode::DXR;
 
@@ -3168,7 +3190,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         g_renderExportJob.completionArmed = true;
         g_renderExportJob.completionFrames = 0;
         g_renderExportJob.settleFramesRemaining =
-            (g_renderExportSettings.denoiserIndex == 0) ? 1 : 3;
+          (g_renderExportJob.targetDenoiserIndex == 0) ? 1 : 3;
       }
 
       if (g_renderExportJob.completionArmed) {
@@ -3176,31 +3198,43 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         if (g_renderExportJob.settleFramesRemaining > 0) {
           --g_renderExportJob.settleFramesRemaining;
         } else {
-          const bool denoiserEnabled =
-              (g_renderExportSettings.denoiserIndex != 0);
-          const bool denoisedReady = DxrRenderer::HasDenoisedOutput();
-          // Wait for the one-shot denoiser to produce output. Keep a timeout so
-          // export cannot hang forever on denoiser failures.
-          if (denoiserEnabled && !denoisedReady &&
-              g_renderExportJob.completionFrames < 240) {
+          const bool finalDisplayReady = DxrRenderer::CanIdleWithoutRendering();
+          // Wait until the renderer reports that the final displayable frame is
+          // ready. This is stricter than "OIDN ran" because it also requires
+          // the tonemapped output to be available.
+          if (!finalDisplayReady && g_renderExportJob.completionFrames < 240) {
             // keep waiting
           } else {
-            const bool exported = DxrRenderer::ExportTonemappedFrameToPng(
-                g_renderExportJob.outputPath);
-            const std::string outPathUtf8 =
-                WStringToUtf8(g_renderExportJob.outputPath);
-            if (exported) {
-              g_renderExportStatus = "Saved: " + outPathUtf8;
-              fprintf(stderr, "Render export finished: %s\n",
-                      outPathUtf8.c_str());
+            if (g_renderExportJob.isPreview) {
+              // Latch camera state now, but DEFER RestoreRenderExportState to
+              // the next frame.  The current command list still contains a
+              // CopyPresentedTexture that references DXR resources
+              // (s_tonemapOutputUAV).  RestoreRenderExportState recreates the
+              // DXR pipeline which destroys those resources.  If we did it on
+              // the same frame, the GPU would read freed memory and overwrite
+              // the denoised image with garbage.
+              LatchPreviewRenderImage();
+              g_renderExportJob.previewRestorePending = true;
+              g_renderExportStatus =
+                  "Preview ready. Move camera or press ESC to dismiss.";
             } else {
-              g_renderExportStatus = "Export failed: " + outPathUtf8;
-              fprintf(stderr, "Render export failed: %s\n",
-                      outPathUtf8.c_str());
+              const bool exported = DxrRenderer::ExportTonemappedFrameToPng(
+                  g_renderExportJob.outputPath);
+              const std::string outPathUtf8 =
+                  WStringToUtf8(g_renderExportJob.outputPath);
+              if (exported) {
+                g_renderExportStatus = "Saved: " + outPathUtf8;
+                fprintf(stderr, "Render export finished: %s\n",
+                        outPathUtf8.c_str());
+              } else {
+                g_renderExportStatus = "Export failed: " + outPathUtf8;
+                fprintf(stderr, "Render export failed: %s\n",
+                        outPathUtf8.c_str());
+              }
+              RestoreRenderExportState();
+              AdvanceBatchRenderExport(exported);
+              AdvanceAnimationRenderExport(exported);
             }
-            RestoreRenderExportState();
-            AdvanceBatchRenderExport(exported);
-            AdvanceAnimationRenderExport(exported);
           }
         }
       }

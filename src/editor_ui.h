@@ -27,6 +27,9 @@ struct RenderExportSettings {
 
 struct RenderExportJobState {
   bool active = false;
+  bool isPreview = false;
+  bool previewReadyToLatch = false;
+  bool previewRestorePending = false;
   bool completionArmed = false;
   int completionFrames = 0;
   int settleFramesRemaining = 0;
@@ -40,6 +43,7 @@ struct RenderExportJobState {
   float previousMaxSpp = 200.0f;
   float previousNoiseThreshold = 0.05f;
   float previousAdaptiveSampling = 1.0f;
+  int targetDenoiserIndex = 0;
   int previousDenoiserIndex = 0;
   // Streamline (DLSS) state saved/restored during export so noise can be
   // calculated even when DLSS-RR is normally active.
@@ -119,7 +123,12 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
 
 // Helper: start / restore / cancel a render export job
 void StartRenderExportJob(const std::wstring &outputPath);
-void RestoreRenderExportState();
+void StartPreviewRenderJob();
+void RestoreRenderExportState(bool preservePreviewImage = false);
+void LatchPreviewRenderImage();
+bool IsPreviewRenderActive();
+bool HasPreviewRenderImage();
+void CancelPreviewRender();
 bool StartBatchRenderExportJobs(const std::wstring &outputDirectory,
                                 const std::wstring &baseName);
 void AdvanceBatchRenderExport(bool previousExportSucceeded);

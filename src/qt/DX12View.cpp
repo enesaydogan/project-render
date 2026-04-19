@@ -1,5 +1,6 @@
 #include "DX12View.h"
 #include "../dx12_context.h" // adapt include path
+#include "../editor_ui.h"
 #include "../input_handler.h"
 #include "../imgui.h"
 #include "../scene.h"
@@ -73,6 +74,7 @@ ImGuiKey MapQtKeyToImGuiKey(QKeyEvent *event)
     case Qt::Key_X: return ImGuiKey_X;
     case Qt::Key_Y: return ImGuiKey_Y;
     case Qt::Key_Z: return ImGuiKey_Z;
+    case Qt::Key_F2: return ImGuiKey_F2;
     case Qt::Key_F4: return ImGuiKey_F4;
     case Qt::Key_F5: return ImGuiKey_F5;
     default: return ImGuiKey_None;
@@ -154,8 +156,12 @@ void DX12View::keyPressEvent(QKeyEvent *e)
                                  static_cast<int>(e->nativeScanCode()));
     }
     if (e->key() == Qt::Key_Escape && !e->isAutoRepeat()) {
-        Scene::SelectNode(static_cast<size_t>(-1));
-        Scene::SelectLight(-1);
+        if (IsPreviewRenderActive()) {
+            CancelPreviewRender();
+        } else {
+            Scene::SelectNode(static_cast<size_t>(-1));
+            Scene::SelectLight(-1);
+        }
     }
     QWidget::keyPressEvent(e);
 }

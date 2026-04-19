@@ -126,6 +126,86 @@ struct HiddenProcessResult {
 static std::future<HiddenProcessResult> g_animationEncodeWorker;
 static std::string g_animationEncodeMessage;
 
+struct PreviewOverlayState {
+  bool visible = false;
+  unsigned int width = 0;
+  unsigned int height = 0;
+  float pos[3] = {0.0f, 0.0f, 0.0f};
+  float forward[3] = {0.0f, 0.0f, 0.0f};
+  float up[3] = {0.0f, 0.0f, 0.0f};
+  float fov = 0.0f;
+  float nearZ = 0.0f;
+  float farZ = 0.0f;
+  float yaw = 0.0f;
+  float pitch = 0.0f;
+  RenderMode renderMode = RenderMode::Raster;
+};
+
+static PreviewOverlayState g_previewOverlay;
+
+static void ReleasePreviewOverlayImage() {
+  g_previewOverlay = {};
+  g_exportRenderTarget.Reset();
+  g_exportRtvHeap.Reset();
+  g_exportRenderTargetWidth = 0;
+  g_exportRenderTargetHeight = 0;
+  g_exportRenderTargetState = D3D12_RESOURCE_STATE_PRESENT;
+}
+
+void LatchPreviewRenderImage() {
+  g_previewOverlay.visible = true;
+  g_previewOverlay.width = g_renderExportJob.targetWidth;
+  g_previewOverlay.height = g_renderExportJob.targetHeight;
+  for (int i = 0; i < 3; ++i) {
+    g_previewOverlay.pos[i] = g_cameraData.pos[i];
+    g_previewOverlay.forward[i] = g_cameraData.forward[i];
+    g_previewOverlay.up[i] = g_cameraData.up[i];
+  }
+  g_previewOverlay.fov = g_cameraData.fov;
+  g_previewOverlay.nearZ = g_cameraData.nearZ;
+  g_previewOverlay.farZ = g_cameraData.farZ;
+  g_previewOverlay.yaw = g_camYaw;
+  g_previewOverlay.pitch = g_camPitch;
+  g_previewOverlay.renderMode = g_renderExportJob.previousMode;
+}
+
+static bool HasPreviewOverlayViewChanged() {
+  if (!g_previewOverlay.visible) {
+    return false;
+  }
+  if (g_currentRenderMode != g_previewOverlay.renderMode) {
+    return true;
+  }
+  for (int i = 0; i < 3; ++i) {
+    if (g_cameraData.pos[i] != g_previewOverlay.pos[i] ||
+        g_cameraData.forward[i] != g_previewOverlay.forward[i] ||
+        g_cameraData.up[i] != g_previewOverlay.up[i]) {
+      return true;
+    }
+  }
+  return g_cameraData.fov != g_previewOverlay.fov ||
+         g_cameraData.nearZ != g_previewOverlay.nearZ ||
+         g_cameraData.farZ != g_previewOverlay.farZ ||
+         g_camYaw != g_previewOverlay.yaw ||
+         g_camPitch != g_previewOverlay.pitch;
+}
+
+static void UpdatePreviewOverlayState() {
+  if (g_renderExportJob.active || !g_previewOverlay.visible) {
+    return;
+  }
+  if (!g_exportRenderTarget || g_exportPreviewSrvGpu.ptr == 0) {
+    ReleasePreviewOverlayImage();
+    return;
+  }
+  if (HasPreviewOverlayViewChanged()) {
+    ReleasePreviewOverlayImage();
+    if (g_renderExportStatus.rfind("Preview ready", 0) == 0) {
+      g_renderExportStatus.clear();
+    }
+  }
+}
+
 static void SceneIoProgressSink(float progress01, const char *stage) {
   g_sceneIoProgressAtomic.store((std::clamp)(progress01, 0.0f, 1.0f),
                                 std::memory_order_relaxed);
@@ -280,8 +360,19 @@ static void DrawSceneIoOverlay() {
 }
 
 static void DrawRenderExportViewportPreview() {
-  if (!g_renderExportJob.active || g_exportPreviewSrvGpu.ptr == 0 ||
-      g_renderExportJob.targetHeight <= 0) {
+  const bool showActiveRender = g_renderExportJob.active;
+  const bool showLatchedPreview =
+      !showActiveRender && g_previewOverlay.visible;
+  if ((!showActiveRender && !showLatchedPreview) ||
+      !g_exportRenderTarget || g_exportPreviewSrvGpu.ptr == 0) {
+    return;
+  }
+
+  const unsigned int sourceWidth =
+      showActiveRender ? g_renderExportJob.targetWidth : g_previewOverlay.width;
+  const unsigned int sourceHeight =
+      showActiveRender ? g_renderExportJob.targetHeight : g_previewOverlay.height;
+  if (sourceHeight == 0) {
     return;
   }
 
@@ -290,8 +381,7 @@ static void DrawRenderExportViewportPreview() {
     return;
   }
 
-  const float srcAspect =
-      (float)g_renderExportJob.targetWidth / (float)g_renderExportJob.targetHeight;
+  const float srcAspect = (float)sourceWidth / (float)sourceHeight;
   float drawW = vp->Size.x;
   float drawH = drawW / srcAspect;
   if (drawH > vp->Size.y) {
@@ -772,11 +862,14 @@ struct RenderExportLaunchSettings {
   float noisePercent = 0.0f;
   int denoiserIndex = 0;
   bool allowNoiseThresholdStop = true;
+  unsigned int explicitWidth = 0;
+  unsigned int explicitHeight = 0;
 };
 
 static void StartRenderExportJobWithSettings(
     const std::wstring &outputPath,
-    const RenderExportLaunchSettings &settings);
+    const RenderExportLaunchSettings &settings,
+    bool isPreview = false);
 static bool StartNextAnimationRenderJob();
 
 static bool StartNextBatchRenderJob() {
@@ -958,8 +1051,12 @@ static bool EnsureExportRenderTarget(UINT width, UINT height) {
 
   static void StartRenderExportJobWithSettings(
     const std::wstring &outputPath,
-    const RenderExportLaunchSettings &settings) {
-    if (g_renderExportJob.active || outputPath.empty() || !g_rayTracingSupported) {
+    const RenderExportLaunchSettings &settings,
+    bool isPreview) {
+    if (!g_renderExportJob.active) {
+      ReleasePreviewOverlayImage();
+    }
+    if (g_renderExportJob.active || (outputPath.empty() && !isPreview) || !g_rayTracingSupported) {
     return;
     }
 
@@ -969,13 +1066,21 @@ static bool EnsureExportRenderTarget(UINT width, UINT height) {
     }
 
     g_renderExportJob.active = true;
+    g_renderExportJob.isPreview = isPreview;
+    g_renderExportJob.previewReadyToLatch = false;
+    g_renderExportJob.previewRestorePending = false;
     g_renderExportJob.outputPath = outputPath;
-    g_renderExportJob.targetWidth = g_renderResolutionPresets[presetIndex].width;
+    g_renderExportJob.targetWidth =
+      settings.explicitWidth > 0 ? settings.explicitWidth
+                                 : g_renderResolutionPresets[presetIndex].width;
     g_renderExportJob.targetHeight =
-      g_renderResolutionPresets[presetIndex].height;
+      settings.explicitHeight > 0 ? settings.explicitHeight
+                                  : g_renderResolutionPresets[presetIndex].height;
     g_renderExportJob.targetMaxSpp = (settings.maxSpp < 1) ? 1 : settings.maxSpp;
     g_renderExportJob.targetNoiseThreshold =
       (settings.noisePercent <= 0.0f) ? 0.001f : (settings.noisePercent / 100.0f);
+    g_renderExportJob.targetDenoiserIndex =
+      (std::clamp)(settings.denoiserIndex, 0, 2);
     g_renderExportJob.allowNoiseThresholdStop = settings.allowNoiseThresholdStop;
     g_renderExportJob.minSppBeforeNoiseStop =
       (g_renderExportJob.targetMaxSpp < 32)
@@ -1011,7 +1116,7 @@ static bool EnsureExportRenderTarget(UINT width, UINT height) {
       settings.allowNoiseThresholdStop ? 1.0f : 0.0f;
     g_cameraData.exportRendering = 1.0f;
     DxrRenderer::SetDenoiserMode(
-      DenoiserModeFromIndex((std::clamp)(settings.denoiserIndex, 0, 2)));
+      DenoiserModeFromIndex(g_renderExportJob.targetDenoiserIndex));
 
     if (!EnsureExportRenderTarget(g_renderExportJob.targetWidth,
                   g_renderExportJob.targetHeight)) {
@@ -1032,6 +1137,9 @@ static bool EnsureExportRenderTarget(UINT width, UINT height) {
     DX12Context::g_streamline.SetEnabled(
       g_renderExportJob.previousStreamlineEnabled);
     g_renderExportJob.active = false;
+    g_renderExportJob.isPreview = false;
+    g_renderExportJob.previewReadyToLatch = false;
+    g_renderExportJob.previewRestorePending = false;
     UpdateCameraCB();
     return;
     }
@@ -1056,16 +1164,19 @@ static bool EnsureExportRenderTarget(UINT width, UINT height) {
     DX12Context::g_streamline.SetEnabled(
       g_renderExportJob.previousStreamlineEnabled);
     g_renderExportJob.active = false;
+    g_renderExportJob.isPreview = false;
+    g_renderExportJob.previewReadyToLatch = false;
+    g_renderExportJob.previewRestorePending = false;
     UpdateCameraCB();
     return;
     }
 
     DxrRenderer::ResetAccumulation();
     UpdateCameraCB();
-    g_renderExportStatus = "Rendering...";
+    g_renderExportStatus = isPreview ? "Rendering preview..." : "Rendering...";
   }
 
-void RestoreRenderExportState() {
+void RestoreRenderExportState(bool preservePreviewImage) {
   if (!g_renderExportJob.active) {
     return;
   }
@@ -1094,15 +1205,17 @@ void RestoreRenderExportState() {
   }
   DxrRenderer::ResetAccumulation();
   g_renderExportJob.active = false;
+  g_renderExportJob.isPreview = false;
+  g_renderExportJob.previewReadyToLatch = false;
+  g_renderExportJob.previewRestorePending = false;
   g_renderExportJob.completionArmed = false;
   g_renderExportJob.completionFrames = 0;
   g_renderExportJob.settleFramesRemaining = 0;
+  g_renderExportJob.targetDenoiserIndex = 0;
   g_renderExportJob.allowNoiseThresholdStop = true;
-  g_exportRenderTarget.Reset();
-  g_exportRtvHeap.Reset();
-  g_exportRenderTargetWidth = 0;
-  g_exportRenderTargetHeight = 0;
-  g_exportRenderTargetState = D3D12_RESOURCE_STATE_PRESENT;
+  if (!preservePreviewImage) {
+    ReleasePreviewOverlayImage();
+  }
   UpdateCameraCB();
 }
 
@@ -1337,6 +1450,29 @@ void CancelAnimationRenderExport() {
   }
 }
 
+void StartPreviewRenderJob() {
+  if (g_renderExportJob.active) return;
+  RenderExportLaunchSettings settings = {};
+  settings.maxSpp = g_renderExportSettings.maxSpp;
+  settings.noisePercent = g_renderExportSettings.noisePercent;
+  settings.denoiserIndex = g_renderExportSettings.denoiserIndex;
+  settings.allowNoiseThresholdStop = true;
+  D3D12_RECT previewRect = {0, 0, (LONG)g_windowWidth, (LONG)g_windowHeight};
+  GetSafeFramePreviewRect(g_windowWidth, g_windowHeight, previewRect);
+  settings.explicitWidth =
+      (std::max)(1u, static_cast<unsigned int>(previewRect.right - previewRect.left));
+  settings.explicitHeight =
+      (std::max)(1u, static_cast<unsigned int>(previewRect.bottom - previewRect.top));
+  StartRenderExportJobWithSettings(L"", settings, true);
+  fprintf(stderr,
+          "Preview render started: %ux%u, maxSPP=%d, noise=%.3f, "
+          "denoiser=%d\n",
+          g_renderExportJob.targetWidth, g_renderExportJob.targetHeight,
+          g_renderExportJob.targetMaxSpp,
+          g_renderExportJob.targetNoiseThreshold,
+          g_renderExportSettings.denoiserIndex);
+}
+
 void StartRenderExportJob(const std::wstring &outputPath) {
   RenderExportLaunchSettings settings = {};
   settings.resolutionPreset = g_renderExportSettings.resolutionPreset;
@@ -1344,7 +1480,7 @@ void StartRenderExportJob(const std::wstring &outputPath) {
   settings.noisePercent = g_renderExportSettings.noisePercent;
   settings.denoiserIndex = g_renderExportSettings.denoiserIndex;
   settings.allowNoiseThresholdStop = true;
-  StartRenderExportJobWithSettings(outputPath, settings);
+  StartRenderExportJobWithSettings(outputPath, settings, false);
   fprintf(stderr,
           "Render export started: %ux%u, maxSPP=%d, noise=%.3f, "
           "denoiser=%d\n",
@@ -1352,6 +1488,28 @@ void StartRenderExportJob(const std::wstring &outputPath) {
           g_renderExportJob.targetMaxSpp,
           g_renderExportJob.targetNoiseThreshold,
           g_renderExportSettings.denoiserIndex);
+}
+
+bool IsPreviewRenderActive() {
+    return (g_renderExportJob.active && g_renderExportJob.isPreview) ||
+           g_previewOverlay.visible;
+}
+
+bool HasPreviewRenderImage() {
+    return g_previewOverlay.visible && g_exportRenderTarget &&
+           g_exportPreviewSrvGpu.ptr != 0;
+}
+
+void CancelPreviewRender() {
+  if (g_renderExportJob.active && g_renderExportJob.isPreview) {
+    g_renderExportStatus = "Preview canceled.";
+    RestoreRenderExportState();
+    return;
+  }
+  if (g_previewOverlay.visible) {
+    ReleasePreviewOverlayImage();
+    g_renderExportStatus.clear();
+  }
 }
 
 std::string WStringToUtf8(const std::wstring &ws) {
@@ -1375,6 +1533,7 @@ static bool RecreateDxrPipelineSafe(UINT width, UINT height,
   }
 
   try {
+    DxrRenderer::WaitForAsyncRestirIdle();
     WaitGPUIdle();
     DxrRenderer::CreateRayTracingPipeline(width, height);
     return true;
@@ -1394,6 +1553,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
                   float &latitudeDeg, float &dayOfYear) {
   UpdateSceneIoJob();
   UpdateAnimationEncodingJob();
+  UpdatePreviewOverlayState();
   if (!Input::g_imguiEnabled) {
     // Keep a minimal ImGui frame alive so viewport gizmos continue to work
     // even when debug windows are hidden with F5.
@@ -1611,7 +1771,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
         const float noise = DxrRenderer::GetCurrentNoiseLevel();
         const bool hasNoise = DxrRenderer::HasNoiseEstimate();
         const bool denoiserEnabled =
-            (g_renderExportSettings.denoiserIndex != 0);
+          (g_renderExportJob.targetDenoiserIndex != 0);
         ImGui::Separator();
         ImGui::Text("Progress: %u / %d SPP", spp,
                     g_renderExportJob.targetMaxSpp);
@@ -2831,8 +2991,16 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
     g_showMaterialEditor = !g_showMaterialEditor;
   }
 
+  if (ImGui::IsKeyPressed(ImGuiKey_F2, false)) {
+    StartPreviewRenderJob();
+  }
+
   if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-    Scene::SelectNode((size_t)-1);
+    if (IsPreviewRenderActive()) {
+        CancelPreviewRender();
+    } else {
+        Scene::SelectNode((size_t)-1);
+    }
   }
 
   if (g_showAssetsWindow) {

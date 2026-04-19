@@ -406,6 +406,13 @@ void MainWindow::createMenus()
     });
     m_loadSceneAction->setShortcut(QKeySequence::Open);
     m_loadSceneAction->setShortcutContext(Qt::ApplicationShortcut);
+    
+    m_previewRenderAction = fileMenu->addAction(tr("Preview Render"), this, [this]() {
+        startPreviewRender();
+    });
+    m_previewRenderAction->setShortcut(QKeySequence(Qt::Key_F2));
+    m_previewRenderAction->setShortcutContext(Qt::ApplicationShortcut);
+    
     fileMenu->addSeparator();
     fileMenu->addAction(tr("E&xit"), this, &QWidget::close);
 
@@ -482,6 +489,9 @@ void MainWindow::createToolBar()
     }
     if (m_loadSceneAction) {
         toolbar->addAction(m_loadSceneAction);
+    }
+    if (m_previewRenderAction) {
+        toolbar->addAction(m_previewRenderAction);
     }
 }
 
@@ -702,6 +712,11 @@ void MainWindow::startLoadScene()
     }
 }
 
+void MainWindow::startPreviewRender()
+{
+    StartPreviewRenderJob();
+}
+
 void MainWindow::toggleQtUiVisibility()
 {
     if (!m_qtUiHidden) {
@@ -743,6 +758,11 @@ void MainWindow::toggleQtUiVisibility()
 
 void MainWindow::updateSceneIoUi()
 {
+    if (m_previewRenderAction) {
+        m_previewRenderAction->setEnabled(g_rayTracingSupported &&
+                                          !g_renderExportJob.active);
+    }
+
     if (!m_sceneIoProgress) {
         m_sceneIoProgress = new QProgressBar(this);
         m_sceneIoProgress->setRange(0, 100);

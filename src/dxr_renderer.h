@@ -138,6 +138,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandList,
 // Submit pending ReSTIR DI/GI compute work on the async compute queue after
 // the frame's direct queue work has been submitted.
 void SubmitAsyncRestirWork();
+// Wait for any in-flight async ReSTIR work to finish before destroying or
+// recreating DXR resources.
+void WaitForAsyncRestirIdle();
 
 // Returns the last calculated average noise level (0.0 - 1.0+)
 float GetCurrentNoiseLevel();

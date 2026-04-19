@@ -37,6 +37,7 @@ private:
     void startSaveScene();
     void startSaveSceneAs();
     void startLoadScene();
+    void startPreviewRender();
     void toggleQtUiVisibility();
     void updateSceneIoUi();
 
@@ -44,6 +45,7 @@ private:
     QAction *m_saveSceneAction = nullptr;
     QAction *m_saveSceneAsAction = nullptr;
     QAction *m_loadSceneAction = nullptr;
+    QAction *m_previewRenderAction = nullptr;
     QProgressBar *m_sceneIoProgress = nullptr;
     QLabel *m_sceneIoLabel = nullptr;
     QLabel *m_statusStatsLabel = nullptr;

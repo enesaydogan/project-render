@@ -222,7 +222,7 @@ void RenderPanel::syncFromRenderer()
                                          : tr("Render And Export PNG..."));
 
     if (active) {
-        const bool denoiserEnabled = (g_renderExportSettings.denoiserIndex != 0);
+        const bool denoiserEnabled = (g_renderExportJob.targetDenoiserIndex != 0);
         QStringList lines;
         lines << tr("Progress: %1 / %2 SPP")
                      .arg(DxrRenderer::GetDisplayedSampleCount())
