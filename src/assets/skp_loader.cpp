@@ -24,6 +24,7 @@
 #include <SketchUpAPI/model/face.h>
 #include <SketchUpAPI/model/group.h>
 #include <SketchUpAPI/model/image_rep.h>
+#include <SketchUpAPI/model/layer.h>
 #include <SketchUpAPI/model/material.h>
 #include <SketchUpAPI/model/mesh_helper.h>
 #include <SketchUpAPI/model/model.h>
@@ -97,6 +98,39 @@ static inline float Clamp01(double value) {
   return static_cast<float>((std::max)(0.0, (std::min)(1.0, value)));
 }
 
+// Compute the 3x3 inverse-transpose of the upper-left 3x3 of an SUTransformation.
+// This is the correct transform for surface normals under non-uniform scaling.
+// SUTransformation.values is column-major.
+static bool ComputeNormalMatrix(const SUTransformation &t, double out[9]) {
+  const double a = t.values[0], d = t.values[1], g = t.values[2];
+  const double b = t.values[4], e = t.values[5], h = t.values[6];
+  const double c = t.values[8], f = t.values[9], i = t.values[10];
+  const double c00 = e * i - f * h;
+  const double c01 = -(d * i - f * g);
+  const double c02 = d * h - e * g;
+  const double c10 = -(b * i - c * h);
+  const double c11 = a * i - c * g;
+  const double c12 = -(a * h - b * g);
+  const double c20 = b * f - c * e;
+  const double c21 = -(a * f - c * d);
+  const double c22 = a * e - b * d;
+  const double det = a * c00 + b * c01 + c * c02;
+  if (std::abs(det) < 1e-30)
+    return false;
+  const double invDet = 1.0 / det;
+  out[0] = c00 * invDet; out[1] = c01 * invDet; out[2] = c02 * invDet;
+  out[3] = c10 * invDet; out[4] = c11 * invDet; out[5] = c12 * invDet;
+  out[6] = c20 * invDet; out[7] = c21 * invDet; out[8] = c22 * invDet;
+  return true;
+}
+
+static inline void TransformNormal3x3(const double m[9], SUVector3D &v) {
+  const double x = v.x, y = v.y, z = v.z;
+  v.x = m[0] * x + m[1] * y + m[2] * z;
+  v.y = m[3] * x + m[4] * y + m[5] * z;
+  v.z = m[6] * x + m[7] * y + m[8] * z;
+}
+
 static inline bool NormalizeSUVector(SUVector3D &v) {
   const double lenSq = v.x * v.x + v.y * v.y + v.z * v.z;
   if (lenSq <= 1e-30)
@@ -128,16 +162,16 @@ static inline double DotVec(const SUVector3D &a, const SUVector3D &b) {
   return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
-static bool ComputeTriangleNormal(const std::vector<SUPoint3D> &verts,
+static bool ComputeTriangleNormal(const SUPoint3D *verts, size_t vertCount,
                                   const std::vector<size_t> &indices,
                                   SUVector3D &outNormal) {
-  if (indices.size() < 3 || verts.empty())
+  if (indices.size() < 3 || vertCount == 0)
     return false;
   for (size_t i = 0; i + 2 < indices.size(); i += 3) {
     const size_t i0 = indices[i + 0];
     const size_t i1 = indices[i + 1];
     const size_t i2 = indices[i + 2];
-    if (i0 >= verts.size() || i1 >= verts.size() || i2 >= verts.size())
+    if (i0 >= vertCount || i1 >= vertCount || i2 >= vertCount)
       continue;
     SUVector3D e1 = SubPoint(verts[i1], verts[i0]);
     SUVector3D e2 = SubPoint(verts[i2], verts[i0]);
@@ -151,23 +185,37 @@ static bool ComputeTriangleNormal(const std::vector<SUPoint3D> &verts,
 }
 
 static bool ShouldUseBackSideMaterial(SUFaceRef face,
-                                      const SUTransformation &faceTransform,
-                                      const std::vector<SUPoint3D> &verts,
+                                      const SUPoint3D *verts, size_t vertCount,
                                       const std::vector<size_t> &indices) {
   SUVector3D triNormal = {};
-  if (!ComputeTriangleNormal(verts, indices, triNormal))
+  if (!ComputeTriangleNormal(verts, vertCount, indices, triNormal))
     return false;
 
   SUVector3D faceNormal = {};
   if (SU_ERROR_NONE != SUFaceGetNormal(face, &faceNormal))
     return false;
-  SUVector3DTransform(&faceTransform, &faceNormal);
-  if (!NormalizeSUVector(faceNormal))
-    return false;
 
   // If tessellated winding opposes face-front normal, this mesh represents the
   // back side and should use back-side material/UVs.
   return DotVec(triNormal, faceNormal) < 0.0;
+}
+
+// Returns true if the drawing element is visible (not individually hidden and
+// its layer/tag is visible).  Defaults to visible when a check fails.
+static bool IsDrawingElementVisible(SUDrawingElementRef elem) {
+  if (SUIsInvalid(elem))
+    return true;
+  bool hidden = false;
+  if (SU_ERROR_NONE == SUDrawingElementGetHidden(elem, &hidden) && hidden)
+    return false;
+  SULayerRef layer = SU_INVALID;
+  if (SU_ERROR_NONE == SUDrawingElementGetLayer(elem, &layer) &&
+      !SUIsInvalid(layer)) {
+    bool visible = true;
+    if (SU_ERROR_NONE == SULayerGetVisibility(layer, &visible) && !visible)
+      return false;
+  }
+  return true;
 }
 
 static bool LoadTextureFromImageRep(SUImageRepRef image, Asset::Texture &outTex) {
@@ -466,8 +514,22 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
     SUTransformation transform = MakeIdentityTransform();
     SUMaterialRef inheritedMaterial = SU_INVALID;
   };
+
+  auto isImageDefinition = [](SUComponentDefinitionRef definition) -> bool {
+    if (SUIsInvalid(definition)) {
+      return false;
+    }
+    SUComponentType type = SUComponentType_Normal;
+    return SU_ERROR_NONE == SUComponentDefinitionGetType(definition, &type) &&
+           type == SUComponentType_Image;
+  };
+
   std::vector<FaceJob> faceJobs;
   std::unordered_map<int64_t, bool> seenFaceIds;
+  size_t skippedImageDefinitionInstances = 0;
+  size_t skippedHiddenFaces = 0;
+  size_t skippedHiddenGroups = 0;
+  size_t skippedHiddenInstances = 0;
   const int statFaceCount =
       modelStats.entity_counts[SUModelStatistics::SUEntityType_Face];
   if (statFaceCount > 0) {
@@ -480,6 +542,12 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
                         bool dedupeExistingFace) {
     if (SUIsInvalid(face))
       return;
+
+    // Skip hidden faces and faces on invisible layers/tags.
+    if (!IsDrawingElementVisible(SUFaceToDrawingElement(face))) {
+      ++skippedHiddenFaces;
+      return;
+    }
 
     int64_t facePid = 0;
     SUEntityGetPersistentID(SUFaceToEntity(face), &facePid);
@@ -506,7 +574,7 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
       return;
 
     size_t localFaceCount = 0;
-    if (SU_ERROR_NONE != SUEntitiesGetFaces(ents, 0, nullptr, &localFaceCount))
+    if (SU_ERROR_NONE != SUEntitiesGetNumFaces(ents, &localFaceCount))
       localFaceCount = 0;
     if (localFaceCount > 0) {
       std::vector<SUFaceRef> localFaces(localFaceCount);
@@ -552,7 +620,7 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
     }
 
     size_t groupCount = 0;
-    if (SU_ERROR_NONE != SUEntitiesGetGroups(ents, 0, nullptr, &groupCount))
+    if (SU_ERROR_NONE != SUEntitiesGetNumGroups(ents, &groupCount))
       groupCount = 0;
     if (groupCount > 0) {
       std::vector<SUGroupRef> groups(groupCount);
@@ -561,6 +629,11 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
         groupCount = 0;
       }
       for (size_t gi = 0; gi < groupCount; ++gi) {
+        // Skip hidden groups and groups on invisible layers.
+        if (!IsDrawingElementVisible(SUGroupToDrawingElement(groups[gi]))) {
+          ++skippedHiddenGroups;
+          continue;
+        }
         SUEntitiesRef groupEnts = SU_INVALID;
         if (SU_ERROR_NONE != SUGroupGetEntities(groups[gi], &groupEnts))
           continue;
@@ -589,7 +662,7 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
     }
 
     size_t instCount = 0;
-    if (SU_ERROR_NONE != SUEntitiesGetInstances(ents, 0, nullptr, &instCount))
+    if (SU_ERROR_NONE != SUEntitiesGetNumInstances(ents, &instCount))
       instCount = 0;
     if (instCount > 0) {
       std::vector<SUComponentInstanceRef> instances(instCount);
@@ -598,11 +671,21 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
         instCount = 0;
       }
       for (size_t ii = 0; ii < instCount; ++ii) {
+        // Skip hidden component instances and instances on invisible layers.
+        if (!IsDrawingElementVisible(
+                SUComponentInstanceToDrawingElement(instances[ii]))) {
+          ++skippedHiddenInstances;
+          continue;
+        }
         SUComponentDefinitionRef def = SU_INVALID;
         if (SU_ERROR_NONE != SUComponentInstanceGetDefinition(instances[ii], &def))
           continue;
         if (SUIsInvalid(def))
           continue;
+        if (isImageDefinition(def)) {
+          ++skippedImageDefinitionInstances;
+          continue;
+        }
 
         SUEntitiesRef defEnts = SU_INVALID;
         if (SU_ERROR_NONE != SUComponentDefinitionGetEntities(def, &defEnts))
@@ -645,6 +728,10 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
       for (size_t i = 0; i < defCount; ++i) {
         if (SUIsInvalid(defs[i]))
           continue;
+        if (isImageDefinition(defs[i])) {
+          ++skippedImageDefinitionInstances;
+          continue;
+        }
         SUEntitiesRef defEnts = SU_INVALID;
         if (SU_ERROR_NONE != SUComponentDefinitionGetEntities(defs[i], &defEnts))
           continue;
@@ -654,18 +741,31 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
     collectDefinitions(SUModelGetNumComponentDefinitions,
                        SUModelGetComponentDefinitions);
     collectDefinitions(SUModelGetNumGroupDefinitions, SUModelGetGroupDefinitions);
-    collectDefinitions(SUModelGetNumImageDefinitions, SUModelGetImageDefinitions);
   };
-  if (faceJobs.empty() ||
-      (statFaceCount > 0 && faceJobs.size() < static_cast<size_t>(statFaceCount))) {
+  if (faceJobs.empty()) {
     const size_t beforeDefinitionSweep = faceJobs.size();
     collectAllDefinitions();
     if (faceJobs.size() > beforeDefinitionSweep) {
       fprintf(stderr,
-              "LoadSkp: definition sweep recovered %zu faces (traversal=%zu stats=%d)\n",
+              "LoadSkp: fallback definition sweep recovered %zu faces (traversal=%zu stats=%d)\n",
               faceJobs.size() - beforeDefinitionSweep, beforeDefinitionSweep,
               statFaceCount);
     }
+  } else if (statFaceCount > 0 &&
+             faceJobs.size() < static_cast<size_t>(statFaceCount)) {
+    fprintf(stderr,
+            "LoadSkp: traversal found %zu visible/instanced faces; model stats report %d total definition faces.\n",
+            faceJobs.size(), statFaceCount);
+  }
+  if (skippedImageDefinitionInstances > 0) {
+    fprintf(stderr, "LoadSkp: skipped %zu SketchUp image definition instances\n",
+            skippedImageDefinitionInstances);
+  }
+  if (skippedHiddenFaces > 0 || skippedHiddenGroups > 0 ||
+      skippedHiddenInstances > 0) {
+    fprintf(stderr,
+            "LoadSkp: skipped hidden entities: faces=%zu groups=%zu instances=%zu\n",
+            skippedHiddenFaces, skippedHiddenGroups, skippedHiddenInstances);
   }
 
   const size_t faceCount = faceJobs.size();
@@ -675,101 +775,226 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
   };
+  struct CachedFaceMesh {
+    std::vector<SUPoint3D> vertices;
+    std::vector<SUVector3D> normals;
+    std::vector<SUPoint3D> stqFront;
+    std::vector<SUPoint3D> stqBack;
+    std::vector<size_t> indices;
+    bool haveFrontSTQ = false;
+    bool haveBackSTQ = false;
+    bool builtWithTextureWriter = false;
+    bool valid = false;
+  };
+  struct FaceMeshLookup {
+    const CachedFaceMesh *mesh = nullptr;
+    bool usedTextureWriter = false;
+  };
   std::unordered_map<int, MeshAccumulator> meshBatches;
+  std::unordered_map<int64_t, CachedFaceMesh> basicFaceMeshCache;
+  std::unordered_map<int64_t, CachedFaceMesh> texturedFaceMeshCache;
+  if (statFaceCount > 0) {
+    basicFaceMeshCache.reserve(static_cast<size_t>(statFaceCount));
+    texturedFaceMeshCache.reserve(static_cast<size_t>(statFaceCount / 4 + 1));
+  }
+  CachedFaceMesh uncachedFaceMeshScratch;
+  size_t meshHelperBuilds = 0;
+  size_t meshHelperCacheHits = 0;
 
-  for (size_t fi = 0; fi < faceCount; ++fi) {
-    SUFaceRef face = faceJobs[fi].face;
-    const SUTransformation &faceTransform = faceJobs[fi].transform;
+  auto getFacePersistentId = [](SUFaceRef face) -> int64_t {
+    int64_t pid = 0;
+    if (!SUIsInvalid(face)) {
+      SUEntityGetPersistentID(SUFaceToEntity(face), &pid);
+    }
+    return pid;
+  };
+
+  auto populateFaceMesh = [&](SUFaceRef face, bool withTextureWriter,
+                              CachedFaceMesh &outMesh) -> bool {
+    outMesh = CachedFaceMesh{};
 
     SUMeshHelperRef meshRef = SU_INVALID;
     SUResult meshCreate = SU_ERROR_INVALID_INPUT;
-    const bool useTextureWriterForFace =
-        textureWriterValid && outTextures &&
-        FaceMayNeedTextureWriter(face, faceJobs[fi].inheritedMaterial);
-    if (useTextureWriterForFace) {
+    bool usedTextureWriter = withTextureWriter;
+    if (withTextureWriter) {
       meshCreate = SUMeshHelperCreateWithTextureWriter(&meshRef, face, texWriter);
     }
     if (meshCreate != SU_ERROR_NONE) {
       meshCreate = SUMeshHelperCreate(&meshRef, face);
+      usedTextureWriter = false;
     }
     if (meshCreate != SU_ERROR_NONE) {
-      continue;
+      return false;
     }
+
+    ++meshHelperBuilds;
 
     size_t numVerts = 0;
     if (SU_ERROR_NONE != SUMeshHelperGetNumVertices(meshRef, &numVerts) ||
         numVerts == 0) {
       SUMeshHelperRelease(&meshRef);
-      continue;
+      return false;
     }
 
-    std::vector<SUPoint3D> suVerts(numVerts);
+    outMesh.vertices.resize(numVerts);
     size_t vertsRetrieved = numVerts;
     if (SU_ERROR_NONE !=
-            SUMeshHelperGetVertices(meshRef, vertsRetrieved, suVerts.data(),
+            SUMeshHelperGetVertices(meshRef, vertsRetrieved, outMesh.vertices.data(),
                                     &vertsRetrieved) ||
         vertsRetrieved == 0) {
       SUMeshHelperRelease(&meshRef);
-      continue;
+      return false;
     }
     if (vertsRetrieved != numVerts) {
       numVerts = vertsRetrieved;
-      suVerts.resize(numVerts);
+      outMesh.vertices.resize(numVerts);
     }
 
-    std::vector<SUPoint3D> stqFront(numVerts, SUPoint3D{0.0, 0.0, 1.0});
-    std::vector<SUPoint3D> stqBack(numVerts, SUPoint3D{0.0, 0.0, 1.0});
+    outMesh.stqFront.assign(numVerts, SUPoint3D{0.0, 0.0, 1.0});
+    outMesh.stqBack.assign(numVerts, SUPoint3D{0.0, 0.0, 1.0});
     size_t stqFrontCount = numVerts;
     size_t stqBackCount = numVerts;
-    const bool haveFrontSTQ =
+    outMesh.haveFrontSTQ =
         (SU_ERROR_NONE ==
-             SUMeshHelperGetFrontSTQCoords(meshRef, stqFrontCount, stqFront.data(),
+             SUMeshHelperGetFrontSTQCoords(meshRef, stqFrontCount,
+                                           outMesh.stqFront.data(),
                                            &stqFrontCount) &&
          stqFrontCount == numVerts);
-    const bool haveBackSTQ =
+    outMesh.haveBackSTQ =
         (SU_ERROR_NONE ==
-             SUMeshHelperGetBackSTQCoords(meshRef, stqBackCount, stqBack.data(),
-                                          &stqBackCount) &&
+             SUMeshHelperGetBackSTQCoords(meshRef, stqBackCount,
+                                          outMesh.stqBack.data(), &stqBackCount) &&
          stqBackCount == numVerts);
 
-    std::vector<SUVector3D> normals(numVerts, SUVector3D{0.0, 1.0, 0.0});
+    outMesh.normals.assign(numVerts, SUVector3D{0.0, 1.0, 0.0});
     size_t normalCount = numVerts;
     if (SU_ERROR_NONE !=
-            SUMeshHelperGetNormals(meshRef, normalCount, normals.data(),
+            SUMeshHelperGetNormals(meshRef, normalCount, outMesh.normals.data(),
                                    &normalCount) ||
         normalCount != numVerts) {
-      std::fill(normals.begin(), normals.end(), SUVector3D{0.0, 1.0, 0.0});
-    }
-
-    bool isId = true;
-    SUTransformationIsIdentity(&faceTransform, &isId);
-    if (!isId) {
-      for (size_t vi = 0; vi < numVerts; ++vi) {
-        SUPoint3DTransform(&faceTransform, &suVerts[vi]);
-        SUVector3DTransform(&faceTransform, &normals[vi]);
-      }
+      std::fill(outMesh.normals.begin(), outMesh.normals.end(),
+                SUVector3D{0.0, 1.0, 0.0});
     }
 
     size_t numTris = 0;
     if (SU_ERROR_NONE != SUMeshHelperGetNumTriangles(meshRef, &numTris) ||
         numTris == 0) {
       SUMeshHelperRelease(&meshRef);
-      continue;
+      return false;
     }
 
-    std::vector<size_t> suIndices(numTris * 3);
-    size_t numIndices = suIndices.size();
+    outMesh.indices.resize(numTris * 3);
+    size_t numIndices = outMesh.indices.size();
     if (SU_ERROR_NONE !=
-            SUMeshHelperGetVertexIndices(meshRef, numIndices, suIndices.data(),
+            SUMeshHelperGetVertexIndices(meshRef, numIndices, outMesh.indices.data(),
                                          &numIndices) ||
         numIndices < 3) {
       SUMeshHelperRelease(&meshRef);
+      return false;
+    }
+    outMesh.indices.resize(numIndices);
+
+    SUMeshHelperRelease(&meshRef);
+    outMesh.builtWithTextureWriter = usedTextureWriter;
+    outMesh.valid = true;
+    return true;
+  };
+
+  auto getFaceMesh = [&](SUFaceRef face, bool wantTextureWriter) -> FaceMeshLookup {
+    const int64_t facePid = getFacePersistentId(face);
+    if (facePid == 0) {
+      if (!populateFaceMesh(face, wantTextureWriter, uncachedFaceMeshScratch)) {
+        return {};
+      }
+      return {&uncachedFaceMeshScratch,
+              uncachedFaceMeshScratch.builtWithTextureWriter};
+    }
+
+    if (wantTextureWriter) {
+      auto texturedIt = texturedFaceMeshCache.find(facePid);
+      if (texturedIt != texturedFaceMeshCache.end()) {
+        ++meshHelperCacheHits;
+        return {&texturedIt->second, true};
+      }
+
+      CachedFaceMesh texturedMesh;
+      if (populateFaceMesh(face, true, texturedMesh)) {
+        if (texturedMesh.builtWithTextureWriter) {
+          auto inserted =
+              texturedFaceMeshCache.emplace(facePid, std::move(texturedMesh));
+          return {&inserted.first->second, true};
+        }
+        auto inserted = basicFaceMeshCache.emplace(facePid, std::move(texturedMesh));
+        return {&inserted.first->second, false};
+      }
+      wantTextureWriter = false;
+    }
+
+    auto texturedIt = texturedFaceMeshCache.find(facePid);
+    if (texturedIt != texturedFaceMeshCache.end()) {
+      ++meshHelperCacheHits;
+      return {&texturedIt->second, false};
+    }
+
+    auto basicIt = basicFaceMeshCache.find(facePid);
+    if (basicIt != basicFaceMeshCache.end()) {
+      ++meshHelperCacheHits;
+      return {&basicIt->second, false};
+    }
+
+    CachedFaceMesh basicMesh;
+    if (!populateFaceMesh(face, false, basicMesh)) {
+      return {};
+    }
+    auto inserted = basicFaceMeshCache.emplace(facePid, std::move(basicMesh));
+    return {&inserted.first->second, false};
+  };
+
+  const size_t progressInterval =
+      (std::max)(static_cast<size_t>(1), faceCount / 100);
+  const std::string progressMsg = std::string("Processing SKP faces: ") + path;
+
+  for (size_t fi = 0; fi < faceCount; ++fi) {
+    SUFaceRef face = faceJobs[fi].face;
+    const SUTransformation &faceTransform = faceJobs[fi].transform;
+
+    const bool useTextureWriterForFace =
+        textureWriterValid && outTextures &&
+        FaceMayNeedTextureWriter(face, faceJobs[fi].inheritedMaterial);
+    const FaceMeshLookup faceMeshLookup =
+        getFaceMesh(face, useTextureWriterForFace);
+    if (!faceMeshLookup.mesh || !faceMeshLookup.mesh->valid) {
       continue;
     }
-    suIndices.resize(numIndices);
+    const CachedFaceMesh &faceMesh = *faceMeshLookup.mesh;
+    const size_t numVerts = faceMesh.vertices.size();
+    if (numVerts == 0 || faceMesh.indices.empty()) {
+      continue;
+    }
 
-    const bool useBackSide =
-        ShouldUseBackSideMaterial(face, faceTransform, suVerts, suIndices);
+    // Compute normal matrix once per face (used for both vertex normals and
+    // the back-side detection heuristic).
+    bool isId = true;
+    SUTransformationIsIdentity(&faceTransform, &isId);
+    double normalMat[9] = {};
+    const bool haveNormalMat = !isId && ComputeNormalMatrix(faceTransform, normalMat);
+    bool isMirrored = false;
+    if (!isId) {
+      const double a = faceTransform.values[0], d = faceTransform.values[1], g = faceTransform.values[2];
+      const double b = faceTransform.values[4], e = faceTransform.values[5], h = faceTransform.values[6];
+      const double c = faceTransform.values[8], f = faceTransform.values[9], i = faceTransform.values[10];
+      const double det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+      isMirrored = (det < 0.0);
+    }
+
+    const SUPoint3D *srcVerts = faceMesh.vertices.data();
+    const SUVector3D *srcNormals = faceMesh.normals.data();
+
+    const std::vector<size_t> &suIndices = faceMesh.indices;
+
+    const bool useBackSide = ShouldUseBackSideMaterial(
+        face, srcVerts, numVerts, suIndices);
+
 
     int materialIndex = -1;
     SUMaterialRef skMat =
@@ -877,7 +1102,7 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
         if (materialType == SUMaterialType_Textured ||
             materialType == SUMaterialType_ColorizedTexture) {
           long texId = 0;
-          if (useTextureWriterForFace) {
+          if (faceMeshLookup.usedTextureWriter) {
             SUResult texResult = SUTextureWriterGetTextureIdForFace(
                 texWriter, face, !useBackSide, &texId);
             if (texResult != SU_ERROR_NONE || texId == 0) {
@@ -995,19 +1220,29 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
     }
 
     auto &batch = meshBatches[materialIndex];
-    batch.vertices.reserve(batch.vertices.size() + numVerts);
-    batch.indices.reserve(batch.indices.size() + suIndices.size());
     const uint32_t baseVertex = static_cast<uint32_t>(batch.vertices.size());
 
     for (size_t vi = 0; vi < numVerts; ++vi) {
       Vertex v{};
-      ConvertSketchUpPointToEngine(suVerts[vi], v.pos);
+      SUPoint3D p = srcVerts[vi];
+      SUVector3D n = srcNormals[vi];
+
+      if (!isId) {
+        SUPoint3DTransform(&faceTransform, &p);
+        if (haveNormalMat) {
+          TransformNormal3x3(normalMat, n);
+        } else {
+          SUVector3DTransform(&faceTransform, &n);
+        }
+      }
+
+      ConvertSketchUpPointToEngine(p, v.pos);
       if (rootTranslation) {
         v.pos[0] += rootTranslation[0];
         v.pos[1] += rootTranslation[1];
         v.pos[2] += rootTranslation[2];
       }
-      ConvertSketchUpVectorToEngine(normals[vi], v.normal);
+      ConvertSketchUpVectorToEngine(n, v.normal);
       if (useBackSide) {
         v.normal[0] = -v.normal[0];
         v.normal[1] = -v.normal[1];
@@ -1019,16 +1254,18 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
       v.tangent[2] = 0.0f;
       v.tangent[3] = useBackSide ? -1.0f : 1.0f;
       const SUPoint3D &uvq =
-          (useBackSide && haveBackSTQ)
-              ? stqBack[vi]
-              : (haveFrontSTQ ? stqFront[vi] : stqBack[vi]);
+          (useBackSide && faceMesh.haveBackSTQ)
+              ? faceMesh.stqBack[vi]
+              : (faceMesh.haveFrontSTQ ? faceMesh.stqFront[vi]
+                                        : faceMesh.stqBack[vi]);
       const double q = (std::abs(uvq.z) > 1e-12) ? uvq.z : 1.0;
       v.uv[0] = static_cast<float>(uvq.x / q);
       v.uv[1] = static_cast<float>(uvq.y / q);
       batch.vertices.push_back(v);
     }
 
-    if (useBackSide) {
+    const bool flipWinding = (useBackSide != isMirrored);
+    if (flipWinding) {
       for (size_t k = 0; k + 2 < suIndices.size(); k += 3) {
         batch.indices.push_back(baseVertex + static_cast<uint32_t>(suIndices[k + 0]));
         batch.indices.push_back(baseVertex + static_cast<uint32_t>(suIndices[k + 2]));
@@ -1040,12 +1277,11 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
       }
     }
 
-    SUMeshHelperRelease(&meshRef);
-
     ++processed;
-    if (s_progressCb) {
+    if (s_progressCb &&
+        (processed % progressInterval == 0 || processed == faceCount)) {
       s_progressCb(static_cast<float>(processed) / static_cast<float>(faceCount),
-                   std::string("Processing SKP faces: ") + path);
+                   progressMsg);
     }
   }
 
@@ -1072,8 +1308,9 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
     outMeshes.push_back(std::move(gm));
   }
 
-  fprintf(stderr, "LoadSkp: faces=%zu meshes_generated=%zu\n", faceCount,
-          outMeshes.size());
+  fprintf(stderr,
+          "LoadSkp: faces=%zu meshes_generated=%zu mesh_helper_builds=%zu cache_hits=%zu\n",
+          faceCount, outMeshes.size(), meshHelperBuilds, meshHelperCacheHits);
   for (size_t mi = 0; mi < outMeshes.size(); ++mi) {
     fprintf(stderr, "LoadSkp: mesh[%zu] verts=%u indices=%u material=%d\n", mi,
             outMeshes[mi].vertexCount, outMeshes[mi].indexCount,
