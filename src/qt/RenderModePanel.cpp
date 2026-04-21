@@ -189,9 +189,6 @@ void RenderModePanel::createUi()
     auto *realtimeForm = new QFormLayout(realtimeGroup);
     m_realtimeDenoiser = new QComboBox(realtimeGroup);
     m_realtimeDenoiser->addItems({tr("Off"), tr("SVGF"), tr("NRD (ReLAX)")});
-    m_realtimeDenoiser->setEnabled(false);
-    m_realtimeDenoiser->setToolTip(
-        tr("Realtime denoisers are temporarily disabled in the Qt UI."));
     m_resetRealtimeHistory = new QPushButton(tr("Reset History"), realtimeGroup);
     realtimeForm->addRow(tr("Mode"), m_realtimeDenoiser);
     realtimeForm->addRow(m_resetRealtimeHistory);
@@ -360,7 +357,10 @@ void RenderModePanel::syncFromRenderer()
 
     m_realtimeDenoiser->setCurrentIndex(
         RealtimeDenoiserIndexFromMode(DxrRenderer::GetRealtimeDenoiserMode()));
-    m_realtimeDenoiser->setEnabled(false);
+    const bool dlssActive =
+        DX12Context::g_streamline.IsEnabled() &&
+        DX12Context::g_streamline.GetMode() != StreamlineManager::Mode::Off;
+    m_realtimeDenoiser->setEnabled(dxrMode && !dlssActive);
 
     m_dlssEnabled->setChecked(DX12Context::g_streamline.IsEnabled());
     m_dlssMode->setCurrentIndex(StreamlineModeIndex(DX12Context::g_streamline.GetMode()));

@@ -27,7 +27,16 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     float3 albedo = g_albedoInput.Load(int3(id.xy, 0)).rgb;
     float3 specAlbedo = g_specAlbedoInput.Load(int3(id.xy, 0)).rgb;
     float4 transmissionAccum = g_transmissionAccumulationInput.Load(int3(id.xy, 0));
-    float3 transmissionColor = (transmissionAccum.a > 0.0) ? (transmissionAccum.rgb / transmissionAccum.a) : 0.0;
+    float3 transmissionColor = (transmissionAccum.a > 0.0)
+                                   ? (transmissionAccum.rgb / transmissionAccum.a)
+                                   : float3(0.0f, 0.0f, 0.0f);
+
+    if (stable.a < 0.5) {
+        g_out[id.xy] = float4(max(transmissionColor + stable.rgb,
+                                   float3(0.0f, 0.0f, 0.0f)),
+                              1.0f);
+        return;
+    }
 
     // Re-apply the same albedo clamps used in the demodulation step in the
     // path tracer shader so both round-trips are exact (no energy gain/loss).
@@ -35,7 +44,10 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     float3 demodSpecAlbedo = max(specAlbedo, float3(0.01f, 0.01f, 0.01f));
 
     // Reconstruct: stable emission + denoised irradiance * albedo + denoised specular * F_env.
-    float3 color = max(transmissionColor + stable.rgb + denoisedDiffuse * demodAlbedo + denoisedSpecular * demodSpecAlbedo, 0.0f.xxx);
+    float3 color = max(transmissionColor + stable.rgb +
+                           denoisedDiffuse * demodAlbedo +
+                           denoisedSpecular * demodSpecAlbedo,
+                       float3(0.0f, 0.0f, 0.0f));
 
     // Suppress warnings from unused raw buffers (kept in the root sig for
     // potential future use such as adaptive sharpening).

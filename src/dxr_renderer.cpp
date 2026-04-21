@@ -4908,6 +4908,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       // Streamline flags used by raytracing shaders.
       cam->dlssEnabled = dlssActive ? 1.0f : 0.0f;
       cam->dlssRayReconstruction = rrActive ? 1.0f : 0.0f;
+      cam->nrdEnabled =
+          (!dlssActive && s_realtimeDenoiserMode == RealtimeDenoiserMode::NRD)
+              ? 1.0f
+              : 0.0f;
       asyncCameraSnapshot = *cam;
       hasAsyncCameraSnapshot = true;
 
@@ -5344,25 +5348,28 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         s_streamlineResetHistory || (currSpp == 0) ||
         !s_accumulation.IsAccumulating();
 
-    if (s_realtimeDenoiserMode == RealtimeDenoiserMode::NRD &&
-        s_nrdOutDiffuseUAV) {
-      NrdDenoiser::Get().Denoise(
-          dxrList.Get(),
-          s_nrdDiffuseRadianceHitDistUAV.Get(),
-          s_nrdSpecRadianceHitDistUAV.Get(),
-          s_nrdViewZUAV.Get(),
-          s_nrdNormalRoughnessUAV.Get(),
-          s_nrdMvUAV.Get(),
-          s_nrdOutDiffuseUAV.Get(),
-          s_nrdOutSpecularUAV.Get(),
-          g_cameraData,
-          jitterX, jitterY,
-          resetHistory
-      );
-      s_streamlineResetHistory = false;
+    if (s_realtimeDenoiserMode == RealtimeDenoiserMode::NRD) {
+      const bool nrdResourcesReady =
+          s_nrdDiffuseRadianceHitDistUAV && s_nrdSpecRadianceHitDistUAV &&
+          s_nrdViewZUAV && s_nrdNormalRoughnessUAV && s_nrdMvUAV &&
+          s_nrdOutDiffuseUAV && s_nrdOutSpecularUAV && s_nrdEmissionUAV &&
+          s_albedoUAV && s_specularAlbedoUAV && s_nrdCompositeUAV &&
+          s_nrdCompositePSO && s_nrdCompositeRootSig && s_nrdCompositeHeap &&
+          s_transmissionAccumulation.GetAccumulationBuffer();
+      const bool nrdRan =
+          nrdResourcesReady &&
+          NrdDenoiser::Get().Denoise(
+              dxrList.Get(), s_nrdDiffuseRadianceHitDistUAV.Get(),
+              s_nrdSpecRadianceHitDistUAV.Get(), s_nrdViewZUAV.Get(),
+              s_nrdNormalRoughnessUAV.Get(), s_nrdMvUAV.Get(),
+              s_nrdOutDiffuseUAV.Get(), s_nrdOutSpecularUAV.Get(),
+              g_cameraData, jitterX, jitterY, resetHistory);
 
-      postColor = s_nrdOutDiffuseUAV.Get();
-      if (s_nrdCompositeUAV && s_nrdCompositePSO && s_nrdCompositeRootSig &&
+      if (nrdRan) {
+        s_streamlineResetHistory = false;
+      }
+
+      if (nrdRan && s_nrdCompositeUAV && s_nrdCompositePSO && s_nrdCompositeRootSig &&
           s_nrdCompositeHeap && s_nrdDiffuseRadianceHitDistUAV &&
           s_nrdSpecRadianceHitDistUAV && s_nrdOutDiffuseUAV &&
           s_nrdOutSpecularUAV && s_nrdEmissionUAV &&

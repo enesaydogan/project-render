@@ -26,7 +26,7 @@ public:
     void RegisterResource(const char* name, ID3D12Resource* d3d12Resource);
 
     // Denoise pass
-    void Denoise(ID3D12GraphicsCommandList* cmdList,
+    bool Denoise(ID3D12GraphicsCommandList* cmdList,
                  ID3D12Resource* inDiffuseRadianceHitDist,
                  ID3D12Resource* inSpecRadianceHitDist,
                  ID3D12Resource* inViewZ,

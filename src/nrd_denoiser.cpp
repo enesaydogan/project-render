@@ -105,7 +105,13 @@ void NrdDenoiser::Recreate(uint32_t width, uint32_t height) {
   m_nrdIntegration->RecreateD3D12(integrationDesc, instanceDesc, deviceDesc);
 }
 
-void NrdDenoiser::Denoise(ID3D12GraphicsCommandList *cmdList,
+void NrdDenoiser::RegisterResource(const char *name,
+                                   ID3D12Resource *d3d12Resource) {
+  (void)name;
+  (void)d3d12Resource;
+}
+
+bool NrdDenoiser::Denoise(ID3D12GraphicsCommandList *cmdList,
                           ID3D12Resource *inDiffuseRadianceHitDist,
                           ID3D12Resource *inSpecRadianceHitDist,
                           ID3D12Resource *inViewZ,
@@ -115,8 +121,12 @@ void NrdDenoiser::Denoise(ID3D12GraphicsCommandList *cmdList,
                           const struct CameraCB &cam, float jitterX,
                           float jitterY, bool resetHistory) {
 
-  if (!m_initialized || !m_nrdIntegration)
-    return;
+  if (!m_initialized || !m_nrdIntegration || !cmdList ||
+      !inDiffuseRadianceHitDist || !inSpecRadianceHitDist || !inViewZ ||
+      !inNormalRoughness || !inMv || !outDiffuse || !outSpecular ||
+      m_width == 0 || m_height == 0) {
+    return false;
+  }
   m_nrdIntegration->NewFrame();
 
   nrd::CommonSettings commonSettings = {};
@@ -143,8 +153,9 @@ void NrdDenoiser::Denoise(ID3D12GraphicsCommandList *cmdList,
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
   };
 
-  auto BuildWorldToViewRowMajor = [&](const float pos[3], const float fwdIn[3],
-                                      const float upIn[3], float out[16]) {
+  auto BuildWorldToViewColumnMajor = [&](const float pos[3],
+                                         const float fwdIn[3],
+                                         const float upIn[3], float out[16]) {
     float fwd[3];
     float up[3];
     float right[3];
@@ -173,8 +184,8 @@ void NrdDenoiser::Denoise(ID3D12GraphicsCommandList *cmdList,
     out[15] = 1.0f;
   };
 
-  auto BuildViewToClipRowMajor = [](float fovDeg, float aspect, float nearZ,
-                                    float farZ, float out[16]) {
+  auto BuildViewToClipColumnMajor = [](float fovDeg, float aspect, float nearZ,
+                                       float farZ, float out[16]) {
     const float safeNear = (nearZ > 0.0f) ? nearZ : 0.001f;
     const float safeFar = (farZ > safeNear + 1e-6f) ? farZ : (safeNear + 1.0f);
     const float safeAspect = (aspect > 1e-6f) ? aspect : 1.0f;
@@ -204,12 +215,13 @@ void NrdDenoiser::Denoise(ID3D12GraphicsCommandList *cmdList,
   float worldToViewPrev[16];
   float viewToClip[16];
   float viewToClipPrev[16];
-  BuildWorldToViewRowMajor(cam.pos, cam.forward, cam.up, worldToView);
-  BuildWorldToViewRowMajor(cam.prevPos, cam.prevForward, cam.prevUp,
-                           worldToViewPrev);
-  BuildViewToClipRowMajor(cam.fov, cam.aspect, cam.nearZ, cam.farZ, viewToClip);
-  BuildViewToClipRowMajor(cam.prevFov, cam.prevAspect, cam.prevNearZ,
-                          cam.prevFarZ, viewToClipPrev);
+  BuildWorldToViewColumnMajor(cam.pos, cam.forward, cam.up, worldToView);
+  BuildWorldToViewColumnMajor(cam.prevPos, cam.prevForward, cam.prevUp,
+                              worldToViewPrev);
+  BuildViewToClipColumnMajor(cam.fov, cam.aspect, cam.nearZ, cam.farZ,
+                             viewToClip);
+  BuildViewToClipColumnMajor(cam.prevFov, cam.prevAspect, cam.prevNearZ,
+                             cam.prevFarZ, viewToClipPrev);
   memcpy(commonSettings.viewToClipMatrix, viewToClip, sizeof(viewToClip));
   memcpy(commonSettings.viewToClipMatrixPrev, viewToClipPrev,
          sizeof(viewToClipPrev));
@@ -265,9 +277,7 @@ void NrdDenoiser::Denoise(ID3D12GraphicsCommandList *cmdList,
   // Prepass Gaussian helps gather energy from sparse 1-spp traces.
   // With demodulated irradiance these values preserve texture edges well.
   relaxSettings.diffusePrepassBlurRadius = 16.0f;
-  relaxSettings.specularPrepassBlurRadius =
-      0.0f; // Disabled to prevent glass and low roughness surfaces from
-            // becoming blurry
+  relaxSettings.specularPrepassBlurRadius = 12.0f;
   relaxSettings.minHitDistanceWeight = 0.05f;
   // 5 A-Trous passes = ~32px effective spatial radius; appropriate for 1-spp.
   relaxSettings.atrousIterationNum = 4;
@@ -297,6 +307,8 @@ void NrdDenoiser::Denoise(ID3D12GraphicsCommandList *cmdList,
   // roughness-transition zones.  0.25 is more lenient without losing material
   // boundaries.
   relaxSettings.roughnessFraction = 0.25f;
+  relaxSettings.hitDistanceReconstructionMode =
+      nrd::HitDistanceReconstructionMode::AREA_3X3;
   // Inject extra variance into low-confidence specular reprojection areas so
   // RELAX detects they need more filtering instead of locking onto noisy
   // history.
@@ -345,4 +357,5 @@ void NrdDenoiser::Denoise(ID3D12GraphicsCommandList *cmdList,
   cmdDesc.d3d12CommandList = cmdList;
 
   m_nrdIntegration->DenoiseD3D12(denoisers, 1, cmdDesc, resourceSnapshot);
+  return true;
 }
