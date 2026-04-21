@@ -8,6 +8,14 @@ namespace MaterialSystem {
 
 namespace {
 
+constexpr float kMinDielectricIor = 1.0f;
+constexpr float kMaxDielectricIor = 3.0f;
+constexpr float kMaterialFlagEpsilon = 1.0e-5f;
+
+float ClampDielectricIor(float ior) {
+  return (std::clamp)(ior, kMinDielectricIor, kMaxDielectricIor);
+}
+
 bool IsSupportedPackedTextureFormat(DXGI_FORMAT format) {
   return format == DXGI_FORMAT_R8G8B8A8_UNORM ||
          format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB ||
@@ -261,10 +269,14 @@ void ApplyPreset(Asset::Material &m, int presetIndex) {
 }
 
 bool MaterialAffectsRtStructure(const Asset::Material &material) {
+  const float clampedMetalness = (std::clamp)(material.metalness, 0.0f, 1.0f);
+  const float effectiveTransmission =
+      (std::clamp)(material.transmissionWeight, 0.0f, 1.0f) *
+      (1.0f - clampedMetalness);
   return material.alphaMode != "OPAQUE" ||
          material.diffuseColor[3] < 0.999f ||
          material.opacityTexture >= 0 ||
-         material.transmissionWeight > 0.01f ||
+         effectiveTransmission > kMaterialFlagEpsilon ||
          material.thinWalled > 0.5f;
 }
 
@@ -504,7 +516,7 @@ uint32_t BuildRuntimeMaterialFlags(const Asset::Material &material) {
   if (material.thinWalled > 0.5f) {
     flags |= kRuntimeMaterialFlagThinWalled;
   }
-  if (material.translucency > 0.01f) {
+  if (material.translucency > kMaterialFlagEpsilon) {
     flags |= kRuntimeMaterialFlagTranslucent;
   }
   if (material.triPlanarEnabled > 0.5f) {
@@ -516,7 +528,7 @@ uint32_t BuildRuntimeMaterialFlags(const Asset::Material &material) {
       std::fabs(material.uvOffset[1]) > 1e-5f) {
     flags |= kRuntimeMaterialFlagUvTransform;
   }
-  if (transmission > 0.01f || material.thinWalled > 0.5f) {
+  if (transmission > kMaterialFlagEpsilon || material.thinWalled > 0.5f) {
     flags |= kRuntimeMaterialFlagGlass;
   }
   if (material.doubleSided) {
@@ -578,12 +590,12 @@ void BuildRuntimeDxrMaterialData(const Asset::Material &material,
               sizeof(float) * 4);
   std::memcpy(outCore->emissiveIor, material.emissiveColor,
               sizeof(float) * 3);
-  outCore->emissiveIor[3] = material.ior;
+  outCore->emissiveIor[3] = ClampDielectricIor(material.ior);
 
   const float roughness = (std::clamp)(material.roughness, 0.0f, 1.0f);
   const float metalness = (std::clamp)(material.metalness, 0.0f, 1.0f);
-  float transmission = (std::clamp)(material.transmissionWeight, 0.0f, 1.0f);
-  transmission *= (1.0f - metalness);
+  const float transmission =
+      (std::clamp)(material.transmissionWeight, 0.0f, 1.0f);
   const uint32_t flags = BuildRuntimeMaterialFlags(material);
   float flagsAsFloat = 0.0f;
   std::memcpy(&flagsAsFloat, &flags, sizeof(flags));
@@ -668,7 +680,7 @@ void BuildRuntimeDxrMaterialData(const Asset::Material &material,
   outExtra->volumeParams[1] = (std::max)(0.0f, material.attenuationDistance);
   outExtra->volumeParams[2] = (std::clamp)(material.thicknessTextureAmount,
                                            0.0f, 1.0f);
-  outExtra->volumeParams[3] = (std::max)(1.0f, material.coatIor);
+  outExtra->volumeParams[3] = ClampDielectricIor(material.coatIor);
   outExtra->specularColor[0] =
       (std::clamp)(material.specularColor[0], 0.0f, 1.0f);
   outExtra->specularColor[1] =
@@ -716,7 +728,7 @@ void BuildRuntimeRasterMaterialConstants(
 
   std::memcpy(outConstants->emissiveColor, material.emissiveColor,
               sizeof(float) * 3);
-  outConstants->emissiveColor[3] = material.ior;
+  outConstants->emissiveColor[3] = ClampDielectricIor(material.ior);
 
   outConstants->textureIndices[0] = material.diffuseTexture;
   outConstants->textureIndices[1] = material.opacityTexture;
@@ -791,7 +803,7 @@ void BuildRuntimeRasterMaterialConstants(
   outConstants->volumeParams[0] = (std::max)(0.0f, material.thickness);
   outConstants->volumeParams[1] = (std::max)(0.0f, material.attenuationDistance);
   outConstants->volumeParams[2] = (std::clamp)(material.alphaCutoff, 0.0f, 1.0f);
-  outConstants->volumeParams[3] = (std::max)(1.0f, material.coatIor);
+  outConstants->volumeParams[3] = ClampDielectricIor(material.coatIor);
   outConstants->specularColor[0] =
       (std::clamp)(material.specularColor[0], 0.0f, 1.0f);
   outConstants->specularColor[1] =

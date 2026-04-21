@@ -322,8 +322,7 @@ void MaterialEditorPanel::createUi()
     surfaceForm->addRow(tr("Specular Weight"), m_specularWeight);
     m_specularColorButton = new QPushButton(tr("Pick"), surfaceTab);
     surfaceForm->addRow(tr("Specular Color"), m_specularColorButton);
-    m_ior = CreateSliderControl(0.01, 10.0, 0.01, 3);
-    m_ior->setLogarithmic(true);
+    m_ior = CreateSliderControl(1.0, 3.0, 0.001, 3);
     surfaceForm->addRow(tr("IOR"), m_ior);
 
     auto *transmissionDivider = new QFrame(surfaceTab);
@@ -1429,8 +1428,8 @@ void MaterialEditorPanel::updateQa()
     const Asset::Material &mat = g_loadedMaterials[idx];
 
     const float rough = std::clamp(mat.roughness, 0.0f, 1.0f);
-    const bool isMetal = mat.metalness > 0.5f;
-    const bool isGlass = mat.transmissionWeight > 0.01f;
+    const bool isMetal = mat.metalness > 1.0e-5f;
+    const bool isGlass = mat.transmissionWeight > 1.0e-5f;
     const float aMin = std::min({mat.diffuseColor[0], mat.diffuseColor[1], mat.diffuseColor[2]});
     const float aMax = std::max({mat.diffuseColor[0], mat.diffuseColor[1], mat.diffuseColor[2]});
 
@@ -1438,15 +1437,15 @@ void MaterialEditorPanel::updateQa()
     if (!isMetal && !isGlass && (aMin < 0.02f || aMax > 0.90f)) {
         warnings << tr("Dielectric albedo is outside typical range (avoid near-black/white).");
     }
-    if (rough < 0.02f) {
+    if (rough < 0.001f) {
         warnings << (IsReflectionGlossinessWorkflow(mat)
-                         ? tr("Glossiness > 0.98 can cause fireflies (converted roughness clamps to 0.02).")
-                         : tr("Roughness < 0.02 can cause fireflies (shader clamps to 0.02)."));
+                         ? tr("Glossiness near 1.0 can need more samples for stable sharp highlights.")
+                         : tr("Near-zero roughness can need more samples for stable sharp highlights."));
     }
-    if (mat.coatWeight > 0.01f && mat.coatRoughness < 0.02f) {
+    if (mat.coatWeight > 1.0e-5f && mat.coatRoughness < 0.001f) {
         warnings << tr("Coat roughness very low; may sparkle.");
     }
-    if (mat.transmissionWeight > 0.01f && mat.thinWalled <= 0.5f &&
+    if (mat.transmissionWeight > 1.0e-5f && mat.thinWalled <= 0.5f &&
         mat.thickness <= 1.0e-5f && mat.thicknessTexture < 0) {
         warnings << tr("Solid transmissive material has no thickness; volume tint will be weak.");
     }

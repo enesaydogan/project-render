@@ -436,7 +436,8 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     }
     
     float metalness = saturate(pbr.x);
-    float roughness = max(saturate(pbr.y), 0.02);
+    float roughnessFloor = 0.001;
+    float roughness = max(saturate(pbr.y), roughnessFloor);
     
     // Metal/Roughness Logic: factor * texture
     if (texMR >= 0) {
@@ -450,8 +451,8 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
         SHADER_COUNTER_ADD(SHADER_COUNTER_TEXTURE_SAMPLES, 1);
     }
 
-    // Clamp to reduce fireflies / unstable highlights in archviz scenes
-    roughness = max(roughness, 0.02);
+    // Use a numerical floor only; material roughness should remain artist-linear.
+    roughness = max(roughness, roughnessFloor);
     
     // Attenuate diffuse by transmission (refraction) for dielectrics.
     // This removes the "tint" or "solid" look from glass.
@@ -464,7 +465,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
         DiffuseAlbedo *= saturate(opacity);
     }
     float clearcoat = saturate(arch0.x);
-    float clearcoatRoughness = max(arch0.y, 0.02);
+    float clearcoatRoughness = max(arch0.y, roughnessFloor);
     float grassRootAmount = 0.0;
     float grassDirectContact = 1.0;
     float grassAmbientContact = 1.0;

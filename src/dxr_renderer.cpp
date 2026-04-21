@@ -3132,8 +3132,10 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
 static bool IsMaterialAlphaTestedOrGlass(const Asset::Material &m) {
   const bool alphaTested =
       (m.alphaMode != "OPAQUE") || (m.diffuseColor[3] < 0.999f);
-  const float transmission = m.transmissionWeight;
-  const bool glassLike = (transmission > 0.01f) || (m.thinWalled > 0.5f);
+  const float metalness = (std::clamp)(m.metalness, 0.0f, 1.0f);
+  const float transmission =
+      (std::clamp)(m.transmissionWeight, 0.0f, 1.0f) * (1.0f - metalness);
+  const bool glassLike = (transmission > 1.0e-5f) || (m.thinWalled > 0.5f);
   return alphaTested || glassLike;
 }
 

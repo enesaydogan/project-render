@@ -842,7 +842,7 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
                   .Get("index")
                   .GetNumberAsInt());
         }
-      } else if (mat.transmissionWeight > 0.01f) {
+      } else if (mat.transmissionWeight > 1.0e-5f) {
         // glTF transmission without KHR_materials_volume behaves like thin glass.
         mat.thinWalled = 1.0f;
       }

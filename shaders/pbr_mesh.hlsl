@@ -599,7 +599,7 @@ void BuildShadingBasis(float3 N, float4 tangent, float rotationDegrees,
 float DistributionGGX(float3 N, float3 H, float roughness,
                       float anisotropy, float3 T, float3 B)
 {
-    float a = max(roughness * roughness, 0.02);
+    float a = max(roughness * roughness, 0.001);
     float NdotH = max(dot(N, H), 0.0);
 
     if (abs(anisotropy) <= 1.0e-4 || length(T) <= 1.0e-4 || length(B) <= 1.0e-4) {
@@ -897,11 +897,11 @@ PSOutput PSMainMesh(PSInputMesh input)
     if (length(lightDir.xyz) < 0.001) L = float3(0, 1, 0);
     float3 H = normalize(V + L);
 
-    // Clamp to reduce fireflies / unstable highlights in archviz scenes
-    roughness = max(roughness, 0.02);
+    // Use a numerical floor only; material roughness should remain artist-linear.
+    roughness = max(roughness, 0.001);
 
     float clearcoat = saturate(coatLayerParams.x);
-    float clearcoatRoughness = max(coatLayerParams.y, 0.02);
+    float clearcoatRoughness = max(coatLayerParams.y, 0.001);
     float translucency = saturate(coatLayerParams.w);
     float grassRootAmount = 0.0;
     float grassDirectContact = 1.0;

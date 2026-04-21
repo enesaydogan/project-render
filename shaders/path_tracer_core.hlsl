@@ -197,16 +197,27 @@ float DielectricF0FromIor(float ior)
     return f0 * f0;
 }
 
-bool ShouldResolveSmoothTransmission(float roughness, float metallic,
-                                     float transmission, float ior)
+float GlassScatterAlpha(float roughness)
 {
-    if ((metallic > 0.05) || (roughness > 0.02) || (transmission <= 0.1)) {
+    float r = saturate(roughness);
+    return r * r;
+}
+
+bool IsDeltaGlass(float roughness)
+{
+    return GlassScatterAlpha(roughness) <= 1.5e-6;
+}
+
+bool ShouldResolveDeltaTransmission(float roughness, float transmission,
+                                    float ior)
+{
+    if (!IsDeltaGlass(roughness)) {
         return false;
     }
 
-    // Use lobe dominance instead of a hard transmission cutoff. If the smooth
-    // transmitted lobe carries at least as much energy as the smooth reflected
-    // lobe at normal incidence, resolve guides/primary through transmission.
+    // Only true delta glass uses the clear-window resolve path. Rough glass,
+    // even slightly rough glass, must stay on the transmission sampler so there
+    // is no hidden material threshold in the roughness slider.
     float f0 = DielectricF0FromIor(ior);
     float transmissionLobe = transmission * (1.0 - f0);
     float reflectionLobe = f0;
@@ -229,6 +240,42 @@ bool RefractDeterministic(float3 V, float3 N, float ior, out float3 L)
 
     float cosThetaT = sqrt(1.0 - sin2ThetaT);
     L = normalize(eta * (-V) + (eta * cosTheta - cosThetaT) * outwardN);
+    return true;
+}
+
+bool SampleRoughDielectric(float3 V, float3 N, float roughness, float ior,
+                           float2 uMicrofacet, float uBranch,
+                           out float3 L, out bool refracted)
+{
+    float3 M = SampleGGX(uMicrofacet, N, roughness);
+    if (dot(V, M) < 0.0) {
+        M = -M;
+    }
+
+    float cosTheta = saturate(dot(V, M));
+    float F = FresnelDielectric(cosTheta, ior);
+    if (uBranch < F) {
+        L = normalize(reflect(-V, M));
+        if (dot(L, N) <= 1.0e-5) {
+            L = reflect(-V, N);
+        }
+        refracted = false;
+        return true;
+    }
+
+    if (!RefractDeterministic(V, M, ior, L)) {
+        L = normalize(reflect(-V, M));
+        if (dot(L, N) <= 1.0e-5) {
+            L = reflect(-V, N);
+        }
+        refracted = false;
+        return true;
+    }
+
+    if (dot(L, N) >= -1.0e-5) {
+        L = normalize(-N);
+    }
+    refracted = true;
     return true;
 }
 
@@ -447,13 +494,12 @@ void RayGen()
 
         float4 guideSurface = UnpackPayloadSurface(guideResolvePayload.packedSurface);
         float guideRoughness = max(0.001, guideSurface.x);
-        float guideMetalness = guideSurface.y;
         float guideTransmission = guideSurface.z;
         float guideIor = UnpackPayloadIor(guideResolvePayload.packedIorType);
         bool guideThinWalled = UnpackPayloadThinWalled(guideResolvePayload.packedIorType);
 
-        if (!ShouldResolveSmoothTransmission(guideRoughness, guideMetalness,
-                                            guideTransmission, guideIor)) {
+        if (!ShouldResolveDeltaTransmission(guideRoughness, guideTransmission,
+                                           guideIor)) {
             primaryGuidePayload = guideResolvePayload;
             primaryGuideResolved = true;
             break;
@@ -497,15 +543,14 @@ void RayGen()
 
         float4 resolveSurface = UnpackPayloadSurface(primaryResolvePayload.packedSurface);
         float resolveRoughness = max(0.001, resolveSurface.x);
-        float resolveMetalness = resolveSurface.y;
         float resolveTransmission = resolveSurface.z;
         float resolveIor = UnpackPayloadIor(primaryResolvePayload.packedIorType);
         float3 resolveTransmissionColor =
             UnpackPayloadTransmissionColor(primaryResolvePayload.packedTransmission);
         bool resolveThinWalled = UnpackPayloadThinWalled(primaryResolvePayload.packedIorType);
 
-        if (!ShouldResolveSmoothTransmission(resolveRoughness, resolveMetalness,
-                                            resolveTransmission, resolveIor)) {
+        if (!ShouldResolveDeltaTransmission(resolveRoughness, resolveTransmission,
+                                           resolveIor)) {
             pretracedPrimaryPayload = primaryResolvePayload;
             hasPretracedPrimaryPayload = true;
             break;
@@ -586,7 +631,7 @@ void RayGen()
         float payloadMetalness = payloadSurface.y;
         float payloadTransmission = payloadSurface.z;
         float payloadTranslucency = payloadSurface.w;
-        float payloadCoatRoughness = max(0.02, PayloadGetCoatRoughness(payload));
+        float payloadCoatRoughness = max(0.001, PayloadGetCoatRoughness(payload));
         float payloadIor = UnpackPayloadIor(payload.packedIorType);
         float payloadSpecularWeight = UnpackPayloadSpecularWeight(payload.packedIorType);
         float3 payloadTransmissionColor = UnpackPayloadTransmissionColor(payload.packedTransmission);
@@ -616,8 +661,8 @@ void RayGen()
                 primaryPos = guideOrigin + guideDir * guidePayload.t;
                 primaryNormal = UnpackNormalOctahedron(guidePayload.packedNormal);
                 primaryAlbedo = guideAlbedo;
-                primaryRoughness = max(0.04, guideRoughness); // Increased min roughness for archviz stability
-                primaryIsRefractive = primaryGuideThroughTransmission || (guideTransmission > 0.1f);
+                primaryIsRefractive = primaryGuideThroughTransmission || (guideTransmission > 0.0f);
+                primaryRoughness = guideRoughness;
                 
                 float3 toHit = primaryPos - camPos;
                 primaryViewZ = dot(toHit, forward); 
@@ -912,7 +957,7 @@ void RayGen()
         float3 V = -rayDir;
         float roughness = payloadRoughness;
         float metallic = payloadMetalness;
-        float transmission = saturate(payloadTransmission) * (1.0 - metallic);
+        float transmission = saturate(payloadTransmission);
         float3 diffuseAlbedo = payloadAlbedo * (1.0 - metallic) * (1.0 - transmission);
 
         // 1. Direct Lighting (Next Event Estimation + ReSTIR for 1st bounce)
@@ -1314,10 +1359,11 @@ void RayGen()
         float2 u = float2(next_float(rng), next_float(rng));
 
         // Refraction / Glass logic
-        bool isRefractive = payloadTransmission > 0.01;
+        bool isRefractive = payloadTransmission > 0.0;
         if (isRefractive) {
             float3 glassL;
             bool refracted = false;
+            bool glassIsDelta = IsDeltaGlass(roughness);
 
             // Thin-walled mode: window glass approximation (no bending).
             // For clear architectural window glass, stochastic Fresnel branch
@@ -1327,12 +1373,12 @@ void RayGen()
             bool deterministicThinGlass =
                 payloadThinWalled &&
                 (bounce == 0) &&
-                ShouldResolveSmoothTransmission(roughness, metallic,
-                                                payloadTransmission, payloadIor);
+                ShouldResolveDeltaTransmission(roughness, payloadTransmission,
+                                               payloadIor);
             if (deterministicThinGlass) {
                 refracted = true;
                 glassL = rayDir;
-            } else if (payloadThinWalled) {
+            } else if (glassIsDelta && payloadThinWalled) {
                 float cosTheta = abs(dot(V, N));
                 float F = FresnelDielectric(cosTheta, payloadIor);
                 if (u.x < F) {
@@ -1342,16 +1388,12 @@ void RayGen()
                     refracted = true;
                     glassL = rayDir; // straight-through
                 }
-            } else {
+            } else if (glassIsDelta) {
                 refracted = SampleGlass(V, N, payloadIor, u, glassL);
-            }
-
-            // Rough transmission/reflection blur (cheap approximation)
-            float rgh = max(roughness, 0.0);
-            if (rgh > 0.02) {
-                float cosMax = saturate(1.0 - rgh * rgh);
-                float2 ucone = float2(next_float(rng), next_float(rng));
-                glassL = SampleCone(glassL, cosMax, ucone);
+            } else {
+                SampleRoughDielectric(V, N, roughness, payloadIor,
+                                      u, next_float(rng),
+                                      glassL, refracted);
             }
 
             if (refracted) {
@@ -1375,7 +1417,7 @@ void RayGen()
             // Skip the standard PBR throughput update
             rayDir = nextDir;
             prevPdf = pdf;
-            prevIsDelta = true;
+            prevIsDelta = glassIsDelta;
             continue; 
         } else {
             // Metallic / Diffuse PBR sampling (+ optional diffuse translucency)
@@ -1536,13 +1578,9 @@ void RayGen()
         float2 nrdMv = g_motionVectors[launchIndex.xy];
         if (abs(nrdMv.x) > 1e5 || abs(nrdMv.y) > 1e5) nrdMv = float2(0.0, 0.0);
         float3 nrdNormal = primaryHit ? normalize(primaryNormal) : float3(0.0, 1.0, 0.0);
-        // For NRD's roughness-based edge-stopping, use a floored roughness instead of
-        // the raw per-texel value.  When a metalRoughness texture produces roughness << 0.1
-        // (e.g. polished ceramic spots), those pixels become isolated islands that RELAX
-        // cannot help because no neighbour has roughness within the acceptance window.
-        // A floor of 0.15 prevents this without biasing the actual BRDF (which still uses
-        // the real primaryRoughness for lighting).  High-roughness surfaces are unaffected.
-        float nrdRoughness = primaryHit ? max(saturate(primaryRoughness), 0.15f) : 1.0;
+        // Feed NRD the material roughness. Stability floors here visibly change
+        // polished materials, so keep this as a numeric payload value, not policy.
+        float nrdRoughness = primaryHit ? saturate(primaryRoughness) : 1.0;
         if (primaryGuideThroughTransmission) {
             g_nrdDiffuseRadianceHitDist[launchIndex.xy] = float4(0.0, 0.0, 0.0, 0.0);
             g_nrdSpecRadianceHitDist[launchIndex.xy] = float4(0.0, 0.0, 0.0, 0.0);

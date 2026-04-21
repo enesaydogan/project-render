@@ -542,7 +542,7 @@ void Draw(HWND hwnd, bool &visible) {
             if (ImGui::ColorEdit3("Specular Color", mat.specularColor))
               DxrRenderer::ResetAccumulation();
 
-            if (ImGui::InputFloat("IOR", &mat.ior, 0.01f, 0.1f, "%.3f"))
+            if (ImGui::SliderFloat("IOR", &mat.ior, 1.0f, 3.0f, "%.3f"))
               DxrRenderer::ResetAccumulation();
 
             ImGui::SeparatorText("Transmission / Coat");
@@ -573,7 +573,7 @@ void Draw(HWND hwnd, bool &visible) {
               mat.coatRoughness = coatRoughness;
               DxrRenderer::ResetAccumulation();
             }
-            if (ImGui::InputFloat("Coat IOR", &mat.coatIor, 0.01f, 0.1f, "%.3f"))
+            if (ImGui::SliderFloat("Coat IOR", &mat.coatIor, 1.0f, 3.0f, "%.3f"))
               DxrRenderer::ResetAccumulation();
             if (ImGui::SliderFloat("Translucency", &mat.translucency, 0.0f,
                                    1.0f))
@@ -873,8 +873,8 @@ void Draw(HWND hwnd, bool &visible) {
 
           if (ImGui::BeginTabItem("QA")) {
             float rough = (std::clamp)(mat.roughness, 0.0f, 1.0f);
-            bool isMetal = mat.metalness > 0.5f;
-            bool isGlass = mat.transmissionWeight > 0.01f;
+            bool isMetal = mat.metalness > 1.0e-5f;
+            bool isGlass = mat.transmissionWeight > 1.0e-5f;
             float aMin = fminf(mat.diffuseColor[0],
                                fminf(mat.diffuseColor[1], mat.diffuseColor[2]));
             float aMax = fmaxf(mat.diffuseColor[0],
@@ -885,14 +885,14 @@ void Draw(HWND hwnd, bool &visible) {
                                  "Dielectric albedo is outside typical range "
                                  "(avoid near-black/white).\n");
             }
-            if (rough < 0.02f) {
+            if (rough < 0.001f) {
               ImGui::TextColored(ImVec4(1, 0.65f, 0, 1),
-                                 "Roughness < 0.02 can cause fireflies (shader "
-                                 "clamps to 0.02).\n");
+                                 "Near-zero roughness can need more samples for "
+                                 "stable sharp highlights.\n");
             }
             const float qaCoatWeight = mat.coatWeight;
             const float qaCoatRoughness = mat.coatRoughness;
-            if (qaCoatWeight > 0.01f && qaCoatRoughness < 0.02f) {
+            if (qaCoatWeight > 1.0e-5f && qaCoatRoughness < 0.001f) {
               ImGui::TextColored(
                   ImVec4(1, 0.65f, 0, 1),
               "Coat roughness very low; may sparkle.\n");
