@@ -76,6 +76,7 @@ public:
 
   void SetEnabled(bool enabled);
   bool IsEnabled() const { return m_enabled; }
+  void ReleaseResourcesForMode(Mode mode);
 
   // Debug/inspection helpers (used by UI).
   void SetMotionVectorsJittered(bool jittered);
@@ -146,6 +147,7 @@ private:
   PFun_slSetConstants* m_slSetConstants = nullptr;
   PFun_slEvaluateFeature* m_slEvaluateFeature = nullptr;
   PFun_slGetFeatureFunction* m_slGetFeatureFunction = nullptr;
+  PFun_slFreeResources* m_slFreeResources = nullptr;
 
   // Feature APIs (resolved via slGetFeatureFunction after device set)
   // NOTE: Streamline headers declare PFun_* typedefs in the global namespace

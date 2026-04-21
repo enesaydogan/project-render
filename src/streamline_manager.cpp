@@ -356,6 +356,28 @@ void StreamlineManager::SetQuality(Quality quality) {
   m_cachedOptimalValid = false;
 }
 
+void StreamlineManager::ReleaseResourcesForMode(Mode mode) {
+  if (!m_initialized || !m_deviceSet || !m_slFreeResources) {
+    return;
+  }
+
+  auto freeFeature = [&](sl::Feature feature, const char *name) {
+    const sl::Result res = m_slFreeResources(feature, m_viewport);
+    if (res != sl::Result::eOk && m_mirrorLogsToStderr) {
+      fprintf(stderr,
+              "StreamlineManager: slFreeResources(%s) returned %d=%s\n",
+              name, (int)res, sl::getResultAsStr(res));
+    }
+  };
+
+  if (mode == Mode::DLSS_SuperResolution || mode == Mode::Off) {
+    freeFeature(sl::kFeatureDLSS, "DLSS");
+  }
+  if (mode == Mode::DLSS_RayReconstruction || mode == Mode::Off) {
+    freeFeature(sl::kFeatureDLSS_RR, "DLSS-RR");
+  }
+}
+
 sl::DLSSMode StreamlineManager::ToSlDlssMode(Quality q) const {
   switch (q) {
   case Quality::MaxPerformance:
@@ -823,10 +845,12 @@ bool StreamlineManager::LoadCoreFunctions() {
       GetProcAddress(m_interposerModule, "slEvaluateFeature"));
   m_slGetFeatureFunction = reinterpret_cast<PFun_slGetFeatureFunction *>(
       GetProcAddress(m_interposerModule, "slGetFeatureFunction"));
+  m_slFreeResources = reinterpret_cast<PFun_slFreeResources *>(
+      GetProcAddress(m_interposerModule, "slFreeResources"));
 
   return m_slInit && m_slShutdown && m_slSetD3DDevice &&
          m_slIsFeatureSupported && m_slGetNewFrameToken && m_slSetConstants &&
-         m_slEvaluateFeature && m_slGetFeatureFunction;
+         m_slEvaluateFeature && m_slGetFeatureFunction && m_slFreeResources;
 }
 
 bool StreamlineManager::LoadFeatureFunctions() {

@@ -322,6 +322,8 @@ inline void TransitionResource(ID3D12GraphicsCommandList *cmdList,
                                ID3D12Resource *resource,
                                D3D12_RESOURCE_STATES before,
                                D3D12_RESOURCE_STATES after) {
+  if (!cmdList || !resource)
+    return;
   if (before == after)
     return;
   D3D12_RESOURCE_BARRIER barrier = {};
@@ -2225,6 +2227,25 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
       NeedsDlssOutputBuffer(resourceFeatureMask);
   const bool needsOidnOutputBuffer =
       NeedsOidnOutputBuffer(resourceFeatureMask);
+
+  const uint32_t previousFeatureMask = s_resourceFeatureMask;
+  if (s_streamline && previousFeatureMask != resourceFeatureMask) {
+    const bool wasDlss = (previousFeatureMask & ResourceFeature_Dlss) != 0;
+    const bool wantsDlss = (resourceFeatureMask & ResourceFeature_Dlss) != 0;
+    const bool wasRr =
+        (previousFeatureMask & ResourceFeature_DlssRayReconstruction) != 0;
+    const bool wantsRr =
+        (resourceFeatureMask & ResourceFeature_DlssRayReconstruction) != 0;
+
+    if (wasDlss && (!wantsDlss || wantsRr)) {
+      s_streamline->ReleaseResourcesForMode(
+          StreamlineManager::Mode::DLSS_SuperResolution);
+    }
+    if (wasRr && !wantsRr) {
+      s_streamline->ReleaseResourcesForMode(
+          StreamlineManager::Mode::DLSS_RayReconstruction);
+    }
+  }
 
   // Compute internal render size (DLSS wants us to render smaller and upscale).
   UINT renderW = outW;

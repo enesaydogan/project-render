@@ -2583,7 +2583,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
         bool dlssEnabled = DX12Context::g_streamline.IsEnabled();
         if (ImGui::Checkbox("Enable", &dlssEnabled)) {
           DX12Context::g_streamline.SetEnabled(dlssEnabled);
-          DxrRenderer::ResetStreamlineHistory();
+          DxrRenderer::ResetAccumulation();
           // DLSS uses a different internal render resolution; recreate
           // resources.
           RecreateDxrPipelineSafe(g_windowWidth, g_windowHeight,
@@ -2618,7 +2618,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
             // Default to a more stable jitter amplitude when entering RR.
             DxrRenderer::SetRrJitterScale(0.5f);
           }
-          DxrRenderer::ResetStreamlineHistory();
+          DxrRenderer::ResetAccumulation();
           RecreateDxrPipelineSafe(g_windowWidth, g_windowHeight,
                                   "DLSS mode change");
           uiChanged = true;
@@ -2659,7 +2659,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
           if (qIdx == 4)
             newQ = StreamlineManager::Quality::DLAA;
           DX12Context::g_streamline.SetQuality(newQ);
-          DxrRenderer::ResetStreamlineHistory();
+          DxrRenderer::ResetAccumulation();
           RecreateDxrPipelineSafe(g_windowWidth, g_windowHeight,
                                   "DLSS quality change");
         }

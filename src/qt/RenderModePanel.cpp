@@ -264,7 +264,7 @@ void RenderModePanel::createUi()
             return;
         }
         DX12Context::g_streamline.SetEnabled(enabled);
-        DxrRenderer::ResetStreamlineHistory();
+        DxrRenderer::ResetAccumulation();
         recreateDxrPipeline("Qt DLSS enable toggle");
     });
     connect(m_dlssMode, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
@@ -276,7 +276,7 @@ void RenderModePanel::createUi()
         if (newMode == StreamlineManager::Mode::DLSS_RayReconstruction) {
             DxrRenderer::SetRrJitterScale(0.5f);
         }
-        DxrRenderer::ResetStreamlineHistory();
+        DxrRenderer::ResetAccumulation();
         recreateDxrPipeline("Qt DLSS mode change");
     });
     connect(m_dlssQuality, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
@@ -284,7 +284,7 @@ void RenderModePanel::createUi()
             return;
         }
         DX12Context::g_streamline.SetQuality(StreamlineQualityFromIndex(index));
-        DxrRenderer::ResetStreamlineHistory();
+        DxrRenderer::ResetAccumulation();
         recreateDxrPipeline("Qt DLSS quality change");
     });
     connect(m_rrJitterScale, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
@@ -411,6 +411,7 @@ void RenderModePanel::recreateDxrPipeline(const char *context)
     }
 
     try {
+        DxrRenderer::WaitForAsyncRestirIdle();
         DX12Context::WaitGPUIdle();
         DxrRenderer::CreateRayTracingPipeline(DX12Context::g_windowWidth,
                                               DX12Context::g_windowHeight);
