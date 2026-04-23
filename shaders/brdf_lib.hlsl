@@ -14,7 +14,8 @@ float D_GGX(float NdotH, float roughness) {
 
 // Smith Geometry Function (Height-Correlated)
 float V_SmithCorrelated(float NdotV, float NdotL, float roughness) {
-    float a2 = roughness * roughness;
+    float a = roughness * roughness;
+    float a2 = a * a;
     float GGXV = NdotL * sqrt(max(0.0, a2 + (1.0 - a2) * (NdotV * NdotV)));
     float GGXL = NdotV * sqrt(max(0.0, a2 + (1.0 - a2) * (NdotL * NdotL)));
     return 0.5 / (GGXV + GGXL + 1e-5);
@@ -87,9 +88,21 @@ float PDF_Lambert(float NdotL) {
 
 // Fresnel for dielectrics
 float FresnelDielectric(float cosTheta, float ior) {
-    float r0 = (1.0 - ior) / (1.0 + ior);
-    r0 = r0 * r0;
-    return r0 + (1.0 - r0) * pow5(saturate(1.0 - cosTheta));
+    float etaI = cosTheta > 0.0 ? 1.0 : ior;
+    float etaT = cosTheta > 0.0 ? ior : 1.0;
+    float absCosTheta = abs(cosTheta);
+    
+    float sin2ThetaI = max(0.0, 1.0 - absCosTheta * absCosTheta);
+    float sin2ThetaT = (etaI / etaT) * (etaI / etaT) * sin2ThetaI;
+    
+    if (sin2ThetaT >= 1.0) {
+        return 1.0; // Total Internal Reflection
+    }
+    
+    float cosThetaT = sqrt(1.0 - sin2ThetaT);
+    float Rs = (etaI * absCosTheta - etaT * cosThetaT) / (etaI * absCosTheta + etaT * cosThetaT);
+    float Rp = (etaT * absCosTheta - etaI * cosThetaT) / (etaT * absCosTheta + etaI * cosThetaT);
+    return (Rs * Rs + Rp * Rp) * 0.5;
 }
 
 // DLSS-RR Specular Albedo approximation
@@ -125,7 +138,6 @@ bool SampleGlass(float3 V, float3 N, float ior, float2 u, out float3 L) {
     float cosTheta = dot(V, N);
     float eta = cosTheta > 0.0 ? (1.0 / ior) : ior;
     float3 outwardN = cosTheta > 0.0 ? N : -N;
-    cosTheta = abs(cosTheta);
 
     float F = FresnelDielectric(cosTheta, ior);
 
@@ -135,17 +147,12 @@ bool SampleGlass(float3 V, float3 N, float ior, float2 u, out float3 L) {
         return false;
     } else {
         // Refraction (Snell's Law)
+        cosTheta = abs(cosTheta);
         float sin2ThetaI = max(0.0, 1.0 - cosTheta * cosTheta);
         float sin2ThetaT = eta * eta * sin2ThetaI;
-        if (sin2ThetaT >= 1.0) {
-            // Total Internal Reflection
-            L = reflect(-V, outwardN);
-            return false;
-        } else {
-            float cosThetaT = sqrt(1.0 - sin2ThetaT);
-            L = normalize(eta * (-V) + (eta * cosTheta - cosThetaT) * outwardN);
-            return true;
-        }
+        float cosThetaT = sqrt(max(0.0, 1.0 - sin2ThetaT));
+        L = normalize(eta * (-V) + (eta * cosTheta - cosThetaT) * outwardN);
+        return true;
     }
 }
 

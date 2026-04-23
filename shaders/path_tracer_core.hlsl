@@ -248,12 +248,14 @@ bool SampleRoughDielectric(float3 V, float3 N, float roughness, float ior,
                            out float3 L, out bool refracted)
 {
     float3 M = SampleGGX(uMicrofacet, N, roughness);
-    if (dot(V, M) < 0.0) {
-        M = -M;
+    if (dot(V, M) <= 0.0) {
+        L = normalize(-N);
+        refracted = true;
+        return false;
     }
 
     float cosTheta = saturate(dot(V, M));
-    float F = FresnelDielectric(cosTheta, ior);
+    float F = FresnelDielectric(dot(V, M), ior);
     if (uBranch < F) {
         L = normalize(reflect(-V, M));
         if (dot(L, N) <= 1.0e-5) {
@@ -587,6 +589,24 @@ void RayGen()
             pretracedPrimaryPayload = primaryResolvePayload;
             hasPretracedPrimaryPayload = true;
             break;
+        }
+
+        float3 resolveN = UnpackNormalOctahedron(primaryResolvePayload.packedNormal);
+        float resolveF = FresnelDielectric(dot(-rayDir, resolveN), resolveIor);
+        float3 reflectionColor = F_Schlick(saturate(dot(-rayDir, resolveN)), float3(0.04, 0.04, 0.04));
+        
+        // Stochastically decide if we reflect or transmit for this delta hit
+        float uBranch = next_float(rng);
+        if (uBranch < resolveF) {
+            throughput *= float3(1.0, 1.0, 1.0); // We reflect perfectly
+            rayDir = reflect(rayDir, resolveN);
+            rayOrigin = rayOrigin + rayDir * primaryResolvePayload.t + rayDir * 0.002;
+            currentRayType = RAY_TYPE_SPECULAR;
+            specularBounces++;
+            break; 
+            // We break out of the delta resolve, it's a valid hit and we just bounce.
+            // Oh wait, if we bounce, we enter the main loop. `hasPretracedPrimaryPayload` will be false for the next segment, 
+            // so we just continue the main PT loop from `rayOrigin`.
         }
 
         if (refractiveBounces >= (int)maxRefractiveBounces) {
