@@ -36,7 +36,6 @@ private:
     QCheckBox *m_adaptiveSampling = nullptr;
     QDoubleSpinBox *m_targetNoise = nullptr;
 
-    QCheckBox *m_dlssEnabled = nullptr;
     QComboBox *m_dlssMode = nullptr;
     QComboBox *m_dlssQuality = nullptr;
     QDoubleSpinBox *m_rrJitterScale = nullptr;

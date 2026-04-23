@@ -496,11 +496,6 @@ void RayGen()
 
     float3 accumulatedColor = float3(0, 0, 0);
     float3 throughput = float3(1, 1, 1);
-    float primaryDiffuseSplit = 1.0;
-    float primarySpecularSplit = 0.0;
-    uint primarySampledLobe = 0u; // 0 = none, 1 = diffuse/translucent, 2 = specular/coat, 3 = glass transmission
-    float primaryDiffuseHitDist = 0.0;
-    float primarySpecularSampleHitDist = 0.0;
     float3 primaryGlassReflection = float3(0, 0, 0);
     // True when the primary hit is a transmissive (glass/refractive) surface.
     bool primaryIsRefractive = false;
@@ -715,15 +710,6 @@ void RayGen()
         float3 payloadSpecularColor = UnpackPayloadSpecularColor(payload.packedSpecular);
         bool payloadThinWalled = UnpackPayloadThinWalled(payload.packedIorType);
 
-        if (bounce == 1) {
-            float firstBounceHitDist = (payload.t > 0.0) ? payload.t : farZ;
-            if (currentRayType == RAY_TYPE_DIFFUSE) {
-                primaryDiffuseHitDist = firstBounceHitDist;
-            } else if (currentRayType == RAY_TYPE_REFLECTION) {
-                primarySpecularSampleHitDist = firstBounceHitDist;
-            }
-        }
-
         if (bounce == 0) {
             RayPayload guidePayload = payload;
             if (primaryGuideResolved) {
@@ -759,27 +745,6 @@ void RayGen()
                                                     guideSpecularColor);
                 float NdotV_primary = saturate(dot(primaryNormal, -guideDir));
                 primarySpecAlbedo = EnvBRDFApprox2(F0_primary, primaryRoughness * primaryRoughness, NdotV_primary);
-
-                float coatProbPrimary = 0.0;
-                float specProbPrimary = 0.0;
-                float diffProbPrimary = 0.0;
-                float transProbPrimary = 0.0;
-                float totalProbPrimary = 1.0;
-                ComputeLobeProbabilities(primaryNormal, -guideDir,
-                                         guideAlbedo,
-                                         guideMetalness, guideTransmission,
-                                         guideTranslucency,
-                                         guideIor, guideSpecularWeight,
-                                         guideSpecularColor,
-                                         guideCoatWeight,
-                                         coatProbPrimary, specProbPrimary,
-                                         diffProbPrimary, transProbPrimary,
-                                         totalProbPrimary);
-                float diffuseBucket = primaryIsRefractive ? 0.0 : max(0.0, diffProbPrimary);
-                float specularBucket = primaryIsRefractive ? 0.0 : max(0.0, coatProbPrimary + specProbPrimary);
-                float splitSum = max(diffuseBucket + specularBucket, 1e-5);
-                primaryDiffuseSplit = diffuseBucket / splitSum;
-                primarySpecularSplit = specularBucket / splitSum;
 
                 // Trace a dedicated specular reflection ray to get hit distance for DLSS-RR.
                 if (!primaryIsRefractive &&
@@ -1490,14 +1455,12 @@ void RayGen()
                 nextDir = glassL;
                 f_brdf = max(payloadTransmissionColor, float3(0.0, 0.0, 0.0)) * payloadTransmission;
                 currentRayType = RAY_TYPE_REFRACTION;
-                if (bounce == 0) primarySampledLobe = 3u;
             } else {
                 if (specularBounces >= (int)maxSpecularBounces) break;
                 specularBounces++;
                 nextDir = glassL;
                 f_brdf = float3(1,1,1);
                 currentRayType = RAY_TYPE_REFLECTION;
-                if (bounce == 0) primarySampledLobe = 2u;
             }
             pdf = 1.0;
             rayOrigin = P + nextDir * 0.002; 
@@ -1546,7 +1509,6 @@ void RayGen()
                 rayOrigin = P + N * 0.002;
                 cosineTerm = NdotL;
                 currentRayType = RAY_TYPE_REFLECTION;
-                if (bounce == 0) primarySampledLobe = 2u;
             } else if (pick < (coatProb + specProb)) {
                 // Specular GGX
                 if (specularBounces >= (int)maxSpecularBounces) break;
@@ -1569,7 +1531,6 @@ void RayGen()
                 rayOrigin = P + N * 0.002;
                 cosineTerm = NdotL;
                 currentRayType = RAY_TYPE_REFLECTION;
-                if (bounce == 0) primarySampledLobe = 2u;
             } else if (pick < (coatProb + specProb + diffProb)) {
                 // Diffuse Lambert
                 if (giBounces >= (int)maxGIBounces) break;
@@ -1582,7 +1543,6 @@ void RayGen()
                 rayOrigin = P + N * 0.002;
                 cosineTerm = NdotL;
                 currentRayType = RAY_TYPE_DIFFUSE;
-                if (bounce == 0) primarySampledLobe = 1u;
             } else {
                 // Diffuse translucency (transmission) Lambert
                 if (giBounces >= (int)maxGIBounces) break;
@@ -1595,7 +1555,6 @@ void RayGen()
                 rayOrigin = P - N * 0.002;
                 cosineTerm = NdotL_t;
                 currentRayType = RAY_TYPE_DIFFUSE;
-                if (bounce == 0) primarySampledLobe = 1u;
             }
 
             if (!(pdf > 0.0)) break;

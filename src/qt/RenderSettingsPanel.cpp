@@ -169,7 +169,6 @@ void RenderSettingsPanel::createUi()
 
     auto *dlssGroup = new QGroupBox(tr("Streamline / DLSS"), m_dxrSection);
     auto *dlssForm = new QFormLayout(dlssGroup);
-    m_dlssEnabled = new QCheckBox(tr("Enable"), dlssGroup);
     m_dlssMode = new QComboBox(dlssGroup);
     m_dlssMode->addItems({tr("Off"), tr("DLSS Super Resolution"), tr("DLSS Ray Reconstruction")});
     m_dlssQuality = new QComboBox(dlssGroup);
@@ -178,7 +177,6 @@ void RenderSettingsPanel::createUi()
     m_resetDlssHistory = new QPushButton(tr("Reset DLSS History"), dlssGroup);
     m_renderSizeLabel = new QLabel(dlssGroup);
     m_renderSizeLabel->setWordWrap(true);
-    dlssForm->addRow(m_dlssEnabled);
     dlssForm->addRow(tr("Mode"), m_dlssMode);
     dlssForm->addRow(tr("Quality"), m_dlssQuality);
     dlssForm->addRow(tr("RR Jitter Scale"), m_rrJitterScale);
@@ -273,19 +271,12 @@ void RenderSettingsPanel::createUi()
     connect(m_adaptiveSampling, &QCheckBox::toggled, this, [applyCamera](bool) { applyCamera(); });
     connect(m_targetNoise->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyCamera](double) { applyCamera(); });
 
-    connect(m_dlssEnabled, &QCheckBox::toggled, this, [this](bool enabled) {
-        if (m_syncing) {
-            return;
-        }
-        DX12Context::g_streamline.SetEnabled(enabled);
-        DxrRenderer::ResetAccumulation();
-        recreateDxrPipeline("Qt DLSS enable toggle");
-    });
     connect(m_dlssMode, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
         if (m_syncing) {
             return;
         }
         const auto newMode = StreamlineModeFromIndex(index);
+        DX12Context::g_streamline.SetEnabled(newMode != StreamlineManager::Mode::Off);
         DX12Context::g_streamline.SetMode(newMode);
         if (newMode == StreamlineManager::Mode::DLSS_RayReconstruction) {
             DxrRenderer::SetRrJitterScale(0.5f);
@@ -421,8 +412,10 @@ void RenderSettingsPanel::syncFromRenderer()
     }
     m_targetNoise->setEnabled(m_adaptiveSampling->isChecked());
 
-    m_dlssEnabled->setChecked(DX12Context::g_streamline.IsEnabled());
-    m_dlssMode->setCurrentIndex(StreamlineModeIndex(DX12Context::g_streamline.GetMode()));
+    const auto streamlineMode = DX12Context::g_streamline.IsEnabled()
+                                    ? DX12Context::g_streamline.GetMode()
+                                    : StreamlineManager::Mode::Off;
+    m_dlssMode->setCurrentIndex(StreamlineModeIndex(streamlineMode));
     m_dlssQuality->setCurrentIndex(StreamlineQualityIndex(DX12Context::g_streamline.GetQuality()));
     m_rrJitterScale->setValue(DxrRenderer::GetRrJitterScale());
     const auto rec = DX12Context::g_streamline.GetRecommendedRenderSize(
@@ -433,8 +426,10 @@ void RenderSettingsPanel::syncFromRenderer()
             .arg(rec.renderHeight)
             .arg(DX12Context::g_windowWidth)
             .arg(DX12Context::g_windowHeight));
-    m_rrJitterScale->setEnabled(DX12Context::g_streamline.GetMode() ==
+    m_dlssQuality->setEnabled(streamlineMode != StreamlineManager::Mode::Off);
+    m_rrJitterScale->setEnabled(streamlineMode ==
                                 StreamlineManager::Mode::DLSS_RayReconstruction);
+    m_resetDlssHistory->setEnabled(streamlineMode != StreamlineManager::Mode::Off);
 
     m_finalDenoiser->setCurrentIndex(DenoiserIndexFromMode(DxrRenderer::GetDenoiserMode()));
     m_oidnQuality->setCurrentIndex(static_cast<int>(DxrRenderer::GetOidnQuality()));

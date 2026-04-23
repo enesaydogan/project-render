@@ -40,7 +40,6 @@ private:
     QCheckBox *m_adaptiveSampling = nullptr;
     SliderControl *m_targetNoise = nullptr;
 
-    QCheckBox *m_dlssEnabled = nullptr;
     QComboBox *m_dlssMode = nullptr;
     QComboBox *m_dlssQuality = nullptr;
     SliderControl *m_rrJitterScale = nullptr;
