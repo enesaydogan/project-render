@@ -279,6 +279,16 @@ bool SampleRoughDielectric(float3 V, float3 N, float roughness, float ior,
     return true;
 }
 
+float3 SampleThinGlassTransmission(float3 V, float roughness, float2 u)
+{
+    float3 forwardDir = normalize(-V);
+    if (IsDeltaGlass(roughness)) {
+        return forwardDir;
+    }
+    float safeRoughness = max(saturate(roughness), 0.001);
+    return SampleGGX(u, forwardDir, safeRoughness);
+}
+
 void ComputeLobeProbabilities(float3 N, float3 V,
                               float3 albedo,
                               float metallic, float transmission,
@@ -456,16 +466,16 @@ void RayGen()
     float3 accumulatedColor = float3(0, 0, 0);
     float3 throughput = float3(1, 1, 1);
     float3 nrdStablePrimary = float3(0, 0, 0);
+    float3 nrdPrimaryGlassReflection = float3(0, 0, 0);
     float primaryDiffuseSplit = 1.0;
     float primarySpecularSplit = 0.0;
-    uint primarySampledLobe = 0u; // 0 = none, 1 = diffuse/translucent, 2 = specular/coat
+    uint primarySampledLobe = 0u; // 0 = none, 1 = diffuse/translucent, 2 = specular/coat, 3 = glass transmission
     float primaryDiffuseHitDist = 0.0;
     float primarySpecularSampleHitDist = 0.0;
     bool nrdPrimarySurface = false;
     // True when the primary hit is a transmissive (glass/refractive) surface.
-    // Refracted sky/environment energy must NOT be sent to RELAX — NRD treats it
-    // as specular reflection and heavily suppresses it, making glass appear black.
-    // Instead we route the full final colour through the stable/emission channel.
+    // NRD denoises the front-surface reflected lobe; refracted energy uses a
+    // separate transmission history and is recombined in the composite.
     bool primaryIsRefractive = false;
 
     // Primary hit info for DLSS inputs
@@ -522,7 +532,7 @@ void RayGen()
         bool guideThinWalled = UnpackPayloadThinWalled(guideResolvePayload.packedIorType);
 
         if (!ShouldResolveDeltaTransmission(guideRoughness, guideTransmission,
-                                           guideIor)) {
+                                            guideIor)) {
             primaryGuidePayload = guideResolvePayload;
             primaryGuideResolved = true;
             break;
@@ -573,7 +583,7 @@ void RayGen()
         bool resolveThinWalled = UnpackPayloadThinWalled(primaryResolvePayload.packedIorType);
 
         if (!ShouldResolveDeltaTransmission(resolveRoughness, resolveTransmission,
-                                           resolveIor)) {
+                                            resolveIor)) {
             pretracedPrimaryPayload = primaryResolvePayload;
             hasPretracedPrimaryPayload = true;
             break;
@@ -1402,7 +1412,9 @@ void RayGen()
             nrdPrimarySurface = true;
         }
 
-        accumulatedColor += throughput * (directLighting + indirectLighting + payloadColor);
+        float3 surfaceLightingContribution =
+            throughput * (directLighting + indirectLighting);
+        accumulatedColor += surfaceLightingContribution + throughput * payloadColor;
 
         // 2. Indirect Lighting Ray Generation
         float3 nextDir;
@@ -1425,11 +1437,10 @@ void RayGen()
             bool deterministicThinGlass =
                 payloadThinWalled &&
                 (bounce == 0) &&
-                ShouldResolveDeltaTransmission(roughness, payloadTransmission,
-                                               payloadIor);
+                (payloadTransmission > 0.0);
             if (deterministicThinGlass) {
                 refracted = true;
-                glassL = rayDir;
+                glassL = SampleThinGlassTransmission(V, roughness, u);
             } else if (glassIsDelta && payloadThinWalled) {
                 float cosTheta = abs(dot(V, N));
                 float F = FresnelDielectric(cosTheta, payloadIor);
@@ -1450,16 +1461,25 @@ void RayGen()
 
             if (refracted) {
                 if (refractiveBounces >= (int)maxRefractiveBounces) break;
+                if (bounce == 0) {
+                    if (deterministicThinGlass) {
+                        nrdPrimaryGlassReflection =
+                            max(surfaceLightingContribution, float3(0.0, 0.0, 0.0));
+                    }
+                    accumulatedColor -= surfaceLightingContribution;
+                }
                 refractiveBounces++;
                 nextDir = glassL;
                 f_brdf = max(payloadTransmissionColor, float3(0.0, 0.0, 0.0)) * payloadTransmission;
                 currentRayType = RAY_TYPE_REFRACTION;
+                if (bounce == 0) primarySampledLobe = 3u;
             } else {
                 if (specularBounces >= (int)maxSpecularBounces) break;
                 specularBounces++;
                 nextDir = glassL;
                 f_brdf = float3(1,1,1);
                 currentRayType = RAY_TYPE_REFLECTION;
+                if (bounce == 0) primarySampledLobe = 2u;
             }
             pdf = 1.0;
             rayOrigin = P + nextDir * 0.002; 
@@ -1594,13 +1614,31 @@ void RayGen()
 
     if (nrdEnabled > 0.5) {
         float3 stableColor = max(nrdStablePrimary * primaryTonemapAoFactor, 0.0);
-        bool nrdBypassSurface = primaryIsRefractive;
-        float3 surfaceColor = (nrdPrimarySurface && !nrdBypassSurface)
-                                  ? max(finalColor - stableColor, 0.0)
-                                  : float3(0.0, 0.0, 0.0);
+        bool nrdGlassSurface = primaryIsRefractive;
+        bool nrdGlassReflectionSample =
+            nrdGlassSurface &&
+            ((primarySampledLobe == 2u) ||
+             any(nrdPrimaryGlassReflection > float3(0.0, 0.0, 0.0)));
+        bool nrdBypassSurface = false;
+        float3 surfaceColor = float3(0.0, 0.0, 0.0);
+        if (nrdPrimarySurface) {
+            if (nrdGlassSurface) {
+                surfaceColor = nrdGlassReflectionSample
+                                   ? max((any(nrdPrimaryGlassReflection > float3(0.0, 0.0, 0.0))
+                                              ? (nrdPrimaryGlassReflection * primaryTonemapAoFactor)
+                                              : (finalColor - stableColor)),
+                                         0.0)
+                                   : float3(0.0, 0.0, 0.0);
+            } else {
+                surfaceColor = max(finalColor - stableColor, 0.0);
+            }
+        }
         float diffuseWeight = primaryDiffuseSplit;
         float specularWeight = primarySpecularSplit;
-        if (primarySampledLobe == 1u) {
+        if (nrdGlassSurface) {
+            diffuseWeight = 0.0;
+            specularWeight = 1.0;
+        } else if (primarySampledLobe == 1u) {
             diffuseWeight = 1.0;
             specularWeight = 0.0;
         } else if (primarySampledLobe == 2u) {
@@ -1669,8 +1707,10 @@ void RayGen()
             g_nrdViewZ[launchIndex.xy] = nrdViewZ;
             g_nrdNormalRoughness[launchIndex.xy] = float4(nrdNormal, nrdRoughness);
             g_nrdMv[launchIndex.xy] = nrdMv;
+            float nrdCompositeMode =
+                nrdGlassSurface ? 2.0 : (nrdPrimarySurface ? 1.0 : 0.0);
             g_nrdEmission[launchIndex.xy] = float4(stableColor,
-                                                   nrdPrimarySurface ? 1.0 : 0.0);
+                                                   nrdCompositeMode);
         }
     }
 
@@ -1743,17 +1783,21 @@ void RayGen()
             bool invalidTransHistory =
                 !isfinite(prevTransN) || (prevTransN < 1.0) || any(!isfinite(prevTransSum));
 
+            float3 transmissionSample =
+                (primarySampledLobe == 2u) ? float3(0.0, 0.0, 0.0) : finalColor;
+
             if (accumFrame == 0 || invalidTransHistory) {
-                g_transmissionAccumulation[launchIndex.xy] = float4(finalColor, 1.0);
+                g_transmissionAccumulation[launchIndex.xy] = float4(transmissionSample, 1.0);
                 g_transmissionVariance[launchIndex.xy] = 0.0;
             } else {
                 float safeTransN = max(prevTransN, 1.0);
                 float oldTransMeanLum = dot(prevTransSum / safeTransN, kLumaWeights);
                 float nextTransN = safeTransN + 1.0;
-                float3 nextTransSum = prevTransSum + finalColor;
+                float3 nextTransSum = prevTransSum + transmissionSample;
                 float nextTransMeanLum = dot(nextTransSum / nextTransN, kLumaWeights);
                 float prevTransM2 = g_transmissionVariance[launchIndex.xy];
-                float nextTransM2 = prevTransM2 + (lum - oldTransMeanLum) * (lum - nextTransMeanLum);
+                float transmissionLum = dot(transmissionSample, kLumaWeights);
+                float nextTransM2 = prevTransM2 + (transmissionLum - oldTransMeanLum) * (transmissionLum - nextTransMeanLum);
                 if (!isfinite(nextTransM2)) nextTransM2 = 0.0;
                 g_transmissionAccumulation[launchIndex.xy] = float4(nextTransSum, nextTransN);
                 g_transmissionVariance[launchIndex.xy] = max(0.0, nextTransM2);
