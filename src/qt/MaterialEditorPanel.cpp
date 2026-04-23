@@ -14,6 +14,7 @@
 #include "../material_editor.h"
 #include "../scene.h"
 
+#include <QScrollArea>
 #include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
@@ -22,6 +23,7 @@
 #include <QFrame>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QImage>
 #include <QInputDialog>
 #include <QLabel>
@@ -300,28 +302,91 @@ void MaterialEditorPanel::createUi()
     presetRow->addWidget(m_applyPresetButton);
     inspectorLayout->addLayout(presetRow);
 
-    m_tabs = new QTabWidget(m_inspectorGroup);
+    QScrollArea *scrollArea = new QScrollArea(m_inspectorGroup);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff); // Prevent horizontal clip issues
 
-    auto *surfaceTab = new QWidget(m_tabs);
+    m_tabs = new QTabWidget(scrollArea);
+
+    auto createTextureSlot = [this](TextureSlot slot) {
+        auto *group = new QWidget(this);
+        auto *layout = new QHBoxLayout(group);
+        layout->setContentsMargins(0, 0, 0, 0);
+
+        auto *combo = new QComboBox(group);
+        combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        combo->setMinimumContentsLength(6);
+        combo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+
+        auto *amount = CreateSliderControl(0.0, 1.0, 0.01, 3);
+        
+        auto *loadButton = new QPushButton(tr("Dir"), group);
+        auto *clearButton = new QPushButton(tr("X"), group);
+        loadButton->setFixedWidth(30);
+        clearButton->setFixedWidth(24);
+
+        layout->addWidget(combo, 1);
+        layout->addWidget(amount, 1);
+        layout->addWidget(loadButton);
+        layout->addWidget(clearButton);
+
+        m_textureSlots[slot].group = group;
+        m_textureSlots[slot].combo = combo;
+        m_textureSlots[slot].amount = amount;
+        m_textureSlots[slot].loadButton = loadButton;
+        m_textureSlots[slot].clearButton = clearButton;
+    };
+
+    createTextureSlot(Albedo);
+    createTextureSlot(Opacity);
+    createTextureSlot(PackedMetalRough);
+    createTextureSlot(Metalness);
+    createTextureSlot(RoughnessGlossiness);
+    createTextureSlot(Normal);
+    createTextureSlot(CoatNormal);
+    createTextureSlot(Occlusion);
+    createTextureSlot(Emissive);
+    createTextureSlot(SpecularColor);
+    createTextureSlot(Thickness);
+
+    auto *surfaceScroll = new QScrollArea(m_tabs);
+    surfaceScroll->setWidgetResizable(true);
+    surfaceScroll->setFrameShape(QFrame::NoFrame);
+    auto *surfaceTab = new QWidget(surfaceScroll);
     auto *surfaceForm = new QFormLayout(surfaceTab);
+    
     m_baseColorButton = new QPushButton(tr("Pick"), surfaceTab);
     surfaceForm->addRow(tr("Base Color"), m_baseColorButton);
+    surfaceForm->addRow(tr(" Albedo Tex"), m_textureSlots[Albedo].group);
+
     m_workflowCombo = new QComboBox(surfaceTab);
     m_workflowCombo->addItems({
         tr("Metalness / Roughness"),
         tr("Reflection / Glossiness"),
     });
     surfaceForm->addRow(tr("Workflow"), m_workflowCombo);
+
     m_roughnessSurfaceLabel = new QLabel(tr("Roughness"), surfaceTab);
     m_roughness = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(m_roughnessSurfaceLabel, m_roughness);
+    surfaceForm->addRow(tr(" Rough Tex"), m_textureSlots[RoughnessGlossiness].group);
+
     m_secondarySurfaceLabel = new QLabel(tr("Metalness"), surfaceTab);
     m_metalness = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(m_secondarySurfaceLabel, m_metalness);
+    surfaceForm->addRow(tr(" Metal Tex"), m_textureSlots[Metalness].group);
+    surfaceForm->addRow(tr(" PBR Tex"), m_textureSlots[PackedMetalRough].group);
+
+    surfaceForm->addRow(tr(" Normal Tex"), m_textureSlots[Normal].group);
+    surfaceForm->addRow(tr(" Ambient Occlusion"), m_textureSlots[Occlusion].group);
+
     m_specularWeight = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(tr("Specular Weight"), m_specularWeight);
     m_specularColorButton = new QPushButton(tr("Pick"), surfaceTab);
     surfaceForm->addRow(tr("Specular Color"), m_specularColorButton);
+    surfaceForm->addRow(tr(" Specular Tex"), m_textureSlots[SpecularColor].group);
+
     m_ior = CreateSliderControl(1.0, 3.0, 0.001, 3);
     surfaceForm->addRow(tr("IOR"), m_ior);
 
@@ -334,30 +399,40 @@ void MaterialEditorPanel::createUi()
     surfaceForm->addRow(tr("Transmission"), m_transmission);
     m_transmissionColorButton = new QPushButton(tr("Pick"), surfaceTab);
     surfaceForm->addRow(tr("Transmission Color"), m_transmissionColorButton);
+    
     m_thickness = CreateSliderControl(0.0, 1.0, 0.001, 4);
     surfaceForm->addRow(tr("Thickness"), m_thickness);
+    surfaceForm->addRow(tr(" Thickness Tex"), m_textureSlots[Thickness].group);
+
     m_attenuationDistance = CreateSliderControl(0.0, 100.0, 0.01, 3);
     surfaceForm->addRow(tr("Attenuation Dist"), m_attenuationDistance);
+    
     m_coatWeight = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(tr("Coat"), m_coatWeight);
     m_coatRoughness = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(tr("Coat Roughness"), m_coatRoughness);
     m_coatIor = CreateSliderControl(1.0, 3.0, 0.01, 3);
     surfaceForm->addRow(tr("Coat IOR"), m_coatIor);
+    surfaceForm->addRow(tr(" Coat Normal Tex"), m_textureSlots[CoatNormal].group);
+
     m_translucency = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(tr("Translucency"), m_translucency);
+    
     m_anisotropy = CreateSliderControl(-1.0, 1.0, 0.01, 3);
     surfaceForm->addRow(tr("Anisotropy"), m_anisotropy);
     m_anisotropyRotation = CreateSliderControl(0.0, 360.0, 1.0, 1);
     surfaceForm->addRow(tr("Aniso Rotation"), m_anisotropyRotation);
+    
     m_sheenWeight = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(tr("Sheen"), m_sheenWeight);
     m_sheenColorButton = new QPushButton(tr("Pick"), surfaceTab);
     surfaceForm->addRow(tr("Sheen Color"), m_sheenColorButton);
+    
     m_thinWalled = new QCheckBox(tr("Thin Walled"), surfaceTab);
     surfaceForm->addRow(m_thinWalled);
 
-    m_tabs->addTab(surfaceTab, tr("Surface"));
+    surfaceScroll->setWidget(surfaceTab);
+    m_tabs->addTab(surfaceScroll, tr("Surface"));
 
     auto *grassTab = new QWidget(m_tabs);
     auto *grassLayout = new QVBoxLayout(grassTab);
@@ -382,83 +457,6 @@ void MaterialEditorPanel::createUi()
     grassLayout->addStretch(1);
     m_tabs->addTab(grassTab, tr("Grass"));
 
-    auto *texturesTab = new QWidget(m_tabs);
-    auto *texturesLayout = new QVBoxLayout(texturesTab);
-    texturesLayout->setSpacing(8);
-
-    auto createTextureSlot = [this, texturesLayout](TextureSlot slot, const QString &title) {
-        auto *group = new QWidget(this);
-        group->setStyleSheet(QStringLiteral("QWidget { background: #232325; border-radius: 6px; } QLabel { background: transparent; } QPushButton { padding: 4px; }"));
-        
-        auto *groupLayout = new QGridLayout(group);
-        groupLayout->setContentsMargins(8, 8, 8, 8);
-        groupLayout->setSpacing(6);
-
-        auto *previewLabel = new QLabel(tr("None"), group);
-        previewLabel->setAlignment(Qt::AlignCenter);
-        previewLabel->setFixedSize(72, 72);
-        previewLabel->setStyleSheet(QStringLiteral("color:#777;background:#1a1a1a; border-radius: 4px;"));
-        groupLayout->addWidget(previewLabel, 0, 0, 3, 1);
-
-        auto *titleLabel = new QLabel(title, group);
-        titleLabel->setStyleSheet(QStringLiteral("font-weight: 600; color: #007acc;"));
-        groupLayout->addWidget(titleLabel, 0, 1);
-
-        auto *infoLabel = new QLabel(tr("-"), group);
-        infoLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        infoLabel->setStyleSheet(QStringLiteral("color: #777; font-size: 11px;"));
-        groupLayout->addWidget(infoLabel, 0, 2);
-
-        auto *combo = new QComboBox(group);
-        combo->setSizeAdjustPolicy(QComboBox::AdjustToContentsOnFirstShow);
-        groupLayout->addWidget(combo, 1, 1, 1, 2);
-
-        auto *controlsLayout = new QHBoxLayout();
-        controlsLayout->setSpacing(4);
-        
-        auto *amount = CreateSliderControl(0.0, 1.0, 0.01, 3);
-        controlsLayout->addWidget(amount, 1);
-        
-        auto *loadButton = new QPushButton(tr("Load"), group);
-        auto *clearButton = new QPushButton(tr("Clear"), group);
-        auto *editButton = new QPushButton(tr("Id"), group);
-        loadButton->setFixedWidth(46);
-        clearButton->setFixedWidth(46);
-        editButton->setFixedWidth(36);
-        
-        controlsLayout->addWidget(loadButton);
-        controlsLayout->addWidget(clearButton);
-        controlsLayout->addWidget(editButton);
-        
-        groupLayout->addLayout(controlsLayout, 2, 1, 1, 2);
-
-        texturesLayout->addWidget(group);
-
-        m_textureSlots[slot].group = group;
-        m_textureSlots[slot].previewLabel = previewLabel;
-        m_textureSlots[slot].label = titleLabel;
-        m_textureSlots[slot].combo = combo;
-        m_textureSlots[slot].amount = amount;
-        m_textureSlots[slot].clearButton = clearButton;
-        m_textureSlots[slot].loadButton = loadButton;
-        m_textureSlots[slot].editButton = editButton;
-        m_textureSlots[slot].infoLabel = infoLabel;
-    };
-
-    createTextureSlot(Albedo, tr("Albedo"));
-    createTextureSlot(Opacity, tr("Opacity"));
-    createTextureSlot(PackedMetalRough, tr("Packed Metal / Roughness (Legacy)"));
-    createTextureSlot(Metalness, tr("Metalness"));
-    createTextureSlot(RoughnessGlossiness, tr("Roughness"));
-    createTextureSlot(Normal, tr("Normal"));
-    createTextureSlot(CoatNormal, tr("Coat Normal"));
-    createTextureSlot(Occlusion, tr("Occlusion"));
-    createTextureSlot(Emissive, tr("Emissive"));
-    createTextureSlot(SpecularColor, tr("Specular Color"));
-    createTextureSlot(Thickness, tr("Thickness"));
-    texturesLayout->addStretch(1);
-
-    m_tabs->addTab(texturesTab, tr("Textures"));
     auto *mappingTab = new QWidget(m_tabs);
     auto *mappingForm = new QFormLayout(mappingTab);
     QWidget *uvScaleWidget = CreateVec2Row(&m_uvScaleX, &m_uvScaleY, 0.0, 1000.0, 0.1, 3);
@@ -496,6 +494,7 @@ void MaterialEditorPanel::createUi()
     emissionForm->addRow(tr("Emissive Color"), m_emissiveColorButton);
     m_emissiveIntensity = CreateSliderControl(0.0, 1000000.0, 1.0, 1);
     emissionForm->addRow(tr("Emissive Intensity"), m_emissiveIntensity);
+    emissionForm->addRow(tr(" Emissive Tex"), m_textureSlots[Emissive].group);
     m_tabs->addTab(emissionTab, tr("Emission"));
 
     auto *flagsTab = new QWidget(m_tabs);
@@ -507,6 +506,7 @@ void MaterialEditorPanel::createUi()
     flagsForm->addRow(tr("Alpha Mode"), m_alphaMode);
     m_alphaCutoff = CreateSliderControl(0.0, 1.0, 0.01, 3);
     flagsForm->addRow(tr("Alpha Cutoff"), m_alphaCutoff);
+    flagsForm->addRow(tr(" Opacity Tex"), m_textureSlots[Opacity].group);
     m_tabs->addTab(flagsTab, tr("Flags"));
 
     auto *qaTab = new QWidget(m_tabs);
@@ -518,7 +518,8 @@ void MaterialEditorPanel::createUi()
     qaLayout->addStretch(1);
     m_tabs->addTab(qaTab, tr("QA"));
 
-    inspectorLayout->addWidget(m_tabs);
+    scrollArea->setWidget(m_tabs);
+    inspectorLayout->addWidget(scrollArea);
     layout->addWidget(m_inspectorGroup);
     layout->addStretch(1);
 
@@ -1114,35 +1115,9 @@ void MaterialEditorPanel::createUi()
                 }
             }
         });
-        connect(widgets.editButton, &QPushButton::clicked, this, [this, slot]() {
-            const int idx = currentMaterialIndex();
-            if (idx < 0) {
-                return;
-            }
-            const Asset::Material &mat = g_loadedMaterials[idx];
-            const int current = textureIndexForSlot(mat, static_cast<TextureSlot>(slot));
-            const int maxIndex = static_cast<int>(g_loadedTextures.size()) - 1;
-            bool ok = false;
-            int value = QInputDialog::getInt(this, tr("Texture Index"),
-                                             tr("Set texture index (-1 for None)"),
-                                             current, -1, std::max(-1, maxIndex), 1, &ok);
-            if (!ok) {
-                return;
-            }
-            applyMaterialChange([this, value, slot](Asset::Material &m) {
-                int newIdx = value;
-                if (newIdx >= 0 && newIdx < static_cast<int>(g_loadedTextures.size()) &&
-                    !g_loadedTextures[newIdx].resource) {
-                    newIdx = -1;
-                }
-                if (newIdx < -1 || newIdx >= static_cast<int>(g_loadedTextures.size())) {
-                    newIdx = -1;
-                }
-                setTextureIndexForSlot(m, static_cast<TextureSlot>(slot), newIdx);
-            });
-        });
     }
 }
+
 void MaterialEditorPanel::refreshMaterials()
 {
     m_refreshQueued = false;
@@ -1502,14 +1477,11 @@ void MaterialEditorPanel::updateTextureOptions()
     }
 
     m_visibleTextureIndices.clear();
-    QStringList options;
-    options << tr("None");
     for (int i = 0; i < static_cast<int>(g_loadedTextures.size()); ++i) {
         if (g_loadedTextures[i].hiddenInEditor) {
             continue;
         }
         m_visibleTextureIndices.push_back(i);
-        options << TextureLabel(g_loadedTextures[i], i);
     }
 
     for (int slot = 0; slot < TextureSlotCount; ++slot) {
@@ -1519,7 +1491,17 @@ void MaterialEditorPanel::updateTextureOptions()
         }
         QSignalBlocker blocker(widgets.combo);
         widgets.combo->clear();
-        widgets.combo->addItems(options);
+        widgets.combo->addItem(tr("None"));
+        for (int i = 0; i < static_cast<int>(m_visibleTextureIndices.size()); ++i) {
+            int texIdx = m_visibleTextureIndices[i];
+            const auto &tex = g_loadedTextures[texIdx];
+            QPixmap preview = createTexturePreview(tex, QSize(24, 24));
+            if (preview.isNull()) {
+                widgets.combo->addItem(TextureLabel(tex, texIdx));
+            } else {
+                widgets.combo->addItem(QIcon(preview), TextureLabel(tex, texIdx));
+            }
+        }
         const int texIdx = textureIndexForSlot(g_loadedMaterials[idx], static_cast<TextureSlot>(slot));
         int comboIndex = visibleComboIndexForTexture(texIdx);
         if (comboIndex < 0 || comboIndex >= widgets.combo->count()) {
@@ -1636,10 +1618,6 @@ void MaterialEditorPanel::updateWorkflowUi(const Asset::Material &mat)
     const bool reflectionWorkflow = IsReflectionGlossinessWorkflow(mat);
     if (m_textureSlots[Metalness].group) {
         m_textureSlots[Metalness].group->setVisible(!reflectionWorkflow);
-    }
-    if (m_textureSlots[RoughnessGlossiness].label) {
-        m_textureSlots[RoughnessGlossiness].label->setText(
-            RoughnessTextureTitleForMaterial(mat));
     }
 }
 
@@ -1762,45 +1740,11 @@ void MaterialEditorPanel::setSelectedMaterial(int materialIndex, bool ensureVisi
 void MaterialEditorPanel::updateTextureSlotUi(TextureSlot slot, const Asset::Material &mat)
 {
     auto &widgets = m_textureSlots[slot];
-    if (!widgets.infoLabel || !widgets.previewLabel || !widgets.amount) {
+    if (!widgets.amount) {
         return;
     }
     const int texIdx = textureIndexForSlot(mat, slot);
     widgets.amount->setValue(MaterialSystem::GetTextureAmount(
         mat, static_cast<MaterialSystem::TextureSlot>(slot)));
     widgets.amount->setEnabled(texIdx >= 0);
-    if (texIdx < 0) {
-        widgets.infoLabel->setText(tr("No texture bound"));
-        widgets.previewLabel->setPixmap(QPixmap());
-        widgets.previewLabel->setText(tr("No Preview"));
-        return;
-    }
-    if (texIdx >= static_cast<int>(g_loadedTextures.size())) {
-        widgets.infoLabel->setText(tr("Texture #%1 (missing)").arg(texIdx));
-        widgets.previewLabel->setPixmap(QPixmap());
-        widgets.previewLabel->setText(tr("Missing"));
-        return;
-    }
-
-    const auto &tex = g_loadedTextures[texIdx];
-    QString info = tr("Texture #%1").arg(texIdx);
-    if (tex.width > 0 && tex.height > 0) {
-        info += tr(" (%1x%2)").arg(tex.width).arg(tex.height);
-    }
-    if (tex.mipLevels > 0) {
-        info += tr(" mips=%1").arg(tex.mipLevels);
-    }
-    if (!tex.resource) {
-        info += tr(" [missing]");
-    }
-    widgets.infoLabel->setText(info);
-
-    const QPixmap preview = createTexturePreview(tex, widgets.previewLabel->size());
-    if (preview.isNull()) {
-        widgets.previewLabel->setPixmap(QPixmap());
-        widgets.previewLabel->setText(tr("No Preview"));
-    } else {
-        widgets.previewLabel->setText(QString());
-        widgets.previewLabel->setPixmap(preview);
-    }
 }

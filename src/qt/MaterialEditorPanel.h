@@ -48,14 +48,10 @@ private:
 
     struct TextureSlotWidgets {
         QWidget *group = nullptr;
-        QLabel *previewLabel = nullptr;
-        QLabel *label = nullptr;
         QComboBox *combo = nullptr;
         SliderControl *amount = nullptr;
         QPushButton *clearButton = nullptr;
         QPushButton *loadButton = nullptr;
-        QPushButton *editButton = nullptr;
-        QLabel *infoLabel = nullptr;
     };
 
     void createUi();

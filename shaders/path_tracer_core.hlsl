@@ -601,7 +601,7 @@ void RayGen()
             throughput *= float3(1.0, 1.0, 1.0); // We reflect perfectly
             rayDir = reflect(rayDir, resolveN);
             rayOrigin = rayOrigin + rayDir * primaryResolvePayload.t + rayDir * 0.002;
-            currentRayType = RAY_TYPE_SPECULAR;
+            currentRayType = RAY_TYPE_REFLECTION;
             specularBounces++;
             break; 
             // We break out of the delta resolve, it's a valid hit and we just bounce.
