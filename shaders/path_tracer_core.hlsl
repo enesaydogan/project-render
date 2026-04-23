@@ -208,6 +208,11 @@ bool IsDeltaGlass(float roughness)
     return GlassScatterAlpha(roughness) <= 1.5e-6;
 }
 
+bool IsDeltaSpecular(float roughness)
+{
+    return GlassScatterAlpha(roughness) <= 1.5e-6;
+}
+
 bool ShouldResolveDeltaTransmission(float roughness, float transmission,
                                     float ior)
 {
@@ -283,12 +288,26 @@ bool SampleRoughDielectric(float3 V, float3 N, float roughness, float ior,
 
 float3 SampleThinGlassTransmission(float3 V, float roughness, float2 u)
 {
-    float3 forwardDir = normalize(-V);
-    if (IsDeltaGlass(roughness)) {
-        return forwardDir;
+    return normalize(-V);
+}
+
+void StabilizeSpecularSample(float3 N, float3 V,
+                             inout float3 H, inout float3 L,
+                             out float NdotL, out float NdotH,
+                             out float VdotH)
+{
+    L = normalize(L);
+    NdotL = saturate(dot(N, L));
+    NdotH = saturate(dot(N, H));
+    VdotH = saturate(dot(V, H));
+
+    if (NdotL <= 1.0e-5 || NdotH <= 1.0e-5 || VdotH <= 1.0e-5) {
+        L = normalize(reflect(-V, N));
+        H = normalize(V + L);
+        NdotL = saturate(dot(N, L));
+        NdotH = saturate(dot(N, H));
+        VdotH = saturate(dot(V, H));
     }
-    float safeRoughness = max(saturate(roughness), 0.001);
-    return SampleGGX(u, forwardDir, safeRoughness);
 }
 
 void ComputeLobeProbabilities(float3 N, float3 V,
@@ -381,6 +400,37 @@ RayPayload InitRayPayload(uint rayType)
     p.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
     p.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
     return p;
+}
+
+float3 TraceGlassReflectionRadiance(float3 P, float3 V, float3 N,
+                                    float3 albedo, float metallic,
+                                    float ior, float specularWeight,
+                                    float3 specularColor)
+{
+    float3 reflectionDir = normalize(reflect(-V, N));
+
+    RayDesc reflectionRay;
+    reflectionRay.Origin = P + reflectionDir * 0.002;
+    reflectionRay.Direction = reflectionDir;
+    reflectionRay.TMin = 0.002;
+    reflectionRay.TMax = 10000.0;
+
+    RayPayload reflectionPayload = InitRayPayload(RAY_TYPE_GI_EVAL);
+    TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0,
+             reflectionRay, reflectionPayload);
+    SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
+    SHADER_COUNTER_ADD(SHADER_COUNTER_SPECULAR_TRACES, 1);
+
+    float cosTheta = abs(dot(V, N));
+    float dielectricF = FresnelDielectric(cosTheta, ior) *
+                        saturate(specularWeight);
+    float3 dielectricReflection = dielectricF * saturate(specularColor);
+    float3 metalReflection =
+        F_Schlick(cosTheta, saturate(albedo));
+    float3 reflectionWeight =
+        lerp(dielectricReflection, metalReflection, saturate(metallic));
+
+    return PayloadGetColor(reflectionPayload) * reflectionWeight;
 }
 
 void WriteNrdBypassInputs(uint2 pixel, float3 stableColor,
@@ -591,24 +641,6 @@ void RayGen()
             break;
         }
 
-        float3 resolveN = UnpackNormalOctahedron(primaryResolvePayload.packedNormal);
-        float resolveF = FresnelDielectric(dot(-rayDir, resolveN), resolveIor);
-        float3 reflectionColor = F_Schlick(saturate(dot(-rayDir, resolveN)), float3(0.04, 0.04, 0.04));
-        
-        // Stochastically decide if we reflect or transmit for this delta hit
-        float uBranch = next_float(rng);
-        if (uBranch < resolveF) {
-            throughput *= float3(1.0, 1.0, 1.0); // We reflect perfectly
-            rayDir = reflect(rayDir, resolveN);
-            rayOrigin = rayOrigin + rayDir * primaryResolvePayload.t + rayDir * 0.002;
-            currentRayType = RAY_TYPE_REFLECTION;
-            specularBounces++;
-            break; 
-            // We break out of the delta resolve, it's a valid hit and we just bounce.
-            // Oh wait, if we bounce, we enter the main loop. `hasPretracedPrimaryPayload` will be false for the next segment, 
-            // so we just continue the main PT loop from `rayOrigin`.
-        }
-
         if (refractiveBounces >= (int)maxRefractiveBounces) {
             pretracedPrimaryPayload = primaryResolvePayload;
             hasPretracedPrimaryPayload = true;
@@ -616,11 +648,28 @@ void RayGen()
         }
 
         float3 resolveP = rayOrigin + rayDir * primaryResolvePayload.t;
+        float3 resolveN = UnpackNormalOctahedron(primaryResolvePayload.packedNormal);
+        float3 resolveV = -rayDir;
+        float resolveMetallic = resolveSurface.y;
+        float resolveSpecularWeight =
+            UnpackPayloadSpecularWeight(primaryResolvePayload.packedIorType);
+        float3 resolveAlbedo =
+            UnpackPayloadAlbedo(primaryResolvePayload.packedAlbedo);
+        float3 resolveSpecularColor =
+            UnpackPayloadSpecularColor(primaryResolvePayload.packedSpecular);
+        float3 resolveReflection =
+            throughput * TraceGlassReflectionRadiance(resolveP, resolveV,
+                                                      resolveN, resolveAlbedo,
+                                                      resolveMetallic,
+                                                      resolveIor,
+                                                      resolveSpecularWeight,
+                                                      resolveSpecularColor);
+        accumulatedColor += resolveReflection;
+        nrdPrimaryGlassReflection += resolveReflection;
+
         throughput *= max(resolveTransmissionColor, float3(0.0, 0.0, 0.0)) * resolveTransmission;
         float3 resolveNextDir = rayDir;
         if (!resolveThinWalled) {
-            float3 resolveN = UnpackNormalOctahedron(primaryResolvePayload.packedNormal);
-            float3 resolveV = -rayDir;
             if (!RefractDeterministic(resolveV, resolveN, resolveIor, resolveNextDir)) {
                 pretracedPrimaryPayload = primaryResolvePayload;
                 hasPretracedPrimaryPayload = true;
@@ -1483,8 +1532,17 @@ void RayGen()
                 if (refractiveBounces >= (int)maxRefractiveBounces) break;
                 if (bounce == 0) {
                     if (deterministicThinGlass) {
+                        float3 reflectedColor =
+                            TraceGlassReflectionRadiance(P, V, N,
+                                                         payloadAlbedo,
+                                                         metallic,
+                                                         payloadIor,
+                                                         payloadSpecularWeight,
+                                                         payloadSpecularColor);
                         nrdPrimaryGlassReflection =
-                            max(surfaceLightingContribution, float3(0.0, 0.0, 0.0));
+                            max(surfaceLightingContribution + reflectedColor,
+                                float3(0.0, 0.0, 0.0));
+                        accumulatedColor += nrdPrimaryGlassReflection;
                     }
                     accumulatedColor -= surfaceLightingContribution;
                 }
@@ -1528,16 +1586,20 @@ void RayGen()
 
             float pick = next_float(rng) * totalProb;
             float cosineTerm = 1.0;
+            bool sampledDelta = false;
 
             if (pick < coatProb) {
                 if (specularBounces >= (int)maxSpecularBounces) break;
                 specularBounces++;
+                sampledDelta = IsDeltaSpecular(payloadCoatRoughness);
 
                 float3 H = SampleGGX(u, N, payloadCoatRoughness);
                 nextDir = reflect(-V, H);
-                float NdotL = saturate(dot(N, nextDir));
-                float NdotH = saturate(dot(N, H));
-                float VdotH = saturate(dot(V, H));
+                float NdotL;
+                float NdotH;
+                float VdotH;
+                StabilizeSpecularSample(N, V, H, nextDir,
+                                         NdotL, NdotH, VdotH);
 
                 pdf = (PDF_GGX(NdotH, VdotH, payloadCoatRoughness) * coatProb) / totalProb;
                 f_brdf = EvaluateCoatSpecular(N, V, nextDir, payloadCoatRoughness);
@@ -1549,12 +1611,15 @@ void RayGen()
                 // Specular GGX
                 if (specularBounces >= (int)maxSpecularBounces) break;
                 specularBounces++;
+                sampledDelta = IsDeltaSpecular(roughness);
 
                 float3 H = SampleGGX(u, N, roughness);
                 nextDir = reflect(-V, H);
-                float NdotL = saturate(dot(N, nextDir));
-                float NdotH = saturate(dot(N, H));
-                float VdotH = saturate(dot(V, H));
+                float NdotL;
+                float NdotH;
+                float VdotH;
+                StabilizeSpecularSample(N, V, H, nextDir,
+                                         NdotL, NdotH, VdotH);
                 float3 F0 = ComputeSurfaceF0(payloadAlbedo, metallic, payloadIor,
                                              payloadSpecularWeight,
                                              payloadSpecularColor);
@@ -1597,7 +1662,7 @@ void RayGen()
             throughput *= (f_brdf * cosineTerm) / pdf;
             rayDir = nextDir;
             prevPdf = pdf;
-            prevIsDelta = false;
+            prevIsDelta = sampledDelta;
             
             // Russian Roulette (Albedo-guided)
             if (bounce >= 2) {
@@ -1803,8 +1868,13 @@ void RayGen()
             bool invalidTransHistory =
                 !isfinite(prevTransN) || (prevTransN < 1.0) || any(!isfinite(prevTransSum));
 
+            float3 glassReflectionForTransmission =
+                nrdPrimaryGlassReflection * primaryTonemapAoFactor;
             float3 transmissionSample =
-                (primarySampledLobe == 2u) ? float3(0.0, 0.0, 0.0) : finalColor;
+                (primarySampledLobe == 2u)
+                    ? float3(0.0, 0.0, 0.0)
+                    : max(finalColor - glassReflectionForTransmission,
+                          float3(0.0, 0.0, 0.0));
 
             if (accumFrame == 0 || invalidTransHistory) {
                 g_transmissionAccumulation[launchIndex.xy] = float4(transmissionSample, 1.0);

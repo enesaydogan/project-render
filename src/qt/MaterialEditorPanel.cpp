@@ -14,7 +14,6 @@
 #include "../material_editor.h"
 #include "../scene.h"
 
-#include <QScrollArea>
 #include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
@@ -31,6 +30,7 @@
 #include <QListWidget>
 #include <QPixmap>
 #include <QPushButton>
+#include <QStyle>
 #include <QStringList>
 #include <QTabWidget>
 #include <QMetaObject>
@@ -261,6 +261,11 @@ void MaterialEditorPanel::createUi()
     auto *inspectorLayout = new QVBoxLayout(m_inspectorGroup);
 
     auto *infoForm = new QFormLayout();
+    infoForm->setRowWrapPolicy(QFormLayout::WrapAllRows);
+    infoForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    infoForm->setContentsMargins(0, 0, 0, 0);
+    infoForm->setHorizontalSpacing(6);
+    infoForm->setVerticalSpacing(4);
     m_materialNameEdit = new QLineEdit(m_inspectorGroup);
     m_materialNameEdit->setMaxLength(63);
     m_materialIdLabel = new QLabel(m_inspectorGroup);
@@ -302,34 +307,68 @@ void MaterialEditorPanel::createUi()
     presetRow->addWidget(m_applyPresetButton);
     inspectorLayout->addLayout(presetRow);
 
-    QScrollArea *scrollArea = new QScrollArea(m_inspectorGroup);
-    scrollArea->setWidgetResizable(true);
-    scrollArea->setFrameShape(QFrame::NoFrame);
-    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff); // Prevent horizontal clip issues
+    m_tabs = new QTabWidget(m_inspectorGroup);
 
-    m_tabs = new QTabWidget(scrollArea);
-
-    auto createTextureSlot = [this](TextureSlot slot) {
+    auto createTextureSlot = [this](TextureSlot slot, const QString &title) {
         auto *group = new QWidget(this);
-        auto *layout = new QHBoxLayout(group);
-        layout->setContentsMargins(0, 0, 0, 0);
+        auto *mainLayout = new QVBoxLayout(group);
+        mainLayout->setContentsMargins(0, 4, 0, 4);
+        mainLayout->setSpacing(4);
+
+        auto *loadButton = new QPushButton(group);
+        auto *clearButton = new QPushButton(group);
+        loadButton->setIcon(group->style()->standardIcon(QStyle::SP_DialogOpenButton));
+        clearButton->setIcon(group->style()->standardIcon(QStyle::SP_DialogResetButton));
+        loadButton->setToolTip(tr("Load texture"));
+        clearButton->setToolTip(tr("Clear texture"));
+        loadButton->setFixedSize(22, 22);
+        clearButton->setFixedSize(22, 22);
+
+        if (!title.isEmpty()) {
+            auto *titleRow = new QHBoxLayout();
+            titleRow->setContentsMargins(0, 0, 0, 0);
+            titleRow->setSpacing(4);
+
+            auto *titleLabel = new QLabel(title, group);
+            titleLabel->setWordWrap(true);
+            titleLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+            titleLabel->setStyleSheet(QStringLiteral("color: #999; font-weight: bold;"));
+            titleRow->addWidget(titleLabel, 1);
+            titleRow->addWidget(loadButton);
+            titleRow->addWidget(clearButton);
+            mainLayout->addLayout(titleRow);
+        } else {
+            auto *buttonRow = new QHBoxLayout();
+            buttonRow->setContentsMargins(0, 0, 0, 0);
+            buttonRow->addStretch(1);
+            buttonRow->addWidget(loadButton);
+            buttonRow->addWidget(clearButton);
+            mainLayout->addLayout(buttonRow);
+        }
+
+        auto *controlsLayout = new QHBoxLayout();
+        controlsLayout->setContentsMargins(0, 0, 0, 0);
+        controlsLayout->setSpacing(3);
 
         auto *combo = new QComboBox(group);
         combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-        combo->setMinimumContentsLength(6);
-        combo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        combo->setMinimumContentsLength(1);
+        combo->setFixedWidth(76);
+        combo->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
 
         auto *amount = CreateSliderControl(0.0, 1.0, 0.01, 3);
-        
-        auto *loadButton = new QPushButton(tr("Dir"), group);
-        auto *clearButton = new QPushButton(tr("X"), group);
-        loadButton->setFixedWidth(30);
-        clearButton->setFixedWidth(24);
+        amount->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        amount->setMinimumWidth(0);
+        amount->spinBox()->setMinimumWidth(52);
+        amount->spinBox()->setMaximumWidth(60);
+        if (auto *slider = amount->findChild<QSlider *>()) {
+            slider->setMinimumWidth(40);
+        }
 
-        layout->addWidget(combo, 1);
-        layout->addWidget(amount, 1);
-        layout->addWidget(loadButton);
-        layout->addWidget(clearButton);
+        controlsLayout->addWidget(combo);
+        controlsLayout->addWidget(amount, 1);
+
+        mainLayout->addLayout(controlsLayout);
 
         m_textureSlots[slot].group = group;
         m_textureSlots[slot].combo = combo;
@@ -338,27 +377,28 @@ void MaterialEditorPanel::createUi()
         m_textureSlots[slot].clearButton = clearButton;
     };
 
-    createTextureSlot(Albedo);
-    createTextureSlot(Opacity);
-    createTextureSlot(PackedMetalRough);
-    createTextureSlot(Metalness);
-    createTextureSlot(RoughnessGlossiness);
-    createTextureSlot(Normal);
-    createTextureSlot(CoatNormal);
-    createTextureSlot(Occlusion);
-    createTextureSlot(Emissive);
-    createTextureSlot(SpecularColor);
-    createTextureSlot(Thickness);
+    createTextureSlot(Albedo, tr("Albedo Texture"));
+    createTextureSlot(Opacity, tr("Opacity Texture"));
+    createTextureSlot(PackedMetalRough, tr("Packed PBR Texture"));
+    createTextureSlot(Metalness, tr("Metalness Texture"));
+    createTextureSlot(RoughnessGlossiness, tr("Roughness / Glossiness Texture"));
+    createTextureSlot(Normal, tr("Normal Map Texture"));
+    createTextureSlot(CoatNormal, tr("Coat Normal Map"));
+    createTextureSlot(Occlusion, tr("Ambient Occlusion Texture"));
+    createTextureSlot(Emissive, tr("Emissive Texture"));
+    createTextureSlot(SpecularColor, tr("Specular Color Texture"));
+    createTextureSlot(Thickness, tr("Thickness Texture"));
 
-    auto *surfaceScroll = new QScrollArea(m_tabs);
-    surfaceScroll->setWidgetResizable(true);
-    surfaceScroll->setFrameShape(QFrame::NoFrame);
-    auto *surfaceTab = new QWidget(surfaceScroll);
+    auto *surfaceTab = new QWidget(m_tabs);
     auto *surfaceForm = new QFormLayout(surfaceTab);
+    surfaceForm->setRowWrapPolicy(QFormLayout::WrapAllRows);
+    surfaceForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    surfaceForm->setHorizontalSpacing(6);
+    surfaceForm->setVerticalSpacing(4);
     
     m_baseColorButton = new QPushButton(tr("Pick"), surfaceTab);
     surfaceForm->addRow(tr("Base Color"), m_baseColorButton);
-    surfaceForm->addRow(tr(" Albedo Tex"), m_textureSlots[Albedo].group);
+    surfaceForm->addRow(m_textureSlots[Albedo].group);
 
     m_workflowCombo = new QComboBox(surfaceTab);
     m_workflowCombo->addItems({
@@ -370,22 +410,22 @@ void MaterialEditorPanel::createUi()
     m_roughnessSurfaceLabel = new QLabel(tr("Roughness"), surfaceTab);
     m_roughness = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(m_roughnessSurfaceLabel, m_roughness);
-    surfaceForm->addRow(tr(" Rough Tex"), m_textureSlots[RoughnessGlossiness].group);
+    surfaceForm->addRow(m_textureSlots[RoughnessGlossiness].group);
 
     m_secondarySurfaceLabel = new QLabel(tr("Metalness"), surfaceTab);
     m_metalness = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(m_secondarySurfaceLabel, m_metalness);
-    surfaceForm->addRow(tr(" Metal Tex"), m_textureSlots[Metalness].group);
-    surfaceForm->addRow(tr(" PBR Tex"), m_textureSlots[PackedMetalRough].group);
+    surfaceForm->addRow(m_textureSlots[Metalness].group);
+    surfaceForm->addRow(m_textureSlots[PackedMetalRough].group);
 
-    surfaceForm->addRow(tr(" Normal Tex"), m_textureSlots[Normal].group);
-    surfaceForm->addRow(tr(" Ambient Occlusion"), m_textureSlots[Occlusion].group);
+    surfaceForm->addRow(m_textureSlots[Normal].group);
+    surfaceForm->addRow(m_textureSlots[Occlusion].group);
 
     m_specularWeight = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(tr("Specular Weight"), m_specularWeight);
     m_specularColorButton = new QPushButton(tr("Pick"), surfaceTab);
     surfaceForm->addRow(tr("Specular Color"), m_specularColorButton);
-    surfaceForm->addRow(tr(" Specular Tex"), m_textureSlots[SpecularColor].group);
+    surfaceForm->addRow(m_textureSlots[SpecularColor].group);
 
     m_ior = CreateSliderControl(1.0, 3.0, 0.001, 3);
     surfaceForm->addRow(tr("IOR"), m_ior);
@@ -402,7 +442,7 @@ void MaterialEditorPanel::createUi()
     
     m_thickness = CreateSliderControl(0.0, 1.0, 0.001, 4);
     surfaceForm->addRow(tr("Thickness"), m_thickness);
-    surfaceForm->addRow(tr(" Thickness Tex"), m_textureSlots[Thickness].group);
+    surfaceForm->addRow(m_textureSlots[Thickness].group);
 
     m_attenuationDistance = CreateSliderControl(0.0, 100.0, 0.01, 3);
     surfaceForm->addRow(tr("Attenuation Dist"), m_attenuationDistance);
@@ -413,7 +453,7 @@ void MaterialEditorPanel::createUi()
     surfaceForm->addRow(tr("Coat Roughness"), m_coatRoughness);
     m_coatIor = CreateSliderControl(1.0, 3.0, 0.01, 3);
     surfaceForm->addRow(tr("Coat IOR"), m_coatIor);
-    surfaceForm->addRow(tr(" Coat Normal Tex"), m_textureSlots[CoatNormal].group);
+    surfaceForm->addRow(m_textureSlots[CoatNormal].group);
 
     m_translucency = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(tr("Translucency"), m_translucency);
@@ -431,8 +471,7 @@ void MaterialEditorPanel::createUi()
     m_thinWalled = new QCheckBox(tr("Thin Walled"), surfaceTab);
     surfaceForm->addRow(m_thinWalled);
 
-    surfaceScroll->setWidget(surfaceTab);
-    m_tabs->addTab(surfaceScroll, tr("Surface"));
+    m_tabs->addTab(surfaceTab, tr("Surface"));
 
     auto *grassTab = new QWidget(m_tabs);
     auto *grassLayout = new QVBoxLayout(grassTab);
@@ -445,6 +484,11 @@ void MaterialEditorPanel::createUi()
     grassLayout->addWidget(m_grassHint);
 
     auto *grassForm = new QFormLayout();
+    grassForm->setRowWrapPolicy(QFormLayout::WrapAllRows);
+    grassForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    grassForm->setContentsMargins(0, 0, 0, 0);
+    grassForm->setHorizontalSpacing(6);
+    grassForm->setVerticalSpacing(4);
     m_grassColorButton = new QPushButton(tr("Pick"), grassTab);
     grassForm->addRow(tr("Grass Color"), m_grassColorButton);
     m_grassBladeSize = CreateSliderControl(0.05, 5.0, 0.05, 2);
@@ -459,6 +503,10 @@ void MaterialEditorPanel::createUi()
 
     auto *mappingTab = new QWidget(m_tabs);
     auto *mappingForm = new QFormLayout(mappingTab);
+    mappingForm->setRowWrapPolicy(QFormLayout::WrapAllRows);
+    mappingForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    mappingForm->setHorizontalSpacing(6);
+    mappingForm->setVerticalSpacing(4);
     QWidget *uvScaleWidget = CreateVec2Row(&m_uvScaleX, &m_uvScaleY, 0.0, 1000.0, 0.1, 3);
     mappingForm->addRow(tr("UV Scale"), uvScaleWidget);
     QWidget *uvOffsetWidget = CreateVec2Row(&m_uvOffsetX, &m_uvOffsetY, -10000.0, 10000.0, 0.1, 3);
@@ -490,15 +538,23 @@ void MaterialEditorPanel::createUi()
 
     auto *emissionTab = new QWidget(m_tabs);
     auto *emissionForm = new QFormLayout(emissionTab);
+    emissionForm->setRowWrapPolicy(QFormLayout::WrapAllRows);
+    emissionForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    emissionForm->setHorizontalSpacing(6);
+    emissionForm->setVerticalSpacing(4);
     m_emissiveColorButton = new QPushButton(tr("Pick"), emissionTab);
     emissionForm->addRow(tr("Emissive Color"), m_emissiveColorButton);
     m_emissiveIntensity = CreateSliderControl(0.0, 1000000.0, 1.0, 1);
     emissionForm->addRow(tr("Emissive Intensity"), m_emissiveIntensity);
-    emissionForm->addRow(tr(" Emissive Tex"), m_textureSlots[Emissive].group);
+    emissionForm->addRow(m_textureSlots[Emissive].group);
     m_tabs->addTab(emissionTab, tr("Emission"));
 
     auto *flagsTab = new QWidget(m_tabs);
     auto *flagsForm = new QFormLayout(flagsTab);
+    flagsForm->setRowWrapPolicy(QFormLayout::WrapAllRows);
+    flagsForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    flagsForm->setHorizontalSpacing(6);
+    flagsForm->setVerticalSpacing(4);
     m_doubleSided = new QCheckBox(tr("Double Sided"), flagsTab);
     flagsForm->addRow(m_doubleSided);
     m_alphaMode = new QComboBox(flagsTab);
@@ -506,7 +562,7 @@ void MaterialEditorPanel::createUi()
     flagsForm->addRow(tr("Alpha Mode"), m_alphaMode);
     m_alphaCutoff = CreateSliderControl(0.0, 1.0, 0.01, 3);
     flagsForm->addRow(tr("Alpha Cutoff"), m_alphaCutoff);
-    flagsForm->addRow(tr(" Opacity Tex"), m_textureSlots[Opacity].group);
+    flagsForm->addRow(m_textureSlots[Opacity].group);
     m_tabs->addTab(flagsTab, tr("Flags"));
 
     auto *qaTab = new QWidget(m_tabs);
@@ -518,8 +574,7 @@ void MaterialEditorPanel::createUi()
     qaLayout->addStretch(1);
     m_tabs->addTab(qaTab, tr("QA"));
 
-    scrollArea->setWidget(m_tabs);
-    inspectorLayout->addWidget(scrollArea);
+    inspectorLayout->addWidget(m_tabs);
     layout->addWidget(m_inspectorGroup);
     layout->addStretch(1);
 

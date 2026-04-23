@@ -39,6 +39,7 @@
 #include <QShortcut>
 #include <QScrollBar>
 #include <QScrollArea>
+#include <QSplitter>
 #include <QToolBar>
 #include <QStatusBar>
 #include <QTimer>
@@ -363,9 +364,19 @@ MainWindow::MainWindow(QWidget *parent)
         }
     }
 
-    // central widget will be the DX12 rendering view
+    // central area is a vertical splitter: render view on top, animation panel below.
     m_view = new DX12View(this);
-    setCentralWidget(m_view);
+    auto *animationPanel = new AnimationPanel(this);
+    animationPanel->setMinimumHeight(170);
+
+    auto *centerSplitter = new QSplitter(Qt::Vertical, this);
+    centerSplitter->setChildrenCollapsible(false);
+    centerSplitter->addWidget(m_view);
+    centerSplitter->addWidget(animationPanel);
+    centerSplitter->setStretchFactor(0, 1);
+    centerSplitter->setStretchFactor(1, 0);
+    centerSplitter->setSizes({760, 220});
+    setCentralWidget(centerSplitter);
 
     createMenus();
     createToolBar();
@@ -545,15 +556,6 @@ void MainWindow::createDocks()
     viewsDock->setAllowedAreas(Qt::AllDockWidgetAreas);
     viewsDock->setWidget(wrapScroll(new ViewsPanel(viewsDock), viewsDock));
     addDockWidget(Qt::RightDockWidgetArea, viewsDock);
-    m_animationDock = new QDockWidget(tr("Animation"), this);
-    m_animationDock->setObjectName(tr("Animation"));
-    m_animationDock->setAllowedAreas(Qt::AllDockWidgetAreas);
-    m_animationDock->setFeatures(QDockWidget::DockWidgetClosable |
-                                 QDockWidget::DockWidgetMovable |
-                                 QDockWidget::DockWidgetFloatable);
-    m_animationDock->setWidget(new AnimationPanel(m_animationDock));
-    addDockWidget(Qt::BottomDockWidgetArea, m_animationDock);
-    m_animationDock->setMinimumHeight(170);
     auto *lightsDock = new QDockWidget(tr("Lights"), this);
     lightsDock->setObjectName(tr("Lights"));
     lightsDock->setAllowedAreas(Qt::AllDockWidgetAreas);

@@ -59,7 +59,6 @@ private:
     QPushButton *m_liveLinkTakeCameraButton = nullptr;
     QFrame *m_statusDivider = nullptr;
     QTimer *m_sceneIoTimer = nullptr;
-    QDockWidget *m_animationDock = nullptr;
     bool m_qtUiHidden = false;
     std::vector<QWidget *> m_hiddenQtUiWidgets;
 };
