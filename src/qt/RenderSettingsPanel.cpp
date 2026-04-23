@@ -46,26 +46,6 @@ bool IsWidgetBeingEdited(QWidget *widget)
            (focus && (focus == widget || widget->isAncestorOf(focus)));
 }
 
-int RealtimeDenoiserIndexFromMode(DxrRenderer::RealtimeDenoiserMode mode)
-{
-    switch (mode) {
-    case DxrRenderer::RealtimeDenoiserMode::SVGF: return 1;
-    case DxrRenderer::RealtimeDenoiserMode::NRD: return 2;
-    default: return 0;
-    }
-}
-
-DxrRenderer::RealtimeDenoiserMode RealtimeDenoiserModeFromIndex(int index)
-{
-    if (index == 1) {
-        return DxrRenderer::RealtimeDenoiserMode::SVGF;
-    }
-    if (index == 2) {
-        return DxrRenderer::RealtimeDenoiserMode::NRD;
-    }
-    return DxrRenderer::RealtimeDenoiserMode::Off;
-}
-
 int DenoiserIndexFromMode(DxrRenderer::DenoiserMode mode)
 {
     switch (mode) {
@@ -187,15 +167,6 @@ void RenderSettingsPanel::createUi()
     pathForm->addRow(tr("Target Noise %"), m_targetNoise);
     dxrLayout->addWidget(pathGroup);
 
-    auto *realtimeGroup = new QGroupBox(tr("Realtime Denoiser"), m_dxrSection);
-    auto *realtimeForm = new QFormLayout(realtimeGroup);
-    m_realtimeDenoiser = new QComboBox(realtimeGroup);
-    m_realtimeDenoiser->addItems({tr("Off"), tr("SVGF"), tr("NRD (ReLAX)")});
-    m_resetRealtimeHistory = new QPushButton(tr("Reset History"), realtimeGroup);
-    realtimeForm->addRow(tr("Mode"), m_realtimeDenoiser);
-    realtimeForm->addRow(m_resetRealtimeHistory);
-    dxrLayout->addWidget(realtimeGroup);
-
     auto *dlssGroup = new QGroupBox(tr("Streamline / DLSS"), m_dxrSection);
     auto *dlssForm = new QFormLayout(dlssGroup);
     m_dlssEnabled = new QCheckBox(tr("Enable"), dlssGroup);
@@ -301,18 +272,6 @@ void RenderSettingsPanel::createUi()
     connect(m_maxSpp->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyCamera](double) { applyCamera(); });
     connect(m_adaptiveSampling, &QCheckBox::toggled, this, [applyCamera](bool) { applyCamera(); });
     connect(m_targetNoise->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyCamera](double) { applyCamera(); });
-
-    connect(m_realtimeDenoiser, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
-        if (m_syncing) {
-            return;
-        }
-        DxrRenderer::SetRealtimeDenoiserMode(RealtimeDenoiserModeFromIndex(index));
-        DxrRenderer::ResetAccumulation();
-        recreateDxrPipeline("Qt realtime denoiser mode change");
-    });
-    connect(m_resetRealtimeHistory, &QPushButton::clicked, this, []() {
-        DxrRenderer::ResetRealtimeDenoiserHistory();
-    });
 
     connect(m_dlssEnabled, &QCheckBox::toggled, this, [this](bool enabled) {
         if (m_syncing) {
@@ -461,13 +420,6 @@ void RenderSettingsPanel::syncFromRenderer()
         m_targetNoise->setValue(g_cameraData.noiseThreshold * 100.0f);
     }
     m_targetNoise->setEnabled(m_adaptiveSampling->isChecked());
-
-    m_realtimeDenoiser->setCurrentIndex(
-        RealtimeDenoiserIndexFromMode(DxrRenderer::GetRealtimeDenoiserMode()));
-    const bool dlssActive =
-        DX12Context::g_streamline.IsEnabled() &&
-        DX12Context::g_streamline.GetMode() != StreamlineManager::Mode::Off;
-    m_realtimeDenoiser->setEnabled(dxrMode && !dlssActive);
 
     m_dlssEnabled->setChecked(DX12Context::g_streamline.IsEnabled());
     m_dlssMode->setCurrentIndex(StreamlineModeIndex(DX12Context::g_streamline.GetMode()));

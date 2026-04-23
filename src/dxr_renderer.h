@@ -77,15 +77,6 @@ float GetGPUFrameTimeMs();
 // available)
 void GetShaderCounters(UINT *outCounters, UINT maxCount);
 
-struct SvgfSettings {
-  float temporalAlpha = 0.0f;
-  float momentsAlpha = 0.0f;
-  int atrousIterations = 5;
-  float phiColor = 10.0f;
-  float phiNormal = 32.0f;
-  float phiDepth = 1.0f;
-};
-
 // Final denoiser mode control (Off, OIDN CPU, OIDN GPU).
 enum class DenoiserMode { Off = 0, OIDN_CPU = 1, OIDN_GPU = 2 };
 void SetDenoiserMode(DenoiserMode m);
@@ -93,14 +84,6 @@ DenoiserMode GetDenoiserMode();
 
 void SetOidnQuality(OidnDenoiser::Quality q);
 OidnDenoiser::Quality GetOidnQuality();
-
-// Realtime denoiser control (Off, SVGF, NRD ReLAX).
-enum class RealtimeDenoiserMode { Off = 0, SVGF = 1, NRD = 2 };
-void SetRealtimeDenoiserMode(RealtimeDenoiserMode m);
-RealtimeDenoiserMode GetRealtimeDenoiserMode();
-void SetSvgfSettings(const SvgfSettings &settings);
-SvgfSettings GetSvgfSettings();
-void ResetRealtimeDenoiserHistory();
 
 enum class TonemapAmbientOcclusionMode {
   Inward = 0,
@@ -168,8 +151,6 @@ float GetPhysicalCameraEV100();
 // Exports the latest tonemapped DXR frame to a PNG file.
 // The PNG is lossless (maximum quality by format design).
 bool ExportTonemappedFrameToPng(const std::wstring &filePath);
-bool ExportNrdDebugBuffersToPng(const std::wstring &directoryPath);
-bool ExportSvgfDebugBuffersToPng(const std::wstring &directoryPath);
 } // namespace DxrRenderer
 
 extern bool g_rayTracingSupported;

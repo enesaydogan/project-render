@@ -61,7 +61,7 @@ cbuffer CameraCB : register(b1)
     float cloudRenderingEnabled;
     float iblRotationDegrees;
     float sampleEnvSolidAngle;
-    float nrdEnabled;
+    float reservedRealtimeDenoiser;
     float exportRendering;
     float dxrProceduralSkyBoost;
     float tonemapAoIntensity;

@@ -21,11 +21,9 @@ project_render_prefer_fetchcontent_source("imgui"      "${CMAKE_SOURCE_DIR}/buil
 project_render_prefer_fetchcontent_source("assimp"     "${CMAKE_SOURCE_DIR}/build/_deps/assimp-src")
 project_render_prefer_fetchcontent_source("shadermake" "${CMAKE_SOURCE_DIR}/build/_deps/shadermake-src")
 project_render_prefer_fetchcontent_source("mathlib"    "${CMAKE_SOURCE_DIR}/build/_deps/mathlib-src")
-project_render_prefer_fetchcontent_source("nri"        "${CMAKE_SOURCE_DIR}/build/_deps/nri-src")
 project_render_prefer_fetchcontent_source("d3d12ma"    "${CMAKE_SOURCE_DIR}/build/_deps/d3d12ma-src")
 project_render_prefer_fetchcontent_source("shadermake" "${CMAKE_SOURCE_DIR}/thirdparty/ShaderMake")
 project_render_prefer_fetchcontent_source("mathlib"    "${CMAKE_SOURCE_DIR}/thirdparty/MathLib")
-project_render_prefer_fetchcontent_source("nri"        "${CMAKE_SOURCE_DIR}/thirdparty/NRI")
 
 if(WIN32)
   if(DEFINED CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION)
@@ -119,7 +117,6 @@ target_sources(project-render PRIVATE
     src/editor_ui.cpp
     src/camera.cpp
     src/dxr_renderer.cpp
-    src/nrd_denoiser.cpp
     src/dxr_accumulation.cpp
     src/streamline_manager.cpp
     src/raster_renderer.cpp 
@@ -267,35 +264,6 @@ if (USE_OPENIMAGEDENOISE)
 else()
   message(STATUS "OpenImageDenoise support disabled (USE_OPENIMAGEDENOISE=OFF)")
 endif()
-  # NRD Integration
-  # Match engine-side NRD input packing:
-  # - normals are stored directly in RGBA16F
-  # - roughness is linear in alpha
-  set(NRD_NORMAL_ENCODING "4" CACHE STRING "" FORCE)
-  set(NRD_ROUGHNESS_ENCODING "1" CACHE STRING "" FORCE)
-  set(NRD_NRI ON CACHE BOOL "" FORCE)
-  set(NRD_EMBEDS_SPIRV_SHADERS OFF CACHE BOOL "" FORCE)
-  set(NRD_EMBEDS_DXBC_SHADERS OFF CACHE BOOL "" FORCE)
-  set(NRD_EMBEDS_DXIL_SHADERS ON CACHE BOOL "" FORCE)
-  set(NRI_STATIC_LIBRARY ON CACHE BOOL "" FORCE)
-  set(NRI_ENABLE_D3D12_SUPPORT ON CACHE BOOL "" FORCE)
-  set(NRI_ENABLE_D3D11_SUPPORT OFF CACHE BOOL "" FORCE)
-  set(NRI_ENABLE_VK_SUPPORT OFF CACHE BOOL "" FORCE)
-  set(NRI_ENABLE_VALIDATION_SUPPORT OFF CACHE BOOL "" FORCE)
-  set(NRI_ENABLE_DEBUG_NAMES_AND_ANNOTATIONS ON CACHE BOOL "" FORCE)
-  set(NRI_ENABLE_AGILITY_SDK_SUPPORT OFF CACHE BOOL "" FORCE)
-  add_subdirectory(thirdparty/NRD)
-
-  if(TARGET NRI_D3D12)
-    target_compile_definitions(NRI_D3D12 PRIVATE
-      D3D12_MS_DISPATCH_MAX_THREAD_GROUPS_PER_GRID=4194303
-      D3D12_AS_TGSM_BYTES_MINIMUM_SUPPORT=32768
-      D3D12_MS_TGSM_BYTES_MINIMUM_SUPPORT=28672
-    )
-  endif()
-  
-  target_link_libraries(project-render PRIVATE NRD NRDIntegration NRI)
-  target_compile_definitions(project-render PRIVATE USE_NRD=1)
 
 # Copy Streamline + NGX runtime files next to the executable.
 
@@ -514,7 +482,7 @@ endif()
 # Place build outputs into dedicated folders to avoid spilling .lib/.exp into
 # the top-level build directory. This keeps asset_loader.lib, imgui_static.lib,
 # project-render.lib and project-render.exp out of the build root.
-set_target_properties(project-render asset_loader imgui_static NRD NRI NRDIntegration PROPERTIES
+set_target_properties(project-render asset_loader imgui_static PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
   RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/Debug/bin"
   RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/Release/bin"
@@ -704,7 +672,7 @@ install(TARGETS project-render
 )
 
 # Install dependent DLLs, shaders, and generated files in the bin folder
-# This will catch Qt, NRD, OpenImageDenoise, shaders/, miniz.dll, assets, etc.
+# This will catch Qt, OpenImageDenoise, shaders/, miniz.dll, assets, etc.
 install(DIRECTORY "$<TARGET_FILE_DIR:project-render>/" 
   DESTINATION bin
   COMPONENT CoreApp

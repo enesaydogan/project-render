@@ -12,9 +12,9 @@
 - **ReSTIR DI & GI**: Reservoir-based Spatio-Temporal Importance Resampling.
 - **Efficiency Optimizations**: Russian Roulette, 64-Byte Material Struct, Opaque Hardware Fast-Path.
 
-### 🧠 Intelligent Denoising Stack
-- **NVIDIA DLSS Ray Reconstruction (DLSS-RR)** & **NVIDIA NRD (ReLAX)**.
-- **SVGF** & **Intel Open Image Denoise (OIDN) 2.x**.
+### 🧠 Reconstruction & Final Denoising
+- **NVIDIA DLSS Ray Reconstruction (DLSS-RR)** for supported realtime reconstruction.
+- **Intel Open Image Denoise (OIDN) 2.x** for final denoising workflows.
 
 ### 🏗 Asset & ArchViz System
 - **Universal Model Import**: Robust support for **glTF 2.0**, FBX, OBJ, and STL.
@@ -48,7 +48,7 @@ Due to licensing agreements, the following SDKs are not included in the public r
 - `thirdparty/max2024-sdk` / `thirdparty/max2025-sdk`: 3ds Max SDKs (Required for 3ds Max 2024 and 2025 plugins).
 - `thirdparty/vray-sdk`: V-Ray AppSDK or headers (Required if building specific V-Ray material conversion paths within the plugins).
 
-*(Smaller open-source dependencies like `NRD`, `NRI`, `oidn`, and `Streamline` are included directly in the repo or fetched during build).*
+*(Smaller open-source dependencies like `oidn` and `Streamline` are included directly in the repo or fetched during build).*
 
 ---
 
@@ -119,9 +119,9 @@ project-render is a state-of-the-art real-time rendering engine designed for hig
 - **ReSTIR DI & GI**: Reservoir-based Spatio-Temporal Importance Resampling.
 - **Efficiency Optimizations**: Russian Roulette, 64-Byte Material Struct, Opaque Hardware Fast-Path.
 
-###  Intelligent Denoising Stack
-- **NVIDIA DLSS Ray Reconstruction (DLSS-RR)** & **NVIDIA NRD (ReLAX)**.
-- **SVGF** & **Intel Open Image Denoise (OIDN) 2.x**.
+###  Reconstruction & Final Denoising
+- **NVIDIA DLSS Ray Reconstruction (DLSS-RR)** for supported realtime reconstruction.
+- **Intel Open Image Denoise (OIDN) 2.x** for final denoising workflows.
 
 ###  Asset & ArchViz System
 - **Universal Model Import**: Robust support for **glTF 2.0**, FBX, OBJ, and STL.
@@ -155,7 +155,7 @@ Due to licensing agreements, the following SDKs are not included in the public r
 - 	hirdparty/max2024-sdk / max2025-sdk: 3ds Max SDKs (Required for 3ds Max 2024 and 2025 plugins).
 - 	hirdparty/vray-sdk: V-Ray AppSDK or headers (Required if building specific V-Ray material conversion paths within the plugins).
 
-*(Smaller open-source dependencies like NRD, NRI, oidn, and Streamline are included directly in the repo or fetched during build).*
+*(Smaller open-source dependencies like oidn and Streamline are included directly in the repo or fetched during build).*
 
 ---
 

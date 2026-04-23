@@ -419,26 +419,6 @@ static int DenoiserIndexFromMode(DxrRenderer::DenoiserMode mode) {
   }
 }
 
-static DxrRenderer::RealtimeDenoiserMode RealtimeDenoiserModeFromIndex(int idx) {
-  if (idx == 1)
-    return DxrRenderer::RealtimeDenoiserMode::SVGF;
-  if (idx == 2)
-    return DxrRenderer::RealtimeDenoiserMode::NRD;
-  return DxrRenderer::RealtimeDenoiserMode::Off;
-}
-
-static int RealtimeDenoiserIndexFromMode(
-    DxrRenderer::RealtimeDenoiserMode mode) {
-  switch (mode) {
-  case DxrRenderer::RealtimeDenoiserMode::SVGF:
-    return 1;
-  case DxrRenderer::RealtimeDenoiserMode::NRD:
-    return 2;
-  default:
-    return 0;
-  }
-}
-
 static bool RecreateDxrPipelineSafe(UINT width, UINT height,
                                     const char *context);
 
@@ -2494,88 +2474,6 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
 #else
           g_cameraData.debugVisualizationMode = 0.0f;
 #endif
-        }
-
-        ImGui::Separator();
-        ImGui::Text("Realtime Denoiser");
-        const char *realtimeDenoisers[] = {"Off", "SVGF", "NRD (ReLAX)"};
-        int realtimeIdx = RealtimeDenoiserIndexFromMode(
-            DxrRenderer::GetRealtimeDenoiserMode());
-        if (ImGui::Combo("Mode##RealtimeDenoiser", &realtimeIdx, realtimeDenoisers,
-                         IM_ARRAYSIZE(realtimeDenoisers))) {
-          DxrRenderer::SetRealtimeDenoiserMode(
-              RealtimeDenoiserModeFromIndex(realtimeIdx));
-          DxrRenderer::ResetAccumulation();
-          RecreateDxrPipelineSafe(g_windowWidth, g_windowHeight,
-                                  "Realtime denoiser mode change");
-          uiChanged = true;
-        }
-        if (DX12Context::g_streamline.GetMode() ==
-                StreamlineManager::Mode::DLSS_RayReconstruction &&
-            DxrRenderer::GetRealtimeDenoiserMode() !=
-                DxrRenderer::RealtimeDenoiserMode::Off) {
-          ImGui::TextWrapped("Realtime denoisers are skipped while DLSS Ray "
-                             "Reconstruction is active.");
-        }
-
-        if (DxrRenderer::GetRealtimeDenoiserMode() ==
-            DxrRenderer::RealtimeDenoiserMode::SVGF) {
-          DxrRenderer::SvgfSettings svgf = DxrRenderer::GetSvgfSettings();
-          if (ImGui::SliderFloat("Temporal Alpha", &svgf.temporalAlpha, 0.0f,
-                                 1.0f, "%.3f")) {
-            DxrRenderer::SetSvgfSettings(svgf);
-            uiChanged = true;
-          }
-          if (ImGui::SliderFloat("Moments Alpha", &svgf.momentsAlpha, 0.0f,
-                                 1.0f, "%.3f")) {
-            DxrRenderer::SetSvgfSettings(svgf);
-            uiChanged = true;
-          }
-          if (ImGui::SliderInt("A-Trous Iterations", &svgf.atrousIterations, 1,
-                               8)) {
-            DxrRenderer::SetSvgfSettings(svgf);
-            uiChanged = true;
-          }
-          if (ImGui::SliderFloat("Color Phi", &svgf.phiColor, 0.1f, 16.0f,
-                                 "%.2f")) {
-            DxrRenderer::SetSvgfSettings(svgf);
-            uiChanged = true;
-          }
-          if (ImGui::SliderFloat("Normal Phi", &svgf.phiNormal, 1.0f, 256.0f,
-                                 "%.1f")) {
-            DxrRenderer::SetSvgfSettings(svgf);
-            uiChanged = true;
-          }
-          if (ImGui::SliderFloat("Depth Phi", &svgf.phiDepth, 0.01f, 8.0f,
-                                 "%.3f")) {
-            DxrRenderer::SetSvgfSettings(svgf);
-            uiChanged = true;
-          }
-          if (ImGui::Button("Reset History")) {
-            DxrRenderer::ResetRealtimeDenoiserHistory();
-            uiChanged = true;
-          }
-          static std::string s_svgfDumpStatus;
-          if (ImGui::Button("Dump SVGF Buffers")) {
-            const bool ok = DxrRenderer::ExportSvgfDebugBuffersToPng(L"run");
-            s_svgfDumpStatus =
-                ok ? "Saved SVGF debug PNGs to run/"
-                   : "SVGF buffer dump failed";
-          }
-          if (!s_svgfDumpStatus.empty()) {
-            ImGui::TextWrapped("%s", s_svgfDumpStatus.c_str());
-          }
-        } else if (DxrRenderer::GetRealtimeDenoiserMode() ==
-                   DxrRenderer::RealtimeDenoiserMode::NRD) {
-          static std::string s_nrdDumpStatus;
-          if (ImGui::Button("Dump NRD Buffers")) {
-            const bool ok = DxrRenderer::ExportNrdDebugBuffersToPng(L"run");
-            s_nrdDumpStatus =
-                ok ? "Saved NRD debug PNGs to run/" : "NRD buffer dump failed";
-          }
-          if (!s_nrdDumpStatus.empty()) {
-            ImGui::TextWrapped("%s", s_nrdDumpStatus.c_str());
-          }
         }
 
         ImGui::Separator();

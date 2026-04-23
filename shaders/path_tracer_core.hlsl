@@ -433,26 +433,6 @@ float3 TraceGlassReflectionRadiance(float3 P, float3 V, float3 N,
     return PayloadGetColor(reflectionPayload) * reflectionWeight;
 }
 
-void WriteNrdBypassInputs(uint2 pixel, float3 stableColor,
-                          bool primaryHit, float primaryViewZ,
-                          float3 primaryNormal, float primaryRoughness,
-                          float2 motionVector, float farPlane)
-{
-    float2 mv = motionVector;
-    if (abs(mv.x) > 1e5 || abs(mv.y) > 1e5) mv = float2(0.0, 0.0);
-
-    g_nrdDiffuseRadianceHitDist[pixel] = float4(0.0, 0.0, 0.0, 0.0);
-    g_nrdSpecRadianceHitDist[pixel] = float4(0.0, 0.0, 0.0, 0.0);
-    g_nrdViewZ[pixel] =
-        (primaryHit && primaryViewZ > 0.0) ? primaryViewZ : (farPlane * 1.001f);
-    g_nrdNormalRoughness[pixel] =
-        float4(primaryHit ? normalize(primaryNormal) : float3(0.0, 1.0, 0.0),
-               primaryHit ? saturate(primaryRoughness) : 1.0);
-    g_nrdMv[pixel] = mv;
-    // alpha == 0 means the composite should bypass denoised diffuse/specular.
-    g_nrdEmission[pixel] = float4(max(stableColor, 0.0), 0.0);
-}
-
 [shader("raygeneration")]
 void RayGen()
 {
@@ -480,7 +460,6 @@ void RayGen()
     // (DI/GI transport) without making the visible sky dome brighter.
     const float kEnvLightingBoost = 3.0;
     const bool debugViewActive = (SHADER_DEBUG_MODE > 0.0) || (SHADER_DEBUG_VIS_MODE == 1.0);
-    const bool nrdActive = (nrdEnabled > 0.5);
 
     const float2 kInvalidMvec = float2(-1e6, -1e6);
     float2 currScreen = float2(launchIndex.xy) + 0.5;
@@ -517,17 +496,13 @@ void RayGen()
 
     float3 accumulatedColor = float3(0, 0, 0);
     float3 throughput = float3(1, 1, 1);
-    float3 nrdStablePrimary = float3(0, 0, 0);
-    float3 nrdPrimaryGlassReflection = float3(0, 0, 0);
     float primaryDiffuseSplit = 1.0;
     float primarySpecularSplit = 0.0;
     uint primarySampledLobe = 0u; // 0 = none, 1 = diffuse/translucent, 2 = specular/coat, 3 = glass transmission
     float primaryDiffuseHitDist = 0.0;
     float primarySpecularSampleHitDist = 0.0;
-    bool nrdPrimarySurface = false;
+    float3 primaryGlassReflection = float3(0, 0, 0);
     // True when the primary hit is a transmissive (glass/refractive) surface.
-    // NRD denoises the front-surface reflected lobe; refracted energy uses a
-    // separate transmission history and is recombined in the composite.
     bool primaryIsRefractive = false;
 
     // Primary hit info for DLSS inputs
@@ -665,7 +640,7 @@ void RayGen()
                                                       resolveSpecularWeight,
                                                       resolveSpecularColor);
         accumulatedColor += resolveReflection;
-        nrdPrimaryGlassReflection += resolveReflection;
+        primaryGlassReflection += resolveReflection;
 
         throughput *= max(resolveTransmissionColor, float3(0.0, 0.0, 0.0)) * resolveTransmission;
         float3 resolveNextDir = rayDir;
@@ -806,12 +781,9 @@ void RayGen()
                 primaryDiffuseSplit = diffuseBucket / splitSum;
                 primarySpecularSplit = specularBucket / splitSum;
 
-                // Trace dedicated specular reflection ray to get hit distance for DLSS-RR and NRD.
-                // NRD's RELAX uses this distance to scale its spatial A-Trous filter per-pixel —
-                // without it, all specular pixels get the same fixed blur radius regardless of
-                // how close or far the reflected geometry is, causing noise on glossy surfaces.
+                // Trace a dedicated specular reflection ray to get hit distance for DLSS-RR.
                 if (!primaryIsRefractive &&
-                    (dlssRayReconstruction > 0.5 || (nrdActive && primaryRoughness < 0.6)) &&
+                    (dlssRayReconstruction > 0.5) &&
                     max(primarySpecAlbedo.r, max(primarySpecAlbedo.g, primarySpecAlbedo.b)) > 0.01) {
                     float3 R_spec = reflect(guideDir, primaryNormal);
                     RayDesc specHitRay;
@@ -840,7 +812,7 @@ void RayGen()
             // --- G-Buffer & Motion Vector Writing (Mandatory for every frame) ---
             if (!primaryHit || primaryViewZ <= 0.0) {
                 g_depth[launchIndex.xy] = (dlssRayReconstruction > 0.5) ? farZ : 1.0;
-                g_svgfLinearDepth[launchIndex.xy] = farZ;
+                g_linearDepth[launchIndex.xy] = farZ;
                 float2 mvecSky = float2(0.0, 0.0);
                 if (prevValid > 0.5) {
                     float3 guideSkyDir = primaryGuideResolved ? primaryGuideDir : rayDirCenter;
@@ -866,7 +838,7 @@ void RayGen()
                 g_specHitDistance[launchIndex.xy] = 0.0;
                 g_specularMotionVectors[launchIndex.xy] = mvecSky;
             } else {
-                g_svgfLinearDepth[launchIndex.xy] = primaryViewZ;
+                g_linearDepth[launchIndex.xy] = primaryViewZ;
                 if (dlssRayReconstruction > 0.5) g_depth[launchIndex.xy] = primaryViewZ;
                 else {
                     float nearZc = nearZ;
@@ -910,21 +882,7 @@ void RayGen()
                 float4 total = g_accumulation[launchIndex.xy];
                 if (total.a > 0.0) {
                     float3 meanColor = total.rgb / total.a;
-                    g_svgfNoisyInput[launchIndex.xy] = float4(meanColor, 1.0);
-                    if (nrdActive) {
-                        WriteNrdBypassInputs(launchIndex.xy, meanColor,
-                                             primaryHit, primaryViewZ,
-                                             primaryNormal, primaryRoughness,
-                                             g_motionVectors[launchIndex.xy],
-                                             farZ);
-                    }
                     g_output[launchIndex.xy] = float4(meanColor, 1.0);
-                } else if (nrdActive) {
-                    WriteNrdBypassInputs(launchIndex.xy, float3(0.0, 0.0, 0.0),
-                                         primaryHit, primaryViewZ,
-                                         primaryNormal, primaryRoughness,
-                                         g_motionVectors[launchIndex.xy],
-                                         farZ);
                 }
                 return;
             }
@@ -985,14 +943,6 @@ void RayGen()
                                 g_gi_reservoir_b2[launchIndex.xy] = g_gi_reservoir_a2[launchIndex.xy];
                             }
                             SHADER_COUNTER_ADD(SHADER_COUNTER_RESERVOIR_WRITES, 1);
-                            g_svgfNoisyInput[launchIndex.xy] = float4(meanColor, 1.0);
-                            if (nrdActive) {
-                                WriteNrdBypassInputs(launchIndex.xy, meanColor,
-                                                     primaryHit, primaryViewZ,
-                                                     primaryNormal, primaryRoughness,
-                                                     g_motionVectors[launchIndex.xy],
-                                                     farZ);
-                            }
                             if (SHADER_DEBUG_VIS_MODE == 1.0) g_output[launchIndex.xy] = float4(0.0, 1.0, 0.0, 1.0);
                             else g_output[launchIndex.xy] = float4(meanColor, 1.0);
                             return;
@@ -1062,11 +1012,6 @@ void RayGen()
                 accumulatedColor += throughput * missColor;
             }
 
-            if (bounce == 0) {
-                nrdStablePrimary = missColor;
-                nrdPrimarySurface = false;
-            }
-            
             // On first bounce miss, update reservoir to empty
             if (bounce == 0) {
                 float4 res_data = pack_reservoir(init_reservoir());
@@ -1476,11 +1421,6 @@ void RayGen()
             payloadColor = float3(0, 0, 0);
         }
 
-        if (bounce == 0) {
-            nrdStablePrimary = payloadColor;
-            nrdPrimarySurface = true;
-        }
-
         float3 surfaceLightingContribution =
             throughput * (directLighting + indirectLighting);
         accumulatedColor += surfaceLightingContribution + throughput * payloadColor;
@@ -1539,10 +1479,10 @@ void RayGen()
                                                          payloadIor,
                                                          payloadSpecularWeight,
                                                          payloadSpecularColor);
-                        nrdPrimaryGlassReflection =
+                        primaryGlassReflection =
                             max(surfaceLightingContribution + reflectedColor,
                                 float3(0.0, 0.0, 0.0));
-                        accumulatedColor += nrdPrimaryGlassReflection;
+                        accumulatedColor += primaryGlassReflection;
                     }
                     accumulatedColor -= surfaceLightingContribution;
                 }
@@ -1697,108 +1637,6 @@ void RayGen()
     if (any(isnan(finalColor)) || any(isinf(finalColor))) finalColor = float3(0, 0, 0);
     finalColor *= primaryTonemapAoFactor;
 
-    if (nrdEnabled > 0.5) {
-        float3 stableColor = max(nrdStablePrimary * primaryTonemapAoFactor, 0.0);
-        bool nrdGlassSurface = primaryIsRefractive;
-        bool nrdGlassReflectionSample =
-            nrdGlassSurface &&
-            ((primarySampledLobe == 2u) ||
-             any(nrdPrimaryGlassReflection > float3(0.0, 0.0, 0.0)));
-        bool nrdBypassSurface = false;
-        float3 surfaceColor = float3(0.0, 0.0, 0.0);
-        if (nrdPrimarySurface) {
-            if (nrdGlassSurface) {
-                surfaceColor = nrdGlassReflectionSample
-                                   ? max((any(nrdPrimaryGlassReflection > float3(0.0, 0.0, 0.0))
-                                              ? (nrdPrimaryGlassReflection * primaryTonemapAoFactor)
-                                              : (finalColor - stableColor)),
-                                         0.0)
-                                   : float3(0.0, 0.0, 0.0);
-            } else {
-                surfaceColor = max(finalColor - stableColor, 0.0);
-            }
-        }
-        float diffuseWeight = primaryDiffuseSplit;
-        float specularWeight = primarySpecularSplit;
-        if (nrdGlassSurface) {
-            diffuseWeight = 0.0;
-            specularWeight = 1.0;
-        } else if (primarySampledLobe == 1u) {
-            diffuseWeight = 1.0;
-            specularWeight = 0.0;
-        } else if (primarySampledLobe == 2u) {
-            diffuseWeight = 0.0;
-            specularWeight = 1.0;
-        }
-        float splitSum = max(diffuseWeight + specularWeight, 1e-5);
-        float3 nrdDiffuseColor = min(surfaceColor * (diffuseWeight / splitSum), 250.0);
-        float3 nrdSpecularColor = min(surfaceColor * (specularWeight / splitSum), 250.0);
-        // Albedo demodulation: strip the primary surface albedo from the diffuse
-        // signal before handing it to NRD.  NRD's edge-stopping functions then
-        // operate on irradiance (smooth, lighting-shaped) rather than on radiance
-        // (high-frequency texture albedo × irradiance).  The albedo is restored
-        // in the composite shader after denoising.  The same clamp (0.01) must be
-        // used in both the shader and the composite so the round-trip is lossless.
-        float3 demodAlbedo = primaryHit ? max(primaryAlbedo, float3(0.01, 0.01, 0.01)) : float3(1.0, 1.0, 1.0);
-        float3 nrdDiffDemod = nrdDiffuseColor / demodAlbedo;
-        // Specular demodulation: strip the environment-integrated specular albedo
-        // (F_env) from the specular signal.  For metallic surfaces F_env is the
-        // metal colour, so without this NRD's luminance edge-stopper treats material
-        // colour variation as noise and blurs across material boundaries.
-        // primarySpecAlbedo = EnvBRDFApprox2(F0, roughness^2, NdotV) is also
-        // stored to g_specularAlbedo and re-applied in the composite.
-        float3 demodSpecAlbedo = primaryHit ? max(primarySpecAlbedo, float3(0.01, 0.01, 0.01)) : float3(1.0, 1.0, 1.0);
-        // Clamp after demodulation.  Dividing by demodSpecAlbedo can amplify the
-        // signal 25-100x on smooth dielectrics (F_env ≈ 0.01-0.04), turning a
-        // single bright 1-spp specular sample into an extreme outlier that NRD's
-        // antiFirefly struggles to suppress.  Cap at 200 — still generous for
-        // HDR interior scenes while preventing amplification blowup.
-        float3 nrdSpecDemod = min(nrdSpecularColor / demodSpecAlbedo, float3(200.0, 200.0, 200.0));
-        // Diffuse hit distance = distance from primary surface to secondary diffuse
-        // hit, which we don't track per-pixel.  Use 0 as the documented safe
-        // fallback (RELAX applies conservative fixed-radius filtering in this case).
-        // Using primaryViewZ (camera-to-primary depth) was WRONG: it mis-scales the
-        // A-Trous filter kernel relative to scene GI depth.
-        float diffHitDist =
-            (diffuseWeight > 0.0 && primaryDiffuseHitDist > 0.0)
-                ? primaryDiffuseHitDist
-                : 0.0;
-        float specHitDist = 0.0;
-        if (specularWeight > 0.0) {
-            specHitDist = max(primarySpecularSampleHitDist, primarySpecHitDist);
-            if (!(specHitDist > 0.0)) specHitDist = 0.0;
-        }
-        // Put sky/background outside the NRD denoising range and let the
-        // composite use the stable channel for those pixels.
-        float nrdViewZ = (primaryHit && primaryViewZ > 0.0) ? primaryViewZ : (farZ * 1.001f);
-        // Use the already-computed screen-space motion vectors (pixel units).
-        // Discard the sentinel value used to mark out-of-bounds pixels.
-        float2 nrdMv = g_motionVectors[launchIndex.xy];
-        if (abs(nrdMv.x) > 1e5 || abs(nrdMv.y) > 1e5) nrdMv = float2(0.0, 0.0);
-        float3 nrdNormal = primaryHit ? normalize(primaryNormal) : float3(0.0, 1.0, 0.0);
-        // Feed NRD the material roughness. Stability floors here visibly change
-        // polished materials, so keep this as a numeric payload value, not policy.
-        float nrdRoughness = primaryHit ? saturate(primaryRoughness) : 1.0;
-        if (nrdBypassSurface) {
-            g_nrdDiffuseRadianceHitDist[launchIndex.xy] = float4(0.0, 0.0, 0.0, 0.0);
-            g_nrdSpecRadianceHitDist[launchIndex.xy] = float4(0.0, 0.0, 0.0, 0.0);
-            g_nrdViewZ[launchIndex.xy] = farZ * 1.001f;
-            g_nrdNormalRoughness[launchIndex.xy] = float4(0.0, 1.0, 0.0, 1.0);
-            g_nrdMv[launchIndex.xy] = float2(0.0, 0.0);
-            g_nrdEmission[launchIndex.xy] = float4(0.0, 0.0, 0.0, 0.0);
-        } else {
-            g_nrdDiffuseRadianceHitDist[launchIndex.xy] = float4(nrdDiffDemod, diffHitDist);
-            g_nrdSpecRadianceHitDist[launchIndex.xy] = float4(nrdSpecDemod, specHitDist);
-            g_nrdViewZ[launchIndex.xy] = nrdViewZ;
-            g_nrdNormalRoughness[launchIndex.xy] = float4(nrdNormal, nrdRoughness);
-            g_nrdMv[launchIndex.xy] = nrdMv;
-            float nrdCompositeMode =
-                nrdGlassSurface ? 2.0 : (nrdPrimarySurface ? 1.0 : 0.0);
-            g_nrdEmission[launchIndex.xy] = float4(stableColor,
-                                                   nrdCompositeMode);
-        }
-    }
-
     // Write DLSS inputs
 
     // Debug: Motion Vectors (debug mode index = 8)
@@ -1847,7 +1685,6 @@ void RayGen()
     // bright sky/sun values do not desaturate toward gray/white.
     if (!any(isfinite(finalColor))) finalColor = float3(0,0,0);
     finalColor = max(finalColor, 0.0);
-    g_svgfNoisyInput[launchIndex.xy] = float4(finalColor, 1.0);
 
     const float3 kLumaWeights = float3(0.2126, 0.7152, 0.0722);
     const float kMaxSampleLuminance = 10000.0; //enes  10 x boost for the better sun
@@ -1859,44 +1696,6 @@ void RayGen()
     float lum = dot(finalColor, kLumaWeights);
     if (!isfinite(lum)) lum = 0.0;
     bool historyRepairedThisFrame = false;
-
-    if (nrdEnabled > 0.5) {
-        if (primaryIsRefractive) {
-            float4 prevTransAccum = g_transmissionAccumulation[launchIndex.xy];
-            float prevTransN = prevTransAccum.a;
-            float3 prevTransSum = prevTransAccum.rgb;
-            bool invalidTransHistory =
-                !isfinite(prevTransN) || (prevTransN < 1.0) || any(!isfinite(prevTransSum));
-
-            float3 glassReflectionForTransmission =
-                nrdPrimaryGlassReflection * primaryTonemapAoFactor;
-            float3 transmissionSample =
-                (primarySampledLobe == 2u)
-                    ? float3(0.0, 0.0, 0.0)
-                    : max(finalColor - glassReflectionForTransmission,
-                          float3(0.0, 0.0, 0.0));
-
-            if (accumFrame == 0 || invalidTransHistory) {
-                g_transmissionAccumulation[launchIndex.xy] = float4(transmissionSample, 1.0);
-                g_transmissionVariance[launchIndex.xy] = 0.0;
-            } else {
-                float safeTransN = max(prevTransN, 1.0);
-                float oldTransMeanLum = dot(prevTransSum / safeTransN, kLumaWeights);
-                float nextTransN = safeTransN + 1.0;
-                float3 nextTransSum = prevTransSum + transmissionSample;
-                float nextTransMeanLum = dot(nextTransSum / nextTransN, kLumaWeights);
-                float prevTransM2 = g_transmissionVariance[launchIndex.xy];
-                float transmissionLum = dot(transmissionSample, kLumaWeights);
-                float nextTransM2 = prevTransM2 + (transmissionLum - oldTransMeanLum) * (transmissionLum - nextTransMeanLum);
-                if (!isfinite(nextTransM2)) nextTransM2 = 0.0;
-                g_transmissionAccumulation[launchIndex.xy] = float4(nextTransSum, nextTransN);
-                g_transmissionVariance[launchIndex.xy] = max(0.0, nextTransM2);
-            }
-        } else {
-            g_transmissionAccumulation[launchIndex.xy] = float4(0.0, 0.0, 0.0, 0.0);
-            g_transmissionVariance[launchIndex.xy] = 0.0;
-        }
-    }
 
     if (accumFrame == 0) {
         g_accumulation[launchIndex.xy] = float4(finalColor, 1.0);

@@ -9,7 +9,6 @@
 #include "grass_manager.h"
 #include "ibl_manager.h"
 #include "oidn_denoiser.h"
-#include "nrd_denoiser.h"
 #include "raster_renderer.h"
 #include "scene.h"
 #include "streamline_manager.h"
@@ -53,11 +52,8 @@ static bool s_streamlineResetHistory = true;
 // Final / export denoiser mode & wrapper
 static DxrRenderer::DenoiserMode s_denoiserMode =
     DxrRenderer::DenoiserMode::OIDN_GPU;
-static DxrRenderer::RealtimeDenoiserMode s_realtimeDenoiserMode =
-  DxrRenderer::RealtimeDenoiserMode::Off;
 static OidnDenoiser s_oidnDenoiser;
 static OidnDenoiser::Quality s_oidnQuality = OidnDenoiser::Quality::High;
-static DxrRenderer::SvgfSettings s_svgfSettings;
 static float s_rrJitterScale = 0.5f;
 
 // default off so that users see the raw sky intensity without
@@ -169,7 +165,7 @@ static const UINT DXR_HEAP_ALBEDO_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 12;
 static const UINT DXR_HEAP_NORMAL_ROUGHNESS_UAV_OFFSET =
     DXR_HEAP_UAV_OFFSET + 13;
 static const UINT DXR_HEAP_DLSS_OUT_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 14;
-static const UINT DXR_HEAP_SVGF_LINEAR_DEPTH_UAV_OFFSET =
+static const UINT DXR_HEAP_LINEAR_DEPTH_UAV_OFFSET =
     DXR_HEAP_UAV_OFFSET + 15;
 static const UINT DXR_HEAP_SPEC_ALBEDO_OFFSET = DXR_HEAP_UAV_OFFSET + 16;
 static const UINT DXR_HEAP_SPEC_HITDIST_OFFSET = DXR_HEAP_UAV_OFFSET + 17;
@@ -180,19 +176,8 @@ static const UINT DXR_HEAP_TRANSMISSION_VARIANCE_OFFSET =
     DXR_HEAP_UAV_OFFSET + 20;
 static const UINT DXR_HEAP_OIDN_OUT_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 21;
 static const UINT DXR_HEAP_VARIANCE_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 22;
-static const UINT DXR_HEAP_SVGF_NOISY_OFFSET = DXR_HEAP_UAV_OFFSET + 23;
 // Extra debug UAV: shader counters (readback) at u24
 static const UINT DXR_HEAP_SHADER_COUNTERS_OFFSET = DXR_HEAP_UAV_OFFSET + 24;
-
-// NRD dedicated UAVs
-static const UINT DXR_HEAP_NRD_DIFFUSE_RADIANCE_HITDIST_OFFSET = DXR_HEAP_UAV_OFFSET + 25;
-static const UINT DXR_HEAP_NRD_SPEC_RADIANCE_HITDIST_OFFSET = DXR_HEAP_UAV_OFFSET + 26;
-static const UINT DXR_HEAP_NRD_VIEWZ_OFFSET = DXR_HEAP_UAV_OFFSET + 27;
-static const UINT DXR_HEAP_NRD_NORMAL_ROUGHNESS_OFFSET = DXR_HEAP_UAV_OFFSET + 28;
-static const UINT DXR_HEAP_NRD_MV_OFFSET = DXR_HEAP_UAV_OFFSET + 29;
-static const UINT DXR_HEAP_NRD_OUT_DIFFUSE_OFFSET = DXR_HEAP_UAV_OFFSET + 30;
-static const UINT DXR_HEAP_NRD_OUT_SPECULAR_OFFSET = DXR_HEAP_UAV_OFFSET + 31;
-static const UINT DXR_HEAP_NRD_EMISSION_OFFSET = DXR_HEAP_UAV_OFFSET + 32;
 
 // Dedicated SRV blocks after UAV range so UAV registers stay stable.
 static const UINT DXR_HEAP_ENV_SRV_OFFSET =
@@ -228,9 +213,7 @@ enum ResourceFeatureBits : uint32_t {
   ResourceFeature_Dlss = 1u << 0,
   ResourceFeature_DlssRayReconstruction = 1u << 1,
   ResourceFeature_FinalOidn = 1u << 2,
-  ResourceFeature_Svgf = 1u << 3,
-  ResourceFeature_Nrd = 1u << 4,
-  ResourceFeature_TonemapAo = 1u << 5,
+  ResourceFeature_TonemapAo = 1u << 3,
 };
 
 // Halton sequence helper for CPU-side jitter
@@ -268,14 +251,6 @@ static uint32_t ComputeResourceFeatureMask() {
   if (s_denoiserMode != DxrRenderer::DenoiserMode::Off && !IsDlssActive()) {
     mask |= ResourceFeature_FinalOidn;
   }
-  if (s_realtimeDenoiserMode == DxrRenderer::RealtimeDenoiserMode::SVGF &&
-      !IsDlssActive()) {
-    mask |= ResourceFeature_Svgf;
-  }
-  if (s_realtimeDenoiserMode == DxrRenderer::RealtimeDenoiserMode::NRD &&
-      !IsDlssActive()) {
-    mask |= ResourceFeature_Nrd;
-  }
   if (s_tonemapAoIntensity > 1.0e-4f) {
     mask |= ResourceFeature_TonemapAo;
   }
@@ -283,31 +258,20 @@ static uint32_t ComputeResourceFeatureMask() {
 }
 
 static bool NeedsDepthAndMotionBuffers(uint32_t mask) {
-  return (mask & (ResourceFeature_Dlss | ResourceFeature_Svgf |
-                  ResourceFeature_Nrd)) != 0;
+  return (mask & ResourceFeature_Dlss) != 0;
 }
 
 static bool NeedsSurfaceDataBuffers(uint32_t mask) {
   return (mask & (ResourceFeature_Dlss | ResourceFeature_FinalOidn |
-                  ResourceFeature_Svgf | ResourceFeature_Nrd |
                   ResourceFeature_TonemapAo)) != 0;
 }
 
 static bool NeedsLinearDepthBuffer(uint32_t mask) {
-  return (mask & (ResourceFeature_Svgf | ResourceFeature_TonemapAo)) != 0;
-}
-
-static bool NeedsSvgfResources(uint32_t mask) {
-  return (mask & ResourceFeature_Svgf) != 0;
-}
-
-static bool NeedsNrdResources(uint32_t mask) {
-  return (mask & ResourceFeature_Nrd) != 0;
+  return (mask & ResourceFeature_TonemapAo) != 0;
 }
 
 static bool NeedsSpecularAuxBuffers(uint32_t mask) {
-  return (mask & (ResourceFeature_DlssRayReconstruction |
-                  ResourceFeature_Nrd)) != 0;
+  return (mask & ResourceFeature_DlssRayReconstruction) != 0;
 }
 
 static bool NeedsDlssOutputBuffer(uint32_t mask) {
@@ -366,37 +330,13 @@ static ComPtr<ID3D12Resource> s_depthUAV;
 static ComPtr<ID3D12Resource> s_mvecUAV;
 static ComPtr<ID3D12Resource> s_albedoUAV;
 static ComPtr<ID3D12Resource> s_normalRoughnessUAV;
-static ComPtr<ID3D12Resource> s_svgfLinearDepthUAV;
+static ComPtr<ID3D12Resource> s_linearDepthUAV;
 static ComPtr<ID3D12Resource> s_dlssOutputUAV;
 static ComPtr<ID3D12Resource> s_oidnOutputUAV;
 static ComPtr<ID3D12Resource> s_tonemapOutputUAV;
 static ComPtr<ID3D12Resource> s_specularAlbedoUAV;
 static ComPtr<ID3D12Resource> s_specHitDistanceUAV;
 static ComPtr<ID3D12Resource> s_specularMotionVectorsUAV;
-static ComPtr<ID3D12Resource> s_svgfNoisyInputUAV;
-static ComPtr<ID3D12Resource> s_svgfHistoryColor[2];
-static ComPtr<ID3D12Resource> s_svgfHistoryMoments[2];
-static ComPtr<ID3D12Resource> s_svgfHistoryLength[2];
-static ComPtr<ID3D12Resource> s_svgfHistoryDepth[2];
-static ComPtr<ID3D12Resource> s_svgfHistoryNormal[2];
-static ComPtr<ID3D12Resource> s_svgfTemporalUAV;
-static ComPtr<ID3D12Resource> s_svgfVarianceUAV;
-static ComPtr<ID3D12Resource> s_svgfAtrousPingUAV;
-static ComPtr<ID3D12Resource> s_svgfAtrousPongUAV;
-static ID3D12Resource *s_svgfLatestOutput = nullptr;
-static bool s_svgfHistoryValid = false;
-static UINT s_svgfHistoryWriteIndex = 0;
-
-// NRD resources
-static ComPtr<ID3D12Resource> s_nrdDiffuseRadianceHitDistUAV;
-static ComPtr<ID3D12Resource> s_nrdSpecRadianceHitDistUAV;
-static ComPtr<ID3D12Resource> s_nrdViewZUAV;
-static ComPtr<ID3D12Resource> s_nrdNormalRoughnessUAV;
-static ComPtr<ID3D12Resource> s_nrdMvUAV;
-static ComPtr<ID3D12Resource> s_nrdOutDiffuseUAV;
-static ComPtr<ID3D12Resource> s_nrdOutSpecularUAV;
-static ComPtr<ID3D12Resource> s_nrdEmissionUAV;
-static ComPtr<ID3D12Resource> s_nrdCompositeUAV;
 
 static UINT s_outputUAVDescriptorSize = 0;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_outputUAVGpuHandle = {0};
@@ -411,22 +351,6 @@ static ComPtr<ID3D12RootSignature> s_tonemapRootSig;
 static ComPtr<ID3D12PipelineState> s_tonemapPSO;
 static ComPtr<ID3D12Resource> s_tonemapCB;
 static ComPtr<ID3D12DescriptorHeap> s_tonemapHeap;
-static ComPtr<ID3D12RootSignature> s_nrdCompositeRootSig;
-static ComPtr<ID3D12PipelineState> s_nrdCompositePSO;
-static ComPtr<ID3D12DescriptorHeap> s_nrdCompositeHeap;
-static ComPtr<ID3D12RootSignature> s_svgfTemporalRootSig;
-static ComPtr<ID3D12PipelineState> s_svgfTemporalPSO;
-static ComPtr<ID3D12DescriptorHeap> s_svgfTemporalHeap;
-static ComPtr<ID3D12RootSignature> s_svgfVarianceRootSig;
-static ComPtr<ID3D12PipelineState> s_svgfVariancePSO;
-static ComPtr<ID3D12DescriptorHeap> s_svgfVarianceHeap;
-static ComPtr<ID3D12RootSignature> s_svgfAtrousRootSig;
-static ComPtr<ID3D12PipelineState> s_svgfAtrousPSO;
-static ComPtr<ID3D12DescriptorHeap> s_svgfAtrousHeap;
-static ComPtr<ID3D12RootSignature> s_svgfCompositeRootSig;
-static ComPtr<ID3D12PipelineState> s_svgfCompositePSO;
-static ComPtr<ID3D12DescriptorHeap> s_svgfCompositeHeap;
-static ComPtr<ID3D12Resource> s_svgfConstantsCB;
 
 struct ShaderTableEntry {
   void *id;
@@ -739,13 +663,6 @@ static void EnsureNoiseStatsPipeline();
 static void EnsureAvgLumPipeline();
 static void EnsureRestirSpatialPipeline();
 static void EnsureRestirGiSpatialPipeline();
-static void EnsureNrdCompositePipeline();
-static void EnsureSvgfTemporalPipeline();
-static void EnsureSvgfVariancePipeline();
-static void EnsureSvgfAtrousPipeline();
-static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
-                               bool resetHistory,
-                               ID3D12Resource **outPostColor);
 
 struct TonemapConstants {
   uint32_t outWidth;
@@ -758,21 +675,6 @@ struct TonemapConstants {
   float aoRadiusMeters;
   uint32_t aoMode;
   float _pad0;
-};
-
-struct SvgfConstants {
-  uint32_t width;
-  uint32_t height;
-  uint32_t stepWidth;
-  uint32_t resetHistory;
-  float temporalAlpha;
-  float momentsAlpha;
-  float phiColor;
-  float phiNormal;
-  float phiDepth;
-  float normalRejectCos;
-  float depthRejectScale;
-  uint32_t remodulateAlbedo;
 };
 
 static void EnsureTonemapPipeline() {
@@ -892,404 +794,6 @@ static void EnsureTonemapPipeline() {
       D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&s_tonemapCB)));
   if (s_tonemapCB)
     s_tonemapCB->SetName(L"Tonemap Constants");
-}
-
-static void EnsureNrdCompositePipeline() {
-  if (s_nrdCompositePSO && s_nrdCompositeRootSig && s_nrdCompositeHeap)
-    return;
-  if (!s_device)
-    return;
-
-  D3D12_DESCRIPTOR_RANGE srvRange{};
-  srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-  srvRange.NumDescriptors = 8; // t0..t7
-  srvRange.BaseShaderRegister = 0;
-  srvRange.RegisterSpace = 0;
-
-  D3D12_DESCRIPTOR_RANGE uavRange{};
-  uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-  uavRange.NumDescriptors = 1;
-  uavRange.BaseShaderRegister = 0;
-  uavRange.RegisterSpace = 0;
-
-  D3D12_ROOT_PARAMETER params[2] = {};
-  params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-  params[0].DescriptorTable.NumDescriptorRanges = 1;
-  params[0].DescriptorTable.pDescriptorRanges = &srvRange;
-  params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-  params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-  params[1].DescriptorTable.NumDescriptorRanges = 1;
-  params[1].DescriptorTable.pDescriptorRanges = &uavRange;
-  params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-  D3D12_ROOT_SIGNATURE_DESC rsDesc{};
-  rsDesc.NumParameters = _countof(params);
-  rsDesc.pParameters = params;
-  rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
-
-  ComPtr<ID3DBlob> sig;
-  ComPtr<ID3DBlob> err;
-  HRESULT hrSerialize = D3D12SerializeRootSignature(
-      &rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err);
-  if (FAILED(hrSerialize)) {
-    if (err) {
-      fprintf(stderr, "DxrRenderer: NRD composite root signature error: %s\n",
-              (char *)err->GetBufferPointer());
-    }
-    return;
-  }
-  ThrowIfFailed(s_device->CreateRootSignature(
-      0, sig->GetBufferPointer(), sig->GetBufferSize(),
-      IID_PPV_ARGS(&s_nrdCompositeRootSig)));
-
-  ComPtr<IDxcBlob> cs;
-  try {
-    std::vector<std::wstring> defines;
-    cs = s_dxcHelper.Compile(L"shaders/nrd_composite_cs.hlsl", L"CSMain",
-                             L"cs_6_3", defines);
-  } catch (const std::exception &e) {
-    fprintf(stderr, "DxrRenderer: NRD composite CS compile failed: %s\n",
-            e.what());
-    return;
-  }
-  if (!cs) {
-    fprintf(stderr, "DxrRenderer: NRD composite CS blob null\n");
-    return;
-  }
-
-  D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
-  psoDesc.pRootSignature = s_nrdCompositeRootSig.Get();
-  psoDesc.CS.pShaderBytecode = cs->GetBufferPointer();
-  psoDesc.CS.BytecodeLength = cs->GetBufferSize();
-  ThrowIfFailed(s_device->CreateComputePipelineState(
-      &psoDesc, IID_PPV_ARGS(&s_nrdCompositePSO)));
-
-  D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-  heapDesc.NumDescriptors = 9; // 8 SRVs (t0..t7) + 1 UAV (u0)
-  heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-  heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-  ThrowIfFailed(s_device->CreateDescriptorHeap(
-      &heapDesc, IID_PPV_ARGS(&s_nrdCompositeHeap)));
-}
-
-static void EnsureSvgfConstantBuffer() {
-  if (s_svgfConstantsCB || !s_device) {
-    return;
-  }
-
-  D3D12_HEAP_PROPERTIES uploadProps = {};
-  uploadProps.Type = D3D12_HEAP_TYPE_UPLOAD;
-  D3D12_RESOURCE_DESC cbDesc = {};
-  cbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-  cbDesc.Width = (sizeof(SvgfConstants) + 255) & ~255u;
-  cbDesc.Height = 1;
-  cbDesc.DepthOrArraySize = 1;
-  cbDesc.MipLevels = 1;
-  cbDesc.SampleDesc.Count = 1;
-  cbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-  ThrowIfFailed(s_device->CreateCommittedResource(
-      &uploadProps, D3D12_HEAP_FLAG_NONE, &cbDesc,
-      D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-      IID_PPV_ARGS(&s_svgfConstantsCB)));
-  if (s_svgfConstantsCB) {
-    s_svgfConstantsCB->SetName(L"SVGF Constants");
-  }
-}
-
-static void EnsureSvgfTemporalPipeline() {
-  if (s_svgfTemporalPSO && s_svgfTemporalRootSig && s_svgfTemporalHeap) {
-    return;
-  }
-  if (!s_device) {
-    return;
-  }
-  EnsureSvgfConstantBuffer();
-
-  D3D12_DESCRIPTOR_RANGE srvRange = {};
-  srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-  srvRange.NumDescriptors = 10;
-  srvRange.BaseShaderRegister = 0;
-
-  D3D12_DESCRIPTOR_RANGE uavRange = {};
-  uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-  uavRange.NumDescriptors = 3;
-  uavRange.BaseShaderRegister = 0;
-
-  D3D12_ROOT_PARAMETER params[3] = {};
-  params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-  params[0].Constants.Num32BitValues = sizeof(SvgfConstants) / 4;
-  params[0].Constants.ShaderRegister = 0;
-  params[0].Constants.RegisterSpace = 0;
-  params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-  params[1].DescriptorTable.NumDescriptorRanges = 1;
-  params[1].DescriptorTable.pDescriptorRanges = &srvRange;
-  params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-  params[2].DescriptorTable.NumDescriptorRanges = 1;
-  params[2].DescriptorTable.pDescriptorRanges = &uavRange;
-
-  D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
-  rsDesc.NumParameters = _countof(params);
-  rsDesc.pParameters = params;
-
-  ComPtr<ID3DBlob> sig;
-  ComPtr<ID3DBlob> err;
-  HRESULT hrSerialize = D3D12SerializeRootSignature(
-      &rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err);
-  if (FAILED(hrSerialize)) {
-    if (err) {
-      fprintf(stderr, "DxrRenderer: SVGF temporal root signature error: %s\n",
-              (char *)err->GetBufferPointer());
-    }
-    return;
-  }
-  ThrowIfFailed(s_device->CreateRootSignature(
-      0, sig->GetBufferPointer(), sig->GetBufferSize(),
-      IID_PPV_ARGS(&s_svgfTemporalRootSig)));
-
-  ComPtr<IDxcBlob> cs;
-  try {
-    std::vector<std::wstring> defines;
-    cs = s_dxcHelper.Compile(L"shaders/svgf_temporal_cs.hlsl", L"CSMain",
-                             L"cs_6_3", defines);
-  } catch (const std::exception &e) {
-    fprintf(stderr, "DxrRenderer: SVGF temporal CS compile failed: %s\n",
-            e.what());
-    return;
-  }
-
-  D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
-  psoDesc.pRootSignature = s_svgfTemporalRootSig.Get();
-  psoDesc.CS = {cs->GetBufferPointer(), cs->GetBufferSize()};
-  ThrowIfFailed(s_device->CreateComputePipelineState(
-      &psoDesc, IID_PPV_ARGS(&s_svgfTemporalPSO)));
-
-  D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-  heapDesc.NumDescriptors = 13;
-  heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-  heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-  ThrowIfFailed(s_device->CreateDescriptorHeap(
-      &heapDesc, IID_PPV_ARGS(&s_svgfTemporalHeap)));
-}
-
-static void EnsureSvgfVariancePipeline() {
-  if (s_svgfVariancePSO && s_svgfVarianceRootSig && s_svgfVarianceHeap) {
-    return;
-  }
-  if (!s_device) {
-    return;
-  }
-  EnsureSvgfConstantBuffer();
-
-  D3D12_DESCRIPTOR_RANGE srvRange = {};
-  srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-  srvRange.NumDescriptors = 3;
-  srvRange.BaseShaderRegister = 0;
-
-  D3D12_DESCRIPTOR_RANGE uavRange = {};
-  uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-  uavRange.NumDescriptors = 1;
-  uavRange.BaseShaderRegister = 0;
-
-  D3D12_ROOT_PARAMETER params[3] = {};
-  params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-  params[0].Constants.Num32BitValues = sizeof(SvgfConstants) / 4;
-  params[0].Constants.ShaderRegister = 0;
-  params[0].Constants.RegisterSpace = 0;
-  params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-  params[1].DescriptorTable.NumDescriptorRanges = 1;
-  params[1].DescriptorTable.pDescriptorRanges = &srvRange;
-  params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-  params[2].DescriptorTable.NumDescriptorRanges = 1;
-  params[2].DescriptorTable.pDescriptorRanges = &uavRange;
-
-  D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
-  rsDesc.NumParameters = _countof(params);
-  rsDesc.pParameters = params;
-
-  ComPtr<ID3DBlob> sig;
-  ComPtr<ID3DBlob> err;
-  HRESULT hrSerialize = D3D12SerializeRootSignature(
-      &rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err);
-  if (FAILED(hrSerialize)) {
-    if (err) {
-      fprintf(stderr, "DxrRenderer: SVGF variance root signature error: %s\n",
-              (char *)err->GetBufferPointer());
-    }
-    return;
-  }
-  ThrowIfFailed(s_device->CreateRootSignature(
-      0, sig->GetBufferPointer(), sig->GetBufferSize(),
-      IID_PPV_ARGS(&s_svgfVarianceRootSig)));
-
-  ComPtr<IDxcBlob> cs;
-  try {
-    std::vector<std::wstring> defines;
-    cs = s_dxcHelper.Compile(L"shaders/svgf_variance_cs.hlsl", L"CSMain",
-                             L"cs_6_3", defines);
-  } catch (const std::exception &e) {
-    fprintf(stderr, "DxrRenderer: SVGF variance CS compile failed: %s\n",
-            e.what());
-    return;
-  }
-
-  D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
-  psoDesc.pRootSignature = s_svgfVarianceRootSig.Get();
-  psoDesc.CS = {cs->GetBufferPointer(), cs->GetBufferSize()};
-  ThrowIfFailed(s_device->CreateComputePipelineState(
-      &psoDesc, IID_PPV_ARGS(&s_svgfVariancePSO)));
-
-  D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-  heapDesc.NumDescriptors = 4;
-  heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-  heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-  ThrowIfFailed(s_device->CreateDescriptorHeap(
-      &heapDesc, IID_PPV_ARGS(&s_svgfVarianceHeap)));
-}
-
-static void EnsureSvgfAtrousPipeline() {
-  if (s_svgfAtrousPSO && s_svgfAtrousRootSig && s_svgfAtrousHeap) {
-    return;
-  }
-  if (!s_device) {
-    return;
-  }
-  EnsureSvgfConstantBuffer();
-
-  D3D12_DESCRIPTOR_RANGE srvRange = {};
-  srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-  srvRange.NumDescriptors = 5;
-  srvRange.BaseShaderRegister = 0;
-
-  D3D12_DESCRIPTOR_RANGE uavRange = {};
-  uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-  uavRange.NumDescriptors = 1;
-  uavRange.BaseShaderRegister = 0;
-
-  D3D12_ROOT_PARAMETER params[3] = {};
-  params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-  params[0].Constants.Num32BitValues = sizeof(SvgfConstants) / 4;
-  params[0].Constants.ShaderRegister = 0;
-  params[0].Constants.RegisterSpace = 0;
-  params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-  params[1].DescriptorTable.NumDescriptorRanges = 1;
-  params[1].DescriptorTable.pDescriptorRanges = &srvRange;
-  params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-  params[2].DescriptorTable.NumDescriptorRanges = 1;
-  params[2].DescriptorTable.pDescriptorRanges = &uavRange;
-
-  D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
-  rsDesc.NumParameters = _countof(params);
-  rsDesc.pParameters = params;
-
-  ComPtr<ID3DBlob> sig;
-  ComPtr<ID3DBlob> err;
-  HRESULT hrSerialize = D3D12SerializeRootSignature(
-      &rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err);
-  if (FAILED(hrSerialize)) {
-    if (err) {
-      fprintf(stderr, "DxrRenderer: SVGF A-Trous root signature error: %s\n",
-              (char *)err->GetBufferPointer());
-    }
-    return;
-  }
-  ThrowIfFailed(s_device->CreateRootSignature(
-      0, sig->GetBufferPointer(), sig->GetBufferSize(),
-      IID_PPV_ARGS(&s_svgfAtrousRootSig)));
-
-  ComPtr<IDxcBlob> cs;
-  try {
-    std::vector<std::wstring> defines;
-    cs = s_dxcHelper.Compile(L"shaders/svgf_atrous_cs.hlsl", L"CSMain",
-                             L"cs_6_3", defines);
-  } catch (const std::exception &e) {
-    fprintf(stderr, "DxrRenderer: SVGF A-Trous CS compile failed: %s\n",
-            e.what());
-    return;
-  }
-
-  D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
-  psoDesc.pRootSignature = s_svgfAtrousRootSig.Get();
-  psoDesc.CS = {cs->GetBufferPointer(), cs->GetBufferSize()};
-  ThrowIfFailed(s_device->CreateComputePipelineState(
-      &psoDesc, IID_PPV_ARGS(&s_svgfAtrousPSO)));
-
-  D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-  heapDesc.NumDescriptors = 60;
-  heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-  heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-  ThrowIfFailed(s_device->CreateDescriptorHeap(
-      &heapDesc, IID_PPV_ARGS(&s_svgfAtrousHeap)));
-}
-
-static void EnsureSvgfCompositePipeline() {
-  if (s_svgfCompositePSO && s_svgfCompositeRootSig && s_svgfCompositeHeap) {
-    return;
-  }
-  if (!s_device) {
-    return;
-  }
-
-  D3D12_DESCRIPTOR_RANGE srvRange = {};
-  srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-  srvRange.NumDescriptors = 2;
-  srvRange.BaseShaderRegister = 0;
-
-  D3D12_DESCRIPTOR_RANGE uavRange = {};
-  uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-  uavRange.NumDescriptors = 1;
-  uavRange.BaseShaderRegister = 0;
-
-  D3D12_ROOT_PARAMETER params[2] = {};
-  params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-  params[0].DescriptorTable.NumDescriptorRanges = 1;
-  params[0].DescriptorTable.pDescriptorRanges = &srvRange;
-  params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-  params[1].DescriptorTable.NumDescriptorRanges = 1;
-  params[1].DescriptorTable.pDescriptorRanges = &uavRange;
-
-  D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
-  rsDesc.NumParameters = _countof(params);
-  rsDesc.pParameters = params;
-
-  ComPtr<ID3DBlob> sig;
-  ComPtr<ID3DBlob> err;
-  HRESULT hrSerialize = D3D12SerializeRootSignature(
-      &rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err);
-  if (FAILED(hrSerialize)) {
-    if (err) {
-      fprintf(stderr, "DxrRenderer: SVGF composite root signature error: %s\n",
-              (char *)err->GetBufferPointer());
-    }
-    return;
-  }
-  ThrowIfFailed(s_device->CreateRootSignature(
-      0, sig->GetBufferPointer(), sig->GetBufferSize(),
-      IID_PPV_ARGS(&s_svgfCompositeRootSig)));
-
-  ComPtr<IDxcBlob> cs;
-  try {
-    std::vector<std::wstring> defines;
-    cs = s_dxcHelper.Compile(L"shaders/svgf_composite_cs.hlsl", L"CSMain",
-                             L"cs_6_3", defines);
-  } catch (const std::exception &e) {
-    fprintf(stderr, "DxrRenderer: SVGF composite CS compile failed: %s\n",
-            e.what());
-    return;
-  }
-
-  D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
-  psoDesc.pRootSignature = s_svgfCompositeRootSig.Get();
-  psoDesc.CS = {cs->GetBufferPointer(), cs->GetBufferSize()};
-  ThrowIfFailed(s_device->CreateComputePipelineState(
-      &psoDesc, IID_PPV_ARGS(&s_svgfCompositePSO)));
-
-  D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-  heapDesc.NumDescriptors = 3;
-  heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-  heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-  ThrowIfFailed(s_device->CreateDescriptorHeap(
-      &heapDesc, IID_PPV_ARGS(&s_svgfCompositeHeap)));
 }
 
 static void EnsureRestirSpatialPipeline() {
@@ -2165,8 +1669,6 @@ void SetCommandQueue(ID3D12CommandQueue *commandQueue, ID3D12Fence *fence,
   s_frameIndexPtr = frameIndexPtr;
   s_fenceEvent = fenceEvent;
 
-  NrdDenoiser::Get().Initialize(s_device, s_commandQueue);
-
   if (s_asyncComputeFenceEvent) {
     CloseHandle(s_asyncComputeFenceEvent);
     s_asyncComputeFenceEvent = nullptr;
@@ -2219,8 +1721,6 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
       NeedsSurfaceDataBuffers(resourceFeatureMask);
   const bool needsLinearDepthBuffer =
       NeedsLinearDepthBuffer(resourceFeatureMask);
-  const bool needsSvgfResources = NeedsSvgfResources(resourceFeatureMask);
-  const bool needsNrdResources = NeedsNrdResources(resourceFeatureMask);
   const bool needsSpecularAuxBuffers =
       NeedsSpecularAuxBuffers(resourceFeatureMask);
   const bool needsDlssOutputBuffer =
@@ -2691,33 +2191,11 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   s_depthUAV.Reset();
   s_mvecUAV.Reset();
   s_albedoUAV.Reset();
-  s_svgfLinearDepthUAV.Reset();
+  s_linearDepthUAV.Reset();
   s_specularAlbedoUAV.Reset();
   s_specHitDistanceUAV.Reset();
   s_specularMotionVectorsUAV.Reset();
-  s_svgfNoisyInputUAV.Reset();
-  for (UINT i = 0; i < 2; ++i) {
-    s_svgfHistoryColor[i].Reset();
-    s_svgfHistoryMoments[i].Reset();
-    s_svgfHistoryLength[i].Reset();
-    s_svgfHistoryDepth[i].Reset();
-    s_svgfHistoryNormal[i].Reset();
-  }
-  s_svgfTemporalUAV.Reset();
-  s_svgfVarianceUAV.Reset();
-  s_svgfAtrousPingUAV.Reset();
-  s_svgfAtrousPongUAV.Reset();
-  s_svgfLatestOutput = nullptr;
   s_normalRoughnessUAV.Reset();
-  s_nrdDiffuseRadianceHitDistUAV.Reset();
-  s_nrdSpecRadianceHitDistUAV.Reset();
-  s_nrdViewZUAV.Reset();
-  s_nrdNormalRoughnessUAV.Reset();
-  s_nrdMvUAV.Reset();
-  s_nrdOutDiffuseUAV.Reset();
-  s_nrdOutSpecularUAV.Reset();
-  s_nrdEmissionUAV.Reset();
-  s_nrdCompositeUAV.Reset();
   s_dlssOutputUAV.Reset();
   s_tonemapOutputUAV.Reset();
   // Enable SHARED flag for OIDN interop (and potentially DLSS/Streamline)
@@ -2768,31 +2246,6 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
                      DXGI_FORMAT_R16G16_FLOAT, L"RT Specular MotionVectors");
   }
 
-  // NRD required resources (all are full window bounds, mostly FP16 or FP32)
-  if (needsNrdResources) {
-    CreateUavTexture(s_nrdDiffuseRadianceHitDistUAV, texDesc,
-                     DXGI_FORMAT_R16G16B16A16_FLOAT,
-                     L"NRD DiffRadiance HitDist");
-    CreateUavTexture(s_nrdSpecRadianceHitDistUAV, texDesc,
-                     DXGI_FORMAT_R16G16B16A16_FLOAT,
-                     L"NRD SpecRadiance HitDist");
-    CreateUavTexture(s_nrdViewZUAV, texDesc, DXGI_FORMAT_R32_FLOAT,
-                     L"NRD ViewZ");
-    CreateUavTexture(s_nrdNormalRoughnessUAV, texDesc,
-                     DXGI_FORMAT_R16G16B16A16_FLOAT,
-                     L"NRD NormalRoughness");
-    CreateUavTexture(s_nrdMvUAV, texDesc, DXGI_FORMAT_R16G16_FLOAT,
-                     L"NRD MotionVectors");
-    CreateUavTexture(s_nrdOutDiffuseUAV, texDesc,
-                     DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD Out Diffuse");
-    CreateUavTexture(s_nrdOutSpecularUAV, texDesc,
-                     DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD Out Specular");
-    CreateUavTexture(s_nrdEmissionUAV, texDesc,
-                     DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD Emission");
-    CreateUavTexture(s_nrdCompositeUAV, texDesc,
-                     DXGI_FORMAT_R16G16B16A16_FLOAT, L"NRD Composite");
-  }
-
   // DLSS output is output-size in linear HDR (pre-tonemap).
   if (needsDlssOutputBuffer) {
     CreateUavTexture(s_dlssOutputUAV, outDesc, DXGI_FORMAT_R16G16B16A16_FLOAT,
@@ -2810,34 +2263,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   CreateUavTexture(s_tonemapOutputUAV, outDesc, DXGI_FORMAT_R10G10B10A2_UNORM,
                    L"RT Tonemap Output");
   if (needsLinearDepthBuffer) {
-    CreateUavTexture(s_svgfLinearDepthUAV, texDesc, DXGI_FORMAT_R32_FLOAT,
-                     L"SVGF Linear Depth");
-  }
-  if (needsSvgfResources) {
-    CreateUavTexture(s_svgfNoisyInputUAV, texDesc,
-                     DXGI_FORMAT_R16G16B16A16_FLOAT, L"SVGF Noisy Input");
-    CreateUavTexture(s_svgfTemporalUAV, texDesc,
-                     DXGI_FORMAT_R16G16B16A16_FLOAT, L"SVGF Temporal");
-    CreateUavTexture(s_svgfVarianceUAV, texDesc, DXGI_FORMAT_R32_FLOAT,
-                     L"SVGF Variance");
-    CreateUavTexture(s_svgfAtrousPingUAV, texDesc,
-                     DXGI_FORMAT_R16G16B16A16_FLOAT, L"SVGF A-Trous Ping");
-    CreateUavTexture(s_svgfAtrousPongUAV, texDesc,
-                     DXGI_FORMAT_R16G16B16A16_FLOAT, L"SVGF A-Trous Pong");
-    for (UINT i = 0; i < 2; ++i) {
-      CreateUavTexture(s_svgfHistoryColor[i], texDesc,
-                       DXGI_FORMAT_R16G16B16A16_FLOAT,
-                       L"SVGF History Color");
-      CreateUavTexture(s_svgfHistoryMoments[i], texDesc,
-                       DXGI_FORMAT_R32G32_FLOAT, L"SVGF History Moments");
-      CreateUavTexture(s_svgfHistoryLength[i], texDesc, DXGI_FORMAT_R32_FLOAT,
-                       L"SVGF History Length");
-      CreateUavTexture(s_svgfHistoryDepth[i], texDesc, DXGI_FORMAT_R32_FLOAT,
-                       L"SVGF History Depth");
-      CreateUavTexture(s_svgfHistoryNormal[i], texDesc,
-                       DXGI_FORMAT_R16G16B16A16_FLOAT,
-                       L"SVGF History Normal");
-    }
+    CreateUavTexture(s_linearDepthUAV, texDesc, DXGI_FORMAT_R32_FLOAT,
+                     L"RT Linear Depth");
   }
 
   D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
@@ -2887,46 +2314,14 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
               DXR_HEAP_NORMAL_ROUGHNESS_UAV_OFFSET);
   CreateUavAt(s_dlssOutputUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
               DXR_HEAP_DLSS_OUT_UAV_OFFSET);
-  CreateUavAt(s_svgfLinearDepthUAV.Get(), DXGI_FORMAT_R32_FLOAT,
-              DXR_HEAP_SVGF_LINEAR_DEPTH_UAV_OFFSET);
+  CreateUavAt(s_linearDepthUAV.Get(), DXGI_FORMAT_R32_FLOAT,
+              DXR_HEAP_LINEAR_DEPTH_UAV_OFFSET);
   CreateUavAt(s_oidnOutputUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
               DXR_HEAP_OIDN_OUT_UAV_OFFSET);
-  CreateUavAt(s_svgfNoisyInputUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
-              DXR_HEAP_SVGF_NOISY_OFFSET);
-  CreateUavAt(s_nrdDiffuseRadianceHitDistUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
-              DXR_HEAP_NRD_DIFFUSE_RADIANCE_HITDIST_OFFSET);
-  CreateUavAt(s_nrdSpecRadianceHitDistUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
-              DXR_HEAP_NRD_SPEC_RADIANCE_HITDIST_OFFSET);
-  CreateUavAt(s_nrdViewZUAV.Get(), DXGI_FORMAT_R32_FLOAT,
-              DXR_HEAP_NRD_VIEWZ_OFFSET);
-  CreateUavAt(s_nrdNormalRoughnessUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
-              DXR_HEAP_NRD_NORMAL_ROUGHNESS_OFFSET);
-  CreateUavAt(s_nrdMvUAV.Get(), DXGI_FORMAT_R16G16_FLOAT,
-              DXR_HEAP_NRD_MV_OFFSET);
-  CreateUavAt(s_nrdOutDiffuseUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
-              DXR_HEAP_NRD_OUT_DIFFUSE_OFFSET);
-  CreateUavAt(s_nrdOutSpecularUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
-              DXR_HEAP_NRD_OUT_SPECULAR_OFFSET);
-  CreateUavAt(s_nrdEmissionUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
-              DXR_HEAP_NRD_EMISSION_OFFSET);
 
   // Prepare tonemap pipeline resources.
   EnsureTonemapPipeline();
-  EnsureNrdCompositePipeline();
-  EnsureSvgfTemporalPipeline();
-  EnsureSvgfVariancePipeline();
-  EnsureSvgfAtrousPipeline();
-
-  if (needsNrdResources) {
-    NrdDenoiser::Get().Initialize(s_device, s_commandQueue);
-    NrdDenoiser::Get().Recreate(s_outputWidth, s_outputHeight);
-  } else {
-    NrdDenoiser::Get().Shutdown();
-  }
   s_resourceFeatureMask = resourceFeatureMask;
-  s_svgfHistoryValid = false;
-  s_svgfHistoryWriteIndex = 0;
-  s_svgfLatestOutput = nullptr;
 
   // Create Accumulation UAV
   s_accumulation.Resize(s_outputWidth, s_outputHeight);
@@ -4119,9 +3514,6 @@ void ResetAccumulation() {
   // Accumulation resets happen on real camera/settings changes; per-frame
   // jitter changes must not trigger this.
   s_streamlineResetHistory = true;
-  s_svgfHistoryValid = false;
-  s_svgfHistoryWriteIndex = 0;
-  s_svgfLatestOutput = nullptr;
   if (g_verboseRenderLogs) {
     fprintf(stderr, "DxrRenderer: Accumulation Reset\n");
   }
@@ -4137,14 +3529,6 @@ void ResetStreamlineHistory() {
   s_rrStillFrameSpp = 0;
   s_hasTonemappedFrame = false;
   s_streamlineResetHistory = true;
-}
-
-void ResetRealtimeDenoiserHistory() {
-  s_svgfHistoryValid = false;
-  s_svgfHistoryWriteIndex = 0;
-  s_svgfLatestOutput = nullptr;
-  s_streamlineResetHistory = true;
-  s_hasTonemappedFrame = false;
 }
 
 void SetDenoiserMode(DenoiserMode m) {
@@ -4164,36 +3548,6 @@ void SetDenoiserMode(DenoiserMode m) {
 }
 
 DenoiserMode GetDenoiserMode() { return s_denoiserMode; }
-
-void SetRealtimeDenoiserMode(RealtimeDenoiserMode m) {
-  if (s_realtimeDenoiserMode == m)
-    return;
-  s_realtimeDenoiserMode = m;
-  g_cameraData.nrdEnabled = (m == RealtimeDenoiserMode::NRD) ? 1.0f : 0.0f;
-  UpdateCameraCB();
-  ResetRealtimeDenoiserHistory();
-  DxrRenderer::ResetAccumulation();
-}
-
-RealtimeDenoiserMode GetRealtimeDenoiserMode() {
-  return s_realtimeDenoiserMode;
-}
-
-void SetSvgfSettings(const SvgfSettings &settings) {
-  s_svgfSettings.temporalAlpha =
-      (std::clamp)(settings.temporalAlpha, 0.0f, 1.0f);
-  s_svgfSettings.momentsAlpha =
-      (std::clamp)(settings.momentsAlpha, 0.0f, 1.0f);
-  s_svgfSettings.atrousIterations =
-      (std::clamp)(settings.atrousIterations, 1, 8);
-  s_svgfSettings.phiColor = (std::max)(settings.phiColor, 0.01f);
-  s_svgfSettings.phiNormal = (std::max)(settings.phiNormal, 1.0f);
-  s_svgfSettings.phiDepth = (std::max)(settings.phiDepth, 0.001f);
-  ResetRealtimeDenoiserHistory();
-  s_hasTonemappedFrame = false;
-}
-
-SvgfSettings GetSvgfSettings() { return s_svgfSettings; }
 
 void SetOidnQuality(OidnDenoiser::Quality q) {
   s_oidnQuality = q;
@@ -4290,378 +3644,6 @@ void SetRrJitterScale(float scale) {
 }
 
 float GetRrJitterScale() { return s_rrJitterScale; }
-
-static bool DispatchSvgfPasses(ID3D12GraphicsCommandList4 *dxrList,
-                               bool resetHistory,
-                               ID3D12Resource **outPostColor) {
-  if (!dxrList || !outPostColor || !s_device || !s_svgfNoisyInputUAV ||
-      !s_svgfLinearDepthUAV || !s_normalRoughnessUAV || !s_mvecUAV ||
-      !s_svgfTemporalUAV || !s_svgfVarianceUAV || !s_svgfAtrousPingUAV ||
-      !s_svgfAtrousPongUAV) {
-    return false;
-  }
-
-  EnsureSvgfTemporalPipeline();
-  EnsureSvgfVariancePipeline();
-  EnsureSvgfAtrousPipeline();
-  EnsureSvgfCompositePipeline();
-  if (!s_svgfTemporalPSO || !s_svgfVariancePSO || !s_svgfAtrousPSO ||
-      !s_svgfCompositePSO || !s_svgfTemporalHeap || !s_svgfVarianceHeap ||
-      !s_svgfAtrousHeap || !s_svgfCompositeHeap ||
-      !s_svgfConstantsCB) {
-    return false;
-  }
-
-  const UINT curr = s_svgfHistoryWriteIndex;
-  const UINT prev = 1u - curr;
-  const bool hasHistory = s_svgfHistoryValid && !resetHistory;
-
-  auto WriteConstants = [&](uint32_t stepWidth, bool resetFlag, bool remodulate) {
-    SvgfConstants cb = {};
-    cb.width = s_outputWidth;
-    cb.height = s_outputHeight;
-    cb.stepWidth = stepWidth;
-    cb.resetHistory = resetFlag ? 1u : 0u;
-    cb.temporalAlpha = s_svgfSettings.temporalAlpha;
-    cb.momentsAlpha = s_svgfSettings.momentsAlpha;
-    cb.phiColor = s_svgfSettings.phiColor;
-    cb.phiNormal = s_svgfSettings.phiNormal;
-    cb.phiDepth = s_svgfSettings.phiDepth;
-    cb.normalRejectCos = 0.90f; // Loosened from 0.95 to preserve more history
-    cb.depthRejectScale = 0.02f;
-    cb.remodulateAlbedo = remodulate ? 1u : 0u;
-    return cb;
-  };
-
-  auto CreateSrvAt = [&](ID3D12DescriptorHeap *heap, UINT index,
-                         ID3D12Resource *res, DXGI_FORMAT format) {
-    D3D12_SHADER_RESOURCE_VIEW_DESC srv = {};
-    srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    srv.Format = format;
-    srv.Texture2D.MostDetailedMip = 0;
-    srv.Texture2D.MipLevels = 1;
-    srv.Texture2D.ResourceMinLODClamp = 0.0f;
-    D3D12_CPU_DESCRIPTOR_HANDLE cpu = heap->GetCPUDescriptorHandleForHeapStart();
-    cpu.ptr += (SIZE_T)index * s_device->GetDescriptorHandleIncrementSize(
-                                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-    s_device->CreateShaderResourceView(res, &srv, cpu);
-  };
-
-  auto CreateUavAt = [&](ID3D12DescriptorHeap *heap, UINT index,
-                         ID3D12Resource *res, DXGI_FORMAT format) {
-    D3D12_UNORDERED_ACCESS_VIEW_DESC uav = {};
-    uav.Format = format;
-    uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-    D3D12_CPU_DESCRIPTOR_HANDLE cpu = heap->GetCPUDescriptorHandleForHeapStart();
-    cpu.ptr += (SIZE_T)index * s_device->GetDescriptorHandleIncrementSize(
-                                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-    s_device->CreateUnorderedAccessView(res, nullptr, &uav, cpu);
-  };
-
-  TransitionResource(dxrList, s_svgfNoisyInputUAV.Get(),
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-  TransitionResource(dxrList, s_svgfLinearDepthUAV.Get(),
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-  TransitionResource(dxrList, s_normalRoughnessUAV.Get(),
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-  TransitionResource(dxrList, s_mvecUAV.Get(),
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-  TransitionResource(dxrList, s_albedoUAV.Get(),
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-  TransitionResource(dxrList, s_svgfHistoryColor[prev].Get(),
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-  TransitionResource(dxrList, s_svgfHistoryMoments[prev].Get(),
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-  TransitionResource(dxrList, s_svgfHistoryLength[prev].Get(),
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-  TransitionResource(dxrList, s_svgfHistoryDepth[prev].Get(),
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-  TransitionResource(dxrList, s_svgfHistoryNormal[prev].Get(),
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-
-  SvgfConstants cbTemp1 = WriteConstants(1u, !hasHistory, false);
-  CreateSrvAt(s_svgfTemporalHeap.Get(), 0, s_svgfNoisyInputUAV.Get(),
-              DXGI_FORMAT_R16G16B16A16_FLOAT);
-  CreateSrvAt(s_svgfTemporalHeap.Get(), 1, s_svgfLinearDepthUAV.Get(),
-              DXGI_FORMAT_R32_FLOAT);
-  CreateSrvAt(s_svgfTemporalHeap.Get(), 2, s_normalRoughnessUAV.Get(),
-              DXGI_FORMAT_R16G16B16A16_FLOAT);
-  CreateSrvAt(s_svgfTemporalHeap.Get(), 3, s_mvecUAV.Get(), DXGI_FORMAT_R16G16_FLOAT);
-  CreateSrvAt(s_svgfTemporalHeap.Get(), 4,
-              s_svgfHistoryColor[prev].Get(),
-              DXGI_FORMAT_R16G16B16A16_FLOAT);
-  CreateSrvAt(s_svgfTemporalHeap.Get(), 5,
-              s_svgfHistoryMoments[prev].Get(),
-              DXGI_FORMAT_R32G32_FLOAT);
-  CreateSrvAt(s_svgfTemporalHeap.Get(), 6,
-              s_svgfHistoryLength[prev].Get(),
-              DXGI_FORMAT_R32_FLOAT);
-  CreateSrvAt(s_svgfTemporalHeap.Get(), 7,
-              s_svgfHistoryDepth[prev].Get(),
-              DXGI_FORMAT_R32_FLOAT);
-  CreateSrvAt(s_svgfTemporalHeap.Get(), 8,
-              s_svgfHistoryNormal[prev].Get(),
-              DXGI_FORMAT_R16G16B16A16_FLOAT);
-  CreateSrvAt(s_svgfTemporalHeap.Get(), 9, s_albedoUAV.Get(),
-              DXGI_FORMAT_R16G16B16A16_FLOAT);
-  CreateUavAt(s_svgfTemporalHeap.Get(), 10, s_svgfTemporalUAV.Get(),
-              DXGI_FORMAT_R16G16B16A16_FLOAT);
-  CreateUavAt(s_svgfTemporalHeap.Get(), 11, s_svgfHistoryMoments[curr].Get(),
-              DXGI_FORMAT_R32G32_FLOAT);
-  CreateUavAt(s_svgfTemporalHeap.Get(), 12, s_svgfHistoryLength[curr].Get(),
-              DXGI_FORMAT_R32_FLOAT);
-
-  ID3D12DescriptorHeap *temporalHeaps[] = {s_svgfTemporalHeap.Get()};
-  dxrList->SetDescriptorHeaps(1, temporalHeaps);
-  dxrList->SetPipelineState(s_svgfTemporalPSO.Get());
-  dxrList->SetComputeRootSignature(s_svgfTemporalRootSig.Get());
-  dxrList->SetComputeRoot32BitConstants(0, sizeof(SvgfConstants) / 4, &cbTemp1, 0);
-  D3D12_GPU_DESCRIPTOR_HANDLE temporalGpu =
-      s_svgfTemporalHeap->GetGPUDescriptorHandleForHeapStart();
-  dxrList->SetComputeRootDescriptorTable(1, temporalGpu);
-  D3D12_GPU_DESCRIPTOR_HANDLE temporalUavGpu = temporalGpu;
-  temporalUavGpu.ptr += 10ull * s_device->GetDescriptorHandleIncrementSize(
-                                    D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-  dxrList->SetComputeRootDescriptorTable(2, temporalUavGpu);
-  dxrList->Dispatch((s_outputWidth + 7) / 8, (s_outputHeight + 7) / 8, 1);
-
-  TransitionResource(dxrList, s_svgfTemporalUAV.Get(),
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-  TransitionResource(dxrList, s_svgfHistoryMoments[curr].Get(),
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-  TransitionResource(dxrList, s_svgfHistoryLength[curr].Get(),
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-
-  CreateSrvAt(s_svgfVarianceHeap.Get(), 0, s_svgfTemporalUAV.Get(),
-              DXGI_FORMAT_R16G16B16A16_FLOAT);
-  CreateSrvAt(s_svgfVarianceHeap.Get(), 1, s_svgfHistoryMoments[curr].Get(),
-              DXGI_FORMAT_R32G32_FLOAT);
-  CreateSrvAt(s_svgfVarianceHeap.Get(), 2, s_svgfHistoryLength[curr].Get(),
-              DXGI_FORMAT_R32_FLOAT);
-  CreateUavAt(s_svgfVarianceHeap.Get(), 3, s_svgfVarianceUAV.Get(),
-              DXGI_FORMAT_R32_FLOAT);
-
-  ID3D12DescriptorHeap *varianceHeaps[] = {s_svgfVarianceHeap.Get()};
-  dxrList->SetDescriptorHeaps(1, varianceHeaps);
-  dxrList->SetPipelineState(s_svgfVariancePSO.Get());
-  dxrList->SetComputeRootSignature(s_svgfVarianceRootSig.Get());
-  dxrList->SetComputeRoot32BitConstants(0, sizeof(SvgfConstants) / 4, &cbTemp1, 0);
-  D3D12_GPU_DESCRIPTOR_HANDLE varianceGpu =
-      s_svgfVarianceHeap->GetGPUDescriptorHandleForHeapStart();
-  dxrList->SetComputeRootDescriptorTable(1, varianceGpu);
-  D3D12_GPU_DESCRIPTOR_HANDLE varianceUavGpu = varianceGpu;
-  varianceUavGpu.ptr += 3ull * s_device->GetDescriptorHandleIncrementSize(
-                                    D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-  dxrList->SetComputeRootDescriptorTable(2, varianceUavGpu);
-  dxrList->Dispatch((s_outputWidth + 7) / 8, (s_outputHeight + 7) / 8, 1);
-
-  TransitionResource(dxrList, s_svgfVarianceUAV.Get(),
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-
-  // Multiple atrous iterations with increasing step width
-  ID3D12Resource *atrousInput = s_svgfTemporalUAV.Get();
-  ID3D12Resource *atrousOutput = s_svgfAtrousPingUAV.Get();
-  
-  for (int iteration = 0; iteration < s_svgfSettings.atrousIterations; ++iteration) {
-    UINT stepWidth = 1u << iteration; // 1, 2, 4, 8, 16...
-    SvgfConstants cbTemp2 = WriteConstants(stepWidth, false, false);
-    UINT offset = iteration * 6;
-    CreateSrvAt(s_svgfAtrousHeap.Get(), offset + 0, atrousInput,
-                DXGI_FORMAT_R16G16B16A16_FLOAT);
-    CreateSrvAt(s_svgfAtrousHeap.Get(), offset + 1, s_svgfVarianceUAV.Get(),
-                DXGI_FORMAT_R32_FLOAT);
-    CreateSrvAt(s_svgfAtrousHeap.Get(), offset + 2, s_normalRoughnessUAV.Get(),
-                DXGI_FORMAT_R16G16B16A16_FLOAT);
-    CreateSrvAt(s_svgfAtrousHeap.Get(), offset + 3, s_svgfLinearDepthUAV.Get(),
-                DXGI_FORMAT_R32_FLOAT);
-    CreateSrvAt(s_svgfAtrousHeap.Get(), offset + 4, s_albedoUAV.Get(),
-                DXGI_FORMAT_R16G16B16A16_FLOAT);
-    CreateUavAt(s_svgfAtrousHeap.Get(), offset + 5, atrousOutput,
-                DXGI_FORMAT_R16G16B16A16_FLOAT);
-
-    ID3D12DescriptorHeap *atrousHeaps[] = {s_svgfAtrousHeap.Get()};
-    dxrList->SetDescriptorHeaps(1, atrousHeaps);
-    dxrList->SetPipelineState(s_svgfAtrousPSO.Get());
-    dxrList->SetComputeRootSignature(s_svgfAtrousRootSig.Get());
-    dxrList->SetComputeRoot32BitConstants(0, sizeof(SvgfConstants) / 4, &cbTemp2, 0);
-    D3D12_GPU_DESCRIPTOR_HANDLE atrousGpu =
-        s_svgfAtrousHeap->GetGPUDescriptorHandleForHeapStart();
-    UINT incrementSize = s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-    atrousGpu.ptr += offset * incrementSize;
-    dxrList->SetComputeRootDescriptorTable(1, atrousGpu);
-    D3D12_GPU_DESCRIPTOR_HANDLE atrousUavGpu = atrousGpu;
-    atrousUavGpu.ptr += 5ull * incrementSize;
-    dxrList->SetComputeRootDescriptorTable(2, atrousUavGpu);
-    dxrList->Dispatch((s_outputWidth + 7) / 8, (s_outputHeight + 7) / 8, 1);
-
-    // Ping-pong for next iteration
-    if (iteration < s_svgfSettings.atrousIterations - 1) {
-      TransitionResource(dxrList, atrousOutput,
-                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-      std::swap(atrousInput, atrousOutput);
-      // The new atrousOutput (prev iteration's input) is still in NPS state;
-      // transition it to UAV so the next iteration can write to it.
-      TransitionResource(dxrList, atrousOutput,
-                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    }
-  }
-
-  // Final filtered illumination is in atrousOutput. Copy that to history
-  // before remodulating so disocclusions never depend on previous-frame albedo.
-  TransitionResource(dxrList, atrousOutput,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                     D3D12_RESOURCE_STATE_COPY_SOURCE);
-  TransitionResource(dxrList, s_svgfHistoryColor[curr].Get(),
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                     D3D12_RESOURCE_STATE_COPY_DEST);
-  TransitionResource(dxrList, s_svgfLinearDepthUAV.Get(),
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                     D3D12_RESOURCE_STATE_COPY_SOURCE);
-  TransitionResource(dxrList, s_svgfHistoryDepth[curr].Get(),
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                     D3D12_RESOURCE_STATE_COPY_DEST);
-  TransitionResource(dxrList, s_normalRoughnessUAV.Get(),
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                     D3D12_RESOURCE_STATE_COPY_SOURCE);
-  TransitionResource(dxrList, s_svgfHistoryNormal[curr].Get(),
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                     D3D12_RESOURCE_STATE_COPY_DEST);
-
-  dxrList->CopyResource(s_svgfHistoryColor[curr].Get(),
-                        atrousOutput);
-  dxrList->CopyResource(s_svgfHistoryDepth[curr].Get(),
-                        s_svgfLinearDepthUAV.Get());
-  dxrList->CopyResource(s_svgfHistoryNormal[curr].Get(), s_normalRoughnessUAV.Get());
-
-  TransitionResource(dxrList, s_svgfHistoryColor[curr].Get(),
-                     D3D12_RESOURCE_STATE_COPY_DEST,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-  TransitionResource(dxrList, s_svgfHistoryDepth[curr].Get(),
-                     D3D12_RESOURCE_STATE_COPY_DEST,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-  TransitionResource(dxrList, s_svgfHistoryNormal[curr].Get(),
-                     D3D12_RESOURCE_STATE_COPY_DEST,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-  TransitionResource(dxrList, atrousOutput,
-                     D3D12_RESOURCE_STATE_COPY_SOURCE,
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-
-  TransitionResource(dxrList, s_svgfLinearDepthUAV.Get(),
-                     D3D12_RESOURCE_STATE_COPY_SOURCE,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-  TransitionResource(dxrList, s_normalRoughnessUAV.Get(),
-                     D3D12_RESOURCE_STATE_COPY_SOURCE,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-  ID3D12Resource *compositeOutput = atrousInput;
-  TransitionResource(dxrList, compositeOutput,
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-
-  CreateSrvAt(s_svgfCompositeHeap.Get(), 0, atrousOutput,
-              DXGI_FORMAT_R16G16B16A16_FLOAT);
-  CreateSrvAt(s_svgfCompositeHeap.Get(), 1, s_albedoUAV.Get(),
-              DXGI_FORMAT_R16G16B16A16_FLOAT);
-  CreateUavAt(s_svgfCompositeHeap.Get(), 2, compositeOutput,
-              DXGI_FORMAT_R16G16B16A16_FLOAT);
-
-  ID3D12DescriptorHeap *compositeHeaps[] = {s_svgfCompositeHeap.Get()};
-  dxrList->SetDescriptorHeaps(1, compositeHeaps);
-  dxrList->SetPipelineState(s_svgfCompositePSO.Get());
-  dxrList->SetComputeRootSignature(s_svgfCompositeRootSig.Get());
-  D3D12_GPU_DESCRIPTOR_HANDLE compositeGpu =
-      s_svgfCompositeHeap->GetGPUDescriptorHandleForHeapStart();
-  dxrList->SetComputeRootDescriptorTable(0, compositeGpu);
-  D3D12_GPU_DESCRIPTOR_HANDLE compositeUavGpu = compositeGpu;
-  compositeUavGpu.ptr += 2ull * s_device->GetDescriptorHandleIncrementSize(
-                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-  dxrList->SetComputeRootDescriptorTable(1, compositeUavGpu);
-  dxrList->Dispatch((s_outputWidth + 7) / 8, (s_outputHeight + 7) / 8, 1);
-
-  TransitionResource(dxrList, atrousOutput,
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-
-
-
-
-  // s_svgfTemporalUAV is already back in UAV via the atrousInput/atrousOutput
-  // cleanup transitions above — no separate transition needed.
-  TransitionResource(dxrList, s_svgfHistoryMoments[curr].Get(),
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-  TransitionResource(dxrList, s_svgfHistoryLength[curr].Get(),
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-  TransitionResource(dxrList, s_svgfVarianceUAV.Get(),
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-  TransitionResource(dxrList, s_svgfNoisyInputUAV.Get(),
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-
-  TransitionResource(dxrList, s_svgfHistoryColor[prev].Get(),
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-  TransitionResource(dxrList, s_svgfHistoryMoments[prev].Get(),
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-  TransitionResource(dxrList, s_svgfHistoryLength[prev].Get(),
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-  TransitionResource(dxrList, s_svgfHistoryDepth[prev].Get(),
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-  TransitionResource(dxrList, s_svgfHistoryNormal[prev].Get(),
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-
-  TransitionResource(dxrList, s_mvecUAV.Get(),
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-  TransitionResource(dxrList, s_albedoUAV.Get(),
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-  TransitionResource(dxrList, s_svgfTemporalUAV.Get(),
-                     (compositeOutput == s_svgfTemporalUAV.Get())
-                         ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS
-                         : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-  TransitionResource(dxrList, s_svgfAtrousPingUAV.Get(),
-                     (compositeOutput == s_svgfAtrousPingUAV.Get() ||
-                      atrousOutput == s_svgfAtrousPingUAV.Get())
-                         ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS
-                         : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-  TransitionResource(dxrList, s_svgfAtrousPongUAV.Get(),
-                     (compositeOutput == s_svgfAtrousPongUAV.Get() ||
-                      atrousOutput == s_svgfAtrousPongUAV.Get())
-                         ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS
-                         : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-
-  *outPostColor = compositeOutput;
-  s_svgfLatestOutput = compositeOutput;
-  s_svgfHistoryValid = true;
-  s_svgfHistoryWriteIndex = prev;
-  return true;
-}
 
 bool IsReady() {
   return g_rayTracingSupported && s_rtStateObject != nullptr;
@@ -4860,8 +3842,6 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   uint32_t frameIdx = s_jitterFrameIndex;
   float jitterX = Halton(frameIdx, 2) - 0.5f;
   float jitterY = Halton(frameIdx, 3) - 0.5f;
-  const bool realtimeDenoiserActive =
-      (s_realtimeDenoiserMode != RealtimeDenoiserMode::Off) && !dlssActive;
 
   // DLSS-RR can shimmer at silhouettes because pixel jitter causes much larger
   // ray-direction changes near the screen edges in a perspective camera.
@@ -4869,11 +3849,6 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   if (rrActive) {
     jitterX *= s_rrJitterScale;
     jitterY *= s_rrJitterScale;
-  } else if (realtimeDenoiserActive) {
-    // Realtime denoisers operate on their own temporal history. Keeping Halton
-    // jitter in this path adds silhouette crawl without helping reconstruction.
-    jitterX = 0.0f;
-    jitterY = 0.0f;
   }
 
   // Expose the final jitter values for UI/debug overlays.
@@ -4908,10 +3883,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       // Streamline flags used by raytracing shaders.
       cam->dlssEnabled = dlssActive ? 1.0f : 0.0f;
       cam->dlssRayReconstruction = rrActive ? 1.0f : 0.0f;
-      cam->nrdEnabled =
-          (!dlssActive && s_realtimeDenoiserMode == RealtimeDenoiserMode::NRD)
-              ? 1.0f
-              : 0.0f;
+        cam->reservedRealtimeDenoiser = 0.0f;
       asyncCameraSnapshot = *cam;
       hasAsyncCameraSnapshot = true;
 
@@ -5322,223 +4294,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
   // Optional Streamline / DLSS evaluation
   ID3D12Resource *postColor = s_outputUAV.Get();
-  // Final OIDN should always denoise the resolved DXR accumulation color,
-  // never the realtime NRD/SVGF composites.
   ID3D12Resource *oidnInput = s_outputUAV.Get();
-  const bool bypassRealtimeDenoiserForFinalOidn =
-      isOidnMode && (doDenoise || (reachedEndCondition && s_hasDenoised));
-
-  // Evaluate realtime denoiser
-  if (!debugViewActive && !rrActive && didDispatchRays &&
-      s_realtimeDenoiserMode != RealtimeDenoiserMode::Off &&
-      !bypassRealtimeDenoiserForFinalOidn) {
-    if (s_queryHeap) {
-      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
-                        5); // Start Denoise
-    }
-
-    {
-      D3D12_RESOURCE_BARRIER denoiseFlush = {};
-      denoiseFlush.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-      denoiseFlush.UAV.pResource = nullptr;
-      dxrList->ResourceBarrier(1, &denoiseFlush);
-    }
-
-    const bool resetHistory =
-        s_streamlineResetHistory || (currSpp == 0) ||
-        !s_accumulation.IsAccumulating();
-
-    if (s_realtimeDenoiserMode == RealtimeDenoiserMode::NRD) {
-      const bool nrdResourcesReady =
-          s_nrdDiffuseRadianceHitDistUAV && s_nrdSpecRadianceHitDistUAV &&
-          s_nrdViewZUAV && s_nrdNormalRoughnessUAV && s_nrdMvUAV &&
-          s_nrdOutDiffuseUAV && s_nrdOutSpecularUAV && s_nrdEmissionUAV &&
-          s_albedoUAV && s_specularAlbedoUAV && s_nrdCompositeUAV &&
-          s_nrdCompositePSO && s_nrdCompositeRootSig && s_nrdCompositeHeap &&
-          s_transmissionAccumulation.GetAccumulationBuffer();
-      const bool nrdRan =
-          nrdResourcesReady &&
-          NrdDenoiser::Get().Denoise(
-              dxrList.Get(), s_nrdDiffuseRadianceHitDistUAV.Get(),
-              s_nrdSpecRadianceHitDistUAV.Get(), s_nrdViewZUAV.Get(),
-              s_nrdNormalRoughnessUAV.Get(), s_nrdMvUAV.Get(),
-              s_nrdOutDiffuseUAV.Get(), s_nrdOutSpecularUAV.Get(),
-              g_cameraData, jitterX, jitterY, resetHistory);
-
-      if (nrdRan) {
-        s_streamlineResetHistory = false;
-      }
-
-      if (nrdRan && s_nrdCompositeUAV && s_nrdCompositePSO && s_nrdCompositeRootSig &&
-          s_nrdCompositeHeap && s_nrdDiffuseRadianceHitDistUAV &&
-          s_nrdSpecRadianceHitDistUAV && s_nrdOutDiffuseUAV &&
-          s_nrdOutSpecularUAV && s_nrdEmissionUAV &&
-          s_transmissionAccumulation.GetAccumulationBuffer()) {
-        const UINT descInc = s_device->GetDescriptorHandleIncrementSize(
-            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        D3D12_CPU_DESCRIPTOR_HANDLE cpuStart =
-            s_nrdCompositeHeap->GetCPUDescriptorHandleForHeapStart();
-
-        D3D12_SHADER_RESOURCE_VIEW_DESC srv = {};
-        srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-        srv.Texture2D.MostDetailedMip = 0;
-        srv.Texture2D.MipLevels = 1;
-        srv.Texture2D.ResourceMinLODClamp = 0.0f;
-
-        srv.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        s_device->CreateShaderResourceView(s_nrdOutDiffuseUAV.Get(), &srv,
-                                           cpuStart);
-
-        D3D12_CPU_DESCRIPTOR_HANDLE specularSrv = cpuStart;
-        specularSrv.ptr += descInc;
-        s_device->CreateShaderResourceView(s_nrdOutSpecularUAV.Get(), &srv,
-                                           specularSrv);
-
-        D3D12_CPU_DESCRIPTOR_HANDLE stableSrv = cpuStart;
-        stableSrv.ptr += descInc * 2;
-        s_device->CreateShaderResourceView(s_nrdDiffuseRadianceHitDistUAV.Get(),
-                                           &srv, stableSrv);
-
-        D3D12_CPU_DESCRIPTOR_HANDLE rawSpecularSrv = cpuStart;
-        rawSpecularSrv.ptr += descInc * 3;
-        s_device->CreateShaderResourceView(s_nrdSpecRadianceHitDistUAV.Get(),
-                                           &srv, rawSpecularSrv);
-
-        D3D12_CPU_DESCRIPTOR_HANDLE stableInputSrv = cpuStart;
-        stableInputSrv.ptr += descInc * 4;
-        s_device->CreateShaderResourceView(s_nrdEmissionUAV.Get(), &srv,
-                                           stableInputSrv);
-
-        if (s_albedoUAV) {
-          D3D12_CPU_DESCRIPTOR_HANDLE albedoSrv = cpuStart;
-          albedoSrv.ptr += descInc * 5;
-          s_device->CreateShaderResourceView(s_albedoUAV.Get(), &srv,
-                                             albedoSrv);
-        }
-
-        if (s_specularAlbedoUAV) {
-          D3D12_CPU_DESCRIPTOR_HANDLE specAlbedoSrv = cpuStart;
-          specAlbedoSrv.ptr += descInc * 6;
-          s_device->CreateShaderResourceView(s_specularAlbedoUAV.Get(), &srv,
-                                             specAlbedoSrv);
-        }
-
-        D3D12_SHADER_RESOURCE_VIEW_DESC transmissionSrvDesc = srv;
-        transmissionSrvDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
-        D3D12_CPU_DESCRIPTOR_HANDLE transmissionSrv = cpuStart;
-        transmissionSrv.ptr += descInc * 7;
-        s_device->CreateShaderResourceView(
-            s_transmissionAccumulation.GetAccumulationBuffer(),
-            &transmissionSrvDesc,
-            transmissionSrv);
-
-        D3D12_CPU_DESCRIPTOR_HANDLE outUav = cpuStart;
-        outUav.ptr += descInc * 8;
-        D3D12_UNORDERED_ACCESS_VIEW_DESC uav = {};
-        uav.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-        s_device->CreateUnorderedAccessView(s_nrdCompositeUAV.Get(), nullptr,
-                                            &uav, outUav);
-
-        TransitionResource(dxrList.Get(), s_nrdOutDiffuseUAV.Get(),
-                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        TransitionResource(dxrList.Get(), s_nrdOutSpecularUAV.Get(),
-                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        TransitionResource(dxrList.Get(), s_nrdDiffuseRadianceHitDistUAV.Get(),
-                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        TransitionResource(dxrList.Get(), s_nrdSpecRadianceHitDistUAV.Get(),
-                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        TransitionResource(dxrList.Get(), s_nrdEmissionUAV.Get(),
-                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        if (s_albedoUAV) {
-          TransitionResource(dxrList.Get(), s_albedoUAV.Get(),
-                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        }
-        if (s_specularAlbedoUAV) {
-          TransitionResource(dxrList.Get(), s_specularAlbedoUAV.Get(),
-                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        }
-        TransitionResource(dxrList.Get(),
-                           s_transmissionAccumulation.GetAccumulationBuffer(),
-                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-
-        ID3D12DescriptorHeap *compHeaps[] = {s_nrdCompositeHeap.Get()};
-        dxrList->SetDescriptorHeaps(1, compHeaps);
-        dxrList->SetPipelineState(s_nrdCompositePSO.Get());
-        dxrList->SetComputeRootSignature(s_nrdCompositeRootSig.Get());
-
-        D3D12_GPU_DESCRIPTOR_HANDLE gpuStart =
-            s_nrdCompositeHeap->GetGPUDescriptorHandleForHeapStart();
-        dxrList->SetComputeRootDescriptorTable(0, gpuStart);
-        D3D12_GPU_DESCRIPTOR_HANDLE gpuUav = gpuStart;
-        gpuUav.ptr += descInc * 8;
-        dxrList->SetComputeRootDescriptorTable(1, gpuUav);
-        dxrList->Dispatch((s_outputWidth + 7) / 8, (s_outputHeight + 7) / 8, 1);
-
-        TransitionResource(dxrList.Get(), s_nrdOutDiffuseUAV.Get(),
-                           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        TransitionResource(dxrList.Get(), s_nrdOutSpecularUAV.Get(),
-                           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        TransitionResource(dxrList.Get(), s_nrdDiffuseRadianceHitDistUAV.Get(),
-                           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        TransitionResource(dxrList.Get(), s_nrdSpecRadianceHitDistUAV.Get(),
-                           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        TransitionResource(dxrList.Get(), s_nrdEmissionUAV.Get(),
-                           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        if (s_albedoUAV) {
-          TransitionResource(dxrList.Get(), s_albedoUAV.Get(),
-                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        }
-        if (s_specularAlbedoUAV) {
-          TransitionResource(dxrList.Get(), s_specularAlbedoUAV.Get(),
-                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        }
-        TransitionResource(dxrList.Get(),
-                           s_transmissionAccumulation.GetAccumulationBuffer(),
-                           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-
-        postColor = s_nrdCompositeUAV.Get();
-      }
-    } else if (s_realtimeDenoiserMode == RealtimeDenoiserMode::SVGF) {
-      ID3D12Resource *svgfPostColor = nullptr;
-      if (DispatchSvgfPasses(dxrList.Get(), resetHistory, &svgfPostColor) &&
-          svgfPostColor) {
-        postColor = svgfPostColor;
-        s_streamlineResetHistory = false;
-      }
-    }
-
-    if (s_queryHeap) {
-      dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
-                        6); // End Denoise
-    }
-  }
-
-  if (!debugViewActive && !rrActive && !didDispatchRays &&
-      !bypassRealtimeDenoiserForFinalOidn &&
-      s_realtimeDenoiserMode == RealtimeDenoiserMode::SVGF &&
-      s_svgfHistoryValid) {
-    if (s_svgfLatestOutput) {
-      postColor = s_svgfLatestOutput;
-    }
-  }
 
   // After one-shot OIDN at end conditions, keep showing the denoised HDR buffer
   // instead of falling back to the raw output on following frames.
@@ -6041,11 +4797,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
           usedOidn ||
           (reachedEndCondition && isOidnMode && s_hasDenoised &&
            postColor == s_oidnOutputUAV.Get());
-        ID3D12Resource *exposureSource =
-          (!useDisplayedPostColorForExposure &&
-           s_realtimeDenoiserMode != RealtimeDenoiserMode::Off && s_outputUAV)
-            ? s_outputUAV.Get()
-            : postColor;
+        ID3D12Resource *exposureSource = useDisplayedPostColorForExposure
+                                             ? postColor
+                                             : postColor;
       bool exposureSourceMatchesPostColor = (exposureSource == postColor);
 
       // 1. Read previous results
@@ -6289,7 +5043,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     }
 
     if (useTonemapAo) {
-      TransitionResource(dxrList.Get(), s_svgfLinearDepthUAV.Get(),
+      TransitionResource(dxrList.Get(), s_linearDepthUAV.Get(),
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
       TransitionResource(dxrList.Get(), s_normalRoughnessUAV.Get(),
@@ -6319,7 +5073,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       depthSrv.Shader4ComponentMapping =
           D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
       depthSrv.Texture2D.MipLevels = 1;
-      s_device->CreateShaderResourceView(s_svgfLinearDepthUAV.Get(), &depthSrv,
+      s_device->CreateShaderResourceView(s_linearDepthUAV.Get(), &depthSrv,
                                          depthCpu);
     } else {
       D3D12_SHADER_RESOURCE_VIEW_DESC nullDepthSrv{};
@@ -6394,7 +5148,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     if (useTonemapAo) {
-      TransitionResource(dxrList.Get(), s_svgfLinearDepthUAV.Get(),
+      TransitionResource(dxrList.Get(), s_linearDepthUAV.Get(),
                          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
       TransitionResource(dxrList.Get(), s_normalRoughnessUAV.Get(),
@@ -6932,244 +5686,6 @@ static bool SaveGrayPngFromFloats(const std::wstring &filePath, UINT width,
   return SaveRgba8ToPngWic(filePath, width, height, rgba.data(), width * 4u);
 }
 
-static bool ExportNrdRadianceHitDistTexture(const std::wstring &directoryPath,
-                                            const std::wstring &baseName,
-                                            ID3D12Resource *resource) {
-  if (!resource)
-    return false;
-
-  std::vector<uint8_t> raw;
-  D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
-  UINT width = 0, height = 0;
-  if (!ReadbackTexture2D(resource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, raw,
-                         footprint, width, height)) {
-    return false;
-  }
-
-  std::vector<uint8_t> rgba((size_t)width * (size_t)height * 4u, 255u);
-  std::vector<float> alpha((size_t)width * (size_t)height, 0.0f);
-  float lumMin = (std::numeric_limits<float>::max)();
-  float lumMax = 0.0f;
-  float alphaMin = (std::numeric_limits<float>::max)();
-  float alphaMax = 0.0f;
-  const DXGI_FORMAT format = resource->GetDesc().Format;
-  const bool isFloat32 = (format == DXGI_FORMAT_R32G32B32A32_FLOAT);
-
-  for (UINT y = 0; y < height; ++y) {
-    const uint8_t *srcRow = raw.data() + footprint.Offset +
-                            (size_t)y * footprint.Footprint.RowPitch;
-    for (UINT x = 0; x < width; ++x) {
-      const size_t idx = (size_t)y * width + x;
-      float r, g, b, a;
-      if (isFloat32) {
-        const float *src = reinterpret_cast<const float *>(srcRow) + x * 4;
-        r = src[0];
-        g = src[1];
-        b = src[2];
-        a = src[3];
-      } else {
-        const uint16_t *src = reinterpret_cast<const uint16_t *>(srcRow) + x * 4;
-        r = HalfToFloat(src[0]);
-        g = HalfToFloat(src[1]);
-        b = HalfToFloat(src[2]);
-        a = HalfToFloat(src[3]);
-      }
-      const float lum = (std::max)(0.0f, 0.2126f * r + 0.7152f * g + 0.0722f * b);
-      lumMin = (std::min)(lumMin, lum);
-      lumMax = (std::max)(lumMax, lum);
-      if (std::isfinite(a) && a > 0.0f) {
-        alphaMin = (std::min)(alphaMin, a);
-        alphaMax = (std::max)(alphaMax, a);
-      }
-      alpha[idx] = a;
-
-      rgba[idx * 4 + 0] = LinearToSrgbByte(r / (1.0f + (std::max)(0.0f, r)));
-      rgba[idx * 4 + 1] = LinearToSrgbByte(g / (1.0f + (std::max)(0.0f, g)));
-      rgba[idx * 4 + 2] = LinearToSrgbByte(b / (1.0f + (std::max)(0.0f, b)));
-    }
-  }
-
-  if (lumMin == (std::numeric_limits<float>::max)())
-    lumMin = 0.0f;
-  if (alphaMin == (std::numeric_limits<float>::max)())
-    alphaMin = 0.0f;
-
-  fprintf(stderr,
-          "DxrRenderer: %ls RGB luminance range [%.6f, %.6f], alpha range "
-          "[%.6f, %.6f]\n",
-          baseName.c_str(), lumMin, lumMax, alphaMin, alphaMax);
-
-  const std::wstring rgbPath =
-      directoryPath + L"/" + baseName + L"_rgb_lum_" + FloatTag(lumMin) + L"_" +
-      FloatTag(lumMax) + L".png";
-  const std::wstring aPath =
-      directoryPath + L"/" + baseName + L"_a_" + FloatTag(alphaMin) + L"_" +
-      FloatTag(alphaMax) + L".png";
-
-  const bool rgbOk =
-      SaveRgba8ToPngWic(rgbPath, width, height, rgba.data(), width * 4u);
-  const bool aOk = SaveGrayPngFromFloats(aPath, width, height, alpha, alphaMin,
-                                         alphaMax, true);
-  return rgbOk && aOk;
-}
-
-static bool ExportNrdNormalRoughnessTexture(const std::wstring &directoryPath,
-                                            const std::wstring &baseName,
-                                            ID3D12Resource *resource) {
-  if (!resource)
-    return false;
-
-  std::vector<uint8_t> raw;
-  D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
-  UINT width = 0, height = 0;
-  if (!ReadbackTexture2D(resource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, raw,
-                         footprint, width, height)) {
-    return false;
-  }
-
-  std::vector<uint8_t> normalRgba((size_t)width * (size_t)height * 4u, 255u);
-  std::vector<float> roughness((size_t)width * (size_t)height, 0.0f);
-  float roughMin = (std::numeric_limits<float>::max)();
-  float roughMax = 0.0f;
-
-  for (UINT y = 0; y < height; ++y) {
-    const uint16_t *srcRow = (const uint16_t *)(raw.data() + footprint.Offset +
-                                                (size_t)y * footprint.Footprint.RowPitch);
-    for (UINT x = 0; x < width; ++x) {
-      const size_t idx = (size_t)y * width + x;
-      const float nx = HalfToFloat(srcRow[x * 4 + 0]);
-      const float ny = HalfToFloat(srcRow[x * 4 + 1]);
-      const float nz = HalfToFloat(srcRow[x * 4 + 2]);
-      const float r = HalfToFloat(srcRow[x * 4 + 3]);
-      normalRgba[idx * 4 + 0] = Float01ToByte(nx * 0.5f + 0.5f);
-      normalRgba[idx * 4 + 1] = Float01ToByte(ny * 0.5f + 0.5f);
-      normalRgba[idx * 4 + 2] = Float01ToByte(nz * 0.5f + 0.5f);
-      roughness[idx] = r;
-      if (std::isfinite(r)) {
-        roughMin = (std::min)(roughMin, r);
-        roughMax = (std::max)(roughMax, r);
-      }
-    }
-  }
-
-  if (roughMin == (std::numeric_limits<float>::max)())
-    roughMin = 0.0f;
-  fprintf(stderr, "DxrRenderer: %ls roughness range [%.6f, %.6f]\n",
-          baseName.c_str(), roughMin, roughMax);
-
-  const std::wstring normalPath =
-      directoryPath + L"/" + baseName + L"_normal.png";
-  const std::wstring roughPath =
-      directoryPath + L"/" + baseName + L"_roughness_" + FloatTag(roughMin) +
-      L"_" + FloatTag(roughMax) + L".png";
-
-  const bool normalOk = SaveRgba8ToPngWic(normalPath, width, height,
-                                          normalRgba.data(), width * 4u);
-  const bool roughOk = SaveGrayPngFromFloats(roughPath, width, height,
-                                             roughness, roughMin, roughMax,
-                                             false);
-  return normalOk && roughOk;
-}
-
-static bool ExportNrdViewZTexture(const std::wstring &directoryPath,
-                                  const std::wstring &baseName,
-                                  ID3D12Resource *resource) {
-  if (!resource)
-    return false;
-
-  std::vector<uint8_t> raw;
-  D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
-  UINT width = 0, height = 0;
-  if (!ReadbackTexture2D(resource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, raw,
-                         footprint, width, height)) {
-    return false;
-  }
-
-  std::vector<float> values((size_t)width * (size_t)height, 0.0f);
-  float minV = (std::numeric_limits<float>::max)();
-  float maxV = 0.0f;
-  for (UINT y = 0; y < height; ++y) {
-    const float *srcRow =
-        (const float *)(raw.data() + footprint.Offset +
-                        (size_t)y * footprint.Footprint.RowPitch);
-    for (UINT x = 0; x < width; ++x) {
-      const float v = srcRow[x];
-      values[(size_t)y * width + x] = v;
-      if (std::isfinite(v) && v > 0.0f) {
-        minV = (std::min)(minV, v);
-        maxV = (std::max)(maxV, v);
-      }
-    }
-  }
-
-  if (minV == (std::numeric_limits<float>::max)())
-    minV = 0.0f;
-  fprintf(stderr, "DxrRenderer: %ls range [%.6f, %.6f]\n", baseName.c_str(),
-          minV, maxV);
-
-  const std::wstring path =
-      directoryPath + L"/" + baseName + L"_" + FloatTag(minV) + L"_" +
-      FloatTag(maxV) + L".png";
-  return SaveGrayPngFromFloats(path, width, height, values, minV, maxV, true);
-}
-
-static bool ExportNrdMotionTexture(const std::wstring &directoryPath,
-                                   const std::wstring &baseName,
-                                   ID3D12Resource *resource) {
-  if (!resource)
-    return false;
-
-  std::vector<uint8_t> raw;
-  D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
-  UINT width = 0, height = 0;
-  if (!ReadbackTexture2D(resource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, raw,
-                         footprint, width, height)) {
-    return false;
-  }
-
-  std::vector<uint8_t> rgba((size_t)width * (size_t)height * 4u, 255u);
-  float maxAbs = 0.0f;
-  for (UINT y = 0; y < height; ++y) {
-    const uint16_t *srcRow = (const uint16_t *)(raw.data() + footprint.Offset +
-                                                (size_t)y * footprint.Footprint.RowPitch);
-    for (UINT x = 0; x < width; ++x) {
-      const float mx = HalfToFloat(srcRow[x * 2 + 0]);
-      const float my = HalfToFloat(srcRow[x * 2 + 1]);
-      if (std::isfinite(mx))
-        maxAbs = (std::max)(maxAbs, fabsf(mx));
-      if (std::isfinite(my))
-        maxAbs = (std::max)(maxAbs, fabsf(my));
-    }
-  }
-  maxAbs = (std::max)(maxAbs, 1e-6f);
-
-  for (UINT y = 0; y < height; ++y) {
-    const uint16_t *srcRow = (const uint16_t *)(raw.data() + footprint.Offset +
-                                                (size_t)y * footprint.Footprint.RowPitch);
-    for (UINT x = 0; x < width; ++x) {
-      const size_t idx = (size_t)y * width + x;
-      const float mx = HalfToFloat(srcRow[x * 2 + 0]);
-      const float my = HalfToFloat(srcRow[x * 2 + 1]);
-      const float nx = std::isfinite(mx) ? (0.5f + 0.5f * mx / maxAbs) : 0.5f;
-      const float ny = std::isfinite(my) ? (0.5f + 0.5f * my / maxAbs) : 0.5f;
-      const float mag =
-          std::isfinite(mx) && std::isfinite(my)
-              ? (sqrtf(mx * mx + my * my) / maxAbs)
-              : 0.0f;
-      rgba[idx * 4 + 0] = Float01ToByte(nx);
-      rgba[idx * 4 + 1] = Float01ToByte(ny);
-      rgba[idx * 4 + 2] = Float01ToByte(mag);
-    }
-  }
-
-  fprintf(stderr, "DxrRenderer: %ls maxAbs %.6f\n", baseName.c_str(), maxAbs);
-
-  const std::wstring path =
-      directoryPath + L"/" + baseName + L"_maxabs_" + FloatTag(maxAbs) +
-      L".png";
-  return SaveRgba8ToPngWic(path, width, height, rgba.data(), width * 4u);
-}
-
 static bool ExportHalfScalarTexture(const std::wstring &directoryPath,
                                     const std::wstring &baseName,
                                     ID3D12Resource *resource,
@@ -7288,105 +5804,6 @@ static bool ExportHalf2Texture(const std::wstring &directoryPath,
   return xOk && yOk;
 }
 
-bool ExportNrdDebugBuffersToPng(const std::wstring &directoryPath) {
-  if (directoryPath.empty() || !s_device) {
-    fprintf(stderr,
-            "DxrRenderer: ExportNrdDebugBuffersToPng invalid arguments.\n");
-    return false;
-  }
-  if (!s_nrdDiffuseRadianceHitDistUAV || !s_nrdSpecRadianceHitDistUAV ||
-      !s_nrdViewZUAV || !s_nrdNormalRoughnessUAV || !s_nrdMvUAV ||
-      !s_nrdOutDiffuseUAV || !s_nrdOutSpecularUAV) {
-    fprintf(stderr,
-            "DxrRenderer: ExportNrdDebugBuffersToPng missing NRD resources.\n");
-    return false;
-  }
-
-  std::error_code ec;
-  std::filesystem::create_directories(directoryPath, ec);
-  if (ec) {
-    fprintf(stderr, "DxrRenderer: failed to create export dir.\n");
-    return false;
-  }
-
-  bool ok = true;
-  ok &= ExportNrdRadianceHitDistTexture(directoryPath, L"nrd_in_diffuse",
-                                        s_nrdDiffuseRadianceHitDistUAV.Get());
-  ok &= ExportNrdRadianceHitDistTexture(directoryPath, L"nrd_in_specular",
-                                        s_nrdSpecRadianceHitDistUAV.Get());
-  ok &= ExportNrdViewZTexture(directoryPath, L"nrd_in_viewz",
-                              s_nrdViewZUAV.Get());
-  ok &= ExportNrdNormalRoughnessTexture(directoryPath, L"nrd_in_normal_roughness",
-                                        s_nrdNormalRoughnessUAV.Get());
-  ok &= ExportNrdMotionTexture(directoryPath, L"nrd_in_mv", s_nrdMvUAV.Get());
-  ok &= ExportNrdRadianceHitDistTexture(directoryPath, L"nrd_out_diffuse",
-                                        s_nrdOutDiffuseUAV.Get());
-  ok &= ExportNrdRadianceHitDistTexture(directoryPath, L"nrd_out_specular",
-                                        s_nrdOutSpecularUAV.Get());
-
-  fprintf(stderr, "DxrRenderer: NRD debug export %s to %ls\n",
-          ok ? "completed" : "failed", directoryPath.c_str());
-  return ok;
-}
-
-bool ExportSvgfDebugBuffersToPng(const std::wstring &directoryPath) {
-  if (directoryPath.empty() || !s_device) {
-    fprintf(stderr,
-            "DxrRenderer: ExportSvgfDebugBuffersToPng invalid arguments.\n");
-    return false;
-  }
-  if (!s_svgfNoisyInputUAV || !s_svgfTemporalUAV || !s_svgfVarianceUAV ||
-      !s_svgfAtrousPingUAV || !s_svgfAtrousPongUAV || !s_depthUAV ||
-      !s_normalRoughnessUAV || !s_mvecUAV) {
-    fprintf(stderr,
-            "DxrRenderer: ExportSvgfDebugBuffersToPng missing SVGF resources.\n");
-    return false;
-  }
-
-  std::error_code ec;
-  std::filesystem::create_directories(directoryPath, ec);
-  if (ec) {
-    fprintf(stderr, "DxrRenderer: failed to create export dir.\n");
-    return false;
-  }
-
-  bool ok = true;
-  ok &= ExportNrdRadianceHitDistTexture(directoryPath, L"svgf_noisy",
-                                        s_svgfNoisyInputUAV.Get());
-  ok &= ExportNrdRadianceHitDistTexture(directoryPath, L"svgf_temporal",
-                                        s_svgfTemporalUAV.Get());
-  ok &= ExportHalfScalarTexture(directoryPath, L"svgf_variance",
-                                s_svgfVarianceUAV.Get(), true);
-  ok &= ExportNrdRadianceHitDistTexture(directoryPath, L"svgf_atrous_ping",
-                                        s_svgfAtrousPingUAV.Get());
-  ok &= ExportNrdRadianceHitDistTexture(directoryPath, L"svgf_atrous_pong",
-                                        s_svgfAtrousPongUAV.Get());
-  ok &= ExportNrdRadianceHitDistTexture(directoryPath, L"svgf_history_color_0",
-                                        s_svgfHistoryColor[0].Get());
-  ok &= ExportNrdRadianceHitDistTexture(directoryPath, L"svgf_history_color_1",
-                                        s_svgfHistoryColor[1].Get());
-  ok &= ExportHalf2Texture(directoryPath, L"svgf_history_moments_0",
-                           s_svgfHistoryMoments[0].Get(), true);
-  ok &= ExportHalf2Texture(directoryPath, L"svgf_history_moments_1",
-                           s_svgfHistoryMoments[1].Get(), true);
-  ok &= ExportHalfScalarTexture(directoryPath, L"svgf_history_length_0",
-                                s_svgfHistoryLength[0].Get(), false);
-  ok &= ExportHalfScalarTexture(directoryPath, L"svgf_history_length_1",
-                                s_svgfHistoryLength[1].Get(), false);
-  ok &= ExportNrdViewZTexture(directoryPath, L"svgf_depth",
-                              s_svgfLinearDepthUAV.Get());
-  ok &= ExportNrdNormalRoughnessTexture(directoryPath, L"svgf_normal_roughness",
-                                        s_normalRoughnessUAV.Get());
-  ok &= ExportNrdMotionTexture(directoryPath, L"svgf_motion", s_mvecUAV.Get());
-  if (s_svgfLatestOutput) {
-    ok &= ExportNrdRadianceHitDistTexture(directoryPath, L"svgf_latest_output",
-                                          s_svgfLatestOutput);
-  }
-
-  fprintf(stderr, "DxrRenderer: SVGF debug export %s to %ls\n",
-          ok ? "completed" : "failed", directoryPath.c_str());
-  return ok;
-}
 
 // Profiling functions
 static std::chrono::high_resolution_clock::time_point s_cpuFrameStartTime;

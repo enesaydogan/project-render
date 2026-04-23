@@ -32,21 +32,12 @@ RWTexture2D<float> g_depth : register(u10);
 RWTexture2D<float2> g_motionVectors : register(u11);
 RWTexture2D<float4> g_albedoOut : register(u12);
 RWTexture2D<float4> g_normalRoughnessOut : register(u13);
-RWTexture2D<float> g_svgfLinearDepth : register(u15);
+RWTexture2D<float> g_linearDepth : register(u15);
 RWTexture2D<float4> g_specularAlbedo : register(u16);
 RWTexture2D<float> g_specHitDistance : register(u17);
 RWTexture2D<float2> g_specularMotionVectors : register(u18);
 RWTexture2D<float4> g_transmissionAccumulation : register(u19);
 RWTexture2D<float> g_transmissionVariance : register(u20);
-RWTexture2D<float4> g_svgfNoisyInput : register(u23);
-
-// NRD inputs (u25+)
-RWTexture2D<float4> g_nrdDiffuseRadianceHitDist : register(u25);
-RWTexture2D<float4> g_nrdSpecRadianceHitDist : register(u26);
-RWTexture2D<float>  g_nrdViewZ : register(u27);
-RWTexture2D<float4> g_nrdNormalRoughness : register(u28);
-RWTexture2D<float2> g_nrdMv : register(u29);
-RWTexture2D<float4> g_nrdEmission : register(u32);
 
 // === Shader instrumentation counters (debug) ===
 static const uint SHADER_COUNTER_TRACE_RAYS = 0;
@@ -161,7 +152,7 @@ cbuffer Camera : register(b0)
     // 0 = use raw texel luminance (area) which is incorrect but useful for
     // comparisons/debugging.
     float sampleEnvSolidAngle;
-    float nrdEnabled;
+    float reservedRealtimeDenoiser;
     float exportRendering;
     float dxrProceduralSkyBoost;
     float tonemapAoIntensity;
