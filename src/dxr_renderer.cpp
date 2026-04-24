@@ -9,6 +9,7 @@
 #include "grass_manager.h"
 #include "ibl_manager.h"
 #include "oidn_denoiser.h"
+#include "optix_denoiser.h"
 #include "raster_renderer.h"
 #include "scene.h"
 #include "streamline_manager.h"
@@ -53,6 +54,7 @@ static bool s_streamlineResetHistory = true;
 static DxrRenderer::DenoiserMode s_denoiserMode =
     DxrRenderer::DenoiserMode::OIDN_GPU;
 static OidnDenoiser s_oidnDenoiser;
+static OptixDenoiserWrapper s_optixDenoiser;
 static OidnDenoiser::Quality s_oidnQuality = OidnDenoiser::Quality::High;
 static float s_rrJitterScale = 0.5f;
 
@@ -212,7 +214,7 @@ static UINT s_presentHeight = 720;
 enum ResourceFeatureBits : uint32_t {
   ResourceFeature_Dlss = 1u << 0,
   ResourceFeature_DlssRayReconstruction = 1u << 1,
-  ResourceFeature_FinalOidn = 1u << 2,
+  ResourceFeature_FinalDenoiser = 1u << 2,
   ResourceFeature_TonemapAo = 1u << 3,
 };
 
@@ -249,7 +251,7 @@ static uint32_t ComputeResourceFeatureMask() {
     mask |= ResourceFeature_DlssRayReconstruction;
   }
   if (s_denoiserMode != DxrRenderer::DenoiserMode::Off && !IsDlssActive()) {
-    mask |= ResourceFeature_FinalOidn;
+    mask |= ResourceFeature_FinalDenoiser;
   }
   if (s_tonemapAoIntensity > 1.0e-4f) {
     mask |= ResourceFeature_TonemapAo;
@@ -262,7 +264,7 @@ static bool NeedsDepthAndMotionBuffers(uint32_t mask) {
 }
 
 static bool NeedsSurfaceDataBuffers(uint32_t mask) {
-  return (mask & (ResourceFeature_Dlss | ResourceFeature_FinalOidn |
+  return (mask & (ResourceFeature_Dlss | ResourceFeature_FinalDenoiser |
                   ResourceFeature_TonemapAo)) != 0;
 }
 
@@ -279,7 +281,7 @@ static bool NeedsDlssOutputBuffer(uint32_t mask) {
 }
 
 static bool NeedsOidnOutputBuffer(uint32_t mask) {
-  return (mask & ResourceFeature_FinalOidn) != 0;
+  return (mask & ResourceFeature_FinalDenoiser) != 0;
 }
 
 inline void TransitionResource(ID3D12GraphicsCommandList *cmdList,
@@ -3536,12 +3538,16 @@ void SetDenoiserMode(DenoiserMode m) {
     return;
   s_denoiserMode = m;
 
-  if (s_denoiserMode != DenoiserMode::Off) {
-    // Try to initialize OIDN wrapper; if device isn't ready, initialization
-    // will be attempted on first RunDenoise call.
+  if (s_denoiserMode == DenoiserMode::OIDN_CPU ||
+      s_denoiserMode == DenoiserMode::OIDN_GPU) {
     s_oidnDenoiser.Initialize(s_device);
+    s_optixDenoiser.Shutdown();
+  } else if (s_denoiserMode == DenoiserMode::OptiX) {
+    s_optixDenoiser.Initialize(s_device);
+    s_oidnDenoiser.Shutdown();
   } else {
     s_oidnDenoiser.Shutdown();
+    s_optixDenoiser.Shutdown();
   }
   // Reset accumulation as denoiser mode change may affect post-process outputs
   DxrRenderer::ResetAccumulation();
@@ -3611,9 +3617,9 @@ bool CanIdleWithoutRendering() {
     return false;
   }
 
-  const bool isOidnMode =
+  const bool isFinalDenoiserMode =
       (s_denoiserMode != DxrRenderer::DenoiserMode::Off && !dlssActive);
-  if (isOidnMode && !s_hasDenoised) {
+  if (isFinalDenoiserMode && !s_hasDenoised) {
     return false;
   }
 
@@ -3768,7 +3774,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       dlssActive && (s_streamline->GetMode() ==
                      StreamlineManager::Mode::DLSS_RayReconstruction);
 
-  bool usedOidn = false;
+  bool usedFinalDenoiser = false;
 
   // If we've hit maxSPP and the camera/settings haven't changed (meaning
   // ResetAccumulation hasn't been called), freeze rendering and keep presenting
@@ -3798,11 +3804,12 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     }
     isConverged = s_noiseConvergedLatched;
   }
-  bool isOidnMode =
+  bool isFinalDenoiserMode =
       (s_denoiserMode != DxrRenderer::DenoiserMode::Off && !dlssActive);
   bool reachedEndCondition = ((maxSpp > 0 && currSpp >= maxSpp) || isConverged);
 
-  bool canAutoDenoise = isOidnMode && reachedEndCondition && !s_hasDenoised;
+  bool canAutoDenoise =
+      isFinalDenoiserMode && reachedEndCondition && !s_hasDenoised;
   bool doDenoise = canAutoDenoise;
 
   // Flag to freeze after tonemapping instead of early return
@@ -4263,8 +4270,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     else if (rrActive && !reachedEndCondition)
       s_rrStillFrameSpp++;
   } else {
-    // We are skipping dispatch to run OIDN on the existing buffer or because
-    // we reached an end condition (noise/maxSPP).
+    // We are skipping dispatch to run the final denoiser on the existing
+    // buffer or because we reached an end condition (noise/maxSPP).
     // Still write the queries to avoid stale data
     if (s_queryHeap) {
       dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
@@ -4293,11 +4300,12 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
   // Optional Streamline / DLSS evaluation
   ID3D12Resource *postColor = s_outputUAV.Get();
-  ID3D12Resource *oidnInput = s_outputUAV.Get();
+  ID3D12Resource *denoiserInput = s_outputUAV.Get();
 
-  // After one-shot OIDN at end conditions, keep showing the denoised HDR buffer
-  // instead of falling back to the raw output on following frames.
-  if (reachedEndCondition && isOidnMode && s_hasDenoised && s_oidnOutputUAV) {
+  // After one-shot final denoising at end conditions, keep showing the denoised
+  // HDR buffer instead of falling back to raw output on following frames.
+  if (reachedEndCondition && isFinalDenoiserMode && s_hasDenoised &&
+      s_oidnOutputUAV) {
     postColor = s_oidnOutputUAV.Get();
   }
   bool usedDlss = false;
@@ -4658,42 +4666,47 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     postColor = s_dlssOutputUAV.Get();
   }
 
-  // If DLSS wasn't used, allow OIDN (or other denoiser) to operate on the
+  // If DLSS wasn't used, allow the final denoiser to operate on the
   // linear HDR output as a post-process cleanup step.
   // IMPORTANT: When DLSS is active, color is output-resolution while our AOVs
-  // (albedo/normal) are render-resolution. Running OIDN in that configuration
-  // produces invalid results. Keep OIDN gated to the non-DLSS path.
-  bool shouldRunOidn = doDenoise && !usedDlss;
+  // (albedo/normal) are render-resolution. Running a final denoiser in that
+  // configuration produces invalid results, so keep it gated to non-DLSS.
+  bool shouldRunFinalDenoiser = doDenoise && !usedDlss;
 
-  if (shouldRunOidn && s_oidnOutputUAV && oidnInput) {
-    const D3D12_RESOURCE_DESC oidnInDesc = oidnInput->GetDesc();
-    const D3D12_RESOURCE_DESC oidnOutDesc = s_oidnOutputUAV->GetDesc();
-    if (oidnInDesc.Width != oidnOutDesc.Width ||
-        oidnInDesc.Height != oidnOutDesc.Height) {
+  if (shouldRunFinalDenoiser && s_oidnOutputUAV && denoiserInput) {
+    const D3D12_RESOURCE_DESC inDesc = denoiserInput->GetDesc();
+    const D3D12_RESOURCE_DESC outDesc = s_oidnOutputUAV->GetDesc();
+    if (inDesc.Width != outDesc.Width || inDesc.Height != outDesc.Height) {
       fprintf(stderr,
-              "DxrRenderer: OIDN skipped (input %ux%u, output %ux%u).\n",
-              (unsigned)oidnInDesc.Width,
-              (unsigned)oidnInDesc.Height,
-              (unsigned)oidnOutDesc.Width,
-              (unsigned)oidnOutDesc.Height);
-      shouldRunOidn = false;
+              "DxrRenderer: final denoiser skipped (input %ux%u, output "
+              "%ux%u).\n",
+              (unsigned)inDesc.Width, (unsigned)inDesc.Height,
+              (unsigned)outDesc.Width, (unsigned)outDesc.Height);
+      shouldRunFinalDenoiser = false;
     }
   }
 
-  if (shouldRunOidn && s_oidnOutputUAV && oidnInput) {
+  if (shouldRunFinalDenoiser && s_oidnOutputUAV && denoiserInput) {
     // Start denoising timer
     if (s_queryHeap) {
       dxrList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
                         5); // Denoise start
     }
 
-    fprintf(stderr,
-            "DxrRenderer: MaxSPP reached. Auto-triggering OIDN denoise.\n");
-    s_oidnDenoiser.Initialize(s_device);
+    const bool useOptix =
+        s_denoiserMode == DxrRenderer::DenoiserMode::OptiX;
+    fprintf(stderr, "DxrRenderer: MaxSPP reached. Auto-triggering %s "
+                    "denoise.\n",
+            useOptix ? "OptiX" : "OIDN");
+    if (useOptix) {
+      s_optixDenoiser.Initialize(s_device);
+    } else {
+      s_oidnDenoiser.Initialize(s_device);
+    }
 
     // Ensure input is in COMMON state for interop.
-    // oidnInput is the resolved DXR accumulation color (s_outputUAV).
-    TransitionResource(dxrList.Get(), oidnInput,
+    // denoiserInput is the resolved DXR accumulation color (s_outputUAV).
+    TransitionResource(dxrList.Get(), denoiserInput,
                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, // Assumed state
                        D3D12_RESOURCE_STATE_COMMON);
 
@@ -4708,15 +4721,15 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                          D3D12_RESOURCE_STATE_COMMON);
     }
 
-    // s_oidnOutputUAV was created/kept as UAV; transition to COMMON for OIDN
-    // write
+    // s_oidnOutputUAV is the shared final-denoiser HDR target; transition to
+    // COMMON for external interop writes.
     TransitionResource(dxrList.Get(), s_oidnOutputUAV.Get(),
                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                        D3D12_RESOURCE_STATE_COMMON);
 
-    // FLUSH & SYNC for OIDN:
+    // FLUSH & SYNC for external denoisers:
     // We must execute the command list to ensure resources are in COMMON state
-    // before OIDN tries to access them.
+    // before CUDA/OIDN tries to access them.
     if (cmdAlloc && s_commandQueue && s_fence) {
       // Flush the transitions to COMMON so OIDN can safely access the
       // resources.
@@ -4739,16 +4752,22 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       ID3D12DescriptorHeap *dxrHeaps[] = {s_srvHeap.Get()};
       dxrList->SetDescriptorHeaps(1, dxrHeaps);
 
-      // Run OIDN.
-      // We pass the command queue so the denoiser can manage its own internal
-      // copy-execute-sync cycle to handle Tiled <-> Linear layout conversion
-      // for D3D12 interop.
-      bool ran = s_oidnDenoiser.RunDenoise(
-          dxrList.Get(), s_commandQueue, oidnInput, s_albedoUAV.Get(),
-          s_normalRoughnessUAV.Get(), s_oidnOutputUAV.Get(), false);
+      bool ran = false;
+      if (useOptix) {
+        ran = s_optixDenoiser.RunDenoise(
+            s_commandQueue, denoiserInput, s_albedoUAV.Get(),
+            s_normalRoughnessUAV.Get(), s_oidnOutputUAV.Get());
+      } else {
+        // OIDN manages its own internal copy-execute-sync cycle to handle
+        // tiled <-> linear layout conversion for D3D12 interop.
+        ran = s_oidnDenoiser.RunDenoise(
+            dxrList.Get(), s_commandQueue, denoiserInput, s_albedoUAV.Get(),
+            s_normalRoughnessUAV.Get(), s_oidnOutputUAV.Get(), false);
+      }
 
       // Restore Resource States from COMMON to what the engine expects.
-      TransitionResource(dxrList.Get(), oidnInput, D3D12_RESOURCE_STATE_COMMON,
+      TransitionResource(dxrList.Get(), denoiserInput,
+                         D3D12_RESOURCE_STATE_COMMON,
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
       if (s_albedoUAV) {
         TransitionResource(dxrList.Get(), s_albedoUAV.Get(),
@@ -4766,12 +4785,35 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
       s_hasDenoised = ran;
       if (ran) {
-        usedOidn = true;
+        usedFinalDenoiser = true;
         postColor = s_oidnOutputUAV.Get();
-        fprintf(stderr, "DxrRenderer: OIDN denoise completed successfully.\n");
+        fprintf(stderr, "DxrRenderer: %s denoise completed successfully.\n",
+                useOptix ? "OptiX" : "OIDN");
       } else {
-        fprintf(stderr, "DxrRenderer: OIDN denoise did not run (unsupported "
-                        "config or failure).\n");
+        fprintf(stderr, "DxrRenderer: %s denoise did not run (unsupported "
+                        "config or failure).\n",
+                useOptix ? "OptiX" : "OIDN");
+        if (useOptix) {
+          // Avoid export deadlock when OptiX is selected on a non-OptiX build
+          // or unsupported adapter; preserve the converged raw image in the
+          // final-denoiser output slot so frozen frames keep showing it.
+          TransitionResource(dxrList.Get(), denoiserInput,
+                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                             D3D12_RESOURCE_STATE_COPY_SOURCE);
+          TransitionResource(dxrList.Get(), s_oidnOutputUAV.Get(),
+                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                             D3D12_RESOURCE_STATE_COPY_DEST);
+          dxrList->CopyResource(s_oidnOutputUAV.Get(), denoiserInput);
+          TransitionResource(dxrList.Get(), denoiserInput,
+                             D3D12_RESOURCE_STATE_COPY_SOURCE,
+                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+          TransitionResource(dxrList.Get(), s_oidnOutputUAV.Get(),
+                             D3D12_RESOURCE_STATE_COPY_DEST,
+                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+          s_hasDenoised = true;
+          usedFinalDenoiser = true;
+          postColor = s_oidnOutputUAV.Get();
+        }
       }
     }
 
@@ -4792,8 +4834,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     if (s_avgLumPSO && s_avgLumRootSig && s_avgLumCB && s_avgLumBuffer &&
         s_avgLumReadbackBuffer && s_avgLumHeap) {
         const bool useDisplayedPostColorForExposure =
-          usedOidn ||
-          (reachedEndCondition && isOidnMode && s_hasDenoised &&
+          usedFinalDenoiser ||
+          (reachedEndCondition && isFinalDenoiserMode && s_hasDenoised &&
            postColor == s_oidnOutputUAV.Get());
         ID3D12Resource *exposureSource = useDisplayedPostColorForExposure
                                              ? postColor
@@ -5154,8 +5196,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
 
-    if (usedOidn) {
-      // If we just ran a one-shot or continuous OIDN pass, we can mark the
+    if (usedFinalDenoiser) {
+      // If we just ran a one-shot or continuous final denoiser pass, mark the
       // frame as tonemapped so that if maxSPP is reached, we don't keep
       // re-tonemapping the same results.
       // Additionally, for one-shot denoise, this helps keep the result on

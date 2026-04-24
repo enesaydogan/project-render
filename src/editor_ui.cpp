@@ -405,6 +405,8 @@ static DxrRenderer::DenoiserMode DenoiserModeFromIndex(int idx) {
     return DxrRenderer::DenoiserMode::OIDN_CPU;
   if (idx == 2)
     return DxrRenderer::DenoiserMode::OIDN_GPU;
+  if (idx == 3)
+    return DxrRenderer::DenoiserMode::OptiX;
   return DxrRenderer::DenoiserMode::Off;
 }
 
@@ -414,6 +416,8 @@ static int DenoiserIndexFromMode(DxrRenderer::DenoiserMode mode) {
     return 1;
   case DxrRenderer::DenoiserMode::OIDN_GPU:
     return 2;
+  case DxrRenderer::DenoiserMode::OptiX:
+    return 3;
   default:
     return 0;
   }
@@ -1059,7 +1063,7 @@ static bool EnsureExportRenderTarget(UINT width, UINT height) {
     g_renderExportJob.targetNoiseThreshold =
       (settings.noisePercent <= 0.0f) ? 0.001f : (settings.noisePercent / 100.0f);
     g_renderExportJob.targetDenoiserIndex =
-      (std::clamp)(settings.denoiserIndex, 0, 2);
+      (std::clamp)(settings.denoiserIndex, 0, 3);
     g_renderExportJob.allowNoiseThresholdStop = settings.allowNoiseThresholdStop;
     g_renderExportJob.minSppBeforeNoiseStop =
       (g_renderExportJob.targetMaxSpp < 32)
@@ -1741,7 +1745,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
       ImGui::SliderFloat("Noise %", &g_renderExportSettings.noisePercent, 0.1f,
                          30.0f, "%.2f%%");
 
-      const char *denoisers[] = {"Off", "OIDN (CPU)", "OIDN (GPU)"};
+      const char *denoisers[] = {"Off", "OIDN (CPU)", "OIDN (GPU)", "OptiX"};
       ImGui::Combo("Denoiser", &g_renderExportSettings.denoiserIndex, denoisers,
                    IM_ARRAYSIZE(denoisers));
 
@@ -2596,7 +2600,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
 
         ImGui::Separator();
         ImGui::Text("Final / Export Denoiser");
-        const char *denoisers[] = {"Off", "OIDN (CPU)", "OIDN (GPU)"};
+        const char *denoisers[] = {"Off", "OIDN (CPU)", "OIDN (GPU)", "OptiX"};
         int denoiserIdx = 0;
         switch (DxrRenderer::GetDenoiserMode()) {
         case DxrRenderer::DenoiserMode::Off:
@@ -2608,6 +2612,9 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
         case DxrRenderer::DenoiserMode::OIDN_GPU:
           denoiserIdx = 2;
           break;
+        case DxrRenderer::DenoiserMode::OptiX:
+          denoiserIdx = 3;
+          break;
         }
         if (ImGui::Combo("Denoiser##Final", &denoiserIdx, denoisers,
                          IM_ARRAYSIZE(denoisers))) {
@@ -2616,6 +2623,8 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
             newMode = DxrRenderer::DenoiserMode::OIDN_CPU;
           if (denoiserIdx == 2)
             newMode = DxrRenderer::DenoiserMode::OIDN_GPU;
+          if (denoiserIdx == 3)
+            newMode = DxrRenderer::DenoiserMode::OptiX;
           DxrRenderer::SetDenoiserMode(newMode);
           // Recreate pipeline/resources to account for any mode-specific
           // resources and reset accumulation for stable rendering.

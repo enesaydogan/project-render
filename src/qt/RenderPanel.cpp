@@ -116,7 +116,7 @@ void RenderPanel::createUi()
     m_maxSpp = CreateSliderControl(16.0, 4096.0, 1.0, 0);
     m_noisePercent = CreateSliderControl(0.1, 30.0, 0.1, 2);
     m_denoiser = new QComboBox(settingsGroup);
-    m_denoiser->addItems({tr("Off"), tr("OIDN (CPU)"), tr("OIDN (GPU)")});
+    m_denoiser->addItems({tr("Off"), tr("OIDN (CPU)"), tr("OIDN (GPU)"), tr("OptiX")});
     m_batchSavedViews = new QCheckBox(tr("Batch Render Saved Views"), settingsGroup);
     m_batchBaseName = new QLineEdit(settingsGroup);
     settingsForm->addRow(tr("Render Resolution"), m_resolutionPreset);
@@ -185,7 +185,7 @@ void RenderPanel::syncFromRenderer()
         m_noisePercent->setValue(g_renderExportSettings.noisePercent);
     }
     if (!IsWidgetBeingEdited(m_denoiser)) {
-        m_denoiser->setCurrentIndex(std::clamp(g_renderExportSettings.denoiserIndex, 0, 2));
+        m_denoiser->setCurrentIndex(std::clamp(g_renderExportSettings.denoiserIndex, 0, 3));
     }
     if (!IsWidgetBeingEdited(m_batchSavedViews)) {
         m_batchSavedViews->setChecked(g_renderExportSettings.batchSavedViews);

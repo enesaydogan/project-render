@@ -17,7 +17,7 @@ struct RenderExportSettings {
   int resolutionPreset = 1;
   int maxSpp = 200;
   float noisePercent = 5.0f;
-  int denoiserIndex = 2; // 0=Off, 1=OIDN CPU, 2=OIDN GPU
+  int denoiserIndex = 2; // 0=Off, 1=OIDN CPU, 2=OIDN GPU, 3=OptiX
   bool batchSavedViews = false;
   std::string batchBaseName = "final";
 };

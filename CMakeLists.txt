@@ -131,6 +131,7 @@ target_sources(project-render PRIVATE
     src/PragueSkyModel.cpp
     src/ImGuizmo.cpp
     src/oidn_denoiser.cpp
+    src/optix_denoiser.cpp
     src/clouds.cpp
     src/imgui_theme.cpp
     src/scene_io.cpp
@@ -263,6 +264,37 @@ if (USE_OPENIMAGEDENOISE)
   )
 else()
   message(STATUS "OpenImageDenoise support disabled (USE_OPENIMAGEDENOISE=OFF)")
+endif()
+
+# Optional NVIDIA OptiX denoiser support. The default build stays independent
+# from CUDA/OptiX; enable this only on machines with both SDKs installed.
+option(USE_OPTIX_DENOISER "Enable NVIDIA OptiX final-frame denoiser" OFF)
+if (USE_OPTIX_DENOISER)
+  find_package(CUDAToolkit REQUIRED)
+
+  set(OPTIX_ROOT "" CACHE PATH "NVIDIA OptiX SDK root")
+  if(NOT OPTIX_ROOT AND DEFINED ENV{OPTIX_SDK_ROOT})
+    set(OPTIX_ROOT "$ENV{OPTIX_SDK_ROOT}")
+  endif()
+  if(NOT OPTIX_ROOT AND DEFINED ENV{OptiX_INSTALL_DIR})
+    set(OPTIX_ROOT "$ENV{OptiX_INSTALL_DIR}")
+  endif()
+
+  find_path(OPTIX_INCLUDE_DIR
+    NAMES optix.h
+    HINTS "${OPTIX_ROOT}" "${OPTIX_ROOT}/include"
+    PATH_SUFFIXES include)
+
+  if(NOT OPTIX_INCLUDE_DIR)
+    message(FATAL_ERROR "USE_OPTIX_DENOISER=ON but optix.h was not found. Set OPTIX_ROOT to the NVIDIA OptiX SDK directory.")
+  endif()
+
+  target_include_directories(project-render PRIVATE "${OPTIX_INCLUDE_DIR}")
+  target_link_libraries(project-render PRIVATE CUDA::cudart CUDA::cuda_driver)
+  target_compile_definitions(project-render PRIVATE USE_OPTIX_DENOISER=1)
+  message(STATUS "OptiX denoiser enabled (headers: ${OPTIX_INCLUDE_DIR})")
+else()
+  message(STATUS "OptiX denoiser disabled (USE_OPTIX_DENOISER=OFF)")
 endif()
 
 # Copy Streamline + NGX runtime files next to the executable.

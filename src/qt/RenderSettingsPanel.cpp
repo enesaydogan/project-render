@@ -51,6 +51,7 @@ int DenoiserIndexFromMode(DxrRenderer::DenoiserMode mode)
     switch (mode) {
     case DxrRenderer::DenoiserMode::OIDN_CPU: return 1;
     case DxrRenderer::DenoiserMode::OIDN_GPU: return 2;
+    case DxrRenderer::DenoiserMode::OptiX: return 3;
     default: return 0;
     }
 }
@@ -62,6 +63,9 @@ DxrRenderer::DenoiserMode DenoiserModeFromIndex(int index)
     }
     if (index == 2) {
         return DxrRenderer::DenoiserMode::OIDN_GPU;
+    }
+    if (index == 3) {
+        return DxrRenderer::DenoiserMode::OptiX;
     }
     return DxrRenderer::DenoiserMode::Off;
 }
@@ -187,7 +191,7 @@ void RenderSettingsPanel::createUi()
     auto *finalGroup = new QGroupBox(tr("Final / Export Denoiser"), m_dxrSection);
     auto *finalForm = new QFormLayout(finalGroup);
     m_finalDenoiser = new QComboBox(finalGroup);
-    m_finalDenoiser->addItems({tr("Off"), tr("OIDN (CPU)"), tr("OIDN (GPU)")});
+    m_finalDenoiser->addItems({tr("Off"), tr("OIDN (CPU)"), tr("OIDN (GPU)"), tr("OptiX")});
     m_oidnQuality = new QComboBox(finalGroup);
     m_oidnQuality->addItems({tr("Fast"), tr("Balanced"), tr("High")});
     finalForm->addRow(tr("Denoiser"), m_finalDenoiser);
