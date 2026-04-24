@@ -288,7 +288,15 @@ bool SampleRoughDielectric(float3 V, float3 N, float roughness, float ior,
 
 float3 SampleThinGlassTransmission(float3 V, float roughness, float2 u)
 {
-    return normalize(-V);
+    float r = saturate(roughness);
+    if (IsDeltaGlass(r)) {
+        return normalize(-V);
+    }
+
+    // Cheap thin-glass blur for architectural panes. Keep the cone bounded so
+    // frosted glass reads as softened transmission without exploding variance.
+    float coneAngle = min(0.75, r * r * 2.0 + r * 0.05);
+    return SampleCone(normalize(-V), cos(coneAngle), u);
 }
 
 void StabilizeSpecularSample(float3 N, float3 V,
@@ -404,10 +412,19 @@ RayPayload InitRayPayload(uint rayType)
 
 float3 TraceGlassReflectionRadiance(float3 P, float3 V, float3 N,
                                     float3 albedo, float metallic,
-                                    float ior, float specularWeight,
-                                    float3 specularColor)
+                                    float roughness, float ior,
+                                    float specularWeight,
+                                    float3 specularColor, float2 uReflection)
 {
     float3 reflectionDir = normalize(reflect(-V, N));
+    float r = saturate(roughness);
+    if (!IsDeltaSpecular(r)) {
+        float3 H = SampleGGX(uReflection, N, r);
+        reflectionDir = normalize(reflect(-V, H));
+        if (dot(reflectionDir, N) <= 1.0e-5) {
+            reflectionDir = normalize(reflect(-V, N));
+        }
+    }
 
     RayDesc reflectionRay;
     reflectionRay.Origin = P + reflectionDir * 0.002;
@@ -630,9 +647,11 @@ void RayGen()
             throughput * TraceGlassReflectionRadiance(resolveP, resolveV,
                                                       resolveN, resolveAlbedo,
                                                       resolveMetallic,
+                                                      resolveRoughness,
                                                       resolveIor,
                                                       resolveSpecularWeight,
-                                                      resolveSpecularColor);
+                                                      resolveSpecularColor,
+                                                      next_float2(rng));
         accumulatedColor += resolveReflection;
         primaryGlassReflection += resolveReflection;
 
@@ -1422,9 +1441,11 @@ void RayGen()
                             TraceGlassReflectionRadiance(P, V, N,
                                                          payloadAlbedo,
                                                          metallic,
+                                                         roughness,
                                                          payloadIor,
                                                          payloadSpecularWeight,
-                                                         payloadSpecularColor);
+                                                         payloadSpecularColor,
+                                                         next_float2(rng));
                         primaryGlassReflection =
                             max(surfaceLightingContribution + reflectedColor,
                                 float3(0.0, 0.0, 0.0));

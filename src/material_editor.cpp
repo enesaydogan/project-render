@@ -536,7 +536,8 @@ void Draw(HWND hwnd, bool &visible) {
               DxrRenderer::ResetAccumulation();
             }
 
-            if (ImGui::SliderFloat("Specular Weight", &mat.specularWeight,
+            if (!IsReflectionGlossinessWorkflow(mat) &&
+                ImGui::SliderFloat("Specular Weight", &mat.specularWeight,
                                    0.0f, 1.0f))
               DxrRenderer::ResetAccumulation();
             if (ImGui::ColorEdit3("Specular Color", mat.specularColor))

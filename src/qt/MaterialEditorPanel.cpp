@@ -421,8 +421,9 @@ void MaterialEditorPanel::createUi()
     surfaceForm->addRow(m_textureSlots[Normal].group);
     surfaceForm->addRow(m_textureSlots[Occlusion].group);
 
+    m_specularWeightLabel = new QLabel(tr("Specular Weight"), surfaceTab);
     m_specularWeight = CreateSliderControl(0.0, 1.0, 0.01, 3);
-    surfaceForm->addRow(tr("Specular Weight"), m_specularWeight);
+    surfaceForm->addRow(m_specularWeightLabel, m_specularWeight);
     m_specularColorButton = new QPushButton(tr("Pick"), surfaceTab);
     surfaceForm->addRow(tr("Specular Color"), m_specularColorButton);
     surfaceForm->addRow(m_textureSlots[SpecularColor].group);
@@ -1673,6 +1674,12 @@ void MaterialEditorPanel::updateWorkflowUi(const Asset::Material &mat)
     const bool reflectionWorkflow = IsReflectionGlossinessWorkflow(mat);
     if (m_textureSlots[Metalness].group) {
         m_textureSlots[Metalness].group->setVisible(!reflectionWorkflow);
+    }
+    if (m_specularWeightLabel) {
+        m_specularWeightLabel->setVisible(!reflectionWorkflow);
+    }
+    if (m_specularWeight) {
+        m_specularWeight->setVisible(!reflectionWorkflow);
     }
 }
 

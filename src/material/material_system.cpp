@@ -224,7 +224,7 @@ void ApplyPreset(Asset::Material &m, int presetIndex) {
   case 9:
     m.metalness = 0.0f;
     m.ior = 1.52f;
-    SetRoughness(0.02f);
+    SetRoughness(0.0f);
     m.transmissionWeight = 1.0f;
     m.thinWalled = 1.0f;
     m.alphaMode = "BLEND";
@@ -234,7 +234,7 @@ void ApplyPreset(Asset::Material &m, int presetIndex) {
     m.ior = 1.52f;
     SetRoughness(0.35f);
     m.transmissionWeight = 1.0f;
-    m.thinWalled = 0.0f;
+    m.thinWalled = 1.0f;
     m.thickness = 0.01f;
     m.attenuationDistance = 0.25f;
     m.alphaMode = "BLEND";
@@ -247,7 +247,7 @@ void ApplyPreset(Asset::Material &m, int presetIndex) {
     m.transmissionColor[1] = 0.95f;
     m.transmissionColor[2] = 1.0f;
     m.transmissionWeight = 1.0f;
-    m.thinWalled = 0.0f;
+    m.thinWalled = 1.0f;
     m.thickness = 0.012f;
     m.attenuationDistance = 0.15f;
     m.alphaMode = "BLEND";

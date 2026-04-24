@@ -117,6 +117,7 @@ private:
     QComboBox *m_workflowCombo = nullptr;
     QLabel *m_secondarySurfaceLabel = nullptr;
     QLabel *m_roughnessSurfaceLabel = nullptr;
+    QLabel *m_specularWeightLabel = nullptr;
     SliderControl *m_roughness = nullptr;
     SliderControl *m_metalness = nullptr;
     SliderControl *m_specularWeight = nullptr;
