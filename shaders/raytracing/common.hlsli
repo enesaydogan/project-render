@@ -416,14 +416,27 @@ inline float3 UnpackPayloadTransmissionColor(uint packed)
     return UnpackPayloadAlbedo(packed);
 }
 
+inline uint PackPayloadSpecularColorThickness(float3 c, float thickness)
+{
+    uint3 q = (uint3)round(saturate(c) * 255.0);
+    uint t = (uint)round(sqrt(saturate(thickness)) * 255.0);
+    return (q.x) | (q.y << 8) | (q.z << 16) | (t << 24);
+}
+
 inline uint PackPayloadSpecularColor(float3 c)
 {
-    return PackPayloadAlbedo(c);
+    return PackPayloadSpecularColorThickness(c, 0.0);
 }
 
 inline float3 UnpackPayloadSpecularColor(uint packed)
 {
     return UnpackPayloadAlbedo(packed);
+}
+
+inline float UnpackPayloadThickness(uint packed)
+{
+    float t = ((packed >> 24) & 0xFFu) / 255.0;
+    return t * t;
 }
 
 #endif // RAYTRACING_COMMON_H

@@ -696,7 +696,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     payload.packedSurface = PackPayloadSurface(roughness, metalness, transmission, translucency);
     payload.packedIorType = PackPayloadIorType(emisColor.w, rayType, thinWalled, specularWeight);
     payload.packedTransmission = PackPayloadTransmissionColor(effectiveTransmissionColor);
-    payload.packedSpecular = PackPayloadSpecularColor(specularColor);
+    payload.packedSpecular = PackPayloadSpecularColorThickness(specularColor, thickness);
 }
 
 [shader("anyhit")]

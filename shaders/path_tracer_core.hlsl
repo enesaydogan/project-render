@@ -229,6 +229,14 @@ bool ShouldResolveDeltaTransmission(float roughness, float transmission,
     return transmissionLobe >= reflectionLobe;
 }
 
+float EffectiveArchGlassThickness(float materialThickness)
+{
+    // Archviz glazing often arrives as a closed, very thin box but the material
+    // thickness is left at zero. Use a small pane thickness so the non-thin
+    // model exits the sheet instead of visibly bending through mesh thickness.
+    return max(materialThickness, 0.04);
+}
+
 bool RefractDeterministic(float3 V, float3 N, float ior, out float3 L)
 {
     float cosTheta = dot(V, N);
@@ -568,6 +576,7 @@ void RayGen()
         float guideTransmission = guideSurface.z;
         float guideIor = UnpackPayloadIor(guideResolvePayload.packedIorType);
         bool guideThinWalled = UnpackPayloadThinWalled(guideResolvePayload.packedIorType);
+        float guideThickness = UnpackPayloadThickness(guideResolvePayload.packedSpecular);
 
         if (!ShouldResolveDeltaTransmission(guideRoughness, guideTransmission,
                                             guideIor)) {
@@ -585,6 +594,12 @@ void RayGen()
                 primaryGuidePayload = guideResolvePayload;
                 primaryGuideResolved = true;
                 break;
+            }
+            if (primaryGuideRayType != RAY_TYPE_REFRACTION) {
+                float travel = EffectiveArchGlassThickness(guideThickness) /
+                               max(abs(dot(guideNextDir, guideN)), 0.2);
+                guideP = guideP + guideNextDir * min(travel, 2.0);
+                guideNextDir = primaryGuideDir;
             }
         }
 
@@ -619,6 +634,7 @@ void RayGen()
         float3 resolveTransmissionColor =
             UnpackPayloadTransmissionColor(primaryResolvePayload.packedTransmission);
         bool resolveThinWalled = UnpackPayloadThinWalled(primaryResolvePayload.packedIorType);
+        float resolveThickness = UnpackPayloadThickness(primaryResolvePayload.packedSpecular);
 
         if (!ShouldResolveDeltaTransmission(resolveRoughness, resolveTransmission,
                                             resolveIor)) {
@@ -662,6 +678,12 @@ void RayGen()
                 pretracedPrimaryPayload = primaryResolvePayload;
                 hasPretracedPrimaryPayload = true;
                 break;
+            }
+            if (currentRayType != RAY_TYPE_REFRACTION) {
+                float travel = EffectiveArchGlassThickness(resolveThickness) /
+                               max(abs(dot(resolveNextDir, resolveN)), 0.2);
+                resolveP = resolveP + resolveNextDir * min(travel, 2.0);
+                resolveNextDir = rayDir;
             }
         }
 
@@ -726,6 +748,7 @@ void RayGen()
         float payloadSpecularWeight = UnpackPayloadSpecularWeight(payload.packedIorType);
         float3 payloadTransmissionColor = UnpackPayloadTransmissionColor(payload.packedTransmission);
         float3 payloadSpecularColor = UnpackPayloadSpecularColor(payload.packedSpecular);
+        float payloadThickness = UnpackPayloadThickness(payload.packedSpecular);
         bool payloadThinWalled = UnpackPayloadThinWalled(payload.packedIorType);
 
         if (bounce == 0) {
@@ -1433,6 +1456,7 @@ void RayGen()
                                       glassL, refracted);
             }
 
+            uint incomingRayType = currentRayType;
             if (refracted) {
                 if (refractiveBounces >= (int)maxRefractiveBounces) break;
                 if (bounce == 0) {
@@ -1465,7 +1489,22 @@ void RayGen()
                 currentRayType = RAY_TYPE_REFLECTION;
             }
             pdf = 1.0;
-            rayOrigin = P + nextDir * 0.002; 
+            bool useSolidSheetApprox =
+                refracted &&
+                !payloadThinWalled &&
+                incomingRayType != RAY_TYPE_REFRACTION;
+            if (useSolidSheetApprox) {
+                float travel = EffectiveArchGlassThickness(payloadThickness) /
+                               max(abs(dot(glassL, N)), 0.2);
+                float3 exitP = P + glassL * min(travel, 2.0);
+                nextDir = IsDeltaGlass(roughness)
+                              ? rayDir
+                              : SampleThinGlassTransmission(V, roughness,
+                                                            next_float2(rng));
+                rayOrigin = exitP + nextDir * 0.002;
+            } else {
+                rayOrigin = P + nextDir * 0.002;
+            }
             // For glass, the cosine term and PDF often cancel out in simple path tracers,
             // but we'll manually update throughput here to ensure it's correct.
             throughput *= f_brdf;
