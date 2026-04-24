@@ -508,7 +508,6 @@ void RayGen()
     float primaryRoughness = 1.0;
     float primaryViewZ = -1.0;
     float3 primarySpecAlbedo = float3(0, 0, 0);
-    float primarySpecHitDist = -1.0;
     float primaryTonemapAoFactor = 1.0;
 
     int specularBounces = 0;
@@ -739,30 +738,13 @@ void RayGen()
                 float3 toHit = primaryPos - camPos;
                 primaryViewZ = dot(toHit, forward); 
 
-                // Specular Albedo calculation for DLSS-RR
                 float3 F0_primary = ComputeSurfaceF0(guideAlbedo, guideMetalness,
                                                     guideIor, guideSpecularWeight,
                                                     guideSpecularColor);
                 float NdotV_primary = saturate(dot(primaryNormal, -guideDir));
-                primarySpecAlbedo = EnvBRDFApprox2(F0_primary, primaryRoughness * primaryRoughness, NdotV_primary);
-
-                // Trace a dedicated specular reflection ray to get hit distance for DLSS-RR.
-                if (!primaryIsRefractive &&
-                    (dlssRayReconstruction > 0.5) &&
-                    max(primarySpecAlbedo.r, max(primarySpecAlbedo.g, primarySpecAlbedo.b)) > 0.01) {
-                    float3 R_spec = reflect(guideDir, primaryNormal);
-                    RayDesc specHitRay;
-                    specHitRay.Origin = primaryPos + primaryNormal * 0.002;
-                    specHitRay.Direction = R_spec;
-                    specHitRay.TMin = 0.002;
-                    specHitRay.TMax = 1000.0;
-                    RayPayload specHitPayload = InitRayPayload(RAY_TYPE_REFLECTION);
-                    TraceRay(g_accel, RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0xFF, 0, 0, 0, specHitRay, specHitPayload);
-                    SHADER_COUNTER_ADD(SHADER_COUNTER_SPECULAR_TRACES, 1);
-                    primarySpecHitDist = (specHitPayload.t > 0) ? specHitPayload.t : 1000.0;
-                } else {
-                    primarySpecHitDist = 0.0;
-                }
+                primarySpecAlbedo = EnvBRDFApprox2(F0_primary,
+                                                   primaryRoughness * primaryRoughness,
+                                                   NdotV_primary);
 
                 if (!primaryIsRefractive &&
                     tonemapAoIntensity > 1.0e-4 &&
@@ -814,7 +796,6 @@ void RayGen()
                     g_depth[launchIndex.xy] = saturate(ndcZ);
                 }
                 float2 mvec = kInvalidMvec;
-                float2 specMvec = kInvalidMvec;
                 if (prevValid > 0.5) {
                     float3 forwardP = normalize(prevForward);
                     float3 Rp = normalize(cross(forwardP, prevUp));
@@ -831,15 +812,15 @@ void RayGen()
                         if (any(prevScreen < screenMin) || any(prevScreen > screenMax)) mvec = kInvalidMvec;
                         else mvec = prevScreen - currScreen;
                     }
-                    if (any(primarySpecAlbedo > 0.0)) specMvec = mvec;
                 }
                 g_motionVectors[launchIndex.xy] = mvec;
-                g_specularMotionVectors[launchIndex.xy] = specMvec;
+                g_specularMotionVectors[launchIndex.xy] =
+                    any(primarySpecAlbedo > 0.0) ? mvec : kInvalidMvec;
                 g_albedoOut[launchIndex.xy] =
                     float4(primaryAlbedo, primaryTonemapAoFactor);
                 g_normalRoughnessOut[launchIndex.xy] = float4(normalize(primaryNormal), primaryRoughness);
                 g_specularAlbedo[launchIndex.xy] = float4(primarySpecAlbedo, 1.0);
-                g_specHitDistance[launchIndex.xy] = primarySpecHitDist;
+                g_specHitDistance[launchIndex.xy] = 0.0;
             }
 
             // --- Adaptive Sampling Early Exit (Now after G-buffers are fresh) ---
@@ -1613,28 +1594,6 @@ void RayGen()
         mvVis = clamp(mvVis, float2(-1.0, -1.0), float2(1.0, 1.0));
         float mag = saturate(length(mv) / kMvPixelsForFullScale);
         float3 col = float3(0.5 + 0.5 * mvVis.x, 0.5 + 0.5 * mvVis.y, mag);
-        g_output[launchIndex.xy] = float4(col, 1.0);
-        return;
-    }
-
-    // Debug: Specular Hit Distance (debug mode index = 9)
-    if (SHADER_DEBUG_MODE == 9.0) {
-        float d = g_specHitDistance[launchIndex.xy];
-        float v = saturate(d / max(farZ, 1e-3));
-        g_output[launchIndex.xy] = float4(v, v, v, 1.0);
-        return;
-    }
-
-    // Debug: Specular Motion Vectors (debug mode index = 10)
-    if (SHADER_DEBUG_MODE == 10.0) {
-        float2 mv = g_specularMotionVectors[launchIndex.xy];
-        // Handle our invalid sentinel.
-        if (abs(mv.x) > 1e5 || abs(mv.y) > 1e5) {
-            mv = float2(0.0, 0.0);
-        }
-        float2 mvNorm = mv / float2(launchDim.xy);
-        float3 col = float3(0.5 + 0.5 * mvNorm.x, 0.5 + 0.5 * mvNorm.y,
-                            saturate(length(mvNorm) * 2.0));
         g_output[launchIndex.xy] = float4(col, 1.0);
         return;
     }

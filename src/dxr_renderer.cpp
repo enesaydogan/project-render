@@ -3883,7 +3883,6 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       // Streamline flags used by raytracing shaders.
       cam->dlssEnabled = dlssActive ? 1.0f : 0.0f;
       cam->dlssRayReconstruction = rrActive ? 1.0f : 0.0f;
-        cam->reservedRealtimeDenoiser = 0.0f;
       asyncCameraSnapshot = *cam;
       hasAsyncCameraSnapshot = true;
 
@@ -4586,7 +4585,6 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
-
     const bool resetHistory = s_streamlineResetHistory;
     s_streamlineResetHistory = false;
 

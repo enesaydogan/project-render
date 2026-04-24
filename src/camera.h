@@ -49,14 +49,12 @@ struct CameraCB {
   // (luminance * sin(theta)) rather than raw texel area. Turning this off can
   // be useful for debugging or comparing the two approaches.
   float sampleEnvSolidAngle;
-  float reservedRealtimeDenoiser;
   float exportRendering;
   float dxrProceduralSkyBoost;
   float tonemapAoIntensity;
   float tonemapAoRadiusMeters;
   float tonemapAoMode;
   float triPlanarWorldRotationDegrees;
-  float _padShadowAlign[3]; // Align shadowMatrix to 16-byte boundary (HLSL float4x4 requirement)
   float shadowMatrix[16];
   float viewProj[16];
   float invViewProj[16];

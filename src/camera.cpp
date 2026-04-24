@@ -47,7 +47,6 @@ CameraCB g_initialCameraData = {
     1.0f,                           // cloudRenderingEnabled (default ON)
     0.0f,                           // iblRotationDegrees
     1.0f,                           // sampleEnvSolidAngle (default true)
-    0.0f,                           // reservedRealtimeDenoiser
     0.0f,                           // exportRendering
     1.0f,                           // dxrProceduralSkyBoost
     0.0f,                           // tonemapAoIntensity

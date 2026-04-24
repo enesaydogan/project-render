@@ -740,7 +740,6 @@ bool StreamlineManager::Evaluate(
       inputs.push_back(&specHitDistTag);
     }
 
-    // Provide either specular motion vectors OR specular hit distance, not both.
     if (specularMotionVectors && !specularHitDistance) {
       specMvecRes =
           sl::Resource(sl::ResourceType::eTex2d, specularMotionVectors,

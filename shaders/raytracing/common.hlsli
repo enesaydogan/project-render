@@ -152,7 +152,6 @@ cbuffer Camera : register(b0)
     // 0 = use raw texel luminance (area) which is incorrect but useful for
     // comparisons/debugging.
     float sampleEnvSolidAngle;
-    float reservedRealtimeDenoiser;
     float exportRendering;
     float dxrProceduralSkyBoost;
     float tonemapAoIntensity;
