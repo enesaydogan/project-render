@@ -826,16 +826,29 @@ void Draw(HWND hwnd, bool &visible) {
               DxrRenderer::ResetAccumulation();
             const char *variationModes[] = {"Off", "Per Mesh", "Per Surface"};
             int variationMode = static_cast<int>(mat.triPlanarVariationMode);
-            ImGui::BeginDisabled(!tri);
-            if (ImGui::Combo("Variation", &variationMode, variationModes,
+            if (ImGui::Combo("Stochastic Tiling", &variationMode,
+                             variationModes,
                              IM_ARRAYSIZE(variationModes))) {
               mat.triPlanarVariationMode =
                   static_cast<uint32_t>((std::clamp)(variationMode, 0, 2));
               DxrRenderer::ResetAccumulation();
             }
-            if (ImGui::SliderFloat("Variation Offset",
+            const bool stochasticActive = variationMode != 0;
+            ImGui::BeginDisabled(!stochasticActive);
+            if (ImGui::SliderFloat("Offset Jitter",
                                    &mat.triPlanarVariationOffset, 0.0f, 1.0f,
                                    "%.2f"))
+              DxrRenderer::ResetAccumulation();
+            if (ImGui::SliderFloat("Random Rotation",
+                                   &mat.stochasticTilingRotationDegrees,
+                                   0.0f, 360.0f, "%.1f"))
+              DxrRenderer::ResetAccumulation();
+            if (ImGui::Checkbox("Mirror Tiles",
+                                &mat.stochasticTilingMirror))
+              DxrRenderer::ResetAccumulation();
+            if (ImGui::SliderFloat("Color Variation",
+                                   &mat.stochasticTilingColorVariation,
+                                   0.0f, 1.0f, "%.2f"))
               DxrRenderer::ResetAccumulation();
             ImGui::EndDisabled();
 

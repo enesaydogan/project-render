@@ -168,6 +168,9 @@ void ApplyPreset(Asset::Material &m, int presetIndex) {
   m.triPlanarRotationDegrees[2] = 0.0f;
   m.triPlanarVariationMode = Asset::Material::kTriPlanarVariationOff;
   m.triPlanarVariationOffset = 0.0f;
+  m.stochasticTilingRotationDegrees = 0.0f;
+  m.stochasticTilingColorVariation = 0.0f;
+  m.stochasticTilingMirror = false;
   m.transmissionColor[0] = 1.0f;
   m.transmissionColor[1] = 1.0f;
   m.transmissionColor[2] = 1.0f;
@@ -642,12 +645,15 @@ void BuildRuntimeDxrMaterialData(const Asset::Material &material,
                    Asset::Material::kTriPlanarVariationPerSurface));
   outExtra->mappingVariationParams[1] =
       (std::clamp)(material.triPlanarVariationOffset, 0.0f, 1.0f);
-  outExtra->mappingVariationParams[2] = 0.0f;
-  outExtra->mappingVariationParams[3] = 0.0f;
+  outExtra->mappingVariationParams[2] =
+      (std::clamp)(material.stochasticTilingRotationDegrees, 0.0f, 360.0f);
+  outExtra->mappingVariationParams[3] =
+      (std::clamp)(material.stochasticTilingColorVariation, 0.0f, 1.0f);
   outExtra->triPlanarRotationParams[0] = material.triPlanarRotationDegrees[0];
   outExtra->triPlanarRotationParams[1] = material.triPlanarRotationDegrees[1];
   outExtra->triPlanarRotationParams[2] = material.triPlanarRotationDegrees[2];
-  outExtra->triPlanarRotationParams[3] = 0.0f;
+  outExtra->triPlanarRotationParams[3] =
+      material.stochasticTilingMirror ? 1.0f : 0.0f;
 
   outExtra->shadingParams[0] = (std::max)(0.0f, material.emissiveIntensity);
   outExtra->shadingParams[1] =
@@ -780,12 +786,15 @@ void BuildRuntimeRasterMaterialConstants(
                    Asset::Material::kTriPlanarVariationPerSurface));
   outConstants->mappingVariationParams[1] =
       (std::clamp)(material.triPlanarVariationOffset, 0.0f, 1.0f);
-  outConstants->mappingVariationParams[2] = 0.0f;
-  outConstants->mappingVariationParams[3] = 0.0f;
+  outConstants->mappingVariationParams[2] =
+      (std::clamp)(material.stochasticTilingRotationDegrees, 0.0f, 360.0f);
+  outConstants->mappingVariationParams[3] =
+      (std::clamp)(material.stochasticTilingColorVariation, 0.0f, 1.0f);
   outConstants->triPlanarRotationParams[0] = material.triPlanarRotationDegrees[0];
   outConstants->triPlanarRotationParams[1] = material.triPlanarRotationDegrees[1];
   outConstants->triPlanarRotationParams[2] = material.triPlanarRotationDegrees[2];
-  outConstants->triPlanarRotationParams[3] = 0.0f;
+  outConstants->triPlanarRotationParams[3] =
+      material.stochasticTilingMirror ? 1.0f : 0.0f;
 
   outConstants->textureWeight0[0] =
       (std::clamp)(material.diffuseTextureAmount, 0.0f, 1.0f);

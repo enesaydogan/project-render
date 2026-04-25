@@ -72,6 +72,9 @@ nlohmann::json BuildMaterialsMetadata(
           mat.triPlanarRotationDegrees[2]}},
         {"tvm", mat.triPlanarVariationMode},
         {"tvo", mat.triPlanarVariationOffset},
+        {"tvr", mat.stochasticTilingRotationDegrees},
+        {"tvc", mat.stochasticTilingColorVariation},
+        {"tvmr", mat.stochasticTilingMirror},
         {"wf", mat.workflow},
         {"txd", MapSavedTextureIndex(textureSaveRemap, mat.diffuseTexture)},
         {"txa", MapSavedTextureIndex(textureSaveRemap, mat.opacityTexture)},
@@ -227,6 +230,12 @@ void RestoreMaterialsFromMetadata(const nlohmann::json &materialsJson,
       "tvm", material.triPlanarVariationMode);
     material.triPlanarVariationOffset =
       savedMaterial.value("tvo", material.triPlanarVariationOffset);
+    material.stochasticTilingRotationDegrees =
+      savedMaterial.value("tvr", material.stochasticTilingRotationDegrees);
+    material.stochasticTilingColorVariation =
+      savedMaterial.value("tvc", material.stochasticTilingColorVariation);
+    material.stochasticTilingMirror =
+      savedMaterial.value("tvmr", material.stochasticTilingMirror);
     material.isGrass = savedMaterial.value("gr", material.isGrass);
     if (savedMaterial.contains("gc")) {
       for (int channel = 0; channel < 3; ++channel) {

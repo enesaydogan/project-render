@@ -82,7 +82,10 @@ struct Material {
   float triPlanarRotationDegrees[3] = {0.0f, 0.0f, 0.0f};
   uint32_t triPlanarVariationMode = kTriPlanarVariationOff;
   float triPlanarVariationOffset =
-      0.0f; // random offset in tile units for tri-planar projection
+      0.0f; // shared jitter for tri-planar variation and UV stochastic tiling
+  float stochasticTilingRotationDegrees = 0.0f;
+  float stochasticTilingColorVariation = 0.0f;
+  bool stochasticTilingMirror = false;
 
   int diffuseTexture = -1; // Was baseColor
   int normalTexture = -1;

@@ -535,9 +535,15 @@ void MaterialEditorPanel::createUi()
     mappingForm->addRow(tr("Rotation Z (deg)"), m_triPlanarRotationZ);
     m_triPlanarVariationMode = new QComboBox(mappingTab);
     m_triPlanarVariationMode->addItems({tr("Off"), tr("Per Mesh"), tr("Per Surface")});
-    mappingForm->addRow(tr("Variation"), m_triPlanarVariationMode);
+    mappingForm->addRow(tr("Stochastic Tiling"), m_triPlanarVariationMode);
     m_triPlanarVariationOffset = CreateSliderControl(0.0, 1.0, 0.01, 2);
-    mappingForm->addRow(tr("Variation Offset"), m_triPlanarVariationOffset);
+    mappingForm->addRow(tr("Offset Jitter"), m_triPlanarVariationOffset);
+    m_stochasticTilingRotation = CreateSliderControl(0.0, 360.0, 1.0, 1);
+    mappingForm->addRow(tr("Random Rotation"), m_stochasticTilingRotation);
+    m_stochasticTilingMirror = new QCheckBox(tr("Mirror Tiles"), mappingTab);
+    mappingForm->addRow(m_stochasticTilingMirror);
+    m_stochasticTilingColorVariation = CreateSliderControl(0.0, 1.0, 0.01, 2);
+    mappingForm->addRow(tr("Color Variation"), m_stochasticTilingColorVariation);
 
     m_tabs->addTab(mappingTab, tr("Mapping"));
 
@@ -1108,6 +1114,30 @@ void MaterialEditorPanel::createUi()
             m.triPlanarVariationOffset = static_cast<float>(value);
         });
     });
+    connect(m_stochasticTilingRotation->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            m.stochasticTilingRotationDegrees = static_cast<float>(value);
+        });
+    });
+    connect(m_stochasticTilingMirror, &QCheckBox::toggled, this, [this](bool enabled) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([enabled](Asset::Material &m) {
+            m.stochasticTilingMirror = enabled;
+        });
+    });
+    connect(m_stochasticTilingColorVariation->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            m.stochasticTilingColorVariation = static_cast<float>(value);
+        });
+    });
 
     connect(m_emissiveIntensity->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
@@ -1457,12 +1487,19 @@ void MaterialEditorPanel::syncInspectorMaterialState(const Asset::Material &mat,
     m_triPlanarVariationMode->setCurrentIndex(
         static_cast<int>(std::clamp(mat.triPlanarVariationMode, 0u, 2u)));
     m_triPlanarVariationOffset->setValue(mat.triPlanarVariationOffset);
+    m_stochasticTilingRotation->setValue(mat.stochasticTilingRotationDegrees);
+    m_stochasticTilingMirror->setChecked(mat.stochasticTilingMirror);
+    m_stochasticTilingColorVariation->setValue(mat.stochasticTilingColorVariation);
     const bool triPlanarActive = mat.triPlanarEnabled > 0.5f;
+    const bool stochasticActive =
+        mat.triPlanarVariationMode != Asset::Material::kTriPlanarVariationOff;
     m_triPlanarRotationX->setEnabled(triPlanarActive);
     m_triPlanarRotationY->setEnabled(triPlanarActive);
     m_triPlanarRotationZ->setEnabled(triPlanarActive);
-    m_triPlanarVariationMode->setEnabled(triPlanarActive);
-    m_triPlanarVariationOffset->setEnabled(triPlanarActive);
+    m_triPlanarVariationOffset->setEnabled(stochasticActive);
+    m_stochasticTilingRotation->setEnabled(stochasticActive);
+    m_stochasticTilingMirror->setEnabled(stochasticActive);
+    m_stochasticTilingColorVariation->setEnabled(stochasticActive);
 
     setColorButton(m_emissiveColorButton, getColorFromMaterial(mat.emissiveColor));
     m_emissiveIntensity->setValue(mat.emissiveIntensity);

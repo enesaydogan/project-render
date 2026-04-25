@@ -198,8 +198,8 @@ struct MaterialExtraData
     float4 coatLayerParams;     // x=coatWeight, y=coatRoughness, z=thinWalled, w=translucency
     float4 uvTransform;         // xy=uvScale, zw=uvOffset
     float4 triPlanarParams;     // x=enabled, y=scale, z=sharpness, w=normalStrength
-    float4 mappingVariationParams; // x=mode, y=offsetJitter, zw=reserved
-    float4 triPlanarRotationParams; // xyz=materialRotationDegrees, w=reserved
+    float4 mappingVariationParams; // x=mode, y=offsetJitter, z=randomRotation, w=colorVariation
+    float4 triPlanarRotationParams; // xyz=materialRotationDegrees, w=stochasticMirror
     float4 shadingParams;       // x=emissiveIntensity, y=specWeight, z=alphaCutoff, w=isGrass
     float4 transmissionColor;   // rgb=tinted transmission color
     float4 textureWeight0;      // x=baseColor, y=packedSurface, z=metalness, w=roughnessGloss

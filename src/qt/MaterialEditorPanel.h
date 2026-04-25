@@ -165,6 +165,9 @@ private:
     SliderControl *m_triPlanarRotationZ = nullptr;
     QComboBox *m_triPlanarVariationMode = nullptr;
     SliderControl *m_triPlanarVariationOffset = nullptr;
+    SliderControl *m_stochasticTilingRotation = nullptr;
+    QCheckBox *m_stochasticTilingMirror = nullptr;
+    SliderControl *m_stochasticTilingColorVariation = nullptr;
 
     // Emission tab
     QPushButton *m_emissiveColorButton = nullptr;
