@@ -157,7 +157,9 @@ private:
     SliderControl *m_triPlanarScale = nullptr;
     SliderControl *m_triPlanarSharpness = nullptr;
     SliderControl *m_triPlanarNormalStrength = nullptr;
-    SliderControl *m_triPlanarRotationDegrees = nullptr;
+    SliderControl *m_triPlanarRotationX = nullptr;
+    SliderControl *m_triPlanarRotationY = nullptr;
+    SliderControl *m_triPlanarRotationZ = nullptr;
     QComboBox *m_triPlanarVariationMode = nullptr;
     SliderControl *m_triPlanarVariationOffset = nullptr;
 

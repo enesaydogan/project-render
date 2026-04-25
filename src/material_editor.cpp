@@ -820,9 +820,9 @@ void Draw(HWND hwnd, bool &visible) {
                                    &mat.triPlanarNormalStrength, 0.0f, 4.0f,
                                    "%.2f"))
               DxrRenderer::ResetAccumulation();
-            if (ImGui::SliderFloat("Rotation (deg)",
-                                   &mat.triPlanarRotationDegrees, 0.0f,
-                                   360.0f, "%.1f"))
+            if (ImGui::SliderFloat3("Rotation XYZ (deg)",
+                                    mat.triPlanarRotationDegrees, 0.0f,
+                                    360.0f, "%.1f"))
               DxrRenderer::ResetAccumulation();
             const char *variationModes[] = {"Off", "Per Mesh", "Per Surface"};
             int variationMode = static_cast<int>(mat.triPlanarVariationMode);

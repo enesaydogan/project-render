@@ -87,6 +87,10 @@ void InitializeRasterConstants(RuntimeRasterMaterialConstants *outConstants) {
   outConstants->mappingVariationParams[1] = 0.0f;
   outConstants->mappingVariationParams[2] = 0.0f;
   outConstants->mappingVariationParams[3] = 0.0f;
+  outConstants->triPlanarRotationParams[0] = 0.0f;
+  outConstants->triPlanarRotationParams[1] = 0.0f;
+  outConstants->triPlanarRotationParams[2] = 0.0f;
+  outConstants->triPlanarRotationParams[3] = 0.0f;
   for (float &textureWeight : outConstants->textureWeight0) {
     textureWeight = 1.0f;
   }
@@ -159,7 +163,9 @@ void ApplyPreset(Asset::Material &m, int presetIndex) {
   m.triPlanarScale = 1.0f;
   m.triPlanarSharpness = 4.0f;
   m.triPlanarNormalStrength = 1.0f;
-  m.triPlanarRotationDegrees = 0.0f;
+  m.triPlanarRotationDegrees[0] = 0.0f;
+  m.triPlanarRotationDegrees[1] = 0.0f;
+  m.triPlanarRotationDegrees[2] = 0.0f;
   m.triPlanarVariationMode = Asset::Material::kTriPlanarVariationOff;
   m.triPlanarVariationOffset = 0.0f;
   m.transmissionColor[0] = 1.0f;
@@ -636,8 +642,12 @@ void BuildRuntimeDxrMaterialData(const Asset::Material &material,
                    Asset::Material::kTriPlanarVariationPerSurface));
   outExtra->mappingVariationParams[1] =
       (std::clamp)(material.triPlanarVariationOffset, 0.0f, 1.0f);
-  outExtra->mappingVariationParams[2] = material.triPlanarRotationDegrees;
+  outExtra->mappingVariationParams[2] = 0.0f;
   outExtra->mappingVariationParams[3] = 0.0f;
+  outExtra->triPlanarRotationParams[0] = material.triPlanarRotationDegrees[0];
+  outExtra->triPlanarRotationParams[1] = material.triPlanarRotationDegrees[1];
+  outExtra->triPlanarRotationParams[2] = material.triPlanarRotationDegrees[2];
+  outExtra->triPlanarRotationParams[3] = 0.0f;
 
   outExtra->shadingParams[0] = (std::max)(0.0f, material.emissiveIntensity);
   outExtra->shadingParams[1] =
@@ -770,8 +780,12 @@ void BuildRuntimeRasterMaterialConstants(
                    Asset::Material::kTriPlanarVariationPerSurface));
   outConstants->mappingVariationParams[1] =
       (std::clamp)(material.triPlanarVariationOffset, 0.0f, 1.0f);
-  outConstants->mappingVariationParams[2] = material.triPlanarRotationDegrees;
+  outConstants->mappingVariationParams[2] = 0.0f;
   outConstants->mappingVariationParams[3] = 0.0f;
+  outConstants->triPlanarRotationParams[0] = material.triPlanarRotationDegrees[0];
+  outConstants->triPlanarRotationParams[1] = material.triPlanarRotationDegrees[1];
+  outConstants->triPlanarRotationParams[2] = material.triPlanarRotationDegrees[2];
+  outConstants->triPlanarRotationParams[3] = 0.0f;
 
   outConstants->textureWeight0[0] =
       (std::clamp)(material.diffuseTextureAmount, 0.0f, 1.0f);

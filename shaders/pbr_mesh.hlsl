@@ -73,7 +73,8 @@ cbuffer MaterialCB : register(b1)
     float4 coatLayerParams;     // x=coatWeight, y=coatRoughness, z=thinWalled, w=translucency
     float4 uvTransform;         // xy=uvScale, zw=uvOffset
     float4 triPlanarParams;     // x=enabled, y=scale, z=sharpness, w=normalStrength
-    float4 mappingVariationParams; // x=mode, y=offsetJitter, z=materialRotationDegrees, w=reserved
+    float4 mappingVariationParams; // x=mode, y=offsetJitter, zw=reserved
+    float4 triPlanarRotationParams; // xyz=materialRotationDegrees, w=reserved
     float4 textureWeight0;      // x=baseColor, y=packedSurface, z=metalness, w=roughnessGloss
     float4 textureWeight1;      // x=normal, y=occlusion, z=emissive, w=opacity
     int4 textureIndices2;       // x=coatNormal, y=thickness
@@ -184,31 +185,23 @@ float HashTriPlanar01(uint x)
     return (HashTriPlanarU32(x) & 0x00FFFFFFu) / 16777215.0;
 }
 
-float GetTriPlanarRotationDegrees()
+float3 RotateTriPlanarVector(float3 v)
 {
-    return triPlanarWorldRotationDegrees + mappingVariationParams.z;
-}
+    float3 radiansXYZ = radians(triPlanarRotationParams.xyz);
+    float sx, cx, sy, cy, sz, cz;
+    sincos(radiansXYZ.x, sx, cx);
+    sincos(radiansXYZ.y, sy, cy);
+    sincos(radiansXYZ.z, sz, cz);
 
-float2 RotateAroundSceneUp(float2 xz, float degrees)
-{
-    float s, c;
-    sincos(radians(degrees), s, c);
-    return float2(xz.x * c - xz.y * s,
-                  xz.x * s + xz.y * c);
-}
-
-float3 RotateTriPlanarPosition(float3 worldPos)
-{
-    float2 rotatedXZ = RotateAroundSceneUp(worldPos.xz,
-                                           GetTriPlanarRotationDegrees());
-    return float3(rotatedXZ.x, worldPos.y, rotatedXZ.y);
+    v = float3(v.x, v.y * cx - v.z * sx, v.y * sx + v.z * cx);
+    v = float3(v.x * cy - v.z * sy, v.y, v.x * sy + v.z * cy);
+    v = float3(v.x * cz - v.y * sz, v.x * sz + v.y * cz, v.z);
+    return v;
 }
 
 float3 RotateTriPlanarAxis(float3 axis)
 {
-    float2 rotatedXZ = RotateAroundSceneUp(axis.xz,
-                                           GetTriPlanarRotationDegrees());
-    return normalize(float3(rotatedXZ.x, axis.y, rotatedXZ.y));
+    return normalize(RotateTriPlanarVector(axis));
 }
 
 uint ComputeTriPlanarVariationSeed(float3 objectOrigin, uint primitiveId)
@@ -280,19 +273,21 @@ float4 SampleTriPlanar(int texIndex, float3 worldPos, float3 worldNormal,
                        float3 objectPos)
 {
     if (texIndex < 0) return float4(1,1,1,1);
-    float3 rotatedPos = RotateTriPlanarPosition(worldPos);
+    float3 rotatedPos = RotateTriPlanarVector(worldPos);
+    float3 rotatedObjectPos = RotateTriPlanarVector(objectPos);
+    float3 rotatedNormal = normalize(RotateTriPlanarVector(worldNormal));
     float2 variationOffset =
-        ComputeTriPlanarVariationOffset(objectOrigin, objectPos, worldNormal);
-    float3 w = TriPlanarWeights(worldNormal, sharpness);
+        ComputeTriPlanarVariationOffset(objectOrigin, rotatedObjectPos, rotatedNormal);
+    float3 w = TriPlanarWeights(rotatedNormal, sharpness);
     float4 sx = textures[texIndex].Sample(
         linearSampler,
-        TriPlanarUV_X(rotatedPos, worldNormal, scale, variationOffset));
+        TriPlanarUV_X(rotatedPos, rotatedNormal, scale, variationOffset));
     float4 sy = textures[texIndex].Sample(
         linearSampler,
-        TriPlanarUV_Y(rotatedPos, worldNormal, scale, variationOffset));
+        TriPlanarUV_Y(rotatedPos, rotatedNormal, scale, variationOffset));
     float4 sz = textures[texIndex].Sample(
         linearSampler,
-        TriPlanarUV_Z(rotatedPos, worldNormal, scale, variationOffset));
+        TriPlanarUV_Z(rotatedPos, rotatedNormal, scale, variationOffset));
     return sx * w.x + sy * w.y + sz * w.z;
 }
 
@@ -324,45 +319,48 @@ float3 SampleTriPlanarNormal(int texIndex, float3 worldPos, float3 worldNormal,
 {
     if (texIndex < 0 || amount <= 0.0) return normalize(worldNormal);
     float3 Nw = normalize(worldNormal);
-    float3 rotatedPos = RotateTriPlanarPosition(worldPos);
+    float3 rotatedPos = RotateTriPlanarVector(worldPos);
+    float3 rotatedObjectPos = RotateTriPlanarVector(objectPos);
+    float3 rotatedNormal = normalize(RotateTriPlanarVector(worldNormal));
     float2 variationOffset =
-        ComputeTriPlanarVariationOffset(objectOrigin, objectPos, Nw);
-    float3 w = TriPlanarWeights(Nw, sharpness);
+        ComputeTriPlanarVariationOffset(objectOrigin, rotatedObjectPos, rotatedNormal);
+    float3 w = TriPlanarWeights(rotatedNormal, sharpness);
 
     float3 nx = UnpackNormal(textures[texIndex].Sample(
         linearSampler,
-        TriPlanarUV_X(rotatedPos, Nw, scale, variationOffset)));
+        TriPlanarUV_X(rotatedPos, rotatedNormal, scale, variationOffset)));
     float3 ny = UnpackNormal(textures[texIndex].Sample(
         linearSampler,
-        TriPlanarUV_Y(rotatedPos, Nw, scale, variationOffset)));
+        TriPlanarUV_Y(rotatedPos, rotatedNormal, scale, variationOffset)));
     float3 nz = UnpackNormal(textures[texIndex].Sample(
         linearSampler,
-        TriPlanarUV_Z(rotatedPos, Nw, scale, variationOffset)));
+        TriPlanarUV_Z(rotatedPos, rotatedNormal, scale, variationOffset)));
     nx = BlendNormalSample(nx, amount);
     ny = BlendNormalSample(ny, amount);
     nz = BlendNormalSample(nz, amount);
     nx.xy *= strength; ny.xy *= strength; nz.xy *= strength;
     nx = normalize(nx); ny = normalize(ny); nz = normalize(nz);
 
-    float sx = (Nw.x >= 0.0) ? 1.0 : -1.0;
-    float sy = (Nw.y >= 0.0) ? 1.0 : -1.0;
-    float sz = (Nw.z >= 0.0) ? 1.0 : -1.0;
+    float sx = (rotatedNormal.x >= 0.0) ? 1.0 : -1.0;
+    float sy = (rotatedNormal.y >= 0.0) ? 1.0 : -1.0;
+    float sz = (rotatedNormal.z >= 0.0) ? 1.0 : -1.0;
 
     float3 axisX = RotateTriPlanarAxis(float3(1,0,0));
+    float3 axisY = RotateTriPlanarAxis(float3(0,1,0));
     float3 axisZ = RotateTriPlanarAxis(float3(0,0,1));
 
     float3 Tx = -axisZ * sx;
-    float3 Bx = float3(0,1,0);
+    float3 Bx = axisY;
     float3 Nx = axisX * sx;
     float3x3 TBNx = float3x3(Tx, Bx, Nx);
 
     float3 Ty = axisX;
     float3 By = -axisZ * sy;
-    float3 Ny = float3(0,sy,0);
+    float3 Ny = axisY * sy;
     float3x3 TBNy = float3x3(Ty, By, Ny);
 
     float3 Tz = axisX * sz;
-    float3 Bz = float3(0,1,0);
+    float3 Bz = axisY;
     float3 Nz = axisZ * sz;
     float3x3 TBNz = float3x3(Tz, Bz, Nz);
 

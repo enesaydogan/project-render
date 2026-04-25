@@ -64,31 +64,23 @@ float HashTriPlanar01(uint x)
     return (HashTriPlanarU32(x) & 0x00FFFFFFu) / 16777215.0;
 }
 
-float GetTriPlanarRotationDegrees(float4 variationParams)
+float3 RotateTriPlanarVector(float3 v, float4 rotationParams)
 {
-    return triPlanarWorldRotationDegrees + variationParams.z;
+    float3 radiansXYZ = radians(rotationParams.xyz);
+    float sx, cx, sy, cy, sz, cz;
+    sincos(radiansXYZ.x, sx, cx);
+    sincos(radiansXYZ.y, sy, cy);
+    sincos(radiansXYZ.z, sz, cz);
+
+    v = float3(v.x, v.y * cx - v.z * sx, v.y * sx + v.z * cx);
+    v = float3(v.x * cy - v.z * sy, v.y, v.x * sy + v.z * cy);
+    v = float3(v.x * cz - v.y * sz, v.x * sz + v.y * cz, v.z);
+    return v;
 }
 
-float2 RotateAroundSceneUp(float2 xz, float degrees)
+float3 RotateTriPlanarAxis(float3 axis, float4 rotationParams)
 {
-    float s, c;
-    sincos(radians(degrees), s, c);
-    return float2(xz.x * c - xz.y * s,
-                  xz.x * s + xz.y * c);
-}
-
-float3 RotateTriPlanarPosition(float3 worldPos, float4 variationParams)
-{
-    float2 rotatedXZ = RotateAroundSceneUp(worldPos.xz,
-                                           GetTriPlanarRotationDegrees(variationParams));
-    return float3(rotatedXZ.x, worldPos.y, rotatedXZ.y);
-}
-
-float3 RotateTriPlanarAxis(float3 axis, float4 variationParams)
-{
-    float2 rotatedXZ = RotateAroundSceneUp(axis.xz,
-                                           GetTriPlanarRotationDegrees(variationParams));
-    return normalize(float3(rotatedXZ.x, axis.y, rotatedXZ.y));
+    return normalize(RotateTriPlanarVector(axis, rotationParams));
 }
 
 uint ComputeTriPlanarVariationSeed(float4 variationParams, float3 objectOrigin,
@@ -154,23 +146,25 @@ float CalculateTextureLod(uint rayType, float3 worldPos)
 
 float4 SampleTriPlanar(int texIndex, float3 worldPos, float3 worldNormal,
                        float scale, float sharpness,
-                       float4 variationParams, float3 objectOrigin,
+                       float4 variationParams, float4 rotationParams,
+                       float3 objectOrigin,
                        uint primitiveId, float lod, bool dominantAxisOnly)
 {
     if (texIndex < 0) return float4(1,1,1,1);
-    float3 rotatedPos = RotateTriPlanarPosition(worldPos, variationParams);
+    float3 rotatedPos = RotateTriPlanarVector(worldPos, rotationParams);
+    float3 rotatedNormal = normalize(RotateTriPlanarVector(worldNormal, rotationParams));
     float2 variationOffset = ComputeTriPlanarVariationOffset(
         variationParams, objectOrigin, primitiveId);
     if (dominantAxisOnly) {
-        float3 an = abs(worldNormal);
-        if (an.x >= an.y && an.x >= an.z) return textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_X(rotatedPos, worldNormal, scale, variationOffset), lod);
-        if (an.y >= an.z) return textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_Y(rotatedPos, worldNormal, scale, variationOffset), lod);
-        return textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_Z(rotatedPos, worldNormal, scale, variationOffset), lod);
+        float3 an = abs(rotatedNormal);
+        if (an.x >= an.y && an.x >= an.z) return textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_X(rotatedPos, rotatedNormal, scale, variationOffset), lod);
+        if (an.y >= an.z) return textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_Y(rotatedPos, rotatedNormal, scale, variationOffset), lod);
+        return textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_Z(rotatedPos, rotatedNormal, scale, variationOffset), lod);
     }
-    float3 w = TriPlanarWeights(worldNormal, sharpness);
-    float4 sx = textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_X(rotatedPos, worldNormal, scale, variationOffset), lod);
-    float4 sy = textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_Y(rotatedPos, worldNormal, scale, variationOffset), lod);
-    float4 sz = textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_Z(rotatedPos, worldNormal, scale, variationOffset), lod);
+    float3 w = TriPlanarWeights(rotatedNormal, sharpness);
+    float4 sx = textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_X(rotatedPos, rotatedNormal, scale, variationOffset), lod);
+    float4 sy = textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_Y(rotatedPos, rotatedNormal, scale, variationOffset), lod);
+    float4 sz = textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_Z(rotatedPos, rotatedNormal, scale, variationOffset), lod);
     return sx * w.x + sy * w.y + sz * w.z;
 }
 
@@ -228,44 +222,47 @@ float3 EvaluateSheenBrdf(float3 sheenTint, float sheenWeight, float VdotH,
 float3 SampleTriPlanarNormal(int texIndex, float3 worldPos, float3 worldNormal,
                              float scale, float sharpness, float strength,
                              float amount, float4 variationParams,
+                             float4 rotationParams,
                              float3 objectOrigin, uint primitiveId,
                              float lod, bool dominantAxisOnly)
 {
     if (texIndex < 0 || amount <= 0.0) return normalize(worldNormal);
     float3 Nw = normalize(worldNormal);
-    float3 rotatedPos = RotateTriPlanarPosition(worldPos, variationParams);
+    float3 rotatedPos = RotateTriPlanarVector(worldPos, rotationParams);
+    float3 rotatedNormal = normalize(RotateTriPlanarVector(worldNormal, rotationParams));
     float2 variationOffset = ComputeTriPlanarVariationOffset(
         variationParams, objectOrigin, primitiveId);
-    float3 w = dominantAxisOnly ? float3(0,0,0) : TriPlanarWeights(Nw, sharpness);
+    float3 w = dominantAxisOnly ? float3(0,0,0) : TriPlanarWeights(rotatedNormal, sharpness);
 
-    float3 nx = UnpackNormal(textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_X(rotatedPos, Nw, scale, variationOffset), lod));
-    float3 ny = UnpackNormal(textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_Y(rotatedPos, Nw, scale, variationOffset), lod));
-    float3 nz = UnpackNormal(textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_Z(rotatedPos, Nw, scale, variationOffset), lod));
+    float3 nx = UnpackNormal(textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_X(rotatedPos, rotatedNormal, scale, variationOffset), lod));
+    float3 ny = UnpackNormal(textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_Y(rotatedPos, rotatedNormal, scale, variationOffset), lod));
+    float3 nz = UnpackNormal(textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_Z(rotatedPos, rotatedNormal, scale, variationOffset), lod));
     nx = BlendNormalSample(nx, amount);
     ny = BlendNormalSample(ny, amount);
     nz = BlendNormalSample(nz, amount);
     nx.xy *= strength; ny.xy *= strength; nz.xy *= strength;
     nx = normalize(nx); ny = normalize(ny); nz = normalize(nz);
 
-    float sx = (Nw.x >= 0.0) ? 1.0 : -1.0;
-    float sy = (Nw.y >= 0.0) ? 1.0 : -1.0;
-    float sz = (Nw.z >= 0.0) ? 1.0 : -1.0;
+    float sx = (rotatedNormal.x >= 0.0) ? 1.0 : -1.0;
+    float sy = (rotatedNormal.y >= 0.0) ? 1.0 : -1.0;
+    float sz = (rotatedNormal.z >= 0.0) ? 1.0 : -1.0;
 
-    float3 axisX = RotateTriPlanarAxis(float3(1,0,0), variationParams);
-    float3 axisZ = RotateTriPlanarAxis(float3(0,0,1), variationParams);
+    float3 axisX = RotateTriPlanarAxis(float3(1,0,0), rotationParams);
+    float3 axisY = RotateTriPlanarAxis(float3(0,1,0), rotationParams);
+    float3 axisZ = RotateTriPlanarAxis(float3(0,0,1), rotationParams);
 
     float3 Tx = -axisZ * sx;
-    float3 Bx = float3(0,1,0);
+    float3 Bx = axisY;
     float3 Nx = axisX * sx;
     float3x3 TBNx = float3x3(Tx, Bx, Nx);
 
     float3 Ty = axisX;
     float3 By = -axisZ * sy;
-    float3 Ny = float3(0,sy,0);
+    float3 Ny = axisY * sy;
     float3x3 TBNy = float3x3(Ty, By, Ny);
 
     float3 Tz = axisX * sz;
-    float3 Bz = float3(0,1,0);
+    float3 Bz = axisY;
     float3 Nz = axisZ * sz;
     float3x3 TBNz = float3x3(Tz, Bz, Nz);
 
@@ -274,7 +271,7 @@ float3 SampleTriPlanarNormal(int texIndex, float3 worldPos, float3 worldNormal,
     float3 wz = normalize(mul(nz, TBNz));
 
     if (dominantAxisOnly) {
-        float3 an = abs(Nw);
+        float3 an = abs(rotatedNormal);
         if (an.x >= an.y && an.x >= an.z) return wx;
         if (an.y >= an.z) return wy;
         return wz;
@@ -338,6 +335,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     float4 uvXf = matExtra.uvTransform;
     float4 triP = matExtra.triPlanarParams;
     float4 mappingVariation = matExtra.mappingVariationParams;
+    float4 triRotation = matExtra.triPlanarRotationParams;
     float4 texWeight0 = matExtra.textureWeight0;
     float4 texWeight1 = matExtra.textureWeight1;
     float4 volumeParams = matExtra.volumeParams;
@@ -422,14 +420,14 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     float opacity = diffColor.a;
     int mode = (int)SHADER_DEBUG_MODE;
     if (texDiff >= 0) {
-        float4 diffSample = triPlanar ? SampleTriPlanar(texDiff, P, worldNormal, triScale, triSharp, mappingVariation, objectOrigin, primIndex, textureLod, dominantTriPlanar)
+        float4 diffSample = triPlanar ? SampleTriPlanar(texDiff, P, worldNormal, triScale, triSharp, mappingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar)
                                       : textures[texDiff].SampleLevel(linearSampler, uv, textureLod);
         BaseColor *= BlendTextureRgb(sRGBToLinear(diffSample.rgb), texWeight0.x);
         opacity *= BlendTextureScalar(diffSample.a, texWeight0.x);
         SHADER_COUNTER_ADD(SHADER_COUNTER_TEXTURE_SAMPLES, 1);
     }
     if (texOpacity >= 0) {
-        float opacitySample = triPlanar ? SampleTriPlanar(texOpacity, P, worldNormal, triScale, triSharp, mappingVariation, objectOrigin, primIndex, textureLod, dominantTriPlanar).r
+        float opacitySample = triPlanar ? SampleTriPlanar(texOpacity, P, worldNormal, triScale, triSharp, mappingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar).r
                                         : textures[texOpacity].SampleLevel(linearSampler, uv, textureLod).r;
         opacity *= BlendTextureScalar(opacitySample, texWeight1.w);
         SHADER_COUNTER_ADD(SHADER_COUNTER_TEXTURE_SAMPLES, 1);
@@ -441,7 +439,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     
     // Metal/Roughness Logic: factor * texture
     if (texMR >= 0) {
-        float4 mrSample = triPlanar ? SampleTriPlanar(texMR, P, worldNormal, triScale, triSharp, mappingVariation, objectOrigin, primIndex, textureLod, dominantTriPlanar)
+        float4 mrSample = triPlanar ? SampleTriPlanar(texMR, P, worldNormal, triScale, triSharp, mappingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar)
                                     : textures[texMR].SampleLevel(linearSampler, uv, textureLod);
         float roughnessFactor = ((matFlags & MATERIAL_FLAG_INVERT_ROUGHNESS) != 0)
                                     ? max(1.0 - mrSample.g, 0.0)
@@ -488,7 +486,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
                 BlendTextureRgb(
                     sRGBToLinear(SampleTriPlanar(texDiff, P, worldNormal,
                                                 triScale, triSharp,
-                                                mappingVariation,
+                                                mappingVariation, triRotation,
                                                 objectOrigin, primIndex,
                                                 textureLod,
                                                 dominantTriPlanar)
@@ -523,7 +521,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     float ior = max(emisColor.w, 1.0);
     float3 specularColor = saturate(specularColorParams.rgb);
     if (texSpecular >= 0) {
-        float3 specSample = triPlanar ? SampleTriPlanar(texSpecular, P, worldNormal, triScale, triSharp, mappingVariation, objectOrigin, primIndex, textureLod, dominantTriPlanar).rgb
+        float3 specSample = triPlanar ? SampleTriPlanar(texSpecular, P, worldNormal, triScale, triSharp, mappingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar).rgb
                                       : textures[texSpecular].SampleLevel(linearSampler, uv, textureLod).rgb;
         specularColor *= BlendTextureRgb(sRGBToLinear(specSample), specularColorParams.a);
         SHADER_COUNTER_ADD(SHADER_COUNTER_TEXTURE_SAMPLES, 1);
@@ -536,10 +534,10 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     float3 F0 = lerp(dielectricF0, BaseColor, metalness);
     
     // Normal mapping
-    float3 N = triPlanar ? SampleTriPlanarNormal(texNorm, P, worldNormal, triScale, triSharp, triNormStrength, texWeight1.x, mappingVariation, objectOrigin, primIndex, textureLod, dominantTriPlanar)
+    float3 N = triPlanar ? SampleTriPlanarNormal(texNorm, P, worldNormal, triScale, triSharp, triNormStrength, texWeight1.x, mappingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar)
                          : GetNormalFromMap(uv, worldNormal, worldTangent, texNorm, texWeight1.x, textureLod);
     if (clearcoat > 0.001 && texCoatNormal >= 0 && lobeParams.x > 1.0e-4) {
-        float3 coatN = triPlanar ? SampleTriPlanarNormal(texCoatNormal, P, worldNormal, triScale, triSharp, triNormStrength, lobeParams.x, mappingVariation, objectOrigin, primIndex, textureLod, dominantTriPlanar)
+        float3 coatN = triPlanar ? SampleTriPlanarNormal(texCoatNormal, P, worldNormal, triScale, triSharp, triNormStrength, lobeParams.x, mappingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar)
                                  : GetNormalFromMap(uv, worldNormal, worldTangent, texCoatNormal, lobeParams.x, textureLod);
         N = normalize(lerp(N, coatN, saturate(clearcoat)));
     }
@@ -550,7 +548,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     // Ambient occlusion (only needed for GI_EVAL which computes Lo)
     float ao = 1.0;
     if (texOcc >= 0 && rayType == RAY_TYPE_GI_EVAL) {
-        float aoSample = triPlanar ? SampleTriPlanar(texOcc, P, worldNormal, triScale, triSharp, mappingVariation, objectOrigin, primIndex, textureLod, dominantTriPlanar).r
+        float aoSample = triPlanar ? SampleTriPlanar(texOcc, P, worldNormal, triScale, triSharp, mappingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar).r
                                    : textures[texOcc].SampleLevel(linearSampler, uv, textureLod).r;
         ao = BlendTextureScalar(aoSample, texWeight1.y);
         SHADER_COUNTER_ADD(SHADER_COUNTER_TEXTURE_SAMPLES, 1);
@@ -561,7 +559,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     const float baseEmissiveBoost = 5.0f;
     float3 emissive = emisColor.rgb * (baseEmissiveBoost * emissiveIntensity);
     if (texEmis >= 0) {
-        float3 e = triPlanar ? SampleTriPlanar(texEmis, P, worldNormal, triScale, triSharp, mappingVariation, objectOrigin, primIndex, textureLod, dominantTriPlanar).rgb
+        float3 e = triPlanar ? SampleTriPlanar(texEmis, P, worldNormal, triScale, triSharp, mappingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar).rgb
                              : textures[texEmis].SampleLevel(linearSampler, uv, textureLod).rgb;
         emissive *= BlendTextureRgb(sRGBToLinear(e), texWeight1.z);
         SHADER_COUNTER_ADD(SHADER_COUNTER_TEXTURE_SAMPLES, 1);
@@ -584,7 +582,7 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     float translucency = saturate(arch0.w);
     float thickness = max(volumeParams.x, 0.0);
     if (texThickness >= 0) {
-        float thicknessSample = triPlanar ? SampleTriPlanar(texThickness, P, worldNormal, triScale, triSharp, mappingVariation, objectOrigin, primIndex, textureLod, dominantTriPlanar).r
+        float thicknessSample = triPlanar ? SampleTriPlanar(texThickness, P, worldNormal, triScale, triSharp, mappingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar).r
                                           : textures[texThickness].SampleLevel(linearSampler, uv, textureLod).r;
         thickness *= BlendTextureScalar(thicknessSample, volumeParams.z);
         SHADER_COUNTER_ADD(SHADER_COUNTER_TEXTURE_SAMPLES, 1);
@@ -747,6 +745,7 @@ void AnyHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes a
                                   max(matExtra.triPlanarParams.y, 1e-6),
                                   max(matExtra.triPlanarParams.z, 0.01),
                                   matExtra.mappingVariationParams,
+                                  matExtra.triPlanarRotationParams,
                                   objectOrigin,
                                   primIndex,
                                   textureLod, dominantTriPlanar).a
@@ -770,6 +769,7 @@ void AnyHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes a
                                   max(matExtra.triPlanarParams.y, 1e-6),
                                   max(matExtra.triPlanarParams.z, 0.01),
                                   matExtra.mappingVariationParams,
+                                  matExtra.triPlanarRotationParams,
                                   objectOrigin,
                                   primIndex,
                                   textureLod, dominantTriPlanar).r

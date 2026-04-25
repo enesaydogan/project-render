@@ -51,7 +51,7 @@ struct Texture {
 };
 
 struct Material {
-  static constexpr uint32_t kSchemaVersionOpenPbrSubset = 8;
+  static constexpr uint32_t kSchemaVersionOpenPbrSubset = 9;
   static constexpr uint32_t kWorkflowMetalRoughness = 0;
   static constexpr uint32_t kWorkflowReflectionGlossiness = 1;
   static constexpr uint32_t kTriPlanarVariationOff = 0;
@@ -79,7 +79,7 @@ struct Material {
   float triPlanarSharpness = 4.0f; // blending exponent (higher = sharper)
   float triPlanarNormalStrength =
       1.0f; // normal intensity for tri-planar normal maps
-  float triPlanarRotationDegrees = 0.0f;
+  float triPlanarRotationDegrees[3] = {0.0f, 0.0f, 0.0f};
   uint32_t triPlanarVariationMode = kTriPlanarVariationOff;
   float triPlanarVariationOffset =
       0.0f; // random offset in tile units for tri-planar projection

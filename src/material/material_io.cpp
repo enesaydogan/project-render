@@ -67,7 +67,9 @@ nlohmann::json BuildMaterialsMetadata(
         {"ts", mat.triPlanarScale},
         {"ths", mat.triPlanarSharpness},
         {"tns", mat.triPlanarNormalStrength},
-        {"trd", mat.triPlanarRotationDegrees},
+        {"trr",
+         {mat.triPlanarRotationDegrees[0], mat.triPlanarRotationDegrees[1],
+          mat.triPlanarRotationDegrees[2]}},
         {"tvm", mat.triPlanarVariationMode},
         {"tvo", mat.triPlanarVariationOffset},
         {"wf", mat.workflow},
@@ -211,8 +213,16 @@ void RestoreMaterialsFromMetadata(const nlohmann::json &materialsJson,
         savedMaterial.value("ths", material.triPlanarSharpness);
     material.triPlanarNormalStrength =
         savedMaterial.value("tns", material.triPlanarNormalStrength);
-    material.triPlanarRotationDegrees =
-      savedMaterial.value("trd", material.triPlanarRotationDegrees);
+    if (savedMaterial.contains("trr")) {
+      for (int axis = 0; axis < 3; ++axis) {
+        material.triPlanarRotationDegrees[axis] = savedMaterial["trr"][axis];
+      }
+    } else {
+      material.triPlanarRotationDegrees[0] = 0.0f;
+      material.triPlanarRotationDegrees[1] =
+          savedMaterial.value("trd", material.triPlanarRotationDegrees[1]);
+      material.triPlanarRotationDegrees[2] = 0.0f;
+    }
     material.triPlanarVariationMode = savedMaterial.value(
       "tvm", material.triPlanarVariationMode);
     material.triPlanarVariationOffset =

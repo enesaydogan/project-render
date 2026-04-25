@@ -504,7 +504,6 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
   j["set"]["ms"] = g_mouseSensitivity;
   j["set"]["dg"] = g_drawGrid;
   j["set"]["dv"] = g_debugMode;
-  j["set"]["tpr"] = g_cameraData.triPlanarWorldRotationDegrees;
 
   // Sky
   j["sky"]["tod"] = g_timeOfDay;
@@ -793,8 +792,6 @@ static void ApplyMetadataPRS(const json &j) {
     g_mouseSensitivity = s.value("ms", g_mouseSensitivity);
     g_drawGrid = s.value("dg", g_drawGrid);
     g_debugMode = s.value("dv", g_debugMode);
-    g_cameraData.triPlanarWorldRotationDegrees =
-      s.value("tpr", g_cameraData.triPlanarWorldRotationDegrees);
   }
   if (j.contains("sky")) {
     auto &s = j["sky"];

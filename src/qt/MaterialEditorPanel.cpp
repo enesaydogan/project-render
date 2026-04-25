@@ -527,8 +527,12 @@ void MaterialEditorPanel::createUi()
     mappingForm->addRow(tr("Sharpness"), m_triPlanarSharpness);
     m_triPlanarNormalStrength = CreateSliderControl(0.0, 4.0, 0.05, 2);
     mappingForm->addRow(tr("Normal Strength"), m_triPlanarNormalStrength);
-    m_triPlanarRotationDegrees = CreateSliderControl(0.0, 360.0, 1.0, 1);
-    mappingForm->addRow(tr("Rotation (deg)"), m_triPlanarRotationDegrees);
+    m_triPlanarRotationX = CreateSliderControl(0.0, 360.0, 1.0, 1);
+    mappingForm->addRow(tr("Rotation X (deg)"), m_triPlanarRotationX);
+    m_triPlanarRotationY = CreateSliderControl(0.0, 360.0, 1.0, 1);
+    mappingForm->addRow(tr("Rotation Y (deg)"), m_triPlanarRotationY);
+    m_triPlanarRotationZ = CreateSliderControl(0.0, 360.0, 1.0, 1);
+    mappingForm->addRow(tr("Rotation Z (deg)"), m_triPlanarRotationZ);
     m_triPlanarVariationMode = new QComboBox(mappingTab);
     m_triPlanarVariationMode->addItems({tr("Off"), tr("Per Mesh"), tr("Per Surface")});
     mappingForm->addRow(tr("Variation"), m_triPlanarVariationMode);
@@ -1064,12 +1068,28 @@ void MaterialEditorPanel::createUi()
             m.triPlanarNormalStrength = static_cast<float>(value);
         });
     });
-    connect(m_triPlanarRotationDegrees->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+    connect(m_triPlanarRotationX->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
         }
         applyMaterialChange([value](Asset::Material &m) {
-            m.triPlanarRotationDegrees = static_cast<float>(value);
+            m.triPlanarRotationDegrees[0] = static_cast<float>(value);
+        });
+    });
+    connect(m_triPlanarRotationY->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            m.triPlanarRotationDegrees[1] = static_cast<float>(value);
+        });
+    });
+    connect(m_triPlanarRotationZ->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            m.triPlanarRotationDegrees[2] = static_cast<float>(value);
         });
     });
     connect(m_triPlanarVariationMode, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
@@ -1423,12 +1443,16 @@ void MaterialEditorPanel::syncInspector()
     m_triPlanarScale->setValue(mat.triPlanarScale);
     m_triPlanarSharpness->setValue(mat.triPlanarSharpness);
     m_triPlanarNormalStrength->setValue(mat.triPlanarNormalStrength);
-    m_triPlanarRotationDegrees->setValue(mat.triPlanarRotationDegrees);
+    m_triPlanarRotationX->setValue(mat.triPlanarRotationDegrees[0]);
+    m_triPlanarRotationY->setValue(mat.triPlanarRotationDegrees[1]);
+    m_triPlanarRotationZ->setValue(mat.triPlanarRotationDegrees[2]);
     m_triPlanarVariationMode->setCurrentIndex(
         static_cast<int>(std::clamp(mat.triPlanarVariationMode, 0u, 2u)));
     m_triPlanarVariationOffset->setValue(mat.triPlanarVariationOffset);
     const bool triPlanarActive = mat.triPlanarEnabled > 0.5f;
-    m_triPlanarRotationDegrees->setEnabled(triPlanarActive);
+    m_triPlanarRotationX->setEnabled(triPlanarActive);
+    m_triPlanarRotationY->setEnabled(triPlanarActive);
+    m_triPlanarRotationZ->setEnabled(triPlanarActive);
     m_triPlanarVariationMode->setEnabled(triPlanarActive);
     m_triPlanarVariationOffset->setEnabled(triPlanarActive);
 
