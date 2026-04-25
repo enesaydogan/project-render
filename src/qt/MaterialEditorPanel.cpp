@@ -641,7 +641,7 @@ void MaterialEditorPanel::createUi()
         }
         applyMaterialChange([this](Asset::Material &mat) {
             mat = *m_clipboard;
-        }, true);
+        }, true, false, true);
     });
     connect(m_resetButton, &QPushButton::clicked, this, [this]() {
         applyMaterialChange([](Asset::Material &mat) {
@@ -694,7 +694,7 @@ void MaterialEditorPanel::createUi()
             mat.roughnessGlossTextureAmount = rga;
             mat.specularColorTextureAmount = sca;
             mat.thicknessTextureAmount = tka;
-        }, true);
+        }, true, false, true);
     });
     connect(m_resetNoTexButton, &QPushButton::clicked, this, [this]() {
         applyMaterialChange([](Asset::Material &mat) {
@@ -703,14 +703,14 @@ void MaterialEditorPanel::createUi()
             strncpy_s(nameBuf, mat.name, _TRUNCATE);
             mat = def;
             strncpy_s(mat.name, nameBuf, _TRUNCATE);
-        }, true);
+        }, true, false, true);
     });
 
     connect(m_applyPresetButton, &QPushButton::clicked, this, [this]() {
         const int presetIdx = m_presetCombo->currentIndex();
         applyMaterialChange([presetIdx](Asset::Material &mat) {
             ApplyPreset(mat, presetIdx);
-        }, true);
+        }, true, false, true);
     });
 
     connect(m_baseColorButton, &QPushButton::clicked, this, [this]() {
@@ -1156,7 +1156,7 @@ void MaterialEditorPanel::createUi()
             applyMaterialChange([this, index, slot](Asset::Material &m) {
                 int newIdx = textureIndexFromVisibleCombo(index);
                 setTextureIndexForSlot(m, static_cast<TextureSlot>(slot), newIdx);
-            });
+            }, false, false, true);
         });
         connect(widgets.amount->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this, slot](double value) {
             if (m_syncing) {
@@ -1172,7 +1172,7 @@ void MaterialEditorPanel::createUi()
         connect(widgets.clearButton, &QPushButton::clicked, this, [this, slot]() {
             applyMaterialChange([this, slot](Asset::Material &m) {
                 setTextureIndexForSlot(m, static_cast<TextureSlot>(slot), -1);
-            });
+            }, false, false, true);
         });
         connect(widgets.loadButton, &QPushButton::clicked, this, [this, slot]() {
             std::wstring chosen;
@@ -1186,8 +1186,7 @@ void MaterialEditorPanel::createUi()
                 if (newTex >= 0) {
                     applyMaterialChange([this, newTex, slot](Asset::Material &m) {
                         setTextureIndexForSlot(m, static_cast<TextureSlot>(slot), newTex);
-                    });
-                    updateTextureOptions();
+                    }, false, false, true);
                 }
             }
         });
@@ -1398,9 +1397,18 @@ void MaterialEditorPanel::syncInspector()
     m_materialIdLabel->setText(tr("#%1").arg(idx));
     m_pasteButton->setEnabled(static_cast<bool>(m_clipboard));
 
+    syncInspectorMaterialState(mat, true);
+
+    m_syncing = false;
+}
+
+void MaterialEditorPanel::syncInspectorMaterialState(const Asset::Material &mat,
+                                                     bool refreshTextureUi)
+{
     setColorButton(m_baseColorButton, getColorFromMaterial(mat.diffuseColor));
     m_workflowCombo->setCurrentIndex(static_cast<int>(std::clamp(mat.workflow, 0u, 1u)));
     updateWorkflowUi(mat);
+
     m_roughness->setValue(IsReflectionGlossinessWorkflow(mat)
                               ? (1.0f - mat.roughness)
                               : mat.roughness);
@@ -1464,13 +1472,13 @@ void MaterialEditorPanel::syncInspector()
     m_alphaCutoff->setValue(mat.alphaCutoff);
     m_alphaCutoff->setEnabled(mat.alphaMode == "MASK");
 
-    updateTextureOptions();
-    for (int slot = 0; slot < TextureSlotCount; ++slot) {
-        updateTextureSlotUi(static_cast<TextureSlot>(slot), mat);
+    if (refreshTextureUi) {
+        updateTextureOptions();
+        for (int slot = 0; slot < TextureSlotCount; ++slot) {
+            updateTextureSlotUi(static_cast<TextureSlot>(slot), mat);
+        }
     }
     updateQa();
-
-    m_syncing = false;
 }
 
 void MaterialEditorPanel::updateQa()
@@ -1748,7 +1756,8 @@ QPixmap MaterialEditorPanel::createTexturePreview(const Asset::Texture &tex, con
 
 void MaterialEditorPanel::applyMaterialChange(const std::function<void(Asset::Material &)> &fn,
                                               bool markOpacityDirty,
-                                              bool requestAsRebuild)
+                                              bool requestAsRebuild,
+                                              bool refreshTextureUi)
 {
     const int idx = currentMaterialIndex();
     if (idx < 0) {
@@ -1765,7 +1774,9 @@ void MaterialEditorPanel::applyMaterialChange(const std::function<void(Asset::Ma
         DxrRenderer::MarkMaterialDirty(idx);
     }
     DxrRenderer::ResetAccumulation();
-    syncInspector();
+    m_syncing = true;
+    syncInspectorMaterialState(mat, refreshTextureUi);
+    m_syncing = false;
 }
 
 void MaterialEditorPanel::setColorButton(QPushButton *button, const QColor &color)

@@ -59,6 +59,8 @@ private:
     void scheduleRefresh();
     void rebuildMaterialList();
     void syncInspector();
+    void syncInspectorMaterialState(const Asset::Material &mat,
+                                    bool refreshTextureUi);
     void updateQa();
     void updatePickUi();
     void updateCounts();
@@ -73,7 +75,8 @@ private:
 
     void applyMaterialChange(const std::function<void(Asset::Material &)> &fn,
                              bool markOpacityDirty = false,
-                             bool requestAsRebuild = false);
+                             bool requestAsRebuild = false,
+                             bool refreshTextureUi = false);
 
     void setColorButton(QPushButton *button, const QColor &color);
     QColor getColorFromMaterial(const float color[3]) const;
