@@ -125,12 +125,8 @@ void DX12View::focusInEvent(QFocusEvent *e)
 void DX12View::focusOutEvent(QFocusEvent *e)
 {
     Input::SetQtWidgetFocused(false);
-    Input::SetQtMouseButtonState(VK_LBUTTON, false);
-    Input::SetQtMouseButtonState(VK_RBUTTON, false);
-    Input::SetQtKeyState('G', false);
-    Input::SetQtKeyState('R', false);
-    Input::SetQtKeyState('T', false);
-    Input::SetQtKeyState('L', false);
+    Input::ResetQtInputState();
+    m_hasLastMousePos = false;
     ImGui::GetIO().AddFocusEvent(false);
     ResetImGuiInputs();
     QWidget::focusOutEvent(e);

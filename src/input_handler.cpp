@@ -34,6 +34,15 @@ static bool s_qtMouseStates[256] = {};
 static float s_qtMouseDeltaX = 0.0f;
 static float s_qtMouseDeltaY = 0.0f;
 
+void ResetQtInputState() {
+  for (int index = 0; index < 256; ++index) {
+    s_qtKeyStates[index] = false;
+    s_qtMouseStates[index] = false;
+  }
+  s_qtMouseDeltaX = 0.0f;
+  s_qtMouseDeltaY = 0.0f;
+}
+
 void SetQtWidgetFocused(bool focused) { s_qtWidgetFocused = focused; }
 
 void SetQtKeyState(int virtualKey, bool down) {
@@ -54,15 +63,27 @@ void AddQtMouseDelta(float dx, float dy) {
 }
 
 static bool IsKeyDown(int virtualKey) {
-  const bool qtDown =
-      (virtualKey >= 0 && virtualKey < 256) ? s_qtKeyStates[virtualKey] : false;
-  return qtDown || ((GetAsyncKeyState(virtualKey) & 0x8000) != 0);
+  if (virtualKey < 0 || virtualKey >= 256) {
+    return false;
+  }
+
+  const bool systemDown = (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
+  if (s_qtKeyStates[virtualKey] && !systemDown) {
+    s_qtKeyStates[virtualKey] = false;
+  }
+  return s_qtKeyStates[virtualKey] || systemDown;
 }
 
 static bool IsMouseButtonDown(int virtualKey) {
-  const bool qtDown =
-      (virtualKey >= 0 && virtualKey < 256) ? s_qtMouseStates[virtualKey] : false;
-  return qtDown || ((GetAsyncKeyState(virtualKey) & 0x8000) != 0);
+  if (virtualKey < 0 || virtualKey >= 256) {
+    return false;
+  }
+
+  const bool systemDown = (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
+  if (s_qtMouseStates[virtualKey] && !systemDown) {
+    s_qtMouseStates[virtualKey] = false;
+  }
+  return s_qtMouseStates[virtualKey] || systemDown;
 }
 
 static void RestoreEngineCameraBasis() {
