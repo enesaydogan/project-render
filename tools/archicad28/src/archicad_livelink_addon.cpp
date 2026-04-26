@@ -18,6 +18,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <chrono>
 #include <cctype>
@@ -312,6 +313,7 @@ struct ElementExportRecord {
     int materialSlot = 0;
   };
   std::vector<MaterialBinding> materialBindings;
+  std::vector<std::string> aliasObjectIds;
 };
 
 struct MaterialExportRecord {
@@ -439,6 +441,7 @@ private:
 };
 
 ArchicadLiveLinkPipeClient g_pipeClient;
+std::atomic<uint64_t> g_nextMeshPayloadSerial{1};
 
 std::string ToUtf8(const GS::UniString &value) {
   std::unique_ptr<char[]> utf8(value.CopyUTF8());
@@ -478,6 +481,112 @@ std::string GuidToString(API_Guid guid) {
 }
 
 std::string MakeObjectId(API_Guid guid) { return GuidToString(guid); }
+
+API_Guid ResolveExplicitHostedOwnerGuid(API_Guid guid) {
+  if (guid == APINULLGuid) {
+    return APINULLGuid;
+  }
+
+  API_Element element = {};
+  element.header.guid = guid;
+  if (ACAPI_Element_Get(&element) != NoError) {
+    return APINULLGuid;
+  }
+
+  switch (element.header.type.typeID) {
+  case API_WindowID:
+  case API_DoorID:
+    return element.window.owner;
+  case API_SkylightID:
+    return element.skylight.owner;
+  default:
+    return APINULLGuid;
+  }
+}
+
+API_Guid ResolveExportRootGuidInternal(API_Guid guid, int depth) {
+  if (guid == APINULLGuid || depth > 8) {
+    return guid;
+  }
+
+  API_HierarchicalOwnerType ownerType = API_RootHierarchicalOwner;
+  API_HierarchicalElemType elemType = API_UnknownElemType;
+  API_Guid rootGuid = APINULLGuid;
+  if (ACAPI_HierarchicalEditing_GetHierarchicalElementOwner(
+          &guid, &ownerType, &elemType, &rootGuid) == NoError &&
+      rootGuid != APINULLGuid && rootGuid != guid) {
+    return ResolveExportRootGuidInternal(rootGuid, depth + 1);
+  }
+
+  const API_Guid explicitOwnerGuid = ResolveExplicitHostedOwnerGuid(guid);
+  if (explicitOwnerGuid != APINULLGuid && explicitOwnerGuid != guid) {
+    return ResolveExportRootGuidInternal(explicitOwnerGuid, depth + 1);
+  }
+
+  return guid;
+}
+
+API_Guid ResolveExportRootGuid(API_Guid guid) {
+  return ResolveExportRootGuidInternal(guid, 0);
+}
+
+void PushUniqueGuid(API_Guid guid, std::unordered_set<std::string> *seenGuids,
+                    GS::Array<API_Guid> *outGuids) {
+  if (guid == APINULLGuid || seenGuids == nullptr || outGuids == nullptr) {
+    return;
+  }
+  if (seenGuids->insert(GuidToString(guid)).second) {
+    outGuids->Push(guid);
+  }
+}
+
+void PushConnectedElements(API_Guid ownerGuid, const API_ElemType &connectedType,
+                           std::unordered_set<std::string> *seenGuids,
+                           GS::Array<API_Guid> *outGuids) {
+  GS::Array<API_Guid> connectedGuids;
+  if (ACAPI_Grouping_GetConnectedElements(ownerGuid, connectedType,
+                                          &connectedGuids, APIFilt_In3D) !=
+      NoError) {
+    return;
+  }
+
+  for (const API_Guid &connectedGuid : connectedGuids) {
+    PushUniqueGuid(connectedGuid, seenGuids, outGuids);
+  }
+}
+
+void PushExportRequestWithHostedChildren(
+    API_Guid requestedGuid, std::unordered_set<std::string> *seenGuids,
+    GS::Array<API_Guid> *outGuids) {
+  const API_Guid rootGuid = ResolveExportRootGuid(requestedGuid);
+  if (rootGuid == APINULLGuid) {
+    return;
+  }
+
+  PushUniqueGuid(rootGuid, seenGuids, outGuids);
+  if (requestedGuid != rootGuid) {
+    PushUniqueGuid(requestedGuid, seenGuids, outGuids);
+  }
+
+  API_Elem_Head header = {};
+  header.guid = rootGuid;
+  if (ACAPI_Element_GetHeader(&header) != NoError) {
+    return;
+  }
+
+  switch (header.type.typeID) {
+  case API_WallID:
+    PushConnectedElements(rootGuid, API_WindowID, seenGuids, outGuids);
+    PushConnectedElements(rootGuid, API_DoorID, seenGuids, outGuids);
+    break;
+  case API_RoofID:
+  case API_ShellID:
+    PushConnectedElements(rootGuid, API_SkylightID, seenGuids, outGuids);
+    break;
+  default:
+    break;
+  }
+}
 
 std::string MakeCameraObjectId() { return "camera:active"; }
 
@@ -871,6 +980,10 @@ bool PopulateMaterialExportRecord(int materialKey,
   if (material.name.empty()) {
     material.name = std::string("Surface ") + std::to_string(materialKey);
   }
+  if (material.materialStableId.empty()) {
+    material.materialStableId =
+        std::string("archicad-surface-key:") + std::to_string(materialKey);
+  }
 
   *outMaterial = std::move(material);
   return true;
@@ -892,6 +1005,87 @@ void DeduplicateMaterialReferences(MaterialExportRecord *material) {
   material->references.erase(
       std::unique(material->references.begin(), material->references.end()),
       material->references.end());
+}
+
+bool NearlyEqual(float lhs, float rhs) {
+  return std::fabs(lhs - rhs) <= 1.0e-4f;
+}
+
+template <size_t N>
+bool SameFloatArray(const std::array<float, N> &lhs,
+                    const std::array<float, N> &rhs) {
+  for (size_t index = 0; index < N; ++index) {
+    if (!NearlyEqual(lhs[index], rhs[index])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool SameTexturePayload(const EmbeddedTexturePayload &lhs,
+                        const EmbeddedTexturePayload &rhs) {
+  return lhs.contentHash == rhs.contentHash;
+}
+
+bool SameMaterialDefinition(const MaterialExportRecord &lhs,
+                            const MaterialExportRecord &rhs) {
+  return lhs.materialStableId == rhs.materialStableId &&
+         lhs.name == rhs.name &&
+         lhs.materialModel == rhs.materialModel &&
+         SameFloatArray(lhs.baseColor, rhs.baseColor) &&
+         lhs.baseColorTextureUri == rhs.baseColorTextureUri &&
+         SameTexturePayload(lhs.baseColorTexturePayload,
+                            rhs.baseColorTexturePayload) &&
+         lhs.opacityTextureUri == rhs.opacityTextureUri &&
+         SameTexturePayload(lhs.opacityTexturePayload,
+                            rhs.opacityTexturePayload) &&
+         lhs.normalTextureUri == rhs.normalTextureUri &&
+         SameTexturePayload(lhs.normalTexturePayload, rhs.normalTexturePayload) &&
+         lhs.coatNormalTextureUri == rhs.coatNormalTextureUri &&
+         SameTexturePayload(lhs.coatNormalTexturePayload,
+                            rhs.coatNormalTexturePayload) &&
+         lhs.emissiveTextureUri == rhs.emissiveTextureUri &&
+         SameTexturePayload(lhs.emissiveTexturePayload,
+                            rhs.emissiveTexturePayload) &&
+         lhs.occlusionTextureUri == rhs.occlusionTextureUri &&
+         SameTexturePayload(lhs.occlusionTexturePayload,
+                            rhs.occlusionTexturePayload) &&
+         lhs.metalRoughTextureUri == rhs.metalRoughTextureUri &&
+         SameTexturePayload(lhs.metalRoughTexturePayload,
+                            rhs.metalRoughTexturePayload) &&
+         lhs.specularColorTextureUri == rhs.specularColorTextureUri &&
+         SameTexturePayload(lhs.specularColorTexturePayload,
+                            rhs.specularColorTexturePayload) &&
+         lhs.thicknessTextureUri == rhs.thicknessTextureUri &&
+         SameTexturePayload(lhs.thicknessTexturePayload,
+                            rhs.thicknessTexturePayload) &&
+         NearlyEqual(lhs.opacityTextureAmount, rhs.opacityTextureAmount) &&
+         NearlyEqual(lhs.coatNormalTextureAmount,
+                     rhs.coatNormalTextureAmount) &&
+         NearlyEqual(lhs.specularColorTextureAmount,
+                     rhs.specularColorTextureAmount) &&
+         NearlyEqual(lhs.thicknessTextureAmount, rhs.thicknessTextureAmount) &&
+         SameFloatArray(lhs.emissiveColor, rhs.emissiveColor) &&
+         NearlyEqual(lhs.emissiveIntensity, rhs.emissiveIntensity) &&
+         NearlyEqual(lhs.roughness, rhs.roughness) &&
+         NearlyEqual(lhs.metalness, rhs.metalness) &&
+         NearlyEqual(lhs.specularWeight, rhs.specularWeight) &&
+         SameFloatArray(lhs.specularColor, rhs.specularColor) &&
+         NearlyEqual(lhs.ior, rhs.ior) &&
+         NearlyEqual(lhs.transmissionWeight, rhs.transmissionWeight) &&
+         SameFloatArray(lhs.transmissionColor, rhs.transmissionColor) &&
+         NearlyEqual(lhs.thickness, rhs.thickness) &&
+         NearlyEqual(lhs.attenuationDistance, rhs.attenuationDistance) &&
+         NearlyEqual(lhs.coatWeight, rhs.coatWeight) &&
+         NearlyEqual(lhs.coatRoughness, rhs.coatRoughness) &&
+         NearlyEqual(lhs.coatIor, rhs.coatIor) &&
+         NearlyEqual(lhs.anisotropy, rhs.anisotropy) &&
+         NearlyEqual(lhs.anisotropyRotation, rhs.anisotropyRotation) &&
+         NearlyEqual(lhs.sheenWeight, rhs.sheenWeight) &&
+         SameFloatArray(lhs.sheenColor, rhs.sheenColor) &&
+         lhs.doubleSided == rhs.doubleSided &&
+         lhs.alphaMode == rhs.alphaMode &&
+         NearlyEqual(lhs.alphaCutoff, rhs.alphaCutoff);
 }
 
 void AssignMaterialBindingIdentity(
@@ -1603,8 +1797,14 @@ bool ExportElementsMeshPayload(const std::string &documentId,
     return false;
   }
 
+  const uint64_t payloadSerial =
+      g_nextMeshPayloadSerial.fetch_add(1, std::memory_order_relaxed);
+  char payloadSerialText[17] = {};
+  sprintf_s(payloadSerialText, "%016llx",
+            static_cast<unsigned long long>(payloadSerial));
   const std::filesystem::path payloadPath =
-      payloadDirectory / (SanitizeDocumentId(record.objectId) + ".prmesh");
+      payloadDirectory / (SanitizeDocumentId(record.objectId) + "_" +
+                          payloadSerialText + ".prmesh");
 
   std::ofstream stream(payloadPath, std::ios::binary | std::ios::trunc);
   if (!stream) {
@@ -1686,7 +1886,13 @@ bool ExportSceneElements(const DocumentInfo &documentInfo,
 
   GS::Array<API_Guid> elementGuids;
   if (requestedElementGuids != nullptr) {
-    elementGuids = *requestedElementGuids;
+    std::unordered_set<std::string> uniqueRequestedGuids;
+    uniqueRequestedGuids.reserve(
+        static_cast<size_t>(requestedElementGuids->GetSize()) * 3);
+    for (const API_Guid &requestedGuid : *requestedElementGuids) {
+      PushExportRequestWithHostedChildren(requestedGuid, &uniqueRequestedGuids,
+                                          &elementGuids);
+    }
   } else {
     const GSErrCode listErr = ACAPI_Element_GetElemList(API_ZombieElemID,
                                                         &elementGuids,
@@ -1743,6 +1949,7 @@ bool ExportSceneElements(const DocumentInfo &documentInfo,
     API_Guid guid;
     std::string objectId;
     std::vector<ModelerAPI::Element> elements;
+    std::vector<std::string> aliasObjectIds;
   };
   std::vector<ExportGroup> exportGroups;
   std::unordered_map<std::string, size_t> groupIndexByObjectId;
@@ -1751,17 +1958,8 @@ bool ExportSceneElements(const DocumentInfo &documentInfo,
     ModelerAPI::Element element;
     model.GetElement(elementIndex, &element);
 
-    API_Guid guid = GSGuid2APIGuid(element.GetElemGuid());
-
-    API_HierarchicalOwnerType ownerType = API_RootHierarchicalOwner;
-    API_HierarchicalElemType elemType = API_UnknownElemType;
-    API_Guid rootGuid = APINULLGuid;
-    if (ACAPI_HierarchicalEditing_GetHierarchicalElementOwner(
-            &guid, &ownerType, &elemType, &rootGuid) == NoError) {
-      if (elemType == API_ChildElemInMultipleElem && rootGuid != APINULLGuid) {
-        guid = rootGuid;
-      }
-    }
+    API_Guid rawGuid = GSGuid2APIGuid(element.GetElemGuid());
+    API_Guid guid = ResolveExportRootGuid(rawGuid);
 
     const std::string objectId = MakeObjectId(guid);
     assignedObjectIds.insert(objectId);
@@ -1775,6 +1973,9 @@ bool ExportSceneElements(const DocumentInfo &documentInfo,
       it = groupIndexByObjectId.emplace(objectId, exportGroups.size() - 1).first;
     }
     exportGroups[it->second].elements.push_back(element);
+    if (rawGuid != APINULLGuid && rawGuid != guid) {
+      exportGroups[it->second].aliasObjectIds.push_back(MakeObjectId(rawGuid));
+    }
   }
 
   exportedElements.reserve(exportGroups.size());
@@ -1783,6 +1984,11 @@ bool ExportSceneElements(const DocumentInfo &documentInfo,
     record.guid = group.guid;
     record.objectId = group.objectId;
     record.displayName = GetElementDisplayName(group.guid);
+    record.aliasObjectIds = group.aliasObjectIds;
+    std::sort(record.aliasObjectIds.begin(), record.aliasObjectIds.end());
+    record.aliasObjectIds.erase(
+        std::unique(record.aliasObjectIds.begin(), record.aliasObjectIds.end()),
+        record.aliasObjectIds.end());
 
     if (!ExportElementsMeshPayload(documentInfo.documentId, record, group.elements,
                                   &record.materialBindings,
@@ -1839,6 +2045,71 @@ bool ExportSceneElements(const DocumentInfo &documentInfo,
   return true;
 }
 
+bool CollectCurrentExportObjectIds(std::unordered_set<std::string> *outObjectIds,
+                                   std::string *outError) {
+  if (outObjectIds == nullptr) {
+    return false;
+  }
+
+  GS::Array<API_Guid> elementGuids;
+  const GSErrCode listErr =
+      ACAPI_Element_GetElemList(API_ZombieElemID, &elementGuids, APIFilt_In3D);
+  if (listErr != NoError) {
+    if (outError != nullptr) {
+      *outError = "ACAPI_Element_GetElemList failed (" +
+                  std::to_string(static_cast<int>(listErr)) + ")";
+    }
+    return false;
+  }
+
+  outObjectIds->clear();
+  if (elementGuids.IsEmpty()) {
+    return true;
+  }
+
+  ScopedTemporarySight temporarySight;
+  if (!temporarySight.CreateAndSelect(outError)) {
+    return false;
+  }
+
+  const GSErrCode modelErr =
+      ACAPI_ModelAccess_GenerateModelWithSeparateComponents(elementGuids);
+  if (modelErr != NoError) {
+    if (outError != nullptr) {
+      *outError =
+          "ACAPI_ModelAccess_GenerateModelWithSeparateComponents failed (" +
+          std::to_string(static_cast<int>(modelErr)) + ")";
+    }
+    return false;
+  }
+
+  ModelerAPI::Model model;
+  const GSErrCode selectedSightErr = ACAPI_Sight_GetSelectedSightModel(model);
+  if (selectedSightErr != NoError) {
+    if (outError != nullptr) {
+      *outError = "ACAPI_Sight_GetSelectedSightModel failed (" +
+                  std::to_string(static_cast<int>(selectedSightErr)) + ")";
+    }
+    return false;
+  }
+
+  const int elementCount = model.GetElementCount();
+  outObjectIds->reserve(static_cast<size_t>(elementCount));
+  for (int elementIndex = 1; elementIndex <= elementCount; ++elementIndex) {
+    ModelerAPI::Element element;
+    model.GetElement(elementIndex, &element);
+
+    const API_Guid rootGuid =
+        ResolveExportRootGuid(GSGuid2APIGuid(element.GetElemGuid()));
+    if (rootGuid == APINULLGuid) {
+      continue;
+    }
+    outObjectIds->insert(MakeObjectId(rootGuid));
+  }
+
+  return true;
+}
+
 class LiveLinkSessionController {
 public:
   bool Start();
@@ -1877,6 +2148,7 @@ private:
                        bool firstBatchFullSync, bool withDialog = true);
   void BuildMaterialRecordsForKeys(
       const std::unordered_set<int> &materialKeys,
+      const std::unordered_map<int, MaterialExportRecord> *materialOverridesByKey,
       std::vector<MaterialExportRecord> *outMaterials) const;
   void UpdateMaterialStateCache(
       const std::vector<MaterialExportRecord> &materials);
@@ -1897,6 +2169,7 @@ private:
   bool m_commandInProgress = false;
   bool m_sceneDirty = false;
   bool m_fullSceneResyncNeeded = true;
+  bool m_refreshTrackedElementsNeeded = false;
   std::string m_sessionId;
   DocumentInfo m_documentInfo;
   uint64_t m_nextSequence = 1;
@@ -1956,6 +2229,7 @@ void LiveLinkSessionController::ResetTrackedSceneState(bool detachObservers) {
   m_observedElementObjectIds.clear();
   m_dirtyElementObjectIds.clear();
   m_removedElementObjectIds.clear();
+  m_refreshTrackedElementsNeeded = false;
 }
 
 void LiveLinkSessionController::HandleSessionLost(
@@ -2078,7 +2352,12 @@ bool LiveLinkSessionController::SendBatch(bool fullSync, json deltas,
   batch["fullSync"] = fullSync;
   batch["deltas"] = std::move(deltas);
 
-  if (!g_pipeClient.SendJsonLine(batch.dump())) {
+  const std::string payload = batch.dump();
+  if (!g_pipeClient.SendJsonLine(payload)) {
+    g_pipeClient.Disconnect();
+    if (EnsureConnected(false) && g_pipeClient.SendJsonLine(payload)) {
+      return true;
+    }
     Report("project-render LiveLink: failed to send batch: " +
                g_pipeClient.GetLastError(),
            withDialog);
@@ -2251,6 +2530,7 @@ bool LiveLinkSessionController::SendDeltaChunks(const std::vector<json> &deltas,
 
 void LiveLinkSessionController::BuildMaterialRecordsForKeys(
     const std::unordered_set<int> &materialKeys,
+    const std::unordered_map<int, MaterialExportRecord> *materialOverridesByKey,
     std::vector<MaterialExportRecord> *outMaterials) const {
   if (outMaterials == nullptr) {
     return;
@@ -2270,11 +2550,22 @@ void LiveLinkSessionController::BuildMaterialRecordsForKeys(
       }
 
       MaterialExportRecord material;
-      auto cachedIt = m_materialStateByKey.find(binding.materialKey);
-      if (cachedIt != m_materialStateByKey.end()) {
-        material = cachedIt->second;
-      } else {
-        PopulateMaterialExportRecord(binding.materialKey, &material);
+      bool hasMaterialOverride = false;
+      if (materialOverridesByKey != nullptr) {
+        const auto overrideIt =
+            materialOverridesByKey->find(binding.materialKey);
+        if (overrideIt != materialOverridesByKey->end()) {
+          material = overrideIt->second;
+          hasMaterialOverride = true;
+        }
+      }
+      if (!hasMaterialOverride) {
+        if (auto cachedIt = m_materialStateByKey.find(binding.materialKey);
+            cachedIt != m_materialStateByKey.end()) {
+          material = cachedIt->second;
+        } else {
+          PopulateMaterialExportRecord(binding.materialKey, &material);
+        }
       }
 
       const std::string materialObjectId =
@@ -2316,22 +2607,32 @@ void LiveLinkSessionController::UpdateMaterialStateCache(
 
 void LiveLinkSessionController::SyncObservedElements() {
   std::unordered_set<std::string> desiredObjectIds;
-  desiredObjectIds.reserve(m_exportedElements.size());
+  desiredObjectIds.reserve(m_exportedElements.size() * 3);
 
-  for (const auto &[objectId, element] : m_exportedElements) {
+  auto observeGuid = [&](const std::string &objectId, API_Guid guid) {
+    if (objectId.empty() || guid == APINULLGuid) {
+      return;
+    }
     desiredObjectIds.insert(objectId);
     if (m_observedElementObjectIds.contains(objectId)) {
-      continue;
+      return;
     }
 
-    const GSErrCode err = ACAPI_Element_AttachObserver(element.guid);
+    const GSErrCode err = ACAPI_Element_AttachObserver(guid);
     if (err == NoError || err == APIERR_LINKEXIST) {
       m_observedElementObjectIds.insert(objectId);
-      continue;
+      return;
     }
 
     Report("project-render LiveLink: failed to observe Archicad element " +
            objectId + " (" + std::to_string(static_cast<int>(err)) + ")");
+  };
+
+  for (const auto &[objectId, element] : m_exportedElements) {
+    observeGuid(objectId, element.guid);
+    for (const std::string &aliasObjectId : element.aliasObjectIds) {
+      observeGuid(aliasObjectId, APIGuidFromString(aliasObjectId.c_str()));
+    }
   }
 
   std::vector<std::string> staleObservedObjectIds;
@@ -2359,7 +2660,7 @@ void LiveLinkSessionController::MarkElementDirty(const API_Guid &guid) {
     return;
   }
 
-  const std::string objectId = MakeObjectId(guid);
+  const std::string objectId = MakeObjectId(ResolveExportRootGuid(guid));
   m_removedElementObjectIds.erase(objectId);
   m_dirtyElementObjectIds.insert(objectId);
   m_sceneDirty = true;
@@ -2467,6 +2768,7 @@ bool LiveLinkSessionController::ExportFullScene(bool startingSession,
   UpdateMaterialStateCache(materials);
   m_dirtyElementObjectIds.clear();
   m_removedElementObjectIds.clear();
+  m_refreshTrackedElementsNeeded = false;
   SyncObservedElements();
   m_lastCamera = hasExportedCamera ? exportedCamera : CameraExportRecord{};
 
@@ -2489,21 +2791,38 @@ bool LiveLinkSessionController::ExportDirtyElements(bool reportSuccess,
     return false;
   }
 
-  GS::Array<API_Guid> currentSceneGuids;
-  if (ACAPI_Element_GetElemList(API_ZombieElemID, &currentSceneGuids, APIFilt_In3D) == NoError) {
-    std::unordered_set<std::string> currentSceneObjectIds;
-    currentSceneObjectIds.reserve(static_cast<size_t>(currentSceneGuids.GetSize()));
-    for (const API_Guid &guid : currentSceneGuids) {
-      currentSceneObjectIds.insert(MakeObjectId(guid));
-    }
+  std::unordered_set<std::string> currentSceneObjectIds;
+  std::string currentSceneError;
+  if (CollectCurrentExportObjectIds(&currentSceneObjectIds, &currentSceneError)) {
     for (const auto &[objectId, _] : m_exportedElements) {
       if (!currentSceneObjectIds.contains(objectId)) {
         m_removedElementObjectIds.insert(objectId);
       }
     }
+    if (m_refreshTrackedElementsNeeded) {
+      for (const auto &[objectId, _] : m_exportedElements) {
+        if (currentSceneObjectIds.contains(objectId) &&
+            !m_removedElementObjectIds.contains(objectId)) {
+          m_dirtyElementObjectIds.insert(objectId);
+        }
+      }
+    }
+  } else if (!currentSceneError.empty()) {
+    Report("project-render LiveLink: failed to verify current Archicad "
+           "export roots: " +
+               currentSceneError,
+           withDialog);
+    if (m_refreshTrackedElementsNeeded) {
+      for (const auto &[objectId, _] : m_exportedElements) {
+        if (!m_removedElementObjectIds.contains(objectId)) {
+          m_dirtyElementObjectIds.insert(objectId);
+        }
+      }
+    }
   }
 
   if (m_dirtyElementObjectIds.empty() && m_removedElementObjectIds.empty()) {
+    m_refreshTrackedElementsNeeded = false;
     m_sceneDirty = false;
     ClearPendingSceneSync();
     return true;
@@ -2515,11 +2834,15 @@ bool LiveLinkSessionController::ExportDirtyElements(bool reportSuccess,
                                           m_dirtyElementObjectIds.end());
   std::sort(removedObjectIds.begin(), removedObjectIds.end());
   std::sort(dirtyObjectIds.begin(), dirtyObjectIds.end());
+  std::vector<std::string> aliasRemovedObjectIds;
   for (const std::string &objectId : removedObjectIds) {
     auto existingIt = m_exportedElements.find(objectId);
     if (existingIt == m_exportedElements.end()) {
       continue;
     }
+    aliasRemovedObjectIds.insert(aliasRemovedObjectIds.end(),
+                                 existingIt->second.aliasObjectIds.begin(),
+                                 existingIt->second.aliasObjectIds.end());
     m_exportedElements.erase(existingIt);
   }
 
@@ -2538,6 +2861,9 @@ bool LiveLinkSessionController::ExportDirtyElements(bool reportSuccess,
 
     auto existingIt = m_exportedElements.find(objectId);
     if (existingIt != m_exportedElements.end()) {
+      aliasRemovedObjectIds.insert(aliasRemovedObjectIds.end(),
+                                   existingIt->second.aliasObjectIds.begin(),
+                                   existingIt->second.aliasObjectIds.end());
       m_exportedElements.erase(existingIt);
     }
     removedObjectIds.push_back(objectId);
@@ -2566,6 +2892,19 @@ bool LiveLinkSessionController::ExportDirtyElements(bool reportSuccess,
     m_exportedElements[element.objectId] = element;
   }
 
+  std::unordered_map<int, MaterialExportRecord> changedMaterialByKey;
+  changedMaterialByKey.reserve(changedMaterials.size());
+  std::unordered_set<int> changedMaterialKeys;
+  changedMaterialKeys.reserve(changedMaterials.size());
+  for (const MaterialExportRecord &material : changedMaterials) {
+    changedMaterialByKey[material.materialKey] = material;
+    const auto cachedIt = m_materialStateByKey.find(material.materialKey);
+    if (cachedIt == m_materialStateByKey.end() ||
+        !SameMaterialDefinition(material, cachedIt->second)) {
+      changedMaterialKeys.insert(material.materialKey);
+    }
+  }
+
   for (const std::string &objectId : dirtyObjectIds) {
     if (exportedChangedObjectIds.contains(objectId) ||
         m_removedElementObjectIds.contains(objectId)) {
@@ -2576,14 +2915,28 @@ bool LiveLinkSessionController::ExportDirtyElements(bool reportSuccess,
     if (existingIt == m_exportedElements.end()) {
       continue;
     }
+    aliasRemovedObjectIds.insert(aliasRemovedObjectIds.end(),
+                                 existingIt->second.aliasObjectIds.begin(),
+                                 existingIt->second.aliasObjectIds.end());
     removedObjectIds.push_back(objectId);
     m_exportedElements.erase(existingIt);
   }
 
+  for (const ElementExportRecord &element : changedElements) {
+    aliasRemovedObjectIds.insert(aliasRemovedObjectIds.end(),
+                                 element.aliasObjectIds.begin(),
+                                 element.aliasObjectIds.end());
+  }
+  removedObjectIds.insert(removedObjectIds.end(), aliasRemovedObjectIds.begin(),
+                          aliasRemovedObjectIds.end());
   std::sort(removedObjectIds.begin(), removedObjectIds.end());
   removedObjectIds.erase(
       std::unique(removedObjectIds.begin(), removedObjectIds.end()),
       removedObjectIds.end());
+
+  std::vector<MaterialExportRecord> materialDeltas;
+  BuildMaterialRecordsForKeys(changedMaterialKeys, &changedMaterialByKey,
+                              &materialDeltas);
 
   std::vector<json> deltas;
   deltas.reserve(removedObjectIds.size() + changedElements.size() * 4);
@@ -2594,10 +2947,10 @@ bool LiveLinkSessionController::ExportDirtyElements(bool reportSuccess,
   }
 
   bool includeMaterialDeltas = true;
-  if (!changedMaterials.empty()) {
+  if (!materialDeltas.empty()) {
     std::string materialLibraryPayloadUri;
     const bool wroteMaterialLibrary =
-        WriteMaterialLibraryPayload(m_documentInfo.documentId, changedMaterials,
+        WriteMaterialLibraryPayload(m_documentInfo.documentId, materialDeltas,
                                     &materialLibraryPayloadUri);
     if (wroteMaterialLibrary && !materialLibraryPayloadUri.empty()) {
       deltas.push_back(MakeMaterialLibraryDelta(m_documentInfo.documentId,
@@ -2607,7 +2960,7 @@ bool LiveLinkSessionController::ExportDirtyElements(bool reportSuccess,
     }
   }
 
-  AppendExportDeltas(changedElements, changedMaterials, nullptr, &deltas,
+  AppendExportDeltas(changedElements, materialDeltas, nullptr, &deltas,
                      &revision, includeMaterialDeltas);
 
   if (!deltas.empty() && !SendDeltaChunks(deltas, false, withDialog)) {
@@ -2616,7 +2969,7 @@ bool LiveLinkSessionController::ExportDirtyElements(bool reportSuccess,
   }
 
   m_nextRevision = revision;
-  UpdateMaterialStateCache(changedMaterials);
+  UpdateMaterialStateCache(materialDeltas);
   for (const std::string &objectId : removedObjectIds) {
     m_removedElementObjectIds.erase(objectId);
     m_dirtyElementObjectIds.erase(objectId);
@@ -2624,6 +2977,7 @@ bool LiveLinkSessionController::ExportDirtyElements(bool reportSuccess,
   for (const std::string &objectId : dirtyObjectIds) {
     m_dirtyElementObjectIds.erase(objectId);
   }
+  m_refreshTrackedElementsNeeded = false;
   m_sceneDirty = !m_fullSceneResyncNeeded &&
                  (!m_dirtyElementObjectIds.empty() ||
                   !m_removedElementObjectIds.empty());
@@ -2772,7 +3126,7 @@ void LiveLinkSessionController::MarkSceneDirty(API_NotifyEventID notifID) {
     break;
   case APINotify_ReceiveChanges:
     m_sceneDirty = true;
-    m_fullSceneResyncNeeded = true;
+    m_refreshTrackedElementsNeeded = true;
     ScheduleSceneSync(kSceneResyncDebounce);
     break;
   default:

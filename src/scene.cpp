@@ -654,6 +654,9 @@ static int FindLinkedMaterialByName(const std::vector<std::string> &sourceNames,
                                     const std::vector<int> &globalIndices,
                                     const std::string &name,
                                     std::vector<bool> *used);
+static int FindLinkedMaterialByStableId(const std::vector<int> &globalIndices,
+                                        const std::string &stableId,
+                                        std::vector<bool> *used);
 static bool IsShareableLiveLinkPayloadPath(const std::string &sourcePath);
 static void ReleaseSharedImportedMeshEntry(const std::string &sourcePath);
 
@@ -773,9 +776,12 @@ static std::vector<int> ResolveReplacementMaterialIndices(
         materialStableIds && i < materialStableIds->size()
             ? NormalizeMaterialStableId((*materialStableIds)[i])
             : std::string();
-    int globalMaterialIndex =
-        FindLinkedMaterialByName(linkedMaterialNames, linkedMaterialIndices,
-                                 importedName, &reused);
+    int globalMaterialIndex = -1;
+
+    if (!stableId.empty()) {
+      globalMaterialIndex =
+          FindLinkedMaterialByStableId(linkedMaterialIndices, stableId, &reused);
+    }
 
     if (globalMaterialIndex < 0 && !stableId.empty()) {
       const auto existingStable = s_materialIndicesByStableId.find(stableId);
@@ -784,7 +790,14 @@ static std::vector<int> ResolveReplacementMaterialIndices(
       }
     }
 
-    if (globalMaterialIndex < 0 && i < linkedMaterialIndices.size()) {
+    if (globalMaterialIndex < 0 && stableId.empty()) {
+      globalMaterialIndex =
+          FindLinkedMaterialByName(linkedMaterialNames, linkedMaterialIndices,
+                                   importedName, &reused);
+    }
+
+    if (globalMaterialIndex < 0 && stableId.empty() &&
+        i < linkedMaterialIndices.size()) {
       const int fallbackIndex = linkedMaterialIndices[i];
       if (fallbackIndex >= 0 && fallbackIndex < (int)g_loadedMaterials.size()) {
         globalMaterialIndex = fallbackIndex;
@@ -1186,6 +1199,35 @@ static int FindLinkedMaterialByName(const std::vector<std::string> &sourceNames,
       (*used)[i] = true;
       return globalIndices[i];
     }
+  }
+  return -1;
+}
+
+static int FindLinkedMaterialByStableId(const std::vector<int> &globalIndices,
+                                        const std::string &stableId,
+                                        std::vector<bool> *used) {
+  if (!used || stableId.empty()) {
+    return -1;
+  }
+
+  EnsureMaterialMetadataStorage();
+  for (size_t i = 0; i < globalIndices.size(); ++i) {
+    if (i < used->size() && (*used)[i]) {
+      continue;
+    }
+
+    const int globalIndex = globalIndices[i];
+    if (globalIndex < 0 ||
+        globalIndex >= static_cast<int>(g_loadedMaterials.size()) ||
+        globalIndex >= static_cast<int>(s_materialStableIds.size()) ||
+        s_materialStableIds[static_cast<size_t>(globalIndex)] != stableId) {
+      continue;
+    }
+
+    if (i < used->size()) {
+      (*used)[i] = true;
+    }
+    return globalIndex;
   }
   return -1;
 }

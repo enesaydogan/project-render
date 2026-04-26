@@ -1891,11 +1891,15 @@ bool LiveLinkSceneSync::ApplyMaterialChanged(const SceneDeltaBatch &batch,
     Scene::UpdateNodeMaterialSourceName(nodeIndex, materialSlot, materialName);
   };
 
-  if (!payload->references.empty()) {
+  const bool meshPayloadOwnsStableMaterialSlots =
+      batch.providerName == "Archicad28Pipe" &&
+      !payload->materialStableId.empty();
+  if (!meshPayloadOwnsStableMaterialSlots && !payload->references.empty()) {
     for (const MaterialNodeReference &reference : payload->references) {
       rebindReference(reference.nodeObjectId, reference.materialSlot);
     }
-  } else if (!payload->nodeObjectId.empty()) {
+  } else if (!meshPayloadOwnsStableMaterialSlots &&
+             !payload->nodeObjectId.empty()) {
     rebindReference(payload->nodeObjectId, payload->materialSlot);
   }
 
@@ -2353,9 +2357,12 @@ bool LiveLinkSceneSync::EnsureMaterialBinding(const SceneDeltaBatch &batch,
   };
 
   ObjectBinding *binding = FindBinding(delta.target);
-  int materialIndex = resolveMaterialIndexFromNodeSlot();
-  if (materialIndex < 0 && payload && !payload->materialStableId.empty()) {
+  int materialIndex = -1;
+  if (payload && !payload->materialStableId.empty()) {
     materialIndex = Scene::FindMaterialByStableId(payload->materialStableId);
+  }
+  if (materialIndex < 0) {
+    materialIndex = resolveMaterialIndexFromNodeSlot();
   }
   if (materialIndex < 0) {
     materialIndex = ResolveMaterialIndexByName(delta, payload);
