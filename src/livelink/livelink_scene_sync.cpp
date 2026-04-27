@@ -9,6 +9,7 @@
 #include "../scene.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -1252,6 +1253,18 @@ LiveLinkSceneSync::StatsSnapshot LiveLinkSceneSync::GetStatsSnapshot() const {
     }
   }
 
+  stats.meshPayloadApplyCount = m_meshPayloadApplyCount;
+  stats.meshPayloadTotalLoadMs = m_meshPayloadTotalLoadMs;
+  stats.meshPayloadTotalReplaceMs = m_meshPayloadTotalReplaceMs;
+  stats.meshPayloadLastLoadMs = m_meshPayloadLastLoadMs;
+  stats.meshPayloadLastReplaceMs = m_meshPayloadLastReplaceMs;
+  stats.meshPayloadLastBytes = m_meshPayloadLastBytes;
+  const Scene::GpuUploadStats gpuUploadStats = Scene::GetGpuUploadStats();
+  stats.gpuUploadBatchCount = gpuUploadStats.batchCount;
+  stats.gpuUploadTotalMs = gpuUploadStats.totalUploadMs;
+  stats.gpuUploadLastMs = gpuUploadStats.lastUploadMs;
+  stats.gpuUploadLastMeshCount = gpuUploadStats.lastMeshCount;
+
   return stats;
 }
 
@@ -1443,7 +1456,8 @@ bool LiveLinkSceneSync::ApplyNodeRemoved(const SceneDeltaBatch &batch,
     return true;
   }
 
-  if (binding && delta.revision > 0 &&
+  if (binding && binding->sessionId == batch.sessionId &&
+      delta.revision > 0 &&
       delta.revision <= binding->lastAppliedRevision) {
     return true;
   }
@@ -1563,7 +1577,8 @@ bool LiveLinkSceneSync::ApplyNodeTransformChanged(const SceneDeltaBatch &batch,
   }
 
   ObjectBinding *binding = FindBinding(delta.target);
-  if (binding && delta.revision > 0 &&
+  if (binding && binding->sessionId == batch.sessionId &&
+      delta.revision > 0 &&
       delta.revision <= binding->lastAppliedRevision) {
     return true;
   }
@@ -1594,7 +1609,8 @@ bool LiveLinkSceneSync::ApplyNodeVisibilityChanged(const SceneDeltaBatch &batch,
   }
 
   ObjectBinding *binding = FindBinding(delta.target);
-  if (binding && delta.revision > 0 &&
+  if (binding && binding->sessionId == batch.sessionId &&
+      delta.revision > 0 &&
       delta.revision <= binding->lastAppliedRevision) {
     return true;
   }
@@ -1633,7 +1649,8 @@ bool LiveLinkSceneSync::ApplyMeshPayloadChanged(const SceneDeltaBatch &batch,
   if (!binding) {
     binding = FindRelatedBinding(delta.target, EngineHandleKind::SceneNode);
   }
-  if (binding && delta.revision > 0 &&
+  if (binding && binding->sessionId == batch.sessionId &&
+      delta.revision > 0 &&
       delta.revision <= binding->lastAppliedRevision) {
     return true;
   }
@@ -1654,6 +1671,13 @@ bool LiveLinkSceneSync::ApplyMeshPayloadChanged(const SceneDeltaBatch &batch,
   const std::filesystem::path payloadPath =
       Utf8PathFromString(payload->payloadUri);
   const std::string extension = payloadPath.extension().string();
+  uint64_t payloadBytes = 0;
+  std::error_code fileSizeError;
+  const auto payloadSize = std::filesystem::file_size(payloadPath, fileSizeError);
+  if (!fileSizeError) {
+    payloadBytes = static_cast<uint64_t>(payloadSize);
+  }
+  const auto loadStart = std::chrono::steady_clock::now();
   const bool loaded = extension == ".prmesh"
                           ? LoadNativeMeshPayload(payload->payloadUri, &meshes,
                                                   &materials,
@@ -1663,6 +1687,10 @@ bool LiveLinkSceneSync::ApplyMeshPayloadChanged(const SceneDeltaBatch &batch,
                                                   &meshPayloadHasFullMaterialDefinitions)
                           : Asset::LoadModel(payload->payloadUri, meshes,
                                              &materials, &textures);
+  const uint64_t loadMs = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - loadStart)
+          .count());
   if (!loaded) {
     LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
                   std::string("Failed to load mesh payload: ") +
@@ -1703,12 +1731,24 @@ bool LiveLinkSceneSync::ApplyMeshPayloadChanged(const SceneDeltaBatch &batch,
   importedPayload.materialsContainFullDefinitions =
       extension != ".prmesh" || meshPayloadHasFullMaterialDefinitions;
 
+  const auto replaceStart = std::chrono::steady_clock::now();
   if (!Scene::ReplaceNodeImportedContent(binding->handleIndex,
                                          std::move(importedPayload))) {
     LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
                   "Failed to replace node content from mesh payload");
     return false;
   }
+  const uint64_t replaceMs = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - replaceStart)
+          .count());
+
+  ++m_meshPayloadApplyCount;
+  m_meshPayloadLastLoadMs = loadMs;
+  m_meshPayloadLastReplaceMs = replaceMs;
+  m_meshPayloadLastBytes = payloadBytes;
+  m_meshPayloadTotalLoadMs += loadMs;
+  m_meshPayloadTotalReplaceMs += replaceMs;
 
   binding->lastAppliedRevision = delta.revision;
   return true;
@@ -1827,7 +1867,8 @@ bool LiveLinkSceneSync::ApplyMaterialChanged(const SceneDeltaBatch &batch,
   }
 
   ObjectBinding *binding = FindBinding(delta.target);
-  if (binding && delta.revision > 0 &&
+  if (binding && binding->sessionId == batch.sessionId &&
+      delta.revision > 0 &&
       delta.revision <= binding->lastAppliedRevision) {
     return true;
   }
@@ -1976,7 +2017,8 @@ bool LiveLinkSceneSync::ApplyLightChanged(const SceneDeltaBatch &batch,
   }
 
   ObjectBinding *binding = FindBinding(delta.target);
-  if (binding && delta.revision > 0 &&
+  if (binding && binding->sessionId == batch.sessionId &&
+      delta.revision > 0 &&
       delta.revision <= binding->lastAppliedRevision) {
     return true;
   }
@@ -2063,7 +2105,8 @@ bool LiveLinkSceneSync::ApplyCameraChanged(const SceneDeltaBatch &batch,
   }
 
   ObjectBinding *binding = FindBinding(delta.target);
-  if (binding && delta.revision > 0 &&
+  if (binding && binding->sessionId == batch.sessionId &&
+      delta.revision > 0 &&
       delta.revision <= binding->lastAppliedRevision) {
     return true;
   }
@@ -2164,7 +2207,8 @@ bool LiveLinkSceneSync::ApplyEnvironmentChanged(const SceneDeltaBatch &batch,
   }
 
   ObjectBinding *binding = FindBinding(delta.target);
-  if (binding && delta.revision > 0 &&
+  if (binding && binding->sessionId == batch.sessionId &&
+      delta.revision > 0 &&
       delta.revision <= binding->lastAppliedRevision) {
     return true;
   }

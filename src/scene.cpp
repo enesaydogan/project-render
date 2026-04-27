@@ -16,6 +16,7 @@
 #include "material/material_system.h"
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -144,6 +145,8 @@ static RendererInvalidationPlan s_batchedInvalidationPlan =
 static bool s_batchedLightsDirty = false;
 static bool s_batchedSceneChanged = false;
 static bool s_batchedGpuIdleSatisfied = false;
+static bool s_batchedMeshUploadDirty = false;
+static GpuUploadStats s_gpuUploadStats;
 
 static void DispatchSceneChanged() {
   if (s_changeListeners.empty()) {
@@ -181,6 +184,35 @@ static void PrepareForDestructiveMeshMutation() {
   }
 
   WaitGPUIdle();
+}
+
+static size_t CountMeshesNeedingGpuUpload(const std::vector<Asset::GpuMesh> &meshes) {
+  size_t count = 0;
+  for (const Asset::GpuMesh &mesh : meshes) {
+    if ((!mesh.vertexBuffer || !mesh.indexBuffer) &&
+        !mesh.cpuVertices.empty() && !mesh.cpuIndices.empty()) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+static void UploadGpuBuffersForMeshes(std::vector<Asset::GpuMesh> &meshes) {
+  const size_t pendingMeshCount = CountMeshesNeedingGpuUpload(meshes);
+  if (pendingMeshCount == 0) {
+    return;
+  }
+
+  const auto uploadStart = std::chrono::steady_clock::now();
+  Asset::UploadMeshes(meshes);
+  const uint64_t uploadMs = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - uploadStart)
+          .count());
+  ++s_gpuUploadStats.batchCount;
+  s_gpuUploadStats.lastMeshCount = pendingMeshCount;
+  s_gpuUploadStats.lastUploadMs = uploadMs;
+  s_gpuUploadStats.totalUploadMs += uploadMs;
 }
 
 static void EnsureMaterialMetadataStorage() {
@@ -694,6 +726,11 @@ static void ExecuteRendererInvalidation(RendererInvalidationPlan plan) {
 }
 
 static void FlushBatchedRendererUpdates() {
+  if (s_batchedMeshUploadDirty) {
+    UploadGpuBuffersForMeshes(g_loadedMeshes);
+    s_batchedMeshUploadDirty = false;
+  }
+
   if (s_batchedLightsDirty) {
     const bool resetAccumulation =
         s_batchedInvalidationPlan == RendererInvalidationPlan::None;
@@ -729,6 +766,7 @@ void EndBatchedUpdates() {
     s_batchedUpdateDepth = 0;
     s_batchedSceneChanged = false;
     s_batchedGpuIdleSatisfied = false;
+    s_batchedMeshUploadDirty = false;
     return;
   }
 
@@ -1245,10 +1283,16 @@ Node::Node() {
 }
 
 static void EnsureGpuBuffersForMeshes(std::vector<Asset::GpuMesh> &meshes) {
-  Asset::UploadMeshes(meshes);
+  if (s_batchedUpdateDepth > 0) {
+    s_batchedMeshUploadDirty = true;
+    return;
+  }
+  UploadGpuBuffersForMeshes(meshes);
 }
 
 const std::string &LastStatus() { return s_lastStatus; }
+
+GpuUploadStats GetGpuUploadStats() { return s_gpuUploadStats; }
 
 size_t AddNode(Node node) {
   s_nodes.push_back(std::move(node));

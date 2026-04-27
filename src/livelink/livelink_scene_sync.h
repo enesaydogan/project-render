@@ -31,6 +31,16 @@ public:
     size_t activeSessionBindingCount = 0;
     bool cameraBound = false;
     bool environmentBound = false;
+    uint64_t meshPayloadApplyCount = 0;
+    uint64_t meshPayloadTotalLoadMs = 0;
+    uint64_t meshPayloadTotalReplaceMs = 0;
+    uint64_t meshPayloadLastLoadMs = 0;
+    uint64_t meshPayloadLastReplaceMs = 0;
+    uint64_t meshPayloadLastBytes = 0;
+    uint64_t gpuUploadBatchCount = 0;
+    uint64_t gpuUploadTotalMs = 0;
+    uint64_t gpuUploadLastMs = 0;
+    size_t gpuUploadLastMeshCount = 0;
   };
 
   enum class EngineHandleKind {
@@ -138,6 +148,12 @@ private:
   std::unordered_map<std::string, int> m_textureIndicesByBlobHash;
   CachedCameraState m_cachedExternalCamera;
   bool m_cameraControlDetached = false;
+  uint64_t m_meshPayloadApplyCount = 0;
+  uint64_t m_meshPayloadTotalLoadMs = 0;
+  uint64_t m_meshPayloadTotalReplaceMs = 0;
+  uint64_t m_meshPayloadLastLoadMs = 0;
+  uint64_t m_meshPayloadLastReplaceMs = 0;
+  uint64_t m_meshPayloadLastBytes = 0;
   mutable uint64_t m_nextDiagnosticSequence = 1;
   mutable std::vector<LiveLinkDiagnosticEntry> m_recentDiagnostics;
 };

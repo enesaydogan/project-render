@@ -214,7 +214,10 @@ bool LiveLinkCoordinator::ValidateAndQueueBatch(ProviderRecord &record,
                                                 const SceneDeltaBatch &batch) {
   const std::string providerName =
       batch.providerName.empty() ? record.providerName : batch.providerName;
-  if (providerName != record.providerName) {
+  const bool compatibleMaxProvider =
+      record.providerName == "3dsMax2025Pipe" &&
+      (providerName == "3dsMax2025Pipe" || providerName == "3dsMax2024Pipe");
+  if (providerName != record.providerName && !compatibleMaxProvider) {
     AppendIssue(ValidationIssue::Severity::Error, record.providerName,
                 batch.sessionId,
                 "Rejected batch because providerName does not match the "

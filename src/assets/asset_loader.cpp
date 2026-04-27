@@ -2407,7 +2407,7 @@ void UploadMeshes(std::vector<GpuMesh> &meshes) {
   pendingMeshIndices.reserve(meshes.size());
   for (size_t meshIndex = 0; meshIndex < meshes.size(); ++meshIndex) {
     const GpuMesh &mesh = meshes[meshIndex];
-    if (mesh.vertexBuffer || mesh.indexBuffer) {
+    if (mesh.vertexBuffer && mesh.indexBuffer) {
       continue;
     }
     if (mesh.cpuVertices.empty() || mesh.cpuIndices.empty()) {

@@ -138,7 +138,7 @@ QString FormatLiveLinkSyncStats(const LiveLink::CoordinatorStats& coordinatorSta
                                 const LiveLink::LiveLinkSceneSync::StatsSnapshot& syncStats,
                                 size_t sessionCount)
 {
-    return QObject::tr("DCC Sync nodes=%1 meshes=%2 lights=%3 materials=%4 bindings=%5 active=%6 sessions=%7 camera=%8 env=%9 | Transport accepted=%10/%11 rejected=%12/%13 queued=%14/%15")
+    return QObject::tr("DCC Sync nodes=%1 meshes=%2 lights=%3 materials=%4 bindings=%5 active=%6 sessions=%7 camera=%8 env=%9 | Transport accepted=%10/%11 rejected=%12/%13 queued=%14/%15 | Mesh apply count=%16 load=%17ms replace=%18ms last=%19/%20ms bytes=%21 | GPU upload batches=%22 last=%23ms/%24 meshes total=%25ms")
         .arg(static_cast<qulonglong>(syncStats.nodeCount))
         .arg(static_cast<qulonglong>(syncStats.meshCount))
         .arg(static_cast<qulonglong>(syncStats.lightCount))
@@ -153,12 +153,23 @@ QString FormatLiveLinkSyncStats(const LiveLink::CoordinatorStats& coordinatorSta
         .arg(static_cast<qulonglong>(coordinatorStats.batchesRejected))
         .arg(static_cast<qulonglong>(coordinatorStats.deltasRejected))
         .arg(static_cast<qulonglong>(coordinatorStats.queuedBatchCount))
-        .arg(static_cast<qulonglong>(coordinatorStats.queuedDeltaCount));
+        .arg(static_cast<qulonglong>(coordinatorStats.queuedDeltaCount))
+        .arg(static_cast<qulonglong>(syncStats.meshPayloadApplyCount))
+        .arg(static_cast<qulonglong>(syncStats.meshPayloadTotalLoadMs))
+        .arg(static_cast<qulonglong>(syncStats.meshPayloadTotalReplaceMs))
+        .arg(static_cast<qulonglong>(syncStats.meshPayloadLastLoadMs))
+        .arg(static_cast<qulonglong>(syncStats.meshPayloadLastReplaceMs))
+        .arg(static_cast<qulonglong>(syncStats.meshPayloadLastBytes))
+        .arg(static_cast<qulonglong>(syncStats.gpuUploadBatchCount))
+        .arg(static_cast<qulonglong>(syncStats.gpuUploadLastMs))
+        .arg(static_cast<qulonglong>(syncStats.gpuUploadLastMeshCount))
+        .arg(static_cast<qulonglong>(syncStats.gpuUploadTotalMs));
 }
 
 QString FormatLiveLinkProviderDisplayName(const std::string &providerName)
 {
-    if (providerName == "3dsMax2025Pipe") {
+    if (providerName == "3dsMax2025Pipe" ||
+        providerName == "3dsMax2024Pipe") {
         return QObject::tr("3ds Max");
     }
     if (providerName == "Archicad28Pipe") {

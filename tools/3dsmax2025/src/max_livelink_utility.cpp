@@ -33,6 +33,7 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <MeshNormalSpec.h>
@@ -241,7 +242,7 @@ constexpr uint64_t kSceneOperationSettleDelayMs = 350;
 constexpr uint64_t kResumeStatePersistDelayMs = 2500;
 constexpr size_t kPayloadRemovalBatchSize = 64;
 constexpr size_t kQueuedMeshExportBatchSize = 15;
-constexpr size_t kCompletedMeshExportBatchSize = 16;
+constexpr size_t kCompletedMeshExportBatchSize = 32;
 constexpr uint64_t kSlowPollThresholdMs = 150;
 constexpr size_t kLargeSceneNodeThreshold = 250;
 constexpr size_t kHugeSceneNodeThreshold = 1500;
@@ -993,14 +994,31 @@ std::string GetOrCreateMaterialGuid(Mtl *material) {
   if (!material) {
     return std::string("missing");
   }
-  return std::to_string(reinterpret_cast<ULONG_PTR>(material));
+  std::string rawGuid = ReadAppDataString(material, kMaterialGuidAppDataSubId);
+  if (rawGuid.empty()) {
+    rawGuid = GenerateGuidString();
+    if (!rawGuid.empty()) {
+      WriteAppDataString(material, kMaterialGuidAppDataSubId, rawGuid);
+    }
+  }
+  return rawGuid.empty() ? std::to_string(reinterpret_cast<ULONG_PTR>(material))
+                         : rawGuid;
 }
 
 std::string GetOrCreateSharedObjectGuid(Object *object) {
   if (!object) {
     return std::string("missing");
   }
-  return std::to_string(reinterpret_cast<ULONG_PTR>(object));
+  std::string rawGuid =
+      ReadAppDataString(object, kSharedObjectGuidAppDataSubId);
+  if (rawGuid.empty()) {
+    rawGuid = GenerateGuidString();
+    if (!rawGuid.empty()) {
+      WriteAppDataString(object, kSharedObjectGuidAppDataSubId, rawGuid);
+    }
+  }
+  return rawGuid.empty() ? std::to_string(reinterpret_cast<ULONG_PTR>(object))
+                         : rawGuid;
 }
 
 std::string MakeMaterialObjectId(const std::string &nodeObjectId,
@@ -1151,6 +1169,9 @@ struct InFlightMeshPayloadExport {
 
 struct MeshExportTimingStats {
   uint64_t completedCount = 0;
+  uint64_t successCount = 0;
+  uint64_t failureCount = 0;
+  uint64_t captureFailureCount = 0;
   uint64_t renderMeshCount = 0;
   uint64_t triObjectFallbackCount = 0;
   uint64_t lastCaptureMs = 0;
@@ -4549,6 +4570,10 @@ void PopulateSnapshotMeshMetadata(Interface *ip, INode *node, Mesh &mesh,
 
   const uint64_t vertexCount = static_cast<uint64_t>(mesh.getNumVerts());
   const uint64_t faceCount = static_cast<uint64_t>(mesh.getNumFaces());
+  snapshot->hasMesh = false;
+  snapshot->vertexCount = 0;
+  snapshot->indexCount = 0;
+  snapshot->geometryFingerprint = 0;
   if (vertexCount == 0 || faceCount == 0) {
     return;
   }
@@ -4706,15 +4731,61 @@ std::filesystem::path GetMaterialLibraryPayloadPath(
   return documentDirectory / "_scene_materials.prmat";
 }
 
-std::string BuildSharedPayloadKey(Interface *ip, INode *node) {
+std::filesystem::path BuildTemporaryPayloadPath(
+    const std::filesystem::path &payloadPath) {
+  static std::atomic<uint64_t> s_nextTempPayloadId{1};
+  std::filesystem::path tempPath = payloadPath;
+  tempPath += std::string(".tmp") +
+              std::to_string(
+                  s_nextTempPayloadId.fetch_add(1, std::memory_order_relaxed));
+  return tempPath;
+}
+
+bool PublishTemporaryPayloadFile(const std::filesystem::path &temporaryPath,
+                                 const std::filesystem::path &payloadPath) {
+  if (temporaryPath.empty() || payloadPath.empty()) {
+    return false;
+  }
+
+  std::error_code error;
+#if defined(_WIN32)
+  if (::MoveFileExW(temporaryPath.c_str(), payloadPath.c_str(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    return true;
+  }
+  error = std::error_code(static_cast<int>(::GetLastError()),
+                          std::system_category());
+#endif
+
+  std::filesystem::rename(temporaryPath, payloadPath, error);
+  if (!error) {
+    return true;
+  }
+
+  std::filesystem::remove(payloadPath, error);
+  error.clear();
+  std::filesystem::rename(temporaryPath, payloadPath, error);
+  return !error;
+}
+
+std::string BuildSharedPayloadBaseKey(Interface *ip, INode *node) {
   if (!node) return {};
   Object* baseObj = node->GetObjectRef();
   if (!baseObj) return {};
 
-  uintptr_t objId = reinterpret_cast<uintptr_t>(baseObj);
-  char buffer[32];
-  snprintf(buffer, sizeof(buffer), "inst_%llx", static_cast<unsigned long long>(objId));
-  return std::string(buffer);
+  return "inst_" + GetOrCreateSharedObjectGuid(baseObj->FindBaseObject());
+}
+
+std::string BuildSharedPayloadKey(const std::string &baseKey,
+                                  uint64_t geometryFingerprint) {
+  if (baseKey.empty() || geometryFingerprint == 0) {
+    return {};
+  }
+
+  char fingerprintText[17] = {};
+  sprintf_s(fingerprintText, "%016llx",
+            static_cast<unsigned long long>(geometryFingerprint));
+  return baseKey + "_" + fingerprintText;
 }
 
 std::filesystem::path GetSharedPayloadPath(const std::string &documentId,
@@ -4728,11 +4799,48 @@ std::filesystem::path GetSharedPayloadPath(const std::string &documentId,
          (SanitizePathComponent(payloadKey) + std::string(".prmesh"));
 }
 
+void RemoveMeshPayloadFilesByPrefix(const std::string &documentId,
+                                    const std::string &payloadKey) {
+  if (documentId.empty() || payloadKey.empty()) {
+    return;
+  }
+
+  const std::filesystem::path documentDirectory =
+      GetDocumentPayloadDirectory(documentId);
+  if (documentDirectory.empty()) {
+    return;
+  }
+
+  const std::string prefix = SanitizePathComponent(payloadKey);
+  std::error_code error;
+  for (const auto &entry :
+       std::filesystem::directory_iterator(documentDirectory, error)) {
+    if (error) {
+      break;
+    }
+    if (!entry.is_regular_file(error)) {
+      error.clear();
+      continue;
+    }
+    const std::filesystem::path path = entry.path();
+    if (path.extension() != ".prmesh") {
+      continue;
+    }
+    const std::string stem = path.stem().string();
+    if (stem == prefix || stem.rfind(prefix + "_", 0) == 0) {
+      std::filesystem::remove(path, error);
+      error.clear();
+    }
+  }
+}
+
 void RemoveNodePayloadFile(const std::string &documentId,
                            const std::string &nodeObjectId) {
   if (documentId.empty() || nodeObjectId.empty()) {
     return;
   }
+
+  RemoveMeshPayloadFilesByPrefix(documentId, nodeObjectId);
 
   std::error_code error;
   const std::filesystem::path payloadPath =
@@ -4755,7 +4863,9 @@ bool WriteMaterialLibraryPayload(const std::string &documentId,
     return false;
   }
 
-  std::ofstream stream(payloadPath, std::ios::binary | std::ios::trunc);
+  const std::filesystem::path temporaryPayloadPath =
+      BuildTemporaryPayloadPath(payloadPath);
+  std::ofstream stream(temporaryPayloadPath, std::ios::binary | std::ios::trunc);
   if (!stream) {
     return false;
   }
@@ -4967,6 +5077,19 @@ bool WriteMaterialLibraryPayload(const std::string &documentId,
   }
 
   if (!stream.good()) {
+    stream.close();
+    std::filesystem::remove(temporaryPayloadPath);
+    return false;
+  }
+
+  stream.close();
+  if (!stream) {
+    std::filesystem::remove(temporaryPayloadPath);
+    return false;
+  }
+
+  if (!PublishTemporaryPayloadFile(temporaryPayloadPath, payloadPath)) {
+    std::filesystem::remove(temporaryPayloadPath);
     return false;
   }
 
@@ -5139,18 +5262,8 @@ bool CaptureNodeMeshPayloadJob(Interface *ip, INode *node,
   CapturedMeshPayloadJob job;
   job.snapshot = snapshot;
   job.documentId = documentId;
-  job.sharedPayloadKey = BuildSharedPayloadKey(ip, node);
-  if (!job.sharedPayloadKey.empty()) {
-    job.payloadPath = GetSharedPayloadPath(documentId, job.sharedPayloadKey);
-  }
-  if (job.payloadPath.empty()) {
-    job.payloadPath = GetNodePayloadPath(documentId, snapshot.objectId);
-  }
-  if (job.payloadPath.empty()) {
-    ReleaseNodeMeshAccess(&meshAccess);
-    return false;
-  }
-  job.payloadUri = PathToUtf8(job.payloadPath);
+  const std::string sharedPayloadBaseKey =
+      BuildSharedPayloadBaseKey(ip, node);
 
   Mesh &mesh = *meshAccess.mesh;
   job.usedRenderMesh = meshAccess.fromRenderMesh;
@@ -5164,6 +5277,20 @@ bool CaptureNodeMeshPayloadJob(Interface *ip, INode *node,
     ReleaseNodeMeshAccess(&meshAccess);
     return false;
   }
+  job.sharedPayloadKey =
+      BuildSharedPayloadKey(sharedPayloadBaseKey,
+                            job.snapshot.geometryFingerprint);
+  if (!job.sharedPayloadKey.empty()) {
+    job.payloadPath = GetSharedPayloadPath(documentId, job.sharedPayloadKey);
+  }
+  if (job.payloadPath.empty()) {
+    job.payloadPath = GetNodePayloadPath(documentId, job.snapshot.objectId);
+  }
+  if (job.payloadPath.empty()) {
+    ReleaseNodeMeshAccess(&meshAccess);
+    return false;
+  }
+  job.payloadUri = PathToUtf8(job.payloadPath);
   const auto normalsReady = std::chrono::steady_clock::now();
 
   job.objectToNode = ComputeObjectToNodeTransform(ip, node);
@@ -5230,9 +5357,13 @@ bool CaptureNodeMeshPayloadJob(Interface *ip, INode *node,
       }
 
       MaterialSnapshot materialSnapshot;
-      if (!CaptureMaterialSnapshot(ip, node, materialSlot, slotMaterial,
-                                   &materialSnapshot)) {
-        continue;
+      materialSnapshot.materialSlot = (std::max)(0, materialSlot);
+      materialSnapshot.materialStableId = GetOrCreateMaterialGuid(slotMaterial);
+      materialSnapshot.name = ToUtf8(slotMaterial->GetName());
+      if (materialSnapshot.name.empty()) {
+        materialSnapshot.name = ToUtf8(node->GetName()) + " [slot " +
+                                std::to_string(materialSnapshot.materialSlot) +
+                                "]";
       }
 
       job.serializedMaterials.push_back(std::move(materialSnapshot));
@@ -5281,7 +5412,9 @@ AsyncMeshPayloadResult SerializeCapturedMeshPayload(
     return result;
   }
 
-  std::ofstream stream(payloadPath, std::ios::binary | std::ios::trunc);
+  const std::filesystem::path temporaryPayloadPath =
+      BuildTemporaryPayloadPath(payloadPath);
+  std::ofstream stream(temporaryPayloadPath, std::ios::binary | std::ios::trunc);
   if (!stream) {
     return result;
   }
@@ -5420,6 +5553,18 @@ AsyncMeshPayloadResult SerializeCapturedMeshPayload(
     submesh = std::move(deduplicatedSubmesh);
   }
 
+  submeshes.erase(std::remove_if(submeshes.begin(), submeshes.end(),
+                                 [](const ExportSubmesh &submesh) {
+                                   return submesh.vertices.empty() ||
+                                          submesh.indices.empty();
+                                 }),
+                  submeshes.end());
+  if (submeshes.empty()) {
+    stream.close();
+    std::filesystem::remove(temporaryPayloadPath);
+    return result;
+  }
+
   NativeMeshPayloadHeader header;
   header.meshCount = static_cast<uint32_t>(submeshes.size());
   header.reserved = static_cast<uint32_t>(job.serializedMaterials.size());
@@ -5452,10 +5597,25 @@ AsyncMeshPayloadResult SerializeCapturedMeshPayload(
                  sizeof(bindingHeader));
     if (!WriteNativePayloadString(stream, material.materialStableId) ||
         !WriteNativePayloadString(stream, material.name)) {
+      stream.close();
+      std::filesystem::remove(temporaryPayloadPath);
       return result;
     }
   }
   if (!stream.good()) {
+    stream.close();
+    std::filesystem::remove(temporaryPayloadPath);
+    return result;
+  }
+
+  stream.close();
+  if (!stream) {
+    std::filesystem::remove(temporaryPayloadPath);
+    return result;
+  }
+
+  if (!PublishTemporaryPayloadFile(temporaryPayloadPath, payloadPath)) {
+    std::filesystem::remove(temporaryPayloadPath);
     return result;
   }
 
@@ -6025,7 +6185,7 @@ bool SendInitialSnapshot(Interface *ip,
   if (INode *root = ip->GetRootNode()) {
     for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
       GatherNodeSnapshots(ip, root->GetChildNode(childIndex), &state,
-                          &nodeLookup, false);
+                          &nodeLookup, true);
       GatherLightSnapshots(ip, root->GetChildNode(childIndex), &lightState);
       GatherSceneCameraSnapshots(ip, root->GetChildNode(childIndex),
                                  &sceneCameraState);
@@ -6443,8 +6603,8 @@ private:
     void MappingChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh | DirtyMaterial); }
     void ExtentionChannelChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh); }
     void ModelOtherEvent(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh | DirtyLight); }
-    void MaterialStructured(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh | DirtyMaterial); }
-    void MaterialOtherEvent(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh | DirtyMaterial); }
+    void MaterialStructured(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMaterial); }
+    void MaterialOtherEvent(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMaterial); }
     void ControllerStructured(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh | DirtyMaterial | DirtyLight); }
     void ControllerOtherEvent(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState | DirtyMesh | DirtyMaterial | DirtyLight); }
     void NameChanged(NodeKeyTab &nodes) override { Mark(nodes, DirtyNodeState); }
@@ -6894,6 +7054,10 @@ private:
            " | lastBatch=" + std::to_string(m_lastBatchDeltaCount) +
            "\r\nMesh Export: done=" +
            std::to_string(m_meshExportTimingStats.completedCount) +
+           " | ok=" + std::to_string(m_meshExportTimingStats.successCount) +
+           " | fail=" + std::to_string(m_meshExportTimingStats.failureCount) +
+           " | captureFail=" +
+           std::to_string(m_meshExportTimingStats.captureFailureCount) +
            " | source=" +
            std::string(m_meshExportTimingStats.lastUsedRenderMesh ? "render"
                                                                   : "tri") +
@@ -7086,6 +7250,11 @@ private:
 
   bool StartLiveSync(bool forceFullResync) {
     std::lock_guard<std::mutex> lock(m_sendMutex);
+    if (m_syncActive && forceFullResync) {
+      MarkFullResyncNeeded();
+      RefreshRollupUI_NoLock();
+      return true;
+    }
     if (m_syncActive && !forceFullResync) {
       RefreshRollupUI_NoLock();
       return true;
@@ -7223,6 +7392,11 @@ private:
 
   void RecordMeshExportTiming_NoLock(const AsyncMeshPayloadResult &result) {
     ++m_meshExportTimingStats.completedCount;
+    if (result.success && result.snapshot.hasMesh && !result.payloadUri.empty()) {
+      ++m_meshExportTimingStats.successCount;
+    } else {
+      ++m_meshExportTimingStats.failureCount;
+    }
     m_meshExportTimingStats.lastUsedRenderMesh = result.usedRenderMesh;
     if (result.usedRenderMesh) {
       ++m_meshExportTimingStats.renderMeshCount;
@@ -7244,6 +7418,17 @@ private:
     m_meshExportTimingStats.totalSerializeMs += result.serializeMs;
     m_meshExportTimingStats.totalCaptureMs +=
         m_meshExportTimingStats.lastCaptureMs;
+  }
+
+  void RecordMeshCaptureFailure_NoLock(ULONG_PTR handle) {
+    ++m_meshExportTimingStats.captureFailureCount;
+    auto snapshotIt = m_lastNodeState.find(handle);
+    if (snapshotIt != m_lastNodeState.end()) {
+      snapshotIt->second.hasMesh = false;
+      snapshotIt->second.vertexCount = 0;
+      snapshotIt->second.indexCount = 0;
+      snapshotIt->second.geometryFingerprint = 0;
+    }
   }
 
   void EnsureMeshWorkerPool_NoLock() {
@@ -7346,16 +7531,40 @@ private:
     }
 
     json deltas = json::array();
-    size_t flushedCount = 0;
+    std::vector<AsyncMeshPayloadResult> readyResults;
     const size_t maxExports =
         force ? m_completedMeshExports.size() : kCompletedMeshExportBatchSize;
-    while (!m_completedMeshExports.empty() && flushedCount < maxExports) {
-    const AsyncMeshPayloadResult &result = m_completedMeshExports.front();
-    if (result.success && result.snapshot.hasMesh && !result.payloadUri.empty()) {
-      auto snapshotIt = m_lastNodeState.find(result.handle);
-      if (snapshotIt != m_lastNodeState.end()) {
-        snapshotIt->second = result.snapshot;
+    size_t inspectedCount = 0;
+    for (const AsyncMeshPayloadResult &result : m_completedMeshExports) {
+      if (inspectedCount >= maxExports) {
+        break;
       }
+      readyResults.push_back(result);
+      if (result.success && result.snapshot.hasMesh && !result.payloadUri.empty()) {
+          AppendMeshPayloadDelta(m_documentId, result.snapshot, result.payloadUri,
+                                 &m_nextRevision, &deltas);
+      }
+      ++inspectedCount;
+    }
+
+    if (deltas.empty()) {
+      for (size_t resultIndex = 0; resultIndex < readyResults.size(); ++resultIndex) {
+        RecordMeshExportTiming_NoLock(readyResults[resultIndex]);
+        m_completedMeshExports.pop_front();
+      }
+      return !readyResults.empty();
+    }
+
+    if (!SendBatch(m_sessionId, m_nextSequence, false, deltas)) {
+      return false;
+    }
+
+    for (const AsyncMeshPayloadResult &result : readyResults) {
+      if (result.success && result.snapshot.hasMesh && !result.payloadUri.empty()) {
+        auto snapshotIt = m_lastNodeState.find(result.handle);
+        if (snapshotIt != m_lastNodeState.end()) {
+          snapshotIt->second = result.snapshot;
+        }
         if (!result.sharedPayloadKey.empty()) {
           m_sharedPayloadCache[result.sharedPayloadKey] =
               SharedPayloadCacheEntry{result.snapshot.geometryFingerprint,
@@ -7363,20 +7572,9 @@ private:
                                       result.snapshot.indexCount,
                                       result.payloadUri};
         }
-        AppendMeshPayloadDelta(m_documentId, result.snapshot, result.payloadUri,
-                               &m_nextRevision, &deltas);
       }
       RecordMeshExportTiming_NoLock(result);
       m_completedMeshExports.pop_front();
-      ++flushedCount;
-    }
-
-    if (deltas.empty()) {
-      return flushedCount > 0;
-    }
-
-    if (!SendBatch(m_sessionId, m_nextSequence, false, deltas)) {
-      return false;
     }
 
     ++m_nextSequence;
@@ -7392,6 +7590,7 @@ private:
     EnsureMeshWorkerPool_NoLock();
 
     json cachedDeltas = json::array();
+    std::vector<std::pair<ULONG_PTR, NodeSnapshot>> cachedReadySnapshots;
     size_t dispatchCount = 0;
     const size_t maxDispatchCount =
         force ? m_pendingMeshExports.size() : MaxQueuedCapturedMeshJobs();
@@ -7406,38 +7605,8 @@ private:
       const NodeSnapshot snapshot = it->second;
       INode *node = FindNodeByHandle(ip, snapshot.handle);
       if (!node) {
+        RecordMeshCaptureFailure_NoLock(snapshot.handle);
         it = m_pendingMeshExports.erase(it);
-        continue;
-      }
-
-      const std::string sharedPayloadKey = BuildSharedPayloadKey(ip, node);
-      const auto cacheIt = m_sharedPayloadCache.find(sharedPayloadKey);
-      if (!sharedPayloadKey.empty() && cacheIt != m_sharedPayloadCache.end() &&
-          (snapshot.geometryFingerprint == 0 ||
-           cacheIt->second.geometryFingerprint == snapshot.geometryFingerprint) &&
-          !cacheIt->second.payloadUri.empty()) {
-        NodeSnapshot cachedSnapshot = snapshot;
-        cachedSnapshot.hasMesh = true;
-        cachedSnapshot.geometryFingerprint = cacheIt->second.geometryFingerprint;
-        cachedSnapshot.vertexCount = cacheIt->second.vertexCount;
-        cachedSnapshot.indexCount = cacheIt->second.indexCount;
-        AppendMeshPayloadDelta(m_documentId, cachedSnapshot,
-                               cacheIt->second.payloadUri, &m_nextRevision,
-                               &cachedDeltas);
-        auto snapshotIt = m_lastNodeState.find(snapshot.handle);
-        if (snapshotIt != m_lastNodeState.end()) {
-          snapshotIt->second = cachedSnapshot;
-        }
-        it = m_pendingMeshExports.erase(it);
-        ++dispatchCount;
-        continue;
-      }
-
-      const auto inFlightSharedIt = m_inFlightSharedPayloads.find(sharedPayloadKey);
-      if (!sharedPayloadKey.empty() &&
-          inFlightSharedIt != m_inFlightSharedPayloads.end() &&
-          inFlightSharedIt->second == snapshot.geometryFingerprint) {
-        ++it;
         continue;
       }
 
@@ -7445,15 +7614,37 @@ private:
       {
         ScopedFlag exportGuard(&g_exportInProgress);
         if (!CaptureNodeMeshPayloadJob(ip, node, m_documentId, snapshot, &job)) {
+          RecordMeshCaptureFailure_NoLock(snapshot.handle);
           it = m_pendingMeshExports.erase(it);
           continue;
         }
       }
 
+      const auto cacheIt = m_sharedPayloadCache.find(job.sharedPayloadKey);
+      if (!job.sharedPayloadKey.empty() &&
+          cacheIt != m_sharedPayloadCache.end() &&
+          !cacheIt->second.payloadUri.empty()) {
+        AppendMeshPayloadDelta(m_documentId, job.snapshot,
+                               cacheIt->second.payloadUri, &m_nextRevision,
+                               &cachedDeltas);
+        cachedReadySnapshots.emplace_back(snapshot.handle, job.snapshot);
+        ++it;
+        ++dispatchCount;
+        continue;
+      }
+
+      const auto inFlightSharedIt =
+          m_inFlightSharedPayloads.find(job.sharedPayloadKey);
+      if (!job.sharedPayloadKey.empty() &&
+          inFlightSharedIt != m_inFlightSharedPayloads.end()) {
+        ++it;
+        continue;
+      }
+
       InFlightMeshPayloadExport exportTask;
       exportTask.handle = snapshot.handle;
       exportTask.sharedPayloadKey = job.sharedPayloadKey;
-      exportTask.geometryFingerprint = snapshot.geometryFingerprint;
+      exportTask.geometryFingerprint = job.snapshot.geometryFingerprint;
       if (!exportTask.sharedPayloadKey.empty()) {
         m_inFlightSharedPayloads[exportTask.sharedPayloadKey] =
             exportTask.geometryFingerprint;
@@ -7470,6 +7661,13 @@ private:
 
     if (!cachedDeltas.empty() &&
         SendBatch(m_sessionId, m_nextSequence, false, cachedDeltas)) {
+      for (const auto &[handle, cachedSnapshot] : cachedReadySnapshots) {
+        auto snapshotIt = m_lastNodeState.find(handle);
+        if (snapshotIt != m_lastNodeState.end()) {
+          snapshotIt->second = cachedSnapshot;
+        }
+        m_pendingMeshExports.erase(handle);
+      }
       ++m_nextSequence;
       RecordBatchSent_NoLock(cachedDeltas.size());
       MarkResumeStateDirty_NoLock();
@@ -7724,6 +7922,8 @@ private:
       ScopedHoldSuspend syncSuspend;
       FullResyncTimingStats fullResyncTiming;
       const auto fullResyncStart = Clock::now();
+      m_sharedPayloadCache.clear();
+      m_inFlightSharedPayloads.clear();
       const auto identifierPrepStart = Clock::now();
       EnsurePersistentSceneIdentifiers(ip);
       fullResyncTiming.identifierPrepMs = static_cast<uint64_t>(
@@ -7739,7 +7939,7 @@ private:
         for (int childIndex = 0; childIndex < root->NumberOfChildren(); ++childIndex) {
           const auto nodeGatherStart = Clock::now();
           GatherNodeSnapshots(ip, root->GetChildNode(childIndex), &currentState,
-                              &nodeLookup, false, &fullResyncTiming);
+                              &nodeLookup, true, &fullResyncTiming);
           fullResyncTiming.nodeGatherMs += static_cast<uint64_t>(
               std::chrono::duration_cast<std::chrono::milliseconds>(
                   Clock::now() - nodeGatherStart)

@@ -20,7 +20,7 @@ Current scope:
   - `NodeRemoved`
   - `NodeTransformChanged`
   - `NodeVisibilityChanged`
-  - `SelectionChanged`scm-history-item:d%3A%5Cproject-render?%7B%22repositoryId%22%3A%22scm0%22%2C%22historyItemId%22%3A%22a679edc0abf5d7e34968bdd81e374b409ee1ec85%22%2C%22historyItemParentId%22%3A%22442f5645bd6d06e5fc70fd3dc16da145e2864da4%22%2C%22historyItemDisplayId%22%3A%22a679edc%22%7D
+  - `SelectionChanged`
   - `MeshPayloadChanged` when detected geometry changes require a fresh payload
   - `MaterialChanged` when supported material state changes
 - sends `SessionClosed` when the utility is closed
@@ -56,25 +56,25 @@ The default pipe name is `project-render-max-livelink`.
 
 ## Build the plugin
 
-Set your 3ds Max 2025 SDK root and configure the standalone project:
+Set your 3ds Max 2024 SDK root and configure the standalone project:
 
 ```powershell
-$env:ADSK_3DSMAX_2025_SDK = "C:/Path/To/3dsMaxSDK"
-cmake -S tools/3dsmax2025 -B build-max2025 -G "Visual Studio 17 2022" -A x64
-cmake --build build-max2025 --config Release
+$env:ADSK_3DSMAX_2024_SDK = "C:/Path/To/3dsMaxSDK"
+cmake -S tools/3dsmax2024 -B build-max2024 -G "Visual Studio 17 2022" -A x64
+cmake --build build-max2024 --config Release
 ```
 
 If your SDK uses a different lib layout, pass these explicitly:
 
 ```powershell
-cmake -S tools/3dsmax2025 -B build-max2025 -G "Visual Studio 17 2022" -A x64 \
+cmake -S tools/3dsmax2024 -B build-max2024 -G "Visual Studio 17 2022" -A x64 \
   -DMAX_SDK_INCLUDE_DIR="C:/Path/To/3dsMaxSDK/include" \
   -DMAX_SDK_LIB_DIR="C:/Path/To/3dsMaxSDK/lib/x64/Release"
 ```
 
 The output plugin is:
 
-- `build-max2025/Release/ProjectRenderLiveLink.dlu`
+- `build-max2024/Release/ProjectRenderLiveLink.dlu`
 
 ## Load in 3ds Max
 

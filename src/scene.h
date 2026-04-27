@@ -3,6 +3,7 @@
 #include "assets/asset_loader.h"
 #include "light.h"
 #include <DirectXMath.h>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
@@ -53,6 +54,13 @@ struct ImportedNodePayload {
   std::vector<Asset::Texture> textures;
   std::vector<std::string> textureSourceUris;
   bool materialsContainFullDefinitions = true;
+};
+
+struct GpuUploadStats {
+  uint64_t batchCount = 0;
+  uint64_t totalUploadMs = 0;
+  uint64_t lastUploadMs = 0;
+  size_t lastMeshCount = 0;
 };
 
 // Import a model (glTF, OBJ, STL) file into the scene. Returns true on success.
@@ -130,6 +138,7 @@ bool UpdateNodeMaterialSourceName(size_t nodeIndex, size_t materialSlot,
                                   const std::string &materialName);
 bool UpdateMaterial(size_t index, const Asset::Material &material);
 void RefreshAllMaterialRuntimeTextures();
+GpuUploadStats GetGpuUploadStats();
 void BeginBatchedUpdates();
 void EndBatchedUpdates();
 
