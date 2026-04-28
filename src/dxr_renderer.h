@@ -77,6 +77,55 @@ float GetGPUFrameTimeMs();
 // available)
 void GetShaderCounters(UINT *outCounters, UINT maxCount);
 
+// Path tracer backend selection. Wavefront modes are scaffolded first and will
+// replace the legacy monolithic path as parity lands.
+enum class PathTracingBackend {
+  Legacy = 0,
+  WavefrontParity = 1,
+  WavefrontOptimized = 2,
+};
+enum class WavefrontMaterialBin {
+  Diffuse = 0,
+  GlossyDielectric = 1,
+  Conductor = 2,
+  DeltaReflection = 3,
+  Refraction = 4,
+  Emissive = 5,
+  Translucent = 6,
+};
+void SetPathTracingBackend(PathTracingBackend backend);
+PathTracingBackend GetPathTracingBackend();
+UINT GetWavefrontBootstrapPathCount();
+UINT GetWavefrontBootstrapOverflowCount();
+UINT GetWavefrontBootstrapDispatchGroups();
+UINT GetWavefrontPrimaryRecordCount();
+UINT GetWavefrontPrimaryHitCount();
+UINT GetWavefrontPrimaryMissCount();
+UINT GetWavefrontResolveRecordCount();
+UINT GetWavefrontResolveSurfaceCount();
+UINT GetWavefrontResolveDiffuseCount();
+UINT GetWavefrontResolveSpecularCount();
+UINT GetWavefrontResolveTransmissionCount();
+UINT GetWavefrontResolveSkyCount();
+UINT GetWavefrontSecondaryPathCount();
+UINT GetWavefrontSecondaryDiffuseCount();
+UINT GetWavefrontSecondarySpecularCount();
+UINT GetWavefrontSecondaryTransmissionCount();
+UINT GetWavefrontShadowTaskCount();
+UINT GetWavefrontSecondaryVisibilityRecordCount();
+UINT GetWavefrontSecondaryVisibilityDiffuseLaneCount();
+UINT GetWavefrontSecondaryVisibilitySpecularLaneCount();
+UINT GetWavefrontSecondaryVisibilityHitCount();
+UINT GetWavefrontSecondaryVisibilityMissCount();
+UINT GetWavefrontSecondaryResolveRecordCount();
+UINT GetWavefrontSecondaryResolveSurfaceCount();
+UINT GetWavefrontSecondaryResolveSkyCount();
+UINT GetWavefrontShadowVisibilityTaskCount();
+UINT GetWavefrontShadowVisibleCount();
+UINT GetWavefrontShadowOccludedCount();
+UINT GetWavefrontPrimaryMaterialBinCount(WavefrontMaterialBin materialBin);
+UINT GetWavefrontSecondaryMaterialBinCount(WavefrontMaterialBin materialBin);
+
 // Final denoiser mode control (Off, OIDN CPU, OIDN GPU, NVIDIA OptiX).
 enum class DenoiserMode { Off = 0, OIDN_CPU = 1, OIDN_GPU = 2, OptiX = 3 };
 void SetDenoiserMode(DenoiserMode m);

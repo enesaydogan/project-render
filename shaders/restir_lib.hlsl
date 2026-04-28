@@ -30,6 +30,24 @@ Reservoir init_reservoir()
     return r;
 }
 
+inline Reservoir unpack_reservoir(float4 data)
+{
+    Reservoir r;
+    r.lightIndex = asuint(data.x);
+    if (r.lightIndex == 0x7FC00000) r.lightIndex = 0xFFFFFFFF;
+    r.w_sum = data.y;
+    r.M = asuint(data.z);
+    r.W = data.w;
+    if (isnan(r.w_sum) || isinf(r.w_sum)) r.w_sum = 0.0;
+    if (isnan(r.W) || isinf(r.W)) r.W = 0.0;
+    return r;
+}
+
+inline float4 pack_reservoir(Reservoir r)
+{
+    return float4(asfloat(r.lightIndex), r.w_sum, asfloat(r.M), r.W);
+}
+
 // Update reservoir with a new candidate
 // returns true if the candidate was selected
 bool update_reservoir(inout Reservoir r, uint lightIndex, float weight, inout RNG rng)

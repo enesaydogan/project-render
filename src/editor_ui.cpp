@@ -2637,6 +2637,110 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
           }
         }
 
+        ImGui::Separator();
+        ImGui::Text("Path Tracing Backend");
+        const char *pathTracingBackends[] = {"Legacy",
+                                             "Wavefront Parity",
+                                             "Wavefront Optimized"};
+        int backendIdx =
+            static_cast<int>(DxrRenderer::GetPathTracingBackend());
+        if (ImGui::Combo("Backend", &backendIdx, pathTracingBackends,
+                         IM_ARRAYSIZE(pathTracingBackends))) {
+          DxrRenderer::SetPathTracingBackend(
+              static_cast<DxrRenderer::PathTracingBackend>(backendIdx));
+          uiChanged = true;
+        }
+        ImGui::TextWrapped(
+          "Wavefront Parity keeps the legacy final image and runs queue "
+          "bootstrap plus primary visibility ahead of it. Wavefront "
+          "Optimized now resolves the queued primary hits into its own "
+          "first-hit output and emits secondary-path and shadow queues "
+          "instead of falling back to the monolithic RayGen path.");
+        if (DxrRenderer::GetPathTracingBackend() !=
+            DxrRenderer::PathTracingBackend::Legacy) {
+          ImGui::Text("Bootstrap paths: %u",
+                      DxrRenderer::GetWavefrontBootstrapPathCount());
+          ImGui::Text("Bootstrap dispatch groups: %u",
+                      DxrRenderer::GetWavefrontBootstrapDispatchGroups());
+          ImGui::Text("Primary visibility records: %u",
+                      DxrRenderer::GetWavefrontPrimaryRecordCount());
+          ImGui::Text("Primary visibility hits / misses: %u / %u",
+                      DxrRenderer::GetWavefrontPrimaryHitCount(),
+                      DxrRenderer::GetWavefrontPrimaryMissCount());
+          ImGui::Text("Primary resolve records / surfaces / sky: %u / %u / %u",
+                      DxrRenderer::GetWavefrontResolveRecordCount(),
+                      DxrRenderer::GetWavefrontResolveSurfaceCount(),
+                      DxrRenderer::GetWavefrontResolveSkyCount());
+          ImGui::Text("Primary resolve diffuse / specular / transmission: %u / %u / %u",
+                      DxrRenderer::GetWavefrontResolveDiffuseCount(),
+                      DxrRenderer::GetWavefrontResolveSpecularCount(),
+                      DxrRenderer::GetWavefrontResolveTransmissionCount());
+            ImGui::Text(
+              "Primary bins diff / glossy / conductor / delta: %u / %u / %u / %u",
+              DxrRenderer::GetWavefrontPrimaryMaterialBinCount(
+                DxrRenderer::WavefrontMaterialBin::Diffuse),
+              DxrRenderer::GetWavefrontPrimaryMaterialBinCount(
+                DxrRenderer::WavefrontMaterialBin::GlossyDielectric),
+              DxrRenderer::GetWavefrontPrimaryMaterialBinCount(
+                DxrRenderer::WavefrontMaterialBin::Conductor),
+              DxrRenderer::GetWavefrontPrimaryMaterialBinCount(
+                DxrRenderer::WavefrontMaterialBin::DeltaReflection));
+            ImGui::Text(
+              "Primary bins refract / emissive / translucent: %u / %u / %u",
+              DxrRenderer::GetWavefrontPrimaryMaterialBinCount(
+                DxrRenderer::WavefrontMaterialBin::Refraction),
+              DxrRenderer::GetWavefrontPrimaryMaterialBinCount(
+                DxrRenderer::WavefrontMaterialBin::Emissive),
+              DxrRenderer::GetWavefrontPrimaryMaterialBinCount(
+                DxrRenderer::WavefrontMaterialBin::Translucent));
+            ImGui::Text("Continuation paths / shadow tasks: %u / %u",
+                  DxrRenderer::GetWavefrontSecondaryPathCount(),
+                  DxrRenderer::GetWavefrontShadowTaskCount());
+            ImGui::Text("Continuation diffuse / specular / transmission: %u / %u / %u",
+                  DxrRenderer::GetWavefrontSecondaryDiffuseCount(),
+                  DxrRenderer::GetWavefrontSecondarySpecularCount(),
+                  DxrRenderer::GetWavefrontSecondaryTransmissionCount());
+            ImGui::Text("Indirect visibility records / hits / misses: %u / %u / %u",
+              DxrRenderer::GetWavefrontSecondaryVisibilityRecordCount(),
+              DxrRenderer::GetWavefrontSecondaryVisibilityHitCount(),
+              DxrRenderer::GetWavefrontSecondaryVisibilityMissCount());
+            ImGui::Text("Indirect visibility diffuse lane / spec lane: %u / %u",
+              DxrRenderer::GetWavefrontSecondaryVisibilityDiffuseLaneCount(),
+              DxrRenderer::GetWavefrontSecondaryVisibilitySpecularLaneCount());
+            ImGui::Text("Indirect resolve records / surfaces / sky: %u / %u / %u",
+              DxrRenderer::GetWavefrontSecondaryResolveRecordCount(),
+              DxrRenderer::GetWavefrontSecondaryResolveSurfaceCount(),
+              DxrRenderer::GetWavefrontSecondaryResolveSkyCount());
+            ImGui::Text(
+              "Indirect bins diff / glossy / conductor / delta: %u / %u / %u / %u",
+              DxrRenderer::GetWavefrontSecondaryMaterialBinCount(
+                DxrRenderer::WavefrontMaterialBin::Diffuse),
+              DxrRenderer::GetWavefrontSecondaryMaterialBinCount(
+                DxrRenderer::WavefrontMaterialBin::GlossyDielectric),
+              DxrRenderer::GetWavefrontSecondaryMaterialBinCount(
+                DxrRenderer::WavefrontMaterialBin::Conductor),
+              DxrRenderer::GetWavefrontSecondaryMaterialBinCount(
+                DxrRenderer::WavefrontMaterialBin::DeltaReflection));
+            ImGui::Text(
+              "Indirect bins refract / emissive / translucent: %u / %u / %u",
+              DxrRenderer::GetWavefrontSecondaryMaterialBinCount(
+                DxrRenderer::WavefrontMaterialBin::Refraction),
+              DxrRenderer::GetWavefrontSecondaryMaterialBinCount(
+                DxrRenderer::WavefrontMaterialBin::Emissive),
+              DxrRenderer::GetWavefrontSecondaryMaterialBinCount(
+                DxrRenderer::WavefrontMaterialBin::Translucent));
+            ImGui::Text("Shadow visibility tasks / visible / occluded: %u / %u / %u",
+              DxrRenderer::GetWavefrontShadowVisibilityTaskCount(),
+              DxrRenderer::GetWavefrontShadowVisibleCount(),
+              DxrRenderer::GetWavefrontShadowOccludedCount());
+          const UINT overflowCount =
+              DxrRenderer::GetWavefrontBootstrapOverflowCount();
+          if (overflowCount > 0) {
+            ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.2f, 1.0f),
+                               "Bootstrap overflow: %u", overflowCount);
+          }
+        }
+
         // Denoising is automatically triggered once when Max SPP is reached
         // (only if a denoiser is selected).
 

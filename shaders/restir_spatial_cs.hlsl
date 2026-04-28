@@ -3,9 +3,6 @@
 #include "brdf_lib.hlsl"
 #include "lights_lib.hlsl"
 
-// Additional resources for ReSTIR
-StructuredBuffer<Light> g_lights : register(t5000);
-
 RWTexture2D<float4> g_reservoir0 : register(u2);
 RWTexture2D<float4> g_reservoir1 : register(u3);
 
@@ -18,22 +15,6 @@ groupshared float4 s_prevReservoirTile[kTileSize * kTileSize];
 
 uint tile_index(uint2 p) {
     return p.y * kTileSize + p.x;
-}
-
-Reservoir unpack_reservoir(float4 data) {
-    Reservoir r;
-    r.lightIndex = asuint(data.x);
-    if (r.lightIndex == 0x7FC00000) r.lightIndex = 0xFFFFFFFF;
-    r.w_sum = data.y;
-    r.M = asuint(data.z);
-    r.W = data.w;
-    if (isnan(r.w_sum) || isinf(r.w_sum)) r.w_sum = 0.0;
-    if (isnan(r.W) || isinf(r.W)) r.W = 0.0;
-    return r;
-}
-
-float4 pack_reservoir(Reservoir r) {
-    return float4(asfloat(r.lightIndex), r.w_sum, asfloat(r.M), r.W);
 }
 
 bool IsSpatiallyCompatibleData(float4 n0, float d0, float4 n1, float d1,

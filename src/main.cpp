@@ -3085,6 +3085,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   auto CheckDeviceRemoved = [&]() {
     HRESULT reason = DX12Context::g_device->GetDeviceRemovedReason();
     if (FAILED(reason)) {
+      fprintf(stderr,
+              "Device removed before recovery attempt "
+              "(GetDeviceRemovedReason=0x%08x)\n",
+              (unsigned)reason);
       // Attempt to recreate the device
       RecreateDevice();
       return true;

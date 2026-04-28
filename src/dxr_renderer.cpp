@@ -50,6 +50,8 @@ static ID3D12CommandQueue *s_commandQueue = nullptr;
 
 static StreamlineManager *s_streamline = nullptr;
 static bool s_streamlineResetHistory = true;
+static DxrRenderer::PathTracingBackend s_pathTracingBackend =
+  DxrRenderer::PathTracingBackend::Legacy;
 // Final / export denoiser mode & wrapper
 static DxrRenderer::DenoiserMode s_denoiserMode =
     DxrRenderer::DenoiserMode::OIDN_GPU;
@@ -139,6 +141,84 @@ static Microsoft::WRL::ComPtr<ID3D12Resource> s_shaderCountersBuffer;
 static Microsoft::WRL::ComPtr<ID3D12Resource> s_shaderCountersReadbackBuffer;
 static UINT s_lastShaderCounters[16] = {0};
 
+struct WavefrontPathStateGpu {
+  float origin[3];
+  uint32_t pixelIndex;
+  float direction[3];
+  uint32_t rngState;
+  float throughput[3];
+  uint32_t packedState;
+};
+static_assert(sizeof(WavefrontPathStateGpu) == 48,
+              "WavefrontPathStateGpu must stay tightly packed.");
+
+struct WavefrontHitRecordGpu {
+  float hitT;
+  uint32_t pixelIndex;
+  uint32_t packedColor0;
+  uint32_t packedColor1;
+  uint32_t packedNormal;
+  uint32_t packedAlbedo;
+  uint32_t packedSurface;
+  uint32_t packedIorType;
+  uint32_t packedTransmission;
+  uint32_t packedSpecular;
+  uint32_t packedState;
+  uint32_t reserved;
+};
+static_assert(sizeof(WavefrontHitRecordGpu) == 48,
+              "WavefrontHitRecordGpu must stay tightly packed.");
+
+struct WavefrontShadowTaskGpu {
+  float origin[3];
+  float maxDistance;
+  float direction[3];
+  uint32_t packedLightIndex;
+  float throughput[3];
+  uint32_t packedState;
+};
+static_assert(sizeof(WavefrontShadowTaskGpu) == 48,
+              "WavefrontShadowTaskGpu must stay tightly packed.");
+
+struct WavefrontDispatchArgsGpu {
+  uint32_t groupCountX;
+  uint32_t groupCountY;
+  uint32_t groupCountZ;
+  uint32_t activeCount;
+};
+static_assert(sizeof(WavefrontDispatchArgsGpu) == 16,
+              "WavefrontDispatchArgsGpu must stay tightly packed.");
+
+struct WavefrontDispatchRaysRecordGpu {
+  D3D12_DISPATCH_RAYS_DESC desc;
+  uint32_t padding[2];
+};
+static_assert(sizeof(WavefrontDispatchRaysRecordGpu) == 112,
+              "WavefrontDispatchRaysRecordGpu must match indirect buffer stride.");
+
+static constexpr UINT kWavefrontQueueCounterCount = 16;
+static constexpr UINT kWavefrontStatsCount = 64;
+static constexpr UINT kWavefrontDispatchArgCount = 4;
+static constexpr UINT kWavefrontReservedUint4Count = 16;
+static constexpr UINT64 kWavefrontMinQueueEntries = 65536ull;
+static constexpr UINT64 kWavefrontMaxPathQueueEntries = 262144ull;
+static constexpr UINT64 kWavefrontMaxShadowQueueEntries = 524288ull;
+static constexpr UINT kWavefrontSecondaryResolveDispatchArgsIndex = 2;
+static constexpr UINT kWavefrontSecondaryDispatchRaysReservedSlot = 0;
+static constexpr UINT kWavefrontShadowDispatchRaysReservedSlot = 7;
+static constexpr UINT kWavefrontQueueFlagSourceIsA = 0x1u;
+static constexpr UINT kWavefrontQueueFlagFilterDiffuse = 0x2u;
+static constexpr UINT kWavefrontQueueFlagFilterSpecular = 0x4u;
+static constexpr UINT64 kWavefrontCounterStrideBytes = sizeof(UINT);
+static constexpr UINT kWavefrontPrimaryMaterialBinStatsBase = 32u;
+static constexpr UINT kWavefrontSecondaryMaterialBinStatsBase = 40u;
+static constexpr UINT kWavefrontMaterialBinCount = 7u;
+static constexpr UINT kWavefrontDispatchRaysRecordStride =
+    sizeof(WavefrontDispatchRaysRecordGpu);
+static constexpr UINT kWavefrontSecondaryDispatchRaysRecordOffset = 0;
+static constexpr UINT kWavefrontShadowDispatchRaysRecordOffset =
+    kWavefrontDispatchRaysRecordStride;
+
 // Descriptor counts (tweak to support large models)
 static const UINT DXR_HEAP_TEX_COUNT =
     16384; // max textures (increased from 2048)
@@ -180,6 +260,17 @@ static const UINT DXR_HEAP_OIDN_OUT_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 21;
 static const UINT DXR_HEAP_VARIANCE_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 22;
 // Extra debug UAV: shader counters (readback) at u24
 static const UINT DXR_HEAP_SHADER_COUNTERS_OFFSET = DXR_HEAP_UAV_OFFSET + 24;
+static const UINT DXR_HEAP_WAVEFRONT_COUNTERS_OFFSET =
+  DXR_HEAP_UAV_OFFSET + 25;
+static const UINT DXR_HEAP_WAVEFRONT_PATH_A_OFFSET = DXR_HEAP_UAV_OFFSET + 26;
+static const UINT DXR_HEAP_WAVEFRONT_PATH_B_OFFSET = DXR_HEAP_UAV_OFFSET + 27;
+static const UINT DXR_HEAP_WAVEFRONT_HIT_OFFSET = DXR_HEAP_UAV_OFFSET + 28;
+static const UINT DXR_HEAP_WAVEFRONT_SHADOW_OFFSET = DXR_HEAP_UAV_OFFSET + 29;
+static const UINT DXR_HEAP_WAVEFRONT_DISPATCH_ARGS_OFFSET =
+  DXR_HEAP_UAV_OFFSET + 30;
+static const UINT DXR_HEAP_WAVEFRONT_STATS_OFFSET = DXR_HEAP_UAV_OFFSET + 31;
+static const UINT DXR_HEAP_WAVEFRONT_RESERVED_OFFSET =
+  DXR_HEAP_UAV_OFFSET + 32;
 
 // Dedicated SRV blocks after UAV range so UAV registers stay stable.
 static const UINT DXR_HEAP_ENV_SRV_OFFSET =
@@ -257,6 +348,15 @@ static uint32_t ComputeResourceFeatureMask() {
     mask |= ResourceFeature_TonemapAo;
   }
   return mask;
+}
+
+static UINT64 ComputeWavefrontQueueCapacity(UINT width, UINT height,
+                                            UINT64 maxEntries,
+                                            UINT64 multiplier = 1ull) {
+  const UINT64 pixelCount =
+      std::max<UINT64>(1ull, static_cast<UINT64>(width) * height);
+  const UINT64 requested = pixelCount * std::max<UINT64>(1ull, multiplier);
+  return std::clamp(requested, kWavefrontMinQueueEntries, maxEntries);
 }
 
 static bool NeedsDepthAndMotionBuffers(uint32_t mask) {
@@ -357,8 +457,12 @@ static ComPtr<ID3D12DescriptorHeap> s_tonemapHeap;
 struct ShaderTableEntry {
   void *id;
 };
+static UINT64 s_rayGenShaderTableEntrySize = 0;
 static UINT64 s_shaderTableEntrySize = 0;
 static D3D12_GPU_VIRTUAL_ADDRESS s_rayGenShaderTable = 0;
+static D3D12_GPU_VIRTUAL_ADDRESS s_wavefrontPrimaryRayGenShaderTable = 0;
+static D3D12_GPU_VIRTUAL_ADDRESS s_wavefrontSecondaryRayGenShaderTable = 0;
+static D3D12_GPU_VIRTUAL_ADDRESS s_wavefrontShadowRayGenShaderTable = 0;
 static D3D12_GPU_VIRTUAL_ADDRESS s_missShaderTable = 0;
 static D3D12_GPU_VIRTUAL_ADDRESS s_hitGroupShaderTable = 0;
 
@@ -434,10 +538,63 @@ static UINT s_avgLumCapacity = 0;
 static float s_avgLuminanceCdM2 = 0.0f;
 static float s_lastEV100 = 0.0f;
 
+static ComPtr<ID3D12Resource> s_wavefrontQueueCountersBuffer;
+static ComPtr<ID3D12Resource> s_wavefrontPathQueueABuffer;
+static ComPtr<ID3D12Resource> s_wavefrontPathQueueBBuffer;
+static ComPtr<ID3D12Resource> s_wavefrontHitQueueBuffer;
+static ComPtr<ID3D12Resource> s_wavefrontShadowQueueBuffer;
+static ComPtr<ID3D12Resource> s_wavefrontDispatchArgsBuffer;
+static ComPtr<ID3D12Resource> s_wavefrontStatsBuffer;
+static ComPtr<ID3D12Resource> s_wavefrontStatsReadbackBuffer;
+static ComPtr<ID3D12Resource> s_wavefrontReservedBuffer;
+static UINT64 s_wavefrontPathQueueCapacity = 0;
+static UINT64 s_wavefrontHitQueueCapacity = 0;
+static UINT64 s_wavefrontShadowQueueCapacity = 0;
+static UINT s_lastWavefrontBootstrapPathCount = 0;
+static UINT s_lastWavefrontBootstrapOverflowCount = 0;
+static UINT s_lastWavefrontBootstrapDispatchGroups = 0;
+static UINT s_lastWavefrontPrimaryHitCount = 0;
+static UINT s_lastWavefrontPrimaryMissCount = 0;
+static UINT s_lastWavefrontPrimaryRecordCount = 0;
+static UINT s_lastWavefrontResolveRecordCount = 0;
+static UINT s_lastWavefrontResolveSurfaceCount = 0;
+static UINT s_lastWavefrontResolveDiffuseCount = 0;
+static UINT s_lastWavefrontResolveSpecularCount = 0;
+static UINT s_lastWavefrontResolveTransmissionCount = 0;
+static UINT s_lastWavefrontResolveSkyCount = 0;
+static UINT s_lastWavefrontSecondaryPathCount = 0;
+static UINT s_lastWavefrontSecondaryDiffuseCount = 0;
+static UINT s_lastWavefrontSecondarySpecularCount = 0;
+static UINT s_lastWavefrontSecondaryTransmissionCount = 0;
+static UINT s_lastWavefrontShadowTaskCount = 0;
+static UINT s_lastWavefrontSecondaryVisibilityRecordCount = 0;
+static UINT s_lastWavefrontSecondaryVisibilityHitCount = 0;
+static UINT s_lastWavefrontSecondaryVisibilityMissCount = 0;
+static UINT s_lastWavefrontSecondaryResolveRecordCount = 0;
+static UINT s_lastWavefrontSecondaryResolveSurfaceCount = 0;
+static UINT s_lastWavefrontSecondaryResolveSkyCount = 0;
+static UINT s_lastWavefrontShadowVisibilityTaskCount = 0;
+static UINT s_lastWavefrontShadowVisibleCount = 0;
+static UINT s_lastWavefrontShadowOccludedCount = 0;
+static UINT s_lastWavefrontStats[64] = {};
+
 static bool s_noiseConvergedLatched = false;
 static bool s_cloudDescriptorsDone = false;
 static bool s_hasDenoised = false;
 static int s_lastRenderFrameFailReason = -1;
+
+static ComPtr<ID3D12RootSignature> s_wavefrontBootstrapRootSig;
+static ComPtr<ID3D12PipelineState> s_wavefrontBootstrapPSO;
+static ComPtr<ID3D12RootSignature> s_wavefrontCounterResetRootSig;
+static ComPtr<ID3D12PipelineState> s_wavefrontCounterResetPSO;
+static ComPtr<ID3D12RootSignature> s_wavefrontPrepareIndirectArgsRootSig;
+static ComPtr<ID3D12PipelineState> s_wavefrontPrepareIndirectArgsPSO;
+static ComPtr<ID3D12RootSignature> s_wavefrontResolveRootSig;
+static ComPtr<ID3D12PipelineState> s_wavefrontResolvePSO;
+static ComPtr<ID3D12PipelineState> s_wavefrontSecondaryResolvePSO;
+static ComPtr<ID3D12CommandSignature> s_wavefrontDispatchCommandSignature;
+static ComPtr<ID3D12CommandSignature> s_wavefrontDispatchRaysCommandSignature;
+static ComPtr<ID3D12Resource> s_wavefrontIndirectDispatchUploadBuffer;
 
 static bool SaveRgba8ToPngWic(const std::wstring &filePath, UINT width,
                               UINT height, const uint8_t *pixels,
@@ -665,6 +822,33 @@ static void EnsureNoiseStatsPipeline();
 static void EnsureAvgLumPipeline();
 static void EnsureRestirSpatialPipeline();
 static void EnsureRestirGiSpatialPipeline();
+static void EnsureWavefrontBootstrapPipeline();
+static void EnsureWavefrontCounterResetPipeline();
+static void EnsureWavefrontPrepareIndirectArgsPipeline();
+static void EnsureWavefrontResolvePipeline();
+static void EnsureWavefrontSecondaryResolvePipeline();
+static void EnsureWavefrontIndirectCommandSignatures();
+static void DispatchWavefrontBootstrap(ID3D12GraphicsCommandList4 *list,
+                                       ID3D12Resource *cameraCB);
+static void DispatchWavefrontCounterReset(ID3D12GraphicsCommandList4 *list,
+                                          UINT counterIndex,
+                                          UINT resetValue);
+static void DispatchWavefrontPrepareIndirectArgs(
+  ID3D12GraphicsCommandList4 *list, UINT queueCounterIndex,
+  UINT dispatchArgsIndex, UINT reservedSlotBase, UINT reservedFlags);
+static void UploadWavefrontIndirectDispatchRecords(
+  ID3D12GraphicsCommandList4 *list);
+static void DispatchWavefrontPrimaryVisibility(
+  ID3D12GraphicsCommandList4 *list);
+static void DispatchWavefrontSecondaryVisibility(
+  ID3D12GraphicsCommandList4 *list, UINT sourceQueueCounterIndex);
+static void DispatchWavefrontShadowVisibility(
+  ID3D12GraphicsCommandList4 *list);
+static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
+                                            ID3D12Resource *cameraCB);
+static void DispatchWavefrontResolveSecondary(ID3D12GraphicsCommandList4 *list,
+                                              ID3D12Resource *cameraCB,
+                                              UINT sourceQueueCounterIndex);
 
 struct TonemapConstants {
   uint32_t outWidth;
@@ -1215,10 +1399,8 @@ static void DispatchRestirSpatialPasses(ID3D12GraphicsCommandList4 *list,
     restirUavTable.ptr += (UINT64)2 * (UINT64)inc; // u2..u13 table base
     list->SetComputeRootDescriptorTable(1, restirUavTable);
 
-    if (s_lightBuffer) {
-      list->SetComputeRootShaderResourceView(
-          2, s_lightBuffer->GetGPUVirtualAddress());
-    }
+    list->SetComputeRootShaderResourceView(
+        2, s_lightBuffer ? s_lightBuffer->GetGPUVirtualAddress() : 0);
 
     list->SetComputeRootDescriptorTable(3, s_texTableGpu);
 
@@ -1256,6 +1438,913 @@ static void DispatchRestirSpatialPasses(ID3D12GraphicsCommandList4 *list,
     uavBarrier.UAV.pResource = nullptr;
     list->ResourceBarrier(1, &uavBarrier);
   }
+}
+
+static void EnsureWavefrontBootstrapPipeline() {
+  if (s_wavefrontBootstrapPSO && s_wavefrontBootstrapRootSig) {
+    return;
+  }
+  if (!s_device) {
+    return;
+  }
+
+  D3D12_DESCRIPTOR_RANGE uavRange = {};
+  uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+  uavRange.NumDescriptors = 8; // u25..u32
+  uavRange.BaseShaderRegister = 25;
+  uavRange.RegisterSpace = 0;
+  uavRange.OffsetInDescriptorsFromTableStart =
+      D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+  D3D12_ROOT_PARAMETER params[4] = {};
+  params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+  params[0].Descriptor.ShaderRegister = 0;
+  params[0].Descriptor.RegisterSpace = 0;
+  params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+  params[1].Constants.ShaderRegister = 1;
+  params[1].Constants.RegisterSpace = 0;
+  params[1].Constants.Num32BitValues = 4;
+  params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[2].DescriptorTable.NumDescriptorRanges = 1;
+  params[2].DescriptorTable.pDescriptorRanges = &uavRange;
+  params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[3].Descriptor.ShaderRegister = 5000;
+  params[3].Descriptor.RegisterSpace = 0;
+  params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
+  rsDesc.NumParameters = _countof(params);
+  rsDesc.pParameters = params;
+  rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+  ComPtr<ID3DBlob> sig, err;
+  HRESULT hrSerialize = D3D12SerializeRootSignature(
+      &rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err);
+  if (FAILED(hrSerialize)) {
+    if (err) {
+      fprintf(stderr, "DxrRenderer: Wavefront bootstrap RS error: %s\n",
+              (char *)err->GetBufferPointer());
+    }
+    return;
+  }
+
+  ThrowIfFailed(s_device->CreateRootSignature(
+      0, sig->GetBufferPointer(), sig->GetBufferSize(),
+      IID_PPV_ARGS(&s_wavefrontBootstrapRootSig)));
+
+  ComPtr<IDxcBlob> cs;
+  try {
+    std::vector<std::wstring> defines;
+    cs = s_dxcHelper.Compile(L"shaders/wavefront_bootstrap_cs.hlsl", L"CSMain",
+                             L"cs_6_5", defines);
+  } catch (const std::exception &e) {
+    fprintf(stderr, "DxrRenderer: Wavefront bootstrap CS compile failed: %s\n",
+            e.what());
+    return;
+  }
+  if (!cs) {
+    fprintf(stderr, "DxrRenderer: Wavefront bootstrap CS blob null\n");
+    return;
+  }
+
+  D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
+  psoDesc.pRootSignature = s_wavefrontBootstrapRootSig.Get();
+  psoDesc.CS.pShaderBytecode = cs->GetBufferPointer();
+  psoDesc.CS.BytecodeLength = cs->GetBufferSize();
+  HRESULT hrPso = s_device->CreateComputePipelineState(
+      &psoDesc, IID_PPV_ARGS(&s_wavefrontBootstrapPSO));
+  if (FAILED(hrPso)) {
+    fprintf(stderr,
+            "DxrRenderer: Wavefront bootstrap PSO creation failed: 0x%08x\n",
+            (unsigned)hrPso);
+    DumpD3D12InfoQueueMessages("Wavefront bootstrap PSO create");
+    s_wavefrontBootstrapPSO.Reset();
+    s_wavefrontBootstrapRootSig.Reset();
+  }
+}
+
+static void DispatchWavefrontBootstrap(ID3D12GraphicsCommandList4 *list,
+                                       ID3D12Resource *cameraCB) {
+  if (!list || !cameraCB || !s_srvHeap || !s_device) {
+    return;
+  }
+
+  EnsureWavefrontBootstrapPipeline();
+  if (!s_wavefrontBootstrapPSO || !s_wavefrontBootstrapRootSig) {
+    return;
+  }
+
+  ID3D12DescriptorHeap *rtHeaps[] = {s_srvHeap.Get()};
+  list->SetDescriptorHeaps(1, rtHeaps);
+  list->SetPipelineState(s_wavefrontBootstrapPSO.Get());
+  list->SetComputeRootSignature(s_wavefrontBootstrapRootSig.Get());
+  list->SetComputeRootConstantBufferView(0, cameraCB->GetGPUVirtualAddress());
+
+  const UINT bootstrapConstants[4] = {
+      s_outputWidth,
+      s_outputHeight,
+      static_cast<UINT>(s_pathTracingBackend),
+      static_cast<UINT>(s_wavefrontPathQueueCapacity)};
+  list->SetComputeRoot32BitConstants(1, _countof(bootstrapConstants),
+                                     bootstrapConstants, 0);
+
+  UINT inc = s_device->GetDescriptorHandleIncrementSize(
+      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+  D3D12_GPU_DESCRIPTOR_HANDLE wavefrontUavTable = s_outputUAVGpu;
+  wavefrontUavTable.ptr += (UINT64)25 * (UINT64)inc;
+  list->SetComputeRootDescriptorTable(2, wavefrontUavTable);
+  list->SetComputeRootShaderResourceView(
+      3, s_lightBuffer ? s_lightBuffer->GetGPUVirtualAddress() : 0);
+
+  D3D12_RESOURCE_BARRIER uavBarrier = {};
+  uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+
+  auto ClearStructuredUav = [&](ID3D12Resource *resource, UINT heapOffset) {
+    if (!resource) {
+      return;
+    }
+    UINT zeros[4] = {0, 0, 0, 0};
+    D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle =
+        s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+    cpuHandle.ptr += static_cast<SIZE_T>(heapOffset) * inc;
+
+    D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = s_outputUAVGpu;
+    gpuHandle.ptr += (UINT64)(heapOffset - DXR_HEAP_UAV_OFFSET) * (UINT64)inc;
+
+    list->ClearUnorderedAccessViewUint(gpuHandle, cpuHandle, resource, zeros, 0,
+                                       nullptr);
+  };
+
+  ClearStructuredUav(s_wavefrontQueueCountersBuffer.Get(),
+                     DXR_HEAP_WAVEFRONT_COUNTERS_OFFSET);
+  ClearStructuredUav(s_wavefrontDispatchArgsBuffer.Get(),
+                     DXR_HEAP_WAVEFRONT_DISPATCH_ARGS_OFFSET);
+  ClearStructuredUav(s_wavefrontStatsBuffer.Get(), DXR_HEAP_WAVEFRONT_STATS_OFFSET);
+
+  list->ResourceBarrier(1, &uavBarrier);
+
+  const UINT gx = (s_outputWidth + 7) / 8;
+  const UINT gy = (s_outputHeight + 7) / 8;
+  const UINT totalPaths = s_outputWidth * s_outputHeight;
+  const UINT clampedPaths =
+      (totalPaths > s_wavefrontPathQueueCapacity)
+          ? static_cast<UINT>(s_wavefrontPathQueueCapacity)
+          : totalPaths;
+  s_lastWavefrontBootstrapPathCount = clampedPaths;
+  s_lastWavefrontBootstrapOverflowCount = totalPaths - clampedPaths;
+  s_lastWavefrontBootstrapDispatchGroups = (clampedPaths + 63u) / 64u;
+  list->Dispatch(gx, gy, 1);
+
+  list->ResourceBarrier(1, &uavBarrier);
+}
+
+static void EnsureWavefrontCounterResetPipeline() {
+  if (s_wavefrontCounterResetPSO && s_wavefrontCounterResetRootSig) {
+    return;
+  }
+  if (!s_device) {
+    return;
+  }
+
+  D3D12_DESCRIPTOR_RANGE uavRange = {};
+  uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+  uavRange.NumDescriptors = DXR_HEAP_UAV_COUNT;
+  uavRange.BaseShaderRegister = 0;
+  uavRange.RegisterSpace = 0;
+  uavRange.OffsetInDescriptorsFromTableStart =
+      D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+  D3D12_ROOT_PARAMETER params[3] = {};
+  params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+  params[0].Constants.ShaderRegister = 0;
+  params[0].Constants.RegisterSpace = 0;
+  params[0].Constants.Num32BitValues = 4;
+  params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[1].DescriptorTable.NumDescriptorRanges = 1;
+  params[1].DescriptorTable.pDescriptorRanges = &uavRange;
+  params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[2].Descriptor.ShaderRegister = 5000;
+  params[2].Descriptor.RegisterSpace = 0;
+  params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
+  rsDesc.NumParameters = _countof(params);
+  rsDesc.pParameters = params;
+  rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+  ComPtr<ID3DBlob> sig, err;
+  HRESULT hrSerialize = D3D12SerializeRootSignature(
+      &rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err);
+  if (FAILED(hrSerialize)) {
+    if (err) {
+      fprintf(stderr, "DxrRenderer: Wavefront counter reset RS error: %s\n",
+              (char *)err->GetBufferPointer());
+    }
+    return;
+  }
+
+  ThrowIfFailed(s_device->CreateRootSignature(
+      0, sig->GetBufferPointer(), sig->GetBufferSize(),
+      IID_PPV_ARGS(&s_wavefrontCounterResetRootSig)));
+
+  ComPtr<IDxcBlob> cs;
+  try {
+    std::vector<std::wstring> defines;
+    cs = s_dxcHelper.Compile(L"shaders/wavefront_counter_reset_cs.hlsl",
+                             L"CSMain", L"cs_6_5", defines);
+  } catch (const std::exception &e) {
+    fprintf(stderr,
+            "DxrRenderer: Wavefront counter reset CS compile failed: %s\n",
+            e.what());
+    return;
+  }
+  if (!cs) {
+    fprintf(stderr, "DxrRenderer: Wavefront counter reset CS blob null\n");
+    return;
+  }
+
+  D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
+  psoDesc.pRootSignature = s_wavefrontCounterResetRootSig.Get();
+  psoDesc.CS.pShaderBytecode = cs->GetBufferPointer();
+  psoDesc.CS.BytecodeLength = cs->GetBufferSize();
+  HRESULT hrPso = s_device->CreateComputePipelineState(
+      &psoDesc, IID_PPV_ARGS(&s_wavefrontCounterResetPSO));
+  if (FAILED(hrPso)) {
+    fprintf(stderr,
+            "DxrRenderer: Wavefront counter reset PSO creation failed: 0x%08x\n",
+            (unsigned)hrPso);
+    DumpD3D12InfoQueueMessages("Wavefront counter reset PSO create");
+    s_wavefrontCounterResetPSO.Reset();
+    s_wavefrontCounterResetRootSig.Reset();
+  }
+}
+
+static void DispatchWavefrontCounterReset(ID3D12GraphicsCommandList4 *list,
+                                          UINT counterIndex,
+                                          UINT resetValue) {
+  if (!list || !s_srvHeap || !s_device) {
+    return;
+  }
+
+  EnsureWavefrontCounterResetPipeline();
+  if (!s_wavefrontCounterResetPSO || !s_wavefrontCounterResetRootSig) {
+    return;
+  }
+
+  ID3D12DescriptorHeap *rtHeaps[] = {s_srvHeap.Get()};
+  list->SetDescriptorHeaps(1, rtHeaps);
+  list->SetPipelineState(s_wavefrontCounterResetPSO.Get());
+  list->SetComputeRootSignature(s_wavefrontCounterResetRootSig.Get());
+
+  const UINT resetConstants[4] = {counterIndex, resetValue, 0u, 0u};
+  list->SetComputeRoot32BitConstants(0, _countof(resetConstants),
+                                     resetConstants, 0);
+  list->SetComputeRootDescriptorTable(1, s_outputUAVGpu);
+  list->SetComputeRootShaderResourceView(
+      2, s_lightBuffer ? s_lightBuffer->GetGPUVirtualAddress() : 0);
+  list->Dispatch(1, 1, 1);
+
+  D3D12_RESOURCE_BARRIER uavBarrier = {};
+  uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+  uavBarrier.UAV.pResource = nullptr;
+  list->ResourceBarrier(1, &uavBarrier);
+}
+
+static void EnsureWavefrontPrepareIndirectArgsPipeline() {
+  if (s_wavefrontPrepareIndirectArgsPSO &&
+      s_wavefrontPrepareIndirectArgsRootSig) {
+    return;
+  }
+  if (!s_device) {
+    return;
+  }
+
+  D3D12_DESCRIPTOR_RANGE uavRange = {};
+  uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+  uavRange.NumDescriptors = DXR_HEAP_UAV_COUNT;
+  uavRange.BaseShaderRegister = 0;
+  uavRange.RegisterSpace = 0;
+  uavRange.OffsetInDescriptorsFromTableStart =
+      D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+  D3D12_ROOT_PARAMETER params[3] = {};
+  params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+  params[0].Constants.ShaderRegister = 0;
+  params[0].Constants.RegisterSpace = 0;
+  params[0].Constants.Num32BitValues = 5;
+  params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[1].DescriptorTable.NumDescriptorRanges = 1;
+  params[1].DescriptorTable.pDescriptorRanges = &uavRange;
+  params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[2].Descriptor.ShaderRegister = 5000;
+  params[2].Descriptor.RegisterSpace = 0;
+  params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
+  rsDesc.NumParameters = _countof(params);
+  rsDesc.pParameters = params;
+  rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+  ComPtr<ID3DBlob> sig, err;
+  HRESULT hrSerialize = D3D12SerializeRootSignature(
+      &rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err);
+  if (FAILED(hrSerialize)) {
+    if (err) {
+      fprintf(stderr,
+              "DxrRenderer: Wavefront prepare indirect args RS error: %s\n",
+              (char *)err->GetBufferPointer());
+    }
+    return;
+  }
+
+  ThrowIfFailed(s_device->CreateRootSignature(
+      0, sig->GetBufferPointer(), sig->GetBufferSize(),
+      IID_PPV_ARGS(&s_wavefrontPrepareIndirectArgsRootSig)));
+
+  ComPtr<IDxcBlob> cs;
+  try {
+    std::vector<std::wstring> defines;
+    cs = s_dxcHelper.Compile(L"shaders/wavefront_prepare_indirect_args_cs.hlsl",
+                             L"CSMain", L"cs_6_5", defines);
+  } catch (const std::exception &e) {
+    fprintf(stderr,
+            "DxrRenderer: Wavefront prepare indirect args CS compile failed: %s\n",
+            e.what());
+    return;
+  }
+  if (!cs) {
+    fprintf(stderr,
+            "DxrRenderer: Wavefront prepare indirect args CS blob null\n");
+    return;
+  }
+
+  D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
+  psoDesc.pRootSignature = s_wavefrontPrepareIndirectArgsRootSig.Get();
+  psoDesc.CS.pShaderBytecode = cs->GetBufferPointer();
+  psoDesc.CS.BytecodeLength = cs->GetBufferSize();
+  HRESULT hrPso = s_device->CreateComputePipelineState(
+      &psoDesc, IID_PPV_ARGS(&s_wavefrontPrepareIndirectArgsPSO));
+  if (FAILED(hrPso)) {
+    fprintf(stderr,
+            "DxrRenderer: Wavefront prepare indirect args PSO creation failed: 0x%08x\n",
+            (unsigned)hrPso);
+    DumpD3D12InfoQueueMessages("Wavefront prepare indirect args PSO create");
+    s_wavefrontPrepareIndirectArgsPSO.Reset();
+    s_wavefrontPrepareIndirectArgsRootSig.Reset();
+  }
+}
+
+static void EnsureWavefrontIndirectCommandSignatures() {
+  if (!s_device) {
+    return;
+  }
+  if (!s_wavefrontDispatchCommandSignature) {
+    D3D12_INDIRECT_ARGUMENT_DESC argDesc = {};
+    argDesc.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH;
+
+    D3D12_COMMAND_SIGNATURE_DESC sigDesc = {};
+    sigDesc.ByteStride = sizeof(WavefrontDispatchArgsGpu);
+    sigDesc.NumArgumentDescs = 1;
+    sigDesc.pArgumentDescs = &argDesc;
+    ThrowIfFailed(s_device->CreateCommandSignature(
+        &sigDesc, nullptr, IID_PPV_ARGS(&s_wavefrontDispatchCommandSignature)));
+  }
+  if (!s_wavefrontDispatchRaysCommandSignature) {
+    D3D12_INDIRECT_ARGUMENT_DESC argDesc = {};
+    argDesc.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_RAYS;
+
+    D3D12_COMMAND_SIGNATURE_DESC sigDesc = {};
+    sigDesc.ByteStride = kWavefrontDispatchRaysRecordStride;
+    sigDesc.NumArgumentDescs = 1;
+    sigDesc.pArgumentDescs = &argDesc;
+    ThrowIfFailed(s_device->CreateCommandSignature(
+        &sigDesc, nullptr,
+        IID_PPV_ARGS(&s_wavefrontDispatchRaysCommandSignature)));
+  }
+}
+
+static void UploadWavefrontIndirectDispatchRecords(
+    ID3D12GraphicsCommandList4 *list) {
+  if (!list || !s_device || !s_wavefrontReservedBuffer ||
+      s_wavefrontSecondaryRayGenShaderTable == 0 ||
+      s_wavefrontShadowRayGenShaderTable == 0 || s_missShaderTable == 0 ||
+      s_hitGroupShaderTable == 0 || s_rayGenShaderTableEntrySize == 0 ||
+      s_shaderTableEntrySize == 0) {
+    return;
+  }
+
+  const UINT64 uploadSize = 2ull * kWavefrontDispatchRaysRecordStride;
+  if (!s_wavefrontIndirectDispatchUploadBuffer) {
+    D3D12_HEAP_PROPERTIES uploadProps = {};
+    uploadProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+    D3D12_RESOURCE_DESC bufDesc = {};
+    bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufDesc.Width = uploadSize;
+    bufDesc.Height = 1;
+    bufDesc.DepthOrArraySize = 1;
+    bufDesc.MipLevels = 1;
+    bufDesc.SampleDesc.Count = 1;
+    bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    ThrowIfFailed(s_device->CreateCommittedResource(
+        &uploadProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&s_wavefrontIndirectDispatchUploadBuffer)));
+    s_wavefrontIndirectDispatchUploadBuffer->SetName(
+        L"Wavefront Indirect Dispatch Upload");
+  }
+
+  WavefrontDispatchRaysRecordGpu records[2] = {};
+  auto initRecord = [&](WavefrontDispatchRaysRecordGpu &record,
+                        D3D12_GPU_VIRTUAL_ADDRESS rayGenAddress) {
+    record.desc.RayGenerationShaderRecord.StartAddress = rayGenAddress;
+    record.desc.RayGenerationShaderRecord.SizeInBytes =
+        s_rayGenShaderTableEntrySize;
+    record.desc.MissShaderTable.StartAddress = s_missShaderTable;
+    record.desc.MissShaderTable.SizeInBytes = s_shaderTableEntrySize;
+    record.desc.MissShaderTable.StrideInBytes = s_shaderTableEntrySize;
+    record.desc.HitGroupTable.StartAddress = s_hitGroupShaderTable;
+    record.desc.HitGroupTable.SizeInBytes = s_shaderTableEntrySize;
+    record.desc.HitGroupTable.StrideInBytes = s_shaderTableEntrySize;
+    record.desc.CallableShaderTable.StartAddress = 0;
+    record.desc.CallableShaderTable.SizeInBytes = 0;
+    record.desc.CallableShaderTable.StrideInBytes = 0;
+    record.desc.Width = 1;
+    record.desc.Height = 1;
+    record.desc.Depth = 1;
+  };
+  initRecord(records[0], s_wavefrontSecondaryRayGenShaderTable);
+  initRecord(records[1], s_wavefrontShadowRayGenShaderTable);
+
+  void *mapped = nullptr;
+  D3D12_RANGE readRange = {0, 0};
+  ThrowIfFailed(s_wavefrontIndirectDispatchUploadBuffer->Map(
+      0, &readRange, &mapped));
+  memcpy(mapped, records, sizeof(records));
+  s_wavefrontIndirectDispatchUploadBuffer->Unmap(0, nullptr);
+
+  D3D12_RESOURCE_BARRIER toCopy = {};
+  toCopy.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+  toCopy.Transition.pResource = s_wavefrontReservedBuffer.Get();
+  toCopy.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+  toCopy.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+  toCopy.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+  list->ResourceBarrier(1, &toCopy);
+  list->CopyBufferRegion(s_wavefrontReservedBuffer.Get(), 0,
+                         s_wavefrontIndirectDispatchUploadBuffer.Get(), 0,
+                         sizeof(records));
+  D3D12_RESOURCE_BARRIER toUav = toCopy;
+  toUav.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+  toUav.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+  list->ResourceBarrier(1, &toUav);
+}
+
+static bool ExecuteWavefrontIndirectRayDispatch(
+    ID3D12GraphicsCommandList4 *list, UINT recordOffsetBytes) {
+  if (!list || !s_device || !s_wavefrontReservedBuffer) {
+    return false;
+  }
+
+  EnsureWavefrontIndirectCommandSignatures();
+  if (!s_wavefrontDispatchRaysCommandSignature) {
+    return false;
+  }
+
+  D3D12_RESOURCE_BARRIER toIndirect = {};
+  toIndirect.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+  toIndirect.Transition.pResource = s_wavefrontReservedBuffer.Get();
+  toIndirect.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+  toIndirect.Transition.StateAfter = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
+  toIndirect.Transition.Subresource =
+      D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+  list->ResourceBarrier(1, &toIndirect);
+
+  list->ExecuteIndirect(s_wavefrontDispatchRaysCommandSignature.Get(), 1,
+                        s_wavefrontReservedBuffer.Get(), recordOffsetBytes,
+                        nullptr, 0);
+
+  D3D12_RESOURCE_BARRIER toUav = toIndirect;
+  toUav.Transition.StateBefore = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
+  toUav.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+  list->ResourceBarrier(1, &toUav);
+
+  D3D12_RESOURCE_BARRIER uavBarrier = {};
+  uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+  uavBarrier.UAV.pResource = nullptr;
+  list->ResourceBarrier(1, &uavBarrier);
+  return true;
+}
+
+static bool ExecuteWavefrontIndirectComputeDispatch(
+    ID3D12GraphicsCommandList4 *list, UINT dispatchArgsIndex) {
+  if (!list || !s_device || !s_wavefrontDispatchArgsBuffer) {
+    return false;
+  }
+
+  EnsureWavefrontIndirectCommandSignatures();
+  if (!s_wavefrontDispatchCommandSignature) {
+    return false;
+  }
+
+  D3D12_RESOURCE_BARRIER toIndirect = {};
+  toIndirect.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+  toIndirect.Transition.pResource = s_wavefrontDispatchArgsBuffer.Get();
+  toIndirect.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+  toIndirect.Transition.StateAfter = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
+  toIndirect.Transition.Subresource =
+      D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+  list->ResourceBarrier(1, &toIndirect);
+
+  list->ExecuteIndirect(
+      s_wavefrontDispatchCommandSignature.Get(), 1,
+      s_wavefrontDispatchArgsBuffer.Get(),
+      static_cast<UINT64>(dispatchArgsIndex) * sizeof(WavefrontDispatchArgsGpu),
+      nullptr, 0);
+
+  D3D12_RESOURCE_BARRIER toUav = toIndirect;
+  toUav.Transition.StateBefore = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
+  toUav.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+  list->ResourceBarrier(1, &toUav);
+
+  D3D12_RESOURCE_BARRIER uavBarrier = {};
+  uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+  uavBarrier.UAV.pResource = nullptr;
+  list->ResourceBarrier(1, &uavBarrier);
+  return true;
+}
+
+static void DispatchWavefrontPrepareIndirectArgs(
+    ID3D12GraphicsCommandList4 *list, UINT queueCounterIndex,
+  UINT dispatchArgsIndex, UINT reservedSlotBase, UINT reservedFlags) {
+  if (!list || !s_srvHeap || !s_device || s_lastWavefrontBootstrapPathCount == 0) {
+    return;
+  }
+
+  EnsureWavefrontPrepareIndirectArgsPipeline();
+  if (!s_wavefrontPrepareIndirectArgsPSO ||
+      !s_wavefrontPrepareIndirectArgsRootSig) {
+    return;
+  }
+
+  ID3D12DescriptorHeap *rtHeaps[] = {s_srvHeap.Get()};
+  list->SetDescriptorHeaps(1, rtHeaps);
+  list->SetPipelineState(s_wavefrontPrepareIndirectArgsPSO.Get());
+  list->SetComputeRootSignature(s_wavefrontPrepareIndirectArgsRootSig.Get());
+
+  const UINT prepConstants[5] = {queueCounterIndex, dispatchArgsIndex,
+                                 reservedSlotBase,
+                                 s_lastWavefrontBootstrapPathCount,
+                                 reservedFlags};
+  list->SetComputeRoot32BitConstants(0, _countof(prepConstants), prepConstants,
+                                     0);
+  list->SetComputeRootDescriptorTable(1, s_outputUAVGpu);
+  list->SetComputeRootShaderResourceView(
+      2, s_lightBuffer ? s_lightBuffer->GetGPUVirtualAddress() : 0);
+  list->Dispatch(1, 1, 1);
+
+  D3D12_RESOURCE_BARRIER uavBarrier = {};
+  uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+  uavBarrier.UAV.pResource = nullptr;
+  list->ResourceBarrier(1, &uavBarrier);
+}
+
+static void DispatchWavefrontPrimaryVisibility(
+    ID3D12GraphicsCommandList4 *list) {
+  if (!list || s_wavefrontPrimaryRayGenShaderTable == 0 ||
+      s_rayGenShaderTableEntrySize == 0 || s_lastWavefrontBootstrapPathCount == 0) {
+    return;
+  }
+
+  D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
+  dispatchDesc.RayGenerationShaderRecord.StartAddress =
+      s_wavefrontPrimaryRayGenShaderTable;
+  dispatchDesc.RayGenerationShaderRecord.SizeInBytes =
+      s_rayGenShaderTableEntrySize;
+  dispatchDesc.MissShaderTable.StartAddress = s_missShaderTable;
+  dispatchDesc.MissShaderTable.SizeInBytes = s_shaderTableEntrySize;
+  dispatchDesc.MissShaderTable.StrideInBytes = s_shaderTableEntrySize;
+  dispatchDesc.HitGroupTable.StartAddress = s_hitGroupShaderTable;
+  dispatchDesc.HitGroupTable.SizeInBytes = s_shaderTableEntrySize;
+  dispatchDesc.HitGroupTable.StrideInBytes = s_shaderTableEntrySize;
+  dispatchDesc.Width = s_lastWavefrontBootstrapPathCount;
+  dispatchDesc.Height = 1;
+  dispatchDesc.Depth = 1;
+
+  list->DispatchRays(&dispatchDesc);
+
+  D3D12_RESOURCE_BARRIER uavBarrier = {};
+  uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+  uavBarrier.UAV.pResource = nullptr;
+  list->ResourceBarrier(1, &uavBarrier);
+}
+
+static void DispatchWavefrontSecondaryVisibility(
+  ID3D12GraphicsCommandList4 *list, UINT sourceQueueCounterIndex) {
+  (void)sourceQueueCounterIndex;
+  if (!list || s_wavefrontSecondaryRayGenShaderTable == 0 ||
+      s_rayGenShaderTableEntrySize == 0 || s_lastWavefrontBootstrapPathCount == 0) {
+    return;
+  }
+
+  if (ExecuteWavefrontIndirectRayDispatch(
+          list, kWavefrontSecondaryDispatchRaysRecordOffset)) {
+    return;
+  }
+
+  D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
+  dispatchDesc.RayGenerationShaderRecord.StartAddress =
+      s_wavefrontSecondaryRayGenShaderTable;
+  dispatchDesc.RayGenerationShaderRecord.SizeInBytes =
+      s_rayGenShaderTableEntrySize;
+  dispatchDesc.MissShaderTable.StartAddress = s_missShaderTable;
+  dispatchDesc.MissShaderTable.SizeInBytes = s_shaderTableEntrySize;
+  dispatchDesc.MissShaderTable.StrideInBytes = s_shaderTableEntrySize;
+  dispatchDesc.HitGroupTable.StartAddress = s_hitGroupShaderTable;
+  dispatchDesc.HitGroupTable.SizeInBytes = s_shaderTableEntrySize;
+  dispatchDesc.HitGroupTable.StrideInBytes = s_shaderTableEntrySize;
+  dispatchDesc.Width = s_lastWavefrontBootstrapPathCount;
+  dispatchDesc.Height = 1;
+  dispatchDesc.Depth = 1;
+
+  list->DispatchRays(&dispatchDesc);
+
+  D3D12_RESOURCE_BARRIER uavBarrier = {};
+  uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+  uavBarrier.UAV.pResource = nullptr;
+  list->ResourceBarrier(1, &uavBarrier);
+}
+
+static void DispatchWavefrontShadowVisibility(
+    ID3D12GraphicsCommandList4 *list) {
+  if (!list || s_wavefrontShadowRayGenShaderTable == 0 ||
+      s_rayGenShaderTableEntrySize == 0 || s_lastWavefrontBootstrapPathCount == 0) {
+    return;
+  }
+
+  if (ExecuteWavefrontIndirectRayDispatch(
+          list, kWavefrontShadowDispatchRaysRecordOffset)) {
+    return;
+  }
+
+  D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
+  dispatchDesc.RayGenerationShaderRecord.StartAddress =
+      s_wavefrontShadowRayGenShaderTable;
+  dispatchDesc.RayGenerationShaderRecord.SizeInBytes =
+      s_rayGenShaderTableEntrySize;
+  dispatchDesc.MissShaderTable.StartAddress = s_missShaderTable;
+  dispatchDesc.MissShaderTable.SizeInBytes = s_shaderTableEntrySize;
+  dispatchDesc.MissShaderTable.StrideInBytes = s_shaderTableEntrySize;
+  dispatchDesc.HitGroupTable.StartAddress = s_hitGroupShaderTable;
+  dispatchDesc.HitGroupTable.SizeInBytes = s_shaderTableEntrySize;
+  dispatchDesc.HitGroupTable.StrideInBytes = s_shaderTableEntrySize;
+  dispatchDesc.Width = s_lastWavefrontBootstrapPathCount;
+  dispatchDesc.Height = 1;
+  dispatchDesc.Depth = 1;
+
+  list->DispatchRays(&dispatchDesc);
+
+  D3D12_RESOURCE_BARRIER uavBarrier = {};
+  uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+  uavBarrier.UAV.pResource = nullptr;
+  list->ResourceBarrier(1, &uavBarrier);
+}
+
+static void EnsureWavefrontResolvePipeline() {
+  if (s_wavefrontResolvePSO && s_wavefrontResolveRootSig) {
+    return;
+  }
+  if (!s_device) {
+    return;
+  }
+
+  D3D12_DESCRIPTOR_RANGE uavRange = {};
+  uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+  uavRange.NumDescriptors = DXR_HEAP_UAV_COUNT; // u0..u32
+  uavRange.BaseShaderRegister = 0;
+  uavRange.RegisterSpace = 0;
+  uavRange.OffsetInDescriptorsFromTableStart =
+      D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+  D3D12_ROOT_PARAMETER params[4] = {};
+  params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+  params[0].Descriptor.ShaderRegister = 0;
+  params[0].Descriptor.RegisterSpace = 0;
+  params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+  params[1].Constants.ShaderRegister = 1;
+  params[1].Constants.RegisterSpace = 0;
+  params[1].Constants.Num32BitValues = 4;
+  params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[2].DescriptorTable.NumDescriptorRanges = 1;
+  params[2].DescriptorTable.pDescriptorRanges = &uavRange;
+  params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[3].Descriptor.ShaderRegister = 5000;
+  params[3].Descriptor.RegisterSpace = 0;
+  params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
+  rsDesc.NumParameters = _countof(params);
+  rsDesc.pParameters = params;
+  rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+  ComPtr<ID3DBlob> sig, err;
+  HRESULT hrSerialize = D3D12SerializeRootSignature(
+      &rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err);
+  if (FAILED(hrSerialize)) {
+    if (err) {
+      fprintf(stderr, "DxrRenderer: Wavefront resolve RS error: %s\n",
+              (char *)err->GetBufferPointer());
+    }
+    return;
+  }
+
+  ThrowIfFailed(s_device->CreateRootSignature(
+      0, sig->GetBufferPointer(), sig->GetBufferSize(),
+      IID_PPV_ARGS(&s_wavefrontResolveRootSig)));
+
+  ComPtr<IDxcBlob> cs;
+  try {
+    std::vector<std::wstring> defines;
+    cs = s_dxcHelper.Compile(L"shaders/wavefront_resolve_primary_cs.hlsl",
+                             L"CSMain", L"cs_6_5", defines);
+  } catch (const std::exception &e) {
+    fprintf(stderr, "DxrRenderer: Wavefront resolve CS compile failed: %s\n",
+            e.what());
+    return;
+  }
+  if (!cs) {
+    fprintf(stderr, "DxrRenderer: Wavefront resolve CS blob null\n");
+    return;
+  }
+
+  D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
+  psoDesc.pRootSignature = s_wavefrontResolveRootSig.Get();
+  psoDesc.CS.pShaderBytecode = cs->GetBufferPointer();
+  psoDesc.CS.BytecodeLength = cs->GetBufferSize();
+  HRESULT hrPso = s_device->CreateComputePipelineState(
+      &psoDesc, IID_PPV_ARGS(&s_wavefrontResolvePSO));
+  if (FAILED(hrPso)) {
+    fprintf(stderr,
+            "DxrRenderer: Wavefront resolve PSO creation failed: 0x%08x\n",
+            (unsigned)hrPso);
+    DumpD3D12InfoQueueMessages("Wavefront resolve PSO create");
+    s_wavefrontResolvePSO.Reset();
+    s_wavefrontResolveRootSig.Reset();
+  }
+}
+
+static void EnsureWavefrontSecondaryResolvePipeline() {
+  EnsureWavefrontResolvePipeline();
+  if (!s_wavefrontResolveRootSig || s_wavefrontSecondaryResolvePSO) {
+    return;
+  }
+
+  ComPtr<IDxcBlob> cs;
+  try {
+    std::vector<std::wstring> defines;
+    cs = s_dxcHelper.Compile(L"shaders/wavefront_resolve_secondary_cs.hlsl",
+                             L"CSMain", L"cs_6_5", defines);
+  } catch (const std::exception &e) {
+    fprintf(stderr,
+            "DxrRenderer: Wavefront secondary resolve CS compile failed: %s\n",
+            e.what());
+    return;
+  }
+  if (!cs) {
+    fprintf(stderr, "DxrRenderer: Wavefront secondary resolve CS blob null\n");
+    return;
+  }
+
+  D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
+  psoDesc.pRootSignature = s_wavefrontResolveRootSig.Get();
+  psoDesc.CS.pShaderBytecode = cs->GetBufferPointer();
+  psoDesc.CS.BytecodeLength = cs->GetBufferSize();
+  HRESULT hrPso = s_device->CreateComputePipelineState(
+      &psoDesc, IID_PPV_ARGS(&s_wavefrontSecondaryResolvePSO));
+  if (FAILED(hrPso)) {
+    fprintf(stderr,
+            "DxrRenderer: Wavefront secondary resolve PSO creation failed: 0x%08x\n",
+            (unsigned)hrPso);
+    DumpD3D12InfoQueueMessages("Wavefront secondary resolve PSO create");
+    s_wavefrontSecondaryResolvePSO.Reset();
+  }
+}
+
+static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
+                                            ID3D12Resource *cameraCB) {
+  if (!list || !cameraCB || !s_srvHeap || !s_device ||
+      s_lastWavefrontBootstrapPathCount == 0) {
+    return;
+  }
+
+  EnsureWavefrontResolvePipeline();
+  if (!s_wavefrontResolvePSO || !s_wavefrontResolveRootSig) {
+    return;
+  }
+
+  ID3D12DescriptorHeap *rtHeaps[] = {s_srvHeap.Get()};
+  list->SetDescriptorHeaps(1, rtHeaps);
+  list->SetPipelineState(s_wavefrontResolvePSO.Get());
+  list->SetComputeRootSignature(s_wavefrontResolveRootSig.Get());
+  list->SetComputeRootConstantBufferView(0, cameraCB->GetGPUVirtualAddress());
+
+  const UINT resolveConstants[4] = {s_outputWidth, s_outputHeight,
+                                    s_lastWavefrontBootstrapPathCount, 0u};
+  list->SetComputeRoot32BitConstants(1, _countof(resolveConstants),
+                                     resolveConstants, 0);
+  list->SetComputeRootDescriptorTable(2, s_outputUAVGpu);
+  list->SetComputeRootShaderResourceView(
+      3, s_lightBuffer ? s_lightBuffer->GetGPUVirtualAddress() : 0);
+
+  const UINT groupCountX = (s_lastWavefrontBootstrapPathCount + 63u) / 64u;
+  list->Dispatch(groupCountX, 1, 1);
+
+  D3D12_RESOURCE_BARRIER uavBarrier = {};
+  uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+  uavBarrier.UAV.pResource = nullptr;
+  list->ResourceBarrier(1, &uavBarrier);
+}
+
+static void DispatchWavefrontResolveSecondary(ID3D12GraphicsCommandList4 *list,
+                                              ID3D12Resource *cameraCB,
+                                              UINT sourceQueueCounterIndex) {
+  if (!list || !cameraCB || !s_srvHeap || !s_device ||
+      s_lastWavefrontBootstrapPathCount == 0) {
+    return;
+  }
+
+  EnsureWavefrontSecondaryResolvePipeline();
+  if (!s_wavefrontSecondaryResolvePSO || !s_wavefrontResolveRootSig) {
+    return;
+  }
+
+  ID3D12DescriptorHeap *rtHeaps[] = {s_srvHeap.Get()};
+  list->SetDescriptorHeaps(1, rtHeaps);
+  list->SetPipelineState(s_wavefrontSecondaryResolvePSO.Get());
+  list->SetComputeRootSignature(s_wavefrontResolveRootSig.Get());
+  list->SetComputeRootConstantBufferView(0, cameraCB->GetGPUVirtualAddress());
+
+  const UINT sourceQueueFlags =
+      (sourceQueueCounterIndex == 0u) ? kWavefrontQueueFlagSourceIsA : 0u;
+  const UINT resolveConstants[4] = {s_outputWidth, s_outputHeight,
+                                    s_lastWavefrontBootstrapPathCount,
+                                    sourceQueueFlags};
+  list->SetComputeRoot32BitConstants(1, _countof(resolveConstants),
+                                     resolveConstants, 0);
+  list->SetComputeRootDescriptorTable(2, s_outputUAVGpu);
+  list->SetComputeRootShaderResourceView(
+      3, s_lightBuffer ? s_lightBuffer->GetGPUVirtualAddress() : 0);
+
+  if (ExecuteWavefrontIndirectComputeDispatch(
+          list, kWavefrontSecondaryResolveDispatchArgsIndex)) {
+    return;
+  }
+
+  const UINT groupCountX = (s_lastWavefrontBootstrapPathCount + 63u) / 64u;
+  list->Dispatch(groupCountX, 1, 1);
+
+  D3D12_RESOURCE_BARRIER uavBarrier = {};
+  uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+  uavBarrier.UAV.pResource = nullptr;
+  list->ResourceBarrier(1, &uavBarrier);
+}
+
+static UINT ComputeWavefrontIndirectPassBudget() {
+  const UINT maxSpecularBounces =
+      (g_cameraData.maxSpecularBounces > 0.0f)
+          ? static_cast<UINT>(g_cameraData.maxSpecularBounces)
+          : 0u;
+  const UINT maxRefractiveBounces =
+      (g_cameraData.maxRefractiveBounces > 0.0f)
+          ? static_cast<UINT>(g_cameraData.maxRefractiveBounces)
+          : 0u;
+  const UINT maxGIBounces =
+      (g_cameraData.maxGIBounces > 0.0f)
+          ? static_cast<UINT>(g_cameraData.maxGIBounces)
+          : 0u;
+  const UINT totalBudget =
+      maxSpecularBounces + maxRefractiveBounces + maxGIBounces;
+  return (totalBudget > 16u) ? 16u : totalBudget;
 }
 
 static TextureStreamingPolicy ChooseAutoTextureStreamingPolicy() {
@@ -1374,6 +2463,45 @@ UpdateTextureDescriptorTable(D3D12_GPU_DESCRIPTOR_HANDLE texturesGpuStart,
   s_lastAppliedTextureStreamingPolicy = s_textureStreamingPolicy;
   s_lastRefreshFrame = s_jitterFrameIndex;
   s_textureTableDirty = false;
+}
+
+static void EnsureNullCloudDescriptors() {
+  if (!s_device || !s_srvHeap) {
+    return;
+  }
+
+  const UINT descSize = s_device->GetDescriptorHandleIncrementSize(
+      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+  D3D12_CPU_DESCRIPTOR_HANDLE base =
+      s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+
+  D3D12_SHADER_RESOURCE_VIEW_DESC volumeSrv = {};
+  volumeSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  volumeSrv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+  volumeSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
+  volumeSrv.Texture3D.MipLevels = 1;
+  volumeSrv.Texture3D.MostDetailedMip = 0;
+  volumeSrv.Texture3D.ResourceMinLODClamp = 0.0f;
+
+  D3D12_CPU_DESCRIPTOR_HANDLE cloudBase = base;
+  cloudBase.ptr += (SIZE_T)DXR_HEAP_CLOUD_TEX_OFFSET * descSize;
+  s_device->CreateShaderResourceView(nullptr, &volumeSrv, cloudBase);
+
+  D3D12_CPU_DESCRIPTOR_HANDLE cloudDetail = base;
+  cloudDetail.ptr += (SIZE_T)DXR_HEAP_CLOUD_DETAIL_TEX_OFFSET * descSize;
+  s_device->CreateShaderResourceView(nullptr, &volumeSrv, cloudDetail);
+
+  D3D12_SHADER_RESOURCE_VIEW_DESC bakedSrv = {};
+  bakedSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  bakedSrv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+  bakedSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+  bakedSrv.Texture2D.MipLevels = 1;
+  bakedSrv.Texture2D.MostDetailedMip = 0;
+  bakedSrv.Texture2D.ResourceMinLODClamp = 0.0f;
+
+  D3D12_CPU_DESCRIPTOR_HANDLE cloudBaked = base;
+  cloudBaked.ptr += (SIZE_T)DXR_HEAP_CLOUD_BAKED_TEX_OFFSET * descSize;
+  s_device->CreateShaderResourceView(nullptr, &bakedSrv, cloudBaked);
 }
 
 static UINT64 ReadbackUint64(ID3D12Resource *resource) {
@@ -1832,6 +2960,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     s_shaderCountersGpuHandle.ptr =
         gpuStart.ptr + (UINT64)DXR_HEAP_SHADER_COUNTERS_OFFSET * descSize;
   }
+  EnsureNullCloudDescriptors();
 
   // Compile shader
   ComPtr<IDxcBlob> shaderBlob;
@@ -1865,7 +2994,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
   D3D12_DESCRIPTOR_RANGE uavRange = {};
   uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-  uavRange.NumDescriptors = DXR_HEAP_UAV_COUNT; // u0..u24
+  uavRange.NumDescriptors = DXR_HEAP_UAV_COUNT; // u0..u32
   uavRange.BaseShaderRegister = 0;
   params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
   params[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -2040,7 +3169,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
 
   // Create state object (DXIL lib etc.)
   static D3D12_DXIL_LIBRARY_DESC libDesc = {};
-  static D3D12_EXPORT_DESC exports[4] = {};
+  static D3D12_EXPORT_DESC exports[7] = {};
   static D3D12_HIT_GROUP_DESC hitGroupDesc = {};
   static D3D12_RAYTRACING_SHADER_CONFIG shaderConfig = {};
   static D3D12_RAYTRACING_PIPELINE_CONFIG pipelineConfig = {};
@@ -2049,10 +3178,13 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   libDesc.DXILLibrary.pShaderBytecode = shaderBlob->GetBufferPointer();
   libDesc.DXILLibrary.BytecodeLength = shaderBlob->GetBufferSize();
   exports[0].Name = L"RayGen";
-  exports[1].Name = L"Miss";
-  exports[2].Name = L"ClosestHit";
-  exports[3].Name = L"AnyHit";
-  libDesc.NumExports = 4;
+  exports[1].Name = L"WavefrontPrimaryRayGen";
+  exports[2].Name = L"WavefrontSecondaryRayGen";
+  exports[3].Name = L"WavefrontShadowRayGen";
+  exports[4].Name = L"Miss";
+  exports[5].Name = L"ClosestHit";
+  exports[6].Name = L"AnyHit";
+  libDesc.NumExports = 7;
   libDesc.pExports = exports;
   D3D12_STATE_SUBOBJECT libSub = {};
   libSub.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY;
@@ -2136,38 +3268,58 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   ComPtr<ID3D12StateObjectProperties> properties;
   ThrowIfFailed(s_rtStateObject.As(&properties));
   void *rayGenId = properties->GetShaderIdentifier(L"RayGen");
+  void *wavefrontRayGenId =
+      properties->GetShaderIdentifier(L"WavefrontPrimaryRayGen");
+  void *wavefrontSecondaryRayGenId =
+      properties->GetShaderIdentifier(L"WavefrontSecondaryRayGen");
+    void *wavefrontShadowRayGenId =
+      properties->GetShaderIdentifier(L"WavefrontShadowRayGen");
   void *missId = properties->GetShaderIdentifier(L"Miss");
   void *hitGroupId = properties->GetShaderIdentifier(L"HitGroup");
-  if (!rayGenId || !missId || !hitGroupId) {
+    if (!rayGenId || !wavefrontRayGenId || !wavefrontSecondaryRayGenId ||
+      !wavefrontShadowRayGenId ||
+      !missId || !hitGroupId) {
     fprintf(stderr, "DxrRenderer: Shader IDs null\n");
     return;
   }
   UINT shaderIdentifierSize = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
   // RayGen record must be aligned to 64 bytes (shader table alignment),
   // miss/hit records must be aligned to 32 bytes (shader record alignment).
-  UINT64 s_rayGenEntrySize =
+    UINT64 s_rayGenEntrySize =
       Align(shaderIdentifierSize, D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
+    s_rayGenShaderTableEntrySize = s_rayGenEntrySize;
   s_shaderTableEntrySize = Align(shaderIdentifierSize,
                                  D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT);
-  // Total SBT size: raygen + miss + hit (each 1 entry for now)
+  // Total SBT size: 4 raygen records + miss + hit.
   UINT64 shaderTableSize =
-      s_rayGenEntrySize + s_shaderTableEntrySize + s_shaderTableEntrySize;
+      (4 * s_rayGenEntrySize) + s_shaderTableEntrySize +
+      s_shaderTableEntrySize;
   AllocateUploadBuffer(s_device, nullptr, shaderTableSize, &s_sbtStorage,
                        L"Shader Table");
   UINT8 *pData = nullptr;
   s_sbtStorage->Map(0, nullptr, (void **)&pData);
   // Place RayGen at beginning (64-byte aligned slot)
   memcpy(pData, rayGenId, shaderIdentifierSize);
-  // Place Miss right after raygen (start aligned to 64 bytes as raygen slot is
-  // 64)
-  memcpy(pData + s_rayGenEntrySize, missId, shaderIdentifierSize);
+  // Place WavefrontPrimaryRayGen in the second raygen slot.
+  memcpy(pData + s_rayGenEntrySize, wavefrontRayGenId, shaderIdentifierSize);
+  // Place WavefrontSecondaryRayGen in the third raygen slot.
+  memcpy(pData + (2 * s_rayGenEntrySize), wavefrontSecondaryRayGenId,
+         shaderIdentifierSize);
+    // Place WavefrontShadowRayGen in the fourth raygen slot.
+    memcpy(pData + (3 * s_rayGenEntrySize), wavefrontShadowRayGenId,
+      shaderIdentifierSize);
+  // Place Miss right after the raygen block.
+    memcpy(pData + (4 * s_rayGenEntrySize), missId, shaderIdentifierSize);
   // Place HitGroup after miss (aligned to 32 bytes)
-  memcpy(pData + s_rayGenEntrySize + s_shaderTableEntrySize, hitGroupId,
+    memcpy(pData + (4 * s_rayGenEntrySize) + s_shaderTableEntrySize, hitGroupId,
          shaderIdentifierSize);
   s_sbtStorage->Unmap(0, nullptr);
   D3D12_GPU_VIRTUAL_ADDRESS baseAddr = s_sbtStorage->GetGPUVirtualAddress();
   s_rayGenShaderTable = baseAddr;
-  s_missShaderTable = baseAddr + s_rayGenEntrySize;
+  s_wavefrontPrimaryRayGenShaderTable = baseAddr + s_rayGenEntrySize;
+  s_wavefrontSecondaryRayGenShaderTable = baseAddr + (2 * s_rayGenEntrySize);
+  s_wavefrontShadowRayGenShaderTable = baseAddr + (3 * s_rayGenEntrySize);
+  s_missShaderTable = baseAddr + (4 * s_rayGenEntrySize);
   s_hitGroupShaderTable = s_missShaderTable + s_shaderTableEntrySize;
 
   // Create a default heap 2D texture to hold raytracing output (render-size)
@@ -2510,6 +3662,128 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
         IID_PPV_ARGS(&s_shaderCountersReadbackBuffer)));
     s_shaderCountersReadbackBuffer->SetName(L"Shader Counters Readback");
   }
+
+    // Reserve the unused UAV tail for the queue-driven wavefront backend.
+    // These buffers are not consumed yet, but keeping them in the main DXR heap
+    // stabilizes the ABI before the first queue bootstrap pass lands.
+    {
+    auto CreateStructuredBufferUav =
+      [&](ComPtr<ID3D12Resource> &buffer, UINT64 elementCount,
+        UINT structureStride, UINT heapOffset, const wchar_t *name) {
+        D3D12_RESOURCE_DESC bufDesc = {};
+        bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        bufDesc.Alignment = 0;
+        bufDesc.Width = std::max<UINT64>(
+          static_cast<UINT64>(structureStride), elementCount * structureStride);
+        bufDesc.Height = 1;
+        bufDesc.DepthOrArraySize = 1;
+        bufDesc.MipLevels = 1;
+        bufDesc.Format = DXGI_FORMAT_UNKNOWN;
+        bufDesc.SampleDesc.Count = 1;
+        bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        bufDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+        buffer.Reset();
+        ThrowIfFailed(s_device->CreateCommittedResource(
+          &heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
+          D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+          IID_PPV_ARGS(&buffer)));
+        buffer->SetName(name);
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+        uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        uavDesc.Buffer.FirstElement = 0;
+        uavDesc.Buffer.NumElements = static_cast<UINT>(elementCount);
+        uavDesc.Buffer.StructureByteStride = structureStride;
+        uavDesc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle =
+          s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+        cpuHandle.ptr +=
+          static_cast<SIZE_T>(heapOffset) *
+          s_device->GetDescriptorHandleIncrementSize(
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        s_device->CreateUnorderedAccessView(buffer.Get(), nullptr, &uavDesc,
+                          cpuHandle);
+      };
+
+    s_wavefrontPathQueueCapacity = ComputeWavefrontQueueCapacity(
+      s_outputWidth, s_outputHeight, kWavefrontMaxPathQueueEntries);
+    s_wavefrontHitQueueCapacity = ComputeWavefrontQueueCapacity(
+      s_outputWidth, s_outputHeight, kWavefrontMaxPathQueueEntries);
+    s_wavefrontShadowQueueCapacity = ComputeWavefrontQueueCapacity(
+      s_outputWidth, s_outputHeight, kWavefrontMaxShadowQueueEntries, 2ull);
+
+    CreateStructuredBufferUav(s_wavefrontQueueCountersBuffer,
+                  kWavefrontQueueCounterCount, sizeof(UINT),
+                  DXR_HEAP_WAVEFRONT_COUNTERS_OFFSET,
+                  L"Wavefront Queue Counters");
+    CreateStructuredBufferUav(s_wavefrontPathQueueABuffer,
+                  s_wavefrontPathQueueCapacity,
+                  sizeof(WavefrontPathStateGpu),
+                  DXR_HEAP_WAVEFRONT_PATH_A_OFFSET,
+                  L"Wavefront Path Queue A");
+    CreateStructuredBufferUav(s_wavefrontPathQueueBBuffer,
+                  s_wavefrontPathQueueCapacity,
+                  sizeof(WavefrontPathStateGpu),
+                  DXR_HEAP_WAVEFRONT_PATH_B_OFFSET,
+                  L"Wavefront Path Queue B");
+    CreateStructuredBufferUav(s_wavefrontHitQueueBuffer,
+                  s_wavefrontHitQueueCapacity,
+                  sizeof(WavefrontHitRecordGpu),
+                  DXR_HEAP_WAVEFRONT_HIT_OFFSET,
+                  L"Wavefront Hit Queue");
+    CreateStructuredBufferUav(s_wavefrontShadowQueueBuffer,
+                  s_wavefrontShadowQueueCapacity,
+                  sizeof(WavefrontShadowTaskGpu),
+                  DXR_HEAP_WAVEFRONT_SHADOW_OFFSET,
+                  L"Wavefront Shadow Queue");
+    CreateStructuredBufferUav(s_wavefrontDispatchArgsBuffer,
+                  kWavefrontDispatchArgCount,
+                  sizeof(WavefrontDispatchArgsGpu),
+                  DXR_HEAP_WAVEFRONT_DISPATCH_ARGS_OFFSET,
+                  L"Wavefront Dispatch Args");
+    CreateStructuredBufferUav(s_wavefrontStatsBuffer, kWavefrontStatsCount,
+                  sizeof(UINT), DXR_HEAP_WAVEFRONT_STATS_OFFSET,
+                  L"Wavefront Stats");
+    {
+      D3D12_RESOURCE_DESC readDesc = {};
+      readDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+      readDesc.Alignment = 0;
+      readDesc.Width = sizeof(UINT) * kWavefrontStatsCount;
+      readDesc.Height = 1;
+      readDesc.DepthOrArraySize = 1;
+      readDesc.MipLevels = 1;
+      readDesc.Format = DXGI_FORMAT_UNKNOWN;
+      readDesc.SampleDesc.Count = 1;
+      readDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+      readDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+      D3D12_HEAP_PROPERTIES readbackHeap = {};
+      readbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
+      s_wavefrontStatsReadbackBuffer.Reset();
+      ThrowIfFailed(s_device->CreateCommittedResource(
+          &readbackHeap, D3D12_HEAP_FLAG_NONE, &readDesc,
+          D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+          IID_PPV_ARGS(&s_wavefrontStatsReadbackBuffer)));
+      s_wavefrontStatsReadbackBuffer->SetName(L"Wavefront Stats Readback");
+    }
+    CreateStructuredBufferUav(s_wavefrontReservedBuffer,
+                  kWavefrontReservedUint4Count,
+                  sizeof(uint32_t) * 4,
+                  DXR_HEAP_WAVEFRONT_RESERVED_OFFSET,
+                  L"Wavefront Reserved Buffer");
+
+    if (g_verboseRenderLogs) {
+      fprintf(stderr,
+          "DxrRenderer: Wavefront scaffolding buffers allocated "
+          "(path=%llu hit=%llu shadow=%llu)\n",
+          static_cast<unsigned long long>(s_wavefrontPathQueueCapacity),
+          static_cast<unsigned long long>(s_wavefrontHitQueueCapacity),
+          static_cast<unsigned long long>(s_wavefrontShadowQueueCapacity));
+    }
+    }
 
   // Create query heap for GPU profiling
   D3D12_QUERY_HEAP_DESC queryHeapDesc = {};
@@ -3533,6 +4807,155 @@ void ResetStreamlineHistory() {
   s_streamlineResetHistory = true;
 }
 
+void SetPathTracingBackend(PathTracingBackend backend) {
+  if (backend == PathTracingBackend::WavefrontOptimized) {
+    fprintf(stderr,
+            "DxrRenderer: Wavefront optimized backend is not stable yet; "
+            "routing to wavefront parity backend.\n");
+    backend = PathTracingBackend::WavefrontParity;
+  }
+  if (s_pathTracingBackend == backend) {
+    return;
+  }
+  WaitForAsyncRestirIdleForLightUpdates();
+  s_asyncRestirPending = false;
+  if (backend != PathTracingBackend::Legacy) {
+    DisableAsyncRestir(
+        "Wavefront backend selected; disabling async ReSTIR while wavefront "
+        "scheduler is stabilizing.");
+  }
+  s_pathTracingBackend = backend;
+  if (g_verboseRenderLogs) {
+    fprintf(stderr, "DxrRenderer: Path tracing backend set to %d\n",
+            static_cast<int>(backend));
+  }
+  DxrRenderer::ResetAccumulation();
+}
+
+PathTracingBackend GetPathTracingBackend() { return s_pathTracingBackend; }
+
+UINT GetWavefrontBootstrapPathCount() {
+  return s_lastWavefrontBootstrapPathCount;
+}
+
+UINT GetWavefrontBootstrapOverflowCount() {
+  return s_lastWavefrontBootstrapOverflowCount;
+}
+
+UINT GetWavefrontBootstrapDispatchGroups() {
+  return s_lastWavefrontBootstrapDispatchGroups;
+}
+
+UINT GetWavefrontPrimaryRecordCount() {
+  return s_lastWavefrontPrimaryRecordCount;
+}
+
+UINT GetWavefrontPrimaryHitCount() { return s_lastWavefrontPrimaryHitCount; }
+
+UINT GetWavefrontPrimaryMissCount() { return s_lastWavefrontPrimaryMissCount; }
+
+UINT GetWavefrontResolveRecordCount() {
+  return s_lastWavefrontResolveRecordCount;
+}
+
+UINT GetWavefrontResolveSurfaceCount() {
+  return s_lastWavefrontResolveSurfaceCount;
+}
+
+UINT GetWavefrontResolveDiffuseCount() {
+  return s_lastWavefrontResolveDiffuseCount;
+}
+
+UINT GetWavefrontResolveSpecularCount() {
+  return s_lastWavefrontResolveSpecularCount;
+}
+
+UINT GetWavefrontResolveTransmissionCount() {
+  return s_lastWavefrontResolveTransmissionCount;
+}
+
+UINT GetWavefrontResolveSkyCount() { return s_lastWavefrontResolveSkyCount; }
+
+UINT GetWavefrontSecondaryPathCount() {
+  return s_lastWavefrontSecondaryPathCount;
+}
+
+UINT GetWavefrontSecondaryDiffuseCount() {
+  return s_lastWavefrontSecondaryDiffuseCount;
+}
+
+UINT GetWavefrontSecondarySpecularCount() {
+  return s_lastWavefrontSecondarySpecularCount;
+}
+
+UINT GetWavefrontSecondaryTransmissionCount() {
+  return s_lastWavefrontSecondaryTransmissionCount;
+}
+
+UINT GetWavefrontShadowTaskCount() { return s_lastWavefrontShadowTaskCount; }
+
+UINT GetWavefrontSecondaryVisibilityRecordCount() {
+  return s_lastWavefrontSecondaryVisibilityRecordCount;
+}
+
+UINT GetWavefrontSecondaryVisibilityDiffuseLaneCount() {
+  return s_lastWavefrontStats[47];
+}
+
+UINT GetWavefrontSecondaryVisibilitySpecularLaneCount() {
+  return s_lastWavefrontStats[48];
+}
+
+UINT GetWavefrontSecondaryVisibilityHitCount() {
+  return s_lastWavefrontSecondaryVisibilityHitCount;
+}
+
+UINT GetWavefrontSecondaryVisibilityMissCount() {
+  return s_lastWavefrontSecondaryVisibilityMissCount;
+}
+
+UINT GetWavefrontSecondaryResolveRecordCount() {
+  return s_lastWavefrontSecondaryResolveRecordCount;
+}
+
+UINT GetWavefrontSecondaryResolveSurfaceCount() {
+  return s_lastWavefrontSecondaryResolveSurfaceCount;
+}
+
+UINT GetWavefrontSecondaryResolveSkyCount() {
+  return s_lastWavefrontSecondaryResolveSkyCount;
+}
+
+UINT GetWavefrontShadowVisibilityTaskCount() {
+  return s_lastWavefrontShadowVisibilityTaskCount;
+}
+
+UINT GetWavefrontShadowVisibleCount() {
+  return s_lastWavefrontShadowVisibleCount;
+}
+
+UINT GetWavefrontShadowOccludedCount() {
+  return s_lastWavefrontShadowOccludedCount;
+}
+
+UINT GetWavefrontPrimaryMaterialBinCount(WavefrontMaterialBin materialBin) {
+  const UINT materialBinIndex = static_cast<UINT>(materialBin);
+  if (materialBinIndex >= kWavefrontMaterialBinCount) {
+    return 0;
+  }
+  return s_lastWavefrontStats[kWavefrontPrimaryMaterialBinStatsBase +
+                              materialBinIndex];
+}
+
+UINT GetWavefrontSecondaryMaterialBinCount(WavefrontMaterialBin materialBin) {
+  const UINT materialBinIndex = static_cast<UINT>(materialBin);
+  if (materialBinIndex >= kWavefrontMaterialBinCount) {
+    return 0;
+  }
+  return s_lastWavefrontStats[kWavefrontSecondaryMaterialBinStatsBase +
+                              materialBinIndex];
+}
+
 void SetDenoiserMode(DenoiserMode m) {
   if (s_denoiserMode == m)
     return;
@@ -3981,20 +5404,15 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       s_cloudDescriptorsDone = true;
     }
 
-    // 4. Bind Resources
-    // Slot 10: Root CBV
-    dxrList->SetComputeRootConstantBufferView(
-        10, g_cloudManager.GetConstantBufferAddr());
-
-    // Slot 11: SRV Table
-    D3D12_GPU_DESCRIPTOR_HANDLE cloudSRV =
-        s_srvHeap->GetGPUDescriptorHandleForHeapStart();
-    cloudSRV.ptr += (UINT64)DXR_HEAP_CLOUD_TEX_OFFSET *
-                    s_device->GetDescriptorHandleIncrementSize(
-                        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-
-    dxrList->SetComputeRootDescriptorTable(11, cloudSRV);
   }
+  dxrList->SetComputeRootConstantBufferView(
+      10, g_cloudManager.GetConstantBufferAddr());
+  D3D12_GPU_DESCRIPTOR_HANDLE cloudSRV =
+      s_srvHeap->GetGPUDescriptorHandleForHeapStart();
+  cloudSRV.ptr += (UINT64)DXR_HEAP_CLOUD_TEX_OFFSET *
+                  s_device->GetDescriptorHandleIncrementSize(
+                      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+  dxrList->SetComputeRootDescriptorTable(11, cloudSRV);
 
   // Always bind IBL descriptors (env map + importance CDFs)
   {
@@ -4078,10 +5496,52 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         7, meshDataSB->GetGPUVirtualAddress());
 
   // Lights SB (t5000)
-  if (s_lightBuffer) {
+  dxrList->SetComputeRootShaderResourceView(
+      9, s_lightBuffer ? s_lightBuffer->GetGPUVirtualAddress() : 0);
+
+  auto BindRayTracingGlobalRoot = [&]() {
+    dxrList->SetPipelineState1(s_rtStateObject.Get());
+    dxrList->SetComputeRootSignature(s_rtGlobalRootSignature.Get());
+
+    ID3D12DescriptorHeap *rtHeaps[] = {s_srvHeap.Get()};
+    dxrList->SetDescriptorHeaps(1, rtHeaps);
+
     dxrList->SetComputeRootShaderResourceView(
-        9, s_lightBuffer->GetGPUVirtualAddress());
-  }
+        0, s_tlas.result->GetGPUVirtualAddress());
+    dxrList->SetComputeRootDescriptorTable(1, s_outputUAVGpu);
+    dxrList->SetComputeRootDescriptorTable(2, s_texTableGpu);
+    if (cameraCB) {
+      dxrList->SetComputeRootConstantBufferView(
+          3, cameraCB->GetGPUVirtualAddress());
+    }
+    if (materialCB) {
+      dxrList->SetComputeRootShaderResourceView(
+          4, materialCB->GetGPUVirtualAddress());
+    }
+    dxrList->SetComputeRootDescriptorTable(5, s_vbTableGpu);
+    dxrList->SetComputeRootDescriptorTable(6, s_ibTableGpu);
+    if (meshDataSB) {
+      dxrList->SetComputeRootShaderResourceView(
+          7, meshDataSB->GetGPUVirtualAddress());
+    }
+    dxrList->SetComputeRootDescriptorTable(8, s_iblGpuHandle);
+    dxrList->SetComputeRootShaderResourceView(
+        9, s_lightBuffer ? s_lightBuffer->GetGPUVirtualAddress() : 0);
+    dxrList->SetComputeRootConstantBufferView(
+        10, g_cloudManager.GetConstantBufferAddr());
+    D3D12_GPU_DESCRIPTOR_HANDLE cloudSRV =
+        s_srvHeap->GetGPUDescriptorHandleForHeapStart();
+    cloudSRV.ptr += (UINT64)DXR_HEAP_CLOUD_TEX_OFFSET *
+                    s_device->GetDescriptorHandleIncrementSize(
+                        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    dxrList->SetComputeRootDescriptorTable(11, cloudSRV);
+    if (materialExtraSB) {
+      dxrList->SetComputeRootShaderResourceView(
+          12, materialExtraSB->GetGPUVirtualAddress());
+    }
+    dxrList->SetComputeRootShaderResourceView(13, grassBladesGpu);
+    dxrList->SetComputeRoot32BitConstants(14, 1, &s_grassTlasStartIndex, 0);
+  };
 
   // (Legacy) maxSPP early-out used to be here. We now freeze using the
   // tonemapped output above so it also works with DLSS-RR.
@@ -4231,7 +5691,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   // If we are denoising an already-completed frame (e.g. at MaxSPP),
   // we do not want to add more samples or modify the accumulation buffer.
 
-  bool didDispatchRays = false;
+  bool didPathTracingWork = false;
+  bool didLegacyDispatchRays = false;
+  bool didWavefrontRestirSeed = false;
   if (!doDenoise && !reachedEndCondition) {
     // Start DispatchRays timer
     if (s_queryHeap) {
@@ -4251,9 +5713,76 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
           s_shaderCountersGpuHandle, cpuCounters, s_shaderCountersBuffer.Get(),
           zeros, 0, nullptr);
     }
+    bool useWavefrontResolvedOutput = false;
+    if (s_pathTracingBackend != PathTracingBackend::Legacy && cameraCB) {
+      DispatchWavefrontBootstrap(dxrList.Get(), cameraCB);
+      BindRayTracingGlobalRoot();
+      DispatchWavefrontPrimaryVisibility(dxrList.Get());
+      if (s_pathTracingBackend == PathTracingBackend::WavefrontOptimized) {
+        const UINT indirectPassBudget = ComputeWavefrontIndirectPassBudget();
+        UploadWavefrontIndirectDispatchRecords(dxrList.Get());
+        DispatchWavefrontCounterReset(dxrList.Get(), 0u, 0u);
+        DispatchWavefrontResolvePrimary(dxrList.Get(), cameraCB);
+        didWavefrontRestirSeed = true;
+        DispatchWavefrontPrepareIndirectArgs(
+            dxrList.Get(), 5u, UINT_MAX,
+            kWavefrontShadowDispatchRaysReservedSlot, 0u);
+        BindRayTracingGlobalRoot();
+        DispatchWavefrontShadowVisibility(dxrList.Get());
+        if (indirectPassBudget > 0) {
+          DispatchWavefrontCounterReset(dxrList.Get(), 5u, 0u);
+        }
+        for (UINT indirectPassIndex = 0; indirectPassIndex < indirectPassBudget;
+             ++indirectPassIndex) {
+          const bool sourceIsQueueA = (indirectPassIndex & 1u) != 0u;
+          const UINT sourceQueueCounter = sourceIsQueueA ? 0u : 4u;
+          const UINT queueFlags = sourceIsQueueA ? kWavefrontQueueFlagSourceIsA : 0u;
+          DispatchWavefrontPrepareIndirectArgs(
+              dxrList.Get(), sourceQueueCounter,
+            UINT_MAX, kWavefrontSecondaryDispatchRaysReservedSlot,
+            queueFlags | kWavefrontQueueFlagFilterDiffuse);
+          BindRayTracingGlobalRoot();
+          DispatchWavefrontSecondaryVisibility(dxrList.Get(),
+                                              sourceQueueCounter);
+          DispatchWavefrontPrepareIndirectArgs(
+            dxrList.Get(), sourceQueueCounter,
+            UINT_MAX, kWavefrontSecondaryDispatchRaysReservedSlot,
+            queueFlags | kWavefrontQueueFlagFilterSpecular);
+          BindRayTracingGlobalRoot();
+          DispatchWavefrontSecondaryVisibility(dxrList.Get(),
+                            sourceQueueCounter);
+          DispatchWavefrontPrepareIndirectArgs(
+            dxrList.Get(), sourceQueueCounter,
+            kWavefrontSecondaryResolveDispatchArgsIndex,
+            kWavefrontSecondaryDispatchRaysReservedSlot, queueFlags);
+          DispatchWavefrontResolveSecondary(dxrList.Get(), cameraCB,
+                                            sourceQueueCounter);
+          DispatchWavefrontPrepareIndirectArgs(
+              dxrList.Get(), 5u, UINT_MAX,
+              kWavefrontShadowDispatchRaysReservedSlot, 0u);
+          BindRayTracingGlobalRoot();
+          DispatchWavefrontShadowVisibility(dxrList.Get());
+          if (indirectPassIndex + 1u < indirectPassBudget && sourceQueueCounter == 0u) {
+            DispatchWavefrontCounterReset(dxrList.Get(), 0u, 0u);
+          }
+          if (indirectPassIndex + 1u < indirectPassBudget && sourceQueueCounter == 4u) {
+            DispatchWavefrontCounterReset(dxrList.Get(), 4u, 0u);
+          }
+          if (indirectPassIndex + 1u < indirectPassBudget) {
+            DispatchWavefrontCounterReset(dxrList.Get(), 5u, 0u);
+          }
+        }
+        useWavefrontResolvedOutput = true;
+        didPathTracingWork = true;
+      }
+    }
 
-    dxrList->DispatchRays(&dispatchDesc);
-    didDispatchRays = true;
+    if (!useWavefrontResolvedOutput) {
+      BindRayTracingGlobalRoot();
+      dxrList->DispatchRays(&dispatchDesc);
+      didPathTracingWork = true;
+      didLegacyDispatchRays = true;
+    }
 
     // End DispatchRays timer
     if (s_queryHeap) {
@@ -4263,11 +5792,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
     // Increment accumulation history only when actually used and not at end
     // condition.
-    if (!rrActive && !reachedEndCondition)
+    if (didPathTracingWork && !rrActive && !reachedEndCondition)
       s_accumulation.IncrementFrame();
-    if (!rrActive && !reachedEndCondition)
+    if (didPathTracingWork && !rrActive && !reachedEndCondition)
       s_transmissionAccumulation.IncrementFrame();
-    else if (rrActive && !reachedEndCondition)
+    else if (didPathTracingWork && rrActive && !reachedEndCondition)
       s_rrStillFrameSpp++;
   } else {
     // We are skipping dispatch to run the final denoiser on the existing
@@ -4288,8 +5817,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
   // Phase 4: decoupled ReSTIR DI temporal/spatial reuse in a dedicated compute
   // pass. RayGen now writes initial candidates, and this pass performs reuse.
-  if (didDispatchRays) {
-    if (cameraCB && s_asyncRestirAvailable && hasAsyncCameraSnapshot &&
+  if (didLegacyDispatchRays || didWavefrontRestirSeed) {
+    if (didLegacyDispatchRays && s_pathTracingBackend == PathTracingBackend::Legacy &&
+        cameraCB && s_asyncRestirAvailable && hasAsyncCameraSnapshot &&
         UploadAsyncRestirCamera(asyncCameraSnapshot)) {
       // Submit on async queue after this frame's direct list executes.
       s_asyncRestirPending = true;
@@ -5881,6 +7411,16 @@ void EndFrameProfiling(ID3D12GraphicsCommandList *commandList) {
                          D3D12_RESOURCE_STATE_COPY_SOURCE,
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
+    if (s_wavefrontStatsBuffer && s_wavefrontStatsReadbackBuffer) {
+      TransitionResource(commandList, s_wavefrontStatsBuffer.Get(),
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                         D3D12_RESOURCE_STATE_COPY_SOURCE);
+      commandList->CopyResource(s_wavefrontStatsReadbackBuffer.Get(),
+                                s_wavefrontStatsBuffer.Get());
+      TransitionResource(commandList, s_wavefrontStatsBuffer.Get(),
+                         D3D12_RESOURCE_STATE_COPY_SOURCE,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
 
     commandList->ResolveQueryData(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
                                   0, 10, s_queryReadbackBuffer.Get(), 0);
@@ -5961,6 +7501,38 @@ void EndFrameProfiling(ID3D12GraphicsCommandList *commandList) {
                 s_lastShaderCounters[4], s_lastShaderCounters[6],
                 s_lastShaderCounters[7]);
       }
+    }
+  }
+
+  if (s_wavefrontStatsReadbackBuffer) {
+    UINT *stats = nullptr;
+    if (SUCCEEDED(
+            s_wavefrontStatsReadbackBuffer->Map(0, nullptr, (void **)&stats))) {
+      memcpy(s_lastWavefrontStats, stats, sizeof(s_lastWavefrontStats));
+      s_lastWavefrontPrimaryRecordCount = s_lastWavefrontStats[2];
+      s_lastWavefrontPrimaryHitCount = s_lastWavefrontStats[6];
+      s_lastWavefrontPrimaryMissCount = s_lastWavefrontStats[7];
+      s_lastWavefrontResolveRecordCount = s_lastWavefrontStats[8];
+      s_lastWavefrontResolveSurfaceCount = s_lastWavefrontStats[9];
+      s_lastWavefrontResolveDiffuseCount = s_lastWavefrontStats[10];
+      s_lastWavefrontResolveSpecularCount = s_lastWavefrontStats[11];
+      s_lastWavefrontResolveTransmissionCount = s_lastWavefrontStats[12];
+      s_lastWavefrontResolveSkyCount = s_lastWavefrontStats[13];
+      s_lastWavefrontSecondaryPathCount = s_lastWavefrontStats[16];
+      s_lastWavefrontSecondaryDiffuseCount = s_lastWavefrontStats[17];
+      s_lastWavefrontSecondarySpecularCount = s_lastWavefrontStats[18];
+      s_lastWavefrontSecondaryTransmissionCount = s_lastWavefrontStats[19];
+      s_lastWavefrontShadowTaskCount = s_lastWavefrontStats[20];
+      s_lastWavefrontSecondaryVisibilityRecordCount = s_lastWavefrontStats[23];
+      s_lastWavefrontSecondaryVisibilityHitCount = s_lastWavefrontStats[24];
+      s_lastWavefrontSecondaryVisibilityMissCount = s_lastWavefrontStats[25];
+      s_lastWavefrontSecondaryResolveRecordCount = s_lastWavefrontStats[26];
+      s_lastWavefrontSecondaryResolveSurfaceCount = s_lastWavefrontStats[27];
+      s_lastWavefrontSecondaryResolveSkyCount = s_lastWavefrontStats[28];
+      s_lastWavefrontShadowVisibilityTaskCount = s_lastWavefrontStats[29];
+      s_lastWavefrontShadowVisibleCount = s_lastWavefrontStats[30];
+      s_lastWavefrontShadowOccludedCount = s_lastWavefrontStats[31];
+      s_wavefrontStatsReadbackBuffer->Unmap(0, nullptr);
     }
   }
 }

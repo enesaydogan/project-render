@@ -593,6 +593,11 @@ if(DXC_COMPILER)
   list(APPEND SHADER_COMPILE_LIST "dxr_tonemap_cs.hlsl|CSMain|cs_6_3")
   list(APPEND SHADER_COMPILE_LIST "restir_spatial_cs.hlsl|CSMain|cs_6_5")
   list(APPEND SHADER_COMPILE_LIST "restir_gi_spatial_cs.hlsl|CSMain|cs_6_5")
+  list(APPEND SHADER_COMPILE_LIST "wavefront_bootstrap_cs.hlsl|CSMain|cs_6_5")
+  list(APPEND SHADER_COMPILE_LIST "wavefront_counter_reset_cs.hlsl|CSMain|cs_6_5")
+  list(APPEND SHADER_COMPILE_LIST "wavefront_prepare_indirect_args_cs.hlsl|CSMain|cs_6_5")
+  list(APPEND SHADER_COMPILE_LIST "wavefront_resolve_primary_cs.hlsl|CSMain|cs_6_5")
+  list(APPEND SHADER_COMPILE_LIST "wavefront_resolve_secondary_cs.hlsl|CSMain|cs_6_5")
   # pbr_mesh's grass vertex path has occasionally been missed by regex-based
   # discovery in existing build trees; keep it explicit so Explorer launches do
   # not fall back to loading source HLSL from the current working directory.

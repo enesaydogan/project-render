@@ -6,8 +6,6 @@
 #include "lights_lib.hlsl"
 #include "restir_lib.hlsl"
 
-// Additional resources for ReSTIR
-StructuredBuffer<Light> g_lights : register(t5000);
 // Matches DXR_HEAP_VARIANCE_UAV_OFFSET (u22) in dxr_renderer.cpp.
 RWTexture2D<float> g_variance : register(u22);
 RWTexture2D<float4> g_reservoir0 : register(u2);
@@ -371,24 +369,6 @@ void pack_gi_reservoir(GI_Reservoir r, out float4 d0, out float4 d1, out float4 
 }
 
 // target PDF for ReSTIR DI (luminance of lit surface) - now in restir_lib.hlsl
-
-Reservoir unpack_reservoir(float4 data) {
-    Reservoir r;
-    r.lightIndex = asuint(data.x);
-    // Defensive: if hardware normalized the NaN bits, reset to Sun index
-    if (r.lightIndex == 0x7FC00000) r.lightIndex = 0xFFFFFFFF;
-    r.w_sum = data.y;
-    r.M = asuint(data.z);
-    r.W = data.w;
-    // Extra safety: clamp state
-    if (isnan(r.w_sum) || isinf(r.w_sum)) r.w_sum = 0.0;
-    if (isnan(r.W) || isinf(r.W)) r.W = 0.0;
-    return r;
-}
-
-float4 pack_reservoir(Reservoir r) {
-    return float4(asfloat(r.lightIndex), r.w_sum, asfloat(r.M), r.W);
-}
 
 float halton(uint index, uint base)
 {

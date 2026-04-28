@@ -171,6 +171,10 @@ inline float2 DirectionToUVRotated(float3 dir) {
     return uv;
 }
 
+#include "../lights_lib.hlsl"
+
+StructuredBuffer<Light> g_lights : register(t5000);
+
 // Material flags (bit-packed in MaterialData.pbrParams_flags.w as uint bits).
 static const uint MATERIAL_FLAG_ALPHA_TESTED = 1u << 0;
 static const uint MATERIAL_FLAG_THIN_WALLED  = 1u << 1;
@@ -268,6 +272,155 @@ Buffer<uint> indices[1024] : register(t3074);
 #define RAY_TYPE_SHADOW     4
 #define RAY_TYPE_GI_EVAL    5
 
+inline uint WavefrontGetPathRayType(uint packedState)
+{
+    return packedState & 0xFFu;
+}
+
+inline uint WavefrontGetSpecularBounceCount(uint packedState)
+{
+    return (packedState >> 8) & 0xFFu;
+}
+
+inline uint WavefrontGetRefractiveBounceCount(uint packedState)
+{
+    return (packedState >> 16) & 0xFFu;
+}
+
+inline uint WavefrontGetDiffuseBounceCount(uint packedState)
+{
+    return (packedState >> 24) & 0xFFu;
+}
+
+inline uint WavefrontBuildPackedState(uint rayType,
+                                      uint specularBounceCount,
+                                      uint refractiveBounceCount,
+                                      uint diffuseBounceCount)
+{
+    return (rayType & 0xFFu) |
+           ((specularBounceCount & 0xFFu) << 8) |
+           ((refractiveBounceCount & 0xFFu) << 16) |
+           ((diffuseBounceCount & 0xFFu) << 24);
+}
+
+inline bool WavefrontHasBounceBudget(uint packedState,
+                                     uint nextRayType,
+                                     uint maxSpecularBounceCount,
+                                     uint maxRefractiveBounceCount,
+                                     uint maxDiffuseBounceCount)
+{
+    if (nextRayType == RAY_TYPE_REFLECTION) {
+        return WavefrontGetSpecularBounceCount(packedState) < maxSpecularBounceCount;
+    }
+    if (nextRayType == RAY_TYPE_REFRACTION) {
+        return WavefrontGetRefractiveBounceCount(packedState) < maxRefractiveBounceCount;
+    }
+    if (nextRayType == RAY_TYPE_DIFFUSE) {
+        return WavefrontGetDiffuseBounceCount(packedState) < maxDiffuseBounceCount;
+    }
+    return false;
+}
+
+inline uint WavefrontAdvancePackedState(uint packedState, uint nextRayType)
+{
+    uint specularBounceCount = WavefrontGetSpecularBounceCount(packedState);
+    uint refractiveBounceCount = WavefrontGetRefractiveBounceCount(packedState);
+    uint diffuseBounceCount = WavefrontGetDiffuseBounceCount(packedState);
+
+    if (nextRayType == RAY_TYPE_REFLECTION) {
+        specularBounceCount = min(specularBounceCount + 1u, 255u);
+    } else if (nextRayType == RAY_TYPE_REFRACTION) {
+        refractiveBounceCount = min(refractiveBounceCount + 1u, 255u);
+    } else if (nextRayType == RAY_TYPE_DIFFUSE) {
+        diffuseBounceCount = min(diffuseBounceCount + 1u, 255u);
+    }
+
+    return WavefrontBuildPackedState(nextRayType,
+                                     specularBounceCount,
+                                     refractiveBounceCount,
+                                     diffuseBounceCount);
+}
+
+struct WavefrontPathState
+{
+    float3 origin;
+    uint pixelIndex;
+    float3 direction;
+    uint rngState;
+    float3 throughput;
+    uint packedState;
+};
+
+struct WavefrontHitRecord
+{
+    float hitT;
+    uint pixelIndex;
+    uint packedColor0;
+    uint packedColor1;
+    uint packedNormal;
+    uint packedAlbedo;
+    uint packedSurface;
+    uint packedIorType;
+    uint packedTransmission;
+    uint packedSpecular;
+    uint packedState;
+    uint reserved;
+};
+
+static const uint WAVEFRONT_HIT_STATE_MISS = 0x80000000u;
+static const uint WAVEFRONT_MATERIAL_BIN_DIFFUSE = 0u;
+static const uint WAVEFRONT_MATERIAL_BIN_GLOSSY_DIELECTRIC = 1u;
+static const uint WAVEFRONT_MATERIAL_BIN_CONDUCTOR = 2u;
+static const uint WAVEFRONT_MATERIAL_BIN_DELTA_REFLECTION = 3u;
+static const uint WAVEFRONT_MATERIAL_BIN_REFRACTION = 4u;
+static const uint WAVEFRONT_MATERIAL_BIN_EMISSIVE = 5u;
+static const uint WAVEFRONT_MATERIAL_BIN_TRANSLUCENT = 6u;
+static const uint WAVEFRONT_MATERIAL_BIN_COUNT = 7u;
+static const uint WAVEFRONT_PRIMARY_MATERIAL_BIN_STATS_BASE = 32u;
+static const uint WAVEFRONT_SECONDARY_MATERIAL_BIN_STATS_BASE = 40u;
+
+struct WavefrontShadowTask
+{
+    float3 origin;
+    float maxDistance;
+    float3 direction;
+    uint packedLightIndex;
+    float3 throughput;
+    uint packedState;
+};
+
+struct WavefrontDispatchArgs
+{
+    uint groupCountX;
+    uint groupCountY;
+    uint groupCountZ;
+    uint activeCount;
+};
+
+RWStructuredBuffer<uint> g_wavefrontQueueCounters : register(u25);
+RWStructuredBuffer<WavefrontPathState> g_wavefrontPathQueueA : register(u26);
+RWStructuredBuffer<WavefrontPathState> g_wavefrontPathQueueB : register(u27);
+RWStructuredBuffer<WavefrontHitRecord> g_wavefrontHitQueue : register(u28);
+RWStructuredBuffer<WavefrontShadowTask> g_wavefrontShadowQueue : register(u29);
+RWStructuredBuffer<WavefrontDispatchArgs> g_wavefrontDispatchArgs : register(u30);
+RWStructuredBuffer<uint> g_wavefrontStats : register(u31);
+RWStructuredBuffer<uint4> g_wavefrontReserved : register(u32);
+
+static const uint WAVEFRONT_RESERVED_SECONDARY_DISPATCH_CONFIG_INDEX = 6u;
+static const uint WAVEFRONT_QUEUE_FLAG_SOURCE_IS_A = 0x1u;
+static const uint WAVEFRONT_QUEUE_FLAG_FILTER_DIFFUSE = 0x2u;
+static const uint WAVEFRONT_QUEUE_FLAG_FILTER_SPECULAR = 0x4u;
+static const uint WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL = 0u;
+static const uint WAVEFRONT_LIGHT_SAMPLE_FLAT = 1u;
+
+struct WavefrontLightSample
+{
+    float3 direction;
+    float maxDistance;
+    float3 radiance;
+    uint packedLightIndex;
+};
+
 struct RayPayload
 {
     float t;              // Hit distance (-1 for miss)
@@ -321,6 +474,25 @@ inline float3 PayloadGetColor(RayPayload p)
     uint hg = (p.packedColor0 >> 16) & 0xFFFFu;
     uint hb = p.packedColor1 & 0xFFFFu;
     return max(float3(f16tof32(hr), f16tof32(hg), f16tof32(hb)), 0.0);
+}
+
+inline float3 UnpackPayloadColorWords(uint packedColor0, uint packedColor1)
+{
+    uint hr = packedColor0 & 0xFFFFu;
+    uint hg = (packedColor0 >> 16) & 0xFFFFu;
+    uint hb = packedColor1 & 0xFFFFu;
+    return max(float3(f16tof32(hr), f16tof32(hg), f16tof32(hb)), 0.0);
+}
+
+inline float3 WavefrontHitRecordGetColor(WavefrontHitRecord record)
+{
+    return UnpackPayloadColorWords(record.packedColor0, record.packedColor1);
+}
+
+inline bool WavefrontHitRecordIsMiss(WavefrontHitRecord record)
+{
+    return (record.packedState & WAVEFRONT_HIT_STATE_MISS) != 0u ||
+           record.hitT < 0.0;
 }
 
 inline void PayloadSetCoatRoughness(inout RayPayload p, float coatRoughness)
@@ -377,6 +549,135 @@ inline float4 UnpackPayloadSurface(uint packed)
         (packed >> 16) & 0xFFu,
         (packed >> 24) & 0xFFu);
     return q / 255.0;
+}
+
+inline uint WavefrontClassifyMaterialBin(uint packedSurface,
+                                         uint packedIorType,
+                                         uint packedColor0,
+                                         uint packedColor1)
+{
+    float4 surface = UnpackPayloadSurface(packedSurface);
+    float roughness = saturate(surface.x);
+    float metallic = saturate(surface.y);
+    float transmission = saturate(surface.z);
+    float translucency = saturate(surface.w);
+    float specularWeight = ((packedIorType >> 25) & 0x7Fu) / 127.0;
+    float3 emissive = UnpackPayloadColorWords(packedColor0, packedColor1);
+    bool hasEmissive = max(emissive.r, max(emissive.g, emissive.b)) > 1.0e-4;
+
+    if (transmission > 0.05) {
+        return WAVEFRONT_MATERIAL_BIN_REFRACTION;
+    }
+    if (hasEmissive) {
+        return WAVEFRONT_MATERIAL_BIN_EMISSIVE;
+    }
+    if (translucency > 0.1) {
+        return WAVEFRONT_MATERIAL_BIN_TRANSLUCENT;
+    }
+    if (roughness < 0.08 && (metallic > 0.45 || specularWeight > 0.55)) {
+        return WAVEFRONT_MATERIAL_BIN_DELTA_REFLECTION;
+    }
+    if (metallic > 0.45) {
+        return WAVEFRONT_MATERIAL_BIN_CONDUCTOR;
+    }
+    if (roughness < 0.3 || specularWeight > 0.55) {
+        return WAVEFRONT_MATERIAL_BIN_GLOSSY_DIELECTRIC;
+    }
+    return WAVEFRONT_MATERIAL_BIN_DIFFUSE;
+}
+
+inline uint WavefrontPackMaterialSortKey(uint rayType,
+                                         uint materialBin,
+                                         uint flags)
+{
+    return ((rayType & 0xFFu) << 16) | ((materialBin & 0xFFu) << 8) |
+           (flags & 0xFFu);
+}
+
+inline uint WavefrontGetMaterialBinFromSortKey(uint sortKey)
+{
+    return (sortKey >> 8) & 0xFFu;
+}
+
+inline void WavefrontAccumulateMaterialBinStat(uint statsBase, uint sortKey)
+{
+    uint materialBin = WavefrontGetMaterialBinFromSortKey(sortKey);
+    if (materialBin < WAVEFRONT_MATERIAL_BIN_COUNT) {
+        uint previousValue = 0u;
+        InterlockedAdd(g_wavefrontStats[statsBase + materialBin], 1u,
+                       previousValue);
+    }
+}
+
+inline uint WavefrontPackLightSampleMetadata(uint lightType, uint lightIndex)
+{
+    return ((lightType & 0xFFu) << 24) | (lightIndex & 0x00FFFFFFu);
+}
+
+inline uint WavefrontGetLightSampleType(uint packedLightIndex)
+{
+    return (packedLightIndex >> 24) & 0xFFu;
+}
+
+inline uint WavefrontGetLightSampleIndex(uint packedLightIndex)
+{
+    return packedLightIndex & 0x00FFFFFFu;
+}
+
+inline WavefrontLightSample WavefrontSampleDirectionalLight(float sampleWeight)
+{
+    WavefrontLightSample sample;
+    sample.direction = normalize(lightDir.xyz);
+    if (dot(sample.direction, sample.direction) < 1.0e-6) {
+        sample.direction = float3(0.0, 1.0, 0.0);
+    }
+    sample.maxDistance = 1000.0;
+    sample.radiance = lightColor.rgb * lightColor.w * intensity * sampleWeight;
+    sample.packedLightIndex =
+        WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL, 0u);
+    return sample;
+}
+
+inline WavefrontLightSample WavefrontSampleFlatLight(float3 surfacePos,
+                                                     uint lightIndex,
+                                                     float sampleWeight)
+{
+    WavefrontLightSample sample;
+    Light light = g_lights[lightIndex];
+    LightSample lightSample = evaluate_light(light, surfacePos);
+    sample.direction = lightSample.L;
+    sample.maxDistance = lightSample.dist;
+    sample.radiance = lightSample.radiance * sampleWeight;
+    sample.packedLightIndex =
+        WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_FLAT, lightIndex);
+    return sample;
+}
+
+inline WavefrontLightSample WavefrontSampleDirectLight(float3 surfacePos,
+                                                       inout RNG rng)
+{
+    const uint numLights = (uint)lightCount;
+    if (numLights == 0u || next_float(rng) < 0.5) {
+        return WavefrontSampleDirectionalLight((numLights > 0u) ? 2.0 : 1.0);
+    }
+
+    const uint lightIndex = next_uint(rng) % numLights;
+    return WavefrontSampleFlatLight(surfacePos, lightIndex,
+                                    2.0 * (float)numLights);
+}
+
+inline float3 WavefrontEvaluateLightSampleRadiance(uint packedLightIndex,
+                                                   float3 surfacePos)
+{
+    const uint lightType = WavefrontGetLightSampleType(packedLightIndex);
+    if (lightType == WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL) {
+        return lightColor.rgb * lightColor.w * intensity;
+    }
+    if (lightType == WAVEFRONT_LIGHT_SAMPLE_FLAT) {
+        Light light = g_lights[WavefrontGetLightSampleIndex(packedLightIndex)];
+        return evaluate_light(light, surfacePos).radiance;
+    }
+    return float3(0.0, 0.0, 0.0);
 }
 
 inline uint PackPayloadIorType(float ior, uint rayType, bool thinWalled, float specularWeight)
