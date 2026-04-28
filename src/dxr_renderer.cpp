@@ -5722,21 +5722,26 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     }
     bool useWavefrontResolvedOutput = false;
     if (s_pathTracingBackend != PathTracingBackend::Legacy && cameraCB) {
+      for (UINT i = 0; i < 6; ++i) {
+        DispatchWavefrontCounterReset(dxrList.Get(), i, 0u);
+      }
+
       SetWavefrontStage("bootstrap");
       DispatchWavefrontBootstrap(dxrList.Get(), cameraCB);
       BindRayTracingGlobalRoot();
       SetWavefrontStage("primary-visibility");
       DispatchWavefrontPrimaryVisibility(dxrList.Get());
 
-      // Upload indirect dispatch records (shader tables into reserved buffer)
-      // once per session; repeated calls are cheap but the GPU copy is
-      // suppressed after the first successful upload.
-      static bool s_wavefrontDispatchRecordsUploaded = false;
-      if (!s_wavefrontDispatchRecordsUploaded) {
+      // Record indirect dispatch updates whenever the active shader table pointers change.
+      static D3D12_GPU_VIRTUAL_ADDRESS s_lastSecondaryRayGen = 0;
+      static D3D12_GPU_VIRTUAL_ADDRESS s_lastShadowRayGen = 0;
+      if (s_wavefrontSecondaryRayGenShaderTable != s_lastSecondaryRayGen ||
+          s_wavefrontShadowRayGenShaderTable != s_lastShadowRayGen) {
         UploadWavefrontIndirectDispatchRecords(dxrList.Get());
         if (s_wavefrontSecondaryRayGenShaderTable != 0 &&
             s_wavefrontShadowRayGenShaderTable != 0) {
-          s_wavefrontDispatchRecordsUploaded = true;
+          s_lastSecondaryRayGen = s_wavefrontSecondaryRayGenShaderTable;
+          s_lastShadowRayGen = s_wavefrontShadowRayGenShaderTable;
         }
       }
 
@@ -5800,6 +5805,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
           SetWavefrontStage("secondary-shadow");
           BindRayTracingGlobalRoot();
           DispatchWavefrontShadowVisibility(dxrList.Get());
+          DispatchWavefrontCounterReset(dxrList.Get(), 5u, 0u);
         }
 
         useWavefrontResolvedOutput = true;

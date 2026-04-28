@@ -68,14 +68,10 @@ void WavefrontShadowRayGen()
                                     WavefrontEvaluateLightSampleRadiance(
                                         task.packedLightIndex,
                                         task.origin);
-        g_output[pixel] = float4(g_output[pixel].rgb + contribution, 1.0);
         float4 accum = g_accumulation[pixel];
+        float historyCount = max(accum.a, 1.0);
+        g_output[pixel] = float4(g_output[pixel].rgb + contribution / historyCount,
+                                 1.0);
         g_accumulation[pixel] = float4(accum.rgb + contribution, accum.a);
-
-        uint previousValue = 0u;
-        InterlockedAdd(g_wavefrontStats[30], 1u, previousValue);
-    } else {
-        uint previousValue = 0u;
-        InterlockedAdd(g_wavefrontStats[31], 1u, previousValue);
     }
 }

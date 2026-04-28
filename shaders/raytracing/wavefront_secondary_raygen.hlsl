@@ -58,16 +58,7 @@ void WavefrontSecondaryRayGen()
         return;
     }
 
-    {
-        uint previousValue = 0u;
-        InterlockedAdd(g_wavefrontStats[23], 1u, previousValue);
-        if (rayType == RAY_TYPE_DIFFUSE) {
-            InterlockedAdd(g_wavefrontStats[47], 1u, previousValue);
-        } else {
-            InterlockedAdd(g_wavefrontStats[48], 1u, previousValue);
-        }
-    }
-
+    // Removed massive global atomic contention
     RayDesc ray;
     ray.Origin = state.origin;
     ray.Direction = normalize(state.direction);
@@ -99,12 +90,7 @@ void WavefrontSecondaryRayGen()
         0u);
 
     if (payload.t < 0.0) {
-        uint previousValue = 0u;
         record.packedState |= WAVEFRONT_HIT_STATE_MISS;
-        InterlockedAdd(g_wavefrontStats[25], 1u, previousValue);
-    } else {
-        uint previousValue = 0u;
-        InterlockedAdd(g_wavefrontStats[24], 1u, previousValue);
     }
 
     g_wavefrontHitQueue[pathIndex] = record;

@@ -217,9 +217,10 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     float2 currScreen = float2(pixel) + 0.5;
     float3 rayDir = normalize(state.direction);
+    float3 pathThroughput = max(state.throughput, 0.0);
     bool isMiss = WavefrontHitRecordIsMiss(record);
 
-    float3 color = WavefrontHitRecordGetColor(record);
+    float3 color = WavefrontHitRecordGetColor(record) * pathThroughput;
     float depth = (dlssRayReconstruction > 0.5) ? farZ : 1.0;
     float linearDepth = farZ;
     float2 motion = ComputeWavefrontSkyMotion(rayDir, currScreen);
@@ -250,8 +251,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         float specularWeight = saturate(UnpackPayloadSpecularWeight(record.packedIorType));
         float ior = UnpackPayloadIor(record.packedIorType);
         float3 transmissionTint = UnpackPayloadTransmissionColor(record.packedTransmission);
-        specularAlbedo = UnpackPayloadSpecularColor(record.packedSpecular) *
-                         saturate(max(metallic, specularWeight) * (1.0 - 0.5 * transmission));
+        float3 specularColor = UnpackPayloadSpecularColor(record.packedSpecular);
+        specularAlbedo = ComputeWavefrontSpecularThroughput(
+            albedo, metallic, ior, specularWeight, specularColor, transmission);
         motion = ComputeWavefrontSurfaceMotion(hitPos, currScreen);
 
         RNG rng;
@@ -268,9 +270,15 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         float3 nextThroughput = state.throughput * max(albedo, 0.02.xxx);
         
         // Evaluate probabilities for path continuation to avoid hard cut-offs
-        float transmissionProb = max(transmission, 0.0);
-        float reflectionProb = saturate(max(metallic, specularWeight) * (1.0 - transmissionProb));
-        float diffuseProb = saturate(1.0 - transmissionProb - reflectionProb);
+        float transmissionProb = 0.0;
+        float reflectionProb = 0.0;
+        float diffuseProb = 0.0;
+        ComputeWavefrontLobeProbabilities(normal, -rayDir,
+                          albedo, metallic, transmission,
+                          translucency, ior, specularWeight,
+                          specularColor,
+                          reflectionProb, diffuseProb,
+                          transmissionProb);
         
         float rnd = next_float(rng);
         if (transmissionProb > 0.0 && rnd < transmissionProb) {
@@ -295,7 +303,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 record, normal, hitPos, sunSample);
             update_reservoir(diReservoir, 0xFFFFFFFFu, sunTarget, rng);
 
-            const uint numLights = (uint)lightCount;
+            const uint numLights = WavefrontGetAvailableLightCount();
             if (numLights > 0u) {
                 const uint lightIndex = next_uint(rng) % numLights;
                 WavefrontLightSample localSample =
@@ -305,11 +313,15 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                     record, normal, hitPos, localSample);
                 update_reservoir(diReservoir, lightIndex, localTarget, rng);
             }
-
             WavefrontLightSample finalSample;
+            finalSample.direction = float3(0.0, 1.0, 0.0);
+            finalSample.maxDistance = 0.0;
+            finalSample.radiance = float3(0.0, 0.0, 0.0);
+            finalSample.packedLightIndex =
+                WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL, 0u);
             if (diReservoir.lightIndex == 0xFFFFFFFFu) {
                 finalSample = WavefrontSampleDirectionalLight(1.0);
-            } else {
+            } else if (diReservoir.lightIndex < numLights) {
                 finalSample = WavefrontSampleFlatLight(hitPos,
                                                        diReservoir.lightIndex,
                                                        1.0);
@@ -335,7 +347,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         }
 
         if (debugMode <= 0.5 && debugVisualizationMode <= 0.5) {
-            color = EvaluateWavefrontPrimaryPreview(record, normal, hitPos);
+            color = EvaluateWavefrontPrimaryPreview(record, normal, hitPos) *
+                    pathThroughput;
         }
 
         uint previousValue = 0u;
@@ -419,8 +432,15 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     ClearWavefrontGiReservoir(pixel);
 
     color = max(color, 0.0);
-    g_output[pixel] = float4(color, 1.0);
-    g_accumulation[pixel] = float4(color, 1.0);
+    float4 history = g_accumulation[pixel];
+    float historyCount = history.a;
+    bool invalidHistory = !isfinite(historyCount) || (historyCount < 1.0) ||
+                          any(!isfinite(history.rgb));
+    float3 historySum = invalidHistory ? float3(0.0, 0.0, 0.0) : history.rgb;
+    float nextCount = invalidHistory ? 1.0 : (historyCount + 1.0);
+    float3 nextSum = historySum + color;
+    g_accumulation[pixel] = float4(nextSum, nextCount);
+    g_output[pixel] = float4(nextSum / max(nextCount, 1.0), 1.0);
     g_depth[pixel] = depth;
     g_linearDepth[pixel] = linearDepth;
     g_motionVectors[pixel] = motion;

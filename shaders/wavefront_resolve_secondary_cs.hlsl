@@ -195,12 +195,13 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         float roughness = saturate(surface.x);
         float metallic = saturate(surface.y);
         float transmission = saturate(surface.z);
+        float translucency = saturate(surface.w);
         float specularWeight = saturate(UnpackPayloadSpecularWeight(record.packedIorType));
         float ior = UnpackPayloadIor(record.packedIorType);
         float3 transmissionTint = UnpackPayloadTransmissionColor(record.packedTransmission);
-        float3 specularAlbedo = UnpackPayloadSpecularColor(record.packedSpecular) *
-                                saturate(max(metallic, specularWeight) *
-                                         (1.0 - 0.5 * transmission));
+        float3 specularColor = UnpackPayloadSpecularColor(record.packedSpecular);
+        float3 specularAlbedo = ComputeWavefrontSpecularThroughput(
+            albedo, metallic, ior, specularWeight, specularColor, transmission);
         RNG rng;
         rng.state = state.rngState ^ (pathIndex * 0x7F4A7C15u) ^ 0xC2B2AE3Du;
         const uint maxSpecularBounceCount =
@@ -215,9 +216,15 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         float3 nextThroughput = state.throughput * max(albedo, 0.02.xxx);
         
         // Evaluate probabilities for path continuation to avoid hard cut-offs
-        float transmissionProb = max(transmission, 0.0);
-        float reflectionProb = saturate(max(metallic, specularWeight) * (1.0 - transmissionProb));
-        float diffuseProb = saturate(1.0 - transmissionProb - reflectionProb);
+        float transmissionProb = 0.0;
+        float reflectionProb = 0.0;
+        float diffuseProb = 0.0;
+        ComputeWavefrontLobeProbabilities(normal, -rayDir,
+                          albedo, metallic, transmission,
+                          translucency, ior, specularWeight,
+                          specularColor,
+                          reflectionProb, diffuseProb,
+                          transmissionProb);
         
         float rnd = next_float(rng);
         if (transmissionProb > 0.0 && rnd < transmissionProb) {
@@ -306,7 +313,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     }
 
     contribution = max(contribution, 0.0);
-    g_output[pixel] = float4(g_output[pixel].rgb + contribution, 1.0);
     float4 accum = g_accumulation[pixel];
+    float historyCount = max(accum.a, 1.0);
+    g_output[pixel] = float4(g_output[pixel].rgb + contribution / historyCount,
+                             1.0);
     g_accumulation[pixel] = float4(accum.rgb + contribution, accum.a);
 }

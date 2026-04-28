@@ -23,7 +23,7 @@ inline float calculate_p_target(float3 radiance, float3 albedo, float3 f_brdf, f
 Reservoir init_reservoir()
 {
     Reservoir r;
-    r.lightIndex = 0;
+    r.lightIndex = 0xFFFFFFFFu;
     r.w_sum = 0.0;
     r.M = 0;
     r.W = 0.0;

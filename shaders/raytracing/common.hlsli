@@ -561,7 +561,6 @@ inline uint WavefrontClassifyMaterialBin(uint packedSurface,
     float metallic = saturate(surface.y);
     float transmission = saturate(surface.z);
     float translucency = saturate(surface.w);
-    float specularWeight = ((packedIorType >> 25) & 0x7Fu) / 127.0;
     float3 emissive = UnpackPayloadColorWords(packedColor0, packedColor1);
     bool hasEmissive = max(emissive.r, max(emissive.g, emissive.b)) > 1.0e-4;
 
@@ -574,13 +573,13 @@ inline uint WavefrontClassifyMaterialBin(uint packedSurface,
     if (translucency > 0.1) {
         return WAVEFRONT_MATERIAL_BIN_TRANSLUCENT;
     }
-    if (roughness < 0.08 && (metallic > 0.45 || specularWeight > 0.55)) {
+    if (roughness < 0.08 && metallic > 0.45) {
         return WAVEFRONT_MATERIAL_BIN_DELTA_REFLECTION;
     }
     if (metallic > 0.45) {
         return WAVEFRONT_MATERIAL_BIN_CONDUCTOR;
     }
-    if (roughness < 0.3 || specularWeight > 0.55) {
+    if (roughness < 0.3) {
         return WAVEFRONT_MATERIAL_BIN_GLOSSY_DIELECTRIC;
     }
     return WAVEFRONT_MATERIAL_BIN_DIFFUSE;
@@ -624,6 +623,14 @@ inline uint WavefrontGetLightSampleIndex(uint packedLightIndex)
     return packedLightIndex & 0x00FFFFFFu;
 }
 
+inline uint WavefrontGetAvailableLightCount()
+{
+    uint availableLights = 0u;
+    uint lightStride = 0u;
+    g_lights.GetDimensions(availableLights, lightStride);
+    return min((uint)lightCount, availableLights);
+}
+
 inline WavefrontLightSample WavefrontSampleDirectionalLight(float sampleWeight)
 {
     WavefrontLightSample sample;
@@ -643,6 +650,15 @@ inline WavefrontLightSample WavefrontSampleFlatLight(float3 surfacePos,
                                                      float sampleWeight)
 {
     WavefrontLightSample sample;
+    const uint availableLights = WavefrontGetAvailableLightCount();
+    if (lightIndex >= availableLights) {
+        sample.direction = float3(0.0, 1.0, 0.0);
+        sample.maxDistance = 0.0;
+        sample.radiance = float3(0.0, 0.0, 0.0);
+        sample.packedLightIndex =
+            WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_FLAT, 0u);
+        return sample;
+    }
     Light light = g_lights[lightIndex];
     LightSample lightSample = evaluate_light(light, surfacePos);
     sample.direction = lightSample.L;
@@ -656,7 +672,7 @@ inline WavefrontLightSample WavefrontSampleFlatLight(float3 surfacePos,
 inline WavefrontLightSample WavefrontSampleDirectLight(float3 surfacePos,
                                                        inout RNG rng)
 {
-    const uint numLights = (uint)lightCount;
+    const uint numLights = WavefrontGetAvailableLightCount();
     if (numLights == 0u || next_float(rng) < 0.5) {
         return WavefrontSampleDirectionalLight((numLights > 0u) ? 2.0 : 1.0);
     }
@@ -674,7 +690,12 @@ inline float3 WavefrontEvaluateLightSampleRadiance(uint packedLightIndex,
         return lightColor.rgb * lightColor.w * intensity;
     }
     if (lightType == WAVEFRONT_LIGHT_SAMPLE_FLAT) {
-        Light light = g_lights[WavefrontGetLightSampleIndex(packedLightIndex)];
+        const uint lightIndex = WavefrontGetLightSampleIndex(packedLightIndex);
+        const uint availableLights = WavefrontGetAvailableLightCount();
+        if (lightIndex >= availableLights) {
+            return float3(0.0, 0.0, 0.0);
+        }
+        Light light = g_lights[lightIndex];
         return evaluate_light(light, surfacePos).radiance;
     }
     return float3(0.0, 0.0, 0.0);
