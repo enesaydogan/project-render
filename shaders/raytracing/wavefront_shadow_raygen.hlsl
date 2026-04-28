@@ -1,19 +1,5 @@
 #include "common.hlsli"
-
-static RayPayload InitWavefrontShadowPayload()
-{
-    RayPayload payload;
-    payload.t = 1.0;
-    payload.packedColor1 = 0u;
-    PayloadSetColor(payload, float3(0.0, 0.0, 0.0));
-    payload.packedNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
-    payload.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
-    payload.packedSurface = PackPayloadSurface(1.0, 0.0, 0.0, 0.0);
-    payload.packedIorType = PackPayloadIorType(1.0, RAY_TYPE_SHADOW, false, 1.0);
-    payload.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
-    payload.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
-    return payload;
-}
+#include "wavefront_transport.hlsli"
 
 [shader("raygeneration")]
 void WavefrontShadowRayGen()
@@ -50,20 +36,24 @@ void WavefrontShadowRayGen()
         return;
     }
 
-    RayDesc ray;
-    ray.Origin = task.origin;
-    ray.Direction = normalize(task.direction);
-    ray.TMin = 0.002;
-    ray.TMax = max(task.maxDistance, 0.002);
+    float3 visibilityDirection = normalize(task.direction);
+    if (WavefrontGetLightSampleType(task.packedLightIndex) ==
+            WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL &&
+        lightDir.w > 0.0) {
+        RNG shadowRng;
+        shadowRng.state =
+            ((uint)globalFrameCount * 0x9E3779B9u) ^
+            (taskIndex * 0x85EBCA6Bu) ^
+            (pixelIndex * 0xC2B2AE35u);
+        visibilityDirection = WavefrontBuildSunVisibilityDirection(
+            visibilityDirection, shadowRng);
+    }
 
-    RayPayload payload = InitWavefrontShadowPayload();
-    TraceRay(g_accel,
-             RAY_FLAG_SKIP_CLOSEST_HIT_SHADER |
-                 RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
-             0xFF, 0, 0, 0, ray, payload);
+    const bool visible = WavefrontTraceVisibility(
+        task.origin, visibilityDirection, task.maxDistance);
     SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
 
-    if (payload.t < 0.0) {
+    if (visible) {
         uint previousValue = 0u;
         InterlockedAdd(g_wavefrontStats[30], 1u, previousValue);
         const float3 contribution = max(task.throughput, 0.0) *

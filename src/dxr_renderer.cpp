@@ -202,7 +202,7 @@ static constexpr UINT kWavefrontDispatchArgCount = 4;
 static constexpr UINT kWavefrontReservedUint4Count = 16;
 static constexpr UINT64 kWavefrontMinQueueEntries = 65536ull;
 static constexpr UINT64 kWavefrontMaxPathQueueEntries = 2097152ull; // 2M
-static constexpr UINT64 kWavefrontMaxShadowQueueEntries = 2097152ull; // 2M
+static constexpr UINT64 kWavefrontMaxShadowQueueEntries = 4194304ull; // 4M
 static constexpr UINT kWavefrontSecondaryResolveDispatchArgsIndex = 2;
 static constexpr UINT kWavefrontSecondaryDispatchRaysReservedSlot = 0;
 static constexpr UINT kWavefrontShadowDispatchRaysReservedSlot = 7;
@@ -3882,7 +3882,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     s_wavefrontHitQueueCapacity = ComputeWavefrontQueueCapacity(
       s_outputWidth, s_outputHeight, kWavefrontMaxPathQueueEntries);
     s_wavefrontShadowQueueCapacity = ComputeWavefrontQueueCapacity(
-      s_outputWidth, s_outputHeight, kWavefrontMaxShadowQueueEntries, 2ull);
+      s_outputWidth, s_outputHeight, kWavefrontMaxShadowQueueEntries, 3ull);
 
     CreateStructuredBufferUav(s_wavefrontQueueCountersBuffer,
                   kWavefrontQueueCounterCount, sizeof(UINT),

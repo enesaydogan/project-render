@@ -62,6 +62,7 @@ CMakeFiles/**
 # OS files
 .DS_Store
 Thumbs.db
+AGENTS.md
 
 # vcpkg/build artifacts (if vendored under repos/)
 repos/vcpkg/buildtrees/

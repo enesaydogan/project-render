@@ -5,6 +5,50 @@
 
 static const float kWavefrontEnvLightingBoost = 3.0;
 
+inline float3 WavefrontSampleCone(float3 dir, float cosThetaMax, float2 u)
+{
+    float z = lerp(cosThetaMax, 1.0, u.x);
+    float r = sqrt(max(0.0, 1.0 - z * z));
+    float phi = 2.0 * PI * u.y;
+    float x = r * cos(phi);
+    float y = r * sin(phi);
+
+    float3 up = abs(dir.z) < 0.999 ? float3(0.0, 0.0, 1.0)
+                                   : float3(1.0, 0.0, 0.0);
+    float3 tangent = normalize(cross(up, dir));
+    float3 bitangent = cross(dir, tangent);
+    return normalize(tangent * x + bitangent * y + dir * z);
+}
+
+inline float3 WavefrontBuildSunVisibilityDirection(float3 direction,
+                                                   inout RNG rng)
+{
+    float3 sunDirection = normalize(direction);
+    if (lightDir.w > 0.0) {
+        sunDirection = WavefrontSampleCone(sunDirection,
+                                           cos(lightDir.w),
+                                           next_float2(rng));
+    }
+    return sunDirection;
+}
+
+inline bool WavefrontTraceVisibility(float3 origin,
+                                     float3 direction,
+                                     float maxDistance)
+{
+    RayDesc ray;
+    ray.Origin = origin;
+    ray.Direction = normalize(direction);
+    ray.TMin = 0.001;
+    ray.TMax = max(0.001, maxDistance - 0.002);
+
+    RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER |
+             RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> query;
+    query.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, ray);
+    while (query.Proceed()) {}
+    return query.CommittedStatus() == COMMITTED_NOTHING;
+}
+
 inline float WavefrontDielectricF0FromIor(float ior)
 {
     float safeIor = max(ior, 1.0 + 1e-4);

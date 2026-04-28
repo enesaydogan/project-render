@@ -96,46 +96,8 @@ inline float3 EvaluateWavefrontSecondaryContribution(
     float3 worldNormal,
     float3 hitPos)
 {
-    float3 baseColor = UnpackPayloadAlbedo(record.packedAlbedo);
-    float3 specularColor = UnpackPayloadSpecularColor(record.packedSpecular);
-    float4 surface = UnpackPayloadSurface(record.packedSurface);
-    float roughness = saturate(surface.x);
-    float metallic = saturate(surface.y);
-    float transmission = saturate(surface.z);
-    float translucency = saturate(surface.w);
-    float specularWeight = saturate(UnpackPayloadSpecularWeight(record.packedIorType));
-
-    float3 V = normalize(camPos - hitPos);
-    float3 L = normalize(lightDir.xyz);
-    float3 H = normalize(V + L);
-    float NdotL = saturate(dot(worldNormal, L));
-    float NdotV = saturate(dot(worldNormal, V));
-    float NdotH = saturate(dot(worldNormal, H));
-    float VdotH = saturate(dot(V, H));
-
-    float3 diffuseColor = baseColor * (1.0 - metallic) * (1.0 - transmission);
-    float3 dielectricF0 = 0.04.xxx * specularWeight;
-    float3 F0 = lerp(dielectricF0 * max(specularColor, 0.0), baseColor, metallic);
-    float alpha = max(roughness * roughness, 0.03);
-    float alpha2 = alpha * alpha;
-    float denom = max(NdotH * NdotH * (alpha2 - 1.0) + 1.0, 1.0e-4);
-    float D = alpha2 / max(PI * denom * denom, 1.0e-4);
-    float k = (alpha + 1.0) * (alpha + 1.0) * 0.125;
-    float Gv = NdotV / max(lerp(NdotV, 1.0, k), 1.0e-4);
-    float Gl = NdotL / max(lerp(NdotL, 1.0, k), 1.0e-4);
-    float3 F = F0 + (1.0 - F0) * pow(max(1.0 - VdotH, 0.0), 5.0);
-    float3 specular = (D * Gv * Gl) * F;
-
-    float horizon = saturate(worldNormal.y * 0.5 + 0.5);
-    float3 ambient = diffuseColor * lerp(0.04, 0.14, horizon) * intensity;
-    float3 transmissionTint =
-        UnpackPayloadTransmissionColor(record.packedTransmission) * transmission;
-    float edgeLight = pow(max(1.0 - NdotV, 0.0), 3.0);
-    float3 translucentWrap = transmissionTint * (0.08 + 0.24 * edgeLight) *
-                             max(translucency, transmission) * intensity;
-
-    float3 localLighting = WavefrontHitRecordGetColor(record) + ambient + translucentWrap;
-    return max(state.throughput, 0.0) * max(localLighting, 0.0);
+    return max(state.throughput, 0.0) *
+           max(WavefrontHitRecordGetColor(record), 0.0);
 }
 
 [numthreads(64, 1, 1)]
@@ -313,12 +275,40 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 
         WavefrontLightSample lightSample =
             WavefrontSampleDirectLight(hitPos, rng);
+        WavefrontLightSample explicitSunSample =
+            WavefrontSampleDirectionalLight(1.0);
+        float3 sunShadowWeight = state.throughput *
+                                 ComputeWavefrontDirectLightingWeight(
+                                     record, normal, hitPos,
+                                     explicitSunSample.direction);
+        if (any(sunShadowWeight > 1.0e-4)) {
+            uint shadowIndex = 0u;
+            InterlockedAdd(g_wavefrontQueueCounters[kWavefrontShadowQueueCounter],
+                           1u, shadowIndex);
+            if (shadowIndex < shadowQueueCapacity) {
+                EmitWavefrontShadowTask(
+                    shadowIndex,
+                    hitPos + normal * kWavefrontRayBias,
+                    explicitSunSample.direction,
+                    explicitSunSample.maxDistance,
+                    explicitSunSample.packedLightIndex,
+                    sunShadowWeight,
+                    record.pixelIndex);
+                uint previousValue = 0u;
+                InterlockedAdd(g_wavefrontStats[20], 1u, previousValue);
+            } else {
+                uint previousValue = 0u;
+                InterlockedAdd(g_wavefrontStats[22], 1u, previousValue);
+            }
+        }
         float3 shadowWeight = state.throughput *
                               ComputeWavefrontDirectLightingWeight(
                                   record, normal, hitPos, lightSample.direction) *
                               WavefrontGetDirectLightSelectionWeight(
                                   lightSample.packedLightIndex);
-        if (any(shadowWeight > 1.0e-4)) {
+        if (WavefrontGetLightSampleType(lightSample.packedLightIndex) !=
+                WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL &&
+            any(shadowWeight > 1.0e-4)) {
             uint shadowIndex = 0u;
             InterlockedAdd(g_wavefrontQueueCounters[kWavefrontShadowQueueCounter],
                            1u, shadowIndex);

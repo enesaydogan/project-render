@@ -866,6 +866,28 @@ inline GI_Reservoir GenerateWavefrontGiCandidate(float3 hitPos,
     return reservoir;
 }
 
+inline float3 EvaluateWavefrontGiReservoirContribution(GI_Reservoir reservoir,
+                                                       float3 hitPos,
+                                                       float3 normal,
+                                                       float3 diffuseAlbedo)
+{
+    if (reservoir.M == 0u || reservoir.W <= 0.0 ||
+        !any(reservoir.radiance > 0.0)) {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    float3 candidateVector = reservoir.hitPos - hitPos;
+    float candidateDistanceSq = dot(candidateVector, candidateVector);
+    if (candidateDistanceSq <= 1.0e-8) {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    float3 candidateDir = candidateVector * rsqrt(candidateDistanceSq);
+    float nDotL = saturate(dot(normal, candidateDir));
+    float3 brdf = diffuseAlbedo / PI;
+    return max(reservoir.radiance * brdf * nDotL * reservoir.W, 0.0);
+}
+
 inline void EmitWavefrontSecondaryPath(uint queueIndex,
                                        uint pixelIndex,
                                        float3 origin,
@@ -1055,11 +1077,6 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             }
         }
 
-        if (debugMode <= 0.5 && debugVisualizationMode <= 0.5) {
-            color = EvaluateWavefrontPrimaryPreview(record, normal, hitPos) *
-                    pathThroughput;
-        }
-
         uint previousValue = 0u;
         InterlockedAdd(g_wavefrontStats[9], 1u, previousValue);
         if (nextRayType == RAY_TYPE_REFRACTION) {
@@ -1108,7 +1125,33 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                                   record, normal, hitPos,
                                   selectedDirectLightSample.direction) *
                               selectedDirectLightWeight;
-        if (selectedDirectLightWeight > 0.0 && any(shadowWeight > 1.0e-4)) {
+        WavefrontLightSample explicitSunSample =
+            WavefrontSampleDirectionalLight(1.0);
+        float3 sunShadowWeight = state.throughput *
+                                 ComputeWavefrontDirectLightingWeight(
+                                     record, normal, hitPos,
+                                     explicitSunSample.direction);
+        if (any(sunShadowWeight > 1.0e-4)) {
+            uint shadowIndex = 0u;
+            InterlockedAdd(g_wavefrontQueueCounters[kWavefrontShadowQueueCounter],
+                           1u, shadowIndex);
+            if (shadowIndex < shadowQueueCapacity) {
+                EmitWavefrontShadowTask(
+                    shadowIndex,
+                    hitPos + normal * kWavefrontRayBias,
+                    explicitSunSample.direction,
+                    explicitSunSample.maxDistance,
+                    explicitSunSample.packedLightIndex,
+                    sunShadowWeight,
+                    record.pixelIndex);
+                InterlockedAdd(g_wavefrontStats[20], 1u, previousValue);
+            } else {
+                InterlockedAdd(g_wavefrontStats[22], 1u, previousValue);
+            }
+        }
+        if (WavefrontGetLightSampleType(selectedDirectLightSample.packedLightIndex) !=
+                WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL &&
+            selectedDirectLightWeight > 0.0 && any(shadowWeight > 1.0e-4)) {
             uint shadowIndex = 0u;
             InterlockedAdd(g_wavefrontQueueCounters[kWavefrontShadowQueueCounter],
                            1u, shadowIndex);
@@ -1127,45 +1170,11 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             }
         }
 
-        float envSampleLod = clamp(log2(max(length(hitPos - camPos), 1.0e-3) * 0.02),
-                                   0.0, 10.0);
-        LightSample envSample = sample_env_map(envMap, envConditionalCdf,
-                                               envMarginalCdf, linearSampler,
-                                               rng, envSampleLod);
-        float NdotL_env = saturate(dot(normal, envSample.L));
-        if (envSample.pdf > 1.0e-8 && NdotL_env > 0.0) {
-            float misW = ComputeWavefrontEnvironmentMisWeight(record, normal,
-                                                              hitPos,
-                                                              envSample.L,
-                                                              envSample.pdf);
-            float3 envShadowWeight = state.throughput *
-                                     ComputeWavefrontDirectLightingWeight(
-                                         record, normal, hitPos,
-                                         envSample.L) *
-                                     (misW / max(envSample.pdf, 1.0e-8)) *
-                                     kWavefrontEnvLightingBoost;
-            if (any(envShadowWeight > 1.0e-4)) {
-                uint shadowIndex = 0u;
-                InterlockedAdd(g_wavefrontQueueCounters[kWavefrontShadowQueueCounter],
-                               1u, shadowIndex);
-                if (shadowIndex < shadowQueueCapacity) {
-                    EmitWavefrontShadowTask(
-                        shadowIndex,
-                        hitPos + normal * kWavefrontRayBias,
-                        envSample.L,
-                        10000.0,
-                        WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_ENV,
-                                                         0u),
-                        envShadowWeight,
-                        record.pixelIndex);
-                    InterlockedAdd(g_wavefrontStats[20], 1u, previousValue);
-                } else {
-                    InterlockedAdd(g_wavefrontStats[22], 1u, previousValue);
-                }
-            }
-        }
         giReservoir = GenerateWavefrontGiCandidate(hitPos, normal,
                                                    diffuseAlbedo, rng);
+        color += state.throughput *
+                 EvaluateWavefrontGiReservoirContribution(
+                     giReservoir, hitPos, normal, diffuseAlbedo);
     } else {
         uint previousValue = 0u;
         InterlockedAdd(g_wavefrontStats[13], 1u, previousValue);
