@@ -577,6 +577,14 @@ static UINT s_lastWavefrontShadowVisibilityTaskCount = 0;
 static UINT s_lastWavefrontShadowVisibleCount = 0;
 static UINT s_lastWavefrontShadowOccludedCount = 0;
 static UINT s_lastWavefrontStats[64] = {};
+static const char *s_wavefrontStageName = "idle";
+
+static void SetWavefrontStage(const char *stageName) {
+  s_wavefrontStageName = stageName ? stageName : "unknown";
+  if (g_verboseRenderLogs) {
+    fprintf(stderr, "DxrRenderer: Wavefront stage: %s\n", s_wavefrontStageName);
+  }
+}
 
 static bool s_noiseConvergedLatched = false;
 static bool s_cloudDescriptorsDone = false;
@@ -2055,7 +2063,6 @@ static void DispatchWavefrontPrimaryVisibility(
 
 static void DispatchWavefrontSecondaryVisibility(
   ID3D12GraphicsCommandList4 *list, UINT sourceQueueCounterIndex) {
-  (void)sourceQueueCounterIndex;
   if (!list || s_wavefrontSecondaryRayGenShaderTable == 0 ||
       s_rayGenShaderTableEntrySize == 0 || s_lastWavefrontBootstrapPathCount == 0) {
     return;
@@ -2066,6 +2073,13 @@ static void DispatchWavefrontSecondaryVisibility(
     return;
   }
 
+  // Fallback direct dispatch: read the source counter from the CPU-side
+  // readback (conservative: use full bootstrap count) since we don't have
+  // a CPU-side copy of the queue counter at this point.  The indirect path
+  // above is preferred; this path executes only when indirect dispatch is
+  // unavailable.
+  const UINT fallbackWidth = s_lastWavefrontBootstrapPathCount;
+  (void)sourceQueueCounterIndex;
   D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
   dispatchDesc.RayGenerationShaderRecord.StartAddress =
       s_wavefrontSecondaryRayGenShaderTable;
@@ -2077,7 +2091,7 @@ static void DispatchWavefrontSecondaryVisibility(
   dispatchDesc.HitGroupTable.StartAddress = s_hitGroupShaderTable;
   dispatchDesc.HitGroupTable.SizeInBytes = s_shaderTableEntrySize;
   dispatchDesc.HitGroupTable.StrideInBytes = s_shaderTableEntrySize;
-  dispatchDesc.Width = s_lastWavefrontBootstrapPathCount;
+  dispatchDesc.Width = fallbackWidth;
   dispatchDesc.Height = 1;
   dispatchDesc.Depth = 1;
 
@@ -2342,9 +2356,11 @@ static UINT ComputeWavefrontIndirectPassBudget() {
       (g_cameraData.maxGIBounces > 0.0f)
           ? static_cast<UINT>(g_cameraData.maxGIBounces)
           : 0u;
+  // Bounces can alternate, we should allow enough passes to resolve the longest valid path.
+  // The actual bounce checks are correctly enforced in the wave shaders.
   const UINT totalBudget =
       maxSpecularBounces + maxRefractiveBounces + maxGIBounces;
-  return (totalBudget > 16u) ? 16u : totalBudget;
+  return totalBudget;
 }
 
 static TextureStreamingPolicy ChooseAutoTextureStreamingPolicy() {
@@ -4808,22 +4824,11 @@ void ResetStreamlineHistory() {
 }
 
 void SetPathTracingBackend(PathTracingBackend backend) {
-  if (backend == PathTracingBackend::WavefrontOptimized) {
-    fprintf(stderr,
-            "DxrRenderer: Wavefront optimized backend is not stable yet; "
-            "routing to wavefront parity backend.\n");
-    backend = PathTracingBackend::WavefrontParity;
-  }
   if (s_pathTracingBackend == backend) {
     return;
   }
   WaitForAsyncRestirIdleForLightUpdates();
   s_asyncRestirPending = false;
-  if (backend != PathTracingBackend::Legacy) {
-    DisableAsyncRestir(
-        "Wavefront backend selected; disabling async ReSTIR while wavefront "
-        "scheduler is stabilizing.");
-  }
   s_pathTracingBackend = backend;
   if (g_verboseRenderLogs) {
     fprintf(stderr, "DxrRenderer: Path tracing backend set to %d\n",
@@ -4833,6 +4838,8 @@ void SetPathTracingBackend(PathTracingBackend backend) {
 }
 
 PathTracingBackend GetPathTracingBackend() { return s_pathTracingBackend; }
+
+const char *GetWavefrontStageName() { return s_wavefrontStageName; }
 
 UINT GetWavefrontBootstrapPathCount() {
   return s_lastWavefrontBootstrapPathCount;
@@ -5715,69 +5722,95 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     }
     bool useWavefrontResolvedOutput = false;
     if (s_pathTracingBackend != PathTracingBackend::Legacy && cameraCB) {
+      SetWavefrontStage("bootstrap");
       DispatchWavefrontBootstrap(dxrList.Get(), cameraCB);
       BindRayTracingGlobalRoot();
+      SetWavefrontStage("primary-visibility");
       DispatchWavefrontPrimaryVisibility(dxrList.Get());
-      if (s_pathTracingBackend == PathTracingBackend::WavefrontOptimized) {
-        const UINT indirectPassBudget = ComputeWavefrontIndirectPassBudget();
+
+      // Upload indirect dispatch records (shader tables into reserved buffer)
+      // once per session; repeated calls are cheap but the GPU copy is
+      // suppressed after the first successful upload.
+      static bool s_wavefrontDispatchRecordsUploaded = false;
+      if (!s_wavefrontDispatchRecordsUploaded) {
         UploadWavefrontIndirectDispatchRecords(dxrList.Get());
-        DispatchWavefrontCounterReset(dxrList.Get(), 0u, 0u);
-        DispatchWavefrontResolvePrimary(dxrList.Get(), cameraCB);
-        didWavefrontRestirSeed = true;
-        DispatchWavefrontPrepareIndirectArgs(
-            dxrList.Get(), 5u, UINT_MAX,
-            kWavefrontShadowDispatchRaysReservedSlot, 0u);
-        BindRayTracingGlobalRoot();
-        DispatchWavefrontShadowVisibility(dxrList.Get());
-        if (indirectPassBudget > 0) {
-          DispatchWavefrontCounterReset(dxrList.Get(), 5u, 0u);
+        if (s_wavefrontSecondaryRayGenShaderTable != 0 &&
+            s_wavefrontShadowRayGenShaderTable != 0) {
+          s_wavefrontDispatchRecordsUploaded = true;
         }
-        for (UINT indirectPassIndex = 0; indirectPassIndex < indirectPassBudget;
-             ++indirectPassIndex) {
-          const bool sourceIsQueueA = (indirectPassIndex & 1u) != 0u;
-          const UINT sourceQueueCounter = sourceIsQueueA ? 0u : 4u;
-          const UINT queueFlags = sourceIsQueueA ? kWavefrontQueueFlagSourceIsA : 0u;
+      }
+
+      if (s_pathTracingBackend == PathTracingBackend::WavefrontOptimized) {
+        // Primary resolve: evaluate primary hits, seed DI/GI reservoirs,
+        // enqueue secondary paths into queue B (counter 4) and primary
+        // shadow tasks into shadow queue (counter 5).
+        SetWavefrontStage("primary-resolve");
+        DispatchWavefrontResolvePrimary(dxrList.Get(), cameraCB);
+
+        // Primary shadow visibility: trace the shadow rays queued by primary
+        // resolve and accumulate direct lighting into the output buffer.
+        DispatchWavefrontPrepareIndirectArgs(dxrList.Get(), 5u, ~0u,
+                                            kWavefrontShadowDispatchRaysReservedSlot,
+                                            0u);
+        BindRayTracingGlobalRoot();
+        SetWavefrontStage("primary-shadow");
+        DispatchWavefrontShadowVisibility(dxrList.Get());
+        DispatchWavefrontCounterReset(dxrList.Get(), 5u, 0u);
+
+        // Secondary bounce loop: ping-pong between queue A (counter 0) and
+        // queue B (counter 4) for at most ComputeWavefrontIndirectPassBudget()
+        // bounce iterations.  Each iteration: prepare indirect args → secondary
+        // visibility → secondary resolve → shadow visibility.
+        const UINT maxBounces = ComputeWavefrontIndirectPassBudget();
+        for (UINT bounce = 0u; bounce < maxBounces; ++bounce) {
+          // Even bounce: source = queue B (counter 4), dest = queue A (counter 0)
+          // Odd  bounce: source = queue A (counter 0), dest = queue B (counter 4)
+          const bool sourceIsA = (bounce & 1u) != 0u;
+          const UINT sourceCounter = sourceIsA ? 0u : 4u;
+          const UINT destCounter   = sourceIsA ? 4u : 0u;
+          const UINT queueFlags    = sourceIsA ? kWavefrontQueueFlagSourceIsA : 0u;
+
+          // Reset destination counter so secondary resolve allocates from 0.
+          DispatchWavefrontCounterReset(dxrList.Get(), destCounter, 0u);
+
+          // Write the indirect dispatch width and queue-selection flags for
+          // secondary visibility (reserved slot) and secondary resolve (args[2]).
           DispatchWavefrontPrepareIndirectArgs(
-              dxrList.Get(), sourceQueueCounter,
-            UINT_MAX, kWavefrontSecondaryDispatchRaysReservedSlot,
-            queueFlags | kWavefrontQueueFlagFilterDiffuse);
+              dxrList.Get(), sourceCounter,
+              kWavefrontSecondaryResolveDispatchArgsIndex,
+              kWavefrontSecondaryDispatchRaysReservedSlot, queueFlags);
+
+          // Secondary visibility: trace continuation rays from source queue.
           BindRayTracingGlobalRoot();
-          DispatchWavefrontSecondaryVisibility(dxrList.Get(),
-                                              sourceQueueCounter);
+          SetWavefrontStage("secondary-visibility");
+          DispatchWavefrontSecondaryVisibility(dxrList.Get(), sourceCounter);
+
+          // Reset shadow counter before secondary resolve enqueues new tasks.
+          DispatchWavefrontCounterReset(dxrList.Get(), 5u, 0u);
+
+          // Secondary resolve: shade secondary hits, enqueue continuations into
+          // destination queue and new shadow tasks into shadow queue.
+          SetWavefrontStage("secondary-resolve");
+          DispatchWavefrontResolveSecondary(dxrList.Get(), cameraCB, sourceCounter);
+
+          // Secondary shadow visibility: trace shadow rays from this bounce.
           DispatchWavefrontPrepareIndirectArgs(
-            dxrList.Get(), sourceQueueCounter,
-            UINT_MAX, kWavefrontSecondaryDispatchRaysReservedSlot,
-            queueFlags | kWavefrontQueueFlagFilterSpecular);
-          BindRayTracingGlobalRoot();
-          DispatchWavefrontSecondaryVisibility(dxrList.Get(),
-                            sourceQueueCounter);
-          DispatchWavefrontPrepareIndirectArgs(
-            dxrList.Get(), sourceQueueCounter,
-            kWavefrontSecondaryResolveDispatchArgsIndex,
-            kWavefrontSecondaryDispatchRaysReservedSlot, queueFlags);
-          DispatchWavefrontResolveSecondary(dxrList.Get(), cameraCB,
-                                            sourceQueueCounter);
-          DispatchWavefrontPrepareIndirectArgs(
-              dxrList.Get(), 5u, UINT_MAX,
+              dxrList.Get(), 5u, ~0u,
               kWavefrontShadowDispatchRaysReservedSlot, 0u);
           BindRayTracingGlobalRoot();
+          SetWavefrontStage("secondary-shadow");
           DispatchWavefrontShadowVisibility(dxrList.Get());
-          if (indirectPassIndex + 1u < indirectPassBudget && sourceQueueCounter == 0u) {
-            DispatchWavefrontCounterReset(dxrList.Get(), 0u, 0u);
-          }
-          if (indirectPassIndex + 1u < indirectPassBudget && sourceQueueCounter == 4u) {
-            DispatchWavefrontCounterReset(dxrList.Get(), 4u, 0u);
-          }
-          if (indirectPassIndex + 1u < indirectPassBudget) {
-            DispatchWavefrontCounterReset(dxrList.Get(), 5u, 0u);
-          }
+          DispatchWavefrontCounterReset(dxrList.Get(), 5u, 0u);
         }
+
         useWavefrontResolvedOutput = true;
         didPathTracingWork = true;
+        didWavefrontRestirSeed = true;
       }
     }
 
     if (!useWavefrontResolvedOutput) {
+      SetWavefrontStage("legacy-dispatch");
       BindRayTracingGlobalRoot();
       dxrList->DispatchRays(&dispatchDesc);
       didPathTracingWork = true;

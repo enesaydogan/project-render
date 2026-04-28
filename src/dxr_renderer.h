@@ -95,6 +95,7 @@ enum class WavefrontMaterialBin {
 };
 void SetPathTracingBackend(PathTracingBackend backend);
 PathTracingBackend GetPathTracingBackend();
+const char *GetWavefrontStageName();
 UINT GetWavefrontBootstrapPathCount();
 UINT GetWavefrontBootstrapOverflowCount();
 UINT GetWavefrontBootstrapDispatchGroups();

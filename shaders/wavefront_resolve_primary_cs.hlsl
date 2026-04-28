@@ -266,18 +266,25 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         uint nextRayType = RAY_TYPE_DIFFUSE;
         float3 nextDirection = normal;
         float3 nextThroughput = state.throughput * max(albedo, 0.02.xxx);
-        if (transmission > 0.05) {
+        
+        // Evaluate probabilities for path continuation to avoid hard cut-offs
+        float transmissionProb = max(transmission, 0.0);
+        float reflectionProb = saturate(max(metallic, specularWeight) * (1.0 - transmissionProb));
+        float diffuseProb = saturate(1.0 - transmissionProb - reflectionProb);
+        
+        float rnd = next_float(rng);
+        if (transmissionProb > 0.0 && rnd < transmissionProb) {
             nextRayType = RAY_TYPE_REFRACTION;
             nextDirection = BuildTransmissionContinuation(rayDir, normal, ior);
-            nextThroughput *= max(transmissionTint, 0.02.xxx) * max(transmission, 0.1);
-        } else if (metallic > 0.45 || roughness < 0.3 || specularWeight > 0.55) {
+            nextThroughput = state.throughput * max(transmissionTint, 0.02.xxx) * max(transmission, 0.1) / max(transmissionProb, 1.0e-4);
+        } else if (reflectionProb > 0.0 && rnd < (transmissionProb + reflectionProb)) {
             nextRayType = RAY_TYPE_REFLECTION;
             nextDirection = BuildSpecularContinuation(rayDir, normal);
-            nextThroughput *= max(specularAlbedo, 0.04.xxx);
+            nextThroughput = state.throughput * max(specularAlbedo, 0.04.xxx) / max(reflectionProb, 1.0e-4);
         } else {
             nextRayType = RAY_TYPE_DIFFUSE;
             nextDirection = BuildDiffuseContinuation(normal, rng);
-            nextThroughput *= saturate(dot(normal, nextDirection));
+            nextThroughput = state.throughput * max(albedo, 0.02.xxx) * saturate(dot(normal, nextDirection)) / max(diffuseProb, 1.0e-4);
         }
         nextThroughput = max(nextThroughput, 0.0);
 
@@ -335,9 +342,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         InterlockedAdd(g_wavefrontStats[9], 1u, previousValue);
         WavefrontAccumulateMaterialBinStat(
             WAVEFRONT_PRIMARY_MATERIAL_BIN_STATS_BASE, record.reserved);
-        if (transmission > 0.05) {
+        if (nextRayType == RAY_TYPE_REFRACTION) {
             InterlockedAdd(g_wavefrontStats[12], 1u, previousValue);
-        } else if (metallic > 0.45 || roughness < 0.3 || specularWeight > 0.55) {
+        } else if (nextRayType == RAY_TYPE_REFLECTION) {
             InterlockedAdd(g_wavefrontStats[11], 1u, previousValue);
         } else {
             InterlockedAdd(g_wavefrontStats[10], 1u, previousValue);

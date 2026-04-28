@@ -3087,8 +3087,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     if (FAILED(reason)) {
       fprintf(stderr,
               "Device removed before recovery attempt "
-              "(GetDeviceRemovedReason=0x%08x)\n",
-              (unsigned)reason);
+              "(GetDeviceRemovedReason=0x%08x, wavefrontStage=%s)\n",
+              (unsigned)reason, DxrRenderer::GetWavefrontStageName());
       // Attempt to recreate the device
       RecreateDevice();
       return true;
