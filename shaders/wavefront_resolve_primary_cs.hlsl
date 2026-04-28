@@ -419,6 +419,44 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 InterlockedAdd(g_wavefrontStats[22], 1u, previousValue);
             }
         }
+
+        float envSampleLod = clamp(log2(max(length(hitPos - camPos), 1.0e-3) * 0.02),
+                                   0.0, 10.0);
+        LightSample envSample = sample_env_map(envMap, envConditionalCdf,
+                                               envMarginalCdf, linearSampler,
+                                               rng, envSampleLod);
+        float NdotL_env = saturate(dot(normal, envSample.L));
+        if (envSample.pdf > 1.0e-8 && NdotL_env > 0.0) {
+            float misW = ComputeWavefrontEnvironmentMisWeight(record, normal,
+                                                              hitPos,
+                                                              envSample.L,
+                                                              envSample.pdf);
+            float3 envShadowWeight = state.throughput *
+                                     ComputeWavefrontDirectLightingWeight(
+                                         record, normal, hitPos,
+                                         envSample.L) *
+                                     (misW / max(envSample.pdf, 1.0e-8)) *
+                                     kWavefrontEnvLightingBoost;
+            if (any(envShadowWeight > 1.0e-4)) {
+                uint shadowIndex = 0u;
+                InterlockedAdd(g_wavefrontQueueCounters[kWavefrontShadowQueueCounter],
+                               1u, shadowIndex);
+                if (shadowIndex < shadowQueueCapacity) {
+                    EmitWavefrontShadowTask(
+                        shadowIndex,
+                        hitPos + normal * kWavefrontRayBias,
+                        envSample.L,
+                        10000.0,
+                        WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_ENV,
+                                                         0u),
+                        envShadowWeight,
+                        record.pixelIndex);
+                    InterlockedAdd(g_wavefrontStats[20], 1u, previousValue);
+                } else {
+                    InterlockedAdd(g_wavefrontStats[22], 1u, previousValue);
+                }
+            }
+        }
     } else {
         uint previousValue = 0u;
         InterlockedAdd(g_wavefrontStats[13], 1u, previousValue);
@@ -440,7 +478,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     float nextCount = invalidHistory ? 1.0 : (historyCount + 1.0);
     float3 nextSum = historySum + color;
     g_accumulation[pixel] = float4(nextSum, nextCount);
-    g_output[pixel] = float4(nextSum / max(nextCount, 1.0), 1.0);
+    g_output[pixel] = (dlssRayReconstruction > 0.5)
+                          ? float4(color, 1.0)
+                          : float4(nextSum / max(nextCount, 1.0), 1.0);
     g_depth[pixel] = depth;
     g_linearDepth[pixel] = linearDepth;
     g_motionVectors[pixel] = motion;

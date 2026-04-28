@@ -284,7 +284,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             WavefrontSampleDirectLight(hitPos, rng);
         float3 shadowWeight = state.throughput *
                               ComputeWavefrontDirectLightingWeight(
-                                  record, normal, hitPos, lightSample.direction);
+                                  record, normal, hitPos, lightSample.direction) *
+                              WavefrontGetDirectLightSelectionWeight(
+                                  lightSample.packedLightIndex);
         if (any(shadowWeight > 1.0e-4)) {
             uint shadowIndex = 0u;
             InterlockedAdd(g_wavefrontQueueCounters[kWavefrontShadowQueueCounter],
@@ -306,6 +308,52 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             }
         }
 
+        uint bounceDepth = WavefrontGetSpecularBounceCount(state.packedState) +
+                           WavefrontGetRefractiveBounceCount(state.packedState) +
+                           WavefrontGetDiffuseBounceCount(state.packedState);
+        if (bounceDepth <= 1u) {
+            float envSampleLod = clamp(log2(max(length(hitPos - camPos), 1.0e-3) * 0.02) +
+                                           0.35,
+                                       0.0, 10.0);
+            LightSample envSample = sample_env_map(envMap, envConditionalCdf,
+                                                   envMarginalCdf, linearSampler,
+                                                   rng, envSampleLod);
+            float NdotL_env = saturate(dot(normal, envSample.L));
+            if (envSample.pdf > 1.0e-8 && NdotL_env > 0.0) {
+                float misW = ComputeWavefrontEnvironmentMisWeight(record, normal,
+                                                                  hitPos,
+                                                                  envSample.L,
+                                                                  envSample.pdf);
+                float3 envShadowWeight = state.throughput *
+                                         ComputeWavefrontDirectLightingWeight(
+                                             record, normal, hitPos,
+                                             envSample.L) *
+                                         (misW / max(envSample.pdf, 1.0e-8)) *
+                                         kWavefrontEnvLightingBoost;
+                if (any(envShadowWeight > 1.0e-4)) {
+                    uint shadowIndex = 0u;
+                    InterlockedAdd(g_wavefrontQueueCounters[kWavefrontShadowQueueCounter],
+                                   1u, shadowIndex);
+                    if (shadowIndex < shadowQueueCapacity) {
+                        EmitWavefrontShadowTask(
+                            shadowIndex,
+                            hitPos + normal * kWavefrontRayBias,
+                            envSample.L,
+                            10000.0,
+                            WavefrontPackLightSampleMetadata(
+                                WAVEFRONT_LIGHT_SAMPLE_ENV, 0u),
+                            envShadowWeight,
+                            record.pixelIndex);
+                        uint previousValue = 0u;
+                        InterlockedAdd(g_wavefrontStats[20], 1u, previousValue);
+                    } else {
+                        uint previousValue = 0u;
+                        InterlockedAdd(g_wavefrontStats[22], 1u, previousValue);
+                    }
+                }
+            }
+        }
+
         uint previousValue = 0u;
         InterlockedAdd(g_wavefrontStats[27], 1u, previousValue);
         WavefrontAccumulateMaterialBinStat(
@@ -315,7 +363,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     contribution = max(contribution, 0.0);
     float4 accum = g_accumulation[pixel];
     float historyCount = max(accum.a, 1.0);
-    g_output[pixel] = float4(g_output[pixel].rgb + contribution / historyCount,
-                             1.0);
+    float3 outputContribution = (dlssRayReconstruction > 0.5)
+                                    ? contribution
+                                    : (contribution / historyCount);
+    g_output[pixel] = float4(g_output[pixel].rgb + outputContribution, 1.0);
     g_accumulation[pixel] = float4(accum.rgb + contribution, accum.a);
 }

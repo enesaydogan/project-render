@@ -412,6 +412,7 @@ static const uint WAVEFRONT_QUEUE_FLAG_FILTER_DIFFUSE = 0x2u;
 static const uint WAVEFRONT_QUEUE_FLAG_FILTER_SPECULAR = 0x4u;
 static const uint WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL = 0u;
 static const uint WAVEFRONT_LIGHT_SAMPLE_FLAT = 1u;
+static const uint WAVEFRONT_LIGHT_SAMPLE_ENV = 2u;
 
 struct WavefrontLightSample
 {
@@ -682,6 +683,29 @@ inline WavefrontLightSample WavefrontSampleDirectLight(float3 surfacePos,
                                     2.0 * (float)numLights);
 }
 
+inline float WavefrontGetDirectLightSelectionWeight(uint packedLightIndex)
+{
+    const uint lightType = WavefrontGetLightSampleType(packedLightIndex);
+    const uint numLights = WavefrontGetAvailableLightCount();
+    if (lightType == WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL) {
+        return (numLights > 0u) ? 2.0 : 1.0;
+    }
+    if (lightType == WAVEFRONT_LIGHT_SAMPLE_FLAT) {
+        return (numLights > 0u) ? (2.0 * (float)numLights) : 0.0;
+    }
+    return 1.0;
+}
+
+inline float3 WavefrontEvaluateEnvironmentRadiance(float3 direction,
+                                                   float3 surfacePos)
+{
+    float pathDistance = max(length(surfacePos - camPos), 1.0e-3);
+    float envLod = clamp(log2(pathDistance * 0.02) + 0.35, 0.0, 10.0);
+    float2 uv = DirectionToUVRotated(normalize(direction));
+    return envMap.SampleLevel(linearSampler, uv, envLod).rgb *
+           GetDxrProceduralSkyBoost() * intensity;
+}
+
 inline float3 WavefrontEvaluateLightSampleRadiance(uint packedLightIndex,
                                                    float3 surfacePos)
 {
@@ -699,6 +723,17 @@ inline float3 WavefrontEvaluateLightSampleRadiance(uint packedLightIndex,
         return evaluate_light(light, surfacePos).radiance;
     }
     return float3(0.0, 0.0, 0.0);
+}
+
+inline float3 WavefrontEvaluateShadowTaskRadiance(uint packedLightIndex,
+                                                  float3 surfacePos,
+                                                  float3 direction)
+{
+    const uint lightType = WavefrontGetLightSampleType(packedLightIndex);
+    if (lightType == WAVEFRONT_LIGHT_SAMPLE_ENV) {
+        return WavefrontEvaluateEnvironmentRadiance(direction, surfacePos);
+    }
+    return WavefrontEvaluateLightSampleRadiance(packedLightIndex, surfacePos);
 }
 
 inline uint PackPayloadIorType(float ior, uint rayType, bool thinWalled, float specularWeight)

@@ -65,13 +65,16 @@ void WavefrontShadowRayGen()
 
     if (payload.t < 0.0) {
         const float3 contribution = max(task.throughput, 0.0) *
-                                    WavefrontEvaluateLightSampleRadiance(
+                                    WavefrontEvaluateShadowTaskRadiance(
                                         task.packedLightIndex,
-                                        task.origin);
+                                        task.origin,
+                                        task.direction);
         float4 accum = g_accumulation[pixel];
         float historyCount = max(accum.a, 1.0);
-        g_output[pixel] = float4(g_output[pixel].rgb + contribution / historyCount,
-                                 1.0);
+        float3 outputContribution = (dlssRayReconstruction > 0.5)
+                                        ? contribution
+                                        : (contribution / historyCount);
+        g_output[pixel] = float4(g_output[pixel].rgb + outputContribution, 1.0);
         g_accumulation[pixel] = float4(accum.rgb + contribution, accum.a);
     }
 }

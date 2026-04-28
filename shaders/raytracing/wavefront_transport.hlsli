@@ -1,6 +1,10 @@
 #ifndef WAVEFRONT_TRANSPORT_HLSLI
 #define WAVEFRONT_TRANSPORT_HLSLI
 
+#include "../brdf_lib.hlsl"
+
+static const float kWavefrontEnvLightingBoost = 3.0;
+
 inline float WavefrontDielectricF0FromIor(float ior)
 {
     float safeIor = max(ior, 1.0 + 1e-4);
@@ -64,6 +68,67 @@ inline float3 ComputeWavefrontSpecularThroughput(float3 albedo,
     float3 F0 = ComputeWavefrontSurfaceF0(albedo, metallic, ior,
                                           specularWeight, specularColor);
     return saturate(F0) * (1.0 - 0.5 * saturate(transmission));
+}
+
+inline float ComputeWavefrontBrdfPdfForDirection(WavefrontHitRecord record,
+                                                 float3 worldNormal,
+                                                 float3 hitPos,
+                                                 float3 lightDirection)
+{
+    float3 baseColor = UnpackPayloadAlbedo(record.packedAlbedo);
+    float3 specularColor = UnpackPayloadSpecularColor(record.packedSpecular);
+    float4 surface = UnpackPayloadSurface(record.packedSurface);
+    float roughness = saturate(surface.x);
+    float metallic = saturate(surface.y);
+    float transmission = saturate(surface.z);
+    float translucency = saturate(surface.w);
+    float specularWeight = saturate(UnpackPayloadSpecularWeight(record.packedIorType));
+    float ior = UnpackPayloadIor(record.packedIorType);
+
+    float3 V = normalize(camPos - hitPos);
+    float reflectionProb = 0.0;
+    float diffuseProb = 0.0;
+    float transmissionProb = 0.0;
+    ComputeWavefrontLobeProbabilities(worldNormal, V,
+                                      baseColor, metallic, transmission,
+                                      translucency, ior, specularWeight,
+                                      specularColor,
+                                      reflectionProb, diffuseProb,
+                                      transmissionProb);
+
+    float3 L = normalize(lightDirection);
+    float NdotL = saturate(dot(worldNormal, L));
+    if (NdotL <= 0.0) {
+        return 0.0;
+    }
+
+    float3 H = normalize(V + L);
+    float NdotH = saturate(dot(worldNormal, H));
+    float VdotH = saturate(dot(V, H));
+    float pdfSpec = 0.0;
+    if (reflectionProb > 0.0 && NdotH > 0.0 && VdotH > 0.0) {
+        pdfSpec = PDF_GGX(NdotH, VdotH, max(roughness, 0.03)) * reflectionProb;
+    }
+    float pdfDiff = 0.0;
+    if (diffuseProb > 0.0) {
+        pdfDiff = PDF_Lambert(NdotL) * diffuseProb;
+    }
+    return max(0.0, pdfSpec + pdfDiff);
+}
+
+inline float ComputeWavefrontEnvironmentMisWeight(WavefrontHitRecord record,
+                                                  float3 worldNormal,
+                                                  float3 hitPos,
+                                                  float3 lightDirection,
+                                                  float lightPdf)
+{
+    float pdfLight = max(lightPdf, 1.0e-8);
+    float pdfBrdf = ComputeWavefrontBrdfPdfForDirection(record,
+                                                        worldNormal,
+                                                        hitPos,
+                                                        lightDirection);
+    return (pdfLight * pdfLight) /
+           (pdfLight * pdfLight + pdfBrdf * pdfBrdf + 1.0e-12);
 }
 
 inline float3 EvaluateWavefrontPrimaryPreview(

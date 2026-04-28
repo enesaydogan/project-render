@@ -2154,7 +2154,15 @@ static void EnsureWavefrontResolvePipeline() {
   uavRange.OffsetInDescriptorsFromTableStart =
       D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-  D3D12_ROOT_PARAMETER params[4] = {};
+    D3D12_DESCRIPTOR_RANGE envSrvRange = {};
+    envSrvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    envSrvRange.NumDescriptors = DXR_HEAP_ENV_SRV_COUNT; // t0..t2, space1
+    envSrvRange.BaseShaderRegister = 0;
+    envSrvRange.RegisterSpace = 1;
+    envSrvRange.OffsetInDescriptorsFromTableStart =
+      D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER params[5] = {};
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
   params[0].Descriptor.ShaderRegister = 0;
   params[0].Descriptor.RegisterSpace = 0;
@@ -2171,15 +2179,37 @@ static void EnsureWavefrontResolvePipeline() {
   params[2].DescriptorTable.pDescriptorRanges = &uavRange;
   params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-  params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
-  params[3].Descriptor.ShaderRegister = 5000;
-  params[3].Descriptor.RegisterSpace = 0;
+  params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[3].DescriptorTable.NumDescriptorRanges = 1;
+  params[3].DescriptorTable.pDescriptorRanges = &envSrvRange;
   params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[4].Descriptor.ShaderRegister = 5000;
+  params[4].Descriptor.RegisterSpace = 0;
+  params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
   D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
   rsDesc.NumParameters = _countof(params);
   rsDesc.pParameters = params;
   rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+  D3D12_STATIC_SAMPLER_DESC linearSampler = {};
+  linearSampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+  linearSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  linearSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  linearSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  linearSampler.MipLODBias = 0;
+  linearSampler.MaxAnisotropy = 1;
+  linearSampler.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+  linearSampler.BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK;
+  linearSampler.MinLOD = 0.0f;
+  linearSampler.MaxLOD = D3D12_FLOAT32_MAX;
+  linearSampler.ShaderRegister = 0;
+  linearSampler.RegisterSpace = 0;
+  linearSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+  rsDesc.NumStaticSamplers = 1;
+  rsDesc.pStaticSamplers = &linearSampler;
 
   ComPtr<ID3DBlob> sig, err;
   HRESULT hrSerialize = D3D12SerializeRootSignature(
@@ -2287,8 +2317,9 @@ static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
   list->SetComputeRoot32BitConstants(1, _countof(resolveConstants),
                                      resolveConstants, 0);
   list->SetComputeRootDescriptorTable(2, s_outputUAVGpu);
-  list->SetComputeRootShaderResourceView(
-      3, s_lightBuffer ? s_lightBuffer->GetGPUVirtualAddress() : 0);
+    list->SetComputeRootDescriptorTable(3, s_iblGpuHandle);
+    list->SetComputeRootShaderResourceView(
+      4, s_lightBuffer ? s_lightBuffer->GetGPUVirtualAddress() : 0);
 
   const UINT groupCountX = (s_lastWavefrontBootstrapPathCount + 63u) / 64u;
   list->Dispatch(groupCountX, 1, 1);
@@ -2326,8 +2357,9 @@ static void DispatchWavefrontResolveSecondary(ID3D12GraphicsCommandList4 *list,
   list->SetComputeRoot32BitConstants(1, _countof(resolveConstants),
                                      resolveConstants, 0);
   list->SetComputeRootDescriptorTable(2, s_outputUAVGpu);
-  list->SetComputeRootShaderResourceView(
-      3, s_lightBuffer ? s_lightBuffer->GetGPUVirtualAddress() : 0);
+    list->SetComputeRootDescriptorTable(3, s_iblGpuHandle);
+    list->SetComputeRootShaderResourceView(
+      4, s_lightBuffer ? s_lightBuffer->GetGPUVirtualAddress() : 0);
 
   if (ExecuteWavefrontIndirectComputeDispatch(
           list, kWavefrontSecondaryResolveDispatchArgsIndex)) {
