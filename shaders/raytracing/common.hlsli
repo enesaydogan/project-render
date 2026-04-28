@@ -691,7 +691,7 @@ inline WavefrontLightSample WavefrontSampleDirectionalLight(float sampleWeight)
         sample.direction = float3(0.0, 1.0, 0.0);
     }
     sample.maxDistance = 1000.0;
-    sample.radiance = lightColor.rgb * lightColor.w * intensity * sampleWeight;
+    sample.radiance = lightColor.rgb * lightColor.w * sampleWeight;
     sample.packedLightIndex =
         WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL, 0u);
     return sample;
@@ -762,7 +762,7 @@ inline float3 WavefrontEvaluateLightSampleRadiance(uint packedLightIndex,
 {
     const uint lightType = WavefrontGetLightSampleType(packedLightIndex);
     if (lightType == WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL) {
-        return lightColor.rgb * lightColor.w * intensity;
+        return lightColor.rgb * lightColor.w;
     }
     if (lightType == WAVEFRONT_LIGHT_SAMPLE_FLAT) {
         const uint lightIndex = WavefrontGetLightSampleIndex(packedLightIndex);

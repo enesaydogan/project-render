@@ -779,46 +779,15 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
             diffuseAlbedo, f0, roughness, clearcoat,
             normal, viewDir, sun.direction, sun.radiance);
     }
-
-    const uint numLights = WavefrontGetAvailableLightCount();
-    if (numLights > 0u) {
-        int3 quantizedPos = int3(round(surfacePos * 64.0));
-        uint lightSeed = WavefrontGiHashU32(
-            (primitiveIndex + 1u) * 0x9e3779b9u ^
-            (materialIndex + 1u) * 0x85ebca6bu ^
-            asuint(quantizedPos.x) * 0x632be59bu ^
-            asuint(quantizedPos.y) * 0x85157af5u ^
-            asuint(quantizedPos.z) * 0x02c9277bu);
-        uint lightIndex = lightSeed % numLights;
-        WavefrontLightSample localLight =
-            WavefrontSampleFlatLight(surfacePos, lightIndex, (float)numLights);
-        if (localLight.maxDistance > 0.0 &&
-            saturate(dot(normal, localLight.direction)) > 0.0 &&
-            WavefrontGiIsShadowVisible(surfacePos + normal * kWavefrontRayBias,
-                                       localLight.direction,
-                                       localLight.maxDistance)) {
-            direct += WavefrontGiEvaluateBrdfLighting(
-                diffuseAlbedo, f0, roughness, clearcoat,
-                normal, viewDir, localLight.direction, localLight.radiance);
-        }
-    }
-
-    const float horizon = saturate(normal.y * 0.5 + 0.5);
-    float3 envIrradiance = envMap.SampleLevel(
-        linearSampler, DirectionToUVRotated(normal), 9.0).rgb *
-        GetDxrProceduralSkyBoost();
-    float3 ambient = diffuseAlbedo *
-                     (0.35 * envIrradiance +
-                      lerp(float3(0.015, 0.015, 0.018),
-                           float3(0.08, 0.09, 0.10), horizon));
+    float3 giLighting = direct;
     float translucency = saturate(coatLayer.w);
     if (translucency > 0.001) {
         float backNdotL = saturate(dot(-normal, sun.direction));
-        ambient += diffuseAlbedo * backNdotL * translucency *
-                   sun.radiance * 0.25;
+        giLighting += (diffuseAlbedo / PI) * sun.radiance * backNdotL *
+                      translucency;
     }
 
-    return max((emissive + ambient * ao) * intensity + direct * ao, 0.0);
+    return max((emissive + giLighting * ao) * intensity, 0.0);
 }
 
 inline GI_Reservoir GenerateWavefrontGiCandidate(float3 hitPos,

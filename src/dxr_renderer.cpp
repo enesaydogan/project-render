@@ -366,12 +366,18 @@ static UINT64 ComputeWavefrontQueueCapacity(UINT width, UINT height,
 }
 
 static bool NeedsDepthAndMotionBuffers(uint32_t mask) {
-  return (mask & ResourceFeature_Dlss) != 0;
+  // The path tracer and ReSTIR passes write/read depth every frame, even when
+  // DLSS is disabled. Keep these UAVs resident so wavefront/native-resolution
+  // rendering does not fall back to null descriptors on the RR-off path.
+  (void)mask;
+  return true;
 }
 
 static bool NeedsSurfaceDataBuffers(uint32_t mask) {
-  return (mask & (ResourceFeature_Dlss | ResourceFeature_FinalDenoiser |
-                  ResourceFeature_TonemapAo)) != 0;
+  // Normal/roughness and albedo are also written unconditionally by the DXR
+  // path and consumed by post-path passes beyond DLSS itself.
+  (void)mask;
+  return true;
 }
 
 static bool NeedsLinearDepthBuffer(uint32_t mask) {
@@ -6054,6 +6060,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       // Submit on async queue after this frame's direct list executes.
       s_asyncRestirPending = true;
     } else if (cameraCB) {
+      SetWavefrontStage("restir-spatial");
       DispatchRestirSpatialPasses(dxrList.Get(), cameraCB);
     }
   }
