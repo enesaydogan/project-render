@@ -159,9 +159,25 @@ inline float3 BuildDiffuseContinuation(float3 normal, inout RNG rng)
     return SafeNormalize(align_to_normal(localSample, normal), normal);
 }
 
-inline float3 BuildSpecularContinuation(float3 rayDir, float3 normal)
+inline bool BuildSpecularContinuation(float3 rayDir, float3 normal,
+                                      float roughness, inout RNG rng,
+                                      out float3 continuationDir)
 {
-    return SafeNormalize(reflect(rayDir, normal), normal);
+    float3 halfVector = SampleGGX(next_float2(rng), normal,
+                                  max(roughness, 0.001));
+    float3 reflected = reflect(rayDir, halfVector);
+    float reflectedLenSq = dot(reflected, reflected);
+    if (reflectedLenSq <= 1.0e-8) {
+        continuationDir = normal;
+        return false;
+    }
+
+    continuationDir = reflected * rsqrt(reflectedLenSq);
+    float3 viewDir = normalize(-rayDir);
+    float NdotL = saturate(dot(normal, continuationDir));
+    float NdotH = saturate(dot(normal, halfVector));
+    float VdotH = saturate(dot(viewDir, halfVector));
+    return (NdotL > 1.0e-5 && NdotH > 1.0e-5 && VdotH > 1.0e-5);
 }
 
 inline float3 BuildTransmissionContinuation(float3 rayDir, float3 normal,
@@ -987,8 +1003,12 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             nextThroughput = state.throughput * max(transmissionTint, 0.02.xxx) * max(transmission, 0.1) / max(transmissionProb, 1.0e-4);
         } else if (reflectionProb > 0.0 && rnd < (transmissionProb + reflectionProb)) {
             nextRayType = RAY_TYPE_REFLECTION;
-            nextDirection = BuildSpecularContinuation(rayDir, normal);
-            nextThroughput = state.throughput * max(specularAlbedo, 0.04.xxx) / max(reflectionProb, 1.0e-4);
+            if (BuildSpecularContinuation(rayDir, normal, roughness, rng,
+                                          nextDirection)) {
+                nextThroughput = state.throughput * max(specularAlbedo, 0.04.xxx) / max(reflectionProb, 1.0e-4);
+            } else {
+                nextThroughput = float3(0.0, 0.0, 0.0);
+            }
         } else {
             nextRayType = RAY_TYPE_DIFFUSE;
             nextDirection = BuildDiffuseContinuation(normal, rng);

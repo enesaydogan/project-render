@@ -305,23 +305,26 @@ float3 SampleThinGlassTransmission(float3 V, float roughness, float2 u)
     return SampleCone(normalize(-V), cos(coneAngle), u);
 }
 
-void StabilizeSpecularSample(float3 N, float3 V,
+bool StabilizeSpecularSample(float3 N, float3 V,
                              inout float3 H, inout float3 L,
                              out float NdotL, out float NdotH,
                              out float VdotH)
 {
     L = normalize(L);
+    float3 halfVec = V + L;
+    if (dot(halfVec, halfVec) <= 1.0e-10) {
+        NdotL = 0.0;
+        NdotH = 0.0;
+        VdotH = 0.0;
+        return false;
+    }
+
+    H = normalize(halfVec);
     NdotL = saturate(dot(N, L));
     NdotH = saturate(dot(N, H));
     VdotH = saturate(dot(V, H));
 
-    if (NdotL <= 1.0e-5 || NdotH <= 1.0e-5 || VdotH <= 1.0e-5) {
-        L = normalize(reflect(-V, N));
-        H = normalize(V + L);
-        NdotL = saturate(dot(N, L));
-        NdotH = saturate(dot(N, H));
-        VdotH = saturate(dot(V, H));
-    }
+    return (NdotL > 1.0e-5 && NdotH > 1.0e-5 && VdotH > 1.0e-5);
 }
 
 void ComputeLobeProbabilities(float3 N, float3 V,
@@ -1522,8 +1525,10 @@ void RayGen()
                 float NdotL;
                 float NdotH;
                 float VdotH;
-                StabilizeSpecularSample(N, V, H, nextDir,
-                                         NdotL, NdotH, VdotH);
+                if (!StabilizeSpecularSample(N, V, H, nextDir,
+                                             NdotL, NdotH, VdotH)) {
+                    break;
+                }
 
                 pdf = (PDF_GGX(NdotH, VdotH, payloadCoatRoughness) * coatProb) / totalProb;
                 f_brdf = EvaluateCoatSpecular(N, V, nextDir, payloadCoatRoughness);
@@ -1541,8 +1546,10 @@ void RayGen()
                 float NdotL;
                 float NdotH;
                 float VdotH;
-                StabilizeSpecularSample(N, V, H, nextDir,
-                                         NdotL, NdotH, VdotH);
+                if (!StabilizeSpecularSample(N, V, H, nextDir,
+                                             NdotL, NdotH, VdotH)) {
+                    break;
+                }
                 float3 F0 = ComputeSurfaceF0(payloadAlbedo, metallic, payloadIor,
                                              payloadSpecularWeight,
                                              payloadSpecularColor);
