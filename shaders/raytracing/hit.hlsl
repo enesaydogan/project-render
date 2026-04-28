@@ -545,8 +545,9 @@ float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent,
     return normalize(mul(tangentNormal, TBN));
 }
 
-[shader("closesthit")]
-void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes attr)
+void ClosestHitImpl(inout RayPayload payload,
+                    in BuiltInTriangleIntersectionAttributes attr,
+                    bool wavefrontMinimal)
 {
     uint rayType = UnpackPayloadRayType(payload.packedIorType);
 
@@ -842,6 +843,26 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     if (isGrassMaterial) {
         translucency = max(translucency, lerp(0.38, 0.72, saturate(1.0 - uv.y)));
     }
+
+    if (wavefrontMinimal) {
+        float3 color = emissive * intensity;
+        PayloadSetColor(payload, color);
+        payload.t = RayTCurrent();
+        payload.packedNormal = PackNormalOctahedron(N);
+        payload.packedAlbedo = PackPayloadAlbedoCoat(BaseColor, clearcoat);
+        PayloadSetCoatRoughness(payload, clearcoatRoughness);
+        bool thinWalled = ((matFlags & MATERIAL_FLAG_THIN_WALLED) != 0) ||
+                          (arch0.z > 0.5);
+        payload.packedSurface =
+            PackPayloadSurface(roughness, metalness, transmission, translucency);
+        payload.packedIorType =
+            PackPayloadIorType(emisColor.w, rayType, thinWalled, specularWeight);
+        payload.packedTransmission =
+            PackPayloadTransmissionColor(effectiveTransmissionColor);
+        payload.packedSpecular =
+            PackPayloadSpecularColorThickness(specularColor, thickness);
+        return;
+    }
     
     float3 Lo = float3(0,0,0);
     float3 ambient = float3(0,0,0);
@@ -945,6 +966,20 @@ void ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttribut
     payload.packedIorType = PackPayloadIorType(emisColor.w, rayType, thinWalled, specularWeight);
     payload.packedTransmission = PackPayloadTransmissionColor(effectiveTransmissionColor);
     payload.packedSpecular = PackPayloadSpecularColorThickness(specularColor, thickness);
+}
+
+[shader("closesthit")]
+void ClosestHit(inout RayPayload payload,
+                in BuiltInTriangleIntersectionAttributes attr)
+{
+    ClosestHitImpl(payload, attr, false);
+}
+
+[shader("closesthit")]
+void WavefrontClosestHit(inout RayPayload payload,
+                         in BuiltInTriangleIntersectionAttributes attr)
+{
+    ClosestHitImpl(payload, attr, true);
 }
 
 [shader("anyhit")]

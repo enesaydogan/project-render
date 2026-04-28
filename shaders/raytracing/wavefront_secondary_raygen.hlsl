@@ -39,6 +39,12 @@ void WavefrontSecondaryRayGen()
         return;
     }
 
+    if (pathIndex == 0u) {
+        uint previousValue = 0u;
+        InterlockedAdd(g_wavefrontStats[23], min(activeCount, queueCapacity),
+                       previousValue);
+    }
+
     WavefrontPathState state;
     if ((queueFlags & WAVEFRONT_QUEUE_FLAG_SOURCE_IS_A) != 0u) {
         state = g_wavefrontPathQueueA[pathIndex];
@@ -58,7 +64,13 @@ void WavefrontSecondaryRayGen()
         return;
     }
 
-    // Removed massive global atomic contention
+    uint lanePreviousValue = 0u;
+    if (rayType == RAY_TYPE_DIFFUSE) {
+        InterlockedAdd(g_wavefrontStats[47], 1u, lanePreviousValue);
+    } else if (rayType == RAY_TYPE_REFLECTION || rayType == RAY_TYPE_REFRACTION) {
+        InterlockedAdd(g_wavefrontStats[48], 1u, lanePreviousValue);
+    }
+
     RayDesc ray;
     ray.Origin = state.origin;
     ray.Direction = normalize(state.direction);
@@ -91,6 +103,11 @@ void WavefrontSecondaryRayGen()
 
     if (payload.t < 0.0) {
         record.packedState |= WAVEFRONT_HIT_STATE_MISS;
+        uint previousValue = 0u;
+        InterlockedAdd(g_wavefrontStats[25], 1u, previousValue);
+    } else {
+        uint previousValue = 0u;
+        InterlockedAdd(g_wavefrontStats[24], 1u, previousValue);
     }
 
     g_wavefrontHitQueue[pathIndex] = record;

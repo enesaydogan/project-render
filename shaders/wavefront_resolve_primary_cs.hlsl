@@ -58,6 +58,23 @@ inline void ClearWavefrontGiReservoir(uint2 pixel)
     }
 }
 
+inline void StoreWavefrontGiReservoir(uint2 pixel, GI_Reservoir reservoir)
+{
+    float4 out0 = float4(reservoir.hitPos, 0.0);
+    float4 out1 = float4(reservoir.radiance, 0.0);
+    float4 out2 = float4(reservoir.w_sum, asfloat(reservoir.M),
+                         reservoir.W, 0.0);
+    if (WavefrontReservoirFlip()) {
+        g_gi_reservoir_a0[pixel] = out0;
+        g_gi_reservoir_a1[pixel] = out1;
+        g_gi_reservoir_a2[pixel] = out2;
+    } else {
+        g_gi_reservoir_b0[pixel] = out0;
+        g_gi_reservoir_b1[pixel] = out1;
+        g_gi_reservoir_b2[pixel] = out2;
+    }
+}
+
 inline float WavefrontEvaluateReservoirTarget(WavefrontHitRecord record,
                                               float3 worldNormal,
                                               float3 hitPos,
@@ -160,6 +177,48 @@ inline float3 BuildTransmissionContinuation(float3 rayDir, float3 normal,
     return SafeNormalize(refracted, -faceNormal);
 }
 
+inline GI_Reservoir GenerateWavefrontGiCandidate(float3 hitPos,
+                                                 float3 normal,
+                                                 float3 diffuseAlbedo,
+                                                 inout RNG rng)
+{
+    GI_Reservoir reservoir = init_gi_reservoir();
+    if (maxGIBounces <= 0.0 || !any(diffuseAlbedo > 1.0e-4)) {
+        return reservoir;
+    }
+
+    float3 candidateDir = BuildDiffuseContinuation(normal, rng);
+    float NdotL = saturate(dot(normal, candidateDir));
+    float pdf = NdotL / PI;
+    if (pdf <= 1.0e-6 || NdotL <= 0.0) {
+        return reservoir;
+    }
+
+    RayDesc giRay;
+    giRay.Origin = hitPos + normal * kWavefrontRayBias;
+    giRay.Direction = candidateDir;
+    giRay.TMin = 0.001;
+    giRay.TMax = 10000.0;
+
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> query;
+    query.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, giRay);
+    query.Proceed();
+
+    float3 radiance = float3(0.0, 0.0, 0.0);
+    float3 candidatePos = hitPos + candidateDir * 1000.0;
+    if (query.CommittedStatus() == COMMITTED_NOTHING) {
+        radiance = WavefrontEvaluateEnvironmentRadiance(candidateDir,
+                                                        candidatePos);
+    }
+
+    float3 brdf = diffuseAlbedo / PI;
+    float pTarget = length(max(radiance * brdf * NdotL, 0.0));
+    float risWeight = min(pTarget / max(pdf, 1.0e-5), 1.0e5);
+    update_gi_reservoir(reservoir, candidatePos, radiance, risWeight, rng);
+    finalize_gi_reservoir(reservoir, pTarget);
+    return reservoir;
+}
+
 inline void EmitWavefrontSecondaryPath(uint queueIndex,
                                        uint pixelIndex,
                                        float3 origin,
@@ -233,6 +292,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     uint shadowQueueCapacity = 0u;
     uint shadowQueueStride = 0u;
     Reservoir diReservoir = init_reservoir();
+    GI_Reservoir giReservoir = init_gi_reservoir();
     WavefrontLightSample selectedDirectLightSample =
         WavefrontSampleDirectionalLight(1.0);
     float selectedDirectLightWeight = 0.0;
@@ -248,6 +308,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         float metallic = saturate(surface.y);
         float transmission = saturate(surface.z);
         float translucency = saturate(surface.w);
+        float3 diffuseAlbedo = albedo * (1.0 - metallic) *
+                               (1.0 - transmission);
         float specularWeight = saturate(UnpackPayloadSpecularWeight(record.packedIorType));
         float ior = UnpackPayloadIor(record.packedIorType);
         float3 transmissionTint = UnpackPayloadTransmissionColor(record.packedTransmission);
@@ -353,8 +415,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 
         uint previousValue = 0u;
         InterlockedAdd(g_wavefrontStats[9], 1u, previousValue);
-        WavefrontAccumulateMaterialBinStat(
-            WAVEFRONT_PRIMARY_MATERIAL_BIN_STATS_BASE, record.reserved);
+        WavefrontCompactMaterialBinIndex(
+            WAVEFRONT_PRIMARY_MATERIAL_BIN_STATS_BASE, record.reserved,
+            pathIndex);
         if (nextRayType == RAY_TYPE_REFRACTION) {
             InterlockedAdd(g_wavefrontStats[12], 1u, previousValue);
         } else if (nextRayType == RAY_TYPE_REFLECTION) {
@@ -457,6 +520,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 }
             }
         }
+        giReservoir = GenerateWavefrontGiCandidate(hitPos, normal,
+                                                   diffuseAlbedo, rng);
     } else {
         uint previousValue = 0u;
         InterlockedAdd(g_wavefrontStats[13], 1u, previousValue);
@@ -467,7 +532,11 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     } else {
         StoreWavefrontDiReservoir(pixel, diReservoir);
     }
-    ClearWavefrontGiReservoir(pixel);
+    if (isMiss) {
+        ClearWavefrontGiReservoir(pixel);
+    } else {
+        StoreWavefrontGiReservoir(pixel, giReservoir);
+    }
 
     color = max(color, 0.0);
     float4 history = g_accumulation[pixel];

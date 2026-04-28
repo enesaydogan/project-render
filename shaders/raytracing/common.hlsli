@@ -405,6 +405,7 @@ RWStructuredBuffer<WavefrontShadowTask> g_wavefrontShadowQueue : register(u29);
 RWStructuredBuffer<WavefrontDispatchArgs> g_wavefrontDispatchArgs : register(u30);
 RWStructuredBuffer<uint> g_wavefrontStats : register(u31);
 RWStructuredBuffer<uint4> g_wavefrontReserved : register(u32);
+RWStructuredBuffer<uint> g_wavefrontMaterialBinIndices : register(u33);
 
 static const uint WAVEFRONT_RESERVED_SECONDARY_DISPATCH_CONFIG_INDEX = 6u;
 static const uint WAVEFRONT_QUEUE_FLAG_SOURCE_IS_A = 0x1u;
@@ -606,6 +607,35 @@ inline void WavefrontAccumulateMaterialBinStat(uint statsBase, uint sortKey)
         uint previousValue = 0u;
         InterlockedAdd(g_wavefrontStats[statsBase + materialBin], 1u,
                        previousValue);
+    }
+}
+
+inline void WavefrontCompactMaterialBinIndex(uint statsBase,
+                                             uint sortKey,
+                                             uint recordIndex)
+{
+    uint materialBin = WavefrontGetMaterialBinFromSortKey(sortKey);
+    if (materialBin >= WAVEFRONT_MATERIAL_BIN_COUNT) {
+        return;
+    }
+
+    uint binIndexCapacity = 0u;
+    uint binIndexStride = 0u;
+    g_wavefrontMaterialBinIndices.GetDimensions(binIndexCapacity,
+                                                binIndexStride);
+    const uint perBinCapacity = binIndexCapacity / WAVEFRONT_MATERIAL_BIN_COUNT;
+    if (perBinCapacity == 0u) {
+        return;
+    }
+
+    uint binOffset = 0u;
+    InterlockedAdd(g_wavefrontStats[statsBase + materialBin], 1u, binOffset);
+    if (binOffset < perBinCapacity) {
+        g_wavefrontMaterialBinIndices[materialBin * perBinCapacity +
+                                      binOffset] = recordIndex;
+    } else {
+        uint previousValue = 0u;
+        InterlockedAdd(g_wavefrontStats[49], 1u, previousValue);
     }
 }
 

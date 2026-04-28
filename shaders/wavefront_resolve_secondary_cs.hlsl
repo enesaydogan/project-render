@@ -356,8 +356,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 
         uint previousValue = 0u;
         InterlockedAdd(g_wavefrontStats[27], 1u, previousValue);
-        WavefrontAccumulateMaterialBinStat(
-            WAVEFRONT_SECONDARY_MATERIAL_BIN_STATS_BASE, record.reserved);
+        WavefrontCompactMaterialBinIndex(
+            WAVEFRONT_SECONDARY_MATERIAL_BIN_STATS_BASE, record.reserved,
+            pathIndex);
     }
 
     contribution = max(contribution, 0.0);

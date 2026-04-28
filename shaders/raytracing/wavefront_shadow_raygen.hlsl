@@ -64,6 +64,8 @@ void WavefrontShadowRayGen()
     SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
 
     if (payload.t < 0.0) {
+        uint previousValue = 0u;
+        InterlockedAdd(g_wavefrontStats[30], 1u, previousValue);
         const float3 contribution = max(task.throughput, 0.0) *
                                     WavefrontEvaluateShadowTaskRadiance(
                                         task.packedLightIndex,
@@ -76,5 +78,8 @@ void WavefrontShadowRayGen()
                                         : (contribution / historyCount);
         g_output[pixel] = float4(g_output[pixel].rgb + outputContribution, 1.0);
         g_accumulation[pixel] = float4(accum.rgb + contribution, accum.a);
+    } else {
+        uint previousValue = 0u;
+        InterlockedAdd(g_wavefrontStats[31], 1u, previousValue);
     }
 }

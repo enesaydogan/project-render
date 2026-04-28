@@ -2739,6 +2739,20 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
             ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.2f, 1.0f),
                                "Bootstrap overflow: %u", overflowCount);
           }
+          const UINT continuationOverflowCount =
+              DxrRenderer::GetWavefrontContinuationOverflowCount();
+          const UINT shadowOverflowCount =
+              DxrRenderer::GetWavefrontShadowOverflowCount();
+          const UINT materialBinOverflowCount =
+              DxrRenderer::GetWavefrontMaterialBinOverflowCount();
+          if (continuationOverflowCount > 0 || shadowOverflowCount > 0 ||
+              materialBinOverflowCount > 0) {
+            ImGui::TextColored(
+                ImVec4(1.0f, 0.45f, 0.2f, 1.0f),
+                "Queue overflow continuation / shadow / bins: %u / %u / %u",
+                continuationOverflowCount, shadowOverflowCount,
+                materialBinOverflowCount);
+          }
         }
 
         // Denoising is automatically triggered once when Max SPP is reached
