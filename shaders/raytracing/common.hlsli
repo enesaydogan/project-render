@@ -411,6 +411,10 @@ static const uint WAVEFRONT_RESERVED_SECONDARY_DISPATCH_CONFIG_INDEX = 6u;
 static const uint WAVEFRONT_QUEUE_FLAG_SOURCE_IS_A = 0x1u;
 static const uint WAVEFRONT_QUEUE_FLAG_FILTER_DIFFUSE = 0x2u;
 static const uint WAVEFRONT_QUEUE_FLAG_FILTER_SPECULAR = 0x4u;
+static const uint WAVEFRONT_QUEUE_FLAG_USE_MATERIAL_BIN_LIST = 0x8u;
+static const uint WAVEFRONT_QUEUE_FLAG_MISS_ONLY = 0x10u;
+static const uint WAVEFRONT_MATERIAL_BIN_COUNTER_BASE = 6u;
+static const uint WAVEFRONT_QUEUE_FLAG_MATERIAL_BIN_SHIFT = 8u;
 static const uint WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL = 0u;
 static const uint WAVEFRONT_LIGHT_SAMPLE_FLAT = 1u;
 static const uint WAVEFRONT_LIGHT_SAMPLE_ENV = 2u;
@@ -600,6 +604,17 @@ inline uint WavefrontGetMaterialBinFromSortKey(uint sortKey)
     return (sortKey >> 8) & 0xFFu;
 }
 
+inline uint WavefrontGetMaterialBinFromQueueFlags(uint flags)
+{
+    return (flags >> WAVEFRONT_QUEUE_FLAG_MATERIAL_BIN_SHIFT) & 0xFFu;
+}
+
+inline uint WavefrontBuildMaterialBinQueueFlags(uint materialBin)
+{
+    return WAVEFRONT_QUEUE_FLAG_USE_MATERIAL_BIN_LIST |
+           ((materialBin & 0xFFu) << WAVEFRONT_QUEUE_FLAG_MATERIAL_BIN_SHIFT);
+}
+
 inline void WavefrontAccumulateMaterialBinStat(uint statsBase, uint sortKey)
 {
     uint materialBin = WavefrontGetMaterialBinFromSortKey(sortKey);
@@ -629,7 +644,13 @@ inline void WavefrontCompactMaterialBinIndex(uint statsBase,
     }
 
     uint binOffset = 0u;
-    InterlockedAdd(g_wavefrontStats[statsBase + materialBin], 1u, binOffset);
+    InterlockedAdd(
+        g_wavefrontQueueCounters[WAVEFRONT_MATERIAL_BIN_COUNTER_BASE +
+                                 materialBin],
+        1u, binOffset);
+    uint previousValue = 0u;
+    InterlockedAdd(g_wavefrontStats[statsBase + materialBin], 1u,
+                   previousValue);
     if (binOffset < perBinCapacity) {
         g_wavefrontMaterialBinIndices[materialBin * perBinCapacity +
                                       binOffset] = recordIndex;

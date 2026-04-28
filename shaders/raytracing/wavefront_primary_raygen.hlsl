@@ -133,6 +133,9 @@ void WavefrontPrimaryRayGen()
         uint previousValue = 0u;
         InterlockedAdd(g_wavefrontQueueCounters[2], 1u, previousValue);
         InterlockedAdd(g_wavefrontStats[6], 1u, previousValue);
+        WavefrontCompactMaterialBinIndex(
+            WAVEFRONT_PRIMARY_MATERIAL_BIN_STATS_BASE, record.reserved,
+            pathIndex);
     }
 
     g_wavefrontHitQueue[pathIndex] = record;

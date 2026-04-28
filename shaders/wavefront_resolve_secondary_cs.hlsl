@@ -145,7 +145,31 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     const uint activeCount = min(maxDispatchCount,
                                  sourceIsQueueA ? g_wavefrontQueueCounters[0]
                                                 : g_wavefrontQueueCounters[4]);
-    const uint pathIndex = dispatchThreadID.x;
+    uint pathIndex = dispatchThreadID.x;
+    const bool useMaterialBinList =
+        (reservedFlags & WAVEFRONT_QUEUE_FLAG_USE_MATERIAL_BIN_LIST) != 0u;
+    const bool missOnly =
+        (reservedFlags & WAVEFRONT_QUEUE_FLAG_MISS_ONLY) != 0u;
+    if (useMaterialBinList) {
+        const uint materialBin = WavefrontGetMaterialBinFromQueueFlags(
+            reservedFlags);
+        uint binIndexCapacity = 0u;
+        uint binIndexStride = 0u;
+        g_wavefrontMaterialBinIndices.GetDimensions(binIndexCapacity,
+                                                    binIndexStride);
+        const uint perBinCapacity =
+            binIndexCapacity / WAVEFRONT_MATERIAL_BIN_COUNT;
+        if (materialBin >= WAVEFRONT_MATERIAL_BIN_COUNT ||
+            dispatchThreadID.x >= perBinCapacity ||
+            dispatchThreadID.x >=
+                g_wavefrontQueueCounters[
+                    WAVEFRONT_MATERIAL_BIN_COUNTER_BASE + materialBin]) {
+            return;
+        }
+        pathIndex =
+            g_wavefrontMaterialBinIndices[materialBin * perBinCapacity +
+                                          dispatchThreadID.x];
+    }
     if (pathIndex >= activeCount) {
         return;
     }
@@ -182,7 +206,14 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     }
 
     float3 contribution = float3(0.0, 0.0, 0.0);
-    if (WavefrontHitRecordIsMiss(record)) {
+    const bool isMiss = WavefrontHitRecordIsMiss(record);
+    if (missOnly && !isMiss) {
+        return;
+    }
+    if (isMiss) {
+        if (useMaterialBinList) {
+            return;
+        }
         contribution = max(state.throughput, 0.0) * WavefrontHitRecordGetColor(record);
         uint previousValue = 0u;
         InterlockedAdd(g_wavefrontStats[28], 1u, previousValue);
@@ -356,9 +387,6 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 
         uint previousValue = 0u;
         InterlockedAdd(g_wavefrontStats[27], 1u, previousValue);
-        WavefrontCompactMaterialBinIndex(
-            WAVEFRONT_SECONDARY_MATERIAL_BIN_STATS_BASE, record.reserved,
-            pathIndex);
     }
 
     contribution = max(contribution, 0.0);

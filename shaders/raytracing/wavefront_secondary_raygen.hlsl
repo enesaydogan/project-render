@@ -108,6 +108,9 @@ void WavefrontSecondaryRayGen()
     } else {
         uint previousValue = 0u;
         InterlockedAdd(g_wavefrontStats[24], 1u, previousValue);
+        WavefrontCompactMaterialBinIndex(
+            WAVEFRONT_SECONDARY_MATERIAL_BIN_STATS_BASE, record.reserved,
+            pathIndex);
     }
 
     g_wavefrontHitQueue[pathIndex] = record;

@@ -209,6 +209,10 @@ static constexpr UINT kWavefrontShadowDispatchRaysReservedSlot = 7;
 static constexpr UINT kWavefrontQueueFlagSourceIsA = 0x1u;
 static constexpr UINT kWavefrontQueueFlagFilterDiffuse = 0x2u;
 static constexpr UINT kWavefrontQueueFlagFilterSpecular = 0x4u;
+static constexpr UINT kWavefrontQueueFlagUseMaterialBinList = 0x8u;
+static constexpr UINT kWavefrontQueueFlagMissOnly = 0x10u;
+static constexpr UINT kWavefrontMaterialBinCounterBase = 6u;
+static constexpr UINT kWavefrontQueueFlagMaterialBinShift = 8u;
 static constexpr UINT64 kWavefrontCounterStrideBytes = sizeof(UINT);
 static constexpr UINT kWavefrontPrimaryMaterialBinStatsBase = 32u;
 static constexpr UINT kWavefrontSecondaryMaterialBinStatsBase = 40u;
@@ -860,10 +864,15 @@ static void DispatchWavefrontSecondaryVisibility(
 static void DispatchWavefrontShadowVisibility(
   ID3D12GraphicsCommandList4 *list);
 static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
-                                            ID3D12Resource *cameraCB);
+                                            ID3D12Resource *cameraCB,
+                                            ID3D12Resource *materialCB,
+                                            ID3D12Resource *meshDataSB,
+                                            ID3D12Resource *materialExtraSB);
 static void DispatchWavefrontResolveSecondary(ID3D12GraphicsCommandList4 *list,
                                               ID3D12Resource *cameraCB,
-                                              UINT sourceQueueCounterIndex);
+                                              UINT sourceQueueCounterIndex,
+                                              UINT extraResolveFlags = 0u,
+                                              bool useIndirectDispatch = false);
 
 struct TonemapConstants {
   uint32_t outWidth;
@@ -2175,7 +2184,31 @@ static void EnsureWavefrontResolvePipeline() {
     envSrvRange.OffsetInDescriptorsFromTableStart =
       D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-  D3D12_ROOT_PARAMETER params[6] = {};
+  D3D12_DESCRIPTOR_RANGE vbRange = {};
+  vbRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+  vbRange.NumDescriptors = 1024;
+  vbRange.BaseShaderRegister = 2050;
+  vbRange.RegisterSpace = 0;
+  vbRange.OffsetInDescriptorsFromTableStart =
+      D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+  D3D12_DESCRIPTOR_RANGE ibRange = {};
+  ibRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+  ibRange.NumDescriptors = 1024;
+  ibRange.BaseShaderRegister = 3074;
+  ibRange.RegisterSpace = 0;
+  ibRange.OffsetInDescriptorsFromTableStart =
+      D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+  D3D12_DESCRIPTOR_RANGE textureRange = {};
+  textureRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+  textureRange.NumDescriptors = 2048;
+  textureRange.BaseShaderRegister = 1;
+  textureRange.RegisterSpace = 0;
+  textureRange.OffsetInDescriptorsFromTableStart =
+      D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+  D3D12_ROOT_PARAMETER params[12] = {};
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
   params[0].Descriptor.ShaderRegister = 0;
   params[0].Descriptor.RegisterSpace = 0;
@@ -2206,6 +2239,36 @@ static void EnsureWavefrontResolvePipeline() {
   params[5].Descriptor.ShaderRegister = 0;
   params[5].Descriptor.RegisterSpace = 0;
   params[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[6].Descriptor.ShaderRegister = 2049;
+  params[6].Descriptor.RegisterSpace = 0;
+  params[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[7].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[7].Descriptor.ShaderRegister = 4098;
+  params[7].Descriptor.RegisterSpace = 0;
+  params[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[8].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[8].Descriptor.ShaderRegister = 4099;
+  params[8].Descriptor.RegisterSpace = 0;
+  params[8].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[9].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[9].DescriptorTable.NumDescriptorRanges = 1;
+  params[9].DescriptorTable.pDescriptorRanges = &vbRange;
+  params[9].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[10].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[10].DescriptorTable.NumDescriptorRanges = 1;
+  params[10].DescriptorTable.pDescriptorRanges = &ibRange;
+  params[10].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[11].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[11].DescriptorTable.NumDescriptorRanges = 1;
+  params[11].DescriptorTable.pDescriptorRanges = &textureRange;
+  params[11].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
   D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
   rsDesc.NumParameters = _countof(params);
@@ -2313,7 +2376,10 @@ static void EnsureWavefrontSecondaryResolvePipeline() {
 }
 
 static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
-                                            ID3D12Resource *cameraCB) {
+                                            ID3D12Resource *cameraCB,
+                                            ID3D12Resource *materialCB,
+                                            ID3D12Resource *meshDataSB,
+                                            ID3D12Resource *materialExtraSB) {
   if (!list || !cameraCB || !s_srvHeap || !s_device ||
       s_lastWavefrontBootstrapPathCount == 0) {
     return;
@@ -2340,6 +2406,15 @@ static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
       4, s_lightBuffer ? s_lightBuffer->GetGPUVirtualAddress() : 0);
   list->SetComputeRootShaderResourceView(
       5, s_tlas.result ? s_tlas.result->GetGPUVirtualAddress() : 0);
+  list->SetComputeRootShaderResourceView(
+      6, materialCB ? materialCB->GetGPUVirtualAddress() : 0);
+  list->SetComputeRootShaderResourceView(
+      7, meshDataSB ? meshDataSB->GetGPUVirtualAddress() : 0);
+  list->SetComputeRootShaderResourceView(
+      8, materialExtraSB ? materialExtraSB->GetGPUVirtualAddress() : 0);
+  list->SetComputeRootDescriptorTable(9, s_vbTableGpu);
+  list->SetComputeRootDescriptorTable(10, s_ibTableGpu);
+  list->SetComputeRootDescriptorTable(11, s_texTableGpu);
 
   const UINT groupCountX = (s_lastWavefrontBootstrapPathCount + 63u) / 64u;
   list->Dispatch(groupCountX, 1, 1);
@@ -2352,7 +2427,9 @@ static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
 
 static void DispatchWavefrontResolveSecondary(ID3D12GraphicsCommandList4 *list,
                                               ID3D12Resource *cameraCB,
-                                              UINT sourceQueueCounterIndex) {
+                                              UINT sourceQueueCounterIndex,
+                                              UINT extraResolveFlags,
+                                              bool useIndirectDispatch) {
   if (!list || !cameraCB || !s_srvHeap || !s_device ||
       s_lastWavefrontBootstrapPathCount == 0) {
     return;
@@ -2373,7 +2450,7 @@ static void DispatchWavefrontResolveSecondary(ID3D12GraphicsCommandList4 *list,
       (sourceQueueCounterIndex == 0u) ? kWavefrontQueueFlagSourceIsA : 0u;
   const UINT resolveConstants[4] = {s_outputWidth, s_outputHeight,
                                     s_lastWavefrontBootstrapPathCount,
-                                    sourceQueueFlags};
+                                    sourceQueueFlags | extraResolveFlags};
   list->SetComputeRoot32BitConstants(1, _countof(resolveConstants),
                                      resolveConstants, 0);
   list->SetComputeRootDescriptorTable(2, s_outputUAVGpu);
@@ -2382,14 +2459,22 @@ static void DispatchWavefrontResolveSecondary(ID3D12GraphicsCommandList4 *list,
       4, s_lightBuffer ? s_lightBuffer->GetGPUVirtualAddress() : 0);
   list->SetComputeRootShaderResourceView(
       5, s_tlas.result ? s_tlas.result->GetGPUVirtualAddress() : 0);
+  list->SetComputeRootShaderResourceView(6, 0);
+  list->SetComputeRootShaderResourceView(7, 0);
+  list->SetComputeRootShaderResourceView(8, 0);
+  list->SetComputeRootDescriptorTable(9, s_vbTableGpu);
+  list->SetComputeRootDescriptorTable(10, s_ibTableGpu);
+  list->SetComputeRootDescriptorTable(11, s_texTableGpu);
 
-  if (ExecuteWavefrontIndirectComputeDispatch(
+  if (useIndirectDispatch && ExecuteWavefrontIndirectComputeDispatch(
           list, kWavefrontSecondaryResolveDispatchArgsIndex)) {
     return;
   }
 
-  const UINT groupCountX = (s_lastWavefrontBootstrapPathCount + 63u) / 64u;
-  list->Dispatch(groupCountX, 1, 1);
+  if (!useIndirectDispatch) {
+    const UINT groupCountX = (s_lastWavefrontBootstrapPathCount + 63u) / 64u;
+    list->Dispatch(groupCountX, 1, 1);
+  }
 
   D3D12_RESOURCE_BARRIER uavBarrier = {};
   uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
@@ -5810,6 +5895,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       for (UINT i = 0; i < 6; ++i) {
         DispatchWavefrontCounterReset(dxrList.Get(), i, 0u);
       }
+      for (UINT i = 0; i < kWavefrontMaterialBinCount; ++i) {
+        DispatchWavefrontCounterReset(
+            dxrList.Get(), kWavefrontMaterialBinCounterBase + i, 0u);
+      }
 
       SetWavefrontStage("bootstrap");
       DispatchWavefrontBootstrap(dxrList.Get(), cameraCB);
@@ -5835,7 +5924,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         // enqueue secondary paths into queue B (counter 4) and primary
         // shadow tasks into shadow queue (counter 5).
         SetWavefrontStage("primary-resolve");
-        DispatchWavefrontResolvePrimary(dxrList.Get(), cameraCB);
+        DispatchWavefrontResolvePrimary(dxrList.Get(), cameraCB, materialCB,
+                                        meshDataSB, materialExtraSB);
 
         // Primary shadow visibility: trace the shadow rays queued by primary
         // resolve and accumulate direct lighting into the output buffer.
@@ -5871,6 +5961,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
               kWavefrontSecondaryDispatchRaysReservedSlot, queueFlags);
 
           // Secondary visibility: trace continuation rays from source queue.
+          for (UINT i = 0; i < kWavefrontMaterialBinCount; ++i) {
+            DispatchWavefrontCounterReset(
+                dxrList.Get(), kWavefrontMaterialBinCounterBase + i, 0u);
+          }
           BindRayTracingGlobalRoot();
           SetWavefrontStage("secondary-visibility");
           DispatchWavefrontSecondaryVisibility(dxrList.Get(), sourceCounter);
@@ -5881,7 +5975,20 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
           // Secondary resolve: shade secondary hits, enqueue continuations into
           // destination queue and new shadow tasks into shadow queue.
           SetWavefrontStage("secondary-resolve");
-          DispatchWavefrontResolveSecondary(dxrList.Get(), cameraCB, sourceCounter);
+          for (UINT materialBin = 0; materialBin < kWavefrontMaterialBinCount;
+               ++materialBin) {
+            DispatchWavefrontPrepareIndirectArgs(
+                dxrList.Get(), kWavefrontMaterialBinCounterBase + materialBin,
+                kWavefrontSecondaryResolveDispatchArgsIndex, ~0u, 0u);
+            const UINT binFlags =
+                kWavefrontQueueFlagUseMaterialBinList |
+                (materialBin << kWavefrontQueueFlagMaterialBinShift);
+            DispatchWavefrontResolveSecondary(dxrList.Get(), cameraCB,
+                                             sourceCounter, binFlags, true);
+          }
+          DispatchWavefrontResolveSecondary(dxrList.Get(), cameraCB,
+                                           sourceCounter,
+                                           kWavefrontQueueFlagMissOnly, false);
 
           // Secondary shadow visibility: trace shadow rays from this bounce.
           DispatchWavefrontPrepareIndirectArgs(
