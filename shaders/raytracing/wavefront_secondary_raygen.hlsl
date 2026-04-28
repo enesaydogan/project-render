@@ -29,6 +29,16 @@ void WavefrontSecondaryRayGen()
         return;
     }
 
+    uint queueCapacity, dummy;
+    if ((queueFlags & WAVEFRONT_QUEUE_FLAG_SOURCE_IS_A) != 0u) {
+        g_wavefrontPathQueueA.GetDimensions(queueCapacity, dummy);
+    } else {
+        g_wavefrontPathQueueB.GetDimensions(queueCapacity, dummy);
+    }
+    if (pathIndex >= queueCapacity) {
+        return;
+    }
+
     WavefrontPathState state;
     if ((queueFlags & WAVEFRONT_QUEUE_FLAG_SOURCE_IS_A) != 0u) {
         state = g_wavefrontPathQueueA[pathIndex];

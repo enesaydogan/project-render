@@ -201,8 +201,8 @@ static constexpr UINT kWavefrontStatsCount = 64;
 static constexpr UINT kWavefrontDispatchArgCount = 4;
 static constexpr UINT kWavefrontReservedUint4Count = 16;
 static constexpr UINT64 kWavefrontMinQueueEntries = 65536ull;
-static constexpr UINT64 kWavefrontMaxPathQueueEntries = 262144ull;
-static constexpr UINT64 kWavefrontMaxShadowQueueEntries = 524288ull;
+static constexpr UINT64 kWavefrontMaxPathQueueEntries = 2097152ull; // 2M
+static constexpr UINT64 kWavefrontMaxShadowQueueEntries = 2097152ull; // 2M
 static constexpr UINT kWavefrontSecondaryResolveDispatchArgsIndex = 2;
 static constexpr UINT kWavefrontSecondaryDispatchRaysReservedSlot = 0;
 static constexpr UINT kWavefrontShadowDispatchRaysReservedSlot = 7;
@@ -5797,10 +5797,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
           DispatchWavefrontPrepareIndirectArgs(
               dxrList.Get(), 5u, ~0u,
               kWavefrontShadowDispatchRaysReservedSlot, 0u);
-          BindRayTracingGlobalRoot();
           SetWavefrontStage("secondary-shadow");
+          BindRayTracingGlobalRoot();
           DispatchWavefrontShadowVisibility(dxrList.Get());
-          DispatchWavefrontCounterReset(dxrList.Get(), 5u, 0u);
         }
 
         useWavefrontResolvedOutput = true;

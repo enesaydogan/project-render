@@ -24,6 +24,12 @@ void WavefrontShadowRayGen()
         return;
     }
 
+    uint queueCapacity, dummy;
+    g_wavefrontShadowQueue.GetDimensions(queueCapacity, dummy);
+    if (taskIndex >= queueCapacity) {
+        return;
+    }
+
     if (taskIndex == 0u) {
         uint previousValue = 0u;
         InterlockedAdd(g_wavefrontStats[29], activeCount, previousValue);
