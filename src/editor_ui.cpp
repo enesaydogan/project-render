@@ -2651,11 +2651,11 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
           uiChanged = true;
         }
         ImGui::TextWrapped(
-          "Wavefront Parity keeps the legacy final image and runs queue "
-          "bootstrap plus primary visibility ahead of it. Wavefront "
-          "Optimized now resolves the queued primary hits into its own "
-          "first-hit output and emits secondary-path and shadow queues "
-          "instead of falling back to the monolithic RayGen path.");
+          "Wavefront Parity is the Phase 2 primary-surface slice: queued "
+          "primary rays are traced and resolved into the existing output and "
+          "AOV surfaces without secondary, shadow, or ReSTIR scheduling. "
+          "Wavefront Optimized extends that scheduler with continuation "
+          "queues, shadow visibility, and shadow integration.");
         if (DxrRenderer::GetPathTracingBackend() !=
             DxrRenderer::PathTracingBackend::Legacy) {
           ImGui::Text("Bootstrap paths: %u",

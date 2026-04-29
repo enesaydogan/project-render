@@ -239,6 +239,7 @@ static constexpr UINT kWavefrontQueueFlagUseMaterialBinList = 0x8u;
 static constexpr UINT kWavefrontQueueFlagMissOnly = 0x10u;
 static constexpr UINT kWavefrontMaterialBinCounterBase = 6u;
 static constexpr UINT kWavefrontQueueFlagMaterialBinShift = 8u;
+static constexpr UINT kWavefrontResolveFlagPrimarySurfaceOnly = 0x10000u;
 static constexpr UINT64 kWavefrontCounterStrideBytes = sizeof(UINT);
 static constexpr UINT kWavefrontPrimaryMaterialBinStatsBase = 32u;
 static constexpr UINT kWavefrontSecondaryMaterialBinStatsBase = 40u;
@@ -916,7 +917,8 @@ static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
                                             ID3D12Resource *cameraCB,
                                             ID3D12Resource *materialCB,
                                             ID3D12Resource *meshDataSB,
-                                            ID3D12Resource *materialExtraSB);
+                                            ID3D12Resource *materialExtraSB,
+                                            UINT resolveFlags = 0u);
 static void DispatchWavefrontResolveSecondary(ID3D12GraphicsCommandList4 *list,
                                               ID3D12Resource *cameraCB,
                                               UINT sourceQueueCounterIndex,
@@ -2466,7 +2468,8 @@ static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
                                             ID3D12Resource *cameraCB,
                                             ID3D12Resource *materialCB,
                                             ID3D12Resource *meshDataSB,
-                                            ID3D12Resource *materialExtraSB) {
+                                            ID3D12Resource *materialExtraSB,
+                                            UINT resolveFlags) {
   if (!list || !cameraCB || !s_srvHeap || !s_device ||
       s_lastWavefrontBootstrapPathCount == 0) {
     return;
@@ -2484,7 +2487,8 @@ static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
   list->SetComputeRootConstantBufferView(0, cameraCB->GetGPUVirtualAddress());
 
   const UINT resolveConstants[4] = {s_outputWidth, s_outputHeight,
-                                    s_lastWavefrontBootstrapPathCount, 0u};
+                                    s_lastWavefrontBootstrapPathCount,
+                                    resolveFlags};
   list->SetComputeRoot32BitConstants(1, _countof(resolveConstants),
                                      resolveConstants, 0);
   list->SetComputeRootDescriptorTable(2, s_outputUAVGpu);
@@ -6118,7 +6122,16 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         }
       }
 
-      if (s_pathTracingBackend == PathTracingBackend::WavefrontOptimized) {
+      if (s_pathTracingBackend == PathTracingBackend::WavefrontParity) {
+        // Phase 2 parity gate: resolve queue-backed primary hits into the
+        // existing output/AOV surfaces without scheduling transport work.
+        SetWavefrontStage("primary-surface-resolve");
+        DispatchWavefrontResolvePrimary(
+            dxrList.Get(), cameraCB, materialCB, meshDataSB, materialExtraSB,
+            kWavefrontResolveFlagPrimarySurfaceOnly);
+        useWavefrontResolvedOutput = true;
+        didPathTracingWork = true;
+      } else if (s_pathTracingBackend == PathTracingBackend::WavefrontOptimized) {
         ClearWavefrontShadowContribution(dxrList.Get());
 
         // Primary resolve: evaluate primary hits, seed DI/GI reservoirs,

@@ -932,6 +932,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     float3 rayDir = normalize(state.direction);
     float3 pathThroughput = max(state.throughput, 0.0);
     bool isMiss = WavefrontHitRecordIsMiss(record);
+    const bool primarySurfaceOnly =
+        (reservedFlags & WAVEFRONT_RESOLVE_FLAG_PRIMARY_SURFACE_ONLY) != 0u;
 
     float3 color = WavefrontHitRecordGetColor(record) * pathThroughput;
     float depth = (dlssRayReconstruction > 0.5) ? farZ : 1.0;
@@ -982,87 +984,6 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         }
         motion = ComputeWavefrontSurfaceMotion(hitPos, currScreen);
 
-        RNG rng;
-        rng.state = state.rngState ^ (pathIndex * 0x9E3779B9u) ^ 0xB5297A4Du;
-        const uint maxSpecularBounceCount =
-            (maxSpecularBounces > 0.0) ? (uint)maxSpecularBounces : 0u;
-        const uint maxRefractiveBounceCount =
-            (maxRefractiveBounces > 0.0) ? (uint)maxRefractiveBounces : 0u;
-        const uint maxDiffuseBounceCount =
-            (maxGIBounces > 0.0) ? (uint)maxGIBounces : 0u;
-
-        uint nextRayType = RAY_TYPE_DIFFUSE;
-        float3 nextDirection = normal;
-        float3 nextThroughput = state.throughput * max(albedo, 0.02.xxx);
-        
-        // Evaluate probabilities for path continuation to avoid hard cut-offs
-        float transmissionProb = 0.0;
-        float reflectionProb = 0.0;
-        float diffuseProb = 0.0;
-        ComputeWavefrontLobeProbabilities(normal, -rayDir,
-                          albedo, metallic, transmission,
-                          translucency, ior, specularWeight,
-                          specularColor,
-                          reflectionProb, diffuseProb,
-                          transmissionProb);
-        
-        float rnd = next_float(rng);
-        if (transmissionProb > 0.0 && rnd < transmissionProb) {
-            nextRayType = RAY_TYPE_REFRACTION;
-            nextDirection = BuildTransmissionContinuation(rayDir, normal, ior);
-            nextThroughput = state.throughput * max(transmissionTint, 0.02.xxx) * max(transmission, 0.1) / max(transmissionProb, 1.0e-4);
-        } else if (reflectionProb > 0.0 && rnd < (transmissionProb + reflectionProb)) {
-            nextRayType = RAY_TYPE_REFLECTION;
-            if (BuildSpecularContinuation(rayDir, normal, roughness, rng,
-                                          nextDirection)) {
-                nextThroughput = state.throughput * max(specularAlbedo, 0.04.xxx) / max(reflectionProb, 1.0e-4);
-            } else {
-                nextThroughput = float3(0.0, 0.0, 0.0);
-            }
-        } else {
-            nextRayType = RAY_TYPE_DIFFUSE;
-            nextDirection = BuildDiffuseContinuation(normal, rng);
-            nextThroughput = state.throughput * max(albedo, 0.02.xxx) * saturate(dot(normal, nextDirection)) / max(diffuseProb, 1.0e-4);
-        }
-        nextThroughput = max(nextThroughput, 0.0);
-
-        {
-            WavefrontLightSample sunSample =
-                WavefrontSampleDirectionalLight(1.0);
-            float sunTarget = WavefrontEvaluateReservoirTarget(
-                record, normal, hitPos, sunSample);
-            update_reservoir(diReservoir, 0xFFFFFFFFu, sunTarget, rng);
-
-            const uint numLights = WavefrontGetAvailableLightCount();
-            if (numLights > 0u) {
-                const uint lightIndex = next_uint(rng) % numLights;
-                WavefrontLightSample localSample =
-                    WavefrontSampleFlatLight(hitPos, lightIndex,
-                                             (float)numLights);
-                float localTarget = WavefrontEvaluateReservoirTarget(
-                    record, normal, hitPos, localSample);
-                update_reservoir(diReservoir, lightIndex, localTarget, rng);
-            }
-            WavefrontLightSample finalSample;
-            finalSample.direction = float3(0.0, 1.0, 0.0);
-            finalSample.maxDistance = 0.0;
-            finalSample.radiance = float3(0.0, 0.0, 0.0);
-            finalSample.packedLightIndex =
-                WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL, 0u);
-            if (diReservoir.lightIndex == 0xFFFFFFFFu) {
-                finalSample = WavefrontSampleDirectionalLight(1.0);
-            } else if (diReservoir.lightIndex < numLights) {
-                finalSample = WavefrontSampleFlatLight(hitPos,
-                                                       diReservoir.lightIndex,
-                                                       1.0);
-            }
-            float finalTarget = WavefrontEvaluateReservoirTarget(
-                record, normal, hitPos, finalSample);
-            finalize_reservoir(diReservoir, finalTarget);
-            selectedDirectLightSample = finalSample;
-            selectedDirectLightWeight = diReservoir.W;
-        }
-
         float3 forwardDir = normalize(camForward);
         float viewZ = dot(hitPos - camPos, forwardDir);
         if (viewZ > 0.0) {
@@ -1076,8 +997,92 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             }
         }
 
+        uint surfaceStatPrevious = 0u;
+        InterlockedAdd(g_wavefrontStats[9], 1u, surfaceStatPrevious);
+
+        if (!primarySurfaceOnly) {
+            RNG rng;
+            rng.state = state.rngState ^ (pathIndex * 0x9E3779B9u) ^ 0xB5297A4Du;
+            const uint maxSpecularBounceCount =
+                (maxSpecularBounces > 0.0) ? (uint)maxSpecularBounces : 0u;
+            const uint maxRefractiveBounceCount =
+                (maxRefractiveBounces > 0.0) ? (uint)maxRefractiveBounces : 0u;
+            const uint maxDiffuseBounceCount =
+                (maxGIBounces > 0.0) ? (uint)maxGIBounces : 0u;
+
+            uint nextRayType = RAY_TYPE_DIFFUSE;
+            float3 nextDirection = normal;
+            float3 nextThroughput = state.throughput * max(albedo, 0.02.xxx);
+            
+            // Evaluate probabilities for path continuation to avoid hard cut-offs
+            float transmissionProb = 0.0;
+            float reflectionProb = 0.0;
+            float diffuseProb = 0.0;
+            ComputeWavefrontLobeProbabilities(normal, -rayDir,
+                              albedo, metallic, transmission,
+                              translucency, ior, specularWeight,
+                              specularColor,
+                              reflectionProb, diffuseProb,
+                              transmissionProb);
+            
+            float rnd = next_float(rng);
+            if (transmissionProb > 0.0 && rnd < transmissionProb) {
+                nextRayType = RAY_TYPE_REFRACTION;
+                nextDirection = BuildTransmissionContinuation(rayDir, normal, ior);
+                nextThroughput = state.throughput * max(transmissionTint, 0.02.xxx) * max(transmission, 0.1) / max(transmissionProb, 1.0e-4);
+            } else if (reflectionProb > 0.0 && rnd < (transmissionProb + reflectionProb)) {
+                nextRayType = RAY_TYPE_REFLECTION;
+                if (BuildSpecularContinuation(rayDir, normal, roughness, rng,
+                                              nextDirection)) {
+                    nextThroughput = state.throughput * max(specularAlbedo, 0.04.xxx) / max(reflectionProb, 1.0e-4);
+                } else {
+                    nextThroughput = float3(0.0, 0.0, 0.0);
+                }
+            } else {
+                nextRayType = RAY_TYPE_DIFFUSE;
+                nextDirection = BuildDiffuseContinuation(normal, rng);
+                nextThroughput = state.throughput * max(albedo, 0.02.xxx) * saturate(dot(normal, nextDirection)) / max(diffuseProb, 1.0e-4);
+            }
+            nextThroughput = max(nextThroughput, 0.0);
+
+            {
+                WavefrontLightSample sunSample =
+                    WavefrontSampleDirectionalLight(1.0);
+                float sunTarget = WavefrontEvaluateReservoirTarget(
+                    record, normal, hitPos, sunSample);
+                update_reservoir(diReservoir, 0xFFFFFFFFu, sunTarget, rng);
+
+                const uint numLights = WavefrontGetAvailableLightCount();
+                if (numLights > 0u) {
+                    const uint lightIndex = next_uint(rng) % numLights;
+                    WavefrontLightSample localSample =
+                        WavefrontSampleFlatLight(hitPos, lightIndex,
+                                                  (float)numLights);
+                    float localTarget = WavefrontEvaluateReservoirTarget(
+                        record, normal, hitPos, localSample);
+                    update_reservoir(diReservoir, lightIndex, localTarget, rng);
+                }
+                WavefrontLightSample finalSample;
+                finalSample.direction = float3(0.0, 1.0, 0.0);
+                finalSample.maxDistance = 0.0;
+                finalSample.radiance = float3(0.0, 0.0, 0.0);
+                finalSample.packedLightIndex =
+                    WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL, 0u);
+                if (diReservoir.lightIndex == 0xFFFFFFFFu) {
+                    finalSample = WavefrontSampleDirectionalLight(1.0);
+                } else if (diReservoir.lightIndex < numLights) {
+                    finalSample = WavefrontSampleFlatLight(hitPos,
+                                                           diReservoir.lightIndex,
+                                                           1.0);
+                }
+                float finalTarget = WavefrontEvaluateReservoirTarget(
+                    record, normal, hitPos, finalSample);
+                finalize_reservoir(diReservoir, finalTarget);
+                selectedDirectLightSample = finalSample;
+                selectedDirectLightWeight = diReservoir.W;
+            }
+
         uint previousValue = 0u;
-        InterlockedAdd(g_wavefrontStats[9], 1u, previousValue);
         if (nextRayType == RAY_TYPE_REFRACTION) {
             InterlockedAdd(g_wavefrontStats[12], 1u, previousValue);
         } else if (nextRayType == RAY_TYPE_REFLECTION) {
@@ -1174,17 +1179,18 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         color += state.throughput *
                  EvaluateWavefrontGiReservoirContribution(
                      giReservoir, hitPos, normal, diffuseAlbedo);
+        }
     } else {
         uint previousValue = 0u;
         InterlockedAdd(g_wavefrontStats[13], 1u, previousValue);
     }
 
-    if (isMiss) {
+    if (primarySurfaceOnly || isMiss) {
         StoreWavefrontDiReservoir(pixel, init_reservoir());
     } else {
         StoreWavefrontDiReservoir(pixel, diReservoir);
     }
-    if (isMiss) {
+    if (primarySurfaceOnly || isMiss) {
         ClearWavefrontGiReservoir(pixel);
     } else {
         StoreWavefrontGiReservoir(pixel, giReservoir);
