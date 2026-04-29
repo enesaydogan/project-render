@@ -294,8 +294,10 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             }
         }
 
+        WavefrontLightSamplerContext lightSampler =
+            WavefrontCreateLightSampler(hitPos);
         WavefrontLightSample lightSample =
-            WavefrontSampleDirectLight(hitPos, rng);
+            WavefrontSampleDirectLight(lightSampler, hitPos, rng);
         WavefrontLightSample explicitSunSample =
             WavefrontSampleDirectionalLight(1.0);
         float3 sunShadowWeight = state.throughput *
@@ -326,6 +328,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                               ComputeWavefrontDirectLightingWeight(
                                   record, normal, hitPos, lightSample.direction) *
                               WavefrontGetDirectLightSelectionWeight(
+                                  lightSampler,
                                   lightSample.packedLightIndex);
         if (WavefrontGetLightSampleType(lightSample.packedLightIndex) !=
                 WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL &&

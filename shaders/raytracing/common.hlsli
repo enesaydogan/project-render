@@ -446,6 +446,7 @@ static const uint WAVEFRONT_RESOLVE_FLAG_PRIMARY_SURFACE_ONLY = 0x10000u;
 static const uint WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL = 0u;
 static const uint WAVEFRONT_LIGHT_SAMPLE_FLAT = 1u;
 static const uint WAVEFRONT_LIGHT_SAMPLE_ENV = 2u;
+static const uint WAVEFRONT_LIGHT_SAMPLER_FLAT = 0u;
 
 struct WavefrontLightSample
 {
@@ -453,6 +454,12 @@ struct WavefrontLightSample
     float maxDistance;
     float3 radiance;
     uint packedLightIndex;
+};
+
+struct WavefrontLightSamplerContext
+{
+    uint mode;
+    uint availableLights;
 };
 
 struct RayPayload
@@ -717,6 +724,14 @@ inline uint WavefrontGetAvailableLightCount()
     return min((uint)lightCount, availableLights);
 }
 
+inline WavefrontLightSamplerContext WavefrontCreateLightSampler(float3 surfacePos)
+{
+    WavefrontLightSamplerContext sampler;
+    sampler.mode = WAVEFRONT_LIGHT_SAMPLER_FLAT;
+    sampler.availableLights = WavefrontGetAvailableLightCount();
+    return sampler;
+}
+
 inline WavefrontLightSample WavefrontSampleDirectionalLight(float sampleWeight)
 {
     WavefrontLightSample sample;
@@ -755,10 +770,12 @@ inline WavefrontLightSample WavefrontSampleFlatLight(float3 surfacePos,
     return sample;
 }
 
-inline WavefrontLightSample WavefrontSampleDirectLight(float3 surfacePos,
-                                                       inout RNG rng)
+inline WavefrontLightSample WavefrontSampleDirectLight(
+    WavefrontLightSamplerContext sampler,
+    float3 surfacePos,
+    inout RNG rng)
 {
-    const uint numLights = WavefrontGetAvailableLightCount();
+    const uint numLights = sampler.availableLights;
     if (numLights == 0u || next_float(rng) < 0.5) {
         return WavefrontSampleDirectionalLight((numLights > 0u) ? 2.0 : 1.0);
     }
@@ -768,10 +785,20 @@ inline WavefrontLightSample WavefrontSampleDirectLight(float3 surfacePos,
                                     2.0 * (float)numLights);
 }
 
-inline float WavefrontGetDirectLightSelectionWeight(uint packedLightIndex)
+inline WavefrontLightSample WavefrontSampleDirectLight(float3 surfacePos,
+                                                       inout RNG rng)
+{
+    WavefrontLightSamplerContext sampler =
+        WavefrontCreateLightSampler(surfacePos);
+    return WavefrontSampleDirectLight(sampler, surfacePos, rng);
+}
+
+inline float WavefrontGetDirectLightSelectionWeight(
+    WavefrontLightSamplerContext sampler,
+    uint packedLightIndex)
 {
     const uint lightType = WavefrontGetLightSampleType(packedLightIndex);
-    const uint numLights = WavefrontGetAvailableLightCount();
+    const uint numLights = sampler.availableLights;
     if (lightType == WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL) {
         return (numLights > 0u) ? 2.0 : 1.0;
     }
@@ -779,6 +806,14 @@ inline float WavefrontGetDirectLightSelectionWeight(uint packedLightIndex)
         return (numLights > 0u) ? (2.0 * (float)numLights) : 0.0;
     }
     return 1.0;
+}
+
+inline float WavefrontGetDirectLightSelectionWeight(uint packedLightIndex)
+{
+    WavefrontLightSamplerContext sampler;
+    sampler.mode = WAVEFRONT_LIGHT_SAMPLER_FLAT;
+    sampler.availableLights = WavefrontGetAvailableLightCount();
+    return WavefrontGetDirectLightSelectionWeight(sampler, packedLightIndex);
 }
 
 inline float3 WavefrontEvaluateEnvironmentRadiance(float3 direction,

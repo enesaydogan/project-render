@@ -918,7 +918,8 @@ static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
                                             ID3D12Resource *materialCB,
                                             ID3D12Resource *meshDataSB,
                                             ID3D12Resource *materialExtraSB,
-                                            UINT resolveFlags = 0u);
+                                            UINT resolveFlags = 0u,
+                                            bool useIndirectDispatch = false);
 static void DispatchWavefrontResolveSecondary(ID3D12GraphicsCommandList4 *list,
                                               ID3D12Resource *cameraCB,
                                               UINT sourceQueueCounterIndex,
@@ -2469,7 +2470,8 @@ static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
                                             ID3D12Resource *materialCB,
                                             ID3D12Resource *meshDataSB,
                                             ID3D12Resource *materialExtraSB,
-                                            UINT resolveFlags) {
+                                            UINT resolveFlags,
+                                            bool useIndirectDispatch) {
   if (!list || !cameraCB || !s_srvHeap || !s_device ||
       s_lastWavefrontBootstrapPathCount == 0) {
     return;
@@ -2507,8 +2509,15 @@ static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
   list->SetComputeRootDescriptorTable(10, s_ibTableGpu);
   list->SetComputeRootDescriptorTable(11, s_texTableGpu);
 
-  const UINT groupCountX = (s_lastWavefrontBootstrapPathCount + 63u) / 64u;
-  list->Dispatch(groupCountX, 1, 1);
+  const bool dispatchedIndirect =
+      useIndirectDispatch &&
+      ExecuteWavefrontIndirectComputeDispatch(
+          list, kWavefrontSecondaryResolveDispatchArgsIndex);
+
+  if (!dispatchedIndirect) {
+    const UINT groupCountX = (s_lastWavefrontBootstrapPathCount + 63u) / 64u;
+    list->Dispatch(groupCountX, 1, 1);
+  }
 
   D3D12_RESOURCE_BARRIER uavBarrier = {};
   uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
@@ -6134,12 +6143,26 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       } else if (s_pathTracingBackend == PathTracingBackend::WavefrontOptimized) {
         ClearWavefrontShadowContribution(dxrList.Get());
 
-        // Primary resolve: evaluate primary hits, seed DI/GI reservoirs,
-        // enqueue secondary paths into queue B (counter 4) and primary
-        // shadow tasks into shadow queue (counter 5).
+        // Primary resolve: shade primary hits by material bin, seed DI/GI
+        // reservoirs, enqueue secondary paths into queue B (counter 4), and
+        // emit primary shadow tasks into shadow queue (counter 5). Misses run
+        // as a separate full-range pass so sky pixels keep their AOV writes.
         SetWavefrontStage("primary-resolve");
-        DispatchWavefrontResolvePrimary(dxrList.Get(), cameraCB, materialCB,
-                                        meshDataSB, materialExtraSB);
+        for (UINT materialBin = 0; materialBin < kWavefrontMaterialBinCount;
+             ++materialBin) {
+          DispatchWavefrontPrepareIndirectArgs(
+              dxrList.Get(), kWavefrontMaterialBinCounterBase + materialBin,
+              kWavefrontSecondaryResolveDispatchArgsIndex, ~0u, 0u);
+          const UINT binFlags =
+              kWavefrontQueueFlagUseMaterialBinList |
+              (materialBin << kWavefrontQueueFlagMaterialBinShift);
+          DispatchWavefrontResolvePrimary(
+              dxrList.Get(), cameraCB, materialCB, meshDataSB,
+              materialExtraSB, binFlags, true);
+        }
+        DispatchWavefrontResolvePrimary(
+            dxrList.Get(), cameraCB, materialCB, meshDataSB, materialExtraSB,
+            kWavefrontQueueFlagMissOnly, false);
 
         // Primary shadow visibility: trace the shadow rays queued by primary
         // resolve and accumulate direct lighting into the output buffer.

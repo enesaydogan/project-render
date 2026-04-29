@@ -912,7 +912,32 @@ inline void EmitWavefrontShadowTask(uint queueIndex,
 [numthreads(64, 1, 1)]
 void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
-    const uint pathIndex = dispatchThreadID.x;
+    const uint dispatchIndex = dispatchThreadID.x;
+    uint pathIndex = dispatchIndex;
+    const bool useMaterialBinList =
+        (reservedFlags & WAVEFRONT_QUEUE_FLAG_USE_MATERIAL_BIN_LIST) != 0u;
+    const bool missOnly =
+        (reservedFlags & WAVEFRONT_QUEUE_FLAG_MISS_ONLY) != 0u;
+    if (useMaterialBinList) {
+        const uint materialBin = WavefrontGetMaterialBinFromQueueFlags(
+            reservedFlags);
+        uint binIndexCapacity = 0u;
+        uint binIndexStride = 0u;
+        g_wavefrontMaterialBinIndices.GetDimensions(binIndexCapacity,
+                                                    binIndexStride);
+        const uint perBinCapacity =
+            binIndexCapacity / WAVEFRONT_MATERIAL_BIN_COUNT;
+        if (materialBin >= WAVEFRONT_MATERIAL_BIN_COUNT ||
+            dispatchIndex >= perBinCapacity ||
+            dispatchIndex >=
+                g_wavefrontQueueCounters[
+                    WAVEFRONT_MATERIAL_BIN_COUNTER_BASE + materialBin]) {
+            return;
+        }
+        pathIndex =
+            g_wavefrontMaterialBinIndices[materialBin * perBinCapacity +
+                                          dispatchIndex];
+    }
     if (pathIndex >= activeCount) {
         return;
     }
@@ -924,7 +949,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         return;
     }
 
-    if (pathIndex == 0u) {
+    if (dispatchIndex == 0u && !useMaterialBinList) {
         g_wavefrontStats[8] = activeCount;
     }
 
@@ -932,6 +957,12 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     float3 rayDir = normalize(state.direction);
     float3 pathThroughput = max(state.throughput, 0.0);
     bool isMiss = WavefrontHitRecordIsMiss(record);
+    if (missOnly && !isMiss) {
+        return;
+    }
+    if (useMaterialBinList && isMiss) {
+        return;
+    }
     const bool primarySurfaceOnly =
         (reservedFlags & WAVEFRONT_RESOLVE_FLAG_PRIMARY_SURFACE_ONLY) != 0u;
 
@@ -1052,7 +1083,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                     record, normal, hitPos, sunSample);
                 update_reservoir(diReservoir, 0xFFFFFFFFu, sunTarget, rng);
 
-                const uint numLights = WavefrontGetAvailableLightCount();
+                WavefrontLightSamplerContext lightSampler =
+                    WavefrontCreateLightSampler(hitPos);
+                const uint numLights = lightSampler.availableLights;
                 if (numLights > 0u) {
                     const uint lightIndex = next_uint(rng) % numLights;
                     WavefrontLightSample localSample =
