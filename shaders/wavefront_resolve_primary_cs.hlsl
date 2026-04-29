@@ -940,6 +940,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     float3 normal = float3(0.0, 1.0, 0.0);
     float3 albedo = float3(0.0, 0.0, 0.0);
     float3 specularAlbedo = float3(0.0, 0.0, 0.0);
+    float3 rrSpecularAlbedo = float3(0.0, 0.0, 0.0);
     float roughness = 1.0;
     uint pathQueueCapacity = 0u;
     uint pathQueueStride = 0u;
@@ -970,6 +971,15 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         float3 specularColor = UnpackPayloadSpecularColor(record.packedSpecular);
         specularAlbedo = ComputeWavefrontSpecularThroughput(
             albedo, metallic, ior, specularWeight, specularColor, transmission);
+        {
+            float3 f0 = ComputeWavefrontSurfaceF0(albedo, metallic, ior,
+                                                  specularWeight,
+                                                  specularColor);
+            float nDotV = saturate(dot(normal, -rayDir));
+            rrSpecularAlbedo = EnvBRDFApprox2(f0,
+                                              roughness * roughness,
+                                              nDotV);
+        }
         motion = ComputeWavefrontSurfaceMotion(hitPos, currScreen);
 
         RNG rng;
@@ -1180,6 +1190,58 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         StoreWavefrontGiReservoir(pixel, giReservoir);
     }
 
+    if (dlssRayReconstruction > 0.5) {
+        if (WavefrontHitRecordGuideIsMiss(record)) {
+            float3 guideSkyDir = normalize(record.guideDirection);
+            depth = farZ;
+            linearDepth = farZ;
+            motion = ComputeWavefrontSkyMotion(guideSkyDir, currScreen);
+            normal = float3(0.0, 1.0, 0.0);
+            albedo = float3(0.0, 0.0, 0.0);
+            roughness = 1.0;
+            rrSpecularAlbedo = float3(0.0, 0.0, 0.0);
+        } else {
+            float3 guideDir = normalize(record.guideDirection);
+            float3 guideHitPos = record.guideOrigin + guideDir * record.guideHitT;
+            float3 guideNormal =
+                UnpackNormalOctahedron(record.guidePackedNormal);
+            float3 guideAlbedo = UnpackPayloadAlbedo(record.guidePackedAlbedo);
+            float4 guideSurface =
+                UnpackPayloadSurface(record.guidePackedSurface);
+            float guideRoughness = saturate(guideSurface.x);
+            float guideMetallic = saturate(guideSurface.y);
+            float guideSpecularWeight =
+                saturate(UnpackPayloadSpecularWeight(
+                    record.guidePackedIorType));
+            float guideIor = UnpackPayloadIor(record.guidePackedIorType);
+            float3 guideSpecularColor =
+                UnpackPayloadSpecularColor(record.guidePackedSpecular);
+
+            normal = guideNormal;
+            albedo = guideAlbedo;
+            roughness = guideRoughness;
+            motion = ComputeWavefrontSurfaceMotion(guideHitPos, currScreen);
+
+            float3 forwardDir = normalize(camForward);
+            float viewZ = dot(guideHitPos - camPos, forwardDir);
+            if (viewZ > 0.0) {
+                linearDepth = viewZ;
+                depth = viewZ;
+            } else {
+                linearDepth = farZ;
+                depth = farZ;
+            }
+
+            float3 guideF0 = ComputeWavefrontSurfaceF0(
+                guideAlbedo, guideMetallic, guideIor, guideSpecularWeight,
+                guideSpecularColor);
+            float guideNdotV = saturate(dot(guideNormal, -guideDir));
+            rrSpecularAlbedo =
+                EnvBRDFApprox2(guideF0, guideRoughness * guideRoughness,
+                               guideNdotV);
+        }
+    }
+
     color = max(color, 0.0);
     float4 history = g_accumulation[pixel];
     float historyCount = history.a;
@@ -1197,9 +1259,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     g_motionVectors[pixel] = motion;
     g_albedoOut[pixel] = float4(albedo, 1.0);
     g_normalRoughnessOut[pixel] = float4(normalize(normal), roughness);
-    g_specularAlbedo[pixel] = float4(specularAlbedo, 1.0);
+    g_specularAlbedo[pixel] = float4(rrSpecularAlbedo, 1.0);
     g_specHitDistance[pixel] = 0.0;
-    g_specularMotionVectors[pixel] = any(specularAlbedo > 0.0) ? motion : kInvalidMvec;
+    g_specularMotionVectors[pixel] = any(rrSpecularAlbedo > 0.0) ? motion : kInvalidMvec;
     g_transmissionAccumulation[pixel] = float4(0.0, 0.0, 0.0, 0.0);
     g_transmissionVariance[pixel] = 0.0;
 }

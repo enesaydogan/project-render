@@ -41,10 +41,11 @@ void WavefrontShadowRayGen()
             WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL &&
         lightDir.w > 0.0) {
         RNG shadowRng;
-        shadowRng.state =
-            ((uint)globalFrameCount * 0x9E3779B9u) ^
-            (taskIndex * 0x85EBCA6Bu) ^
-            (pixelIndex * 0xC2B2AE35u);
+        uint stableSeed =
+            (pixelIndex * 0xC2B2AE35u) ^
+            (task.packedLightIndex * 0x27D4EB2Du);
+        shadowRng.state = (((uint)globalFrameCount * 0x9E3779B9u) ^
+                           stableSeed);
         visibilityDirection = WavefrontBuildSunVisibilityDirection(
             visibilityDirection, shadowRng);
     }
@@ -61,13 +62,7 @@ void WavefrontShadowRayGen()
                                         task.packedLightIndex,
                                         task.origin,
                                         task.direction);
-        float4 accum = g_accumulation[pixel];
-        float historyCount = max(accum.a, 1.0);
-        float3 outputContribution = (dlssRayReconstruction > 0.5)
-                                        ? contribution
-                                        : (contribution / historyCount);
-        g_output[pixel] = float4(g_output[pixel].rgb + outputContribution, 1.0);
-        g_accumulation[pixel] = float4(accum.rgb + contribution, accum.a);
+        WavefrontAtomicAddShadowContribution(pixelIndex, contribution);
     } else {
         uint previousValue = 0u;
         InterlockedAdd(g_wavefrontStats[31], 1u, previousValue);

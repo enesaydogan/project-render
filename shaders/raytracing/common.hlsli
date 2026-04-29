@@ -38,6 +38,7 @@ RWTexture2D<float> g_specHitDistance : register(u17);
 RWTexture2D<float2> g_specularMotionVectors : register(u18);
 RWTexture2D<float4> g_transmissionAccumulation : register(u19);
 RWTexture2D<float> g_transmissionVariance : register(u20);
+RWStructuredBuffer<uint> g_wavefrontShadowContribution : register(u23);
 
 // === Shader instrumentation counters (debug) ===
 static const uint SHADER_COUNTER_TRACE_RAYS = 0;
@@ -365,9 +366,23 @@ struct WavefrontHitRecord
     uint packedSpecular;
     uint packedState;
     uint reserved;
+    float3 guideOrigin;
+    uint guidePackedState;
+    float3 guideDirection;
+    float guideHitT;
+    uint guidePackedNormal;
+    uint guidePackedAlbedo;
+    uint guidePackedSurface;
+    uint guidePackedIorType;
+    uint guidePackedTransmission;
+    uint guidePackedSpecular;
+    uint guideReserved0;
+    uint guideReserved1;
 };
 
 static const uint WAVEFRONT_HIT_STATE_MISS = 0x80000000u;
+static const uint WAVEFRONT_GUIDE_STATE_MISS = 0x80000000u;
+static const uint WAVEFRONT_GUIDE_STATE_THROUGH_TRANSMISSION = 0x40000000u;
 static const uint WAVEFRONT_MATERIAL_BIN_DIFFUSE = 0u;
 static const uint WAVEFRONT_MATERIAL_BIN_GLOSSY_DIELECTRIC = 1u;
 static const uint WAVEFRONT_MATERIAL_BIN_CONDUCTOR = 2u;
@@ -499,6 +514,12 @@ inline bool WavefrontHitRecordIsMiss(WavefrontHitRecord record)
 {
     return (record.packedState & WAVEFRONT_HIT_STATE_MISS) != 0u ||
            record.hitT < 0.0;
+}
+
+inline bool WavefrontHitRecordGuideIsMiss(WavefrontHitRecord record)
+{
+    return (record.guidePackedState & WAVEFRONT_GUIDE_STATE_MISS) != 0u ||
+           record.guideHitT < 0.0;
 }
 
 inline void PayloadSetCoatRoughness(inout RayPayload p, float coatRoughness)

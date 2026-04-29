@@ -100,6 +100,18 @@ void WavefrontSecondaryRayGen()
                                      payload.packedColor0,
                                      payload.packedColor1),
         0u);
+    record.guideOrigin = state.origin;
+    record.guidePackedState = (payload.t < 0.0) ? WAVEFRONT_GUIDE_STATE_MISS : 0u;
+    record.guideDirection = normalize(state.direction);
+    record.guideHitT = payload.t;
+    record.guidePackedNormal = payload.packedNormal;
+    record.guidePackedAlbedo = payload.packedAlbedo;
+    record.guidePackedSurface = payload.packedSurface;
+    record.guidePackedIorType = payload.packedIorType;
+    record.guidePackedTransmission = payload.packedTransmission;
+    record.guidePackedSpecular = payload.packedSpecular;
+    record.guideReserved0 = 0u;
+    record.guideReserved1 = 0u;
 
     if (payload.t < 0.0) {
         record.packedState |= WAVEFRONT_HIT_STATE_MISS;

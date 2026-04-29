@@ -4,6 +4,41 @@
 #include "../brdf_lib.hlsl"
 
 static const float kWavefrontEnvLightingBoost = 3.0;
+static const float kWavefrontShadowContributionScale = 4096.0;
+static const float kWavefrontShadowContributionInvScale =
+    1.0 / kWavefrontShadowContributionScale;
+static const float kWavefrontShadowContributionMax = 65504.0;
+
+inline uint WavefrontEncodeShadowContribution(float value)
+{
+    float finiteValue = isfinite(value) ? value : 0.0;
+    return (uint)min(max(finiteValue, 0.0) *
+                         kWavefrontShadowContributionScale + 0.5,
+                     kWavefrontShadowContributionMax *
+                         kWavefrontShadowContributionScale);
+}
+
+inline void WavefrontAtomicAddShadowContribution(uint pixelIndex,
+                                                 float3 contribution)
+{
+    uint baseIndex = pixelIndex * 4u;
+    uint r = WavefrontEncodeShadowContribution(contribution.r);
+    uint g = WavefrontEncodeShadowContribution(contribution.g);
+    uint b = WavefrontEncodeShadowContribution(contribution.b);
+    uint previousValue = 0u;
+    if (r != 0u) {
+        InterlockedAdd(g_wavefrontShadowContribution[baseIndex + 0u], r,
+                       previousValue);
+    }
+    if (g != 0u) {
+        InterlockedAdd(g_wavefrontShadowContribution[baseIndex + 1u], g,
+                       previousValue);
+    }
+    if (b != 0u) {
+        InterlockedAdd(g_wavefrontShadowContribution[baseIndex + 2u], b,
+                       previousValue);
+    }
+}
 
 inline float3 WavefrontSampleCone(float3 dir, float cosThetaMax, float2 u)
 {
