@@ -44,6 +44,13 @@ inline void StoreWavefrontDiReservoir(uint2 pixel, Reservoir reservoir)
     }
 }
 
+inline Reservoir LoadWavefrontDiReservoir(uint2 pixel)
+{
+    return unpack_reservoir(WavefrontReservoirFlip()
+                                ? g_reservoir1[pixel]
+                                : g_reservoir0[pixel]);
+}
+
 inline void ClearWavefrontGiReservoir(uint2 pixel)
 {
     const float4 zero4 = float4(0.0, 0.0, 0.0, 0.0);
@@ -1077,24 +1084,10 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             nextThroughput = max(nextThroughput, 0.0);
 
             {
-                WavefrontLightSample sunSample =
-                    WavefrontSampleDirectionalLight(1.0);
-                float sunTarget = WavefrontEvaluateReservoirTarget(
-                    record, normal, hitPos, sunSample);
-                update_reservoir(diReservoir, 0xFFFFFFFFu, sunTarget, rng);
-
+                diReservoir = LoadWavefrontDiReservoir(pixel);
                 WavefrontLightSamplerContext lightSampler =
                     WavefrontCreateLightSampler(hitPos);
                 const uint numLights = lightSampler.availableLights;
-                if (numLights > 0u) {
-                    const uint lightIndex = next_uint(rng) % numLights;
-                    WavefrontLightSample localSample =
-                        WavefrontSampleFlatLight(hitPos, lightIndex,
-                                                  (float)numLights);
-                    float localTarget = WavefrontEvaluateReservoirTarget(
-                        record, normal, hitPos, localSample);
-                    update_reservoir(diReservoir, lightIndex, localTarget, rng);
-                }
                 WavefrontLightSample finalSample;
                 finalSample.direction = float3(0.0, 1.0, 0.0);
                 finalSample.maxDistance = 0.0;
@@ -1108,9 +1101,6 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                                                            diReservoir.lightIndex,
                                                            1.0);
                 }
-                float finalTarget = WavefrontEvaluateReservoirTarget(
-                    record, normal, hitPos, finalSample);
-                finalize_reservoir(diReservoir, finalTarget);
                 selectedDirectLightSample = finalSample;
                 selectedDirectLightWeight = diReservoir.W;
             }
@@ -1220,8 +1210,6 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     if (primarySurfaceOnly || isMiss) {
         StoreWavefrontDiReservoir(pixel, init_reservoir());
-    } else {
-        StoreWavefrontDiReservoir(pixel, diReservoir);
     }
     if (primarySurfaceOnly || isMiss) {
         ClearWavefrontGiReservoir(pixel);

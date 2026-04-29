@@ -43,9 +43,22 @@ finished tracing shadows.
 
 ## ReSTIR
 
-Wavefront optimized primary resolve seeds DI/GI reservoirs from queue-produced
-primary hit records. The existing spatial ReSTIR passes then consume those
-reservoir textures through the same resource formats used by the legacy path.
+Wavefront optimized has an explicit `restir-seed` scheduler stage for ReSTIR DI.
+It consumes queue-produced primary hit records through the same material-bin
+task lists used by primary resolve, writes the DI reservoir textures, and clears
+miss pixels. Primary resolve then reads the scheduler-seeded DI reservoir when
+emitting direct-light shadow tasks.
+
+The existing spatial ReSTIR DI pass remains the temporal/spatial reuse stage and
+continues to consume the same reservoir resource format as legacy.
+
+ReSTIR GI candidate generation still happens inside primary resolve in this
+phase because it currently depends on the GI candidate ray query and secondary
+surface radiance evaluation helpers. The GI spatial reuse pass remains
+resource-format compatible with legacy. Moving GI candidate generation into its
+own scheduler stage should be treated as the next ReSTIR-specific refactor, not
+as part of Light Tree/ReGIR.
+
 Parity mode clears reservoir outputs and does not run ReSTIR, so primary-AOV
 validation remains isolated from transport reuse.
 

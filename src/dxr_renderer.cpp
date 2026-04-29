@@ -659,6 +659,7 @@ static ComPtr<ID3D12RootSignature> s_wavefrontPrepareIndirectArgsRootSig;
 static ComPtr<ID3D12PipelineState> s_wavefrontPrepareIndirectArgsPSO;
 static ComPtr<ID3D12RootSignature> s_wavefrontResolveRootSig;
 static ComPtr<ID3D12PipelineState> s_wavefrontResolvePSO;
+static ComPtr<ID3D12PipelineState> s_wavefrontRestirSeedPSO;
 static ComPtr<ID3D12PipelineState> s_wavefrontSecondaryResolvePSO;
 static ComPtr<ID3D12PipelineState> s_wavefrontShadowIntegratePSO;
 static ComPtr<ID3D12CommandSignature> s_wavefrontDispatchCommandSignature;
@@ -895,6 +896,7 @@ static void EnsureWavefrontBootstrapPipeline();
 static void EnsureWavefrontCounterResetPipeline();
 static void EnsureWavefrontPrepareIndirectArgsPipeline();
 static void EnsureWavefrontResolvePipeline();
+static void EnsureWavefrontRestirSeedPipeline();
 static void EnsureWavefrontSecondaryResolvePipeline();
 static void EnsureWavefrontIndirectCommandSignatures();
 static void DispatchWavefrontBootstrap(ID3D12GraphicsCommandList4 *list,
@@ -920,6 +922,10 @@ static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
                                             ID3D12Resource *materialExtraSB,
                                             UINT resolveFlags = 0u,
                                             bool useIndirectDispatch = false);
+static void DispatchWavefrontRestirSeed(ID3D12GraphicsCommandList4 *list,
+                                        ID3D12Resource *cameraCB,
+                                        UINT seedFlags = 0u,
+                                        bool useIndirectDispatch = false);
 static void DispatchWavefrontResolveSecondary(ID3D12GraphicsCommandList4 *list,
                                               ID3D12Resource *cameraCB,
                                               UINT sourceQueueCounterIndex,
@@ -2427,6 +2433,44 @@ static void EnsureWavefrontSecondaryResolvePipeline() {
   }
 }
 
+static void EnsureWavefrontRestirSeedPipeline() {
+  EnsureWavefrontResolvePipeline();
+  if (!s_wavefrontResolveRootSig || s_wavefrontRestirSeedPSO) {
+    return;
+  }
+
+  ComPtr<IDxcBlob> cs;
+  try {
+    std::vector<std::wstring> defines;
+    cs = s_dxcHelper.Compile(L"shaders/wavefront_restir_seed_cs.hlsl",
+                             L"CSMain", L"cs_6_5", defines);
+  } catch (const std::exception &e) {
+    fprintf(stderr,
+            "DxrRenderer: Wavefront ReSTIR seed CS compile failed: %s\n",
+            e.what());
+    return;
+  }
+  if (!cs) {
+    fprintf(stderr, "DxrRenderer: Wavefront ReSTIR seed CS blob null\n");
+    return;
+  }
+
+  D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
+  psoDesc.pRootSignature = s_wavefrontResolveRootSig.Get();
+  psoDesc.CS.pShaderBytecode = cs->GetBufferPointer();
+  psoDesc.CS.BytecodeLength = cs->GetBufferSize();
+  HRESULT hrPso = s_device->CreateComputePipelineState(
+      &psoDesc, IID_PPV_ARGS(&s_wavefrontRestirSeedPSO));
+  if (FAILED(hrPso)) {
+    fprintf(stderr,
+            "DxrRenderer: Wavefront ReSTIR seed PSO creation failed: "
+            "0x%08x\n",
+            (unsigned)hrPso);
+    DumpD3D12InfoQueueMessages("Wavefront ReSTIR seed PSO create");
+    s_wavefrontRestirSeedPSO.Reset();
+  }
+}
+
 static void EnsureWavefrontShadowIntegratePipeline() {
   EnsureWavefrontResolvePipeline();
   if (!s_wavefrontResolveRootSig || s_wavefrontShadowIntegratePSO) {
@@ -2505,6 +2549,60 @@ static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
       7, meshDataSB ? meshDataSB->GetGPUVirtualAddress() : 0);
   list->SetComputeRootShaderResourceView(
       8, materialExtraSB ? materialExtraSB->GetGPUVirtualAddress() : 0);
+  list->SetComputeRootDescriptorTable(9, s_vbTableGpu);
+  list->SetComputeRootDescriptorTable(10, s_ibTableGpu);
+  list->SetComputeRootDescriptorTable(11, s_texTableGpu);
+
+  const bool dispatchedIndirect =
+      useIndirectDispatch &&
+      ExecuteWavefrontIndirectComputeDispatch(
+          list, kWavefrontSecondaryResolveDispatchArgsIndex);
+
+  if (!dispatchedIndirect) {
+    const UINT groupCountX = (s_lastWavefrontBootstrapPathCount + 63u) / 64u;
+    list->Dispatch(groupCountX, 1, 1);
+  }
+
+  D3D12_RESOURCE_BARRIER uavBarrier = {};
+  uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+  uavBarrier.UAV.pResource = nullptr;
+  list->ResourceBarrier(1, &uavBarrier);
+}
+
+static void DispatchWavefrontRestirSeed(ID3D12GraphicsCommandList4 *list,
+                                        ID3D12Resource *cameraCB,
+                                        UINT seedFlags,
+                                        bool useIndirectDispatch) {
+  if (!list || !cameraCB || !s_srvHeap || !s_device ||
+      s_lastWavefrontBootstrapPathCount == 0) {
+    return;
+  }
+
+  EnsureWavefrontRestirSeedPipeline();
+  if (!s_wavefrontRestirSeedPSO || !s_wavefrontResolveRootSig) {
+    return;
+  }
+
+  ID3D12DescriptorHeap *rtHeaps[] = {s_srvHeap.Get()};
+  list->SetDescriptorHeaps(1, rtHeaps);
+  list->SetPipelineState(s_wavefrontRestirSeedPSO.Get());
+  list->SetComputeRootSignature(s_wavefrontResolveRootSig.Get());
+  list->SetComputeRootConstantBufferView(0, cameraCB->GetGPUVirtualAddress());
+
+  const UINT seedConstants[4] = {s_outputWidth, s_outputHeight,
+                                 s_lastWavefrontBootstrapPathCount,
+                                 seedFlags};
+  list->SetComputeRoot32BitConstants(1, _countof(seedConstants),
+                                     seedConstants, 0);
+  list->SetComputeRootDescriptorTable(2, s_outputUAVGpu);
+  list->SetComputeRootDescriptorTable(3, s_iblGpuHandle);
+  list->SetComputeRootShaderResourceView(
+      4, s_lightBuffer ? s_lightBuffer->GetGPUVirtualAddress() : 0);
+  list->SetComputeRootShaderResourceView(
+      5, s_tlas.result ? s_tlas.result->GetGPUVirtualAddress() : 0);
+  list->SetComputeRootShaderResourceView(6, 0);
+  list->SetComputeRootShaderResourceView(7, 0);
+  list->SetComputeRootShaderResourceView(8, 0);
   list->SetComputeRootDescriptorTable(9, s_vbTableGpu);
   list->SetComputeRootDescriptorTable(10, s_ibTableGpu);
   list->SetComputeRootDescriptorTable(11, s_texTableGpu);
@@ -6143,10 +6241,28 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       } else if (s_pathTracingBackend == PathTracingBackend::WavefrontOptimized) {
         ClearWavefrontShadowContribution(dxrList.Get());
 
-        // Primary resolve: shade primary hits by material bin, seed DI/GI
-        // reservoirs, enqueue secondary paths into queue B (counter 4), and
-        // emit primary shadow tasks into shadow queue (counter 5). Misses run
-        // as a separate full-range pass so sky pixels keep their AOV writes.
+        // ReSTIR DI seed: consume queue-produced primary hit records as the
+        // scheduler task source. Spatial reuse still runs later on the same
+        // reservoir textures used by legacy.
+        SetWavefrontStage("restir-seed");
+        for (UINT materialBin = 0; materialBin < kWavefrontMaterialBinCount;
+             ++materialBin) {
+          DispatchWavefrontPrepareIndirectArgs(
+              dxrList.Get(), kWavefrontMaterialBinCounterBase + materialBin,
+              kWavefrontSecondaryResolveDispatchArgsIndex, ~0u, 0u);
+          const UINT binFlags =
+              kWavefrontQueueFlagUseMaterialBinList |
+              (materialBin << kWavefrontQueueFlagMaterialBinShift);
+          DispatchWavefrontRestirSeed(dxrList.Get(), cameraCB, binFlags, true);
+        }
+        DispatchWavefrontRestirSeed(dxrList.Get(), cameraCB,
+                                    kWavefrontQueueFlagMissOnly, false);
+
+        // Primary resolve: shade primary hits by material bin, read
+        // scheduler-seeded DI reservoirs for direct-light tasks, seed GI,
+        // enqueue secondary paths into queue B (counter 4), and emit primary
+        // shadow tasks into shadow queue (counter 5). Misses run as a
+        // separate full-range pass so sky pixels keep their AOV writes.
         SetWavefrontStage("primary-resolve");
         for (UINT materialBin = 0; materialBin < kWavefrontMaterialBinCount;
              ++materialBin) {
