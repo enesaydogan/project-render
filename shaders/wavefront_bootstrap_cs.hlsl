@@ -43,10 +43,12 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         g_wavefrontStats[3] = backendMode;
         g_wavefrontStats[4] = asuint(globalFrameCount);
         g_wavefrontStats[5] = asuint(accumulationCount);
+        g_wavefrontStats[50] = WAVEFRONT_ABI_VERSION;
     }
 
     uint queueIndex = 0u;
-    InterlockedAdd(g_wavefrontQueueCounters[0], 1u, queueIndex);
+    InterlockedAdd(g_wavefrontQueueCounters[WAVEFRONT_QUEUE_PATH_A], 1u,
+                   queueIndex);
     if (queueIndex >= maxPathCount) {
         InterlockedAdd(g_wavefrontStats[15], 1u);
         return;

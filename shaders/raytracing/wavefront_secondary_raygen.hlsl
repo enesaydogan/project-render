@@ -23,8 +23,8 @@ void WavefrontSecondaryRayGen()
         g_wavefrontReserved[WAVEFRONT_RESERVED_SECONDARY_DISPATCH_CONFIG_INDEX].w;
     const uint activeCount =
         ((queueFlags & WAVEFRONT_QUEUE_FLAG_SOURCE_IS_A) != 0u)
-            ? g_wavefrontQueueCounters[0]
-            : g_wavefrontQueueCounters[4];
+            ? g_wavefrontQueueCounters[WAVEFRONT_QUEUE_PATH_A]
+            : g_wavefrontQueueCounters[WAVEFRONT_QUEUE_PATH_B];
     if (pathIndex >= activeCount) {
         return;
     }

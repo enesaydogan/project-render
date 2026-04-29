@@ -9,9 +9,9 @@ cbuffer WavefrontSecondaryResolveConstants : register(b1)
     uint reservedFlags;
 };
 
-static const uint kWavefrontContinuationQueueCounterA = 0u;
-static const uint kWavefrontContinuationQueueCounterB = 4u;
-static const uint kWavefrontShadowQueueCounter = 5u;
+static const uint kWavefrontContinuationQueueCounterA = WAVEFRONT_QUEUE_PATH_A;
+static const uint kWavefrontContinuationQueueCounterB = WAVEFRONT_QUEUE_PATH_B;
+static const uint kWavefrontShadowQueueCounter = WAVEFRONT_QUEUE_SHADOW;
 static const float kWavefrontRayBias = 0.002f;
 
 inline uint2 WavefrontSecondaryPixelCoord(uint pixelIndex)
@@ -121,8 +121,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     const bool sourceIsQueueA = (reservedFlags & WAVEFRONT_QUEUE_FLAG_SOURCE_IS_A) != 0u;
     const uint activeCount = min(maxDispatchCount,
-                                 sourceIsQueueA ? g_wavefrontQueueCounters[0]
-                                                : g_wavefrontQueueCounters[4]);
+                                 sourceIsQueueA
+                                     ? g_wavefrontQueueCounters[WAVEFRONT_QUEUE_PATH_A]
+                                     : g_wavefrontQueueCounters[WAVEFRONT_QUEUE_PATH_B]);
     uint pathIndex = dispatchThreadID.x;
     const bool useMaterialBinList =
         (reservedFlags & WAVEFRONT_QUEUE_FLAG_USE_MATERIAL_BIN_LIST) != 0u;

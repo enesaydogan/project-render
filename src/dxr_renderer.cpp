@@ -211,7 +211,18 @@ struct WavefrontDispatchRaysRecordGpu {
 static_assert(sizeof(WavefrontDispatchRaysRecordGpu) == 112,
               "WavefrontDispatchRaysRecordGpu must match indirect buffer stride.");
 
+static constexpr UINT kWavefrontAbiVersion = 3;
+static constexpr UINT kWavefrontPathStateDwords = 12;
+static constexpr UINT kWavefrontHitRecordDwords = 28;
+static constexpr UINT kWavefrontShadowTaskDwords = 12;
+static constexpr UINT kWavefrontDispatchArgsDwords = 4;
 static constexpr UINT kWavefrontQueueCounterCount = 16;
+static constexpr UINT kWavefrontQueuePathA = 0u;
+static constexpr UINT kWavefrontQueuePrimaryActive = 1u;
+static constexpr UINT kWavefrontQueuePrimaryHit = 2u;
+static constexpr UINT kWavefrontQueuePrimaryMiss = 3u;
+static constexpr UINT kWavefrontQueuePathB = 4u;
+static constexpr UINT kWavefrontQueueShadow = 5u;
 static constexpr UINT kWavefrontStatsCount = 64;
 static constexpr UINT kWavefrontDispatchArgCount = 4;
 static constexpr UINT kWavefrontReservedUint4Count = 16;
@@ -232,6 +243,20 @@ static constexpr UINT64 kWavefrontCounterStrideBytes = sizeof(UINT);
 static constexpr UINT kWavefrontPrimaryMaterialBinStatsBase = 32u;
 static constexpr UINT kWavefrontSecondaryMaterialBinStatsBase = 40u;
 static constexpr UINT kWavefrontMaterialBinCount = 7u;
+static_assert(kWavefrontAbiVersion == 3,
+              "Bump shader WAVEFRONT_ABI_VERSION and docs with ABI changes.");
+static_assert(sizeof(WavefrontPathStateGpu) / sizeof(uint32_t) ==
+                  kWavefrontPathStateDwords,
+              "CPU PathState dword count must match the shader ABI.");
+static_assert(sizeof(WavefrontHitRecordGpu) / sizeof(uint32_t) ==
+                  kWavefrontHitRecordDwords,
+              "CPU HitRecord dword count must match the shader ABI.");
+static_assert(sizeof(WavefrontShadowTaskGpu) / sizeof(uint32_t) ==
+                  kWavefrontShadowTaskDwords,
+              "CPU ShadowTask dword count must match the shader ABI.");
+static_assert(sizeof(WavefrontDispatchArgsGpu) / sizeof(uint32_t) ==
+                  kWavefrontDispatchArgsDwords,
+              "CPU DispatchArgs dword count must match the shader ABI.");
 static constexpr UINT kWavefrontDispatchRaysRecordStride =
     sizeof(WavefrontDispatchRaysRecordGpu);
 static constexpr UINT kWavefrontSecondaryDispatchRaysRecordOffset = 0;
@@ -6105,13 +6130,13 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
         // Primary shadow visibility: trace the shadow rays queued by primary
         // resolve and accumulate direct lighting into the output buffer.
-        DispatchWavefrontPrepareIndirectArgs(dxrList.Get(), 5u, ~0u,
+        DispatchWavefrontPrepareIndirectArgs(dxrList.Get(), kWavefrontQueueShadow, ~0u,
                                             kWavefrontShadowDispatchRaysReservedSlot,
                                             0u);
         BindRayTracingGlobalRoot();
         SetWavefrontStage("primary-shadow");
         DispatchWavefrontShadowVisibility(dxrList.Get());
-        DispatchWavefrontCounterReset(dxrList.Get(), 5u, 0u);
+        DispatchWavefrontCounterReset(dxrList.Get(), kWavefrontQueueShadow, 0u);
 
         // Secondary bounce loop: ping-pong between queue A (counter 0) and
         // queue B (counter 4) for at most ComputeWavefrontIndirectPassBudget()
@@ -6122,8 +6147,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
           // Even bounce: source = queue B (counter 4), dest = queue A (counter 0)
           // Odd  bounce: source = queue A (counter 0), dest = queue B (counter 4)
           const bool sourceIsA = (bounce & 1u) != 0u;
-          const UINT sourceCounter = sourceIsA ? 0u : 4u;
-          const UINT destCounter   = sourceIsA ? 4u : 0u;
+          const UINT sourceCounter =
+              sourceIsA ? kWavefrontQueuePathA : kWavefrontQueuePathB;
+          const UINT destCounter =
+              sourceIsA ? kWavefrontQueuePathB : kWavefrontQueuePathA;
           const UINT queueFlags    = sourceIsA ? kWavefrontQueueFlagSourceIsA : 0u;
 
           // Reset destination counter so secondary resolve allocates from 0.
@@ -6146,7 +6173,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
           DispatchWavefrontSecondaryVisibility(dxrList.Get(), sourceCounter);
 
           // Reset shadow counter before secondary resolve enqueues new tasks.
-          DispatchWavefrontCounterReset(dxrList.Get(), 5u, 0u);
+          DispatchWavefrontCounterReset(dxrList.Get(), kWavefrontQueueShadow, 0u);
 
           // Secondary resolve: shade secondary hits, enqueue continuations into
           // destination queue and new shadow tasks into shadow queue.
@@ -6168,12 +6195,12 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
           // Secondary shadow visibility: trace shadow rays from this bounce.
           DispatchWavefrontPrepareIndirectArgs(
-              dxrList.Get(), 5u, ~0u,
+              dxrList.Get(), kWavefrontQueueShadow, ~0u,
               kWavefrontShadowDispatchRaysReservedSlot, 0u);
           SetWavefrontStage("secondary-shadow");
           BindRayTracingGlobalRoot();
           DispatchWavefrontShadowVisibility(dxrList.Get());
-          DispatchWavefrontCounterReset(dxrList.Get(), 5u, 0u);
+          DispatchWavefrontCounterReset(dxrList.Get(), kWavefrontQueueShadow, 0u);
         }
 
         SetWavefrontStage("shadow-integrate");

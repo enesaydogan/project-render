@@ -2,6 +2,7 @@
 // Main Path Tracing RayGen shader with Accumulation and ReSTIR DI
 
 #include "raytracing/common.hlsli"
+#include "raytracing/primary_guide.hlsli"
 #include "random_lib.hlsl"
 #include "lights_lib.hlsl"
 #include "restir_lib.hlsl"
@@ -188,72 +189,6 @@ float3 EvaluateSurfaceBrdf(float3 N, float3 V, float3 L,
     return baseBrdf * (1.0 - clearcoat) + coatBrdf * clearcoat;
 }
 
-float DielectricF0FromIor(float ior)
-{
-    float safeIor = max(ior, 1.0 + 1e-4);
-    float f0 = (safeIor - 1.0) / (safeIor + 1.0);
-    return f0 * f0;
-}
-
-float GlassScatterAlpha(float roughness)
-{
-    float r = saturate(roughness);
-    return r * r;
-}
-
-bool IsDeltaGlass(float roughness)
-{
-    return GlassScatterAlpha(roughness) <= 1.5e-6;
-}
-
-bool IsDeltaSpecular(float roughness)
-{
-    return GlassScatterAlpha(roughness) <= 1.5e-6;
-}
-
-bool ShouldResolveDeltaTransmission(float roughness, float transmission,
-                                    float ior)
-{
-    if (!IsDeltaGlass(roughness)) {
-        return false;
-    }
-
-    // Only true delta glass uses the clear-window resolve path. Rough glass,
-    // even slightly rough glass, must stay on the transmission sampler so there
-    // is no hidden material threshold in the roughness slider.
-    float f0 = DielectricF0FromIor(ior);
-    float transmissionLobe = transmission * (1.0 - f0);
-    float reflectionLobe = f0;
-    return transmissionLobe >= reflectionLobe;
-}
-
-float EffectiveArchGlassThickness(float materialThickness)
-{
-    // Archviz glazing often arrives as a closed, very thin box but the material
-    // thickness is left at zero. Use a small pane thickness so the non-thin
-    // model exits the sheet instead of visibly bending through mesh thickness.
-    return max(materialThickness, 0.04);
-}
-
-bool RefractDeterministic(float3 V, float3 N, float ior, out float3 L)
-{
-    float cosTheta = dot(V, N);
-    float eta = cosTheta > 0.0 ? (1.0 / ior) : ior;
-    float3 outwardN = cosTheta > 0.0 ? N : -N;
-    cosTheta = abs(cosTheta);
-
-    float sin2ThetaI = max(0.0, 1.0 - cosTheta * cosTheta);
-    float sin2ThetaT = eta * eta * sin2ThetaI;
-    if (sin2ThetaT >= 1.0) {
-        L = reflect(-V, outwardN);
-        return false;
-    }
-
-    float cosThetaT = sqrt(1.0 - sin2ThetaT);
-    L = normalize(eta * (-V) + (eta * cosTheta - cosThetaT) * outwardN);
-    return true;
-}
-
 bool SampleRoughDielectric(float3 V, float3 N, float roughness, float ior,
                            float2 uMicrofacet, float uBranch,
                            out float3 L, out bool refracted)
@@ -386,21 +321,6 @@ float halton(uint index, uint base)
     return r;
 }
 
-RayPayload InitRayPayload(uint rayType)
-{
-    RayPayload p;
-    p.t = -1.0;
-    p.packedColor1 = 0u;
-    PayloadSetColor(p, float3(0.0, 0.0, 0.0));
-    p.packedNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
-    p.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
-    p.packedSurface = PackPayloadSurface(1.0, 0.0, 0.0, 0.0);
-    p.packedIorType = PackPayloadIorType(1.0, rayType, false, 1.0);
-    p.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
-    p.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
-    return p;
-}
-
 float3 TraceGlassReflectionRadiance(float3 P, float3 V, float3 N,
                                     float3 albedo, float metallic,
                                     float roughness, float ior,
@@ -527,70 +447,17 @@ void RayGen()
 
     float3 primaryGuideOrigin = camPos;
     float3 primaryGuideDir = rayDirCenter;
-    uint primaryGuideRayType = RAY_TYPE_PRIMARY;
     RayPayload primaryGuidePayload = InitRayPayload(RAY_TYPE_PRIMARY);
-    bool primaryGuideResolved = false;
-    bool primaryGuideThroughTransmission = false;
+    uint primaryGuideState = 0u;
+    TracePrimaryGuideForPixel(launchIndex.xy, launchDim.xy,
+                              primaryGuideOrigin, primaryGuideDir,
+                              primaryGuidePayload, primaryGuideState);
+    bool primaryGuideThroughTransmission =
+        (primaryGuideState & WAVEFRONT_GUIDE_STATE_THROUGH_TRANSMISSION) != 0u;
 
     RayPayload pretracedPrimaryPayload = InitRayPayload(RAY_TYPE_PRIMARY);
     bool hasPretracedPrimaryPayload = false;
     const int maxPrimaryDeltaSteps = 8;
-
-    for (int deltaStep = 0; deltaStep < maxPrimaryDeltaSteps; ++deltaStep)
-    {
-        RayDesc guideResolveRay;
-        guideResolveRay.Origin = primaryGuideOrigin;
-        guideResolveRay.Direction = primaryGuideDir;
-        guideResolveRay.TMin = 0.002;
-        guideResolveRay.TMax = 10000.0;
-
-        RayPayload guideResolvePayload = InitRayPayload(primaryGuideRayType);
-        TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, guideResolveRay, guideResolvePayload);
-        SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
-
-        if (guideResolvePayload.t < 0.0) {
-            primaryGuidePayload = guideResolvePayload;
-            primaryGuideResolved = true;
-            break;
-        }
-
-        float4 guideSurface = UnpackPayloadSurface(guideResolvePayload.packedSurface);
-        float guideRoughness = max(0.001, guideSurface.x);
-        float guideTransmission = guideSurface.z;
-        float guideIor = UnpackPayloadIor(guideResolvePayload.packedIorType);
-        bool guideThinWalled = UnpackPayloadThinWalled(guideResolvePayload.packedIorType);
-        float guideThickness = UnpackPayloadThickness(guideResolvePayload.packedSpecular);
-
-        if (!ShouldResolveDeltaTransmission(guideRoughness, guideTransmission,
-                                            guideIor)) {
-            primaryGuidePayload = guideResolvePayload;
-            primaryGuideResolved = true;
-            break;
-        }
-
-        float3 guideP = primaryGuideOrigin + primaryGuideDir * guideResolvePayload.t;
-        float3 guideNextDir = primaryGuideDir;
-        if (!guideThinWalled) {
-            float3 guideN = UnpackNormalOctahedron(guideResolvePayload.packedNormal);
-            float3 guideV = -primaryGuideDir;
-            if (!RefractDeterministic(guideV, guideN, guideIor, guideNextDir)) {
-                primaryGuidePayload = guideResolvePayload;
-                primaryGuideResolved = true;
-                break;
-            }
-            if (primaryGuideRayType != RAY_TYPE_REFRACTION) {
-                float travel = EffectiveArchGlassThickness(guideThickness) /
-                               max(abs(dot(guideNextDir, guideN)), 0.2);
-                guideP = guideP + guideNextDir * min(travel, 2.0);
-                guideNextDir = primaryGuideDir;
-            }
-        }
-
-        primaryGuideOrigin = guideP + guideNextDir * 0.002;
-        primaryGuideDir = guideNextDir;
-        primaryGuideRayType = RAY_TYPE_REFRACTION;
-        primaryGuideThroughTransmission = true;
-    }
 
     for (int deltaStep = 0; deltaStep < maxPrimaryDeltaSteps; ++deltaStep)
     {
@@ -678,18 +545,6 @@ void RayGen()
         prevIsDelta = true;
     }
 
-    if (!primaryGuideResolved) {
-        RayDesc guideResolveRay;
-        guideResolveRay.Origin = primaryGuideOrigin;
-        guideResolveRay.Direction = primaryGuideDir;
-        guideResolveRay.TMin = 0.002;
-        guideResolveRay.TMax = 10000.0;
-        primaryGuidePayload = InitRayPayload(primaryGuideRayType);
-        TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, guideResolveRay, primaryGuidePayload);
-        SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
-        primaryGuideResolved = true;
-    }
-
     if (!hasPretracedPrimaryPayload) {
         RayDesc primaryResolveRay;
         primaryResolveRay.Origin = rayOrigin;
@@ -735,10 +590,7 @@ void RayGen()
         bool payloadThinWalled = UnpackPayloadThinWalled(payload.packedIorType);
 
         if (bounce == 0) {
-            RayPayload guidePayload = payload;
-            if (primaryGuideResolved) {
-                guidePayload = primaryGuidePayload;
-            }
+            RayPayload guidePayload = primaryGuidePayload;
             float3 guideAlbedo = UnpackPayloadAlbedo(guidePayload.packedAlbedo);
             float guideCoatWeight = UnpackPayloadCoatWeight(guidePayload.packedAlbedo);
             float4 guideSurface = UnpackPayloadSurface(guidePayload.packedSurface);
@@ -752,8 +604,8 @@ void RayGen()
 
             if (guidePayload.t >= 0.0) {
                 primaryHit = true;
-                float3 guideOrigin = primaryGuideResolved ? primaryGuideOrigin : rayOrigin;
-                float3 guideDir = primaryGuideResolved ? primaryGuideDir : rayDir;
+                float3 guideOrigin = primaryGuideOrigin;
+                float3 guideDir = primaryGuideDir;
                 primaryPos = guideOrigin + guideDir * guidePayload.t;
                 primaryNormal = UnpackNormalOctahedron(guidePayload.packedNormal);
                 primaryAlbedo = guideAlbedo;
@@ -787,7 +639,7 @@ void RayGen()
                 g_linearDepth[launchIndex.xy] = farZ;
                 float2 mvecSky = float2(0.0, 0.0);
                 if (prevValid > 0.5) {
-                    float3 guideSkyDir = primaryGuideResolved ? primaryGuideDir : rayDirCenter;
+                    float3 guideSkyDir = primaryGuideDir;
                     float3 forwardP = normalize(prevForward);
                     float3 Rp = normalize(cross(forwardP, prevUp));
                     float3 Up = normalize(cross(Rp, forwardP));

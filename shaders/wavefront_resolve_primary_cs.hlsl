@@ -11,8 +11,8 @@ cbuffer WavefrontResolveConstants : register(b1)
 };
 
 static const float2 kInvalidMvec = float2(-1e6, -1e6);
-static const uint kWavefrontSecondaryQueueCounter = 4u;
-static const uint kWavefrontShadowQueueCounter = 5u;
+static const uint kWavefrontSecondaryQueueCounter = WAVEFRONT_QUEUE_PATH_B;
+static const uint kWavefrontShadowQueueCounter = WAVEFRONT_QUEUE_SHADOW;
 static const float kWavefrontRayBias = 0.002f;
 
 RWTexture2D<float4> g_reservoir0 : register(u2);

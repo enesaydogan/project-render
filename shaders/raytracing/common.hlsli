@@ -352,6 +352,18 @@ struct WavefrontPathState
     uint packedState;
 };
 
+static const uint WAVEFRONT_ABI_VERSION = 3u;
+static const uint WAVEFRONT_PATH_STATE_DWORDS = 12u;
+static const uint WAVEFRONT_HIT_RECORD_DWORDS = 28u;
+static const uint WAVEFRONT_SHADOW_TASK_DWORDS = 12u;
+static const uint WAVEFRONT_DISPATCH_ARGS_DWORDS = 4u;
+static const uint WAVEFRONT_QUEUE_PATH_A = 0u;
+static const uint WAVEFRONT_QUEUE_PRIMARY_ACTIVE = 1u;
+static const uint WAVEFRONT_QUEUE_PRIMARY_HIT = 2u;
+static const uint WAVEFRONT_QUEUE_PRIMARY_MISS = 3u;
+static const uint WAVEFRONT_QUEUE_PATH_B = 4u;
+static const uint WAVEFRONT_QUEUE_SHADOW = 5u;
+
 struct WavefrontHitRecord
 {
     float hitT;
@@ -867,6 +879,83 @@ inline float UnpackPayloadThickness(uint packed)
 {
     float t = ((packed >> 24) & 0xFFu) / 255.0;
     return t * t;
+}
+
+inline RayPayload InitRayPayload(uint rayType)
+{
+    RayPayload p;
+    p.t = -1.0;
+    p.packedColor1 = 0u;
+    PayloadSetColor(p, float3(0.0, 0.0, 0.0));
+    p.packedNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
+    p.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
+    p.packedSurface = PackPayloadSurface(1.0, 0.0, 0.0, 0.0);
+    p.packedIorType = PackPayloadIorType(1.0, rayType, false, 1.0);
+    p.packedTransmission =
+        PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
+    p.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
+    return p;
+}
+
+inline float DielectricF0FromIor(float ior)
+{
+    float safeIor = max(ior, 1.0 + 1e-4);
+    float f0 = (safeIor - 1.0) / (safeIor + 1.0);
+    return f0 * f0;
+}
+
+inline float GlassScatterAlpha(float roughness)
+{
+    float r = saturate(roughness);
+    return r * r;
+}
+
+inline bool IsDeltaGlass(float roughness)
+{
+    return GlassScatterAlpha(roughness) <= 1.5e-6;
+}
+
+inline bool IsDeltaSpecular(float roughness)
+{
+    return GlassScatterAlpha(roughness) <= 1.5e-6;
+}
+
+inline bool ShouldResolveDeltaTransmission(float roughness,
+                                           float transmission,
+                                           float ior)
+{
+    if (!IsDeltaGlass(roughness)) {
+        return false;
+    }
+
+    float f0 = DielectricF0FromIor(ior);
+    float transmissionLobe = transmission * (1.0 - f0);
+    float reflectionLobe = f0;
+    return transmissionLobe >= reflectionLobe;
+}
+
+inline float EffectiveArchGlassThickness(float materialThickness)
+{
+    return max(materialThickness, 0.04);
+}
+
+inline bool RefractDeterministic(float3 V, float3 N, float ior, out float3 L)
+{
+    float cosTheta = dot(V, N);
+    float eta = cosTheta > 0.0 ? (1.0 / ior) : ior;
+    float3 outwardN = cosTheta > 0.0 ? N : -N;
+    cosTheta = abs(cosTheta);
+
+    float sin2ThetaI = max(0.0, 1.0 - cosTheta * cosTheta);
+    float sin2ThetaT = eta * eta * sin2ThetaI;
+    if (sin2ThetaT >= 1.0) {
+        L = reflect(-V, outwardN);
+        return false;
+    }
+
+    float cosThetaT = sqrt(1.0 - sin2ThetaT);
+    L = normalize(eta * (-V) + (eta * cosTheta - cosThetaT) * outwardN);
+    return true;
 }
 
 #endif // RAYTRACING_COMMON_H

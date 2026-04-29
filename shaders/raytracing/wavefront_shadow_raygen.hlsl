@@ -5,7 +5,7 @@
 void WavefrontShadowRayGen()
 {
     const uint taskIndex = DispatchRaysIndex().x;
-    const uint activeCount = g_wavefrontQueueCounters[5];
+    const uint activeCount = g_wavefrontQueueCounters[WAVEFRONT_QUEUE_SHADOW];
     if (taskIndex >= activeCount) {
         return;
     }
