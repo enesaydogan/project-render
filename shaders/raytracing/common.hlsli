@@ -718,10 +718,10 @@ inline uint WavefrontGetLightSampleIndex(uint packedLightIndex)
 
 inline uint WavefrontGetAvailableLightCount()
 {
-    uint availableLights = 0u;
-    uint lightStride = 0u;
-    g_lights.GetDimensions(availableLights, lightStride);
-    return min((uint)lightCount, availableLights);
+    // The wavefront compute passes bind g_lights as a root SRV. On that path
+    // the shader-visible element count is not a reliable source of truth, so
+    // match the legacy tracer and use the CPU-authored camera constant.
+    return (uint)max(lightCount, 0.0);
 }
 
 inline WavefrontLightSamplerContext WavefrontCreateLightSampler(float3 surfacePos)
@@ -744,6 +744,12 @@ inline WavefrontLightSample WavefrontSampleDirectionalLight(float sampleWeight)
     sample.packedLightIndex =
         WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL, 0u);
     return sample;
+}
+
+inline bool WavefrontIsAreaLightType(uint lightType)
+{
+    return lightType == LIGHT_TYPE_AREA_RECT ||
+           lightType == LIGHT_TYPE_AREA_DISK;
 }
 
 inline WavefrontLightSample WavefrontSampleFlatLight(float3 surfacePos,
@@ -770,6 +776,69 @@ inline WavefrontLightSample WavefrontSampleFlatLight(float3 surfacePos,
     return sample;
 }
 
+inline WavefrontLightSample WavefrontSampleFlatLight(float3 surfacePos,
+                                                     uint lightIndex,
+                                                     float sampleWeight,
+                                                     inout RNG rng)
+{
+    WavefrontLightSample sample;
+    const uint availableLights = WavefrontGetAvailableLightCount();
+    if (lightIndex >= availableLights) {
+        sample.direction = float3(0.0, 1.0, 0.0);
+        sample.maxDistance = 0.0;
+        sample.radiance = float3(0.0, 0.0, 0.0);
+        sample.packedLightIndex =
+            WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_FLAT, 0u);
+        return sample;
+    }
+
+    Light light = g_lights[lightIndex];
+    if (!WavefrontIsAreaLightType(light.type)) {
+        return WavefrontSampleFlatLight(surfacePos, lightIndex, sampleWeight);
+    }
+
+    LightSample lightSample = sample_area_light(light, surfacePos,
+                                                next_float2(rng));
+    const float pdfInv = rcp(max(lightSample.pdf, 1.0e-6));
+    sample.direction = lightSample.L;
+    sample.maxDistance = lightSample.dist;
+    sample.radiance = lightSample.radiance * sampleWeight * pdfInv;
+    sample.packedLightIndex =
+        WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_FLAT, lightIndex);
+    return sample;
+}
+
+inline WavefrontLightSample WavefrontSampleFlatLightUnweighted(
+    float3 surfacePos,
+    uint lightIndex,
+    inout RNG rng)
+{
+    WavefrontLightSample sample;
+    const uint availableLights = WavefrontGetAvailableLightCount();
+    if (lightIndex >= availableLights) {
+        sample.direction = float3(0.0, 1.0, 0.0);
+        sample.maxDistance = 0.0;
+        sample.radiance = float3(0.0, 0.0, 0.0);
+        sample.packedLightIndex =
+            WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_FLAT, 0u);
+        return sample;
+    }
+
+    Light light = g_lights[lightIndex];
+    if (!WavefrontIsAreaLightType(light.type)) {
+        return WavefrontSampleFlatLight(surfacePos, lightIndex, 1.0);
+    }
+
+    LightSample lightSample = sample_area_light(light, surfacePos,
+                                                next_float2(rng));
+    sample.direction = lightSample.L;
+    sample.maxDistance = lightSample.dist;
+    sample.radiance = lightSample.radiance;
+    sample.packedLightIndex =
+        WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_FLAT, lightIndex);
+    return sample;
+}
+
 inline WavefrontLightSample WavefrontSampleDirectLight(
     WavefrontLightSamplerContext sampler,
     float3 surfacePos,
@@ -782,7 +851,7 @@ inline WavefrontLightSample WavefrontSampleDirectLight(
 
     const uint lightIndex = next_uint(rng) % numLights;
     return WavefrontSampleFlatLight(surfacePos, lightIndex,
-                                    2.0 * (float)numLights);
+                                    2.0 * (float)numLights, rng);
 }
 
 inline WavefrontLightSample WavefrontSampleDirectLight(float3 surfacePos,
@@ -791,29 +860,6 @@ inline WavefrontLightSample WavefrontSampleDirectLight(float3 surfacePos,
     WavefrontLightSamplerContext sampler =
         WavefrontCreateLightSampler(surfacePos);
     return WavefrontSampleDirectLight(sampler, surfacePos, rng);
-}
-
-inline float WavefrontGetDirectLightSelectionWeight(
-    WavefrontLightSamplerContext sampler,
-    uint packedLightIndex)
-{
-    const uint lightType = WavefrontGetLightSampleType(packedLightIndex);
-    const uint numLights = sampler.availableLights;
-    if (lightType == WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL) {
-        return (numLights > 0u) ? 2.0 : 1.0;
-    }
-    if (lightType == WAVEFRONT_LIGHT_SAMPLE_FLAT) {
-        return (numLights > 0u) ? (2.0 * (float)numLights) : 0.0;
-    }
-    return 1.0;
-}
-
-inline float WavefrontGetDirectLightSelectionWeight(uint packedLightIndex)
-{
-    WavefrontLightSamplerContext sampler;
-    sampler.mode = WAVEFRONT_LIGHT_SAMPLER_FLAT;
-    sampler.availableLights = WavefrontGetAvailableLightCount();
-    return WavefrontGetDirectLightSelectionWeight(sampler, packedLightIndex);
 }
 
 inline float3 WavefrontEvaluateEnvironmentRadiance(float3 direction,
@@ -826,25 +872,6 @@ inline float3 WavefrontEvaluateEnvironmentRadiance(float3 direction,
            GetDxrProceduralSkyBoost() * intensity;
 }
 
-inline float3 WavefrontEvaluateLightSampleRadiance(uint packedLightIndex,
-                                                   float3 surfacePos)
-{
-    const uint lightType = WavefrontGetLightSampleType(packedLightIndex);
-    if (lightType == WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL) {
-        return lightColor.rgb * lightColor.w;
-    }
-    if (lightType == WAVEFRONT_LIGHT_SAMPLE_FLAT) {
-        const uint lightIndex = WavefrontGetLightSampleIndex(packedLightIndex);
-        const uint availableLights = WavefrontGetAvailableLightCount();
-        if (lightIndex >= availableLights) {
-            return float3(0.0, 0.0, 0.0);
-        }
-        Light light = g_lights[lightIndex];
-        return evaluate_light(light, surfacePos).radiance;
-    }
-    return float3(0.0, 0.0, 0.0);
-}
-
 inline float3 WavefrontEvaluateShadowTaskRadiance(uint packedLightIndex,
                                                   float3 surfacePos,
                                                   float3 direction)
@@ -853,7 +880,7 @@ inline float3 WavefrontEvaluateShadowTaskRadiance(uint packedLightIndex,
     if (lightType == WAVEFRONT_LIGHT_SAMPLE_ENV) {
         return WavefrontEvaluateEnvironmentRadiance(direction, surfacePos);
     }
-    return WavefrontEvaluateLightSampleRadiance(packedLightIndex, surfacePos);
+    return float3(0.0, 0.0, 0.0);
 }
 
 inline uint PackPayloadIorType(float ior, uint rayType, bool thinWalled, float specularWeight)

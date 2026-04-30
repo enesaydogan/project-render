@@ -112,7 +112,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             const uint lightIndex = next_uint(rng) % numLights;
             WavefrontLightSample localSample =
                 WavefrontSampleFlatLight(hitPos, lightIndex,
-                                         (float)numLights);
+                                         (float)numLights, rng);
             float localTarget = WavefrontEvaluateReservoirTarget(
                 record, normal, hitPos, localSample);
             update_reservoir(reservoir, lightIndex, localTarget, rng);
@@ -127,9 +127,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         if (reservoir.lightIndex == 0xFFFFFFFFu) {
             finalSample = WavefrontSampleDirectionalLight(1.0);
         } else if (reservoir.lightIndex < numLights) {
-            finalSample = WavefrontSampleFlatLight(hitPos,
-                                                   reservoir.lightIndex,
-                                                   1.0);
+            finalSample = WavefrontSampleFlatLightUnweighted(
+                hitPos, reservoir.lightIndex, rng);
         }
         float finalTarget = WavefrontEvaluateReservoirTarget(
             record, normal, hitPos, finalSample);

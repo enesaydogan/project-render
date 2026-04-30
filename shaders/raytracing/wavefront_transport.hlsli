@@ -84,6 +84,19 @@ inline bool WavefrontTraceVisibility(float3 origin,
     return query.CommittedStatus() == COMMITTED_NOTHING;
 }
 
+inline float3 WavefrontBuildShadowOrigin(float3 hitPos,
+                                         float3 worldNormal,
+                                         float3 lightDirection,
+                                         float bias)
+{
+    float3 N = normalize(worldNormal);
+    float3 L = normalize(lightDirection);
+    if (dot(N, L) < 0.0) {
+        N = -N;
+    }
+    return hitPos + N * bias;
+}
+
 inline float WavefrontDielectricF0FromIor(float ior)
 {
     float safeIor = max(ior, 1.0 + 1e-4);

@@ -303,7 +303,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         float3 sunShadowWeight = state.throughput *
                                  ComputeWavefrontDirectLightingWeight(
                                      record, normal, hitPos,
-                                     explicitSunSample.direction);
+                                     explicitSunSample.direction) *
+                                 explicitSunSample.radiance;
         if (any(sunShadowWeight > 1.0e-4)) {
             uint shadowIndex = 0u;
             InterlockedAdd(g_wavefrontQueueCounters[kWavefrontShadowQueueCounter],
@@ -311,7 +312,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             if (shadowIndex < shadowQueueCapacity) {
                 EmitWavefrontShadowTask(
                     shadowIndex,
-                    hitPos + normal * kWavefrontRayBias,
+                    WavefrontBuildShadowOrigin(hitPos, normal,
+                                               explicitSunSample.direction,
+                                               kWavefrontRayBias),
                     explicitSunSample.direction,
                     explicitSunSample.maxDistance,
                     explicitSunSample.packedLightIndex,
@@ -326,10 +329,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         }
         float3 shadowWeight = state.throughput *
                               ComputeWavefrontDirectLightingWeight(
-                                  record, normal, hitPos, lightSample.direction) *
-                              WavefrontGetDirectLightSelectionWeight(
-                                  lightSampler,
-                                  lightSample.packedLightIndex);
+                                  record, normal, hitPos,
+                                  lightSample.direction) *
+                              lightSample.radiance;
         if (WavefrontGetLightSampleType(lightSample.packedLightIndex) !=
                 WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL &&
             any(shadowWeight > 1.0e-4)) {
@@ -339,7 +341,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             if (shadowIndex < shadowQueueCapacity) {
                 EmitWavefrontShadowTask(
                     shadowIndex,
-                    hitPos + normal * kWavefrontRayBias,
+                    WavefrontBuildShadowOrigin(hitPos, normal,
+                                               lightSample.direction,
+                                               kWavefrontRayBias),
                     lightSample.direction,
                     lightSample.maxDistance,
                     lightSample.packedLightIndex,
@@ -382,7 +386,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                     if (shadowIndex < shadowQueueCapacity) {
                         EmitWavefrontShadowTask(
                             shadowIndex,
-                            hitPos + normal * kWavefrontRayBias,
+                            WavefrontBuildShadowOrigin(hitPos, normal,
+                                                       envSample.L,
+                                                       kWavefrontRayBias),
                             envSample.L,
                             10000.0,
                             WavefrontPackLightSampleMetadata(

@@ -36,9 +36,9 @@ void WavefrontShadowRayGen()
         return;
     }
 
+    const uint lightSampleType = WavefrontGetLightSampleType(task.packedLightIndex);
     float3 visibilityDirection = normalize(task.direction);
-    if (WavefrontGetLightSampleType(task.packedLightIndex) ==
-            WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL &&
+    if (lightSampleType == WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL &&
         lightDir.w > 0.0) {
         RNG shadowRng;
         uint stableSeed =
@@ -57,11 +57,11 @@ void WavefrontShadowRayGen()
     if (visible) {
         uint previousValue = 0u;
         InterlockedAdd(g_wavefrontStats[30], 1u, previousValue);
-        const float3 contribution = max(task.throughput, 0.0) *
-                                    WavefrontEvaluateShadowTaskRadiance(
-                                        task.packedLightIndex,
-                                        task.origin,
-                                        task.direction);
+        float3 contribution = max(task.throughput, 0.0);
+        if (lightSampleType == WAVEFRONT_LIGHT_SAMPLE_ENV) {
+            contribution *= WavefrontEvaluateShadowTaskRadiance(
+                task.packedLightIndex, task.origin, task.direction);
+        }
         WavefrontAtomicAddShadowContribution(pixelIndex, contribution);
     } else {
         uint previousValue = 0u;

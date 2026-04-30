@@ -41,6 +41,16 @@ lighting into the shadow-contribution scratch buffer. Shadow integration folds
 the scratch buffer into `g_output` and `g_accumulation` after the scheduler has
 finished tracing shadows.
 
+Local point, spot, IES, rect, and disk lights are expected to contribute in
+`Wavefront Optimized`. Primary resolve always emits an explicit sampled local
+light task, so local emitters are not hidden behind sun-only reservoir choices
+or low-weight DI candidates. Direct-light task weights use a two-sided normal
+orientation for robustness against flipped hit normals. Direct local-light
+tasks carry their full weighted radiance in `throughput`, so shadow visibility
+only gates visibility and integrates the queued contribution. Rect and disk
+lights carry their sampled direction and distance through the shadow task rather
+than collapsing the light to a center-point approximation.
+
 ## ReSTIR
 
 Wavefront optimized has an explicit `restir-seed` scheduler stage for ReSTIR DI.
