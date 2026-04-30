@@ -30,7 +30,11 @@
 
 #ifdef USE_QT_UI
 #include <QApplication>
+#include <QFileInfo>
+#include <QIcon>
+#include <QImage>
 #include <QMessageBox>
+#include <QPixmap>
 #include "qt/DX12View.h"
 #include "qt/MainWindow.h"
 #include "qt/QtTheme.h"
@@ -1855,9 +1859,34 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   QApplication app(qtArgc, qtArgv);
   ApplyQtTheme(app);
 
+  QIcon qtAppIcon;
+  HICON hQtIcon = static_cast<HICON>(LoadImageW(
+      hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, 0, 0,
+      LR_DEFAULTSIZE));
+  if (hQtIcon) {
+    qtAppIcon.addPixmap(QPixmap::fromImage(QImage::fromHICON(hQtIcon)));
+    DestroyIcon(hQtIcon);
+  }
+  if (qtAppIcon.isNull()) {
+    QString iconPath = QCoreApplication::applicationDirPath() +
+                       QStringLiteral("/resources/app.ico");
+    if (!QFileInfo::exists(iconPath)) {
+      iconPath = QStringLiteral("resources/app.ico");
+    }
+    if (QFileInfo::exists(iconPath)) {
+      qtAppIcon = QIcon(iconPath);
+    }
+  }
+  if (!qtAppIcon.isNull()) {
+    app.setWindowIcon(qtAppIcon);
+  }
+
   EnforceReleaseDebugFlags();
 
   MainWindow w;
+  if (!qtAppIcon.isNull()) {
+    w.setWindowIcon(qtAppIcon);
+  }
   w.show();
 
   // obtain native handle from DX12View inside MainWindow
