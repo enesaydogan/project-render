@@ -144,6 +144,12 @@ struct PreviewOverlayState {
 static PreviewOverlayState g_previewOverlay;
 
 static void ReleasePreviewOverlayImage() {
+  if (g_exportRenderTarget) {
+    // The preview target can still be referenced by the previous frame's
+    // ImGui draw list when the user dismisses it via camera movement or ESC.
+    // Drain the direct queue before releasing that SRV-backed texture.
+    WaitGPUIdle();
+  }
   g_previewOverlay = {};
   g_exportRenderTarget.Reset();
   g_exportRtvHeap.Reset();
