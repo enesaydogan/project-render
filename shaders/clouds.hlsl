@@ -83,6 +83,13 @@ float CloudHash12(float2 p)
     return frac((p3.x + p3.y) * p3.z);
 }
 
+float2 CloudHash22(float2 p)
+{
+    float3 p3 = frac(float3(p.xyx) * float3(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yzx + 33.33);
+    return frac((p3.xx + p3.yz) * p3.zy);
+}
+
 float CloudValueNoise2D(float2 p)
 {
     float2 cell = floor(p);
@@ -113,6 +120,37 @@ float CloudWeatherNoise2D(float2 p)
     }
 
     return (totalWeight > 1e-5) ? (value / totalWeight) : 0.0;
+}
+
+float CloudCellularCumulus(float2 uv, float radiusScale)
+{
+    float2 cell = floor(uv);
+    float2 f = frac(uv);
+    float result = 0.0;
+
+    [unroll]
+    for (int y = -1; y <= 1; ++y) {
+        [unroll]
+        for (int x = -1; x <= 1; ++x) {
+            float2 offset = float2((float)x, (float)y);
+            float2 rnd = CloudHash22(cell + offset);
+            float2 center = offset + lerp(float2(0.18f, 0.18f), float2(0.82f, 0.82f), rnd);
+            float d = length(f - center);
+            float radius = lerp(0.28f, 0.58f, rnd.x) * radiusScale;
+            float softness = radius * lerp(0.45f, 0.72f, rnd.y);
+            float blob = smoothstep(radius, max(0.001f, radius - softness), d);
+            result = max(result, blob * lerp(0.65f, 1.0f, rnd.y));
+        }
+    }
+
+    return saturate(result);
+}
+
+float2 CloudNonPeriodicOffset(float2 uv)
+{
+    float x = CloudWeatherNoise2D(uv + float2(17.7f, -4.2f));
+    float y = CloudWeatherNoise2D(uv * 1.37f + float2(-8.1f, 21.9f));
+    return float2(x, y) - 0.5f;
 }
 
 // Small hash for jitter (works in raytracing shaders when common.hlsli is present)
@@ -186,9 +224,36 @@ float SampleDensity(float3 p, float lod) {
     
     float heightPct = saturate((heightAboveGround - CloudCB.cloudBottom) / (layerTop - CloudCB.cloudBottom));
 
-    // 1. Base Coordinates with Rotation to break tracking
+    float windMeters = CloudCB.timeSeconds * CloudCB.windSpeed;
+    float2 advectedXZ = p.xz + windMeters * float2(32.0f, 11.0f);
+    float coverageScale = max(CloudCB.coverageScale, 1.0e-6f);
+
+    // Non-periodic world-space placement: broad weather, cellular cloud groups,
+    // and smaller puffs. The tiled 3D textures below should only supply local
+    // volume detail; this field owns where cloud islands exist.
+    float2 macroUv = advectedXZ * coverageScale;
+    float2 macroUvA = float2(macroUv.x * 0.82f - macroUv.y * 0.57f,
+                             macroUv.x * 0.57f + macroUv.y * 0.82f);
+    float2 macroUvB = float2(macroUv.x * 1.13f + macroUv.y * 0.41f,
+                            -macroUv.x * 0.41f + macroUv.y * 1.13f);
+    float weatherNoiseA = CloudWeatherNoise2D(macroUvA + float2(11.7f, 3.1f));
+    float weatherNoiseB = CloudWeatherNoise2D(macroUvB * 0.53f + float2(-5.2f, 8.4f));
+    float weatherNoise = lerp(weatherNoiseA, weatherNoiseB, 0.35f);
+    float largeCells = CloudCellularCumulus(macroUv * 0.62f + float2(2.7f, -9.1f), 1.05f);
+    float midCells = CloudCellularCumulus(macroUv * 1.55f + float2(-5.4f, 13.2f), 0.92f);
+    float tinyCells = CloudCellularCumulus(macroUv * 3.10f + float2(19.5f, 4.4f), 0.72f);
+    float variety = saturate(CloudCB.coverageVariation);
+    float cellField = saturate(max(largeCells, midCells * lerp(0.45f, 0.82f, variety)) +
+                               tinyCells * lerp(0.05f, 0.32f, variety));
+    float macroField = saturate(cellField * lerp(0.72f, 1.15f, weatherNoise) +
+                                weatherNoise * lerp(0.04f, 0.18f, variety));
+
+    // 1. Base Coordinates with decorrelated local offsets to break tile tracking.
+    float2 localOffset = CloudNonPeriodicOffset(macroUv * 0.31f);
     float3 basePos = p * CloudCB.baseScale;
-    basePos.xz += CloudCB.timeSeconds * CloudCB.windSpeed * float2(0.001, 0.0005); // Diagonal wind
+    basePos.xz += windMeters * float2(0.0010f, 0.0005f);
+    basePos.xz += localOffset * 0.73f;
+    basePos.y += dot(localOffset, float2(0.37f, -0.21f));
     
     // Domain Warp (Low Frequency)
     float3 warpPos = RotateDomain(basePos) * 0.5f;
@@ -198,8 +263,13 @@ float SampleDensity(float3 p, float lod) {
     // 2. Base Shape (Perlin-Worley)
     // Rotate sampling to avoid axis streaks
     float3 noiseCoord = RotateDomain(basePos);
-    // Base R is Channel-Packed Perlin-Worley from C++ generation
-    float baseCloud = NoiseTex.SampleLevel(LinearWrapSampler, noiseCoord, lod).r;
+    float3 altNoiseCoord = RotateDomain(basePos * float3(1.73f, 1.11f, 1.47f) +
+                                        float3(0.37f, 0.19f, 0.71f));
+    // Base R/G are channel-packed Perlin-Worley variants. Blend two transformed
+    // samples so the underlying 3D tile does not read as a repeated stamp.
+    float baseA = NoiseTex.SampleLevel(LinearWrapSampler, noiseCoord, lod).r;
+    float baseB = NoiseTex.SampleLevel(LinearWrapSampler, altNoiseCoord, lod + 0.65f).g;
+    float baseCloud = saturate(baseA * 0.72f + baseB * 0.46f);
     
     // 3. Density Gradient + Cloud Type Profile
     float heightGrad = HeightGradient(heightPct);
@@ -209,15 +279,15 @@ float SampleDensity(float3 p, float lod) {
         LinearWrapSampler,
         noiseCoord * 0.23f + float3(0.0f, CloudCB.timeSeconds * 0.0002f, 0.0f),
         lod + 2.0f).g;
-    float typeBlend = saturate(CloudCB.coverageVariation) * smoothstep(0.30f, 0.80f, typeNoise);
+    float typeBlend = saturate(CloudCB.coverageVariation) * smoothstep(0.40f, 0.86f, typeNoise);
 
     float cumulusProfile = pow(saturate(heightGrad), max(0.35f, CloudCB.shapePower));
-    float stratusProfile = smoothstep(0.0f, 0.08f, heightPct) * smoothstep(0.65f, 0.30f, heightPct);
-    float verticalProfile = lerp(cumulusProfile, stratusProfile, typeBlend);
+    float stratusProfile = smoothstep(0.0f, 0.08f, heightPct) * smoothstep(0.68f, 0.26f, heightPct);
+    float verticalProfile = lerp(cumulusProfile, stratusProfile, typeBlend * 0.55f);
     baseCloud *= verticalProfile;
 
     // Shape curve: keep cumulus a bit punchier, stratus a bit softer.
-    float shapeCurve = lerp(1.15f, 0.90f, typeBlend);
+    float shapeCurve = lerp(1.05f, 0.82f, typeBlend);
     baseCloud = pow(saturate(baseCloud), shapeCurve);
 
     // 4. Coverage
@@ -229,48 +299,32 @@ float SampleDensity(float3 p, float lod) {
     float coverageLinear = pow(effectiveCoverage, 0.65f);
     // High threshold at low coverage removes most clouds; low threshold at high
     // coverage produces overcast-like fill.
-    float densityThreshold = lerp(0.93f, 0.04f, coverageLinear);
+    float densityThreshold = lerp(0.84f, 0.10f, coverageLinear);
 
     // Standard Schneider remap:
-    float covRemap = Remap(baseCloud, densityThreshold, 1.0f, 0.0f, 1.0f);
+    float macroMask = smoothstep(lerp(0.62f, 0.18f, coverageLinear),
+                                 lerp(0.82f, 0.36f, coverageLinear),
+                                 macroField);
+    float cloudSignal = baseCloud * lerp(0.18f, 1.18f, macroMask);
+    float covRemap = Remap(cloudSignal, densityThreshold, 1.0f, 0.0f, 1.0f);
     baseCloud = covRemap; 
-    
-    // 5. Cloud Type / Weather variation (simulated by large scale noise)
-    // Acts as a "probability to spawn cloud here"
-    float3 coveragePos = p * CloudCB.coverageScale +
-                         float3(CloudCB.timeSeconds * CloudCB.windSpeed * 0.005, 0, 0);
-
-    // Use non-periodic procedural 2D weather noise instead of the wrapping
-    // tiled 3D texture slice. This avoids large repeating cloud blocks in the
-    // visible sky bake while keeping the weather field stable in world space.
-    float2 weatherUV = coveragePos.xz;
-    float2 weatherUvA = float2(weatherUV.x * 0.82f - weatherUV.y * 0.57f,
-                               weatherUV.x * 0.57f + weatherUV.y * 0.82f);
-    float2 weatherUvB = float2(weatherUV.x * 1.13f + weatherUV.y * 0.41f,
-                              -weatherUV.x * 0.41f + weatherUV.y * 1.13f);
-    float weatherNoiseA = CloudWeatherNoise2D(weatherUvA + float2(11.7f, 3.1f));
-    float weatherNoiseB = CloudWeatherNoise2D(weatherUvB * 0.53f + float2(-5.2f, 8.4f));
-    float weatherNoise = lerp(weatherNoiseA, weatherNoiseB, 0.35f);
-    
-    // Sync weather mask with coverage so we don't punch holes in "full" coverage
-    // Use remapped coverage here for consistent visual response.
-    float weatherThreshold = lerp(0.88f, 0.0f, coverageLinear);
-    float weatherBias = (weatherNoise - 0.5f) * (0.35f * saturate(CloudCB.coverageVariation));
-    weatherThreshold = saturate(weatherThreshold + weatherBias);
-    // Smoother transition for weather mask to avoid hard cloud cuts
-    float weatherWidth = lerp(0.12f, 0.30f, saturate(CloudCB.coverageVariation));
-    float weatherMask = smoothstep(weatherThreshold - weatherWidth, weatherThreshold + weatherWidth, weatherNoise);
-    baseCloud *= weatherMask;
+    baseCloud *= lerp(0.05f, 1.0f, macroMask);
 
     // 6. Detail Erosion (High Frequency)
     if (baseCloud > 0.0) {
         float3 detailPos = p * CloudCB.detailScale;
-        detailPos.xz += CloudCB.timeSeconds * CloudCB.windSpeed * 0.002;
+        detailPos.xz += windMeters * 0.002f;
+        detailPos.xz += localOffset * 1.31f;
         // Rotate detail too
         detailPos = RotateDomain(detailPos);
         
         float3 detailNoise = DetailTex.SampleLevel(LinearWrapSampler, detailPos, lod).rgb;
-        float highFreqFBM = detailNoise.r * 0.625 + detailNoise.g * 0.25 + detailNoise.b * 0.125;
+        float3 detailNoiseB = DetailTex.SampleLevel(
+            LinearWrapSampler,
+            RotateDomain(detailPos * float3(1.91f, 1.27f, 1.53f) + float3(0.23f, 0.67f, 0.41f)),
+            lod + 0.85f).rgb;
+        float highFreqFBM = dot(detailNoise, float3(0.55f, 0.28f, 0.17f));
+        highFreqFBM = lerp(highFreqFBM, dot(detailNoiseB, float3(0.45f, 0.35f, 0.20f)), 0.42f);
         
         // Directional erosion adds wind-sheared edge complexity.
         float modifier = lerp(highFreqFBM, 1.0 - highFreqFBM, saturate(heightPct * 5.0));
@@ -278,7 +332,7 @@ float SampleDensity(float3 p, float lod) {
         float directionalErosion = lerp(highFreqFBM, modifier, windPhase);
         
         // Remap density based on detail
-        float erosion = CloudCB.erosion * lerp(0.35f, 0.75f, 1.0f - typeBlend);
+        float erosion = CloudCB.erosion * lerp(0.42f, 0.82f, 1.0f - typeBlend);
         baseCloud = Remap(baseCloud, directionalErosion * erosion, 1.0, 0.0, 1.0);
     }
     

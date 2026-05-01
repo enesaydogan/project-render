@@ -211,26 +211,26 @@ CloudParams MakeDefaultCloudParams() {
   CloudParams p = {};
 
   // Baked-cloud quality defaults (higher fidelity than old real-time profile).
-  p.density = 1.15f;
-  p.absorption = 0.38f;
-  p.coverage = 0.34f;
-  p.scattering = 0.72f;
+  p.density = 0.95f;
+  p.absorption = 0.30f;
+  p.coverage = 0.38f;
+  p.scattering = 0.78f;
   p.steps = 128;
-  p.sunIntensity = 1.00f;
-  p.cloudTop = 4200.0f;
-  p.cloudBottom = 1600.0f;
+  p.sunIntensity = 1.12f;
+  p.cloudTop = 4600.0f;
+  p.cloudBottom = 1700.0f;
   p.windSpeed = 0.012f;
 
-  p.baseScale = 0.00016f;
-  p.detailScale = 0.00380f;
-  p.coverageScale = 0.00018f;
-  p.coverageVariation = 0.60f;
-  p.erosion = 0.58f;
-  p.warpStrength = 0.75f;
-  p.shapePower = 1.35f;
-  p.powderStrength = 0.95f;
-  p.cirrusAmount = 0.18f;
-  p.cloudShadowStrength = 0.50f;
+  p.baseScale = 0.00012f;
+  p.detailScale = 0.00260f;
+  p.coverageScale = 0.000115f;
+  p.coverageVariation = 0.78f;
+  p.erosion = 0.64f;
+  p.warpStrength = 1.05f;
+  p.shapePower = 1.05f;
+  p.powderStrength = 1.18f;
+  p.cirrusAmount = 0.34f;
+  p.cloudShadowStrength = 0.42f;
   p._pad0 = 0.0f;
   p._pad1 = 0.0f;
 
