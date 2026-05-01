@@ -70,6 +70,26 @@ DxrRenderer::DenoiserMode DenoiserModeFromIndex(int index)
     return DxrRenderer::DenoiserMode::Off;
 }
 
+int PathBackendIndex(DxrRenderer::PathTracingBackend backend)
+{
+    switch (backend) {
+    case DxrRenderer::PathTracingBackend::WavefrontParity: return 1;
+    case DxrRenderer::PathTracingBackend::WavefrontOptimized: return 2;
+    default: return 0;
+    }
+}
+
+DxrRenderer::PathTracingBackend PathBackendFromIndex(int index)
+{
+    if (index == 1) {
+        return DxrRenderer::PathTracingBackend::WavefrontParity;
+    }
+    if (index == 2) {
+        return DxrRenderer::PathTracingBackend::WavefrontOptimized;
+    }
+    return DxrRenderer::PathTracingBackend::Legacy;
+}
+
 int StreamlineModeIndex(StreamlineManager::Mode mode)
 {
     switch (mode) {
@@ -164,6 +184,16 @@ void RenderSettingsPanel::createUi()
     m_adaptiveSampling = new QCheckBox(tr("Enable Adaptive Sampling"), pathGroup);
     m_targetNoise = CreateSliderControl(1.0, 30.0, 0.1, 1);
     m_clayMode = new QCheckBox(tr("Clay Material Override"), pathGroup);
+    m_pathBackend = new QComboBox(pathGroup);
+    m_pathBackend->addItems({
+        tr("Legacy (Default)"),
+        tr("Wavefront Parity - Experimental"),
+        tr("Wavefront Optimized - Experimental")
+    });
+    m_pathBackendWarning = new QLabel(pathGroup);
+    m_pathBackendWarning->setWordWrap(true);
+    m_pathBackendWarning->setStyleSheet(
+        "QLabel { color: #ff4d4d; font-weight: 600; }");
     pathForm->addRow(tr("Reflection Bounces"), m_reflectionBounces);
     pathForm->addRow(tr("Refraction Bounces"), m_refractionBounces);
     pathForm->addRow(tr("GI Bounces"), m_giBounces);
@@ -171,6 +201,8 @@ void RenderSettingsPanel::createUi()
     pathForm->addRow(m_adaptiveSampling);
     pathForm->addRow(tr("Target Noise %"), m_targetNoise);
     pathForm->addRow(m_clayMode);
+    pathForm->addRow(tr("Backend"), m_pathBackend);
+    pathForm->addRow(m_pathBackendWarning);
     dxrLayout->addWidget(pathGroup);
 
     auto *dlssGroup = new QGroupBox(tr("Streamline / DLSS"), m_dxrSection);
@@ -277,6 +309,13 @@ void RenderSettingsPanel::createUi()
     connect(m_adaptiveSampling, &QCheckBox::toggled, this, [applyCamera](bool) { applyCamera(); });
     connect(m_targetNoise->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyCamera](double) { applyCamera(); });
     connect(m_clayMode, &QCheckBox::toggled, this, [applyCamera](bool) { applyCamera(); });
+    connect(m_pathBackend, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
+        if (m_syncing) {
+            return;
+        }
+        DxrRenderer::SetPathTracingBackend(PathBackendFromIndex(index));
+        syncFromRenderer();
+    });
 
     connect(m_dlssMode, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
         if (m_syncing) {
@@ -420,6 +459,16 @@ void RenderSettingsPanel::syncFromRenderer()
     if (!IsWidgetBeingEdited(m_clayMode)) {
         m_clayMode->setChecked(g_cameraData.debugVisualizationMode > 1.5f &&
                                g_cameraData.debugVisualizationMode < 2.5f);
+    }
+    if (!IsWidgetBeingEdited(m_pathBackend)) {
+        m_pathBackend->setCurrentIndex(PathBackendIndex(DxrRenderer::GetPathTracingBackend()));
+    }
+    if (DxrRenderer::GetPathTracingBackend() == DxrRenderer::PathTracingBackend::Legacy) {
+        m_pathBackendWarning->setText(
+            tr("Legacy is the production default. Wavefront modes are experimental test backends."));
+    } else {
+        m_pathBackendWarning->setText(
+            tr("EXPERIMENTAL WAVEFRONT BACKEND ACTIVE: expect visual differences, missing features, or instability. Switch back to Legacy for production renders."));
     }
     m_targetNoise->setEnabled(m_adaptiveSampling->isChecked());
 

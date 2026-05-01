@@ -40,6 +40,8 @@ private:
     QCheckBox *m_adaptiveSampling = nullptr;
     SliderControl *m_targetNoise = nullptr;
     QCheckBox *m_clayMode = nullptr;
+    QComboBox *m_pathBackend = nullptr;
+    QLabel *m_pathBackendWarning = nullptr;
 
     QComboBox *m_dlssMode = nullptr;
     QComboBox *m_dlssQuality = nullptr;
