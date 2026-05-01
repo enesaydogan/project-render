@@ -1272,13 +1272,13 @@ PSOutput PSMainMesh(PSInputMesh input)
     float3 kS_ibl = F_ibl;
     float3 kD_ibl = 1.0 - kS_ibl;
 
-    // Raster does not have a preconvolved irradiance map yet. A single blurred
-    // env lookup overestimates Prague sky energy on upward-facing diffuse
-    // surfaces, so keep the fake irradiance both blurrier and much lower-energy
-    // until a proper irradiance/prefilter path exists.
-    const float kRasterDiffuseIrradianceScale = 0.08;
-    const float kRasterDiffuseAmbientScale = 0.18;
-    const float kRasterSpecularAmbientScale = 0.10;
+    // Raster does not have a true convolved irradiance map yet, but the Prague
+    // sky texture is authored in physical cd/m2. Sample a high mip as a stable
+    // sky-fill approximation and keep the energy in the same ballpark as the
+    // physical-camera exposure path.
+    const float kRasterDiffuseIrradianceScale = 0.65;
+    const float kRasterDiffuseAmbientScale = 0.75;
+    const float kRasterSpecularAmbientScale = 0.22;
     float2 envUV_diff = DirectionToUV(N);
     float3 irradiance = envMap.SampleLevel(linearSampler, envUV_diff, 9.0).rgb *
                         kRasterDiffuseIrradianceScale;

@@ -99,11 +99,11 @@ PSInput VSMain(VSInput input) {
 #include "clouds.hlsl"
 
 float4 PSMain(PSInput input) : SV_TARGET {
-    // Keep the visible raster sky noticeably dimmer than the lighting sky.
-    // Surface lighting already uses the full procedural sky energy, while the
-    // sky dome is only a background plate for SDR presentation.
-    const float kRasterVisibleSkyScale = 0.007f;
-    const float kRasterVisibleSunScale = 0.05f;
+    // Raster now renders into the HDR buffer and uses the same physical camera
+    // exposure as DXR, so keep the sky in scene-linear radiance here. The
+    // tonemap pass is the only place that should compress it for display.
+    const float kRasterVisibleSkyScale = 1.0f;
+    const float kRasterVisibleSunScale = 1.0f;
     float3 dir = normalize(input.viewDir);
     float2 uv = DirectionToUV(dir);
     float3 baseSky = envMap.SampleLevel(linearSampler, uv, 0).rgb;
@@ -141,8 +141,7 @@ float4 PSMain(PSInput input) : SV_TARGET {
         float opacity = 1.0 - baked.a;
         float denseCore = pow(saturate(opacity), 2.2);
         float skyLeak = 0.035 * denseCore;
-        composed = baked.rgb * kRasterVisibleSkyScale +
-                   color * (baked.a + skyLeak);
+        composed = baked.rgb + color * (baked.a + skyLeak);
         composed += color * (0.006 * denseCore);
     }
 
