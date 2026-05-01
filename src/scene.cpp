@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -247,6 +248,34 @@ static std::string NormalizeMaterialStableId(const std::string &stableId) {
     return stableId.substr(strlen("material:id:"));
   }
   return stableId;
+}
+
+static std::string NormalizeMaterialSourceNameForMatch(
+    const std::string &name) {
+  auto begin = name.begin();
+  while (begin != name.end() &&
+         std::isspace(static_cast<unsigned char>(*begin))) {
+    ++begin;
+  }
+
+  auto end = name.end();
+  while (end != begin &&
+         std::isspace(static_cast<unsigned char>(*(end - 1)))) {
+    --end;
+  }
+
+  std::string normalized(begin, end);
+  std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                 [](unsigned char ch) {
+                   return static_cast<char>(std::tolower(ch));
+                 });
+  return normalized;
+}
+
+static bool MaterialSourceNamesMatch(const std::string &a,
+                                     const std::string &b) {
+  return NormalizeMaterialSourceNameForMatch(a) ==
+         NormalizeMaterialSourceNameForMatch(b);
 }
 
 static ImGuizmo::OPERATION GetActiveGizmoOperation() {
@@ -807,6 +836,15 @@ static std::vector<int> ResolveReplacementMaterialIndices(
   if (linkedMaterialNames.size() != linkedMaterialIndices.size()) {
     linkedMaterialNames = BuildLegacyLinkedMaterialNames(linkedMaterialIndices);
   }
+  const bool hasSourceMaterialNames =
+      std::any_of(linkedMaterialNames.begin(), linkedMaterialNames.end(),
+                  [](const std::string &name) { return !name.empty(); });
+  std::vector<std::string> incomingMaterialNames;
+  incomingMaterialNames.reserve(materials.size());
+  for (const Asset::Material &material : materials) {
+    incomingMaterialNames.push_back(
+        NormalizeMaterialSourceNameForMatch(material.name));
+  }
 
   std::vector<bool> reused(linkedMaterialIndices.size(), false);
   std::vector<int> localToGlobal(materials.size(), -1);
@@ -836,8 +874,20 @@ static std::vector<int> ResolveReplacementMaterialIndices(
                                    importedName, &reused);
     }
 
-    if (globalMaterialIndex < 0 && stableId.empty() &&
-        i < linkedMaterialIndices.size()) {
+    bool allowSlotFallback =
+        !hasSourceMaterialNames || importedName.empty();
+    if (!allowSlotFallback && i < linkedMaterialNames.size()) {
+      const std::string linkedSlotName =
+          NormalizeMaterialSourceNameForMatch(linkedMaterialNames[i]);
+      const bool linkedSlotStillIncoming =
+          !linkedSlotName.empty() &&
+          std::find(incomingMaterialNames.begin(), incomingMaterialNames.end(),
+                    linkedSlotName) != incomingMaterialNames.end();
+      allowSlotFallback = !linkedSlotStillIncoming;
+    }
+
+    if (globalMaterialIndex < 0 && stableId.empty() && allowSlotFallback &&
+        i < linkedMaterialIndices.size() && i < reused.size() && !reused[i]) {
       const int fallbackIndex = linkedMaterialIndices[i];
       if (fallbackIndex >= 0 && fallbackIndex < (int)g_loadedMaterials.size()) {
         globalMaterialIndex = fallbackIndex;
@@ -913,21 +963,55 @@ static std::vector<int> ResolveReplacementMaterialIndices(
 }
 
 static std::vector<int> BuildLegacyLinkedMaterialIndices(const Node &node) {
-  std::vector<int> indices;
-  for (size_t meshIndex : node.meshIndices) {
-    if (meshIndex >= g_loadedMeshes.size()) {
-      continue;
+  std::vector<int> indicesBySlot;
+  std::vector<int> encounteredIndices;
+  bool foundSourceSlots = false;
+
+  auto visitNodeMeshes = [&](const Node &sceneNode) {
+    for (size_t meshIndex : sceneNode.meshIndices) {
+      if (meshIndex >= g_loadedMeshes.size()) {
+        continue;
+      }
+      const Asset::GpuMesh &mesh = g_loadedMeshes[meshIndex];
+      const int materialIndex = mesh.materialIndex;
+      if (materialIndex < 0 ||
+          materialIndex >= static_cast<int>(g_loadedMaterials.size())) {
+        continue;
+      }
+
+      if (mesh.materialSlot >= 0) {
+        const size_t materialSlot = static_cast<size_t>(mesh.materialSlot);
+        if (materialSlot >= indicesBySlot.size()) {
+          indicesBySlot.resize(materialSlot + 1, -1);
+        }
+        if (indicesBySlot[materialSlot] < 0) {
+          indicesBySlot[materialSlot] = materialIndex;
+        }
+        foundSourceSlots = true;
+      }
+
+      if (std::find(encounteredIndices.begin(), encounteredIndices.end(),
+                    materialIndex) == encounteredIndices.end()) {
+        encounteredIndices.push_back(materialIndex);
+      }
     }
-    const int materialIndex = g_loadedMeshes[meshIndex].materialIndex;
-    if (materialIndex < 0) {
-      continue;
+  };
+
+  if (!node.importGroupKey.empty()) {
+    for (const Node &sceneNode : s_nodes) {
+      if (sceneNode.importGroupKey == node.importGroupKey) {
+        visitNodeMeshes(sceneNode);
+      }
     }
-    if (std::find(indices.begin(), indices.end(), materialIndex) == indices.end()) {
-      indices.push_back(materialIndex);
-    }
+  } else {
+    visitNodeMeshes(node);
   }
-  std::sort(indices.begin(), indices.end());
-  return indices;
+
+  if (foundSourceSlots) {
+    return indicesBySlot;
+  }
+
+  return encounteredIndices;
 }
 
 static std::vector<std::string> BuildLegacyLinkedMaterialNames(const std::vector<int> &indices) {
@@ -1235,7 +1319,7 @@ static int FindLinkedMaterialByName(const std::vector<std::string> &sourceNames,
     if ((*used)[i]) {
       continue;
     }
-    if (sourceNames[i] == name && globalIndices[i] >= 0 &&
+    if (MaterialSourceNamesMatch(sourceNames[i], name) && globalIndices[i] >= 0 &&
         globalIndices[i] < (int)g_loadedMaterials.size()) {
       (*used)[i] = true;
       return globalIndices[i];
@@ -3353,6 +3437,155 @@ int UpdateSelection(float screenWidth, float screenHeight) {
     SelectNode((size_t)hitNode);
     fprintf(stderr, "Scene: Picked Node '%s' (ID %d), Material ID %d\n",
             s_nodes[hitNode].name.c_str(), hitNode, hitMaterial);
+  }
+
+  return hitMaterial;
+}
+
+int PickMaterialAtCursor(float screenWidth, float screenHeight) {
+  if (ImGuizmo::IsUsing()) {
+    return -1;
+  }
+
+  if (screenWidth <= 1.0f || screenHeight <= 1.0f) {
+    return -1;
+  }
+
+  ImVec2 mposAbs = ImGui::GetIO().MousePos;
+  float vpX = 0.0f;
+  float vpY = 0.0f;
+  float vpWidth = screenWidth;
+  float vpHeight = screenHeight;
+  GetRenderViewportRect(&vpX, &vpY, &vpWidth, &vpHeight);
+  float mx = mposAbs.x - vpX;
+  float my = mposAbs.y - vpY;
+  if (mx < 0.0f || my < 0.0f || mx > vpWidth || my > vpHeight) {
+    return -1;
+  }
+
+  const float ndcX = (mx / vpWidth) * 2.0f - 1.0f;
+  const float ndcY = 1.0f - (my / vpHeight) * 2.0f;
+  const float kPi = 3.14159265359f;
+  const float fovRad = g_cameraData.fov * (kPi / 180.0f);
+  const float tanHalfFov = tanf(fovRad * 0.5f);
+  const float aspect = (vpHeight > 0.0f) ? (vpWidth / vpHeight)
+                                         : g_cameraData.aspect;
+
+  float forward[3] = {g_cameraData.forward[0], g_cameraData.forward[1],
+                      g_cameraData.forward[2]};
+  float upHint[3] = {g_cameraData.up[0], g_cameraData.up[1],
+                     g_cameraData.up[2]};
+
+  auto Normalize3 = [](float v[3]) -> bool {
+    float len2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+    if (len2 <= 1e-12f) {
+      return false;
+    }
+    float invLen = 1.0f / sqrtf(len2);
+    v[0] *= invLen;
+    v[1] *= invLen;
+    v[2] *= invLen;
+    return true;
+  };
+
+  auto Cross3 = [](const float a[3], const float b[3], float out[3]) {
+    out[0] = a[1] * b[2] - a[2] * b[1];
+    out[1] = a[2] * b[0] - a[0] * b[2];
+    out[2] = a[0] * b[1] - a[1] * b[0];
+  };
+
+  if (!Normalize3(forward)) {
+    return -1;
+  }
+  float right[3];
+  Cross3(forward, upHint, right);
+  if (!Normalize3(right)) {
+    return -1;
+  }
+  float up[3];
+  Cross3(right, forward, up);
+  if (!Normalize3(up)) {
+    return -1;
+  }
+
+  const float xView = ndcX * aspect * tanHalfFov;
+  const float yView = ndcY * tanHalfFov;
+  float dir[3] = {xView * right[0] + yView * up[0] + forward[0],
+                  xView * right[1] + yView * up[1] + forward[1],
+                  xView * right[2] + yView * up[2] + forward[2]};
+  if (!Normalize3(dir)) {
+    return -1;
+  }
+
+  float orig[3] = {g_cameraData.pos[0], g_cameraData.pos[1],
+                   g_cameraData.pos[2]};
+
+  auto TransformPoint = [](const float m[16], const float p[3],
+                           float out[3]) {
+    out[0] = p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12];
+    out[1] = p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13];
+    out[2] = p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14];
+  };
+  auto TransformVector = [](const float m[16], const float v[3],
+                            float out[3]) {
+    out[0] = v[0] * m[0] + v[1] * m[4] + v[2] * m[8];
+    out[1] = v[0] * m[1] + v[1] * m[5] + v[2] * m[9];
+    out[2] = v[0] * m[2] + v[1] * m[6] + v[2] * m[10];
+  };
+
+  float minWorldDist2 = FLT_MAX;
+  int hitMaterial = -1;
+
+  for (const Node &node : s_nodes) {
+    if (!node.visible) {
+      continue;
+    }
+
+    float invNode[16];
+    if (!Inverse4x4(node.transform, invNode)) {
+      continue;
+    }
+
+    float localOrig[3], localDir[3];
+    TransformPoint(invNode, orig, localOrig);
+    TransformVector(invNode, dir, localDir);
+    const float localDirLen2 = localDir[0] * localDir[0] +
+                               localDir[1] * localDir[1] +
+                               localDir[2] * localDir[2];
+    if (localDirLen2 <= 1e-12f) {
+      continue;
+    }
+
+    for (size_t meshIndex : node.meshIndices) {
+      if (meshIndex >= g_loadedMeshes.size()) {
+        continue;
+      }
+      const Asset::GpuMesh &mesh = g_loadedMeshes[meshIndex];
+      if (mesh.materialIndex < 0 ||
+          mesh.materialIndex >= static_cast<int>(g_loadedMaterials.size())) {
+        continue;
+      }
+
+      float boxT = 1e30f;
+      if (!RayAABBIntersection(localOrig, localDir, mesh.minBound,
+                               mesh.maxBound, boxT)) {
+        continue;
+      }
+
+      float localHit[3] = {localOrig[0] + localDir[0] * boxT,
+                           localOrig[1] + localDir[1] * boxT,
+                           localOrig[2] + localDir[2] * boxT};
+      float worldHit[3];
+      TransformPoint(node.transform, localHit, worldHit);
+      const float dx = worldHit[0] - orig[0];
+      const float dy = worldHit[1] - orig[1];
+      const float dz = worldHit[2] - orig[2];
+      const float worldDist2 = dx * dx + dy * dy + dz * dz;
+      if (worldDist2 < minWorldDist2) {
+        minWorldDist2 = worldDist2;
+        hitMaterial = mesh.materialIndex;
+      }
+    }
   }
 
   return hitMaterial;

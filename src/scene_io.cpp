@@ -599,7 +599,8 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
       {"igk", node.importGroupKey}, {"igr", node.importGroupRoot},
       {"v", node.visible}, {"s", node.selected},
       {"ll", node.liveLinkManaged}, {"pi", node.parentIndex},
-      {"mi", node.meshIndices}, {"t", xf}
+      {"mi", node.meshIndices}, {"lmi", node.linkedMaterialIndices},
+      {"lmn", node.linkedMaterialSourceNames}, {"t", xf}
     });
   }
 
@@ -922,6 +923,13 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
       node.liveLinkManaged = n.value("ll", false);
       node.parentIndex = n.value("pi", static_cast<size_t>(-1));
       node.meshIndices = n["mi"].get<std::vector<size_t>>();
+      if (n.contains("lmi")) {
+        node.linkedMaterialIndices = n["lmi"].get<std::vector<int>>();
+      }
+      if (n.contains("lmn")) {
+        node.linkedMaterialSourceNames =
+            n["lmn"].get<std::vector<std::string>>();
+      }
       if (n.contains("t")) for (int i=0;i<16;++i) node.transform[i]=n["t"][i];
       node.selected = n.value("s", false);
       const_cast<std::vector<Scene::Node>&>(Scene::GetNodes()).push_back(node);
@@ -960,6 +968,14 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
         nodes[restoredIndex].liveLinkManaged = n.value("ll", false);
         nodes[restoredIndex].parentIndex =
             n.value("pi", static_cast<size_t>(-1));
+        if (n.contains("lmi")) {
+          nodes[restoredIndex].linkedMaterialIndices =
+              n["lmi"].get<std::vector<int>>();
+        }
+        if (n.contains("lmn")) {
+          nodes[restoredIndex].linkedMaterialSourceNames =
+              n["lmn"].get<std::vector<std::string>>();
+        }
         if (n.contains("t")) for (int i=0;i<16;++i) nodes[restoredIndex].transform[i]=n["t"][i];
         nodes[restoredIndex].selected = n.value("s", false);
       }
@@ -1264,6 +1280,16 @@ bool LoadScenePRS(const std::string &path) {
       MaterialIO::RestoreMaterialsFromMetadata(meta["mat"],
                                                &g_loadedMaterials,
                                                g_loadedTextures, &remap);
+    }
+    if (!remap.empty()) {
+      auto &nodes = const_cast<std::vector<Scene::Node>&>(Scene::GetNodes());
+      for (Scene::Node &node : nodes) {
+        for (int &materialIndex : node.linkedMaterialIndices) {
+          if (materialIndex >= 0 && materialIndex < (int)remap.size()) {
+            materialIndex = remap[materialIndex];
+          }
+        }
+      }
     }
     Scene::RefreshAllMaterialRuntimeTextures();
     RestoreLiveLinkBindingsPRS(meta, remap);

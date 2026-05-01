@@ -361,6 +361,21 @@ float3 TraceGlassReflectionRadiance(float3 P, float3 V, float3 N,
     return PayloadGetColor(reflectionPayload) * reflectionWeight;
 }
 
+float3 ComputeDeterministicGlassTransmissionWeight(float3 albedo, float metallic,
+                                                   float ior, float specularWeight,
+                                                   float3 specularColor, float3 V,
+                                                   float3 N)
+{
+    float cosTheta = abs(dot(V, N));
+    float dielectricF = FresnelDielectric(cosTheta, ior) *
+                        saturate(specularWeight);
+    float3 dielectricReflection = dielectricF * saturate(specularColor);
+    float3 metalReflection = F_Schlick(cosTheta, saturate(albedo));
+    float3 reflectionWeight =
+        lerp(dielectricReflection, metalReflection, saturate(metallic));
+    return saturate(1.0.xxx - reflectionWeight);
+}
+
 [shader("raygeneration")]
 void RayGen()
 {
@@ -521,7 +536,15 @@ void RayGen()
         accumulatedColor += resolveReflection;
         primaryGlassReflection += resolveReflection;
 
-        throughput *= max(resolveTransmissionColor, float3(0.0, 0.0, 0.0)) * resolveTransmission;
+        float3 resolveTransmissionWeight =
+            ComputeDeterministicGlassTransmissionWeight(resolveAlbedo,
+                                                        resolveMetallic,
+                                                        resolveIor,
+                                                        resolveSpecularWeight,
+                                                        resolveSpecularColor,
+                                                        resolveV, resolveN);
+        throughput *= max(resolveTransmissionColor, float3(0.0, 0.0, 0.0)) *
+                      resolveTransmission * resolveTransmissionWeight;
         float3 resolveNextDir = rayDir;
         if (!resolveThinWalled) {
             if (!RefractDeterministic(resolveV, resolveN, resolveIor, resolveNextDir)) {
@@ -1319,7 +1342,20 @@ void RayGen()
                 }
                 refractiveBounces++;
                 nextDir = glassL;
-                f_brdf = max(payloadTransmissionColor, float3(0.0, 0.0, 0.0)) * payloadTransmission;
+                if (deterministicThinGlass) {
+                    float3 transmissionWeight =
+                        ComputeDeterministicGlassTransmissionWeight(payloadAlbedo,
+                                                                    metallic,
+                                                                    payloadIor,
+                                                                    payloadSpecularWeight,
+                                                                    payloadSpecularColor,
+                                                                    V, N);
+                    f_brdf = max(payloadTransmissionColor, float3(0.0, 0.0, 0.0)) *
+                             payloadTransmission * transmissionWeight;
+                } else {
+                    f_brdf = max(payloadTransmissionColor, float3(0.0, 0.0, 0.0)) *
+                             payloadTransmission;
+                }
                 currentRayType = RAY_TYPE_REFRACTION;
             } else {
                 if (specularBounces >= (int)maxSpecularBounces) break;

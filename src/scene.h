@@ -145,6 +145,7 @@ void EndBatchedUpdates();
 // Ray-cast selection from mouse. Returns the global material index of the hit
 // submesh, or -1.
 int UpdateSelection(float screenWidth, float screenHeight);
+int PickMaterialAtCursor(float screenWidth, float screenHeight);
 void DeleteNode(size_t index);
 
 // Rebuild acceleration structures using active meshes

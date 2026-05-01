@@ -298,18 +298,17 @@ void Update(float dt) {
     static bool lbtnDown = false;
     if (IsMouseButtonDown(VK_LBUTTON)) {
       if (!lbtnDown) {
-        // Always run selection logic to allow selecting nodes
-        int pickedMaterial =
-            Scene::UpdateSelection((float)DX12Context::g_windowWidth,
-                                   (float)DX12Context::g_windowHeight);
-
-        if (pickedMaterial != -1) {
-          // Only switch the Material Editor's active material if the Picking
-          // Tool is explicitly enabled
-          if (MaterialEditor::IsPickingEnabled()) {
+        if (MaterialEditor::IsPickingEnabled()) {
+          const int pickedMaterial =
+              Scene::PickMaterialAtCursor((float)DX12Context::g_windowWidth,
+                                          (float)DX12Context::g_windowHeight);
+          if (pickedMaterial != -1) {
             MaterialEditor::SelectMaterial(pickedMaterial);
             MaterialEditor::SetPickingEnabled(false);
           }
+        } else {
+          Scene::UpdateSelection((float)DX12Context::g_windowWidth,
+                                 (float)DX12Context::g_windowHeight);
         }
         lbtnDown = true;
       }

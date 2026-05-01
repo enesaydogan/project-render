@@ -3,6 +3,7 @@
 #include "../editor_ui.h"
 #include "../input_handler.h"
 #include "../imgui.h"
+#include "../material_editor.h"
 #include "../scene.h"
 #include <cfloat>
 #include <QFocusEvent>
@@ -183,6 +184,19 @@ void DX12View::mousePressEvent(QMouseEvent *e)
     setFocus(Qt::MouseFocusReason);
     ImGui::GetIO().AddMousePosEvent(static_cast<float>(e->globalPosition().x()),
                                     static_cast<float>(e->globalPosition().y()));
+
+    if (e->button() == Qt::LeftButton && MaterialEditor::IsPickingEnabled()) {
+        const int pickedMaterial = Scene::PickMaterialAtCursor(
+            static_cast<float>(DX12Context::g_windowWidth),
+            static_cast<float>(DX12Context::g_windowHeight));
+        if (pickedMaterial >= 0) {
+            MaterialEditor::SelectMaterial(pickedMaterial);
+            MaterialEditor::SetPickingEnabled(false);
+        }
+        e->accept();
+        return;
+    }
+
     const int virtualKey = MapQtMouseButtonToVirtualKey(e->button());
     if (virtualKey != 0) {
         Input::SetQtMouseButtonState(virtualKey, true);
