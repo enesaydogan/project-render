@@ -64,7 +64,7 @@ public:
   // - cmdList: graphics/compute command list to record the bake into
   // - cameraCB: optional camera constant buffer (used for origin/light)
   void BakeSky(ID3D12GraphicsCommandList *cmdList, ID3D12Resource *cameraCB = nullptr);
-  void RequestBake() { m_bakeRequested = true; }
+  void RequestBake();
   bool NeedsBake() const { return m_bakeRequested; }
   ID3D12Resource *GetBakedSkyTexture() const { return m_bakedSkyTexture.Get(); }
 
@@ -103,6 +103,10 @@ private:
 
   // Bake control
   bool m_bakeRequested = false;
+  bool m_pendingParamBake = false;
+  float m_secondsSinceParamEdit = 0.0f;
+  float m_secondsSinceBake = 0.0f;
+  CloudParams m_lastObservedParams = {};
   CloudParams m_lastBakedParams = {};
 };
 

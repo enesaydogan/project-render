@@ -211,26 +211,26 @@ CloudParams MakeDefaultCloudParams() {
   CloudParams p = {};
 
   // Baked-cloud quality defaults (higher fidelity than old real-time profile).
-  p.density = 0.95f;
-  p.absorption = 0.30f;
-  p.coverage = 0.38f;
-  p.scattering = 0.78f;
+  p.density = 1.05f;
+  p.absorption = 0.22f;
+  p.coverage = 0.46f;
+  p.scattering = 0.74f;
   p.steps = 128;
-  p.sunIntensity = 1.12f;
-  p.cloudTop = 4600.0f;
-  p.cloudBottom = 1700.0f;
+  p.sunIntensity = 1.10f;
+  p.cloudTop = 5200.0f;
+  p.cloudBottom = 2400.0f;
   p.windSpeed = 0.012f;
 
-  p.baseScale = 0.00012f;
-  p.detailScale = 0.00260f;
-  p.coverageScale = 0.000115f;
-  p.coverageVariation = 0.78f;
-  p.erosion = 0.64f;
-  p.warpStrength = 1.05f;
-  p.shapePower = 1.05f;
-  p.powderStrength = 1.18f;
-  p.cirrusAmount = 0.34f;
-  p.cloudShadowStrength = 0.42f;
+  p.baseScale = 0.00018f;
+  p.detailScale = 0.00220f;
+  p.coverageScale = 0.000080f;
+  p.coverageVariation = 0.62f;
+  p.erosion = 0.48f;
+  p.warpStrength = 0.62f;
+  p.shapePower = 1.22f;
+  p.powderStrength = 0.90f;
+  p.cirrusAmount = 0.06f;
+  p.cloudShadowStrength = 0.34f;
   p._pad0 = 0.0f;
   p._pad1 = 0.0f;
 
@@ -265,10 +265,20 @@ void CloudManager::Initialize(ID3D12Device *device,
   CreateDescriptors(device);
 
   // Mark first bake requested so baked-sky is populated at startup
+  m_lastObservedParams = m_params;
   m_lastBakedParams = m_params;
   m_bakeRequested = true;
+  m_pendingParamBake = false;
+  m_secondsSinceParamEdit = 0.0f;
+  m_secondsSinceBake = 0.0f;
 
   m_initialized = true;
+}
+
+void CloudManager::RequestBake() {
+  m_bakeRequested = true;
+  m_pendingParamBake = false;
+  m_secondsSinceParamEdit = 0.0f;
 }
 
 void CloudManager::CreateDescriptors(ID3D12Device *device) {
@@ -352,15 +362,31 @@ void CloudManager::Update(float dt, UINT frameIndex) {
   if (!m_initialized)
     return;
 
-  // Advance animation time
-  m_params.timeSeconds += dt;
+  const float safeDt = (std::max)(dt, 0.0f);
 
-  // Detect parameter changes (excluding time) to trigger a bake request.
+  // Advance animation time
+  m_params.timeSeconds += safeDt;
+  m_secondsSinceBake += safeDt;
+  m_secondsSinceParamEdit += safeDt;
+
+  // Detect parameter changes (excluding time) and schedule a trailing-edge bake
+  // to avoid rebaking every frame while dragging UI sliders.
   CloudParams a = m_params;
-  CloudParams b = m_lastBakedParams;
+  CloudParams b = m_lastObservedParams;
   a.timeSeconds = 0.0f;
   b.timeSeconds = 0.0f;
   if (memcmp(&a, &b, sizeof(CloudParams)) != 0) {
+    m_lastObservedParams = m_params;
+    m_lastObservedParams.timeSeconds = 0.0f;
+    m_pendingParamBake = true;
+    m_secondsSinceParamEdit = 0.0f;
+  }
+
+  static constexpr float kBakeDebounceSeconds = 0.12f;
+  static constexpr float kBakeMinIntervalSeconds = 0.25f;
+  if (m_pendingParamBake && !m_bakeRequested &&
+      m_secondsSinceParamEdit >= kBakeDebounceSeconds &&
+      m_secondsSinceBake >= kBakeMinIntervalSeconds) {
     m_bakeRequested = true;
   }
 
@@ -602,6 +628,11 @@ void CloudManager::BakeSky(ID3D12GraphicsCommandList *cmdList, ID3D12Resource *c
 
   // Mark baked state
   m_bakeRequested = false;
+  m_pendingParamBake = false;
+  m_secondsSinceBake = 0.0f;
+  m_secondsSinceParamEdit = 0.0f;
+  m_lastObservedParams = m_params;
+  m_lastObservedParams.timeSeconds = 0.0f;
   m_lastBakedParams = m_params;
   if (device) device->Release();
 }

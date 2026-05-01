@@ -239,21 +239,22 @@ float SampleDensity(float3 p, float lod) {
     float weatherNoiseA = CloudWeatherNoise2D(macroUvA + float2(11.7f, 3.1f));
     float weatherNoiseB = CloudWeatherNoise2D(macroUvB * 0.53f + float2(-5.2f, 8.4f));
     float weatherNoise = lerp(weatherNoiseA, weatherNoiseB, 0.35f);
-    float largeCells = CloudCellularCumulus(macroUv * 0.62f + float2(2.7f, -9.1f), 1.05f);
-    float midCells = CloudCellularCumulus(macroUv * 1.55f + float2(-5.4f, 13.2f), 0.92f);
-    float tinyCells = CloudCellularCumulus(macroUv * 3.10f + float2(19.5f, 4.4f), 0.72f);
+    float broadFill = CloudWeatherNoise2D(macroUv * 0.28f + float2(-31.4f, 6.8f));
+    float largeCells = CloudCellularCumulus(macroUv * 0.52f + float2(2.7f, -9.1f), 0.92f);
+    float midCells = CloudCellularCumulus(macroUv * 1.24f + float2(-5.4f, 13.2f), 0.78f);
+    float tinyCells = CloudCellularCumulus(macroUv * 2.60f + float2(19.5f, 4.4f), 0.58f);
     float variety = saturate(CloudCB.coverageVariation);
-    float cellField = saturate(max(largeCells, midCells * lerp(0.45f, 0.82f, variety)) +
-                               tinyCells * lerp(0.05f, 0.32f, variety));
-    float macroField = saturate(cellField * lerp(0.72f, 1.15f, weatherNoise) +
-                                weatherNoise * lerp(0.04f, 0.18f, variety));
+    float cellField = saturate(max(largeCells, midCells * lerp(0.28f, 0.58f, variety)) +
+                               tinyCells * lerp(0.02f, 0.16f, variety));
+    float macroField = saturate(cellField * lerp(0.66f, 1.05f, weatherNoise) +
+                                weatherNoise * lerp(0.02f, 0.10f, variety));
 
     // 1. Base Coordinates with decorrelated local offsets to break tile tracking.
     float2 localOffset = CloudNonPeriodicOffset(macroUv * 0.31f);
     float3 basePos = p * CloudCB.baseScale;
     basePos.xz += windMeters * float2(0.0010f, 0.0005f);
-    basePos.xz += localOffset * 0.73f;
-    basePos.y += dot(localOffset, float2(0.37f, -0.21f));
+    basePos.xz += localOffset * 0.42f;
+    basePos.y += dot(localOffset, float2(0.21f, -0.12f));
     
     // Domain Warp (Low Frequency)
     float3 warpPos = RotateDomain(basePos) * 0.5f;
@@ -269,7 +270,7 @@ float SampleDensity(float3 p, float lod) {
     // samples so the underlying 3D tile does not read as a repeated stamp.
     float baseA = NoiseTex.SampleLevel(LinearWrapSampler, noiseCoord, lod).r;
     float baseB = NoiseTex.SampleLevel(LinearWrapSampler, altNoiseCoord, lod + 0.65f).g;
-    float baseCloud = saturate(baseA * 0.72f + baseB * 0.46f);
+    float baseCloud = saturate(baseA * 0.78f + baseB * 0.28f);
     
     // 3. Density Gradient + Cloud Type Profile
     float heightGrad = HeightGradient(heightPct);
@@ -279,11 +280,11 @@ float SampleDensity(float3 p, float lod) {
         LinearWrapSampler,
         noiseCoord * 0.23f + float3(0.0f, CloudCB.timeSeconds * 0.0002f, 0.0f),
         lod + 2.0f).g;
-    float typeBlend = saturate(CloudCB.coverageVariation) * smoothstep(0.40f, 0.86f, typeNoise);
+    float typeBlend = saturate(CloudCB.coverageVariation) * smoothstep(0.52f, 0.92f, typeNoise);
 
     float cumulusProfile = pow(saturate(heightGrad), max(0.35f, CloudCB.shapePower));
     float stratusProfile = smoothstep(0.0f, 0.08f, heightPct) * smoothstep(0.68f, 0.26f, heightPct);
-    float verticalProfile = lerp(cumulusProfile, stratusProfile, typeBlend * 0.55f);
+    float verticalProfile = lerp(cumulusProfile, stratusProfile, typeBlend * 0.22f);
     baseCloud *= verticalProfile;
 
     // Shape curve: keep cumulus a bit punchier, stratus a bit softer.
@@ -297,24 +298,29 @@ float SampleDensity(float3 p, float lod) {
     float effectiveCoverage = saturate(CloudCB.coverage);
     // Perceptual remap: make low-mid slider values produce visible cloud amount.
     float coverageLinear = pow(effectiveCoverage, 0.65f);
+    float highCoverage = smoothstep(0.58f, 0.96f, effectiveCoverage);
     // High threshold at low coverage removes most clouds; low threshold at high
     // coverage produces overcast-like fill.
-    float densityThreshold = lerp(0.84f, 0.10f, coverageLinear);
+    float densityThreshold = lerp(0.84f, 0.045f, coverageLinear);
 
     // Standard Schneider remap:
-    float macroMask = smoothstep(lerp(0.62f, 0.18f, coverageLinear),
-                                 lerp(0.82f, 0.36f, coverageLinear),
+    float macroMask = smoothstep(lerp(0.58f, 0.24f, coverageLinear),
+                                 lerp(0.80f, 0.44f, coverageLinear),
                                  macroField);
-    float cloudSignal = baseCloud * lerp(0.18f, 1.18f, macroMask);
+    float highCoverageMask = smoothstep(lerp(0.62f, 0.16f, coverageLinear),
+                                        lerp(0.82f, 0.34f, coverageLinear),
+                                        saturate(0.62f * weatherNoise + 0.38f * broadFill));
+    macroMask = saturate(max(macroMask, highCoverageMask * highCoverage));
+    float cloudSignal = baseCloud * lerp(0.04f, lerp(1.05f, 1.48f, highCoverage), macroMask);
     float covRemap = Remap(cloudSignal, densityThreshold, 1.0f, 0.0f, 1.0f);
     baseCloud = covRemap; 
-    baseCloud *= lerp(0.05f, 1.0f, macroMask);
+    baseCloud *= lerp(0.0f, 1.0f, macroMask);
 
     // 6. Detail Erosion (High Frequency)
     if (baseCloud > 0.0) {
         float3 detailPos = p * CloudCB.detailScale;
         detailPos.xz += windMeters * 0.002f;
-        detailPos.xz += localOffset * 1.31f;
+        detailPos.xz += localOffset * 0.74f;
         // Rotate detail too
         detailPos = RotateDomain(detailPos);
         
@@ -332,7 +338,7 @@ float SampleDensity(float3 p, float lod) {
         float directionalErosion = lerp(highFreqFBM, modifier, windPhase);
         
         // Remap density based on detail
-        float erosion = CloudCB.erosion * lerp(0.42f, 0.82f, 1.0f - typeBlend);
+        float erosion = CloudCB.erosion * lerp(0.36f, 0.72f, 1.0f - typeBlend);
         baseCloud = Remap(baseCloud, directionalErosion * erosion, 1.0, 0.0, 1.0);
     }
     
@@ -405,7 +411,7 @@ float4 EvaluateCirrusLayer(float3 rayOrigin, float3 rayDir, float3 sunDir, float
                            float3 skyZenith, float3 skyHorizon)
 {
     float amount = saturate(CloudCB.cirrusAmount);
-    if (amount <= 0.001f || rayDir.y <= 0.015f) {
+    if (amount <= 0.001f || rayDir.y <= 0.045f) {
         return float4(0.0f, 0.0f, 0.0f, 1.0f);
     }
 
@@ -427,8 +433,8 @@ float4 EvaluateCirrusLayer(float3 rayOrigin, float3 rayDir, float3 sunDir, float
     float wisps = smoothstep(0.54f, 0.88f, longStreaks) *
                   smoothstep(0.24f, 0.78f, feather) *
                   lerp(0.55f, 1.0f, breakup);
-    float viewFade = smoothstep(0.02f, 0.22f, rayDir.y);
-    float opacity = saturate(wisps * amount * 0.24f * viewFade);
+    float viewFade = smoothstep(0.08f, 0.35f, rayDir.y);
+    float opacity = saturate(wisps * amount * 0.13f * viewFade);
 
     float cosAngle = dot(rayDir, sunDir);
     float phase = PhaseHG(cosAngle, 0.72f);
@@ -490,6 +496,7 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
     // tStart = max(tStart, max(0.0f, tMin)); // Don't clip start by tMin if tMin is scene geometry? tMin usually 0 or NearZ
     // tMax comes from depth buffer.
     tEnd = min(tEnd, (tMax > 0.0) ? tMax : 100000.0);
+    tEnd = min(tEnd, tStart + lerp(45000.0f, 100000.0f, smoothstep(0.06f, 0.28f, abs(rayDir.y))));
     
     if (tEnd <= tStart) return float4(0,0,0,1);
 
@@ -525,6 +532,7 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
 
     float3 sum = float3(0,0,0);
     float transmittance = 1.0f;
+    float horizonDensityFade = smoothstep(0.035f, 0.18f, rayDir.y);
     
     // Phase Function (sun-angle aware)
     float cosAngle = dot(rayDir, sunDir);
@@ -565,7 +573,7 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
     for(int i = 0; i < steps; ++i) {
         if (transmittance < 0.01f) break;
 
-        float density = SampleDensity(pos, densityLodBias);
+        float density = SampleDensity(pos, densityLodBias) * horizonDensityFade;
         
         if (density > 0.001f) {
             float denseMask = saturate(density * 1.25f);
