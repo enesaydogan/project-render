@@ -2266,7 +2266,15 @@ static void EnsureWavefrontResolvePipeline() {
   textureRange.OffsetInDescriptorsFromTableStart =
       D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-  D3D12_ROOT_PARAMETER params[12] = {};
+  D3D12_DESCRIPTOR_RANGE cloudSrvRange = {};
+  cloudSrvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+  cloudSrvRange.NumDescriptors = DXR_HEAP_CLOUD_SRV_COUNT; // t10..t12, space2
+  cloudSrvRange.BaseShaderRegister = 10;
+  cloudSrvRange.RegisterSpace = 2;
+  cloudSrvRange.OffsetInDescriptorsFromTableStart =
+      D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+  D3D12_ROOT_PARAMETER params[14] = {};
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
   params[0].Descriptor.ShaderRegister = 0;
   params[0].Descriptor.RegisterSpace = 0;
@@ -2328,27 +2336,41 @@ static void EnsureWavefrontResolvePipeline() {
   params[11].DescriptorTable.pDescriptorRanges = &textureRange;
   params[11].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
+  params[12].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+  params[12].Descriptor.ShaderRegister = 10;
+  params[12].Descriptor.RegisterSpace = 2;
+  params[12].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[13].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[13].DescriptorTable.NumDescriptorRanges = 1;
+  params[13].DescriptorTable.pDescriptorRanges = &cloudSrvRange;
+  params[13].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
   D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
   rsDesc.NumParameters = _countof(params);
   rsDesc.pParameters = params;
   rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
-  D3D12_STATIC_SAMPLER_DESC linearSampler = {};
-  linearSampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-  linearSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-  linearSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-  linearSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-  linearSampler.MipLODBias = 0;
-  linearSampler.MaxAnisotropy = 1;
-  linearSampler.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
-  linearSampler.BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK;
-  linearSampler.MinLOD = 0.0f;
-  linearSampler.MaxLOD = D3D12_FLOAT32_MAX;
-  linearSampler.ShaderRegister = 0;
-  linearSampler.RegisterSpace = 0;
-  linearSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-  rsDesc.NumStaticSamplers = 1;
-  rsDesc.pStaticSamplers = &linearSampler;
+  D3D12_STATIC_SAMPLER_DESC linearSamplers[2] = {};
+  linearSamplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+  linearSamplers[0].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  linearSamplers[0].AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  linearSamplers[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  linearSamplers[0].MipLODBias = 0;
+  linearSamplers[0].MaxAnisotropy = 1;
+  linearSamplers[0].ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+  linearSamplers[0].BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK;
+  linearSamplers[0].MinLOD = 0.0f;
+  linearSamplers[0].MaxLOD = D3D12_FLOAT32_MAX;
+  linearSamplers[0].ShaderRegister = 0;
+  linearSamplers[0].RegisterSpace = 0;
+  linearSamplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  linearSamplers[1] = linearSamplers[0];
+  linearSamplers[1].RegisterSpace = 2;
+
+  rsDesc.NumStaticSamplers = _countof(linearSamplers);
+  rsDesc.pStaticSamplers = linearSamplers;
 
   ComPtr<ID3DBlob> sig, err;
   HRESULT hrSerialize = D3D12SerializeRootSignature(
@@ -2552,6 +2574,14 @@ static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
   list->SetComputeRootDescriptorTable(9, s_vbTableGpu);
   list->SetComputeRootDescriptorTable(10, s_ibTableGpu);
   list->SetComputeRootDescriptorTable(11, s_texTableGpu);
+  list->SetComputeRootConstantBufferView(12,
+                                         g_cloudManager.GetConstantBufferAddr());
+  D3D12_GPU_DESCRIPTOR_HANDLE cloudSRV =
+      s_srvHeap->GetGPUDescriptorHandleForHeapStart();
+  cloudSRV.ptr += (UINT64)DXR_HEAP_CLOUD_TEX_OFFSET *
+                  s_device->GetDescriptorHandleIncrementSize(
+                      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+  list->SetComputeRootDescriptorTable(13, cloudSRV);
 
   const bool dispatchedIndirect =
       useIndirectDispatch &&
@@ -2606,6 +2636,14 @@ static void DispatchWavefrontRestirSeed(ID3D12GraphicsCommandList4 *list,
   list->SetComputeRootDescriptorTable(9, s_vbTableGpu);
   list->SetComputeRootDescriptorTable(10, s_ibTableGpu);
   list->SetComputeRootDescriptorTable(11, s_texTableGpu);
+  list->SetComputeRootConstantBufferView(12,
+                                         g_cloudManager.GetConstantBufferAddr());
+  D3D12_GPU_DESCRIPTOR_HANDLE cloudSRV =
+      s_srvHeap->GetGPUDescriptorHandleForHeapStart();
+  cloudSRV.ptr += (UINT64)DXR_HEAP_CLOUD_TEX_OFFSET *
+                  s_device->GetDescriptorHandleIncrementSize(
+                      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+  list->SetComputeRootDescriptorTable(13, cloudSRV);
 
   const bool dispatchedIndirect =
       useIndirectDispatch &&
@@ -2663,6 +2701,14 @@ static void DispatchWavefrontResolveSecondary(ID3D12GraphicsCommandList4 *list,
   list->SetComputeRootDescriptorTable(9, s_vbTableGpu);
   list->SetComputeRootDescriptorTable(10, s_ibTableGpu);
   list->SetComputeRootDescriptorTable(11, s_texTableGpu);
+  list->SetComputeRootConstantBufferView(12,
+                                         g_cloudManager.GetConstantBufferAddr());
+  D3D12_GPU_DESCRIPTOR_HANDLE cloudSRV =
+      s_srvHeap->GetGPUDescriptorHandleForHeapStart();
+  cloudSRV.ptr += (UINT64)DXR_HEAP_CLOUD_TEX_OFFSET *
+                  s_device->GetDescriptorHandleIncrementSize(
+                      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+  list->SetComputeRootDescriptorTable(13, cloudSRV);
 
   const bool dispatchedIndirect =
       useIndirectDispatch &&
