@@ -1264,11 +1264,13 @@ void RayGen()
             // Thin-walled mode: window glass approximation (no bending).
             // For clear architectural window glass, stochastic Fresnel branch
             // selection creates visible salt-and-pepper noise because adjacent
-            // pixels randomly flip between reflection and transmission. Treat
-            // that primary path as deterministic transmission instead.
+            // pixels randomly flip between reflection and transmission. Keep
+            // view-through-glass rays on a deterministic transmission path and
+            // trace the reflected contribution explicitly instead.
             bool deterministicThinGlass =
                 payloadThinWalled &&
-                (bounce == 0) &&
+                (currentRayType == RAY_TYPE_PRIMARY ||
+                 currentRayType == RAY_TYPE_REFRACTION) &&
                 (payloadTransmission > 0.0);
             if (deterministicThinGlass) {
                 refracted = true;
@@ -1294,22 +1296,25 @@ void RayGen()
             uint incomingRayType = currentRayType;
             if (refracted) {
                 if (refractiveBounces >= (int)maxRefractiveBounces) break;
-                if (bounce == 0) {
-                    if (deterministicThinGlass) {
-                        float3 reflectedColor =
-                            TraceGlassReflectionRadiance(P, V, N,
-                                                         payloadAlbedo,
-                                                         metallic,
-                                                         roughness,
-                                                         payloadIor,
-                                                         payloadSpecularWeight,
-                                                         payloadSpecularColor,
-                                                         next_float2(rng));
-                        primaryGlassReflection =
-                            max(surfaceLightingContribution + reflectedColor,
-                                float3(0.0, 0.0, 0.0));
-                        accumulatedColor += primaryGlassReflection;
+                if (deterministicThinGlass) {
+                    float3 reflectedColor =
+                        throughput * TraceGlassReflectionRadiance(P, V, N,
+                                                                  payloadAlbedo,
+                                                                  metallic,
+                                                                  roughness,
+                                                                  payloadIor,
+                                                                  payloadSpecularWeight,
+                                                                  payloadSpecularColor,
+                                                                  next_float2(rng));
+                    float3 deterministicReflection =
+                        max(surfaceLightingContribution + reflectedColor,
+                            float3(0.0, 0.0, 0.0));
+                    if (bounce == 0) {
+                        primaryGlassReflection = deterministicReflection;
                     }
+                    accumulatedColor += deterministicReflection;
+                }
+                if (bounce == 0 || deterministicThinGlass) {
                     accumulatedColor -= surfaceLightingContribution;
                 }
                 refractiveBounces++;

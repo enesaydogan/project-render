@@ -428,7 +428,8 @@ void MaterialEditorPanel::createUi()
     surfaceForm->addRow(tr("Specular Color"), m_specularColorButton);
     surfaceForm->addRow(m_textureSlots[SpecularColor].group);
 
-    m_ior = CreateSliderControl(1.0, 3.0, 0.001, 3);
+    m_ior = CreateSliderControl(MaterialSystem::kMinMaterialIor,
+                                MaterialSystem::kMaxMaterialIor, 0.001, 3);
     surfaceForm->addRow(tr("IOR"), m_ior);
 
     auto *transmissionDivider = new QFrame(surfaceTab);
@@ -452,7 +453,8 @@ void MaterialEditorPanel::createUi()
     surfaceForm->addRow(tr("Coat"), m_coatWeight);
     m_coatRoughness = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(tr("Coat Roughness"), m_coatRoughness);
-    m_coatIor = CreateSliderControl(1.0, 3.0, 0.01, 3);
+    m_coatIor = CreateSliderControl(MaterialSystem::kMinMaterialIor,
+                                    MaterialSystem::kMaxMaterialIor, 0.01, 3);
     surfaceForm->addRow(tr("Coat IOR"), m_coatIor);
     surfaceForm->addRow(m_textureSlots[CoatNormal].group);
 

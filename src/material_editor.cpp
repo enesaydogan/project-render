@@ -543,7 +543,8 @@ void Draw(HWND hwnd, bool &visible) {
             if (ImGui::ColorEdit3("Specular Color", mat.specularColor))
               DxrRenderer::ResetAccumulation();
 
-            if (ImGui::SliderFloat("IOR", &mat.ior, 1.0f, 3.0f, "%.3f"))
+            if (ImGui::SliderFloat("IOR", &mat.ior, MaterialSystem::kMinMaterialIor,
+                                   MaterialSystem::kMaxMaterialIor, "%.3f"))
               DxrRenderer::ResetAccumulation();
 
             ImGui::SeparatorText("Transmission / Coat");
@@ -574,7 +575,9 @@ void Draw(HWND hwnd, bool &visible) {
               mat.coatRoughness = coatRoughness;
               DxrRenderer::ResetAccumulation();
             }
-            if (ImGui::SliderFloat("Coat IOR", &mat.coatIor, 1.0f, 3.0f, "%.3f"))
+            if (ImGui::SliderFloat("Coat IOR", &mat.coatIor,
+                                   MaterialSystem::kMinMaterialIor,
+                                   MaterialSystem::kMaxMaterialIor, "%.3f"))
               DxrRenderer::ResetAccumulation();
             if (ImGui::SliderFloat("Translucency", &mat.translucency, 0.0f,
                                    1.0f))

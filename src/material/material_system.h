@@ -6,6 +6,9 @@
 
 namespace MaterialSystem {
 
+constexpr float kMinMaterialIor = 1.0f;
+constexpr float kMaxMaterialIor = 10.0f;
+
 enum class TextureSlot {
   BaseColor = 0,
   Opacity = 1,

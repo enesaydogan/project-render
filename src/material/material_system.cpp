@@ -8,12 +8,10 @@ namespace MaterialSystem {
 
 namespace {
 
-constexpr float kMinDielectricIor = 1.0f;
-constexpr float kMaxDielectricIor = 3.0f;
 constexpr float kMaterialFlagEpsilon = 1.0e-5f;
 
 float ClampDielectricIor(float ior) {
-  return (std::clamp)(ior, kMinDielectricIor, kMaxDielectricIor);
+  return (std::clamp)(ior, kMinMaterialIor, kMaxMaterialIor);
 }
 
 bool IsSupportedPackedTextureFormat(DXGI_FORMAT format) {

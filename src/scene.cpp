@@ -799,6 +799,8 @@ static std::vector<int> ResolveReplacementMaterialIndices(
   EnsureMaterialMetadataStorage();
   std::vector<int> linkedMaterialIndices = node.linkedMaterialIndices;
   std::vector<std::string> linkedMaterialNames = node.linkedMaterialSourceNames;
+  const bool allowGlobalNameReuse =
+      allowSharedByNameReuse && materialStableIds && !materialStableIds->empty();
   if (linkedMaterialIndices.empty()) {
     linkedMaterialIndices = BuildLegacyLinkedMaterialIndices(node);
   }
@@ -843,7 +845,8 @@ static std::vector<int> ResolveReplacementMaterialIndices(
       }
     }
 
-    if (allowSharedByNameReuse && globalMaterialIndex < 0 && !importedName.empty()) {
+    if (allowGlobalNameReuse && globalMaterialIndex < 0 &&
+      !importedName.empty()) {
       const auto sharedIt = s_materialIndicesByName.find(importedName);
       if (sharedIt != s_materialIndicesByName.end() &&
           sharedIt->second >= 0 &&
