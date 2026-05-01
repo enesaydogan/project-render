@@ -845,7 +845,7 @@ void ClosestHitImpl(inout RayPayload payload,
     }
 
     if (wavefrontMinimal) {
-        float3 color = emissive * intensity;
+        float3 color = emissive;
         PayloadSetColor(payload, color);
         payload.t = RayTCurrent();
         payload.packedNormal = PackNormalOctahedron(N);
@@ -950,9 +950,9 @@ void ClosestHitImpl(inout RayPayload payload,
     // Keep payload color compact and purpose-specific:
     // - regular path rays carry emissive only (direct/indirect handled in raygen)
     // - GI evaluation rays carry local diffuse+emissive estimate
-    float3 color = emissive * intensity;
+    float3 color = emissive;
     if (rayType == RAY_TYPE_GI_EVAL) {
-        color = (Lo + emissive) * intensity;
+        color = Lo + emissive;
     }
     
     // In PT mode, we skip tone mapping here and do it in RayGen after accumulation

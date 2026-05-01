@@ -202,8 +202,8 @@ private:
   float m_solarAzimuth = 0.0f;
   float m_altitude = 200.0f; // meters (0 - 15000)
   float m_skyIntensity = 1.0f; // non-physical sky gain (UI range 0..5)
-  float m_sunIntensity = 1000.0f; //reduce default intensity
-  float m_sunSize = 1.5f; // degrees (actual sun size is ~0.5 deg)
+  float m_sunIntensity = 110000.0f; // clear midday sun illuminance in lux
+  float m_sunSize = 0.53f; // degrees (actual solar angular diameter)
   bool m_physicalCalibrationEnabled = false;
   // when true, importance textures are generated using solid-angle weights
   // (sin(theta)).  The UI allows toggling this for experimentation.

@@ -370,7 +370,6 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
 
     // Setup ambient sky approximation (driven by env/prague sky samples).
     float ambientAutoBoost = 1.0f;
-    float sunExposureComp = 1.0f;
 
     // Fallback/Bias colors (Neutral Grey/White base)
     // We keep these strictly neutral so they don't fight with the sky color
@@ -386,21 +385,16 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
     float2 uvZenith = DirectionToUVRotated(float3(0.0, 1.0, 0.0));
     float2 uvHorizon = DirectionToUVRotated(float3(1.0, 0.0, 0.0));
 
-    // Keep cloud ambient reasonably stable when post-lighting exposure scale
-    // gets very low in physical camera mode.
-    float intensityForCloudAmbient = max(intensity, 1.0f);
     float skyScale = 0.00125f;
 
-    float3 realZenith = envMap.SampleLevel(linearSampler, uvZenith, 8.0).rgb * intensityForCloudAmbient * skyScale;
-    float3 realHorizon = envMap.SampleLevel(linearSampler, uvHorizon, 8.0).rgb * intensityForCloudAmbient * skyScale;
+    float3 realZenith = envMap.SampleLevel(linearSampler, uvZenith, 8.0).rgb * skyScale;
+    float3 realHorizon = envMap.SampleLevel(linearSampler, uvHorizon, 8.0).rgb * skyScale;
 
     float3 avgSky = 0.5f * (realZenith + realHorizon);
     float avgSkyLum = max(1e-4f, dot(avgSky, float3(0.2126f, 0.7152f, 0.0722f)));
     ambientAutoBoost = clamp(0.12f / avgSkyLum, 1.0f, 12.0f);
     realZenith *= ambientAutoBoost;
     realHorizon *= ambientAutoBoost;
-    sunExposureComp = 1.0f / max(0.25f, intensity);
-    
     // Use real sky colors directly.
     kSkyZenith = realZenith;
     kSkyHorizon = realHorizon;
@@ -432,10 +426,11 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
             // Light Energy Calculation
             // 1. Direct Sun (with shadow ray)
             
-            // Stabilize cloud sun term against post-lighting exposure scaling.
+            // Scene-linear cloud sun calibration. Keep this independent of
+            // camera exposure; exposure is applied once in tonemap.
             float sunset = saturate((0.35f - sunElevation) / 0.35f);
             float3 sunsetTint = lerp(float3(1.0f, 1.0f, 1.0f), float3(1.0f, 0.86f, 0.72f), sunset * 0.7f);
-            float3 sunColorScaled = lightColor * (0.000025f * sunExposureComp) * sunsetTint;
+            float3 sunColorScaled = lightColor * 0.00010f * sunsetTint;
 
             float shadowTerm = shadowTermCached;
             if (density > CloudCB.shadowDensityThreshold) {
@@ -513,13 +508,8 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
     if (any(isnan(sum)) || any(isinf(sum))) sum = float3(0.0, 0.0, 0.0);
     if (isnan(transmittance) || isinf(transmittance)) transmittance = 1.0f;
 
-    // Extra lift for dense cloud cores under physically-scaled lighting.
-    float cloudLightBoost = 2.5f;
-#ifdef RAYTRACING_COMMON_H
-    // If post-lighting exposure scale is low, compensate cloud scattering so
-    // clouds don't collapse to black while preserving highlights.
-    cloudLightBoost *= clamp(1.0f / max(0.25f, intensity), 1.0f, 6.0f);
-#endif
+    // Scene-linear lift for dense cloud cores under physically-scaled lighting.
+    float cloudLightBoost = 10.0f;
     sum *= cloudLightBoost;
 
     // Multiple-scattering tail (dense-core weighted, sky/sun tinted).
@@ -527,7 +517,7 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
     float denseCore = pow(saturate(opacity), 1.7f);
     float sunset = saturate((0.35f - sunElevation) / 0.35f);
     float3 msSkyTint = lerp(kSkyHorizon, kSkyZenith, 0.35f);
-    float3 msSunTint = lightColor * (0.000018f * sunExposureComp) *
+    float3 msSunTint = lightColor * 0.000072f *
                        lerp(float3(1.0f, 1.0f, 1.0f), float3(1.0f, 0.85f, 0.70f), sunset * 0.7f);
     float3 msColor = lerp(msSkyTint, msSunTint, 0.38f);
     float msStrength = 0.012f + 0.030f * CloudCB.powderStrength;

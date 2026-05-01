@@ -260,13 +260,13 @@ inline float3 EvaluateWavefrontPrimaryPreview(
     float3 specular = (D * Gv * Gl) * F;
 
     float horizon = saturate(worldNormal.y * 0.5 + 0.5);
-    float3 ambient = diffuseColor * lerp(0.08, 0.24, horizon) * intensity;
+    float3 ambient = diffuseColor * lerp(0.08, 0.24, horizon);
 
     float3 transmissionTint =
         UnpackPayloadTransmissionColor(record.packedTransmission) * transmission;
     float edgeLight = pow(max(1.0 - NdotV, 0.0), 3.0);
     float3 translucentWrap = transmissionTint * (0.12 + 0.38 * edgeLight) *
-                             max(translucency, transmission) * intensity;
+                             max(translucency, transmission);
 
     return WavefrontHitRecordGetColor(record) + ambient + translucentWrap;
 }

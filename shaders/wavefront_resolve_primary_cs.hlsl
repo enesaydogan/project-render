@@ -810,7 +810,7 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
                       translucency;
     }
 
-    return max((emissive + giLighting * ao) * intensity, 0.0);
+    return max(emissive + giLighting * ao, 0.0);
 }
 
 inline GI_Reservoir GenerateWavefrontGiCandidate(float3 hitPos,

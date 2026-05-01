@@ -18,9 +18,10 @@ void Miss(inout RayPayload payload)
     float envLod = isViewLikeRay ? 0.0 : clamp(log2(pathDistance * 0.02) + 0.35, 0.0, 10.0);
     float cloudLod = isViewLikeRay ? 0.0 : min(10.0, envLod + 0.5);
 
-    // Sample environment map and apply camera exposure scale.
+    // Sample scene-linear environment radiance. Camera exposure is applied once
+    // in the DXR tonemap pass after accumulation.
     float3 color = envMap.SampleLevel(linearSampler, uv, envLod).rgb *
-                   GetDxrProceduralSkyBoost() * intensity;
+                   GetDxrProceduralSkyBoost();
 
     // Add Analytic Sun Disc
     float3 L = normalize(lightDir.xyz);
@@ -36,7 +37,7 @@ void Miss(inout RayPayload payload)
          float sunSolidAngle = 2.0f * PI * (1.0f - cosSunRadius);
          float3 sunRadiance = (lightColor.rgb * lightColor.w) / max(sunSolidAngle, 1e-7f);
          const float dxrSunDiscMatchGain = 1.12f;
-         color = sunRadiance * intensity * dxrSunDiscMatchGain;
+         color = sunRadiance * dxrSunDiscMatchGain;
     }
     
     // --- Volumetric Clouds (baked) ---

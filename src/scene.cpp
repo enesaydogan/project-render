@@ -3802,7 +3802,7 @@ void ResetScene() {
   // Ensure camera/exposure defaults are restored when starting a fresh scene
   DxrRenderer::SetAutoExposure(false);
   DxrRenderer::SetPhysicalCameraExposure(true);
-  DxrRenderer::SetPhysicalCameraSettings(100.0f, 1.0f / 30.0f, 2.8f);
+  DxrRenderer::SetPhysicalCameraSettings(100.0f, 1.0f / 125.0f, 16.0f);
   NotifySceneChanged();
 }
 

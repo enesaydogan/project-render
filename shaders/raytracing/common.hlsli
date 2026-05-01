@@ -869,7 +869,7 @@ inline float3 WavefrontEvaluateEnvironmentRadiance(float3 direction,
     float envLod = clamp(log2(pathDistance * 0.02) + 0.35, 0.0, 10.0);
     float2 uv = DirectionToUVRotated(normalize(direction));
     return envMap.SampleLevel(linearSampler, uv, envLod).rgb *
-           GetDxrProceduralSkyBoost() * intensity;
+           GetDxrProceduralSkyBoost();
 }
 
 inline float3 WavefrontEvaluateShadowTaskRadiance(uint packedLightIndex,

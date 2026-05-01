@@ -67,8 +67,8 @@ static float s_exposureCompensation = 1.0f;
 static float s_smoothedExposure = 0.02f; // persistent smoothed exposure
 static bool s_physicalCameraExposure = true;
 static float s_cameraIso = 100.0f;
-static float s_cameraShutterSeconds = 1.0f / 30.0f;
-static float s_cameraApertureFNumber = 2.8f;
+static float s_cameraShutterSeconds = 1.0f / 125.0f;
+static float s_cameraApertureFNumber = 16.0f;
 static DxrRenderer::TonemapAmbientOcclusionMode s_tonemapAoMode =
     DxrRenderer::TonemapAmbientOcclusionMode::Both;
 static float s_tonemapAoIntensity = 0.0f;

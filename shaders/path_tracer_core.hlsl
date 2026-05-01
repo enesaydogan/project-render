@@ -810,7 +810,7 @@ void RayGen()
                 float rrSkyLod = clamp(log2(max(length(rayOrigin - camPos), 1e-3) * 0.02), 0.0, 10.0);
 
                 float3 rrSky = envMap.SampleLevel(linearSampler, skyUv, rrSkyLod).rgb *
-                               GetDxrProceduralSkyBoost() * intensity;
+                               GetDxrProceduralSkyBoost();
                 float3 rrColor = rrSky;
 
                 // Keep sun disc behavior consistent with miss/skybox shading.
@@ -821,7 +821,7 @@ void RayGen()
                     float sunSolidAngle = 2.0f * PI * (1.0f - cosSunRadius);
                     float3 sunRadiance = (lightColor.rgb * lightColor.w) / max(sunSolidAngle, 1e-7f);
                     const float dxrSunDiscMatchGain = 1.12f;
-                    rrColor = sunRadiance * intensity * dxrSunDiscMatchGain;
+                    rrColor = sunRadiance * dxrSunDiscMatchGain;
                 }
 
                 if (cloudRenderingEnabled > 0.5f) {
@@ -1249,9 +1249,9 @@ void RayGen()
                                  (pdfLightEnv * pdfLightEnv +
                                   pdfBrdfEnv * pdfBrdfEnv + 1e-12);
 
-                    // Keep environment NEE exposure-consistent with miss/sky
-                    // shading paths, which already apply camera intensity.
-                    float3 envRadiance = envLs.radiance * intensity;
+                    // Keep environment NEE in scene-linear radiance. Camera
+                    // exposure is applied once in the DXR tonemap pass.
+                    float3 envRadiance = envLs.radiance;
                     float3 envContrib = brdf_env * envRadiance *
                                         (NdotL_env / pdfLightEnv) * misW;
                     envContrib *= kEnvLightingBoost;
@@ -1512,8 +1512,9 @@ void RayGen()
     // Final result with aggressive firefly suppression for Archviz
     if (any(isnan(accumulatedColor)) || any(isinf(accumulatedColor))) accumulatedColor = float3(0,0,0);
 
-    // Radiance must be non-negative. Clamp numerical underflow/instability.
-    float3 finalColor = clamp(accumulatedColor, 0.0, 1000.0);
+    // Radiance must be non-negative, but do not clamp valid HDR daylight here.
+    // Camera exposure and highlight rolloff belong to the tonemap pass.
+    float3 finalColor = max(accumulatedColor, 0.0);
     if (any(isnan(finalColor)) || any(isinf(finalColor))) finalColor = float3(0, 0, 0);
     finalColor *= primaryTonemapAoFactor;
 
@@ -1545,7 +1546,7 @@ void RayGen()
     finalColor = max(finalColor, 0.0);
 
     const float3 kLumaWeights = float3(0.2126, 0.7152, 0.0722);
-    const float kMaxSampleLuminance = 10000.0; //enes  10 x boost for the better sun
+    const float kMaxSampleLuminance = 100000.0;
     float sampleLum = dot(finalColor, kLumaWeights);
     if (sampleLum > kMaxSampleLuminance) {
         finalColor *= (kMaxSampleLuminance / sampleLum);
