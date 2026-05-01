@@ -30,6 +30,7 @@
 #include <QListWidget>
 #include <QPixmap>
 #include <QPushButton>
+#include <QApplication>
 #include <QStyle>
 #include <QStringList>
 #include <QTabWidget>
@@ -171,6 +172,56 @@ QString RoughnessTextureTitleForMaterial(const Asset::Material &material)
 bool MaterialAffectsRtStructure(const Asset::Material &material)
 {
     return MaterialSystem::MaterialAffectsRtStructure(material);
+}
+
+bool IsWidgetBeingEdited(QWidget *widget)
+{
+    if (!widget) {
+        return false;
+    }
+
+    QWidget *focus = QApplication::focusWidget();
+    return widget->hasFocus() ||
+           (focus && (focus == widget || widget->isAncestorOf(focus)));
+}
+
+void SyncLineEditText(QLineEdit *lineEdit, const QString &text)
+{
+    if (!lineEdit || IsWidgetBeingEdited(lineEdit) || lineEdit->text() == text) {
+        return;
+    }
+
+    const QSignalBlocker blocker(lineEdit);
+    lineEdit->setText(text);
+}
+
+void SyncComboBoxIndex(QComboBox *comboBox, int index)
+{
+    if (!comboBox || IsWidgetBeingEdited(comboBox) || comboBox->currentIndex() == index) {
+        return;
+    }
+
+    const QSignalBlocker blocker(comboBox);
+    comboBox->setCurrentIndex(index);
+}
+
+void SyncCheckBoxState(QCheckBox *checkBox, bool checked)
+{
+    if (!checkBox || IsWidgetBeingEdited(checkBox) || checkBox->isChecked() == checked) {
+        return;
+    }
+
+    const QSignalBlocker blocker(checkBox);
+    checkBox->setChecked(checked);
+}
+
+void SyncSliderControlValue(SliderControl *control, double value)
+{
+    if (!control || control->isInteracting()) {
+        return;
+    }
+
+    control->setValue(value);
 }
 
 void ApplyPreset(Asset::Material &m, int presetIdx)
@@ -1425,7 +1476,7 @@ void MaterialEditorPanel::syncInspector()
     Asset::Material &mat = g_loadedMaterials[idx];
     m_inspectorGroup->setEnabled(true);
 
-    m_materialNameEdit->setText(QString::fromUtf8(mat.name));
+    SyncLineEditText(m_materialNameEdit, QString::fromUtf8(mat.name));
     m_materialIdLabel->setText(tr("#%1").arg(idx));
     m_pasteButton->setEnabled(static_cast<bool>(m_clipboard));
 
@@ -1438,60 +1489,64 @@ void MaterialEditorPanel::syncInspectorMaterialState(const Asset::Material &mat,
                                                      bool refreshTextureUi)
 {
     setColorButton(m_baseColorButton, getColorFromMaterial(mat.diffuseColor));
-    m_workflowCombo->setCurrentIndex(static_cast<int>(std::clamp(mat.workflow, 0u, 1u)));
+    SyncComboBoxIndex(m_workflowCombo,
+                      static_cast<int>(std::clamp(mat.workflow, 0u, 1u)));
     updateWorkflowUi(mat);
 
-    m_roughness->setValue(IsReflectionGlossinessWorkflow(mat)
-                              ? (1.0f - mat.roughness)
-                              : mat.roughness);
-    m_metalness->setValue(IsReflectionGlossinessWorkflow(mat)
-                              ? mat.specularWeight
-                              : mat.metalness);
-    m_specularWeight->setValue(mat.specularWeight);
+    SyncSliderControlValue(m_roughness,
+                           IsReflectionGlossinessWorkflow(mat)
+                               ? (1.0f - mat.roughness)
+                               : mat.roughness);
+    SyncSliderControlValue(m_metalness,
+                           IsReflectionGlossinessWorkflow(mat)
+                               ? mat.specularWeight
+                               : mat.metalness);
+    SyncSliderControlValue(m_specularWeight, mat.specularWeight);
     setColorButton(m_specularColorButton, getColorFromMaterial(mat.specularColor));
-    m_ior->setValue(mat.ior);
-    m_transmission->setValue(mat.transmissionWeight);
+    SyncSliderControlValue(m_ior, mat.ior);
+    SyncSliderControlValue(m_transmission, mat.transmissionWeight);
     setColorButton(m_transmissionColorButton, getColorFromMaterial(mat.transmissionColor));
-    m_thickness->setValue(mat.thickness);
-    m_attenuationDistance->setValue(mat.attenuationDistance);
-    m_coatWeight->setValue(mat.coatWeight);
-    m_coatRoughness->setValue(mat.coatRoughness);
-    m_coatIor->setValue(mat.coatIor);
-    m_translucency->setValue(mat.translucency);
-    m_anisotropy->setValue(mat.anisotropy);
-    m_anisotropyRotation->setValue(mat.anisotropyRotation);
-    m_sheenWeight->setValue(mat.sheenWeight);
+    SyncSliderControlValue(m_thickness, mat.thickness);
+    SyncSliderControlValue(m_attenuationDistance, mat.attenuationDistance);
+    SyncSliderControlValue(m_coatWeight, mat.coatWeight);
+    SyncSliderControlValue(m_coatRoughness, mat.coatRoughness);
+    SyncSliderControlValue(m_coatIor, mat.coatIor);
+    SyncSliderControlValue(m_translucency, mat.translucency);
+    SyncSliderControlValue(m_anisotropy, mat.anisotropy);
+    SyncSliderControlValue(m_anisotropyRotation, mat.anisotropyRotation);
+    SyncSliderControlValue(m_sheenWeight, mat.sheenWeight);
     setColorButton(m_sheenColorButton, getColorFromMaterial(mat.sheenColor));
-    m_thinWalled->setChecked(mat.thinWalled > 0.5f);
+    SyncCheckBoxState(m_thinWalled, mat.thinWalled > 0.5f);
 
-    m_grassEnabled->setChecked(mat.isGrass);
+    SyncCheckBoxState(m_grassEnabled, mat.isGrass);
     setColorButton(m_grassColorButton, getColorFromMaterial(mat.grassColor));
-    m_grassBladeSize->setValue(mat.grassBladeSize);
-    m_grassBladeCount->setValue(mat.grassBladeCount);
-    m_grassBladeVariation->setValue(mat.grassBladeVariation);
+    SyncSliderControlValue(m_grassBladeSize, mat.grassBladeSize);
+    SyncSliderControlValue(m_grassBladeCount, mat.grassBladeCount);
+    SyncSliderControlValue(m_grassBladeVariation, mat.grassBladeVariation);
     m_grassHint->setVisible(!mat.isGrass);
     m_grassColorButton->setEnabled(mat.isGrass);
     m_grassBladeSize->setEnabled(mat.isGrass);
     m_grassBladeCount->setEnabled(mat.isGrass);
     m_grassBladeVariation->setEnabled(mat.isGrass);
 
-    m_uvScaleX->setValue(mat.uvScale[0]);
-    m_uvScaleY->setValue(mat.uvScale[1]);
-    m_uvOffsetX->setValue(mat.uvOffset[0]);
-    m_uvOffsetY->setValue(mat.uvOffset[1]);
-    m_triPlanarEnabled->setChecked(mat.triPlanarEnabled > 0.5f);
-    m_triPlanarScale->setValue(mat.triPlanarScale);
-    m_triPlanarSharpness->setValue(mat.triPlanarSharpness);
-    m_triPlanarNormalStrength->setValue(mat.triPlanarNormalStrength);
-    m_triPlanarRotationX->setValue(mat.triPlanarRotationDegrees[0]);
-    m_triPlanarRotationY->setValue(mat.triPlanarRotationDegrees[1]);
-    m_triPlanarRotationZ->setValue(mat.triPlanarRotationDegrees[2]);
-    m_triPlanarVariationMode->setCurrentIndex(
+    SyncSliderControlValue(m_uvScaleX, mat.uvScale[0]);
+    SyncSliderControlValue(m_uvScaleY, mat.uvScale[1]);
+    SyncSliderControlValue(m_uvOffsetX, mat.uvOffset[0]);
+    SyncSliderControlValue(m_uvOffsetY, mat.uvOffset[1]);
+    SyncCheckBoxState(m_triPlanarEnabled, mat.triPlanarEnabled > 0.5f);
+    SyncSliderControlValue(m_triPlanarScale, mat.triPlanarScale);
+    SyncSliderControlValue(m_triPlanarSharpness, mat.triPlanarSharpness);
+    SyncSliderControlValue(m_triPlanarNormalStrength, mat.triPlanarNormalStrength);
+    SyncSliderControlValue(m_triPlanarRotationX, mat.triPlanarRotationDegrees[0]);
+    SyncSliderControlValue(m_triPlanarRotationY, mat.triPlanarRotationDegrees[1]);
+    SyncSliderControlValue(m_triPlanarRotationZ, mat.triPlanarRotationDegrees[2]);
+    SyncComboBoxIndex(m_triPlanarVariationMode,
         static_cast<int>(std::clamp(mat.triPlanarVariationMode, 0u, 2u)));
-    m_triPlanarVariationOffset->setValue(mat.triPlanarVariationOffset);
-    m_stochasticTilingRotation->setValue(mat.stochasticTilingRotationDegrees);
-    m_stochasticTilingMirror->setChecked(mat.stochasticTilingMirror);
-    m_stochasticTilingColorVariation->setValue(mat.stochasticTilingColorVariation);
+    SyncSliderControlValue(m_triPlanarVariationOffset, mat.triPlanarVariationOffset);
+    SyncSliderControlValue(m_stochasticTilingRotation, mat.stochasticTilingRotationDegrees);
+    SyncCheckBoxState(m_stochasticTilingMirror, mat.stochasticTilingMirror);
+    SyncSliderControlValue(m_stochasticTilingColorVariation,
+                           mat.stochasticTilingColorVariation);
     const bool triPlanarActive = mat.triPlanarEnabled > 0.5f;
     const bool stochasticActive =
         mat.triPlanarVariationMode != Asset::Material::kTriPlanarVariationOff;
@@ -1504,11 +1559,11 @@ void MaterialEditorPanel::syncInspectorMaterialState(const Asset::Material &mat,
     m_stochasticTilingColorVariation->setEnabled(stochasticActive);
 
     setColorButton(m_emissiveColorButton, getColorFromMaterial(mat.emissiveColor));
-    m_emissiveIntensity->setValue(mat.emissiveIntensity);
+    SyncSliderControlValue(m_emissiveIntensity, mat.emissiveIntensity);
 
-    m_doubleSided->setChecked(mat.doubleSided);
-    m_alphaMode->setCurrentIndex(AlphaModeIndex(mat.alphaMode));
-    m_alphaCutoff->setValue(mat.alphaCutoff);
+    SyncCheckBoxState(m_doubleSided, mat.doubleSided);
+    SyncComboBoxIndex(m_alphaMode, AlphaModeIndex(mat.alphaMode));
+    SyncSliderControlValue(m_alphaCutoff, mat.alphaCutoff);
     m_alphaCutoff->setEnabled(mat.alphaMode == "MASK");
 
     if (refreshTextureUi) {
@@ -1634,7 +1689,7 @@ void MaterialEditorPanel::updateTextureOptions()
         if (comboIndex < 0 || comboIndex >= widgets.combo->count()) {
             comboIndex = 0;
         }
-        widgets.combo->setCurrentIndex(comboIndex);
+        SyncComboBoxIndex(widgets.combo, comboIndex);
     }
 }
 
@@ -1880,7 +1935,9 @@ void MaterialEditorPanel::updateTextureSlotUi(TextureSlot slot, const Asset::Mat
         return;
     }
     const int texIdx = textureIndexForSlot(mat, slot);
-    widgets.amount->setValue(MaterialSystem::GetTextureAmount(
-        mat, static_cast<MaterialSystem::TextureSlot>(slot)));
+    SyncSliderControlValue(
+        widgets.amount,
+        MaterialSystem::GetTextureAmount(
+            mat, static_cast<MaterialSystem::TextureSlot>(slot)));
     widgets.amount->setEnabled(texIdx >= 0);
 }

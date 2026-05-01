@@ -2,6 +2,8 @@
 
 #include <QWidget>
 
+#include <cstddef>
+
 class QLabel;
 class QProgressBar;
 class QPushButton;
@@ -14,10 +16,12 @@ class ScenePanel : public QWidget
 
 public:
     explicit ScenePanel(QWidget *parent = nullptr);
+    ~ScenePanel() override;
 
 private:
     void createUi();
     void refreshSceneList();
+    void scheduleRefresh();
     int selectedNodeIndex() const;
 
     QTreeWidget *m_nodeList = nullptr;
@@ -31,4 +35,6 @@ private:
     QPushButton *m_deleteButton = nullptr;
     QTimer *m_refreshTimer = nullptr;
     bool m_syncing = false;
+    bool m_refreshQueued = false;
+    size_t m_sceneChangeListenerId = 0;
 };

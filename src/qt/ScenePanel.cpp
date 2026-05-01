@@ -6,6 +6,7 @@
 #include <QHBoxLayout>
 #include <QFileInfo>
 #include <QLabel>
+#include <QMetaObject>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QTimer>
@@ -14,12 +15,18 @@
 #include <QVBoxLayout>
 
 #include <functional>
+#include <unordered_set>
 
 extern HWND g_hwnd;
 
 namespace {
 
 constexpr int kNodeIndexRole = Qt::UserRole;
+
+struct TreeUiState {
+    bool liveSyncExpanded = true;
+    std::unordered_set<int> expandedNodeIndices;
+};
 
 QString BuildNodeLabel(const Scene::Node &node)
 {
@@ -29,6 +36,49 @@ QString BuildNodeLabel(const Scene::Node &node)
         label += QObject::tr(" [hidden]");
     }
     return label;
+}
+
+void CaptureTreeItemState(const QTreeWidgetItem *item, TreeUiState *state)
+{
+    if (!item || !state) {
+        return;
+    }
+
+    const QVariant nodeIndexData = item->data(0, kNodeIndexRole);
+    if (nodeIndexData.isValid() && item->isExpanded()) {
+        state->expandedNodeIndices.insert(nodeIndexData.toInt());
+    }
+
+    for (int childIndex = 0; childIndex < item->childCount(); ++childIndex) {
+        CaptureTreeItemState(item->child(childIndex), state);
+    }
+}
+
+TreeUiState CaptureTreeUiState(const QTreeWidget *treeWidget)
+{
+    TreeUiState state;
+    if (!treeWidget) {
+        return state;
+    }
+
+    for (int topLevelIndex = 0; topLevelIndex < treeWidget->topLevelItemCount(); ++topLevelIndex) {
+        const QTreeWidgetItem *item = treeWidget->topLevelItem(topLevelIndex);
+        if (!item) {
+            continue;
+        }
+
+        if (item->data(0, kNodeIndexRole).isValid()) {
+            CaptureTreeItemState(item, &state);
+            continue;
+        }
+
+        if (item->text(0) == QObject::tr("Live Sync")) {
+            state.liveSyncExpanded = item->isExpanded();
+            CaptureTreeItemState(item, &state);
+        }
+    }
+
+    return state;
 }
 
 }
@@ -41,9 +91,25 @@ ScenePanel::ScenePanel(QWidget *parent)
 
     m_refreshTimer = new QTimer(this);
     connect(m_refreshTimer, &QTimer::timeout, this, [this]() {
-        refreshSceneList();
+        if (IsSceneIoJobActive() || Scene::IsImportInProgress() ||
+            (m_importProgress && m_importProgress->isVisible())) {
+            refreshSceneList();
+        }
     });
-    m_refreshTimer->start(500);
+    m_refreshTimer->start(200);
+
+    m_sceneChangeListenerId = Scene::RegisterChangeListener([this]() {
+        QMetaObject::invokeMethod(this, [this]() {
+            scheduleRefresh();
+        }, Qt::QueuedConnection);
+    });
+}
+
+ScenePanel::~ScenePanel()
+{
+    if (m_sceneChangeListenerId != 0) {
+        Scene::UnregisterChangeListener(m_sceneChangeListenerId);
+    }
 }
 
 void ScenePanel::createUi()
@@ -154,8 +220,21 @@ int ScenePanel::selectedNodeIndex() const
     return nodeIndexData.isValid() ? nodeIndexData.toInt() : -1;
 }
 
+void ScenePanel::scheduleRefresh()
+{
+    if (m_refreshQueued) {
+        return;
+    }
+
+    m_refreshQueued = true;
+    QMetaObject::invokeMethod(this, [this]() {
+        refreshSceneList();
+    }, Qt::QueuedConnection);
+}
+
 void ScenePanel::refreshSceneList()
 {
+    m_refreshQueued = false;
     m_syncing = true;
 
     if (IsSceneIoJobActive()) {
@@ -195,6 +274,7 @@ void ScenePanel::refreshSceneList()
     }
 
     const auto &nodes = Scene::GetNodes();
+    const TreeUiState treeState = CaptureTreeUiState(m_nodeList);
     int selectedRow = -1;
     for (size_t index = 0; index < nodes.size(); ++index) {
         if (nodes[index].selected) {
@@ -207,7 +287,7 @@ void ScenePanel::refreshSceneList()
     auto *liveSyncRoot = new QTreeWidgetItem(m_nodeList);
     liveSyncRoot->setText(0, tr("Live Sync"));
     liveSyncRoot->setFlags(liveSyncRoot->flags() & ~Qt::ItemIsSelectable);
-    liveSyncRoot->setExpanded(true);
+    liveSyncRoot->setExpanded(treeState.liveSyncExpanded);
 
     QTreeWidgetItem *selectedItem = nullptr;
     auto isGroupRoot = [&](size_t index, bool liveLinkGroup) {
@@ -234,6 +314,10 @@ void ScenePanel::refreshSceneList()
 
         item->setText(0, BuildNodeLabel(node));
         item->setData(0, kNodeIndexRole, static_cast<int>(index));
+        if (treeState.expandedNodeIndices.find(static_cast<int>(index)) !=
+            treeState.expandedNodeIndices.end()) {
+            item->setExpanded(true);
+        }
         if (static_cast<int>(index) == selectedRow) {
             selectedItem = item;
         }
@@ -259,6 +343,10 @@ void ScenePanel::refreshSceneList()
     }
 
     if (selectedItem) {
+        for (QTreeWidgetItem *ancestor = selectedItem->parent(); ancestor;
+             ancestor = ancestor->parent()) {
+            ancestor->setExpanded(true);
+        }
         m_nodeList->setCurrentItem(selectedItem);
     } else {
         m_nodeList->clearSelection();
