@@ -3534,9 +3534,11 @@ int PickMaterialAtCursor(float screenWidth, float screenHeight) {
   };
 
   float minWorldDist2 = FLT_MAX;
+  int hitNode = -1;
   int hitMaterial = -1;
 
-  for (const Node &node : s_nodes) {
+  for (size_t nodeIndex = 0; nodeIndex < s_nodes.size(); ++nodeIndex) {
+    const Node &node = s_nodes[nodeIndex];
     if (!node.visible) {
       continue;
     }
@@ -3583,9 +3585,14 @@ int PickMaterialAtCursor(float screenWidth, float screenHeight) {
       const float worldDist2 = dx * dx + dy * dy + dz * dz;
       if (worldDist2 < minWorldDist2) {
         minWorldDist2 = worldDist2;
+        hitNode = static_cast<int>(nodeIndex);
         hitMaterial = mesh.materialIndex;
       }
     }
+  }
+
+  if (hitNode >= 0) {
+    SelectNode(static_cast<size_t>(hitNode));
   }
 
   return hitMaterial;

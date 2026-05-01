@@ -3301,13 +3301,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     g_cameraData.frameCount = (float)DxrRenderer::GetDisplayedSampleCount();
     const bool fileIblActive =
         (IBLManager::Get().GetIBLSource() == IBLManager::IBLSource::File);
-    const bool proceduralSkyActive =
-      (IBLManager::Get().GetIBLSource() ==
-       IBLManager::IBLSource::PragueSkyModel);
     const bool effectiveCloudRendering =
         g_cloudRenderingEnabled && !fileIblActive;
     g_cameraData.cloudRenderingEnabled = effectiveCloudRendering ? 1.0f : 0.0f;
-    g_cameraData.dxrProceduralSkyBoost = proceduralSkyActive ? 2.7f : 1.0f;
+    g_cameraData.dxrProceduralSkyBoost = 1.0f;
     UpdateCameraCB();
 
     // Update Cloud Manager (uploads changed params to GPU)
