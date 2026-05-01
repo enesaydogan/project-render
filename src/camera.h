@@ -42,7 +42,7 @@ struct CameraCB {
   float prevFarZ;
   float noiseThreshold;
   float useAdaptiveSampling;
-  float debugVisualizationMode;
+  float debugVisualizationMode; // 0=None, 1=NoiseMap, 2=ClayMaterialOverride
   float cloudRenderingEnabled;
   float iblRotationDegrees;
   // When true we build/sample the environment CDF using solid-angle weighting

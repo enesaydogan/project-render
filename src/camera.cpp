@@ -105,6 +105,7 @@ static bool CameraChanged(const CameraCB &a, const CameraCB &b) {
       a.farZ != b.farZ)
     return true;
   if (a.debugMode != b.debugMode ||
+      a.debugVisualizationMode != b.debugVisualizationMode ||
       a.maxSpecularBounces != b.maxSpecularBounces ||
       a.maxRefractiveBounces != b.maxRefractiveBounces ||
       a.maxGIBounces != b.maxGIBounces || a.maxSPP != b.maxSPP)

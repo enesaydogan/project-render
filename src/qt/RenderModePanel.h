@@ -35,6 +35,7 @@ private:
     QSpinBox *m_maxSpp = nullptr;
     QCheckBox *m_adaptiveSampling = nullptr;
     QDoubleSpinBox *m_targetNoise = nullptr;
+    QCheckBox *m_clayMode = nullptr;
 
     QComboBox *m_dlssMode = nullptr;
     QComboBox *m_dlssQuality = nullptr;

@@ -146,7 +146,7 @@ cbuffer Camera : register(b0)
     float prevFarZ;
     float noiseThreshold;
     float useAdaptiveSampling;
-    float debugVisualizationMode; // 0=None, 1=NoiseMap
+    float debugVisualizationMode; // 0=None, 1=NoiseMap, 2=ClayMaterialOverride
     float cloudRenderingEnabled;
     float iblRotationDegrees;
     // 1 = compute env map CDF / pdf in solid-angle measure (luminance*sin(theta)).

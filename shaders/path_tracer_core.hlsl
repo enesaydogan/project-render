@@ -402,7 +402,8 @@ void RayGen()
     // Keep environment transport in the same energy space as the sky model.
     // Extra fill here washes out architectural shadow contrast.
     const float kEnvLightingBoost = 1.0;
-    const bool debugViewActive = (SHADER_DEBUG_MODE > 0.0) || (SHADER_DEBUG_VIS_MODE == 1.0);
+    const bool debugViewActive =
+        (SHADER_DEBUG_MODE > 0.0) || (SHADER_DEBUG_VIS_MODE == 1.0);
 
     const float2 kInvalidMvec = float2(-1e6, -1e6);
     float2 currScreen = float2(launchIndex.xy) + 0.5;

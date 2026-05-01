@@ -652,10 +652,13 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
     const float textureLod =
         clamp(log2(max(length(surfacePos - camPos), 1.0e-3) * 0.02) + 0.35,
               0.0, 10.0);
+    const bool clayMode =
+        (SHADER_DEBUG_VIS_MODE > 1.5) && (SHADER_DEBUG_VIS_MODE < 2.5);
 
-    float3 baseColor = saturate(material.baseColor_opacity.rgb);
-    float opacity = saturate(material.baseColor_opacity.a);
-    if (texDiff >= 0) {
+    float3 baseColor = clayMode ? float3(0.5, 0.5, 0.5)
+                                : saturate(material.baseColor_opacity.rgb);
+    float opacity = clayMode ? 1.0 : saturate(material.baseColor_opacity.a);
+    if (!clayMode && texDiff >= 0) {
         float4 diffSample = triPlanar
             ? WavefrontGiSampleTriPlanar(texDiff, surfacePos, worldNormal,
                                          triScale, triSharp, mappingVariation,
@@ -668,7 +671,7 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
                                                 texWeight0.x);
         opacity *= WavefrontGiBlendTextureScalar(diffSample.a, texWeight0.x);
     }
-    if (texOpacity >= 0) {
+    if (!clayMode && texOpacity >= 0) {
         float opacitySample = triPlanar
             ? WavefrontGiSampleTriPlanar(texOpacity, surfacePos, worldNormal,
                                          triScale, triSharp, mappingVariation,
@@ -681,9 +684,9 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
                                                  texWeight1.w);
     }
 
-    float metallic = saturate(material.pbrParams_flags.x);
-    float roughness = max(saturate(material.pbrParams_flags.y), 0.001);
-    if (texMR >= 0) {
+    float metallic = clayMode ? 0.0 : saturate(material.pbrParams_flags.x);
+    float roughness = clayMode ? 1.0 : max(saturate(material.pbrParams_flags.y), 0.001);
+    if (!clayMode && texMR >= 0) {
         float4 mrSample = triPlanar
             ? WavefrontGiSampleTriPlanar(texMR, surfacePos, worldNormal,
                                          triScale, triSharp, mappingVariation,
@@ -711,14 +714,21 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
     if (materialExtra.shadingParams.z < 0.0) {
         diffuseAlbedo *= opacity;
     }
+    if (clayMode) {
+        transmission = 0.0;
+        diffuseAlbedo = baseColor;
+    }
 
-    float clearcoat = saturate(coatLayer.x);
-    float3 normal = WavefrontGiSampleNormalMap(
-        texNorm, uv, surfacePos, worldNormal, worldTangent,
-        texWeight1.x, triPlanar, triScale, triSharp, triNormalStrength,
-        mappingVariation, triRotation, objectOrigin, primitiveIndex,
-        textureLod);
-    if (clearcoat > 0.001 && texCoatNormal >= 0 && lobeParams.x > 1.0e-4) {
+    float clearcoat = clayMode ? 0.0 : saturate(coatLayer.x);
+    float3 normal = clayMode
+        ? worldNormal
+        : WavefrontGiSampleNormalMap(
+              texNorm, uv, surfacePos, worldNormal, worldTangent,
+              texWeight1.x, triPlanar, triScale, triSharp, triNormalStrength,
+              mappingVariation, triRotation, objectOrigin, primitiveIndex,
+              textureLod);
+    if (!clayMode && clearcoat > 0.001 && texCoatNormal >= 0 &&
+        lobeParams.x > 1.0e-4) {
         float3 coatNormal = WavefrontGiSampleNormalMap(
             texCoatNormal, uv, surfacePos, worldNormal, worldTangent,
             lobeParams.x, triPlanar, triScale, triSharp, triNormalStrength,
@@ -731,7 +741,7 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
     }
 
     float ao = 1.0;
-    if (texOcc >= 0) {
+    if (!clayMode && texOcc >= 0) {
         float aoSample = triPlanar
             ? WavefrontGiSampleTriPlanar(texOcc, surfacePos, worldNormal,
                                          triScale, triSharp, mappingVariation,
@@ -744,9 +754,10 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
     }
 
     float3 emissive =
-        material.emissive_ior.rgb *
-        (5.0 * max(0.0, materialExtra.shadingParams.x));
-    if (texEmis >= 0) {
+        clayMode ? float3(0.0, 0.0, 0.0)
+                 : material.emissive_ior.rgb *
+                       (5.0 * max(0.0, materialExtra.shadingParams.x));
+    if (!clayMode && texEmis >= 0) {
         float3 e = triPlanar
             ? WavefrontGiSampleTriPlanar(texEmis, surfacePos, worldNormal,
                                          triScale, triSharp, mappingVariation,
@@ -759,8 +770,8 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
                                                texWeight1.z);
     }
 
-    float thickness = max(volumeParams.x, 0.0);
-    if (texThickness >= 0) {
+    float thickness = clayMode ? 0.0 : max(volumeParams.x, 0.0);
+    if (!clayMode && texThickness >= 0) {
         float thicknessSample = triPlanar
             ? WavefrontGiSampleTriPlanar(texThickness, surfacePos, worldNormal,
                                          triScale, triSharp, mappingVariation,
@@ -774,7 +785,7 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
     }
 
     float3 specularColor = saturate(specularColorParams.rgb);
-    if (texSpecular >= 0) {
+    if (!clayMode && texSpecular >= 0) {
         float3 specSample = triPlanar
             ? WavefrontGiSampleTriPlanar(texSpecular, surfacePos, worldNormal,
                                          triScale, triSharp, mappingVariation,
@@ -788,7 +799,7 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
     }
 
     float ior = max(material.emissive_ior.w, 1.0);
-    float specularWeight = saturate(materialExtra.shadingParams.y);
+    float specularWeight = clayMode ? 0.0 : saturate(materialExtra.shadingParams.y);
     float3 f0 = ComputeWavefrontSurfaceF0(baseColor, metallic, ior,
                                           specularWeight, specularColor);
     float3 viewDir = normalize(-incomingDirection);
@@ -803,7 +814,7 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
             normal, viewDir, sun.direction, sun.radiance);
     }
     float3 giLighting = direct;
-    float translucency = saturate(coatLayer.w);
+    float translucency = clayMode ? 0.0 : saturate(coatLayer.w);
     if (translucency > 0.001) {
         float backNdotL = saturate(dot(-normal, sun.direction));
         giLighting += (diffuseAlbedo / PI) * sun.radiance * backNdotL *

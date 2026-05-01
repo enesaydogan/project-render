@@ -5694,7 +5694,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   const UINT currSpp =
       rrActive ? s_rrStillFrameSpp : s_accumulation.GetFrameCount();
   const bool debugViewActive = (g_cameraData.debugMode != 0.0f) ||
-                               (g_cameraData.debugVisualizationMode != 0.0f);
+                               (g_cameraData.debugVisualizationMode == 1.0f);
 
   // Global stop by measured noise with hysteresis to avoid stop/resume flicker.
   bool isConverged = false;

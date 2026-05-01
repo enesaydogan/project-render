@@ -662,6 +662,26 @@ void ClosestHitImpl(inout RayPayload payload,
     float triNormStrength = max(triP.w, 0.0);
     float textureLod = CalculateTextureLod(rayType, P);
     bool dominantTriPlanar = triPlanar && (rayType != RAY_TYPE_PRIMARY);
+    const bool clayMode =
+        (SHADER_DEBUG_VIS_MODE > 1.5) && (SHADER_DEBUG_VIS_MODE < 2.5);
+    if (clayMode) {
+        texDiff = -1;
+        texNorm = -1;
+        texMR = -1;
+        texOcc = -1;
+        texEmis = -1;
+        texOpacity = -1;
+        texSpecular = -1;
+        texThickness = -1;
+        texCoatNormal = -1;
+        triPlanar = false;
+        dominantTriPlanar = false;
+        matFlags = 0u;
+        alphaCutoff = 0.5;
+        emissiveIntensity = 0.0;
+        specularWeight = 0.0;
+        isGrassMaterial = false;
+    }
 
     // Sample textures
     float3 BaseColor = diffColor.rgb;
@@ -716,6 +736,18 @@ void ClosestHitImpl(inout RayPayload payload,
     float grassDirectContact = 1.0;
     float grassAmbientContact = 1.0;
     float3 grassSoilBounce = float3(0.0, 0.0, 0.0);
+
+    if (clayMode) {
+        BaseColor = float3(0.5, 0.5, 0.5);
+        opacity = 1.0;
+        metalness = 0.0;
+        roughness = 1.0;
+        transmission = 0.0;
+        DiffuseAlbedo = BaseColor;
+        clearcoat = 0.0;
+        clearcoatRoughness = 1.0;
+        transmissionColor = float3(1.0, 1.0, 1.0);
+    }
 
     if (isGrassMaterial) {
         if (!triPlanar && texDiff >= 0 && grassTlasStartIndex != 0xFFFFFFFFu &&
@@ -830,8 +862,8 @@ void ClosestHitImpl(inout RayPayload payload,
     if (mode == 7) { PayloadSetColor(payload, float3(ao, ao, ao)); payload.t = RayTCurrent(); return; }
 
     // Archviz extensions
-    float translucency = saturate(arch0.w);
-    float thickness = max(volumeParams.x, 0.0);
+    float translucency = clayMode ? 0.0 : saturate(arch0.w);
+    float thickness = clayMode ? 0.0 : max(volumeParams.x, 0.0);
     if (texThickness >= 0) {
         float thicknessSample = triPlanar ? SampleTriPlanar(texThickness, P, worldNormal, triScale, triSharp, mappingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar).r
                                           : SampleUvTexture(texThickness, uv, objectOrigin, worldNormal, mappingVariation, triRotation, textureLod, false).r;
@@ -851,8 +883,9 @@ void ClosestHitImpl(inout RayPayload payload,
         payload.packedNormal = PackNormalOctahedron(N);
         payload.packedAlbedo = PackPayloadAlbedoCoat(BaseColor, clearcoat);
         PayloadSetCoatRoughness(payload, clearcoatRoughness);
-        bool thinWalled = ((matFlags & MATERIAL_FLAG_THIN_WALLED) != 0) ||
-                          (arch0.z > 0.5);
+        bool thinWalled = !clayMode &&
+                          (((matFlags & MATERIAL_FLAG_THIN_WALLED) != 0) ||
+                           (arch0.z > 0.5));
         payload.packedSurface =
             PackPayloadSurface(roughness, metalness, transmission, translucency);
         payload.packedIorType =
@@ -961,7 +994,9 @@ void ClosestHitImpl(inout RayPayload payload,
     payload.packedNormal = PackNormalOctahedron(N);
     payload.packedAlbedo = PackPayloadAlbedoCoat(BaseColor, clearcoat);
     PayloadSetCoatRoughness(payload, clearcoatRoughness);
-    bool thinWalled = ((matFlags & MATERIAL_FLAG_THIN_WALLED) != 0) || (arch0.z > 0.5);
+    bool thinWalled = !clayMode &&
+                      (((matFlags & MATERIAL_FLAG_THIN_WALLED) != 0) ||
+                       (arch0.z > 0.5));
     payload.packedSurface = PackPayloadSurface(roughness, metalness, transmission, translucency);
     payload.packedIorType = PackPayloadIorType(emisColor.w, rayType, thinWalled, specularWeight);
     payload.packedTransmission = PackPayloadTransmissionColor(effectiveTransmissionColor);
@@ -994,6 +1029,10 @@ void AnyHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes a
     uint matFlags = asuint(mat.pbrParams_flags.w);
     bool alphaTested = (matFlags & MATERIAL_FLAG_ALPHA_TESTED) != 0;
     float alphaCutoff = matExtra.shadingParams.z;
+
+    if ((SHADER_DEBUG_VIS_MODE > 1.5) && (SHADER_DEBUG_VIS_MODE < 2.5)) {
+        return;
+    }
 
     if (alphaTested) {
         uint primIndex = PrimitiveIndex();

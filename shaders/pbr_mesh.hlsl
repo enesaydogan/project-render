@@ -1056,35 +1056,42 @@ PSOutput PSMainMesh(PSInputMesh input)
     float triScale = max(triPlanarParams.y, 1e-6);
     float triSharp = max(triPlanarParams.z, 0.01);
     float triNormStrength = max(triPlanarParams.w, 0.0);
+    const bool clayMode =
+        (debugVisualizationMode > 1.5) && (debugVisualizationMode < 2.5);
 
     float3 BaseColor = diffuseColor.rgb;
     float alpha = diffuseColor.a;
-    if (textureIndices.x >= 0) {
+    if (!clayMode && textureIndices.x >= 0) {
         float4 diffSample = triPlanar ? SampleTriPlanar(textureIndices.x, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos)
                                       : SampleUvTexture(textureIndices.x, uv, objectOrigin, worldNormal, true);
         BaseColor *= BlendTextureRgb(sRGBToLinear(diffSample.rgb), textureWeight0.x);
         alpha *= BlendTextureScalar(diffSample.a, textureWeight0.x);
     }
-    if (textureIndices.y >= 0) {
+    if (!clayMode && textureIndices.y >= 0) {
         float opacitySample = triPlanar ? SampleTriPlanar(textureIndices.y, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos).r
                                         : SampleUvTexture(textureIndices.y, uv, objectOrigin, worldNormal, false).r;
         alpha *= BlendTextureScalar(opacitySample, textureWeight1.w);
     }
 
     float alphaCutoff = extraParams.y;
-    bool alphaMasked = extraParams.z > 0.5;
-    bool isGrassMaterial = extraParams.w > 0.5;
+    bool alphaMasked = !clayMode && extraParams.z > 0.5;
+    bool isGrassMaterial = !clayMode && extraParams.w > 0.5;
+    if (clayMode) {
+        BaseColor = float3(0.5, 0.5, 0.5);
+        alpha = 1.0;
+        triPlanar = false;
+    }
     if (alphaMasked && alphaCutoff >= 0.0) {
         clip(alpha - alphaCutoff);
     }
 
-    float roughness = saturate(surfaceParams.x);
-    float metalness = saturate(surfaceParams.y);
-    float transmission = saturate(transmissionParams.a) * (1.0 - metalness);
+    float roughness = clayMode ? 1.0 : saturate(surfaceParams.x);
+    float metalness = clayMode ? 0.0 : saturate(surfaceParams.y);
+    float transmission = clayMode ? 0.0 : saturate(transmissionParams.a) * (1.0 - metalness);
     
     // Metal/Roughness Logic: factor * texture
     // G = Roughness, B = Metalness
-    if (emissiveAndPad.z >= 0) {
+    if (!clayMode && emissiveAndPad.z >= 0) {
         float4 mrSample = triPlanar ? SampleTriPlanar(emissiveAndPad.z, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos)
                                     : SampleUvTexture(emissiveAndPad.z, uv, objectOrigin, worldNormal, false);
 
@@ -1097,9 +1104,9 @@ PSOutput PSMainMesh(PSInputMesh input)
 
     // OpenPBR subset: dielectric F0 from IOR scaled by specular weight.
     float ior = max(emissiveColor.w, 1.0);
-    float specularWeight = saturate(surfaceParams.z);
+    float specularWeight = clayMode ? 0.0 : saturate(surfaceParams.z);
     float3 specularTint = saturate(specularColor.rgb);
-    if (textureIndices.w >= 0) {
+    if (!clayMode && textureIndices.w >= 0) {
         float3 specSample = triPlanar ? SampleTriPlanar(textureIndices.w, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos).rgb
                                       : SampleUvTexture(textureIndices.w, uv, objectOrigin, worldNormal, false).rgb;
         specularTint *= BlendTextureRgb(sRGBToLinear(specSample), textureWeight2.z);
@@ -1111,17 +1118,20 @@ PSOutput PSMainMesh(PSInputMesh input)
     float3 DiffuseAlbedo = BaseColor * (1.0 - metalness) * (1.0 - transmission);
     
     // Normal
-    float3 N = triPlanar ? SampleTriPlanarNormal(textureIndices.z, worldPos, worldNormal, triScale, triSharp, triNormStrength, textureWeight1.x, objectOrigin, objectPos)
-                         : GetNormalFromMap(uv, worldNormal, input.tangent, textureIndices.z, textureWeight1.x, objectOrigin);
-    if (coatLayerParams.x > 0.001 && textureIndices2.x >= 0 && lobeParams.w > 1.0e-4) {
+    float3 N = clayMode
+        ? worldNormal
+        : (triPlanar ? SampleTriPlanarNormal(textureIndices.z, worldPos, worldNormal, triScale, triSharp, triNormStrength, textureWeight1.x, objectOrigin, objectPos)
+                     : GetNormalFromMap(uv, worldNormal, input.tangent, textureIndices.z, textureWeight1.x, objectOrigin));
+    if (!clayMode && coatLayerParams.x > 0.001 && textureIndices2.x >= 0 && lobeParams.w > 1.0e-4) {
         float3 coatN = triPlanar ? SampleTriPlanarNormal(textureIndices2.x, worldPos, worldNormal, triScale, triSharp, triNormStrength, lobeParams.w, objectOrigin, objectPos)
                                  : GetNormalFromMap(uv, worldNormal, input.tangent, textureIndices2.x, lobeParams.w, objectOrigin);
         N = normalize(lerp(N, coatN, saturate(coatLayerParams.x)));
     }
 
     // Emissive with user-defined intensity
-    float3 emiss = emissiveColor.rgb * extraParams.x;
-    if (emissiveAndPad.x >= 0) {
+    float3 emiss = clayMode ? float3(0.0, 0.0, 0.0)
+                            : emissiveColor.rgb * extraParams.x;
+    if (!clayMode && emissiveAndPad.x >= 0) {
         float3 e = triPlanar ? SampleTriPlanar(emissiveAndPad.x, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos).rgb
                              : SampleUvTexture(emissiveAndPad.x, uv, objectOrigin, worldNormal, true).rgb;
         emiss *= BlendTextureRgb(sRGBToLinear(e), textureWeight1.z);
@@ -1129,7 +1139,7 @@ PSOutput PSMainMesh(PSInputMesh input)
 
     // Occlusion
     float ao = 1.0;
-    if (emissiveAndPad.y >= 0) {
+    if (!clayMode && emissiveAndPad.y >= 0) {
         float aoSample = triPlanar ? SampleTriPlanar(emissiveAndPad.y, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos).r
                                    : SampleUvTexture(emissiveAndPad.y, uv, objectOrigin, worldNormal, false).r;
         ao = BlendTextureScalar(aoSample, textureWeight1.y);
@@ -1146,9 +1156,9 @@ PSOutput PSMainMesh(PSInputMesh input)
     // Use a numerical floor only; material roughness should remain artist-linear.
     roughness = max(roughness, 0.001);
 
-    float clearcoat = saturate(coatLayerParams.x);
-    float clearcoatRoughness = max(coatLayerParams.y, 0.001);
-    float translucency = saturate(coatLayerParams.w);
+    float clearcoat = clayMode ? 0.0 : saturate(coatLayerParams.x);
+    float clearcoatRoughness = clayMode ? 1.0 : max(coatLayerParams.y, 0.001);
+    float translucency = clayMode ? 0.0 : saturate(coatLayerParams.w);
     float grassRootAmount = 0.0;
     float grassDirectContact = 1.0;
     float grassAmbientContact = 1.0;

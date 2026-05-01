@@ -39,6 +39,7 @@ private:
     SliderControl *m_maxSpp = nullptr;
     QCheckBox *m_adaptiveSampling = nullptr;
     SliderControl *m_targetNoise = nullptr;
+    QCheckBox *m_clayMode = nullptr;
 
     QComboBox *m_dlssMode = nullptr;
     QComboBox *m_dlssQuality = nullptr;

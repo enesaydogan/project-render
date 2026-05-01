@@ -163,12 +163,14 @@ void RenderSettingsPanel::createUi()
     m_maxSpp = CreateSliderControl(10.0, 1000.0, 1.0, 0);
     m_adaptiveSampling = new QCheckBox(tr("Enable Adaptive Sampling"), pathGroup);
     m_targetNoise = CreateSliderControl(1.0, 30.0, 0.1, 1);
+    m_clayMode = new QCheckBox(tr("Clay Material Override"), pathGroup);
     pathForm->addRow(tr("Reflection Bounces"), m_reflectionBounces);
     pathForm->addRow(tr("Refraction Bounces"), m_refractionBounces);
     pathForm->addRow(tr("GI Bounces"), m_giBounces);
     pathForm->addRow(tr("Max SPP"), m_maxSpp);
     pathForm->addRow(m_adaptiveSampling);
     pathForm->addRow(tr("Target Noise %"), m_targetNoise);
+    pathForm->addRow(m_clayMode);
     dxrLayout->addWidget(pathGroup);
 
     auto *dlssGroup = new QGroupBox(tr("Streamline / DLSS"), m_dxrSection);
@@ -274,6 +276,7 @@ void RenderSettingsPanel::createUi()
     connect(m_maxSpp->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyCamera](double) { applyCamera(); });
     connect(m_adaptiveSampling, &QCheckBox::toggled, this, [applyCamera](bool) { applyCamera(); });
     connect(m_targetNoise->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyCamera](double) { applyCamera(); });
+    connect(m_clayMode, &QCheckBox::toggled, this, [applyCamera](bool) { applyCamera(); });
 
     connect(m_dlssMode, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
         if (m_syncing) {
@@ -414,6 +417,10 @@ void RenderSettingsPanel::syncFromRenderer()
     if (!IsWidgetBeingEdited(m_targetNoise)) {
         m_targetNoise->setValue(g_cameraData.noiseThreshold * 100.0f);
     }
+    if (!IsWidgetBeingEdited(m_clayMode)) {
+        m_clayMode->setChecked(g_cameraData.debugVisualizationMode > 1.5f &&
+                               g_cameraData.debugVisualizationMode < 2.5f);
+    }
     m_targetNoise->setEnabled(m_adaptiveSampling->isChecked());
 
     const auto streamlineMode = DX12Context::g_streamline.IsEnabled()
@@ -497,6 +504,12 @@ void RenderSettingsPanel::applyCameraSettings()
         g_cameraData.noiseThreshold = 0.05f;
     }
     g_cameraData.noiseThreshold = static_cast<float>(m_targetNoise->value() / 100.0);
+    if (m_clayMode->isChecked()) {
+        g_cameraData.debugVisualizationMode = 2.0f;
+    } else if (g_cameraData.debugVisualizationMode > 1.5f &&
+               g_cameraData.debugVisualizationMode < 2.5f) {
+        g_cameraData.debugVisualizationMode = 0.0f;
+    }
     UpdateCameraCB();
     DxrRenderer::ResetAccumulation();
 }

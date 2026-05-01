@@ -2439,6 +2439,24 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
           uiChanged = true;
         }
 
+        bool clayMode = g_cameraData.debugVisualizationMode > 1.5f &&
+                        g_cameraData.debugVisualizationMode < 2.5f;
+        if (ImGui::Checkbox("Clay Material Override", &clayMode)) {
+          if (clayMode) {
+            g_cameraData.debugVisualizationMode = 2.0f;
+          } else if (g_cameraData.debugVisualizationMode > 1.5f &&
+                     g_cameraData.debugVisualizationMode < 2.5f) {
+            g_cameraData.debugVisualizationMode = 0.0f;
+          }
+          UpdateCameraCB();
+          uiChanged = true;
+        }
+        if (ImGui::IsItemHovered()) {
+          ImGui::SetTooltip(
+              "Overrides scene materials with opaque matte 50%% grey for "
+              "lighting checks");
+        }
+
         ImGui::Separator();
         ImGui::Text("Adaptive Sampling");
         bool adaptive = g_cameraData.useAdaptiveSampling > 0.5f;
@@ -2465,9 +2483,13 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
           }
 
 #ifdef _DEBUG
-          bool viz = g_cameraData.debugVisualizationMode > 0.5f;
+          bool viz = g_cameraData.debugVisualizationMode == 1.0f;
           if (ImGui::Checkbox("Show Noise Map (Debug)", &viz)) {
-            g_cameraData.debugVisualizationMode = viz ? 1.0f : 0.0f;
+            if (viz) {
+              g_cameraData.debugVisualizationMode = 1.0f;
+            } else if (g_cameraData.debugVisualizationMode == 1.0f) {
+              g_cameraData.debugVisualizationMode = 0.0f;
+            }
             UpdateCameraCB();
             uiChanged = true;
           }
@@ -2475,7 +2497,9 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
           if (ImGui::IsItemHovered())
             ImGui::SetTooltip("White = High Noise (10%+), Black = Low Noise");
 #else
-          g_cameraData.debugVisualizationMode = 0.0f;
+          if (g_cameraData.debugVisualizationMode == 1.0f) {
+            g_cameraData.debugVisualizationMode = 0.0f;
+          }
 #endif
         }
 
