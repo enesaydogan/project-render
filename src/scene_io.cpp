@@ -893,10 +893,10 @@ static void ApplyMetadataPRS(const json &j) {
       if (!p.empty() && fs::exists(p)) ibl.LoadEnvironmentMap(p);
     }
     ibl.SetIBLSource(wantsFile ? IBLManager::IBLSource::File : IBLManager::IBLSource::PragueSkyModel);
-    ibl.SetSkyVisibility(i.value("vis",30.0f)); ibl.SetSkyAlbedo(i.value("alb",0.5f));
+    ibl.SetSkyVisibility(i.value("vis",60.0f)); ibl.SetSkyAlbedo(i.value("alb",0.3f));
     ibl.SetSolarAltitude(i.value("sel",0.5f)); ibl.SetSolarAzimuth(i.value("saz",0.0f));
-    ibl.SetObserverAltitude(i.value("alt",200.0f)); ibl.SetSkyIntensity(i.value("ski",1.0f));
-    ibl.SetSunIntensity(i.value("sui",1.0f)); ibl.SetSunSize(i.value("sus",2.0f));
+    ibl.SetObserverAltitude(i.value("alt",0.0f)); ibl.SetSkyIntensity(i.value("ski",1.0f));
+    ibl.SetSunIntensity(i.value("sui",110000.0f)); ibl.SetSunSize(i.value("sus",0.53f));
     ibl.SetPhysicalCalibrationEnabled(i.value("pc", ibl.IsPhysicalCalibrationEnabled()));
     ibl.SetIblRotationDegrees(i.value("rot", ibl.GetIblRotationDegrees()));
     ibl.SetEnvSolidAngleSampling(i.value("esa", ibl.GetEnvSolidAngleSampling()));

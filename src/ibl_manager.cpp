@@ -777,32 +777,32 @@ void IBLManager::UpdateTextureFromSkyModel() {
             }
           }
 
-          // Lower hemisphere: approximate earth as Lambertian reflector lit by
-          // sky dome. This keeps ground values in a realistic range relative to
-          // the sky and avoids exposure bias from a pitch-black nadir.
+          // Lower hemisphere: approximate earth as a neutral Lambertian
+          // reflector lit by sky and direct sun. Keep this conservative: a
+          // warm/brown or over-boosted ground dome makes vertical facades look
+          // milky compared with the Prague/Vantage clear-sky defaults.
           if (dy < 0.0) {
             const float PI_F = 3.14159265359f;
             const float groundAlbedo = std::clamp((float)albedo, 0.02f, 0.95f);
             const float reflectance = groundAlbedo / PI_F;
 
-            // Earth/soil tint blended with neutral so user albedo still drives
-            // brightness while color remains plausible outdoors.
-            const float earthR = 0.36f;
-            const float earthG = 0.30f;
-            const float earthB = 0.24f;
-            const float tintStrength = 0.65f;
+            // Slightly warm neutral ground, not soil-brown. Most comparison
+            // scenes already contain explicit ground geometry/materials.
+            const float earthR = 0.72f;
+            const float earthG = 0.70f;
+            const float earthB = 0.66f;
+            const float tintStrength = 0.20f;
             const float horizonFactor =
                 std::pow(std::clamp(1.0f + (float)dy, 0.0f, 1.0f), 0.35f);
-            const float ambientBoost = 1.0f + 0.35f * horizonFactor;
             const float sunBounce =
                 sunGroundIlluminance * reflectance *
                 (0.35f + 0.65f * horizonFactor);
 
-            float gr = std::max(0.0f, r) * reflectance * ambientBoost *
+            float gr = std::max(0.0f, r) * reflectance *
                        ((1.0f - tintStrength) + tintStrength * earthR);
-            float gg = std::max(0.0f, g) * reflectance * ambientBoost *
+            float gg = std::max(0.0f, g) * reflectance *
                        ((1.0f - tintStrength) + tintStrength * earthG);
-            float gb = std::max(0.0f, b) * reflectance * ambientBoost *
+            float gb = std::max(0.0f, b) * reflectance *
                        ((1.0f - tintStrength) + tintStrength * earthB);
 
             gr += sunColor.x * sunBounce *
@@ -899,9 +899,18 @@ DirectX::XMFLOAT3 IBLManager::GetSunColor() const {
   float r, g, b;
   XYZtoRGB(X, Y, Z, r, g, b);
 
+  // Return normalized color (chromaticity). Keep the physical illuminance in
+  // the Sun Intensity value, but bias the chromaticity slightly warmer to
+  // match the Prague/Vantage daylight appearance in neutral clay scenes.
+  r = (std::max)(0.0f, r) * 1.035f;
+  g = (std::max)(0.0f, g) * 1.000f;
+  b = (std::max)(0.0f, b) * 0.930f;
+
+  const float rgbLuminance = (std::max)(
+      1.0e-6f, 0.2126f * r + 0.7152f * g + 0.0722f * b);
+
   // Return normalized color (chromaticity).
   // The absolute intensity (Y) will be handled by the Sun Intensity slider in
   // Lux.
-  float mag = std::max(1e-6f, Y);
-  return {r / mag, g / mag, b / mag};
+  return {r / rgbLuminance, g / rgbLuminance, b / rgbLuminance};
 }

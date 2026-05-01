@@ -30,6 +30,7 @@ public:
   IBLSource GetIBLSource() const { return m_source; }
 
   void SetSkyVisibility(float km) {
+    km = std::clamp(km, 10.0f, 120.0f);
     if (m_visibility != km) {
       m_visibility = km;
       m_skyDirty = true;
@@ -38,6 +39,7 @@ public:
   float GetSkyVisibility() const { return m_visibility; }
 
   void SetSkyAlbedo(float v) {
+    v = std::clamp(v, 0.0f, 1.0f);
     if (m_albedo != v) {
       m_albedo = v;
       m_skyDirty = true;
@@ -62,6 +64,7 @@ public:
   float GetSolarAzimuth() const { return m_solarAzimuth; }
 
   void SetObserverAltitude(float meters) {
+    meters = std::clamp(meters, 0.0f, 15000.0f);
     if (m_altitude != meters) {
       m_altitude = meters;
       m_skyDirty = true;
@@ -85,6 +88,7 @@ public:
     if (m_physicalCalibrationEnabled) {
       return;
     }
+    v = (std::max)(0.0f, v);
     if (m_sunIntensity != v) {
       m_sunIntensity = v;
       m_skyDirty = true;
@@ -104,6 +108,7 @@ public:
     if (m_physicalCalibrationEnabled) {
       return;
     }
+    degrees = std::clamp(degrees, 0.05f, 5.0f);
     if (m_sunSize != degrees) {
       m_sunSize = degrees;
       m_skyDirty = true;
@@ -196,11 +201,11 @@ private:
   bool m_skyInitialized = false;
   bool m_skyDirty = true;
 
-  float m_visibility = 30.0f; // km (20 - 100 range usually)
-  float m_albedo = 0.5f;
+  float m_visibility = 60.0f; // km; clear-air daylight default
+  float m_albedo = 0.3f;      // typical mixed terrain/concrete reflectance
   float m_solarElevation = 0.5f;
   float m_solarAzimuth = 0.0f;
-  float m_altitude = 200.0f; // meters (0 - 15000)
+  float m_altitude = 0.0f; // meters (0 - 15000)
   float m_skyIntensity = 1.0f; // non-physical sky gain (UI range 0..5)
   float m_sunIntensity = 110000.0f; // clear midday sun illuminance in lux
   float m_sunSize = 0.53f; // degrees (actual solar angular diameter)
@@ -220,7 +225,7 @@ private:
   float m_fileSunIntensity = 1.0f;
   float m_fileSunRadiusDeg = 0.53f;
 
-  static constexpr float kPhysicalSkyIntensity = 20.0f;
+  static constexpr float kPhysicalSkyIntensity = 1.0f;
   static constexpr float kPhysicalSunIntensityLux = 110000.0f;
   static constexpr float kPhysicalSunSizeDeg = 0.53f;
 
