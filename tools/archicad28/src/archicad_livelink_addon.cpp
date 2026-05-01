@@ -393,12 +393,40 @@ struct ScopedElementMemo : API_ElementMemo {
   ~ScopedElementMemo() { ACAPI_DisposeElemMemoHdls(this); }
 };
 
+class Scoped3DCutPlanesInfo {
+public:
+  Scoped3DCutPlanesInfo() { BNZeroMemory(&m_cutInfo, sizeof(m_cutInfo)); }
+  ~Scoped3DCutPlanesInfo() { Reset(); }
+
+  API_3DCutPlanesInfo *Get() { return &m_cutInfo; }
+
+  void Reset() {
+    if (m_cutInfo.shapes != nullptr) {
+      BMKillHandle(reinterpret_cast<GSHandle *>(&m_cutInfo.shapes));
+    }
+    BNZeroMemory(&m_cutInfo, sizeof(m_cutInfo));
+  }
+
+private:
+  API_3DCutPlanesInfo m_cutInfo;
+};
+
 class ScopedTemporarySight {
 public:
   ~ScopedTemporarySight() { Reset(); }
 
   bool CreateAndSelect(std::string *outError) {
     Reset();
+
+    // Capture the active 3D visibility/cut state before switching away from
+    // the user's current window sight so the export model matches Archicad's
+    // section-cut result instead of an uncut default sight.
+    API_3DFilterAndCutSettings filterAndCutSettings = {};
+    const bool hasFilterAndCutSettings =
+        ACAPI_View_Get3DImageSets(&filterAndCutSettings) == NoError;
+    Scoped3DCutPlanesInfo cutPlanesInfo;
+    const bool hasCutPlanesInfo =
+        ACAPI_View_Get3DCuttingPlanes(cutPlanesInfo.Get()) == NoError;
 
     GSErrCode err = ACAPI_Sight_CreateSight(&m_temporarySight);
     if (err != NoError) {
@@ -412,6 +440,25 @@ public:
       ACAPI_Sight_DeleteSight(m_temporarySight);
       m_temporarySight = nullptr;
       return false;
+    }
+
+    if (hasFilterAndCutSettings) {
+      bool mustConvert = false;
+      err = ACAPI_View_Change3DImageSets(&filterAndCutSettings, &mustConvert);
+      if (err != NoError) {
+        AssignError(outError, "ACAPI_View_Change3DImageSets", err);
+        Reset();
+        return false;
+      }
+    }
+
+    if (hasCutPlanesInfo) {
+      err = ACAPI_View_Change3DCuttingPlanes(cutPlanesInfo.Get());
+      if (err != NoError) {
+        AssignError(outError, "ACAPI_View_Change3DCuttingPlanes", err);
+        Reset();
+        return false;
+      }
     }
 
     return true;
