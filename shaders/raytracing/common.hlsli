@@ -885,7 +885,7 @@ inline float3 WavefrontEvaluateShadowTaskRadiance(uint packedLightIndex,
 
 inline uint PackPayloadIorType(float ior, uint rayType, bool thinWalled, float specularWeight)
 {
-    uint hIor = f32tof16(clamp(ior, 1.0, 3.0)) & 0xFFFFu;
+    uint hIor = f32tof16(clamp(ior, 1.0, 10.0)) & 0xFFFFu;
     uint thin = thinWalled ? (1u << 24) : 0u;
     uint spec = (((uint)round(saturate(specularWeight) * 127.0)) & 0x7Fu) << 25;
     return hIor | ((rayType & 0xFFu) << 16) | thin | spec;

@@ -91,17 +91,22 @@ ScenePanel::ScenePanel(QWidget *parent)
 
     m_refreshTimer = new QTimer(this);
     connect(m_refreshTimer, &QTimer::timeout, this, [this]() {
-        if (IsSceneIoJobActive() || Scene::IsImportInProgress() ||
-            (m_importProgress && m_importProgress->isVisible())) {
+        const bool sceneIoActive = IsSceneIoJobActive();
+        const bool importActive = Scene::IsImportInProgress();
+        const bool sceneIoTransition = (sceneIoActive != m_lastSceneIoActive);
+        const bool importTransition = (importActive != m_lastImportActive);
+        const bool refreshNeeded = m_treeDirty || sceneIoTransition ||
+                                   importTransition || sceneIoActive ||
+                                   importActive ||
+                                   (m_importProgress && m_importProgress->isVisible());
+        if (refreshNeeded) {
             refreshSceneList();
         }
     });
     m_refreshTimer->start(200);
 
     m_sceneChangeListenerId = Scene::RegisterChangeListener([this]() {
-        QMetaObject::invokeMethod(this, [this]() {
-            scheduleRefresh();
-        }, Qt::QueuedConnection);
+        scheduleRefresh();
     });
 }
 
@@ -222,22 +227,19 @@ int ScenePanel::selectedNodeIndex() const
 
 void ScenePanel::scheduleRefresh()
 {
-    if (m_refreshQueued) {
-        return;
-    }
-
-    m_refreshQueued = true;
-    QMetaObject::invokeMethod(this, [this]() {
-        refreshSceneList();
-    }, Qt::QueuedConnection);
+    m_treeDirty = true;
 }
 
 void ScenePanel::refreshSceneList()
 {
-    m_refreshQueued = false;
     m_syncing = true;
+    const bool sceneIoActive = IsSceneIoJobActive();
+    const bool importActive = Scene::IsImportInProgress();
+    m_lastSceneIoActive = sceneIoActive;
+    m_lastImportActive = importActive;
+    m_treeDirty = false;
 
-    if (IsSceneIoJobActive()) {
+    if (sceneIoActive) {
         m_importProgress->hide();
         m_importStatusLabel->hide();
         m_importButton->setEnabled(false);
@@ -255,7 +257,7 @@ void ScenePanel::refreshSceneList()
     m_addPlaneButton->setEnabled(true);
     m_nodeList->setEnabled(true);
 
-    const bool importing = Scene::IsImportInProgress();
+    const bool importing = importActive;
     if (importing) {
         float progress = Scene::GetImportProgress();
         if (progress < 0.0f) {

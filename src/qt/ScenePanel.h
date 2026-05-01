@@ -35,6 +35,8 @@ private:
     QPushButton *m_deleteButton = nullptr;
     QTimer *m_refreshTimer = nullptr;
     bool m_syncing = false;
-    bool m_refreshQueued = false;
+    bool m_treeDirty = true;
+    bool m_lastSceneIoActive = false;
+    bool m_lastImportActive = false;
     size_t m_sceneChangeListenerId = 0;
 };
