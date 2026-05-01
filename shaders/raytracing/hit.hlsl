@@ -2,6 +2,7 @@
 // Closest hit shader with full PBR lighting
 
 #include "common.hlsli"
+#include "../clouds.hlsl"
 
 // BRDF helpers: using D_GGX, V_SmithCorrelated, F_Schlick from brdf_lib.hlsl
 // (included via path_tracer_core.hlsl before this file)
@@ -935,6 +936,9 @@ void ClosestHitImpl(inout RayPayload payload,
 
             if (shadowPayload.t < 0.0) { // Miss = not occluded
                 float3 radiance = lightColor.rgb * lightColor.w;
+                if (cloudRenderingEnabled > 0.5f) {
+                    radiance *= CloudSunTransmittance(shadowRay.Origin, shadowRay.Direction);
+                }
                 float3 V = normalize(-WorldRayDirection());
                 float3 H = normalize(V + L);
                 float NdotV = saturate(dot(N, V));
@@ -971,7 +975,11 @@ void ClosestHitImpl(inout RayPayload payload,
         if (translucency > 0.001) {
             float NdotL_back = saturate(dot(-N, normalize(lightDir.xyz)));
             if (NdotL_back > 0.0) {
-                Lo += (DiffuseAlbedo / PI) * (lightColor.rgb * lightColor.w) * NdotL_back * translucency;
+                float3 backRadiance = lightColor.rgb * lightColor.w;
+                if (cloudRenderingEnabled > 0.5f) {
+                    backRadiance *= CloudSunTransmittance(P - N * 0.002, normalize(lightDir.xyz));
+                }
+                Lo += (DiffuseAlbedo / PI) * backRadiance * NdotL_back * translucency;
             }
         }
     }

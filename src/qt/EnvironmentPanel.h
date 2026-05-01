@@ -66,6 +66,8 @@ private:
     SliderControl *m_warpStrength = nullptr;
     SliderControl *m_shapePower = nullptr;
     SliderControl *m_powderStrength = nullptr;
+    SliderControl *m_cirrusAmount = nullptr;
+    SliderControl *m_cloudShadowStrength = nullptr;
     SliderControl *m_shadowSteps = nullptr;
     SliderControl *m_shadowStepSize = nullptr;
     SliderControl *m_shadowLod = nullptr;

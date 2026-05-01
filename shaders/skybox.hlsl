@@ -140,10 +140,10 @@ float4 PSMain(PSInput input) : SV_TARGET {
         // If debug view selected, show baked cloud color directly
         float opacity = 1.0 - baked.a;
         float denseCore = pow(saturate(opacity), 2.2);
-        float skyLeak = 0.10 * denseCore;
+        float skyLeak = 0.035 * denseCore;
         composed = baked.rgb * kRasterVisibleSkyScale +
                    color * (baked.a + skyLeak);
-        composed += color * (0.025 * denseCore);
+        composed += color * (0.006 * denseCore);
     }
 
     // Mark sky pixels separately so raster auto-exposure can ignore the

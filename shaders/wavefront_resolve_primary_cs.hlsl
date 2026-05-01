@@ -1,4 +1,7 @@
 #include "raytracing/common.hlsli"
+#define CLOUDS_NO_RAYTRACING_INTRINSICS 1
+#include "clouds.hlsl"
+#undef CLOUDS_NO_RAYTRACING_INTRINSICS
 #include "raytracing/wavefront_transport.hlsli"
 #include "restir_lib.hlsl"
 
@@ -805,6 +808,10 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
     float3 viewDir = normalize(-incomingDirection);
     float3 direct = float3(0.0, 0.0, 0.0);
     WavefrontLightSample sun = WavefrontSampleDirectionalLight(1.0);
+    if (cloudRenderingEnabled > 0.5f) {
+        sun.radiance *= CloudSunTransmittance(surfacePos + normal * kWavefrontRayBias,
+                                             sun.direction);
+    }
     float nDotL = saturate(dot(normal, sun.direction));
     if (nDotL > 0.0 &&
         WavefrontGiIsShadowVisible(surfacePos + normal * kWavefrontRayBias,
@@ -1165,6 +1172,13 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                               selectedDirectLightWeight;
         WavefrontLightSample explicitSunSample =
             WavefrontSampleDirectionalLight(1.0);
+        if (cloudRenderingEnabled > 0.5f) {
+            explicitSunSample.radiance *= CloudSunTransmittance(
+                WavefrontBuildShadowOrigin(hitPos, normal,
+                                           explicitSunSample.direction,
+                                           kWavefrontRayBias),
+                explicitSunSample.direction);
+        }
         float3 sunShadowWeight = state.throughput *
                                  ComputeWavefrontDirectLightingWeight(
                                      record, normal, hitPos,

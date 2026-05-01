@@ -2261,11 +2261,15 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
         cloudChanged |=
             ImGui::SliderFloat("Scattering (g)", &cp.scattering, -0.99f, 0.99f);
         cloudChanged |=
-            ImGui::SliderFloat("Sun Intensity", &cp.sunIntensity, 0.0f, 20.0f);
+            ImGui::SliderFloat("Sun Intensity", &cp.sunIntensity, 0.0f, 5.0f);
         cloudChanged |=
-            ImGui::SliderFloat("Cloud Top", &cp.cloudTop, 200.0f, 1000.0f);
+            ImGui::SliderFloat("Top Height", &cp.cloudTop, 500.0f, 12000.0f);
         cloudChanged |=
-            ImGui::SliderFloat("Cloud Bottom", &cp.cloudBottom, 50.0f, 300.0f);
+            ImGui::SliderFloat("Start Height", &cp.cloudBottom, 100.0f, 6000.0f);
+        if (cp.cloudTop < cp.cloudBottom + 100.0f) {
+          cp.cloudTop = cp.cloudBottom + 100.0f;
+          cloudChanged = true;
+        }
         cloudChanged |=
             ImGui::SliderFloat("Wind Speed", &cp.windSpeed, 0.0f, 50.0f);
 
@@ -2279,7 +2283,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
         cloudChanged |=
             ImGui::SliderFloat("Coverage Scale", &cp.coverageScale, 0.00005f,
                                0.0010f, "%.5f", ImGuiSliderFlags_Logarithmic);
-        cloudChanged |= ImGui::SliderFloat("Coverage Variation",
+        cloudChanged |= ImGui::SliderFloat("Variety",
                                            &cp.coverageVariation, 0.0f, 1.0f);
         cloudChanged |= ImGui::SliderFloat("Erosion", &cp.erosion, 0.0f, 1.0f);
         cloudChanged |=
@@ -2288,10 +2292,14 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
             ImGui::SliderFloat("Shape Power", &cp.shapePower, 0.4f, 3.0f);
         cloudChanged |= ImGui::SliderFloat("Powder Strength",
                                            &cp.powderStrength, 0.0f, 1.5f);
+        cloudChanged |= ImGui::SliderFloat("Cirrus Amount", &cp.cirrusAmount,
+                                           0.0f, 1.0f);
+        cloudChanged |= ImGui::SliderFloat("Ground Shadows",
+                                           &cp.cloudShadowStrength, 0.0f, 1.0f);
 
         ImGui::Separator();
         cloudChanged |=
-            ImGui::SliderInt("Shadow Steps", &cp.shadowSteps, 1, 16);
+            ImGui::SliderInt("Shadow Steps", &cp.shadowSteps, 1, 24);
         cloudChanged |= ImGui::SliderFloat("Shadow Step Size",
                                            &cp.shadowStepSize, 10.0f, 500.0f);
         cloudChanged |=

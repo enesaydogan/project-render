@@ -64,10 +64,10 @@ void Miss(inout RayPayload payload)
             float opacity = 1.0 - baked.a;
             // Lift only dense cloud cores to keep silhouette and edge contrast.
             float denseCore = pow(saturate(opacity), 2.2);
-            float skyLeak = 0.10 * denseCore;
+            float skyLeak = 0.035 * denseCore;
             float3 fullCloudColor = skyColor * (baked.a + skyLeak) + baked.rgb;
             // Additional soft floor, biased to dense regions only.
-            fullCloudColor += skyColor * (0.025 * denseCore);
+            fullCloudColor += skyColor * (0.006 * denseCore);
             // Relaxed clamp for physical units + exposure
             color = clamp(fullCloudColor, 0.0, 100000.0);
         }

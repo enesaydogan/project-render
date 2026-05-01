@@ -24,6 +24,10 @@ struct CloudParams {
   float warpStrength;      // Domain-warp strength
   float shapePower;        // Density curve shaping (higher = puffier clumps)
   float powderStrength;    // Multiple scattering / powder approximation
+  float cirrusAmount;      // High-altitude wispy cloud layer amount
+  float cloudShadowStrength; // Scene-surface shadowing from clouds
+  float _pad0;
+  float _pad1;
 
   // Shadowing
   int shadowSteps;      // Light ray steps

@@ -20,6 +20,8 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
+#include <algorithm>
+
 extern HWND g_hwnd;
 extern bool g_cloudRenderingEnabled;
 extern float g_timeOfDay;
@@ -139,9 +141,9 @@ void EnvironmentPanel::createUi()
     m_cloudAbsorption = CreateSliderControl(0.0, 2.0, 0.05, 2);
     m_cloudCoverage = CreateSliderControl(0.0, 1.0, 0.01, 2);
     m_cloudScattering = CreateSliderControl(-0.99, 0.99, 0.01, 2);
-    m_cloudSunIntensity = CreateSliderControl(0.0, 20.0, 0.1, 2);
-    m_cloudTop = CreateSliderControl(200.0, 1000.0, 5.0, 1);
-    m_cloudBottom = CreateSliderControl(50.0, 300.0, 5.0, 1);
+    m_cloudSunIntensity = CreateSliderControl(0.0, 5.0, 0.05, 2);
+    m_cloudTop = CreateSliderControl(500.0, 12000.0, 25.0, 1);
+    m_cloudBottom = CreateSliderControl(100.0, 6000.0, 25.0, 1);
     m_cloudWindSpeed = CreateSliderControl(0.0, 50.0, 0.5, 2);
     m_baseScale = CreateSliderControl(0.0001, 0.0020, 0.0001, 5);
     m_baseScale->setLogarithmic(true);
@@ -154,7 +156,9 @@ void EnvironmentPanel::createUi()
     m_warpStrength = CreateSliderControl(0.0, 2.0, 0.05, 2);
     m_shapePower = CreateSliderControl(0.4, 3.0, 0.05, 2);
     m_powderStrength = CreateSliderControl(0.0, 1.5, 0.05, 2);
-    m_shadowSteps = CreateSliderControl(1.0, 16.0, 1.0, 0);
+    m_cirrusAmount = CreateSliderControl(0.0, 1.0, 0.01, 2);
+    m_cloudShadowStrength = CreateSliderControl(0.0, 1.0, 0.01, 2);
+    m_shadowSteps = CreateSliderControl(1.0, 24.0, 1.0, 0);
     m_shadowStepSize = CreateSliderControl(10.0, 500.0, 5.0, 1);
     m_shadowLod = CreateSliderControl(0.0, 5.0, 0.1, 2);
     cloudForm->addRow(m_cloudEnabled);
@@ -164,17 +168,19 @@ void EnvironmentPanel::createUi()
     cloudForm->addRow(tr("Coverage"), m_cloudCoverage);
     cloudForm->addRow(tr("Scattering (g)"), m_cloudScattering);
     cloudForm->addRow(tr("Sun Intensity"), m_cloudSunIntensity);
-    cloudForm->addRow(tr("Cloud Top"), m_cloudTop);
-    cloudForm->addRow(tr("Cloud Bottom"), m_cloudBottom);
+    cloudForm->addRow(tr("Top Height"), m_cloudTop);
+    cloudForm->addRow(tr("Start Height"), m_cloudBottom);
     cloudForm->addRow(tr("Wind Speed"), m_cloudWindSpeed);
     cloudForm->addRow(tr("Base Scale"), m_baseScale);
     cloudForm->addRow(tr("Detail Scale"), m_detailScale);
     cloudForm->addRow(tr("Coverage Scale"), m_coverageScale);
-    cloudForm->addRow(tr("Coverage Variation"), m_coverageVariation);
+    cloudForm->addRow(tr("Variety"), m_coverageVariation);
     cloudForm->addRow(tr("Erosion"), m_erosion);
     cloudForm->addRow(tr("Warp Strength"), m_warpStrength);
     cloudForm->addRow(tr("Shape Power"), m_shapePower);
     cloudForm->addRow(tr("Powder Strength"), m_powderStrength);
+    cloudForm->addRow(tr("Cirrus Amount"), m_cirrusAmount);
+    cloudForm->addRow(tr("Ground Shadows"), m_cloudShadowStrength);
     cloudForm->addRow(tr("Shadow Steps"), m_shadowSteps);
     cloudForm->addRow(tr("Shadow Step Size"), m_shadowStepSize);
     cloudForm->addRow(tr("Shadow LOD"), m_shadowLod);
@@ -261,6 +267,8 @@ void EnvironmentPanel::createUi()
     connectCloudControl(m_warpStrength);
     connectCloudControl(m_shapePower);
     connectCloudControl(m_powderStrength);
+    connectCloudControl(m_cirrusAmount);
+    connectCloudControl(m_cloudShadowStrength);
     connectCloudControl(m_shadowSteps);
     connectCloudControl(m_shadowStepSize);
     connectCloudControl(m_shadowLod);
@@ -343,6 +351,8 @@ void EnvironmentPanel::syncFromRenderer()
     m_warpStrength->setValue(cp.warpStrength);
     m_shapePower->setValue(cp.shapePower);
     m_powderStrength->setValue(cp.powderStrength);
+    m_cirrusAmount->setValue(cp.cirrusAmount);
+    m_cloudShadowStrength->setValue(cp.cloudShadowStrength);
     m_shadowSteps->setValue(cp.shadowSteps);
     m_shadowStepSize->setValue(cp.shadowStepSize);
     m_shadowLod->setValue(cp.shadowLod);
@@ -364,6 +374,8 @@ void EnvironmentPanel::syncFromRenderer()
     m_warpStrength->setEnabled(cloudsEditable);
     m_shapePower->setEnabled(cloudsEditable);
     m_powderStrength->setEnabled(cloudsEditable);
+    m_cirrusAmount->setEnabled(cloudsEditable);
+    m_cloudShadowStrength->setEnabled(cloudsEditable);
     m_shadowSteps->setEnabled(cloudsEditable);
     m_shadowStepSize->setEnabled(cloudsEditable);
     m_shadowLod->setEnabled(cloudsEditable);
@@ -445,6 +457,7 @@ void EnvironmentPanel::applyCloudSettings()
     cp.sunIntensity = static_cast<float>(m_cloudSunIntensity->value());
     cp.cloudTop = static_cast<float>(m_cloudTop->value());
     cp.cloudBottom = static_cast<float>(m_cloudBottom->value());
+    cp.cloudTop = (std::max)(cp.cloudTop, cp.cloudBottom + 100.0f);
     cp.windSpeed = static_cast<float>(m_cloudWindSpeed->value());
     cp.baseScale = static_cast<float>(m_baseScale->value());
     cp.detailScale = static_cast<float>(m_detailScale->value());
@@ -454,6 +467,8 @@ void EnvironmentPanel::applyCloudSettings()
     cp.warpStrength = static_cast<float>(m_warpStrength->value());
     cp.shapePower = static_cast<float>(m_shapePower->value());
     cp.powderStrength = static_cast<float>(m_powderStrength->value());
+    cp.cirrusAmount = static_cast<float>(m_cirrusAmount->value());
+    cp.cloudShadowStrength = static_cast<float>(m_cloudShadowStrength->value());
     cp.shadowSteps = static_cast<int>(m_shadowSteps->value());
     cp.shadowStepSize = static_cast<float>(m_shadowStepSize->value());
     cp.shadowLod = static_cast<float>(m_shadowLod->value());

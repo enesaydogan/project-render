@@ -211,33 +211,37 @@ CloudParams MakeDefaultCloudParams() {
   CloudParams p = {};
 
   // Baked-cloud quality defaults (higher fidelity than old real-time profile).
-  p.density = 2.8f;
-  p.absorption = 0.72f;
-  p.coverage = 0.28f;
-  p.scattering = 0.88f;
+  p.density = 1.15f;
+  p.absorption = 0.38f;
+  p.coverage = 0.34f;
+  p.scattering = 0.72f;
   p.steps = 128;
-  p.sunIntensity = 1.35f;
-  p.cloudTop = 1000.0f;
-  p.cloudBottom = 300.0f;
+  p.sunIntensity = 1.00f;
+  p.cloudTop = 4200.0f;
+  p.cloudBottom = 1600.0f;
   p.windSpeed = 0.012f;
 
-  p.baseScale = 0.00028f;
-  p.detailScale = 0.00900f;
-  p.coverageScale = 0.00055f;
-  p.coverageVariation = 0.45f;
-  p.erosion = 0.82f;
-  p.warpStrength = 1.20f;
-  p.shapePower = 2.10f;
-  p.powderStrength = 0.72f;
+  p.baseScale = 0.00016f;
+  p.detailScale = 0.00380f;
+  p.coverageScale = 0.00018f;
+  p.coverageVariation = 0.60f;
+  p.erosion = 0.58f;
+  p.warpStrength = 0.75f;
+  p.shapePower = 1.35f;
+  p.powderStrength = 0.95f;
+  p.cirrusAmount = 0.18f;
+  p.cloudShadowStrength = 0.50f;
+  p._pad0 = 0.0f;
+  p._pad1 = 0.0f;
 
-  p.shadowSteps = 10;
-  p.shadowStepSize = 140.0f;
-  p.shadowLod = 1.5f;
+  p.shadowSteps = 16;
+  p.shadowStepSize = 180.0f;
+  p.shadowLod = 1.0f;
 
   p.maxSteps = 320;
   p.verticalStepMeters = 18.0f;
-  p.shadowEvery = 3;
-  p.shadowDensityThreshold = 0.035f;
+  p.shadowEvery = 2;
+  p.shadowDensityThreshold = 0.025f;
 
   p.timeSeconds = 0.0f;
   p._pad = {0, 0, 0};

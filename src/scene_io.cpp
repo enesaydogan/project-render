@@ -518,7 +518,8 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
     {"stp",cp.steps},{"si",cp.sunIntensity},{"ct",cp.cloudTop},{"cb",cp.cloudBottom},
     {"ws",cp.windSpeed},{"bs",cp.baseScale},{"ds",cp.detailScale},{"cs",cp.coverageScale},
     {"cv",cp.coverageVariation},{"er",cp.erosion},{"wst",cp.warpStrength},{"sp",cp.shapePower},
-    {"ps",cp.powderStrength},{"ssh",cp.shadowSteps},{"sss",cp.shadowStepSize},
+    {"ps",cp.powderStrength},{"ca",cp.cirrusAmount},{"gsh",cp.cloudShadowStrength},
+    {"ssh",cp.shadowSteps},{"sss",cp.shadowStepSize},
     {"sl",cp.shadowLod},{"ms2",cp.maxSteps},{"vsm",cp.verticalStepMeters},
     {"se",cp.shadowEvery},{"sdt",cp.shadowDensityThreshold}
   };
@@ -812,7 +813,8 @@ static void ApplyMetadataPRS(const json &j) {
     cp.detailScale=c.value("ds",cp.detailScale); cp.coverageScale=c.value("cs",cp.coverageScale);
     cp.coverageVariation=c.value("cv",cp.coverageVariation); cp.erosion=c.value("er",cp.erosion);
     cp.warpStrength=c.value("wst",cp.warpStrength); cp.shapePower=c.value("sp",cp.shapePower);
-    cp.powderStrength=c.value("ps",cp.powderStrength); cp.shadowSteps=c.value("ssh",cp.shadowSteps);
+    cp.powderStrength=c.value("ps",cp.powderStrength); cp.cirrusAmount=c.value("ca",cp.cirrusAmount);
+    cp.cloudShadowStrength=c.value("gsh",cp.cloudShadowStrength); cp.shadowSteps=c.value("ssh",cp.shadowSteps);
     cp.shadowStepSize=c.value("sss",cp.shadowStepSize); cp.shadowLod=c.value("sl",cp.shadowLod);
     cp.maxSteps=c.value("ms2",cp.maxSteps); cp.verticalStepMeters=c.value("vsm",cp.verticalStepMeters);
     cp.shadowEvery=c.value("se",cp.shadowEvery); cp.shadowDensityThreshold=c.value("sdt",cp.shadowDensityThreshold);

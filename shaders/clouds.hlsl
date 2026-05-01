@@ -20,6 +20,10 @@ struct CloudParams {
     float warpStrength;
     float shapePower;
     float powderStrength;
+    float cirrusAmount;
+    float cloudShadowStrength;
+    float _pad0;
+    float _pad1;
 
     int shadowSteps;
     float shadowStepSize;
@@ -49,6 +53,10 @@ static const float CLOUDS_PI = 3.14159265f;
 // Normalize to physical-scene march units so typical values (0.2..1.0)
 // remain usable after switching to physical lighting.
 static const float CLOUD_ABSORPTION_SCALE = 0.01f;
+static const float CLOUD_SKY_RADIANCE_SCALE = 0.18f;
+static const float CLOUD_SUN_ILLUMINANCE_SCALE = 0.0028f;
+static const float CLOUD_MS_SUN_SCALE = 0.0012f;
+static const float CLOUD_SHADOW_ABSORPTION_SCALE = 0.0065f;
 
 // Dual Henyey-Greenstein for realistic cloud scattering
 // (Forward peak + slight backward peak)
@@ -163,6 +171,7 @@ static const float EARTH_RADIUS = 6360000.0;
 static const float3 PLANET_CENTER = float3(0.0, -EARTH_RADIUS, 0.0);
 
 float SampleDensity(float3 p, float lod) {
+    float layerTop = max(CloudCB.cloudTop, CloudCB.cloudBottom + 10.0f);
     // Stable Spherical Altitude Calculation
     float3 relP = p - PLANET_CENTER;
     float distToCenter = length(relP);
@@ -173,9 +182,9 @@ float SampleDensity(float3 p, float lod) {
     float heightAboveGround = (dot(p, p) + 2.0 * p.y * EARTH_RADIUS) / (distToCenter + EARTH_RADIUS);
     
     // Check bounds
-    if (heightAboveGround < CloudCB.cloudBottom || heightAboveGround > CloudCB.cloudTop) return 0.0;
+    if (heightAboveGround < CloudCB.cloudBottom || heightAboveGround > layerTop) return 0.0;
     
-    float heightPct = saturate((heightAboveGround - CloudCB.cloudBottom) / (CloudCB.cloudTop - CloudCB.cloudBottom));
+    float heightPct = saturate((heightAboveGround - CloudCB.cloudBottom) / (layerTop - CloudCB.cloudBottom));
 
     // 1. Base Coordinates with Rotation to break tracking
     float3 basePos = p * CloudCB.baseScale;
@@ -276,12 +285,111 @@ float SampleDensity(float3 p, float lod) {
     return saturate(baseCloud) * CloudCB.density;
 }
 
+float CloudSunTransmittance(float3 worldPos, float3 sunDir)
+{
+    if (CloudCB.density <= 0.001f ||
+        CloudCB.coverage <= 0.001f ||
+        CloudCB.cloudShadowStrength <= 0.001f) {
+        return 1.0f;
+    }
+
+    sunDir = normalize(sunDir);
+    float innerRadius = EARTH_RADIUS + CloudCB.cloudBottom;
+    float outerRadius = EARTH_RADIUS + max(CloudCB.cloudTop, CloudCB.cloudBottom + 10.0f);
+    float distToCenter = length(worldPos - PLANET_CENTER);
+    float2 hitInner = RaySphereIntersect(worldPos, sunDir, PLANET_CENTER, innerRadius);
+    float2 hitOuter = RaySphereIntersect(worldPos, sunDir, PLANET_CENTER, outerRadius);
+
+    float tStart = 0.0f;
+    float tEnd = 0.0f;
+
+    if (distToCenter < innerRadius) {
+        if (hitInner.y < 0.0f || hitOuter.y < 0.0f) {
+            return 1.0f;
+        }
+        tStart = max(hitInner.y, 0.0f);
+        tEnd = max(hitOuter.y, 0.0f);
+    } else if (distToCenter < outerRadius) {
+        float dInner = (hitInner.x > 0.0f) ? hitInner.x : ((hitInner.y > 0.0f) ? hitInner.y : 1e9f);
+        float dOuter = (hitOuter.y > 0.0f) ? hitOuter.y : 1e9f;
+        tStart = 0.0f;
+        tEnd = min(dInner, dOuter);
+    } else {
+        if (hitOuter.x < 0.0f) {
+            return 1.0f;
+        }
+        tStart = max(hitOuter.x, 0.0f);
+        tEnd = max(hitOuter.y, 0.0f);
+    }
+
+    if (tEnd <= tStart) {
+        return 1.0f;
+    }
+
+    int steps = clamp(CloudCB.shadowSteps, 4, 24);
+    float thickness = min(tEnd - tStart, max(CloudCB.shadowStepSize * (float)steps, 1.0f));
+    float stepSize = thickness / (float)steps;
+    float jitter = CloudHash12(worldPos.xz * 0.037f + worldPos.yy * 0.011f);
+    float3 p = worldPos + sunDir * (tStart + stepSize * jitter);
+
+    float densitySum = 0.0f;
+    float lod = max(CloudCB.shadowLod, 1.0f);
+    [loop]
+    for (int i = 0; i < steps; ++i) {
+        densitySum += SampleDensity(p, lod);
+        p += sunDir * stepSize;
+    }
+
+    float opticalDepth = densitySum * stepSize *
+                         CloudCB.absorption *
+                         CLOUD_SHADOW_ABSORPTION_SCALE *
+                         CloudCB.cloudShadowStrength;
+    return lerp(1.0f, exp(-opticalDepth), saturate(CloudCB.cloudShadowStrength));
+}
+
+float4 EvaluateCirrusLayer(float3 rayOrigin, float3 rayDir, float3 sunDir, float3 sunIlluminance,
+                           float3 skyZenith, float3 skyHorizon)
+{
+    float amount = saturate(CloudCB.cirrusAmount);
+    if (amount <= 0.001f || rayDir.y <= 0.015f) {
+        return float4(0.0f, 0.0f, 0.0f, 1.0f);
+    }
+
+    const float cirrusHeight = 8200.0f;
+    float t = (cirrusHeight - rayOrigin.y) / rayDir.y;
+    if (t <= 0.0f || t > 200000.0f) {
+        return float4(0.0f, 0.0f, 0.0f, 1.0f);
+    }
+
+    float3 p = rayOrigin + rayDir * t;
+    float2 wind = float2(CloudCB.timeSeconds * CloudCB.windSpeed * 0.000035f,
+                         CloudCB.timeSeconds * CloudCB.windSpeed * 0.000011f);
+    float2 uv = p.xz * 0.000043f + wind;
+    float2 streakUv = float2(uv.x * 0.28f + uv.y * 0.04f, uv.y * 3.60f);
+    float longStreaks = CloudWeatherNoise2D(streakUv + float2(21.3f, -5.7f));
+    float feather = CloudWeatherNoise2D(streakUv * 4.0f + float2(-9.1f, 14.6f));
+    float breakup = CloudWeatherNoise2D(uv * 13.0f + float2(3.2f, 18.4f));
+
+    float wisps = smoothstep(0.54f, 0.88f, longStreaks) *
+                  smoothstep(0.24f, 0.78f, feather) *
+                  lerp(0.55f, 1.0f, breakup);
+    float viewFade = smoothstep(0.02f, 0.22f, rayDir.y);
+    float opacity = saturate(wisps * amount * 0.24f * viewFade);
+
+    float cosAngle = dot(rayDir, sunDir);
+    float phase = PhaseHG(cosAngle, 0.72f);
+    float3 skyTint = lerp(skyHorizon, skyZenith, saturate(rayDir.y));
+    float3 sunTint = sunIlluminance * (CLOUD_MS_SUN_SCALE * 0.42f);
+    float3 color = lerp(skyTint * 0.55f, sunTint, saturate(phase * 5.0f)) * opacity;
+    return float4(color, 1.0f - opacity);
+}
+
 // Raymarch function returning accumulated cloud color (rgb) and transmittance (a)
 // tMin/tMax: Intersection distance with cloud shell
 float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, float3 sunDir, float3 lightColor, uint rayType, uint rayDepth) {
     // 1. Setup Intersection for Spherical Shell
     float innerRadius = EARTH_RADIUS + CloudCB.cloudBottom;
-    float outerRadius = EARTH_RADIUS + CloudCB.cloudTop;
+    float outerRadius = EARTH_RADIUS + max(CloudCB.cloudTop, CloudCB.cloudBottom + 10.0f);
     
     float2 hitInner = RaySphereIntersect(rayOrigin, rayDir, PLANET_CENTER, innerRadius);
     float2 hitOuter = RaySphereIntersect(rayOrigin, rayDir, PLANET_CENTER, outerRadius);
@@ -334,7 +442,8 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
     float thickness = tEnd - tStart;
     
     // Adaptive stepping
-    float verticalThickness = max(1.0f, CloudCB.cloudTop - CloudCB.cloudBottom);
+    float layerTop = max(CloudCB.cloudTop, CloudCB.cloudBottom + 10.0f);
+    float verticalThickness = max(1.0f, layerTop - CloudCB.cloudBottom);
     float verticalStepMeters = max(1.0f, CloudCB.verticalStepMeters);
     // Rough approx of vertical component for step count
     float rayDirYAbs = max(0.05f, abs(rayDir.y)); 
@@ -353,7 +462,7 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
     
     // Dither start (Using stable IGN but very low amplitude)
     float jitter = 0.5;
-    #ifdef RAYTRACING_COMMON_H
+    #if defined(RAYTRACING_COMMON_H) && !defined(CLOUDS_NO_RAYTRACING_INTRINSICS)
     // Low amplitude jitter helps break bands without causing massive chunks
     jitter = InterleavedGradientNoise(DispatchRaysIndex().xy, (uint)globalFrameCount);
     jitter = 0.3 + 0.4 * jitter; // Center around 0.5
@@ -367,9 +476,6 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
     float cosAngle = dot(rayDir, sunDir);
     float basePhaseG = clamp(CloudCB.scattering, -0.95f, 0.95f);
     float sunElevation = saturate(sunDir.y * 0.5f + 0.5f);
-
-    // Setup ambient sky approximation (driven by env/prague sky samples).
-    float ambientAutoBoost = 1.0f;
 
     // Fallback/Bias colors (Neutral Grey/White base)
     // We keep these strictly neutral so they don't fight with the sky color
@@ -385,16 +491,8 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
     float2 uvZenith = DirectionToUVRotated(float3(0.0, 1.0, 0.0));
     float2 uvHorizon = DirectionToUVRotated(float3(1.0, 0.0, 0.0));
 
-    float skyScale = 0.00125f;
-
-    float3 realZenith = envMap.SampleLevel(linearSampler, uvZenith, 8.0).rgb * skyScale;
-    float3 realHorizon = envMap.SampleLevel(linearSampler, uvHorizon, 8.0).rgb * skyScale;
-
-    float3 avgSky = 0.5f * (realZenith + realHorizon);
-    float avgSkyLum = max(1e-4f, dot(avgSky, float3(0.2126f, 0.7152f, 0.0722f)));
-    ambientAutoBoost = clamp(0.12f / avgSkyLum, 1.0f, 12.0f);
-    realZenith *= ambientAutoBoost;
-    realHorizon *= ambientAutoBoost;
+    float3 realZenith = envMap.SampleLevel(linearSampler, uvZenith, 8.0).rgb * CLOUD_SKY_RADIANCE_SCALE;
+    float3 realHorizon = envMap.SampleLevel(linearSampler, uvHorizon, 8.0).rgb * CLOUD_SKY_RADIANCE_SCALE;
     // Use real sky colors directly.
     kSkyZenith = realZenith;
     kSkyHorizon = realHorizon;
@@ -430,7 +528,7 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
             // camera exposure; exposure is applied once in tonemap.
             float sunset = saturate((0.35f - sunElevation) / 0.35f);
             float3 sunsetTint = lerp(float3(1.0f, 1.0f, 1.0f), float3(1.0f, 0.86f, 0.72f), sunset * 0.7f);
-            float3 sunColorScaled = lightColor * 0.00010f * sunsetTint;
+            float3 sunColorScaled = lightColor * CLOUD_SUN_ILLUMINANCE_SCALE * sunsetTint;
 
             float shadowTerm = shadowTermCached;
             if (density > CloudCB.shadowDensityThreshold) {
@@ -449,7 +547,7 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
                    }
                    // Stronger absorption for light/shadow integration restores
                    // internal cloud structure without over-darkening edge wisps.
-                   float shadowAbsorption = absorptionCoeff * lerp(1.00f, 1.45f, denseMask);
+                   float shadowAbsorption = absorptionCoeff * lerp(1.08f, 1.70f, denseMask);
                    shadowTermCached = exp(-lDens * lStep * shadowAbsorption);
                }
                shadowTerm = shadowTermCached;
@@ -470,7 +568,7 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
             
             // 2. Ambient Light
             // Height based gradient
-            float hPct = (pos.y - CloudCB.cloudBottom) / (CloudCB.cloudTop - CloudCB.cloudBottom);
+            float hPct = (pos.y - CloudCB.cloudBottom) / (layerTop - CloudCB.cloudBottom);
             // kSkyHorizon and kSkyZenith now contain the actual sampled sky colors (if weighted)
             float3 ambient = lerp(kSkyHorizon, kSkyZenith, hPct);
             
@@ -490,6 +588,7 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
             float shadowOcclusion = 1.0f - shadowTerm;
             float msStep = (1.0f - stepTrans) * shadowOcclusion;
             float3 multiScatter = ambient * (0.55f * CloudCB.powderStrength * msStep);
+            multiScatter += sunColorScaled * (0.020f * CloudCB.powderStrength * msStep * powder);
 
             float3 source = (CloudCB.sunIntensity * directLight * sunColorScaled) + ambient + multiScatter;
             source = max(source, 0.0);
@@ -508,22 +607,22 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
     if (any(isnan(sum)) || any(isinf(sum))) sum = float3(0.0, 0.0, 0.0);
     if (isnan(transmittance) || isinf(transmittance)) transmittance = 1.0f;
 
-    // Scene-linear lift for dense cloud cores under physically-scaled lighting.
-    float cloudLightBoost = 10.0f;
-    sum *= cloudLightBoost;
-
     // Multiple-scattering tail (dense-core weighted, sky/sun tinted).
     float opacity = 1.0f - saturate(transmittance);
     float denseCore = pow(saturate(opacity), 1.7f);
     float sunset = saturate((0.35f - sunElevation) / 0.35f);
     float3 msSkyTint = lerp(kSkyHorizon, kSkyZenith, 0.35f);
-    float3 msSunTint = lightColor * 0.000072f *
+    float3 msSunTint = lightColor * CLOUD_MS_SUN_SCALE *
                        lerp(float3(1.0f, 1.0f, 1.0f), float3(1.0f, 0.85f, 0.70f), sunset * 0.7f);
     float3 msColor = lerp(msSkyTint, msSunTint, 0.38f);
     float msStrength = 0.012f + 0.030f * CloudCB.powderStrength;
     sum += msColor * (msStrength * denseCore);
 
-    sum = clamp(sum, 0.0, 64.0);
+    float4 cirrus = EvaluateCirrusLayer(rayOrigin, rayDir, sunDir, lightColor, kSkyZenith, kSkyHorizon);
+    sum = sum * cirrus.a + cirrus.rgb;
+    transmittance *= cirrus.a;
+
+    sum = clamp(sum, 0.0, 50000.0);
     transmittance = saturate(transmittance);
     return float4(sum, transmittance);
 }

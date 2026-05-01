@@ -2,6 +2,7 @@
 // Main Path Tracing RayGen shader with Accumulation and ReSTIR DI
 
 #include "raytracing/common.hlsli"
+#include "clouds.hlsl"
 #include "raytracing/primary_guide.hlsli"
 #include "random_lib.hlsl"
 #include "lights_lib.hlsl"
@@ -831,9 +832,9 @@ void RayGen()
                     baked.rgb = max(baked.rgb, 0.0);
                     float opacity = 1.0f - baked.a;
                     float denseCore = pow(saturate(opacity), 2.2f);
-                    float skyLeak = 0.10f * denseCore;
+                    float skyLeak = 0.035f * denseCore;
                     missColor = baked.rgb + rrColor * (baked.a + skyLeak);
-                    missColor += rrColor * (0.025f * denseCore);
+                    missColor += rrColor * (0.006f * denseCore);
                     missColor = clamp(missColor, 0.0f, 100000.0f);
                 } else {
                     missColor = rrColor;
@@ -1000,6 +1001,10 @@ void RayGen()
                 while (q.Proceed()) {}
                 
                 if (q.CommittedStatus() == COMMITTED_NOTHING) {
+                    float3 visibleRadiance = radiance_final;
+                    if (res.lightIndex == 0xFFFFFFFF && cloudRenderingEnabled > 0.5f) {
+                        visibleRadiance *= CloudSunTransmittance(shadowRay.Origin, shadowRay.Direction);
+                    }
                     float pdfLight = (res.W > 0.0) ? (1.0 / res.W) : 0.0;
 
                     float coatProb = 0.0;
@@ -1034,7 +1039,7 @@ void RayGen()
                     float pdfBrdf = pdfCoat + pdfSpec + pdfDiff;
                     float misW = (pdfLight * pdfLight) / (pdfLight * pdfLight + pdfBrdf * pdfBrdf + 1e-12);
                     
-                    directLighting = radiance_final * brdf_f * NdotL_final * res.W * misW;
+                    directLighting = visibleRadiance * brdf_f * NdotL_final * res.W * misW;
                 }
             }
 
@@ -1118,12 +1123,14 @@ void RayGen()
             float3 radiance_nee;
             float dist_nee;
             float neeWeight = 1.0; // PDF compensation factor
+            bool neeIsSun = false;
             if (numLights == 0 || next_float(rng) < 0.5) {
                 // Sample Sun (probability = numLights > 0 ? 0.5 : 1.0)
                 L_nee = normalize(lightDir.xyz);
                 radiance_nee = lightColor.rgb * lightColor.w;
                 dist_nee = 1000.0;
                 neeWeight = (numLights > 0) ? 2.0 : 1.0;
+                neeIsSun = true;
             } else {
                 // Sample random local light (probability = 0.5 * 1/numLights)
                 uint lightIdx = next_uint(rng) % numLights;
@@ -1158,6 +1165,9 @@ void RayGen()
                 SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                 SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
                 if (q_nee.CommittedStatus() == COMMITTED_NOTHING) {
+                     if (neeIsSun && cloudRenderingEnabled > 0.5f) {
+                         radiance_nee *= CloudSunTransmittance(shadowRay.Origin, shadowRay.Direction);
+                     }
                      float3 brdf = EvaluateSurfaceBrdf(N, V, L_nee,
                                                 payloadAlbedo, diffuseAlbedo,
                                                 metallic, roughness,
