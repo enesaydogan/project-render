@@ -43,6 +43,18 @@ struct CloudParams {
   // Animation
   float timeSeconds;
 
+  // Baked-sky quality controls
+  int previewBakeSamples; // Interactive bake samples per texel
+  int finalBakeSamples;   // Final/idle bake samples per texel
+  float bakeJitterStrength; // Angular supersampling radius in texels
+  float multiScatterBoost;  // Extra baked-only multiple scattering fill
+
+  // Baked lighting/art controls
+  float silverLiningStrength; // Directional edge brightening around the sun
+  float cloudType;            // 0=cumulus, 1=stratus, 2=overcast blend
+  float groundBounceStrength; // Warm lower-cloud fill
+  float shadowSoftness;       // Shadow/light march smoothing
+
   DirectX::XMFLOAT3 _pad; // ensure 16-byte boundaries
 };
 
@@ -117,6 +129,8 @@ private:
 
   // Bake control
   bool m_bakeRequested = false;
+  bool m_bakeInProgress = false;
+  UINT m_bakeNextRow = 0;
   bool m_pendingParamBake = false;
   bool m_pendingPreviewBake = false;
   bool m_pendingFinalBake = false;

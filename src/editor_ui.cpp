@@ -2304,6 +2304,24 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
                                            &cp.shadowStepSize, 10.0f, 500.0f);
         cloudChanged |=
             ImGui::SliderFloat("Shadow LOD", &cp.shadowLod, 0.0f, 5.0f);
+        cloudChanged |=
+            ImGui::SliderFloat("Shadow Softness", &cp.shadowSoftness, 0.0f, 1.0f);
+
+        ImGui::Separator();
+        cloudChanged |=
+            ImGui::SliderInt("Preview Bake Samples", &cp.previewBakeSamples, 1, 8);
+        cloudChanged |=
+            ImGui::SliderInt("Final Bake Samples", &cp.finalBakeSamples, 1, 32);
+        cloudChanged |= ImGui::SliderFloat("Bake Jitter",
+                                           &cp.bakeJitterStrength, 0.0f, 2.0f);
+        cloudChanged |= ImGui::SliderFloat("Multi-Scatter Boost",
+                                           &cp.multiScatterBoost, 0.0f, 2.0f);
+        cloudChanged |= ImGui::SliderFloat("Silver Lining",
+                                           &cp.silverLiningStrength, 0.0f, 2.0f);
+        cloudChanged |= ImGui::SliderFloat("Cloud Type",
+                                           &cp.cloudType, 0.0f, 2.0f);
+        cloudChanged |= ImGui::SliderFloat("Ground Bounce",
+                                           &cp.groundBounceStrength, 0.0f, 2.0f);
 
         if (cloudChanged) {
           DxrRenderer::ResetAccumulation();

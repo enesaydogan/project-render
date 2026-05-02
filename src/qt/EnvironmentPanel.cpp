@@ -161,6 +161,14 @@ void EnvironmentPanel::createUi()
     m_shadowSteps = CreateSliderControl(1.0, 24.0, 1.0, 0);
     m_shadowStepSize = CreateSliderControl(10.0, 500.0, 5.0, 1);
     m_shadowLod = CreateSliderControl(0.0, 5.0, 0.1, 2);
+    m_previewBakeSamples = CreateSliderControl(1.0, 8.0, 1.0, 0);
+    m_finalBakeSamples = CreateSliderControl(1.0, 32.0, 1.0, 0);
+    m_bakeJitterStrength = CreateSliderControl(0.0, 2.0, 0.05, 2);
+    m_multiScatterBoost = CreateSliderControl(0.0, 2.0, 0.05, 2);
+    m_silverLiningStrength = CreateSliderControl(0.0, 2.0, 0.05, 2);
+    m_cloudType = CreateSliderControl(0.0, 2.0, 0.05, 2);
+    m_groundBounceStrength = CreateSliderControl(0.0, 2.0, 0.05, 2);
+    m_shadowSoftness = CreateSliderControl(0.0, 1.0, 0.01, 2);
     cloudForm->addRow(m_cloudEnabled);
     cloudForm->addRow(m_resetCloudsButton);
     cloudForm->addRow(tr("Density"), m_cloudDensity);
@@ -184,6 +192,14 @@ void EnvironmentPanel::createUi()
     cloudForm->addRow(tr("Shadow Steps"), m_shadowSteps);
     cloudForm->addRow(tr("Shadow Step Size"), m_shadowStepSize);
     cloudForm->addRow(tr("Shadow LOD"), m_shadowLod);
+    cloudForm->addRow(tr("Preview Bake Samples"), m_previewBakeSamples);
+    cloudForm->addRow(tr("Final Bake Samples"), m_finalBakeSamples);
+    cloudForm->addRow(tr("Bake Jitter"), m_bakeJitterStrength);
+    cloudForm->addRow(tr("Multi-Scatter Boost"), m_multiScatterBoost);
+    cloudForm->addRow(tr("Silver Lining"), m_silverLiningStrength);
+    cloudForm->addRow(tr("Cloud Type"), m_cloudType);
+    cloudForm->addRow(tr("Ground Bounce"), m_groundBounceStrength);
+    cloudForm->addRow(tr("Shadow Softness"), m_shadowSoftness);
     cloudLayout->addWidget(cloudGroup);
     cloudLayout->addStretch(1);
     tabs->addTab(cloudTab, tr("Clouds"));
@@ -272,6 +288,14 @@ void EnvironmentPanel::createUi()
     connectCloudControl(m_shadowSteps);
     connectCloudControl(m_shadowStepSize);
     connectCloudControl(m_shadowLod);
+    connectCloudControl(m_previewBakeSamples);
+    connectCloudControl(m_finalBakeSamples);
+    connectCloudControl(m_bakeJitterStrength);
+    connectCloudControl(m_multiScatterBoost);
+    connectCloudControl(m_silverLiningStrength);
+    connectCloudControl(m_cloudType);
+    connectCloudControl(m_groundBounceStrength);
+    connectCloudControl(m_shadowSoftness);
 }
 
 void EnvironmentPanel::syncFromRenderer()
@@ -356,6 +380,14 @@ void EnvironmentPanel::syncFromRenderer()
     m_shadowSteps->setValue(cp.shadowSteps);
     m_shadowStepSize->setValue(cp.shadowStepSize);
     m_shadowLod->setValue(cp.shadowLod);
+    m_previewBakeSamples->setValue(cp.previewBakeSamples);
+    m_finalBakeSamples->setValue(cp.finalBakeSamples);
+    m_bakeJitterStrength->setValue(cp.bakeJitterStrength);
+    m_multiScatterBoost->setValue(cp.multiScatterBoost);
+    m_silverLiningStrength->setValue(cp.silverLiningStrength);
+    m_cloudType->setValue(cp.cloudType);
+    m_groundBounceStrength->setValue(cp.groundBounceStrength);
+    m_shadowSoftness->setValue(cp.shadowSoftness);
 
     const bool cloudsEditable = g_cloudRenderingEnabled;
     m_cloudDensity->setEnabled(cloudsEditable);
@@ -379,6 +411,14 @@ void EnvironmentPanel::syncFromRenderer()
     m_shadowSteps->setEnabled(cloudsEditable);
     m_shadowStepSize->setEnabled(cloudsEditable);
     m_shadowLod->setEnabled(cloudsEditable);
+    m_previewBakeSamples->setEnabled(cloudsEditable);
+    m_finalBakeSamples->setEnabled(cloudsEditable);
+    m_bakeJitterStrength->setEnabled(cloudsEditable);
+    m_multiScatterBoost->setEnabled(cloudsEditable);
+    m_silverLiningStrength->setEnabled(cloudsEditable);
+    m_cloudType->setEnabled(cloudsEditable);
+    m_groundBounceStrength->setEnabled(cloudsEditable);
+    m_shadowSoftness->setEnabled(cloudsEditable);
 
     m_syncing = false;
 }
@@ -472,6 +512,14 @@ void EnvironmentPanel::applyCloudSettings()
     cp.shadowSteps = static_cast<int>(m_shadowSteps->value());
     cp.shadowStepSize = static_cast<float>(m_shadowStepSize->value());
     cp.shadowLod = static_cast<float>(m_shadowLod->value());
+    cp.previewBakeSamples = static_cast<int>(m_previewBakeSamples->value());
+    cp.finalBakeSamples = static_cast<int>(m_finalBakeSamples->value());
+    cp.bakeJitterStrength = static_cast<float>(m_bakeJitterStrength->value());
+    cp.multiScatterBoost = static_cast<float>(m_multiScatterBoost->value());
+    cp.silverLiningStrength = static_cast<float>(m_silverLiningStrength->value());
+    cp.cloudType = static_cast<float>(m_cloudType->value());
+    cp.groundBounceStrength = static_cast<float>(m_groundBounceStrength->value());
+    cp.shadowSoftness = static_cast<float>(m_shadowSoftness->value());
 
     // CloudManager::Update detects parameter edits and schedules a trailing-edge
     // bake. RequestBake() here would force the full sky bake on every slider tick.

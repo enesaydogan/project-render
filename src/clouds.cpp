@@ -207,6 +207,63 @@ float WorleyFBM(float x, float y, float z, int c0, int c1, int c2,
   return (w0 * 0.625f + w1 * 0.25f + w2 * 0.125f);
 }
 
+std::vector<std::vector<UINT8>>
+BuildRgba8MipChain3D(const std::vector<UINT8> &base, UINT width, UINT height,
+                     UINT depth) {
+  std::vector<std::vector<UINT8>> mips;
+  mips.push_back(base);
+
+  UINT srcW = width;
+  UINT srcH = height;
+  UINT srcD = depth;
+  while (srcW > 1 || srcH > 1 || srcD > 1) {
+    const UINT dstW = (std::max)(1u, srcW >> 1);
+    const UINT dstH = (std::max)(1u, srcH >> 1);
+    const UINT dstD = (std::max)(1u, srcD >> 1);
+    const std::vector<UINT8> &src = mips.back();
+    std::vector<UINT8> dst((size_t)dstW * dstH * dstD * 4);
+
+    for (UINT z = 0; z < dstD; ++z) {
+      for (UINT y = 0; y < dstH; ++y) {
+        for (UINT x = 0; x < dstW; ++x) {
+          UINT sum[4] = {0, 0, 0, 0};
+          UINT count = 0;
+          for (UINT dz = 0; dz < 2; ++dz) {
+            const UINT sz = (std::min)(srcD - 1, z * 2 + dz);
+            for (UINT dy = 0; dy < 2; ++dy) {
+              const UINT sy = (std::min)(srcH - 1, y * 2 + dy);
+              for (UINT dx = 0; dx < 2; ++dx) {
+                const UINT sx = (std::min)(srcW - 1, x * 2 + dx);
+                const size_t srcIdx =
+                    ((size_t)sz * srcW * srcH + (size_t)sy * srcW + sx) * 4;
+                sum[0] += src[srcIdx + 0];
+                sum[1] += src[srcIdx + 1];
+                sum[2] += src[srcIdx + 2];
+                sum[3] += src[srcIdx + 3];
+                ++count;
+              }
+            }
+          }
+
+          const size_t dstIdx =
+              ((size_t)z * dstW * dstH + (size_t)y * dstW + x) * 4;
+          dst[dstIdx + 0] = (UINT8)((sum[0] + count / 2) / count);
+          dst[dstIdx + 1] = (UINT8)((sum[1] + count / 2) / count);
+          dst[dstIdx + 2] = (UINT8)((sum[2] + count / 2) / count);
+          dst[dstIdx + 3] = (UINT8)((sum[3] + count / 2) / count);
+        }
+      }
+    }
+
+    mips.push_back(std::move(dst));
+    srcW = dstW;
+    srcH = dstH;
+    srcD = dstD;
+  }
+
+  return mips;
+}
+
 CloudParams MakeDefaultCloudParams() {
   CloudParams p = {};
 
@@ -244,6 +301,14 @@ CloudParams MakeDefaultCloudParams() {
   p.shadowDensityThreshold = 0.025f;
 
   p.timeSeconds = 0.0f;
+  p.previewBakeSamples = 1;
+  p.finalBakeSamples = 4;
+  p.bakeJitterStrength = 0.85f;
+  p.multiScatterBoost = 0.55f;
+  p.silverLiningStrength = 0.80f;
+  p.cloudType = 0.18f;
+  p.groundBounceStrength = 0.85f;
+  p.shadowSoftness = 0.45f;
   p._pad = {0, 0, 0};
   return p;
 }
@@ -268,6 +333,8 @@ void CloudManager::Initialize(ID3D12Device *device,
   m_lastObservedParams = m_params;
   m_lastBakedParams = m_params;
   m_bakeRequested = true;
+  m_bakeInProgress = false;
+  m_bakeNextRow = 0;
   m_pendingParamBake = false;
   m_pendingPreviewBake = false;
   m_pendingFinalBake = false;
@@ -287,6 +354,8 @@ ID3D12Resource *CloudManager::GetBakedSkyTexture() const {
 
 void CloudManager::RequestBake() {
   m_bakeRequested = true;
+  m_bakeInProgress = false;
+  m_bakeNextRow = 0;
   m_pendingParamBake = false;
   m_pendingPreviewBake = false;
   m_pendingFinalBake = false;
@@ -414,6 +483,8 @@ void CloudManager::Update(float dt, UINT frameIndex) {
   if (memcmp(&a, &b, sizeof(CloudParams)) != 0) {
     m_lastObservedParams = m_params;
     m_lastObservedParams.timeSeconds = 0.0f;
+    m_bakeInProgress = false;
+    m_bakeNextRow = 0;
     m_pendingParamBake = true;
     m_pendingPreviewBake = true;
     m_pendingFinalBake = true;
@@ -493,7 +564,8 @@ static void CreateBakePipelineIfNeeded(ID3D12Device* device,
   // 1: Cloud CB (b10, space2) - root CBV for simplicity
   // 2: SRV table (t10..t12, space2)
   // 3: UAV table (u0)
-  D3D12_ROOT_PARAMETER params[4] = {};
+  // 4: bake row constants (b11, space2): startY, endY
+  D3D12_ROOT_PARAMETER params[5] = {};
 
   // b0 (Camera)
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
@@ -531,6 +603,12 @@ static void CreateBakePipelineIfNeeded(ID3D12Device* device,
   params[3].DescriptorTable.NumDescriptorRanges = 1;
   params[3].DescriptorTable.pDescriptorRanges = &uavRange;
   params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+  params[4].Constants.ShaderRegister = 11;
+  params[4].Constants.RegisterSpace = 2;
+  params[4].Constants.Num32BitValues = 4;
+  params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
   // Add a static linear sampler (binding s0) to match shader's 'linearSampler'
   D3D12_STATIC_SAMPLER_DESC staticSampler = {};
@@ -595,6 +673,10 @@ void CloudManager::BakeSky(ID3D12GraphicsCommandList *cmdList, ID3D12Resource *c
       m_requestedBakeQuality == BakeQuality::Preview
           ? m_previewBakedSkyUAVGpuHandle
           : m_finalBakedSkyUAVGpuHandle;
+  D3D12_CPU_DESCRIPTOR_HANDLE targetUAVCpu =
+      m_requestedBakeQuality == BakeQuality::Preview
+          ? m_previewBakedSkyUAVCpuHandle
+          : m_finalBakedSkyUAVCpuHandle;
 
   if (!m_initialized || !cmdList || !targetTexture) {
     return;
@@ -645,6 +727,14 @@ void CloudManager::BakeSky(ID3D12GraphicsCommandList *cmdList, ID3D12Resource *c
   // Root table (3) = UAV for baked sky
   cmdList->SetComputeRootDescriptorTable(3, targetUAV);
 
+  D3D12_RESOURCE_DESC desc = targetTexture->GetDesc();
+  const UINT textureHeight = (UINT)desc.Height;
+  const bool startingBake = !m_bakeInProgress || m_bakeNextRow >= textureHeight;
+  if (startingBake) {
+    m_bakeInProgress = true;
+    m_bakeNextRow = 0;
+  }
+
   // Transition baked texture to UAV
   {
     D3D12_RESOURCE_BARRIER barrier = {};
@@ -658,12 +748,36 @@ void CloudManager::BakeSky(ID3D12GraphicsCommandList *cmdList, ID3D12Resource *c
     cmdList->ResourceBarrier(1, &barrier);
   }
 
+  if (startingBake) {
+    FLOAT clearValue[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    cmdList->ClearUnorderedAccessViewFloat(targetUAV, targetUAVCpu,
+                                           targetTexture, clearValue, 0,
+                                           nullptr);
+    D3D12_RESOURCE_BARRIER clearBarrier = {};
+    clearBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    clearBarrier.UAV.pResource = targetTexture;
+    cmdList->ResourceBarrier(1, &clearBarrier);
+  }
+
   // Dispatch
-  D3D12_RESOURCE_DESC desc = targetTexture->GetDesc();
+  const UINT requestedSamples =
+      m_requestedBakeQuality == BakeQuality::Preview
+          ? (UINT)(std::max)(1, m_params.previewBakeSamples)
+          : (UINT)(std::max)(1, m_params.finalBakeSamples);
+  const UINT rowsPerSlice =
+      m_requestedBakeQuality == BakeQuality::Preview
+          ? 64u
+          : (std::max)(2u, 64u / (std::min)(requestedSamples, 32u));
+  const UINT startY = m_bakeNextRow;
+  const UINT endY = (std::min)(textureHeight, startY + rowsPerSlice);
+  UINT bakeConstants[4] = {startY, endY, 0u, 0u};
+  cmdList->SetComputeRoot32BitConstants(4, 4, bakeConstants, 0);
+
   const UINT tgX = 16, tgY = 16;
   UINT dispatchX = (UINT)((desc.Width + tgX - 1) / tgX);
-  UINT dispatchY = (UINT)((desc.Height + tgY - 1) / tgY);
+  UINT dispatchY = (UINT)(((endY - startY) + tgY - 1) / tgY);
   cmdList->Dispatch(dispatchX, dispatchY, 1);
+  m_bakeNextRow = endY;
 
   // UAV barrier & transition back to SRV for sampling
   D3D12_RESOURCE_BARRIER uavBarrier = {};
@@ -683,6 +797,12 @@ void CloudManager::BakeSky(ID3D12GraphicsCommandList *cmdList, ID3D12Resource *c
     cmdList->ResourceBarrier(1, &barrier);
   }
 
+  const bool bakeComplete = m_bakeNextRow >= textureHeight;
+  if (!bakeComplete) {
+    if (device) device->Release();
+    return;
+  }
+
   // Mark baked state
   const bool bakedPreview = m_requestedBakeQuality == BakeQuality::Preview;
   m_activeBakedSkyTexture =
@@ -690,6 +810,8 @@ void CloudManager::BakeSky(ID3D12GraphicsCommandList *cmdList, ID3D12Resource *c
   UpdateBakedSkySRV(device, targetTexture);
 
   m_bakeRequested = false;
+  m_bakeInProgress = false;
+  m_bakeNextRow = 0;
   m_secondsSinceBake = 0.0f;
   m_lastObservedParams = m_params;
   m_lastObservedParams.timeSeconds = 0.0f;
@@ -720,7 +842,7 @@ void CloudManager::CreateTextures(ID3D12Device *device,
   // R: Perlin-Worley (Base Shape)
   // G: Worley FBM (Freq 1)
   // B: Worley FBM (Freq 2)
-  // A: Worley FBM (Freq 3)
+  // A: low-frequency warp helper
   {
     const UINT width = 128;
     const UINT height = 128;
@@ -767,8 +889,6 @@ void CloudManager::CreateTextures(ID3D12Device *device,
               // Worley FBMs for Base
               float wf1 = WorleyFBM(u, v, w, 4, 8, 16, worleySeed);
               float wf2 = WorleyFBM(u, v, w, 8, 16, 32, worleySeed ^ 0x12345678);
-              float wf3 = WorleyFBM(u, v, w, 16, 32, 64, worleySeed ^ 0x87654321);
-
               float worleyBase = wf1;
               float perlinWorley = Remap(perlin, worleyBase, 1.0f, 0.0f, 1.0f);
               perlinWorley = (std::max)(0.0f, (std::min)(1.0f, perlinWorley));
@@ -789,13 +909,16 @@ void CloudManager::CreateTextures(ID3D12Device *device,
 
     for (auto &th : threads) th.join();
 
+    std::vector<std::vector<UINT8>> mips =
+        BuildRgba8MipChain3D(noiseData, width, height, depth);
+
     // Create Resource
     D3D12_RESOURCE_DESC texDesc = {};
     texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE3D;
     texDesc.Width = width;
     texDesc.Height = height;
     texDesc.DepthOrArraySize = depth;
-    texDesc.MipLevels = 1;
+    texDesc.MipLevels = (UINT16)mips.size();
     texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     texDesc.SampleDesc.Count = 1;
     texDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
@@ -810,7 +933,7 @@ void CloudManager::CreateTextures(ID3D12Device *device,
 
     // Upload
     const UINT64 uploadSize =
-        GetRequiredIntermediateSize(m_baseTexture.Get(), 0, 1);
+        GetRequiredIntermediateSize(m_baseTexture.Get(), 0, (UINT)mips.size());
     Microsoft::WRL::ComPtr<ID3D12Resource> uploadBuffer;
     D3D12_HEAP_PROPERTIES uploadHeap = {};
     uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
@@ -831,13 +954,19 @@ void CloudManager::CreateTextures(ID3D12Device *device,
         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
         IID_PPV_ARGS(&uploadBuffer)));
 
-    D3D12_SUBRESOURCE_DATA srcData = {};
-    srcData.pData = noiseData.data();
-    srcData.RowPitch = width * 4;
-    srcData.SlicePitch = srcData.RowPitch * height;
+    std::vector<D3D12_SUBRESOURCE_DATA> srcData(mips.size());
+    UINT mipW = width;
+    UINT mipH = height;
+    for (size_t mip = 0; mip < mips.size(); ++mip) {
+      srcData[mip].pData = mips[mip].data();
+      srcData[mip].RowPitch = (LONG_PTR)mipW * 4;
+      srcData[mip].SlicePitch = srcData[mip].RowPitch * mipH;
+      mipW = (std::max)(1u, mipW >> 1);
+      mipH = (std::max)(1u, mipH >> 1);
+    }
 
     UpdateSubresources(cmdList, m_baseTexture.Get(), uploadBuffer.Get(), 0, 0,
-                       1, &srcData);
+                       (UINT)srcData.size(), srcData.data());
 
     D3D12_RESOURCE_BARRIER barrier = {};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -904,12 +1033,15 @@ void CloudManager::CreateTextures(ID3D12Device *device,
       for (auto &th : threads) th.join();
     }
 
+    std::vector<std::vector<UINT8>> mips =
+        BuildRgba8MipChain3D(noiseData, width, height, depth);
+
     D3D12_RESOURCE_DESC texDesc = {};
     texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE3D;
     texDesc.Width = width;
     texDesc.Height = height;
     texDesc.DepthOrArraySize = depth;
-    texDesc.MipLevels = 1;
+    texDesc.MipLevels = (UINT16)mips.size();
     texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     texDesc.SampleDesc.Count = 1;
     texDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
@@ -924,7 +1056,7 @@ void CloudManager::CreateTextures(ID3D12Device *device,
     m_detailTexture->SetName(L"CloudDetailTexture");
 
     const UINT64 uploadSize =
-        GetRequiredIntermediateSize(m_detailTexture.Get(), 0, 1);
+        GetRequiredIntermediateSize(m_detailTexture.Get(), 0, (UINT)mips.size());
     Microsoft::WRL::ComPtr<ID3D12Resource> uploadBuffer;
     D3D12_HEAP_PROPERTIES uploadHeap = {};
     uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
@@ -945,13 +1077,19 @@ void CloudManager::CreateTextures(ID3D12Device *device,
         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
         IID_PPV_ARGS(&uploadBuffer)));
 
-    D3D12_SUBRESOURCE_DATA srcData = {};
-    srcData.pData = noiseData.data();
-    srcData.RowPitch = width * 4;
-    srcData.SlicePitch = srcData.RowPitch * height;
+    std::vector<D3D12_SUBRESOURCE_DATA> srcData(mips.size());
+    UINT mipW = width;
+    UINT mipH = height;
+    for (size_t mip = 0; mip < mips.size(); ++mip) {
+      srcData[mip].pData = mips[mip].data();
+      srcData[mip].RowPitch = (LONG_PTR)mipW * 4;
+      srcData[mip].SlicePitch = srcData[mip].RowPitch * mipH;
+      mipW = (std::max)(1u, mipW >> 1);
+      mipH = (std::max)(1u, mipH >> 1);
+    }
 
     UpdateSubresources(cmdList, m_detailTexture.Get(), uploadBuffer.Get(), 0, 0,
-                       1, &srcData);
+                       (UINT)srcData.size(), srcData.data());
 
     D3D12_RESOURCE_BARRIER barrier = {};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;

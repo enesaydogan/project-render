@@ -2797,11 +2797,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
         // Draw Skybox (Always passes depth, but doesn't write depth)
         if (g_cloudManager.NeedsBake()) {
-          fprintf(stderr,
-                  "Main: calling g_cloudManager.BakeSky() before DrawSkybox\n");
           g_cloudManager.BakeSky(DX12Context::g_commandList.Get(),
                                  g_cameraConstantBuffer.Get());
-          fprintf(stderr, "Main: returned from g_cloudManager.BakeSky()\n");
         }
         RasterRenderer::DrawSkybox(DX12Context::g_commandList.Get(),
                                    g_cameraConstantBuffer.Get());

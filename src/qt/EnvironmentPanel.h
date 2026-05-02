@@ -71,6 +71,14 @@ private:
     SliderControl *m_shadowSteps = nullptr;
     SliderControl *m_shadowStepSize = nullptr;
     SliderControl *m_shadowLod = nullptr;
+    SliderControl *m_previewBakeSamples = nullptr;
+    SliderControl *m_finalBakeSamples = nullptr;
+    SliderControl *m_bakeJitterStrength = nullptr;
+    SliderControl *m_multiScatterBoost = nullptr;
+    SliderControl *m_silverLiningStrength = nullptr;
+    SliderControl *m_cloudType = nullptr;
+    SliderControl *m_groundBounceStrength = nullptr;
+    SliderControl *m_shadowSoftness = nullptr;
 
     QTimer *m_refreshTimer = nullptr;
 };

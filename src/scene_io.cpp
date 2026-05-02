@@ -521,7 +521,11 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
     {"ps",cp.powderStrength},{"ca",cp.cirrusAmount},{"gsh",cp.cloudShadowStrength},
     {"ssh",cp.shadowSteps},{"sss",cp.shadowStepSize},
     {"sl",cp.shadowLod},{"ms2",cp.maxSteps},{"vsm",cp.verticalStepMeters},
-    {"se",cp.shadowEvery},{"sdt",cp.shadowDensityThreshold}
+    {"se",cp.shadowEvery},{"sdt",cp.shadowDensityThreshold},
+    {"pbs",cp.previewBakeSamples},{"fbs",cp.finalBakeSamples},
+    {"bjs",cp.bakeJitterStrength},{"msb",cp.multiScatterBoost},
+    {"sls",cp.silverLiningStrength},{"cty",cp.cloudType},
+    {"gbs",cp.groundBounceStrength},{"sso",cp.shadowSoftness}
   };
 
   // Streamline
@@ -818,6 +822,10 @@ static void ApplyMetadataPRS(const json &j) {
     cp.shadowStepSize=c.value("sss",cp.shadowStepSize); cp.shadowLod=c.value("sl",cp.shadowLod);
     cp.maxSteps=c.value("ms2",cp.maxSteps); cp.verticalStepMeters=c.value("vsm",cp.verticalStepMeters);
     cp.shadowEvery=c.value("se",cp.shadowEvery); cp.shadowDensityThreshold=c.value("sdt",cp.shadowDensityThreshold);
+    cp.previewBakeSamples=c.value("pbs",cp.previewBakeSamples); cp.finalBakeSamples=c.value("fbs",cp.finalBakeSamples);
+    cp.bakeJitterStrength=c.value("bjs",cp.bakeJitterStrength); cp.multiScatterBoost=c.value("msb",cp.multiScatterBoost);
+    cp.silverLiningStrength=c.value("sls",cp.silverLiningStrength); cp.cloudType=c.value("cty",cp.cloudType);
+    cp.groundBounceStrength=c.value("gbs",cp.groundBounceStrength); cp.shadowSoftness=c.value("sso",cp.shadowSoftness);
   }
   if (j.contains("stl")) {
     auto &s = j["stl"];

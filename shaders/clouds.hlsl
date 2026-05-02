@@ -36,6 +36,16 @@ struct CloudParams {
 
     float timeSeconds;
 
+    int previewBakeSamples;
+    int finalBakeSamples;
+    float bakeJitterStrength;
+    float multiScatterBoost;
+
+    float silverLiningStrength;
+    float cloudType;
+    float groundBounceStrength;
+    float shadowSoftness;
+
     float3 _pad;
 };
 
@@ -69,7 +79,8 @@ float PhaseHG(float cosTheta, float g) {
     float g2Back = gBack * gBack;
     float back = (1.0f - g2Back) / (4.0f * CLOUDS_PI * pow(1.0f + g2Back - 2.0f * gBack * cosTheta, 1.5f));
     
-    return lerp(fwd, back, 0.4f);
+    float backMix = lerp(0.30f, 0.48f, saturate(CloudCB.silverLiningStrength));
+    return lerp(fwd, back, backMix);
 }
 
 float Remap(float x, float a, float b, float c, float d) {
@@ -280,11 +291,16 @@ float SampleDensity(float3 p, float lod) {
         LinearWrapSampler,
         noiseCoord * 0.23f + float3(0.0f, CloudCB.timeSeconds * 0.0002f, 0.0f),
         lod + 2.0f).g;
+    float authoredType = saturate(CloudCB.cloudType);
+    float overcastBlend = saturate(CloudCB.cloudType - 1.0f);
     float typeBlend = saturate(CloudCB.coverageVariation) * smoothstep(0.52f, 0.92f, typeNoise);
+    typeBlend = saturate(max(typeBlend, authoredType * 0.82f));
 
     float cumulusProfile = pow(saturate(heightGrad), max(0.35f, CloudCB.shapePower));
     float stratusProfile = smoothstep(0.0f, 0.08f, heightPct) * smoothstep(0.68f, 0.26f, heightPct);
-    float verticalProfile = lerp(cumulusProfile, stratusProfile, typeBlend * 0.22f);
+    float overcastProfile = smoothstep(0.0f, 0.04f, heightPct) * smoothstep(0.96f, 0.54f, heightPct);
+    float verticalProfile = lerp(cumulusProfile, stratusProfile, typeBlend * 0.35f);
+    verticalProfile = lerp(verticalProfile, overcastProfile, overcastBlend);
     baseCloud *= verticalProfile;
 
     // Shape curve: keep cumulus a bit punchier, stratus a bit softer.
@@ -302,6 +318,7 @@ float SampleDensity(float3 p, float lod) {
     // High threshold at low coverage removes most clouds; low threshold at high
     // coverage produces overcast-like fill.
     float densityThreshold = lerp(0.84f, 0.045f, coverageLinear);
+    densityThreshold = lerp(densityThreshold, 0.025f, overcastBlend);
 
     // Standard Schneider remap:
     float macroMask = smoothstep(lerp(0.58f, 0.24f, coverageLinear),
@@ -310,7 +327,7 @@ float SampleDensity(float3 p, float lod) {
     float highCoverageMask = smoothstep(lerp(0.62f, 0.16f, coverageLinear),
                                         lerp(0.82f, 0.34f, coverageLinear),
                                         saturate(0.62f * weatherNoise + 0.38f * broadFill));
-    macroMask = saturate(max(macroMask, highCoverageMask * highCoverage));
+    macroMask = saturate(max(macroMask, highCoverageMask * max(highCoverage, overcastBlend)));
     float cloudSignal = baseCloud * lerp(0.04f, lerp(1.05f, 1.48f, highCoverage), macroMask);
     float covRemap = Remap(cloudSignal, densityThreshold, 1.0f, 0.0f, 1.0f);
     baseCloud = covRemap; 
@@ -339,6 +356,7 @@ float SampleDensity(float3 p, float lod) {
         
         // Remap density based on detail
         float erosion = CloudCB.erosion * lerp(0.36f, 0.72f, 1.0f - typeBlend);
+        erosion *= lerp(1.0f, 0.58f, overcastBlend);
         baseCloud = Remap(baseCloud, directionalErosion * erosion, 1.0, 0.0, 1.0);
     }
     
@@ -404,7 +422,9 @@ float CloudSunTransmittance(float3 worldPos, float3 sunDir)
                          CloudCB.absorption *
                          CLOUD_SHADOW_ABSORPTION_SCALE *
                          CloudCB.cloudShadowStrength;
-    return lerp(1.0f, exp(-opticalDepth), saturate(CloudCB.cloudShadowStrength));
+    float tr = exp(-opticalDepth);
+    tr = pow(saturate(tr), lerp(1.0f, 0.68f, saturate(CloudCB.shadowSoftness)));
+    return lerp(1.0f, tr, saturate(CloudCB.cloudShadowStrength));
 }
 
 float4 EvaluateCirrusLayer(float3 rayOrigin, float3 rayDir, float3 sunDir, float3 sunIlluminance,
@@ -438,9 +458,10 @@ float4 EvaluateCirrusLayer(float3 rayOrigin, float3 rayDir, float3 sunDir, float
 
     float cosAngle = dot(rayDir, sunDir);
     float phase = PhaseHG(cosAngle, 0.72f);
+    float silver = pow(saturate(cosAngle), 8.0f) * saturate(CloudCB.silverLiningStrength);
     float3 skyTint = lerp(skyHorizon, skyZenith, saturate(rayDir.y));
     float3 sunTint = sunIlluminance * (CLOUD_MS_SUN_SCALE * 0.42f);
-    float3 color = lerp(skyTint * 0.55f, sunTint, saturate(phase * 5.0f)) * opacity;
+    float3 color = lerp(skyTint * 0.55f, sunTint, saturate(phase * 5.0f + silver)) * opacity;
     return float4(color, 1.0f - opacity);
 }
 
@@ -611,6 +632,8 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
                    // internal cloud structure without over-darkening edge wisps.
                    float shadowAbsorption = absorptionCoeff * lerp(1.08f, 1.70f, denseMask);
                    shadowTermCached = exp(-lDens * lStep * shadowAbsorption);
+                   shadowTermCached = pow(saturate(shadowTermCached),
+                                          lerp(1.0f, 0.68f, saturate(CloudCB.shadowSoftness)));
                }
                shadowTerm = shadowTermCached;
             } else {
@@ -621,6 +644,8 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
             // Sun-angle + density dependent phase keeps silver-lining and avoids flat shading.
             float gLocal = clamp(basePhaseG + lerp(0.03f, 0.14f, denseMask), -0.95f, 0.93f);
             float phaseLocal = PhaseHG(cosAngle, gLocal);
+            float edgeLight = pow(saturate(cosAngle), lerp(14.0f, 5.5f, saturate(CloudCB.silverLiningStrength)));
+            phaseLocal += edgeLight * saturate(CloudCB.silverLiningStrength) * lerp(0.025f, 0.11f, 1.0f - denseMask);
             float backScatter = pow(saturate(-cosAngle), 2.0f) * (1.0f - sunElevation) * 0.18f;
             phaseLocal += backScatter;
 
@@ -640,7 +665,7 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
 
             // Ground bounce gives cloud bottoms warmer/filled response.
             float groundWeight = (1.0f - saturate(hPct)) * (0.35f + 0.65f * denseMask);
-            float3 groundBounce = kSkyHorizon * (0.12f * groundWeight);
+            float3 groundBounce = kSkyHorizon * (0.12f * groundWeight * CloudCB.groundBounceStrength);
             ambient += groundBounce;
 
             // Prevent full-black cloud silhouettes under low ambient exposure.
@@ -649,8 +674,9 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
             
             float shadowOcclusion = 1.0f - shadowTerm;
             float msStep = (1.0f - stepTrans) * shadowOcclusion;
-            float3 multiScatter = ambient * (0.55f * CloudCB.powderStrength * msStep);
-            multiScatter += sunColorScaled * (0.020f * CloudCB.powderStrength * msStep * powder);
+            float msBoost = max(0.0f, CloudCB.multiScatterBoost);
+            float3 multiScatter = ambient * ((0.55f + 0.35f * msBoost) * CloudCB.powderStrength * msStep);
+            multiScatter += sunColorScaled * ((0.020f + 0.018f * msBoost) * CloudCB.powderStrength * msStep * powder);
 
             float3 source = (CloudCB.sunIntensity * directLight * sunColorScaled) + ambient + multiScatter;
             source = max(source, 0.0);
@@ -677,7 +703,7 @@ float4 RaymarchClouds(float3 rayOrigin, float3 rayDir, float tMin, float tMax, f
     float3 msSunTint = lightColor * CLOUD_MS_SUN_SCALE *
                        lerp(float3(1.0f, 1.0f, 1.0f), float3(1.0f, 0.85f, 0.70f), sunset * 0.7f);
     float3 msColor = lerp(msSkyTint, msSunTint, 0.38f);
-    float msStrength = 0.012f + 0.030f * CloudCB.powderStrength;
+    float msStrength = 0.012f + 0.030f * CloudCB.powderStrength + 0.018f * max(0.0f, CloudCB.multiScatterBoost);
     sum += msColor * (msStrength * denseCore);
 
     float4 cirrus = EvaluateCirrusLayer(rayOrigin, rayDir, sunDir, lightColor, kSkyZenith, kSkyHorizon);
