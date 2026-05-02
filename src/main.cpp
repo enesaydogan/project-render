@@ -2644,6 +2644,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
               g_renderExportJob.active && g_exportRenderTarget && g_exportRtvHeap;
           if (g_renderExportJob.active && g_exportRenderTarget &&
               g_exportRtvHeap) {
+            if (g_exportRenderTargetState != D3D12_RESOURCE_STATE_PRESENT) {
+              TR(DX12Context::g_commandList.Get(), g_exportRenderTarget.Get(),
+                 g_exportRenderTargetState, D3D12_RESOURCE_STATE_PRESENT);
+              g_exportRenderTargetState = D3D12_RESOURCE_STATE_PRESENT;
+            }
             dxrTarget = g_exportRenderTarget.Get();
             dxrRtv = g_exportRtvHeap->GetCPUDescriptorHandleForHeapStart();
           }

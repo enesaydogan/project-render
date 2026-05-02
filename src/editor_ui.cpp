@@ -118,6 +118,17 @@ static std::atomic<float> g_sceneIoProgressAtomic{0.0f};
 static std::atomic<uint32_t> g_sceneIoTickAtomic{0};
 static std::string g_sceneIoStageAtomic;
 static std::string g_currentScenePath;
+
+static bool RecreateDxrPipelineSafe(UINT width, UINT height,
+                                    const char *context);
+
+static void GetCurrentDxrPreviewSize(UINT &width, UINT &height) {
+  D3D12_RECT previewRect = {0, 0, (LONG)g_windowWidth, (LONG)g_windowHeight};
+  GetSafeFramePreviewRect(g_windowWidth, g_windowHeight, previewRect);
+  width = (UINT)(std::max<LONG>)(1, previewRect.right - previewRect.left);
+  height = (UINT)(std::max<LONG>)(1, previewRect.bottom - previewRect.top);
+}
+
 struct HiddenProcessResult {
   int exitCode = -1;
   DWORD launchError = 0;
@@ -322,6 +333,22 @@ static void UpdateSceneIoJob() {
       g_currentScenePath = g_sceneIoJob.path;
       fprintf(stderr, "%s scene %s\n",
               g_sceneIoJob.isSave ? "Saved" : "Loaded", g_sceneIoJob.path.c_str());
+      if (!g_sceneIoJob.isSave) {
+        Scene::RequestRendererFullRebuild();
+        g_cloudManager.RequestBake();
+        DxrRenderer::ResetStreamlineHistory();
+        DxrRenderer::ResetAccumulation();
+        UpdateCameraCB();
+        if (g_currentRenderMode == RenderMode::DXR && g_rayTracingSupported) {
+          UINT dxrWidth = 1;
+          UINT dxrHeight = 1;
+          GetCurrentDxrPreviewSize(dxrWidth, dxrHeight);
+          if (!RecreateDxrPipelineSafe(dxrWidth, dxrHeight,
+                                       "scene load complete")) {
+            g_currentRenderMode = RenderMode::Raster;
+          }
+        }
+      }
     } else {
       fprintf(stderr, "Failed to %s scene %s\n",
               g_sceneIoJob.isSave ? "save" : "load", g_sceneIoJob.path.c_str());
@@ -1188,7 +1215,10 @@ void RestoreRenderExportState(bool preservePreviewImage) {
       g_renderExportJob.previousStreamlineEnabled);
 
   DxrRenderer::ResetStreamlineHistory();
-  if (!RecreateDxrPipelineSafe(g_windowWidth, g_windowHeight,
+  UINT restoreWidth = 1;
+  UINT restoreHeight = 1;
+  GetCurrentDxrPreviewSize(restoreWidth, restoreHeight);
+  if (!RecreateDxrPipelineSafe(restoreWidth, restoreHeight,
                                "RestoreRenderExportState")) {
     g_currentRenderMode = RenderMode::Raster;
   }
