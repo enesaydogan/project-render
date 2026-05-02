@@ -11,7 +11,7 @@ bool OpenModelFileDialog(HWND owner, std::wstring &outPath) {
   ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY |
               OFN_NOCHANGEDIR;
   ofn.lpstrFilter =
-      L"Model files\0*.skp;*.gltf;*.glb;*.obj;*.stl;*.fbx\0All files\0*.*\0";
+      L"Model files\0*.skp;*.gltf;*.glb;*.obj;*.stl;*.fbx;*.ltm\0All files\0*.*\0";
   if (GetOpenFileNameW(&ofn)) {
     outPath = szFile;
     return true;

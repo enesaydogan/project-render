@@ -1177,6 +1177,7 @@ bool SaveScene(const std::string &path) {
 // ---------------------------------------------------------------------------
 // LoadScene — PRS binary only
 // ---------------------------------------------------------------------------
+
 bool LoadScene(const std::string &path) {
   try {
     std::ifstream probe(path, std::ios::binary);
