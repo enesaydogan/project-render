@@ -757,6 +757,8 @@ float g_timeOfDay = 10.0f;
 float g_northOffset = 0.0f;
 float g_latitudeDeg = 50.08f; // Prague default latitude
 float g_dayOfYear = 172.0f;   // June solstice-ish
+float g_iblIntensity = 1.0f;  // IBL intensity multiplier (dxrProceduralSkyBoost)
+float g_iblIndirectBoost = 1.0f; // Indirect-only IBL lighting multiplier
 
 // Small camera module is defined in src/camera.h/.cpp
 #include "camera.h"
@@ -3306,7 +3308,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     const bool effectiveCloudRendering =
         g_cloudRenderingEnabled && !fileIblActive;
     g_cameraData.cloudRenderingEnabled = effectiveCloudRendering ? 1.0f : 0.0f;
-    g_cameraData.dxrProceduralSkyBoost = 1.0f;
+    g_cameraData.dxrProceduralSkyBoost = g_iblIntensity;
+    g_cameraData.iblIndirectBoost = g_iblIndirectBoost;
     UpdateCameraCB();
 
     // Update Cloud Manager (uploads changed params to GPU)

@@ -30,6 +30,8 @@ private:
     QComboBox *m_iblSource = nullptr;
     QPushButton *m_loadHdrButton = nullptr;
     SliderControl *m_iblRotation = nullptr;
+    SliderControl *m_iblIntensity = nullptr;
+    SliderControl *m_iblIndirectBoost = nullptr;
     QCheckBox *m_solidAngleSampling = nullptr;
 
     QCheckBox *m_physicalCalibration = nullptr;

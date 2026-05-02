@@ -51,6 +51,7 @@ struct CameraCB {
   float sampleEnvSolidAngle;
   float exportRendering;
   float dxrProceduralSkyBoost;
+  float iblIndirectBoost;
   float tonemapAoIntensity;
   float tonemapAoRadiusMeters;
   float tonemapAoMode;

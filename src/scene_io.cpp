@@ -39,6 +39,8 @@ extern float g_timeOfDay;
 extern float g_northOffset;
 extern float g_latitudeDeg;
 extern float g_dayOfYear;
+extern float g_iblIntensity;
+extern float g_iblIndirectBoost;
 extern int g_debugMode;
 #include "dx12_context.h"
 #include "streamline_manager.h"
@@ -510,6 +512,8 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
   j["sky"]["no"]  = g_northOffset;
   j["sky"]["lat"] = g_latitudeDeg;
   j["sky"]["doy"] = g_dayOfYear;
+  j["sky"]["ibli"] = g_iblIntensity;
+  j["sky"]["iblib"] = g_iblIndirectBoost;
 
   // Clouds
   auto &cp = g_cloudManager.GetParams();
@@ -805,6 +809,8 @@ static void ApplyMetadataPRS(const json &j) {
     g_northOffset = s.value("no", g_northOffset);
     g_latitudeDeg = s.value("lat", g_latitudeDeg);
     g_dayOfYear = s.value("doy", g_dayOfYear);
+    g_iblIntensity = s.value("ibli", g_iblIntensity);
+    g_iblIndirectBoost = s.value("iblib", g_iblIndirectBoost);
   }
   if (j.contains("cld")) {
     auto &c = j["cld"];

@@ -42,6 +42,7 @@ cbuffer CameraCB : register(b0)
     float sampleEnvSolidAngle;
     float exportRendering;
     float dxrProceduralSkyBoost;
+    float iblIndirectBoost;
     float tonemapAoIntensity;
     float tonemapAoRadiusMeters;
     float tonemapAoMode;

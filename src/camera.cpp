@@ -49,6 +49,7 @@ CameraCB g_initialCameraData = {
     1.0f,                           // sampleEnvSolidAngle (default true)
     0.0f,                           // exportRendering
     1.0f,                           // dxrProceduralSkyBoost
+    1.0f,                           // iblIndirectBoost
     0.0f,                           // tonemapAoIntensity
     0.25f,                          // tonemapAoRadiusMeters
     2.0f,                           // tonemapAoMode (Both)
@@ -121,6 +122,8 @@ static bool CameraChanged(const CameraCB &a, const CameraCB &b) {
   if (a.sampleEnvSolidAngle != b.sampleEnvSolidAngle)
     return true;
   if (a.dxrProceduralSkyBoost != b.dxrProceduralSkyBoost)
+    return true;
+  if (a.iblIndirectBoost != b.iblIndirectBoost)
     return true;
   if (a.tonemapAoIntensity != b.tonemapAoIntensity ||
       a.tonemapAoRadiusMeters != b.tonemapAoRadiusMeters ||

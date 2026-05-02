@@ -401,8 +401,9 @@ void RayGen()
     const float kAdaptiveLagKeepScale = 1.00;
     const bool exportAdaptiveMode = (exportRendering > 0.5);
     // Keep environment transport in the same energy space as the sky model.
-    // Extra fill here washes out architectural shadow contrast.
-    const float kEnvLightingBoost = 1.0;
+    // Apply only to indirect environment transport so visible sky stays
+    // unchanged while interior indirect fill can be art-directed.
+    const float kEnvLightingBoost = max(iblIndirectBoost, 0.0);
     const bool debugViewActive =
         (SHADER_DEBUG_MODE > 0.0) || (SHADER_DEBUG_VIS_MODE == 1.0);
 
@@ -1265,7 +1266,9 @@ void RayGen()
                     float3 envRadiance = envLs.radiance;
                     float3 envContrib = brdf_env * envRadiance *
                                         (NdotL_env / pdfLightEnv) * misW;
-                    envContrib *= kEnvLightingBoost;
+                    if (bounce > 0) {
+                        envContrib *= kEnvLightingBoost;
+                    }
                     directLighting += envContrib;
                 }
             }

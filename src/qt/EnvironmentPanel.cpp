@@ -28,6 +28,8 @@ extern float g_timeOfDay;
 extern float g_northOffset;
 extern float g_latitudeDeg;
 extern float g_dayOfYear;
+extern float g_iblIntensity;
+extern float g_iblIndirectBoost;
 
 namespace {
 
@@ -78,6 +80,8 @@ void EnvironmentPanel::createUi()
     m_filePathLabel = new QLabel(sourceGroup);
     m_filePathLabel->setWordWrap(true);
     m_iblRotation = CreateSliderControl(0.0, 360.0, 1.0, 1);
+    m_iblIntensity = CreateSliderControl(0.0, 5.0, 0.01, 2);
+    m_iblIndirectBoost = CreateSliderControl(0.0, 5.0, 0.01, 2);
     m_solidAngleSampling = new QCheckBox(tr("Use Solid-Angle Env Sampling"), sourceGroup);
     m_analyticSunIntensity = CreateSliderControl(0.0, 150000.0, 100.0, 0);
     m_fileSunIntensity = CreateSliderControl(0.01, 200.0, 0.1, 2);
@@ -88,6 +92,8 @@ void EnvironmentPanel::createUi()
     sourceForm->addRow(m_loadHdrButton);
     sourceForm->addRow(tr("Loaded Map"), m_filePathLabel);
     sourceForm->addRow(tr("IBL Rotation (deg)"), m_iblRotation);
+    sourceForm->addRow(tr("IBL Intensity"), m_iblIntensity);
+    sourceForm->addRow(tr("IBL Indirect Boost"), m_iblIndirectBoost);
     sourceForm->addRow(m_solidAngleSampling);
     sourceForm->addRow(tr("Analytic Sun Intensity"), m_analyticSunIntensity);
     sourceForm->addRow(tr("File Sun Scale"), m_fileSunIntensity);
@@ -218,6 +224,12 @@ void EnvironmentPanel::createUi()
     connect(m_iblRotation->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) {
         applyLightingSettings(false, true);
     });
+    connect(m_iblIntensity->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) {
+        applyLightingSettings(false, true);
+    });
+    connect(m_iblIndirectBoost->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) {
+        applyLightingSettings(false, true);
+    });
     connect(m_solidAngleSampling, &QCheckBox::toggled, this, [this](bool) {
         applyLightingSettings(false, true);
     });
@@ -318,6 +330,8 @@ void EnvironmentPanel::syncFromRenderer()
 
     m_iblSource->setCurrentIndex(usingFileIbl ? 0 : 1);
     m_iblRotation->setValue(ibl.GetIblRotationDegrees());
+    m_iblIntensity->setValue(g_iblIntensity);
+    m_iblIndirectBoost->setValue(g_iblIndirectBoost);
     m_solidAngleSampling->setChecked(g_cameraData.sampleEnvSolidAngle > 0.5f);
     m_analyticSunIntensity->setValue(hasFileSun ? ibl.GetFileSunIntensity()
                                                 : ibl.GetSunIntensity());
@@ -437,6 +451,8 @@ void EnvironmentPanel::applyLightingSettings(bool updateSkyModel, bool updateCam
     const bool hasFileSun = usingFileIbl && ibl.HasFileSun();
     ibl.SetIblRotationDegrees(static_cast<float>(m_iblRotation->value()));
     g_cameraData.iblRotationDegrees = static_cast<float>(m_iblRotation->value());
+    g_iblIntensity = static_cast<float>(m_iblIntensity->value());
+    g_iblIndirectBoost = static_cast<float>(m_iblIndirectBoost->value());
     ibl.SetEnvSolidAngleSampling(m_solidAngleSampling->isChecked());
     g_cameraData.sampleEnvSolidAngle = m_solidAngleSampling->isChecked() ? 1.0f : 0.0f;
 
