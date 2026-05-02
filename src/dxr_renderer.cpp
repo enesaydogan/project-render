@@ -5915,28 +5915,28 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       s_device->CreateShaderResourceView(g_cloudManager.GetDetailTexture(),
                                          &srvDescDetail, srvCpuDetail);
 
-      // 4. Create Baked Sky SRV at DXR_HEAP_CLOUD_BAKED_TEX_OFFSET
-      D3D12_CPU_DESCRIPTOR_HANDLE srvCpuBaked =
-          s_srvHeap->GetCPUDescriptorHandleForHeapStart();
-      srvCpuBaked.ptr += (SIZE_T)DXR_HEAP_CLOUD_BAKED_TEX_OFFSET *
-                         s_device->GetDescriptorHandleIncrementSize(
-                             D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-
-      if (g_cloudManager.GetBakedSkyTexture()) {
-        D3D12_SHADER_RESOURCE_VIEW_DESC srvDescBaked = {};
-        srvDescBaked.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        srvDescBaked.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-        srvDescBaked.Texture2D.MipLevels = 1;
-        srvDescBaked.Texture2D.MostDetailedMip = 0;
-        srvDescBaked.Shader4ComponentMapping =
-            D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        s_device->CreateShaderResourceView(g_cloudManager.GetBakedSkyTexture(),
-                                           &srvDescBaked, srvCpuBaked);
-      }
-
       s_cloudDescriptorsDone = true;
     }
 
+  }
+  // Preview and final cloud bakes use different textures. Keep the DXR heap
+  // pointed at whichever bake the cloud manager most recently published.
+  if (s_device && s_srvHeap && g_cloudManager.GetBakedSkyTexture()) {
+    D3D12_CPU_DESCRIPTOR_HANDLE srvCpuBaked =
+        s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+    srvCpuBaked.ptr += (SIZE_T)DXR_HEAP_CLOUD_BAKED_TEX_OFFSET *
+                       s_device->GetDescriptorHandleIncrementSize(
+                           D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDescBaked = {};
+    srvDescBaked.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    srvDescBaked.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDescBaked.Texture2D.MipLevels = 1;
+    srvDescBaked.Texture2D.MostDetailedMip = 0;
+    srvDescBaked.Shader4ComponentMapping =
+        D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    s_device->CreateShaderResourceView(g_cloudManager.GetBakedSkyTexture(),
+                                       &srvDescBaked, srvCpuBaked);
   }
   dxrList->SetComputeRootConstantBufferView(
       10, g_cloudManager.GetConstantBufferAddr());

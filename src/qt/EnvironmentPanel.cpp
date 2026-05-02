@@ -473,7 +473,8 @@ void EnvironmentPanel::applyCloudSettings()
     cp.shadowStepSize = static_cast<float>(m_shadowStepSize->value());
     cp.shadowLod = static_cast<float>(m_shadowLod->value());
 
-    g_cloudManager.RequestBake();
+    // CloudManager::Update detects parameter edits and schedules a trailing-edge
+    // bake. RequestBake() here would force the full sky bake on every slider tick.
     DxrRenderer::ResetAccumulation();
     syncFromRenderer();
 }

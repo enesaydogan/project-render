@@ -66,21 +66,33 @@ public:
   void BakeSky(ID3D12GraphicsCommandList *cmdList, ID3D12Resource *cameraCB = nullptr);
   void RequestBake();
   bool NeedsBake() const { return m_bakeRequested; }
-  ID3D12Resource *GetBakedSkyTexture() const { return m_bakedSkyTexture.Get(); }
+  ID3D12Resource *GetBakedSkyTexture() const;
 
   // GPU descriptor handle that points to the contiguous CBV+SRV descriptors for
   // clouds
   D3D12_GPU_DESCRIPTOR_HANDLE GetGPUHandle() const { return m_gpuHandle; }
 
 private:
+  enum class BakeQuality {
+    Preview,
+    Final,
+  };
+
+  enum class BakedSkyTexture {
+    Preview,
+    Final,
+  };
+
   void CreateTextures(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList);
   void CreateConstantBuffers(ID3D12Device *device);
   void UpdateConstantBuffer();
   void CreateDescriptors(ID3D12Device *device);
+  void UpdateBakedSkySRV(ID3D12Device *device, ID3D12Resource *resource);
 
   Microsoft::WRL::ComPtr<ID3D12Resource> m_baseTexture;
   Microsoft::WRL::ComPtr<ID3D12Resource> m_detailTexture;
-  Microsoft::WRL::ComPtr<ID3D12Resource> m_bakedSkyTexture; // lat-long baked sky (RGBA + transmittance)
+  Microsoft::WRL::ComPtr<ID3D12Resource> m_previewBakedSkyTexture; // low-res interactive lat-long bake
+  Microsoft::WRL::ComPtr<ID3D12Resource> m_finalBakedSkyTexture;   // full-res idle lat-long bake
   std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> m_uploadBuffers;
   Microsoft::WRL::ComPtr<ID3D12Resource> m_constantBuffers[3];
   UINT m_currentFrame = 0;
@@ -93,9 +105,11 @@ private:
   D3D12_CPU_DESCRIPTOR_HANDLE m_cpuHandle = {};
   D3D12_GPU_DESCRIPTOR_HANDLE m_gpuHandle = {};
 
-  // UAV descriptor (for compute bake) - persistent allocation
-  D3D12_CPU_DESCRIPTOR_HANDLE m_bakedSkyUAVCpuHandle = {};
-  D3D12_GPU_DESCRIPTOR_HANDLE m_bakedSkyUAVGpuHandle = {};
+  // UAV descriptors (for compute bake) - persistent allocation
+  D3D12_CPU_DESCRIPTOR_HANDLE m_previewBakedSkyUAVCpuHandle = {};
+  D3D12_GPU_DESCRIPTOR_HANDLE m_previewBakedSkyUAVGpuHandle = {};
+  D3D12_CPU_DESCRIPTOR_HANDLE m_finalBakedSkyUAVCpuHandle = {};
+  D3D12_GPU_DESCRIPTOR_HANDLE m_finalBakedSkyUAVGpuHandle = {};
 
   // Bake pipeline state / root signature cached here
   Microsoft::WRL::ComPtr<ID3D12RootSignature> m_bakeRootSig;
@@ -104,8 +118,12 @@ private:
   // Bake control
   bool m_bakeRequested = false;
   bool m_pendingParamBake = false;
+  bool m_pendingPreviewBake = false;
+  bool m_pendingFinalBake = false;
   float m_secondsSinceParamEdit = 0.0f;
   float m_secondsSinceBake = 0.0f;
+  BakeQuality m_requestedBakeQuality = BakeQuality::Final;
+  BakedSkyTexture m_activeBakedSkyTexture = BakedSkyTexture::Final;
   CloudParams m_lastObservedParams = {};
   CloudParams m_lastBakedParams = {};
 };

@@ -269,15 +269,28 @@ void CloudManager::Initialize(ID3D12Device *device,
   m_lastBakedParams = m_params;
   m_bakeRequested = true;
   m_pendingParamBake = false;
+  m_pendingPreviewBake = false;
+  m_pendingFinalBake = false;
+  m_requestedBakeQuality = BakeQuality::Final;
+  m_activeBakedSkyTexture = BakedSkyTexture::Final;
   m_secondsSinceParamEdit = 0.0f;
   m_secondsSinceBake = 0.0f;
 
   m_initialized = true;
 }
 
+ID3D12Resource *CloudManager::GetBakedSkyTexture() const {
+  return m_activeBakedSkyTexture == BakedSkyTexture::Preview
+             ? m_previewBakedSkyTexture.Get()
+             : m_finalBakedSkyTexture.Get();
+}
+
 void CloudManager::RequestBake() {
   m_bakeRequested = true;
   m_pendingParamBake = false;
+  m_pendingPreviewBake = false;
+  m_pendingFinalBake = false;
+  m_requestedBakeQuality = BakeQuality::Final;
   m_secondsSinceParamEdit = 0.0f;
 }
 
@@ -328,27 +341,50 @@ void CloudManager::CreateDescriptors(ID3D12Device *device) {
   device->CreateShaderResourceView(m_detailTexture.Get(), &srvDescDetail,
                                    srvCpuDetail);
 
-  // 4) Baked Sky SRV (t12, space2)
-  D3D12_CPU_DESCRIPTOR_HANDLE srvCpuBaked = m_cpuHandle;
-  srvCpuBaked.ptr += (SIZE_T)descSize * 3;
-  D3D12_SHADER_RESOURCE_VIEW_DESC srvDescBaked = {};
-  srvDescBaked.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-  srvDescBaked.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-  srvDescBaked.Texture2D.MipLevels = 1;
-  srvDescBaked.Texture2D.MostDetailedMip = 0;
-  srvDescBaked.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-  device->CreateShaderResourceView(m_bakedSkyTexture.Get(), &srvDescBaked, srvCpuBaked);
+  // 4) Baked Sky SRV (t12, space2). This descriptor is repointed after each
+  // preview/final bake so raster and DXR sample the newest cloud bake.
+  UpdateBakedSkySRV(device, GetBakedSkyTexture());
 
-  // Allocate a separate persistent descriptor for the UAV used by the bake CS
-  DescriptorAllocation uavAlloc = g_cbvSrvAllocator.AllocatePersistent(1);
-  m_bakedSkyUAVCpuHandle = uavAlloc.cpu;
-  m_bakedSkyUAVGpuHandle = uavAlloc.gpu;
+  // Allocate persistent UAV descriptors used by the bake CS.
+  DescriptorAllocation uavAlloc = g_cbvSrvAllocator.AllocatePersistent(2);
+  m_previewBakedSkyUAVCpuHandle = uavAlloc.cpu;
+  m_previewBakedSkyUAVGpuHandle = uavAlloc.gpu;
+  m_finalBakedSkyUAVCpuHandle = uavAlloc.cpu;
+  m_finalBakedSkyUAVGpuHandle = uavAlloc.gpu;
+  m_finalBakedSkyUAVCpuHandle.ptr += (SIZE_T)descSize;
+  m_finalBakedSkyUAVGpuHandle.ptr += (UINT64)descSize;
 
   D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
   uavDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
   uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
   uavDesc.Texture2D.MipSlice = 0;
-  device->CreateUnorderedAccessView(m_bakedSkyTexture.Get(), nullptr, &uavDesc, m_bakedSkyUAVCpuHandle);
+  device->CreateUnorderedAccessView(m_previewBakedSkyTexture.Get(), nullptr,
+                                    &uavDesc,
+                                    m_previewBakedSkyUAVCpuHandle);
+  device->CreateUnorderedAccessView(m_finalBakedSkyTexture.Get(), nullptr,
+                                    &uavDesc,
+                                    m_finalBakedSkyUAVCpuHandle);
+}
+
+void CloudManager::UpdateBakedSkySRV(ID3D12Device *device,
+                                     ID3D12Resource *resource) {
+  if (!device || !resource || m_cpuHandle.ptr == 0) {
+    return;
+  }
+
+  const UINT descSize = device->GetDescriptorHandleIncrementSize(
+      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+  D3D12_CPU_DESCRIPTOR_HANDLE srvCpuBaked = m_cpuHandle;
+  srvCpuBaked.ptr += (SIZE_T)descSize * 3;
+
+  D3D12_SHADER_RESOURCE_VIEW_DESC srvDescBaked = {};
+  srvDescBaked.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+  srvDescBaked.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+  srvDescBaked.Texture2D.MipLevels = 1;
+  srvDescBaked.Texture2D.MostDetailedMip = 0;
+  srvDescBaked.Shader4ComponentMapping =
+      D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  device->CreateShaderResourceView(resource, &srvDescBaked, srvCpuBaked);
 }
 
 void CloudManager::ResetToDefaults() {
@@ -379,15 +415,27 @@ void CloudManager::Update(float dt, UINT frameIndex) {
     m_lastObservedParams = m_params;
     m_lastObservedParams.timeSeconds = 0.0f;
     m_pendingParamBake = true;
+    m_pendingPreviewBake = true;
+    m_pendingFinalBake = true;
     m_secondsSinceParamEdit = 0.0f;
   }
 
-  static constexpr float kBakeDebounceSeconds = 0.12f;
-  static constexpr float kBakeMinIntervalSeconds = 0.25f;
-  if (m_pendingParamBake && !m_bakeRequested &&
-      m_secondsSinceParamEdit >= kBakeDebounceSeconds &&
-      m_secondsSinceBake >= kBakeMinIntervalSeconds) {
-    m_bakeRequested = true;
+  static constexpr float kPreviewBakeDebounceSeconds = 0.06f;
+  static constexpr float kPreviewBakeMinIntervalSeconds = 0.14f;
+  static constexpr float kFinalBakeDebounceSeconds = 0.75f;
+  static constexpr float kFinalBakeMinIntervalSeconds = 0.25f;
+  if (m_pendingParamBake && !m_bakeRequested) {
+    if (m_pendingFinalBake &&
+        m_secondsSinceParamEdit >= kFinalBakeDebounceSeconds &&
+        m_secondsSinceBake >= kFinalBakeMinIntervalSeconds) {
+      m_bakeRequested = true;
+      m_requestedBakeQuality = BakeQuality::Final;
+    } else if (m_pendingPreviewBake &&
+               m_secondsSinceParamEdit >= kPreviewBakeDebounceSeconds &&
+               m_secondsSinceBake >= kPreviewBakeMinIntervalSeconds) {
+      m_bakeRequested = true;
+      m_requestedBakeQuality = BakeQuality::Preview;
+    }
   }
 
   m_currentFrame = frameIndex % 3;
@@ -539,7 +587,16 @@ static void CreateBakePipelineIfNeeded(ID3D12Device* device,
 }
 
 void CloudManager::BakeSky(ID3D12GraphicsCommandList *cmdList, ID3D12Resource *cameraCB) {
-  if (!m_initialized || !cmdList || !m_bakedSkyTexture) {
+  ID3D12Resource *targetTexture =
+      m_requestedBakeQuality == BakeQuality::Preview
+          ? m_previewBakedSkyTexture.Get()
+          : m_finalBakedSkyTexture.Get();
+  D3D12_GPU_DESCRIPTOR_HANDLE targetUAV =
+      m_requestedBakeQuality == BakeQuality::Preview
+          ? m_previewBakedSkyUAVGpuHandle
+          : m_finalBakedSkyUAVGpuHandle;
+
+  if (!m_initialized || !cmdList || !targetTexture) {
     return;
   }
 
@@ -586,13 +643,13 @@ void CloudManager::BakeSky(ID3D12GraphicsCommandList *cmdList, ID3D12Resource *c
   }
 
   // Root table (3) = UAV for baked sky
-  cmdList->SetComputeRootDescriptorTable(3, m_bakedSkyUAVGpuHandle);
+  cmdList->SetComputeRootDescriptorTable(3, targetUAV);
 
   // Transition baked texture to UAV
   {
     D3D12_RESOURCE_BARRIER barrier = {};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition.pResource = m_bakedSkyTexture.Get();
+    barrier.Transition.pResource = targetTexture;
     barrier.Transition.StateBefore =
       D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
@@ -602,7 +659,7 @@ void CloudManager::BakeSky(ID3D12GraphicsCommandList *cmdList, ID3D12Resource *c
   }
 
   // Dispatch
-  D3D12_RESOURCE_DESC desc = m_bakedSkyTexture->GetDesc();
+  D3D12_RESOURCE_DESC desc = targetTexture->GetDesc();
   const UINT tgX = 16, tgY = 16;
   UINT dispatchX = (UINT)((desc.Width + tgX - 1) / tgX);
   UINT dispatchY = (UINT)((desc.Height + tgY - 1) / tgY);
@@ -611,13 +668,13 @@ void CloudManager::BakeSky(ID3D12GraphicsCommandList *cmdList, ID3D12Resource *c
   // UAV barrier & transition back to SRV for sampling
   D3D12_RESOURCE_BARRIER uavBarrier = {};
   uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-  uavBarrier.UAV.pResource = m_bakedSkyTexture.Get();
+  uavBarrier.UAV.pResource = targetTexture;
   cmdList->ResourceBarrier(1, &uavBarrier);
 
   {
     D3D12_RESOURCE_BARRIER barrier = {};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition.pResource = m_bakedSkyTexture.Get();
+    barrier.Transition.pResource = targetTexture;
     barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     barrier.Transition.StateAfter =
       D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
@@ -627,13 +684,24 @@ void CloudManager::BakeSky(ID3D12GraphicsCommandList *cmdList, ID3D12Resource *c
   }
 
   // Mark baked state
+  const bool bakedPreview = m_requestedBakeQuality == BakeQuality::Preview;
+  m_activeBakedSkyTexture =
+      bakedPreview ? BakedSkyTexture::Preview : BakedSkyTexture::Final;
+  UpdateBakedSkySRV(device, targetTexture);
+
   m_bakeRequested = false;
-  m_pendingParamBake = false;
   m_secondsSinceBake = 0.0f;
-  m_secondsSinceParamEdit = 0.0f;
   m_lastObservedParams = m_params;
   m_lastObservedParams.timeSeconds = 0.0f;
-  m_lastBakedParams = m_params;
+  if (bakedPreview) {
+    m_pendingPreviewBake = false;
+  } else {
+    m_pendingParamBake = false;
+    m_pendingPreviewBake = false;
+    m_pendingFinalBake = false;
+    m_secondsSinceParamEdit = 0.0f;
+    m_lastBakedParams = m_params;
+  }
   if (device) device->Release();
 }
 
@@ -898,31 +966,36 @@ void CloudManager::CreateTextures(ID3D12Device *device,
     m_uploadBuffers.push_back(uploadBuffer);
   }
 
-  // --- 3. Baked Sky Texture (Latitude-Longitude) ---
+  // --- 3. Baked Sky Textures (Latitude-Longitude) ---
   {
-    const UINT width = 4096;   // 4K horizontal
-    const UINT height = 2048;  // 4K-equivalent lat-long (2:1)
+    auto createBakedSky = [device](UINT width, UINT height, const wchar_t *name,
+                                   Microsoft::WRL::ComPtr<ID3D12Resource> &out) {
+      D3D12_RESOURCE_DESC skyDesc = {};
+      skyDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+      skyDesc.Width = width;
+      skyDesc.Height = height;
+      skyDesc.DepthOrArraySize = 1;
+      skyDesc.MipLevels = 1;
+      skyDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; // HDR enough for clouds
+      skyDesc.SampleDesc.Count = 1;
+      skyDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+      skyDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
-    D3D12_RESOURCE_DESC skyDesc = {};
-    skyDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    skyDesc.Width = width;
-    skyDesc.Height = height;
-    skyDesc.DepthOrArraySize = 1;
-    skyDesc.MipLevels = 1;
-    skyDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; // HDR enough for clouds
-    skyDesc.SampleDesc.Count = 1;
-    skyDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-    skyDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+      D3D12_HEAP_PROPERTIES defaultHeap = {};
+      defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
 
-    D3D12_HEAP_PROPERTIES defaultHeap = {};
-    defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+      ThrowIfFailed(device->CreateCommittedResource(
+          &defaultHeap, D3D12_HEAP_FLAG_NONE, &skyDesc,
+          D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+          nullptr, IID_PPV_ARGS(&out)));
+      out->SetName(name);
+    };
 
-    ThrowIfFailed(device->CreateCommittedResource(
-      &defaultHeap, D3D12_HEAP_FLAG_NONE, &skyDesc,
-      D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
-        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-      nullptr, IID_PPV_ARGS(&m_bakedSkyTexture)));
-    m_bakedSkyTexture->SetName(L"BakedCloudSkyTexture");
+    createBakedSky(1024, 512, L"PreviewBakedCloudSkyTexture",
+                   m_previewBakedSkyTexture);
+    createBakedSky(4096, 2048, L"FinalBakedCloudSkyTexture",
+                   m_finalBakedSkyTexture);
   }
 }
 
