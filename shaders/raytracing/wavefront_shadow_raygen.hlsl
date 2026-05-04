@@ -50,8 +50,25 @@ void WavefrontShadowRayGen()
             visibilityDirection, shadowRng);
     }
 
-    const bool visible = WavefrontTraceVisibility(
-        task.origin, visibilityDirection, task.maxDistance);
+    RayPayload shadowPayload;
+    shadowPayload.t = 1.0;
+    shadowPayload.packedColor1 = 0u;
+    PayloadSetColor(shadowPayload, float3(0.0, 0.0, 0.0));
+    shadowPayload.packedNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
+    shadowPayload.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
+    shadowPayload.packedSurface = PackPayloadSurface(1.0, 0.0, 0.0, 0.0);
+    shadowPayload.packedIorType = PackPayloadIorType(1.0, RAY_TYPE_SHADOW, false, 1.0);
+    shadowPayload.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
+    shadowPayload.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
+
+    RayDesc shadowRay;
+    shadowRay.Origin = task.origin;
+    shadowRay.Direction = visibilityDirection;
+    shadowRay.TMin = 0.001;
+    shadowRay.TMax = max(0.001, task.maxDistance - 0.002);
+
+    TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
+    const bool visible = (shadowPayload.t < 0.0);
     SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
 
     if (visible) {

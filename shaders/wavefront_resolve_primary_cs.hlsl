@@ -541,7 +541,11 @@ inline bool WavefrontGiIsShadowVisible(float3 origin,
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
              RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> shadowQuery;
     shadowQuery.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, shadowRay);
-    shadowQuery.Proceed();
+    while (shadowQuery.Proceed()) {
+        if (shadowQuery.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
+            shadowQuery.CommitNonOpaqueTriangleHit();
+        }
+    }
     return shadowQuery.CommittedStatus() == COMMITTED_NOTHING;
 }
 

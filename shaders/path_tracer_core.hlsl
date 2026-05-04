@@ -994,14 +994,20 @@ void RayGen()
                 shadowRay.TMin = 0.001;
                 shadowRay.TMax = max(0.001, dist_final - 0.002);
 
-                RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
-                q.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, shadowRay);
+                RayPayload shadowPayload;
+                shadowPayload.t = 1.0;
+                shadowPayload.packedColor1 = 0u;
+                PayloadSetColor(shadowPayload, float3(0.0, 0.0, 0.0));
+                shadowPayload.packedNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
+                shadowPayload.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
+                shadowPayload.packedSurface = PackPayloadSurface(1.0, 0.0, 0.0, 0.0);
+                shadowPayload.packedIorType = PackPayloadIorType(1.0, RAY_TYPE_SHADOW, false, 1.0);
+                shadowPayload.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
+                shadowPayload.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
 
-                // Drain the query so non-opaque candidates (e.g. glass) do not
-                // early-out visibility before opaque blockers behind them.
-                while (q.Proceed()) {}
+                TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
                 
-                if (q.CommittedStatus() == COMMITTED_NOTHING) {
+                if (shadowPayload.t < 0.0) {
                     float3 visibleRadiance = radiance_final;
                     if (res.lightIndex == 0xFFFFFFFF && cloudRenderingEnabled > 0.5f) {
                         visibleRadiance *= CloudSunTransmittance(shadowRay.Origin, shadowRay.Direction);
@@ -1096,7 +1102,11 @@ void RayGen()
                     
                     RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q_gi;
                     q_gi.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, giVisRay);
-                    while (q_gi.Proceed()) {}
+                    while (q_gi.Proceed()) {
+                        if (q_gi.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
+                             q_gi.CommitNonOpaqueTriangleHit(); // for now fallback to opaque
+                        }
+                    }
                     
                     SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                     if (q_gi.CommittedStatus() == COMMITTED_NOTHING) {
@@ -1159,13 +1169,22 @@ void RayGen()
                 shadowRay.TMin = 0.001;
                 shadowRay.TMax = max(0.001, dist_nee - 0.001);
                 
-                RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q_nee;
-                q_nee.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, shadowRay);
-                while (q_nee.Proceed()) {}
+                RayPayload neePayload;
+                neePayload.t = 1.0;
+                neePayload.packedColor1 = 0u;
+                PayloadSetColor(neePayload, float3(0.0, 0.0, 0.0));
+                neePayload.packedNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
+                neePayload.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
+                neePayload.packedSurface = PackPayloadSurface(1.0, 0.0, 0.0, 0.0);
+                neePayload.packedIorType = PackPayloadIorType(1.0, RAY_TYPE_SHADOW, false, 1.0);
+                neePayload.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
+                neePayload.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
+                
+                TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, shadowRay, neePayload);
                 
                 SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                 SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
-                if (q_nee.CommittedStatus() == COMMITTED_NOTHING) {
+                if (neePayload.t < 0.0) {
                      if (neeIsSun && cloudRenderingEnabled > 0.5f) {
                          radiance_nee *= CloudSunTransmittance(shadowRay.Origin, shadowRay.Direction);
                      }
@@ -1205,14 +1224,23 @@ void RayGen()
                 envShadowRay.TMin = 0.001;
                 envShadowRay.TMax = 10000.0;
 
-                RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q_env;
-                q_env.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, envShadowRay);
-                while (q_env.Proceed()) {}
+                RayPayload envPayload;
+                envPayload.t = 1.0;
+                envPayload.packedColor1 = 0u;
+                PayloadSetColor(envPayload, float3(0.0, 0.0, 0.0));
+                envPayload.packedNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
+                envPayload.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
+                envPayload.packedSurface = PackPayloadSurface(1.0, 0.0, 0.0, 0.0);
+                envPayload.packedIorType = PackPayloadIorType(1.0, RAY_TYPE_SHADOW, false, 1.0);
+                envPayload.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
+                envPayload.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
+
+                TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, envShadowRay, envPayload);
                 
                 SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
                 SHADER_COUNTER_ADD(SHADER_COUNTER_SHADOW_TRACES, 1);
 
-                if (q_env.CommittedStatus() == COMMITTED_NOTHING) {
+                if (envPayload.t < 0.0) {
                     float3 H_env = normalize(envLs.L + V);
                     float3 brdf_env = EvaluateSurfaceBrdf(N, V, envLs.L,
                                                           payloadAlbedo, diffuseAlbedo,
