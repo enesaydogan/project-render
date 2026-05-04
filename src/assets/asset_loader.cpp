@@ -2577,14 +2577,36 @@ static const uint8_t *LtmScanTag(const uint8_t *from, const uint8_t *limit,
 // EverMotion asset-browser metadata file whose "OO ClassInstance" block
 // stores a float32 surfaceShaderNr identifying the canonical material slot.
 static int LtmReadInnSurfaceShaderNr(const std::string &ltmPath) {
-  std::string innPath = ltmPath + ".inn";
-  std::ifstream fi(innPath, std::ios::binary | std::ios::ate);
-  if (!fi.is_open()) return -1;
+  std::filesystem::path p(ltmPath);
+  std::vector<std::string> innCandidates;
+  innCandidates.push_back(ltmPath + ".inn");
+  {
+    std::filesystem::path alt = p;
+    alt.replace_extension(".inn");
+    if (alt.string() != innCandidates[0])
+      innCandidates.push_back(alt.string());
+  }
+
+  std::ifstream fi;
+  std::string innPath;
+  for (const std::string &candidate : innCandidates) {
+    fi.open(candidate, std::ios::binary | std::ios::ate);
+    if (fi.is_open()) {
+      innPath = candidate;
+      break;
+    }
+    fi.clear();
+  }
+  if (!fi.is_open()) {
+    fprintf(stderr, "LTM: .inn companion not found for %s\n", ltmPath.c_str());
+    return -1;
+  }
   const size_t innSize = static_cast<size_t>(fi.tellg());
   fi.seekg(0);
   std::vector<uint8_t> buf(innSize);
   fi.read(reinterpret_cast<char *>(buf.data()), static_cast<std::streamsize>(innSize));
   fi.close();
+  fprintf(stderr, "LTM: using companion metadata %s\n", innPath.c_str());
 
   // UTF-16LE: "surfaceShaderNr"
   static const uint8_t kName[] = {
@@ -2596,24 +2618,34 @@ static int LtmReadInnSurfaceShaderNr(const std::string &ltmPath) {
 
   const uint8_t *base    = buf.data();
   const uint8_t *fileEnd = base + innSize;
+  bool sawSurfaceShaderName = false;
 
   for (const uint8_t *p = base; p + 8 <= fileEnd; ++p) {
     if (memcmp(p, "IINW", 4) != 0) continue;
     const uint32_t sz = *reinterpret_cast<const uint32_t *>(p + 4);
     if (sz < kNameLen || p + 8 + sz > fileEnd) continue;
     if (memcmp(p + 8, kName, kNameLen) != 0) continue;
+    sawSurfaceShaderName = true;
     // Found the IINW for "surfaceShaderNr". Scan forward for IIVE.
     const uint8_t *scan  = p + 8 + sz;
-    const uint8_t *limit = (std::min)(scan + 512, fileEnd);
+    const uint8_t *limit = (std::min)(scan + 4096, fileEnd);
     for (const uint8_t *q = scan; q + 8 <= limit; ++q) {
       if (memcmp(q, "IIVE", 4) != 0) continue;
       const uint32_t vsz = *reinterpret_cast<const uint32_t *>(q + 4);
       if (vsz == 4 && q + 12 <= fileEnd) {
         float fval;
         memcpy(&fval, q + 8, 4);
+        fprintf(stderr,
+                "LTM: .inn surfaceShaderNr=%.3f parsed from %s\n",
+                (double)fval, innPath.c_str());
         return static_cast<int>(fval + 0.5f);
       }
     }
+  }
+  if (sawSurfaceShaderName) {
+    fprintf(stderr,
+            "LTM: .inn has surfaceShaderNr field but no nearby IIVE value in %s\n",
+            innPath.c_str());
   }
   return -1;
 }
@@ -3037,6 +3069,7 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
           std::vector<int> diffuseTex;
           std::vector<int> normalTex;
           std::vector<int> packedTex;
+          std::vector<uint32_t> packedTexSizes; // parallel to packedTex
           for (size_t ti = 0; ti < textureEntries.size(); ++ti) {
             const LtmTextureEntry &entry = textureEntries[ti];
             if (entry.uploadedTextureIndex < 0)
@@ -3052,27 +3085,59 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
             case LtmTextureSemantic::Roughness:
             case LtmTextureSemantic::Metalness:
               packedTex.push_back(entry.uploadedTextureIndex);
+              packedTexSizes.push_back(entry.texSize);
               break;
             default:
               break;
             }
           }
 
-          // Offset the round-robin so the .inn primary material gets set 0.
+          // EverMotion LTM assets embed viewer/preview textures BEFORE the
+          // first ICSI material-group boundary. These appear as leading entries
+          // in the sorted semantic arrays and must be skipped.
+          //
+          // For roughness, tiny 16x16 BC4 placeholder tiles (TEXS ≤ 1024 bytes)
+          // are filler entries that don't correspond to any material slot — they
+          // are excluded from the substantive set used for assignment.
+          //
+          // Offset rule: skip leading (nType − nMats) entries so that material 0
+          // always gets the first post-preview texture of each semantic type.
           const int nMats = static_cast<int>(outMaterials->size());
-          const int matOrder = (primaryMi >= 0 && nMats > 0)
-              ? static_cast<int>((static_cast<int>(mi) - primaryMi + nMats) % nMats)
-              : static_cast<int>(mi);
 
-          if (mat.diffuseTexture < 0 && !diffuseTex.empty()) {
-            mat.diffuseTexture = diffuseTex[(size_t)matOrder % diffuseTex.size()];
+          std::vector<int> substantivePacked;
+          for (size_t i = 0; i < packedTex.size(); ++i) {
+            if (packedTexSizes[i] > 1024)
+              substantivePacked.push_back(packedTex[i]);
           }
-          if (mat.normalTexture < 0 && !normalTex.empty()) {
-            mat.normalTexture = normalTex[(size_t)matOrder % normalTex.size()];
-          }
-          if (mat.metalRoughTexture < 0 && !packedTex.empty()) {
-            mat.metalRoughTexture = packedTex[(size_t)matOrder % packedTex.size()];
-          }
+
+          const int diffOff  = std::max(0, (int)diffuseTex.size()       - nMats);
+          const int normOff  = std::max(0, (int)normalTex.size()        - nMats);
+          const int packOff  = std::max(0, (int)substantivePacked.size() - nMats);
+          const int setIdx   = static_cast<int>(mi);
+
+          if (mat.diffuseTexture < 0 && !diffuseTex.empty())
+            mat.diffuseTexture = diffuseTex[(setIdx + diffOff) % (int)diffuseTex.size()];
+          if (mat.normalTexture < 0 && !normalTex.empty())
+            mat.normalTexture = normalTex[(setIdx + normOff) % (int)normalTex.size()];
+          if (mat.metalRoughTexture < 0 && !substantivePacked.empty())
+            mat.metalRoughTexture = substantivePacked[(setIdx + packOff) % (int)substantivePacked.size()];
+
+          const int slotId = (mi < uniqueSlots.size())
+                                 ? static_cast<int>(uniqueSlots[mi]) : -1;
+          fprintf(stderr,
+              "LTM: fallback set map material %s slot=%d mi=%zu "
+              "diffOff=%d normOff=%d packOff=%d -> diff=%d norm=%d mr=%d\n",
+              mat.name, slotId, mi,
+              diffOff, normOff, packOff,
+              mat.diffuseTexture, mat.normalTexture, mat.metalRoughTexture);
+        }
+
+        // LTM foliage assets commonly encode cutout opacity in base-color
+        // alpha. Force MASK when we have a diffuse map so the shader applies
+        // alpha clip instead of treating transparent texels as opaque.
+        if (mat.diffuseTexture >= 0 && mat.alphaMode == "OPAQUE") {
+          mat.alphaMode = "MASK";
+          mat.alphaCutoff = (std::clamp)(mat.alphaCutoff, 0.2f, 0.5f);
         }
 
         fprintf(stderr,
