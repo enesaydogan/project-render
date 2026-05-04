@@ -1277,23 +1277,27 @@ PSOutput PSMainMesh(PSInputMesh input)
     // sky texture is authored in physical cd/m2. Sample a high mip as a stable
     // sky-fill approximation and keep the energy in the same ballpark as the
     // physical-camera exposure path.
-    const float kRasterDiffuseIrradianceScale = 0.65;
-    const float kRasterDiffuseAmbientScale = 0.75;
-    const float kRasterSpecularAmbientScale = 0.22;
+    const float kRasterDiffuseIrradianceScale = 0.95;
+    const float kRasterDiffuseAmbientScale = 1.10;
+    const float kRasterSpecularAmbientScale = 0.32;
+    float rasterSkyBoost = max(dxrProceduralSkyBoost, 0.0);
+    float rasterIndirectBoost = max(iblIndirectBoost, 3.0);
     float2 envUV_diff = DirectionToUV(N);
     float3 irradiance = envMap.SampleLevel(linearSampler, envUV_diff, 9.0).rgb *
-                        kRasterDiffuseIrradianceScale;
+                        (kRasterDiffuseIrradianceScale * rasterSkyBoost);
     float3 diffuse_ibl = kD_ibl * irradiance * (DiffuseAlbedo / PI);
 
     float2 envUV_spec = DirectionToUV(R);
-    float3 prefilteredColor = envMap.SampleLevel(linearSampler, envUV_spec, roughness * 7.0).rgb;
+    float3 prefilteredColor = envMap.SampleLevel(linearSampler, envUV_spec, roughness * 7.0).rgb *
+                              rasterSkyBoost;
     float2 envBrdf = EnvBRDFApprox(F0, roughness, NdotV);
     float3 specular_ibl = prefilteredColor * (F0 * envBrdf.x + envBrdf.y);
 
     float3 coat_ibl = float3(0.0, 0.0, 0.0);
     if (clearcoat > 0.001) {
         float2 envUV_spec = DirectionToUV(R);
-        float3 prefilteredCoat = envMap.SampleLevel(linearSampler, envUV_spec, clearcoatRoughness * 7.0).rgb;
+        float3 prefilteredCoat = envMap.SampleLevel(linearSampler, envUV_spec, clearcoatRoughness * 7.0).rgb *
+                                 rasterSkyBoost;
         float coatF0 = DielectricF0FromIor(volumeParams.w);
         float3 F0c = float3(coatF0, coatF0, coatF0);
         float2 envBrdfCoat = EnvBRDFApprox(F0c, clearcoatRoughness, NdotV);
@@ -1303,18 +1307,18 @@ PSOutput PSMainMesh(PSInputMesh input)
     // Raster has no true GI, so keep the environment contribution conservative
     // to avoid blowing out simple procedural-sky scenes.
     float3 envIBL = (diffuse_ibl * kRasterDiffuseAmbientScale +
-                     specular_ibl * kRasterSpecularAmbientScale) * ao;
+                     specular_ibl * kRasterSpecularAmbientScale) * (ao * rasterIndirectBoost);
     float3 ambient = envIBL * (1.0 - clearcoat);
     if (clearcoat > 0.001) {
-        float3 ambCoat = coat_ibl * (ao * kRasterSpecularAmbientScale);
+        float3 ambCoat = coat_ibl * (ao * rasterIndirectBoost * kRasterSpecularAmbientScale);
         ambient += ambCoat * clearcoat;
     }
 
     if (translucency > 0.001) {
         float2 envUV_back = DirectionToUV(-N);
         float3 irradianceBack = envMap.SampleLevel(linearSampler, envUV_back, 9.0).rgb *
-                     kRasterDiffuseIrradianceScale;
-        float3 envBack = (DiffuseAlbedo * irradianceBack) * (ao * kRasterDiffuseAmbientScale);
+                     (kRasterDiffuseIrradianceScale * rasterSkyBoost);
+        float3 envBack = (DiffuseAlbedo * irradianceBack) * (ao * rasterIndirectBoost * kRasterDiffuseAmbientScale);
         ambient += envBack * translucency;
     }
 
@@ -1322,16 +1326,16 @@ PSOutput PSMainMesh(PSInputMesh input)
     if (sheenIblWeight > 1.0e-4) {
         float2 envUV_sheen = DirectionToUV(reflect(-V, N));
         float3 sheenEnv = envMap.SampleLevel(linearSampler, envUV_sheen,
-                                             roughness * 6.0 + 2.0).rgb;
+                                             roughness * 6.0 + 2.0).rgb * rasterSkyBoost;
         float grazing = pow(saturate(1.0 - NdotV), 4.0);
         ambient += sheenEnv * saturate(sheenColor.rgb) *
-                   (sheenIblWeight * grazing * 0.06 * ao);
+                   (sheenIblWeight * grazing * 0.06 * ao * rasterIndirectBoost);
     }
 
     float skyHemi = saturate(N.y * 0.5 + 0.5);
     float envLuma = dot(irradiance + prefilteredColor, float3(0.2126, 0.7152, 0.0722));
     float fallbackWeight = saturate(1.0 - envLuma * 2.0);
-    float3 skyFill = DiffuseAlbedo * radiance * ao * (0.008 + 0.018 * skyHemi);
+    float3 skyFill = DiffuseAlbedo * radiance * ao * rasterIndirectBoost * (0.012 + 0.028 * skyHemi);
     ambient += skyFill * fallbackWeight;
 
     ambient = ambient * grassAmbientContact + grassSoilBounce;
