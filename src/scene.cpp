@@ -3519,6 +3519,130 @@ static bool ComputeSelectionPivot(
   return true;
 }
 
+static bool WorldToScreenPoint(const float worldPoint[3], const float view[16],
+                               const float proj[16], float windowX,
+                               float windowY, float windowWidth,
+                               float windowHeight, ImVec2 &outScreen) {
+  float viewPos[4];
+  for (int i = 0; i < 4; i++) {
+    viewPos[i] = worldPoint[0] * view[0 * 4 + i] +
+                 worldPoint[1] * view[1 * 4 + i] +
+                 worldPoint[2] * view[2 * 4 + i] + view[3 * 4 + i];
+  }
+
+  float clipPos[4];
+  for (int i = 0; i < 4; i++) {
+    clipPos[i] = viewPos[0] * proj[0 * 4 + i] +
+                 viewPos[1] * proj[1 * 4 + i] +
+                 viewPos[2] * proj[2 * 4 + i] +
+                 viewPos[3] * proj[3 * 4 + i];
+  }
+  if (clipPos[3] < 0.001f) {
+    return false;
+  }
+
+  outScreen.x =
+      windowX + (clipPos[0] / clipPos[3] + 1.0f) * 0.5f * windowWidth;
+  outScreen.y =
+      windowY + (1.0f - clipPos[1] / clipPos[3]) * 0.5f * windowHeight;
+  return true;
+}
+
+static bool ComputeSelectedRootWorldBounds(
+    size_t rootIndex, const std::vector<std::array<float, 16>> &worldTransforms,
+    float outMin[3], float outMax[3]) {
+  if (rootIndex >= s_nodes.size()) {
+    return false;
+  }
+
+  outMin[0] = outMin[1] = outMin[2] = FLT_MAX;
+  outMax[0] = outMax[1] = outMax[2] = -FLT_MAX;
+  bool hasBounds = false;
+
+  for (size_t nodeIndex = 0; nodeIndex < s_nodes.size(); ++nodeIndex) {
+    if (!IsNodeDescendantOf(nodeIndex, rootIndex) ||
+        nodeIndex >= worldTransforms.size()) {
+      continue;
+    }
+    const Node &node = s_nodes[nodeIndex];
+    if (!node.visible) {
+      continue;
+    }
+
+    for (size_t meshIndex : node.meshIndices) {
+      if (meshIndex >= g_loadedMeshes.size()) {
+        continue;
+      }
+      const Asset::GpuMesh &mesh = g_loadedMeshes[meshIndex];
+      const float corners[8][3] = {
+          {mesh.minBound[0], mesh.minBound[1], mesh.minBound[2]},
+          {mesh.maxBound[0], mesh.minBound[1], mesh.minBound[2]},
+          {mesh.maxBound[0], mesh.maxBound[1], mesh.minBound[2]},
+          {mesh.minBound[0], mesh.maxBound[1], mesh.minBound[2]},
+          {mesh.minBound[0], mesh.minBound[1], mesh.maxBound[2]},
+          {mesh.maxBound[0], mesh.minBound[1], mesh.maxBound[2]},
+          {mesh.maxBound[0], mesh.maxBound[1], mesh.maxBound[2]},
+          {mesh.minBound[0], mesh.maxBound[1], mesh.maxBound[2]},
+      };
+      for (const auto &corner : corners) {
+        float worldCorner[3];
+        TransformPointColumnMajor(worldTransforms[nodeIndex].data(), corner,
+                                  worldCorner);
+        for (int axis = 0; axis < 3; ++axis) {
+          outMin[axis] = (std::min)(outMin[axis], worldCorner[axis]);
+          outMax[axis] = (std::max)(outMax[axis], worldCorner[axis]);
+        }
+        hasBounds = true;
+      }
+    }
+  }
+
+  return hasBounds;
+}
+
+static void DrawSelectedRootOutline(
+    ImDrawList *drawList, size_t rootIndex,
+    const std::vector<std::array<float, 16>> &worldTransforms,
+    const float view[16], const float proj[16], float windowX, float windowY,
+    float windowWidth, float windowHeight) {
+  if (!drawList) {
+    return;
+  }
+
+  float minB[3];
+  float maxB[3];
+  if (!ComputeSelectedRootWorldBounds(rootIndex, worldTransforms, minB, maxB)) {
+    return;
+  }
+
+  const float corners[8][3] = {
+      {minB[0], minB[1], minB[2]}, {maxB[0], minB[1], minB[2]},
+      {maxB[0], maxB[1], minB[2]}, {minB[0], maxB[1], minB[2]},
+      {minB[0], minB[1], maxB[2]}, {maxB[0], minB[1], maxB[2]},
+      {maxB[0], maxB[1], maxB[2]}, {minB[0], maxB[1], maxB[2]},
+  };
+
+  ImVec2 screen[8];
+  for (int i = 0; i < 8; ++i) {
+    if (!WorldToScreenPoint(corners[i], view, proj, windowX, windowY,
+                            windowWidth, windowHeight, screen[i])) {
+      return;
+    }
+  }
+
+  const int edges[12][2] = {{0, 1}, {1, 2}, {2, 3}, {3, 0},
+                            {4, 5}, {5, 6}, {6, 7}, {7, 4},
+                            {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+  const ImU32 shadow = IM_COL32(0, 0, 0, 180);
+  const ImU32 accent = IM_COL32(255, 210, 80, 255);
+  for (const auto &edge : edges) {
+    drawList->AddLine(screen[edge[0]], screen[edge[1]], shadow, 5.0f);
+  }
+  for (const auto &edge : edges) {
+    drawList->AddLine(screen[edge[0]], screen[edge[1]], accent, 2.5f);
+  }
+}
+
 void DrawGizmo() {
   std::vector<size_t> selectedRoots = GetSelectedTransformRoots();
   if (s_shiftCloneDrag.active &&
@@ -3579,6 +3703,12 @@ void DrawGizmo() {
 
   const std::vector<std::array<float, 16>> worldTransforms =
       BuildNodeWorldTransforms();
+
+  for (size_t rootIndex : selectedRoots) {
+    DrawSelectedRootOutline(overlayDrawList, rootIndex, worldTransforms, view,
+                            proj, windowX, windowY, windowWidth,
+                            windowHeight);
+  }
 
   float pivotMatrix[16];
   if (!ComputeSelectionPivot(selectedRoots, worldTransforms, pivotMatrix)) {

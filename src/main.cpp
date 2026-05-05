@@ -3318,6 +3318,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     // Editor UI (moved to editor_ui.cpp)
     DrawEditorUI(g_fps, g_timeOfDay, g_northOffset, g_latitudeDeg, g_dayOfYear);
 
+    const bool previewOverlayHoldingViewport =
+        !g_renderExportJob.active && HasPreviewRenderImage();
+    if (previewOverlayHoldingViewport) {
+      prevTime = std::chrono::high_resolution_clock::now();
+      WaitMessage();
+      prevTime = std::chrono::high_resolution_clock::now();
+      continue;
+    }
+
   #ifdef USE_QT_UI
     const bool canIdleDxr =
       !g_renderExportJob.active && g_currentRenderMode == RenderMode::DXR &&

@@ -1472,16 +1472,11 @@ void CancelAnimationRenderExport() {
 void StartPreviewRenderJob() {
   if (g_renderExportJob.active) return;
   RenderExportLaunchSettings settings = {};
+  settings.resolutionPreset = g_renderExportSettings.resolutionPreset;
   settings.maxSpp = g_renderExportSettings.maxSpp;
   settings.noisePercent = g_renderExportSettings.noisePercent;
   settings.denoiserIndex = g_renderExportSettings.denoiserIndex;
   settings.allowNoiseThresholdStop = true;
-  D3D12_RECT previewRect = {0, 0, (LONG)g_windowWidth, (LONG)g_windowHeight};
-  GetSafeFramePreviewRect(g_windowWidth, g_windowHeight, previewRect);
-  settings.explicitWidth =
-      (std::max)(1u, static_cast<unsigned int>(previewRect.right - previewRect.left));
-  settings.explicitHeight =
-      (std::max)(1u, static_cast<unsigned int>(previewRect.bottom - previewRect.top));
   StartRenderExportJobWithSettings(L"", settings, true);
   fprintf(stderr,
           "Preview render started: %ux%u, maxSPP=%d, noise=%.3f, "
@@ -3092,10 +3087,6 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
 
   if (ImGui::IsKeyPressed(ImGuiKey_M, false)) {
     g_showMaterialEditor = !g_showMaterialEditor;
-  }
-
-  if (ImGui::IsKeyPressed(ImGuiKey_F2, false)) {
-    StartPreviewRenderJob();
   }
 
   if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
