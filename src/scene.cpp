@@ -88,6 +88,18 @@ static std::atomic<bool> s_pendingReady(false);
 static std::mutex s_pendingMutex;
 static ImGuizmo::OPERATION g_currentGizmoOp = ImGuizmo::TRANSLATE;
 static ImGuizmo::MODE g_currentGizmoMode = ImGuizmo::WORLD;
+static int s_selectedLightIdx = -1;
+
+struct ShiftCloneDragState {
+  bool active = false;
+  bool optionsPending = false;
+  bool sawLeftMouseDown = false;
+  size_t gizmoId = static_cast<size_t>(-1);
+  std::vector<size_t> cloneRootIndices;
+  std::vector<size_t> cloneNodeIndices;
+};
+
+static ShiftCloneDragState s_shiftCloneDrag;
 
 static void EnsureGpuBuffersForMeshes(std::vector<Asset::GpuMesh> &meshes);
 
@@ -931,6 +943,119 @@ static bool IsNodeDescendantOf(size_t nodeIndex, size_t ancestorIndex) {
   return false;
 }
 
+static bool IsModifierDown(bool ImGuiIO::*member, int virtualKey) {
+  const ImGuiIO &io = ImGui::GetIO();
+  return io.*member || ((GetKeyState(virtualKey) & 0x8000) != 0);
+}
+
+static bool IsCtrlDown() {
+  return IsModifierDown(&ImGuiIO::KeyCtrl, VK_CONTROL);
+}
+
+static bool IsShiftDown() {
+  return IsModifierDown(&ImGuiIO::KeyShift, VK_SHIFT);
+}
+
+static bool IsLeftMouseDown() {
+  const ImGuiIO &io = ImGui::GetIO();
+  return io.MouseDown[0] || ((GetKeyState(VK_LBUTTON) & 0x8000) != 0);
+}
+
+static std::vector<size_t> GetSelectedNodeIndices() {
+  std::vector<size_t> selected;
+  for (size_t i = 0; i < s_nodes.size(); ++i) {
+    if (s_nodes[i].selected) {
+      selected.push_back(i);
+    }
+  }
+  return selected;
+}
+
+static std::vector<size_t> GetSelectedTransformRoots() {
+  std::vector<size_t> selected = GetSelectedNodeIndices();
+  std::vector<size_t> roots;
+  roots.reserve(selected.size());
+  for (size_t index : selected) {
+    bool hasSelectedAncestor = false;
+    size_t cursor = s_nodes[index].parentIndex;
+    for (size_t guard = 0; guard < s_nodes.size(); ++guard) {
+      if (cursor == static_cast<size_t>(-1) || cursor >= s_nodes.size()) {
+        break;
+      }
+      if (s_nodes[cursor].selected) {
+        hasSelectedAncestor = true;
+        break;
+      }
+      cursor = s_nodes[cursor].parentIndex;
+    }
+    if (!hasSelectedAncestor) {
+      roots.push_back(index);
+    }
+  }
+  return roots;
+}
+
+static void SelectOnlyNodes(const std::vector<size_t> &indices) {
+  for (Node &node : s_nodes) {
+    node.selected = false;
+  }
+  for (size_t index : indices) {
+    if (index < s_nodes.size()) {
+      s_nodes[index].selected = true;
+    }
+  }
+  s_selectedLightIdx = -1;
+  NotifySceneChanged();
+}
+
+static void ToggleNodeSelection(size_t index) {
+  if (index >= s_nodes.size()) {
+    return;
+  }
+  s_nodes[index].selected = !s_nodes[index].selected;
+  s_selectedLightIdx = -1;
+  NotifySceneChanged();
+}
+
+static bool IsMeshReferencedOutsideNodes(
+    size_t meshIndex, const std::vector<size_t> &excludedNodes) {
+  for (size_t nodeIndex = 0; nodeIndex < s_nodes.size(); ++nodeIndex) {
+    if (std::find(excludedNodes.begin(), excludedNodes.end(), nodeIndex) !=
+        excludedNodes.end()) {
+      continue;
+    }
+    const Node &node = s_nodes[nodeIndex];
+    if (std::find(node.meshIndices.begin(), node.meshIndices.end(),
+                  meshIndex) != node.meshIndices.end()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool IsMeshReferencedByOtherNode(size_t meshIndex, const Node &owner) {
+  for (const Node &node : s_nodes) {
+    if (&node == &owner) {
+      continue;
+    }
+    if (std::find(node.meshIndices.begin(), node.meshIndices.end(),
+                  meshIndex) != node.meshIndices.end()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void ClearGpuMeshEntry(size_t meshIndex) {
+  if (meshIndex >= g_loadedMeshes.size()) {
+    return;
+  }
+  g_loadedMeshes[meshIndex].vertexBuffer.Reset();
+  g_loadedMeshes[meshIndex].indexBuffer.Reset();
+  g_loadedMeshes[meshIndex].vertexCount = 0;
+  g_loadedMeshes[meshIndex].indexCount = 0;
+}
+
 static std::vector<int> ResolveReplacementMaterialIndices(
     const Node &node, std::vector<Asset::Material> &materials,
     const std::vector<std::string> *materialStableIds = nullptr,
@@ -1140,25 +1265,28 @@ static std::vector<std::string> BuildLegacyLinkedMaterialNames(const std::vector
 
 static void ClearNodeMeshes(const Node &node) {
   for (size_t meshIndex : node.meshIndices) {
-    if (meshIndex >= g_loadedMeshes.size()) {
-      continue;
+    if (!IsMeshReferencedByOtherNode(meshIndex, node)) {
+      ClearGpuMeshEntry(meshIndex);
     }
-    g_loadedMeshes[meshIndex].vertexBuffer.Reset();
-    g_loadedMeshes[meshIndex].indexBuffer.Reset();
-    g_loadedMeshes[meshIndex].vertexCount = 0;
-    g_loadedMeshes[meshIndex].indexCount = 0;
   }
 }
 
 static void ClearMeshIndices(const std::vector<size_t> &meshIndices) {
+  static const std::vector<size_t> emptyExcludedNodes;
   for (size_t meshIndex : meshIndices) {
-    if (meshIndex >= g_loadedMeshes.size()) {
-      continue;
+    if (!IsMeshReferencedOutsideNodes(meshIndex, emptyExcludedNodes)) {
+      ClearGpuMeshEntry(meshIndex);
     }
-    g_loadedMeshes[meshIndex].vertexBuffer.Reset();
-    g_loadedMeshes[meshIndex].indexBuffer.Reset();
-    g_loadedMeshes[meshIndex].vertexCount = 0;
-    g_loadedMeshes[meshIndex].indexCount = 0;
+  }
+}
+
+static void ClearMeshIndicesAfterRemovingNodes(
+    const std::vector<size_t> &meshIndices,
+    const std::vector<size_t> &removingNodes) {
+  for (size_t meshIndex : meshIndices) {
+    if (!IsMeshReferencedOutsideNodes(meshIndex, removingNodes)) {
+      ClearGpuMeshEntry(meshIndex);
+    }
   }
 }
 
@@ -1224,7 +1352,7 @@ static void RemoveNodesByIndexSet(std::vector<size_t> indices,
       }
     }
   }
-  ClearMeshIndices(uniqueMeshIndices);
+  ClearMeshIndicesAfterRemovingNodes(uniqueMeshIndices, indices);
 
   for (auto it = indices.rbegin(); it != indices.rend(); ++it) {
     const size_t nodeIndex = *it;
@@ -1294,6 +1422,139 @@ static void ReleaseNodeMeshes(const Node &node) {
     return;
   }
   ClearNodeMeshes(node);
+}
+
+struct ClonedNodeSet {
+  std::vector<size_t> rootIndices;
+  std::vector<size_t> nodeIndices;
+};
+
+static std::vector<size_t> CollectNodeSubtree(size_t rootIndex) {
+  std::vector<size_t> subtree;
+  if (rootIndex >= s_nodes.size()) {
+    return subtree;
+  }
+  for (size_t nodeIndex = 0; nodeIndex < s_nodes.size(); ++nodeIndex) {
+    if (IsNodeDescendantOf(nodeIndex, rootIndex)) {
+      subtree.push_back(nodeIndex);
+    }
+  }
+  return subtree;
+}
+
+static ClonedNodeSet CloneNodesAsInstances(const std::vector<size_t> &roots) {
+  ClonedNodeSet result;
+  if (roots.empty()) {
+    return result;
+  }
+
+  std::vector<size_t> sourceNodes;
+  for (size_t rootIndex : roots) {
+    std::vector<size_t> subtree = CollectNodeSubtree(rootIndex);
+    sourceNodes.insert(sourceNodes.end(), subtree.begin(), subtree.end());
+  }
+  std::sort(sourceNodes.begin(), sourceNodes.end());
+  sourceNodes.erase(std::unique(sourceNodes.begin(), sourceNodes.end()),
+                    sourceNodes.end());
+  if (sourceNodes.empty()) {
+    return result;
+  }
+
+  std::unordered_map<size_t, size_t> remap;
+  remap.reserve(sourceNodes.size());
+  std::unordered_map<std::string, std::string> groupKeyRemap;
+
+  for (size_t sourceIndex : sourceNodes) {
+    const Node &source = s_nodes[sourceIndex];
+    Node clone = source;
+    clone.selected = false;
+    clone.liveLinkManaged = false;
+    clone.sourcePath.clear();
+    clone.name = source.name + " Instance";
+
+    if (!source.importGroupKey.empty()) {
+      auto groupIt = groupKeyRemap.find(source.importGroupKey);
+      if (groupIt == groupKeyRemap.end()) {
+        groupIt = groupKeyRemap
+                      .emplace(source.importGroupKey,
+                               GenerateImportGroupKey(source.sourcePath))
+                      .first;
+      }
+      clone.importGroupKey = groupIt->second;
+    }
+
+    const auto parentIt = remap.find(source.parentIndex);
+    if (parentIt != remap.end()) {
+      clone.parentIndex = parentIt->second;
+    } else {
+      clone.parentIndex = static_cast<size_t>(-1);
+    }
+
+    const size_t cloneIndex = s_nodes.size();
+    s_nodes.push_back(std::move(clone));
+    remap[sourceIndex] = cloneIndex;
+    result.nodeIndices.push_back(cloneIndex);
+  }
+
+  result.rootIndices.reserve(roots.size());
+  for (size_t rootIndex : roots) {
+    const auto it = remap.find(rootIndex);
+    if (it != remap.end()) {
+      result.rootIndices.push_back(it->second);
+    }
+  }
+  return result;
+}
+
+static void ConvertClonedInstancesToCopies(
+    const std::vector<size_t> &cloneNodeIndices) {
+  if (cloneNodeIndices.empty()) {
+    return;
+  }
+
+  PrepareForDestructiveMeshMutation();
+
+  std::unordered_map<size_t, size_t> meshRemap;
+  for (size_t nodeIndex : cloneNodeIndices) {
+    if (nodeIndex >= s_nodes.size()) {
+      continue;
+    }
+    Node &node = s_nodes[nodeIndex];
+    std::vector<size_t> copiedMeshIndices;
+    copiedMeshIndices.reserve(node.meshIndices.size());
+    for (size_t meshIndex : node.meshIndices) {
+      if (meshIndex >= g_loadedMeshes.size()) {
+        continue;
+      }
+      auto remapIt = meshRemap.find(meshIndex);
+      if (remapIt == meshRemap.end()) {
+        Asset::GpuMesh meshCopy = g_loadedMeshes[meshIndex];
+        if (!meshCopy.cpuVertices.empty() && !meshCopy.cpuIndices.empty()) {
+          meshCopy.vertexBuffer.Reset();
+          meshCopy.indexBuffer.Reset();
+          meshCopy.vbView = {};
+          meshCopy.ibView = {};
+        }
+        const size_t newMeshIndex = g_loadedMeshes.size();
+        g_loadedMeshes.push_back(std::move(meshCopy));
+        remapIt = meshRemap.emplace(meshIndex, newMeshIndex).first;
+      }
+      copiedMeshIndices.push_back(remapIt->second);
+    }
+    node.meshIndices = std::move(copiedMeshIndices);
+    const std::string suffix = " Instance";
+    if (node.name.size() >= suffix.size() &&
+        node.name.compare(node.name.size() - suffix.size(), suffix.size(),
+                          suffix) == 0) {
+      node.name.replace(node.name.size() - suffix.size(), suffix.size(),
+                        " Copy");
+    }
+  }
+
+  UploadGpuBuffersForMeshes(g_loadedMeshes);
+  ApplyRendererInvalidation(
+      RendererInvalidationPlan::FullAccelerationStructureRebuild);
+  NotifySceneChanged();
 }
 
 static bool FinalizeImportedNode(const std::string &srcPath,
@@ -2115,8 +2376,6 @@ void RegisterTextures(const std::vector<Asset::Texture> &textures) {
   g_textureDescriptorCount = (UINT)clampedCount;
 }
 
-static int s_selectedLightIdx = -1;
-
 bool ImportModelWithDialog(HWND hwnd) {
   std::wstring chosen;
   if (OpenModelFileDialog(hwnd, chosen)) {
@@ -2213,12 +2472,38 @@ bool ReimportNode(size_t index) {
 }
 
 void SelectNode(size_t index) {
-  for (size_t i = 0; i < s_nodes.size(); ++i)
-    s_nodes[i].selected = false;
-  s_selectedLightIdx = -1;
-  if (index < s_nodes.size())
-    s_nodes[index].selected = true;
+  if (index < s_nodes.size()) {
+    SelectOnlyNodes({index});
+  } else {
+    SelectOnlyNodes({});
+  }
+}
+
+void SelectNodes(const std::vector<size_t> &indices) {
+  SelectOnlyNodes(indices);
+}
+
+bool HasPendingCloneOptions() { return s_shiftCloneDrag.optionsPending; }
+
+void ResolvePendingCloneAsCopy() {
+  if (!s_shiftCloneDrag.optionsPending) {
+    return;
+  }
+  const std::vector<size_t> cloneRootIndices = s_shiftCloneDrag.cloneRootIndices;
+  ConvertClonedInstancesToCopies(s_shiftCloneDrag.cloneNodeIndices);
+  SelectOnlyNodes(cloneRootIndices);
+  s_shiftCloneDrag = {};
+}
+
+void ResolvePendingCloneAsInstance() {
+  if (!s_shiftCloneDrag.optionsPending) {
+    return;
+  }
+  const std::vector<size_t> cloneRootIndices = s_shiftCloneDrag.cloneRootIndices;
+  ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
   NotifySceneChanged();
+  SelectOnlyNodes(cloneRootIndices);
+  s_shiftCloneDrag = {};
 }
 
 size_t RegisterChangeListener(std::function<void()> callback) {
@@ -3103,19 +3388,109 @@ void MatMul(const float *a, const float *b, float *out) {
 
 bool Inverse4x4(const float *m, float *out);
 
-void DrawGizmo() {
-  size_t selectedIdx = (size_t)-1;
-  for (size_t i = 0; i < s_nodes.size(); ++i) {
-    if (s_nodes[i].selected) {
-      selectedIdx = i;
-      break;
+static void ApplyNodeWorldTransform(
+    size_t nodeIndex, const float newWorld[16],
+    const std::vector<std::array<float, 16>> &worldTransforms) {
+  if (nodeIndex >= s_nodes.size()) {
+    return;
+  }
+  Node &node = s_nodes[nodeIndex];
+  const size_t transformRootIndex = FindSceneTransformRootAncestor(nodeIndex);
+  if (transformRootIndex != static_cast<size_t>(-1) &&
+      transformRootIndex < worldTransforms.size()) {
+    float invRootWorld[16];
+    if (Inverse4x4(worldTransforms[transformRootIndex].data(),
+                   invRootWorld)) {
+      MatMul(invRootWorld, newWorld, node.transform);
+      return;
+    }
+  }
+  CopyMatrix4x4(newWorld, node.transform);
+}
+
+static bool ComputeSelectionPivot(
+    const std::vector<size_t> &roots,
+    const std::vector<std::array<float, 16>> &worldTransforms,
+    float pivotMatrix[16]) {
+  if (roots.empty() || roots.front() >= worldTransforms.size()) {
+    return false;
+  }
+
+  CopyMatrix4x4(worldTransforms[roots.front()].data(), pivotMatrix);
+
+  float center[3] = {0.0f, 0.0f, 0.0f};
+  int centerCount = 0;
+  for (size_t rootIndex : roots) {
+    if (rootIndex >= s_nodes.size()) {
+      continue;
+    }
+    for (size_t nodeIndex = 0; nodeIndex < s_nodes.size(); ++nodeIndex) {
+      if (!IsNodeDescendantOf(nodeIndex, rootIndex) ||
+          nodeIndex >= worldTransforms.size()) {
+        continue;
+      }
+      const Node &meshNode = s_nodes[nodeIndex];
+      if (!meshNode.visible) {
+        continue;
+      }
+      for (size_t meshIndex : meshNode.meshIndices) {
+        if (meshIndex >= g_loadedMeshes.size()) {
+          continue;
+        }
+        const Asset::GpuMesh &mesh = g_loadedMeshes[meshIndex];
+        float meshLocalCenter[3] = {
+            (mesh.minBound[0] + mesh.maxBound[0]) * 0.5f,
+            (mesh.minBound[1] + mesh.maxBound[1]) * 0.5f,
+            (mesh.minBound[2] + mesh.maxBound[2]) * 0.5f};
+        float worldCenter[3];
+        TransformPointColumnMajor(worldTransforms[nodeIndex].data(),
+                                  meshLocalCenter, worldCenter);
+        center[0] += worldCenter[0];
+        center[1] += worldCenter[1];
+        center[2] += worldCenter[2];
+        ++centerCount;
+      }
     }
   }
 
+  if (centerCount > 0) {
+    center[0] /= static_cast<float>(centerCount);
+    center[1] /= static_cast<float>(centerCount);
+    center[2] /= static_cast<float>(centerCount);
+  } else {
+    for (size_t rootIndex : roots) {
+      if (rootIndex >= worldTransforms.size()) {
+        continue;
+      }
+      const float *rootWorld = worldTransforms[rootIndex].data();
+      center[0] += rootWorld[12];
+      center[1] += rootWorld[13];
+      center[2] += rootWorld[14];
+      ++centerCount;
+    }
+    if (centerCount > 0) {
+      center[0] /= static_cast<float>(centerCount);
+      center[1] /= static_cast<float>(centerCount);
+      center[2] /= static_cast<float>(centerCount);
+    }
+  }
+
+  pivotMatrix[12] = center[0];
+  pivotMatrix[13] = center[1];
+  pivotMatrix[14] = center[2];
+  return true;
+}
+
+void DrawGizmo() {
+  std::vector<size_t> selectedRoots = GetSelectedTransformRoots();
+  if (s_shiftCloneDrag.active &&
+      !s_shiftCloneDrag.cloneRootIndices.empty()) {
+    selectedRoots = s_shiftCloneDrag.cloneRootIndices;
+  }
+
   // ImGuizmo::BeginFrame() called in main.cpp
-  if (selectedIdx == (size_t)-1)
+  if (selectedRoots.empty())
     return;
-  auto &node = s_nodes[selectedIdx];
 
   float view[16], proj[16];
   BuildViewMatrix(view);
@@ -3154,118 +3529,81 @@ void DrawGizmo() {
   ImGuizmo::GetStyle().TranslationLineThickness = 6.0f;
   ImGuizmo::GetStyle().RotationLineThickness = 6.0f;
 
-  ImGuizmo::SetID((int)selectedIdx);
+  const size_t gizmoId =
+      s_shiftCloneDrag.active &&
+              s_shiftCloneDrag.gizmoId != static_cast<size_t>(-1)
+          ? s_shiftCloneDrag.gizmoId
+          : selectedRoots.front();
+  ImGuizmo::SetID((int)gizmoId);
   ImGuizmo::SetOrthographic(false);
   ImGuizmo::SetDrawlist(overlayDrawList);
   ImGuizmo::SetRect(windowX, windowY, windowWidth, windowHeight);
 
   const std::vector<std::array<float, 16>> worldTransforms =
       BuildNodeWorldTransforms();
-  const float *selectedWorld = worldTransforms[selectedIdx].data();
-
-  // Compute the center in selected-node local space. For imported roots this
-  // includes child mesh nodes, so the gizmo controls the visible asset group.
-  float localCenter[3] = {0, 0, 0};
-  int count = 0;
-  float selectedInv[16];
-  const bool haveSelectedInv = Inverse4x4(selectedWorld, selectedInv);
-  if (haveSelectedInv) {
-    for (size_t nodeIndex = 0; nodeIndex < s_nodes.size(); ++nodeIndex) {
-      if (!IsNodeDescendantOf(nodeIndex, selectedIdx)) {
-        continue;
-      }
-      const Node &meshNode = s_nodes[nodeIndex];
-      if (!meshNode.visible) {
-        continue;
-      }
-      for (size_t meshIndex : meshNode.meshIndices) {
-        if (meshIndex >= g_loadedMeshes.size()) {
-          continue;
-        }
-        const auto &m = g_loadedMeshes[meshIndex];
-        float meshLocalCenter[3] = {
-            (m.minBound[0] + m.maxBound[0]) * 0.5f,
-            (m.minBound[1] + m.maxBound[1]) * 0.5f,
-            (m.minBound[2] + m.maxBound[2]) * 0.5f};
-        float worldCenter[3];
-        float selectedLocalCenter[3];
-        TransformPointColumnMajor(worldTransforms[nodeIndex].data(),
-                                  meshLocalCenter, worldCenter);
-        TransformPointColumnMajor(selectedInv, worldCenter,
-                                  selectedLocalCenter);
-        for (int a = 0; a < 3; ++a) {
-          localCenter[a] += selectedLocalCenter[a];
-        }
-        ++count;
-      }
-    }
-  }
-  if (count > 0) {
-    localCenter[0] /= count;
-    localCenter[1] /= count;
-    localCenter[2] /= count;
-  }
 
   float pivotMatrix[16];
-  CopyMatrix4x4(selectedWorld, pivotMatrix);
-  float translationMat[16] = {1,
-                              0,
-                              0,
-                              0,
-                              0,
-                              1,
-                              0,
-                              0,
-                              0,
-                              0,
-                              1,
-                              0,
-                              localCenter[0],
-                              localCenter[1],
-                              localCenter[2],
-                              1};
-  MatMul(pivotMatrix, translationMat, pivotMatrix);
+  if (!ComputeSelectionPivot(selectedRoots, worldTransforms, pivotMatrix)) {
+    ImGui::End();
+    return;
+  }
+
+  float originalPivotMatrix[16];
+  CopyMatrix4x4(pivotMatrix, originalPivotMatrix);
+  std::vector<std::array<float, 16>> originalRootWorlds;
+  originalRootWorlds.reserve(selectedRoots.size());
+  for (size_t rootIndex : selectedRoots) {
+    std::array<float, 16> rootWorld{};
+    if (rootIndex < worldTransforms.size()) {
+      CopyMatrix4x4(worldTransforms[rootIndex].data(), rootWorld.data());
+    }
+    originalRootWorlds.push_back(rootWorld);
+  }
 
   ImGuizmo::OPERATION op = GetActiveGizmoOperation();
 
   if (ImGuizmo::Manipulate(view, proj, op, actualMode,
                            pivotMatrix)) {
-    // SelectedWorld = pivotMatrix * Translation(-localCenter)
-    float invTranslationMat[16] = {1,
-                                   0,
-                                   0,
-                                   0,
-                                   0,
-                                   1,
-                                   0,
-                                   0,
-                                   0,
-                                   0,
-                                   1,
-                                   0,
-                                   -localCenter[0],
-                                   -localCenter[1],
-                                   -localCenter[2],
-                                   1};
-    float newWorld[16];
-    MatMul(pivotMatrix, invTranslationMat, newWorld);
-
-    const size_t transformRootIndex =
-        FindSceneTransformRootAncestor(selectedIdx);
-    if (transformRootIndex != static_cast<size_t>(-1) &&
-        transformRootIndex < s_nodes.size()) {
-      float invRootWorld[16];
-      if (Inverse4x4(worldTransforms[transformRootIndex].data(),
-                     invRootWorld)) {
-        MatMul(invRootWorld, newWorld, node.transform);
-      } else {
-        CopyMatrix4x4(newWorld, node.transform);
+    if (IsShiftDown() && !s_shiftCloneDrag.active &&
+        !s_shiftCloneDrag.optionsPending) {
+      ClonedNodeSet clones = CloneNodesAsInstances(selectedRoots);
+      if (!clones.rootIndices.empty()) {
+        s_shiftCloneDrag.active = true;
+        s_shiftCloneDrag.sawLeftMouseDown = IsLeftMouseDown();
+        s_shiftCloneDrag.gizmoId = selectedRoots.front();
+        s_shiftCloneDrag.cloneRootIndices = clones.rootIndices;
+        s_shiftCloneDrag.cloneNodeIndices = clones.nodeIndices;
+        selectedRoots = clones.rootIndices;
       }
-    } else {
-      CopyMatrix4x4(newWorld, node.transform);
     }
 
-    ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
+    float invOriginalPivot[16];
+    if (Inverse4x4(originalPivotMatrix, invOriginalPivot)) {
+      float delta[16];
+      MatMul(pivotMatrix, invOriginalPivot, delta);
+
+      const std::vector<std::array<float, 16>> currentWorldTransforms =
+          BuildNodeWorldTransforms();
+      for (size_t i = 0; i < selectedRoots.size() &&
+                         i < originalRootWorlds.size();
+           ++i) {
+        float newWorld[16];
+        MatMul(delta, originalRootWorlds[i].data(), newWorld);
+        ApplyNodeWorldTransform(selectedRoots[i], newWorld,
+                                currentWorldTransforms);
+      }
+
+      ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
+    }
+  }
+
+  if (s_shiftCloneDrag.active && IsLeftMouseDown()) {
+    s_shiftCloneDrag.sawLeftMouseDown = true;
+  }
+  if (s_shiftCloneDrag.active && s_shiftCloneDrag.sawLeftMouseDown &&
+      !IsLeftMouseDown()) {
+    s_shiftCloneDrag.active = false;
+    s_shiftCloneDrag.optionsPending = true;
   }
 
   ImGui::End();
@@ -3578,9 +3916,15 @@ int UpdateSelection(float screenWidth, float screenHeight) {
   }
 
   if (hitNode != -1) {
-    SelectNode((size_t)hitNode);
+    if (IsCtrlDown()) {
+      ToggleNodeSelection(static_cast<size_t>(hitNode));
+    } else {
+      SelectNode((size_t)hitNode);
+    }
     fprintf(stderr, "Scene: Picked Node '%s' (ID %d), Material ID %d\n",
             s_nodes[hitNode].name.c_str(), hitNode, hitMaterial);
+  } else if (!IsCtrlDown()) {
+    SelectNode(static_cast<size_t>(-1));
   }
 
   return hitMaterial;
@@ -3799,7 +4143,11 @@ void DrawScenePanel(HWND hwnd, bool &visible) {
           bool selected = s_nodes[index].selected;
           if (ImGui::Selectable(s_nodes[index].name.c_str(), selected,
                                 ImGuiSelectableFlags_SpanAllColumns)) {
-            SelectNode(index);
+            if (IsCtrlDown()) {
+              ToggleNodeSelection(index);
+            } else {
+              SelectNode(index);
+            }
           }
 
           if (indentChild) {

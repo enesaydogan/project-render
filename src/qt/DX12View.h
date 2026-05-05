@@ -3,6 +3,8 @@
 #include <QPointF>
 #include <QWidget>
 
+class QTimer;
+
 class DX12View : public QWidget
 {
     Q_OBJECT
@@ -23,6 +25,10 @@ protected:
     void resizeEvent(QResizeEvent *e) override;
 
 private:
+    void showPendingCloneOptions();
+
     QPointF m_lastGlobalMousePos;
     bool m_hasLastMousePos = false;
+    bool m_cloneOptionsDialogOpen = false;
+    QTimer *m_cloneOptionsTimer = nullptr;
 };

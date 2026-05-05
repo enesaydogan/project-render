@@ -8,8 +8,11 @@
 #include <cfloat>
 #include <QFocusEvent>
 #include <QKeyEvent>
+#include <QMessageBox>
 #include <QMouseEvent>
+#include <QPushButton>
 #include <QResizeEvent>
+#include <QTimer>
 #include <QWheelEvent>
 
 namespace {
@@ -110,6 +113,14 @@ DX12View::DX12View(QWidget *parent)
     setAttribute(Qt::WA_NativeWindow);
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
+
+    m_cloneOptionsTimer = new QTimer(this);
+    connect(m_cloneOptionsTimer, &QTimer::timeout, this, [this]() {
+        if (Scene::HasPendingCloneOptions()) {
+            showPendingCloneOptions();
+        }
+    });
+    m_cloneOptionsTimer->start(50);
 }
 
 DX12View::~DX12View()
@@ -152,6 +163,9 @@ void DX12View::keyPressEvent(QKeyEvent *e)
         io.SetKeyEventNativeData(imguiKey, static_cast<int>(e->nativeVirtualKey()),
                                  static_cast<int>(e->nativeScanCode()));
     }
+    ImGuiIO &io = ImGui::GetIO();
+    io.KeyCtrl = e->modifiers().testFlag(Qt::ControlModifier);
+    io.KeyShift = e->modifiers().testFlag(Qt::ShiftModifier);
     if (e->key() == Qt::Key_Escape && !e->isAutoRepeat()) {
         if (IsPreviewRenderActive()) {
             CancelPreviewRender();
@@ -176,6 +190,9 @@ void DX12View::keyReleaseEvent(QKeyEvent *e)
         io.SetKeyEventNativeData(imguiKey, static_cast<int>(e->nativeVirtualKey()),
                                  static_cast<int>(e->nativeScanCode()));
     }
+    ImGuiIO &io = ImGui::GetIO();
+    io.KeyCtrl = e->modifiers().testFlag(Qt::ControlModifier);
+    io.KeyShift = e->modifiers().testFlag(Qt::ShiftModifier);
     QWidget::keyReleaseEvent(e);
 }
 
@@ -260,4 +277,30 @@ void DX12View::resizeEvent(QResizeEvent *e)
     QWidget::resizeEvent(e);
     DX12Context::QueueResize(static_cast<UINT>(width()),
                              static_cast<UINT>(height()));
+}
+
+void DX12View::showPendingCloneOptions()
+{
+    if (m_cloneOptionsDialogOpen || !Scene::HasPendingCloneOptions()) {
+        return;
+    }
+
+    m_cloneOptionsDialogOpen = true;
+    QMessageBox dialog(this);
+    dialog.setWindowTitle(tr("Clone Options"));
+    dialog.setText(tr("Clone selection as:"));
+    QPushButton *copyButton =
+        dialog.addButton(tr("Copy"), QMessageBox::AcceptRole);
+    QPushButton *instanceButton =
+        dialog.addButton(tr("Instance"), QMessageBox::AcceptRole);
+    dialog.setDefaultButton(instanceButton);
+    dialog.setEscapeButton(instanceButton);
+    dialog.exec();
+
+    if (dialog.clickedButton() == copyButton) {
+        Scene::ResolvePendingCloneAsCopy();
+    } else {
+        Scene::ResolvePendingCloneAsInstance();
+    }
+    m_cloneOptionsDialogOpen = false;
 }

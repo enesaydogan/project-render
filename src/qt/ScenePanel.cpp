@@ -4,18 +4,23 @@
 #include "../scene.h"
 
 #include <QHBoxLayout>
+#include <QAbstractItemView>
 #include <QFileInfo>
+#include <QItemSelectionModel>
 #include <QLabel>
 #include <QMetaObject>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QVBoxLayout>
 
 #include <functional>
+#include <algorithm>
 #include <unordered_set>
+#include <vector>
 
 extern HWND g_hwnd;
 
@@ -157,6 +162,7 @@ void ScenePanel::createUi()
     m_nodeList = new QTreeWidget(this);
     m_nodeList->setColumnCount(1);
     m_nodeList->setHeaderHidden(true);
+    m_nodeList->setSelectionMode(QAbstractItemView::ExtendedSelection);
     layout->addWidget(m_nodeList);
 
     m_statusLabel = new QLabel(this);
@@ -187,16 +193,24 @@ void ScenePanel::createUi()
             refreshSceneList();
         }
     });
-    connect(m_nodeList, &QTreeWidget::currentItemChanged, this,
-            [this](QTreeWidgetItem *current, QTreeWidgetItem *) {
-        if (m_syncing || !current) {
+    connect(m_nodeList, &QTreeWidget::itemSelectionChanged, this, [this]() {
+        if (m_syncing) {
             return;
         }
-        const QVariant nodeIndexData = current->data(0, kNodeIndexRole);
-        if (!nodeIndexData.isValid()) {
-            return;
+        std::vector<size_t> selectedNodeIndices;
+        const QList<QTreeWidgetItem *> selectedItems = m_nodeList->selectedItems();
+        selectedNodeIndices.reserve(static_cast<size_t>(selectedItems.size()));
+        for (QTreeWidgetItem *item : selectedItems) {
+            if (!item) {
+                continue;
+            }
+            const QVariant nodeIndexData = item->data(0, kNodeIndexRole);
+            if (nodeIndexData.isValid()) {
+                selectedNodeIndices.push_back(
+                    static_cast<size_t>(nodeIndexData.toInt()));
+            }
         }
-        Scene::SelectNode(static_cast<size_t>(nodeIndexData.toInt()));
+        Scene::SelectNodes(selectedNodeIndices);
     });
     connect(m_sourceLabel, &QLabel::linkActivated, this, [this](const QString &link) {
         if (link != QStringLiteral("reimport")) {
@@ -233,6 +247,7 @@ void ScenePanel::scheduleRefresh()
 void ScenePanel::refreshSceneList()
 {
     m_syncing = true;
+    const QSignalBlocker treeSignalBlocker(m_nodeList);
     const bool sceneIoActive = IsSceneIoJobActive();
     const bool importActive = Scene::IsImportInProgress();
     m_lastSceneIoActive = sceneIoActive;
@@ -277,11 +292,10 @@ void ScenePanel::refreshSceneList()
 
     const auto &nodes = Scene::GetNodes();
     const TreeUiState treeState = CaptureTreeUiState(m_nodeList);
-    int selectedRow = -1;
+    std::vector<int> selectedRows;
     for (size_t index = 0; index < nodes.size(); ++index) {
         if (nodes[index].selected) {
-            selectedRow = static_cast<int>(index);
-            break;
+            selectedRows.push_back(static_cast<int>(index));
         }
     }
 
@@ -291,7 +305,7 @@ void ScenePanel::refreshSceneList()
     liveSyncRoot->setFlags(liveSyncRoot->flags() & ~Qt::ItemIsSelectable);
     liveSyncRoot->setExpanded(treeState.liveSyncExpanded);
 
-    QTreeWidgetItem *selectedItem = nullptr;
+    QTreeWidgetItem *currentSelectedItem = nullptr;
     auto isGroupRoot = [&](size_t index, bool liveLinkGroup) {
         if (index >= nodes.size() || nodes[index].liveLinkManaged != liveLinkGroup) {
             return false;
@@ -320,8 +334,14 @@ void ScenePanel::refreshSceneList()
             treeState.expandedNodeIndices.end()) {
             item->setExpanded(true);
         }
-        if (static_cast<int>(index) == selectedRow) {
-            selectedItem = item;
+        const bool nodeSelected =
+            std::find(selectedRows.begin(), selectedRows.end(),
+                      static_cast<int>(index)) != selectedRows.end();
+        if (nodeSelected) {
+            item->setSelected(true);
+            if (!currentSelectedItem) {
+                currentSelectedItem = item;
+            }
         }
 
         for (size_t childIndex = 0; childIndex < nodes.size(); ++childIndex) {
@@ -344,19 +364,23 @@ void ScenePanel::refreshSceneList()
         }
     }
 
-    if (selectedItem) {
-        for (QTreeWidgetItem *ancestor = selectedItem->parent(); ancestor;
+    if (currentSelectedItem) {
+        for (QTreeWidgetItem *ancestor = currentSelectedItem->parent(); ancestor;
              ancestor = ancestor->parent()) {
             ancestor->setExpanded(true);
         }
-        m_nodeList->setCurrentItem(selectedItem);
+        m_nodeList->setCurrentItem(currentSelectedItem, 0,
+                                   QItemSelectionModel::NoUpdate);
     } else {
         m_nodeList->clearSelection();
     }
 
-    if (selectedRow >= 0 && selectedRow < static_cast<int>(nodes.size()) &&
-        Scene::CanReimportNode(static_cast<size_t>(selectedRow))) {
-        const QString sourcePath = QString::fromStdString(nodes[static_cast<size_t>(selectedRow)].sourcePath);
+    const int primarySelectedRow =
+        selectedRows.empty() ? -1 : selectedRows.front();
+    if (primarySelectedRow >= 0 &&
+        primarySelectedRow < static_cast<int>(nodes.size()) &&
+        Scene::CanReimportNode(static_cast<size_t>(primarySelectedRow))) {
+        const QString sourcePath = QString::fromStdString(nodes[static_cast<size_t>(primarySelectedRow)].sourcePath);
         const QString fileName = QFileInfo(sourcePath).fileName().toHtmlEscaped();
         m_sourceLabel->setText(tr("Linked source: <a href=\"reimport\">%1</a>").arg(fileName));
         m_sourceLabel->setToolTip(sourcePath);
@@ -374,6 +398,6 @@ void ScenePanel::refreshSceneList()
             .arg(static_cast<int>(Scene::GetLights().size()))
             .arg(QString::fromStdString(Scene::LastStatus())));
 
-    m_deleteButton->setEnabled(selectedNodeIndex() >= 0);
+    m_deleteButton->setEnabled(!selectedRows.empty());
     m_syncing = false;
 }
