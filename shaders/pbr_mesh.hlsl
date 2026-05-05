@@ -86,6 +86,12 @@ cbuffer MaterialCB : register(b1)
     float4 lobeParams;          // x=anisotropy, y=anisoRotation, z=sheenWeight, w=coatNormalAmount
 };
 
+cbuffer GrassDrawCB : register(b3)
+{
+    uint selectedGrassMaterialIndex;
+    uint3 grassDrawPadding;
+};
+
 // Texture array - bonded as an unbounded array in SM 6.x
 Texture2D textures[] : register(t0);
 Texture2D envMap : register(t0, space1);
@@ -733,6 +739,18 @@ PSInputMesh VSMainGrass(VSInputMesh input, uint instanceId : SV_InstanceID)
 
     uint bladeIndex = g_grassVisible[instanceId + 1].x;
     FGrassPatch blade = g_grassInstances[bladeIndex];
+    if ((blade.packedData & 0xFFFFu) != selectedGrassMaterialIndex)
+    {
+        o.position = float4(0.0, 0.0, -1.0, 1.0);
+        o.worldPos = 0.0;
+        o.objectPos = 0.0;
+        o.normal = float3(0.0, 1.0, 0.0);
+        o.tangent = float4(1.0, 0.0, 0.0, 1.0);
+        o.uv = 0.0;
+        o.grassVariation = 0.0;
+        o.emitterUv = 0.0;
+        return o;
+    }
     float bladeScale = max(blade.scale, 1e-3);
 
     float3 right;

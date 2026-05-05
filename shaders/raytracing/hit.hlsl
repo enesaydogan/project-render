@@ -558,9 +558,14 @@ void ClosestHitImpl(inout RayPayload payload,
     }
 
     // Access mesh and material for this instance
+    uint instanceIdx = InstanceIndex();
     uint meshIdx = InstanceID();
     MeshData mesh = meshData[meshIdx];
     uint matIdx = (uint)max(0, mesh.materialIndex);
+    if (grassTlasStartIndex != 0xFFFFFFFFu && instanceIdx >= grassTlasStartIndex) {
+        uint grassBladeIndex = instanceIdx - grassTlasStartIndex;
+        matIdx = grassBlades[grassBladeIndex].packedData & 0xFFFFu;
+    }
     MaterialData mat = materials[matIdx];
     MaterialExtraData matExtra = materialExtras[matIdx];
 
@@ -752,8 +757,8 @@ void ClosestHitImpl(inout RayPayload payload,
 
     if (isGrassMaterial) {
         if (!triPlanar && texDiff >= 0 && grassTlasStartIndex != 0xFFFFFFFFu &&
-            InstanceIndex() >= grassTlasStartIndex) {
-            uint grassBladeIndex = InstanceIndex() - grassTlasStartIndex;
+            instanceIdx >= grassTlasStartIndex) {
+            uint grassBladeIndex = instanceIdx - grassTlasStartIndex;
             float2 emitterUv =
                 grassBlades[grassBladeIndex].emitterUv * uvXf.xy + uvXf.zw;
             float3 groundTint =
@@ -1029,9 +1034,14 @@ void WavefrontClosestHit(inout RayPayload payload,
 void AnyHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes attr)
 {
     uint rayType = UnpackPayloadRayType(payload.packedIorType);
+    uint instanceIdx = InstanceIndex();
     uint meshIdx = InstanceID();
     MeshData mesh = meshData[meshIdx];
     uint matIdx = (uint)max(0, mesh.materialIndex);
+    if (grassTlasStartIndex != 0xFFFFFFFFu && instanceIdx >= grassTlasStartIndex) {
+        uint grassBladeIndex = instanceIdx - grassTlasStartIndex;
+        matIdx = grassBlades[grassBladeIndex].packedData & 0xFFFFu;
+    }
     MaterialData mat = materials[matIdx];
     MaterialExtraData matExtra = materialExtras[matIdx];
     uint matFlags = asuint(mat.pbrParams_flags.w);

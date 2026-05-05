@@ -2751,6 +2751,18 @@ std::vector<const Asset::GpuMesh *> GetActiveMeshes() {
       active.push_back(patch);
     }
   }
+  const Asset::GpuMesh *midPatch = GrassManager::GetMidPatchMesh();
+  if (midPatch && midPatch->vertexBuffer && midPatch->indexBuffer &&
+      midPatch->indexCount > 0) {
+    const bool alreadyPresent = std::any_of(
+        active.begin(), active.end(),
+        [midPatch](const Asset::GpuMesh *m) {
+          return m && m->vertexBuffer.Get() == midPatch->vertexBuffer.Get();
+        });
+    if (!alreadyPresent) {
+      active.push_back(midPatch);
+    }
+  }
   return active;
 }
 

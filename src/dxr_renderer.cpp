@@ -535,6 +535,8 @@ static std::vector<const Asset::GpuMesh *> s_cachedTlasMeshOrder;
 static bool s_tlasSupportsUpdate = false;
 static bool s_forceAsRebuild = false;
 static bool s_forceTlasUpdate = false;
+static bool s_hasGrassTlasCameraPos = false;
+static DirectX::XMFLOAT3 s_lastGrassTlasCameraPos = {};
 static uint32_t s_resourceFeatureMask = 0;
 
 // Async compute execution for decoupled ReSTIR DI/GI.
@@ -4409,6 +4411,33 @@ void RequestAccelerationStructureUpdate() {
   }
 }
 
+static bool GrassTlasNeedsCameraRefresh() {
+  if (GrassManager::GetPatchCount() == 0) {
+    s_hasGrassTlasCameraPos = false;
+    return false;
+  }
+  if (!s_hasGrassTlasCameraPos) {
+    return true;
+  }
+
+  const float dx = g_cameraData.pos[0] - s_lastGrassTlasCameraPos.x;
+  const float dy = g_cameraData.pos[1] - s_lastGrassTlasCameraPos.y;
+  const float dz = g_cameraData.pos[2] - s_lastGrassTlasCameraPos.z;
+  constexpr float kGrassTlasCameraRefreshMeters = 0.25f;
+  return (dx * dx + dy * dy + dz * dz) >=
+         (kGrassTlasCameraRefreshMeters * kGrassTlasCameraRefreshMeters);
+}
+
+static void CaptureGrassTlasCameraPos() {
+  if (GrassManager::GetPatchCount() == 0) {
+    s_hasGrassTlasCameraPos = false;
+    return;
+  }
+  s_lastGrassTlasCameraPos = {g_cameraData.pos[0], g_cameraData.pos[1],
+                              g_cameraData.pos[2]};
+  s_hasGrassTlasCameraPos = true;
+}
+
 static void ClearDirtyMaterialsForMeshes(
     const std::vector<const Asset::GpuMesh *> &meshes) {
   if (s_dirtyMaterialFlags.empty()) {
@@ -5012,27 +5041,45 @@ void BuildAccelerationStructures(
       const UINT grassRequested = GrassManager::GetPatchCount();
       if (grassRequested > 0) {
         const Asset::GpuMesh *patchMesh = GrassManager::GetPatchMesh();
-        UINT64 patchBlasAddr = 0;
-        UINT patchMeshIndex = 0;
-        if (patchMesh && patchMesh->vertexBuffer) {
-          auto patchIt = meshToBlasIndex.find(patchMesh->vertexBuffer.Get());
-          if (patchIt != meshToBlasIndex.end()) {
-            const size_t patchBlasIndex = patchIt->second;
-            if (patchBlasIndex < s_allBLAS.size() &&
-                s_allBLAS[patchBlasIndex].buffers.result) {
-              patchBlasAddr =
-                  s_allBLAS[patchBlasIndex].buffers.result->GetGPUVirtualAddress();
-              patchMeshIndex = (UINT)s_allBLAS[patchBlasIndex].meshId;
-            }
+        const Asset::GpuMesh *midPatchMesh = GrassManager::GetMidPatchMesh();
+        auto findGrassBlas = [&](const Asset::GpuMesh *mesh,
+                                 UINT64 &blasAddr,
+                                 UINT &meshIndex) {
+          blasAddr = 0;
+          meshIndex = 0;
+          if (!mesh || !mesh->vertexBuffer) {
+            return;
           }
-        }
+          auto patchIt = meshToBlasIndex.find(mesh->vertexBuffer.Get());
+          if (patchIt == meshToBlasIndex.end()) {
+            return;
+          }
+          const size_t patchBlasIndex = patchIt->second;
+          if (patchBlasIndex < s_allBLAS.size() &&
+              s_allBLAS[patchBlasIndex].buffers.result) {
+            blasAddr =
+                s_allBLAS[patchBlasIndex].buffers.result->GetGPUVirtualAddress();
+            meshIndex = (UINT)s_allBLAS[patchBlasIndex].meshId;
+          }
+        };
 
-        if (patchBlasAddr != 0) {
+        UINT64 patchBlasAddr = 0;
+        UINT64 midPatchBlasAddr = 0;
+        UINT patchMeshIndex = 0;
+        UINT midPatchMeshIndex = 0;
+        findGrassBlas(patchMesh, patchBlasAddr, patchMeshIndex);
+        findGrassBlas(midPatchMesh, midPatchBlasAddr, midPatchMeshIndex);
+
+        if (patchBlasAddr != 0 || midPatchBlasAddr != 0) {
           const auto &patches = GrassManager::GetPatches();
           std::vector<FGrassPatch> rtPatches;
           rtPatches.reserve(patches.size());
           const float nearDistance = GrassManager::GetNearDistance();
-          const float nearDistanceSq = nearDistance * nearDistance;
+          const float midDistance = GrassManager::GetMidDistance();
+          const float midDistanceSq = midDistance * midDistance;
+          const float transitionStart = nearDistance * 0.72f;
+          const float transitionEnd =
+              (std::min)(midDistance * 0.68f, nearDistance * 1.85f);
           const DirectX::XMFLOAT3 cameraPos = {g_cameraData.pos[0],
                                                g_cameraData.pos[1],
                                                g_cameraData.pos[2]};
@@ -5041,7 +5088,35 @@ void BuildAccelerationStructures(
             const float dy = b.position.y - cameraPos.y;
             const float dz = b.position.z - cameraPos.z;
             const float distSq = dx * dx + dy * dy + dz * dz;
-            if (distSq > nearDistanceSq) {
+            if (distSq > midDistanceSq) {
+              continue;
+            }
+
+            const float dist = sqrtf(distSq);
+            const float transitionDenom =
+                (std::max)(transitionEnd - transitionStart, 0.001f);
+            float nearWeight =
+                1.0f - (dist - transitionStart) / transitionDenom;
+            nearWeight = (std::clamp)(nearWeight, 0.0f, 1.0f);
+            nearWeight = nearWeight * nearWeight * (3.0f - 2.0f * nearWeight);
+            const float lodNoise =
+                (float)((b.colorVariation >> 8) & 0xFFFFu) / 65535.0f;
+            const bool useNearMesh =
+                (patchBlasAddr != 0) &&
+                (midPatchBlasAddr == 0 || dist <= transitionStart ||
+                 (dist < transitionEnd && lodNoise < nearWeight));
+
+            UINT64 selectedBlasAddr = patchBlasAddr;
+            UINT selectedMeshIndex = patchMeshIndex;
+            const Asset::GpuMesh *selectedMesh = patchMesh;
+            if (!useNearMesh) {
+              if (midPatchBlasAddr == 0) {
+                continue;
+              }
+              selectedBlasAddr = midPatchBlasAddr;
+              selectedMeshIndex = midPatchMeshIndex;
+              selectedMesh = midPatchMesh;
+            } else if (selectedBlasAddr == 0) {
               continue;
             }
 
@@ -5096,13 +5171,13 @@ void BuildAccelerationStructures(
             inst.Transform[2][1] = upF.z * sc;
             inst.Transform[2][2] = forwardF.z * sc;
             inst.Transform[2][3] = b.position.z;
-            inst.InstanceID = patchMeshIndex;
+            inst.InstanceID = selectedMeshIndex;
             inst.InstanceMask = 0xFF;
             inst.InstanceContributionToHitGroupIndex = 0;
             inst.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
-            inst.AccelerationStructure = patchBlasAddr;
+            inst.AccelerationStructure = selectedBlasAddr;
             instanceDescs.push_back(inst);
-            instanceMeshOrder.push_back(patchMesh);
+            instanceMeshOrder.push_back(selectedMesh);
           }
           GrassManager::UploadRayTracingPatches(cmdList.Get(), rtPatches);
         } else if (g_verboseRenderLogs) {
@@ -5213,6 +5288,7 @@ void BuildAccelerationStructures(
       s_cachedTlasMeshOrder = instanceMeshOrder;
       s_tlasSupportsUpdate = true;
     }
+    CaptureGrassTlasCameraPos();
 
   } catch (const std::exception &e) {
     fprintf(stderr, "DxrRenderer: Exception during AS build: %s\n", e.what());
@@ -5644,7 +5720,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
   // Material edits only require AS rebuild when opaque-vs-nonopaque state
   // changes (affects BLAS geometry flags / AnyHit path).
-  if (s_forceAsRebuild || s_forceTlasUpdate ||
+  const bool grassTlasCameraChanged = GrassTlasNeedsCameraRefresh();
+  if (s_forceAsRebuild || s_forceTlasUpdate || grassTlasCameraChanged ||
       (!s_tlas.result && !meshes.empty())) {
     BuildAccelerationStructures(meshes, Scene::GetInstances());
     if (!s_tlas.result) {

@@ -167,28 +167,30 @@ static bool EnsureProceduralGrassBladeMesh() {
     return true;
   }
 
-  // Build a compact grass tuft so each instance reads more like a clump than
-  // a single crossed billboard.
+  // Build a low, arched grass tuft.  The user-facing blade size is treated as
+  // a lawn scale, so the mesh stays broad and soft instead of becoming tall
+  // upright spikes.
   std::vector<Asset::Vertex> vertices;
   std::vector<uint32_t> indices;
-  vertices.reserve(40);
-  indices.reserve(180);
+  vertices.reserve(80);
+  indices.reserve(360);
 
   auto addBladePlane = [&](float yawRadians, float baseOffsetX,
                            float baseOffsetZ, float widthScale,
-                           float heightScale, float sideLean) {
+                           float heightScale, float sideLean,
+                           float forwardLean) {
     const uint32_t base = static_cast<uint32_t>(vertices.size());
     const float c = std::cos(yawRadians);
     const float s = std::sin(yawRadians);
-    const float halfWidths[4] = {0.072f, 0.052f, 0.026f, 0.006f};
-    const float heights[4] = {0.00f, 0.32f, 0.71f, 1.00f};
-    const float curve[4] = {0.000f, 0.018f, 0.056f, 0.105f};
-    const float uvsV[4] = {1.00f, 0.64f, 0.22f, 0.00f};
+    const float halfWidths[5] = {0.082f, 0.072f, 0.050f, 0.023f, 0.005f};
+    const float heights[5] = {0.00f, 0.13f, 0.28f, 0.44f, 0.56f};
+    const float curve[5] = {0.000f, 0.030f, 0.078f, 0.138f, 0.205f};
+    const float uvsV[5] = {1.00f, 0.76f, 0.48f, 0.21f, 0.00f};
 
-    for (int row = 0; row < 4; ++row) {
+    for (int row = 0; row < 5; ++row) {
       const float width = halfWidths[row] * widthScale;
       const float height = heights[row] * heightScale;
-      const float bend = curve[row] * heightScale;
+      const float bend = curve[row] * heightScale * forwardLean;
       const float lateral = sideLean * heights[row];
 
       auto makeVertex = [&](float side, float u) {
@@ -199,9 +201,9 @@ static bool EnsureProceduralGrassBladeMesh() {
         v.pos[0] = localX * c - localZ * s;
         v.pos[1] = localY;
         v.pos[2] = localX * s + localZ * c;
-        v.normal[0] = c;
-        v.normal[1] = 0.18f;
-        v.normal[2] = s;
+        v.normal[0] = 0.55f * c;
+        v.normal[1] = 0.58f;
+        v.normal[2] = 0.55f * s;
         v.tangent[0] = -s;
         v.tangent[1] = 0.0f;
         v.tangent[2] = c;
@@ -219,7 +221,7 @@ static bool EnsureProceduralGrassBladeMesh() {
       vertices.push_back(right);
     }
 
-    for (uint32_t row = 0; row < 3; ++row) {
+    for (uint32_t row = 0; row < 4; ++row) {
       const uint32_t i0 = base + row * 2;
       const uint32_t i1 = i0 + 1;
       const uint32_t i2 = i0 + 2;
@@ -229,11 +231,13 @@ static bool EnsureProceduralGrassBladeMesh() {
     }
   };
 
-  addBladePlane(0.12f, -0.030f, -0.014f, 1.00f, 1.00f, -0.012f);
-  addBladePlane(1.11f, 0.024f, -0.008f, 0.88f, 0.93f, 0.015f);
-  addBladePlane(2.24f, 0.008f, 0.022f, 0.76f, 0.84f, -0.008f);
-  addBladePlane(3.51f, -0.020f, 0.016f, 0.70f, 0.78f, 0.006f);
-  addBladePlane(4.67f, 0.018f, 0.006f, 0.64f, 0.73f, -0.004f);
+  addBladePlane(0.12f, -0.040f, -0.020f, 1.10f, 1.00f, -0.026f, 1.08f);
+  addBladePlane(0.86f, 0.026f, -0.030f, 0.95f, 0.90f, 0.022f, 1.20f);
+  addBladePlane(1.62f, -0.004f, 0.006f, 0.88f, 0.82f, -0.014f, 0.92f);
+  addBladePlane(2.39f, 0.036f, 0.020f, 0.76f, 0.70f, 0.016f, 1.32f);
+  addBladePlane(3.18f, -0.030f, 0.030f, 0.82f, 0.76f, -0.018f, 1.15f);
+  addBladePlane(4.05f, 0.010f, 0.010f, 0.68f, 0.62f, 0.010f, 1.38f);
+  addBladePlane(5.18f, -0.010f, -0.006f, 0.72f, 0.66f, -0.008f, 0.85f);
 
   Asset::GpuMesh gm = Asset::LoadMeshFromMemory(vertices, indices);
   if (!gm.vertexBuffer || !gm.indexBuffer || gm.indexCount == 0) {
@@ -241,12 +245,12 @@ static bool EnsureProceduralGrassBladeMesh() {
     return false;
   }
   gm.materialIndex = -1;
-  gm.minBound[0] = -0.12f;
+  gm.minBound[0] = -0.16f;
   gm.minBound[1] = 0.0f;
-  gm.minBound[2] = -0.11f;
-  gm.maxBound[0] = 0.12f;
-  gm.maxBound[1] = 1.0f;
-  gm.maxBound[2] = 0.12f;
+  gm.minBound[2] = -0.15f;
+  gm.maxBound[0] = 0.16f;
+  gm.maxBound[1] = 0.58f;
+  gm.maxBound[2] = 0.24f;
 
   g_proceduralGrassBladeMesh = std::move(gm);
   g_proceduralGrassBladeReady = true;
@@ -264,47 +268,62 @@ static bool EnsureProceduralGrassMidMesh() {
 
   std::vector<Asset::Vertex> vertices;
   std::vector<uint32_t> indices;
-  vertices.reserve(8);
-  indices.reserve(24);
+  vertices.reserve(32);
+  indices.reserve(128);
 
-  auto addCrossPlane = [&](float yawRadians) {
+  auto addMidBlade = [&](float yawRadians, float baseOffsetX,
+                         float baseOffsetZ, float heightScale,
+                         float forwardLean) {
     const uint32_t base = static_cast<uint32_t>(vertices.size());
     const float c = std::cos(yawRadians);
     const float s = std::sin(yawRadians);
-    const float halfWidth = 0.085f;
-    const float height = 0.92f;
+    const float halfWidths[3] = {0.056f, 0.034f, 0.006f};
+    const float heights[3] = {0.00f, 0.16f, 0.30f};
+    const float curve[3] = {0.000f, 0.050f, 0.120f};
+    const float uvsV[3] = {1.00f, 0.48f, 0.00f};
 
-    auto makeVertex = [&](float side, float y, float u, float v) {
-      Asset::Vertex vert = {};
-      const float localX = side * halfWidth;
-      const float localZ = y * 0.04f;
-      vert.pos[0] = localX * c - localZ * s;
-      vert.pos[1] = y * height;
-      vert.pos[2] = localX * s + localZ * c;
-      vert.normal[0] = c;
-      vert.normal[1] = 0.12f;
-      vert.normal[2] = s;
-      vert.tangent[0] = -s;
-      vert.tangent[1] = 0.0f;
-      vert.tangent[2] = c;
-      vert.tangent[3] = 1.0f;
-      vert.uv[0] = u;
-      vert.uv[1] = v;
-      return vert;
-    };
+    for (int row = 0; row < 3; ++row) {
+      const float width = halfWidths[row];
+      const float height = heights[row] * heightScale;
+      const float bend = curve[row] * heightScale * forwardLean;
 
-    vertices.push_back(makeVertex(-1.0f, 0.0f, 0.0f, 1.0f));
-    vertices.push_back(makeVertex(1.0f, 0.0f, 1.0f, 1.0f));
-    vertices.push_back(makeVertex(-1.0f, 1.0f, 0.0f, 0.0f));
-    vertices.push_back(makeVertex(1.0f, 1.0f, 1.0f, 0.0f));
+      auto makeVertex = [&](float side, float u) {
+        Asset::Vertex vert = {};
+        const float localX = baseOffsetX + side * width;
+        const float localZ = baseOffsetZ + bend;
+        vert.pos[0] = localX * c - localZ * s;
+        vert.pos[1] = height;
+        vert.pos[2] = localX * s + localZ * c;
+        vert.normal[0] = 0.34f * c;
+        vert.normal[1] = 0.82f;
+        vert.normal[2] = 0.34f * s;
+        vert.tangent[0] = -s;
+        vert.tangent[1] = 0.0f;
+        vert.tangent[2] = c;
+        vert.tangent[3] = 1.0f;
+        vert.uv[0] = u;
+        vert.uv[1] = uvsV[row];
+        return vert;
+      };
 
-    indices.insert(indices.end(),
-                   {base + 0, base + 1, base + 2, base + 2, base + 1, base + 3,
-                    base + 2, base + 1, base + 0, base + 3, base + 1, base + 2});
+      vertices.push_back(makeVertex(-1.0f, 0.0f));
+      vertices.push_back(makeVertex(1.0f, 1.0f));
+    }
+
+    for (uint32_t row = 0; row < 2; ++row) {
+      const uint32_t i0 = base + row * 2;
+      const uint32_t i1 = i0 + 1;
+      const uint32_t i2 = i0 + 2;
+      const uint32_t i3 = i0 + 3;
+      indices.insert(indices.end(), {i0, i1, i2, i2, i1, i3, i2, i1, i0,
+                                     i3, i1, i2});
+    }
   };
 
-  addCrossPlane(0.25f);
-  addCrossPlane(1.57f);
+  addMidBlade(0.25f, -0.030f, -0.012f, 1.00f, 1.00f);
+  addMidBlade(1.42f, 0.026f, -0.018f, 0.86f, 1.18f);
+  addMidBlade(2.80f, 0.004f, 0.016f, 0.78f, 0.92f);
+  addMidBlade(4.40f, -0.014f, 0.010f, 0.70f, 1.28f);
 
   Asset::GpuMesh gm = Asset::LoadMeshFromMemory(vertices, indices);
   if (!gm.vertexBuffer || !gm.indexBuffer || gm.indexCount == 0) {
@@ -312,12 +331,12 @@ static bool EnsureProceduralGrassMidMesh() {
     return false;
   }
   gm.materialIndex = -1;
-  gm.minBound[0] = -0.10f;
+  gm.minBound[0] = -0.11f;
   gm.minBound[1] = 0.0f;
   gm.minBound[2] = -0.10f;
-  gm.maxBound[0] = 0.10f;
-  gm.maxBound[1] = 0.92f;
-  gm.maxBound[2] = 0.10f;
+  gm.maxBound[0] = 0.11f;
+  gm.maxBound[1] = 0.31f;
+  gm.maxBound[2] = 0.16f;
 
   g_proceduralGrassMidMesh = std::move(gm);
   g_proceduralGrassMidReady = true;
@@ -329,6 +348,7 @@ static bool EnsureProceduralGrassMidMesh() {
 
 static void AppendGrassPatchesFromInstance(const Scene::Instance &inst,
                                            uint32_t sourceMeshId,
+                                           uint32_t sourceMaterialIndex,
                                            const Asset::Material &grassMat,
                                            std::vector<FGrassPatch> &outPatches) {
   if (!inst.mesh)
@@ -343,7 +363,7 @@ static void AppendGrassPatchesFromInstance(const Scene::Instance &inst,
       (std::clamp)(grassMat.grassBladeVariation, 0.0f, 1.0f);
   const float densityCompensation =
       (std::clamp)(0.6f / baseSize, 0.8f, 3.5f);
-  const float patchDensityScale = 0.18f;
+  const float patchDensityScale = 0.34f;
 
   struct GrassTriangle {
     DirectX::XMFLOAT3 p0;
@@ -528,8 +548,8 @@ static void AppendGrassPatchesFromInstance(const Scene::Instance &inst,
 
     FGrassPatch patch = {};
     patch.position = position;
-    const float randScale = 0.75f + 0.5f * Hash01(baseSeed ^ 0x1f123bb5U);
-    const float patchScale = 0.82f + 0.36f * patchWeight;
+    const float randScale = 0.68f + 0.56f * Hash01(baseSeed ^ 0x1f123bb5U);
+    const float patchScale = 0.78f + 0.24f * patchWeight;
     patch.scale =
         baseSize * (1.0f + (randScale - 1.0f) * variation) * patchScale;
     patch.normal = normal;
@@ -537,6 +557,7 @@ static void AppendGrassPatchesFromInstance(const Scene::Instance &inst,
     patch.yawRadians = randYaw;
     patch.emitterUv = emitterUv;
     patch.colorVariation = HashU32(baseSeed ^ 0xdeadbeefU);
+    patch.packedData = sourceMaterialIndex & 0xFFFFu;
     outPatches.push_back(patch);
   };
 
@@ -1124,7 +1145,7 @@ bool InitApplication(HWND hwnd) {
 
   // --- Create a root signature with CBV b0 (vertex), descriptor table t0
   // (SRV), and CBV b1 (pixel material) ---
-  D3D12_ROOT_PARAMETER rootParameters[8] = {};
+  D3D12_ROOT_PARAMETER rootParameters[9] = {};
   // b0 - transform CBV for vertex shader AND pixel shader (needed for view
   // direction)
   rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
@@ -1203,6 +1224,13 @@ bool InitApplication(HWND hwnd) {
   rootParameters[7].Descriptor.ShaderRegister = 1;
   rootParameters[7].Descriptor.RegisterSpace = 3;
   rootParameters[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+
+  // b3 - selected grass material index for per-material grass draw passes.
+  rootParameters[8].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+  rootParameters[8].Constants.ShaderRegister = 3;
+  rootParameters[8].Constants.RegisterSpace = 0;
+  rootParameters[8].Constants.Num32BitValues = 1;
+  rootParameters[8].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
 
   // static sampler for textures
   D3D12_STATIC_SAMPLER_DESC samplers[3] = {};
@@ -2472,14 +2500,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     } else {
       // --- Rebuild grass patch list every frame (shared by DXR & Raster)
       // ---
-      int activeGrassMaterialIndex = -1;
+      std::vector<int> activeGrassMaterialIndices;
       {
         static UINT s_prevGrassPatchCount = (UINT)-1;
-        static int s_prevGrassMaterial = -2;
+        static uint64_t s_prevGrassMaterialHash = 0;
         static uint64_t s_prevGrassSceneHash = 0;
         auto sceneInstances_grass = Scene::GetInstances();
         const uint64_t grassSceneHash = ComputeGrassSceneHash(sceneInstances_grass);
         const bool grassSceneChanged = (grassSceneHash != s_prevGrassSceneHash);
+        auto addGrassMaterialIndex = [&activeGrassMaterialIndices](int matIdx) {
+          if (std::find(activeGrassMaterialIndices.begin(),
+                        activeGrassMaterialIndices.end(),
+                        matIdx) == activeGrassMaterialIndices.end()) {
+            activeGrassMaterialIndices.push_back(matIdx);
+          }
+        };
         if (grassSceneChanged) {
           g_grassPatches.clear();
           uint32_t grassSourceId = 0;
@@ -2492,9 +2527,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             const auto &mat = g_loadedMaterials[matIdx];
             if (!mat.isGrass)
               continue;
-            if (activeGrassMaterialIndex < 0)
-              activeGrassMaterialIndex = matIdx;
-            AppendGrassPatchesFromInstance(inst, grassSourceId++, mat,
+            addGrassMaterialIndex(matIdx);
+            AppendGrassPatchesFromInstance(inst, grassSourceId++,
+                                           static_cast<uint32_t>(matIdx), mat,
                                            g_grassPatches);
           }
           GrassManager::SetPatches(g_grassPatches);
@@ -2507,29 +2542,34 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             if (matIdx < 0 || matIdx >= (int)g_loadedMaterials.size())
               continue;
             if (g_loadedMaterials[matIdx].isGrass) {
-              activeGrassMaterialIndex = matIdx;
-              break;
+              addGrassMaterialIndex(matIdx);
             }
           }
         }
         GrassManager::PrepareGpuBuffers(DX12Context::g_commandList.Get());
         // Grass always instances dedicated procedural meshes for near and mid.
         if (EnsureProceduralGrassBladeMesh()) {
-          if (activeGrassMaterialIndex >= 0) {
-            g_proceduralGrassBladeMesh.materialIndex = activeGrassMaterialIndex;
+          if (!activeGrassMaterialIndices.empty()) {
+            g_proceduralGrassBladeMesh.materialIndex =
+                activeGrassMaterialIndices.front();
           }
           GrassManager::SetPatchMesh(&g_proceduralGrassBladeMesh);
         }
         if (EnsureProceduralGrassMidMesh()) {
-          if (activeGrassMaterialIndex >= 0) {
-            g_proceduralGrassMidMesh.materialIndex = activeGrassMaterialIndex;
+          if (!activeGrassMaterialIndices.empty()) {
+            g_proceduralGrassMidMesh.materialIndex =
+                activeGrassMaterialIndices.front();
           }
           GrassManager::SetMidPatchMesh(&g_proceduralGrassMidMesh);
         }
         const UINT currentPatchCount = (UINT)g_grassPatches.size();
+        uint64_t grassMaterialHash = 0xcbf29ce484222325ULL;
+        for (int matIdx : activeGrassMaterialIndices) {
+          HashCombineU64(grassMaterialHash, static_cast<uint64_t>(matIdx + 1));
+        }
         const bool grassTopologyChanged =
             (currentPatchCount != s_prevGrassPatchCount) ||
-            (activeGrassMaterialIndex != s_prevGrassMaterial);
+            (grassMaterialHash != s_prevGrassMaterialHash);
         if (grassSceneChanged || grassTopologyChanged) {
           if (grassTopologyChanged) {
             DxrRenderer::RequestAccelerationStructureRebuild();
@@ -2538,7 +2578,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           }
           DxrRenderer::ResetAccumulation();
           s_prevGrassPatchCount = currentPatchCount;
-          s_prevGrassMaterial = activeGrassMaterialIndex;
+          s_prevGrassMaterialHash = grassMaterialHash;
         }
       }
 
@@ -2819,8 +2859,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         // Draw loaded meshes
         auto sceneInstances = Scene::GetInstances();
         const bool rasterGrassReady =
-            activeGrassMaterialIndex >= 0 &&
-            activeGrassMaterialIndex < (int)g_loadedMaterials.size() &&
+            !activeGrassMaterialIndices.empty() &&
             RasterRenderer::g_grassPipelineState &&
             GrassManager::GetPatchCount() > 0 &&
             GrassManager::GetPatchMesh() &&
@@ -3002,35 +3041,45 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
               4, alloc.gpu);
             }
 
-            MaterialCB grassMatCB = {};
-
-          const auto &srcMat = g_loadedMaterials[activeGrassMaterialIndex];
-            MaterialSystem::BuildRuntimeRasterMaterialConstants(srcMat,
-                                      &grassMatCB);
-
-          if (g_materialCbMappedData) {
-            const UINT64 matSlotSize = (sizeof(MaterialCB) + 255) & ~255;
-            UINT64 offset = (activeGrassMaterialIndex % 16384) * matSlotSize;
-            memcpy((uint8_t *)g_materialCbMappedData + offset, &grassMatCB,
-                   sizeof(grassMatCB));
-            DX12Context::g_commandList->SetGraphicsRootConstantBufferView(
-                2, g_materialConstantBuffer->GetGPUVirtualAddress() + offset);
-          }
-
           DX12Context::g_commandList->SetGraphicsRootShaderResourceView(
               6, GrassManager::GetInstanceBufferGpuAddress());
-          DX12Context::g_commandList->SetGraphicsRootShaderResourceView(
-              7, GrassManager::GetVisibleBufferGpuAddress(
-                     GrassManager::LodBand::Near));
-          GrassManager::DrawVisible(DX12Context::g_commandList.Get(),
-                                    GrassManager::LodBand::Near);
-          if (g_proceduralGrassMidMesh.vertexBuffer &&
-              g_proceduralGrassMidMesh.indexBuffer) {
+          for (int grassMaterialIndex : activeGrassMaterialIndices) {
+            if (grassMaterialIndex < 0 ||
+                grassMaterialIndex >= (int)g_loadedMaterials.size()) {
+              continue;
+            }
+
+            MaterialCB grassMatCB = {};
+            const auto &srcMat = g_loadedMaterials[grassMaterialIndex];
+            MaterialSystem::BuildRuntimeRasterMaterialConstants(srcMat,
+                                                                &grassMatCB);
+
+            if (g_materialCbMappedData) {
+              const UINT64 matSlotSize = (sizeof(MaterialCB) + 255) & ~255;
+              UINT64 offset = (grassMaterialIndex % 16384) * matSlotSize;
+              memcpy((uint8_t *)g_materialCbMappedData + offset, &grassMatCB,
+                     sizeof(grassMatCB));
+              DX12Context::g_commandList->SetGraphicsRootConstantBufferView(
+                  2, g_materialConstantBuffer->GetGPUVirtualAddress() + offset);
+            }
+
+            const uint32_t selectedGrassMaterial =
+                static_cast<uint32_t>(grassMaterialIndex);
+            DX12Context::g_commandList->SetGraphicsRoot32BitConstants(
+                8, 1, &selectedGrassMaterial, 0);
             DX12Context::g_commandList->SetGraphicsRootShaderResourceView(
                 7, GrassManager::GetVisibleBufferGpuAddress(
-                       GrassManager::LodBand::Mid));
+                       GrassManager::LodBand::Near));
             GrassManager::DrawVisible(DX12Context::g_commandList.Get(),
-                                      GrassManager::LodBand::Mid);
+                                      GrassManager::LodBand::Near);
+            if (g_proceduralGrassMidMesh.vertexBuffer &&
+                g_proceduralGrassMidMesh.indexBuffer) {
+              DX12Context::g_commandList->SetGraphicsRootShaderResourceView(
+                  7, GrassManager::GetVisibleBufferGpuAddress(
+                         GrassManager::LodBand::Mid));
+              GrassManager::DrawVisible(DX12Context::g_commandList.Get(),
+                                        GrassManager::LodBand::Mid);
+            }
           }
         }
 

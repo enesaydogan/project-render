@@ -2300,7 +2300,55 @@ static int LtmBCBlockBytes(DXGI_FORMAT fmt) {
   }
 }
 
-static Texture LtmUploadDDS(const uint8_t *ddsData, size_t ddsSize) {
+static bool LtmIsBlockCompressedFormat(DXGI_FORMAT fmt) {
+  switch (fmt) {
+  case DXGI_FORMAT_BC1_UNORM:
+  case DXGI_FORMAT_BC1_UNORM_SRGB:
+  case DXGI_FORMAT_BC2_UNORM:
+  case DXGI_FORMAT_BC2_UNORM_SRGB:
+  case DXGI_FORMAT_BC3_UNORM:
+  case DXGI_FORMAT_BC3_UNORM_SRGB:
+  case DXGI_FORMAT_BC4_UNORM:
+  case DXGI_FORMAT_BC4_SNORM:
+  case DXGI_FORMAT_BC5_UNORM:
+  case DXGI_FORMAT_BC5_SNORM:
+  case DXGI_FORMAT_BC7_UNORM:
+  case DXGI_FORMAT_BC7_UNORM_SRGB:
+    return true;
+  default:
+    return false;
+  }
+}
+
+static int LtmBytesPerPixel(DXGI_FORMAT fmt) {
+  switch (fmt) {
+  case DXGI_FORMAT_R8G8B8A8_UNORM:
+  case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+  case DXGI_FORMAT_B8G8R8A8_UNORM:
+  case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+  case DXGI_FORMAT_B8G8R8X8_UNORM:
+  case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+    return 4;
+  default:
+    return 0;
+  }
+}
+
+static DXGI_FORMAT LtmRemoveSrgbViewFormat(DXGI_FORMAT fmt) {
+  switch (fmt) {
+  case DXGI_FORMAT_BC1_UNORM_SRGB: return DXGI_FORMAT_BC1_UNORM;
+  case DXGI_FORMAT_BC2_UNORM_SRGB: return DXGI_FORMAT_BC2_UNORM;
+  case DXGI_FORMAT_BC3_UNORM_SRGB: return DXGI_FORMAT_BC3_UNORM;
+  case DXGI_FORMAT_BC7_UNORM_SRGB: return DXGI_FORMAT_BC7_UNORM;
+  case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB: return DXGI_FORMAT_R8G8B8A8_UNORM;
+  case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB: return DXGI_FORMAT_B8G8R8A8_UNORM;
+  case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB: return DXGI_FORMAT_B8G8R8X8_UNORM;
+  default: return fmt;
+  }
+}
+
+static Texture LtmUploadDDS(const uint8_t *ddsData, size_t ddsSize,
+                            DXGI_FORMAT *outAuthoredFormat = nullptr) {
   if (!s_device || ddsSize < 128) return {};
   const auto *hdr = reinterpret_cast<const LtmDdsHeader *>(ddsData);
   if (hdr->magic != 0x20534444u) {
@@ -2337,7 +2385,19 @@ static Texture LtmUploadDDS(const uint8_t *ddsData, size_t ddsSize) {
     }
   }
 
-  const int blockBytes = LtmBCBlockBytes(fmt);
+  if (outAuthoredFormat) {
+    *outAuthoredFormat = fmt;
+  }
+  const DXGI_FORMAT resourceFmt = LtmRemoveSrgbViewFormat(fmt);
+  const bool blockCompressed = LtmIsBlockCompressedFormat(resourceFmt);
+  const int blockBytes = blockCompressed ? LtmBCBlockBytes(resourceFmt) : 0;
+  const int bytesPerPixel = blockCompressed ? 0 : LtmBytesPerPixel(resourceFmt);
+  if (!blockCompressed && bytesPerPixel == 0) {
+    fprintf(stderr,
+            "LTM: DDS upload rejected (unsupported uncompressed fmt=%u authoredFmt=%u size=%zu)\n",
+            (unsigned)resourceFmt, (unsigned)fmt, ddsSize);
+    return {};
+  }
 
   D3D12_RESOURCE_DESC texDesc = {};
   texDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -2345,7 +2405,7 @@ static Texture LtmUploadDDS(const uint8_t *ddsData, size_t ddsSize) {
   texDesc.Height           = H;
   texDesc.DepthOrArraySize = 1;
   texDesc.MipLevels        = (UINT16)mips;
-  texDesc.Format           = fmt;
+  texDesc.Format           = resourceFmt;
   texDesc.SampleDesc.Count = 1;
   texDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
 
@@ -2385,16 +2445,21 @@ static Texture LtmUploadDDS(const uint8_t *ddsData, size_t ddsSize) {
   for (uint32_t mip = 0; mip < mips; ++mip) {
     uint32_t mW = std::max(1u, W >> mip);
     uint32_t mH = std::max(1u, H >> mip);
-    uint32_t blkW = (mW + 3) / 4;
-    uint32_t blkH = (mH + 3) / 4;
-    uint32_t srcRowPitch = blkW * (uint32_t)blockBytes;
+    uint32_t srcRows = mH;
+    uint32_t srcRowPitch = mW * (uint32_t)bytesPerPixel;
+    if (blockCompressed) {
+      const uint32_t blkW = (mW + 3) / 4;
+      const uint32_t blkH = (mH + 3) / 4;
+      srcRows = blkH;
+      srcRowPitch = blkW * (uint32_t)blockBytes;
+    }
     uint8_t *dst = mapped + footprints[mip].Offset;
-    for (uint32_t row = 0; row < blkH; ++row) {
+    for (uint32_t row = 0; row < srcRows; ++row) {
       if (src + srcRowPitch > ddsData + ddsSize) goto ltm_dds_done;
       memcpy(dst + (size_t)row * footprints[mip].Footprint.RowPitch,
              src + (size_t)row * srcRowPitch, srcRowPitch);
     }
-    src += (size_t)blkW * blkH * blockBytes;
+    src += (size_t)srcRows * srcRowPitch;
   }
 ltm_dds_done:
   uploadBuf->Unmap(0, nullptr);
@@ -2434,7 +2499,7 @@ ltm_dds_done:
   tex.width     = W;
   tex.height    = H;
   tex.mipLevels = mips;
-  tex.format    = fmt;
+  tex.format    = resourceFmt;
   return tex;
 }
 
@@ -2474,6 +2539,7 @@ struct LtmTextureEntry {
   size_t ddsSize = 0;
   int uploadedTextureIndex = -1;
   DXGI_FORMAT uploadedFormat = DXGI_FORMAT_UNKNOWN;
+  DXGI_FORMAT authoredFormat = DXGI_FORMAT_UNKNOWN;
 };
 
 static int LtmFindNearestMaterialSlot(const uint8_t *base,
@@ -2543,6 +2609,9 @@ static LtmTextureSemantic LtmInferSemanticFromEntry(const LtmTextureEntry &entry
     return LtmTextureSemantic::Unknown;
 
   // Strong format hints.
+  if (LtmIsSrgbFormat(entry.authoredFormat)) {
+    return LtmTextureSemantic::Diffuse;
+  }
   if (uploadedTex->format == DXGI_FORMAT_BC5_UNORM ||
       uploadedTex->format == DXGI_FORMAT_BC5_SNORM) {
     return LtmTextureSemantic::Normal;
@@ -2909,7 +2978,8 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
                                                     LtmTextureSemantic::Unknown);
     for (size_t ti = 0; ti < textureEntries.size(); ++ti) {
       LtmTextureEntry &entry = textureEntries[ti];
-      Texture tex = LtmUploadDDS(entry.ddsPtr, entry.ddsSize);
+      Texture tex = LtmUploadDDS(entry.ddsPtr, entry.ddsSize,
+                                 &entry.authoredFormat);
       if (tex.resource) {
         entry.uploadedTextureIndex = static_cast<int>(outTextures->size());
         entry.uploadedFormat = tex.format;
@@ -2937,7 +3007,7 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
     // typically color/normal pairs in these files.
     for (size_t ti = 0; ti < textureEntries.size(); ++ti) {
       const LtmTextureEntry &a = textureEntries[ti];
-      if (a.uploadedTextureIndex < 0 || !LtmIsSrgbFormat(a.uploadedFormat))
+      if (a.uploadedTextureIndex < 0 || !LtmIsSrgbFormat(a.authoredFormat))
         continue;
       if (semanticByEntry[ti] == LtmTextureSemantic::Unknown)
         semanticByEntry[ti] = LtmTextureSemantic::Diffuse;
@@ -2950,7 +3020,7 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
         const LtmTextureEntry &b = textureEntries[tj];
         if (b.uploadedTextureIndex < 0)
           continue;
-        if (LtmIsSrgbFormat(b.uploadedFormat))
+        if (LtmIsSrgbFormat(b.authoredFormat))
           continue;
         if (semanticByEntry[tj] != LtmTextureSemantic::Unknown &&
             semanticByEntry[tj] != LtmTextureSemantic::Normal)
@@ -2977,7 +3047,7 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
       const LtmTextureEntry &entry = textureEntries[ti];
       if (entry.uploadedTextureIndex < 0)
         continue;
-      semanticByEntry[ti] = LtmIsSrgbFormat(entry.uploadedFormat)
+      semanticByEntry[ti] = LtmIsSrgbFormat(entry.authoredFormat)
                                 ? LtmTextureSemantic::Diffuse
                                 : LtmTextureSemantic::MetalRough;
     }
@@ -3153,11 +3223,12 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
           continue;
         LtmTextureSemantic semantic = semanticByEntry[ti];
         fprintf(stderr,
-                "LTM: tex entry %zu -> texIdx=%d mapType=%u materialSlot=%d semantic=%s tex=%ux%u txft=%u tecm=%u fmt=%u\n",
+                "LTM: tex entry %zu -> texIdx=%d mapType=%u materialSlot=%d semantic=%s tex=%ux%u txft=%u tecm=%u fmt=%u authoredFmt=%u\n",
                 ti, entry.uploadedTextureIndex, entry.mapType,
                 entry.materialSlot, LtmTextureSemanticName(semantic),
                 entry.texW, entry.texH, entry.txft, entry.tecm,
-                (unsigned)entry.uploadedFormat);
+                (unsigned)entry.uploadedFormat,
+                (unsigned)entry.authoredFormat);
       }
     }
   }
