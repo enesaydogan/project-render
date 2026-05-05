@@ -191,8 +191,12 @@ inline bool BuildSpecularContinuation(float3 rayDir, float3 normal,
 }
 
 inline float3 BuildTransmissionContinuation(float3 rayDir, float3 normal,
-                                            float ior)
+                                            float ior, bool thinWalled)
 {
+    if (thinWalled) {
+        return normalize(rayDir);
+    }
+
     float entering = dot(rayDir, normal) < 0.0 ? 1.0 : 0.0;
     float3 faceNormal = (entering > 0.5) ? normal : -normal;
     float eta = (entering > 0.5) ? rcp(max(ior, 1.0)) : max(ior, 1.0);
@@ -1029,6 +1033,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                                (1.0 - transmission);
         float specularWeight = saturate(UnpackPayloadSpecularWeight(record.packedIorType));
         float ior = UnpackPayloadIor(record.packedIorType);
+        bool thinWalled = UnpackPayloadThinWalled(record.packedIorType);
         float3 transmissionTint = UnpackPayloadTransmissionColor(record.packedTransmission);
         float3 specularColor = UnpackPayloadSpecularColor(record.packedSpecular);
         specularAlbedo = ComputeWavefrontSpecularThroughput(
@@ -1070,41 +1075,6 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             const uint maxDiffuseBounceCount =
                 (maxGIBounces > 0.0) ? (uint)maxGIBounces : 0u;
 
-            uint nextRayType = RAY_TYPE_DIFFUSE;
-            float3 nextDirection = normal;
-            float3 nextThroughput = state.throughput * max(albedo, 0.02.xxx);
-            
-            // Evaluate probabilities for path continuation to avoid hard cut-offs
-            float transmissionProb = 0.0;
-            float reflectionProb = 0.0;
-            float diffuseProb = 0.0;
-            ComputeWavefrontLobeProbabilities(normal, -rayDir,
-                              albedo, metallic, transmission,
-                              translucency, ior, specularWeight,
-                              specularColor,
-                              reflectionProb, diffuseProb,
-                              transmissionProb);
-            
-            float rnd = next_float(rng);
-            if (transmissionProb > 0.0 && rnd < transmissionProb) {
-                nextRayType = RAY_TYPE_REFRACTION;
-                nextDirection = BuildTransmissionContinuation(rayDir, normal, ior);
-                nextThroughput = state.throughput * max(transmissionTint, 0.02.xxx) * max(transmission, 0.1) / max(transmissionProb, 1.0e-4);
-            } else if (reflectionProb > 0.0 && rnd < (transmissionProb + reflectionProb)) {
-                nextRayType = RAY_TYPE_REFLECTION;
-                if (BuildSpecularContinuation(rayDir, normal, roughness, rng,
-                                              nextDirection)) {
-                    nextThroughput = state.throughput * max(specularAlbedo, 0.04.xxx) / max(reflectionProb, 1.0e-4);
-                } else {
-                    nextThroughput = float3(0.0, 0.0, 0.0);
-                }
-            } else {
-                nextRayType = RAY_TYPE_DIFFUSE;
-                nextDirection = BuildDiffuseContinuation(normal, rng);
-                nextThroughput = state.throughput * max(albedo, 0.02.xxx) * saturate(dot(normal, nextDirection)) / max(diffuseProb, 1.0e-4);
-            }
-            nextThroughput = max(nextThroughput, 0.0);
-
             {
                 diReservoir = LoadWavefrontDiReservoir(pixel);
                 WavefrontLightSamplerContext lightSampler =
@@ -1126,47 +1096,166 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 selectedDirectLightWeight = diReservoir.W;
             }
 
-        uint previousValue = 0u;
-        if (nextRayType == RAY_TYPE_REFRACTION) {
-            InterlockedAdd(g_wavefrontStats[12], 1u, previousValue);
-        } else if (nextRayType == RAY_TYPE_REFLECTION) {
-            InterlockedAdd(g_wavefrontStats[11], 1u, previousValue);
-        } else {
-            InterlockedAdd(g_wavefrontStats[10], 1u, previousValue);
-        }
+            uint previousValue = 0u;
+            const bool deterministicThinGlass =
+                thinWalled && transmission > 1.0e-5;
+            if (deterministicThinGlass) {
+                float fresnel =
+                    saturate(FresnelDielectric(dot(-rayDir, normal), ior) *
+                             specularWeight);
+                float3 reflectionDirection = normalize(reflect(rayDir, normal));
 
-        const bool allowContinuation =
-            any(nextThroughput > 1.0e-4) &&
-            WavefrontHasBounceBudget(state.packedState,
-                                     nextRayType,
-                                     maxSpecularBounceCount,
-                                     maxRefractiveBounceCount,
-                                     maxDiffuseBounceCount);
-        if (allowContinuation) {
-            uint secondaryIndex = 0u;
-            InterlockedAdd(g_wavefrontQueueCounters[kWavefrontSecondaryQueueCounter], 1u,
-                           secondaryIndex);
-            if (secondaryIndex < pathQueueCapacity) {
-                EmitWavefrontSecondaryPath(
-                    secondaryIndex,
-                    record.pixelIndex,
-                    hitPos + nextDirection * kWavefrontRayBias,
-                    nextDirection,
-                    rng.state,
-                    nextThroughput,
-                    WavefrontAdvancePackedState(state.packedState, nextRayType));
-                InterlockedAdd(g_wavefrontStats[16], 1u, previousValue);
-                if (nextRayType == RAY_TYPE_REFRACTION) {
-                    InterlockedAdd(g_wavefrontStats[19], 1u, previousValue);
-                } else if (nextRayType == RAY_TYPE_REFLECTION) {
-                    InterlockedAdd(g_wavefrontStats[18], 1u, previousValue);
-                } else {
-                    InterlockedAdd(g_wavefrontStats[17], 1u, previousValue);
+                float3 transmissionDirection = normalize(rayDir);
+                float3 transmissionThroughput =
+                    state.throughput *
+                    max(transmissionTint, float3(0.0, 0.0, 0.0)) *
+                    transmission * max(1.0 - fresnel, 0.0);
+                if (any(transmissionThroughput > 1.0e-4) &&
+                    WavefrontHasBounceBudget(state.packedState,
+                                             RAY_TYPE_REFRACTION,
+                                             maxSpecularBounceCount,
+                                             maxRefractiveBounceCount,
+                                             maxDiffuseBounceCount)) {
+                    uint secondaryIndex = 0u;
+                    InterlockedAdd(
+                        g_wavefrontQueueCounters[kWavefrontSecondaryQueueCounter],
+                        1u, secondaryIndex);
+                    if (secondaryIndex < pathQueueCapacity) {
+                        EmitWavefrontSecondaryPath(
+                            secondaryIndex,
+                            record.pixelIndex,
+                            hitPos + transmissionDirection * kWavefrontRayBias,
+                            transmissionDirection,
+                            rng.state,
+                            transmissionThroughput,
+                            WavefrontAdvancePackedState(
+                                state.packedState, RAY_TYPE_REFRACTION));
+                        InterlockedAdd(g_wavefrontStats[12], 1u,
+                                       previousValue);
+                        InterlockedAdd(g_wavefrontStats[16], 1u,
+                                       previousValue);
+                        InterlockedAdd(g_wavefrontStats[19], 1u,
+                                       previousValue);
+                    } else {
+                        InterlockedAdd(g_wavefrontStats[21], 1u,
+                                       previousValue);
+                    }
+                }
+
+                float3 reflectionThroughput =
+                    state.throughput *
+                    max(specularColor, float3(0.0, 0.0, 0.0)) * fresnel;
+                if (any(reflectionThroughput > 1.0e-4) &&
+                    WavefrontHasBounceBudget(state.packedState,
+                                             RAY_TYPE_REFLECTION,
+                                             maxSpecularBounceCount,
+                                             maxRefractiveBounceCount,
+                                             maxDiffuseBounceCount)) {
+                    uint secondaryIndex = 0u;
+                    InterlockedAdd(
+                        g_wavefrontQueueCounters[kWavefrontSecondaryQueueCounter],
+                        1u, secondaryIndex);
+                    if (secondaryIndex < pathQueueCapacity) {
+                        EmitWavefrontSecondaryPath(
+                            secondaryIndex,
+                            record.pixelIndex,
+                            hitPos + reflectionDirection * kWavefrontRayBias,
+                            reflectionDirection,
+                            rng.state ^ 0xA511E9B3u,
+                            reflectionThroughput,
+                            WavefrontAdvancePackedState(
+                                state.packedState, RAY_TYPE_REFLECTION));
+                        InterlockedAdd(g_wavefrontStats[11], 1u,
+                                       previousValue);
+                        InterlockedAdd(g_wavefrontStats[16], 1u,
+                                       previousValue);
+                        InterlockedAdd(g_wavefrontStats[18], 1u,
+                                       previousValue);
+                    } else {
+                        InterlockedAdd(g_wavefrontStats[21], 1u,
+                                       previousValue);
+                    }
                 }
             } else {
-                InterlockedAdd(g_wavefrontStats[21], 1u, previousValue);
+                uint nextRayType = RAY_TYPE_DIFFUSE;
+                float3 nextDirection = normal;
+                float3 nextThroughput =
+                    state.throughput * max(albedo, 0.02.xxx);
+
+                // Evaluate probabilities for path continuation to avoid hard cut-offs
+                float transmissionProb = 0.0;
+                float reflectionProb = 0.0;
+                float diffuseProb = 0.0;
+                ComputeWavefrontLobeProbabilities(normal, -rayDir,
+                                  albedo, metallic, transmission,
+                                  translucency, ior, specularWeight,
+                                  specularColor,
+                                  reflectionProb, diffuseProb,
+                                  transmissionProb);
+
+                float rnd = next_float(rng);
+                if (transmissionProb > 0.0 && rnd < transmissionProb) {
+                    nextRayType = RAY_TYPE_REFRACTION;
+                    nextDirection =
+                        BuildTransmissionContinuation(rayDir, normal, ior,
+                                                      thinWalled);
+                    nextThroughput = state.throughput * max(transmissionTint, 0.02.xxx) * max(transmission, 0.1) / max(transmissionProb, 1.0e-4);
+                } else if (reflectionProb > 0.0 && rnd < (transmissionProb + reflectionProb)) {
+                    nextRayType = RAY_TYPE_REFLECTION;
+                    if (BuildSpecularContinuation(rayDir, normal, roughness, rng,
+                                                  nextDirection)) {
+                        nextThroughput = state.throughput * max(specularAlbedo, 0.04.xxx) / max(reflectionProb, 1.0e-4);
+                    } else {
+                        nextThroughput = float3(0.0, 0.0, 0.0);
+                    }
+                } else {
+                    nextRayType = RAY_TYPE_DIFFUSE;
+                    nextDirection = BuildDiffuseContinuation(normal, rng);
+                    nextThroughput = state.throughput * max(albedo, 0.02.xxx) * saturate(dot(normal, nextDirection)) / max(diffuseProb, 1.0e-4);
+                }
+                nextThroughput = max(nextThroughput, 0.0);
+
+                if (nextRayType == RAY_TYPE_REFRACTION) {
+                    InterlockedAdd(g_wavefrontStats[12], 1u, previousValue);
+                } else if (nextRayType == RAY_TYPE_REFLECTION) {
+                    InterlockedAdd(g_wavefrontStats[11], 1u, previousValue);
+                } else {
+                    InterlockedAdd(g_wavefrontStats[10], 1u, previousValue);
+                }
+
+                const bool allowContinuation =
+                    any(nextThroughput > 1.0e-4) &&
+                    WavefrontHasBounceBudget(state.packedState,
+                                             nextRayType,
+                                             maxSpecularBounceCount,
+                                             maxRefractiveBounceCount,
+                                             maxDiffuseBounceCount);
+                if (allowContinuation) {
+                    uint secondaryIndex = 0u;
+                    InterlockedAdd(g_wavefrontQueueCounters[kWavefrontSecondaryQueueCounter], 1u,
+                                   secondaryIndex);
+                    if (secondaryIndex < pathQueueCapacity) {
+                        EmitWavefrontSecondaryPath(
+                            secondaryIndex,
+                            record.pixelIndex,
+                            hitPos + nextDirection * kWavefrontRayBias,
+                            nextDirection,
+                            rng.state,
+                            nextThroughput,
+                            WavefrontAdvancePackedState(state.packedState, nextRayType));
+                        InterlockedAdd(g_wavefrontStats[16], 1u, previousValue);
+                        if (nextRayType == RAY_TYPE_REFRACTION) {
+                            InterlockedAdd(g_wavefrontStats[19], 1u, previousValue);
+                        } else if (nextRayType == RAY_TYPE_REFLECTION) {
+                            InterlockedAdd(g_wavefrontStats[18], 1u, previousValue);
+                        } else {
+                            InterlockedAdd(g_wavefrontStats[17], 1u, previousValue);
+                        }
+                    } else {
+                        InterlockedAdd(g_wavefrontStats[21], 1u, previousValue);
+                    }
+                }
             }
-        }
 
         float3 shadowWeight = state.throughput *
                               ComputeWavefrontDirectLightingWeight(

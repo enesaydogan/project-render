@@ -17,21 +17,38 @@ uint tile_index(uint2 p) {
     return p.y * kTileSize + p.x;
 }
 
+bool IsValidSurfaceData(float4 normalRoughness, float depth)
+{
+    float normalLenSq = dot(normalRoughness.xyz, normalRoughness.xyz);
+    return isfinite(depth) && depth > 0.0 &&
+           isfinite(normalRoughness.x) &&
+           isfinite(normalRoughness.y) &&
+           isfinite(normalRoughness.z) &&
+           isfinite(normalRoughness.w) &&
+           normalLenSq > 0.25 &&
+           normalLenSq < 4.0;
+}
+
+float3 SafeNormalize3(float3 v, float3 fallback)
+{
+    float lenSq = dot(v, v);
+    return (isfinite(lenSq) && lenSq > 1.0e-8) ? v * rsqrt(lenSq)
+                                                : fallback;
+}
+
 bool IsSpatiallyCompatibleData(float4 n0, float d0, float4 n1, float d1,
                                float ndotMin, float depthTolBase)
 {
+    if (!IsValidSurfaceData(n0, d0) || !IsValidSurfaceData(n1, d1)) {
+        return false;
+    }
+
     float3 nn0 = n0.xyz;
     float3 nn1 = n1.xyz;
-    float l0 = dot(nn0, nn0);
-    float l1 = dot(nn1, nn1);
-
-    if (l0 <= 0.25 || l1 <= 0.25) return false;
-    nn0 = normalize(nn0);
-    nn1 = normalize(nn1);
+    nn0 = SafeNormalize3(nn0, float3(0.0, 1.0, 0.0));
+    nn1 = SafeNormalize3(nn1, float3(0.0, 1.0, 0.0));
     if (dot(nn0, nn1) < ndotMin) return false;
     if (abs(n0.w - n1.w) > 0.25) return false;
-
-    if (!isfinite(d0) || !isfinite(d1) || d0 <= 0.0 || d1 <= 0.0) return false;
 
     float depthTol = depthTolBase * min(d0, d1);
     if (abs(d0 - d1) > max(0.05, depthTol)) return false;
@@ -67,25 +84,35 @@ float3 ReconstructWorldPos(uint2 pix, uint2 dim, float depth)
     float halfH = tan(fov * 0.5);
     float halfW = halfH * aspect;
 
-    float3 right = normalize(cross(camForward, camUp));
-    float3 up    = cross(right, camForward);
+    float3 forward = SafeNormalize3(camForward, float3(0.0, 0.0, 1.0));
+    float3 cameraUp = SafeNormalize3(camUp, float3(0.0, 1.0, 0.0));
+    float3 right = SafeNormalize3(cross(forward, cameraUp),
+                                  float3(1.0, 0.0, 0.0));
+    float3 up = SafeNormalize3(cross(right, forward), cameraUp);
 
-    float3 dir = normalize(camForward + right * (ndc.x * halfW) + up * (ndc.y * halfH));
+    float3 dir = SafeNormalize3(forward + right * (ndc.x * halfW) +
+                                    up * (ndc.y * halfH),
+                                forward);
     return camPos + dir * depth;
 }
 
 // Evaluate a simplified p_target for a reservoir candidate at the given surface.
 float EvalCandidatePTarget(uint candidateLightIndex, float3 N, float3 P)
 {
-    if (candidateLightIndex != 0xFFFFFFFF && (uint)lightCount > 0) {
-        uint lIdx = candidateLightIndex % (uint)lightCount;
-        Light l = g_lights[lIdx];
+    if (!all(isfinite(N)) || !all(isfinite(P))) {
+        return 0.0;
+    }
+    uint numLights = (uint)max(lightCount, 0.0);
+    if (candidateLightIndex != 0xFFFFFFFFu) {
+        if (candidateLightIndex >= numLights) {
+            return 0.0;
+        }
+        Light l = g_lights[candidateLightIndex];
         LightSample ls = evaluate_light(l, P);
         return max(0.0, length(ls.radiance * saturate(dot(N, ls.L))));
-    } else if (candidateLightIndex == 0xFFFFFFFF) {
+    } else {
         return max(0.0, length(lightColor.rgb * lightColor.w * saturate(dot(N, lightDir.xyz))));
     }
-    return 1.0;
 }
 
 [numthreads(8, 8, 1)]
@@ -97,7 +124,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID,
     g_depth.GetDimensions(dim.x, dim.y);
     uint frame = (uint)globalFrameCount;
     bool flip = (frame & 1u) == 1u;
-    if (dlssRayReconstruction > 0.5) {
+    if (dlssRayReconstruction > 0.5 || dim.x == 0u || dim.y == 0u) {
         return;
     }
 
@@ -145,17 +172,27 @@ void CSMain(uint3 dtid : SV_DispatchThreadID,
     RNG rng = init_rng(pix + uint2(0x51D2u, 0xC3A5u), frame ^ 0xBA5Eu);
 
     float4 centerNormalRoughness = s_normalTile[tile_index(sharedCenter)];
-    float3 N = normalize(centerNormalRoughness.xyz);
     float centerDepth = s_depthTile[tile_index(sharedCenter)];
-
-    // Reconstruct world position for correct local light evaluation
-    float3 P = ReconstructWorldPos(pix, dim, centerDepth);
 
     float4 curData = flip ? g_reservoir1[pix] : g_reservoir0[pix];
     Reservoir res = unpack_reservoir(curData);
     if (res.M == 0) {
         return;
     }
+    if (!IsValidSurfaceData(centerNormalRoughness, centerDepth)) {
+        if (flip) {
+            g_reservoir1[pix] = pack_reservoir(init_reservoir());
+        } else {
+            g_reservoir0[pix] = pack_reservoir(init_reservoir());
+        }
+        return;
+    }
+
+    float3 N = SafeNormalize3(centerNormalRoughness.xyz,
+                              float3(0.0, 1.0, 0.0));
+
+    // Reconstruct world position for correct local light evaluation.
+    float3 P = ReconstructWorldPos(pix, dim, centerDepth);
 
     // Temporal reuse
     if (frame > 0) {

@@ -33,13 +33,19 @@ Reservoir init_reservoir()
 inline Reservoir unpack_reservoir(float4 data)
 {
     Reservoir r;
-    r.lightIndex = asuint(data.x);
-    if (r.lightIndex == 0x7FC00000) r.lightIndex = 0xFFFFFFFF;
+    r.lightIndex = isnan(data.x) ? 0xFFFFFFFFu : asuint(data.x);
     r.w_sum = data.y;
     r.M = asuint(data.z);
     r.W = data.w;
     if (isnan(r.w_sum) || isinf(r.w_sum)) r.w_sum = 0.0;
     if (isnan(r.W) || isinf(r.W)) r.W = 0.0;
+    if (r.w_sum < 0.0 || r.W < 0.0) {
+        r.w_sum = 0.0;
+        r.W = 0.0;
+        r.M = 0u;
+        r.lightIndex = 0xFFFFFFFFu;
+    }
+    r.M = min(r.M, 1024u);
     return r;
 }
 
@@ -73,12 +79,16 @@ bool update_reservoir(inout Reservoir r, uint lightIndex, float weight, inout RN
 // Combine two reservoirs (Spatial or Temporal resampling)
 void combine_reservoirs(inout Reservoir r, const Reservoir r_other, float p_target, inout RNG rng)
 {
+    if (r_other.M == 0u || r_other.W <= 0.0 || !isfinite(p_target) ||
+        p_target <= 0.0) {
+        return;
+    }
     uint M_orig = r.M;
     // We treat the incoming reservoir as a single sample with weight = p_target * W * M
     float weight = p_target * r_other.W * (float)r_other.M;
     weight = min(weight, 1e7); // Extra safety for combined weight
     update_reservoir(r, r_other.lightIndex, weight, rng);
-    r.M = M_orig + r_other.M;
+    r.M = min(M_orig + r_other.M, 1024u);
 }
 
 // Finalize the reservoir weight

@@ -1142,8 +1142,10 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
         }
 
         SUMaterialWorkflow workflow = SUMaterialWorkflow_Classic;
-        if (SU_ERROR_NONE == SUMaterialGetWorkflow(skMat, &workflow) &&
-            workflow == SUMaterialWorkflow_PBRMetallicRoughness) {
+        const bool pbrMetallicRoughness =
+            SU_ERROR_NONE == SUMaterialGetWorkflow(skMat, &workflow) &&
+            workflow == SUMaterialWorkflow_PBRMetallicRoughness;
+        if (pbrMetallicRoughness) {
           double metallicFactor = 0.0;
           if (SU_ERROR_NONE == SUMaterialGetMetallicFactor(skMat, &metallicFactor)) {
             mtl.metalness = Clamp01(metallicFactor);
@@ -1194,6 +1196,16 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
         if (mtl.diffuseColor[3] < 0.999f) {
           mtl.alphaMode = "BLEND";
           mtl.thinWalled = 1.0f;
+          const float transmission =
+              std::clamp(1.0f - mtl.diffuseColor[3], 0.0f, 1.0f);
+          mtl.transmissionWeight =
+              (std::max)(mtl.transmissionWeight, transmission);
+          mtl.transmissionColor[0] = mtl.diffuseColor[0];
+          mtl.transmissionColor[1] = mtl.diffuseColor[1];
+          mtl.transmissionColor[2] = mtl.diffuseColor[2];
+          if (!pbrMetallicRoughness) {
+            mtl.roughness = (std::min)(mtl.roughness, 0.03f);
+          }
         } else if (diffuseHasAlphaTexture && outTextures &&
                    mtl.diffuseTexture >= 0 &&
                    static_cast<size_t>(mtl.diffuseTexture) < outTextures->size()) {

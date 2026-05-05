@@ -271,10 +271,10 @@ inline float3 EvaluateWavefrontPrimaryPreview(
     return WavefrontHitRecordGetColor(record) + ambient + translucentWrap;
 }
 
-inline float3 ComputeWavefrontDirectLightingWeight(
+inline float3 ComputeWavefrontDirectLightingWeightForView(
     WavefrontHitRecord record,
     float3 worldNormal,
-    float3 hitPos,
+    float3 viewDirection,
     float3 lightDirection)
 {
     float3 baseColor = UnpackPayloadAlbedo(record.packedAlbedo);
@@ -286,7 +286,7 @@ inline float3 ComputeWavefrontDirectLightingWeight(
     float specularWeight = saturate(UnpackPayloadSpecularWeight(record.packedIorType));
     float ior = UnpackPayloadIor(record.packedIorType);
 
-    float3 V = normalize(camPos - hitPos);
+    float3 V = normalize(viewDirection);
     float3 L = normalize(lightDirection);
     float3 H = normalize(V + L);
     float NdotL = saturate(dot(worldNormal, L));
@@ -308,6 +308,17 @@ inline float3 ComputeWavefrontDirectLightingWeight(
     float3 specular = (D * Gv * Gl) * F;
 
     return ((diffuseColor / PI) + specular) * NdotL;
+}
+
+inline float3 ComputeWavefrontDirectLightingWeight(
+    WavefrontHitRecord record,
+    float3 worldNormal,
+    float3 hitPos,
+    float3 lightDirection)
+{
+    float3 viewDir = normalize(camPos - hitPos);
+    return ComputeWavefrontDirectLightingWeightForView(
+        record, worldNormal, viewDir, lightDirection);
 }
 
 #endif // WAVEFRONT_TRANSPORT_HLSLI

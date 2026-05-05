@@ -71,8 +71,12 @@ inline bool BuildSpecularContinuation(float3 rayDir, float3 normal,
 }
 
 inline float3 BuildTransmissionContinuation(float3 rayDir, float3 normal,
-                                            float ior)
+                                            float ior, bool thinWalled)
 {
+    if (thinWalled) {
+        return normalize(rayDir);
+    }
+
     float entering = dot(rayDir, normal) < 0.0 ? 1.0 : 0.0;
     float3 faceNormal = (entering > 0.5) ? normal : -normal;
     float eta = (entering > 0.5) ? rcp(max(ior, 1.0)) : max(ior, 1.0);
@@ -112,8 +116,16 @@ inline float3 EvaluateWavefrontSecondaryContribution(
     float3 worldNormal,
     float3 hitPos)
 {
+    float3 baseColor = UnpackPayloadAlbedo(record.packedAlbedo);
+    float4 surface = UnpackPayloadSurface(record.packedSurface);
+    float metallic = saturate(surface.y);
+    float transmission = saturate(surface.z);
+    float3 diffuseAlbedo = baseColor * (1.0 - metallic) *
+                           (1.0 - transmission);
+    float horizon = saturate(worldNormal.y * 0.5 + 0.5);
+    float3 ambient = diffuseAlbedo * lerp(0.08, 0.24, horizon);
     return max(state.throughput, 0.0) *
-           max(WavefrontHitRecordGetColor(record), 0.0);
+           max(WavefrontHitRecordGetColor(record) + ambient, 0.0);
 }
 
 [numthreads(64, 1, 1)]
@@ -208,6 +220,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         float translucency = saturate(surface.w);
         float specularWeight = saturate(UnpackPayloadSpecularWeight(record.packedIorType));
         float ior = UnpackPayloadIor(record.packedIorType);
+        bool thinWalled = UnpackPayloadThinWalled(record.packedIorType);
         float3 transmissionTint = UnpackPayloadTransmissionColor(record.packedTransmission);
         float3 specularColor = UnpackPayloadSpecularColor(record.packedSpecular);
         float3 specularAlbedo = ComputeWavefrontSpecularThroughput(
@@ -239,7 +252,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         float rnd = next_float(rng);
         if (transmissionProb > 0.0 && rnd < transmissionProb) {
             nextRayType = RAY_TYPE_REFRACTION;
-            nextDirection = BuildTransmissionContinuation(rayDir, normal, ior);
+            nextDirection =
+                BuildTransmissionContinuation(rayDir, normal, ior,
+                                              thinWalled);
             nextThroughput = state.throughput * max(transmissionTint, 0.02.xxx) * max(transmission, 0.1) / max(transmissionProb, 1.0e-4);
         } else if (reflectionProb > 0.0 && rnd < (transmissionProb + reflectionProb)) {
             nextRayType = RAY_TYPE_REFLECTION;
@@ -301,8 +316,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         WavefrontLightSample explicitSunSample =
             WavefrontSampleDirectionalLight(1.0);
         float3 sunShadowWeight = state.throughput *
-                                 ComputeWavefrontDirectLightingWeight(
-                                     record, normal, hitPos,
+                                 ComputeWavefrontDirectLightingWeightForView(
+                                     record, normal, -rayDir,
                                      explicitSunSample.direction) *
                                  explicitSunSample.radiance;
         if (any(sunShadowWeight > 1.0e-4)) {
@@ -328,8 +343,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             }
         }
         float3 shadowWeight = state.throughput *
-                              ComputeWavefrontDirectLightingWeight(
-                                  record, normal, hitPos,
+                              ComputeWavefrontDirectLightingWeightForView(
+                                  record, normal, -rayDir,
                                   lightSample.direction) *
                               lightSample.radiance;
         if (WavefrontGetLightSampleType(lightSample.packedLightIndex) !=
@@ -374,8 +389,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                                                                   envSample.L,
                                                                   envSample.pdf);
                 float3 envShadowWeight = state.throughput *
-                                         ComputeWavefrontDirectLightingWeight(
-                                             record, normal, hitPos,
+                                         ComputeWavefrontDirectLightingWeightForView(
+                                             record, normal, -rayDir,
                                              envSample.L) *
                                          (misW / max(envSample.pdf, 1.0e-8)) *
                                          kWavefrontEnvLightingBoost;
@@ -410,11 +425,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     }
 
     contribution = max(contribution, 0.0);
-    float4 accum = g_accumulation[pixel];
-    float historyCount = max(accum.a, 1.0);
-    float3 outputContribution = (dlssRayReconstruction > 0.5)
-                                    ? contribution
-                                    : (contribution / historyCount);
-    g_output[pixel] = float4(g_output[pixel].rgb + outputContribution, 1.0);
-    g_accumulation[pixel] = float4(accum.rgb + contribution, accum.a);
+    if (any(contribution > 0.0)) {
+        WavefrontAtomicAddShadowContribution(record.pixelIndex,
+                                             contribution);
+    }
 }

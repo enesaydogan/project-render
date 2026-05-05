@@ -34,6 +34,25 @@ uint tile_index(uint2 p) {
     return p.y * kTileSize + p.x;
 }
 
+bool IsValidSurfaceData(float4 normalRoughness, float depth)
+{
+    float normalLenSq = dot(normalRoughness.xyz, normalRoughness.xyz);
+    return isfinite(depth) && depth > 0.0 &&
+           isfinite(normalRoughness.x) &&
+           isfinite(normalRoughness.y) &&
+           isfinite(normalRoughness.z) &&
+           isfinite(normalRoughness.w) &&
+           normalLenSq > 0.25 &&
+           normalLenSq < 4.0;
+}
+
+float3 SafeNormalize3(float3 v, float3 fallback)
+{
+    float lenSq = dot(v, v);
+    return (isfinite(lenSq) && lenSq > 1.0e-8) ? v * rsqrt(lenSq)
+                                                : fallback;
+}
+
 GI_Reservoir unpack_gi_reservoir(float4 d0, float4 d1, float4 d2) {
     GI_Reservoir r;
     r.hitPos = d0.xyz;
@@ -41,6 +60,8 @@ GI_Reservoir unpack_gi_reservoir(float4 d0, float4 d1, float4 d2) {
     r.w_sum = d2.x;
     r.M = asuint(d2.y);
     r.W = d2.z;
+    if (!all(isfinite(r.hitPos))) r.hitPos = float3(0.0, 0.0, 0.0);
+    if (!all(isfinite(r.radiance))) r.radiance = float3(0.0, 0.0, 0.0);
     if (!isfinite(r.w_sum) || r.w_sum < 0.0) r.w_sum = 0.0;
     if (!isfinite(r.W) || r.W < 0.0) r.W = 0.0;
     return r;
@@ -55,18 +76,16 @@ void pack_gi_reservoir(GI_Reservoir r, out float4 d0, out float4 d1, out float4 
 bool IsSpatiallyCompatibleData(float4 n0, float d0, float4 n1, float d1,
                                float ndotMin, float depthTolBase)
 {
+    if (!IsValidSurfaceData(n0, d0) || !IsValidSurfaceData(n1, d1)) {
+        return false;
+    }
+
     float3 nn0 = n0.xyz;
     float3 nn1 = n1.xyz;
-    float l0 = dot(nn0, nn0);
-    float l1 = dot(nn1, nn1);
-
-    if (l0 <= 0.25 || l1 <= 0.25) return false;
-    nn0 = normalize(nn0);
-    nn1 = normalize(nn1);
+    nn0 = SafeNormalize3(nn0, float3(0.0, 1.0, 0.0));
+    nn1 = SafeNormalize3(nn1, float3(0.0, 1.0, 0.0));
     if (dot(nn0, nn1) < ndotMin) return false;
     if (abs(n0.w - n1.w) > 0.25) return false;
-
-    if (!isfinite(d0) || !isfinite(d1) || d0 <= 0.0 || d1 <= 0.0) return false;
 
     float depthTol = depthTolBase * min(d0, d1);
     if (abs(d0 - d1) > max(0.05, depthTol)) return false;
@@ -111,7 +130,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID,
     g_depth.GetDimensions(dim.x, dim.y);
     uint frame = (uint)globalFrameCount;
     bool flip = (frame & 1u) == 1u;
-    if (dlssRayReconstruction > 0.5) return;
+    if (dlssRayReconstruction > 0.5 || dim.x == 0u || dim.y == 0u) return;
 
     int2 groupBase = int2(gid.xy * kGroupSize);
     int2 localPix = groupBase + int2(gtid.xy);
@@ -171,6 +190,23 @@ void CSMain(uint3 dtid : SV_DispatchThreadID,
     GI_Reservoir res = unpack_gi_reservoir(cur0, cur1, cur2);
     if (res.M == 0) return;
 
+    float4 centerNormal = s_normalTile[tile_index(sharedCenter)];
+    float centerDepth = s_depthTile[tile_index(sharedCenter)];
+    if (!IsValidSurfaceData(centerNormal, centerDepth)) {
+        float4 zero0, zero1, zero2;
+        pack_gi_reservoir(init_gi_reservoir(), zero0, zero1, zero2);
+        if (flip) {
+            g_gi_reservoir_a0[pix] = zero0;
+            g_gi_reservoir_a1[pix] = zero1;
+            g_gi_reservoir_a2[pix] = zero2;
+        } else {
+            g_gi_reservoir_b0[pix] = zero0;
+            g_gi_reservoir_b1[pix] = zero1;
+            g_gi_reservoir_b2[pix] = zero2;
+        }
+        return;
+    }
+
     // Temporal reuse from previous ping-pong side.
     if (frame > 0) {
         uint centerIdx = tile_index(sharedCenter);
@@ -181,9 +217,6 @@ void CSMain(uint3 dtid : SV_DispatchThreadID,
         prev.M = min(prev.M, 15);
         combine_gi_reservoirs(res, prev, 1.0, rng);
     }
-
-    float4 centerNormal = s_normalTile[tile_index(sharedCenter)];
-    float centerDepth = s_depthTile[tile_index(sharedCenter)];
 
     // Spatial reuse from previous frame neighbors.
     static const int2 kOffsets[4] = {
