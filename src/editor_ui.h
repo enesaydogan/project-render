@@ -30,6 +30,8 @@ struct RenderExportJobState {
   bool isPreview = false;
   bool previewReadyToLatch = false;
   bool previewRestorePending = false;
+  bool completionAdvancePending = false;
+  bool completionExportSucceeded = false;
   bool completionArmed = false;
   int completionFrames = 0;
   int settleFramesRemaining = 0;

@@ -3252,13 +3252,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     const UINT previewHeight =
       (std::max)(1u, static_cast<UINT>(previewRect.bottom - previewRect.top));
 
-    // Deferred preview restore: the previous frame latched the preview image
-    // and recorded its final CopyPresentedTexture.  Now that the GPU has
-    // executed that copy, it is safe to tear down the export-sized DXR
-    // pipeline and recreate it at viewport size.
+    // Deferred export restore: the previous frame finished presentation/copy
+    // work that can reference export-sized DXR resources.  Restore on the next
+    // tick so tearing down the export pipeline cannot race the command list,
+    // then submit a normal viewport frame.
     if (g_renderExportJob.active && g_renderExportJob.previewRestorePending) {
+      const bool preservePreviewImage = g_renderExportJob.isPreview;
+      const bool advanceAfterRestore = g_renderExportJob.completionAdvancePending;
+      const bool restoredExportSucceeded =
+          g_renderExportJob.completionExportSucceeded;
       g_renderExportJob.previewRestorePending = false;
-      RestoreRenderExportState(true);
+      RestoreRenderExportState(preservePreviewImage);
+      if (advanceAfterRestore) {
+        AdvanceBatchRenderExport(restoredExportSucceeded);
+        AdvanceAnimationRenderExport(restoredExportSucceeded);
+      }
     }
 
     if (g_renderExportJob.active) {
@@ -3321,9 +3329,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                 fprintf(stderr, "Render export failed: %s\n",
                         outPathUtf8.c_str());
               }
-              RestoreRenderExportState();
-              AdvanceBatchRenderExport(exported);
-              AdvanceAnimationRenderExport(exported);
+              g_renderExportJob.completionExportSucceeded = exported;
+              g_renderExportJob.completionAdvancePending = true;
+              g_renderExportJob.previewRestorePending = true;
             }
           }
         }

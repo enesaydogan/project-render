@@ -1085,6 +1085,8 @@ static bool EnsureExportRenderTarget(UINT width, UINT height) {
     g_renderExportJob.isPreview = isPreview;
     g_renderExportJob.previewReadyToLatch = false;
     g_renderExportJob.previewRestorePending = false;
+    g_renderExportJob.completionAdvancePending = false;
+    g_renderExportJob.completionExportSucceeded = false;
     g_renderExportJob.outputPath = outputPath;
     g_renderExportJob.targetWidth =
       settings.explicitWidth > 0 ? settings.explicitWidth
@@ -1156,6 +1158,8 @@ static bool EnsureExportRenderTarget(UINT width, UINT height) {
     g_renderExportJob.isPreview = false;
     g_renderExportJob.previewReadyToLatch = false;
     g_renderExportJob.previewRestorePending = false;
+    g_renderExportJob.completionAdvancePending = false;
+    g_renderExportJob.completionExportSucceeded = false;
     UpdateCameraCB();
     return;
     }
@@ -1183,6 +1187,8 @@ static bool EnsureExportRenderTarget(UINT width, UINT height) {
     g_renderExportJob.isPreview = false;
     g_renderExportJob.previewReadyToLatch = false;
     g_renderExportJob.previewRestorePending = false;
+    g_renderExportJob.completionAdvancePending = false;
+    g_renderExportJob.completionExportSucceeded = false;
     UpdateCameraCB();
     return;
     }
@@ -1227,6 +1233,8 @@ void RestoreRenderExportState(bool preservePreviewImage) {
   g_renderExportJob.isPreview = false;
   g_renderExportJob.previewReadyToLatch = false;
   g_renderExportJob.previewRestorePending = false;
+  g_renderExportJob.completionAdvancePending = false;
+  g_renderExportJob.completionExportSucceeded = false;
   g_renderExportJob.completionArmed = false;
   g_renderExportJob.completionFrames = 0;
   g_renderExportJob.settleFramesRemaining = 0;
