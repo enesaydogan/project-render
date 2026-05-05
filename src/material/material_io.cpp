@@ -258,8 +258,14 @@ void RestoreMaterialsFromMetadata(const nlohmann::json &materialsJson,
         return;
       }
       const int textureIndex = savedMaterial[key];
-      *field = (textureIndex >= 0 &&
-                textureIndex < static_cast<int>(textures.size()))
+      if (textureIndex < 0 ||
+          textureIndex >= static_cast<int>(textures.size())) {
+        *field = -1;
+        return;
+      }
+      const Asset::Texture &texture =
+          textures[static_cast<size_t>(textureIndex)];
+      *field = (texture.resource && texture.width > 0 && texture.height > 0)
                    ? textureIndex
                    : -1;
     };

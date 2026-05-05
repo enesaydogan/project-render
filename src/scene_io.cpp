@@ -52,7 +52,7 @@ namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 static const char PRS_MAGIC[4] = {'P', 'R', 'S', '1'};
-static const uint32_t PRS_VERSION = 1;
+static const uint32_t PRS_VERSION = 2;
 static const char PRS_CHUNK_MAGIC[4] = {'P', 'R', 'S', 'C'};
 static constexpr size_t PRS_CHUNK_SIZE = 4ull * 1024ull * 1024ull;
 
@@ -1094,7 +1094,7 @@ bool SaveScene(const std::string &path) {
       for (size_t textureIndex = 0; textureIndex < g_loadedTextures.size();
            ++textureIndex)
         if (textureSaveRemap[textureIndex] >= 0)
-          est += 16 + g_loadedTextures[textureIndex].cpuData.size();
+          est += 20 + g_loadedTextures[textureIndex].cpuData.size();
       payload.reserve(est);
     }
 
@@ -1137,6 +1137,7 @@ bool SaveScene(const std::string &path) {
       w.writeU32(tex.width);
       w.writeU32(tex.height);
       w.writeU32((uint32_t)tex.format);
+      w.writeU32(tex.mipLevels);
       uint32_t db = (uint32_t)tex.cpuData.size();
       w.writeU32(db);
       if (db) w.writeBytes(tex.cpuData.data(), db);
@@ -1218,7 +1219,7 @@ bool LoadScenePRS(const std::string &path) {
     char magic[4]; file.read(magic, 4);
     if (memcmp(magic, PRS_MAGIC, 4) != 0) return false;
     uint32_t version; file.read(reinterpret_cast<char*>(&version), 4);
-    if (version != PRS_VERSION) { fprintf(stderr, "PRS: Unknown version %u\n", version); return false; }
+    if (version == 0 || version > PRS_VERSION) { fprintf(stderr, "PRS: Unknown version %u\n", version); return false; }
     uint64_t uncompSize; file.read(reinterpret_cast<char*>(&uncompSize), 8);
 
     size_t compSize = fileSize - 16;
@@ -1274,10 +1275,18 @@ bool LoadScenePRS(const std::string &path) {
     for (uint32_t ti = 0; ti < numTex; ++ti) {
       uint32_t w = r.readU32(), h = r.readU32();
       DXGI_FORMAT fmt = (DXGI_FORMAT)r.readU32();
+      uint32_t mipLevels = 1;
+      if (version >= 2) {
+        mipLevels = (std::max)(1u, r.readU32());
+      }
       uint32_t db = r.readU32();
       if (db) {
         const uint8_t *px = r.readBytes(db);
-        g_loadedTextures[ti] = Asset::LoadTextureFromMemory(px, w, h, fmt);
+        g_loadedTextures[ti] =
+            version >= 2
+                ? Asset::LoadTextureFromMemoryMipChain(px, db, w, h, fmt,
+                                                       mipLevels)
+                : Asset::LoadTextureFromMemory(px, w, h, fmt);
       }
     }
     Scene::RegisterTextures(g_loadedTextures);

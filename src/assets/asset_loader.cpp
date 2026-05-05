@@ -153,6 +153,75 @@ inline uint32_t ComputeMipLevels(uint32_t width, uint32_t height) {
          1;
 }
 
+static bool IsBlockCompressedTextureFormat(DXGI_FORMAT format) {
+  switch (format) {
+  case DXGI_FORMAT_BC1_UNORM:
+  case DXGI_FORMAT_BC1_UNORM_SRGB:
+  case DXGI_FORMAT_BC2_UNORM:
+  case DXGI_FORMAT_BC2_UNORM_SRGB:
+  case DXGI_FORMAT_BC3_UNORM:
+  case DXGI_FORMAT_BC3_UNORM_SRGB:
+  case DXGI_FORMAT_BC4_UNORM:
+  case DXGI_FORMAT_BC4_SNORM:
+  case DXGI_FORMAT_BC5_UNORM:
+  case DXGI_FORMAT_BC5_SNORM:
+  case DXGI_FORMAT_BC7_UNORM:
+  case DXGI_FORMAT_BC7_UNORM_SRGB:
+    return true;
+  default:
+    return false;
+  }
+}
+
+static size_t TextureBlockBytes(DXGI_FORMAT format) {
+  switch (format) {
+  case DXGI_FORMAT_BC1_UNORM:
+  case DXGI_FORMAT_BC1_UNORM_SRGB:
+  case DXGI_FORMAT_BC4_UNORM:
+  case DXGI_FORMAT_BC4_SNORM:
+    return 8;
+  case DXGI_FORMAT_BC2_UNORM:
+  case DXGI_FORMAT_BC2_UNORM_SRGB:
+  case DXGI_FORMAT_BC3_UNORM:
+  case DXGI_FORMAT_BC3_UNORM_SRGB:
+  case DXGI_FORMAT_BC5_UNORM:
+  case DXGI_FORMAT_BC5_SNORM:
+  case DXGI_FORMAT_BC7_UNORM:
+  case DXGI_FORMAT_BC7_UNORM_SRGB:
+    return 16;
+  default:
+    return 0;
+  }
+}
+
+static size_t TextureBytesPerPixel(DXGI_FORMAT format) {
+  switch (format) {
+  case DXGI_FORMAT_R32G32B32A32_FLOAT:
+    return 16;
+  case DXGI_FORMAT_R8G8B8A8_UNORM:
+  case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+  case DXGI_FORMAT_B8G8R8A8_UNORM:
+  case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+  case DXGI_FORMAT_B8G8R8X8_UNORM:
+  case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+    return 4;
+  default:
+    return 0;
+  }
+}
+
+static size_t TightlyPackedMipSize(DXGI_FORMAT format, uint32_t width,
+                                   uint32_t height) {
+  if (IsBlockCompressedTextureFormat(format)) {
+    const size_t blockBytes = TextureBlockBytes(format);
+    const size_t blockW = (width + 3u) / 4u;
+    const size_t blockH = (height + 3u) / 4u;
+    return blockW * blockH * blockBytes;
+  }
+  return static_cast<size_t>(width) * static_cast<size_t>(height) *
+         TextureBytesPerPixel(format);
+}
+
 static bool CreateGpuTexture(const void *src, int width, int height,
                              int components, DXGI_FORMAT format,
                              Texture &outTex) {
@@ -2398,6 +2467,22 @@ static Texture LtmUploadDDS(const uint8_t *ddsData, size_t ddsSize,
             (unsigned)resourceFmt, (unsigned)fmt, ddsSize);
     return {};
   }
+  size_t tightMipBytes = 0;
+  uint32_t availableMips = 0;
+  for (uint32_t mip = 0; mip < mips; ++mip) {
+    const uint32_t mipW = std::max(1u, W >> mip);
+    const uint32_t mipH = std::max(1u, H >> mip);
+    const size_t mipBytes = TightlyPackedMipSize(resourceFmt, mipW, mipH);
+    if (mipBytes == 0 || mipPtr + tightMipBytes + mipBytes > ddsData + ddsSize) {
+      break;
+    }
+    tightMipBytes += mipBytes;
+    ++availableMips;
+  }
+  if (availableMips == 0) {
+    return {};
+  }
+  mips = availableMips;
 
   D3D12_RESOURCE_DESC texDesc = {};
   texDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -2500,6 +2585,7 @@ ltm_dds_done:
   tex.height    = H;
   tex.mipLevels = mips;
   tex.format    = resourceFmt;
+  tex.cpuData.assign(mipPtr, mipPtr + tightMipBytes);
   return tex;
 }
 
@@ -3334,6 +3420,152 @@ Texture LoadTextureFromMemory(const void *src, int width, int height,
                               DXGI_FORMAT format) {
   Texture tex;
   CreateGpuTexture(src, width, height, 4, format, tex);
+  return tex;
+}
+
+Texture LoadTextureFromMemoryMipChain(const void *src, size_t srcSize,
+                                      int width, int height,
+                                      DXGI_FORMAT format,
+                                      uint32_t mipLevels) {
+  Texture tex;
+  if (!s_device || !src || srcSize == 0 || width <= 0 || height <= 0) {
+    return tex;
+  }
+
+  const uint32_t requestedMips = std::max(1u, mipLevels);
+  const uint32_t baseW = static_cast<uint32_t>(width);
+  const uint32_t baseH = static_cast<uint32_t>(height);
+  const size_t baseBytes = TightlyPackedMipSize(format, baseW, baseH);
+  if (baseBytes == 0 || srcSize < baseBytes) {
+    return tex;
+  }
+
+  if (!IsBlockCompressedTextureFormat(format) && srcSize == baseBytes) {
+    return LoadTextureFromMemory(src, width, height, format);
+  }
+
+  size_t tightBytes = 0;
+  uint32_t usableMips = 0;
+  for (uint32_t mip = 0; mip < requestedMips; ++mip) {
+    const uint32_t mipW = std::max(1u, baseW >> mip);
+    const uint32_t mipH = std::max(1u, baseH >> mip);
+    const size_t mipBytes = TightlyPackedMipSize(format, mipW, mipH);
+    if (mipBytes == 0 || tightBytes + mipBytes > srcSize) {
+      break;
+    }
+    tightBytes += mipBytes;
+    ++usableMips;
+  }
+  if (usableMips == 0) {
+    return tex;
+  }
+
+  D3D12_RESOURCE_DESC texDesc = {};
+  texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+  texDesc.Width = static_cast<UINT>(width);
+  texDesc.Height = static_cast<UINT>(height);
+  texDesc.DepthOrArraySize = 1;
+  texDesc.MipLevels = static_cast<UINT16>(usableMips);
+  texDesc.Format = format;
+  texDesc.SampleDesc.Count = 1;
+  texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+
+  D3D12_HEAP_PROPERTIES defaultHeapProps = {D3D12_HEAP_TYPE_DEFAULT,
+                                            D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+                                            D3D12_MEMORY_POOL_UNKNOWN, 1, 1};
+  if (FAILED(s_device->CreateCommittedResource(
+          &defaultHeapProps, D3D12_HEAP_FLAG_NONE, &texDesc,
+          D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+          IID_PPV_ARGS(&tex.resource)))) {
+    return {};
+  }
+
+  std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints(usableMips);
+  std::vector<UINT> numRows(usableMips);
+  std::vector<UINT64> rowBytes(usableMips);
+  UINT64 totalBytes = 0;
+  s_device->GetCopyableFootprints(&texDesc, 0, usableMips, 0,
+                                  footprints.data(), numRows.data(),
+                                  rowBytes.data(), &totalBytes);
+
+  D3D12_HEAP_PROPERTIES uploadHeapProps = {D3D12_HEAP_TYPE_UPLOAD,
+                                           D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+                                           D3D12_MEMORY_POOL_UNKNOWN, 1, 1};
+  D3D12_RESOURCE_DESC bufDesc = {};
+  bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+  bufDesc.Width = totalBytes;
+  bufDesc.Height = 1;
+  bufDesc.DepthOrArraySize = 1;
+  bufDesc.MipLevels = 1;
+  bufDesc.Format = DXGI_FORMAT_UNKNOWN;
+  bufDesc.SampleDesc.Count = 1;
+  bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+  ComPtr<ID3D12Resource> uploadBuffer;
+  ThrowIfFailed(s_device->CreateCommittedResource(
+      &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
+      D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadBuffer)));
+
+  uint8_t *mapped = nullptr;
+  ThrowIfFailed(uploadBuffer->Map(0, nullptr,
+                                  reinterpret_cast<void **>(&mapped)));
+
+  const uint8_t *tightSrc = static_cast<const uint8_t *>(src);
+  size_t srcOffset = 0;
+  for (uint32_t mip = 0; mip < usableMips; ++mip) {
+    const uint32_t mipW = std::max(1u, baseW >> mip);
+    const uint32_t mipH = std::max(1u, baseH >> mip);
+    UINT rows = mipH;
+    size_t rowPitch = static_cast<size_t>(mipW) * TextureBytesPerPixel(format);
+    if (IsBlockCompressedTextureFormat(format)) {
+      rows = (mipH + 3u) / 4u;
+      rowPitch = static_cast<size_t>((mipW + 3u) / 4u) *
+                 TextureBlockBytes(format);
+    }
+
+    uint8_t *dst = mapped + footprints[mip].Offset;
+    for (UINT row = 0; row < rows; ++row) {
+      memcpy(dst + static_cast<size_t>(row) *
+                       footprints[mip].Footprint.RowPitch,
+             tightSrc + srcOffset + static_cast<size_t>(row) * rowPitch,
+             rowPitch);
+    }
+    srcOffset += rows * rowPitch;
+  }
+  uploadBuffer->Unmap(0, nullptr);
+
+  ComPtr<ID3D12CommandAllocator> allocator;
+  ComPtr<ID3D12GraphicsCommandList> cmdList;
+  ThrowIfFailed(s_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                                 IID_PPV_ARGS(&allocator)));
+  ThrowIfFailed(s_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                            allocator.Get(), nullptr,
+                                            IID_PPV_ARGS(&cmdList)));
+
+  for (uint32_t mip = 0; mip < usableMips; ++mip) {
+    D3D12_TEXTURE_COPY_LOCATION dst = {
+        tex.resource.Get(), D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, mip};
+    D3D12_TEXTURE_COPY_LOCATION srcLoc = {
+        uploadBuffer.Get(), D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+        footprints[mip]};
+    cmdList->CopyTextureRegion(&dst, 0, 0, 0, &srcLoc, nullptr);
+  }
+
+  D3D12_RESOURCE_BARRIER barrier = {};
+  barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+  barrier.Transition.pResource = tex.resource.Get();
+  barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+  barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+  barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+  cmdList->ResourceBarrier(1, &barrier);
+
+  ExecuteCommandListAndWait(cmdList.Get());
+
+  tex.width = static_cast<UINT>(width);
+  tex.height = static_cast<UINT>(height);
+  tex.format = format;
+  tex.mipLevels = usableMips;
+  tex.cpuData.assign(tightSrc, tightSrc + tightBytes);
   return tex;
 }
 

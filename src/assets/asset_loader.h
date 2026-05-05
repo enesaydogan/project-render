@@ -245,6 +245,10 @@ Texture LoadTextureFromEncodedMemory(const void *src, size_t size,
 // Load a single texture from memory.
 Texture LoadTextureFromMemory(const void *src, int width, int height,
                               DXGI_FORMAT format);
+Texture LoadTextureFromMemoryMipChain(const void *src, size_t srcSize,
+                                      int width, int height,
+                                      DXGI_FORMAT format,
+                                      uint32_t mipLevels);
 
 // Load a single mesh from memory.
 GpuMesh LoadMeshFromMemory(const std::vector<Vertex> &vertices,

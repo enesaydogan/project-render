@@ -664,6 +664,37 @@ static uint64_t ComputeGrassSceneHash(const std::vector<Scene::Instance> &instan
   }
   return hash;
 }
+
+static bool EnsureInteractiveDxrPipelineSize(UINT width, UINT height,
+                                             const char *context) {
+  if (!g_rayTracingSupported || width == 0 || height == 0) {
+    return false;
+  }
+
+  static UINT s_lastInteractiveDxrWidth = 0;
+  static UINT s_lastInteractiveDxrHeight = 0;
+  if (DxrRenderer::IsReady() && width == s_lastInteractiveDxrWidth &&
+      height == s_lastInteractiveDxrHeight) {
+    return true;
+  }
+
+  try {
+    DxrRenderer::WaitForAsyncRestirIdle();
+    DX12Context::WaitGPUIdle();
+    DxrRenderer::CreateRayTracingPipeline(width, height);
+    s_lastInteractiveDxrWidth = width;
+    s_lastInteractiveDxrHeight = height;
+    DxrRenderer::ResetAccumulation();
+    return DxrRenderer::IsReady();
+  } catch (const std::exception &e) {
+    fprintf(stderr, "DXR pipeline resize failed (%s, %u x %u): %s\n",
+            context ? context : "unknown", width, height, e.what());
+  } catch (...) {
+    fprintf(stderr, "DXR pipeline resize failed (%s, %u x %u): unknown\n",
+            context ? context : "unknown", width, height);
+  }
+  return false;
+}
 } // namespace
 
 // Top-level exception handler for debug builds.
@@ -2463,17 +2494,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           (std::max)(1u, static_cast<UINT>(presentationRect.bottom -
                                            presentationRect.top));
     }
-    if (!g_renderExportJob.active && g_rayTracingSupported) {
-      static UINT s_lastPreviewWidth = 0;
-      static UINT s_lastPreviewHeight = 0;
-      if (previewWidth != s_lastPreviewWidth ||
-          previewHeight != s_lastPreviewHeight) {
-        DxrRenderer::CreateRayTracingPipeline(previewWidth, previewHeight);
-        s_lastPreviewWidth = previewWidth;
-        s_lastPreviewHeight = previewHeight;
-      }
-    }
-
     // Set viewport and scissor
     D3D12_VIEWPORT viewport = {};
     viewport.TopLeftX = 0;
@@ -2587,9 +2607,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       case RenderMode::DXR: {
         if (!DxrRenderer::IsReady()) {
           try {
+            DxrRenderer::WaitForAsyncRestirIdle();
             DX12Context::WaitGPUIdle();
             DxrRenderer::CreateRayTracingPipeline(previewWidth,
                                                   previewHeight);
+            DxrRenderer::ResetAccumulation();
           } catch (const std::exception &e) {
             fprintf(stderr,
                     "DXR lazy pipeline create failed during mode switch: %s\n",
@@ -3368,6 +3390,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     g_cameraData.dxrProceduralSkyBoost = g_iblIntensity;
     g_cameraData.iblIndirectBoost = g_iblIndirectBoost;
     UpdateCameraCB();
+
+    if (!g_renderExportJob.active && g_currentRenderMode == RenderMode::DXR) {
+      EnsureInteractiveDxrPipelineSize(previewWidth, previewHeight,
+                                       "interactive preview resize");
+    }
 
     // Update Cloud Manager (uploads changed params to GPU)
     g_cloudManager.Update(dt, DX12Context::g_frameIndex);
