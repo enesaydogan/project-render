@@ -15,6 +15,7 @@
 #include "imgui.h"
 #include "material/material_system.h"
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cctype>
@@ -818,6 +819,116 @@ void RequestRendererFullRebuild() {
 
 void RequestRendererTlasRefresh() {
   ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
+}
+
+static void CopyMatrix4x4(const float *src, float *dst) {
+  memcpy(dst, src, 16 * sizeof(float));
+}
+
+static void MulColumnMajor4x4(const float *a, const float *b, float *out) {
+  float tmp[16];
+  for (int col = 0; col < 4; col++) {
+    for (int row = 0; row < 4; row++) {
+      float sum = 0.0f;
+      for (int k = 0; k < 4; k++) {
+        sum += a[k * 4 + row] * b[col * 4 + k];
+      }
+      tmp[col * 4 + row] = sum;
+    }
+  }
+  CopyMatrix4x4(tmp, out);
+}
+
+static void TransformPointColumnMajor(const float m[16], const float p[3],
+                                      float out[3]) {
+  out[0] = p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12];
+  out[1] = p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13];
+  out[2] = p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14];
+}
+
+static void TransformVectorColumnMajor(const float m[16], const float v[3],
+                                       float out[3]) {
+  out[0] = v[0] * m[0] + v[1] * m[4] + v[2] * m[8];
+  out[1] = v[0] * m[1] + v[1] * m[5] + v[2] * m[9];
+  out[2] = v[0] * m[2] + v[1] * m[6] + v[2] * m[10];
+}
+
+static size_t FindSceneTransformRootAncestor(size_t nodeIndex) {
+  if (nodeIndex >= s_nodes.size()) {
+    return static_cast<size_t>(-1);
+  }
+  size_t cursor = s_nodes[nodeIndex].parentIndex;
+  for (size_t guard = 0; guard < s_nodes.size(); ++guard) {
+    if (cursor == static_cast<size_t>(-1) || cursor >= s_nodes.size()) {
+      return static_cast<size_t>(-1);
+    }
+    if (s_nodes[cursor].importGroupRoot) {
+      return cursor;
+    }
+    cursor = s_nodes[cursor].parentIndex;
+  }
+  return static_cast<size_t>(-1);
+}
+
+static bool ResolveNodeWorldTransform(
+    size_t nodeIndex, std::vector<std::array<float, 16>> &worldTransforms,
+    std::vector<uint8_t> &visitState) {
+  if (nodeIndex >= s_nodes.size()) {
+    return false;
+  }
+  if (visitState[nodeIndex] == 2) {
+    return true;
+  }
+  if (visitState[nodeIndex] == 1) {
+    CopyMatrix4x4(s_nodes[nodeIndex].transform,
+                  worldTransforms[nodeIndex].data());
+    visitState[nodeIndex] = 2;
+    return false;
+  }
+
+  visitState[nodeIndex] = 1;
+  const size_t transformRootIndex = FindSceneTransformRootAncestor(nodeIndex);
+  if (transformRootIndex != static_cast<size_t>(-1) &&
+      transformRootIndex != nodeIndex &&
+      ResolveNodeWorldTransform(transformRootIndex, worldTransforms,
+                                visitState)) {
+    MulColumnMajor4x4(worldTransforms[transformRootIndex].data(),
+                      s_nodes[nodeIndex].transform,
+                      worldTransforms[nodeIndex].data());
+  } else {
+    CopyMatrix4x4(s_nodes[nodeIndex].transform,
+                  worldTransforms[nodeIndex].data());
+  }
+  visitState[nodeIndex] = 2;
+  return true;
+}
+
+static std::vector<std::array<float, 16>> BuildNodeWorldTransforms() {
+  std::vector<std::array<float, 16>> worldTransforms(s_nodes.size());
+  std::vector<uint8_t> visitState(s_nodes.size(), 0);
+  for (size_t i = 0; i < s_nodes.size(); ++i) {
+    ResolveNodeWorldTransform(i, worldTransforms, visitState);
+  }
+  return worldTransforms;
+}
+
+static bool IsNodeDescendantOf(size_t nodeIndex, size_t ancestorIndex) {
+  if (nodeIndex >= s_nodes.size() || ancestorIndex >= s_nodes.size()) {
+    return false;
+  }
+  size_t cursor = nodeIndex;
+  for (size_t guard = 0; guard < s_nodes.size(); ++guard) {
+    if (cursor == ancestorIndex) {
+      return true;
+    }
+    const size_t parentIndex = s_nodes[cursor].parentIndex;
+    if (parentIndex == static_cast<size_t>(-1) ||
+        parentIndex >= s_nodes.size()) {
+      return false;
+    }
+    cursor = parentIndex;
+  }
+  return false;
 }
 
 static std::vector<int> ResolveReplacementMaterialIndices(
@@ -2323,6 +2434,8 @@ std::vector<const Asset::GpuMesh *> GetActiveMeshes() {
 std::vector<Instance> GetInstances() {
   std::vector<Instance> instances;
   instances.reserve(1280); // Heuristic
+  const std::vector<std::array<float, 16>> worldTransforms =
+      BuildNodeWorldTransforms();
   for (size_t ni = 0; ni < s_nodes.size(); ++ni) {
     const auto &node = s_nodes[ni];
     if (!node.visible)
@@ -2333,7 +2446,8 @@ std::vector<Instance> GetInstances() {
         inst.name = node.name;
         inst.mesh = &g_loadedMeshes[mi];
         inst.transform = DirectX::XMLoadFloat4x4(
-            reinterpret_cast<const DirectX::XMFLOAT4X4 *>(node.transform));
+            reinterpret_cast<const DirectX::XMFLOAT4X4 *>(
+                worldTransforms[ni].data()));
         inst.id = (int)ni;
         instances.push_back(inst);
       }
@@ -2984,18 +3098,10 @@ void DrawLightGizmo() {
 }
 
 void MatMul(const float *a, const float *b, float *out) {
-  float tmp[16];
-  for (int col = 0; col < 4; col++) {
-    for (int row = 0; row < 4; row++) {
-      float sum = 0;
-      for (int k = 0; k < 4; k++) {
-        sum += a[k * 4 + row] * b[col * 4 + k];
-      }
-      tmp[col * 4 + row] = sum;
-    }
-  }
-  memcpy(out, tmp, 16 * sizeof(float));
+  MulColumnMajor4x4(a, b, out);
 }
+
+bool Inverse4x4(const float *m, float *out);
 
 void DrawGizmo() {
   size_t selectedIdx = (size_t)-1;
@@ -3053,15 +3159,45 @@ void DrawGizmo() {
   ImGuizmo::SetDrawlist(overlayDrawList);
   ImGuizmo::SetRect(windowX, windowY, windowWidth, windowHeight);
 
-  // Compute mesh local center to position gizmo at center of the object
+  const std::vector<std::array<float, 16>> worldTransforms =
+      BuildNodeWorldTransforms();
+  const float *selectedWorld = worldTransforms[selectedIdx].data();
+
+  // Compute the center in selected-node local space. For imported roots this
+  // includes child mesh nodes, so the gizmo controls the visible asset group.
   float localCenter[3] = {0, 0, 0};
   int count = 0;
-  for (size_t mi : node.meshIndices) {
-    if (mi < g_loadedMeshes.size()) {
-      const auto &m = g_loadedMeshes[mi];
-      for (int a = 0; a < 3; ++a)
-        localCenter[a] += (m.minBound[a] + m.maxBound[a]) * 0.5f;
-      count++;
+  float selectedInv[16];
+  const bool haveSelectedInv = Inverse4x4(selectedWorld, selectedInv);
+  if (haveSelectedInv) {
+    for (size_t nodeIndex = 0; nodeIndex < s_nodes.size(); ++nodeIndex) {
+      if (!IsNodeDescendantOf(nodeIndex, selectedIdx)) {
+        continue;
+      }
+      const Node &meshNode = s_nodes[nodeIndex];
+      if (!meshNode.visible) {
+        continue;
+      }
+      for (size_t meshIndex : meshNode.meshIndices) {
+        if (meshIndex >= g_loadedMeshes.size()) {
+          continue;
+        }
+        const auto &m = g_loadedMeshes[meshIndex];
+        float meshLocalCenter[3] = {
+            (m.minBound[0] + m.maxBound[0]) * 0.5f,
+            (m.minBound[1] + m.maxBound[1]) * 0.5f,
+            (m.minBound[2] + m.maxBound[2]) * 0.5f};
+        float worldCenter[3];
+        float selectedLocalCenter[3];
+        TransformPointColumnMajor(worldTransforms[nodeIndex].data(),
+                                  meshLocalCenter, worldCenter);
+        TransformPointColumnMajor(selectedInv, worldCenter,
+                                  selectedLocalCenter);
+        for (int a = 0; a < 3; ++a) {
+          localCenter[a] += selectedLocalCenter[a];
+        }
+        ++count;
+      }
     }
   }
   if (count > 0) {
@@ -3071,7 +3207,7 @@ void DrawGizmo() {
   }
 
   float pivotMatrix[16];
-  memcpy(pivotMatrix, node.transform, 16 * sizeof(float));
+  CopyMatrix4x4(selectedWorld, pivotMatrix);
   float translationMat[16] = {1,
                               0,
                               0,
@@ -3094,7 +3230,7 @@ void DrawGizmo() {
 
   if (ImGuizmo::Manipulate(view, proj, op, actualMode,
                            pivotMatrix)) {
-    // NodeTransform = pivotMatrix * Translation(-localCenter)
+    // SelectedWorld = pivotMatrix * Translation(-localCenter)
     float invTranslationMat[16] = {1,
                                    0,
                                    0,
@@ -3111,7 +3247,23 @@ void DrawGizmo() {
                                    -localCenter[1],
                                    -localCenter[2],
                                    1};
-    MatMul(pivotMatrix, invTranslationMat, node.transform);
+    float newWorld[16];
+    MatMul(pivotMatrix, invTranslationMat, newWorld);
+
+    const size_t transformRootIndex =
+        FindSceneTransformRootAncestor(selectedIdx);
+    if (transformRootIndex != static_cast<size_t>(-1) &&
+        transformRootIndex < s_nodes.size()) {
+      float invRootWorld[16];
+      if (Inverse4x4(worldTransforms[transformRootIndex].data(),
+                     invRootWorld)) {
+        MatMul(invRootWorld, newWorld, node.transform);
+      } else {
+        CopyMatrix4x4(newWorld, node.transform);
+      }
+    } else {
+      CopyMatrix4x4(newWorld, node.transform);
+    }
 
     ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
   }
@@ -3326,34 +3478,26 @@ int UpdateSelection(float screenWidth, float screenHeight) {
 
   float orig[3] = {g_cameraData.pos[0], g_cameraData.pos[1], g_cameraData.pos[2]};
 
-  auto TransformPoint = [](const float m[16], const float p[3], float out[3]) {
-    out[0] = p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12];
-    out[1] = p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13];
-    out[2] = p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14];
-  };
-  auto TransformVector = [](const float m[16], const float v[3], float out[3]) {
-    out[0] = v[0] * m[0] + v[1] * m[4] + v[2] * m[8];
-    out[1] = v[0] * m[1] + v[1] * m[5] + v[2] * m[9];
-    out[2] = v[0] * m[2] + v[1] * m[6] + v[2] * m[10];
-  };
-
   float minWorldDist2 = FLT_MAX;
   int hitNode = -1;
   int hitMaterial = -1;
+  const std::vector<std::array<float, 16>> worldTransforms =
+      BuildNodeWorldTransforms();
 
   for (size_t i = 0; i < s_nodes.size(); ++i) {
     auto &node = s_nodes[i];
     if (!node.visible)
       continue;
 
+    const float *nodeWorld = worldTransforms[i].data();
     float invNode[16];
-    if (!Inverse4x4(node.transform, invNode))
+    if (!Inverse4x4(nodeWorld, invNode))
       continue;
 
     // Transform ray to local space
     float localOrig[3], localDir[3];
-    TransformPoint(invNode, orig, localOrig);
-    TransformVector(invNode, dir, localDir);
+    TransformPointColumnMajor(invNode, orig, localOrig);
+    TransformVectorColumnMajor(invNode, dir, localDir);
     float localDirLen2 = localDir[0] * localDir[0] + localDir[1] * localDir[1] +
                          localDir[2] * localDir[2];
     if (localDirLen2 <= 1e-12f)
@@ -3395,7 +3539,7 @@ int UpdateSelection(float screenWidth, float screenHeight) {
                                localOrig[1] + localDir[1] * tVal,
                                localOrig[2] + localDir[2] * tVal};
           float worldHit[3];
-          TransformPoint(node.transform, localHit, worldHit);
+          TransformPointColumnMajor(nodeWorld, localHit, worldHit);
           float dx = worldHit[0] - orig[0];
           float dy = worldHit[1] - orig[1];
           float dz = worldHit[2] - orig[2];
@@ -3418,7 +3562,7 @@ int UpdateSelection(float screenWidth, float screenHeight) {
                              localOrig[1] + localDir[1] * boxT,
                              localOrig[2] + localDir[2] * boxT};
         float worldHit[3];
-        TransformPoint(node.transform, localHit, worldHit);
+        TransformPointColumnMajor(nodeWorld, localHit, worldHit);
         float dx = worldHit[0] - orig[0];
         float dy = worldHit[1] - orig[1];
         float dz = worldHit[2] - orig[2];
@@ -3520,22 +3664,11 @@ int PickMaterialAtCursor(float screenWidth, float screenHeight) {
   float orig[3] = {g_cameraData.pos[0], g_cameraData.pos[1],
                    g_cameraData.pos[2]};
 
-  auto TransformPoint = [](const float m[16], const float p[3],
-                           float out[3]) {
-    out[0] = p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12];
-    out[1] = p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13];
-    out[2] = p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14];
-  };
-  auto TransformVector = [](const float m[16], const float v[3],
-                            float out[3]) {
-    out[0] = v[0] * m[0] + v[1] * m[4] + v[2] * m[8];
-    out[1] = v[0] * m[1] + v[1] * m[5] + v[2] * m[9];
-    out[2] = v[0] * m[2] + v[1] * m[6] + v[2] * m[10];
-  };
-
   float minWorldDist2 = FLT_MAX;
   int hitNode = -1;
   int hitMaterial = -1;
+  const std::vector<std::array<float, 16>> worldTransforms =
+      BuildNodeWorldTransforms();
 
   for (size_t nodeIndex = 0; nodeIndex < s_nodes.size(); ++nodeIndex) {
     const Node &node = s_nodes[nodeIndex];
@@ -3543,14 +3676,15 @@ int PickMaterialAtCursor(float screenWidth, float screenHeight) {
       continue;
     }
 
+    const float *nodeWorld = worldTransforms[nodeIndex].data();
     float invNode[16];
-    if (!Inverse4x4(node.transform, invNode)) {
+    if (!Inverse4x4(nodeWorld, invNode)) {
       continue;
     }
 
     float localOrig[3], localDir[3];
-    TransformPoint(invNode, orig, localOrig);
-    TransformVector(invNode, dir, localDir);
+    TransformPointColumnMajor(invNode, orig, localOrig);
+    TransformVectorColumnMajor(invNode, dir, localDir);
     const float localDirLen2 = localDir[0] * localDir[0] +
                                localDir[1] * localDir[1] +
                                localDir[2] * localDir[2];
@@ -3578,7 +3712,7 @@ int PickMaterialAtCursor(float screenWidth, float screenHeight) {
                            localOrig[1] + localDir[1] * boxT,
                            localOrig[2] + localDir[2] * boxT};
       float worldHit[3];
-      TransformPoint(node.transform, localHit, worldHit);
+      TransformPointColumnMajor(nodeWorld, localHit, worldHit);
       const float dx = worldHit[0] - orig[0];
       const float dy = worldHit[1] - orig[1];
       const float dz = worldHit[2] - orig[2];
