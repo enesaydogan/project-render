@@ -943,6 +943,29 @@ static bool IsNodeDescendantOf(size_t nodeIndex, size_t ancestorIndex) {
   return false;
 }
 
+static size_t ResolveSelectionTargetForHit(size_t hitNodeIndex) {
+  if (hitNodeIndex >= s_nodes.size()) {
+    return static_cast<size_t>(-1);
+  }
+
+  size_t selectionTarget = hitNodeIndex;
+  size_t cursor = hitNodeIndex;
+  for (size_t guard = 0; guard < s_nodes.size(); ++guard) {
+    if (cursor >= s_nodes.size()) {
+      break;
+    }
+    if (s_nodes[cursor].selectionLocked) {
+      selectionTarget = cursor;
+    }
+    const size_t parentIndex = s_nodes[cursor].parentIndex;
+    if (parentIndex == static_cast<size_t>(-1)) {
+      break;
+    }
+    cursor = parentIndex;
+  }
+  return selectionTarget;
+}
+
 static bool IsModifierDown(bool ImGuiIO::*member, int virtualKey) {
   const ImGuiIO &io = ImGui::GetIO();
   return io.*member || ((GetKeyState(virtualKey) & 0x8000) != 0);
@@ -1808,6 +1831,7 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
     rootNode.sourcePath = payload.sourcePath;
     rootNode.importGroupKey = groupKey;
     rootNode.importGroupRoot = true;
+    rootNode.selectionLocked = true;
     rootNode.linkedMaterialIndices = localToGlobal;
     rootNode.linkedMaterialSourceNames.reserve(payload.materials.size());
     for (const Asset::Material &material : payload.materials) {
@@ -1876,6 +1900,7 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
       Node node;
       node.name = ResolveNodeDisplayName(payload);
       node.sourcePath = payload.sourcePath;
+      node.selectionLocked = true;
       node.meshIndices = sharedEntryIt->second.meshIndices;
       node.linkedMaterialIndices = sharedEntryIt->second.linkedMaterialIndices;
       node.linkedMaterialSourceNames =
@@ -1923,6 +1948,7 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
   Node node;
   node.name = ResolveNodeDisplayName(payload);
   node.sourcePath = payload.sourcePath;
+  node.selectionLocked = true;
   node.meshIndices.reserve(payload.meshes.size());
   for (size_t i = 0; i < payload.meshes.size(); ++i) {
     node.meshIndices.push_back(meshBase + i);
@@ -2184,6 +2210,18 @@ bool SetNodeVisibility(size_t index, bool visible) {
   }
   s_nodes[index].visible = visible;
   ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
+  return true;
+}
+
+bool SetNodeSelectionLocked(size_t index, bool locked) {
+  if (index >= s_nodes.size()) {
+    return false;
+  }
+  if (s_nodes[index].selectionLocked == locked) {
+    return true;
+  }
+  s_nodes[index].selectionLocked = locked;
+  NotifySceneChanged();
   return true;
 }
 
@@ -3916,13 +3954,16 @@ int UpdateSelection(float screenWidth, float screenHeight) {
   }
 
   if (hitNode != -1) {
+    const size_t selectionTarget =
+        ResolveSelectionTargetForHit(static_cast<size_t>(hitNode));
     if (IsCtrlDown()) {
-      ToggleNodeSelection(static_cast<size_t>(hitNode));
+      ToggleNodeSelection(selectionTarget);
     } else {
-      SelectNode((size_t)hitNode);
+      SelectNode(selectionTarget);
     }
     fprintf(stderr, "Scene: Picked Node '%s' (ID %d), Material ID %d\n",
-            s_nodes[hitNode].name.c_str(), hitNode, hitMaterial);
+            s_nodes[selectionTarget].name.c_str(),
+            static_cast<int>(selectionTarget), hitMaterial);
   } else if (!IsCtrlDown()) {
     SelectNode(static_cast<size_t>(-1));
   }

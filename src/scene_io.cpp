@@ -607,6 +607,7 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
       {"n", node.name}, {"sp", node.sourcePath},
       {"igk", node.importGroupKey}, {"igr", node.importGroupRoot},
       {"v", node.visible}, {"s", node.selected},
+      {"sl", node.selectionLocked},
       {"ll", node.liveLinkManaged}, {"pi", node.parentIndex},
       {"mi", node.meshIndices}, {"lmi", node.linkedMaterialIndices},
       {"lmn", node.linkedMaterialSourceNames}, {"t", xf}
@@ -936,6 +937,7 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
       node.importGroupKey = n.value("igk", std::string());
       node.importGroupRoot = n.value("igr", false);
       node.visible = n.value("v", true);
+      node.selectionLocked = n.value("sl", node.importGroupRoot);
       node.liveLinkManaged = n.value("ll", false);
       node.parentIndex = n.value("pi", static_cast<size_t>(-1));
       node.meshIndices = n["mi"].get<std::vector<size_t>>();
@@ -957,6 +959,7 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
         auto &nodes = const_cast<std::vector<Scene::Node>&>(Scene::GetNodes());
         if (!nodes.empty()) {
           nodes.back().visible = n.value("v", true);
+          nodes.back().selectionLocked = n.value("sl", false);
           nodes.back().liveLinkManaged = n.value("ll", false);
           nodes.back().parentIndex = n.value("pi", static_cast<size_t>(-1));
           if (n.contains("t")) for (int i=0;i<16;++i) nodes.back().transform[i]=n["t"][i];
@@ -981,6 +984,8 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
       if (restoredIndex < nodes.size()) {
         nodes[restoredIndex].name = n.value("n", nodes[restoredIndex].name);
         nodes[restoredIndex].visible = n.value("v", true);
+        nodes[restoredIndex].selectionLocked =
+            n.value("sl", nodes[restoredIndex].importGroupRoot);
         nodes[restoredIndex].liveLinkManaged = n.value("ll", false);
         nodes[restoredIndex].parentIndex =
             n.value("pi", static_cast<size_t>(-1));

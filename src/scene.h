@@ -29,6 +29,7 @@ struct Node {
   bool visible = true;
   bool liveLinkManaged = false;
   bool importGroupRoot = false;
+  bool selectionLocked = false;
 
   Node();
 };
@@ -106,6 +107,7 @@ bool ReplaceNodeImportedContent(size_t index, ImportedNodePayload payload);
 bool RenameNode(size_t index, const std::string &name);
 bool UpdateNodeTransform(size_t index, const float *columnMajor4x4);
 bool SetNodeVisibility(size_t index, bool visible);
+bool SetNodeSelectionLocked(size_t index, bool locked);
 bool SetNodeLiveLinkManaged(size_t index, bool liveLinkManaged);
 bool SetNodeParent(size_t index, size_t parentIndex);
 bool RemoveNode(size_t index);

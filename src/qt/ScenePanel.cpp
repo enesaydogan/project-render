@@ -6,6 +6,7 @@
 #include <QHBoxLayout>
 #include <QAbstractItemView>
 #include <QFileInfo>
+#include <QHeaderView>
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QMetaObject>
@@ -27,6 +28,8 @@ extern HWND g_hwnd;
 namespace {
 
 constexpr int kNodeIndexRole = Qt::UserRole;
+constexpr int kNodeNameColumn = 0;
+constexpr int kNodeLockColumn = 1;
 
 struct TreeUiState {
     bool liveSyncExpanded = true;
@@ -49,7 +52,7 @@ void CaptureTreeItemState(const QTreeWidgetItem *item, TreeUiState *state)
         return;
     }
 
-    const QVariant nodeIndexData = item->data(0, kNodeIndexRole);
+    const QVariant nodeIndexData = item->data(kNodeNameColumn, kNodeIndexRole);
     if (nodeIndexData.isValid() && item->isExpanded()) {
         state->expandedNodeIndices.insert(nodeIndexData.toInt());
     }
@@ -72,7 +75,7 @@ TreeUiState CaptureTreeUiState(const QTreeWidget *treeWidget)
             continue;
         }
 
-        if (item->data(0, kNodeIndexRole).isValid()) {
+        if (item->data(kNodeNameColumn, kNodeIndexRole).isValid()) {
             CaptureTreeItemState(item, &state);
             continue;
         }
@@ -160,9 +163,11 @@ void ScenePanel::createUi()
     layout->addWidget(m_sourceLabel);
 
     m_nodeList = new QTreeWidget(this);
-    m_nodeList->setColumnCount(1);
+    m_nodeList->setColumnCount(2);
     m_nodeList->setHeaderHidden(true);
     m_nodeList->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_nodeList->header()->setSectionResizeMode(kNodeNameColumn, QHeaderView::Stretch);
+    m_nodeList->header()->setSectionResizeMode(kNodeLockColumn, QHeaderView::ResizeToContents);
     layout->addWidget(m_nodeList);
 
     m_statusLabel = new QLabel(this);
@@ -204,13 +209,31 @@ void ScenePanel::createUi()
             if (!item) {
                 continue;
             }
-            const QVariant nodeIndexData = item->data(0, kNodeIndexRole);
+            const QVariant nodeIndexData = item->data(kNodeNameColumn, kNodeIndexRole);
             if (nodeIndexData.isValid()) {
                 selectedNodeIndices.push_back(
                     static_cast<size_t>(nodeIndexData.toInt()));
             }
         }
         Scene::SelectNodes(selectedNodeIndices);
+    });
+    connect(m_nodeList, &QTreeWidget::itemClicked, this,
+            [this](QTreeWidgetItem *item, int column) {
+        if (m_syncing || !item || column != kNodeLockColumn) {
+            return;
+        }
+        const QVariant nodeIndexData = item->data(kNodeNameColumn, kNodeIndexRole);
+        if (!nodeIndexData.isValid()) {
+            return;
+        }
+        const size_t nodeIndex = static_cast<size_t>(nodeIndexData.toInt());
+        const auto &nodes = Scene::GetNodes();
+        if (nodeIndex >= nodes.size()) {
+            return;
+        }
+        Scene::SetNodeSelectionLocked(nodeIndex,
+                                      !nodes[nodeIndex].selectionLocked);
+        refreshSceneList();
     });
     connect(m_sourceLabel, &QLabel::linkActivated, this, [this](const QString &link) {
         if (link != QStringLiteral("reimport")) {
@@ -235,7 +258,7 @@ int ScenePanel::selectedNodeIndex() const
         return -1;
     }
 
-    const QVariant nodeIndexData = current->data(0, kNodeIndexRole);
+    const QVariant nodeIndexData = current->data(kNodeNameColumn, kNodeIndexRole);
     return nodeIndexData.isValid() ? nodeIndexData.toInt() : -1;
 }
 
@@ -302,6 +325,7 @@ void ScenePanel::refreshSceneList()
     m_nodeList->clear();
     auto *liveSyncRoot = new QTreeWidgetItem(m_nodeList);
     liveSyncRoot->setText(0, tr("Live Sync"));
+    liveSyncRoot->setText(kNodeLockColumn, QString());
     liveSyncRoot->setFlags(liveSyncRoot->flags() & ~Qt::ItemIsSelectable);
     liveSyncRoot->setExpanded(treeState.liveSyncExpanded);
 
@@ -328,8 +352,13 @@ void ScenePanel::refreshSceneList()
             item = new QTreeWidgetItem(m_nodeList);
         }
 
-        item->setText(0, BuildNodeLabel(node));
-        item->setData(0, kNodeIndexRole, static_cast<int>(index));
+        item->setText(kNodeNameColumn, BuildNodeLabel(node));
+        item->setText(kNodeLockColumn, node.selectionLocked ? tr("Lock") : tr("Free"));
+        item->setToolTip(kNodeLockColumn,
+                         node.selectionLocked
+                             ? tr("Click to allow selecting child meshes")
+                             : tr("Click to select this node when descendants are hit"));
+        item->setData(kNodeNameColumn, kNodeIndexRole, static_cast<int>(index));
         if (treeState.expandedNodeIndices.find(static_cast<int>(index)) !=
             treeState.expandedNodeIndices.end()) {
             item->setExpanded(true);
