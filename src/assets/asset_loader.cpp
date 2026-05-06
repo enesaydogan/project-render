@@ -4,6 +4,7 @@
 #include "asset_loader.h"
 #include <algorithm>
 #include <cfloat>
+#include <cctype>
 #include <cstring>
 #include <cmath>
 #include <d3d12.h>
@@ -2598,6 +2599,8 @@ struct LtmGeoBlock {
   const uint8_t *vtd0 = nullptr;
   const uint8_t *vttb = nullptr;
   const uint8_t *po32 = nullptr;
+  const uint8_t *poda = nullptr;
+  std::string    materialName;
   uint16_t       matSlot = 0;
 };
 
@@ -2627,6 +2630,7 @@ struct LtmTextureEntry {
   int uploadedTextureIndex = -1;
   DXGI_FORMAT uploadedFormat = DXGI_FORMAT_UNKNOWN;
   DXGI_FORMAT authoredFormat = DXGI_FORMAT_UNKNOWN;
+  std::string materialName;
 };
 
 static int LtmFindNearestMaterialSlot(const uint8_t *base,
@@ -2719,19 +2723,64 @@ static bool LtmIsBc7Format(DXGI_FORMAT fmt) {
          fmt == DXGI_FORMAT_BC7_UNORM_SRGB;
 }
 
+static std::string LtmReadUtf16AsciiString(const uint8_t *payload,
+                                           uint32_t size) {
+  std::string out;
+  if (!payload)
+    return out;
+  const uint32_t chars = size / 2;
+  out.reserve(chars);
+  for (uint32_t i = 0; i < chars; ++i) {
+    const uint8_t lo = payload[i * 2];
+    const uint8_t hi = payload[i * 2 + 1];
+    if (lo == 0 && hi == 0)
+      break;
+    if (hi != 0 || lo < 0x20 || lo > 0x7e)
+      break;
+    out.push_back(static_cast<char>(lo));
+  }
+  while (!out.empty() && out.back() == ' ')
+    out.pop_back();
+  return out;
+}
+
+static std::string LtmFindNearestUtf16ChunkString(const uint8_t *base,
+                                                  const uint8_t *fileEnd,
+                                                  const uint8_t *beforePos,
+                                                  const char tag[4],
+                                                  size_t backScanBytes =
+                                                      256 * 1024) {
+  if (!base || !fileEnd || !beforePos || beforePos <= base + 8)
+    return {};
+
+  const uint8_t *start =
+      beforePos - (std::min)(backScanBytes, (size_t)(beforePos - base));
+  const uint8_t *p = beforePos - 8;
+  while (p >= start) {
+    if (memcmp(p, tag, 4) == 0 && p + 8 <= fileEnd) {
+      const uint32_t sz = *reinterpret_cast<const uint32_t *>(p + 4);
+      if (sz > 0 && sz <= 512 && p + 8 + sz <= fileEnd) {
+        std::string text = LtmReadUtf16AsciiString(p + 8, sz);
+        if (!text.empty())
+          return text;
+      }
+    }
+    if (p == start)
+      break;
+    --p;
+  }
+  return {};
+}
+
 static void LtmApplyLmodTextureOrderHeuristics(
     const std::vector<LtmTextureEntry> &textureEntries,
     std::vector<LtmTextureSemantic> &semanticByEntry) {
   std::vector<size_t> colorEntries;
-  bool hasNormal = false;
 
   for (size_t ti = 0; ti < textureEntries.size(); ++ti) {
     const LtmTextureEntry &entry = textureEntries[ti];
     if (entry.uploadedTextureIndex < 0)
       continue;
-
-    if (semanticByEntry[ti] == LtmTextureSemantic::Normal)
-      hasNormal = true;
 
     if (entry.uploadedFormat == DXGI_FORMAT_BC4_UNORM ||
         entry.uploadedFormat == DXGI_FORMAT_BC4_SNORM) {
@@ -2751,16 +2800,6 @@ static void LtmApplyLmodTextureOrderHeuristics(
   // LMOD assets do not appear to include the leading viewer/preview texture
   // run that EverMotion LTM files do. The first BC7 map is the surface color.
   semanticByEntry[colorEntries[0]] = LtmTextureSemantic::Diffuse;
-
-  // In observed LMOD assets, an extra sRGB BC7 map after diffuse is a tangent
-  // normal map even when the TextureList metadata names are not authoritative.
-  if (!hasNormal && colorEntries.size() > 1) {
-    const size_t normalCandidate = colorEntries[1];
-    if (textureEntries[normalCandidate].authoredFormat ==
-        DXGI_FORMAT_BC7_UNORM_SRGB) {
-      semanticByEntry[normalCandidate] = LtmTextureSemantic::Normal;
-    }
-  }
 }
 
 static bool LtmPayloadStartsWithUtf16Name(const uint8_t *payload, uint32_t size,
@@ -3037,7 +3076,9 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
     // VTD1 and VTO1 are optional UV channel 1; skip them
     skip("VTD1");
     skip("VTO1");
-    if (!consume("VTTB", &gb.vttb))        { ++scan; continue; }
+    // Some LMOD meshes omit tangents; keep the block and use the fallback
+    // tangent generated below.
+    consume("VTTB", &gb.vttb);
     // VCNC: per-vertex material slot
     if (p + 8 <= fileEnd && memcmp(p, "VCNC", 4) == 0) {
       uint32_t sz = *reinterpret_cast<const uint32_t *>(p + 4);
@@ -3053,7 +3094,7 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
       if (sz >= 4) gb.indexCount = *reinterpret_cast<const uint32_t *>(p + 8);
       p += 8 + sz;
     }
-    // PO32: index data
+    // PO32/PODA: index data. PODA is a 16-bit index stream used by some LMODs.
     if (p + 8 <= fileEnd && memcmp(p, "PO32", 4) == 0) {
       uint32_t sz = *reinterpret_cast<const uint32_t *>(p + 4);
       if (p + 8 + sz <= fileEnd) {
@@ -3061,9 +3102,23 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
         gb.indexCount = sz / 4;
         p += 8 + sz;
       }
+    } else if (p + 8 <= fileEnd && memcmp(p, "PODA", 4) == 0) {
+      uint32_t sz = *reinterpret_cast<const uint32_t *>(p + 4);
+      if (p + 8 + sz <= fileEnd) {
+        gb.poda = p + 8;
+        gb.indexCount = sz / 2;
+        p += 8 + sz;
+      }
     }
 
-    if (gb.vppi && gb.po32 && gb.indexCount > 0) {
+    if (gb.vppi && (gb.po32 || gb.poda) && gb.indexCount > 0) {
+      if (isLmod) {
+        gb.materialName =
+            LtmFindNearestUtf16ChunkString(base, fileEnd, scan, "STWA");
+        if (gb.materialName.empty())
+          gb.materialName =
+              LtmFindNearestUtf16ChunkString(base, fileEnd, scan, "CHNW");
+      }
       geoBlocks.push_back(gb);
       scan = p; // continue scanning after this block
     } else {
@@ -3072,6 +3127,7 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
   }
 
   // ---- Scan for embedded textures (TEXM + TEXT groups) ------------------
+  std::string currentLmodTextureMaterialName;
   for (const uint8_t *scan = base; scan + 12 <= fileEnd; ++scan) {
     if (memcmp(scan, "TEXM", 4) != 0)
       continue;
@@ -3083,6 +3139,14 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
     LtmTextureEntry entry;
     entry.mapType = *reinterpret_cast<const uint32_t *>(scan + 8);
     entry.materialSlot = LtmFindNearestMaterialSlot(base, fileEnd, scan);
+    if (isLmod) {
+      entry.materialName =
+          LtmFindNearestUtf16ChunkString(base, fileEnd, scan, "STWA");
+      if (!entry.materialName.empty())
+        currentLmodTextureMaterialName = entry.materialName;
+      else
+        entry.materialName = currentLmodTextureMaterialName;
+    }
 
     const uint8_t *p = scan + 8 + texmSize;
     for (int guard = 0; guard < 32 && p + 8 <= fileEnd; ++guard) {
@@ -3141,16 +3205,33 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
 
   // De-duplicate material slots.
   std::vector<uint16_t> uniqueSlots;
-  for (const auto &gb : geoBlocks) {
-    bool found = false;
-    for (auto s : uniqueSlots) if (s == gb.matSlot) { found = true; break; }
-    if (!found) uniqueSlots.push_back(gb.matSlot);
+  std::vector<std::string> uniqueMaterialNames;
+  for (size_t bi = 0; bi < geoBlocks.size(); ++bi) {
+    const auto &gb = geoBlocks[bi];
+    if (isLmod) {
+      std::string name = gb.materialName.empty()
+                             ? ("LMOD_mesh_" + std::to_string(bi))
+                             : gb.materialName;
+      bool found = false;
+      for (const std::string &existing : uniqueMaterialNames) {
+        if (existing == name) {
+          found = true;
+          break;
+        }
+      }
+      if (!found)
+        uniqueMaterialNames.push_back(name);
+    } else {
+      bool found = false;
+      for (auto s : uniqueSlots) if (s == gb.matSlot) { found = true; break; }
+      if (!found) uniqueSlots.push_back(gb.matSlot);
+    }
   }
 
   // Read companion .inn to find the primary surface shader slot.
   const int innShaderNr = LtmReadInnSurfaceShaderNr(path);
   int primaryMi = -1;
-  if (innShaderNr >= 0) {
+  if (!isLmod && innShaderNr >= 0) {
     for (int si = 0; si < (int)uniqueSlots.size(); ++si) {
       if ((int)uniqueSlots[(size_t)si] == innShaderNr) {
         primaryMi = si;
@@ -3163,11 +3244,31 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
 
   std::vector<int> slotToMaterialIndex(65536, -1);
   if (outMaterials) {
-    for (uint16_t slot : uniqueSlots) {
-      Material mat;
-      snprintf(mat.name, sizeof(mat.name), "LTM_mat_%u", (unsigned)slot);
-      slotToMaterialIndex[slot] = static_cast<int>(outMaterials->size());
-      outMaterials->push_back(mat);
+    if (isLmod) {
+      for (const std::string &name : uniqueMaterialNames) {
+        Material mat;
+        snprintf(mat.name, sizeof(mat.name), "%s", name.c_str());
+        std::string lowerName = name;
+        std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(),
+                       [](unsigned char c) {
+                         return static_cast<char>(std::tolower(c));
+                       });
+        if (lowerName.find("glass") != std::string::npos) {
+          mat.diffuseColor[0] = 0.02f;
+          mat.diffuseColor[1] = 0.02f;
+          mat.diffuseColor[2] = 0.025f;
+          mat.roughness = 0.02f;
+          mat.specularWeight = 1.0f;
+        }
+        outMaterials->push_back(mat);
+      }
+    } else {
+      for (uint16_t slot : uniqueSlots) {
+        Material mat;
+        snprintf(mat.name, sizeof(mat.name), "LTM_mat_%u", (unsigned)slot);
+        slotToMaterialIndex[slot] = static_cast<int>(outMaterials->size());
+        outMaterials->push_back(mat);
+      }
     }
   }
 
@@ -3202,11 +3303,31 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
     }
 
     std::vector<uint32_t> inds(ic);
-    memcpy(inds.data(), gb.po32, (size_t)ic * 4);
+    if (gb.po32) {
+      memcpy(inds.data(), gb.po32, (size_t)ic * 4);
+    } else if (gb.poda) {
+      for (uint32_t i = 0; i < ic; ++i) {
+        uint16_t idx = 0;
+        memcpy(&idx, gb.poda + (size_t)i * 2, 2);
+        inds[i] = idx;
+      }
+    }
 
     int localMatIdx = 0;
-    for (int si = 0; si < (int)uniqueSlots.size(); ++si)
-      if (uniqueSlots[si] == gb.matSlot) { localMatIdx = si; break; }
+    if (isLmod) {
+      const std::string name = gb.materialName.empty()
+                                   ? ("LMOD_mesh_" + std::to_string(bi))
+                                   : gb.materialName;
+      for (int mi = 0; mi < (int)uniqueMaterialNames.size(); ++mi) {
+        if (uniqueMaterialNames[(size_t)mi] == name) {
+          localMatIdx = mi;
+          break;
+        }
+      }
+    } else {
+      for (int si = 0; si < (int)uniqueSlots.size(); ++si)
+        if (uniqueSlots[si] == gb.matSlot) { localMatIdx = si; break; }
+    }
 
     GpuMesh gm = LoadMeshFromMemory(verts, inds);
     gm.materialIndex = localMatIdx;
@@ -3319,6 +3440,21 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
         const LtmTextureEntry &entry = textureEntries[ti];
         if (entry.uploadedTextureIndex < 0)
           continue;
+        if (isLmod && !entry.materialName.empty()) {
+          bool linkedByName = false;
+          for (size_t mi = 0; mi < uniqueMaterialNames.size() &&
+                              mi < perMaterial.size(); ++mi) {
+            if (uniqueMaterialNames[mi] == entry.materialName) {
+              perMaterial[mi].push_back(&entry);
+              perMaterialEntryIndices[mi].push_back(ti);
+              hasMaterialLinkedTextures = true;
+              linkedByName = true;
+              break;
+            }
+          }
+          if (linkedByName)
+            continue;
+        }
         if (entry.materialSlot >= 0 && entry.materialSlot < (int)slotToMaterialIndex.size()) {
           int mi = slotToMaterialIndex[(size_t)entry.materialSlot];
           if (mi >= 0 && mi < (int)perMaterial.size()) {
