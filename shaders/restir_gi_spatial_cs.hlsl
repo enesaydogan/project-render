@@ -8,6 +8,7 @@
 cbuffer Camera : register(b0)
 {
     float globalFrameCount : packoffset(c4.y);
+    float accumulationCount : packoffset(c5.w);
     float dlssRayReconstruction : packoffset(c10.w);
 }
 
@@ -208,7 +209,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID,
     }
 
     // Temporal reuse from previous ping-pong side.
-    if (frame > 0) {
+    if (accumulationCount > 0.0) {
         uint centerIdx = tile_index(sharedCenter);
         float4 prev0 = s_prevGi0Tile[centerIdx];
         float4 prev1 = s_prevGi1Tile[centerIdx];
@@ -216,28 +217,29 @@ void CSMain(uint3 dtid : SV_DispatchThreadID,
         GI_Reservoir prev = unpack_gi_reservoir(prev0, prev1, prev2);
         prev.M = min(prev.M, 15);
         combine_gi_reservoirs(res, prev, 1.0, rng);
-    }
 
-    // Spatial reuse from previous frame neighbors.
-    static const int2 kOffsets[4] = {
-        int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1)
-    };
-    [unroll]
-    for (uint i = 0; i < 4; ++i) {
-        uint2 sN = uint2(int2(sharedCenter) + kOffsets[i]);
-        float4 neighNormal = s_normalTile[tile_index(sN)];
-        float neighDepth = s_depthTile[tile_index(sN)];
-        if (!IsSpatiallyCompatibleData(centerNormal, centerDepth,
-                                       neighNormal, neighDepth,
-                                       0.94, 0.010)) continue;
+        // Spatial reuse from previous frame neighbors.
+        // Only run if history is valid, otherwise we pull uninitialized neighbor reservoirs!
+        static const int2 kOffsets[4] = {
+            int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1)
+        };
+        [unroll]
+        for (uint i = 0; i < 4; ++i) {
+            uint2 sN = uint2(int2(sharedCenter) + kOffsets[i]);
+            float4 neighNormal = s_normalTile[tile_index(sN)];
+            float neighDepth = s_depthTile[tile_index(sN)];
+            if (!IsSpatiallyCompatibleData(centerNormal, centerDepth,
+                                           neighNormal, neighDepth,
+                                           0.94, 0.010)) continue;
 
-        uint idx = tile_index(sN);
-        float4 d0 = s_prevGi0Tile[idx];
-        float4 d1 = s_prevGi1Tile[idx];
-        float4 d2 = s_prevGi2Tile[idx];
-        GI_Reservoir neigh = unpack_gi_reservoir(d0, d1, d2);
-        neigh.M = min(neigh.M, 8);
-        combine_gi_reservoirs(res, neigh, 1.0, rng);
+            uint idx = tile_index(sN);
+            float4 d0 = s_prevGi0Tile[idx];
+            float4 d1 = s_prevGi1Tile[idx];
+            float4 d2 = s_prevGi2Tile[idx];
+            GI_Reservoir neigh = unpack_gi_reservoir(d0, d1, d2);
+            neigh.M = min(neigh.M, 8);
+            combine_gi_reservoirs(res, neigh, 1.0, rng);
+        }
     }
 
     finalize_gi_reservoir(res, 1.0);

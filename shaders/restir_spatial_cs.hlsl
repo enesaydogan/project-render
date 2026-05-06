@@ -195,34 +195,35 @@ void CSMain(uint3 dtid : SV_DispatchThreadID,
     float3 P = ReconstructWorldPos(pix, dim, centerDepth);
 
     // Temporal reuse
-    if (frame > 0) {
+    if (accumulationCount > 0.0) {
         float4 prevData = s_prevReservoirTile[tile_index(sharedCenter)];
         Reservoir prev = unpack_reservoir(prevData);
         prev.M = min(prev.M, 30);
         float p_target = EvalCandidatePTarget(prev.lightIndex, N, P);
         combine_reservoirs(res, prev, p_target, rng);
-    }
 
-    // Spatial reuse from 4 immediate neighbors
-    static const int2 kOffsets[4] = {
-        int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1)
-    };
-    [unroll]
-    for (uint i = 0; i < 4; ++i) {
-        uint2 sN = uint2(int2(sharedCenter) + kOffsets[i]);
-        float4 neighNormal = s_normalTile[tile_index(sN)];
-        float neighDepth = s_depthTile[tile_index(sN)];
-        if (!IsSpatiallyCompatibleData(centerNormalRoughness, centerDepth,
-                                       neighNormal, neighDepth,
-                                       0.96, 0.006)) {
-            continue;
+        // Spatial reuse from 4 immediate neighbors
+        // Only run if history is valid, otherwise we pull uninitialized neighbor reservoirs!
+        static const int2 kOffsets[4] = {
+            int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1)
+        };
+        [unroll]
+        for (uint i = 0; i < 4; ++i) {
+            uint2 sN = uint2(int2(sharedCenter) + kOffsets[i]);
+            float4 neighNormal = s_normalTile[tile_index(sN)];
+            float neighDepth = s_depthTile[tile_index(sN)];
+            if (!IsSpatiallyCompatibleData(centerNormalRoughness, centerDepth,
+                                           neighNormal, neighDepth,
+                                           0.96, 0.006)) {
+                continue;
+            }
+
+            float4 neighData = s_prevReservoirTile[tile_index(sN)];
+            Reservoir neigh = unpack_reservoir(neighData);
+            neigh.M = min(neigh.M, 8);
+            float p_target = EvalCandidatePTarget(neigh.lightIndex, N, P);
+            combine_reservoirs(res, neigh, p_target, rng);
         }
-
-        float4 neighData = s_prevReservoirTile[tile_index(sN)];
-        Reservoir neigh = unpack_reservoir(neighData);
-        neigh.M = min(neigh.M, 8);
-        float p_target = EvalCandidatePTarget(neigh.lightIndex, N, P);
-        combine_reservoirs(res, neigh, p_target, rng);
     }
 
     float final_p_target = EvalCandidatePTarget(res.lightIndex, N, P);
