@@ -46,6 +46,10 @@ void UpdateLights(const std::vector<Light> &lights,
                   bool resetAccumulation = true);
 // Reset accumulation for path tracing
 void ResetAccumulation();
+// Scene texture resources/descriptors changed. The next DXR frame must rebuild
+// its private shader-visible texture table even if the descriptor range/count
+// did not change.
+void MarkTextureDescriptorTableDirty();
 // Attach Streamline manager (optional) for DLSS-SR / DLSS-RR evaluation.
 void SetStreamlineManager(StreamlineManager *streamline);
 // Resets Streamline/DLSS temporal history without touching DXR accumulation.

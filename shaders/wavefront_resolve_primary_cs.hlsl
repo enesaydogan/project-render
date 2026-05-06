@@ -57,14 +57,17 @@ inline Reservoir LoadWavefrontDiReservoir(uint2 pixel)
 inline void ClearWavefrontGiReservoir(uint2 pixel)
 {
     const float4 zero4 = float4(0.0, 0.0, 0.0, 0.0);
+    // Clear the same ping-pong side StoreWavefrontGiReservoir writes this frame.
+    // Miss/disabled-GI pixels must not leave stale current-frame reservoirs for
+    // the spatial reuse pass to consume while accumulation keeps advancing.
     if (WavefrontReservoirFlip()) {
-        g_gi_reservoir_b0[pixel] = zero4;
-        g_gi_reservoir_b1[pixel] = zero4;
-        g_gi_reservoir_b2[pixel] = zero4;
-    } else {
         g_gi_reservoir_a0[pixel] = zero4;
         g_gi_reservoir_a1[pixel] = zero4;
         g_gi_reservoir_a2[pixel] = zero4;
+    } else {
+        g_gi_reservoir_b0[pixel] = zero4;
+        g_gi_reservoir_b1[pixel] = zero4;
+        g_gi_reservoir_b2[pixel] = zero4;
     }
 }
 
@@ -1097,8 +1100,12 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             }
 
             uint previousValue = 0u;
+            // Split only true delta glass. Broad thin-walled/translucent
+            // materials still use stochastic continuation so they do not
+            // explode queue pressure or destabilize temporal reuse.
             const bool deterministicThinGlass =
-                thinWalled && transmission > 1.0e-5;
+                thinWalled && transmission > 1.0e-5 &&
+                ShouldResolveDeltaTransmission(roughness, transmission, ior);
             if (deterministicThinGlass) {
                 float fresnel =
                     saturate(FresnelDielectric(dot(-rayDir, normal), ior) *

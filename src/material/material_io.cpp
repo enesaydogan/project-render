@@ -128,21 +128,14 @@ void RestoreMaterialsFromMetadata(const nlohmann::json &materialsJson,
     const auto &savedMaterial = materialsJson[jsonIndex];
     const std::string name = savedMaterial.value("n", "Material");
 
-    int materialIndex = -1;
-    for (size_t existingIndex = 0; existingIndex < materials->size();
-         ++existingIndex) {
-      if (std::string((*materials)[existingIndex].name) == name) {
-        materialIndex = static_cast<int>(existingIndex);
-        break;
-      }
-    }
-
-    if (materialIndex == -1) {
-      Asset::Material material;
-      strncpy_s(material.name, name.c_str(), sizeof(material.name) - 1);
-      materials->push_back(material);
-      materialIndex = static_cast<int>(materials->size()) - 1;
-    }
+    // Scene files store material slots by index. Display names are not unique
+    // enough to use as restore identity; collapsing same-named materials
+    // changes mesh material indices and the wavefront material-bin path.
+    Asset::Material restoredMaterial;
+    strncpy_s(restoredMaterial.name, name.c_str(),
+              sizeof(restoredMaterial.name) - 1);
+    materials->push_back(restoredMaterial);
+    const int materialIndex = static_cast<int>(materials->size()) - 1;
 
     (*remap)[jsonIndex] = materialIndex;
     auto &material = (*materials)[static_cast<size_t>(materialIndex)];

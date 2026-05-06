@@ -241,6 +241,8 @@ void StartSceneIoJob(bool isSave, const std::string &utf8Path) {
   // Scene I/O reads or mutates global mesh/material/texture arrays and DXR
   // resources. The main thread pauses scene rendering and editing while any job
   // is active so async saves cannot serialize half-applied scene edits.
+  DxrRenderer::WaitForAsyncRestirIdle();
+  WaitGPUIdle();
 
   g_sceneIoJob.active = true;
   g_sceneIoJob.isSave = isSave;

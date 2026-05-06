@@ -228,8 +228,9 @@ static constexpr UINT kWavefrontDispatchArgCount = 4;
 static constexpr UINT kWavefrontReservedUint4Count = 16;
 static constexpr UINT64 kWavefrontMinQueueEntries = 65536ull;
 static constexpr UINT64 kWavefrontMaxPathQueueEntries = 4194304ull; // 4M
-static constexpr UINT64 kWavefrontMaxShadowQueueEntries = 4194304ull; // 4M
+static constexpr UINT64 kWavefrontMaxShadowQueueEntries = 8388608ull; // 8M
 static constexpr UINT64 kWavefrontPathQueueMultiplier = 2ull;
+static constexpr UINT64 kWavefrontShadowQueueMultiplier = 6ull;
 static constexpr UINT kWavefrontSecondaryResolveDispatchArgsIndex = 2;
 static constexpr UINT kWavefrontSecondaryDispatchRaysReservedSlot = 0;
 static constexpr UINT kWavefrontShadowDispatchRaysReservedSlot = 7;
@@ -4259,8 +4260,13 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     s_wavefrontHitQueueCapacity = ComputeWavefrontQueueCapacity(
       s_outputWidth, s_outputHeight, kWavefrontMaxPathQueueEntries,
       kWavefrontPathQueueMultiplier);
+    // Secondary resolve can enqueue sun, local-light, and environment
+    // visibility tasks for each active path. If this queue overflows, atomic
+    // allocation keeps a nondeterministic subset of tasks, which reads as
+    // random lighting/reservoir flicker while accumulation continues.
     s_wavefrontShadowQueueCapacity = ComputeWavefrontQueueCapacity(
-      s_outputWidth, s_outputHeight, kWavefrontMaxShadowQueueEntries, 3ull);
+      s_outputWidth, s_outputHeight, kWavefrontMaxShadowQueueEntries,
+      kWavefrontShadowQueueMultiplier);
 
     CreateStructuredBufferUav(s_wavefrontQueueCountersBuffer,
                   kWavefrontQueueCounterCount, sizeof(UINT),
@@ -4483,6 +4489,16 @@ static bool GrassTlasNeedsCameraRefresh() {
       (kGrassTlasCameraRefreshMeters * kGrassTlasCameraRefreshMeters);
   if (!movedPastRefreshDistance) {
     return false;
+  }
+
+  // Camera movement already resets accumulation before RenderFrame. If the
+  // history is still cold, refresh the grass TLAS immediately so wavefront does
+  // not converge several clean samples against stale grass and then visibly
+  // reset after the idle-settle delay.
+  const bool accumulationCold =
+      (s_accumulation.GetFrameCount() == 0u) && (s_rrStillFrameSpp == 0u);
+  if (accumulationCold) {
+    return true;
   }
 
   const float idleMs =
@@ -5466,6 +5482,8 @@ void ResetAccumulation() {
     fprintf(stderr, "DxrRenderer: Accumulation Reset\n");
   }
 }
+
+void MarkTextureDescriptorTableDirty() { s_textureTableDirty = true; }
 
 void SetStreamlineManager(StreamlineManager *streamline) {
   s_streamline = streamline;

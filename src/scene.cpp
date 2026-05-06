@@ -334,6 +334,7 @@ static bool WriteTextureSrv(UINT textureIndex, const Asset::Texture &tex) {
   srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
   srvDesc.Texture2D.MipLevels = tex.mipLevels;
   g_device->CreateShaderResourceView(tex.resource.Get(), &srvDesc, cpu);
+  DxrRenderer::MarkTextureDescriptorTableDirty();
   return true;
 }
 
@@ -4497,6 +4498,7 @@ void ResetScene() {
   AnimationSequence::Clear();
   SavedViews::Clear();
   g_textureDescriptorCount = 0;
+  DxrRenderer::MarkTextureDescriptorTableDirty();
   // Note: In a full implementation, we should also release GPU
   // resources/descriptors and reset the IBL manager, but for now this clears
   // the CPU state which is then rebuilt by LoadScene.
