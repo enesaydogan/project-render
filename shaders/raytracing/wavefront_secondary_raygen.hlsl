@@ -77,7 +77,14 @@ void WavefrontSecondaryRayGen()
     ray.TMin = 0.002;
     ray.TMax = 10000.0;
 
-    RayPayload payload = InitWavefrontSecondaryPayload(rayType);
+    // Legacy deterministic glass reflections trace with GI_EVAL payload
+    // semantics so miss rays carry the full reflected environment.  Keep the
+    // queued path state as REFLECTION for wavefront scheduling and bounce
+    // accounting; only the traced payload type changes the hit/miss shading
+    // contract.
+    const uint payloadRayType =
+        (rayType == RAY_TYPE_REFLECTION) ? RAY_TYPE_GI_EVAL : rayType;
+    RayPayload payload = InitWavefrontSecondaryPayload(payloadRayType);
     TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
     SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
 

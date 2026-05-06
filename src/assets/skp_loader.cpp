@@ -1196,8 +1196,11 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
         if (mtl.diffuseColor[3] < 0.999f) {
           mtl.alphaMode = "BLEND";
           mtl.thinWalled = 1.0f;
-          const float transmission =
-              std::clamp(1.0f - mtl.diffuseColor[3], 0.0f, 1.0f);
+          // SketchUp scalar opacity is an authoring/display control, not a
+          // physical absorption coefficient.  In DXR, imported transparent
+          // panes should behave like energy-conserving thin architectural
+          // glass instead of dropping the non-opaque portion into black.
+          const float transmission = 1.0f;
           mtl.transmissionWeight =
               (std::max)(mtl.transmissionWeight, transmission);
           mtl.transmissionColor[0] = mtl.diffuseColor[0];

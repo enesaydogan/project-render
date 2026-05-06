@@ -732,6 +732,12 @@ void ClosestHitImpl(inout RayPayload payload,
     if (alphaCutoff < 0.0 && opacity < 0.999) {
         transmission = max(transmission, 1.0 - saturate(opacity));
     }
+    if (alphaCutoff < 0.0 &&
+        ((matFlags & (MATERIAL_FLAG_GLASS | MATERIAL_FLAG_THIN_WALLED)) != 0) &&
+        arch0.z > 0.5 &&
+        transmission > 1.0e-5) {
+        transmission = 1.0;
+    }
     float3 DiffuseAlbedo = BaseColor * (1.0 - metalness) * (1.0 - transmission);
     if (alphaCutoff < 0.0) {
         DiffuseAlbedo *= saturate(opacity);
@@ -1131,12 +1137,14 @@ void AnyHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes a
         }
     }
 
-    // For shadow or diffuse (GI visibility) rays hitting glass or thin-walled materials, we want to let light through.
-    // This is a critical optimization for interior scenes with windows.
+    // For shadow or diffuse (GI visibility) rays hitting glass or thin-walled
+    // materials, we want to let light through.  Smooth BLEND glass still sets
+    // the alpha-tested runtime flag so any-hit can sample texture alpha, but
+    // only MASK/cutout materials should block this visibility shortcut.
     if (rayType == RAY_TYPE_SHADOW || rayType == RAY_TYPE_DIFFUSE || rayType == RAY_TYPE_GI_EVAL) {
         const bool transmissiveVisibility =
             ((matFlags & (MATERIAL_FLAG_GLASS | MATERIAL_FLAG_THIN_WALLED | MATERIAL_FLAG_TRANSLUCENT)) != 0) &&
-            !alphaTested;
+            alphaCutoff < 0.0;
         if (transmissiveVisibility) {
             IgnoreHit();
         }

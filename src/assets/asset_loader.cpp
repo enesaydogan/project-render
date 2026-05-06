@@ -4,6 +4,7 @@
 #include "asset_loader.h"
 #include <algorithm>
 #include <cfloat>
+#include <cstring>
 #include <cmath>
 #include <d3d12.h>
 #include <filesystem>
@@ -2325,7 +2326,7 @@ bool LoadSTL(const std::string &path, std::vector<GpuMesh> &outMeshes,
 }
 
 // ---------------------------------------------------------------------------
-// LoadLTM — proprietary .ltm chunked model format
+// LoadLTM — proprietary .ltm/.lmod chunked model format
 // ---------------------------------------------------------------------------
 
 #pragma pack(push, 1)
@@ -2713,6 +2714,104 @@ static LtmTextureSemantic LtmInferSemanticFromEntry(const LtmTextureEntry &entry
   return LtmTextureSemantic::Unknown;
 }
 
+static bool LtmPayloadStartsWithUtf16Name(const uint8_t *payload, uint32_t size,
+                                          const char *name) {
+  if (!payload || !name)
+    return false;
+
+  const size_t len = strlen(name);
+  if (size < len * 2)
+    return false;
+
+  for (size_t i = 0; i < len; ++i) {
+    if (payload[i * 2] != static_cast<uint8_t>(name[i]) ||
+        payload[i * 2 + 1] != 0) {
+      return false;
+    }
+  }
+
+  if (size >= (len + 1) * 2) {
+    const uint16_t next =
+        static_cast<uint16_t>(payload[len * 2]) |
+        (static_cast<uint16_t>(payload[len * 2 + 1]) << 8);
+    return next == 0 || next == 0x20;
+  }
+  return true;
+}
+
+static LtmTextureSemantic LtmSemanticFromUtf16NamePayload(const uint8_t *payload,
+                                                          uint32_t size) {
+  if (LtmPayloadStartsWithUtf16Name(payload, size, "Diffuse"))
+    return LtmTextureSemantic::Diffuse;
+  if (LtmPayloadStartsWithUtf16Name(payload, size, "Normal"))
+    return LtmTextureSemantic::Normal;
+  if (LtmPayloadStartsWithUtf16Name(payload, size, "Opacity") ||
+      LtmPayloadStartsWithUtf16Name(payload, size, "Alpha"))
+    return LtmTextureSemantic::Opacity;
+  if (LtmPayloadStartsWithUtf16Name(payload, size, "Emissive") ||
+      LtmPayloadStartsWithUtf16Name(payload, size, "Emission"))
+    return LtmTextureSemantic::Emissive;
+  if (LtmPayloadStartsWithUtf16Name(payload, size, "Occlusion"))
+    return LtmTextureSemantic::Occlusion;
+  if (LtmPayloadStartsWithUtf16Name(payload, size, "Roughness"))
+    return LtmTextureSemantic::Roughness;
+  if (LtmPayloadStartsWithUtf16Name(payload, size, "Metalness"))
+    return LtmTextureSemantic::Metalness;
+  return LtmTextureSemantic::Unknown;
+}
+
+static std::vector<LtmTextureSemantic>
+LtmReadLmodTextureSemanticHints(const uint8_t *base, const uint8_t *fileEnd) {
+  std::vector<LtmTextureSemantic> hints;
+  if (!base || !fileEnd || fileEnd <= base)
+    return hints;
+
+  const uint8_t *firstTexm = nullptr;
+  for (const uint8_t *p = base; p + 8 <= fileEnd; ++p) {
+    if (memcmp(p, "TEXM", 4) != 0)
+      continue;
+    const uint32_t sz = *reinterpret_cast<const uint32_t *>(p + 4);
+    if (sz >= 4 && p + 8 + sz <= fileEnd) {
+      firstTexm = p;
+      break;
+    }
+  }
+  if (!firstTexm)
+    return hints;
+
+  // LMOD stores texture channel names (Diffuse, Emissive, etc.) as IINW
+  // entries before the embedded Texture chunks. The DDS headers are often
+  // authored as linear BC7, so these names are stronger than format hints.
+  bool sawTextureList = false;
+  const size_t bytesBeforeTexm = static_cast<size_t>(firstTexm - base);
+  const uint8_t *scanEnd = base + (std::min)(bytesBeforeTexm, (size_t)256 * 1024);
+  for (const uint8_t *p = base; p + 8 <= scanEnd; ++p) {
+    if (memcmp(p, "IINW", 4) != 0)
+      continue;
+    const uint32_t sz = *reinterpret_cast<const uint32_t *>(p + 4);
+    if (sz == 0 || sz > 512 || p + 8 + sz > fileEnd)
+      continue;
+    const uint8_t *payload = p + 8;
+    if (LtmPayloadStartsWithUtf16Name(payload, sz, "TextureList")) {
+      sawTextureList = true;
+      continue;
+    }
+    if (!sawTextureList)
+      continue;
+    if (LtmPayloadStartsWithUtf16Name(payload, sz, "ObjectData") ||
+        LtmPayloadStartsWithUtf16Name(payload, sz, "surfaceNr") ||
+        LtmPayloadStartsWithUtf16Name(payload, sz, "MaterialInfo")) {
+      break;
+    }
+
+    const LtmTextureSemantic semantic =
+        LtmSemanticFromUtf16NamePayload(payload, sz);
+    if (semantic != LtmTextureSemantic::Unknown)
+      hints.push_back(semantic);
+  }
+  return hints;
+}
+
 // Scan for a 4-byte tag starting at or after `from`, up to `limit`.
 // Returns pointer to the tag if found and its payload is within bounds, else nullptr.
 static const uint8_t *LtmScanTag(const uint8_t *from, const uint8_t *limit,
@@ -2845,6 +2944,9 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
 
   std::vector<LtmGeoBlock> geoBlocks;
   std::vector<LtmTextureEntry> textureEntries;
+  std::string ext = std::filesystem::path(path).extension().string();
+  std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+  const bool isLmod = ext == ".lmod";
 
   // Walk the file scanning for VRCO
   for (const uint8_t *scan = base; scan + 8 <= fileEnd; ) {
@@ -2977,6 +3079,17 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
   fprintf(stderr, "LTM: %zu mesh block(s), %zu DDS texture(s) - %s\n",
           geoBlocks.size(), textureEntries.size(), path.c_str());
 
+  const std::vector<LtmTextureSemantic> textureSemanticHints =
+      isLmod ? LtmReadLmodTextureSemanticHints(base, fileEnd)
+             : std::vector<LtmTextureSemantic>();
+  if (!textureSemanticHints.empty()) {
+    fprintf(stderr, "LMOD: %zu texture semantic hint(s):",
+            textureSemanticHints.size());
+    for (LtmTextureSemantic semantic : textureSemanticHints)
+      fprintf(stderr, " %s", LtmTextureSemanticName(semantic));
+    fprintf(stderr, "\n");
+  }
+
   // De-duplicate material slots.
   std::vector<uint16_t> uniqueSlots;
   for (const auto &gb : geoBlocks) {
@@ -3087,6 +3200,10 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
               ? &(*outTextures)[(size_t)entry.uploadedTextureIndex]
               : nullptr;
       semanticByEntry[ti] = LtmInferSemanticFromEntry(entry, uploadedTex);
+      if (ti < textureSemanticHints.size() &&
+          textureSemanticHints[ti] != LtmTextureSemantic::Unknown) {
+        semanticByEntry[ti] = textureSemanticHints[ti];
+      }
     }
 
     // Second-pass pairing heuristic: same-size sRGB + linear textures are
@@ -3225,6 +3342,7 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
           std::vector<int> diffuseTex;
           std::vector<int> normalTex;
           std::vector<int> packedTex;
+          std::vector<int> emissiveTex;
           std::vector<uint32_t> packedTexSizes; // parallel to packedTex
           for (size_t ti = 0; ti < textureEntries.size(); ++ti) {
             const LtmTextureEntry &entry = textureEntries[ti];
@@ -3242,6 +3360,9 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
             case LtmTextureSemantic::Metalness:
               packedTex.push_back(entry.uploadedTextureIndex);
               packedTexSizes.push_back(entry.texSize);
+              break;
+            case LtmTextureSemantic::Emissive:
+              emissiveTex.push_back(entry.uploadedTextureIndex);
               break;
             default:
               break;
@@ -3277,6 +3398,8 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
             mat.normalTexture = normalTex[(setIdx + normOff) % (int)normalTex.size()];
           if (mat.metalRoughTexture < 0 && !substantivePacked.empty())
             mat.metalRoughTexture = substantivePacked[(setIdx + packOff) % (int)substantivePacked.size()];
+          if (mat.emissiveTexture < 0 && !emissiveTex.empty())
+            mat.emissiveTexture = emissiveTex[setIdx % (int)emissiveTex.size()];
 
           const int slotId = (mi < uniqueSlots.size())
                                  ? static_cast<int>(uniqueSlots[mi]) : -1;
@@ -3331,7 +3454,7 @@ bool LoadModel(const std::string &path, std::vector<GpuMesh> &outMeshes,
   std::string ext = std::filesystem::path(path).extension().string();
   std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
-  if (ext == ".ltm") {
+  if (ext == ".ltm" || ext == ".lmod") {
     return LoadLTM(path, outMeshes, outMaterials, outTextures, outSceneNodes);
   } else if (ext == ".skp") {
     return LoadSkp(path, outMeshes, outMaterials, outTextures, rootTranslation,

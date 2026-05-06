@@ -227,8 +227,9 @@ static constexpr UINT kWavefrontStatsCount = 64;
 static constexpr UINT kWavefrontDispatchArgCount = 4;
 static constexpr UINT kWavefrontReservedUint4Count = 16;
 static constexpr UINT64 kWavefrontMinQueueEntries = 65536ull;
-static constexpr UINT64 kWavefrontMaxPathQueueEntries = 2097152ull; // 2M
+static constexpr UINT64 kWavefrontMaxPathQueueEntries = 4194304ull; // 4M
 static constexpr UINT64 kWavefrontMaxShadowQueueEntries = 4194304ull; // 4M
+static constexpr UINT64 kWavefrontPathQueueMultiplier = 2ull;
 static constexpr UINT kWavefrontSecondaryResolveDispatchArgsIndex = 2;
 static constexpr UINT kWavefrontSecondaryDispatchRaysReservedSlot = 0;
 static constexpr UINT kWavefrontShadowDispatchRaysReservedSlot = 7;
@@ -2092,11 +2093,13 @@ static void DispatchWavefrontPrepareIndirectArgs(
   list->SetComputeRootSignature(s_wavefrontPrepareIndirectArgsRootSig.Get());
 
   const UINT maxDispatchCount =
-      (queueCounterIndex == 5u)
+      (queueCounterIndex == kWavefrontQueueShadow)
           ? static_cast<UINT>(
                 std::min<UINT64>(s_wavefrontShadowQueueCapacity,
                                   (std::numeric_limits<UINT>::max)()))
-          : s_lastWavefrontBootstrapPathCount;
+          : static_cast<UINT>(
+                std::min<UINT64>(s_wavefrontPathQueueCapacity,
+                                  (std::numeric_limits<UINT>::max)()));
   const UINT prepConstants[5] = {queueCounterIndex, dispatchArgsIndex,
                                  reservedSlotBase, maxDispatchCount,
                                  reservedFlags};
@@ -2155,12 +2158,12 @@ static void DispatchWavefrontSecondaryVisibility(
       list, kWavefrontSecondaryDispatchRaysRecordOffset);
 
   if (!dispatchedIndirect) {
-    // Fallback direct dispatch: read the source counter from the CPU-side
-    // readback (conservative: use full bootstrap count) since we don't have
-    // a CPU-side copy of the queue counter at this point.  The indirect path
-    // above is preferred; this path executes only when indirect dispatch is
-    // unavailable.
-    const UINT fallbackWidth = s_lastWavefrontBootstrapPathCount;
+    // Fallback direct dispatch is intentionally queue-capacity sized.  The
+    // raygen clamps against the live queue counter and buffer dimensions, so
+    // this preserves correctness when glass split paths exceed primary count.
+    const UINT fallbackWidth = static_cast<UINT>(
+        std::min<UINT64>(s_wavefrontPathQueueCapacity,
+                         (std::numeric_limits<UINT>::max)()));
     D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
     dispatchDesc.RayGenerationShaderRecord.StartAddress =
         s_wavefrontSecondaryRayGenShaderTable;
@@ -2207,7 +2210,9 @@ static void DispatchWavefrontShadowVisibility(
     dispatchDesc.HitGroupTable.StartAddress = s_wavefrontHitGroupShaderTable;
     dispatchDesc.HitGroupTable.SizeInBytes = s_shaderTableEntrySize;
     dispatchDesc.HitGroupTable.StrideInBytes = s_shaderTableEntrySize;
-    dispatchDesc.Width = s_lastWavefrontBootstrapPathCount;
+    dispatchDesc.Width = static_cast<UINT>(
+        std::min<UINT64>(s_wavefrontShadowQueueCapacity,
+                         (std::numeric_limits<UINT>::max)()));
     dispatchDesc.Height = 1;
     dispatchDesc.Depth = 1;
 
@@ -2686,8 +2691,11 @@ static void DispatchWavefrontResolveSecondary(ID3D12GraphicsCommandList4 *list,
 
   const UINT sourceQueueFlags =
       (sourceQueueCounterIndex == 0u) ? kWavefrontQueueFlagSourceIsA : 0u;
+  const UINT secondaryMaxDispatchCount = static_cast<UINT>(
+      std::min<UINT64>(s_wavefrontPathQueueCapacity,
+                       (std::numeric_limits<UINT>::max)()));
   const UINT resolveConstants[4] = {s_outputWidth, s_outputHeight,
-                                    s_lastWavefrontBootstrapPathCount,
+                                    secondaryMaxDispatchCount,
                                     sourceQueueFlags | extraResolveFlags};
   list->SetComputeRoot32BitConstants(1, _countof(resolveConstants),
                                      resolveConstants, 0);
@@ -3292,6 +3300,8 @@ static void EnsureCurrentFeatureResources() {
 void CreateRayTracingPipeline(UINT width, UINT height) {
   if (!g_rayTracingSupported || !s_dxrDevice)
     return;
+
+  WaitForAsyncRestirIdle();
 
   // Track requested output (swapchain) size.
   if (width > 0)
@@ -4236,9 +4246,11 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
       };
 
     s_wavefrontPathQueueCapacity = ComputeWavefrontQueueCapacity(
-      s_outputWidth, s_outputHeight, kWavefrontMaxPathQueueEntries);
+      s_outputWidth, s_outputHeight, kWavefrontMaxPathQueueEntries,
+      kWavefrontPathQueueMultiplier);
     s_wavefrontHitQueueCapacity = ComputeWavefrontQueueCapacity(
-      s_outputWidth, s_outputHeight, kWavefrontMaxPathQueueEntries);
+      s_outputWidth, s_outputHeight, kWavefrontMaxPathQueueEntries,
+      kWavefrontPathQueueMultiplier);
     s_wavefrontShadowQueueCapacity = ComputeWavefrontQueueCapacity(
       s_outputWidth, s_outputHeight, kWavefrontMaxShadowQueueEntries, 3ull);
 
@@ -6464,9 +6476,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
             DispatchWavefrontResolveSecondary(dxrList.Get(), cameraCB,
                                              sourceCounter, binFlags, true);
           }
-          DispatchWavefrontResolveSecondary(dxrList.Get(), cameraCB,
-                                           sourceCounter,
-                                           kWavefrontQueueFlagMissOnly, false);
+          DispatchWavefrontPrepareIndirectArgs(dxrList.Get(), sourceCounter, kWavefrontSecondaryResolveDispatchArgsIndex, ~0u, 0u);
+          DispatchWavefrontResolveSecondary(dxrList.Get(), cameraCB, sourceCounter, kWavefrontQueueFlagMissOnly, true);
 
           // Secondary shadow visibility: trace shadow rays from this bounce.
           DispatchWavefrontPrepareIndirectArgs(
