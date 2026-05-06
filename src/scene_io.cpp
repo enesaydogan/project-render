@@ -59,6 +59,19 @@ static constexpr size_t PRS_CHUNK_SIZE = 4ull * 1024ull * 1024ull;
 static std::mutex g_sceneIoProgressMutex;
 static SceneIO::ProgressCallback g_sceneIoProgressCb = nullptr;
 
+static int PathTracingBackendToSceneValue() {
+  return DxrRenderer::GetPathTracingBackend() ==
+                 DxrRenderer::PathTracingBackend::WavefrontOptimized
+             ? 2
+             : 0;
+}
+
+static DxrRenderer::PathTracingBackend PathTracingBackendFromSceneValue(
+    int value) {
+  return value > 0 ? DxrRenderer::PathTracingBackend::WavefrontOptimized
+                   : DxrRenderer::PathTracingBackend::Legacy;
+}
+
 static void ReportProgress(float progress01, const char *stage) {
   SceneIO::ProgressCallback cb = nullptr;
   {
@@ -543,7 +556,8 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
   j["dxr"] = {
     {"fdm", (int)DxrRenderer::GetDenoiserMode()},
     {"oq", (int)DxrRenderer::GetOidnQuality()},
-    {"rj", DxrRenderer::GetRrJitterScale()}
+    {"rj", DxrRenderer::GetRrJitterScale()},
+    {"ptb", PathTracingBackendToSceneValue()}
   };
 
   // Raster post-process
@@ -850,6 +864,8 @@ static void ApplyMetadataPRS(const json &j) {
                                                            : (int)DxrRenderer::GetDenoiserMode()));
     DxrRenderer::SetOidnQuality((OidnDenoiser::Quality)d.value("oq", (int)DxrRenderer::GetOidnQuality()));
     DxrRenderer::SetRrJitterScale(d.value("rj", DxrRenderer::GetRrJitterScale()));
+    DxrRenderer::SetPathTracingBackend(PathTracingBackendFromSceneValue(
+        d.value("ptb", PathTracingBackendToSceneValue())));
   }
   if (j.contains("rps") && j["rps"].is_object()) {
     auto &r = j["rps"];

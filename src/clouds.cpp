@@ -329,16 +329,18 @@ void CloudManager::Initialize(ID3D12Device *device,
   // Create persistent descriptors (CBV + BaseTex SRV + DetailTex SRV + BakedSky SRV)
   CreateDescriptors(device);
 
-  // Mark first bake requested so baked-sky is populated at startup
+  // Mark first bake requested so baked-sky is populated at startup. Start with
+  // the preview texture; the full 4K bake is scheduled after that so DXR scene
+  // loads never inject a large cloud job into the first active path-trace frame.
   m_lastObservedParams = m_params;
   m_lastBakedParams = m_params;
   m_bakeRequested = true;
   m_bakeInProgress = false;
   m_bakeNextRow = 0;
-  m_pendingParamBake = false;
-  m_pendingPreviewBake = false;
-  m_pendingFinalBake = false;
-  m_requestedBakeQuality = BakeQuality::Final;
+  m_pendingParamBake = true;
+  m_pendingPreviewBake = true;
+  m_pendingFinalBake = true;
+  m_requestedBakeQuality = BakeQuality::Preview;
   m_activeBakedSkyTexture = BakedSkyTexture::Final;
   m_secondsSinceParamEdit = 0.0f;
   m_secondsSinceBake = 0.0f;
@@ -356,10 +358,10 @@ void CloudManager::RequestBake() {
   m_bakeRequested = true;
   m_bakeInProgress = false;
   m_bakeNextRow = 0;
-  m_pendingParamBake = false;
-  m_pendingPreviewBake = false;
-  m_pendingFinalBake = false;
-  m_requestedBakeQuality = BakeQuality::Final;
+  m_pendingParamBake = true;
+  m_pendingPreviewBake = true;
+  m_pendingFinalBake = true;
+  m_requestedBakeQuality = BakeQuality::Preview;
   m_secondsSinceParamEdit = 0.0f;
 }
 
@@ -664,7 +666,9 @@ static void CreateBakePipelineIfNeeded(ID3D12Device* device,
   }
 }
 
-void CloudManager::BakeSky(ID3D12GraphicsCommandList *cmdList, ID3D12Resource *cameraCB) {
+void CloudManager::BakeSky(ID3D12GraphicsCommandList *cmdList,
+                           ID3D12Resource *cameraCB,
+                           bool backgroundBudget) {
   ID3D12Resource *targetTexture =
       m_requestedBakeQuality == BakeQuality::Preview
           ? m_previewBakedSkyTexture.Get()
@@ -766,7 +770,7 @@ void CloudManager::BakeSky(ID3D12GraphicsCommandList *cmdList, ID3D12Resource *c
           : (UINT)(std::max)(1, m_params.finalBakeSamples);
   const UINT rowsPerSlice =
       m_requestedBakeQuality == BakeQuality::Preview
-          ? 64u
+          ? (backgroundBudget ? 8u : 64u)
           : (std::max)(2u, 64u / (std::min)(requestedSamples, 32u));
   const UINT startY = m_bakeNextRow;
   const UINT endY = (std::min)(textureHeight, startY + rowsPerSlice);

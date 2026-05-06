@@ -59,6 +59,17 @@ struct CloudParams {
 };
 
 class CloudManager {
+private:
+  enum class BakeQuality {
+    Preview,
+    Final,
+  };
+
+  enum class BakedSkyTexture {
+    Preview,
+    Final,
+  };
+
 public:
   void Initialize(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList);
   void Update(float dt, UINT frameIndex);
@@ -75,9 +86,14 @@ public:
   // Request an on-GPU bake of the current clouds (runs a compute pass)
   // - cmdList: graphics/compute command list to record the bake into
   // - cameraCB: optional camera constant buffer (used for origin/light)
-  void BakeSky(ID3D12GraphicsCommandList *cmdList, ID3D12Resource *cameraCB = nullptr);
+  void BakeSky(ID3D12GraphicsCommandList *cmdList,
+               ID3D12Resource *cameraCB = nullptr,
+               bool backgroundBudget = false);
   void RequestBake();
   bool NeedsBake() const { return m_bakeRequested; }
+  bool FinalBakeRequested() const {
+    return m_bakeRequested && m_requestedBakeQuality == BakeQuality::Final;
+  }
   ID3D12Resource *GetBakedSkyTexture() const;
 
   // GPU descriptor handle that points to the contiguous CBV+SRV descriptors for
@@ -85,16 +101,6 @@ public:
   D3D12_GPU_DESCRIPTOR_HANDLE GetGPUHandle() const { return m_gpuHandle; }
 
 private:
-  enum class BakeQuality {
-    Preview,
-    Final,
-  };
-
-  enum class BakedSkyTexture {
-    Preview,
-    Final,
-  };
-
   void CreateTextures(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList);
   void CreateConstantBuffers(ID3D12Device *device);
   void UpdateConstantBuffer();

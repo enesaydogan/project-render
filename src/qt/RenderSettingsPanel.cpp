@@ -73,8 +73,8 @@ DxrRenderer::DenoiserMode DenoiserModeFromIndex(int index)
 int PathBackendIndex(DxrRenderer::PathTracingBackend backend)
 {
     switch (backend) {
-    case DxrRenderer::PathTracingBackend::WavefrontParity: return 1;
-    case DxrRenderer::PathTracingBackend::WavefrontOptimized: return 2;
+    case DxrRenderer::PathTracingBackend::WavefrontParity:
+    case DxrRenderer::PathTracingBackend::WavefrontOptimized: return 1;
     default: return 0;
     }
 }
@@ -82,9 +82,6 @@ int PathBackendIndex(DxrRenderer::PathTracingBackend backend)
 DxrRenderer::PathTracingBackend PathBackendFromIndex(int index)
 {
     if (index == 1) {
-        return DxrRenderer::PathTracingBackend::WavefrontParity;
-    }
-    if (index == 2) {
         return DxrRenderer::PathTracingBackend::WavefrontOptimized;
     }
     return DxrRenderer::PathTracingBackend::Legacy;
@@ -187,7 +184,6 @@ void RenderSettingsPanel::createUi()
     m_pathBackend = new QComboBox(pathGroup);
     m_pathBackend->addItems({
         tr("Legacy (Default)"),
-        tr("Wavefront Parity - Experimental"),
         tr("Wavefront Optimized - Experimental")
     });
     m_pathBackendWarning = new QLabel(pathGroup);
@@ -465,10 +461,10 @@ void RenderSettingsPanel::syncFromRenderer()
     }
     if (DxrRenderer::GetPathTracingBackend() == DxrRenderer::PathTracingBackend::Legacy) {
         m_pathBackendWarning->setText(
-            tr("Legacy is the production default. Wavefront modes are experimental test backends."));
+            tr("Legacy is the production default."));
     } else {
         m_pathBackendWarning->setText(
-            tr("EXPERIMENTAL WAVEFRONT BACKEND ACTIVE: expect visual differences, missing features, or instability. Switch back to Legacy for production renders."));
+            tr("EXPERIMENTAL WAVEFRONT OPTIMIZED BACKEND ACTIVE: expect visual differences or instability. Switch back to Legacy for production renders."));
     }
     m_targetNoise->setEnabled(m_adaptiveSampling->isChecked());
 

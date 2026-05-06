@@ -5914,11 +5914,16 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   // Flag to freeze after tonemapping instead of early return
   bool shouldFreezeAfterTonemap = reachedEndCondition && !doDenoise;
 
-  // Bake clouds before DXR state binding. BakeSky uses compute
-  // PSO/root-signature and descriptor heaps, so it must not run mid-way through
-  // DXR root bindings.
+  // Bake clouds before DXR state binding. Keep this cooperative with the path
+  // tracer: preview bakes can run in tiny background slices, but the full 4K
+  // final bake waits until DXR is not actively adding samples. Otherwise a
+  // scene load can stack cloud raymarch compute and DXR transport into one
+  // TDR-prone frame.
   if (g_cloudManager.NeedsBake()) {
-    g_cloudManager.BakeSky(commandListBase, cameraCB);
+    const bool dxrAddingSamples = !doDenoise && !reachedEndCondition;
+    if (!dxrAddingSamples || !g_cloudManager.FinalBakeRequested()) {
+      g_cloudManager.BakeSky(commandListBase, cameraCB, dxrAddingSamples);
+    }
   }
 
   // Set pipeline and root signature
