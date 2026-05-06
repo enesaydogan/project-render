@@ -538,6 +538,10 @@ static bool s_forceAsRebuild = false;
 static bool s_forceTlasUpdate = false;
 static bool s_hasGrassTlasCameraPos = false;
 static DirectX::XMFLOAT3 s_lastGrassTlasCameraPos = {};
+static bool s_hasGrassCameraMotionSample = false;
+static DirectX::XMFLOAT3 s_lastObservedGrassCameraPos = {};
+static std::chrono::high_resolution_clock::time_point
+    s_lastGrassCameraMotionTime;
 static uint32_t s_resourceFeatureMask = 0;
 
 // Async compute execution for decoupled ReSTIR DI/GI.
@@ -557,10 +561,10 @@ static ComPtr<ID3D12Resource> s_asyncRestirCameraCB;
 
 enum class TextureStreamingPolicy { FullRes = 0, Balanced = 1, Aggressive = 2 };
 static TextureStreamingPolicy s_textureStreamingPolicy =
-    TextureStreamingPolicy::Balanced;
+    TextureStreamingPolicy::FullRes;
 static TextureStreamingPolicy s_lastAppliedTextureStreamingPolicy =
-    TextureStreamingPolicy::Balanced;
-static bool s_textureStreamingAuto = true;
+    TextureStreamingPolicy::FullRes;
+static bool s_textureStreamingAuto = false;
 static bool s_textureTableDirty = true;
 
 static ComPtr<ID3D12Resource> s_lightBuffer;
@@ -2860,6 +2864,10 @@ UpdateTextureDescriptorTable(D3D12_GPU_DESCRIPTOR_HANDLE texturesGpuStart,
     return;
   }
 
+  // Keep DXR material textures at the same most-detailed mip as raster.
+  // Hidden frame-time based mip clamping makes imported DDS backdrops visibly
+  // softer in DXR and breaks raster/DXR texture parity. If streaming returns,
+  // it should be user-facing and opt-in.
   if (s_textureStreamingAuto) {
     TextureStreamingPolicy desired = ChooseAutoTextureStreamingPolicy();
     if (desired != s_textureStreamingPolicy) {
@@ -4423,31 +4431,77 @@ void RequestAccelerationStructureUpdate() {
   }
 }
 
+static DirectX::XMFLOAT3 CurrentGrassCameraPos() {
+  return {g_cameraData.pos[0], g_cameraData.pos[1], g_cameraData.pos[2]};
+}
+
+static float DistanceSq(const DirectX::XMFLOAT3 &a,
+                        const DirectX::XMFLOAT3 &b) {
+  const float dx = a.x - b.x;
+  const float dy = a.y - b.y;
+  const float dz = a.z - b.z;
+  return dx * dx + dy * dy + dz * dz;
+}
+
+static void ResetGrassTlasCameraTracking() {
+  s_hasGrassTlasCameraPos = false;
+  s_hasGrassCameraMotionSample = false;
+}
+
 static bool GrassTlasNeedsCameraRefresh() {
   if (GrassManager::GetPatchCount() == 0) {
-    s_hasGrassTlasCameraPos = false;
+    ResetGrassTlasCameraTracking();
     return false;
   }
+
+  const DirectX::XMFLOAT3 cameraPos = CurrentGrassCameraPos();
   if (!s_hasGrassTlasCameraPos) {
+    s_lastObservedGrassCameraPos = cameraPos;
+    s_lastGrassCameraMotionTime = std::chrono::high_resolution_clock::now();
+    s_hasGrassCameraMotionSample = true;
     return true;
   }
 
-  const float dx = g_cameraData.pos[0] - s_lastGrassTlasCameraPos.x;
-  const float dy = g_cameraData.pos[1] - s_lastGrassTlasCameraPos.y;
-  const float dz = g_cameraData.pos[2] - s_lastGrassTlasCameraPos.z;
   constexpr float kGrassTlasCameraRefreshMeters = 0.25f;
-  return (dx * dx + dy * dy + dz * dz) >=
-         (kGrassTlasCameraRefreshMeters * kGrassTlasCameraRefreshMeters);
+  constexpr float kGrassCameraMotionEpsilonMeters = 0.001f;
+  constexpr float kGrassCameraSettleMs = 180.0f;
+
+  const auto now = std::chrono::high_resolution_clock::now();
+  if (!s_hasGrassCameraMotionSample) {
+    s_lastObservedGrassCameraPos = cameraPos;
+    s_lastGrassCameraMotionTime = now;
+    s_hasGrassCameraMotionSample = true;
+  } else if (DistanceSq(cameraPos, s_lastObservedGrassCameraPos) >=
+             (kGrassCameraMotionEpsilonMeters *
+              kGrassCameraMotionEpsilonMeters)) {
+    s_lastObservedGrassCameraPos = cameraPos;
+    s_lastGrassCameraMotionTime = now;
+  }
+
+  const bool movedPastRefreshDistance =
+      DistanceSq(cameraPos, s_lastGrassTlasCameraPos) >=
+      (kGrassTlasCameraRefreshMeters * kGrassTlasCameraRefreshMeters);
+  if (!movedPastRefreshDistance) {
+    return false;
+  }
+
+  const float idleMs =
+      std::chrono::duration<float, std::milli>(now -
+                                               s_lastGrassCameraMotionTime)
+          .count();
+  return idleMs >= kGrassCameraSettleMs;
 }
 
 static void CaptureGrassTlasCameraPos() {
   if (GrassManager::GetPatchCount() == 0) {
-    s_hasGrassTlasCameraPos = false;
+    ResetGrassTlasCameraTracking();
     return;
   }
-  s_lastGrassTlasCameraPos = {g_cameraData.pos[0], g_cameraData.pos[1],
-                              g_cameraData.pos[2]};
+  s_lastGrassTlasCameraPos = CurrentGrassCameraPos();
+  s_lastObservedGrassCameraPos = s_lastGrassTlasCameraPos;
+  s_lastGrassCameraMotionTime = std::chrono::high_resolution_clock::now();
   s_hasGrassTlasCameraPos = true;
+  s_hasGrassCameraMotionSample = true;
 }
 
 static void ClearDirtyMaterialsForMeshes(
@@ -5738,6 +5792,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     BuildAccelerationStructures(meshes, Scene::GetInstances());
     if (!s_tlas.result) {
       return ReturnFail(16, "TLAS missing after forced rebuild");
+    }
+    if (grassTlasCameraChanged) {
+      ResetAccumulation();
     }
     s_forceAsRebuild = false;
     s_forceTlasUpdate = false;
