@@ -48,6 +48,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <locale>
+#include <oleidl.h>
 #include <shellapi.h>
 #include <stdio.h>
 #include <string>
@@ -1800,12 +1801,11 @@ static bool IsSupportedDroppedModelPath(const std::wstring &path) {
          ext == L".ltm" || ext == L".lmod";
 }
 
-static bool ImportFirstDroppedModelFile(HDROP drop) {
+static bool ImportFirstDroppedModelFileHandle(HDROP drop) {
   if (!drop) {
     return false;
   }
 
-  bool startedImport = false;
   const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
   for (UINT i = 0; i < count; ++i) {
     const UINT len = DragQueryFileW(drop, i, nullptr, 0);
@@ -1820,13 +1820,135 @@ static bool ImportFirstDroppedModelFile(HDROP drop) {
       continue;
     }
 
-    startedImport = Scene::ImportModelAsync(WStringToUtf8(path));
-    break;
+    return Scene::ImportModelAsync(WStringToUtf8(path));
   }
+
+  return false;
+}
+
+static bool ImportFirstDroppedModelFile(HDROP drop) {
+  if (!drop) {
+    return false;
+  }
+
+  const bool startedImport = ImportFirstDroppedModelFileHandle(drop);
 
   DragFinish(drop);
   return startedImport;
 }
+
+class ModelFileDropTarget : public IDropTarget {
+public:
+  ModelFileDropTarget() : refCount_(1) {}
+
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid,
+                                           void **ppvObject) override {
+    if (!ppvObject) {
+      return E_POINTER;
+    }
+    if (riid == IID_IUnknown || riid == IID_IDropTarget) {
+      *ppvObject = static_cast<IDropTarget *>(this);
+      AddRef();
+      return S_OK;
+    }
+    *ppvObject = nullptr;
+    return E_NOINTERFACE;
+  }
+
+  ULONG STDMETHODCALLTYPE AddRef() override {
+    return static_cast<ULONG>(InterlockedIncrement(&refCount_));
+  }
+
+  ULONG STDMETHODCALLTYPE Release() override {
+    const LONG count = InterlockedDecrement(&refCount_);
+    if (count == 0) {
+      delete this;
+    }
+    return static_cast<ULONG>(count);
+  }
+
+  HRESULT STDMETHODCALLTYPE DragEnter(IDataObject *dataObject, DWORD,
+                                      POINTL, DWORD *effect) override {
+    if (!effect) {
+      return E_POINTER;
+    }
+    *effect = HasSupportedFiles(dataObject) ? DROPEFFECT_COPY : DROPEFFECT_NONE;
+    return S_OK;
+  }
+
+  HRESULT STDMETHODCALLTYPE DragOver(DWORD, POINTL, DWORD *effect) override {
+    if (!effect) {
+      return E_POINTER;
+    }
+    if (*effect != DROPEFFECT_NONE) {
+      *effect = DROPEFFECT_COPY;
+    }
+    return S_OK;
+  }
+
+  HRESULT STDMETHODCALLTYPE DragLeave() override { return S_OK; }
+
+  HRESULT STDMETHODCALLTYPE Drop(IDataObject *dataObject, DWORD,
+                                 POINTL, DWORD *effect) override {
+    if (!effect) {
+      return E_POINTER;
+    }
+
+    *effect = DROPEFFECT_NONE;
+    FORMATETC format = {CF_HDROP, nullptr, DVASPECT_CONTENT, -1,
+                        TYMED_HGLOBAL};
+    STGMEDIUM medium = {};
+    if (!dataObject || FAILED(dataObject->GetData(&format, &medium))) {
+      return S_OK;
+    }
+
+    bool startedImport = false;
+    if (medium.tymed == TYMED_HGLOBAL && medium.hGlobal) {
+      startedImport = ImportFirstDroppedModelFileHandle(
+          static_cast<HDROP>(medium.hGlobal));
+    }
+    ReleaseStgMedium(&medium);
+    *effect = startedImport ? DROPEFFECT_COPY : DROPEFFECT_NONE;
+    return S_OK;
+  }
+
+private:
+  bool HasSupportedFiles(IDataObject *dataObject) const {
+    FORMATETC format = {CF_HDROP, nullptr, DVASPECT_CONTENT, -1,
+                        TYMED_HGLOBAL};
+    STGMEDIUM medium = {};
+    if (!dataObject || FAILED(dataObject->GetData(&format, &medium))) {
+      return false;
+    }
+
+    bool supported = false;
+    if (medium.tymed == TYMED_HGLOBAL && medium.hGlobal) {
+      const UINT count = DragQueryFileW(static_cast<HDROP>(medium.hGlobal),
+                                        0xFFFFFFFF, nullptr, 0);
+      for (UINT i = 0; i < count; ++i) {
+        const UINT len = DragQueryFileW(static_cast<HDROP>(medium.hGlobal), i,
+                                        nullptr, 0);
+        if (len == 0) {
+          continue;
+        }
+
+        std::wstring path(len + 1, L'\0');
+        DragQueryFileW(static_cast<HDROP>(medium.hGlobal), i, path.data(),
+                       len + 1);
+        path.resize(len);
+        if (IsSupportedDroppedModelPath(path)) {
+          supported = true;
+          break;
+        }
+      }
+    }
+
+    ReleaseStgMedium(&medium);
+    return supported;
+  }
+
+  LONG refCount_;
+};
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
                          LPARAM lParam) {
@@ -1889,6 +2011,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
   // window handle (Qt path will obtain from widget, Win32 path from CreateWindow)
   HWND hwnd = nullptr;
+#ifndef USE_QT_UI
+  ModelFileDropTarget *dropTarget = nullptr;
+  bool oleInitialized = false;
+#endif
   if (lpCmdLine && *lpCmdLine) {
     std::string cmd = lpCmdLine;
     std::istringstream iss(cmd);
@@ -2003,6 +2129,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     return -1;
   }
 #else
+  const HRESULT oleHr = OleInitialize(nullptr);
+  if (SUCCEEDED(oleHr)) {
+    oleInitialized = true;
+  } else {
+    fprintf(stderr, "Main: OleInitialize failed (0x%08x)\n",
+            static_cast<unsigned int>(oleHr));
+  }
+
   const wchar_t CLASS_NAME[] = L"ProjectRenderWndClass";
 
   // use the extended version so we can set a small icon directly
@@ -2032,7 +2166,22 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     return 0;
   }
 
-  DragAcceptFiles(hwnd, TRUE);
+  bool useLegacyDropFiles = true;
+  if (oleInitialized) {
+    dropTarget = new ModelFileDropTarget();
+    const HRESULT dropHr = RegisterDragDrop(hwnd, dropTarget);
+    if (SUCCEEDED(dropHr)) {
+      useLegacyDropFiles = false;
+    } else {
+      fprintf(stderr, "Main: RegisterDragDrop failed (0x%08x)\n",
+              static_cast<unsigned int>(dropHr));
+      dropTarget->Release();
+      dropTarget = nullptr;
+    }
+  }
+  if (useLegacyDropFiles) {
+    DragAcceptFiles(hwnd, TRUE);
+  }
   ShowWindow(hwnd, nCmdShow);
 
   EnforceReleaseDebugFlags();
@@ -3533,6 +3682,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
   ImGui_ImplDX12_Shutdown();
   ImGui_ImplWin32_Shutdown();
   ImGui::DestroyContext();
+
+#ifndef USE_QT_UI
+  if (dropTarget) {
+    RevokeDragDrop(hwnd);
+    dropTarget->Release();
+    dropTarget = nullptr;
+  }
+  if (oleInitialized) {
+    OleUninitialize();
+  }
+#endif
 
   // Cleanup fence event
   CloseHandle(DX12Context::g_fenceEvent);

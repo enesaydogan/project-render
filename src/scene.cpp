@@ -54,6 +54,9 @@ static std::atomic<bool> s_importInProgress(false);
 static std::atomic<float> s_importProgress(0.0f);
 static std::string s_importStatus;
 static std::mutex s_importStatusMutex;
+static std::mutex s_recentImportMutex;
+static std::string s_recentImportPath;
+static std::chrono::steady_clock::time_point s_recentImportTime;
 
 enum class PendingImportAction {
   Import,
@@ -2448,6 +2451,24 @@ bool ImportModelAsync(const std::string &utf8path) {
     s_lastStatus = "Import failed: path not found: " + utf8path;
     return false;
   }
+
+  {
+    std::lock_guard<std::mutex> lock(s_recentImportMutex);
+    const auto now = std::chrono::steady_clock::now();
+    if (!s_recentImportPath.empty() && s_recentImportPath == utf8path) {
+      const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+          now - s_recentImportTime);
+      if (elapsedMs.count() < 500) { // lowered from 1500 to 500, true cause fixed in browser
+        s_lastStatus = "Duplicate import suppressed: " + utf8path;
+        fprintf(stderr, "Scene::ImportModelAsync: suppressed duplicate import for %s\n",
+                utf8path.c_str());
+        return false;
+      }
+    }
+    s_recentImportPath = utf8path;
+    s_recentImportTime = now;
+  }
+
   return StartAsyncSceneLoadJob(utf8path, PendingImportAction::Import);
 }
 

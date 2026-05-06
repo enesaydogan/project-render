@@ -148,7 +148,7 @@ DX12View::DX12View(QWidget *parent)
     setAttribute(Qt::WA_NativeWindow);
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
-    setAcceptDrops(true);
+    setAcceptDrops(false);
 
     m_cloneOptionsTimer = new QTimer(this);
     connect(m_cloneOptionsTimer, &QTimer::timeout, this, [this]() {

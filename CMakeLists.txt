@@ -390,6 +390,38 @@ target_link_libraries(imgui_static PRIVATE d3d12 d3dcompiler)
 
 target_link_libraries(project-render PRIVATE imgui_static)
 
+add_executable(content-browser WIN32
+  src-example/tools/browser/main.cpp
+  ${imgui_SOURCE_DIR}/imgui.cpp
+  ${imgui_SOURCE_DIR}/imgui_draw.cpp
+  ${imgui_SOURCE_DIR}/imgui_tables.cpp
+  ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+  ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp
+  ${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp
+)
+
+target_include_directories(content-browser PRIVATE
+  ${imgui_SOURCE_DIR}
+  ${imgui_SOURCE_DIR}/backends
+)
+
+target_compile_definitions(content-browser PRIVATE UNICODE _UNICODE)
+target_link_libraries(content-browser PRIVATE
+  d3d11
+  dxgi
+  d3dcompiler
+  ole32
+  shell32
+  windowscodecs
+  uuid
+)
+
+if (MSVC)
+  target_compile_options(content-browser PRIVATE /W4 /permissive-)
+  target_compile_options(content-browser PRIVATE $<$<CONFIG:Release>:/Ox /Ob2 /Oi /Ot /Oy /GL /arch:AVX2>)
+  target_link_options(content-browser PRIVATE $<$<CONFIG:Release>:/LTCG>)
+endif()
+
 # Asset loader static library (stub implementation present)
 option(USE_SKETCHUP_SDK "Enable SketchUp SDK support for .skp import" OFF)
 # If a bundled SDK exists in the repo, hint about it at configure time
@@ -514,7 +546,7 @@ endif()
 # Place build outputs into dedicated folders to avoid spilling .lib/.exp into
 # the top-level build directory. This keeps asset_loader.lib, imgui_static.lib,
 # project-render.lib and project-render.exp out of the build root.
-set_target_properties(project-render asset_loader imgui_static PROPERTIES
+set_target_properties(project-render asset_loader imgui_static content-browser PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
   RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/Debug/bin"
   RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/Release/bin"
