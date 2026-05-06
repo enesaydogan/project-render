@@ -541,8 +541,6 @@ static bool s_hasGrassTlasCameraPos = false;
 static DirectX::XMFLOAT3 s_lastGrassTlasCameraPos = {};
 static bool s_hasGrassCameraMotionSample = false;
 static DirectX::XMFLOAT3 s_lastObservedGrassCameraPos = {};
-static std::chrono::high_resolution_clock::time_point
-    s_lastGrassCameraMotionTime;
 static uint32_t s_resourceFeatureMask = 0;
 
 // Async compute execution for decoupled ReSTIR DI/GI.
@@ -4463,25 +4461,21 @@ static bool GrassTlasNeedsCameraRefresh() {
   const DirectX::XMFLOAT3 cameraPos = CurrentGrassCameraPos();
   if (!s_hasGrassTlasCameraPos) {
     s_lastObservedGrassCameraPos = cameraPos;
-    s_lastGrassCameraMotionTime = std::chrono::high_resolution_clock::now();
     s_hasGrassCameraMotionSample = true;
     return true;
   }
 
   constexpr float kGrassTlasCameraRefreshMeters = 0.25f;
   constexpr float kGrassCameraMotionEpsilonMeters = 0.001f;
-  constexpr float kGrassCameraSettleMs = 180.0f;
 
-  const auto now = std::chrono::high_resolution_clock::now();
   if (!s_hasGrassCameraMotionSample) {
     s_lastObservedGrassCameraPos = cameraPos;
-    s_lastGrassCameraMotionTime = now;
     s_hasGrassCameraMotionSample = true;
   } else if (DistanceSq(cameraPos, s_lastObservedGrassCameraPos) >=
              (kGrassCameraMotionEpsilonMeters *
               kGrassCameraMotionEpsilonMeters)) {
     s_lastObservedGrassCameraPos = cameraPos;
-    s_lastGrassCameraMotionTime = now;
+    return false;
   }
 
   const bool movedPastRefreshDistance =
@@ -4491,21 +4485,7 @@ static bool GrassTlasNeedsCameraRefresh() {
     return false;
   }
 
-  // Camera movement already resets accumulation before RenderFrame. If the
-  // history is still cold, refresh the grass TLAS immediately so wavefront does
-  // not converge several clean samples against stale grass and then visibly
-  // reset after the idle-settle delay.
-  const bool accumulationCold =
-      (s_accumulation.GetFrameCount() == 0u) && (s_rrStillFrameSpp == 0u);
-  if (accumulationCold) {
-    return true;
-  }
-
-  const float idleMs =
-      std::chrono::duration<float, std::milli>(now -
-                                               s_lastGrassCameraMotionTime)
-          .count();
-  return idleMs >= kGrassCameraSettleMs;
+  return true;
 }
 
 static void CaptureGrassTlasCameraPos() {
@@ -4515,7 +4495,6 @@ static void CaptureGrassTlasCameraPos() {
   }
   s_lastGrassTlasCameraPos = CurrentGrassCameraPos();
   s_lastObservedGrassCameraPos = s_lastGrassTlasCameraPos;
-  s_lastGrassCameraMotionTime = std::chrono::high_resolution_clock::now();
   s_hasGrassTlasCameraPos = true;
   s_hasGrassCameraMotionSample = true;
 }
