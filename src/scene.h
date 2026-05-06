@@ -67,6 +67,7 @@ struct GpuUploadStats {
 // Import a model (glTF, OBJ, STL) file into the scene. Returns true on success.
 bool ImportModel(const std::string &utf8path,
                  const float *rootTranslation = nullptr);
+bool ImportModelAsync(const std::string &utf8path);
 bool ReimportNode(size_t index);
 bool CanReimportNode(size_t index);
 // Open file dialog and import selected model

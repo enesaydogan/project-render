@@ -7,7 +7,9 @@
 class DX12View;
 class QAction;
 class QComboBox;
+class QDragEnterEvent;
 class QDockWidget;
+class QDropEvent;
 class QLabel;
 class QPlainTextEdit;
 class QProgressBar;
@@ -29,6 +31,8 @@ public:
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
 
 private:
     void createMenus();

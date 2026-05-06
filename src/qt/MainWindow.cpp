@@ -23,6 +23,8 @@
 #include <QComboBox>
 #include <QDockWidget>
 #include <QDialog>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QIcon>
@@ -30,6 +32,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QFrame>
+#include <QMimeData>
 #include <QProcess>
 #include <QPushButton>
 #include <QVBoxLayout>
@@ -43,6 +46,7 @@
 #include <QToolBar>
 #include <QStatusBar>
 #include <QTimer>
+#include <QUrl>
 #include <vector>
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -249,6 +253,36 @@ QString ReadTotalRam()
     return QString::number(gb, 'f', 1) + QStringLiteral(" GB");
 }
 
+bool IsSupportedDroppedModelPath(const QString &path)
+{
+    const QString suffix = QFileInfo(path).suffix().toLower();
+    return suffix == QStringLiteral("skp") ||
+           suffix == QStringLiteral("gltf") ||
+           suffix == QStringLiteral("glb") ||
+           suffix == QStringLiteral("obj") ||
+           suffix == QStringLiteral("stl") ||
+           suffix == QStringLiteral("fbx") ||
+           suffix == QStringLiteral("ltm") ||
+           suffix == QStringLiteral("lmod");
+}
+
+QString FirstSupportedDroppedModelPath(const QMimeData *mimeData)
+{
+    if (!mimeData || !mimeData->hasUrls()) {
+        return {};
+    }
+    for (const QUrl &url : mimeData->urls()) {
+        if (!url.isLocalFile()) {
+            continue;
+        }
+        const QString path = url.toLocalFile();
+        if (IsSupportedDroppedModelPath(path)) {
+            return path;
+        }
+    }
+    return {};
+}
+
 QString ReadVersionValue(const wchar_t *key)
 {
     wchar_t modulePath[MAX_PATH] = {};
@@ -363,6 +397,7 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     setWindowTitle(QStringLiteral("Project Render"));
+    setAcceptDrops(true);
     resize(1920, 1080);
     {
         QString iconPath = QCoreApplication::applicationDirPath() +
@@ -1058,4 +1093,24 @@ void MainWindow::closeEvent(QCloseEvent *event)
 {
     g_appClosing = true;
     QMainWindow::closeEvent(event);
+}
+
+void MainWindow::dragEnterEvent(QDragEnterEvent *event)
+{
+    if (!FirstSupportedDroppedModelPath(event->mimeData()).isEmpty()) {
+        event->acceptProposedAction();
+        return;
+    }
+    QMainWindow::dragEnterEvent(event);
+}
+
+void MainWindow::dropEvent(QDropEvent *event)
+{
+    const QString path = FirstSupportedDroppedModelPath(event->mimeData());
+    if (!path.isEmpty()) {
+        Scene::ImportModelAsync(path.toUtf8().constData());
+        event->acceptProposedAction();
+        return;
+    }
+    QMainWindow::dropEvent(event);
 }

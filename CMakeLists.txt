@@ -202,7 +202,7 @@ else()
   add_compile_options(-O3 -march=native -mavx2 -mfma)
 endif()
 
-target_link_libraries(project-render PRIVATE d3d12 dxgi dxguid ole32 windowscodecs)
+target_link_libraries(project-render PRIVATE d3d12 dxgi dxguid ole32 shell32 windowscodecs)
 
 # make resources/ visible for includes (resource.h)
 target_include_directories(project-render PRIVATE "${CMAKE_SOURCE_DIR}/resources")

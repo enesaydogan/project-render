@@ -4,6 +4,8 @@
 #include <QWidget>
 
 class QTimer;
+class QDragEnterEvent;
+class QDropEvent;
 
 class DX12View : public QWidget
 {
@@ -23,6 +25,8 @@ protected:
     void mouseMoveEvent(QMouseEvent *e) override;
     void wheelEvent(QWheelEvent *e) override;
     void resizeEvent(QResizeEvent *e) override;
+    void dragEnterEvent(QDragEnterEvent *e) override;
+    void dropEvent(QDropEvent *e) override;
 
 private:
     void showPendingCloneOptions();

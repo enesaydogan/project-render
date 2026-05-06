@@ -2439,6 +2439,18 @@ bool ImportModelWithDialog(HWND hwnd) {
   return false;
 }
 
+bool ImportModelAsync(const std::string &utf8path) {
+  if (utf8path.empty()) {
+    s_lastStatus = "Import failed: empty path";
+    return false;
+  }
+  if (!std::filesystem::exists(std::filesystem::path(utf8path))) {
+    s_lastStatus = "Import failed: path not found: " + utf8path;
+    return false;
+  }
+  return StartAsyncSceneLoadJob(utf8path, PendingImportAction::Import);
+}
+
 bool ImportHDRWithDialog(HWND hwnd) {
   std::wstring chosen;
   if (OpenHDRFileDialog(hwnd, chosen)) {

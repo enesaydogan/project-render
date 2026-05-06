@@ -44,9 +44,11 @@
 #include <codecvt>
 #include <commctrl.h>
 #include <commdlg.h>
+#include <cwctype>
 #include <cstdint>
 #include <filesystem>
 #include <locale>
+#include <shellapi.h>
 #include <stdio.h>
 #include <string>
 #include <vector>
@@ -1789,6 +1791,43 @@ bool InitApplication(HWND hwnd) {
 // Mesh PSO recreation moved to RasterRenderer::RecreateMeshPipeline
 // (src/raster_renderer.cpp)
 
+static bool IsSupportedDroppedModelPath(const std::wstring &path) {
+  std::wstring ext = std::filesystem::path(path).extension().wstring();
+  std::transform(ext.begin(), ext.end(), ext.begin(),
+                 [](wchar_t c) { return static_cast<wchar_t>(towlower(c)); });
+  return ext == L".skp" || ext == L".gltf" || ext == L".glb" ||
+         ext == L".obj" || ext == L".stl" || ext == L".fbx" ||
+         ext == L".ltm" || ext == L".lmod";
+}
+
+static bool ImportFirstDroppedModelFile(HDROP drop) {
+  if (!drop) {
+    return false;
+  }
+
+  bool startedImport = false;
+  const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+  for (UINT i = 0; i < count; ++i) {
+    const UINT len = DragQueryFileW(drop, i, nullptr, 0);
+    if (len == 0) {
+      continue;
+    }
+
+    std::wstring path(len + 1, L'\0');
+    DragQueryFileW(drop, i, path.data(), len + 1);
+    path.resize(len);
+    if (!IsSupportedDroppedModelPath(path)) {
+      continue;
+    }
+
+    startedImport = Scene::ImportModelAsync(WStringToUtf8(path));
+    break;
+  }
+
+  DragFinish(drop);
+  return startedImport;
+}
+
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
                          LPARAM lParam) {
   if (Input::g_imguiEnabled &&
@@ -1811,6 +1850,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
       DX12Context::QueueResize(LOWORD(lParam), HIWORD(lParam));
     }
     return 0;
+  case WM_DROPFILES:
+    ImportFirstDroppedModelFile(reinterpret_cast<HDROP>(wParam));
+    return 0;
   case WM_DESTROY:
     PostQuitMessage(0);
     return 0;
@@ -1821,6 +1863,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                    int nCmdShow) {
+#ifdef USE_QT_UI
+  (void)nCmdShow;
+#endif
 #ifdef _DEBUG
   SetUnhandledExceptionFilter(TopLevelExceptionHandler);
 #endif
@@ -1987,6 +2032,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     return 0;
   }
 
+  DragAcceptFiles(hwnd, TRUE);
   ShowWindow(hwnd, nCmdShow);
 
   EnforceReleaseDebugFlags();

@@ -2714,6 +2714,55 @@ static LtmTextureSemantic LtmInferSemanticFromEntry(const LtmTextureEntry &entry
   return LtmTextureSemantic::Unknown;
 }
 
+static bool LtmIsBc7Format(DXGI_FORMAT fmt) {
+  return fmt == DXGI_FORMAT_BC7_UNORM ||
+         fmt == DXGI_FORMAT_BC7_UNORM_SRGB;
+}
+
+static void LtmApplyLmodTextureOrderHeuristics(
+    const std::vector<LtmTextureEntry> &textureEntries,
+    std::vector<LtmTextureSemantic> &semanticByEntry) {
+  std::vector<size_t> colorEntries;
+  bool hasNormal = false;
+
+  for (size_t ti = 0; ti < textureEntries.size(); ++ti) {
+    const LtmTextureEntry &entry = textureEntries[ti];
+    if (entry.uploadedTextureIndex < 0)
+      continue;
+
+    if (semanticByEntry[ti] == LtmTextureSemantic::Normal)
+      hasNormal = true;
+
+    if (entry.uploadedFormat == DXGI_FORMAT_BC4_UNORM ||
+        entry.uploadedFormat == DXGI_FORMAT_BC4_SNORM) {
+      semanticByEntry[ti] = LtmTextureSemantic::Roughness;
+      continue;
+    }
+
+    if (LtmIsBc7Format(entry.authoredFormat) ||
+        LtmIsBc7Format(entry.uploadedFormat)) {
+      colorEntries.push_back(ti);
+    }
+  }
+
+  if (colorEntries.empty())
+    return;
+
+  // LMOD assets do not appear to include the leading viewer/preview texture
+  // run that EverMotion LTM files do. The first BC7 map is the surface color.
+  semanticByEntry[colorEntries[0]] = LtmTextureSemantic::Diffuse;
+
+  // In observed LMOD assets, an extra sRGB BC7 map after diffuse is a tangent
+  // normal map even when the TextureList metadata names are not authoritative.
+  if (!hasNormal && colorEntries.size() > 1) {
+    const size_t normalCandidate = colorEntries[1];
+    if (textureEntries[normalCandidate].authoredFormat ==
+        DXGI_FORMAT_BC7_UNORM_SRGB) {
+      semanticByEntry[normalCandidate] = LtmTextureSemantic::Normal;
+    }
+  }
+}
+
 static bool LtmPayloadStartsWithUtf16Name(const uint8_t *payload, uint32_t size,
                                           const char *name) {
   if (!payload || !name)
@@ -3200,10 +3249,14 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
               ? &(*outTextures)[(size_t)entry.uploadedTextureIndex]
               : nullptr;
       semanticByEntry[ti] = LtmInferSemanticFromEntry(entry, uploadedTex);
-      if (ti < textureSemanticHints.size() &&
+      if (!isLmod && ti < textureSemanticHints.size() &&
           textureSemanticHints[ti] != LtmTextureSemantic::Unknown) {
         semanticByEntry[ti] = textureSemanticHints[ti];
       }
+    }
+
+    if (isLmod) {
+      LtmApplyLmodTextureOrderHeuristics(textureEntries, semanticByEntry);
     }
 
     // Second-pass pairing heuristic: same-size sRGB + linear textures are
@@ -3387,9 +3440,9 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
               substantivePacked.push_back(packedTex[i]);
           }
 
-          const int diffOff  = std::max(0, (int)diffuseTex.size()       - nMats);
-          const int normOff  = std::max(0, (int)normalTex.size()        - nMats);
-          const int packOff  = std::max(0, (int)substantivePacked.size() - nMats);
+          const int diffOff  = isLmod ? 0 : std::max(0, (int)diffuseTex.size()       - nMats);
+          const int normOff  = isLmod ? 0 : std::max(0, (int)normalTex.size()        - nMats);
+          const int packOff  = isLmod ? 0 : std::max(0, (int)substantivePacked.size() - nMats);
           const int setIdx   = static_cast<int>(mi);
 
           if (mat.diffuseTexture < 0 && !diffuseTex.empty())

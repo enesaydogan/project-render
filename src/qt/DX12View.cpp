@@ -5,14 +5,19 @@
 #include "../imgui.h"
 #include "../material_editor.h"
 #include "../scene.h"
+#include <algorithm>
 #include <cfloat>
+#include <QDragEnterEvent>
+#include <QFileInfo>
 #include <QFocusEvent>
 #include <QKeyEvent>
 #include <QMessageBox>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QTimer>
+#include <QUrl>
 #include <QWheelEvent>
 
 namespace {
@@ -95,6 +100,36 @@ void ResetImGuiInputs()
     io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
 }
 
+bool IsSupportedDroppedModelPath(const QString &path)
+{
+    const QString suffix = QFileInfo(path).suffix().toLower();
+    return suffix == QStringLiteral("skp") ||
+           suffix == QStringLiteral("gltf") ||
+           suffix == QStringLiteral("glb") ||
+           suffix == QStringLiteral("obj") ||
+           suffix == QStringLiteral("stl") ||
+           suffix == QStringLiteral("fbx") ||
+           suffix == QStringLiteral("ltm") ||
+           suffix == QStringLiteral("lmod");
+}
+
+QString FirstSupportedDroppedModelPath(const QMimeData *mimeData)
+{
+    if (!mimeData || !mimeData->hasUrls()) {
+        return {};
+    }
+    for (const QUrl &url : mimeData->urls()) {
+        if (!url.isLocalFile()) {
+            continue;
+        }
+        const QString path = url.toLocalFile();
+        if (IsSupportedDroppedModelPath(path)) {
+            return path;
+        }
+    }
+    return {};
+}
+
 int MapQtMouseButtonToVirtualKey(Qt::MouseButton button)
 {
     switch (button) {
@@ -113,6 +148,7 @@ DX12View::DX12View(QWidget *parent)
     setAttribute(Qt::WA_NativeWindow);
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
+    setAcceptDrops(true);
 
     m_cloneOptionsTimer = new QTimer(this);
     connect(m_cloneOptionsTimer, &QTimer::timeout, this, [this]() {
@@ -277,6 +313,26 @@ void DX12View::resizeEvent(QResizeEvent *e)
     QWidget::resizeEvent(e);
     DX12Context::QueueResize(static_cast<UINT>(width()),
                              static_cast<UINT>(height()));
+}
+
+void DX12View::dragEnterEvent(QDragEnterEvent *e)
+{
+    if (!FirstSupportedDroppedModelPath(e->mimeData()).isEmpty()) {
+        e->acceptProposedAction();
+        return;
+    }
+    QWidget::dragEnterEvent(e);
+}
+
+void DX12View::dropEvent(QDropEvent *e)
+{
+    const QString path = FirstSupportedDroppedModelPath(e->mimeData());
+    if (!path.isEmpty()) {
+        Scene::ImportModelAsync(QString(path).toUtf8().constData());
+        e->acceptProposedAction();
+        return;
+    }
+    QWidget::dropEvent(e);
 }
 
 void DX12View::showPendingCloneOptions()
