@@ -27,32 +27,33 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     }
 
     const uint pixelIndex = pixel.y * outputWidth + pixel.x;
+    const uint totalPathCount = outputWidth * outputHeight;
+    const uint clampedPathCount = min(totalPathCount, maxPathCount);
 
     if (pixelIndex == 0) {
-        const uint totalPathCount = outputWidth * outputHeight;
-        const uint groupCount = (totalPathCount + 63u) / 64u;
+        const uint groupCount = (clampedPathCount + 63u) / 64u;
 
         g_wavefrontDispatchArgs[0].groupCountX = groupCount;
         g_wavefrontDispatchArgs[0].groupCountY = 1u;
         g_wavefrontDispatchArgs[0].groupCountZ = 1u;
-        g_wavefrontDispatchArgs[0].activeCount = totalPathCount;
+        g_wavefrontDispatchArgs[0].activeCount = clampedPathCount;
 
         g_wavefrontStats[0] = outputWidth;
         g_wavefrontStats[1] = outputHeight;
-        g_wavefrontStats[2] = totalPathCount;
+        g_wavefrontStats[2] = clampedPathCount;
         g_wavefrontStats[3] = backendMode;
         g_wavefrontStats[4] = asuint(globalFrameCount);
         g_wavefrontStats[5] = asuint(accumulationCount);
+        g_wavefrontStats[15] = totalPathCount - clampedPathCount;
         g_wavefrontStats[50] = WAVEFRONT_ABI_VERSION;
+        g_wavefrontQueueCounters[WAVEFRONT_QUEUE_PATH_A] = clampedPathCount;
     }
 
-    uint queueIndex = 0u;
-    InterlockedAdd(g_wavefrontQueueCounters[WAVEFRONT_QUEUE_PATH_A], 1u,
-                   queueIndex);
-    if (queueIndex >= maxPathCount) {
-        InterlockedAdd(g_wavefrontStats[15], 1u);
+    if (pixelIndex >= clampedPathCount) {
         return;
     }
+
+    const uint queueIndex = pixelIndex;
 
     const float2 screenDim = float2(outputWidth, outputHeight);
     const float2 uv = (float2(pixel) + 0.5 + float2(jitterX, jitterY)) / screenDim;

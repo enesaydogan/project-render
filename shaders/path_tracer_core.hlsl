@@ -467,11 +467,9 @@ void RayGen()
     float3 primaryGuideDir = rayDirCenter;
     RayPayload primaryGuidePayload = InitRayPayload(RAY_TYPE_PRIMARY);
     uint primaryGuideState = 0u;
-    TracePrimaryGuideForPixel(launchIndex.xy, launchDim.xy,
-                              primaryGuideOrigin, primaryGuideDir,
-                              primaryGuidePayload, primaryGuideState);
-    bool primaryGuideThroughTransmission =
-        (primaryGuideState & WAVEFRONT_GUIDE_STATE_THROUGH_TRANSMISSION) != 0u;
+    const bool needsPrimaryGuide =
+        DxrFeatureEnabled(DXR_FEATURE_PRIMARY_GUIDE);
+    bool primaryGuideThroughTransmission = false;
 
     RayPayload pretracedPrimaryPayload = InitRayPayload(RAY_TYPE_PRIMARY);
     bool hasPretracedPrimaryPayload = false;
@@ -593,6 +591,26 @@ void RayGen()
         TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, primaryResolveRay, pretracedPrimaryPayload);
         SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
     }
+
+    if (needsPrimaryGuide) {
+        TracePrimaryGuideForPixel(launchIndex.xy, launchDim.xy,
+                                  primaryGuideOrigin, primaryGuideDir,
+                                  primaryGuidePayload, primaryGuideState);
+    } else {
+        primaryGuideOrigin = rayOrigin;
+        primaryGuideDir = rayDir;
+        primaryGuidePayload = pretracedPrimaryPayload;
+        primaryGuideState = (pretracedPrimaryPayload.t < 0.0)
+            ? WAVEFRONT_GUIDE_STATE_MISS
+            : 0u;
+        if (refractiveBounces > 0 ||
+            primaryThinGlassResolveLayers > 0 ||
+            currentRayType == RAY_TYPE_REFRACTION) {
+            primaryGuideState |= WAVEFRONT_GUIDE_STATE_THROUGH_TRANSMISSION;
+        }
+    }
+    primaryGuideThroughTransmission =
+        (primaryGuideState & WAVEFRONT_GUIDE_STATE_THROUGH_TRANSMISSION) != 0u;
 
     for (int bounce = 0; bounce < 32; ++bounce) 
     {

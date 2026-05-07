@@ -252,8 +252,9 @@ float4 SampleUvTexture(int texIndex, float2 uv, float3 objectOrigin,
                        bool applyColorVariation)
 {
     if (texIndex < 0) return float4(1, 1, 1, 1);
+    uint texSlot = NonUniformResourceIndex((uint)texIndex);
     if (!UseUvStochasticTiling(variationParams, rotationParams)) {
-        return textures[texIndex].SampleLevel(linearSampler, uv, lod);
+        return textures[texSlot].SampleLevel(linearSampler, uv, lod);
     }
 
     uint baseSeed = ComputeUvVariationBaseSeed(variationParams, objectOrigin,
@@ -278,15 +279,15 @@ float4 SampleUvTexture(int texIndex, float2 uv, float3 objectOrigin,
     ComputeUvVariationTransform(seed2, variationParams, rotationParams,
                                 offset2, mirror2, sin2, cos2, color2);
 
-    float4 s0 = textures[texIndex].SampleLevel(
+    float4 s0 = textures[texSlot].SampleLevel(
         linearSampler,
         TransformUvForCell(uv, offset0, mirror0, sin0, cos0),
         lod);
-    float4 s1 = textures[texIndex].SampleLevel(
+    float4 s1 = textures[texSlot].SampleLevel(
         linearSampler,
         TransformUvForCell(uv, offset1, mirror1, sin1, cos1),
         lod);
-    float4 s2 = textures[texIndex].SampleLevel(
+    float4 s2 = textures[texSlot].SampleLevel(
         linearSampler,
         TransformUvForCell(uv, offset2, mirror2, sin2, cos2),
         lod);
@@ -304,10 +305,11 @@ float3 SampleUvNormalTexture(int texIndex, float2 uv, float amount,
                              float4 rotationParams, float lod)
 {
     if (texIndex < 0 || amount <= 0.0f) return float3(0.0f, 0.0f, 1.0f);
+    uint texSlot = NonUniformResourceIndex((uint)texIndex);
     if (!UseUvStochasticTiling(variationParams, rotationParams)) {
         return normalize(lerp(
             float3(0.0f, 0.0f, 1.0f),
-            textures[texIndex].SampleLevel(linearSampler, uv, lod).xyz *
+            textures[texSlot].SampleLevel(linearSampler, uv, lod).xyz *
                 2.0f - 1.0f,
             saturate(amount)));
     }
@@ -337,19 +339,19 @@ float3 SampleUvNormalTexture(int texIndex, float2 uv, float amount,
     float blendAmount = saturate(amount);
     float3 n0 = normalize(lerp(
         float3(0.0f, 0.0f, 1.0f),
-        textures[texIndex].SampleLevel(
+        textures[texSlot].SampleLevel(
             linearSampler, TransformUvForCell(uv, offset0, mirror0, sin0, cos0),
             lod).xyz * 2.0f - 1.0f,
         blendAmount));
     float3 n1 = normalize(lerp(
         float3(0.0f, 0.0f, 1.0f),
-        textures[texIndex].SampleLevel(
+        textures[texSlot].SampleLevel(
             linearSampler, TransformUvForCell(uv, offset1, mirror1, sin1, cos1),
             lod).xyz * 2.0f - 1.0f,
         blendAmount));
     float3 n2 = normalize(lerp(
         float3(0.0f, 0.0f, 1.0f),
-        textures[texIndex].SampleLevel(
+        textures[texSlot].SampleLevel(
             linearSampler, TransformUvForCell(uv, offset2, mirror2, sin2, cos2),
             lod).xyz * 2.0f - 1.0f,
         blendAmount));
@@ -395,20 +397,21 @@ float4 SampleTriPlanar(int texIndex, float3 worldPos, float3 worldNormal,
                        uint primitiveId, float lod, bool dominantAxisOnly)
 {
     if (texIndex < 0) return float4(1,1,1,1);
+    uint texSlot = NonUniformResourceIndex((uint)texIndex);
     float3 rotatedPos = RotateTriPlanarVector(worldPos, rotationParams);
     float3 rotatedNormal = normalize(RotateTriPlanarVector(worldNormal, rotationParams));
     float2 variationOffset = ComputeTriPlanarVariationOffset(
         variationParams, objectOrigin, primitiveId);
     if (dominantAxisOnly) {
         float3 an = abs(rotatedNormal);
-        if (an.x >= an.y && an.x >= an.z) return textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_X(rotatedPos, rotatedNormal, scale, variationOffset), lod);
-        if (an.y >= an.z) return textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_Y(rotatedPos, rotatedNormal, scale, variationOffset), lod);
-        return textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_Z(rotatedPos, rotatedNormal, scale, variationOffset), lod);
+        if (an.x >= an.y && an.x >= an.z) return textures[texSlot].SampleLevel(linearSampler, TriPlanarUV_X(rotatedPos, rotatedNormal, scale, variationOffset), lod);
+        if (an.y >= an.z) return textures[texSlot].SampleLevel(linearSampler, TriPlanarUV_Y(rotatedPos, rotatedNormal, scale, variationOffset), lod);
+        return textures[texSlot].SampleLevel(linearSampler, TriPlanarUV_Z(rotatedPos, rotatedNormal, scale, variationOffset), lod);
     }
     float3 w = TriPlanarWeights(rotatedNormal, sharpness);
-    float4 sx = textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_X(rotatedPos, rotatedNormal, scale, variationOffset), lod);
-    float4 sy = textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_Y(rotatedPos, rotatedNormal, scale, variationOffset), lod);
-    float4 sz = textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_Z(rotatedPos, rotatedNormal, scale, variationOffset), lod);
+    float4 sx = textures[texSlot].SampleLevel(linearSampler, TriPlanarUV_X(rotatedPos, rotatedNormal, scale, variationOffset), lod);
+    float4 sy = textures[texSlot].SampleLevel(linearSampler, TriPlanarUV_Y(rotatedPos, rotatedNormal, scale, variationOffset), lod);
+    float4 sz = textures[texSlot].SampleLevel(linearSampler, TriPlanarUV_Z(rotatedPos, rotatedNormal, scale, variationOffset), lod);
     return sx * w.x + sy * w.y + sz * w.z;
 }
 
@@ -471,6 +474,7 @@ float3 SampleTriPlanarNormal(int texIndex, float3 worldPos, float3 worldNormal,
                              float lod, bool dominantAxisOnly)
 {
     if (texIndex < 0 || amount <= 0.0) return normalize(worldNormal);
+    uint texSlot = NonUniformResourceIndex((uint)texIndex);
     float3 Nw = normalize(worldNormal);
     float3 rotatedPos = RotateTriPlanarVector(worldPos, rotationParams);
     float3 rotatedNormal = normalize(RotateTriPlanarVector(worldNormal, rotationParams));
@@ -489,21 +493,21 @@ float3 SampleTriPlanarNormal(int texIndex, float3 worldPos, float3 worldNormal,
         float3 axisNormal;
         float3x3 axisTbn;
         if (an.x >= an.y && an.x >= an.z) {
-            axisNormal = UnpackNormal(textures[texIndex].SampleLevel(
+            axisNormal = UnpackNormal(textures[texSlot].SampleLevel(
                 linearSampler,
                 TriPlanarUV_X(rotatedPos, rotatedNormal, scale,
                                variationOffset),
                 lod));
             axisTbn = float3x3(-axisZ * sx, axisY, axisX * sx);
         } else if (an.y >= an.z) {
-            axisNormal = UnpackNormal(textures[texIndex].SampleLevel(
+            axisNormal = UnpackNormal(textures[texSlot].SampleLevel(
                 linearSampler,
                 TriPlanarUV_Y(rotatedPos, rotatedNormal, scale,
                                variationOffset),
                 lod));
             axisTbn = float3x3(axisX, -axisZ * sy, axisY * sy);
         } else {
-            axisNormal = UnpackNormal(textures[texIndex].SampleLevel(
+            axisNormal = UnpackNormal(textures[texSlot].SampleLevel(
                 linearSampler,
                 TriPlanarUV_Z(rotatedPos, rotatedNormal, scale,
                                variationOffset),
@@ -516,9 +520,9 @@ float3 SampleTriPlanarNormal(int texIndex, float3 worldPos, float3 worldNormal,
     }
     float3 w = dominantAxisOnly ? float3(0,0,0) : TriPlanarWeights(rotatedNormal, sharpness);
 
-    float3 nx = UnpackNormal(textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_X(rotatedPos, rotatedNormal, scale, variationOffset), lod));
-    float3 ny = UnpackNormal(textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_Y(rotatedPos, rotatedNormal, scale, variationOffset), lod));
-    float3 nz = UnpackNormal(textures[texIndex].SampleLevel(linearSampler, TriPlanarUV_Z(rotatedPos, rotatedNormal, scale, variationOffset), lod));
+    float3 nx = UnpackNormal(textures[texSlot].SampleLevel(linearSampler, TriPlanarUV_X(rotatedPos, rotatedNormal, scale, variationOffset), lod));
+    float3 ny = UnpackNormal(textures[texSlot].SampleLevel(linearSampler, TriPlanarUV_Y(rotatedPos, rotatedNormal, scale, variationOffset), lod));
+    float3 nz = UnpackNormal(textures[texSlot].SampleLevel(linearSampler, TriPlanarUV_Z(rotatedPos, rotatedNormal, scale, variationOffset), lod));
     nx = BlendNormalSample(nx, amount);
     ny = BlendNormalSample(ny, amount);
     nz = BlendNormalSample(nz, amount);
@@ -654,20 +658,25 @@ void ClosestHitImpl(inout RayPayload payload,
     float3 bary = float3(1.0 - bary2.x - bary2.y, bary2.x, bary2.y);
     uint primIndex = PrimitiveIndex();
     uint baseIndex = primIndex * 3;
+    uint ibIndex = NonUniformResourceIndex((uint)mesh.ibIndex);
+    uint vbIndex = NonUniformResourceIndex((uint)mesh.vbIndex);
     
     // Use .Load for indices to ensure compatibility with typed buffer arrays
-    uint i0 = indices[mesh.ibIndex].Load(baseIndex);
-    uint i1 = indices[mesh.ibIndex].Load(baseIndex + 1);
-    uint i2 = indices[mesh.ibIndex].Load(baseIndex + 2);
+    uint i0 = indices[ibIndex].Load(baseIndex);
+    uint i1 = indices[ibIndex].Load(baseIndex + 1);
+    uint i2 = indices[ibIndex].Load(baseIndex + 2);
 
     // Instrumentation: count index + vertex fetches
     SHADER_COUNTER_ADD(SHADER_COUNTER_INDEX_LOADS, 3);
     SHADER_COUNTER_ADD(SHADER_COUNTER_VERTEX_FETCHES, 3);
+    Vertex v0 = vertices[vbIndex][i0];
+    Vertex v1 = vertices[vbIndex][i1];
+    Vertex v2 = vertices[vbIndex][i2];
     
     // Interpolate UV
-    float2 uv0 = vertices[mesh.vbIndex][i0].uv;
-    float2 uv1 = vertices[mesh.vbIndex][i1].uv;
-    float2 uv2 = vertices[mesh.vbIndex][i2].uv;
+    float2 uv0 = v0.uv;
+    float2 uv1 = v1.uv;
+    float2 uv2 = v2.uv;
     float2 uv = uv0 * bary.x + uv1 * bary.y + uv2 * bary.z;
 
     // Material UV transform (real-world scaling control)
@@ -680,14 +689,14 @@ void ClosestHitImpl(inout RayPayload payload,
     float3 objectOrigin = mul(ObjectToWorld3x4(), float4(0.0, 0.0, 0.0, 1.0));
     
     // Interpolate normal and tangent (local space)
-    float3 n0 = vertices[mesh.vbIndex][i0].normal;
-    float3 n1 = vertices[mesh.vbIndex][i1].normal;
-    float3 n2 = vertices[mesh.vbIndex][i2].normal;
+    float3 n0 = v0.normal;
+    float3 n1 = v1.normal;
+    float3 n2 = v2.normal;
     float3 localNormal = normalize(n0 * bary.x + n1 * bary.y + n2 * bary.z);
     
-    float4 t0 = vertices[mesh.vbIndex][i0].tangent;
-    float4 t1 = vertices[mesh.vbIndex][i1].tangent;
-    float4 t2 = vertices[mesh.vbIndex][i2].tangent;
+    float4 t0 = v0.tangent;
+    float4 t1 = v1.tangent;
+    float4 t2 = v2.tangent;
     float4 localTangent = t0 * bary.x + t1 * bary.y + t2 * bary.z;
 
     // Transform to world space
@@ -1104,15 +1113,20 @@ void AnyHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes a
     if (alphaTested) {
         uint primIndex = PrimitiveIndex();
         uint baseIndex = primIndex * 3;
-        uint i0 = indices[mesh.ibIndex].Load(baseIndex);
-        uint i1 = indices[mesh.ibIndex].Load(baseIndex + 1);
-        uint i2 = indices[mesh.ibIndex].Load(baseIndex + 2);
+        uint ibIndex = NonUniformResourceIndex((uint)mesh.ibIndex);
+        uint vbIndex = NonUniformResourceIndex((uint)mesh.vbIndex);
+        uint i0 = indices[ibIndex].Load(baseIndex);
+        uint i1 = indices[ibIndex].Load(baseIndex + 1);
+        uint i2 = indices[ibIndex].Load(baseIndex + 2);
+        Vertex v0 = vertices[vbIndex][i0];
+        Vertex v1 = vertices[vbIndex][i1];
+        Vertex v2 = vertices[vbIndex][i2];
 
         float2 bary2 = attr.barycentrics;
         float3 bary = float3(1.0 - bary2.x - bary2.y, bary2.x, bary2.y);
-        float2 uv0 = vertices[mesh.vbIndex][i0].uv;
-        float2 uv1 = vertices[mesh.vbIndex][i1].uv;
-        float2 uv2 = vertices[mesh.vbIndex][i2].uv;
+        float2 uv0 = v0.uv;
+        float2 uv1 = v1.uv;
+        float2 uv2 = v2.uv;
         float2 uv = uv0 * bary.x + uv1 * bary.y + uv2 * bary.z;
         if ((matFlags & MATERIAL_FLAG_UV_TRANSFORM) != 0) {
             uv = uv * matExtra.uvTransform.xy + matExtra.uvTransform.zw;
@@ -1121,9 +1135,9 @@ void AnyHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes a
         float alpha = mat.baseColor_opacity.a;
         int texDiff = UnpackTextureIndexLow(mat.packedTextures.x);
         if (texDiff >= 0) {
-            float3 n0 = vertices[mesh.vbIndex][i0].normal;
-            float3 n1 = vertices[mesh.vbIndex][i1].normal;
-            float3 n2 = vertices[mesh.vbIndex][i2].normal;
+            float3 n0 = v0.normal;
+            float3 n1 = v1.normal;
+            float3 n2 = v2.normal;
             float3 localNormal = normalize(n0 * bary.x + n1 * bary.y + n2 * bary.z);
             float3 worldNormal = normalize(mul(localNormal, (float3x3)WorldToObject3x4()));
             float3 P = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
@@ -1148,9 +1162,9 @@ void AnyHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes a
         }
         int texOpacity = UnpackTextureIndexHigh(mat.packedTextures.z);
         if (texOpacity >= 0) {
-            float3 n0 = vertices[mesh.vbIndex][i0].normal;
-            float3 n1 = vertices[mesh.vbIndex][i1].normal;
-            float3 n2 = vertices[mesh.vbIndex][i2].normal;
+            float3 n0 = v0.normal;
+            float3 n1 = v1.normal;
+            float3 n2 = v2.normal;
             float3 localNormal = normalize(n0 * bary.x + n1 * bary.y + n2 * bary.z);
             float3 worldNormal = normalize(mul(localNormal, (float3x3)WorldToObject3x4()));
             float3 P = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();

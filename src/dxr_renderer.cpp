@@ -143,6 +143,12 @@ static Microsoft::WRL::ComPtr<ID3D12Resource> s_shaderCountersReadbackBuffer;
 static Microsoft::WRL::ComPtr<ID3D12Resource>
     s_wavefrontShadowContributionUAV;
 static UINT s_lastShaderCounters[16] = {0};
+#if defined(_DEBUG)
+static constexpr bool kShaderCountersEnabled = true;
+#else
+static constexpr bool kShaderCountersEnabled = false;
+#endif
+static bool ShaderCountersEnabled() { return kShaderCountersEnabled; }
 
 struct WavefrontPathStateGpu {
   float origin[3];
@@ -360,6 +366,11 @@ enum ResourceFeatureBits : uint32_t {
   ResourceFeature_TonemapAo = 1u << 3,
 };
 
+enum DxrFeatureBits : uint32_t {
+  DxrFeature_AovOutput = 1u << 0,
+  DxrFeature_PrimaryGuide = 1u << 1,
+};
+
 // Halton sequence helper for CPU-side jitter
 static float Halton(uint32_t index, uint32_t base) {
   float f = 1.0f;
@@ -397,6 +408,21 @@ static uint32_t ComputeResourceFeatureMask() {
   }
   if (s_tonemapAoIntensity > 1.0e-4f) {
     mask |= ResourceFeature_TonemapAo;
+  }
+  return mask;
+}
+
+static uint32_t ComputeDxrFeatureMask(bool dlssActive, bool rrActive,
+                                      bool debugViewActive,
+                                      bool finalDenoiserActive) {
+  uint32_t mask = 0;
+  if (dlssActive || finalDenoiserActive || debugViewActive ||
+      s_tonemapAoIntensity > 1.0e-4f ||
+      s_pathTracingBackend != DxrRenderer::PathTracingBackend::Legacy) {
+    mask |= DxrFeature_AovOutput;
+  }
+  if (dlssActive || rrActive || s_tonemapAoIntensity > 1.0e-4f) {
+    mask |= DxrFeature_PrimaryGuide;
   }
   return mask;
 }
@@ -909,7 +935,8 @@ static void DispatchWavefrontBootstrap(ID3D12GraphicsCommandList4 *list,
                                        ID3D12Resource *cameraCB);
 static void DispatchWavefrontCounterReset(ID3D12GraphicsCommandList4 *list,
                                           UINT counterIndex,
-                                          UINT resetValue);
+                                          UINT resetValue,
+                                          UINT resetCount = 1u);
 static void DispatchWavefrontPrepareIndirectArgs(
   ID3D12GraphicsCommandList4 *list, UINT queueCounterIndex,
   UINT dispatchArgsIndex, UINT reservedSlotBase, UINT reservedFlags);
@@ -1779,7 +1806,8 @@ static void EnsureWavefrontCounterResetPipeline() {
 
 static void DispatchWavefrontCounterReset(ID3D12GraphicsCommandList4 *list,
                                           UINT counterIndex,
-                                          UINT resetValue) {
+                                          UINT resetValue,
+                                          UINT resetCount) {
   if (!list || !s_srvHeap || !s_device) {
     return;
   }
@@ -1794,7 +1822,7 @@ static void DispatchWavefrontCounterReset(ID3D12GraphicsCommandList4 *list,
   list->SetPipelineState(s_wavefrontCounterResetPSO.Get());
   list->SetComputeRootSignature(s_wavefrontCounterResetRootSig.Get());
 
-  const UINT resetConstants[4] = {counterIndex, resetValue, 0u, 0u};
+  const UINT resetConstants[4] = {counterIndex, resetValue, resetCount, 0u};
   list->SetComputeRoot32BitConstants(0, _countof(resetConstants),
                                      resetConstants, 0);
   list->SetComputeRootDescriptorTable(1, s_outputUAVGpu);
@@ -2031,11 +2059,6 @@ static bool ExecuteWavefrontIndirectRayDispatch(
   toUav.Transition.StateBefore = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
   toUav.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
   list->ResourceBarrier(1, &toUav);
-
-  D3D12_RESOURCE_BARRIER uavBarrier = {};
-  uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-  uavBarrier.UAV.pResource = nullptr;
-  list->ResourceBarrier(1, &uavBarrier);
   return true;
 }
 
@@ -2069,11 +2092,6 @@ static bool ExecuteWavefrontIndirectComputeDispatch(
   toUav.Transition.StateBefore = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
   toUav.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
   list->ResourceBarrier(1, &toUav);
-
-  D3D12_RESOURCE_BARRIER uavBarrier = {};
-  uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-  uavBarrier.UAV.pResource = nullptr;
-  list->ResourceBarrier(1, &uavBarrier);
   return true;
 }
 
@@ -4753,6 +4771,9 @@ void BuildAccelerationStructures(
     // live-update paths or when DLSS/Streamline is active.
     const bool enableBlasCompaction =
         (meshes.size() <= 1500) && !conservativeBlasBuild;
+    const BlasBuildPreference blasBuildPreference =
+        conservativeBlasBuild ? BlasBuildPreference::FastBuild
+                              : BlasBuildPreference::FastTrace;
     size_t batchCount = 0;
 
     std::vector<ComPtr<ID3D12CommandAllocator>> submittedBatchAllocators;
@@ -4814,7 +4835,7 @@ void BuildAccelerationStructures(
             auto bl = BuildBLAS(s_dxrDevice.Get(), cmdList.Get(), vbAddr,
                                 mesh.vertexCount, sizeof(Asset::Vertex), ibAddr,
                                 mesh.indexCount, meshOpaqueStates[i] != 0, false,
-                                enableBlasCompaction);
+                                enableBlasCompaction, blasBuildPreference);
             if (bl.result && bl.scratch) {
               s_allBLAS.push_back({bl, (UINT64)i});
               s_cachedMeshBuffersForBlas.push_back(mesh.vertexBuffer.Get());
@@ -4856,7 +4877,7 @@ void BuildAccelerationStructures(
                 BuildBLAS(s_dxrDevice.Get(), cmdList.Get(), vbAddr,
                           mesh.vertexCount, sizeof(Asset::Vertex), ibAddr,
                           mesh.indexCount, meshOpaqueStates[i] != 0, false,
-                          enableBlasCompaction);
+                          enableBlasCompaction, blasBuildPreference);
             if (bl.result && bl.scratch) {
               s_allBLAS.push_back({bl, (UINT64)i});
               s_cachedMeshBuffersForBlas.push_back(mesh.vertexBuffer.Get());
@@ -5905,6 +5926,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   }
   bool isFinalDenoiserMode =
       (s_denoiserMode != DxrRenderer::DenoiserMode::Off && !dlssActive);
+  const uint32_t dxrFeatureMask =
+      ComputeDxrFeatureMask(dlssActive, rrActive, debugViewActive,
+                            isFinalDenoiserMode);
   bool reachedEndCondition = ((maxSpp > 0 && currSpp >= maxSpp) || isConverged);
 
   bool canAutoDenoise =
@@ -5984,8 +6008,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       cam->tonemapAoIntensity = s_tonemapAoIntensity;
       cam->tonemapAoRadiusMeters = s_tonemapAoLengthMm * 0.001f;
       cam->tonemapAoMode = static_cast<float>(static_cast<int>(s_tonemapAoMode));
-        cam->triPlanarWorldRotationDegrees =
+      cam->triPlanarWorldRotationDegrees =
           g_cameraData.triPlanarWorldRotationDegrees;
+      cam->dxrFeatureFlags = static_cast<float>(dxrFeatureMask);
 
       // Keep actual still-frame count even for RR so shaders can compute
       // variance/noise for adaptive sampling and diagnostics.
@@ -6326,7 +6351,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     dxrList->ResourceBarrier(1, &uavBarrier);
 
     // Clear shader counters (debug instrumentation)
-    if (s_shaderCountersBuffer) {
+    if (ShaderCountersEnabled() && s_shaderCountersBuffer) {
       UINT zeroVals[4] = {0, 0, 0, 0};
       UINT inc = s_device->GetDescriptorHandleIncrementSize(
           D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
@@ -6383,7 +6408,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     }
 
     // Ensure shader counters are reset per-frame (debug instrumentation)
-    if (s_shaderCountersBuffer) {
+    if (ShaderCountersEnabled() && s_shaderCountersBuffer) {
       UINT zeros[4] = {0, 0, 0, 0};
       UINT inc = s_device->GetDescriptorHandleIncrementSize(
           D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
@@ -6396,14 +6421,6 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     }
     bool useWavefrontResolvedOutput = false;
     if (s_pathTracingBackend != PathTracingBackend::Legacy && cameraCB) {
-      for (UINT i = 0; i < 6; ++i) {
-        DispatchWavefrontCounterReset(dxrList.Get(), i, 0u);
-      }
-      for (UINT i = 0; i < kWavefrontMaterialBinCount; ++i) {
-        DispatchWavefrontCounterReset(
-            dxrList.Get(), kWavefrontMaterialBinCounterBase + i, 0u);
-      }
-
       SetWavefrontStage("bootstrap");
       DispatchWavefrontBootstrap(dxrList.Get(), cameraCB);
       BindRayTracingGlobalRoot();
@@ -6510,10 +6527,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
               kWavefrontSecondaryDispatchRaysReservedSlot, queueFlags);
 
           // Secondary visibility: trace continuation rays from source queue.
-          for (UINT i = 0; i < kWavefrontMaterialBinCount; ++i) {
-            DispatchWavefrontCounterReset(
-                dxrList.Get(), kWavefrontMaterialBinCounterBase + i, 0u);
-          }
+          DispatchWavefrontCounterReset(
+              dxrList.Get(), kWavefrontMaterialBinCounterBase, 0u,
+              kWavefrontMaterialBinCount);
           BindRayTracingGlobalRoot();
           SetWavefrontStage("secondary-visibility");
           DispatchWavefrontSecondaryVisibility(dxrList.Get(), sourceCounter);
@@ -8178,12 +8194,17 @@ void EndFrameProfiling(ID3D12GraphicsCommandList *commandList) {
   s_cpuWorkTimeMs =
       std::chrono::duration<float, std::milli>(cpuEnd - s_cpuFrameStartTime)
           .count();
+  static UINT s_wavefrontStatsReadbackFrame = 0;
+  const bool readbackShaderCounters = ShaderCountersEnabled();
+  const bool readbackWavefrontStats =
+      g_verboseRenderLogs || ((s_wavefrontStatsReadbackFrame++ & 7u) == 0u);
 
   if (s_queryHeap) {
     commandList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
                           9); // Frame end
     // Copy shader counters (GPU -> readback) so CPU can inspect them next map
-    if (s_shaderCountersBuffer && s_shaderCountersReadbackBuffer) {
+    if (readbackShaderCounters && s_shaderCountersBuffer &&
+        s_shaderCountersReadbackBuffer) {
       TransitionResource(commandList, s_shaderCountersBuffer.Get(),
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                          D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -8193,7 +8214,8 @@ void EndFrameProfiling(ID3D12GraphicsCommandList *commandList) {
                          D3D12_RESOURCE_STATE_COPY_SOURCE,
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
-    if (s_wavefrontStatsBuffer && s_wavefrontStatsReadbackBuffer) {
+    if (readbackWavefrontStats && s_wavefrontStatsBuffer &&
+        s_wavefrontStatsReadbackBuffer) {
       TransitionResource(commandList, s_wavefrontStatsBuffer.Get(),
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                          D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -8266,7 +8288,7 @@ void EndFrameProfiling(ID3D12GraphicsCommandList *commandList) {
   }
 
   // Read shader counters readback (from GPU) and log a short summary
-  if (s_shaderCountersReadbackBuffer) {
+  if (readbackShaderCounters && s_shaderCountersReadbackBuffer) {
     UINT *c = nullptr;
     if (SUCCEEDED(
             s_shaderCountersReadbackBuffer->Map(0, nullptr, (void **)&c))) {
@@ -8286,7 +8308,7 @@ void EndFrameProfiling(ID3D12GraphicsCommandList *commandList) {
     }
   }
 
-  if (s_wavefrontStatsReadbackBuffer) {
+  if (readbackWavefrontStats && s_wavefrontStatsReadbackBuffer) {
     UINT *stats = nullptr;
     if (SUCCEEDED(
             s_wavefrontStatsReadbackBuffer->Map(0, nullptr, (void **)&stats))) {

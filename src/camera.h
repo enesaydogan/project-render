@@ -56,7 +56,8 @@ struct CameraCB {
   float tonemapAoRadiusMeters;
   float tonemapAoMode;
   float triPlanarWorldRotationDegrees;
-  float _pad3[3]; // ALIGNMENT PADDING
+  float dxrFeatureFlags;
+  float _pad3[2]; // ALIGNMENT PADDING
   float shadowMatrix[16];
   float viewProj[16];
   float invViewProj[16];

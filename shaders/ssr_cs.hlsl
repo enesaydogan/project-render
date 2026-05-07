@@ -47,6 +47,7 @@ cbuffer CameraCB : register(b0)
     float tonemapAoRadiusMeters;
     float tonemapAoMode;
     float triPlanarWorldRotationDegrees;
+    float dxrFeatureFlags;
     float4x4 shadowMatrix;
     float4x4 viewProj;
     float4x4 invViewProj;

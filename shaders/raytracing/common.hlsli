@@ -7,7 +7,7 @@
 #include "../random_lib.hlsl"
 
 #ifndef SHADER_ENABLE_DEBUG
-#define SHADER_ENABLE_DEBUG 1
+#define SHADER_ENABLE_DEBUG 0
 #endif
 
 static const float PI = 3.14159265359;
@@ -160,6 +160,15 @@ cbuffer Camera : register(b0)
     float tonemapAoRadiusMeters;
     float tonemapAoMode;
     float triPlanarWorldRotationDegrees;
+    float dxrFeatureFlags;
+}
+
+static const uint DXR_FEATURE_AOV_OUTPUT = 1u << 0;
+static const uint DXR_FEATURE_PRIMARY_GUIDE = 1u << 1;
+
+inline bool DxrFeatureEnabled(uint feature)
+{
+    return (((uint)dxrFeatureFlags) & feature) != 0u;
 }
 
 inline float GetDxrProceduralSkyBoost()
@@ -364,6 +373,7 @@ static const uint WAVEFRONT_QUEUE_PRIMARY_HIT = 2u;
 static const uint WAVEFRONT_QUEUE_PRIMARY_MISS = 3u;
 static const uint WAVEFRONT_QUEUE_PATH_B = 4u;
 static const uint WAVEFRONT_QUEUE_SHADOW = 5u;
+static const uint WAVEFRONT_QUEUE_COUNTER_COUNT = 16u;
 
 struct WavefrontHitRecord
 {

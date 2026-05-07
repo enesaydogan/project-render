@@ -570,6 +570,14 @@ set_target_properties(project-render asset_loader imgui_static content-browser P
 #
 set(SHADER_SOURCE_DIR "${CMAKE_SOURCE_DIR}/shaders")
 set(SHADER_BINARY_DIR "${CMAKE_BINARY_DIR}/shaders")
+option(PROJECT_RENDER_SHADER_COUNTERS
+       "Compile DXR shader instrumentation counters into shipped shader bytecode"
+       OFF)
+if(PROJECT_RENDER_SHADER_COUNTERS)
+  set(PROJECT_RENDER_SHADER_COUNTER_DEFINE "SHADER_ENABLE_DEBUG=1")
+else()
+  set(PROJECT_RENDER_SHADER_COUNTER_DEFINE "SHADER_ENABLE_DEBUG=0")
+endif()
 file(GLOB_RECURSE SHADER_ALL_INPUTS CONFIGURE_DEPENDS
     "${SHADER_SOURCE_DIR}/*.hlsl"
     "${SHADER_SOURCE_DIR}/*.hlsli"
@@ -659,7 +667,7 @@ if(DXC_COMPILER)
     get_filename_component(base "${file}" NAME_WE)
     set(out "${SHADER_BINARY_DIR}/${base}_${ep}_${profile}.cso")
 
-    set(dxc_args -T ${profile})
+    set(dxc_args -T ${profile} -D ${PROJECT_RENDER_SHADER_COUNTER_DEFINE})
     if(NOT ep STREQUAL "")
       list(APPEND dxc_args -E ${ep})
     endif()

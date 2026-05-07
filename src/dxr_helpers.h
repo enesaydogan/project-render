@@ -26,6 +26,8 @@ struct AccelerationStructureBuffers {
   bool supportsUpdate = false;
 };
 
+enum class BlasBuildPreference { FastBuild, FastTrace };
+
 // Start Alignment at 256 bytes for good measure
 inline UINT64 Align(UINT64 size, UINT64 alignment) {
   return (size + (alignment - 1)) & ~(alignment - 1);
@@ -135,7 +137,9 @@ BuildBLAS(ID3D12Device5 *device, ID3D12GraphicsCommandList4 *commandList,
           D3D12_GPU_VIRTUAL_ADDRESS vbPtr, UINT vertexCount, UINT vertexStride,
           D3D12_GPU_VIRTUAL_ADDRESS ibPtr, UINT indexCount,
           bool isOpaque = true, bool allowUpdate = false,
-          bool allowCompaction = true) {
+          bool allowCompaction = true,
+          BlasBuildPreference buildPreference =
+              BlasBuildPreference::FastBuild) {
   D3D12_RAYTRACING_GEOMETRY_DESC geomDesc = {};
   geomDesc.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
   geomDesc.Triangles.VertexBuffer.StartAddress = vbPtr;
@@ -154,12 +158,10 @@ BuildBLAS(ID3D12Device5 *device, ID3D12GraphicsCommandList4 *commandList,
   D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
   inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
   inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
-  // Use PREFER_FAST_BUILD for faster load times.
-  // PREFER_FAST_TRACE is better for runtime performance but much slower to
-  // build. For models taking "ages" to load, FAST_BUILD is the right trade-
-  // off.
   inputs.Flags =
-      D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
+      (buildPreference == BlasBuildPreference::FastTrace)
+          ? D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE
+          : D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
   if (allowUpdate) {
     inputs.Flags |=
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE;

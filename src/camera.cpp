@@ -53,7 +53,8 @@ CameraCB g_initialCameraData = {
     0.0f,                           // tonemapAoIntensity
     0.25f,                          // tonemapAoRadiusMeters
     2.0f,                           // tonemapAoMode (Both)
-    0.0f                            // triPlanarWorldRotationDegrees
+    0.0f,                           // triPlanarWorldRotationDegrees
+    0.0f                            // dxrFeatureFlags
 };
 CameraCB g_cameraData = g_initialCameraData;
 ComPtr<ID3D12Resource> g_cameraConstantBuffer;

@@ -4,7 +4,7 @@ cbuffer WavefrontCounterResetConstants : register(b0)
 {
     uint counterIndex;
     uint resetValue;
-    uint reserved0;
+    uint resetCount;
     uint reserved1;
 };
 
@@ -15,5 +15,13 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         return;
     }
 
-    g_wavefrontQueueCounters[counterIndex] = resetValue;
+    const uint count = max(resetCount, 1u);
+    [loop]
+    for (uint i = 0u; i < count; ++i) {
+        const uint index = counterIndex + i;
+        if (index >= WAVEFRONT_QUEUE_COUNTER_COUNT) {
+            break;
+        }
+        g_wavefrontQueueCounters[index] = resetValue;
+    }
 }

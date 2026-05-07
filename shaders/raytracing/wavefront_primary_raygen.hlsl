@@ -29,8 +29,8 @@ void WavefrontPrimaryRayGen()
                                                         uint2(width, height));
     RayPayload guidePayload = InitRayPayload(RAY_TYPE_PRIMARY);
     uint guideState = 0u;
-    TracePrimaryGuideForPixel(pixel, uint2(width, height), guideOrigin,
-                              guideDirection, guidePayload, guideState);
+    const bool needsPrimaryGuide =
+        DxrFeatureEnabled(DXR_FEATURE_PRIMARY_GUIDE);
 
     RayDesc ray;
     ray.Origin = traceOrigin;
@@ -41,6 +41,19 @@ void WavefrontPrimaryRayGen()
     RayPayload payload = InitRayPayload(currentRayType);
     TraceRay(g_accel, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
     SHADER_COUNTER_ADD(SHADER_COUNTER_TRACE_RAYS, 1);
+
+    if (needsPrimaryGuide) {
+        TracePrimaryGuideForPixel(pixel, uint2(width, height), guideOrigin,
+                                  guideDirection, guidePayload, guideState);
+    } else {
+        guideOrigin = traceOrigin;
+        guideDirection = traceDirection;
+        guidePayload = payload;
+        guideState = (payload.t < 0.0) ? WAVEFRONT_GUIDE_STATE_MISS : 0u;
+        if (currentRayType == RAY_TYPE_REFRACTION) {
+            guideState |= WAVEFRONT_GUIDE_STATE_THROUGH_TRANSMISSION;
+        }
+    }
 
     state.origin = traceOrigin;
     state.direction = traceDirection;
