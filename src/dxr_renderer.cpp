@@ -230,7 +230,7 @@ static constexpr UINT kWavefrontQueuePrimaryMiss = 3u;
 static constexpr UINT kWavefrontQueuePathB = 4u;
 static constexpr UINT kWavefrontQueueShadow = 5u;
 static constexpr UINT kWavefrontStatsCount = 64;
-static constexpr UINT kWavefrontDispatchArgCount = 4;
+static constexpr UINT kWavefrontDispatchArgCount = 16;
 static constexpr UINT kWavefrontReservedUint4Count = 16;
 static constexpr UINT64 kWavefrontMinQueueEntries = 65536ull;
 static constexpr UINT64 kWavefrontMaxPathQueueEntries = 4194304ull; // 4M
@@ -954,16 +954,22 @@ static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
                                             ID3D12Resource *meshDataSB,
                                             ID3D12Resource *materialExtraSB,
                                             UINT resolveFlags = 0u,
-                                            bool useIndirectDispatch = false);
+                                            bool useIndirectDispatch = false,
+                                            UINT dispatchArgsIndex = 2,
+                                            bool doBarriers = true);
 static void DispatchWavefrontRestirSeed(ID3D12GraphicsCommandList4 *list,
                                         ID3D12Resource *cameraCB,
                                         UINT seedFlags = 0u,
-                                        bool useIndirectDispatch = false);
+                                        bool useIndirectDispatch = false,
+                                        UINT dispatchArgsIndex = 2,
+                                        bool doBarriers = true);
 static void DispatchWavefrontResolveSecondary(ID3D12GraphicsCommandList4 *list,
                                               ID3D12Resource *cameraCB,
                                               UINT sourceQueueCounterIndex,
                                               UINT extraResolveFlags = 0u,
-                                              bool useIndirectDispatch = false);
+                                              bool useIndirectDispatch = false,
+                                              UINT dispatchArgsIndex = 2,
+                                              bool doBarriers = true);
 
 struct TonemapConstants {
   uint32_t outWidth;
@@ -2032,7 +2038,7 @@ static void UploadWavefrontIndirectDispatchRecords(
 }
 
 static bool ExecuteWavefrontIndirectRayDispatch(
-    ID3D12GraphicsCommandList4 *list, UINT recordOffsetBytes) {
+    ID3D12GraphicsCommandList4 *list, UINT recordOffsetBytes, bool doBarriers = true) {
   if (!list || !s_device || !s_wavefrontReservedBuffer) {
     return false;
   }
@@ -2049,21 +2055,26 @@ static bool ExecuteWavefrontIndirectRayDispatch(
   toIndirect.Transition.StateAfter = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
   toIndirect.Transition.Subresource =
       D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-  list->ResourceBarrier(1, &toIndirect);
+
+  if (doBarriers) {
+    list->ResourceBarrier(1, &toIndirect);
+  }
 
   list->ExecuteIndirect(s_wavefrontDispatchRaysCommandSignature.Get(), 1,
                         s_wavefrontReservedBuffer.Get(), recordOffsetBytes,
                         nullptr, 0);
 
-  D3D12_RESOURCE_BARRIER toUav = toIndirect;
-  toUav.Transition.StateBefore = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
-  toUav.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-  list->ResourceBarrier(1, &toUav);
+  if (doBarriers) {
+    D3D12_RESOURCE_BARRIER toUav = toIndirect;
+    toUav.Transition.StateBefore = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
+    toUav.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    list->ResourceBarrier(1, &toUav);
+  }
   return true;
 }
 
 static bool ExecuteWavefrontIndirectComputeDispatch(
-    ID3D12GraphicsCommandList4 *list, UINT dispatchArgsIndex) {
+    ID3D12GraphicsCommandList4 *list, UINT dispatchArgsIndex, bool doBarriers = true) {
   if (!list || !s_device || !s_wavefrontDispatchArgsBuffer) {
     return false;
   }
@@ -2080,7 +2091,10 @@ static bool ExecuteWavefrontIndirectComputeDispatch(
   toIndirect.Transition.StateAfter = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
   toIndirect.Transition.Subresource =
       D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-  list->ResourceBarrier(1, &toIndirect);
+
+  if (doBarriers) {
+    list->ResourceBarrier(1, &toIndirect);
+  }
 
   list->ExecuteIndirect(
       s_wavefrontDispatchCommandSignature.Get(), 1,
@@ -2088,10 +2102,12 @@ static bool ExecuteWavefrontIndirectComputeDispatch(
       static_cast<UINT64>(dispatchArgsIndex) * sizeof(WavefrontDispatchArgsGpu),
       nullptr, 0);
 
-  D3D12_RESOURCE_BARRIER toUav = toIndirect;
-  toUav.Transition.StateBefore = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
-  toUav.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-  list->ResourceBarrier(1, &toUav);
+  if (doBarriers) {
+    D3D12_RESOURCE_BARRIER toUav = toIndirect;
+    toUav.Transition.StateBefore = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
+    toUav.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    list->ResourceBarrier(1, &toUav);
+  }
   return true;
 }
 
@@ -2565,7 +2581,9 @@ static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
                                             ID3D12Resource *meshDataSB,
                                             ID3D12Resource *materialExtraSB,
                                             UINT resolveFlags,
-                                            bool useIndirectDispatch) {
+                                            bool useIndirectDispatch,
+                                            UINT dispatchArgsIndex,
+                                            bool doBarriers) {
   if (!list || !cameraCB || !s_srvHeap || !s_device ||
       s_lastWavefrontBootstrapPathCount == 0) {
     return;
@@ -2614,23 +2632,27 @@ static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
   const bool dispatchedIndirect =
       useIndirectDispatch &&
       ExecuteWavefrontIndirectComputeDispatch(
-          list, kWavefrontSecondaryResolveDispatchArgsIndex);
+          list, dispatchArgsIndex, doBarriers);
 
   if (!dispatchedIndirect) {
     const UINT groupCountX = (s_lastWavefrontBootstrapPathCount + 63u) / 64u;
     list->Dispatch(groupCountX, 1, 1);
   }
 
-  D3D12_RESOURCE_BARRIER uavBarrier = {};
-  uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-  uavBarrier.UAV.pResource = nullptr;
-  list->ResourceBarrier(1, &uavBarrier);
+  if (doBarriers) {
+    D3D12_RESOURCE_BARRIER uavBarrier = {};
+    uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    uavBarrier.UAV.pResource = nullptr;
+    list->ResourceBarrier(1, &uavBarrier);
+  }
 }
 
 static void DispatchWavefrontRestirSeed(ID3D12GraphicsCommandList4 *list,
                                         ID3D12Resource *cameraCB,
                                         UINT seedFlags,
-                                        bool useIndirectDispatch) {
+                                        bool useIndirectDispatch,
+                                        UINT dispatchArgsIndex,
+                                        bool doBarriers) {
   if (!list || !cameraCB || !s_srvHeap || !s_device ||
       s_lastWavefrontBootstrapPathCount == 0) {
     return;
@@ -2676,24 +2698,28 @@ static void DispatchWavefrontRestirSeed(ID3D12GraphicsCommandList4 *list,
   const bool dispatchedIndirect =
       useIndirectDispatch &&
       ExecuteWavefrontIndirectComputeDispatch(
-          list, kWavefrontSecondaryResolveDispatchArgsIndex);
+          list, dispatchArgsIndex, doBarriers);
 
   if (!dispatchedIndirect) {
     const UINT groupCountX = (s_lastWavefrontBootstrapPathCount + 63u) / 64u;
     list->Dispatch(groupCountX, 1, 1);
   }
 
-  D3D12_RESOURCE_BARRIER uavBarrier = {};
-  uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-  uavBarrier.UAV.pResource = nullptr;
-  list->ResourceBarrier(1, &uavBarrier);
+  if (doBarriers) {
+    D3D12_RESOURCE_BARRIER uavBarrier = {};
+    uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    uavBarrier.UAV.pResource = nullptr;
+    list->ResourceBarrier(1, &uavBarrier);
+  }
 }
 
 static void DispatchWavefrontResolveSecondary(ID3D12GraphicsCommandList4 *list,
                                               ID3D12Resource *cameraCB,
                                               UINT sourceQueueCounterIndex,
                                               UINT extraResolveFlags,
-                                              bool useIndirectDispatch) {
+                                              bool useIndirectDispatch,
+                                              UINT dispatchArgsIndex,
+                                              bool doBarriers) {
   if (!list || !cameraCB || !s_srvHeap || !s_device ||
       s_lastWavefrontBootstrapPathCount == 0) {
     return;
@@ -2744,17 +2770,19 @@ static void DispatchWavefrontResolveSecondary(ID3D12GraphicsCommandList4 *list,
   const bool dispatchedIndirect =
       useIndirectDispatch &&
       ExecuteWavefrontIndirectComputeDispatch(
-          list, kWavefrontSecondaryResolveDispatchArgsIndex);
+          list, dispatchArgsIndex, doBarriers);
 
   if (!dispatchedIndirect) {
     const UINT groupCountX = (s_lastWavefrontBootstrapPathCount + 63u) / 64u;
     list->Dispatch(groupCountX, 1, 1);
   }
 
-  D3D12_RESOURCE_BARRIER uavBarrier = {};
-  uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-  uavBarrier.UAV.pResource = nullptr;
-  list->ResourceBarrier(1, &uavBarrier);
+  if (doBarriers) {
+    D3D12_RESOURCE_BARRIER uavBarrier = {};
+    uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    uavBarrier.UAV.pResource = nullptr;
+    list->ResourceBarrier(1, &uavBarrier);
+  }
 }
 
 static void ClearWavefrontShadowContribution(
@@ -6423,6 +6451,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     if (s_pathTracingBackend != PathTracingBackend::Legacy && cameraCB) {
       SetWavefrontStage("bootstrap");
       DispatchWavefrontBootstrap(dxrList.Get(), cameraCB);
+      DispatchWavefrontCounterReset(dxrList.Get(), kWavefrontMaterialBinCounterBase, 0u, kWavefrontMaterialBinCount);
       BindRayTracingGlobalRoot();
       SetWavefrontStage("primary-visibility");
       DispatchWavefrontPrimaryVisibility(dxrList.Get());
@@ -6456,16 +6485,32 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         // scheduler task source. Spatial reuse still runs later on the same
         // reservoir textures used by legacy.
         SetWavefrontStage("restir-seed");
-        for (UINT materialBin = 0; materialBin < kWavefrontMaterialBinCount;
-             ++materialBin) {
+        for (UINT materialBin = 0; materialBin < kWavefrontMaterialBinCount; ++materialBin) {
           DispatchWavefrontPrepareIndirectArgs(
               dxrList.Get(), kWavefrontMaterialBinCounterBase + materialBin,
-              kWavefrontSecondaryResolveDispatchArgsIndex, ~0u, 0u);
+              materialBin, ~0u, 0u);
+        }
+        
+        D3D12_RESOURCE_BARRIER toArgsBarrier = {};
+        toArgsBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toArgsBarrier.Transition.pResource = s_wavefrontDispatchArgsBuffer.Get();
+        toArgsBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        toArgsBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
+        toArgsBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        dxrList->ResourceBarrier(1, &toArgsBarrier);
+
+        for (UINT materialBin = 0; materialBin < kWavefrontMaterialBinCount; ++materialBin) {
           const UINT binFlags =
               kWavefrontQueueFlagUseMaterialBinList |
               (materialBin << kWavefrontQueueFlagMaterialBinShift);
-          DispatchWavefrontRestirSeed(dxrList.Get(), cameraCB, binFlags, true);
+          DispatchWavefrontRestirSeed(dxrList.Get(), cameraCB, binFlags, true, materialBin, false);
         }
+        
+        D3D12_RESOURCE_BARRIER toUavBarrier = toArgsBarrier;
+        toUavBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
+        toUavBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        dxrList->ResourceBarrier(1, &toUavBarrier);
+
         DispatchWavefrontRestirSeed(dxrList.Get(), cameraCB,
                                     kWavefrontQueueFlagMissOnly, false);
 
@@ -6475,18 +6520,25 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         // shadow tasks into shadow queue (counter 5). Misses run as a
         // separate full-range pass so sky pixels keep their AOV writes.
         SetWavefrontStage("primary-resolve");
-        for (UINT materialBin = 0; materialBin < kWavefrontMaterialBinCount;
-             ++materialBin) {
+        for (UINT materialBin = 0; materialBin < kWavefrontMaterialBinCount; ++materialBin) {
           DispatchWavefrontPrepareIndirectArgs(
               dxrList.Get(), kWavefrontMaterialBinCounterBase + materialBin,
-              kWavefrontSecondaryResolveDispatchArgsIndex, ~0u, 0u);
+              materialBin, ~0u, 0u);
+        }
+        
+        dxrList->ResourceBarrier(1, &toArgsBarrier);
+
+        for (UINT materialBin = 0; materialBin < kWavefrontMaterialBinCount; ++materialBin) {
           const UINT binFlags =
               kWavefrontQueueFlagUseMaterialBinList |
               (materialBin << kWavefrontQueueFlagMaterialBinShift);
           DispatchWavefrontResolvePrimary(
               dxrList.Get(), cameraCB, materialCB, meshDataSB,
-              materialExtraSB, binFlags, true);
+              materialExtraSB, binFlags, true, materialBin, false);
         }
+        
+        dxrList->ResourceBarrier(1, &toUavBarrier);
+
         DispatchWavefrontResolvePrimary(
             dxrList.Get(), cameraCB, materialCB, meshDataSB, materialExtraSB,
             kWavefrontQueueFlagMissOnly, false);
@@ -6540,17 +6592,24 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
           // Secondary resolve: shade secondary hits, enqueue continuations into
           // destination queue and new shadow tasks into shadow queue.
           SetWavefrontStage("secondary-resolve");
-          for (UINT materialBin = 0; materialBin < kWavefrontMaterialBinCount;
-               ++materialBin) {
+          for (UINT materialBin = 0; materialBin < kWavefrontMaterialBinCount; ++materialBin) {
             DispatchWavefrontPrepareIndirectArgs(
                 dxrList.Get(), kWavefrontMaterialBinCounterBase + materialBin,
-                kWavefrontSecondaryResolveDispatchArgsIndex, ~0u, 0u);
+                materialBin, ~0u, 0u);
+          }
+          
+          dxrList->ResourceBarrier(1, &toArgsBarrier);
+
+          for (UINT materialBin = 0; materialBin < kWavefrontMaterialBinCount; ++materialBin) {
             const UINT binFlags =
                 kWavefrontQueueFlagUseMaterialBinList |
                 (materialBin << kWavefrontQueueFlagMaterialBinShift);
             DispatchWavefrontResolveSecondary(dxrList.Get(), cameraCB,
-                                             sourceCounter, binFlags, true);
+                                             sourceCounter, binFlags, true, materialBin, false);
           }
+          
+          dxrList->ResourceBarrier(1, &toUavBarrier);
+
           DispatchWavefrontPrepareIndirectArgs(dxrList.Get(), sourceCounter, kWavefrontSecondaryResolveDispatchArgsIndex, ~0u, 0u);
           DispatchWavefrontResolveSecondary(dxrList.Get(), cameraCB, sourceCounter, kWavefrontQueueFlagMissOnly, true);
 

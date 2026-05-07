@@ -20,8 +20,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     }
 
     const uint activeCount = min(maxDispatchCount, g_wavefrontQueueCounters[queueCounterIndex]);
-    const uint dispatchCount = max(activeCount, 1u);
-    const uint groupCountX = max((dispatchCount + 63u) / 64u, 1u);
+    const uint dispatchCount = activeCount;
+    const uint groupCountX = (dispatchCount + 63u) / 64u;
 
     if (dispatchArgsIndex != kInvalidDispatchArgsIndex) {
         WavefrontDispatchArgs args;
