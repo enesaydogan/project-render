@@ -1086,8 +1086,13 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 (maxSpecularBounces > 0.0) ? (uint)maxSpecularBounces : 0u;
             const uint maxRefractiveBounceCount =
                 (maxRefractiveBounces > 0.0) ? (uint)maxRefractiveBounces : 0u;
-            const uint maxDiffuseBounceCount =
+            const bool fastGi =
+                (reservedFlags & WAVEFRONT_RESOLVE_FLAG_FAST_GI) != 0u;
+            uint maxDiffuseBounceCount =
                 (maxGIBounces > 0.0) ? (uint)maxGIBounces : 0u;
+            if (fastGi) {
+                maxDiffuseBounceCount = min(maxDiffuseBounceCount, 1u);
+            }
 
             {
                 diReservoir = LoadWavefrontDiReservoir(pixel);
@@ -1238,11 +1243,23 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 }
                 nextThroughput = max(nextThroughput, 0.0);
 
-                if (nextRayType == RAY_TYPE_REFRACTION) {
+                if (fastGi && nextRayType == RAY_TYPE_DIFFUSE &&
+                    any(nextThroughput > 1.0e-4)) {
+                    const float keepProbability = 0.5;
+                    if (next_float(rng) >= keepProbability) {
+                        nextThroughput = float3(0.0, 0.0, 0.0);
+                    } else {
+                        nextThroughput *= rcp(keepProbability);
+                    }
+                }
+
+                if (any(nextThroughput > 1.0e-4) &&
+                    nextRayType == RAY_TYPE_REFRACTION) {
                     InterlockedAdd(g_wavefrontStats[12], 1u, previousValue);
-                } else if (nextRayType == RAY_TYPE_REFLECTION) {
+                } else if (any(nextThroughput > 1.0e-4) &&
+                           nextRayType == RAY_TYPE_REFLECTION) {
                     InterlockedAdd(g_wavefrontStats[11], 1u, previousValue);
-                } else {
+                } else if (any(nextThroughput > 1.0e-4)) {
                     InterlockedAdd(g_wavefrontStats[10], 1u, previousValue);
                 }
 

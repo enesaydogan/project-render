@@ -43,6 +43,20 @@ inline void EmitWavefrontShadowTask(uint queueIndex,
     g_wavefrontShadowQueue[queueIndex] = task;
 }
 
+inline bool KeepWavefrontSecondaryShadow(float keepProbability,
+                                         inout RNG rng,
+                                         inout float3 weight)
+{
+    if (keepProbability >= 0.999f) {
+        return true;
+    }
+    if (next_float(rng) >= keepProbability) {
+        return false;
+    }
+    weight *= rcp(max(keepProbability, 1.0e-4f));
+    return true;
+}
+
 inline float3 BuildDiffuseContinuation(float3 normal, inout RNG rng)
 {
     float3 localSample = sample_hemisphere_cosine(next_float2(rng));
@@ -231,8 +245,15 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             (maxSpecularBounces > 0.0) ? (uint)maxSpecularBounces : 0u;
         const uint maxRefractiveBounceCount =
             (maxRefractiveBounces > 0.0) ? (uint)maxRefractiveBounces : 0u;
-        const uint maxDiffuseBounceCount =
+        const bool fastGi =
+            (reservedFlags & WAVEFRONT_RESOLVE_FLAG_FAST_GI) != 0u;
+        const bool thinSecondaryShadows =
+            (reservedFlags & WAVEFRONT_RESOLVE_FLAG_THIN_SECONDARY_SHADOWS) != 0u;
+        uint maxDiffuseBounceCount =
             (maxGIBounces > 0.0) ? (uint)maxGIBounces : 0u;
+        if (fastGi) {
+            maxDiffuseBounceCount = min(maxDiffuseBounceCount, 1u);
+        }
 
         uint nextRayType = RAY_TYPE_DIFFUSE;
         float3 nextDirection = normal;
@@ -270,6 +291,16 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             nextThroughput = state.throughput * max(albedo, 0.02.xxx) * saturate(dot(normal, nextDirection)) / max(diffuseProb, 1.0e-4);
         }
         nextThroughput = max(nextThroughput, 0.0);
+
+        if (fastGi && nextRayType == RAY_TYPE_DIFFUSE &&
+            any(nextThroughput > 1.0e-4)) {
+            const float keepProbability = 0.5;
+            if (next_float(rng) >= keepProbability) {
+                nextThroughput = float3(0.0, 0.0, 0.0);
+            } else {
+                nextThroughput *= rcp(keepProbability);
+            }
+        }
 
         contribution = EvaluateWavefrontSecondaryContribution(record, state, normal, hitPos);
 
@@ -315,12 +346,19 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             WavefrontSampleDirectLight(lightSampler, hitPos, rng);
         WavefrontLightSample explicitSunSample =
             WavefrontSampleDirectionalLight(1.0);
+        uint bounceDepth = WavefrontGetSpecularBounceCount(state.packedState) +
+                           WavefrontGetRefractiveBounceCount(state.packedState) +
+                           WavefrontGetDiffuseBounceCount(state.packedState);
+        const float secondaryShadowKeepProbability =
+            thinSecondaryShadows ? ((bounceDepth <= 1u) ? 0.5f : 0.25f) : 1.0f;
         float3 sunShadowWeight = state.throughput *
                                  ComputeWavefrontDirectLightingWeightForView(
                                      record, normal, -rayDir,
                                      explicitSunSample.direction) *
                                  explicitSunSample.radiance;
-        if (any(sunShadowWeight > 1.0e-4)) {
+        if (any(sunShadowWeight > 1.0e-4) &&
+            KeepWavefrontSecondaryShadow(secondaryShadowKeepProbability,
+                                         rng, sunShadowWeight)) {
             uint shadowIndex = 0u;
             InterlockedAdd(g_wavefrontQueueCounters[kWavefrontShadowQueueCounter],
                            1u, shadowIndex);
@@ -349,7 +387,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                               lightSample.radiance;
         if (WavefrontGetLightSampleType(lightSample.packedLightIndex) !=
                 WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL &&
-            any(shadowWeight > 1.0e-4)) {
+            any(shadowWeight > 1.0e-4) &&
+            KeepWavefrontSecondaryShadow(secondaryShadowKeepProbability,
+                                         rng, shadowWeight)) {
             uint shadowIndex = 0u;
             InterlockedAdd(g_wavefrontQueueCounters[kWavefrontShadowQueueCounter],
                            1u, shadowIndex);
@@ -372,9 +412,6 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             }
         }
 
-        uint bounceDepth = WavefrontGetSpecularBounceCount(state.packedState) +
-                           WavefrontGetRefractiveBounceCount(state.packedState) +
-                           WavefrontGetDiffuseBounceCount(state.packedState);
         if (bounceDepth <= 1u) {
             float envSampleLod = clamp(log2(max(length(hitPos - camPos), 1.0e-3) * 0.02) +
                                            0.35,
@@ -394,7 +431,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                                              envSample.L) *
                                          (misW / max(envSample.pdf, 1.0e-8)) *
                                          kWavefrontEnvLightingBoost;
-                if (any(envShadowWeight > 1.0e-4)) {
+                if (any(envShadowWeight > 1.0e-4) &&
+                    KeepWavefrontSecondaryShadow(secondaryShadowKeepProbability,
+                                                 rng, envShadowWeight)) {
                     uint shadowIndex = 0u;
                     InterlockedAdd(g_wavefrontQueueCounters[kWavefrontShadowQueueCounter],
                                    1u, shadowIndex);

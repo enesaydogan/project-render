@@ -248,6 +248,8 @@ static constexpr UINT kWavefrontQueueFlagMissOnly = 0x10u;
 static constexpr UINT kWavefrontMaterialBinCounterBase = 6u;
 static constexpr UINT kWavefrontQueueFlagMaterialBinShift = 8u;
 static constexpr UINT kWavefrontResolveFlagPrimarySurfaceOnly = 0x10000u;
+static constexpr UINT kWavefrontResolveFlagFastGi = 0x20000u;
+static constexpr UINT kWavefrontResolveFlagThinSecondaryShadows = 0x40000u;
 static constexpr UINT64 kWavefrontCounterStrideBytes = sizeof(UINT);
 static constexpr UINT kWavefrontPrimaryMaterialBinStatsBase = 32u;
 static constexpr UINT kWavefrontSecondaryMaterialBinStatsBase = 40u;
@@ -2850,10 +2852,13 @@ static UINT ComputeWavefrontIndirectPassBudget() {
       (g_cameraData.maxRefractiveBounces > 0.0f)
           ? static_cast<UINT>(g_cameraData.maxRefractiveBounces)
           : 0u;
-  const UINT maxGIBounces =
+  UINT maxGIBounces =
       (g_cameraData.maxGIBounces > 0.0f)
           ? static_cast<UINT>(g_cameraData.maxGIBounces)
           : 0u;
+  if (s_pathTracingBackend == DxrRenderer::PathTracingBackend::WavefrontOptimized) {
+    maxGIBounces = (std::min)(maxGIBounces, 1u);
+  }
   // Bounces can alternate, we should allow enough passes to resolve the longest valid path.
   // The actual bounce checks are correctly enforced in the wave shaders.
   const UINT totalBudget =
@@ -6480,6 +6485,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         didPathTracingWork = true;
       } else if (s_pathTracingBackend == PathTracingBackend::WavefrontOptimized) {
         ClearWavefrontShadowContribution(dxrList.Get());
+        const UINT wavefrontFastTransportFlags =
+            kWavefrontResolveFlagFastGi |
+            kWavefrontResolveFlagThinSecondaryShadows;
 
         // ReSTIR DI seed: consume queue-produced primary hit records as the
         // scheduler task source. Spatial reuse still runs later on the same
@@ -6531,7 +6539,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         for (UINT materialBin = 0; materialBin < kWavefrontMaterialBinCount; ++materialBin) {
           const UINT binFlags =
               kWavefrontQueueFlagUseMaterialBinList |
-              (materialBin << kWavefrontQueueFlagMaterialBinShift);
+              (materialBin << kWavefrontQueueFlagMaterialBinShift) |
+              wavefrontFastTransportFlags;
           DispatchWavefrontResolvePrimary(
               dxrList.Get(), cameraCB, materialCB, meshDataSB,
               materialExtraSB, binFlags, true, materialBin, false);
@@ -6541,7 +6550,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
         DispatchWavefrontResolvePrimary(
             dxrList.Get(), cameraCB, materialCB, meshDataSB, materialExtraSB,
-            kWavefrontQueueFlagMissOnly, false);
+            kWavefrontQueueFlagMissOnly | wavefrontFastTransportFlags, false);
 
         // Primary shadow visibility: trace the shadow rays queued by primary
         // resolve and accumulate direct lighting into the output buffer.
@@ -6603,7 +6612,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
           for (UINT materialBin = 0; materialBin < kWavefrontMaterialBinCount; ++materialBin) {
             const UINT binFlags =
                 kWavefrontQueueFlagUseMaterialBinList |
-                (materialBin << kWavefrontQueueFlagMaterialBinShift);
+                (materialBin << kWavefrontQueueFlagMaterialBinShift) |
+                wavefrontFastTransportFlags;
             DispatchWavefrontResolveSecondary(dxrList.Get(), cameraCB,
                                              sourceCounter, binFlags, true, materialBin, false);
           }
@@ -6611,7 +6621,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
           dxrList->ResourceBarrier(1, &toUavBarrier);
 
           DispatchWavefrontPrepareIndirectArgs(dxrList.Get(), sourceCounter, kWavefrontSecondaryResolveDispatchArgsIndex, ~0u, 0u);
-          DispatchWavefrontResolveSecondary(dxrList.Get(), cameraCB, sourceCounter, kWavefrontQueueFlagMissOnly, true);
+          DispatchWavefrontResolveSecondary(
+              dxrList.Get(), cameraCB, sourceCounter,
+              kWavefrontQueueFlagMissOnly | wavefrontFastTransportFlags, true);
 
           // Secondary shadow visibility: trace shadow rays from this bounce.
           DispatchWavefrontPrepareIndirectArgs(
