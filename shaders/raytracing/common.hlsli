@@ -998,6 +998,20 @@ inline bool ShouldResolveDeltaTransmission(float roughness,
     return transmissionLobe >= reflectionLobe;
 }
 
+inline bool IsPrimaryThinGlassFastPath(float roughness,
+                                       float transmission,
+                                       float ior,
+                                       bool thinWalled)
+{
+    return thinWalled &&
+           ShouldResolveDeltaTransmission(roughness, transmission, ior);
+}
+
+inline bool ShouldSimplifySecondaryMaterial(uint rayType)
+{
+    return rayType == RAY_TYPE_DIFFUSE || rayType == RAY_TYPE_GI_EVAL;
+}
+
 inline float EffectiveArchGlassThickness(float materialThickness)
 {
     return max(materialThickness, 0.04);

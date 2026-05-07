@@ -437,14 +437,23 @@ inline float4 WavefrontGiSampleTriPlanar(int texIndex,
         (float2(WavefrontGiHash01(seed ^ 0x68bc21ebu),
                 WavefrontGiHash01(seed ^ 0x02e5be93u)) * 2.0 - 1.0) *
         max(variationParams.y, 0.0);
-    float3 weights = WavefrontGiTriPlanarWeights(rotatedNormal, sharpness);
-    float4 sx = textures[texIndex].SampleLevel(
-        linearSampler, WavefrontGiTriUvX(rotatedPos, rotatedNormal, scale, offset), lod);
-    float4 sy = textures[texIndex].SampleLevel(
-        linearSampler, WavefrontGiTriUvY(rotatedPos, rotatedNormal, scale, offset), lod);
-    float4 sz = textures[texIndex].SampleLevel(
-        linearSampler, WavefrontGiTriUvZ(rotatedPos, rotatedNormal, scale, offset), lod);
-    return sx * weights.x + sy * weights.y + sz * weights.z;
+    float3 an = abs(rotatedNormal);
+    if (an.x >= an.y && an.x >= an.z) {
+        return textures[texIndex].SampleLevel(
+            linearSampler,
+            WavefrontGiTriUvX(rotatedPos, rotatedNormal, scale, offset),
+            lod);
+    }
+    if (an.y >= an.z) {
+        return textures[texIndex].SampleLevel(
+            linearSampler,
+            WavefrontGiTriUvY(rotatedPos, rotatedNormal, scale, offset),
+            lod);
+    }
+    return textures[texIndex].SampleLevel(
+        linearSampler,
+        WavefrontGiTriUvZ(rotatedPos, rotatedNormal, scale, offset),
+        lod);
 }
 
 inline float3 WavefrontGiUnpackNormal(float4 n)
@@ -501,25 +510,6 @@ inline float3 WavefrontGiSampleNormalMap(int texIndex,
         (float2(WavefrontGiHash01(seed ^ 0x68bc21ebu),
                 WavefrontGiHash01(seed ^ 0x02e5be93u)) * 2.0 - 1.0) *
         max(variationParams.y, 0.0);
-    float3 weights = WavefrontGiTriPlanarWeights(rotatedNormal, triSharp);
-    float3 nx = WavefrontGiBlendNormalSample(
-        WavefrontGiUnpackNormal(textures[texIndex].SampleLevel(
-            linearSampler,
-            WavefrontGiTriUvX(rotatedPos, rotatedNormal, triScale, offset), lod)),
-        amount);
-    float3 ny = WavefrontGiBlendNormalSample(
-        WavefrontGiUnpackNormal(textures[texIndex].SampleLevel(
-            linearSampler,
-            WavefrontGiTriUvY(rotatedPos, rotatedNormal, triScale, offset), lod)),
-        amount);
-    float3 nz = WavefrontGiBlendNormalSample(
-        WavefrontGiUnpackNormal(textures[texIndex].SampleLevel(
-            linearSampler,
-            WavefrontGiTriUvZ(rotatedPos, rotatedNormal, triScale, offset), lod)),
-        amount);
-    nx.xy *= triNormalStrength;
-    ny.xy *= triNormalStrength;
-    nz.xy *= triNormalStrength;
 
     float sx = (rotatedNormal.x >= 0.0) ? 1.0 : -1.0;
     float sy = (rotatedNormal.y >= 0.0) ? 1.0 : -1.0;
@@ -527,12 +517,31 @@ inline float3 WavefrontGiSampleNormalMap(int texIndex,
     float3 axisX = normalize(WavefrontGiRotateVector(float3(1, 0, 0), rotationParams));
     float3 axisY = normalize(WavefrontGiRotateVector(float3(0, 1, 0), rotationParams));
     float3 axisZ = normalize(WavefrontGiRotateVector(float3(0, 0, 1), rotationParams));
-    float3x3 tbnX = float3x3(-axisZ * sx, axisY, axisX * sx);
-    float3x3 tbnY = float3x3(axisX, -axisZ * sy, axisY * sy);
-    float3x3 tbnZ = float3x3(axisX * sz, axisY, axisZ * sz);
-    return normalize(normalize(mul(normalize(nx), tbnX)) * weights.x +
-                     normalize(mul(normalize(ny), tbnY)) * weights.y +
-                     normalize(mul(normalize(nz), tbnZ)) * weights.z);
+    float3 an = abs(rotatedNormal);
+    float3 axisNormal;
+    float3x3 axisTbn;
+    if (an.x >= an.y && an.x >= an.z) {
+        axisNormal = WavefrontGiUnpackNormal(textures[texIndex].SampleLevel(
+            linearSampler,
+            WavefrontGiTriUvX(rotatedPos, rotatedNormal, triScale, offset),
+            lod));
+        axisTbn = float3x3(-axisZ * sx, axisY, axisX * sx);
+    } else if (an.y >= an.z) {
+        axisNormal = WavefrontGiUnpackNormal(textures[texIndex].SampleLevel(
+            linearSampler,
+            WavefrontGiTriUvY(rotatedPos, rotatedNormal, triScale, offset),
+            lod));
+        axisTbn = float3x3(axisX, -axisZ * sy, axisY * sy);
+    } else {
+        axisNormal = WavefrontGiUnpackNormal(textures[texIndex].SampleLevel(
+            linearSampler,
+            WavefrontGiTriUvZ(rotatedPos, rotatedNormal, triScale, offset),
+            lod));
+        axisTbn = float3x3(axisX * sz, axisY, axisZ * sz);
+    }
+    axisNormal = WavefrontGiBlendNormalSample(axisNormal, amount);
+    axisNormal.xy *= triNormalStrength;
+    return normalize(mul(normalize(axisNormal), axisTbn));
 }
 
 inline bool WavefrontGiIsShadowVisible(float3 origin,
@@ -618,7 +627,9 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
     int texCoatNormal = UnpackTextureIndexLow(materialExtra.extraPackedTextures.x);
 
     const float4 triParams = materialExtra.triPlanarParams;
-    const float4 mappingVariation = materialExtra.mappingVariationParams;
+    // GI RayQuery material evaluation is a secondary diffuse path. Keep the
+    // material response coherent, but skip stochastic UV/triplanar variation.
+    const float4 mappingVariation = float4(0.0, 0.0, 0.0, 0.0);
     const float4 triRotation = materialExtra.triPlanarRotationParams;
     const float4 texWeight0 = materialExtra.textureWeight0;
     const float4 texWeight1 = materialExtra.textureWeight1;
@@ -1104,13 +1115,17 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             // materials still use stochastic continuation so they do not
             // explode queue pressure or destabilize temporal reuse.
             const bool deterministicThinGlass =
-                thinWalled && transmission > 1.0e-5 &&
-                ShouldResolveDeltaTransmission(roughness, transmission, ior);
+                IsPrimaryThinGlassFastPath(roughness, transmission, ior,
+                                           thinWalled);
             if (deterministicThinGlass) {
                 float fresnel =
                     saturate(FresnelDielectric(dot(-rayDir, normal), ior) *
                              specularWeight);
                 float3 reflectionDirection = normalize(reflect(rayDir, normal));
+                const bool traceThinGlassReflection =
+                    WavefrontGetSpecularBounceCount(state.packedState) == 0u &&
+                    WavefrontGetRefractiveBounceCount(state.packedState) == 0u &&
+                    WavefrontGetDiffuseBounceCount(state.packedState) == 0u;
 
                 float3 transmissionDirection = normalize(rayDir);
                 float3 transmissionThroughput =
@@ -1152,7 +1167,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 float3 reflectionThroughput =
                     state.throughput *
                     max(specularColor, float3(0.0, 0.0, 0.0)) * fresnel;
-                if (any(reflectionThroughput > 1.0e-4) &&
+                if (traceThinGlassReflection &&
+                    any(reflectionThroughput > 1.0e-4) &&
                     WavefrontHasBounceBudget(state.packedState,
                                              RAY_TYPE_REFLECTION,
                                              maxSpecularBounceCount,

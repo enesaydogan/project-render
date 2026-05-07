@@ -31,7 +31,8 @@ inline void TracePrimaryGuide(float3 initialOrigin,
     guideState = 0u;
 
     uint guideRayType = RAY_TYPE_PRIMARY;
-    const uint maxPrimaryDeltaSteps = 8u;
+    const uint maxPrimaryDeltaSteps =
+        min(8u, max(1u, (uint)maxRefractiveBounces));
     [loop]
     for (uint deltaStep = 0u; deltaStep < maxPrimaryDeltaSteps; ++deltaStep) {
         RayDesc ray;

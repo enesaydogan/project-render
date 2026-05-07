@@ -475,7 +475,9 @@ void RayGen()
 
     RayPayload pretracedPrimaryPayload = InitRayPayload(RAY_TYPE_PRIMARY);
     bool hasPretracedPrimaryPayload = false;
-    const int maxPrimaryDeltaSteps = 8;
+    const int maxPrimaryDeltaSteps =
+        min(8, max(1, (int)maxRefractiveBounces));
+    int primaryThinGlassResolveLayers = 0;
 
     for (int deltaStep = 0; deltaStep < maxPrimaryDeltaSteps; ++deltaStep)
     {
@@ -503,6 +505,9 @@ void RayGen()
             UnpackPayloadTransmissionColor(primaryResolvePayload.packedTransmission);
         bool resolveThinWalled = UnpackPayloadThinWalled(primaryResolvePayload.packedIorType);
         float resolveThickness = UnpackPayloadThickness(primaryResolvePayload.packedSpecular);
+        bool resolveThinGlassFastPath =
+            IsPrimaryThinGlassFastPath(resolveRoughness, resolveTransmission,
+                                       resolveIor, resolveThinWalled);
 
         if (!ShouldResolveDeltaTransmission(resolveRoughness, resolveTransmission,
                                             resolveIor)) {
@@ -527,17 +532,24 @@ void RayGen()
             UnpackPayloadAlbedo(primaryResolvePayload.packedAlbedo);
         float3 resolveSpecularColor =
             UnpackPayloadSpecularColor(primaryResolvePayload.packedSpecular);
-        float3 resolveReflection =
-            throughput * TraceGlassReflectionRadiance(resolveP, resolveV,
-                                                      resolveN, resolveAlbedo,
-                                                      resolveMetallic,
-                                                      resolveRoughness,
-                                                      resolveIor,
-                                                      resolveSpecularWeight,
-                                                      resolveSpecularColor,
-                                                      next_float2(rng));
-        accumulatedColor += resolveReflection;
-        primaryGlassReflection += resolveReflection;
+        bool traceResolveReflection =
+            !resolveThinGlassFastPath || primaryThinGlassResolveLayers == 0;
+        if (traceResolveReflection) {
+            float3 resolveReflection =
+                throughput * TraceGlassReflectionRadiance(resolveP, resolveV,
+                                                          resolveN, resolveAlbedo,
+                                                          resolveMetallic,
+                                                          resolveRoughness,
+                                                          resolveIor,
+                                                          resolveSpecularWeight,
+                                                          resolveSpecularColor,
+                                                          next_float2(rng));
+            accumulatedColor += resolveReflection;
+            primaryGlassReflection += resolveReflection;
+        }
+        if (resolveThinGlassFastPath) {
+            primaryThinGlassResolveLayers++;
+        }
 
         float3 resolveTransmissionWeight =
             ComputeDeterministicGlassTransmissionWeight(resolveAlbedo,
@@ -1362,15 +1374,19 @@ void RayGen()
             if (refracted) {
                 if (refractiveBounces >= (int)maxRefractiveBounces) break;
                 if (deterministicThinGlass) {
-                    float3 reflectedColor =
-                        throughput * TraceGlassReflectionRadiance(P, V, N,
-                                                                  payloadAlbedo,
-                                                                  metallic,
-                                                                  roughness,
-                                                                  payloadIor,
-                                                                  payloadSpecularWeight,
-                                                                  payloadSpecularColor,
-                                                                  next_float2(rng));
+                    bool traceThinGlassReflection = refractiveBounces == 0;
+                    float3 reflectedColor = float3(0.0, 0.0, 0.0);
+                    if (traceThinGlassReflection) {
+                        reflectedColor =
+                            throughput * TraceGlassReflectionRadiance(P, V, N,
+                                                                      payloadAlbedo,
+                                                                      metallic,
+                                                                      roughness,
+                                                                      payloadIor,
+                                                                      payloadSpecularWeight,
+                                                                      payloadSpecularColor,
+                                                                      next_float2(rng));
+                    }
                     float3 deterministicReflection =
                         max(surfaceLightingContribution + reflectedColor,
                             float3(0.0, 0.0, 0.0));
