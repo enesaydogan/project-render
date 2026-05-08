@@ -14,6 +14,12 @@ public:
   bool Initialize(ID3D12Device *device);
   void Shutdown();
 
+  // Create persistent filter/intermediate resources for the current render
+  // target before the end-condition denoise is needed. This is a best-effort
+  // warmup; RunDenoise() still validates and prepares lazily if necessary.
+  bool Prepare(ID3D12Resource *input, ID3D12Resource *albedo,
+               ID3D12Resource *normal, ID3D12Resource *output);
+
   // Run denoise pass. If async is true, the implementation should attempt
   // asynchronous execution when available. Returns true if the denoiser ran.
   // Requires command queue for interop copies and synchronization.

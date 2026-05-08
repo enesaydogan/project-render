@@ -51,6 +51,12 @@ void UpdateLights(const std::vector<Light> &lights,
                   bool resetAccumulation = true);
 // Reset accumulation for path tracing
 void ResetAccumulation();
+// Wake the render loop out of final-frame idle without necessarily invalidating
+// accumulated samples. Use ResetAccumulation() for camera/material changes that
+// require a new sample history.
+void RequestInteractiveWake(const char *reason = nullptr);
+bool ConsumeInteractiveWake();
+bool HasInteractiveWake();
 // Scene texture resources/descriptors changed. The next DXR frame must rebuild
 // its private shader-visible texture table even if the descriptor range/count
 // did not change.

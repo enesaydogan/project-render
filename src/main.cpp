@@ -78,6 +78,12 @@ extern std::vector<Asset::Material> g_loadedMaterials;
 
 namespace {
 constexpr float kTwoPi = 6.283185307179586f;
+constexpr DWORD kFinalFrameIdleWaitMs = 16;
+
+static void WaitForSoftIdleMessage(DWORD timeoutMs = kFinalFrameIdleWaitMs) {
+  MsgWaitForMultipleObjectsEx(0, nullptr, timeoutMs, QS_ALLINPUT,
+                              MWMO_INPUTAVAILABLE);
+}
 
 static uint32_t HashU32(uint32_t x) {
   x ^= x >> 16;
@@ -1969,10 +1975,26 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
     return 0;
   case WM_SIZE:
     if (!g_appClosing && DX12Context::g_swapChain && wParam != SIZE_MINIMIZED) {
+      DxrRenderer::RequestInteractiveWake("window resize");
       DX12Context::QueueResize(LOWORD(lParam), HIWORD(lParam));
     }
     return 0;
+  case WM_KEYDOWN:
+  case WM_KEYUP:
+  case WM_SYSKEYDOWN:
+  case WM_SYSKEYUP:
+  case WM_LBUTTONDOWN:
+  case WM_LBUTTONUP:
+  case WM_RBUTTONDOWN:
+  case WM_RBUTTONUP:
+  case WM_MBUTTONDOWN:
+  case WM_MBUTTONUP:
+  case WM_MOUSEWHEEL:
+  case WM_MOUSEHWHEEL:
+    DxrRenderer::RequestInteractiveWake("window input");
+    break;
   case WM_DROPFILES:
+    DxrRenderer::RequestInteractiveWake("model drop");
     ImportFirstDroppedModelFile(reinterpret_cast<HDROP>(wParam));
     return 0;
   case WM_DESTROY:
@@ -3622,24 +3644,28 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         !g_renderExportJob.active && HasPreviewRenderImage();
     if (previewOverlayHoldingViewport) {
       prevTime = std::chrono::high_resolution_clock::now();
-      WaitMessage();
+      WaitForSoftIdleMessage();
       prevTime = std::chrono::high_resolution_clock::now();
       continue;
     }
 
+    const bool consumedDxrWake =
+        !g_renderExportJob.active && g_currentRenderMode == RenderMode::DXR &&
+        DxrRenderer::IsReady() && DxrRenderer::ConsumeInteractiveWake();
   #ifdef USE_QT_UI
     const bool canIdleDxr =
       !g_renderExportJob.active && g_currentRenderMode == RenderMode::DXR &&
-      DxrRenderer::IsReady() && DxrRenderer::CanIdleWithoutRendering();
+      DxrRenderer::IsReady() && !consumedDxrWake &&
+      DxrRenderer::CanIdleWithoutRendering();
   #else
     const bool canIdleDxr =
       !handledWindowMessage && !g_renderExportJob.active &&
       g_currentRenderMode == RenderMode::DXR && DxrRenderer::IsReady() &&
-      DxrRenderer::CanIdleWithoutRendering();
+      !consumedDxrWake && DxrRenderer::CanIdleWithoutRendering();
   #endif
     if (canIdleDxr) {
       prevTime = std::chrono::high_resolution_clock::now();
-      WaitMessage();
+      WaitForSoftIdleMessage();
       prevTime = std::chrono::high_resolution_clock::now();
       continue;
     }

@@ -11,6 +11,8 @@ public:
 
   bool Initialize(ID3D12Device *device);
   void Shutdown();
+  bool Prepare(ID3D12Resource *input, ID3D12Resource *albedo,
+               ID3D12Resource *normal, ID3D12Resource *output);
 
   bool RunDenoise(ID3D12CommandQueue *queue, ID3D12Resource *input,
                   ID3D12Resource *albedo, ID3D12Resource *normal,

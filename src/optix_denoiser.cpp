@@ -435,6 +435,24 @@ bool OptixDenoiserWrapper::WaitForQueue(ID3D12CommandQueue *queue) {
   return true;
 }
 
+bool OptixDenoiserWrapper::Prepare(ID3D12Resource *input,
+                                   ID3D12Resource *albedo,
+                                   ID3D12Resource *normal,
+                                   ID3D12Resource *output) {
+  if (!input || !output)
+    return false;
+  if (!m_initialized || !m_optixAvailable) {
+    if (!Initialize(m_device))
+      return false;
+  }
+  try {
+    return CreateOrResizeResources(input, albedo, normal, output);
+  } catch (const std::exception &e) {
+    fprintf(stderr, "OptixDenoiser: Prepare failed: %s\n", e.what());
+    return false;
+  }
+}
+
 bool OptixDenoiserWrapper::RunDenoise(ID3D12CommandQueue *queue,
                                       ID3D12Resource *input,
                                       ID3D12Resource *albedo,
@@ -442,15 +460,11 @@ bool OptixDenoiserWrapper::RunDenoise(ID3D12CommandQueue *queue,
                                       ID3D12Resource *output) {
   if (!queue || !input || !output)
     return false;
-  if (!Initialize(m_device))
-    return false;
-  if (!m_optixAvailable || !m_cmdList)
+  if (!Prepare(input, albedo, normal, output) || !m_optixAvailable ||
+      !m_cmdList)
     return false;
 
   try {
-    if (!CreateOrResizeResources(input, albedo, normal, output))
-      return false;
-
     m_cmdAlloc->Reset();
     m_cmdList->Reset(m_cmdAlloc.Get(), nullptr);
 
@@ -625,6 +639,11 @@ bool OptixDenoiserWrapper::Initialize(ID3D12Device *device) {
 void OptixDenoiserWrapper::Shutdown() {
   m_initialized = false;
   m_device = nullptr;
+}
+
+bool OptixDenoiserWrapper::Prepare(ID3D12Resource *, ID3D12Resource *,
+                                   ID3D12Resource *, ID3D12Resource *) {
+  return false;
 }
 
 bool OptixDenoiserWrapper::RunDenoise(ID3D12CommandQueue *, ID3D12Resource *,

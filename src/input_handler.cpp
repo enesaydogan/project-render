@@ -48,18 +48,25 @@ void SetQtWidgetFocused(bool focused) { s_qtWidgetFocused = focused; }
 void SetQtKeyState(int virtualKey, bool down) {
   if (virtualKey >= 0 && virtualKey < 256) {
     s_qtKeyStates[virtualKey] = down;
+    DxrRenderer::RequestInteractiveWake(down ? "Qt key down"
+                                             : "Qt key up");
   }
 }
 
 void SetQtMouseButtonState(int virtualKey, bool down) {
   if (virtualKey >= 0 && virtualKey < 256) {
     s_qtMouseStates[virtualKey] = down;
+    DxrRenderer::RequestInteractiveWake(down ? "Qt mouse down"
+                                             : "Qt mouse up");
   }
 }
 
 void AddQtMouseDelta(float dx, float dy) {
   s_qtMouseDeltaX += dx;
   s_qtMouseDeltaY += dy;
+  if (dx != 0.0f || dy != 0.0f) {
+    DxrRenderer::RequestInteractiveWake("Qt mouse move");
+  }
 }
 
 static bool IsKeyDown(int virtualKey) {

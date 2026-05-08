@@ -242,34 +242,43 @@ static inline bool IsSupportedOidnInteropTexture(const D3D12_RESOURCE_DESC& desc
          desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT;
 }
 
-bool OidnDenoiser::RunDenoise(ID3D12GraphicsCommandList *cmd, ID3D12CommandQueue *queue,
-                               ID3D12Resource *input, ID3D12Resource *albedo,
-                               ID3D12Resource *normal, ID3D12Resource *output,
-                               bool async) {
-  if (!queue || !input || !output) return false;
+bool OidnDenoiser::Prepare(ID3D12Resource *input, ID3D12Resource *albedo,
+                           ID3D12Resource *normal,
+                           ID3D12Resource *output) {
+  if (!input || !output || !m_device)
+    return false;
 
 #ifdef USE_OIDN
+  if (!m_initialized && !Initialize(m_device))
+    return false;
   if (!m_oidnAvailable || !m_gpuBackendAvailable || !m_cmdList)
     return false;
 
   const D3D12_RESOURCE_DESC inputDesc = input->GetDesc();
   const D3D12_RESOURCE_DESC outputDesc = output->GetDesc();
-  if (inputDesc.Width != outputDesc.Width ||
+  if (!IsSupportedOidnInteropTexture(inputDesc) ||
+      !IsSupportedOidnInteropTexture(outputDesc) ||
+      inputDesc.Width != outputDesc.Width ||
       inputDesc.Height != outputDesc.Height) {
     return false;
   }
 
   const uint32_t width = (uint32_t)inputDesc.Width;
   const uint32_t height = inputDesc.Height;
+  const bool hasAlbedo = albedo != nullptr;
+  const bool hasNormal = normal != nullptr;
 
   try {
     oidn::DeviceRef& dev = *static_cast<oidn::DeviceRef*>(m_oidnDevice);
 
-    // Recreate OIDN objects if resolution, resources, or quality changed
-    // Note: We check if input/output pointers changed, but we fundamentally rely on the Linear Buffers now.
-    // If the logical size changes, we must recreate.
+    // Recreate OIDN objects if resolution, guide buffers, or quality changed.
+    // The denoiser imports persistent linear buffers, so source texture pointer
+    // changes do not require filter rebuilds as long as the logical layout is
+    // unchanged.
     bool needsUpdate = (width != m_width || height != m_height ||
-                        m_quality != m_lastQuality || !m_linearColor);
+                        m_quality != m_lastQuality || !m_linearColor ||
+                        hasAlbedo != (m_linearAlbedo.Get() != nullptr) ||
+                        hasNormal != (m_linearNormal.Get() != nullptr));
 
     if (needsUpdate) {
       // Clean up old
@@ -283,10 +292,18 @@ bool OidnDenoiser::RunDenoise(ID3D12GraphicsCommandList *cmd, ID3D12CommandQueue
       m_oidnAlbedoBuf = nullptr;
       m_oidnNormalBuf = nullptr;
       m_oidnOutputBuf = nullptr;
+      m_linearColor.Reset();
+      m_linearAlbedo.Reset();
+      m_linearNormal.Reset();
+      m_linearOutput.Reset();
 
       m_width = width;
       m_height = height;
       m_lastQuality = m_quality;
+      m_lastInput = input;
+      m_lastAlbedo = albedo;
+      m_lastNormal = normal;
+      m_lastOutput = output;
 
       // Calculate footprint
       UINT64 totalBytes = 0;
@@ -306,19 +323,20 @@ bool OidnDenoiser::RunDenoise(ID3D12GraphicsCommandList *cmd, ID3D12CommandQueue
       heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
 
       // Create Linear Buffers
-      auto CreateBuf = [&](ID3D12Resource** ppRes, const wchar_t* name) {
+      auto CreateBuf = [&](ComPtr<ID3D12Resource> &resource,
+                           const wchar_t* name) {
           // IMPORTANT: D3D12_HEAP_FLAG_SHARED is required for CreateSharedHandle to work
           if (FAILED(m_device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_SHARED, &bufDesc, 
-              D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(ppRes)))) {
+              D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(resource.GetAddressOf())))) {
               throw std::runtime_error("Failed to create OIDN linear buffer");
           }
-          (*ppRes)->SetName(name);
+          resource->SetName(name);
       };
 
-      CreateBuf(&m_linearColor, L"OIDN Linear Color");
-      CreateBuf(&m_linearOutput, L"OIDN Linear Output");
-      if (albedo) CreateBuf(&m_linearAlbedo, L"OIDN Linear Albedo");
-      if (normal) CreateBuf(&m_linearNormal, L"OIDN Linear Normal");
+      CreateBuf(m_linearColor, L"OIDN Linear Color");
+      CreateBuf(m_linearOutput, L"OIDN Linear Output");
+      if (hasAlbedo) CreateBuf(m_linearAlbedo, L"OIDN Linear Albedo");
+      if (hasNormal) CreateBuf(m_linearNormal, L"OIDN Linear Normal");
 
       // Register with OIDN
       auto RegisterBuf = [&](ID3D12Resource* res) -> void* {
@@ -356,6 +374,34 @@ bool OidnDenoiser::RunDenoise(ID3D12GraphicsCommandList *cmd, ID3D12CommandQueue
       filter.commit();
       m_oidnFilter = new oidn::FilterRef(filter);
     }
+    return true;
+  } catch (const std::exception& e) {
+    fprintf(stderr, "OidnDenoiser: Prepare failed: %s\n", e.what());
+    return false;
+  }
+#else
+  (void)input;
+  (void)albedo;
+  (void)normal;
+  (void)output;
+  return false;
+#endif
+}
+
+bool OidnDenoiser::RunDenoise(ID3D12GraphicsCommandList *cmd, ID3D12CommandQueue *queue,
+                               ID3D12Resource *input, ID3D12Resource *albedo,
+                               ID3D12Resource *normal, ID3D12Resource *output,
+                               bool async) {
+  if (!queue || !input || !output) return false;
+  (void)async;
+
+#ifdef USE_OIDN
+  (void)cmd;
+  if (!Prepare(input, albedo, normal, output))
+    return false;
+
+  try {
+    oidn::DeviceRef& dev = *static_cast<oidn::DeviceRef*>(m_oidnDevice);
 
     // --- STEP 1: Copy Textures -> Linear Buffers ---
     m_cmdAlloc->Reset();

@@ -527,6 +527,35 @@ static ComPtr<ID3D12Resource> s_specularAlbedoUAV;
 static ComPtr<ID3D12Resource> s_specHitDistanceUAV;
 static ComPtr<ID3D12Resource> s_specularMotionVectorsUAV;
 
+static bool PrepareSelectedFinalDenoiserResources() {
+  if (!s_device || !s_outputUAV || !s_oidnOutputUAV ||
+      s_denoiserMode == DxrRenderer::DenoiserMode::Off || IsDlssActive()) {
+    return false;
+  }
+
+  if (s_denoiserMode == DxrRenderer::DenoiserMode::OIDN_CPU ||
+      s_denoiserMode == DxrRenderer::DenoiserMode::OIDN_GPU) {
+    s_oidnDenoiser.SetQuality(s_oidnQuality);
+    if (!s_oidnDenoiser.Initialize(s_device)) {
+      return false;
+    }
+    return s_oidnDenoiser.Prepare(s_outputUAV.Get(), s_albedoUAV.Get(),
+                                  s_normalRoughnessUAV.Get(),
+                                  s_oidnOutputUAV.Get());
+  }
+
+  if (s_denoiserMode == DxrRenderer::DenoiserMode::OptiX) {
+    if (!s_optixDenoiser.Initialize(s_device)) {
+      return false;
+    }
+    return s_optixDenoiser.Prepare(s_outputUAV.Get(), s_albedoUAV.Get(),
+                                   s_normalRoughnessUAV.Get(),
+                                   s_oidnOutputUAV.Get());
+  }
+
+  return false;
+}
+
 static UINT s_outputUAVDescriptorSize = 0;
 static D3D12_GPU_DESCRIPTOR_HANDLE s_outputUAVGpuHandle = {0};
 static ComPtr<ID3D12DescriptorHeap>
@@ -686,6 +715,26 @@ static bool s_noiseConvergedLatched = false;
 static bool s_cloudDescriptorsDone = false;
 static bool s_hasDenoised = false;
 static int s_lastRenderFrameFailReason = -1;
+
+enum class FinalDisplayState {
+  Rendering,
+  FinalDenoisePending,
+  DisplayingFinal,
+  WakePending,
+};
+static FinalDisplayState s_finalDisplayState = FinalDisplayState::Rendering;
+static bool s_interactiveWakeRequested = false;
+static UINT s_interactiveWakeFrameBudget = 0;
+static std::string s_interactiveWakeReason;
+static constexpr UINT kInteractiveWakeFrameBudget = 2;
+
+static void QueueInteractiveWake(const char *reason) {
+  s_interactiveWakeRequested = true;
+  s_interactiveWakeFrameBudget =
+      (std::max)(s_interactiveWakeFrameBudget, kInteractiveWakeFrameBudget);
+  s_interactiveWakeReason = reason ? reason : "interactive change";
+  s_finalDisplayState = FinalDisplayState::WakePending;
+}
 
 static ComPtr<ID3D12RootSignature> s_wavefrontBootstrapRootSig;
 static ComPtr<ID3D12PipelineState> s_wavefrontBootstrapPSO;
@@ -4073,6 +4122,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   // Prepare tonemap pipeline resources.
   EnsureTonemapPipeline();
   s_resourceFeatureMask = resourceFeatureMask;
+  PrepareSelectedFinalDenoiserResources();
 
   // Create Accumulation UAV
   s_accumulation.Resize(s_outputWidth, s_outputHeight);
@@ -4475,17 +4525,20 @@ void MarkMaterialDirty(int materialIndex) {
     s_dirtyMaterialFlags.resize(idx + 1, 0);
   }
   s_dirtyMaterialFlags[idx] = 1;
+  QueueInteractiveWake("material dirtied");
 }
 
 void RequestAccelerationStructureRebuild() {
   s_forceAsRebuild = true;
   s_forceTlasUpdate = false;
+  QueueInteractiveWake("acceleration structure rebuild");
 }
 
 void RequestAccelerationStructureUpdate() {
   if (!s_forceAsRebuild) {
     s_forceTlasUpdate = true;
   }
+  QueueInteractiveWake("acceleration structure update");
 }
 
 static DirectX::XMFLOAT3 CurrentGrassCameraPos() {
@@ -5500,6 +5553,7 @@ void UpdateLights(const std::vector<Light> &lights, bool resetAccumulation) {
 }
 
 void ResetAccumulation() {
+  QueueInteractiveWake("accumulation reset");
   s_accumulation.Reset();
   s_transmissionAccumulation.Reset();
   s_rrStillFrameSpp = 0;
@@ -5509,6 +5563,7 @@ void ResetAccumulation() {
   s_noiseConvergedLatched = false;
   s_hasTonemappedFrame = false;
   s_hasDenoised = false; // Reset auto-denoiser state
+  s_finalDisplayState = FinalDisplayState::WakePending;
   // Keep Streamline history reset separate from accumulation decisions.
   // Accumulation resets happen on real camera/settings changes; per-frame
   // jitter changes must not trigger this.
@@ -5518,11 +5573,39 @@ void ResetAccumulation() {
   }
 }
 
-void MarkTextureDescriptorTableDirty() { s_textureTableDirty = true; }
+void RequestInteractiveWake(const char *reason) { QueueInteractiveWake(reason); }
+
+bool ConsumeInteractiveWake() {
+  if (!s_interactiveWakeRequested && s_interactiveWakeFrameBudget == 0) {
+    return false;
+  }
+
+  s_interactiveWakeRequested = false;
+  if (s_interactiveWakeFrameBudget == 0) {
+    s_interactiveWakeFrameBudget = kInteractiveWakeFrameBudget;
+  }
+  --s_interactiveWakeFrameBudget;
+  if (s_interactiveWakeFrameBudget == 0 &&
+      s_finalDisplayState == FinalDisplayState::WakePending) {
+    s_finalDisplayState = FinalDisplayState::Rendering;
+  }
+  return true;
+}
+
+bool HasInteractiveWake() {
+  return s_interactiveWakeRequested || s_interactiveWakeFrameBudget > 0 ||
+         s_finalDisplayState == FinalDisplayState::WakePending;
+}
+
+void MarkTextureDescriptorTableDirty() {
+  s_textureTableDirty = true;
+  QueueInteractiveWake("texture descriptor table dirty");
+}
 
 void RequestPipelineRecreate(const char *context) {
   s_pipelineRecreateRequested = true;
   s_pipelineRecreateContext = context ? context : "unspecified";
+  QueueInteractiveWake("pipeline recreate requested");
 }
 
 bool ConsumePipelineRecreateRequest(std::string *outContext) {
@@ -5546,6 +5629,7 @@ void SetStreamlineManager(StreamlineManager *streamline) {
 
 void ResetStreamlineHistory() {
   // Resetting DLSS history should resume sampling even if we previously froze.
+  QueueInteractiveWake("streamline history reset");
   s_rrStillFrameSpp = 0;
   s_hasTonemappedFrame = false;
   s_streamlineResetHistory = true;
@@ -5719,6 +5803,7 @@ void SetDenoiserMode(DenoiserMode m) {
     s_oidnDenoiser.Shutdown();
     s_optixDenoiser.Shutdown();
   }
+  PrepareSelectedFinalDenoiserResources();
   // Reset accumulation as denoiser mode change may affect post-process outputs
   DxrRenderer::ResetAccumulation();
 }
@@ -5726,8 +5811,15 @@ void SetDenoiserMode(DenoiserMode m) {
 DenoiserMode GetDenoiserMode() { return s_denoiserMode; }
 
 void SetOidnQuality(OidnDenoiser::Quality q) {
+  if (s_oidnQuality == q) {
+    return;
+  }
   s_oidnQuality = q;
   s_oidnDenoiser.SetQuality(q);
+  s_hasDenoised = false;
+  s_hasTonemappedFrame = false;
+  PrepareSelectedFinalDenoiserResources();
+  QueueInteractiveWake("OIDN quality changed");
 }
 
 OidnDenoiser::Quality GetOidnQuality() { return s_oidnQuality; }
@@ -5746,6 +5838,10 @@ UINT GetDisplayedSampleCount() {
 }
 
 bool CanIdleWithoutRendering() {
+  if (s_finalDisplayState == FinalDisplayState::FinalDenoisePending) {
+    return false;
+  }
+
   if (!s_outputUAV || !s_tonemapOutputUAV) {
     return false;
   }
@@ -5988,6 +6084,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   bool canAutoDenoise =
       isFinalDenoiserMode && reachedEndCondition && !s_hasDenoised;
   bool doDenoise = canAutoDenoise;
+  if (!reachedEndCondition) {
+    s_finalDisplayState = FinalDisplayState::Rendering;
+  } else if (doDenoise) {
+    s_finalDisplayState = FinalDisplayState::FinalDenoisePending;
+  }
 
   // Flag to freeze after tonemapping instead of early return
   bool shouldFreezeAfterTonemap = reachedEndCondition && !doDenoise;
@@ -7118,11 +7219,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     fprintf(stderr, "DxrRenderer: MaxSPP reached. Auto-triggering %s "
                     "denoise.\n",
             useOptix ? "OptiX" : "OIDN");
-    if (useOptix) {
-      s_optixDenoiser.Initialize(s_device);
-    } else {
-      s_oidnDenoiser.Initialize(s_device);
-    }
+    PrepareSelectedFinalDenoiserResources();
 
     // Ensure input is in COMMON state for interop.
     // denoiserInput is the resolved DXR accumulation color (s_outputUAV).
@@ -7623,6 +7720,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       // Additionally, for one-shot denoise, this helps keep the result on
       // screen.
       s_hasTonemappedFrame = true;
+      s_finalDisplayState = FinalDisplayState::DisplayingFinal;
     }
   } else {
     // Tonemap resources are mandatory for SDR swapchain output.
@@ -7659,6 +7757,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     if (freezeSrc) {
       CopyPresentedTexture(freezeSrc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
       s_hasTonemappedFrame = true;
+      s_finalDisplayState = FinalDisplayState::DisplayingFinal;
     }
   }
 

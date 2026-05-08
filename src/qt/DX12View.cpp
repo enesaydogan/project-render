@@ -1,5 +1,6 @@
 #include "DX12View.h"
 #include "../dx12_context.h" // adapt include path
+#include "../dxr_renderer.h"
 #include "../editor_ui.h"
 #include "../input_handler.h"
 #include "../imgui.h"
@@ -165,6 +166,7 @@ DX12View::~DX12View()
 
 void DX12View::focusInEvent(QFocusEvent *e)
 {
+    DxrRenderer::RequestInteractiveWake("Qt viewport focus");
     Input::SetQtWidgetFocused(true);
     ImGui::GetIO().AddFocusEvent(true);
     QWidget::focusInEvent(e);
@@ -234,6 +236,7 @@ void DX12View::keyReleaseEvent(QKeyEvent *e)
 
 void DX12View::mousePressEvent(QMouseEvent *e)
 {
+    DxrRenderer::RequestInteractiveWake("Qt viewport mouse press");
     setFocus(Qt::MouseFocusReason);
     ImGui::GetIO().AddMousePosEvent(static_cast<float>(e->globalPosition().x()),
                                     static_cast<float>(e->globalPosition().y()));
@@ -303,6 +306,7 @@ void DX12View::mouseMoveEvent(QMouseEvent *e)
 
 void DX12View::wheelEvent(QWheelEvent *e)
 {
+    DxrRenderer::RequestInteractiveWake("Qt viewport wheel");
     ImGui::GetIO().AddMousePosEvent(static_cast<float>(e->globalPosition().x()),
                                     static_cast<float>(e->globalPosition().y()));
     const QPoint angleDelta = e->angleDelta();
@@ -314,6 +318,7 @@ void DX12View::wheelEvent(QWheelEvent *e)
 void DX12View::resizeEvent(QResizeEvent *e)
 {
     QWidget::resizeEvent(e);
+    DxrRenderer::RequestInteractiveWake("Qt viewport resize");
     DX12Context::QueueResize(static_cast<UINT>(width()),
                              static_cast<UINT>(height()));
 }
