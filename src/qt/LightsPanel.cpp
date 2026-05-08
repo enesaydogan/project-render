@@ -3,6 +3,7 @@
 #include "../editor_ui.h"
 #include "../scene.h"
 
+#include <QApplication>
 #include <QColorDialog>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
@@ -12,10 +13,13 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QTimer>
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <cstdint>
+#include <cstring>
 #include <cmath>
 
 namespace {
@@ -69,7 +73,9 @@ LightsPanel::LightsPanel(QWidget *parent)
 
     m_refreshTimer = new QTimer(this);
     connect(m_refreshTimer, &QTimer::timeout, this, [this]() {
-        refreshLights();
+        if (!hasPropertyEditorFocus()) {
+            refreshLights();
+        }
     });
     m_refreshTimer->start(250);
 }
@@ -369,6 +375,70 @@ void LightsPanel::applyLight(const std::function<void(Light &)> &fn)
     Scene::UpdateLights();
 }
 
+bool LightsPanel::hasPropertyEditorFocus() const
+{
+    QWidget *focus = QApplication::focusWidget();
+    if (!focus || !isAncestorOf(focus)) {
+        return false;
+    }
+
+    auto editing = [focus](QWidget *widget) {
+        return widget && (focus == widget || widget->isAncestorOf(focus));
+    };
+
+    return editing(m_intensity) ||
+           editing(m_posX) ||
+           editing(m_posY) ||
+           editing(m_posZ) ||
+           editing(m_dirX) ||
+           editing(m_dirY) ||
+           editing(m_dirZ) ||
+           editing(m_radius) ||
+           editing(m_innerAngle) ||
+           editing(m_outerAngle) ||
+           editing(m_areaWidth) ||
+           editing(m_areaHeight);
+}
+
+uint64_t LightsPanel::lightListSignature() const
+{
+    uint64_t hash = 1469598103934665603ull;
+    auto mix = [&hash](uint64_t value) {
+        hash ^= value;
+        hash *= 1099511628211ull;
+    };
+    auto mixFloat = [&mix](float value) {
+        uint32_t bits = 0;
+        static_assert(sizeof(bits) == sizeof(value), "float hash size mismatch");
+        std::memcpy(&bits, &value, sizeof(bits));
+        mix(bits);
+    };
+
+    const auto &lights = Scene::GetLights();
+    mix(static_cast<uint64_t>(lights.size()));
+    for (const Light &light : lights) {
+        mix(static_cast<uint64_t>(light.type));
+        for (float v : light.position) {
+            mixFloat(v);
+        }
+        for (float v : light.emission) {
+            mixFloat(v);
+        }
+        for (float v : light.direction) {
+            mixFloat(v);
+        }
+        mixFloat(light.radius);
+        mixFloat(light.innerConeAngle);
+        mixFloat(light.outerConeAngle);
+        for (float v : light.areaExtents) {
+            mixFloat(v);
+        }
+        mix(static_cast<uint64_t>(static_cast<int64_t>(light.iesAtlasIndex) + 1));
+    }
+
+    return hash;
+}
+
 void LightsPanel::updateColorButton(const QColor &color)
 {
     const QString style =
@@ -415,25 +485,30 @@ void LightsPanel::refreshLights()
         selected = -1;
     }
 
-    m_lightList->clear();
-    for (size_t i = 0; i < lights.size(); ++i) {
-        const Light &l = lights[i];
-        const char *typeStr = "Unknown";
-        switch (static_cast<LightType>(l.type)) {
-        case LightType::Directional: typeStr = "Sun"; break;
-        case LightType::Omni: typeStr = "Omni"; break;
-        case LightType::Spot: typeStr = "Spot"; break;
-        case LightType::AreaRect: typeStr = "Rect"; break;
-        case LightType::AreaDisk: typeStr = "Disk"; break;
-        case LightType::IES: typeStr = "IES"; break;
+    const uint64_t signature = lightListSignature();
+    if (signature != m_lastLightListSignature) {
+        const QSignalBlocker listBlocker(m_lightList);
+        m_lightList->clear();
+        for (size_t i = 0; i < lights.size(); ++i) {
+            const Light &l = lights[i];
+            const char *typeStr = "Unknown";
+            switch (static_cast<LightType>(l.type)) {
+            case LightType::Directional: typeStr = "Sun"; break;
+            case LightType::Omni: typeStr = "Omni"; break;
+            case LightType::Spot: typeStr = "Spot"; break;
+            case LightType::AreaRect: typeStr = "Rect"; break;
+            case LightType::AreaDisk: typeStr = "Disk"; break;
+            case LightType::IES: typeStr = "IES"; break;
+            }
+            m_lightList->addItem(
+                tr("Light %1 (%2)  [%3, %4, %5]")
+                    .arg(static_cast<int>(i))
+                    .arg(typeStr)
+                    .arg(l.position[0], 0, 'f', 2)
+                    .arg(l.position[1], 0, 'f', 2)
+                    .arg(l.position[2], 0, 'f', 2));
         }
-        m_lightList->addItem(
-            tr("Light %1 (%2)  [%3, %4, %5]")
-                .arg(static_cast<int>(i))
-                .arg(typeStr)
-                .arg(l.position[0], 0, 'f', 2)
-                .arg(l.position[1], 0, 'f', 2)
-                .arg(l.position[2], 0, 'f', 2));
+        m_lastLightListSignature = signature;
     }
 
     if (selected >= 0 && selected < m_lightList->count()) {
@@ -447,7 +522,11 @@ void LightsPanel::refreshLights()
     m_selectButton->setEnabled(hasSelection);
     m_removeButton->setEnabled(hasSelection);
 
-    if (hasSelection) {
+    const bool updateInspector =
+        hasSelection &&
+        (!hasPropertyEditorFocus() || selected != m_lastInspectorLightIndex);
+
+    if (updateInspector) {
         const Light &l = lights[(size_t)selected];
         const char *typeStr = "Unknown";
         switch (static_cast<LightType>(l.type)) {
@@ -493,6 +572,9 @@ void LightsPanel::refreshLights()
         m_iesLabel->setText(tr("IES Atlas Index: %1").arg(l.iesAtlasIndex));
 
         updatePropertyVisibility(l.type);
+        m_lastInspectorLightIndex = selected;
+    } else if (!hasSelection) {
+        m_lastInspectorLightIndex = -1;
     }
 
     m_syncing = false;

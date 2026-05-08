@@ -432,6 +432,12 @@ void RenderSettingsPanel::syncFromRenderer()
                     .arg(QString::number(RasterRenderer::GetCurrentAvgLuminance(), 'f', 2))
                     .arg(QString::number(RasterRenderer::GetCurrentEV100(), 'f', 2));
     }
+    if (DxrRenderer::HasPipelineRecreateRequest()) {
+        if (!stats.isEmpty()) {
+            stats += QLatin1Char('\n');
+        }
+        stats += tr("Pipeline change queued...");
+    }
     m_statsLabel->setText(stats);
 
     if (!IsWidgetBeingEdited(m_reflectionBounces)) {
@@ -471,9 +477,15 @@ void RenderSettingsPanel::syncFromRenderer()
     const auto streamlineMode = DX12Context::g_streamline.IsEnabled()
                                     ? DX12Context::g_streamline.GetMode()
                                     : StreamlineManager::Mode::Off;
-    m_dlssMode->setCurrentIndex(StreamlineModeIndex(streamlineMode));
-    m_dlssQuality->setCurrentIndex(StreamlineQualityIndex(DX12Context::g_streamline.GetQuality()));
-    m_rrJitterScale->setValue(DxrRenderer::GetRrJitterScale());
+    if (!IsWidgetBeingEdited(m_dlssMode)) {
+        m_dlssMode->setCurrentIndex(StreamlineModeIndex(streamlineMode));
+    }
+    if (!IsWidgetBeingEdited(m_dlssQuality)) {
+        m_dlssQuality->setCurrentIndex(StreamlineQualityIndex(DX12Context::g_streamline.GetQuality()));
+    }
+    if (!m_rrJitterScale->isInteracting()) {
+        m_rrJitterScale->setValue(DxrRenderer::GetRrJitterScale());
+    }
     const auto rec = DX12Context::g_streamline.GetRecommendedRenderSize(
         DX12Context::g_windowWidth, DX12Context::g_windowHeight);
     m_renderSizeLabel->setText(
@@ -487,31 +499,65 @@ void RenderSettingsPanel::syncFromRenderer()
                                 StreamlineManager::Mode::DLSS_RayReconstruction);
     m_resetDlssHistory->setEnabled(streamlineMode != StreamlineManager::Mode::Off);
 
-    m_finalDenoiser->setCurrentIndex(DenoiserIndexFromMode(DxrRenderer::GetDenoiserMode()));
-    m_oidnQuality->setCurrentIndex(static_cast<int>(DxrRenderer::GetOidnQuality()));
+    if (!IsWidgetBeingEdited(m_finalDenoiser)) {
+        m_finalDenoiser->setCurrentIndex(DenoiserIndexFromMode(DxrRenderer::GetDenoiserMode()));
+    }
+    if (!IsWidgetBeingEdited(m_oidnQuality)) {
+        m_oidnQuality->setCurrentIndex(static_cast<int>(DxrRenderer::GetOidnQuality()));
+    }
     const bool oidnActive = DxrRenderer::GetDenoiserMode() == DxrRenderer::DenoiserMode::OIDN_CPU ||
                             DxrRenderer::GetDenoiserMode() == DxrRenderer::DenoiserMode::OIDN_GPU;
     m_oidnQuality->setEnabled(oidnActive);
 
     const auto &rs = RasterRenderer::GetRenderSettings();
 
-    m_enableSsr->setChecked(rs.enableSSR);
-    m_ssrStepSize->setValue(rs.ssrStepSize);
-    m_ssrThickness->setValue(rs.ssrThickness);
-    m_ssrIntensity->setValue(rs.ssrIntensity);
-    m_ssrMinSmoothness->setValue(rs.ssrMinSmoothness);
-    m_ssrMaxSteps->setValue(rs.ssrMaxSteps);
+    if (!IsWidgetBeingEdited(m_enableSsr)) {
+        m_enableSsr->setChecked(rs.enableSSR);
+    }
+    if (!m_ssrStepSize->isInteracting()) {
+        m_ssrStepSize->setValue(rs.ssrStepSize);
+    }
+    if (!m_ssrThickness->isInteracting()) {
+        m_ssrThickness->setValue(rs.ssrThickness);
+    }
+    if (!m_ssrIntensity->isInteracting()) {
+        m_ssrIntensity->setValue(rs.ssrIntensity);
+    }
+    if (!m_ssrMinSmoothness->isInteracting()) {
+        m_ssrMinSmoothness->setValue(rs.ssrMinSmoothness);
+    }
+    if (!m_ssrMaxSteps->isInteracting()) {
+        m_ssrMaxSteps->setValue(rs.ssrMaxSteps);
+    }
 
-    m_enableSsao->setChecked(rs.enableSSAO);
-    m_ssaoRadius->setValue(rs.ssaoRadius);
-    m_ssaoBias->setValue(rs.ssaoBias);
-    m_ssaoStrength->setValue(rs.ssaoStrength);
-    m_ssaoSamples->setValue(rs.ssaoSamples);
-    m_ssaoCompositeWeight->setValue(rs.ssaoCompositeWeight);
+    if (!IsWidgetBeingEdited(m_enableSsao)) {
+        m_enableSsao->setChecked(rs.enableSSAO);
+    }
+    if (!m_ssaoRadius->isInteracting()) {
+        m_ssaoRadius->setValue(rs.ssaoRadius);
+    }
+    if (!m_ssaoBias->isInteracting()) {
+        m_ssaoBias->setValue(rs.ssaoBias);
+    }
+    if (!m_ssaoStrength->isInteracting()) {
+        m_ssaoStrength->setValue(rs.ssaoStrength);
+    }
+    if (!m_ssaoSamples->isInteracting()) {
+        m_ssaoSamples->setValue(rs.ssaoSamples);
+    }
+    if (!m_ssaoCompositeWeight->isInteracting()) {
+        m_ssaoCompositeWeight->setValue(rs.ssaoCompositeWeight);
+    }
 
-    m_enableBloom->setChecked(rs.enableBloom);
-    m_bloomThreshold->setValue(rs.bloomThreshold);
-    m_bloomIntensity->setValue(rs.bloomIntensity);
+    if (!IsWidgetBeingEdited(m_enableBloom)) {
+        m_enableBloom->setChecked(rs.enableBloom);
+    }
+    if (!m_bloomThreshold->isInteracting()) {
+        m_bloomThreshold->setValue(rs.bloomThreshold);
+    }
+    if (!m_bloomIntensity->isInteracting()) {
+        m_bloomIntensity->setValue(rs.bloomIntensity);
+    }
 
     m_ssrStepSize->setEnabled(rs.enableSSR);
     m_ssrThickness->setEnabled(rs.enableSSR);
@@ -564,17 +610,6 @@ void RenderSettingsPanel::recreateDxrPipeline(const char *context)
     if (!g_rayTracingSupported) {
         return;
     }
-
-    try {
-        DxrRenderer::WaitForAsyncRestirIdle();
-        DX12Context::WaitGPUIdle();
-        DxrRenderer::CreateRayTracingPipeline(DX12Context::g_windowWidth,
-                                              DX12Context::g_windowHeight);
-    } catch (const std::exception &e) {
-        fprintf(stderr, "Qt DXR pipeline recreate failed (%s): %s\n",
-                context ? context : "unknown", e.what());
-    } catch (...) {
-        fprintf(stderr, "Qt DXR pipeline recreate failed (%s): unknown exception\n",
-                context ? context : "unknown");
-    }
+    DxrRenderer::RequestPipelineRecreate(context);
+    syncFromRenderer();
 }

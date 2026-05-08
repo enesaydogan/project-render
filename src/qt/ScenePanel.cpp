@@ -20,6 +20,7 @@
 
 #include <functional>
 #include <algorithm>
+#include <cstdint>
 #include <unordered_set>
 #include <vector>
 
@@ -87,6 +88,59 @@ TreeUiState CaptureTreeUiState(const QTreeWidget *treeWidget)
     }
 
     return state;
+}
+
+void HashCombine(uint64_t *hash, uint64_t value)
+{
+    *hash ^= value;
+    *hash *= 1099511628211ull;
+}
+
+void HashString(uint64_t *hash, const std::string &value)
+{
+    HashCombine(hash, static_cast<uint64_t>(value.size()));
+    for (unsigned char c : value) {
+        HashCombine(hash, c);
+    }
+}
+
+uint64_t BuildTreeStructureSignature(const std::vector<Scene::Node> &nodes)
+{
+    uint64_t hash = 1469598103934665603ull;
+    HashCombine(&hash, static_cast<uint64_t>(nodes.size()));
+    for (const Scene::Node &node : nodes) {
+        HashString(&hash, node.name);
+        HashCombine(&hash, static_cast<uint64_t>(node.meshIndices.size()));
+        HashCombine(&hash, node.visible ? 1ull : 0ull);
+        HashCombine(&hash, node.selectionLocked ? 1ull : 0ull);
+        HashCombine(&hash, node.liveLinkManaged ? 1ull : 0ull);
+        HashCombine(&hash, static_cast<uint64_t>(node.parentIndex + 1));
+        HashString(&hash, node.sourcePath);
+        HashString(&hash, node.importGroupKey);
+    }
+    return hash;
+}
+
+void SyncTreeSelection(QTreeWidgetItem *item,
+                       const std::unordered_set<int> &selectedRows,
+                       QTreeWidgetItem **firstSelectedItem)
+{
+    if (!item) {
+        return;
+    }
+
+    const QVariant nodeIndexData = item->data(kNodeNameColumn, kNodeIndexRole);
+    if (nodeIndexData.isValid()) {
+        const bool selected = selectedRows.find(nodeIndexData.toInt()) != selectedRows.end();
+        item->setSelected(selected);
+        if (selected && firstSelectedItem && !*firstSelectedItem) {
+            *firstSelectedItem = item;
+        }
+    }
+
+    for (int childIndex = 0; childIndex < item->childCount(); ++childIndex) {
+        SyncTreeSelection(item->child(childIndex), selectedRows, firstSelectedItem);
+    }
 }
 
 }
@@ -314,82 +368,92 @@ void ScenePanel::refreshSceneList()
     }
 
     const auto &nodes = Scene::GetNodes();
-    const TreeUiState treeState = CaptureTreeUiState(m_nodeList);
     std::vector<int> selectedRows;
     for (size_t index = 0; index < nodes.size(); ++index) {
         if (nodes[index].selected) {
             selectedRows.push_back(static_cast<int>(index));
         }
     }
-
-    m_nodeList->clear();
-    auto *liveSyncRoot = new QTreeWidgetItem(m_nodeList);
-    liveSyncRoot->setText(0, tr("Live Sync"));
-    liveSyncRoot->setText(kNodeLockColumn, QString());
-    liveSyncRoot->setFlags(liveSyncRoot->flags() & ~Qt::ItemIsSelectable);
-    liveSyncRoot->setExpanded(treeState.liveSyncExpanded);
+    const std::unordered_set<int> selectedSet(selectedRows.begin(), selectedRows.end());
 
     QTreeWidgetItem *currentSelectedItem = nullptr;
-    auto isGroupRoot = [&](size_t index, bool liveLinkGroup) {
-        if (index >= nodes.size() || nodes[index].liveLinkManaged != liveLinkGroup) {
-            return false;
-        }
-        const size_t parentIndex = nodes[index].parentIndex;
-        return parentIndex == static_cast<size_t>(-1) ||
-               parentIndex >= nodes.size() ||
-               nodes[parentIndex].liveLinkManaged != liveLinkGroup;
-    };
 
-    std::function<void(size_t, QTreeWidgetItem *, bool)> addNodeRecursive;
-    addNodeRecursive = [&](size_t index, QTreeWidgetItem *parentItem, bool liveLinkGroup) {
-        const Scene::Node &node = nodes[index];
-        QTreeWidgetItem *item = nullptr;
-        if (parentItem) {
-            item = new QTreeWidgetItem(parentItem);
-        } else if (liveLinkGroup) {
-            item = new QTreeWidgetItem(liveSyncRoot);
-        } else {
-            item = new QTreeWidgetItem(m_nodeList);
-        }
+    const uint64_t structureSignature = BuildTreeStructureSignature(nodes);
+    if (structureSignature != m_treeStructureSignature) {
+        const TreeUiState treeState = CaptureTreeUiState(m_nodeList);
+        m_treeStructureSignature = structureSignature;
 
-        item->setText(kNodeNameColumn, BuildNodeLabel(node));
-        item->setText(kNodeLockColumn, node.selectionLocked ? tr("Lock") : tr("Free"));
-        item->setToolTip(kNodeLockColumn,
-                         node.selectionLocked
-                             ? tr("Click to allow selecting child meshes")
-                             : tr("Click to select this node when descendants are hit"));
-        item->setData(kNodeNameColumn, kNodeIndexRole, static_cast<int>(index));
-        if (treeState.expandedNodeIndices.find(static_cast<int>(index)) !=
-            treeState.expandedNodeIndices.end()) {
-            item->setExpanded(true);
-        }
-        const bool nodeSelected =
-            std::find(selectedRows.begin(), selectedRows.end(),
-                      static_cast<int>(index)) != selectedRows.end();
-        if (nodeSelected) {
-            item->setSelected(true);
-            if (!currentSelectedItem) {
-                currentSelectedItem = item;
+        std::vector<std::vector<size_t>> children(nodes.size());
+        std::vector<size_t> liveRoots;
+        std::vector<size_t> regularRoots;
+        for (size_t index = 0; index < nodes.size(); ++index) {
+            const bool liveLinkGroup = nodes[index].liveLinkManaged;
+            const size_t parentIndex = nodes[index].parentIndex;
+            if (parentIndex < nodes.size() &&
+                nodes[parentIndex].liveLinkManaged == liveLinkGroup) {
+                children[parentIndex].push_back(index);
+            } else if (liveLinkGroup) {
+                liveRoots.push_back(index);
+            } else {
+                regularRoots.push_back(index);
             }
         }
 
-        for (size_t childIndex = 0; childIndex < nodes.size(); ++childIndex) {
-            if (nodes[childIndex].parentIndex != index ||
-                nodes[childIndex].liveLinkManaged != liveLinkGroup) {
-                continue;
-            }
-            addNodeRecursive(childIndex, item, liveLinkGroup);
-        }
-    };
+        m_nodeList->clear();
+        auto *liveSyncRoot = new QTreeWidgetItem(m_nodeList);
+        liveSyncRoot->setText(0, tr("Live Sync"));
+        liveSyncRoot->setText(kNodeLockColumn, QString());
+        liveSyncRoot->setFlags(liveSyncRoot->flags() & ~Qt::ItemIsSelectable);
+        liveSyncRoot->setExpanded(treeState.liveSyncExpanded);
 
-    for (size_t index = 0; index < nodes.size(); ++index) {
-        if (isGroupRoot(index, true)) {
+        std::function<void(size_t, QTreeWidgetItem *, bool)> addNodeRecursive;
+        addNodeRecursive = [&](size_t index, QTreeWidgetItem *parentItem, bool liveLinkGroup) {
+            const Scene::Node &node = nodes[index];
+            QTreeWidgetItem *item = nullptr;
+            if (parentItem) {
+                item = new QTreeWidgetItem(parentItem);
+            } else if (liveLinkGroup) {
+                item = new QTreeWidgetItem(liveSyncRoot);
+            } else {
+                item = new QTreeWidgetItem(m_nodeList);
+            }
+
+            item->setText(kNodeNameColumn, BuildNodeLabel(node));
+            item->setText(kNodeLockColumn, node.selectionLocked ? tr("Lock") : tr("Free"));
+            item->setToolTip(kNodeLockColumn,
+                             node.selectionLocked
+                                 ? tr("Click to allow selecting child meshes")
+                                 : tr("Click to select this node when descendants are hit"));
+            item->setData(kNodeNameColumn, kNodeIndexRole, static_cast<int>(index));
+            if (treeState.expandedNodeIndices.find(static_cast<int>(index)) !=
+                treeState.expandedNodeIndices.end()) {
+                item->setExpanded(true);
+            }
+            const bool nodeSelected =
+                selectedSet.find(static_cast<int>(index)) != selectedSet.end();
+            if (nodeSelected) {
+                item->setSelected(true);
+                if (!currentSelectedItem) {
+                    currentSelectedItem = item;
+                }
+            }
+
+            for (size_t childIndex : children[index]) {
+                addNodeRecursive(childIndex, item, liveLinkGroup);
+            }
+        };
+
+        for (size_t index : liveRoots) {
             addNodeRecursive(index, nullptr, true);
         }
-    }
-    for (size_t index = 0; index < nodes.size(); ++index) {
-        if (isGroupRoot(index, false)) {
+        for (size_t index : regularRoots) {
             addNodeRecursive(index, nullptr, false);
+        }
+    } else {
+        for (int topLevelIndex = 0; topLevelIndex < m_nodeList->topLevelItemCount(); ++topLevelIndex) {
+            SyncTreeSelection(m_nodeList->topLevelItem(topLevelIndex),
+                              selectedSet,
+                              &currentSelectedItem);
         }
     }
 

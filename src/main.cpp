@@ -2800,6 +2800,27 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       // Render based on current mode
       switch (g_currentRenderMode) {
       case RenderMode::DXR: {
+        std::string pipelineRecreateContext;
+        if (DxrRenderer::ConsumePipelineRecreateRequest(
+                &pipelineRecreateContext)) {
+          try {
+            DxrRenderer::WaitForAsyncRestirIdle();
+            DX12Context::WaitGPUIdle();
+            DxrRenderer::CreateRayTracingPipeline(previewWidth,
+                                                  previewHeight);
+            DxrRenderer::ResetAccumulation();
+          } catch (const std::exception &e) {
+            fprintf(stderr,
+                    "DXR queued pipeline recreate failed (%s): %s\n",
+                    pipelineRecreateContext.c_str(), e.what());
+          } catch (...) {
+            fprintf(stderr,
+                    "DXR queued pipeline recreate failed (%s): unknown "
+                    "exception\n",
+                    pipelineRecreateContext.c_str());
+          }
+        }
+
         if (!DxrRenderer::IsReady()) {
           try {
             DxrRenderer::WaitForAsyncRestirIdle();

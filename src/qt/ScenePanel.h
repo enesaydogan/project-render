@@ -3,6 +3,7 @@
 #include <QWidget>
 
 #include <cstddef>
+#include <cstdint>
 
 class QLabel;
 class QProgressBar;
@@ -38,5 +39,6 @@ private:
     bool m_treeDirty = true;
     bool m_lastSceneIoActive = false;
     bool m_lastImportActive = false;
+    uint64_t m_treeStructureSignature = 0;
     size_t m_sceneChangeListenerId = 0;
 };

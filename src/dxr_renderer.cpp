@@ -59,6 +59,8 @@ static OidnDenoiser s_oidnDenoiser;
 static OptixDenoiserWrapper s_optixDenoiser;
 static OidnDenoiser::Quality s_oidnQuality = OidnDenoiser::Quality::High;
 static float s_rrJitterScale = 0.5f;
+static bool s_pipelineRecreateRequested = false;
+static std::string s_pipelineRecreateContext;
 
 // default off so that users see the raw sky intensity without
 // automatic normalization.  The UI checkbox will toggle this at runtime.
@@ -5517,6 +5519,25 @@ void ResetAccumulation() {
 }
 
 void MarkTextureDescriptorTableDirty() { s_textureTableDirty = true; }
+
+void RequestPipelineRecreate(const char *context) {
+  s_pipelineRecreateRequested = true;
+  s_pipelineRecreateContext = context ? context : "unspecified";
+}
+
+bool ConsumePipelineRecreateRequest(std::string *outContext) {
+  if (!s_pipelineRecreateRequested) {
+    return false;
+  }
+  s_pipelineRecreateRequested = false;
+  if (outContext) {
+    *outContext = s_pipelineRecreateContext;
+  }
+  s_pipelineRecreateContext.clear();
+  return true;
+}
+
+bool HasPipelineRecreateRequest() { return s_pipelineRecreateRequested; }
 
 void SetStreamlineManager(StreamlineManager *streamline) {
   s_streamline = streamline;

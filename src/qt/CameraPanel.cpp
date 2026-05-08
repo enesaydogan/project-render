@@ -7,6 +7,7 @@
 #include "../raster_renderer.h"
 #include "../scene.h"
 
+#include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QFormLayout>
@@ -14,6 +15,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -46,6 +48,46 @@ void SetHorizontalFovDegrees(double horizontalDegrees)
     const double hHalfRad = horizontalDegrees * 0.5 * (kPi / 180.0);
     const double vHalfRad = std::atan(std::tan(hHalfRad) / aspect);
     g_cameraData.fov = static_cast<float>(2.0 * vHalfRad * (180.0 / kPi));
+}
+
+bool IsWidgetBeingEdited(QWidget *widget)
+{
+    if (!widget) {
+        return false;
+    }
+
+    QWidget *focus = QApplication::focusWidget();
+    return widget->hasFocus() ||
+           (focus && (focus == widget || widget->isAncestorOf(focus)));
+}
+
+void SyncCheckBoxState(QCheckBox *checkBox, bool checked)
+{
+    if (!checkBox || IsWidgetBeingEdited(checkBox) || checkBox->isChecked() == checked) {
+        return;
+    }
+
+    const QSignalBlocker blocker(checkBox);
+    checkBox->setChecked(checked);
+}
+
+void SyncComboBoxIndex(QComboBox *comboBox, int index)
+{
+    if (!comboBox || IsWidgetBeingEdited(comboBox) || comboBox->currentIndex() == index) {
+        return;
+    }
+
+    const QSignalBlocker blocker(comboBox);
+    comboBox->setCurrentIndex(index);
+}
+
+void SyncSliderControlValue(SliderControl *control, double value)
+{
+    if (!control || control->isInteracting()) {
+        return;
+    }
+
+    control->setValue(value);
 }
 
 } // namespace
@@ -272,10 +314,10 @@ void CameraPanel::syncFromRenderer()
             .arg(sceneEv, 0, 'f', 2)
             .arg(avgLum, 0, 'f', 2));
 
-    m_horizontalFov->setValue(CurrentHorizontalFovDegrees());
-    m_moveSpeed->setValue(g_camSpeed);
-    m_mouseSensitivity->setValue(g_mouseSensitivity);
-    m_safeFrameEnabled->setChecked(g_safeFrameEnabled);
+    SyncSliderControlValue(m_horizontalFov, CurrentHorizontalFovDegrees());
+    SyncSliderControlValue(m_moveSpeed, g_camSpeed);
+    SyncSliderControlValue(m_mouseSensitivity, g_mouseSensitivity);
+    SyncCheckBoxState(m_safeFrameEnabled, g_safeFrameEnabled);
 
     UINT safeFrameWidth = 0;
     UINT safeFrameHeight = 0;
@@ -288,18 +330,18 @@ void CameraPanel::syncFromRenderer()
         m_safeFrameInfo->setText(tr("Unavailable"));
     }
 
-    m_autoExposure->setChecked(autoExposure);
-    m_physicalCamera->setChecked(physicalCamera);
-    m_exposureCompensation->setValue(DxrRenderer::GetExposureCompensation());
-    m_manualExposure->setValue(g_cameraData.intensity);
+    SyncCheckBoxState(m_autoExposure, autoExposure);
+    SyncCheckBoxState(m_physicalCamera, physicalCamera);
+    SyncSliderControlValue(m_exposureCompensation, DxrRenderer::GetExposureCompensation());
+    SyncSliderControlValue(m_manualExposure, g_cameraData.intensity);
 
     float iso = 100.0f;
     float shutterSeconds = 1.0f / 125.0f;
     float aperture = 16.0f;
     DxrRenderer::GetPhysicalCameraSettings(iso, shutterSeconds, aperture);
-    m_iso->setValue(iso);
-    m_shutterSeconds->setValue(shutterSeconds);
-    m_aperture->setValue(aperture);
+    SyncSliderControlValue(m_iso, iso);
+    SyncSliderControlValue(m_shutterSeconds, shutterSeconds);
+    SyncSliderControlValue(m_aperture, aperture);
     m_evLabel->setText(tr("Camera EV100: %1").arg(DxrRenderer::GetPhysicalCameraEV100(), 0, 'f', 2));
 
     const bool usePhysicalControls = (!autoExposure && physicalCamera);
@@ -314,16 +356,16 @@ void CameraPanel::syncFromRenderer()
     m_matchSceneEv->setEnabled(usePhysicalControls);
 
     const auto &rs = RasterRenderer::GetRenderSettings();
-    m_tonemapVignette->setValue(rs.tonemapVignette);
-    m_tonemapSaturation->setValue(rs.tonemapSaturation);
-    m_tonemapContrast->setValue(rs.tonemapContrast);
+    SyncSliderControlValue(m_tonemapVignette, rs.tonemapVignette);
+    SyncSliderControlValue(m_tonemapSaturation, rs.tonemapSaturation);
+    SyncSliderControlValue(m_tonemapContrast, rs.tonemapContrast);
     const int aoMode = static_cast<int>(DxrRenderer::GetTonemapAmbientOcclusionMode());
     const int aoModeIndex = m_dxrAoMode->findData(aoMode);
     if (aoModeIndex >= 0) {
-        m_dxrAoMode->setCurrentIndex(aoModeIndex);
+        SyncComboBoxIndex(m_dxrAoMode, aoModeIndex);
     }
-    m_dxrAoIntensity->setValue(DxrRenderer::GetTonemapAmbientOcclusionIntensity());
-    m_dxrAoLengthMm->setValue(DxrRenderer::GetTonemapAmbientOcclusionLengthMm());
+    SyncSliderControlValue(m_dxrAoIntensity, DxrRenderer::GetTonemapAmbientOcclusionIntensity());
+    SyncSliderControlValue(m_dxrAoLengthMm, DxrRenderer::GetTonemapAmbientOcclusionLengthMm());
     const bool dxrMode = (g_currentRenderMode == RenderMode::DXR);
     m_dxrAoNote->setEnabled(dxrMode);
     m_dxrAoMode->setEnabled(dxrMode);
@@ -339,12 +381,17 @@ void CameraPanel::applyLensSettings()
         return;
     }
 
+    const float oldFov = g_cameraData.fov;
+    const bool oldSafeFrameEnabled = g_safeFrameEnabled;
     SetHorizontalFovDegrees(m_horizontalFov->value());
     g_camSpeed = static_cast<float>(m_moveSpeed->value());
     g_mouseSensitivity = static_cast<float>(m_mouseSensitivity->value());
     g_safeFrameEnabled = m_safeFrameEnabled->isChecked();
     UpdateCameraCB();
-    DxrRenderer::ResetAccumulation();
+    if (std::abs(oldFov - g_cameraData.fov) > 1.0e-4f ||
+        oldSafeFrameEnabled != g_safeFrameEnabled) {
+        DxrRenderer::ResetAccumulation();
+    }
 }
 
 void CameraPanel::applyExposureSettings(bool resetAccumulation)
@@ -364,7 +411,9 @@ void CameraPanel::applyExposureSettings(bool resetAccumulation)
     if (resetAccumulation) {
         DxrRenderer::ResetAccumulation();
     }
-    syncFromRenderer();
+    if (!anyControlInteracting()) {
+        syncFromRenderer();
+    }
 }
 
 void CameraPanel::applyTonemapSettings()
@@ -384,4 +433,30 @@ void CameraPanel::applyTonemapSettings()
     DxrRenderer::SetTonemapAmbientOcclusionMode(
         static_cast<DxrRenderer::TonemapAmbientOcclusionMode>(
             m_dxrAoMode->currentData().toInt()));
+}
+
+bool CameraPanel::anyControlInteracting() const
+{
+    const SliderControl *controls[] = {
+        m_horizontalFov,
+        m_moveSpeed,
+        m_mouseSensitivity,
+        m_exposureCompensation,
+        m_manualExposure,
+        m_iso,
+        m_shutterSeconds,
+        m_aperture,
+        m_tonemapVignette,
+        m_tonemapSaturation,
+        m_tonemapContrast,
+        m_dxrAoIntensity,
+        m_dxrAoLengthMm,
+    };
+
+    for (const SliderControl *control : controls) {
+        if (control && control->isInteracting()) {
+            return true;
+        }
+    }
+    return false;
 }

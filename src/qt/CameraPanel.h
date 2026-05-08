@@ -22,6 +22,7 @@ private:
     void applyLensSettings();
     void applyExposureSettings(bool resetAccumulation);
     void applyTonemapSettings();
+    bool anyControlInteracting() const;
 
     bool m_syncing = false;
 

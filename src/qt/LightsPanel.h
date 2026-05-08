@@ -2,6 +2,7 @@
 
 #include <QWidget>
 #include <QColor>
+#include <cstdint>
 #include <functional>
 
 struct Light;
@@ -26,8 +27,12 @@ private:
     void applyLight(const std::function<void(struct Light &)> &fn);
     void updateColorButton(const QColor &color);
     void updatePropertyVisibility(uint32_t type);
+    bool hasPropertyEditorFocus() const;
+    uint64_t lightListSignature() const;
 
     bool m_syncing = false;
+    uint64_t m_lastLightListSignature = 0;
+    int m_lastInspectorLightIndex = -2;
 
     QLabel *m_loadNotice = nullptr;
     QGroupBox *m_listGroup = nullptr;
