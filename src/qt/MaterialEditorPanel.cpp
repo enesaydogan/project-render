@@ -315,7 +315,7 @@ void MaterialEditorPanel::createUi()
     auto *inspectorLayout = new QVBoxLayout(m_inspectorGroup);
 
     auto *infoForm = new QFormLayout();
-    infoForm->setRowWrapPolicy(QFormLayout::WrapAllRows);
+    infoForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
     infoForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     infoForm->setContentsMargins(0, 0, 0, 0);
     infoForm->setHorizontalSpacing(6);
@@ -366,9 +366,23 @@ void MaterialEditorPanel::createUi()
 
     auto createTextureSlot = [this](TextureSlot slot, const QString &title) {
         auto *group = new QWidget(this);
-        auto *mainLayout = new QVBoxLayout(group);
-        mainLayout->setContentsMargins(0, 4, 0, 4);
-        mainLayout->setSpacing(4);
+        group->setStyleSheet(QStringLiteral("QWidget { background-color: rgba(255, 255, 255, 0.05); border-radius: 4px; }"));
+        
+        auto *mainLayout = new QHBoxLayout(group);
+        mainLayout->setContentsMargins(4, 4, 4, 4);
+        mainLayout->setSpacing(8);
+
+        auto *thumbLabel = new QLabel(group);
+        thumbLabel->setFixedSize(48, 48);
+        thumbLabel->setFrameStyle(QFrame::Panel | QFrame::Sunken);
+        thumbLabel->setAlignment(Qt::AlignCenter);
+        thumbLabel->setStyleSheet(QStringLiteral("background-color: #222; border-radius: 2px;"));
+        thumbLabel->setText(tr("None"));
+        mainLayout->addWidget(thumbLabel);
+
+        auto *controlsLayout = new QVBoxLayout();
+        controlsLayout->setContentsMargins(0, 0, 0, 0);
+        controlsLayout->setSpacing(2);
 
         auto *loadButton = new QPushButton(group);
         auto *clearButton = new QPushButton(group);
@@ -379,37 +393,31 @@ void MaterialEditorPanel::createUi()
         loadButton->setFixedSize(22, 22);
         clearButton->setFixedSize(22, 22);
 
-        if (!title.isEmpty()) {
-            auto *titleRow = new QHBoxLayout();
-            titleRow->setContentsMargins(0, 0, 0, 0);
-            titleRow->setSpacing(4);
+        auto *titleRow = new QHBoxLayout();
+        titleRow->setContentsMargins(0, 0, 0, 0);
+        titleRow->setSpacing(4);
 
+        if (!title.isEmpty()) {
             auto *titleLabel = new QLabel(title, group);
             titleLabel->setWordWrap(true);
             titleLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-            titleLabel->setStyleSheet(QStringLiteral("color: #999; font-weight: bold;"));
+            titleLabel->setStyleSheet(QStringLiteral("color: #999; font-weight: bold; background: transparent;"));
             titleRow->addWidget(titleLabel, 1);
-            titleRow->addWidget(loadButton);
-            titleRow->addWidget(clearButton);
-            mainLayout->addLayout(titleRow);
         } else {
-            auto *buttonRow = new QHBoxLayout();
-            buttonRow->setContentsMargins(0, 0, 0, 0);
-            buttonRow->addStretch(1);
-            buttonRow->addWidget(loadButton);
-            buttonRow->addWidget(clearButton);
-            mainLayout->addLayout(buttonRow);
+            titleRow->addStretch(1);
         }
+        titleRow->addWidget(loadButton);
+        titleRow->addWidget(clearButton);
+        controlsLayout->addLayout(titleRow);
 
-        auto *controlsLayout = new QHBoxLayout();
-        controlsLayout->setContentsMargins(0, 0, 0, 0);
-        controlsLayout->setSpacing(3);
+        auto *bottomRow = new QHBoxLayout();
+        bottomRow->setContentsMargins(0, 0, 0, 0);
+        bottomRow->setSpacing(3);
 
         auto *combo = new QComboBox(group);
         combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-        combo->setMinimumContentsLength(1);
-        combo->setFixedWidth(76);
-        combo->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        combo->setMinimumContentsLength(4);
+        combo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         combo->setModel(m_textureOptionsModel);
 
         auto *amount = CreateSliderControl(0.0, 1.0, 0.01, 3);
@@ -421,16 +429,18 @@ void MaterialEditorPanel::createUi()
             slider->setMinimumWidth(40);
         }
 
-        controlsLayout->addWidget(combo);
-        controlsLayout->addWidget(amount, 1);
+        bottomRow->addWidget(combo, 1);
+        bottomRow->addWidget(amount, 1);
 
-        mainLayout->addLayout(controlsLayout);
+        controlsLayout->addLayout(bottomRow);
+        mainLayout->addLayout(controlsLayout, 1);
 
         m_textureSlots[slot].group = group;
         m_textureSlots[slot].combo = combo;
         m_textureSlots[slot].amount = amount;
         m_textureSlots[slot].loadButton = loadButton;
         m_textureSlots[slot].clearButton = clearButton;
+        m_textureSlots[slot].thumbLabel = thumbLabel;
     };
 
     createTextureSlot(Albedo, tr("Albedo Texture"));
@@ -447,7 +457,7 @@ void MaterialEditorPanel::createUi()
 
     auto *surfaceTab = new QWidget(m_tabs);
     auto *surfaceForm = new QFormLayout(surfaceTab);
-    surfaceForm->setRowWrapPolicy(QFormLayout::WrapAllRows);
+    surfaceForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
     surfaceForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     surfaceForm->setHorizontalSpacing(6);
     surfaceForm->setVerticalSpacing(4);
@@ -543,7 +553,7 @@ void MaterialEditorPanel::createUi()
     grassLayout->addWidget(m_grassHint);
 
     auto *grassForm = new QFormLayout();
-    grassForm->setRowWrapPolicy(QFormLayout::WrapAllRows);
+    grassForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
     grassForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     grassForm->setContentsMargins(0, 0, 0, 0);
     grassForm->setHorizontalSpacing(6);
@@ -562,7 +572,7 @@ void MaterialEditorPanel::createUi()
 
     auto *mappingTab = new QWidget(m_tabs);
     auto *mappingForm = new QFormLayout(mappingTab);
-    mappingForm->setRowWrapPolicy(QFormLayout::WrapAllRows);
+    mappingForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
     mappingForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     mappingForm->setHorizontalSpacing(6);
     mappingForm->setVerticalSpacing(4);
@@ -607,7 +617,7 @@ void MaterialEditorPanel::createUi()
 
     auto *emissionTab = new QWidget(m_tabs);
     auto *emissionForm = new QFormLayout(emissionTab);
-    emissionForm->setRowWrapPolicy(QFormLayout::WrapAllRows);
+    emissionForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
     emissionForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     emissionForm->setHorizontalSpacing(6);
     emissionForm->setVerticalSpacing(4);
@@ -620,7 +630,7 @@ void MaterialEditorPanel::createUi()
 
     auto *flagsTab = new QWidget(m_tabs);
     auto *flagsForm = new QFormLayout(flagsTab);
-    flagsForm->setRowWrapPolicy(QFormLayout::WrapAllRows);
+    flagsForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
     flagsForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     flagsForm->setHorizontalSpacing(6);
     flagsForm->setVerticalSpacing(4);
@@ -2003,4 +2013,20 @@ void MaterialEditorPanel::updateTextureSlotUi(TextureSlot slot, const Asset::Mat
         MaterialSystem::GetTextureAmount(
             mat, static_cast<MaterialSystem::TextureSlot>(slot)));
     widgets.amount->setEnabled(texIdx >= 0);
+
+    if (widgets.thumbLabel) {
+        if (texIdx >= 0 && texIdx < static_cast<int>(g_loadedTextures.size())) {
+            const QPixmap preview = createTexturePreview(g_loadedTextures[texIdx], QSize(48, 48));
+            if (!preview.isNull()) {
+                widgets.thumbLabel->setPixmap(preview);
+                widgets.thumbLabel->setText(QString());
+            } else {
+                widgets.thumbLabel->setPixmap(QPixmap());
+                widgets.thumbLabel->setText(tr("None"));
+            }
+        } else {
+            widgets.thumbLabel->setPixmap(QPixmap());
+            widgets.thumbLabel->setText(tr("None"));
+        }
+    }
 }

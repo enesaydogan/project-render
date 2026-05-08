@@ -54,6 +54,7 @@ private:
         SliderControl *amount = nullptr;
         QPushButton *clearButton = nullptr;
         QPushButton *loadButton = nullptr;
+        QLabel *thumbLabel = nullptr;
     };
 
     void createUi();
