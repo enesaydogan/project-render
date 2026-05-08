@@ -1,4 +1,4 @@
-# project-render 0.2.0 - High-End ArchViz Real-Time Engine
+# project-render 0.3.0 - High-End ArchViz Real-Time Engine
 
 `project-render` is a real-time rendering engine for high-fidelity Architectural Visualization (ArchViz). It uses DirectX 12, DXR ray tracing, NVIDIA Streamline, and optional final-frame denoisers for physically based lighting and export workflows.
 
@@ -8,9 +8,10 @@
 
 ### Advanced Path Tracing
 - **Unified DXR Path Tracer**: Progressive path tracing with high-precision accumulation (`R32G32B32A32_FLOAT`).
+- **Wavefront Architecture**: Highly optimized phase 1-3 wavefront runtime, improving stability, speeding up glass/UV lookups, and fixing reflections.
 - **Multiple Importance Sampling (MIS)**: Power-heuristic MIS combining BRDF and light sampling to reduce fireflies on glossy surfaces.
-- **ReSTIR DI & GI**: Reservoir-based spatio-temporal importance resampling.
-- **Efficiency Optimizations**: Russian roulette, compact material data, and opaque hardware fast paths.
+- **ReSTIR DI & GI**: Reservoir-based spatio-temporal importance resampling, now fully integrated with the wavefront path.
+- **Efficiency Optimizations**: Russian roulette, compact material data, opaque hardware fast paths, Opacity Micromaps, and secondary GI/shadow thinning.
 
 ### Reconstruction & Final Denoising
 - **NVIDIA DLSS Ray Reconstruction (DLSS-RR)** for supported real-time reconstruction through NVIDIA Streamline.
@@ -18,13 +19,15 @@
 - **NVIDIA OptiX Denoiser 9.x** as an optional NVIDIA/CUDA final-frame denoiser.
 
 ### Asset & ArchViz System
-- **Universal Model Import**: Robust support for glTF 2.0, FBX, OBJ, and STL.
+- **Universal Model Import**: Robust support for glTF 2.0, FBX, OBJ, STL, and fast drag-and-drop file import.
 - **OpenPBR-Oriented Material Runtime**: Clearcoat, transmission, and tri-planar mapping.
-- **ArchViz Material Editor**: Single scene material editor combining specular/metallic workflows.
-- **Physical Camera & Lighting**: IES light profiles, Prague Sky Model, and physical exposure.
+- **Foliage & Environment**: Grass emitting, foliage performance improvements, and real-time volumetric clouds.
+- **ArchViz Material Editor**: Single scene material editor combining specular/metallic workflows. Massively accelerated UI rendering.
+- **Physical Camera & Lighting**: IES light profiles, Prague Sky Model with new intensity controls, and physical exposure. Also includes a Clay Render mode for rapid lighting tweaks.
 
 ### Editor & Workflow
-- **Qt UI Integration**: Event-driven, hardware-accelerated Qt6 UI for large scene and material editing.
+- **Qt UI Integration**: Event-driven, hardware-accelerated Qt6 UI with highly optimized material/environment editing panels.
+- **Advanced Selection Tools**: Fast node locking for easier scene editing, selection bounding box outlines, and Shift-drag quick copy/instancing support.
 - **Saved Views & Camera Sequencing**: Keyframed animation paths with per-segment easing and MP4 export.
 - **3ds Max 2024/2025 LiveLink**: Named-pipe live sync for nodes, `.prmesh` payloads, shared materials, and geometry streaming.
 - **Archicad 28 LiveLink**: Pipe-based scene sync with stable material identity across re-syncs.
