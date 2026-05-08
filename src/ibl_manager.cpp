@@ -182,6 +182,9 @@ bool IBLManager::InitializeSkyModel(const std::string &datasetPath) {
 }
 
 void IBLManager::UpdateSkyModel() {
+  if (m_skyUpdateSuspended)
+    return;
+
   if (m_source == IBLSource::PragueSkyModel && m_skyDirty && m_skyInitialized) {
     UpdateTextureFromSkyModel();
     m_envMap = m_proceduralTexture;

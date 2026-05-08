@@ -239,7 +239,10 @@ void DX12View::mousePressEvent(QMouseEvent *e)
                                     static_cast<float>(e->globalPosition().y()));
 
     if (e->button() == Qt::LeftButton && MaterialEditor::IsPickingEnabled()) {
-        const int pickedMaterial = Scene::PickMaterialAtCursor(
+        const QPointF pickPos = e->globalPosition();
+        const int pickedMaterial = Scene::PickMaterialAt(
+            static_cast<float>(pickPos.x()),
+            static_cast<float>(pickPos.y()),
             static_cast<float>(DX12Context::g_windowWidth),
             static_cast<float>(DX12Context::g_windowHeight));
         if (pickedMaterial >= 0) {

@@ -4147,7 +4147,8 @@ int UpdateSelection(float screenWidth, float screenHeight) {
   return hitMaterial;
 }
 
-int PickMaterialAtCursor(float screenWidth, float screenHeight) {
+int PickMaterialAt(float screenX, float screenY, float screenWidth,
+                   float screenHeight) {
   if (ImGuizmo::IsUsing()) {
     return -1;
   }
@@ -4156,14 +4157,13 @@ int PickMaterialAtCursor(float screenWidth, float screenHeight) {
     return -1;
   }
 
-  ImVec2 mposAbs = ImGui::GetIO().MousePos;
   float vpX = 0.0f;
   float vpY = 0.0f;
   float vpWidth = screenWidth;
   float vpHeight = screenHeight;
   GetRenderViewportRect(&vpX, &vpY, &vpWidth, &vpHeight);
-  float mx = mposAbs.x - vpX;
-  float my = mposAbs.y - vpY;
+  float mx = screenX - vpX;
+  float my = screenY - vpY;
   if (mx < 0.0f || my < 0.0f || mx > vpWidth || my > vpHeight) {
     return -1;
   }
@@ -4269,17 +4269,64 @@ int PickMaterialAtCursor(float screenWidth, float screenHeight) {
         continue;
       }
 
-      float localHit[3] = {localOrig[0] + localDir[0] * boxT,
-                           localOrig[1] + localDir[1] * boxT,
-                           localOrig[2] + localDir[2] * boxT};
-      float worldHit[3];
-      TransformPointColumnMajor(nodeWorld, localHit, worldHit);
-      const float dx = worldHit[0] - orig[0];
-      const float dy = worldHit[1] - orig[1];
-      const float dz = worldHit[2] - orig[2];
-      const float worldDist2 = dx * dx + dy * dy + dz * dz;
-      if (worldDist2 < minWorldDist2) {
-        minWorldDist2 = worldDist2;
+      const float boxLocalHit[3] = {localOrig[0] + localDir[0] * boxT,
+                                    localOrig[1] + localDir[1] * boxT,
+                                    localOrig[2] + localDir[2] * boxT};
+      float boxWorldHit[3];
+      TransformPointColumnMajor(nodeWorld, boxLocalHit, boxWorldHit);
+      const float boxDx = boxWorldHit[0] - orig[0];
+      const float boxDy = boxWorldHit[1] - orig[1];
+      const float boxDz = boxWorldHit[2] - orig[2];
+      const float boxWorldDist2 = boxDx * boxDx + boxDy * boxDy +
+                                  boxDz * boxDz;
+      if (boxWorldDist2 >= minWorldDist2) {
+        continue;
+      }
+
+      if (!mesh.cpuVertices.empty() && !mesh.cpuIndices.empty()) {
+        bool triHit = false;
+        float bestMeshDist2 = FLT_MAX;
+
+        for (size_t k = 0; k + 2 < mesh.cpuIndices.size(); k += 3) {
+          const uint32_t i0 = mesh.cpuIndices[k];
+          const uint32_t i1 = mesh.cpuIndices[k + 1];
+          const uint32_t i2 = mesh.cpuIndices[k + 2];
+          if (i0 >= mesh.cpuVertices.size() || i1 >= mesh.cpuVertices.size() ||
+              i2 >= mesh.cpuVertices.size()) {
+            continue;
+          }
+
+          float tVal = 0.0f;
+          if (!RayTriangleIntersection(localOrig, localDir,
+                                       mesh.cpuVertices[i0].pos,
+                                       mesh.cpuVertices[i1].pos,
+                                       mesh.cpuVertices[i2].pos, tVal)) {
+            continue;
+          }
+
+          float localHit[3] = {localOrig[0] + localDir[0] * tVal,
+                               localOrig[1] + localDir[1] * tVal,
+                               localOrig[2] + localDir[2] * tVal};
+          float worldHit[3];
+          TransformPointColumnMajor(nodeWorld, localHit, worldHit);
+          const float dx = worldHit[0] - orig[0];
+          const float dy = worldHit[1] - orig[1];
+          const float dz = worldHit[2] - orig[2];
+          const float worldDist2 = dx * dx + dy * dy + dz * dz;
+
+          if (worldDist2 < bestMeshDist2) {
+            bestMeshDist2 = worldDist2;
+            triHit = true;
+          }
+        }
+
+        if (triHit && bestMeshDist2 < minWorldDist2) {
+          minWorldDist2 = bestMeshDist2;
+          hitNode = static_cast<int>(nodeIndex);
+          hitMaterial = mesh.materialIndex;
+        }
+      } else {
+        minWorldDist2 = boxWorldDist2;
         hitNode = static_cast<int>(nodeIndex);
         hitMaterial = mesh.materialIndex;
       }
@@ -4291,6 +4338,11 @@ int PickMaterialAtCursor(float screenWidth, float screenHeight) {
   }
 
   return hitMaterial;
+}
+
+int PickMaterialAtCursor(float screenWidth, float screenHeight) {
+  const ImVec2 mousePos = ImGui::GetIO().MousePos;
+  return PickMaterialAt(mousePos.x, mousePos.y, screenWidth, screenHeight);
 }
 
 void DrawScenePanel(HWND hwnd, bool &visible) {

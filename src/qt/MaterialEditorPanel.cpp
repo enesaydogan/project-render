@@ -38,9 +38,12 @@
 #include <QShowEvent>
 #include <QVBoxLayout>
 #include <QSignalBlocker>
+#include <QStandardItem>
+#include <QStandardItemModel>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <cwctype>
 
@@ -359,6 +362,7 @@ void MaterialEditorPanel::createUi()
     inspectorLayout->addLayout(presetRow);
 
     m_tabs = new QTabWidget(m_inspectorGroup);
+    m_textureOptionsModel = new QStandardItemModel(this);
 
     auto createTextureSlot = [this](TextureSlot slot, const QString &title) {
         auto *group = new QWidget(this);
@@ -406,6 +410,7 @@ void MaterialEditorPanel::createUi()
         combo->setMinimumContentsLength(1);
         combo->setFixedWidth(76);
         combo->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        combo->setModel(m_textureOptionsModel);
 
         auto *amount = CreateSliderControl(0.0, 1.0, 0.01, 3);
         amount->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -1654,16 +1659,31 @@ void MaterialEditorPanel::updateCounts()
 void MaterialEditorPanel::updateTextureOptions()
 {
     const int idx = currentMaterialIndex();
-    if (idx < 0) {
+    if (idx < 0 || !m_textureOptionsModel) {
         return;
     }
 
-    m_visibleTextureIndices.clear();
-    for (int i = 0; i < static_cast<int>(g_loadedTextures.size()); ++i) {
-        if (g_loadedTextures[i].hiddenInEditor) {
-            continue;
+    const uint64_t signature = textureOptionsSignature();
+    if (signature != m_textureOptionsSignature) {
+        m_textureOptionsSignature = signature;
+        m_visibleTextureIndices.clear();
+        m_textureOptionsModel->clear();
+
+        m_textureOptionsModel->appendRow(new QStandardItem(tr("None")));
+        for (int texIdx = 0; texIdx < static_cast<int>(g_loadedTextures.size()); ++texIdx) {
+            const auto &tex = g_loadedTextures[texIdx];
+            if (tex.hiddenInEditor) {
+                continue;
+            }
+            m_visibleTextureIndices.push_back(texIdx);
+
+            auto *item = new QStandardItem(TextureLabel(tex, texIdx));
+            const QPixmap preview = createTexturePreview(tex, QSize(24, 24));
+            if (!preview.isNull()) {
+                item->setIcon(QIcon(preview));
+            }
+            m_textureOptionsModel->appendRow(item);
         }
-        m_visibleTextureIndices.push_back(i);
     }
 
     for (int slot = 0; slot < TextureSlotCount; ++slot) {
@@ -1672,17 +1692,8 @@ void MaterialEditorPanel::updateTextureOptions()
             continue;
         }
         QSignalBlocker blocker(widgets.combo);
-        widgets.combo->clear();
-        widgets.combo->addItem(tr("None"));
-        for (int i = 0; i < static_cast<int>(m_visibleTextureIndices.size()); ++i) {
-            int texIdx = m_visibleTextureIndices[i];
-            const auto &tex = g_loadedTextures[texIdx];
-            QPixmap preview = createTexturePreview(tex, QSize(24, 24));
-            if (preview.isNull()) {
-                widgets.combo->addItem(TextureLabel(tex, texIdx));
-            } else {
-                widgets.combo->addItem(QIcon(preview), TextureLabel(tex, texIdx));
-            }
+        if (widgets.combo->model() != m_textureOptionsModel) {
+            widgets.combo->setModel(m_textureOptionsModel);
         }
         const int texIdx = textureIndexForSlot(g_loadedMaterials[idx], static_cast<TextureSlot>(slot));
         int comboIndex = visibleComboIndexForTexture(texIdx);
@@ -1788,6 +1799,29 @@ int MaterialEditorPanel::visibleComboIndexForTexture(int textureIndex) const
     return 0;
 }
 
+uint64_t MaterialEditorPanel::textureOptionsSignature() const
+{
+    uint64_t hash = 1469598103934665603ull;
+    auto mix = [&hash](uint64_t value) {
+        hash ^= value;
+        hash *= 1099511628211ull;
+    };
+
+    mix(static_cast<uint64_t>(g_loadedTextures.size()));
+    for (const auto &tex : g_loadedTextures) {
+        mix(tex.hiddenInEditor ? 1ull : 0ull);
+        mix(static_cast<uint64_t>(tex.width));
+        mix(static_cast<uint64_t>(tex.height));
+        mix(static_cast<uint64_t>(tex.mipLevels));
+        mix(static_cast<uint64_t>(tex.format));
+        mix(static_cast<uint64_t>(tex.cpuData.size()));
+        mix(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(tex.cpuData.data())));
+        mix(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(tex.resource.Get())));
+    }
+
+    return hash;
+}
+
 void MaterialEditorPanel::updateWorkflowUi(const Asset::Material &mat)
 {
     if (m_roughnessSurfaceLabel) {
@@ -1815,34 +1849,63 @@ QPixmap MaterialEditorPanel::createTexturePreview(const Asset::Texture &tex, con
         return QPixmap();
     }
 
+    const int previewWidth = std::max(1, size.width());
+    const int previewHeight = std::max(1, size.height());
+    QImage image(previewWidth, previewHeight, QImage::Format_RGBA8888);
+
     if ((tex.format == DXGI_FORMAT_R8G8B8A8_UNORM ||
          tex.format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB) &&
         tex.cpuData.size() >= static_cast<size_t>(tex.width) * tex.height * 4) {
-        QImage image(tex.cpuData.data(),
-                     static_cast<int>(tex.width),
-                     static_cast<int>(tex.height),
-                     QImage::Format_RGBA8888);
-        return QPixmap::fromImage(image.copy()).scaled(
-            size, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        const uint8_t *pixels = tex.cpuData.data();
+        for (int y = 0; y < previewHeight; ++y) {
+            const int srcY = std::min<int>(
+                static_cast<int>(tex.height) - 1,
+                static_cast<int>((static_cast<double>(y) + 0.5) *
+                                 static_cast<double>(tex.height) /
+                                 static_cast<double>(previewHeight)));
+            for (int x = 0; x < previewWidth; ++x) {
+                const int srcX = std::min<int>(
+                    static_cast<int>(tex.width) - 1,
+                    static_cast<int>((static_cast<double>(x) + 0.5) *
+                                     static_cast<double>(tex.width) /
+                                     static_cast<double>(previewWidth)));
+                const size_t base =
+                    (static_cast<size_t>(srcY) * tex.width + static_cast<size_t>(srcX)) * 4;
+                image.setPixelColor(
+                    x, y,
+                    QColor(pixels[base + 0],
+                           pixels[base + 1],
+                           pixels[base + 2],
+                           pixels[base + 3]));
+            }
+        }
+        return QPixmap::fromImage(image);
     }
 
     if (tex.format == DXGI_FORMAT_R32G32B32A32_FLOAT &&
         tex.cpuData.size() >= static_cast<size_t>(tex.width) * tex.height * 16) {
-        QImage image(static_cast<int>(tex.width),
-                     static_cast<int>(tex.height),
-                     QImage::Format_RGBA8888);
         const float *pixels = reinterpret_cast<const float *>(tex.cpuData.data());
-        for (int y = 0; y < static_cast<int>(tex.height); ++y) {
-            for (int x = 0; x < static_cast<int>(tex.width); ++x) {
-                const size_t base = (static_cast<size_t>(y) * tex.width + x) * 4;
+        for (int y = 0; y < previewHeight; ++y) {
+            const int srcY = std::min<int>(
+                static_cast<int>(tex.height) - 1,
+                static_cast<int>((static_cast<double>(y) + 0.5) *
+                                 static_cast<double>(tex.height) /
+                                 static_cast<double>(previewHeight)));
+            for (int x = 0; x < previewWidth; ++x) {
+                const int srcX = std::min<int>(
+                    static_cast<int>(tex.width) - 1,
+                    static_cast<int>((static_cast<double>(x) + 0.5) *
+                                     static_cast<double>(tex.width) /
+                                     static_cast<double>(previewWidth)));
+                const size_t base =
+                    (static_cast<size_t>(srcY) * tex.width + static_cast<size_t>(srcX)) * 4;
                 const float r = std::clamp(pixels[base + 0], 0.0f, 1.0f);
                 const float g = std::clamp(pixels[base + 1], 0.0f, 1.0f);
                 const float b = std::clamp(pixels[base + 2], 0.0f, 1.0f);
                 image.setPixelColor(x, y, QColor::fromRgbF(r, g, b, 1.0f));
             }
         }
-        return QPixmap::fromImage(image).scaled(
-            size, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        return QPixmap::fromImage(image);
     }
 
     return QPixmap();

@@ -5,6 +5,7 @@
 #include <QSize>
 #include <QWidget>
 #include <array>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -21,6 +22,7 @@ class QPushButton;
 class QShowEvent;
 class SliderControl;
 class QTabWidget;
+class QStandardItemModel;
 
 class MaterialEditorPanel : public QWidget
 {
@@ -71,6 +73,7 @@ private:
     void setTextureIndexForSlot(Asset::Material &mat, TextureSlot slot, int index);
     int textureIndexFromVisibleCombo(int comboIndex) const;
     int visibleComboIndexForTexture(int textureIndex) const;
+    uint64_t textureOptionsSignature() const;
     QPixmap createTexturePreview(const Asset::Texture &tex, const QSize &size) const;
 
     void applyMaterialChange(const std::function<void(Asset::Material &)> &fn,
@@ -184,4 +187,6 @@ private:
     // Clipboard
     std::unique_ptr<Asset::Material> m_clipboard;
     std::vector<int> m_visibleTextureIndices;
+    QStandardItemModel *m_textureOptionsModel = nullptr;
+    uint64_t m_textureOptionsSignature = 0;
 };

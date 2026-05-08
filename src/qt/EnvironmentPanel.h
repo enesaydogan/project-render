@@ -22,6 +22,8 @@ private:
     void syncFromRenderer();
     void applyLightingSettings(bool updateSkyModel, bool updateCameraBuffer);
     void applyCloudSettings();
+    void scheduleSkyModelUpdate();
+    bool anyControlInteracting() const;
 
     bool m_syncing = false;
 
@@ -83,4 +85,5 @@ private:
     SliderControl *m_shadowSoftness = nullptr;
 
     QTimer *m_refreshTimer = nullptr;
+    QTimer *m_skyUpdateTimer = nullptr;
 };

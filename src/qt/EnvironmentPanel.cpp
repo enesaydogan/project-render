@@ -47,11 +47,27 @@ EnvironmentPanel::EnvironmentPanel(QWidget *parent)
     : QWidget(parent)
 {
     createUi();
+
+    m_skyUpdateTimer = new QTimer(this);
+    m_skyUpdateTimer->setSingleShot(true);
+    connect(m_skyUpdateTimer, &QTimer::timeout, this, [this]() {
+        auto &ibl = IBLManager::Get();
+        ibl.SetSkyModelUpdatesSuspended(false);
+        if (ibl.GetIBLSource() == IBLManager::IBLSource::PragueSkyModel) {
+            ibl.UpdateSkyModel();
+            UpdateCameraCB();
+            DxrRenderer::ResetAccumulation();
+        }
+        syncFromRenderer();
+    });
+
     syncFromRenderer();
 
     m_refreshTimer = new QTimer(this);
     connect(m_refreshTimer, &QTimer::timeout, this, [this]() {
-        syncFromRenderer();
+        if (!anyControlInteracting()) {
+            syncFromRenderer();
+        }
     });
     m_refreshTimer->start(250);
 }
@@ -310,6 +326,73 @@ void EnvironmentPanel::createUi()
     connectCloudControl(m_shadowSoftness);
 }
 
+void EnvironmentPanel::scheduleSkyModelUpdate()
+{
+    auto &ibl = IBLManager::Get();
+    ibl.SetSkyModelUpdatesSuspended(true);
+    if (m_skyUpdateTimer) {
+        m_skyUpdateTimer->start(150);
+    }
+}
+
+bool EnvironmentPanel::anyControlInteracting() const
+{
+    const SliderControl *controls[] = {
+        m_iblRotation,
+        m_iblIntensity,
+        m_iblIndirectBoost,
+        m_analyticSunIntensity,
+        m_fileSunIntensity,
+        m_fileSunSize,
+        m_visibility,
+        m_albedo,
+        m_altitude,
+        m_skyIntensity,
+        m_sunIntensity,
+        m_sunSize,
+        m_timeOfDay,
+        m_northOffset,
+        m_latitude,
+        m_dayOfYear,
+        m_cloudDensity,
+        m_cloudAbsorption,
+        m_cloudCoverage,
+        m_cloudScattering,
+        m_cloudSunIntensity,
+        m_cloudTop,
+        m_cloudBottom,
+        m_cloudWindSpeed,
+        m_baseScale,
+        m_detailScale,
+        m_coverageScale,
+        m_coverageVariation,
+        m_erosion,
+        m_warpStrength,
+        m_shapePower,
+        m_powderStrength,
+        m_cirrusAmount,
+        m_cloudShadowStrength,
+        m_shadowSteps,
+        m_shadowStepSize,
+        m_shadowLod,
+        m_previewBakeSamples,
+        m_finalBakeSamples,
+        m_bakeJitterStrength,
+        m_multiScatterBoost,
+        m_silverLiningStrength,
+        m_cloudType,
+        m_groundBounceStrength,
+        m_shadowSoftness,
+    };
+
+    for (const SliderControl *control : controls) {
+        if (control && control->isInteracting()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void EnvironmentPanel::syncFromRenderer()
 {
     m_syncing = true;
@@ -444,9 +527,12 @@ void EnvironmentPanel::applyLightingSettings(bool updateSkyModel, bool updateCam
     }
 
     auto &ibl = IBLManager::Get();
-    ibl.SetIBLSource(m_iblSource->currentIndex() == 0
-                         ? IBLManager::IBLSource::File
-                         : IBLManager::IBLSource::PragueSkyModel);
+    const IBLManager::IBLSource requestedSource =
+        m_iblSource->currentIndex() == 0
+            ? IBLManager::IBLSource::File
+            : IBLManager::IBLSource::PragueSkyModel;
+    const bool sourceChanged = ibl.GetIBLSource() != requestedSource;
+    ibl.SetIBLSource(requestedSource);
     const bool usingFileIbl = ibl.GetIBLSource() == IBLManager::IBLSource::File;
     const bool hasFileSun = usingFileIbl && ibl.HasFileSun();
     ibl.SetIblRotationDegrees(static_cast<float>(m_iblRotation->value()));
@@ -487,14 +573,18 @@ void EnvironmentPanel::applyLightingSettings(bool updateSkyModel, bool updateCam
     g_latitudeDeg = static_cast<float>(m_latitude->value());
     g_dayOfYear = static_cast<float>(m_dayOfYear->value());
 
-    if (updateSkyModel && ibl.GetIBLSource() == IBLManager::IBLSource::PragueSkyModel) {
-        ibl.UpdateSkyModel();
+    if (updateSkyModel &&
+        ibl.GetIBLSource() == IBLManager::IBLSource::PragueSkyModel &&
+        !sourceChanged) {
+        scheduleSkyModelUpdate();
     }
     if (updateCameraBuffer) {
         UpdateCameraCB();
     }
     DxrRenderer::ResetAccumulation();
-    syncFromRenderer();
+    if (sourceChanged || !anyControlInteracting()) {
+        syncFromRenderer();
+    }
 }
 
 void EnvironmentPanel::applyCloudSettings()
@@ -540,5 +630,7 @@ void EnvironmentPanel::applyCloudSettings()
     // CloudManager::Update detects parameter edits and schedules a trailing-edge
     // bake. RequestBake() here would force the full sky bake on every slider tick.
     DxrRenderer::ResetAccumulation();
-    syncFromRenderer();
+    if (!anyControlInteracting()) {
+        syncFromRenderer();
+    }
 }

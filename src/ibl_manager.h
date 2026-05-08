@@ -24,6 +24,10 @@ public:
   // Sky Model Integration
   bool InitializeSkyModel(const std::string &datasetPath);
   void UpdateSkyModel();
+  void SetSkyModelUpdatesSuspended(bool suspended) {
+    m_skyUpdateSuspended = suspended;
+  }
+  bool AreSkyModelUpdatesSuspended() const { return m_skyUpdateSuspended; }
 
   // Parameters
   void SetIBLSource(IBLSource source);
@@ -200,6 +204,7 @@ private:
   std::unique_ptr<PragueSkyModel> m_pragueSkyModel;
   bool m_skyInitialized = false;
   bool m_skyDirty = true;
+  bool m_skyUpdateSuspended = false;
 
   float m_visibility = 60.0f; // km; clear-air daylight default
   float m_albedo = 0.3f;      // typical mixed terrain/concrete reflectance
