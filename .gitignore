@@ -58,6 +58,7 @@ CMakeFiles/**
 .vscode/
 .idea/
 *.code-workspace
+*.grc
 
 # OS files
 .DS_Store
