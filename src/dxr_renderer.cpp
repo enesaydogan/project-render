@@ -582,6 +582,8 @@ static D3D12_GPU_VIRTUAL_ADDRESS s_wavefrontShadowRayGenShaderTable = 0;
 static D3D12_GPU_VIRTUAL_ADDRESS s_missShaderTable = 0;
 static D3D12_GPU_VIRTUAL_ADDRESS s_hitGroupShaderTable = 0;
 static D3D12_GPU_VIRTUAL_ADDRESS s_wavefrontHitGroupShaderTable = 0;
+static D3D12_GPU_VIRTUAL_ADDRESS s_uploadedWavefrontSecondaryRayGen = 0;
+static D3D12_GPU_VIRTUAL_ADDRESS s_uploadedWavefrontShadowRayGen = 0;
 
 struct MeshBLAS {
   AccelerationStructureBuffers buffers;
@@ -725,8 +727,10 @@ enum class FinalDisplayState {
 static FinalDisplayState s_finalDisplayState = FinalDisplayState::Rendering;
 static bool s_interactiveWakeRequested = false;
 static UINT s_interactiveWakeFrameBudget = 0;
+static UINT s_sceneLoadWarmupFramesRemaining = 0;
 static std::string s_interactiveWakeReason;
 static constexpr UINT kInteractiveWakeFrameBudget = 2;
+static constexpr UINT kSceneLoadWarmupFrameBudget = 4;
 
 static void QueueInteractiveWake(const char *reason) {
   s_interactiveWakeRequested = true;
@@ -983,7 +987,9 @@ static void EnsureWavefrontPrepareIndirectArgsPipeline();
 static void EnsureWavefrontResolvePipeline();
 static void EnsureWavefrontRestirSeedPipeline();
 static void EnsureWavefrontSecondaryResolvePipeline();
+static void EnsureWavefrontShadowIntegratePipeline();
 static void EnsureWavefrontIndirectCommandSignatures();
+static void PrepareWavefrontBackendPipelines();
 static void DispatchWavefrontBootstrap(ID3D12GraphicsCommandList4 *list,
                                        ID3D12Resource *cameraCB);
 static void DispatchWavefrontCounterReset(ID3D12GraphicsCommandList4 *list,
@@ -2894,6 +2900,32 @@ static void DispatchWavefrontShadowIntegration(
   list->ResourceBarrier(1, &uavBarrier);
 }
 
+static void PrepareWavefrontBackendPipelines() {
+  if (s_pathTracingBackend == DxrRenderer::PathTracingBackend::Legacy ||
+      !s_device) {
+    return;
+  }
+
+  // Compile and create the queue-backed wavefront compute PSOs before the
+  // first interactive camera invalidation. These Ensure* calls are cached, so
+  // backend switches and pipeline recreates pay the one-time setup outside the
+  // user's first movement frame.
+  EnsureWavefrontBootstrapPipeline();
+  EnsureWavefrontCounterResetPipeline();
+  EnsureWavefrontPrepareIndirectArgsPipeline();
+  EnsureWavefrontResolvePipeline();
+  EnsureWavefrontIndirectCommandSignatures();
+
+  if (s_pathTracingBackend ==
+      DxrRenderer::PathTracingBackend::WavefrontOptimized) {
+    EnsureWavefrontRestirSeedPipeline();
+    EnsureWavefrontSecondaryResolvePipeline();
+    EnsureWavefrontShadowIntegratePipeline();
+    EnsureRestirSpatialPipeline();
+    EnsureRestirGiSpatialPipeline();
+  }
+}
+
 static UINT ComputeWavefrontIndirectPassBudget() {
   const UINT maxSpecularBounces =
       (g_cameraData.maxSpecularBounces > 0.0f)
@@ -3911,6 +3943,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   s_hitGroupShaderTable = s_missShaderTable + s_shaderTableEntrySize;
   s_wavefrontHitGroupShaderTable =
       s_hitGroupShaderTable + s_shaderTableEntrySize;
+  s_uploadedWavefrontSecondaryRayGen = 0;
+  s_uploadedWavefrontShadowRayGen = 0;
 
   // Create a default heap 2D texture to hold raytracing output (render-size)
   D3D12_RESOURCE_DESC texDesc = {};
@@ -4122,6 +4156,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   // Prepare tonemap pipeline resources.
   EnsureTonemapPipeline();
   s_resourceFeatureMask = resourceFeatureMask;
+  PrepareWavefrontBackendPipelines();
   PrepareSelectedFinalDenoiserResources();
 
   // Create Accumulation UAV
@@ -5597,6 +5632,23 @@ bool HasInteractiveWake() {
          s_finalDisplayState == FinalDisplayState::WakePending;
 }
 
+void RequestSceneLoadWarmup(const char *reason) {
+  s_sceneLoadWarmupFramesRemaining =
+      (std::max)(s_sceneLoadWarmupFramesRemaining,
+                 kSceneLoadWarmupFrameBudget);
+  QueueInteractiveWake(reason ? reason : "scene load warmup");
+}
+
+bool HasSceneLoadWarmup() { return s_sceneLoadWarmupFramesRemaining > 0; }
+
+bool ConsumeSceneLoadWarmupFrame() {
+  if (s_sceneLoadWarmupFramesRemaining == 0) {
+    return false;
+  }
+  --s_sceneLoadWarmupFramesRemaining;
+  return true;
+}
+
 void MarkTextureDescriptorTableDirty() {
   s_textureTableDirty = true;
   QueueInteractiveWake("texture descriptor table dirty");
@@ -5646,6 +5698,7 @@ void SetPathTracingBackend(PathTracingBackend backend) {
     fprintf(stderr, "DxrRenderer: Path tracing backend set to %d\n",
             static_cast<int>(backend));
   }
+  PrepareWavefrontBackendPipelines();
   DxrRenderer::ResetAccumulation();
 }
 
@@ -6583,16 +6636,19 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       SetWavefrontStage("primary-visibility");
       DispatchWavefrontPrimaryVisibility(dxrList.Get());
 
-      // Record indirect dispatch updates whenever the active shader table pointers change.
-      static D3D12_GPU_VIRTUAL_ADDRESS s_lastSecondaryRayGen = 0;
-      static D3D12_GPU_VIRTUAL_ADDRESS s_lastShadowRayGen = 0;
-      if (s_wavefrontSecondaryRayGenShaderTable != s_lastSecondaryRayGen ||
-          s_wavefrontShadowRayGenShaderTable != s_lastShadowRayGen) {
+      // Record indirect dispatch updates whenever the active shader table
+      // pointers change. The cache is module state so pipeline recreates can
+      // reset it explicitly instead of leaving hidden stale function statics.
+      if (s_wavefrontSecondaryRayGenShaderTable !=
+              s_uploadedWavefrontSecondaryRayGen ||
+          s_wavefrontShadowRayGenShaderTable !=
+              s_uploadedWavefrontShadowRayGen) {
         UploadWavefrontIndirectDispatchRecords(dxrList.Get());
         if (s_wavefrontSecondaryRayGenShaderTable != 0 &&
             s_wavefrontShadowRayGenShaderTable != 0) {
-          s_lastSecondaryRayGen = s_wavefrontSecondaryRayGenShaderTable;
-          s_lastShadowRayGen = s_wavefrontShadowRayGenShaderTable;
+          s_uploadedWavefrontSecondaryRayGen =
+              s_wavefrontSecondaryRayGenShaderTable;
+          s_uploadedWavefrontShadowRayGen = s_wavefrontShadowRayGenShaderTable;
         }
       }
 

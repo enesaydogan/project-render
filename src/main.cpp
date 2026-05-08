@@ -74,7 +74,23 @@ static Asset::GpuMesh g_proceduralGrassBladeMesh;
 static Asset::GpuMesh g_proceduralGrassMidMesh;
 static bool g_proceduralGrassBladeReady = false;
 static bool g_proceduralGrassMidReady = false;
+static bool g_forceGrassRuntimeRefresh = true;
+static UINT g_prevGrassPatchCount = (UINT)-1;
+static uint64_t g_prevGrassMaterialHash = 0;
+static uint64_t g_prevGrassSceneHash = 0;
 extern std::vector<Asset::Material> g_loadedMaterials;
+
+void RequestGrassRuntimeRefreshForSceneLoad() {
+  g_forceGrassRuntimeRefresh = true;
+  g_prevGrassPatchCount = (UINT)-1;
+  g_prevGrassMaterialHash = 0;
+  g_prevGrassSceneHash = 0;
+  g_grassPatches.clear();
+  GrassManager::SetPatches(g_grassPatches);
+  DxrRenderer::RequestAccelerationStructureRebuild();
+  DxrRenderer::RequestSceneLoadWarmup("grass scene load refresh");
+  DxrRenderer::ResetAccumulation();
+}
 
 namespace {
 constexpr float kTwoPi = 6.283185307179586f;
@@ -2229,6 +2245,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     if (fs::exists(sceneToLoad)) {
       if (SceneIO::LoadScene(sceneToLoad)) {
         SetCurrentScenePath(sceneToLoad);
+        RequestGrassRuntimeRefreshForSceneLoad();
         fprintf(stderr, "Startup: loaded scene %s\n", sceneToLoad.c_str());
       } else {
         fprintf(stderr, "Startup: failed to load scene %s\n",
@@ -2739,12 +2756,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       // ---
       std::vector<int> activeGrassMaterialIndices;
       {
-        static UINT s_prevGrassPatchCount = (UINT)-1;
-        static uint64_t s_prevGrassMaterialHash = 0;
-        static uint64_t s_prevGrassSceneHash = 0;
+        const bool forceGrassRefresh = g_forceGrassRuntimeRefresh;
         auto sceneInstances_grass = Scene::GetInstances();
         const uint64_t grassSceneHash = ComputeGrassSceneHash(sceneInstances_grass);
-        const bool grassSceneChanged = (grassSceneHash != s_prevGrassSceneHash);
+        const bool grassSceneChanged =
+            forceGrassRefresh || (grassSceneHash != g_prevGrassSceneHash);
         auto addGrassMaterialIndex = [&activeGrassMaterialIndices](int matIdx) {
           if (std::find(activeGrassMaterialIndices.begin(),
                         activeGrassMaterialIndices.end(),
@@ -2770,7 +2786,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                                            g_grassPatches);
           }
           GrassManager::SetPatches(g_grassPatches);
-          s_prevGrassSceneHash = grassSceneHash;
+          g_prevGrassSceneHash = grassSceneHash;
         } else {
           for (const auto &inst : sceneInstances_grass) {
             if (!inst.mesh)
@@ -2805,17 +2821,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           HashCombineU64(grassMaterialHash, static_cast<uint64_t>(matIdx + 1));
         }
         const bool grassTopologyChanged =
-            (currentPatchCount != s_prevGrassPatchCount) ||
-            (grassMaterialHash != s_prevGrassMaterialHash);
+            (currentPatchCount != g_prevGrassPatchCount) ||
+            (grassMaterialHash != g_prevGrassMaterialHash);
         if (grassSceneChanged || grassTopologyChanged) {
-          if (grassTopologyChanged) {
+          if (forceGrassRefresh || grassTopologyChanged) {
             DxrRenderer::RequestAccelerationStructureRebuild();
           } else {
             DxrRenderer::RequestAccelerationStructureUpdate();
           }
           DxrRenderer::ResetAccumulation();
-          s_prevGrassPatchCount = currentPatchCount;
-          s_prevGrassMaterialHash = grassMaterialHash;
+          g_prevGrassPatchCount = currentPatchCount;
+          g_prevGrassMaterialHash = grassMaterialHash;
+          g_forceGrassRuntimeRefresh = false;
         }
       }
 
@@ -3496,8 +3513,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     }
 
     const bool sceneIoActive = IsSceneIoJobActive();
+    const bool sceneLoadWarmupActive =
+        !sceneIoActive && g_currentRenderMode == RenderMode::DXR &&
+        DxrRenderer::HasSceneLoadWarmup();
     if (!sceneIoActive) {
-      Input::Update(dt);
+      if (!sceneLoadWarmupActive) {
+        Input::Update(dt);
+      }
       LiveLink::TickRuntime();
     } else {
       LiveLink::TickCoordinator();
@@ -3652,16 +3674,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     const bool consumedDxrWake =
         !g_renderExportJob.active && g_currentRenderMode == RenderMode::DXR &&
         DxrRenderer::IsReady() && DxrRenderer::ConsumeInteractiveWake();
+    const bool consumedSceneLoadWarmup =
+        !g_renderExportJob.active && g_currentRenderMode == RenderMode::DXR &&
+        DxrRenderer::IsReady() && DxrRenderer::ConsumeSceneLoadWarmupFrame();
   #ifdef USE_QT_UI
     const bool canIdleDxr =
       !g_renderExportJob.active && g_currentRenderMode == RenderMode::DXR &&
       DxrRenderer::IsReady() && !consumedDxrWake &&
+      !consumedSceneLoadWarmup &&
       DxrRenderer::CanIdleWithoutRendering();
   #else
     const bool canIdleDxr =
       !handledWindowMessage && !g_renderExportJob.active &&
       g_currentRenderMode == RenderMode::DXR && DxrRenderer::IsReady() &&
-      !consumedDxrWake && DxrRenderer::CanIdleWithoutRendering();
+      !consumedDxrWake && !consumedSceneLoadWarmup &&
+      DxrRenderer::CanIdleWithoutRendering();
   #endif
     if (canIdleDxr) {
       prevTime = std::chrono::high_resolution_clock::now();

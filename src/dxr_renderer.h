@@ -57,6 +57,11 @@ void ResetAccumulation();
 void RequestInteractiveWake(const char *reason = nullptr);
 bool ConsumeInteractiveWake();
 bool HasInteractiveWake();
+// After a scene load, force a few real DXR frames through before viewport input
+// resumes so lazy AS/queue/cloud/reset work is paid at the load boundary.
+void RequestSceneLoadWarmup(const char *reason = nullptr);
+bool HasSceneLoadWarmup();
+bool ConsumeSceneLoadWarmupFrame();
 // Scene texture resources/descriptors changed. The next DXR frame must rebuild
 // its private shader-visible texture table even if the descriptor range/count
 // did not change.

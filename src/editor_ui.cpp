@@ -50,6 +50,7 @@ extern bool g_rasterWireframe;
 extern bool g_rasterDebugDepth;
 extern ComPtr<ID3D12RootSignature> g_rootSignature;
 extern CameraCB g_cameraData;
+extern void RequestGrassRuntimeRefreshForSceneLoad();
 // use DX12Context::g_streamline
 extern float g_camSpeed;
 extern float g_mouseSensitivity;
@@ -336,6 +337,7 @@ static void UpdateSceneIoJob() {
       fprintf(stderr, "%s scene %s\n",
               g_sceneIoJob.isSave ? "Saved" : "Loaded", g_sceneIoJob.path.c_str());
       if (!g_sceneIoJob.isSave) {
+        RequestGrassRuntimeRefreshForSceneLoad();
         Scene::RequestRendererFullRebuild();
         g_cloudManager.RequestBake();
         DxrRenderer::ResetStreamlineHistory();
@@ -348,6 +350,8 @@ static void UpdateSceneIoJob() {
           if (!RecreateDxrPipelineSafe(dxrWidth, dxrHeight,
                                        "scene load complete")) {
             g_currentRenderMode = RenderMode::Raster;
+          } else {
+            DxrRenderer::RequestSceneLoadWarmup("scene load complete");
           }
         }
       }
