@@ -399,6 +399,12 @@ public:
   ~Scoped3DCutPlanesInfo() { Reset(); }
 
   API_3DCutPlanesInfo *Get() { return &m_cutInfo; }
+  const API_3DCutPlanesInfo *Get() const { return &m_cutInfo; }
+
+  bool HasActiveCutaway() const {
+    return m_cutInfo.isCutPlanes && m_cutInfo.nShapes > 0 &&
+           m_cutInfo.shapes != nullptr;
+  }
 
   void Reset() {
     if (m_cutInfo.shapes != nullptr) {
@@ -411,6 +417,98 @@ private:
   API_3DCutPlanesInfo m_cutInfo;
 };
 
+bool Is3DCutawayActive() {
+  Scoped3DCutPlanesInfo cutPlanesInfo;
+  return ACAPI_View_Get3DCuttingPlanes(cutPlanesInfo.Get()) == NoError &&
+         cutPlanesInfo.HasActiveCutaway();
+}
+
+bool IsCurrentWindow3D() {
+  API_WindowInfo windowInfo = {};
+  return ACAPI_Window_GetCurrentWindow(&windowInfo) == NoError &&
+         windowInfo.typeID == APIWind_3DModelID;
+}
+
+bool IsCutawaySignatureActive(const std::string &signature) {
+  return signature.rfind("on:", 0) == 0 && signature != "on:0";
+}
+
+std::string Read3DCutawaySignature() {
+  Scoped3DCutPlanesInfo cutPlanesInfo;
+  const GSErrCode err = ACAPI_View_Get3DCuttingPlanes(cutPlanesInfo.Get());
+  if (err != NoError) {
+    return std::string("error:") + std::to_string(static_cast<int>(err));
+  }
+
+  const API_3DCutPlanesInfo *info = cutPlanesInfo.Get();
+  std::string signature =
+      info->isCutPlanes ? std::string("on") : std::string("off");
+  signature += ":";
+  signature += std::to_string(info->nShapes);
+  if (info->shapes == nullptr) {
+    return signature;
+  }
+
+  for (short shapeIndex = 0; shapeIndex < info->nShapes; ++shapeIndex) {
+    const API_3DCutShapeType &shape = (*info->shapes)[shapeIndex];
+    signature += ":";
+    signature += std::to_string(shape.cutStatus);
+    signature += ",";
+    signature += std::to_string(shape.pa);
+    signature += ",";
+    signature += std::to_string(shape.pb);
+    signature += ",";
+    signature += std::to_string(shape.pc);
+    signature += ",";
+    signature += std::to_string(shape.pd);
+  }
+  return signature;
+}
+
+bool Rebuild3DModelDatabase(std::string *outError) {
+  API_DatabaseInfo originalDatabase = {};
+  const GSErrCode getErr =
+      ACAPI_Database_GetCurrentDatabase(&originalDatabase);
+  if (getErr != NoError) {
+    if (outError != nullptr) {
+      *outError = "ACAPI_Database_GetCurrentDatabase failed (" +
+                  std::to_string(static_cast<int>(getErr)) + ")";
+    }
+    return false;
+  }
+
+  API_DatabaseInfo modelDatabase = {};
+  modelDatabase.typeID = APIWind_3DModelID;
+  GSErrCode err = ACAPI_Database_ChangeCurrentDatabase(&modelDatabase);
+  if (err != NoError) {
+    if (outError != nullptr) {
+      *outError = "ACAPI_Database_ChangeCurrentDatabase failed (" +
+                  std::to_string(static_cast<int>(err)) + ")";
+    }
+    return false;
+  }
+
+  err = ACAPI_Database_RebuildCurrentDatabase();
+  const GSErrCode restoreErr =
+      ACAPI_Database_ChangeCurrentDatabase(&originalDatabase);
+  if (err != NoError) {
+    if (outError != nullptr) {
+      *outError = "ACAPI_Database_RebuildCurrentDatabase failed (" +
+                  std::to_string(static_cast<int>(err)) + ")";
+    }
+    return false;
+  }
+  if (restoreErr != NoError) {
+    if (outError != nullptr) {
+      *outError = "ACAPI_Database_ChangeCurrentDatabase restore failed (" +
+                  std::to_string(static_cast<int>(restoreErr)) + ")";
+    }
+    return false;
+  }
+
+  return true;
+}
+
 class ScopedTemporarySight {
 public:
   ~ScopedTemporarySight() { Reset(); }
@@ -418,15 +516,12 @@ public:
   bool CreateAndSelect(std::string *outError) {
     Reset();
 
-    // Capture the active 3D visibility/cut state before switching away from
+    // Capture the active 3D visibility state before switching away from
     // the user's current window sight so the export model matches Archicad's
-    // section-cut result instead of an uncut default sight.
+    // visible element/story/marquee filters instead of an unfiltered sight.
     API_3DFilterAndCutSettings filterAndCutSettings = {};
     const bool hasFilterAndCutSettings =
         ACAPI_View_Get3DImageSets(&filterAndCutSettings) == NoError;
-    Scoped3DCutPlanesInfo cutPlanesInfo;
-    const bool hasCutPlanesInfo =
-        ACAPI_View_Get3DCuttingPlanes(cutPlanesInfo.Get()) == NoError;
 
     GSErrCode err = ACAPI_Sight_CreateSight(&m_temporarySight);
     if (err != NoError) {
@@ -447,15 +542,6 @@ public:
       err = ACAPI_View_Change3DImageSets(&filterAndCutSettings, &mustConvert);
       if (err != NoError) {
         AssignError(outError, "ACAPI_View_Change3DImageSets", err);
-        Reset();
-        return false;
-      }
-    }
-
-    if (hasCutPlanesInfo) {
-      err = ACAPI_View_Change3DCuttingPlanes(cutPlanesInfo.Get());
-      if (err != NoError) {
-        AssignError(outError, "ACAPI_View_Change3DCuttingPlanes", err);
         Reset();
         return false;
       }
@@ -484,6 +570,45 @@ private:
   }
 
   void *m_temporarySight = nullptr;
+  void *m_originalSight = nullptr;
+};
+
+class ScopedCurrent3DWindowSight {
+public:
+  ~ScopedCurrent3DWindowSight() { Reset(); }
+
+  bool Select(std::string *outError) {
+    Reset();
+
+    const GSErrCode err = ACAPI_Sight_SelectSight(nullptr, &m_originalSight);
+    if (err != NoError) {
+      AssignError(outError, "ACAPI_Sight_SelectSight", err);
+      return false;
+    }
+    m_selected = true;
+    return true;
+  }
+
+  void Reset() {
+    if (m_selected) {
+      void *currentSight = nullptr;
+      ACAPI_Sight_SelectSight(m_originalSight, &currentSight);
+    }
+    m_selected = false;
+    m_originalSight = nullptr;
+  }
+
+private:
+  static void AssignError(std::string *outError, const char *operation,
+                          GSErrCode error) {
+    if (outError == nullptr) {
+      return;
+    }
+    *outError = std::string(operation) + " failed (" +
+                std::to_string(static_cast<int>(error)) + ")";
+  }
+
+  bool m_selected = false;
   void *m_originalSight = nullptr;
 };
 
@@ -1958,23 +2083,34 @@ bool ExportSceneElements(const DocumentInfo &documentInfo,
     return true;
   }
 
+  const bool useCurrentWindowModel = Is3DCutawayActive();
+  ScopedCurrent3DWindowSight currentWindowSight;
   ScopedTemporarySight temporarySight;
-  if (!temporarySight.CreateAndSelect(outError)) {
-    return false;
-  }
-
-  const GSErrCode modelErr =
-      ACAPI_ModelAccess_GenerateModelWithSeparateComponents(elementGuids);
-  if (modelErr != NoError) {
-    if (outError != nullptr) {
-      *outError =
-          "ACAPI_ModelAccess_GenerateModelWithSeparateComponents failed (" +
-          std::to_string(static_cast<int>(modelErr)) + ")";
-    }
-    return false;
-  }
-
   ModelerAPI::Model model;
+  if (useCurrentWindowModel) {
+    if (!Rebuild3DModelDatabase(outError)) {
+      return false;
+    }
+    if (!currentWindowSight.Select(outError)) {
+      return false;
+    }
+  } else {
+    if (!temporarySight.CreateAndSelect(outError)) {
+      return false;
+    }
+
+    const GSErrCode modelErr =
+        ACAPI_ModelAccess_GenerateModelWithSeparateComponents(elementGuids);
+    if (modelErr != NoError) {
+      if (outError != nullptr) {
+        *outError =
+            "ACAPI_ModelAccess_GenerateModelWithSeparateComponents failed (" +
+            std::to_string(static_cast<int>(modelErr)) + ")";
+      }
+      return false;
+    }
+  }
+
   const GSErrCode selectedSightErr = ACAPI_Sight_GetSelectedSightModel(model);
   if (selectedSightErr != NoError) {
     if (outError != nullptr) {
@@ -2000,6 +2136,14 @@ bool ExportSceneElements(const DocumentInfo &documentInfo,
   };
   std::vector<ExportGroup> exportGroups;
   std::unordered_map<std::string, size_t> groupIndexByObjectId;
+  std::unordered_set<std::string> requestedObjectIds;
+  if (useCurrentWindowModel && requestedElementGuids != nullptr) {
+    requestedObjectIds.reserve(static_cast<size_t>(elementGuids.GetSize()) * 2);
+    for (const API_Guid &guid : elementGuids) {
+      requestedObjectIds.insert(MakeObjectId(guid));
+      requestedObjectIds.insert(MakeObjectId(ResolveExportRootGuid(guid)));
+    }
+  }
 
   for (int elementIndex = 1; elementIndex <= elementCount; ++elementIndex) {
     ModelerAPI::Element element;
@@ -2009,6 +2153,11 @@ bool ExportSceneElements(const DocumentInfo &documentInfo,
     API_Guid guid = ResolveExportRootGuid(rawGuid);
 
     const std::string objectId = MakeObjectId(guid);
+    if (!requestedObjectIds.empty() &&
+        !requestedObjectIds.contains(objectId) &&
+        !requestedObjectIds.contains(MakeObjectId(rawGuid))) {
+      continue;
+    }
     assignedObjectIds.insert(objectId);
 
     auto it = groupIndexByObjectId.find(objectId);
@@ -2114,23 +2263,34 @@ bool CollectCurrentExportObjectIds(std::unordered_set<std::string> *outObjectIds
     return true;
   }
 
+  const bool useCurrentWindowModel = Is3DCutawayActive();
+  ScopedCurrent3DWindowSight currentWindowSight;
   ScopedTemporarySight temporarySight;
-  if (!temporarySight.CreateAndSelect(outError)) {
-    return false;
-  }
-
-  const GSErrCode modelErr =
-      ACAPI_ModelAccess_GenerateModelWithSeparateComponents(elementGuids);
-  if (modelErr != NoError) {
-    if (outError != nullptr) {
-      *outError =
-          "ACAPI_ModelAccess_GenerateModelWithSeparateComponents failed (" +
-          std::to_string(static_cast<int>(modelErr)) + ")";
-    }
-    return false;
-  }
-
   ModelerAPI::Model model;
+  if (useCurrentWindowModel) {
+    if (!Rebuild3DModelDatabase(outError)) {
+      return false;
+    }
+    if (!currentWindowSight.Select(outError)) {
+      return false;
+    }
+  } else {
+    if (!temporarySight.CreateAndSelect(outError)) {
+      return false;
+    }
+
+    const GSErrCode modelErr =
+        ACAPI_ModelAccess_GenerateModelWithSeparateComponents(elementGuids);
+    if (modelErr != NoError) {
+      if (outError != nullptr) {
+        *outError =
+            "ACAPI_ModelAccess_GenerateModelWithSeparateComponents failed (" +
+            std::to_string(static_cast<int>(modelErr)) + ")";
+      }
+      return false;
+    }
+  }
+
   const GSErrCode selectedSightErr = ACAPI_Sight_GetSelectedSightModel(model);
   if (selectedSightErr != NoError) {
     if (outError != nullptr) {
@@ -2222,6 +2382,7 @@ private:
   uint64_t m_nextSequence = 1;
   uint64_t m_nextRevision = 1;
   CameraExportRecord m_lastCamera = {};
+  std::string m_lastCutawaySignature;
   std::unordered_map<std::string, ElementExportRecord> m_exportedElements;
   std::unordered_map<int, MaterialExportRecord> m_materialStateByKey;
   std::unordered_set<std::string> m_observedElementObjectIds;
@@ -2256,6 +2417,7 @@ void LiveLinkSessionController::ResetSessionState(bool disconnectPipe) {
   m_nextSequence = 1;
   m_nextRevision = 1;
   m_lastCamera = {};
+  m_lastCutawaySignature.clear();
 }
 
 void LiveLinkSessionController::ResetTrackedSceneState(bool detachObservers) {
@@ -2818,6 +2980,7 @@ bool LiveLinkSessionController::ExportFullScene(bool startingSession,
   m_refreshTrackedElementsNeeded = false;
   SyncObservedElements();
   m_lastCamera = hasExportedCamera ? exportedCamera : CameraExportRecord{};
+  m_lastCutawaySignature = Read3DCutawaySignature();
 
   if (reportSuccess) {
     Report("project-render LiveLink: exported " +
@@ -3032,6 +3195,7 @@ bool LiveLinkSessionController::ExportDirtyElements(bool reportSuccess,
     ClearPendingSceneSync();
   }
   SyncObservedElements();
+  m_lastCutawaySignature = Read3DCutawaySignature();
 
   if (reportSuccess) {
     Report("project-render LiveLink: synced " +
@@ -3144,6 +3308,12 @@ void LiveLinkSessionController::OnScenePollTimer() {
     return;
   }
 
+  if (IsCutawaySignatureActive(m_lastCutawaySignature) &&
+      !IsCurrentWindow3D()) {
+    ScheduleSceneSync(std::chrono::milliseconds(kScenePollIntervalMs));
+    return;
+  }
+
   const bool ok = m_fullSceneResyncNeeded
                       ? ExportFullScene(!m_sessionOpen, false, false)
                       : ExportDirtyElements(false, false);
@@ -3155,6 +3325,18 @@ void LiveLinkSessionController::OnScenePollTimer() {
 void LiveLinkSessionController::OnCameraPollTimer() {
   if (!m_syncActive || m_commandInProgress || !m_sessionOpen ||
       m_fullSceneResyncNeeded) {
+    return;
+  }
+  if (!IsCurrentWindow3D()) {
+    return;
+  }
+
+  const std::string cutawaySignature = Read3DCutawaySignature();
+  if (cutawaySignature != m_lastCutawaySignature) {
+    m_lastCutawaySignature = cutawaySignature;
+    m_fullSceneResyncNeeded = true;
+    m_sceneDirty = true;
+    ScheduleSceneSync(std::chrono::milliseconds(0));
     return;
   }
 
@@ -3171,7 +3353,29 @@ void LiveLinkSessionController::MarkSceneDirty(API_NotifyEventID notifID) {
     m_sceneDirty = true;
     ScheduleSceneSync(kSceneResyncDebounce);
     break;
+  case APINotify_ChangeWindow:
+    if (IsCurrentWindow3D()) {
+      const std::string cutawaySignature = Read3DCutawaySignature();
+      const bool cutawayStateChanged =
+          cutawaySignature != m_lastCutawaySignature &&
+          (IsCutawaySignatureActive(cutawaySignature) ||
+           IsCutawaySignatureActive(m_lastCutawaySignature));
+      if (cutawayStateChanged) {
+        m_lastCutawaySignature = cutawaySignature;
+        m_fullSceneResyncNeeded = true;
+        m_sceneDirty = true;
+        ScheduleSceneSync(std::chrono::milliseconds(0));
+      } else if (IsCutawaySignatureActive(cutawaySignature) &&
+                 (m_sceneDirty || !m_dirtyElementObjectIds.empty() ||
+                  !m_removedElementObjectIds.empty())) {
+        ScheduleSceneSync(std::chrono::milliseconds(0));
+      }
+    }
+    break;
   case APINotify_ReceiveChanges:
+    if (IsCutawaySignatureActive(m_lastCutawaySignature)) {
+      m_fullSceneResyncNeeded = true;
+    }
     m_sceneDirty = true;
     m_refreshTrackedElementsNeeded = true;
     ScheduleSceneSync(kSceneResyncDebounce);
@@ -3320,7 +3524,8 @@ GSErrCode Initialize(void) {
   }
 
   const GSErrCode notifyErr = ACAPI_ProjectOperation_CatchProjectEvent(
-      APINotify_AllInputFinished | APINotify_ReceiveChanges,
+      APINotify_AllInputFinished | APINotify_ReceiveChanges |
+          APINotify_ChangeWindow,
       ProjectEventHandler);
   if (notifyErr != NoError) {
     ACAPI_WriteReport(
