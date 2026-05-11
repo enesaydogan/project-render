@@ -9,6 +9,7 @@
 #include "scene.h"
 #include "raster_renderer.h"
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <filesystem>
 #include <fstream>
@@ -628,6 +629,55 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
     });
   }
 
+  j["sct"] = json::array();
+  for (const Scene::ScatterModel &model : Scene::GetScatterModels()) {
+    json sm;
+    sm["n"] = model.name;
+    sm["sd"] = model.seed;
+    sm["en"] = model.enabled;
+    sm["tg"] = json::array();
+    for (const Scene::ScatterTarget &target : model.targets) {
+      sm["tg"].push_back({
+          {"ni", target.nodeIndex},
+          {"mi", target.meshIndex},
+          {"w", target.weight},
+          {"en", target.enabled},
+      });
+    }
+    sm["ob"] = json::array();
+    for (const Scene::ScatterObject &object : model.objects) {
+      json meshTransforms = json::array();
+      for (const auto &transform : object.meshLocalTransforms) {
+        std::vector<float> savedTransform(16);
+        for (int i = 0; i < 16; ++i) {
+          savedTransform[i] = transform[static_cast<size_t>(i)];
+        }
+        meshTransforms.push_back(std::move(savedTransform));
+      }
+      sm["ob"].push_back({
+          {"n", object.name},
+          {"mi", object.meshIndices},
+          {"mt", meshTransforms},
+          {"d", object.densityPerSquareMeter},
+          {"w", object.weight},
+          {"mx", object.maxInstances},
+          {"s0", object.minScale},
+          {"s1", object.maxScale},
+          {"yw", object.randomYawDegrees},
+          {"pt", object.randomPitchDegrees},
+          {"rl", object.randomRollDegrees},
+          {"na", object.normalAlign},
+          {"sl0", object.slopeMinDegrees},
+          {"sl1", object.slopeMaxDegrees},
+          {"h0", object.heightMin},
+          {"h1", object.heightMax},
+          {"jt", object.jitterMeters},
+          {"en", object.enabled},
+      });
+    }
+    j["sct"].push_back(std::move(sm));
+  }
+
   // Lights
   j["lgt"] = json::array();
   for (const auto &lt : Scene::GetLights()) {
@@ -1020,6 +1070,125 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
   }
 }
 
+static size_t JsonToSizeT(const json &entry, const char *key,
+                          size_t fallback = static_cast<size_t>(-1)) {
+  if (!entry.contains(key)) {
+    return fallback;
+  }
+  if (entry[key].is_number_unsigned()) {
+    return static_cast<size_t>(entry[key].get<uint64_t>());
+  }
+  if (entry[key].is_number_integer()) {
+    const int64_t value = entry[key].get<int64_t>();
+    return value < 0 ? fallback : static_cast<size_t>(value);
+  }
+  return fallback;
+}
+
+static void RestoreScatterPRS(const json &j) {
+  std::vector<Scene::ScatterModel> models;
+  if (!j.contains("sct") || !j["sct"].is_array()) {
+    Scene::SetScatterModels({});
+    return;
+  }
+
+  const size_t nodeCount = Scene::GetNodes().size();
+  const size_t meshCount = g_loadedMeshes.size();
+  for (const auto &savedModel : j["sct"]) {
+    Scene::ScatterModel model;
+    model.name = savedModel.value("n", std::string("Scatter"));
+    model.seed = savedModel.value("sd", model.seed);
+    model.enabled = savedModel.value("en", model.enabled);
+
+    if (savedModel.contains("tg") && savedModel["tg"].is_array()) {
+      for (const auto &savedTarget : savedModel["tg"]) {
+        Scene::ScatterTarget target;
+        target.nodeIndex = JsonToSizeT(savedTarget, "ni");
+        target.meshIndex = JsonToSizeT(savedTarget, "mi");
+        target.weight = savedTarget.value("w", target.weight);
+        target.enabled = savedTarget.value("en", target.enabled);
+        if (target.nodeIndex >= nodeCount || target.meshIndex >= meshCount) {
+          target.enabled = false;
+        }
+        model.targets.push_back(target);
+      }
+    }
+
+    if (savedModel.contains("ob") && savedModel["ob"].is_array()) {
+      for (const auto &savedObject : savedModel["ob"]) {
+        Scene::ScatterObject object;
+        object.name = savedObject.value("n", std::string("Scatter Object"));
+        if (savedObject.contains("mi") && savedObject["mi"].is_array()) {
+          object.meshIndices.clear();
+          for (const auto &savedMeshIndex : savedObject["mi"]) {
+            size_t meshIndex = static_cast<size_t>(-1);
+            if (savedMeshIndex.is_number_unsigned()) {
+              meshIndex = static_cast<size_t>(savedMeshIndex.get<uint64_t>());
+            } else if (savedMeshIndex.is_number_integer()) {
+              const int64_t value = savedMeshIndex.get<int64_t>();
+              if (value >= 0) {
+                meshIndex = static_cast<size_t>(value);
+              }
+            }
+            if (meshIndex < meshCount) {
+              object.meshIndices.push_back(meshIndex);
+            }
+          }
+        }
+        if (savedObject.contains("mt") && savedObject["mt"].is_array()) {
+          object.meshLocalTransforms.clear();
+          for (const auto &savedTransform : savedObject["mt"]) {
+            std::array<float, 16> transform = {};
+            transform[0] = 1.0f;
+            transform[5] = 1.0f;
+            transform[10] = 1.0f;
+            transform[15] = 1.0f;
+            if (savedTransform.is_array() && savedTransform.size() >= 16) {
+              for (int i = 0; i < 16; ++i) {
+                transform[static_cast<size_t>(i)] = savedTransform[i];
+              }
+            }
+            object.meshLocalTransforms.push_back(transform);
+          }
+        }
+        while (object.meshLocalTransforms.size() < object.meshIndices.size()) {
+          std::array<float, 16> identity = {};
+          identity[0] = 1.0f;
+          identity[5] = 1.0f;
+          identity[10] = 1.0f;
+          identity[15] = 1.0f;
+          object.meshLocalTransforms.push_back(identity);
+        }
+        if (object.meshLocalTransforms.size() > object.meshIndices.size()) {
+          object.meshLocalTransforms.resize(object.meshIndices.size());
+        }
+        object.densityPerSquareMeter = savedObject.value("d", object.densityPerSquareMeter);
+        object.weight = savedObject.value("w", object.weight);
+        object.maxInstances = savedObject.value("mx", object.maxInstances);
+        object.minScale = savedObject.value("s0", object.minScale);
+        object.maxScale = savedObject.value("s1", object.maxScale);
+        object.randomYawDegrees = savedObject.value("yw", object.randomYawDegrees);
+        object.randomPitchDegrees = savedObject.value("pt", object.randomPitchDegrees);
+        object.randomRollDegrees = savedObject.value("rl", object.randomRollDegrees);
+        object.normalAlign = savedObject.value("na", object.normalAlign);
+        object.slopeMinDegrees = savedObject.value("sl0", object.slopeMinDegrees);
+        object.slopeMaxDegrees = savedObject.value("sl1", object.slopeMaxDegrees);
+        object.heightMin = savedObject.value("h0", object.heightMin);
+        object.heightMax = savedObject.value("h1", object.heightMax);
+        object.jitterMeters = savedObject.value("jt", object.jitterMeters);
+        object.enabled = savedObject.value("en", object.enabled);
+        if (object.meshIndices.empty()) {
+          object.enabled = false;
+        }
+        model.objects.push_back(std::move(object));
+      }
+    }
+    models.push_back(std::move(model));
+  }
+
+  Scene::SetScatterModels(std::move(models));
+}
+
 static void RestoreLiveLinkBindingsPRS(const json &j,
                                        const std::vector<int> &materialRemap) {
   std::vector<LiveLink::LiveLinkSceneSync::PersistedBinding> bindings;
@@ -1338,6 +1507,7 @@ bool LoadScenePRS(const std::string &path) {
         }
       }
     }
+    RestoreScatterPRS(meta);
     Scene::RefreshAllMaterialRuntimeTextures();
     RestoreLiveLinkBindingsPRS(meta, remap);
 

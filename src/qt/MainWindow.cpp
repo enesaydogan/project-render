@@ -7,6 +7,7 @@
 #include "MaterialEditorPanel.h"
 #include "RenderPanel.h"
 #include "RenderSettingsPanel.h"
+#include "ScatterPanel.h"
 #include "ScenePanel.h"
 #include "ViewsPanel.h"
 #include "../dx12_context.h"
@@ -574,6 +575,11 @@ void MainWindow::createDocks()
     materialsDock->setAllowedAreas(Qt::AllDockWidgetAreas);
     materialsDock->setWidget(wrapScroll(new MaterialEditorPanel(materialsDock), materialsDock));
     addDockWidget(Qt::LeftDockWidgetArea, materialsDock);
+    auto *scatterDock = new QDockWidget(tr("Scatter"), this);
+    scatterDock->setObjectName(tr("Scatter"));
+    scatterDock->setAllowedAreas(Qt::AllDockWidgetAreas);
+    scatterDock->setWidget(wrapScroll(new ScatterPanel(scatterDock), scatterDock));
+    addDockWidget(Qt::LeftDockWidgetArea, scatterDock);
     auto *renderDock = new QDockWidget(tr("Render Settings"), this);
     renderDock->setObjectName(tr("Render Settings"));
     renderDock->setAllowedAreas(Qt::AllDockWidgetAreas);

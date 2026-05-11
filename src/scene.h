@@ -3,6 +3,7 @@
 #include "assets/asset_loader.h"
 #include "light.h"
 #include <DirectXMath.h>
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -40,6 +41,42 @@ struct Instance {
   DirectX::XMMATRIX transform;
   int id;
   const Asset::GpuMesh *mesh;
+};
+
+struct ScatterTarget {
+  size_t nodeIndex = static_cast<size_t>(-1);
+  size_t meshIndex = static_cast<size_t>(-1);
+  float weight = 1.0f;
+  bool enabled = true;
+};
+
+struct ScatterObject {
+  std::string name = "Scatter Object";
+  std::vector<size_t> meshIndices;
+  std::vector<std::array<float, 16>> meshLocalTransforms;
+  float densityPerSquareMeter = 12.0f;
+  float weight = 1.0f;
+  uint32_t maxInstances = 25000;
+  float minScale = 0.85f;
+  float maxScale = 1.15f;
+  float randomYawDegrees = 360.0f;
+  float randomPitchDegrees = 0.0f;
+  float randomRollDegrees = 0.0f;
+  float normalAlign = 1.0f;
+  float slopeMinDegrees = 0.0f;
+  float slopeMaxDegrees = 55.0f;
+  float heightMin = -100000.0f;
+  float heightMax = 100000.0f;
+  float jitterMeters = 0.0f;
+  bool enabled = true;
+};
+
+struct ScatterModel {
+  std::string name = "Scatter";
+  uint32_t seed = 1;
+  bool enabled = true;
+  std::vector<ScatterTarget> targets;
+  std::vector<ScatterObject> objects;
 };
 
 struct ImportedNodePayload {
@@ -114,12 +151,24 @@ bool SetNodeParent(size_t index, size_t parentIndex);
 bool RemoveNode(size_t index);
 void SelectNode(size_t index);
 void SelectNodes(const std::vector<size_t> &indices);
+std::vector<size_t> GetSelectedNodeIndices();
 bool HasPendingCloneOptions();
 void ResolvePendingCloneAsCopy();
 void ResolvePendingCloneAsInstance();
 size_t RegisterChangeListener(std::function<void()> callback);
 void UnregisterChangeListener(size_t listenerId);
 std::vector<Instance> GetInstances();
+
+// Scatter authoring and runtime data. Scatter models are scene-owned and
+// generate virtual render instances without adding thousands of Scene nodes.
+const std::vector<ScatterModel> &GetScatterModels();
+void SetScatterModels(std::vector<ScatterModel> models);
+size_t AddScatterModel(const std::string &name = "Scatter");
+bool RemoveScatterModel(size_t index);
+bool UpdateScatterModel(size_t index, const ScatterModel &model);
+bool AddSelectedNodesAsScatterTargets(size_t scatterIndex);
+bool AddSelectedNodesAsScatterObjects(size_t scatterIndex);
+uint64_t GetScatterRuntimeRevision();
 
 // Light manipulation
 std::vector<Light> &GetLights();

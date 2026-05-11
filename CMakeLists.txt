@@ -157,6 +157,7 @@ if(USE_QT_UI)
       src/qt/RenderPanel.cpp
       src/qt/RenderSettingsPanel.cpp
       src/qt/ScenePanel.cpp
+      src/qt/ScatterPanel.cpp
       src/qt/LightsPanel.cpp
       src/qt/MaterialEditorPanel.cpp
       src/qt/ViewsPanel.cpp

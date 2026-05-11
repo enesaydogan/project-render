@@ -27,6 +27,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 #include <wrl.h>
 
@@ -49,6 +50,10 @@ namespace Scene {
 
 static std::vector<Node> s_nodes;
 static std::vector<Light> s_lights;
+static std::vector<ScatterModel> s_scatterModels;
+static std::vector<Instance> s_scatterInstanceCache;
+static uint64_t s_scatterRuntimeRevision = 1;
+static uint64_t s_scatterInstanceCacheRevision = 0;
 // Import progress & pending results (for async import)
 static std::atomic<bool> s_importInProgress(false);
 static std::atomic<float> s_importProgress(0.0f);
@@ -105,6 +110,8 @@ struct ShiftCloneDragState {
 static ShiftCloneDragState s_shiftCloneDrag;
 
 static void EnsureGpuBuffersForMeshes(std::vector<Asset::GpuMesh> &meshes);
+static void ReindexScatterNodeReferencesAfterRemoval(size_t removedNodeIndex);
+bool Inverse4x4(const float *m, float *out);
 
 static void ResetGpuMeshEntry(Asset::GpuMesh &mesh) {
   mesh.vertexBuffer.Reset();
@@ -184,6 +191,8 @@ static void DispatchSceneChanged() {
 }
 
 static void NotifySceneChanged() {
+  ++s_scatterRuntimeRevision;
+  s_scatterInstanceCacheRevision = 0;
   if (s_batchedUpdateDepth > 0) {
     s_batchedSceneChanged = true;
     return;
@@ -988,7 +997,7 @@ static bool IsLeftMouseDown() {
   return io.MouseDown[0] || ((GetKeyState(VK_LBUTTON) & 0x8000) != 0);
 }
 
-static std::vector<size_t> GetSelectedNodeIndices() {
+std::vector<size_t> GetSelectedNodeIndices() {
   std::vector<size_t> selected;
   for (size_t i = 0; i < s_nodes.size(); ++i) {
     if (s_nodes[i].selected) {
@@ -1400,6 +1409,7 @@ static void RemoveNodesByIndexSet(std::vector<size_t> indices,
       }
     }
     LiveLink::GetSceneSync().ReindexSceneNodeBindingsAfterRemoval(nodeIndex);
+    ReindexScatterNodeReferencesAfterRemoval(nodeIndex);
   }
 
   if (notifyScene) {
@@ -2201,6 +2211,8 @@ bool UpdateNodeTransform(size_t index, const float *columnMajor4x4) {
   }
   memcpy(s_nodes[index].transform, columnMajor4x4,
          sizeof(s_nodes[index].transform));
+  ++s_scatterRuntimeRevision;
+  s_scatterInstanceCacheRevision = 0;
   ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
   return true;
 }
@@ -2213,6 +2225,8 @@ bool SetNodeVisibility(size_t index, bool visible) {
     return true;
   }
   s_nodes[index].visible = visible;
+  ++s_scatterRuntimeRevision;
+  s_scatterInstanceCacheRevision = 0;
   ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
   return true;
 }
@@ -2257,7 +2271,184 @@ bool SetNodeParent(size_t index, size_t parentIndex) {
   }
 
   s_nodes[index].parentIndex = resolvedParent;
+  ++s_scatterRuntimeRevision;
+  s_scatterInstanceCacheRevision = 0;
   return true;
+}
+
+const std::vector<ScatterModel> &GetScatterModels() {
+  return s_scatterModels;
+}
+
+static void MarkScatterRuntimeChanged(RendererInvalidationPlan plan =
+                                          RendererInvalidationPlan::
+                                              FullAccelerationStructureRebuild) {
+  ++s_scatterRuntimeRevision;
+  s_scatterInstanceCacheRevision = 0;
+  ApplyRendererInvalidation(plan);
+  NotifySceneChanged();
+}
+
+void SetScatterModels(std::vector<ScatterModel> models) {
+  s_scatterModels = std::move(models);
+  MarkScatterRuntimeChanged();
+}
+
+size_t AddScatterModel(const std::string &name) {
+  ScatterModel model;
+  model.name = name.empty() ? "Scatter" : name;
+  model.seed = static_cast<uint32_t>(s_scatterModels.size() + 1);
+  s_scatterModels.push_back(std::move(model));
+  MarkScatterRuntimeChanged();
+  return s_scatterModels.size() - 1;
+}
+
+bool RemoveScatterModel(size_t index) {
+  if (index >= s_scatterModels.size()) {
+    return false;
+  }
+  s_scatterModels.erase(s_scatterModels.begin() + index);
+  MarkScatterRuntimeChanged();
+  return true;
+}
+
+bool UpdateScatterModel(size_t index, const ScatterModel &model) {
+  if (index >= s_scatterModels.size()) {
+    return false;
+  }
+  s_scatterModels[index] = model;
+  MarkScatterRuntimeChanged();
+  return true;
+}
+
+bool AddSelectedNodesAsScatterTargets(size_t scatterIndex) {
+  if (scatterIndex >= s_scatterModels.size()) {
+    return false;
+  }
+  ScatterModel &model = s_scatterModels[scatterIndex];
+  bool added = false;
+  for (size_t nodeIndex : GetSelectedNodeIndices()) {
+    if (nodeIndex >= s_nodes.size()) {
+      continue;
+    }
+    std::vector<size_t> candidateNodes;
+    candidateNodes.push_back(nodeIndex);
+    for (size_t childIndex = 0; childIndex < s_nodes.size(); ++childIndex) {
+      if (childIndex != nodeIndex && IsNodeDescendantOf(childIndex, nodeIndex)) {
+        candidateNodes.push_back(childIndex);
+      }
+    }
+    for (size_t targetNodeIndex : candidateNodes) {
+      if (targetNodeIndex >= s_nodes.size()) {
+        continue;
+      }
+      for (size_t meshIndex : s_nodes[targetNodeIndex].meshIndices) {
+        if (meshIndex >= g_loadedMeshes.size()) {
+          continue;
+        }
+        auto exists = std::find_if(
+            model.targets.begin(), model.targets.end(),
+            [targetNodeIndex, meshIndex](const ScatterTarget &target) {
+              return target.nodeIndex == targetNodeIndex &&
+                     target.meshIndex == meshIndex;
+            });
+        if (exists != model.targets.end()) {
+          continue;
+        }
+        ScatterTarget target;
+        target.nodeIndex = targetNodeIndex;
+        target.meshIndex = meshIndex;
+        model.targets.push_back(target);
+        added = true;
+      }
+    }
+  }
+  if (added) {
+    MarkScatterRuntimeChanged();
+  }
+  return added;
+}
+
+bool AddSelectedNodesAsScatterObjects(size_t scatterIndex) {
+  if (scatterIndex >= s_scatterModels.size()) {
+    return false;
+  }
+  ScatterModel &model = s_scatterModels[scatterIndex];
+  bool added = false;
+  const std::vector<std::array<float, 16>> worldTransforms =
+      BuildNodeWorldTransforms();
+  for (size_t nodeIndex : GetSelectedNodeIndices()) {
+    if (nodeIndex >= s_nodes.size()) {
+      continue;
+    }
+    float invRoot[16];
+    if (nodeIndex >= worldTransforms.size() ||
+        !Inverse4x4(worldTransforms[nodeIndex].data(), invRoot)) {
+      continue;
+    }
+
+    std::vector<std::pair<size_t, std::array<float, 16>>> meshEntries;
+    auto appendNodeMeshes = [&](size_t sourceNodeIndex) {
+      if (sourceNodeIndex >= s_nodes.size() ||
+          sourceNodeIndex >= worldTransforms.size()) {
+        return;
+      }
+      std::array<float, 16> localTransform = {};
+      MulColumnMajor4x4(invRoot, worldTransforms[sourceNodeIndex].data(),
+                        localTransform.data());
+      for (size_t meshIndex : s_nodes[sourceNodeIndex].meshIndices) {
+        if (meshIndex < g_loadedMeshes.size()) {
+          meshEntries.push_back({meshIndex, localTransform});
+        }
+      }
+    };
+
+    appendNodeMeshes(nodeIndex);
+    for (size_t childIndex = 0; childIndex < s_nodes.size(); ++childIndex) {
+      if (childIndex == nodeIndex || !IsNodeDescendantOf(childIndex, nodeIndex)) {
+        continue;
+      }
+      appendNodeMeshes(childIndex);
+    }
+    if (meshEntries.empty()) {
+      continue;
+    }
+    ScatterObject object;
+    object.name = s_nodes[nodeIndex].name.empty() ? "Scatter Object"
+                                                  : s_nodes[nodeIndex].name;
+    object.meshIndices.reserve(meshEntries.size());
+    object.meshLocalTransforms.reserve(meshEntries.size());
+    for (const auto &entry : meshEntries) {
+      object.meshIndices.push_back(entry.first);
+      object.meshLocalTransforms.push_back(entry.second);
+    }
+    object.densityPerSquareMeter = 8.0f;
+    object.maxInstances = 12000;
+    model.objects.push_back(std::move(object));
+    added = true;
+  }
+  if (added) {
+    MarkScatterRuntimeChanged();
+  }
+  return added;
+}
+
+uint64_t GetScatterRuntimeRevision() { return s_scatterRuntimeRevision; }
+
+static void ReindexScatterNodeReferencesAfterRemoval(size_t removedNodeIndex) {
+  for (ScatterModel &model : s_scatterModels) {
+    for (ScatterTarget &target : model.targets) {
+      if (target.nodeIndex == removedNodeIndex) {
+        target.nodeIndex = static_cast<size_t>(-1);
+        target.enabled = false;
+      } else if (target.nodeIndex != static_cast<size_t>(-1) &&
+                 target.nodeIndex > removedNodeIndex) {
+        --target.nodeIndex;
+      }
+    }
+  }
+  ++s_scatterRuntimeRevision;
+  s_scatterInstanceCacheRevision = 0;
 }
 
 bool IsImportInProgress() { return s_importInProgress.load(); }
@@ -2613,6 +2804,7 @@ bool RemoveNode(size_t index) {
   }
 
   LiveLink::GetSceneSync().ReindexSceneNodeBindingsAfterRemoval(index);
+  ReindexScatterNodeReferencesAfterRemoval(index);
   ApplyRendererInvalidation(
       RendererInvalidationPlan::FullAccelerationStructureRebuild);
   NotifySceneChanged();
@@ -2748,6 +2940,346 @@ void AddDefaultPlane(float offset_y) {
   }
 }
 
+namespace {
+
+struct ScatterTriangle {
+  DirectX::XMFLOAT3 p0;
+  DirectX::XMFLOAT3 p1;
+  DirectX::XMFLOAT3 p2;
+  DirectX::XMFLOAT3 n0;
+  DirectX::XMFLOAT3 n1;
+  DirectX::XMFLOAT3 n2;
+  float weight = 0.0f;
+};
+
+static uint32_t ScatterHashU32(uint32_t x) {
+  x ^= x >> 16;
+  x *= 0x7feb352du;
+  x ^= x >> 15;
+  x *= 0x846ca68bu;
+  x ^= x >> 16;
+  return x;
+}
+
+static float ScatterHash01(uint32_t x) {
+  return static_cast<float>(ScatterHashU32(x) & 0x00ffffffu) / 16777215.0f;
+}
+
+static DirectX::XMVECTOR ScatterSafeNormalize(DirectX::XMVECTOR v,
+                                              DirectX::XMVECTOR fallback) {
+  if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(v)) < 1e-10f) {
+    return fallback;
+  }
+  return DirectX::XMVector3Normalize(v);
+}
+
+static DirectX::XMMATRIX MakeScatterTransform(const DirectX::XMFLOAT3 &position,
+                                              const DirectX::XMFLOAT3 &normal,
+                                              const ScatterObject &object,
+                                              float yawRadians,
+                                              float pitchRadians,
+                                              float rollRadians,
+                                              float uniformScale) {
+  const DirectX::XMVECTOR worldUp =
+      DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+  DirectX::XMVECTOR surfaceUp =
+      ScatterSafeNormalize(DirectX::XMLoadFloat3(&normal), worldUp);
+  DirectX::XMVECTOR up = DirectX::XMVector3Normalize(
+      DirectX::XMVectorLerp(worldUp, surfaceUp,
+                            (std::clamp)(object.normalAlign, 0.0f, 1.0f)));
+
+  DirectX::XMVECTOR helper =
+      (fabsf(DirectX::XMVectorGetY(up)) > 0.92f)
+          ? DirectX::XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f)
+          : worldUp;
+  DirectX::XMVECTOR right = ScatterSafeNormalize(
+      DirectX::XMVector3Cross(helper, up),
+      DirectX::XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f));
+  DirectX::XMVECTOR forward = ScatterSafeNormalize(
+      DirectX::XMVector3Cross(up, right),
+      DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f));
+
+  DirectX::XMMATRIX basis(
+      right, up, forward, DirectX::XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f));
+  DirectX::XMMATRIX rotation =
+      DirectX::XMMatrixRotationRollPitchYaw(pitchRadians, yawRadians,
+                                            rollRadians);
+  DirectX::XMMATRIX local = DirectX::XMMatrixMultiply(rotation, basis);
+
+  DirectX::XMFLOAT4X4 m = {};
+  DirectX::XMStoreFloat4x4(&m, local);
+  m._11 *= uniformScale;
+  m._12 *= uniformScale;
+  m._13 *= uniformScale;
+  m._21 *= uniformScale;
+  m._22 *= uniformScale;
+  m._23 *= uniformScale;
+  m._31 *= uniformScale;
+  m._32 *= uniformScale;
+  m._33 *= uniformScale;
+  m._41 = position.x;
+  m._42 = position.y;
+  m._43 = position.z;
+  m._44 = 1.0f;
+  return DirectX::XMLoadFloat4x4(&m);
+}
+
+static void GatherScatterTriangles(const ScatterTarget &target,
+                                   const float *nodeWorld,
+                                   std::vector<ScatterTriangle> &triangles,
+                                   float &weightedArea) {
+  if (!target.enabled || target.nodeIndex >= s_nodes.size() ||
+      target.meshIndex >= g_loadedMeshes.size() ||
+      !g_loadedMeshes[target.meshIndex].cpuVertices.size() ||
+      g_loadedMeshes[target.meshIndex].cpuIndices.size() < 3) {
+    return;
+  }
+
+  const Asset::GpuMesh &mesh = g_loadedMeshes[target.meshIndex];
+  DirectX::XMMATRIX world = DirectX::XMLoadFloat4x4(
+      reinterpret_cast<const DirectX::XMFLOAT4X4 *>(nodeWorld));
+  const DirectX::XMVECTOR worldUp =
+      DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+
+  for (size_t tri = 0; tri + 2 < mesh.cpuIndices.size(); tri += 3) {
+    const uint32_t i0 = mesh.cpuIndices[tri + 0];
+    const uint32_t i1 = mesh.cpuIndices[tri + 1];
+    const uint32_t i2 = mesh.cpuIndices[tri + 2];
+    if (i0 >= mesh.cpuVertices.size() || i1 >= mesh.cpuVertices.size() ||
+        i2 >= mesh.cpuVertices.size()) {
+      continue;
+    }
+
+    const Asset::Vertex &v0 = mesh.cpuVertices[i0];
+    const Asset::Vertex &v1 = mesh.cpuVertices[i1];
+    const Asset::Vertex &v2 = mesh.cpuVertices[i2];
+    const DirectX::XMVECTOR p0 = DirectX::XMVector3TransformCoord(
+        DirectX::XMLoadFloat3(
+            reinterpret_cast<const DirectX::XMFLOAT3 *>(v0.pos)),
+        world);
+    const DirectX::XMVECTOR p1 = DirectX::XMVector3TransformCoord(
+        DirectX::XMLoadFloat3(
+            reinterpret_cast<const DirectX::XMFLOAT3 *>(v1.pos)),
+        world);
+    const DirectX::XMVECTOR p2 = DirectX::XMVector3TransformCoord(
+        DirectX::XMLoadFloat3(
+            reinterpret_cast<const DirectX::XMFLOAT3 *>(v2.pos)),
+        world);
+    const DirectX::XMVECTOR e0 = DirectX::XMVectorSubtract(p1, p0);
+    const DirectX::XMVECTOR e1 = DirectX::XMVectorSubtract(p2, p0);
+    const DirectX::XMVECTOR faceNormal = DirectX::XMVector3Cross(e0, e1);
+    const float area =
+        0.5f * DirectX::XMVectorGetX(DirectX::XMVector3Length(faceNormal));
+    if (area <= 1e-6f) {
+      continue;
+    }
+    const DirectX::XMVECTOR normal =
+        DirectX::XMVector3Normalize(faceNormal);
+    const float upDot =
+        (std::max)(-1.0f, (std::min)(
+                             1.0f, DirectX::XMVectorGetX(
+                                       DirectX::XMVector3Dot(normal, worldUp))));
+    const float slopeDegrees = acosf(upDot) * 57.2957795f;
+
+    ScatterTriangle out = {};
+    DirectX::XMStoreFloat3(&out.p0, p0);
+    DirectX::XMStoreFloat3(&out.p1, p1);
+    DirectX::XMStoreFloat3(&out.p2, p2);
+    DirectX::XMStoreFloat3(&out.n0, normal);
+    DirectX::XMStoreFloat3(&out.n1, normal);
+    DirectX::XMStoreFloat3(&out.n2, normal);
+    out.weight = area * (std::max)(target.weight, 0.0f);
+    if (out.weight <= 1e-6f || slopeDegrees > 89.5f) {
+      continue;
+    }
+    weightedArea += out.weight;
+    triangles.push_back(out);
+  }
+}
+
+static void AppendScatterInstancesForObject(
+    const ScatterModel &model, size_t modelIndex, const ScatterObject &object,
+    size_t objectIndex, const std::vector<ScatterTriangle> &triangles,
+    float weightedArea, std::vector<Instance> &outInstances) {
+  if (!model.enabled || !object.enabled || object.meshIndices.empty() ||
+      triangles.empty() || weightedArea <= 1e-6f ||
+      object.densityPerSquareMeter <= 0.0f || object.weight <= 0.0f) {
+    return;
+  }
+
+  const float desired =
+      weightedArea * object.densityPerSquareMeter * object.weight;
+  uint32_t instanceCount =
+      static_cast<uint32_t>((std::max)(0.0f, std::round(desired)));
+  instanceCount = (std::min)(instanceCount, object.maxInstances);
+  if (instanceCount == 0) {
+    return;
+  }
+
+  const float twoPi = 6.283185307179586f;
+  const float yawRange =
+      (std::max)(0.0f, object.randomYawDegrees) * (twoPi / 360.0f);
+  const float pitchRange =
+      (std::max)(0.0f, object.randomPitchDegrees) * (twoPi / 360.0f);
+  const float rollRange =
+      (std::max)(0.0f, object.randomRollDegrees) * (twoPi / 360.0f);
+  const float minScale =
+      (std::max)(0.001f, (std::min)(object.minScale, object.maxScale));
+  const float maxScale =
+      (std::max)(minScale, (std::max)(object.minScale, object.maxScale));
+
+  for (uint32_t instanceIndex = 0; instanceIndex < instanceCount;
+       ++instanceIndex) {
+    const uint32_t baseSeed =
+        model.seed * 0x9e3779b9u ^
+        static_cast<uint32_t>(modelIndex + 1) * 0x85ebca6bu ^
+        static_cast<uint32_t>(objectIndex + 1) * 0xc2b2ae35u ^
+        instanceIndex * 0x27d4eb2du;
+
+    const float triPick = ScatterHash01(baseSeed ^ 0x165667b1u) * weightedArea;
+    float accum = 0.0f;
+    const ScatterTriangle *chosen = &triangles.back();
+    for (const ScatterTriangle &tri : triangles) {
+      accum += tri.weight;
+      if (triPick <= accum) {
+        chosen = &tri;
+        break;
+      }
+    }
+
+    const float u = ScatterHash01(baseSeed ^ 0x9f123bb5u);
+    const float v = ScatterHash01(baseSeed ^ 0x4f1bbcdcu);
+    const float su = sqrtf(u);
+    const float b0 = 1.0f - su;
+    const float b1 = su * (1.0f - v);
+    const float b2 = su * v;
+    DirectX::XMFLOAT3 position = {
+        chosen->p0.x * b0 + chosen->p1.x * b1 + chosen->p2.x * b2,
+        chosen->p0.y * b0 + chosen->p1.y * b1 + chosen->p2.y * b2,
+        chosen->p0.z * b0 + chosen->p1.z * b1 + chosen->p2.z * b2};
+    DirectX::XMFLOAT3 normal = {
+        chosen->n0.x * b0 + chosen->n1.x * b1 + chosen->n2.x * b2,
+        chosen->n0.y * b0 + chosen->n1.y * b1 + chosen->n2.y * b2,
+        chosen->n0.z * b0 + chosen->n1.z * b1 + chosen->n2.z * b2};
+
+    if (position.y < object.heightMin || position.y > object.heightMax) {
+      continue;
+    }
+    DirectX::XMVECTOR n = ScatterSafeNormalize(DirectX::XMLoadFloat3(&normal),
+                                               DirectX::XMVectorSet(0.0f, 1.0f,
+                                                                    0.0f, 0.0f));
+    DirectX::XMStoreFloat3(&normal, n);
+    const float upDot =
+        (std::clamp)(normal.y, -1.0f, 1.0f);
+    const float slopeDegrees = acosf(upDot) * 57.2957795f;
+    if (slopeDegrees < object.slopeMinDegrees ||
+        slopeDegrees > object.slopeMaxDegrees) {
+      continue;
+    }
+
+    if (object.jitterMeters > 0.0f) {
+      position.x +=
+          (ScatterHash01(baseSeed ^ 0xdd4f5a11u) * 2.0f - 1.0f) *
+          object.jitterMeters;
+      position.z +=
+          (ScatterHash01(baseSeed ^ 0xabc98388u) * 2.0f - 1.0f) *
+          object.jitterMeters;
+    }
+
+    const float scale =
+        minScale + (maxScale - minScale) * ScatterHash01(baseSeed ^ 0x632be59bu);
+    const float yaw =
+        (ScatterHash01(baseSeed ^ 0x85157af5u) - 0.5f) * yawRange;
+    const float pitch =
+        (ScatterHash01(baseSeed ^ 0x94d049bbu) - 0.5f) * pitchRange;
+    const float roll =
+        (ScatterHash01(baseSeed ^ 0xbf58476du) - 0.5f) * rollRange;
+    const DirectX::XMMATRIX transform =
+        MakeScatterTransform(position, normal, object, yaw, pitch, roll, scale);
+
+    for (size_t objectMeshOffset = 0; objectMeshOffset < object.meshIndices.size();
+         ++objectMeshOffset) {
+      const size_t meshIndex = object.meshIndices[objectMeshOffset];
+      if (meshIndex >= g_loadedMeshes.size()) {
+        continue;
+      }
+      const Asset::GpuMesh &mesh = g_loadedMeshes[meshIndex];
+      if (!mesh.vertexBuffer || !mesh.indexBuffer || mesh.vertexCount == 0 ||
+          mesh.indexCount == 0) {
+        continue;
+      }
+      Instance inst;
+      inst.name = model.name + " / " + object.name;
+      if (objectMeshOffset < object.meshLocalTransforms.size()) {
+        DirectX::XMMATRIX local = DirectX::XMLoadFloat4x4(
+            reinterpret_cast<const DirectX::XMFLOAT4X4 *>(
+                object.meshLocalTransforms[objectMeshOffset].data()));
+        inst.transform = DirectX::XMMatrixMultiply(local, transform);
+      } else {
+        inst.transform = transform;
+      }
+      inst.id = -100000 - static_cast<int>(modelIndex);
+      inst.mesh = &mesh;
+      outInstances.push_back(std::move(inst));
+    }
+  }
+}
+
+static void AppendScatterInstances(std::vector<Instance> &outInstances) {
+  if (s_scatterModels.empty()) {
+    s_scatterInstanceCache.clear();
+    s_scatterInstanceCacheRevision = s_scatterRuntimeRevision;
+    return;
+  }
+
+  if (s_scatterInstanceCacheRevision == s_scatterRuntimeRevision) {
+    outInstances.insert(outInstances.end(), s_scatterInstanceCache.begin(),
+                        s_scatterInstanceCache.end());
+    return;
+  }
+
+  s_scatterInstanceCache.clear();
+  const std::vector<std::array<float, 16>> worldTransforms =
+      BuildNodeWorldTransforms();
+  for (size_t modelIndex = 0; modelIndex < s_scatterModels.size();
+       ++modelIndex) {
+    const ScatterModel &model = s_scatterModels[modelIndex];
+    if (!model.enabled || model.targets.empty() || model.objects.empty()) {
+      continue;
+    }
+
+    std::vector<ScatterTriangle> triangles;
+    triangles.reserve(4096);
+    float weightedArea = 0.0f;
+    for (const ScatterTarget &target : model.targets) {
+      if (target.nodeIndex >= s_nodes.size() ||
+          !s_nodes[target.nodeIndex].visible ||
+          target.nodeIndex >= worldTransforms.size()) {
+        continue;
+      }
+      GatherScatterTriangles(target, worldTransforms[target.nodeIndex].data(),
+                             triangles, weightedArea);
+    }
+
+    if (triangles.empty() || weightedArea <= 1e-6f) {
+      continue;
+    }
+
+    for (size_t objectIndex = 0; objectIndex < model.objects.size();
+         ++objectIndex) {
+      AppendScatterInstancesForObject(model, modelIndex,
+                                      model.objects[objectIndex], objectIndex,
+                                      triangles, weightedArea,
+                                      s_scatterInstanceCache);
+    }
+  }
+  s_scatterInstanceCacheRevision = s_scatterRuntimeRevision;
+  outInstances.insert(outInstances.end(), s_scatterInstanceCache.begin(),
+                      s_scatterInstanceCache.end());
+}
+
+} // namespace
+
 void RebuildAccelerationStructures() {
   DxrRenderer::BuildAccelerationStructures(GetActiveMeshes(), GetInstances());
 }
@@ -2769,6 +3301,28 @@ std::vector<const Asset::GpuMesh *> GetActiveMeshes() {
           m.indexCount > 0) {
         active.push_back(&m);
         used[meshIndex] = true;
+      }
+    }
+  }
+
+  for (const ScatterModel &model : s_scatterModels) {
+    if (!model.enabled) {
+      continue;
+    }
+    for (const ScatterObject &object : model.objects) {
+      if (!object.enabled) {
+        continue;
+      }
+      for (size_t meshIndex : object.meshIndices) {
+        if (meshIndex >= g_loadedMeshes.size() || used[meshIndex]) {
+          continue;
+        }
+        const auto &m = g_loadedMeshes[meshIndex];
+        if (m.vertexBuffer && m.indexBuffer && m.vertexCount > 0 &&
+            m.indexCount > 0) {
+          active.push_back(&m);
+          used[meshIndex] = true;
+        }
       }
     }
   }
@@ -2822,6 +3376,7 @@ std::vector<Instance> GetInstances() {
       }
     }
   }
+  AppendScatterInstances(instances);
   return instances;
 }
 
@@ -4545,6 +5100,10 @@ void ResetScene() {
   s_materialMetadataDirty = false;
   s_sharedImportedMeshesBySourcePath.clear();
   s_textureIndicesBySourceUri.clear();
+  s_scatterModels.clear();
+  s_scatterInstanceCache.clear();
+  ++s_scatterRuntimeRevision;
+  s_scatterInstanceCacheRevision = 0;
   s_lights.clear();
   s_selectedLightIdx = -1;
   AnimationSequence::Clear();
