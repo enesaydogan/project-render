@@ -88,6 +88,46 @@ struct SharedImportedMeshEntry {
 static std::unordered_map<std::string, SharedImportedMeshEntry>
     s_sharedImportedMeshesBySourcePath;
 static size_t s_nextImportGroupId = 1;
+
+static std::wstring WidePathFromUtf8(const std::string &path) {
+  if (path.empty()) {
+    return {};
+  }
+
+  int wideCount = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                                      path.data(),
+                                      static_cast<int>(path.size()), nullptr,
+                                      0);
+  UINT codePage = CP_UTF8;
+  DWORD flags = MB_ERR_INVALID_CHARS;
+  if (wideCount <= 0) {
+    // Older saved scenes may contain paths encoded with the process ANSI code
+    // page. Keep those reimportable while treating new paths as UTF-8.
+    codePage = CP_ACP;
+    flags = 0;
+    wideCount = MultiByteToWideChar(codePage, flags, path.data(),
+                                    static_cast<int>(path.size()), nullptr, 0);
+  }
+  if (wideCount <= 0) {
+    return {};
+  }
+
+  std::wstring widePath(static_cast<size_t>(wideCount), L'\0');
+  MultiByteToWideChar(codePage, flags, path.data(),
+                      static_cast<int>(path.size()), widePath.data(),
+                      wideCount);
+  return widePath;
+}
+
+static fs::path NativePathFromStoredPath(const std::string &path) {
+  std::wstring widePath = WidePathFromUtf8(path);
+  return widePath.empty() ? fs::path(path) : fs::path(widePath);
+}
+
+static bool StoredPathExists(const std::string &path) {
+  std::error_code ec;
+  return fs::exists(NativePathFromStoredPath(path), ec);
+}
 static size_t s_nextChangeListenerId = 1;
 static std::unordered_map<size_t, std::function<void()>> s_changeListeners;
 static std::string s_pendingPath;
@@ -2729,7 +2769,7 @@ bool ImportModelAsync(const std::string &utf8path) {
     s_lastStatus = "Import failed: empty path";
     return false;
   }
-  if (!std::filesystem::exists(std::filesystem::path(utf8path))) {
+  if (!StoredPathExists(utf8path)) {
     s_lastStatus = "Import failed: path not found: " + utf8path;
     return false;
   }
@@ -2814,7 +2854,7 @@ bool ReimportNode(size_t index) {
 
   Node &node = s_nodes[index];
   const std::string srcPath = node.sourcePath;
-  if (!fs::exists(fs::path(srcPath))) {
+  if (!StoredPathExists(srcPath)) {
     s_lastStatus = std::string("Reimport failed: source missing: ") + srcPath;
     fprintf(stderr, "%s\n", s_lastStatus.c_str());
     return false;
