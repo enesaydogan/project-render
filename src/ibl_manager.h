@@ -155,8 +155,8 @@ public:
   void SetFileSunRadiusDeg(float deg) { m_fileSunRadiusDeg = deg; }
 
 
-  // Toggle between solid-angle weighting and simple texel-area weighting when
-  // building/sampling the environment importance textures.  True by default.
+  // Environment importance textures are always solid-angle weighted. The setter
+  // is retained for old UI/scene plumbing and clamps back to the physical mode.
   void SetEnvSolidAngleSampling(bool enabled);
   bool GetEnvSolidAngleSampling() const { return m_envSolidAngleSampling; }
 
@@ -215,8 +215,8 @@ private:
   float m_sunIntensity = 110000.0f; // clear midday sun illuminance in lux
   float m_sunSize = 0.53f; // degrees (actual solar angular diameter)
   bool m_physicalCalibrationEnabled = false;
-  // when true, importance textures are generated using solid-angle weights
-  // (sin(theta)).  The UI allows toggling this for experimentation.
+  // Always true: importance textures are generated using solid-angle weights
+  // (sin(theta)) so light PDFs stay invariant for material evaluation.
   bool m_envSolidAngleSampling = true;
 
   // data for automatically extracted sun from a file-based IBL.  When

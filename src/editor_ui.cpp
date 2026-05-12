@@ -2103,13 +2103,14 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
         }
       }
 
-      // environment sampling mode
-      bool sampleSolid = (g_cameraData.sampleEnvSolidAngle > 0.5f);
-      if (ImGui::Checkbox("Solid-angle env sampling", &sampleSolid)) {
-        g_cameraData.sampleEnvSolidAngle = sampleSolid ? 1.0f : 0.0f;
-        IBLManager::Get().SetEnvSolidAngleSampling(sampleSolid);
-        uiChanged = true;
-      }
+      // Environment sampling is physically locked to solid-angle measure; the
+      // disabled control remains as a diagnostic readout for old scenes/tools.
+      bool sampleSolid = true;
+      ImGui::BeginDisabled();
+      ImGui::Checkbox("Solid-angle env sampling", &sampleSolid);
+      ImGui::EndDisabled();
+      g_cameraData.sampleEnvSolidAngle = 1.0f;
+      IBLManager::Get().SetEnvSolidAngleSampling(true);
 
       bool fileIblEnabled =
           (IBLManager::Get().GetIBLSource() == IBLManager::IBLSource::File);
@@ -2735,25 +2736,27 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
 
         ImGui::Separator();
         ImGui::Text("Path Tracing Backend");
-        const char *pathTracingBackends[] = {"Legacy",
-                                             "Wavefront Parity",
-                                             "Wavefront Optimized"};
+        const char *pathTracingBackends[] = {"Wavefront Optimized",
+                                             "Wavefront Surface Diagnostics"};
         int backendIdx =
-            static_cast<int>(DxrRenderer::GetPathTracingBackend());
+            DxrRenderer::GetPathTracingBackend() ==
+                    DxrRenderer::PathTracingBackend::WavefrontParity
+                ? 1
+                : 0;
         if (ImGui::Combo("Backend", &backendIdx, pathTracingBackends,
                          IM_ARRAYSIZE(pathTracingBackends))) {
           DxrRenderer::SetPathTracingBackend(
-              static_cast<DxrRenderer::PathTracingBackend>(backendIdx));
+              backendIdx == 1
+                  ? DxrRenderer::PathTracingBackend::WavefrontParity
+                  : DxrRenderer::PathTracingBackend::WavefrontOptimized);
           uiChanged = true;
         }
         ImGui::TextWrapped(
-          "Wavefront Parity is the Phase 2 primary-surface slice: queued "
+          "Wavefront Optimized is the production path. Surface Diagnostics is "
+          "the primary-surface slice: queued "
           "primary rays are traced and resolved into the existing output and "
-          "AOV surfaces without secondary, shadow, or ReSTIR scheduling. "
-          "Wavefront Optimized extends that scheduler with continuation "
-          "queues, shadow visibility, and shadow integration.");
-        if (DxrRenderer::GetPathTracingBackend() !=
-            DxrRenderer::PathTracingBackend::Legacy) {
+          "AOV surfaces without secondary, shadow, or ReSTIR scheduling.");
+        {
           ImGui::Text("Bootstrap paths: %u",
                       DxrRenderer::GetWavefrontBootstrapPathCount());
           ImGui::Text("Bootstrap dispatch groups: %u",

@@ -42,6 +42,7 @@ void RayGen()
     payload.packedNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
     payload.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
     payload.packedSurface = PackPayloadSurface(1.0, 0.0, 0.0, 0.0);
+    payload.surface = float4(1.0, 0.0, 0.0, 0.0);
     payload.packedIorType = PackPayloadIorType(1.0, RAY_TYPE_PRIMARY, false, 1.0);
     payload.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
     payload.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));

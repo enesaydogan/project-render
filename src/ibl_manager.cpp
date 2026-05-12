@@ -408,21 +408,19 @@ static bool CreateTexFromData(ID3D12Device *device, ID3D12CommandQueue *queue,
   return true;
 }
 
-// Setter invoked from UI when user toggles between sampling modes.
 void IBLManager::SetEnvSolidAngleSampling(bool enabled) {
-  if (m_envSolidAngleSampling != enabled) {
-    m_envSolidAngleSampling = enabled;
-    // recompute CDFs if we already have an environment map
+  (void)enabled;
+  if (!m_envSolidAngleSampling) {
+    m_envSolidAngleSampling = true;
     if (m_envMap.resource) {
       BuildEnvironmentImportanceTextures(m_envMap);
     }
   }
 }
 
-// note: the weighting applied to each texel can either include the
-// sin(theta) term (solid-angle sampling) or not.  The former is physically
-// correct for lat-long maps; the latter corresponds to naive texel-area
-// weighting and is kept around only for experimentation.
+// Environment importance sampling is always built in solid-angle measure for
+// lat-long maps. Diagnostics may inspect this mode, but material evaluation and
+// MIS never switch to texel-area PDFs.
 
 bool IBLManager::BuildEnvironmentImportanceTextures(const Asset::Texture &envTex) {
   if (!m_device || !m_queue || !envTex.resource || envTex.width == 0 ||
@@ -476,8 +474,7 @@ bool IBLManager::BuildEnvironmentImportanceTextures(const Asset::Texture &envTex
 
       const double luminance = std::max(
           0.0, 0.2126 * (double)r + 0.7152 * (double)g + 0.0722 * (double)b);
-    // apply optional solid-angle term
-    const double weight = luminance * (m_envSolidAngleSampling ? sinTheta : 1.0);
+      const double weight = luminance * sinTheta;
     texelWeights[idx] = weight;
     rowSum += weight;
     }
@@ -587,7 +584,7 @@ bool IBLManager::BuildEnvironmentImportanceTextures(const Asset::Texture &envTex
     for (UINT y = 0; y < height; ++y) {
       const double theta = ((double)y + 0.5) / (double)height * pi;
       const double sinTheta = std::max(1e-6, std::sin(theta));
-      const double rowWeight = (m_envSolidAngleSampling ? sinTheta : 1.0) * (double)width;
+      const double rowWeight = sinTheta * (double)width;
       rowSums[y] = rowWeight;
       totalWeight += rowWeight;
       for (UINT x = 0; x < width; ++x) {

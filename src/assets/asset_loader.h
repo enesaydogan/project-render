@@ -52,8 +52,15 @@ struct Texture {
 
 struct Material {
   static constexpr uint32_t kSchemaVersionOpenPbrSubset = 9;
+  static constexpr uint32_t kSchemaVersionCoronaArchviz = 10;
   static constexpr uint32_t kWorkflowMetalRoughness = 0;
   static constexpr uint32_t kWorkflowReflectionGlossiness = 1;
+  static constexpr uint32_t kMaterialClassGeneric = 0;
+  static constexpr uint32_t kMaterialClassMetal = 1;
+  static constexpr uint32_t kMaterialClassGlass = 2;
+  static constexpr uint32_t kMaterialClassFabric = 3;
+  static constexpr uint32_t kMaterialClassLeaf = 4;
+  static constexpr uint32_t kMaterialClassEmissive = 5;
   static constexpr uint32_t kTriPlanarVariationOff = 0;
   static constexpr uint32_t kTriPlanarVariationPerMesh = 1;
   static constexpr uint32_t kTriPlanarVariationPerSurface = 2;
@@ -124,7 +131,8 @@ struct Material {
   float grassBladeVariation = 0.45f; // 0=no randomness, 1=full random scale/yaw
 
   // Canonical OpenPBR runtime subset fields.
-  uint32_t schemaVersion = kSchemaVersionOpenPbrSubset;
+  uint32_t schemaVersion = kSchemaVersionCoronaArchviz;
+  uint32_t materialClass = kMaterialClassGeneric;
   uint32_t workflow = kWorkflowMetalRoughness;
   float roughness = 0.2f;
   float specularWeight = 1.0f;
@@ -163,6 +171,7 @@ inline void ApplyDefaultGrassLook(Material &m) {
   const float *tint = hasDiffuseTexture ? texturedTint : defaultTint;
 
   m.isGrass = true;
+  m.materialClass = Material::kMaterialClassLeaf;
   m.grassColor[0] = tint[0];
   m.grassColor[1] = tint[1];
   m.grassColor[2] = tint[2];

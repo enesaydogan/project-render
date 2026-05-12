@@ -4,6 +4,37 @@
 #include <cmath>
 
 namespace MaterialLiveLink {
+namespace {
+
+uint32_t InferLiveLinkMaterialClass(
+    const LiveLink::MaterialChangedPayload &payload) {
+  if (payload.materialClass <= Asset::Material::kMaterialClassEmissive) {
+    return payload.materialClass;
+  }
+  const float emissiveMax =
+      (std::max)(payload.emissiveColor[0],
+                 (std::max)(payload.emissiveColor[1],
+                            payload.emissiveColor[2])) *
+      (std::max)(payload.emissiveIntensity, 0.0f);
+  if (emissiveMax > 1.0e-4f) {
+    return Asset::Material::kMaterialClassEmissive;
+  }
+  if (payload.transmissionWeight > 1.0e-4f || payload.thinWalled > 0.5f) {
+    return Asset::Material::kMaterialClassGlass;
+  }
+  if (payload.translucency > 1.0e-4f) {
+    return Asset::Material::kMaterialClassLeaf;
+  }
+  if (payload.metalness > 0.5f) {
+    return Asset::Material::kMaterialClassMetal;
+  }
+  if (payload.sheenWeight > 1.0e-4f) {
+    return Asset::Material::kMaterialClassFabric;
+  }
+  return Asset::Material::kMaterialClassGeneric;
+}
+
+} // namespace
 
 void ApplyPayloadToMaterial(const LiveLink::MaterialChangedPayload &payload,
                             const ResolveTextureIndexFn &resolveTextureIndex,
@@ -115,9 +146,8 @@ void ApplyPayloadToMaterial(const LiveLink::MaterialChangedPayload &payload,
   material->workflow = payload.workflow;
   material->runtimeMetalRoughTexture = -1;
 
-  if (!payload.materialModel.empty()) {
-    material->schemaVersion = Asset::Material::kSchemaVersionOpenPbrSubset;
-  }
+  material->schemaVersion = Asset::Material::kSchemaVersionCoronaArchviz;
+  material->materialClass = InferLiveLinkMaterialClass(payload);
 }
 
 } // namespace MaterialLiveLink

@@ -136,6 +136,8 @@ void ApplyPreset(Asset::Material &m, int presetIndex) {
   };
 
   m.workflow = Asset::Material::kWorkflowMetalRoughness;
+  m.schemaVersion = Asset::Material::kSchemaVersionCoronaArchviz;
+  m.materialClass = Asset::Material::kMaterialClassGeneric;
   m.coatWeight = 0.0f;
   m.coatRoughness = 0.1f;
   m.coatIor = 1.5f;
@@ -212,11 +214,13 @@ void ApplyPreset(Asset::Material &m, int presetIndex) {
     m.coatRoughness = 0.12f;
     break;
   case 6:
+    m.materialClass = Asset::Material::kMaterialClassMetal;
     m.metalness = 1.0f;
     m.ior = 1.0f;
     SetRoughness(0.35f);
     break;
   case 7:
+    m.materialClass = Asset::Material::kMaterialClassMetal;
     m.metalness = 1.0f;
     m.ior = 1.0f;
     SetRoughness(0.08f);
@@ -229,6 +233,7 @@ void ApplyPreset(Asset::Material &m, int presetIndex) {
     m.coatRoughness = 0.15f;
     break;
   case 9:
+    m.materialClass = Asset::Material::kMaterialClassGlass;
     m.metalness = 0.0f;
     m.ior = 1.52f;
     SetRoughness(0.0f);
@@ -237,6 +242,7 @@ void ApplyPreset(Asset::Material &m, int presetIndex) {
     m.alphaMode = "BLEND";
     break;
   case 10:
+    m.materialClass = Asset::Material::kMaterialClassGlass;
     m.metalness = 0.0f;
     m.ior = 1.52f;
     SetRoughness(0.35f);
@@ -247,6 +253,7 @@ void ApplyPreset(Asset::Material &m, int presetIndex) {
     m.alphaMode = "BLEND";
     break;
   case 11:
+    m.materialClass = Asset::Material::kMaterialClassGlass;
     m.metalness = 0.0f;
     m.ior = 1.52f;
     SetRoughness(0.05f);
@@ -260,12 +267,14 @@ void ApplyPreset(Asset::Material &m, int presetIndex) {
     m.alphaMode = "BLEND";
     break;
   case 12:
+    m.materialClass = Asset::Material::kMaterialClassFabric;
     m.metalness = 0.0f;
     m.ior = 1.4f;
     SetRoughness(0.8f);
     m.translucency = 0.15f;
     break;
   case 13:
+    m.materialClass = Asset::Material::kMaterialClassLeaf;
     m.metalness = 0.0f;
     m.ior = 1.4f;
     SetRoughness(0.65f);

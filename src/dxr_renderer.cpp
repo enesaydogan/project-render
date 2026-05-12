@@ -51,7 +51,7 @@ static ID3D12CommandQueue *s_commandQueue = nullptr;
 static StreamlineManager *s_streamline = nullptr;
 static bool s_streamlineResetHistory = true;
 static DxrRenderer::PathTracingBackend s_pathTracingBackend =
-  DxrRenderer::PathTracingBackend::Legacy;
+  DxrRenderer::PathTracingBackend::WavefrontOptimized;
 // Final / export denoiser mode & wrapper
 static DxrRenderer::DenoiserMode s_denoiserMode =
     DxrRenderer::DenoiserMode::OIDN_GPU;
@@ -176,6 +176,7 @@ struct WavefrontHitRecordGpu {
   uint32_t packedSpecular;
   uint32_t packedState;
   uint32_t reserved;
+  float surface[4];
   float guideOrigin[3];
   uint32_t guidePackedState;
   float guideDirection[3];
@@ -188,8 +189,9 @@ struct WavefrontHitRecordGpu {
   uint32_t guidePackedSpecular;
   uint32_t guideReserved0;
   uint32_t guideReserved1;
+  float guideSurface[4];
 };
-static_assert(sizeof(WavefrontHitRecordGpu) == 112,
+static_assert(sizeof(WavefrontHitRecordGpu) == 144,
               "WavefrontHitRecordGpu must stay tightly packed.");
 
 struct WavefrontShadowTaskGpu {
@@ -219,9 +221,9 @@ struct WavefrontDispatchRaysRecordGpu {
 static_assert(sizeof(WavefrontDispatchRaysRecordGpu) == 112,
               "WavefrontDispatchRaysRecordGpu must match indirect buffer stride.");
 
-static constexpr UINT kWavefrontAbiVersion = 3;
+static constexpr UINT kWavefrontAbiVersion = 4;
 static constexpr UINT kWavefrontPathStateDwords = 12;
-static constexpr UINT kWavefrontHitRecordDwords = 28;
+static constexpr UINT kWavefrontHitRecordDwords = 36;
 static constexpr UINT kWavefrontShadowTaskDwords = 12;
 static constexpr UINT kWavefrontDispatchArgsDwords = 4;
 static constexpr UINT kWavefrontQueueCounterCount = 16;
@@ -257,7 +259,7 @@ static constexpr UINT64 kWavefrontCounterStrideBytes = sizeof(UINT);
 static constexpr UINT kWavefrontPrimaryMaterialBinStatsBase = 32u;
 static constexpr UINT kWavefrontSecondaryMaterialBinStatsBase = 40u;
 static constexpr UINT kWavefrontMaterialBinCount = 7u;
-static_assert(kWavefrontAbiVersion == 3,
+static_assert(kWavefrontAbiVersion == 4,
               "Bump shader WAVEFRONT_ABI_VERSION and docs with ABI changes.");
 static_assert(sizeof(WavefrontPathStateGpu) / sizeof(uint32_t) ==
                   kWavefrontPathStateDwords,
@@ -3889,7 +3891,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   hitSubs[1].pDesc = &hitGroupDescs[1];
 
   constexpr UINT kRayPayloadSizeInBytes =
-      sizeof(float) + 8u * sizeof(uint32_t);
+      sizeof(float) + 8u * sizeof(uint32_t) + 4u * sizeof(float);
   fprintf(stderr, "DxrRenderer: MaxPayloadSizeInBytes=%u\n",
           kRayPayloadSizeInBytes);
   shaderConfig.MaxPayloadSizeInBytes = kRayPayloadSizeInBytes;
@@ -5763,6 +5765,9 @@ void ResetStreamlineHistory() {
 }
 
 void SetPathTracingBackend(PathTracingBackend backend) {
+  if (backend == PathTracingBackend::Legacy) {
+    backend = PathTracingBackend::WavefrontOptimized;
+  }
   if (s_pathTracingBackend == backend) {
     return;
   }

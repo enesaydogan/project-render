@@ -73,8 +73,8 @@ DxrRenderer::DenoiserMode DenoiserModeFromIndex(int index)
 int PathBackendIndex(DxrRenderer::PathTracingBackend backend)
 {
     switch (backend) {
-    case DxrRenderer::PathTracingBackend::WavefrontParity:
-    case DxrRenderer::PathTracingBackend::WavefrontOptimized: return 1;
+    case DxrRenderer::PathTracingBackend::WavefrontParity: return 1;
+    case DxrRenderer::PathTracingBackend::WavefrontOptimized: return 0;
     default: return 0;
     }
 }
@@ -82,9 +82,9 @@ int PathBackendIndex(DxrRenderer::PathTracingBackend backend)
 DxrRenderer::PathTracingBackend PathBackendFromIndex(int index)
 {
     if (index == 1) {
-        return DxrRenderer::PathTracingBackend::WavefrontOptimized;
+        return DxrRenderer::PathTracingBackend::WavefrontParity;
     }
-    return DxrRenderer::PathTracingBackend::Legacy;
+    return DxrRenderer::PathTracingBackend::WavefrontOptimized;
 }
 
 int StreamlineModeIndex(StreamlineManager::Mode mode)
@@ -183,8 +183,8 @@ void RenderSettingsPanel::createUi()
     m_clayMode = new QCheckBox(tr("Clay Material Override"), pathGroup);
     m_pathBackend = new QComboBox(pathGroup);
     m_pathBackend->addItems({
-        tr("Legacy (Default)"),
-        tr("Wavefront Optimized - Experimental")
+        tr("Wavefront Optimized"),
+        tr("Wavefront Surface Diagnostics")
     });
     m_pathBackendWarning = new QLabel(pathGroup);
     m_pathBackendWarning->setWordWrap(true);
@@ -465,12 +465,12 @@ void RenderSettingsPanel::syncFromRenderer()
     if (!IsWidgetBeingEdited(m_pathBackend)) {
         m_pathBackend->setCurrentIndex(PathBackendIndex(DxrRenderer::GetPathTracingBackend()));
     }
-    if (DxrRenderer::GetPathTracingBackend() == DxrRenderer::PathTracingBackend::Legacy) {
+    if (DxrRenderer::GetPathTracingBackend() == DxrRenderer::PathTracingBackend::WavefrontParity) {
         m_pathBackendWarning->setText(
-            tr("Legacy is the production default."));
+            tr("Wavefront diagnostics mode only resolves primary surfaces and AOVs."));
     } else {
         m_pathBackendWarning->setText(
-            tr("EXPERIMENTAL WAVEFRONT OPTIMIZED BACKEND ACTIVE: expect visual differences or instability. Switch back to Legacy for production renders."));
+            tr("Wavefront optimized is the production path."));
     }
     m_targetNoise->setEnabled(m_adaptiveSampling->isChecked());
 

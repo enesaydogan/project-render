@@ -375,9 +375,9 @@ struct WavefrontPathState
     uint packedState;
 };
 
-static const uint WAVEFRONT_ABI_VERSION = 3u;
+static const uint WAVEFRONT_ABI_VERSION = 4u;
 static const uint WAVEFRONT_PATH_STATE_DWORDS = 12u;
-static const uint WAVEFRONT_HIT_RECORD_DWORDS = 28u;
+static const uint WAVEFRONT_HIT_RECORD_DWORDS = 36u;
 static const uint WAVEFRONT_SHADOW_TASK_DWORDS = 12u;
 static const uint WAVEFRONT_DISPATCH_ARGS_DWORDS = 4u;
 static const uint WAVEFRONT_QUEUE_PATH_A = 0u;
@@ -402,6 +402,7 @@ struct WavefrontHitRecord
     uint packedSpecular;
     uint packedState;
     uint reserved;
+    float4 surface;
     float3 guideOrigin;
     uint guidePackedState;
     float3 guideDirection;
@@ -414,6 +415,7 @@ struct WavefrontHitRecord
     uint guidePackedSpecular;
     uint guideReserved0;
     uint guideReserved1;
+    float4 guideSurface;
 };
 
 static const uint WAVEFRONT_HIT_STATE_MISS = 0x80000000u;
@@ -503,6 +505,7 @@ struct RayPayload
     uint packedIorType;   // 16-bit half IOR + 8-bit rayType + thin-walled bit
     uint packedTransmission; // 3x8 UNORM transmission color
     uint packedSpecular;  // 3x8 UNORM specular color
+    float4 surface;       // full precision: roughness/metallic/transmission/translucency
 };
 
 inline uint PackNormalOctahedron(float3 n)
@@ -628,12 +631,21 @@ inline float4 UnpackPayloadSurface(uint packed)
     return q / 255.0;
 }
 
-inline uint WavefrontClassifyMaterialBin(uint packedSurface,
-                                         uint packedIorType,
-                                         uint packedColor0,
-                                         uint packedColor1)
+inline float4 WavefrontHitRecordSurface(WavefrontHitRecord record)
 {
-    float4 surface = UnpackPayloadSurface(packedSurface);
+    return saturate(record.surface);
+}
+
+inline float4 WavefrontHitRecordGuideSurface(WavefrontHitRecord record)
+{
+    return saturate(record.guideSurface);
+}
+
+inline uint WavefrontClassifyMaterialBinFromSurface(float4 surface,
+                                                    uint packedIorType,
+                                                    uint packedColor0,
+                                                    uint packedColor1)
+{
     float roughness = saturate(surface.x);
     float metallic = saturate(surface.y);
     float transmission = saturate(surface.z);
@@ -660,6 +672,16 @@ inline uint WavefrontClassifyMaterialBin(uint packedSurface,
         return WAVEFRONT_MATERIAL_BIN_GLOSSY_DIELECTRIC;
     }
     return WAVEFRONT_MATERIAL_BIN_DIFFUSE;
+}
+
+inline uint WavefrontClassifyMaterialBin(uint packedSurface,
+                                         uint packedIorType,
+                                         uint packedColor0,
+                                         uint packedColor1)
+{
+    return WavefrontClassifyMaterialBinFromSurface(
+        UnpackPayloadSurface(packedSurface), packedIorType, packedColor0,
+        packedColor1);
 }
 
 inline uint WavefrontPackMaterialSortKey(uint rayType,
@@ -1010,6 +1032,7 @@ inline RayPayload InitRayPayload(uint rayType)
     p.packedTransmission =
         PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
     p.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
+    p.surface = float4(1.0, 0.0, 0.0, 0.0);
     return p;
 }
 

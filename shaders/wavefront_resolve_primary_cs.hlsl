@@ -184,21 +184,16 @@ inline bool BuildSpecularContinuation(float3 rayDir, float3 normal,
     return (NdotL > 1.0e-5 && NdotH > 1.0e-5 && VdotH > 1.0e-5);
 }
 
-inline float3 BuildTransmissionContinuation(float3 rayDir, float3 normal,
-                                            float ior, bool thinWalled)
+inline bool BuildTransmissionContinuation(float3 rayDir, float3 normal,
+                                          float roughness, float ior,
+                                          bool thinWalled, inout RNG rng,
+                                          out float3 continuationDir,
+                                          out bool reflected,
+                                          out float branchProbability)
 {
-    if (thinWalled) {
-        return normalize(rayDir);
-    }
-
-    float entering = dot(rayDir, normal) < 0.0 ? 1.0 : 0.0;
-    float3 faceNormal = (entering > 0.5) ? normal : -normal;
-    float eta = (entering > 0.5) ? rcp(max(ior, 1.0)) : max(ior, 1.0);
-    float3 refracted = refract(rayDir, faceNormal, eta);
-    if (dot(refracted, refracted) < 1.0e-8) {
-        refracted = reflect(rayDir, faceNormal);
-    }
-    return SafeNormalize(refracted, -faceNormal);
+    return WavefrontBsdfSampleRoughDielectric(
+        rayDir, normal, roughness, ior, thinWalled, rng, continuationDir,
+        reflected, branchProbability);
 }
 
 inline float WavefrontGiHash12(float2 p)
@@ -1033,7 +1028,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         float3 hitPos = state.origin + rayDir * record.hitT;
         normal = UnpackNormalOctahedron(record.packedNormal);
         albedo = UnpackPayloadAlbedo(record.packedAlbedo);
-        float4 surface = UnpackPayloadSurface(record.packedSurface);
+        float4 surface = WavefrontHitRecordSurface(record);
         roughness = saturate(surface.x);
         float metallic = saturate(surface.y);
         float transmission = saturate(surface.z);
@@ -1204,7 +1199,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 uint nextRayType = RAY_TYPE_DIFFUSE;
                 float3 nextDirection = normal;
                 float3 nextThroughput =
-                    state.throughput * max(albedo, 0.02.xxx);
+                    state.throughput * saturate(albedo);
 
                 // Evaluate probabilities for path continuation to avoid hard cut-offs
                 float transmissionProb = 0.0;
@@ -1220,22 +1215,37 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 float rnd = next_float(rng);
                 if (transmissionProb > 0.0 && rnd < transmissionProb) {
                     nextRayType = RAY_TYPE_REFRACTION;
-                    nextDirection =
-                        BuildTransmissionContinuation(rayDir, normal, ior,
-                                                      thinWalled);
-                    nextThroughput = state.throughput * max(transmissionTint, 0.02.xxx) * max(transmission, 0.1) / max(transmissionProb, 1.0e-4);
+                    bool glassReflected = false;
+                    float glassBranchProbability = 1.0;
+                    if (BuildTransmissionContinuation(
+                            rayDir, normal, roughness, ior, thinWalled, rng,
+                            nextDirection, glassReflected,
+                            glassBranchProbability)) {
+                        nextRayType = glassReflected ? RAY_TYPE_REFLECTION
+                                                     : RAY_TYPE_REFRACTION;
+                        float3 glassTint =
+                            glassReflected ? saturate(specularColor)
+                                           : saturate(transmissionTint) *
+                                                 saturate(transmission);
+                        nextThroughput =
+                            state.throughput * glassTint /
+                            max(transmissionProb * glassBranchProbability,
+                                1.0e-4);
+                    } else {
+                        nextThroughput = float3(0.0, 0.0, 0.0);
+                    }
                 } else if (reflectionProb > 0.0 && rnd < (transmissionProb + reflectionProb)) {
                     nextRayType = RAY_TYPE_REFLECTION;
                     if (BuildSpecularContinuation(rayDir, normal, roughness, rng,
                                                   nextDirection)) {
-                        nextThroughput = state.throughput * max(specularAlbedo, 0.04.xxx) / max(reflectionProb, 1.0e-4);
+                        nextThroughput = state.throughput * saturate(specularAlbedo) / max(reflectionProb, 1.0e-4);
                     } else {
                         nextThroughput = float3(0.0, 0.0, 0.0);
                     }
                 } else {
                     nextRayType = RAY_TYPE_DIFFUSE;
                     nextDirection = BuildDiffuseContinuation(normal, rng);
-                    nextThroughput = state.throughput * max(albedo, 0.02.xxx) * saturate(dot(normal, nextDirection)) / max(diffuseProb, 1.0e-4);
+                    nextThroughput = state.throughput * saturate(albedo) * saturate(dot(normal, nextDirection)) / max(diffuseProb, 1.0e-4);
                 }
                 nextThroughput = max(nextThroughput, 0.0);
 
@@ -1392,8 +1402,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             float3 guideNormal =
                 UnpackNormalOctahedron(record.guidePackedNormal);
             float3 guideAlbedo = UnpackPayloadAlbedo(record.guidePackedAlbedo);
-            float4 guideSurface =
-                UnpackPayloadSurface(record.guidePackedSurface);
+            float4 guideSurface = WavefrontHitRecordGuideSurface(record);
             float guideRoughness = saturate(guideSurface.x);
             float guideMetallic = saturate(guideSurface.y);
             float guideSpecularWeight =

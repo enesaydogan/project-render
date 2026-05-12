@@ -415,7 +415,8 @@ void EnvironmentPanel::syncFromRenderer()
     m_iblRotation->setValue(ibl.GetIblRotationDegrees());
     m_iblIntensity->setValue(g_iblIntensity);
     m_iblIndirectBoost->setValue(g_iblIndirectBoost);
-    m_solidAngleSampling->setChecked(g_cameraData.sampleEnvSolidAngle > 0.5f);
+    m_solidAngleSampling->setChecked(true);
+    m_solidAngleSampling->setEnabled(false);
     m_analyticSunIntensity->setValue(hasFileSun ? ibl.GetFileSunIntensity()
                                                 : ibl.GetSunIntensity());
     m_fileSunIntensity->setValue(ibl.GetFileSunIntensity());
@@ -539,8 +540,8 @@ void EnvironmentPanel::applyLightingSettings(bool updateSkyModel, bool updateCam
     g_cameraData.iblRotationDegrees = static_cast<float>(m_iblRotation->value());
     g_iblIntensity = static_cast<float>(m_iblIntensity->value());
     g_iblIndirectBoost = static_cast<float>(m_iblIndirectBoost->value());
-    ibl.SetEnvSolidAngleSampling(m_solidAngleSampling->isChecked());
-    g_cameraData.sampleEnvSolidAngle = m_solidAngleSampling->isChecked() ? 1.0f : 0.0f;
+    ibl.SetEnvSolidAngleSampling(true);
+    g_cameraData.sampleEnvSolidAngle = 1.0f;
 
     ibl.SetPhysicalCalibrationEnabled(m_physicalCalibration->isChecked());
     ibl.SetSkyVisibility(static_cast<float>(m_visibility->value()));

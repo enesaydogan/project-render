@@ -119,8 +119,7 @@ SavedViews::SavedView InterpolateView(const Keyframe &from, const Keyframe &to,
   result.debugVisualizationMode =
       Lerp(from.camera.debugVisualizationMode,
            to.camera.debugVisualizationMode, t);
-  result.sampleEnvSolidAngle =
-      Lerp(from.camera.sampleEnvSolidAngle, to.camera.sampleEnvSolidAngle, t);
+  result.sampleEnvSolidAngle = 1.0f;
   result.autoExposure = (t < 0.5f) ? from.camera.autoExposure : to.camera.autoExposure;
   result.physicalCameraExposure =
       (t < 0.5f) ? from.camera.physicalCameraExposure

@@ -9,6 +9,7 @@ static RayPayload InitWavefrontSecondaryPayload(uint rayType)
     payload.packedNormal = PackNormalOctahedron(float3(0.0, 1.0, 0.0));
     payload.packedAlbedo = PackPayloadAlbedo(float3(0.0, 0.0, 0.0));
     payload.packedSurface = PackPayloadSurface(1.0, 0.0, 0.0, 0.0);
+    payload.surface = float4(1.0, 0.0, 0.0, 0.0);
     payload.packedIorType = PackPayloadIorType(1.0, rayType, false, 1.0);
     payload.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
     payload.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
@@ -102,11 +103,12 @@ void WavefrontSecondaryRayGen()
     record.packedState = state.packedState;
     record.reserved = WavefrontPackMaterialSortKey(
         rayType,
-        WavefrontClassifyMaterialBin(payload.packedSurface,
-                                     payload.packedIorType,
-                                     payload.packedColor0,
-                                     payload.packedColor1),
+        WavefrontClassifyMaterialBinFromSurface(payload.surface,
+                                                payload.packedIorType,
+                                                payload.packedColor0,
+                                                payload.packedColor1),
         0u);
+    record.surface = payload.surface;
     record.guideOrigin = state.origin;
     record.guidePackedState = (payload.t < 0.0) ? WAVEFRONT_GUIDE_STATE_MISS : 0u;
     record.guideDirection = normalize(state.direction);
@@ -119,6 +121,7 @@ void WavefrontSecondaryRayGen()
     record.guidePackedSpecular = payload.packedSpecular;
     record.guideReserved0 = 0u;
     record.guideReserved1 = 0u;
+    record.guideSurface = payload.surface;
 
     if (payload.t < 0.0) {
         record.packedState |= WAVEFRONT_HIT_STATE_MISS;

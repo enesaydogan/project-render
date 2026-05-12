@@ -1007,6 +1007,23 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
             !tmpTextures[mat.diffuseTexture].resource)
           mat.diffuseTexture = -1;
       }
+      const float emissiveMax =
+          (std::max)(mat.emissiveColor[0],
+                     (std::max)(mat.emissiveColor[1], mat.emissiveColor[2])) *
+          (std::max)(mat.emissiveIntensity, 0.0f);
+      if (emissiveMax > 1.0e-4f) {
+        mat.materialClass = Material::kMaterialClassEmissive;
+      } else if (mat.transmissionWeight > 1.0e-5f ||
+                 mat.thinWalled > 0.5f) {
+        mat.materialClass = Material::kMaterialClassGlass;
+      } else if (mat.metalness > 0.5f) {
+        mat.materialClass = Material::kMaterialClassMetal;
+      } else if (mat.sheenWeight > 1.0e-4f) {
+        mat.materialClass = Material::kMaterialClassFabric;
+      } else {
+        mat.materialClass = Material::kMaterialClassGeneric;
+      }
+      mat.schemaVersion = Material::kSchemaVersionCoronaArchviz;
       tmpMaterials[mi] = std::move(mat);
     }
   }
@@ -1905,6 +1922,18 @@ bool LoadWithAssimp(const std::string &path, std::vector<GpuMesh> &outMeshes,
       aiMat->Get(AI_MATKEY_METALLIC_FACTOR, metalness);
       mat.roughness = roughness;
       mat.metalness = metalness;
+      mat.schemaVersion = Material::kSchemaVersionCoronaArchviz;
+      const float emissiveMax =
+          (std::max)(mat.emissiveColor[0],
+                     (std::max)(mat.emissiveColor[1], mat.emissiveColor[2])) *
+          (std::max)(mat.emissiveIntensity, 0.0f);
+      if (emissiveMax > 1.0e-4f) {
+        mat.materialClass = Material::kMaterialClassEmissive;
+      } else if (mat.metalness > 0.5f) {
+        mat.materialClass = Material::kMaterialClassMetal;
+      } else {
+        mat.materialClass = Material::kMaterialClassGeneric;
+      }
 
       auto GetTexturePath = [&](aiTextureType type) -> std::string {
         aiString texPath;

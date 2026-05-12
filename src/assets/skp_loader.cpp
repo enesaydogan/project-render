@@ -1041,6 +1041,8 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
         mtl.specularWeight = 1.0f;
         mtl.doubleSided = true;
         mtl.workflow = Material::kWorkflowMetalRoughness;
+        mtl.schemaVersion = Material::kSchemaVersionCoronaArchviz;
+        mtl.materialClass = Material::kMaterialClassGeneric;
 
         SUMaterialType materialType = SUMaterialType_Colored;
         if (SU_ERROR_NONE != SUMaterialGetType(skMat, &materialType)) {
@@ -1149,6 +1151,9 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
           double metallicFactor = 0.0;
           if (SU_ERROR_NONE == SUMaterialGetMetallicFactor(skMat, &metallicFactor)) {
             mtl.metalness = Clamp01(metallicFactor);
+            if (mtl.metalness > 0.5f) {
+              mtl.materialClass = Material::kMaterialClassMetal;
+            }
           }
 
           double roughnessFactor = 1.0;
@@ -1206,6 +1211,7 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
           mtl.transmissionColor[0] = mtl.diffuseColor[0];
           mtl.transmissionColor[1] = mtl.diffuseColor[1];
           mtl.transmissionColor[2] = mtl.diffuseColor[2];
+          mtl.materialClass = Material::kMaterialClassGlass;
           if (!pbrMetallicRoughness) {
             mtl.roughness = (std::min)(mtl.roughness, 0.03f);
           }

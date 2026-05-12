@@ -230,19 +230,10 @@ LightSample sample_env_map(Texture2D env,
     float sinTheta = max(1e-6, sin(theta));
     float dOmega = (2.0 * PI / (float)envW) * (PI / (float)envH) * sinTheta;
 
-    // When building with solid-angle weighting we also report pdf in
-    // steradians; otherwise we can return a per-texel pdf which is helpful
-    // for comparing the wrong behaviour.  The camera constant buffer field
-    // sampleEnvSolidAngle is set via the UI (see editor_ui.cpp).
-    float pdf;
-    if (sampleEnvSolidAngle > 0.5) {
-        pdf = texelPmf / max(1e-12, dOmega);
-    } else {
-        // texel-based pdf (unitless, 1/texel).  MIS in the path tracer will
-        // still use this value; results will be incorrect but the toggle
-        // allows experimentation.
-        pdf = texelPmf;
-    }
+    // Shading is always in solid-angle measure.  Diagnostics may rebuild the
+    // CDF differently on the CPU, but the BSDF/light MIS contract never
+    // changes units.
+    float pdf = texelPmf / max(1e-12, dOmega);
 
     ls.L = worldDir;
     ls.radiance = env.SampleLevel(s, uvRot, sampleLod).rgb * GetDxrProceduralSkyBoost();
@@ -270,11 +261,7 @@ float evaluate_env_map_pdf(Texture2D<float4> conditionalCdf,
     float sinTheta = max(1e-6, sin(theta));
     float dOmega = (2.0 * PI / (float)envW) * (PI / (float)envH) * sinTheta;
 
-    if (sampleEnvSolidAngle > 0.5) {
-        return texelPmf / max(1e-12, dOmega);
-    } else {
-        return texelPmf;
-    }
+    return texelPmf / max(1e-12, dOmega);
 }
 
 #endif // LIGHTS_LIB_HLSL

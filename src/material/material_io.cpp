@@ -1,8 +1,37 @@
 #include "material_io.h"
 
+#include <algorithm>
 #include <cstring>
 
 namespace MaterialIO {
+namespace {
+
+uint32_t InferMaterialClass(const Asset::Material &material) {
+  if (material.isGrass || material.translucency > 0.05f) {
+    return Asset::Material::kMaterialClassLeaf;
+  }
+  if (material.transmissionWeight > 1.0e-5f ||
+      material.thinWalled > 0.5f) {
+    return Asset::Material::kMaterialClassGlass;
+  }
+  if (material.metalness > 0.5f) {
+    return Asset::Material::kMaterialClassMetal;
+  }
+  const float emissiveMax = (std::max)(
+      material.emissiveColor[0],
+      (std::max)(material.emissiveColor[1], material.emissiveColor[2]));
+  if (emissiveMax * (std::max)(material.emissiveIntensity, 0.0f) >
+      1.0e-4f) {
+    return Asset::Material::kMaterialClassEmissive;
+  }
+  return Asset::Material::kMaterialClassGeneric;
+}
+
+uint32_t ClampMaterialClass(uint32_t materialClass) {
+  return (std::min)(materialClass, Asset::Material::kMaterialClassEmissive);
+}
+
+} // namespace
 
 std::vector<int> BuildTextureSaveRemap(
     const std::vector<Asset::Texture> &textures) {
@@ -32,7 +61,9 @@ nlohmann::json BuildMaterialsMetadata(
   for (const auto &mat : materials) {
     materialArray.push_back({
         {"n", std::string(mat.name)},
-        {"sv", mat.schemaVersion},
+        {"sv", Asset::Material::kSchemaVersionCoronaArchviz},
+        {"materialClass", ClampMaterialClass(mat.materialClass)},
+        {"mc", ClampMaterialClass(mat.materialClass)},
         {"bc",
          {mat.diffuseColor[0], mat.diffuseColor[1], mat.diffuseColor[2],
           mat.diffuseColor[3]}},
@@ -140,8 +171,15 @@ void RestoreMaterialsFromMetadata(const nlohmann::json &materialsJson,
     (*remap)[jsonIndex] = materialIndex;
     auto &material = (*materials)[static_cast<size_t>(materialIndex)];
 
-    material.schemaVersion = savedMaterial.value(
+    const uint32_t savedSchema = savedMaterial.value(
         "sv", Asset::Material::kSchemaVersionOpenPbrSubset);
+    material.schemaVersion = Asset::Material::kSchemaVersionCoronaArchviz;
+    const uint32_t savedMaterialClass = savedMaterial.value(
+        "materialClass",
+        savedMaterial.value(
+            "mc",
+            static_cast<uint32_t>(Asset::Material::kMaterialClassGeneric)));
+    material.materialClass = ClampMaterialClass(savedMaterialClass);
     if (savedMaterial.contains("bc")) {
       for (int channel = 0; channel < 4; ++channel) {
         material.diffuseColor[channel] = savedMaterial["bc"][channel];
@@ -301,7 +339,11 @@ void RestoreMaterialsFromMetadata(const nlohmann::json &materialsJson,
     material.doubleSided = savedMaterial.value("ds", material.doubleSided);
     material.alphaMode = savedMaterial.value("am", material.alphaMode);
     material.alphaCutoff = savedMaterial.value("ac", material.alphaCutoff);
-    material.schemaVersion = Asset::Material::kSchemaVersionOpenPbrSubset;
+    if (savedSchema < Asset::Material::kSchemaVersionCoronaArchviz ||
+        !savedMaterial.contains("mc")) {
+      material.materialClass = InferMaterialClass(material);
+    }
+    material.schemaVersion = Asset::Material::kSchemaVersionCoronaArchviz;
   }
 }
 

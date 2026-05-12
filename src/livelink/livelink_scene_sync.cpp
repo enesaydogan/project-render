@@ -34,6 +34,31 @@ const T *FindPayload(const SceneDelta &delta) {
 
 constexpr size_t kInvalidHandle = static_cast<size_t>(-1);
 
+uint32_t InferAssetMaterialClass(const Asset::Material &material) {
+  const float emissiveMax =
+      (std::max)(material.emissiveColor[0],
+                 (std::max)(material.emissiveColor[1],
+                            material.emissiveColor[2])) *
+      (std::max)(material.emissiveIntensity, 0.0f);
+  if (emissiveMax > 1.0e-4f) {
+    return Asset::Material::kMaterialClassEmissive;
+  }
+  if (material.transmissionWeight > 1.0e-4f ||
+      material.thinWalled > 0.5f) {
+    return Asset::Material::kMaterialClassGlass;
+  }
+  if (material.translucency > 1.0e-4f) {
+    return Asset::Material::kMaterialClassLeaf;
+  }
+  if (material.metalness > 0.5f) {
+    return Asset::Material::kMaterialClassMetal;
+  }
+  if (material.sheenWeight > 1.0e-4f) {
+    return Asset::Material::kMaterialClassFabric;
+  }
+  return Asset::Material::kMaterialClassGeneric;
+}
+
 std::string BuildLiveLinkMaterialName(const std::string &nodeObjectId,
                                       int materialSlot);
 
@@ -720,9 +745,8 @@ bool LoadNativeMeshPayload(const std::string &path,
       material.invertRoughnessTexture =
           (materialHeader.flags & kNativeMaterialFlagInvertRoughnessTexture) !=
           0;
-      if (!materialModel.empty()) {
-        material.schemaVersion = Asset::Material::kSchemaVersionOpenPbrSubset;
-      }
+      material.schemaVersion = Asset::Material::kSchemaVersionCoronaArchviz;
+      material.materialClass = InferAssetMaterialClass(material);
 
       material.diffuseTexture = AppendNativePayloadTexture(
           baseColorTextureUri, &textureIndicesByUri, outTextures,

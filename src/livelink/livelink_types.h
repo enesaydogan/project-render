@@ -162,6 +162,7 @@ struct MaterialChangedPayload {
   std::vector<MaterialNodeReference> references;
   std::string name;
   std::string materialModel;
+  uint32_t materialClass = 0xFFFFFFFFu;
   std::array<float, 4> baseColor = {1.0f, 1.0f, 1.0f, 1.0f};
   std::string baseColorTextureUri;
   std::string baseColorTextureBlobHash;

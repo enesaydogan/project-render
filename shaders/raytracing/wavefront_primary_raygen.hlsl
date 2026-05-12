@@ -73,11 +73,12 @@ void WavefrontPrimaryRayGen()
     record.packedState = state.packedState;
     record.reserved = WavefrontPackMaterialSortKey(
         currentRayType,
-        WavefrontClassifyMaterialBin(payload.packedSurface,
-                                     payload.packedIorType,
-                                     payload.packedColor0,
-                                     payload.packedColor1),
+        WavefrontClassifyMaterialBinFromSurface(payload.surface,
+                                                payload.packedIorType,
+                                                payload.packedColor0,
+                                                payload.packedColor1),
         0u);
+    record.surface = payload.surface;
     record.guideOrigin = guideOrigin;
     record.guidePackedState = guideState;
     record.guideDirection = guideDirection;
@@ -90,6 +91,7 @@ void WavefrontPrimaryRayGen()
     record.guidePackedSpecular = guidePayload.packedSpecular;
     record.guideReserved0 = 0u;
     record.guideReserved1 = 0u;
+    record.guideSurface = guidePayload.surface;
 
     if (payload.t < 0.0) {
         if (dlssRayReconstruction > 0.5 &&

@@ -2,6 +2,7 @@
 #define WAVEFRONT_TRANSPORT_HLSLI
 
 #include "../brdf_lib.hlsl"
+#include "wavefront_bsdf.hlsli"
 
 static const float kWavefrontShadowContributionScale = 4096.0;
 static const float kWavefrontShadowContributionInvScale =
@@ -128,25 +129,13 @@ inline void ComputeWavefrontLobeProbabilities(float3 normal,
                                               out float diffuseProb,
                                               out float transmissionProb)
 {
-    float3 F0 = ComputeWavefrontSurfaceF0(albedo, metallic, ior,
-                                          specularWeight, specularColor);
-    float3 F = F0 + (1.0 - F0) *
-                    pow(max(1.0 - saturate(dot(normal, viewDir)), 0.0), 5.0);
-
-    transmissionProb = saturate(transmission);
-    reflectionProb = max(F.x, max(F.y, F.z)) * (1.0 - transmissionProb);
-
-    float baseDiffuseProb = (1.0 - reflectionProb) *
-                            (1.0 - saturate(metallic)) *
-                            (1.0 - transmissionProb);
-    float translucentProb = baseDiffuseProb * saturate(translucency);
-    diffuseProb = max(0.0, baseDiffuseProb - translucentProb);
-
-    float totalProb = max(reflectionProb + diffuseProb + transmissionProb,
-                          1.0e-6);
-    reflectionProb /= totalProb;
-    diffuseProb /= totalProb;
-    transmissionProb /= totalProb;
+    WavefrontBsdfLobeProbabilities p =
+        WavefrontBsdfComputeLobeProbabilities(
+            normal, viewDir, albedo, metallic, transmission, translucency, ior,
+            specularWeight, specularColor);
+    reflectionProb = p.reflection;
+    diffuseProb = p.diffuse;
+    transmissionProb = p.transmission;
 }
 
 inline float3 ComputeWavefrontSpecularThroughput(float3 albedo,
@@ -168,7 +157,7 @@ inline float ComputeWavefrontBrdfPdfForDirection(WavefrontHitRecord record,
 {
     float3 baseColor = UnpackPayloadAlbedo(record.packedAlbedo);
     float3 specularColor = UnpackPayloadSpecularColor(record.packedSpecular);
-    float4 surface = UnpackPayloadSurface(record.packedSurface);
+    float4 surface = WavefrontHitRecordSurface(record);
     float roughness = saturate(surface.x);
     float metallic = saturate(surface.y);
     float transmission = saturate(surface.z);
@@ -229,7 +218,7 @@ inline float3 EvaluateWavefrontPrimaryPreview(
 {
     float3 baseColor = UnpackPayloadAlbedo(record.packedAlbedo);
     float3 specularColor = UnpackPayloadSpecularColor(record.packedSpecular);
-    float4 surface = UnpackPayloadSurface(record.packedSurface);
+    float4 surface = WavefrontHitRecordSurface(record);
     float roughness = saturate(surface.x);
     float metallic = saturate(surface.y);
     float transmission = saturate(surface.z);
@@ -278,7 +267,7 @@ inline float3 ComputeWavefrontDirectLightingWeightForView(
 {
     float3 baseColor = UnpackPayloadAlbedo(record.packedAlbedo);
     float3 specularColor = UnpackPayloadSpecularColor(record.packedSpecular);
-    float4 surface = UnpackPayloadSurface(record.packedSurface);
+    float4 surface = WavefrontHitRecordSurface(record);
     float roughness = saturate(surface.x);
     float metallic = saturate(surface.y);
     float transmission = saturate(surface.z);
