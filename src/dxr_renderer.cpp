@@ -106,8 +106,7 @@ static UINT s_lastFrameCount = 0;
 static std::chrono::high_resolution_clock::time_point s_lastFrameTime;
 
 // Some debug toggles live in main.cpp; declare them here so we can react to UI
-// changes
-extern bool g_dxrDebugUV;
+// changes.
 extern bool g_dxrHitDebug;
 extern bool g_dxrDumpD3D12Messages;
 extern bool g_verboseRenderLogs;
@@ -573,14 +572,12 @@ static ComPtr<ID3D12DescriptorHeap> s_tonemapHeap;
 struct ShaderTableEntry {
   void *id;
 };
-static UINT64 s_rayGenShaderTableEntrySize = 0;
+static UINT64 s_wavefrontRayGenShaderTableEntrySize = 0;
 static UINT64 s_shaderTableEntrySize = 0;
-static D3D12_GPU_VIRTUAL_ADDRESS s_rayGenShaderTable = 0;
 static D3D12_GPU_VIRTUAL_ADDRESS s_wavefrontPrimaryRayGenShaderTable = 0;
 static D3D12_GPU_VIRTUAL_ADDRESS s_wavefrontSecondaryRayGenShaderTable = 0;
 static D3D12_GPU_VIRTUAL_ADDRESS s_wavefrontShadowRayGenShaderTable = 0;
 static D3D12_GPU_VIRTUAL_ADDRESS s_missShaderTable = 0;
-static D3D12_GPU_VIRTUAL_ADDRESS s_hitGroupShaderTable = 0;
 static D3D12_GPU_VIRTUAL_ADDRESS s_wavefrontHitGroupShaderTable = 0;
 static D3D12_GPU_VIRTUAL_ADDRESS s_uploadedWavefrontSecondaryRayGen = 0;
 static D3D12_GPU_VIRTUAL_ADDRESS s_uploadedWavefrontShadowRayGen = 0;
@@ -2024,7 +2021,7 @@ static void UploadWavefrontIndirectDispatchRecords(
       s_wavefrontSecondaryRayGenShaderTable == 0 ||
       s_wavefrontShadowRayGenShaderTable == 0 || s_missShaderTable == 0 ||
       s_wavefrontHitGroupShaderTable == 0 ||
-      s_rayGenShaderTableEntrySize == 0 ||
+      s_wavefrontRayGenShaderTableEntrySize == 0 ||
       s_shaderTableEntrySize == 0) {
     return;
   }
@@ -2056,7 +2053,7 @@ static void UploadWavefrontIndirectDispatchRecords(
                         D3D12_GPU_VIRTUAL_ADDRESS rayGenAddress) {
     record.desc.RayGenerationShaderRecord.StartAddress = rayGenAddress;
     record.desc.RayGenerationShaderRecord.SizeInBytes =
-        s_rayGenShaderTableEntrySize;
+        s_wavefrontRayGenShaderTableEntrySize;
     record.desc.MissShaderTable.StartAddress = s_missShaderTable;
     record.desc.MissShaderTable.SizeInBytes = s_shaderTableEntrySize;
     record.desc.MissShaderTable.StrideInBytes = s_shaderTableEntrySize;
@@ -2215,7 +2212,7 @@ static void DispatchWavefrontPrepareIndirectArgs(
 static void DispatchWavefrontPrimaryVisibility(
     ID3D12GraphicsCommandList4 *list) {
   if (!list || s_wavefrontPrimaryRayGenShaderTable == 0 ||
-      s_rayGenShaderTableEntrySize == 0 || s_lastWavefrontBootstrapPathCount == 0) {
+      s_wavefrontRayGenShaderTableEntrySize == 0 || s_lastWavefrontBootstrapPathCount == 0) {
     return;
   }
 
@@ -2223,7 +2220,7 @@ static void DispatchWavefrontPrimaryVisibility(
   dispatchDesc.RayGenerationShaderRecord.StartAddress =
       s_wavefrontPrimaryRayGenShaderTable;
   dispatchDesc.RayGenerationShaderRecord.SizeInBytes =
-      s_rayGenShaderTableEntrySize;
+      s_wavefrontRayGenShaderTableEntrySize;
   dispatchDesc.MissShaderTable.StartAddress = s_missShaderTable;
   dispatchDesc.MissShaderTable.SizeInBytes = s_shaderTableEntrySize;
   dispatchDesc.MissShaderTable.StrideInBytes = s_shaderTableEntrySize;
@@ -2245,7 +2242,7 @@ static void DispatchWavefrontPrimaryVisibility(
 static void DispatchWavefrontSecondaryVisibility(
   ID3D12GraphicsCommandList4 *list, UINT sourceQueueCounterIndex) {
   if (!list || s_wavefrontSecondaryRayGenShaderTable == 0 ||
-      s_rayGenShaderTableEntrySize == 0 || s_lastWavefrontBootstrapPathCount == 0) {
+      s_wavefrontRayGenShaderTableEntrySize == 0 || s_lastWavefrontBootstrapPathCount == 0) {
     return;
   }
   (void)sourceQueueCounterIndex;
@@ -2264,7 +2261,7 @@ static void DispatchWavefrontSecondaryVisibility(
     dispatchDesc.RayGenerationShaderRecord.StartAddress =
         s_wavefrontSecondaryRayGenShaderTable;
     dispatchDesc.RayGenerationShaderRecord.SizeInBytes =
-        s_rayGenShaderTableEntrySize;
+        s_wavefrontRayGenShaderTableEntrySize;
     dispatchDesc.MissShaderTable.StartAddress = s_missShaderTable;
     dispatchDesc.MissShaderTable.SizeInBytes = s_shaderTableEntrySize;
     dispatchDesc.MissShaderTable.StrideInBytes = s_shaderTableEntrySize;
@@ -2287,7 +2284,7 @@ static void DispatchWavefrontSecondaryVisibility(
 static void DispatchWavefrontShadowVisibility(
     ID3D12GraphicsCommandList4 *list) {
   if (!list || s_wavefrontShadowRayGenShaderTable == 0 ||
-      s_rayGenShaderTableEntrySize == 0 || s_lastWavefrontBootstrapPathCount == 0) {
+      s_wavefrontRayGenShaderTableEntrySize == 0 || s_lastWavefrontBootstrapPathCount == 0) {
     return;
   }
 
@@ -2299,7 +2296,7 @@ static void DispatchWavefrontShadowVisibility(
     dispatchDesc.RayGenerationShaderRecord.StartAddress =
         s_wavefrontShadowRayGenShaderTable;
     dispatchDesc.RayGenerationShaderRecord.SizeInBytes =
-        s_rayGenShaderTableEntrySize;
+        s_wavefrontRayGenShaderTableEntrySize;
     dispatchDesc.MissShaderTable.StartAddress = s_missShaderTable;
     dispatchDesc.MissShaderTable.SizeInBytes = s_shaderTableEntrySize;
     dispatchDesc.MissShaderTable.StrideInBytes = s_shaderTableEntrySize;
@@ -3649,8 +3646,6 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     std::vector<std::wstring> compileDefines;
 #ifdef _DEBUG
     compileDefines.push_back(L"SHADER_ENABLE_DEBUG=1");
-    if (::g_dxrDebugUV)
-      compileDefines.push_back(L"RAYGEN_DEBUG=1");
     if (::g_dxrHitDebug)
       compileDefines.push_back(L"HIT_DEBUG=1");
 #else
@@ -3850,41 +3845,33 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
 
   // Create state object (DXIL lib etc.)
   static D3D12_DXIL_LIBRARY_DESC libDesc = {};
-  static D3D12_EXPORT_DESC exports[8] = {};
-  static D3D12_HIT_GROUP_DESC hitGroupDescs[2] = {};
+  static D3D12_EXPORT_DESC exports[6] = {};
+  static D3D12_HIT_GROUP_DESC hitGroupDesc = {};
   static D3D12_RAYTRACING_SHADER_CONFIG shaderConfig = {};
   static D3D12_RAYTRACING_PIPELINE_CONFIG pipelineConfig = {};
   static D3D12_GLOBAL_ROOT_SIGNATURE globalRootSigDesc = {};
 
   libDesc.DXILLibrary.pShaderBytecode = shaderBlob->GetBufferPointer();
   libDesc.DXILLibrary.BytecodeLength = shaderBlob->GetBufferSize();
-  exports[0].Name = L"RayGen";
-  exports[1].Name = L"WavefrontPrimaryRayGen";
-  exports[2].Name = L"WavefrontSecondaryRayGen";
-  exports[3].Name = L"WavefrontShadowRayGen";
-  exports[4].Name = L"Miss";
-  exports[5].Name = L"ClosestHit";
-  exports[6].Name = L"AnyHit";
-  exports[7].Name = L"WavefrontClosestHit";
-  libDesc.NumExports = 8;
+  exports[0].Name = L"WavefrontPrimaryRayGen";
+  exports[1].Name = L"WavefrontSecondaryRayGen";
+  exports[2].Name = L"WavefrontShadowRayGen";
+  exports[3].Name = L"Miss";
+  exports[4].Name = L"AnyHit";
+  exports[5].Name = L"WavefrontClosestHit";
+  libDesc.NumExports = 6;
   libDesc.pExports = exports;
   D3D12_STATE_SUBOBJECT libSub = {};
   libSub.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY;
   libSub.pDesc = &libDesc;
 
-  hitGroupDescs[0].HitGroupExport = L"HitGroup";
-  hitGroupDescs[0].Type = D3D12_HIT_GROUP_TYPE_TRIANGLES;
-  hitGroupDescs[0].ClosestHitShaderImport = L"ClosestHit";
-  hitGroupDescs[0].AnyHitShaderImport = L"AnyHit";
-  hitGroupDescs[1].HitGroupExport = L"WavefrontHitGroup";
-  hitGroupDescs[1].Type = D3D12_HIT_GROUP_TYPE_TRIANGLES;
-  hitGroupDescs[1].ClosestHitShaderImport = L"WavefrontClosestHit";
-  hitGroupDescs[1].AnyHitShaderImport = L"AnyHit";
-  D3D12_STATE_SUBOBJECT hitSubs[2] = {};
-  hitSubs[0].Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
-  hitSubs[0].pDesc = &hitGroupDescs[0];
-  hitSubs[1].Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
-  hitSubs[1].pDesc = &hitGroupDescs[1];
+  hitGroupDesc.HitGroupExport = L"WavefrontHitGroup";
+  hitGroupDesc.Type = D3D12_HIT_GROUP_TYPE_TRIANGLES;
+  hitGroupDesc.ClosestHitShaderImport = L"WavefrontClosestHit";
+  hitGroupDesc.AnyHitShaderImport = L"AnyHit";
+  D3D12_STATE_SUBOBJECT hitSub = {};
+  hitSub.Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
+  hitSub.pDesc = &hitGroupDesc;
 
   constexpr UINT kRayPayloadSizeInBytes =
       sizeof(float) + 8u * sizeof(uint32_t) + 4u * sizeof(float);
@@ -3908,8 +3895,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
 
   std::vector<D3D12_STATE_SUBOBJECT> subobjects;
   subobjects.push_back(libSub);
-  subobjects.push_back(hitSubs[0]);
-  subobjects.push_back(hitSubs[1]);
+  subobjects.push_back(hitSub);
   subobjects.push_back(shaderConfigSub);
   subobjects.push_back(pipeConfigSub);
   subobjects.push_back(rootSigSub);
@@ -3956,66 +3942,50 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   // Create Shader Table
   ComPtr<ID3D12StateObjectProperties> properties;
   ThrowIfFailed(s_rtStateObject.As(&properties));
-  void *rayGenId = properties->GetShaderIdentifier(L"RayGen");
   void *wavefrontRayGenId =
       properties->GetShaderIdentifier(L"WavefrontPrimaryRayGen");
   void *wavefrontSecondaryRayGenId =
       properties->GetShaderIdentifier(L"WavefrontSecondaryRayGen");
-    void *wavefrontShadowRayGenId =
+  void *wavefrontShadowRayGenId =
       properties->GetShaderIdentifier(L"WavefrontShadowRayGen");
   void *missId = properties->GetShaderIdentifier(L"Miss");
-  void *hitGroupId = properties->GetShaderIdentifier(L"HitGroup");
   void *wavefrontHitGroupId =
       properties->GetShaderIdentifier(L"WavefrontHitGroup");
-    if (!rayGenId || !wavefrontRayGenId || !wavefrontSecondaryRayGenId ||
-      !wavefrontShadowRayGenId ||
-      !missId || !hitGroupId || !wavefrontHitGroupId) {
+  if (!wavefrontRayGenId || !wavefrontSecondaryRayGenId ||
+      !wavefrontShadowRayGenId || !missId || !wavefrontHitGroupId) {
     fprintf(stderr, "DxrRenderer: Shader IDs null\n");
     return;
   }
   UINT shaderIdentifierSize = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
   // RayGen record must be aligned to 64 bytes (shader table alignment),
   // miss/hit records must be aligned to 32 bytes (shader record alignment).
-    UINT64 s_rayGenEntrySize =
+  UINT64 s_rayGenEntrySize =
       Align(shaderIdentifierSize, D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
-    s_rayGenShaderTableEntrySize = s_rayGenEntrySize;
+  s_wavefrontRayGenShaderTableEntrySize = s_rayGenEntrySize;
   s_shaderTableEntrySize = Align(shaderIdentifierSize,
                                  D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT);
-  // Total SBT size: 4 raygen records + miss + legacy hit + wavefront hit.
+  // Total SBT size: 3 wavefront raygen records + miss + wavefront hit.
   UINT64 shaderTableSize =
-      (4 * s_rayGenEntrySize) + s_shaderTableEntrySize +
-      (2 * s_shaderTableEntrySize);
+      (3 * s_rayGenEntrySize) + (2 * s_shaderTableEntrySize);
   AllocateUploadBuffer(s_device, nullptr, shaderTableSize, &s_sbtStorage,
                        L"Shader Table");
   UINT8 *pData = nullptr;
   s_sbtStorage->Map(0, nullptr, (void **)&pData);
-  // Place RayGen at beginning (64-byte aligned slot)
-  memcpy(pData, rayGenId, shaderIdentifierSize);
-  // Place WavefrontPrimaryRayGen in the second raygen slot.
-  memcpy(pData + s_rayGenEntrySize, wavefrontRayGenId, shaderIdentifierSize);
-  // Place WavefrontSecondaryRayGen in the third raygen slot.
-  memcpy(pData + (2 * s_rayGenEntrySize), wavefrontSecondaryRayGenId,
+  memcpy(pData, wavefrontRayGenId, shaderIdentifierSize);
+  memcpy(pData + s_rayGenEntrySize, wavefrontSecondaryRayGenId,
          shaderIdentifierSize);
-    // Place WavefrontShadowRayGen in the fourth raygen slot.
-    memcpy(pData + (3 * s_rayGenEntrySize), wavefrontShadowRayGenId,
-      shaderIdentifierSize);
-  // Place Miss right after the raygen block.
-    memcpy(pData + (4 * s_rayGenEntrySize), missId, shaderIdentifierSize);
-  // Place HitGroup after miss (aligned to 32 bytes)
-    memcpy(pData + (4 * s_rayGenEntrySize) + s_shaderTableEntrySize, hitGroupId,
+  memcpy(pData + (2 * s_rayGenEntrySize), wavefrontShadowRayGenId,
          shaderIdentifierSize);
-  memcpy(pData + (4 * s_rayGenEntrySize) + (2 * s_shaderTableEntrySize),
+  memcpy(pData + (3 * s_rayGenEntrySize), missId, shaderIdentifierSize);
+  memcpy(pData + (3 * s_rayGenEntrySize) + s_shaderTableEntrySize,
          wavefrontHitGroupId, shaderIdentifierSize);
   s_sbtStorage->Unmap(0, nullptr);
   D3D12_GPU_VIRTUAL_ADDRESS baseAddr = s_sbtStorage->GetGPUVirtualAddress();
-  s_rayGenShaderTable = baseAddr;
-  s_wavefrontPrimaryRayGenShaderTable = baseAddr + s_rayGenEntrySize;
-  s_wavefrontSecondaryRayGenShaderTable = baseAddr + (2 * s_rayGenEntrySize);
-  s_wavefrontShadowRayGenShaderTable = baseAddr + (3 * s_rayGenEntrySize);
-  s_missShaderTable = baseAddr + (4 * s_rayGenEntrySize);
-  s_hitGroupShaderTable = s_missShaderTable + s_shaderTableEntrySize;
-  s_wavefrontHitGroupShaderTable =
-      s_hitGroupShaderTable + s_shaderTableEntrySize;
+  s_wavefrontPrimaryRayGenShaderTable = baseAddr;
+  s_wavefrontSecondaryRayGenShaderTable = baseAddr + s_rayGenEntrySize;
+  s_wavefrontShadowRayGenShaderTable = baseAddr + (2 * s_rayGenEntrySize);
+  s_missShaderTable = baseAddr + (3 * s_rayGenEntrySize);
+  s_wavefrontHitGroupShaderTable = s_missShaderTable + s_shaderTableEntrySize;
   s_uploadedWavefrontSecondaryRayGen = 0;
   s_uploadedWavefrontShadowRayGen = 0;
 
@@ -5761,9 +5731,6 @@ void ResetStreamlineHistory() {
 }
 
 void SetPathTracingBackend(PathTracingBackend backend) {
-  if (backend == PathTracingBackend::Legacy) {
-    backend = PathTracingBackend::WavefrontOptimized;
-  }
   if (s_pathTracingBackend == backend) {
     return;
   }
@@ -6657,26 +6624,6 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     s_transmissionAccumulation.SetNeedsClear(false);
   }
 
-  D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
-  // RayGen record size must match the raygen slot size (may be 64-aligned)
-  UINT64 s_rayGenEntrySize =
-      Align(D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES,
-            D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
-  dispatchDesc.RayGenerationShaderRecord.StartAddress = s_rayGenShaderTable;
-  dispatchDesc.RayGenerationShaderRecord.SizeInBytes = s_rayGenEntrySize;
-  // Miss/Hit tables: one entry each for now
-  dispatchDesc.MissShaderTable.StartAddress = s_missShaderTable;
-  dispatchDesc.MissShaderTable.SizeInBytes = s_shaderTableEntrySize * 1;
-  dispatchDesc.MissShaderTable.StrideInBytes = s_shaderTableEntrySize;
-  dispatchDesc.HitGroupTable.StartAddress = s_hitGroupShaderTable;
-  dispatchDesc.HitGroupTable.SizeInBytes = s_shaderTableEntrySize * 1;
-  dispatchDesc.HitGroupTable.StrideInBytes = s_shaderTableEntrySize;
-
-  // Dispatch size should match created output texture size
-  dispatchDesc.Width = s_outputWidth;
-  dispatchDesc.Height = s_outputHeight;
-  dispatchDesc.Depth = 1;
-
   // Only Dispatch Rays if we are NOT in a pure denoise pass.
   // If we are denoising an already-completed frame (e.g. at MaxSPP),
   // we do not want to add more samples or modify the accumulation buffer.
@@ -6932,8 +6879,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     }
   }
 
-  // Phase 4: decoupled ReSTIR DI temporal/spatial reuse in a dedicated compute
-  // pass. RayGen now writes initial candidates, and this pass performs reuse.
+  // Decoupled ReSTIR DI temporal/spatial reuse in a dedicated compute pass.
+  // Wavefront resolve writes initial candidates, and this pass performs reuse.
   if (didWavefrontRestirSeed) {
     if (cameraCB) {
       SetWavefrontStage("restir-spatial");
@@ -7705,7 +7652,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     tc.saturation = rs.tonemapSaturation;
     tc.contrast = rs.tonemapContrast;
 
-    // DXR path: Secondary ray traced AO is computed in path_tracer_core via
+    // DXR path: Secondary ray traced AO is computed in the wavefront path via
     // ComputePrimaryRayTracedAo and encoded in the primary color output.
     // Disable tonemap post-process AO entirely in this path, to avoid double
     // AO application.

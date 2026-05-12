@@ -747,8 +747,6 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 
 RenderMode g_currentRenderMode = RenderMode::Raster;
 // Panel visibility flags moved to editor_ui.cpp
-// Debug toggles for DXR
-bool g_dxrDebugUV = false;
 bool g_dxrDumpPixels = false;
 bool g_dxrHitDebug = false; // encode primitive ID in hit shader for debugging
 bool g_dxrDumpD3D12Messages = false; // dump D3D12 InfoQueue messages to stderr
@@ -937,7 +935,6 @@ static void EnableD3D12DebugLayer() {
 
 static void EnforceReleaseDebugFlags() {
 #ifndef _DEBUG
-  g_dxrDebugUV = false;
   g_dxrDumpPixels = false;
   g_dxrHitDebug = false;
   g_dxrDumpD3D12Messages = false;

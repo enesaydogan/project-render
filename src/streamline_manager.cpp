@@ -566,7 +566,7 @@ bool StreamlineManager::Evaluate(
   sl::matrixMul(c.clipToPrevClip, clipToPrevCameraView, prevViewToClip);
   sl::matrixFullInvert(c.prevClipToClip, c.clipToPrevClip);
 
-  // Match raygen jitter (see shaders/path_tracer_core.hlsl): Halton jitter in
+  // Match wavefront primary jitter: Halton jitter in
   // pixel units.
   // Using passed jitter values to ensure synchronization with shader.
   c.jitterOffset = sl::float2(jitterX, jitterY);

@@ -44,7 +44,6 @@ extern CloudManager g_cloudManager;
 extern RenderMode g_currentRenderMode;
 extern bool g_drawGrid;
 extern bool g_verboseRenderLogs;
-extern bool g_dxrDebugUV;
 extern bool g_rasterDebugUV;
 extern bool g_rasterWireframe;
 extern bool g_rasterDebugDepth;
@@ -2943,12 +2942,6 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
         ImGui::TextDisabled("(DXR unsupported)");
       }
 #ifdef _DEBUG
-      // DXR debug: show UV output from RayGen
-      if (ImGui::Checkbox("DXR: Show RayGen UV (debug)", &g_dxrDebugUV)) {
-        // Recreate pipeline with debug define; reinitializing RT pipeline
-        RecreateDxrPipelineSafe(g_windowWidth, g_windowHeight,
-                                "DXR debug UV toggle");
-      }
       if (ImGui::Checkbox("Raster: Show UV (debug)", &g_rasterDebugUV)) {
         fprintf(stderr, "Raster: ShowUV set=%d\n", g_rasterDebugUV);
         RasterRenderer::RecreateMeshPipeline(g_device.Get(),
@@ -2969,7 +2962,6 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
                                              g_rootSignature.Get());
       }
 #else
-      g_dxrDebugUV = false;
       g_rasterDebugUV = false;
       g_rasterWireframe = false;
       g_rasterDebugDepth = false;

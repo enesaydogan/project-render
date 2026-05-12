@@ -97,10 +97,9 @@ float GetGPUFrameTimeMs();
 // available)
 void GetShaderCounters(UINT *outCounters, UINT maxCount);
 
-// Path tracer backend selection. Legacy is retained only as a deprecated scene
-// value; runtime selection clamps it to WavefrontOptimized.
+// Path tracer backend selection. Scene value 0 is deprecated and migrates to
+// WavefrontOptimized during load.
 enum class PathTracingBackend {
-  Legacy = 0,
   WavefrontParity = 1,
   WavefrontOptimized = 2,
 };

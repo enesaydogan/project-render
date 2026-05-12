@@ -2,10 +2,8 @@
 // Closest hit shader with full PBR lighting
 
 #include "common.hlsli"
+#include "../brdf_lib.hlsl"
 #include "../clouds.hlsl"
-
-// BRDF helpers: using D_GGX, V_SmithCorrelated, F_Schlick from brdf_lib.hlsl
-// (included via path_tracer_core.hlsl before this file)
 
 float3 TriPlanarWeights(float3 n, float sharpness)
 {
@@ -967,8 +965,9 @@ void ClosestHitImpl(inout RayPayload payload,
 
     // OPTIMIZATION:
     // Only calculate direct lighting (Shadow Ray) for GI Diffuse rays.
-    // Primary rays use ReSTIR in RayGen and don't need this locally computed color.
-    // IBL (ambient) is currently unused by both RayGen (for Primary) and Diffuse rays (which take Lo only).
+    // Primary rays use wavefront resolve/ReSTIR and don't need this locally
+    // computed color. IBL ambient is unused by both primary resolve and diffuse
+    // GI rays here.
     
     if (rayType == RAY_TYPE_GI_EVAL)
     {
@@ -1061,7 +1060,7 @@ void ClosestHitImpl(inout RayPayload payload,
         color = Lo + emissive;
     }
     
-    // In PT mode, we skip tone mapping here and do it in RayGen after accumulation
+    // In PT mode, we skip tone mapping here and do it after accumulation.
     PayloadSetColor(payload, color);
     payload.t = RayTCurrent();
     payload.packedNormal = PackNormalOctahedron(N);
