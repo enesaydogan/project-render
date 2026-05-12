@@ -97,8 +97,8 @@ float GetGPUFrameTimeMs();
 // available)
 void GetShaderCounters(UINT *outCounters, UINT maxCount);
 
-// Path tracer backend selection. Wavefront modes are scaffolded first and will
-// replace the legacy monolithic path as parity lands.
+// Path tracer backend selection. Legacy is retained only as a deprecated scene
+// value; runtime selection clamps it to WavefrontOptimized.
 enum class PathTracingBackend {
   Legacy = 0,
   WavefrontParity = 1,

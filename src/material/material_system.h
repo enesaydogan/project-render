@@ -91,6 +91,10 @@ const char *GetSecondarySurfaceLabel(const Asset::Material &material);
 const char *GetMicrosurfaceTextureLabel(const Asset::Material &material);
 
 void ApplyPreset(Asset::Material &material, int presetIndex);
+const char *MaterialClassName(uint32_t materialClass);
+uint32_t ClampMaterialClass(uint32_t materialClass);
+void ApplyMaterialClassAuthoringDefaults(Asset::Material &material,
+                                         uint32_t materialClass);
 bool MaterialAffectsRtStructure(const Asset::Material &material);
 
 int GetTextureIndex(const Asset::Material &material, TextureSlot slot);

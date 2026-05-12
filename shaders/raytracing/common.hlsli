@@ -375,9 +375,9 @@ struct WavefrontPathState
     uint packedState;
 };
 
-static const uint WAVEFRONT_ABI_VERSION = 4u;
+static const uint WAVEFRONT_ABI_VERSION = 5u;
 static const uint WAVEFRONT_PATH_STATE_DWORDS = 12u;
-static const uint WAVEFRONT_HIT_RECORD_DWORDS = 36u;
+static const uint WAVEFRONT_HIT_RECORD_DWORDS = 34u;
 static const uint WAVEFRONT_SHADOW_TASK_DWORDS = 12u;
 static const uint WAVEFRONT_DISPATCH_ARGS_DWORDS = 4u;
 static const uint WAVEFRONT_QUEUE_PATH_A = 0u;
@@ -396,7 +396,6 @@ struct WavefrontHitRecord
     uint packedColor1;
     uint packedNormal;
     uint packedAlbedo;
-    uint packedSurface;
     uint packedIorType;
     uint packedTransmission;
     uint packedSpecular;
@@ -409,7 +408,6 @@ struct WavefrontHitRecord
     float guideHitT;
     uint guidePackedNormal;
     uint guidePackedAlbedo;
-    uint guidePackedSurface;
     uint guidePackedIorType;
     uint guidePackedTransmission;
     uint guidePackedSpecular;
@@ -472,7 +470,6 @@ static const uint WAVEFRONT_RESOLVE_FLAG_PRIMARY_SURFACE_ONLY = 0x10000u;
 static const uint WAVEFRONT_RESOLVE_FLAG_FAST_GI = 0x20000u;
 static const uint WAVEFRONT_RESOLVE_FLAG_THIN_SECONDARY_SHADOWS = 0x40000u;
 static const uint WAVEFRONT_RESOLVE_FLAG_DEFER_ACCUMULATION = 0x80000u;
-static const uint WAVEFRONT_BACKEND_LEGACY = 0u;
 static const uint WAVEFRONT_BACKEND_PARITY = 1u;
 static const uint WAVEFRONT_BACKEND_OPTIMIZED = 2u;
 static const uint WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL = 0u;
@@ -672,16 +669,6 @@ inline uint WavefrontClassifyMaterialBinFromSurface(float4 surface,
         return WAVEFRONT_MATERIAL_BIN_GLOSSY_DIELECTRIC;
     }
     return WAVEFRONT_MATERIAL_BIN_DIFFUSE;
-}
-
-inline uint WavefrontClassifyMaterialBin(uint packedSurface,
-                                         uint packedIorType,
-                                         uint packedColor0,
-                                         uint packedColor1)
-{
-    return WavefrontClassifyMaterialBinFromSurface(
-        UnpackPayloadSurface(packedSurface), packedIorType, packedColor0,
-        packedColor1);
 }
 
 inline uint WavefrontPackMaterialSortKey(uint rayType,

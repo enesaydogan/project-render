@@ -121,6 +121,7 @@ private:
 
     // Surface tab
     QPushButton *m_baseColorButton = nullptr;
+    QComboBox *m_materialClassCombo = nullptr;
     QComboBox *m_workflowCombo = nullptr;
     QLabel *m_secondarySurfaceLabel = nullptr;
     QLabel *m_roughnessSurfaceLabel = nullptr;

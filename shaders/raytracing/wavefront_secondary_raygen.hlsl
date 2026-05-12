@@ -96,7 +96,6 @@ void WavefrontSecondaryRayGen()
     record.packedColor1 = payload.packedColor1;
     record.packedNormal = payload.packedNormal;
     record.packedAlbedo = payload.packedAlbedo;
-    record.packedSurface = payload.packedSurface;
     record.packedIorType = payload.packedIorType;
     record.packedTransmission = payload.packedTransmission;
     record.packedSpecular = payload.packedSpecular;
@@ -115,7 +114,6 @@ void WavefrontSecondaryRayGen()
     record.guideHitT = payload.t;
     record.guidePackedNormal = payload.packedNormal;
     record.guidePackedAlbedo = payload.packedAlbedo;
-    record.guidePackedSurface = payload.packedSurface;
     record.guidePackedIorType = payload.packedIorType;
     record.guidePackedTransmission = payload.packedTransmission;
     record.guidePackedSpecular = payload.packedSpecular;

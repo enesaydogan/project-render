@@ -170,7 +170,6 @@ struct WavefrontHitRecordGpu {
   uint32_t packedColor1;
   uint32_t packedNormal;
   uint32_t packedAlbedo;
-  uint32_t packedSurface;
   uint32_t packedIorType;
   uint32_t packedTransmission;
   uint32_t packedSpecular;
@@ -183,7 +182,6 @@ struct WavefrontHitRecordGpu {
   float guideHitT;
   uint32_t guidePackedNormal;
   uint32_t guidePackedAlbedo;
-  uint32_t guidePackedSurface;
   uint32_t guidePackedIorType;
   uint32_t guidePackedTransmission;
   uint32_t guidePackedSpecular;
@@ -191,7 +189,7 @@ struct WavefrontHitRecordGpu {
   uint32_t guideReserved1;
   float guideSurface[4];
 };
-static_assert(sizeof(WavefrontHitRecordGpu) == 144,
+static_assert(sizeof(WavefrontHitRecordGpu) == 136,
               "WavefrontHitRecordGpu must stay tightly packed.");
 
 struct WavefrontShadowTaskGpu {
@@ -221,9 +219,9 @@ struct WavefrontDispatchRaysRecordGpu {
 static_assert(sizeof(WavefrontDispatchRaysRecordGpu) == 112,
               "WavefrontDispatchRaysRecordGpu must match indirect buffer stride.");
 
-static constexpr UINT kWavefrontAbiVersion = 4;
+static constexpr UINT kWavefrontAbiVersion = 5;
 static constexpr UINT kWavefrontPathStateDwords = 12;
-static constexpr UINT kWavefrontHitRecordDwords = 36;
+static constexpr UINT kWavefrontHitRecordDwords = 34;
 static constexpr UINT kWavefrontShadowTaskDwords = 12;
 static constexpr UINT kWavefrontDispatchArgsDwords = 4;
 static constexpr UINT kWavefrontQueueCounterCount = 16;
@@ -259,7 +257,7 @@ static constexpr UINT64 kWavefrontCounterStrideBytes = sizeof(UINT);
 static constexpr UINT kWavefrontPrimaryMaterialBinStatsBase = 32u;
 static constexpr UINT kWavefrontSecondaryMaterialBinStatsBase = 40u;
 static constexpr UINT kWavefrontMaterialBinCount = 7u;
-static_assert(kWavefrontAbiVersion == 4,
+static_assert(kWavefrontAbiVersion == 5,
               "Bump shader WAVEFRONT_ABI_VERSION and docs with ABI changes.");
 static_assert(sizeof(WavefrontPathStateGpu) / sizeof(uint32_t) ==
                   kWavefrontPathStateDwords,
@@ -424,8 +422,7 @@ static uint32_t ComputeDxrFeatureMask(bool dlssActive, bool rrActive,
                                       bool finalDenoiserActive) {
   uint32_t mask = 0;
   if (dlssActive || finalDenoiserActive || debugViewActive ||
-      s_tonemapAoIntensity > 1.0e-4f ||
-      s_pathTracingBackend != DxrRenderer::PathTracingBackend::Legacy) {
+      s_tonemapAoIntensity > 1.0e-4f) {
     mask |= DxrFeature_AovOutput;
   }
   if (dlssActive || rrActive || s_tonemapAoIntensity > 1.0e-4f) {
@@ -2977,8 +2974,7 @@ static void DispatchWavefrontAccumulate(ID3D12GraphicsCommandList4 *list,
 }
 
 static void PrepareWavefrontBackendPipelines() {
-  if (s_pathTracingBackend == DxrRenderer::PathTracingBackend::Legacy ||
-      !s_device) {
+  if (!s_device) {
     return;
   }
 
@@ -6686,7 +6682,6 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   // we do not want to add more samples or modify the accumulation buffer.
 
   bool didPathTracingWork = false;
-  bool didLegacyDispatchRays = false;
   bool didWavefrontRestirSeed = false;
   if (!doDenoise && !reachedEndCondition) {
     // Start DispatchRays timer
@@ -6707,8 +6702,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
           s_shaderCountersGpuHandle, cpuCounters, s_shaderCountersBuffer.Get(),
           zeros, 0, nullptr);
     }
-    bool useWavefrontResolvedOutput = false;
-    if (s_pathTracingBackend != PathTracingBackend::Legacy && cameraCB) {
+    if (cameraCB) {
       SetWavefrontStage("bootstrap");
       DispatchWavefrontBootstrap(dxrList.Get(), cameraCB);
       DispatchWavefrontPrepareIndirectArgs(
@@ -6741,7 +6735,6 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         DispatchWavefrontResolvePrimary(
             dxrList.Get(), cameraCB, materialCB, meshDataSB, materialExtraSB,
             kWavefrontResolveFlagPrimarySurfaceOnly);
-        useWavefrontResolvedOutput = true;
         didPathTracingWork = true;
       } else if (s_pathTracingBackend == PathTracingBackend::WavefrontOptimized) {
         ClearWavefrontShadowContribution(dxrList.Get());
@@ -6903,18 +6896,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         SetWavefrontStage("accumulate");
         DispatchWavefrontAccumulate(dxrList.Get(), cameraCB);
 
-        useWavefrontResolvedOutput = true;
         didPathTracingWork = true;
         didWavefrontRestirSeed = true;
       }
-    }
-
-    if (!useWavefrontResolvedOutput) {
-      SetWavefrontStage("legacy-dispatch");
-      BindRayTracingGlobalRoot();
-      dxrList->DispatchRays(&dispatchDesc);
-      didPathTracingWork = true;
-      didLegacyDispatchRays = true;
     }
 
     // End DispatchRays timer
@@ -6950,13 +6934,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
   // Phase 4: decoupled ReSTIR DI temporal/spatial reuse in a dedicated compute
   // pass. RayGen now writes initial candidates, and this pass performs reuse.
-  if (didLegacyDispatchRays || didWavefrontRestirSeed) {
-    if (didLegacyDispatchRays && s_pathTracingBackend == PathTracingBackend::Legacy &&
-        cameraCB && s_asyncRestirAvailable && hasAsyncCameraSnapshot &&
-        UploadAsyncRestirCamera(asyncCameraSnapshot)) {
-      // Submit on async queue after this frame's direct list executes.
-      s_asyncRestirPending = true;
-    } else if (cameraCB) {
+  if (didWavefrontRestirSeed) {
+    if (cameraCB) {
       SetWavefrontStage("restir-spatial");
       DispatchRestirSpatialPasses(dxrList.Get(), cameraCB);
     }

@@ -130,6 +130,76 @@ const char *GetMicrosurfaceTextureLabel(const Asset::Material &material) {
   return UsesReflectionGlossiness(material) ? "Glossiness" : "Roughness";
 }
 
+uint32_t ClampMaterialClass(uint32_t materialClass) {
+  return (std::min)(materialClass, Asset::Material::kMaterialClassEmissive);
+}
+
+const char *MaterialClassName(uint32_t materialClass) {
+  switch (ClampMaterialClass(materialClass)) {
+  case Asset::Material::kMaterialClassMetal:
+    return "Metal";
+  case Asset::Material::kMaterialClassGlass:
+    return "Glass";
+  case Asset::Material::kMaterialClassFabric:
+    return "Fabric";
+  case Asset::Material::kMaterialClassLeaf:
+    return "Leaf";
+  case Asset::Material::kMaterialClassEmissive:
+    return "Emissive";
+  case Asset::Material::kMaterialClassGeneric:
+  default:
+    return "Generic";
+  }
+}
+
+void ApplyMaterialClassAuthoringDefaults(Asset::Material &m,
+                                         uint32_t materialClass) {
+  m.schemaVersion = Asset::Material::kSchemaVersionCoronaArchviz;
+  m.materialClass = ClampMaterialClass(materialClass);
+  switch (m.materialClass) {
+  case Asset::Material::kMaterialClassMetal:
+    m.workflow = Asset::Material::kWorkflowMetalRoughness;
+    m.metalness = (std::max)(m.metalness, 1.0f);
+    m.transmissionWeight = 0.0f;
+    m.thinWalled = 0.0f;
+    break;
+  case Asset::Material::kMaterialClassGlass:
+    m.workflow = Asset::Material::kWorkflowMetalRoughness;
+    m.metalness = 0.0f;
+    m.transmissionWeight = (std::max)(m.transmissionWeight, 1.0f);
+    m.ior = (std::clamp)(m.ior, 1.3f, 1.8f);
+    if (m.diffuseColor[3] >= 0.999f) {
+      m.diffuseColor[3] = 0.35f;
+    }
+    m.alphaMode = "BLEND";
+    break;
+  case Asset::Material::kMaterialClassFabric:
+    m.metalness = 0.0f;
+    m.transmissionWeight = 0.0f;
+    m.sheenWeight = (std::max)(m.sheenWeight, 0.35f);
+    m.roughness = (std::max)(m.roughness, 0.55f);
+    break;
+  case Asset::Material::kMaterialClassLeaf:
+    m.metalness = 0.0f;
+    m.transmissionWeight = 0.0f;
+    m.translucency = (std::max)(m.translucency, 0.45f);
+    m.thinWalled = 1.0f;
+    break;
+  case Asset::Material::kMaterialClassEmissive:
+    if (m.emissiveColor[0] <= 1.0e-4f && m.emissiveColor[1] <= 1.0e-4f &&
+        m.emissiveColor[2] <= 1.0e-4f) {
+      m.emissiveColor[0] = 1.0f;
+      m.emissiveColor[1] = 1.0f;
+      m.emissiveColor[2] = 1.0f;
+    }
+    m.emissiveIntensity = (std::max)(m.emissiveIntensity, 1.0f);
+    break;
+  case Asset::Material::kMaterialClassGeneric:
+  default:
+    break;
+  }
+}
+
 void ApplyPreset(Asset::Material &m, int presetIndex) {
   auto SetRoughness = [&](float roughness) {
     m.roughness = (std::clamp)(roughness, 0.0f, 1.0f);

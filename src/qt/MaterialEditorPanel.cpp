@@ -466,6 +466,17 @@ void MaterialEditorPanel::createUi()
     surfaceForm->addRow(tr("Base Color"), m_baseColorButton);
     surfaceForm->addRow(m_textureSlots[Albedo].group);
 
+    m_materialClassCombo = new QComboBox(surfaceTab);
+    m_materialClassCombo->addItems({
+        tr("Generic"),
+        tr("Metal"),
+        tr("Glass"),
+        tr("Fabric"),
+        tr("Leaf"),
+        tr("Emissive"),
+    });
+    surfaceForm->addRow(tr("Material Class"), m_materialClassCombo);
+
     m_workflowCombo = new QComboBox(surfaceTab);
     m_workflowCombo->addItems({
         tr("Metalness / Roughness"),
@@ -906,6 +917,16 @@ void MaterialEditorPanel::createUi()
                 m.metalness = 0.0f;
             }
         });
+    });
+
+    connect(m_materialClassCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([index](Asset::Material &m) {
+            MaterialSystem::ApplyMaterialClassAuthoringDefaults(
+                m, static_cast<uint32_t>(std::clamp(index, 0, 5)));
+        }, true);
     });
 
     connect(m_roughness->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
@@ -1504,6 +1525,9 @@ void MaterialEditorPanel::syncInspectorMaterialState(const Asset::Material &mat,
                                                      bool refreshTextureUi)
 {
     setColorButton(m_baseColorButton, getColorFromMaterial(mat.diffuseColor));
+    SyncComboBoxIndex(m_materialClassCombo,
+                      static_cast<int>(MaterialSystem::ClampMaterialClass(
+                          mat.materialClass)));
     SyncComboBoxIndex(m_workflowCombo,
                       static_cast<int>(std::clamp(mat.workflow, 0u, 1u)));
     updateWorkflowUi(mat);

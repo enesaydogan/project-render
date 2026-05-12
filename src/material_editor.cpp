@@ -500,6 +500,17 @@ void Draw(HWND hwnd, bool &visible) {
             if (ImGui::ColorEdit3("Base Color", mat.diffuseColor))
               DxrRenderer::ResetAccumulation();
 
+            int materialClass =
+                (int)MaterialSystem::ClampMaterialClass(mat.materialClass);
+            const char *materialClasses[] = {
+                "Generic", "Metal", "Glass", "Fabric", "Leaf", "Emissive"};
+            if (ImGui::Combo("Material Class", &materialClass,
+                             materialClasses, IM_ARRAYSIZE(materialClasses))) {
+              MaterialSystem::ApplyMaterialClassAuthoringDefaults(
+                  mat, (uint32_t)materialClass);
+              MarkOpacityDirty();
+            }
+
             int workflow = (int)mat.workflow;
             const char *workflows[] = {"Metalness / Roughness",
                                        "Reflection / Glossiness"};

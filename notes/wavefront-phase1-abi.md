@@ -1,6 +1,6 @@
 # Wavefront Phase 1 ABI
 
-Status: frozen for the current wavefront backend ABI v4.
+Status: frozen for the current wavefront backend ABI v5.
 
 This note records the Phase 1 contract for the queue-driven DXR backend. Later
 phases may add new queues or reserved fields, but changes to the fields below
@@ -50,12 +50,11 @@ size checks live in `src/dxr_renderer.cpp`.
 bounce counts. Medium tracking is not encoded yet; future medium support must
 use a versioned extension rather than repurposing existing bits silently.
 
-`WavefrontHitRecord` is 36 dwords:
+`WavefrontHitRecord` is 34 dwords:
 - hit distance, pixel index, packed color/material payload, packed path state,
   and material sort key
 - full-precision roughness, metallic, transmission, and translucency used by
-  wavefront shading; the packed surface value remains only for compatibility
-  and diagnostics
+  wavefront shading
 - non-jittered primary guide origin/direction/hit payload for stable DLSS-RR
   AOVs
 - reserved guide fields and full-precision guide surface metadata
