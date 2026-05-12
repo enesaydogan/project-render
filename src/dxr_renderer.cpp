@@ -252,6 +252,7 @@ static constexpr UINT kWavefrontQueueFlagMaterialBinShift = 8u;
 static constexpr UINT kWavefrontResolveFlagPrimarySurfaceOnly = 0x10000u;
 static constexpr UINT kWavefrontResolveFlagFastGi = 0x20000u;
 static constexpr UINT kWavefrontResolveFlagThinSecondaryShadows = 0x40000u;
+static constexpr UINT kWavefrontResolveFlagDeferAccumulation = 0x80000u;
 static constexpr UINT64 kWavefrontCounterStrideBytes = sizeof(UINT);
 static constexpr UINT kWavefrontPrimaryMaterialBinStatsBase = 32u;
 static constexpr UINT kWavefrontSecondaryMaterialBinStatsBase = 40u;
@@ -751,6 +752,7 @@ static ComPtr<ID3D12PipelineState> s_wavefrontResolvePSO;
 static ComPtr<ID3D12PipelineState> s_wavefrontRestirSeedPSO;
 static ComPtr<ID3D12PipelineState> s_wavefrontSecondaryResolvePSO;
 static ComPtr<ID3D12PipelineState> s_wavefrontShadowIntegratePSO;
+static ComPtr<ID3D12PipelineState> s_wavefrontAccumulatePSO;
 static ComPtr<ID3D12CommandSignature> s_wavefrontDispatchCommandSignature;
 static ComPtr<ID3D12CommandSignature> s_wavefrontDispatchRaysCommandSignature;
 static ComPtr<ID3D12Resource> s_wavefrontIndirectDispatchUploadBuffer;
@@ -988,6 +990,7 @@ static void EnsureWavefrontResolvePipeline();
 static void EnsureWavefrontRestirSeedPipeline();
 static void EnsureWavefrontSecondaryResolvePipeline();
 static void EnsureWavefrontShadowIntegratePipeline();
+static void EnsureWavefrontAccumulatePipeline();
 static void EnsureWavefrontIndirectCommandSignatures();
 static void PrepareWavefrontBackendPipelines();
 static void DispatchWavefrontBootstrap(ID3D12GraphicsCommandList4 *list,
@@ -1630,8 +1633,8 @@ static void EnsureWavefrontBootstrapPipeline() {
 
   D3D12_DESCRIPTOR_RANGE uavRange = {};
   uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-  uavRange.NumDescriptors = 8; // u25..u32
-  uavRange.BaseShaderRegister = 25;
+  uavRange.NumDescriptors = DXR_HEAP_UAV_COUNT; // u0..u33
+  uavRange.BaseShaderRegister = 0;
   uavRange.RegisterSpace = 0;
   uavRange.OffsetInDescriptorsFromTableStart =
       D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
@@ -1736,9 +1739,7 @@ static void DispatchWavefrontBootstrap(ID3D12GraphicsCommandList4 *list,
 
   UINT inc = s_device->GetDescriptorHandleIncrementSize(
       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-  D3D12_GPU_DESCRIPTOR_HANDLE wavefrontUavTable = s_outputUAVGpu;
-  wavefrontUavTable.ptr += (UINT64)25 * (UINT64)inc;
-  list->SetComputeRootDescriptorTable(2, wavefrontUavTable);
+  list->SetComputeRootDescriptorTable(2, s_outputUAVGpu);
   list->SetComputeRootShaderResourceView(
       3, s_lightBuffer ? s_lightBuffer->GetGPUVirtualAddress() : 0);
 
@@ -2634,6 +2635,44 @@ static void EnsureWavefrontShadowIntegratePipeline() {
   }
 }
 
+static void EnsureWavefrontAccumulatePipeline() {
+  EnsureWavefrontResolvePipeline();
+  if (!s_wavefrontResolveRootSig || s_wavefrontAccumulatePSO) {
+    return;
+  }
+
+  ComPtr<IDxcBlob> cs;
+  try {
+    std::vector<std::wstring> defines;
+    cs = s_dxcHelper.Compile(L"shaders/wavefront_accumulate_cs.hlsl",
+                             L"CSMain", L"cs_6_5", defines);
+  } catch (const std::exception &e) {
+    fprintf(stderr,
+            "DxrRenderer: Wavefront accumulate CS compile failed: %s\n",
+            e.what());
+    return;
+  }
+  if (!cs) {
+    fprintf(stderr, "DxrRenderer: Wavefront accumulate CS blob null\n");
+    return;
+  }
+
+  D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
+  psoDesc.pRootSignature = s_wavefrontResolveRootSig.Get();
+  psoDesc.CS.pShaderBytecode = cs->GetBufferPointer();
+  psoDesc.CS.BytecodeLength = cs->GetBufferSize();
+  HRESULT hrPso = s_device->CreateComputePipelineState(
+      &psoDesc, IID_PPV_ARGS(&s_wavefrontAccumulatePSO));
+  if (FAILED(hrPso)) {
+    fprintf(stderr,
+            "DxrRenderer: Wavefront accumulate PSO creation failed: "
+            "0x%08x\n",
+            (unsigned)hrPso);
+    DumpD3D12InfoQueueMessages("Wavefront accumulate PSO create");
+    s_wavefrontAccumulatePSO.Reset();
+  }
+}
+
 static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
                                             ID3D12Resource *cameraCB,
                                             ID3D12Resource *materialCB,
@@ -2868,7 +2907,8 @@ static void ClearWavefrontShadowContribution(
 }
 
 static void DispatchWavefrontShadowIntegration(
-    ID3D12GraphicsCommandList4 *list, ID3D12Resource *cameraCB) {
+    ID3D12GraphicsCommandList4 *list, ID3D12Resource *cameraCB,
+    UINT integrateFlags = 0u) {
   if (!list || !cameraCB || !s_srvHeap || !s_device ||
       !s_wavefrontShadowContributionUAV || s_lastWavefrontBootstrapPathCount == 0) {
     return;
@@ -2885,9 +2925,43 @@ static void DispatchWavefrontShadowIntegration(
   list->SetComputeRootSignature(s_wavefrontResolveRootSig.Get());
   list->SetComputeRootConstantBufferView(0, cameraCB->GetGPUVirtualAddress());
 
-  const UINT integrateConstants[4] = {s_outputWidth, s_outputHeight, 0u, 0u};
+  const UINT integrateConstants[4] = {s_outputWidth, s_outputHeight,
+                                      integrateFlags, 0u};
   list->SetComputeRoot32BitConstants(1, _countof(integrateConstants),
                                      integrateConstants, 0);
+  list->SetComputeRootDescriptorTable(2, s_outputUAVGpu);
+
+  const UINT groupCountX = (s_outputWidth + 7u) / 8u;
+  const UINT groupCountY = (s_outputHeight + 7u) / 8u;
+  list->Dispatch(groupCountX, groupCountY, 1);
+
+  D3D12_RESOURCE_BARRIER uavBarrier = {};
+  uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+  uavBarrier.UAV.pResource = nullptr;
+  list->ResourceBarrier(1, &uavBarrier);
+}
+
+static void DispatchWavefrontAccumulate(ID3D12GraphicsCommandList4 *list,
+                                        ID3D12Resource *cameraCB) {
+  if (!list || !cameraCB || !s_srvHeap || !s_device ||
+      s_lastWavefrontBootstrapPathCount == 0) {
+    return;
+  }
+
+  EnsureWavefrontAccumulatePipeline();
+  if (!s_wavefrontAccumulatePSO || !s_wavefrontResolveRootSig) {
+    return;
+  }
+
+  ID3D12DescriptorHeap *rtHeaps[] = {s_srvHeap.Get()};
+  list->SetDescriptorHeaps(1, rtHeaps);
+  list->SetPipelineState(s_wavefrontAccumulatePSO.Get());
+  list->SetComputeRootSignature(s_wavefrontResolveRootSig.Get());
+  list->SetComputeRootConstantBufferView(0, cameraCB->GetGPUVirtualAddress());
+
+  const UINT accumulateConstants[4] = {s_outputWidth, s_outputHeight, 0u, 0u};
+  list->SetComputeRoot32BitConstants(1, _countof(accumulateConstants),
+                                     accumulateConstants, 0);
   list->SetComputeRootDescriptorTable(2, s_outputUAVGpu);
 
   const UINT groupCountX = (s_outputWidth + 7u) / 8u;
@@ -2921,6 +2995,7 @@ static void PrepareWavefrontBackendPipelines() {
     EnsureWavefrontRestirSeedPipeline();
     EnsureWavefrontSecondaryResolvePipeline();
     EnsureWavefrontShadowIntegratePipeline();
+    EnsureWavefrontAccumulatePipeline();
     EnsureRestirSpatialPipeline();
     EnsureRestirGiSpatialPipeline();
   }
@@ -6631,6 +6706,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     if (s_pathTracingBackend != PathTracingBackend::Legacy && cameraCB) {
       SetWavefrontStage("bootstrap");
       DispatchWavefrontBootstrap(dxrList.Get(), cameraCB);
+      DispatchWavefrontPrepareIndirectArgs(
+          dxrList.Get(), kWavefrontQueuePathA, 0u, ~0u, 0u);
       DispatchWavefrontCounterReset(dxrList.Get(), kWavefrontMaterialBinCounterBase, 0u, kWavefrontMaterialBinCount);
       BindRayTracingGlobalRoot();
       SetWavefrontStage("primary-visibility");
@@ -6665,7 +6742,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         ClearWavefrontShadowContribution(dxrList.Get());
         const UINT wavefrontFastTransportFlags =
             kWavefrontResolveFlagFastGi |
-            kWavefrontResolveFlagThinSecondaryShadows;
+            kWavefrontResolveFlagThinSecondaryShadows |
+            kWavefrontResolveFlagDeferAccumulation;
 
         // ReSTIR DI seed: consume queue-produced primary hit records as the
         // scheduler task source. Spatial reuse still runs later on the same
@@ -6814,7 +6892,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         }
 
         SetWavefrontStage("shadow-integrate");
-        DispatchWavefrontShadowIntegration(dxrList.Get(), cameraCB);
+        DispatchWavefrontShadowIntegration(
+            dxrList.Get(), cameraCB, kWavefrontResolveFlagDeferAccumulation);
+
+        SetWavefrontStage("accumulate");
+        DispatchWavefrontAccumulate(dxrList.Get(), cameraCB);
 
         useWavefrontResolvedOutput = true;
         didPathTracingWork = true;

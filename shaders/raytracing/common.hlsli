@@ -26,6 +26,14 @@ inline float3 LinearToSRGB(float3 color) {
 RaytracingAccelerationStructure g_accel : register(t0);
 RWTexture2D<float4> g_output : register(u0);
 RWTexture2D<float4> g_accumulation : register(u1);
+RWTexture2D<float4> g_reservoir0 : register(u2);
+RWTexture2D<float4> g_reservoir1 : register(u3);
+RWTexture2D<float4> g_gi_reservoir_a0 : register(u4);
+RWTexture2D<float4> g_gi_reservoir_a1 : register(u5);
+RWTexture2D<float4> g_gi_reservoir_a2 : register(u6);
+RWTexture2D<float4> g_gi_reservoir_b0 : register(u7);
+RWTexture2D<float4> g_gi_reservoir_b1 : register(u8);
+RWTexture2D<float4> g_gi_reservoir_b2 : register(u9);
 
 // Streamline / DLSS inputs (u10+)
 RWTexture2D<float> g_depth : register(u10);
@@ -38,6 +46,7 @@ RWTexture2D<float> g_specHitDistance : register(u17);
 RWTexture2D<float2> g_specularMotionVectors : register(u18);
 RWTexture2D<float4> g_transmissionAccumulation : register(u19);
 RWTexture2D<float> g_transmissionVariance : register(u20);
+RWTexture2D<float> g_variance : register(u22);
 RWStructuredBuffer<uint> g_wavefrontShadowContribution : register(u23);
 
 // === Shader instrumentation counters (debug) ===
@@ -455,6 +464,10 @@ static const uint WAVEFRONT_QUEUE_FLAG_MATERIAL_BIN_SHIFT = 8u;
 static const uint WAVEFRONT_RESOLVE_FLAG_PRIMARY_SURFACE_ONLY = 0x10000u;
 static const uint WAVEFRONT_RESOLVE_FLAG_FAST_GI = 0x20000u;
 static const uint WAVEFRONT_RESOLVE_FLAG_THIN_SECONDARY_SHADOWS = 0x40000u;
+static const uint WAVEFRONT_RESOLVE_FLAG_DEFER_ACCUMULATION = 0x80000u;
+static const uint WAVEFRONT_BACKEND_LEGACY = 0u;
+static const uint WAVEFRONT_BACKEND_PARITY = 1u;
+static const uint WAVEFRONT_BACKEND_OPTIMIZED = 2u;
 static const uint WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL = 0u;
 static const uint WAVEFRONT_LIGHT_SAMPLE_FLAT = 1u;
 static const uint WAVEFRONT_LIGHT_SAMPLE_ENV = 2u;

@@ -29,14 +29,22 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     float3 contribution = float3(packedR, packedG, packedB) *
                           kWavefrontShadowContributionInvScale;
 
-    float4 accum = g_accumulation[pixel];
-    float historyCount = max(accum.a, 1.0);
-    float3 outputContribution = (dlssRayReconstruction > 0.5)
-                                    ? contribution
-                                    : (contribution / historyCount);
+    const bool deferAccumulation =
+        (reserved0 & WAVEFRONT_RESOLVE_FLAG_DEFER_ACCUMULATION) != 0u;
+    if (deferAccumulation) {
+        g_output[pixel] = float4(g_output[pixel].rgb + contribution,
+                                 g_output[pixel].a);
+    } else {
+        float4 accum = g_accumulation[pixel];
+        float historyCount = max(accum.a, 1.0);
+        float3 outputContribution = (dlssRayReconstruction > 0.5)
+                                        ? contribution
+                                        : (contribution / historyCount);
 
-    g_output[pixel] = float4(g_output[pixel].rgb + outputContribution, 1.0);
-    g_accumulation[pixel] = float4(accum.rgb + contribution, accum.a);
+        g_output[pixel] = float4(g_output[pixel].rgb + outputContribution,
+                                 1.0);
+        g_accumulation[pixel] = float4(accum.rgb + contribution, accum.a);
+    }
     g_wavefrontShadowContribution[baseIndex + 0u] = 0u;
     g_wavefrontShadowContribution[baseIndex + 1u] = 0u;
     g_wavefrontShadowContribution[baseIndex + 2u] = 0u;

@@ -10,9 +10,6 @@ cbuffer WavefrontRestirSeedConstants : register(b1)
     uint reservedFlags;
 };
 
-RWTexture2D<float4> g_reservoir0 : register(u2);
-RWTexture2D<float4> g_reservoir1 : register(u3);
-
 inline uint2 WavefrontRestirPixelCoord(uint pixelIndex)
 {
     return uint2(pixelIndex % outputWidth, pixelIndex / outputWidth);
@@ -48,6 +45,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     const uint dispatchIndex = dispatchThreadID.x;
     uint pathIndex = dispatchIndex;
+    const uint queueActiveCount =
+        min(activeCount, g_wavefrontQueueCounters[WAVEFRONT_QUEUE_PATH_A]);
     const bool useMaterialBinList =
         (reservedFlags & WAVEFRONT_QUEUE_FLAG_USE_MATERIAL_BIN_LIST) != 0u;
     const bool missOnly =
@@ -72,7 +71,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             g_wavefrontMaterialBinIndices[materialBin * perBinCapacity +
                                           dispatchIndex];
     }
-    if (pathIndex >= activeCount) {
+    if (pathIndex >= queueActiveCount) {
         return;
     }
 
@@ -97,7 +96,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         float3 hitPos = state.origin + rayDir * record.hitT;
         float3 normal = UnpackNormalOctahedron(record.packedNormal);
         RNG rng;
-        rng.state = state.rngState ^ (pathIndex * 0x6C8E9CF5u) ^ 0xA24BAED5u;
+        rng.state = state.rngState ^
+                    (record.pixelIndex * 0x6C8E9CF5u) ^ 0xA24BAED5u;
 
         WavefrontLightSample sunSample =
             WavefrontSampleDirectionalLight(1.0);

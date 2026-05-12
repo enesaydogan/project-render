@@ -3,9 +3,6 @@
 #include "brdf_lib.hlsl"
 #include "lights_lib.hlsl"
 
-RWTexture2D<float4> g_reservoir0 : register(u2);
-RWTexture2D<float4> g_reservoir1 : register(u3);
-
 static const uint kGroupSize = 8;
 static const uint kTileSize = kGroupSize + 2;
 

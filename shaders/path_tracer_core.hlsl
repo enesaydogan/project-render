@@ -8,17 +8,6 @@
 #include "lights_lib.hlsl"
 #include "restir_lib.hlsl"
 
-// Matches DXR_HEAP_VARIANCE_UAV_OFFSET (u22) in dxr_renderer.cpp.
-RWTexture2D<float> g_variance : register(u22);
-RWTexture2D<float4> g_reservoir0 : register(u2);
-RWTexture2D<float4> g_reservoir1 : register(u3);
-RWTexture2D<float4> g_gi_reservoir_a0 : register(u4);
-RWTexture2D<float4> g_gi_reservoir_a1 : register(u5);
-RWTexture2D<float4> g_gi_reservoir_a2 : register(u6);
-RWTexture2D<float4> g_gi_reservoir_b0 : register(u7);
-RWTexture2D<float4> g_gi_reservoir_b1 : register(u8);
-RWTexture2D<float4> g_gi_reservoir_b2 : register(u9);
-
 #include "brdf_lib.hlsl"
 
 // Cosine-weighted cone sampling around a direction (very small, stable approximation)

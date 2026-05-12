@@ -240,7 +240,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         float3 specularAlbedo = ComputeWavefrontSpecularThroughput(
             albedo, metallic, ior, specularWeight, specularColor, transmission);
         RNG rng;
-        rng.state = state.rngState ^ (pathIndex * 0x7F4A7C15u) ^ 0xC2B2AE3Du;
+        rng.state = state.rngState ^
+                    (record.pixelIndex * 0x7F4A7C15u) ^ 0xC2B2AE3Du;
         const uint maxSpecularBounceCount =
             (maxSpecularBounces > 0.0) ? (uint)maxSpecularBounces : 0u;
         const uint maxRefractiveBounceCount =

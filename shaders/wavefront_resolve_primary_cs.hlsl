@@ -18,15 +18,6 @@ static const uint kWavefrontSecondaryQueueCounter = WAVEFRONT_QUEUE_PATH_B;
 static const uint kWavefrontShadowQueueCounter = WAVEFRONT_QUEUE_SHADOW;
 static const float kWavefrontRayBias = 0.002f;
 
-RWTexture2D<float4> g_reservoir0 : register(u2);
-RWTexture2D<float4> g_reservoir1 : register(u3);
-RWTexture2D<float4> g_gi_reservoir_a0 : register(u4);
-RWTexture2D<float4> g_gi_reservoir_a1 : register(u5);
-RWTexture2D<float4> g_gi_reservoir_a2 : register(u6);
-RWTexture2D<float4> g_gi_reservoir_b0 : register(u7);
-RWTexture2D<float4> g_gi_reservoir_b1 : register(u8);
-RWTexture2D<float4> g_gi_reservoir_b2 : register(u9);
-
 inline uint2 WavefrontPixelCoord(uint pixelIndex)
 {
     return uint2(pixelIndex % outputWidth, pixelIndex / outputWidth);
@@ -961,6 +952,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     const uint dispatchIndex = dispatchThreadID.x;
     uint pathIndex = dispatchIndex;
+    const uint queueActiveCount =
+        min(activeCount, g_wavefrontQueueCounters[WAVEFRONT_QUEUE_PATH_A]);
     const bool useMaterialBinList =
         (reservedFlags & WAVEFRONT_QUEUE_FLAG_USE_MATERIAL_BIN_LIST) != 0u;
     const bool missOnly =
@@ -985,7 +978,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             g_wavefrontMaterialBinIndices[materialBin * perBinCapacity +
                                           dispatchIndex];
     }
-    if (pathIndex >= activeCount) {
+    if (pathIndex >= queueActiveCount) {
         return;
     }
 
@@ -997,7 +990,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     }
 
     if (dispatchIndex == 0u && !useMaterialBinList) {
-        g_wavefrontStats[8] = activeCount;
+        g_wavefrontStats[8] = queueActiveCount;
     }
 
     float2 currScreen = float2(pixel) + 0.5;
@@ -1012,6 +1005,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     }
     const bool primarySurfaceOnly =
         (reservedFlags & WAVEFRONT_RESOLVE_FLAG_PRIMARY_SURFACE_ONLY) != 0u;
+    const bool deferAccumulation =
+        (reservedFlags & WAVEFRONT_RESOLVE_FLAG_DEFER_ACCUMULATION) != 0u;
 
     float3 color = WavefrontHitRecordGetColor(record) * pathThroughput;
     float depth = (dlssRayReconstruction > 0.5) ? farZ : 1.0;
@@ -1081,7 +1076,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 
         if (!primarySurfaceOnly) {
             RNG rng;
-            rng.state = state.rngState ^ (pathIndex * 0x9E3779B9u) ^ 0xB5297A4Du;
+            rng.state = state.rngState ^
+                        (record.pixelIndex * 0x9E3779B9u) ^ 0xB5297A4Du;
             const uint maxSpecularBounceCount =
                 (maxSpecularBounces > 0.0) ? (uint)maxSpecularBounces : 0u;
             const uint maxRefractiveBounceCount =
@@ -1433,17 +1429,23 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     }
 
     color = max(color, 0.0);
-    float4 history = g_accumulation[pixel];
-    float historyCount = history.a;
-    bool invalidHistory = !isfinite(historyCount) || (historyCount < 1.0) ||
-                          any(!isfinite(history.rgb));
-    float3 historySum = invalidHistory ? float3(0.0, 0.0, 0.0) : history.rgb;
-    float nextCount = invalidHistory ? 1.0 : (historyCount + 1.0);
-    float3 nextSum = historySum + color;
-    g_accumulation[pixel] = float4(nextSum, nextCount);
-    g_output[pixel] = (dlssRayReconstruction > 0.5)
-                          ? float4(color, 1.0)
-                          : float4(nextSum / max(nextCount, 1.0), 1.0);
+    if (deferAccumulation) {
+        g_output[pixel] = float4(color, 1.0);
+    } else {
+        float4 history = g_accumulation[pixel];
+        float historyCount = history.a;
+        bool invalidHistory = !isfinite(historyCount) ||
+                              (historyCount < 1.0) ||
+                              any(!isfinite(history.rgb));
+        float3 historySum =
+            invalidHistory ? float3(0.0, 0.0, 0.0) : history.rgb;
+        float nextCount = invalidHistory ? 1.0 : (historyCount + 1.0);
+        float3 nextSum = historySum + color;
+        g_accumulation[pixel] = float4(nextSum, nextCount);
+        g_output[pixel] = (dlssRayReconstruction > 0.5)
+                              ? float4(color, 1.0)
+                              : float4(nextSum / max(nextCount, 1.0), 1.0);
+    }
     g_depth[pixel] = depth;
     g_linearDepth[pixel] = linearDepth;
     g_motionVectors[pixel] = motion;
