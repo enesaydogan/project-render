@@ -14,6 +14,7 @@
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QTabWidget>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -102,37 +103,67 @@ void ScatterPanel::createUi()
     m_modelEnabled = new QCheckBox(tr("Enabled"), modelGroup);
     m_modelSeed = new QSpinBox(modelGroup);
     m_modelSeed->setRange(1, 2147483647);
+    m_previewDensityScale = CreateDoubleSpin(0.0, 10.0, 0.1, 2);
+    m_previewBudget = new QSpinBox(modelGroup);
+    m_previewBudget->setRange(0, 2000000);
     modelForm->addRow(tr("Name"), m_modelName);
     modelForm->addRow(tr("State"), m_modelEnabled);
     modelForm->addRow(tr("Seed"), m_modelSeed);
+    modelForm->addRow(tr("Preview Density"), m_previewDensityScale);
+    modelForm->addRow(tr("Preview Budget"), m_previewBudget);
     layout->addWidget(modelGroup);
 
-    auto *assignmentButtons = new QHBoxLayout();
+    auto *targetButtons = new QHBoxLayout();
     m_addTargetsButton = new QPushButton(tr("Add Targets"), this);
     m_addTargetsButton->setToolTip(tr("Add meshes from the current scene selection as scatter surfaces"));
+    m_pickTargetButton = new QPushButton(tr("Pick Target"), this);
+    m_pickTargetButton->setToolTip(tr("Click a viewport surface to add it to this scatter model"));
+    m_cancelPickButton = new QPushButton(tr("Cancel Pick"), this);
+    m_cancelPickButton->setToolTip(tr("Stop viewport scatter-target picking"));
+    targetButtons->addWidget(m_addTargetsButton);
+    targetButtons->addWidget(m_pickTargetButton);
+    targetButtons->addWidget(m_cancelPickButton);
+    layout->addLayout(targetButtons);
+
+    auto *objectButtons = new QHBoxLayout();
     m_addObjectsButton = new QPushButton(tr("Add Objects"), this);
     m_addObjectsButton->setToolTip(tr("Use meshes from the current scene selection as scatter prototypes"));
-    assignmentButtons->addWidget(m_addTargetsButton);
-    assignmentButtons->addWidget(m_addObjectsButton);
-    layout->addLayout(assignmentButtons);
+    m_cleanupObjectsButton = new QPushButton(tr("Clean Objects"), this);
+    m_cleanupObjectsButton->setToolTip(tr("Remove scatter prototypes whose mesh library entries no longer exist"));
+    objectButtons->addWidget(m_addObjectsButton);
+    objectButtons->addWidget(m_cleanupObjectsButton);
+    layout->addLayout(objectButtons);
+
+    m_tabs = new QTabWidget(this);
+    layout->addWidget(m_tabs, 1);
 
     auto *targetGroup = new QGroupBox(tr("Targets"), this);
     auto *targetLayout = new QVBoxLayout(targetGroup);
     m_targetList = new QListWidget(targetGroup);
     m_targetList->setMinimumHeight(80);
     m_removeTargetButton = new QPushButton(tr("Remove Target"), targetGroup);
+    auto *targetForm = new QFormLayout();
+    targetForm->setContentsMargins(0, 0, 0, 0);
+    m_targetEnabled = new QCheckBox(tr("Enabled"), targetGroup);
+    m_targetWeight = CreateDoubleSpin(0.0, 100.0, 0.1, 2);
     targetLayout->addWidget(m_targetList);
+    targetForm->addRow(tr("State"), m_targetEnabled);
+    targetForm->addRow(tr("Weight"), m_targetWeight);
+    targetLayout->addLayout(targetForm);
     targetLayout->addWidget(m_removeTargetButton);
-    layout->addWidget(targetGroup);
+    m_tabs->addTab(targetGroup, tr("Targets"));
 
     auto *objectGroup = new QGroupBox(tr("Objects"), this);
     auto *objectLayout = new QVBoxLayout(objectGroup);
     m_objectList = new QListWidget(objectGroup);
     m_objectList->setMinimumHeight(80);
     m_removeObjectButton = new QPushButton(tr("Remove Object"), objectGroup);
+    m_hideSourceButton = new QPushButton(tr("Hide Source"), objectGroup);
+    m_hideSourceButton->setToolTip(tr("Hide or show the original scene nodes used as this prototype library source"));
     objectLayout->addWidget(m_objectList);
+    objectLayout->addWidget(m_hideSourceButton);
     objectLayout->addWidget(m_removeObjectButton);
-    layout->addWidget(objectGroup);
+    m_tabs->addTab(objectGroup, tr("Objects"));
 
     auto *objectEditGroup = new QGroupBox(tr("Object Settings"), this);
     auto *objectForm = new QFormLayout(objectEditGroup);
@@ -142,6 +173,8 @@ void ScatterPanel::createUi()
     m_weight = CreateDoubleSpin(0.0, 100.0, 0.1, 2);
     m_maxInstances = new QSpinBox(objectEditGroup);
     m_maxInstances->setRange(0, 2000000);
+    m_previewMaxInstances = new QSpinBox(objectEditGroup);
+    m_previewMaxInstances->setRange(0, 2000000);
     m_minScale = CreateDoubleSpin(0.001, 1000.0, 0.05, 3);
     m_maxScale = CreateDoubleSpin(0.001, 1000.0, 0.05, 3);
     m_yaw = CreateDoubleSpin(0.0, 360.0, 5.0, 1);
@@ -151,12 +184,18 @@ void ScatterPanel::createUi()
     m_slopeMin = CreateDoubleSpin(0.0, 89.0, 1.0, 1);
     m_slopeMax = CreateDoubleSpin(0.0, 89.0, 1.0, 1);
     m_jitter = CreateDoubleSpin(0.0, 1000.0, 0.01, 3);
+    m_minDistance = CreateDoubleSpin(0.0, 100000.0, 1.0, 2);
+    m_maxDistance = CreateDoubleSpin(0.0, 100000.0, 1.0, 2);
+    m_clumpScale = CreateDoubleSpin(0.0, 10000.0, 0.25, 2);
+    m_clumpStrength = CreateDoubleSpin(0.0, 1.0, 0.05, 2);
+    m_edgeAvoidance = CreateDoubleSpin(0.0, 0.33, 0.01, 2);
 
     objectForm->addRow(tr("Name"), m_objectName);
     objectForm->addRow(tr("State"), m_objectEnabled);
     objectForm->addRow(tr("Density / m2"), m_density);
     objectForm->addRow(tr("Weight"), m_weight);
     objectForm->addRow(tr("Max Instances"), m_maxInstances);
+    objectForm->addRow(tr("Preview Max"), m_previewMaxInstances);
     objectForm->addRow(tr("Min Scale"), m_minScale);
     objectForm->addRow(tr("Max Scale"), m_maxScale);
     objectForm->addRow(tr("Yaw Random"), m_yaw);
@@ -166,7 +205,12 @@ void ScatterPanel::createUi()
     objectForm->addRow(tr("Slope Min"), m_slopeMin);
     objectForm->addRow(tr("Slope Max"), m_slopeMax);
     objectForm->addRow(tr("Jitter"), m_jitter);
-    layout->addWidget(objectEditGroup);
+    objectForm->addRow(tr("Min Distance"), m_minDistance);
+    objectForm->addRow(tr("Max Distance"), m_maxDistance);
+    objectForm->addRow(tr("Clump Scale"), m_clumpScale);
+    objectForm->addRow(tr("Clump Strength"), m_clumpStrength);
+    objectForm->addRow(tr("Edge Avoid"), m_edgeAvoidance);
+    m_tabs->addTab(objectEditGroup, tr("Placement"));
 
     m_statsLabel = new QLabel(this);
     m_statsLabel->setWordWrap(true);
@@ -199,6 +243,8 @@ void ScatterPanel::createUi()
             syncInspector();
         }
     });
+    connect(m_targetEnabled, &QCheckBox::toggled, this, [this](bool) { applyTargetEdit(); });
+    connect(m_targetWeight, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) { applyTargetEdit(); });
     connect(m_addTargetsButton, &QPushButton::clicked, this, [this]() {
         const int row = selectedModelIndex();
         if (row >= 0) {
@@ -206,10 +252,28 @@ void ScatterPanel::createUi()
             refreshUi();
         }
     });
+    connect(m_pickTargetButton, &QPushButton::clicked, this, [this]() {
+        const int row = selectedModelIndex();
+        if (row >= 0) {
+            Scene::SetScatterPickTarget(static_cast<size_t>(row));
+            syncInspector();
+        }
+    });
+    connect(m_cancelPickButton, &QPushButton::clicked, this, [this]() {
+        Scene::CancelScatterPick();
+        syncInspector();
+    });
     connect(m_addObjectsButton, &QPushButton::clicked, this, [this]() {
         const int row = selectedModelIndex();
         if (row >= 0) {
             Scene::AddSelectedNodesAsScatterObjects(static_cast<size_t>(row));
+            refreshUi();
+        }
+    });
+    connect(m_cleanupObjectsButton, &QPushButton::clicked, this, [this]() {
+        const int row = selectedModelIndex();
+        if (row >= 0) {
+            Scene::RemoveUnusedScatterObjects(static_cast<size_t>(row));
             refreshUi();
         }
     });
@@ -241,10 +305,28 @@ void ScatterPanel::createUi()
         Scene::UpdateScatterModel(static_cast<size_t>(modelRow), model);
         refreshUi();
     });
+    connect(m_hideSourceButton, &QPushButton::clicked, this, [this]() {
+        const int modelRow = selectedModelIndex();
+        const int objectRow = selectedObjectIndex();
+        const auto &models = Scene::GetScatterModels();
+        if (modelRow < 0 || modelRow >= static_cast<int>(models.size()) ||
+            objectRow < 0 ||
+            objectRow >= static_cast<int>(models[static_cast<size_t>(modelRow)].objects.size())) {
+            return;
+        }
+        const Scene::ScatterObject &object =
+            models[static_cast<size_t>(modelRow)].objects[static_cast<size_t>(objectRow)];
+        Scene::SetScatterObjectSourcesHidden(static_cast<size_t>(modelRow),
+                                             static_cast<size_t>(objectRow),
+                                             !object.librarySourceHidden);
+        refreshUi();
+    });
 
     connect(m_modelName, &QLineEdit::editingFinished, this, [this]() { applyModelEdit(); });
     connect(m_modelEnabled, &QCheckBox::toggled, this, [this](bool) { applyModelEdit(); });
     connect(m_modelSeed, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { applyModelEdit(); });
+    connect(m_previewDensityScale, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) { applyModelEdit(); });
+    connect(m_previewBudget, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { applyModelEdit(); });
 
     auto objectEdit = [this]() { applyObjectEdit(); };
     connect(m_objectName, &QLineEdit::editingFinished, this, objectEdit);
@@ -252,6 +334,7 @@ void ScatterPanel::createUi()
     connect(m_density, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
     connect(m_weight, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
     connect(m_maxInstances, qOverload<int>(&QSpinBox::valueChanged), this, [objectEdit](int) { objectEdit(); });
+    connect(m_previewMaxInstances, qOverload<int>(&QSpinBox::valueChanged), this, [objectEdit](int) { objectEdit(); });
     connect(m_minScale, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
     connect(m_maxScale, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
     connect(m_yaw, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
@@ -261,6 +344,11 @@ void ScatterPanel::createUi()
     connect(m_slopeMin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
     connect(m_slopeMax, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
     connect(m_jitter, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
+    connect(m_minDistance, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
+    connect(m_maxDistance, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
+    connect(m_clumpScale, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
+    connect(m_clumpStrength, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
+    connect(m_edgeAvoidance, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
 }
 
 void ScatterPanel::refreshUi()
@@ -301,23 +389,35 @@ void ScatterPanel::syncInspector()
 
     m_deleteModelButton->setEnabled(hasModel);
     m_addTargetsButton->setEnabled(hasModel);
+    m_pickTargetButton->setEnabled(hasModel);
+    m_cancelPickButton->setEnabled(Scene::IsScatterPickingTarget());
     m_addObjectsButton->setEnabled(hasModel);
+    m_cleanupObjectsButton->setEnabled(hasModel);
     m_modelName->setEnabled(hasModel);
     m_modelEnabled->setEnabled(hasModel);
     m_modelSeed->setEnabled(hasModel);
+    m_previewDensityScale->setEnabled(hasModel);
+    m_previewBudget->setEnabled(hasModel);
 
+    const int previousTargetRow = m_targetList ? m_targetList->currentRow() : -1;
+    const int previousObjectRow = m_objectList ? m_objectList->currentRow() : -1;
     m_targetList->clear();
     m_objectList->clear();
 
     if (!hasModel) {
         m_modelName->clear();
         m_modelEnabled->setChecked(false);
+        m_modelSeed->setValue(1);
+        m_previewDensityScale->setValue(1.0);
+        m_previewBudget->setValue(0);
         m_statsLabel->setText(tr("Add a scatter model, then select surface nodes and prototype object nodes."));
     } else {
         const Scene::ScatterModel &model = models[static_cast<size_t>(modelRow)];
         m_modelName->setText(QString::fromStdString(model.name));
         m_modelEnabled->setChecked(model.enabled);
         m_modelSeed->setValue(static_cast<int>(std::max(1u, model.seed)));
+        m_previewDensityScale->setValue(model.previewDensityScale);
+        m_previewBudget->setValue(static_cast<int>(std::min<uint32_t>(model.previewInstanceBudget, 2000000u)));
 
         for (const Scene::ScatterTarget &target : model.targets) {
             m_targetList->addItem(tr("%1%2 / %3")
@@ -331,7 +431,18 @@ void ScatterPanel::syncInspector()
                                       .arg(QString::fromStdString(object.name))
                                       .arg(static_cast<int>(object.meshIndices.size())));
         }
-        m_statsLabel->setText(tr("Virtual instances are generated at render time; prototype nodes can be hidden from the Scene panel if you only want their scattered copies."));
+        if (!model.targets.empty()) {
+            m_targetList->setCurrentRow(std::clamp(previousTargetRow, 0, static_cast<int>(model.targets.size()) - 1));
+        }
+        if (!model.objects.empty()) {
+            m_objectList->setCurrentRow(std::clamp(previousObjectRow, 0, static_cast<int>(model.objects.size()) - 1));
+        }
+        const Scene::ScatterRuntimeStats stats = Scene::GetScatterRuntimeStats();
+        m_statsLabel->setText(tr("Generated %1 render instances. Active: %2 targets, %3 objects. Budget skipped: %4.")
+                                  .arg(static_cast<qulonglong>(stats.generatedInstances))
+                                  .arg(static_cast<unsigned>(stats.activeTargets))
+                                  .arg(static_cast<unsigned>(stats.activeObjects))
+                                  .arg(static_cast<unsigned>(stats.skippedByBudget)));
     }
 
     const int objectRow = selectedObjectIndex();
@@ -339,12 +450,29 @@ void ScatterPanel::syncInspector()
         hasModel && objectRow >= 0 &&
         objectRow < static_cast<int>(models[static_cast<size_t>(modelRow)].objects.size());
     m_removeTargetButton->setEnabled(hasModel && m_targetList->currentRow() >= 0);
+    const int targetRow = m_targetList ? m_targetList->currentRow() : -1;
+    const bool hasTarget =
+        hasModel && targetRow >= 0 &&
+        targetRow < static_cast<int>(models[static_cast<size_t>(modelRow)].targets.size());
+    m_targetEnabled->setEnabled(hasTarget);
+    m_targetWeight->setEnabled(hasTarget);
+    if (hasTarget) {
+        const Scene::ScatterTarget &target =
+            models[static_cast<size_t>(modelRow)].targets[static_cast<size_t>(targetRow)];
+        m_targetEnabled->setChecked(target.enabled);
+        m_targetWeight->setValue(target.weight);
+    } else {
+        m_targetEnabled->setChecked(false);
+        m_targetWeight->setValue(1.0);
+    }
     m_removeObjectButton->setEnabled(hasObject);
+    m_hideSourceButton->setEnabled(hasObject);
     m_objectName->setEnabled(hasObject);
     m_objectEnabled->setEnabled(hasObject);
     m_density->setEnabled(hasObject);
     m_weight->setEnabled(hasObject);
     m_maxInstances->setEnabled(hasObject);
+    m_previewMaxInstances->setEnabled(hasObject);
     m_minScale->setEnabled(hasObject);
     m_maxScale->setEnabled(hasObject);
     m_yaw->setEnabled(hasObject);
@@ -354,15 +482,22 @@ void ScatterPanel::syncInspector()
     m_slopeMin->setEnabled(hasObject);
     m_slopeMax->setEnabled(hasObject);
     m_jitter->setEnabled(hasObject);
+    m_minDistance->setEnabled(hasObject);
+    m_maxDistance->setEnabled(hasObject);
+    m_clumpScale->setEnabled(hasObject);
+    m_clumpStrength->setEnabled(hasObject);
+    m_edgeAvoidance->setEnabled(hasObject);
 
     if (hasObject) {
         const Scene::ScatterObject &object =
             models[static_cast<size_t>(modelRow)].objects[static_cast<size_t>(objectRow)];
+        m_hideSourceButton->setText(object.librarySourceHidden ? tr("Show Source") : tr("Hide Source"));
         m_objectName->setText(QString::fromStdString(object.name));
         m_objectEnabled->setChecked(object.enabled);
         m_density->setValue(object.densityPerSquareMeter);
         m_weight->setValue(object.weight);
         m_maxInstances->setValue(static_cast<int>(std::min<uint32_t>(object.maxInstances, 2000000u)));
+        m_previewMaxInstances->setValue(static_cast<int>(std::min<uint32_t>(object.previewMaxInstances, 2000000u)));
         m_minScale->setValue(object.minScale);
         m_maxScale->setValue(object.maxScale);
         m_yaw->setValue(object.randomYawDegrees);
@@ -372,9 +507,24 @@ void ScatterPanel::syncInspector()
         m_slopeMin->setValue(object.slopeMinDegrees);
         m_slopeMax->setValue(object.slopeMaxDegrees);
         m_jitter->setValue(object.jitterMeters);
+        m_minDistance->setValue(object.minDistance);
+        m_maxDistance->setValue(object.maxDistance);
+        m_clumpScale->setValue(object.clumpScale);
+        m_clumpStrength->setValue(object.clumpStrength);
+        m_edgeAvoidance->setValue(object.edgeAvoidance);
     } else {
+        m_hideSourceButton->setText(tr("Hide Source"));
         m_objectName->clear();
         m_objectEnabled->setChecked(false);
+        m_density->setValue(0.0);
+        m_weight->setValue(0.0);
+        m_maxInstances->setValue(0);
+        m_previewMaxInstances->setValue(0);
+        m_minDistance->setValue(0.0);
+        m_maxDistance->setValue(0.0);
+        m_clumpScale->setValue(0.0);
+        m_clumpStrength->setValue(0.0);
+        m_edgeAvoidance->setValue(0.0);
     }
     m_syncing = false;
 }
@@ -393,7 +543,30 @@ void ScatterPanel::applyModelEdit()
     model.name = m_modelName->text().toStdString();
     model.enabled = m_modelEnabled->isChecked();
     model.seed = static_cast<uint32_t>(std::max(1, m_modelSeed->value()));
+    model.previewDensityScale = static_cast<float>(m_previewDensityScale->value());
+    model.previewInstanceBudget =
+        static_cast<uint32_t>(std::max(0, m_previewBudget->value()));
     Scene::UpdateScatterModel(static_cast<size_t>(row), model);
+}
+
+void ScatterPanel::applyTargetEdit()
+{
+    if (m_syncing) {
+        return;
+    }
+    const int modelRow = selectedModelIndex();
+    const int targetRow = m_targetList ? m_targetList->currentRow() : -1;
+    const auto &models = Scene::GetScatterModels();
+    if (modelRow < 0 || modelRow >= static_cast<int>(models.size()) ||
+        targetRow < 0 ||
+        targetRow >= static_cast<int>(models[static_cast<size_t>(modelRow)].targets.size())) {
+        return;
+    }
+    Scene::ScatterModel model = models[static_cast<size_t>(modelRow)];
+    Scene::ScatterTarget &target = model.targets[static_cast<size_t>(targetRow)];
+    target.enabled = m_targetEnabled->isChecked();
+    target.weight = static_cast<float>(m_targetWeight->value());
+    Scene::UpdateScatterModel(static_cast<size_t>(modelRow), model);
 }
 
 void ScatterPanel::applyObjectEdit()
@@ -416,6 +589,8 @@ void ScatterPanel::applyObjectEdit()
     object.densityPerSquareMeter = static_cast<float>(m_density->value());
     object.weight = static_cast<float>(m_weight->value());
     object.maxInstances = static_cast<uint32_t>(std::max(0, m_maxInstances->value()));
+    object.previewMaxInstances =
+        static_cast<uint32_t>(std::max(0, m_previewMaxInstances->value()));
     object.minScale = static_cast<float>(m_minScale->value());
     object.maxScale = static_cast<float>(m_maxScale->value());
     object.randomYawDegrees = static_cast<float>(m_yaw->value());
@@ -425,6 +600,11 @@ void ScatterPanel::applyObjectEdit()
     object.slopeMinDegrees = static_cast<float>(m_slopeMin->value());
     object.slopeMaxDegrees = static_cast<float>(m_slopeMax->value());
     object.jitterMeters = static_cast<float>(m_jitter->value());
+    object.minDistance = static_cast<float>(m_minDistance->value());
+    object.maxDistance = static_cast<float>(m_maxDistance->value());
+    object.clumpScale = static_cast<float>(m_clumpScale->value());
+    object.clumpStrength = static_cast<float>(m_clumpStrength->value());
+    object.edgeAvoidance = static_cast<float>(m_edgeAvoidance->value());
     Scene::UpdateScatterModel(static_cast<size_t>(modelRow), model);
 }
 

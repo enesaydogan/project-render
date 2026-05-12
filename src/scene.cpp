@@ -54,6 +54,8 @@ static std::vector<ScatterModel> s_scatterModels;
 static std::vector<Instance> s_scatterInstanceCache;
 static uint64_t s_scatterRuntimeRevision = 1;
 static uint64_t s_scatterInstanceCacheRevision = 0;
+static ScatterRuntimeStats s_scatterRuntimeStats;
+static size_t s_scatterPickTargetIndex = static_cast<size_t>(-1);
 // Import progress & pending results (for async import)
 static std::atomic<bool> s_importInProgress(false);
 static std::atomic<float> s_importProgress(0.0f);
@@ -112,6 +114,21 @@ static ShiftCloneDragState s_shiftCloneDrag;
 static void EnsureGpuBuffersForMeshes(std::vector<Asset::GpuMesh> &meshes);
 static void ReindexScatterNodeReferencesAfterRemoval(size_t removedNodeIndex);
 bool Inverse4x4(const float *m, float *out);
+
+static void PopulateScatterTargetMetadata(ScatterTarget &target) {
+  if (target.nodeIndex >= s_nodes.size()) {
+    return;
+  }
+  const Node &node = s_nodes[target.nodeIndex];
+  target.nodeName = node.name;
+  target.sourcePath = node.sourcePath;
+  target.importGroupKey = node.importGroupKey;
+  if (target.meshIndex < g_loadedMeshes.size()) {
+    const Asset::GpuMesh &mesh = g_loadedMeshes[target.meshIndex];
+    target.materialIndex = mesh.materialIndex;
+    target.materialSlot = mesh.materialSlot;
+  }
+}
 
 static void ResetGpuMeshEntry(Asset::GpuMesh &mesh) {
   mesh.vertexBuffer.Reset();
@@ -2358,6 +2375,7 @@ bool AddSelectedNodesAsScatterTargets(size_t scatterIndex) {
         ScatterTarget target;
         target.nodeIndex = targetNodeIndex;
         target.meshIndex = meshIndex;
+        PopulateScatterTargetMetadata(target);
         model.targets.push_back(target);
         added = true;
       }
@@ -2416,6 +2434,8 @@ bool AddSelectedNodesAsScatterObjects(size_t scatterIndex) {
     ScatterObject object;
     object.name = s_nodes[nodeIndex].name.empty() ? "Scatter Object"
                                                   : s_nodes[nodeIndex].name;
+    object.sourceNodeName = s_nodes[nodeIndex].name;
+    object.sourcePath = s_nodes[nodeIndex].sourcePath;
     object.meshIndices.reserve(meshEntries.size());
     object.meshLocalTransforms.reserve(meshEntries.size());
     for (const auto &entry : meshEntries) {
@@ -2434,6 +2454,76 @@ bool AddSelectedNodesAsScatterObjects(size_t scatterIndex) {
 }
 
 uint64_t GetScatterRuntimeRevision() { return s_scatterRuntimeRevision; }
+
+ScatterRuntimeStats GetScatterRuntimeStats() { return s_scatterRuntimeStats; }
+
+void SetScatterPickTarget(size_t scatterIndex) {
+  s_scatterPickTargetIndex =
+      scatterIndex < s_scatterModels.size() ? scatterIndex
+                                            : static_cast<size_t>(-1);
+}
+
+bool IsScatterPickingTarget() {
+  return s_scatterPickTargetIndex < s_scatterModels.size();
+}
+
+void CancelScatterPick() { s_scatterPickTargetIndex = static_cast<size_t>(-1); }
+
+bool SetScatterObjectSourcesHidden(size_t scatterIndex, size_t objectIndex,
+                                   bool hidden) {
+  if (scatterIndex >= s_scatterModels.size() ||
+      objectIndex >= s_scatterModels[scatterIndex].objects.size()) {
+    return false;
+  }
+  ScatterObject &object = s_scatterModels[scatterIndex].objects[objectIndex];
+  object.librarySourceHidden = hidden;
+  bool changed = false;
+  for (Node &node : s_nodes) {
+    bool ownsMesh = false;
+    for (size_t nodeMeshIndex : node.meshIndices) {
+      if (std::find(object.meshIndices.begin(), object.meshIndices.end(),
+                    nodeMeshIndex) != object.meshIndices.end()) {
+        ownsMesh = true;
+        break;
+      }
+    }
+    if (!ownsMesh || node.visible == !hidden) {
+      continue;
+    }
+    node.visible = !hidden;
+    changed = true;
+  }
+  if (changed) {
+    MarkScatterRuntimeChanged(RendererInvalidationPlan::TlasRefresh);
+  } else {
+    MarkScatterRuntimeChanged(RendererInvalidationPlan::AccumulationOnly);
+  }
+  return true;
+}
+
+bool RemoveUnusedScatterObjects(size_t scatterIndex) {
+  if (scatterIndex >= s_scatterModels.size()) {
+    return false;
+  }
+  ScatterModel &model = s_scatterModels[scatterIndex];
+  const size_t before = model.objects.size();
+  model.objects.erase(
+      std::remove_if(model.objects.begin(), model.objects.end(),
+                     [](const ScatterObject &object) {
+                       return object.meshIndices.empty() ||
+                              std::none_of(object.meshIndices.begin(),
+                                           object.meshIndices.end(),
+                                           [](size_t meshIndex) {
+                                             return meshIndex < g_loadedMeshes.size();
+                                           });
+                     }),
+      model.objects.end());
+  if (model.objects.size() != before) {
+    MarkScatterRuntimeChanged();
+    return true;
+  }
+  return false;
+}
 
 static void ReindexScatterNodeReferencesAfterRemoval(size_t removedNodeIndex) {
   for (ScatterModel &model : s_scatterModels) {
@@ -2965,6 +3055,49 @@ static float ScatterHash01(uint32_t x) {
   return static_cast<float>(ScatterHashU32(x) & 0x00ffffffu) / 16777215.0f;
 }
 
+static float ScatterSmoothStep(float x) {
+  x = (std::clamp)(x, 0.0f, 1.0f);
+  return x * x * (3.0f - 2.0f * x);
+}
+
+static float ScatterValueNoise2D(float x, float y, uint32_t seed) {
+  const int ix = static_cast<int>(floorf(x));
+  const int iy = static_cast<int>(floorf(y));
+  const float fx = x - static_cast<float>(ix);
+  const float fy = y - static_cast<float>(iy);
+  const float sx = ScatterSmoothStep(fx);
+  const float sy = ScatterSmoothStep(fy);
+  auto cell = [seed](int cx, int cy) {
+    const uint32_t hx = static_cast<uint32_t>(cx) * 0x8da6b343u;
+    const uint32_t hy = static_cast<uint32_t>(cy) * 0xd8163841u;
+    return ScatterHash01(seed ^ hx ^ hy);
+  };
+  const float v00 = cell(ix, iy);
+  const float v10 = cell(ix + 1, iy);
+  const float v01 = cell(ix, iy + 1);
+  const float v11 = cell(ix + 1, iy + 1);
+  const float vx0 = v00 + (v10 - v00) * sx;
+  const float vx1 = v01 + (v11 - v01) * sx;
+  return vx0 + (vx1 - vx0) * sy;
+}
+
+static float ScatterFractalNoise2D(float x, float y, uint32_t seed) {
+  float sum = 0.0f;
+  float amp = 0.5f;
+  float scale = 1.0f;
+  float norm = 0.0f;
+  for (int octave = 0; octave < 3; ++octave) {
+    sum += ScatterValueNoise2D(x * scale, y * scale,
+                               seed + static_cast<uint32_t>(octave) *
+                                          0x9e3779b9u) *
+           amp;
+    norm += amp;
+    scale *= 2.03f;
+    amp *= 0.5f;
+  }
+  return norm > 0.0f ? sum / norm : 0.0f;
+}
+
 static DirectX::XMVECTOR ScatterSafeNormalize(DirectX::XMVECTOR v,
                                               DirectX::XMVECTOR fallback) {
   if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(v)) < 1e-10f) {
@@ -3100,21 +3233,35 @@ static void GatherScatterTriangles(const ScatterTarget &target,
 static void AppendScatterInstancesForObject(
     const ScatterModel &model, size_t modelIndex, const ScatterObject &object,
     size_t objectIndex, const std::vector<ScatterTriangle> &triangles,
-    float weightedArea, std::vector<Instance> &outInstances) {
+    float weightedArea, uint32_t &remainingModelBudget,
+    std::vector<Instance> &outInstances) {
   if (!model.enabled || !object.enabled || object.meshIndices.empty() ||
       triangles.empty() || weightedArea <= 1e-6f ||
       object.densityPerSquareMeter <= 0.0f || object.weight <= 0.0f) {
     return;
   }
+  if (remainingModelBudget == 0) {
+    return;
+  }
 
   const float desired =
-      weightedArea * object.densityPerSquareMeter * object.weight;
+      weightedArea * object.densityPerSquareMeter * object.weight *
+      (std::max)(0.0f, model.previewDensityScale);
   uint32_t instanceCount =
       static_cast<uint32_t>((std::max)(0.0f, std::round(desired)));
   instanceCount = (std::min)(instanceCount, object.maxInstances);
+  if (object.previewMaxInstances > 0) {
+    instanceCount = (std::min)(instanceCount, object.previewMaxInstances);
+  }
+  if (instanceCount > remainingModelBudget) {
+    s_scatterRuntimeStats.skippedByBudget +=
+        instanceCount - remainingModelBudget;
+    instanceCount = remainingModelBudget;
+  }
   if (instanceCount == 0) {
     return;
   }
+  ++s_scatterRuntimeStats.activeObjects;
 
   const float twoPi = 6.283185307179586f;
   const float yawRange =
@@ -3127,8 +3274,23 @@ static void AppendScatterInstancesForObject(
       (std::max)(0.001f, (std::min)(object.minScale, object.maxScale));
   const float maxScale =
       (std::max)(minScale, (std::max)(object.minScale, object.maxScale));
+  const float minDistance2 =
+      (std::max)(0.0f, object.minDistance) *
+      (std::max)(0.0f, object.minDistance);
+  const float maxDistance2 =
+      (std::max)(0.0f, object.maxDistance) *
+      (std::max)(0.0f, object.maxDistance);
+  const float clumpScale = (std::max)(0.0f, object.clumpScale);
+  const float clumpStrength =
+      (std::clamp)(object.clumpStrength, 0.0f, 1.0f);
+  const float edgeAvoidance =
+      (std::clamp)(object.edgeAvoidance, 0.0f, 0.33f);
+  const float cameraX = g_cameraData.pos[0];
+  const float cameraY = g_cameraData.pos[1];
+  const float cameraZ = g_cameraData.pos[2];
 
-  for (uint32_t instanceIndex = 0; instanceIndex < instanceCount;
+  for (uint32_t instanceIndex = 0;
+       instanceIndex < instanceCount && remainingModelBudget > 0;
        ++instanceIndex) {
     const uint32_t baseSeed =
         model.seed * 0x9e3779b9u ^
@@ -3153,6 +3315,10 @@ static void AppendScatterInstancesForObject(
     const float b0 = 1.0f - su;
     const float b1 = su * (1.0f - v);
     const float b2 = su * v;
+    if (edgeAvoidance > 0.0f &&
+        (std::min)(b0, (std::min)(b1, b2)) < edgeAvoidance) {
+      continue;
+    }
     DirectX::XMFLOAT3 position = {
         chosen->p0.x * b0 + chosen->p1.x * b1 + chosen->p2.x * b2,
         chosen->p0.y * b0 + chosen->p1.y * b1 + chosen->p2.y * b2,
@@ -3164,6 +3330,28 @@ static void AppendScatterInstancesForObject(
 
     if (position.y < object.heightMin || position.y > object.heightMax) {
       continue;
+    }
+    const float cameraDx = position.x - cameraX;
+    const float cameraDy = position.y - cameraY;
+    const float cameraDz = position.z - cameraZ;
+    const float cameraDist2 =
+        cameraDx * cameraDx + cameraDy * cameraDy + cameraDz * cameraDz;
+    if (minDistance2 > 0.0f && cameraDist2 < minDistance2) {
+      continue;
+    }
+    if (maxDistance2 > 0.0f && cameraDist2 > maxDistance2) {
+      continue;
+    }
+    if (clumpScale > 1e-4f && clumpStrength > 0.0f) {
+      const float noise = ScatterFractalNoise2D(
+          position.x / clumpScale, position.z / clumpScale,
+          model.seed ^ static_cast<uint32_t>(objectIndex + 17) * 0x45d9f3bu);
+      const float clustered = ScatterSmoothStep((noise - 0.35f) / 0.45f);
+      const float acceptProbability =
+          1.0f + (clustered - 1.0f) * clumpStrength;
+      if (ScatterHash01(baseSeed ^ 0x6d2b79f5u) > acceptProbability) {
+        continue;
+      }
     }
     DirectX::XMVECTOR n = ScatterSafeNormalize(DirectX::XMLoadFloat3(&normal),
                                                DirectX::XMVectorSet(0.0f, 1.0f,
@@ -3199,6 +3387,9 @@ static void AppendScatterInstancesForObject(
 
     for (size_t objectMeshOffset = 0; objectMeshOffset < object.meshIndices.size();
          ++objectMeshOffset) {
+      if (remainingModelBudget == 0) {
+        break;
+      }
       const size_t meshIndex = object.meshIndices[objectMeshOffset];
       if (meshIndex >= g_loadedMeshes.size()) {
         continue;
@@ -3221,6 +3412,8 @@ static void AppendScatterInstancesForObject(
       inst.id = -100000 - static_cast<int>(modelIndex);
       inst.mesh = &mesh;
       outInstances.push_back(std::move(inst));
+      ++s_scatterRuntimeStats.generatedInstances;
+      --remainingModelBudget;
     }
   }
 }
@@ -3229,6 +3422,8 @@ static void AppendScatterInstances(std::vector<Instance> &outInstances) {
   if (s_scatterModels.empty()) {
     s_scatterInstanceCache.clear();
     s_scatterInstanceCacheRevision = s_scatterRuntimeRevision;
+    s_scatterRuntimeStats = {};
+    s_scatterRuntimeStats.revision = s_scatterRuntimeRevision;
     return;
   }
 
@@ -3239,6 +3434,8 @@ static void AppendScatterInstances(std::vector<Instance> &outInstances) {
   }
 
   s_scatterInstanceCache.clear();
+  s_scatterRuntimeStats = {};
+  s_scatterRuntimeStats.revision = s_scatterRuntimeRevision;
   const std::vector<std::array<float, 16>> worldTransforms =
       BuildNodeWorldTransforms();
   for (size_t modelIndex = 0; modelIndex < s_scatterModels.size();
@@ -3252,25 +3449,31 @@ static void AppendScatterInstances(std::vector<Instance> &outInstances) {
     triangles.reserve(4096);
     float weightedArea = 0.0f;
     for (const ScatterTarget &target : model.targets) {
-      if (target.nodeIndex >= s_nodes.size() ||
+      if (!target.enabled || target.nodeIndex >= s_nodes.size() ||
           !s_nodes[target.nodeIndex].visible ||
           target.nodeIndex >= worldTransforms.size()) {
         continue;
       }
       GatherScatterTriangles(target, worldTransforms[target.nodeIndex].data(),
                              triangles, weightedArea);
+      ++s_scatterRuntimeStats.activeTargets;
     }
 
     if (triangles.empty() || weightedArea <= 1e-6f) {
       continue;
     }
 
+    uint32_t remainingModelBudget = model.previewInstanceBudget;
     for (size_t objectIndex = 0; objectIndex < model.objects.size();
          ++objectIndex) {
       AppendScatterInstancesForObject(model, modelIndex,
                                       model.objects[objectIndex], objectIndex,
                                       triangles, weightedArea,
+                                      remainingModelBudget,
                                       s_scatterInstanceCache);
+      if (remainingModelBudget == 0) {
+        break;
+      }
     }
   }
   s_scatterInstanceCacheRevision = s_scatterRuntimeRevision;
@@ -4898,6 +5101,225 @@ int PickMaterialAt(float screenX, float screenY, float screenWidth,
 int PickMaterialAtCursor(float screenWidth, float screenHeight) {
   const ImVec2 mousePos = ImGui::GetIO().MousePos;
   return PickMaterialAt(mousePos.x, mousePos.y, screenWidth, screenHeight);
+}
+
+struct SceneMeshPickHit {
+  size_t nodeIndex = static_cast<size_t>(-1);
+  size_t meshIndex = static_cast<size_t>(-1);
+};
+
+static bool PickSceneMeshAt(float screenX, float screenY, float screenWidth,
+                            float screenHeight, SceneMeshPickHit &outHit) {
+  outHit = {};
+  if (ImGuizmo::IsUsing() || screenWidth <= 1.0f || screenHeight <= 1.0f) {
+    return false;
+  }
+
+  float vpX = 0.0f;
+  float vpY = 0.0f;
+  float vpWidth = screenWidth;
+  float vpHeight = screenHeight;
+  GetRenderViewportRect(&vpX, &vpY, &vpWidth, &vpHeight);
+  const float mx = screenX - vpX;
+  const float my = screenY - vpY;
+  if (mx < 0.0f || my < 0.0f || mx > vpWidth || my > vpHeight) {
+    return false;
+  }
+
+  const float ndcX = (mx / vpWidth) * 2.0f - 1.0f;
+  const float ndcY = 1.0f - (my / vpHeight) * 2.0f;
+  const float kPi = 3.14159265359f;
+  const float fovRad = g_cameraData.fov * (kPi / 180.0f);
+  const float tanHalfFov = tanf(fovRad * 0.5f);
+  const float aspect = (vpHeight > 0.0f) ? (vpWidth / vpHeight)
+                                         : g_cameraData.aspect;
+
+  float forward[3] = {g_cameraData.forward[0], g_cameraData.forward[1],
+                      g_cameraData.forward[2]};
+  float upHint[3] = {g_cameraData.up[0], g_cameraData.up[1],
+                     g_cameraData.up[2]};
+
+  auto Normalize3 = [](float v[3]) -> bool {
+    const float len2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+    if (len2 <= 1e-12f) {
+      return false;
+    }
+    const float invLen = 1.0f / sqrtf(len2);
+    v[0] *= invLen;
+    v[1] *= invLen;
+    v[2] *= invLen;
+    return true;
+  };
+  auto Cross3 = [](const float a[3], const float b[3], float out[3]) {
+    out[0] = a[1] * b[2] - a[2] * b[1];
+    out[1] = a[2] * b[0] - a[0] * b[2];
+    out[2] = a[0] * b[1] - a[1] * b[0];
+  };
+
+  if (!Normalize3(forward)) {
+    return false;
+  }
+  float right[3];
+  Cross3(forward, upHint, right);
+  if (!Normalize3(right)) {
+    return false;
+  }
+  float up[3];
+  Cross3(right, forward, up);
+  if (!Normalize3(up)) {
+    return false;
+  }
+
+  const float xView = ndcX * aspect * tanHalfFov;
+  const float yView = ndcY * tanHalfFov;
+  float dir[3] = {xView * right[0] + yView * up[0] + forward[0],
+                  xView * right[1] + yView * up[1] + forward[1],
+                  xView * right[2] + yView * up[2] + forward[2]};
+  if (!Normalize3(dir)) {
+    return false;
+  }
+
+  const float orig[3] = {g_cameraData.pos[0], g_cameraData.pos[1],
+                         g_cameraData.pos[2]};
+  float minWorldDist2 = FLT_MAX;
+  const std::vector<std::array<float, 16>> worldTransforms =
+      BuildNodeWorldTransforms();
+
+  for (size_t nodeIndex = 0; nodeIndex < s_nodes.size(); ++nodeIndex) {
+    const Node &node = s_nodes[nodeIndex];
+    if (!node.visible || nodeIndex >= worldTransforms.size()) {
+      continue;
+    }
+    const float *nodeWorld = worldTransforms[nodeIndex].data();
+    float invNode[16];
+    if (!Inverse4x4(nodeWorld, invNode)) {
+      continue;
+    }
+
+    float localOrig[3], localDir[3];
+    TransformPointColumnMajor(invNode, orig, localOrig);
+    TransformVectorColumnMajor(invNode, dir, localDir);
+    const float localDirLen2 = localDir[0] * localDir[0] +
+                               localDir[1] * localDir[1] +
+                               localDir[2] * localDir[2];
+    if (localDirLen2 <= 1e-12f) {
+      continue;
+    }
+
+    for (size_t meshIndex : node.meshIndices) {
+      if (meshIndex >= g_loadedMeshes.size()) {
+        continue;
+      }
+      const Asset::GpuMesh &mesh = g_loadedMeshes[meshIndex];
+      float boxT = 1e30f;
+      if (!RayAABBIntersection(localOrig, localDir, mesh.minBound,
+                               mesh.maxBound, boxT)) {
+        continue;
+      }
+
+      float bestMeshDist2 = FLT_MAX;
+      bool meshHit = false;
+      if (!mesh.cpuVertices.empty() && !mesh.cpuIndices.empty()) {
+        for (size_t k = 0; k + 2 < mesh.cpuIndices.size(); k += 3) {
+          const uint32_t i0 = mesh.cpuIndices[k];
+          const uint32_t i1 = mesh.cpuIndices[k + 1];
+          const uint32_t i2 = mesh.cpuIndices[k + 2];
+          if (i0 >= mesh.cpuVertices.size() || i1 >= mesh.cpuVertices.size() ||
+              i2 >= mesh.cpuVertices.size()) {
+            continue;
+          }
+          float tVal = 0.0f;
+          if (!RayTriangleIntersection(localOrig, localDir,
+                                       mesh.cpuVertices[i0].pos,
+                                       mesh.cpuVertices[i1].pos,
+                                       mesh.cpuVertices[i2].pos, tVal)) {
+            continue;
+          }
+          const float localHit[3] = {localOrig[0] + localDir[0] * tVal,
+                                     localOrig[1] + localDir[1] * tVal,
+                                     localOrig[2] + localDir[2] * tVal};
+          float worldHit[3];
+          TransformPointColumnMajor(nodeWorld, localHit, worldHit);
+          const float dx = worldHit[0] - orig[0];
+          const float dy = worldHit[1] - orig[1];
+          const float dz = worldHit[2] - orig[2];
+          const float worldDist2 = dx * dx + dy * dy + dz * dz;
+          if (worldDist2 < bestMeshDist2) {
+            bestMeshDist2 = worldDist2;
+            meshHit = true;
+          }
+        }
+      } else {
+        const float localHit[3] = {localOrig[0] + localDir[0] * boxT,
+                                   localOrig[1] + localDir[1] * boxT,
+                                   localOrig[2] + localDir[2] * boxT};
+        float worldHit[3];
+        TransformPointColumnMajor(nodeWorld, localHit, worldHit);
+        const float dx = worldHit[0] - orig[0];
+        const float dy = worldHit[1] - orig[1];
+        const float dz = worldHit[2] - orig[2];
+        bestMeshDist2 = dx * dx + dy * dy + dz * dz;
+        meshHit = true;
+      }
+
+      if (meshHit && bestMeshDist2 < minWorldDist2) {
+        minWorldDist2 = bestMeshDist2;
+        outHit.nodeIndex = nodeIndex;
+        outHit.meshIndex = meshIndex;
+      }
+    }
+  }
+
+  return outHit.nodeIndex < s_nodes.size() &&
+         outHit.meshIndex < g_loadedMeshes.size();
+}
+
+bool AddScatterTargetFromPick(size_t scatterIndex, float screenX, float screenY,
+                              float screenWidth, float screenHeight) {
+  if (scatterIndex >= s_scatterModels.size()) {
+    return false;
+  }
+  SceneMeshPickHit hit;
+  if (!PickSceneMeshAt(screenX, screenY, screenWidth, screenHeight, hit)) {
+    return false;
+  }
+
+  ScatterModel &model = s_scatterModels[scatterIndex];
+  auto existing =
+      std::find_if(model.targets.begin(), model.targets.end(),
+                   [&hit](const ScatterTarget &target) {
+                     return target.nodeIndex == hit.nodeIndex &&
+                            target.meshIndex == hit.meshIndex;
+                   });
+  if (existing != model.targets.end()) {
+    existing->enabled = true;
+    PopulateScatterTargetMetadata(*existing);
+    MarkScatterRuntimeChanged();
+    return true;
+  }
+
+  ScatterTarget target;
+  target.nodeIndex = hit.nodeIndex;
+  target.meshIndex = hit.meshIndex;
+  PopulateScatterTargetMetadata(target);
+  model.targets.push_back(std::move(target));
+  MarkScatterRuntimeChanged();
+  return true;
+}
+
+bool HandleScatterPick(float screenX, float screenY, float screenWidth,
+                       float screenHeight) {
+  if (!IsScatterPickingTarget()) {
+    return false;
+  }
+  const size_t targetScatter = s_scatterPickTargetIndex;
+  const bool added =
+      AddScatterTargetFromPick(targetScatter, screenX, screenY, screenWidth,
+                               screenHeight);
+  if (added) {
+    CancelScatterPick();
+  }
+  return added;
 }
 
 void DrawScenePanel(HWND hwnd, bool &visible) {

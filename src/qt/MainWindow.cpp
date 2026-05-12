@@ -702,10 +702,11 @@ void MainWindow::createDocks()
     }
     addDockWidget(Qt::BottomDockWidgetArea, liveLinkDock);
 
+    tabifyDockWidget(sceneDock, scatterDock);
     tabifyDockWidget(sceneDock, materialsDock);
     tabifyDockWidget(sceneDock, lightsDock);
-    sceneDock->raise();
-    tabifyDockWidget(lightsDock, liveLinkDock);
+    tabifyDockWidget(sceneDock, liveLinkDock);
+    scatterDock->raise();
     tabifyDockWidget(renderDock, renderExportDock);
     renderDock->raise();
     splitDockWidget(renderDock, environmentDock, Qt::Vertical);
@@ -713,14 +714,14 @@ void MainWindow::createDocks()
     tabifyDockWidget(cameraDock, viewsDock);
     environmentDock->raise();
 
-    QTimer::singleShot(0, this, [this, sceneDock, renderDock, environmentDock]() {
+    QTimer::singleShot(0, this, [this, sceneDock, scatterDock, renderDock, environmentDock]() {
         resizeDocks({sceneDock, renderDock},
                     {300, 420},
                     Qt::Horizontal);
         resizeDocks({renderDock, environmentDock},
                     {320, 760},
                     Qt::Vertical);
-        sceneDock->raise();
+        scatterDock->raise();
     });
 }
 

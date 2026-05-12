@@ -635,11 +635,18 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
     sm["n"] = model.name;
     sm["sd"] = model.seed;
     sm["en"] = model.enabled;
+    sm["pds"] = model.previewDensityScale;
+    sm["pib"] = model.previewInstanceBudget;
     sm["tg"] = json::array();
     for (const Scene::ScatterTarget &target : model.targets) {
       sm["tg"].push_back({
           {"ni", target.nodeIndex},
           {"mi", target.meshIndex},
+          {"nn", target.nodeName},
+          {"sp", target.sourcePath},
+          {"igk", target.importGroupKey},
+          {"mat", target.materialIndex},
+          {"ms", target.materialSlot},
           {"w", target.weight},
           {"en", target.enabled},
       });
@@ -656,11 +663,14 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
       }
       sm["ob"].push_back({
           {"n", object.name},
+          {"sn", object.sourceNodeName},
+          {"sp", object.sourcePath},
           {"mi", object.meshIndices},
           {"mt", meshTransforms},
           {"d", object.densityPerSquareMeter},
           {"w", object.weight},
           {"mx", object.maxInstances},
+          {"pmx", object.previewMaxInstances},
           {"s0", object.minScale},
           {"s1", object.maxScale},
           {"yw", object.randomYawDegrees},
@@ -672,6 +682,12 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
           {"h0", object.heightMin},
           {"h1", object.heightMax},
           {"jt", object.jitterMeters},
+          {"md", object.minDistance},
+          {"xd", object.maxDistance},
+          {"cs", object.clumpScale},
+          {"cl", object.clumpStrength},
+          {"ea", object.edgeAvoidance},
+          {"lhs", object.librarySourceHidden},
           {"en", object.enabled},
       });
     }
@@ -1085,6 +1101,54 @@ static size_t JsonToSizeT(const json &entry, const char *key,
   return fallback;
 }
 
+static bool ResolveScatterTarget(Scene::ScatterTarget &target) {
+  const auto &nodes = Scene::GetNodes();
+  if (target.nodeIndex < nodes.size() && target.meshIndex < g_loadedMeshes.size()) {
+    return true;
+  }
+
+  auto nodeMatches = [&target](const Scene::Node &node) {
+    if (!target.importGroupKey.empty() &&
+        node.importGroupKey == target.importGroupKey) {
+      return true;
+    }
+    if (!target.sourcePath.empty() && node.sourcePath == target.sourcePath) {
+      return true;
+    }
+    return !target.nodeName.empty() && node.name == target.nodeName;
+  };
+
+  for (size_t nodeIndex = 0; nodeIndex < nodes.size(); ++nodeIndex) {
+    const Scene::Node &node = nodes[nodeIndex];
+    if (!nodeMatches(node)) {
+      continue;
+    }
+    for (size_t meshIndex : node.meshIndices) {
+      if (meshIndex >= g_loadedMeshes.size()) {
+        continue;
+      }
+      const Asset::GpuMesh &mesh = g_loadedMeshes[meshIndex];
+      const bool slotMatches =
+          target.materialSlot >= 0 && mesh.materialSlot == target.materialSlot;
+      const bool materialMatches =
+          target.materialIndex >= 0 && mesh.materialIndex == target.materialIndex;
+      const bool hasStableMeshHint =
+          target.materialSlot >= 0 || target.materialIndex >= 0;
+      if (!hasStableMeshHint || slotMatches || materialMatches) {
+        target.nodeIndex = nodeIndex;
+        target.meshIndex = meshIndex;
+        target.materialIndex = mesh.materialIndex;
+        target.materialSlot = mesh.materialSlot;
+        target.nodeName = node.name;
+        target.sourcePath = node.sourcePath;
+        target.importGroupKey = node.importGroupKey;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 static void RestoreScatterPRS(const json &j) {
   std::vector<Scene::ScatterModel> models;
   if (!j.contains("sct") || !j["sct"].is_array()) {
@@ -1099,15 +1163,23 @@ static void RestoreScatterPRS(const json &j) {
     model.name = savedModel.value("n", std::string("Scatter"));
     model.seed = savedModel.value("sd", model.seed);
     model.enabled = savedModel.value("en", model.enabled);
+    model.previewDensityScale = savedModel.value("pds", model.previewDensityScale);
+    model.previewInstanceBudget = savedModel.value("pib", model.previewInstanceBudget);
 
     if (savedModel.contains("tg") && savedModel["tg"].is_array()) {
       for (const auto &savedTarget : savedModel["tg"]) {
         Scene::ScatterTarget target;
         target.nodeIndex = JsonToSizeT(savedTarget, "ni");
         target.meshIndex = JsonToSizeT(savedTarget, "mi");
+        target.nodeName = savedTarget.value("nn", std::string());
+        target.sourcePath = savedTarget.value("sp", std::string());
+        target.importGroupKey = savedTarget.value("igk", std::string());
+        target.materialIndex = savedTarget.value("mat", target.materialIndex);
+        target.materialSlot = savedTarget.value("ms", target.materialSlot);
         target.weight = savedTarget.value("w", target.weight);
         target.enabled = savedTarget.value("en", target.enabled);
-        if (target.nodeIndex >= nodeCount || target.meshIndex >= meshCount) {
+        if ((target.nodeIndex >= nodeCount || target.meshIndex >= meshCount) &&
+            !ResolveScatterTarget(target)) {
           target.enabled = false;
         }
         model.targets.push_back(target);
@@ -1118,6 +1190,8 @@ static void RestoreScatterPRS(const json &j) {
       for (const auto &savedObject : savedModel["ob"]) {
         Scene::ScatterObject object;
         object.name = savedObject.value("n", std::string("Scatter Object"));
+        object.sourceNodeName = savedObject.value("sn", object.sourceNodeName);
+        object.sourcePath = savedObject.value("sp", object.sourcePath);
         if (savedObject.contains("mi") && savedObject["mi"].is_array()) {
           object.meshIndices.clear();
           for (const auto &savedMeshIndex : savedObject["mi"]) {
@@ -1165,6 +1239,7 @@ static void RestoreScatterPRS(const json &j) {
         object.densityPerSquareMeter = savedObject.value("d", object.densityPerSquareMeter);
         object.weight = savedObject.value("w", object.weight);
         object.maxInstances = savedObject.value("mx", object.maxInstances);
+        object.previewMaxInstances = savedObject.value("pmx", object.previewMaxInstances);
         object.minScale = savedObject.value("s0", object.minScale);
         object.maxScale = savedObject.value("s1", object.maxScale);
         object.randomYawDegrees = savedObject.value("yw", object.randomYawDegrees);
@@ -1176,6 +1251,12 @@ static void RestoreScatterPRS(const json &j) {
         object.heightMin = savedObject.value("h0", object.heightMin);
         object.heightMax = savedObject.value("h1", object.heightMax);
         object.jitterMeters = savedObject.value("jt", object.jitterMeters);
+        object.minDistance = savedObject.value("md", object.minDistance);
+        object.maxDistance = savedObject.value("xd", object.maxDistance);
+        object.clumpScale = savedObject.value("cs", object.clumpScale);
+        object.clumpStrength = savedObject.value("cl", object.clumpStrength);
+        object.edgeAvoidance = savedObject.value("ea", object.edgeAvoidance);
+        object.librarySourceHidden = savedObject.value("lhs", object.librarySourceHidden);
         object.enabled = savedObject.value("en", object.enabled);
         if (object.meshIndices.empty()) {
           object.enabled = false;

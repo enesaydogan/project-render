@@ -241,6 +241,17 @@ void DX12View::mousePressEvent(QMouseEvent *e)
     ImGui::GetIO().AddMousePosEvent(static_cast<float>(e->globalPosition().x()),
                                     static_cast<float>(e->globalPosition().y()));
 
+    if (e->button() == Qt::LeftButton && Scene::IsScatterPickingTarget()) {
+        const QPointF pickPos = e->globalPosition();
+        if (Scene::HandleScatterPick(static_cast<float>(pickPos.x()),
+                                     static_cast<float>(pickPos.y()),
+                                     static_cast<float>(DX12Context::g_windowWidth),
+                                     static_cast<float>(DX12Context::g_windowHeight))) {
+            e->accept();
+            return;
+        }
+    }
+
     if (e->button() == Qt::LeftButton && MaterialEditor::IsPickingEnabled()) {
         const QPointF pickPos = e->globalPosition();
         const int pickedMaterial = Scene::PickMaterialAt(

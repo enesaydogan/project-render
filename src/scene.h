@@ -46,17 +46,25 @@ struct Instance {
 struct ScatterTarget {
   size_t nodeIndex = static_cast<size_t>(-1);
   size_t meshIndex = static_cast<size_t>(-1);
+  std::string nodeName;
+  std::string sourcePath;
+  std::string importGroupKey;
+  int materialIndex = -1;
+  int materialSlot = -1;
   float weight = 1.0f;
   bool enabled = true;
 };
 
 struct ScatterObject {
   std::string name = "Scatter Object";
+  std::string sourceNodeName;
+  std::string sourcePath;
   std::vector<size_t> meshIndices;
   std::vector<std::array<float, 16>> meshLocalTransforms;
   float densityPerSquareMeter = 12.0f;
   float weight = 1.0f;
   uint32_t maxInstances = 25000;
+  uint32_t previewMaxInstances = 25000;
   float minScale = 0.85f;
   float maxScale = 1.15f;
   float randomYawDegrees = 360.0f;
@@ -68,15 +76,31 @@ struct ScatterObject {
   float heightMin = -100000.0f;
   float heightMax = 100000.0f;
   float jitterMeters = 0.0f;
+  float minDistance = 0.0f;
+  float maxDistance = 0.0f; // 0 = unlimited
+  float clumpScale = 0.0f;
+  float clumpStrength = 0.0f;
+  float edgeAvoidance = 0.0f;
   bool enabled = true;
+  bool librarySourceHidden = false;
 };
 
 struct ScatterModel {
   std::string name = "Scatter";
   uint32_t seed = 1;
   bool enabled = true;
+  float previewDensityScale = 1.0f;
+  uint32_t previewInstanceBudget = 200000;
   std::vector<ScatterTarget> targets;
   std::vector<ScatterObject> objects;
+};
+
+struct ScatterRuntimeStats {
+  uint32_t generatedInstances = 0;
+  uint32_t skippedByBudget = 0;
+  uint32_t activeTargets = 0;
+  uint32_t activeObjects = 0;
+  uint64_t revision = 0;
 };
 
 struct ImportedNodePayload {
@@ -168,6 +192,17 @@ bool RemoveScatterModel(size_t index);
 bool UpdateScatterModel(size_t index, const ScatterModel &model);
 bool AddSelectedNodesAsScatterTargets(size_t scatterIndex);
 bool AddSelectedNodesAsScatterObjects(size_t scatterIndex);
+bool AddScatterTargetFromPick(size_t scatterIndex, float screenX, float screenY,
+                              float screenWidth, float screenHeight);
+void SetScatterPickTarget(size_t scatterIndex);
+bool IsScatterPickingTarget();
+bool HandleScatterPick(float screenX, float screenY, float screenWidth,
+                       float screenHeight);
+void CancelScatterPick();
+bool SetScatterObjectSourcesHidden(size_t scatterIndex, size_t objectIndex,
+                                   bool hidden);
+bool RemoveUnusedScatterObjects(size_t scatterIndex);
+ScatterRuntimeStats GetScatterRuntimeStats();
 uint64_t GetScatterRuntimeRevision();
 
 // Light manipulation
