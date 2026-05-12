@@ -103,7 +103,7 @@ void ScatterPanel::createUi()
     m_modelEnabled = new QCheckBox(tr("Enabled"), modelGroup);
     m_modelSeed = new QSpinBox(modelGroup);
     m_modelSeed->setRange(1, 2147483647);
-    m_previewDensityScale = CreateDoubleSpin(0.0, 10.0, 0.1, 2);
+    m_previewDensityScale = CreateDoubleSpin(0.0, 1.0, 0.05, 2);
     m_previewBudget = new QSpinBox(modelGroup);
     m_previewBudget->setRange(0, 2000000);
     modelForm->addRow(tr("Name"), m_modelName);
@@ -189,6 +189,7 @@ void ScatterPanel::createUi()
     m_clumpScale = CreateDoubleSpin(0.0, 10000.0, 0.25, 2);
     m_clumpStrength = CreateDoubleSpin(0.0, 1.0, 0.05, 2);
     m_edgeAvoidance = CreateDoubleSpin(0.0, 0.33, 0.01, 2);
+    m_collisionAvoidance = CreateDoubleSpin(0.0, 10000.0, 0.05, 3);
 
     objectForm->addRow(tr("Name"), m_objectName);
     objectForm->addRow(tr("State"), m_objectEnabled);
@@ -210,6 +211,7 @@ void ScatterPanel::createUi()
     objectForm->addRow(tr("Clump Scale"), m_clumpScale);
     objectForm->addRow(tr("Clump Strength"), m_clumpStrength);
     objectForm->addRow(tr("Edge Avoid"), m_edgeAvoidance);
+    objectForm->addRow(tr("Avoid Collision"), m_collisionAvoidance);
     m_tabs->addTab(objectEditGroup, tr("Placement"));
 
     m_statsLabel = new QLabel(this);
@@ -349,6 +351,7 @@ void ScatterPanel::createUi()
     connect(m_clumpScale, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
     connect(m_clumpStrength, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
     connect(m_edgeAvoidance, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
+    connect(m_collisionAvoidance, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
 }
 
 void ScatterPanel::refreshUi()
@@ -416,7 +419,7 @@ void ScatterPanel::syncInspector()
         m_modelName->setText(QString::fromStdString(model.name));
         m_modelEnabled->setChecked(model.enabled);
         m_modelSeed->setValue(static_cast<int>(std::max(1u, model.seed)));
-        m_previewDensityScale->setValue(model.previewDensityScale);
+        m_previewDensityScale->setValue(std::clamp(model.previewDensityScale, 0.0f, 1.0f));
         m_previewBudget->setValue(static_cast<int>(std::min<uint32_t>(model.previewInstanceBudget, 2000000u)));
 
         for (const Scene::ScatterTarget &target : model.targets) {
@@ -487,6 +490,7 @@ void ScatterPanel::syncInspector()
     m_clumpScale->setEnabled(hasObject);
     m_clumpStrength->setEnabled(hasObject);
     m_edgeAvoidance->setEnabled(hasObject);
+    m_collisionAvoidance->setEnabled(hasObject);
 
     if (hasObject) {
         const Scene::ScatterObject &object =
@@ -512,6 +516,7 @@ void ScatterPanel::syncInspector()
         m_clumpScale->setValue(object.clumpScale);
         m_clumpStrength->setValue(object.clumpStrength);
         m_edgeAvoidance->setValue(object.edgeAvoidance);
+        m_collisionAvoidance->setValue(object.collisionAvoidanceRadius);
     } else {
         m_hideSourceButton->setText(tr("Hide Source"));
         m_objectName->clear();
@@ -525,6 +530,7 @@ void ScatterPanel::syncInspector()
         m_clumpScale->setValue(0.0);
         m_clumpStrength->setValue(0.0);
         m_edgeAvoidance->setValue(0.0);
+        m_collisionAvoidance->setValue(0.0);
     }
     m_syncing = false;
 }
@@ -543,7 +549,8 @@ void ScatterPanel::applyModelEdit()
     model.name = m_modelName->text().toStdString();
     model.enabled = m_modelEnabled->isChecked();
     model.seed = static_cast<uint32_t>(std::max(1, m_modelSeed->value()));
-    model.previewDensityScale = static_cast<float>(m_previewDensityScale->value());
+    model.previewDensityScale =
+        std::clamp(static_cast<float>(m_previewDensityScale->value()), 0.0f, 1.0f);
     model.previewInstanceBudget =
         static_cast<uint32_t>(std::max(0, m_previewBudget->value()));
     Scene::UpdateScatterModel(static_cast<size_t>(row), model);
@@ -605,6 +612,7 @@ void ScatterPanel::applyObjectEdit()
     object.clumpScale = static_cast<float>(m_clumpScale->value());
     object.clumpStrength = static_cast<float>(m_clumpStrength->value());
     object.edgeAvoidance = static_cast<float>(m_edgeAvoidance->value());
+    object.collisionAvoidanceRadius = static_cast<float>(m_collisionAvoidance->value());
     Scene::UpdateScatterModel(static_cast<size_t>(modelRow), model);
 }
 

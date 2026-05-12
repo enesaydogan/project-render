@@ -81,6 +81,7 @@ struct ScatterObject {
   float clumpScale = 0.0f;
   float clumpStrength = 0.0f;
   float edgeAvoidance = 0.0f;
+  float collisionAvoidanceRadius = 0.0f;
   bool enabled = true;
   bool librarySourceHidden = false;
 };

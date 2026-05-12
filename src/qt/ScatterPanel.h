@@ -80,5 +80,6 @@ private:
     QDoubleSpinBox *m_clumpScale = nullptr;
     QDoubleSpinBox *m_clumpStrength = nullptr;
     QDoubleSpinBox *m_edgeAvoidance = nullptr;
+    QDoubleSpinBox *m_collisionAvoidance = nullptr;
     QTimer *m_refreshTimer = nullptr;
 };

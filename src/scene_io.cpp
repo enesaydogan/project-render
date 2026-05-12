@@ -687,6 +687,7 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
           {"cs", object.clumpScale},
           {"cl", object.clumpStrength},
           {"ea", object.edgeAvoidance},
+          {"ca", object.collisionAvoidanceRadius},
           {"lhs", object.librarySourceHidden},
           {"en", object.enabled},
       });
@@ -1256,6 +1257,8 @@ static void RestoreScatterPRS(const json &j) {
         object.clumpScale = savedObject.value("cs", object.clumpScale);
         object.clumpStrength = savedObject.value("cl", object.clumpStrength);
         object.edgeAvoidance = savedObject.value("ea", object.edgeAvoidance);
+        object.collisionAvoidanceRadius =
+            savedObject.value("ca", object.collisionAvoidanceRadius);
         object.librarySourceHidden = savedObject.value("lhs", object.librarySourceHidden);
         object.enabled = savedObject.value("en", object.enabled);
         if (object.meshIndices.empty()) {

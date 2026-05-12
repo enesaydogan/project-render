@@ -3098,6 +3098,32 @@ static float ScatterFractalNoise2D(float x, float y, uint32_t seed) {
   return norm > 0.0f ? sum / norm : 0.0f;
 }
 
+struct ScatterCollisionCell {
+  int x = 0;
+  int y = 0;
+  int z = 0;
+
+  bool operator==(const ScatterCollisionCell &rhs) const {
+    return x == rhs.x && y == rhs.y && z == rhs.z;
+  }
+};
+
+struct ScatterCollisionCellHash {
+  size_t operator()(const ScatterCollisionCell &cell) const {
+    uint32_t h = ScatterHashU32(static_cast<uint32_t>(cell.x));
+    h ^= ScatterHashU32(static_cast<uint32_t>(cell.y) + 0x9e3779b9u);
+    h ^= ScatterHashU32(static_cast<uint32_t>(cell.z) + 0x85ebca6bu);
+    return static_cast<size_t>(h);
+  }
+};
+
+static ScatterCollisionCell ScatterCollisionCellFor(
+    const DirectX::XMFLOAT3 &position, float cellSize) {
+  return {static_cast<int>(floorf(position.x / cellSize)),
+          static_cast<int>(floorf(position.y / cellSize)),
+          static_cast<int>(floorf(position.z / cellSize))};
+}
+
 static DirectX::XMVECTOR ScatterSafeNormalize(DirectX::XMVECTOR v,
                                               DirectX::XMVECTOR fallback) {
   if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(v)) < 1e-10f) {
@@ -3246,7 +3272,7 @@ static void AppendScatterInstancesForObject(
 
   const float desired =
       weightedArea * object.densityPerSquareMeter * object.weight *
-      (std::max)(0.0f, model.previewDensityScale);
+      (std::clamp)(model.previewDensityScale, 0.0f, 1.0f);
   uint32_t instanceCount =
       static_cast<uint32_t>((std::max)(0.0f, std::round(desired)));
   instanceCount = (std::min)(instanceCount, object.maxInstances);
@@ -3285,9 +3311,52 @@ static void AppendScatterInstancesForObject(
       (std::clamp)(object.clumpStrength, 0.0f, 1.0f);
   const float edgeAvoidance =
       (std::clamp)(object.edgeAvoidance, 0.0f, 0.33f);
+  const float collisionRadius =
+      (std::max)(0.0f, object.collisionAvoidanceRadius);
+  const float collisionRadius2 = collisionRadius * collisionRadius;
   const float cameraX = g_cameraData.pos[0];
   const float cameraY = g_cameraData.pos[1];
   const float cameraZ = g_cameraData.pos[2];
+  std::unordered_map<ScatterCollisionCell, std::vector<DirectX::XMFLOAT3>,
+                     ScatterCollisionCellHash>
+      acceptedCollisionPoints;
+  auto collidesWithAcceptedPoint = [&](const DirectX::XMFLOAT3 &position) {
+    if (collisionRadius <= 1e-4f) {
+      return false;
+    }
+    const ScatterCollisionCell cell =
+        ScatterCollisionCellFor(position, collisionRadius);
+    for (int dz = -1; dz <= 1; ++dz) {
+      for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+          const ScatterCollisionCell neighbor{cell.x + dx, cell.y + dy,
+                                              cell.z + dz};
+          const auto it = acceptedCollisionPoints.find(neighbor);
+          if (it == acceptedCollisionPoints.end()) {
+            continue;
+          }
+          for (const DirectX::XMFLOAT3 &accepted : it->second) {
+            const float diffX = position.x - accepted.x;
+            const float diffY = position.y - accepted.y;
+            const float diffZ = position.z - accepted.z;
+            const float dist2 =
+                diffX * diffX + diffY * diffY + diffZ * diffZ;
+            if (dist2 < collisionRadius2) {
+              return true;
+            }
+          }
+        }
+      }
+    }
+    return false;
+  };
+  auto addAcceptedCollisionPoint = [&](const DirectX::XMFLOAT3 &position) {
+    if (collisionRadius <= 1e-4f) {
+      return;
+    }
+    acceptedCollisionPoints[ScatterCollisionCellFor(position, collisionRadius)]
+        .push_back(position);
+  };
 
   for (uint32_t instanceIndex = 0;
        instanceIndex < instanceCount && remainingModelBudget > 0;
@@ -3353,6 +3422,9 @@ static void AppendScatterInstancesForObject(
         continue;
       }
     }
+    if (collidesWithAcceptedPoint(position)) {
+      continue;
+    }
     DirectX::XMVECTOR n = ScatterSafeNormalize(DirectX::XMLoadFloat3(&normal),
                                                DirectX::XMVectorSet(0.0f, 1.0f,
                                                                     0.0f, 0.0f));
@@ -3385,6 +3457,7 @@ static void AppendScatterInstancesForObject(
     const DirectX::XMMATRIX transform =
         MakeScatterTransform(position, normal, object, yaw, pitch, roll, scale);
 
+    bool emittedPlacement = false;
     for (size_t objectMeshOffset = 0; objectMeshOffset < object.meshIndices.size();
          ++objectMeshOffset) {
       if (remainingModelBudget == 0) {
@@ -3414,6 +3487,10 @@ static void AppendScatterInstancesForObject(
       outInstances.push_back(std::move(inst));
       ++s_scatterRuntimeStats.generatedInstances;
       --remainingModelBudget;
+      emittedPlacement = true;
+    }
+    if (emittedPlacement) {
+      addAcceptedCollisionPoint(position);
     }
   }
 }
