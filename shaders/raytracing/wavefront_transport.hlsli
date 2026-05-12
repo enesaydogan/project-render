@@ -3,7 +3,6 @@
 
 #include "../brdf_lib.hlsl"
 
-static const float kWavefrontEnvLightingBoost = 3.0;
 static const float kWavefrontShadowContributionScale = 4096.0;
 static const float kWavefrontShadowContributionInvScale =
     1.0 / kWavefrontShadowContributionScale;

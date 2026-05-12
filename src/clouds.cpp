@@ -365,6 +365,17 @@ void CloudManager::RequestBake() {
   m_secondsSinceParamEdit = 0.0f;
 }
 
+void CloudManager::RequestPreviewBake() {
+  m_bakeRequested = true;
+  m_bakeInProgress = false;
+  m_bakeNextRow = 0;
+  m_pendingParamBake = true;
+  m_pendingPreviewBake = true;
+  m_pendingFinalBake = true;
+  m_requestedBakeQuality = BakeQuality::Preview;
+  m_secondsSinceParamEdit = 0.0f;
+}
+
 void CloudManager::CreateDescriptors(ID3D12Device *device) {
   // Allocate 4 contiguous persistent descriptors: CBV, Base SRV, Detail SRV, BakedSky SRV
   DescriptorAllocation alloc = g_cbvSrvAllocator.AllocatePersistent(4);

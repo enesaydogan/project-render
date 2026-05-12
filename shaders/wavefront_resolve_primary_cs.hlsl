@@ -874,8 +874,8 @@ inline GI_Reservoir GenerateWavefrontGiCandidate(float3 hitPos,
     float3 radiance = float3(0.0, 0.0, 0.0);
     float3 candidatePos = hitPos + candidateDir * 1000.0;
     if (query.CommittedStatus() == COMMITTED_NOTHING) {
-        radiance = WavefrontEvaluateEnvironmentRadiance(candidateDir,
-                                                        candidatePos);
+        radiance = WavefrontEvaluateIndirectEnvironmentRadiance(candidateDir,
+                                                                candidatePos);
     } else if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
         radiance = EvaluateWavefrontGiSurfaceRadiance(query, candidateDir,
                                                       candidatePos);

@@ -219,7 +219,11 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         if (useMaterialBinList) {
             return;
         }
-        contribution = max(state.throughput, 0.0) * WavefrontHitRecordGetColor(record);
+        float3 missRadiance = WavefrontHitRecordGetColor(record);
+        if (WavefrontGetPathRayType(state.packedState) == RAY_TYPE_DIFFUSE) {
+            missRadiance *= GetDxrIndirectIblBoost();
+        }
+        contribution = max(state.throughput, 0.0) * missRadiance;
         uint previousValue = 0u;
         InterlockedAdd(g_wavefrontStats[28], 1u, previousValue);
     } else {
@@ -430,8 +434,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                                          ComputeWavefrontDirectLightingWeightForView(
                                              record, normal, -rayDir,
                                              envSample.L) *
-                                         (misW / max(envSample.pdf, 1.0e-8)) *
-                                         kWavefrontEnvLightingBoost;
+                                         (misW / max(envSample.pdf, 1.0e-8));
                 if (any(envShadowWeight > 1.0e-4) &&
                     KeepWavefrontSecondaryShadow(secondaryShadowKeepProbability,
                                                  rng, envShadowWeight)) {

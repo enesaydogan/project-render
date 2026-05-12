@@ -90,6 +90,7 @@ public:
                ID3D12Resource *cameraCB = nullptr,
                bool backgroundBudget = false);
   void RequestBake();
+  void RequestPreviewBake();
   bool NeedsBake() const { return m_bakeRequested; }
   bool FinalBakeRequested() const {
     return m_bakeRequested && m_requestedBakeQuality == BakeQuality::Final;

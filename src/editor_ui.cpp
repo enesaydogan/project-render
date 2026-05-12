@@ -2363,6 +2363,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
                                            &cp.groundBounceStrength, 0.0f, 2.0f);
 
         if (cloudChanged) {
+          g_cloudManager.RequestPreviewBake();
           DxrRenderer::ResetAccumulation();
         }
       }

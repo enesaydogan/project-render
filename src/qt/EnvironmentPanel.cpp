@@ -627,8 +627,9 @@ void EnvironmentPanel::applyCloudSettings()
     cp.groundBounceStrength = static_cast<float>(m_groundBounceStrength->value());
     cp.shadowSoftness = static_cast<float>(m_shadowSoftness->value());
 
-    // CloudManager::Update detects parameter edits and schedules a trailing-edge
-    // bake. RequestBake() here would force the full sky bake on every slider tick.
+    // Keep slider feedback interactive with a preview bake; CloudManager::Update
+    // still schedules the trailing-edge final bake after edits settle.
+    g_cloudManager.RequestPreviewBake();
     DxrRenderer::ResetAccumulation();
     if (!anyControlInteracting()) {
         syncFromRenderer();

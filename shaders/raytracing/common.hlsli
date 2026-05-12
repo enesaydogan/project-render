@@ -184,6 +184,11 @@ inline float GetDxrProceduralSkyBoost()
     return max(dxrProceduralSkyBoost, 0.0);
 }
 
+inline float GetDxrIndirectIblBoost()
+{
+    return max(iblIndirectBoost, 0.0);
+}
+
 inline float2 DirectionToUVRotated(float3 dir) {
     float2 uv = DirectionToUV(dir);
     uv.x = frac(uv.x + (iblRotationDegrees / 360.0));
@@ -892,9 +897,31 @@ inline float3 WavefrontEvaluateEnvironmentRadiance(float3 direction,
 {
     float pathDistance = max(length(surfacePos - camPos), 1.0e-3);
     float envLod = clamp(log2(pathDistance * 0.02) + 0.35, 0.0, 10.0);
+    float cloudLod = min(10.0, envLod + 0.5);
     float2 uv = DirectionToUVRotated(normalize(direction));
-    return envMap.SampleLevel(linearSampler, uv, envLod).rgb *
-           GetDxrProceduralSkyBoost();
+    float3 color = envMap.SampleLevel(linearSampler, uv, envLod).rgb *
+                   GetDxrProceduralSkyBoost();
+
+    if (cloudRenderingEnabled > 0.5f) {
+        float4 baked = bakedClouds.SampleLevel(linearSampler, uv, cloudLod);
+        baked.a = saturate(baked.a);
+        baked.rgb = max(baked.rgb, 0.0);
+        float opacity = 1.0f - baked.a;
+        float denseCore = pow(saturate(opacity), 2.2f);
+        float skyLeak = 0.035f * denseCore;
+        float3 cloudColor = color * (baked.a + skyLeak) + baked.rgb;
+        cloudColor += color * (0.006f * denseCore);
+        color = clamp(cloudColor, 0.0f, 100000.0f);
+    }
+
+    return color;
+}
+
+inline float3 WavefrontEvaluateIndirectEnvironmentRadiance(float3 direction,
+                                                           float3 surfacePos)
+{
+    return WavefrontEvaluateEnvironmentRadiance(direction, surfacePos) *
+           GetDxrIndirectIblBoost();
 }
 
 inline float3 WavefrontEvaluateShadowTaskRadiance(uint packedLightIndex,
@@ -903,7 +930,8 @@ inline float3 WavefrontEvaluateShadowTaskRadiance(uint packedLightIndex,
 {
     const uint lightType = WavefrontGetLightSampleType(packedLightIndex);
     if (lightType == WAVEFRONT_LIGHT_SAMPLE_ENV) {
-        return WavefrontEvaluateEnvironmentRadiance(direction, surfacePos);
+        return WavefrontEvaluateIndirectEnvironmentRadiance(direction,
+                                                           surfacePos);
     }
     return float3(0.0, 0.0, 0.0);
 }
