@@ -6753,6 +6753,14 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
             dxrList.Get(), cameraCB, materialCB, meshDataSB, materialExtraSB,
             kWavefrontQueueFlagMissOnly | wavefrontFastTransportFlags, false);
 
+        // Barrier for s_outputUAV (g_output) to ensure ResolvePrimary writes are visible
+        {
+          D3D12_RESOURCE_BARRIER uavBarrier = {};
+          uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+          uavBarrier.UAV.pResource = s_outputUAV.Get();
+          dxrList->ResourceBarrier(1, &uavBarrier);
+        }
+
         // Primary shadow visibility: trace the shadow rays queued by primary
         // resolve and accumulate direct lighting into the output buffer.
         DispatchWavefrontPrepareIndirectArgs(dxrList.Get(), kWavefrontQueueShadow, ~0u,
@@ -7935,6 +7943,40 @@ void SubmitAsyncRestirWork() {
   s_asyncComputePendingFenceWait = computeFenceValue;
 
   s_asyncRestirPending = false;
+}
+
+bool CopyTonemappedFrameToResource(ID3D12GraphicsCommandList *commandList,
+                                   ID3D12Resource *target,
+                                   D3D12_RESOURCE_STATES *targetState) {
+  if (!commandList || !target || !targetState || !s_tonemapOutputUAV) {
+    return false;
+  }
+
+  const D3D12_RESOURCE_DESC srcDesc = s_tonemapOutputUAV->GetDesc();
+  const D3D12_RESOURCE_DESC dstDesc = target->GetDesc();
+  if (srcDesc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
+      dstDesc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
+      srcDesc.Format != dstDesc.Format || srcDesc.Width != dstDesc.Width ||
+      srcDesc.Height != dstDesc.Height) {
+    return false;
+  }
+
+  const D3D12_RESOURCE_STATES restoreTargetState = *targetState;
+  TransitionResource(commandList, s_tonemapOutputUAV.Get(),
+                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                     D3D12_RESOURCE_STATE_COPY_SOURCE);
+  TransitionResource(commandList, target, *targetState,
+                     D3D12_RESOURCE_STATE_COPY_DEST);
+  *targetState = D3D12_RESOURCE_STATE_COPY_DEST;
+
+  commandList->CopyResource(target, s_tonemapOutputUAV.Get());
+
+  TransitionResource(commandList, target, *targetState, restoreTargetState);
+  *targetState = restoreTargetState;
+  TransitionResource(commandList, s_tonemapOutputUAV.Get(),
+                     D3D12_RESOURCE_STATE_COPY_SOURCE,
+                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+  return true;
 }
 
 bool ExportTonemappedFrameToPng(const std::wstring &filePath) {

@@ -223,6 +223,12 @@ float GetPhysicalCameraEV100();
 // Exports the latest tonemapped DXR frame to a PNG file.
 // The PNG is lossless (maximum quality by format design).
 bool ExportTonemappedFrameToPng(const std::wstring &filePath);
+
+// Copies the latest tonemapped DXR frame into an external preview/export
+// target. The caller owns targetState and keeps it in sync with other passes.
+bool CopyTonemappedFrameToResource(ID3D12GraphicsCommandList *commandList,
+                                   ID3D12Resource *target,
+                                   D3D12_RESOURCE_STATES *targetState);
 } // namespace DxrRenderer
 
 extern bool g_rayTracingSupported;

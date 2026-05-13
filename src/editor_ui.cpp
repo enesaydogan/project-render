@@ -139,6 +139,7 @@ static std::string g_animationEncodeMessage;
 
 struct PreviewOverlayState {
   bool visible = false;
+  bool needsPresent = false;
   unsigned int width = 0;
   unsigned int height = 0;
   float pos[3] = {0.0f, 0.0f, 0.0f};
@@ -157,7 +158,7 @@ static PreviewOverlayState g_previewOverlay;
 static void ReleasePreviewOverlayImage() {
   if (g_exportRenderTarget) {
     // The preview target can still be referenced by the previous frame's
-    // ImGui draw list when the user dismisses it via camera movement or ESC.
+    // direct present command list when the user dismisses it.
     // Drain the direct queue before releasing that SRV-backed texture.
     WaitGPUIdle();
   }
@@ -171,6 +172,7 @@ static void ReleasePreviewOverlayImage() {
 
 void LatchPreviewRenderImage() {
   g_previewOverlay.visible = true;
+  g_previewOverlay.needsPresent = true;
   g_previewOverlay.width = g_renderExportJob.targetWidth;
   g_previewOverlay.height = g_renderExportJob.targetHeight;
   for (int i = 0; i < 3; ++i) {
@@ -394,46 +396,6 @@ static void DrawSceneIoOverlay() {
                        ImVec2(420.0f, 0.0f));
   }
   ImGui::End();
-}
-
-static void DrawRenderExportViewportPreview() {
-  const bool showActiveRender = g_renderExportJob.active;
-  const bool showLatchedPreview =
-      !showActiveRender && g_previewOverlay.visible;
-  if ((!showActiveRender && !showLatchedPreview) ||
-      !g_exportRenderTarget || g_exportPreviewSrvGpu.ptr == 0) {
-    return;
-  }
-
-  const unsigned int sourceWidth =
-      showActiveRender ? g_renderExportJob.targetWidth : g_previewOverlay.width;
-  const unsigned int sourceHeight =
-      showActiveRender ? g_renderExportJob.targetHeight : g_previewOverlay.height;
-  if (sourceHeight == 0) {
-    return;
-  }
-
-  ImGuiViewport *vp = ImGui::GetMainViewport();
-  if (!vp) {
-    return;
-  }
-
-  const float srcAspect = (float)sourceWidth / (float)sourceHeight;
-  float drawW = vp->Size.x;
-  float drawH = drawW / srcAspect;
-  if (drawH > vp->Size.y) {
-    drawH = vp->Size.y;
-    drawW = drawH * srcAspect;
-  }
-  if (drawW <= 0.0f || drawH <= 0.0f) {
-    return;
-  }
-
-  const ImVec2 pMin(vp->Pos.x + (vp->Size.x - drawW) * 0.5f,
-                    vp->Pos.y + (vp->Size.y - drawH) * 0.5f);
-  const ImVec2 pMax(pMin.x + drawW, pMin.y + drawH);
-  ImGui::GetBackgroundDrawList()->AddImage(
-      (ImTextureID)g_exportPreviewSrvGpu.ptr, pMin, pMax);
 }
 
 // ── helper lambdas/functions that were local to WinMain ─────────────────────
@@ -1527,6 +1489,16 @@ bool HasPreviewRenderImage() {
            g_exportPreviewSrvGpu.ptr != 0;
 }
 
+bool PreviewRenderNeedsPresent() {
+  return HasPreviewRenderImage() && g_previewOverlay.needsPresent;
+}
+
+void MarkPreviewRenderPresented() {
+  if (g_previewOverlay.visible) {
+    g_previewOverlay.needsPresent = false;
+  }
+}
+
 void CancelPreviewRender() {
   if (g_renderExportJob.active && g_renderExportJob.isPreview) {
     g_renderExportStatus = "Preview canceled.";
@@ -1587,7 +1559,6 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
-    DrawRenderExportViewportPreview();
     if (!IsSceneIoJobActive()) {
       ImGuizmo::BeginFrame();
       Scene::DrawGizmo();
@@ -1644,10 +1615,6 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
     ImGui::Render();
     return;
   }
-
-  // Draw export preview directly into the main viewport (scaled to fit),
-  // so users can track render progress without opening a separate panel.
-  DrawRenderExportViewportPreview();
 
   // Main menu bar: Window menu + quick panel toggles on the bar for fast
   // access

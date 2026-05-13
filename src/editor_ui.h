@@ -130,6 +130,8 @@ void RestoreRenderExportState(bool preservePreviewImage = false);
 void LatchPreviewRenderImage();
 bool IsPreviewRenderActive();
 bool HasPreviewRenderImage();
+bool PreviewRenderNeedsPresent();
+void MarkPreviewRenderPresented();
 void CancelPreviewRender();
 bool StartBatchRenderExportJobs(const std::wstring &outputDirectory,
                                 const std::wstring &baseName);

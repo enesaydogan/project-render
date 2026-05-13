@@ -816,6 +816,8 @@ static D3D12_VERTEX_BUFFER_VIEW g_vertexBufferView = {};
 ComPtr<ID3D12Resource> g_constantBuffer;
 void *g_constantCbMappedData = nullptr;
 static float g_offsetX = 0.2f;
+static ComPtr<ID3D12RootSignature> g_previewPresentRootSignature;
+static ComPtr<ID3D12PipelineState> g_previewPresentPipelineState;
 
 // Grid rendering resources
 static ComPtr<ID3D12Resource> g_gridVertexBuffer;
@@ -921,6 +923,203 @@ static std::wstring FindShaderFile(const wchar_t *relativePath) {
 
   // Return original path if not found (will fail later with clear error)
   return relativePath;
+}
+
+static bool EnsurePreviewPresentPipeline() {
+  if (g_previewPresentRootSignature && g_previewPresentPipelineState) {
+    return true;
+  }
+  if (!DX12Context::g_device) {
+    return false;
+  }
+
+  D3D12_DESCRIPTOR_RANGE srvRange = {};
+  srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+  srvRange.NumDescriptors = 1;
+  srvRange.BaseShaderRegister = 0;
+  srvRange.RegisterSpace = 0;
+  srvRange.OffsetInDescriptorsFromTableStart =
+      D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+  D3D12_ROOT_PARAMETER rootParam = {};
+  rootParam.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  rootParam.DescriptorTable.NumDescriptorRanges = 1;
+  rootParam.DescriptorTable.pDescriptorRanges = &srvRange;
+  rootParam.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+  D3D12_STATIC_SAMPLER_DESC sampler = {};
+  sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+  sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+  sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+  sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+  sampler.MipLODBias = 0.0f;
+  sampler.MaxAnisotropy = 1;
+  sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+  sampler.BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
+  sampler.MinLOD = 0.0f;
+  sampler.MaxLOD = D3D12_FLOAT32_MAX;
+  sampler.ShaderRegister = 0;
+  sampler.RegisterSpace = 0;
+  sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+  D3D12_ROOT_SIGNATURE_DESC rootDesc = {};
+  rootDesc.NumParameters = 1;
+  rootDesc.pParameters = &rootParam;
+  rootDesc.NumStaticSamplers = 1;
+  rootDesc.pStaticSamplers = &sampler;
+  rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+  ComPtr<ID3DBlob> signature;
+  ComPtr<ID3DBlob> error;
+  HRESULT hr = D3D12SerializeRootSignature(
+      &rootDesc, D3D_ROOT_SIGNATURE_VERSION_1, &signature, &error);
+  if (FAILED(hr)) {
+    if (error) {
+      fprintf(stderr, "Preview present root signature error: %s\n",
+              (char *)error->GetBufferPointer());
+    }
+    return false;
+  }
+  hr = DX12Context::g_device->CreateRootSignature(
+      0, signature->GetBufferPointer(), signature->GetBufferSize(),
+      IID_PPV_ARGS(&g_previewPresentRootSignature));
+  if (FAILED(hr)) {
+    fprintf(stderr, "Preview present root signature create failed: 0x%08x\n",
+            (unsigned)hr);
+    return false;
+  }
+
+  DxcHelper dxc;
+  ComPtr<IDxcBlob> vsBlob;
+  ComPtr<IDxcBlob> psBlob;
+  const std::wstring shaderPath =
+      FindShaderFile(L"shaders\\preview_present.hlsl");
+  try {
+    vsBlob = dxc.Compile(shaderPath, L"VSMain", L"vs_6_0");
+    psBlob = dxc.Compile(shaderPath, L"PSMain", L"ps_6_0");
+  } catch (const std::exception &e) {
+    fprintf(stderr, "Preview present shader compile failed: %s\n", e.what());
+    g_previewPresentRootSignature.Reset();
+    return false;
+  }
+
+  D3D12_RASTERIZER_DESC rasterDesc = {};
+  rasterDesc.FillMode = D3D12_FILL_MODE_SOLID;
+  rasterDesc.CullMode = D3D12_CULL_MODE_NONE;
+  rasterDesc.DepthClipEnable = TRUE;
+
+  D3D12_BLEND_DESC blendDesc = {};
+  blendDesc.AlphaToCoverageEnable = FALSE;
+  blendDesc.IndependentBlendEnable = FALSE;
+  for (int i = 0; i < D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i) {
+    blendDesc.RenderTarget[i].BlendEnable = FALSE;
+    blendDesc.RenderTarget[i].LogicOpEnable = FALSE;
+    blendDesc.RenderTarget[i].SrcBlend = D3D12_BLEND_ONE;
+    blendDesc.RenderTarget[i].DestBlend = D3D12_BLEND_ZERO;
+    blendDesc.RenderTarget[i].BlendOp = D3D12_BLEND_OP_ADD;
+    blendDesc.RenderTarget[i].SrcBlendAlpha = D3D12_BLEND_ONE;
+    blendDesc.RenderTarget[i].DestBlendAlpha = D3D12_BLEND_ZERO;
+    blendDesc.RenderTarget[i].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    blendDesc.RenderTarget[i].LogicOp = D3D12_LOGIC_OP_NOOP;
+    blendDesc.RenderTarget[i].RenderTargetWriteMask =
+        D3D12_COLOR_WRITE_ENABLE_ALL;
+  }
+
+  D3D12_DEPTH_STENCIL_DESC depthDesc = {};
+  depthDesc.DepthEnable = FALSE;
+  depthDesc.StencilEnable = FALSE;
+
+  D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+  psoDesc.pRootSignature = g_previewPresentRootSignature.Get();
+  psoDesc.VS = {vsBlob->GetBufferPointer(), vsBlob->GetBufferSize()};
+  psoDesc.PS = {psBlob->GetBufferPointer(), psBlob->GetBufferSize()};
+  psoDesc.RasterizerState = rasterDesc;
+  psoDesc.BlendState = blendDesc;
+  psoDesc.DepthStencilState = depthDesc;
+  psoDesc.SampleMask = UINT_MAX;
+  psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+  psoDesc.NumRenderTargets = 1;
+  psoDesc.RTVFormats[0] = DXGI_FORMAT_R10G10B10A2_UNORM;
+  psoDesc.SampleDesc.Count = 1;
+
+  hr = DX12Context::g_device->CreateGraphicsPipelineState(
+      &psoDesc, IID_PPV_ARGS(&g_previewPresentPipelineState));
+  if (FAILED(hr)) {
+    fprintf(stderr, "Preview present PSO create failed: 0x%08x\n",
+            (unsigned)hr);
+    g_previewPresentRootSignature.Reset();
+    return false;
+  }
+
+  return true;
+}
+
+static bool DrawRenderPreviewToBackbuffer(
+    ID3D12GraphicsCommandList *cmdList, ID3D12Resource *backbuffer,
+    D3D12_CPU_DESCRIPTOR_HANDLE backbufferRtv, ID3D12Resource *previewTexture,
+    D3D12_RESOURCE_STATES &previewState,
+    D3D12_GPU_DESCRIPTOR_HANDLE previewSrv) {
+  if (!cmdList || !backbuffer || !previewTexture || previewSrv.ptr == 0 ||
+      !EnsurePreviewPresentPipeline()) {
+    return false;
+  }
+
+  const D3D12_RESOURCE_DESC srcDesc = previewTexture->GetDesc();
+  const D3D12_RESOURCE_DESC dstDesc = backbuffer->GetDesc();
+  const UINT srcWidth = static_cast<UINT>(srcDesc.Width);
+  const UINT srcHeight = srcDesc.Height;
+  const UINT dstWidth = static_cast<UINT>(dstDesc.Width);
+  const UINT dstHeight = dstDesc.Height;
+  if (srcWidth == 0 || srcHeight == 0 || dstWidth == 0 || dstHeight == 0) {
+    return false;
+  }
+
+  TR(cmdList, previewTexture, previewState,
+     D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+  previewState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+
+  const FLOAT clearColor[] = {0.0f, 0.0f, 0.0f, 1.0f};
+  cmdList->ClearRenderTargetView(backbufferRtv, clearColor, 0, nullptr);
+  cmdList->OMSetRenderTargets(1, &backbufferRtv, FALSE, nullptr);
+
+  const float srcAspect = (float)srcWidth / (float)srcHeight;
+  float drawW = (float)dstWidth;
+  float drawH = drawW / srcAspect;
+  if (drawH > (float)dstHeight) {
+    drawH = (float)dstHeight;
+    drawW = drawH * srcAspect;
+  }
+  const float drawX = ((float)dstWidth - drawW) * 0.5f;
+  const float drawY = ((float)dstHeight - drawH) * 0.5f;
+
+  D3D12_VIEWPORT previewViewport = {};
+  previewViewport.TopLeftX = drawX;
+  previewViewport.TopLeftY = drawY;
+  previewViewport.Width = drawW;
+  previewViewport.Height = drawH;
+  previewViewport.MinDepth = 0.0f;
+  previewViewport.MaxDepth = 1.0f;
+
+  D3D12_RECT previewScissor = {
+      (LONG)std::floor(drawX), (LONG)std::floor(drawY),
+      (LONG)std::ceil(drawX + drawW), (LONG)std::ceil(drawY + drawH)};
+  previewScissor.left = (std::max<LONG>)(0, previewScissor.left);
+  previewScissor.top = (std::max<LONG>)(0, previewScissor.top);
+  previewScissor.right =
+      (std::min<LONG>)((LONG)dstWidth, previewScissor.right);
+  previewScissor.bottom =
+      (std::min<LONG>)((LONG)dstHeight, previewScissor.bottom);
+
+  ID3D12DescriptorHeap *heaps[] = {g_cbvSrvAllocator.Heap()};
+  cmdList->SetDescriptorHeaps(_countof(heaps), heaps);
+  cmdList->SetGraphicsRootSignature(g_previewPresentRootSignature.Get());
+  cmdList->SetPipelineState(g_previewPresentPipelineState.Get());
+  cmdList->RSSetViewports(1, &previewViewport);
+  cmdList->RSSetScissorRects(1, &previewScissor);
+  cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+  cmdList->SetGraphicsRootDescriptorTable(0, previewSrv);
+  cmdList->DrawInstanced(3, 1, 0, 0);
+  return true;
 }
 
 // Enable D3D12 debug layer when available (debug builds)
@@ -2996,6 +3195,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
             if (g_renderExportJob.active &&
                 dxrTarget == g_exportRenderTarget.Get()) {
               g_exportRenderTargetState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+              DxrRenderer::CopyTonemappedFrameToResource(
+                  DX12Context::g_commandList.Get(), g_exportRenderTarget.Get(),
+                  &g_exportRenderTargetState);
             }
             // Success DXR render - Draw Grid with depth checks
             if (!g_renderExportJob.active && g_drawGrid) {
@@ -3043,6 +3245,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                   rtvHandle, clearColor, 0, nullptr);
               DX12Context::g_commandList->OMSetRenderTargets(1, &rtvHandle,
                                                              FALSE, nullptr);
+              DrawRenderPreviewToBackbuffer(
+                  DX12Context::g_commandList.Get(),
+                  DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),
+                  rtvHandle, g_exportRenderTarget.Get(),
+                  g_exportRenderTargetState, g_exportPreviewSrvGpu);
             }
           } else {
             // If RenderFrame failed, fall back to red clear.
@@ -3373,6 +3580,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       }
     } // End else !IsSceneIoJobActive()
 
+    if (!g_renderExportJob.active && HasPreviewRenderImage()) {
+      DrawRenderPreviewToBackbuffer(
+          DX12Context::g_commandList.Get(),
+          DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),
+          rtvHandle, g_exportRenderTarget.Get(), g_exportRenderTargetState,
+          g_exportPreviewSrvGpu);
+    }
+
     // Render ImGui (Overlay on top of whatever was drawn)
     if ((g_renderExportJob.active || HasPreviewRenderImage()) && g_exportRenderTarget &&
         g_exportPreviewSrvGpu.ptr != 0 &&
@@ -3422,6 +3637,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     // Release GPU resources
     g_pipelineState.Reset();
     g_rootSignature.Reset();
+    g_previewPresentPipelineState.Reset();
+    g_previewPresentRootSignature.Reset();
     g_vertexBuffer.Reset();
     g_constantBuffer.Reset();
     DX12Context::g_commandList.Reset();
@@ -3661,7 +3878,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
     const bool previewOverlayHoldingViewport =
         !g_renderExportJob.active && HasPreviewRenderImage();
-    if (previewOverlayHoldingViewport) {
+    if (previewOverlayHoldingViewport && !PreviewRenderNeedsPresent()) {
       prevTime = std::chrono::high_resolution_clock::now();
       WaitForSoftIdleMessage();
       prevTime = std::chrono::high_resolution_clock::now();
@@ -3737,6 +3954,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
     // Wait for previous frame
     DX12Context::WaitForPreviousFrame();
+
+    if (!g_renderExportJob.active && HasPreviewRenderImage() &&
+        PreviewRenderNeedsPresent()) {
+      MarkPreviewRenderPresented();
+    }
 
     // Check if the GPU was removed (TDR) during the last frame
     if (CheckDeviceRemoved()) {
