@@ -3,17 +3,21 @@
 #include "../editor_ui.h"
 #include "../scene.h"
 
-#include <QHBoxLayout>
 #include <QAbstractItemView>
+#include <QColor>
 #include <QFileInfo>
 #include <QHeaderView>
+#include <QHBoxLayout>
+#include <QIcon>
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QMetaObject>
+#include <QPainter>
+#include <QPixmap>
 #include <QProgressBar>
-#include <QPushButton>
 #include <QSignalBlocker>
 #include <QTimer>
+#include <QToolButton>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QVBoxLayout>
@@ -31,6 +35,14 @@ namespace {
 constexpr int kNodeIndexRole = Qt::UserRole;
 constexpr int kNodeNameColumn = 0;
 constexpr int kNodeLockColumn = 1;
+constexpr int kSceneToolButtonSize = 30;
+
+enum class SceneToolIcon {
+    ImportModel,
+    Reimport,
+    AddGroundPlane,
+    DeleteSelected
+};
 
 struct TreeUiState {
     bool liveSyncExpanded = true;
@@ -88,6 +100,72 @@ TreeUiState CaptureTreeUiState(const QTreeWidget *treeWidget)
     }
 
     return state;
+}
+
+QIcon MakeSceneToolIcon(SceneToolIcon icon)
+{
+    constexpr int kIconSize = 18;
+    QPixmap pixmap(kIconSize, kIconSize);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    const QColor stroke(206, 214, 218);
+    const QColor accent(88, 208, 244);
+    const QColor muted(132, 140, 144);
+
+    painter.setPen(QPen(stroke, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+
+    switch (icon) {
+    case SceneToolIcon::ImportModel:
+        painter.drawRect(QRectF(3.0, 6.0, 12.0, 8.0));
+        painter.drawLine(QPointF(5.0, 6.0), QPointF(7.0, 3.0));
+        painter.drawLine(QPointF(7.0, 3.0), QPointF(13.0, 3.0));
+        painter.drawLine(QPointF(13.0, 3.0), QPointF(15.0, 6.0));
+        painter.setPen(QPen(accent, 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.drawLine(QPointF(9.0, 7.0), QPointF(9.0, 12.0));
+        painter.drawLine(QPointF(6.5, 9.5), QPointF(9.0, 12.0));
+        painter.drawLine(QPointF(11.5, 9.5), QPointF(9.0, 12.0));
+        break;
+    case SceneToolIcon::Reimport:
+        painter.drawArc(QRectF(3.0, 3.0, 12.0, 12.0), 35 * 16, 285 * 16);
+        painter.setPen(QPen(accent, 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.drawLine(QPointF(14.0, 5.0), QPointF(14.5, 1.8));
+        painter.drawLine(QPointF(14.0, 5.0), QPointF(10.8, 4.5));
+        break;
+    case SceneToolIcon::AddGroundPlane:
+        painter.drawPolygon(QPolygonF({QPointF(3.0, 11.0), QPointF(9.0, 7.0),
+                                       QPointF(15.0, 11.0), QPointF(9.0, 15.0)}));
+        painter.setPen(QPen(accent, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.drawLine(QPointF(9.0, 2.5), QPointF(9.0, 7.5));
+        painter.drawLine(QPointF(6.5, 5.0), QPointF(11.5, 5.0));
+        break;
+    case SceneToolIcon::DeleteSelected:
+        painter.drawLine(QPointF(5.0, 6.0), QPointF(14.0, 6.0));
+        painter.drawLine(QPointF(7.0, 4.0), QPointF(12.0, 4.0));
+        painter.drawLine(QPointF(7.0, 7.5), QPointF(8.0, 14.0));
+        painter.drawLine(QPointF(12.0, 7.5), QPointF(11.0, 14.0));
+        painter.setPen(QPen(muted, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.drawLine(QPointF(9.5, 8.0), QPointF(9.5, 13.5));
+        break;
+    }
+
+    return QIcon(pixmap);
+}
+
+QToolButton *CreateSceneToolButton(QWidget *parent, const QString &toolTip, SceneToolIcon icon)
+{
+    auto *button = new QToolButton(parent);
+    button->setToolTip(toolTip);
+    button->setStatusTip(toolTip);
+    button->setIcon(MakeSceneToolIcon(icon));
+    button->setIconSize(QSize(18, 18));
+    button->setFixedSize(kSceneToolButtonSize, kSceneToolButtonSize);
+    button->setAutoRaise(false);
+    button->setFocusPolicy(Qt::NoFocus);
+    return button;
 }
 
 void HashCombine(uint64_t *hash, uint64_t value)
@@ -194,20 +272,21 @@ void ScenePanel::createUi()
     m_importStatusLabel->hide();
     layout->addWidget(m_importStatusLabel);
 
-    auto *buttonGrid = new QGridLayout();
-    buttonGrid->setContentsMargins(0, 0, 0, 0);
-    buttonGrid->setSpacing(4);
-    
-    m_importButton = new QPushButton(tr("Import Model"), this);
-    m_reimportButton = new QPushButton(tr("Reimport Selected"), this);
-    m_addPlaneButton = new QPushButton(tr("Add Ground Plane"), this);
-    m_deleteButton = new QPushButton(tr("Delete Selected"), this);
-    
-    buttonGrid->addWidget(m_importButton, 0, 0);
-    buttonGrid->addWidget(m_reimportButton, 0, 1);
-    buttonGrid->addWidget(m_addPlaneButton, 1, 0);
-    buttonGrid->addWidget(m_deleteButton, 1, 1);
-    layout->addLayout(buttonGrid);
+    auto *toolRow = new QHBoxLayout();
+    toolRow->setContentsMargins(0, 0, 0, 0);
+    toolRow->setSpacing(4);
+
+    m_importButton = CreateSceneToolButton(this, tr("Import Model"), SceneToolIcon::ImportModel);
+    m_reimportButton = CreateSceneToolButton(this, tr("Reimport Selected"), SceneToolIcon::Reimport);
+    m_addPlaneButton = CreateSceneToolButton(this, tr("Add Ground Plane"), SceneToolIcon::AddGroundPlane);
+    m_deleteButton = CreateSceneToolButton(this, tr("Delete Selected"), SceneToolIcon::DeleteSelected);
+
+    toolRow->addWidget(m_importButton);
+    toolRow->addWidget(m_reimportButton);
+    toolRow->addWidget(m_addPlaneButton);
+    toolRow->addWidget(m_deleteButton);
+    toolRow->addStretch(1);
+    layout->addLayout(toolRow);
 
     m_sourceLabel = new QLabel(this);
     m_sourceLabel->setWordWrap(true);
@@ -228,24 +307,24 @@ void ScenePanel::createUi()
     m_statusLabel->setWordWrap(true);
     layout->addWidget(m_statusLabel);
 
-    connect(m_importButton, &QPushButton::clicked, this, []() {
+    connect(m_importButton, &QToolButton::clicked, this, []() {
         HWND owner = g_hwnd ? GetAncestor(g_hwnd, GA_ROOT) : nullptr;
         if (!owner) {
             owner = g_hwnd;
         }
         Scene::ImportModelWithDialog(owner);
     });
-    connect(m_reimportButton, &QPushButton::clicked, this, [this]() {
+    connect(m_reimportButton, &QToolButton::clicked, this, [this]() {
         const int nodeIndex = selectedNodeIndex();
         if (nodeIndex >= 0) {
             Scene::ReimportNode(static_cast<size_t>(nodeIndex));
             refreshSceneList();
         }
     });
-    connect(m_addPlaneButton, &QPushButton::clicked, this, []() {
+    connect(m_addPlaneButton, &QToolButton::clicked, this, []() {
         Scene::AddDefaultPlane(0.0f);
     });
-    connect(m_deleteButton, &QPushButton::clicked, this, [this]() {
+    connect(m_deleteButton, &QToolButton::clicked, this, [this]() {
         const int nodeIndex = selectedNodeIndex();
         if (nodeIndex >= 0) {
             Scene::DeleteNode(static_cast<size_t>(nodeIndex));

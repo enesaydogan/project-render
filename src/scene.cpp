@@ -155,6 +155,40 @@ static void EnsureGpuBuffersForMeshes(std::vector<Asset::GpuMesh> &meshes);
 static void ReindexScatterNodeReferencesAfterRemoval(size_t removedNodeIndex);
 bool Inverse4x4(const float *m, float *out);
 
+void SetGizmoOperation(GizmoOperation operation) {
+  switch (operation) {
+  case GizmoOperation::Translate:
+    g_currentGizmoOp = ImGuizmo::TRANSLATE;
+    break;
+  case GizmoOperation::Rotate:
+    g_currentGizmoOp = ImGuizmo::ROTATE;
+    break;
+  case GizmoOperation::Scale:
+    g_currentGizmoOp = ImGuizmo::SCALE;
+    break;
+  }
+}
+
+GizmoOperation GetGizmoOperation() {
+  if (g_currentGizmoOp == ImGuizmo::ROTATE) {
+    return GizmoOperation::Rotate;
+  }
+  if (g_currentGizmoOp == ImGuizmo::SCALE) {
+    return GizmoOperation::Scale;
+  }
+  return GizmoOperation::Translate;
+}
+
+void SetGizmoSpace(GizmoSpace space) {
+  g_currentGizmoMode =
+      (space == GizmoSpace::World) ? ImGuizmo::WORLD : ImGuizmo::LOCAL;
+}
+
+GizmoSpace GetGizmoSpace() {
+  return (g_currentGizmoMode == ImGuizmo::WORLD) ? GizmoSpace::World
+                                                 : GizmoSpace::Local;
+}
+
 static void PopulateScatterTargetMetadata(ScatterTarget &target) {
   if (target.nodeIndex >= s_nodes.size()) {
     return;

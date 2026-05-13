@@ -131,7 +131,7 @@ void LightsPanel::createUi()
     form->setSpacing(6);
 
     m_typeLabel = new QLabel(tr("None"), m_propertiesGroup);
-    m_typeLabel->setStyleSheet(QStringLiteral("color: #007acc; font-weight: bold;"));
+    m_typeLabel->setStyleSheet(QStringLiteral("color: #58d0f4; font-weight: bold;"));
     form->addRow(tr("Type"), m_typeLabel);
 
     auto *posRow = CreateVec3Editor(m_posX, m_posY, m_posZ, -10000.0, 10000.0, 0.1, 2);

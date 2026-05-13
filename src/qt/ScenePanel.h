@@ -7,8 +7,8 @@
 
 class QLabel;
 class QProgressBar;
-class QPushButton;
 class QTimer;
+class QToolButton;
 class QTreeWidget;
 
 class ScenePanel : public QWidget
@@ -30,10 +30,10 @@ private:
     QLabel *m_importStatusLabel = nullptr;
     QLabel *m_statusLabel = nullptr;
     QLabel *m_sourceLabel = nullptr;
-    QPushButton *m_importButton = nullptr;
-    QPushButton *m_reimportButton = nullptr;
-    QPushButton *m_addPlaneButton = nullptr;
-    QPushButton *m_deleteButton = nullptr;
+    QToolButton *m_importButton = nullptr;
+    QToolButton *m_reimportButton = nullptr;
+    QToolButton *m_addPlaneButton = nullptr;
+    QToolButton *m_deleteButton = nullptr;
     QTimer *m_refreshTimer = nullptr;
     bool m_syncing = false;
     bool m_treeDirty = true;

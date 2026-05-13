@@ -161,6 +161,22 @@ void DrawGizmo();
 // Draw ImGuizmo gizmo for the selected light
 void DrawLightGizmo();
 
+enum class GizmoOperation {
+  Translate,
+  Rotate,
+  Scale,
+};
+
+enum class GizmoSpace {
+  Local,
+  World,
+};
+
+void SetGizmoOperation(GizmoOperation operation);
+GizmoOperation GetGizmoOperation();
+void SetGizmoSpace(GizmoSpace space);
+GizmoSpace GetGizmoSpace();
+
 // Node manipulation
 const std::vector<Node> &GetNodes();
 size_t AddNode(Node node);

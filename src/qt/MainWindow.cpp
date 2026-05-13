@@ -10,22 +10,30 @@
 #include "ScatterPanel.h"
 #include "ScenePanel.h"
 #include "ViewsPanel.h"
+#include "../animation_sequence.h"
 #include "../dx12_context.h"
 #include "../dxr_renderer.h"
 #include "../editor_ui.h"
 #include "../file_import.h"
 #include "../livelink/livelink_runtime.h"
 #include "../livelink/livelink_scene_sync.h"
+#include "../saved_views.h"
 #include "../scene.h"
 #include "../streamline_manager.h"
 #include <QAction>
+#include <QActionGroup>
 #include <QKeySequence>
 #include <QCloseEvent>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDockWidget>
 #include <QDialog>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QDoubleSpinBox>
+#include <QFileDialog>
+#include <QFormLayout>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QIcon>
@@ -33,9 +41,16 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QFrame>
+#include <QLineEdit>
 #include <QMimeData>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPen>
 #include <QProcess>
 #include <QPushButton>
+#include <QRadioButton>
+#include <QSizePolicy>
+#include <QSpinBox>
 #include <QVBoxLayout>
 #include <QMenuBar>
 #include <QPlainTextEdit>
@@ -43,11 +58,13 @@
 #include <QShortcut>
 #include <QScrollBar>
 #include <QScrollArea>
-#include <QSplitter>
+#include <QTabWidget>
 #include <QToolBar>
 #include <QStatusBar>
 #include <QTimer>
 #include <QUrl>
+#include <algorithm>
+#include <cmath>
 #include <vector>
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -63,6 +80,21 @@ extern HWND g_hwnd;
 extern RenderMode g_currentRenderMode;
 
 namespace {
+
+enum class ToolbarIcon {
+    Save,
+    SaveAs,
+    Open,
+    Render,
+    Teapot,
+    ImportModel,
+    ImportHdr,
+    Translate,
+    Rotate,
+    Scale,
+    Local,
+    World,
+};
 
 struct MemoryStats {
     double usedGb = 0.0;
@@ -207,6 +239,157 @@ QString FormatCompactLiveLinkStatus(
 
     return QObject::tr("LiveLink: %1 Connected")
         .arg(connectedProviders.join(QStringLiteral(", ")));
+}
+
+QIcon MakeToolbarIcon(ToolbarIcon icon,
+                      QColor line = QColor(205, 205, 205),
+                      QColor accent = QColor(69, 196, 238))
+{
+    constexpr int size = 32;
+    QPixmap pixmap(size, size);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(line, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+    QPen accentPen(accent, 2.2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+
+    switch (icon) {
+    case ToolbarIcon::Save:
+        painter.drawRoundedRect(QRectF(8, 6, 16, 20), 2, 2);
+        painter.drawLine(QPointF(11, 10), QPointF(21, 10));
+        painter.drawLine(QPointF(12, 20), QPointF(20, 20));
+        painter.drawLine(QPointF(12, 23), QPointF(20, 23));
+        break;
+    case ToolbarIcon::SaveAs:
+        painter.drawRoundedRect(QRectF(7, 6, 15, 19), 2, 2);
+        painter.drawLine(QPointF(10, 10), QPointF(19, 10));
+        painter.setPen(accentPen);
+        painter.drawLine(QPointF(20, 21), QPointF(26, 15));
+        painter.drawLine(QPointF(23, 14), QPointF(27, 18));
+        break;
+    case ToolbarIcon::Open:
+        painter.drawPath([&]() {
+            QPainterPath path;
+            path.moveTo(5, 12);
+            path.lineTo(13, 12);
+            path.lineTo(15, 9);
+            path.lineTo(23, 9);
+            path.lineTo(27, 13);
+            path.lineTo(24, 24);
+            path.lineTo(7, 24);
+            path.closeSubpath();
+            return path;
+        }());
+        painter.setPen(accentPen);
+        painter.drawLine(QPointF(10, 18), QPointF(22, 18));
+        break;
+    case ToolbarIcon::Render:
+        painter.setPen(accentPen);
+        painter.drawEllipse(QRectF(8, 8, 16, 16));
+        painter.drawLine(QPointF(14, 12), QPointF(21, 16));
+        painter.drawLine(QPointF(21, 16), QPointF(14, 20));
+        break;
+    case ToolbarIcon::Teapot:
+        painter.setPen(accentPen);
+        painter.drawPath([&]() {
+            QPainterPath body;
+            body.moveTo(9, 14);
+            body.cubicTo(10, 10, 20, 10, 21, 14);
+            body.lineTo(20, 22);
+            body.cubicTo(19, 25, 11, 25, 10, 22);
+            body.closeSubpath();
+            return body;
+        }());
+        painter.setPen(pen);
+        painter.drawLine(QPointF(13, 10), QPointF(18, 10));
+        painter.drawArc(QRectF(19, 14, 8, 7), 275 * 16, 215 * 16);
+        painter.drawPath([&]() {
+            QPainterPath spout;
+            spout.moveTo(9, 16);
+            spout.cubicTo(5, 15, 4, 12, 3, 12);
+            spout.cubicTo(5, 17, 7, 19, 10, 19);
+            return spout;
+        }());
+        painter.setPen(accentPen);
+        painter.drawLine(QPointF(12, 24), QPointF(19, 24));
+        break;
+    case ToolbarIcon::ImportModel:
+        painter.drawLine(QPointF(16, 6), QPointF(25, 11));
+        painter.drawLine(QPointF(16, 6), QPointF(7, 11));
+        painter.drawLine(QPointF(7, 11), QPointF(16, 16));
+        painter.drawLine(QPointF(25, 11), QPointF(16, 16));
+        painter.drawLine(QPointF(7, 11), QPointF(7, 21));
+        painter.drawLine(QPointF(25, 11), QPointF(25, 21));
+        painter.drawLine(QPointF(16, 16), QPointF(16, 26));
+        painter.drawLine(QPointF(7, 21), QPointF(16, 26));
+        painter.drawLine(QPointF(25, 21), QPointF(16, 26));
+        break;
+    case ToolbarIcon::ImportHdr:
+        painter.setPen(accentPen);
+        painter.drawEllipse(QRectF(11, 11, 10, 10));
+        painter.setPen(pen);
+        for (int i = 0; i < 8; ++i) {
+            const double a = i * 3.14159265358979323846 / 4.0;
+            const QPointF p0(16 + std::cos(a) * 8.0, 16 + std::sin(a) * 8.0);
+            const QPointF p1(16 + std::cos(a) * 12.0, 16 + std::sin(a) * 12.0);
+            painter.drawLine(p0, p1);
+        }
+        break;
+    case ToolbarIcon::Translate:
+        painter.setPen(accentPen);
+        painter.drawLine(QPointF(16, 6), QPointF(16, 26));
+        painter.drawLine(QPointF(6, 16), QPointF(26, 16));
+        painter.drawLine(QPointF(16, 6), QPointF(12, 10));
+        painter.drawLine(QPointF(16, 6), QPointF(20, 10));
+        painter.drawLine(QPointF(26, 16), QPointF(22, 12));
+        painter.drawLine(QPointF(26, 16), QPointF(22, 20));
+        break;
+    case ToolbarIcon::Rotate:
+        painter.setPen(accentPen);
+        painter.drawArc(QRectF(7, 7, 18, 18), 30 * 16, 285 * 16);
+        painter.drawLine(QPointF(23, 8), QPointF(26, 15));
+        painter.drawLine(QPointF(23, 8), QPointF(16, 8));
+        break;
+    case ToolbarIcon::Scale:
+        painter.drawRect(QRectF(9, 9, 14, 14));
+        painter.setPen(accentPen);
+        painter.drawLine(QPointF(14, 18), QPointF(23, 9));
+        painter.drawLine(QPointF(23, 9), QPointF(23, 15));
+        painter.drawLine(QPointF(23, 9), QPointF(17, 9));
+        break;
+    case ToolbarIcon::Local:
+        painter.setPen(accentPen);
+        painter.drawLine(QPointF(10, 23), QPointF(22, 11));
+        painter.drawLine(QPointF(10, 23), QPointF(10, 10));
+        painter.drawLine(QPointF(10, 23), QPointF(24, 23));
+        painter.setPen(pen);
+        painter.drawEllipse(QRectF(7, 20, 6, 6));
+        break;
+    case ToolbarIcon::World:
+        painter.drawEllipse(QRectF(7, 7, 18, 18));
+        painter.drawLine(QPointF(16, 7), QPointF(16, 25));
+        painter.drawLine(QPointF(7, 16), QPointF(25, 16));
+        painter.setPen(accentPen);
+        painter.drawArc(QRectF(10, 7, 12, 18), 90 * 16, 180 * 16);
+        painter.drawArc(QRectF(10, 7, 12, 18), -90 * 16, 180 * 16);
+        break;
+    }
+
+    return QIcon(pixmap);
+}
+
+void ConfigureToolbarAction(QAction *action, const QString &text,
+                            const QString &tooltip, ToolbarIcon icon)
+{
+    if (!action) {
+        return;
+    }
+    action->setText(text);
+    action->setToolTip(tooltip);
+    action->setIcon(MakeToolbarIcon(icon));
 }
 
 QString ReadGitHash()
@@ -399,6 +582,16 @@ MainWindow::MainWindow(QWidget *parent)
 {
     setWindowTitle(QStringLiteral("Project Render"));
     setAcceptDrops(true);
+    setDocumentMode(true);
+    setDockOptions(QMainWindow::AnimatedDocks |
+                   QMainWindow::AllowNestedDocks |
+                   QMainWindow::AllowTabbedDocks |
+                   QMainWindow::GroupedDragging);
+    setTabPosition(Qt::AllDockWidgetAreas, QTabWidget::North);
+    setCorner(Qt::TopLeftCorner, Qt::LeftDockWidgetArea);
+    setCorner(Qt::BottomLeftCorner, Qt::LeftDockWidgetArea);
+    setCorner(Qt::TopRightCorner, Qt::RightDockWidgetArea);
+    setCorner(Qt::BottomRightCorner, Qt::RightDockWidgetArea);
     resize(1920, 1080);
     {
         QString iconPath = QCoreApplication::applicationDirPath() +
@@ -411,19 +604,8 @@ MainWindow::MainWindow(QWidget *parent)
         }
     }
 
-    // central area is a vertical splitter: render view on top, animation panel below.
     m_view = new DX12View(this);
-    auto *animationPanel = new AnimationPanel(this);
-    animationPanel->setMinimumHeight(170);
-
-    auto *centerSplitter = new QSplitter(Qt::Vertical, this);
-    centerSplitter->setChildrenCollapsible(false);
-    centerSplitter->addWidget(m_view);
-    centerSplitter->addWidget(animationPanel);
-    centerSplitter->setStretchFactor(0, 1);
-    centerSplitter->setStretchFactor(1, 0);
-    centerSplitter->setSizes({760, 220});
-    setCentralWidget(centerSplitter);
+    setCentralWidget(m_view);
 
     createMenus();
     createToolBar();
@@ -464,15 +646,101 @@ void MainWindow::createMenus()
     });
     m_loadSceneAction->setShortcut(QKeySequence::Open);
     m_loadSceneAction->setShortcutContext(Qt::ApplicationShortcut);
+    fileMenu->addSeparator();
+    m_importModelAction = fileMenu->addAction(tr("Import Model..."), this, []() {
+        HWND owner = g_hwnd ? GetAncestor(g_hwnd, GA_ROOT) : nullptr;
+        if (!owner) {
+            owner = g_hwnd;
+        }
+        Scene::ImportModelWithDialog(owner);
+    });
+    m_importHdrAction = fileMenu->addAction(tr("Import HDR..."), this, []() {
+        HWND owner = g_hwnd ? GetAncestor(g_hwnd, GA_ROOT) : nullptr;
+        if (!owner) {
+            owner = g_hwnd;
+        }
+        Scene::ImportHDRWithDialog(owner);
+    });
     
+    fileMenu->addSeparator();
     m_previewRenderAction = fileMenu->addAction(tr("Preview Render"), this, [this]() {
         startPreviewRender();
     });
     m_previewRenderAction->setShortcut(QKeySequence(Qt::Key_F2));
     m_previewRenderAction->setShortcutContext(Qt::ApplicationShortcut);
+    m_renderPopupAction = new QAction(this);
+    connect(m_renderPopupAction, &QAction::triggered, this, [this]() {
+        showRenderPopup();
+    });
     
-    fileMenu->addSeparator();
     fileMenu->addAction(tr("E&xit"), this, &QWidget::close);
+
+    QMenu *editMenu = menuBar()->addMenu(tr("&Edit"));
+    m_transformOperationGroup = new QActionGroup(this);
+    m_transformOperationGroup->setExclusive(true);
+    m_transformTranslateAction =
+        editMenu->addAction(tr("Translate"), this, []() {
+            Scene::SetGizmoOperation(Scene::GizmoOperation::Translate);
+        });
+    m_transformRotateAction =
+        editMenu->addAction(tr("Rotate"), this, []() {
+            Scene::SetGizmoOperation(Scene::GizmoOperation::Rotate);
+        });
+    m_transformScaleAction =
+        editMenu->addAction(tr("Scale"), this, []() {
+            Scene::SetGizmoOperation(Scene::GizmoOperation::Scale);
+        });
+    for (QAction *action : {m_transformTranslateAction, m_transformRotateAction,
+                            m_transformScaleAction}) {
+        action->setCheckable(true);
+        m_transformOperationGroup->addAction(action);
+    }
+
+    editMenu->addSeparator();
+    m_transformSpaceGroup = new QActionGroup(this);
+    m_transformSpaceGroup->setExclusive(true);
+    m_transformLocalAction =
+        editMenu->addAction(tr("Local Space"), this, []() {
+            Scene::SetGizmoSpace(Scene::GizmoSpace::Local);
+        });
+    m_transformWorldAction =
+        editMenu->addAction(tr("World Space"), this, []() {
+            Scene::SetGizmoSpace(Scene::GizmoSpace::World);
+        });
+    for (QAction *action : {m_transformLocalAction, m_transformWorldAction}) {
+        action->setCheckable(true);
+        m_transformSpaceGroup->addAction(action);
+    }
+
+    m_viewMenu = menuBar()->addMenu(tr("&View"));
+    m_viewMenu->addAction(tr("Toggle UI (F1)"), this, [this]() {
+        toggleQtUiVisibility();
+    });
+    m_viewMenu->addAction(tr("Show All Panels"), this, [this]() {
+        showAllDockPanels();
+    });
+    m_viewMenu->addAction(tr("Restore Default Panel Layout"), this, [this]() {
+        restoreDefaultDockLayout();
+    });
+    m_viewMenu->addSeparator();
+
+    QMenu *toolsMenu = menuBar()->addMenu(tr("&Tools"));
+    toolsMenu->addAction(tr("No tools configured"))->setEnabled(false);
+
+    QMenu *renderMenu = menuBar()->addMenu(tr("&Render"));
+    renderMenu->addAction(m_renderPopupAction);
+    renderMenu->addAction(m_previewRenderAction);
+
+    QMenu *liveLinkMenu = menuBar()->addMenu(tr("&Live Link"));
+    liveLinkMenu->addAction(tr("Show LiveLink Panel"), this, [this]() {
+        for (QDockWidget *dockWidget : findChildren<QDockWidget *>()) {
+            if (dockWidget && dockWidget->objectName() == tr("LiveLink")) {
+                dockWidget->show();
+                dockWidget->raise();
+                break;
+            }
+        }
+    });
 
     QMenu *helpMenu = menuBar()->addMenu(tr("&Help"));
     helpMenu->addAction(tr("&About"), this, [this]() {
@@ -539,6 +807,60 @@ void MainWindow::createToolBar()
 {
     auto *toolbar = addToolBar(tr("Main"));
     toolbar->setObjectName(tr("MainToolbar"));
+    toolbar->setMovable(false);
+    toolbar->setFloatable(false);
+    toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    toolbar->setIconSize(QSize(22, 22));
+
+    ConfigureToolbarAction(m_saveSceneAction,
+                           tr("Save Scene"),
+                           tr("Save scene (Ctrl+S)"),
+                           ToolbarIcon::Save);
+    ConfigureToolbarAction(m_saveSceneAsAction,
+                           tr("Save Scene As"),
+                           tr("Save scene as (Ctrl+Shift+S)"),
+                           ToolbarIcon::SaveAs);
+    ConfigureToolbarAction(m_loadSceneAction,
+                           tr("Load Scene"),
+                           tr("Load scene (Ctrl+O)"),
+                           ToolbarIcon::Open);
+    ConfigureToolbarAction(m_previewRenderAction,
+                           tr("Preview Render"),
+                           tr("Preview render (F2)"),
+                           ToolbarIcon::Render);
+    ConfigureToolbarAction(m_renderPopupAction,
+                           tr("Render..."),
+                           tr("Render settings and export"),
+                           ToolbarIcon::Teapot);
+    ConfigureToolbarAction(m_importModelAction,
+                           tr("Import Model"),
+                           tr("Import model"),
+                           ToolbarIcon::ImportModel);
+    ConfigureToolbarAction(m_importHdrAction,
+                           tr("Import HDR"),
+                           tr("Import HDR environment"),
+                           ToolbarIcon::ImportHdr);
+    ConfigureToolbarAction(m_transformTranslateAction,
+                           tr("Translate"),
+                           tr("Translate gizmo (G)"),
+                           ToolbarIcon::Translate);
+    ConfigureToolbarAction(m_transformRotateAction,
+                           tr("Rotate"),
+                           tr("Rotate gizmo (R)"),
+                           ToolbarIcon::Rotate);
+    ConfigureToolbarAction(m_transformScaleAction,
+                           tr("Scale"),
+                           tr("Scale gizmo (T)"),
+                           ToolbarIcon::Scale);
+    ConfigureToolbarAction(m_transformLocalAction,
+                           tr("Local"),
+                           tr("Local transform space (L toggles in viewport)"),
+                           ToolbarIcon::Local);
+    ConfigureToolbarAction(m_transformWorldAction,
+                           tr("World"),
+                           tr("World transform space (L toggles in viewport)"),
+                           ToolbarIcon::World);
+
     if (m_saveSceneAction) {
         toolbar->addAction(m_saveSceneAction);
     }
@@ -548,9 +870,120 @@ void MainWindow::createToolBar()
     if (m_loadSceneAction) {
         toolbar->addAction(m_loadSceneAction);
     }
-    if (m_previewRenderAction) {
-        toolbar->addAction(m_previewRenderAction);
+    toolbar->addSeparator();
+    if (m_importModelAction) {
+        toolbar->addAction(m_importModelAction);
     }
+    if (m_importHdrAction) {
+        toolbar->addAction(m_importHdrAction);
+    }
+    toolbar->addSeparator();
+    if (m_transformTranslateAction) {
+        toolbar->addAction(m_transformTranslateAction);
+    }
+    if (m_transformRotateAction) {
+        toolbar->addAction(m_transformRotateAction);
+    }
+    if (m_transformScaleAction) {
+        toolbar->addAction(m_transformScaleAction);
+    }
+    toolbar->addSeparator();
+    if (m_transformLocalAction) {
+        toolbar->addAction(m_transformLocalAction);
+    }
+    if (m_transformWorldAction) {
+        toolbar->addAction(m_transformWorldAction);
+    }
+    auto *debugViewCombo = new QComboBox(toolbar);
+    debugViewCombo->setObjectName(QStringLiteral("ToolbarCombo"));
+    debugViewCombo->addItem(tr("Beauty"), 0);
+    debugViewCombo->addItem(tr("Albedo"), 1);
+    debugViewCombo->addItem(tr("Normal"), 2);
+    debugViewCombo->addItem(tr("Emissive"), 3);
+    debugViewCombo->addItem(tr("Roughness"), 4);
+    debugViewCombo->addItem(tr("AO"), 7);
+    debugViewCombo->setToolTip(tr("Viewport display pass"));
+    debugViewCombo->setMinimumWidth(112);
+    connect(debugViewCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [debugViewCombo]() {
+                g_debugMode = debugViewCombo->currentData().toInt();
+                DxrRenderer::ResetAccumulation();
+            });
+    toolbar->addWidget(debugViewCombo);
+
+    auto *spacer = new QWidget(toolbar);
+    spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    toolbar->addWidget(spacer);
+
+    if (m_renderPopupAction) {
+        toolbar->addAction(m_renderPopupAction);
+    }
+
+    updateTransformUi();
+}
+
+void MainWindow::updateTransformUi()
+{
+    const Scene::GizmoOperation operation = Scene::GetGizmoOperation();
+    if (m_transformTranslateAction) {
+        m_transformTranslateAction->setChecked(
+            operation == Scene::GizmoOperation::Translate);
+    }
+    if (m_transformRotateAction) {
+        m_transformRotateAction->setChecked(
+            operation == Scene::GizmoOperation::Rotate);
+    }
+    if (m_transformScaleAction) {
+        m_transformScaleAction->setChecked(
+            operation == Scene::GizmoOperation::Scale);
+    }
+
+    const Scene::GizmoSpace space = Scene::GetGizmoSpace();
+    if (m_transformLocalAction) {
+        m_transformLocalAction->setChecked(space == Scene::GizmoSpace::Local);
+    }
+    if (m_transformWorldAction) {
+        m_transformWorldAction->setChecked(space == Scene::GizmoSpace::World);
+    }
+}
+
+void MainWindow::registerDockPanel(QDockWidget *dockWidget)
+{
+    if (!dockWidget) {
+        return;
+    }
+
+    dockWidget->setAllowedAreas(Qt::AllDockWidgetAreas);
+    dockWidget->setFeatures(QDockWidget::DockWidgetClosable |
+                            QDockWidget::DockWidgetMovable |
+                            QDockWidget::DockWidgetFloatable);
+
+    if (m_viewMenu) {
+        QAction *toggleAction = dockWidget->toggleViewAction();
+        toggleAction->setText(dockWidget->windowTitle());
+        m_viewMenu->addAction(toggleAction);
+    }
+}
+
+void MainWindow::showAllDockPanels()
+{
+    const auto dockWidgets = findChildren<QDockWidget *>();
+    for (QDockWidget *dockWidget : dockWidgets) {
+        if (!dockWidget) {
+            continue;
+        }
+        dockWidget->show();
+        dockWidget->raise();
+    }
+}
+
+void MainWindow::restoreDefaultDockLayout()
+{
+    if (m_defaultDockState.isEmpty()) {
+        showAllDockPanels();
+        return;
+    }
+    restoreState(m_defaultDockState);
 }
 
 void MainWindow::createDocks()
@@ -567,55 +1000,62 @@ void MainWindow::createDocks()
 
     auto *sceneDock = new QDockWidget(tr("Scene"), this);
     sceneDock->setObjectName(tr("Scene"));
-    sceneDock->setAllowedAreas(Qt::AllDockWidgetAreas);
     sceneDock->setWidget(wrapScroll(new ScenePanel(sceneDock), sceneDock));
-    addDockWidget(Qt::LeftDockWidgetArea, sceneDock);
+    registerDockPanel(sceneDock);
+    addDockWidget(Qt::RightDockWidgetArea, sceneDock);
     auto *materialsDock = new QDockWidget(tr("Materials"), this);
     materialsDock->setObjectName(tr("Materials"));
-    materialsDock->setAllowedAreas(Qt::AllDockWidgetAreas);
     materialsDock->setWidget(wrapScroll(new MaterialEditorPanel(materialsDock), materialsDock));
-    addDockWidget(Qt::LeftDockWidgetArea, materialsDock);
+    registerDockPanel(materialsDock);
+    addDockWidget(Qt::RightDockWidgetArea, materialsDock);
     auto *scatterDock = new QDockWidget(tr("Scatter"), this);
     scatterDock->setObjectName(tr("Scatter"));
-    scatterDock->setAllowedAreas(Qt::AllDockWidgetAreas);
     scatterDock->setWidget(wrapScroll(new ScatterPanel(scatterDock), scatterDock));
-    addDockWidget(Qt::LeftDockWidgetArea, scatterDock);
+    registerDockPanel(scatterDock);
+    addDockWidget(Qt::RightDockWidgetArea, scatterDock);
     auto *renderDock = new QDockWidget(tr("Render Settings"), this);
     renderDock->setObjectName(tr("Render Settings"));
-    renderDock->setAllowedAreas(Qt::AllDockWidgetAreas);
     {
         auto *renderPanel = new RenderSettingsPanel(renderDock);
         renderDock->setWidget(wrapScroll(renderPanel, renderDock));
     }
-    addDockWidget(Qt::RightDockWidgetArea, renderDock);
+    registerDockPanel(renderDock);
+    addDockWidget(Qt::LeftDockWidgetArea, renderDock);
     auto *renderExportDock = new QDockWidget(tr("Render"), this);
     renderExportDock->setObjectName(tr("Render"));
-    renderExportDock->setAllowedAreas(Qt::AllDockWidgetAreas);
     renderExportDock->setWidget(wrapScroll(new RenderPanel(renderExportDock), renderExportDock));
+    registerDockPanel(renderExportDock);
     addDockWidget(Qt::RightDockWidgetArea, renderExportDock);
     auto *environmentDock = new QDockWidget(tr("Environment"), this);
     environmentDock->setObjectName(tr("Environment"));
-    environmentDock->setAllowedAreas(Qt::AllDockWidgetAreas);
     environmentDock->setWidget(wrapScroll(new EnvironmentPanel(environmentDock), environmentDock));
-    addDockWidget(Qt::RightDockWidgetArea, environmentDock);
+    registerDockPanel(environmentDock);
+    addDockWidget(Qt::LeftDockWidgetArea, environmentDock);
     auto *cameraDock = new QDockWidget(tr("Camera"), this);
     cameraDock->setObjectName(tr("Camera"));
-    cameraDock->setAllowedAreas(Qt::AllDockWidgetAreas);
     cameraDock->setWidget(wrapScroll(new CameraPanel(cameraDock), cameraDock));
-    addDockWidget(Qt::RightDockWidgetArea, cameraDock);
+    registerDockPanel(cameraDock);
+    addDockWidget(Qt::LeftDockWidgetArea, cameraDock);
     auto *viewsDock = new QDockWidget(tr("Views"), this);
-    viewsDock->setObjectName(tr("Views"));
-    viewsDock->setAllowedAreas(Qt::AllDockWidgetAreas);
+    viewsDock->setWindowTitle(tr("Camera Lister"));
+    viewsDock->setObjectName(tr("Camera Lister"));
     viewsDock->setWidget(wrapScroll(new ViewsPanel(viewsDock), viewsDock));
-    addDockWidget(Qt::RightDockWidgetArea, viewsDock);
+    registerDockPanel(viewsDock);
+    addDockWidget(Qt::LeftDockWidgetArea, viewsDock);
     auto *lightsDock = new QDockWidget(tr("Lights"), this);
     lightsDock->setObjectName(tr("Lights"));
-    lightsDock->setAllowedAreas(Qt::AllDockWidgetAreas);
     lightsDock->setWidget(wrapScroll(new LightsPanel(lightsDock), lightsDock));
-    addDockWidget(Qt::BottomDockWidgetArea, lightsDock);
+    registerDockPanel(lightsDock);
+    addDockWidget(Qt::RightDockWidgetArea, lightsDock);
+    auto *animationDock = new QDockWidget(tr("Animation"), this);
+    animationDock->setObjectName(tr("Animation"));
+    auto *animationPanel = new AnimationPanel(animationDock);
+    animationPanel->setMinimumHeight(170);
+    animationDock->setWidget(animationPanel);
+    registerDockPanel(animationDock);
+    addDockWidget(Qt::BottomDockWidgetArea, animationDock);
     auto *liveLinkDock = new QDockWidget(tr("LiveLink"), this);
     liveLinkDock->setObjectName(tr("LiveLink"));
-    liveLinkDock->setAllowedAreas(Qt::AllDockWidgetAreas);
     {
         auto *panel = new QWidget(liveLinkDock);
         auto *layout = new QVBoxLayout(panel);
@@ -700,28 +1140,37 @@ void MainWindow::createDocks()
 
         liveLinkDock->setWidget(panel);
     }
-    addDockWidget(Qt::BottomDockWidgetArea, liveLinkDock);
+    registerDockPanel(liveLinkDock);
+    addDockWidget(Qt::LeftDockWidgetArea, liveLinkDock);
 
-    tabifyDockWidget(sceneDock, scatterDock);
     tabifyDockWidget(sceneDock, materialsDock);
     tabifyDockWidget(sceneDock, lightsDock);
-    tabifyDockWidget(sceneDock, liveLinkDock);
-    scatterDock->raise();
-    tabifyDockWidget(renderDock, renderExportDock);
-    renderDock->raise();
-    splitDockWidget(renderDock, environmentDock, Qt::Vertical);
+    tabifyDockWidget(sceneDock, scatterDock);
+    sceneDock->raise();
+
     tabifyDockWidget(environmentDock, cameraDock);
-    tabifyDockWidget(cameraDock, viewsDock);
+    tabifyDockWidget(environmentDock, renderDock);
+    tabifyDockWidget(environmentDock, liveLinkDock);
+    splitDockWidget(environmentDock, viewsDock, Qt::Vertical);
     environmentDock->raise();
 
-    QTimer::singleShot(0, this, [this, sceneDock, scatterDock, renderDock, environmentDock]() {
-        resizeDocks({sceneDock, renderDock},
-                    {300, 420},
+    animationDock->raise();
+
+    QTimer::singleShot(0, this, [this, sceneDock, renderExportDock, environmentDock, viewsDock, animationDock]() {
+        resizeDocks({environmentDock, sceneDock},
+                    {415, 420},
                     Qt::Horizontal);
-        resizeDocks({renderDock, environmentDock},
-                    {320, 760},
+        resizeDocks({environmentDock, viewsDock},
+                    {640, 210},
                     Qt::Vertical);
-        scatterDock->raise();
+        resizeDocks({animationDock},
+                    {220},
+                    Qt::Vertical);
+        environmentDock->raise();
+        sceneDock->raise();
+        renderExportDock->hide();
+        animationDock->hide();
+        m_defaultDockState = saveState();
     });
 }
 
@@ -772,6 +1221,250 @@ void MainWindow::startPreviewRender()
     StartPreviewRenderJob();
 }
 
+void MainWindow::showRenderPopup()
+{
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Render"));
+    dialog.setModal(true);
+    dialog.setMinimumWidth(420);
+    dialog.setObjectName(QStringLiteral("RenderPopup"));
+
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(14, 12, 14, 12);
+    layout->setSpacing(10);
+
+    auto *commonGroup = new QGroupBox(tr("Common settings"), &dialog);
+    auto *commonLayout = new QHBoxLayout(commonGroup);
+    auto *stillMode = new QRadioButton(tr("Still image"), commonGroup);
+    auto *sequenceMode = new QRadioButton(tr("Sequence"), commonGroup);
+    stillMode->setChecked(true);
+    commonLayout->addWidget(stillMode);
+    commonLayout->addWidget(sequenceMode);
+    layout->addWidget(commonGroup);
+
+    auto *resolutionGroup = new QGroupBox(tr("Resolution"), &dialog);
+    auto *resolutionForm = new QFormLayout(resolutionGroup);
+    auto *resolutionPreset = new QComboBox(resolutionGroup);
+    for (int i = 0; i < g_renderResolutionPresetCount; ++i) {
+        resolutionPreset->addItem(QString::fromUtf8(g_renderResolutionPresets[i].label));
+    }
+    resolutionPreset->setCurrentIndex(std::clamp(g_renderExportSettings.resolutionPreset,
+                                                 0,
+                                                 std::max(0, g_renderResolutionPresetCount - 1)));
+    auto *resolutionInfo = new QLabel(resolutionGroup);
+    resolutionForm->addRow(tr("Preset"), resolutionPreset);
+    resolutionForm->addRow(tr("Output"), resolutionInfo);
+    layout->addWidget(resolutionGroup);
+
+    auto *stillGroup = new QGroupBox(tr("Render"), &dialog);
+    auto *stillForm = new QFormLayout(stillGroup);
+    auto *qualityPreset = new QComboBox(stillGroup);
+    qualityPreset->addItem(tr("Custom"));
+    auto *samples = new QSpinBox(stillGroup);
+    samples->setRange(16, 4096);
+    samples->setValue(std::clamp(g_renderExportSettings.maxSpp, 16, 4096));
+    auto *noise = new QDoubleSpinBox(stillGroup);
+    noise->setRange(0.1, 30.0);
+    noise->setDecimals(2);
+    noise->setSingleStep(0.1);
+    noise->setSuffix(tr(" %"));
+    noise->setValue(std::clamp(static_cast<double>(g_renderExportSettings.noisePercent),
+                               0.1,
+                               30.0));
+    auto *denoiser = new QComboBox(stillGroup);
+    denoiser->addItems({tr("Off"), tr("OIDN (CPU)"), tr("OIDN (GPU)"), tr("OptiX")});
+    denoiser->setCurrentIndex(std::clamp(g_renderExportSettings.denoiserIndex, 0, 3));
+    auto *batchSavedViews = new QCheckBox(tr("Render saved camera lister views"), stillGroup);
+    batchSavedViews->setChecked(g_renderExportSettings.batchSavedViews);
+    auto *batchBaseName = new QLineEdit(stillGroup);
+    batchBaseName->setText(QString::fromUtf8(g_renderExportSettings.batchBaseName.c_str()));
+    stillForm->addRow(tr("Quality preset"), qualityPreset);
+    stillForm->addRow(tr("Samples"), samples);
+    stillForm->addRow(tr("Noise stop"), noise);
+    stillForm->addRow(tr("Denoiser"), denoiser);
+    stillForm->addRow(QString(), batchSavedViews);
+    stillForm->addRow(tr("Batch base name"), batchBaseName);
+    layout->addWidget(stillGroup);
+
+    auto *sequenceGroup = new QGroupBox(tr("Sequence"), &dialog);
+    auto *sequenceForm = new QFormLayout(sequenceGroup);
+    const auto animationSettings = AnimationSequence::GetExportSettings();
+    auto *sequenceFps = new QSpinBox(sequenceGroup);
+    sequenceFps->setRange(1, 240);
+    sequenceFps->setValue(animationSettings.fps);
+    auto *sequenceSamples = new QSpinBox(sequenceGroup);
+    sequenceSamples->setRange(1, 4096);
+    sequenceSamples->setValue(animationSettings.maxSpp);
+    auto *sequenceOutput = new QComboBox(sequenceGroup);
+    for (int index = 0; index < AnimationSequence::GetExportModeCount(); ++index) {
+        sequenceOutput->addItem(QString::fromUtf8(AnimationSequence::GetExportModeLabel(index)));
+    }
+    sequenceOutput->setCurrentIndex(std::clamp(animationSettings.exportMode,
+                                               0,
+                                               std::max(0, AnimationSequence::GetExportModeCount() - 1)));
+    auto *sequenceBaseName = new QLineEdit(sequenceGroup);
+    sequenceBaseName->setText(QString::fromUtf8(animationSettings.baseName.c_str()));
+    auto *sequenceInfo = new QLabel(sequenceGroup);
+    sequenceInfo->setWordWrap(true);
+    sequenceForm->addRow(tr("FPS"), sequenceFps);
+    sequenceForm->addRow(tr("Samples"), sequenceSamples);
+    sequenceForm->addRow(tr("Output"), sequenceOutput);
+    sequenceForm->addRow(tr("Base name"), sequenceBaseName);
+    sequenceForm->addRow(tr("Camera path"), sequenceInfo);
+    layout->addWidget(sequenceGroup);
+
+    auto *statusLabel = new QLabel(&dialog);
+    statusLabel->setWordWrap(true);
+    layout->addWidget(statusLabel);
+
+    auto *buttonRow = new QHBoxLayout();
+    auto *previewButton = new QPushButton(tr("Preview"), &dialog);
+    auto *renderButton = new QPushButton(tr("Render..."), &dialog);
+    auto *cancelActiveButton = new QPushButton(tr("Cancel Active Render"), &dialog);
+    auto *closeButton = new QPushButton(tr("Close"), &dialog);
+    buttonRow->addWidget(previewButton);
+    buttonRow->addStretch(1);
+    buttonRow->addWidget(cancelActiveButton);
+    buttonRow->addWidget(closeButton);
+    buttonRow->addWidget(renderButton);
+    layout->addLayout(buttonRow);
+
+    auto applyStillSettings = [&]() {
+        g_renderExportSettings.resolutionPreset = resolutionPreset->currentIndex();
+        g_renderExportSettings.maxSpp = samples->value();
+        g_renderExportSettings.noisePercent = static_cast<float>(noise->value());
+        g_renderExportSettings.denoiserIndex = denoiser->currentIndex();
+        g_renderExportSettings.batchSavedViews = batchSavedViews->isChecked();
+        g_renderExportSettings.batchBaseName =
+            batchBaseName->text().trimmed().toUtf8().constData();
+        if (g_renderExportSettings.batchBaseName.empty()) {
+            g_renderExportSettings.batchBaseName = "final";
+        }
+    };
+
+    auto applySequenceSettings = [&]() {
+        AnimationSequence::ExportSettings settings =
+            AnimationSequence::GetExportSettings();
+        settings.resolutionPreset = resolutionPreset->currentIndex();
+        settings.fps = sequenceFps->value();
+        settings.maxSpp = sequenceSamples->value();
+        settings.exportMode = sequenceOutput->currentIndex();
+        settings.baseName = sequenceBaseName->text().trimmed().toUtf8().constData();
+        if (settings.baseName.empty()) {
+            settings.baseName = "final";
+        }
+        AnimationSequence::SetExportSettings(settings);
+    };
+
+    auto updateSummary = [&]() {
+        const int presetIndex = std::clamp(resolutionPreset->currentIndex(),
+                                           0,
+                                           std::max(0, g_renderResolutionPresetCount - 1));
+        if (g_renderResolutionPresetCount > 0) {
+            const RenderResolutionPreset &preset = g_renderResolutionPresets[presetIndex];
+            resolutionInfo->setText(tr("%1 x %2").arg(preset.width).arg(preset.height));
+        }
+        const int keyframeCount =
+            static_cast<int>(AnimationSequence::GetKeyframes().size());
+        sequenceInfo->setText(tr("%1 keys | %2 frames @ %3 fps")
+                                  .arg(keyframeCount)
+                                  .arg(AnimationSequence::GetTotalFrameCount(sequenceFps->value()))
+                                  .arg(sequenceFps->value()));
+        stillGroup->setEnabled(stillMode->isChecked());
+        sequenceGroup->setEnabled(sequenceMode->isChecked());
+        batchBaseName->setEnabled(batchSavedViews->isChecked());
+        previewButton->setEnabled(stillMode->isChecked() && g_rayTracingSupported &&
+                                  !g_renderExportJob.active);
+        renderButton->setEnabled(g_rayTracingSupported &&
+                                 !g_renderExportJob.active &&
+                                 !g_renderBatchExport.active &&
+                                 !g_renderAnimationExport.active &&
+                                 (stillMode->isChecked() || keyframeCount > 0));
+        renderButton->setText(sequenceMode->isChecked()
+                                  ? tr("Render Sequence...")
+                                  : (batchSavedViews->isChecked()
+                                         ? tr("Render Saved Views...")
+                                         : tr("Render Image...")));
+        cancelActiveButton->setEnabled(g_renderExportJob.active ||
+                                       g_renderBatchExport.active ||
+                                       g_renderAnimationExport.active);
+        if (!g_rayTracingSupported) {
+            statusLabel->setText(tr("DXR is not supported on this device."));
+        } else if (sequenceMode->isChecked() && keyframeCount == 0) {
+            statusLabel->setText(tr("Create camera path keys before rendering a sequence."));
+        } else if (!g_renderExportStatus.empty()) {
+            statusLabel->setText(QString::fromUtf8(g_renderExportStatus.c_str()));
+        } else {
+            statusLabel->setText(tr("Ready."));
+        }
+    };
+
+    connect(stillMode, &QRadioButton::toggled, &dialog, updateSummary);
+    connect(sequenceMode, &QRadioButton::toggled, &dialog, updateSummary);
+    connect(resolutionPreset, qOverload<int>(&QComboBox::currentIndexChanged),
+            &dialog, updateSummary);
+    connect(sequenceFps, qOverload<int>(&QSpinBox::valueChanged),
+            &dialog, updateSummary);
+    connect(batchSavedViews, &QCheckBox::toggled, &dialog, updateSummary);
+    connect(closeButton, &QPushButton::clicked, &dialog, &QDialog::reject);
+    connect(previewButton, &QPushButton::clicked, &dialog, [&]() {
+        applyStillSettings();
+        StartPreviewRenderJob();
+        updateSummary();
+    });
+    connect(cancelActiveButton, &QPushButton::clicked, &dialog, [&]() {
+        if (g_renderExportJob.active) {
+            RestoreRenderExportState();
+        }
+        CancelBatchRenderExport();
+        CancelAnimationRenderExport();
+        g_renderExportStatus = "Render canceled.";
+        updateSummary();
+    });
+    connect(renderButton, &QPushButton::clicked, &dialog, [&]() {
+        if (sequenceMode->isChecked()) {
+            applySequenceSettings();
+            const int exportMode = sequenceOutput->currentIndex();
+            const QString outputDir = QFileDialog::getExistingDirectory(
+                &dialog,
+                exportMode == static_cast<int>(AnimationSequence::ExportMode::Mp4)
+                    ? tr("Choose Output Folder For MP4 Export")
+                    : tr("Choose Output Folder For Frame Export"),
+                QString(),
+                QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
+            if (!outputDir.isEmpty()) {
+                StartAnimationRenderExport(outputDir.toStdWString());
+                dialog.accept();
+            }
+            return;
+        }
+
+        applyStillSettings();
+        if (g_renderExportSettings.batchSavedViews) {
+            const QString outputDir = QFileDialog::getExistingDirectory(
+                &dialog,
+                tr("Choose Output Folder For Saved Views"),
+                QString(),
+                QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
+            if (!outputDir.isEmpty()) {
+                StartBatchRenderExportJobs(
+                    outputDir.toStdWString(),
+                    QString::fromUtf8(g_renderExportSettings.batchBaseName.c_str()).toStdWString());
+                dialog.accept();
+            }
+        } else {
+            std::wstring chosenPath;
+            if (SaveRenderImageFileDialog(g_hwnd, chosenPath)) {
+                StartRenderExportJob(chosenPath);
+                dialog.accept();
+            }
+        }
+    });
+
+    updateSummary();
+    dialog.exec();
+}
+
 void MainWindow::toggleQtUiVisibility()
 {
     if (!m_qtUiHidden) {
@@ -813,6 +1506,8 @@ void MainWindow::toggleQtUiVisibility()
 
 void MainWindow::updateSceneIoUi()
 {
+    updateTransformUi();
+
     const bool active = IsSceneIoJobActive();
     if (m_previewRenderAction) {
         m_previewRenderAction->setEnabled(g_rayTracingSupported &&
@@ -1059,6 +1754,12 @@ void MainWindow::updateSceneIoUi()
     }
     if (m_loadSceneAction) {
         m_loadSceneAction->setEnabled(!active);
+    }
+    if (m_importModelAction) {
+        m_importModelAction->setEnabled(!active);
+    }
+    if (m_importHdrAction) {
+        m_importHdrAction->setEnabled(!active);
     }
 
     const auto dockWidgets = findChildren<QDockWidget *>();

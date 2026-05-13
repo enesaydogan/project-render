@@ -1,16 +1,19 @@
 #pragma once
 
+#include <QByteArray>
 #include <QMainWindow>
 
 #include <vector>
 
 class DX12View;
 class QAction;
+class QActionGroup;
 class QComboBox;
 class QDragEnterEvent;
 class QDockWidget;
 class QDropEvent;
 class QLabel;
+class QMenu;
 class QPlainTextEdit;
 class QProgressBar;
 class QFrame;
@@ -38,10 +41,15 @@ private:
     void createMenus();
     void createToolBar();
     void createDocks();
+    void registerDockPanel(QDockWidget *dockWidget);
+    void restoreDefaultDockLayout();
+    void showAllDockPanels();
+    void updateTransformUi();
     void startSaveScene();
     void startSaveSceneAs();
     void startLoadScene();
     void startPreviewRender();
+    void showRenderPopup();
     void toggleQtUiVisibility();
     void updateSceneIoUi();
 
@@ -50,6 +58,18 @@ private:
     QAction *m_saveSceneAsAction = nullptr;
     QAction *m_loadSceneAction = nullptr;
     QAction *m_previewRenderAction = nullptr;
+    QAction *m_renderPopupAction = nullptr;
+    QAction *m_importModelAction = nullptr;
+    QAction *m_importHdrAction = nullptr;
+    QAction *m_transformTranslateAction = nullptr;
+    QAction *m_transformRotateAction = nullptr;
+    QAction *m_transformScaleAction = nullptr;
+    QAction *m_transformLocalAction = nullptr;
+    QAction *m_transformWorldAction = nullptr;
+    QActionGroup *m_transformOperationGroup = nullptr;
+    QActionGroup *m_transformSpaceGroup = nullptr;
+    QMenu *m_viewMenu = nullptr;
+    QByteArray m_defaultDockState;
     QProgressBar *m_sceneIoProgress = nullptr;
     QLabel *m_sceneIoLabel = nullptr;
     QLabel *m_statusStatsLabel = nullptr;
