@@ -697,6 +697,8 @@ static void AdjustMaterialTextureIndices(std::vector<Asset::Material> &materials
       m.metalnessTexture += (int)textureBase;
     if (m.roughnessGlossTexture >= 0)
       m.roughnessGlossTexture += (int)textureBase;
+    if (m.parallaxTexture >= 0)
+      m.parallaxTexture += (int)textureBase;
   }
 }
 
@@ -744,6 +746,7 @@ static void RemapMaterialTextureIndices(std::vector<Asset::Material> &materials,
     RemapMaterialTextureIndex(material.runtimeMetalRoughTexture, textureRemap);
     RemapMaterialTextureIndex(material.metalnessTexture, textureRemap);
     RemapMaterialTextureIndex(material.roughnessGlossTexture, textureRemap);
+    RemapMaterialTextureIndex(material.parallaxTexture, textureRemap);
   }
 }
 

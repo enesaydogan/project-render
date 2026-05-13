@@ -36,6 +36,7 @@ enum RuntimeMaterialFlags : uint32_t {
   kRuntimeMaterialFlagHasSpecularColor = 1u << 9,
   kRuntimeMaterialFlagHasVolume = 1u << 10,
   kRuntimeMaterialFlagHasCoatNormal = 1u << 11,
+  kRuntimeMaterialFlagParallaxMapped = 1u << 12,
 };
 
 struct RuntimeRasterMaterialConstants {
@@ -54,7 +55,7 @@ struct RuntimeRasterMaterialConstants {
   float textureWeight0[4];
   float textureWeight1[4];
   int textureIndices2[4];
-  float textureWeight2[4];
+  float textureWeight2[4]; // x=coatNormal, y=thickness, z=specularColor, w=parallaxDepth
   float volumeParams[4];
   float specularColor[4];
   float sheenColor[4];
@@ -78,11 +79,12 @@ struct RuntimeDxrMaterialExtraData {
   float transmissionColor[4];
   float textureWeight0[4];
   float textureWeight1[4];
-  uint32_t extraPackedTextures[4];
+  uint32_t extraPackedTextures[4]; // x packs coat normal (low) + parallax depth (high)
   float volumeParams[4];
   float specularColor[4];
   float sheenColor[4];
   float lobeParams[4];
+  float parallaxParams[4];
 };
 
 bool UsesReflectionGlossiness(const Asset::Material &material);

@@ -122,6 +122,7 @@ nlohmann::json BuildMaterialsMetadata(
         {"txsc",
          MapSavedTextureIndex(textureSaveRemap, mat.specularColorTexture)},
         {"txtk", MapSavedTextureIndex(textureSaveRemap, mat.thicknessTexture)},
+        {"txp", MapSavedTextureIndex(textureSaveRemap, mat.parallaxTexture)},
         {"tad", mat.diffuseTextureAmount},
         {"taa", mat.opacityTextureAmount},
         {"tamr", mat.metalRoughTextureAmount},
@@ -133,6 +134,7 @@ nlohmann::json BuildMaterialsMetadata(
         {"tae", mat.emissiveTextureAmount},
         {"tasc", mat.specularColorTextureAmount},
         {"tatk", mat.thicknessTextureAmount},
+        {"tap", mat.parallaxDepthScale},
         {"ds", mat.doubleSided},
         {"am", mat.alphaMode},
         {"ac", mat.alphaCutoff},
@@ -312,6 +314,7 @@ void RestoreMaterialsFromMetadata(const nlohmann::json &materialsJson,
     restoreTextureIndex("txrg", &material.roughnessGlossTexture);
     restoreTextureIndex("txsc", &material.specularColorTexture);
     restoreTextureIndex("txtk", &material.thicknessTexture);
+    restoreTextureIndex("txp", &material.parallaxTexture);
     material.diffuseTextureAmount =
       savedMaterial.value("tad", material.diffuseTextureAmount);
     material.opacityTextureAmount =
@@ -334,6 +337,8 @@ void RestoreMaterialsFromMetadata(const nlohmann::json &materialsJson,
       savedMaterial.value("tasc", material.specularColorTextureAmount);
     material.thicknessTextureAmount =
       savedMaterial.value("tatk", material.thicknessTextureAmount);
+    material.parallaxDepthScale =
+      savedMaterial.value("tap", material.parallaxDepthScale);
 
     material.runtimeMetalRoughTexture = -1;
     material.doubleSided = savedMaterial.value("ds", material.doubleSided);

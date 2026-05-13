@@ -167,6 +167,8 @@ static bool IsBlockCompressedTextureFormat(DXGI_FORMAT format) {
   case DXGI_FORMAT_BC4_SNORM:
   case DXGI_FORMAT_BC5_UNORM:
   case DXGI_FORMAT_BC5_SNORM:
+  case DXGI_FORMAT_BC6H_UF16:
+  case DXGI_FORMAT_BC6H_SF16:
   case DXGI_FORMAT_BC7_UNORM:
   case DXGI_FORMAT_BC7_UNORM_SRGB:
     return true;
@@ -188,6 +190,8 @@ static size_t TextureBlockBytes(DXGI_FORMAT format) {
   case DXGI_FORMAT_BC3_UNORM_SRGB:
   case DXGI_FORMAT_BC5_UNORM:
   case DXGI_FORMAT_BC5_SNORM:
+  case DXGI_FORMAT_BC6H_UF16:
+  case DXGI_FORMAT_BC6H_SF16:
   case DXGI_FORMAT_BC7_UNORM:
   case DXGI_FORMAT_BC7_UNORM_SRGB:
     return 16;
@@ -2755,6 +2759,8 @@ static bool LtmIsLmodColorCandidateFormat(DXGI_FORMAT fmt) {
   case DXGI_FORMAT_BC2_UNORM_SRGB:
   case DXGI_FORMAT_BC3_UNORM:
   case DXGI_FORMAT_BC3_UNORM_SRGB:
+  case DXGI_FORMAT_BC6H_UF16:
+  case DXGI_FORMAT_BC6H_SF16:
   case DXGI_FORMAT_BC7_UNORM:
   case DXGI_FORMAT_BC7_UNORM_SRGB:
   case DXGI_FORMAT_R8G8B8A8_UNORM:
@@ -2994,6 +3000,166 @@ LtmReadLmodTextureSemanticHints(const uint8_t *base, const uint8_t *fileEnd) {
   return hints;
 }
 
+static std::vector<LtmTextureEntry>
+LtmScanEmbeddedTextureEntries(const uint8_t *base, const uint8_t *fileEnd,
+                              bool captureLmodMaterialNames) {
+  std::vector<LtmTextureEntry> entries;
+  if (!base || !fileEnd || fileEnd <= base)
+    return entries;
+
+  std::string currentLmodTextureMaterialName;
+  for (const uint8_t *scan = base; scan + 12 <= fileEnd; ++scan) {
+    if (memcmp(scan, "TEXM", 4) != 0)
+      continue;
+
+    const uint32_t texmSize = *reinterpret_cast<const uint32_t *>(scan + 4);
+    if (texmSize < 4 || scan + 8 + texmSize > fileEnd)
+      continue;
+
+    LtmTextureEntry entry;
+    entry.mapType = *reinterpret_cast<const uint32_t *>(scan + 8);
+    entry.materialSlot = LtmFindNearestMaterialSlot(base, fileEnd, scan);
+    if (captureLmodMaterialNames) {
+      entry.materialName =
+          LtmFindNearestUtf16ChunkString(base, fileEnd, scan, "STWA");
+      if (!entry.materialName.empty())
+        currentLmodTextureMaterialName = entry.materialName;
+      else
+        entry.materialName = currentLmodTextureMaterialName;
+    }
+
+    const uint8_t *p = scan + 8 + texmSize;
+    for (int guard = 0; guard < 32 && p + 8 <= fileEnd; ++guard) {
+      const uint8_t *tag = p;
+      const uint32_t sz = *reinterpret_cast<const uint32_t *>(p + 4);
+      if (p + 8 + sz > fileEnd)
+        break;
+
+      if (memcmp(tag, "TEXW", 4) == 0 && sz >= 4)
+        entry.texW = *reinterpret_cast<const uint32_t *>(p + 8);
+      else if (memcmp(tag, "TEXH", 4) == 0 && sz >= 4)
+        entry.texH = *reinterpret_cast<const uint32_t *>(p + 8);
+      else if (memcmp(tag, "TEXS", 4) == 0 && sz >= 4)
+        entry.texSize = *reinterpret_cast<const uint32_t *>(p + 8);
+      else if (memcmp(tag, "TXFT", 4) == 0 && sz >= 4)
+        entry.txft = *reinterpret_cast<const uint32_t *>(p + 8);
+      else if (memcmp(tag, "TECM", 4) == 0 && sz >= 4)
+        entry.tecm = *reinterpret_cast<const uint32_t *>(p + 8);
+      else if (memcmp(tag, "TENT", 4) == 0 && sz >= 4)
+        entry.tent = *reinterpret_cast<const uint32_t *>(p + 8);
+      else if (memcmp(tag, "TEXT", 4) == 0) {
+        const uint8_t *payload = p + 8;
+        if (sz >= 4 && memcmp(payload, "DDS ", 4) == 0) {
+          entry.ddsPtr = payload;
+          entry.ddsSize = sz;
+        }
+        break;
+      } else if (memcmp(tag, "TEXM", 4) == 0) {
+        break;
+      }
+
+      p += 8 + sz;
+    }
+
+    if (entry.ddsPtr && entry.ddsSize)
+      entries.push_back(entry);
+  }
+  return entries;
+}
+
+static bool LtmReadWholeFile(const std::filesystem::path &path,
+                             std::vector<uint8_t> &data) {
+  std::ifstream f(path, std::ios::binary | std::ios::ate);
+  if (!f.is_open())
+    return false;
+  const size_t fileSize = static_cast<size_t>(f.tellg());
+  f.seekg(0);
+  data.resize(fileSize);
+  if (fileSize > 0) {
+    f.read(reinterpret_cast<char *>(data.data()),
+           static_cast<std::streamsize>(fileSize));
+  }
+  return f.good() || f.eof();
+}
+
+static void LtmImportLprCompanion(const std::string &lmodPath,
+                                  std::vector<Material> *outMaterials,
+                                  std::vector<Texture> *outTextures) {
+  if (!outMaterials || outMaterials->empty() || !outTextures)
+    return;
+
+  std::filesystem::path lprPath(lmodPath);
+  lprPath.replace_extension(".lpr");
+  if (!std::filesystem::exists(lprPath))
+    return;
+
+  std::vector<uint8_t> lprData;
+  if (!LtmReadWholeFile(lprPath, lprData) || lprData.empty()) {
+    fprintf(stderr, "LMOD: failed to read LPR companion %s\n",
+            lprPath.string().c_str());
+    return;
+  }
+
+  const uint8_t *lprBase = lprData.data();
+  const uint8_t *lprEnd = lprBase + lprData.size();
+  std::vector<LtmTextureEntry> lprTextures =
+      LtmScanEmbeddedTextureEntries(lprBase, lprEnd, false);
+  if (lprTextures.size() < 3) {
+    fprintf(stderr,
+            "LMOD: LPR companion %s has %zu DDS texture(s); expected day/night/depth.\n",
+            lprPath.string().c_str(), lprTextures.size());
+    return;
+  }
+
+  auto uploadCompanionTexture = [&](size_t entryIndex) -> int {
+    if (entryIndex >= lprTextures.size())
+      return -1;
+    LtmTextureEntry &entry = lprTextures[entryIndex];
+    Texture tex = LtmUploadDDS(entry.ddsPtr, entry.ddsSize,
+                               &entry.authoredFormat);
+    if (!tex.resource) {
+      fprintf(stderr,
+              "LMOD: failed to upload LPR texture %zu from %s\n",
+              entryIndex, lprPath.string().c_str());
+      return -1;
+    }
+    entry.uploadedTextureIndex = static_cast<int>(outTextures->size());
+    entry.uploadedFormat = tex.format;
+    outTextures->push_back(std::move(tex));
+    return entry.uploadedTextureIndex;
+  };
+
+  const int dayTexture = uploadCompanionTexture(0);
+  const int nightTexture = uploadCompanionTexture(1);
+  const int parallaxTexture = uploadCompanionTexture(2);
+
+  Material &mat = (*outMaterials)[0];
+  if (dayTexture >= 0) {
+    mat.diffuseTexture = dayTexture;
+    mat.diffuseTextureAmount = 1.0f;
+  }
+  if (nightTexture >= 0) {
+    mat.emissiveTexture = nightTexture;
+    mat.emissiveTextureAmount = 1.0f;
+    mat.emissiveColor[0] = 1.0f;
+    mat.emissiveColor[1] = 1.0f;
+    mat.emissiveColor[2] = 1.0f;
+    mat.emissiveColor[3] = 1.0f;
+    mat.emissiveIntensity = (std::max)(mat.emissiveIntensity, 0.35f);
+  }
+  if (parallaxTexture >= 0) {
+    mat.parallaxTexture = parallaxTexture;
+    mat.parallaxDepthScale = 0.075f;
+  }
+  mat.doubleSided = true;
+  mat.alphaMode = "OPAQUE";
+
+  fprintf(stderr,
+          "LMOD: LPR companion %s imported day=%d night=%d parallax=%d -> material %s\n",
+          lprPath.string().c_str(), dayTexture, nightTexture, parallaxTexture,
+          mat.name);
+}
+
 // Scan for a 4-byte tag starting at or after `from`, up to `limit`.
 // Returns pointer to the tag if found and its payload is within bounds, else nullptr.
 static const uint8_t *LtmScanTag(const uint8_t *from, const uint8_t *limit,
@@ -3221,63 +3387,7 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
   }
 
   // ---- Scan for embedded textures (TEXM + TEXT groups) ------------------
-  std::string currentLmodTextureMaterialName;
-  for (const uint8_t *scan = base; scan + 12 <= fileEnd; ++scan) {
-    if (memcmp(scan, "TEXM", 4) != 0)
-      continue;
-
-    const uint32_t texmSize = *reinterpret_cast<const uint32_t *>(scan + 4);
-    if (texmSize < 4 || scan + 8 + texmSize > fileEnd)
-      continue;
-
-    LtmTextureEntry entry;
-    entry.mapType = *reinterpret_cast<const uint32_t *>(scan + 8);
-    entry.materialSlot = LtmFindNearestMaterialSlot(base, fileEnd, scan);
-    if (isLmod) {
-      entry.materialName =
-          LtmFindNearestUtf16ChunkString(base, fileEnd, scan, "STWA");
-      if (!entry.materialName.empty())
-        currentLmodTextureMaterialName = entry.materialName;
-      else
-        entry.materialName = currentLmodTextureMaterialName;
-    }
-
-    const uint8_t *p = scan + 8 + texmSize;
-    for (int guard = 0; guard < 32 && p + 8 <= fileEnd; ++guard) {
-      const uint8_t *tag = p;
-      const uint32_t sz = *reinterpret_cast<const uint32_t *>(p + 4);
-      if (p + 8 + sz > fileEnd)
-        break;
-
-      if (memcmp(tag, "TEXW", 4) == 0 && sz >= 4)
-        entry.texW = *reinterpret_cast<const uint32_t *>(p + 8);
-      else if (memcmp(tag, "TEXH", 4) == 0 && sz >= 4)
-        entry.texH = *reinterpret_cast<const uint32_t *>(p + 8);
-      else if (memcmp(tag, "TEXS", 4) == 0 && sz >= 4)
-        entry.texSize = *reinterpret_cast<const uint32_t *>(p + 8);
-      else if (memcmp(tag, "TXFT", 4) == 0 && sz >= 4)
-        entry.txft = *reinterpret_cast<const uint32_t *>(p + 8);
-      else if (memcmp(tag, "TECM", 4) == 0 && sz >= 4)
-        entry.tecm = *reinterpret_cast<const uint32_t *>(p + 8);
-      else if (memcmp(tag, "TENT", 4) == 0 && sz >= 4)
-        entry.tent = *reinterpret_cast<const uint32_t *>(p + 8);
-      else if (memcmp(tag, "TEXT", 4) == 0) {
-        const uint8_t *payload = p + 8;
-        if (sz >= 4 && memcmp(payload, "DDS ", 4) == 0) {
-          entry.ddsPtr = payload;
-          entry.ddsSize = sz;
-        }
-        break;
-      } else if (memcmp(tag, "TEXM", 4) == 0) {
-        break;
-      }
-
-      p += 8 + sz;
-    }
-
-    if (entry.ddsPtr && entry.ddsSize)
-      textureEntries.push_back(entry);
-  }
+  textureEntries = LtmScanEmbeddedTextureEntries(base, fileEnd, isLmod);
 
   if (geoBlocks.empty()) {
     fprintf(stderr, "LoadLTM: no geometry found in %s\n", path.c_str());
@@ -3729,6 +3839,10 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
                 (unsigned)entry.authoredFormat);
       }
     }
+  }
+
+  if (isLmod) {
+    LtmImportLprCompanion(path, outMaterials, outTextures);
   }
 
   return true;

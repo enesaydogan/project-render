@@ -106,6 +106,7 @@ struct Material {
   int specularColorTexture = -1;
   int thicknessTexture = -1;
   int coatNormalTexture = -1;
+  int parallaxTexture = -1;
   float diffuseTextureAmount = 1.0f;
   float opacityTextureAmount = 1.0f;
   float metalRoughTextureAmount = 1.0f;
@@ -117,6 +118,7 @@ struct Material {
   float specularColorTextureAmount = 1.0f;
   float thicknessTextureAmount = 1.0f;
   float coatNormalTextureAmount = 1.0f;
+  float parallaxDepthScale = 0.0f;
 
   bool doubleSided = false;
   std::string alphaMode = "OPAQUE";

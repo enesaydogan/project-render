@@ -637,6 +637,9 @@ uint32_t BuildRuntimeMaterialFlags(const Asset::Material &material) {
       material.coatWeight > 1.0e-5f) {
     flags |= kRuntimeMaterialFlagHasCoatNormal;
   }
+  if (material.parallaxTexture >= 0 && material.parallaxDepthScale > 1.0e-5f) {
+    flags |= kRuntimeMaterialFlagParallaxMapped;
+  }
   return flags;
 }
 
@@ -765,7 +768,7 @@ void BuildRuntimeDxrMaterialData(const Asset::Material &material,
   outExtra->textureWeight1[3] =
       (std::clamp)(material.opacityTextureAmount, 0.0f, 1.0f);
   outExtra->extraPackedTextures[0] =
-      PackTexturePair(material.coatNormalTexture, -1);
+      PackTexturePair(material.coatNormalTexture, material.parallaxTexture);
   outExtra->extraPackedTextures[1] = PackTexturePair(-1, -1);
   outExtra->extraPackedTextures[2] = PackTexturePair(-1, -1);
   outExtra->extraPackedTextures[3] = PackTexturePair(-1, -1);
@@ -794,6 +797,11 @@ void BuildRuntimeDxrMaterialData(const Asset::Material &material,
   outExtra->lobeParams[1] = (std::clamp)(material.anisotropy, -1.0f, 1.0f);
   outExtra->lobeParams[2] = material.anisotropyRotation;
   outExtra->lobeParams[3] = (std::clamp)(material.sheenWeight, 0.0f, 1.0f);
+  outExtra->parallaxParams[0] =
+      (std::clamp)(material.parallaxDepthScale, 0.0f, 0.25f);
+  outExtra->parallaxParams[1] = 0.0f;
+  outExtra->parallaxParams[2] = 0.0f;
+  outExtra->parallaxParams[3] = 0.0f;
 }
 
 void BuildRuntimeRasterMaterialConstants(
@@ -891,7 +899,7 @@ void BuildRuntimeRasterMaterialConstants(
       (std::clamp)(material.opacityTextureAmount, 0.0f, 1.0f);
   outConstants->textureIndices2[0] = material.coatNormalTexture;
   outConstants->textureIndices2[1] = material.thicknessTexture;
-  outConstants->textureIndices2[2] = -1;
+  outConstants->textureIndices2[2] = material.parallaxTexture;
   outConstants->textureIndices2[3] = -1;
   outConstants->textureWeight2[0] =
       (std::clamp)(material.coatNormalTextureAmount, 0.0f, 1.0f);
@@ -899,7 +907,8 @@ void BuildRuntimeRasterMaterialConstants(
       (std::clamp)(material.thicknessTextureAmount, 0.0f, 1.0f);
   outConstants->textureWeight2[2] =
       (std::clamp)(material.specularColorTextureAmount, 0.0f, 1.0f);
-  outConstants->textureWeight2[3] = 0.0f;
+  outConstants->textureWeight2[3] =
+      (std::clamp)(material.parallaxDepthScale, 0.0f, 0.25f);
   outConstants->volumeParams[0] = (std::max)(0.0f, material.thickness);
   outConstants->volumeParams[1] = (std::max)(0.0f, material.attenuationDistance);
   outConstants->volumeParams[2] = (std::clamp)(material.alphaCutoff, 0.0f, 1.0f);

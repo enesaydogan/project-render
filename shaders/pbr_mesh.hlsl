@@ -79,8 +79,8 @@ cbuffer MaterialCB : register(b1)
     float4 triPlanarRotationParams; // xyz=materialRotationDegrees, w=stochasticMirror
     float4 textureWeight0;      // x=baseColor, y=packedSurface, z=metalness, w=roughnessGloss
     float4 textureWeight1;      // x=normal, y=occlusion, z=emissive, w=opacity
-    int4 textureIndices2;       // x=coatNormal, y=thickness
-    float4 textureWeight2;      // x=coatNormal, y=thickness, z=specularColor
+    int4 textureIndices2;       // x=coatNormal, y=thickness, z=parallaxDepth
+    float4 textureWeight2;      // x=coatNormal, y=thickness, z=specularColor, w=parallaxDepthScale
     float4 volumeParams;        // x=thickness, y=attenuationDistance, z=alphaCutoff, w=coatIor
     float4 specularColor;       // rgb=specularColor, a=specularColorTexAmount
     float4 sheenColor;          // rgb=sheenColor
@@ -859,6 +859,57 @@ void BuildShadingBasis(float3 N, float4 tangent, float rotationDegrees,
     B = normalize(cross(N, T)) * handedness;
 }
 
+float2 ApplyParallaxOcclusionUv(float2 uv, float3 worldPos, float3 worldNormal,
+                                float4 worldTangent, int parallaxTexIndex,
+                                float depthScale)
+{
+    if (parallaxTexIndex < 0 || depthScale <= 1.0e-5 ||
+        length(worldTangent.xyz) < 1.0e-4) {
+        return uv;
+    }
+
+    float3 N = normalize(worldNormal);
+    float3 T, B;
+    BuildShadingBasis(N, worldTangent, 0.0, T, B);
+    float3 V = normalize(pos - worldPos);
+    float3 viewTs = normalize(float3(dot(V, T), dot(V, B), dot(V, N)));
+    if (viewTs.z <= 0.05) {
+        return uv;
+    }
+
+    int layerCount = (int)round(lerp(28.0, 10.0, saturate(viewTs.z)));
+    float layerDepth = 1.0 / max((float)layerCount, 1.0);
+    float2 deltaUv = (viewTs.xy / max(viewTs.z, 0.08)) *
+                     saturate(depthScale) / max((float)layerCount, 1.0);
+
+    float2 currentUv = uv;
+    float2 previousUv = uv;
+    float currentLayerDepth = 0.0;
+    float currentDepth = 1.0 - textures[parallaxTexIndex].Sample(
+        linearSampler, currentUv).r;
+
+    [loop]
+    for (int step = 0; step < 32; ++step) {
+        if (step >= layerCount || currentLayerDepth >= currentDepth) {
+            break;
+        }
+        previousUv = currentUv;
+        currentUv -= deltaUv;
+        currentLayerDepth += layerDepth;
+        currentDepth = 1.0 - textures[parallaxTexIndex].Sample(
+            linearSampler, currentUv).r;
+    }
+
+    float previousLayerDepth = currentLayerDepth - layerDepth;
+    float previousDepth = 1.0 - textures[parallaxTexIndex].Sample(
+        linearSampler, previousUv).r;
+    float afterDepth = currentDepth - currentLayerDepth;
+    float beforeDepth = previousDepth - previousLayerDepth;
+    float denom = afterDepth - beforeDepth;
+    float weight = (abs(denom) > 1.0e-5) ? saturate(afterDepth / denom) : 0.0;
+    return lerp(currentUv, previousUv, weight);
+}
+
 // GGX/Trowbridge-Reitz normal distribution with anisotropy support
 float DistributionGGX(float3 N, float3 H, float roughness,
                       float anisotropy, float3 T, float3 B)
@@ -1078,13 +1129,23 @@ PSOutput PSMainMesh(PSInputMesh input)
     float triNormStrength = max(triPlanarParams.w, 0.0);
     const bool clayMode =
         (debugVisualizationMode > 1.5) && (debugVisualizationMode < 2.5);
+    bool parallaxMapped =
+        !clayMode && !triPlanar && textureIndices2.z >= 0 &&
+        textureWeight2.w > 1.0e-5;
+    if (parallaxMapped) {
+        uv = ApplyParallaxOcclusionUv(uv, worldPos, worldNormal,
+                                      input.tangent, textureIndices2.z,
+                                      textureWeight2.w);
+    }
 
     float3 BaseColor = diffuseColor.rgb;
     float alpha = diffuseColor.a;
     if (!clayMode && textureIndices.x >= 0) {
         float4 diffSample = triPlanar ? SampleTriPlanar(textureIndices.x, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos)
                                       : SampleUvTexture(textureIndices.x, uv, objectOrigin, worldNormal, true);
-        BaseColor *= BlendTextureRgb(sRGBToLinear(diffSample.rgb), textureWeight0.x);
+        float3 diffRgb = parallaxMapped ? diffSample.rgb
+                                        : sRGBToLinear(diffSample.rgb);
+        BaseColor *= BlendTextureRgb(diffRgb, textureWeight0.x);
         alpha *= BlendTextureScalar(diffSample.a, textureWeight0.x);
     }
     if (!clayMode && textureIndices.y >= 0) {
@@ -1154,7 +1215,8 @@ PSOutput PSMainMesh(PSInputMesh input)
     if (!clayMode && emissiveAndPad.x >= 0) {
         float3 e = triPlanar ? SampleTriPlanar(emissiveAndPad.x, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos).rgb
                              : SampleUvTexture(emissiveAndPad.x, uv, objectOrigin, worldNormal, true).rgb;
-        emiss *= BlendTextureRgb(sRGBToLinear(e), textureWeight1.z);
+        emiss *= BlendTextureRgb(parallaxMapped ? e : sRGBToLinear(e),
+                                 textureWeight1.z);
     } 
 
     // Occlusion

@@ -442,6 +442,61 @@ inline float4 WavefrontGiSampleTriPlanar(int texIndex,
         lod);
 }
 
+inline float2 WavefrontGiApplyParallaxUv(float2 uv, float3 viewWorld,
+                                         float3 worldNormal,
+                                         float4 worldTangent,
+                                         int parallaxTexIndex,
+                                         float depthScale,
+                                         float lod)
+{
+    if (parallaxTexIndex < 0 || depthScale <= 1.0e-5 ||
+        dot(worldTangent.xyz, worldTangent.xyz) < 1.0e-6) {
+        return uv;
+    }
+
+    float3 n = normalize(worldNormal);
+    float3 t = normalize(worldTangent.xyz - n * dot(n, worldTangent.xyz));
+    float3 b = normalize(cross(n, t)) * (worldTangent.w >= 0.0 ? 1.0 : -1.0);
+    float3 v = normalize(viewWorld);
+    float3 viewTs = normalize(float3(dot(v, t), dot(v, b), dot(v, n)));
+    if (viewTs.z <= 0.05) {
+        return uv;
+    }
+
+    uint texSlot = NonUniformResourceIndex((uint)parallaxTexIndex);
+    int layerCount = (int)round(lerp(28.0, 10.0, saturate(viewTs.z)));
+    float layerDepth = 1.0 / max((float)layerCount, 1.0);
+    float2 deltaUv = (viewTs.xy / max(viewTs.z, 0.08)) *
+                     saturate(depthScale) / max((float)layerCount, 1.0);
+
+    float2 currentUv = uv;
+    float2 previousUv = uv;
+    float currentLayerDepth = 0.0;
+    float currentDepth =
+        1.0 - textures[texSlot].SampleLevel(linearSampler, currentUv, lod).r;
+
+    [loop]
+    for (int step = 0; step < 32; ++step) {
+        if (step >= layerCount || currentLayerDepth >= currentDepth) {
+            break;
+        }
+        previousUv = currentUv;
+        currentUv -= deltaUv;
+        currentLayerDepth += layerDepth;
+        currentDepth =
+            1.0 - textures[texSlot].SampleLevel(linearSampler, currentUv, lod).r;
+    }
+
+    float previousLayerDepth = currentLayerDepth - layerDepth;
+    float previousDepth =
+        1.0 - textures[texSlot].SampleLevel(linearSampler, previousUv, lod).r;
+    float afterDepth = currentDepth - currentLayerDepth;
+    float beforeDepth = previousDepth - previousLayerDepth;
+    float denom = afterDepth - beforeDepth;
+    float weight = (abs(denom) > 1.0e-5) ? saturate(afterDepth / denom) : 0.0;
+    return lerp(currentUv, previousUv, weight);
+}
+
 inline float3 WavefrontGiUnpackNormal(float4 n)
 {
     return n.xyz * 2.0 - 1.0;
@@ -611,6 +666,7 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
     int texSpecular = UnpackTextureIndexLow(material.packedTextures.w);
     int texThickness = UnpackTextureIndexHigh(material.packedTextures.w);
     int texCoatNormal = UnpackTextureIndexLow(materialExtra.extraPackedTextures.x);
+    int texParallax = UnpackTextureIndexHigh(materialExtra.extraPackedTextures.x);
 
     const float4 triParams = materialExtra.triPlanarParams;
     // GI RayQuery material evaluation is a secondary diffuse path. Keep the
@@ -623,6 +679,7 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
     const float4 volumeParams = materialExtra.volumeParams;
     const float4 specularColorParams = materialExtra.specularColor;
     const float4 lobeParams = materialExtra.lobeParams;
+    const float parallaxDepthScale = materialExtra.parallaxParams.x;
 
     const float3 localNormal =
         normalize(vertices[mesh.vbIndex][i0].normal * bary.x +
@@ -665,6 +722,15 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
               0.0, 10.0);
     const bool clayMode =
         (SHADER_DEBUG_VIS_MODE > 1.5) && (SHADER_DEBUG_VIS_MODE < 2.5);
+    const bool parallaxMapped =
+        !clayMode && !triPlanar &&
+        ((matFlags & MATERIAL_FLAG_PARALLAX_MAPPED) != 0u) &&
+        texParallax >= 0 && parallaxDepthScale > 1.0e-5;
+    if (parallaxMapped) {
+        uv = WavefrontGiApplyParallaxUv(uv, -incomingDirection, worldNormal,
+                                        worldTangent, texParallax,
+                                        parallaxDepthScale, textureLod);
+    }
 
     float3 baseColor = clayMode ? float3(0.5, 0.5, 0.5)
                                 : saturate(material.baseColor_opacity.rgb);
@@ -678,8 +744,9 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
             : WavefrontGiSampleUvTexture(texDiff, uv, objectOrigin,
                                          worldNormal, mappingVariation,
                                          triRotation, textureLod, true);
-        baseColor *= WavefrontGiBlendTextureRgb(sRGBToLinear(diffSample.rgb),
-                                                texWeight0.x);
+        float3 diffRgb = parallaxMapped ? diffSample.rgb
+                                        : sRGBToLinear(diffSample.rgb);
+        baseColor *= WavefrontGiBlendTextureRgb(diffRgb, texWeight0.x);
         opacity *= WavefrontGiBlendTextureScalar(diffSample.a, texWeight0.x);
     }
     if (!clayMode && texOpacity >= 0) {
@@ -777,7 +844,8 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
             : WavefrontGiSampleUvTexture(texEmis, uv, objectOrigin,
                                          worldNormal, mappingVariation,
                                          triRotation, textureLod, true).rgb;
-        emissive *= WavefrontGiBlendTextureRgb(sRGBToLinear(e),
+        emissive *= WavefrontGiBlendTextureRgb(parallaxMapped ? e
+                                                              : sRGBToLinear(e),
                                                texWeight1.z);
     }
 

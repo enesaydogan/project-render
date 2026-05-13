@@ -586,6 +586,59 @@ float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent,
     return normalize(mul(tangentNormal, TBN));
 }
 
+float2 ApplyParallaxOcclusionUv(float2 uv, float3 viewWorld,
+                                float3 worldNormal, float4 worldTangent,
+                                int parallaxTexIndex, float depthScale,
+                                float lod)
+{
+    if (parallaxTexIndex < 0 || depthScale <= 1.0e-5 ||
+        dot(worldTangent.xyz, worldTangent.xyz) < 1.0e-6) {
+        return uv;
+    }
+
+    float3 N = normalize(worldNormal);
+    float3 T = normalize(worldTangent.xyz - N * dot(N, worldTangent.xyz));
+    float3 B = normalize(cross(N, T)) * (worldTangent.w >= 0.0 ? 1.0 : -1.0);
+    float3 V = normalize(viewWorld);
+    float3 viewTs = normalize(float3(dot(V, T), dot(V, B), dot(V, N)));
+    if (viewTs.z <= 0.05) {
+        return uv;
+    }
+
+    uint texSlot = NonUniformResourceIndex((uint)parallaxTexIndex);
+    int layerCount = (int)round(lerp(28.0, 10.0, saturate(viewTs.z)));
+    float layerDepth = 1.0 / max((float)layerCount, 1.0);
+    float2 deltaUv = (viewTs.xy / max(viewTs.z, 0.08)) *
+                     saturate(depthScale) / max((float)layerCount, 1.0);
+
+    float2 currentUv = uv;
+    float2 previousUv = uv;
+    float currentLayerDepth = 0.0;
+    float currentDepth = 1.0 - textures[texSlot].SampleLevel(
+        linearSampler, currentUv, lod).r;
+
+    [loop]
+    for (int step = 0; step < 32; ++step) {
+        if (step >= layerCount || currentLayerDepth >= currentDepth) {
+            break;
+        }
+        previousUv = currentUv;
+        currentUv -= deltaUv;
+        currentLayerDepth += layerDepth;
+        currentDepth = 1.0 - textures[texSlot].SampleLevel(
+            linearSampler, currentUv, lod).r;
+    }
+
+    float previousLayerDepth = currentLayerDepth - layerDepth;
+    float previousDepth = 1.0 - textures[texSlot].SampleLevel(
+        linearSampler, previousUv, lod).r;
+    float afterDepth = currentDepth - currentLayerDepth;
+    float beforeDepth = previousDepth - previousLayerDepth;
+    float denom = afterDepth - beforeDepth;
+    float weight = (abs(denom) > 1.0e-5) ? saturate(afterDepth / denom) : 0.0;
+    return lerp(currentUv, previousUv, weight);
+}
+
 void ClosestHitImpl(inout RayPayload payload,
                     in BuiltInTriangleIntersectionAttributes attr,
                     bool wavefrontMinimal)
@@ -624,6 +677,7 @@ void ClosestHitImpl(inout RayPayload payload,
     int texSpecular = UnpackTextureIndexLow(mat.packedTextures.w);
     int texThickness = UnpackTextureIndexHigh(mat.packedTextures.w);
     int texCoatNormal = UnpackTextureIndexLow(matExtra.extraPackedTextures.x);
+    int texParallax = UnpackTextureIndexHigh(matExtra.extraPackedTextures.x);
 
     float4 arch0 = matExtra.coatLayerParams;
     float4 uvXf = matExtra.uvTransform;
@@ -641,6 +695,7 @@ void ClosestHitImpl(inout RayPayload payload,
     float specularWeight = saturate(matExtra.shadingParams.y);
     float alphaCutoff = matExtra.shadingParams.z;
     bool isGrassMaterial = matExtra.shadingParams.w > 0.5;
+    float parallaxDepthScale = matExtra.parallaxParams.x;
 
 #ifdef HIT_DEBUG
     // Encode primitive index into color for debugging
@@ -729,6 +784,7 @@ void ClosestHitImpl(inout RayPayload payload,
         texSpecular = -1;
         texThickness = -1;
         texCoatNormal = -1;
+        texParallax = -1;
         triPlanar = false;
         dominantTriPlanar = false;
         samplingVariation = float4(0.0, 0.0, 0.0, 0.0);
@@ -737,16 +793,28 @@ void ClosestHitImpl(inout RayPayload payload,
         emissiveIntensity = 0.0;
         specularWeight = 0.0;
         isGrassMaterial = false;
+        parallaxDepthScale = 0.0;
     }
 
     // Sample textures
+    bool parallaxMapped =
+        ((matFlags & MATERIAL_FLAG_PARALLAX_MAPPED) != 0) &&
+        !triPlanar && texParallax >= 0 && parallaxDepthScale > 1.0e-5;
+    if (parallaxMapped) {
+        uv = ApplyParallaxOcclusionUv(uv, -WorldRayDirection(),
+                                      worldNormal, worldTangent, texParallax,
+                                      parallaxDepthScale, textureLod);
+    }
+
     float3 BaseColor = diffColor.rgb;
     float opacity = diffColor.a;
     int mode = (int)SHADER_DEBUG_MODE;
     if (texDiff >= 0) {
         float4 diffSample = triPlanar ? SampleTriPlanar(texDiff, P, worldNormal, triScale, triSharp, samplingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar)
                                       : SampleUvTexture(texDiff, uv, objectOrigin, worldNormal, samplingVariation, triRotation, textureLod, true);
-        BaseColor *= BlendTextureRgb(sRGBToLinear(diffSample.rgb), texWeight0.x);
+        float3 diffRgb = parallaxMapped ? diffSample.rgb
+                                        : sRGBToLinear(diffSample.rgb);
+        BaseColor *= BlendTextureRgb(diffRgb, texWeight0.x);
         opacity *= BlendTextureScalar(diffSample.a, texWeight0.x);
         SHADER_COUNTER_ADD(SHADER_COUNTER_TEXTURE_SAMPLES, 1);
     }
@@ -906,7 +974,8 @@ void ClosestHitImpl(inout RayPayload payload,
     if (texEmis >= 0) {
         float3 e = triPlanar ? SampleTriPlanar(texEmis, P, worldNormal, triScale, triSharp, samplingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar).rgb
                              : SampleUvTexture(texEmis, uv, objectOrigin, worldNormal, samplingVariation, triRotation, textureLod, true).rgb;
-        emissive *= BlendTextureRgb(sRGBToLinear(e), texWeight1.z);
+        emissive *= BlendTextureRgb(parallaxMapped ? e : sRGBToLinear(e),
+                                    texWeight1.z);
         SHADER_COUNTER_ADD(SHADER_COUNTER_TEXTURE_SAMPLES, 1);
     }
     

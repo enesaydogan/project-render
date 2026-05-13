@@ -212,6 +212,7 @@ static const uint MATERIAL_FLAG_HAS_OPACITY_TEXTURE = 1u << 8;
 static const uint MATERIAL_FLAG_HAS_SPECULAR_COLOR = 1u << 9;
 static const uint MATERIAL_FLAG_HAS_VOLUME = 1u << 10;
 static const uint MATERIAL_FLAG_HAS_COAT_NORMAL = 1u << 11;
+static const uint MATERIAL_FLAG_PARALLAX_MAPPED = 1u << 12;
 
 struct MaterialData
 {
@@ -232,11 +233,12 @@ struct MaterialExtraData
     float4 transmissionColor;   // rgb=tinted transmission color
     float4 textureWeight0;      // x=baseColor, y=packedSurface, z=metalness, w=roughnessGloss
     float4 textureWeight1;      // x=normal, y=occlusion, z=emissive, w=opacity
-    uint4  extraPackedTextures; // x=coatNormal
+    uint4  extraPackedTextures; // x=coatNormal/parallaxDepth
     float4 volumeParams;        // x=thickness, y=attenuationDistance, z=thicknessTexAmount, w=coatIor
     float4 specularColor;       // rgb=specularColor, a=specularColorTexAmount
     float4 sheenColor;          // rgb=sheenColor
     float4 lobeParams;          // x=coatNormalAmount, y=anisotropy, z=anisoRotationDeg, w=sheenWeight
+    float4 parallaxParams;      // x=parallaxDepthScale
 };
 
 inline int UnpackTextureIndexLow(uint packedPair)
