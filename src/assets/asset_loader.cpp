@@ -2747,9 +2747,26 @@ static LtmTextureSemantic LtmInferSemanticFromEntry(const LtmTextureEntry &entry
   return LtmTextureSemantic::Unknown;
 }
 
-static bool LtmIsBc7Format(DXGI_FORMAT fmt) {
-  return fmt == DXGI_FORMAT_BC7_UNORM ||
-         fmt == DXGI_FORMAT_BC7_UNORM_SRGB;
+static bool LtmIsLmodColorCandidateFormat(DXGI_FORMAT fmt) {
+  switch (fmt) {
+  case DXGI_FORMAT_BC1_UNORM:
+  case DXGI_FORMAT_BC1_UNORM_SRGB:
+  case DXGI_FORMAT_BC2_UNORM:
+  case DXGI_FORMAT_BC2_UNORM_SRGB:
+  case DXGI_FORMAT_BC3_UNORM:
+  case DXGI_FORMAT_BC3_UNORM_SRGB:
+  case DXGI_FORMAT_BC7_UNORM:
+  case DXGI_FORMAT_BC7_UNORM_SRGB:
+  case DXGI_FORMAT_R8G8B8A8_UNORM:
+  case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+  case DXGI_FORMAT_B8G8R8A8_UNORM:
+  case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+  case DXGI_FORMAT_B8G8R8X8_UNORM:
+  case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+    return true;
+  default:
+    return false;
+  }
 }
 
 static std::string LtmReadUtf16AsciiString(const uint8_t *payload,
@@ -2804,7 +2821,12 @@ static std::string LtmFindNearestUtf16ChunkString(const uint8_t *base,
 static void LtmApplyLmodTextureOrderHeuristics(
     const std::vector<LtmTextureEntry> &textureEntries,
     std::vector<LtmTextureSemantic> &semanticByEntry) {
-  std::vector<size_t> colorEntries;
+  struct MaterialTextureGroup {
+    std::string materialName;
+    std::vector<size_t> colorEntries;
+  };
+  std::vector<MaterialTextureGroup> materialGroups;
+  std::vector<size_t> unlinkedColorEntries;
 
   for (size_t ti = 0; ti < textureEntries.size(); ++ti) {
     const LtmTextureEntry &entry = textureEntries[ti];
@@ -2817,18 +2839,61 @@ static void LtmApplyLmodTextureOrderHeuristics(
       continue;
     }
 
-    if (LtmIsBc7Format(entry.authoredFormat) ||
-        LtmIsBc7Format(entry.uploadedFormat)) {
-      colorEntries.push_back(ti);
+    if (entry.uploadedFormat == DXGI_FORMAT_BC5_UNORM ||
+        entry.uploadedFormat == DXGI_FORMAT_BC5_SNORM) {
+      if (semanticByEntry[ti] == LtmTextureSemantic::Unknown)
+        semanticByEntry[ti] = LtmTextureSemantic::Normal;
+      continue;
+    }
+
+    const bool colorCandidate =
+        LtmIsLmodColorCandidateFormat(entry.authoredFormat) ||
+        LtmIsLmodColorCandidateFormat(entry.uploadedFormat);
+    if (!colorCandidate)
+      continue;
+
+    if (entry.materialName.empty()) {
+      unlinkedColorEntries.push_back(ti);
+      continue;
+    }
+
+    auto groupIt = std::find_if(
+        materialGroups.begin(), materialGroups.end(),
+        [&](const MaterialTextureGroup &group) {
+          return group.materialName == entry.materialName;
+        });
+    if (groupIt == materialGroups.end()) {
+      MaterialTextureGroup group;
+      group.materialName = entry.materialName;
+      group.colorEntries.push_back(ti);
+      materialGroups.push_back(std::move(group));
+    } else {
+      groupIt->colorEntries.push_back(ti);
     }
   }
 
-  if (colorEntries.empty())
-    return;
+  // LMOD DDS headers are commonly authored as linear BC7 even for albedo. The
+  // reliable cue in these files is the material run: the first color texture
+  // following a materialname belongs in that material's base-color slot.
+  bool assignedAnyDiffuse = false;
+  for (const MaterialTextureGroup &group : materialGroups) {
+    if (group.colorEntries.empty())
+      continue;
+    const size_t firstColorEntry = group.colorEntries[0];
+    if (semanticByEntry[firstColorEntry] == LtmTextureSemantic::Unknown ||
+        semanticByEntry[firstColorEntry] == LtmTextureSemantic::Diffuse) {
+      semanticByEntry[firstColorEntry] = LtmTextureSemantic::Diffuse;
+      assignedAnyDiffuse = true;
+    }
+  }
 
-  // LMOD assets do not appear to include the leading viewer/preview texture
-  // run that EverMotion LTM files do. The first BC7 map is the surface color.
-  semanticByEntry[colorEntries[0]] = LtmTextureSemantic::Diffuse;
+  if (!assignedAnyDiffuse && !unlinkedColorEntries.empty()) {
+    const size_t firstColorEntry = unlinkedColorEntries[0];
+    if (semanticByEntry[firstColorEntry] == LtmTextureSemantic::Unknown ||
+        semanticByEntry[firstColorEntry] == LtmTextureSemantic::Diffuse) {
+      semanticByEntry[firstColorEntry] = LtmTextureSemantic::Diffuse;
+    }
+  }
 }
 
 static bool LtmPayloadStartsWithUtf16Name(const uint8_t *payload, uint32_t size,
@@ -3445,13 +3510,17 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
         semanticByEntry[best] = LtmTextureSemantic::Normal;
     }
 
-    // Remaining unknown linear maps are more likely packed surface data than
-    // base color.
+    // Remaining unknown linear LTM maps are more likely packed surface data
+    // than base color. LMOD texture streams can also contain thumbnails and
+    // alternate color payloads, so leave those unclassified unless metadata or
+    // the material-run heuristic above identified the slot.
     for (size_t ti = 0; ti < textureEntries.size(); ++ti) {
       if (semanticByEntry[ti] != LtmTextureSemantic::Unknown)
         continue;
       const LtmTextureEntry &entry = textureEntries[ti];
       if (entry.uploadedTextureIndex < 0)
+        continue;
+      if (isLmod && !LtmIsSrgbFormat(entry.authoredFormat))
         continue;
       semanticByEntry[ti] = LtmIsSrgbFormat(entry.authoredFormat)
                                 ? LtmTextureSemantic::Diffuse
@@ -3550,6 +3619,8 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
           for (size_t ci = 0; ci < candidates.size() && ci < candidateIndices.size(); ++ci) {
             const LtmTextureEntry *entry = candidates[ci];
             const LtmTextureSemantic semantic = semanticByEntry[candidateIndices[ci]];
+            if (isLmod && semantic == LtmTextureSemantic::Unknown)
+              continue;
             assignSemanticTexture(mat, semantic, entry->uploadedTextureIndex);
           }
         }
