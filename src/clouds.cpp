@@ -361,7 +361,7 @@ void CloudManager::RequestBake() {
   m_pendingParamBake = true;
   m_pendingPreviewBake = true;
   m_pendingFinalBake = true;
-  m_requestedBakeQuality = BakeQuality::Preview;
+  m_requestedBakeQuality = BakeQuality::Final;
   m_secondsSinceParamEdit = 0.0f;
 }
 
@@ -1147,7 +1147,7 @@ void CloudManager::CreateTextures(ID3D12Device *device,
 
     createBakedSky(1024, 512, L"PreviewBakedCloudSkyTexture",
                    m_previewBakedSkyTexture);
-    createBakedSky(4096, 2048, L"FinalBakedCloudSkyTexture",
+    createBakedSky(8192, 4096, L"FinalBakedCloudSkyTexture",
                    m_finalBakedSkyTexture);
   }
 }
