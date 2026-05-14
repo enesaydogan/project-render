@@ -268,6 +268,10 @@ void RequestRendererTlasRefresh();
 // Return vector of pointers to active meshes for rendering / DXR dispatch
 std::vector<const Asset::GpuMesh *> GetActiveMeshes();
 
+// Clean up orphaned data — removes materials unreferenced by any node and
+// textures unreferenced by any remaining material. Returns summary message.
+std::string CleanOrphanedData();
+
 // Status message to display in UI
 const std::string &LastStatus();
 

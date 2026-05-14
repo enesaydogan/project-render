@@ -725,7 +725,10 @@ void MainWindow::createMenus()
     m_viewMenu->addSeparator();
 
     QMenu *toolsMenu = menuBar()->addMenu(tr("&Tools"));
-    toolsMenu->addAction(tr("No tools configured"))->setEnabled(false);
+    toolsMenu->addAction(tr("Clean Orphaned Data..."), this, [this]() {
+        std::string result = Scene::CleanOrphanedData();
+        statusBar()->showMessage(QString::fromStdString(result), 5000);
+    });
 
     QMenu *renderMenu = menuBar()->addMenu(tr("&Render"));
     renderMenu->addAction(m_renderPopupAction);

@@ -6069,4 +6069,221 @@ void ResetScene() {
   NotifySceneChanged();
 }
 
+std::string CleanOrphanedData() {
+  if (g_loadedMaterials.empty() && g_loadedTextures.empty()) {
+    return "No material or texture data to clean.";
+  }
+
+  // Must flush GPU before we mutate textures whose resources are in-flight.
+  WaitGPUIdle();
+
+  // --- Pass 1: collect all material indices used by any node or mesh ---
+  std::vector<bool> materialUsed(g_loadedMaterials.size(), false);
+
+  for (const auto &node : s_nodes) {
+    for (size_t meshIdx : node.meshIndices) {
+      if (meshIdx < g_loadedMeshes.size()) {
+        int matIdx = g_loadedMeshes[meshIdx].materialIndex;
+        if (matIdx >= 0 && static_cast<size_t>(matIdx) < materialUsed.size()) {
+          materialUsed[static_cast<size_t>(matIdx)] = true;
+        }
+      }
+    }
+    for (int linkedMatIdx : node.linkedMaterialIndices) {
+      if (linkedMatIdx >= 0 && static_cast<size_t>(linkedMatIdx) < materialUsed.size()) {
+        materialUsed[static_cast<size_t>(linkedMatIdx)] = true;
+      }
+    }
+  }
+
+  // Also keep materials referenced by scatter objects' source meshes
+  for (const auto &model : s_scatterModels) {
+    for (const auto &obj : model.objects) {
+      for (size_t meshIdx : obj.meshIndices) {
+        if (meshIdx < g_loadedMeshes.size()) {
+          int matIdx = g_loadedMeshes[meshIdx].materialIndex;
+          if (matIdx >= 0 && static_cast<size_t>(matIdx) < materialUsed.size()) {
+            materialUsed[static_cast<size_t>(matIdx)] = true;
+          }
+        }
+      }
+    }
+  }
+
+  // --- Pass 2: compact materials (keep only used ones, build remap) ---
+  size_t removedMaterials = 0;
+  std::vector<int> materialRemap(g_loadedMaterials.size(), -1);
+  {
+    std::vector<Asset::Material> compactedMaterials;
+    std::vector<std::string> compactedStableIds;
+    compactedMaterials.reserve(g_loadedMaterials.size());
+    if (s_materialStableIds.size() < g_loadedMaterials.size()) {
+      s_materialStableIds.resize(g_loadedMaterials.size());
+    }
+    compactedStableIds.reserve(s_materialStableIds.size());
+
+    for (size_t oldIdx = 0; oldIdx < g_loadedMaterials.size(); ++oldIdx) {
+      if (!materialUsed[oldIdx]) {
+        ++removedMaterials;
+        continue;
+      }
+      materialRemap[oldIdx] = static_cast<int>(compactedMaterials.size());
+      compactedMaterials.push_back(std::move(g_loadedMaterials[oldIdx]));
+      compactedStableIds.push_back(
+          oldIdx < s_materialStableIds.size()
+              ? std::move(s_materialStableIds[oldIdx])
+              : std::string());
+    }
+    g_loadedMaterials = std::move(compactedMaterials);
+    s_materialStableIds = std::move(compactedStableIds);
+  }
+
+  // Rebuild material lookup maps
+  s_materialIndicesByStableId.clear();
+  s_materialIndicesByName.clear();
+  for (size_t i = 0; i < g_loadedMaterials.size(); ++i) {
+    const std::string &name = g_loadedMaterials[i].name;
+    if (!name.empty()) {
+      s_materialIndicesByName[name] = static_cast<int>(i);
+    }
+    if (i < s_materialStableIds.size() && !s_materialStableIds[i].empty()) {
+      s_materialIndicesByStableId[s_materialStableIds[i]] = static_cast<int>(i);
+    }
+  }
+
+  // Remap material indices in meshes, nodes, scatter targets, shared entries
+  for (Asset::GpuMesh &mesh : g_loadedMeshes) {
+    if (mesh.materialIndex >= 0 &&
+        mesh.materialIndex < static_cast<int>(materialRemap.size())) {
+      mesh.materialIndex = materialRemap[static_cast<size_t>(mesh.materialIndex)];
+    } else if (mesh.materialIndex >= static_cast<int>(materialRemap.size())) {
+      mesh.materialIndex = -1;
+    }
+  }
+  for (Node &node : s_nodes) {
+    for (int &linkedIdx : node.linkedMaterialIndices) {
+      if (linkedIdx >= 0 && linkedIdx < static_cast<int>(materialRemap.size())) {
+        linkedIdx = materialRemap[static_cast<size_t>(linkedIdx)];
+      } else if (linkedIdx >= static_cast<int>(materialRemap.size())) {
+        linkedIdx = -1;
+      }
+    }
+  }
+  for (auto &[_, entry] : s_sharedImportedMeshesBySourcePath) {
+    for (int &linkedIdx : entry.linkedMaterialIndices) {
+      if (linkedIdx >= 0 && linkedIdx < static_cast<int>(materialRemap.size())) {
+        linkedIdx = materialRemap[static_cast<size_t>(linkedIdx)];
+      } else if (linkedIdx >= static_cast<int>(materialRemap.size())) {
+        linkedIdx = -1;
+      }
+    }
+  }
+  for (ScatterModel &model : s_scatterModels) {
+    for (ScatterTarget &target : model.targets) {
+      if (target.materialIndex >= 0 &&
+          target.materialIndex < static_cast<int>(materialRemap.size())) {
+        target.materialIndex = materialRemap[static_cast<size_t>(target.materialIndex)];
+      } else if (target.materialIndex >= static_cast<int>(materialRemap.size())) {
+        target.materialIndex = -1;
+      }
+    }
+  }
+
+  // --- Pass 3: collect all texture indices used by remaining materials ---
+  std::vector<bool> textureUsed(g_loadedTextures.size(), false);
+
+  auto markTexture = [&](int texIdx) {
+    if (texIdx >= 0 && static_cast<size_t>(texIdx) < textureUsed.size()) {
+      textureUsed[static_cast<size_t>(texIdx)] = true;
+    }
+  };
+
+  for (const auto &mat : g_loadedMaterials) {
+    markTexture(mat.diffuseTexture);
+    markTexture(mat.normalTexture);
+    markTexture(mat.opacityTexture);
+    markTexture(mat.emissiveTexture);
+    markTexture(mat.occlusionTexture);
+    markTexture(mat.metalRoughTexture);
+    markTexture(mat.runtimeMetalRoughTexture);
+    markTexture(mat.metalnessTexture);
+    markTexture(mat.roughnessGlossTexture);
+    markTexture(mat.specularColorTexture);
+    markTexture(mat.thicknessTexture);
+    markTexture(mat.coatNormalTexture);
+    markTexture(mat.parallaxTexture);
+  }
+
+  // --- Pass 4: compact textures (keep only used, rewrite descriptors) ---
+  size_t removedTextures = 0;
+  std::vector<int> textureRemap(g_loadedTextures.size(), -1);
+  {
+    std::vector<Asset::Texture> compactedTextures;
+    compactedTextures.reserve(g_loadedTextures.size());
+
+    for (size_t oldIdx = 0; oldIdx < g_loadedTextures.size(); ++oldIdx) {
+      if (!textureUsed[oldIdx]) {
+        ++removedTextures;
+        continue;
+      }
+      textureRemap[oldIdx] = static_cast<int>(compactedTextures.size());
+      compactedTextures.push_back(std::move(g_loadedTextures[oldIdx]));
+    }
+    g_loadedTextures = std::move(compactedTextures);
+  }
+
+  // Rewrite SRV descriptors for all remaining textures at their new positions,
+  // then clamp the active descriptor count.
+  RegisterTextures(g_loadedTextures);
+  DxrRenderer::MarkTextureDescriptorTableDirty();
+
+  // Fix up s_textureIndicesBySourceUri after compaction
+  for (auto it = s_textureIndicesBySourceUri.begin();
+       it != s_textureIndicesBySourceUri.end();) {
+    int oldIdx = it->second;
+    if (oldIdx >= 0 && oldIdx < static_cast<int>(textureRemap.size()) &&
+        textureRemap[static_cast<size_t>(oldIdx)] >= 0) {
+      it->second = textureRemap[static_cast<size_t>(oldIdx)];
+      ++it;
+    } else {
+      it = s_textureIndicesBySourceUri.erase(it);
+    }
+  }
+
+  // Fix up material texture indices
+  auto remapTexIdx = [&](int &texIdx) {
+    if (texIdx >= 0 && static_cast<size_t>(texIdx) < textureRemap.size()) {
+      texIdx = textureRemap[static_cast<size_t>(texIdx)];
+    } else if (texIdx >= static_cast<int>(textureRemap.size())) {
+      texIdx = -1;
+    }
+  };
+
+  for (auto &mat : g_loadedMaterials) {
+    remapTexIdx(mat.diffuseTexture);
+    remapTexIdx(mat.normalTexture);
+    remapTexIdx(mat.opacityTexture);
+    remapTexIdx(mat.emissiveTexture);
+    remapTexIdx(mat.occlusionTexture);
+    remapTexIdx(mat.metalRoughTexture);
+    remapTexIdx(mat.runtimeMetalRoughTexture);
+    remapTexIdx(mat.metalnessTexture);
+    remapTexIdx(mat.roughnessGlossTexture);
+    remapTexIdx(mat.specularColorTexture);
+    remapTexIdx(mat.thicknessTexture);
+    remapTexIdx(mat.coatNormalTexture);
+    remapTexIdx(mat.parallaxTexture);
+  }
+
+  // Signal the renderer that material data changed
+  DxrRenderer::RequestAccelerationStructureRebuild();
+  DxrRenderer::ResetAccumulation();
+
+  char buf[256];
+  snprintf(buf, sizeof(buf),
+           "Cleaned %zu orphaned material(s) and %zu orphaned texture(s).",
+           removedMaterials, removedTextures);
+  return std::string(buf);
+}
+
 } // namespace Scene

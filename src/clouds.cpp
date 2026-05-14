@@ -1147,7 +1147,7 @@ void CloudManager::CreateTextures(ID3D12Device *device,
 
     createBakedSky(1024, 512, L"PreviewBakedCloudSkyTexture",
                    m_previewBakedSkyTexture);
-    createBakedSky(8192, 4096, L"FinalBakedCloudSkyTexture",
+    createBakedSky(4096, 2048, L"FinalBakedCloudSkyTexture",
                    m_finalBakedSkyTexture);
   }
 }
