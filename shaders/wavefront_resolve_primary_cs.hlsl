@@ -497,6 +497,125 @@ inline float2 WavefrontGiApplyParallaxUv(float2 uv, float3 viewWorld,
     return lerp(currentUv, previousUv, weight);
 }
 
+inline float WavefrontGiWindowBoxAtlasAlpha(int alphaTexIndex, float2 uv,
+                                            float fallbackAlpha, float lod)
+{
+    if (alphaTexIndex < 0) {
+        return fallbackAlpha;
+    }
+    uint alphaSlot = NonUniformResourceIndex((uint)alphaTexIndex);
+    return textures[alphaSlot].SampleLevel(linearSampler, uv, lod).r;
+}
+
+inline float4 WavefrontGiSampleWindowBoxParallax(int texIndex,
+                                                 int alphaTexIndex,
+                                                 float2 uv,
+                                                 float3 viewWorld,
+                                                 float3 worldNormal,
+                                                 float4 worldTangent,
+                                                 float roomDepth,
+                                                 float windowAspect,
+                                                 float lod)
+{
+    if (texIndex < 0 || dot(worldTangent.xyz, worldTangent.xyz) < 1.0e-6) {
+        return float4(1.0, 1.0, 1.0, 1.0);
+    }
+
+    float3 n = normalize(worldNormal);
+    float3 t = normalize(worldTangent.xyz - n * dot(n, worldTangent.xyz));
+    float3 b = normalize(cross(n, t)) * (worldTangent.w >= 0.0 ? 1.0 : -1.0);
+    float3 v = normalize(viewWorld);
+    float3 viewTs = normalize(float3(dot(v, t), dot(v, b), dot(v, n)));
+    uint texSlot = NonUniformResourceIndex((uint)texIndex);
+    if (viewTs.z <= 0.05) {
+        float4 grazingSample =
+            textures[texSlot].SampleLevel(linearSampler, uv, lod);
+        grazingSample.a = WavefrontGiWindowBoxAtlasAlpha(
+            alphaTexIndex, uv, grazingSample.a, lod);
+        return grazingSample;
+    }
+
+    float depth = max(roomDepth, 0.1);
+    float aspect = max(windowAspect, 0.05);
+    float3 objI = normalize(float3(-viewTs.x / aspect, -viewTs.y, -viewTs.z));
+    float3 objSign = lerp(-1.0.xxx, 1.0.xxx, step(0.0.xxx, objI));
+    float3 safeObjI = objSign * max(abs(objI), 1.0e-4.xxx);
+    float3 objP = float3(saturate(uv), 0.5);
+    float3 sections = step(0.0.xxx, safeObjI);
+
+    float invThird = 1.0 / 3.0;
+    float twoThirds = 2.0 / 3.0;
+    float3 baseDepth = (objP - sections) / (-safeObjI * depth);
+    float3 baseBack = (objP - sections) / (-safeObjI);
+    float3 baseWidth = baseDepth * depth;
+    float3 baseDepthX = baseDepth.y * safeObjI + objP + 1.0;
+    float3 baseDepthY = baseDepth.x * safeObjI + objP + 1.0;
+    float3 baseWidthX = baseWidth.y * safeObjI + objP + 1.0;
+    float3 baseWidthY = baseWidth.x * safeObjI + objP + 1.0;
+
+    float horizU = baseDepthY.z - 0.5;
+    float vertU = baseWidthX.x - 1.0;
+    float horizV = baseWidthY.y - 1.0;
+    float vertV = baseDepthX.z - 0.5;
+
+    float2 finalUv = 0.0.xx;
+    float floorCeilMask =
+        step(0.0, vertV) * step(0.0, 1.0 - max(vertU, 1.0 - vertU));
+    float2 floorCeilUv = float2(vertU, vertV) * invThird;
+    float2 ceilUv = (floorCeilUv + float2(invThird, twoThirds)) *
+                    floorCeilMask * sections.y;
+    float2 floorUv = floorCeilUv + float2(invThird, 0.0);
+    floorUv.y = invThird - floorCeilUv.y;
+    floorUv *= floorCeilMask * (1.0 - sections.y);
+    finalUv += ceilUv + floorUv;
+
+    float sideWallsMask =
+        step(0.0, horizU) * step(0.0, 1.0 - max(horizV, 1.0 - horizV));
+    float2 sideWallsUv = float2(horizU, horizV) * invThird;
+    float2 rightUv = (sideWallsUv + float2(twoThirds, invThird)) *
+                     sideWallsMask * sections.x;
+    float2 leftUv = sideWallsUv + float2(0.0, invThird);
+    leftUv.x = invThird - sideWallsUv.x;
+    leftUv *= sideWallsMask * (1.0 - sections.x);
+    finalUv += leftUv + rightUv;
+
+    float backMask = 1.0 - max(step(0.0, horizU), step(0.0, vertV));
+    float2 backUv =
+        ((baseBack.z * safeObjI.xy + (objP.xy * 0.5) / depth) *
+         (depth * 2.0) * invThird + float2(invThird, invThird)) * backMask;
+    finalUv += backUv;
+
+    float hasWall = step(1.0e-5, dot(abs(finalUv), 1.0.xx));
+    float4 finalSample = textures[texSlot].SampleLevel(linearSampler, finalUv, lod);
+    finalSample.a = WavefrontGiWindowBoxAtlasAlpha(
+                        alphaTexIndex, finalUv, finalSample.a, lod) *
+                    hasWall;
+
+    float midDepth = clamp(0.5, 0.05, max(depth - 0.01, 0.05));
+    float2 midUv = ((baseBack.z * safeObjI.xy + objP.xy / (midDepth * 2.0)) *
+                    (midDepth * 2.0) * invThird);
+    float midMask = step(0.0, midUv.y * 3.0 * (1.0 - midUv.y * 3.0)) *
+                    step(0.0, midUv.x * (invThird - midUv.x));
+    if (midUv.x > 0.01 && midUv.x < 0.331 && midUv.y > 0.01 && midUv.y < 0.331) {
+        float4 midSample = textures[texSlot].SampleLevel(linearSampler, midUv, lod);
+        midSample.a = WavefrontGiWindowBoxAtlasAlpha(
+            alphaTexIndex, midUv, midSample.a, lod);
+        finalSample.rgb = lerp(finalSample.rgb, midSample.rgb,
+                               saturate(midSample.a * midMask));
+        finalSample.a = lerp(finalSample.a, 1.0, saturate(midSample.a * midMask));
+    }
+
+    float2 curtainsUv = uv * invThird + float2(0.0, twoThirds);
+    float4 curtainsSample =
+        textures[texSlot].SampleLevel(linearSampler, curtainsUv, lod);
+    curtainsSample.a = WavefrontGiWindowBoxAtlasAlpha(
+        alphaTexIndex, curtainsUv, curtainsSample.a, lod);
+    finalSample.rgb = lerp(finalSample.rgb, curtainsSample.rgb,
+                           saturate(curtainsSample.a));
+    finalSample.a = lerp(finalSample.a, 1.0, saturate(curtainsSample.a));
+    return finalSample;
+}
+
 inline float3 WavefrontGiUnpackNormal(float4 n)
 {
     return n.xyz * 2.0 - 1.0;
@@ -680,6 +799,7 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
     const float4 specularColorParams = materialExtra.specularColor;
     const float4 lobeParams = materialExtra.lobeParams;
     const float parallaxDepthScale = materialExtra.parallaxParams.x;
+    const int parallaxMode = (int)round(materialExtra.parallaxParams.y);
 
     const float3 localNormal =
         normalize(vertices[mesh.vbIndex][i0].normal * bary.x +
@@ -725,7 +845,12 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
     const bool parallaxMapped =
         !clayMode && !triPlanar &&
         ((matFlags & MATERIAL_FLAG_PARALLAX_MAPPED) != 0u) &&
-        texParallax >= 0 && parallaxDepthScale > 1.0e-5;
+        texParallax >= 0 && parallaxMode == 1 &&
+        parallaxDepthScale > 1.0e-5;
+    const bool windowBoxMapped =
+        !clayMode && !triPlanar &&
+        ((matFlags & MATERIAL_FLAG_PARALLAX_MAPPED) != 0u) &&
+        texParallax >= 0 && parallaxMode == 2;
     if (parallaxMapped) {
         uv = WavefrontGiApplyParallaxUv(uv, -incomingDirection, worldNormal,
                                         worldTangent, texParallax,
@@ -735,6 +860,28 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
     float3 baseColor = clayMode ? float3(0.5, 0.5, 0.5)
                                 : saturate(material.baseColor_opacity.rgb);
     float opacity = clayMode ? 1.0 : saturate(material.baseColor_opacity.a);
+    float3 windowBoxEmission = float3(0.0, 0.0, 0.0);
+    if (windowBoxMapped) {
+        float2 windowBoxUv =
+            (uv - 0.5.xx) * max(materialExtra.parallaxTransform.xy, 0.01.xx) +
+            0.5.xx + materialExtra.parallaxTransform.zw;
+        float4 wb = WavefrontGiSampleWindowBoxParallax(
+            texParallax, texOpacity, windowBoxUv, -incomingDirection,
+            worldNormal, worldTangent,
+            materialExtra.parallaxParams.z, materialExtra.parallaxParams.w,
+            textureLod);
+        baseColor *= wb.rgb;
+        opacity *= wb.a;
+        if (texEmis >= 0) {
+            float4 wbEmission = WavefrontGiSampleWindowBoxParallax(
+                texEmis, texOpacity, windowBoxUv, -incomingDirection,
+                worldNormal, worldTangent, materialExtra.parallaxParams.z,
+                materialExtra.parallaxParams.w, textureLod);
+            windowBoxEmission = wbEmission.rgb;
+        } else {
+            windowBoxEmission = wb.rgb;
+        }
+    }
     if (!clayMode && texDiff >= 0) {
         float4 diffSample = triPlanar
             ? WavefrontGiSampleTriPlanar(texDiff, surfacePos, worldNormal,
@@ -744,12 +891,12 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
             : WavefrontGiSampleUvTexture(texDiff, uv, objectOrigin,
                                          worldNormal, mappingVariation,
                                          triRotation, textureLod, true);
-        float3 diffRgb = parallaxMapped ? diffSample.rgb
+        float3 diffRgb = (parallaxMapped || windowBoxMapped) ? diffSample.rgb
                                         : sRGBToLinear(diffSample.rgb);
         baseColor *= WavefrontGiBlendTextureRgb(diffRgb, texWeight0.x);
         opacity *= WavefrontGiBlendTextureScalar(diffSample.a, texWeight0.x);
     }
-    if (!clayMode && texOpacity >= 0) {
+    if (!clayMode && texOpacity >= 0 && !windowBoxMapped) {
         float opacitySample = triPlanar
             ? WavefrontGiSampleTriPlanar(texOpacity, surfacePos, worldNormal,
                                          triScale, triSharp, mappingVariation,
@@ -835,7 +982,11 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
         clayMode ? float3(0.0, 0.0, 0.0)
                  : material.emissive_ior.rgb *
                        (5.0 * max(0.0, materialExtra.shadingParams.x));
-    if (!clayMode && texEmis >= 0) {
+    if (!clayMode && windowBoxMapped) {
+        emissive += windowBoxEmission *
+                    (5.0 * max(0.0, materialExtra.shadingParams.x));
+    }
+    if (!clayMode && texEmis >= 0 && !windowBoxMapped) {
         float3 e = triPlanar
             ? WavefrontGiSampleTriPlanar(texEmis, surfacePos, worldNormal,
                                          triScale, triSharp, mappingVariation,
@@ -844,7 +995,7 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
             : WavefrontGiSampleUvTexture(texEmis, uv, objectOrigin,
                                          worldNormal, mappingVariation,
                                          triRotation, textureLod, true).rgb;
-        emissive *= WavefrontGiBlendTextureRgb(parallaxMapped ? e
+        emissive *= WavefrontGiBlendTextureRgb((parallaxMapped || windowBoxMapped) ? e
                                                               : sRGBToLinear(e),
                                                texWeight1.z);
     }

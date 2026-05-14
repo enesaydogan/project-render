@@ -134,7 +134,12 @@ nlohmann::json BuildMaterialsMetadata(
         {"tae", mat.emissiveTextureAmount},
         {"tasc", mat.specularColorTextureAmount},
         {"tatk", mat.thicknessTextureAmount},
+        {"pm", mat.parallaxMode},
         {"tap", mat.parallaxDepthScale},
+        {"prd", mat.parallaxRoomDepth},
+        {"pwa", mat.parallaxWindowAspect},
+        {"pvs", {mat.parallaxUvScale[0], mat.parallaxUvScale[1]}},
+        {"pvo", {mat.parallaxUvOffset[0], mat.parallaxUvOffset[1]}},
         {"ds", mat.doubleSided},
         {"am", mat.alphaMode},
         {"ac", mat.alphaCutoff},
@@ -337,8 +342,32 @@ void RestoreMaterialsFromMetadata(const nlohmann::json &materialsJson,
       savedMaterial.value("tasc", material.specularColorTextureAmount);
     material.thicknessTextureAmount =
       savedMaterial.value("tatk", material.thicknessTextureAmount);
+    material.parallaxMode =
+      savedMaterial.value("pm", material.parallaxMode);
     material.parallaxDepthScale =
       savedMaterial.value("tap", material.parallaxDepthScale);
+    material.parallaxRoomDepth =
+      savedMaterial.value("prd", material.parallaxRoomDepth);
+    material.parallaxWindowAspect =
+      savedMaterial.value("pwa", material.parallaxWindowAspect);
+    if (savedMaterial.contains("pvs") && savedMaterial["pvs"].is_array()) {
+      const auto &arr = savedMaterial["pvs"];
+      if (arr.size() >= 2) {
+        material.parallaxUvScale[0] =
+          arr[0].get<float>();
+        material.parallaxUvScale[1] =
+          arr[1].get<float>();
+      }
+    }
+    if (savedMaterial.contains("pvo") && savedMaterial["pvo"].is_array()) {
+      const auto &arr = savedMaterial["pvo"];
+      if (arr.size() >= 2) {
+        material.parallaxUvOffset[0] =
+          arr[0].get<float>();
+        material.parallaxUvOffset[1] =
+          arr[1].get<float>();
+      }
+    }
 
     material.runtimeMetalRoughTexture = -1;
     material.doubleSided = savedMaterial.value("ds", material.doubleSided);

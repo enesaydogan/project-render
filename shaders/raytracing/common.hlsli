@@ -238,7 +238,8 @@ struct MaterialExtraData
     float4 specularColor;       // rgb=specularColor, a=specularColorTexAmount
     float4 sheenColor;          // rgb=sheenColor
     float4 lobeParams;          // x=coatNormalAmount, y=anisotropy, z=anisoRotationDeg, w=sheenWeight
-    float4 parallaxParams;      // x=parallaxDepthScale
+    float4 parallaxParams;      // x=heightDepth, y=mode, z=roomDepth, w=windowAspect
+    float4 parallaxTransform;   // xy=uvScale, zw=uvOffset
 };
 
 inline int UnpackTextureIndexLow(uint packedPair)

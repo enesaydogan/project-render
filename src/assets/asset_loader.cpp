@@ -2416,6 +2416,8 @@ static bool LtmIsBlockCompressedFormat(DXGI_FORMAT fmt) {
   case DXGI_FORMAT_BC4_SNORM:
   case DXGI_FORMAT_BC5_UNORM:
   case DXGI_FORMAT_BC5_SNORM:
+  case DXGI_FORMAT_BC6H_UF16:
+  case DXGI_FORMAT_BC6H_SF16:
   case DXGI_FORMAT_BC7_UNORM:
   case DXGI_FORMAT_BC7_UNORM_SRGB:
     return true;
@@ -2436,6 +2438,34 @@ static int LtmBytesPerPixel(DXGI_FORMAT fmt) {
   default:
     return 0;
   }
+}
+
+static bool LtmReadDDSFormat(const uint8_t *ddsData, size_t ddsSize,
+                             DXGI_FORMAT *outFormat) {
+  if (!ddsData || ddsSize < 128 || !outFormat)
+    return false;
+  const auto *hdr = reinterpret_cast<const LtmDdsHeader *>(ddsData);
+  if (hdr->magic != 0x20534444u)
+    return false;
+
+  DXGI_FORMAT fmt = DXGI_FORMAT_UNKNOWN;
+  if (hdr->ddspf.fourCC == 0x30315844u) {
+    if (ddsSize < 148)
+      return false;
+    const auto *dx10 =
+        reinterpret_cast<const LtmDdsHeaderDxt10 *>(ddsData + 128);
+    fmt = static_cast<DXGI_FORMAT>(dx10->dxgiFormat);
+  } else {
+    fmt = LtmFourCCToFormat(hdr->ddspf.fourCC);
+    if (fmt == DXGI_FORMAT_UNKNOWN && (hdr->ddspf.flags & 0x40u) &&
+        hdr->ddspf.rgbBitCount == 32) {
+      fmt = DXGI_FORMAT_R8G8B8A8_UNORM;
+    }
+  }
+  if (fmt == DXGI_FORMAT_UNKNOWN)
+    return false;
+  *outFormat = fmt;
+  return true;
 }
 
 static DXGI_FORMAT LtmRemoveSrgbViewFormat(DXGI_FORMAT fmt) {
@@ -2466,27 +2496,19 @@ static Texture LtmUploadDDS(const uint8_t *ddsData, size_t ddsSize,
   uint32_t H      = hdr->height;
   const uint8_t *mipPtr = ddsData + 128;
 
+  if (!LtmReadDDSFormat(ddsData, ddsSize, &fmt)) {
+    fprintf(stderr,
+            "LTM: DDS upload rejected (unsupported FourCC=0x%08X flags=0x%08X rgbBits=%u size=%zu)\n",
+            hdr->ddspf.fourCC, hdr->ddspf.flags, hdr->ddspf.rgbBitCount,
+            ddsSize);
+    return {};
+  }
   if (hdr->ddspf.fourCC == 0x30315844u) { // DX10
     if (ddsSize < 148) {
       fprintf(stderr, "LTM: DDS upload rejected (DX10 header missing, size=%zu)\n", ddsSize);
       return {};
     }
-    const auto *dx10 = reinterpret_cast<const LtmDdsHeaderDxt10 *>(ddsData + 128);
-    fmt    = static_cast<DXGI_FORMAT>(dx10->dxgiFormat);
     mipPtr = ddsData + 148;
-  } else {
-    fmt = LtmFourCCToFormat(hdr->ddspf.fourCC);
-    if (fmt == DXGI_FORMAT_UNKNOWN) {
-      if ((hdr->ddspf.flags & 0x40u) && hdr->ddspf.rgbBitCount == 32)
-        fmt = DXGI_FORMAT_R8G8B8A8_UNORM;
-      else {
-        fprintf(stderr,
-                "LTM: DDS upload rejected (unsupported FourCC=0x%08X flags=0x%08X rgbBits=%u size=%zu)\n",
-                hdr->ddspf.fourCC, hdr->ddspf.flags, hdr->ddspf.rgbBitCount,
-                ddsSize);
-        return {};
-      }
-    }
   }
 
   if (outAuthoredFormat) {
@@ -2605,7 +2627,7 @@ ltm_dds_done:
   barrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
   barrier.Transition.pResource   = texRes.Get();
   barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-  barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+  barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
   barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
   cl->ResourceBarrier(1, &barrier);
   cl->Close();
@@ -3082,6 +3104,31 @@ static bool LtmReadWholeFile(const std::filesystem::path &path,
   return f.good() || f.eof();
 }
 
+static bool LtmLooksLikeWParallaxLpr(
+    const std::filesystem::path &lprPath,
+    const std::vector<LtmTextureEntry> &lprTextures) {
+  if (lprTextures.size() < 3)
+    return false;
+
+  std::string stem = lprPath.stem().string();
+  std::transform(stem.begin(), stem.end(), stem.begin(),
+                 [](unsigned char c) {
+                   return static_cast<char>(std::tolower(c));
+                 });
+  if (stem.rfind("wp_", 0) != 0 && stem.find("wparallax") == std::string::npos)
+    return false;
+
+  const auto isBc6h = [](DXGI_FORMAT fmt) {
+    return fmt == DXGI_FORMAT_BC6H_UF16 || fmt == DXGI_FORMAT_BC6H_SF16;
+  };
+  const auto isBc4 = [](DXGI_FORMAT fmt) {
+    return fmt == DXGI_FORMAT_BC4_UNORM || fmt == DXGI_FORMAT_BC4_SNORM;
+  };
+  return isBc6h(lprTextures[0].authoredFormat) &&
+         isBc6h(lprTextures[1].authoredFormat) &&
+         isBc4(lprTextures[2].authoredFormat);
+}
+
 static void LtmImportLprCompanion(const std::string &lmodPath,
                                   std::vector<Material> *outMaterials,
                                   std::vector<Texture> *outTextures) {
@@ -3104,10 +3151,22 @@ static void LtmImportLprCompanion(const std::string &lmodPath,
   const uint8_t *lprEnd = lprBase + lprData.size();
   std::vector<LtmTextureEntry> lprTextures =
       LtmScanEmbeddedTextureEntries(lprBase, lprEnd, false);
+  for (LtmTextureEntry &entry : lprTextures) {
+    if (!entry.ddsPtr || entry.ddsSize < 128)
+      continue;
+    if (LtmReadDDSFormat(entry.ddsPtr, entry.ddsSize, &entry.authoredFormat))
+      entry.uploadedFormat = LtmRemoveSrgbViewFormat(entry.authoredFormat);
+  }
   if (lprTextures.size() < 3) {
     fprintf(stderr,
             "LMOD: LPR companion %s has %zu DDS texture(s); expected day/night/depth.\n",
             lprPath.string().c_str(), lprTextures.size());
+    return;
+  }
+  if (!LtmLooksLikeWParallaxLpr(lprPath, lprTextures)) {
+    fprintf(stderr,
+            "LMOD: LPR companion %s is not a recognized wParallax atlas set; skipping special import.\n",
+            lprPath.string().c_str());
     return;
   }
 
@@ -3131,12 +3190,20 @@ static void LtmImportLprCompanion(const std::string &lmodPath,
 
   const int dayTexture = uploadCompanionTexture(0);
   const int nightTexture = uploadCompanionTexture(1);
-  const int parallaxTexture = uploadCompanionTexture(2);
+  const int alphaTexture = uploadCompanionTexture(2);
 
   Material &mat = (*outMaterials)[0];
   if (dayTexture >= 0) {
-    mat.diffuseTexture = dayTexture;
-    mat.diffuseTextureAmount = 1.0f;
+    mat.diffuseTexture = -1;
+    mat.parallaxTexture = dayTexture;
+    mat.parallaxMode = Material::kParallaxModeWindowBox;
+    mat.parallaxDepthScale = 0.0f;
+    mat.parallaxRoomDepth = 1.0f;
+    mat.parallaxWindowAspect = 1.0f;
+    mat.parallaxUvScale[0] = 1.0f;
+    mat.parallaxUvScale[1] = 1.0f;
+    mat.parallaxUvOffset[0] = 0.0f;
+    mat.parallaxUvOffset[1] = 0.0f;
   }
   if (nightTexture >= 0) {
     mat.emissiveTexture = nightTexture;
@@ -3145,18 +3212,19 @@ static void LtmImportLprCompanion(const std::string &lmodPath,
     mat.emissiveColor[1] = 1.0f;
     mat.emissiveColor[2] = 1.0f;
     mat.emissiveColor[3] = 1.0f;
-    mat.emissiveIntensity = (std::max)(mat.emissiveIntensity, 0.35f);
+    mat.emissiveIntensity = (std::max)(mat.emissiveIntensity, 1.0f);
   }
-  if (parallaxTexture >= 0) {
-    mat.parallaxTexture = parallaxTexture;
-    mat.parallaxDepthScale = 0.075f;
+  if (alphaTexture >= 0) {
+    mat.opacityTexture = alphaTexture;
+    mat.opacityTextureAmount = 1.0f;
+    mat.alphaMode = "MASK";
+    mat.alphaCutoff = 0.02f;
   }
   mat.doubleSided = true;
-  mat.alphaMode = "OPAQUE";
 
   fprintf(stderr,
-          "LMOD: LPR companion %s imported day=%d night=%d parallax=%d -> material %s\n",
-          lprPath.string().c_str(), dayTexture, nightTexture, parallaxTexture,
+          "LMOD: wParallax LPR %s imported day=%d night=%d alpha=%d -> material %s\n",
+          lprPath.string().c_str(), dayTexture, nightTexture, alphaTexture,
           mat.name);
 }
 

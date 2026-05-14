@@ -390,6 +390,8 @@ int GetTextureIndex(const Asset::Material &material, TextureSlot slot) {
     return material.specularColorTexture;
   case TextureSlot::Thickness:
     return material.thicknessTexture;
+  case TextureSlot::Parallax:
+    return material.parallaxTexture;
   }
   return -1;
 }
@@ -418,6 +420,8 @@ float GetTextureAmount(const Asset::Material &material, TextureSlot slot) {
     return material.specularColorTextureAmount;
   case TextureSlot::Thickness:
     return material.thicknessTextureAmount;
+  case TextureSlot::Parallax:
+    return material.parallaxDepthScale;
   }
   return 1.0f;
 }
@@ -458,6 +462,9 @@ void SetTextureIndex(Asset::Material &material, TextureSlot slot,
   case TextureSlot::Thickness:
     material.thicknessTexture = textureIndex;
     break;
+  case TextureSlot::Parallax:
+    material.parallaxTexture = textureIndex;
+    break;
   }
 }
 
@@ -497,6 +504,9 @@ void SetTextureAmount(Asset::Material &material, TextureSlot slot,
     break;
   case TextureSlot::Thickness:
     material.thicknessTextureAmount = clampedAmount;
+    break;
+  case TextureSlot::Parallax:
+    material.parallaxDepthScale = (std::clamp)(textureAmount, 0.0f, 0.25f);
     break;
   }
 }
@@ -637,7 +647,12 @@ uint32_t BuildRuntimeMaterialFlags(const Asset::Material &material) {
       material.coatWeight > 1.0e-5f) {
     flags |= kRuntimeMaterialFlagHasCoatNormal;
   }
-  if (material.parallaxTexture >= 0 && material.parallaxDepthScale > 1.0e-5f) {
+  const uint32_t parallaxMode =
+      (std::clamp)(material.parallaxMode, Asset::Material::kParallaxModeOff,
+                   Asset::Material::kParallaxModeWindowBox);
+  if (material.parallaxTexture >= 0 &&
+      (parallaxMode != Asset::Material::kParallaxModeOff ||
+       material.parallaxDepthScale > 1.0e-5f)) {
     flags |= kRuntimeMaterialFlagParallaxMapped;
   }
   return flags;
@@ -797,11 +812,28 @@ void BuildRuntimeDxrMaterialData(const Asset::Material &material,
   outExtra->lobeParams[1] = (std::clamp)(material.anisotropy, -1.0f, 1.0f);
   outExtra->lobeParams[2] = material.anisotropyRotation;
   outExtra->lobeParams[3] = (std::clamp)(material.sheenWeight, 0.0f, 1.0f);
+  uint32_t parallaxMode =
+      (std::clamp)(material.parallaxMode, Asset::Material::kParallaxModeOff,
+                   Asset::Material::kParallaxModeWindowBox);
+  if (parallaxMode == Asset::Material::kParallaxModeOff &&
+      material.parallaxTexture >= 0 && material.parallaxDepthScale > 1.0e-5f) {
+    parallaxMode = Asset::Material::kParallaxModeHeightMap;
+  }
   outExtra->parallaxParams[0] =
       (std::clamp)(material.parallaxDepthScale, 0.0f, 0.25f);
-  outExtra->parallaxParams[1] = 0.0f;
-  outExtra->parallaxParams[2] = 0.0f;
-  outExtra->parallaxParams[3] = 0.0f;
+  outExtra->parallaxParams[1] = static_cast<float>(parallaxMode);
+  outExtra->parallaxParams[2] =
+      (std::clamp)(material.parallaxRoomDepth, 0.1f, 100.0f);
+  outExtra->parallaxParams[3] =
+      (std::clamp)(material.parallaxWindowAspect, 0.05f, 20.0f);
+  outExtra->parallaxTransform[0] =
+      (std::clamp)(material.parallaxUvScale[0], 0.01f, 100.0f);
+  outExtra->parallaxTransform[1] =
+      (std::clamp)(material.parallaxUvScale[1], 0.01f, 100.0f);
+  outExtra->parallaxTransform[2] =
+      (std::clamp)(material.parallaxUvOffset[0], -100.0f, 100.0f);
+  outExtra->parallaxTransform[3] =
+      (std::clamp)(material.parallaxUvOffset[1], -100.0f, 100.0f);
 }
 
 void BuildRuntimeRasterMaterialConstants(
@@ -933,6 +965,28 @@ void BuildRuntimeRasterMaterialConstants(
   outConstants->lobeParams[2] = (std::clamp)(material.sheenWeight, 0.0f, 1.0f);
   outConstants->lobeParams[3] = (std::clamp)(material.coatNormalTextureAmount,
                                              0.0f, 1.0f);
+  uint32_t parallaxMode =
+      (std::clamp)(material.parallaxMode, Asset::Material::kParallaxModeOff,
+                   Asset::Material::kParallaxModeWindowBox);
+  if (parallaxMode == Asset::Material::kParallaxModeOff &&
+      material.parallaxTexture >= 0 && material.parallaxDepthScale > 1.0e-5f) {
+    parallaxMode = Asset::Material::kParallaxModeHeightMap;
+  }
+  outConstants->parallaxParams[0] =
+      (std::clamp)(material.parallaxDepthScale, 0.0f, 0.25f);
+  outConstants->parallaxParams[1] = static_cast<float>(parallaxMode);
+  outConstants->parallaxParams[2] =
+      (std::clamp)(material.parallaxRoomDepth, 0.1f, 100.0f);
+  outConstants->parallaxParams[3] =
+      (std::clamp)(material.parallaxWindowAspect, 0.05f, 20.0f);
+  outConstants->parallaxTransform[0] =
+      (std::clamp)(material.parallaxUvScale[0], 0.01f, 100.0f);
+  outConstants->parallaxTransform[1] =
+      (std::clamp)(material.parallaxUvScale[1], 0.01f, 100.0f);
+  outConstants->parallaxTransform[2] =
+      (std::clamp)(material.parallaxUvOffset[0], -100.0f, 100.0f);
+  outConstants->parallaxTransform[3] =
+      (std::clamp)(material.parallaxUvOffset[1], -100.0f, 100.0f);
 }
 
 } // namespace MaterialSystem

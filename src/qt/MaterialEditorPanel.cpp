@@ -454,6 +454,10 @@ void MaterialEditorPanel::createUi()
     createTextureSlot(Emissive, tr("Emissive Texture"));
     createTextureSlot(SpecularColor, tr("Specular Color Texture"));
     createTextureSlot(Thickness, tr("Thickness Texture"));
+    createTextureSlot(Parallax, tr("Parallax Texture"));
+    if (m_textureSlots[Parallax].amount) {
+        m_textureSlots[Parallax].amount->setVisible(false);
+    }
 
     auto *surfaceTab = new QWidget(m_tabs);
     auto *surfaceForm = new QFormLayout(surfaceTab);
@@ -626,6 +630,37 @@ void MaterialEditorPanel::createUi()
 
     m_tabs->addTab(mappingTab, tr("Mapping"));
 
+    auto *parallaxTab = new QWidget(m_tabs);
+    auto *parallaxForm = new QFormLayout(parallaxTab);
+    parallaxForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    parallaxForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    parallaxForm->setHorizontalSpacing(6);
+    parallaxForm->setVerticalSpacing(4);
+    m_parallaxMode = new QComboBox(parallaxTab);
+    m_parallaxMode->addItems({tr("Off"), tr("Height Map"), tr("Window Box")});
+    parallaxForm->addRow(tr("Mode"), m_parallaxMode);
+    parallaxForm->addRow(m_textureSlots[Parallax].group);
+    m_parallaxDepthScale = CreateSliderControl(0.0, 0.25, 0.001, 4);
+    parallaxForm->addRow(tr("Height Depth"), m_parallaxDepthScale);
+    m_parallaxRoomDepth = CreateSliderControl(0.1, 100.0, 0.05, 3);
+    m_parallaxRoomDepth->setLogarithmic(true);
+    parallaxForm->addRow(tr("Room Depth"), m_parallaxRoomDepth);
+    m_parallaxWindowAspect = CreateSliderControl(0.05, 20.0, 0.01, 3);
+    parallaxForm->addRow(tr("Window Aspect"), m_parallaxWindowAspect);
+    m_parallaxWindowBrightness = CreateSliderControl(0.0, 1000000.0, 1.0, 1);
+    parallaxForm->addRow(tr("Window Brightness"), m_parallaxWindowBrightness);
+    QWidget *parallaxScaleWidget =
+        CreateVec2Row(&m_parallaxScaleX, &m_parallaxScaleY,
+                      0.05, 20.0, 0.01, 3);
+    m_parallaxScaleX->setLogarithmic(true);
+    m_parallaxScaleY->setLogarithmic(true);
+    parallaxForm->addRow(tr("Window Scale"), parallaxScaleWidget);
+    QWidget *parallaxOffsetWidget =
+        CreateVec2Row(&m_parallaxOffsetX, &m_parallaxOffsetY,
+                      -2.0, 2.0, 0.001, 4);
+    parallaxForm->addRow(tr("Window Offset"), parallaxOffsetWidget);
+    m_tabs->addTab(parallaxTab, tr("Parallax"));
+
     auto *emissionTab = new QWidget(m_tabs);
     auto *emissionForm = new QFormLayout(emissionTab);
     emissionForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
@@ -744,6 +779,7 @@ void MaterialEditorPanel::createUi()
             const int rg = mat.roughnessGlossTexture;
             const int sc = mat.specularColorTexture;
             const int tk = mat.thicknessTexture;
+            const int px = mat.parallaxTexture;
             const float da = mat.diffuseTextureAmount;
             const float aa = mat.opacityTextureAmount;
             const float na = mat.normalTextureAmount;
@@ -755,6 +791,14 @@ void MaterialEditorPanel::createUi()
             const float rga = mat.roughnessGlossTextureAmount;
             const float sca = mat.specularColorTextureAmount;
             const float tka = mat.thicknessTextureAmount;
+            const uint32_t pm = mat.parallaxMode;
+            const float pds = mat.parallaxDepthScale;
+            const float prd = mat.parallaxRoomDepth;
+            const float pwa = mat.parallaxWindowAspect;
+            const float psx = mat.parallaxUvScale[0];
+            const float psy = mat.parallaxUvScale[1];
+            const float pox = mat.parallaxUvOffset[0];
+            const float poy = mat.parallaxUvOffset[1];
             mat = def;
             strncpy_s(mat.name, nameBuf, _TRUNCATE);
             mat.diffuseTexture = d;
@@ -768,6 +812,7 @@ void MaterialEditorPanel::createUi()
             mat.roughnessGlossTexture = rg;
             mat.specularColorTexture = sc;
             mat.thicknessTexture = tk;
+            mat.parallaxTexture = px;
             mat.diffuseTextureAmount = da;
             mat.opacityTextureAmount = aa;
             mat.normalTextureAmount = na;
@@ -779,6 +824,14 @@ void MaterialEditorPanel::createUi()
             mat.roughnessGlossTextureAmount = rga;
             mat.specularColorTextureAmount = sca;
             mat.thicknessTextureAmount = tka;
+            mat.parallaxMode = pm;
+            mat.parallaxDepthScale = pds;
+            mat.parallaxRoomDepth = prd;
+            mat.parallaxWindowAspect = pwa;
+            mat.parallaxUvScale[0] = psx;
+            mat.parallaxUvScale[1] = psy;
+            mat.parallaxUvOffset[0] = pox;
+            mat.parallaxUvOffset[1] = poy;
         }, true, false, true);
     });
     connect(m_resetNoTexButton, &QPushButton::clicked, this, [this]() {
@@ -1228,6 +1281,79 @@ void MaterialEditorPanel::createUi()
         });
     });
 
+    connect(m_parallaxMode, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([index](Asset::Material &m) {
+            m.parallaxMode = static_cast<uint32_t>(std::clamp(index, 0, 2));
+        }, false, false, true);
+    });
+    connect(m_parallaxDepthScale->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            m.parallaxDepthScale = static_cast<float>(value);
+        });
+    });
+    connect(m_parallaxRoomDepth->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            m.parallaxRoomDepth = static_cast<float>(value);
+        });
+    });
+    connect(m_parallaxWindowAspect->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            m.parallaxWindowAspect = static_cast<float>(value);
+        });
+    });
+    connect(m_parallaxWindowBrightness->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            m.emissiveIntensity = static_cast<float>(value);
+        });
+    });
+    connect(m_parallaxScaleX->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            m.parallaxUvScale[0] = static_cast<float>(value);
+        });
+    });
+    connect(m_parallaxScaleY->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            m.parallaxUvScale[1] = static_cast<float>(value);
+        });
+    });
+    connect(m_parallaxOffsetX->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            m.parallaxUvOffset[0] = static_cast<float>(value);
+        });
+    });
+    connect(m_parallaxOffsetY->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            m.parallaxUvOffset[1] = static_cast<float>(value);
+        });
+    });
+
     connect(m_emissiveIntensity->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
             return;
@@ -1597,6 +1723,35 @@ void MaterialEditorPanel::syncInspectorMaterialState(const Asset::Material &mat,
     m_stochasticTilingMirror->setEnabled(stochasticActive);
     m_stochasticTilingColorVariation->setEnabled(stochasticActive);
 
+    const int parallaxMode =
+        static_cast<int>(std::clamp(mat.parallaxMode, 0u, 2u));
+    SyncComboBoxIndex(m_parallaxMode, parallaxMode);
+    SyncSliderControlValue(m_parallaxDepthScale, mat.parallaxDepthScale);
+    SyncSliderControlValue(m_parallaxRoomDepth, mat.parallaxRoomDepth);
+    SyncSliderControlValue(m_parallaxWindowAspect, mat.parallaxWindowAspect);
+    SyncSliderControlValue(m_parallaxWindowBrightness, mat.emissiveIntensity);
+    SyncSliderControlValue(m_parallaxScaleX, mat.parallaxUvScale[0]);
+    SyncSliderControlValue(m_parallaxScaleY, mat.parallaxUvScale[1]);
+    SyncSliderControlValue(m_parallaxOffsetX, mat.parallaxUvOffset[0]);
+    SyncSliderControlValue(m_parallaxOffsetY, mat.parallaxUvOffset[1]);
+    const bool parallaxActive =
+        parallaxMode != static_cast<int>(Asset::Material::kParallaxModeOff);
+    const bool heightMapMode =
+        parallaxMode == static_cast<int>(Asset::Material::kParallaxModeHeightMap);
+    const bool windowBoxMode =
+        parallaxMode == static_cast<int>(Asset::Material::kParallaxModeWindowBox);
+    if (m_textureSlots[Parallax].group) {
+        m_textureSlots[Parallax].group->setEnabled(parallaxActive);
+    }
+    m_parallaxDepthScale->setEnabled(heightMapMode);
+    m_parallaxRoomDepth->setEnabled(windowBoxMode);
+    m_parallaxWindowAspect->setEnabled(windowBoxMode);
+    m_parallaxWindowBrightness->setEnabled(windowBoxMode);
+    m_parallaxScaleX->setEnabled(windowBoxMode);
+    m_parallaxScaleY->setEnabled(windowBoxMode);
+    m_parallaxOffsetX->setEnabled(windowBoxMode);
+    m_parallaxOffsetY->setEnabled(windowBoxMode);
+
     setColorButton(m_emissiveColorButton, getColorFromMaterial(mat.emissiveColor));
     SyncSliderControlValue(m_emissiveIntensity, mat.emissiveIntensity);
 
@@ -1763,6 +1918,8 @@ int MaterialEditorPanel::textureIndexForSlot(const Asset::Material &mat, Texture
         return MaterialSystem::GetTextureIndex(mat, MaterialSystem::TextureSlot::SpecularColor);
     case Thickness:
         return MaterialSystem::GetTextureIndex(mat, MaterialSystem::TextureSlot::Thickness);
+    case Parallax:
+        return MaterialSystem::GetTextureIndex(mat, MaterialSystem::TextureSlot::Parallax);
     default:
         return -1;
     }
@@ -1803,6 +1960,9 @@ void MaterialEditorPanel::setTextureIndexForSlot(Asset::Material &mat, TextureSl
         break;
     case Thickness:
         MaterialSystem::SetTextureIndex(mat, MaterialSystem::TextureSlot::Thickness, index);
+        break;
+    case Parallax:
+        MaterialSystem::SetTextureIndex(mat, MaterialSystem::TextureSlot::Parallax, index);
         break;
     default: break;
     }

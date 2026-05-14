@@ -831,6 +831,8 @@ static Node BuildImportMaterialProbe(const ImportedNodePayload &payload) {
 static std::vector<int> BuildLegacyLinkedMaterialIndices(const Node &node);
 static std::vector<std::string>
 BuildLegacyLinkedMaterialNames(const std::vector<int> &indices);
+static bool MergeMissingParallaxMaterialChannels(Asset::Material &existing,
+                                                 const Asset::Material &incoming);
 static int FindLinkedMaterialByName(const std::vector<std::string> &sourceNames,
                                     const std::vector<int> &globalIndices,
                                     const std::string &name,
@@ -1307,6 +1309,15 @@ static std::vector<int> ResolveReplacementMaterialIndices(
           s_materialIndicesByStableId.erase(previousStableIt);
         }
       }
+    } else if (globalMaterialIndex >= 0 &&
+               globalMaterialIndex < (int)g_loadedMaterials.size()) {
+      if (MergeMissingParallaxMaterialChannels(
+              g_loadedMaterials[(size_t)globalMaterialIndex], materials[i])) {
+        fprintf(stderr,
+                "Scene: merged missing parallax texture slots into material "
+                "%s (index=%d)\n",
+                importedName.c_str(), globalMaterialIndex);
+      }
     }
 
     if (globalMaterialIndex >= 0 &&
@@ -1391,6 +1402,80 @@ static std::vector<std::string> BuildLegacyLinkedMaterialNames(const std::vector
     }
   }
   return names;
+}
+
+static bool MergeMissingParallaxMaterialChannels(Asset::Material &existing,
+                                                 const Asset::Material &incoming) {
+  if (incoming.parallaxTexture < 0) {
+    return false;
+  }
+
+  bool changed = false;
+  if (existing.diffuseTexture < 0 && incoming.diffuseTexture >= 0) {
+    existing.diffuseTexture = incoming.diffuseTexture;
+    existing.diffuseTextureAmount = incoming.diffuseTextureAmount;
+    changed = true;
+  }
+  if (existing.emissiveTexture < 0 && incoming.emissiveTexture >= 0) {
+    existing.emissiveTexture = incoming.emissiveTexture;
+    existing.emissiveTextureAmount = incoming.emissiveTextureAmount;
+    std::copy(std::begin(incoming.emissiveColor),
+              std::end(incoming.emissiveColor),
+              std::begin(existing.emissiveColor));
+    existing.emissiveIntensity = incoming.emissiveIntensity;
+    changed = true;
+  }
+  if (existing.opacityTexture < 0 && incoming.opacityTexture >= 0) {
+    existing.opacityTexture = incoming.opacityTexture;
+    existing.opacityTextureAmount = incoming.opacityTextureAmount;
+    existing.alphaCutoff = incoming.alphaCutoff;
+    changed = true;
+  }
+  if (existing.parallaxTexture < 0) {
+    existing.parallaxTexture = incoming.parallaxTexture;
+    existing.parallaxMode = incoming.parallaxMode;
+    existing.parallaxDepthScale = incoming.parallaxDepthScale;
+    existing.parallaxRoomDepth = incoming.parallaxRoomDepth;
+    existing.parallaxWindowAspect = incoming.parallaxWindowAspect;
+    existing.parallaxUvScale[0] = incoming.parallaxUvScale[0];
+    existing.parallaxUvScale[1] = incoming.parallaxUvScale[1];
+    existing.parallaxUvOffset[0] = incoming.parallaxUvOffset[0];
+    existing.parallaxUvOffset[1] = incoming.parallaxUvOffset[1];
+    changed = true;
+  } else if (incoming.parallaxMode == Asset::Material::kParallaxModeWindowBox &&
+             existing.parallaxMode != Asset::Material::kParallaxModeWindowBox) {
+    existing.parallaxTexture = incoming.parallaxTexture;
+    existing.parallaxMode = incoming.parallaxMode;
+    existing.parallaxDepthScale = incoming.parallaxDepthScale;
+    existing.parallaxRoomDepth = incoming.parallaxRoomDepth;
+    existing.parallaxWindowAspect = incoming.parallaxWindowAspect;
+    existing.parallaxUvScale[0] = incoming.parallaxUvScale[0];
+    existing.parallaxUvScale[1] = incoming.parallaxUvScale[1];
+    existing.parallaxUvOffset[0] = incoming.parallaxUvOffset[0];
+    existing.parallaxUvOffset[1] = incoming.parallaxUvOffset[1];
+    changed = true;
+  } else if (existing.parallaxDepthScale <= 1.0e-5f &&
+             incoming.parallaxDepthScale > 1.0e-5f) {
+    if (existing.parallaxMode == Asset::Material::kParallaxModeOff) {
+      existing.parallaxMode = incoming.parallaxMode;
+    }
+    existing.parallaxDepthScale = incoming.parallaxDepthScale;
+    existing.parallaxRoomDepth = incoming.parallaxRoomDepth;
+    existing.parallaxWindowAspect = incoming.parallaxWindowAspect;
+    existing.parallaxUvScale[0] = incoming.parallaxUvScale[0];
+    existing.parallaxUvScale[1] = incoming.parallaxUvScale[1];
+    existing.parallaxUvOffset[0] = incoming.parallaxUvOffset[0];
+    existing.parallaxUvOffset[1] = incoming.parallaxUvOffset[1];
+    changed = true;
+  }
+
+  if (changed) {
+    existing.doubleSided = existing.doubleSided || incoming.doubleSided;
+    if (existing.alphaMode.empty() || existing.alphaMode == "OPAQUE") {
+      existing.alphaMode = incoming.alphaMode;
+    }
+  }
+  return changed;
 }
 
 static void ClearNodeMeshes(const Node &node) {

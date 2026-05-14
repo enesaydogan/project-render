@@ -639,6 +639,119 @@ float2 ApplyParallaxOcclusionUv(float2 uv, float3 viewWorld,
     return lerp(currentUv, previousUv, weight);
 }
 
+float WindowBoxAtlasAlpha(int alphaTexIndex, float2 uv, float fallbackAlpha,
+                          float lod)
+{
+    if (alphaTexIndex < 0) {
+        return fallbackAlpha;
+    }
+    uint alphaSlot = NonUniformResourceIndex((uint)alphaTexIndex);
+    return textures[alphaSlot].SampleLevel(linearSampler, uv, lod).r;
+}
+
+float4 SampleWindowBoxParallax(int texIndex, int alphaTexIndex, float2 uv,
+                               float3 viewWorld,
+                               float3 worldNormal, float4 worldTangent,
+                               float roomDepth, float windowAspect,
+                               float lod)
+{
+    if (texIndex < 0 || dot(worldTangent.xyz, worldTangent.xyz) < 1.0e-6) {
+        return float4(1.0, 1.0, 1.0, 1.0);
+    }
+
+    float3 N = normalize(worldNormal);
+    float3 T = normalize(worldTangent.xyz - N * dot(N, worldTangent.xyz));
+    float3 B = normalize(cross(N, T)) * (worldTangent.w >= 0.0 ? 1.0 : -1.0);
+    float3 V = normalize(viewWorld);
+    float3 viewTs = normalize(float3(dot(V, T), dot(V, B), dot(V, N)));
+    uint texSlot = NonUniformResourceIndex((uint)texIndex);
+    if (viewTs.z <= 0.05) {
+        float4 grazingSample =
+            textures[texSlot].SampleLevel(linearSampler, uv, lod);
+        grazingSample.a = WindowBoxAtlasAlpha(alphaTexIndex, uv,
+                                              grazingSample.a, lod);
+        return grazingSample;
+    }
+
+    float depth = max(roomDepth, 0.1);
+    float aspect = max(windowAspect, 0.05);
+    float3 objI = normalize(float3(-viewTs.x / aspect, -viewTs.y, -viewTs.z));
+    float3 objSign = lerp(-1.0.xxx, 1.0.xxx, step(0.0.xxx, objI));
+    float3 safeObjI = objSign * max(abs(objI), 1.0e-4.xxx);
+    float3 objP = float3(saturate(uv), 0.5);
+    float3 sections = step(0.0.xxx, safeObjI);
+
+    float invThird = 1.0 / 3.0;
+    float twoThirds = 2.0 / 3.0;
+    float3 baseDepth = (objP - sections) / (-safeObjI * depth);
+    float3 baseBack = (objP - sections) / (-safeObjI);
+    float3 baseWidth = baseDepth * depth;
+    float3 baseDepthX = baseDepth.y * safeObjI + objP + 1.0;
+    float3 baseDepthY = baseDepth.x * safeObjI + objP + 1.0;
+    float3 baseWidthX = baseWidth.y * safeObjI + objP + 1.0;
+    float3 baseWidthY = baseWidth.x * safeObjI + objP + 1.0;
+
+    float horizU = baseDepthY.z - 0.5;
+    float vertU = baseWidthX.x - 1.0;
+    float horizV = baseWidthY.y - 1.0;
+    float vertV = baseDepthX.z - 0.5;
+
+    float2 finalUv = 0.0.xx;
+    float floorCeilMask =
+        step(0.0, vertV) * step(0.0, 1.0 - max(vertU, 1.0 - vertU));
+    float2 floorCeilUv = float2(vertU, vertV) * invThird;
+    float2 ceilUv = (floorCeilUv + float2(invThird, twoThirds)) *
+                    floorCeilMask * sections.y;
+    float2 floorUv = floorCeilUv + float2(invThird, 0.0);
+    floorUv.y = invThird - floorCeilUv.y;
+    floorUv *= floorCeilMask * (1.0 - sections.y);
+    finalUv += ceilUv + floorUv;
+
+    float sideWallsMask =
+        step(0.0, horizU) * step(0.0, 1.0 - max(horizV, 1.0 - horizV));
+    float2 sideWallsUv = float2(horizU, horizV) * invThird;
+    float2 rightUv = (sideWallsUv + float2(twoThirds, invThird)) *
+                     sideWallsMask * sections.x;
+    float2 leftUv = sideWallsUv + float2(0.0, invThird);
+    leftUv.x = invThird - sideWallsUv.x;
+    leftUv *= sideWallsMask * (1.0 - sections.x);
+    finalUv += leftUv + rightUv;
+
+    float backMask = 1.0 - max(step(0.0, horizU), step(0.0, vertV));
+    float2 backUv =
+        ((baseBack.z * safeObjI.xy + (objP.xy * 0.5) / depth) *
+         (depth * 2.0) * invThird + float2(invThird, invThird)) * backMask;
+    finalUv += backUv;
+
+    float hasWall = step(1.0e-5, dot(abs(finalUv), 1.0.xx));
+    float4 finalSample = textures[texSlot].SampleLevel(linearSampler, finalUv, lod);
+    finalSample.a = WindowBoxAtlasAlpha(alphaTexIndex, finalUv,
+                                        finalSample.a, lod) * hasWall;
+
+    float midDepth = clamp(0.5, 0.05, max(depth - 0.01, 0.05));
+    float2 midUv = ((baseBack.z * safeObjI.xy + objP.xy / (midDepth * 2.0)) *
+                    (midDepth * 2.0) * invThird);
+    float midMask = step(0.0, midUv.y * 3.0 * (1.0 - midUv.y * 3.0)) *
+                    step(0.0, midUv.x * (invThird - midUv.x));
+    if (midUv.x > 0.01 && midUv.x < 0.331 && midUv.y > 0.01 && midUv.y < 0.331) {
+        float4 midSample = textures[texSlot].SampleLevel(linearSampler, midUv, lod);
+        midSample.a = WindowBoxAtlasAlpha(alphaTexIndex, midUv,
+                                          midSample.a, lod);
+        finalSample.rgb = lerp(finalSample.rgb, midSample.rgb,
+                               saturate(midSample.a * midMask));
+        finalSample.a = lerp(finalSample.a, 1.0, saturate(midSample.a * midMask));
+    }
+
+    float2 curtainsUv = uv * invThird + float2(0.0, twoThirds);
+    float4 curtainsSample = textures[texSlot].SampleLevel(linearSampler, curtainsUv, lod);
+    curtainsSample.a = WindowBoxAtlasAlpha(alphaTexIndex, curtainsUv,
+                                           curtainsSample.a, lod);
+    finalSample.rgb = lerp(finalSample.rgb, curtainsSample.rgb,
+                           saturate(curtainsSample.a));
+    finalSample.a = lerp(finalSample.a, 1.0, saturate(curtainsSample.a));
+    return finalSample;
+}
+
 void ClosestHitImpl(inout RayPayload payload,
                     in BuiltInTriangleIntersectionAttributes attr,
                     bool wavefrontMinimal)
@@ -696,6 +809,7 @@ void ClosestHitImpl(inout RayPayload payload,
     float alphaCutoff = matExtra.shadingParams.z;
     bool isGrassMaterial = matExtra.shadingParams.w > 0.5;
     float parallaxDepthScale = matExtra.parallaxParams.x;
+    int parallaxMode = (int)round(matExtra.parallaxParams.y);
 
 #ifdef HIT_DEBUG
     // Encode primitive index into color for debugging
@@ -794,12 +908,17 @@ void ClosestHitImpl(inout RayPayload payload,
         specularWeight = 0.0;
         isGrassMaterial = false;
         parallaxDepthScale = 0.0;
+        parallaxMode = 0;
     }
 
     // Sample textures
     bool parallaxMapped =
         ((matFlags & MATERIAL_FLAG_PARALLAX_MAPPED) != 0) &&
-        !triPlanar && texParallax >= 0 && parallaxDepthScale > 1.0e-5;
+        !triPlanar && texParallax >= 0 && parallaxMode == 1 &&
+        parallaxDepthScale > 1.0e-5;
+    bool windowBoxMapped =
+        ((matFlags & MATERIAL_FLAG_PARALLAX_MAPPED) != 0) &&
+        !triPlanar && texParallax >= 0 && parallaxMode == 2;
     if (parallaxMapped) {
         uv = ApplyParallaxOcclusionUv(uv, -WorldRayDirection(),
                                       worldNormal, worldTangent, texParallax,
@@ -808,17 +927,42 @@ void ClosestHitImpl(inout RayPayload payload,
 
     float3 BaseColor = diffColor.rgb;
     float opacity = diffColor.a;
+    float3 windowBoxEmission = float3(0.0, 0.0, 0.0);
+    if (windowBoxMapped) {
+        float2 windowBoxUv =
+            (uv - 0.5.xx) * max(matExtra.parallaxTransform.xy, 0.01.xx) +
+            0.5.xx + matExtra.parallaxTransform.zw;
+        float4 wb = SampleWindowBoxParallax(texParallax, texOpacity,
+                                            windowBoxUv,
+                                            -WorldRayDirection(),
+                                            worldNormal, worldTangent,
+                                            matExtra.parallaxParams.z,
+                                            matExtra.parallaxParams.w,
+                                            textureLod);
+        BaseColor *= wb.rgb;
+        opacity *= wb.a;
+        if (texEmis >= 0) {
+            float4 wbEmission = SampleWindowBoxParallax(
+                texEmis, texOpacity, windowBoxUv, -WorldRayDirection(),
+                worldNormal, worldTangent, matExtra.parallaxParams.z,
+                matExtra.parallaxParams.w, textureLod);
+            windowBoxEmission = wbEmission.rgb;
+        } else {
+            windowBoxEmission = wb.rgb;
+        }
+        SHADER_COUNTER_ADD(SHADER_COUNTER_TEXTURE_SAMPLES, 4);
+    }
     int mode = (int)SHADER_DEBUG_MODE;
     if (texDiff >= 0) {
         float4 diffSample = triPlanar ? SampleTriPlanar(texDiff, P, worldNormal, triScale, triSharp, samplingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar)
                                       : SampleUvTexture(texDiff, uv, objectOrigin, worldNormal, samplingVariation, triRotation, textureLod, true);
-        float3 diffRgb = parallaxMapped ? diffSample.rgb
+        float3 diffRgb = (parallaxMapped || windowBoxMapped) ? diffSample.rgb
                                         : sRGBToLinear(diffSample.rgb);
         BaseColor *= BlendTextureRgb(diffRgb, texWeight0.x);
         opacity *= BlendTextureScalar(diffSample.a, texWeight0.x);
         SHADER_COUNTER_ADD(SHADER_COUNTER_TEXTURE_SAMPLES, 1);
     }
-    if (texOpacity >= 0) {
+    if (texOpacity >= 0 && !windowBoxMapped) {
         float opacitySample = triPlanar ? SampleTriPlanar(texOpacity, P, worldNormal, triScale, triSharp, samplingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar).r
                                         : SampleUvTexture(texOpacity, uv, objectOrigin, worldNormal, samplingVariation, triRotation, textureLod, false).r;
         opacity *= BlendTextureScalar(opacitySample, texWeight1.w);
@@ -971,10 +1115,13 @@ void ClosestHitImpl(inout RayPayload payload,
     // Emissive with a conservative default boost.
     const float baseEmissiveBoost = 5.0f;
     float3 emissive = emisColor.rgb * (baseEmissiveBoost * emissiveIntensity);
-    if (texEmis >= 0) {
+    if (windowBoxMapped) {
+        emissive += windowBoxEmission * (baseEmissiveBoost * emissiveIntensity);
+    }
+    if (texEmis >= 0 && !windowBoxMapped) {
         float3 e = triPlanar ? SampleTriPlanar(texEmis, P, worldNormal, triScale, triSharp, samplingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar).rgb
                              : SampleUvTexture(texEmis, uv, objectOrigin, worldNormal, samplingVariation, triRotation, textureLod, true).rgb;
-        emissive *= BlendTextureRgb(parallaxMapped ? e : sRGBToLinear(e),
+        emissive *= BlendTextureRgb((parallaxMapped || windowBoxMapped) ? e : sRGBToLinear(e),
                                     texWeight1.z);
         SHADER_COUNTER_ADD(SHADER_COUNTER_TEXTURE_SAMPLES, 1);
     }
@@ -1232,6 +1379,12 @@ void AnyHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes a
             alpha *= BlendTextureScalar(alphaSample, matExtra.textureWeight0.x);
         }
         int texOpacity = UnpackTextureIndexHigh(mat.packedTextures.z);
+        int texParallax = UnpackTextureIndexHigh(matExtra.extraPackedTextures.x);
+        int parallaxMode = (int)round(matExtra.parallaxParams.y);
+        bool windowBoxMapped =
+            ((matFlags & MATERIAL_FLAG_PARALLAX_MAPPED) != 0) &&
+            !((matFlags & MATERIAL_FLAG_TRI_PLANAR) != 0) &&
+            texParallax >= 0 && parallaxMode == 2;
         if (texOpacity >= 0) {
             float3 n0 = v0.normal;
             float3 n1 = v1.normal;
@@ -1243,19 +1396,40 @@ void AnyHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes a
             bool triPlanar = ((matFlags & MATERIAL_FLAG_TRI_PLANAR) != 0) && (matExtra.triPlanarParams.x > 0.5);
             float textureLod = CalculateTextureLod(rayType, P);
             bool dominantTriPlanar = triPlanar && (rayType != RAY_TYPE_PRIMARY);
-            float opacitySample = triPlanar
-                ? SampleTriPlanar(texOpacity, P, worldNormal,
-                                  max(matExtra.triPlanarParams.y, 1e-6),
-                                  max(matExtra.triPlanarParams.z, 0.01),
-                                  matExtra.mappingVariationParams,
-                                  matExtra.triPlanarRotationParams,
-                                  objectOrigin,
-                                  primIndex,
-                                  textureLod, dominantTriPlanar).r
-                : SampleUvTexture(texOpacity, uv, objectOrigin, worldNormal,
-                                  matExtra.mappingVariationParams,
-                                  matExtra.triPlanarRotationParams,
-                                  textureLod, false).r;
+            float opacitySample = 1.0;
+            if (windowBoxMapped && !triPlanar) {
+                float4 t0 = v0.tangent;
+                float4 t1 = v1.tangent;
+                float4 t2 = v2.tangent;
+                float4 localTangent = t0 * bary.x + t1 * bary.y + t2 * bary.z;
+                float4 worldTangent;
+                worldTangent.xyz =
+                    normalize(mul((float3x3)ObjectToWorld3x4(), localTangent.xyz));
+                worldTangent.w = localTangent.w;
+                float2 windowBoxUv =
+                    (uv - 0.5.xx) * max(matExtra.parallaxTransform.xy, 0.01.xx) +
+                    0.5.xx + matExtra.parallaxTransform.zw;
+                opacitySample = SampleWindowBoxParallax(
+                                    texParallax, texOpacity, windowBoxUv,
+                                    -WorldRayDirection(), worldNormal,
+                                    worldTangent, matExtra.parallaxParams.z,
+                                    matExtra.parallaxParams.w, textureLod)
+                                    .a;
+            } else {
+                opacitySample = triPlanar
+                    ? SampleTriPlanar(texOpacity, P, worldNormal,
+                                      max(matExtra.triPlanarParams.y, 1e-6),
+                                      max(matExtra.triPlanarParams.z, 0.01),
+                                      matExtra.mappingVariationParams,
+                                      matExtra.triPlanarRotationParams,
+                                      objectOrigin,
+                                      primIndex,
+                                      textureLod, dominantTriPlanar).r
+                    : SampleUvTexture(texOpacity, uv, objectOrigin, worldNormal,
+                                      matExtra.mappingVariationParams,
+                                      matExtra.triPlanarRotationParams,
+                                      textureLod, false).r;
+            }
             alpha *= BlendTextureScalar(opacitySample, matExtra.textureWeight1.w);
         }
 

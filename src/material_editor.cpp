@@ -808,7 +808,45 @@ void Draw(HWND hwnd, bool &visible) {
             DrawTextureSlot("Specular Color",
                             MaterialSystem::TextureSlot::SpecularColor);
             DrawTextureSlot("Thickness", MaterialSystem::TextureSlot::Thickness);
+            DrawTextureSlot("Parallax", MaterialSystem::TextureSlot::Parallax);
 
+            ImGui::EndTabItem();
+          }
+
+          if (ImGui::BeginTabItem("Parallax")) {
+            const char *modes[] = {"Off", "Height Map", "Window Box"};
+            int mode = (int)std::clamp(mat.parallaxMode, 0u, 2u);
+            if (ImGui::Combo("Mode", &mode, modes, IM_ARRAYSIZE(modes))) {
+              mat.parallaxMode = static_cast<uint32_t>(std::clamp(mode, 0, 2));
+              DxrRenderer::ResetAccumulation();
+            }
+            if (ImGui::SliderFloat("Height Depth", &mat.parallaxDepthScale,
+                                   0.0f, 0.25f, "%.4f")) {
+              DxrRenderer::ResetAccumulation();
+            }
+            if (ImGui::SliderFloat("Room Depth", &mat.parallaxRoomDepth,
+                                   0.1f, 100.0f, "%.3f",
+                                   ImGuiSliderFlags_Logarithmic)) {
+              DxrRenderer::ResetAccumulation();
+            }
+            if (ImGui::SliderFloat("Window Aspect", &mat.parallaxWindowAspect,
+                                   0.05f, 20.0f, "%.3f")) {
+              DxrRenderer::ResetAccumulation();
+            }
+            if (ImGui::SliderFloat("Window Brightness",
+                                   &mat.emissiveIntensity, 0.0f, 1000000.0f,
+                                   "%.1f")) {
+              DxrRenderer::ResetAccumulation();
+            }
+            if (ImGui::SliderFloat2("Window Scale", mat.parallaxUvScale, 0.05f,
+                                    20.0f, "%.3f",
+                                    ImGuiSliderFlags_Logarithmic)) {
+              DxrRenderer::ResetAccumulation();
+            }
+            if (ImGui::SliderFloat2("Window Offset", mat.parallaxUvOffset,
+                                    -2.0f, 2.0f, "%.4f")) {
+              DxrRenderer::ResetAccumulation();
+            }
             ImGui::EndTabItem();
           }
 

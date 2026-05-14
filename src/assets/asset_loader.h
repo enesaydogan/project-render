@@ -52,7 +52,7 @@ struct Texture {
 
 struct Material {
   static constexpr uint32_t kSchemaVersionOpenPbrSubset = 9;
-  static constexpr uint32_t kSchemaVersionCoronaArchviz = 10;
+  static constexpr uint32_t kSchemaVersionCoronaArchviz = 11;
   static constexpr uint32_t kWorkflowMetalRoughness = 0;
   static constexpr uint32_t kWorkflowReflectionGlossiness = 1;
   static constexpr uint32_t kMaterialClassGeneric = 0;
@@ -64,6 +64,9 @@ struct Material {
   static constexpr uint32_t kTriPlanarVariationOff = 0;
   static constexpr uint32_t kTriPlanarVariationPerMesh = 1;
   static constexpr uint32_t kTriPlanarVariationPerSurface = 2;
+  static constexpr uint32_t kParallaxModeOff = 0;
+  static constexpr uint32_t kParallaxModeHeightMap = 1;
+  static constexpr uint32_t kParallaxModeWindowBox = 2;
 
   char name[64] = "Material";
   float diffuseColor[4] = {1, 1, 1, 1};
@@ -118,7 +121,12 @@ struct Material {
   float specularColorTextureAmount = 1.0f;
   float thicknessTextureAmount = 1.0f;
   float coatNormalTextureAmount = 1.0f;
+  uint32_t parallaxMode = kParallaxModeOff;
   float parallaxDepthScale = 0.0f;
+  float parallaxRoomDepth = 1.0f;
+  float parallaxWindowAspect = 1.0f;
+  float parallaxUvScale[2] = {1.0f, 1.0f};
+  float parallaxUvOffset[2] = {0.0f, 0.0f};
 
   bool doubleSided = false;
   std::string alphaMode = "OPAQUE";

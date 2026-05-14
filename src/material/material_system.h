@@ -21,6 +21,7 @@ enum class TextureSlot {
   Emissive = 8,
   SpecularColor = 9,
   Thickness = 10,
+  Parallax = 11,
 };
 
 enum RuntimeMaterialFlags : uint32_t {
@@ -60,6 +61,8 @@ struct RuntimeRasterMaterialConstants {
   float specularColor[4];
   float sheenColor[4];
   float lobeParams[4];
+  float parallaxParams[4];
+  float parallaxTransform[4];
 };
 
 struct RuntimeDxrMaterialData {
@@ -85,6 +88,7 @@ struct RuntimeDxrMaterialExtraData {
   float sheenColor[4];
   float lobeParams[4];
   float parallaxParams[4];
+  float parallaxTransform[4];
 };
 
 bool UsesReflectionGlossiness(const Asset::Material &material);

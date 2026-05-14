@@ -45,7 +45,8 @@ private:
         Emissive = 8,
         SpecularColor = 9,
         Thickness = 10,
-        TextureSlotCount = 11
+        Parallax = 11,
+        TextureSlotCount = 12
     };
 
     struct TextureSlotWidgets {
@@ -173,6 +174,17 @@ private:
     SliderControl *m_stochasticTilingRotation = nullptr;
     QCheckBox *m_stochasticTilingMirror = nullptr;
     SliderControl *m_stochasticTilingColorVariation = nullptr;
+
+    // Parallax tab
+    QComboBox *m_parallaxMode = nullptr;
+    SliderControl *m_parallaxDepthScale = nullptr;
+    SliderControl *m_parallaxRoomDepth = nullptr;
+    SliderControl *m_parallaxWindowAspect = nullptr;
+    SliderControl *m_parallaxWindowBrightness = nullptr;
+    SliderControl *m_parallaxScaleX = nullptr;
+    SliderControl *m_parallaxScaleY = nullptr;
+    SliderControl *m_parallaxOffsetX = nullptr;
+    SliderControl *m_parallaxOffsetY = nullptr;
 
     // Emission tab
     QPushButton *m_emissiveColorButton = nullptr;
