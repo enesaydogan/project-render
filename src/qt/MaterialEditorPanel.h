@@ -185,6 +185,7 @@ private:
     SliderControl *m_parallaxScaleY = nullptr;
     SliderControl *m_parallaxOffsetX = nullptr;
     SliderControl *m_parallaxOffsetY = nullptr;
+    QCheckBox *m_parallaxBackFace = nullptr;
 
     // Emission tab
     QPushButton *m_emissiveColorButton = nullptr;

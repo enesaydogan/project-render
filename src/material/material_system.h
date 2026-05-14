@@ -63,6 +63,7 @@ struct RuntimeRasterMaterialConstants {
   float lobeParams[4];
   float parallaxParams[4];
   float parallaxTransform[4];
+  float parallaxOptions[4];
 };
 
 struct RuntimeDxrMaterialData {
@@ -89,6 +90,7 @@ struct RuntimeDxrMaterialExtraData {
   float lobeParams[4];
   float parallaxParams[4];
   float parallaxTransform[4];
+  float parallaxOptions[4];
 };
 
 bool UsesReflectionGlossiness(const Asset::Material &material);

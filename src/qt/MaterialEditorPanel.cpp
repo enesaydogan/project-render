@@ -659,6 +659,10 @@ void MaterialEditorPanel::createUi()
         CreateVec2Row(&m_parallaxOffsetX, &m_parallaxOffsetY,
                       -2.0, 2.0, 0.001, 4);
     parallaxForm->addRow(tr("Window Offset"), parallaxOffsetWidget);
+    m_parallaxBackFace = new QCheckBox(tr("Render On Back Face"), parallaxTab);
+    m_parallaxBackFace->setToolTip(
+        tr("Uses the opposite surface side for Window Box parallax on reversed window planes."));
+    parallaxForm->addRow(m_parallaxBackFace);
     m_tabs->addTab(parallaxTab, tr("Parallax"));
 
     auto *emissionTab = new QWidget(m_tabs);
@@ -799,6 +803,7 @@ void MaterialEditorPanel::createUi()
             const float psy = mat.parallaxUvScale[1];
             const float pox = mat.parallaxUvOffset[0];
             const float poy = mat.parallaxUvOffset[1];
+            const bool pbf = mat.parallaxBackFace;
             mat = def;
             strncpy_s(mat.name, nameBuf, _TRUNCATE);
             mat.diffuseTexture = d;
@@ -832,6 +837,7 @@ void MaterialEditorPanel::createUi()
             mat.parallaxUvScale[1] = psy;
             mat.parallaxUvOffset[0] = pox;
             mat.parallaxUvOffset[1] = poy;
+            mat.parallaxBackFace = pbf;
         }, true, false, true);
     });
     connect(m_resetNoTexButton, &QPushButton::clicked, this, [this]() {
@@ -1353,6 +1359,14 @@ void MaterialEditorPanel::createUi()
             m.parallaxUvOffset[1] = static_cast<float>(value);
         });
     });
+    connect(m_parallaxBackFace, &QCheckBox::toggled, this, [this](bool enabled) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([enabled](Asset::Material &m) {
+            m.parallaxBackFace = enabled;
+        });
+    });
 
     connect(m_emissiveIntensity->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
         if (m_syncing) {
@@ -1753,6 +1767,7 @@ void MaterialEditorPanel::syncInspectorMaterialState(const Asset::Material &mat,
     SyncSliderControlValue(m_parallaxScaleY, mat.parallaxUvScale[1]);
     SyncSliderControlValue(m_parallaxOffsetX, mat.parallaxUvOffset[0]);
     SyncSliderControlValue(m_parallaxOffsetY, mat.parallaxUvOffset[1]);
+    SyncCheckBoxState(m_parallaxBackFace, mat.parallaxBackFace);
     const bool parallaxActive =
         parallaxMode != static_cast<int>(Asset::Material::kParallaxModeOff);
     const bool heightMapMode =
@@ -1770,6 +1785,7 @@ void MaterialEditorPanel::syncInspectorMaterialState(const Asset::Material &mat,
     m_parallaxScaleY->setEnabled(windowBoxMode);
     m_parallaxOffsetX->setEnabled(windowBoxMode);
     m_parallaxOffsetY->setEnabled(windowBoxMode);
+    m_parallaxBackFace->setEnabled(windowBoxMode);
 
     setColorButton(m_emissiveColorButton, getColorFromMaterial(mat.emissiveColor));
     SyncSliderControlValue(m_emissiveIntensity, mat.emissiveIntensity);

@@ -87,6 +87,7 @@ cbuffer MaterialCB : register(b1)
     float4 lobeParams;          // x=anisotropy, y=anisoRotation, z=sheenWeight, w=coatNormalAmount
     float4 parallaxParams;      // x=heightDepth, y=mode, z=roomDepth, w=windowAspect
     float4 parallaxTransform;   // xy=uvScale, zw=uvOffset
+    float4 parallaxOptions;     // x=renderWindowBoxOnBackFace
 };
 
 cbuffer GrassDrawCB : register(b3)
@@ -923,15 +924,21 @@ float WindowBoxAtlasAlpha(int alphaTexIndex, float2 uv, float fallbackAlpha)
 float4 SampleWindowBoxParallax(int texIndex, int alphaTexIndex, float2 uv,
                                float3 worldPos,
                                float3 worldNormal, float4 worldTangent,
-                               float roomDepth, float windowAspect)
+                               float roomDepth, float windowAspect,
+                               bool renderBackFace)
 {
     if (texIndex < 0 || length(worldTangent.xyz) < 1.0e-4) {
         return float4(1.0, 1.0, 1.0, 1.0);
     }
 
     float3 N = normalize(worldNormal);
+    float4 tangent = worldTangent;
+    if (renderBackFace) {
+        N = -N;
+        tangent.w = -tangent.w;
+    }
     float3 T, B;
-    BuildShadingBasis(N, worldTangent, 0.0, T, B);
+    BuildShadingBasis(N, tangent, 0.0, T, B);
     float3 V = normalize(pos - worldPos);
     float3 viewTs = normalize(float3(dot(V, T), dot(V, B), dot(V, N)));
     if (viewTs.z <= 0.05) {
@@ -1256,6 +1263,7 @@ PSOutput PSMainMesh(PSInputMesh input)
     float alpha = diffuseColor.a;
     float3 windowBoxEmission = float3(0.0, 0.0, 0.0);
     if (windowBoxMapped) {
+        bool windowBoxBackFace = parallaxOptions.x > 0.5;
         float2 windowBoxUv =
             (uv - 0.5.xx) * max(parallaxTransform.xy, 0.01.xx) +
             0.5.xx + parallaxTransform.zw;
@@ -1263,14 +1271,15 @@ PSOutput PSMainMesh(PSInputMesh input)
                                             windowBoxUv, worldPos,
                                             worldNormal, input.tangent,
                                             parallaxParams.z,
-                                            parallaxParams.w);
+                                            parallaxParams.w,
+                                            windowBoxBackFace);
         BaseColor *= wb.rgb;
         alpha *= wb.a;
         if (emissiveAndPad.x >= 0) {
             float4 wbEmission = SampleWindowBoxParallax(
                 emissiveAndPad.x, textureIndices.y, windowBoxUv, worldPos,
                 worldNormal, input.tangent, parallaxParams.z,
-                parallaxParams.w);
+                parallaxParams.w, windowBoxBackFace);
             windowBoxEmission = wbEmission.rgb;
         } else {
             windowBoxEmission = wb.rgb;

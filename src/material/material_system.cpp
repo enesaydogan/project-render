@@ -834,6 +834,10 @@ void BuildRuntimeDxrMaterialData(const Asset::Material &material,
       (std::clamp)(material.parallaxUvOffset[0], -100.0f, 100.0f);
   outExtra->parallaxTransform[3] =
       (std::clamp)(material.parallaxUvOffset[1], -100.0f, 100.0f);
+  outExtra->parallaxOptions[0] = material.parallaxBackFace ? 1.0f : 0.0f;
+  outExtra->parallaxOptions[1] = 0.0f;
+  outExtra->parallaxOptions[2] = 0.0f;
+  outExtra->parallaxOptions[3] = 0.0f;
 }
 
 void BuildRuntimeRasterMaterialConstants(
@@ -987,6 +991,10 @@ void BuildRuntimeRasterMaterialConstants(
       (std::clamp)(material.parallaxUvOffset[0], -100.0f, 100.0f);
   outConstants->parallaxTransform[3] =
       (std::clamp)(material.parallaxUvOffset[1], -100.0f, 100.0f);
+  outConstants->parallaxOptions[0] = material.parallaxBackFace ? 1.0f : 0.0f;
+  outConstants->parallaxOptions[1] = 0.0f;
+  outConstants->parallaxOptions[2] = 0.0f;
+  outConstants->parallaxOptions[3] = 0.0f;
 }
 
 } // namespace MaterialSystem

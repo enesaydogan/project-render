@@ -1876,6 +1876,7 @@ static bool MergeMissingParallaxMaterialChannels(Asset::Material &existing,
     existing.parallaxUvScale[1] = incoming.parallaxUvScale[1];
     existing.parallaxUvOffset[0] = incoming.parallaxUvOffset[0];
     existing.parallaxUvOffset[1] = incoming.parallaxUvOffset[1];
+    existing.parallaxBackFace = incoming.parallaxBackFace;
     changed = true;
   } else if (incoming.parallaxMode == Asset::Material::kParallaxModeWindowBox &&
              existing.parallaxMode != Asset::Material::kParallaxModeWindowBox) {
@@ -1888,6 +1889,7 @@ static bool MergeMissingParallaxMaterialChannels(Asset::Material &existing,
     existing.parallaxUvScale[1] = incoming.parallaxUvScale[1];
     existing.parallaxUvOffset[0] = incoming.parallaxUvOffset[0];
     existing.parallaxUvOffset[1] = incoming.parallaxUvOffset[1];
+    existing.parallaxBackFace = incoming.parallaxBackFace;
     changed = true;
   } else if (existing.parallaxDepthScale <= 1.0e-5f &&
              incoming.parallaxDepthScale > 1.0e-5f) {
@@ -1901,6 +1903,7 @@ static bool MergeMissingParallaxMaterialChannels(Asset::Material &existing,
     existing.parallaxUvScale[1] = incoming.parallaxUvScale[1];
     existing.parallaxUvOffset[0] = incoming.parallaxUvOffset[0];
     existing.parallaxUvOffset[1] = incoming.parallaxUvOffset[1];
+    existing.parallaxBackFace = incoming.parallaxBackFace;
     changed = true;
   }
 

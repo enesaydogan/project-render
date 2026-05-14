@@ -847,6 +847,10 @@ void Draw(HWND hwnd, bool &visible) {
                                     -2.0f, 2.0f, "%.4f")) {
               DxrRenderer::ResetAccumulation();
             }
+            if (ImGui::Checkbox("Render On Back Face",
+                                &mat.parallaxBackFace)) {
+              DxrRenderer::ResetAccumulation();
+            }
             ImGui::EndTabItem();
           }
 

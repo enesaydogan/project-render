@@ -140,6 +140,7 @@ nlohmann::json BuildMaterialsMetadata(
         {"pwa", mat.parallaxWindowAspect},
         {"pvs", {mat.parallaxUvScale[0], mat.parallaxUvScale[1]}},
         {"pvo", {mat.parallaxUvOffset[0], mat.parallaxUvOffset[1]}},
+        {"pbf", mat.parallaxBackFace},
         {"ds", mat.doubleSided},
         {"am", mat.alphaMode},
         {"ac", mat.alphaCutoff},
@@ -369,6 +370,8 @@ void RestoreMaterialsFromMetadata(const nlohmann::json &materialsJson,
       }
     }
 
+    material.parallaxBackFace =
+      savedMaterial.value("pbf", material.parallaxBackFace);
     material.runtimeMetalRoughTexture = -1;
     material.doubleSided = savedMaterial.value("ds", material.doubleSided);
     material.alphaMode = savedMaterial.value("am", material.alphaMode);

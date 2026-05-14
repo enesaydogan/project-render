@@ -52,7 +52,7 @@ struct Texture {
 
 struct Material {
   static constexpr uint32_t kSchemaVersionOpenPbrSubset = 9;
-  static constexpr uint32_t kSchemaVersionCoronaArchviz = 11;
+  static constexpr uint32_t kSchemaVersionCoronaArchviz = 12;
   static constexpr uint32_t kWorkflowMetalRoughness = 0;
   static constexpr uint32_t kWorkflowReflectionGlossiness = 1;
   static constexpr uint32_t kMaterialClassGeneric = 0;
@@ -127,6 +127,7 @@ struct Material {
   float parallaxWindowAspect = 1.0f;
   float parallaxUvScale[2] = {1.0f, 1.0f};
   float parallaxUvOffset[2] = {0.0f, 0.0f};
+  bool parallaxBackFace = false;
 
   bool doubleSided = false;
   std::string alphaMode = "OPAQUE";

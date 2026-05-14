@@ -515,15 +515,21 @@ inline float4 WavefrontGiSampleWindowBoxParallax(int texIndex,
                                                  float4 worldTangent,
                                                  float roomDepth,
                                                  float windowAspect,
-                                                 float lod)
+                                                 float lod,
+                                                 bool renderBackFace)
 {
     if (texIndex < 0 || dot(worldTangent.xyz, worldTangent.xyz) < 1.0e-6) {
         return float4(1.0, 1.0, 1.0, 1.0);
     }
 
     float3 n = normalize(worldNormal);
-    float3 t = normalize(worldTangent.xyz - n * dot(n, worldTangent.xyz));
-    float3 b = normalize(cross(n, t)) * (worldTangent.w >= 0.0 ? 1.0 : -1.0);
+    float4 tangent = worldTangent;
+    if (renderBackFace) {
+        n = -n;
+        tangent.w = -tangent.w;
+    }
+    float3 t = normalize(tangent.xyz - n * dot(n, tangent.xyz));
+    float3 b = normalize(cross(n, t)) * (tangent.w >= 0.0 ? 1.0 : -1.0);
     float3 v = normalize(viewWorld);
     float3 viewTs = normalize(float3(dot(v, t), dot(v, b), dot(v, n)));
     uint texSlot = NonUniformResourceIndex((uint)texIndex);
@@ -862,6 +868,7 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
     float opacity = clayMode ? 1.0 : saturate(material.baseColor_opacity.a);
     float3 windowBoxEmission = float3(0.0, 0.0, 0.0);
     if (windowBoxMapped) {
+        bool windowBoxBackFace = materialExtra.parallaxOptions.x > 0.5;
         float2 windowBoxUv =
             (uv - 0.5.xx) * max(materialExtra.parallaxTransform.xy, 0.01.xx) +
             0.5.xx + materialExtra.parallaxTransform.zw;
@@ -869,14 +876,14 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
             texParallax, texOpacity, windowBoxUv, -incomingDirection,
             worldNormal, worldTangent,
             materialExtra.parallaxParams.z, materialExtra.parallaxParams.w,
-            textureLod);
+            textureLod, windowBoxBackFace);
         baseColor *= wb.rgb;
         opacity *= wb.a;
         if (texEmis >= 0) {
             float4 wbEmission = WavefrontGiSampleWindowBoxParallax(
                 texEmis, texOpacity, windowBoxUv, -incomingDirection,
                 worldNormal, worldTangent, materialExtra.parallaxParams.z,
-                materialExtra.parallaxParams.w, textureLod);
+                materialExtra.parallaxParams.w, textureLod, windowBoxBackFace);
             windowBoxEmission = wbEmission.rgb;
         } else {
             windowBoxEmission = wb.rgb;

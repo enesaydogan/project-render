@@ -653,15 +653,20 @@ float4 SampleWindowBoxParallax(int texIndex, int alphaTexIndex, float2 uv,
                                float3 viewWorld,
                                float3 worldNormal, float4 worldTangent,
                                float roomDepth, float windowAspect,
-                               float lod)
+                               float lod, bool renderBackFace)
 {
     if (texIndex < 0 || dot(worldTangent.xyz, worldTangent.xyz) < 1.0e-6) {
         return float4(1.0, 1.0, 1.0, 1.0);
     }
 
     float3 N = normalize(worldNormal);
-    float3 T = normalize(worldTangent.xyz - N * dot(N, worldTangent.xyz));
-    float3 B = normalize(cross(N, T)) * (worldTangent.w >= 0.0 ? 1.0 : -1.0);
+    float4 tangent = worldTangent;
+    if (renderBackFace) {
+        N = -N;
+        tangent.w = -tangent.w;
+    }
+    float3 T = normalize(tangent.xyz - N * dot(N, tangent.xyz));
+    float3 B = normalize(cross(N, T)) * (tangent.w >= 0.0 ? 1.0 : -1.0);
     float3 V = normalize(viewWorld);
     float3 viewTs = normalize(float3(dot(V, T), dot(V, B), dot(V, N)));
     uint texSlot = NonUniformResourceIndex((uint)texIndex);
@@ -929,6 +934,7 @@ void ClosestHitImpl(inout RayPayload payload,
     float opacity = diffColor.a;
     float3 windowBoxEmission = float3(0.0, 0.0, 0.0);
     if (windowBoxMapped) {
+        bool windowBoxBackFace = matExtra.parallaxOptions.x > 0.5;
         float2 windowBoxUv =
             (uv - 0.5.xx) * max(matExtra.parallaxTransform.xy, 0.01.xx) +
             0.5.xx + matExtra.parallaxTransform.zw;
@@ -938,14 +944,14 @@ void ClosestHitImpl(inout RayPayload payload,
                                             worldNormal, worldTangent,
                                             matExtra.parallaxParams.z,
                                             matExtra.parallaxParams.w,
-                                            textureLod);
+                                            textureLod, windowBoxBackFace);
         BaseColor *= wb.rgb;
         opacity *= wb.a;
         if (texEmis >= 0) {
             float4 wbEmission = SampleWindowBoxParallax(
                 texEmis, texOpacity, windowBoxUv, -WorldRayDirection(),
                 worldNormal, worldTangent, matExtra.parallaxParams.z,
-                matExtra.parallaxParams.w, textureLod);
+                matExtra.parallaxParams.w, textureLod, windowBoxBackFace);
             windowBoxEmission = wbEmission.rgb;
         } else {
             windowBoxEmission = wb.rgb;
@@ -1413,7 +1419,8 @@ void AnyHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes a
                                     texParallax, texOpacity, windowBoxUv,
                                     -WorldRayDirection(), worldNormal,
                                     worldTangent, matExtra.parallaxParams.z,
-                                    matExtra.parallaxParams.w, textureLod)
+                                    matExtra.parallaxParams.w, textureLod,
+                                    matExtra.parallaxOptions.x > 0.5)
                                     .a;
             } else {
                 opacitySample = triPlanar
