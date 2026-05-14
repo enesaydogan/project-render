@@ -230,6 +230,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         float roughness = saturate(surface.x);
         float metallic = saturate(surface.y);
         float transmission = saturate(surface.z);
+        float3 diffuseAlbedo = albedo * (1.0 - metallic) *
+                               (1.0 - transmission);
         float translucency = saturate(surface.w);
         float specularWeight = saturate(UnpackPayloadSpecularWeight(record.packedIorType));
         float ior = UnpackPayloadIor(record.packedIorType);
@@ -301,7 +303,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         } else {
             nextRayType = RAY_TYPE_DIFFUSE;
             nextDirection = BuildDiffuseContinuation(normal, rng);
-            nextThroughput = state.throughput * saturate(albedo) * saturate(dot(normal, nextDirection)) / max(diffuseProb, 1.0e-4);
+            nextThroughput =
+                state.throughput * saturate(diffuseAlbedo) /
+                max(diffuseProb, 1.0e-4);
         }
         nextThroughput = max(nextThroughput, 0.0);
 

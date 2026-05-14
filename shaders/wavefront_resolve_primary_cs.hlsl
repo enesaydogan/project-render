@@ -1313,7 +1313,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 } else {
                     nextRayType = RAY_TYPE_DIFFUSE;
                     nextDirection = BuildDiffuseContinuation(normal, rng);
-                    nextThroughput = state.throughput * saturate(albedo) * saturate(dot(normal, nextDirection)) / max(diffuseProb, 1.0e-4);
+                    nextThroughput =
+                        state.throughput * saturate(diffuseAlbedo) /
+                        max(diffuseProb, 1.0e-4);
                 }
                 nextThroughput = max(nextThroughput, 0.0);
 
