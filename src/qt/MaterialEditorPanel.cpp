@@ -1557,8 +1557,27 @@ void MaterialEditorPanel::rebuildMaterialList()
         }
     }
 
-    if (!showAll && selectedNodeIndex != m_lastSelectedNodeIndex) {
+    if (selectedNodeIndex != m_lastSelectedNodeIndex) {
         m_lastSelectedNodeIndex = selectedNodeIndex;
+        if (showAll && selectedNode) {
+            m_syncing = true;
+            m_showAllCheck->setChecked(false);
+            m_syncing = false;
+            scopeIndices.clear();
+            for (size_t i = 0; i < selectedNode->meshIndices.size(); ++i) {
+                const size_t meshIndex = selectedNode->meshIndices[i];
+                if (meshIndex >= g_loadedMeshes.size()) {
+                    continue;
+                }
+                const int matIdx = g_loadedMeshes[meshIndex].materialIndex;
+                if (matIdx < 0 || matIdx >= static_cast<int>(g_loadedMaterials.size())) {
+                    continue;
+                }
+                if (std::find(scopeIndices.begin(), scopeIndices.end(), matIdx) == scopeIndices.end()) {
+                    scopeIndices.push_back(matIdx);
+                }
+            }
+        }
         bool ok = false;
         for (int idx : scopeIndices) {
             if (idx == m_selectedMaterial) {
