@@ -140,6 +140,28 @@ static ImGuizmo::OPERATION g_currentGizmoOp = ImGuizmo::TRANSLATE;
 static ImGuizmo::MODE g_currentGizmoMode = ImGuizmo::WORLD;
 static int s_selectedLightIdx = -1;
 
+struct TransformNodeHistory {
+  size_t nodeIndex = static_cast<size_t>(-1);
+  std::string nodeName;
+  std::array<float, 16> before{};
+  std::array<float, 16> after{};
+};
+
+struct TransformHistoryEntry {
+  std::vector<TransformNodeHistory> nodes;
+};
+
+struct ActiveTransformEdit {
+  bool active = false;
+  std::vector<TransformNodeHistory> nodes;
+};
+
+static constexpr size_t kMaxTransformHistoryEntries = 128;
+static std::vector<TransformHistoryEntry> s_transformUndoStack;
+static std::vector<TransformHistoryEntry> s_transformRedoStack;
+static ActiveTransformEdit s_activeTransformEdit;
+static std::string s_lastStatus;
+
 struct ShiftCloneDragState {
   bool active = false;
   bool optionsPending = false;
@@ -675,8 +697,6 @@ static ImDrawList *BeginRenderOverlayWindow(const char *name, float x, float y,
   return ImGui::GetWindowDrawList();
 }
 
-static std::string s_lastStatus;
-
 static void AdjustMaterialTextureIndices(std::vector<Asset::Material> &materials,
                                          size_t textureBase) {
   for (size_t i = 0; i < materials.size(); ++i) {
@@ -948,6 +968,144 @@ void RequestRendererTlasRefresh() {
 
 static void CopyMatrix4x4(const float *src, float *dst) {
   memcpy(dst, src, 16 * sizeof(float));
+}
+
+static bool MatrixEquals(const std::array<float, 16> &a,
+                         const std::array<float, 16> &b) {
+  return memcmp(a.data(), b.data(), a.size() * sizeof(float)) == 0;
+}
+
+static bool CaptureNodeTransform(size_t nodeIndex,
+                                 TransformNodeHistory *outSnapshot) {
+  if (!outSnapshot || nodeIndex >= s_nodes.size()) {
+    return false;
+  }
+  outSnapshot->nodeIndex = nodeIndex;
+  outSnapshot->nodeName = s_nodes[nodeIndex].name;
+  CopyMatrix4x4(s_nodes[nodeIndex].transform, outSnapshot->before.data());
+  outSnapshot->after = outSnapshot->before;
+  return true;
+}
+
+static void PushTransformHistoryEntry(TransformHistoryEntry entry) {
+  entry.nodes.erase(
+      std::remove_if(entry.nodes.begin(), entry.nodes.end(),
+                     [](const TransformNodeHistory &node) {
+                       return MatrixEquals(node.before, node.after);
+                     }),
+      entry.nodes.end());
+  if (entry.nodes.empty()) {
+    return;
+  }
+
+  s_transformUndoStack.push_back(std::move(entry));
+  if (s_transformUndoStack.size() > kMaxTransformHistoryEntries) {
+    s_transformUndoStack.erase(s_transformUndoStack.begin());
+  }
+  s_transformRedoStack.clear();
+}
+
+static void BeginTransformHistoryEdit(const std::vector<size_t> &nodeIndices) {
+  if (s_activeTransformEdit.active || nodeIndices.empty()) {
+    return;
+  }
+
+  s_activeTransformEdit.nodes.clear();
+  s_activeTransformEdit.nodes.reserve(nodeIndices.size());
+  for (size_t nodeIndex : nodeIndices) {
+    TransformNodeHistory snapshot;
+    if (CaptureNodeTransform(nodeIndex, &snapshot)) {
+      s_activeTransformEdit.nodes.push_back(std::move(snapshot));
+    }
+  }
+  s_activeTransformEdit.active = !s_activeTransformEdit.nodes.empty();
+}
+
+static void CancelTransformHistoryEdit() {
+  s_activeTransformEdit = {};
+}
+
+static void CommitTransformHistoryEdit() {
+  if (!s_activeTransformEdit.active) {
+    return;
+  }
+
+  TransformHistoryEntry entry;
+  entry.nodes = std::move(s_activeTransformEdit.nodes);
+  s_activeTransformEdit = {};
+
+  for (TransformNodeHistory &node : entry.nodes) {
+    if (node.nodeIndex < s_nodes.size() &&
+        s_nodes[node.nodeIndex].name == node.nodeName) {
+      CopyMatrix4x4(s_nodes[node.nodeIndex].transform, node.after.data());
+    } else {
+      node.after = node.before;
+    }
+  }
+  PushTransformHistoryEntry(std::move(entry));
+}
+
+static bool IsTransformHistoryEntryValid(const TransformHistoryEntry &entry) {
+  return std::all_of(entry.nodes.begin(), entry.nodes.end(),
+                     [](const TransformNodeHistory &node) {
+                       return node.nodeIndex < s_nodes.size() &&
+                              s_nodes[node.nodeIndex].name == node.nodeName;
+                     });
+}
+
+static void ApplyTransformHistoryEntry(const TransformHistoryEntry &entry,
+                                       bool useAfter) {
+  for (const TransformNodeHistory &node : entry.nodes) {
+    if (node.nodeIndex >= s_nodes.size()) {
+      continue;
+    }
+    const std::array<float, 16> &matrix = useAfter ? node.after : node.before;
+    CopyMatrix4x4(matrix.data(), s_nodes[node.nodeIndex].transform);
+  }
+  ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
+  NotifySceneChanged();
+}
+
+bool CanUndoTransform() { return !s_transformUndoStack.empty(); }
+
+bool CanRedoTransform() { return !s_transformRedoStack.empty(); }
+
+bool UndoTransform() {
+  CommitTransformHistoryEdit();
+  while (!s_transformUndoStack.empty()) {
+    TransformHistoryEntry entry = std::move(s_transformUndoStack.back());
+    s_transformUndoStack.pop_back();
+    if (!IsTransformHistoryEntryValid(entry)) {
+      continue;
+    }
+    ApplyTransformHistoryEntry(entry, false);
+    s_transformRedoStack.push_back(std::move(entry));
+    s_lastStatus = "Undo transform";
+    return true;
+  }
+  return false;
+}
+
+bool RedoTransform() {
+  CommitTransformHistoryEdit();
+  while (!s_transformRedoStack.empty()) {
+    TransformHistoryEntry entry = std::move(s_transformRedoStack.back());
+    s_transformRedoStack.pop_back();
+    if (!IsTransformHistoryEntryValid(entry)) {
+      continue;
+    }
+    ApplyTransformHistoryEntry(entry, true);
+    s_transformUndoStack.push_back(std::move(entry));
+    s_lastStatus = "Redo transform";
+    return true;
+  }
+  return false;
+}
+
+void ClearTransformHistory() {
+  s_transformUndoStack.clear();
+  s_transformRedoStack.clear();
+  s_activeTransformEdit = {};
 }
 
 static void MulColumnMajor4x4(const float *a, const float *b, float *out) {
@@ -1824,6 +1982,7 @@ static void RemoveNodesByIndexSet(std::vector<size_t> indices,
     return;
   }
 
+  ClearTransformHistory();
   PrepareForDestructiveMeshMutation();
 
   std::sort(indices.begin(), indices.end());
@@ -2730,6 +2889,10 @@ bool SetNodeParent(size_t index, size_t parentIndex) {
     cursor = s_nodes[cursor].parentIndex;
   }
 
+  if (s_nodes[index].parentIndex == resolvedParent) {
+    return true;
+  }
+  ClearTransformHistory();
   s_nodes[index].parentIndex = resolvedParent;
   ++s_scatterRuntimeRevision;
   s_scatterInstanceCacheRevision = 0;
@@ -3316,6 +3479,7 @@ bool RemoveNode(size_t index) {
   if (index >= s_nodes.size())
     return false;
 
+  ClearTransformHistory();
   PrepareForDestructiveMeshMutation();
 
   if (IsImportedSceneGroupNode(s_nodes[index])) {
@@ -4978,8 +5142,12 @@ void DrawGizmo() {
   }
 
   // ImGuizmo::BeginFrame() called in main.cpp
-  if (selectedRoots.empty())
+  if (selectedRoots.empty()) {
+    if (s_activeTransformEdit.active && !ImGuizmo::IsUsing()) {
+      CommitTransformHistoryEdit();
+    }
     return;
+  }
 
   float view[16], proj[16];
   BuildViewMatrix(view);
@@ -5059,6 +5227,13 @@ void DrawGizmo() {
 
   if (ImGuizmo::Manipulate(view, proj, op, actualMode,
                            pivotMatrix)) {
+    if (!IsShiftDown() && !s_shiftCloneDrag.active &&
+        !s_shiftCloneDrag.optionsPending) {
+      BeginTransformHistoryEdit(selectedRoots);
+    } else {
+      CancelTransformHistoryEdit();
+    }
+
     if (IsShiftDown() && !s_shiftCloneDrag.active &&
         !s_shiftCloneDrag.optionsPending) {
       ClonedNodeSet clones = CloneNodesAsInstances(selectedRoots);
@@ -5090,6 +5265,10 @@ void DrawGizmo() {
 
       ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
     }
+  }
+
+  if (s_activeTransformEdit.active && !ImGuizmo::IsUsing()) {
+    CommitTransformHistoryEdit();
   }
 
   if (s_shiftCloneDrag.active && IsLeftMouseDown()) {
@@ -6034,6 +6213,7 @@ void DrawScenePanel(HWND hwnd, bool &visible) {
 }
 
 void ResetScene() {
+  ClearTransformHistory();
   PrepareForDestructiveMeshMutation();
   s_nodes.clear();
   g_loadedMeshes.clear();

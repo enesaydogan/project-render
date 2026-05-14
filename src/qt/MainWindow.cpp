@@ -89,6 +89,8 @@ enum class ToolbarIcon {
     Teapot,
     ImportModel,
     ImportHdr,
+    Undo,
+    Redo,
     Translate,
     Rotate,
     Scale,
@@ -337,6 +339,18 @@ QIcon MakeToolbarIcon(ToolbarIcon icon,
             const QPointF p1(16 + std::cos(a) * 12.0, 16 + std::sin(a) * 12.0);
             painter.drawLine(p0, p1);
         }
+        break;
+    case ToolbarIcon::Undo:
+        painter.setPen(accentPen);
+        painter.drawArc(QRectF(7, 8, 18, 16), 35 * 16, 285 * 16);
+        painter.drawLine(QPointF(8, 15), QPointF(5, 9));
+        painter.drawLine(QPointF(8, 15), QPointF(14, 14));
+        break;
+    case ToolbarIcon::Redo:
+        painter.setPen(accentPen);
+        painter.drawArc(QRectF(7, 8, 18, 16), 220 * 16, 285 * 16);
+        painter.drawLine(QPointF(24, 15), QPointF(27, 9));
+        painter.drawLine(QPointF(24, 15), QPointF(18, 14));
         break;
     case ToolbarIcon::Translate:
         painter.setPen(accentPen);
@@ -676,6 +690,26 @@ void MainWindow::createMenus()
     fileMenu->addAction(tr("E&xit"), this, &QWidget::close);
 
     QMenu *editMenu = menuBar()->addMenu(tr("&Edit"));
+    m_undoTransformAction =
+        editMenu->addAction(tr("Undo Transform"), this, [this]() {
+            if (Scene::UndoTransform()) {
+                statusBar()->showMessage(tr("Undo transform"), 2000);
+            }
+            updateSceneIoUi();
+        });
+    m_undoTransformAction->setShortcut(QKeySequence::Undo);
+    m_undoTransformAction->setShortcutContext(Qt::ApplicationShortcut);
+    m_redoTransformAction =
+        editMenu->addAction(tr("Redo Transform"), this, [this]() {
+            if (Scene::RedoTransform()) {
+                statusBar()->showMessage(tr("Redo transform"), 2000);
+            }
+            updateSceneIoUi();
+        });
+    m_redoTransformAction->setShortcut(QKeySequence::Redo);
+    m_redoTransformAction->setShortcutContext(Qt::ApplicationShortcut);
+    editMenu->addSeparator();
+
     m_transformOperationGroup = new QActionGroup(this);
     m_transformOperationGroup->setExclusive(true);
     m_transformTranslateAction =
@@ -843,6 +877,14 @@ void MainWindow::createToolBar()
                            tr("Import HDR"),
                            tr("Import HDR environment"),
                            ToolbarIcon::ImportHdr);
+    ConfigureToolbarAction(m_undoTransformAction,
+                           tr("Undo Transform"),
+                           tr("Undo transform (Ctrl+Z)"),
+                           ToolbarIcon::Undo);
+    ConfigureToolbarAction(m_redoTransformAction,
+                           tr("Redo Transform"),
+                           tr("Redo transform (Ctrl+Y)"),
+                           ToolbarIcon::Redo);
     ConfigureToolbarAction(m_transformTranslateAction,
                            tr("Translate"),
                            tr("Translate gizmo (G)"),
@@ -879,6 +921,13 @@ void MainWindow::createToolBar()
     }
     if (m_importHdrAction) {
         toolbar->addAction(m_importHdrAction);
+    }
+    toolbar->addSeparator();
+    if (m_undoTransformAction) {
+        toolbar->addAction(m_undoTransformAction);
+    }
+    if (m_redoTransformAction) {
+        toolbar->addAction(m_redoTransformAction);
     }
     toolbar->addSeparator();
     if (m_transformTranslateAction) {
@@ -947,6 +996,12 @@ void MainWindow::updateTransformUi()
     }
     if (m_transformWorldAction) {
         m_transformWorldAction->setChecked(space == Scene::GizmoSpace::World);
+    }
+    if (m_undoTransformAction) {
+        m_undoTransformAction->setEnabled(Scene::CanUndoTransform());
+    }
+    if (m_redoTransformAction) {
+        m_redoTransformAction->setEnabled(Scene::CanRedoTransform());
     }
 }
 

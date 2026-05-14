@@ -61,6 +61,8 @@ private:
     QAction *m_renderPopupAction = nullptr;
     QAction *m_importModelAction = nullptr;
     QAction *m_importHdrAction = nullptr;
+    QAction *m_undoTransformAction = nullptr;
+    QAction *m_redoTransformAction = nullptr;
     QAction *m_transformTranslateAction = nullptr;
     QAction *m_transformRotateAction = nullptr;
     QAction *m_transformScaleAction = nullptr;

@@ -176,6 +176,11 @@ void SetGizmoOperation(GizmoOperation operation);
 GizmoOperation GetGizmoOperation();
 void SetGizmoSpace(GizmoSpace space);
 GizmoSpace GetGizmoSpace();
+bool CanUndoTransform();
+bool CanRedoTransform();
+bool UndoTransform();
+bool RedoTransform();
+void ClearTransformHistory();
 
 // Node manipulation
 const std::vector<Node> &GetNodes();

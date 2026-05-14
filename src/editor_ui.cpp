@@ -1659,6 +1659,29 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
       ImGui::EndMenu();
     }
 
+    if (ImGui::BeginMenu("Edit")) {
+      if (!Scene::CanUndoTransform()) {
+        ImGui::BeginDisabled();
+      }
+      if (ImGui::MenuItem("Undo Transform", "Ctrl+Z")) {
+        Scene::UndoTransform();
+      }
+      if (!Scene::CanUndoTransform()) {
+        ImGui::EndDisabled();
+      }
+
+      if (!Scene::CanRedoTransform()) {
+        ImGui::BeginDisabled();
+      }
+      if (ImGui::MenuItem("Redo Transform", "Ctrl+Y")) {
+        Scene::RedoTransform();
+      }
+      if (!Scene::CanRedoTransform()) {
+        ImGui::EndDisabled();
+      }
+      ImGui::EndMenu();
+    }
+
     if (ImGui::BeginMenu("Window")) {
       ImGui::MenuItem("Scene", nullptr, &g_showAssetsWindow);
       ImGui::MenuItem("Lights", nullptr, &g_showLightsWindow);
