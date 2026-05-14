@@ -24,6 +24,7 @@ private:
     void refreshSceneList();
     void scheduleRefresh();
     int selectedNodeIndex() const;
+    void requestDeleteSelectedNode();
 
     QTreeWidget *m_nodeList = nullptr;
     QProgressBar *m_importProgress = nullptr;

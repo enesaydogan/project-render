@@ -11,10 +11,12 @@
 #include <QIcon>
 #include <QItemSelectionModel>
 #include <QLabel>
+#include <QMessageBox>
 #include <QMetaObject>
 #include <QPainter>
 #include <QPixmap>
 #include <QProgressBar>
+#include <QShortcut>
 #include <QSignalBlocker>
 #include <QTimer>
 #include <QToolButton>
@@ -279,7 +281,9 @@ void ScenePanel::createUi()
     m_importButton = CreateSceneToolButton(this, tr("Import Model"), SceneToolIcon::ImportModel);
     m_reimportButton = CreateSceneToolButton(this, tr("Reimport Selected"), SceneToolIcon::Reimport);
     m_addPlaneButton = CreateSceneToolButton(this, tr("Add Ground Plane"), SceneToolIcon::AddGroundPlane);
-    m_deleteButton = CreateSceneToolButton(this, tr("Delete Selected"), SceneToolIcon::DeleteSelected);
+    m_deleteButton = CreateSceneToolButton(this, tr("Delete Selected (Del)"), SceneToolIcon::DeleteSelected);
+    m_deleteButton->setText(tr("Del"));
+    m_deleteButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
 
     toolRow->addWidget(m_importButton);
     toolRow->addWidget(m_reimportButton);
@@ -325,11 +329,12 @@ void ScenePanel::createUi()
         Scene::AddDefaultPlane(0.0f);
     });
     connect(m_deleteButton, &QToolButton::clicked, this, [this]() {
-        const int nodeIndex = selectedNodeIndex();
-        if (nodeIndex >= 0) {
-            Scene::DeleteNode(static_cast<size_t>(nodeIndex));
-            refreshSceneList();
-        }
+        requestDeleteSelectedNode();
+    });
+    auto *deleteShortcut = new QShortcut(QKeySequence(Qt::Key_Delete), this);
+    deleteShortcut->setContext(Qt::ApplicationShortcut);
+    connect(deleteShortcut, &QShortcut::activated, this, [this]() {
+        requestDeleteSelectedNode();
     });
     connect(m_nodeList, &QTreeWidget::itemSelectionChanged, this, [this]() {
         if (m_syncing) {
@@ -393,6 +398,28 @@ int ScenePanel::selectedNodeIndex() const
 
     const QVariant nodeIndexData = current->data(kNodeNameColumn, kNodeIndexRole);
     return nodeIndexData.isValid() ? nodeIndexData.toInt() : -1;
+}
+
+void ScenePanel::requestDeleteSelectedNode()
+{
+    const int nodeIndex = selectedNodeIndex();
+    if (nodeIndex < 0) {
+        return;
+    }
+
+    const QMessageBox::StandardButton answer = QMessageBox::question(
+        this,
+        tr("Delete Scene Node"),
+        tr("Are you sure you want to delete this node?"),
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+
+    Scene::DeleteNode(static_cast<size_t>(nodeIndex));
+    refreshSceneList();
 }
 
 void ScenePanel::scheduleRefresh()
