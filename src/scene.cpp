@@ -739,13 +739,17 @@ static void RemapMaterialTextureIndices(std::vector<Asset::Material> &materials,
                                         const std::vector<int> &textureRemap) {
   for (Asset::Material &material : materials) {
     RemapMaterialTextureIndex(material.diffuseTexture, textureRemap);
+    RemapMaterialTextureIndex(material.opacityTexture, textureRemap);
     RemapMaterialTextureIndex(material.normalTexture, textureRemap);
+    RemapMaterialTextureIndex(material.coatNormalTexture, textureRemap);
     RemapMaterialTextureIndex(material.occlusionTexture, textureRemap);
     RemapMaterialTextureIndex(material.emissiveTexture, textureRemap);
     RemapMaterialTextureIndex(material.metalRoughTexture, textureRemap);
     RemapMaterialTextureIndex(material.runtimeMetalRoughTexture, textureRemap);
     RemapMaterialTextureIndex(material.metalnessTexture, textureRemap);
     RemapMaterialTextureIndex(material.roughnessGlossTexture, textureRemap);
+    RemapMaterialTextureIndex(material.specularColorTexture, textureRemap);
+    RemapMaterialTextureIndex(material.thicknessTexture, textureRemap);
     RemapMaterialTextureIndex(material.parallaxTexture, textureRemap);
   }
 }
@@ -1188,6 +1192,279 @@ static void ClearGpuMeshEntry(size_t meshIndex) {
   g_loadedMeshes[meshIndex].indexCount = 0;
 }
 
+static void AddUniqueInt(std::vector<int> &values, int value) {
+  if (value < 0) {
+    return;
+  }
+  if (std::find(values.begin(), values.end(), value) == values.end()) {
+    values.push_back(value);
+  }
+}
+
+static void AddUniqueSize(std::vector<size_t> &values, size_t value) {
+  if (std::find(values.begin(), values.end(), value) == values.end()) {
+    values.push_back(value);
+  }
+}
+
+static void CollectMaterialTextureCandidates(
+    const Asset::Material &material, std::vector<size_t> &textureIndices) {
+  auto addTexture = [&](int textureIndex) {
+    if (textureIndex >= 0 &&
+        textureIndex < static_cast<int>(g_loadedTextures.size())) {
+      AddUniqueSize(textureIndices, static_cast<size_t>(textureIndex));
+    }
+  };
+
+  addTexture(material.diffuseTexture);
+  addTexture(material.opacityTexture);
+  addTexture(material.normalTexture);
+  addTexture(material.coatNormalTexture);
+  addTexture(material.emissiveTexture);
+  addTexture(material.occlusionTexture);
+  addTexture(material.metalRoughTexture);
+  addTexture(material.runtimeMetalRoughTexture);
+  addTexture(material.metalnessTexture);
+  addTexture(material.roughnessGlossTexture);
+  addTexture(material.specularColorTexture);
+  addTexture(material.thicknessTexture);
+  addTexture(material.parallaxTexture);
+}
+
+static void RemapMaterialTextureIndicesInPlace(
+    Asset::Material &material, const std::vector<int> &textureRemap) {
+  RemapMaterialTextureIndex(material.diffuseTexture, textureRemap);
+  RemapMaterialTextureIndex(material.opacityTexture, textureRemap);
+  RemapMaterialTextureIndex(material.normalTexture, textureRemap);
+  RemapMaterialTextureIndex(material.coatNormalTexture, textureRemap);
+  RemapMaterialTextureIndex(material.emissiveTexture, textureRemap);
+  RemapMaterialTextureIndex(material.occlusionTexture, textureRemap);
+  RemapMaterialTextureIndex(material.metalRoughTexture, textureRemap);
+  RemapMaterialTextureIndex(material.runtimeMetalRoughTexture, textureRemap);
+  RemapMaterialTextureIndex(material.metalnessTexture, textureRemap);
+  RemapMaterialTextureIndex(material.roughnessGlossTexture, textureRemap);
+  RemapMaterialTextureIndex(material.specularColorTexture, textureRemap);
+  RemapMaterialTextureIndex(material.thicknessTexture, textureRemap);
+  RemapMaterialTextureIndex(material.parallaxTexture, textureRemap);
+}
+
+static void CollectNodeMaterialCandidates(
+    const Node &node, std::vector<int> &materialIndices) {
+  for (int materialIndex : node.linkedMaterialIndices) {
+    AddUniqueInt(materialIndices, materialIndex);
+  }
+  for (size_t meshIndex : node.meshIndices) {
+    if (meshIndex >= g_loadedMeshes.size()) {
+      continue;
+    }
+    AddUniqueInt(materialIndices, g_loadedMeshes[meshIndex].materialIndex);
+  }
+}
+
+static std::vector<int> CollectMaterialCandidatesForNodes(
+    const std::vector<size_t> &nodeIndices) {
+  std::vector<int> materialIndices;
+  for (size_t nodeIndex : nodeIndices) {
+    if (nodeIndex < s_nodes.size()) {
+      CollectNodeMaterialCandidates(s_nodes[nodeIndex], materialIndices);
+    }
+  }
+  return materialIndices;
+}
+
+static std::vector<int> BuildLiveMaterialReferenceCounts() {
+  std::vector<int> refCounts(g_loadedMaterials.size(), 0);
+  for (const Asset::GpuMesh &mesh : g_loadedMeshes) {
+    if (mesh.vertexCount == 0 || mesh.indexCount == 0 ||
+        mesh.materialIndex < 0 ||
+        mesh.materialIndex >= static_cast<int>(refCounts.size())) {
+      continue;
+    }
+    ++refCounts[static_cast<size_t>(mesh.materialIndex)];
+  }
+  return refCounts;
+}
+
+static void RemapMaterialIndexValue(int &materialIndex,
+                                    const std::vector<int> &materialRemap) {
+  if (materialIndex < 0) {
+    return;
+  }
+  if (materialIndex >= static_cast<int>(materialRemap.size())) {
+    materialIndex = -1;
+    return;
+  }
+  materialIndex = materialRemap[static_cast<size_t>(materialIndex)];
+}
+
+static void RemapMaterialIndexVector(std::vector<int> &indices,
+                                     const std::vector<int> &materialRemap) {
+  for (int &materialIndex : indices) {
+    RemapMaterialIndexValue(materialIndex, materialRemap);
+  }
+}
+
+static void CompactImportedMaterialCandidates(
+    const std::vector<int> &candidateMaterialIndices,
+    std::vector<size_t> &candidateTextureIndices) {
+  if (candidateMaterialIndices.empty() || g_loadedMaterials.empty()) {
+    return;
+  }
+
+  const std::vector<int> liveRefCounts = BuildLiveMaterialReferenceCounts();
+  std::vector<uint8_t> removeMaterial(g_loadedMaterials.size(), 0);
+  for (int materialIndex : candidateMaterialIndices) {
+    if (materialIndex < 0 ||
+        materialIndex >= static_cast<int>(g_loadedMaterials.size())) {
+      continue;
+    }
+    const size_t index = static_cast<size_t>(materialIndex);
+    if (index < liveRefCounts.size() && liveRefCounts[index] > 0) {
+      continue;
+    }
+    removeMaterial[index] = 1;
+    CollectMaterialTextureCandidates(g_loadedMaterials[index],
+                                     candidateTextureIndices);
+  }
+
+  if (std::none_of(removeMaterial.begin(), removeMaterial.end(),
+                   [](uint8_t remove) { return remove != 0; })) {
+    return;
+  }
+
+  std::vector<int> materialRemap(g_loadedMaterials.size(), -1);
+  std::vector<Asset::Material> compactedMaterials;
+  std::vector<std::string> compactedStableIds;
+  compactedMaterials.reserve(g_loadedMaterials.size());
+  compactedStableIds.reserve(s_materialStableIds.size());
+  for (size_t materialIndex = 0; materialIndex < g_loadedMaterials.size();
+       ++materialIndex) {
+    if (removeMaterial[materialIndex]) {
+      continue;
+    }
+    materialRemap[materialIndex] = static_cast<int>(compactedMaterials.size());
+    compactedMaterials.push_back(std::move(g_loadedMaterials[materialIndex]));
+    compactedStableIds.push_back(
+        materialIndex < s_materialStableIds.size()
+            ? s_materialStableIds[materialIndex]
+            : std::string());
+  }
+
+  for (Asset::GpuMesh &mesh : g_loadedMeshes) {
+    RemapMaterialIndexValue(mesh.materialIndex, materialRemap);
+  }
+  for (Node &node : s_nodes) {
+    RemapMaterialIndexVector(node.linkedMaterialIndices, materialRemap);
+  }
+  for (auto &[_, entry] : s_sharedImportedMeshesBySourcePath) {
+    RemapMaterialIndexVector(entry.linkedMaterialIndices, materialRemap);
+  }
+  for (ScatterModel &model : s_scatterModels) {
+    for (ScatterTarget &target : model.targets) {
+      RemapMaterialIndexValue(target.materialIndex, materialRemap);
+    }
+  }
+
+  g_loadedMaterials = std::move(compactedMaterials);
+  s_materialStableIds = std::move(compactedStableIds);
+  s_materialMetadataDirty = true;
+  EnsureMaterialMetadataStorage();
+}
+
+static std::vector<uint8_t> BuildLiveTextureReferenceMask() {
+  std::vector<uint8_t> live(g_loadedTextures.size(), 0);
+  for (const Asset::Material &material : g_loadedMaterials) {
+    std::vector<size_t> textureIndices;
+    CollectMaterialTextureCandidates(material, textureIndices);
+    for (size_t textureIndex : textureIndices) {
+      if (textureIndex < live.size()) {
+        live[textureIndex] = 1;
+      }
+    }
+  }
+  return live;
+}
+
+static void CompactImportedTextureCandidates(
+    const std::vector<size_t> &candidateTextureIndices) {
+  if (candidateTextureIndices.empty() || g_loadedTextures.empty()) {
+    return;
+  }
+
+  const std::vector<uint8_t> liveTextures = BuildLiveTextureReferenceMask();
+  std::vector<uint8_t> removeTexture(g_loadedTextures.size(), 0);
+  for (size_t textureIndex : candidateTextureIndices) {
+    if (textureIndex >= g_loadedTextures.size()) {
+      continue;
+    }
+    if (textureIndex < liveTextures.size() && liveTextures[textureIndex]) {
+      continue;
+    }
+    removeTexture[textureIndex] = 1;
+  }
+
+  if (std::none_of(removeTexture.begin(), removeTexture.end(),
+                   [](uint8_t remove) { return remove != 0; })) {
+    return;
+  }
+
+  std::vector<int> textureRemap(g_loadedTextures.size(), -1);
+  std::vector<Asset::Texture> compactedTextures;
+  compactedTextures.reserve(g_loadedTextures.size());
+  for (size_t textureIndex = 0; textureIndex < g_loadedTextures.size();
+       ++textureIndex) {
+    if (removeTexture[textureIndex]) {
+      continue;
+    }
+    textureRemap[textureIndex] = static_cast<int>(compactedTextures.size());
+    compactedTextures.push_back(std::move(g_loadedTextures[textureIndex]));
+  }
+
+  for (Asset::Material &material : g_loadedMaterials) {
+    RemapMaterialTextureIndicesInPlace(material, textureRemap);
+  }
+
+  for (auto it = s_textureIndicesBySourceUri.begin();
+       it != s_textureIndicesBySourceUri.end();) {
+    const int textureIndex = it->second;
+    if (textureIndex < 0 ||
+        textureIndex >= static_cast<int>(textureRemap.size()) ||
+        textureRemap[static_cast<size_t>(textureIndex)] < 0) {
+      it = s_textureIndicesBySourceUri.erase(it);
+      continue;
+    }
+    it->second = textureRemap[static_cast<size_t>(textureIndex)];
+    ++it;
+  }
+
+  g_loadedTextures = std::move(compactedTextures);
+  RegisterTextures(g_loadedTextures);
+  DxrRenderer::MarkTextureDescriptorTableDirty();
+}
+
+static void PruneOrphanedImportAssets(
+    const std::vector<int> &candidateMaterialIndices) {
+  if (candidateMaterialIndices.empty()) {
+    return;
+  }
+
+  std::vector<size_t> candidateTextureIndices;
+  const size_t materialCountBefore = g_loadedMaterials.size();
+  const size_t textureCountBefore = g_loadedTextures.size();
+  CompactImportedMaterialCandidates(candidateMaterialIndices,
+                                    candidateTextureIndices);
+  CompactImportedTextureCandidates(candidateTextureIndices);
+
+  const size_t removedMaterials = materialCountBefore - g_loadedMaterials.size();
+  const size_t removedTextures = textureCountBefore - g_loadedTextures.size();
+  if (removedMaterials > 0 || removedTextures > 0) {
+    RefreshAllMaterialRuntimeTextures();
+    fprintf(stderr,
+            "Scene: pruned orphaned import assets (materials=%zu textures=%zu)\n",
+            removedMaterials, removedTextures);
+  }
+}
+
 static std::vector<int> ResolveReplacementMaterialIndices(
     const Node &node, std::vector<Asset::Material> &materials,
     const std::vector<std::string> *materialStableIds = nullptr,
@@ -1551,6 +1828,8 @@ static void RemoveNodesByIndexSet(std::vector<size_t> indices,
 
   std::sort(indices.begin(), indices.end());
   indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
+  std::vector<int> candidateMaterialIndices =
+      CollectMaterialCandidatesForNodes(indices);
 
   std::vector<size_t> uniqueMeshIndices;
   for (size_t nodeIndex : indices) {
@@ -1590,6 +1869,8 @@ static void RemoveNodesByIndexSet(std::vector<size_t> indices,
     LiveLink::GetSceneSync().ReindexSceneNodeBindingsAfterRemoval(nodeIndex);
     ReindexScatterNodeReferencesAfterRemoval(nodeIndex);
   }
+
+  PruneOrphanedImportAssets(candidateMaterialIndices);
 
   if (notifyScene) {
     DxrRenderer::RequestAccelerationStructureRebuild();
@@ -3043,6 +3324,8 @@ bool RemoveNode(size_t index) {
     return true;
   }
 
+  std::vector<int> candidateMaterialIndices;
+  CollectNodeMaterialCandidates(s_nodes[index], candidateMaterialIndices);
   ReleaseNodeMeshes(s_nodes[index]);
   s_nodes.erase(s_nodes.begin() + index);
 
@@ -3057,6 +3340,7 @@ bool RemoveNode(size_t index) {
 
   LiveLink::GetSceneSync().ReindexSceneNodeBindingsAfterRemoval(index);
   ReindexScatterNodeReferencesAfterRemoval(index);
+  PruneOrphanedImportAssets(candidateMaterialIndices);
   ApplyRendererInvalidation(
       RendererInvalidationPlan::FullAccelerationStructureRebuild);
   NotifySceneChanged();
