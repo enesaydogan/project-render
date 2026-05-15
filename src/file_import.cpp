@@ -111,6 +111,19 @@ void RememberSelectedDirectory(DialogLocation location, const std::wstring &path
   }
 }
 
+std::wstring EnsureSceneSaveExtension(const std::wstring &path) {
+  if (path.empty()) {
+    return path;
+  }
+
+  std::filesystem::path savePath(path);
+  const std::wstring extension = savePath.extension().wstring();
+  if (extension.empty() || extension == L".") {
+    savePath += L".prs";
+  }
+  return savePath.wstring();
+}
+
 } // namespace
 
 bool OpenModelFileDialog(HWND owner, std::wstring &outPath) {
@@ -204,7 +217,7 @@ bool SaveSceneFileDialog(HWND owner, std::wstring &outPath) {
   ofn.lpstrDefExt = L"prs";
   ApplyInitialDirectory(ofn, DialogLocation::SaveScene);
   if (GetSaveFileNameW(&ofn)) {
-    outPath = szFile;
+    outPath = EnsureSceneSaveExtension(szFile);
     RememberSelectedDirectory(DialogLocation::SaveScene, outPath);
     return true;
   }

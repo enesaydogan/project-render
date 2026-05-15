@@ -122,6 +122,50 @@ static std::string g_currentScenePath;
 static bool RecreateDxrPipelineSafe(UINT width, UINT height,
                                     const char *context);
 
+static std::filesystem::path SceneIoNativePathFromUtf8(
+    const std::string &utf8Path) {
+  if (utf8Path.empty()) {
+    return {};
+  }
+
+#ifdef _WIN32
+  const int wideCount = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                                            utf8Path.c_str(), -1, nullptr, 0);
+  if (wideCount > 0) {
+    std::wstring wide(static_cast<size_t>(wideCount), L'\0');
+    const int converted = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                                              utf8Path.c_str(), -1,
+                                              wide.data(), wideCount);
+    if (converted == wideCount) {
+      if (!wide.empty() && wide.back() == L'\0') {
+        wide.pop_back();
+      }
+      return std::filesystem::path(wide);
+    }
+  }
+#endif
+
+  return std::filesystem::path(utf8Path);
+}
+
+static std::string NormalizeSceneSaveJobPath(const std::string &utf8Path) {
+  std::filesystem::path path = SceneIoNativePathFromUtf8(utf8Path);
+  if (path.empty()) {
+    return {};
+  }
+
+  const std::filesystem::path extension = path.extension();
+  if (extension.empty() || extension == L".") {
+    path += L".prs";
+  }
+
+#ifdef _WIN32
+  return WStringToUtf8(path.wstring());
+#else
+  return path.string();
+#endif
+}
+
 static void GetCurrentDxrPreviewSize(UINT &width, UINT &height) {
   D3D12_RECT previewRect = {0, 0, (LONG)g_windowWidth, (LONG)g_windowHeight};
   GetSafeFramePreviewRect(g_windowWidth, g_windowHeight, previewRect);
@@ -236,7 +280,9 @@ static void SceneIoProgressSink(float progress01, const char *stage) {
 }
 
 void StartSceneIoJob(bool isSave, const std::string &utf8Path) {
-  if (g_sceneIoJob.active || utf8Path.empty()) {
+  const std::string jobPath =
+      isSave ? NormalizeSceneSaveJobPath(utf8Path) : utf8Path;
+  if (g_sceneIoJob.active || jobPath.empty()) {
     return;
   }
 
@@ -248,7 +294,7 @@ void StartSceneIoJob(bool isSave, const std::string &utf8Path) {
 
   g_sceneIoJob.active = true;
   g_sceneIoJob.isSave = isSave;
-  g_sceneIoJob.path = utf8Path;
+  g_sceneIoJob.path = jobPath;
   g_sceneIoJob.progress = 0.0f;
   g_sceneIoJob.stage = isSave ? "Preparing save" : "Preparing load";
   g_sceneIoProgressAtomic.store(0.0f, std::memory_order_relaxed);
@@ -260,8 +306,8 @@ void StartSceneIoJob(bool isSave, const std::string &utf8Path) {
 
   SceneIO::SetProgressCallback(&SceneIoProgressSink);
   g_sceneIoJob.worker =
-      std::async(std::launch::async, [isSave, utf8Path]() -> bool {
-        return isSave ? SceneIO::SaveScene(utf8Path) : SceneIO::LoadScene(utf8Path);
+      std::async(std::launch::async, [isSave, jobPath]() -> bool {
+        return isSave ? SceneIO::SaveScene(jobPath) : SceneIO::LoadScene(jobPath);
       });
 }
 

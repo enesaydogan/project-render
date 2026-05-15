@@ -85,6 +85,39 @@ static void ReportProgress(float progress01, const char *stage) {
   cb(progress01, stage ? stage : "");
 }
 
+static fs::path NativePathFromUtf8(const std::string &path) {
+  if (path.empty()) {
+    return {};
+  }
+
+#ifdef _WIN32
+  const int wideCount = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                                            path.c_str(), -1, nullptr, 0);
+  if (wideCount > 0) {
+    std::wstring wide(static_cast<size_t>(wideCount), L'\0');
+    const int converted = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                                              path.c_str(), -1, wide.data(),
+                                              wideCount);
+    if (converted == wideCount) {
+      if (!wide.empty() && wide.back() == L'\0') {
+        wide.pop_back();
+      }
+      return fs::path(wide);
+    }
+  }
+#endif
+
+  return fs::path(path);
+}
+
+static fs::path NormalizeSceneSavePath(fs::path path) {
+  const fs::path extension = path.extension();
+  if (extension.empty() || extension == L".") {
+    path += L".prs";
+  }
+  return path;
+}
+
 class BinaryWriter {
   std::vector<uint8_t> &buf;
 
@@ -1376,6 +1409,12 @@ void SetProgressCallback(ProgressCallback cb) {
 // ---------------------------------------------------------------------------
 bool SaveScene(const std::string &path) {
   try {
+    fs::path outputPath = NormalizeSceneSavePath(NativePathFromUtf8(path));
+    if (outputPath.empty()) {
+      fprintf(stderr, "PRS: Save failed: empty output path\n");
+      return false;
+    }
+
     ReportProgress(0.01f, "Preparing scene metadata");
     fprintf(stderr, "PRS: Saving scene to %s\n", path.c_str());
 
@@ -1462,8 +1501,26 @@ bool SaveScene(const std::string &path) {
             compressed.size()/(1024.0*1024.0), 100.0*compressed.size()/uncompSize);
 
     // 4. Write: header (16 bytes) + compressed payload
-    std::ofstream file(path, std::ios::binary);
-    if (!file.is_open()) return false;
+    ReportProgress(0.96f, "Writing file");
+
+    if (outputPath.has_parent_path()) {
+      std::error_code parentError;
+      const fs::path parent = outputPath.parent_path();
+      if (!parent.empty() && !fs::exists(parent, parentError)) {
+        parentError.clear();
+        if (!fs::create_directories(parent, parentError) && parentError) {
+          fprintf(stderr, "PRS: Save failed: could not create output directory: %s\n",
+                  parentError.message().c_str());
+          return false;
+        }
+      }
+    }
+
+    std::ofstream file(outputPath, std::ios::binary);
+    if (!file.is_open()) {
+      fprintf(stderr, "PRS: Save failed: could not open output file\n");
+      return false;
+    }
 
     file.write(PRS_MAGIC, 4);
     uint32_t ver = PRS_VERSION;
@@ -1471,7 +1528,12 @@ bool SaveScene(const std::string &path) {
     uint64_t usz = (uint64_t)uncompSize;
     file.write(reinterpret_cast<const char*>(&usz), 8);
     file.write(reinterpret_cast<const char*>(compressed.data()), compressed.size());
-        ReportProgress(0.98f, "Writing file");
+    file.close();
+    if (!file) {
+      fprintf(stderr, "PRS: Save failed: write did not complete\n");
+      return false;
+    }
+    ReportProgress(0.98f, "Finalizing file");
 
     fprintf(stderr, "PRS: Saved %.2f MB (was %.2f MB uncompressed)\n",
             (16+compressed.size())/(1024.0*1024.0), uncompSize/(1024.0*1024.0));
@@ -1489,7 +1551,7 @@ bool SaveScene(const std::string &path) {
 
 bool LoadScene(const std::string &path) {
   try {
-    std::ifstream probe(path, std::ios::binary);
+    std::ifstream probe(NativePathFromUtf8(path), std::ios::binary);
     if (!probe.is_open()) return false;
     char magic[4] = {};
     probe.read(magic, 4);
@@ -1513,7 +1575,7 @@ bool LoadScenePRS(const std::string &path) {
     ReportProgress(0.01f, "Reading scene file");
     fprintf(stderr, "PRS: Loading %s\n", path.c_str());
 
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    std::ifstream file(NativePathFromUtf8(path), std::ios::binary | std::ios::ate);
     if (!file.is_open()) return false;
     size_t fileSize = (size_t)file.tellg();
     if (fileSize < 16) return false;

@@ -2846,6 +2846,63 @@ static std::string LtmFindNearestUtf16ChunkString(const uint8_t *base,
   return {};
 }
 
+static bool LtmLooksLikeLmodMaterialName(const std::string &text) {
+  if (text.empty() || text.size() > 128)
+    return false;
+
+  const char first = text.front();
+  if (first == '{' || first == '[')
+    return false;
+
+  std::string lower = text;
+  std::transform(lower.begin(), lower.end(), lower.begin(),
+                 [](unsigned char c) {
+                   return static_cast<char>(std::tolower(c));
+                 });
+  if (lower == "text" || lower == "texture" || lower == "buffer" ||
+      lower == "3d objectdata" || lower == "oo classinstance" ||
+      lower == "oo class instances list") {
+    return false;
+  }
+
+  bool hasNameChar = false;
+  for (char c : text) {
+    const unsigned char uc = static_cast<unsigned char>(c);
+    if (std::iscntrl(uc))
+      return false;
+    if (std::isalnum(uc))
+      hasNameChar = true;
+  }
+  return hasNameChar;
+}
+
+static std::string LtmFindNearestLmodMaterialName(const uint8_t *base,
+                                                  const uint8_t *fileEnd,
+                                                  const uint8_t *beforePos,
+                                                  size_t backScanBytes =
+                                                      512 * 1024) {
+  if (!base || !fileEnd || !beforePos || beforePos <= base + 8)
+    return {};
+
+  const uint8_t *start =
+      beforePos - (std::min)(backScanBytes, (size_t)(beforePos - base));
+  const uint8_t *p = beforePos - 8;
+  while (p >= start) {
+    if (memcmp(p, "STWA", 4) == 0 && p + 8 <= fileEnd) {
+      const uint32_t sz = *reinterpret_cast<const uint32_t *>(p + 4);
+      if (sz > 0 && sz <= 512 && p + 8 + sz <= fileEnd) {
+        std::string text = LtmReadUtf16AsciiString(p + 8, sz);
+        if (LtmLooksLikeLmodMaterialName(text))
+          return text;
+      }
+    }
+    if (p == start)
+      break;
+    --p;
+  }
+  return {};
+}
+
 static void LtmApplyLmodTextureOrderHeuristics(
     const std::vector<LtmTextureEntry> &textureEntries,
     std::vector<LtmTextureSemantic> &semanticByEntry) {
@@ -3042,8 +3099,7 @@ LtmScanEmbeddedTextureEntries(const uint8_t *base, const uint8_t *fileEnd,
     entry.mapType = *reinterpret_cast<const uint32_t *>(scan + 8);
     entry.materialSlot = LtmFindNearestMaterialSlot(base, fileEnd, scan);
     if (captureLmodMaterialNames) {
-      entry.materialName =
-          LtmFindNearestUtf16ChunkString(base, fileEnd, scan, "STWA");
+      entry.materialName = LtmFindNearestLmodMaterialName(base, fileEnd, scan);
       if (!entry.materialName.empty())
         currentLmodTextureMaterialName = entry.materialName;
       else
@@ -3442,10 +3498,7 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
     if (gb.vppi && (gb.po32 || gb.poda) && gb.indexCount > 0) {
       if (isLmod) {
         gb.materialName =
-            LtmFindNearestUtf16ChunkString(base, fileEnd, scan, "STWA");
-        if (gb.materialName.empty())
-          gb.materialName =
-              LtmFindNearestUtf16ChunkString(base, fileEnd, scan, "CHNW");
+            LtmFindNearestLmodMaterialName(base, fileEnd, scan);
       }
       geoBlocks.push_back(gb);
       scan = p; // continue scanning after this block
