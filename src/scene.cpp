@@ -1980,7 +1980,8 @@ static std::vector<size_t> CollectImportGroupNodeIndices(
 }
 
 static void RemoveNodesByIndexSet(std::vector<size_t> indices,
-                                  bool notifyScene = true) {
+                                  bool notifyScene = true,
+                                  bool pruneAssets = true) {
   if (indices.empty()) {
     return;
   }
@@ -2032,7 +2033,9 @@ static void RemoveNodesByIndexSet(std::vector<size_t> indices,
     ReindexScatterNodeReferencesAfterRemoval(nodeIndex);
   }
 
-  PruneOrphanedImportAssets(candidateMaterialIndices);
+  if (pruneAssets) {
+    PruneOrphanedImportAssets(candidateMaterialIndices);
+  }
 
   if (notifyScene) {
     DxrRenderer::RequestAccelerationStructureRebuild();
@@ -2668,13 +2671,19 @@ bool ReplaceNodeImportedContent(size_t index, ImportedNodePayload payload) {
         IsImportedSceneGroupNode(node)
             ? CollectImportGroupNodeIndices(node.importGroupKey)
             : std::vector<size_t>{index};
-    RemoveNodesByIndexSet(std::move(nodesToRemove), false);
+    std::vector<int> candidateMaterialIndices =
+        CollectMaterialCandidatesForNodes(nodesToRemove);
+    // Keep material indices stable until the rebuilt import has rebound its
+    // source slots; pruning here would invalidate edited engine materials.
+    RemoveNodesByIndexSet(std::move(nodesToRemove), false, false);
 
     size_t newRootIndex = static_cast<size_t>(-1);
     const bool ok = AddImportedNode(std::move(payload), &newRootIndex);
     if (!ok) {
       s_lastStatus =
           "ReplaceNodeImportedContent failed: unable to rebuild import group";
+    } else {
+      PruneOrphanedImportAssets(candidateMaterialIndices);
     }
     return ok;
   }
