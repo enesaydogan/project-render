@@ -38,6 +38,11 @@ struct SavedView {
   float tonemapAoIntensity = 0.0f;
   float tonemapAoLengthMm = 250.0f;
   int tonemapAoMode = 2;
+  float tonemapVignette = 0.15f;
+  float tonemapSaturation = 1.0f;
+  float tonemapContrast = 1.0f;
+  float tonemapWhiteBalance = 0.0f;
+  bool tonemapSettingsCaptured = false;
   uint32_t thumbnailWidth = 0;
   uint32_t thumbnailHeight = 0;
   std::vector<uint8_t> thumbnailRgba;
@@ -50,6 +55,7 @@ void SetSelectedViewIndex(int index);
 
 SavedView CaptureCurrentState();
 size_t AddCurrentView(const std::string &preferredName = std::string());
+bool UpdateViewFromCurrentState(size_t index);
 bool RemoveView(size_t index);
 bool ApplyView(const SavedView &view);
 bool ApplyView(size_t index);

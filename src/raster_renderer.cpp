@@ -726,6 +726,8 @@ struct TonemapConstants {
   float contrast;
   float ssaoEnabled;
   float ssaoCompositeWeight;
+  float whiteBalance;
+  float _pad0[3];
 };
 
 static bool EnsureTonemapPipeline(ID3D12Device *device) {
@@ -1189,6 +1191,7 @@ bool TonemapHdrToBackbuffer(ID3D12Device *device, ID3D12GraphicsCommandList *cmd
   tc.contrast = s_renderSettings.tonemapContrast;
   tc.ssaoEnabled = (s_renderSettings.enableSSAO && s_ssaoMap) ? 1.0f : 0.0f;
   tc.ssaoCompositeWeight = s_renderSettings.ssaoCompositeWeight;
+  tc.whiteBalance = s_renderSettings.tonemapWhiteBalance;
   if (SUCCEEDED(s_tonemapCB->Map(0, nullptr, &p))) {
     memcpy(p, &tc, sizeof(tc));
     s_tonemapCB->Unmap(0, nullptr);

@@ -181,6 +181,7 @@ void CameraPanel::createUi()
     m_tonemapVignette = CreateSliderControl(0.0, 1.0, 0.01, 2);
     m_tonemapSaturation = CreateSliderControl(0.0, 2.0, 0.01, 2);
     m_tonemapContrast = CreateSliderControl(0.0, 2.0, 0.01, 2);
+    m_tonemapWhiteBalance = CreateSliderControl(-1.0, 1.0, 0.01, 2);
     m_dxrAoNote = new QLabel(tr("DXR-only ambient occlusion uses true ray-traced visibility before tone mapping."), tonemapGroup);
     m_dxrAoNote->setWordWrap(true);
     m_dxrAoMode = new QComboBox(tonemapGroup);
@@ -192,6 +193,7 @@ void CameraPanel::createUi()
     tonemapForm->addRow(tr("Vignette"), m_tonemapVignette);
     tonemapForm->addRow(tr("Saturation"), m_tonemapSaturation);
     tonemapForm->addRow(tr("Contrast"), m_tonemapContrast);
+    tonemapForm->addRow(tr("White Balance"), m_tonemapWhiteBalance);
     tonemapForm->addRow(m_dxrAoNote);
     tonemapForm->addRow(tr("DXR AO Mode"), m_dxrAoMode);
     tonemapForm->addRow(tr("DXR AO Intensity"), m_dxrAoIntensity);
@@ -289,6 +291,9 @@ void CameraPanel::createUi()
     connect(m_tonemapContrast->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) {
         applyTonemapSettings();
     });
+    connect(m_tonemapWhiteBalance->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) {
+        applyTonemapSettings();
+    });
     connect(m_dxrAoMode, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
         applyTonemapSettings();
     });
@@ -359,6 +364,7 @@ void CameraPanel::syncFromRenderer()
     SyncSliderControlValue(m_tonemapVignette, rs.tonemapVignette);
     SyncSliderControlValue(m_tonemapSaturation, rs.tonemapSaturation);
     SyncSliderControlValue(m_tonemapContrast, rs.tonemapContrast);
+    SyncSliderControlValue(m_tonemapWhiteBalance, rs.tonemapWhiteBalance);
     const int aoMode = static_cast<int>(DxrRenderer::GetTonemapAmbientOcclusionMode());
     const int aoModeIndex = m_dxrAoMode->findData(aoMode);
     if (aoModeIndex >= 0) {
@@ -426,6 +432,7 @@ void CameraPanel::applyTonemapSettings()
     rs.tonemapVignette = static_cast<float>(m_tonemapVignette->value());
     rs.tonemapSaturation = static_cast<float>(m_tonemapSaturation->value());
     rs.tonemapContrast = static_cast<float>(m_tonemapContrast->value());
+    rs.tonemapWhiteBalance = static_cast<float>(m_tonemapWhiteBalance->value());
     DxrRenderer::SetTonemapAmbientOcclusionIntensity(
         static_cast<float>(m_dxrAoIntensity->value()));
     DxrRenderer::SetTonemapAmbientOcclusionLengthMm(
@@ -449,6 +456,7 @@ bool CameraPanel::anyControlInteracting() const
         m_tonemapVignette,
         m_tonemapSaturation,
         m_tonemapContrast,
+        m_tonemapWhiteBalance,
         m_dxrAoIntensity,
         m_dxrAoLengthMm,
     };

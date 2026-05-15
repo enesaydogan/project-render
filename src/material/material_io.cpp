@@ -31,6 +31,96 @@ uint32_t ClampMaterialClass(uint32_t materialClass) {
   return (std::min)(materialClass, Asset::Material::kMaterialClassEmissive);
 }
 
+nlohmann::json BuildMappingMetadata(const Asset::Material &material) {
+  return {
+      {"us", {material.uvScale[0], material.uvScale[1]}},
+      {"uo", {material.uvOffset[0], material.uvOffset[1]}},
+      {"te", material.triPlanarEnabled},
+      {"ts", material.triPlanarScale},
+      {"ths", material.triPlanarSharpness},
+      {"tns", material.triPlanarNormalStrength},
+      {"trr",
+       {material.triPlanarRotationDegrees[0],
+        material.triPlanarRotationDegrees[1],
+        material.triPlanarRotationDegrees[2]}},
+      {"tvm", material.triPlanarVariationMode},
+      {"tvo", material.triPlanarVariationOffset},
+      {"tvr", material.stochasticTilingRotationDegrees},
+      {"tvc", material.stochasticTilingColorVariation},
+      {"tvmr", material.stochasticTilingMirror},
+      {"pm", material.parallaxMode},
+      {"tap", material.parallaxDepthScale},
+      {"prd", material.parallaxRoomDepth},
+      {"pwa", material.parallaxWindowAspect},
+      {"pvs", {material.parallaxUvScale[0], material.parallaxUvScale[1]}},
+      {"pvo", {material.parallaxUvOffset[0], material.parallaxUvOffset[1]}},
+      {"pbf", material.parallaxBackFace},
+  };
+}
+
+void RestoreMappingMetadata(const nlohmann::json &mapping,
+                            Asset::Material &material) {
+  if (!mapping.is_object()) {
+    return;
+  }
+
+  if (mapping.contains("us") && mapping["us"].is_array() &&
+      mapping["us"].size() >= 2) {
+    material.uvScale[0] = mapping["us"][0].get<float>();
+    material.uvScale[1] = mapping["us"][1].get<float>();
+  }
+  if (mapping.contains("uo") && mapping["uo"].is_array() &&
+      mapping["uo"].size() >= 2) {
+    material.uvOffset[0] = mapping["uo"][0].get<float>();
+    material.uvOffset[1] = mapping["uo"][1].get<float>();
+  }
+  material.triPlanarEnabled =
+      mapping.value("te", material.triPlanarEnabled);
+  material.triPlanarScale =
+      mapping.value("ts", material.triPlanarScale);
+  material.triPlanarSharpness =
+      mapping.value("ths", material.triPlanarSharpness);
+  material.triPlanarNormalStrength =
+      mapping.value("tns", material.triPlanarNormalStrength);
+  if (mapping.contains("trr") && mapping["trr"].is_array() &&
+      mapping["trr"].size() >= 3) {
+    for (int axis = 0; axis < 3; ++axis) {
+      material.triPlanarRotationDegrees[axis] =
+          mapping["trr"][axis].get<float>();
+    }
+  }
+  material.triPlanarVariationMode =
+      mapping.value("tvm", material.triPlanarVariationMode);
+  material.triPlanarVariationOffset =
+      mapping.value("tvo", material.triPlanarVariationOffset);
+  material.stochasticTilingRotationDegrees =
+      mapping.value("tvr", material.stochasticTilingRotationDegrees);
+  material.stochasticTilingColorVariation =
+      mapping.value("tvc", material.stochasticTilingColorVariation);
+  material.stochasticTilingMirror =
+      mapping.value("tvmr", material.stochasticTilingMirror);
+  material.parallaxMode =
+      mapping.value("pm", material.parallaxMode);
+  material.parallaxDepthScale =
+      mapping.value("tap", material.parallaxDepthScale);
+  material.parallaxRoomDepth =
+      mapping.value("prd", material.parallaxRoomDepth);
+  material.parallaxWindowAspect =
+      mapping.value("pwa", material.parallaxWindowAspect);
+  if (mapping.contains("pvs") && mapping["pvs"].is_array() &&
+      mapping["pvs"].size() >= 2) {
+    material.parallaxUvScale[0] = mapping["pvs"][0].get<float>();
+    material.parallaxUvScale[1] = mapping["pvs"][1].get<float>();
+  }
+  if (mapping.contains("pvo") && mapping["pvo"].is_array() &&
+      mapping["pvo"].size() >= 2) {
+    material.parallaxUvOffset[0] = mapping["pvo"][0].get<float>();
+    material.parallaxUvOffset[1] = mapping["pvo"][1].get<float>();
+  }
+  material.parallaxBackFace =
+      mapping.value("pbf", material.parallaxBackFace);
+}
+
 } // namespace
 
 std::vector<int> BuildTextureSaveRemap(
@@ -92,6 +182,7 @@ nlohmann::json BuildMaterialsMetadata(
         {"shc", {mat.sheenColor[0], mat.sheenColor[1], mat.sheenColor[2]}},
         {"th", mat.thinWalled},
         {"tl", mat.translucency},
+        {"mp", BuildMappingMetadata(mat)},
         {"us", {mat.uvScale[0], mat.uvScale[1]}},
         {"uo", {mat.uvOffset[0], mat.uvOffset[1]}},
         {"te", mat.triPlanarEnabled},
@@ -372,6 +463,9 @@ void RestoreMaterialsFromMetadata(const nlohmann::json &materialsJson,
 
     material.parallaxBackFace =
       savedMaterial.value("pbf", material.parallaxBackFace);
+    if (savedMaterial.contains("mp")) {
+      RestoreMappingMetadata(savedMaterial["mp"], material);
+    }
     material.runtimeMetalRoughTexture = -1;
     material.doubleSided = savedMaterial.value("ds", material.doubleSided);
     material.alphaMode = savedMaterial.value("am", material.alphaMode);

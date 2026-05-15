@@ -139,6 +139,17 @@ SavedViews::SavedView InterpolateView(const Keyframe &from, const Keyframe &to,
       Lerp(from.camera.tonemapAoLengthMm, to.camera.tonemapAoLengthMm, t);
   result.tonemapAoMode =
       (t < 0.5f) ? from.camera.tonemapAoMode : to.camera.tonemapAoMode;
+  result.tonemapVignette =
+      Lerp(from.camera.tonemapVignette, to.camera.tonemapVignette, t);
+  result.tonemapSaturation =
+      Lerp(from.camera.tonemapSaturation, to.camera.tonemapSaturation, t);
+  result.tonemapContrast =
+      Lerp(from.camera.tonemapContrast, to.camera.tonemapContrast, t);
+  result.tonemapWhiteBalance =
+      Lerp(from.camera.tonemapWhiteBalance, to.camera.tonemapWhiteBalance, t);
+  result.tonemapSettingsCaptured =
+      from.camera.tonemapSettingsCaptured &&
+      to.camera.tonemapSettingsCaptured;
   result.thumbnailWidth = 0;
   result.thumbnailHeight = 0;
   result.thumbnailRgba.clear();

@@ -428,6 +428,7 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
   j["cam"]["tal"] = DxrRenderer::GetTonemapAmbientOcclusionLengthMm();
   j["cam"]["tam"] =
       static_cast<int>(DxrRenderer::GetTonemapAmbientOcclusionMode());
+  j["cam"]["wb"] = RasterRenderer::GetRenderSettings().tonemapWhiteBalance;
 
   j["vws"] = json::array();
   for (const auto &view : SavedViews::GetViews()) {
@@ -460,6 +461,11 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
         {"tai", view.tonemapAoIntensity},
         {"tal", view.tonemapAoLengthMm},
         {"tam", view.tonemapAoMode},
+        {"tvg", view.tonemapVignette},
+        {"tsa", view.tonemapSaturation},
+        {"tco", view.tonemapContrast},
+        {"twb", view.tonemapWhiteBalance},
+        {"tms", view.tonemapSettingsCaptured},
     };
     if (!view.thumbnailRgba.empty() && view.thumbnailWidth > 0 &&
         view.thumbnailHeight > 0) {
@@ -511,6 +517,11 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
         {"tai", keyframe.camera.tonemapAoIntensity},
         {"tal", keyframe.camera.tonemapAoLengthMm},
         {"tam", keyframe.camera.tonemapAoMode},
+        {"tvg", keyframe.camera.tonemapVignette},
+        {"tsa", keyframe.camera.tonemapSaturation},
+        {"tco", keyframe.camera.tonemapContrast},
+        {"twb", keyframe.camera.tonemapWhiteBalance},
+        {"tms", keyframe.camera.tonemapSettingsCaptured},
     });
   }
 
@@ -582,7 +593,8 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
       {"bin", rs.bloomIntensity},
       {"vig", rs.tonemapVignette},
       {"sat", rs.tonemapSaturation},
-      {"con", rs.tonemapContrast}
+      {"con", rs.tonemapContrast},
+      {"wb", rs.tonemapWhiteBalance}
     };
   }
 
@@ -765,6 +777,11 @@ static void ApplyMetadataPRS(const json &j) {
                                static_cast<int>(
                                    DxrRenderer::GetTonemapAmbientOcclusionMode())),
                        0, 2)));
+    if (c.contains("wb")) {
+      auto &rs = RasterRenderer::GetRenderSettings();
+      rs.tonemapWhiteBalance =
+          (std::clamp)(c.value("wb", rs.tonemapWhiteBalance), -1.0f, 1.0f);
+    }
   }
   std::vector<SavedViews::SavedView> loadedViews;
   if (j.contains("vws") && j["vws"].is_array()) {
@@ -804,6 +821,13 @@ static void ApplyMetadataPRS(const json &j) {
       view.tonemapAoIntensity = entry.value("tai", view.tonemapAoIntensity);
       view.tonemapAoLengthMm = entry.value("tal", view.tonemapAoLengthMm);
       view.tonemapAoMode = std::clamp(entry.value("tam", view.tonemapAoMode), 0, 2);
+      view.tonemapVignette = std::clamp(entry.value("tvg", view.tonemapVignette), 0.0f, 1.0f);
+      view.tonemapSaturation = std::clamp(entry.value("tsa", view.tonemapSaturation), 0.0f, 2.0f);
+      view.tonemapContrast = std::clamp(entry.value("tco", view.tonemapContrast), 0.0f, 2.0f);
+      view.tonemapWhiteBalance = std::clamp(entry.value("twb", view.tonemapWhiteBalance), -1.0f, 1.0f);
+      view.tonemapSettingsCaptured =
+          entry.value("tms", entry.contains("tvg") || entry.contains("tsa") ||
+                                 entry.contains("tco") || entry.contains("twb"));
       view.thumbnailWidth = entry.value("tw", 0u);
       view.thumbnailHeight = entry.value("th", 0u);
       if (entry.contains("tb") && entry["tb"].is_binary()) {
@@ -871,6 +895,15 @@ static void ApplyMetadataPRS(const json &j) {
         keyframe.camera.tonemapAoIntensity = entry.value("tai", keyframe.camera.tonemapAoIntensity);
         keyframe.camera.tonemapAoLengthMm = entry.value("tal", keyframe.camera.tonemapAoLengthMm);
         keyframe.camera.tonemapAoMode = std::clamp(entry.value("tam", keyframe.camera.tonemapAoMode), 0, 2);
+        keyframe.camera.tonemapVignette = std::clamp(entry.value("tvg", keyframe.camera.tonemapVignette), 0.0f, 1.0f);
+        keyframe.camera.tonemapSaturation = std::clamp(entry.value("tsa", keyframe.camera.tonemapSaturation), 0.0f, 2.0f);
+        keyframe.camera.tonemapContrast = std::clamp(entry.value("tco", keyframe.camera.tonemapContrast), 0.0f, 2.0f);
+        keyframe.camera.tonemapWhiteBalance = std::clamp(entry.value("twb", keyframe.camera.tonemapWhiteBalance), -1.0f, 1.0f);
+        keyframe.camera.tonemapSettingsCaptured =
+            entry.value("tms", entry.contains("tvg") ||
+                                   entry.contains("tsa") ||
+                                   entry.contains("tco") ||
+                                   entry.contains("twb"));
         animationKeyframes.push_back(std::move(keyframe));
       }
     }
@@ -959,6 +992,7 @@ static void ApplyMetadataPRS(const json &j) {
     rs.tonemapVignette = (std::clamp)(r.value("vig", rs.tonemapVignette), 0.0f, 1.0f);
     rs.tonemapSaturation = (std::clamp)(r.value("sat", rs.tonemapSaturation), 0.0f, 2.0f);
     rs.tonemapContrast = (std::clamp)(r.value("con", rs.tonemapContrast), 0.0f, 2.0f);
+    rs.tonemapWhiteBalance = (std::clamp)(r.value("wb", rs.tonemapWhiteBalance), -1.0f, 1.0f);
   }
   if (j.contains("lit")) {
     auto &l = j["lit"];

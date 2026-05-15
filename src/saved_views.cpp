@@ -3,6 +3,7 @@
 #include "camera.h"
 #include "dx12_context.h"
 #include "dxr_renderer.h"
+#include "raster_renderer.h"
 
 #include <algorithm>
 #include <cmath>
@@ -113,6 +114,12 @@ void CaptureCurrentCameraState(SavedView &view) {
   view.tonemapAoLengthMm = DxrRenderer::GetTonemapAmbientOcclusionLengthMm();
   view.tonemapAoMode =
       static_cast<int>(DxrRenderer::GetTonemapAmbientOcclusionMode());
+  const auto &rs = RasterRenderer::GetRenderSettings();
+  view.tonemapVignette = rs.tonemapVignette;
+  view.tonemapSaturation = rs.tonemapSaturation;
+  view.tonemapContrast = rs.tonemapContrast;
+  view.tonemapWhiteBalance = rs.tonemapWhiteBalance;
+  view.tonemapSettingsCaptured = true;
 }
 
 void ApplyCameraState(const SavedView &view) {
@@ -144,6 +151,14 @@ void ApplyCameraState(const SavedView &view) {
   DxrRenderer::SetTonemapAmbientOcclusionMode(
       static_cast<DxrRenderer::TonemapAmbientOcclusionMode>(
           std::clamp(view.tonemapAoMode, 0, 2)));
+  if (view.tonemapSettingsCaptured) {
+    auto &rs = RasterRenderer::GetRenderSettings();
+    rs.tonemapVignette = std::clamp(view.tonemapVignette, 0.0f, 1.0f);
+    rs.tonemapSaturation = std::clamp(view.tonemapSaturation, 0.0f, 2.0f);
+    rs.tonemapContrast = std::clamp(view.tonemapContrast, 0.0f, 2.0f);
+    rs.tonemapWhiteBalance =
+        std::clamp(view.tonemapWhiteBalance, -1.0f, 1.0f);
+  }
   UpdateCameraCB();
   DxrRenderer::ResetAccumulation();
 }
@@ -369,6 +384,21 @@ size_t AddCurrentView(const std::string &preferredName) {
   g_selectedViewIndex = static_cast<int>(g_savedViews.size()) - 1;
   g_lastStatus = "Saved view: " + g_savedViews.back().name;
   return g_savedViews.size() - 1;
+}
+
+bool UpdateViewFromCurrentState(size_t index) {
+  if (index >= g_savedViews.size()) {
+    return false;
+  }
+
+  SavedView updated = g_savedViews[index];
+  CaptureCurrentCameraState(updated);
+  CaptureThumbnail(updated.thumbnailRgba, updated.thumbnailWidth,
+                   updated.thumbnailHeight);
+  g_savedViews[index] = std::move(updated);
+  g_selectedViewIndex = static_cast<int>(index);
+  g_lastStatus = "Updated view: " + g_savedViews[index].name;
+  return true;
 }
 
 bool RemoveView(size_t index) {

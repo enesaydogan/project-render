@@ -57,8 +57,10 @@ void ViewsPanel::createUi()
 
     auto *buttonRow = new QHBoxLayout();
     m_createButton = new QPushButton(tr("Create View"), this);
+    m_updateButton = new QPushButton(tr("Update Selected View"), this);
     m_deleteButton = new QPushButton(tr("Delete View"), this);
     buttonRow->addWidget(m_createButton);
+    buttonRow->addWidget(m_updateButton);
     buttonRow->addWidget(m_deleteButton);
     layout->addLayout(buttonRow);
 
@@ -95,6 +97,13 @@ void ViewsPanel::createUi()
         const int index = selectedViewIndex();
         if (index >= 0) {
             SavedViews::RemoveView(static_cast<size_t>(index));
+            syncFromViews();
+        }
+    });
+    connect(m_updateButton, &QPushButton::clicked, this, [this]() {
+        const int index = selectedViewIndex();
+        if (index >= 0) {
+            SavedViews::UpdateViewFromCurrentState(static_cast<size_t>(index));
             syncFromViews();
         }
     });
@@ -157,6 +166,7 @@ void ViewsPanel::syncFromViews()
 
     SavedViews::SetSelectedViewIndex(selectedViewIndex());
     m_deleteButton->setEnabled(selectedViewIndex() >= 0);
+    m_updateButton->setEnabled(selectedViewIndex() >= 0);
     m_addToAnimationButton->setEnabled(selectedViewIndex() >= 0);
     if (views.empty()) {
         m_statusLabel->setText(tr("No saved views. Create one from the current viewport."));

@@ -16,7 +16,22 @@ cbuffer TonemapCB : register(b0)
     float aoRadiusMeters;
     uint aoMode;
     float _pad0;
+    float whiteBalance;
+    float3 _pad1;
 };
+
+float3 ApplyWhiteBalance(float3 color, float balance)
+{
+    balance = clamp(balance, -1.0f, 1.0f);
+    float3 warm = float3(1.18f, 1.04f, 0.82f);
+    float3 cool = float3(0.82f, 0.96f, 1.20f);
+    float3 neutral = float3(1.0f, 1.0f, 1.0f);
+    float3 factors = balance >= 0.0f
+        ? lerp(neutral, warm, balance)
+        : lerp(neutral, cool, -balance);
+    factors *= rcp(max(dot(factors, float3(0.2126f, 0.7152f, 0.0722f)), 1.0e-4f));
+    return color * factors;
+}
 
 float3 ToneMapFilmic(float3 x)
 {
@@ -198,6 +213,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     float3 hdr = g_hdrInput.Load(int3(id.xy, 0)).rgb;
     hdr *= ComputeDxrTonemapAo(id.xy);
     hdr *= exposure;
+    hdr = ApplyWhiteBalance(hdr, whiteBalance);
 
     float3 mapped = ToneMapFilmic(hdr);
     mapped = saturate((mapped - 0.5f) * contrast + 0.5f);

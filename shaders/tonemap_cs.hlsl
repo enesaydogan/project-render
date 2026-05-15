@@ -16,7 +16,22 @@ cbuffer TonemapCB : register(b0)
     float contrast;   // 1.0 is neutral
     float ssaoEnabled;
     float ssaoCompositeWeight;
+    float whiteBalance; // -1.0 cool, 0.0 neutral, 1.0 warm
+    float3 _pad0;
 };
+
+float3 ApplyWhiteBalance(float3 color, float balance)
+{
+    balance = clamp(balance, -1.0, 1.0);
+    float3 warm = float3(1.18, 1.04, 0.82);
+    float3 cool = float3(0.82, 0.96, 1.20);
+    float3 neutral = float3(1.0, 1.0, 1.0);
+    float3 factors = balance >= 0.0
+        ? lerp(neutral, warm, balance)
+        : lerp(neutral, cool, -balance);
+    factors *= rcp(max(dot(factors, float3(0.2126, 0.7152, 0.0722)), 1.0e-4));
+    return color * factors;
+}
 
 float3 ToneMapFilmic(float3 x)
 {
@@ -55,6 +70,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
 
     hdr = hdr * aoTerm + bloom;
     hdr *= exposure;
+    hdr = ApplyWhiteBalance(hdr, whiteBalance);
 
     float3 mapped = ToneMapFilmic(hdr);
 

@@ -51,6 +51,7 @@ private:
     SliderControl *m_tonemapVignette = nullptr;
     SliderControl *m_tonemapSaturation = nullptr;
     SliderControl *m_tonemapContrast = nullptr;
+    SliderControl *m_tonemapWhiteBalance = nullptr;
     QLabel *m_dxrAoNote = nullptr;
     QComboBox *m_dxrAoMode = nullptr;
     SliderControl *m_dxrAoIntensity = nullptr;

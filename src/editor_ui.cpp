@@ -2008,6 +2008,10 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
                                "%.2f")) {
           uiChanged = true;
         }
+        if (ImGui::SliderFloat("White Balance", &rs.tonemapWhiteBalance,
+                               -1.0f, 1.0f, "%.2f")) {
+          uiChanged = true;
+        }
 
         if (g_currentRenderMode == RenderMode::DXR) {
           static const char *kAoModeLabels[] = {"Inward", "Outward", "Both"};
@@ -2426,6 +2430,8 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
                          "%.2f");
       ImGui::SliderFloat("Contrast", &rs.tonemapContrast, 0.0f, 2.0f,
                          "%.2f");
+      ImGui::SliderFloat("White Balance", &rs.tonemapWhiteBalance, -1.0f,
+                         1.0f, "%.2f");
     }
     ImGui::End();
   }

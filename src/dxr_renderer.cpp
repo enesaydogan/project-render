@@ -1038,6 +1038,8 @@ struct TonemapConstants {
   float aoRadiusMeters;
   uint32_t aoMode;
   float _pad0;
+  float whiteBalance;
+  float _pad1[3];
 };
 
 static void EnsureTonemapPipeline() {
@@ -7652,6 +7654,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     tc.vignette = rs.tonemapVignette;
     tc.saturation = rs.tonemapSaturation;
     tc.contrast = rs.tonemapContrast;
+    tc.whiteBalance = rs.tonemapWhiteBalance;
 
     // DXR path: Secondary ray traced AO is computed in the wavefront path via
     // ComputePrimaryRayTracedAo and encoded in the primary color output.
