@@ -731,6 +731,76 @@ inline bool WavefrontGiIsShadowVisible(float3 origin,
     return shadowQuery.CommittedStatus() == COMMITTED_NOTHING;
 }
 
+inline bool WavefrontAoOccluded(float3 origin, float3 direction,
+                                float maxDistance)
+{
+    RayDesc aoRay;
+    aoRay.Origin = origin;
+    aoRay.Direction = normalize(direction);
+    aoRay.TMin = 0.002;
+    aoRay.TMax = max(maxDistance, 0.002);
+
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
+             RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> aoQuery;
+    aoQuery.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF, aoRay);
+    while (aoQuery.Proceed()) {
+        if (aoQuery.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
+            aoQuery.CommitNonOpaqueTriangleHit();
+        }
+    }
+    return aoQuery.CommittedStatus() != COMMITTED_NOTHING;
+}
+
+inline float WavefrontTraceAmbientOcclusion(float3 hitPos, float3 normal,
+                                            float3 rayDir, RNG rng)
+{
+    const float aoIntensity = max(tonemapAoIntensity, 0.0);
+    const float aoRadius = max(tonemapAoRadiusMeters, 0.0);
+    if (aoIntensity <= 1.0e-4 || aoRadius <= 1.0e-4) {
+        return 1.0;
+    }
+
+    const uint mode = (uint)round(tonemapAoMode);
+    const bool traceInward = (mode == 0u || mode >= 2u);
+    const bool traceOutward = (mode == 1u || mode >= 2u);
+    const float3 safeNormal = SafeNormalize(normal, -rayDir);
+    const float3 viewDir = SafeNormalize(-rayDir, safeNormal);
+    const float3 outwardNormal =
+        (dot(safeNormal, viewDir) >= 0.0) ? safeNormal : -safeNormal;
+
+    float occluded = 0.0;
+    float sampleCount = 0.0;
+    static const uint kSamplesPerSide = 6u;
+    [unroll]
+    for (uint i = 0u; i < kSamplesPerSide; ++i) {
+        float2 u = next_float2(rng);
+        // A mild uniform/cosine blend sees neighboring meshes better than a
+        // pure cosine lobe without turning into a silhouette edge detector.
+        u.y = lerp(u.y, sqrt(u.y), 0.35);
+        float3 localDir = sample_hemisphere_cosine(u);
+        if (traceInward) {
+            float3 dir = SafeNormalize(align_to_normal(localDir, outwardNormal),
+                                       outwardNormal);
+            float3 origin = hitPos + outwardNormal * kWavefrontRayBias;
+            occluded += WavefrontAoOccluded(origin, dir, aoRadius) ? 1.0 : 0.0;
+            sampleCount += 1.0;
+        }
+        if (traceOutward) {
+            float3 inwardNormal = -outwardNormal;
+            float3 dir = SafeNormalize(align_to_normal(localDir, inwardNormal),
+                                       inwardNormal);
+            float3 origin = hitPos + inwardNormal * kWavefrontRayBias;
+            occluded += WavefrontAoOccluded(origin, dir, aoRadius) ? 1.0 : 0.0;
+            sampleCount += 1.0;
+        }
+    }
+
+    if (sampleCount <= 0.0) {
+        return 1.0;
+    }
+    return saturate(1.0 - (occluded / sampleCount) * aoIntensity);
+}
+
 inline float3 WavefrontGiEvaluateBrdfLighting(float3 diffuseAlbedo,
                                               float3 f0,
                                               float roughness,
@@ -1600,6 +1670,12 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                  EvaluateWavefrontGiReservoirContribution(
                      giReservoir, hitPos, normal, diffuseAlbedo);
         }
+
+        RNG aoRng;
+        aoRng.state = state.rngState ^
+                      (record.pixelIndex * 0x85EBCA6Bu) ^
+                      (((uint)globalFrameCount + 1u) * 0xC2B2AE35u);
+        color *= WavefrontTraceAmbientOcclusion(hitPos, normal, rayDir, aoRng);
     } else {
         uint previousValue = 0u;
         InterlockedAdd(g_wavefrontStats[13], 1u, previousValue);

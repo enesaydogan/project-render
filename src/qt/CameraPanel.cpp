@@ -182,7 +182,7 @@ void CameraPanel::createUi()
     m_tonemapSaturation = CreateSliderControl(0.0, 2.0, 0.01, 2);
     m_tonemapContrast = CreateSliderControl(0.0, 2.0, 0.01, 2);
     m_tonemapWhiteBalance = CreateSliderControl(-1.0, 1.0, 0.01, 2);
-    m_dxrAoNote = new QLabel(tr("DXR-only ambient occlusion uses true ray-traced visibility before tone mapping."), tonemapGroup);
+    m_dxrAoNote = new QLabel(tr("DXR-only ambient occlusion uses depth and normal buffers before tone mapping."), tonemapGroup);
     m_dxrAoNote->setWordWrap(true);
     m_dxrAoMode = new QComboBox(tonemapGroup);
     m_dxrAoMode->addItem(tr("Inward"), static_cast<int>(DxrRenderer::TonemapAmbientOcclusionMode::Inward));

@@ -920,8 +920,13 @@ TonemapAmbientOcclusionMode GetTonemapAmbientOcclusionMode() {
 void SetTonemapAmbientOcclusionIntensity(float intensity) {
   const float clamped = (std::clamp)(intensity, 0.0f, 4.0f);
   if (std::abs(s_tonemapAoIntensity - clamped) > 1.0e-6f) {
+    const bool wasActive = s_tonemapAoIntensity > 1.0e-4f;
+    const bool willBeActive = clamped > 1.0e-4f;
     s_tonemapAoIntensity = clamped;
     g_cameraData.tonemapAoIntensity = clamped;
+    if (wasActive != willBeActive) {
+      RequestPipelineRecreate("DXR tonemap AO toggle");
+    }
     ResetAccumulation();
     s_hasTonemappedFrame = false;
   }
@@ -7656,10 +7661,6 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     tc.contrast = rs.tonemapContrast;
     tc.whiteBalance = rs.tonemapWhiteBalance;
 
-    // DXR path: Secondary ray traced AO is computed in the wavefront path via
-    // ComputePrimaryRayTracedAo and encoded in the primary color output.
-    // Disable tonemap post-process AO entirely in this path, to avoid double
-    // AO application.
     tc.aoIntensity = 0.0f;
     tc.aoRadiusMeters = 0.0f;
     tc.aoMode = static_cast<uint32_t>(s_tonemapAoMode);
