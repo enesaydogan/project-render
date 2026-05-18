@@ -1,5 +1,6 @@
 #include "oidn_denoiser.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cassert>
@@ -15,6 +16,19 @@
 using Microsoft::WRL::ComPtr;
 
 #ifdef USE_OIDN
+struct OidnInputStats {
+  uint64_t pixels = 0;
+  uint64_t nonFinite = 0;
+  uint64_t negative = 0;
+  uint64_t clamped = 0;
+  uint64_t zeroAlbedo = 0;
+  uint64_t defaultUpNormal = 0;
+  uint64_t normalOutOfRange = 0;
+  float maxRgb = 0.0f;
+  float p995Luminance = 0.0f;
+  float maxAbsNormal = 0.0f;
+};
+
 static float HalfToFloat(uint16_t h) {
   const uint32_t sign = (uint32_t)(h & 0x8000) << 16;
   uint32_t exp = (h >> 10) & 0x1f;
@@ -73,47 +87,108 @@ static uint16_t FloatToHalf(float value) {
   return (uint16_t)half;
 }
 
-static void SanitizeOidnHalf4Rows(uint8_t* data, uint32_t width,
-                                  uint32_t height, size_t rowPitchBytes,
-                                  int kind) {
+static OidnInputStats SanitizeOidnHalf4Rows(uint8_t* data, uint32_t width,
+                                            uint32_t height,
+                                            size_t rowPitchBytes, int kind) {
+  OidnInputStats stats = {};
   if (!data || width == 0 || height == 0)
-    return;
+    return stats;
+
+  std::array<uint64_t, 256> luminanceHistogram = {};
+  uint64_t luminanceSamples = 0;
+  constexpr float kLogLumMin = -16.0f;
+  constexpr float kLogLumMax = 16.0f;
+  constexpr float kLogLumScale =
+      255.0f / (kLogLumMax - kLogLumMin);
 
   for (uint32_t y = 0; y < height; ++y) {
     uint16_t* row = reinterpret_cast<uint16_t*>(data + (size_t)y * rowPitchBytes);
     for (uint32_t x = 0; x < width; ++x) {
+      ++stats.pixels;
       uint16_t* px = row + (size_t)x * 4;
       if (kind == 0) {
+        float rgb[3] = {};
         for (int c = 0; c < 3; ++c) {
           float v = HalfToFloat(px[c]);
+          if (std::isfinite(v)) {
+            stats.maxRgb = (std::max)(stats.maxRgb, v);
+          }
           if (!std::isfinite(v) || v < 0.0f) {
+            stats.nonFinite += !std::isfinite(v) ? 1 : 0;
+            stats.negative += std::isfinite(v) && v < 0.0f ? 1 : 0;
             v = 0.0f;
+          }
+          if (v > 65504.0f) {
+            ++stats.clamped;
           }
           px[c] = FloatToHalf((std::min)(v, 65504.0f));
+          rgb[c] = (std::min)(v, 65504.0f);
+        }
+        const float luminance =
+            0.2126f * rgb[0] + 0.7152f * rgb[1] + 0.0722f * rgb[2];
+        if (std::isfinite(luminance) && luminance > 0.0f) {
+          const float logLum = std::log2(luminance);
+          const int bin = std::clamp(
+              (int)((logLum - kLogLumMin) * kLogLumScale), 0, 255);
+          ++luminanceHistogram[(size_t)bin];
+          ++luminanceSamples;
         }
       } else if (kind == 1) {
+        bool allNearZero = true;
         for (int c = 0; c < 3; ++c) {
           float v = HalfToFloat(px[c]);
+          if (std::isfinite(v)) {
+            stats.maxRgb = (std::max)(stats.maxRgb, v);
+          }
           if (!std::isfinite(v)) {
+            ++stats.nonFinite;
             v = 0.0f;
           }
+          if (v < 0.0f || v > 1.0f) {
+            ++stats.clamped;
+          }
+          allNearZero = allNearZero && std::abs(v) < 1.0e-4f;
           px[c] = FloatToHalf(std::clamp(v, 0.0f, 1.0f));
         }
+        stats.zeroAlbedo += allNearZero ? 1 : 0;
       } else {
         float n[3] = {HalfToFloat(px[0]), HalfToFloat(px[1]),
                       HalfToFloat(px[2])};
         if (!std::isfinite(n[0]) || !std::isfinite(n[1]) ||
             !std::isfinite(n[2])) {
+          ++stats.nonFinite;
           n[0] = 0.0f;
           n[1] = 1.0f;
           n[2] = 0.0f;
         }
+        bool defaultUp = std::abs(n[0]) < 1.0e-4f &&
+                         std::abs(n[1] - 1.0f) < 1.0e-4f &&
+                         std::abs(n[2]) < 1.0e-4f;
+        stats.defaultUpNormal += defaultUp ? 1 : 0;
         for (int c = 0; c < 3; ++c) {
+          stats.maxAbsNormal = (std::max)(stats.maxAbsNormal, std::abs(n[c]));
+          if (n[c] < -1.0f || n[c] > 1.0f) {
+            ++stats.normalOutOfRange;
+          }
           px[c] = FloatToHalf(std::clamp(n[c], -1.0f, 1.0f));
         }
       }
     }
   }
+  if (kind == 0 && luminanceSamples > 0) {
+    const uint64_t target = (luminanceSamples * 995ull + 999ull) / 1000ull;
+    uint64_t running = 0;
+    for (size_t i = 0; i < luminanceHistogram.size(); ++i) {
+      running += luminanceHistogram[i];
+      if (running >= target) {
+        const float t = (float)i / 255.0f;
+        const float logLum = kLogLumMin + t * (kLogLumMax - kLogLumMin);
+        stats.p995Luminance = std::pow(2.0f, logLum);
+        break;
+      }
+    }
+  }
+  return stats;
 }
 #endif
 
@@ -212,7 +287,11 @@ void OidnDenoiser::Shutdown() {
   m_sanitizeReadback.Reset();
   m_sanitizeUpload.Reset();
   m_sanitizeStagingBytes = 0;
+  m_depthReadback.Reset();
+  m_depthFootprint = {};
+  m_depthReadbackBytes = 0;
   m_linearBufferBytes = 0;
+  m_oidnInputScale = 1.0f;
   m_cmdAlloc.Reset();
   m_cmdList.Reset();
   m_fence.Reset();
@@ -266,7 +345,8 @@ bool OidnDenoiser::RunDenoiseHostHalf4(const void* input, uint32_t width,
                   inBytes + (size_t)y * inputRowPitchBytes,
                   (size_t)width * 8);
     }
-    SanitizeOidnHalf4Rows(sanitized, width, height, inputRowPitchBytes, 0);
+    (void)SanitizeOidnHalf4Rows(sanitized, width, height,
+                                inputRowPitchBytes, 0);
 
     const bool needsUpdate = (!m_oidnCpuFilter || width != m_cpuWidth ||
                               height != m_cpuHeight ||
@@ -489,9 +569,43 @@ bool OidnDenoiser::SanitizeLinearBufferForOidn(ID3D12CommandQueue* queue,
     return false;
   }
   std::memcpy(uploadPtr, readbackPtr, (size_t)m_linearBufferBytes);
-  SanitizeOidnHalf4Rows(reinterpret_cast<uint8_t*>(uploadPtr), m_width,
-                        m_height, m_linearFootprint.Footprint.RowPitch,
-                        static_cast<int>(kind));
+  const OidnInputStats stats = SanitizeOidnHalf4Rows(
+      reinterpret_cast<uint8_t*>(uploadPtr), m_width, m_height,
+      m_linearFootprint.Footprint.RowPitch, static_cast<int>(kind));
+  const char* kindName = (kind == OidnInputKind::Color)
+                             ? "color"
+                             : (kind == OidnInputKind::Albedo) ? "albedo"
+                                                               : "normal";
+  if (kind == OidnInputKind::Color) {
+    const float scaleReference = (std::max)(stats.p995Luminance, 1.0f);
+    m_oidnInputScale =
+        std::clamp(1.0f / scaleReference, 1.0f / 65504.0f, 1.0f);
+    fprintf(stderr,
+            "OidnDenoiser: %s stats pixels=%llu nonFinite=%llu "
+            "negative=%llu clamped=%llu maxRgb=%.6g p995Lum=%.6g "
+            "inputScale=%.9g\n",
+            kindName, (unsigned long long)stats.pixels,
+            (unsigned long long)stats.nonFinite,
+            (unsigned long long)stats.negative,
+            (unsigned long long)stats.clamped, stats.maxRgb,
+            stats.p995Luminance, m_oidnInputScale);
+  } else if (kind == OidnInputKind::Albedo) {
+    fprintf(stderr,
+            "OidnDenoiser: %s stats pixels=%llu nonFinite=%llu "
+            "clamped=%llu zeroAlbedoPixels=%llu maxRgb=%.6g\n",
+            kindName, (unsigned long long)stats.pixels,
+            (unsigned long long)stats.nonFinite,
+            (unsigned long long)stats.clamped,
+            (unsigned long long)stats.zeroAlbedo, stats.maxRgb);
+  } else {
+    fprintf(stderr,
+            "OidnDenoiser: %s stats pixels=%llu nonFinite=%llu "
+            "outOfRange=%llu defaultUpPixels=%llu maxAbs=%.6g\n",
+            kindName, (unsigned long long)stats.pixels,
+            (unsigned long long)stats.nonFinite,
+            (unsigned long long)stats.normalOutOfRange,
+            (unsigned long long)stats.defaultUpNormal, stats.maxAbsNormal);
+  }
   const D3D12_RANGE uploadWritten = {0, (SIZE_T)m_linearBufferBytes};
   m_sanitizeUpload->Unmap(0, &uploadWritten);
   m_sanitizeReadback->Unmap(0, nullptr);
@@ -534,6 +648,227 @@ bool OidnDenoiser::SanitizeLinearInputsForOidn(ID3D12CommandQueue* queue,
                                    OidnInputKind::Normal)) {
     return false;
   }
+  return true;
+}
+
+bool OidnDenoiser::RestoreSkyPixelsAfterOidn(ID3D12CommandQueue* queue,
+                                             ID3D12Resource* linearDepth) {
+  if (!queue || !linearDepth || !m_linearColor || !m_linearOutput ||
+      !m_cmdAlloc || !m_cmdList || !m_fence || !m_fenceEvent ||
+      m_linearBufferBytes == 0) {
+    return false;
+  }
+  const D3D12_RESOURCE_DESC depthDesc = linearDepth->GetDesc();
+  if (depthDesc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
+      depthDesc.Format != DXGI_FORMAT_R32_FLOAT ||
+      (uint32_t)depthDesc.Width != m_width ||
+      depthDesc.Height != m_height) {
+    return false;
+  }
+  if (!EnsureSanitizeStaging(m_linearBufferBytes)) {
+    return false;
+  }
+
+  auto ExecuteAndWait = [&]() -> bool {
+    ID3D12CommandList* lists[] = {m_cmdList.Get()};
+    queue->ExecuteCommandLists(1, lists);
+    HRESULT hr = queue->Signal(m_fence.Get(), m_fenceValue);
+    if (FAILED(hr))
+      return false;
+    hr = m_fence->SetEventOnCompletion(m_fenceValue, m_fenceEvent);
+    if (FAILED(hr))
+      return false;
+    WaitForSingleObject(m_fenceEvent, INFINITE);
+    ++m_fenceValue;
+    return true;
+  };
+
+  UINT64 depthBytes = 0;
+  D3D12_PLACED_SUBRESOURCE_FOOTPRINT depthFootprint = {};
+  m_device->GetCopyableFootprints(&depthDesc, 0, 1, 0, &depthFootprint,
+                                  nullptr, nullptr, &depthBytes);
+  if (!m_depthReadback || m_depthReadbackBytes < depthBytes) {
+    m_depthReadback.Reset();
+    D3D12_RESOURCE_DESC rbDesc = {};
+    rbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    rbDesc.Width = depthBytes;
+    rbDesc.Height = 1;
+    rbDesc.DepthOrArraySize = 1;
+    rbDesc.MipLevels = 1;
+    rbDesc.SampleDesc.Count = 1;
+    rbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    D3D12_HEAP_PROPERTIES rbHeap = {};
+    rbHeap.Type = D3D12_HEAP_TYPE_READBACK;
+    HRESULT hr = m_device->CreateCommittedResource(
+        &rbHeap, D3D12_HEAP_FLAG_NONE, &rbDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+        IID_PPV_ARGS(m_depthReadback.GetAddressOf()));
+    if (FAILED(hr)) {
+      fprintf(stderr,
+              "OidnDenoiser: depth readback allocation failed 0x%08x\n",
+              (unsigned)hr);
+      return false;
+    }
+    m_depthReadback->SetName(L"OIDN Sky Restore Depth Readback");
+    m_depthReadbackBytes = depthBytes;
+  }
+  m_depthFootprint = depthFootprint;
+
+  HRESULT hr = m_cmdAlloc->Reset();
+  if (FAILED(hr))
+    return false;
+  hr = m_cmdList->Reset(m_cmdAlloc.Get(), nullptr);
+  if (FAILED(hr))
+    return false;
+
+  D3D12_RESOURCE_BARRIER depthBarrier = {};
+  depthBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+  depthBarrier.Transition.pResource = linearDepth;
+  depthBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+  depthBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+  depthBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+  m_cmdList->ResourceBarrier(1, &depthBarrier);
+  D3D12_TEXTURE_COPY_LOCATION depthSrc = {};
+  depthSrc.pResource = linearDepth;
+  depthSrc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+  depthSrc.SubresourceIndex = 0;
+  D3D12_TEXTURE_COPY_LOCATION depthDst = {};
+  depthDst.pResource = m_depthReadback.Get();
+  depthDst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+  depthDst.PlacedFootprint = depthFootprint;
+  m_cmdList->CopyTextureRegion(&depthDst, 0, 0, 0, &depthSrc, nullptr);
+  depthBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+  depthBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COMMON;
+  m_cmdList->ResourceBarrier(1, &depthBarrier);
+  hr = m_cmdList->Close();
+  if (FAILED(hr) || !ExecuteAndWait())
+    return false;
+
+  auto ReadLinearBuffer = [&](ID3D12Resource* source,
+                              std::vector<uint8_t>& out) -> bool {
+    HRESULT localHr = m_cmdAlloc->Reset();
+    if (FAILED(localHr))
+      return false;
+    localHr = m_cmdList->Reset(m_cmdAlloc.Get(), nullptr);
+    if (FAILED(localHr))
+      return false;
+    D3D12_RESOURCE_BARRIER b = {};
+    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    b.Transition.pResource = source;
+    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    b.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+    b.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    m_cmdList->ResourceBarrier(1, &b);
+    m_cmdList->CopyBufferRegion(m_sanitizeReadback.Get(), 0, source, 0,
+                                m_linearBufferBytes);
+    b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    b.Transition.StateAfter = D3D12_RESOURCE_STATE_COMMON;
+    m_cmdList->ResourceBarrier(1, &b);
+    localHr = m_cmdList->Close();
+    if (FAILED(localHr) || !ExecuteAndWait())
+      return false;
+
+    void* mapped = nullptr;
+    const D3D12_RANGE range = {0, (SIZE_T)m_linearBufferBytes};
+    localHr = m_sanitizeReadback->Map(0, &range, &mapped);
+    if (FAILED(localHr))
+      return false;
+    out.resize((size_t)m_linearBufferBytes);
+    std::memcpy(out.data(), mapped, (size_t)m_linearBufferBytes);
+    m_sanitizeReadback->Unmap(0, nullptr);
+    return true;
+  };
+
+  std::vector<uint8_t> denoisedBytes;
+  std::vector<uint8_t> rawColorBytes;
+  if (!ReadLinearBuffer(m_linearOutput.Get(), denoisedBytes) ||
+      !ReadLinearBuffer(m_linearColor.Get(), rawColorBytes)) {
+    return false;
+  }
+
+  void* depthMapped = nullptr;
+  const D3D12_RANGE depthRange = {0, (SIZE_T)depthBytes};
+  hr = m_depthReadback->Map(0, &depthRange, &depthMapped);
+  if (FAILED(hr))
+    return false;
+
+  float maxDepth = 0.0f;
+  for (uint32_t y = 0; y < m_height; ++y) {
+    const float* depthRow = reinterpret_cast<const float*>(
+        reinterpret_cast<const uint8_t*>(depthMapped) +
+        (size_t)y * depthFootprint.Footprint.RowPitch);
+    for (uint32_t x = 0; x < m_width; ++x) {
+      const float d = depthRow[x];
+      if (std::isfinite(d)) {
+        maxDepth = (std::max)(maxDepth, d);
+      }
+    }
+  }
+
+  uint64_t restoredPixels = 0;
+  if (maxDepth > 0.0f) {
+    const float skyDepthThreshold = maxDepth * 0.999f;
+    for (uint32_t y = 0; y < m_height; ++y) {
+      const float* depthRow = reinterpret_cast<const float*>(
+          reinterpret_cast<const uint8_t*>(depthMapped) +
+          (size_t)y * depthFootprint.Footprint.RowPitch);
+      uint8_t* denoisedRow =
+          denoisedBytes.data() + (size_t)y * m_linearFootprint.Footprint.RowPitch;
+      const uint8_t* rawRow =
+          rawColorBytes.data() + (size_t)y * m_linearFootprint.Footprint.RowPitch;
+      for (uint32_t x = 0; x < m_width; ++x) {
+        const float d = depthRow[x];
+        if (std::isfinite(d) && d >= skyDepthThreshold) {
+          std::memcpy(denoisedRow + (size_t)x * 8, rawRow + (size_t)x * 8, 8);
+          ++restoredPixels;
+        }
+      }
+    }
+  }
+  m_depthReadback->Unmap(0, nullptr);
+
+  if (restoredPixels == 0) {
+    fprintf(stderr,
+            "OidnDenoiser: sky restore found no background pixels "
+            "(maxDepth=%.6g).\n",
+            maxDepth);
+    return true;
+  }
+
+  void* uploadMapped = nullptr;
+  hr = m_sanitizeUpload->Map(0, nullptr, &uploadMapped);
+  if (FAILED(hr))
+    return false;
+  std::memcpy(uploadMapped, denoisedBytes.data(), (size_t)m_linearBufferBytes);
+  const D3D12_RANGE written = {0, (SIZE_T)m_linearBufferBytes};
+  m_sanitizeUpload->Unmap(0, &written);
+
+  hr = m_cmdAlloc->Reset();
+  if (FAILED(hr))
+    return false;
+  hr = m_cmdList->Reset(m_cmdAlloc.Get(), nullptr);
+  if (FAILED(hr))
+    return false;
+  D3D12_RESOURCE_BARRIER outBarrier = {};
+  outBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+  outBarrier.Transition.pResource = m_linearOutput.Get();
+  outBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+  outBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+  outBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+  m_cmdList->ResourceBarrier(1, &outBarrier);
+  m_cmdList->CopyBufferRegion(m_linearOutput.Get(), 0, m_sanitizeUpload.Get(),
+                              0, m_linearBufferBytes);
+  outBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+  outBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COMMON;
+  m_cmdList->ResourceBarrier(1, &outBarrier);
+  hr = m_cmdList->Close();
+  if (FAILED(hr) || !ExecuteAndWait())
+    return false;
+
+  fprintf(stderr,
+          "OidnDenoiser: restored %llu sky/background pixels after OIDN "
+          "(maxDepth=%.6g).\n",
+          (unsigned long long)restoredPixels, maxDepth);
   return true;
 }
 #endif
@@ -687,8 +1022,9 @@ bool OidnDenoiser::Prepare(ID3D12Resource *input, ID3D12Resource *albedo,
 
 bool OidnDenoiser::RunDenoise(ID3D12GraphicsCommandList *cmd, ID3D12CommandQueue *queue,
                                ID3D12Resource *input, ID3D12Resource *albedo,
-                               ID3D12Resource *normal, ID3D12Resource *output,
-                               bool async) {
+                               ID3D12Resource *normal,
+                               ID3D12Resource *linearDepth,
+                               ID3D12Resource *output, bool async) {
   if (!queue || !input || !output) return false;
   (void)async;
 
@@ -778,8 +1114,17 @@ bool OidnDenoiser::RunDenoise(ID3D12GraphicsCommandList *cmd, ID3D12CommandQueue
 
     // --- STEP 2: Execute OIDN ---
     oidn::FilterRef& filter = *static_cast<oidn::FilterRef*>(m_oidnFilter);
+    filter.set("inputScale", m_oidnInputScale);
+    filter.commit();
     filter.execute();
     dev.sync(); // Wait for OIDN to finish on GPU
+
+    if (linearDepth) {
+      if (!RestoreSkyPixelsAfterOidn(queue, linearDepth)) {
+        fprintf(stderr,
+                "OidnDenoiser: sky restore failed; keeping denoised output.\n");
+      }
+    }
 
     // --- STEP 3: Copy Linear Buffer -> Texture ---
     m_cmdAlloc->Reset();

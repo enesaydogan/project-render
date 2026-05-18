@@ -7314,6 +7314,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                          D3D12_RESOURCE_STATE_COMMON);
     }
+    if (!useOptix && s_linearDepthUAV) {
+      TransitionResource(dxrList.Get(), s_linearDepthUAV.Get(),
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                         D3D12_RESOURCE_STATE_COMMON);
+    }
 
     // s_oidnOutputUAV is the shared final-denoiser HDR target; transition to
     // COMMON for external interop writes.
@@ -7356,7 +7361,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         // tiled <-> linear layout conversion for D3D12 interop.
         ran = s_oidnDenoiser.RunDenoise(
             dxrList.Get(), s_commandQueue, denoiserInput, s_albedoUAV.Get(),
-            s_normalRoughnessUAV.Get(), s_oidnOutputUAV.Get(), false);
+            s_normalRoughnessUAV.Get(), s_linearDepthUAV.Get(),
+            s_oidnOutputUAV.Get(), false);
       }
 
       // Restore Resource States from COMMON to what the engine expects.
@@ -7370,6 +7376,11 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       }
       if (s_normalRoughnessUAV) {
         TransitionResource(dxrList.Get(), s_normalRoughnessUAV.Get(),
+                           D3D12_RESOURCE_STATE_COMMON,
+                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+      }
+      if (!useOptix && s_linearDepthUAV) {
+        TransitionResource(dxrList.Get(), s_linearDepthUAV.Get(),
                            D3D12_RESOURCE_STATE_COMMON,
                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
       }

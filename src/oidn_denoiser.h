@@ -26,8 +26,8 @@ public:
   // Requires command queue for interop copies and synchronization.
   bool RunDenoise(ID3D12GraphicsCommandList *cmd, ID3D12CommandQueue *queue, 
                   ID3D12Resource *input, ID3D12Resource *albedo, 
-                  ID3D12Resource *normal, ID3D12Resource *output, 
-                  bool async);
+                  ID3D12Resource *normal, ID3D12Resource *linearDepth,
+                  ID3D12Resource *output, bool async);
 
   // CPU fallback: denoise host-mapped Half4 buffers.
   // The input/output pointers must point to the first pixel (row 0, col 0).
@@ -75,6 +75,9 @@ private:
   Microsoft::WRL::ComPtr<ID3D12Resource> m_sanitizeReadback;
   Microsoft::WRL::ComPtr<ID3D12Resource> m_sanitizeUpload;
   uint64_t m_sanitizeStagingBytes = 0;
+  Microsoft::WRL::ComPtr<ID3D12Resource> m_depthReadback;
+  D3D12_PLACED_SUBRESOURCE_FOOTPRINT m_depthFootprint = {};
+  uint64_t m_depthReadbackBytes = 0;
   
   // Synchronization for internal copies
   Microsoft::WRL::ComPtr<ID3D12Fence> m_fence;
@@ -86,6 +89,7 @@ private:
 
   D3D12_PLACED_SUBRESOURCE_FOOTPRINT m_linearFootprint = {};
   uint64_t m_linearBufferBytes = 0;
+  float m_oidnInputScale = 1.0f;
 
   // Track state to detect when we need to recreate OIDN objects
   uint32_t m_width = 0;
@@ -118,5 +122,7 @@ private:
                                    OidnInputKind kind);
   bool SanitizeLinearInputsForOidn(ID3D12CommandQueue* queue,
                                    bool hasAlbedo, bool hasNormal);
+  bool RestoreSkyPixelsAfterOidn(ID3D12CommandQueue* queue,
+                                 ID3D12Resource* linearDepth);
 #endif
 };
