@@ -55,11 +55,13 @@ private:
     void updateSceneIoUi();
     void updateRenderExportProgressUi();
     void closeRenderExportProgressUi();
+    void setWindowCloseEnabled(bool enabled);
 
     DX12View *m_view;
     QAction *m_saveSceneAction = nullptr;
     QAction *m_saveSceneAsAction = nullptr;
     QAction *m_loadSceneAction = nullptr;
+    QAction *m_exitAction = nullptr;
     QAction *m_previewRenderAction = nullptr;
     QAction *m_renderPopupAction = nullptr;
     QAction *m_importModelAction = nullptr;

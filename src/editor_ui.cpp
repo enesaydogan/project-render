@@ -1713,8 +1713,14 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
         ImGui::EndDisabled();
       }
       ImGui::Separator();
+      if (IsSceneIoJobActive()) {
+        ImGui::BeginDisabled();
+      }
       if (ImGui::MenuItem("Exit", "Alt+F4")) {
         g_appClosing = true;
+      }
+      if (IsSceneIoJobActive()) {
+        ImGui::EndDisabled();
       }
       ImGui::EndMenu();
     }

@@ -2182,6 +2182,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
     return result;
   }
   case WM_CLOSE:
+    if (IsSceneIoJobActive()) {
+      fprintf(stderr,
+              "Close request ignored while scene %s is in progress.\n",
+              IsSceneIoSaveJob() ? "save" : "load");
+      return 0;
+    }
     g_appClosing = true;
     PostQuitMessage(0);
     return 0;

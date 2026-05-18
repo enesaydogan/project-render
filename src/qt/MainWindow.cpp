@@ -761,7 +761,7 @@ void MainWindow::createMenus()
         showRenderPopup();
     });
     
-    fileMenu->addAction(tr("E&xit"), this, &QWidget::close);
+    m_exitAction = fileMenu->addAction(tr("E&xit"), this, &QWidget::close);
 
     QMenu *editMenu = menuBar()->addMenu(tr("&Edit"));
     m_undoTransformAction =
@@ -1810,6 +1810,7 @@ void MainWindow::updateSceneIoUi()
 
     const bool active = IsSceneIoJobActive();
     const bool exportActive = IsRenderExportActive();
+    setWindowCloseEnabled(!active);
     if (m_previewRenderAction) {
         m_previewRenderAction->setEnabled(g_rayTracingSupported &&
                                           !exportActive &&
@@ -2056,6 +2057,9 @@ void MainWindow::updateSceneIoUi()
     if (m_loadSceneAction) {
         m_loadSceneAction->setEnabled(!active);
     }
+    if (m_exitAction) {
+        m_exitAction->setEnabled(!active);
+    }
     if (m_importModelAction) {
         m_importModelAction->setEnabled(!active);
     }
@@ -2098,8 +2102,35 @@ void MainWindow::updateSceneIoUi()
     m_sceneIoLabel->show();
 }
 
+void MainWindow::setWindowCloseEnabled(bool enabled)
+{
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    if (!hwnd) {
+        return;
+    }
+
+    HMENU systemMenu = GetSystemMenu(hwnd, FALSE);
+    if (!systemMenu) {
+        return;
+    }
+
+    EnableMenuItem(systemMenu, SC_CLOSE,
+                   MF_BYCOMMAND | (enabled ? MF_ENABLED : MF_GRAYED));
+    DrawMenuBar(hwnd);
+}
+
 void MainWindow::closeEvent(QCloseEvent *event)
 {
+    if (IsSceneIoJobActive()) {
+        event->ignore();
+        g_appClosing = false;
+        statusBar()->showMessage(
+            IsSceneIoSaveJob()
+                ? tr("Please wait: scene save is still in progress.")
+                : tr("Please wait: scene load is still in progress."),
+            5000);
+        return;
+    }
     g_appClosing = true;
     QMainWindow::closeEvent(event);
 }
