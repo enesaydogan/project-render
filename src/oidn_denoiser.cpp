@@ -1,6 +1,9 @@
 #include "oidn_denoiser.h"
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cassert>
+#include <cstring>
 #include <utility>
 #include <vector>
 #include <stdexcept>
@@ -10,6 +13,109 @@
 #endif
 
 using Microsoft::WRL::ComPtr;
+
+#ifdef USE_OIDN
+static float HalfToFloat(uint16_t h) {
+  const uint32_t sign = (uint32_t)(h & 0x8000) << 16;
+  uint32_t exp = (h >> 10) & 0x1f;
+  uint32_t mant = h & 0x03ff;
+  uint32_t bits = 0;
+
+  if (exp == 0) {
+    if (mant == 0) {
+      bits = sign;
+    } else {
+      int e = -14;
+      while ((mant & 0x0400) == 0) {
+        mant <<= 1;
+        --e;
+      }
+      mant &= 0x03ff;
+      bits = sign | (uint32_t)(e + 127) << 23 | (mant << 13);
+    }
+  } else if (exp == 0x1f) {
+    bits = sign | 0x7f800000u | (mant << 13);
+  } else {
+    bits = sign | ((exp + 112u) << 23) | (mant << 13);
+  }
+
+  float value = 0.0f;
+  std::memcpy(&value, &bits, sizeof(value));
+  return value;
+}
+
+static uint16_t FloatToHalf(float value) {
+  uint32_t bits = 0;
+  std::memcpy(&bits, &value, sizeof(bits));
+
+  const uint32_t sign = (bits >> 16) & 0x8000u;
+  int exp = (int)((bits >> 23) & 0xffu) - 127 + 15;
+  uint32_t mant = bits & 0x007fffffu;
+
+  if (exp <= 0) {
+    if (exp < -10) {
+      return (uint16_t)sign;
+    }
+    mant = (mant | 0x00800000u) >> (uint32_t)(1 - exp);
+    return (uint16_t)(sign | ((mant + 0x00001000u) >> 13));
+  }
+
+  if (exp >= 31) {
+    return (uint16_t)(sign | 0x7bffu);
+  }
+
+  uint32_t half = sign | ((uint32_t)exp << 10) |
+                  ((mant + 0x00001000u) >> 13);
+  if ((half & 0x03ffu) == 0x0400u) {
+    half += 0x0400u;
+    half &= ~0x03ffu;
+  }
+  return (uint16_t)half;
+}
+
+static void SanitizeOidnHalf4Rows(uint8_t* data, uint32_t width,
+                                  uint32_t height, size_t rowPitchBytes,
+                                  int kind) {
+  if (!data || width == 0 || height == 0)
+    return;
+
+  for (uint32_t y = 0; y < height; ++y) {
+    uint16_t* row = reinterpret_cast<uint16_t*>(data + (size_t)y * rowPitchBytes);
+    for (uint32_t x = 0; x < width; ++x) {
+      uint16_t* px = row + (size_t)x * 4;
+      if (kind == 0) {
+        for (int c = 0; c < 3; ++c) {
+          float v = HalfToFloat(px[c]);
+          if (!std::isfinite(v) || v < 0.0f) {
+            v = 0.0f;
+          }
+          px[c] = FloatToHalf((std::min)(v, 65504.0f));
+        }
+      } else if (kind == 1) {
+        for (int c = 0; c < 3; ++c) {
+          float v = HalfToFloat(px[c]);
+          if (!std::isfinite(v)) {
+            v = 0.0f;
+          }
+          px[c] = FloatToHalf(std::clamp(v, 0.0f, 1.0f));
+        }
+      } else {
+        float n[3] = {HalfToFloat(px[0]), HalfToFloat(px[1]),
+                      HalfToFloat(px[2])};
+        if (!std::isfinite(n[0]) || !std::isfinite(n[1]) ||
+            !std::isfinite(n[2])) {
+          n[0] = 0.0f;
+          n[1] = 1.0f;
+          n[2] = 0.0f;
+        }
+        for (int c = 0; c < 3; ++c) {
+          px[c] = FloatToHalf(std::clamp(n[c], -1.0f, 1.0f));
+        }
+      }
+    }
+  }
+}
+#endif
 
 OidnDenoiser::OidnDenoiser() {}
 OidnDenoiser::~OidnDenoiser() { Shutdown(); }
@@ -103,6 +209,10 @@ void OidnDenoiser::Shutdown() {
   m_linearAlbedo.Reset();
   m_linearNormal.Reset();
   m_linearOutput.Reset();
+  m_sanitizeReadback.Reset();
+  m_sanitizeUpload.Reset();
+  m_sanitizeStagingBytes = 0;
+  m_linearBufferBytes = 0;
   m_cmdAlloc.Reset();
   m_cmdList.Reset();
   m_fence.Reset();
@@ -117,6 +227,9 @@ void OidnDenoiser::Shutdown() {
   m_height = 0;
   m_cpuWidth = 0;
   m_cpuHeight = 0;
+  m_cpuInputRowPitchBytes = 0;
+  m_cpuSanitizedInput.clear();
+  m_cpuSanitizedInputPtr = nullptr;
   m_lastInput = nullptr;
   m_lastAlbedo = nullptr;
   m_lastNormal = nullptr;
@@ -144,8 +257,21 @@ bool OidnDenoiser::RunDenoiseHostHalf4(const void* input, uint32_t width,
 
     oidn::DeviceRef& dev = *static_cast<oidn::DeviceRef*>(m_oidnCpuDevice);
 
+    const size_t sanitizedBytes = inputRowPitchBytes * (size_t)height;
+    m_cpuSanitizedInput.resize(sanitizedBytes);
+    uint8_t* sanitized = m_cpuSanitizedInput.data();
+    const uint8_t* inBytes = reinterpret_cast<const uint8_t*>(input);
+    for (uint32_t y = 0; y < height; ++y) {
+      std::memcpy(sanitized + (size_t)y * inputRowPitchBytes,
+                  inBytes + (size_t)y * inputRowPitchBytes,
+                  (size_t)width * 8);
+    }
+    SanitizeOidnHalf4Rows(sanitized, width, height, inputRowPitchBytes, 0);
+
     const bool needsUpdate = (!m_oidnCpuFilter || width != m_cpuWidth ||
                               height != m_cpuHeight ||
+                              inputRowPitchBytes != m_cpuInputRowPitchBytes ||
+                              sanitized != m_cpuSanitizedInputPtr ||
                               m_quality != m_cpuLastQuality);
     if (needsUpdate) {
       if (m_oidnCpuFilter) {
@@ -157,7 +283,7 @@ bool OidnDenoiser::RunDenoiseHostHalf4(const void* input, uint32_t width,
       // Denoise RGB only (Half3) but keep a pixel stride of 8 bytes to match
       // our Half4 layout. This avoids any ambiguity around alpha handling.
       // Provide explicit row strides (mapped readback buffers use padded rows).
-      filter.setImage("color", const_cast<void*>(input), oidn::Format::Half3, width, height, 0,
+      filter.setImage("color", sanitized, oidn::Format::Half3, width, height, 0,
               8, inputRowPitchBytes);
       filter.setImage("output", output, oidn::Format::Half3, width, height, 0,
               8, outputRowPitchBytes);
@@ -177,6 +303,8 @@ bool OidnDenoiser::RunDenoiseHostHalf4(const void* input, uint32_t width,
       m_oidnCpuFilter = new oidn::FilterRef(filter);
       m_cpuWidth = width;
       m_cpuHeight = height;
+      m_cpuInputRowPitchBytes = inputRowPitchBytes;
+      m_cpuSanitizedInputPtr = sanitized;
       m_cpuLastQuality = m_quality;
     }
 
@@ -241,6 +369,174 @@ static inline bool IsSupportedOidnInteropTexture(const D3D12_RESOURCE_DESC& desc
          desc.MipLevels == 1 &&
          desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT;
 }
+
+#ifdef USE_OIDN
+bool OidnDenoiser::EnsureSanitizeStaging(uint64_t byteSize) {
+  if (!m_device || byteSize == 0)
+    return false;
+  if (m_sanitizeReadback && m_sanitizeUpload &&
+      m_sanitizeStagingBytes >= byteSize) {
+    return true;
+  }
+
+  m_sanitizeReadback.Reset();
+  m_sanitizeUpload.Reset();
+  m_sanitizeStagingBytes = 0;
+
+  D3D12_RESOURCE_DESC desc = {};
+  desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+  desc.Width = byteSize;
+  desc.Height = 1;
+  desc.DepthOrArraySize = 1;
+  desc.MipLevels = 1;
+  desc.SampleDesc.Count = 1;
+  desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+  D3D12_HEAP_PROPERTIES readbackHeap = {};
+  readbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
+  HRESULT hr = m_device->CreateCommittedResource(
+      &readbackHeap, D3D12_HEAP_FLAG_NONE, &desc,
+      D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+      IID_PPV_ARGS(m_sanitizeReadback.GetAddressOf()));
+  if (FAILED(hr)) {
+    fprintf(stderr, "OidnDenoiser: sanitize readback allocation failed 0x%08x\n",
+            (unsigned)hr);
+    return false;
+  }
+  m_sanitizeReadback->SetName(L"OIDN Sanitize Readback");
+
+  D3D12_HEAP_PROPERTIES uploadHeap = {};
+  uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+  hr = m_device->CreateCommittedResource(
+      &uploadHeap, D3D12_HEAP_FLAG_NONE, &desc,
+      D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+      IID_PPV_ARGS(m_sanitizeUpload.GetAddressOf()));
+  if (FAILED(hr)) {
+    fprintf(stderr, "OidnDenoiser: sanitize upload allocation failed 0x%08x\n",
+            (unsigned)hr);
+    m_sanitizeReadback.Reset();
+    return false;
+  }
+  m_sanitizeUpload->SetName(L"OIDN Sanitize Upload");
+  m_sanitizeStagingBytes = byteSize;
+  return true;
+}
+
+bool OidnDenoiser::SanitizeLinearBufferForOidn(ID3D12CommandQueue* queue,
+                                               ID3D12Resource* linearBuffer,
+                                               OidnInputKind kind) {
+  if (!queue || !linearBuffer || !m_cmdAlloc || !m_cmdList || !m_fence ||
+      !m_fenceEvent || m_linearBufferBytes == 0) {
+    return false;
+  }
+  if (!EnsureSanitizeStaging(m_linearBufferBytes))
+    return false;
+
+  auto ExecuteAndWait = [&]() -> bool {
+    ID3D12CommandList* lists[] = {m_cmdList.Get()};
+    queue->ExecuteCommandLists(1, lists);
+    HRESULT hr = queue->Signal(m_fence.Get(), m_fenceValue);
+    if (FAILED(hr)) {
+      fprintf(stderr, "OidnDenoiser: sanitize queue signal failed 0x%08x\n",
+              (unsigned)hr);
+      return false;
+    }
+    hr = m_fence->SetEventOnCompletion(m_fenceValue, m_fenceEvent);
+    if (FAILED(hr)) {
+      fprintf(stderr, "OidnDenoiser: sanitize fence wait setup failed 0x%08x\n",
+              (unsigned)hr);
+      return false;
+    }
+    WaitForSingleObject(m_fenceEvent, INFINITE);
+    ++m_fenceValue;
+    return true;
+  };
+
+  HRESULT hr = m_cmdAlloc->Reset();
+  if (FAILED(hr))
+    return false;
+  hr = m_cmdList->Reset(m_cmdAlloc.Get(), nullptr);
+  if (FAILED(hr))
+    return false;
+
+  D3D12_RESOURCE_BARRIER barrier = {};
+  barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+  barrier.Transition.pResource = linearBuffer;
+  barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+  barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+  barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+  m_cmdList->ResourceBarrier(1, &barrier);
+  m_cmdList->CopyBufferRegion(m_sanitizeReadback.Get(), 0, linearBuffer, 0,
+                              m_linearBufferBytes);
+  barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+  barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COMMON;
+  m_cmdList->ResourceBarrier(1, &barrier);
+  hr = m_cmdList->Close();
+  if (FAILED(hr))
+    return false;
+  if (!ExecuteAndWait())
+    return false;
+
+  void* readbackPtr = nullptr;
+  void* uploadPtr = nullptr;
+  const D3D12_RANGE readRange = {0, (SIZE_T)m_linearBufferBytes};
+  hr = m_sanitizeReadback->Map(0, &readRange, &readbackPtr);
+  if (FAILED(hr))
+    return false;
+  hr = m_sanitizeUpload->Map(0, nullptr, &uploadPtr);
+  if (FAILED(hr)) {
+    m_sanitizeReadback->Unmap(0, nullptr);
+    return false;
+  }
+  std::memcpy(uploadPtr, readbackPtr, (size_t)m_linearBufferBytes);
+  SanitizeOidnHalf4Rows(reinterpret_cast<uint8_t*>(uploadPtr), m_width,
+                        m_height, m_linearFootprint.Footprint.RowPitch,
+                        static_cast<int>(kind));
+  const D3D12_RANGE uploadWritten = {0, (SIZE_T)m_linearBufferBytes};
+  m_sanitizeUpload->Unmap(0, &uploadWritten);
+  m_sanitizeReadback->Unmap(0, nullptr);
+
+  hr = m_cmdAlloc->Reset();
+  if (FAILED(hr))
+    return false;
+  hr = m_cmdList->Reset(m_cmdAlloc.Get(), nullptr);
+  if (FAILED(hr))
+    return false;
+
+  barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+  barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+  m_cmdList->ResourceBarrier(1, &barrier);
+  m_cmdList->CopyBufferRegion(linearBuffer, 0, m_sanitizeUpload.Get(), 0,
+                              m_linearBufferBytes);
+  barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+  barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COMMON;
+  m_cmdList->ResourceBarrier(1, &barrier);
+  hr = m_cmdList->Close();
+  if (FAILED(hr))
+    return false;
+  return ExecuteAndWait();
+}
+
+bool OidnDenoiser::SanitizeLinearInputsForOidn(ID3D12CommandQueue* queue,
+                                               bool hasAlbedo,
+                                               bool hasNormal) {
+  if (!SanitizeLinearBufferForOidn(queue, m_linearColor.Get(),
+                                   OidnInputKind::Color)) {
+    return false;
+  }
+  if (hasAlbedo && m_linearAlbedo &&
+      !SanitizeLinearBufferForOidn(queue, m_linearAlbedo.Get(),
+                                   OidnInputKind::Albedo)) {
+    return false;
+  }
+  if (hasNormal && m_linearNormal &&
+      !SanitizeLinearBufferForOidn(queue, m_linearNormal.Get(),
+                                   OidnInputKind::Normal)) {
+    return false;
+  }
+  return true;
+}
+#endif
 
 bool OidnDenoiser::Prepare(ID3D12Resource *input, ID3D12Resource *albedo,
                            ID3D12Resource *normal,
@@ -308,6 +604,7 @@ bool OidnDenoiser::Prepare(ID3D12Resource *input, ID3D12Resource *albedo,
       // Calculate footprint
       UINT64 totalBytes = 0;
       m_device->GetCopyableFootprints(&inputDesc, 0, 1, 0, &m_linearFootprint, nullptr, nullptr, &totalBytes);
+      m_linearBufferBytes = totalBytes;
 
       D3D12_RESOURCE_DESC bufDesc = {};
       bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
@@ -472,6 +769,12 @@ bool OidnDenoiser::RunDenoise(ID3D12GraphicsCommandList *cmd, ID3D12CommandQueue
     m_fence->SetEventOnCompletion(m_fenceValue, m_fenceEvent);
     WaitForSingleObject(m_fenceEvent, INFINITE);
     m_fenceValue++;
+
+    if (!SanitizeLinearInputsForOidn(queue, albedo && m_linearAlbedo,
+                                     normal && m_linearNormal)) {
+      fprintf(stderr, "OidnDenoiser: input sanitation failed; skipping OIDN.\n");
+      return false;
+    }
 
     // --- STEP 2: Execute OIDN ---
     oidn::FilterRef& filter = *static_cast<oidn::FilterRef*>(m_oidnFilter);

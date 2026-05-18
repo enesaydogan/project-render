@@ -2,6 +2,7 @@
 #include <d3d12.h>
 #include <wrl.h>
 #include <cstdint>
+#include <vector>
 
 class OidnDenoiser {
 public:
@@ -67,6 +68,13 @@ private:
   Microsoft::WRL::ComPtr<ID3D12Resource> m_linearAlbedo;
   Microsoft::WRL::ComPtr<ID3D12Resource> m_linearNormal;
   Microsoft::WRL::ComPtr<ID3D12Resource> m_linearOutput;
+
+  // CPU-visible staging used only to sanitize OIDN inputs after the texture to
+  // linear-buffer copy. This keeps the renderer's HDR output untouched while
+  // preventing NaN/Inf or invalid guide values from poisoning the denoiser.
+  Microsoft::WRL::ComPtr<ID3D12Resource> m_sanitizeReadback;
+  Microsoft::WRL::ComPtr<ID3D12Resource> m_sanitizeUpload;
+  uint64_t m_sanitizeStagingBytes = 0;
   
   // Synchronization for internal copies
   Microsoft::WRL::ComPtr<ID3D12Fence> m_fence;
@@ -77,6 +85,7 @@ private:
   Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_cmdList;
 
   D3D12_PLACED_SUBRESOURCE_FOOTPRINT m_linearFootprint = {};
+  uint64_t m_linearBufferBytes = 0;
 
   // Track state to detect when we need to recreate OIDN objects
   uint32_t m_width = 0;
@@ -90,8 +99,24 @@ private:
   // CPU fallback objects
   void* m_oidnCpuDevice = nullptr; // oidn::DeviceRef
   void* m_oidnCpuFilter = nullptr; // oidn::FilterRef
+  std::vector<uint8_t> m_cpuSanitizedInput;
+  const void* m_cpuSanitizedInputPtr = nullptr;
   uint32_t m_cpuWidth = 0;
   uint32_t m_cpuHeight = 0;
+  size_t m_cpuInputRowPitchBytes = 0;
   Quality m_cpuLastQuality = Quality::Balanced;
+
+  enum class OidnInputKind {
+    Color,
+    Albedo,
+    Normal
+  };
+
+  bool EnsureSanitizeStaging(uint64_t byteSize);
+  bool SanitizeLinearBufferForOidn(ID3D12CommandQueue* queue,
+                                   ID3D12Resource* linearBuffer,
+                                   OidnInputKind kind);
+  bool SanitizeLinearInputsForOidn(ID3D12CommandQueue* queue,
+                                   bool hasAlbedo, bool hasNormal);
 #endif
 };
