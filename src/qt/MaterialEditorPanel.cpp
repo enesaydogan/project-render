@@ -1,5 +1,6 @@
 #include "MaterialEditorPanel.h"
 
+#include "ArchColorDialog.h"
 #include "SliderControl.h"
 
 #ifndef NOMINMAX
@@ -15,7 +16,6 @@
 #include "../scene.h"
 
 #include <QCheckBox>
-#include <QColorDialog>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
@@ -864,7 +864,7 @@ void MaterialEditorPanel::createUi()
         }
         Asset::Material &mat = g_loadedMaterials[idx];
         QColor current = getColorFromMaterial(mat.diffuseColor);
-        QColor picked = QColorDialog::getColor(current, this, tr("Pick Base Color"));
+        QColor picked = ArchColorDialog::getColor(current, this, tr("Pick Base Color"));
         if (!picked.isValid()) {
             return;
         }
@@ -881,7 +881,7 @@ void MaterialEditorPanel::createUi()
         }
         Asset::Material &mat = g_loadedMaterials[idx];
         QColor current = getColorFromMaterial(mat.specularColor);
-        QColor picked = QColorDialog::getColor(current, this, tr("Pick Specular Color"));
+        QColor picked = ArchColorDialog::getColor(current, this, tr("Pick Specular Color"));
         if (!picked.isValid()) {
             return;
         }
@@ -899,7 +899,7 @@ void MaterialEditorPanel::createUi()
         }
         Asset::Material &mat = g_loadedMaterials[idx];
         QColor current = getColorFromMaterial(mat.transmissionColor);
-        QColor picked = QColorDialog::getColor(current, this, tr("Pick Transmission Color"));
+        QColor picked = ArchColorDialog::getColor(current, this, tr("Pick Transmission Color"));
         if (!picked.isValid()) {
             return;
         }
@@ -916,7 +916,7 @@ void MaterialEditorPanel::createUi()
         }
         Asset::Material &mat = g_loadedMaterials[idx];
         QColor current = getColorFromMaterial(mat.sheenColor);
-        QColor picked = QColorDialog::getColor(current, this, tr("Pick Sheen Color"));
+        QColor picked = ArchColorDialog::getColor(current, this, tr("Pick Sheen Color"));
         if (!picked.isValid()) {
             return;
         }
@@ -934,7 +934,7 @@ void MaterialEditorPanel::createUi()
         }
         Asset::Material &mat = g_loadedMaterials[idx];
         QColor current = getColorFromMaterial(mat.grassColor);
-        QColor picked = QColorDialog::getColor(current, this, tr("Pick Grass Color"));
+        QColor picked = ArchColorDialog::getColor(current, this, tr("Pick Grass Color"));
         if (!picked.isValid()) {
             return;
         }
@@ -955,7 +955,7 @@ void MaterialEditorPanel::createUi()
         }
         Asset::Material &mat = g_loadedMaterials[idx];
         QColor current = getColorFromMaterial(mat.emissiveColor);
-        QColor picked = QColorDialog::getColor(current, this, tr("Pick Emissive Color"));
+        QColor picked = ArchColorDialog::getColor(current, this, tr("Pick Emissive Color"));
         if (!picked.isValid()) {
             return;
         }

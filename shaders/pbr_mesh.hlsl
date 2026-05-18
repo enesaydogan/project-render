@@ -233,8 +233,7 @@ uint ComputeTriPlanarVariationSeed(float3 objectOrigin, uint primitiveId)
     return seed;
 }
 
-float2 ComputeTriPlanarVariationOffset(float3 objectOrigin, float3 objectPos,
-                                       float3 worldNormal)
+float2 ComputeTriPlanarVariationOffset(float3 objectOrigin, uint primitiveId)
 {
     if (mappingVariationParams.x < 0.5 || mappingVariationParams.y <= 1.0e-4) {
         return float2(0.0, 0.0);
@@ -247,14 +246,7 @@ float2 ComputeTriPlanarVariationOffset(float3 objectOrigin, float3 objectPos,
         asuint(quantizedOrigin.y) * 19349663u ^
         asuint(quantizedOrigin.z) * 83492791u);
     if (mode >= 2u) {
-        float3 an = abs(worldNormal);
-        uint dominantAxis = (an.x >= an.y && an.x >= an.z) ? 0u :
-                            ((an.y >= an.z) ? 1u : 2u);
-        float planeValue = (dominantAxis == 0u) ? objectPos.x :
-                           ((dominantAxis == 1u) ? objectPos.y : objectPos.z);
-        int quantizedPlane = (int)round(planeValue * 100.0);
-        seed = HashTriPlanarU32(seed ^ ((dominantAxis + 1u) * 0x9e3779b9u) ^
-                                (asuint(quantizedPlane) * 0x85ebca6bu));
+        seed = HashTriPlanarU32(seed ^ ((primitiveId + 1u) * 0x9e3779b9u));
     }
     return (float2(HashTriPlanar01(seed ^ 0x68bc21ebu),
                    HashTriPlanar01(seed ^ 0x02e5be93u)) * 2.0 - 1.0) *
@@ -270,7 +262,8 @@ bool UseUvStochasticTiling()
             triPlanarRotationParams.w > 0.5);
 }
 
-uint ComputeUvVariationBaseSeed(float3 objectOrigin, float3 worldNormal)
+uint ComputeUvVariationBaseSeed(float3 objectOrigin, float3 worldNormal,
+                                uint primitiveId)
 {
     int3 quantizedOrigin = int3(round(objectOrigin * 100.0));
     uint seed = HashTriPlanarU32(
@@ -285,7 +278,10 @@ uint ComputeUvVariationBaseSeed(float3 objectOrigin, float3 worldNormal)
         float axisValue = (dominantAxis == 0u) ? worldNormal.x :
                           ((dominantAxis == 1u) ? worldNormal.y : worldNormal.z);
         uint signSeed = axisValue >= 0.0f ? 0x85ebca6bu : 0xc2b2ae35u;
-        seed = HashTriPlanarU32(seed ^ ((dominantAxis + 1u) * 0x9e3779b9u) ^ signSeed);
+        seed = HashTriPlanarU32(seed ^
+                                ((dominantAxis + 1u) * 0x9e3779b9u) ^
+                                signSeed ^
+                                ((primitiveId + 1u) * 0x632be59bu));
     }
     return seed;
 }
@@ -393,14 +389,17 @@ float2 TransformUvForCell(float2 uv, float2 offset, float2 mirrorSign,
 }
 
 float4 SampleUvTexture(int texIndex, float2 uv, float3 objectOrigin,
-                       float3 worldNormal, bool applyColorVariation)
+                       float3 worldNormal, uint primitiveId,
+                       bool applyColorVariation)
 {
     if (texIndex < 0) return float4(1, 1, 1, 1);
     if (!UseUvStochasticTiling()) {
         return textures[texIndex].Sample(linearSampler, uv);
     }
 
-    uint baseSeed = ComputeUvVariationBaseSeed(objectOrigin, normalize(worldNormal));
+    uint baseSeed = ComputeUvVariationBaseSeed(objectOrigin,
+                                               normalize(worldNormal),
+                                               primitiveId);
     int2 cell0, cell1, cell2;
     float3 weights;
     ComputeUvVariationCells(uv, cell0, cell1, cell2, weights);
@@ -441,7 +440,8 @@ float4 SampleUvTexture(int texIndex, float2 uv, float3 objectOrigin,
 }
 
 float3 SampleUvNormalTexture(int texIndex, float2 uv, float amount,
-                             float3 objectOrigin, float3 worldNormal)
+                             float3 objectOrigin, float3 worldNormal,
+                             uint primitiveId)
 {
     if (texIndex < 0 || amount <= 0.0f) return float3(0.0f, 0.0f, 1.0f);
     if (!UseUvStochasticTiling()) {
@@ -451,7 +451,9 @@ float3 SampleUvNormalTexture(int texIndex, float2 uv, float amount,
             saturate(amount)));
     }
 
-    uint baseSeed = ComputeUvVariationBaseSeed(objectOrigin, normalize(worldNormal));
+    uint baseSeed = ComputeUvVariationBaseSeed(objectOrigin,
+                                               normalize(worldNormal),
+                                               primitiveId);
     int2 cell0, cell1, cell2;
     float3 weights;
     ComputeUvVariationCells(uv, cell0, cell1, cell2, weights);
@@ -528,14 +530,13 @@ float2 TriPlanarUV_Z(float3 p, float3 n, float scale, float2 offset)
 
 float4 SampleTriPlanar(int texIndex, float3 worldPos, float3 worldNormal,
                        float scale, float sharpness, float3 objectOrigin,
-                       float3 objectPos)
+                       float3 objectPos, uint primitiveId)
 {
     if (texIndex < 0) return float4(1,1,1,1);
     float3 rotatedPos = RotateTriPlanarVector(worldPos);
-    float3 rotatedObjectPos = RotateTriPlanarVector(objectPos);
     float3 rotatedNormal = normalize(RotateTriPlanarVector(worldNormal));
     float2 variationOffset =
-        ComputeTriPlanarVariationOffset(objectOrigin, rotatedObjectPos, rotatedNormal);
+        ComputeTriPlanarVariationOffset(objectOrigin, primitiveId);
     float3 w = TriPlanarWeights(rotatedNormal, sharpness);
     float4 sx = textures[texIndex].Sample(
         linearSampler,
@@ -573,15 +574,14 @@ float3 BlendNormalSample(float3 tangentNormal, float amount)
 float3 SampleTriPlanarNormal(int texIndex, float3 worldPos, float3 worldNormal,
                              float scale, float sharpness, float strength,
                              float amount, float3 objectOrigin,
-                             float3 objectPos)
+                             float3 objectPos, uint primitiveId)
 {
     if (texIndex < 0 || amount <= 0.0) return normalize(worldNormal);
     float3 Nw = normalize(worldNormal);
     float3 rotatedPos = RotateTriPlanarVector(worldPos);
-    float3 rotatedObjectPos = RotateTriPlanarVector(objectPos);
     float3 rotatedNormal = normalize(RotateTriPlanarVector(worldNormal));
     float2 variationOffset =
-        ComputeTriPlanarVariationOffset(objectOrigin, rotatedObjectPos, rotatedNormal);
+        ComputeTriPlanarVariationOffset(objectOrigin, primitiveId);
     float3 w = TriPlanarWeights(rotatedNormal, sharpness);
 
     float3 nx = UnpackNormal(textures[texIndex].Sample(
@@ -1112,14 +1112,14 @@ float2 EnvBRDFApprox(float3 F0, float roughness, float NdotV)
 // Extract normal from normal map and transform to world space
 float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent,
                         int normalTexIndex, float amount,
-                        float3 objectOrigin)
+                        float3 objectOrigin, uint primitiveId)
 {
     if (normalTexIndex < 0 || amount <= 0.0 ||
         length(worldTangent.xyz) < 0.001) return normalize(worldNormal);
     
     float3 tangentNormal =
         SampleUvNormalTexture(normalTexIndex, uv, amount, objectOrigin,
-                              worldNormal);
+                              worldNormal, primitiveId);
     
     float3 N = normalize(worldNormal);
     float3 T = normalize(worldTangent.xyz);
@@ -1211,7 +1211,7 @@ struct PSOutput {
     float4 normal : SV_Target1;
 };
 
-PSOutput PSMainMesh(PSInputMesh input)
+PSOutput PSMainMesh(PSInputMesh input, uint primitiveId : SV_PrimitiveID)
 {
 #ifdef RASTER_DEBUG_DEPTH
     // Output clip-space depth as grayscale for debugging
@@ -1286,16 +1286,16 @@ PSOutput PSMainMesh(PSInputMesh input)
         }
     }
     if (!clayMode && textureIndices.x >= 0) {
-        float4 diffSample = triPlanar ? SampleTriPlanar(textureIndices.x, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos)
-                                      : SampleUvTexture(textureIndices.x, uv, objectOrigin, worldNormal, true);
+        float4 diffSample = triPlanar ? SampleTriPlanar(textureIndices.x, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos, primitiveId)
+                                      : SampleUvTexture(textureIndices.x, uv, objectOrigin, worldNormal, primitiveId, true);
         float3 diffRgb = (parallaxMapped || windowBoxMapped) ? diffSample.rgb
                                         : sRGBToLinear(diffSample.rgb);
         BaseColor *= BlendTextureRgb(diffRgb, textureWeight0.x);
         alpha *= BlendTextureScalar(diffSample.a, textureWeight0.x);
     }
     if (!clayMode && textureIndices.y >= 0 && !windowBoxMapped) {
-        float opacitySample = triPlanar ? SampleTriPlanar(textureIndices.y, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos).r
-                                        : SampleUvTexture(textureIndices.y, uv, objectOrigin, worldNormal, false).r;
+        float opacitySample = triPlanar ? SampleTriPlanar(textureIndices.y, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos, primitiveId).r
+                                        : SampleUvTexture(textureIndices.y, uv, objectOrigin, worldNormal, primitiveId, false).r;
         alpha *= BlendTextureScalar(opacitySample, textureWeight1.w);
     }
 
@@ -1318,8 +1318,8 @@ PSOutput PSMainMesh(PSInputMesh input)
     // Metal/Roughness Logic: factor * texture
     // G = Roughness, B = Metalness
     if (!clayMode && emissiveAndPad.z >= 0) {
-        float4 mrSample = triPlanar ? SampleTriPlanar(emissiveAndPad.z, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos)
-                                    : SampleUvTexture(emissiveAndPad.z, uv, objectOrigin, worldNormal, false);
+        float4 mrSample = triPlanar ? SampleTriPlanar(emissiveAndPad.z, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos, primitiveId)
+                                    : SampleUvTexture(emissiveAndPad.z, uv, objectOrigin, worldNormal, primitiveId, false);
 
         float roughnessFactor = (emissiveAndPad.w > 0)
                                     ? max(1.0 - mrSample.g, 0.0)
@@ -1333,8 +1333,8 @@ PSOutput PSMainMesh(PSInputMesh input)
     float specularWeight = clayMode ? 0.0 : saturate(surfaceParams.z);
     float3 specularTint = saturate(specularColor.rgb);
     if (!clayMode && textureIndices.w >= 0) {
-        float3 specSample = triPlanar ? SampleTriPlanar(textureIndices.w, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos).rgb
-                                      : SampleUvTexture(textureIndices.w, uv, objectOrigin, worldNormal, false).rgb;
+        float3 specSample = triPlanar ? SampleTriPlanar(textureIndices.w, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos, primitiveId).rgb
+                                      : SampleUvTexture(textureIndices.w, uv, objectOrigin, worldNormal, primitiveId, false).rgb;
         specularTint *= BlendTextureRgb(sRGBToLinear(specSample), textureWeight2.z);
     }
     float f0s = (ior - 1.0) / (ior + 1.0);
@@ -1346,11 +1346,11 @@ PSOutput PSMainMesh(PSInputMesh input)
     // Normal
     float3 N = clayMode
         ? worldNormal
-        : (triPlanar ? SampleTriPlanarNormal(textureIndices.z, worldPos, worldNormal, triScale, triSharp, triNormStrength, textureWeight1.x, objectOrigin, objectPos)
-                     : GetNormalFromMap(uv, worldNormal, input.tangent, textureIndices.z, textureWeight1.x, objectOrigin));
+        : (triPlanar ? SampleTriPlanarNormal(textureIndices.z, worldPos, worldNormal, triScale, triSharp, triNormStrength, textureWeight1.x, objectOrigin, objectPos, primitiveId)
+                     : GetNormalFromMap(uv, worldNormal, input.tangent, textureIndices.z, textureWeight1.x, objectOrigin, primitiveId));
     if (!clayMode && coatLayerParams.x > 0.001 && textureIndices2.x >= 0 && lobeParams.w > 1.0e-4) {
-        float3 coatN = triPlanar ? SampleTriPlanarNormal(textureIndices2.x, worldPos, worldNormal, triScale, triSharp, triNormStrength, lobeParams.w, objectOrigin, objectPos)
-                                 : GetNormalFromMap(uv, worldNormal, input.tangent, textureIndices2.x, lobeParams.w, objectOrigin);
+        float3 coatN = triPlanar ? SampleTriPlanarNormal(textureIndices2.x, worldPos, worldNormal, triScale, triSharp, triNormStrength, lobeParams.w, objectOrigin, objectPos, primitiveId)
+                                 : GetNormalFromMap(uv, worldNormal, input.tangent, textureIndices2.x, lobeParams.w, objectOrigin, primitiveId);
         N = normalize(lerp(N, coatN, saturate(coatLayerParams.x)));
     }
 
@@ -1361,8 +1361,8 @@ PSOutput PSMainMesh(PSInputMesh input)
         emiss += windowBoxEmission * max(extraParams.x, 0.0);
     }
     if (!clayMode && emissiveAndPad.x >= 0 && !windowBoxMapped) {
-        float3 e = triPlanar ? SampleTriPlanar(emissiveAndPad.x, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos).rgb
-                             : SampleUvTexture(emissiveAndPad.x, uv, objectOrigin, worldNormal, true).rgb;
+        float3 e = triPlanar ? SampleTriPlanar(emissiveAndPad.x, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos, primitiveId).rgb
+                             : SampleUvTexture(emissiveAndPad.x, uv, objectOrigin, worldNormal, primitiveId, true).rgb;
         emiss *= BlendTextureRgb((parallaxMapped || windowBoxMapped) ? e : sRGBToLinear(e),
                                  textureWeight1.z);
     } 
@@ -1370,8 +1370,8 @@ PSOutput PSMainMesh(PSInputMesh input)
     // Occlusion
     float ao = 1.0;
     if (!clayMode && emissiveAndPad.y >= 0) {
-        float aoSample = triPlanar ? SampleTriPlanar(emissiveAndPad.y, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos).r
-                                   : SampleUvTexture(emissiveAndPad.y, uv, objectOrigin, worldNormal, false).r;
+        float aoSample = triPlanar ? SampleTriPlanar(emissiveAndPad.y, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos, primitiveId).r
+                                   : SampleUvTexture(emissiveAndPad.y, uv, objectOrigin, worldNormal, primitiveId, false).r;
         ao = BlendTextureScalar(aoSample, textureWeight1.y);
     }
 
@@ -1403,7 +1403,8 @@ PSOutput PSMainMesh(PSInputMesh input)
                 BlendTextureRgb(
                     sRGBToLinear(
                         SampleUvTexture(textureIndices.x, emitterUv,
-                                        objectOrigin, worldNormal, true)
+                                        objectOrigin, worldNormal, primitiveId,
+                                        true)
                             .rgb),
                     textureWeight0.x);
             float groundInfluence = lerp(0.70, 0.18, tip);
@@ -1414,7 +1415,7 @@ PSOutput PSMainMesh(PSInputMesh input)
                     sRGBToLinear(SampleTriPlanar(textureIndices.x, worldPos,
                                                 worldNormal, triScale,
                                                 triSharp, objectOrigin,
-                                                objectPos)
+                                                objectPos, primitiveId)
                                      .rgb),
                     textureWeight0.x);
             float groundInfluence = lerp(0.70, 0.18, tip);

@@ -841,6 +841,11 @@ static bool StartAnimationMp4Encode() {
   return true;
 }
 
+bool IsRenderExportActive() {
+  return g_renderExportJob.active || g_renderBatchExport.active ||
+         g_renderAnimationExport.active;
+}
+
 static void UpdateAnimationEncodingJob() {
   if (!g_renderAnimationExport.active || !g_renderAnimationExport.encoding ||
       !g_animationEncodeWorker.valid()) {
@@ -1123,6 +1128,7 @@ static bool EnsureExportRenderTarget(UINT width, UINT height) {
     g_renderExportJob.completionArmed = false;
     g_renderExportJob.completionFrames = 0;
     g_renderExportJob.settleFramesRemaining = 0;
+    g_renderExportJob.startedTickMs = GetTickCount64();
     g_renderExportJob.previousMode = g_currentRenderMode;
     g_renderExportJob.previousMaxSpp = g_cameraData.maxSPP;
     g_renderExportJob.previousNoiseThreshold = g_cameraData.noiseThreshold;
@@ -1251,6 +1257,7 @@ void RestoreRenderExportState(bool preservePreviewImage) {
   g_renderExportJob.completionArmed = false;
   g_renderExportJob.completionFrames = 0;
   g_renderExportJob.settleFramesRemaining = 0;
+  g_renderExportJob.startedTickMs = 0;
   g_renderExportJob.targetDenoiserIndex = 0;
   g_renderExportJob.allowNoiseThresholdStop = true;
   if (!preservePreviewImage) {
@@ -1278,6 +1285,7 @@ bool StartBatchRenderExportJobs(const std::wstring &outputDirectory,
   g_renderBatchExport.baseName = baseName;
   g_renderBatchExport.previousCamera = SavedViews::CaptureCurrentState();
   g_renderBatchExport.previousCameraCaptured = true;
+  g_renderBatchExport.startedTickMs = GetTickCount64();
   g_renderBatchExport.viewIndices.resize(views.size());
   for (size_t index = 0; index < views.size(); ++index) {
     g_renderBatchExport.viewIndices[index] = index;
@@ -1326,6 +1334,9 @@ void CancelBatchRenderExport() {
     return;
   }
 
+  if (g_renderExportJob.active) {
+    RestoreRenderExportState();
+  }
   if (g_renderBatchExport.previousCameraCaptured) {
     SavedViews::ApplyView(g_renderBatchExport.previousCamera);
   }
@@ -1457,6 +1468,9 @@ void CancelAnimationRenderExport() {
     return;
   }
 
+  if (g_renderExportJob.active) {
+    RestoreRenderExportState();
+  }
   if (g_renderAnimationExport.previousCameraCaptured) {
     SavedViews::ApplyView(g_renderAnimationExport.previousCamera);
   }

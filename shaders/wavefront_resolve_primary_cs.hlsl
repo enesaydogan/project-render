@@ -325,6 +325,7 @@ inline float4 WavefrontGiSampleUvTexture(int texIndex, float2 uv,
                                          float4 variationParams,
                                          float4 rotationParams,
                                          float lod,
+                                         uint primitiveId,
                                          bool applyColorVariation)
 {
     if (texIndex < 0) {
@@ -356,7 +357,8 @@ inline float4 WavefrontGiSampleUvTexture(int texIndex, float2 uv,
     }
 
     uint baseSeed = WavefrontGiVariationSeed(variationParams, objectOrigin,
-                                             normalize(worldNormal), 0u);
+                                             normalize(worldNormal),
+                                             primitiveId);
     float4 result = 0.0;
     [unroll]
     for (uint i = 0u; i < 3u; ++i) {
@@ -659,7 +661,8 @@ inline float3 WavefrontGiSampleNormalMap(int texIndex,
         }
         float3 tangentNormal = WavefrontGiSampleUvTexture(
             texIndex, uv, objectOrigin, worldNormal,
-            variationParams, rotationParams, lod, false).xyz * 2.0 - 1.0;
+            variationParams, rotationParams, lod, primitiveId, false).xyz *
+            2.0 - 1.0;
         tangentNormal = WavefrontGiBlendNormalSample(tangentNormal, amount);
         float3 n = normalize(worldNormal);
         float3 t = normalize(worldTangent.xyz);
@@ -967,7 +970,8 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
                                          primitiveIndex, textureLod)
             : WavefrontGiSampleUvTexture(texDiff, uv, objectOrigin,
                                          worldNormal, mappingVariation,
-                                         triRotation, textureLod, true);
+                                         triRotation, textureLod,
+                                         primitiveIndex, true);
         float3 diffRgb = (parallaxMapped || windowBoxMapped) ? diffSample.rgb
                                         : sRGBToLinear(diffSample.rgb);
         baseColor *= WavefrontGiBlendTextureRgb(diffRgb, texWeight0.x);
@@ -981,7 +985,8 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
                                          primitiveIndex, textureLod).r
             : WavefrontGiSampleUvTexture(texOpacity, uv, objectOrigin,
                                          worldNormal, mappingVariation,
-                                         triRotation, textureLod, false).r;
+                                         triRotation, textureLod,
+                                         primitiveIndex, false).r;
         opacity *= WavefrontGiBlendTextureScalar(opacitySample,
                                                  texWeight1.w);
     }
@@ -996,7 +1001,7 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
                                          primitiveIndex, textureLod)
             : WavefrontGiSampleUvTexture(texMR, uv, objectOrigin, worldNormal,
                                          mappingVariation, triRotation,
-                                         textureLod, false);
+                                         textureLod, primitiveIndex, false);
         float roughnessFactor = ((matFlags & MATERIAL_FLAG_INVERT_ROUGHNESS) != 0u)
                                     ? max(1.0 - mrSample.g, 0.0)
                                     : mrSample.g;
@@ -1051,7 +1056,8 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
                                          primitiveIndex, textureLod).r
             : WavefrontGiSampleUvTexture(texOcc, uv, objectOrigin,
                                          worldNormal, mappingVariation,
-                                         triRotation, textureLod, false).r;
+                                         triRotation, textureLod,
+                                         primitiveIndex, false).r;
         ao = WavefrontGiBlendTextureScalar(aoSample, texWeight1.y);
     }
 
@@ -1071,7 +1077,8 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
                                          primitiveIndex, textureLod).rgb
             : WavefrontGiSampleUvTexture(texEmis, uv, objectOrigin,
                                          worldNormal, mappingVariation,
-                                         triRotation, textureLod, true).rgb;
+                                         triRotation, textureLod,
+                                         primitiveIndex, true).rgb;
         emissive *= WavefrontGiBlendTextureRgb((parallaxMapped || windowBoxMapped) ? e
                                                               : sRGBToLinear(e),
                                                texWeight1.z);
@@ -1086,7 +1093,8 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
                                          primitiveIndex, textureLod).r
             : WavefrontGiSampleUvTexture(texThickness, uv, objectOrigin,
                                          worldNormal, mappingVariation,
-                                         triRotation, textureLod, false).r;
+                                         triRotation, textureLod,
+                                         primitiveIndex, false).r;
         thickness *= WavefrontGiBlendTextureScalar(thicknessSample,
                                                    volumeParams.z);
     }
@@ -1100,7 +1108,8 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
                                          primitiveIndex, textureLod).rgb
             : WavefrontGiSampleUvTexture(texSpecular, uv, objectOrigin,
                                          worldNormal, mappingVariation,
-                                         triRotation, textureLod, false).rgb;
+                                         triRotation, textureLod,
+                                         primitiveIndex, false).rgb;
         specularColor *= WavefrontGiBlendTextureRgb(sRGBToLinear(specSample),
                                                     specularColorParams.a);
     }

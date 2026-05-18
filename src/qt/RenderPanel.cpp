@@ -157,11 +157,13 @@ void RenderPanel::createUi()
         startRenderExport();
     });
     connect(m_cancelButton, &QPushButton::clicked, this, []() {
-        if (g_renderExportJob.active) {
+        if (g_renderAnimationExport.active) {
+            CancelAnimationRenderExport();
+        } else if (g_renderBatchExport.active) {
+            CancelBatchRenderExport();
+        } else if (g_renderExportJob.active) {
             g_renderExportStatus = "Render canceled.";
             RestoreRenderExportState();
-            CancelBatchRenderExport();
-            CancelAnimationRenderExport();
         }
     });
 }
@@ -203,7 +205,7 @@ void RenderPanel::syncFromRenderer()
             .arg(preset.width)
             .arg(preset.height));
 
-    const bool active = g_renderExportJob.active;
+    const bool active = IsRenderExportActive();
     const bool batchEnabled = g_renderExportSettings.batchSavedViews;
     const int savedViewCount = static_cast<int>(SavedViews::GetViews().size());
     m_progressBar->setValue(active ? ComputeProgressPercent() : 0);
@@ -221,7 +223,7 @@ void RenderPanel::syncFromRenderer()
     m_renderButton->setText(batchEnabled ? tr("Render Saved Views...")
                                          : tr("Render And Export PNG..."));
 
-    if (active) {
+    if (g_renderExportJob.active) {
         const bool denoiserEnabled = (g_renderExportJob.targetDenoiserIndex != 0);
         QStringList lines;
         lines << tr("Progress: %1 / %2 SPP")
@@ -300,7 +302,7 @@ void RenderPanel::updateExportSettings()
 
 void RenderPanel::startRenderExport()
 {
-    if (!g_rayTracingSupported || g_renderExportJob.active) {
+    if (!g_rayTracingSupported || IsRenderExportActive()) {
         return;
     }
 

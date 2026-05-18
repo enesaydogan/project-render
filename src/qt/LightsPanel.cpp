@@ -1,10 +1,11 @@
 #include "LightsPanel.h"
 
+#include "ArchColorDialog.h"
+
 #include "../editor_ui.h"
 #include "../scene.h"
 
 #include <QApplication>
-#include <QColorDialog>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QGridLayout>
@@ -239,7 +240,7 @@ void LightsPanel::createUi()
         if (m_syncing) {
             return;
         }
-        QColor chosen = QColorDialog::getColor(m_currentColor, this, tr("Select Light Color"));
+        QColor chosen = ArchColorDialog::getColor(m_currentColor, this, tr("Select Light Color"));
         if (!chosen.isValid()) {
             return;
         }

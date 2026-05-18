@@ -243,6 +243,79 @@ QString FormatCompactLiveLinkStatus(
         .arg(connectedProviders.join(QStringLiteral(", ")));
 }
 
+QString FormatDurationCompact(double seconds)
+{
+    const int rounded = static_cast<int>(std::max(0.0, seconds) + 0.5);
+    const int hours = rounded / 3600;
+    const int minutes = (rounded / 60) % 60;
+    const int secs = rounded % 60;
+    if (hours > 0) {
+        return QStringLiteral("%1:%2:%3")
+            .arg(hours)
+            .arg(minutes, 2, 10, QLatin1Char('0'))
+            .arg(secs, 2, 10, QLatin1Char('0'));
+    }
+    return QStringLiteral("%1:%2")
+        .arg(minutes, 2, 10, QLatin1Char('0'))
+        .arg(secs, 2, 10, QLatin1Char('0'));
+}
+
+double SecondsSinceTick(qulonglong startedTickMs)
+{
+    if (startedTickMs == 0) {
+        return 0.0;
+    }
+    const qulonglong now = GetTickCount64();
+    return now >= startedTickMs
+        ? static_cast<double>(now - startedTickMs) / 1000.0
+        : 0.0;
+}
+
+double CurrentRenderItemProgress()
+{
+    if (!g_renderExportJob.active || g_renderExportJob.targetMaxSpp <= 0) {
+        return 0.0;
+    }
+    double progress =
+        static_cast<double>(DxrRenderer::GetDisplayedSampleCount()) /
+        static_cast<double>(std::max(1, g_renderExportJob.targetMaxSpp));
+    progress = std::clamp(progress, 0.0, 1.0);
+    if (g_renderExportJob.completionArmed) {
+        const int settleTotal = g_renderExportJob.targetDenoiserIndex == 0 ? 1 : 3;
+        const double settleProgress =
+            1.0 - static_cast<double>(std::max(0, g_renderExportJob.settleFramesRemaining)) /
+                      static_cast<double>(std::max(1, settleTotal));
+        progress = 0.96 + std::clamp(settleProgress, 0.0, 1.0) * 0.04;
+    }
+    return std::clamp(progress, 0.0, 0.995);
+}
+
+QString BasenameForDisplay(const std::wstring &path)
+{
+    if (path.empty()) {
+        return {};
+    }
+    return QFileInfo(QString::fromStdWString(path)).fileName();
+}
+
+void CancelActiveExport()
+{
+    if (g_renderAnimationExport.active) {
+        CancelAnimationRenderExport();
+        return;
+    }
+    if (g_renderBatchExport.active) {
+        CancelBatchRenderExport();
+        return;
+    }
+    if (g_renderExportJob.active) {
+        g_renderExportStatus = g_renderExportJob.isPreview
+            ? "Preview canceled."
+            : "Render canceled.";
+        RestoreRenderExportState();
+    }
+}
+
 QIcon MakeToolbarIcon(ToolbarIcon icon,
                       QColor line = QColor(205, 205, 205),
                       QColor accent = QColor(69, 196, 238))
@@ -633,6 +706,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_sceneIoTimer = new QTimer(this);
     connect(m_sceneIoTimer, &QTimer::timeout, this, [this]() {
         updateSceneIoUi();
+        updateRenderExportProgressUi();
     });
     m_sceneIoTimer->start(100);
     statusBar()->showMessage("Ready");
@@ -1432,20 +1506,16 @@ void MainWindow::showRenderPopup()
         sequenceGroup->setEnabled(sequenceMode->isChecked());
         batchBaseName->setEnabled(batchSavedViews->isChecked());
         previewButton->setEnabled(stillMode->isChecked() && g_rayTracingSupported &&
-                                  !g_renderExportJob.active);
+                                  !IsRenderExportActive());
         renderButton->setEnabled(g_rayTracingSupported &&
-                                 !g_renderExportJob.active &&
-                                 !g_renderBatchExport.active &&
-                                 !g_renderAnimationExport.active &&
+                                 !IsRenderExportActive() &&
                                  (stillMode->isChecked() || keyframeCount > 0));
         renderButton->setText(sequenceMode->isChecked()
                                   ? tr("Render Sequence...")
                                   : (batchSavedViews->isChecked()
                                          ? tr("Render Saved Views...")
                                          : tr("Render Image...")));
-        cancelActiveButton->setEnabled(g_renderExportJob.active ||
-                                       g_renderBatchExport.active ||
-                                       g_renderAnimationExport.active);
+        cancelActiveButton->setEnabled(IsRenderExportActive());
         if (!g_rayTracingSupported) {
             statusLabel->setText(tr("DXR is not supported on this device."));
         } else if (sequenceMode->isChecked() && keyframeCount == 0) {
@@ -1471,12 +1541,7 @@ void MainWindow::showRenderPopup()
         updateSummary();
     });
     connect(cancelActiveButton, &QPushButton::clicked, &dialog, [&]() {
-        if (g_renderExportJob.active) {
-            RestoreRenderExportState();
-        }
-        CancelBatchRenderExport();
-        CancelAnimationRenderExport();
-        g_renderExportStatus = "Render canceled.";
+        CancelActiveExport();
         updateSummary();
     });
     connect(renderButton, &QPushButton::clicked, &dialog, [&]() {
@@ -1562,14 +1627,192 @@ void MainWindow::toggleQtUiVisibility()
     m_qtUiHidden = false;
 }
 
+void MainWindow::closeRenderExportProgressUi()
+{
+    if (!m_renderProgressDialog) {
+        return;
+    }
+    QDialog *dialog = m_renderProgressDialog;
+    m_renderProgressDialog = nullptr;
+    m_renderProgressBar = nullptr;
+    m_renderProgressTitle = nullptr;
+    m_renderProgressDetails = nullptr;
+    m_renderProgressTiming = nullptr;
+    m_renderProgressCancel = nullptr;
+    dialog->close();
+    dialog->deleteLater();
+}
+
+void MainWindow::updateRenderExportProgressUi()
+{
+    if (!IsRenderExportActive()) {
+        closeRenderExportProgressUi();
+        return;
+    }
+
+    if (!m_renderProgressDialog) {
+        m_renderProgressDialog = new QDialog(this);
+        m_renderProgressDialog->setWindowTitle(tr("Render Export Progress"));
+        m_renderProgressDialog->setModal(false);
+        m_renderProgressDialog->setMinimumWidth(520);
+        m_renderProgressDialog->setObjectName(QStringLiteral("RenderProgressPopup"));
+        m_renderProgressDialog->setWindowFlag(Qt::WindowContextHelpButtonHint, false);
+
+        auto *layout = new QVBoxLayout(m_renderProgressDialog);
+        layout->setContentsMargins(16, 14, 16, 14);
+        layout->setSpacing(10);
+
+        m_renderProgressTitle = new QLabel(m_renderProgressDialog);
+        QFont titleFont = m_renderProgressTitle->font();
+        titleFont.setBold(true);
+        titleFont.setPointSize(titleFont.pointSize() + 1);
+        m_renderProgressTitle->setFont(titleFont);
+        layout->addWidget(m_renderProgressTitle);
+
+        m_renderProgressBar = new QProgressBar(m_renderProgressDialog);
+        m_renderProgressBar->setRange(0, 1000);
+        m_renderProgressBar->setTextVisible(true);
+        layout->addWidget(m_renderProgressBar);
+
+        m_renderProgressDetails = new QLabel(m_renderProgressDialog);
+        m_renderProgressDetails->setWordWrap(true);
+        m_renderProgressDetails->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        layout->addWidget(m_renderProgressDetails);
+
+        m_renderProgressTiming = new QLabel(m_renderProgressDialog);
+        m_renderProgressTiming->setWordWrap(true);
+        layout->addWidget(m_renderProgressTiming);
+
+        m_renderProgressCancel = new QPushButton(tr("Cancel Export"), m_renderProgressDialog);
+        connect(m_renderProgressCancel, &QPushButton::clicked, this, [this]() {
+            CancelActiveExport();
+            closeRenderExportProgressUi();
+        });
+        layout->addWidget(m_renderProgressCancel);
+        connect(m_renderProgressDialog, &QObject::destroyed, this, [this]() {
+            m_renderProgressDialog = nullptr;
+            m_renderProgressBar = nullptr;
+            m_renderProgressTitle = nullptr;
+            m_renderProgressDetails = nullptr;
+            m_renderProgressTiming = nullptr;
+            m_renderProgressCancel = nullptr;
+        });
+        m_renderProgressDialog->show();
+    } else if (!m_renderProgressDialog->isVisible()) {
+        m_renderProgressDialog->show();
+    }
+    m_renderProgressDialog->raise();
+
+    const bool animation = g_renderAnimationExport.active;
+    const bool batch = g_renderBatchExport.active;
+    const bool preview = g_renderExportJob.active && g_renderExportJob.isPreview;
+    const bool encoding = animation && g_renderAnimationExport.encoding;
+    const double itemProgress = encoding ? 1.0 : CurrentRenderItemProgress();
+    double overallProgress = itemProgress;
+    double elapsed = SecondsSinceTick(g_renderExportJob.startedTickMs);
+    int finished = 0;
+    int total = 1;
+    QString title = preview ? tr("Rendering Preview") : tr("Rendering PNG");
+    QString currentItem = BasenameForDisplay(g_renderExportJob.outputPath);
+
+    if (batch) {
+        title = tr("Rendering Camera Lister Batch");
+        total = static_cast<int>(std::max<size_t>(1, g_renderBatchExport.viewIndices.size()));
+        finished = static_cast<int>(g_renderBatchExport.currentViewListIndex == 0
+                                        ? 0
+                                        : g_renderBatchExport.currentViewListIndex - 1);
+        overallProgress = (static_cast<double>(finished) + itemProgress) /
+                          static_cast<double>(total);
+        elapsed = SecondsSinceTick(g_renderBatchExport.startedTickMs);
+        currentItem = g_renderBatchExport.currentViewName.empty()
+                          ? BasenameForDisplay(g_renderBatchExport.currentOutputPath)
+                          : QString::fromUtf8(g_renderBatchExport.currentViewName.c_str());
+    } else if (animation) {
+        title = encoding ? tr("Encoding Animation") : tr("Rendering Animation");
+        total = std::max(1, g_renderAnimationExport.totalFrames);
+        finished = encoding ? total
+                            : std::max(0, g_renderAnimationExport.currentFrameIndex - 1);
+        overallProgress = encoding
+                              ? 1.0
+                              : (static_cast<double>(finished) + itemProgress) /
+                                    static_cast<double>(total);
+        elapsed = SecondsSinceTick(g_renderAnimationExport.startedTickMs);
+        currentItem = g_renderAnimationExport.currentLabel.empty()
+                          ? BasenameForDisplay(g_renderAnimationExport.currentOutputPath)
+                          : QString::fromUtf8(g_renderAnimationExport.currentLabel.c_str());
+    }
+
+    overallProgress = std::clamp(overallProgress, 0.0, 1.0);
+    const int progressPermille = static_cast<int>(overallProgress * 1000.0 + 0.5);
+    m_renderProgressBar->setValue(progressPermille);
+    m_renderProgressBar->setFormat(QStringLiteral("%1%").arg(overallProgress * 100.0, 0, 'f', 1));
+    m_renderProgressTitle->setText(title);
+
+    QStringList details;
+    details << tr("Current item: %1").arg(currentItem.isEmpty() ? tr("export") : currentItem);
+    details << tr("Resolution: %1 x %2")
+                   .arg(g_renderExportJob.targetWidth)
+                   .arg(g_renderExportJob.targetHeight);
+    details << tr("Samples: %1 / %2 SPP")
+                   .arg(DxrRenderer::GetDisplayedSampleCount())
+                   .arg(g_renderExportJob.targetMaxSpp);
+    if (DxrRenderer::HasNoiseEstimate()) {
+        details << tr("Noise: %1% / %2%")
+                       .arg(DxrRenderer::GetCurrentNoiseLevel() * 100.0f, 0, 'f', 2)
+                       .arg(g_renderExportJob.targetNoiseThreshold * 100.0f, 0, 'f', 2);
+    } else {
+        details << tr("Noise: calculating");
+    }
+    if (g_renderExportJob.targetDenoiserIndex != 0) {
+        details << tr("Denoiser: %1")
+                       .arg(DxrRenderer::HasDenoisedOutput() ? tr("ready") : tr("waiting"));
+    }
+    if (batch) {
+        details << tr("PNG files: %1 finished / %2 total").arg(finished).arg(total);
+        details << tr("Saved view: %1 / %2").arg((std::min)(finished + 1, total)).arg(total);
+    } else if (animation) {
+        details << tr("Frames: %1 finished / %2 total").arg(finished).arg(total);
+        details << tr("Animation FPS: %1").arg(std::max(1, g_renderAnimationExport.fps));
+        details << tr("Output: %1")
+                       .arg(g_renderAnimationExport.exportMode ==
+                                    static_cast<int>(AnimationSequence::ExportMode::Mp4)
+                                ? (encoding ? tr("MP4 encoding") : tr("MP4 frame render"))
+                                : tr("PNG sequence"));
+    }
+    m_renderProgressDetails->setText(details.join(QLatin1Char('\n')));
+
+    const double totalEstimate =
+        overallProgress > 0.001 ? elapsed / (std::min)(overallProgress, 0.999) : 0.0;
+    const double remaining =
+        totalEstimate > 0.0 ? std::max(0.0, totalEstimate - elapsed) : 0.0;
+    QStringList timing;
+    timing << tr("Elapsed: %1").arg(FormatDurationCompact(elapsed));
+    timing << tr("Estimated left: %1")
+                  .arg(remaining > 0.0 ? FormatDurationCompact(remaining)
+                                       : tr("calculating"));
+    timing << tr("Estimated total: %1")
+                  .arg(totalEstimate > 0.0 ? FormatDurationCompact(totalEstimate)
+                                           : tr("calculating"));
+    if (!g_renderExportStatus.empty()) {
+        timing << QString::fromUtf8(g_renderExportStatus.c_str());
+    }
+    m_renderProgressTiming->setText(timing.join(QStringLiteral(" | ")));
+
+    const bool canCancel = !(animation && encoding);
+    m_renderProgressCancel->setEnabled(canCancel);
+    m_renderProgressCancel->setText(canCancel ? tr("Cancel Export")
+                                              : tr("Encoding Cannot Be Canceled"));
+}
+
 void MainWindow::updateSceneIoUi()
 {
     updateTransformUi();
 
     const bool active = IsSceneIoJobActive();
+    const bool exportActive = IsRenderExportActive();
     if (m_previewRenderAction) {
         m_previewRenderAction->setEnabled(g_rayTracingSupported &&
-                                          !g_renderExportJob.active &&
+                                          !exportActive &&
                                           !active);
     }
 

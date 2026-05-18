@@ -3731,7 +3731,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         !sceneIoActive && g_currentRenderMode == RenderMode::DXR &&
         DxrRenderer::HasSceneLoadWarmup();
     if (!sceneIoActive) {
-      if (!sceneLoadWarmupActive) {
+      if (!sceneLoadWarmupActive && !IsRenderExportActive()) {
         Input::Update(dt);
       }
       LiveLink::TickRuntime();

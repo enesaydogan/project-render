@@ -154,6 +154,7 @@ if(USE_QT_UI)
       src/qt/MainWindow.cpp
       src/qt/DX12View.cpp
       src/qt/QtTheme.cpp
+      src/qt/ArchColorDialog.cpp
       src/qt/RenderPanel.cpp
       src/qt/RenderSettingsPanel.cpp
       src/qt/ScenePanel.cpp

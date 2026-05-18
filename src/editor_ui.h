@@ -53,6 +53,7 @@ struct RenderExportJobState {
   int previousStreamlineMode = 0;
   int previousStreamlineQuality = 1;
   bool allowNoiseThresholdStop = true;
+  unsigned long long startedTickMs = 0;
 };
 
 struct RenderBatchExportState {
@@ -66,6 +67,7 @@ struct RenderBatchExportState {
   bool previousCameraCaptured = false;
   std::wstring currentOutputPath;
   std::string currentViewName;
+  unsigned long long startedTickMs = 0;
 };
 
 struct RenderAnimationExportState {
@@ -133,6 +135,7 @@ bool HasPreviewRenderImage();
 bool PreviewRenderNeedsPresent();
 void MarkPreviewRenderPresented();
 void CancelPreviewRender();
+bool IsRenderExportActive();
 bool StartBatchRenderExportJobs(const std::wstring &outputDirectory,
                                 const std::wstring &baseName);
 void AdvanceBatchRenderExport(bool previousExportSucceeded);

@@ -9,6 +9,7 @@ class DX12View;
 class QAction;
 class QActionGroup;
 class QComboBox;
+class QDialog;
 class QDragEnterEvent;
 class QDockWidget;
 class QDropEvent;
@@ -52,6 +53,8 @@ private:
     void showRenderPopup();
     void toggleQtUiVisibility();
     void updateSceneIoUi();
+    void updateRenderExportProgressUi();
+    void closeRenderExportProgressUi();
 
     DX12View *m_view;
     QAction *m_saveSceneAction = nullptr;
@@ -85,6 +88,12 @@ private:
     QPushButton *m_liveLinkTakeCameraButton = nullptr;
     QFrame *m_statusDivider = nullptr;
     QTimer *m_sceneIoTimer = nullptr;
+    QDialog *m_renderProgressDialog = nullptr;
+    QProgressBar *m_renderProgressBar = nullptr;
+    QLabel *m_renderProgressTitle = nullptr;
+    QLabel *m_renderProgressDetails = nullptr;
+    QLabel *m_renderProgressTiming = nullptr;
+    QPushButton *m_renderProgressCancel = nullptr;
     bool m_qtUiHidden = false;
     std::vector<QWidget *> m_hiddenQtUiWidgets;
 };
