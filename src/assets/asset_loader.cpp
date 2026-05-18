@@ -57,6 +57,40 @@ static ComPtr<ID3D12CommandQueue> s_queue;
 std::function<void(float, const std::string &)> s_progressCb;
 static thread_local bool s_deferGpuUpload = false;
 
+static std::wstring WidePathFromUtf8(const std::string &path) {
+  if (path.empty()) {
+    return {};
+  }
+
+  int wideCount = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                                      path.data(),
+                                      static_cast<int>(path.size()), nullptr,
+                                      0);
+  UINT codePage = CP_UTF8;
+  DWORD flags = MB_ERR_INVALID_CHARS;
+  if (wideCount <= 0) {
+    codePage = CP_ACP;
+    flags = 0;
+    wideCount = MultiByteToWideChar(codePage, flags, path.data(),
+                                    static_cast<int>(path.size()), nullptr, 0);
+  }
+  if (wideCount <= 0) {
+    return {};
+  }
+
+  std::wstring widePath(static_cast<size_t>(wideCount), L'\0');
+  MultiByteToWideChar(codePage, flags, path.data(),
+                      static_cast<int>(path.size()), widePath.data(),
+                      wideCount);
+  return widePath;
+}
+
+static std::filesystem::path NativePathFromUtf8(const std::string &path) {
+  std::wstring widePath = WidePathFromUtf8(path);
+  return widePath.empty() ? std::filesystem::path(path)
+                          : std::filesystem::path(widePath);
+}
+
 static void SetIdentityMatrix(float out[16]) {
   if (!out) {
     return;
@@ -644,7 +678,9 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
   oss << "Asset::LoadGltf (tinygltf) requested: " << path << "\n";
   fprintf(stderr, "%s", oss.str().c_str());
 
-  if (!std::filesystem::exists(path)) {
+  const std::filesystem::path nativePath = NativePathFromUtf8(path);
+  std::error_code ec;
+  if (!std::filesystem::exists(nativePath, ec)) {
     fprintf(stderr, "File not found: glTF path does not exist\n");
     return false;
   }
@@ -658,10 +694,9 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
   bool ret;
 
   // Diagnostics: print file size and header bytes before calling loader
-  std::error_code ec;
   uint64_t fsize = 0;
   try {
-    fsize = std::filesystem::file_size(path, ec);
+    fsize = std::filesystem::file_size(nativePath, ec);
   } catch (...) {
     ec.assign(1, std::generic_category());
   }
@@ -674,7 +709,7 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
   }
 
   if (isBinary) {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(nativePath, std::ios::binary);
     if (in) {
       unsigned char header[4] = {0, 0, 0, 0};
       in.read(reinterpret_cast<char *>(header), sizeof(header));
@@ -1807,7 +1842,9 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
   oss << "Asset::LoadGltf requested: " << path << "\n";
   fprintf(stderr, "%s", oss.str().c_str());
 
-  if (!std::filesystem::exists(path)) {
+  const std::filesystem::path nativePath = NativePathFromUtf8(path);
+  std::error_code ec;
+  if (!std::filesystem::exists(nativePath, ec)) {
     fprintf(stderr, "File not found: glTF path does not exist\n");
     return false;
   }
