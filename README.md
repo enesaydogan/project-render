@@ -1,6 +1,20 @@
-# project-render 0.3.0 - High-End ArchViz Real-Time Engine
+# project-render 0.4.0 - High-End ArchViz Real-Time Engine
 
 `project-render` is a real-time rendering engine for high-fidelity Architectural Visualization (ArchViz). It uses DirectX 12, DXR ray tracing, NVIDIA Streamline, and optional final-frame denoisers for physically based lighting and export workflows.
+
+---
+
+## What's New in 0.4.0
+
+- **Wavefront-first DXR renderer**: The legacy raygen path was removed and the renderer now builds around the wavefront primary, secondary, shadow, resolve, ReSTIR, and accumulation stages.
+- **Material system overhaul**: OpenPBR-oriented material classes, authoring defaults, texture weights, stochastic tiling, tri-planar controls, and Qt material inspector workflows were expanded and made faster.
+- **Parallax and window-box mapping**: Added height parallax, window-box parallax, and back-face options for reversed architectural window planes.
+- **Qt editor polish**: Added toolbar icons, transform undo/redo, selected-material auto focus, orphaned data cleanup, render/export progress UI, and a custom arch-viz color picker with RGB/HSV/Kelvin controls and variation strips.
+- **Scatter and grass improvements**: Added scatter tooling passes and improved procedural grass/foliage behavior for architectural scenes.
+- **Camera and environment workflow**: Added white balance controls, saved-camera material setting persistence, preview-render improvements, larger cloud resources, and IBL/wavefront boost fixes.
+- **Import and save/load robustness**: Improved UTF-8/non-English path handling, fixed scene save/load issues, cleaned reimport/orphan paths, and blocked app exit while save/load is running to prevent data loss.
+- **Denoiser/export stability**: Sanitized OIDN inputs to prevent NaN/Inf export failures, fixed DXR AO after the wavefront migration, and improved final-frame export safety.
+- **LiveLink fixes**: Improved Archicad and 3ds Max LiveLink material/geometry sync behavior and plugin packaging support.
 
 ---
 
@@ -8,7 +22,7 @@
 
 ### Advanced Path Tracing
 - **Unified DXR Path Tracer**: Progressive path tracing with high-precision accumulation (`R32G32B32A32_FLOAT`).
-- **Wavefront Architecture**: Highly optimized phase 1-3 wavefront runtime, improving stability, speeding up glass/UV lookups, and fixing reflections.
+- **Wavefront Architecture**: Wavefront-first DXR runtime with separated traversal, resolve, visibility, ReSTIR, and accumulation stages.
 - **Multiple Importance Sampling (MIS)**: Power-heuristic MIS combining BRDF and light sampling to reduce fireflies on glossy surfaces.
 - **ReSTIR DI & GI**: Reservoir-based spatio-temporal importance resampling, now fully integrated with the wavefront path.
 - **Efficiency Optimizations**: Russian roulette, compact material data, opaque hardware fast paths, Opacity Micromaps, and secondary GI/shadow thinning.
@@ -20,15 +34,16 @@
 
 ### Asset & ArchViz System
 - **Universal Model Import**: Robust support for glTF 2.0, FBX, OBJ, STL, and fast drag-and-drop file import.
-- **OpenPBR-Oriented Material Runtime**: Clearcoat, transmission, and tri-planar mapping.
-- **Foliage & Environment**: Grass emitting, foliage performance improvements, and real-time volumetric clouds.
-- **ArchViz Material Editor**: Single scene material editor combining specular/metallic workflows. Massively accelerated UI rendering.
-- **Physical Camera & Lighting**: IES light profiles, Prague Sky Model with new intensity controls, and physical exposure. Also includes a Clay Render mode for rapid lighting tweaks.
+- **OpenPBR-Oriented Material Runtime**: Material classes, clearcoat, transmission, tri-planar mapping, stochastic tiling, parallax mapping, and window-box interiors.
+- **Foliage & Environment**: Scatter tooling, grass emitting, foliage performance improvements, and real-time volumetric clouds.
+- **ArchViz Material Editor**: Qt and ImGui material editors with class presets, selected-material focus, texture preview/weights, mapping controls, and a Kelvin-capable color picker.
+- **Physical Camera & Lighting**: IES light profiles, Prague Sky Model with intensity controls, white balance, physical exposure, and Clay Render mode for rapid lighting tweaks.
 
 ### Editor & Workflow
 - **Qt UI Integration**: Event-driven, hardware-accelerated Qt6 UI with highly optimized material/environment editing panels.
-- **Advanced Selection Tools**: Fast node locking for easier scene editing, selection bounding box outlines, and Shift-drag quick copy/instancing support.
+- **Advanced Selection Tools**: Transform undo/redo, delete/cleanup tools, fast node locking, selection bounding box outlines, and Shift-drag quick copy/instancing support.
 - **Saved Views & Camera Sequencing**: Keyframed animation paths with per-segment easing and MP4 export.
+- **Safer Scene I/O**: Save/load runs asynchronously with progress feedback and normal close/exit paths are blocked while scene I/O is active.
 - **3ds Max 2024/2025 LiveLink**: Named-pipe live sync for nodes, `.prmesh` payloads, shared materials, and geometry streaming.
 - **Archicad 28 LiveLink**: Pipe-based scene sync with stable material identity across re-syncs.
 
@@ -148,6 +163,7 @@ Check `tools/3dsmax2025/README.md` or `tools/archicad28/README.md` for plugin in
 
 ### Troubleshooting
 - **Grey viewport**: Ensure a sky model is selected or an HDRI is loaded in the Environment panel.
+- **Non-English file paths**: 0.4.0 improves UTF-8 path handling for glTF/GLB and scene I/O. If an importer still fails, try moving the asset to a short ASCII-only path and report the original path.
 - **OptiX stub log**: Reconfigure and rebuild the exact executable you launch with `-DUSE_OPTIX_DENOISER=ON`.
 - **OptiX runtime failure**: Verify CUDA Toolkit installation, NVIDIA driver support, and that the D3D12 adapter matches the CUDA device.
 - **Deleting objects with DXR enabled**: The renderer forces an acceleration-structure rebuild. If you see crashes, verify build geometry flags.
