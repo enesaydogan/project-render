@@ -124,12 +124,37 @@ void RestoreMappingMetadata(const nlohmann::json &mapping,
 } // namespace
 
 std::vector<int> BuildTextureSaveRemap(
-    const std::vector<Asset::Texture> &textures) {
+    const std::vector<Asset::Texture> &textures,
+    const std::vector<Asset::Material> &materials) {
   std::vector<int> remap(textures.size(), -1);
+  std::vector<uint8_t> referenced(textures.size(), 0);
+  const auto markTexture = [&](int textureIndex) {
+    if (textureIndex < 0 ||
+        textureIndex >= static_cast<int>(textures.size())) {
+      return;
+    }
+    referenced[static_cast<size_t>(textureIndex)] = 1;
+  };
+
+  for (const Asset::Material &material : materials) {
+    markTexture(material.diffuseTexture);
+    markTexture(material.opacityTexture);
+    markTexture(material.normalTexture);
+    markTexture(material.coatNormalTexture);
+    markTexture(material.emissiveTexture);
+    markTexture(material.occlusionTexture);
+    markTexture(material.metalRoughTexture);
+    markTexture(material.metalnessTexture);
+    markTexture(material.roughnessGlossTexture);
+    markTexture(material.specularColorTexture);
+    markTexture(material.thicknessTexture);
+    markTexture(material.parallaxTexture);
+  }
+
   int nextIndex = 0;
   for (size_t textureIndex = 0; textureIndex < textures.size();
        ++textureIndex) {
-    if (textures[textureIndex].hiddenInEditor) {
+    if (!referenced[textureIndex] || textures[textureIndex].hiddenInEditor) {
       continue;
     }
     remap[textureIndex] = nextIndex++;

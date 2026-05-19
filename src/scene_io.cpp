@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -53,9 +55,15 @@ namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 static const char PRS_MAGIC[4] = {'P', 'R', 'S', '1'};
-static const uint32_t PRS_VERSION = 2;
+static const uint32_t PRS_VERSION = 3;
 static const char PRS_CHUNK_MAGIC[4] = {'P', 'R', 'S', 'C'};
+static const char PRS_CHUNK_V3_MAGIC[4] = {'P', 'R', 'S', '3'};
 static constexpr size_t PRS_CHUNK_SIZE = 4ull * 1024ull * 1024ull;
+
+enum class PrsCompressionAlgorithm : uint32_t {
+  Lzms = 1,
+  XpressHuff = 2,
+};
 
 static std::mutex g_sceneIoProgressMutex;
 static SceneIO::ProgressCallback g_sceneIoProgressCb = nullptr;
@@ -174,10 +182,83 @@ public:
   }
 };
 
-static bool CompressLZMSBlock(const uint8_t *input, size_t inputSize,
-                              std::vector<uint8_t> &output) {
+static DWORD WindowsCompressionAlgorithm(PrsCompressionAlgorithm algorithm) {
+  switch (algorithm) {
+  case PrsCompressionAlgorithm::XpressHuff:
+    return COMPRESS_ALGORITHM_XPRESS_HUFF;
+  case PrsCompressionAlgorithm::Lzms:
+  default:
+    return COMPRESS_ALGORITHM_LZMS;
+  }
+}
+
+static const char *CompressionAlgorithmName(
+    PrsCompressionAlgorithm algorithm) {
+  switch (algorithm) {
+  case PrsCompressionAlgorithm::XpressHuff:
+    return "XPRESS_HUFF";
+  case PrsCompressionAlgorithm::Lzms:
+  default:
+    return "LZMS";
+  }
+}
+
+static PrsCompressionAlgorithm CompressionAlgorithmFromStoredValue(
+    uint32_t value) {
+  switch (static_cast<PrsCompressionAlgorithm>(value)) {
+  case PrsCompressionAlgorithm::XpressHuff:
+    return PrsCompressionAlgorithm::XpressHuff;
+  case PrsCompressionAlgorithm::Lzms:
+    return PrsCompressionAlgorithm::Lzms;
+  default:
+    return PrsCompressionAlgorithm::Lzms;
+  }
+}
+
+static bool IsKnownCompressionAlgorithmValue(uint32_t value) {
+  return value == static_cast<uint32_t>(PrsCompressionAlgorithm::Lzms) ||
+         value == static_cast<uint32_t>(PrsCompressionAlgorithm::XpressHuff);
+}
+
+static PrsCompressionAlgorithm GetSaveCompressionAlgorithm() {
+  char value[32] = {};
+  DWORD length = GetEnvironmentVariableA("PROJECT_RENDER_PRS_COMPRESSION",
+                                         value, static_cast<DWORD>(sizeof(value)));
+  if (length > 0 && length < sizeof(value)) {
+    std::string mode(value, value + length);
+    std::transform(mode.begin(), mode.end(), mode.begin(), [](unsigned char c) {
+      return static_cast<char>(std::tolower(c));
+    });
+    if (mode == "lzms" || mode == "small") {
+      return PrsCompressionAlgorithm::Lzms;
+    }
+    if (mode == "legacy" || mode == "v2") {
+      return PrsCompressionAlgorithm::Lzms;
+    }
+  }
+  return PrsCompressionAlgorithm::XpressHuff;
+}
+
+static bool ShouldSaveLegacyPrsV2() {
+  char value[32] = {};
+  DWORD length = GetEnvironmentVariableA("PROJECT_RENDER_PRS_COMPRESSION",
+                                         value, static_cast<DWORD>(sizeof(value)));
+  if (length == 0 || length >= sizeof(value)) {
+    return false;
+  }
+  std::string mode(value, value + length);
+  std::transform(mode.begin(), mode.end(), mode.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+  return mode == "legacy" || mode == "v2";
+}
+
+static bool CompressBlock(PrsCompressionAlgorithm algorithm,
+                          const uint8_t *input, size_t inputSize,
+                          std::vector<uint8_t> &output) {
   COMPRESSOR_HANDLE handle = nullptr;
-  if (!CreateCompressor(COMPRESS_ALGORITHM_LZMS, nullptr, &handle)) {
+  const DWORD windowsAlgorithm = WindowsCompressionAlgorithm(algorithm);
+  if (!CreateCompressor(windowsAlgorithm, nullptr, &handle)) {
     fprintf(stderr, "PRS: CreateCompressor failed (%lu)\n", GetLastError());
     return false;
   }
@@ -196,11 +277,13 @@ static bool CompressLZMSBlock(const uint8_t *input, size_t inputSize,
   return true;
 }
 
-static bool DecompressLZMSBlock(const uint8_t *comp, size_t compSize,
-                                uint8_t *out, size_t outSize,
-                                size_t &actualOut) {
+static bool DecompressBlock(PrsCompressionAlgorithm algorithm,
+                            const uint8_t *comp, size_t compSize,
+                            uint8_t *out, size_t outSize,
+                            size_t &actualOut) {
   DECOMPRESSOR_HANDLE handle = nullptr;
-  if (!CreateDecompressor(COMPRESS_ALGORITHM_LZMS, nullptr, &handle)) {
+  const DWORD windowsAlgorithm = WindowsCompressionAlgorithm(algorithm);
+  if (!CreateDecompressor(windowsAlgorithm, nullptr, &handle)) {
     fprintf(stderr, "PRS: CreateDecompressor failed (%lu)\n", GetLastError());
     return false;
   }
@@ -213,6 +296,18 @@ static bool DecompressLZMSBlock(const uint8_t *comp, size_t compSize,
   }
   actualOut = static_cast<size_t>(actual);
   return true;
+}
+
+static bool CompressLZMSBlock(const uint8_t *input, size_t inputSize,
+                              std::vector<uint8_t> &output) {
+  return CompressBlock(PrsCompressionAlgorithm::Lzms, input, inputSize, output);
+}
+
+static bool DecompressLZMSBlock(const uint8_t *comp, size_t compSize,
+                                uint8_t *out, size_t outSize,
+                                size_t &actualOut) {
+  return DecompressBlock(PrsCompressionAlgorithm::Lzms, comp, compSize, out,
+                         outSize, actualOut);
 }
 
 static bool DecompressLZMSLegacy(const uint8_t *comp, size_t compSize,
@@ -262,11 +357,18 @@ static size_t GetWorkerCount(size_t tasks) {
   return (std::min)(workers, tasks);
 }
 
-static bool CompressLZMSChunked(const std::vector<uint8_t> &input,
-                                std::vector<uint8_t> &output) {
+static bool CompressChunked(const std::vector<uint8_t> &input,
+                            std::vector<uint8_t> &output,
+                            PrsCompressionAlgorithm algorithm,
+                            bool legacyV2ChunkHeader = false) {
   if (input.empty()) {
     output.clear();
-    output.insert(output.end(), PRS_CHUNK_MAGIC, PRS_CHUNK_MAGIC + 4);
+    if (legacyV2ChunkHeader) {
+      output.insert(output.end(), PRS_CHUNK_MAGIC, PRS_CHUNK_MAGIC + 4);
+    } else {
+      output.insert(output.end(), PRS_CHUNK_V3_MAGIC, PRS_CHUNK_V3_MAGIC + 4);
+      WriteU32(output, static_cast<uint32_t>(algorithm));
+    }
     WriteU32(output, 0);
     return true;
   }
@@ -295,8 +397,8 @@ static bool CompressLZMSChunked(const std::vector<uint8_t> &input,
         const size_t blockSize =
             (std::min)(PRS_CHUNK_SIZE, input.size() - offset);
         uncompSizes[chunkIndex] = static_cast<uint64_t>(blockSize);
-        if (!CompressLZMSBlock(input.data() + offset, blockSize,
-                               compressedChunks[chunkIndex])) {
+        if (!CompressBlock(algorithm, input.data() + offset, blockSize,
+                           compressedChunks[chunkIndex])) {
           failed.store(true);
           break;
         }
@@ -319,8 +421,14 @@ static bool CompressLZMSChunked(const std::vector<uint8_t> &input,
     totalCompBytes += chunk.size();
 
   output.clear();
-  output.reserve(8 + chunkCount * 16 + totalCompBytes);
-  output.insert(output.end(), PRS_CHUNK_MAGIC, PRS_CHUNK_MAGIC + 4);
+  output.reserve((legacyV2ChunkHeader ? 8 : 12) + chunkCount * 16 +
+                 totalCompBytes);
+  if (legacyV2ChunkHeader) {
+    output.insert(output.end(), PRS_CHUNK_MAGIC, PRS_CHUNK_MAGIC + 4);
+  } else {
+    output.insert(output.end(), PRS_CHUNK_V3_MAGIC, PRS_CHUNK_V3_MAGIC + 4);
+    WriteU32(output, static_cast<uint32_t>(algorithm));
+  }
   WriteU32(output, static_cast<uint32_t>(chunkCount));
   for (size_t i = 0; i < chunkCount; ++i) {
     WriteU64(output, uncompSizes[i]);
@@ -333,8 +441,24 @@ static bool CompressLZMSChunked(const std::vector<uint8_t> &input,
 
 static bool DecompressLZMSAny(const uint8_t *comp, size_t compSize,
                               std::vector<uint8_t> &output, size_t uncompSize) {
-  if (compSize >= 8 && memcmp(comp, PRS_CHUNK_MAGIC, 4) == 0) {
+  const bool isLegacyChunked =
+      compSize >= 8 && memcmp(comp, PRS_CHUNK_MAGIC, 4) == 0;
+  const bool isV3Chunked =
+      compSize >= 12 && memcmp(comp, PRS_CHUNK_V3_MAGIC, 4) == 0;
+  if (isLegacyChunked || isV3Chunked) {
     size_t pos = 4;
+    PrsCompressionAlgorithm algorithm = PrsCompressionAlgorithm::Lzms;
+    if (isV3Chunked) {
+      uint32_t storedAlgorithm = 0;
+      if (!ReadU32(comp, compSize, pos, storedAlgorithm))
+        return false;
+      if (!IsKnownCompressionAlgorithmValue(storedAlgorithm)) {
+        fprintf(stderr, "PRS: Unknown compression algorithm %u\n",
+                storedAlgorithm);
+        return false;
+      }
+      algorithm = CompressionAlgorithmFromStoredValue(storedAlgorithm);
+    }
     uint32_t chunkCount = 0;
     if (!ReadU32(comp, compSize, pos, chunkCount))
       return false;
@@ -403,10 +527,10 @@ static bool DecompressLZMSAny(const uint8_t *comp, size_t compSize,
 
           size_t actualOut = 0;
           size_t outputSize = static_cast<size_t>(chunk.uncompSize);
-          if (!DecompressLZMSBlock(comp + chunk.compOffset,
-                                   static_cast<size_t>(chunk.compSize),
-                                   output.data() + chunk.outOffset, outputSize,
-                                   actualOut) ||
+          if (!DecompressBlock(algorithm, comp + chunk.compOffset,
+                               static_cast<size_t>(chunk.compSize),
+                               output.data() + chunk.outOffset, outputSize,
+                               actualOut) ||
               actualOut != outputSize) {
             failed.store(true);
             break;
@@ -1409,6 +1533,17 @@ void SetProgressCallback(ProgressCallback cb) {
 // ---------------------------------------------------------------------------
 bool SaveScene(const std::string &path) {
   try {
+    const auto saveStart = std::chrono::steady_clock::now();
+    auto stageStart = saveStart;
+    const auto elapsedMs = [](std::chrono::steady_clock::time_point start,
+                              std::chrono::steady_clock::time_point end) {
+      return std::chrono::duration<double, std::milli>(end - start).count();
+    };
+    double metadataMs = 0.0;
+    double serializeMs = 0.0;
+    double compressMs = 0.0;
+    double writeMs = 0.0;
+
     fs::path outputPath = NormalizeSceneSavePath(NativePathFromUtf8(path));
     if (outputPath.empty()) {
       fprintf(stderr, "PRS: Save failed: empty output path\n");
@@ -1419,13 +1554,30 @@ bool SaveScene(const std::string &path) {
     fprintf(stderr, "PRS: Saving scene to %s\n", path.c_str());
 
     const std::vector<int> textureSaveRemap =
-      MaterialIO::BuildTextureSaveRemap(g_loadedTextures);
+      MaterialIO::BuildTextureSaveRemap(g_loadedTextures, g_loadedMaterials);
+    uint32_t savedTextureCount = 0;
+    size_t savedTextureBytes = 0;
+    for (size_t textureIndex = 0; textureIndex < g_loadedTextures.size();
+         ++textureIndex) {
+      if (textureSaveRemap[textureIndex] < 0) {
+        continue;
+      }
+      ++savedTextureCount;
+      savedTextureBytes += g_loadedTextures[textureIndex].cpuData.size();
+    }
+    fprintf(stderr,
+            "PRS: Texture save set: %u referenced / %zu loaded (%.2f MB)\n",
+            savedTextureCount, g_loadedTextures.size(),
+            savedTextureBytes / (1024.0 * 1024.0));
 
     // 1. Build metadata as msgpack
     json metadata = BuildMetadata(textureSaveRemap);
     std::vector<uint8_t> msgpack = json::to_msgpack(metadata);
     ReportProgress(0.08f, "Packing metadata");
     fprintf(stderr, "PRS: Metadata: %zu bytes (msgpack)\n", msgpack.size());
+    auto stageEnd = std::chrono::steady_clock::now();
+    metadataMs = elapsedMs(stageStart, stageEnd);
+    stageStart = stageEnd;
 
     // 2. Build uncompressed binary payload
     std::vector<uint8_t> payload;
@@ -1450,6 +1602,7 @@ bool SaveScene(const std::string &path) {
 
     // Meshes — raw binary (no base64 = saves ~33% size)
     w.writeU32((uint32_t)g_loadedMeshes.size());
+    size_t meshBytes = 0;
     for (const auto &mesh : g_loadedMeshes) {
       w.writeI32(mesh.materialIndex);
       w.writeU32((uint32_t)mesh.vertexCount);
@@ -1457,18 +1610,16 @@ bool SaveScene(const std::string &path) {
       w.writeF32(mesh.minBound[0]); w.writeF32(mesh.minBound[1]); w.writeF32(mesh.minBound[2]);
       w.writeF32(mesh.maxBound[0]); w.writeF32(mesh.maxBound[1]); w.writeF32(mesh.maxBound[2]);
       uint32_t vb = (uint32_t)(mesh.cpuVertices.size() * sizeof(Asset::Vertex));
+      meshBytes += vb;
       w.writeU32(vb);
       if (vb) w.writeBytes(mesh.cpuVertices.data(), vb);
       uint32_t ib = (uint32_t)(mesh.cpuIndices.size() * sizeof(uint32_t));
+      meshBytes += ib;
       w.writeU32(ib);
       if (ib) w.writeBytes(mesh.cpuIndices.data(), ib);
     }
 
     // Textures — raw binary
-    uint32_t savedTextureCount = 0;
-    for (int mappedIndex : textureSaveRemap)
-      if (mappedIndex >= 0)
-        ++savedTextureCount;
     w.writeU32(savedTextureCount);
     for (size_t textureIndex = 0; textureIndex < g_loadedTextures.size();
          ++textureIndex) {
@@ -1485,17 +1636,35 @@ bool SaveScene(const std::string &path) {
       if (db) w.writeBytes(tex.cpuData.data(), db);
     }
     ReportProgress(0.28f, "Finalizing payload");
+    stageEnd = std::chrono::steady_clock::now();
+    serializeMs = elapsedMs(stageStart, stageEnd);
+    stageStart = stageEnd;
 
     size_t uncompSize = payload.size();
-    fprintf(stderr, "PRS: Uncompressed: %.2f MB\n", uncompSize / (1024.0*1024.0));
+    fprintf(stderr,
+            "PRS: Uncompressed: %.2f MB (meshes %.2f MB, textures %.2f MB)\n",
+            uncompSize / (1024.0 * 1024.0),
+            meshBytes / (1024.0 * 1024.0),
+            savedTextureBytes / (1024.0 * 1024.0));
 
-    // 3. Compress with LZMS
+    // 3. Compress
+    const bool saveLegacyV2 = ShouldSaveLegacyPrsV2();
+    const PrsCompressionAlgorithm compressionAlgorithm =
+        saveLegacyV2 ? PrsCompressionAlgorithm::Lzms
+                     : GetSaveCompressionAlgorithm();
+    fprintf(stderr, "PRS: Save format: v%u, compression: %s\n",
+            saveLegacyV2 ? 2u : PRS_VERSION,
+            CompressionAlgorithmName(compressionAlgorithm));
     std::vector<uint8_t> compressed;
-    if (!CompressLZMSChunked(payload, compressed)) {
+    if (!CompressChunked(payload, compressed, compressionAlgorithm,
+                         saveLegacyV2)) {
       fprintf(stderr, "PRS: Compression failed\n");
       return false;
     }
     payload.clear(); payload.shrink_to_fit();
+    stageEnd = std::chrono::steady_clock::now();
+    compressMs = elapsedMs(stageStart, stageEnd);
+    stageStart = stageEnd;
 
     fprintf(stderr, "PRS: Compressed: %.2f MB (%.1f%% ratio)\n",
             compressed.size()/(1024.0*1024.0), 100.0*compressed.size()/uncompSize);
@@ -1523,7 +1692,7 @@ bool SaveScene(const std::string &path) {
     }
 
     file.write(PRS_MAGIC, 4);
-    uint32_t ver = PRS_VERSION;
+    uint32_t ver = saveLegacyV2 ? 2u : PRS_VERSION;
     file.write(reinterpret_cast<const char*>(&ver), 4);
     uint64_t usz = (uint64_t)uncompSize;
     file.write(reinterpret_cast<const char*>(&usz), 8);
@@ -1533,11 +1702,18 @@ bool SaveScene(const std::string &path) {
       fprintf(stderr, "PRS: Save failed: write did not complete\n");
       return false;
     }
+    stageEnd = std::chrono::steady_clock::now();
+    writeMs = elapsedMs(stageStart, stageEnd);
     ReportProgress(0.98f, "Finalizing file");
 
     fprintf(stderr, "PRS: Saved %.2f MB (was %.2f MB uncompressed)\n",
             (16+compressed.size())/(1024.0*1024.0), uncompSize/(1024.0*1024.0));
-        ReportProgress(1.0f, "Save complete");
+    fprintf(stderr,
+            "PRS: Save timings: metadata %.1f ms, serialize %.1f ms, "
+            "compress %.1f ms, write %.1f ms, total %.1f ms\n",
+            metadataMs, serializeMs, compressMs, writeMs,
+            elapsedMs(saveStart, std::chrono::steady_clock::now()));
+    ReportProgress(1.0f, "Save complete");
     return true;
   } catch (const std::exception &e) {
     std::cerr << "SaveScene: " << e.what() << std::endl;

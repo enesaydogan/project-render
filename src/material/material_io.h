@@ -9,7 +9,8 @@
 namespace MaterialIO {
 
 std::vector<int> BuildTextureSaveRemap(
-    const std::vector<Asset::Texture> &textures);
+    const std::vector<Asset::Texture> &textures,
+    const std::vector<Asset::Material> &materials);
 
 int MapSavedTextureIndex(const std::vector<int> &remap, int textureIndex);
 
