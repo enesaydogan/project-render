@@ -23,6 +23,7 @@ class QShowEvent;
 class SliderControl;
 class QTabWidget;
 class QStandardItemModel;
+class QToolButton;
 
 class MaterialEditorPanel : public QWidget
 {
@@ -53,8 +54,8 @@ private:
         QWidget *group = nullptr;
         QComboBox *combo = nullptr;
         SliderControl *amount = nullptr;
-        QPushButton *clearButton = nullptr;
-        QPushButton *loadButton = nullptr;
+        QToolButton *clearButton = nullptr;
+        QToolButton *loadButton = nullptr;
         QLabel *thumbLabel = nullptr;
     };
 

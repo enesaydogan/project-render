@@ -28,12 +28,14 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QPainter>
+#include <QPainterPath>
 #include <QPixmap>
 #include <QPushButton>
 #include <QApplication>
-#include <QStyle>
 #include <QStringList>
 #include <QTabWidget>
+#include <QToolButton>
 #include <QMetaObject>
 #include <QShowEvent>
 #include <QVBoxLayout>
@@ -53,6 +55,13 @@ extern std::vector<Asset::Material> g_loadedMaterials;
 extern std::vector<Asset::Texture> g_loadedTextures;
 
 namespace {
+
+constexpr int kTextureToolButtonSize = 30;
+
+enum class TextureToolIcon {
+    Load,
+    Clear
+};
 
 SliderControl *CreateSliderControl(double minValue,
                                    double maxValue,
@@ -124,6 +133,68 @@ bool IsHDRTexturePath(const std::wstring &path)
         c = static_cast<wchar_t>(towlower(c));
     }
     return (ext == L".hdr" || ext == L".exr");
+}
+
+QIcon MakeTextureToolIcon(TextureToolIcon icon)
+{
+    constexpr int kIconSize = 18;
+    QPixmap pixmap(kIconSize, kIconSize);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    const QColor stroke(206, 214, 218);
+    const QColor accent(88, 208, 244);
+    const QColor muted(132, 140, 144);
+
+    painter.setPen(QPen(stroke, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+
+    switch (icon) {
+    case TextureToolIcon::Load: {
+        QPainterPath folder;
+        folder.moveTo(2.5, 6.0);
+        folder.lineTo(6.6, 6.0);
+        folder.lineTo(8.2, 4.2);
+        folder.lineTo(15.5, 4.2);
+        folder.lineTo(15.5, 14.0);
+        folder.lineTo(2.5, 14.0);
+        folder.closeSubpath();
+        painter.drawPath(folder);
+        painter.setPen(QPen(accent, 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.drawLine(QPointF(9.0, 7.2), QPointF(9.0, 12.0));
+        painter.drawLine(QPointF(6.8, 9.8), QPointF(9.0, 12.0));
+        painter.drawLine(QPointF(11.2, 9.8), QPointF(9.0, 12.0));
+        break;
+    }
+    case TextureToolIcon::Clear:
+        painter.drawRect(QRectF(4.8, 4.8, 8.6, 8.6));
+        painter.setPen(QPen(muted, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.drawLine(QPointF(6.8, 6.8), QPointF(11.4, 11.4));
+        painter.drawLine(QPointF(11.4, 6.8), QPointF(6.8, 11.4));
+        painter.setPen(QPen(accent, 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.drawLine(QPointF(13.5, 3.8), QPointF(15.2, 2.1));
+        painter.drawLine(QPointF(15.2, 2.1), QPointF(16.2, 3.1));
+        break;
+    }
+
+    return QIcon(pixmap);
+}
+
+QToolButton *CreateTextureToolButton(QWidget *parent,
+                                     const QString &toolTip,
+                                     TextureToolIcon icon)
+{
+    auto *button = new QToolButton(parent);
+    button->setToolTip(toolTip);
+    button->setStatusTip(toolTip);
+    button->setIcon(MakeTextureToolIcon(icon));
+    button->setIconSize(QSize(18, 18));
+    button->setFixedSize(kTextureToolButtonSize, kTextureToolButtonSize);
+    button->setAutoRaise(false);
+    button->setFocusPolicy(Qt::NoFocus);
+    return button;
 }
 
 int AlphaModeIndex(const std::string &mode)
@@ -384,14 +455,10 @@ void MaterialEditorPanel::createUi()
         controlsLayout->setContentsMargins(0, 0, 0, 0);
         controlsLayout->setSpacing(2);
 
-        auto *loadButton = new QPushButton(group);
-        auto *clearButton = new QPushButton(group);
-        loadButton->setIcon(group->style()->standardIcon(QStyle::SP_DialogOpenButton));
-        clearButton->setIcon(group->style()->standardIcon(QStyle::SP_DialogResetButton));
-        loadButton->setToolTip(tr("Load texture"));
-        clearButton->setToolTip(tr("Clear texture"));
-        loadButton->setFixedSize(22, 22);
-        clearButton->setFixedSize(22, 22);
+        auto *loadButton =
+            CreateTextureToolButton(group, tr("Load texture"), TextureToolIcon::Load);
+        auto *clearButton =
+            CreateTextureToolButton(group, tr("Clear texture"), TextureToolIcon::Clear);
 
         auto *titleRow = new QHBoxLayout();
         titleRow->setContentsMargins(0, 0, 0, 0);
