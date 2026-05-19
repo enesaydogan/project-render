@@ -172,10 +172,28 @@ enum class GizmoSpace {
   World,
 };
 
+enum class MirrorAxis {
+  X,
+  Y,
+  Z,
+};
+
+enum class MirrorPivot {
+  SelectionCenter,
+  WorldOrigin,
+  ActiveNode,
+};
+
+enum class MirrorSpace {
+  World,
+  Local,
+};
+
 void SetGizmoOperation(GizmoOperation operation);
 GizmoOperation GetGizmoOperation();
 void SetGizmoSpace(GizmoSpace space);
 GizmoSpace GetGizmoSpace();
+bool MirrorSelectedNodes(MirrorAxis axis, MirrorPivot pivot, MirrorSpace space);
 bool CanUndoTransform();
 bool CanRedoTransform();
 bool UndoTransform();

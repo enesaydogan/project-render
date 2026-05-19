@@ -4,6 +4,7 @@
 #include "../scene.h"
 
 #include <QAbstractItemView>
+#include <QAction>
 #include <QColor>
 #include <QFileInfo>
 #include <QHeaderView>
@@ -11,6 +12,7 @@
 #include <QIcon>
 #include <QItemSelectionModel>
 #include <QLabel>
+#include <QMenu>
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QPainter>
@@ -303,6 +305,7 @@ void ScenePanel::createUi()
     m_nodeList->setColumnCount(2);
     m_nodeList->setHeaderHidden(true);
     m_nodeList->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_nodeList->setContextMenuPolicy(Qt::CustomContextMenu);
     m_nodeList->header()->setSectionResizeMode(kNodeNameColumn, QHeaderView::Stretch);
     m_nodeList->header()->setSectionResizeMode(kNodeLockColumn, QHeaderView::ResizeToContents);
     layout->addWidget(m_nodeList);
@@ -355,6 +358,8 @@ void ScenePanel::createUi()
         }
         Scene::SelectNodes(selectedNodeIndices);
     });
+    connect(m_nodeList, &QTreeWidget::customContextMenuRequested,
+            this, &ScenePanel::showNodeContextMenu);
     connect(m_nodeList, &QTreeWidget::itemClicked, this,
             [this](QTreeWidgetItem *item, int column) {
         if (m_syncing || !item || column != kNodeLockColumn) {
@@ -420,6 +425,45 @@ void ScenePanel::requestDeleteSelectedNode()
 
     Scene::DeleteNode(static_cast<size_t>(nodeIndex));
     refreshSceneList();
+}
+
+void ScenePanel::showNodeContextMenu(const QPoint &pos)
+{
+    if (!m_nodeList || IsSceneIoJobActive()) {
+        return;
+    }
+
+    QMenu menu(this);
+    auto *transformMenu = menu.addMenu(tr("Transform"));
+    auto *mirrorMenu = transformMenu->addMenu(tr("Mirror"));
+
+    const bool hasSelection = !Scene::GetSelectedNodeIndices().empty();
+    const auto addMirrorAction = [&](const QString &label,
+                                     const QString &toolTip,
+                                     Scene::MirrorAxis axis) {
+        QAction *action = mirrorMenu->addAction(label, this, [this, axis]() {
+            Scene::MirrorSpace space =
+                Scene::GetGizmoSpace() == Scene::GizmoSpace::Local
+                    ? Scene::MirrorSpace::Local
+                    : Scene::MirrorSpace::World;
+            if (Scene::MirrorSelectedNodes(axis,
+                                           Scene::MirrorPivot::SelectionCenter,
+                                           space)) {
+                refreshSceneList();
+            }
+        });
+        action->setToolTip(toolTip);
+        action->setEnabled(hasSelection);
+    };
+
+    addMirrorAction(tr("Flip X"), tr("Mirror across the YZ plane"),
+                    Scene::MirrorAxis::X);
+    addMirrorAction(tr("Flip Y"), tr("Mirror across the XZ plane"),
+                    Scene::MirrorAxis::Y);
+    addMirrorAction(tr("Flip Z"), tr("Mirror across the XY plane"),
+                    Scene::MirrorAxis::Z);
+
+    menu.exec(m_nodeList->viewport()->mapToGlobal(pos));
 }
 
 void ScenePanel::scheduleRefresh()

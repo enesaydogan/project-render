@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QPoint>
 #include <QWidget>
 
 #include <cstddef>
@@ -25,6 +26,7 @@ private:
     void scheduleRefresh();
     int selectedNodeIndex() const;
     void requestDeleteSelectedNode();
+    void showNodeContextMenu(const QPoint &pos);
 
     QTreeWidget *m_nodeList = nullptr;
     QProgressBar *m_importProgress = nullptr;

@@ -5022,6 +5022,147 @@ static bool ComputeSelectionPivot(
   return true;
 }
 
+static void SetIdentityMatrix4x4(float matrix[16]) {
+  for (int i = 0; i < 16; ++i) {
+    matrix[i] = 0.0f;
+  }
+  matrix[0] = 1.0f;
+  matrix[5] = 1.0f;
+  matrix[10] = 1.0f;
+  matrix[15] = 1.0f;
+}
+
+static const char *MirrorAxisName(MirrorAxis axis) {
+  switch (axis) {
+  case MirrorAxis::X:
+    return "X";
+  case MirrorAxis::Y:
+    return "Y";
+  case MirrorAxis::Z:
+    return "Z";
+  }
+  return "?";
+}
+
+static bool BuildMirrorPivotMatrix(
+    const std::vector<size_t> &roots,
+    const std::vector<std::array<float, 16>> &worldTransforms,
+    MirrorPivot pivot, MirrorSpace space, float outPivot[16]) {
+  if (roots.empty() || roots.front() >= worldTransforms.size()) {
+    return false;
+  }
+
+  float pivotPoint[3] = {0.0f, 0.0f, 0.0f};
+  switch (pivot) {
+  case MirrorPivot::SelectionCenter: {
+    float selectionPivot[16];
+    if (!ComputeSelectionPivot(roots, worldTransforms, selectionPivot)) {
+      return false;
+    }
+    pivotPoint[0] = selectionPivot[12];
+    pivotPoint[1] = selectionPivot[13];
+    pivotPoint[2] = selectionPivot[14];
+    break;
+  }
+  case MirrorPivot::WorldOrigin:
+    break;
+  case MirrorPivot::ActiveNode: {
+    const float *activeWorld = worldTransforms[roots.front()].data();
+    pivotPoint[0] = activeWorld[12];
+    pivotPoint[1] = activeWorld[13];
+    pivotPoint[2] = activeWorld[14];
+    break;
+  }
+  }
+
+  if (space == MirrorSpace::Local) {
+    CopyMatrix4x4(worldTransforms[roots.front()].data(), outPivot);
+  } else {
+    SetIdentityMatrix4x4(outPivot);
+  }
+  outPivot[12] = pivotPoint[0];
+  outPivot[13] = pivotPoint[1];
+  outPivot[14] = pivotPoint[2];
+  return true;
+}
+
+bool MirrorSelectedNodes(MirrorAxis axis, MirrorPivot pivot,
+                         MirrorSpace space) {
+  CommitTransformHistoryEdit();
+  const std::vector<size_t> selectedRoots = GetSelectedTransformRoots();
+  if (selectedRoots.empty()) {
+    return false;
+  }
+
+  const std::vector<std::array<float, 16>> worldTransforms =
+      BuildNodeWorldTransforms();
+  float pivotMatrix[16];
+  if (!BuildMirrorPivotMatrix(selectedRoots, worldTransforms, pivot, space,
+                              pivotMatrix)) {
+    return false;
+  }
+  float invPivot[16];
+  if (!Inverse4x4(pivotMatrix, invPivot)) {
+    return false;
+  }
+
+  float reflection[16];
+  SetIdentityMatrix4x4(reflection);
+  switch (axis) {
+  case MirrorAxis::X:
+    reflection[0] = -1.0f;
+    break;
+  case MirrorAxis::Y:
+    reflection[5] = -1.0f;
+    break;
+  case MirrorAxis::Z:
+    reflection[10] = -1.0f;
+    break;
+  }
+
+  float pivotReflection[16];
+  float mirrorDelta[16];
+  MatMul(pivotMatrix, reflection, pivotReflection);
+  MatMul(pivotReflection, invPivot, mirrorDelta);
+
+  TransformHistoryEntry historyEntry;
+  historyEntry.nodes.reserve(selectedRoots.size());
+  for (size_t rootIndex : selectedRoots) {
+    TransformNodeHistory snapshot;
+    if (CaptureNodeTransform(rootIndex, &snapshot)) {
+      historyEntry.nodes.push_back(std::move(snapshot));
+    }
+  }
+  if (historyEntry.nodes.empty()) {
+    return false;
+  }
+
+  for (size_t rootIndex : selectedRoots) {
+    if (rootIndex >= worldTransforms.size()) {
+      continue;
+    }
+    float newWorld[16];
+    MatMul(mirrorDelta, worldTransforms[rootIndex].data(), newWorld);
+    ApplyNodeWorldTransform(rootIndex, newWorld, worldTransforms);
+  }
+
+  for (TransformNodeHistory &node : historyEntry.nodes) {
+    if (node.nodeIndex < s_nodes.size() &&
+        node.nodeName == s_nodes[node.nodeIndex].name) {
+      CopyMatrix4x4(s_nodes[node.nodeIndex].transform, node.after.data());
+    } else {
+      node.after = node.before;
+    }
+  }
+  PushTransformHistoryEntry(std::move(historyEntry));
+
+  ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
+  NotifySceneChanged();
+  s_lastStatus = std::string("Mirrored selected nodes on ") +
+                 MirrorAxisName(axis) + " axis";
+  return true;
+}
+
 static bool WorldToScreenPoint(const float worldPoint[3], const float view[16],
                                const float proj[16], float windowX,
                                float windowY, float windowWidth,

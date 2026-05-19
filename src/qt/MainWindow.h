@@ -20,6 +20,7 @@ class QProgressBar;
 class QFrame;
 class QTimer;
 class QPushButton;
+class QToolButton;
 class QWidget;
 
 class MainWindow : public QMainWindow
@@ -73,9 +74,23 @@ private:
     QAction *m_transformScaleAction = nullptr;
     QAction *m_transformLocalAction = nullptr;
     QAction *m_transformWorldAction = nullptr;
+    QAction *m_mirrorXAction = nullptr;
+    QAction *m_mirrorYAction = nullptr;
+    QAction *m_mirrorZAction = nullptr;
+    QAction *m_mirrorPivotSelectionAction = nullptr;
+    QAction *m_mirrorPivotWorldAction = nullptr;
+    QAction *m_mirrorPivotActiveAction = nullptr;
+    QAction *m_mirrorSpaceCurrentAction = nullptr;
+    QAction *m_mirrorSpaceWorldAction = nullptr;
+    QAction *m_mirrorSpaceLocalAction = nullptr;
     QActionGroup *m_transformOperationGroup = nullptr;
     QActionGroup *m_transformSpaceGroup = nullptr;
+    QActionGroup *m_mirrorPivotGroup = nullptr;
+    QActionGroup *m_mirrorSpaceGroup = nullptr;
     QMenu *m_viewMenu = nullptr;
+    QMenu *m_mirrorMenu = nullptr;
+    int m_mirrorPivot = 0;
+    int m_mirrorSpace = 0;
     QByteArray m_defaultDockState;
     QProgressBar *m_sceneIoProgress = nullptr;
     QLabel *m_sceneIoLabel = nullptr;

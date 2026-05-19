@@ -54,12 +54,14 @@
 #include <QVBoxLayout>
 #include <QMenuBar>
 #include <QPlainTextEdit>
+#include <QPolygonF>
 #include <QProgressBar>
 #include <QShortcut>
 #include <QScrollBar>
 #include <QScrollArea>
 #include <QTabWidget>
 #include <QToolBar>
+#include <QToolButton>
 #include <QStatusBar>
 #include <QTimer>
 #include <QUrl>
@@ -94,6 +96,7 @@ enum class ToolbarIcon {
     Translate,
     Rotate,
     Scale,
+    Mirror,
     Local,
     World,
 };
@@ -447,6 +450,19 @@ QIcon MakeToolbarIcon(ToolbarIcon icon,
         painter.drawLine(QPointF(23, 9), QPointF(23, 15));
         painter.drawLine(QPointF(23, 9), QPointF(17, 9));
         break;
+    case ToolbarIcon::Mirror:
+        painter.drawLine(QPointF(16, 5), QPointF(16, 27));
+        painter.setPen(QPen(line, 1.2, Qt::DashLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.drawLine(QPointF(4, 16), QPointF(28, 16));
+        painter.setPen(pen);
+        painter.drawPolygon(QPolygonF({
+            QPointF(6, 9), QPointF(13, 12), QPointF(13, 20), QPointF(6, 23)
+        }));
+        painter.setPen(accentPen);
+        painter.drawPolygon(QPolygonF({
+            QPointF(26, 9), QPointF(19, 12), QPointF(19, 20), QPointF(26, 23)
+        }));
+        break;
     case ToolbarIcon::Local:
         painter.setPen(accentPen);
         painter.drawLine(QPointF(10, 23), QPointF(22, 11));
@@ -477,6 +493,47 @@ void ConfigureToolbarAction(QAction *action, const QString &text,
     action->setText(text);
     action->setToolTip(tooltip);
     action->setIcon(MakeToolbarIcon(icon));
+}
+
+Scene::MirrorPivot MirrorPivotFromIndex(int index)
+{
+    switch (index) {
+    case 1:
+        return Scene::MirrorPivot::WorldOrigin;
+    case 2:
+        return Scene::MirrorPivot::ActiveNode;
+    case 0:
+    default:
+        return Scene::MirrorPivot::SelectionCenter;
+    }
+}
+
+Scene::MirrorSpace MirrorSpaceFromIndex(int index)
+{
+    switch (index) {
+    case 1:
+        return Scene::MirrorSpace::World;
+    case 2:
+        return Scene::MirrorSpace::Local;
+    case 0:
+    default:
+        return Scene::GetGizmoSpace() == Scene::GizmoSpace::Local
+                   ? Scene::MirrorSpace::Local
+                   : Scene::MirrorSpace::World;
+    }
+}
+
+QString MirrorAxisLabel(Scene::MirrorAxis axis)
+{
+    switch (axis) {
+    case Scene::MirrorAxis::X:
+        return QObject::tr("X");
+    case Scene::MirrorAxis::Y:
+        return QObject::tr("Y");
+    case Scene::MirrorAxis::Z:
+        return QObject::tr("Z");
+    }
+    return QString();
 }
 
 QString ReadGitHash()
@@ -820,6 +877,69 @@ void MainWindow::createMenus()
         m_transformSpaceGroup->addAction(action);
     }
 
+    editMenu->addSeparator();
+    m_mirrorMenu = editMenu->addMenu(tr("Mirror"));
+    m_mirrorMenu->setIcon(MakeToolbarIcon(ToolbarIcon::Mirror));
+    auto triggerMirror = [this](Scene::MirrorAxis axis) {
+        const Scene::MirrorPivot pivot = MirrorPivotFromIndex(m_mirrorPivot);
+        const Scene::MirrorSpace space = MirrorSpaceFromIndex(m_mirrorSpace);
+        if (Scene::MirrorSelectedNodes(axis, pivot, space)) {
+            statusBar()->showMessage(
+                tr("Mirrored selection on %1").arg(MirrorAxisLabel(axis)), 2000);
+        }
+        updateTransformUi();
+    };
+    m_mirrorXAction = m_mirrorMenu->addAction(tr("Flip X"), this, [triggerMirror]() {
+        triggerMirror(Scene::MirrorAxis::X);
+    });
+    m_mirrorXAction->setToolTip(tr("Mirror across the YZ plane"));
+    m_mirrorYAction = m_mirrorMenu->addAction(tr("Flip Y"), this, [triggerMirror]() {
+        triggerMirror(Scene::MirrorAxis::Y);
+    });
+    m_mirrorYAction->setToolTip(tr("Mirror across the XZ plane"));
+    m_mirrorZAction = m_mirrorMenu->addAction(tr("Flip Z"), this, [triggerMirror]() {
+        triggerMirror(Scene::MirrorAxis::Z);
+    });
+    m_mirrorZAction->setToolTip(tr("Mirror across the XY plane"));
+    m_mirrorMenu->addSeparator();
+    QMenu *pivotMenu = m_mirrorMenu->addMenu(tr("Pivot"));
+    m_mirrorPivotGroup = new QActionGroup(this);
+    m_mirrorPivotGroup->setExclusive(true);
+    m_mirrorPivotSelectionAction = pivotMenu->addAction(tr("Selection Center"), this, [this]() {
+        m_mirrorPivot = 0;
+    });
+    m_mirrorPivotWorldAction = pivotMenu->addAction(tr("World Origin"), this, [this]() {
+        m_mirrorPivot = 1;
+    });
+    m_mirrorPivotActiveAction = pivotMenu->addAction(tr("Active Node"), this, [this]() {
+        m_mirrorPivot = 2;
+    });
+    for (QAction *action : {m_mirrorPivotSelectionAction, m_mirrorPivotWorldAction,
+                            m_mirrorPivotActiveAction}) {
+        action->setCheckable(true);
+        m_mirrorPivotGroup->addAction(action);
+    }
+    m_mirrorPivotSelectionAction->setChecked(true);
+
+    QMenu *spaceMenu = m_mirrorMenu->addMenu(tr("Space"));
+    m_mirrorSpaceGroup = new QActionGroup(this);
+    m_mirrorSpaceGroup->setExclusive(true);
+    m_mirrorSpaceCurrentAction = spaceMenu->addAction(tr("Current Gizmo Space"), this, [this]() {
+        m_mirrorSpace = 0;
+    });
+    m_mirrorSpaceWorldAction = spaceMenu->addAction(tr("World"), this, [this]() {
+        m_mirrorSpace = 1;
+    });
+    m_mirrorSpaceLocalAction = spaceMenu->addAction(tr("Local"), this, [this]() {
+        m_mirrorSpace = 2;
+    });
+    for (QAction *action : {m_mirrorSpaceCurrentAction, m_mirrorSpaceWorldAction,
+                            m_mirrorSpaceLocalAction}) {
+        action->setCheckable(true);
+        m_mirrorSpaceGroup->addAction(action);
+    }
+    m_mirrorSpaceCurrentAction->setChecked(true);
+
     m_viewMenu = menuBar()->addMenu(tr("&View"));
     m_viewMenu->addAction(tr("Toggle UI (F1)"), this, [this]() {
         toggleQtUiVisibility();
@@ -1013,6 +1133,17 @@ void MainWindow::createToolBar()
     if (m_transformScaleAction) {
         toolbar->addAction(m_transformScaleAction);
     }
+    if (m_mirrorMenu) {
+        auto *mirrorButton = new QToolButton(toolbar);
+        mirrorButton->setToolTip(tr("Mirror selected nodes"));
+        mirrorButton->setStatusTip(tr("Mirror selected nodes"));
+        mirrorButton->setIcon(MakeToolbarIcon(ToolbarIcon::Mirror));
+        mirrorButton->setIconSize(QSize(22, 22));
+        mirrorButton->setMenu(m_mirrorMenu);
+        mirrorButton->setPopupMode(QToolButton::InstantPopup);
+        mirrorButton->setAutoRaise(false);
+        toolbar->addWidget(mirrorButton);
+    }
     toolbar->addSeparator();
     if (m_transformLocalAction) {
         toolbar->addAction(m_transformLocalAction);
@@ -1076,6 +1207,12 @@ void MainWindow::updateTransformUi()
     }
     if (m_redoTransformAction) {
         m_redoTransformAction->setEnabled(Scene::CanRedoTransform());
+    }
+    const bool hasSelectedNodes = !Scene::GetSelectedNodeIndices().empty();
+    for (QAction *action : {m_mirrorXAction, m_mirrorYAction, m_mirrorZAction}) {
+        if (action) {
+            action->setEnabled(hasSelectedNodes);
+        }
     }
 }
 
