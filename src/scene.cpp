@@ -4544,7 +4544,13 @@ void RefreshAllMaterialRuntimeTextures() {
 void RemoveLight(size_t index) {
   if (index < s_lights.size()) {
     s_lights.erase(s_lights.begin() + index);
+    if (s_selectedLightIdx == (int)index) {
+      s_selectedLightIdx = -1;
+    } else if (s_selectedLightIdx > (int)index) {
+      --s_selectedLightIdx;
+    }
     LiveLink::GetSceneSync().ReindexSceneLightBindingsAfterRemoval(index);
+    UpdateLights();
     NotifySceneChanged();
   }
 }
