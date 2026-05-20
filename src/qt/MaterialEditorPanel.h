@@ -163,6 +163,7 @@ private:
     SliderControl *m_uvScaleY = nullptr;
     SliderControl *m_uvOffsetX = nullptr;
     SliderControl *m_uvOffsetY = nullptr;
+    SliderControl *m_uvRotation = nullptr;
     QCheckBox *m_triPlanarEnabled = nullptr;
     SliderControl *m_triPlanarScale = nullptr;
     SliderControl *m_triPlanarSharpness = nullptr;

@@ -74,6 +74,7 @@ cbuffer MaterialCB : register(b1)
     float4 extraParams;         // x=emissiveIntensity, y=alphaCutoff, z=isMask, w=isGrass
     float4 coatLayerParams;     // x=coatWeight, y=coatRoughness, z=thinWalled, w=translucency
     float4 uvTransform;         // xy=uvScale, zw=uvOffset
+    float4 uvRotationParams;    // x=regular UV rotation in degrees
     float4 triPlanarParams;     // x=enabled, y=scale, z=sharpness, w=normalStrength
     float4 mappingVariationParams; // x=mode, y=offsetJitter, z=randomRotation, w=colorVariation
     float4 triPlanarRotationParams; // xyz=materialRotationDegrees, w=stochasticMirror
@@ -340,6 +341,30 @@ float2 RotateNormalLocal(float2 tangentXY, float2 mirrorSign,
     tangentXY *= mirrorSign;
     return float2(tangentXY.x * cosR - tangentXY.y * sinR,
                   tangentXY.x * sinR + tangentXY.y * cosR);
+}
+
+float2 ApplyRegularUvTransform(float2 uv)
+{
+    float rotationDegrees = uvRotationParams.x;
+    if (abs(rotationDegrees) > 1.0e-5f) {
+        float sinR, cosR;
+        sincos(radians(rotationDegrees), sinR, cosR);
+        uv = RotateUvLocal(uv, sinR, cosR);
+    }
+    return uv * uvTransform.xy + uvTransform.zw;
+}
+
+float3 ApplyRegularUvNormalRotation(float3 tangentNormal)
+{
+    float rotationDegrees = uvRotationParams.x;
+    if (abs(rotationDegrees) <= 1.0e-5f) {
+        return tangentNormal;
+    }
+    float sinR, cosR;
+    sincos(radians(rotationDegrees), sinR, cosR);
+    tangentNormal.xy =
+        RotateNormalLocal(tangentNormal.xy, float2(1.0f, 1.0f), sinR, cosR);
+    return normalize(tangentNormal);
 }
 
 float2 TransformUvGradientForCell(float2 uvGradient, float2 mirrorSign,
@@ -1120,6 +1145,7 @@ float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent,
     float3 tangentNormal =
         SampleUvNormalTexture(normalTexIndex, uv, amount, objectOrigin,
                               worldNormal, primitiveId);
+    tangentNormal = ApplyRegularUvNormalRotation(tangentNormal);
     
     float3 N = normalize(worldNormal);
     float3 T = normalize(worldTangent.xyz);
@@ -1234,7 +1260,7 @@ PSOutput PSMainMesh(PSInputMesh input, uint primitiveId : SV_PrimitiveID)
 #endif
 
     // --- Texture Lookups ---
-    float2 uv = input.uv * uvTransform.xy + uvTransform.zw;
+    float2 uv = ApplyRegularUvTransform(input.uv);
     float3 worldPos = input.worldPos;
     float3 objectPos = input.objectPos;
     float3 worldNormal = normalize(input.normal);
@@ -1398,7 +1424,7 @@ PSOutput PSMainMesh(PSInputMesh input, uint primitiveId : SV_PrimitiveID)
         float tip = saturate(1.0 - input.uv.y);
         grassRootAmount = saturate(pow(input.uv.y, 1.65));
         if (!triPlanar && textureIndices.x >= 0) {
-            float2 emitterUv = input.emitterUv * uvTransform.xy + uvTransform.zw;
+            float2 emitterUv = ApplyRegularUvTransform(input.emitterUv);
             float3 groundTint =
                 BlendTextureRgb(
                     sRGBToLinear(

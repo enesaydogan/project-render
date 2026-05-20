@@ -229,6 +229,7 @@ void ApplyPreset(Asset::Material &m, int presetIndex) {
   m.uvScale[1] = 1.0f;
   m.uvOffset[0] = 0.0f;
   m.uvOffset[1] = 0.0f;
+  m.uvRotationDegrees = 0.0f;
   m.triPlanarEnabled = 0.0f;
   m.triPlanarScale = 1.0f;
   m.triPlanarSharpness = 4.0f;
@@ -621,7 +622,8 @@ uint32_t BuildRuntimeMaterialFlags(const Asset::Material &material) {
   if (std::fabs(material.uvScale[0] - 1.0f) > 1e-5f ||
       std::fabs(material.uvScale[1] - 1.0f) > 1e-5f ||
       std::fabs(material.uvOffset[0]) > 1e-5f ||
-      std::fabs(material.uvOffset[1]) > 1e-5f) {
+      std::fabs(material.uvOffset[1]) > 1e-5f ||
+      std::fabs(material.uvRotationDegrees) > 1e-5f) {
     flags |= kRuntimeMaterialFlagUvTransform;
   }
   if (transmission > kMaterialFlagEpsilon || material.thinWalled > 0.5f) {
@@ -729,6 +731,10 @@ void BuildRuntimeDxrMaterialData(const Asset::Material &material,
   outExtra->uvTransform[1] = material.uvScale[1];
   outExtra->uvTransform[2] = material.uvOffset[0];
   outExtra->uvTransform[3] = material.uvOffset[1];
+  outExtra->uvRotationParams[0] = material.uvRotationDegrees;
+  outExtra->uvRotationParams[1] = 0.0f;
+  outExtra->uvRotationParams[2] = 0.0f;
+  outExtra->uvRotationParams[3] = 0.0f;
 
   outExtra->triPlanarParams[0] = material.triPlanarEnabled;
   outExtra->triPlanarParams[1] = material.triPlanarScale;
@@ -896,6 +902,10 @@ void BuildRuntimeRasterMaterialConstants(
   outConstants->uvTransform[1] = material.uvScale[1];
   outConstants->uvTransform[2] = material.uvOffset[0];
   outConstants->uvTransform[3] = material.uvOffset[1];
+  outConstants->uvRotationParams[0] = material.uvRotationDegrees;
+  outConstants->uvRotationParams[1] = 0.0f;
+  outConstants->uvRotationParams[2] = 0.0f;
+  outConstants->uvRotationParams[3] = 0.0f;
 
   outConstants->triPlanarParams[0] = material.triPlanarEnabled;
   outConstants->triPlanarParams[1] = material.triPlanarScale;

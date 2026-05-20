@@ -52,7 +52,7 @@ struct Texture {
 
 struct Material {
   static constexpr uint32_t kSchemaVersionOpenPbrSubset = 9;
-  static constexpr uint32_t kSchemaVersionCoronaArchviz = 12;
+  static constexpr uint32_t kSchemaVersionCoronaArchviz = 13;
   static constexpr uint32_t kWorkflowMetalRoughness = 0;
   static constexpr uint32_t kWorkflowReflectionGlossiness = 1;
   static constexpr uint32_t kMaterialClassGeneric = 0;
@@ -82,6 +82,7 @@ struct Material {
   // Simple UV transform for real-world scaling
   float uvScale[2] = {1.0f, 1.0f};
   float uvOffset[2] = {0.0f, 0.0f};
+  float uvRotationDegrees = 0.0f;
 
   // Tri-planar mapping (world-space projection)
   float triPlanarEnabled = 0.0f;   // 0/1

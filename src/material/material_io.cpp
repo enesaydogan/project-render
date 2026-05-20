@@ -35,6 +35,7 @@ nlohmann::json BuildMappingMetadata(const Asset::Material &material) {
   return {
       {"us", {material.uvScale[0], material.uvScale[1]}},
       {"uo", {material.uvOffset[0], material.uvOffset[1]}},
+      {"ur", material.uvRotationDegrees},
       {"te", material.triPlanarEnabled},
       {"ts", material.triPlanarScale},
       {"ths", material.triPlanarSharpness},
@@ -76,6 +77,8 @@ void RestoreMappingMetadata(const nlohmann::json &mapping,
   }
   material.triPlanarEnabled =
       mapping.value("te", material.triPlanarEnabled);
+  material.uvRotationDegrees =
+      mapping.value("ur", material.uvRotationDegrees);
   material.triPlanarScale =
       mapping.value("ts", material.triPlanarScale);
   material.triPlanarSharpness =
@@ -210,6 +213,7 @@ nlohmann::json BuildMaterialsMetadata(
         {"mp", BuildMappingMetadata(mat)},
         {"us", {mat.uvScale[0], mat.uvScale[1]}},
         {"uo", {mat.uvOffset[0], mat.uvOffset[1]}},
+        {"ur", mat.uvRotationDegrees},
         {"te", mat.triPlanarEnabled},
         {"ts", mat.triPlanarScale},
         {"ths", mat.triPlanarSharpness},
@@ -363,6 +367,8 @@ void RestoreMaterialsFromMetadata(const nlohmann::json &materialsJson,
         material.uvOffset[channel] = savedMaterial["uo"][channel];
       }
     }
+    material.uvRotationDegrees =
+        savedMaterial.value("ur", material.uvRotationDegrees);
     material.triPlanarEnabled =
         savedMaterial.value("te", material.triPlanarEnabled);
     material.triPlanarScale =

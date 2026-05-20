@@ -662,6 +662,8 @@ void MaterialEditorPanel::createUi()
     mappingForm->addRow(tr("UV Scale"), uvScaleWidget);
     QWidget *uvOffsetWidget = CreateVec2Row(&m_uvOffsetX, &m_uvOffsetY, -10000.0, 10000.0, 0.1, 3);
     mappingForm->addRow(tr("UV Offset"), uvOffsetWidget);
+    m_uvRotation = CreateSliderControl(-360.0, 360.0, 1.0, 1);
+    mappingForm->addRow(tr("UV Rotation (deg)"), m_uvRotation);
 
     auto *triPlanarDivider = new QFrame(mappingTab);
     triPlanarDivider->setFrameShape(QFrame::HLine);
@@ -1257,6 +1259,14 @@ void MaterialEditorPanel::createUi()
             m.uvOffset[1] = static_cast<float>(value);
         });
     });
+    connect(m_uvRotation->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            m.uvRotationDegrees = static_cast<float>(value);
+        });
+    });
     connect(m_triPlanarEnabled, &QCheckBox::toggled, this, [this](bool enabled) {
         if (m_syncing) {
             return;
@@ -1798,6 +1808,7 @@ void MaterialEditorPanel::syncInspectorMaterialState(const Asset::Material &mat,
     SyncSliderControlValue(m_uvScaleY, mat.uvScale[1]);
     SyncSliderControlValue(m_uvOffsetX, mat.uvOffset[0]);
     SyncSliderControlValue(m_uvOffsetY, mat.uvOffset[1]);
+    SyncSliderControlValue(m_uvRotation, mat.uvRotationDegrees);
     SyncCheckBoxState(m_triPlanarEnabled, mat.triPlanarEnabled > 0.5f);
     SyncSliderControlValue(m_triPlanarScale, mat.triPlanarScale);
     SyncSliderControlValue(m_triPlanarSharpness, mat.triPlanarSharpness);

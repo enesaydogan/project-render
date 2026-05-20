@@ -207,6 +207,32 @@ float2 RotateNormalLocal(float2 tangentXY, float2 mirrorSign,
                   tangentXY.x * sinR + tangentXY.y * cosR);
 }
 
+float2 ApplyRegularUvTransform(float2 uv, float4 uvTransform,
+                               float4 uvRotationParams)
+{
+    float rotationDegrees = uvRotationParams.x;
+    if (abs(rotationDegrees) > 1.0e-5f) {
+        float sinR, cosR;
+        sincos(radians(rotationDegrees), sinR, cosR);
+        uv = RotateUvLocal(uv, sinR, cosR);
+    }
+    return uv * uvTransform.xy + uvTransform.zw;
+}
+
+float3 ApplyRegularUvNormalRotation(float3 tangentNormal,
+                                    float4 uvRotationParams)
+{
+    float rotationDegrees = uvRotationParams.x;
+    if (abs(rotationDegrees) <= 1.0e-5f) {
+        return tangentNormal;
+    }
+    float sinR, cosR;
+    sincos(radians(rotationDegrees), sinR, cosR);
+    tangentNormal.xy =
+        RotateNormalLocal(tangentNormal.xy, float2(1.0f, 1.0f), sinR, cosR);
+    return normalize(tangentNormal);
+}
+
 void ComputeUvVariationTransform(uint cellSeed, float4 variationParams,
                                  float4 rotationParams, out float2 offset,
                                  out float2 mirrorSign,
@@ -575,7 +601,8 @@ float3 SampleTriPlanarNormal(int texIndex, float3 worldPos, float3 worldNormal,
 float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent,
                         int normalTexIndex, float amount, float lod,
                         float4 variationParams, float4 rotationParams,
-                        float3 objectOrigin, uint primitiveId)
+                        float4 uvRotationParams, float3 objectOrigin,
+                        uint primitiveId)
 {
     if (normalTexIndex < 0 || amount <= 0.0 ||
         dot(worldTangent.xyz, worldTangent.xyz) < 1e-6) return normalize(worldNormal);
@@ -584,6 +611,8 @@ float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent,
         SampleUvNormalTexture(normalTexIndex, uv, amount, objectOrigin,
                               worldNormal, variationParams,
                               rotationParams, lod, primitiveId);
+    tangentNormal = ApplyRegularUvNormalRotation(tangentNormal,
+                                                 uvRotationParams);
     
     float3 N = normalize(worldNormal);
     float3 T = normalize(worldTangent.xyz);
@@ -860,7 +889,7 @@ void ClosestHitImpl(inout RayPayload payload,
 
     // Material UV transform (real-world scaling control)
     if ((matFlags & MATERIAL_FLAG_UV_TRANSFORM) != 0) {
-        uv = uv * uvXf.xy + uvXf.zw;
+        uv = ApplyRegularUvTransform(uv, uvXf, matExtra.uvRotationParams);
     }
 
     // World position (used by tri-planar)
@@ -1041,7 +1070,8 @@ void ClosestHitImpl(inout RayPayload payload,
             instanceIdx >= grassTlasStartIndex) {
             uint grassBladeIndex = instanceIdx - grassTlasStartIndex;
             float2 emitterUv =
-                grassBlades[grassBladeIndex].emitterUv * uvXf.xy + uvXf.zw;
+                ApplyRegularUvTransform(grassBlades[grassBladeIndex].emitterUv,
+                                        uvXf, matExtra.uvRotationParams);
             float3 groundTint =
                 BlendTextureRgb(
                     sRGBToLinear(SampleUvTexture(texDiff, emitterUv,
@@ -1105,10 +1135,10 @@ void ClosestHitImpl(inout RayPayload payload,
     
     // Normal mapping
     float3 N = triPlanar ? SampleTriPlanarNormal(texNorm, P, worldNormal, triScale, triSharp, triNormStrength, texWeight1.x, samplingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar)
-                         : GetNormalFromMap(uv, worldNormal, worldTangent, texNorm, texWeight1.x, textureLod, samplingVariation, triRotation, objectOrigin, primIndex);
+                         : GetNormalFromMap(uv, worldNormal, worldTangent, texNorm, texWeight1.x, textureLod, samplingVariation, triRotation, matExtra.uvRotationParams, objectOrigin, primIndex);
     if (clearcoat > 0.001 && texCoatNormal >= 0 && lobeParams.x > 1.0e-4) {
         float3 coatN = triPlanar ? SampleTriPlanarNormal(texCoatNormal, P, worldNormal, triScale, triSharp, triNormStrength, lobeParams.x, samplingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar)
-                                 : GetNormalFromMap(uv, worldNormal, worldTangent, texCoatNormal, lobeParams.x, textureLod, samplingVariation, triRotation, objectOrigin, primIndex);
+                                 : GetNormalFromMap(uv, worldNormal, worldTangent, texCoatNormal, lobeParams.x, textureLod, samplingVariation, triRotation, matExtra.uvRotationParams, objectOrigin, primIndex);
         N = normalize(lerp(N, coatN, saturate(clearcoat)));
     }
     // Two-sided shading guard for reverse-oriented faces.
@@ -1360,7 +1390,8 @@ void AnyHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes a
         float2 uv2 = v2.uv;
         float2 uv = uv0 * bary.x + uv1 * bary.y + uv2 * bary.z;
         if ((matFlags & MATERIAL_FLAG_UV_TRANSFORM) != 0) {
-            uv = uv * matExtra.uvTransform.xy + matExtra.uvTransform.zw;
+            uv = ApplyRegularUvTransform(uv, matExtra.uvTransform,
+                                         matExtra.uvRotationParams);
         }
 
         float alpha = mat.baseColor_opacity.a;

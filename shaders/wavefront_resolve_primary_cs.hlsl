@@ -234,6 +234,40 @@ inline float2 WavefrontGiTransformUvForCell(float2 uv, float2 offset,
                   centered.x * sinR + centered.y * cosR) + 0.5 + offset;
 }
 
+inline float2 WavefrontGiRotateUvLocal(float2 uv, float sinR, float cosR)
+{
+    float2 centered = uv - 0.5;
+    return float2(centered.x * cosR - centered.y * sinR,
+                  centered.x * sinR + centered.y * cosR) + 0.5;
+}
+
+inline float2 WavefrontGiApplyRegularUvTransform(float2 uv,
+                                                 float4 uvTransform,
+                                                 float4 uvRotationParams)
+{
+    float rotationDegrees = uvRotationParams.x;
+    if (abs(rotationDegrees) > 1.0e-5) {
+        float sinR, cosR;
+        sincos(radians(rotationDegrees), sinR, cosR);
+        uv = WavefrontGiRotateUvLocal(uv, sinR, cosR);
+    }
+    return uv * uvTransform.xy + uvTransform.zw;
+}
+
+inline float3 WavefrontGiApplyRegularUvNormalRotation(float3 tangentNormal,
+                                                      float4 uvRotationParams)
+{
+    float rotationDegrees = uvRotationParams.x;
+    if (abs(rotationDegrees) <= 1.0e-5) {
+        return tangentNormal;
+    }
+    float sinR, cosR;
+    sincos(radians(rotationDegrees), sinR, cosR);
+    tangentNormal.xy = float2(tangentNormal.x * cosR - tangentNormal.y * sinR,
+                              tangentNormal.x * sinR + tangentNormal.y * cosR);
+    return normalize(tangentNormal);
+}
+
 inline bool WavefrontGiUseUvStochasticTiling(float4 variationParams,
                                              float4 rotationParams)
 {
@@ -647,6 +681,7 @@ inline float3 WavefrontGiSampleNormalMap(int texIndex,
                                          float triNormalStrength,
                                          float4 variationParams,
                                          float4 rotationParams,
+                                         float4 uvRotationParams,
                                          float3 objectOrigin,
                                          uint primitiveId,
                                          float lod)
@@ -664,6 +699,9 @@ inline float3 WavefrontGiSampleNormalMap(int texIndex,
             variationParams, rotationParams, lod, primitiveId, false).xyz *
             2.0 - 1.0;
         tangentNormal = WavefrontGiBlendNormalSample(tangentNormal, amount);
+        tangentNormal =
+            WavefrontGiApplyRegularUvNormalRotation(tangentNormal,
+                                                    uvRotationParams);
         float3 n = normalize(worldNormal);
         float3 t = normalize(worldTangent.xyz);
         float3 b = cross(n, t) * worldTangent.w;
@@ -893,7 +931,8 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
         vertices[mesh.vbIndex][i1].uv * bary.y +
         vertices[mesh.vbIndex][i2].uv * bary.z;
     if ((matFlags & MATERIAL_FLAG_UV_TRANSFORM) != 0u) {
-        uv = uv * materialExtra.uvTransform.xy + materialExtra.uvTransform.zw;
+        uv = WavefrontGiApplyRegularUvTransform(
+            uv, materialExtra.uvTransform, materialExtra.uvRotationParams);
     }
 
     const float3x4 objectToWorld = query.CommittedObjectToWorld3x4();
@@ -1032,15 +1071,15 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
         : WavefrontGiSampleNormalMap(
               texNorm, uv, surfacePos, worldNormal, worldTangent,
               texWeight1.x, triPlanar, triScale, triSharp, triNormalStrength,
-              mappingVariation, triRotation, objectOrigin, primitiveIndex,
-              textureLod);
+              mappingVariation, triRotation, materialExtra.uvRotationParams,
+              objectOrigin, primitiveIndex, textureLod);
     if (!clayMode && clearcoat > 0.001 && texCoatNormal >= 0 &&
         lobeParams.x > 1.0e-4) {
         float3 coatNormal = WavefrontGiSampleNormalMap(
             texCoatNormal, uv, surfacePos, worldNormal, worldTangent,
             lobeParams.x, triPlanar, triScale, triSharp, triNormalStrength,
-            mappingVariation, triRotation, objectOrigin, primitiveIndex,
-            textureLod);
+            mappingVariation, triRotation, materialExtra.uvRotationParams,
+            objectOrigin, primitiveIndex, textureLod);
         normal = normalize(lerp(normal, coatNormal, clearcoat));
     }
     if (dot(normal, -incomingDirection) < 0.0) {

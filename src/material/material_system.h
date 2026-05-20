@@ -50,6 +50,7 @@ struct RuntimeRasterMaterialConstants {
   float extraParams[4];
   float coatLayerParams[4];
   float uvTransform[4];
+  float uvRotationParams[4];
   float triPlanarParams[4];
   float mappingVariationParams[4];
   float triPlanarRotationParams[4];
@@ -76,6 +77,7 @@ struct RuntimeDxrMaterialData {
 struct RuntimeDxrMaterialExtraData {
   float coatLayerParams[4];
   float uvTransform[4];
+  float uvRotationParams[4];
   float triPlanarParams[4];
   float mappingVariationParams[4];
   float triPlanarRotationParams[4];
