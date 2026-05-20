@@ -240,21 +240,35 @@ void LightsPanel::createUi()
         if (m_syncing) {
             return;
         }
-        QColor chosen = ArchColorDialog::getColor(m_currentColor, this, tr("Select Light Color"));
-        if (!chosen.isValid()) {
+        const int row = m_lightList->currentRow();
+        auto &lights = Scene::GetLights();
+        if (row < 0 || row >= static_cast<int>(lights.size())) {
             return;
         }
-        m_currentColor = chosen;
-        updateColorButton(m_currentColor);
-        applyLight([this](Light &l) {
+
+        const Light originalLight = lights[static_cast<size_t>(row)];
+        const QColor originalColor = m_currentColor;
+        auto applyPreview = [this, row, originalLight](const QColor &color) {
+            if (!color.isValid()) {
+                return;
+            }
+            Light preview = originalLight;
             const float intensity = static_cast<float>(m_intensity->value());
-            const float r = static_cast<float>(m_currentColor.redF());
-            const float g = static_cast<float>(m_currentColor.greenF());
-            const float b = static_cast<float>(m_currentColor.blueF());
-            l.emission[0] = r * intensity;
-            l.emission[1] = g * intensity;
-            l.emission[2] = b * intensity;
-        });
+            preview.emission[0] = static_cast<float>(color.redF()) * intensity;
+            preview.emission[1] = static_cast<float>(color.greenF()) * intensity;
+            preview.emission[2] = static_cast<float>(color.blueF()) * intensity;
+            Scene::UpdateLight(static_cast<size_t>(row), preview);
+            m_currentColor = color;
+            updateColorButton(m_currentColor);
+        };
+
+        auto restoreOriginal = [this, row, originalLight, originalColor]() {
+            Scene::UpdateLight(static_cast<size_t>(row), originalLight);
+            m_currentColor = originalColor;
+            updateColorButton(m_currentColor);
+        };
+        ArchColorDialog::showColor(m_currentColor, this, tr("Select Light Color"),
+                                   applyPreview, applyPreview, restoreOriginal);
     });
 
     connect(m_intensity, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) {

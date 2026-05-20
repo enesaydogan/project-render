@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <memory>
 
 namespace {
 
@@ -391,7 +392,8 @@ void ConnectChannel(const ChannelRow &row, double minValue, double maxValue,
 
 QColor ArchColorDialog::getColor(const QColor &initial,
                                  QWidget *parent,
-                                 const QString &title)
+                                 const QString &title,
+                                 const std::function<void(const QColor &)> &previewChanged)
 {
     QDialog dialog(parent);
     dialog.setWindowTitle(title);
@@ -499,6 +501,9 @@ QColor ArchColorDialog::getColor(const QColor &initial,
         }
         current = color;
         refreshUi();
+        if (previewChanged) {
+            previewChanged(current);
+        }
     };
 
     auto setRgb = [&](double r, double g, double b) {
@@ -567,6 +572,221 @@ QColor ArchColorDialog::getColor(const QColor &initial,
         return QColor();
     }
     return current;
+}
+
+void ArchColorDialog::showColor(
+    const QColor &initial,
+    QWidget *parent,
+    const QString &title,
+    const std::function<void(const QColor &)> &previewChanged,
+    const std::function<void(const QColor &)> &accepted,
+    const std::function<void()> &rejected)
+{
+    auto *dialog = new QDialog(parent);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(title);
+    dialog->setMinimumWidth(650);
+
+    struct State {
+        QColor current;
+        double hue = 0.0;
+        float sat = 0.0f;
+        float val = 0.0f;
+        bool syncing = false;
+    };
+    auto state = std::make_shared<State>();
+    state->current = initial.isValid() ? initial : QColor(Qt::white);
+    state->hue = NormalizedHue(state->current, 0.0);
+    float initialHue = 0.0f;
+    state->current.getHsvF(&initialHue, &state->sat, &state->val);
+
+    auto *layout = new QVBoxLayout(dialog);
+    layout->setContentsMargins(10, 10, 10, 10);
+    layout->setSpacing(8);
+
+    auto *top = new QHBoxLayout();
+    top->setSpacing(12);
+
+    auto *plane = new ColorPlane(dialog);
+    auto *hueStrip = new HueStrip(dialog);
+    top->addWidget(plane, 1);
+    top->addWidget(hueStrip);
+
+    auto *controls = new QGridLayout();
+    controls->setHorizontalSpacing(8);
+    controls->setVerticalSpacing(6);
+    top->addLayout(controls, 1);
+
+    ChannelRow rRow = CreateChannelRow(controls, 0, QObject::tr("R"), 0.0, 1.0, 3);
+    ChannelRow gRow = CreateChannelRow(controls, 1, QObject::tr("G"), 0.0, 1.0, 3);
+    ChannelRow bRow = CreateChannelRow(controls, 2, QObject::tr("B"), 0.0, 1.0, 3);
+    ChannelRow hRow = CreateChannelRow(controls, 4, QObject::tr("H"), 0.0, 1.0, 3);
+    ChannelRow sRow = CreateChannelRow(controls, 5, QObject::tr("S"), 0.0, 1.0, 3);
+    ChannelRow vRow = CreateChannelRow(controls, 6, QObject::tr("V"), 0.0, 1.0, 3);
+    ChannelRow kRow = CreateChannelRow(controls, 8, QObject::tr("K"), 1000.0, 40000.0, 0,
+                                       QObject::tr(" K"));
+    controls->setRowMinimumHeight(3, 8);
+    controls->setRowMinimumHeight(7, 8);
+
+    layout->addLayout(top, 1);
+
+    auto *swatchRow = new QHBoxLayout();
+    swatchRow->setSpacing(8);
+    swatchRow->addWidget(new QLabel(QObject::tr("Previous"), dialog));
+    auto *previousSwatch = new Swatch(dialog);
+    previousSwatch->setColor(state->current);
+    swatchRow->addWidget(previousSwatch);
+    swatchRow->addWidget(new QLabel(QObject::tr("Current"), dialog));
+    auto *currentSwatch = new Swatch(dialog);
+    swatchRow->addWidget(currentSwatch);
+    swatchRow->addStretch(1);
+    layout->addLayout(swatchRow);
+
+    auto *variationGrid = new QGridLayout();
+    variationGrid->setHorizontalSpacing(8);
+    variationGrid->setVerticalSpacing(4);
+    auto *hueStripVariants = new VariationStrip(VariationStrip::Mode::Hue, dialog);
+    auto *satStripVariants =
+        new VariationStrip(VariationStrip::Mode::Saturation, dialog);
+    auto *valStripVariants =
+        new VariationStrip(VariationStrip::Mode::Value, dialog);
+    variationGrid->addWidget(new QLabel(QObject::tr("Hue Variation"), dialog),
+                             0, 0);
+    variationGrid->addWidget(hueStripVariants, 0, 1);
+    variationGrid->addWidget(new QLabel(QObject::tr("Sat Variation"), dialog),
+                             1, 0);
+    variationGrid->addWidget(satStripVariants, 1, 1);
+    variationGrid->addWidget(new QLabel(QObject::tr("Val Variation"), dialog),
+                             2, 0);
+    variationGrid->addWidget(valStripVariants, 2, 1);
+    variationGrid->setColumnStretch(1, 1);
+    layout->addLayout(variationGrid);
+
+    std::shared_ptr<std::function<void()>> refreshUi =
+        std::make_shared<std::function<void()>>();
+    std::shared_ptr<std::function<void(const QColor &)>> setColor =
+        std::make_shared<std::function<void(const QColor &)>>();
+
+    *refreshUi = [=]() {
+        state->syncing = true;
+        float r = 0.0f;
+        float g = 0.0f;
+        float b = 0.0f;
+        state->current.getRgbF(&r, &g, &b);
+        float hsvHue = 0.0f;
+        state->current.getHsvF(&hsvHue, &state->sat, &state->val);
+        state->hue = NormalizedHue(state->current, state->hue);
+
+        SetChannelValue(rRow, r, 0.0, 1.0);
+        SetChannelValue(gRow, g, 0.0, 1.0);
+        SetChannelValue(bRow, b, 0.0, 1.0);
+        SetChannelValue(hRow, state->hue, 0.0, 1.0);
+        SetChannelValue(sRow, state->sat, 0.0, 1.0);
+        SetChannelValue(vRow, state->val, 0.0, 1.0);
+
+        plane->setValues(state->hue, state->sat, state->val);
+        hueStrip->setHue(state->hue);
+        currentSwatch->setColor(state->current);
+        hueStripVariants->setBaseColor(state->current, state->hue);
+        satStripVariants->setBaseColor(state->current, state->hue);
+        valStripVariants->setBaseColor(state->current, state->hue);
+        state->syncing = false;
+    };
+
+    *setColor = [=](const QColor &color) {
+        if (state->syncing || !color.isValid()) {
+            return;
+        }
+        state->current = color;
+        (*refreshUi)();
+        if (previewChanged) {
+            previewChanged(state->current);
+        }
+    };
+
+    auto setRgb = [=](double r, double g, double b) {
+        (*setColor)(QColor::fromRgbF(std::clamp(r, 0.0, 1.0),
+                                     std::clamp(g, 0.0, 1.0),
+                                     std::clamp(b, 0.0, 1.0)));
+    };
+
+    ConnectChannel(rRow, 0.0, 1.0, [=](double value) {
+        if (!state->syncing) setRgb(value, state->current.greenF(), state->current.blueF());
+    });
+    ConnectChannel(gRow, 0.0, 1.0, [=](double value) {
+        if (!state->syncing) setRgb(state->current.redF(), value, state->current.blueF());
+    });
+    ConnectChannel(bRow, 0.0, 1.0, [=](double value) {
+        if (!state->syncing) setRgb(state->current.redF(), state->current.greenF(), value);
+    });
+    ConnectChannel(hRow, 0.0, 1.0, [=](double value) {
+        if (!state->syncing) {
+            state->hue = value;
+            (*setColor)(QColor::fromHsvF(state->hue, state->sat, state->val));
+        }
+    });
+    ConnectChannel(sRow, 0.0, 1.0, [=](double value) {
+        if (!state->syncing) (*setColor)(QColor::fromHsvF(state->hue, value, state->val));
+    });
+    ConnectChannel(vRow, 0.0, 1.0, [=](double value) {
+        if (!state->syncing) (*setColor)(QColor::fromHsvF(state->hue, state->sat, value));
+    });
+    ConnectChannel(kRow, 1000.0, 40000.0, [=](double value) {
+        if (!state->syncing) (*setColor)(colorForKelvin(value));
+    });
+
+    plane->setChangedCallback([=](double saturation, double value) {
+        if (!state->syncing) (*setColor)(QColor::fromHsvF(state->hue, saturation, value));
+    });
+    hueStrip->setChangedCallback([=](double value) {
+        if (!state->syncing) {
+            state->hue = value;
+            (*setColor)(QColor::fromHsvF(state->hue, state->sat, state->val));
+        }
+    });
+    hueStripVariants->setChangedCallback([=](const QColor &color) {
+        if (!state->syncing) (*setColor)(color);
+    });
+    satStripVariants->setChangedCallback([=](const QColor &color) {
+        if (!state->syncing) (*setColor)(color);
+    });
+    valStripVariants->setChangedCallback([=](const QColor &color) {
+        if (!state->syncing) (*setColor)(color);
+    });
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok |
+                                         QDialogButtonBox::Cancel,
+                                         dialog);
+    layout->addWidget(buttons);
+    auto completed = std::make_shared<bool>(false);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, dialog, [=]() {
+        *completed = true;
+        if (accepted) {
+            accepted(state->current);
+        }
+        dialog->accept();
+    });
+    QObject::connect(buttons, &QDialogButtonBox::rejected, dialog, [=]() {
+        *completed = true;
+        if (rejected) {
+            rejected();
+        }
+        dialog->reject();
+    });
+    QObject::connect(dialog, &QDialog::finished, dialog, [=](int result) {
+        if (!*completed && result != QDialog::Accepted) {
+            *completed = true;
+            if (rejected) {
+                rejected();
+            }
+        }
+    });
+
+    SetChannelValue(kRow, 6500.0, 1000.0, 40000.0);
+    (*refreshUi)();
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
 }
 
 QColor ArchColorDialog::colorForKelvin(double kelvin)

@@ -86,6 +86,9 @@ private:
 
     void setColorButton(QPushButton *button, const QColor &color);
     QColor getColorFromMaterial(const float color[3]) const;
+    void pickMaterialColor(const QString &title,
+                           const std::function<QColor(const Asset::Material &)> &readColor,
+                           const std::function<void(Asset::Material &, const QColor &)> &writeColor);
 
     int currentMaterialIndex() const;
     void setSelectedMaterial(int materialIndex, bool ensureVisible);

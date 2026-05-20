@@ -927,112 +927,82 @@ void MaterialEditorPanel::createUi()
     });
 
     connect(m_baseColorButton, &QPushButton::clicked, this, [this]() {
-        const int idx = currentMaterialIndex();
-        if (idx < 0) {
-            return;
-        }
-        Asset::Material &mat = g_loadedMaterials[idx];
-        QColor current = getColorFromMaterial(mat.diffuseColor);
-        QColor picked = ArchColorDialog::getColor(current, this, tr("Pick Base Color"));
-        if (!picked.isValid()) {
-            return;
-        }
-        applyMaterialChange([picked](Asset::Material &m) {
-            m.diffuseColor[0] = static_cast<float>(picked.redF());
-            m.diffuseColor[1] = static_cast<float>(picked.greenF());
-            m.diffuseColor[2] = static_cast<float>(picked.blueF());
-        });
+        pickMaterialColor(
+            tr("Pick Base Color"),
+            [this](const Asset::Material &m) {
+                return getColorFromMaterial(m.diffuseColor);
+            },
+            [](Asset::Material &m, const QColor &picked) {
+                m.diffuseColor[0] = static_cast<float>(picked.redF());
+                m.diffuseColor[1] = static_cast<float>(picked.greenF());
+                m.diffuseColor[2] = static_cast<float>(picked.blueF());
+            });
     });
     connect(m_specularColorButton, &QPushButton::clicked, this, [this]() {
-        const int idx = currentMaterialIndex();
-        if (idx < 0) {
-            return;
-        }
-        Asset::Material &mat = g_loadedMaterials[idx];
-        QColor current = getColorFromMaterial(mat.specularColor);
-        QColor picked = ArchColorDialog::getColor(current, this, tr("Pick Specular Color"));
-        if (!picked.isValid()) {
-            return;
-        }
-        applyMaterialChange([picked](Asset::Material &m) {
-            m.specularColor[0] = static_cast<float>(picked.redF());
-            m.specularColor[1] = static_cast<float>(picked.greenF());
-            m.specularColor[2] = static_cast<float>(picked.blueF());
-        });
+        pickMaterialColor(
+            tr("Pick Specular Color"),
+            [this](const Asset::Material &m) {
+                return getColorFromMaterial(m.specularColor);
+            },
+            [](Asset::Material &m, const QColor &picked) {
+                m.specularColor[0] = static_cast<float>(picked.redF());
+                m.specularColor[1] = static_cast<float>(picked.greenF());
+                m.specularColor[2] = static_cast<float>(picked.blueF());
+            });
     });
 
     connect(m_transmissionColorButton, &QPushButton::clicked, this, [this]() {
-        const int idx = currentMaterialIndex();
-        if (idx < 0) {
-            return;
-        }
-        Asset::Material &mat = g_loadedMaterials[idx];
-        QColor current = getColorFromMaterial(mat.transmissionColor);
-        QColor picked = ArchColorDialog::getColor(current, this, tr("Pick Transmission Color"));
-        if (!picked.isValid()) {
-            return;
-        }
-        applyMaterialChange([picked](Asset::Material &m) {
-            m.transmissionColor[0] = static_cast<float>(picked.redF());
-            m.transmissionColor[1] = static_cast<float>(picked.greenF());
-            m.transmissionColor[2] = static_cast<float>(picked.blueF());
-        });
+        pickMaterialColor(
+            tr("Pick Transmission Color"),
+            [this](const Asset::Material &m) {
+                return getColorFromMaterial(m.transmissionColor);
+            },
+            [](Asset::Material &m, const QColor &picked) {
+                m.transmissionColor[0] = static_cast<float>(picked.redF());
+                m.transmissionColor[1] = static_cast<float>(picked.greenF());
+                m.transmissionColor[2] = static_cast<float>(picked.blueF());
+            });
     });
     connect(m_sheenColorButton, &QPushButton::clicked, this, [this]() {
-        const int idx = currentMaterialIndex();
-        if (idx < 0) {
-            return;
-        }
-        Asset::Material &mat = g_loadedMaterials[idx];
-        QColor current = getColorFromMaterial(mat.sheenColor);
-        QColor picked = ArchColorDialog::getColor(current, this, tr("Pick Sheen Color"));
-        if (!picked.isValid()) {
-            return;
-        }
-        applyMaterialChange([picked](Asset::Material &m) {
-            m.sheenColor[0] = static_cast<float>(picked.redF());
-            m.sheenColor[1] = static_cast<float>(picked.greenF());
-            m.sheenColor[2] = static_cast<float>(picked.blueF());
-        });
+        pickMaterialColor(
+            tr("Pick Sheen Color"),
+            [this](const Asset::Material &m) {
+                return getColorFromMaterial(m.sheenColor);
+            },
+            [](Asset::Material &m, const QColor &picked) {
+                m.sheenColor[0] = static_cast<float>(picked.redF());
+                m.sheenColor[1] = static_cast<float>(picked.greenF());
+                m.sheenColor[2] = static_cast<float>(picked.blueF());
+            });
     });
 
     connect(m_grassColorButton, &QPushButton::clicked, this, [this]() {
-        const int idx = currentMaterialIndex();
-        if (idx < 0) {
-            return;
-        }
-        Asset::Material &mat = g_loadedMaterials[idx];
-        QColor current = getColorFromMaterial(mat.grassColor);
-        QColor picked = ArchColorDialog::getColor(current, this, tr("Pick Grass Color"));
-        if (!picked.isValid()) {
-            return;
-        }
-        applyMaterialChange([picked](Asset::Material &m) {
-            m.grassColor[0] = static_cast<float>(picked.redF());
-            m.grassColor[1] = static_cast<float>(picked.greenF());
-            m.grassColor[2] = static_cast<float>(picked.blueF());
-            m.diffuseColor[0] = m.grassColor[0];
-            m.diffuseColor[1] = m.grassColor[1];
-            m.diffuseColor[2] = m.grassColor[2];
-        });
+        pickMaterialColor(
+            tr("Pick Grass Color"),
+            [this](const Asset::Material &m) {
+                return getColorFromMaterial(m.grassColor);
+            },
+            [](Asset::Material &m, const QColor &picked) {
+                m.grassColor[0] = static_cast<float>(picked.redF());
+                m.grassColor[1] = static_cast<float>(picked.greenF());
+                m.grassColor[2] = static_cast<float>(picked.blueF());
+                m.diffuseColor[0] = m.grassColor[0];
+                m.diffuseColor[1] = m.grassColor[1];
+                m.diffuseColor[2] = m.grassColor[2];
+            });
     });
 
     connect(m_emissiveColorButton, &QPushButton::clicked, this, [this]() {
-        const int idx = currentMaterialIndex();
-        if (idx < 0) {
-            return;
-        }
-        Asset::Material &mat = g_loadedMaterials[idx];
-        QColor current = getColorFromMaterial(mat.emissiveColor);
-        QColor picked = ArchColorDialog::getColor(current, this, tr("Pick Emissive Color"));
-        if (!picked.isValid()) {
-            return;
-        }
-        applyMaterialChange([picked](Asset::Material &m) {
-            m.emissiveColor[0] = static_cast<float>(picked.redF());
-            m.emissiveColor[1] = static_cast<float>(picked.greenF());
-            m.emissiveColor[2] = static_cast<float>(picked.blueF());
-        });
+        pickMaterialColor(
+            tr("Pick Emissive Color"),
+            [this](const Asset::Material &m) {
+                return getColorFromMaterial(m.emissiveColor);
+            },
+            [](Asset::Material &m, const QColor &picked) {
+                m.emissiveColor[0] = static_cast<float>(picked.redF());
+                m.emissiveColor[1] = static_cast<float>(picked.greenF());
+                m.emissiveColor[2] = static_cast<float>(picked.blueF());
+            });
     });
 
     connect(m_workflowCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
@@ -2241,6 +2211,45 @@ void MaterialEditorPanel::applyMaterialChange(const std::function<void(Asset::Ma
     m_syncing = true;
     syncInspectorMaterialState(mat, refreshTextureUi);
     m_syncing = false;
+}
+
+void MaterialEditorPanel::pickMaterialColor(
+    const QString &title,
+    const std::function<QColor(const Asset::Material &)> &readColor,
+    const std::function<void(Asset::Material &, const QColor &)> &writeColor)
+{
+    const int idx = currentMaterialIndex();
+    if (idx < 0 || idx >= static_cast<int>(g_loadedMaterials.size())) {
+        return;
+    }
+
+    const Asset::Material originalMaterial = g_loadedMaterials[idx];
+    const QColor originalColor = readColor(originalMaterial);
+    auto applyPreview = [this, idx, writeColor](const QColor &color) {
+        if (!color.isValid() || idx >= static_cast<int>(g_loadedMaterials.size())) {
+            return;
+        }
+        writeColor(g_loadedMaterials[idx], color);
+        DxrRenderer::MarkMaterialDirty(idx);
+        m_syncing = true;
+        syncInspectorMaterialState(g_loadedMaterials[idx], false);
+        m_syncing = false;
+        DxrRenderer::ResetAccumulation();
+    };
+
+    auto restoreOriginal = [this, idx, originalMaterial]() {
+        if (idx < static_cast<int>(g_loadedMaterials.size())) {
+            g_loadedMaterials[idx] = originalMaterial;
+            DxrRenderer::MarkMaterialDirty(idx);
+            m_syncing = true;
+            syncInspectorMaterialState(g_loadedMaterials[idx], false);
+            m_syncing = false;
+            DxrRenderer::ResetAccumulation();
+        }
+    };
+
+    ArchColorDialog::showColor(originalColor, this, title, applyPreview,
+                               applyPreview, restoreOriginal);
 }
 
 void MaterialEditorPanel::setColorButton(QPushButton *button, const QColor &color)
