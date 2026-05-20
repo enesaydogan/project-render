@@ -6048,6 +6048,112 @@ void SetRrJitterScale(float scale) {
 
 float GetRrJitterScale() { return s_rrJitterScale; }
 
+GpuMemoryBreakdown GetGpuMemoryBreakdown() {
+  GpuMemoryBreakdown breakdown = {};
+  if (!s_device) {
+    return breakdown;
+  }
+
+  auto resourceBytes = [](ID3D12Resource *resource) -> uint64_t {
+    if (!s_device || !resource) {
+      return 0;
+    }
+    const D3D12_RESOURCE_DESC desc = resource->GetDesc();
+    const D3D12_RESOURCE_ALLOCATION_INFO info =
+        s_device->GetResourceAllocationInfo(0, 1, &desc);
+    return static_cast<uint64_t>(info.SizeInBytes);
+  };
+  auto addResource = [&](ID3D12Resource *resource, uint64_t &bucket) {
+    bucket += resourceBytes(resource);
+  };
+  auto addAsBuffers = [&](const AccelerationStructureBuffers &buffers) {
+    addResource(buffers.result.Get(), breakdown.accelerationStructureBytes);
+    addResource(buffers.scratch.Get(), breakdown.accelerationStructureBytes);
+    addResource(buffers.instanceDesc.Get(), breakdown.accelerationStructureBytes);
+    addResource(buffers.compactedSizeBuffer.Get(),
+                breakdown.accelerationStructureBytes);
+  };
+
+  addResource(s_outputUAV.Get(), breakdown.renderTargetBytes);
+  addResource(s_depthUAV.Get(), breakdown.renderTargetBytes);
+  addResource(s_mvecUAV.Get(), breakdown.renderTargetBytes);
+  addResource(s_albedoUAV.Get(), breakdown.renderTargetBytes);
+  addResource(s_normalRoughnessUAV.Get(), breakdown.renderTargetBytes);
+  addResource(s_oidnAlbedoGuideUAV.Get(), breakdown.renderTargetBytes);
+  addResource(s_oidnNormalRoughnessGuideUAV.Get(), breakdown.renderTargetBytes);
+  addResource(s_linearDepthUAV.Get(), breakdown.renderTargetBytes);
+  addResource(s_dlssOutputUAV.Get(), breakdown.renderTargetBytes);
+  addResource(s_oidnOutputUAV.Get(), breakdown.renderTargetBytes);
+  addResource(s_tonemapOutputUAV.Get(), breakdown.renderTargetBytes);
+  addResource(s_specularAlbedoUAV.Get(), breakdown.renderTargetBytes);
+  addResource(s_specHitDistanceUAV.Get(), breakdown.renderTargetBytes);
+  addResource(s_specularMotionVectorsUAV.Get(), breakdown.renderTargetBytes);
+
+  addResource(s_accumulation.GetAccumulationBuffer(),
+              breakdown.accumulationBytes);
+  addResource(s_accumulation.GetVarianceBuffer(), breakdown.accumulationBytes);
+  addResource(s_transmissionAccumulation.GetAccumulationBuffer(),
+              breakdown.accumulationBytes);
+  addResource(s_transmissionAccumulation.GetVarianceBuffer(),
+              breakdown.accumulationBytes);
+
+  for (const auto &buffer : s_reservoirBuffers) {
+    addResource(buffer.Get(), breakdown.reservoirBytes);
+  }
+  for (const auto &buffer : s_gi_reservoirBuffers) {
+    addResource(buffer.Get(), breakdown.reservoirBytes);
+  }
+  addResource(s_wavefrontShadowContributionUAV.Get(),
+              breakdown.wavefrontQueueBytes);
+  addResource(s_wavefrontQueueCountersBuffer.Get(),
+              breakdown.wavefrontQueueBytes);
+  addResource(s_wavefrontPathQueueABuffer.Get(),
+              breakdown.wavefrontQueueBytes);
+  addResource(s_wavefrontPathQueueBBuffer.Get(),
+              breakdown.wavefrontQueueBytes);
+  addResource(s_wavefrontHitQueueBuffer.Get(), breakdown.wavefrontQueueBytes);
+  addResource(s_wavefrontShadowQueueBuffer.Get(),
+              breakdown.wavefrontQueueBytes);
+  addResource(s_wavefrontDispatchArgsBuffer.Get(),
+              breakdown.wavefrontQueueBytes);
+  addResource(s_wavefrontStatsBuffer.Get(), breakdown.wavefrontQueueBytes);
+  addResource(s_wavefrontReservedBuffer.Get(), breakdown.wavefrontQueueBytes);
+  addResource(s_wavefrontMaterialBinIndicesBuffer.Get(),
+              breakdown.wavefrontQueueBytes);
+
+  addAsBuffers(s_tlas);
+  for (const MeshBLAS &blas : s_allBLAS) {
+    addAsBuffers(blas.buffers);
+  }
+  breakdown.blasCount = static_cast<uint32_t>(
+      (std::min)(s_allBLAS.size(),
+                 static_cast<size_t>((std::numeric_limits<uint32_t>::max)())));
+
+  addResource(s_sbtStorage.Get(), breakdown.shaderTableBytes);
+  addResource(s_lightBuffer.Get(), breakdown.lightBufferBytes);
+  addResource(s_shaderCountersBuffer.Get(), breakdown.diagnosticBufferBytes);
+  addResource(s_noiseStatsOutputBuffer.Get(), breakdown.diagnosticBufferBytes);
+  addResource(s_avgLumBuffer.Get(), breakdown.diagnosticBufferBytes);
+
+  breakdown.descriptorCount = DXR_HEAP_TOTAL_COUNT;
+  const UINT descriptorSize =
+      s_device->GetDescriptorHandleIncrementSize(
+          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+  breakdown.descriptorHeapBytes =
+      static_cast<uint64_t>(DXR_HEAP_TOTAL_COUNT) * descriptorSize;
+
+  breakdown.totalBytes = breakdown.renderTargetBytes +
+                         breakdown.accumulationBytes +
+                         breakdown.reservoirBytes +
+                         breakdown.wavefrontQueueBytes +
+                         breakdown.accelerationStructureBytes +
+                         breakdown.shaderTableBytes +
+                         breakdown.lightBufferBytes +
+                         breakdown.diagnosticBufferBytes +
+                         breakdown.descriptorHeapBytes;
+  return breakdown;
+}
+
 bool IsReady() {
   return g_rayTracingSupported && s_rtStateObject != nullptr;
 }

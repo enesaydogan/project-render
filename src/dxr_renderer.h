@@ -1,6 +1,7 @@
 #pragma once
 #include "assets/asset_loader.h"
 #include "oidn_denoiser.h"
+#include <cstdint>
 #include <d3d12.h>
 #include <string>
 #include <vector>
@@ -176,6 +177,23 @@ UINT GetLightCount();
 // 1.0 = full jitter (best DLSS sampling), 0.0 = disable jitter.
 void SetRrJitterScale(float scale);
 float GetRrJitterScale();
+
+struct GpuMemoryBreakdown {
+  uint64_t renderTargetBytes = 0;
+  uint64_t accumulationBytes = 0;
+  uint64_t reservoirBytes = 0;
+  uint64_t wavefrontQueueBytes = 0;
+  uint64_t accelerationStructureBytes = 0;
+  uint64_t shaderTableBytes = 0;
+  uint64_t lightBufferBytes = 0;
+  uint64_t diagnosticBufferBytes = 0;
+  uint64_t descriptorHeapBytes = 0;
+  uint64_t totalBytes = 0;
+  uint32_t blasCount = 0;
+  uint32_t descriptorCount = 0;
+};
+GpuMemoryBreakdown GetGpuMemoryBreakdown();
+
 // Perform DXR render (dispatch rays, copy to render target). Returns true if
 // executed.
 bool RenderFrame(ID3D12GraphicsCommandList *commandList,

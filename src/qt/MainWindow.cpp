@@ -11,17 +11,20 @@
 #include "ScenePanel.h"
 #include "ViewsPanel.h"
 #include "../animation_sequence.h"
+#include "../d3d12_helpers.h"
 #include "../dx12_context.h"
 #include "../dxr_renderer.h"
 #include "../editor_ui.h"
 #include "../file_import.h"
 #include "../livelink/livelink_runtime.h"
 #include "../livelink/livelink_scene_sync.h"
+#include "../material/material_system.h"
 #include "../saved_views.h"
 #include "../scene.h"
 #include "../streamline_manager.h"
 #include <QAction>
 #include <QActionGroup>
+#include <QAbstractItemView>
 #include <QKeySequence>
 #include <QCloseEvent>
 #include <QCheckBox>
@@ -60,6 +63,9 @@
 #include <QScrollBar>
 #include <QScrollArea>
 #include <QTabWidget>
+#include <QTableWidget>
+#include <QTableWidgetItem>
+#include <QHeaderView>
 #include <QToolBar>
 #include <QToolButton>
 #include <QStatusBar>
@@ -67,6 +73,7 @@
 #include <QUrl>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -80,6 +87,12 @@
 extern bool g_appClosing;
 extern HWND g_hwnd;
 extern RenderMode g_currentRenderMode;
+extern DescriptorHeapAllocator g_cbvSrvAllocator;
+extern std::vector<Asset::GpuMesh> g_loadedMeshes;
+extern std::vector<Asset::Material> g_loadedMaterials;
+extern std::vector<Asset::Texture> g_loadedTextures;
+extern UINT g_textureDescriptorCount;
+extern UINT g_textureDescriptorCapacity;
 
 namespace {
 
@@ -174,6 +187,119 @@ MemoryStats ReadGpuMemoryStats()
     }
 
     return stats;
+}
+
+UINT64 ResourceAllocationBytes(ID3D12Resource *resource)
+{
+    if (!DX12Context::g_device || !resource) {
+        return 0;
+    }
+    const D3D12_RESOURCE_DESC desc = resource->GetDesc();
+    const D3D12_RESOURCE_ALLOCATION_INFO info =
+        DX12Context::g_device->GetResourceAllocationInfo(0, 1, &desc);
+    return static_cast<UINT64>(info.SizeInBytes);
+}
+
+UINT64 AlignTo(UINT64 value, UINT64 alignment)
+{
+    return (value + (alignment - 1)) & ~(alignment - 1);
+}
+
+QString FormatBytes(UINT64 bytes)
+{
+    const double gb = static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0);
+    if (gb >= 1.0) {
+        return QObject::tr("%1 GB").arg(gb, 0, 'f', 2);
+    }
+    const double mb = static_cast<double>(bytes) / (1024.0 * 1024.0);
+    if (mb >= 1.0) {
+        return QObject::tr("%1 MB").arg(mb, 0, 'f', 1);
+    }
+    const double kb = static_cast<double>(bytes) / 1024.0;
+    if (kb >= 1.0) {
+        return QObject::tr("%1 KB").arg(kb, 0, 'f', 1);
+    }
+    return QObject::tr("%1 B").arg(static_cast<qulonglong>(bytes));
+}
+
+struct SceneMemoryBreakdown {
+    UINT64 textureBytes = 0;
+    UINT64 meshBytes = 0;
+    UINT64 materialPayloadBytes = 0;
+    UINT64 materialReservedBytes = 0;
+    UINT64 meshMappingPayloadBytes = 0;
+    UINT64 descriptorRecordBytes = 0;
+    UINT64 globalDescriptorHeapBytes = 0;
+    UINT64 sceneAssetBytes = 0;
+    UINT64 sceneWithAccelerationBytes = 0;
+    UINT64 accountedRuntimeBytes = 0;
+    size_t textureCount = 0;
+    size_t hiddenTextureCount = 0;
+    size_t meshCount = 0;
+    size_t materialCount = 0;
+    UINT64 vertexCount = 0;
+    UINT64 triangleCount = 0;
+    UINT activeDescriptorRecords = 0;
+};
+
+SceneMemoryBreakdown BuildSceneMemoryBreakdown(
+    const DxrRenderer::GpuMemoryBreakdown &dxrBreakdown)
+{
+    SceneMemoryBreakdown breakdown = {};
+    breakdown.textureCount = g_loadedTextures.size();
+    breakdown.meshCount = g_loadedMeshes.size();
+    breakdown.materialCount = g_loadedMaterials.size();
+
+    for (const Asset::Texture &texture : g_loadedTextures) {
+        breakdown.textureBytes += ResourceAllocationBytes(texture.resource.Get());
+        if (texture.hiddenInEditor) {
+            ++breakdown.hiddenTextureCount;
+        }
+    }
+
+    for (const Asset::GpuMesh &mesh : g_loadedMeshes) {
+        breakdown.meshBytes += ResourceAllocationBytes(mesh.vertexBuffer.Get());
+        breakdown.meshBytes += ResourceAllocationBytes(mesh.indexBuffer.Get());
+        breakdown.vertexCount += mesh.vertexCount;
+        breakdown.triangleCount += mesh.indexCount / 3;
+    }
+
+    using RasterMaterial = MaterialSystem::RuntimeRasterMaterialConstants;
+    using DxrMaterial = MaterialSystem::RuntimeDxrMaterialData;
+    using DxrMaterialExtra = MaterialSystem::RuntimeDxrMaterialExtraData;
+    const UINT64 materialCount = static_cast<UINT64>(g_loadedMaterials.size());
+    constexpr UINT64 kMaterialReserveCount = 16384;
+    const UINT64 rasterStride = AlignTo(sizeof(RasterMaterial), 256);
+    breakdown.materialPayloadBytes =
+        materialCount * (rasterStride + sizeof(DxrMaterial) + sizeof(DxrMaterialExtra));
+    breakdown.materialReservedBytes =
+        kMaterialReserveCount *
+        (rasterStride + sizeof(DxrMaterial) + sizeof(DxrMaterialExtra));
+    breakdown.meshMappingPayloadBytes =
+        static_cast<UINT64>(g_loadedMeshes.size()) * sizeof(int) * 4;
+
+    const UINT descriptorSize = g_cbvSrvAllocator.DescriptorSize();
+    const UINT meshSrvRecords =
+        static_cast<UINT>((std::min)(g_loadedMeshes.size(),
+                                     static_cast<size_t>(
+                                         (std::numeric_limits<UINT>::max)() / 2))) *
+        2u;
+    breakdown.activeDescriptorRecords =
+        g_textureDescriptorCount + meshSrvRecords + dxrBreakdown.descriptorCount;
+    breakdown.descriptorRecordBytes =
+        static_cast<UINT64>(breakdown.activeDescriptorRecords) * descriptorSize;
+    breakdown.globalDescriptorHeapBytes =
+        static_cast<UINT64>(g_cbvSrvAllocator.Capacity()) * descriptorSize;
+
+    breakdown.sceneAssetBytes = breakdown.textureBytes + breakdown.meshBytes +
+                                breakdown.materialPayloadBytes +
+                                breakdown.meshMappingPayloadBytes;
+    breakdown.sceneWithAccelerationBytes =
+        breakdown.sceneAssetBytes + dxrBreakdown.accelerationStructureBytes;
+    breakdown.accountedRuntimeBytes = breakdown.sceneAssetBytes +
+                                      dxrBreakdown.totalBytes +
+                                      breakdown.globalDescriptorHeapBytes;
+    return breakdown;
 }
 
 QString FormatLiveLinkSyncStats(const LiveLink::CoordinatorStats& coordinatorStats,
@@ -953,6 +1079,9 @@ void MainWindow::createMenus()
     m_viewMenu->addSeparator();
 
     QMenu *toolsMenu = menuBar()->addMenu(tr("&Tools"));
+    toolsMenu->addAction(tr("VRAM Breakdown..."), this, [this]() {
+        showMemoryBreakdownPopup();
+    });
     toolsMenu->addAction(tr("Clean Orphaned Data..."), this, [this]() {
         std::string result = Scene::CleanOrphanedData();
         statusBar()->showMessage(QString::fromStdString(result), 5000);
@@ -1722,6 +1851,141 @@ void MainWindow::showRenderPopup()
     });
 
     updateSummary();
+    dialog.exec();
+}
+
+void MainWindow::showMemoryBreakdownPopup()
+{
+    const DxrRenderer::GpuMemoryBreakdown dxrBreakdown =
+        DxrRenderer::GetGpuMemoryBreakdown();
+    const SceneMemoryBreakdown sceneBreakdown =
+        BuildSceneMemoryBreakdown(dxrBreakdown);
+    const MemoryStats adapterMemory = ReadGpuMemoryStats();
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("VRAM Breakdown"));
+    dialog.setModal(true);
+    dialog.resize(780, 520);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(14, 12, 14, 12);
+    layout->setSpacing(10);
+
+    auto *summary = new QLabel(&dialog);
+    summary->setWordWrap(true);
+    const QString adapterText =
+        (adapterMemory.valid && adapterMemory.totalGb > 0.1)
+            ? tr("Adapter current usage: %1 / %2 GB")
+                  .arg(adapterMemory.usedGb, 0, 'f', 2)
+                  .arg(adapterMemory.totalGb, 0, 'f', 2)
+            : tr("Adapter current usage: n/a");
+    summary->setText(
+        tr("%1\nScene assets + DXR acceleration structures: %2\nAccounted renderer/runtime allocation: %3")
+            .arg(adapterText,
+                 FormatBytes(sceneBreakdown.sceneWithAccelerationBytes),
+                 FormatBytes(sceneBreakdown.accountedRuntimeBytes)));
+    layout->addWidget(summary);
+
+    auto *table = new QTableWidget(&dialog);
+    table->setColumnCount(3);
+    table->setHorizontalHeaderLabels({tr("Category"), tr("Details"), tr("Memory")});
+    table->horizontalHeader()->setStretchLastSection(false);
+    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    table->verticalHeader()->setVisible(false);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->setSelectionMode(QAbstractItemView::NoSelection);
+    table->setAlternatingRowColors(true);
+
+    auto addRow = [&](const QString &category, const QString &details,
+                      UINT64 bytes) {
+        const int row = table->rowCount();
+        table->insertRow(row);
+        auto *categoryItem = new QTableWidgetItem(category);
+        auto *detailsItem = new QTableWidgetItem(details);
+        auto *bytesItem = new QTableWidgetItem(FormatBytes(bytes));
+        bytesItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        table->setItem(row, 0, categoryItem);
+        table->setItem(row, 1, detailsItem);
+        table->setItem(row, 2, bytesItem);
+    };
+
+    addRow(tr("Textures"),
+           tr("%1 loaded, %2 hidden/runtime, %3 active texture SRVs / %4 reserved")
+               .arg(static_cast<qulonglong>(sceneBreakdown.textureCount))
+               .arg(static_cast<qulonglong>(sceneBreakdown.hiddenTextureCount))
+               .arg(g_textureDescriptorCount)
+               .arg(g_textureDescriptorCapacity),
+           sceneBreakdown.textureBytes);
+    addRow(tr("Meshes"),
+           tr("%1 meshes, %2 vertices, %3 triangles")
+               .arg(static_cast<qulonglong>(sceneBreakdown.meshCount))
+               .arg(static_cast<qulonglong>(sceneBreakdown.vertexCount))
+               .arg(static_cast<qulonglong>(sceneBreakdown.triangleCount)),
+           sceneBreakdown.meshBytes);
+    addRow(tr("Materials"),
+           tr("%1 materials, active runtime payload; reserved GPU-visible material buffers: %2")
+               .arg(static_cast<qulonglong>(sceneBreakdown.materialCount))
+               .arg(FormatBytes(sceneBreakdown.materialReservedBytes)),
+           sceneBreakdown.materialPayloadBytes);
+    addRow(tr("Mesh/material mapping"),
+           tr("DXR mesh mapping payload for scene mesh material/index lookup"),
+           sceneBreakdown.meshMappingPayloadBytes);
+    addRow(tr("DXR acceleration structures"),
+           tr("%1 BLAS plus TLAS, including scratch/result buffers")
+               .arg(static_cast<qulonglong>(dxrBreakdown.blasCount)),
+           dxrBreakdown.accelerationStructureBytes);
+    addRow(tr("Render targets and AOVs"),
+           tr("DXR output, depth, motion vectors, denoiser guides, tonemap targets"),
+           dxrBreakdown.renderTargetBytes);
+    addRow(tr("Accumulation"),
+           tr("Beauty/transmission accumulation and variance buffers"),
+           dxrBreakdown.accumulationBytes);
+    addRow(tr("ReSTIR reservoirs"),
+           tr("DI and GI reservoir textures"),
+           dxrBreakdown.reservoirBytes);
+    addRow(tr("Wavefront queues"),
+           tr("Path, hit, shadow, dispatch, binning, and shadow contribution buffers"),
+           dxrBreakdown.wavefrontQueueBytes);
+    addRow(tr("Other buffers"),
+           tr("Shader table, light upload, and diagnostics buffers"),
+           dxrBreakdown.shaderTableBytes + dxrBreakdown.lightBufferBytes +
+               dxrBreakdown.diagnosticBufferBytes);
+    addRow(tr("SRV/UAV descriptor records"),
+           tr("%1 active records, global heap %2/%3 persistent/reserved, DXR heap %4 records")
+               .arg(sceneBreakdown.activeDescriptorRecords)
+               .arg(g_cbvSrvAllocator.PersistentCount())
+               .arg(g_cbvSrvAllocator.Capacity())
+               .arg(dxrBreakdown.descriptorCount),
+           sceneBreakdown.globalDescriptorHeapBytes + dxrBreakdown.descriptorHeapBytes);
+    addRow(tr("Scene asset subtotal"),
+           tr("Textures + mesh buffers + active material payload + mesh/material mapping"),
+           sceneBreakdown.sceneAssetBytes);
+    addRow(tr("Scene with DXR AS"),
+           tr("Scene asset subtotal plus BLAS/TLAS allocation"),
+           sceneBreakdown.sceneWithAccelerationBytes);
+    addRow(tr("Accounted runtime total"),
+           tr("Scene assets + DXR renderer allocations + global descriptor heap estimate"),
+           sceneBreakdown.accountedRuntimeBytes);
+
+    table->resizeRowsToContents();
+    layout->addWidget(table, 1);
+
+    auto *note = new QLabel(
+        tr("Values are D3D12 allocation-size estimates for committed resources. "
+           "Adapter usage includes driver residency, swapchain, external denoisers, and other allocations outside this scene table."),
+        &dialog);
+    note->setWordWrap(true);
+    layout->addWidget(note);
+
+    auto *buttonRow = new QHBoxLayout();
+    buttonRow->addStretch(1);
+    auto *closeButton = new QPushButton(tr("Close"), &dialog);
+    connect(closeButton, &QPushButton::clicked, &dialog, &QDialog::accept);
+    buttonRow->addWidget(closeButton);
+    layout->addLayout(buttonRow);
+
     dialog.exec();
 }
 

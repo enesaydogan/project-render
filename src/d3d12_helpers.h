@@ -115,6 +115,9 @@ public:
   }
 
   ID3D12DescriptorHeap *Heap() const { return m_heap.Get(); }
+  UINT DescriptorSize() const { return m_descriptorSize; }
+  UINT Capacity() const { return m_numDescriptors; }
+  UINT PersistentCount() const { return m_persistentOffset; }
 
 private:
   ComPtr<ID3D12DescriptorHeap> m_heap;
