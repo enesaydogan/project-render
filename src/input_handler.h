@@ -9,4 +9,5 @@ void SetQtKeyState(int virtualKey, bool down);
 void SetQtMouseButtonState(int virtualKey, bool down);
 void AddQtMouseDelta(float dx, float dy);
 void ResetQtInputState();
+void ResetTransientInputState();
 }

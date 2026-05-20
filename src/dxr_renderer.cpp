@@ -361,6 +361,8 @@ static UINT s_outputHeight = 720;
 // Output (swapchain) dimensions last requested by the host
 static UINT s_presentWidth = 1280;
 static UINT s_presentHeight = 720;
+static UINT s_readyPresentWidth = 0;
+static UINT s_readyPresentHeight = 0;
 enum ResourceFeatureBits : uint32_t {
   ResourceFeature_Dlss = 1u << 0,
   ResourceFeature_DlssRayReconstruction = 1u << 1,
@@ -4558,6 +4560,13 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   if (g_verboseRenderLogs) {
     fprintf(stderr, "DxrRenderer: Ray Tracing Pipeline ready\n");
   }
+  s_readyPresentWidth = s_presentWidth;
+  s_readyPresentHeight = s_presentHeight;
+}
+
+void GetPipelinePresentSize(UINT &width, UINT &height) {
+  width = s_readyPresentWidth;
+  height = s_readyPresentHeight;
 }
 
 static bool IsMaterialAlphaTestedOrGlass(const Asset::Material &m) {

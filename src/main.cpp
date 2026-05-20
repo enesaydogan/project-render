@@ -696,10 +696,12 @@ static bool EnsureInteractiveDxrPipelineSize(UINT width, UINT height,
     return false;
   }
 
-  static UINT s_lastInteractiveDxrWidth = 0;
-  static UINT s_lastInteractiveDxrHeight = 0;
-  if (DxrRenderer::IsReady() && width == s_lastInteractiveDxrWidth &&
-      height == s_lastInteractiveDxrHeight) {
+  UINT currentPresentWidth = 0;
+  UINT currentPresentHeight = 0;
+  DxrRenderer::GetPipelinePresentSize(currentPresentWidth,
+                                      currentPresentHeight);
+  if (DxrRenderer::IsReady() && width == currentPresentWidth &&
+      height == currentPresentHeight) {
     return true;
   }
 
@@ -707,8 +709,6 @@ static bool EnsureInteractiveDxrPipelineSize(UINT width, UINT height,
     DxrRenderer::WaitForAsyncRestirIdle();
     DX12Context::WaitGPUIdle();
     DxrRenderer::CreateRayTracingPipeline(width, height);
-    s_lastInteractiveDxrWidth = width;
-    s_lastInteractiveDxrHeight = height;
     DxrRenderer::ResetAccumulation();
     return DxrRenderer::IsReady();
   } catch (const std::exception &e) {

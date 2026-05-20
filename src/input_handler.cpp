@@ -43,6 +43,19 @@ void ResetQtInputState() {
   s_qtMouseDeltaY = 0.0f;
 }
 
+void ResetTransientInputState() {
+  ResetQtInputState();
+  if (g_mouseCaptured) {
+    ShowCursor(TRUE);
+    ClipCursor(NULL);
+    g_mouseCaptured = false;
+  }
+  if (g_hwnd) {
+    GetCursorPos(&g_prevMousePos);
+    ScreenToClient(g_hwnd, &g_prevMousePos);
+  }
+}
+
 void SetQtWidgetFocused(bool focused) { s_qtWidgetFocused = focused; }
 
 void SetQtKeyState(int virtualKey, bool down) {

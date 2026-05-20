@@ -13,6 +13,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -900,6 +901,37 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
 // ---------------------------------------------------------------------------
 // Apply PRS metadata (compact keys) to engine state
 // ---------------------------------------------------------------------------
+static void SyncLoadedCameraInputBasis(bool loadedYaw, bool loadedPitch) {
+  constexpr float kPi = 3.14159265358979323846f;
+  constexpr float kMaxPitch = kPi * 0.5f - 0.01f;
+
+  const float fx = g_cameraData.forward[0];
+  const float fy = g_cameraData.forward[1];
+  const float fz = g_cameraData.forward[2];
+  const float forwardLenSq = fx * fx + fy * fy + fz * fz;
+  if ((!loadedYaw || !loadedPitch) && forwardLenSq > 1.0e-8f) {
+    const float invLen = 1.0f / std::sqrt(forwardLenSq);
+    const float nfx = fx * invLen;
+    const float nfy = (std::clamp)(fy * invLen, -1.0f, 1.0f);
+    const float nfz = fz * invLen;
+    g_camYaw = std::atan2(nfx, -nfz);
+    g_camPitch = std::asin(nfy);
+  }
+
+  if (!std::isfinite(g_camYaw)) {
+    g_camYaw = 0.0f;
+  }
+  if (!std::isfinite(g_camPitch)) {
+    g_camPitch = 0.0f;
+  }
+  g_camPitch = (std::clamp)(g_camPitch, -kMaxPitch, kMaxPitch);
+
+  const float cp = std::cos(g_camPitch);
+  g_cameraData.forward[0] = cp * std::sin(g_camYaw);
+  g_cameraData.forward[1] = std::sin(g_camPitch);
+  g_cameraData.forward[2] = cp * -std::cos(g_camYaw);
+}
+
 static void ApplyMetadataPRS(const json &j) {
   if (j.contains("cam")) {
     auto &c = j["cam"];
@@ -914,8 +946,11 @@ static void ApplyMetadataPRS(const json &j) {
     g_cameraData.maxSpecularBounces = c.value("msb", 3.0f);
     g_cameraData.maxRefractiveBounces = c.value("mrb", 3.0f);
     g_cameraData.maxGIBounces = c.value("mgb", 2.0f);
+    const bool loadedYaw = c.contains("yaw");
+    const bool loadedPitch = c.contains("pit");
     g_camYaw = c.value("yaw", g_camYaw);
     g_camPitch = c.value("pit", g_camPitch);
+    SyncLoadedCameraInputBasis(loadedYaw, loadedPitch);
     g_cameraData.useAdaptiveSampling = c.value("as", 0.0f);
     g_cameraData.noiseThreshold = c.value("nt", 0.05f);
     g_cameraData.debugVisualizationMode = c.value("dvm", 0.0f);

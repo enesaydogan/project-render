@@ -27,6 +27,7 @@ void SetCommandQueue(ID3D12CommandQueue *commandQueue, ID3D12Fence *fence,
                      HANDLE fenceEvent);
 // Build RayTracing pipeline (TLAS, BLAS, and PSO)
 void CreateRayTracingPipeline(UINT width, UINT height);
+void GetPipelinePresentSize(UINT &width, UINT &height);
 // Queue a pipeline rebuild for the render loop. This keeps UI callbacks from
 // waiting on GPU idle and PSO creation directly.
 void RequestPipelineRecreate(const char *context = nullptr);
