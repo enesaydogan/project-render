@@ -48,6 +48,8 @@ RWTexture2D<float4> g_transmissionAccumulation : register(u19);
 RWTexture2D<float> g_transmissionVariance : register(u20);
 RWTexture2D<float> g_variance : register(u22);
 RWStructuredBuffer<uint> g_wavefrontShadowContribution : register(u23);
+RWTexture2D<float4> g_oidnAlbedoGuideOut : register(u34);
+RWTexture2D<float4> g_oidnNormalRoughnessGuideOut : register(u35);
 
 // === Shader instrumentation counters (debug) ===
 static const uint SHADER_COUNTER_TRACE_RAYS = 0;

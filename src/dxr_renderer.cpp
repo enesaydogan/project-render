@@ -285,7 +285,7 @@ static const UINT DXR_HEAP_TEX_OFFSET = 0;
 static const UINT DXR_HEAP_VB_OFFSET = DXR_HEAP_TEX_OFFSET + DXR_HEAP_TEX_COUNT;
 static const UINT DXR_HEAP_IB_OFFSET = DXR_HEAP_VB_OFFSET + DXR_HEAP_VB_COUNT;
 static const UINT DXR_HEAP_UAV_OFFSET = DXR_HEAP_IB_OFFSET + DXR_HEAP_IB_COUNT;
-static const UINT DXR_HEAP_UAV_COUNT = 34; // u0..u33
+static const UINT DXR_HEAP_UAV_COUNT = 36; // u0..u35
 static const UINT DXR_HEAP_ACCUM_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 1;
 static const UINT DXR_HEAP_RESERVOIR_0_OFFSET = DXR_HEAP_UAV_OFFSET + 2;
 static const UINT DXR_HEAP_RESERVOIR_1_OFFSET = DXR_HEAP_UAV_OFFSET + 3;
@@ -330,6 +330,10 @@ static const UINT DXR_HEAP_WAVEFRONT_RESERVED_OFFSET =
   DXR_HEAP_UAV_OFFSET + 32;
 static const UINT DXR_HEAP_WAVEFRONT_BIN_INDICES_OFFSET =
   DXR_HEAP_UAV_OFFSET + 33;
+static const UINT DXR_HEAP_OIDN_ALBEDO_GUIDE_OFFSET =
+    DXR_HEAP_UAV_OFFSET + 34;
+static const UINT DXR_HEAP_OIDN_NORMAL_GUIDE_OFFSET =
+    DXR_HEAP_UAV_OFFSET + 35;
 
 // Dedicated SRV blocks after UAV range so UAV registers stay stable.
 static const UINT DXR_HEAP_ENV_SRV_OFFSET =
@@ -455,7 +459,8 @@ static bool NeedsSurfaceDataBuffers(uint32_t mask) {
 }
 
 static bool NeedsLinearDepthBuffer(uint32_t mask) {
-  return (mask & ResourceFeature_TonemapAo) != 0;
+  return (mask & (ResourceFeature_TonemapAo | ResourceFeature_FinalDenoiser)) !=
+         0;
 }
 
 static bool NeedsSpecularAuxBuffers(uint32_t mask) {
@@ -518,6 +523,8 @@ static ComPtr<ID3D12Resource> s_depthUAV;
 static ComPtr<ID3D12Resource> s_mvecUAV;
 static ComPtr<ID3D12Resource> s_albedoUAV;
 static ComPtr<ID3D12Resource> s_normalRoughnessUAV;
+static ComPtr<ID3D12Resource> s_oidnAlbedoGuideUAV;
+static ComPtr<ID3D12Resource> s_oidnNormalRoughnessGuideUAV;
 static ComPtr<ID3D12Resource> s_linearDepthUAV;
 static ComPtr<ID3D12Resource> s_dlssOutputUAV;
 static ComPtr<ID3D12Resource> s_oidnOutputUAV;
@@ -538,8 +545,12 @@ static bool PrepareSelectedFinalDenoiserResources() {
     if (!s_oidnDenoiser.Initialize(s_device)) {
       return false;
     }
-    return s_oidnDenoiser.Prepare(s_outputUAV.Get(), s_albedoUAV.Get(),
-                                  s_normalRoughnessUAV.Get(),
+    ID3D12Resource *oidnAlbedo =
+        s_oidnAlbedoGuideUAV ? s_oidnAlbedoGuideUAV.Get() : s_albedoUAV.Get();
+    ID3D12Resource *oidnNormal = s_oidnNormalRoughnessGuideUAV
+                                     ? s_oidnNormalRoughnessGuideUAV.Get()
+                                     : s_normalRoughnessUAV.Get();
+    return s_oidnDenoiser.Prepare(s_outputUAV.Get(), oidnAlbedo, oidnNormal,
                                   s_oidnOutputUAV.Get());
   }
 
@@ -1636,7 +1647,7 @@ static void EnsureWavefrontBootstrapPipeline() {
 
   D3D12_DESCRIPTOR_RANGE uavRange = {};
   uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-  uavRange.NumDescriptors = DXR_HEAP_UAV_COUNT; // u0..u33
+  uavRange.NumDescriptors = DXR_HEAP_UAV_COUNT; // u0..u35
   uavRange.BaseShaderRegister = 0;
   uavRange.RegisterSpace = 0;
   uavRange.OffsetInDescriptorsFromTableStart =
@@ -2335,7 +2346,7 @@ static void EnsureWavefrontResolvePipeline() {
 
   D3D12_DESCRIPTOR_RANGE uavRange = {};
   uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-  uavRange.NumDescriptors = DXR_HEAP_UAV_COUNT; // u0..u33
+  uavRange.NumDescriptors = DXR_HEAP_UAV_COUNT; // u0..u35
   uavRange.BaseShaderRegister = 0;
   uavRange.RegisterSpace = 0;
   uavRange.OffsetInDescriptorsFromTableStart =
@@ -3674,7 +3685,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
   D3D12_DESCRIPTOR_RANGE uavRange = {};
   uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-  uavRange.NumDescriptors = DXR_HEAP_UAV_COUNT; // u0..u32
+  uavRange.NumDescriptors = DXR_HEAP_UAV_COUNT; // u0..u35
   uavRange.BaseShaderRegister = 0;
   params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
   params[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -4016,6 +4027,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   s_depthUAV.Reset();
   s_mvecUAV.Reset();
   s_albedoUAV.Reset();
+  s_oidnAlbedoGuideUAV.Reset();
+  s_oidnNormalRoughnessGuideUAV.Reset();
   s_linearDepthUAV.Reset();
   s_specularAlbedoUAV.Reset();
   s_specHitDistanceUAV.Reset();
@@ -4062,6 +4075,12 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     CreateUavTexture(s_normalRoughnessUAV, texDesc,
                      DXGI_FORMAT_R16G16B16A16_FLOAT, L"RT NormalRoughness",
                      true); // Shared for OIDN
+    CreateUavTexture(s_oidnAlbedoGuideUAV, texDesc,
+                     DXGI_FORMAT_R16G16B16A16_FLOAT,
+                     L"RT OIDN Accumulated Albedo Guide", true);
+    CreateUavTexture(s_oidnNormalRoughnessGuideUAV, texDesc,
+                     DXGI_FORMAT_R16G16B16A16_FLOAT,
+                     L"RT OIDN Accumulated Normal Guide", true);
   }
   if (needsSpecularAuxBuffers) {
     CreateUavTexture(s_specularAlbedoUAV, texDesc,
@@ -4180,6 +4199,11 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
               DXR_HEAP_ALBEDO_UAV_OFFSET);
   CreateUavAt(s_normalRoughnessUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
               DXR_HEAP_NORMAL_ROUGHNESS_UAV_OFFSET);
+  CreateUavAt(s_oidnAlbedoGuideUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
+              DXR_HEAP_OIDN_ALBEDO_GUIDE_OFFSET);
+  CreateUavAt(s_oidnNormalRoughnessGuideUAV.Get(),
+              DXGI_FORMAT_R16G16B16A16_FLOAT,
+              DXR_HEAP_OIDN_NORMAL_GUIDE_OFFSET);
   CreateUavAt(s_dlssOutputUAV.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT,
               DXR_HEAP_DLSS_OUT_UAV_OFFSET);
   CreateUavAt(s_linearDepthUAV.Get(), DXGI_FORMAT_R32_FLOAT,
@@ -6550,6 +6574,31 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     s_transmissionAccumulation.Clear(
         dxrList.Get(), s_transmissionAccumUAVGpu, transAccumCpu,
         s_transmissionVarianceUAVGpu, transVarCpu);
+    if (s_oidnAlbedoGuideUAV && s_oidnNormalRoughnessGuideUAV) {
+      const float clearGuide[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+      const UINT inc = s_device->GetDescriptorHandleIncrementSize(
+          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+      D3D12_GPU_DESCRIPTOR_HANDLE oidnAlbedoGpu = s_outputUAVGpu;
+      oidnAlbedoGpu.ptr +=
+          (UINT64)(DXR_HEAP_OIDN_ALBEDO_GUIDE_OFFSET - DXR_HEAP_UAV_OFFSET) *
+          (UINT64)inc;
+      D3D12_CPU_DESCRIPTOR_HANDLE oidnAlbedoCpu =
+          s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+      oidnAlbedoCpu.ptr += (SIZE_T)DXR_HEAP_OIDN_ALBEDO_GUIDE_OFFSET * inc;
+      D3D12_GPU_DESCRIPTOR_HANDLE oidnNormalGpu = s_outputUAVGpu;
+      oidnNormalGpu.ptr +=
+          (UINT64)(DXR_HEAP_OIDN_NORMAL_GUIDE_OFFSET - DXR_HEAP_UAV_OFFSET) *
+          (UINT64)inc;
+      D3D12_CPU_DESCRIPTOR_HANDLE oidnNormalCpu =
+          s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+      oidnNormalCpu.ptr += (SIZE_T)DXR_HEAP_OIDN_NORMAL_GUIDE_OFFSET * inc;
+      dxrList->ClearUnorderedAccessViewFloat(
+          oidnAlbedoGpu, oidnAlbedoCpu, s_oidnAlbedoGuideUAV.Get(),
+          clearGuide, 0, nullptr);
+      dxrList->ClearUnorderedAccessViewFloat(
+          oidnNormalGpu, oidnNormalCpu, s_oidnNormalRoughnessGuideUAV.Get(),
+          clearGuide, 0, nullptr);
+    }
 
     // Also clear reservoir buffers to prevent artifacts from stale data
     // Important: lightIndex should be cleared to 0xFFFFFFFF (invalid)
@@ -7302,6 +7351,15 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
     const bool useOptix =
         s_denoiserMode == DxrRenderer::DenoiserMode::OptiX;
+    ID3D12Resource *denoiserAlbedo = s_albedoUAV.Get();
+    ID3D12Resource *denoiserNormal = s_normalRoughnessUAV.Get();
+    if (!useOptix) {
+      denoiserAlbedo = s_oidnAlbedoGuideUAV ? s_oidnAlbedoGuideUAV.Get()
+                                            : denoiserAlbedo;
+      denoiserNormal = s_oidnNormalRoughnessGuideUAV
+                           ? s_oidnNormalRoughnessGuideUAV.Get()
+                           : denoiserNormal;
+    }
     fprintf(stderr, "DxrRenderer: MaxSPP reached. Auto-triggering %s "
                     "denoise.\n",
             useOptix ? "OptiX" : "OIDN");
@@ -7313,13 +7371,13 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, // Assumed state
                        D3D12_RESOURCE_STATE_COMMON);
 
-    if (s_albedoUAV) {
-      TransitionResource(dxrList.Get(), s_albedoUAV.Get(),
+    if (denoiserAlbedo) {
+      TransitionResource(dxrList.Get(), denoiserAlbedo,
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                          D3D12_RESOURCE_STATE_COMMON);
     }
-    if (s_normalRoughnessUAV) {
-      TransitionResource(dxrList.Get(), s_normalRoughnessUAV.Get(),
+    if (denoiserNormal) {
+      TransitionResource(dxrList.Get(), denoiserNormal,
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                          D3D12_RESOURCE_STATE_COMMON);
     }
@@ -7363,14 +7421,14 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       bool ran = false;
       if (useOptix) {
         ran = s_optixDenoiser.RunDenoise(
-            s_commandQueue, denoiserInput, s_albedoUAV.Get(),
-            s_normalRoughnessUAV.Get(), s_oidnOutputUAV.Get());
+            s_commandQueue, denoiserInput, denoiserAlbedo, denoiserNormal,
+            s_oidnOutputUAV.Get());
       } else {
         // OIDN manages its own internal copy-execute-sync cycle to handle
         // tiled <-> linear layout conversion for D3D12 interop.
         ran = s_oidnDenoiser.RunDenoise(
-            dxrList.Get(), s_commandQueue, denoiserInput, s_albedoUAV.Get(),
-            s_normalRoughnessUAV.Get(), s_linearDepthUAV.Get(),
+            dxrList.Get(), s_commandQueue, denoiserInput, denoiserAlbedo,
+            denoiserNormal, s_linearDepthUAV.Get(),
             s_oidnOutputUAV.Get(), false);
       }
 
@@ -7378,13 +7436,13 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       TransitionResource(dxrList.Get(), denoiserInput,
                          D3D12_RESOURCE_STATE_COMMON,
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-      if (s_albedoUAV) {
-        TransitionResource(dxrList.Get(), s_albedoUAV.Get(),
+      if (denoiserAlbedo) {
+        TransitionResource(dxrList.Get(), denoiserAlbedo,
                            D3D12_RESOURCE_STATE_COMMON,
                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
       }
-      if (s_normalRoughnessUAV) {
-        TransitionResource(dxrList.Get(), s_normalRoughnessUAV.Get(),
+      if (denoiserNormal) {
+        TransitionResource(dxrList.Get(), denoiserNormal,
                            D3D12_RESOURCE_STATE_COMMON,
                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
       }

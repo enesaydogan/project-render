@@ -1751,17 +1751,17 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     }
 
     color = max(color, 0.0);
+    float4 history = g_accumulation[pixel];
+    float historyCount = history.a;
+    bool invalidHistory = !isfinite(historyCount) ||
+                          (historyCount < 1.0) ||
+                          any(!isfinite(history.rgb));
+    float nextCount = invalidHistory ? 1.0 : (historyCount + 1.0);
     if (deferAccumulation) {
         g_output[pixel] = float4(color, 1.0);
     } else {
-        float4 history = g_accumulation[pixel];
-        float historyCount = history.a;
-        bool invalidHistory = !isfinite(historyCount) ||
-                              (historyCount < 1.0) ||
-                              any(!isfinite(history.rgb));
         float3 historySum =
             invalidHistory ? float3(0.0, 0.0, 0.0) : history.rgb;
-        float nextCount = invalidHistory ? 1.0 : (historyCount + 1.0);
         float3 nextSum = historySum + color;
         g_accumulation[pixel] = float4(nextSum, nextCount);
         g_output[pixel] = (dlssRayReconstruction > 0.5)
@@ -1773,6 +1773,26 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     g_motionVectors[pixel] = motion;
     g_albedoOut[pixel] = float4(albedo, 1.0);
     g_normalRoughnessOut[pixel] = float4(normalize(normal), roughness);
+    float4 oidnAlbedoGuide = float4(albedo, 1.0);
+    float4 oidnNormalGuide = float4(normalize(normal), roughness);
+    if (nextCount > 1.0) {
+        const float previousWeight = (nextCount - 1.0) / nextCount;
+        const float currentWeight = 1.0 / nextCount;
+        float4 previousAlbedoGuide = g_oidnAlbedoGuideOut[pixel];
+        float4 previousNormalGuide = g_oidnNormalRoughnessGuideOut[pixel];
+        if (all(isfinite(previousAlbedoGuide.rgb))) {
+            oidnAlbedoGuide =
+                previousAlbedoGuide * previousWeight +
+                oidnAlbedoGuide * currentWeight;
+        }
+        if (all(isfinite(previousNormalGuide))) {
+            oidnNormalGuide =
+                previousNormalGuide * previousWeight +
+                oidnNormalGuide * currentWeight;
+        }
+    }
+    g_oidnAlbedoGuideOut[pixel] = oidnAlbedoGuide;
+    g_oidnNormalRoughnessGuideOut[pixel] = oidnNormalGuide;
     g_specularAlbedo[pixel] = float4(rrSpecularAlbedo, 1.0);
     g_specHitDistance[pixel] = 0.0;
     g_specularMotionVectors[pixel] = any(rrSpecularAlbedo > 0.0) ? motion : kInvalidMvec;

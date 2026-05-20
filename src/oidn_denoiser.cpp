@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cassert>
 #include <cstring>
+#include <limits>
 #include <utility>
 #include <vector>
 #include <stdexcept>
@@ -192,7 +193,11 @@ static OidnInputStats SanitizeOidnHalf4Rows(uint8_t* data, uint32_t width,
 }
 #endif
 
-OidnDenoiser::OidnDenoiser() {}
+OidnDenoiser::OidnDenoiser() {
+#ifdef USE_OIDN
+  m_oidnInputScale = std::numeric_limits<float>::quiet_NaN();
+#endif
+}
 OidnDenoiser::~OidnDenoiser() { Shutdown(); }
 
 bool OidnDenoiser::Initialize(ID3D12Device *device) {
@@ -291,7 +296,7 @@ void OidnDenoiser::Shutdown() {
   m_depthFootprint = {};
   m_depthReadbackBytes = 0;
   m_linearBufferBytes = 0;
-  m_oidnInputScale = 1.0f;
+  m_oidnInputScale = std::numeric_limits<float>::quiet_NaN();
   m_cmdAlloc.Reset();
   m_cmdList.Reset();
   m_fence.Reset();
@@ -577,18 +582,16 @@ bool OidnDenoiser::SanitizeLinearBufferForOidn(ID3D12CommandQueue* queue,
                              : (kind == OidnInputKind::Albedo) ? "albedo"
                                                                : "normal";
   if (kind == OidnInputKind::Color) {
-    const float scaleReference = (std::max)(stats.p995Luminance, 1.0f);
-    m_oidnInputScale =
-        std::clamp(1.0f / scaleReference, 1.0f / 65504.0f, 1.0f);
+    m_oidnInputScale = std::numeric_limits<float>::quiet_NaN();
     fprintf(stderr,
             "OidnDenoiser: %s stats pixels=%llu nonFinite=%llu "
             "negative=%llu clamped=%llu maxRgb=%.6g p995Lum=%.6g "
-            "inputScale=%.9g\n",
+            "inputScale=auto\n",
             kindName, (unsigned long long)stats.pixels,
             (unsigned long long)stats.nonFinite,
             (unsigned long long)stats.negative,
             (unsigned long long)stats.clamped, stats.maxRgb,
-            stats.p995Luminance, m_oidnInputScale);
+            stats.p995Luminance);
   } else if (kind == OidnInputKind::Albedo) {
     fprintf(stderr,
             "OidnDenoiser: %s stats pixels=%llu nonFinite=%llu "
@@ -998,6 +1001,8 @@ bool OidnDenoiser::Prepare(ID3D12Resource *input, ID3D12Resource *albedo,
       filter.setImage("output", *static_cast<oidn::BufferRef*>(m_oidnOutputBuf), oidn::Format::Half3, width, height, 0, 8, m_linearFootprint.Footprint.RowPitch);
       
       filter.set("hdr", true);
+      if (m_oidnAlbedoBuf || m_oidnNormalBuf)
+          filter.set("cleanAux", true);
       switch(m_quality) {
         case Quality::Fast:     filter.set("quality", OIDN_QUALITY_FAST); break;
         case Quality::Balanced: filter.set("quality", OIDN_QUALITY_BALANCED); break;
