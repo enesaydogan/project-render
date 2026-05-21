@@ -2122,6 +2122,8 @@ uint64_t MaterialEditorPanel::textureOptionsSignature() const
         mix(static_cast<uint64_t>(tex.height));
         mix(static_cast<uint64_t>(tex.mipLevels));
         mix(static_cast<uint64_t>(tex.format));
+        mix(static_cast<uint64_t>(tex.cpuMipLevels));
+        mix(static_cast<uint64_t>(tex.cpuFormat));
         mix(static_cast<uint64_t>(tex.cpuData.size()));
         mix(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(tex.cpuData.data())));
         mix(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(tex.resource.Get())));
@@ -2161,8 +2163,9 @@ QPixmap MaterialEditorPanel::createTexturePreview(const Asset::Texture &tex, con
     const int previewHeight = std::max(1, size.height());
     QImage image(previewWidth, previewHeight, QImage::Format_RGBA8888);
 
-    if ((tex.format == DXGI_FORMAT_R8G8B8A8_UNORM ||
-         tex.format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB) &&
+    if ((tex.cpuFormat == DXGI_FORMAT_R8G8B8A8_UNORM ||
+         tex.cpuFormat == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB) &&
+        tex.cpuMipLevels >= 1 &&
         tex.cpuData.size() >= static_cast<size_t>(tex.width) * tex.height * 4) {
         const uint8_t *pixels = tex.cpuData.data();
         for (int y = 0; y < previewHeight; ++y) {
@@ -2190,7 +2193,8 @@ QPixmap MaterialEditorPanel::createTexturePreview(const Asset::Texture &tex, con
         return QPixmap::fromImage(image);
     }
 
-    if (tex.format == DXGI_FORMAT_R32G32B32A32_FLOAT &&
+    if (tex.cpuFormat == DXGI_FORMAT_R32G32B32A32_FLOAT &&
+        tex.cpuMipLevels >= 1 &&
         tex.cpuData.size() >= static_cast<size_t>(tex.width) * tex.height * 16) {
         const float *pixels = reinterpret_cast<const float *>(tex.cpuData.data());
         for (int y = 0; y < previewHeight; ++y) {
