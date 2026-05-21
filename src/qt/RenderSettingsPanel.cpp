@@ -184,6 +184,10 @@ void RenderSettingsPanel::createUi()
     m_adaptiveSampling = new QCheckBox(tr("Enable Adaptive Sampling"), pathGroup);
     m_targetNoise = CreateSliderControl(1.0, 30.0, 0.1, 1);
     m_clayMode = new QCheckBox(tr("Clay Material Override"), pathGroup);
+    m_clayPreserveTransparency =
+        new QCheckBox(tr("Clay: Preserve Transparency"), pathGroup);
+    m_clayPreserveEmission =
+        new QCheckBox(tr("Clay: Preserve Emission"), pathGroup);
     m_pathBackend = new QComboBox(pathGroup);
     m_pathBackend->addItems({
         tr("Wavefront Optimized"),
@@ -206,6 +210,8 @@ void RenderSettingsPanel::createUi()
     pathForm->addRow(m_adaptiveSampling);
     pathForm->addRow(tr("Target Noise %"), m_targetNoise);
     pathForm->addRow(m_clayMode);
+    pathForm->addRow(m_clayPreserveTransparency);
+    pathForm->addRow(m_clayPreserveEmission);
     pathForm->addRow(tr("Backend"), m_pathBackend);
     pathForm->addRow(tr("Texture Compression"), m_textureCompression);
     pathForm->addRow(m_pathBackendWarning);
@@ -315,6 +321,8 @@ void RenderSettingsPanel::createUi()
     connect(m_adaptiveSampling, &QCheckBox::toggled, this, [applyCamera](bool) { applyCamera(); });
     connect(m_targetNoise->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyCamera](double) { applyCamera(); });
     connect(m_clayMode, &QCheckBox::toggled, this, [applyCamera](bool) { applyCamera(); });
+    connect(m_clayPreserveTransparency, &QCheckBox::toggled, this, [applyCamera](bool) { applyCamera(); });
+    connect(m_clayPreserveEmission, &QCheckBox::toggled, this, [applyCamera](bool) { applyCamera(); });
     connect(m_pathBackend, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
         if (m_syncing) {
             return;
@@ -482,6 +490,16 @@ void RenderSettingsPanel::syncFromRenderer()
         m_clayMode->setChecked(g_cameraData.debugVisualizationMode > 1.5f &&
                                g_cameraData.debugVisualizationMode < 2.5f);
     }
+    const uint32_t clayFeatureFlags =
+        static_cast<uint32_t>(g_cameraData.dxrFeatureFlags);
+    if (!IsWidgetBeingEdited(m_clayPreserveTransparency)) {
+        m_clayPreserveTransparency->setChecked(
+            (clayFeatureFlags & kDxrFeatureClayPreserveTransparency) != 0);
+    }
+    if (!IsWidgetBeingEdited(m_clayPreserveEmission)) {
+        m_clayPreserveEmission->setChecked(
+            (clayFeatureFlags & kDxrFeatureClayPreserveEmission) != 0);
+    }
     if (!IsWidgetBeingEdited(m_pathBackend)) {
         m_pathBackend->setCurrentIndex(PathBackendIndex(DxrRenderer::GetPathTracingBackend()));
     }
@@ -497,6 +515,9 @@ void RenderSettingsPanel::syncFromRenderer()
             tr("Wavefront optimized is the production path."));
     }
     m_targetNoise->setEnabled(m_adaptiveSampling->isChecked());
+    const bool clayMode = m_clayMode->isChecked();
+    m_clayPreserveTransparency->setEnabled(clayMode);
+    m_clayPreserveEmission->setEnabled(clayMode);
 
     const auto streamlineMode = DX12Context::g_streamline.IsEnabled()
                                     ? DX12Context::g_streamline.GetMode()
@@ -625,6 +646,17 @@ void RenderSettingsPanel::applyCameraSettings()
                g_cameraData.debugVisualizationMode < 2.5f) {
         g_cameraData.debugVisualizationMode = 0.0f;
     }
+    uint32_t clayFeatureFlags =
+        static_cast<uint32_t>(g_cameraData.dxrFeatureFlags);
+    clayFeatureFlags &= ~(kDxrFeatureClayPreserveTransparency |
+                          kDxrFeatureClayPreserveEmission);
+    if (m_clayPreserveTransparency->isChecked()) {
+        clayFeatureFlags |= kDxrFeatureClayPreserveTransparency;
+    }
+    if (m_clayPreserveEmission->isChecked()) {
+        clayFeatureFlags |= kDxrFeatureClayPreserveEmission;
+    }
+    g_cameraData.dxrFeatureFlags = static_cast<float>(clayFeatureFlags);
     UpdateCameraCB();
     DxrRenderer::ResetAccumulation();
 }

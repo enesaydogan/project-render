@@ -58,6 +58,14 @@ cbuffer CameraCB : register(b0)
     float4 shadowProjParams1;
 };
 
+static const uint DXR_FEATURE_CLAY_PRESERVE_TRANSPARENCY = 1u << 2;
+static const uint DXR_FEATURE_CLAY_PRESERVE_EMISSION = 1u << 3;
+
+inline bool DxrFeatureEnabled(uint feature)
+{
+    return (((uint)dxrFeatureFlags) & feature) != 0u;
+}
+
 cbuffer WorldCB : register(b2)
 {
     float4x4 world;
@@ -1272,6 +1280,10 @@ PSOutput PSMainMesh(PSInputMesh input, uint primitiveId : SV_PrimitiveID)
     float triNormStrength = max(triPlanarParams.w, 0.0);
     const bool clayMode =
         (debugVisualizationMode > 1.5) && (debugVisualizationMode < 2.5);
+    const bool clayPreserveTransparency =
+        clayMode && DxrFeatureEnabled(DXR_FEATURE_CLAY_PRESERVE_TRANSPARENCY);
+    const bool clayPreserveEmission =
+        clayMode && DxrFeatureEnabled(DXR_FEATURE_CLAY_PRESERVE_EMISSION);
     int parallaxMode = (int)round(parallaxParams.y);
     bool parallaxMapped =
         !clayMode && !triPlanar && textureIndices2.z >= 0 &&
@@ -1311,7 +1323,7 @@ PSOutput PSMainMesh(PSInputMesh input, uint primitiveId : SV_PrimitiveID)
             windowBoxEmission = wb.rgb;
         }
     }
-    if (!clayMode && textureIndices.x >= 0) {
+    if ((!clayMode || clayPreserveTransparency) && textureIndices.x >= 0) {
         float4 diffSample = triPlanar ? SampleTriPlanar(textureIndices.x, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos, primitiveId)
                                       : SampleUvTexture(textureIndices.x, uv, objectOrigin, worldNormal, primitiveId, true);
         float3 diffRgb = (parallaxMapped || windowBoxMapped) ? diffSample.rgb
@@ -1319,18 +1331,22 @@ PSOutput PSMainMesh(PSInputMesh input, uint primitiveId : SV_PrimitiveID)
         BaseColor *= BlendTextureRgb(diffRgb, textureWeight0.x);
         alpha *= BlendTextureScalar(diffSample.a, textureWeight0.x);
     }
-    if (!clayMode && textureIndices.y >= 0 && !windowBoxMapped) {
+    if ((!clayMode || clayPreserveTransparency) &&
+        textureIndices.y >= 0 && !windowBoxMapped) {
         float opacitySample = triPlanar ? SampleTriPlanar(textureIndices.y, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos, primitiveId).r
                                         : SampleUvTexture(textureIndices.y, uv, objectOrigin, worldNormal, primitiveId, false).r;
         alpha *= BlendTextureScalar(opacitySample, textureWeight1.w);
     }
 
     float alphaCutoff = extraParams.y;
-    bool alphaMasked = !clayMode && extraParams.z > 0.5;
+    bool alphaMasked =
+        (!clayMode || clayPreserveTransparency) && extraParams.z > 0.5;
     bool isGrassMaterial = !clayMode && extraParams.w > 0.5;
     if (clayMode) {
         BaseColor = float3(0.5, 0.5, 0.5);
-        alpha = 1.0;
+        if (!clayPreserveTransparency) {
+            alpha = 1.0;
+        }
         triPlanar = false;
     }
     if (alphaMasked && alphaCutoff >= 0.0) {
@@ -1339,7 +1355,10 @@ PSOutput PSMainMesh(PSInputMesh input, uint primitiveId : SV_PrimitiveID)
 
     float roughness = clayMode ? 1.0 : saturate(surfaceParams.x);
     float metalness = clayMode ? 0.0 : saturate(surfaceParams.y);
-    float transmission = clayMode ? 0.0 : saturate(transmissionParams.a) * (1.0 - metalness);
+    float transmission =
+        (clayMode && !clayPreserveTransparency)
+            ? 0.0
+            : saturate(transmissionParams.a) * (1.0 - metalness);
     
     // Metal/Roughness Logic: factor * texture
     // G = Roughness, B = Metalness
@@ -1381,12 +1400,15 @@ PSOutput PSMainMesh(PSInputMesh input, uint primitiveId : SV_PrimitiveID)
     }
 
     // Emissive with user-defined intensity
-    float3 emiss = clayMode ? float3(0.0, 0.0, 0.0)
-                            : emissiveColor.rgb * extraParams.x;
-    if (!clayMode && windowBoxMapped) {
+    float3 emiss =
+        (clayMode && !clayPreserveEmission)
+            ? float3(0.0, 0.0, 0.0)
+            : emissiveColor.rgb * extraParams.x;
+    if ((!clayMode || clayPreserveEmission) && windowBoxMapped) {
         emiss += windowBoxEmission * max(extraParams.x, 0.0);
     }
-    if (!clayMode && emissiveAndPad.x >= 0 && !windowBoxMapped) {
+    if ((!clayMode || clayPreserveEmission) &&
+        emissiveAndPad.x >= 0 && !windowBoxMapped) {
         float3 e = triPlanar ? SampleTriPlanar(emissiveAndPad.x, worldPos, worldNormal, triScale, triSharp, objectOrigin, objectPos, primitiveId).rgb
                              : SampleUvTexture(emissiveAndPad.x, uv, objectOrigin, worldNormal, primitiveId, true).rgb;
         emiss *= BlendTextureRgb((parallaxMapped || windowBoxMapped) ? e : sRGBToLinear(e),
@@ -1414,7 +1436,10 @@ PSOutput PSMainMesh(PSInputMesh input, uint primitiveId : SV_PrimitiveID)
 
     float clearcoat = clayMode ? 0.0 : saturate(coatLayerParams.x);
     float clearcoatRoughness = clayMode ? 1.0 : max(coatLayerParams.y, 0.001);
-    float translucency = clayMode ? 0.0 : saturate(coatLayerParams.w);
+    float translucency =
+        (clayMode && !clayPreserveTransparency)
+            ? 0.0
+            : saturate(coatLayerParams.w);
     float grassRootAmount = 0.0;
     float grassDirectContact = 1.0;
     float grassAmbientContact = 1.0;

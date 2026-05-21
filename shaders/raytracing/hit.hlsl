@@ -929,13 +929,23 @@ void ClosestHitImpl(inout RayPayload payload,
     bool dominantTriPlanar = triPlanar && (rayType != RAY_TYPE_PRIMARY);
     const bool clayMode =
         (SHADER_DEBUG_VIS_MODE > 1.5) && (SHADER_DEBUG_VIS_MODE < 2.5);
+    const bool clayPreserveTransparency =
+        clayMode && DxrFeatureEnabled(DXR_FEATURE_CLAY_PRESERVE_TRANSPARENCY);
+    const bool clayPreserveEmission =
+        clayMode && DxrFeatureEnabled(DXR_FEATURE_CLAY_PRESERVE_EMISSION);
     if (clayMode) {
-        texDiff = -1;
+        if (!clayPreserveTransparency) {
+            texDiff = -1;
+            texOpacity = -1;
+            alphaCutoff = 0.5;
+        }
         texNorm = -1;
         texMR = -1;
         texOcc = -1;
-        texEmis = -1;
-        texOpacity = -1;
+        if (!clayPreserveEmission) {
+            texEmis = -1;
+            emissiveIntensity = 0.0;
+        }
         texSpecular = -1;
         texThickness = -1;
         texCoatNormal = -1;
@@ -943,9 +953,14 @@ void ClosestHitImpl(inout RayPayload payload,
         triPlanar = false;
         dominantTriPlanar = false;
         samplingVariation = float4(0.0, 0.0, 0.0, 0.0);
-        matFlags = 0u;
-        alphaCutoff = 0.5;
-        emissiveIntensity = 0.0;
+        matFlags = clayPreserveTransparency
+            ? (matFlags &
+               (MATERIAL_FLAG_ALPHA_TESTED |
+                MATERIAL_FLAG_THIN_WALLED |
+                MATERIAL_FLAG_TRANSLUCENT |
+                MATERIAL_FLAG_GLASS |
+                MATERIAL_FLAG_HAS_OPACITY_TEXTURE))
+            : 0u;
         specularWeight = 0.0;
         isGrassMaterial = false;
         parallaxDepthScale = 0.0;
@@ -1055,14 +1070,21 @@ void ClosestHitImpl(inout RayPayload payload,
 
     if (clayMode) {
         BaseColor = float3(0.5, 0.5, 0.5);
-        opacity = 1.0;
         metalness = 0.0;
         roughness = 1.0;
-        transmission = 0.0;
-        DiffuseAlbedo = BaseColor;
+        if (!clayPreserveTransparency) {
+            opacity = 1.0;
+            transmission = 0.0;
+        }
+        DiffuseAlbedo = BaseColor * (1.0 - transmission);
+        if (clayPreserveTransparency && alphaCutoff < 0.0) {
+            DiffuseAlbedo *= saturate(opacity);
+        }
         clearcoat = 0.0;
         clearcoatRoughness = 1.0;
-        transmissionColor = float3(1.0, 1.0, 1.0);
+        if (!clayPreserveTransparency) {
+            transmissionColor = float3(1.0, 1.0, 1.0);
+        }
     }
 
     if (isGrassMaterial) {
@@ -1183,8 +1205,10 @@ void ClosestHitImpl(inout RayPayload payload,
     if (mode == 7) { PayloadSetColor(payload, float3(ao, ao, ao)); payload.t = RayTCurrent(); return; }
 
     // Archviz extensions
-    float translucency = clayMode ? 0.0 : saturate(arch0.w);
-    float thickness = clayMode ? 0.0 : max(volumeParams.x, 0.0);
+    float translucency =
+        (clayMode && !clayPreserveTransparency) ? 0.0 : saturate(arch0.w);
+    float thickness =
+        (clayMode && !clayPreserveTransparency) ? 0.0 : max(volumeParams.x, 0.0);
     if (texThickness >= 0) {
         float thicknessSample = triPlanar ? SampleTriPlanar(texThickness, P, worldNormal, triScale, triSharp, samplingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar).r
                                           : SampleUvTexture(texThickness, uv, objectOrigin, worldNormal, samplingVariation, triRotation, textureLod, primIndex, false).r;
@@ -1204,7 +1228,7 @@ void ClosestHitImpl(inout RayPayload payload,
         payload.packedNormal = PackNormalOctahedron(N);
         payload.packedAlbedo = PackPayloadAlbedoCoat(BaseColor, clearcoat);
         PayloadSetCoatRoughness(payload, clearcoatRoughness);
-        bool thinWalled = !clayMode &&
+        bool thinWalled = (!clayMode || clayPreserveTransparency) &&
                           (((matFlags & MATERIAL_FLAG_THIN_WALLED) != 0) ||
                            (arch0.z > 0.5));
         payload.packedSurface =
@@ -1325,7 +1349,7 @@ void ClosestHitImpl(inout RayPayload payload,
     payload.packedNormal = PackNormalOctahedron(N);
     payload.packedAlbedo = PackPayloadAlbedoCoat(BaseColor, clearcoat);
     PayloadSetCoatRoughness(payload, clearcoatRoughness);
-    bool thinWalled = !clayMode &&
+    bool thinWalled = (!clayMode || clayPreserveTransparency) &&
                       (((matFlags & MATERIAL_FLAG_THIN_WALLED) != 0) ||
                        (arch0.z > 0.5));
     payload.packedSurface = PackPayloadSurface(roughness, metalness, transmission, translucency);
@@ -1367,7 +1391,8 @@ void AnyHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes a
     bool alphaTested = (matFlags & MATERIAL_FLAG_ALPHA_TESTED) != 0;
     float alphaCutoff = matExtra.shadingParams.z;
 
-    if ((SHADER_DEBUG_VIS_MODE > 1.5) && (SHADER_DEBUG_VIS_MODE < 2.5)) {
+    if ((SHADER_DEBUG_VIS_MODE > 1.5) && (SHADER_DEBUG_VIS_MODE < 2.5) &&
+        !DxrFeatureEnabled(DXR_FEATURE_CLAY_PRESERVE_TRANSPARENCY)) {
         return;
     }
 

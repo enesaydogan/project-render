@@ -2586,6 +2586,35 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
               "Overrides scene materials with opaque matte 50%% grey for "
               "lighting checks");
         }
+        ImGui::BeginDisabled(!clayMode);
+        uint32_t clayFeatureFlags =
+            static_cast<uint32_t>(g_cameraData.dxrFeatureFlags);
+        bool clayPreserveTransparency =
+            (clayFeatureFlags & kDxrFeatureClayPreserveTransparency) != 0;
+        if (ImGui::Checkbox("Clay Preserve Transparency",
+                            &clayPreserveTransparency)) {
+          if (clayPreserveTransparency) {
+            clayFeatureFlags |= kDxrFeatureClayPreserveTransparency;
+          } else {
+            clayFeatureFlags &= ~kDxrFeatureClayPreserveTransparency;
+          }
+          g_cameraData.dxrFeatureFlags = static_cast<float>(clayFeatureFlags);
+          UpdateCameraCB();
+          uiChanged = true;
+        }
+        bool clayPreserveEmission =
+            (clayFeatureFlags & kDxrFeatureClayPreserveEmission) != 0;
+        if (ImGui::Checkbox("Clay Preserve Emission", &clayPreserveEmission)) {
+          if (clayPreserveEmission) {
+            clayFeatureFlags |= kDxrFeatureClayPreserveEmission;
+          } else {
+            clayFeatureFlags &= ~kDxrFeatureClayPreserveEmission;
+          }
+          g_cameraData.dxrFeatureFlags = static_cast<float>(clayFeatureFlags);
+          UpdateCameraCB();
+          uiChanged = true;
+        }
+        ImGui::EndDisabled();
 
         ImGui::Separator();
         ImGui::Text("Adaptive Sampling");

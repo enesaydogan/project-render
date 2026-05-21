@@ -960,6 +960,10 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
               0.0, 10.0);
     const bool clayMode =
         (SHADER_DEBUG_VIS_MODE > 1.5) && (SHADER_DEBUG_VIS_MODE < 2.5);
+    const bool clayPreserveTransparency =
+        clayMode && DxrFeatureEnabled(DXR_FEATURE_CLAY_PRESERVE_TRANSPARENCY);
+    const bool clayPreserveEmission =
+        clayMode && DxrFeatureEnabled(DXR_FEATURE_CLAY_PRESERVE_EMISSION);
     const bool parallaxMapped =
         !clayMode && !triPlanar &&
         ((matFlags & MATERIAL_FLAG_PARALLAX_MAPPED) != 0u) &&
@@ -975,9 +979,10 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
                                         parallaxDepthScale, textureLod);
     }
 
-    float3 baseColor = clayMode ? float3(0.5, 0.5, 0.5)
-                                : saturate(material.baseColor_opacity.rgb);
-    float opacity = clayMode ? 1.0 : saturate(material.baseColor_opacity.a);
+    float3 baseColor = saturate(material.baseColor_opacity.rgb);
+    float opacity = clayPreserveTransparency
+        ? saturate(material.baseColor_opacity.a)
+        : (clayMode ? 1.0 : saturate(material.baseColor_opacity.a));
     float3 windowBoxEmission = float3(0.0, 0.0, 0.0);
     if (windowBoxMapped) {
         bool windowBoxBackFace = materialExtra.parallaxOptions.x > 0.5;
@@ -1001,7 +1006,7 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
             windowBoxEmission = wb.rgb;
         }
     }
-    if (!clayMode && texDiff >= 0) {
+    if ((!clayMode || clayPreserveTransparency) && texDiff >= 0) {
         float4 diffSample = triPlanar
             ? WavefrontGiSampleTriPlanar(texDiff, surfacePos, worldNormal,
                                          triScale, triSharp, mappingVariation,
@@ -1016,7 +1021,8 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
         baseColor *= WavefrontGiBlendTextureRgb(diffRgb, texWeight0.x);
         opacity *= WavefrontGiBlendTextureScalar(diffSample.a, texWeight0.x);
     }
-    if (!clayMode && texOpacity >= 0 && !windowBoxMapped) {
+    if ((!clayMode || clayPreserveTransparency) &&
+        texOpacity >= 0 && !windowBoxMapped) {
         float opacitySample = triPlanar
             ? WavefrontGiSampleTriPlanar(texOpacity, surfacePos, worldNormal,
                                          triScale, triSharp, mappingVariation,
@@ -1028,6 +1034,10 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
                                          primitiveIndex, false).r;
         opacity *= WavefrontGiBlendTextureScalar(opacitySample,
                                                  texWeight1.w);
+    }
+
+    if (clayMode) {
+        baseColor = float3(0.5, 0.5, 0.5);
     }
 
     float metallic = clayMode ? 0.0 : saturate(material.pbrParams_flags.x);
@@ -1051,7 +1061,10 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
     }
     roughness = max(roughness, 0.001);
 
-    float transmission = saturate(material.pbrParams_flags.z) * (1.0 - metallic);
+    float transmission =
+        (clayMode && !clayPreserveTransparency)
+            ? 0.0
+            : saturate(material.pbrParams_flags.z) * (1.0 - metallic);
     if (materialExtra.shadingParams.z < 0.0 && opacity < 0.999) {
         transmission = max(transmission, 1.0 - opacity);
     }
@@ -1062,7 +1075,16 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
     }
     if (clayMode) {
         transmission = 0.0;
+        if (clayPreserveTransparency) {
+            transmission = saturate(material.pbrParams_flags.z);
+            if (materialExtra.shadingParams.z < 0.0 && opacity < 0.999) {
+                transmission = max(transmission, 1.0 - opacity);
+            }
+        }
         diffuseAlbedo = baseColor;
+        if (clayPreserveTransparency && materialExtra.shadingParams.z < 0.0) {
+            diffuseAlbedo *= opacity;
+        }
     }
 
     float clearcoat = clayMode ? 0.0 : saturate(coatLayer.x);
@@ -1101,14 +1123,16 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
     }
 
     float3 emissive =
-        clayMode ? float3(0.0, 0.0, 0.0)
-                 : material.emissive_ior.rgb *
-                       (5.0 * max(0.0, materialExtra.shadingParams.x));
-    if (!clayMode && windowBoxMapped) {
+        (clayMode && !clayPreserveEmission)
+            ? float3(0.0, 0.0, 0.0)
+            : material.emissive_ior.rgb *
+                  (5.0 * max(0.0, materialExtra.shadingParams.x));
+    if ((!clayMode || clayPreserveEmission) && windowBoxMapped) {
         emissive += windowBoxEmission *
                     (5.0 * max(0.0, materialExtra.shadingParams.x));
     }
-    if (!clayMode && texEmis >= 0 && !windowBoxMapped) {
+    if ((!clayMode || clayPreserveEmission) &&
+        texEmis >= 0 && !windowBoxMapped) {
         float3 e = triPlanar
             ? WavefrontGiSampleTriPlanar(texEmis, surfacePos, worldNormal,
                                          triScale, triSharp, mappingVariation,
@@ -1123,8 +1147,9 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
                                                texWeight1.z);
     }
 
-    float thickness = clayMode ? 0.0 : max(volumeParams.x, 0.0);
-    if (!clayMode && texThickness >= 0) {
+    float thickness =
+        (clayMode && !clayPreserveTransparency) ? 0.0 : max(volumeParams.x, 0.0);
+    if ((!clayMode || clayPreserveTransparency) && texThickness >= 0) {
         float thicknessSample = triPlanar
             ? WavefrontGiSampleTriPlanar(texThickness, surfacePos, worldNormal,
                                          triScale, triSharp, mappingVariation,
@@ -1173,7 +1198,8 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
             normal, viewDir, sun.direction, sun.radiance);
     }
     float3 giLighting = direct;
-    float translucency = clayMode ? 0.0 : saturate(coatLayer.w);
+    float translucency =
+        (clayMode && !clayPreserveTransparency) ? 0.0 : saturate(coatLayer.w);
     if (translucency > 0.001) {
         float backNdotL = saturate(dot(-normal, sun.direction));
         giLighting += (diffuseAlbedo / PI) * sun.radiance * backNdotL *

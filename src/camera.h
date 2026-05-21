@@ -1,8 +1,14 @@
 #pragma once
 #include <d3d12.h>
+#include <cstdint>
 #include <windows.h>
 #include <wrl.h>
 using Microsoft::WRL::ComPtr;
+
+constexpr uint32_t kDxrFeatureAovOutput = 1u << 0;
+constexpr uint32_t kDxrFeaturePrimaryGuide = 1u << 1;
+constexpr uint32_t kDxrFeatureClayPreserveTransparency = 1u << 2;
+constexpr uint32_t kDxrFeatureClayPreserveEmission = 1u << 3;
 
 struct CameraCB {
   float pos[3];

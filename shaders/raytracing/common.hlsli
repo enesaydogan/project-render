@@ -175,6 +175,8 @@ cbuffer Camera : register(b0)
 
 static const uint DXR_FEATURE_AOV_OUTPUT = 1u << 0;
 static const uint DXR_FEATURE_PRIMARY_GUIDE = 1u << 1;
+static const uint DXR_FEATURE_CLAY_PRESERVE_TRANSPARENCY = 1u << 2;
+static const uint DXR_FEATURE_CLAY_PRESERVE_EMISSION = 1u << 3;
 
 inline bool DxrFeatureEnabled(uint feature)
 {

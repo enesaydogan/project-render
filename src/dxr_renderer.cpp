@@ -375,8 +375,8 @@ enum ResourceFeatureBits : uint32_t {
 };
 
 enum DxrFeatureBits : uint32_t {
-  DxrFeature_AovOutput = 1u << 0,
-  DxrFeature_PrimaryGuide = 1u << 1,
+  DxrFeature_AovOutput = kDxrFeatureAovOutput,
+  DxrFeature_PrimaryGuide = kDxrFeaturePrimaryGuide,
 };
 
 // Halton sequence helper for CPU-side jitter
@@ -431,6 +431,9 @@ static uint32_t ComputeDxrFeatureMask(bool dlssActive, bool rrActive,
   if (dlssActive || rrActive || s_tonemapAoIntensity > 1.0e-4f) {
     mask |= DxrFeature_PrimaryGuide;
   }
+  mask |= static_cast<uint32_t>(g_cameraData.dxrFeatureFlags) &
+          (kDxrFeatureClayPreserveTransparency |
+           kDxrFeatureClayPreserveEmission);
   return mask;
 }
 

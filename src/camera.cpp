@@ -132,6 +132,8 @@ static bool CameraChanged(const CameraCB &a, const CameraCB &b) {
     return true;
   if (a.triPlanarWorldRotationDegrees != b.triPlanarWorldRotationDegrees)
     return true;
+  if (a.dxrFeatureFlags != b.dxrFeatureFlags)
+    return true;
   return false;
 }
 
