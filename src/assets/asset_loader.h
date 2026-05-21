@@ -40,12 +40,34 @@ struct Vertex {
   float uv[2];
 };
 
+enum class TextureCompressionMode : uint32_t {
+  Off = 0,
+  Balanced = 1,
+  HighQuality = 2,
+};
+
+enum class TextureUsageSemantic : uint32_t {
+  Unknown = 0,
+  Color = 1,
+  ColorAlpha = 2,
+  Normal = 3,
+  PackedSurface = 4,
+  Scalar = 5,
+  Emissive = 6,
+  Hdr = 7,
+};
+
 struct Texture {
   ComPtr<ID3D12Resource> resource;
   UINT width = 0;
   UINT height = 0;
   UINT mipLevels = 1;
   DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM;
+  DXGI_FORMAT cpuFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+  UINT cpuMipLevels = 1;
+  TextureUsageSemantic usageSemantic = TextureUsageSemantic::Unknown;
+  TextureCompressionMode compressionMode = TextureCompressionMode::Off;
+  bool gpuCompressed = false;
   std::vector<uint8_t> cpuData; // Added for serialization
   bool hiddenInEditor = false;
 };
@@ -206,6 +228,13 @@ inline void ApplyDefaultGrassLook(Material &m) {
 // Initialize the loader with a device and command queue for GPU uploads.
 void Initialize(ID3D12Device *device, ID3D12CommandQueue *queue);
 
+void SetTextureCompressionMode(TextureCompressionMode mode);
+TextureCompressionMode GetTextureCompressionMode();
+const char *TextureCompressionModeName(TextureCompressionMode mode);
+const char *TextureUsageSemanticName(TextureUsageSemantic semantic);
+bool ApplyTextureCompressionForUsage(Texture &texture,
+                                     TextureUsageSemantic semantic);
+
 // Progress callback: progress [0..1], status message. May be called from loader
 // thread.
 using ProgressCallback = std::function<void(float, const std::string &)>;
@@ -258,10 +287,15 @@ bool LoadSkp(const std::string &path, std::vector<GpuMesh> &outMeshes,
 
 // Load a single texture from file.
 Texture LoadTextureFromFile(const std::string &path, bool isHDR = false);
+Texture LoadTextureFromFile(const std::string &path, bool isHDR,
+                            TextureUsageSemantic semantic);
 
 // Load a single texture from encoded image bytes (png/jpg/hdr/exr).
 Texture LoadTextureFromEncodedMemory(const void *src, size_t size,
                                      bool isHDRHint = false);
+Texture LoadTextureFromEncodedMemory(const void *src, size_t size,
+                                     bool isHDRHint,
+                                     TextureUsageSemantic semantic);
 
 // Load a single texture from memory.
 Texture LoadTextureFromMemory(const void *src, int width, int height,

@@ -140,6 +140,8 @@ bool ImportHDRWithDialog(HWND hwnd);
 // Load a texture from file and append it to the global texture array.
 // Returns the global texture index, or -1 on failure.
 int AddTextureFromFile(const std::string &utf8path, bool isHDR = false);
+int AddTextureFromFile(const std::string &utf8path, bool isHDR,
+                       Asset::TextureUsageSemantic semantic);
 int AddTexture(Asset::Texture texture);
 
 // Add a default ground plane
@@ -269,6 +271,7 @@ bool UpdateNodeMaterialSourceName(size_t nodeIndex, size_t materialSlot,
                                   const std::string &materialName);
 bool UpdateMaterial(size_t index, const Asset::Material &material);
 void RefreshAllMaterialRuntimeTextures();
+void RefreshTextureCompression(bool resetAccumulation = true);
 GpuUploadStats GetGpuUploadStats();
 void BeginBatchedUpdates();
 void EndBatchedUpdates();

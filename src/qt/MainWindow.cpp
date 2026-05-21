@@ -222,6 +222,40 @@ QString FormatBytes(UINT64 bytes)
     return QObject::tr("%1 B").arg(static_cast<qulonglong>(bytes));
 }
 
+QString FormatDxgiFormat(DXGI_FORMAT format)
+{
+    switch (format) {
+    case DXGI_FORMAT_R8G8B8A8_UNORM:
+        return QStringLiteral("RGBA8");
+    case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+        return QStringLiteral("RGBA8 sRGB");
+    case DXGI_FORMAT_R32G32B32A32_FLOAT:
+        return QStringLiteral("RGBA32F");
+    case DXGI_FORMAT_BC1_UNORM:
+        return QStringLiteral("BC1");
+    case DXGI_FORMAT_BC1_UNORM_SRGB:
+        return QStringLiteral("BC1 sRGB");
+    case DXGI_FORMAT_BC3_UNORM:
+        return QStringLiteral("BC3");
+    case DXGI_FORMAT_BC3_UNORM_SRGB:
+        return QStringLiteral("BC3 sRGB");
+    case DXGI_FORMAT_BC4_UNORM:
+        return QStringLiteral("BC4");
+    case DXGI_FORMAT_BC4_SNORM:
+        return QStringLiteral("BC4 SNORM");
+    case DXGI_FORMAT_BC5_UNORM:
+        return QStringLiteral("BC5");
+    case DXGI_FORMAT_BC6H_UF16:
+        return QStringLiteral("BC6H");
+    case DXGI_FORMAT_BC7_UNORM:
+        return QStringLiteral("BC7");
+    case DXGI_FORMAT_BC7_UNORM_SRGB:
+        return QStringLiteral("BC7 sRGB");
+    default:
+        return QObject::tr("DXGI %1").arg(static_cast<unsigned>(format));
+    }
+}
+
 struct SceneMemoryBreakdown {
     UINT64 textureBytes = 0;
     UINT64 meshBytes = 0;
@@ -1886,7 +1920,13 @@ void MainWindow::showMemoryBreakdownPopup()
                  FormatBytes(sceneBreakdown.accountedRuntimeBytes)));
     layout->addWidget(summary);
 
-    auto *table = new QTableWidget(&dialog);
+    auto *tabs = new QTabWidget(&dialog);
+    auto *breakdownPage = new QWidget(tabs);
+    auto *breakdownLayout = new QVBoxLayout(breakdownPage);
+    breakdownLayout->setContentsMargins(0, 0, 0, 0);
+    breakdownLayout->setSpacing(0);
+
+    auto *table = new QTableWidget(breakdownPage);
     table->setColumnCount(3);
     table->setHorizontalHeaderLabels({tr("Category"), tr("Details"), tr("Memory")});
     table->horizontalHeader()->setStretchLastSection(false);
@@ -1970,7 +2010,97 @@ void MainWindow::showMemoryBreakdownPopup()
            sceneBreakdown.accountedRuntimeBytes);
 
     table->resizeRowsToContents();
-    layout->addWidget(table, 1);
+    breakdownLayout->addWidget(table, 1);
+    tabs->addTab(breakdownPage, tr("Breakdown"));
+
+    auto *texturePage = new QWidget(tabs);
+    auto *textureLayout = new QVBoxLayout(texturePage);
+    textureLayout->setContentsMargins(0, 0, 0, 0);
+    textureLayout->setSpacing(0);
+
+    auto *textureTable = new QTableWidget(texturePage);
+    textureTable->setColumnCount(9);
+    textureTable->setHorizontalHeaderLabels(
+        {tr("#"), tr("Resolution"), tr("GPU Format"), tr("Source Format"),
+         tr("Usage"), tr("Compression"), tr("GPU"), tr("CPU Source"),
+         tr("Hidden")});
+    textureTable->horizontalHeader()->setStretchLastSection(false);
+    textureTable->horizontalHeader()->setSectionResizeMode(
+        0, QHeaderView::ResizeToContents);
+    textureTable->horizontalHeader()->setSectionResizeMode(
+        1, QHeaderView::ResizeToContents);
+    textureTable->horizontalHeader()->setSectionResizeMode(
+        2, QHeaderView::ResizeToContents);
+    textureTable->horizontalHeader()->setSectionResizeMode(
+        3, QHeaderView::ResizeToContents);
+    textureTable->horizontalHeader()->setSectionResizeMode(
+        4, QHeaderView::ResizeToContents);
+    textureTable->horizontalHeader()->setSectionResizeMode(
+        5, QHeaderView::Stretch);
+    textureTable->horizontalHeader()->setSectionResizeMode(
+        6, QHeaderView::ResizeToContents);
+    textureTable->horizontalHeader()->setSectionResizeMode(
+        7, QHeaderView::ResizeToContents);
+    textureTable->horizontalHeader()->setSectionResizeMode(
+        8, QHeaderView::ResizeToContents);
+    textureTable->verticalHeader()->setVisible(false);
+    textureTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    textureTable->setSelectionMode(QAbstractItemView::NoSelection);
+    textureTable->setAlternatingRowColors(true);
+
+    auto setTextureCell = [textureTable](int row, int column,
+                                         const QString &text,
+                                         Qt::Alignment alignment =
+                                             Qt::AlignLeft | Qt::AlignVCenter) {
+        auto *item = new QTableWidgetItem(text);
+        item->setTextAlignment(alignment);
+        textureTable->setItem(row, column, item);
+    };
+
+    for (size_t i = 0; i < g_loadedTextures.size(); ++i) {
+        const Asset::Texture &texture = g_loadedTextures[i];
+        const int row = textureTable->rowCount();
+        textureTable->insertRow(row);
+
+        const QString resolution =
+            tr("%1 x %2, %3 mip%4")
+                .arg(texture.width)
+                .arg(texture.height)
+                .arg(texture.mipLevels)
+                .arg(texture.mipLevels == 1 ? QString() : QStringLiteral("s"));
+        QString compression =
+            QString::fromLatin1(
+                Asset::TextureCompressionModeName(texture.compressionMode));
+        if (texture.gpuCompressed) {
+            compression += tr(" (GPU compressed)");
+        }
+
+        setTextureCell(row, 0, QString::number(i),
+                       Qt::AlignRight | Qt::AlignVCenter);
+        setTextureCell(row, 1, resolution);
+        setTextureCell(row, 2, FormatDxgiFormat(texture.format));
+        setTextureCell(row, 3, FormatDxgiFormat(texture.cpuFormat));
+        setTextureCell(
+            row, 4,
+            QString::fromLatin1(
+                Asset::TextureUsageSemanticName(texture.usageSemantic)));
+        setTextureCell(row, 5, compression);
+        setTextureCell(row, 6,
+                       FormatBytes(ResourceAllocationBytes(
+                           texture.resource.Get())),
+                       Qt::AlignRight | Qt::AlignVCenter);
+        setTextureCell(row, 7,
+                       FormatBytes(static_cast<UINT64>(texture.cpuData.size())),
+                       Qt::AlignRight | Qt::AlignVCenter);
+        setTextureCell(row, 8,
+                       texture.hiddenInEditor ? tr("Yes") : tr("No"),
+                       Qt::AlignCenter);
+    }
+
+    textureTable->resizeRowsToContents();
+    textureLayout->addWidget(textureTable, 1);
+    tabs->addTab(texturePage, tr("Textures"));
+    layout->addWidget(tabs, 1);
 
     auto *note = new QLabel(
         tr("Values are D3D12 allocation-size estimates for committed resources. "

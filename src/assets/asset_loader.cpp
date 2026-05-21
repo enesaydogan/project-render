@@ -13,6 +13,8 @@
 #include <functional>
 #include <iostream>
 #include <sstream>
+#define STB_DXT_IMPLEMENTATION
+#include <stb_dxt.h>
 #include <stb_image.h>
 #include <stdio.h>
 #include <string>
@@ -56,6 +58,8 @@ static ComPtr<ID3D12CommandQueue> s_queue;
 // Optional progress callback. Signature: progress [0..1], status message
 std::function<void(float, const std::string &)> s_progressCb;
 static thread_local bool s_deferGpuUpload = false;
+static TextureCompressionMode s_textureCompressionMode =
+    TextureCompressionMode::Balanced;
 
 static std::wstring WidePathFromUtf8(const std::string &path) {
   if (path.empty()) {
@@ -157,6 +161,48 @@ void ClearProgressCallback() { s_progressCb = ProgressCallback(); }
 void SetDeferGpuUpload(bool enable) { s_deferGpuUpload = enable; }
 
 bool GetDeferGpuUpload() { return s_deferGpuUpload; }
+
+void SetTextureCompressionMode(TextureCompressionMode mode) {
+  s_textureCompressionMode = mode;
+}
+
+TextureCompressionMode GetTextureCompressionMode() {
+  return s_textureCompressionMode;
+}
+
+const char *TextureCompressionModeName(TextureCompressionMode mode) {
+  switch (mode) {
+  case TextureCompressionMode::Off:
+    return "Off";
+  case TextureCompressionMode::Balanced:
+    return "Balanced";
+  case TextureCompressionMode::HighQuality:
+    return "High Quality";
+  default:
+    return "Unknown";
+  }
+}
+
+const char *TextureUsageSemanticName(TextureUsageSemantic semantic) {
+  switch (semantic) {
+  case TextureUsageSemantic::Color:
+    return "Color";
+  case TextureUsageSemantic::ColorAlpha:
+    return "Color + Alpha";
+  case TextureUsageSemantic::Normal:
+    return "Normal";
+  case TextureUsageSemantic::PackedSurface:
+    return "Packed Surface";
+  case TextureUsageSemantic::Scalar:
+    return "Scalar";
+  case TextureUsageSemantic::Emissive:
+    return "Emissive";
+  case TextureUsageSemantic::Hdr:
+    return "HDR";
+  default:
+    return "Unknown";
+  }
+}
 
 // ... rest of the file ... (excluding LoadGltf until later)
 
@@ -425,6 +471,10 @@ static bool CreateGpuTexture(const void *src, int width, int height,
   outTex.height = height;
   outTex.format = format;
   outTex.mipLevels = mipLevels;
+  outTex.cpuFormat = format;
+  outTex.cpuMipLevels = 1;
+  outTex.gpuCompressed = IsBlockCompressedTextureFormat(format);
+  outTex.compressionMode = TextureCompressionMode::Off;
 
   // Store CPU data for serialization
   bpp = (format == DXGI_FORMAT_R32G32B32A32_FLOAT) ? 16 : 4;
@@ -2477,6 +2527,16 @@ static int LtmBytesPerPixel(DXGI_FORMAT fmt) {
   }
 }
 
+Texture LoadTextureFromFile(const std::string &path, bool isHDR,
+                            TextureUsageSemantic semantic) {
+  Texture tex = LoadTextureFromFile(path, isHDR);
+  if (tex.resource) {
+    ApplyTextureCompressionForUsage(
+        tex, isHDR ? TextureUsageSemantic::Hdr : semantic);
+  }
+  return tex;
+}
+
 static bool LtmReadDDSFormat(const uint8_t *ddsData, size_t ddsSize,
                              DXGI_FORMAT *outFormat) {
   if (!ddsData || ddsSize < 128 || !outFormat)
@@ -2679,6 +2739,10 @@ ltm_dds_done:
   tex.height    = H;
   tex.mipLevels = mips;
   tex.format    = resourceFmt;
+  tex.cpuFormat = resourceFmt;
+  tex.cpuMipLevels = mips;
+  tex.gpuCompressed = IsBlockCompressedTextureFormat(resourceFmt);
+  tex.compressionMode = TextureCompressionMode::Off;
   tex.cpuData.assign(mipPtr, mipPtr + tightMipBytes);
   return tex;
 }
@@ -4100,6 +4164,17 @@ Texture LoadTextureFromEncodedMemory(const void *src, size_t size,
   return loadHdr();
 }
 
+Texture LoadTextureFromEncodedMemory(const void *src, size_t size,
+                                     bool isHDRHint,
+                                     TextureUsageSemantic semantic) {
+  Texture tex = LoadTextureFromEncodedMemory(src, size, isHDRHint);
+  if (tex.resource) {
+    ApplyTextureCompressionForUsage(
+        tex, isHDRHint ? TextureUsageSemantic::Hdr : semantic);
+  }
+  return tex;
+}
+
 Texture LoadTextureFromMemory(const void *src, int width, int height,
                               DXGI_FORMAT format) {
   Texture tex;
@@ -4249,8 +4324,290 @@ Texture LoadTextureFromMemoryMipChain(const void *src, size_t srcSize,
   tex.height = static_cast<UINT>(height);
   tex.format = format;
   tex.mipLevels = usableMips;
+  tex.cpuFormat = format;
+  tex.cpuMipLevels = usableMips;
+  tex.gpuCompressed = IsBlockCompressedTextureFormat(format);
+  tex.compressionMode = TextureCompressionMode::Off;
   tex.cpuData.assign(tightSrc, tightSrc + tightBytes);
   return tex;
+}
+
+static bool TextureCpuDataIsRgba8(const Texture &texture) {
+  return texture.cpuFormat == DXGI_FORMAT_R8G8B8A8_UNORM &&
+         texture.cpuMipLevels == 1 && texture.width > 0 && texture.height > 0 &&
+         texture.cpuData.size() >=
+             static_cast<size_t>(texture.width) * texture.height * 4;
+}
+
+static bool TextureHasUsefulAlpha(const uint8_t *rgba, uint32_t width,
+                                  uint32_t height) {
+  if (!rgba) {
+    return false;
+  }
+  const size_t pixelCount = static_cast<size_t>(width) * height;
+  for (size_t i = 0; i < pixelCount; ++i) {
+    if (rgba[i * 4 + 3] < 250) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void DownsampleRgba2x(const std::vector<uint8_t> &src, uint32_t srcW,
+                             uint32_t srcH, std::vector<uint8_t> &dst,
+                             uint32_t &dstW, uint32_t &dstH) {
+  dstW = std::max(1u, srcW >> 1);
+  dstH = std::max(1u, srcH >> 1);
+  dst.assign(static_cast<size_t>(dstW) * dstH * 4, 0);
+
+  for (uint32_t y = 0; y < dstH; ++y) {
+    for (uint32_t x = 0; x < dstW; ++x) {
+      uint32_t sum[4] = {};
+      uint32_t count = 0;
+      for (uint32_t oy = 0; oy < 2; ++oy) {
+        for (uint32_t ox = 0; ox < 2; ++ox) {
+          const uint32_t sx = std::min(srcW - 1, x * 2 + ox);
+          const uint32_t sy = std::min(srcH - 1, y * 2 + oy);
+          const uint8_t *p = src.data() + (static_cast<size_t>(sy) * srcW + sx) * 4;
+          sum[0] += p[0];
+          sum[1] += p[1];
+          sum[2] += p[2];
+          sum[3] += p[3];
+          ++count;
+        }
+      }
+      uint8_t *d = dst.data() + (static_cast<size_t>(y) * dstW + x) * 4;
+      d[0] = static_cast<uint8_t>(sum[0] / count);
+      d[1] = static_cast<uint8_t>(sum[1] / count);
+      d[2] = static_cast<uint8_t>(sum[2] / count);
+      d[3] = static_cast<uint8_t>(sum[3] / count);
+    }
+  }
+}
+
+static void FillRgbaBlock(const uint8_t *rgba, uint32_t width, uint32_t height,
+                          uint32_t blockX, uint32_t blockY,
+                          uint8_t block[64]) {
+  for (uint32_t y = 0; y < 4; ++y) {
+    for (uint32_t x = 0; x < 4; ++x) {
+      const uint32_t sx = std::min(width - 1, blockX * 4 + x);
+      const uint32_t sy = std::min(height - 1, blockY * 4 + y);
+      const uint8_t *src = rgba + (static_cast<size_t>(sy) * width + sx) * 4;
+      uint8_t *dst = block + (y * 4 + x) * 4;
+      dst[0] = src[0];
+      dst[1] = src[1];
+      dst[2] = src[2];
+      dst[3] = src[3];
+    }
+  }
+}
+
+static void EncodeBc4Block(const uint8_t values[16], uint8_t outBlock[8]) {
+  uint8_t minValue = 255;
+  uint8_t maxValue = 0;
+  for (int i = 0; i < 16; ++i) {
+    minValue = std::min(minValue, values[i]);
+    maxValue = std::max(maxValue, values[i]);
+  }
+
+  outBlock[0] = maxValue;
+  outBlock[1] = minValue;
+
+  uint8_t palette[8] = {};
+  palette[0] = maxValue;
+  palette[1] = minValue;
+  if (maxValue > minValue) {
+    palette[2] = static_cast<uint8_t>((6 * maxValue + 1 * minValue + 3) / 7);
+    palette[3] = static_cast<uint8_t>((5 * maxValue + 2 * minValue + 3) / 7);
+    palette[4] = static_cast<uint8_t>((4 * maxValue + 3 * minValue + 3) / 7);
+    palette[5] = static_cast<uint8_t>((3 * maxValue + 4 * minValue + 3) / 7);
+    palette[6] = static_cast<uint8_t>((2 * maxValue + 5 * minValue + 3) / 7);
+    palette[7] = static_cast<uint8_t>((1 * maxValue + 6 * minValue + 3) / 7);
+  } else {
+    palette[2] = static_cast<uint8_t>((4 * maxValue + 1 * minValue + 2) / 5);
+    palette[3] = static_cast<uint8_t>((3 * maxValue + 2 * minValue + 2) / 5);
+    palette[4] = static_cast<uint8_t>((2 * maxValue + 3 * minValue + 2) / 5);
+    palette[5] = static_cast<uint8_t>((1 * maxValue + 4 * minValue + 2) / 5);
+    palette[6] = 0;
+    palette[7] = 255;
+  }
+
+  uint64_t packed = 0;
+  for (int i = 0; i < 16; ++i) {
+    int bestIndex = 0;
+    int bestError = 256 * 256;
+    for (int p = 0; p < 8; ++p) {
+      const int error = std::abs(static_cast<int>(values[i]) -
+                                 static_cast<int>(palette[p]));
+      if (error < bestError) {
+        bestError = error;
+        bestIndex = p;
+      }
+    }
+    packed |= (static_cast<uint64_t>(bestIndex) & 0x7ull) << (i * 3);
+  }
+
+  for (int i = 0; i < 6; ++i) {
+    outBlock[2 + i] = static_cast<uint8_t>((packed >> (8 * i)) & 0xffu);
+  }
+}
+
+static void CompressMipToBc(const uint8_t *rgba, uint32_t width,
+                            uint32_t height, DXGI_FORMAT format,
+                            std::vector<uint8_t> &out) {
+  const uint32_t blocksX = (width + 3u) / 4u;
+  const uint32_t blocksY = (height + 3u) / 4u;
+  const size_t blockBytes = TextureBlockBytes(format);
+  out.resize(static_cast<size_t>(blocksX) * blocksY * blockBytes);
+
+  uint8_t block[64] = {};
+  uint8_t channel[16] = {};
+  for (uint32_t by = 0; by < blocksY; ++by) {
+    for (uint32_t bx = 0; bx < blocksX; ++bx) {
+      FillRgbaBlock(rgba, width, height, bx, by, block);
+      uint8_t *dst = out.data() + (static_cast<size_t>(by) * blocksX + bx) * blockBytes;
+      if (format == DXGI_FORMAT_BC1_UNORM) {
+        stb_compress_dxt_block(dst, block, 0, STB_DXT_HIGHQUAL);
+      } else if (format == DXGI_FORMAT_BC3_UNORM) {
+        stb_compress_dxt_block(dst, block, 1, STB_DXT_HIGHQUAL);
+      } else if (format == DXGI_FORMAT_BC4_UNORM) {
+        for (int i = 0; i < 16; ++i) {
+          channel[i] = block[i * 4 + 0];
+        }
+        EncodeBc4Block(channel, dst);
+      }
+    }
+  }
+}
+
+static DXGI_FORMAT ChooseCompressedFormat(TextureUsageSemantic semantic,
+                                          TextureCompressionMode mode,
+                                          bool hasAlpha) {
+  if (mode == TextureCompressionMode::Off) {
+    return DXGI_FORMAT_UNKNOWN;
+  }
+  switch (semantic) {
+  case TextureUsageSemantic::Scalar:
+    return DXGI_FORMAT_BC4_UNORM;
+  case TextureUsageSemantic::ColorAlpha:
+  case TextureUsageSemantic::Normal:
+  case TextureUsageSemantic::PackedSurface:
+    return DXGI_FORMAT_BC3_UNORM;
+  case TextureUsageSemantic::Color:
+  case TextureUsageSemantic::Emissive:
+  case TextureUsageSemantic::Unknown:
+    if (hasAlpha || mode == TextureCompressionMode::HighQuality) {
+      return DXGI_FORMAT_BC3_UNORM;
+    }
+    return DXGI_FORMAT_BC1_UNORM;
+  default:
+    return DXGI_FORMAT_UNKNOWN;
+  }
+}
+
+bool ApplyTextureCompressionForUsage(Texture &texture,
+                                     TextureUsageSemantic semantic) {
+  texture.usageSemantic = semantic;
+
+  if (!s_device || texture.width == 0 || texture.height == 0 ||
+      texture.cpuData.empty()) {
+    return false;
+  }
+
+  if (semantic == TextureUsageSemantic::Hdr ||
+      texture.cpuFormat == DXGI_FORMAT_R32G32B32A32_FLOAT ||
+      IsBlockCompressedTextureFormat(texture.cpuFormat)) {
+    texture.compressionMode = TextureCompressionMode::Off;
+    texture.gpuCompressed = IsBlockCompressedTextureFormat(texture.format);
+    return false;
+  }
+
+  if (!TextureCpuDataIsRgba8(texture)) {
+    return false;
+  }
+
+  if (s_textureCompressionMode == TextureCompressionMode::Off) {
+    texture.compressionMode = TextureCompressionMode::Off;
+    const uint32_t expectedMipLevels =
+        ComputeMipLevels(texture.width, texture.height);
+    if (texture.gpuCompressed || texture.format != texture.cpuFormat ||
+        texture.mipLevels != expectedMipLevels) {
+      Texture uncompressed = LoadTextureFromMemory(
+          texture.cpuData.data(), static_cast<int>(texture.width),
+          static_cast<int>(texture.height), texture.cpuFormat);
+      if (uncompressed.resource) {
+        texture.resource = std::move(uncompressed.resource);
+        texture.format = texture.cpuFormat;
+        texture.mipLevels = 1;
+        texture.gpuCompressed = false;
+        return true;
+      }
+    }
+    texture.gpuCompressed = false;
+    return false;
+  }
+
+  const uint8_t *base = texture.cpuData.data();
+  const bool hasAlpha = semantic == TextureUsageSemantic::ColorAlpha ||
+                        TextureHasUsefulAlpha(base, texture.width,
+                                              texture.height);
+  const DXGI_FORMAT compressedFormat =
+      ChooseCompressedFormat(semantic, s_textureCompressionMode, hasAlpha);
+  if (compressedFormat == DXGI_FORMAT_UNKNOWN) {
+    return false;
+  }
+
+  uint32_t expectedMipLevels = 1;
+  for (uint32_t w = texture.width, h = texture.height;
+       w > 1 || h > 1;
+       w = std::max(1u, w >> 1), h = std::max(1u, h >> 1)) {
+    ++expectedMipLevels;
+  }
+  if (texture.gpuCompressed && texture.format == compressedFormat &&
+      texture.mipLevels == expectedMipLevels) {
+    texture.compressionMode = s_textureCompressionMode;
+    return false;
+  }
+
+  std::vector<uint8_t> compressedMipChain;
+  std::vector<uint8_t> current(base, base + static_cast<size_t>(texture.width) *
+                                             texture.height * 4);
+  uint32_t width = texture.width;
+  uint32_t height = texture.height;
+  uint32_t mipLevels = 0;
+  while (true) {
+    std::vector<uint8_t> compressedMip;
+    CompressMipToBc(current.data(), width, height, compressedFormat,
+                    compressedMip);
+    compressedMipChain.insert(compressedMipChain.end(), compressedMip.begin(),
+                              compressedMip.end());
+    ++mipLevels;
+    if (width == 1 && height == 1) {
+      break;
+    }
+    std::vector<uint8_t> next;
+    uint32_t nextW = 1;
+    uint32_t nextH = 1;
+    DownsampleRgba2x(current, width, height, next, nextW, nextH);
+    current = std::move(next);
+    width = nextW;
+    height = nextH;
+  }
+
+  Texture compressed = LoadTextureFromMemoryMipChain(
+      compressedMipChain.data(), compressedMipChain.size(),
+      static_cast<int>(texture.width), static_cast<int>(texture.height),
+      compressedFormat, mipLevels);
+  if (!compressed.resource) {
+    return false;
+  }
+
+  texture.resource = std::move(compressed.resource);
+  texture.format = compressedFormat;
+  texture.mipLevels = compressed.mipLevels;
+  texture.compressionMode = s_textureCompressionMode;
+  texture.gpuCompressed = true;
+  return true;
 }
 
 GpuMesh LoadMeshFromMemory(const std::vector<Vertex> &vertices,

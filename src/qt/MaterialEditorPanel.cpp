@@ -63,6 +63,33 @@ enum class TextureToolIcon {
     Clear
 };
 
+Asset::TextureUsageSemantic TextureCompressionSemantic(int slot)
+{
+    using Semantic = Asset::TextureUsageSemantic;
+    switch (slot) {
+    case 0:
+        return Semantic::Color;
+    case 1:
+    case 3:
+    case 4:
+    case 7:
+    case 10:
+    case 11:
+        return Semantic::Scalar;
+    case 2:
+        return Semantic::PackedSurface;
+    case 5:
+    case 6:
+        return Semantic::Normal;
+    case 8:
+        return Semantic::Emissive;
+    case 9:
+        return Semantic::Color;
+    default:
+        return Semantic::Unknown;
+    }
+}
+
 SliderControl *CreateSliderControl(double minValue,
                                    double maxValue,
                                    double step,
@@ -1488,7 +1515,11 @@ void MaterialEditorPanel::createUi()
             }
             if (OpenTextureFileDialog(owner, chosen) && !chosen.empty()) {
                 const bool isHdr = IsHDRTexturePath(chosen);
-                const int newTex = Scene::AddTextureFromFile(WStringToUtf8(chosen), isHdr);
+                const int newTex = Scene::AddTextureFromFile(
+                    WStringToUtf8(chosen),
+                    isHdr,
+                    isHdr ? Asset::TextureUsageSemantic::Hdr
+                          : TextureCompressionSemantic(slot));
                 if (newTex >= 0) {
                     applyMaterialChange([this, newTex, slot](Asset::Material &m) {
                         setTextureIndexForSlot(m, static_cast<TextureSlot>(slot), newTex);

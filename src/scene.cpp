@@ -460,6 +460,120 @@ static bool WriteTextureSrv(UINT textureIndex, const Asset::Texture &tex) {
   return true;
 }
 
+static Asset::TextureUsageSemantic MergeTextureSemantic(
+    Asset::TextureUsageSemantic existing,
+    Asset::TextureUsageSemantic incoming) {
+  using Semantic = Asset::TextureUsageSemantic;
+  if (existing == Semantic::Unknown) {
+    return incoming;
+  }
+  if (incoming == Semantic::Unknown || incoming == existing) {
+    return existing;
+  }
+  const auto priority = [](Semantic semantic) {
+    switch (semantic) {
+    case Semantic::Normal:
+      return 70;
+    case Semantic::PackedSurface:
+      return 60;
+    case Semantic::ColorAlpha:
+      return 50;
+    case Semantic::Color:
+    case Semantic::Emissive:
+      return 40;
+    case Semantic::Scalar:
+      return 30;
+    case Semantic::Hdr:
+      return 20;
+    default:
+      return 0;
+    }
+  };
+  return priority(incoming) > priority(existing) ? incoming : existing;
+}
+
+static void MarkTextureSemantic(std::vector<Asset::TextureUsageSemantic> &usage,
+                                int textureIndex,
+                                Asset::TextureUsageSemantic semantic) {
+  if (textureIndex < 0 ||
+      textureIndex >= static_cast<int>(usage.size())) {
+    return;
+  }
+  usage[static_cast<size_t>(textureIndex)] =
+      MergeTextureSemantic(usage[static_cast<size_t>(textureIndex)], semantic);
+}
+
+static Asset::TextureUsageSemantic TextureSemanticFromMaterialAlpha(
+    const Asset::Material &material) {
+  if (material.alphaMode != "OPAQUE" || material.opacityTexture >= 0) {
+    return Asset::TextureUsageSemantic::ColorAlpha;
+  }
+  return Asset::TextureUsageSemantic::Color;
+}
+
+static void RefreshTextureCompressionForMaterials(bool resetAccumulation) {
+  if (g_loadedTextures.empty()) {
+    return;
+  }
+
+  std::vector<Asset::TextureUsageSemantic> usage(
+      g_loadedTextures.size(), Asset::TextureUsageSemantic::Unknown);
+  for (const Asset::Material &material : g_loadedMaterials) {
+    MarkTextureSemantic(usage, material.diffuseTexture,
+                        TextureSemanticFromMaterialAlpha(material));
+    MarkTextureSemantic(usage, material.opacityTexture,
+                        Asset::TextureUsageSemantic::Scalar);
+    MarkTextureSemantic(usage, material.normalTexture,
+                        Asset::TextureUsageSemantic::Normal);
+    MarkTextureSemantic(usage, material.coatNormalTexture,
+                        Asset::TextureUsageSemantic::Normal);
+    MarkTextureSemantic(usage, material.occlusionTexture,
+                        Asset::TextureUsageSemantic::Scalar);
+    MarkTextureSemantic(usage, material.emissiveTexture,
+                        Asset::TextureUsageSemantic::Emissive);
+    MarkTextureSemantic(usage, material.metalRoughTexture,
+                        Asset::TextureUsageSemantic::PackedSurface);
+    MarkTextureSemantic(usage, material.runtimeMetalRoughTexture,
+                        Asset::TextureUsageSemantic::PackedSurface);
+    MarkTextureSemantic(usage, material.metalnessTexture,
+                        Asset::TextureUsageSemantic::Scalar);
+    MarkTextureSemantic(usage, material.roughnessGlossTexture,
+                        Asset::TextureUsageSemantic::Scalar);
+    MarkTextureSemantic(usage, material.specularColorTexture,
+                        Asset::TextureUsageSemantic::Color);
+    MarkTextureSemantic(usage, material.thicknessTexture,
+                        Asset::TextureUsageSemantic::Scalar);
+    MarkTextureSemantic(usage, material.parallaxTexture,
+                        Asset::TextureUsageSemantic::Scalar);
+  }
+
+  bool changed = false;
+  for (size_t textureIndex = 0; textureIndex < g_loadedTextures.size();
+       ++textureIndex) {
+    Asset::Texture &texture = g_loadedTextures[textureIndex];
+    const Asset::TextureUsageSemantic semantic = usage[textureIndex];
+    if (!texture.resource || semantic == Asset::TextureUsageSemantic::Unknown) {
+      continue;
+    }
+    const DXGI_FORMAT oldFormat = texture.format;
+    const UINT oldMipLevels = texture.mipLevels;
+    const bool oldCompressed = texture.gpuCompressed;
+    if (Asset::ApplyTextureCompressionForUsage(texture, semantic) &&
+        (texture.format != oldFormat || texture.mipLevels != oldMipLevels ||
+         texture.gpuCompressed != oldCompressed)) {
+      WriteTextureSrv(static_cast<UINT>(textureIndex), texture);
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    DxrRenderer::MarkTextureDescriptorTableDirty();
+    if (resetAccumulation) {
+      DxrRenderer::ResetAccumulation();
+    }
+  }
+}
+
 static void RefreshMaterialRuntimeTexture(Asset::Material &material) {
   if (!MaterialSystem::NeedsDerivedPackedSurfaceTexture(material)) {
     material.runtimeMetalRoughTexture = -1;
@@ -489,6 +603,8 @@ static void RefreshMaterialRuntimeTexture(Asset::Material &material) {
           static_cast<int>(g_loadedTextures.size()) &&
       g_loadedTextures[static_cast<size_t>(material.runtimeMetalRoughTexture)]
           .hiddenInEditor) {
+    Asset::ApplyTextureCompressionForUsage(
+        derived, Asset::TextureUsageSemantic::PackedSurface);
     WaitGPUIdle();
     g_loadedTextures[static_cast<size_t>(material.runtimeMetalRoughTexture)] =
         std::move(derived);
@@ -506,6 +622,11 @@ static void RefreshMaterialRuntimeTexture(Asset::Material &material) {
       newTextureIndex < static_cast<int>(g_loadedTextures.size())) {
     g_loadedTextures[static_cast<size_t>(newTextureIndex)].hiddenInEditor =
         true;
+    Asset::ApplyTextureCompressionForUsage(
+        g_loadedTextures[static_cast<size_t>(newTextureIndex)],
+        Asset::TextureUsageSemantic::PackedSurface);
+    WriteTextureSrv(static_cast<UINT>(newTextureIndex),
+                    g_loadedTextures[static_cast<size_t>(newTextureIndex)]);
   }
 }
 
@@ -545,6 +666,13 @@ int AddTexture(Asset::Texture texture) {
 }
 
 int AddTextureFromFile(const std::string &utf8path, bool isHDR) {
+  return AddTextureFromFile(utf8path, isHDR,
+                            isHDR ? Asset::TextureUsageSemantic::Hdr
+                                  : Asset::TextureUsageSemantic::Unknown);
+}
+
+int AddTextureFromFile(const std::string &utf8path, bool isHDR,
+                       Asset::TextureUsageSemantic semantic) {
   if (!g_device) {
     fprintf(stderr, "AddTextureFromFile: no device\n");
     return -1;
@@ -553,7 +681,7 @@ int AddTextureFromFile(const std::string &utf8path, bool isHDR) {
   // modal dialogs are active and the window may also be resizing.
   WaitGPUIdle();
 
-  Asset::Texture tex = Asset::LoadTextureFromFile(utf8path, isHDR);
+  Asset::Texture tex = Asset::LoadTextureFromFile(utf8path, isHDR, semantic);
   if (!tex.resource) {
     fprintf(stderr, "AddTextureFromFile: failed to load '%s'\n",
             utf8path.c_str());
@@ -2445,6 +2573,7 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
                                           &payload.materialStableIds,
                                           !isLiveLinkPayload,
                                           overwriteResolvedMaterials);
+    RefreshTextureCompressionForMaterials(false);
 
     const size_t meshBase = g_loadedMeshes.size();
     g_loadedMeshes.insert(g_loadedMeshes.end(), payload.meshes.begin(),
@@ -2572,6 +2701,7 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
                &payload.materialStableIds,
                        !isLiveLinkPayload,
                        overwriteResolvedMaterials);
+  RefreshTextureCompressionForMaterials(false);
   g_loadedMeshes.insert(g_loadedMeshes.end(), payload.meshes.begin(),
                         payload.meshes.end());
 
@@ -2703,6 +2833,7 @@ bool ReplaceNodeImportedContent(size_t index, ImportedNodePayload payload) {
                &payload.materialStableIds,
                        !isLiveLinkPayload,
                        overwriteResolvedMaterials);
+  RefreshTextureCompressionForMaterials(false);
 
   const size_t meshBase = g_loadedMeshes.size();
   for (size_t i = 0; i < payload.meshes.size(); ++i) {
@@ -4529,6 +4660,7 @@ bool UpdateMaterial(size_t index, const Asset::Material &material) {
   if (!updatedName.empty()) {
     s_materialIndicesByName[updatedName] = static_cast<int>(index);
   }
+  RefreshTextureCompressionForMaterials(false);
   DxrRenderer::MarkMaterialDirty(static_cast<int>(index));
   ApplyRendererInvalidation(RendererInvalidationPlan::AccumulationOnly);
   NotifySceneChanged();
@@ -4539,6 +4671,12 @@ void RefreshAllMaterialRuntimeTextures() {
   for (Asset::Material &material : g_loadedMaterials) {
     RefreshMaterialRuntimeTexture(material);
   }
+  RefreshTextureCompressionForMaterials(true);
+}
+
+void RefreshTextureCompression(bool resetAccumulation) {
+  WaitGPUIdle();
+  RefreshTextureCompressionForMaterials(resetAccumulation);
 }
 
 void RemoveLight(size_t index) {

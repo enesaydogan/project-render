@@ -1664,8 +1664,8 @@ bool SaveScene(const std::string &path) {
       const auto &tex = g_loadedTextures[textureIndex];
       w.writeU32(tex.width);
       w.writeU32(tex.height);
-      w.writeU32((uint32_t)tex.format);
-      w.writeU32(tex.mipLevels);
+      w.writeU32((uint32_t)tex.cpuFormat);
+      w.writeU32(tex.cpuMipLevels);
       uint32_t db = (uint32_t)tex.cpuData.size();
       w.writeU32(db);
       if (db) w.writeBytes(tex.cpuData.data(), db);

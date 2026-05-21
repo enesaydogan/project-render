@@ -42,6 +42,7 @@ private:
     QCheckBox *m_clayMode = nullptr;
     QComboBox *m_pathBackend = nullptr;
     QLabel *m_pathBackendWarning = nullptr;
+    QComboBox *m_textureCompression = nullptr;
 
     QComboBox *m_dlssMode = nullptr;
     QComboBox *m_dlssQuality = nullptr;

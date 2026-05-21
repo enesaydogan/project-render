@@ -3,6 +3,7 @@
 #include "SliderControl.h"
 
 #include "../camera.h"
+#include "../assets/asset_loader.h"
 #include "../dx12_context.h"
 #include "../dxr_renderer.h"
 #include "../raster_renderer.h"
@@ -21,6 +22,8 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
+
+#include <algorithm>
 
 extern RenderMode g_currentRenderMode;
 extern bool g_rayTracingSupported;
@@ -186,6 +189,12 @@ void RenderSettingsPanel::createUi()
         tr("Wavefront Optimized"),
         tr("Wavefront Surface Diagnostics")
     });
+    m_textureCompression = new QComboBox(pathGroup);
+    m_textureCompression->addItems({
+        tr("Off"),
+        tr("Balanced BC"),
+        tr("High Quality BC")
+    });
     m_pathBackendWarning = new QLabel(pathGroup);
     m_pathBackendWarning->setWordWrap(true);
     m_pathBackendWarning->setStyleSheet(
@@ -198,6 +207,7 @@ void RenderSettingsPanel::createUi()
     pathForm->addRow(tr("Target Noise %"), m_targetNoise);
     pathForm->addRow(m_clayMode);
     pathForm->addRow(tr("Backend"), m_pathBackend);
+    pathForm->addRow(tr("Texture Compression"), m_textureCompression);
     pathForm->addRow(m_pathBackendWarning);
     dxrLayout->addWidget(pathGroup);
 
@@ -310,6 +320,16 @@ void RenderSettingsPanel::createUi()
             return;
         }
         DxrRenderer::SetPathTracingBackend(PathBackendFromIndex(index));
+        syncFromRenderer();
+    });
+    connect(m_textureCompression, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
+        if (m_syncing) {
+            return;
+        }
+        const int clamped = std::clamp(index, 0, 2);
+        Asset::SetTextureCompressionMode(
+            static_cast<Asset::TextureCompressionMode>(clamped));
+        Scene::RefreshTextureCompression(true);
         syncFromRenderer();
     });
 
@@ -464,6 +484,10 @@ void RenderSettingsPanel::syncFromRenderer()
     }
     if (!IsWidgetBeingEdited(m_pathBackend)) {
         m_pathBackend->setCurrentIndex(PathBackendIndex(DxrRenderer::GetPathTracingBackend()));
+    }
+    if (!IsWidgetBeingEdited(m_textureCompression)) {
+        m_textureCompression->setCurrentIndex(
+            static_cast<int>(Asset::GetTextureCompressionMode()));
     }
     if (DxrRenderer::GetPathTracingBackend() == DxrRenderer::PathTracingBackend::WavefrontParity) {
         m_pathBackendWarning->setText(
