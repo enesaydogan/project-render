@@ -113,5 +113,7 @@ private:
     QLabel *m_renderProgressTiming = nullptr;
     QPushButton *m_renderProgressCancel = nullptr;
     bool m_qtUiHidden = false;
+    bool m_closeAfterSceneSave = false;
+    bool m_allowCloseWithoutPrompt = false;
     std::vector<QWidget *> m_hiddenQtUiWidgets;
 };

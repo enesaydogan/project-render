@@ -25,6 +25,7 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QAbstractItemView>
+#include <QAbstractButton>
 #include <QKeySequence>
 #include <QCloseEvent>
 #include <QCheckBox>
@@ -56,6 +57,7 @@
 #include <QSpinBox>
 #include <QVBoxLayout>
 #include <QMenuBar>
+#include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPolygonF>
 #include <QProgressBar>
@@ -2609,6 +2611,19 @@ void MainWindow::updateSceneIoUi()
     }
 
     if (!active) {
+        if (m_closeAfterSceneSave) {
+            const QString stage = QString::fromStdString(GetSceneIoStage());
+            m_closeAfterSceneSave = false;
+            if (stage == QStringLiteral("Save complete")) {
+                m_allowCloseWithoutPrompt = true;
+                close();
+                return;
+            }
+            statusBar()->showMessage(
+                stage.isEmpty() ? tr("Scene save did not complete; close canceled.")
+                                : tr("%1; close canceled.").arg(stage),
+                7000);
+        }
         m_sceneIoProgress->hide();
         m_sceneIoLabel->hide();
         return;
@@ -2652,6 +2667,14 @@ void MainWindow::setWindowCloseEnabled(bool enabled)
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
+    if (m_allowCloseWithoutPrompt) {
+        m_allowCloseWithoutPrompt = false;
+        m_closeAfterSceneSave = false;
+        g_appClosing = true;
+        QMainWindow::closeEvent(event);
+        return;
+    }
+
     if (IsSceneIoJobActive()) {
         event->ignore();
         g_appClosing = false;
@@ -2662,8 +2685,66 @@ void MainWindow::closeEvent(QCloseEvent *event)
             5000);
         return;
     }
-    g_appClosing = true;
-    QMainWindow::closeEvent(event);
+
+    QMessageBox prompt(this);
+    prompt.setWindowTitle(tr("Save Scene Before Closing?"));
+    prompt.setIcon(QMessageBox::Warning);
+    prompt.setText(tr("Save the current scene before closing?"));
+    prompt.setInformativeText(
+        tr("Choose Save to write the scene first, Don't Save to exit now, "
+           "or Cancel to keep working."));
+    QPushButton *saveButton =
+        prompt.addButton(tr("Save"), QMessageBox::AcceptRole);
+    QPushButton *dontSaveButton =
+        prompt.addButton(tr("Don't Save"), QMessageBox::DestructiveRole);
+    QPushButton *cancelButton =
+        prompt.addButton(tr("Cancel"), QMessageBox::RejectRole);
+    prompt.setDefaultButton(saveButton);
+    prompt.setEscapeButton(cancelButton);
+    prompt.exec();
+
+    QAbstractButton *clicked = prompt.clickedButton();
+    if (clicked == cancelButton || !clicked) {
+        event->ignore();
+        g_appClosing = false;
+        statusBar()->showMessage(tr("Close canceled."), 3000);
+        return;
+    }
+
+    if (clicked == dontSaveButton) {
+        m_closeAfterSceneSave = false;
+        g_appClosing = true;
+        QMainWindow::closeEvent(event);
+        return;
+    }
+
+    event->ignore();
+    g_appClosing = false;
+    std::string savePath;
+    if (HasCurrentScenePath()) {
+        savePath = GetCurrentScenePath();
+    } else {
+        std::wstring chosen;
+        HWND owner = g_hwnd ? GetAncestor(g_hwnd, GA_ROOT) : nullptr;
+        if (!owner) {
+            owner = g_hwnd;
+        }
+        if (!SaveSceneFileDialog(owner, chosen)) {
+            statusBar()->showMessage(tr("Close canceled."), 3000);
+            return;
+        }
+        savePath = WStringToUtf8(chosen);
+    }
+
+    if (savePath.empty()) {
+        statusBar()->showMessage(tr("Close canceled: no save path."), 5000);
+        return;
+    }
+
+    m_closeAfterSceneSave = true;
+    StartSceneIoJob(true, savePath);
+    updateSceneIoUi();
+    statusBar()->showMessage(tr("Saving scene before closing..."), 5000);
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *event)
