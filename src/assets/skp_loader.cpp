@@ -244,6 +244,15 @@ static bool LoadTextureFromImageRep(SUImageRepRef image, Asset::Texture &outTex)
     return false;
   }
 
+#ifdef _WIN32
+  // SketchUp image reps expose 32-bit bitmap data as BGRA on Windows.
+  // Convert to the RGBA ordering expected by the engine upload path.
+  const size_t pixelCount = width * height;
+  for (size_t pixel = 0; pixel < pixelCount; ++pixel) {
+    std::swap(rgba[pixel * 4 + 0], rgba[pixel * 4 + 2]);
+  }
+#endif
+
   Asset::Texture tex = Asset::LoadTextureFromMemory(
       rgba.data(), static_cast<int>(width), static_cast<int>(height),
       DXGI_FORMAT_R8G8B8A8_UNORM);
