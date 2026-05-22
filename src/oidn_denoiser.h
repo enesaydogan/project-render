@@ -122,7 +122,7 @@ private:
                                    OidnInputKind kind);
   bool SanitizeLinearInputsForOidn(ID3D12CommandQueue* queue,
                                    bool hasAlbedo, bool hasNormal);
-  bool RestoreSkyPixelsAfterOidn(ID3D12CommandQueue* queue,
-                                 ID3D12Resource* linearDepth);
+  bool RestoreSkyAndEmissivePixelsAfterOidn(ID3D12CommandQueue* queue,
+                                            ID3D12Resource* linearDepth);
 #endif
 };

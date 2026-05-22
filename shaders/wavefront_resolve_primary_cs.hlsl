@@ -1373,7 +1373,16 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     const bool deferAccumulation =
         (reservedFlags & WAVEFRONT_RESOLVE_FLAG_DEFER_ACCUMULATION) != 0u;
 
-    float3 color = WavefrontHitRecordGetColor(record) * pathThroughput;
+    float3 visibleEmissive = WavefrontHitRecordGetColor(record);
+    float3 color = visibleEmissive * pathThroughput;
+    // OIDN binds the albedo guide as RGB only. Preserve direct-emitter
+    // coverage in alpha so the final denoise pass can keep light meshes exact.
+    float visibleEmissiveMask =
+        (!isMiss &&
+         max(visibleEmissive.r, max(visibleEmissive.g, visibleEmissive.b)) >
+             1.0e-4)
+            ? 1.0
+            : 0.0;
     float depth = (dlssRayReconstruction > 0.5) ? farZ : 1.0;
     float linearDepth = farZ;
     float2 motion = ComputeWavefrontSkyMotion(rayDir, currScreen);
@@ -1838,7 +1847,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     g_motionVectors[pixel] = motion;
     g_albedoOut[pixel] = float4(albedo, 1.0);
     g_normalRoughnessOut[pixel] = float4(normalize(normal), roughness);
-    float4 oidnAlbedoGuide = float4(albedo, 1.0);
+    float4 oidnAlbedoGuide = float4(albedo, visibleEmissiveMask);
     float4 oidnNormalGuide = float4(normalize(normal), roughness);
     if (nextCount > 1.0) {
         const float previousWeight = (nextCount - 1.0) / nextCount;

@@ -654,8 +654,8 @@ bool OidnDenoiser::SanitizeLinearInputsForOidn(ID3D12CommandQueue* queue,
   return true;
 }
 
-bool OidnDenoiser::RestoreSkyPixelsAfterOidn(ID3D12CommandQueue* queue,
-                                             ID3D12Resource* linearDepth) {
+bool OidnDenoiser::RestoreSkyAndEmissivePixelsAfterOidn(
+    ID3D12CommandQueue* queue, ID3D12Resource* linearDepth) {
   if (!queue || !linearDepth || !m_linearColor || !m_linearOutput ||
       !m_cmdAlloc || !m_cmdList || !m_fence || !m_fenceEvent ||
       m_linearBufferBytes == 0) {
@@ -712,7 +712,7 @@ bool OidnDenoiser::RestoreSkyPixelsAfterOidn(ID3D12CommandQueue* queue,
               (unsigned)hr);
       return false;
     }
-    m_depthReadback->SetName(L"OIDN Sky Restore Depth Readback");
+    m_depthReadback->SetName(L"OIDN Preserve Depth Readback");
     m_depthReadbackBytes = depthBytes;
   }
   m_depthFootprint = depthFootprint;
@@ -784,8 +784,13 @@ bool OidnDenoiser::RestoreSkyPixelsAfterOidn(ID3D12CommandQueue* queue,
 
   std::vector<uint8_t> denoisedBytes;
   std::vector<uint8_t> rawColorBytes;
+  std::vector<uint8_t> albedoGuideBytes;
   if (!ReadLinearBuffer(m_linearOutput.Get(), denoisedBytes) ||
       !ReadLinearBuffer(m_linearColor.Get(), rawColorBytes)) {
+    return false;
+  }
+  if (m_linearAlbedo &&
+      !ReadLinearBuffer(m_linearAlbedo.Get(), albedoGuideBytes)) {
     return false;
   }
 
@@ -808,31 +813,49 @@ bool OidnDenoiser::RestoreSkyPixelsAfterOidn(ID3D12CommandQueue* queue,
     }
   }
 
-  uint64_t restoredPixels = 0;
-  if (maxDepth > 0.0f) {
-    const float skyDepthThreshold = maxDepth * 0.999f;
-    for (uint32_t y = 0; y < m_height; ++y) {
-      const float* depthRow = reinterpret_cast<const float*>(
-          reinterpret_cast<const uint8_t*>(depthMapped) +
-          (size_t)y * depthFootprint.Footprint.RowPitch);
-      uint8_t* denoisedRow =
-          denoisedBytes.data() + (size_t)y * m_linearFootprint.Footprint.RowPitch;
-      const uint8_t* rawRow =
-          rawColorBytes.data() + (size_t)y * m_linearFootprint.Footprint.RowPitch;
-      for (uint32_t x = 0; x < m_width; ++x) {
-        const float d = depthRow[x];
-        if (std::isfinite(d) && d >= skyDepthThreshold) {
-          std::memcpy(denoisedRow + (size_t)x * 8, rawRow + (size_t)x * 8, 8);
-          ++restoredPixels;
-        }
+  const float skyDepthThreshold =
+      maxDepth > 0.0f ? maxDepth * 0.999f
+                      : std::numeric_limits<float>::infinity();
+  uint64_t restoredSkyPixels = 0;
+  uint64_t restoredEmissivePixels = 0;
+  for (uint32_t y = 0; y < m_height; ++y) {
+    const float* depthRow = reinterpret_cast<const float*>(
+        reinterpret_cast<const uint8_t*>(depthMapped) +
+        (size_t)y * depthFootprint.Footprint.RowPitch);
+    uint8_t* denoisedRow =
+        denoisedBytes.data() + (size_t)y * m_linearFootprint.Footprint.RowPitch;
+    const uint8_t* rawRow =
+        rawColorBytes.data() + (size_t)y * m_linearFootprint.Footprint.RowPitch;
+    const uint8_t* albedoGuideRow =
+        albedoGuideBytes.empty()
+            ? nullptr
+            : albedoGuideBytes.data() +
+                  (size_t)y * m_linearFootprint.Footprint.RowPitch;
+    for (uint32_t x = 0; x < m_width; ++x) {
+      const float d = depthRow[x];
+      const bool restoreSky =
+          std::isfinite(d) && d >= skyDepthThreshold;
+      bool restoreEmissive = false;
+      if (albedoGuideRow) {
+        const uint16_t* albedoGuidePx = reinterpret_cast<const uint16_t*>(
+            albedoGuideRow + (size_t)x * 8);
+        const float emissiveCoverage = HalfToFloat(albedoGuidePx[3]);
+        restoreEmissive = std::isfinite(emissiveCoverage) &&
+                          emissiveCoverage > 1.0e-4f;
+      }
+      if (restoreSky || restoreEmissive) {
+        std::memcpy(denoisedRow + (size_t)x * 8, rawRow + (size_t)x * 8, 8);
+        restoredSkyPixels += restoreSky ? 1 : 0;
+        restoredEmissivePixels += restoreEmissive ? 1 : 0;
       }
     }
   }
   m_depthReadback->Unmap(0, nullptr);
 
-  if (restoredPixels == 0) {
+  if (restoredSkyPixels == 0 && restoredEmissivePixels == 0) {
     fprintf(stderr,
-            "OidnDenoiser: sky restore found no background pixels "
+            "OidnDenoiser: preserve pass found no sky or direct-emissive "
+            "pixels "
             "(maxDepth=%.6g).\n",
             maxDepth);
     return true;
@@ -869,9 +892,11 @@ bool OidnDenoiser::RestoreSkyPixelsAfterOidn(ID3D12CommandQueue* queue,
     return false;
 
   fprintf(stderr,
-          "OidnDenoiser: restored %llu sky/background pixels after OIDN "
+          "OidnDenoiser: restored %llu sky/background and %llu "
+          "direct-emissive pixels after OIDN "
           "(maxDepth=%.6g).\n",
-          (unsigned long long)restoredPixels, maxDepth);
+          (unsigned long long)restoredSkyPixels,
+          (unsigned long long)restoredEmissivePixels, maxDepth);
   return true;
 }
 #endif
@@ -1125,9 +1150,10 @@ bool OidnDenoiser::RunDenoise(ID3D12GraphicsCommandList *cmd, ID3D12CommandQueue
     dev.sync(); // Wait for OIDN to finish on GPU
 
     if (linearDepth) {
-      if (!RestoreSkyPixelsAfterOidn(queue, linearDepth)) {
+      if (!RestoreSkyAndEmissivePixelsAfterOidn(queue, linearDepth)) {
         fprintf(stderr,
-                "OidnDenoiser: sky restore failed; keeping denoised output.\n");
+                "OidnDenoiser: preserve restore failed; keeping denoised "
+                "output.\n");
       }
     }
 
