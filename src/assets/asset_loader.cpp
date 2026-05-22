@@ -4033,9 +4033,9 @@ bool LoadLTM(const std::string &path, std::vector<GpuMesh> &outMeshes,
         }
 
         // LTM foliage assets commonly encode cutout opacity in base-color
-        // alpha. Force MASK when we have a diffuse map so the shader applies
-        // alpha clip instead of treating transparent texels as opaque.
-        if (mat.diffuseTexture >= 0 && mat.alphaMode == "OPAQUE") {
+        // alpha. LMOD diffuse DDS alpha is not reliably authored opacity;
+        // LMOD still becomes masked above when it has an explicit opacity map.
+        if (!isLmod && mat.diffuseTexture >= 0 && mat.alphaMode == "OPAQUE") {
           mat.alphaMode = "MASK";
           mat.alphaCutoff = (std::clamp)(mat.alphaCutoff, 0.2f, 0.5f);
         }
