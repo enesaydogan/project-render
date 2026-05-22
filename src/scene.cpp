@@ -702,33 +702,78 @@ int AddTextureFromFile(const std::string &utf8path, bool isHDR,
   return newIndex;
 }
 
+static bool BuildSceneCameraPerspectiveBasis(float forward[3],
+                                             const float upHint[3],
+                                             float right[3], float up[3],
+                                             float &verticalCenterShift) {
+  auto Normalize3 = [](float v[3]) -> bool {
+    const float len2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+    if (len2 <= 1.0e-12f)
+      return false;
+    const float invLen = 1.0f / sqrtf(len2);
+    v[0] *= invLen;
+    v[1] *= invLen;
+    v[2] *= invLen;
+    return true;
+  };
+  auto Cross3 = [](const float a[3], const float b[3], float out[3]) {
+    out[0] = a[1] * b[2] - a[2] * b[1];
+    out[1] = a[2] * b[0] - a[0] * b[2];
+    out[2] = a[0] * b[1] - a[1] * b[0];
+  };
+
+  verticalCenterShift = 0.0f;
+  if (!Normalize3(forward))
+    return false;
+  Cross3(forward, upHint, right);
+  if (!Normalize3(right))
+    return false;
+  Cross3(right, forward, up);
+  if (!Normalize3(up))
+    return false;
+
+  if (g_cameraData.verticalTiltCorrection <= 0.5f)
+    return true;
+
+  const float pitchedForward[3] = {forward[0], forward[1], forward[2]};
+  float levelForward[3] = {forward[0], 0.0f, forward[2]};
+  if (!Normalize3(levelForward))
+    return true;
+  const float worldUp[3] = {0.0f, 1.0f, 0.0f};
+  Cross3(levelForward, worldUp, right);
+  if (!Normalize3(right))
+    return false;
+  Cross3(right, levelForward, up);
+  if (!Normalize3(up))
+    return false;
+  forward[0] = levelForward[0];
+  forward[1] = levelForward[1];
+  forward[2] = levelForward[2];
+  const float numerator = pitchedForward[0] * up[0] +
+                          pitchedForward[1] * up[1] +
+                          pitchedForward[2] * up[2];
+  const float denominator = std::max(
+      0.025f, pitchedForward[0] * forward[0] +
+                  pitchedForward[1] * forward[1] +
+                  pitchedForward[2] * forward[2]);
+  verticalCenterShift = std::clamp(numerator / denominator, -40.0f, 40.0f);
+  return true;
+}
+
 // Helper: Simple matrix math for ImGuizmo
 void BuildViewMatrix(float *mat) {
   float pos[3] = {g_cameraData.pos[0], g_cameraData.pos[1],
                   g_cameraData.pos[2]};
   float fwd[3] = {g_cameraData.forward[0], g_cameraData.forward[1],
                   g_cameraData.forward[2]};
-  float up_in[3] = {0, 1, 0}; // Use world up as reference
-
-  // R = F x U (as in shader)
-  float R[3] = {fwd[1] * up_in[2] - fwd[2] * up_in[1],
-                fwd[2] * up_in[0] - fwd[0] * up_in[2],
-                fwd[0] * up_in[1] - fwd[1] * up_in[0]};
-  float rlen = sqrtf(R[0] * R[0] + R[1] * R[1] + R[2] * R[2]);
-  if (rlen > 0) {
-    R[0] /= rlen;
-    R[1] /= rlen;
-    R[2] /= rlen;
-  }
-
-  // U = R x F
-  float U[3] = {R[1] * fwd[2] - R[2] * fwd[1], R[2] * fwd[0] - R[0] * fwd[2],
-                R[0] * fwd[1] - R[1] * fwd[0]};
-  float ulen = sqrtf(U[0] * U[0] + U[1] * U[1] + U[2] * U[2]);
-  if (ulen > 0) {
-    U[0] /= ulen;
-    U[1] /= ulen;
-    U[2] /= ulen;
+  const float upHint[3] = {g_cameraData.up[0], g_cameraData.up[1],
+                           g_cameraData.up[2]};
+  float R[3] = {};
+  float U[3] = {};
+  float verticalCenterShift = 0.0f;
+  if (!BuildSceneCameraPerspectiveBasis(fwd, upHint, R, U,
+                                        verticalCenterShift)) {
+    return;
   }
 
   memset(mat, 0, 16 * sizeof(float));
@@ -757,10 +802,19 @@ void BuildProjectionMatrix(float *mat) {
   float n = g_cameraData.nearZ;
   float f = g_cameraData.farZ;
   float focalScale = 1.0f / tanf(fovRad * 0.5f);
+  float fwd[3] = {g_cameraData.forward[0], g_cameraData.forward[1],
+                  g_cameraData.forward[2]};
+  const float upHint[3] = {g_cameraData.up[0], g_cameraData.up[1],
+                           g_cameraData.up[2]};
+  float R[3] = {};
+  float U[3] = {};
+  float verticalCenterShift = 0.0f;
+  BuildSceneCameraPerspectiveBasis(fwd, upHint, R, U, verticalCenterShift);
 
   memset(mat, 0, 16 * sizeof(float));
   mat[0] = focalScale / aspect;
   mat[5] = focalScale;
+  mat[9] = -verticalCenterShift * focalScale;
   mat[10] = f / (f - n);
   mat[11] = 1.0f;
   mat[14] = -(f * n) / (f - n);
@@ -5803,25 +5857,15 @@ int UpdateSelection(float screenWidth, float screenHeight) {
     return true;
   };
 
-  auto Cross3 = [](const float a[3], const float b[3], float out[3]) {
-    out[0] = a[1] * b[2] - a[2] * b[1];
-    out[1] = a[2] * b[0] - a[0] * b[2];
-    out[2] = a[0] * b[1] - a[1] * b[0];
-  };
-
-  if (!Normalize3(forward))
-    return -1;
-  float right[3];
-  Cross3(forward, upHint, right);
-  if (!Normalize3(right))
-    return -1;
-  float up[3];
-  Cross3(right, forward, up);
-  if (!Normalize3(up))
+  float right[3] = {};
+  float up[3] = {};
+  float verticalCenterShift = 0.0f;
+  if (!BuildSceneCameraPerspectiveBasis(forward, upHint, right, up,
+                                        verticalCenterShift))
     return -1;
 
   float xView = ndcX * aspect * tanHalfFov;
-  float yView = ndcY * tanHalfFov;
+  float yView = ndcY * tanHalfFov + verticalCenterShift;
   float dir[3] = {xView * right[0] + yView * up[0] + forward[0],
                   xView * right[1] + yView * up[1] + forward[1],
                   xView * right[2] + yView * up[2] + forward[2]};
@@ -5993,28 +6037,16 @@ int PickMaterialAt(float screenX, float screenY, float screenWidth,
     return true;
   };
 
-  auto Cross3 = [](const float a[3], const float b[3], float out[3]) {
-    out[0] = a[1] * b[2] - a[2] * b[1];
-    out[1] = a[2] * b[0] - a[0] * b[2];
-    out[2] = a[0] * b[1] - a[1] * b[0];
-  };
-
-  if (!Normalize3(forward)) {
-    return -1;
-  }
-  float right[3];
-  Cross3(forward, upHint, right);
-  if (!Normalize3(right)) {
-    return -1;
-  }
-  float up[3];
-  Cross3(right, forward, up);
-  if (!Normalize3(up)) {
+  float right[3] = {};
+  float up[3] = {};
+  float verticalCenterShift = 0.0f;
+  if (!BuildSceneCameraPerspectiveBasis(forward, upHint, right, up,
+                                        verticalCenterShift)) {
     return -1;
   }
 
   const float xView = ndcX * aspect * tanHalfFov;
-  const float yView = ndcY * tanHalfFov;
+  const float yView = ndcY * tanHalfFov + verticalCenterShift;
   float dir[3] = {xView * right[0] + yView * up[0] + forward[0],
                   xView * right[1] + yView * up[1] + forward[1],
                   xView * right[2] + yView * up[2] + forward[2]};
@@ -6194,28 +6226,16 @@ static bool BuildViewportRayAt(float screenX, float screenY, float screenWidth,
     v[2] *= invLen;
     return true;
   };
-  auto Cross3 = [](const float a[3], const float b[3], float out[3]) {
-    out[0] = a[1] * b[2] - a[2] * b[1];
-    out[1] = a[2] * b[0] - a[0] * b[2];
-    out[2] = a[0] * b[1] - a[1] * b[0];
-  };
-
-  if (!Normalize3(forward)) {
-    return false;
-  }
-  float right[3];
-  Cross3(forward, upHint, right);
-  if (!Normalize3(right)) {
-    return false;
-  }
-  float up[3];
-  Cross3(right, forward, up);
-  if (!Normalize3(up)) {
+  float right[3] = {};
+  float up[3] = {};
+  float verticalCenterShift = 0.0f;
+  if (!BuildSceneCameraPerspectiveBasis(forward, upHint, right, up,
+                                        verticalCenterShift)) {
     return false;
   }
 
   const float xView = ndcX * aspect * tanHalfFov;
-  const float yView = ndcY * tanHalfFov;
+  const float yView = ndcY * tanHalfFov + verticalCenterShift;
   float dir[3] = {xView * right[0] + yView * up[0] + forward[0],
                   xView * right[1] + yView * up[1] + forward[1],
                   xView * right[2] + yView * up[2] + forward[2]};

@@ -573,6 +573,7 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
   j["cam"]["as"]  = g_cameraData.useAdaptiveSampling;
   j["cam"]["nt"]  = g_cameraData.noiseThreshold;
   j["cam"]["dvm"] = g_cameraData.debugVisualizationMode;
+  j["cam"]["vtc"] = g_cameraData.verticalTiltCorrection > 0.5f;
   j["cam"]["sea"] = 1.0f;
   j["cam"]["ae"]  = DxrRenderer::GetAutoExposure();
   j["cam"]["pce"] = DxrRenderer::GetPhysicalCameraExposure();
@@ -609,6 +610,7 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
         {"nt", view.noiseThreshold},
         {"dvm", view.debugVisualizationMode},
         {"sea", 1.0f},
+        {"vtc", view.verticalTiltCorrection},
         {"ae", view.autoExposure},
         {"pce", view.physicalCameraExposure},
         {"sf", view.safeFrameEnabled},
@@ -665,6 +667,7 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
         {"nt", keyframe.camera.noiseThreshold},
         {"dvm", keyframe.camera.debugVisualizationMode},
         {"sea", 1.0f},
+        {"vtc", keyframe.camera.verticalTiltCorrection},
         {"ae", keyframe.camera.autoExposure},
         {"pce", keyframe.camera.physicalCameraExposure},
         {"sf", keyframe.camera.safeFrameEnabled},
@@ -955,6 +958,8 @@ static void ApplyMetadataPRS(const json &j) {
     g_cameraData.noiseThreshold = c.value("nt", 0.05f);
     g_cameraData.debugVisualizationMode = c.value("dvm", 0.0f);
     g_cameraData.sampleEnvSolidAngle = 1.0f;
+    g_cameraData.verticalTiltCorrection =
+        c.value("vtc", false) ? 1.0f : 0.0f;
     DxrRenderer::SetAutoExposure(c.value("ae", DxrRenderer::GetAutoExposure()));
     DxrRenderer::SetPhysicalCameraExposure(c.value("pce", DxrRenderer::GetPhysicalCameraExposure()));
     DxrRenderer::SetPhysicalCameraSettings(c.value("iso",100.0f), c.value("ss",1.0f/125.0f), c.value("apt",16.0f));
@@ -1003,6 +1008,8 @@ static void ApplyMetadataPRS(const json &j) {
       view.noiseThreshold = entry.value("nt", view.noiseThreshold);
       view.debugVisualizationMode = entry.value("dvm", view.debugVisualizationMode);
       view.sampleEnvSolidAngle = 1.0f;
+      view.verticalTiltCorrection =
+          entry.value("vtc", view.verticalTiltCorrection);
       view.autoExposure = entry.value("ae", view.autoExposure);
       view.physicalCameraExposure = entry.value("pce", view.physicalCameraExposure);
       view.safeFrameEnabled = entry.value("sf", view.safeFrameEnabled);
@@ -1077,6 +1084,8 @@ static void ApplyMetadataPRS(const json &j) {
         keyframe.camera.noiseThreshold = entry.value("nt", keyframe.camera.noiseThreshold);
         keyframe.camera.debugVisualizationMode = entry.value("dvm", keyframe.camera.debugVisualizationMode);
         keyframe.camera.sampleEnvSolidAngle = 1.0f;
+        keyframe.camera.verticalTiltCorrection =
+            entry.value("vtc", keyframe.camera.verticalTiltCorrection);
         keyframe.camera.autoExposure = entry.value("ae", keyframe.camera.autoExposure);
         keyframe.camera.physicalCameraExposure = entry.value("pce", keyframe.camera.physicalCameraExposure);
         keyframe.camera.safeFrameEnabled = entry.value("sf", keyframe.camera.safeFrameEnabled);

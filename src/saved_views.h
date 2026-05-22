@@ -28,6 +28,7 @@ struct SavedView {
   float noiseThreshold = 0.05f;
   float debugVisualizationMode = 0.0f;
   float sampleEnvSolidAngle = 1.0f;
+  bool verticalTiltCorrection = false;
   bool autoExposure = false;
   bool physicalCameraExposure = true;
   bool safeFrameEnabled = false;

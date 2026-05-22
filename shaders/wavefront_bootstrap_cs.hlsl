@@ -217,19 +217,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     const float2 screenDim = float2(outputWidth, outputHeight);
     const float2 uv = (float2(pixel) + 0.5 + float2(jitterX, jitterY)) / screenDim;
-    const float2 ndc = uv * 2.0 - 1.0;
-
-    const float fInv = tan(radians(fov) * 0.5);
-    const float3 forwardDir = normalize(camForward);
-    const float3 rightDir = normalize(cross(forwardDir, camUp));
-    const float3 upDir = normalize(cross(rightDir, forwardDir));
-
-    const float yView = (-ndc.y) * fInv;
-    const float xView = ndc.x * aspect * fInv;
-
     WavefrontPathState state;
     state.origin = camPos;
-    state.direction = normalize(xView * rightDir + yView * upDir + forwardDir);
+    state.direction = BuildCameraPrimaryDirection(uv);
     state.pixelIndex = pixelIndex;
     state.rngState = WangHash(pixelIndex ^ asuint(globalFrameCount) ^ 0x9E3779B9u);
     state.throughput = float3(1.0, 1.0, 1.0);

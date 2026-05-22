@@ -54,7 +54,9 @@ CameraCB g_initialCameraData = {
     0.25f,                          // tonemapAoRadiusMeters
     2.0f,                           // tonemapAoMode (Both)
     0.0f,                           // triPlanarWorldRotationDegrees
-    0.0f                            // dxrFeatureFlags
+    0.0f,                           // dxrFeatureFlags
+    0.0f,                           // verticalTiltCorrection
+    0.0f                            // projectionMode
 };
 CameraCB g_cameraData = g_initialCameraData;
 ComPtr<ID3D12Resource> g_cameraConstantBuffer;
@@ -86,6 +88,10 @@ static void ResolveSafeFrameTargetSize(UINT &width, UINT &height) {
                      g_renderResolutionPresetCount - 1);
     width = g_renderResolutionPresets[presetIndex].width;
     height = g_renderResolutionPresets[presetIndex].height;
+    if ((int)g_renderExportSettings.projectionMode ==
+        (int)CameraProjectionMode::Spherical360) {
+      height = (std::max)(1u, width / 2u);
+    }
     return;
   }
 
@@ -133,6 +139,9 @@ static bool CameraChanged(const CameraCB &a, const CameraCB &b) {
   if (a.triPlanarWorldRotationDegrees != b.triPlanarWorldRotationDegrees)
     return true;
   if (a.dxrFeatureFlags != b.dxrFeatureFlags)
+    return true;
+  if (a.verticalTiltCorrection != b.verticalTiltCorrection ||
+      a.projectionMode != b.projectionMode)
     return true;
   return false;
 }

@@ -11,6 +11,7 @@
 #include "ScenePanel.h"
 #include "ViewsPanel.h"
 #include "../animation_sequence.h"
+#include "../camera.h"
 #include "../d3d12_helpers.h"
 #include "../dx12_context.h"
 #include "../dxr_renderer.h"
@@ -1686,7 +1687,15 @@ void MainWindow::showRenderPopup()
                                                  0,
                                                  std::max(0, g_renderResolutionPresetCount - 1)));
     auto *resolutionInfo = new QLabel(resolutionGroup);
+    auto *projection = new QComboBox(resolutionGroup);
+    projection->addItem(tr("Perspective"),
+                        static_cast<int>(CameraProjectionMode::Perspective));
+    projection->addItem(tr("Spherical 360 Panorama"),
+                        static_cast<int>(CameraProjectionMode::Spherical360));
+    projection->setCurrentIndex(std::clamp(g_renderExportSettings.projectionMode,
+                                           0, projection->count() - 1));
     resolutionForm->addRow(tr("Preset"), resolutionPreset);
+    resolutionForm->addRow(tr("Projection"), projection);
     resolutionForm->addRow(tr("Output"), resolutionInfo);
     layout->addWidget(resolutionGroup);
 
@@ -1768,6 +1777,8 @@ void MainWindow::showRenderPopup()
         g_renderExportSettings.maxSpp = samples->value();
         g_renderExportSettings.noisePercent = static_cast<float>(noise->value());
         g_renderExportSettings.denoiserIndex = denoiser->currentIndex();
+        g_renderExportSettings.projectionMode =
+            projection->currentData().toInt();
         g_renderExportSettings.batchSavedViews = batchSavedViews->isChecked();
         g_renderExportSettings.batchBaseName =
             batchBaseName->text().trimmed().toUtf8().constData();
@@ -1796,7 +1807,13 @@ void MainWindow::showRenderPopup()
                                            std::max(0, g_renderResolutionPresetCount - 1));
         if (g_renderResolutionPresetCount > 0) {
             const RenderResolutionPreset &preset = g_renderResolutionPresets[presetIndex];
-            resolutionInfo->setText(tr("%1 x %2").arg(preset.width).arg(preset.height));
+            const bool spherical =
+                projection->currentData().toInt() ==
+                static_cast<int>(CameraProjectionMode::Spherical360);
+            const unsigned int outputHeight =
+                spherical ? std::max(1u, preset.width / 2u) : preset.height;
+            resolutionInfo->setText(
+                tr("%1 x %2").arg(preset.width).arg(outputHeight));
         }
         const int keyframeCount =
             static_cast<int>(AnimationSequence::GetKeyframes().size());
@@ -1832,6 +1849,8 @@ void MainWindow::showRenderPopup()
     connect(stillMode, &QRadioButton::toggled, &dialog, updateSummary);
     connect(sequenceMode, &QRadioButton::toggled, &dialog, updateSummary);
     connect(resolutionPreset, qOverload<int>(&QComboBox::currentIndexChanged),
+            &dialog, updateSummary);
+    connect(projection, qOverload<int>(&QComboBox::currentIndexChanged),
             &dialog, updateSummary);
     connect(sequenceFps, qOverload<int>(&QSpinBox::valueChanged),
             &dialog, updateSummary);

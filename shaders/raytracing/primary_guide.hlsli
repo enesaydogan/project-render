@@ -8,14 +8,7 @@ inline float3 BuildPrimaryCenterDirection(uint2 pixel, uint2 dimensions)
     }
 
     float2 uv = (float2(pixel) + 0.5) / float2(dimensions);
-    float2 ndc = uv * 2.0 - 1.0;
-    float fInv = tan(radians(fov) * 0.5);
-    float3 forwardDir = normalize(camForward);
-    float3 rightDir = normalize(cross(forwardDir, camUp));
-    float3 upDir = normalize(cross(rightDir, forwardDir));
-    float yView = (-ndc.y) * fInv;
-    float xView = ndc.x * aspect * fInv;
-    return normalize(xView * rightDir + yView * upDir + forwardDir);
+    return BuildCameraPrimaryDirection(uv);
 }
 
 inline void TracePrimaryGuide(float3 initialOrigin,

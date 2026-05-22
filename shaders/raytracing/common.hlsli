@@ -171,6 +171,94 @@ cbuffer Camera : register(b0)
     float tonemapAoMode;
     float triPlanarWorldRotationDegrees;
     float dxrFeatureFlags;
+    float verticalTiltCorrection;
+    float projectionMode;
+}
+
+static const float CAMERA_PROJECTION_PERSPECTIVE = 0.0;
+static const float CAMERA_PROJECTION_SPHERICAL_360 = 1.0;
+
+inline void BuildPerspectiveCameraBasis(float3 inputForward, float3 inputUp,
+                                        float enableVerticalCorrection,
+                                        out float3 projectionForward,
+                                        out float3 projectionRight,
+                                        out float3 projectionUp,
+                                        out float verticalCenterShift)
+{
+    float3 forwardDir = normalize(inputForward);
+    projectionRight = normalize(cross(forwardDir, inputUp));
+    projectionUp = normalize(cross(projectionRight, forwardDir));
+    projectionForward = forwardDir;
+    verticalCenterShift = 0.0;
+
+    if (enableVerticalCorrection <= 0.5) {
+        return;
+    }
+
+    const float3 worldUp = float3(0.0, 1.0, 0.0);
+    float3 levelForward = forwardDir - worldUp * dot(forwardDir, worldUp);
+    float levelLengthSq = dot(levelForward, levelForward);
+    if (levelLengthSq <= 1.0e-6) {
+        return;
+    }
+
+    projectionForward = levelForward * rsqrt(levelLengthSq);
+    projectionRight = normalize(cross(projectionForward, worldUp));
+    projectionUp = normalize(cross(projectionRight, projectionForward));
+    verticalCenterShift =
+        clamp(dot(forwardDir, projectionUp) /
+                  max(dot(forwardDir, projectionForward), 0.025),
+              -40.0, 40.0);
+}
+
+inline float3 BuildPerspectiveCameraDirection(float2 uv, float3 inputForward,
+                                              float3 inputUp,
+                                              float verticalCorrection,
+                                              float verticalFovDegrees,
+                                              float cameraAspect)
+{
+    float3 projectionForward;
+    float3 projectionRight;
+    float3 projectionUp;
+    float verticalCenterShift;
+    BuildPerspectiveCameraBasis(inputForward, inputUp, verticalCorrection,
+                                projectionForward, projectionRight,
+                                projectionUp, verticalCenterShift);
+
+    float2 ndc = uv * 2.0 - 1.0;
+    float fInv = tan(radians(verticalFovDegrees) * 0.5);
+    float yView = (-ndc.y) * fInv + verticalCenterShift;
+    float xView = ndc.x * cameraAspect * fInv;
+    return normalize(xView * projectionRight + yView * projectionUp +
+                     projectionForward);
+}
+
+inline float3 BuildSphericalCameraDirection(float2 uv, float3 inputForward,
+                                            float3 inputUp)
+{
+    float3 forwardDir = normalize(inputForward);
+    float3 rightDir = normalize(cross(forwardDir, inputUp));
+    float3 upDir = normalize(cross(rightDir, forwardDir));
+    float azimuth = (uv.x - 0.5) * (2.0 * PI);
+    float elevation = (0.5 - saturate(uv.y)) * PI;
+    float sinAzimuth;
+    float cosAzimuth;
+    float sinElevation;
+    float cosElevation;
+    sincos(azimuth, sinAzimuth, cosAzimuth);
+    sincos(elevation, sinElevation, cosElevation);
+    float3 horizonDir = cosAzimuth * forwardDir + sinAzimuth * rightDir;
+    return normalize(horizonDir * cosElevation + upDir * sinElevation);
+}
+
+inline float3 BuildCameraPrimaryDirection(float2 uv)
+{
+    if (projectionMode >= CAMERA_PROJECTION_SPHERICAL_360 - 0.5) {
+        return BuildSphericalCameraDirection(uv, camForward, camUp);
+    }
+    return BuildPerspectiveCameraDirection(uv, camForward, camUp,
+                                           verticalTiltCorrection, fov,
+                                           aspect);
 }
 
 static const uint DXR_FEATURE_AOV_OUTPUT = 1u << 0;

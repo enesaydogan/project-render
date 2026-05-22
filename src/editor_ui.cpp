@@ -897,6 +897,7 @@ struct RenderExportLaunchSettings {
   int maxSpp = 1;
   float noisePercent = 0.0f;
   int denoiserIndex = 0;
+  int projectionMode = (int)CameraProjectionMode::Perspective;
   bool allowNoiseThresholdStop = true;
   unsigned int explicitWidth = 0;
   unsigned int explicitHeight = 0;
@@ -1114,6 +1115,14 @@ static bool EnsureExportRenderTarget(UINT width, UINT height) {
     g_renderExportJob.targetHeight =
       settings.explicitHeight > 0 ? settings.explicitHeight
                                   : g_renderResolutionPresets[presetIndex].height;
+    const int targetProjectionMode =
+        (std::clamp)(settings.projectionMode,
+                     (int)CameraProjectionMode::Perspective,
+                     (int)CameraProjectionMode::Spherical360);
+    if (targetProjectionMode == (int)CameraProjectionMode::Spherical360) {
+      g_renderExportJob.targetHeight =
+          (std::max)(1u, g_renderExportJob.targetWidth / 2u);
+    }
     g_renderExportJob.targetMaxSpp = (settings.maxSpp < 1) ? 1 : settings.maxSpp;
     g_renderExportJob.targetNoiseThreshold =
       (settings.noisePercent <= 0.0f) ? 0.001f : (settings.noisePercent / 100.0f);
@@ -1137,6 +1146,7 @@ static bool EnsureExportRenderTarget(UINT width, UINT height) {
     g_renderExportJob.previousAdaptiveSampling = g_cameraData.useAdaptiveSampling;
     g_renderExportJob.previousDenoiserIndex =
       DenoiserIndexFromMode(DxrRenderer::GetDenoiserMode());
+    g_renderExportJob.previousProjectionMode = g_cameraData.projectionMode;
 
     g_renderExportJob.previousStreamlineEnabled =
       DX12Context::g_streamline.IsEnabled();
@@ -1154,6 +1164,7 @@ static bool EnsureExportRenderTarget(UINT width, UINT height) {
     g_cameraData.useAdaptiveSampling =
       settings.allowNoiseThresholdStop ? 1.0f : 0.0f;
     g_cameraData.exportRendering = 1.0f;
+    g_cameraData.projectionMode = (float)targetProjectionMode;
     DxrRenderer::SetDenoiserMode(
       DenoiserModeFromIndex(g_renderExportJob.targetDenoiserIndex));
 
@@ -1165,6 +1176,7 @@ static bool EnsureExportRenderTarget(UINT width, UINT height) {
     g_cameraData.useAdaptiveSampling =
       g_renderExportJob.previousAdaptiveSampling;
     g_cameraData.exportRendering = 0.0f;
+    g_cameraData.projectionMode = g_renderExportJob.previousProjectionMode;
     DxrRenderer::SetDenoiserMode(
       DenoiserModeFromIndex(g_renderExportJob.previousDenoiserIndex));
     g_currentRenderMode = g_renderExportJob.previousMode;
@@ -1194,6 +1206,7 @@ static bool EnsureExportRenderTarget(UINT width, UINT height) {
     g_cameraData.useAdaptiveSampling =
       g_renderExportJob.previousAdaptiveSampling;
     g_cameraData.exportRendering = 0.0f;
+    g_cameraData.projectionMode = g_renderExportJob.previousProjectionMode;
     DxrRenderer::SetDenoiserMode(
       DenoiserModeFromIndex(g_renderExportJob.previousDenoiserIndex));
     g_currentRenderMode = g_renderExportJob.previousMode;
@@ -1228,6 +1241,7 @@ void RestoreRenderExportState(bool preservePreviewImage) {
   g_cameraData.noiseThreshold = g_renderExportJob.previousNoiseThreshold;
   g_cameraData.useAdaptiveSampling = g_renderExportJob.previousAdaptiveSampling;
   g_cameraData.exportRendering = 0.0f;
+  g_cameraData.projectionMode = g_renderExportJob.previousProjectionMode;
   DxrRenderer::SetDenoiserMode(
       DenoiserModeFromIndex(g_renderExportJob.previousDenoiserIndex));
   g_currentRenderMode = g_renderExportJob.previousMode;
@@ -1513,6 +1527,7 @@ void StartPreviewRenderJob() {
   settings.maxSpp = g_renderExportSettings.maxSpp;
   settings.noisePercent = g_renderExportSettings.noisePercent;
   settings.denoiserIndex = g_renderExportSettings.denoiserIndex;
+  settings.projectionMode = g_renderExportSettings.projectionMode;
   settings.allowNoiseThresholdStop = true;
   StartRenderExportJobWithSettings(L"", settings, true);
   fprintf(stderr,
@@ -1530,6 +1545,7 @@ void StartRenderExportJob(const std::wstring &outputPath) {
   settings.maxSpp = g_renderExportSettings.maxSpp;
   settings.noisePercent = g_renderExportSettings.noisePercent;
   settings.denoiserIndex = g_renderExportSettings.denoiserIndex;
+  settings.projectionMode = g_renderExportSettings.projectionMode;
   settings.allowNoiseThresholdStop = true;
   StartRenderExportJobWithSettings(outputPath, settings, false);
   fprintf(stderr,
@@ -1842,6 +1858,10 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
         }
         ImGui::EndCombo();
       }
+
+      const char *projections[] = {"Perspective", "Spherical 360 Panorama"};
+      ImGui::Combo("Projection", &g_renderExportSettings.projectionMode,
+                   projections, IM_ARRAYSIZE(projections));
 
       ImGui::SliderInt("Max SPP", &g_renderExportSettings.maxSpp, 16, 4096);
       ImGui::SliderFloat("Noise %", &g_renderExportSettings.noisePercent, 0.1f,

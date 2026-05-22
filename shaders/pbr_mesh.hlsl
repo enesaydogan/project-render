@@ -48,6 +48,8 @@ cbuffer CameraCB : register(b0)
     float tonemapAoMode;
     float triPlanarWorldRotationDegrees;
     float dxrFeatureFlags;
+    float verticalTiltCorrection;
+    float projectionMode;
     float4x4 shadowMatrix;
     float4x4 viewProj;
     float4x4 invViewProj;
@@ -64,6 +66,36 @@ static const uint DXR_FEATURE_CLAY_PRESERVE_EMISSION = 1u << 3;
 inline bool DxrFeatureEnabled(uint feature)
 {
     return (((uint)dxrFeatureFlags) & feature) != 0u;
+}
+
+void BuildPerspectiveCameraBasis(out float3 projectionForward,
+                                 out float3 projectionRight,
+                                 out float3 projectionUp,
+                                 out float verticalCenterShift)
+{
+    float3 forwardDir = normalize(forward);
+    projectionRight = normalize(cross(forwardDir, up));
+    projectionUp = normalize(cross(projectionRight, forwardDir));
+    projectionForward = forwardDir;
+    verticalCenterShift = 0.0;
+    if (verticalTiltCorrection <= 0.5) {
+        return;
+    }
+
+    const float3 worldUp = float3(0.0, 1.0, 0.0);
+    float3 levelForward = forwardDir - worldUp * dot(forwardDir, worldUp);
+    float levelLengthSq = dot(levelForward, levelForward);
+    if (levelLengthSq <= 1.0e-6) {
+        return;
+    }
+
+    projectionForward = levelForward * rsqrt(levelLengthSq);
+    projectionRight = normalize(cross(projectionForward, worldUp));
+    projectionUp = normalize(cross(projectionRight, projectionForward));
+    verticalCenterShift =
+        clamp(dot(forwardDir, projectionUp) /
+                  max(dot(forwardDir, projectionForward), 0.025),
+              -40.0, 40.0);
 }
 
 cbuffer WorldCB : register(b2)
@@ -735,15 +767,18 @@ PSInputMesh VSMainMesh(VSInputMesh input)
     float4 worldPos = mul(world, float4(input.position, 1.0f));
     float3 outWorldPos = worldPos.xyz;
 
-    // Use a standard right-handed view basis for the camera
-    float3 R = normalize(cross(forward, up)); // Right (F x U in RH with F pointing away)
-    float3 U = normalize(cross(R, forward));  // Up (orthonormal)
+    float3 projectionForward;
+    float3 R;
+    float3 U;
+    float verticalCenterShift;
+    BuildPerspectiveCameraBasis(projectionForward, R, U,
+                                verticalCenterShift);
     
     float3 rel = outWorldPos - pos;
     float3 viewPos;
     viewPos.x = dot(rel, R);
     viewPos.y = dot(rel, U);
-    viewPos.z = dot(rel, forward);
+    viewPos.z = dot(rel, projectionForward);
     
     // Build projection matrix
     // Convert FOV to radians and compute focal term
@@ -755,7 +790,7 @@ PSInputMesh VSMainMesh(VSInputMesh input)
     float B = -nearZ * farZ / (farZ - nearZ);
     o.position = float4(
         viewPos.x * f / aspect,
-        viewPos.y * f,
+        (viewPos.y - verticalCenterShift * viewPos.z) * f,
         viewPos.z * A + B,
         viewPos.z
     );
@@ -806,21 +841,25 @@ PSInputMesh VSMainGrass(VSInputMesh input, uint instanceId : SV_InstanceID)
                                     upDir * input.tangent.y +
                                     forwardDir * input.tangent.z);
 
-    float3 R = normalize(cross(forward, up));
-    float3 U = normalize(cross(R, forward));
+    float3 projectionForward;
+    float3 R;
+    float3 U;
+    float verticalCenterShift;
+    BuildPerspectiveCameraBasis(projectionForward, R, U,
+                                verticalCenterShift);
 
     float3 rel = outWorldPos - pos;
     float3 viewPos;
     viewPos.x = dot(rel, R);
     viewPos.y = dot(rel, U);
-    viewPos.z = dot(rel, forward);
+    viewPos.z = dot(rel, projectionForward);
 
     float f = 1.0f / tan(radians(fov) * 0.5f);
     float A = farZ / (farZ - nearZ);
     float B = -nearZ * farZ / (farZ - nearZ);
     o.position = float4(
         viewPos.x * f / aspect,
-        viewPos.y * f,
+        (viewPos.y - verticalCenterShift * viewPos.z) * f,
         viewPos.z * A + B,
         viewPos.z
     );

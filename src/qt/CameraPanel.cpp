@@ -120,11 +120,14 @@ void CameraPanel::createUi()
     m_horizontalFov = CreateSliderControl(20.0, 160.0, 1.0, 1);
     m_moveSpeed = CreateSliderControl(0.1, 20.0, 0.1, 2);
     m_mouseSensitivity = CreateSliderControl(0.001, 0.05, 0.001, 3);
+    m_verticalTiltCorrection =
+        new QCheckBox(tr("Vertical Tilt Correction"), lensGroup);
     m_safeFrameEnabled = new QCheckBox(tr("Show Safe Frame"), lensGroup);
     m_safeFrameInfo = new QLabel(lensGroup);
     m_safeFrameInfo->setWordWrap(true);
     m_resetCameraButton = new QPushButton(tr("Reset Camera"), lensGroup);
     lensForm->addRow(tr("Horizontal FOV"), m_horizontalFov);
+    lensForm->addRow(m_verticalTiltCorrection);
     lensForm->addRow(tr("Move Speed"), m_moveSpeed);
     lensForm->addRow(tr("Mouse Sensitivity"), m_mouseSensitivity);
     lensForm->addRow(m_safeFrameEnabled);
@@ -209,6 +212,9 @@ void CameraPanel::createUi()
         applyLensSettings();
     });
     connect(m_mouseSensitivity->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) {
+        applyLensSettings();
+    });
+    connect(m_verticalTiltCorrection, &QCheckBox::toggled, this, [this](bool) {
         applyLensSettings();
     });
     connect(m_safeFrameEnabled, &QCheckBox::toggled, this, [this](bool) {
@@ -322,6 +328,8 @@ void CameraPanel::syncFromRenderer()
     SyncSliderControlValue(m_horizontalFov, CurrentHorizontalFovDegrees());
     SyncSliderControlValue(m_moveSpeed, g_camSpeed);
     SyncSliderControlValue(m_mouseSensitivity, g_mouseSensitivity);
+    SyncCheckBoxState(m_verticalTiltCorrection,
+                      g_cameraData.verticalTiltCorrection > 0.5f);
     SyncCheckBoxState(m_safeFrameEnabled, g_safeFrameEnabled);
 
     UINT safeFrameWidth = 0;
@@ -388,13 +396,19 @@ void CameraPanel::applyLensSettings()
     }
 
     const float oldFov = g_cameraData.fov;
+    const bool oldVerticalTiltCorrection =
+        g_cameraData.verticalTiltCorrection > 0.5f;
     const bool oldSafeFrameEnabled = g_safeFrameEnabled;
     SetHorizontalFovDegrees(m_horizontalFov->value());
     g_camSpeed = static_cast<float>(m_moveSpeed->value());
     g_mouseSensitivity = static_cast<float>(m_mouseSensitivity->value());
+    g_cameraData.verticalTiltCorrection =
+        m_verticalTiltCorrection->isChecked() ? 1.0f : 0.0f;
     g_safeFrameEnabled = m_safeFrameEnabled->isChecked();
     UpdateCameraCB();
     if (std::abs(oldFov - g_cameraData.fov) > 1.0e-4f ||
+        oldVerticalTiltCorrection !=
+            (g_cameraData.verticalTiltCorrection > 0.5f) ||
         oldSafeFrameEnabled != g_safeFrameEnabled) {
         DxrRenderer::ResetAccumulation();
     }

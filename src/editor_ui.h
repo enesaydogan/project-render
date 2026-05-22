@@ -18,6 +18,7 @@ struct RenderExportSettings {
   int maxSpp = 200;
   float noisePercent = 5.0f;
   int denoiserIndex = 2; // 0=Off, 1=OIDN CPU, 2=OIDN GPU, 3=OptiX
+  int projectionMode = 0; // CameraProjectionMode
   bool batchSavedViews = false;
   std::string batchBaseName = "final";
 };
@@ -47,6 +48,7 @@ struct RenderExportJobState {
   float previousAdaptiveSampling = 1.0f;
   int targetDenoiserIndex = 0;
   int previousDenoiserIndex = 0;
+  float previousProjectionMode = 0.0f;
   // Streamline (DLSS) state saved/restored during export so noise can be
   // calculated even when DLSS-RR is normally active.
   bool previousStreamlineEnabled = false;

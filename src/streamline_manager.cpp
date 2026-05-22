@@ -44,7 +44,8 @@ static std::wstring GetExecutableDir() {
 }
 
 static sl::float4x4 MakePerspectiveViewToClip(float fovDegrees, float aspect,
-                                              float nearZ, float farZ) {
+                                              float nearZ, float farZ,
+                                              float verticalCenterShift = 0.0f) {
   // Row-major matrix, matching the projection math used in your shaders.
   //
   // In simple.hlsl you effectively do:
@@ -59,7 +60,7 @@ static sl::float4x4 MakePerspectiveViewToClip(float fovDegrees, float aspect,
   sl::float4x4 m{};
   m[0] = sl::float4(f / aspect, 0, 0, 0);
   m[1] = sl::float4(0, f, 0, 0);
-  m[2] = sl::float4(0, 0, A, 1);
+  m[2] = sl::float4(0, -verticalCenterShift * f, A, 1);
   m[3] = sl::float4(0, 0, B, 0);
   return m;
 }
@@ -68,16 +69,52 @@ static sl::float3 ToSl3(const float v[3]) {
   return sl::float3(v[0], v[1], v[2]);
 }
 
-static sl::float4x4 MakeCameraViewToWorld(const CameraCB &cam) {
+static void ResolveProjectionBasis(const CameraCB &cam, sl::float3 &fwd,
+                                   sl::float3 &right, sl::float3 &up,
+                                   float &verticalCenterShift) {
   // Build an orthonormal basis like in the shaders.
-  sl::float3 fwd = ToSl3(cam.forward);
-  sl::float3 up = ToSl3(cam.up);
-  sl::float3 right;
+  fwd = ToSl3(cam.forward);
+  up = ToSl3(cam.up);
   sl::vectorCrossProduct(right, fwd, up);
   sl::vectorNormalize(right);
   sl::vectorCrossProduct(up, fwd, right);
   sl::vectorNormalize(up);
   sl::vectorNormalize(fwd);
+  verticalCenterShift = 0.0f;
+
+  if (cam.verticalTiltCorrection <= 0.5f) {
+    return;
+  }
+
+  const sl::float3 pitchedFwd = fwd;
+  fwd.y = 0.0f;
+  const float levelLengthSq = fwd.x * fwd.x + fwd.z * fwd.z;
+  if (levelLengthSq <= 1.0e-6f) {
+    fwd = pitchedFwd;
+    return;
+  }
+
+  sl::vectorNormalize(fwd);
+  const sl::float3 worldUp(0.0f, 1.0f, 0.0f);
+  sl::vectorCrossProduct(right, fwd, worldUp);
+  sl::vectorNormalize(right);
+  sl::vectorCrossProduct(up, fwd, right);
+  sl::vectorNormalize(up);
+  const float levelDot =
+      (std::max)(0.025f, pitchedFwd.x * fwd.x + pitchedFwd.y * fwd.y +
+                             pitchedFwd.z * fwd.z);
+  verticalCenterShift = std::clamp(
+      (pitchedFwd.x * up.x + pitchedFwd.y * up.y + pitchedFwd.z * up.z) /
+          levelDot,
+      -40.0f, 40.0f);
+}
+
+static sl::float4x4 MakeCameraViewToWorld(const CameraCB &cam) {
+  sl::float3 fwd;
+  sl::float3 up;
+  sl::float3 right;
+  float verticalCenterShift = 0.0f;
+  ResolveProjectionBasis(cam, fwd, right, up, verticalCenterShift);
 
   sl::float4x4 m{};
   m[0] = sl::float4(right.x, right.y, right.z, 0.0f);
@@ -535,19 +572,21 @@ bool StreamlineManager::Evaluate(
     prevCam.farZ = cam.prevFarZ;
   }
 
-  c.cameraViewToClip =
-      MakePerspectiveViewToClip(cam.fov, cam.aspect, cam.nearZ, cam.farZ);
+  sl::float3 projectionFwd;
+  sl::float3 projectionRight;
+  sl::float3 projectionUp;
+  float verticalCenterShift = 0.0f;
+  ResolveProjectionBasis(cam, projectionFwd, projectionRight, projectionUp,
+                         verticalCenterShift);
+  c.cameraViewToClip = MakePerspectiveViewToClip(
+      cam.fov, cam.aspect, cam.nearZ, cam.farZ, verticalCenterShift);
   sl::matrixFullInvert(c.clipToCameraView, c.cameraViewToClip);
 
   // Camera vectors
   c.cameraPos = sl::float3(cam.pos[0], cam.pos[1], cam.pos[2]);
-  c.cameraFwd = sl::float3(cam.forward[0], cam.forward[1], cam.forward[2]);
-  c.cameraUp = sl::float3(cam.up[0], cam.up[1], cam.up[2]);
-  sl::vectorCrossProduct(c.cameraRight, c.cameraFwd, c.cameraUp);
-  sl::vectorNormalize(c.cameraRight);
-  sl::vectorCrossProduct(c.cameraUp, c.cameraFwd, c.cameraRight);
-  sl::vectorNormalize(c.cameraUp);
-  sl::vectorNormalize(c.cameraFwd);
+  c.cameraFwd = projectionFwd;
+  c.cameraRight = projectionRight;
+  c.cameraUp = projectionUp;
 
   // Prev transforms
   sl::float4x4 cameraViewToWorld = MakeCameraViewToWorld(cam);
@@ -557,8 +596,15 @@ bool StreamlineManager::Evaluate(
   sl::calcCameraToPrevCamera(cameraViewToPrevCameraView, cameraViewToWorld,
                              cameraViewToWorldPrev);
 
+  sl::float3 prevProjectionFwd;
+  sl::float3 prevProjectionRight;
+  sl::float3 prevProjectionUp;
+  float prevVerticalCenterShift = 0.0f;
+  ResolveProjectionBasis(prevCam, prevProjectionFwd, prevProjectionRight,
+                         prevProjectionUp, prevVerticalCenterShift);
   sl::float4x4 prevViewToClip = MakePerspectiveViewToClip(
-      prevCam.fov, prevCam.aspect, prevCam.nearZ, prevCam.farZ);
+      prevCam.fov, prevCam.aspect, prevCam.nearZ, prevCam.farZ,
+      prevVerticalCenterShift);
 
   sl::float4x4 clipToPrevCameraView;
   sl::matrixMul(clipToPrevCameraView, c.clipToCameraView,

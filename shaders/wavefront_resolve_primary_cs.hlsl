@@ -92,17 +92,24 @@ inline float WavefrontEvaluateReservoirTarget(WavefrontHitRecord record,
 inline float2 ComputeWavefrontSkyMotion(float3 rayDir, float2 currScreen)
 {
     float2 motion = float2(0.0, 0.0);
-    if (prevValid > 0.5) {
-        float3 forwardPrev = normalize(prevForward);
-        float3 rightPrev = normalize(cross(forwardPrev, prevUp));
-        float3 upPrev = normalize(cross(rightPrev, forwardPrev));
+    if (prevValid > 0.5 &&
+        projectionMode < CAMERA_PROJECTION_SPHERICAL_360 - 0.5) {
+        float3 forwardPrev;
+        float3 rightPrev;
+        float3 upPrev;
+        float verticalCenterShiftPrev;
+        BuildPerspectiveCameraBasis(prevForward, prevUp,
+                                    verticalTiltCorrection, forwardPrev,
+                                    rightPrev, upPrev,
+                                    verticalCenterShiftPrev);
         float fInvPrev = tan(radians(prevFov) * 0.5);
         float vxPrev = dot(rayDir, rightPrev);
         float vyPrev = dot(rayDir, upPrev);
         float vzPrev = dot(rayDir, forwardPrev);
         if (vzPrev > 0.001) {
             float ndcXPrev = vxPrev / (vzPrev * prevAspect * fInvPrev);
-            float ndcYPrev = -vyPrev / (vzPrev * fInvPrev);
+            float ndcYPrev =
+                (verticalCenterShiftPrev - vyPrev / vzPrev) / fInvPrev;
             float2 prevScreen =
                 (float2(ndcXPrev, ndcYPrev) * 0.5 + 0.5) * float2(outputWidth, outputHeight);
             float2 screenMin = float2(0.0, 0.0);
@@ -118,10 +125,16 @@ inline float2 ComputeWavefrontSkyMotion(float3 rayDir, float2 currScreen)
 inline float2 ComputeWavefrontSurfaceMotion(float3 hitPos, float2 currScreen)
 {
     float2 motion = kInvalidMvec;
-    if (prevValid > 0.5) {
-        float3 forwardPrev = normalize(prevForward);
-        float3 rightPrev = normalize(cross(forwardPrev, prevUp));
-        float3 upPrev = normalize(cross(rightPrev, forwardPrev));
+    if (prevValid > 0.5 &&
+        projectionMode < CAMERA_PROJECTION_SPHERICAL_360 - 0.5) {
+        float3 forwardPrev;
+        float3 rightPrev;
+        float3 upPrev;
+        float verticalCenterShiftPrev;
+        BuildPerspectiveCameraBasis(prevForward, prevUp,
+                                    verticalTiltCorrection, forwardPrev,
+                                    rightPrev, upPrev,
+                                    verticalCenterShiftPrev);
         float fInvPrev = tan(radians(prevFov) * 0.5);
         float3 relPrev = hitPos - prevPos;
         float vxPrev = dot(relPrev, rightPrev);
@@ -129,7 +142,8 @@ inline float2 ComputeWavefrontSurfaceMotion(float3 hitPos, float2 currScreen)
         float vzPrev = dot(relPrev, forwardPrev);
         if (vzPrev > 0.001) {
             float ndcXPrev = vxPrev / (vzPrev * prevAspect * fInvPrev);
-            float ndcYPrev = -vyPrev / (vzPrev * fInvPrev);
+            float ndcYPrev =
+                (verticalCenterShiftPrev - vyPrev / vzPrev) / fInvPrev;
             float2 prevScreen =
                 (float2(ndcXPrev, ndcYPrev) * 0.5 + 0.5) * float2(outputWidth, outputHeight);
             float2 screenMin = float2(0.0, 0.0);
@@ -1432,10 +1446,25 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         }
         motion = ComputeWavefrontSurfaceMotion(hitPos, currScreen);
 
-        float3 forwardDir = normalize(camForward);
+        float3 forwardDir;
+        float3 projectionRight;
+        float3 projectionUp;
+        float projectionVerticalShift;
+        BuildPerspectiveCameraBasis(camForward, camUp,
+                                    verticalTiltCorrection, forwardDir,
+                                    projectionRight, projectionUp,
+                                    projectionVerticalShift);
         float viewZ = dot(hitPos - camPos, forwardDir);
+        // Panorama hits can lie behind the camera forward axis. Keep their
+        // OIDN preserve depth finite so only actual misses restore raw color.
+        float preserveDepth =
+            (projectionMode >= CAMERA_PROJECTION_SPHERICAL_360 - 0.5)
+                ? record.hitT
+                : viewZ;
+        if (preserveDepth > 0.0) {
+            linearDepth = preserveDepth;
+        }
         if (viewZ > 0.0) {
-            linearDepth = viewZ;
             if (dlssRayReconstruction > 0.5) {
                 depth = viewZ;
             } else {
@@ -1804,13 +1833,27 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             roughness = guideRoughness;
             motion = ComputeWavefrontSurfaceMotion(guideHitPos, currScreen);
 
-            float3 forwardDir = normalize(camForward);
+            float3 forwardDir;
+            float3 projectionRight;
+            float3 projectionUp;
+            float projectionVerticalShift;
+            BuildPerspectiveCameraBasis(camForward, camUp,
+                                        verticalTiltCorrection, forwardDir,
+                                        projectionRight, projectionUp,
+                                        projectionVerticalShift);
             float viewZ = dot(guideHitPos - camPos, forwardDir);
-            if (viewZ > 0.0) {
-                linearDepth = viewZ;
-                depth = viewZ;
+            float preserveDepth =
+                (projectionMode >= CAMERA_PROJECTION_SPHERICAL_360 - 0.5)
+                    ? record.guideHitT
+                    : viewZ;
+            if (preserveDepth > 0.0) {
+                linearDepth = preserveDepth;
             } else {
                 linearDepth = farZ;
+            }
+            if (viewZ > 0.0) {
+                depth = viewZ;
+            } else {
                 depth = farZ;
             }
 

@@ -2887,10 +2887,51 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         // Raster mesh VS projects with positive forward Z, so these matrices
         // must use the same left-handed convention or screen-space effects
         // reconstruct from a different camera basis.
-        XMMATRIX camView = XMMatrixLookToLH(camPos, camFwd, camUp);
-        XMMATRIX camProj = XMMatrixPerspectiveFovLH(
-            XMConvertToRadians(g_cameraData.fov), g_cameraData.aspect,
-            g_cameraData.nearZ, g_cameraData.farZ);
+        XMVECTOR projectionFwd = camFwd;
+        XMVECTOR projectionUp = camUp;
+        float verticalCenterShift = 0.0f;
+        if (g_cameraData.verticalTiltCorrection > 0.5f) {
+          const XMVECTOR worldUp = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+          XMVECTOR levelForward =
+              XMVectorSubtract(camFwd,
+                               XMVectorScale(worldUp,
+                                             XMVectorGetX(
+                                                 XMVector3Dot(camFwd, worldUp))));
+          const float levelLengthSq =
+              XMVectorGetX(XMVector3LengthSq(levelForward));
+          if (levelLengthSq > 1.0e-6f) {
+            projectionFwd = XMVector3Normalize(levelForward);
+            const XMVECTOR projectionRight =
+                XMVector3Normalize(XMVector3Cross(projectionFwd, worldUp));
+            projectionUp =
+                XMVector3Normalize(XMVector3Cross(projectionRight,
+                                                  projectionFwd));
+            const float levelDot =
+                std::max(0.025f,
+                         XMVectorGetX(XMVector3Dot(camFwd, projectionFwd)));
+            verticalCenterShift = std::clamp(
+                XMVectorGetX(XMVector3Dot(camFwd, projectionUp)) / levelDot,
+                -40.0f, 40.0f);
+          }
+        }
+        XMMATRIX camView = XMMatrixLookToLH(camPos, projectionFwd, projectionUp);
+        XMMATRIX camProj;
+        if (g_cameraData.verticalTiltCorrection > 0.5f &&
+            std::abs(verticalCenterShift) > 1.0e-6f) {
+          const float nearZ = g_cameraData.nearZ;
+          const float fInv =
+              tanf(XMConvertToRadians(g_cameraData.fov) * 0.5f);
+          const float halfWidth = nearZ * fInv * g_cameraData.aspect;
+          const float bottom = nearZ * (verticalCenterShift - fInv);
+          const float top = nearZ * (verticalCenterShift + fInv);
+          camProj = XMMatrixPerspectiveOffCenterLH(
+              -halfWidth, halfWidth, bottom, top, nearZ,
+              g_cameraData.farZ);
+        } else {
+          camProj = XMMatrixPerspectiveFovLH(
+              XMConvertToRadians(g_cameraData.fov), g_cameraData.aspect,
+              g_cameraData.nearZ, g_cameraData.farZ);
+        }
         XMMATRIX vp = camView * camProj;
         XMVECTOR det;
         XMMATRIX invVp = XMMatrixInverse(&det, vp);

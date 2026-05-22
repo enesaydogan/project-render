@@ -32,6 +32,7 @@ private:
     QPushButton *m_resetCameraButton = nullptr;
     SliderControl *m_moveSpeed = nullptr;
     SliderControl *m_mouseSensitivity = nullptr;
+    QCheckBox *m_verticalTiltCorrection = nullptr;
     QCheckBox *m_safeFrameEnabled = nullptr;
     QLabel *m_safeFrameInfo = nullptr;
 

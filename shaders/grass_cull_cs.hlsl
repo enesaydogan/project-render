@@ -69,6 +69,8 @@ cbuffer CameraCB : register(b1)
     float tonemapAoMode;
     float triPlanarWorldRotationDegrees;
     float dxrFeatureFlags;
+    float verticalTiltCorrection;
+    float projectionMode;
     float4x4 shadowMatrix;
     float4x4 viewProj;
     float4x4 invViewProj;

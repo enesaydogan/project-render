@@ -10,6 +10,11 @@ constexpr uint32_t kDxrFeaturePrimaryGuide = 1u << 1;
 constexpr uint32_t kDxrFeatureClayPreserveTransparency = 1u << 2;
 constexpr uint32_t kDxrFeatureClayPreserveEmission = 1u << 3;
 
+enum class CameraProjectionMode : int {
+  Perspective = 0,
+  Spherical360 = 1,
+};
+
 struct CameraCB {
   float pos[3];
   float debugMode; // used to be _pad0
@@ -63,7 +68,8 @@ struct CameraCB {
   float tonemapAoMode;
   float triPlanarWorldRotationDegrees;
   float dxrFeatureFlags;
-  float _pad3[2]; // ALIGNMENT PADDING
+  float verticalTiltCorrection;
+  float projectionMode;
   float shadowMatrix[16];
   float viewProj[16];
   float invViewProj[16];

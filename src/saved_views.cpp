@@ -104,6 +104,7 @@ void CaptureCurrentCameraState(SavedView &view) {
   view.noiseThreshold = g_cameraData.noiseThreshold;
   view.debugVisualizationMode = g_cameraData.debugVisualizationMode;
   view.sampleEnvSolidAngle = 1.0f;
+  view.verticalTiltCorrection = g_cameraData.verticalTiltCorrection > 0.5f;
   view.autoExposure = DxrRenderer::GetAutoExposure();
   view.physicalCameraExposure = DxrRenderer::GetPhysicalCameraExposure();
   view.safeFrameEnabled = g_safeFrameEnabled;
@@ -138,6 +139,8 @@ void ApplyCameraState(const SavedView &view) {
   g_cameraData.noiseThreshold = view.noiseThreshold;
   g_cameraData.debugVisualizationMode = view.debugVisualizationMode;
   g_cameraData.sampleEnvSolidAngle = 1.0f;
+  g_cameraData.verticalTiltCorrection =
+      view.verticalTiltCorrection ? 1.0f : 0.0f;
   g_camYaw = view.yaw;
   g_camPitch = view.pitch;
   g_safeFrameEnabled = view.safeFrameEnabled;
