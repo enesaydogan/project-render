@@ -74,6 +74,8 @@ static std::vector<Asset::GpuMesh> s_pendingMeshes;
 static std::vector<Asset::Material> s_pendingMaterials;
 static std::vector<Asset::Texture> s_pendingTextures;
 static std::vector<Asset::ImportedSceneNode> s_pendingSceneNodes;
+static std::array<float, 3> s_pendingRootTranslation = {};
+static bool s_pendingHasRootTranslation = false;
 static std::unordered_map<std::string, int> s_textureIndicesBySourceUri;
 static std::vector<std::string> s_materialStableIds;
 static std::unordered_map<std::string, int> s_materialIndicesByStableId;
@@ -2351,9 +2353,15 @@ static bool FinalizeImportedNode(const std::string &srcPath,
                                  std::vector<Asset::GpuMesh> meshes,
                                  std::vector<Asset::Material> materials,
                                  std::vector<Asset::Texture> textures,
-                                 std::vector<Asset::ImportedSceneNode> sceneNodes) {
+                                 std::vector<Asset::ImportedSceneNode> sceneNodes,
+                                 const float *rootTranslation = nullptr) {
   ImportedNodePayload payload;
   payload.sourcePath = srcPath;
+  if (rootTranslation) {
+    payload.rootTranslation = {rootTranslation[0], rootTranslation[1],
+                               rootTranslation[2]};
+    payload.hasRootTranslation = true;
+  }
   payload.meshes = std::move(meshes);
   payload.materials = std::move(materials);
   payload.textures = std::move(textures);
@@ -2407,7 +2415,8 @@ static bool StartAsyncSceneLoadJob(const std::string &path,
                                    PendingImportAction action,
                                    size_t targetNodeIndex =
                                        static_cast<size_t>(-1),
-                                   const std::string &targetImportGroupKey = {}) {
+                                   const std::string &targetImportGroupKey = {},
+                                   const float *rootTranslation = nullptr) {
   if (s_importInProgress.load()) {
     s_lastStatus = "Import already in progress";
     return false;
@@ -2427,7 +2436,15 @@ static bool StartAsyncSceneLoadJob(const std::string &path,
     s_importStatus = FormatSceneLoadProgressStatus(action, message, path);
   });
 
-  std::thread([path, action, targetNodeIndex, targetImportGroupKey]() {
+  std::array<float, 3> asyncRootTranslation = {};
+  const bool hasRootTranslation = rootTranslation != nullptr;
+  if (rootTranslation) {
+    asyncRootTranslation = {rootTranslation[0], rootTranslation[1],
+                            rootTranslation[2]};
+  }
+
+  std::thread([path, action, targetNodeIndex, targetImportGroupKey,
+               asyncRootTranslation, hasRootTranslation]() {
     std::vector<Asset::GpuMesh> meshes;
     std::vector<Asset::Material> materials;
     std::vector<Asset::Texture> textures;
@@ -2462,6 +2479,8 @@ static bool StartAsyncSceneLoadJob(const std::string &path,
       s_pendingAction = action;
       s_pendingTargetNodeIndex = targetNodeIndex;
       s_pendingTargetImportGroupKey = targetImportGroupKey;
+      s_pendingRootTranslation = asyncRootTranslation;
+      s_pendingHasRootTranslation = hasRootTranslation;
     }
     s_pendingReady = true;
     Asset::ClearProgressCallback();
@@ -2602,6 +2621,11 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
     rootNode.selectionLocked = true;
     rootNode.linkedMaterialIndices = localToGlobal;
     rootNode.linkedMaterialSourceNames.reserve(payload.materials.size());
+    if (payload.hasRootTranslation) {
+      rootNode.transform[12] = payload.rootTranslation[0];
+      rootNode.transform[13] = payload.rootTranslation[1];
+      rootNode.transform[14] = payload.rootTranslation[2];
+    }
     for (const Asset::Material &material : payload.materials) {
       rootNode.linkedMaterialSourceNames.emplace_back(material.name);
     }
@@ -2673,6 +2697,11 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
       node.linkedMaterialIndices = sharedEntryIt->second.linkedMaterialIndices;
       node.linkedMaterialSourceNames =
           sharedEntryIt->second.linkedMaterialSourceNames;
+      if (payload.hasRootTranslation) {
+        node.transform[12] = payload.rootTranslation[0];
+        node.transform[13] = payload.rootTranslation[1];
+        node.transform[14] = payload.rootTranslation[2];
+      }
       const size_t nodeIndex = AddNode(std::move(node));
 
       s_lastStatus = std::string("Loaded shared: ") + payload.sourcePath;
@@ -2725,6 +2754,11 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
   node.linkedMaterialIndices = std::move(localToGlobal);
   node.linkedMaterialSourceNames.clear();
   node.linkedMaterialSourceNames.reserve(payload.materials.size());
+  if (payload.hasRootTranslation) {
+    node.transform[12] = payload.rootTranslation[0];
+    node.transform[13] = payload.rootTranslation[1];
+    node.transform[14] = payload.rootTranslation[2];
+  }
   for (const Asset::Material &material : payload.materials) {
     node.linkedMaterialSourceNames.emplace_back(material.name);
   }
@@ -3312,6 +3346,8 @@ void ProcessPendingImport() {
   PendingImportAction action = PendingImportAction::Import;
   size_t targetNodeIndex = static_cast<size_t>(-1);
   std::string targetImportGroupKey;
+  std::array<float, 3> rootTranslation = {};
+  bool hasRootTranslation = false;
   {
     std::lock_guard<std::mutex> lg(s_pendingMutex);
     meshes = std::move(s_pendingMeshes);
@@ -3322,6 +3358,8 @@ void ProcessPendingImport() {
     action = s_pendingAction;
     targetNodeIndex = s_pendingTargetNodeIndex;
     targetImportGroupKey = std::move(s_pendingTargetImportGroupKey);
+    rootTranslation = s_pendingRootTranslation;
+    hasRootTranslation = s_pendingHasRootTranslation;
     s_pendingMeshes.clear();
     s_pendingMaterials.clear();
     s_pendingTextures.clear();
@@ -3330,13 +3368,17 @@ void ProcessPendingImport() {
     s_pendingAction = PendingImportAction::Import;
     s_pendingTargetNodeIndex = static_cast<size_t>(-1);
     s_pendingTargetImportGroupKey.clear();
+    s_pendingRootTranslation = {};
+    s_pendingHasRootTranslation = false;
   }
   s_pendingReady = false;
 
   bool ok = false;
   if (action == PendingImportAction::Import) {
     ok = FinalizeImportedNode(srcPath, std::move(meshes), std::move(materials),
-                              std::move(textures), std::move(sceneNodes));
+                              std::move(textures), std::move(sceneNodes),
+                              hasRootTranslation ? rootTranslation.data()
+                                                 : nullptr);
   } else {
     if (!targetImportGroupKey.empty()) {
       targetNodeIndex = FindImportGroupRootIndex(targetImportGroupKey);
@@ -3473,7 +3515,7 @@ bool ImportModelWithDialog(HWND hwnd) {
   return false;
 }
 
-bool ImportModelAsync(const std::string &utf8path) {
+bool ImportModelAsync(const std::string &utf8path, const float *rootTranslation) {
   if (utf8path.empty()) {
     s_lastStatus = "Import failed: empty path";
     return false;
@@ -3500,7 +3542,8 @@ bool ImportModelAsync(const std::string &utf8path) {
     s_recentImportTime = now;
   }
 
-  return StartAsyncSceneLoadJob(utf8path, PendingImportAction::Import);
+  return StartAsyncSceneLoadJob(utf8path, PendingImportAction::Import,
+                                static_cast<size_t>(-1), {}, rootTranslation);
 }
 
 bool ImportHDRWithDialog(HWND hwnd) {
@@ -6105,12 +6148,14 @@ int PickMaterialAtCursor(float screenWidth, float screenHeight) {
 struct SceneMeshPickHit {
   size_t nodeIndex = static_cast<size_t>(-1);
   size_t meshIndex = static_cast<size_t>(-1);
+  float worldPosition[3] = {};
 };
 
-static bool PickSceneMeshAt(float screenX, float screenY, float screenWidth,
-                            float screenHeight, SceneMeshPickHit &outHit) {
-  outHit = {};
-  if (ImGuizmo::IsUsing() || screenWidth <= 1.0f || screenHeight <= 1.0f) {
+static bool BuildViewportRayAt(float screenX, float screenY, float screenWidth,
+                               float screenHeight, float outOrigin[3],
+                               float outDirection[3]) {
+  if (!outOrigin || !outDirection || screenWidth <= 1.0f ||
+      screenHeight <= 1.0f) {
     return false;
   }
 
@@ -6178,8 +6223,29 @@ static bool PickSceneMeshAt(float screenX, float screenY, float screenWidth,
     return false;
   }
 
-  const float orig[3] = {g_cameraData.pos[0], g_cameraData.pos[1],
-                         g_cameraData.pos[2]};
+  outOrigin[0] = g_cameraData.pos[0];
+  outOrigin[1] = g_cameraData.pos[1];
+  outOrigin[2] = g_cameraData.pos[2];
+  outDirection[0] = dir[0];
+  outDirection[1] = dir[1];
+  outDirection[2] = dir[2];
+  return true;
+}
+
+static bool PickSceneMeshAt(float screenX, float screenY, float screenWidth,
+                            float screenHeight, SceneMeshPickHit &outHit) {
+  outHit = {};
+  if (ImGuizmo::IsUsing()) {
+    return false;
+  }
+
+  float orig[3] = {};
+  float dir[3] = {};
+  if (!BuildViewportRayAt(screenX, screenY, screenWidth, screenHeight, orig,
+                          dir)) {
+    return false;
+  }
+
   float minWorldDist2 = FLT_MAX;
   const std::vector<std::array<float, 16>> worldTransforms =
       BuildNodeWorldTransforms();
@@ -6217,6 +6283,7 @@ static bool PickSceneMeshAt(float screenX, float screenY, float screenWidth,
       }
 
       float bestMeshDist2 = FLT_MAX;
+      float bestMeshWorldHit[3] = {};
       bool meshHit = false;
       if (!mesh.cpuVertices.empty() && !mesh.cpuIndices.empty()) {
         for (size_t k = 0; k + 2 < mesh.cpuIndices.size(); k += 3) {
@@ -6245,6 +6312,9 @@ static bool PickSceneMeshAt(float screenX, float screenY, float screenWidth,
           const float worldDist2 = dx * dx + dy * dy + dz * dz;
           if (worldDist2 < bestMeshDist2) {
             bestMeshDist2 = worldDist2;
+            bestMeshWorldHit[0] = worldHit[0];
+            bestMeshWorldHit[1] = worldHit[1];
+            bestMeshWorldHit[2] = worldHit[2];
             meshHit = true;
           }
         }
@@ -6258,6 +6328,9 @@ static bool PickSceneMeshAt(float screenX, float screenY, float screenWidth,
         const float dy = worldHit[1] - orig[1];
         const float dz = worldHit[2] - orig[2];
         bestMeshDist2 = dx * dx + dy * dy + dz * dz;
+        bestMeshWorldHit[0] = worldHit[0];
+        bestMeshWorldHit[1] = worldHit[1];
+        bestMeshWorldHit[2] = worldHit[2];
         meshHit = true;
       }
 
@@ -6265,12 +6338,69 @@ static bool PickSceneMeshAt(float screenX, float screenY, float screenWidth,
         minWorldDist2 = bestMeshDist2;
         outHit.nodeIndex = nodeIndex;
         outHit.meshIndex = meshIndex;
+        outHit.worldPosition[0] = bestMeshWorldHit[0];
+        outHit.worldPosition[1] = bestMeshWorldHit[1];
+        outHit.worldPosition[2] = bestMeshWorldHit[2];
       }
     }
   }
 
   return outHit.nodeIndex < s_nodes.size() &&
          outHit.meshIndex < g_loadedMeshes.size();
+}
+
+bool ResolveViewportImportPlacement(float screenX, float screenY,
+                                    float screenWidth, float screenHeight,
+                                    float outTranslation[3]) {
+  if (!outTranslation) {
+    return false;
+  }
+
+  SceneMeshPickHit hit;
+  if (PickSceneMeshAt(screenX, screenY, screenWidth, screenHeight, hit)) {
+    outTranslation[0] = hit.worldPosition[0];
+    outTranslation[1] = hit.worldPosition[1];
+    outTranslation[2] = hit.worldPosition[2];
+    return true;
+  }
+
+  float origin[3] = {};
+  float direction[3] = {};
+  if (!BuildViewportRayAt(screenX, screenY, screenWidth, screenHeight, origin,
+                          direction)) {
+    return false;
+  }
+
+  float forward[3] = {g_cameraData.forward[0], g_cameraData.forward[1],
+                      g_cameraData.forward[2]};
+  const float forwardLen2 =
+      forward[0] * forward[0] + forward[1] * forward[1] +
+      forward[2] * forward[2];
+  if (forwardLen2 <= 1e-12f) {
+    return false;
+  }
+  const float invForwardLen = 1.0f / sqrtf(forwardLen2);
+  forward[0] *= invForwardLen;
+  forward[1] *= invForwardLen;
+  forward[2] *= invForwardLen;
+
+  // Keep empty-view drops visible under the cursor at a stable view depth.
+  const float fallbackDepth = std::max(5.0f, g_cameraData.nearZ * 4.0f);
+  const float denominator = direction[0] * forward[0] +
+                            direction[1] * forward[1] +
+                            direction[2] * forward[2];
+  float rayDistance = fallbackDepth;
+  if (std::fabs(denominator) > 1e-5f) {
+    rayDistance = fallbackDepth / denominator;
+  }
+  if (rayDistance <= g_cameraData.nearZ) {
+    rayDistance = fallbackDepth;
+  }
+
+  outTranslation[0] = origin[0] + direction[0] * rayDistance;
+  outTranslation[1] = origin[1] + direction[1] * rayDistance;
+  outTranslation[2] = origin[2] + direction[2] * rayDistance;
+  return true;
 }
 
 bool AddScatterTargetFromPick(size_t scatterIndex, float screenX, float screenY,

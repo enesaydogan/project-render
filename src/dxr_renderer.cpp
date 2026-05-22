@@ -5067,6 +5067,11 @@ void BuildAccelerationStructures(
               return;
             }
             batchCount = 0;
+          } else {
+            // An exact batch boundary leaves submitCurrentBatch(true) with a
+            // reopened empty list. Close it before the allocator is reset for
+            // the TLAS pass below.
+            ThrowIfFailed(cmdList->Close());
           }
         } else {
           for (size_t i = 0; i < meshes.size(); ++i) {

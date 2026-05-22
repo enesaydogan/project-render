@@ -149,7 +149,7 @@ DX12View::DX12View(QWidget *parent)
     setAttribute(Qt::WA_NativeWindow);
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
-    setAcceptDrops(false);
+    setAcceptDrops(true);
 
     m_cloneOptionsTimer = new QTimer(this);
     connect(m_cloneOptionsTimer, &QTimer::timeout, this, [this]() {
@@ -347,7 +347,17 @@ void DX12View::dropEvent(QDropEvent *e)
 {
     const QString path = FirstSupportedDroppedModelPath(e->mimeData());
     if (!path.isEmpty()) {
-        Scene::ImportModelAsync(QString(path).toUtf8().constData());
+        float placement[3] = {};
+        const QPoint dropPos = mapToGlobal(e->position().toPoint());
+        if (Scene::ResolveViewportImportPlacement(
+                static_cast<float>(dropPos.x()), static_cast<float>(dropPos.y()),
+                static_cast<float>(DX12Context::g_windowWidth),
+                static_cast<float>(DX12Context::g_windowHeight), placement)) {
+            Scene::ImportModelAsync(QString(path).toUtf8().constData(),
+                                    placement);
+        } else {
+            Scene::ImportModelAsync(QString(path).toUtf8().constData());
+        }
         e->acceptProposedAction();
         return;
     }

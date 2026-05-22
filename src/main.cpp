@@ -2019,7 +2019,9 @@ static bool IsSupportedDroppedModelPath(const std::wstring &path) {
          ext == L".ltm" || ext == L".lmod";
 }
 
-static bool ImportFirstDroppedModelFileHandle(HDROP drop) {
+static bool ImportFirstDroppedModelFileHandle(HDROP drop,
+                                              const POINT *dropScreenPoint =
+                                                  nullptr) {
   if (!drop) {
     return false;
   }
@@ -2038,6 +2040,15 @@ static bool ImportFirstDroppedModelFileHandle(HDROP drop) {
       continue;
     }
 
+    float placement[3] = {};
+    if (dropScreenPoint &&
+        Scene::ResolveViewportImportPlacement(
+            static_cast<float>(dropScreenPoint->x),
+            static_cast<float>(dropScreenPoint->y),
+            static_cast<float>(DX12Context::g_windowWidth),
+            static_cast<float>(DX12Context::g_windowHeight), placement)) {
+      return Scene::ImportModelAsync(WStringToUtf8(path), placement);
+    }
     return Scene::ImportModelAsync(WStringToUtf8(path));
   }
 
@@ -2049,7 +2060,15 @@ static bool ImportFirstDroppedModelFile(HDROP drop) {
     return false;
   }
 
-  const bool startedImport = ImportFirstDroppedModelFileHandle(drop);
+  POINT dropPoint = {};
+  const POINT *dropScreenPoint = nullptr;
+  if (DragQueryPoint(drop, &dropPoint) && g_hwnd &&
+      ClientToScreen(g_hwnd, &dropPoint)) {
+    dropScreenPoint = &dropPoint;
+  }
+
+  const bool startedImport =
+      ImportFirstDroppedModelFileHandle(drop, dropScreenPoint);
 
   DragFinish(drop);
   return startedImport;
@@ -2107,7 +2126,7 @@ public:
   HRESULT STDMETHODCALLTYPE DragLeave() override { return S_OK; }
 
   HRESULT STDMETHODCALLTYPE Drop(IDataObject *dataObject, DWORD,
-                                 POINTL, DWORD *effect) override {
+                                 POINTL dropPoint, DWORD *effect) override {
     if (!effect) {
       return E_POINTER;
     }
@@ -2122,8 +2141,9 @@ public:
 
     bool startedImport = false;
     if (medium.tymed == TYMED_HGLOBAL && medium.hGlobal) {
+      const POINT dropScreenPoint = {dropPoint.x, dropPoint.y};
       startedImport = ImportFirstDroppedModelFileHandle(
-          static_cast<HDROP>(medium.hGlobal));
+          static_cast<HDROP>(medium.hGlobal), &dropScreenPoint);
     }
     ReleaseStgMedium(&medium);
     *effect = startedImport ? DROPEFFECT_COPY : DROPEFFECT_NONE;

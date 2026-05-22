@@ -108,6 +108,7 @@ struct ImportedNodePayload {
   std::string sourcePath;
   std::string displayName;
   std::string importGroupKey;
+  std::array<float, 3> rootTranslation = {};
   std::vector<Asset::GpuMesh> meshes;
   std::vector<Asset::ImportedSceneNode> sceneNodes;
   std::vector<Asset::Material> materials;
@@ -117,6 +118,7 @@ struct ImportedNodePayload {
   std::vector<Asset::Texture> textures;
   std::vector<std::string> textureSourceUris;
   bool materialsContainFullDefinitions = true;
+  bool hasRootTranslation = false;
 };
 
 struct GpuUploadStats {
@@ -129,7 +131,11 @@ struct GpuUploadStats {
 // Import a model (glTF, OBJ, STL) file into the scene. Returns true on success.
 bool ImportModel(const std::string &utf8path,
                  const float *rootTranslation = nullptr);
-bool ImportModelAsync(const std::string &utf8path);
+bool ImportModelAsync(const std::string &utf8path,
+                      const float *rootTranslation = nullptr);
+bool ResolveViewportImportPlacement(float screenX, float screenY,
+                                    float screenWidth, float screenHeight,
+                                    float outTranslation[3]);
 bool ReimportNode(size_t index);
 bool CanReimportNode(size_t index);
 // Open file dialog and import selected model
