@@ -1035,6 +1035,12 @@ void SetupTiledExportJob(RenderExportJobState &job) {
   // Allocate CPU full-frame HDR buffer (R16G16B16A16_FLOAT = 8 bytes/pixel)
   const size_t totalPixels = (size_t)t.fullWidth * t.fullHeight;
   t.cpuBeautyBuffer.resize(totalPixels * 8);
+  if (job.targetDenoiserIndex != 0) {
+    t.cpuAlbedoGuideBuffer.resize(totalPixels * 8);
+    t.cpuNormalGuideBuffer.resize(totalPixels * 8);
+  }
+  t.guidesCaptured = false;
+  t.guideReadbackFailed = false;
 
   fprintf(stderr,
           "Tiled panorama export: %ux%u -> %u tiles (%ux%u render size)\n",
@@ -1059,14 +1065,14 @@ bool AdvanceToNextTile(RenderExportJobState &job) {
   return true;
 }
 
-// Composite a readback tile into the full-frame HDR panorama buffer.
-// srcData: tile-size R16G16B16A16_FLOAT data (8 bytes/pixel)
-void CompositeTileToHdrPanorama(RenderExportTileState &t,
-                                       const std::vector<uint8_t> &srcData) {
+// Composite a readback tile into a full-frame tightly packed Half4 buffer.
+bool CompositeTileToHalf4Buffer(RenderExportTileState &t,
+                                const std::vector<uint8_t> &srcData,
+                                std::vector<uint8_t> &dstData) {
   if (!t.enabled || t.fullWidth == 0 || t.fullHeight == 0 ||
       t.tileWidth == 0 || t.tileHeight == 0 ||
       t.tileOffsetY >= t.fullHeight) {
-    return;
+    return false;
   }
   const size_t tileRowBytes = t.tileWidth * 8; // R16G16B16A16
   const size_t fullRowBytes = t.fullWidth * 8;
@@ -1075,17 +1081,24 @@ void CompositeTileToHdrPanorama(RenderExportTileState &t,
   const size_t bytesToCopy =
       (std::min)(tileRowBytes, fullRowBytes - (size_t)t.tileOffsetX * 8);
   if (srcData.size() < tileRowBytes * (size_t)t.tileHeight ||
-      t.cpuBeautyBuffer.size() < fullRowBytes * (size_t)t.fullHeight) {
-    return;
+      dstData.size() < fullRowBytes * (size_t)t.fullHeight) {
+    return false;
   }
   for (UINT row = 0; row < rowsToCopy; ++row) {
     const size_t srcOffset = row * tileRowBytes;
     const size_t dstOffset = ((size_t)(t.tileOffsetY + row) * fullRowBytes) +
                              (size_t)t.tileOffsetX * 8;
-    memcpy(t.cpuBeautyBuffer.data() + dstOffset,
-           srcData.data() + srcOffset,
+    memcpy(dstData.data() + dstOffset, srcData.data() + srcOffset,
            bytesToCopy);
   }
+  return true;
+}
+
+// Composite a readback tile into the full-frame HDR panorama buffer.
+// srcData: tile-size R16G16B16A16_FLOAT data (8 bytes/pixel)
+void CompositeTileToHdrPanorama(RenderExportTileState &t,
+                                       const std::vector<uint8_t> &srcData) {
+  (void)CompositeTileToHalf4Buffer(t, srcData, t.cpuBeautyBuffer);
 }
 
 // Simple HDR tonemap + convert to RGBA8 for the full panorama buffer.
@@ -2061,6 +2074,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
         const float noise = DxrRenderer::GetCurrentNoiseLevel();
         const bool hasNoise = DxrRenderer::HasNoiseEstimate();
         const bool denoiserEnabled =
+          !g_renderExportJob.tileState.enabled &&
           (g_renderExportJob.targetDenoiserIndex != 0);
         ImGui::Separator();
         ImGui::Text("Progress: %u / %d SPP", spp,

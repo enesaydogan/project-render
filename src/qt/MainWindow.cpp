@@ -447,7 +447,10 @@ double CurrentRenderItemProgress()
         static_cast<double>(std::max(1, g_renderExportJob.targetMaxSpp));
     progress = std::clamp(progress, 0.0, 1.0);
     if (g_renderExportJob.completionArmed) {
-        const int settleTotal = g_renderExportJob.targetDenoiserIndex == 0 ? 1 : 3;
+        const bool renderDenoiserActive =
+            !g_renderExportJob.tileState.enabled &&
+            g_renderExportJob.targetDenoiserIndex != 0;
+        const int settleTotal = renderDenoiserActive ? 3 : 1;
         const double settleProgress =
             1.0 - static_cast<double>(std::max(0, g_renderExportJob.settleFramesRemaining)) /
                       static_cast<double>(std::max(1, settleTotal));
@@ -2335,7 +2338,8 @@ void MainWindow::updateRenderExportProgressUi()
     } else {
         details << tr("Noise: calculating");
     }
-    if (g_renderExportJob.targetDenoiserIndex != 0) {
+    if (!g_renderExportJob.tileState.enabled &&
+        g_renderExportJob.targetDenoiserIndex != 0) {
         details << tr("Denoiser: %1")
                        .arg(DxrRenderer::HasDenoisedOutput() ? tr("ready") : tr("waiting"));
     }

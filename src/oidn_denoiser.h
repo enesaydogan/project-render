@@ -35,6 +35,12 @@ public:
   bool RunDenoiseHostHalf4(const void* input, uint32_t width, uint32_t height,
                            size_t inputRowPitchBytes, void* output,
                            size_t outputRowPitchBytes);
+  bool RunDenoiseHostHalf4(const void* input, const void* albedo,
+                           const void* normal, uint32_t width,
+                           uint32_t height, size_t inputRowPitchBytes,
+                           size_t albedoRowPitchBytes,
+                           size_t normalRowPitchBytes, void* output,
+                           size_t outputRowPitchBytes);
 
   enum class Quality {
     Fast,

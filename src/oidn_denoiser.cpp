@@ -327,6 +327,15 @@ bool OidnDenoiser::RunDenoiseHostHalf4(const void* input, uint32_t width,
                                       uint32_t height,
                                       size_t inputRowPitchBytes, void* output,
                                       size_t outputRowPitchBytes) {
+  return RunDenoiseHostHalf4(input, nullptr, nullptr, width, height,
+                             inputRowPitchBytes, 0, 0, output,
+                             outputRowPitchBytes);
+}
+
+bool OidnDenoiser::RunDenoiseHostHalf4(
+    const void* input, const void* albedo, const void* normal, uint32_t width,
+    uint32_t height, size_t inputRowPitchBytes, size_t albedoRowPitchBytes,
+    size_t normalRowPitchBytes, void* output, size_t outputRowPitchBytes) {
   if (!input || !output || width == 0 || height == 0)
     return false;
 
@@ -341,9 +350,9 @@ bool OidnDenoiser::RunDenoiseHostHalf4(const void* input, uint32_t width,
 
     oidn::DeviceRef& dev = *static_cast<oidn::DeviceRef*>(m_oidnCpuDevice);
 
-    const size_t sanitizedBytes = inputRowPitchBytes * (size_t)height;
-    m_cpuSanitizedInput.resize(sanitizedBytes);
-    uint8_t* sanitized = m_cpuSanitizedInput.data();
+    const size_t colorBytes = inputRowPitchBytes * (size_t)height;
+    std::vector<uint8_t> sanitizedColor(colorBytes);
+    uint8_t* sanitized = sanitizedColor.data();
     const uint8_t* inBytes = reinterpret_cast<const uint8_t*>(input);
     for (uint32_t y = 0; y < height; ++y) {
       std::memcpy(sanitized + (size_t)y * inputRowPitchBytes,
@@ -353,44 +362,37 @@ bool OidnDenoiser::RunDenoiseHostHalf4(const void* input, uint32_t width,
     (void)SanitizeOidnHalf4Rows(sanitized, width, height,
                                 inputRowPitchBytes, 0);
 
-    const bool needsUpdate = (!m_oidnCpuFilter || width != m_cpuWidth ||
-                              height != m_cpuHeight ||
-                              inputRowPitchBytes != m_cpuInputRowPitchBytes ||
-                              sanitized != m_cpuSanitizedInputPtr ||
-                              m_quality != m_cpuLastQuality);
-    if (needsUpdate) {
-      if (m_oidnCpuFilter) {
-        delete static_cast<oidn::FilterRef*>(m_oidnCpuFilter);
-        m_oidnCpuFilter = nullptr;
-      }
+    std::vector<uint8_t> sanitizedAlbedo;
+    std::vector<uint8_t> sanitizedNormal;
+    const bool hasAlbedo =
+        albedo && albedoRowPitchBytes >= (size_t)width * 8;
+    const bool hasNormal =
+        normal && normalRowPitchBytes >= (size_t)width * 8;
 
-      oidn::FilterRef filter = dev.newFilter("RT");
-      // Denoise RGB only (Half3) but keep a pixel stride of 8 bytes to match
-      // our Half4 layout. This avoids any ambiguity around alpha handling.
-      // Provide explicit row strides (mapped readback buffers use padded rows).
-      filter.setImage("color", sanitized, oidn::Format::Half3, width, height, 0,
-              8, inputRowPitchBytes);
-      filter.setImage("output", output, oidn::Format::Half3, width, height, 0,
-              8, outputRowPitchBytes);
-      filter.set("hdr", true);
-      switch (m_quality) {
-      case Quality::Fast:
-        filter.set("quality", OIDN_QUALITY_FAST);
-        break;
-      case Quality::Balanced:
-        filter.set("quality", OIDN_QUALITY_BALANCED);
-        break;
-      case Quality::High:
-        filter.set("quality", OIDN_QUALITY_HIGH);
-        break;
+    if (hasAlbedo) {
+      const size_t bytes = albedoRowPitchBytes * (size_t)height;
+      sanitizedAlbedo.resize(bytes);
+      const uint8_t* src = reinterpret_cast<const uint8_t*>(albedo);
+      for (uint32_t y = 0; y < height; ++y) {
+        std::memcpy(sanitizedAlbedo.data() + (size_t)y * albedoRowPitchBytes,
+                    src + (size_t)y * albedoRowPitchBytes,
+                    (size_t)width * 8);
       }
-      filter.commit();
-      m_oidnCpuFilter = new oidn::FilterRef(filter);
-      m_cpuWidth = width;
-      m_cpuHeight = height;
-      m_cpuInputRowPitchBytes = inputRowPitchBytes;
-      m_cpuSanitizedInputPtr = sanitized;
-      m_cpuLastQuality = m_quality;
+      (void)SanitizeOidnHalf4Rows(sanitizedAlbedo.data(), width, height,
+                                  albedoRowPitchBytes, 1);
+    }
+
+    if (hasNormal) {
+      const size_t bytes = normalRowPitchBytes * (size_t)height;
+      sanitizedNormal.resize(bytes);
+      const uint8_t* src = reinterpret_cast<const uint8_t*>(normal);
+      for (uint32_t y = 0; y < height; ++y) {
+        std::memcpy(sanitizedNormal.data() + (size_t)y * normalRowPitchBytes,
+                    src + (size_t)y * normalRowPitchBytes,
+                    (size_t)width * 8);
+      }
+      (void)SanitizeOidnHalf4Rows(sanitizedNormal.data(), width, height,
+                                  normalRowPitchBytes, 2);
     }
 
     // Preserve alpha (and any padding) by copying input->output first.
@@ -404,7 +406,37 @@ bool OidnDenoiser::RunDenoiseHostHalf4(const void* input, uint32_t width,
              rowCopyBytes);
     }
 
-    oidn::FilterRef& filter = *static_cast<oidn::FilterRef*>(m_oidnCpuFilter);
+    oidn::FilterRef filter = dev.newFilter("RT");
+    // Denoise RGB only (Half3) but keep a pixel stride of 8 bytes to match
+    // our Half4 layout. This avoids any ambiguity around alpha handling.
+    filter.setImage("color", sanitized, oidn::Format::Half3, width, height, 0,
+                    8, inputRowPitchBytes);
+    if (hasAlbedo) {
+      filter.setImage("albedo", sanitizedAlbedo.data(), oidn::Format::Half3,
+                      width, height, 0, 8, albedoRowPitchBytes);
+    }
+    if (hasNormal) {
+      filter.setImage("normal", sanitizedNormal.data(), oidn::Format::Half3,
+                      width, height, 0, 8, normalRowPitchBytes);
+    }
+    filter.setImage("output", output, oidn::Format::Half3, width, height, 0,
+                    8, outputRowPitchBytes);
+    filter.set("hdr", true);
+    if (hasAlbedo || hasNormal) {
+      filter.set("cleanAux", true);
+    }
+    switch (m_quality) {
+    case Quality::Fast:
+      filter.set("quality", OIDN_QUALITY_FAST);
+      break;
+    case Quality::Balanced:
+      filter.set("quality", OIDN_QUALITY_BALANCED);
+      break;
+    case Quality::High:
+      filter.set("quality", OIDN_QUALITY_HIGH);
+      break;
+    }
+    filter.commit();
     filter.execute();
     dev.sync();
     return true;
@@ -417,6 +449,10 @@ bool OidnDenoiser::RunDenoiseHostHalf4(const void* input, uint32_t width,
   (void)width;
   (void)height;
   (void)inputRowPitchBytes;
+  (void)albedo;
+  (void)normal;
+  (void)albedoRowPitchBytes;
+  (void)normalRowPitchBytes;
   (void)output;
   (void)outputRowPitchBytes;
   return false;

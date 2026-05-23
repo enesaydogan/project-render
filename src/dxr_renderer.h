@@ -281,6 +281,11 @@ bool SaveRgba8BufferToPng(const std::wstring &filePath,
 bool DenoiseHostBeautyHalf4(const std::vector<uint8_t> &input,
                             UINT width, UINT height,
                             std::vector<uint8_t> &output);
+bool DenoiseHostBeautyGuidedHalf4(const std::vector<uint8_t> &input,
+                                  const std::vector<uint8_t> &albedo,
+                                  const std::vector<uint8_t> &normal,
+                                  UINT width, UINT height,
+                                  std::vector<uint8_t> &output);
 } // namespace DxrRenderer
 
 extern bool g_rayTracingSupported;

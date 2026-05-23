@@ -45,6 +45,7 @@ struct RenderExportTileState {
   std::vector<uint8_t> cpuAlbedoGuideBuffer;
   std::vector<uint8_t> cpuNormalGuideBuffer;
   bool guidesCaptured = false;
+  bool guideReadbackFailed = false;
 };
 
 struct RenderExportJobState {
@@ -175,6 +176,9 @@ void SetupTiledExportJob(RenderExportJobState &job);
 bool AdvanceToNextTile(RenderExportJobState &job);
 void CompositeTileToHdrPanorama(RenderExportTileState &t,
                                 const std::vector<uint8_t> &srcData);
+bool CompositeTileToHalf4Buffer(RenderExportTileState &t,
+                                const std::vector<uint8_t> &srcData,
+                                std::vector<uint8_t> &dstData);
 void TonemapHdrPanoramaToRgba8(const std::vector<uint8_t> &hdrBuffer,
                                 UINT width, UINT height,
                                 std::vector<uint8_t> &outRgba);

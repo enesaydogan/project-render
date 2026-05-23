@@ -8521,14 +8521,18 @@ bool ReadbackBeautyTile(std::vector<uint8_t> &outData,
 bool ReadbackGuideTiles(std::vector<uint8_t> &outAlbedo,
                         std::vector<uint8_t> &outNormal,
                         UINT tileWidth, UINT tileHeight) {
-  if (!s_albedoUAV || !s_normalRoughnessUAV ||
-      tileWidth == 0 || tileHeight == 0)
+  ID3D12Resource *albedoGuide =
+      s_oidnAlbedoGuideUAV ? s_oidnAlbedoGuideUAV.Get() : s_albedoUAV.Get();
+  ID3D12Resource *normalGuide = s_oidnNormalRoughnessGuideUAV
+                                    ? s_oidnNormalRoughnessGuideUAV.Get()
+                                    : s_normalRoughnessUAV.Get();
+  if (!albedoGuide || !normalGuide || tileWidth == 0 || tileHeight == 0)
     return false;
-  if (!ReadbackTextureToCpu(s_albedoUAV.Get(),
+  if (!ReadbackTextureToCpu(albedoGuide,
                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                             tileWidth, tileHeight, 8, outAlbedo))
     return false;
-  return ReadbackTextureToCpu(s_normalRoughnessUAV.Get(),
+  return ReadbackTextureToCpu(normalGuide,
                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                               tileWidth, tileHeight, 8, outNormal);
 }
@@ -8557,6 +8561,27 @@ bool DenoiseHostBeautyHalf4(const std::vector<uint8_t> &input,
   return s_oidnDenoiser.RunDenoiseHostHalf4(input.data(), width, height,
                                             rowPitch, output.data(),
                                             rowPitch);
+}
+
+bool DenoiseHostBeautyGuidedHalf4(const std::vector<uint8_t> &input,
+                                  const std::vector<uint8_t> &albedo,
+                                  const std::vector<uint8_t> &normal,
+                                  UINT width, UINT height,
+                                  std::vector<uint8_t> &output) {
+  const size_t rowPitch = (size_t)width * 8;
+  const size_t requiredBytes = rowPitch * (size_t)height;
+  if (width == 0 || height == 0 || input.size() < requiredBytes ||
+      albedo.size() < requiredBytes || normal.size() < requiredBytes) {
+    return false;
+  }
+  if (!s_oidnDenoiser.Initialize(s_device)) {
+    return false;
+  }
+  s_oidnDenoiser.SetQuality(s_oidnQuality);
+  output.resize(requiredBytes);
+  return s_oidnDenoiser.RunDenoiseHostHalf4(
+      input.data(), albedo.data(), normal.data(), width, height, rowPitch,
+      rowPitch, rowPitch, output.data(), rowPitch);
 }
 
 static float HalfToFloat(uint16_t h) {

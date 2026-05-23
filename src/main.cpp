@@ -3870,8 +3870,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       if (reachedEnd && !g_renderExportJob.completionArmed) {
         g_renderExportJob.completionArmed = true;
         g_renderExportJob.completionFrames = 0;
+        const bool renderDenoiserActive =
+            !g_renderExportJob.tileState.enabled &&
+            (g_renderExportJob.targetDenoiserIndex != 0);
         g_renderExportJob.settleFramesRemaining =
-          (g_renderExportJob.targetDenoiserIndex == 0) ? 1 : 3;
+            renderDenoiserActive ? 3 : 1;
       }
 
       if (g_renderExportJob.completionArmed) {
@@ -3907,6 +3910,29 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                   tileData.size() >=
                       (size_t)t.tileWidth * t.tileHeight * 8) {
                 CompositeTileToHdrPanorama(t, tileData);
+                if (g_renderExportJob.targetDenoiserIndex != 0 &&
+                    !t.cpuAlbedoGuideBuffer.empty() &&
+                    !t.cpuNormalGuideBuffer.empty()) {
+                  std::vector<uint8_t> tileAlbedo;
+                  std::vector<uint8_t> tileNormal;
+                  if (DxrRenderer::ReadbackGuideTiles(
+                          tileAlbedo, tileNormal, t.tileWidth,
+                          t.tileHeight) &&
+                      CompositeTileToHalf4Buffer(
+                          t, tileAlbedo, t.cpuAlbedoGuideBuffer) &&
+                      CompositeTileToHalf4Buffer(
+                          t, tileNormal, t.cpuNormalGuideBuffer)) {
+                    t.guidesCaptured = !t.guideReadbackFailed;
+                  } else {
+                    t.guidesCaptured = false;
+                    t.guideReadbackFailed = true;
+                    fprintf(stderr,
+                            "Tiled export: guide readback failed for tile "
+                            "%u/%u; final panorama denoise will be skipped.\n",
+                            t.currentTileIndex + 1,
+                            t.tileCountX * t.tileCountY);
+                  }
+                }
                 fprintf(stderr,
                         "Tiled export: tile %u/%u done (%ux%u at offset %u,%u)\n",
                         t.currentTileIndex + 1,
@@ -3944,15 +3970,30 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                       &t.cpuBeautyBuffer;
                   std::vector<uint8_t> denoisedBeauty;
                   if (g_renderExportJob.targetDenoiserIndex != 0) {
-                    g_renderExportStatus = "Denoising panorama...";
-                    if (DxrRenderer::DenoiseHostBeautyHalf4(
-                            t.cpuBeautyBuffer, t.fullWidth, t.fullHeight,
-                            denoisedBeauty)) {
-                      beautyForTonemap = &denoisedBeauty;
+                    if (t.guidesCaptured && !t.guideReadbackFailed &&
+                        t.cpuAlbedoGuideBuffer.size() ==
+                            t.cpuBeautyBuffer.size() &&
+                        t.cpuNormalGuideBuffer.size() ==
+                            t.cpuBeautyBuffer.size()) {
+                      g_renderExportStatus =
+                          "Denoising panorama with guides...";
+                      fprintf(stderr,
+                              "Tiled export: running full panorama CPU OIDN "
+                              "with stitched guides.\n");
+                      if (DxrRenderer::DenoiseHostBeautyGuidedHalf4(
+                              t.cpuBeautyBuffer, t.cpuAlbedoGuideBuffer,
+                              t.cpuNormalGuideBuffer, t.fullWidth,
+                              t.fullHeight, denoisedBeauty)) {
+                        beautyForTonemap = &denoisedBeauty;
+                      } else {
+                        fprintf(stderr,
+                                "Tiled export: guided CPU OIDN failed; "
+                                "saving accumulated panorama.\n");
+                      }
                     } else {
                       fprintf(stderr,
-                              "Tiled export: CPU OIDN failed, saving noisy "
-                              "panorama.\n");
+                              "Tiled export: stitched guides unavailable; "
+                              "saving accumulated panorama without denoise.\n");
                     }
                   }
                   std::vector<uint8_t> rgbaOut;
