@@ -1,20 +1,24 @@
-# project-render 0.4.0 - High-End ArchViz Real-Time Engine
+#- IMPORTANT NOTE -
+
+#I created this renderer for my use. I dont know any coding. 99% of the code is from #Agentic coding. It does the job for me. And features i put in based on projects i made. If #projects need spherical panoram i add spherical panorama. Currently dont have any #licensing, and i dont now anything about it. Its free and always be free. I hope you like #it. Good Luck! 
+
+# project-render 0.4.5 - High-End ArchViz Real-Time Engine
 
 `project-render` is a real-time rendering engine for high-fidelity Architectural Visualization (ArchViz). It uses DirectX 12, DXR ray tracing, NVIDIA Streamline, and optional final-frame denoisers for physically based lighting and export workflows.
 
 ---
 
-## What's New in 0.4.0
+## What's New in 0.4.5
 
-- **Wavefront-first DXR renderer**: The legacy raygen path was removed and the renderer now builds around the wavefront primary, secondary, shadow, resolve, ReSTIR, and accumulation stages.
-- **Material system overhaul**: OpenPBR-oriented material classes, authoring defaults, texture weights, stochastic tiling, tri-planar controls, and Qt material inspector workflows were expanded and made faster.
-- **Parallax and window-box mapping**: Added height parallax, window-box parallax, and back-face options for reversed architectural window planes.
-- **Qt editor polish**: Added toolbar icons, transform undo/redo, selected-material auto focus, orphaned data cleanup, render/export progress UI, and a custom arch-viz color picker with RGB/HSV/Kelvin controls and variation strips.
-- **Scatter and grass improvements**: Added scatter tooling passes and improved procedural grass/foliage behavior for architectural scenes.
-- **Camera and environment workflow**: Added white balance controls, saved-camera material setting persistence, preview-render improvements, larger cloud resources, and IBL/wavefront boost fixes.
-- **Import and save/load robustness**: Improved UTF-8/non-English path handling, fixed scene save/load issues, cleaned reimport/orphan paths, and blocked app exit while save/load is running to prevent data loss.
-- **Denoiser/export stability**: Sanitized OIDN inputs to prevent NaN/Inf export failures, fixed DXR AO after the wavefront migration, and improved final-frame export safety.
-- **LiveLink fixes**: Improved Archicad and 3ds Max LiveLink material/geometry sync behavior and plugin packaging support.
+- **Major VRAM and memory work**: Added GPU-side BC texture compression, texture usage detection, a detailed VRAM Breakdown tool, and additional renderer memory reductions aimed at fitting larger arch-viz scenes on smaller GPUs.
+- **Tile-based high-resolution export**: Added tile rendering for large panorama and perspective stills so 4K+ exports can be rendered in smaller GPU-memory slices, then stitched into the final image.
+- **Guide-aware tiled denoising**: Tiled exports now stitch HDR beauty plus OIDN albedo/normal guide buffers and run a final full-frame CPU OIDN pass for cleaner output without per-tile denoise seams.
+- **Panorama and perspective export upgrades**: Added spherical 360 render export, vertical tilt correction, custom resolution controls, aspect-ratio locking, and corrected perspective tile projection.
+- **More reliable final render stopping**: Export progress now honors the configured noise stop directly while still stopping at Max SPP if that comes first.
+- **Export UX polish**: Added clearer tile progress, denoising progress feedback, tile-render warnings, automatic higher SPP defaults for tiled rendering, and a cleaner batch-render UI.
+- **Scene and import reliability**: Improved scene save/load performance, first-interaction stability after loading, drag-and-drop import placement, SketchUp texture channel handling, and close/save reminder behavior.
+- **Editor and material workflow improvements**: Added UV rotation controls, live material/light color preview, mirror tools, Clay Render options, material thumbnail fixes after compression, and several Qt polish passes.
+- **Denoiser robustness**: Improved OIDN handling for NaN/Inf and emissive edge cases, plus safer export denoise behavior for tiled and non-tiled renders.
 
 ---
 
@@ -163,7 +167,7 @@ Check `tools/3dsmax2025/README.md` or `tools/archicad28/README.md` for plugin in
 
 ### Troubleshooting
 - **Grey viewport**: Ensure a sky model is selected or an HDRI is loaded in the Environment panel.
-- **Non-English file paths**: 0.4.0 improves UTF-8 path handling for glTF/GLB and scene I/O. If an importer still fails, try moving the asset to a short ASCII-only path and report the original path.
+- **Non-English file paths**: 0.4.5 keeps the UTF-8 path handling improvements for glTF/GLB and scene I/O. If an importer still fails, try moving the asset to a short ASCII-only path and report the original path.
 - **OptiX stub log**: Reconfigure and rebuild the exact executable you launch with `-DUSE_OPTIX_DENOISER=ON`.
 - **OptiX runtime failure**: Verify CUDA Toolkit installation, NVIDIA driver support, and that the D3D12 adapter matches the CUDA device.
 - **Deleting objects with DXR enabled**: The renderer forces an acceleration-structure rebuild. If you see crashes, verify build geometry flags.
