@@ -33,6 +33,7 @@ public:
 
     // access to the central DX12 rendering widget
     DX12View *view() const { return m_view; }
+    void refreshRenderExportProgressUiNow();
 
 protected:
     void closeEvent(QCloseEvent *event) override;

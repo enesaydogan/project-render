@@ -3862,10 +3862,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       const bool noiseDone =
           (currentSpp >= g_renderExportJob.minSppBeforeNoiseStop) &&
           hasNoiseEstimate &&
-          (currentNoise <= g_renderExportJob.targetNoiseThreshold * 0.90f);
+          (currentNoise <= g_renderExportJob.targetNoiseThreshold);
 
         const bool reachedEnd =
-          g_renderExportJob.allowNoiseThresholdStop ? noiseDone : sppDone;
+          sppDone || (g_renderExportJob.allowNoiseThresholdStop && noiseDone);
 
       if (reachedEnd && !g_renderExportJob.completionArmed) {
         g_renderExportJob.completionArmed = true;
@@ -3977,9 +3977,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                             t.cpuBeautyBuffer.size()) {
                       g_renderExportStatus =
                           "Denoising panorama with guides...";
-                      // Force UI refresh so user sees "Denoising..." before
-                      // the blocking CPU OIDN call (which can take seconds).
 #ifdef USE_QT_UI
+                      w.refreshRenderExportProgressUiNow();
                       QApplication::processEvents();
 #endif
                       fprintf(stderr,

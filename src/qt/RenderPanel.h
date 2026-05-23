@@ -38,6 +38,7 @@ private:
     QCheckBox *m_batchSavedViews = nullptr;
     QCheckBox *m_tileRendering = nullptr;
     QLineEdit *m_batchBaseName = nullptr;
+    QLabel *m_tileRenderingWarning = nullptr;
 
     QProgressBar *m_progressBar = nullptr;
     QPushButton *m_renderButton = nullptr;

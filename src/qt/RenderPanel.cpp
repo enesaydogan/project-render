@@ -122,6 +122,11 @@ void RenderPanel::createUi()
     m_tileRendering = new QCheckBox(
         tr("Tile-based rendering (saves VRAM)"), settingsGroup);
     m_tileRendering->setChecked(g_renderExportSettings.tileRenderingEnabled);
+    m_tileRenderingWarning = new QLabel(
+        tr("Higher Spp recomended while tile render selected to ensure quality does not slip between tiles to prevent artifacts on final image."),
+        settingsGroup);
+    m_tileRenderingWarning->setWordWrap(true);
+    m_tileRenderingWarning->setStyleSheet(QStringLiteral("QLabel { color: #ff9944; font-weight: bold; }"));
     settingsForm->addRow(tr("Render Resolution"), m_resolutionPreset);
     settingsForm->addRow(tr("Max SPP"), m_maxSpp);
     settingsForm->addRow(tr("Noise %"), m_noisePercent);
@@ -129,6 +134,7 @@ void RenderPanel::createUi()
     settingsForm->addRow(QString(), m_batchSavedViews);
     settingsForm->addRow(tr("Batch Base Name"), m_batchBaseName);
     settingsForm->addRow(QString(), m_tileRendering);
+    settingsForm->addRow(QString(), m_tileRenderingWarning);
     layout->addWidget(settingsGroup);
 
     auto *statusGroup = new QGroupBox(tr("Status"), this);
@@ -157,7 +163,11 @@ void RenderPanel::createUi()
     connect(m_batchBaseName, &QLineEdit::editingFinished, this, [this]() {
         updateExportSettings();
     });
-    connect(m_tileRendering, &QCheckBox::toggled, this, [this](bool) {
+    connect(m_tileRendering, &QCheckBox::toggled, this, [this](bool checked) {
+        if (m_syncing) {
+            return;
+        }
+        m_maxSpp->setValue(checked ? 1000.0 : 200.0);
         updateExportSettings();
     });
     connect(m_renderButton, &QPushButton::clicked, this, [this]() {
@@ -230,6 +240,15 @@ void RenderPanel::syncFromRenderer()
     m_denoiser->setEnabled(!active);
     m_batchSavedViews->setEnabled(!active);
     m_batchBaseName->setEnabled(!active && batchEnabled);
+    m_batchBaseName->setVisible(batchEnabled);
+    if (auto *form = qobject_cast<QFormLayout *>(m_batchBaseName->parentWidget()
+            ? m_batchBaseName->parentWidget()->layout()
+            : nullptr)) {
+        if (QWidget *label = form->labelForField(m_batchBaseName)) {
+            label->setVisible(batchEnabled);
+        }
+    }
+    m_tileRenderingWarning->setVisible(g_renderExportSettings.tileRenderingEnabled);
     m_renderButton->setText(batchEnabled ? tr("Render Saved Views...")
                                          : tr("Render And Export PNG..."));
 

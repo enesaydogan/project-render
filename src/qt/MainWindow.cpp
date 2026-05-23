@@ -1727,6 +1727,11 @@ void MainWindow::showRenderPopup()
     auto *tileRendering = new QCheckBox(
         tr("Tile-based rendering (saves VRAM on large renders)"), resolutionGroup);
     tileRendering->setChecked(g_renderExportSettings.tileRenderingEnabled);
+    auto *tileRenderingWarning = new QLabel(
+        tr("Higher Spp recomended while tile render selected to ensure quality does not slip between tiles to prevent artifacts on final image."),
+        resolutionGroup);
+    tileRenderingWarning->setWordWrap(true);
+    tileRenderingWarning->setStyleSheet(QStringLiteral("QLabel { color: #ff9944; font-weight: bold; }"));
 
     // VRAM warning label
     auto *vramWarning = new QLabel(resolutionGroup);
@@ -1742,6 +1747,7 @@ void MainWindow::showRenderPopup()
     resolutionForm->addRow(tr("Projection"), projection);
     resolutionForm->addRow(tr("Output"), resolutionInfo);
     resolutionForm->addRow(QString(), tileRendering);
+    resolutionForm->addRow(QString(), tileRenderingWarning);
     resolutionForm->addRow(QString(), vramWarning);
 
     // Initial visibility
@@ -2007,6 +2013,11 @@ void MainWindow::showRenderPopup()
         stillGroup->setEnabled(stillMode->isChecked());
         sequenceGroup->setEnabled(sequenceMode->isChecked());
         batchBaseName->setEnabled(batchSavedViews->isChecked());
+        batchBaseName->setVisible(batchSavedViews->isChecked());
+        if (QWidget *label = stillForm->labelForField(batchBaseName)) {
+            label->setVisible(batchSavedViews->isChecked());
+        }
+        tileRenderingWarning->setVisible(tileRendering->isChecked());
         previewButton->setEnabled(stillMode->isChecked() && g_rayTracingSupported &&
                                   !IsRenderExportActive());
         renderButton->setEnabled(g_rayTracingSupported &&
@@ -2041,7 +2052,10 @@ void MainWindow::showRenderPopup()
     connect(customHeight, qOverload<int>(&QSpinBox::valueChanged),
             &dialog, updateSummary);
     connect(lockRatio, &QCheckBox::toggled, &dialog, updateSummary);
-    connect(tileRendering, &QCheckBox::toggled, &dialog, updateSummary);
+    connect(tileRendering, &QCheckBox::toggled, &dialog, [=](bool checked) {
+        samples->setValue(checked ? 1000 : 200);
+        updateSummary();
+    });
     connect(ratioEdit, &QLineEdit::editingFinished, &dialog, updateSummary);
     connect(sequenceFps, qOverload<int>(&QSpinBox::valueChanged),
             &dialog, updateSummary);
@@ -2393,6 +2407,11 @@ void MainWindow::closeRenderExportProgressUi()
     dialog->deleteLater();
 }
 
+void MainWindow::refreshRenderExportProgressUiNow()
+{
+    updateRenderExportProgressUi();
+}
+
 void MainWindow::updateRenderExportProgressUi()
 {
     if (!IsRenderExportActive()) {
@@ -2464,6 +2483,11 @@ void MainWindow::updateRenderExportProgressUi()
     int total = 1;
     QString title = preview ? tr("Rendering Preview") : tr("Rendering PNG");
     QString currentItem = BasenameForDisplay(g_renderExportJob.outputPath);
+    const QString statusText =
+        QString::fromUtf8(g_renderExportStatus.c_str());
+    const bool denoising =
+        statusText.contains(QStringLiteral("Denoising"),
+                            Qt::CaseInsensitive);
 
     if (batch) {
         title = tr("Rendering Camera Lister Batch");
@@ -2491,6 +2515,10 @@ void MainWindow::updateRenderExportProgressUi()
                           ? BasenameForDisplay(g_renderAnimationExport.currentOutputPath)
                           : QString::fromUtf8(g_renderAnimationExport.currentLabel.c_str());
     }
+    if (denoising) {
+        title = tr("Denoising PNG");
+        overallProgress = std::max(overallProgress, 0.995);
+    }
 
     overallProgress = std::clamp(overallProgress, 0.0, 1.0);
     const int progressPermille = static_cast<int>(overallProgress * 1000.0 + 0.5);
@@ -2511,6 +2539,9 @@ void MainWindow::updateRenderExportProgressUi()
                        .arg(tile.tileWidth)
                        .arg(tile.tileHeight)
                        .arg(tile.tileOffsetY);
+        if (denoising) {
+            details << tr("Denoising final image...");
+        }
     } else {
         details << tr("Resolution: %1 x %2")
                        .arg(g_renderExportJob.targetWidth)
@@ -2557,8 +2588,8 @@ void MainWindow::updateRenderExportProgressUi()
     timing << tr("Estimated total: %1")
                   .arg(totalEstimate > 0.0 ? FormatDurationCompact(totalEstimate)
                                            : tr("calculating"));
-    if (!g_renderExportStatus.empty()) {
-        timing << QString::fromUtf8(g_renderExportStatus.c_str());
+    if (!statusText.isEmpty()) {
+        timing << statusText;
     }
     m_renderProgressTiming->setText(timing.join(QStringLiteral(" | ")));
 

@@ -6064,10 +6064,15 @@ bool CanIdleWithoutRendering() {
       (g_cameraData.maxSPP > 0.0f) ? (UINT)g_cameraData.maxSPP : 0u;
 
   bool isConverged = false;
+  const bool exportNoiseStopMode =
+      g_cameraData.exportRendering > 0.5f &&
+      g_cameraData.useAdaptiveSampling > 0.5f;
   if (s_hasNoiseEstimate) {
     const bool adaptiveEnabled = (g_cameraData.useAdaptiveSampling > 0.5f);
     const UINT minNoiseStopSpp = adaptiveEnabled ? 32u : 24u;
-    const float stopThreshold = g_cameraData.noiseThreshold * 0.90f;
+    const float stopThreshold = exportNoiseStopMode
+                                    ? g_cameraData.noiseThreshold
+                                    : g_cameraData.noiseThreshold * 0.90f;
     const float resumeThreshold = g_cameraData.noiseThreshold * 1.20f;
     if (currSpp >= minNoiseStopSpp) {
       if (s_noiseConvergedLatched) {
@@ -6082,13 +6087,8 @@ bool CanIdleWithoutRendering() {
     }
   }
 
-  const bool exportNoiseStopMode =
-      g_cameraData.exportRendering > 0.5f &&
-      g_cameraData.useAdaptiveSampling > 0.5f;
   const bool reachedEndCondition =
-      exportNoiseStopMode ? isConverged
-                          : ((maxSpp > 0 && currSpp >= maxSpp) ||
-                             isConverged);
+      (maxSpp > 0 && currSpp >= maxSpp) || isConverged;
   if (!reachedEndCondition) {
     return false;
   }
@@ -6380,10 +6380,15 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
   // Global stop by measured noise with hysteresis to avoid stop/resume flicker.
   bool isConverged = false;
+  const bool exportNoiseStopMode =
+      g_cameraData.exportRendering > 0.5f &&
+      g_cameraData.useAdaptiveSampling > 0.5f;
   if (s_hasNoiseEstimate) {
     const bool adaptiveEnabled = (g_cameraData.useAdaptiveSampling > 0.5f);
     const UINT minNoiseStopSpp = adaptiveEnabled ? 32u : 24u;
-    const float stopThreshold = g_cameraData.noiseThreshold * 0.90f;
+    const float stopThreshold = exportNoiseStopMode
+                                    ? g_cameraData.noiseThreshold
+                                    : g_cameraData.noiseThreshold * 0.90f;
     const float resumeThreshold = g_cameraData.noiseThreshold * 1.20f;
     if (currSpp >= minNoiseStopSpp) {
       if (s_noiseConvergedLatched) {
@@ -6401,13 +6406,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   const uint32_t dxrFeatureMask =
       ComputeDxrFeatureMask(dlssActive, rrActive, debugViewActive,
                             isFinalDenoiserMode);
-  const bool exportNoiseStopMode =
-      g_cameraData.exportRendering > 0.5f &&
-      g_cameraData.useAdaptiveSampling > 0.5f;
   bool reachedEndCondition =
-      exportNoiseStopMode ? isConverged
-                          : ((maxSpp > 0 && currSpp >= maxSpp) ||
-                             isConverged);
+      (maxSpp > 0 && currSpp >= maxSpp) || isConverged;
 
   bool canAutoDenoise =
       isFinalDenoiserMode && reachedEndCondition && !s_hasDenoised;
