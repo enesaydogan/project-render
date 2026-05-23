@@ -1,6 +1,6 @@
 # - IMPORTANT NOTE -
 
-# I created this renderer for my use. I dont know any coding. 99% of the code is from Agentic coding. It does the job for me. And features i put in based on projects i made. If projects need spherical panoram i add spherical panorama. Currently dont have any licensing, and i dont now anything about it. Its free and always be free. I hope you like it. Good Luck! 
+# I created this renderer for my use. I dont know any coding. 99% of the code is from Agentic coding. It does the job for me. And features i put in based on projects i made. If projects need spherical panoram i add spherical panorama. Its free and always be free. I hope you like it. Good Luck! 
 
 # project-render 0.4.5 - High-End ArchViz Real-Time Engine
 
@@ -72,6 +72,16 @@ Due to licensing agreements, these SDKs are not included in the public repositor
 - `thirdparty/vray-sdk`: V-Ray AppSDK or headers, required only for specific V-Ray material conversion paths.
 
 Smaller dependencies such as OIDN and Streamline are included directly in the repo or fetched during build.
+
+---
+
+## License
+
+Project Render's own source code is intended to be released under the MIT License: free of charge, permissive, and suitable for personal, commercial, and open-source use.
+
+Third-party libraries, SDKs, runtimes, plugins, headers, and binary redistributables remain under their own licenses and vendor terms. In particular, Qt, OIDN, Assimp, Streamline/DLSS/NGX, OptiX, SketchUp SDK, Autodesk 3ds Max SDK, Graphisoft Archicad API DevKit, and Chaos V-Ray SDK are not relicensed by Project Render.
+
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for dependency notices and redistribution notes.
 
 ---
 
