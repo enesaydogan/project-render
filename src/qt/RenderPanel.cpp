@@ -229,9 +229,21 @@ void RenderPanel::syncFromRenderer()
         lines << tr("Progress: %1 / %2 SPP")
                      .arg(DxrRenderer::GetDisplayedSampleCount())
                      .arg(g_renderExportJob.targetMaxSpp);
-        lines << tr("Output: %1 x %2")
-                     .arg(g_renderExportJob.targetWidth)
-                     .arg(g_renderExportJob.targetHeight);
+        if (g_renderExportJob.tileState.enabled) {
+            const RenderExportTileState &tile = g_renderExportJob.tileState;
+            lines << tr("Output: %1 x %2")
+                         .arg(tile.fullWidth)
+                         .arg(tile.fullHeight);
+            lines << tr("Tile: %1 / %2 (%3 x %4)")
+                         .arg(tile.currentTileIndex + 1)
+                         .arg(tile.tileCountX * tile.tileCountY)
+                         .arg(tile.tileWidth)
+                         .arg(tile.tileHeight);
+        } else {
+            lines << tr("Output: %1 x %2")
+                         .arg(g_renderExportJob.targetWidth)
+                         .arg(g_renderExportJob.targetHeight);
+        }
         lines << NoiseStatusText();
         lines << tr("Min SPP before noise-stop: %1")
                      .arg(g_renderExportJob.minSppBeforeNoiseStop);

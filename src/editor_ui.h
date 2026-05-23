@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -25,6 +26,26 @@ struct RenderExportSettings {
 
 // NOTE: RenderMode is defined in scene.h
 #include "scene.h"
+
+// Tile-based panorama export state
+struct RenderExportTileState {
+  bool enabled = false;
+  unsigned int fullWidth = 0;
+  unsigned int fullHeight = 0;
+  unsigned int tileWidth = 0;
+  unsigned int tileHeight = 0;
+  unsigned int tileCountX = 0;
+  unsigned int tileCountY = 0;
+  unsigned int currentTileIndex = 0;
+  unsigned int tileOffsetX = 0;
+  unsigned int tileOffsetY = 0;
+  // CPU-side full-frame HDR panorama buffer (R16G16B16A16_FLOAT)
+  std::vector<uint8_t> cpuBeautyBuffer;
+  // CPU-side full-frame guide buffers (optional, for OIDN)
+  std::vector<uint8_t> cpuAlbedoGuideBuffer;
+  std::vector<uint8_t> cpuNormalGuideBuffer;
+  bool guidesCaptured = false;
+};
 
 struct RenderExportJobState {
   bool active = false;
@@ -56,6 +77,8 @@ struct RenderExportJobState {
   int previousStreamlineQuality = 1;
   bool allowNoiseThresholdStop = true;
   unsigned long long startedTickMs = 0;
+  // Tile-based panorama export state
+  RenderExportTileState tileState;
 };
 
 struct RenderBatchExportState {
@@ -146,6 +169,15 @@ bool StartAnimationRenderExport(const std::wstring &outputDirectory);
 void AdvanceAnimationRenderExport(bool previousExportSucceeded);
 void CancelAnimationRenderExport();
 std::string GetAnimationExportProgressText();
+
+// Tile-based panorama export helpers (used by main.cpp)
+void SetupTiledExportJob(RenderExportJobState &job);
+bool AdvanceToNextTile(RenderExportJobState &job);
+void CompositeTileToHdrPanorama(RenderExportTileState &t,
+                                const std::vector<uint8_t> &srcData);
+void TonemapHdrPanoramaToRgba8(const std::vector<uint8_t> &hdrBuffer,
+                                UINT width, UINT height,
+                                std::vector<uint8_t> &outRgba);
 
 // Utility
 std::string WStringToUtf8(const std::wstring &ws);

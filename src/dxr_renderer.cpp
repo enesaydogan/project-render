@@ -383,6 +383,13 @@ static UINT s_presentWidth = 1280;
 static UINT s_presentHeight = 720;
 static UINT s_readyPresentWidth = 0;
 static UINT s_readyPresentHeight = 0;
+
+// Tile-based panorama export constants (0 = no tiling)
+static UINT s_exportFullWidth = 0;
+static UINT s_exportFullHeight = 0;
+static UINT s_exportTileOffsetX = 0;
+static UINT s_exportTileOffsetY = 0;
+
 enum ResourceFeatureBits : uint32_t {
   ResourceFeature_Dlss = 1u << 0,
   ResourceFeature_DlssRayReconstruction = 1u << 1,
@@ -1705,7 +1712,7 @@ static void EnsureWavefrontBootstrapPipeline() {
   params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
   params[1].Constants.ShaderRegister = 1;
   params[1].Constants.RegisterSpace = 0;
-  params[1].Constants.Num32BitValues = 4;
+  params[1].Constants.Num32BitValues = 8;
   params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
   params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -1786,11 +1793,15 @@ static void DispatchWavefrontBootstrap(ID3D12GraphicsCommandList4 *list,
   list->SetComputeRootSignature(s_wavefrontBootstrapRootSig.Get());
   list->SetComputeRootConstantBufferView(0, cameraCB->GetGPUVirtualAddress());
 
-  const UINT bootstrapConstants[4] = {
+  const UINT bootstrapConstants[8] = {
       s_outputWidth,
       s_outputHeight,
       static_cast<UINT>(s_pathTracingBackend),
-      static_cast<UINT>(s_wavefrontPathQueueCapacity)};
+      static_cast<UINT>(s_wavefrontPathQueueCapacity),
+      s_exportFullWidth,
+      s_exportFullHeight,
+      s_exportTileOffsetX,
+      s_exportTileOffsetY};
   list->SetComputeRoot32BitConstants(1, _countof(bootstrapConstants),
                                      bootstrapConstants, 0);
 
@@ -5996,6 +6007,14 @@ void SetDenoiserMode(DenoiserMode m) {
 
 DenoiserMode GetDenoiserMode() { return s_denoiserMode; }
 
+void SetExportTileConstants(UINT fullWidth, UINT fullHeight,
+                            UINT tileOffsetX, UINT tileOffsetY) {
+  s_exportFullWidth = fullWidth;
+  s_exportFullHeight = fullHeight;
+  s_exportTileOffsetX = tileOffsetX;
+  s_exportTileOffsetY = tileOffsetY;
+}
+
 void SetOidnQuality(OidnDenoiser::Quality q) {
   if (s_oidnQuality == q) {
     return;
@@ -8380,6 +8399,164 @@ bool ExportTonemappedFrameToPng(const std::wstring &filePath) {
   readback->Unmap(0, nullptr);
 
   return SaveRgba8ToPngWic(filePath, width, height, rgba.data(), width * 4);
+}
+
+// Helper: read back a 2D UAV texture to a CPU buffer via a dedicated command list.
+static bool ReadbackTextureToCpu(ID3D12Resource *source,
+                                 D3D12_RESOURCE_STATES assumedState,
+                                 UINT width, UINT height, UINT bytesPerPixel,
+                                 std::vector<uint8_t> &outData) {
+  if (!source || !s_device || !s_commandQueue || !s_fence || !s_fenceValues ||
+      !s_frameIndexPtr || !s_fenceEvent) {
+    return false;
+  }
+
+  const D3D12_RESOURCE_DESC srcDesc = source->GetDesc();
+  if (srcDesc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
+      (UINT)srcDesc.Width != width || srcDesc.Height != height) {
+    return false;
+  }
+
+  D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
+  UINT numRows = 0;
+  UINT64 rowSizeInBytes = 0;
+  UINT64 totalBytes = 0;
+  D3D12_RESOURCE_DESC readDesc = srcDesc;
+  s_device->GetCopyableFootprints(&readDesc, 0, 1, 0, &footprint, &numRows,
+                                  &rowSizeInBytes, &totalBytes);
+  if (totalBytes == 0 || numRows == 0)
+    return false;
+
+  ComPtr<ID3D12CommandAllocator> cmdAlloc;
+  if (FAILED(s_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                              IID_PPV_ARGS(&cmdAlloc))))
+    return false;
+
+  ComPtr<ID3D12GraphicsCommandList> cmdList;
+  if (FAILED(s_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                         cmdAlloc.Get(), nullptr,
+                                         IID_PPV_ARGS(&cmdList))))
+    return false;
+
+  D3D12_HEAP_PROPERTIES readbackHeap = {};
+  readbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
+
+  D3D12_RESOURCE_DESC bufDesc = {};
+  bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+  bufDesc.Width = totalBytes;
+  bufDesc.Height = 1;
+  bufDesc.DepthOrArraySize = 1;
+  bufDesc.MipLevels = 1;
+  bufDesc.SampleDesc.Count = 1;
+  bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+  ComPtr<ID3D12Resource> readback;
+  if (FAILED(s_device->CreateCommittedResource(
+          &readbackHeap, D3D12_HEAP_FLAG_NONE, &bufDesc,
+          D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback))))
+    return false;
+
+  TransitionResource(cmdList.Get(), source, assumedState,
+                     D3D12_RESOURCE_STATE_COPY_SOURCE);
+
+  D3D12_TEXTURE_COPY_LOCATION srcLoc = {};
+  srcLoc.pResource = source;
+  srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+  srcLoc.SubresourceIndex = 0;
+
+  D3D12_TEXTURE_COPY_LOCATION dstLoc = {};
+  dstLoc.pResource = readback.Get();
+  dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+  dstLoc.PlacedFootprint = footprint;
+
+  cmdList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, nullptr);
+  TransitionResource(cmdList.Get(), source, D3D12_RESOURCE_STATE_COPY_SOURCE,
+                     assumedState);
+
+  if (FAILED(cmdList->Close()))
+    return false;
+
+  ID3D12CommandList *lists[] = {cmdList.Get()};
+  s_commandQueue->ExecuteCommandLists(1, lists);
+
+  const UINT fi = *s_frameIndexPtr;
+  const UINT64 fenceValue = s_fenceValues[fi];
+  if (FAILED(s_commandQueue->Signal(s_fence, fenceValue)))
+    return false;
+  s_fenceValues[fi] = fenceValue + 1;
+
+  if (s_fence->GetCompletedValue() < fenceValue) {
+    if (FAILED(s_fence->SetEventOnCompletion(fenceValue, s_fenceEvent)))
+      return false;
+    if (WaitForSingleObject(s_fenceEvent, 5000) == WAIT_TIMEOUT)
+      return false;
+  }
+
+  uint8_t *mapped = nullptr;
+  if (FAILED(readback->Map(0, nullptr, reinterpret_cast<void **>(&mapped))) ||
+      !mapped)
+    return false;
+
+  const UINT srcPitch = footprint.Footprint.RowPitch;
+  const UINT dstRowBytes = width * bytesPerPixel;
+  outData.resize(height * dstRowBytes);
+  for (UINT y = 0; y < height; ++y) {
+    memcpy(outData.data() + y * dstRowBytes,
+           mapped + footprint.Offset + y * srcPitch, dstRowBytes);
+  }
+
+  readback->Unmap(0, nullptr);
+  return true;
+}
+
+bool ReadbackBeautyTile(std::vector<uint8_t> &outData,
+                        UINT tileWidth, UINT tileHeight) {
+  if (!s_outputUAV || tileWidth == 0 || tileHeight == 0)
+    return false;
+  return ReadbackTextureToCpu(s_outputUAV.Get(),
+                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                              tileWidth, tileHeight, 8, outData);
+}
+
+bool ReadbackGuideTiles(std::vector<uint8_t> &outAlbedo,
+                        std::vector<uint8_t> &outNormal,
+                        UINT tileWidth, UINT tileHeight) {
+  if (!s_albedoUAV || !s_normalRoughnessUAV ||
+      tileWidth == 0 || tileHeight == 0)
+    return false;
+  if (!ReadbackTextureToCpu(s_albedoUAV.Get(),
+                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                            tileWidth, tileHeight, 8, outAlbedo))
+    return false;
+  return ReadbackTextureToCpu(s_normalRoughnessUAV.Get(),
+                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                              tileWidth, tileHeight, 8, outNormal);
+}
+
+bool SaveRgba8BufferToPng(const std::wstring &filePath,
+                          UINT width, UINT height,
+                          const std::vector<uint8_t> &rgbaData) {
+  if (rgbaData.size() < (size_t)width * height * 4)
+    return false;
+  return SaveRgba8ToPngWic(filePath, width, height, rgbaData.data(), width * 4);
+}
+
+bool DenoiseHostBeautyHalf4(const std::vector<uint8_t> &input,
+                            UINT width, UINT height,
+                            std::vector<uint8_t> &output) {
+  const size_t rowPitch = (size_t)width * 8;
+  const size_t requiredBytes = rowPitch * (size_t)height;
+  if (width == 0 || height == 0 || input.size() < requiredBytes) {
+    return false;
+  }
+  if (!s_oidnDenoiser.Initialize(s_device)) {
+    return false;
+  }
+  s_oidnDenoiser.SetQuality(s_oidnQuality);
+  output.resize(requiredBytes);
+  return s_oidnDenoiser.RunDenoiseHostHalf4(input.data(), width, height,
+                                            rowPitch, output.data(),
+                                            rowPitch);
 }
 
 static float HalfToFloat(uint16_t h) {

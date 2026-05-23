@@ -2309,9 +2309,22 @@ void MainWindow::updateRenderExportProgressUi()
 
     QStringList details;
     details << tr("Current item: %1").arg(currentItem.isEmpty() ? tr("export") : currentItem);
-    details << tr("Resolution: %1 x %2")
-                   .arg(g_renderExportJob.targetWidth)
-                   .arg(g_renderExportJob.targetHeight);
+    if (g_renderExportJob.tileState.enabled) {
+        const RenderExportTileState &tile = g_renderExportJob.tileState;
+        details << tr("Final resolution: %1 x %2")
+                       .arg(tile.fullWidth)
+                       .arg(tile.fullHeight);
+        details << tr("Current tile: %1 / %2, %3 x %4 at y %5")
+                       .arg(tile.currentTileIndex + 1)
+                       .arg(tile.tileCountX * tile.tileCountY)
+                       .arg(tile.tileWidth)
+                       .arg(tile.tileHeight)
+                       .arg(tile.tileOffsetY);
+    } else {
+        details << tr("Resolution: %1 x %2")
+                       .arg(g_renderExportJob.targetWidth)
+                       .arg(g_renderExportJob.targetHeight);
+    }
     details << tr("Samples: %1 / %2 SPP")
                    .arg(DxrRenderer::GetDisplayedSampleCount())
                    .arg(g_renderExportJob.targetMaxSpp);

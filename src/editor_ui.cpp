@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstring>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -1002,6 +1003,172 @@ static bool StartNextAnimationRenderJob() {
 // Forward declarations for helpers also used by the export job logic in
 // main.cpp
 
+// Minimum panorama width that triggers tiled export on 6 GB GPUs.
+static const UINT kTiledExportMinWidth = 2049;
+static const UINT kDefaultTileHeight = 256;
+
+static bool ShouldUseTiledExport(const RenderExportJobState &job,
+                                 int projectionMode) {
+  if (projectionMode != (int)CameraProjectionMode::Spherical360)
+    return false;
+  return job.targetWidth >= kTiledExportMinWidth;
+}
+
+void SetupTiledExportJob(RenderExportJobState &job) {
+  RenderExportTileState &t = job.tileState;
+  t.enabled = true;
+  t.fullWidth = job.targetWidth;
+  t.fullHeight = job.targetHeight;
+
+  // Use horizontal stripes: full width, fixed tile height. The last tile may
+  // render a few rows beyond the panorama; compositing clamps the copied rows.
+  t.tileWidth = t.fullWidth;
+  t.tileHeight = (std::min)(kDefaultTileHeight, t.fullHeight);
+  t.tileCountX = 1;
+  t.tileCountY = (t.fullHeight + t.tileHeight - 1) / t.tileHeight;
+  t.currentTileIndex = 0;
+  t.tileOffsetX = 0;
+  t.tileOffsetY = 0;
+  job.targetWidth = t.tileWidth;
+  job.targetHeight = t.tileHeight;
+
+  // Allocate CPU full-frame HDR buffer (R16G16B16A16_FLOAT = 8 bytes/pixel)
+  const size_t totalPixels = (size_t)t.fullWidth * t.fullHeight;
+  t.cpuBeautyBuffer.resize(totalPixels * 8);
+
+  fprintf(stderr,
+          "Tiled panorama export: %ux%u -> %u tiles (%ux%u render size)\n",
+          t.fullWidth, t.fullHeight,
+          t.tileCountX * t.tileCountY,
+          t.tileWidth, t.tileHeight);
+}
+
+// Update job state for the next tile. Returns false if no more tiles.
+bool AdvanceToNextTile(RenderExportJobState &job) {
+  RenderExportTileState &t = job.tileState;
+  t.currentTileIndex++;
+  if (t.currentTileIndex >= t.tileCountX * t.tileCountY) {
+    return false; // All tiles done
+  }
+  // Compute tile offset for current index (row-major, single column)
+  const UINT tileY = t.currentTileIndex;
+  t.tileOffsetX = 0;
+  t.tileOffsetY = tileY * t.tileHeight;
+  job.targetWidth = t.tileWidth;
+  job.targetHeight = t.tileHeight;
+  return true;
+}
+
+// Composite a readback tile into the full-frame HDR panorama buffer.
+// srcData: tile-size R16G16B16A16_FLOAT data (8 bytes/pixel)
+void CompositeTileToHdrPanorama(RenderExportTileState &t,
+                                       const std::vector<uint8_t> &srcData) {
+  if (!t.enabled || t.fullWidth == 0 || t.fullHeight == 0 ||
+      t.tileWidth == 0 || t.tileHeight == 0 ||
+      t.tileOffsetY >= t.fullHeight) {
+    return;
+  }
+  const size_t tileRowBytes = t.tileWidth * 8; // R16G16B16A16
+  const size_t fullRowBytes = t.fullWidth * 8;
+  const UINT rowsToCopy =
+      (std::min)(t.tileHeight, t.fullHeight - t.tileOffsetY);
+  const size_t bytesToCopy =
+      (std::min)(tileRowBytes, fullRowBytes - (size_t)t.tileOffsetX * 8);
+  if (srcData.size() < tileRowBytes * (size_t)t.tileHeight ||
+      t.cpuBeautyBuffer.size() < fullRowBytes * (size_t)t.fullHeight) {
+    return;
+  }
+  for (UINT row = 0; row < rowsToCopy; ++row) {
+    const size_t srcOffset = row * tileRowBytes;
+    const size_t dstOffset = ((size_t)(t.tileOffsetY + row) * fullRowBytes) +
+                             (size_t)t.tileOffsetX * 8;
+    memcpy(t.cpuBeautyBuffer.data() + dstOffset,
+           srcData.data() + srcOffset,
+           bytesToCopy);
+  }
+}
+
+// Simple HDR tonemap + convert to RGBA8 for the full panorama buffer.
+// Uses the same ACES-inspired curve as the GPU tonemapper.
+void TonemapHdrPanoramaToRgba8(
+    const std::vector<uint8_t> &hdrBuffer,
+    UINT width, UINT height,
+    std::vector<uint8_t> &outRgba) {
+  outRgba.resize((size_t)width * height * 4);
+  const auto *src = reinterpret_cast<const uint16_t *>(hdrBuffer.data());
+  for (UINT y = 0; y < height; ++y) {
+    for (UINT x = 0; x < width; ++x) {
+      const size_t idx = (size_t)y * width + x;
+      const size_t srcOff = idx * 4;
+      const size_t dstOff = idx * 4;
+
+      // Convert half to float
+      auto h2f = [](uint16_t h) -> float {
+        // Simple half-to-float conversion
+        const uint32_t sign = (uint32_t)(h & 0x8000u) << 16;
+        uint32_t exp = (h >> 10) & 0x1Fu;
+        uint32_t mant = h & 0x03FFu;
+        uint32_t bits;
+        if (exp == 0) {
+          if (mant == 0) {
+            bits = sign;
+          } else {
+            exp = 1;
+            while ((mant & 0x0400u) == 0) { mant <<= 1; exp--; }
+            mant &= 0x03FFu;
+            bits = sign | ((exp + 112u) << 23) | (mant << 13);
+          }
+        } else if (exp == 31) {
+          bits = sign | 0x7F800000u | (mant << 13);
+        } else {
+          bits = sign | ((exp + 112u) << 23) | (mant << 13);
+        }
+        float f;
+        memcpy(&f, &bits, sizeof(f));
+        return f;
+      };
+
+      float r = h2f(src[srcOff + 0]);
+      float g = h2f(src[srcOff + 1]);
+      float b = h2f(src[srcOff + 2]);
+      // float a = h2f(src[srcOff + 3]);
+
+      // ACES-inspired tonemap (matches GPU ToneMap)
+      auto tonemap = [](float c) -> float {
+        const float a = 2.51f, b2 = 0.03f, c2 = 2.43f, d = 0.59f, e = 0.14f;
+        c = (std::max)(0.0f, c);
+        return (std::min)(1.0f, (c * (a * c + b2)) / (c * (c2 * c + d) + e));
+      };
+
+      // Apply exposure (intensity) from camera
+      float intensity = g_cameraData.intensity;
+      r *= intensity;
+      g *= intensity;
+      b *= intensity;
+
+      r = tonemap(r);
+      g = tonemap(g);
+      b = tonemap(b);
+
+      // Linear to sRGB
+      auto linearToSrgb = [](float c) -> uint8_t {
+        c = (std::max)(0.0f, (std::min)(1.0f, c));
+        if (c <= 0.0031308f) {
+          c = c * 12.92f;
+        } else {
+          c = 1.055f * powf(c, 1.0f / 2.4f) - 0.055f;
+        }
+        return (uint8_t)(c * 255.0f + 0.5f);
+      };
+
+      outRgba[dstOff + 0] = linearToSrgb(r);
+      outRgba[dstOff + 1] = linearToSrgb(g);
+      outRgba[dstOff + 2] = linearToSrgb(b);
+      outRgba[dstOff + 3] = 255;
+    }
+  }
+}
+
 static bool EnsureExportRenderTarget(UINT width, UINT height) {
   if (!g_device || width == 0 || height == 0) {
     return false;
@@ -1134,8 +1301,14 @@ static bool EnsureExportRenderTarget(UINT width, UINT height) {
         ? (UINT)g_renderExportJob.targetMaxSpp
         : 32u;
     if (g_renderExportJob.minSppBeforeNoiseStop < 8u) {
-    g_renderExportJob.minSppBeforeNoiseStop = 8u;
+      g_renderExportJob.minSppBeforeNoiseStop = 8u;
     }
+
+    g_renderExportJob.tileState = {}; // Clear any previous tile state
+    if (!isPreview && ShouldUseTiledExport(g_renderExportJob, targetProjectionMode)) {
+      SetupTiledExportJob(g_renderExportJob);
+    }
+
     g_renderExportJob.completionArmed = false;
     g_renderExportJob.completionFrames = 0;
     g_renderExportJob.settleFramesRemaining = 0;
@@ -1165,8 +1338,11 @@ static bool EnsureExportRenderTarget(UINT width, UINT height) {
       settings.allowNoiseThresholdStop ? 1.0f : 0.0f;
     g_cameraData.exportRendering = 1.0f;
     g_cameraData.projectionMode = (float)targetProjectionMode;
-    DxrRenderer::SetDenoiserMode(
-      DenoiserModeFromIndex(g_renderExportJob.targetDenoiserIndex));
+    const int activeDenoiserIndex =
+        g_renderExportJob.tileState.enabled
+            ? 0
+            : g_renderExportJob.targetDenoiserIndex;
+    DxrRenderer::SetDenoiserMode(DenoiserModeFromIndex(activeDenoiserIndex));
 
     if (!EnsureExportRenderTarget(g_renderExportJob.targetWidth,
                   g_renderExportJob.targetHeight)) {
@@ -1228,6 +1404,12 @@ static bool EnsureExportRenderTarget(UINT width, UINT height) {
     }
 
     DxrRenderer::ResetAccumulation();
+    // Set tile constants for tiled panorama export (no-op if not tiled)
+    if (g_renderExportJob.tileState.enabled) {
+      const auto &t = g_renderExportJob.tileState;
+      DxrRenderer::SetExportTileConstants(t.fullWidth, t.fullHeight,
+                                          t.tileOffsetX, t.tileOffsetY);
+    }
     UpdateCameraCB();
     g_renderExportStatus = isPreview ? "Rendering preview..." : "Rendering...";
   }
@@ -1264,6 +1446,9 @@ void RestoreRenderExportState(bool preservePreviewImage) {
     g_currentRenderMode = RenderMode::Raster;
   }
   DxrRenderer::ResetAccumulation();
+  // Clear tiled export state and disable tile constants
+  g_renderExportJob.tileState = {};
+  DxrRenderer::SetExportTileConstants(0, 0, 0, 0);
   g_renderExportJob.active = false;
   g_renderExportJob.isPreview = false;
   g_renderExportJob.previewReadyToLatch = false;
@@ -1880,8 +2065,17 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
         ImGui::Separator();
         ImGui::Text("Progress: %u / %d SPP", spp,
                     g_renderExportJob.targetMaxSpp);
-        ImGui::Text("Output: %u x %u", g_renderExportJob.targetWidth,
-                    g_renderExportJob.targetHeight);
+        if (g_renderExportJob.tileState.enabled) {
+          const RenderExportTileState &tile = g_renderExportJob.tileState;
+          ImGui::Text("Output: %u x %u", tile.fullWidth, tile.fullHeight);
+          ImGui::Text("Tile: %u / %u (%u x %u, y=%u)",
+                      tile.currentTileIndex + 1,
+                      tile.tileCountX * tile.tileCountY, tile.tileWidth,
+                      tile.tileHeight, tile.tileOffsetY);
+        } else {
+          ImGui::Text("Output: %u x %u", g_renderExportJob.targetWidth,
+                      g_renderExportJob.targetHeight);
+        }
         if (hasNoise) {
           ImGui::Text("Noise: %.2f%% / %.2f%%", noise * 100.0f,
                       g_renderExportJob.targetNoiseThreshold * 100.0f);

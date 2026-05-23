@@ -6,6 +6,11 @@ cbuffer WavefrontBootstrapConstants : register(b1)
     uint outputHeight;
     uint backendMode;
     uint maxPathCount;
+    // Tile-based panorama export: 0 means no tiling
+    uint exportFullWidth;
+    uint exportFullHeight;
+    uint exportTileOffsetX;
+    uint exportTileOffsetY;
 };
 
 static uint WangHash(uint value)
@@ -215,8 +220,13 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         InterlockedAdd(g_wavefrontStats[2], 1u, activePrevious);
     }
 
-    const float2 screenDim = float2(outputWidth, outputHeight);
-    const float2 uv = (float2(pixel) + 0.5 + float2(jitterX, jitterY)) / screenDim;
+    const float2 screenDim = (exportFullWidth > 0u && exportFullHeight > 0u)
+        ? float2(exportFullWidth, exportFullHeight)
+        : float2(outputWidth, outputHeight);
+    const float2 pixelOffset = (exportFullWidth > 0u && exportFullHeight > 0u)
+        ? float2(exportTileOffsetX, exportTileOffsetY)
+        : float2(0.0, 0.0);
+    const float2 uv = (float2(pixel) + pixelOffset + 0.5 + float2(jitterX, jitterY)) / screenDim;
     WavefrontPathState state;
     state.origin = camPos;
     state.direction = BuildCameraPrimaryDirection(uv);

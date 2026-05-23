@@ -159,6 +159,11 @@ DenoiserMode GetDenoiserMode();
 void SetOidnQuality(OidnDenoiser::Quality q);
 OidnDenoiser::Quality GetOidnQuality();
 
+// Tile-based panorama export: set full panorama dimensions and current tile offset.
+// Set fullWidth=0 to disable tiling (default).
+void SetExportTileConstants(UINT fullWidth, UINT fullHeight,
+                            UINT tileOffsetX, UINT tileOffsetY);
+
 enum class TonemapAmbientOcclusionMode {
   Inward = 0,
   Outward = 1,
@@ -253,6 +258,29 @@ bool ExportTonemappedFrameToPng(const std::wstring &filePath);
 bool CopyTonemappedFrameToResource(ID3D12GraphicsCommandList *commandList,
                                    ID3D12Resource *target,
                                    D3D12_RESOURCE_STATES *targetState);
+
+// Tile-based panorama export: read back the current HDR beauty output
+// (R16G16B16A16_FLOAT) into a caller-owned CPU buffer.
+// outData must be pre-sized to tileWidth * tileHeight * 8 bytes.
+bool ReadbackBeautyTile(std::vector<uint8_t> &outData,
+                        UINT tileWidth, UINT tileHeight);
+
+// Read back albedo (R16G16B16A16) and normal/roughness (R16G16B16A16)
+// guide buffers for the current tile.
+bool ReadbackGuideTiles(std::vector<uint8_t> &outAlbedo,
+                        std::vector<uint8_t> &outNormal,
+                        UINT tileWidth, UINT tileHeight);
+
+// Save a CPU-side RGBA8 full-frame buffer as PNG via WIC.
+bool SaveRgba8BufferToPng(const std::wstring &filePath,
+                          UINT width, UINT height,
+                          const std::vector<uint8_t> &rgbaData);
+
+// CPU OIDN helper for tiled exports. Input and output are tightly packed
+// R16G16B16A16_FLOAT buffers with width * 8 bytes per row.
+bool DenoiseHostBeautyHalf4(const std::vector<uint8_t> &input,
+                            UINT width, UINT height,
+                            std::vector<uint8_t> &output);
 } // namespace DxrRenderer
 
 extern bool g_rayTracingSupported;

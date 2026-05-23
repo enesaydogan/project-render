@@ -1083,26 +1083,46 @@ static bool DrawRenderPreviewToBackbuffer(
   cmdList->OMSetRenderTargets(1, &backbufferRtv, FALSE, nullptr);
 
   const float srcAspect = (float)srcWidth / (float)srcHeight;
+  const bool tiledExportPreview =
+      g_renderExportJob.active && g_renderExportJob.tileState.enabled &&
+      g_renderExportJob.tileState.fullWidth > 0 &&
+      g_renderExportJob.tileState.fullHeight > 0 &&
+      g_renderExportJob.tileState.tileHeight > 0;
+  const float previewAspect =
+      tiledExportPreview
+          ? ((float)g_renderExportJob.tileState.fullWidth /
+             (float)g_renderExportJob.tileState.fullHeight)
+          : srcAspect;
   float drawW = (float)dstWidth;
-  float drawH = drawW / srcAspect;
+  float drawH = drawW / previewAspect;
   if (drawH > (float)dstHeight) {
     drawH = (float)dstHeight;
-    drawW = drawH * srcAspect;
+    drawW = drawH * previewAspect;
   }
-  const float drawX = ((float)dstWidth - drawW) * 0.5f;
-  const float drawY = ((float)dstHeight - drawH) * 0.5f;
+  float drawX = ((float)dstWidth - drawW) * 0.5f;
+  float drawY = ((float)dstHeight - drawH) * 0.5f;
+  float tileDrawW = drawW;
+  float tileDrawH = drawH;
+  if (tiledExportPreview) {
+    const RenderExportTileState &tile = g_renderExportJob.tileState;
+    tileDrawW = drawW * ((float)tile.tileWidth / (float)tile.fullWidth);
+    tileDrawH = drawH * ((float)tile.tileHeight / (float)tile.fullHeight);
+    drawX += drawW * ((float)tile.tileOffsetX / (float)tile.fullWidth);
+    drawY += drawH * ((float)tile.tileOffsetY / (float)tile.fullHeight);
+  }
 
   D3D12_VIEWPORT previewViewport = {};
   previewViewport.TopLeftX = drawX;
   previewViewport.TopLeftY = drawY;
-  previewViewport.Width = drawW;
-  previewViewport.Height = drawH;
+  previewViewport.Width = tileDrawW;
+  previewViewport.Height = tileDrawH;
   previewViewport.MinDepth = 0.0f;
   previewViewport.MaxDepth = 1.0f;
 
   D3D12_RECT previewScissor = {
       (LONG)std::floor(drawX), (LONG)std::floor(drawY),
-      (LONG)std::ceil(drawX + drawW), (LONG)std::ceil(drawY + drawH)};
+      (LONG)std::ceil(drawX + tileDrawW),
+      (LONG)std::ceil(drawY + tileDrawH)};
   previewScissor.left = (std::max<LONG>)(0, previewScissor.left);
   previewScissor.top = (std::max<LONG>)(0, previewScissor.top);
   previewScissor.right =
@@ -3878,6 +3898,93 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
               g_renderExportJob.previewRestorePending = true;
               g_renderExportStatus =
                   "Preview ready. Move camera or press ESC to dismiss.";
+            } else if (g_renderExportJob.tileState.enabled) {
+              RenderExportTileState &t = g_renderExportJob.tileState;
+              std::vector<uint8_t> tileData;
+              bool readbackOk = DxrRenderer::ReadbackBeautyTile(
+                  tileData, t.tileWidth, t.tileHeight);
+              if (readbackOk &&
+                  tileData.size() >=
+                      (size_t)t.tileWidth * t.tileHeight * 8) {
+                CompositeTileToHdrPanorama(t, tileData);
+                fprintf(stderr,
+                        "Tiled export: tile %u/%u done (%ux%u at offset %u,%u)\n",
+                        t.currentTileIndex + 1,
+                        t.tileCountX * t.tileCountY,
+                        t.tileWidth, t.tileHeight,
+                        t.tileOffsetX, t.tileOffsetY);
+
+                if (AdvanceToNextTile(g_renderExportJob)) {
+                  g_renderExportJob.completionArmed = false;
+                  g_renderExportJob.completionFrames = 0;
+                  g_renderExportJob.settleFramesRemaining = 0;
+                  g_renderExportJob.minSppBeforeNoiseStop =
+                      (g_renderExportJob.targetMaxSpp < 32)
+                          ? (UINT)g_renderExportJob.targetMaxSpp
+                          : 32u;
+                  DxrRenderer::WaitForAsyncRestirIdle();
+                  DX12Context::WaitGPUIdle();
+                  DxrRenderer::CreateRayTracingPipeline(
+                      g_renderExportJob.targetWidth,
+                      g_renderExportJob.targetHeight);
+                  DxrRenderer::ResetAccumulation();
+                  DxrRenderer::SetExportTileConstants(
+                      t.fullWidth, t.fullHeight,
+                      t.tileOffsetX, t.tileOffsetY);
+                  g_renderExportStatus =
+                      "Tiled export: tile " +
+                      std::to_string(t.currentTileIndex + 1) + "/" +
+                      std::to_string(t.tileCountX * t.tileCountY);
+                } else {
+                  fprintf(stderr,
+                          "Tiled export: all %u tiles done, compositing %ux%u panorama\n",
+                          t.tileCountX * t.tileCountY,
+                          t.fullWidth, t.fullHeight);
+                  const std::vector<uint8_t> *beautyForTonemap =
+                      &t.cpuBeautyBuffer;
+                  std::vector<uint8_t> denoisedBeauty;
+                  if (g_renderExportJob.targetDenoiserIndex != 0) {
+                    g_renderExportStatus = "Denoising panorama...";
+                    if (DxrRenderer::DenoiseHostBeautyHalf4(
+                            t.cpuBeautyBuffer, t.fullWidth, t.fullHeight,
+                            denoisedBeauty)) {
+                      beautyForTonemap = &denoisedBeauty;
+                    } else {
+                      fprintf(stderr,
+                              "Tiled export: CPU OIDN failed, saving noisy "
+                              "panorama.\n");
+                    }
+                  }
+                  std::vector<uint8_t> rgbaOut;
+                  TonemapHdrPanoramaToRgba8(
+                      *beautyForTonemap, t.fullWidth, t.fullHeight, rgbaOut);
+                  bool exported = DxrRenderer::SaveRgba8BufferToPng(
+                      g_renderExportJob.outputPath,
+                      t.fullWidth, t.fullHeight, rgbaOut);
+                  const std::string outPathUtf8 =
+                      WStringToUtf8(g_renderExportJob.outputPath);
+                  if (exported) {
+                    g_renderExportStatus = "Saved: " + outPathUtf8;
+                    fprintf(stderr, "Render export finished: %s\n",
+                            outPathUtf8.c_str());
+                  } else {
+                    g_renderExportStatus = "Export failed: " + outPathUtf8;
+                    fprintf(stderr, "Render export failed: %s\n",
+                            outPathUtf8.c_str());
+                  }
+                  g_renderExportJob.completionExportSucceeded = exported;
+                  g_renderExportJob.completionAdvancePending = true;
+                  g_renderExportJob.previewRestorePending = true;
+                  g_renderExportJob.tileState = {};
+                }
+              } else {
+                g_renderExportStatus = "Export failed: tile readback error.";
+                fprintf(stderr, "Render export failed: tile readback error\n");
+                g_renderExportJob.completionExportSucceeded = false;
+                g_renderExportJob.completionAdvancePending = true;
+                g_renderExportJob.previewRestorePending = true;
+                g_renderExportJob.tileState = {};
+              }
             } else {
               const bool exported = DxrRenderer::ExportTonemappedFrameToPng(
                   g_renderExportJob.outputPath);
