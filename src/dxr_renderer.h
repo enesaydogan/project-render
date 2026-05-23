@@ -189,8 +189,13 @@ struct GpuMemoryBreakdown {
   uint64_t diagnosticBufferBytes = 0;
   uint64_t descriptorHeapBytes = 0;
   uint64_t totalBytes = 0;
+  uint64_t wavefrontPathQueueCapacity = 0;
+  uint64_t wavefrontHitQueueCapacity = 0;
+  uint64_t wavefrontShadowQueueCapacity = 0;
   uint32_t blasCount = 0;
   uint32_t descriptorCount = 0;
+  uint32_t wavefrontQueueProfile = 0;
+  uint32_t wavefrontQueuePromotionCount = 0;
 };
 GpuMemoryBreakdown GetGpuMemoryBreakdown();
 

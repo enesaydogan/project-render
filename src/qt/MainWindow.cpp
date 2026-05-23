@@ -2007,7 +2007,14 @@ void MainWindow::showMemoryBreakdownPopup()
            tr("DI and GI reservoir textures"),
            dxrBreakdown.reservoirBytes);
     addRow(tr("Wavefront queues"),
-           tr("Path, hit, shadow, dispatch, binning, and shadow contribution buffers"),
+           tr("%1 profile, capacities path %2 / hit %3 / shadow %4, overflow promotions %5")
+               .arg(dxrBreakdown.wavefrontQueueProfile == 1
+                        ? tr("Expanded")
+                        : tr("Compact"))
+               .arg(static_cast<qulonglong>(dxrBreakdown.wavefrontPathQueueCapacity))
+               .arg(static_cast<qulonglong>(dxrBreakdown.wavefrontHitQueueCapacity))
+               .arg(static_cast<qulonglong>(dxrBreakdown.wavefrontShadowQueueCapacity))
+               .arg(dxrBreakdown.wavefrontQueuePromotionCount),
            dxrBreakdown.wavefrontQueueBytes);
     addRow(tr("Other buffers"),
            tr("Shader table, light upload, and diagnostics buffers"),

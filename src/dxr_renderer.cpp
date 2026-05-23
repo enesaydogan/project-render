@@ -236,8 +236,10 @@ static constexpr UINT kWavefrontReservedUint4Count = 16;
 static constexpr UINT64 kWavefrontMinQueueEntries = 65536ull;
 static constexpr UINT64 kWavefrontMaxPathQueueEntries = 4194304ull; // 4M
 static constexpr UINT64 kWavefrontMaxShadowQueueEntries = 8388608ull; // 8M
-static constexpr UINT64 kWavefrontPathQueueMultiplier = 2ull;
-static constexpr UINT64 kWavefrontShadowQueueMultiplier = 6ull;
+static constexpr UINT64 kWavefrontCompactPathQueueMultiplier = 1ull;
+static constexpr UINT64 kWavefrontCompactShadowQueueMultiplier = 3ull;
+static constexpr UINT64 kWavefrontExpandedPathQueueMultiplier = 2ull;
+static constexpr UINT64 kWavefrontExpandedShadowQueueMultiplier = 6ull;
 static constexpr UINT kWavefrontSecondaryResolveDispatchArgsIndex = 2;
 static constexpr UINT kWavefrontSecondaryDispatchRaysReservedSlot = 0;
 static constexpr UINT kWavefrontShadowDispatchRaysReservedSlot = 7;
@@ -254,6 +256,20 @@ static constexpr UINT64 kWavefrontCounterStrideBytes = sizeof(UINT);
 static constexpr UINT kWavefrontPrimaryMaterialBinStatsBase = 32u;
 static constexpr UINT kWavefrontSecondaryMaterialBinStatsBase = 40u;
 static constexpr UINT kWavefrontMaterialBinCount = 7u;
+enum class WavefrontQueueProfile : uint32_t {
+  Compact = 0,
+  Expanded = 1,
+};
+
+static const char *WavefrontQueueProfileName(WavefrontQueueProfile profile) {
+  switch (profile) {
+  case WavefrontQueueProfile::Compact:
+    return "compact";
+  case WavefrontQueueProfile::Expanded:
+    return "expanded";
+  }
+  return "unknown";
+}
 static_assert(kWavefrontAbiVersion == 5,
               "Bump shader WAVEFRONT_ABI_VERSION and docs with ABI changes.");
 static_assert(sizeof(WavefrontPathStateGpu) / sizeof(uint32_t) ==
@@ -444,6 +460,26 @@ static UINT64 ComputeWavefrontQueueCapacity(UINT width, UINT height,
       std::max<UINT64>(1ull, static_cast<UINT64>(width) * height);
   const UINT64 requested = pixelCount * std::max<UINT64>(1ull, multiplier);
   return std::clamp(requested, kWavefrontMinQueueEntries, maxEntries);
+}
+
+static WavefrontQueueProfile
+ChooseWavefrontQueueProfile(bool overflowPromoted) {
+  return overflowPromoted ? WavefrontQueueProfile::Expanded
+                          : WavefrontQueueProfile::Compact;
+}
+
+static UINT64
+WavefrontPathQueueMultiplier(WavefrontQueueProfile queueProfile) {
+  return queueProfile == WavefrontQueueProfile::Expanded
+             ? kWavefrontExpandedPathQueueMultiplier
+             : kWavefrontCompactPathQueueMultiplier;
+}
+
+static UINT64
+WavefrontShadowQueueMultiplier(WavefrontQueueProfile queueProfile) {
+  return queueProfile == WavefrontQueueProfile::Expanded
+             ? kWavefrontExpandedShadowQueueMultiplier
+             : kWavefrontCompactShadowQueueMultiplier;
 }
 
 static bool NeedsDepthAndMotionBuffers(uint32_t mask) {
@@ -685,6 +721,10 @@ static ComPtr<ID3D12Resource> s_wavefrontMaterialBinIndicesBuffer;
 static UINT64 s_wavefrontPathQueueCapacity = 0;
 static UINT64 s_wavefrontHitQueueCapacity = 0;
 static UINT64 s_wavefrontShadowQueueCapacity = 0;
+static WavefrontQueueProfile s_wavefrontQueueProfile =
+    WavefrontQueueProfile::Expanded;
+static bool s_wavefrontQueueOverflowPromoted = false;
+static UINT s_wavefrontQueuePromotionCount = 0;
 static UINT s_lastWavefrontBootstrapPathCount = 0;
 static UINT s_lastWavefrontBootstrapOverflowCount = 0;
 static UINT s_lastWavefrontContinuationOverflowCount = 0;
@@ -4464,19 +4504,25 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
                           cpuHandle);
       };
 
+    s_wavefrontQueueProfile =
+        ChooseWavefrontQueueProfile(s_wavefrontQueueOverflowPromoted);
+    const UINT64 pathQueueMultiplier =
+        WavefrontPathQueueMultiplier(s_wavefrontQueueProfile);
+    const UINT64 shadowQueueMultiplier =
+        WavefrontShadowQueueMultiplier(s_wavefrontQueueProfile);
     s_wavefrontPathQueueCapacity = ComputeWavefrontQueueCapacity(
       s_outputWidth, s_outputHeight, kWavefrontMaxPathQueueEntries,
-      kWavefrontPathQueueMultiplier);
+      pathQueueMultiplier);
     s_wavefrontHitQueueCapacity = ComputeWavefrontQueueCapacity(
       s_outputWidth, s_outputHeight, kWavefrontMaxPathQueueEntries,
-      kWavefrontPathQueueMultiplier);
+      pathQueueMultiplier);
     // Secondary resolve can enqueue sun, local-light, and environment
     // visibility tasks for each active path. If this queue overflows, atomic
     // allocation keeps a nondeterministic subset of tasks, which reads as
     // random lighting/reservoir flicker while accumulation continues.
     s_wavefrontShadowQueueCapacity = ComputeWavefrontQueueCapacity(
       s_outputWidth, s_outputHeight, kWavefrontMaxShadowQueueEntries,
-      kWavefrontShadowQueueMultiplier);
+      shadowQueueMultiplier);
 
     CreateStructuredBufferUav(s_wavefrontQueueCountersBuffer,
                   kWavefrontQueueCounterCount, sizeof(UINT),
@@ -4546,7 +4592,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
     if (g_verboseRenderLogs) {
       fprintf(stderr,
           "DxrRenderer: Wavefront scaffolding buffers allocated "
-          "(path=%llu hit=%llu shadow=%llu)\n",
+          "(profile=%s path=%llu hit=%llu shadow=%llu)\n",
+          WavefrontQueueProfileName(s_wavefrontQueueProfile),
           static_cast<unsigned long long>(s_wavefrontPathQueueCapacity),
           static_cast<unsigned long long>(s_wavefrontHitQueueCapacity),
           static_cast<unsigned long long>(s_wavefrontShadowQueueCapacity));
@@ -6149,6 +6196,12 @@ GpuMemoryBreakdown GetGpuMemoryBreakdown() {
           D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
   breakdown.descriptorHeapBytes =
       static_cast<uint64_t>(DXR_HEAP_TOTAL_COUNT) * descriptorSize;
+  breakdown.wavefrontPathQueueCapacity = s_wavefrontPathQueueCapacity;
+  breakdown.wavefrontHitQueueCapacity = s_wavefrontHitQueueCapacity;
+  breakdown.wavefrontShadowQueueCapacity = s_wavefrontShadowQueueCapacity;
+  breakdown.wavefrontQueueProfile =
+      static_cast<uint32_t>(s_wavefrontQueueProfile);
+  breakdown.wavefrontQueuePromotionCount = s_wavefrontQueuePromotionCount;
 
   breakdown.totalBytes = breakdown.renderTargetBytes +
                          breakdown.accumulationBytes +
@@ -8831,6 +8884,25 @@ void EndFrameProfiling(ID3D12GraphicsCommandList *commandList) {
       s_lastWavefrontShadowVisibleCount = s_lastWavefrontStats[30];
       s_lastWavefrontShadowOccludedCount = s_lastWavefrontStats[31];
       s_wavefrontStatsReadbackBuffer->Unmap(0, nullptr);
+
+      const bool queueOverflowed =
+          s_lastWavefrontContinuationOverflowCount > 0 ||
+          s_lastWavefrontShadowOverflowCount > 0 ||
+          s_lastWavefrontMaterialBinOverflowCount > 0;
+      if (queueOverflowed &&
+          s_wavefrontQueueProfile == WavefrontQueueProfile::Compact &&
+          !s_wavefrontQueueOverflowPromoted) {
+        s_wavefrontQueueOverflowPromoted = true;
+        ++s_wavefrontQueuePromotionCount;
+        fprintf(stderr,
+                "DxrRenderer: promoting compact wavefront queues after "
+                "overflow (continuation=%u shadow=%u bins=%u).\n",
+                s_lastWavefrontContinuationOverflowCount,
+                s_lastWavefrontShadowOverflowCount,
+                s_lastWavefrontMaterialBinOverflowCount);
+        ResetAccumulation();
+        RequestPipelineRecreate("compact wavefront queue overflow");
+      }
     }
   }
 }
