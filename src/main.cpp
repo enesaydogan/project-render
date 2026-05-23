@@ -3865,7 +3865,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
           (currentNoise <= g_renderExportJob.targetNoiseThreshold * 0.90f);
 
         const bool reachedEnd =
-          sppDone || (g_renderExportJob.allowNoiseThresholdStop && noiseDone);
+          g_renderExportJob.allowNoiseThresholdStop ? noiseDone : sppDone;
 
       if (reachedEnd && !g_renderExportJob.completionArmed) {
         g_renderExportJob.completionArmed = true;
@@ -3977,6 +3977,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
                             t.cpuBeautyBuffer.size()) {
                       g_renderExportStatus =
                           "Denoising panorama with guides...";
+                      // Force UI refresh so user sees "Denoising..." before
+                      // the blocking CPU OIDN call (which can take seconds).
+#ifdef USE_QT_UI
+                      QApplication::processEvents();
+#endif
                       fprintf(stderr,
                               "Tiled export: running full panorama CPU OIDN "
                               "with stitched guides.\n");
@@ -4059,12 +4064,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     const bool usingExportAspect =
         g_renderExportJob.active && g_renderExportJob.targetWidth > 0 &&
         g_renderExportJob.targetHeight > 0;
-    const float targetWidth = usingExportAspect
-                                  ? (float)g_renderExportJob.targetWidth
-                    : (float)previewWidth;
-    const float targetHeight = usingExportAspect
-                                   ? (float)g_renderExportJob.targetHeight
-                     : (float)previewHeight;
+    const bool usingTiledExportAspect =
+        usingExportAspect && g_renderExportJob.tileState.enabled &&
+        g_renderExportJob.tileState.fullWidth > 0 &&
+        g_renderExportJob.tileState.fullHeight > 0;
+    const float targetWidth =
+        usingTiledExportAspect
+            ? (float)g_renderExportJob.tileState.fullWidth
+            : (usingExportAspect ? (float)g_renderExportJob.targetWidth
+                                 : (float)previewWidth);
+    const float targetHeight =
+        usingTiledExportAspect
+            ? (float)g_renderExportJob.tileState.fullHeight
+            : (usingExportAspect ? (float)g_renderExportJob.targetHeight
+                                 : (float)previewHeight);
     if (targetHeight > 0.0f) {
       g_cameraData.aspect = targetWidth / targetHeight;
     }

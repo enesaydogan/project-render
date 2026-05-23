@@ -36,6 +36,7 @@ private:
     SliderControl *m_noisePercent = nullptr;
     QComboBox *m_denoiser = nullptr;
     QCheckBox *m_batchSavedViews = nullptr;
+    QCheckBox *m_tileRendering = nullptr;
     QLineEdit *m_batchBaseName = nullptr;
 
     QProgressBar *m_progressBar = nullptr;

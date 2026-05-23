@@ -119,12 +119,16 @@ void RenderPanel::createUi()
     m_denoiser->addItems({tr("Off"), tr("OIDN (CPU)"), tr("OIDN (GPU)"), tr("OptiX")});
     m_batchSavedViews = new QCheckBox(tr("Batch Render Saved Views"), settingsGroup);
     m_batchBaseName = new QLineEdit(settingsGroup);
+    m_tileRendering = new QCheckBox(
+        tr("Tile-based rendering (saves VRAM)"), settingsGroup);
+    m_tileRendering->setChecked(g_renderExportSettings.tileRenderingEnabled);
     settingsForm->addRow(tr("Render Resolution"), m_resolutionPreset);
     settingsForm->addRow(tr("Max SPP"), m_maxSpp);
     settingsForm->addRow(tr("Noise %"), m_noisePercent);
     settingsForm->addRow(tr("Denoiser"), m_denoiser);
     settingsForm->addRow(QString(), m_batchSavedViews);
     settingsForm->addRow(tr("Batch Base Name"), m_batchBaseName);
+    settingsForm->addRow(QString(), m_tileRendering);
     layout->addWidget(settingsGroup);
 
     auto *statusGroup = new QGroupBox(tr("Status"), this);
@@ -151,6 +155,9 @@ void RenderPanel::createUi()
         updateExportSettings();
     });
     connect(m_batchBaseName, &QLineEdit::editingFinished, this, [this]() {
+        updateExportSettings();
+    });
+    connect(m_tileRendering, &QCheckBox::toggled, this, [this](bool) {
         updateExportSettings();
     });
     connect(m_renderButton, &QPushButton::clicked, this, [this]() {
@@ -191,6 +198,9 @@ void RenderPanel::syncFromRenderer()
     }
     if (!IsWidgetBeingEdited(m_batchSavedViews)) {
         m_batchSavedViews->setChecked(g_renderExportSettings.batchSavedViews);
+    }
+    if (!IsWidgetBeingEdited(m_tileRendering)) {
+        m_tileRendering->setChecked(g_renderExportSettings.tileRenderingEnabled);
     }
     if (!IsWidgetBeingEdited(m_batchBaseName)) {
         m_batchBaseName->setText(QString::fromUtf8(g_renderExportSettings.batchBaseName.c_str()));
@@ -307,6 +317,7 @@ void RenderPanel::updateExportSettings()
     g_renderExportSettings.noisePercent = static_cast<float>(m_noisePercent->value());
     g_renderExportSettings.denoiserIndex = m_denoiser->currentIndex();
     g_renderExportSettings.batchSavedViews = m_batchSavedViews->isChecked();
+    g_renderExportSettings.tileRenderingEnabled = m_tileRendering->isChecked();
     g_renderExportSettings.batchBaseName = m_batchBaseName->text().trimmed().toUtf8().constData();
     if (g_renderExportSettings.batchBaseName.empty()) {
         g_renderExportSettings.batchBaseName = "final";

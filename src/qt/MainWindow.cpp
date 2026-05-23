@@ -1682,6 +1682,12 @@ void MainWindow::showRenderPopup()
 
     auto *resolutionGroup = new QGroupBox(tr("Resolution"), &dialog);
     auto *resolutionForm = new QFormLayout(resolutionGroup);
+
+    // Custom resolution toggle
+    auto *useCustomRes = new QCheckBox(tr("Custom resolution"), resolutionGroup);
+    useCustomRes->setChecked(g_renderExportSettings.useCustomResolution);
+
+    // Preset dropdown (hidden when custom is active)
     auto *resolutionPreset = new QComboBox(resolutionGroup);
     for (int i = 0; i < g_renderResolutionPresetCount; ++i) {
         resolutionPreset->addItem(QString::fromUtf8(g_renderResolutionPresets[i].label));
@@ -1689,7 +1695,24 @@ void MainWindow::showRenderPopup()
     resolutionPreset->setCurrentIndex(std::clamp(g_renderExportSettings.resolutionPreset,
                                                  0,
                                                  std::max(0, g_renderResolutionPresetCount - 1)));
-    auto *resolutionInfo = new QLabel(resolutionGroup);
+
+    // Custom width/height spinboxes (hidden when preset is active)
+    auto *customWidth = new QSpinBox(resolutionGroup);
+    customWidth->setRange(64, 16384);
+    customWidth->setSingleStep(64);
+    customWidth->setValue(std::clamp(g_renderExportSettings.customWidth, 64, 16384));
+
+    auto *customHeight = new QSpinBox(resolutionGroup);
+    customHeight->setRange(64, 16384);
+    customHeight->setSingleStep(64);
+    customHeight->setValue(std::clamp(g_renderExportSettings.customHeight, 64, 16384));
+
+    // Editable aspect ratio
+    auto *ratioEdit = new QLineEdit(resolutionGroup);
+    ratioEdit->setPlaceholderText(tr("e.g. 16:9 or 1.78"));
+    auto *lockRatio = new QCheckBox(tr("Lock aspect ratio"), resolutionGroup);
+    lockRatio->setChecked(g_renderExportSettings.lockAspectRatio);
+
     auto *projection = new QComboBox(resolutionGroup);
     projection->addItem(tr("Perspective"),
                         static_cast<int>(CameraProjectionMode::Perspective));
@@ -1697,9 +1720,35 @@ void MainWindow::showRenderPopup()
                         static_cast<int>(CameraProjectionMode::Spherical360));
     projection->setCurrentIndex(std::clamp(g_renderExportSettings.projectionMode,
                                            0, projection->count() - 1));
+
+    auto *resolutionInfo = new QLabel(resolutionGroup);
+
+    // Tile rendering checkbox
+    auto *tileRendering = new QCheckBox(
+        tr("Tile-based rendering (saves VRAM on large renders)"), resolutionGroup);
+    tileRendering->setChecked(g_renderExportSettings.tileRenderingEnabled);
+
+    // VRAM warning label
+    auto *vramWarning = new QLabel(resolutionGroup);
+    vramWarning->setWordWrap(true);
+    vramWarning->setStyleSheet(QStringLiteral("QLabel { color: #ff9944; font-weight: bold; }"));
+
+    resolutionForm->addRow(QString(), useCustomRes);
     resolutionForm->addRow(tr("Preset"), resolutionPreset);
+    resolutionForm->addRow(tr("Width"), customWidth);
+    resolutionForm->addRow(tr("Height"), customHeight);
+    resolutionForm->addRow(tr("Aspect ratio"), ratioEdit);
+    resolutionForm->addRow(QString(), lockRatio);
     resolutionForm->addRow(tr("Projection"), projection);
     resolutionForm->addRow(tr("Output"), resolutionInfo);
+    resolutionForm->addRow(QString(), tileRendering);
+    resolutionForm->addRow(QString(), vramWarning);
+
+    // Initial visibility
+    resolutionPreset->setVisible(!useCustomRes->isChecked());
+    customWidth->setVisible(useCustomRes->isChecked());
+    customHeight->setVisible(useCustomRes->isChecked());
+
     layout->addWidget(resolutionGroup);
 
     auto *stillGroup = new QGroupBox(tr("Render"), &dialog);
@@ -1777,6 +1826,11 @@ void MainWindow::showRenderPopup()
 
     auto applyStillSettings = [&]() {
         g_renderExportSettings.resolutionPreset = resolutionPreset->currentIndex();
+        g_renderExportSettings.useCustomResolution = useCustomRes->isChecked();
+        g_renderExportSettings.customWidth = customWidth->value();
+        g_renderExportSettings.customHeight = customHeight->value();
+        g_renderExportSettings.lockAspectRatio = lockRatio->isChecked();
+        g_renderExportSettings.tileRenderingEnabled = tileRendering->isChecked();
         g_renderExportSettings.maxSpp = samples->value();
         g_renderExportSettings.noisePercent = static_cast<float>(noise->value());
         g_renderExportSettings.denoiserIndex = denoiser->currentIndex();
@@ -1805,19 +1859,145 @@ void MainWindow::showRenderPopup()
     };
 
     auto updateSummary = [&]() {
-        const int presetIndex = std::clamp(resolutionPreset->currentIndex(),
-                                           0,
-                                           std::max(0, g_renderResolutionPresetCount - 1));
-        if (g_renderResolutionPresetCount > 0) {
-            const RenderResolutionPreset &preset = g_renderResolutionPresets[presetIndex];
-            const bool spherical =
-                projection->currentData().toInt() ==
-                static_cast<int>(CameraProjectionMode::Spherical360);
-            const unsigned int outputHeight =
-                spherical ? std::max(1u, preset.width / 2u) : preset.height;
-            resolutionInfo->setText(
-                tr("%1 x %2").arg(preset.width).arg(outputHeight));
+        const bool customRes = useCustomRes->isChecked();
+        const bool spherical =
+            projection->currentData().toInt() ==
+            static_cast<int>(CameraProjectionMode::Spherical360);
+
+        // Show/hide preset vs custom fields
+        resolutionPreset->setVisible(!customRes);
+        customWidth->setVisible(customRes);
+        customHeight->setVisible(customRes);
+
+        // Compute effective width/height (before ratio section which uses them)
+        unsigned int effectiveW = 0, effectiveH = 0;
+        if (customRes) {
+            effectiveW = (unsigned int)customWidth->value();
+            effectiveH = (unsigned int)customHeight->value();
+            if (spherical) {
+                effectiveH = std::max(1u, effectiveW / 2u);
+                if (customHeight->value() != (int)effectiveH) {
+                    customHeight->blockSignals(true);
+                    customHeight->setValue((int)effectiveH);
+                    customHeight->blockSignals(false);
+                }
+            }
+        } else {
+            const int presetIndex = std::clamp(resolutionPreset->currentIndex(),
+                                               0,
+                                               std::max(0, g_renderResolutionPresetCount - 1));
+            if (g_renderResolutionPresetCount > 0) {
+                const RenderResolutionPreset &preset = g_renderResolutionPresets[presetIndex];
+                effectiveW = preset.width;
+                effectiveH = spherical ? std::max(1u, preset.width / 2u) : preset.height;
+            }
         }
+
+        // Parse ratio from editable field (supports "16:9", "16/9", "1.78", "1.78:1")
+        auto parseRatio = [](const QString &text, float &outRatio) -> bool {
+            QString t = text.trimmed();
+            if (t.isEmpty()) return false;
+            // Remove trailing ":1" suffix if present
+            if (t.endsWith(QStringLiteral(":1")) && t.length() > 2)
+                t = t.left(t.length() - 2);
+            // Try "W:H" or "W/H" format
+            int colonIdx = t.indexOf(QChar(':'));
+            int slashIdx = t.indexOf(QChar('/'));
+            int sepIdx = (colonIdx >= 0) ? colonIdx : slashIdx;
+            if (sepIdx > 0 && sepIdx < t.length() - 1) {
+                bool okW = false, okH = false;
+                float w = t.left(sepIdx).toFloat(&okW);
+                float h = t.mid(sepIdx + 1).toFloat(&okH);
+                if (okW && okH && h > 0.001f) {
+                    outRatio = w / h;
+                    return true;
+                }
+            }
+            // Try plain float
+            bool ok = false;
+            float v = t.toFloat(&ok);
+            if (ok && v > 0.001f) {
+                outRatio = v;
+                return true;
+            }
+            return false;
+        };
+
+        // Update ratioEdit text from current aspect ratio
+        {
+            const float ar = (effectiveH > 0) ? (float)effectiveW / (float)effectiveH : 0.0f;
+            if (spherical) {
+                if (ratioEdit->text() != QStringLiteral("2:1"))
+                    ratioEdit->setText(QStringLiteral("2:1"));
+            } else if (ar > 0.001f && !ratioEdit->hasFocus()) {
+                const QString formatted = QString::number((double)ar, 'f', 4);
+                if (ratioEdit->text() != formatted)
+                    ratioEdit->setText(formatted);
+            }
+        }
+
+        // When ratioEdit is edited by user, parse and apply new ratio
+        if (customRes && ratioEdit->isModified()) {
+            float parsedAr = 0.0f;
+            if (!spherical && parseRatio(ratioEdit->text(), parsedAr)) {
+                g_renderExportSettings.lockedAspectRatio = parsedAr;
+                // Apply ratio: keep width, adjust height
+                int newH = (int)std::round((float)customWidth->value() / parsedAr);
+                newH = std::clamp(newH, 64, 16384);
+                customHeight->blockSignals(true);
+                customHeight->setValue(newH);
+                customHeight->blockSignals(false);
+            }
+            ratioEdit->setModified(false);
+        }
+
+        // Aspect ratio lock: when locked and one dimension changes, update the other
+        // (only in perspective mode; spherical always forces 2:1)
+        if (customRes && lockRatio->isChecked() && !spherical &&
+            g_renderExportSettings.lockedAspectRatio > 0.001f) {
+            const float lockAr = g_renderExportSettings.lockedAspectRatio;
+            // Detect which dimension just changed by comparing with last known values
+            // (simple heuristic: if width doesn't match expected from height, width changed)
+            const int expectedWFromH = (int)std::round((float)customHeight->value() * lockAr);
+            const int expectedHFromW = (int)std::round((float)customWidth->value() / lockAr);
+            if (std::abs(customWidth->value() - expectedWFromH) >
+                std::abs(customHeight->value() - expectedHFromW)) {
+                // Width was manually changed → adjust height
+                int newH = std::clamp(expectedHFromW, 64, 16384);
+                if (spherical) newH = std::max(1, customWidth->value() / 2);
+                customHeight->blockSignals(true);
+                customHeight->setValue(newH);
+                customHeight->blockSignals(false);
+            } else {
+                // Height was manually changed → adjust width
+                int newW = std::clamp(expectedWFromH, 64, 16384);
+                customWidth->blockSignals(true);
+                customWidth->setValue(newW);
+                customWidth->blockSignals(false);
+            }
+        }
+
+        // Output info
+        resolutionInfo->setText(
+            tr("%1 x %2").arg(effectiveW).arg(effectiveH));
+
+        // VRAM estimate
+        const unsigned long long totalPixels = (unsigned long long)effectiveW * effectiveH;
+        // Rough heuristic: ~400 bytes/pixel for DXR resources at full res
+        const unsigned long long estimatedVramMB = totalPixels * 400ull / (1024ull * 1024ull);
+        const unsigned long long warningThresholdMB = 4500ull;
+        if (totalPixels > 4000000ull && estimatedVramMB > warningThresholdMB) {
+            vramWarning->setText(
+                tr("⚠ VRAM warning: ~%1 MB estimated.\n"
+                   "May exceed available GPU memory. Enable tile-based rendering\n"
+                   "above to render in stripes, or reduce resolution.")
+                    .arg(estimatedVramMB));
+            vramWarning->setVisible(true);
+        } else {
+            vramWarning->setVisible(false);
+        }
+
+        // Rest of existing updateSummary logic
         const int keyframeCount =
             static_cast<int>(AnimationSequence::GetKeyframes().size());
         sequenceInfo->setText(tr("%1 keys | %2 frames @ %3 fps")
@@ -1855,6 +2035,14 @@ void MainWindow::showRenderPopup()
             &dialog, updateSummary);
     connect(projection, qOverload<int>(&QComboBox::currentIndexChanged),
             &dialog, updateSummary);
+    connect(useCustomRes, &QCheckBox::toggled, &dialog, updateSummary);
+    connect(customWidth, qOverload<int>(&QSpinBox::valueChanged),
+            &dialog, updateSummary);
+    connect(customHeight, qOverload<int>(&QSpinBox::valueChanged),
+            &dialog, updateSummary);
+    connect(lockRatio, &QCheckBox::toggled, &dialog, updateSummary);
+    connect(tileRendering, &QCheckBox::toggled, &dialog, updateSummary);
+    connect(ratioEdit, &QLineEdit::editingFinished, &dialog, updateSummary);
     connect(sequenceFps, qOverload<int>(&QSpinBox::valueChanged),
             &dialog, updateSummary);
     connect(batchSavedViews, &QCheckBox::toggled, &dialog, updateSummary);

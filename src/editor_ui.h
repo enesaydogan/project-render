@@ -22,6 +22,15 @@ struct RenderExportSettings {
   int projectionMode = 0; // CameraProjectionMode
   bool batchSavedViews = false;
   std::string batchBaseName = "final";
+  // Custom resolution (overrides preset when enabled)
+  bool useCustomResolution = false;
+  int customWidth = 3840;
+  int customHeight = 2160;
+  // Aspect ratio lock
+  bool lockAspectRatio = false;
+  float lockedAspectRatio = 0.0f;
+  // Tile-based panorama export toggle (default off, user opts in)
+  bool tileRenderingEnabled = false;
 };
 
 // NOTE: RenderMode is defined in scene.h

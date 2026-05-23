@@ -6082,8 +6082,13 @@ bool CanIdleWithoutRendering() {
     }
   }
 
+  const bool exportNoiseStopMode =
+      g_cameraData.exportRendering > 0.5f &&
+      g_cameraData.useAdaptiveSampling > 0.5f;
   const bool reachedEndCondition =
-      ((maxSpp > 0 && currSpp >= maxSpp) || isConverged);
+      exportNoiseStopMode ? isConverged
+                          : ((maxSpp > 0 && currSpp >= maxSpp) ||
+                             isConverged);
   if (!reachedEndCondition) {
     return false;
   }
@@ -6396,7 +6401,13 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   const uint32_t dxrFeatureMask =
       ComputeDxrFeatureMask(dlssActive, rrActive, debugViewActive,
                             isFinalDenoiserMode);
-  bool reachedEndCondition = ((maxSpp > 0 && currSpp >= maxSpp) || isConverged);
+  const bool exportNoiseStopMode =
+      g_cameraData.exportRendering > 0.5f &&
+      g_cameraData.useAdaptiveSampling > 0.5f;
+  bool reachedEndCondition =
+      exportNoiseStopMode ? isConverged
+                          : ((maxSpp > 0 && currSpp >= maxSpp) ||
+                             isConverged);
 
   bool canAutoDenoise =
       isFinalDenoiserMode && reachedEndCondition && !s_hasDenoised;

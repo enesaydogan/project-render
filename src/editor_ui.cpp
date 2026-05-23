@@ -902,6 +902,7 @@ struct RenderExportLaunchSettings {
   bool allowNoiseThresholdStop = true;
   unsigned int explicitWidth = 0;
   unsigned int explicitHeight = 0;
+  bool tileRenderingEnabled = false;
 };
 
 static void StartRenderExportJobWithSettings(
@@ -1003,15 +1004,19 @@ static bool StartNextAnimationRenderJob() {
 // Forward declarations for helpers also used by the export job logic in
 // main.cpp
 
-// Minimum panorama width that triggers tiled export on 6 GB GPUs.
+// Minimum width that triggers tiled export on 6 GB GPUs.
 static const UINT kTiledExportMinWidth = 2049;
+static const UINT kTiledExportMinPixels = 4000000; // ~4 MP
 static const UINT kDefaultTileHeight = 256;
 
-static bool ShouldUseTiledExport(const RenderExportJobState &job,
-                                 int projectionMode) {
-  if (projectionMode != (int)CameraProjectionMode::Spherical360)
-    return false;
-  return job.targetWidth >= kTiledExportMinWidth;
+static bool ShouldUseTiledExport(const RenderExportJobState &job) {
+  // Tiled export for any very large render (panorama or perspective)
+  if (job.targetWidth >= kTiledExportMinWidth)
+    return true;
+  // Also trigger on pixel count for tall narrow renders
+  const unsigned long long totalPixels =
+      (unsigned long long)job.targetWidth * job.targetHeight;
+  return totalPixels >= kTiledExportMinPixels;
 }
 
 void SetupTiledExportJob(RenderExportJobState &job) {
@@ -1318,7 +1323,9 @@ static bool EnsureExportRenderTarget(UINT width, UINT height) {
     }
 
     g_renderExportJob.tileState = {}; // Clear any previous tile state
-    if (!isPreview && ShouldUseTiledExport(g_renderExportJob, targetProjectionMode)) {
+    if (!isPreview &&
+        settings.tileRenderingEnabled &&
+        ShouldUseTiledExport(g_renderExportJob)) {
       SetupTiledExportJob(g_renderExportJob);
     }
 
@@ -1727,6 +1734,11 @@ void StartPreviewRenderJob() {
   settings.denoiserIndex = g_renderExportSettings.denoiserIndex;
   settings.projectionMode = g_renderExportSettings.projectionMode;
   settings.allowNoiseThresholdStop = true;
+  if (g_renderExportSettings.useCustomResolution) {
+    settings.explicitWidth = (unsigned int)g_renderExportSettings.customWidth;
+    settings.explicitHeight = (unsigned int)g_renderExportSettings.customHeight;
+  }
+  settings.tileRenderingEnabled = g_renderExportSettings.tileRenderingEnabled;
   StartRenderExportJobWithSettings(L"", settings, true);
   fprintf(stderr,
           "Preview render started: %ux%u, maxSPP=%d, noise=%.3f, "
@@ -1745,6 +1757,11 @@ void StartRenderExportJob(const std::wstring &outputPath) {
   settings.denoiserIndex = g_renderExportSettings.denoiserIndex;
   settings.projectionMode = g_renderExportSettings.projectionMode;
   settings.allowNoiseThresholdStop = true;
+  if (g_renderExportSettings.useCustomResolution) {
+    settings.explicitWidth = (unsigned int)g_renderExportSettings.customWidth;
+    settings.explicitHeight = (unsigned int)g_renderExportSettings.customHeight;
+  }
+  settings.tileRenderingEnabled = g_renderExportSettings.tileRenderingEnabled;
   StartRenderExportJobWithSettings(outputPath, settings, false);
   fprintf(stderr,
           "Render export started: %ux%u, maxSPP=%d, noise=%.3f, "
