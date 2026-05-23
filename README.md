@@ -1,6 +1,6 @@
-#- IMPORTANT NOTE -
+# - IMPORTANT NOTE -
 
-#I created this renderer for my use. I dont know any coding. 99% of the code is from #Agentic coding. It does the job for me. And features i put in based on projects i made. If #projects need spherical panoram i add spherical panorama. Currently dont have any #licensing, and i dont now anything about it. Its free and always be free. I hope you like #it. Good Luck! 
+# I created this renderer for my use. I dont know any coding. 99% of the code is from Agentic coding. It does the job for me. And features i put in based on projects i made. If projects need spherical panoram i add spherical panorama. Currently dont have any licensing, and i dont now anything about it. Its free and always be free. I hope you like it. Good Luck! 
 
 # project-render 0.4.5 - High-End ArchViz Real-Time Engine
 
