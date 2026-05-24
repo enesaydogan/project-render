@@ -185,6 +185,17 @@ enum class GizmoSpace {
   World,
 };
 
+enum class SelectionToolMode {
+  Pointer,
+  Box,
+};
+
+enum class SelectionFilter {
+  Meshes,
+  Lights,
+  MeshesAndLights,
+};
+
 enum class MirrorAxis {
   X,
   Y,
@@ -212,6 +223,10 @@ void SetGizmoOperation(GizmoOperation operation);
 GizmoOperation GetGizmoOperation();
 void SetGizmoSpace(GizmoSpace space);
 GizmoSpace GetGizmoSpace();
+void SetSelectionToolMode(SelectionToolMode mode);
+SelectionToolMode GetSelectionToolMode();
+void SetSelectionFilter(SelectionFilter filter);
+SelectionFilter GetSelectionFilter();
 bool MirrorSelectedNodes(MirrorAxis axis, MirrorPivot pivot, MirrorSpace space);
 bool CanUndoTransform();
 bool CanRedoTransform();
@@ -339,6 +354,9 @@ void EndBatchedUpdates();
 // Ray-cast selection from mouse. Returns the global material index of the hit
 // submesh, or -1.
 int UpdateSelection(float screenWidth, float screenHeight);
+bool BoxSelect(float startScreenX, float startScreenY, float endScreenX,
+               float endScreenY, float screenWidth, float screenHeight,
+               bool additive);
 int PickMaterialAt(float screenX, float screenY, float screenWidth,
                    float screenHeight);
 int PickMaterialAtCursor(float screenWidth, float screenHeight);

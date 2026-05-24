@@ -16,6 +16,7 @@
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPushButton>
+#include <QRubberBand>
 #include <QResizeEvent>
 #include <QTimer>
 #include <QUrl>
@@ -177,6 +178,7 @@ void DX12View::focusOutEvent(QFocusEvent *e)
     Input::SetQtWidgetFocused(false);
     Input::ResetQtInputState();
     m_hasLastMousePos = false;
+    cancelBoxSelection();
     ImGui::GetIO().AddFocusEvent(false);
     ResetImGuiInputs();
     QWidget::focusOutEvent(e);
@@ -281,6 +283,20 @@ void DX12View::mousePressEvent(QMouseEvent *e)
         return;
     }
 
+    if (e->button() == Qt::LeftButton &&
+        Scene::GetSelectionToolMode() == Scene::SelectionToolMode::Box) {
+        m_boxSelecting = true;
+        m_boxStartGlobalPos = e->globalPosition();
+        m_boxStartLocalPos = e->position().toPoint();
+        if (!m_boxSelectionBand) {
+            m_boxSelectionBand = new QRubberBand(QRubberBand::Rectangle, this);
+        }
+        m_boxSelectionBand->setGeometry(QRect(m_boxStartLocalPos, QSize()));
+        m_boxSelectionBand->show();
+        e->accept();
+        return;
+    }
+
     const int virtualKey = MapQtMouseButtonToVirtualKey(e->button());
     if (virtualKey != 0) {
         Input::SetQtMouseButtonState(virtualKey, true);
@@ -301,6 +317,29 @@ void DX12View::mouseReleaseEvent(QMouseEvent *e)
 {
     ImGui::GetIO().AddMousePosEvent(static_cast<float>(e->globalPosition().x()),
                                     static_cast<float>(e->globalPosition().y()));
+
+    if (m_boxSelecting && e->button() == Qt::LeftButton) {
+        if (m_boxSelectionBand) {
+            m_boxSelectionBand->hide();
+        }
+        const QRect localRect =
+            QRect(m_boxStartLocalPos, e->position().toPoint()).normalized();
+        const bool tinyDrag = localRect.width() < 4 && localRect.height() < 4;
+        const QPointF endPos = tinyDrag
+            ? QPointF(m_boxStartGlobalPos.x() + 3.0, m_boxStartGlobalPos.y() + 3.0)
+            : e->globalPosition();
+        Scene::BoxSelect(static_cast<float>(m_boxStartGlobalPos.x()),
+                         static_cast<float>(m_boxStartGlobalPos.y()),
+                         static_cast<float>(endPos.x()),
+                         static_cast<float>(endPos.y()),
+                         static_cast<float>(DX12Context::g_windowWidth),
+                         static_cast<float>(DX12Context::g_windowHeight),
+                         e->modifiers().testFlag(Qt::ControlModifier));
+        m_boxSelecting = false;
+        e->accept();
+        return;
+    }
+
     const int virtualKey = MapQtMouseButtonToVirtualKey(e->button());
     if (virtualKey != 0) {
         Input::SetQtMouseButtonState(virtualKey, false);
@@ -319,6 +358,14 @@ void DX12View::mouseMoveEvent(QMouseEvent *e)
 {
     ImGui::GetIO().AddMousePosEvent(static_cast<float>(e->globalPosition().x()),
                                     static_cast<float>(e->globalPosition().y()));
+    if (m_boxSelecting) {
+        if (m_boxSelectionBand) {
+            m_boxSelectionBand->setGeometry(
+                QRect(m_boxStartLocalPos, e->position().toPoint()).normalized());
+        }
+        e->accept();
+        return;
+    }
     if (m_hasLastMousePos && (e->buttons() & Qt::RightButton)) {
         const QPointF delta = e->globalPosition() - m_lastGlobalMousePos;
         Input::AddQtMouseDelta(static_cast<float>(delta.x()),
@@ -402,4 +449,12 @@ void DX12View::showPendingCloneOptions()
         Scene::ResolvePendingCloneAsInstance();
     }
     m_cloneOptionsDialogOpen = false;
+}
+
+void DX12View::cancelBoxSelection()
+{
+    m_boxSelecting = false;
+    if (m_boxSelectionBand) {
+        m_boxSelectionBand->hide();
+    }
 }

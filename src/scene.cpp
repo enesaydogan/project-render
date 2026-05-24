@@ -182,6 +182,8 @@ static std::atomic<bool> s_pendingReady(false);
 static std::mutex s_pendingMutex;
 static ImGuizmo::OPERATION g_currentGizmoOp = ImGuizmo::TRANSLATE;
 static ImGuizmo::MODE g_currentGizmoMode = ImGuizmo::WORLD;
+static SelectionToolMode s_selectionToolMode = SelectionToolMode::Pointer;
+static SelectionFilter s_selectionFilter = SelectionFilter::MeshesAndLights;
 static int s_selectedLightIdx = -1;
 
 struct TransformNodeHistory {
@@ -264,6 +266,18 @@ GizmoSpace GetGizmoSpace() {
   return (g_currentGizmoMode == ImGuizmo::WORLD) ? GizmoSpace::World
                                                  : GizmoSpace::Local;
 }
+
+void SetSelectionToolMode(SelectionToolMode mode) {
+  s_selectionToolMode = mode;
+}
+
+SelectionToolMode GetSelectionToolMode() { return s_selectionToolMode; }
+
+void SetSelectionFilter(SelectionFilter filter) {
+  s_selectionFilter = filter;
+}
+
+SelectionFilter GetSelectionFilter() { return s_selectionFilter; }
 
 static void PopulateScatterTargetMetadata(ScatterTarget &target) {
   if (target.nodeIndex >= s_nodes.size()) {
@@ -7088,6 +7102,191 @@ bool Inverse4x4(const float *m, float *out) {
   for (i = 0; i < 16; i++)
     out[i] = inv[i] * det;
   return true;
+}
+
+static bool ScreenRectsIntersect(float aMinX, float aMinY, float aMaxX,
+                                 float aMaxY, float bMinX, float bMinY,
+                                 float bMaxX, float bMaxY) {
+  return aMinX <= bMaxX && aMaxX >= bMinX && aMinY <= bMaxY &&
+         aMaxY >= bMinY;
+}
+
+static void AppendUniqueIndex(std::vector<size_t> &indices, size_t index) {
+  if (std::find(indices.begin(), indices.end(), index) == indices.end()) {
+    indices.push_back(index);
+  }
+}
+
+static void ApplySelectionSets(const std::vector<size_t> &nodeIndices,
+                               const std::vector<size_t> &lightIndices) {
+  for (Node &node : s_nodes) {
+    node.selected = false;
+  }
+  for (LightInstance &inst : s_lightInstances) {
+    inst.selected = false;
+  }
+
+  for (size_t index : nodeIndices) {
+    if (index < s_nodes.size()) {
+      s_nodes[index].selected = true;
+    }
+  }
+
+  s_selectedLightIdx = -1;
+  for (size_t index : lightIndices) {
+    if (index >= s_lightInstances.size()) {
+      continue;
+    }
+    s_lightInstances[index].selected = true;
+    s_selectedLightIdx = static_cast<int>(index);
+  }
+
+  NotifySceneChanged();
+}
+
+static bool ProjectNodeBoundsToScreen(
+    size_t nodeIndex, const std::vector<std::array<float, 16>> &worldTransforms,
+    const float view[16], const float proj[16], float windowX, float windowY,
+    float windowWidth, float windowHeight, float &outMinX, float &outMinY,
+    float &outMaxX, float &outMaxY) {
+  if (nodeIndex >= s_nodes.size() || nodeIndex >= worldTransforms.size()) {
+    return false;
+  }
+
+  const Node &node = s_nodes[nodeIndex];
+  if (!node.visible) {
+    return false;
+  }
+
+  bool hasPoint = false;
+  outMinX = outMinY = FLT_MAX;
+  outMaxX = outMaxY = -FLT_MAX;
+  const float *nodeWorld = worldTransforms[nodeIndex].data();
+  for (size_t meshIndex : node.meshIndices) {
+    if (meshIndex >= g_loadedMeshes.size()) {
+      continue;
+    }
+    const Asset::GpuMesh &mesh = g_loadedMeshes[meshIndex];
+    const float corners[8][3] = {
+        {mesh.minBound[0], mesh.minBound[1], mesh.minBound[2]},
+        {mesh.maxBound[0], mesh.minBound[1], mesh.minBound[2]},
+        {mesh.maxBound[0], mesh.maxBound[1], mesh.minBound[2]},
+        {mesh.minBound[0], mesh.maxBound[1], mesh.minBound[2]},
+        {mesh.minBound[0], mesh.minBound[1], mesh.maxBound[2]},
+        {mesh.maxBound[0], mesh.minBound[1], mesh.maxBound[2]},
+        {mesh.maxBound[0], mesh.maxBound[1], mesh.maxBound[2]},
+        {mesh.minBound[0], mesh.maxBound[1], mesh.maxBound[2]},
+    };
+    for (const auto &corner : corners) {
+      float worldCorner[3];
+      TransformPointColumnMajor(nodeWorld, corner, worldCorner);
+      ImVec2 screenPoint;
+      if (!WorldToScreenPoint(worldCorner, view, proj, windowX, windowY,
+                              windowWidth, windowHeight, screenPoint)) {
+        continue;
+      }
+      outMinX = (std::min)(outMinX, screenPoint.x);
+      outMinY = (std::min)(outMinY, screenPoint.y);
+      outMaxX = (std::max)(outMaxX, screenPoint.x);
+      outMaxY = (std::max)(outMaxY, screenPoint.y);
+      hasPoint = true;
+    }
+  }
+  return hasPoint;
+}
+
+bool BoxSelect(float startScreenX, float startScreenY, float endScreenX,
+               float endScreenY, float screenWidth, float screenHeight,
+               bool additive) {
+  if (screenWidth <= 1.0f || screenHeight <= 1.0f) {
+    return false;
+  }
+
+  float vpX = 0.0f;
+  float vpY = 0.0f;
+  float vpWidth = screenWidth;
+  float vpHeight = screenHeight;
+  GetRenderViewportRect(&vpX, &vpY, &vpWidth, &vpHeight);
+
+  float boxMinX = (std::min)(startScreenX, endScreenX);
+  float boxMinY = (std::min)(startScreenY, endScreenY);
+  float boxMaxX = (std::max)(startScreenX, endScreenX);
+  float boxMaxY = (std::max)(startScreenY, endScreenY);
+
+  boxMinX = std::clamp(boxMinX, vpX, vpX + vpWidth);
+  boxMaxX = std::clamp(boxMaxX, vpX, vpX + vpWidth);
+  boxMinY = std::clamp(boxMinY, vpY, vpY + vpHeight);
+  boxMaxY = std::clamp(boxMaxY, vpY, vpY + vpHeight);
+  if (boxMaxX - boxMinX < 1.0f || boxMaxY - boxMinY < 1.0f) {
+    return false;
+  }
+
+  const bool includeMeshes =
+      s_selectionFilter == SelectionFilter::Meshes ||
+      s_selectionFilter == SelectionFilter::MeshesAndLights;
+  const bool includeLights =
+      s_selectionFilter == SelectionFilter::Lights ||
+      s_selectionFilter == SelectionFilter::MeshesAndLights;
+
+  std::vector<size_t> selectedNodes =
+      additive ? GetSelectedNodeIndices() : std::vector<size_t>{};
+  std::vector<size_t> selectedLights =
+      additive ? GetSelectedLightIndices() : std::vector<size_t>{};
+
+  float view[16], proj[16];
+  BuildViewMatrix(view);
+  BuildProjectionMatrix(proj);
+
+  if (includeMeshes) {
+    const std::vector<std::array<float, 16>> worldTransforms =
+        BuildNodeWorldTransforms();
+    for (size_t nodeIndex = 0; nodeIndex < s_nodes.size(); ++nodeIndex) {
+      float meshMinX = 0.0f;
+      float meshMinY = 0.0f;
+      float meshMaxX = 0.0f;
+      float meshMaxY = 0.0f;
+      if (!ProjectNodeBoundsToScreen(nodeIndex, worldTransforms, view, proj,
+                                     vpX, vpY, vpWidth, vpHeight, meshMinX,
+                                     meshMinY, meshMaxX, meshMaxY)) {
+        continue;
+      }
+      if (!ScreenRectsIntersect(boxMinX, boxMinY, boxMaxX, boxMaxY, meshMinX,
+                                meshMinY, meshMaxX, meshMaxY)) {
+        continue;
+      }
+      const size_t target = ResolveSelectionTargetForHit(nodeIndex);
+      if (target < s_nodes.size()) {
+        AppendUniqueIndex(selectedNodes, target);
+      }
+    }
+  }
+
+  if (includeLights) {
+    constexpr float kLightPickRadiusPixels = 12.0f;
+    for (size_t lightIndex = 0; lightIndex < s_lightInstances.size();
+         ++lightIndex) {
+      const LightInstance &inst = s_lightInstances[lightIndex];
+      if (inst.prototypeIndex >= s_lightPrototypes.size()) {
+        continue;
+      }
+      ImVec2 screenPoint;
+      if (!WorldToScreenPoint(inst.position, view, proj, vpX, vpY, vpWidth,
+                              vpHeight, screenPoint)) {
+        continue;
+      }
+      if (!ScreenRectsIntersect(boxMinX, boxMinY, boxMaxX, boxMaxY,
+                                screenPoint.x - kLightPickRadiusPixels,
+                                screenPoint.y - kLightPickRadiusPixels,
+                                screenPoint.x + kLightPickRadiusPixels,
+                                screenPoint.y + kLightPickRadiusPixels)) {
+        continue;
+      }
+      AppendUniqueIndex(selectedLights, lightIndex);
+    }
+  }
+
+  ApplySelectionSets(selectedNodes, selectedLights);
+  return !selectedNodes.empty() || !selectedLights.empty();
 }
 
 int UpdateSelection(float screenWidth, float screenHeight) {

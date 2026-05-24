@@ -71,6 +71,8 @@ private:
     QAction *m_importHdrAction = nullptr;
     QAction *m_undoTransformAction = nullptr;
     QAction *m_redoTransformAction = nullptr;
+    QAction *m_selectPointerAction = nullptr;
+    QAction *m_selectBoxAction = nullptr;
     QAction *m_transformTranslateAction = nullptr;
     QAction *m_transformRotateAction = nullptr;
     QAction *m_transformScaleAction = nullptr;
@@ -86,6 +88,7 @@ private:
     QAction *m_mirrorSpaceCurrentAction = nullptr;
     QAction *m_mirrorSpaceWorldAction = nullptr;
     QAction *m_mirrorSpaceLocalAction = nullptr;
+    QActionGroup *m_selectionToolGroup = nullptr;
     QActionGroup *m_transformOperationGroup = nullptr;
     QActionGroup *m_transformSpaceGroup = nullptr;
     QActionGroup *m_mirrorPivotGroup = nullptr;

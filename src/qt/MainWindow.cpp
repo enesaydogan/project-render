@@ -109,6 +109,8 @@ enum class ToolbarIcon {
     ImportHdr,
     Undo,
     Redo,
+    SelectPointer,
+    BoxSelect,
     Translate,
     Rotate,
     Scale,
@@ -595,6 +597,30 @@ QIcon MakeToolbarIcon(ToolbarIcon icon,
         painter.drawLine(QPointF(24, 15), QPointF(27, 9));
         painter.drawLine(QPointF(24, 15), QPointF(18, 14));
         break;
+    case ToolbarIcon::SelectPointer:
+        painter.setPen(accentPen);
+        painter.setBrush(Qt::NoBrush);
+        painter.drawPath([&]() {
+            QPainterPath cursor;
+            cursor.moveTo(10, 6);
+            cursor.lineTo(10, 25);
+            cursor.lineTo(15, 20);
+            cursor.lineTo(18, 27);
+            cursor.lineTo(22, 25);
+            cursor.lineTo(19, 18);
+            cursor.lineTo(26, 18);
+            cursor.closeSubpath();
+            return cursor;
+        }());
+        break;
+    case ToolbarIcon::BoxSelect:
+        painter.setPen(QPen(accent, 2.0, Qt::DashLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.drawRect(QRectF(7, 7, 18, 18));
+        painter.setPen(pen);
+        painter.drawLine(QPointF(10, 11), QPointF(15, 16));
+        painter.drawLine(QPointF(10, 11), QPointF(10, 17));
+        painter.drawLine(QPointF(10, 11), QPointF(16, 11));
+        break;
     case ToolbarIcon::Translate:
         painter.setPen(accentPen);
         painter.drawLine(QPointF(16, 6), QPointF(16, 26));
@@ -1019,6 +1045,25 @@ void MainWindow::createMenus()
     m_redoTransformAction->setShortcutContext(Qt::ApplicationShortcut);
     editMenu->addSeparator();
 
+    m_selectionToolGroup = new QActionGroup(this);
+    m_selectionToolGroup->setExclusive(true);
+    m_selectPointerAction =
+        editMenu->addAction(tr("Pointer Select"), this, [this]() {
+            Scene::SetSelectionToolMode(Scene::SelectionToolMode::Pointer);
+            statusBar()->showMessage(tr("Pointer selection"), 1600);
+        });
+    m_selectBoxAction =
+        editMenu->addAction(tr("Box Select"), this, [this]() {
+            Scene::SetSelectionToolMode(Scene::SelectionToolMode::Box);
+            statusBar()->showMessage(tr("Box selection"), 1600);
+        });
+    for (QAction *action : {m_selectPointerAction, m_selectBoxAction}) {
+        action->setCheckable(true);
+        m_selectionToolGroup->addAction(action);
+    }
+    m_selectPointerAction->setChecked(true);
+    editMenu->addSeparator();
+
     m_transformOperationGroup = new QActionGroup(this);
     m_transformOperationGroup->setExclusive(true);
     m_transformTranslateAction =
@@ -1272,6 +1317,14 @@ void MainWindow::createToolBar()
                            tr("Redo Transform"),
                            tr("Redo transform (Ctrl+Y)"),
                            ToolbarIcon::Redo);
+    ConfigureToolbarAction(m_selectPointerAction,
+                           tr("Pointer Select"),
+                           tr("Pointer selection"),
+                           ToolbarIcon::SelectPointer);
+    ConfigureToolbarAction(m_selectBoxAction,
+                           tr("Box Select"),
+                           tr("Box selection"),
+                           ToolbarIcon::BoxSelect);
     ConfigureToolbarAction(m_transformTranslateAction,
                            tr("Translate"),
                            tr("Translate gizmo (G)"),
@@ -1320,6 +1373,31 @@ void MainWindow::createToolBar()
     if (m_redoTransformAction) {
         toolbar->addAction(m_redoTransformAction);
     }
+    toolbar->addSeparator();
+    if (m_selectPointerAction) {
+        toolbar->addAction(m_selectPointerAction);
+    }
+    if (m_selectBoxAction) {
+        toolbar->addAction(m_selectBoxAction);
+    }
+    auto *selectionFilterCombo = new QComboBox(toolbar);
+    selectionFilterCombo->setObjectName(QStringLiteral("ToolbarCombo"));
+    selectionFilterCombo->addItem(
+        tr("Mesh + Light"),
+        static_cast<int>(Scene::SelectionFilter::MeshesAndLights));
+    selectionFilterCombo->addItem(
+        tr("Mesh"), static_cast<int>(Scene::SelectionFilter::Meshes));
+    selectionFilterCombo->addItem(
+        tr("Light"), static_cast<int>(Scene::SelectionFilter::Lights));
+    selectionFilterCombo->setToolTip(tr("Box selection filter"));
+    selectionFilterCombo->setMinimumWidth(118);
+    connect(selectionFilterCombo,
+            qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [selectionFilterCombo]() {
+                Scene::SetSelectionFilter(static_cast<Scene::SelectionFilter>(
+                    selectionFilterCombo->currentData().toInt()));
+            });
+    toolbar->addWidget(selectionFilterCombo);
     toolbar->addSeparator();
     if (m_transformTranslateAction) {
         toolbar->addAction(m_transformTranslateAction);
