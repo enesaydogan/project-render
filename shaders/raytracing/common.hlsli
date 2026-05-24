@@ -291,6 +291,65 @@ inline float2 DirectionToUVRotated(float3 dir) {
 
 StructuredBuffer<Light> g_lights : register(t5000);
 
+#ifdef REGIR_ENABLED
+// ReGIR resources (defined in regir_lib.hlsl)
+#include "../regir_lib.hlsl"
+RWStructuredBuffer<ReGIRCellReservoir> g_regirCells : register(u36);
+StructuredBuffer<ReGIRLightBound> g_regirLightBounds : register(t5001);
+cbuffer ReGIRParams : register(b11, space3)
+{
+    ReGIRConstants g_regirParams;
+};
+
+// ReGIR sampling functions (require g_regirCells, declared above)
+
+uint ReGIR_SampleCandidate(float3 worldPos, inout RNG rng,
+                           ReGIRConstants params)
+{
+    uint cellIdx = ReGIR_WorldPosToCell(worldPos, params);
+    if (cellIdx == 0xFFFFFFFFu)
+        return 0xFFFFFFFFu;
+
+    uint base = ReGIR_CellBaseIndex(cellIdx, params);
+
+    // Count valid candidates in this cell
+    uint validCount = 0u;
+    for (uint i = 0u; i < params.candidatesPerCell; ++i) {
+        ReGIRCellReservoir slot = g_regirCells[base + i];
+        if (slot.lightIndex != 0xFFFFFFFFu && slot.W > 0.0)
+            ++validCount;
+    }
+
+    if (validCount == 0u)
+        return 0xFFFFFFFFu;
+
+    // Pick a random valid slot (uniform among valid candidates)
+    uint target = next_uint(rng) % validCount;
+    uint found = 0u;
+    for (uint j = 0u; j < params.candidatesPerCell; ++j) {
+        ReGIRCellReservoir slot = g_regirCells[base + j];
+        if (slot.lightIndex != 0xFFFFFFFFu && slot.W > 0.0) {
+            if (found == target)
+                return slot.lightIndex;
+            ++found;
+        }
+    }
+
+    return 0xFFFFFFFFu;
+}
+
+uint ReGIR_GetCellOccupancy(uint cellIndex, ReGIRConstants params)
+{
+    uint base = ReGIR_CellBaseIndex(cellIndex, params);
+    uint count = 0u;
+    for (uint i = 0u; i < params.candidatesPerCell; ++i) {
+        if (g_regirCells[base + i].lightIndex != 0xFFFFFFFFu)
+            ++count;
+    }
+    return count;
+}
+#endif // REGIR_ENABLED
+
 // Material flags (bit-packed in MaterialData.pbrParams_flags.w as uint bits).
 static const uint MATERIAL_FLAG_ALPHA_TESTED = 1u << 0;
 static const uint MATERIAL_FLAG_THIN_WALLED  = 1u << 1;
@@ -573,6 +632,9 @@ static const uint WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL = 0u;
 static const uint WAVEFRONT_LIGHT_SAMPLE_FLAT = 1u;
 static const uint WAVEFRONT_LIGHT_SAMPLE_ENV = 2u;
 static const uint WAVEFRONT_LIGHT_SAMPLER_FLAT = 0u;
+#ifdef REGIR_ENABLED
+static const uint WAVEFRONT_LIGHT_SAMPLER_REGIR = 1u;
+#endif
 
 struct WavefrontLightSample
 {
@@ -863,8 +925,17 @@ inline uint WavefrontGetAvailableLightCount()
 inline WavefrontLightSamplerContext WavefrontCreateLightSampler(float3 surfacePos)
 {
     WavefrontLightSamplerContext sampler;
+    uint numLights = WavefrontGetAvailableLightCount();
+    sampler.availableLights = numLights;
+#ifdef REGIR_ENABLED
+    if (numLights > 0u && g_regirParams.totalCells > 0u) {
+        sampler.mode = WAVEFRONT_LIGHT_SAMPLER_REGIR;
+    } else {
+        sampler.mode = WAVEFRONT_LIGHT_SAMPLER_FLAT;
+    }
+#else
     sampler.mode = WAVEFRONT_LIGHT_SAMPLER_FLAT;
-    sampler.availableLights = WavefrontGetAvailableLightCount();
+#endif
     return sampler;
 }
 
@@ -975,6 +1046,33 @@ inline WavefrontLightSample WavefrontSampleFlatLightUnweighted(
     return sample;
 }
 
+#ifdef REGIR_ENABLED
+inline WavefrontLightSample WavefrontSampleReGIRLight(
+    float3 surfacePos,
+    float sampleWeight,
+    inout RNG rng)
+{
+    WavefrontLightSample sample;
+    const uint numLights = WavefrontGetAvailableLightCount();
+
+    uint lightIndex = ReGIR_SampleCandidate(surfacePos, rng, g_regirParams);
+    if (lightIndex == 0xFFFFFFFFu || lightIndex >= numLights) {
+        // Fallback: random light from flat list
+        if (numLights == 0u) {
+            sample.direction = float3(0.0, 1.0, 0.0);
+            sample.maxDistance = 0.0;
+            sample.radiance = float3(0.0, 0.0, 0.0);
+            sample.packedLightIndex =
+                WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_FLAT, 0u);
+            return sample;
+        }
+        lightIndex = next_uint(rng) % numLights;
+    }
+
+    return WavefrontSampleFlatLight(surfacePos, lightIndex, sampleWeight, rng);
+}
+#endif // REGIR_ENABLED
+
 inline WavefrontLightSample WavefrontSampleDirectLight(
     WavefrontLightSamplerContext sampler,
     float3 surfacePos,
@@ -984,6 +1082,12 @@ inline WavefrontLightSample WavefrontSampleDirectLight(
     if (numLights == 0u || next_float(rng) < 0.5) {
         return WavefrontSampleDirectionalLight((numLights > 0u) ? 2.0 : 1.0);
     }
+
+#ifdef REGIR_ENABLED
+    if (sampler.mode == WAVEFRONT_LIGHT_SAMPLER_REGIR) {
+        return WavefrontSampleReGIRLight(surfacePos, 2.0 * (float)numLights, rng);
+    }
+#endif
 
     const uint lightIndex = next_uint(rng) % numLights;
     return WavefrontSampleFlatLight(surfacePos, lightIndex,

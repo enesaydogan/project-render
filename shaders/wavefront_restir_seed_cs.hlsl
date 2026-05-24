@@ -109,7 +109,18 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             WavefrontCreateLightSampler(hitPos);
         const uint numLights = lightSampler.availableLights;
         if (numLights > 0u) {
-            const uint lightIndex = next_uint(rng) % numLights;
+            uint lightIndex;
+#ifdef REGIR_ENABLED
+            if (lightSampler.mode == WAVEFRONT_LIGHT_SAMPLER_REGIR) {
+                lightIndex = ReGIR_SampleCandidate(hitPos, rng, g_regirParams);
+                if (lightIndex == 0xFFFFFFFFu)
+                    lightIndex = next_uint(rng) % numLights;
+            } else {
+                lightIndex = next_uint(rng) % numLights;
+            }
+#else
+            lightIndex = next_uint(rng) % numLights;
+#endif
             WavefrontLightSample localSample =
                 WavefrontSampleFlatLight(hitPos, lightIndex,
                                          (float)numLights, rng);

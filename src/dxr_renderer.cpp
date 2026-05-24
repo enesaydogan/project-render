@@ -301,7 +301,7 @@ static const UINT DXR_HEAP_TEX_OFFSET = 0;
 static const UINT DXR_HEAP_VB_OFFSET = DXR_HEAP_TEX_OFFSET + DXR_HEAP_TEX_COUNT;
 static const UINT DXR_HEAP_IB_OFFSET = DXR_HEAP_VB_OFFSET + DXR_HEAP_VB_COUNT;
 static const UINT DXR_HEAP_UAV_OFFSET = DXR_HEAP_IB_OFFSET + DXR_HEAP_IB_COUNT;
-static const UINT DXR_HEAP_UAV_COUNT = 36; // u0..u35
+static const UINT DXR_HEAP_UAV_COUNT = 38; // u0..u37 (ReGIR at u36-u37)
 static const UINT DXR_HEAP_ACCUM_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 1;
 static const UINT DXR_HEAP_RESERVOIR_0_OFFSET = DXR_HEAP_UAV_OFFSET + 2;
 static const UINT DXR_HEAP_RESERVOIR_1_OFFSET = DXR_HEAP_UAV_OFFSET + 3;
@@ -350,6 +350,8 @@ static const UINT DXR_HEAP_OIDN_ALBEDO_GUIDE_OFFSET =
     DXR_HEAP_UAV_OFFSET + 34;
 static const UINT DXR_HEAP_OIDN_NORMAL_GUIDE_OFFSET =
     DXR_HEAP_UAV_OFFSET + 35;
+static const UINT DXR_HEAP_REGIR_CELLS_OFFSET = DXR_HEAP_UAV_OFFSET + 36;
+static const UINT DXR_HEAP_REGIR_DEBUG_OFFSET = DXR_HEAP_UAV_OFFSET + 37;
 
 // Dedicated SRV blocks after UAV range so UAV registers stay stable.
 static const UINT DXR_HEAP_ENV_SRV_OFFSET =
@@ -763,6 +765,30 @@ static UINT s_lastWavefrontShadowVisibleCount = 0;
 static UINT s_lastWavefrontShadowOccludedCount = 0;
 static UINT s_lastWavefrontStats[64] = {};
 static const char *s_wavefrontStageName = "idle";
+
+// ReGIR resources
+static ComPtr<ID3D12Resource> s_regirCellBuffer;
+static ComPtr<ID3D12Resource> s_regirDebugBuffer;
+static ComPtr<ID3D12Resource> s_regirLightBoundsBuffer;
+static ComPtr<ID3D12Resource> s_regirConstantsBuffer;
+static ComPtr<ID3D12RootSignature> s_regirClearRootSig;
+static ComPtr<ID3D12PipelineState> s_regirClearPSO;
+static ComPtr<ID3D12RootSignature> s_regirUpdateRootSig;
+static ComPtr<ID3D12PipelineState> s_regirUpdatePSO;
+static bool s_regirResourcesCreated = false;
+static bool s_regirDirty = true;
+static UINT s_regirTotalCells = 0;
+static UINT s_regirLightBoundCount = 0;
+static UINT s_regirCandidatesPerCell = 8;
+static UINT s_regirGridRes[3] = {16, 8, 16};
+static float s_sceneBoundsMin[3] = {0, 0, 0};
+static float s_sceneBoundsMax[3] = {1, 1, 1};
+static bool s_sceneBoundsValid = false;
+
+static void InvalidateReGIRGrid() {
+  s_regirDirty = true;
+  s_sceneBoundsValid = false;
+}
 
 static void SetWavefrontStage(const char *stageName) {
   s_wavefrontStageName = stageName ? stageName : "unknown";
@@ -2446,7 +2472,7 @@ static void EnsureWavefrontResolvePipeline() {
   cloudSrvRange.OffsetInDescriptorsFromTableStart =
       D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-  D3D12_ROOT_PARAMETER params[14] = {};
+  D3D12_ROOT_PARAMETER params[16] = {};
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
   params[0].Descriptor.ShaderRegister = 0;
   params[0].Descriptor.RegisterSpace = 0;
@@ -2518,6 +2544,17 @@ static void EnsureWavefrontResolvePipeline() {
   params[13].DescriptorTable.pDescriptorRanges = &cloudSrvRange;
   params[13].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
+  // ReGIR bindings (only used when REGIR_ENABLED is defined in shader)
+  params[14].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[14].Descriptor.ShaderRegister = 5001;
+  params[14].Descriptor.RegisterSpace = 0;
+  params[14].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[15].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+  params[15].Descriptor.ShaderRegister = 11;
+  params[15].Descriptor.RegisterSpace = 3;
+  params[15].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
   D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
   rsDesc.NumParameters = _countof(params);
   rsDesc.pParameters = params;
@@ -2562,6 +2599,7 @@ static void EnsureWavefrontResolvePipeline() {
   ComPtr<IDxcBlob> cs;
   try {
     std::vector<std::wstring> defines;
+    defines.push_back(L"REGIR_ENABLED");
     cs = s_dxcHelper.Compile(L"shaders/wavefront_resolve_primary_cs.hlsl",
                              L"CSMain", L"cs_6_5", defines);
   } catch (const std::exception &e) {
@@ -2599,6 +2637,7 @@ static void EnsureWavefrontSecondaryResolvePipeline() {
   ComPtr<IDxcBlob> cs;
   try {
     std::vector<std::wstring> defines;
+    defines.push_back(L"REGIR_ENABLED");
     cs = s_dxcHelper.Compile(L"shaders/wavefront_resolve_secondary_cs.hlsl",
                              L"CSMain", L"cs_6_5", defines);
   } catch (const std::exception &e) {
@@ -2636,6 +2675,7 @@ static void EnsureWavefrontRestirSeedPipeline() {
   ComPtr<IDxcBlob> cs;
   try {
     std::vector<std::wstring> defines;
+    defines.push_back(L"REGIR_ENABLED");
     cs = s_dxcHelper.Compile(L"shaders/wavefront_restir_seed_cs.hlsl",
                              L"CSMain", L"cs_6_5", defines);
   } catch (const std::exception &e) {
@@ -2794,6 +2834,15 @@ static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
                   s_device->GetDescriptorHandleIncrementSize(
                       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
   list->SetComputeRootDescriptorTable(13, cloudSRV);
+  // ReGIR SRV + CBV (only referenced when REGIR_ENABLED is defined in shader)
+  list->SetComputeRootShaderResourceView(
+      14, s_regirLightBoundsBuffer
+              ? s_regirLightBoundsBuffer->GetGPUVirtualAddress()
+              : 0);
+  list->SetComputeRootConstantBufferView(
+      15, s_regirConstantsBuffer
+              ? s_regirConstantsBuffer->GetGPUVirtualAddress()
+              : 0);
 
   const bool dispatchedIndirect =
       useIndirectDispatch &&
@@ -2860,6 +2909,15 @@ static void DispatchWavefrontRestirSeed(ID3D12GraphicsCommandList4 *list,
                   s_device->GetDescriptorHandleIncrementSize(
                       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
   list->SetComputeRootDescriptorTable(13, cloudSRV);
+  // ReGIR SRV + CBV (only referenced when REGIR_ENABLED is defined in shader)
+  list->SetComputeRootShaderResourceView(
+      14, s_regirLightBoundsBuffer
+              ? s_regirLightBoundsBuffer->GetGPUVirtualAddress()
+              : 0);
+  list->SetComputeRootConstantBufferView(
+      15, s_regirConstantsBuffer
+              ? s_regirConstantsBuffer->GetGPUVirtualAddress()
+              : 0);
 
   const bool dispatchedIndirect =
       useIndirectDispatch &&
@@ -2932,6 +2990,15 @@ static void DispatchWavefrontResolveSecondary(ID3D12GraphicsCommandList4 *list,
                   s_device->GetDescriptorHandleIncrementSize(
                       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
   list->SetComputeRootDescriptorTable(13, cloudSRV);
+  // ReGIR SRV + CBV (only referenced when REGIR_ENABLED is defined in shader)
+  list->SetComputeRootShaderResourceView(
+      14, s_regirLightBoundsBuffer
+              ? s_regirLightBoundsBuffer->GetGPUVirtualAddress()
+              : 0);
+  list->SetComputeRootConstantBufferView(
+      15, s_regirConstantsBuffer
+              ? s_regirConstantsBuffer->GetGPUVirtualAddress()
+              : 0);
 
   const bool dispatchedIndirect =
       useIndirectDispatch &&
@@ -4705,6 +4772,7 @@ void MarkMaterialDirty(int materialIndex) {
 void RequestAccelerationStructureRebuild() {
   s_forceAsRebuild = true;
   s_forceTlasUpdate = false;
+  InvalidateReGIRGrid();
   QueueInteractiveWake("acceleration structure rebuild");
 }
 
@@ -4712,6 +4780,7 @@ void RequestAccelerationStructureUpdate() {
   if (!s_forceAsRebuild) {
     s_forceTlasUpdate = true;
   }
+  InvalidateReGIRGrid();
   QueueInteractiveWake("acceleration structure update");
 }
 
@@ -4799,6 +4868,7 @@ void BuildAccelerationStructures(
     const std::vector<const Asset::GpuMesh *> &meshes,
     const std::vector<Scene::Instance> &instances) {
   s_grassTlasStartIndex = 0xFFFFFFFFu;
+  InvalidateReGIRGrid();
   if (g_debugLog) {
     std::ostringstream _oss;
     _oss << "DxrRenderer::BuildAccelerationStructures: ENTRY meshes="
@@ -5662,6 +5732,10 @@ void BuildAccelerationStructures(
   }
 }
 
+// Forward declarations for ReGIR invalidation from scene-facing update paths.
+static UINT BuildReGIRLightBounds(const std::vector<Light> &lights);
+void MarkReGIRDirty();
+
 void UpdateLights(const std::vector<Light> &lights, bool resetAccumulation) {
   WaitForAsyncRestirIdleForLightUpdates();
 
@@ -5669,6 +5743,8 @@ void UpdateLights(const std::vector<Light> &lights, bool resetAccumulation) {
     if (s_lightCount != 0) {
       s_lightCount = 0;
       s_lastLightsCpu.clear();
+      s_regirLightBoundCount = 0;
+      MarkReGIRDirty();
       if (resetAccumulation) {
         ResetAccumulation();
       }
@@ -5729,6 +5805,9 @@ void UpdateLights(const std::vector<Light> &lights, bool resetAccumulation) {
   if (resetAccumulation) {
     ResetAccumulation();
   }
+
+  s_regirLightBoundCount = 0;
+  MarkReGIRDirty();
 }
 
 void ResetAccumulation() {
@@ -6237,6 +6316,545 @@ GpuMemoryBreakdown GetGpuMemoryBreakdown() {
                          breakdown.diagnosticBufferBytes +
                          breakdown.descriptorHeapBytes;
   return breakdown;
+}
+
+// ---- ReGIR helpers ---------------------------------------------------------
+
+static D3D12_GPU_DESCRIPTOR_HANDLE GetDxrHeapGpuHandle(UINT heapOffset) {
+  D3D12_GPU_DESCRIPTOR_HANDLE handle = {};
+  if (!s_srvHeap || !s_device) {
+    return handle;
+  }
+  handle = s_srvHeap->GetGPUDescriptorHandleForHeapStart();
+  handle.ptr +=
+      (UINT64)heapOffset *
+      s_device->GetDescriptorHandleIncrementSize(
+          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+  return handle;
+}
+
+static void ComputeSceneBounds() {
+  s_sceneBoundsValid = false;
+  s_sceneBoundsMin[0] = s_sceneBoundsMin[1] = s_sceneBoundsMin[2] = FLT_MAX;
+  s_sceneBoundsMax[0] = s_sceneBoundsMax[1] = s_sceneBoundsMax[2] = -FLT_MAX;
+
+  auto instances = Scene::GetInstances();
+  auto UseDefaultBounds = []() {
+    // Default cube if no geometry
+    s_sceneBoundsMin[0] = s_sceneBoundsMin[1] = s_sceneBoundsMin[2] = -5.0f;
+    s_sceneBoundsMax[0] = s_sceneBoundsMax[1] = s_sceneBoundsMax[2] = 5.0f;
+    s_sceneBoundsValid = true;
+  };
+
+  if (instances.empty()) {
+    UseDefaultBounds();
+    return;
+  }
+
+  bool foundBounds = false;
+  for (const auto &inst : instances) {
+    if (!inst.mesh) continue;
+    foundBounds = true;
+    float localMin[3] = {inst.mesh->minBound[0], inst.mesh->minBound[1],
+                         inst.mesh->minBound[2]};
+    float localMax[3] = {inst.mesh->maxBound[0], inst.mesh->maxBound[1],
+                         inst.mesh->maxBound[2]};
+
+    // Transform 8 corners to world space
+    for (int c = 0; c < 8; ++c) {
+      float lx = (c & 1) ? localMax[0] : localMin[0];
+      float ly = (c & 2) ? localMax[1] : localMin[1];
+      float lz = (c & 4) ? localMax[2] : localMin[2];
+
+      DirectX::XMVECTOR local = DirectX::XMVectorSet(lx, ly, lz, 1.0f);
+      DirectX::XMVECTOR world = DirectX::XMVector4Transform(local, inst.transform);
+      float wx = DirectX::XMVectorGetX(world);
+      float wy = DirectX::XMVectorGetY(world);
+      float wz = DirectX::XMVectorGetZ(world);
+
+      if (wx < s_sceneBoundsMin[0]) s_sceneBoundsMin[0] = wx;
+      if (wy < s_sceneBoundsMin[1]) s_sceneBoundsMin[1] = wy;
+      if (wz < s_sceneBoundsMin[2]) s_sceneBoundsMin[2] = wz;
+      if (wx > s_sceneBoundsMax[0]) s_sceneBoundsMax[0] = wx;
+      if (wy > s_sceneBoundsMax[1]) s_sceneBoundsMax[1] = wy;
+      if (wz > s_sceneBoundsMax[2]) s_sceneBoundsMax[2] = wz;
+    }
+  }
+
+  if (!foundBounds) {
+    UseDefaultBounds();
+    return;
+  }
+
+  // Add 10% margin
+  float margin[3];
+  for (int i = 0; i < 3; ++i) {
+    margin[i] = (s_sceneBoundsMax[i] - s_sceneBoundsMin[i]) * 0.1f;
+    if (margin[i] < 1.0f) margin[i] = 1.0f;
+  }
+  s_sceneBoundsMin[0] -= margin[0];
+  s_sceneBoundsMin[1] -= margin[1];
+  s_sceneBoundsMin[2] -= margin[2];
+  s_sceneBoundsMax[0] += margin[0];
+  s_sceneBoundsMax[1] += margin[1];
+  s_sceneBoundsMax[2] += margin[2];
+
+  s_sceneBoundsValid = true;
+}
+
+// GPU-side structs matching regir_lib.hlsl
+struct ReGIRCellReservoirGpu {
+  uint32_t lightIndex;
+  float weight;
+  uint32_t M;
+  float W;
+};
+
+struct ReGIRLightBoundGpu {
+  float center[3];
+  float radius;
+  float power;
+  uint32_t lightIndex;
+  uint32_t pad[2];
+};
+
+struct ReGIRConstantsGpu {
+  float gridMin[4];       // pad0 in [3]
+  float gridMax[4];       // pad1 in [3]
+  float cellSize[4];      // pad2 in [3]
+  uint32_t gridRes[4];    // x, y, z, candidatesPerCell
+  uint32_t totalCells;
+  uint32_t frameIndex;
+  uint32_t lightsDirty;
+  uint32_t pad3;
+  // Extended fields for ReGIR update shader (after ReGIRConstants)
+  uint32_t numLightBounds;
+  uint32_t updatePad[3];
+};
+
+static void EnsureReGIRResources() {
+  if (s_regirResourcesCreated) return;
+
+  s_regirTotalCells =
+      s_regirGridRes[0] * s_regirGridRes[1] * s_regirGridRes[2];
+  UINT cellBufferElements = s_regirTotalCells * s_regirCandidatesPerCell;
+
+  // Cell reservoir buffer (UAV)
+  {
+    D3D12_HEAP_PROPERTIES heapProps = {};
+    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+    D3D12_RESOURCE_DESC bufDesc = {};
+    bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufDesc.Width = cellBufferElements * sizeof(ReGIRCellReservoirGpu);
+    bufDesc.Height = 1;
+    bufDesc.DepthOrArraySize = 1;
+    bufDesc.MipLevels = 1;
+    bufDesc.Format = DXGI_FORMAT_UNKNOWN;
+    bufDesc.SampleDesc.Count = 1;
+    bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    bufDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+    ThrowIfFailed(s_device->CreateCommittedResource(
+        &heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+        IID_PPV_ARGS(&s_regirCellBuffer)));
+
+    // Create UAV descriptor
+    UINT descInc = s_device->GetDescriptorHandleIncrementSize(
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle =
+        s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+    cpuHandle.ptr += DXR_HEAP_REGIR_CELLS_OFFSET * descInc;
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+    uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    uavDesc.Buffer.NumElements = cellBufferElements;
+    uavDesc.Buffer.StructureByteStride = sizeof(ReGIRCellReservoirGpu);
+    s_device->CreateUnorderedAccessView(s_regirCellBuffer.Get(), nullptr,
+                                        &uavDesc, cpuHandle);
+  }
+
+  // Debug buffer (UAV, small)
+  {
+    D3D12_HEAP_PROPERTIES heapProps = {};
+    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+    D3D12_RESOURCE_DESC bufDesc = {};
+    bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufDesc.Width = 256 * sizeof(uint32_t) * 4; // 4KB
+    bufDesc.Height = 1;
+    bufDesc.DepthOrArraySize = 1;
+    bufDesc.MipLevels = 1;
+    bufDesc.Format = DXGI_FORMAT_UNKNOWN;
+    bufDesc.SampleDesc.Count = 1;
+    bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    bufDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+    ThrowIfFailed(s_device->CreateCommittedResource(
+        &heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+        IID_PPV_ARGS(&s_regirDebugBuffer)));
+
+    UINT descInc = s_device->GetDescriptorHandleIncrementSize(
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle =
+        s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+    cpuHandle.ptr += DXR_HEAP_REGIR_DEBUG_OFFSET * descInc;
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+    uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    uavDesc.Buffer.NumElements = 256;
+    uavDesc.Buffer.StructureByteStride = sizeof(uint32_t) * 4;
+    s_device->CreateUnorderedAccessView(s_regirDebugBuffer.Get(), nullptr,
+                                        &uavDesc, cpuHandle);
+  }
+
+  // Light bounds buffer (upload heap, SRV)
+  {
+    D3D12_HEAP_PROPERTIES heapProps = {};
+    heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+    D3D12_RESOURCE_DESC bufDesc = {};
+    bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufDesc.Width = std::max<UINT>(
+        (UINT)sizeof(ReGIRLightBoundGpu) * 1024,
+        (UINT)sizeof(ReGIRLightBoundGpu) * 16);
+    bufDesc.Height = 1;
+    bufDesc.DepthOrArraySize = 1;
+    bufDesc.MipLevels = 1;
+    bufDesc.Format = DXGI_FORMAT_UNKNOWN;
+    bufDesc.SampleDesc.Count = 1;
+    bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    bufDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+    ThrowIfFailed(s_device->CreateCommittedResource(
+        &heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&s_regirLightBoundsBuffer)));
+  }
+
+  // Constants buffer (upload heap, CBV)
+  {
+    D3D12_HEAP_PROPERTIES heapProps = {};
+    heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+    D3D12_RESOURCE_DESC bufDesc = {};
+    bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufDesc.Width = 256; // must be 256-aligned for CB
+    bufDesc.Height = 1;
+    bufDesc.DepthOrArraySize = 1;
+    bufDesc.MipLevels = 1;
+    bufDesc.Format = DXGI_FORMAT_UNKNOWN;
+    bufDesc.SampleDesc.Count = 1;
+    bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    bufDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+    ThrowIfFailed(s_device->CreateCommittedResource(
+        &heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&s_regirConstantsBuffer)));
+  }
+
+  // Root signatures for ReGIR passes
+  if (!s_regirClearRootSig) {
+    // Clear: needs UAV table (u36-u37) + four root constants at b0.
+    D3D12_DESCRIPTOR_RANGE uavRange = {};
+    uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    uavRange.NumDescriptors = 2; // u36-u37
+    uavRange.BaseShaderRegister = 36;
+    uavRange.RegisterSpace = 0;
+
+    D3D12_ROOT_PARAMETER params[2] = {};
+    params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    params[0].Constants.ShaderRegister = 0;
+    params[0].Constants.RegisterSpace = 0;
+    params[0].Constants.Num32BitValues = 4;
+    params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[1].DescriptorTable.NumDescriptorRanges = 1;
+    params[1].DescriptorTable.pDescriptorRanges = &uavRange;
+    params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rootSigDesc = {};
+    rootSigDesc.NumParameters = 2;
+    rootSigDesc.pParameters = params;
+    rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ComPtr<ID3DBlob> sigBlob, errBlob;
+    ThrowIfFailed(D3D12SerializeRootSignature(
+        &rootSigDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob));
+    ThrowIfFailed(s_device->CreateRootSignature(
+        0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(),
+        IID_PPV_ARGS(&s_regirClearRootSig)));
+  }
+
+  if (!s_regirUpdateRootSig) {
+    // Update: needs UAV table (u36-u37) + SRV t5001 + root CBV
+    D3D12_DESCRIPTOR_RANGE uavRange = {};
+    uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    uavRange.NumDescriptors = 2;
+    uavRange.BaseShaderRegister = 36;
+    uavRange.RegisterSpace = 0;
+
+    D3D12_ROOT_PARAMETER params[3] = {};
+    params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    params[0].Descriptor.ShaderRegister = 0;
+    params[0].Descriptor.RegisterSpace = 0;
+    params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[1].DescriptorTable.NumDescriptorRanges = 1;
+    params[1].DescriptorTable.pDescriptorRanges = &uavRange;
+    params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    params[2].Descriptor.ShaderRegister = 5001;
+    params[2].Descriptor.RegisterSpace = 0;
+    params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rootSigDesc = {};
+    rootSigDesc.NumParameters = 3;
+    rootSigDesc.pParameters = params;
+    rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ComPtr<ID3DBlob> sigBlob, errBlob;
+    ThrowIfFailed(D3D12SerializeRootSignature(
+        &rootSigDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob));
+    ThrowIfFailed(s_device->CreateRootSignature(
+        0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(),
+        IID_PPV_ARGS(&s_regirUpdateRootSig)));
+  }
+
+  // Compile ReGIR compute shaders
+  if (!s_regirClearPSO) {
+    std::vector<std::wstring> defines;
+    ComPtr<IDxcBlob> cs =
+        s_dxcHelper.Compile(L"shaders/regir_clear_cs.hlsl", L"CSMain",
+                            L"cs_6_5", defines);
+    D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
+    psoDesc.pRootSignature = s_regirClearRootSig.Get();
+    psoDesc.CS.pShaderBytecode = cs->GetBufferPointer();
+    psoDesc.CS.BytecodeLength = cs->GetBufferSize();
+    ThrowIfFailed(s_device->CreateComputePipelineState(
+        &psoDesc, IID_PPV_ARGS(&s_regirClearPSO)));
+  }
+
+  if (!s_regirUpdatePSO) {
+    std::vector<std::wstring> defines;
+    ComPtr<IDxcBlob> cs =
+        s_dxcHelper.Compile(L"shaders/regir_update_cs.hlsl", L"CSMain",
+                            L"cs_6_5", defines);
+    D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
+    psoDesc.pRootSignature = s_regirUpdateRootSig.Get();
+    psoDesc.CS.pShaderBytecode = cs->GetBufferPointer();
+    psoDesc.CS.BytecodeLength = cs->GetBufferSize();
+    ThrowIfFailed(s_device->CreateComputePipelineState(
+        &psoDesc, IID_PPV_ARGS(&s_regirUpdatePSO)));
+  }
+
+  s_regirResourcesCreated = true;
+}
+
+static UINT BuildReGIRLightBounds(const std::vector<Light> &lights) {
+  s_regirLightBoundCount = 0;
+  if (!s_regirLightBoundsBuffer) return 0;
+
+  std::vector<ReGIRLightBoundGpu> bounds;
+  bounds.reserve(lights.size());
+
+  for (size_t i = 0; i < lights.size(); ++i) {
+    const Light &l = lights[i];
+    if (l.type == (uint32_t)LightType::Directional) {
+      continue;
+    }
+
+    const float power =
+        (std::max)(0.0f, (l.emission[0] + l.emission[1] + l.emission[2]) *
+                             0.33333334f);
+    if (power <= 0.0f) {
+      continue;
+    }
+
+    ReGIRLightBoundGpu lb = {};
+    lb.center[0] = l.position[0];
+    lb.center[1] = l.position[1];
+    lb.center[2] = l.position[2];
+    lb.lightIndex = (uint32_t)i;
+    lb.power = power;
+
+    // Bounding sphere radius
+    if (l.type == (uint32_t)LightType::Omni ||
+        l.type == (uint32_t)LightType::IES) {
+      lb.radius = l.radius > 0.0f ? l.radius : 1.0f;
+    } else if (l.type == (uint32_t)LightType::Spot) {
+      lb.radius = (std::max)(l.radius, 2.0f);
+    } else if (l.type == (uint32_t)LightType::AreaRect ||
+               l.type == (uint32_t)LightType::AreaDisk) {
+      float halfDiag =
+          sqrtf(l.areaExtents[0] * l.areaExtents[0] +
+                l.areaExtents[1] * l.areaExtents[1]) * 0.5f;
+      lb.radius = (std::max)(halfDiag, 1.0f);
+    } else {
+      lb.radius = 1.0f;
+    }
+
+    bounds.push_back(lb);
+  }
+
+  // Resize upload buffer if needed
+  UINT needed = (UINT)(bounds.size() * sizeof(ReGIRLightBoundGpu));
+  if (needed > s_regirLightBoundsBuffer->GetDesc().Width) {
+    s_regirLightBoundsBuffer.Reset();
+    D3D12_HEAP_PROPERTIES heapProps = {};
+    heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+    D3D12_RESOURCE_DESC bufDesc = {};
+    bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufDesc.Width = (std::max)(needed, (UINT)sizeof(ReGIRLightBoundGpu) * 16);
+    bufDesc.Height = 1;
+    bufDesc.DepthOrArraySize = 1;
+    bufDesc.MipLevels = 1;
+    bufDesc.Format = DXGI_FORMAT_UNKNOWN;
+    bufDesc.SampleDesc.Count = 1;
+    bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    bufDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+    ThrowIfFailed(s_device->CreateCommittedResource(
+        &heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&s_regirLightBoundsBuffer)));
+  }
+
+  // Upload
+  void *pData = nullptr;
+  ThrowIfFailed(s_regirLightBoundsBuffer->Map(0, nullptr, &pData));
+  if (!bounds.empty()) {
+    memcpy(pData, bounds.data(), bounds.size() * sizeof(ReGIRLightBoundGpu));
+  }
+  s_regirLightBoundsBuffer->Unmap(0, nullptr);
+  s_regirLightBoundCount = (UINT)bounds.size();
+  return s_regirLightBoundCount;
+}
+
+static void UploadReGIRConstants(UINT numLightBounds) {
+  if (!s_regirConstantsBuffer) return;
+
+  ReGIRConstantsGpu cb = {};
+  cb.gridMin[0] = s_sceneBoundsMin[0];
+  cb.gridMin[1] = s_sceneBoundsMin[1];
+  cb.gridMin[2] = s_sceneBoundsMin[2];
+  cb.gridMin[3] = 0.0f; // pad
+  cb.gridMax[0] = s_sceneBoundsMax[0];
+  cb.gridMax[1] = s_sceneBoundsMax[1];
+  cb.gridMax[2] = s_sceneBoundsMax[2];
+  cb.gridMax[3] = 0.0f;
+
+  for (int i = 0; i < 3; ++i) {
+    float extent = s_sceneBoundsMax[i] - s_sceneBoundsMin[i];
+    if (extent <= 0.0f) extent = 1.0f;
+    cb.cellSize[i] = extent / (float)s_regirGridRes[i];
+  }
+  cb.cellSize[3] = 0.0f;
+
+  cb.gridRes[0] = s_regirGridRes[0];
+  cb.gridRes[1] = s_regirGridRes[1];
+  cb.gridRes[2] = s_regirGridRes[2];
+  cb.gridRes[3] = s_regirCandidatesPerCell;
+  cb.totalCells =
+      (numLightBounds > 0u && s_sceneBoundsValid) ? s_regirTotalCells : 0u;
+  cb.frameIndex = s_frameIndexPtr ? *s_frameIndexPtr : 0u;
+  cb.lightsDirty = s_regirDirty ? 1u : 0u;
+  cb.numLightBounds = numLightBounds;
+
+  void *pData = nullptr;
+  ThrowIfFailed(s_regirConstantsBuffer->Map(0, nullptr, &pData));
+  memcpy(pData, &cb, sizeof(ReGIRConstantsGpu));
+  s_regirConstantsBuffer->Unmap(0, nullptr);
+}
+
+static void DispatchReGIRClear(ID3D12GraphicsCommandList4 *list) {
+  if (!s_regirClearPSO || !s_regirClearRootSig || !s_regirCellBuffer) return;
+
+  UINT totalEntries = s_regirTotalCells * s_regirCandidatesPerCell;
+  UINT cbData[4] = {s_regirTotalCells, s_regirCandidatesPerCell, 0, 0};
+
+  list->SetComputeRootSignature(s_regirClearRootSig.Get());
+  list->SetComputeRoot32BitConstants(0, 4, cbData, 0);
+  list->SetComputeRootDescriptorTable(
+      1, GetDxrHeapGpuHandle(DXR_HEAP_REGIR_CELLS_OFFSET));
+
+  list->SetPipelineState(s_regirClearPSO.Get());
+  list->Dispatch((totalEntries + 63) / 64, 1, 1);
+}
+
+static void DispatchReGIRUpdate(ID3D12GraphicsCommandList4 *list,
+                                UINT numLightBounds) {
+  if (!s_regirUpdatePSO || !s_regirUpdateRootSig || !s_regirCellBuffer ||
+      !s_regirConstantsBuffer || !s_regirLightBoundsBuffer ||
+      numLightBounds == 0u) {
+    return;
+  }
+
+  UploadReGIRConstants(numLightBounds);
+
+  list->SetComputeRootSignature(s_regirUpdateRootSig.Get());
+  // Root CBV (b0): ReGIR constants
+  list->SetComputeRootConstantBufferView(
+      0, s_regirConstantsBuffer->GetGPUVirtualAddress());
+  // UAV table (u36-u37)
+  list->SetComputeRootDescriptorTable(
+      1, GetDxrHeapGpuHandle(DXR_HEAP_REGIR_CELLS_OFFSET));
+  // SRV (t5001): light bounds
+  list->SetComputeRootShaderResourceView(
+      2, s_regirLightBoundsBuffer->GetGPUVirtualAddress());
+
+  list->SetPipelineState(s_regirUpdatePSO.Get());
+  list->Dispatch((s_regirTotalCells + 63) / 64, 1, 1);
+}
+
+static void PrepareReGIRFrame(ID3D12GraphicsCommandList4 *list) {
+  if (!s_device || !s_srvHeap) {
+    return;
+  }
+
+  EnsureReGIRResources();
+  if (!s_regirConstantsBuffer) {
+    return;
+  }
+
+  if (!s_sceneBoundsValid || s_regirDirty) {
+    ComputeSceneBounds();
+  }
+
+  UINT lightBoundCount = s_regirLightBoundCount;
+  if (s_regirDirty && !s_lastLightsCpu.empty()) {
+    lightBoundCount = BuildReGIRLightBounds(s_lastLightsCpu);
+  }
+
+  if (!s_sceneBoundsValid || lightBoundCount == 0u) {
+    s_regirDirty = false;
+    UploadReGIRConstants(0u);
+    return;
+  }
+
+  UploadReGIRConstants(lightBoundCount);
+  if (!list || !s_regirDirty) {
+    return;
+  }
+
+  DispatchReGIRClear(list);
+  D3D12_RESOURCE_BARRIER regirClearBarrier = {};
+  regirClearBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+  regirClearBarrier.UAV.pResource = nullptr;
+  list->ResourceBarrier(1, &regirClearBarrier);
+
+  DispatchReGIRUpdate(list, lightBoundCount);
+  D3D12_RESOURCE_BARRIER regirUpdateBarrier = {};
+  regirUpdateBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+  regirUpdateBarrier.UAV.pResource = nullptr;
+  list->ResourceBarrier(1, &regirUpdateBarrier);
+
+  s_regirDirty = false;
+  UploadReGIRConstants(lightBoundCount);
+}
+
+void MarkReGIRDirty() {
+  InvalidateReGIRGrid();
 }
 
 bool IsReady() {
@@ -6931,6 +7549,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
           s_uploadedWavefrontShadowRayGen = s_wavefrontShadowRayGenShaderTable;
         }
       }
+
+      PrepareReGIRFrame(dxrList.Get());
 
       if (s_pathTracingBackend == PathTracingBackend::WavefrontParity) {
         // Phase 2 parity gate: resolve queue-backed primary hits into the
