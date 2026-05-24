@@ -265,6 +265,7 @@ static const uint DXR_FEATURE_AOV_OUTPUT = 1u << 0;
 static const uint DXR_FEATURE_PRIMARY_GUIDE = 1u << 1;
 static const uint DXR_FEATURE_CLAY_PRESERVE_TRANSPARENCY = 1u << 2;
 static const uint DXR_FEATURE_CLAY_PRESERVE_EMISSION = 1u << 3;
+static const uint DXR_FEATURE_REGIR_ENABLED = 1u << 8;
 
 inline bool DxrFeatureEnabled(uint feature)
 {
@@ -296,6 +297,17 @@ StructuredBuffer<Light> g_lights : register(t5000);
 #include "../regir_lib.hlsl"
 RWStructuredBuffer<ReGIRCellReservoir> g_regirCells : register(u36);
 StructuredBuffer<ReGIRLightBound> g_regirLightBounds : register(t5001);
+#ifdef REGIR_ENABLED
+// Emissive mesh proxy data (sentinel lightIndex 0x80000000 | proxyIndex)
+struct EmissiveProxyData
+{
+    float3 center;
+    float  radius;
+    float3 radiance;
+    uint   pad;
+};
+StructuredBuffer<EmissiveProxyData> g_emissiveProxyData : register(t5003);
+#endif
 cbuffer ReGIRParams : register(b11, space3)
 {
     ReGIRConstants g_regirParams;
@@ -928,7 +940,8 @@ inline WavefrontLightSamplerContext WavefrontCreateLightSampler(float3 surfacePo
     uint numLights = WavefrontGetAvailableLightCount();
     sampler.availableLights = numLights;
 #ifdef REGIR_ENABLED
-    if (numLights > 0u && g_regirParams.totalCells > 0u) {
+    if ((dxrFeatureFlags & DXR_FEATURE_REGIR_ENABLED) &&
+        g_regirParams.totalCells > 0u) {
         sampler.mode = WAVEFRONT_LIGHT_SAMPLER_REGIR;
     } else {
         sampler.mode = WAVEFRONT_LIGHT_SAMPLER_FLAT;
@@ -1047,6 +1060,31 @@ inline WavefrontLightSample WavefrontSampleFlatLightUnweighted(
 }
 
 #ifdef REGIR_ENABLED
+inline bool WavefrontIsEmissiveProxyLightIndex(uint lightIndex)
+{
+    return lightIndex != 0xFFFFFFFFu && ((lightIndex & 0x80000000u) != 0u);
+}
+
+inline WavefrontLightSample WavefrontSampleEmissiveProxyLight(
+    float3 surfacePos,
+    uint packedProxyIndex,
+    float sampleWeight)
+{
+    WavefrontLightSample sample;
+    uint proxyIdx = packedProxyIndex & 0x7FFFFFFFu;
+    EmissiveProxyData proxy = g_emissiveProxyData[proxyIdx];
+    float3 toProxy = proxy.center - surfacePos;
+    float dist = length(toProxy);
+    float3 L = dist > 1e-4 ? toProxy / dist : float3(0.0, 1.0, 0.0);
+    sample.direction = L;
+    sample.maxDistance = dist;
+    float attenuation = 1.0 / max(dist * dist, proxy.radius * proxy.radius * 0.25);
+    sample.radiance = proxy.radiance * attenuation * sampleWeight;
+    sample.packedLightIndex =
+        WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_FLAT, 0xFFFFFFFFu);
+    return sample;
+}
+
 inline WavefrontLightSample WavefrontSampleReGIRLight(
     float3 surfacePos,
     float sampleWeight,
@@ -1056,7 +1094,26 @@ inline WavefrontLightSample WavefrontSampleReGIRLight(
     const uint numLights = WavefrontGetAvailableLightCount();
 
     uint lightIndex = ReGIR_SampleCandidate(surfacePos, rng, g_regirParams);
-    if (lightIndex == 0xFFFFFFFFu || lightIndex >= numLights) {
+
+    if (lightIndex == 0xFFFFFFFFu) {
+        if (numLights == 0u) {
+            sample.direction = float3(0.0, 1.0, 0.0);
+            sample.maxDistance = 0.0;
+            sample.radiance = float3(0.0, 0.0, 0.0);
+            sample.packedLightIndex =
+                WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_FLAT, 0u);
+            return sample;
+        }
+        lightIndex = next_uint(rng) % numLights;
+    }
+
+    // Handle emissive proxy sentinel
+    if (WavefrontIsEmissiveProxyLightIndex(lightIndex)) {
+        return WavefrontSampleEmissiveProxyLight(
+            surfacePos, lightIndex, sampleWeight);
+    }
+
+    if (lightIndex >= numLights) {
         // Fallback: random light from flat list
         if (numLights == 0u) {
             sample.direction = float3(0.0, 1.0, 0.0);
@@ -1079,13 +1136,21 @@ inline WavefrontLightSample WavefrontSampleDirectLight(
     inout RNG rng)
 {
     const uint numLights = sampler.availableLights;
+#ifdef REGIR_ENABLED
+    const bool useReGIR = (sampler.mode == WAVEFRONT_LIGHT_SAMPLER_REGIR);
+    if (numLights == 0u && useReGIR) {
+        return WavefrontSampleReGIRLight(surfacePos, 1.0, rng);
+    }
+#endif
+
     if (numLights == 0u || next_float(rng) < 0.5) {
         return WavefrontSampleDirectionalLight((numLights > 0u) ? 2.0 : 1.0);
     }
 
 #ifdef REGIR_ENABLED
     if (sampler.mode == WAVEFRONT_LIGHT_SAMPLER_REGIR) {
-        return WavefrontSampleReGIRLight(surfacePos, 2.0 * (float)numLights, rng);
+        return WavefrontSampleReGIRLight(
+            surfacePos, 2.0 * max((float)numLights, 1.0), rng);
     }
 #endif
 

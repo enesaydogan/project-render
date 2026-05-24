@@ -9,6 +9,7 @@ constexpr uint32_t kDxrFeatureAovOutput = 1u << 0;
 constexpr uint32_t kDxrFeaturePrimaryGuide = 1u << 1;
 constexpr uint32_t kDxrFeatureClayPreserveTransparency = 1u << 2;
 constexpr uint32_t kDxrFeatureClayPreserveEmission = 1u << 3;
+constexpr uint32_t kDxrFeatureReGIREnabled = 1u << 8;
 
 enum class CameraProjectionMode : int {
   Perspective = 0,

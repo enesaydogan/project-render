@@ -181,6 +181,9 @@ UINT GetLightCount();
 // Mark ReGIR grid as dirty so it gets rebuilt on the next frame (call when scene
 // geometry or lights change).
 void MarkReGIRDirty();
+// Runtime toggle for ReGIR enable/disable (default: true).
+void SetReGIREnabled(bool enabled);
+bool GetReGIREnabled();
 // Camera jitter scale applied only when DLSS-RR is active.
 // 1.0 = full jitter (best DLSS sampling), 0.0 = disable jitter.
 void SetRrJitterScale(float scale);

@@ -2908,6 +2908,20 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
         }
 
         ImGui::Separator();
+        ImGui::Text("ReGIR Light Sampling");
+        bool regirEnabled = DxrRenderer::GetReGIREnabled();
+        if (ImGui::Checkbox("Enable ReGIR", &regirEnabled)) {
+          DxrRenderer::SetReGIREnabled(regirEnabled);
+          DxrRenderer::ResetAccumulation();
+          uiChanged = true;
+        }
+        if (ImGui::IsItemHovered())
+          ImGui::SetTooltip(
+              "Spatially-aware light selection via grid importance "
+              "sampling.\nDisable to fall back to uniform random light "
+              "sampling.");
+
+        ImGui::Separator();
         ImGui::Text("Streamline / DLSS");
         bool dlssEnabled = DX12Context::g_streamline.IsEnabled();
         if (ImGui::Checkbox("Enable", &dlssEnabled)) {

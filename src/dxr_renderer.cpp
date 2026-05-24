@@ -404,6 +404,8 @@ enum DxrFeatureBits : uint32_t {
   DxrFeature_PrimaryGuide = kDxrFeaturePrimaryGuide,
 };
 
+static bool s_regirEnabled = true; // must precede ComputeDxrFeatureMask
+
 // Halton sequence helper for CPU-side jitter
 static float Halton(uint32_t index, uint32_t base) {
   float f = 1.0f;
@@ -459,6 +461,8 @@ static uint32_t ComputeDxrFeatureMask(bool dlssActive, bool rrActive,
   mask |= static_cast<uint32_t>(g_cameraData.dxrFeatureFlags) &
           (kDxrFeatureClayPreserveTransparency |
            kDxrFeatureClayPreserveEmission);
+  if (s_regirEnabled)
+    mask |= kDxrFeatureReGIREnabled;
   return mask;
 }
 
@@ -771,6 +775,7 @@ static ComPtr<ID3D12Resource> s_regirCellBuffer;
 static ComPtr<ID3D12Resource> s_regirDebugBuffer;
 static ComPtr<ID3D12Resource> s_regirLightBoundsBuffer;
 static ComPtr<ID3D12Resource> s_regirConstantsBuffer;
+static ComPtr<ID3D12Resource> s_emissiveProxyBuffer;
 static ComPtr<ID3D12RootSignature> s_regirClearRootSig;
 static ComPtr<ID3D12PipelineState> s_regirClearPSO;
 static ComPtr<ID3D12RootSignature> s_regirUpdateRootSig;
@@ -2472,7 +2477,7 @@ static void EnsureWavefrontResolvePipeline() {
   cloudSrvRange.OffsetInDescriptorsFromTableStart =
       D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-  D3D12_ROOT_PARAMETER params[16] = {};
+  D3D12_ROOT_PARAMETER params[17] = {};
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
   params[0].Descriptor.ShaderRegister = 0;
   params[0].Descriptor.RegisterSpace = 0;
@@ -2554,6 +2559,12 @@ static void EnsureWavefrontResolvePipeline() {
   params[15].Descriptor.ShaderRegister = 11;
   params[15].Descriptor.RegisterSpace = 3;
   params[15].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  // Emissive proxy data SRV
+  params[16].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[16].Descriptor.ShaderRegister = 5003;
+  params[16].Descriptor.RegisterSpace = 0;
+  params[16].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
   D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
   rsDesc.NumParameters = _countof(params);
@@ -2843,6 +2854,10 @@ static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
       15, s_regirConstantsBuffer
               ? s_regirConstantsBuffer->GetGPUVirtualAddress()
               : 0);
+  list->SetComputeRootShaderResourceView(
+      16, s_emissiveProxyBuffer
+              ? s_emissiveProxyBuffer->GetGPUVirtualAddress()
+              : 0);
 
   const bool dispatchedIndirect =
       useIndirectDispatch &&
@@ -2917,6 +2932,10 @@ static void DispatchWavefrontRestirSeed(ID3D12GraphicsCommandList4 *list,
   list->SetComputeRootConstantBufferView(
       15, s_regirConstantsBuffer
               ? s_regirConstantsBuffer->GetGPUVirtualAddress()
+              : 0);
+  list->SetComputeRootShaderResourceView(
+      16, s_emissiveProxyBuffer
+              ? s_emissiveProxyBuffer->GetGPUVirtualAddress()
               : 0);
 
   const bool dispatchedIndirect =
@@ -2998,6 +3017,10 @@ static void DispatchWavefrontResolveSecondary(ID3D12GraphicsCommandList4 *list,
   list->SetComputeRootConstantBufferView(
       15, s_regirConstantsBuffer
               ? s_regirConstantsBuffer->GetGPUVirtualAddress()
+              : 0);
+  list->SetComputeRootShaderResourceView(
+      16, s_emissiveProxyBuffer
+              ? s_emissiveProxyBuffer->GetGPUVirtualAddress()
               : 0);
 
   const bool dispatchedIndirect =
@@ -6807,6 +6830,180 @@ static void DispatchReGIRUpdate(ID3D12GraphicsCommandList4 *list,
   list->Dispatch((s_regirTotalCells + 63) / 64, 1, 1);
 }
 
+// Emissive proxy data GPU struct (must match common.hlsli EmissiveProxyData)
+struct EmissiveProxyDataGpu {
+  float center[3];
+  float radius;
+  float radiance[3];
+  uint32_t pad;
+};
+
+static UINT BuildEmissiveProxyBounds() {
+  // Scan scene instances for emissive materials and create light-like proxy
+  // entries in both the emissive proxy data buffer and the ReGIR light bounds.
+  const auto &instances = Scene::GetInstances();
+  const auto &materials = g_loadedMaterials;
+
+  std::vector<EmissiveProxyDataGpu> proxies;
+  std::vector<ReGIRLightBoundGpu> proxyBounds;
+
+  for (size_t instIdx = 0; instIdx < instances.size(); ++instIdx) {
+    const auto &inst = instances[instIdx];
+    if (!inst.mesh) continue;
+
+    int matIdx = inst.mesh->materialIndex;
+    if (matIdx < 0 || matIdx >= (int)materials.size()) continue;
+
+    const Asset::Material &mat = materials[matIdx];
+    float emisR = mat.emissiveColor[0];
+    float emisG = mat.emissiveColor[1];
+    float emisB = mat.emissiveColor[2];
+    float emisIntensity = mat.emissiveIntensity;
+    float maxEmis = (emisR + emisG + emisB) * emisIntensity / 3.0f;
+    if (maxEmis < 10.0f) continue; // skip negligible emissive
+
+    EmissiveProxyDataGpu proxy;
+    float worldMin[3] = {FLT_MAX, FLT_MAX, FLT_MAX};
+    float worldMax[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
+    for (int corner = 0; corner < 8; ++corner) {
+      float lx = (corner & 1) ? inst.mesh->maxBound[0] : inst.mesh->minBound[0];
+      float ly = (corner & 2) ? inst.mesh->maxBound[1] : inst.mesh->minBound[1];
+      float lz = (corner & 4) ? inst.mesh->maxBound[2] : inst.mesh->minBound[2];
+      DirectX::XMVECTOR local = DirectX::XMVectorSet(lx, ly, lz, 1.0f);
+      DirectX::XMVECTOR world =
+          DirectX::XMVector4Transform(local, inst.transform);
+      float wx = DirectX::XMVectorGetX(world);
+      float wy = DirectX::XMVectorGetY(world);
+      float wz = DirectX::XMVectorGetZ(world);
+      worldMin[0] = (std::min)(worldMin[0], wx);
+      worldMin[1] = (std::min)(worldMin[1], wy);
+      worldMin[2] = (std::min)(worldMin[2], wz);
+      worldMax[0] = (std::max)(worldMax[0], wx);
+      worldMax[1] = (std::max)(worldMax[1], wy);
+      worldMax[2] = (std::max)(worldMax[2], wz);
+    }
+    float worldExtent[3] = {
+        (worldMax[0] - worldMin[0]) * 0.5f,
+        (worldMax[1] - worldMin[1]) * 0.5f,
+        (worldMax[2] - worldMin[2]) * 0.5f,
+    };
+    proxy.center[0] = (worldMin[0] + worldMax[0]) * 0.5f;
+    proxy.center[1] = (worldMin[1] + worldMax[1]) * 0.5f;
+    proxy.center[2] = (worldMin[2] + worldMax[2]) * 0.5f;
+    proxy.radius = sqrtf(worldExtent[0] * worldExtent[0] +
+                         worldExtent[1] * worldExtent[1] +
+                         worldExtent[2] * worldExtent[2]);
+    if (proxy.radius < 0.5f) proxy.radius = 0.5f;
+    if (proxy.radius > 10.0f) proxy.radius = 10.0f;
+    proxy.radiance[0] = emisR * emisIntensity;
+    proxy.radiance[1] = emisG * emisIntensity;
+    proxy.radiance[2] = emisB * emisIntensity;
+    proxy.pad = 0;
+
+    uint32_t proxyIndex = (uint32_t)proxies.size();
+    proxies.push_back(proxy);
+
+    ReGIRLightBoundGpu lb = {};
+    lb.center[0] = proxy.center[0];
+    lb.center[1] = proxy.center[1];
+    lb.center[2] = proxy.center[2];
+    lb.radius = proxy.radius;
+    lb.power = (proxy.radiance[0] + proxy.radiance[1] + proxy.radiance[2]) / 3.0f;
+    lb.lightIndex = 0x80000000u | proxyIndex;
+    proxyBounds.push_back(lb);
+  }
+
+  if (proxies.empty()) return 0;
+
+  // Upload emissive proxy data buffer
+  {
+    UINT needed = (UINT)(proxies.size() * sizeof(EmissiveProxyDataGpu));
+    if (!s_emissiveProxyBuffer ||
+        s_emissiveProxyBuffer->GetDesc().Width < needed) {
+      s_emissiveProxyBuffer.Reset();
+      D3D12_HEAP_PROPERTIES heapProps = {};
+      heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+      D3D12_RESOURCE_DESC bufDesc = {};
+      bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+      bufDesc.Width = (std::max)(needed,
+                                  (UINT)sizeof(EmissiveProxyDataGpu) * 16);
+      bufDesc.Height = 1;
+      bufDesc.DepthOrArraySize = 1;
+      bufDesc.MipLevels = 1;
+      bufDesc.Format = DXGI_FORMAT_UNKNOWN;
+      bufDesc.SampleDesc.Count = 1;
+      bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+      bufDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+      ThrowIfFailed(s_device->CreateCommittedResource(
+          &heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
+          D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+          IID_PPV_ARGS(&s_emissiveProxyBuffer)));
+    }
+    void *pData = nullptr;
+    ThrowIfFailed(s_emissiveProxyBuffer->Map(0, nullptr, &pData));
+    memcpy(pData, proxies.data(),
+           proxies.size() * sizeof(EmissiveProxyDataGpu));
+    s_emissiveProxyBuffer->Unmap(0, nullptr);
+  }
+
+  // Append proxy entries to the light bounds upload buffer
+  {
+    UINT curCount = s_regirLightBoundCount;
+    UINT totalCount = curCount + (UINT)proxyBounds.size();
+    UINT curBytes = curCount * sizeof(ReGIRLightBoundGpu);
+    UINT needed = totalCount * sizeof(ReGIRLightBoundGpu);
+
+    // Grow the upload buffer if needed
+    if (!s_regirLightBoundsBuffer ||
+        s_regirLightBoundsBuffer->GetDesc().Width < needed) {
+      // Need a bigger buffer — copy existing + new entries
+      std::vector<ReGIRLightBoundGpu> existing(curCount);
+      if (curCount > 0 && s_regirLightBoundsBuffer) {
+        void *pRead = nullptr;
+        ThrowIfFailed(s_regirLightBoundsBuffer->Map(0, nullptr, &pRead));
+        memcpy(existing.data(), pRead, curBytes);
+        s_regirLightBoundsBuffer->Unmap(0, nullptr);
+      }
+
+      s_regirLightBoundsBuffer.Reset();
+      D3D12_HEAP_PROPERTIES heapProps = {};
+      heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+      D3D12_RESOURCE_DESC bufDesc = {};
+      bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+      bufDesc.Width = (std::max)(needed, (UINT)sizeof(ReGIRLightBoundGpu) * 16);
+      bufDesc.Height = 1;
+      bufDesc.DepthOrArraySize = 1;
+      bufDesc.MipLevels = 1;
+      bufDesc.Format = DXGI_FORMAT_UNKNOWN;
+      bufDesc.SampleDesc.Count = 1;
+      bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+      bufDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+      ThrowIfFailed(s_device->CreateCommittedResource(
+          &heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
+          D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+          IID_PPV_ARGS(&s_regirLightBoundsBuffer)));
+
+      void *pData = nullptr;
+      ThrowIfFailed(s_regirLightBoundsBuffer->Map(0, nullptr, &pData));
+      if (!existing.empty())
+        memcpy(pData, existing.data(), curBytes);
+      memcpy((uint8_t *)pData + curBytes, proxyBounds.data(),
+             proxyBounds.size() * sizeof(ReGIRLightBoundGpu));
+      s_regirLightBoundsBuffer->Unmap(0, nullptr);
+    } else {
+      // Existing buffer is large enough — append
+      void *pData = nullptr;
+      ThrowIfFailed(s_regirLightBoundsBuffer->Map(0, nullptr, &pData));
+      memcpy((uint8_t *)pData + curBytes, proxyBounds.data(),
+             proxyBounds.size() * sizeof(ReGIRLightBoundGpu));
+      s_regirLightBoundsBuffer->Unmap(0, nullptr);
+    }
+    s_regirLightBoundCount = totalCount;
+  }
+
+  return (UINT)proxyBounds.size();
+}
+
 static void PrepareReGIRFrame(ID3D12GraphicsCommandList4 *list) {
   if (!s_device || !s_srvHeap) {
     return;
@@ -6824,6 +7021,12 @@ static void PrepareReGIRFrame(ID3D12GraphicsCommandList4 *list) {
   UINT lightBoundCount = s_regirLightBoundCount;
   if (s_regirDirty && !s_lastLightsCpu.empty()) {
     lightBoundCount = BuildReGIRLightBounds(s_lastLightsCpu);
+  }
+
+  // Append emissive mesh proxies to light bounds for ReGIR (cheap point lights)
+  if (s_regirDirty) {
+    UINT emissiveProxyCount = BuildEmissiveProxyBounds();
+    lightBoundCount += emissiveProxyCount;
   }
 
   if (!s_sceneBoundsValid || lightBoundCount == 0u) {
@@ -6855,6 +7058,18 @@ static void PrepareReGIRFrame(ID3D12GraphicsCommandList4 *list) {
 
 void MarkReGIRDirty() {
   InvalidateReGIRGrid();
+}
+
+void SetReGIREnabled(bool enabled) {
+  if (s_regirEnabled != enabled) {
+    s_regirEnabled = enabled;
+    if (enabled)
+      InvalidateReGIRGrid();
+  }
+}
+
+bool GetReGIREnabled() {
+  return s_regirEnabled;
 }
 
 bool IsReady() {

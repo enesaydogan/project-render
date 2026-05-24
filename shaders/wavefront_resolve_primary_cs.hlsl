@@ -1212,6 +1212,44 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
             normal, viewDir, sun.direction, sun.radiance);
     }
     float3 giLighting = direct;
+
+    // Sample one local light (sun + local lights in GI for indirect color bleeding)
+    WavefrontLightSamplerContext giSampler =
+        WavefrontCreateLightSampler(surfacePos);
+    bool hasGiLocalSampler = giSampler.availableLights > 0u;
+#ifdef REGIR_ENABLED
+    hasGiLocalSampler =
+        hasGiLocalSampler ||
+        (giSampler.mode == WAVEFRONT_LIGHT_SAMPLER_REGIR);
+#endif
+    if (hasGiLocalSampler) {
+        RNG giLightRng;
+        giLightRng.state = (asuint(surfacePos.x) ^ asuint(surfacePos.y) ^
+                            asuint(surfacePos.z) ^ asuint(incomingDirection.x)) *
+                           0x6C8E9CF5u;
+        WavefrontLightSample giLocal;
+#ifdef REGIR_ENABLED
+        if (giSampler.mode == WAVEFRONT_LIGHT_SAMPLER_REGIR) {
+            giLocal = WavefrontSampleReGIRLight(surfacePos, 1.0, giLightRng);
+        } else
+#endif
+        {
+            if (giSampler.availableLights == 0u)
+                return max(emissive + giLighting * ao, 0.0);
+            uint li = next_uint(giLightRng) % giSampler.availableLights;
+            giLocal = WavefrontSampleFlatLight(
+                surfacePos, li, (float)giSampler.availableLights, giLightRng);
+        }
+        float giLocalNdotL = saturate(dot(normal, giLocal.direction));
+        if (giLocalNdotL > 0.0 &&
+            WavefrontGiIsShadowVisible(
+                surfacePos + normal * kWavefrontRayBias,
+                giLocal.direction, giLocal.maxDistance)) {
+            giLighting += WavefrontGiEvaluateBrdfLighting(
+                diffuseAlbedo, f0, roughness, clearcoat,
+                normal, viewDir, giLocal.direction, giLocal.radiance);
+        }
+    }
     float translucency =
         (clayMode && !clayPreserveTransparency) ? 0.0 : saturate(coatLayer.w);
     if (translucency > 0.001) {
@@ -1506,6 +1544,12 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                     WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL, 0u);
                 if (diReservoir.lightIndex == 0xFFFFFFFFu) {
                     finalSample = WavefrontSampleDirectionalLight(1.0);
+#ifdef REGIR_ENABLED
+                } else if (WavefrontIsEmissiveProxyLightIndex(
+                               diReservoir.lightIndex)) {
+                    finalSample = WavefrontSampleEmissiveProxyLight(
+                        hitPos, diReservoir.lightIndex, 1.0);
+#endif
                 } else if (diReservoir.lightIndex < numLights) {
                     finalSample = WavefrontSampleFlatLightUnweighted(
                         hitPos, diReservoir.lightIndex, rng);
