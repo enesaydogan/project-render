@@ -776,17 +776,7 @@ bool StreamlineManager::Evaluate(
       inputs.push_back(&specAlbedoTag);
     }
 
-    if (specularHitDistance) {
-      specHitDistRes =
-          sl::Resource(sl::ResourceType::eTex2d, specularHitDistance,
-                       (uint32_t)specularHitDistanceState);
-      specHitDistTag = sl::ResourceTag{
-          &specHitDistRes, sl::kBufferTypeSpecularHitDistance,
-          sl::ResourceLifecycle::eValidUntilEvaluate, &renderExtent};
-      inputs.push_back(&specHitDistTag);
-    }
-
-    if (specularMotionVectors && !specularHitDistance) {
+    if (specularMotionVectors) {
       specMvecRes =
           sl::Resource(sl::ResourceType::eTex2d, specularMotionVectors,
                        (uint32_t)specularMotionVectorsState);
@@ -794,6 +784,14 @@ bool StreamlineManager::Evaluate(
           &specMvecRes, sl::kBufferTypeSpecularMotionVectors,
           sl::ResourceLifecycle::eValidUntilEvaluate, &renderExtent};
       inputs.push_back(&specMvecTag);
+    } else if (specularHitDistance) {
+      specHitDistRes =
+          sl::Resource(sl::ResourceType::eTex2d, specularHitDistance,
+                       (uint32_t)specularHitDistanceState);
+      specHitDistTag = sl::ResourceTag{
+          &specHitDistRes, sl::kBufferTypeSpecularHitDistance,
+          sl::ResourceLifecycle::eValidUntilEvaluate, &renderExtent};
+      inputs.push_back(&specHitDistTag);
     }
   }
 
