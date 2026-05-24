@@ -3424,6 +3424,25 @@ static void EnsureNullIESAtlasDescriptor() {
     return;
   }
 
+  if (s_iesAtlasTexture && s_iesAtlasSliceCount > 0) {
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Texture2DArray.MostDetailedMip = 0;
+    srvDesc.Texture2DArray.MipLevels = 1;
+    srvDesc.Texture2DArray.FirstArraySlice = 0;
+    srvDesc.Texture2DArray.ArraySize = static_cast<UINT>(s_iesAtlasSliceCount);
+    srvDesc.Texture2DArray.PlaneSlice = 0;
+    srvDesc.Texture2DArray.ResourceMinLODClamp = 0.0f;
+
+    s_device->CreateShaderResourceView(
+        s_iesAtlasTexture.Get(), &srvDesc,
+        GetDxrHeapCpuHandle(DXR_HEAP_IES_SRV_OFFSET));
+    s_iesAtlasSrvGpu = GetDxrHeapGpuHandle(DXR_HEAP_IES_SRV_OFFSET);
+    return;
+  }
+
   D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
   srvDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
   srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
@@ -5946,19 +5965,19 @@ void UpdateLights(const std::vector<Light> &lights, bool resetAccumulation) {
   MarkReGIRDirty();
 }
 
-void UpdateIESAtlas(const float *data, int sliceCount) {
+bool UpdateIESAtlas(const float *data, int sliceCount) {
   if (sliceCount <= 0 || !data) {
     s_iesAtlasTexture.Reset();
     s_iesAtlasSliceCount = 0;
     EnsureNullIESAtlasDescriptor();
     ResetAccumulation();
-    return;
+    return true;
   }
 
   if (!s_device || !s_srvHeap || !s_commandQueue || !s_fence ||
       !s_fenceValues || !s_frameIndexPtr || !s_fenceEvent) {
     fprintf(stderr, "DxrRenderer: UpdateIESAtlas precondition failed.\n");
-    return;
+    return false;
   }
 
   sliceCount = (std::min)(sliceCount, 32);
@@ -5989,14 +6008,14 @@ void UpdateIESAtlas(const float *data, int sliceCount) {
     fprintf(stderr,
             "DxrRenderer: UpdateIESAtlas failed to create texture: 0x%08x\n",
             (unsigned)hr);
-    return;
+    return false;
   }
 
   UINT64 totalBytes = 0;
   s_device->GetCopyableFootprints(&texDesc, 0, static_cast<UINT>(sliceCount),
                                   0, nullptr, nullptr, nullptr, &totalBytes);
   if (totalBytes == 0) {
-    return;
+    return false;
   }
 
   D3D12_HEAP_PROPERTIES uploadHeap = {};
@@ -6021,7 +6040,7 @@ void UpdateIESAtlas(const float *data, int sliceCount) {
             "DxrRenderer: UpdateIESAtlas failed to create upload buffer: "
             "0x%08x\n",
             (unsigned)hr);
-    return;
+    return false;
   }
 
   std::vector<D3D12_SUBRESOURCE_DATA> subresources(
@@ -6042,7 +6061,7 @@ void UpdateIESAtlas(const float *data, int sliceCount) {
             "DxrRenderer: UpdateIESAtlas failed to create command allocator: "
             "0x%08x\n",
             (unsigned)hr);
-    return;
+    return false;
   }
 
   ComPtr<ID3D12GraphicsCommandList> cmdList;
@@ -6054,7 +6073,7 @@ void UpdateIESAtlas(const float *data, int sliceCount) {
             "DxrRenderer: UpdateIESAtlas failed to create command list: "
             "0x%08x\n",
             (unsigned)hr);
-    return;
+    return false;
   }
 
   UpdateSubresources(cmdList.Get(), texture.Get(), upload.Get(), 0, 0,
@@ -6075,7 +6094,7 @@ void UpdateIESAtlas(const float *data, int sliceCount) {
             "DxrRenderer: UpdateIESAtlas failed to close command list: "
             "0x%08x\n",
             (unsigned)hr);
-    return;
+    return false;
   }
 
   ID3D12CommandList *lists[] = {cmdList.Get()};
@@ -6089,7 +6108,7 @@ void UpdateIESAtlas(const float *data, int sliceCount) {
     fprintf(stderr,
             "DxrRenderer: UpdateIESAtlas failed to signal fence: 0x%08x\n",
             (unsigned)hr);
-    return;
+    return false;
   }
   s_fenceValues[frameIndex] = fenceValue + 1;
 
@@ -6100,11 +6119,11 @@ void UpdateIESAtlas(const float *data, int sliceCount) {
               "DxrRenderer: UpdateIESAtlas SetEventOnCompletion failed: "
               "0x%08x\n",
               (unsigned)hr);
-      return;
+      return false;
     }
     if (WaitForSingleObject(s_fenceEvent, 5000) == WAIT_TIMEOUT) {
       fprintf(stderr, "DxrRenderer: UpdateIESAtlas wait timed out.\n");
-      return;
+      return false;
     }
   }
 
@@ -6128,6 +6147,7 @@ void UpdateIESAtlas(const float *data, int sliceCount) {
 
   s_iesAtlasSliceCount = sliceCount;
   ResetAccumulation();
+  return true;
 }
 
 void ResetAccumulation() {
@@ -6987,8 +7007,13 @@ static UINT BuildReGIRLightBounds(const std::vector<Light> &lights) {
     lb.power = power;
 
     // Bounding sphere radius
-    if (l.type == (uint32_t)LightType::Omni ||
-        l.type == (uint32_t)LightType::IES) {
+    if (l.type == (uint32_t)LightType::IES) {
+      // An IES profile is angular photometry, not a tiny geometric emitter.
+      // ReGIR needs a reach bound large enough to include the receiving cells;
+      // using the 0.1 m gizmo radius makes the light effectively unsampleable.
+      lb.radius =
+          (std::max)(l.radius, (std::clamp)(std::sqrt(power) * 2.0f, 2.0f, 64.0f));
+    } else if (l.type == (uint32_t)LightType::Omni) {
       lb.radius = l.radius > 0.0f ? l.radius : 1.0f;
     } else if (l.type == (uint32_t)LightType::Spot) {
       lb.radius = (std::max)(l.radius, 2.0f);

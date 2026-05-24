@@ -116,6 +116,21 @@ static fs::path NativePathFromUtf8(const std::string &path) {
       return fs::path(wide);
     }
   }
+
+  const int acpWideCount =
+      MultiByteToWideChar(CP_ACP, 0, path.c_str(), -1, nullptr, 0);
+  if (acpWideCount > 0) {
+    std::wstring wide(static_cast<size_t>(acpWideCount), L'\0');
+    const int converted =
+        MultiByteToWideChar(CP_ACP, 0, path.c_str(), -1, wide.data(),
+                            acpWideCount);
+    if (converted == acpWideCount) {
+      if (!wide.empty() && wide.back() == L'\0') {
+        wide.pop_back();
+      }
+      return fs::path(wide);
+    }
+  }
 #endif
 
   return fs::path(path);
@@ -553,7 +568,8 @@ static bool DecompressLZMSAny(const uint8_t *comp, size_t compSize,
   return DecompressLZMSLegacy(comp, compSize, output, uncompSize);
 }
 
-static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
+static json BuildMetadata(const std::vector<int> &textureSaveRemap,
+                             const fs::path &sceneDir) {
   json j;
   j["matv"] = Asset::Material::kSchemaVersionCoronaArchviz;
   j["matModel"] = "corona-archviz-wavefront";
@@ -874,14 +890,29 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
   {
     const auto &iesProfiles = Scene::GetIESProfiles();
     j["iesp"] = json::array();
-    for (const auto &profile : iesProfiles) {
+    for (size_t i = 0; i < iesProfiles.size(); ++i) {
+      const auto &profile = iesProfiles[i];
       std::string sourceText = profile.sourceText;
       if (sourceText.empty() && !profile.filePath.empty()) {
-        std::ifstream sourceFile(profile.filePath, std::ios::binary);
+        std::ifstream sourceFile(NativePathFromUtf8(profile.filePath),
+                                 std::ios::binary);
         if (sourceFile.is_open()) {
           std::ostringstream sourceStream;
           sourceStream << sourceFile.rdbuf();
           sourceText = sourceStream.str();
+          // Update the in-memory profile so subsequent saves or operations don't
+          // have to hit the disk again.
+          const_cast<IESProfile&>(profile).sourceText = sourceText;
+        } else if (!sceneDir.empty()) {
+          const fs::path fallbackPath =
+              sceneDir / NativePathFromUtf8(profile.filePath);
+          std::ifstream fallbackSourceFile(fallbackPath, std::ios::binary);
+          if (fallbackSourceFile.is_open()) {
+            std::ostringstream sourceStream;
+            sourceStream << fallbackSourceFile.rdbuf();
+            sourceText = sourceStream.str();
+            const_cast<IESProfile&>(profile).sourceText = sourceText;
+          }
         }
       }
       j["iesp"].push_back({
@@ -977,7 +1008,7 @@ static void SyncLoadedCameraInputBasis(bool loadedYaw, bool loadedPitch) {
   g_cameraData.forward[2] = cp * -std::cos(g_camYaw);
 }
 
-static void ApplyMetadataPRS(const json &j) {
+static void ApplyMetadataPRS(const json &j, const fs::path &sceneDirectory) {
   if (j.contains("cam")) {
     auto &c = j["cam"];
     if (c.contains("p"))  { g_cameraData.pos[0]=c["p"][0]; g_cameraData.pos[1]=c["p"][1]; g_cameraData.pos[2]=c["p"][2]; }
@@ -1242,18 +1273,21 @@ static void ApplyMetadataPRS(const json &j) {
     if (l.contains("ld") && l["ld"].size()>=4) for (int i=0;i<4;++i) g_cameraData.lightDir[i]=l["ld"][i];
     if (l.contains("lc") && l["lc"].size()>=4) for (int i=0;i<4;++i) g_cameraData.lightColor[i]=l["lc"][i];
   }
-  if ((j.contains("lgp") && j["lgp"].is_array() && j.contains("lgi") && j["lgi"].is_array()) ||
-      (j.contains("lgt") && j["lgt"].is_array())) {
-    Scene::ClearIESProfiles();
-  }
   if (j.contains("lgp") && j["lgp"].is_array() && j.contains("lgi") && j["lgi"].is_array()) {
     std::vector<int> iesProfileRemap;
-    // Load IES profiles first so prototype ipi references are valid
+    // Load IES profiles first so prototype ipi references are valid.
+    // Wrap in batched updates to avoid rebuilding the GPU atlas N times.
+    Scene::BeginBatchedUpdates();
     if (j.contains("iesp") && j["iesp"].is_array()) {
       for (const auto &savedProfile : j["iesp"]) {
         int loadedProfile = -1;
         if (savedProfile.is_string()) {
-          loadedProfile = Scene::LoadIESProfile(savedProfile.get<std::string>());
+          const std::string savedPath = savedProfile.get<std::string>();
+          loadedProfile = Scene::LoadIESProfile(savedPath);
+          if (loadedProfile < 0 && !sceneDirectory.empty()) {
+            loadedProfile = Scene::LoadIESProfile(
+                (sceneDirectory / savedPath).string());
+          }
         } else if (savedProfile.is_object()) {
           const std::string path =
               savedProfile.value("path", std::string());
@@ -1266,8 +1300,13 @@ static void ApplyMetadataPRS(const json &j) {
           }
           if (loadedProfile < 0 && !path.empty()) {
             loadedProfile = Scene::LoadIESProfile(path);
+            if (loadedProfile < 0 && !sceneDirectory.empty()) {
+              loadedProfile = Scene::LoadIESProfile(
+                  (sceneDirectory / path).string());
+            }
           }
           if (loadedProfile < 0) {
+            // Manual recreation from saved vectors if file/source loading failed
             IESProfile embedded;
             embedded.filePath = path;
             embedded.displayName = name;
@@ -1331,9 +1370,11 @@ static void ApplyMetadataPRS(const json &j) {
       inst.enabled = i.value("en", true);
       Scene::AddLightInstanceRaw(inst);
     }
+    Scene::EndBatchedUpdates();
     Scene::UpdateLights();
   } else if (j.contains("lgt") && j["lgt"].is_array()) {
     // Legacy flat light format — migrate each light to one prototype + one instance
+    Scene::BeginBatchedUpdates();
     for (const auto &l : j["lgt"]) {
       LightPrototype proto;
       proto.type = l.value("ty", 1u);
@@ -1362,6 +1403,7 @@ static void ApplyMetadataPRS(const json &j) {
       if (d.size()>=3) { inst.direction[0]=d[0]; inst.direction[1]=d[1]; inst.direction[2]=d[2]; }
       Scene::AddLightInstanceRaw(inst);
     }
+    Scene::EndBatchedUpdates();
     Scene::UpdateLights();
   }
   if (j.contains("rm")) g_currentRenderMode = (j["rm"].get<int>()==1) ? RenderMode::DXR : RenderMode::Raster;
@@ -1761,7 +1803,7 @@ bool SaveScene(const std::string &path) {
             savedTextureBytes / (1024.0 * 1024.0));
 
     // 1. Build metadata as msgpack
-    json metadata = BuildMetadata(textureSaveRemap);
+    json metadata = BuildMetadata(textureSaveRemap, outputPath.parent_path());
     std::vector<uint8_t> msgpack = json::to_msgpack(metadata);
     ReportProgress(0.08f, "Packing metadata");
     fprintf(stderr, "PRS: Metadata: %zu bytes (msgpack)\n", msgpack.size());
@@ -2034,7 +2076,8 @@ bool LoadScenePRS(const std::string &path) {
     size_t embMeshCnt = g_loadedMeshes.size();
 
     // Apply metadata
-    ApplyMetadataPRS(meta);
+    fs::path sceneDirectory = fs::path(path).parent_path();
+    ApplyMetadataPRS(meta, sceneDirectory);
     RestoreNodesPRS(meta, hasEmbedded);
 
     std::vector<int> remap;

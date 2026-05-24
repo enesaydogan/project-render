@@ -3164,6 +3164,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
         // Use DXR module to perform ray dispatch and copy to backbuffer
         if (DxrRenderer::IsReady()) {
+          Scene::EnsureIESAtlasReady();
+
           // Update Structured Material Buffers for DXR.
           // Core material data stays at 64 bytes; heavy/conditional values live
           // in a secondary buffer.

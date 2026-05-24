@@ -52,7 +52,7 @@ void MarkMaterialDirty(int materialIndex);
 void UpdateLights(const std::vector<Light> &lights,
                   bool resetAccumulation = true);
 // Update the IES profile atlas Texture2DArray. Pass nullptr / 0 to clear.
-void UpdateIESAtlas(const float *data, int sliceCount);
+bool UpdateIESAtlas(const float *data, int sliceCount);
 // Reset accumulation for path tracing
 void ResetAccumulation();
 // Wake the render loop out of final-frame idle without necessarily invalidating

@@ -327,6 +327,8 @@ static bool s_batchedLightsDirty = false;
 static bool s_batchedSceneChanged = false;
 static bool s_batchedGpuIdleSatisfied = false;
 static bool s_batchedMeshUploadDirty = false;
+static bool s_batchedIESAtlasDirty = false;
+static bool s_rebuildingIESAtlas = false;
 static GpuUploadStats s_gpuUploadStats;
 
 static void DispatchSceneChanged() {
@@ -1130,6 +1132,11 @@ static void FlushBatchedRendererUpdates() {
   if (s_batchedMeshUploadDirty) {
     UploadGpuBuffersForMeshes(g_loadedMeshes);
     s_batchedMeshUploadDirty = false;
+  }
+
+  if (s_batchedIESAtlasDirty) {
+    RebuildIESAtlas();
+    s_batchedIESAtlasDirty = false;
   }
 
   if (s_batchedLightsDirty) {
@@ -4562,7 +4569,8 @@ void UpdateLights() {
   // Resolve IES profile indices to atlas slice indices
   for (auto &proto : s_lightPrototypes) {
     if (proto.iesProfileIndex >= 0 &&
-        proto.iesProfileIndex < static_cast<int>(s_iesProfiles.size())) {
+        proto.iesProfileIndex < static_cast<int>(s_iesProfiles.size()) &&
+        s_iesProfiles[proto.iesProfileIndex].gpuReady) {
       proto.iesAtlasIndex = s_iesProfiles[proto.iesProfileIndex].atlasSlice;
     } else {
       proto.iesAtlasIndex = -1;
@@ -4581,13 +4589,80 @@ void UpdateLights() {
 static bool ParseIESStream(std::istream &file, const std::string &path,
                            const std::string &displayName,
                            const std::string &sourceText, IESProfile &out) {
+  auto trimAscii = [](std::string value) {
+    auto isSpace = [](unsigned char ch) { return std::isspace(ch) != 0; };
+    value.erase(value.begin(),
+                std::find_if(value.begin(), value.end(),
+                             [&](char ch) { return !isSpace((unsigned char)ch); }));
+    value.erase(std::find_if(value.rbegin(), value.rend(),
+                             [&](char ch) { return !isSpace((unsigned char)ch); })
+                    .base(),
+                value.end());
+    return value;
+  };
+  auto upperAscii = [](std::string value) {
+    for (char &ch : value) {
+      ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+    }
+    return value;
+  };
+  auto extractTiltValue = [&](const std::string &sourceLine,
+                              std::string &tiltValue) {
+    const std::string upper = upperAscii(sourceLine);
+    const size_t tiltPos = upper.find("TILT");
+    if (tiltPos == std::string::npos) {
+      return false;
+    }
+    size_t cursor = tiltPos + 4;
+    while (cursor < sourceLine.size() &&
+           std::isspace(static_cast<unsigned char>(sourceLine[cursor]))) {
+      ++cursor;
+    }
+    if (cursor >= sourceLine.size() || sourceLine[cursor] != '=') {
+      return false;
+    }
+    ++cursor;
+    tiltValue = trimAscii(sourceLine.substr(cursor));
+    if (tiltValue.size() >= 2 &&
+        ((tiltValue.front() == '"' && tiltValue.back() == '"') ||
+         (tiltValue.front() == '\'' && tiltValue.back() == '\''))) {
+      tiltValue = tiltValue.substr(1, tiltValue.size() - 2);
+    }
+    return true;
+  };
+  auto skipInlineTiltData = [&](const std::string &tiltValue) {
+    const std::string normalizedTilt = upperAscii(trimAscii(tiltValue));
+    if (normalizedTilt.empty() || normalizedTilt == "NONE") {
+      return true;
+    }
+    if (normalizedTilt != "INCLUDE") {
+      // External tilt files do not consume numeric records from the IES stream.
+      return true;
+    }
+
+    int pairCount = 0;
+    file >> pairCount;
+    if (!file || pairCount < 0 || pairCount > 4096) {
+      return false;
+    }
+    float ignored = 0.0f;
+    for (int i = 0; i < pairCount * 2; ++i) {
+      file >> ignored;
+      if (!file) {
+        return false;
+      }
+    }
+    return true;
+  };
+
   std::string line;
   if (!std::getline(file, line))
     return false;
 
   bool foundTilt = false;
+  std::string tiltValue;
   while (std::getline(file, line)) {
-    if (line.find("TILT=") != std::string::npos) {
+    if (extractTiltValue(line, tiltValue)) {
       foundTilt = true;
       break;
     }
@@ -4595,11 +4670,8 @@ static bool ParseIESStream(std::istream &file, const std::string &path,
   if (!foundTilt)
     return false;
 
-  if (line.find("TILT=NONE") == std::string::npos) {
-    for (int i = 0; i < 4; ++i) {
-      if (!std::getline(file, line))
-        return false;
-    }
+  if (!skipInlineTiltData(tiltValue)) {
+    return false;
   }
 
   int numLamps = 0;
@@ -4676,7 +4748,7 @@ static bool ParseIESStream(std::istream &file, const std::string &path,
 }
 
 static bool ReadIESSourceText(const std::string &path, std::string &outText) {
-  std::ifstream file(path, std::ios::binary);
+  std::ifstream file(NativePathFromStoredPath(path), std::ios::binary);
   if (!file.is_open()) {
     return false;
   }
@@ -4809,10 +4881,21 @@ void ClearIESProfile(int profileIndex) {
 }
 
 void RebuildIESAtlas() {
+  if (s_batchedUpdateDepth > 0) {
+    s_batchedIESAtlasDirty = true;
+    return;
+  }
+  if (s_rebuildingIESAtlas) {
+    return;
+  }
+
+  s_rebuildingIESAtlas = true;
+
   const int sliceCount = static_cast<int>(s_iesProfiles.size());
   if (sliceCount == 0) {
     DxrRenderer::UpdateIESAtlas(nullptr, 0);
     UpdateLights();
+    s_rebuildingIESAtlas = false;
     return;
   }
 
@@ -4822,6 +4905,7 @@ void RebuildIESAtlas() {
 
   for (int slice = 0; slice < sliceCount; ++slice) {
     IESProfile &profile = s_iesProfiles[slice];
+    profile.gpuReady = false;
     const int numVA = profile.numVerticalAngles;
     const int numHA = profile.numHorizontalAngles;
     const float mult = profile.multiplier;
@@ -4895,11 +4979,55 @@ void RebuildIESAtlas() {
       }
     }
 
-    profile.gpuReady = true;
   }
 
-  DxrRenderer::UpdateIESAtlas(atlasData.data(), sliceCount);
+  const bool atlasUploaded = DxrRenderer::UpdateIESAtlas(atlasData.data(), sliceCount);
+  if (atlasUploaded) {
+    for (IESProfile &profile : s_iesProfiles) {
+      const int numVA = profile.numVerticalAngles;
+      const int numHA = profile.numHorizontalAngles;
+      profile.gpuReady =
+          numVA > 0 && numHA > 0 &&
+          profile.candela.size() >=
+              static_cast<size_t>(numVA) * static_cast<size_t>(numHA);
+    }
+  }
   UpdateLights();
+  s_rebuildingIESAtlas = false;
+}
+
+bool EnsureIESAtlasReady() {
+  if (s_rebuildingIESAtlas || s_iesProfiles.empty()) {
+    return false;
+  }
+
+  bool needsRebuild = false;
+  for (const LightPrototype &proto : s_lightPrototypes) {
+    if (proto.iesProfileIndex < 0 ||
+        proto.iesProfileIndex >= static_cast<int>(s_iesProfiles.size())) {
+      continue;
+    }
+    const IESProfile &profile = s_iesProfiles[proto.iesProfileIndex];
+    const bool hasValidProfile =
+        profile.numVerticalAngles > 0 && profile.numHorizontalAngles > 0 &&
+        profile.verticalAngles.size() ==
+            static_cast<size_t>(profile.numVerticalAngles) &&
+        profile.horizontalAngles.size() ==
+            static_cast<size_t>(profile.numHorizontalAngles) &&
+        profile.candela.size() >=
+            static_cast<size_t>(profile.numVerticalAngles) *
+                static_cast<size_t>(profile.numHorizontalAngles);
+    if (hasValidProfile && !profile.gpuReady) {
+      needsRebuild = true;
+      break;
+    }
+  }
+  if (!needsRebuild) {
+    return false;
+  }
+
+  RebuildIESAtlas();
+  return true;
 }
 
 int GetSelectedLightIndex() { return s_selectedLightIdx; }
@@ -5427,7 +5555,37 @@ void DrawLightsPanel(bool &visible) {
         }
 
         if (proto.type == (uint32_t)LightType::IES) {
-          ImGui::Text("IES Atlas Index: %d (placeholder)", proto.iesAtlasIndex);
+          if (proto.iesProfileIndex >= 0 &&
+              proto.iesProfileIndex < static_cast<int>(s_iesProfiles.size())) {
+            const auto &profile = s_iesProfiles[proto.iesProfileIndex];
+            ImGui::Text("IES Profile: %s", profile.displayName.c_str());
+            ImGui::Text("Atlas Slice: %d", proto.iesAtlasIndex);
+          } else {
+            ImGui::Text("IES Profile: None");
+          }
+
+          if (ImGui::Button("Load IES File...")) {
+            char filename[MAX_PATH] = {};
+            OPENFILENAMEA ofn = {};
+            ofn.lStructSize = sizeof(ofn);
+            ofn.lpstrFilter = "IES Files (*.ies)\0*.ies\0All Files (*.*)\0*.*\0";
+            ofn.lpstrFile = filename;
+            ofn.nMaxFile = MAX_PATH;
+            ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+            if (GetOpenFileNameA(&ofn)) {
+              int profIdx = LoadIESProfile(filename);
+              if (profIdx >= 0) {
+                proto.iesProfileIndex = profIdx;
+                protoChanged = true;
+              }
+            }
+          }
+          ImGui::SameLine();
+          if (ImGui::Button("Clear IES")) {
+            proto.iesProfileIndex = -1;
+            proto.iesAtlasIndex = -1;
+            protoChanged = true;
+          }
         }
 
         ImGui::Checkbox("Enabled", &proto.enabled);

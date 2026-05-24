@@ -311,6 +311,7 @@ int AddIESProfile(IESProfile profile);
 void ClearIESProfile(int profileIndex);
 void ClearIESProfiles();
 void RebuildIESAtlas();
+bool EnsureIESAtlasReady();
 
 // Material manipulation
 size_t GetMaterialCount();

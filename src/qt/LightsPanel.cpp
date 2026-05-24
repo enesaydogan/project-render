@@ -312,29 +312,29 @@ void LightsPanel::createUi()
         refreshLights();
     });
     connect(m_addIESButton, &QPushButton::clicked, this, [this]() {
-        const size_t protoIdx = Scene::AddLightPrototype(LightType::IES);
-        const int instIdx = static_cast<int>(Scene::GetLightInstances().size()) - 1;
-        Scene::SelectLight(instIdx);
-        refreshLights();
-        // Automatically open file dialog for IES profile
         const QString path = QFileDialog::getOpenFileName(
             this, tr("Load IES Profile"), QString(),
             tr("IES Files (*.ies);;All Files (*)"));
-        if (!path.isEmpty()) {
-            const int profIdx = Scene::LoadIESProfile(path.toStdString());
-            if (profIdx >= 0) {
-                auto protos = Scene::GetLightPrototypes();
-                if (protoIdx < protos.size()) {
-                    LightPrototype proto = protos[protoIdx];
-                    proto.iesProfileIndex = profIdx;
-                    Scene::UpdateLightPrototype(protoIdx, proto);
-                }
-                refreshLights();
-            } else {
-                QMessageBox::warning(this, tr("IES Load Failed"),
-                                     tr("Could not parse IES file:\n%1").arg(path));
-            }
+        if (path.isEmpty()) {
+            return;
         }
+        const int profIdx = Scene::LoadIESProfile(path.toStdString());
+        if (profIdx < 0) {
+            QMessageBox::warning(this, tr("IES Load Failed"),
+                                 tr("Could not parse IES file:\n%1").arg(path));
+            return;
+        }
+
+        const size_t protoIdx = Scene::AddLightPrototype(LightType::IES);
+        const int instIdx = static_cast<int>(Scene::GetLightInstances().size()) - 1;
+        auto protos = Scene::GetLightPrototypes();
+        if (protoIdx < protos.size()) {
+            LightPrototype proto = protos[protoIdx];
+            proto.iesProfileIndex = profIdx;
+            Scene::UpdateLightPrototype(protoIdx, proto);
+        }
+        Scene::SelectLight(instIdx);
+        refreshLights();
     });
 
     connect(m_lightTree, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem *current, QTreeWidgetItem *) {
