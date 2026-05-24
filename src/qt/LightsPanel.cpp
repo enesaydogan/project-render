@@ -6,6 +6,8 @@
 #include "../scene.h"
 
 #include <QApplication>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFileDialog>
 #include <QFormLayout>
@@ -13,6 +15,7 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSignalBlocker>
@@ -23,6 +26,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <cmath>
 
@@ -124,9 +128,12 @@ void LightsPanel::createUi()
     listLayout->setContentsMargins(8, 16, 8, 8);
     listLayout->setSpacing(4);
     m_lightTree = new QTreeWidget(m_listGroup);
-    m_lightTree->setHeaderHidden(true);
-    m_lightTree->setMinimumHeight(100);
+    m_lightTree->setColumnCount(4);
+    m_lightTree->setHeaderLabels({tr("Group / Instance"), tr("On"),
+                                  tr("Count / Position"), tr("Profile")});
     m_lightTree->setRootIsDecorated(true);
+    m_lightTree->setAlternatingRowColors(true);
+    m_lightTree->setMinimumHeight(100);
     listLayout->addWidget(m_lightTree);
 
     m_propertiesGroup = new QGroupBox(tr("Properties"), this);
@@ -147,6 +154,13 @@ void LightsPanel::createUi()
     m_typeLabel = new QLabel(tr("None"), m_protoPropsWidget);
     m_typeLabel->setStyleSheet(QStringLiteral("color: #58d0f4; font-weight: bold;"));
     protoForm->addRow(tr("Type"), m_typeLabel);
+
+    m_nameEdit = new QLineEdit(m_protoPropsWidget);
+    m_nameEdit->setMaxLength(63);
+    protoForm->addRow(tr("Name"), m_nameEdit);
+
+    m_protoEnabled = new QCheckBox(tr("Enabled"), m_protoPropsWidget);
+    protoForm->addRow(m_protoEnabled);
 
     m_instCountLabel = new QLabel(tr("1 instance"), m_protoPropsWidget);
     protoForm->addRow(tr("Instances"), m_instCountLabel);
@@ -213,6 +227,9 @@ void LightsPanel::createUi()
     m_instanceLabel->setStyleSheet(QStringLiteral("color: #58d0f4; font-weight: bold;"));
     instLayout->addWidget(m_instanceLabel);
 
+    m_instanceEnabled = new QCheckBox(tr("Enabled"), m_instancePropsWidget);
+    instLayout->addWidget(m_instanceEnabled);
+
     auto *posRow = CreateVec3Editor(m_posX, m_posY, m_posZ, -10000.0, 10000.0, 0.1, 2);
     auto *posLabel = new QLabel(tr("Position"), m_instancePropsWidget);
     instLayout->addWidget(posLabel);
@@ -226,8 +243,37 @@ void LightsPanel::createUi()
     propertiesLayout->addWidget(m_instancePropsWidget);
 
     // --- Actions ---
-    m_addInstanceButton = new QPushButton(tr("Add Instance"), m_propertiesGroup);
-    propertiesLayout->addWidget(m_addInstanceButton);
+    auto *dupRow = new QHBoxLayout();
+    dupRow->setSpacing(4);
+    m_addInstanceButton = new QPushButton(tr("Instance"), m_propertiesGroup);
+    m_duplicateCopyButton = new QPushButton(tr("Copy"), m_propertiesGroup);
+    m_mergeCopiesButton = new QPushButton(tr("Merge Copies"), m_propertiesGroup);
+    m_addInstanceButton->setToolTip(tr("Duplicate selected light as another instance sharing this group"));
+    m_duplicateCopyButton->setToolTip(tr("Duplicate selected light as an independent editable copy"));
+    m_mergeCopiesButton->setToolTip(tr("Merge compatible copied groups back into this prototype group"));
+    dupRow->addWidget(m_addInstanceButton);
+    dupRow->addWidget(m_duplicateCopyButton);
+    dupRow->addWidget(m_mergeCopiesButton);
+    propertiesLayout->addLayout(dupRow);
+
+    auto *placementGroup = new QGroupBox(tr("Viewport Placement"), m_propertiesGroup);
+    auto *placementLayout = new QVBoxLayout(placementGroup);
+    placementLayout->setContentsMargins(8, 16, 8, 8);
+    placementLayout->setSpacing(6);
+    auto *placementRow = new QHBoxLayout();
+    placementRow->setSpacing(4);
+    m_placeTypeCombo = new QComboBox(placementGroup);
+    m_placeTypeCombo->addItems({tr("Point"), tr("Spot"), tr("Rect"), tr("Disk"), tr("IES")});
+    m_createAtClickButton = new QPushButton(tr("Click Create"), placementGroup);
+    m_moveToSurfaceButton = new QPushButton(tr("Click Move Selected"), placementGroup);
+    placementRow->addWidget(m_placeTypeCombo);
+    placementRow->addWidget(m_createAtClickButton);
+    placementLayout->addLayout(placementRow);
+    placementLayout->addWidget(m_moveToSurfaceButton);
+    m_placementStatusLabel = new QLabel(tr("Click creation places on hit surfaces and falls back to camera depth."), placementGroup);
+    m_placementStatusLabel->setWordWrap(true);
+    placementLayout->addWidget(m_placementStatusLabel);
+    propertiesLayout->addWidget(placementGroup);
 
     auto *actionRow = new QHBoxLayout();
     actionRow->setSpacing(4);
@@ -304,6 +350,50 @@ void LightsPanel::createUi()
         } else {
             Scene::SelectLight(-1);
         }
+        refreshLights();
+    });
+
+    connect(m_lightTree, &QTreeWidget::itemChanged, this, [this](QTreeWidgetItem *item, int column) {
+        if (m_syncing || !item || column != 1) return;
+        const bool enabled = (item->checkState(1) == Qt::Checked);
+        if (item->type() == kProtoItemType) {
+            const int protoIdx = item->data(0, Qt::UserRole).toInt();
+            const auto &protos = Scene::GetLightPrototypes();
+            if (protoIdx < 0 || protoIdx >= static_cast<int>(protos.size())) return;
+            LightPrototype proto = protos[static_cast<size_t>(protoIdx)];
+            proto.enabled = enabled;
+            Scene::UpdateLightPrototype(static_cast<size_t>(protoIdx), proto);
+        } else {
+            const int instIdx = item->data(0, Qt::UserRole).toInt();
+            const auto &insts = Scene::GetLightInstances();
+            if (instIdx < 0 || instIdx >= static_cast<int>(insts.size())) return;
+            LightInstance inst = insts[static_cast<size_t>(instIdx)];
+            inst.enabled = enabled;
+            Scene::UpdateLightInstance(static_cast<size_t>(instIdx), inst);
+        }
+        refreshLights();
+    });
+
+    connect(m_nameEdit, &QLineEdit::editingFinished, this, [this]() {
+        if (m_syncing) return;
+        const int protoIdx = selectedPrototypeIndex();
+        const auto &protos = Scene::GetLightPrototypes();
+        if (protoIdx < 0 || protoIdx >= static_cast<int>(protos.size())) return;
+        LightPrototype proto = protos[static_cast<size_t>(protoIdx)];
+        std::snprintf(proto.name, sizeof(proto.name), "%s",
+                      m_nameEdit->text().trimmed().toUtf8().constData());
+        Scene::UpdateLightPrototype(static_cast<size_t>(protoIdx), proto);
+        refreshLights();
+    });
+
+    connect(m_protoEnabled, &QCheckBox::toggled, this, [this](bool enabled) {
+        if (m_syncing) return;
+        const int protoIdx = selectedPrototypeIndex();
+        const auto &protos = Scene::GetLightPrototypes();
+        if (protoIdx < 0 || protoIdx >= static_cast<int>(protos.size())) return;
+        LightPrototype proto = protos[static_cast<size_t>(protoIdx)];
+        proto.enabled = enabled;
+        Scene::UpdateLightPrototype(static_cast<size_t>(protoIdx), proto);
         refreshLights();
     });
 
@@ -458,6 +548,17 @@ void LightsPanel::createUi()
     connect(m_dirY, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyDirection](double) { applyDirection(); });
     connect(m_dirZ, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyDirection](double) { applyDirection(); });
 
+    connect(m_instanceEnabled, &QCheckBox::toggled, this, [this](bool enabled) {
+        if (m_syncing) return;
+        const int instIdx = selectedInstanceIndex();
+        const auto &insts = Scene::GetLightInstances();
+        if (instIdx < 0 || instIdx >= static_cast<int>(insts.size())) return;
+        LightInstance inst = insts[static_cast<size_t>(instIdx)];
+        inst.enabled = enabled;
+        Scene::UpdateLightInstance(static_cast<size_t>(instIdx), inst);
+        refreshLights();
+    });
+
     connect(m_selectButton, &QPushButton::clicked, this, [this]() {
         if (m_syncing) return;
         const int instIdx = selectedInstanceIndex();
@@ -481,10 +582,56 @@ void LightsPanel::createUi()
 
     connect(m_addInstanceButton, &QPushButton::clicked, this, [this]() {
         if (m_syncing) return;
+        int instIdx = selectedInstanceIndex();
+        size_t newIdx = static_cast<size_t>(-1);
+        if (instIdx >= 0) {
+            newIdx = Scene::DuplicateLightInstanceAsInstance(static_cast<size_t>(instIdx));
+        } else {
+            const int protoIdx = selectedPrototypeIndex();
+            if (protoIdx < 0) return;
+            newIdx = Scene::AddLightInstance(static_cast<size_t>(protoIdx));
+        }
+        Scene::SelectLight(static_cast<int>(newIdx));
+        refreshLights();
+    });
+
+    connect(m_duplicateCopyButton, &QPushButton::clicked, this, [this]() {
+        if (m_syncing) return;
+        const int instIdx = selectedInstanceIndex();
+        if (instIdx < 0) return;
+        Scene::DuplicateLightInstanceAsCopy(static_cast<size_t>(instIdx));
+        refreshLights();
+    });
+
+    connect(m_mergeCopiesButton, &QPushButton::clicked, this, [this]() {
+        if (m_syncing) return;
         const int protoIdx = selectedPrototypeIndex();
         if (protoIdx < 0) return;
-        const size_t newIdx = Scene::AddLightInstance(static_cast<size_t>(protoIdx));
-        Scene::SelectLight(static_cast<int>(newIdx));
+        const int moved = Scene::MergeCompatibleLightPrototypes(static_cast<size_t>(protoIdx));
+        if (moved == 0) {
+            QMessageBox::information(this, tr("Merge Copies"),
+                                     tr("No compatible copied light groups were found."));
+        }
+        refreshLights();
+    });
+
+    connect(m_createAtClickButton, &QPushButton::clicked, this, [this]() {
+        if (m_syncing) return;
+        const int typeIndex = m_placeTypeCombo->currentIndex();
+        LightType type = LightType::Omni;
+        if (typeIndex == 1) type = LightType::Spot;
+        else if (typeIndex == 2) type = LightType::AreaRect;
+        else if (typeIndex == 3) type = LightType::AreaDisk;
+        else if (typeIndex == 4) type = LightType::IES;
+        Scene::BeginCreateLightAtClick(type);
+        refreshLights();
+    });
+
+    connect(m_moveToSurfaceButton, &QPushButton::clicked, this, [this]() {
+        if (m_syncing) return;
+        const int instIdx = selectedInstanceIndex();
+        if (instIdx < 0) return;
+        Scene::BeginMoveLightToSurface(instIdx);
         refreshLights();
     });
 }
@@ -495,7 +642,6 @@ int LightsPanel::selectedInstanceIndex() const
     if (item) {
         if (item->type() == kInstanceItemType)
             return item->data(0, Qt::UserRole).toInt();
-        return -1;
     }
 
     const int sel = Scene::GetSelectedLightIndex();
@@ -527,6 +673,7 @@ bool LightsPanel::hasPropertyEditorFocus() const
     };
 
     return editing(m_intensity) ||
+           editing(m_nameEdit) ||
            editing(m_posX) || editing(m_posY) || editing(m_posZ) ||
            editing(m_dirX) || editing(m_dirY) || editing(m_dirZ) ||
            editing(m_radius) ||
@@ -553,6 +700,7 @@ uint64_t LightsPanel::lightListSignature() const
     mix(static_cast<uint64_t>(protos.size()));
     mix(static_cast<uint64_t>(insts.size()));
     for (const LightPrototype &p : protos) {
+        for (char ch : p.name) mix(static_cast<unsigned char>(ch));
         mix(static_cast<uint64_t>(p.type));
         mix(p.enabled ? 1ull : 0ull);
         for (float v : p.color) mixFloat(v);
@@ -609,6 +757,7 @@ void LightsPanel::refreshLights()
     m_addRectButton->setEnabled(!sceneIoActive);
     m_addDiskButton->setEnabled(!sceneIoActive);
     m_addIESButton->setEnabled(!sceneIoActive);
+    m_createAtClickButton->setEnabled(!sceneIoActive);
     if (sceneIoActive) {
         m_syncing = false;
         return;
@@ -638,14 +787,30 @@ void LightsPanel::refreshLights()
 
             // Count instances
             int instCount = 0;
+            int emittedCount = 0;
             for (const auto &inst : insts) {
-                if (inst.prototypeIndex == p) ++instCount;
+                if (inst.prototypeIndex == p) {
+                    ++instCount;
+                    if (proto.enabled && inst.enabled) ++emittedCount;
+                }
             }
 
             auto *protoItem = new QTreeWidgetItem(kProtoItemType);
-            protoItem->setText(0, tr("Proto %1 (%2) [%3]")
-                .arg(static_cast<int>(p)).arg(typeStr).arg(instCount));
+            const QString groupName = proto.name[0] != '\0'
+                ? QString::fromUtf8(proto.name)
+                : tr("%1 %2").arg(typeStr).arg(static_cast<int>(p) + 1);
+            protoItem->setText(0, tr("%1  (%2)").arg(groupName).arg(typeStr));
+            protoItem->setText(2, tr("%1 inst / %2 active").arg(instCount).arg(emittedCount));
+            QString profileText = tr("-");
+            if (proto.iesProfileIndex >= 0 &&
+                proto.iesProfileIndex < static_cast<int>(Scene::GetIESProfiles().size())) {
+                const auto &prof = Scene::GetIESProfiles()[proto.iesProfileIndex];
+                profileText = QString::fromStdString(prof.displayName);
+            }
+            protoItem->setText(3, profileText);
             protoItem->setData(0, Qt::UserRole, static_cast<int>(p));
+            protoItem->setFlags(protoItem->flags() | Qt::ItemIsUserCheckable);
+            protoItem->setCheckState(1, proto.enabled ? Qt::Checked : Qt::Unchecked);
             if (!proto.enabled) {
                 QFont f = protoItem->font(0);
                 f.setItalic(true);
@@ -659,12 +824,14 @@ void LightsPanel::refreshLights()
                 if (inst.prototypeIndex != p) continue;
 
                 auto *instItem = new QTreeWidgetItem(kInstanceItemType);
-                instItem->setText(0, tr("Instance %1  [%2, %3, %4]")
-                    .arg(static_cast<int>(i))
+                instItem->setText(0, tr("Instance %1").arg(static_cast<int>(i)));
+                instItem->setText(2, tr("%1, %2, %3")
                     .arg(inst.position[0], 0, 'f', 2)
                     .arg(inst.position[1], 0, 'f', 2)
                     .arg(inst.position[2], 0, 'f', 2));
                 instItem->setData(0, Qt::UserRole, static_cast<int>(i));
+                instItem->setFlags(instItem->flags() | Qt::ItemIsUserCheckable);
+                instItem->setCheckState(1, inst.enabled ? Qt::Checked : Qt::Unchecked);
                 if (!inst.enabled) {
                     QFont f = instItem->font(0);
                     f.setItalic(true);
@@ -674,6 +841,10 @@ void LightsPanel::refreshLights()
             }
 
             protoItem->setExpanded(true);
+        }
+
+        for (int col = 0; col < m_lightTree->columnCount(); ++col) {
+            m_lightTree->resizeColumnToContents(col);
         }
 
         m_lastLightListSignature = signature;
@@ -703,14 +874,27 @@ void LightsPanel::refreshLights()
     const bool hasInst = (curInstIdx >= 0 && curInstIdx < static_cast<int>(insts.size()));
 
     m_propertiesGroup->setEnabled(hasProto || hasInst);
+    m_protoPropsWidget->setVisible(hasProto);
+    m_instancePropsWidget->setVisible(hasInst);
     m_addInstanceButton->setEnabled(hasProto);
+    m_duplicateCopyButton->setEnabled(hasInst);
+    m_mergeCopiesButton->setEnabled(hasProto);
     m_selectButton->setEnabled(hasInst);
     m_removeButton->setEnabled(hasProto || hasInst);
+    m_moveToSurfaceButton->setEnabled(hasInst);
+    if (Scene::IsLightPlacementActive()) {
+        const bool moving = Scene::GetLightPlacementMode() == Scene::LightPlacementMode::MoveSelected;
+        m_placementStatusLabel->setText(moving
+            ? tr("Click a surface in the viewport to move the selected light. Esc cancels.")
+            : tr("Click in the viewport to create the selected light type. Esc cancels."));
+    } else {
+        m_placementStatusLabel->setText(tr("Click creation places on hit surfaces and falls back to camera depth."));
+    }
 
     // Update remove button text
     QTreeWidgetItem *curItem = m_lightTree->currentItem();
     if (curItem && curItem->type() == kProtoItemType) {
-        m_removeButton->setText(tr("Remove Proto"));
+        m_removeButton->setText(tr("Remove Group"));
     } else {
         m_removeButton->setText(tr("Remove Instance"));
     }
@@ -732,13 +916,19 @@ void LightsPanel::refreshLights()
         case LightType::IES: typeStr = "IES"; break;
         }
         m_typeLabel->setText(tr("%1").arg(typeStr));
+        m_nameEdit->setText(QString::fromUtf8(proto.name));
+        m_protoEnabled->setChecked(proto.enabled);
 
         // Count instances
         int instCount = 0;
+        int emittedCount = 0;
         for (const auto &inst : insts) {
-            if (inst.prototypeIndex == static_cast<size_t>(curProtoIdx)) ++instCount;
+            if (inst.prototypeIndex == static_cast<size_t>(curProtoIdx)) {
+                ++instCount;
+                if (proto.enabled && inst.enabled) ++emittedCount;
+            }
         }
-        m_instCountLabel->setText(tr("%1 instance(s)").arg(instCount));
+        m_instCountLabel->setText(tr("%1 instance(s), %2 active").arg(instCount).arg(emittedCount));
 
         m_currentColor = QColor::fromRgbF(
             std::clamp(proto.color[0], 0.0f, 1.0f),
@@ -787,6 +977,7 @@ void LightsPanel::refreshLights()
 
     if (updateInstInspector) {
         const LightInstance &inst = insts[static_cast<size_t>(curInstIdx)];
+        m_instanceEnabled->setChecked(inst.enabled);
 
         m_posX->setValue(inst.position[0]);
         m_posY->setValue(inst.position[1]);

@@ -12,7 +12,10 @@ class QLabel;
 class QListWidget;
 class QPushButton;
 class QDoubleSpinBox;
+class QCheckBox;
+class QComboBox;
 class QGroupBox;
+class QLineEdit;
 class QTimer;
 class QTreeWidget;
 class QTreeWidgetItem;
@@ -56,6 +59,8 @@ private:
     // Prototype property widgets
     QLabel *m_typeLabel = nullptr;
     QWidget *m_protoPropsWidget = nullptr;
+    QLineEdit *m_nameEdit = nullptr;
+    QCheckBox *m_protoEnabled = nullptr;
     QLabel *m_instCountLabel = nullptr;
 
     QPushButton *m_colorButton = nullptr;
@@ -80,6 +85,7 @@ private:
     // Instance transform widgets
     QWidget *m_instancePropsWidget = nullptr;
     QLabel *m_instanceLabel = nullptr;
+    QCheckBox *m_instanceEnabled = nullptr;
     QLabel *m_directionLabel = nullptr;
     QWidget *m_directionRow = nullptr;
 
@@ -94,6 +100,12 @@ private:
     QPushButton *m_selectButton = nullptr;
     QPushButton *m_removeButton = nullptr;
     QPushButton *m_addInstanceButton = nullptr;
+    QPushButton *m_duplicateCopyButton = nullptr;
+    QPushButton *m_mergeCopiesButton = nullptr;
+    QPushButton *m_moveToSurfaceButton = nullptr;
+    QComboBox *m_placeTypeCombo = nullptr;
+    QPushButton *m_createAtClickButton = nullptr;
+    QLabel *m_placementStatusLabel = nullptr;
 
     QTimer *m_refreshTimer = nullptr;
 };

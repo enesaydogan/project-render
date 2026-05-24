@@ -198,6 +198,12 @@ enum class MirrorSpace {
   Local,
 };
 
+enum class LightPlacementMode {
+  None,
+  Create,
+  MoveSelected,
+};
+
 void SetGizmoOperation(GizmoOperation operation);
 GizmoOperation GetGizmoOperation();
 void SetGizmoSpace(GizmoSpace space);
@@ -264,6 +270,9 @@ size_t AddLightPrototype(LightType type);
 size_t AddLightPrototypeRaw(const LightPrototype &proto); // no auto-instance, for scene loading
 bool UpdateLightPrototype(size_t index, const LightPrototype &proto);
 void RemoveLightPrototype(size_t index);
+size_t DuplicateLightInstanceAsInstance(size_t instanceIndex);
+size_t DuplicateLightInstanceAsCopy(size_t instanceIndex);
+int MergeCompatibleLightPrototypes(size_t targetPrototypeIndex);
 
 // Instance operations
 size_t AddLightInstance(size_t prototypeIndex);
@@ -274,6 +283,16 @@ void RemoveLightInstance(size_t index);
 // Selection (instance-based)
 int GetSelectedLightIndex();
 void SelectLight(int instanceIndex);
+
+// Viewport light placement.
+void BeginCreateLightAtClick(LightType type);
+void BeginMoveLightToSurface(int instanceIndex);
+void BeginMoveSelectedLightToSurface();
+bool IsLightPlacementActive();
+LightPlacementMode GetLightPlacementMode();
+void CancelLightPlacement();
+bool HandleLightPlacement(float screenX, float screenY, float screenWidth,
+                          float screenHeight);
 
 // Rebuild flattened array and upload to GPU
 void UpdateLights();

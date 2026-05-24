@@ -14,6 +14,7 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -881,6 +882,7 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
   j["lgp"] = json::array();
   for (const auto &proto : Scene::GetLightPrototypes()) {
     j["lgp"].push_back({
+      {"nm",  std::string(proto.name)},
       {"ty",  proto.type},
       {"en",  proto.enabled},
       {"c",   {proto.color[0], proto.color[1], proto.color[2]}},
@@ -1239,6 +1241,10 @@ static void ApplyMetadataPRS(const json &j) {
     // New prototype + instance schema
     for (const auto &p : j["lgp"]) {
       LightPrototype proto;
+      const std::string name = p.value("nm", std::string());
+      if (!name.empty()) {
+        std::snprintf(proto.name, sizeof(proto.name), "%s", name.c_str());
+      }
       proto.type = p.value("ty", 1u);
       proto.enabled = p.value("en", true);
       auto c = p.value("c", std::vector<float>{1,1,1});

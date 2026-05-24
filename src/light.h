@@ -34,6 +34,7 @@ static_assert(sizeof(Light) == 64, "Light struct must be 64 bytes");
 
 // Editor-side prototype: shared properties for a group of light instances.
 struct LightPrototype {
+  char name[64] = {};
   uint32_t type = 1;       // LightType::Omni
   bool enabled = true;
   float color[3] = {1.0f, 1.0f, 1.0f};

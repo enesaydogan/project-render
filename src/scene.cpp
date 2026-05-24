@@ -21,6 +21,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -61,6 +62,9 @@ static uint64_t s_scatterRuntimeRevision = 1;
 static uint64_t s_scatterInstanceCacheRevision = 0;
 static ScatterRuntimeStats s_scatterRuntimeStats;
 static size_t s_scatterPickTargetIndex = static_cast<size_t>(-1);
+static LightPlacementMode s_lightPlacementMode = LightPlacementMode::None;
+static LightType s_lightPlacementCreateType = LightType::Omni;
+static int s_lightPlacementMoveInstance = -1;
 // Import progress & pending results (for async import)
 static std::atomic<bool> s_importInProgress(false);
 static std::atomic<float> s_importProgress(0.0f);
@@ -95,6 +99,37 @@ struct SharedImportedMeshEntry {
 static std::unordered_map<std::string, SharedImportedMeshEntry>
     s_sharedImportedMeshesBySourcePath;
 static size_t s_nextImportGroupId = 1;
+
+static const char *LightTypeLabel(LightType type) {
+  switch (type) {
+  case LightType::Directional: return "Sun";
+  case LightType::Omni: return "Point";
+  case LightType::Spot: return "Spot";
+  case LightType::AreaRect: return "Rect";
+  case LightType::AreaDisk: return "Disk";
+  case LightType::IES: return "IES";
+  }
+  return "Light";
+}
+
+static void EnsureLightPrototypeName(LightPrototype &proto, size_t index) {
+  if (proto.name[0] != '\0') {
+    proto.name[sizeof(proto.name) - 1] = '\0';
+    return;
+  }
+  std::snprintf(proto.name, sizeof(proto.name), "%s %zu",
+                LightTypeLabel(static_cast<LightType>(proto.type)),
+                index + 1);
+}
+
+static bool LightPrototypeSharedFieldsEqual(const LightPrototype &a,
+                                            const LightPrototype &b) {
+  LightPrototype lhs = a;
+  LightPrototype rhs = b;
+  std::memset(lhs.name, 0, sizeof(lhs.name));
+  std::memset(rhs.name, 0, sizeof(rhs.name));
+  return std::memcmp(&lhs, &rhs, sizeof(LightPrototype)) == 0;
+}
 
 static std::wstring WidePathFromUtf8(const std::string &path) {
   if (path.empty()) {
@@ -4819,6 +4854,7 @@ size_t AddLightPrototype(LightType type) {
     break;
   }
   size_t protoIdx = s_lightPrototypes.size();
+  EnsureLightPrototypeName(proto, protoIdx);
   s_lightPrototypes.push_back(proto);
 
   // Auto-create one instance
@@ -4832,16 +4868,20 @@ size_t AddLightPrototype(LightType type) {
 
 size_t AddLightPrototypeRaw(const LightPrototype &proto) {
   size_t idx = s_lightPrototypes.size();
-  s_lightPrototypes.push_back(proto);
+  LightPrototype namedProto = proto;
+  EnsureLightPrototypeName(namedProto, idx);
+  s_lightPrototypes.push_back(namedProto);
   return idx;
 }
 
 bool UpdateLightPrototype(size_t index, const LightPrototype &proto) {
   if (index >= s_lightPrototypes.size())
     return false;
-  if (memcmp(&s_lightPrototypes[index], &proto, sizeof(LightPrototype)) == 0)
+  LightPrototype namedProto = proto;
+  EnsureLightPrototypeName(namedProto, index);
+  if (memcmp(&s_lightPrototypes[index], &namedProto, sizeof(LightPrototype)) == 0)
     return true;
-  s_lightPrototypes[index] = proto;
+  s_lightPrototypes[index] = namedProto;
   UpdateLights();
   return true;
 }
@@ -4872,6 +4912,90 @@ void RemoveLightPrototype(size_t index) {
   s_lightPrototypes.erase(s_lightPrototypes.begin() + index);
   UpdateLights();
   NotifySceneChanged();
+}
+
+size_t DuplicateLightInstanceAsInstance(size_t instanceIndex) {
+  if (instanceIndex >= s_lightInstances.size()) {
+    return static_cast<size_t>(-1);
+  }
+  LightInstance inst = s_lightInstances[instanceIndex];
+  const size_t newIndex = s_lightInstances.size();
+  inst.position[0] += 0.5f;
+  s_lightInstances.push_back(inst);
+  SelectLight(static_cast<int>(newIndex));
+  UpdateLights();
+  NotifySceneChanged();
+  return newIndex;
+}
+
+size_t DuplicateLightInstanceAsCopy(size_t instanceIndex) {
+  if (instanceIndex >= s_lightInstances.size()) {
+    return static_cast<size_t>(-1);
+  }
+  const LightInstance &sourceInst = s_lightInstances[instanceIndex];
+  if (sourceInst.prototypeIndex >= s_lightPrototypes.size()) {
+    return static_cast<size_t>(-1);
+  }
+
+  LightPrototype proto = s_lightPrototypes[sourceInst.prototypeIndex];
+  std::snprintf(proto.name, sizeof(proto.name), "%s Copy",
+                s_lightPrototypes[sourceInst.prototypeIndex].name[0] != '\0'
+                    ? s_lightPrototypes[sourceInst.prototypeIndex].name
+                    : LightTypeLabel(static_cast<LightType>(proto.type)));
+  const size_t protoIndex = s_lightPrototypes.size();
+  s_lightPrototypes.push_back(proto);
+
+  LightInstance inst = sourceInst;
+  inst.prototypeIndex = protoIndex;
+  inst.position[0] += 0.5f;
+  const size_t newIndex = s_lightInstances.size();
+  s_lightInstances.push_back(inst);
+  SelectLight(static_cast<int>(newIndex));
+  UpdateLights();
+  NotifySceneChanged();
+  return newIndex;
+}
+
+int MergeCompatibleLightPrototypes(size_t targetPrototypeIndex) {
+  if (targetPrototypeIndex >= s_lightPrototypes.size()) {
+    return 0;
+  }
+
+  int movedInstances = 0;
+  for (int protoIndex = static_cast<int>(s_lightPrototypes.size()) - 1;
+       protoIndex >= 0; --protoIndex) {
+    if (static_cast<size_t>(protoIndex) == targetPrototypeIndex) {
+      continue;
+    }
+    if (!LightPrototypeSharedFieldsEqual(
+            s_lightPrototypes[targetPrototypeIndex],
+            s_lightPrototypes[static_cast<size_t>(protoIndex)])) {
+      continue;
+    }
+
+    const size_t removedIndex = static_cast<size_t>(protoIndex);
+    const size_t remappedTarget =
+        (targetPrototypeIndex > removedIndex) ? targetPrototypeIndex - 1
+                                              : targetPrototypeIndex;
+    for (auto &inst : s_lightInstances) {
+      if (inst.prototypeIndex == static_cast<size_t>(protoIndex)) {
+        inst.prototypeIndex = remappedTarget;
+        ++movedInstances;
+      } else if (inst.prototypeIndex > static_cast<size_t>(protoIndex)) {
+        --inst.prototypeIndex;
+      }
+    }
+    s_lightPrototypes.erase(s_lightPrototypes.begin() + protoIndex);
+    if (targetPrototypeIndex > static_cast<size_t>(protoIndex)) {
+      --targetPrototypeIndex;
+    }
+  }
+
+  if (movedInstances > 0) {
+    UpdateLights();
+    NotifySceneChanged();
+  }
+  return movedInstances;
 }
 
 size_t AddLightInstance(size_t prototypeIndex) {
@@ -6562,6 +6686,7 @@ struct SceneMeshPickHit {
   size_t nodeIndex = static_cast<size_t>(-1);
   size_t meshIndex = static_cast<size_t>(-1);
   float worldPosition[3] = {};
+  float worldNormal[3] = {0.0f, 1.0f, 0.0f};
 };
 
 static bool BuildViewportRayAt(float screenX, float screenY, float screenWidth,
@@ -6648,6 +6773,17 @@ static bool PickSceneMeshAt(float screenX, float screenY, float screenWidth,
   }
 
   float minWorldDist2 = FLT_MAX;
+  auto normalize3 = [](float v[3]) {
+    const float len2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+    if (len2 <= 1e-12f) {
+      return false;
+    }
+    const float invLen = 1.0f / sqrtf(len2);
+    v[0] *= invLen;
+    v[1] *= invLen;
+    v[2] *= invLen;
+    return true;
+  };
   const std::vector<std::array<float, 16>> worldTransforms =
       BuildNodeWorldTransforms();
 
@@ -6685,6 +6821,7 @@ static bool PickSceneMeshAt(float screenX, float screenY, float screenWidth,
 
       float bestMeshDist2 = FLT_MAX;
       float bestMeshWorldHit[3] = {};
+      float bestMeshWorldNormal[3] = {0.0f, 1.0f, 0.0f};
       bool meshHit = false;
       if (!mesh.cpuVertices.empty() && !mesh.cpuIndices.empty()) {
         for (size_t k = 0; k + 2 < mesh.cpuIndices.size(); k += 3) {
@@ -6712,10 +6849,41 @@ static bool PickSceneMeshAt(float screenX, float screenY, float screenWidth,
           const float dz = worldHit[2] - orig[2];
           const float worldDist2 = dx * dx + dy * dy + dz * dz;
           if (worldDist2 < bestMeshDist2) {
+            float localNormal[3] = {
+                mesh.cpuVertices[i0].normal[0] + mesh.cpuVertices[i1].normal[0] +
+                    mesh.cpuVertices[i2].normal[0],
+                mesh.cpuVertices[i0].normal[1] + mesh.cpuVertices[i1].normal[1] +
+                    mesh.cpuVertices[i2].normal[1],
+                mesh.cpuVertices[i0].normal[2] + mesh.cpuVertices[i1].normal[2] +
+                    mesh.cpuVertices[i2].normal[2]};
+            if (!normalize3(localNormal)) {
+              const float *p0 = mesh.cpuVertices[i0].pos;
+              const float *p1 = mesh.cpuVertices[i1].pos;
+              const float *p2 = mesh.cpuVertices[i2].pos;
+              const float e1[3] = {p1[0] - p0[0], p1[1] - p0[1],
+                                   p1[2] - p0[2]};
+              const float e2[3] = {p2[0] - p0[0], p2[1] - p0[1],
+                                   p2[2] - p0[2]};
+              localNormal[0] = e1[1] * e2[2] - e1[2] * e2[1];
+              localNormal[1] = e1[2] * e2[0] - e1[0] * e2[2];
+              localNormal[2] = e1[0] * e2[1] - e1[1] * e2[0];
+            }
+            float worldNormal[3] = {0.0f, 1.0f, 0.0f};
+            if (normalize3(localNormal)) {
+              TransformVectorColumnMajor(nodeWorld, localNormal, worldNormal);
+              if (!normalize3(worldNormal)) {
+                worldNormal[0] = 0.0f;
+                worldNormal[1] = 1.0f;
+                worldNormal[2] = 0.0f;
+              }
+            }
             bestMeshDist2 = worldDist2;
             bestMeshWorldHit[0] = worldHit[0];
             bestMeshWorldHit[1] = worldHit[1];
             bestMeshWorldHit[2] = worldHit[2];
+            bestMeshWorldNormal[0] = worldNormal[0];
+            bestMeshWorldNormal[1] = worldNormal[1];
+            bestMeshWorldNormal[2] = worldNormal[2];
             meshHit = true;
           }
         }
@@ -6732,6 +6900,10 @@ static bool PickSceneMeshAt(float screenX, float screenY, float screenWidth,
         bestMeshWorldHit[0] = worldHit[0];
         bestMeshWorldHit[1] = worldHit[1];
         bestMeshWorldHit[2] = worldHit[2];
+        bestMeshWorldNormal[0] = -dir[0];
+        bestMeshWorldNormal[1] = -dir[1];
+        bestMeshWorldNormal[2] = -dir[2];
+        normalize3(bestMeshWorldNormal);
         meshHit = true;
       }
 
@@ -6742,6 +6914,9 @@ static bool PickSceneMeshAt(float screenX, float screenY, float screenWidth,
         outHit.worldPosition[0] = bestMeshWorldHit[0];
         outHit.worldPosition[1] = bestMeshWorldHit[1];
         outHit.worldPosition[2] = bestMeshWorldHit[2];
+        outHit.worldNormal[0] = bestMeshWorldNormal[0];
+        outHit.worldNormal[1] = bestMeshWorldNormal[1];
+        outHit.worldNormal[2] = bestMeshWorldNormal[2];
       }
     }
   }
@@ -6801,6 +6976,132 @@ bool ResolveViewportImportPlacement(float screenX, float screenY,
   outTranslation[0] = origin[0] + direction[0] * rayDistance;
   outTranslation[1] = origin[1] + direction[1] * rayDistance;
   outTranslation[2] = origin[2] + direction[2] * rayDistance;
+  return true;
+}
+
+static bool ResolveLightPlacement(float screenX, float screenY,
+                                  float screenWidth, float screenHeight,
+                                  float outPosition[3], float outDirection[3]) {
+  if (!outPosition || !outDirection) {
+    return false;
+  }
+
+  SceneMeshPickHit hit;
+  if (PickSceneMeshAt(screenX, screenY, screenWidth, screenHeight, hit)) {
+    const float offset = 0.05f;
+    outPosition[0] = hit.worldPosition[0] + hit.worldNormal[0] * offset;
+    outPosition[1] = hit.worldPosition[1] + hit.worldNormal[1] * offset;
+    outPosition[2] = hit.worldPosition[2] + hit.worldNormal[2] * offset;
+    outDirection[0] = hit.worldNormal[0];
+    outDirection[1] = hit.worldNormal[1];
+    outDirection[2] = hit.worldNormal[2];
+    return true;
+  }
+
+  float origin[3] = {};
+  float direction[3] = {};
+  if (!BuildViewportRayAt(screenX, screenY, screenWidth, screenHeight, origin,
+                          direction)) {
+    return false;
+  }
+
+  const float fallbackDepth = std::max(5.0f, g_cameraData.nearZ * 4.0f);
+  outPosition[0] = origin[0] + direction[0] * fallbackDepth;
+  outPosition[1] = origin[1] + direction[1] * fallbackDepth;
+  outPosition[2] = origin[2] + direction[2] * fallbackDepth;
+  outDirection[0] = direction[0];
+  outDirection[1] = direction[1];
+  outDirection[2] = direction[2];
+  return true;
+}
+
+void BeginCreateLightAtClick(LightType type) {
+  s_lightPlacementCreateType = type;
+  s_lightPlacementMoveInstance = -1;
+  s_lightPlacementMode = LightPlacementMode::Create;
+}
+
+void BeginMoveLightToSurface(int instanceIndex) {
+  if (instanceIndex < 0 ||
+      instanceIndex >= static_cast<int>(s_lightInstances.size())) {
+    s_lightPlacementMoveInstance = -1;
+    s_lightPlacementMode = LightPlacementMode::None;
+    return;
+  }
+
+  s_lightPlacementMoveInstance = instanceIndex;
+  SelectLight(instanceIndex);
+  s_lightPlacementMode = LightPlacementMode::MoveSelected;
+}
+
+void BeginMoveSelectedLightToSurface() {
+  BeginMoveLightToSurface(s_selectedLightIdx);
+}
+
+bool IsLightPlacementActive() {
+  return s_lightPlacementMode != LightPlacementMode::None;
+}
+
+LightPlacementMode GetLightPlacementMode() { return s_lightPlacementMode; }
+
+void CancelLightPlacement() {
+  s_lightPlacementMoveInstance = -1;
+  s_lightPlacementMode = LightPlacementMode::None;
+}
+
+bool HandleLightPlacement(float screenX, float screenY, float screenWidth,
+                          float screenHeight) {
+  if (s_lightPlacementMode == LightPlacementMode::None) {
+    return false;
+  }
+
+  float position[3] = {};
+  float direction[3] = {};
+  if (!ResolveLightPlacement(screenX, screenY, screenWidth, screenHeight,
+                             position, direction)) {
+    return false;
+  }
+
+  if (s_lightPlacementMode == LightPlacementMode::Create) {
+    const size_t prototypeIndex = AddLightPrototype(s_lightPlacementCreateType);
+    if (prototypeIndex >= s_lightPrototypes.size() || s_lightInstances.empty()) {
+      s_lightPlacementMode = LightPlacementMode::None;
+      return false;
+    }
+    const size_t instanceIndex = s_lightInstances.size() - 1;
+    LightInstance inst = s_lightInstances[instanceIndex];
+    inst.position[0] = position[0];
+    inst.position[1] = position[1];
+    inst.position[2] = position[2];
+    inst.direction[0] = direction[0];
+    inst.direction[1] = direction[1];
+    inst.direction[2] = direction[2];
+    UpdateLightInstance(instanceIndex, inst);
+    SelectLight(static_cast<int>(instanceIndex));
+    s_lightPlacementMoveInstance = -1;
+    s_lightPlacementMode = LightPlacementMode::None;
+    return true;
+  }
+
+  const int moveInstance = s_lightPlacementMoveInstance;
+  if (moveInstance < 0 ||
+      moveInstance >= static_cast<int>(s_lightInstances.size())) {
+    s_lightPlacementMoveInstance = -1;
+    s_lightPlacementMode = LightPlacementMode::None;
+    return false;
+  }
+
+  LightInstance inst = s_lightInstances[static_cast<size_t>(moveInstance)];
+  inst.position[0] = position[0];
+  inst.position[1] = position[1];
+  inst.position[2] = position[2];
+  inst.direction[0] = direction[0];
+  inst.direction[1] = direction[1];
+  inst.direction[2] = direction[2];
+  UpdateLightInstance(static_cast<size_t>(moveInstance), inst);
+  SelectLight(moveInstance);
+  s_lightPlacementMoveInstance = -1;
+  s_lightPlacementMode = LightPlacementMode::None;
   return true;
 }
 
@@ -7061,6 +7362,8 @@ void ResetScene() {
   s_lightInstances.clear();
   s_flattenedLights.clear();
   s_lightFlattenMapping.clear();
+  s_lightPlacementMoveInstance = -1;
+  s_lightPlacementMode = LightPlacementMode::None;
   s_iesProfiles.clear();
   s_selectedLightIdx = -1;
   AnimationSequence::Clear();

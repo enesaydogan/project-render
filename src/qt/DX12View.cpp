@@ -207,6 +207,8 @@ void DX12View::keyPressEvent(QKeyEvent *e)
     if (e->key() == Qt::Key_Escape && !e->isAutoRepeat()) {
         if (IsPreviewRenderActive()) {
             CancelPreviewRender();
+        } else if (Scene::IsLightPlacementActive()) {
+            Scene::CancelLightPlacement();
         } else {
             Scene::SelectNode(static_cast<size_t>(-1));
             Scene::SelectLight(-1);
@@ -247,6 +249,18 @@ void DX12View::mousePressEvent(QMouseEvent *e)
                                      static_cast<float>(pickPos.y()),
                                      static_cast<float>(DX12Context::g_windowWidth),
                                      static_cast<float>(DX12Context::g_windowHeight))) {
+            e->accept();
+            return;
+        }
+    }
+
+    if (e->button() == Qt::LeftButton && Scene::IsLightPlacementActive()) {
+        const QPointF pickPos = e->globalPosition();
+        if (Scene::HandleLightPlacement(
+                static_cast<float>(pickPos.x()),
+                static_cast<float>(pickPos.y()),
+                static_cast<float>(DX12Context::g_windowWidth),
+                static_cast<float>(DX12Context::g_windowHeight))) {
             e->accept();
             return;
         }
