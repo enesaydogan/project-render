@@ -1241,7 +1241,7 @@ LiveLinkSceneSync::StatsSnapshot LiveLinkSceneSync::GetStatsSnapshot() const {
     stats.meshCount += node.meshIndices.size();
   }
 
-  const size_t lightLimit = Scene::GetLights().size();
+  const size_t lightLimit = Scene::GetLightInstances().size();
   const size_t materialLimit = Scene::GetMaterialCount();
   for (const auto &[_, binding] : m_bindings) {
     if (binding.objectId.Empty() ||
@@ -1490,9 +1490,9 @@ bool LiveLinkSceneSync::ApplyNodeRemoved(const SceneDeltaBatch &batch,
       binding->handleIndex == kInvalidHandle) {
     if (binding->handleKind == EngineHandleKind::SceneLight &&
         binding->handleIndex != kInvalidHandle &&
-        binding->handleIndex < Scene::GetLights().size()) {
+        binding->handleIndex < Scene::GetLightInstances().size()) {
       const size_t removedLightIndex = binding->handleIndex;
-      Scene::RemoveLight(removedLightIndex);
+      Scene::RemoveLightInstance(removedLightIndex);
       m_bindings.erase(delta.target);
       ReindexSceneLightBindingsAfterRemoval(removedLightIndex);
       return true;
@@ -2049,36 +2049,53 @@ bool LiveLinkSceneSync::ApplyLightChanged(const SceneDeltaBatch &batch,
 
   if (!EnsureLightBinding(batch, delta, &binding) || !binding ||
       binding->handleIndex == kInvalidHandle ||
-      binding->handleIndex >= Scene::GetLights().size()) {
+      binding->handleIndex >= Scene::GetLightInstances().size()) {
     return false;
   }
 
-  Light light = Scene::GetLights()[binding->handleIndex];
-  light.type = static_cast<uint32_t>(ParseEngineLightType(payload->lightType));
-  light.position[0] = payload->position[0];
-  light.position[1] = payload->position[1];
-  light.position[2] = payload->position[2];
-  light.emission[0] = payload->color[0] * payload->intensity;
-  light.emission[1] = payload->color[1] * payload->intensity;
-  light.emission[2] = payload->color[2] * payload->intensity;
-  light.direction[0] = payload->direction[0];
-  light.direction[1] = payload->direction[1];
-  light.direction[2] = payload->direction[2];
+  const auto &insts = Scene::GetLightInstances();
+  const auto &protos = Scene::GetLightPrototypes();
+  const size_t instIdx = binding->handleIndex;
+  if (instIdx >= insts.size()) return false;
+
+  const LightInstance &inst = insts[instIdx];
+  if (inst.prototypeIndex >= protos.size()) return false;
+
+  LightPrototype proto = protos[inst.prototypeIndex];
+  proto.type = static_cast<uint32_t>(ParseEngineLightType(payload->lightType));
+  {
+    const float maxComp = (std::max)({payload->color[0], payload->color[1], payload->color[2], 0.001f});
+    proto.color[0] = payload->color[0] / maxComp;
+    proto.color[1] = payload->color[1] / maxComp;
+    proto.color[2] = payload->color[2] / maxComp;
+    proto.intensity = maxComp * payload->intensity;
+  }
+  proto.radius = payload->radius;
+  proto.innerConeAngle = cosf(DirectX::XMConvertToRadians(payload->innerConeDegrees));
+  proto.outerConeAngle = cosf(DirectX::XMConvertToRadians(payload->outerConeDegrees));
+  proto.areaExtents[0] = payload->areaExtents[0];
+  proto.areaExtents[1] = payload->areaExtents[1];
+
+  LightInstance newInst = inst;
+  newInst.position[0] = payload->position[0];
+  newInst.position[1] = payload->position[1];
+  newInst.position[2] = payload->position[2];
+  newInst.direction[0] = payload->direction[0];
+  newInst.direction[1] = payload->direction[1];
+  newInst.direction[2] = payload->direction[2];
   {
     const float fallbackDirection[3] = {0.0f, -1.0f, 0.0f};
-    Normalize3(light.direction, fallbackDirection);
+    Normalize3(newInst.direction, fallbackDirection);
   }
-  light.radius = payload->radius;
-  light.innerConeAngle =
-      cosf(DirectX::XMConvertToRadians(payload->innerConeDegrees));
-  light.outerConeAngle =
-      cosf(DirectX::XMConvertToRadians(payload->outerConeDegrees));
-  light.areaExtents[0] = payload->areaExtents[0];
-  light.areaExtents[1] = payload->areaExtents[1];
 
-  if (!Scene::UpdateLight(binding->handleIndex, light)) {
+  if (!Scene::UpdateLightPrototype(inst.prototypeIndex, proto)) {
     LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
-                  "Failed to apply light change");
+                  "Failed to apply light prototype change");
+    return false;
+  }
+  if (!Scene::UpdateLightInstance(instIdx, newInst)) {
+    LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
+                  "Failed to apply light instance change");
     return false;
   }
 
@@ -2364,9 +2381,11 @@ bool LiveLinkSceneSync::EnsureLightBinding(const SceneDeltaBatch &batch,
                                            ObjectBinding **outBinding) {
   ObjectBinding *binding = FindBinding(delta.target);
   if (!binding) {
-    const size_t lightIndex = Scene::AddLight(LightType::Omni);
+    // Create a new prototype + instance pair
+    Scene::AddLightPrototype(LightType::Omni);
+    const size_t instIdx = Scene::GetLightInstances().size() - 1;
     binding = &BindObject(delta.target, batch.sessionId,
-                          EngineHandleKind::SceneLight, lightIndex);
+                          EngineHandleKind::SceneLight, instIdx);
   }
 
   if (binding->handleKind != EngineHandleKind::SceneLight) {
@@ -2376,8 +2395,9 @@ bool LiveLinkSceneSync::EnsureLightBinding(const SceneDeltaBatch &batch,
   }
 
   if (binding->handleIndex == kInvalidHandle ||
-      binding->handleIndex >= Scene::GetLights().size()) {
-    binding->handleIndex = Scene::AddLight(LightType::Omni);
+      binding->handleIndex >= Scene::GetLightInstances().size()) {
+    Scene::AddLightPrototype(LightType::Omni);
+    binding->handleIndex = Scene::GetLightInstances().size() - 1;
   }
 
   if (binding->sessionId != batch.sessionId) {

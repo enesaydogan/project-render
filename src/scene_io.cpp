@@ -56,7 +56,7 @@ namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 static const char PRS_MAGIC[4] = {'P', 'R', 'S', '1'};
-static const uint32_t PRS_VERSION = 3;
+static const uint32_t PRS_VERSION = 4;
 static const char PRS_CHUNK_MAGIC[4] = {'P', 'R', 'S', 'C'};
 static const char PRS_CHUNK_V3_MAGIC[4] = {'P', 'R', 'S', '3'};
 static constexpr size_t PRS_CHUNK_SIZE = 4ull * 1024ull * 1024ull;
@@ -868,17 +868,28 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
     j["sct"].push_back(std::move(sm));
   }
 
-  // Lights
-  j["lgt"] = json::array();
-  for (const auto &lt : Scene::GetLights()) {
-    j["lgt"].push_back({
-      {"ty", lt.type},
-      {"p",  {lt.position[0], lt.position[1], lt.position[2]}},
-      {"e",  {lt.emission[0], lt.emission[1], lt.emission[2]}},
-      {"d",  {lt.direction[0], lt.direction[1], lt.direction[2]}},
-      {"r",  lt.radius}, {"ica", lt.innerConeAngle}, {"oca", lt.outerConeAngle},
-      {"ae", {lt.areaExtents[0], lt.areaExtents[1]}},
-      {"iai",lt.iesAtlasIndex}
+  // Lights — new prototype + instance schema
+  j["lgp"] = json::array();
+  for (const auto &proto : Scene::GetLightPrototypes()) {
+    j["lgp"].push_back({
+      {"ty",  proto.type},
+      {"en",  proto.enabled},
+      {"c",   {proto.color[0], proto.color[1], proto.color[2]}},
+      {"i",   proto.intensity},
+      {"r",   proto.radius},
+      {"ica", proto.innerConeAngle},
+      {"oca", proto.outerConeAngle},
+      {"ae",  {proto.areaExtents[0], proto.areaExtents[1]}},
+      {"iai", proto.iesAtlasIndex}
+    });
+  }
+  j["lgi"] = json::array();
+  for (const auto &inst : Scene::GetLightInstances()) {
+    j["lgi"].push_back({
+      {"pi", inst.prototypeIndex},
+      {"p",  {inst.position[0], inst.position[1], inst.position[2]}},
+      {"d",  {inst.direction[0], inst.direction[1], inst.direction[2]}},
+      {"en", inst.enabled}
     });
   }
 
@@ -1200,21 +1211,65 @@ static void ApplyMetadataPRS(const json &j) {
     if (l.contains("ld") && l["ld"].size()>=4) for (int i=0;i<4;++i) g_cameraData.lightDir[i]=l["ld"][i];
     if (l.contains("lc") && l["lc"].size()>=4) for (int i=0;i<4;++i) g_cameraData.lightColor[i]=l["lc"][i];
   }
-  if (j.contains("lgt") && j["lgt"].is_array()) {
-    auto &sceneLights = Scene::GetLights();
-    sceneLights.clear();
+  if (j.contains("lgp") && j["lgp"].is_array() && j.contains("lgi") && j["lgi"].is_array()) {
+    // New prototype + instance schema
+    for (const auto &p : j["lgp"]) {
+      LightPrototype proto;
+      proto.type = p.value("ty", 1u);
+      proto.enabled = p.value("en", true);
+      auto c = p.value("c", std::vector<float>{1,1,1});
+      if (c.size()>=3) { proto.color[0]=c[0]; proto.color[1]=c[1]; proto.color[2]=c[2]; }
+      proto.intensity = p.value("i", 1000.0f);
+      proto.radius = p.value("r", 0.1f);
+      proto.innerConeAngle = p.value("ica", 0.8660254f);
+      proto.outerConeAngle = p.value("oca", 0.7071068f);
+      auto ae = p.value("ae", std::vector<float>{1,1});
+      if (ae.size()>=2) { proto.areaExtents[0]=ae[0]; proto.areaExtents[1]=ae[1]; }
+      proto.iesAtlasIndex = p.value("iai", -1);
+      // Add prototype without auto-instance (we'll add instances from lgi)
+      size_t protoIdx = Scene::AddLightPrototypeRaw(proto);
+      (void)protoIdx;
+    }
+    for (const auto &i : j["lgi"]) {
+      LightInstance inst;
+      inst.prototypeIndex = i.value("pi", size_t(0));
+      auto ip = i.value("p", std::vector<float>{0,2,0});
+      if (ip.size()>=3) { inst.position[0]=ip[0]; inst.position[1]=ip[1]; inst.position[2]=ip[2]; }
+      auto id = i.value("d", std::vector<float>{0,-1,0});
+      if (id.size()>=3) { inst.direction[0]=id[0]; inst.direction[1]=id[1]; inst.direction[2]=id[2]; }
+      inst.enabled = i.value("en", true);
+      Scene::AddLightInstanceRaw(inst);
+    }
+    Scene::UpdateLights();
+  } else if (j.contains("lgt") && j["lgt"].is_array()) {
+    // Legacy flat light format — migrate each light to one prototype + one instance
     for (const auto &l : j["lgt"]) {
-      Light light = {};
-      light.type = l.value("ty", 1u);
-      auto p = l.value("p", std::vector<float>{0,0,0}); if (p.size()>=3) { light.position[0]=p[0]; light.position[1]=p[1]; light.position[2]=p[2]; }
-      auto e = l.value("e", std::vector<float>{10,10,10}); if (e.size()>=3) { light.emission[0]=e[0]; light.emission[1]=e[1]; light.emission[2]=e[2]; }
-      auto d = l.value("d", std::vector<float>{0,-1,0}); if (d.size()>=3) { light.direction[0]=d[0]; light.direction[1]=d[1]; light.direction[2]=d[2]; }
-      light.radius = l.value("r", 0.1f);
-      light.innerConeAngle = l.value("ica", 1.0f);
-      light.outerConeAngle = l.value("oca", 0.5f);
-      auto ae = l.value("ae", std::vector<float>{1,1}); if (ae.size()>=2) { light.areaExtents[0]=ae[0]; light.areaExtents[1]=ae[1]; }
-      light.iesAtlasIndex = l.value("iai", -1);
-      sceneLights.push_back(light);
+      LightPrototype proto;
+      proto.type = l.value("ty", 1u);
+      auto e = l.value("e", std::vector<float>{10,10,10});
+      float intensity = 1.0f;
+      if (e.size()>=3) {
+        intensity = (std::max)({e[0], e[1], e[2], 0.001f});
+        proto.color[0] = e[0] / intensity;
+        proto.color[1] = e[1] / intensity;
+        proto.color[2] = e[2] / intensity;
+      }
+      proto.intensity = intensity;
+      proto.radius = l.value("r", 0.1f);
+      proto.innerConeAngle = l.value("ica", 1.0f);
+      proto.outerConeAngle = l.value("oca", 0.5f);
+      auto ae = l.value("ae", std::vector<float>{1,1});
+      if (ae.size()>=2) { proto.areaExtents[0]=ae[0]; proto.areaExtents[1]=ae[1]; }
+      proto.iesAtlasIndex = l.value("iai", -1);
+      size_t protoIdx = Scene::AddLightPrototypeRaw(proto);
+
+      LightInstance inst;
+      inst.prototypeIndex = protoIdx;
+      auto p = l.value("p", std::vector<float>{0,0,0});
+      if (p.size()>=3) { inst.position[0]=p[0]; inst.position[1]=p[1]; inst.position[2]=p[2]; }
+      auto d = l.value("d", std::vector<float>{0,-1,0});
+      if (d.size()>=3) { inst.direction[0]=d[0]; inst.direction[1]=d[1]; inst.direction[2]=d[2]; }
+      Scene::AddLightInstanceRaw(inst);
     }
     Scene::UpdateLights();
   }
@@ -1534,7 +1589,7 @@ static void RestoreLiveLinkBindingsPRS(const json &j,
         }
         break;
       case LiveLink::LiveLinkSceneSync::EngineHandleKind::SceneLight:
-        if (binding.handleIndex >= Scene::GetLights().size()) {
+        if (binding.handleIndex >= Scene::GetLightInstances().size()) {
           continue;
         }
         break;

@@ -49,7 +49,10 @@ using namespace DX12Context;
 namespace Scene {
 
 static std::vector<Node> s_nodes;
-static std::vector<Light> s_lights;
+static std::vector<LightPrototype> s_lightPrototypes;
+static std::vector<LightInstance> s_lightInstances;
+static std::vector<Light> s_flattenedLights;
+static std::vector<std::pair<size_t, size_t>> s_lightFlattenMapping;
 static std::vector<ScatterModel> s_scatterModels;
 static std::vector<Instance> s_scatterInstanceCache;
 static uint64_t s_scatterRuntimeRevision = 1;
@@ -1093,7 +1096,7 @@ static void FlushBatchedRendererUpdates() {
   if (s_batchedLightsDirty) {
     const bool resetAccumulation =
         s_batchedInvalidationPlan == RendererInvalidationPlan::None;
-    DxrRenderer::UpdateLights(s_lights, resetAccumulation);
+    DxrRenderer::UpdateLights(s_flattenedLights, resetAccumulation);
     s_batchedLightsDirty = false;
   }
 
@@ -4510,64 +4513,175 @@ std::vector<Instance> GetInstances() {
   return instances;
 }
 
-std::vector<Light> &GetLights() { return s_lights; }
+const std::vector<LightPrototype> &GetLightPrototypes() { return s_lightPrototypes; }
+
+const std::vector<LightInstance> &GetLightInstances() { return s_lightInstances; }
+
+const std::vector<Light> &GetLights() { return s_flattenedLights; }
 
 void UpdateLights() {
+  FlattenLights(s_lightPrototypes, s_lightInstances, s_flattenedLights,
+                s_lightFlattenMapping);
   if (s_batchedUpdateDepth > 0) {
     s_batchedLightsDirty = true;
     return;
   }
-  DxrRenderer::UpdateLights(s_lights);
+  DxrRenderer::UpdateLights(s_flattenedLights);
 }
 
 int GetSelectedLightIndex() { return s_selectedLightIdx; }
 
-void SelectLight(int index) {
-  if (index < 0 || index >= (int)s_lights.size()) {
+void SelectLight(int instanceIndex) {
+  if (instanceIndex < 0 || instanceIndex >= (int)s_lightInstances.size()) {
     s_selectedLightIdx = -1;
     NotifySceneChanged();
     return;
   }
-  s_selectedLightIdx = index;
+  s_selectedLightIdx = instanceIndex;
   for (auto &n : s_nodes)
     n.selected = false;
   NotifySceneChanged();
 }
 
-size_t AddLight(LightType type) {
-  Light l = {};
-  memset(&l, 0, sizeof(Light));
-  l.type = (uint32_t)type;
-  l.position[0] = 0;
-  l.position[1] = 2;
-  l.position[2] = 0;
-  l.emission[0] = 1000;
-  l.emission[1] = 1000;
-  l.emission[2] = 1000;
-  l.direction[0] = 0;
-  l.direction[1] = -1;
-  l.direction[2] = 0;
-  l.radius = 0.1f;
-  l.innerConeAngle = cosf(DirectX::XMConvertToRadians(30.0f));
-  l.outerConeAngle = cosf(DirectX::XMConvertToRadians(45.0f));
-  l.areaExtents[0] = 1;
-  l.areaExtents[1] = 1;
-  l.iesAtlasIndex = -1;
-  s_lights.push_back(l);
+size_t AddLightPrototype(LightType type) {
+  LightPrototype proto;
+  proto.type = (uint32_t)type;
+  switch (type) {
+  case LightType::Omni:
+  case LightType::IES:
+    proto.radius = 0.1f;
+    break;
+  case LightType::Spot:
+    proto.innerConeAngle = cosf(DirectX::XMConvertToRadians(30.0f));
+    proto.outerConeAngle = cosf(DirectX::XMConvertToRadians(45.0f));
+    break;
+  case LightType::AreaRect:
+  case LightType::AreaDisk:
+    proto.areaExtents[0] = 1.0f;
+    proto.areaExtents[1] = 1.0f;
+    break;
+  default:
+    break;
+  }
+  size_t protoIdx = s_lightPrototypes.size();
+  s_lightPrototypes.push_back(proto);
+
+  // Auto-create one instance
+  LightInstance inst;
+  inst.prototypeIndex = protoIdx;
+  s_lightInstances.push_back(inst);
+
   UpdateLights();
-  return s_lights.empty() ? (size_t)-1 : (s_lights.size() - 1);
+  return protoIdx;
 }
 
-bool UpdateLight(size_t index, const Light &light) {
-  if (index >= s_lights.size()) {
+size_t AddLightPrototypeRaw(const LightPrototype &proto) {
+  size_t idx = s_lightPrototypes.size();
+  s_lightPrototypes.push_back(proto);
+  return idx;
+}
+
+bool UpdateLightPrototype(size_t index, const LightPrototype &proto) {
+  if (index >= s_lightPrototypes.size())
     return false;
-  }
-  if (memcmp(&s_lights[index], &light, sizeof(Light)) == 0) {
+  if (memcmp(&s_lightPrototypes[index], &proto, sizeof(LightPrototype)) == 0)
     return true;
-  }
-  s_lights[index] = light;
+  s_lightPrototypes[index] = proto;
   UpdateLights();
   return true;
+}
+
+void RemoveLightPrototype(size_t index) {
+  if (index >= s_lightPrototypes.size())
+    return;
+
+  // Remove all instances belonging to this prototype (reverse order)
+  for (int i = (int)s_lightInstances.size() - 1; i >= 0; --i) {
+    if (s_lightInstances[i].prototypeIndex == index) {
+      if (s_selectedLightIdx == i) {
+        s_selectedLightIdx = -1;
+      } else if (s_selectedLightIdx > i) {
+        --s_selectedLightIdx;
+      }
+      LiveLink::GetSceneSync().ReindexSceneLightBindingsAfterRemoval(i);
+      s_lightInstances.erase(s_lightInstances.begin() + i);
+    }
+  }
+
+  // Fix up prototype indices for instances that referenced prototypes after the removed one
+  for (auto &inst : s_lightInstances) {
+    if (inst.prototypeIndex > index)
+      --inst.prototypeIndex;
+  }
+
+  s_lightPrototypes.erase(s_lightPrototypes.begin() + index);
+  UpdateLights();
+  NotifySceneChanged();
+}
+
+size_t AddLightInstance(size_t prototypeIndex) {
+  if (prototypeIndex >= s_lightPrototypes.size())
+    return (size_t)-1;
+
+  LightInstance inst;
+  inst.prototypeIndex = prototypeIndex;
+  size_t idx = s_lightInstances.size();
+  s_lightInstances.push_back(inst);
+  UpdateLights();
+  return idx;
+}
+
+size_t AddLightInstanceRaw(const LightInstance &inst) {
+  size_t idx = s_lightInstances.size();
+  s_lightInstances.push_back(inst);
+  return idx;
+}
+
+bool UpdateLightInstance(size_t index, const LightInstance &inst) {
+  if (index >= s_lightInstances.size())
+    return false;
+  if (inst.prototypeIndex >= s_lightPrototypes.size())
+    return false;
+  s_lightInstances[index] = inst;
+  UpdateLights();
+  return true;
+}
+
+void RemoveLightInstance(size_t index) {
+  if (index >= s_lightInstances.size())
+    return;
+
+  size_t protoIdx = s_lightInstances[index].prototypeIndex;
+
+  // Update selection
+  if (s_selectedLightIdx == (int)index) {
+    s_selectedLightIdx = -1;
+  } else if (s_selectedLightIdx > (int)index) {
+    --s_selectedLightIdx;
+  }
+
+  LiveLink::GetSceneSync().ReindexSceneLightBindingsAfterRemoval(index);
+  s_lightInstances.erase(s_lightInstances.begin() + index);
+
+  // If no more instances reference this prototype, remove the prototype too
+  bool hasOtherInstances = false;
+  for (const auto &inst : s_lightInstances) {
+    if (inst.prototypeIndex == protoIdx) {
+      hasOtherInstances = true;
+      break;
+    }
+  }
+  if (!hasOtherInstances) {
+    s_lightPrototypes.erase(s_lightPrototypes.begin() + protoIdx);
+    // Fix up prototype indices
+    for (auto &inst : s_lightInstances) {
+      if (inst.prototypeIndex > protoIdx)
+        --inst.prototypeIndex;
+    }
+  }
+
+  UpdateLights();
+  NotifySceneChanged();
 }
 
 size_t GetMaterialCount() { return g_loadedMaterials.size(); }
@@ -4776,154 +4890,154 @@ void RefreshTextureCompression(bool resetAccumulation) {
   RefreshTextureCompressionForMaterials(resetAccumulation);
 }
 
-void RemoveLight(size_t index) {
-  if (index < s_lights.size()) {
-    s_lights.erase(s_lights.begin() + index);
-    if (s_selectedLightIdx == (int)index) {
-      s_selectedLightIdx = -1;
-    } else if (s_selectedLightIdx > (int)index) {
-      --s_selectedLightIdx;
-    }
-    LiveLink::GetSceneSync().ReindexSceneLightBindingsAfterRemoval(index);
-    UpdateLights();
-    NotifySceneChanged();
-  }
-}
-
 void DrawLightsPanel(bool &visible) {
   if (!visible)
     return;
   if (ImGui::Begin("Global Lights", &visible)) {
     if (ImGui::Button("Add Point Light"))
-      AddLight(LightType::Omni);
+      AddLightPrototype(LightType::Omni);
     ImGui::SameLine();
     if (ImGui::Button("Add Spot Light"))
-      AddLight(LightType::Spot);
+      AddLightPrototype(LightType::Spot);
     ImGui::SameLine();
     if (ImGui::Button("Add Rect Area"))
-      AddLight(LightType::AreaRect);
+      AddLightPrototype(LightType::AreaRect);
     ImGui::SameLine();
     if (ImGui::Button("Add Disk Area"))
-      AddLight(LightType::AreaDisk);
+      AddLightPrototype(LightType::AreaDisk);
 
     ImGui::Separator();
 
-    for (size_t i = 0; i < s_lights.size(); ++i) {
-      ImGui::PushID((int)i);
-      Light &l = s_lights[i];
-      char buf[64];
+    for (size_t p = 0; p < s_lightPrototypes.size(); ++p) {
+      ImGui::PushID((int)p);
+      LightPrototype &proto = s_lightPrototypes[p];
+
       const char *typeStr = "Unknown";
-      switch ((LightType)l.type) {
-      case LightType::Directional:
-        typeStr = "Sun";
-        break;
-      case LightType::Omni:
-        typeStr = "Omni";
-        break;
-      case LightType::Spot:
-        typeStr = "Spot";
-        break;
-      case LightType::AreaRect:
-        typeStr = "Rect";
-        break;
-      case LightType::AreaDisk:
-        typeStr = "Disk";
-        break;
-      case LightType::IES:
-        typeStr = "IES";
-        break;
+      switch ((LightType)proto.type) {
+      case LightType::Directional: typeStr = "Sun"; break;
+      case LightType::Omni:        typeStr = "Omni"; break;
+      case LightType::Spot:        typeStr = "Spot"; break;
+      case LightType::AreaRect:    typeStr = "Rect"; break;
+      case LightType::AreaDisk:    typeStr = "Disk"; break;
+      case LightType::IES:         typeStr = "IES";  break;
       }
-      sprintf_s(buf, sizeof(buf), "Light %zu (%s)", i, typeStr);
 
-      bool isSelected = (s_selectedLightIdx == (int)i);
-      if (isSelected)
-        ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.3f, 0.5f, 0.8f, 0.7f));
+      // Count instances for this prototype
+      int instCount = 0;
+      for (const auto &inst : s_lightInstances) {
+        if (inst.prototypeIndex == p) ++instCount;
+      }
 
+      char buf[128];
+      snprintf(buf, sizeof(buf), "Proto %zu (%s) [%d inst]", p, typeStr, instCount);
       bool headerOpen = ImGui::CollapsingHeader(buf);
 
-      // Select light when clicking the header
-      if (ImGui::IsItemClicked(0)) {
-        s_selectedLightIdx = (int)i;
-        for (auto &n : s_nodes)
-          n.selected = false;
-      }
-
-      if (isSelected)
-        ImGui::PopStyleColor();
-
       if (headerOpen) {
-        bool changed = false;
-        changed |= ImGui::DragFloat3("Position", l.position, 0.1f);
+        bool protoChanged = false;
 
-        // Color + Intensity (separate controls)
-        // Compute current intensity as max component
-        float maxComp =
-            std::max({l.emission[0], l.emission[1], l.emission[2], 0.001f});
-        float color[3] = {l.emission[0] / maxComp, l.emission[1] / maxComp,
-                          l.emission[2] / maxComp};
-        float intensity = maxComp;
-
+        // Shared properties
+        float color[3] = {proto.color[0], proto.color[1], proto.color[2]};
         if (ImGui::ColorEdit3("Color", color)) {
-          l.emission[0] = color[0] * intensity;
-          l.emission[1] = color[1] * intensity;
-          l.emission[2] = color[2] * intensity;
-          changed = true;
+          proto.color[0] = color[0]; proto.color[1] = color[1]; proto.color[2] = color[2];
+          protoChanged = true;
         }
-        if (ImGui::DragFloat("Intensity", &intensity, 10.0f, 0.0f, 1000000.0f,
-                             "%.2f")) {
-          l.emission[0] = color[0] * intensity;
-          l.emission[1] = color[1] * intensity;
-          l.emission[2] = color[2] * intensity;
-          changed = true;
-        }
+        if (ImGui::DragFloat("Intensity", &proto.intensity, 10.0f, 0.0f, 1000000.0f, "%.2f"))
+          protoChanged = true;
+        if (ImGui::DragFloat("Radius", &proto.radius, 0.01f, 0.0f, 10.0f))
+          protoChanged = true;
 
-        if (l.type != (uint32_t)LightType::Omni) {
-          changed |= ImGui::DragFloat3("Direction", l.direction, 0.01f);
-        }
-
-        changed |= ImGui::DragFloat("Radius", &l.radius, 0.01f, 0.0f, 10.0f);
-
-        if (l.type == (uint32_t)LightType::Spot) {
-          float inner = acosf(l.innerConeAngle) * 180.0f / 3.14159f;
-          float outer = acosf(l.outerConeAngle) * 180.0f / 3.14159f;
+        if (proto.type == (uint32_t)LightType::Spot) {
+          float inner = acosf(proto.innerConeAngle) * 180.0f / 3.14159f;
+          float outer = acosf(proto.outerConeAngle) * 180.0f / 3.14159f;
           if (ImGui::SliderFloat("Inner Angle", &inner, 0, 90)) {
-            l.innerConeAngle = cosf(DirectX::XMConvertToRadians(inner));
-            changed = true;
+            proto.innerConeAngle = cosf(DirectX::XMConvertToRadians(inner));
+            protoChanged = true;
           }
           if (ImGui::SliderFloat("Outer Angle", &outer, inner, 90)) {
-            l.outerConeAngle = cosf(DirectX::XMConvertToRadians(outer));
-            changed = true;
+            proto.outerConeAngle = cosf(DirectX::XMConvertToRadians(outer));
+            protoChanged = true;
           }
         }
 
-        if (l.type == (uint32_t)LightType::AreaRect ||
-            l.type == (uint32_t)LightType::AreaDisk) {
-          changed |=
-              ImGui::DragFloat2("Extents", l.areaExtents, 0.1f, 0.01f, 50.0f);
+        if (proto.type == (uint32_t)LightType::AreaRect ||
+            proto.type == (uint32_t)LightType::AreaDisk) {
+          protoChanged |= ImGui::DragFloat2("Extents", proto.areaExtents, 0.1f, 0.01f, 50.0f);
         }
 
-        if (l.type == (uint32_t)LightType::IES) {
-          ImGui::Text("IES Atlas Index: %d (placeholder)", l.iesAtlasIndex);
+        if (proto.type == (uint32_t)LightType::IES) {
+          ImGui::Text("IES Atlas Index: %d (placeholder)", proto.iesAtlasIndex);
         }
 
-        ImGui::Spacing();
-        if (ImGui::Button("Select for Gizmo")) {
-          s_selectedLightIdx = (int)i;
-          for (auto &n : s_nodes)
-            n.selected = false;
+        ImGui::Checkbox("Enabled", &proto.enabled);
+        if (ImGui::IsItemDeactivatedAfterEdit()) protoChanged = true;
+
+        if (protoChanged)
+          UpdateLightPrototype(p, proto);
+
+        ImGui::Separator();
+        ImGui::Text("Instances:");
+
+        // List instances for this prototype
+        for (size_t i = 0; i < s_lightInstances.size(); ++i) {
+          LightInstance &inst = s_lightInstances[i];
+          if (inst.prototypeIndex != p) continue;
+
+          ImGui::PushID((int)(i + 100000));
+          bool isSelected = (s_selectedLightIdx == (int)i);
+          if (isSelected)
+            ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.3f, 0.5f, 0.8f, 0.7f));
+
+          char instLabel[64];
+          snprintf(instLabel, sizeof(instLabel), "Instance %zu", i);
+          bool instOpen = ImGui::TreeNodeEx(instLabel,
+              ImGuiTreeNodeFlags_DefaultOpen | (isSelected ? ImGuiTreeNodeFlags_Selected : 0));
+
+          if (ImGui::IsItemClicked(0)) {
+            s_selectedLightIdx = (int)i;
+            for (auto &n : s_nodes) n.selected = false;
+          }
+
+          if (isSelected)
+            ImGui::PopStyleColor();
+
+          if (instOpen) {
+            bool instChanged = false;
+            instChanged |= ImGui::DragFloat3("Position", inst.position, 0.1f);
+            instChanged |= ImGui::DragFloat3("Direction", inst.direction, 0.01f);
+            ImGui::Checkbox("Enabled", &inst.enabled);
+            if (ImGui::IsItemDeactivatedAfterEdit()) instChanged = true;
+
+            if (ImGui::Button("Select for Gizmo")) {
+              s_selectedLightIdx = (int)i;
+              for (auto &n : s_nodes) n.selected = false;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Remove Instance")) {
+              RemoveLightInstance(i);
+              ImGui::TreePop();
+              ImGui::PopID();
+              ImGui::PopID();
+              break;
+            }
+            if (instChanged)
+              UpdateLightInstance(i, inst);
+            ImGui::TreePop();
+          }
+          ImGui::PopID();
+        }
+
+        // Add instance button
+        if (ImGui::Button("Add Instance")) {
+          size_t newIdx = AddLightInstance(p);
+          s_selectedLightIdx = (int)newIdx;
+          for (auto &n : s_nodes) n.selected = false;
         }
         ImGui::SameLine();
-        if (ImGui::Button("Remove")) {
-          if (s_selectedLightIdx == (int)i)
-            s_selectedLightIdx = -1;
-          else if (s_selectedLightIdx > (int)i)
-            s_selectedLightIdx--;
-          RemoveLight(i);
+        if (ImGui::Button("Remove Prototype")) {
+          RemoveLightPrototype(p);
           ImGui::PopID();
           break;
         }
-        if (changed)
-          UpdateLights();
       }
       ImGui::PopID();
     }
@@ -4964,15 +5078,19 @@ void DrawLightGizmo() {
   };
 
   // 1. Draw wireframes / icons for ALL lights to visualize their layout
-  for (size_t i = 0; i < s_lights.size(); ++i) {
-    Light &l = s_lights[i];
+  for (size_t i = 0; i < s_lightInstances.size(); ++i) {
+    LightInstance &inst = s_lightInstances[i];
+    if (!inst.enabled) continue;
+    if (inst.prototypeIndex >= s_lightPrototypes.size()) continue;
+    LightPrototype &proto = s_lightPrototypes[inst.prototypeIndex];
+    if (!proto.enabled) continue;
     bool isSelected = (s_selectedLightIdx == (int)i);
     ImU32 col =
         isSelected ? IM_COL32(255, 200, 50, 255) : IM_COL32(200, 200, 200, 150);
     float thick = isSelected ? 3.0f : 1.5f;
 
     ImVec2 screenPos;
-    if (!WorldToScreen(l.position, screenPos))
+    if (!WorldToScreen(inst.position, screenPos))
       continue;
 
     // Draw little center circle for the light
@@ -4983,22 +5101,22 @@ void DrawLightGizmo() {
     drawList->AddText(ImVec2(screenPos.x + 8.0f, screenPos.y - 8.0f), col,
                       label);
 
-    if (l.type == (uint32_t)LightType::Omni) {
-      drawList->AddCircle(screenPos, l.radius * 5.0f + 10.0f, col, 16, thick);
+    if (proto.type == (uint32_t)LightType::Omni) {
+      drawList->AddCircle(screenPos, proto.radius * 5.0f + 10.0f, col, 16, thick);
     } else {
       // spot, directional, area: draw an arrow representing 'direction'
-      float fwd[3] = {l.direction[0], l.direction[1], l.direction[2]};
-      float arrowEnd[3] = {l.position[0] + fwd[0] * 1.0f,
-                           l.position[1] + fwd[1] * 1.0f,
-                           l.position[2] + fwd[2] * 1.0f};
+      float fwd[3] = {inst.direction[0], inst.direction[1], inst.direction[2]};
+      float arrowEnd[3] = {inst.position[0] + fwd[0] * 1.0f,
+                           inst.position[1] + fwd[1] * 1.0f,
+                           inst.position[2] + fwd[2] * 1.0f};
 
       ImVec2 sEnd;
       if (WorldToScreen(arrowEnd, sEnd)) {
         drawList->AddLine(screenPos, sEnd, col, thick);
       }
 
-      if (l.type == (uint32_t)LightType::AreaRect ||
-          l.type == (uint32_t)LightType::AreaDisk) {
+      if (proto.type == (uint32_t)LightType::AreaRect ||
+          proto.type == (uint32_t)LightType::AreaDisk) {
         // Draw the wireframe of the area light surface
         float up_ref[3] = {0, 1, 0};
         if (fabsf(fwd[1]) > 0.99f) {
@@ -5023,26 +5141,26 @@ void DrawLightGizmo() {
                        fwd[2] * right[0] - fwd[0] * right[2],
                        fwd[0] * right[1] - fwd[1] * right[0]};
 
-        float hw = l.areaExtents[0] * 0.5f;
-        float hh = l.areaExtents[1] * 0.5f;
+        float hw = proto.areaExtents[0] * 0.5f;
+        float hh = proto.areaExtents[1] * 0.5f;
 
         // 4 corners of the quad
         float c[4][3];
-        c[0][0] = l.position[0] + right[0] * hw + up[0] * hh;
-        c[0][1] = l.position[1] + right[1] * hw + up[1] * hh;
-        c[0][2] = l.position[2] + right[2] * hw + up[2] * hh;
+        c[0][0] = inst.position[0] + right[0] * hw + up[0] * hh;
+        c[0][1] = inst.position[1] + right[1] * hw + up[1] * hh;
+        c[0][2] = inst.position[2] + right[2] * hw + up[2] * hh;
 
-        c[1][0] = l.position[0] - right[0] * hw + up[0] * hh;
-        c[1][1] = l.position[1] - right[1] * hw + up[1] * hh;
-        c[1][2] = l.position[2] - right[2] * hw + up[2] * hh;
+        c[1][0] = inst.position[0] - right[0] * hw + up[0] * hh;
+        c[1][1] = inst.position[1] - right[1] * hw + up[1] * hh;
+        c[1][2] = inst.position[2] - right[2] * hw + up[2] * hh;
 
-        c[2][0] = l.position[0] - right[0] * hw - up[0] * hh;
-        c[2][1] = l.position[1] - right[1] * hw - up[1] * hh;
-        c[2][2] = l.position[2] - right[2] * hw - up[2] * hh;
+        c[2][0] = inst.position[0] - right[0] * hw - up[0] * hh;
+        c[2][1] = inst.position[1] - right[1] * hw - up[1] * hh;
+        c[2][2] = inst.position[2] - right[2] * hw - up[2] * hh;
 
-        c[3][0] = l.position[0] + right[0] * hw - up[0] * hh;
-        c[3][1] = l.position[1] + right[1] * hw - up[1] * hh;
-        c[3][2] = l.position[2] + right[2] * hw - up[2] * hh;
+        c[3][0] = inst.position[0] + right[0] * hw - up[0] * hh;
+        c[3][1] = inst.position[1] + right[1] * hw - up[1] * hh;
+        c[3][2] = inst.position[2] + right[2] * hw - up[2] * hh;
 
         ImVec2 sc[4];
         bool ok = true;
@@ -5052,7 +5170,7 @@ void DrawLightGizmo() {
         }
 
         if (ok) {
-          if (l.type == (uint32_t)LightType::AreaDisk) {
+          if (proto.type == (uint32_t)LightType::AreaDisk) {
             // Draw a quick octagon for the disk
             drawList->AddLine(sc[0], sc[1], col, thick);
             drawList->AddLine(sc[1], sc[2], col, thick);
@@ -5071,19 +5189,24 @@ void DrawLightGizmo() {
   }
 
   // 2. Do ImGuizmo manipulate for the selected light
-  if (s_selectedLightIdx < 0 || s_selectedLightIdx >= (int)s_lights.size()) {
+  if (s_selectedLightIdx < 0 || s_selectedLightIdx >= (int)s_lightInstances.size()) {
     ImGui::End();
     return;
   }
 
-  Light &l = s_lights[s_selectedLightIdx];
+  LightInstance &inst = s_lightInstances[s_selectedLightIdx];
+  if (inst.prototypeIndex >= s_lightPrototypes.size()) {
+    ImGui::End();
+    return;
+  }
+  LightPrototype &proto = s_lightPrototypes[inst.prototypeIndex];
 
   ImGuizmo::AllowAxisFlip(false);
   ImGuizmo::GetStyle().TranslationLineThickness = 6.0f;
 
   // Build a matrix containing both position and direction
   float up_ref[3] = {0, 1, 0};
-  float fwd[3] = {l.direction[0], l.direction[1], l.direction[2]};
+  float fwd[3] = {inst.direction[0], inst.direction[1], inst.direction[2]};
   if (fabsf(fwd[1]) > 0.99f) {
     up_ref[0] = 1;
     up_ref[1] = 0;
@@ -5109,7 +5232,7 @@ void DrawLightGizmo() {
   float matrix[16] = {right[0],      right[1],      right[2],      0,
                       up[0],         up[1],         up[2],         0,
                       fwd[0],        fwd[1],        fwd[2],        0,
-                      l.position[0], l.position[1], l.position[2], 1};
+                      inst.position[0], inst.position[1], inst.position[2], 1};
 
   // Keyboard toggles for Translate / Rotate / Scale
   if (ImGui::IsKeyPressed(ImGuiKey_G))
@@ -5131,18 +5254,18 @@ void DrawLightGizmo() {
 
   if (ImGuizmo::Manipulate(view, proj, op, ImGuizmo::WORLD, matrix)) {
     // Read back position
-    l.position[0] = matrix[12];
-    l.position[1] = matrix[13];
-    l.position[2] = matrix[14];
+    inst.position[0] = matrix[12];
+    inst.position[1] = matrix[13];
+    inst.position[2] = matrix[14];
 
     // Read back direction (Z axis of matrix)
     float nfwd[3] = {matrix[8], matrix[9], matrix[10]};
     float nlen =
         sqrtf(nfwd[0] * nfwd[0] + nfwd[1] * nfwd[1] + nfwd[2] * nfwd[2]);
     if (nlen > 0.001f) {
-      l.direction[0] = nfwd[0] / nlen;
-      l.direction[1] = nfwd[1] / nlen;
-      l.direction[2] = nfwd[2] / nlen;
+      inst.direction[0] = nfwd[0] / nlen;
+      inst.direction[1] = nfwd[1] / nlen;
+      inst.direction[2] = nfwd[2] / nlen;
     }
 
     // Read back scale (if SCALE Op)
@@ -5152,13 +5275,16 @@ void DrawLightGizmo() {
           sqrtf(matrix[0] * matrix[0] + matrix[1] * matrix[1] +
                 matrix[2] * matrix[2]);
       if (currentScaleX > 0.001f) {
-        l.areaExtents[0] *= currentScaleX;
-        l.areaExtents[1] *= currentScaleX;
-        l.radius *= currentScaleX;
+        proto.areaExtents[0] *= currentScaleX;
+        proto.areaExtents[1] *= currentScaleX;
+        proto.radius *= currentScaleX;
       }
     }
 
-    UpdateLights();
+    UpdateLightInstance(s_selectedLightIdx, inst);
+    if (op == ImGuizmo::SCALE) {
+      UpdateLightPrototype(inst.prototypeIndex, proto);
+    }
   }
 
   ImGui::End();
@@ -6676,7 +6802,10 @@ void ResetScene() {
   s_scatterInstanceCache.clear();
   ++s_scatterRuntimeRevision;
   s_scatterInstanceCacheRevision = 0;
-  s_lights.clear();
+  s_lightPrototypes.clear();
+  s_lightInstances.clear();
+  s_flattenedLights.clear();
+  s_lightFlattenMapping.clear();
   s_selectedLightIdx = -1;
   AnimationSequence::Clear();
   SavedViews::Clear();

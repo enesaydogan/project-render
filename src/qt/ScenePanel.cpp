@@ -638,7 +638,7 @@ void ScenePanel::refreshSceneList()
     m_statusLabel->setText(
         tr("Nodes: %1\nLights: %2\nStatus: %3")
             .arg(static_cast<int>(nodes.size()))
-            .arg(static_cast<int>(Scene::GetLights().size()))
+            .arg(static_cast<int>(Scene::GetLightInstances().size()))
             .arg(QString::fromStdString(Scene::LastStatus())));
 
     m_deleteButton->setEnabled(!selectedRows.empty());

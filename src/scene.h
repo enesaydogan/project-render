@@ -254,13 +254,28 @@ ScatterRuntimeStats GetScatterRuntimeStats();
 uint64_t GetScatterRuntimeRevision();
 
 // Light manipulation
-std::vector<Light> &GetLights();
-size_t AddLight(LightType type);
-bool UpdateLight(size_t index, const Light &light);
-void RemoveLight(size_t index);
-void UpdateLights();
+const std::vector<LightPrototype> &GetLightPrototypes();
+const std::vector<LightInstance> &GetLightInstances();
+const std::vector<Light> &GetLights();
+
+// Prototype operations
+size_t AddLightPrototype(LightType type);
+size_t AddLightPrototypeRaw(const LightPrototype &proto); // no auto-instance, for scene loading
+bool UpdateLightPrototype(size_t index, const LightPrototype &proto);
+void RemoveLightPrototype(size_t index);
+
+// Instance operations
+size_t AddLightInstance(size_t prototypeIndex);
+size_t AddLightInstanceRaw(const LightInstance &inst); // no flatten call, for scene loading
+bool UpdateLightInstance(size_t index, const LightInstance &inst);
+void RemoveLightInstance(size_t index);
+
+// Selection (instance-based)
 int GetSelectedLightIndex();
-void SelectLight(int index);
+void SelectLight(int instanceIndex);
+
+// Rebuild flattened array and upload to GPU
+void UpdateLights();
 
 // Material manipulation
 size_t GetMaterialCount();
