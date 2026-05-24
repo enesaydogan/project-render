@@ -43,7 +43,10 @@ inline float SampleIESAtlas(int atlasIndex, float3 localDir)
     float phi = atan2(localDir.y, localDir.x);
     uint tx = uint((phi + PI) / (2.0 * PI) * 255.0 + 0.5);
     uint ty = uint(theta / PI * 255.0 + 0.5);
-    return g_iesAtlas.Load(int4(tx, ty, atlasIndex, 0)).x;
+    float iesVal = g_iesAtlas.Load(int4(tx, ty, atlasIndex, 0)).x;
+    // Fallback: if atlas data is unavailable (zero), treat as uniform 1.0
+    // so the light still emits as a regular omni light.
+    return (iesVal > 0.0) ? iesVal : 1.0;
 }
 
 inline float SampleIESModulation(Light light, float3 toSurface)

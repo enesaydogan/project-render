@@ -4564,7 +4564,7 @@ void UpdateLights() {
     if (proto.iesProfileIndex >= 0 &&
         proto.iesProfileIndex < static_cast<int>(s_iesProfiles.size())) {
       proto.iesAtlasIndex = s_iesProfiles[proto.iesProfileIndex].atlasSlice;
-    } else if (proto.iesProfileIndex >= 0) {
+    } else {
       proto.iesAtlasIndex = -1;
     }
   }
@@ -4702,8 +4702,13 @@ const std::vector<IESProfile> &GetIESProfiles() { return s_iesProfiles; }
 
 int LoadIESProfile(const std::string &path) {
   for (size_t i = 0; i < s_iesProfiles.size(); ++i) {
-    if (s_iesProfiles[i].filePath == path)
+    if (s_iesProfiles[i].filePath == path) {
+      // Profile already loaded, but ensure the GPU atlas is current.
+      // This fixes the case where the atlas was lost across save/load
+      // or was never built for this profile's slice.
+      RebuildIESAtlas();
       return static_cast<int>(i);
+    }
   }
 
   if (s_iesProfiles.size() >= static_cast<size_t>(kMaxIESSlices))
@@ -4752,6 +4757,8 @@ int AddIESProfile(IESProfile profile) {
   if (!profile.filePath.empty()) {
     for (size_t i = 0; i < s_iesProfiles.size(); ++i) {
       if (s_iesProfiles[i].filePath == profile.filePath) {
+        // Profile already loaded, but ensure the GPU atlas is current.
+        RebuildIESAtlas();
         return static_cast<int>(i);
       }
     }
@@ -4791,9 +4798,10 @@ void ClearIESProfile(int profileIndex) {
 
   // Update prototypes that referenced shifted profiles
   for (auto &proto : s_lightPrototypes) {
-    if (proto.iesProfileIndex == profileIndex)
+    if (proto.iesProfileIndex == profileIndex) {
       proto.iesProfileIndex = -1;
-    else if (proto.iesProfileIndex > profileIndex)
+      proto.iesAtlasIndex = -1;
+    } else if (proto.iesProfileIndex > profileIndex)
       proto.iesProfileIndex--;
   }
 
