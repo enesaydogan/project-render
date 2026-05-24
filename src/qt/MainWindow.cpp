@@ -113,6 +113,7 @@ enum class ToolbarIcon {
     Rotate,
     Scale,
     Mirror,
+    LightGizmo,
     Local,
     World,
 };
@@ -629,6 +630,17 @@ QIcon MakeToolbarIcon(ToolbarIcon icon,
             QPointF(26, 9), QPointF(19, 12), QPointF(19, 20), QPointF(26, 23)
         }));
         break;
+    case ToolbarIcon::LightGizmo:
+        painter.setPen(accentPen);
+        painter.drawEllipse(QRectF(8, 8, 9, 9));
+        painter.drawLine(QPointF(12.5, 17), QPointF(12.5, 24));
+        painter.setPen(pen);
+        painter.drawArc(QRectF(15, 8, 10, 16), -55 * 16, 110 * 16);
+        painter.drawLine(QPointF(14, 12), QPointF(25, 8));
+        painter.drawLine(QPointF(14, 17), QPointF(25, 24));
+        painter.setPen(QPen(line, 1.4, Qt::DashLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.drawEllipse(QRectF(6, 6, 14, 14));
+        break;
     case ToolbarIcon::Local:
         painter.setPen(accentPen);
         painter.drawLine(QPointF(10, 23), QPointF(22, 11));
@@ -1026,6 +1038,15 @@ void MainWindow::createMenus()
         action->setCheckable(true);
         m_transformOperationGroup->addAction(action);
     }
+    m_lightGizmosAction = new QAction(tr("Light Gizmos"), this);
+    connect(m_lightGizmosAction, &QAction::triggered, this, [this](bool checked) {
+        Scene::SetLightGizmosVisible(checked);
+        statusBar()->showMessage(checked ? tr("Light gizmos visible")
+                                         : tr("Light gizmos hidden"),
+                                 1600);
+    });
+    m_lightGizmosAction->setCheckable(true);
+    m_lightGizmosAction->setChecked(Scene::AreLightGizmosVisible());
 
     editMenu->addSeparator();
     m_transformSpaceGroup = new QActionGroup(this);
@@ -1116,6 +1137,9 @@ void MainWindow::createMenus()
     m_viewMenu->addAction(tr("Restore Default Panel Layout"), this, [this]() {
         restoreDefaultDockLayout();
     });
+    if (m_lightGizmosAction) {
+        m_viewMenu->addAction(m_lightGizmosAction);
+    }
     m_viewMenu->addSeparator();
 
     QMenu *toolsMenu = menuBar()->addMenu(tr("&Tools"));
@@ -1260,6 +1284,10 @@ void MainWindow::createToolBar()
                            tr("Scale"),
                            tr("Scale gizmo (T)"),
                            ToolbarIcon::Scale);
+    ConfigureToolbarAction(m_lightGizmosAction,
+                           tr("Light Gizmos"),
+                           tr("Show or hide viewport light gizmos"),
+                           ToolbarIcon::LightGizmo);
     ConfigureToolbarAction(m_transformLocalAction,
                            tr("Local"),
                            tr("Local transform space (L toggles in viewport)"),
@@ -1312,6 +1340,9 @@ void MainWindow::createToolBar()
         mirrorButton->setPopupMode(QToolButton::InstantPopup);
         mirrorButton->setAutoRaise(false);
         toolbar->addWidget(mirrorButton);
+    }
+    if (m_lightGizmosAction) {
+        toolbar->addAction(m_lightGizmosAction);
     }
     toolbar->addSeparator();
     if (m_transformLocalAction) {

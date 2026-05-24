@@ -65,6 +65,7 @@ static size_t s_scatterPickTargetIndex = static_cast<size_t>(-1);
 static LightPlacementMode s_lightPlacementMode = LightPlacementMode::None;
 static LightType s_lightPlacementCreateType = LightType::Omni;
 static int s_lightPlacementMoveInstance = -1;
+static bool s_lightGizmosVisible = true;
 // Import progress & pending results (for async import)
 static std::atomic<bool> s_importInProgress(false);
 static std::atomic<float> s_importProgress(0.0f);
@@ -5424,6 +5425,438 @@ void DrawLightsPanel(bool &visible) {
   ImGui::End();
 }
 
+static bool NormalizeLightVec(float v[3]) {
+  const float len2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+  if (len2 <= 1e-12f) {
+    return false;
+  }
+  const float invLen = 1.0f / sqrtf(len2);
+  v[0] *= invLen;
+  v[1] *= invLen;
+  v[2] *= invLen;
+  return true;
+}
+
+static void CrossLightVec(const float a[3], const float b[3], float out[3]) {
+  out[0] = a[1] * b[2] - a[2] * b[1];
+  out[1] = a[2] * b[0] - a[0] * b[2];
+  out[2] = a[0] * b[1] - a[1] * b[0];
+}
+
+static void BuildLightBasis(const LightInstance &inst, float right[3],
+                            float up[3], float fwd[3]) {
+  fwd[0] = inst.direction[0];
+  fwd[1] = inst.direction[1];
+  fwd[2] = inst.direction[2];
+  if (!NormalizeLightVec(fwd)) {
+    fwd[0] = 0.0f;
+    fwd[1] = -1.0f;
+    fwd[2] = 0.0f;
+  }
+
+  float upRef[3] = {0.0f, 1.0f, 0.0f};
+  if (fabsf(fwd[1]) > 0.96f) {
+    upRef[0] = 1.0f;
+    upRef[1] = 0.0f;
+    upRef[2] = 0.0f;
+  }
+  CrossLightVec(upRef, fwd, right);
+  if (!NormalizeLightVec(right)) {
+    right[0] = 1.0f;
+    right[1] = 0.0f;
+    right[2] = 0.0f;
+  }
+  CrossLightVec(fwd, right, up);
+  NormalizeLightVec(up);
+}
+
+static bool ProjectLightPoint(const float wp[3], const float view[16],
+                              const float proj[16], float windowX,
+                              float windowY, float windowWidth,
+                              float windowHeight, ImVec2 &outSp) {
+  float viewPos[4];
+  for (int i = 0; i < 4; i++) {
+    viewPos[i] = wp[0] * view[0 * 4 + i] + wp[1] * view[1 * 4 + i] +
+                 wp[2] * view[2 * 4 + i] + view[3 * 4 + i];
+  }
+
+  float clipPos[4];
+  for (int i = 0; i < 4; i++) {
+    clipPos[i] = viewPos[0] * proj[0 * 4 + i] +
+                 viewPos[1] * proj[1 * 4 + i] +
+                 viewPos[2] * proj[2 * 4 + i] +
+                 viewPos[3] * proj[3 * 4 + i];
+  }
+
+  if (clipPos[3] < 0.001f) {
+    return false;
+  }
+
+  outSp.x = windowX + (clipPos[0] / clipPos[3] + 1.0f) * 0.5f * windowWidth;
+  outSp.y = windowY + (1.0f - clipPos[1] / clipPos[3]) * 0.5f * windowHeight;
+  return true;
+}
+
+static ImU32 LightGizmoColor(const LightPrototype &proto,
+                             const LightInstance &inst, bool selected,
+                             int alphaOverride = -1) {
+  if (selected) {
+    return IM_COL32(255, 202, 72, alphaOverride >= 0 ? alphaOverride : 255);
+  }
+  const bool enabled = proto.enabled && inst.enabled;
+  const int alpha = alphaOverride >= 0 ? alphaOverride : (enabled ? 185 : 72);
+  if (!enabled) {
+    return IM_COL32(145, 145, 145, alpha);
+  }
+  const int r = static_cast<int>(std::clamp(proto.color[0], 0.0f, 1.0f) * 210.0f + 35.0f);
+  const int g = static_cast<int>(std::clamp(proto.color[1], 0.0f, 1.0f) * 210.0f + 35.0f);
+  const int b = static_cast<int>(std::clamp(proto.color[2], 0.0f, 1.0f) * 210.0f + 35.0f);
+  return IM_COL32(std::min(r, 255), std::min(g, 255), std::min(b, 255), alpha);
+}
+
+static float DistanceToSegment2D(ImVec2 p, ImVec2 a, ImVec2 b) {
+  const float vx = b.x - a.x;
+  const float vy = b.y - a.y;
+  const float wx = p.x - a.x;
+  const float wy = p.y - a.y;
+  const float len2 = vx * vx + vy * vy;
+  float t = len2 > 1e-5f ? (wx * vx + wy * vy) / len2 : 0.0f;
+  t = std::clamp(t, 0.0f, 1.0f);
+  const float dx = p.x - (a.x + vx * t);
+  const float dy = p.y - (a.y + vy * t);
+  return sqrtf(dx * dx + dy * dy);
+}
+
+static float LightGizmoReach(const LightPrototype &proto) {
+  const float intensityScale = sqrtf(std::max(0.0f, proto.intensity)) * 0.035f;
+  return std::clamp(0.9f + intensityScale, 0.9f, 4.5f);
+}
+
+static void AddWorldLine(ImDrawList *drawList, const float a[3], const float b[3],
+                         const float view[16], const float proj[16],
+                         float windowX, float windowY, float windowWidth,
+                         float windowHeight, ImU32 col, float thickness) {
+  ImVec2 sa;
+  ImVec2 sb;
+  if (ProjectLightPoint(a, view, proj, windowX, windowY, windowWidth,
+                        windowHeight, sa) &&
+      ProjectLightPoint(b, view, proj, windowX, windowY, windowWidth,
+                        windowHeight, sb)) {
+    drawList->AddLine(sa, sb, col, thickness);
+  }
+}
+
+static void AddWorldCircle(ImDrawList *drawList, const float center[3],
+                           const float axisA[3], const float axisB[3],
+                           float radius, int segments, const float view[16],
+                           const float proj[16], float windowX, float windowY,
+                           float windowWidth, float windowHeight, ImU32 col,
+                           float thickness) {
+  ImVec2 first;
+  ImVec2 prev;
+  bool haveFirst = false;
+  bool havePrev = false;
+  for (int s = 0; s <= segments; ++s) {
+    const float t = (static_cast<float>(s) / static_cast<float>(segments)) *
+                    6.28318530718f;
+    const float p[3] = {
+        center[0] + (axisA[0] * cosf(t) + axisB[0] * sinf(t)) * radius,
+        center[1] + (axisA[1] * cosf(t) + axisB[1] * sinf(t)) * radius,
+        center[2] + (axisA[2] * cosf(t) + axisB[2] * sinf(t)) * radius};
+    ImVec2 sp;
+    if (!ProjectLightPoint(p, view, proj, windowX, windowY, windowWidth,
+                           windowHeight, sp)) {
+      havePrev = false;
+      continue;
+    }
+    if (!haveFirst) {
+      first = sp;
+      haveFirst = true;
+    }
+    if (havePrev) {
+      drawList->AddLine(prev, sp, col, thickness);
+    }
+    prev = sp;
+    havePrev = true;
+  }
+  if (haveFirst && havePrev) {
+    drawList->AddLine(prev, first, col, thickness);
+  }
+}
+
+static void AddScreenArrow(ImDrawList *drawList, ImVec2 a, ImVec2 b, ImU32 col,
+                           float thickness) {
+  drawList->AddLine(a, b, col, thickness);
+  const float dx = b.x - a.x;
+  const float dy = b.y - a.y;
+  const float len = sqrtf(dx * dx + dy * dy);
+  if (len < 1.0f) {
+    return;
+  }
+  const float ux = dx / len;
+  const float uy = dy / len;
+  const float px = -uy;
+  const float py = ux;
+  const float head = 8.0f;
+  drawList->AddLine(b, ImVec2(b.x - ux * head + px * head * 0.45f,
+                              b.y - uy * head + py * head * 0.45f),
+                    col, thickness);
+  drawList->AddLine(b, ImVec2(b.x - ux * head - px * head * 0.45f,
+                              b.y - uy * head - py * head * 0.45f),
+                    col, thickness);
+}
+
+static int CountLightPrototypeInstances(size_t prototypeIndex) {
+  int count = 0;
+  for (const LightInstance &inst : s_lightInstances) {
+    if (inst.prototypeIndex == prototypeIndex) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+static void DrawLightModel(ImDrawList *drawList, size_t instanceIndex,
+                           const LightPrototype &proto,
+                           const LightInstance &inst, const float view[16],
+                           const float proj[16], float windowX, float windowY,
+                           float windowWidth, float windowHeight,
+                           bool selected, bool simple) {
+  ImVec2 center;
+  if (!ProjectLightPoint(inst.position, view, proj, windowX, windowY,
+                         windowWidth, windowHeight, center)) {
+    return;
+  }
+
+  const ImU32 col = LightGizmoColor(proto, inst, selected);
+  const ImU32 dimCol = LightGizmoColor(proto, inst, selected, selected ? 120 : 84);
+  const float thick = selected ? 2.6f : 1.35f;
+  drawList->AddCircleFilled(center, selected ? 4.8f : 3.6f, col, 16);
+  drawList->AddCircle(center, selected ? 8.5f : 6.5f, col, 16, thick);
+
+  float right[3], up[3], fwd[3];
+  BuildLightBasis(inst, right, up, fwd);
+  const LightType type = static_cast<LightType>(proto.type);
+  const int segments = selected ? 36 : 20;
+
+  if (!simple) {
+    if (type == LightType::Omni) {
+      const float radius = std::max(0.18f, proto.radius);
+      AddWorldCircle(drawList, inst.position, right, up, radius, segments, view,
+                     proj, windowX, windowY, windowWidth, windowHeight, col,
+                     thick);
+      AddWorldCircle(drawList, inst.position, right, fwd, radius, segments, view,
+                     proj, windowX, windowY, windowWidth, windowHeight, dimCol,
+                     1.0f);
+      AddWorldCircle(drawList, inst.position, up, fwd, radius, segments, view,
+                     proj, windowX, windowY, windowWidth, windowHeight, dimCol,
+                     1.0f);
+    } else if (type == LightType::Spot || type == LightType::IES) {
+      const float length = LightGizmoReach(proto);
+      const float outerAngle =
+          acosf(std::clamp(proto.outerConeAngle, -0.999f, 0.999f));
+      const float innerAngle =
+          acosf(std::clamp(proto.innerConeAngle, -0.999f, 0.999f));
+      const float outerRadius = tanf(outerAngle) * length;
+      const float innerRadius = tanf(innerAngle) * length;
+      const float ringCenter[3] = {inst.position[0] + fwd[0] * length,
+                                   inst.position[1] + fwd[1] * length,
+                                   inst.position[2] + fwd[2] * length};
+      AddWorldCircle(drawList, ringCenter, right, up, outerRadius, segments,
+                     view, proj, windowX, windowY, windowWidth, windowHeight,
+                     col, thick);
+      AddWorldCircle(drawList, ringCenter, right, up, innerRadius, segments,
+                     view, proj, windowX, windowY, windowWidth, windowHeight,
+                     dimCol, 1.0f);
+      for (int k = 0; k < 4; ++k) {
+        const float sx = (k == 0) ? 1.0f : ((k == 1) ? -1.0f : 0.0f);
+        const float sy = (k == 2) ? 1.0f : ((k == 3) ? -1.0f : 0.0f);
+        const float edge[3] = {ringCenter[0] + (right[0] * sx + up[0] * sy) * outerRadius,
+                               ringCenter[1] + (right[1] * sx + up[1] * sy) * outerRadius,
+                               ringCenter[2] + (right[2] * sx + up[2] * sy) * outerRadius};
+        AddWorldLine(drawList, inst.position, edge, view, proj, windowX, windowY,
+                     windowWidth, windowHeight, col, 1.0f);
+      }
+      AddWorldLine(drawList, inst.position, ringCenter, view, proj, windowX,
+                   windowY, windowWidth, windowHeight, col, thick);
+      if (type == LightType::IES || proto.iesProfileIndex >= 0) {
+        for (int k = 0; k < 10; ++k) {
+          const float t = (static_cast<float>(k) / 10.0f) * 6.28318530718f;
+          const float lobe = 0.18f + ((k % 2) ? 0.12f : 0.28f);
+          const float a[3] = {inst.position[0] + fwd[0] * 0.18f,
+                              inst.position[1] + fwd[1] * 0.18f,
+                              inst.position[2] + fwd[2] * 0.18f};
+          const float b[3] = {a[0] + (right[0] * cosf(t) + up[0] * sinf(t)) * lobe,
+                              a[1] + (right[1] * cosf(t) + up[1] * sinf(t)) * lobe,
+                              a[2] + (right[2] * cosf(t) + up[2] * sinf(t)) * lobe};
+          AddWorldLine(drawList, a, b, view, proj, windowX, windowY,
+                       windowWidth, windowHeight, dimCol, 1.0f);
+        }
+      }
+    } else if (type == LightType::AreaRect || type == LightType::AreaDisk) {
+      const float hw = std::max(0.02f, proto.areaExtents[0] * 0.5f);
+      const float hh = std::max(0.02f, proto.areaExtents[1] * 0.5f);
+      if (type == LightType::AreaDisk) {
+        AddWorldCircle(drawList, inst.position, right, up, std::max(hw, hh),
+                       selected ? 40 : 24, view, proj, windowX, windowY,
+                       windowWidth, windowHeight, col, thick);
+        AddWorldCircle(drawList, inst.position, right, up, std::min(hw, hh),
+                       selected ? 32 : 18, view, proj, windowX, windowY,
+                       windowWidth, windowHeight, dimCol, 1.0f);
+      } else {
+        float c[4][3];
+        for (int k = 0; k < 4; ++k) {
+          const float sx = (k == 0 || k == 3) ? 1.0f : -1.0f;
+          const float sy = (k < 2) ? 1.0f : -1.0f;
+          c[k][0] = inst.position[0] + right[0] * hw * sx + up[0] * hh * sy;
+          c[k][1] = inst.position[1] + right[1] * hw * sx + up[1] * hh * sy;
+          c[k][2] = inst.position[2] + right[2] * hw * sx + up[2] * hh * sy;
+        }
+        for (int k = 0; k < 4; ++k) {
+          AddWorldLine(drawList, c[k], c[(k + 1) % 4], view, proj, windowX,
+                       windowY, windowWidth, windowHeight, col, thick);
+        }
+        AddWorldLine(drawList, c[0], c[2], view, proj, windowX, windowY,
+                     windowWidth, windowHeight, dimCol, 1.0f);
+        AddWorldLine(drawList, c[1], c[3], view, proj, windowX, windowY,
+                     windowWidth, windowHeight, dimCol, 1.0f);
+      }
+      const float arrowEnd[3] = {inst.position[0] + fwd[0] * 0.7f,
+                                 inst.position[1] + fwd[1] * 0.7f,
+                                 inst.position[2] + fwd[2] * 0.7f};
+      AddWorldLine(drawList, inst.position, arrowEnd, view, proj, windowX,
+                   windowY, windowWidth, windowHeight, col, thick);
+    } else if (type == LightType::Directional) {
+      AddWorldCircle(drawList, inst.position, right, up, 0.28f, 24, view, proj,
+                     windowX, windowY, windowWidth, windowHeight, col, thick);
+      for (int k = -1; k <= 1; ++k) {
+        const float base[3] = {inst.position[0] + right[0] * 0.22f * k,
+                               inst.position[1] + right[1] * 0.22f * k,
+                               inst.position[2] + right[2] * 0.22f * k};
+        const float end[3] = {base[0] + fwd[0] * 0.75f,
+                              base[1] + fwd[1] * 0.75f,
+                              base[2] + fwd[2] * 0.75f};
+        AddWorldLine(drawList, base, end, view, proj, windowX, windowY,
+                     windowWidth, windowHeight, col, thick);
+      }
+    }
+  }
+
+  if (selected) {
+    const int groupCount = CountLightPrototypeInstances(inst.prototypeIndex);
+    char label[128];
+    std::snprintf(label, sizeof(label), "%s  #%zu / %d",
+                  proto.name[0] ? proto.name : LightTypeLabel(type),
+                  instanceIndex, groupCount);
+    const ImVec2 textSize = ImGui::CalcTextSize(label);
+    const ImVec2 textPos(center.x + 12.0f, center.y - textSize.y * 0.5f);
+    drawList->AddRectFilled(ImVec2(textPos.x - 5.0f, textPos.y - 3.0f),
+                            ImVec2(textPos.x + textSize.x + 5.0f,
+                                   textPos.y + textSize.y + 3.0f),
+                            IM_COL32(18, 20, 22, 190), 4.0f);
+    drawList->AddText(textPos, col, label);
+  }
+}
+
+void SetLightGizmosVisible(bool visible) { s_lightGizmosVisible = visible; }
+
+bool AreLightGizmosVisible() { return s_lightGizmosVisible; }
+
+int PickLightGizmoAt(float screenX, float screenY, float screenWidth,
+                     float screenHeight) {
+  if (ImGuizmo::IsUsing() || screenWidth <= 1.0f || screenHeight <= 1.0f) {
+    return -1;
+  }
+
+  float view[16], proj[16];
+  BuildViewMatrix(view);
+  BuildProjectionMatrix(proj);
+  float windowX = 0.0f, windowY = 0.0f, windowWidth = screenWidth,
+        windowHeight = screenHeight;
+  GetRenderViewportRect(&windowX, &windowY, &windowWidth, &windowHeight);
+  const ImVec2 mouse(screenX, screenY);
+  if (mouse.x < windowX || mouse.y < windowY ||
+      mouse.x > windowX + windowWidth || mouse.y > windowY + windowHeight) {
+    return -1;
+  }
+
+  int bestIndex = -1;
+  float bestDistance = 18.0f;
+  for (size_t i = 0; i < s_lightInstances.size(); ++i) {
+    const LightInstance &inst = s_lightInstances[i];
+    if (inst.prototypeIndex >= s_lightPrototypes.size()) {
+      continue;
+    }
+    const LightPrototype &proto = s_lightPrototypes[inst.prototypeIndex];
+    ImVec2 center;
+    if (!ProjectLightPoint(inst.position, view, proj, windowX, windowY,
+                           windowWidth, windowHeight, center)) {
+      continue;
+    }
+
+    float distance = sqrtf((mouse.x - center.x) * (mouse.x - center.x) +
+                           (mouse.y - center.y) * (mouse.y - center.y));
+    float right[3], up[3], fwd[3];
+    BuildLightBasis(inst, right, up, fwd);
+    const LightType type = static_cast<LightType>(proto.type);
+    const float length =
+        (type == LightType::Spot || type == LightType::IES)
+            ? LightGizmoReach(proto)
+            : 0.8f;
+    const float end[3] = {inst.position[0] + fwd[0] * length,
+                          inst.position[1] + fwd[1] * length,
+                          inst.position[2] + fwd[2] * length};
+    ImVec2 endScreen;
+    if (ProjectLightPoint(end, view, proj, windowX, windowY, windowWidth,
+                          windowHeight, endScreen)) {
+      distance = std::min(distance, DistanceToSegment2D(mouse, center, endScreen));
+    }
+
+    if (type == LightType::AreaRect || type == LightType::AreaDisk) {
+      const float hw = std::max(0.02f, proto.areaExtents[0] * 0.5f);
+      const float hh = std::max(0.02f, proto.areaExtents[1] * 0.5f);
+      ImVec2 prev;
+      bool havePrev = false;
+      const int samples = (type == LightType::AreaDisk) ? 32 : 4;
+      for (int k = 0; k <= samples; ++k) {
+        float sx = 0.0f;
+        float sy = 0.0f;
+        if (type == LightType::AreaDisk) {
+          const float t = (static_cast<float>(k) / static_cast<float>(samples)) *
+                          6.28318530718f;
+          sx = cosf(t);
+          sy = sinf(t);
+        } else {
+          const int corner = k % 4;
+          sx = (corner == 0 || corner == 3) ? 1.0f : -1.0f;
+          sy = (corner < 2) ? 1.0f : -1.0f;
+        }
+        const float p[3] = {
+            inst.position[0] + right[0] * hw * sx + up[0] * hh * sy,
+            inst.position[1] + right[1] * hw * sx + up[1] * hh * sy,
+            inst.position[2] + right[2] * hw * sx + up[2] * hh * sy};
+        ImVec2 sp;
+        if (!ProjectLightPoint(p, view, proj, windowX, windowY, windowWidth,
+                               windowHeight, sp)) {
+          havePrev = false;
+          continue;
+        }
+        if (havePrev) {
+          distance = std::min(distance, DistanceToSegment2D(mouse, prev, sp));
+        }
+        prev = sp;
+        havePrev = true;
+      }
+    }
+
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = static_cast<int>(i);
+    }
+  }
+  return bestIndex;
+}
+
 void DrawLightGizmo() {
   float view[16], proj[16];
   BuildViewMatrix(view);
@@ -5438,132 +5871,18 @@ void DrawLightGizmo() {
       BeginRenderOverlayWindow("##LightViewportOverlay", windowX, windowY,
                                windowWidth, windowHeight);
 
-  auto WorldToScreen = [&](const float *wp, ImVec2 &outSp) -> bool {
-    float viewPos[4];
-    for (int i = 0; i < 4; i++) {
-      viewPos[i] = wp[0] * view[0 * 4 + i] + wp[1] * view[1 * 4 + i] +
-                   wp[2] * view[2 * 4 + i] + 1.0f * view[3 * 4 + i];
-    }
-    float clipPos[4];
-    for (int i = 0; i < 4; i++) {
-      clipPos[i] = viewPos[0] * proj[0 * 4 + i] + viewPos[1] * proj[1 * 4 + i] +
-                   viewPos[2] * proj[2 * 4 + i] + viewPos[3] * proj[3 * 4 + i];
-    }
-    if (clipPos[3] < 0.001f) // Behind camera
-      return false;
-    outSp.x = windowX + (clipPos[0] / clipPos[3] + 1.0f) * 0.5f * windowWidth;
-    outSp.y = windowY + (1.0f - clipPos[1] / clipPos[3]) * 0.5f * windowHeight;
-    return true;
-  };
-
-  // 1. Draw wireframes / icons for ALL lights to visualize their layout
-  for (size_t i = 0; i < s_lightInstances.size(); ++i) {
-    LightInstance &inst = s_lightInstances[i];
-    if (!inst.enabled) continue;
-    if (inst.prototypeIndex >= s_lightPrototypes.size()) continue;
-    LightPrototype &proto = s_lightPrototypes[inst.prototypeIndex];
-    if (!proto.enabled) continue;
-    bool isSelected = (s_selectedLightIdx == (int)i);
-    ImU32 col =
-        isSelected ? IM_COL32(255, 200, 50, 255) : IM_COL32(200, 200, 200, 150);
-    float thick = isSelected ? 3.0f : 1.5f;
-
-    ImVec2 screenPos;
-    if (!WorldToScreen(inst.position, screenPos))
-      continue;
-
-    // Draw little center circle for the light
-    drawList->AddCircleFilled(screenPos, 4.0f, col);
-
-    char label[64];
-    snprintf(label, sizeof(label), "L%zu", i);
-    drawList->AddText(ImVec2(screenPos.x + 8.0f, screenPos.y - 8.0f), col,
-                      label);
-
-    if (proto.type == (uint32_t)LightType::Omni) {
-      drawList->AddCircle(screenPos, proto.radius * 5.0f + 10.0f, col, 16, thick);
-    } else {
-      // spot, directional, area: draw an arrow representing 'direction'
-      float fwd[3] = {inst.direction[0], inst.direction[1], inst.direction[2]};
-      float arrowEnd[3] = {inst.position[0] + fwd[0] * 1.0f,
-                           inst.position[1] + fwd[1] * 1.0f,
-                           inst.position[2] + fwd[2] * 1.0f};
-
-      ImVec2 sEnd;
-      if (WorldToScreen(arrowEnd, sEnd)) {
-        drawList->AddLine(screenPos, sEnd, col, thick);
+  if (s_lightGizmosVisible) {
+    const bool manyLights = s_lightInstances.size() > 512;
+    for (size_t i = 0; i < s_lightInstances.size(); ++i) {
+      const LightInstance &inst = s_lightInstances[i];
+      if (inst.prototypeIndex >= s_lightPrototypes.size()) {
+        continue;
       }
-
-      if (proto.type == (uint32_t)LightType::AreaRect ||
-          proto.type == (uint32_t)LightType::AreaDisk) {
-        // Draw the wireframe of the area light surface
-        float up_ref[3] = {0, 1, 0};
-        if (fabsf(fwd[1]) > 0.99f) {
-          up_ref[0] = 1;
-          up_ref[1] = 0;
-        }
-
-        // right = up_ref x fwd
-        float right[3] = {up_ref[1] * fwd[2] - up_ref[2] * fwd[1],
-                          up_ref[2] * fwd[0] - up_ref[0] * fwd[2],
-                          up_ref[0] * fwd[1] - up_ref[1] * fwd[0]};
-        float rlen = sqrtf(right[0] * right[0] + right[1] * right[1] +
-                           right[2] * right[2]);
-        if (rlen > 0.001f) {
-          right[0] /= rlen;
-          right[1] /= rlen;
-          right[2] /= rlen;
-        }
-
-        // up = fwd x right
-        float up[3] = {fwd[1] * right[2] - fwd[2] * right[1],
-                       fwd[2] * right[0] - fwd[0] * right[2],
-                       fwd[0] * right[1] - fwd[1] * right[0]};
-
-        float hw = proto.areaExtents[0] * 0.5f;
-        float hh = proto.areaExtents[1] * 0.5f;
-
-        // 4 corners of the quad
-        float c[4][3];
-        c[0][0] = inst.position[0] + right[0] * hw + up[0] * hh;
-        c[0][1] = inst.position[1] + right[1] * hw + up[1] * hh;
-        c[0][2] = inst.position[2] + right[2] * hw + up[2] * hh;
-
-        c[1][0] = inst.position[0] - right[0] * hw + up[0] * hh;
-        c[1][1] = inst.position[1] - right[1] * hw + up[1] * hh;
-        c[1][2] = inst.position[2] - right[2] * hw + up[2] * hh;
-
-        c[2][0] = inst.position[0] - right[0] * hw - up[0] * hh;
-        c[2][1] = inst.position[1] - right[1] * hw - up[1] * hh;
-        c[2][2] = inst.position[2] - right[2] * hw - up[2] * hh;
-
-        c[3][0] = inst.position[0] + right[0] * hw - up[0] * hh;
-        c[3][1] = inst.position[1] + right[1] * hw - up[1] * hh;
-        c[3][2] = inst.position[2] + right[2] * hw - up[2] * hh;
-
-        ImVec2 sc[4];
-        bool ok = true;
-        for (int k = 0; k < 4; k++) {
-          if (!WorldToScreen(c[k], sc[k]))
-            ok = false;
-        }
-
-        if (ok) {
-          if (proto.type == (uint32_t)LightType::AreaDisk) {
-            // Draw a quick octagon for the disk
-            drawList->AddLine(sc[0], sc[1], col, thick);
-            drawList->AddLine(sc[1], sc[2], col, thick);
-            drawList->AddLine(sc[2], sc[3], col, thick);
-            drawList->AddLine(sc[3], sc[0], col, thick);
-          } else {
-            // Draw rect
-            drawList->AddLine(sc[0], sc[1], col, thick);
-            drawList->AddLine(sc[1], sc[2], col, thick);
-            drawList->AddLine(sc[2], sc[3], col, thick);
-            drawList->AddLine(sc[3], sc[0], col, thick);
-          }
-        }
-      }
+      const LightPrototype &proto = s_lightPrototypes[inst.prototypeIndex];
+      const bool isSelected = (s_selectedLightIdx == static_cast<int>(i));
+      DrawLightModel(drawList, i, proto, inst, view, proj, windowX, windowY,
+                     windowWidth, windowHeight, isSelected,
+                     manyLights && !isSelected);
     }
   }
 
@@ -6335,6 +6654,14 @@ int UpdateSelection(float screenWidth, float screenHeight) {
   float my = mposAbs.y - vpY;
   if (mx < 0.0f || my < 0.0f || mx > vpWidth || my > vpHeight)
     return -1;
+
+  const int pickedLight =
+      PickLightGizmoAt(mposAbs.x, mposAbs.y, screenWidth, screenHeight);
+  if (pickedLight >= 0) {
+    SelectLight(pickedLight);
+    fprintf(stderr, "Scene: Picked Light %d\n", pickedLight);
+    return -1;
+  }
 
   // NDC [-1, 1]
   float ndcX = (mx / vpWidth) * 2.0f - 1.0f;

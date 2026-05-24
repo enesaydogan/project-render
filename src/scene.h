@@ -169,6 +169,10 @@ void DrawGizmo();
 
 // Draw ImGuizmo gizmo for the selected light
 void DrawLightGizmo();
+void SetLightGizmosVisible(bool visible);
+bool AreLightGizmosVisible();
+int PickLightGizmoAt(float screenX, float screenY, float screenWidth,
+                     float screenHeight);
 
 enum class GizmoOperation {
   Translate,

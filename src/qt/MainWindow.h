@@ -74,6 +74,7 @@ private:
     QAction *m_transformTranslateAction = nullptr;
     QAction *m_transformRotateAction = nullptr;
     QAction *m_transformScaleAction = nullptr;
+    QAction *m_lightGizmosAction = nullptr;
     QAction *m_transformLocalAction = nullptr;
     QAction *m_transformWorldAction = nullptr;
     QAction *m_mirrorXAction = nullptr;
