@@ -5877,14 +5877,13 @@ void UpdateLights(const std::vector<Light> &lights, bool resetAccumulation) {
   WaitForAsyncRestirIdleForLightUpdates();
 
   if (lights.empty()) {
-    if (s_lightCount != 0) {
-      s_lightCount = 0;
-      s_lastLightsCpu.clear();
-      s_regirLightBoundCount = 0;
-      MarkReGIRDirty();
-      if (resetAccumulation) {
-        ResetAccumulation();
-      }
+    const bool hadLights = (s_lightCount != 0 || !s_lastLightsCpu.empty());
+    s_lightCount = 0;
+    s_lastLightsCpu.clear();
+    s_regirLightBoundCount = 0;
+    MarkReGIRDirty();
+    if (resetAccumulation && hadLights) {
+      ResetAccumulation();
     }
     return;
   }

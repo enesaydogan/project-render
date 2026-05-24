@@ -7,6 +7,7 @@
 struct IESProfile {
   std::string filePath;             // absolute path to .ies file
   std::string displayName;          // filename stem
+  std::string sourceText;           // embedded original .ies payload
   std::vector<float> verticalAngles;
   std::vector<float> horizontalAngles;
   std::vector<float> candela;       // raw candela values (numVA * numHA)

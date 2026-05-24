@@ -21,6 +21,7 @@
 #include <limits>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <sstream>
 #include <thread>
 #include <vector>
 
@@ -874,7 +875,26 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
     const auto &iesProfiles = Scene::GetIESProfiles();
     j["iesp"] = json::array();
     for (const auto &profile : iesProfiles) {
-      j["iesp"].push_back(profile.filePath);
+      std::string sourceText = profile.sourceText;
+      if (sourceText.empty() && !profile.filePath.empty()) {
+        std::ifstream sourceFile(profile.filePath, std::ios::binary);
+        if (sourceFile.is_open()) {
+          std::ostringstream sourceStream;
+          sourceStream << sourceFile.rdbuf();
+          sourceText = sourceStream.str();
+        }
+      }
+      j["iesp"].push_back({
+        {"path", profile.filePath},
+        {"name", profile.displayName},
+        {"raw", sourceText},
+        {"va", profile.verticalAngles},
+        {"ha", profile.horizontalAngles},
+        {"cd", profile.candela},
+        {"mul", profile.multiplier},
+        {"nva", profile.numVerticalAngles},
+        {"nha", profile.numHorizontalAngles}
+      });
     }
   }
 
@@ -891,7 +911,6 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
       {"ica", proto.innerConeAngle},
       {"oca", proto.outerConeAngle},
       {"ae",  {proto.areaExtents[0], proto.areaExtents[1]}},
-      {"iai", proto.iesAtlasIndex},
       {"ipi", proto.iesProfileIndex}
     });
   }
@@ -1231,10 +1250,46 @@ static void ApplyMetadataPRS(const json &j) {
     std::vector<int> iesProfileRemap;
     // Load IES profiles first so prototype ipi references are valid
     if (j.contains("iesp") && j["iesp"].is_array()) {
-      for (const auto &path : j["iesp"]) {
+      for (const auto &savedProfile : j["iesp"]) {
         int loadedProfile = -1;
-        if (path.is_string())
-          loadedProfile = Scene::LoadIESProfile(path.get<std::string>());
+        if (savedProfile.is_string()) {
+          loadedProfile = Scene::LoadIESProfile(savedProfile.get<std::string>());
+        } else if (savedProfile.is_object()) {
+          const std::string path =
+              savedProfile.value("path", std::string());
+          const std::string name =
+              savedProfile.value("name", std::string("Embedded IES"));
+          const std::string raw =
+              savedProfile.value("raw", std::string());
+          if (!raw.empty()) {
+            loadedProfile = Scene::AddIESProfileFromSource(raw, path, name);
+          }
+          if (loadedProfile < 0 && !path.empty()) {
+            loadedProfile = Scene::LoadIESProfile(path);
+          }
+          if (loadedProfile < 0) {
+            IESProfile embedded;
+            embedded.filePath = path;
+            embedded.displayName = name;
+            embedded.sourceText = raw;
+            embedded.verticalAngles =
+                savedProfile.value("va", std::vector<float>{});
+            embedded.horizontalAngles =
+                savedProfile.value("ha", std::vector<float>{});
+            embedded.candela =
+                savedProfile.value("cd", std::vector<float>{});
+            embedded.multiplier = savedProfile.value("mul", 1.0f);
+            embedded.numVerticalAngles =
+                savedProfile.value("nva",
+                                   static_cast<int>(
+                                       embedded.verticalAngles.size()));
+            embedded.numHorizontalAngles =
+                savedProfile.value("nha",
+                                   static_cast<int>(
+                                       embedded.horizontalAngles.size()));
+            loadedProfile = Scene::AddIESProfile(std::move(embedded));
+          }
+        }
         iesProfileRemap.push_back(loadedProfile);
       }
     }
@@ -1255,7 +1310,7 @@ static void ApplyMetadataPRS(const json &j) {
       proto.outerConeAngle = p.value("oca", 0.7071068f);
       auto ae = p.value("ae", std::vector<float>{1,1});
       if (ae.size()>=2) { proto.areaExtents[0]=ae[0]; proto.areaExtents[1]=ae[1]; }
-      proto.iesAtlasIndex = p.value("iai", -1);
+      proto.iesAtlasIndex = -1;
       const int savedProfileIndex = p.value("ipi", -1);
       proto.iesProfileIndex =
           (savedProfileIndex >= 0 &&
@@ -1296,7 +1351,7 @@ static void ApplyMetadataPRS(const json &j) {
       proto.outerConeAngle = l.value("oca", 0.5f);
       auto ae = l.value("ae", std::vector<float>{1,1});
       if (ae.size()>=2) { proto.areaExtents[0]=ae[0]; proto.areaExtents[1]=ae[1]; }
-      proto.iesAtlasIndex = l.value("iai", -1);
+      proto.iesAtlasIndex = -1;
       size_t protoIdx = Scene::AddLightPrototypeRaw(proto);
 
       LightInstance inst;

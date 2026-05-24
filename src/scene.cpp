@@ -26,6 +26,7 @@
 #include <fstream>
 #include <functional>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -4577,13 +4578,9 @@ void UpdateLights() {
   DxrRenderer::UpdateLights(s_flattenedLights);
 }
 
-// Parse an .ies file into raw profile data (no GPU bake).
-// Reuses the parsing logic from Asset::LoadIES but stores raw candela arrays.
-static bool ParseIESFile(const std::string &path, IESProfile &out) {
-  std::ifstream file(path);
-  if (!file.is_open())
-    return false;
-
+static bool ParseIESStream(std::istream &file, const std::string &path,
+                           const std::string &displayName,
+                           const std::string &sourceText, IESProfile &out) {
   std::string line;
   if (!std::getline(file, line))
     return false;
@@ -4662,7 +4659,12 @@ static bool ParseIESFile(const std::string &path, IESProfile &out) {
   }
 
   out.filePath = path;
-  out.displayName = fs::path(path).stem().string();
+  out.displayName =
+      displayName.empty()
+          ? (path.empty() ? std::string("Embedded IES")
+                          : fs::path(path).stem().string())
+          : displayName;
+  out.sourceText = sourceText;
   out.verticalAngles = std::move(verticalAngles);
   out.horizontalAngles = std::move(horizontalAngles);
   out.candela = std::move(candelaValues);
@@ -4671,6 +4673,29 @@ static bool ParseIESFile(const std::string &path, IESProfile &out) {
   out.numHorizontalAngles = numHorizontalAngles;
   out.loaded = true;
   return true;
+}
+
+static bool ReadIESSourceText(const std::string &path, std::string &outText) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file.is_open()) {
+    return false;
+  }
+  std::ostringstream text;
+  text << file.rdbuf();
+  outText = text.str();
+  return !outText.empty();
+}
+
+// Parse an .ies file into raw profile data (no GPU bake).
+// Reuses the parsing logic from Asset::LoadIES but stores raw candela arrays.
+static bool ParseIESFile(const std::string &path, IESProfile &out) {
+  std::string sourceText;
+  if (!ReadIESSourceText(path, sourceText)) {
+    return false;
+  }
+  std::istringstream stream(sourceText);
+  return ParseIESStream(stream, path, fs::path(path).stem().string(),
+                        sourceText, out);
 }
 
 const std::vector<IESProfile> &GetIESProfiles() { return s_iesProfiles; }
@@ -4691,6 +4716,55 @@ int LoadIESProfile(const std::string &path) {
   profile.atlasSlice = static_cast<int>(s_iesProfiles.size());
   s_iesProfiles.push_back(std::move(profile));
 
+  RebuildIESAtlas();
+  return static_cast<int>(s_iesProfiles.size()) - 1;
+}
+
+int AddIESProfileFromSource(const std::string &sourceText,
+                            const std::string &originalPath,
+                            const std::string &displayName) {
+  if (sourceText.empty()) {
+    return -1;
+  }
+  IESProfile profile;
+  std::istringstream stream(sourceText);
+  if (!ParseIESStream(stream, originalPath, displayName, sourceText, profile)) {
+    return -1;
+  }
+  return AddIESProfile(std::move(profile));
+}
+
+int AddIESProfile(IESProfile profile) {
+  if (profile.numVerticalAngles <= 0 ||
+      profile.numHorizontalAngles <= 0 ||
+      profile.verticalAngles.size() !=
+          static_cast<size_t>(profile.numVerticalAngles) ||
+      profile.horizontalAngles.size() !=
+          static_cast<size_t>(profile.numHorizontalAngles) ||
+      profile.candela.size() !=
+          static_cast<size_t>(profile.numVerticalAngles) *
+              static_cast<size_t>(profile.numHorizontalAngles)) {
+    return -1;
+  }
+  if (s_iesProfiles.size() >= static_cast<size_t>(kMaxIESSlices)) {
+    return -1;
+  }
+  if (!profile.filePath.empty()) {
+    for (size_t i = 0; i < s_iesProfiles.size(); ++i) {
+      if (s_iesProfiles[i].filePath == profile.filePath) {
+        return static_cast<int>(i);
+      }
+    }
+  }
+  if (profile.displayName.empty()) {
+    profile.displayName = profile.filePath.empty()
+                              ? "Embedded IES"
+                              : fs::path(profile.filePath).stem().string();
+  }
+  profile.atlasSlice = static_cast<int>(s_iesProfiles.size());
+  profile.loaded = true;
+  profile.gpuReady = false;
+  s_iesProfiles.push_back(std::move(profile));
   RebuildIESAtlas();
   return static_cast<int>(s_iesProfiles.size()) - 1;
 }

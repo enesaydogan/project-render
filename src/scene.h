@@ -304,6 +304,10 @@ void UpdateLights();
 // IES profile management
 const std::vector<IESProfile> &GetIESProfiles();
 int LoadIESProfile(const std::string &path);
+int AddIESProfileFromSource(const std::string &sourceText,
+                            const std::string &originalPath,
+                            const std::string &displayName);
+int AddIESProfile(IESProfile profile);
 void ClearIESProfile(int profileIndex);
 void ClearIESProfiles();
 void RebuildIESAtlas();
