@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -53,6 +54,7 @@ static std::vector<LightPrototype> s_lightPrototypes;
 static std::vector<LightInstance> s_lightInstances;
 static std::vector<Light> s_flattenedLights;
 static std::vector<std::pair<size_t, size_t>> s_lightFlattenMapping;
+static std::vector<IESProfile> s_iesProfiles;
 static std::vector<ScatterModel> s_scatterModels;
 static std::vector<Instance> s_scatterInstanceCache;
 static uint64_t s_scatterRuntimeRevision = 1;
@@ -4520,6 +4522,16 @@ const std::vector<LightInstance> &GetLightInstances() { return s_lightInstances;
 const std::vector<Light> &GetLights() { return s_flattenedLights; }
 
 void UpdateLights() {
+  // Resolve IES profile indices to atlas slice indices
+  for (auto &proto : s_lightPrototypes) {
+    if (proto.iesProfileIndex >= 0 &&
+        proto.iesProfileIndex < static_cast<int>(s_iesProfiles.size())) {
+      proto.iesAtlasIndex = s_iesProfiles[proto.iesProfileIndex].atlasSlice;
+    } else if (proto.iesProfileIndex >= 0) {
+      proto.iesAtlasIndex = -1;
+    }
+  }
+
   FlattenLights(s_lightPrototypes, s_lightInstances, s_flattenedLights,
                 s_lightFlattenMapping);
   if (s_batchedUpdateDepth > 0) {
@@ -4527,6 +4539,249 @@ void UpdateLights() {
     return;
   }
   DxrRenderer::UpdateLights(s_flattenedLights);
+}
+
+// Parse an .ies file into raw profile data (no GPU bake).
+// Reuses the parsing logic from Asset::LoadIES but stores raw candela arrays.
+static bool ParseIESFile(const std::string &path, IESProfile &out) {
+  std::ifstream file(path);
+  if (!file.is_open())
+    return false;
+
+  std::string line;
+  if (!std::getline(file, line))
+    return false;
+
+  bool foundTilt = false;
+  while (std::getline(file, line)) {
+    if (line.find("TILT=") != std::string::npos) {
+      foundTilt = true;
+      break;
+    }
+  }
+  if (!foundTilt)
+    return false;
+
+  if (line.find("TILT=NONE") == std::string::npos) {
+    for (int i = 0; i < 4; ++i) {
+      if (!std::getline(file, line))
+        return false;
+    }
+  }
+
+  int numLamps = 0;
+  int numVerticalAngles = 0;
+  int numHorizontalAngles = 0;
+  int phototype = 0;
+  int unitType = 0;
+  float lumens = 0.0f;
+  float multiplier = 1.0f;
+  float width = 0.0f;
+  float length = 0.0f;
+  float height = 0.0f;
+
+  file >> numLamps >> lumens >> multiplier >> numVerticalAngles >>
+      numHorizontalAngles >> phototype >> unitType >> width >> length >> height;
+  if (!file || numVerticalAngles <= 0 || numHorizontalAngles <= 0 ||
+      numVerticalAngles > 4096 || numHorizontalAngles > 4096) {
+    return false;
+  }
+  const int64_t candelaCount =
+      static_cast<int64_t>(numVerticalAngles) * numHorizontalAngles;
+  if (candelaCount <= 0 || candelaCount > 4 * 1024 * 1024)
+    return false;
+
+  float ballMult = 1.0f;
+  float volt = 0.0f;
+  float watts = 0.0f;
+  file >> ballMult >> volt >> watts;
+  if (!file)
+    return false;
+
+  std::vector<float> verticalAngles(numVerticalAngles);
+  for (int i = 0; i < numVerticalAngles; ++i) {
+    file >> verticalAngles[i];
+    if (!file)
+      return false;
+  }
+
+  std::vector<float> horizontalAngles(numHorizontalAngles);
+  for (int i = 0; i < numHorizontalAngles; ++i) {
+    file >> horizontalAngles[i];
+    if (!file)
+      return false;
+  }
+
+  std::vector<float> candelaValues(static_cast<size_t>(candelaCount));
+  for (int64_t i = 0; i < candelaCount; ++i) {
+    file >> candelaValues[i];
+    if (!file)
+      return false;
+  }
+
+  if (!std::isfinite(multiplier))
+    multiplier = 1.0f;
+  for (float &value : candelaValues) {
+    value = std::isfinite(value) ? (std::max)(0.0f, value) : 0.0f;
+  }
+
+  out.filePath = path;
+  out.displayName = fs::path(path).stem().string();
+  out.verticalAngles = std::move(verticalAngles);
+  out.horizontalAngles = std::move(horizontalAngles);
+  out.candela = std::move(candelaValues);
+  out.multiplier = multiplier;
+  out.numVerticalAngles = numVerticalAngles;
+  out.numHorizontalAngles = numHorizontalAngles;
+  out.loaded = true;
+  return true;
+}
+
+const std::vector<IESProfile> &GetIESProfiles() { return s_iesProfiles; }
+
+int LoadIESProfile(const std::string &path) {
+  for (size_t i = 0; i < s_iesProfiles.size(); ++i) {
+    if (s_iesProfiles[i].filePath == path)
+      return static_cast<int>(i);
+  }
+
+  if (s_iesProfiles.size() >= static_cast<size_t>(kMaxIESSlices))
+    return -1;
+
+  IESProfile profile;
+  if (!ParseIESFile(path, profile))
+    return -1;
+
+  profile.atlasSlice = static_cast<int>(s_iesProfiles.size());
+  s_iesProfiles.push_back(std::move(profile));
+
+  RebuildIESAtlas();
+  return static_cast<int>(s_iesProfiles.size()) - 1;
+}
+
+void ClearIESProfiles() {
+  s_iesProfiles.clear();
+  for (auto &proto : s_lightPrototypes) {
+    proto.iesProfileIndex = -1;
+    proto.iesAtlasIndex = -1;
+  }
+  DxrRenderer::UpdateIESAtlas(nullptr, 0);
+  UpdateLights();
+}
+
+void ClearIESProfile(int profileIndex) {
+  if (profileIndex < 0 || profileIndex >= static_cast<int>(s_iesProfiles.size()))
+    return;
+
+  s_iesProfiles.erase(s_iesProfiles.begin() + profileIndex);
+
+  // Shift remaining profiles' atlas slices
+  for (size_t i = 0; i < s_iesProfiles.size(); ++i)
+    s_iesProfiles[i].atlasSlice = static_cast<int>(i);
+
+  // Update prototypes that referenced shifted profiles
+  for (auto &proto : s_lightPrototypes) {
+    if (proto.iesProfileIndex == profileIndex)
+      proto.iesProfileIndex = -1;
+    else if (proto.iesProfileIndex > profileIndex)
+      proto.iesProfileIndex--;
+  }
+
+  RebuildIESAtlas();
+}
+
+void RebuildIESAtlas() {
+  const int sliceCount = static_cast<int>(s_iesProfiles.size());
+  if (sliceCount == 0) {
+    DxrRenderer::UpdateIESAtlas(nullptr, 0);
+    UpdateLights();
+    return;
+  }
+
+  const int texW = kIESAtlasResolution;
+  const int texH = kIESAtlasResolution;
+  std::vector<float> atlasData(texW * texH * sliceCount * 4, 0.0f);
+
+  for (int slice = 0; slice < sliceCount; ++slice) {
+    IESProfile &profile = s_iesProfiles[slice];
+    const int numVA = profile.numVerticalAngles;
+    const int numHA = profile.numHorizontalAngles;
+    const float mult = profile.multiplier;
+    const auto &vAngles = profile.verticalAngles;
+    const auto &hAngles = profile.horizontalAngles;
+    const auto &candela = profile.candela;
+    if (numVA <= 0 || numHA <= 0 ||
+        candela.size() < static_cast<size_t>(numVA) *
+                             static_cast<size_t>(numHA)) {
+      profile.gpuReady = false;
+      continue;
+    }
+
+    float *sliceData = atlasData.data() + (slice * texW * texH * 4);
+
+    for (int y = 0; y < texH; ++y) {
+      float theta = static_cast<float>(y) / static_cast<float>(texH - 1) * 180.0f;
+      for (int x = 0; x < texW; ++x) {
+        float phi = static_cast<float>(x) / static_cast<float>(texW - 1) * 360.0f;
+
+        // Wrap phi for symmetry (IES often stores 0-90 or 0-180)
+        float lookPhi = phi;
+        if (numHA > 1) {
+          float maxH = hAngles.back();
+          if (maxH == 90.0f) {
+            lookPhi = fmodf(phi, 90.0f);
+            if ((static_cast<int>(phi / 90.0f) % 2) == 1)
+              lookPhi = 90.0f - lookPhi;
+          } else if (maxH == 180.0f) {
+            lookPhi = fmodf(phi, 180.0f);
+            if ((static_cast<int>(phi / 180.0f) % 2) == 1)
+              lookPhi = 180.0f - lookPhi;
+          }
+        } else {
+          lookPhi = 0.0f;
+        }
+
+        // Linear interpolation for vertical
+        int v0 = 0;
+        while (v0 < numVA - 2 && vAngles[v0 + 1] < theta)
+          v0++;
+        int v1 = std::min(v0 + 1, numVA - 1);
+        float vLerp = (theta - vAngles[v0]) /
+                      std::max(1e-5f, vAngles[v1] - vAngles[v0]);
+        vLerp = std::clamp(vLerp, 0.0f, 1.0f);
+
+        // Linear interpolation for horizontal
+        int h0 = 0;
+        while (h0 < numHA - 2 && hAngles[h0 + 1] < lookPhi)
+          h0++;
+        int h1 = std::min(h0 + 1, numHA - 1);
+        float hLerp = (lookPhi - hAngles[h0]) /
+                      std::max(1e-5f, hAngles[h1] - hAngles[h0]);
+        hLerp = std::clamp(hLerp, 0.0f, 1.0f);
+
+        float c00 = candela[h0 * numVA + v0];
+        float c01 = candela[h0 * numVA + v1];
+        float c10 = candela[h1 * numVA + v0];
+        float c11 = candela[h1 * numVA + v1];
+
+        float val = (c00 * (1.0f - vLerp) * (1.0f - hLerp) +
+                     c01 * vLerp * (1.0f - hLerp) +
+                     c10 * (1.0f - vLerp) * hLerp +
+                     c11 * vLerp * hLerp) * mult;
+
+        int pixelIdx = (y * texW + x) * 4;
+        sliceData[pixelIdx + 0] = val;
+        sliceData[pixelIdx + 1] = val;
+        sliceData[pixelIdx + 2] = val;
+        sliceData[pixelIdx + 3] = 1.0f;
+      }
+    }
+
+    profile.gpuReady = true;
+  }
+
+  DxrRenderer::UpdateIESAtlas(atlasData.data(), sliceCount);
+  UpdateLights();
 }
 
 int GetSelectedLightIndex() { return s_selectedLightIdx; }
@@ -6806,6 +7061,7 @@ void ResetScene() {
   s_lightInstances.clear();
   s_flattenedLights.clear();
   s_lightFlattenMapping.clear();
+  s_iesProfiles.clear();
   s_selectedLightIdx = -1;
   AnimationSequence::Clear();
   SavedViews::Clear();
@@ -6816,6 +7072,7 @@ void ResetScene() {
   // the CPU state which is then rebuilt by LoadScene.
 
   // Reset DXR state if it's active
+  DxrRenderer::UpdateIESAtlas(nullptr, 0);
   UpdateLights();
   DxrRenderer::ResetAccumulation();
   // Ensure camera/exposure defaults are restored when starting a fresh scene

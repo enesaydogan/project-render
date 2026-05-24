@@ -1,6 +1,7 @@
 #pragma once
 
 #include "assets/asset_loader.h"
+#include "ies_profile.h"
 #include "light.h"
 #include <DirectXMath.h>
 #include <array>
@@ -276,6 +277,13 @@ void SelectLight(int instanceIndex);
 
 // Rebuild flattened array and upload to GPU
 void UpdateLights();
+
+// IES profile management
+const std::vector<IESProfile> &GetIESProfiles();
+int LoadIESProfile(const std::string &path);
+void ClearIESProfile(int profileIndex);
+void ClearIESProfiles();
+void RebuildIESAtlas();
 
 // Material manipulation
 size_t GetMaterialCount();

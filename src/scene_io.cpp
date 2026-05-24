@@ -868,6 +868,15 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
     j["sct"].push_back(std::move(sm));
   }
 
+  // IES profile paths
+  {
+    const auto &iesProfiles = Scene::GetIESProfiles();
+    j["iesp"] = json::array();
+    for (const auto &profile : iesProfiles) {
+      j["iesp"].push_back(profile.filePath);
+    }
+  }
+
   // Lights — new prototype + instance schema
   j["lgp"] = json::array();
   for (const auto &proto : Scene::GetLightPrototypes()) {
@@ -880,7 +889,8 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap) {
       {"ica", proto.innerConeAngle},
       {"oca", proto.outerConeAngle},
       {"ae",  {proto.areaExtents[0], proto.areaExtents[1]}},
-      {"iai", proto.iesAtlasIndex}
+      {"iai", proto.iesAtlasIndex},
+      {"ipi", proto.iesProfileIndex}
     });
   }
   j["lgi"] = json::array();
@@ -1211,7 +1221,21 @@ static void ApplyMetadataPRS(const json &j) {
     if (l.contains("ld") && l["ld"].size()>=4) for (int i=0;i<4;++i) g_cameraData.lightDir[i]=l["ld"][i];
     if (l.contains("lc") && l["lc"].size()>=4) for (int i=0;i<4;++i) g_cameraData.lightColor[i]=l["lc"][i];
   }
+  if ((j.contains("lgp") && j["lgp"].is_array() && j.contains("lgi") && j["lgi"].is_array()) ||
+      (j.contains("lgt") && j["lgt"].is_array())) {
+    Scene::ClearIESProfiles();
+  }
   if (j.contains("lgp") && j["lgp"].is_array() && j.contains("lgi") && j["lgi"].is_array()) {
+    std::vector<int> iesProfileRemap;
+    // Load IES profiles first so prototype ipi references are valid
+    if (j.contains("iesp") && j["iesp"].is_array()) {
+      for (const auto &path : j["iesp"]) {
+        int loadedProfile = -1;
+        if (path.is_string())
+          loadedProfile = Scene::LoadIESProfile(path.get<std::string>());
+        iesProfileRemap.push_back(loadedProfile);
+      }
+    }
     // New prototype + instance schema
     for (const auto &p : j["lgp"]) {
       LightPrototype proto;
@@ -1226,6 +1250,12 @@ static void ApplyMetadataPRS(const json &j) {
       auto ae = p.value("ae", std::vector<float>{1,1});
       if (ae.size()>=2) { proto.areaExtents[0]=ae[0]; proto.areaExtents[1]=ae[1]; }
       proto.iesAtlasIndex = p.value("iai", -1);
+      const int savedProfileIndex = p.value("ipi", -1);
+      proto.iesProfileIndex =
+          (savedProfileIndex >= 0 &&
+           savedProfileIndex < static_cast<int>(iesProfileRemap.size()))
+              ? iesProfileRemap[static_cast<size_t>(savedProfileIndex)]
+              : -1;
       // Add prototype without auto-instance (we'll add instances from lgi)
       size_t protoIdx = Scene::AddLightPrototypeRaw(proto);
       (void)protoIdx;

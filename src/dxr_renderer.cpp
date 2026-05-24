@@ -373,9 +373,14 @@ static const UINT DXR_HEAP_CLOUD_DETAIL_TEX_OFFSET =
 static const UINT DXR_HEAP_CLOUD_BAKED_TEX_OFFSET =
     DXR_HEAP_CLOUD_SRV_OFFSET + 2;
 
+static const UINT DXR_HEAP_IES_SRV_OFFSET =
+    DXR_HEAP_CLOUD_SRV_OFFSET + DXR_HEAP_CLOUD_SRV_COUNT;
+static const UINT DXR_HEAP_IES_SRV_COUNT = 1;
+
 static const UINT DXR_HEAP_TOTAL_COUNT =
     DXR_HEAP_TEX_COUNT + DXR_HEAP_VB_COUNT + DXR_HEAP_IB_COUNT +
-    DXR_HEAP_UAV_COUNT + DXR_HEAP_ENV_SRV_COUNT + DXR_HEAP_CLOUD_SRV_COUNT;
+    DXR_HEAP_UAV_COUNT + DXR_HEAP_ENV_SRV_COUNT +
+    DXR_HEAP_CLOUD_SRV_COUNT + DXR_HEAP_IES_SRV_COUNT;
 
 // Output texture dimensions used by DXR (kept local to module)
 static UINT s_outputWidth = 1280;
@@ -690,6 +695,10 @@ static bool s_textureTableDirty = true;
 static ComPtr<ID3D12Resource> s_lightBuffer;
 static UINT s_lightCount = 0;
 static std::vector<Light> s_lastLightsCpu;
+// IES profile atlas
+static ComPtr<ID3D12Resource> s_iesAtlasTexture;
+static D3D12_GPU_DESCRIPTOR_HANDLE s_iesAtlasSrvGpu = {};
+static int s_iesAtlasSliceCount = 0;
 static ComPtr<ID3D12Resource> s_reservoirBuffers[2];
 static ComPtr<ID3D12Resource> s_gi_reservoirBuffers[6];
 static ComPtr<ID3D12RootSignature> s_restirSpatialRootSig;
@@ -1284,7 +1293,7 @@ static void EnsureRestirSpatialPipeline() {
   texRange.OffsetInDescriptorsFromTableStart =
       D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-  D3D12_ROOT_PARAMETER params[4] = {};
+  D3D12_ROOT_PARAMETER params[5] = {};
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
   params[0].Descriptor.ShaderRegister = 0;
   params[0].Descriptor.RegisterSpace = 0;
@@ -1306,6 +1315,19 @@ static void EnsureRestirSpatialPipeline() {
   params[3].DescriptorTable.NumDescriptorRanges = 1;
   params[3].DescriptorTable.pDescriptorRanges = &texRange;
   params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  // IES Atlas (t5002)
+  D3D12_DESCRIPTOR_RANGE iesRange = {};
+  iesRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+  iesRange.NumDescriptors = 1;
+  iesRange.BaseShaderRegister = 5002;
+  iesRange.RegisterSpace = 0;
+  iesRange.OffsetInDescriptorsFromTableStart =
+      D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+  params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[4].DescriptorTable.NumDescriptorRanges = 1;
+  params[4].DescriptorTable.pDescriptorRanges = &iesRange;
+  params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
   D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
   rsDesc.NumParameters = _countof(params);
@@ -1682,6 +1704,8 @@ static void DispatchRestirSpatialPasses(ID3D12GraphicsCommandList4 *list,
 
     list->SetComputeRootDescriptorTable(3, s_texTableGpu);
 
+    list->SetComputeRootDescriptorTable(4, s_iesAtlasSrvGpu);
+
     const UINT gx = (s_outputWidth + 7) / 8;
     const UINT gy = (s_outputHeight + 7) / 8;
     list->Dispatch(gx, gy, 1);
@@ -1734,7 +1758,7 @@ static void EnsureWavefrontBootstrapPipeline() {
   uavRange.OffsetInDescriptorsFromTableStart =
       D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-  D3D12_ROOT_PARAMETER params[4] = {};
+  D3D12_ROOT_PARAMETER params[5] = {};
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
   params[0].Descriptor.ShaderRegister = 0;
   params[0].Descriptor.RegisterSpace = 0;
@@ -1755,6 +1779,19 @@ static void EnsureWavefrontBootstrapPipeline() {
   params[3].Descriptor.ShaderRegister = 5000;
   params[3].Descriptor.RegisterSpace = 0;
   params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  // IES Atlas (t5002)
+  D3D12_DESCRIPTOR_RANGE iesBootstrapRange = {};
+  iesBootstrapRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+  iesBootstrapRange.NumDescriptors = 1;
+  iesBootstrapRange.BaseShaderRegister = 5002;
+  iesBootstrapRange.RegisterSpace = 0;
+  iesBootstrapRange.OffsetInDescriptorsFromTableStart =
+      D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+  params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[4].DescriptorTable.NumDescriptorRanges = 1;
+  params[4].DescriptorTable.pDescriptorRanges = &iesBootstrapRange;
+  params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
   D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
   rsDesc.NumParameters = _countof(params);
@@ -1841,6 +1878,7 @@ static void DispatchWavefrontBootstrap(ID3D12GraphicsCommandList4 *list,
   list->SetComputeRootDescriptorTable(2, s_outputUAVGpu);
   list->SetComputeRootShaderResourceView(
       3, s_lightBuffer ? s_lightBuffer->GetGPUVirtualAddress() : 0);
+  list->SetComputeRootDescriptorTable(4, s_iesAtlasSrvGpu);
 
   D3D12_RESOURCE_BARRIER uavBarrier = {};
   uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
@@ -2477,7 +2515,7 @@ static void EnsureWavefrontResolvePipeline() {
   cloudSrvRange.OffsetInDescriptorsFromTableStart =
       D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-  D3D12_ROOT_PARAMETER params[17] = {};
+  D3D12_ROOT_PARAMETER params[18] = {};
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
   params[0].Descriptor.ShaderRegister = 0;
   params[0].Descriptor.RegisterSpace = 0;
@@ -2565,6 +2603,19 @@ static void EnsureWavefrontResolvePipeline() {
   params[16].Descriptor.ShaderRegister = 5003;
   params[16].Descriptor.RegisterSpace = 0;
   params[16].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  // IES Atlas descriptor table (t5002)
+  D3D12_DESCRIPTOR_RANGE iesResolveRange = {};
+  iesResolveRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+  iesResolveRange.NumDescriptors = 1;
+  iesResolveRange.BaseShaderRegister = 5002;
+  iesResolveRange.RegisterSpace = 0;
+  iesResolveRange.OffsetInDescriptorsFromTableStart =
+      D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+  params[17].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[17].DescriptorTable.NumDescriptorRanges = 1;
+  params[17].DescriptorTable.pDescriptorRanges = &iesResolveRange;
+  params[17].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
   D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
   rsDesc.NumParameters = _countof(params);
@@ -2858,6 +2909,7 @@ static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
       16, s_emissiveProxyBuffer
               ? s_emissiveProxyBuffer->GetGPUVirtualAddress()
               : 0);
+  list->SetComputeRootDescriptorTable(17, s_iesAtlasSrvGpu);
 
   const bool dispatchedIndirect =
       useIndirectDispatch &&
@@ -2937,6 +2989,7 @@ static void DispatchWavefrontRestirSeed(ID3D12GraphicsCommandList4 *list,
       16, s_emissiveProxyBuffer
               ? s_emissiveProxyBuffer->GetGPUVirtualAddress()
               : 0);
+  list->SetComputeRootDescriptorTable(17, s_iesAtlasSrvGpu);
 
   const bool dispatchedIndirect =
       useIndirectDispatch &&
@@ -3022,6 +3075,7 @@ static void DispatchWavefrontResolveSecondary(ID3D12GraphicsCommandList4 *list,
       16, s_emissiveProxyBuffer
               ? s_emissiveProxyBuffer->GetGPUVirtualAddress()
               : 0);
+  list->SetComputeRootDescriptorTable(17, s_iesAtlasSrvGpu);
 
   const bool dispatchedIndirect =
       useIndirectDispatch &&
@@ -3337,6 +3391,53 @@ static void EnsureNullCloudDescriptors() {
   D3D12_CPU_DESCRIPTOR_HANDLE cloudBaked = base;
   cloudBaked.ptr += (SIZE_T)DXR_HEAP_CLOUD_BAKED_TEX_OFFSET * descSize;
   s_device->CreateShaderResourceView(nullptr, &bakedSrv, cloudBaked);
+}
+
+static D3D12_CPU_DESCRIPTOR_HANDLE GetDxrHeapCpuHandle(UINT heapOffset) {
+  D3D12_CPU_DESCRIPTOR_HANDLE handle = {};
+  if (!s_srvHeap || !s_device) {
+    return handle;
+  }
+  handle = s_srvHeap->GetCPUDescriptorHandleForHeapStart();
+  handle.ptr +=
+      (UINT64)heapOffset *
+      s_device->GetDescriptorHandleIncrementSize(
+          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+  return handle;
+}
+
+static D3D12_GPU_DESCRIPTOR_HANDLE GetDxrHeapGpuHandle(UINT heapOffset) {
+  D3D12_GPU_DESCRIPTOR_HANDLE handle = {};
+  if (!s_srvHeap || !s_device) {
+    return handle;
+  }
+  handle = s_srvHeap->GetGPUDescriptorHandleForHeapStart();
+  handle.ptr +=
+      (UINT64)heapOffset *
+      s_device->GetDescriptorHandleIncrementSize(
+          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+  return handle;
+}
+
+static void EnsureNullIESAtlasDescriptor() {
+  if (!s_device || !s_srvHeap) {
+    return;
+  }
+
+  D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+  srvDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+  srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+  srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  srvDesc.Texture2DArray.MostDetailedMip = 0;
+  srvDesc.Texture2DArray.MipLevels = 1;
+  srvDesc.Texture2DArray.FirstArraySlice = 0;
+  srvDesc.Texture2DArray.ArraySize = 1;
+  srvDesc.Texture2DArray.PlaneSlice = 0;
+  srvDesc.Texture2DArray.ResourceMinLODClamp = 0.0f;
+
+  s_device->CreateShaderResourceView(
+      nullptr, &srvDesc, GetDxrHeapCpuHandle(DXR_HEAP_IES_SRV_OFFSET));
+  s_iesAtlasSrvGpu = GetDxrHeapGpuHandle(DXR_HEAP_IES_SRV_OFFSET);
 }
 
 static UINT64 ReadbackUint64(ID3D12Resource *resource) {
@@ -3798,6 +3899,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
         gpuStart.ptr + (UINT64)DXR_HEAP_SHADER_COUNTERS_OFFSET * descSize;
   }
   EnsureNullCloudDescriptors();
+  EnsureNullIESAtlasDescriptor();
 
   // Compile shader
   ComPtr<IDxcBlob> shaderBlob;
@@ -3822,8 +3924,8 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   }
 
   // Create global root signature
-  D3D12_ROOT_PARAMETER params[15] =
-      {}; // Increased for Lights, material extras, grass data, and cloud resources
+  D3D12_ROOT_PARAMETER params[16] =
+      {}; // Lights, material extras, grass data, cloud resources, IES atlas.
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
   params[0].Descriptor.ShaderRegister = 0;
   params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -3941,8 +4043,20 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   params[11].DescriptorTable.pDescriptorRanges = &cloudSrvRange;
   params[11].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
+  static D3D12_DESCRIPTOR_RANGE iesSrvRange = {};
+  iesSrvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+  iesSrvRange.NumDescriptors = 1;
+  iesSrvRange.BaseShaderRegister = 5002;
+  iesSrvRange.RegisterSpace = 0;
+  iesSrvRange.OffsetInDescriptorsFromTableStart =
+      D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+  params[15].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[15].DescriptorTable.NumDescriptorRanges = 1;
+  params[15].DescriptorTable.pDescriptorRanges = &iesSrvRange;
+  params[15].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
   D3D12_ROOT_SIGNATURE_DESC rootDesc = {};
-  rootDesc.NumParameters = 15;
+  rootDesc.NumParameters = _countof(params);
   rootDesc.pParameters = params;
   rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
@@ -5833,6 +5947,190 @@ void UpdateLights(const std::vector<Light> &lights, bool resetAccumulation) {
   MarkReGIRDirty();
 }
 
+void UpdateIESAtlas(const float *data, int sliceCount) {
+  if (sliceCount <= 0 || !data) {
+    s_iesAtlasTexture.Reset();
+    s_iesAtlasSliceCount = 0;
+    EnsureNullIESAtlasDescriptor();
+    ResetAccumulation();
+    return;
+  }
+
+  if (!s_device || !s_srvHeap || !s_commandQueue || !s_fence ||
+      !s_fenceValues || !s_frameIndexPtr || !s_fenceEvent) {
+    fprintf(stderr, "DxrRenderer: UpdateIESAtlas precondition failed.\n");
+    return;
+  }
+
+  sliceCount = (std::min)(sliceCount, 32);
+  const UINT w = 256;
+  const UINT h = 256;
+  const UINT rowPitch = w * sizeof(float) * 4;
+  const UINT slicePitch = rowPitch * h;
+
+  D3D12_RESOURCE_DESC texDesc = {};
+  texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+  texDesc.Width = w;
+  texDesc.Height = h;
+  texDesc.DepthOrArraySize = static_cast<UINT16>(sliceCount);
+  texDesc.MipLevels = 1;
+  texDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+  texDesc.SampleDesc = {1, 0};
+  texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+  texDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+  D3D12_HEAP_PROPERTIES defaultHeap = {};
+  defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+  ComPtr<ID3D12Resource> texture;
+  HRESULT hr = s_device->CreateCommittedResource(
+      &defaultHeap, D3D12_HEAP_FLAG_NONE, &texDesc,
+      D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&texture));
+  if (FAILED(hr)) {
+    fprintf(stderr,
+            "DxrRenderer: UpdateIESAtlas failed to create texture: 0x%08x\n",
+            (unsigned)hr);
+    return;
+  }
+
+  UINT64 totalBytes = 0;
+  s_device->GetCopyableFootprints(&texDesc, 0, static_cast<UINT>(sliceCount),
+                                  0, nullptr, nullptr, nullptr, &totalBytes);
+  if (totalBytes == 0) {
+    return;
+  }
+
+  D3D12_HEAP_PROPERTIES uploadHeap = {};
+  uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+  D3D12_RESOURCE_DESC uploadDesc = {};
+  uploadDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+  uploadDesc.Width = totalBytes;
+  uploadDesc.Height = 1;
+  uploadDesc.DepthOrArraySize = 1;
+  uploadDesc.MipLevels = 1;
+  uploadDesc.Format = DXGI_FORMAT_UNKNOWN;
+  uploadDesc.SampleDesc.Count = 1;
+  uploadDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+  ComPtr<ID3D12Resource> upload;
+  hr = s_device->CreateCommittedResource(
+      &uploadHeap, D3D12_HEAP_FLAG_NONE, &uploadDesc,
+      D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload));
+  if (FAILED(hr)) {
+    fprintf(stderr,
+            "DxrRenderer: UpdateIESAtlas failed to create upload buffer: "
+            "0x%08x\n",
+            (unsigned)hr);
+    return;
+  }
+
+  std::vector<D3D12_SUBRESOURCE_DATA> subresources(
+      static_cast<size_t>(sliceCount));
+  const BYTE *src = reinterpret_cast<const BYTE *>(data);
+  for (int slice = 0; slice < sliceCount; ++slice) {
+    D3D12_SUBRESOURCE_DATA &sub = subresources[static_cast<size_t>(slice)];
+    sub.pData = src + static_cast<size_t>(slice) * slicePitch;
+    sub.RowPitch = rowPitch;
+    sub.SlicePitch = slicePitch;
+  }
+
+  ComPtr<ID3D12CommandAllocator> cmdAlloc;
+  hr = s_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                        IID_PPV_ARGS(&cmdAlloc));
+  if (FAILED(hr)) {
+    fprintf(stderr,
+            "DxrRenderer: UpdateIESAtlas failed to create command allocator: "
+            "0x%08x\n",
+            (unsigned)hr);
+    return;
+  }
+
+  ComPtr<ID3D12GraphicsCommandList> cmdList;
+  hr = s_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                   cmdAlloc.Get(), nullptr,
+                                   IID_PPV_ARGS(&cmdList));
+  if (FAILED(hr)) {
+    fprintf(stderr,
+            "DxrRenderer: UpdateIESAtlas failed to create command list: "
+            "0x%08x\n",
+            (unsigned)hr);
+    return;
+  }
+
+  UpdateSubresources(cmdList.Get(), texture.Get(), upload.Get(), 0, 0,
+                     static_cast<UINT>(sliceCount), subresources.data());
+
+  D3D12_RESOURCE_BARRIER barrier = {};
+  barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+  barrier.Transition.pResource = texture.Get();
+  barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+  barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+  barrier.Transition.StateAfter =
+      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+  cmdList->ResourceBarrier(1, &barrier);
+
+  hr = cmdList->Close();
+  if (FAILED(hr)) {
+    fprintf(stderr,
+            "DxrRenderer: UpdateIESAtlas failed to close command list: "
+            "0x%08x\n",
+            (unsigned)hr);
+    return;
+  }
+
+  ID3D12CommandList *lists[] = {cmdList.Get()};
+  s_commandQueue->ExecuteCommandLists(1, lists);
+
+  const UINT frameIndex = *s_frameIndexPtr;
+  const UINT64 fenceValue =
+      (std::max)(s_fenceValues[frameIndex], s_fence->GetCompletedValue() + 1);
+  hr = s_commandQueue->Signal(s_fence, fenceValue);
+  if (FAILED(hr)) {
+    fprintf(stderr,
+            "DxrRenderer: UpdateIESAtlas failed to signal fence: 0x%08x\n",
+            (unsigned)hr);
+    return;
+  }
+  s_fenceValues[frameIndex] = fenceValue + 1;
+
+  if (s_fence->GetCompletedValue() < fenceValue) {
+    hr = s_fence->SetEventOnCompletion(fenceValue, s_fenceEvent);
+    if (FAILED(hr)) {
+      fprintf(stderr,
+              "DxrRenderer: UpdateIESAtlas SetEventOnCompletion failed: "
+              "0x%08x\n",
+              (unsigned)hr);
+      return;
+    }
+    if (WaitForSingleObject(s_fenceEvent, 5000) == WAIT_TIMEOUT) {
+      fprintf(stderr, "DxrRenderer: UpdateIESAtlas wait timed out.\n");
+      return;
+    }
+  }
+
+  s_iesAtlasTexture = texture;
+
+  D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+  srvDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+  srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+  srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  srvDesc.Texture2DArray.MostDetailedMip = 0;
+  srvDesc.Texture2DArray.MipLevels = 1;
+  srvDesc.Texture2DArray.FirstArraySlice = 0;
+  srvDesc.Texture2DArray.ArraySize = static_cast<UINT>(sliceCount);
+  srvDesc.Texture2DArray.PlaneSlice = 0;
+  srvDesc.Texture2DArray.ResourceMinLODClamp = 0.0f;
+
+  s_device->CreateShaderResourceView(s_iesAtlasTexture.Get(), &srvDesc,
+                                      GetDxrHeapCpuHandle(
+                                          DXR_HEAP_IES_SRV_OFFSET));
+  s_iesAtlasSrvGpu = GetDxrHeapGpuHandle(DXR_HEAP_IES_SRV_OFFSET);
+
+  s_iesAtlasSliceCount = sliceCount;
+  ResetAccumulation();
+}
+
 void ResetAccumulation() {
   QueueInteractiveWake("accumulation reset");
   s_accumulation.Reset();
@@ -6342,19 +6640,6 @@ GpuMemoryBreakdown GetGpuMemoryBreakdown() {
 }
 
 // ---- ReGIR helpers ---------------------------------------------------------
-
-static D3D12_GPU_DESCRIPTOR_HANDLE GetDxrHeapGpuHandle(UINT heapOffset) {
-  D3D12_GPU_DESCRIPTOR_HANDLE handle = {};
-  if (!s_srvHeap || !s_device) {
-    return handle;
-  }
-  handle = s_srvHeap->GetGPUDescriptorHandleForHeapStart();
-  handle.ptr +=
-      (UINT64)heapOffset *
-      s_device->GetDescriptorHandleIncrementSize(
-          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-  return handle;
-}
 
 static void ComputeSceneBounds() {
   s_sceneBoundsValid = false;
@@ -7358,6 +7643,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       GrassManager::GetRayTracingInstanceBufferGpuAddress();
   dxrList->SetComputeRootShaderResourceView(13, grassBladesGpu);
   dxrList->SetComputeRoot32BitConstants(14, 1, &s_grassTlasStartIndex, 0);
+  dxrList->SetComputeRootDescriptorTable(15, s_iesAtlasSrvGpu);
 
   // --- Bind Cloud Resources (Slot 10) ---
   if (g_cloudManager.GetBaseTexture() && g_cloudManager.GetDetailTexture()) {
@@ -7563,6 +7849,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     }
     dxrList->SetComputeRootShaderResourceView(13, grassBladesGpu);
     dxrList->SetComputeRoot32BitConstants(14, 1, &s_grassTlasStartIndex, 0);
+    dxrList->SetComputeRootDescriptorTable(15, s_iesAtlasSrvGpu);
   };
 
   // (Legacy) maxSPP early-out used to be here. We now freeze using the

@@ -7,11 +7,13 @@
 
 #include <QApplication>
 #include <QDoubleSpinBox>
+#include <QFileDialog>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QTimer>
@@ -102,16 +104,19 @@ void LightsPanel::createUi()
     m_addSpotButton = new QPushButton(tr("Spot"), this);
     m_addRectButton = new QPushButton(tr("Rect"), this);
     m_addDiskButton = new QPushButton(tr("Disk"), this);
+    m_addIESButton = new QPushButton(tr("IES"), this);
 
     m_addPointButton->setToolTip(tr("Add Point Light"));
     m_addSpotButton->setToolTip(tr("Add Spot Light"));
     m_addRectButton->setToolTip(tr("Add Rect Area Light"));
     m_addDiskButton->setToolTip(tr("Add Disk Area Light"));
+    m_addIESButton->setToolTip(tr("Add IES Light (opens file dialog)"));
 
     buttonGrid->addWidget(m_addPointButton, 0, 0);
     buttonGrid->addWidget(m_addSpotButton, 0, 1);
     buttonGrid->addWidget(m_addRectButton, 0, 2);
     buttonGrid->addWidget(m_addDiskButton, 0, 3);
+    buttonGrid->addWidget(m_addIESButton, 1, 0);
     layout->addLayout(buttonGrid);
 
     m_listGroup = new QGroupBox(tr("Lights"), this);
@@ -177,12 +182,23 @@ void LightsPanel::createUi()
     areaForm->addRow(tr("Height"), m_areaHeight);
     protoLayout->addWidget(m_areaGroup);
 
-    m_iesGroup = new QGroupBox(tr("IES"), m_protoPropsWidget);
+    m_iesGroup = new QGroupBox(tr("IES Profile"), m_protoPropsWidget);
     auto *iesLayout = new QVBoxLayout(m_iesGroup);
     iesLayout->setContentsMargins(8, 16, 8, 8);
     iesLayout->setSpacing(6);
-    m_iesLabel = new QLabel(tr("IES Atlas Index: -1"), m_iesGroup);
+    m_iesLabel = new QLabel(tr("No profile assigned"), m_iesGroup);
+    m_iesLabel->setWordWrap(true);
     iesLayout->addWidget(m_iesLabel);
+
+    auto *iesBtnRow = new QHBoxLayout();
+    iesBtnRow->setSpacing(4);
+    m_loadIESButton = new QPushButton(tr("Load IES..."), m_iesGroup);
+    m_clearIESButton = new QPushButton(tr("Clear"), m_iesGroup);
+    m_loadIESButton->setToolTip(tr("Load an .ies photometric profile file"));
+    m_clearIESButton->setToolTip(tr("Remove the assigned IES profile"));
+    iesBtnRow->addWidget(m_loadIESButton);
+    iesBtnRow->addWidget(m_clearIESButton);
+    iesLayout->addLayout(iesBtnRow);
     protoLayout->addWidget(m_iesGroup);
 
     propertiesLayout->addWidget(m_protoPropsWidget);
@@ -248,6 +264,31 @@ void LightsPanel::createUi()
         Scene::AddLightPrototype(LightType::AreaDisk);
         Scene::SelectLight(static_cast<int>(Scene::GetLightInstances().size()) - 1);
         refreshLights();
+    });
+    connect(m_addIESButton, &QPushButton::clicked, this, [this]() {
+        const size_t protoIdx = Scene::AddLightPrototype(LightType::IES);
+        const int instIdx = static_cast<int>(Scene::GetLightInstances().size()) - 1;
+        Scene::SelectLight(instIdx);
+        refreshLights();
+        // Automatically open file dialog for IES profile
+        const QString path = QFileDialog::getOpenFileName(
+            this, tr("Load IES Profile"), QString(),
+            tr("IES Files (*.ies);;All Files (*)"));
+        if (!path.isEmpty()) {
+            const int profIdx = Scene::LoadIESProfile(path.toStdString());
+            if (profIdx >= 0) {
+                auto protos = Scene::GetLightPrototypes();
+                if (protoIdx < protos.size()) {
+                    LightPrototype proto = protos[protoIdx];
+                    proto.iesProfileIndex = profIdx;
+                    Scene::UpdateLightPrototype(protoIdx, proto);
+                }
+                refreshLights();
+            } else {
+                QMessageBox::warning(this, tr("IES Load Failed"),
+                                     tr("Could not parse IES file:\n%1").arg(path));
+            }
+        }
     });
 
     connect(m_lightTree, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem *current, QTreeWidgetItem *) {
@@ -352,6 +393,39 @@ void LightsPanel::createUi()
     };
     connect(m_areaWidth, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyArea](double) { applyArea(); });
     connect(m_areaHeight, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [applyArea](double) { applyArea(); });
+
+    connect(m_loadIESButton, &QPushButton::clicked, this, [this]() {
+        if (m_syncing) return;
+        const int protoIdx = selectedPrototypeIndex();
+        const auto &protos = Scene::GetLightPrototypes();
+        if (protoIdx < 0 || protoIdx >= static_cast<int>(protos.size())) return;
+        const QString path = QFileDialog::getOpenFileName(
+            this, tr("Load IES Profile"), QString(),
+            tr("IES Files (*.ies);;All Files (*)"));
+        if (path.isEmpty()) return;
+        const int profIdx = Scene::LoadIESProfile(path.toStdString());
+        if (profIdx < 0) {
+            QMessageBox::warning(this, tr("IES Load Failed"),
+                                 tr("Could not parse IES file:\n%1").arg(path));
+            return;
+        }
+        LightPrototype proto = protos[static_cast<size_t>(protoIdx)];
+        proto.iesProfileIndex = profIdx;
+        Scene::UpdateLightPrototype(static_cast<size_t>(protoIdx), proto);
+        refreshLights();
+    });
+
+    connect(m_clearIESButton, &QPushButton::clicked, this, [this]() {
+        if (m_syncing) return;
+        const int protoIdx = selectedPrototypeIndex();
+        const auto &protos = Scene::GetLightPrototypes();
+        if (protoIdx < 0 || protoIdx >= static_cast<int>(protos.size())) return;
+        LightPrototype proto = protos[static_cast<size_t>(protoIdx)];
+        proto.iesProfileIndex = -1;
+        proto.iesAtlasIndex = -1;
+        Scene::UpdateLightPrototype(static_cast<size_t>(protoIdx), proto);
+        refreshLights();
+    });
 
     // Instance transform connections
     auto applyPosition = [this]() {
@@ -488,6 +562,7 @@ uint64_t LightsPanel::lightListSignature() const
         mixFloat(p.outerConeAngle);
         for (float v : p.areaExtents) mixFloat(v);
         mix(static_cast<uint64_t>(static_cast<int64_t>(p.iesAtlasIndex) + 1));
+        mix(static_cast<uint64_t>(static_cast<int64_t>(p.iesProfileIndex) + 1));
     }
     for (const LightInstance &inst : insts) {
         mix(static_cast<uint64_t>(inst.prototypeIndex));
@@ -511,11 +586,14 @@ void LightsPanel::updatePropertyVisibility(uint32_t type)
     const bool isSpot = (type == static_cast<uint32_t>(LightType::Spot));
     const bool isArea = (type == static_cast<uint32_t>(LightType::AreaRect) ||
                          type == static_cast<uint32_t>(LightType::AreaDisk));
-    const bool isIes = (type == static_cast<uint32_t>(LightType::IES));
+    // IES is a profile on point/spot/IES-type lights
+    const bool isIesCompatible = (type == static_cast<uint32_t>(LightType::Omni) ||
+                                   type == static_cast<uint32_t>(LightType::Spot) ||
+                                   type == static_cast<uint32_t>(LightType::IES));
 
     m_spotGroup->setVisible(isSpot);
     m_areaGroup->setVisible(isArea);
-    m_iesGroup->setVisible(isIes);
+    m_iesGroup->setVisible(isIesCompatible);
 }
 
 void LightsPanel::refreshLights()
@@ -530,6 +608,7 @@ void LightsPanel::refreshLights()
     m_addSpotButton->setEnabled(!sceneIoActive);
     m_addRectButton->setEnabled(!sceneIoActive);
     m_addDiskButton->setEnabled(!sceneIoActive);
+    m_addIESButton->setEnabled(!sceneIoActive);
     if (sceneIoActive) {
         m_syncing = false;
         return;
@@ -680,7 +759,21 @@ void LightsPanel::refreshLights()
         m_areaWidth->setValue(proto.areaExtents[0]);
         m_areaHeight->setValue(proto.areaExtents[1]);
 
-        m_iesLabel->setText(tr("IES Atlas Index: %1").arg(proto.iesAtlasIndex));
+        // Update IES profile info
+        if (proto.iesProfileIndex >= 0) {
+            const auto &iesProfiles = Scene::GetIESProfiles();
+            if (proto.iesProfileIndex < static_cast<int>(iesProfiles.size())) {
+                const auto &prof = iesProfiles[proto.iesProfileIndex];
+                m_iesLabel->setText(tr("Profile: %1\nSlice: %2 | Status: %3")
+                    .arg(QString::fromStdString(prof.displayName))
+                    .arg(prof.atlasSlice)
+                    .arg(prof.gpuReady ? tr("Ready") : tr("Loading...")));
+            } else {
+                m_iesLabel->setText(tr("Profile index %1 not found").arg(proto.iesProfileIndex));
+            }
+        } else {
+            m_iesLabel->setText(tr("No profile assigned"));
+        }
 
         updatePropertyVisibility(proto.type);
         m_lastInspectorProtoIndex = curProtoIdx;

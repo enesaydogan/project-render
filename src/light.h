@@ -43,6 +43,7 @@ struct LightPrototype {
   float outerConeAngle = 0.7071068f;  // cos(45°)
   float areaExtents[2] = {1.0f, 1.0f};
   int iesAtlasIndex = -1;
+  int iesProfileIndex = -1;  // index into Scene::GetIESProfiles()
 };
 
 // Editor-side instance: per-light transform data.

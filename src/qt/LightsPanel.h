@@ -51,6 +51,7 @@ private:
     QPushButton *m_addSpotButton = nullptr;
     QPushButton *m_addRectButton = nullptr;
     QPushButton *m_addDiskButton = nullptr;
+    QPushButton *m_addIESButton = nullptr;
 
     // Prototype property widgets
     QLabel *m_typeLabel = nullptr;
@@ -73,6 +74,8 @@ private:
 
     QGroupBox *m_iesGroup = nullptr;
     QLabel *m_iesLabel = nullptr;
+    QPushButton *m_loadIESButton = nullptr;
+    QPushButton *m_clearIESButton = nullptr;
 
     // Instance transform widgets
     QWidget *m_instancePropsWidget = nullptr;
