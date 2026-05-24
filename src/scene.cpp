@@ -217,9 +217,19 @@ struct ShiftCloneDragState {
 
 static ShiftCloneDragState s_shiftCloneDrag;
 
+struct ShiftLightCloneDragState {
+  bool active = false;
+  bool sawLeftMouseDown = false;
+  int gizmoId = -1;
+  std::vector<size_t> cloneIndices;
+};
+
+static ShiftLightCloneDragState s_shiftLightCloneDrag;
+
 static void EnsureGpuBuffersForMeshes(std::vector<Asset::GpuMesh> &meshes);
 static void ReindexScatterNodeReferencesAfterRemoval(size_t removedNodeIndex);
 bool Inverse4x4(const float *m, float *out);
+void MatMul(const float *a, const float *b, float *out);
 
 void SetGizmoOperation(GizmoOperation operation) {
   switch (operation) {
@@ -1532,6 +1542,9 @@ static void SelectOnlyNodes(const std::vector<size_t> &indices) {
     }
   }
   s_selectedLightIdx = -1;
+  for (LightInstance &inst : s_lightInstances) {
+    inst.selected = false;
+  }
   NotifySceneChanged();
 }
 
@@ -1541,6 +1554,9 @@ static void ToggleNodeSelection(size_t index) {
   }
   s_nodes[index].selected = !s_nodes[index].selected;
   s_selectedLightIdx = -1;
+  for (LightInstance &inst : s_lightInstances) {
+    inst.selected = false;
+  }
   NotifySceneChanged();
 }
 
@@ -5032,15 +5048,79 @@ bool EnsureIESAtlasReady() {
 
 int GetSelectedLightIndex() { return s_selectedLightIdx; }
 
+std::vector<size_t> GetSelectedLightIndices() {
+  std::vector<size_t> selected;
+  for (size_t i = 0; i < s_lightInstances.size(); ++i) {
+    if (s_lightInstances[i].selected) {
+      selected.push_back(i);
+    }
+  }
+  if (selected.empty() && s_selectedLightIdx >= 0 &&
+      s_selectedLightIdx < static_cast<int>(s_lightInstances.size())) {
+    selected.push_back(static_cast<size_t>(s_selectedLightIdx));
+  }
+  return selected;
+}
+
+static void ClearNodeSelectionForLightSelection() {
+  for (auto &n : s_nodes) {
+    n.selected = false;
+  }
+}
+
 void SelectLight(int instanceIndex) {
+  for (LightInstance &inst : s_lightInstances) {
+    inst.selected = false;
+  }
   if (instanceIndex < 0 || instanceIndex >= (int)s_lightInstances.size()) {
     s_selectedLightIdx = -1;
     NotifySceneChanged();
     return;
   }
   s_selectedLightIdx = instanceIndex;
-  for (auto &n : s_nodes)
-    n.selected = false;
+  s_lightInstances[static_cast<size_t>(instanceIndex)].selected = true;
+  ClearNodeSelectionForLightSelection();
+  NotifySceneChanged();
+}
+
+void SelectLights(const std::vector<size_t> &instanceIndices) {
+  for (LightInstance &inst : s_lightInstances) {
+    inst.selected = false;
+  }
+
+  s_selectedLightIdx = -1;
+  for (size_t index : instanceIndices) {
+    if (index >= s_lightInstances.size()) {
+      continue;
+    }
+    s_lightInstances[index].selected = true;
+    s_selectedLightIdx = static_cast<int>(index);
+  }
+
+  if (s_selectedLightIdx >= 0) {
+    ClearNodeSelectionForLightSelection();
+  }
+  NotifySceneChanged();
+}
+
+void ToggleLightSelection(size_t instanceIndex) {
+  if (instanceIndex >= s_lightInstances.size()) {
+    return;
+  }
+
+  s_lightInstances[instanceIndex].selected =
+      !s_lightInstances[instanceIndex].selected;
+  if (s_lightInstances[instanceIndex].selected) {
+    s_selectedLightIdx = static_cast<int>(instanceIndex);
+    ClearNodeSelectionForLightSelection();
+  } else if (s_selectedLightIdx == static_cast<int>(instanceIndex)) {
+    s_selectedLightIdx = -1;
+    for (size_t i = 0; i < s_lightInstances.size(); ++i) {
+      if (s_lightInstances[i].selected) {
+        s_selectedLightIdx = static_cast<int>(i);
+      }
+    }
+  }
   NotifySceneChanged();
 }
 
@@ -6097,6 +6177,102 @@ int PickLightGizmoAt(float screenX, float screenY, float screenWidth,
   return bestIndex;
 }
 
+static void BuildLightTransformMatrix(const LightInstance &inst,
+                                      float matrix[16]) {
+  float right[3], up[3], fwd[3];
+  BuildLightBasis(inst, right, up, fwd);
+  matrix[0] = right[0];
+  matrix[1] = right[1];
+  matrix[2] = right[2];
+  matrix[3] = 0.0f;
+  matrix[4] = up[0];
+  matrix[5] = up[1];
+  matrix[6] = up[2];
+  matrix[7] = 0.0f;
+  matrix[8] = fwd[0];
+  matrix[9] = fwd[1];
+  matrix[10] = fwd[2];
+  matrix[11] = 0.0f;
+  matrix[12] = inst.position[0];
+  matrix[13] = inst.position[1];
+  matrix[14] = inst.position[2];
+  matrix[15] = 1.0f;
+}
+
+static void ApplyLightTransformMatrix(size_t instanceIndex,
+                                      const float matrix[16]) {
+  if (instanceIndex >= s_lightInstances.size()) {
+    return;
+  }
+  LightInstance &inst = s_lightInstances[instanceIndex];
+  inst.position[0] = matrix[12];
+  inst.position[1] = matrix[13];
+  inst.position[2] = matrix[14];
+
+  float nfwd[3] = {matrix[8], matrix[9], matrix[10]};
+  const float nlen =
+      sqrtf(nfwd[0] * nfwd[0] + nfwd[1] * nfwd[1] + nfwd[2] * nfwd[2]);
+  if (nlen > 0.001f) {
+    inst.direction[0] = nfwd[0] / nlen;
+    inst.direction[1] = nfwd[1] / nlen;
+    inst.direction[2] = nfwd[2] / nlen;
+  }
+}
+
+static bool ComputeLightSelectionPivot(const std::vector<size_t> &indices,
+                                       size_t activeIndex,
+                                       float outPivot[16]) {
+  if (indices.empty() || activeIndex >= s_lightInstances.size()) {
+    return false;
+  }
+
+  LightInstance pivotInst = s_lightInstances[activeIndex];
+  pivotInst.position[0] = 0.0f;
+  pivotInst.position[1] = 0.0f;
+  pivotInst.position[2] = 0.0f;
+
+  int count = 0;
+  for (size_t index : indices) {
+    if (index >= s_lightInstances.size()) {
+      continue;
+    }
+    pivotInst.position[0] += s_lightInstances[index].position[0];
+    pivotInst.position[1] += s_lightInstances[index].position[1];
+    pivotInst.position[2] += s_lightInstances[index].position[2];
+    ++count;
+  }
+  if (count == 0) {
+    return false;
+  }
+
+  const float invCount = 1.0f / static_cast<float>(count);
+  pivotInst.position[0] *= invCount;
+  pivotInst.position[1] *= invCount;
+  pivotInst.position[2] *= invCount;
+  BuildLightTransformMatrix(pivotInst, outPivot);
+  return true;
+}
+
+static std::vector<size_t>
+CloneLightInstancesAsInstances(const std::vector<size_t> &indices) {
+  std::vector<size_t> clones;
+  clones.reserve(indices.size());
+  for (size_t index : indices) {
+    if (index >= s_lightInstances.size()) {
+      continue;
+    }
+    LightInstance clone = s_lightInstances[index];
+    clone.selected = true;
+    clones.push_back(s_lightInstances.size());
+    s_lightInstances.push_back(clone);
+  }
+  if (!clones.empty()) {
+    SelectLights(clones);
+    UpdateLights();
+  }
+  return clones;
+}
+
 void DrawLightGizmo() {
   float view[16], proj[16];
   BuildViewMatrix(view);
@@ -6119,110 +6295,148 @@ void DrawLightGizmo() {
         continue;
       }
       const LightPrototype &proto = s_lightPrototypes[inst.prototypeIndex];
-      const bool isSelected = (s_selectedLightIdx == static_cast<int>(i));
+      const bool isSelected = inst.selected ||
+                              (s_selectedLightIdx == static_cast<int>(i));
       DrawLightModel(drawList, i, proto, inst, view, proj, windowX, windowY,
                      windowWidth, windowHeight, isSelected,
                      manyLights && !isSelected);
     }
   }
 
-  // 2. Do ImGuizmo manipulate for the selected light
-  if (s_selectedLightIdx < 0 || s_selectedLightIdx >= (int)s_lightInstances.size()) {
+  std::vector<size_t> selectedIndices = GetSelectedLightIndices();
+  if (s_shiftLightCloneDrag.active &&
+      !s_shiftLightCloneDrag.cloneIndices.empty()) {
+    selectedIndices = s_shiftLightCloneDrag.cloneIndices;
+  }
+  if (selectedIndices.empty()) {
     ImGui::End();
     return;
   }
 
-  LightInstance &inst = s_lightInstances[s_selectedLightIdx];
-  if (inst.prototypeIndex >= s_lightPrototypes.size()) {
+  size_t activeIndex = selectedIndices.front();
+  if (s_selectedLightIdx >= 0 &&
+      s_selectedLightIdx < static_cast<int>(s_lightInstances.size()) &&
+      s_lightInstances[static_cast<size_t>(s_selectedLightIdx)].selected) {
+    activeIndex = static_cast<size_t>(s_selectedLightIdx);
+  }
+  if (activeIndex >= s_lightInstances.size() ||
+      s_lightInstances[activeIndex].prototypeIndex >= s_lightPrototypes.size()) {
     ImGui::End();
     return;
   }
-  LightPrototype &proto = s_lightPrototypes[inst.prototypeIndex];
 
   ImGuizmo::AllowAxisFlip(false);
   ImGuizmo::GetStyle().TranslationLineThickness = 6.0f;
+  ImGuizmo::GetStyle().RotationLineThickness = 6.0f;
 
-  // Build a matrix containing both position and direction
-  float up_ref[3] = {0, 1, 0};
-  float fwd[3] = {inst.direction[0], inst.direction[1], inst.direction[2]};
-  if (fabsf(fwd[1]) > 0.99f) {
-    up_ref[0] = 1;
-    up_ref[1] = 0;
-  }
-  float right[3] = {up_ref[1] * fwd[2] - up_ref[2] * fwd[1],
-                    up_ref[2] * fwd[0] - up_ref[0] * fwd[2],
-                    up_ref[0] * fwd[1] - up_ref[1] * fwd[0]};
-  float rlen =
-      sqrtf(right[0] * right[0] + right[1] * right[1] + right[2] * right[2]);
-  if (rlen > 0.001f) {
-    right[0] /= rlen;
-    right[1] /= rlen;
-    right[2] /= rlen;
-  } else {
-    right[0] = 1;
-    right[1] = 0;
-    right[2] = 0;
-  }
-  float up[3] = {fwd[1] * right[2] - fwd[2] * right[1],
-                 fwd[2] * right[0] - fwd[0] * right[2],
-                 fwd[0] * right[1] - fwd[1] * right[0]};
-
-  float matrix[16] = {right[0],      right[1],      right[2],      0,
-                      up[0],         up[1],         up[2],         0,
-                      fwd[0],        fwd[1],        fwd[2],        0,
-                      inst.position[0], inst.position[1], inst.position[2], 1};
-
-  // Keyboard toggles for Translate / Rotate / Scale
   if (ImGui::IsKeyPressed(ImGuiKey_G))
     g_currentGizmoOp = ImGuizmo::TRANSLATE;
   if (ImGui::IsKeyPressed(ImGuiKey_R))
     g_currentGizmoOp = ImGuizmo::ROTATE;
   if (ImGui::IsKeyPressed(ImGuiKey_T))
     g_currentGizmoOp = ImGuizmo::SCALE;
+  if (ImGui::IsKeyPressed(ImGuiKey_L)) {
+    g_currentGizmoMode = (g_currentGizmoMode == ImGuizmo::WORLD)
+                             ? ImGuizmo::LOCAL
+                             : ImGuizmo::WORLD;
+  }
 
-  // Only allow uniform scale mode for lights if T is pressed
   ImGuizmo::OPERATION op = (g_currentGizmoOp == ImGuizmo::SCALE)
                                ? ImGuizmo::SCALE
                                : GetActiveGizmoOperation();
+  ImGuizmo::MODE mode = (op == ImGuizmo::SCALE) ? ImGuizmo::LOCAL
+                                                : g_currentGizmoMode;
 
-  ImGuizmo::SetID(10000 + s_selectedLightIdx);
+  const int gizmoId =
+      s_shiftLightCloneDrag.active && s_shiftLightCloneDrag.gizmoId >= 0
+          ? s_shiftLightCloneDrag.gizmoId
+          : static_cast<int>(activeIndex);
+  ImGuizmo::SetID(10000 + gizmoId);
   ImGuizmo::SetOrthographic(false);
   ImGuizmo::SetDrawlist(drawList);
   ImGuizmo::SetRect(windowX, windowY, windowWidth, windowHeight);
 
-  if (ImGuizmo::Manipulate(view, proj, op, ImGuizmo::WORLD, matrix)) {
-    // Read back position
-    inst.position[0] = matrix[12];
-    inst.position[1] = matrix[13];
-    inst.position[2] = matrix[14];
+  float pivotMatrix[16];
+  if (!ComputeLightSelectionPivot(selectedIndices, activeIndex, pivotMatrix)) {
+    ImGui::End();
+    return;
+  }
 
-    // Read back direction (Z axis of matrix)
-    float nfwd[3] = {matrix[8], matrix[9], matrix[10]};
-    float nlen =
-        sqrtf(nfwd[0] * nfwd[0] + nfwd[1] * nfwd[1] + nfwd[2] * nfwd[2]);
-    if (nlen > 0.001f) {
-      inst.direction[0] = nfwd[0] / nlen;
-      inst.direction[1] = nfwd[1] / nlen;
-      inst.direction[2] = nfwd[2] / nlen;
+  float originalPivotMatrix[16];
+  CopyMatrix4x4(pivotMatrix, originalPivotMatrix);
+  std::vector<std::array<float, 16>> originalLightMatrices;
+  originalLightMatrices.reserve(selectedIndices.size());
+  for (size_t index : selectedIndices) {
+    std::array<float, 16> matrix{};
+    if (index < s_lightInstances.size()) {
+      BuildLightTransformMatrix(s_lightInstances[index], matrix.data());
     }
+    originalLightMatrices.push_back(matrix);
+  }
 
-    // Read back scale (if SCALE Op)
-    if (op == ImGuizmo::SCALE) {
-      // Approximate scale change (just based on X axis magnitude of matrix)
-      float currentScaleX =
-          sqrtf(matrix[0] * matrix[0] + matrix[1] * matrix[1] +
-                matrix[2] * matrix[2]);
-      if (currentScaleX > 0.001f) {
-        proto.areaExtents[0] *= currentScaleX;
-        proto.areaExtents[1] *= currentScaleX;
-        proto.radius *= currentScaleX;
+  if (ImGuizmo::Manipulate(view, proj, op, mode, pivotMatrix)) {
+    if (IsShiftDown() && !s_shiftLightCloneDrag.active) {
+      const std::vector<size_t> clones =
+          CloneLightInstancesAsInstances(selectedIndices);
+      if (!clones.empty()) {
+        s_shiftLightCloneDrag.active = true;
+        s_shiftLightCloneDrag.sawLeftMouseDown = IsLeftMouseDown();
+        s_shiftLightCloneDrag.gizmoId = static_cast<int>(activeIndex);
+        s_shiftLightCloneDrag.cloneIndices = clones;
+        selectedIndices = clones;
+        activeIndex = selectedIndices.front();
       }
     }
 
-    UpdateLightInstance(s_selectedLightIdx, inst);
-    if (op == ImGuizmo::SCALE) {
-      UpdateLightPrototype(inst.prototypeIndex, proto);
+    float invOriginalPivot[16];
+    if (Inverse4x4(originalPivotMatrix, invOriginalPivot)) {
+      float delta[16];
+      MatMul(pivotMatrix, invOriginalPivot, delta);
+
+      for (size_t i = 0; i < selectedIndices.size() &&
+                         i < originalLightMatrices.size();
+           ++i) {
+        float newMatrix[16];
+        MatMul(delta, originalLightMatrices[i].data(), newMatrix);
+        ApplyLightTransformMatrix(selectedIndices[i], newMatrix);
+      }
+
+      if (op == ImGuizmo::SCALE) {
+        const float currentScaleX =
+            sqrtf(delta[0] * delta[0] + delta[1] * delta[1] +
+                  delta[2] * delta[2]);
+        if (currentScaleX > 0.001f) {
+          std::vector<size_t> scaledPrototypes;
+          for (size_t index : selectedIndices) {
+            if (index >= s_lightInstances.size()) {
+              continue;
+            }
+            const size_t protoIndex = s_lightInstances[index].prototypeIndex;
+            if (protoIndex >= s_lightPrototypes.size() ||
+                std::find(scaledPrototypes.begin(), scaledPrototypes.end(),
+                          protoIndex) != scaledPrototypes.end()) {
+              continue;
+            }
+            LightPrototype &proto = s_lightPrototypes[protoIndex];
+            proto.areaExtents[0] *= currentScaleX;
+            proto.areaExtents[1] *= currentScaleX;
+            proto.radius *= currentScaleX;
+            scaledPrototypes.push_back(protoIndex);
+          }
+        }
+      }
+
+      UpdateLights();
+      NotifySceneChanged();
     }
+  }
+
+  if (s_shiftLightCloneDrag.active && IsLeftMouseDown()) {
+    s_shiftLightCloneDrag.sawLeftMouseDown = true;
+  }
+  if (s_shiftLightCloneDrag.active && s_shiftLightCloneDrag.sawLeftMouseDown &&
+      !IsLeftMouseDown()) {
+    s_shiftLightCloneDrag = ShiftLightCloneDragState{};
   }
 
   ImGui::End();
@@ -6898,7 +7112,11 @@ int UpdateSelection(float screenWidth, float screenHeight) {
   const int pickedLight =
       PickLightGizmoAt(mposAbs.x, mposAbs.y, screenWidth, screenHeight);
   if (pickedLight >= 0) {
-    SelectLight(pickedLight);
+    if (IsCtrlDown()) {
+      ToggleLightSelection(static_cast<size_t>(pickedLight));
+    } else {
+      SelectLight(pickedLight);
+    }
     fprintf(stderr, "Scene: Picked Light %d\n", pickedLight);
     return -1;
   }

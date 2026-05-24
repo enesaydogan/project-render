@@ -5,6 +5,7 @@
 #include "../editor_ui.h"
 #include "../scene.h"
 
+#include <QAbstractItemView>
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
@@ -29,6 +30,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cmath>
+#include <vector>
 
 namespace {
 
@@ -133,6 +135,7 @@ void LightsPanel::createUi()
                                   tr("Count / Position"), tr("Profile")});
     m_lightTree->setRootIsDecorated(true);
     m_lightTree->setAlternatingRowColors(true);
+    m_lightTree->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_lightTree->setMinimumHeight(100);
     listLayout->addWidget(m_lightTree);
 
@@ -345,11 +348,68 @@ void LightsPanel::createUi()
             return;
         }
         if (current->type() == kInstanceItemType) {
-            const int instIdx = current->data(0, Qt::UserRole).toInt();
-            Scene::SelectLight(instIdx);
-        } else {
+            std::vector<size_t> selectedIndices;
+            const int currentInstIdx = current->data(0, Qt::UserRole).toInt();
+            const auto &insts = Scene::GetLightInstances();
+            for (QTreeWidgetItem *item : m_lightTree->selectedItems()) {
+                if (!item || item->type() != kInstanceItemType) {
+                    continue;
+                }
+                const int instIdx = item->data(0, Qt::UserRole).toInt();
+                if (instIdx >= 0 && instIdx < static_cast<int>(insts.size())) {
+                    selectedIndices.push_back(static_cast<size_t>(instIdx));
+                }
+            }
+            if (currentInstIdx >= 0 &&
+                currentInstIdx < static_cast<int>(insts.size())) {
+                const size_t currentIndex = static_cast<size_t>(currentInstIdx);
+                selectedIndices.erase(
+                    std::remove(selectedIndices.begin(), selectedIndices.end(),
+                                currentIndex),
+                    selectedIndices.end());
+                selectedIndices.push_back(currentIndex);
+            }
+            Scene::SelectLights(selectedIndices);
+        } else if (m_lightTree->selectedItems().empty()) {
             Scene::SelectLight(-1);
         }
+        refreshLights();
+    });
+
+    connect(m_lightTree, &QTreeWidget::itemSelectionChanged, this, [this]() {
+        if (m_syncing) return;
+        std::vector<size_t> selectedIndices;
+        const auto &insts = Scene::GetLightInstances();
+        for (QTreeWidgetItem *item : m_lightTree->selectedItems()) {
+            if (!item || item->type() != kInstanceItemType) {
+                continue;
+            }
+            const int instIdx = item->data(0, Qt::UserRole).toInt();
+            if (instIdx >= 0 && instIdx < static_cast<int>(insts.size())) {
+                selectedIndices.push_back(static_cast<size_t>(instIdx));
+            }
+        }
+        QTreeWidgetItem *current = m_lightTree->currentItem();
+        if (current && current->type() == kInstanceItemType) {
+            const int instIdx = current->data(0, Qt::UserRole).toInt();
+            if (instIdx >= 0 && instIdx < static_cast<int>(insts.size())) {
+                const size_t currentIndex = static_cast<size_t>(instIdx);
+                selectedIndices.erase(
+                    std::remove(selectedIndices.begin(), selectedIndices.end(),
+                                currentIndex),
+                    selectedIndices.end());
+                selectedIndices.push_back(currentIndex);
+            }
+        }
+        if (selectedIndices.empty()) {
+            if (!m_lightTree->currentItem() ||
+                m_lightTree->currentItem()->type() == kInstanceItemType) {
+                Scene::SelectLight(-1);
+                refreshLights();
+            }
+            return;
+        }
+        Scene::SelectLights(selectedIndices);
         refreshLights();
     });
 
@@ -717,6 +777,7 @@ uint64_t LightsPanel::lightListSignature() const
         for (float v : inst.position) mixFloat(v);
         for (float v : inst.direction) mixFloat(v);
         mix(inst.enabled ? 1ull : 0ull);
+        mix(inst.selected ? 1ull : 0ull);
     }
 
     return hash;
@@ -766,6 +827,7 @@ void LightsPanel::refreshLights()
     const auto &protos = Scene::GetLightPrototypes();
     const auto &insts = Scene::GetLightInstances();
     const int selectedInst = Scene::GetSelectedLightIndex();
+    const std::vector<size_t> selectedInsts = Scene::GetSelectedLightIndices();
 
     const uint64_t signature = lightListSignature();
     if (signature != m_lastLightListSignature) {
@@ -850,21 +912,51 @@ void LightsPanel::refreshLights()
         m_lastLightListSignature = signature;
     }
 
-    // Select the appropriate tree item
+    // Select the appropriate tree items
     {
         const QSignalBlocker treeBlocker(m_lightTree);
+        m_lightTree->clearSelection();
+        QTreeWidgetItem *activeItem = nullptr;
+        QTreeWidgetItem *firstSelectedItem = nullptr;
         if (selectedInst >= 0 && selectedInst < static_cast<int>(insts.size())) {
-            // Find and select the instance item
             for (int topIdx = 0; topIdx < m_lightTree->topLevelItemCount(); ++topIdx) {
                 QTreeWidgetItem *protoItem = m_lightTree->topLevelItem(topIdx);
                 for (int childIdx = 0; childIdx < protoItem->childCount(); ++childIdx) {
                     QTreeWidgetItem *instItem = protoItem->child(childIdx);
-                    if (instItem->data(0, Qt::UserRole).toInt() == selectedInst) {
-                        m_lightTree->setCurrentItem(instItem);
-                        break;
+                    const int instIdx = instItem->data(0, Qt::UserRole).toInt();
+                    const bool isSelected =
+                        std::find(selectedInsts.begin(), selectedInsts.end(),
+                                  static_cast<size_t>(instIdx)) != selectedInsts.end();
+                    instItem->setSelected(isSelected);
+                    if (isSelected && !firstSelectedItem) {
+                        firstSelectedItem = instItem;
+                    }
+                    if (instIdx == selectedInst) {
+                        activeItem = instItem;
                     }
                 }
             }
+        } else {
+            for (int topIdx = 0; topIdx < m_lightTree->topLevelItemCount(); ++topIdx) {
+                QTreeWidgetItem *protoItem = m_lightTree->topLevelItem(topIdx);
+                for (int childIdx = 0; childIdx < protoItem->childCount(); ++childIdx) {
+                    QTreeWidgetItem *instItem = protoItem->child(childIdx);
+                    const int instIdx = instItem->data(0, Qt::UserRole).toInt();
+                    const bool isSelected =
+                        instIdx >= 0 &&
+                        std::find(selectedInsts.begin(), selectedInsts.end(),
+                                  static_cast<size_t>(instIdx)) != selectedInsts.end();
+                    instItem->setSelected(isSelected);
+                    if (isSelected && !firstSelectedItem) {
+                        firstSelectedItem = instItem;
+                    }
+                }
+            }
+        }
+        if (activeItem) {
+            m_lightTree->setCurrentItem(activeItem);
+        } else if (firstSelectedItem) {
+            m_lightTree->setCurrentItem(firstSelectedItem);
         }
     }
 

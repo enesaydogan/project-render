@@ -268,6 +268,7 @@ uint64_t GetScatterRuntimeRevision();
 const std::vector<LightPrototype> &GetLightPrototypes();
 const std::vector<LightInstance> &GetLightInstances();
 const std::vector<Light> &GetLights();
+std::vector<size_t> GetSelectedLightIndices();
 
 // Prototype operations
 size_t AddLightPrototype(LightType type);
@@ -287,6 +288,8 @@ void RemoveLightInstance(size_t index);
 // Selection (instance-based)
 int GetSelectedLightIndex();
 void SelectLight(int instanceIndex);
+void SelectLights(const std::vector<size_t> &instanceIndices);
+void ToggleLightSelection(size_t instanceIndex);
 
 // Viewport light placement.
 void BeginCreateLightAtClick(LightType type);
