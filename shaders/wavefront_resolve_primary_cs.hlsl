@@ -1924,10 +1924,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         float3 historySum =
             invalidHistory ? float3(0.0, 0.0, 0.0) : history.rgb;
         float3 nextSum = historySum + color;
+        float3 accumulatedColor = nextSum / max(nextCount, 1.0);
         g_accumulation[pixel] = float4(nextSum, nextCount);
-        g_output[pixel] = (dlssRayReconstruction > 0.5)
-                              ? float4(color, 1.0)
-                              : float4(nextSum / max(nextCount, 1.0), 1.0);
+        g_output[pixel] = float4(accumulatedColor, 1.0);
     }
     g_depth[pixel] = depth;
     g_linearDepth[pixel] = linearDepth;
