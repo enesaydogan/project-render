@@ -95,6 +95,7 @@ void RequestGrassRuntimeRefreshForSceneLoad() {
 namespace {
 constexpr float kTwoPi = 6.283185307179586f;
 constexpr DWORD kFinalFrameIdleWaitMs = 16;
+constexpr DWORD kIdleUiFrameIntervalMs = 33;
 
 static void WaitForSoftIdleMessage(DWORD timeoutMs = kFinalFrameIdleWaitMs) {
   MsgWaitForMultipleObjectsEx(0, nullptr, timeoutMs, QS_ALLINPUT,
@@ -3764,6 +3765,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
 
   // Setup timing for camera movement
   static auto prevTime = std::chrono::high_resolution_clock::now();
+  static auto lastIdleUiPresentTime =
+      prevTime - std::chrono::milliseconds(kIdleUiFrameIntervalMs);
 
   // Enter main loop (simple, no extra SEH wrappers)
   while (msg.message != WM_QUIT) {
@@ -4134,10 +4137,23 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
       DxrRenderer::CanIdleWithoutRendering();
   #endif
     if (canIdleDxr) {
-      prevTime = std::chrono::high_resolution_clock::now();
-      WaitForSoftIdleMessage();
-      prevTime = std::chrono::high_resolution_clock::now();
-      continue;
+      const auto idleNow = std::chrono::high_resolution_clock::now();
+      const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 idleNow - lastIdleUiPresentTime)
+                                 .count();
+      if (elapsedMs < kIdleUiFrameIntervalMs) {
+        const DWORD waitMs = (std::max)(
+            1L, static_cast<LONG>(kIdleUiFrameIntervalMs - elapsedMs));
+        prevTime = std::chrono::high_resolution_clock::now();
+        WaitForSoftIdleMessage(waitMs);
+        prevTime = std::chrono::high_resolution_clock::now();
+        continue;
+      }
+
+      // DXR has converged, but ImGui still needs periodic swapchain presents.
+      // RenderFrame's end-condition path skips ray dispatch and sample
+      // increments, so this refresh redraws the frozen image plus UI only.
+      lastIdleUiPresentTime = idleNow;
     }
 
     // fprintf(stderr, "MainLoop: PopulateCommandList start\n");
