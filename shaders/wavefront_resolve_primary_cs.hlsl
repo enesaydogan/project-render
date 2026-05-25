@@ -1542,7 +1542,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 finalSample.radiance = float3(0.0, 0.0, 0.0);
                 finalSample.packedLightIndex =
                     WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL, 0u);
-                if (diReservoir.lightIndex == 0xFFFFFFFFu) {
+                if (diReservoir.lightIndex == 0xFFFFFFFFu &&
+                    WavefrontDirectionalLightActive()) {
                     finalSample = WavefrontSampleDirectionalLight(1.0);
 #ifdef REGIR_ENABLED
                 } else if (WavefrontIsEmissiveProxyLightIndex(
@@ -1763,38 +1764,40 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                                   selectedDirectLightSample.direction) *
                               selectedDirectLightSample.radiance *
                               selectedDirectLightWeight;
-        WavefrontLightSample explicitSunSample =
-            WavefrontSampleDirectionalLight(1.0);
-        if (cloudRenderingEnabled > 0.5f) {
-            explicitSunSample.radiance *= CloudSunTransmittance(
-                WavefrontBuildShadowOrigin(hitPos, normal,
-                                           explicitSunSample.direction,
-                                           kWavefrontRayBias),
-                explicitSunSample.direction);
-        }
-        float3 sunShadowWeight = state.throughput *
-                                 ComputeWavefrontDirectLightingWeight(
-                                     record, normal, hitPos,
-                                     explicitSunSample.direction) *
-                                 explicitSunSample.radiance;
-        if (any(sunShadowWeight > 1.0e-4)) {
-            uint shadowIndex = 0u;
-            InterlockedAdd(g_wavefrontQueueCounters[kWavefrontShadowQueueCounter],
-                           1u, shadowIndex);
-            if (shadowIndex < shadowQueueCapacity) {
-                EmitWavefrontShadowTask(
-                    shadowIndex,
+        if (WavefrontDirectionalLightActive()) {
+            WavefrontLightSample explicitSunSample =
+                WavefrontSampleDirectionalLight(1.0);
+            if (cloudRenderingEnabled > 0.5f) {
+                explicitSunSample.radiance *= CloudSunTransmittance(
                     WavefrontBuildShadowOrigin(hitPos, normal,
                                                explicitSunSample.direction,
                                                kWavefrontRayBias),
-                    explicitSunSample.direction,
-                    explicitSunSample.maxDistance,
-                    explicitSunSample.packedLightIndex,
-                    sunShadowWeight,
-                    record.pixelIndex);
-                InterlockedAdd(g_wavefrontStats[20], 1u, previousValue);
-            } else {
-                InterlockedAdd(g_wavefrontStats[22], 1u, previousValue);
+                    explicitSunSample.direction);
+            }
+            float3 sunShadowWeight = state.throughput *
+                                     ComputeWavefrontDirectLightingWeight(
+                                         record, normal, hitPos,
+                                         explicitSunSample.direction) *
+                                     explicitSunSample.radiance;
+            if (any(sunShadowWeight > 1.0e-4)) {
+                uint shadowIndex = 0u;
+                InterlockedAdd(g_wavefrontQueueCounters[kWavefrontShadowQueueCounter],
+                               1u, shadowIndex);
+                if (shadowIndex < shadowQueueCapacity) {
+                    EmitWavefrontShadowTask(
+                        shadowIndex,
+                        WavefrontBuildShadowOrigin(hitPos, normal,
+                                                   explicitSunSample.direction,
+                                                   kWavefrontRayBias),
+                        explicitSunSample.direction,
+                        explicitSunSample.maxDistance,
+                        explicitSunSample.packedLightIndex,
+                        sunShadowWeight,
+                        record.pixelIndex);
+                    InterlockedAdd(g_wavefrontStats[20], 1u, previousValue);
+                } else {
+                    InterlockedAdd(g_wavefrontStats[22], 1u, previousValue);
+                }
             }
         }
         if (WavefrontGetLightSampleType(selectedDirectLightSample.packedLightIndex) !=

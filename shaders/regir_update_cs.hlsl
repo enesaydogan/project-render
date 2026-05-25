@@ -26,6 +26,7 @@ cbuffer ReGIRUpdateConstants : register(b0)
 struct CellReservoir
 {
     uint  lightIndex;
+    float selectedWeight;
     float w_sum;
     uint  M;
 };
@@ -34,6 +35,7 @@ CellReservoir init_cell_reservoir()
 {
     CellReservoir r;
     r.lightIndex = 0xFFFFFFFFu;
+    r.selectedWeight = 0.0;
     r.w_sum = 0.0;
     r.M = 0u;
     return r;
@@ -49,8 +51,10 @@ bool update_cell_reservoir(inout CellReservoir r, uint lightIndex,
     r.M++;
 
     bool selected = (next_float(rng) * newWSum < weight);
-    if (selected)
+    if (selected) {
         r.lightIndex = lightIndex;
+        r.selectedWeight = weight;
+    }
     r.w_sum = min(newWSum, 1e10);
     return selected;
 }
@@ -59,10 +63,10 @@ void finalize_cell_reservoir(inout CellReservoir r,
                              out ReGIRCellReservoir outSlot)
 {
     outSlot.lightIndex = r.lightIndex;
-    outSlot.weight = r.w_sum;
+    outSlot.weight = r.selectedWeight;
     outSlot.M = min(r.M, 255u);
     if (r.M > 0u)
-        outSlot.W = r.w_sum / (float)r.M;
+        outSlot.W = r.w_sum;
     else
         outSlot.W = 0.0;
 }
@@ -74,6 +78,29 @@ bool SphereOverlapsCell(float3 sphereCenter, float sphereRadius,
     float3 closest = clamp(sphereCenter, cellMin, cellMax);
     float3 diff = sphereCenter - closest;
     return dot(diff, diff) <= (sphereRadius * sphereRadius);
+}
+
+bool SpotConeOverlapsCell(ReGIRLightBound lb, float3 cellCenter,
+                          float cellRadius)
+{
+    if (lb.type != 2u)
+        return true;
+
+    float3 axis = normalize(lb.direction);
+    float axisLenSq = dot(axis, axis);
+    if (!isfinite(axisLenSq) || axisLenSq < 0.25)
+        axis = float3(0.0, -1.0, 0.0);
+
+    float3 toCell = cellCenter - lb.center;
+    float axial = dot(toCell, axis);
+    if (axial < -cellRadius || axial > lb.radius + cellRadius)
+        return false;
+
+    float outerCos = clamp(lb.outerConeAngle, 0.01, 0.999);
+    float tanOuter = sqrt(max(0.0, 1.0 - outerCos * outerCos)) / outerCos;
+    float3 radial = toCell - axis * max(axial, 0.0);
+    float allowedRadius = max(axial, 0.0) * tanOuter + cellRadius;
+    return dot(radial, radial) <= allowedRadius * allowedRadius;
 }
 
 // Compute a target importance weight for a light relative to a cell.
@@ -127,6 +154,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 
         // Bounding sphere test
         if (!SphereOverlapsCell(lb.center, lb.radius, cellMin, cellMax))
+            continue;
+        if (!SpotConeOverlapsCell(lb, cellCenter, cellRadius))
             continue;
 
         float weight = ComputeLightCellWeight(

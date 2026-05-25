@@ -1279,7 +1279,7 @@ static void EnsureRestirSpatialPipeline() {
 
   D3D12_DESCRIPTOR_RANGE uavRange = {};
   uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-  uavRange.NumDescriptors = 12; // u2..u13
+  uavRange.NumDescriptors = 14; // u2..u15 (DI reservoirs + AOVs + linear depth)
   uavRange.BaseShaderRegister = 2;
   uavRange.RegisterSpace = 0;
   uavRange.OffsetInDescriptorsFromTableStart =
@@ -1293,7 +1293,7 @@ static void EnsureRestirSpatialPipeline() {
   texRange.OffsetInDescriptorsFromTableStart =
       D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-  D3D12_ROOT_PARAMETER params[5] = {};
+  D3D12_ROOT_PARAMETER params[6] = {};
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
   params[0].Descriptor.ShaderRegister = 0;
   params[0].Descriptor.RegisterSpace = 0;
@@ -1329,6 +1329,13 @@ static void EnsureRestirSpatialPipeline() {
   params[4].DescriptorTable.pDescriptorRanges = &iesRange;
   params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
+  // Emissive proxy data (t5003), used when ReGIR feeds proxy candidates into
+  // the DI reservoir.
+  params[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[5].Descriptor.ShaderRegister = 5003;
+  params[5].Descriptor.RegisterSpace = 0;
+  params[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
   D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
   rsDesc.NumParameters = _countof(params);
   rsDesc.pParameters = params;
@@ -1352,6 +1359,7 @@ static void EnsureRestirSpatialPipeline() {
   ComPtr<IDxcBlob> cs;
   try {
     std::vector<std::wstring> defines;
+    defines.push_back(L"REGIR_ENABLED");
     cs = s_dxcHelper.Compile(L"shaders/restir_spatial_cs.hlsl", L"CSMain",
                              L"cs_6_5", defines);
   } catch (const std::exception &e) {
@@ -1674,7 +1682,7 @@ void WaitForAsyncRestirIdle() {
   WaitForAsyncRestirIdleForLightUpdates();
 }
 
-static void DispatchRestirSpatialPasses(ID3D12GraphicsCommandList4 *list,
+static void DispatchRestirDiSpatialPass(ID3D12GraphicsCommandList4 *list,
                                         ID3D12Resource *cameraCB) {
   if (!list || !cameraCB || !s_srvHeap || !s_device) {
     return;
@@ -1696,7 +1704,7 @@ static void DispatchRestirSpatialPasses(ID3D12GraphicsCommandList4 *list,
     UINT inc = s_device->GetDescriptorHandleIncrementSize(
         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     D3D12_GPU_DESCRIPTOR_HANDLE restirUavTable = s_outputUAVGpu;
-    restirUavTable.ptr += (UINT64)2 * (UINT64)inc; // u2..u13 table base
+    restirUavTable.ptr += (UINT64)2 * (UINT64)inc; // u2..u15 table base
     list->SetComputeRootDescriptorTable(1, restirUavTable);
 
     list->SetComputeRootShaderResourceView(
@@ -1706,12 +1714,26 @@ static void DispatchRestirSpatialPasses(ID3D12GraphicsCommandList4 *list,
 
     list->SetComputeRootDescriptorTable(4, s_iesAtlasSrvGpu);
 
+    if (s_restirSpatialRootSig) {
+      list->SetComputeRootShaderResourceView(
+          5, s_emissiveProxyBuffer
+                 ? s_emissiveProxyBuffer->GetGPUVirtualAddress()
+                 : 0);
+    }
+
     const UINT gx = (s_outputWidth + 7) / 8;
     const UINT gy = (s_outputHeight + 7) / 8;
     list->Dispatch(gx, gy, 1);
 
     uavBarrier.UAV.pResource = nullptr;
     list->ResourceBarrier(1, &uavBarrier);
+  }
+}
+
+static void DispatchRestirGiSpatialPass(ID3D12GraphicsCommandList4 *list,
+                                        ID3D12Resource *cameraCB) {
+  if (!list || !cameraCB || !s_srvHeap || !s_device) {
+    return;
   }
 
   EnsureRestirGiSpatialPipeline();
@@ -6740,9 +6762,12 @@ struct ReGIRCellReservoirGpu {
 struct ReGIRLightBoundGpu {
   float center[3];
   float radius;
+  float direction[3];
+  float outerConeAngle;
   float power;
   uint32_t lightIndex;
-  uint32_t pad[2];
+  uint32_t type;
+  uint32_t pad;
 };
 
 struct ReGIRConstantsGpu {
@@ -6753,11 +6778,44 @@ struct ReGIRConstantsGpu {
   uint32_t totalCells;
   uint32_t frameIndex;
   uint32_t lightsDirty;
-  uint32_t pad3;
+  uint32_t lightBoundCount;
   // Extended fields for ReGIR update shader (after ReGIRConstants)
   uint32_t numLightBounds;
   uint32_t updatePad[3];
 };
+
+static float ComputeReGIRLocalLightReach(const Light &light, float power) {
+  // Light::radius is the emitter/soft-shadow radius, not the attenuation reach.
+  // ReGIR bounds need to cover receiver cells that the light can meaningfully
+  // illuminate; otherwise dense point/spot scenes fall back to flat random
+  // light picking for most surfaces.
+  const float emitterRadius = (std::max)(light.radius, 0.0f);
+  const float powerReach =
+      (std::clamp)(std::sqrt((std::max)(power, 0.0f)) * 2.0f, 2.0f, 64.0f);
+  return (std::max)(emitterRadius, powerReach);
+}
+
+static void StoreReGIRLightDirection(const Light &light,
+                                     ReGIRLightBoundGpu &bound) {
+  float dx = light.direction[0];
+  float dy = light.direction[1];
+  float dz = light.direction[2];
+  const float lenSq = dx * dx + dy * dy + dz * dz;
+  if (lenSq > 1.0e-8f) {
+    const float invLen = 1.0f / std::sqrt(lenSq);
+    dx *= invLen;
+    dy *= invLen;
+    dz *= invLen;
+  } else {
+    dx = 0.0f;
+    dy = -1.0f;
+    dz = 0.0f;
+  }
+  bound.direction[0] = dx;
+  bound.direction[1] = dy;
+  bound.direction[2] = dz;
+  bound.outerConeAngle = (std::clamp)(light.outerConeAngle, 0.0f, 1.0f);
+}
 
 static void EnsureReGIRResources() {
   if (s_regirResourcesCreated) return;
@@ -7005,24 +7063,28 @@ static UINT BuildReGIRLightBounds(const std::vector<Light> &lights) {
     lb.center[2] = l.position[2];
     lb.lightIndex = (uint32_t)i;
     lb.power = power;
+    lb.type = l.type;
+    StoreReGIRLightDirection(l, lb);
 
-    // Bounding sphere radius
+    // Bounding sphere radius. These are influence bounds for ReGIR candidate
+    // placement, not emitter geometry bounds.
     if (l.type == (uint32_t)LightType::IES) {
       // An IES profile is angular photometry, not a tiny geometric emitter.
       // ReGIR needs a reach bound large enough to include the receiving cells;
       // using the 0.1 m gizmo radius makes the light effectively unsampleable.
-      lb.radius =
-          (std::max)(l.radius, (std::clamp)(std::sqrt(power) * 2.0f, 2.0f, 64.0f));
+      lb.radius = ComputeReGIRLocalLightReach(l, power);
     } else if (l.type == (uint32_t)LightType::Omni) {
-      lb.radius = l.radius > 0.0f ? l.radius : 1.0f;
+      lb.radius = ComputeReGIRLocalLightReach(l, power);
     } else if (l.type == (uint32_t)LightType::Spot) {
-      lb.radius = (std::max)(l.radius, 2.0f);
+      const float reach = ComputeReGIRLocalLightReach(l, power);
+      const float outerCos = (std::clamp)(l.outerConeAngle, 0.25f, 1.0f);
+      lb.radius = (std::min)(reach / outerCos, 96.0f);
     } else if (l.type == (uint32_t)LightType::AreaRect ||
                l.type == (uint32_t)LightType::AreaDisk) {
       float halfDiag =
           sqrtf(l.areaExtents[0] * l.areaExtents[0] +
                 l.areaExtents[1] * l.areaExtents[1]) * 0.5f;
-      lb.radius = (std::max)(halfDiag, 1.0f);
+      lb.radius = (std::max)(halfDiag, ComputeReGIRLocalLightReach(l, power));
     } else {
       lb.radius = 1.0f;
     }
@@ -7091,6 +7153,7 @@ static void UploadReGIRConstants(UINT numLightBounds) {
       (numLightBounds > 0u && s_sceneBoundsValid) ? s_regirTotalCells : 0u;
   cb.frameIndex = s_frameIndexPtr ? *s_frameIndexPtr : 0u;
   cb.lightsDirty = s_regirDirty ? 1u : 0u;
+  cb.lightBoundCount = numLightBounds;
   cb.numLightBounds = numLightBounds;
 
   void *pData = nullptr;
@@ -7219,6 +7282,11 @@ static UINT BuildEmissiveProxyBounds() {
     lb.radius = proxy.radius;
     lb.power = (proxy.radiance[0] + proxy.radiance[1] + proxy.radiance[2]) / 3.0f;
     lb.lightIndex = 0x80000000u | proxyIndex;
+    lb.type = (uint32_t)LightType::Omni;
+    lb.direction[0] = 0.0f;
+    lb.direction[1] = -1.0f;
+    lb.direction[2] = 0.0f;
+    lb.outerConeAngle = 0.0f;
     proxyBounds.push_back(lb);
   }
 
@@ -8091,22 +8159,33 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         const UINT wavefrontTransportFlags =
             kWavefrontResolveFlagDeferAccumulation;
 
+        D3D12_RESOURCE_BARRIER toArgsBarrier = {};
+        toArgsBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toArgsBarrier.Transition.pResource =
+            s_wavefrontDispatchArgsBuffer.Get();
+        toArgsBarrier.Transition.StateBefore =
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        toArgsBarrier.Transition.StateAfter =
+            D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
+        toArgsBarrier.Transition.Subresource =
+            D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+        D3D12_RESOURCE_BARRIER toUavBarrier = toArgsBarrier;
+        toUavBarrier.Transition.StateBefore =
+            D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
+        toUavBarrier.Transition.StateAfter =
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+
         // ReSTIR DI seed: consume queue-produced primary hit records as the
-        // scheduler task source. Spatial reuse still runs later on the same
-        // reservoir textures used by legacy.
+        // scheduler task source. Spatial reuse runs after the frame, matching
+        // the existing ownership model; primary resolve consumes only the seed.
         SetWavefrontStage("restir-seed");
         for (UINT materialBin = 0; materialBin < kWavefrontMaterialBinCount; ++materialBin) {
           DispatchWavefrontPrepareIndirectArgs(
               dxrList.Get(), kWavefrontMaterialBinCounterBase + materialBin,
               materialBin, ~0u, 0u);
         }
-        
-        D3D12_RESOURCE_BARRIER toArgsBarrier = {};
-        toArgsBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        toArgsBarrier.Transition.pResource = s_wavefrontDispatchArgsBuffer.Get();
-        toArgsBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        toArgsBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
-        toArgsBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
         dxrList->ResourceBarrier(1, &toArgsBarrier);
 
         for (UINT materialBin = 0; materialBin < kWavefrontMaterialBinCount; ++materialBin) {
@@ -8115,10 +8194,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
               (materialBin << kWavefrontQueueFlagMaterialBinShift);
           DispatchWavefrontRestirSeed(dxrList.Get(), cameraCB, binFlags, true, materialBin, false);
         }
-        
-        D3D12_RESOURCE_BARRIER toUavBarrier = toArgsBarrier;
-        toUavBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
-        toUavBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+
         dxrList->ResourceBarrier(1, &toUavBarrier);
 
         DispatchWavefrontRestirSeed(dxrList.Get(), cameraCB,
@@ -8288,12 +8364,15 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     }
   }
 
-  // Decoupled ReSTIR DI temporal/spatial reuse in a dedicated compute pass.
-  // Wavefront resolve writes initial candidates, and this pass performs reuse.
+  // Decoupled ReSTIR DI/GI temporal/spatial reuse in dedicated compute passes.
+  // The active frame has already consumed the seeded DI reservoir; these passes
+  // keep reuse bookkeeping out of traversal and visibility.
   if (didWavefrontRestirSeed) {
     if (cameraCB) {
-      SetWavefrontStage("restir-spatial");
-      DispatchRestirSpatialPasses(dxrList.Get(), cameraCB);
+      SetWavefrontStage("restir-di-spatial");
+      DispatchRestirDiSpatialPass(dxrList.Get(), cameraCB);
+      SetWavefrontStage("restir-gi-spatial");
+      DispatchRestirGiSpatialPass(dxrList.Get(), cameraCB);
     }
   }
 
@@ -9319,7 +9398,9 @@ void SubmitAsyncRestirWork() {
     return;
   }
 
-  DispatchRestirSpatialPasses(s_asyncComputeList.Get(),
+  DispatchRestirDiSpatialPass(s_asyncComputeList.Get(),
+                              s_asyncRestirCameraCB.Get());
+  DispatchRestirGiSpatialPass(s_asyncComputeList.Get(),
                               s_asyncRestirCameraCB.Get());
 
   hr = s_asyncComputeList->Close();

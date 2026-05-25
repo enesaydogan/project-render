@@ -11,19 +11,21 @@
 struct ReGIRCellReservoir
 {
     uint  lightIndex;  // index into g_lights, 0xFFFFFFFF = empty slot
-    float weight;      // resampling weight (w_sum)
+    float weight;      // selected candidate target weight
     uint  M;           // sample count
-    float W;           // resampling weight final
+    float W;           // cell target weight sum
 };
 
 struct ReGIRLightBound
 {
     float3 center;     // world-space bounding sphere center
     float  radius;     // bounding sphere radius
+    float3 direction;  // normalized spotlight direction
+    float  outerConeAngle; // cos(outer cone), spot only
     float  power;      // total emissive power for importance sampling
     uint   lightIndex; // back-reference into g_lights
+    uint   type;
     uint   pad0;
-    uint   pad1;
 };
 
 // ---- grid constants --------------------------------------------------------
@@ -46,7 +48,7 @@ struct ReGIRConstants
     uint   totalCells;
     uint   frameIndex;
     uint   lightsDirty;
-    uint   pad3;
+    uint   lightBoundCount;
 };
 
 // ---- world-position to cell index ------------------------------------------

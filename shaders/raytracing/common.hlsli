@@ -282,6 +282,11 @@ inline float GetDxrIndirectIblBoost()
     return max(iblIndirectBoost, 0.0);
 }
 
+inline bool WavefrontDirectionalLightActive()
+{
+    return lightColor.w > 0.0 && any(lightColor.rgb > 1.0e-6);
+}
+
 inline float2 DirectionToUVRotated(float3 dir) {
     float2 uv = DirectionToUV(dir);
     uv.x = frac(uv.x + (iblRotationDegrees / 360.0));
@@ -315,9 +320,11 @@ cbuffer ReGIRParams : register(b11, space3)
 
 // ReGIR sampling functions (require g_regirCells, declared above)
 
-uint ReGIR_SampleCandidate(float3 worldPos, inout RNG rng,
-                           ReGIRConstants params)
+uint ReGIR_SampleCandidateWeighted(float3 worldPos, inout RNG rng,
+                                   ReGIRConstants params,
+                                   out float sampleWeight)
 {
+    sampleWeight = 0.0;
     uint cellIdx = ReGIR_WorldPosToCell(worldPos, params);
     if (cellIdx == 0xFFFFFFFFu)
         return 0xFFFFFFFFu;
@@ -328,7 +335,8 @@ uint ReGIR_SampleCandidate(float3 worldPos, inout RNG rng,
     uint validCount = 0u;
     for (uint i = 0u; i < params.candidatesPerCell; ++i) {
         ReGIRCellReservoir slot = g_regirCells[base + i];
-        if (slot.lightIndex != 0xFFFFFFFFu && slot.W > 0.0)
+        if (slot.lightIndex != 0xFFFFFFFFu &&
+            slot.weight > 0.0 && slot.W > 0.0)
             ++validCount;
     }
 
@@ -340,9 +348,16 @@ uint ReGIR_SampleCandidate(float3 worldPos, inout RNG rng,
     uint found = 0u;
     for (uint j = 0u; j < params.candidatesPerCell; ++j) {
         ReGIRCellReservoir slot = g_regirCells[base + j];
-        if (slot.lightIndex != 0xFFFFFFFFu && slot.W > 0.0) {
-            if (found == target)
+        if (slot.lightIndex != 0xFFFFFFFFu &&
+            slot.weight > 0.0 && slot.W > 0.0) {
+            if (found == target) {
+                const float domainCap =
+                    max((float)max(params.lightBoundCount, validCount), 1.0);
+                sampleWeight =
+                    clamp(slot.W / max(slot.weight, 1.0e-8),
+                          1.0, domainCap);
                 return slot.lightIndex;
+            }
             ++found;
         }
     }
@@ -350,12 +365,22 @@ uint ReGIR_SampleCandidate(float3 worldPos, inout RNG rng,
     return 0xFFFFFFFFu;
 }
 
+uint ReGIR_SampleCandidate(float3 worldPos, inout RNG rng,
+                           ReGIRConstants params)
+{
+    float sampleWeight = 0.0;
+    return ReGIR_SampleCandidateWeighted(worldPos, rng, params,
+                                         sampleWeight);
+}
+
 uint ReGIR_GetCellOccupancy(uint cellIndex, ReGIRConstants params)
 {
     uint base = ReGIR_CellBaseIndex(cellIndex, params);
     uint count = 0u;
     for (uint i = 0u; i < params.candidatesPerCell; ++i) {
-        if (g_regirCells[base + i].lightIndex != 0xFFFFFFFFu)
+        ReGIRCellReservoir slot = g_regirCells[base + i];
+        if (slot.lightIndex != 0xFFFFFFFFu &&
+            slot.weight > 0.0 && slot.W > 0.0)
             ++count;
     }
     return count;
@@ -960,7 +985,9 @@ inline WavefrontLightSample WavefrontSampleDirectionalLight(float sampleWeight)
         sample.direction = float3(0.0, 1.0, 0.0);
     }
     sample.maxDistance = 1000.0;
-    sample.radiance = lightColor.rgb * lightColor.w * sampleWeight;
+    sample.radiance = WavefrontDirectionalLightActive()
+                          ? lightColor.rgb * lightColor.w * sampleWeight
+                          : float3(0.0, 0.0, 0.0);
     sample.packedLightIndex =
         WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL, 0u);
     return sample;
@@ -1093,7 +1120,9 @@ inline WavefrontLightSample WavefrontSampleReGIRLight(
     WavefrontLightSample sample;
     const uint numLights = WavefrontGetAvailableLightCount();
 
-    uint lightIndex = ReGIR_SampleCandidate(surfacePos, rng, g_regirParams);
+    float regirSampleWeight = 0.0;
+    uint lightIndex = ReGIR_SampleCandidateWeighted(
+        surfacePos, rng, g_regirParams, regirSampleWeight);
 
     if (lightIndex == 0xFFFFFFFFu) {
         if (numLights == 0u) {
@@ -1105,12 +1134,16 @@ inline WavefrontLightSample WavefrontSampleReGIRLight(
             return sample;
         }
         lightIndex = next_uint(rng) % numLights;
+        regirSampleWeight = (float)numLights;
     }
+
+    const float effectiveSampleWeight =
+        sampleWeight * max(regirSampleWeight, 1.0);
 
     // Handle emissive proxy sentinel
     if (WavefrontIsEmissiveProxyLightIndex(lightIndex)) {
         return WavefrontSampleEmissiveProxyLight(
-            surfacePos, lightIndex, sampleWeight);
+            surfacePos, lightIndex, effectiveSampleWeight);
     }
 
     if (lightIndex >= numLights) {
@@ -1124,9 +1157,12 @@ inline WavefrontLightSample WavefrontSampleReGIRLight(
             return sample;
         }
         lightIndex = next_uint(rng) % numLights;
+        regirSampleWeight = (float)numLights;
     }
 
-    return WavefrontSampleFlatLight(surfacePos, lightIndex, sampleWeight, rng);
+    return WavefrontSampleFlatLight(
+        surfacePos, lightIndex,
+        sampleWeight * max(regirSampleWeight, 1.0), rng);
 }
 #endif // REGIR_ENABLED
 
@@ -1136,6 +1172,7 @@ inline WavefrontLightSample WavefrontSampleDirectLight(
     inout RNG rng)
 {
     const uint numLights = sampler.availableLights;
+    const bool directionalActive = WavefrontDirectionalLightActive();
 #ifdef REGIR_ENABLED
     const bool useReGIR = (sampler.mode == WAVEFRONT_LIGHT_SAMPLER_REGIR);
     if (numLights == 0u && useReGIR) {
@@ -1143,20 +1180,27 @@ inline WavefrontLightSample WavefrontSampleDirectLight(
     }
 #endif
 
-    if (numLights == 0u || next_float(rng) < 0.5) {
+    if (numLights == 0u) {
+        if (directionalActive) {
+            return WavefrontSampleDirectionalLight(1.0);
+        }
+        return WavefrontSampleFlatLight(surfacePos, 0u, 1.0, rng);
+    }
+
+    if (directionalActive && next_float(rng) < 0.5) {
         return WavefrontSampleDirectionalLight((numLights > 0u) ? 2.0 : 1.0);
     }
 
+    const float localSampleWeight = directionalActive ? 2.0 : 1.0;
 #ifdef REGIR_ENABLED
     if (sampler.mode == WAVEFRONT_LIGHT_SAMPLER_REGIR) {
-        return WavefrontSampleReGIRLight(
-            surfacePos, 2.0 * max((float)numLights, 1.0), rng);
+        return WavefrontSampleReGIRLight(surfacePos, localSampleWeight, rng);
     }
 #endif
 
     const uint lightIndex = next_uint(rng) % numLights;
     return WavefrontSampleFlatLight(surfacePos, lightIndex,
-                                    2.0 * (float)numLights, rng);
+                                    localSampleWeight * (float)numLights, rng);
 }
 
 inline WavefrontLightSample WavefrontSampleDirectLight(float3 surfacePos,

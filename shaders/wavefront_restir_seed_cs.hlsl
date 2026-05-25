@@ -99,11 +99,13 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         rng.state = state.rngState ^
                     (record.pixelIndex * 0x6C8E9CF5u) ^ 0xA24BAED5u;
 
-        WavefrontLightSample sunSample =
-            WavefrontSampleDirectionalLight(1.0);
-        float sunTarget = WavefrontEvaluateReservoirTarget(
-            record, normal, hitPos, sunSample);
-        update_reservoir(reservoir, 0xFFFFFFFFu, sunTarget, rng);
+        if (WavefrontDirectionalLightActive()) {
+            WavefrontLightSample sunSample =
+                WavefrontSampleDirectionalLight(1.0);
+            float sunTarget = WavefrontEvaluateReservoirTarget(
+                record, normal, hitPos, sunSample);
+            update_reservoir(reservoir, 0xFFFFFFFFu, sunTarget, rng);
+        }
 
         WavefrontLightSamplerContext lightSampler =
             WavefrontCreateLightSampler(hitPos);
@@ -118,31 +120,45 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             uint lightIndex = 0xFFFFFFFFu;
 #ifdef REGIR_ENABLED
             if (lightSampler.mode == WAVEFRONT_LIGHT_SAMPLER_REGIR) {
-                lightIndex = ReGIR_SampleCandidate(hitPos, rng, g_regirParams);
-                if (lightIndex == 0xFFFFFFFFu && numLights > 0u)
+                float regirSampleWeight = 0.0;
+                lightIndex = ReGIR_SampleCandidateWeighted(
+                    hitPos, rng, g_regirParams, regirSampleWeight);
+                if (lightIndex == 0xFFFFFFFFu && numLights > 0u) {
                     lightIndex = next_uint(rng) % numLights;
+                    regirSampleWeight = (float)numLights;
+                }
+                if (WavefrontIsEmissiveProxyLightIndex(lightIndex) ||
+                    lightIndex < numLights) {
+                    WavefrontLightSample localSample =
+                        WavefrontIsEmissiveProxyLightIndex(lightIndex)
+                            ? WavefrontSampleEmissiveProxyLight(
+                                  hitPos, lightIndex,
+                                  max(regirSampleWeight, 1.0))
+                            : WavefrontSampleFlatLight(
+                                  hitPos, lightIndex,
+                                  max(regirSampleWeight, 1.0), rng);
+                    float localTarget = WavefrontEvaluateReservoirTarget(
+                        record, normal, hitPos, localSample);
+                    update_reservoir(reservoir, lightIndex, localTarget, rng);
+                }
             } else {
                 lightIndex = next_uint(rng) % numLights;
-            }
-#else
-            lightIndex = next_uint(rng) % numLights;
-#endif
-            if (lightIndex != 0xFFFFFFFFu) {
-#ifdef REGIR_ENABLED
-                WavefrontLightSample localSample =
-                    WavefrontIsEmissiveProxyLightIndex(lightIndex)
-                        ? WavefrontSampleEmissiveProxyLight(hitPos, lightIndex, 1.0)
-                        : WavefrontSampleFlatLight(hitPos, lightIndex,
-                                                   (float)numLights, rng);
-#else
                 WavefrontLightSample localSample =
                     WavefrontSampleFlatLight(hitPos, lightIndex,
                                              (float)numLights, rng);
-#endif
                 float localTarget = WavefrontEvaluateReservoirTarget(
                     record, normal, hitPos, localSample);
                 update_reservoir(reservoir, lightIndex, localTarget, rng);
             }
+#else
+            lightIndex = next_uint(rng) % numLights;
+            WavefrontLightSample localSample =
+                WavefrontSampleFlatLight(hitPos, lightIndex,
+                                         (float)numLights, rng);
+            float localTarget = WavefrontEvaluateReservoirTarget(
+                record, normal, hitPos, localSample);
+            update_reservoir(reservoir, lightIndex, localTarget, rng);
+#endif
         }
 
         WavefrontLightSample finalSample;
@@ -151,14 +167,17 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         finalSample.radiance = float3(0.0, 0.0, 0.0);
         finalSample.packedLightIndex =
             WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL, 0u);
-        if (reservoir.lightIndex == 0xFFFFFFFFu) {
+        if (reservoir.lightIndex == 0xFFFFFFFFu &&
+            WavefrontDirectionalLightActive()) {
             finalSample = WavefrontSampleDirectionalLight(1.0);
 #ifdef REGIR_ENABLED
         } else if (WavefrontIsEmissiveProxyLightIndex(reservoir.lightIndex)) {
             finalSample = WavefrontSampleEmissiveProxyLight(
                 hitPos, reservoir.lightIndex, 1.0);
-#endif
         } else if (reservoir.lightIndex < numLights) {
+#else
+        } else if (reservoir.lightIndex < numLights) {
+#endif
             finalSample = WavefrontSampleFlatLightUnweighted(
                 hitPos, reservoir.lightIndex, rng);
         }

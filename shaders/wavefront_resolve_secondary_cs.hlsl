@@ -361,8 +361,15 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             WavefrontCreateLightSampler(hitPos);
         WavefrontLightSample lightSample =
             WavefrontSampleDirectLight(lightSampler, hitPos, rng);
-        WavefrontLightSample explicitSunSample =
-            WavefrontSampleDirectionalLight(1.0);
+        WavefrontLightSample explicitSunSample;
+        explicitSunSample.direction = float3(0.0, 1.0, 0.0);
+        explicitSunSample.maxDistance = 0.0;
+        explicitSunSample.radiance = float3(0.0, 0.0, 0.0);
+        explicitSunSample.packedLightIndex =
+            WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL, 0u);
+        if (WavefrontDirectionalLightActive()) {
+            explicitSunSample = WavefrontSampleDirectionalLight(1.0);
+        }
         uint bounceDepth = WavefrontGetSpecularBounceCount(state.packedState) +
                            WavefrontGetRefractiveBounceCount(state.packedState) +
                            WavefrontGetDiffuseBounceCount(state.packedState);

@@ -66,7 +66,7 @@ void LoadSharedSlot(uint2 slot, int2 pix, uint2 dim, bool flip)
     }
 
     uint2 p = uint2(pix);
-    s_depthTile[idx] = g_depth[p];
+    s_depthTile[idx] = g_linearDepth[p];
     s_normalTile[idx] = g_normalRoughnessOut[p];
     s_prevReservoirTile[idx] = flip ? g_reservoir0[p] : g_reservoir1[p];
 }
@@ -101,15 +101,22 @@ float EvalCandidatePTarget(uint candidateLightIndex, float3 N, float3 P)
     }
     uint numLights = (uint)max(lightCount, 0.0);
     if (candidateLightIndex != 0xFFFFFFFFu) {
+#ifdef REGIR_ENABLED
+        if (WavefrontIsEmissiveProxyLightIndex(candidateLightIndex)) {
+            WavefrontLightSample proxy =
+                WavefrontSampleEmissiveProxyLight(P, candidateLightIndex, 1.0);
+            return max(0.0, length(proxy.radiance *
+                                   saturate(dot(N, proxy.direction))));
+        }
+#endif
         if (candidateLightIndex >= numLights) {
             return 0.0;
         }
         Light l = g_lights[candidateLightIndex];
         LightSample ls = evaluate_light(l, P);
         return max(0.0, length(ls.radiance * saturate(dot(N, ls.L))));
-    } else {
-        return max(0.0, length(lightColor.rgb * lightColor.w * saturate(dot(N, lightDir.xyz))));
     }
+    return 0.0;
 }
 
 [numthreads(8, 8, 1)]
