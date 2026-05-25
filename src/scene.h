@@ -302,6 +302,7 @@ size_t AddLightInstance(size_t prototypeIndex);
 size_t AddLightInstanceRaw(const LightInstance &inst); // no flatten call, for scene loading
 bool UpdateLightInstance(size_t index, const LightInstance &inst);
 void RemoveLightInstance(size_t index);
+void RemoveLightInstances(const std::vector<size_t> &indices);
 
 // Selection (instance-based)
 int GetSelectedLightIndex();

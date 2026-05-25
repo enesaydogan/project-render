@@ -5388,6 +5388,76 @@ void RemoveLightInstance(size_t index) {
   NotifySceneChanged();
 }
 
+void RemoveLightInstances(const std::vector<size_t> &indices) {
+  std::vector<size_t> removeIndices;
+  removeIndices.reserve(indices.size());
+  for (size_t index : indices) {
+    if (index < s_lightInstances.size()) {
+      removeIndices.push_back(index);
+    }
+  }
+  std::sort(removeIndices.begin(), removeIndices.end());
+  removeIndices.erase(std::unique(removeIndices.begin(), removeIndices.end()),
+                      removeIndices.end());
+  if (removeIndices.empty()) {
+    return;
+  }
+
+  std::vector<size_t> affectedPrototypes;
+  affectedPrototypes.reserve(removeIndices.size());
+  for (size_t index : removeIndices) {
+    const size_t protoIdx = s_lightInstances[index].prototypeIndex;
+    if (protoIdx < s_lightPrototypes.size()) {
+      affectedPrototypes.push_back(protoIdx);
+    }
+  }
+
+  for (auto it = removeIndices.rbegin(); it != removeIndices.rend(); ++it) {
+    const size_t index = *it;
+    if (index >= s_lightInstances.size()) {
+      continue;
+    }
+    LiveLink::GetSceneSync().ReindexSceneLightBindingsAfterRemoval(
+        static_cast<int>(index));
+    s_lightInstances.erase(s_lightInstances.begin() + index);
+  }
+
+  std::sort(affectedPrototypes.begin(), affectedPrototypes.end());
+  affectedPrototypes.erase(
+      std::unique(affectedPrototypes.begin(), affectedPrototypes.end()),
+      affectedPrototypes.end());
+  for (auto it = affectedPrototypes.rbegin(); it != affectedPrototypes.rend();
+       ++it) {
+    const size_t protoIdx = *it;
+    if (protoIdx >= s_lightPrototypes.size()) {
+      continue;
+    }
+    const bool hasOtherInstances = std::any_of(
+        s_lightInstances.begin(), s_lightInstances.end(),
+        [protoIdx](const LightInstance &inst) {
+          return inst.prototypeIndex == protoIdx;
+        });
+    if (hasOtherInstances) {
+      continue;
+    }
+
+    s_lightPrototypes.erase(s_lightPrototypes.begin() + protoIdx);
+    for (auto &inst : s_lightInstances) {
+      if (inst.prototypeIndex > protoIdx) {
+        --inst.prototypeIndex;
+      }
+    }
+  }
+
+  for (LightInstance &inst : s_lightInstances) {
+    inst.selected = false;
+  }
+  s_selectedLightIdx = -1;
+
+  UpdateLights();
+  NotifySceneChanged();
+}
+
 size_t GetMaterialCount() { return g_loadedMaterials.size(); }
 
 size_t GetTextureCount() { return g_loadedTextures.size(); }
@@ -6370,6 +6440,12 @@ void DrawLightGizmo() {
     selectedIndices = s_shiftCloneDrag.cloneLightIndices;
   }
   if (selectedIndices.empty() || !GetSelectedTransformRoots().empty()) {
+    ImGui::End();
+    return;
+  }
+  if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) &&
+      !s_shiftCloneDrag.active && !s_shiftCloneDrag.optionsPending) {
+    RemoveLightInstances(selectedIndices);
     ImGui::End();
     return;
   }

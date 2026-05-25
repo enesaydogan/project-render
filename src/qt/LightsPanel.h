@@ -34,6 +34,7 @@ private:
     void updatePropertyVisibility(uint32_t type);
     bool hasPropertyEditorFocus() const;
     uint64_t lightListSignature() const;
+    void removeSelectedItems();
 
     // Returns the currently selected instance index, or -1
     int selectedInstanceIndex() const;

@@ -19,6 +19,8 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QKeySequence>
+#include <QShortcut>
 #include <QSignalBlocker>
 #include <QTimer>
 #include <QTreeWidget>
@@ -138,6 +140,10 @@ void LightsPanel::createUi()
     m_lightTree->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_lightTree->setMinimumHeight(100);
     listLayout->addWidget(m_lightTree);
+    auto *deleteShortcut = new QShortcut(QKeySequence(Qt::Key_Delete), this);
+    deleteShortcut->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(deleteShortcut, &QShortcut::activated, this,
+            [this]() { removeSelectedItems(); });
 
     m_propertiesGroup = new QGroupBox(tr("Properties"), this);
     auto *propertiesLayout = new QVBoxLayout(m_propertiesGroup);
@@ -627,17 +633,7 @@ void LightsPanel::createUi()
     });
 
     connect(m_removeButton, &QPushButton::clicked, this, [this]() {
-        if (m_syncing) return;
-        QTreeWidgetItem *item = m_lightTree->currentItem();
-        if (!item) return;
-        if (item->type() == kInstanceItemType) {
-            const int instIdx = item->data(0, Qt::UserRole).toInt();
-            Scene::RemoveLightInstance(static_cast<size_t>(instIdx));
-        } else {
-            const int protoIdx = item->data(0, Qt::UserRole).toInt();
-            Scene::RemoveLightPrototype(static_cast<size_t>(protoIdx));
-        }
-        refreshLights();
+        removeSelectedItems();
     });
 
     connect(m_addInstanceButton, &QPushButton::clicked, this, [this]() {
@@ -694,6 +690,62 @@ void LightsPanel::createUi()
         Scene::BeginMoveLightToSurface(instIdx);
         refreshLights();
     });
+}
+
+void LightsPanel::removeSelectedItems()
+{
+    if (m_syncing || !m_lightTree) {
+        return;
+    }
+
+    const auto &insts = Scene::GetLightInstances();
+    const auto &protos = Scene::GetLightPrototypes();
+    std::vector<size_t> instanceIndices;
+    std::vector<size_t> prototypeIndices;
+
+    auto collectItem = [&](QTreeWidgetItem *item) {
+        if (!item) {
+            return;
+        }
+        const int rawIndex = item->data(0, Qt::UserRole).toInt();
+        if (rawIndex < 0) {
+            return;
+        }
+        if (item->type() == kInstanceItemType) {
+            if (rawIndex < static_cast<int>(insts.size())) {
+                instanceIndices.push_back(static_cast<size_t>(rawIndex));
+            }
+        } else if (item->type() == kProtoItemType) {
+            if (rawIndex < static_cast<int>(protos.size())) {
+                prototypeIndices.push_back(static_cast<size_t>(rawIndex));
+            }
+        }
+    };
+
+    for (QTreeWidgetItem *item : m_lightTree->selectedItems()) {
+        collectItem(item);
+    }
+    if (instanceIndices.empty() && prototypeIndices.empty()) {
+        collectItem(m_lightTree->currentItem());
+    }
+
+    if (!instanceIndices.empty()) {
+        Scene::RemoveLightInstances(instanceIndices);
+        refreshLights();
+        return;
+    }
+
+    std::sort(prototypeIndices.begin(), prototypeIndices.end());
+    prototypeIndices.erase(
+        std::unique(prototypeIndices.begin(), prototypeIndices.end()),
+        prototypeIndices.end());
+    for (auto it = prototypeIndices.rbegin(); it != prototypeIndices.rend();
+         ++it) {
+        Scene::RemoveLightPrototype(*it);
+    }
+    if (!prototypeIndices.empty()) {
+        refreshLights();
+    }
 }
 
 int LightsPanel::selectedInstanceIndex() const
@@ -985,7 +1037,9 @@ void LightsPanel::refreshLights()
 
     // Update remove button text
     QTreeWidgetItem *curItem = m_lightTree->currentItem();
-    if (curItem && curItem->type() == kProtoItemType) {
+    if (selectedInsts.size() > 1) {
+        m_removeButton->setText(tr("Remove Instances"));
+    } else if (curItem && curItem->type() == kProtoItemType) {
         m_removeButton->setText(tr("Remove Group"));
     } else {
         m_removeButton->setText(tr("Remove Instance"));

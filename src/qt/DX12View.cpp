@@ -8,6 +8,7 @@
 #include "../scene.h"
 #include <algorithm>
 #include <cfloat>
+#include <vector>
 #include <QDragEnterEvent>
 #include <QFileInfo>
 #include <QFocusEvent>
@@ -248,6 +249,14 @@ void DX12View::keyPressEvent(QKeyEvent *e)
         } else {
             Scene::SelectNode(static_cast<size_t>(-1));
             Scene::SelectLight(-1);
+        }
+    }
+    if (e->key() == Qt::Key_Delete && !e->isAutoRepeat()) {
+        const std::vector<size_t> selectedLights = Scene::GetSelectedLightIndices();
+        if (!selectedLights.empty()) {
+            Scene::RemoveLightInstances(selectedLights);
+            e->accept();
+            return;
         }
     }
     QWidget::keyPressEvent(e);

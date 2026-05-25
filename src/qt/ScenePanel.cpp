@@ -407,6 +407,14 @@ int ScenePanel::selectedNodeIndex() const
 
 void ScenePanel::requestDeleteSelectedNode()
 {
+    const std::vector<size_t> selectedLightIndices =
+        Scene::GetSelectedLightIndices();
+    if (!selectedLightIndices.empty()) {
+        Scene::RemoveLightInstances(selectedLightIndices);
+        refreshSceneList();
+        return;
+    }
+
     const int nodeIndex = selectedNodeIndex();
     if (nodeIndex < 0) {
         return;
