@@ -15,14 +15,48 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QPainter>
 #include <QPushButton>
-#include <QRubberBand>
 #include <QResizeEvent>
 #include <QTimer>
 #include <QUrl>
 #include <QWheelEvent>
 
 namespace {
+
+class DashedSelectionBand : public QWidget
+{
+public:
+    explicit DashedSelectionBand(QWidget *parent)
+        : QWidget(parent,
+                  Qt::Tool |
+                      Qt::FramelessWindowHint |
+                      Qt::WindowStaysOnTopHint |
+                      Qt::WindowDoesNotAcceptFocus |
+                      Qt::NoDropShadowWindowHint)
+    {
+        setObjectName(QStringLiteral("BoxSelectionOverlay"));
+        setAttribute(Qt::WA_TranslucentBackground);
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_NoSystemBackground);
+        setAttribute(Qt::WA_ShowWithoutActivating);
+        hide();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, false);
+        painter.fillRect(rect(), QColor(69, 196, 238, 28));
+        QPen pen(QColor(69, 196, 238, 230), 1.0, Qt::DashLine,
+                 Qt::SquareCap, Qt::MiterJoin);
+        painter.setPen(pen);
+        painter.setBrush(Qt::NoBrush);
+        QRect border = rect().adjusted(0, 0, -1, -1);
+        painter.drawRect(border);
+    }
+};
 
 int MapQtKeyToVirtualKey(QKeyEvent *event)
 {
@@ -284,15 +318,15 @@ void DX12View::mousePressEvent(QMouseEvent *e)
     }
 
     if (e->button() == Qt::LeftButton &&
-        Scene::GetSelectionToolMode() == Scene::SelectionToolMode::Box) {
+        Scene::GetSelectionToolMode() == Scene::SelectionToolMode::Box &&
+        !Scene::IsTransformGizmoActiveOrHovered()) {
         m_boxSelecting = true;
         m_boxStartGlobalPos = e->globalPosition();
         m_boxStartLocalPos = e->position().toPoint();
         if (!m_boxSelectionBand) {
-            m_boxSelectionBand = new QRubberBand(QRubberBand::Rectangle, this);
+            m_boxSelectionBand = new DashedSelectionBand(this);
         }
-        m_boxSelectionBand->setGeometry(QRect(m_boxStartLocalPos, QSize()));
-        m_boxSelectionBand->show();
+        updateBoxSelectionBand(m_boxStartGlobalPos);
         e->accept();
         return;
     }
@@ -359,10 +393,7 @@ void DX12View::mouseMoveEvent(QMouseEvent *e)
     ImGui::GetIO().AddMousePosEvent(static_cast<float>(e->globalPosition().x()),
                                     static_cast<float>(e->globalPosition().y()));
     if (m_boxSelecting) {
-        if (m_boxSelectionBand) {
-            m_boxSelectionBand->setGeometry(
-                QRect(m_boxStartLocalPos, e->position().toPoint()).normalized());
-        }
+        updateBoxSelectionBand(e->globalPosition());
         e->accept();
         return;
     }
@@ -457,4 +488,25 @@ void DX12View::cancelBoxSelection()
     if (m_boxSelectionBand) {
         m_boxSelectionBand->hide();
     }
+}
+
+void DX12View::updateBoxSelectionBand(const QPointF &currentGlobalPos)
+{
+    if (!m_boxSelectionBand) {
+        return;
+    }
+
+    QRect globalRect(m_boxStartGlobalPos.toPoint(),
+                     currentGlobalPos.toPoint());
+    globalRect = globalRect.normalized();
+    if (globalRect.width() < 1) {
+        globalRect.setWidth(1);
+    }
+    if (globalRect.height() < 1) {
+        globalRect.setHeight(1);
+    }
+    m_boxSelectionBand->setGeometry(globalRect);
+    m_boxSelectionBand->show();
+    m_boxSelectionBand->raise();
+    m_boxSelectionBand->update();
 }

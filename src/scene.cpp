@@ -6096,6 +6096,10 @@ void SetLightGizmosVisible(bool visible) { s_lightGizmosVisible = visible; }
 
 bool AreLightGizmosVisible() { return s_lightGizmosVisible; }
 
+bool IsTransformGizmoActiveOrHovered() {
+  return ImGuizmo::IsUsing() || ImGuizmo::IsOver();
+}
+
 int PickLightGizmoAt(float screenX, float screenY, float screenWidth,
                      float screenHeight) {
   if (ImGuizmo::IsUsing() || screenWidth <= 1.0f || screenHeight <= 1.0f) {
@@ -6267,6 +6271,33 @@ static bool ComputeLightSelectionPivot(const std::vector<size_t> &indices,
   return true;
 }
 
+static void ApplyLightScaleDeltaToPrototypes(
+    const std::vector<size_t> &selectedIndices, const float delta[16]) {
+  const float currentScaleX =
+      sqrtf(delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]);
+  if (currentScaleX <= 0.001f) {
+    return;
+  }
+
+  std::vector<size_t> scaledPrototypes;
+  for (size_t index : selectedIndices) {
+    if (index >= s_lightInstances.size()) {
+      continue;
+    }
+    const size_t protoIndex = s_lightInstances[index].prototypeIndex;
+    if (protoIndex >= s_lightPrototypes.size() ||
+        std::find(scaledPrototypes.begin(), scaledPrototypes.end(),
+                  protoIndex) != scaledPrototypes.end()) {
+      continue;
+    }
+    LightPrototype &proto = s_lightPrototypes[protoIndex];
+    proto.areaExtents[0] *= currentScaleX;
+    proto.areaExtents[1] *= currentScaleX;
+    proto.radius *= currentScaleX;
+    scaledPrototypes.push_back(protoIndex);
+  }
+}
+
 static std::vector<size_t>
 CloneLightInstancesAsInstances(const std::vector<size_t> &indices) {
   std::vector<size_t> clones;
@@ -6322,7 +6353,7 @@ void DrawLightGizmo() {
       !s_shiftLightCloneDrag.cloneIndices.empty()) {
     selectedIndices = s_shiftLightCloneDrag.cloneIndices;
   }
-  if (selectedIndices.empty()) {
+  if (selectedIndices.empty() || !GetSelectedTransformRoots().empty()) {
     ImGui::End();
     return;
   }
@@ -6416,28 +6447,7 @@ void DrawLightGizmo() {
       }
 
       if (op == ImGuizmo::SCALE) {
-        const float currentScaleX =
-            sqrtf(delta[0] * delta[0] + delta[1] * delta[1] +
-                  delta[2] * delta[2]);
-        if (currentScaleX > 0.001f) {
-          std::vector<size_t> scaledPrototypes;
-          for (size_t index : selectedIndices) {
-            if (index >= s_lightInstances.size()) {
-              continue;
-            }
-            const size_t protoIndex = s_lightInstances[index].prototypeIndex;
-            if (protoIndex >= s_lightPrototypes.size() ||
-                std::find(scaledPrototypes.begin(), scaledPrototypes.end(),
-                          protoIndex) != scaledPrototypes.end()) {
-              continue;
-            }
-            LightPrototype &proto = s_lightPrototypes[protoIndex];
-            proto.areaExtents[0] *= currentScaleX;
-            proto.areaExtents[1] *= currentScaleX;
-            proto.radius *= currentScaleX;
-            scaledPrototypes.push_back(protoIndex);
-          }
-        }
+        ApplyLightScaleDeltaToPrototypes(selectedIndices, delta);
       }
 
       UpdateLights();
@@ -6552,6 +6562,36 @@ static bool ComputeSelectionPivot(
   pivotMatrix[12] = center[0];
   pivotMatrix[13] = center[1];
   pivotMatrix[14] = center[2];
+  return true;
+}
+
+static bool ComputeMixedSelectionPivot(
+    const std::vector<size_t> &roots,
+    const std::vector<size_t> &lightIndices,
+    const std::vector<std::array<float, 16>> &worldTransforms,
+    float pivotMatrix[16]) {
+  if (!ComputeSelectionPivot(roots, worldTransforms, pivotMatrix)) {
+    return false;
+  }
+  if (lightIndices.empty()) {
+    return true;
+  }
+
+  float center[3] = {pivotMatrix[12], pivotMatrix[13], pivotMatrix[14]};
+  int centerCount = 1;
+  for (size_t index : lightIndices) {
+    if (index >= s_lightInstances.size()) {
+      continue;
+    }
+    center[0] += s_lightInstances[index].position[0];
+    center[1] += s_lightInstances[index].position[1];
+    center[2] += s_lightInstances[index].position[2];
+    ++centerCount;
+  }
+
+  pivotMatrix[12] = center[0] / static_cast<float>(centerCount);
+  pivotMatrix[13] = center[1] / static_cast<float>(centerCount);
+  pivotMatrix[14] = center[2] / static_cast<float>(centerCount);
   return true;
 }
 
@@ -6822,9 +6862,11 @@ static void DrawSelectedRootOutline(
 
 void DrawGizmo() {
   std::vector<size_t> selectedRoots = GetSelectedTransformRoots();
+  std::vector<size_t> selectedLightIndices = GetSelectedLightIndices();
   if (s_shiftCloneDrag.active &&
       !s_shiftCloneDrag.cloneRootIndices.empty()) {
     selectedRoots = s_shiftCloneDrag.cloneRootIndices;
+    selectedLightIndices.clear();
   }
 
   // ImGuizmo::BeginFrame() called in main.cpp
@@ -6892,7 +6934,8 @@ void DrawGizmo() {
   }
 
   float pivotMatrix[16];
-  if (!ComputeSelectionPivot(selectedRoots, worldTransforms, pivotMatrix)) {
+  if (!ComputeMixedSelectionPivot(selectedRoots, selectedLightIndices,
+                                  worldTransforms, pivotMatrix)) {
     ImGui::End();
     return;
   }
@@ -6907,6 +6950,15 @@ void DrawGizmo() {
       CopyMatrix4x4(worldTransforms[rootIndex].data(), rootWorld.data());
     }
     originalRootWorlds.push_back(rootWorld);
+  }
+  std::vector<std::array<float, 16>> originalLightMatrices;
+  originalLightMatrices.reserve(selectedLightIndices.size());
+  for (size_t index : selectedLightIndices) {
+    std::array<float, 16> matrix{};
+    if (index < s_lightInstances.size()) {
+      BuildLightTransformMatrix(s_lightInstances[index], matrix.data());
+    }
+    originalLightMatrices.push_back(matrix);
   }
 
   ImGuizmo::OPERATION op = GetActiveGizmoOperation();
@@ -6950,6 +7002,21 @@ void DrawGizmo() {
       }
 
       ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
+
+      for (size_t i = 0; i < selectedLightIndices.size() &&
+                         i < originalLightMatrices.size();
+           ++i) {
+        float newMatrix[16];
+        MatMul(delta, originalLightMatrices[i].data(), newMatrix);
+        ApplyLightTransformMatrix(selectedLightIndices[i], newMatrix);
+      }
+      if (!selectedLightIndices.empty()) {
+        if (op == ImGuizmo::SCALE) {
+          ApplyLightScaleDeltaToPrototypes(selectedLightIndices, delta);
+        }
+        UpdateLights();
+        NotifySceneChanged();
+      }
     }
   }
 

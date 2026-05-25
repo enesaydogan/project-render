@@ -6,7 +6,6 @@
 class QTimer;
 class QDragEnterEvent;
 class QDropEvent;
-class QRubberBand;
 
 class DX12View : public QWidget
 {
@@ -32,6 +31,7 @@ protected:
 private:
     void showPendingCloneOptions();
     void cancelBoxSelection();
+    void updateBoxSelectionBand(const QPointF &currentGlobalPos);
 
     QPointF m_lastGlobalMousePos;
     QPointF m_boxStartGlobalPos;
@@ -39,6 +39,6 @@ private:
     bool m_hasLastMousePos = false;
     bool m_boxSelecting = false;
     bool m_cloneOptionsDialogOpen = false;
-    QRubberBand *m_boxSelectionBand = nullptr;
+    QWidget *m_boxSelectionBand = nullptr;
     QTimer *m_cloneOptionsTimer = nullptr;
 };

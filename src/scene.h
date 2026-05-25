@@ -166,6 +166,7 @@ void ResetScene();
 
 // Draw the ImGuizmo gizmo for selection
 void DrawGizmo();
+bool IsTransformGizmoActiveOrHovered();
 
 // Draw ImGuizmo gizmo for the selected light
 void DrawLightGizmo();
