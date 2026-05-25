@@ -212,6 +212,7 @@ struct ShiftCloneDragState {
   bool active = false;
   bool optionsPending = false;
   bool sawLeftMouseDown = false;
+  int releaseFramesArmed = 0;
   size_t gizmoId = static_cast<size_t>(-1);
   std::vector<size_t> cloneRootIndices;
   std::vector<size_t> cloneNodeIndices;
@@ -1513,7 +1514,9 @@ static bool IsShiftDown() {
 
 static bool IsLeftMouseDown() {
   const ImGuiIO &io = ImGui::GetIO();
-  return io.MouseDown[0] || ((GetKeyState(VK_LBUTTON) & 0x8000) != 0);
+  return ImGuizmo::IsUsing() || io.MouseDown[0] ||
+         ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0) ||
+         ((GetKeyState(VK_LBUTTON) & 0x8000) != 0);
 }
 
 std::vector<size_t> GetSelectedNodeIndices() {
@@ -6433,6 +6436,7 @@ void DrawLightGizmo() {
     originalLightMatrices.push_back(matrix);
   }
 
+  bool startedShiftCloneThisFrame = false;
   if (ImGuizmo::Manipulate(view, proj, op, mode, pivotMatrix)) {
     if (IsShiftDown() && !s_shiftCloneDrag.active &&
         !s_shiftCloneDrag.optionsPending) {
@@ -6441,11 +6445,12 @@ void DrawLightGizmo() {
       if (!clones.empty()) {
         s_shiftCloneDrag.active = true;
         s_shiftCloneDrag.sawLeftMouseDown = IsLeftMouseDown();
+        s_shiftCloneDrag.releaseFramesArmed = 2;
         s_shiftCloneDrag.gizmoId = activeIndex;
         s_shiftCloneDrag.cloneLightIndices = clones;
+        startedShiftCloneThisFrame = true;
         selectedIndices = clones;
         activeIndex = selectedIndices.front();
-        SelectNodesAndLights({}, clones);
         UpdateLights();
       }
     }
@@ -6477,7 +6482,12 @@ void DrawLightGizmo() {
     s_shiftCloneDrag.sawLeftMouseDown = true;
   }
   if (s_shiftCloneDrag.active && s_shiftCloneDrag.cloneRootIndices.empty() &&
+      !startedShiftCloneThisFrame && s_shiftCloneDrag.releaseFramesArmed > 0) {
+    --s_shiftCloneDrag.releaseFramesArmed;
+  }
+  if (s_shiftCloneDrag.active && s_shiftCloneDrag.cloneRootIndices.empty() &&
       s_shiftCloneDrag.sawLeftMouseDown &&
+      s_shiftCloneDrag.releaseFramesArmed <= 0 && !ImGuizmo::IsUsing() &&
       !IsLeftMouseDown()) {
     s_shiftCloneDrag = ShiftCloneDragState{};
   }
@@ -6584,6 +6594,10 @@ static bool ComputeSelectionPivot(
   return true;
 }
 
+static bool ComputeSelectedRootWorldBounds(
+    size_t rootIndex, const std::vector<std::array<float, 16>> &worldTransforms,
+    float outMin[3], float outMax[3]);
+
 static bool ComputeMixedSelectionPivot(
     const std::vector<size_t> &roots,
     const std::vector<size_t> &lightIndices,
@@ -6592,25 +6606,49 @@ static bool ComputeMixedSelectionPivot(
   if (!ComputeSelectionPivot(roots, worldTransforms, pivotMatrix)) {
     return false;
   }
-  if (lightIndices.empty()) {
-    return true;
+
+  float minPoint[3] = {FLT_MAX, FLT_MAX, FLT_MAX};
+  float maxPoint[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
+  bool hasBounds = false;
+
+  auto includePoint = [&](const float point[3]) {
+    for (int axis = 0; axis < 3; ++axis) {
+      minPoint[axis] = (std::min)(minPoint[axis], point[axis]);
+      maxPoint[axis] = (std::max)(maxPoint[axis], point[axis]);
+    }
+    hasBounds = true;
+  };
+
+  for (size_t rootIndex : roots) {
+    float rootMin[3] = {};
+    float rootMax[3] = {};
+    if (ComputeSelectedRootWorldBounds(rootIndex, worldTransforms, rootMin,
+                                       rootMax)) {
+      includePoint(rootMin);
+      includePoint(rootMax);
+      continue;
+    }
+    if (rootIndex < worldTransforms.size()) {
+      const float *rootWorld = worldTransforms[rootIndex].data();
+      const float rootPos[3] = {rootWorld[12], rootWorld[13], rootWorld[14]};
+      includePoint(rootPos);
+    }
   }
 
-  float center[3] = {pivotMatrix[12], pivotMatrix[13], pivotMatrix[14]};
-  int centerCount = 1;
   for (size_t index : lightIndices) {
     if (index >= s_lightInstances.size()) {
       continue;
     }
-    center[0] += s_lightInstances[index].position[0];
-    center[1] += s_lightInstances[index].position[1];
-    center[2] += s_lightInstances[index].position[2];
-    ++centerCount;
+    includePoint(s_lightInstances[index].position);
   }
 
-  pivotMatrix[12] = center[0] / static_cast<float>(centerCount);
-  pivotMatrix[13] = center[1] / static_cast<float>(centerCount);
-  pivotMatrix[14] = center[2] / static_cast<float>(centerCount);
+  if (!hasBounds) {
+    return true;
+  }
+
+  pivotMatrix[12] = (minPoint[0] + maxPoint[0]) * 0.5f;
+  pivotMatrix[13] = (minPoint[1] + maxPoint[1]) * 0.5f;
+  pivotMatrix[14] = (minPoint[2] + maxPoint[2]) * 0.5f;
   return true;
 }
 
@@ -6879,6 +6917,67 @@ static void DrawSelectedRootOutline(
   }
 }
 
+bool IsTransformGizmoHitAt(float screenX, float screenY, float screenWidth,
+                           float screenHeight) {
+  if (ImGuizmo::IsUsing() || ImGuizmo::IsOver()) {
+    return true;
+  }
+  if (screenWidth <= 1.0f || screenHeight <= 1.0f) {
+    return false;
+  }
+
+  std::vector<size_t> selectedRoots = GetSelectedTransformRoots();
+  std::vector<size_t> selectedLightIndices = GetSelectedLightIndices();
+  if (selectedRoots.empty() && selectedLightIndices.empty()) {
+    return false;
+  }
+
+  float view[16], proj[16];
+  BuildViewMatrix(view);
+  BuildProjectionMatrix(proj);
+
+  float pivotMatrix[16] = {};
+  bool hasPivot = false;
+  if (!selectedRoots.empty()) {
+    const std::vector<std::array<float, 16>> worldTransforms =
+        BuildNodeWorldTransforms();
+    hasPivot = ComputeMixedSelectionPivot(selectedRoots, selectedLightIndices,
+                                          worldTransforms, pivotMatrix);
+  } else {
+    size_t activeIndex = selectedLightIndices.front();
+    if (s_selectedLightIdx >= 0 &&
+        s_selectedLightIdx < static_cast<int>(s_lightInstances.size()) &&
+        s_lightInstances[static_cast<size_t>(s_selectedLightIdx)].selected) {
+      activeIndex = static_cast<size_t>(s_selectedLightIdx);
+    }
+    hasPivot = ComputeLightSelectionPivot(selectedLightIndices, activeIndex,
+                                          pivotMatrix);
+  }
+  if (!hasPivot) {
+    return false;
+  }
+
+  float windowX = 0.0f;
+  float windowY = 0.0f;
+  float windowWidth = screenWidth;
+  float windowHeight = screenHeight;
+  GetRenderViewportRect(&windowX, &windowY, &windowWidth, &windowHeight);
+
+  const float pivotPoint[3] = {pivotMatrix[12], pivotMatrix[13],
+                               pivotMatrix[14]};
+  ImVec2 pivotScreen;
+  if (!WorldToScreenPoint(pivotPoint, view, proj, windowX, windowY,
+                          windowWidth, windowHeight, pivotScreen)) {
+    return false;
+  }
+
+  constexpr float kGizmoCenterHitRadius = 54.0f;
+  const float dx = screenX - pivotScreen.x;
+  const float dy = screenY - pivotScreen.y;
+  return dx * dx + dy * dy <=
+         kGizmoCenterHitRadius * kGizmoCenterHitRadius;
+}
+
 void DrawGizmo() {
   std::vector<size_t> selectedRoots = GetSelectedTransformRoots();
   std::vector<size_t> selectedLightIndices = GetSelectedLightIndices();
@@ -6981,7 +7080,7 @@ void DrawGizmo() {
   }
 
   ImGuizmo::OPERATION op = GetActiveGizmoOperation();
-
+  bool startedShiftCloneThisFrame = false;
   if (ImGuizmo::Manipulate(view, proj, op, actualMode,
                            pivotMatrix)) {
     if (!IsShiftDown() && !s_shiftCloneDrag.active &&
@@ -6999,15 +7098,14 @@ void DrawGizmo() {
       if (!clones.rootIndices.empty() || !lightClones.empty()) {
         s_shiftCloneDrag.active = true;
         s_shiftCloneDrag.sawLeftMouseDown = IsLeftMouseDown();
-        s_shiftCloneDrag.gizmoId =
-            !clones.rootIndices.empty() ? clones.rootIndices.front()
-                                        : selectedRoots.front();
+        s_shiftCloneDrag.releaseFramesArmed = 2;
+        s_shiftCloneDrag.gizmoId = selectedRoots.front();
         s_shiftCloneDrag.cloneRootIndices = clones.rootIndices;
         s_shiftCloneDrag.cloneNodeIndices = clones.nodeIndices;
         s_shiftCloneDrag.cloneLightIndices = lightClones;
+        startedShiftCloneThisFrame = true;
         selectedRoots = clones.rootIndices;
         selectedLightIndices = lightClones;
-        SelectNodesAndLights(selectedRoots, selectedLightIndices);
         if (!selectedLightIndices.empty()) {
           UpdateLights();
         }
@@ -7056,7 +7154,12 @@ void DrawGizmo() {
   if (s_shiftCloneDrag.active && IsLeftMouseDown()) {
     s_shiftCloneDrag.sawLeftMouseDown = true;
   }
+  if (s_shiftCloneDrag.active && !startedShiftCloneThisFrame &&
+      s_shiftCloneDrag.releaseFramesArmed > 0) {
+    --s_shiftCloneDrag.releaseFramesArmed;
+  }
   if (s_shiftCloneDrag.active && s_shiftCloneDrag.sawLeftMouseDown &&
+      s_shiftCloneDrag.releaseFramesArmed <= 0 && !ImGuizmo::IsUsing() &&
       !IsLeftMouseDown()) {
     s_shiftCloneDrag.active = false;
     if (!ShiftCloneHasMeshChoice()) {
@@ -7369,6 +7472,9 @@ bool BoxSelect(float startScreenX, float startScreenY, float endScreenX,
 }
 
 int UpdateSelection(float screenWidth, float screenHeight) {
+  if (s_selectionToolMode == SelectionToolMode::Box) {
+    return -1;
+  }
   if (ImGuizmo::IsOver() || ImGuizmo::IsUsing() || ImGui::IsAnyItemHovered())
     return -1;
 

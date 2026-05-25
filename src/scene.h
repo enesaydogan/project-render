@@ -167,6 +167,8 @@ void ResetScene();
 // Draw the ImGuizmo gizmo for selection
 void DrawGizmo();
 bool IsTransformGizmoActiveOrHovered();
+bool IsTransformGizmoHitAt(float screenX, float screenY, float screenWidth,
+                           float screenHeight);
 
 // Draw ImGuizmo gizmo for the selected light
 void DrawLightGizmo();

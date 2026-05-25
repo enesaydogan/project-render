@@ -319,7 +319,11 @@ void DX12View::mousePressEvent(QMouseEvent *e)
 
     if (e->button() == Qt::LeftButton &&
         Scene::GetSelectionToolMode() == Scene::SelectionToolMode::Box &&
-        !Scene::IsTransformGizmoActiveOrHovered()) {
+        !Scene::IsTransformGizmoHitAt(
+            static_cast<float>(e->globalPosition().x()),
+            static_cast<float>(e->globalPosition().y()),
+            static_cast<float>(DX12Context::g_windowWidth),
+            static_cast<float>(DX12Context::g_windowHeight))) {
         m_boxSelecting = true;
         m_boxStartGlobalPos = e->globalPosition();
         m_boxStartLocalPos = e->position().toPoint();
