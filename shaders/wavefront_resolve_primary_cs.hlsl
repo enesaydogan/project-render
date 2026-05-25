@@ -1954,7 +1954,10 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     g_oidnAlbedoGuideOut[pixel] = oidnAlbedoGuide;
     g_oidnNormalRoughnessGuideOut[pixel] = oidnNormalGuide;
     g_specularAlbedo[pixel] = float4(rrSpecularAlbedo, 1.0);
-    g_specHitDistance[pixel] = 0.0;
+    // specHitDistance: provide linear depth for specular pixels so DLSS-RR
+    // can disambiguate specular-path depth from diffuse depth. Use farZ as
+    // sentinel for diffuse-only pixels where specular tracking is irrelevant.
+    g_specHitDistance[pixel] = any(rrSpecularAlbedo > 0.0) ? linearDepth : farZ;
     g_specularMotionVectors[pixel] = any(rrSpecularAlbedo > 0.0) ? motion : kInvalidMvec;
     g_transmissionAccumulation[pixel] = float4(0.0, 0.0, 0.0, 0.0);
     g_transmissionVariance[pixel] = 0.0;

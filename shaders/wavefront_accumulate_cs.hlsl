@@ -67,7 +67,18 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     g_accumulation[pixel] = float4(nextSum, nextCount);
     g_variance[pixel] = nextM2;
-    g_output[pixel] = (dlssRayReconstruction > 0.5)
-                          ? float4(sampleColor, 1.0)
-                          : float4(nextMean, 1.0);
+
+    if (dlssRayReconstruction > 0.5) {
+        // DLSS-RR performs its own temporal accumulation; feed it the raw
+        // single-sample color. Apply a tighter firefly clamp than the generic
+        // 100k-nit cap so that extreme ReSTIR outliers in multi-light scenes
+        // don't destabilize the denoiser's temporal history.
+        const float kDLSSFireflyMaxLuminance = 10000.0;
+        if (sampleLum > kDLSSFireflyMaxLuminance) {
+            sampleColor *= kDLSSFireflyMaxLuminance / sampleLum;
+        }
+        g_output[pixel] = float4(sampleColor, 1.0);
+    } else {
+        g_output[pixel] = float4(nextMean, 1.0);
+    }
 }
