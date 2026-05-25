@@ -215,18 +215,22 @@ struct ShiftCloneDragState {
   size_t gizmoId = static_cast<size_t>(-1);
   std::vector<size_t> cloneRootIndices;
   std::vector<size_t> cloneNodeIndices;
+  std::vector<size_t> cloneLightIndices;
 };
 
 static ShiftCloneDragState s_shiftCloneDrag;
 
-struct ShiftLightCloneDragState {
-  bool active = false;
-  bool sawLeftMouseDown = false;
-  int gizmoId = -1;
-  std::vector<size_t> cloneIndices;
-};
+static void SelectNodesAndLights(const std::vector<size_t> &nodeIndices,
+                                 const std::vector<size_t> &lightIndices);
 
-static ShiftLightCloneDragState s_shiftLightCloneDrag;
+static bool ShiftCloneHasMeshChoice() {
+  return !s_shiftCloneDrag.cloneNodeIndices.empty();
+}
+
+static void SelectShiftCloneResult() {
+  SelectNodesAndLights(s_shiftCloneDrag.cloneRootIndices,
+                       s_shiftCloneDrag.cloneLightIndices);
+}
 
 static void EnsureGpuBuffersForMeshes(std::vector<Asset::GpuMesh> &meshes);
 static void ReindexScatterNodeReferencesAfterRemoval(size_t removedNodeIndex);
@@ -1546,20 +1550,35 @@ static std::vector<size_t> GetSelectedTransformRoots() {
   return roots;
 }
 
-static void SelectOnlyNodes(const std::vector<size_t> &indices) {
+static void SelectNodesAndLights(const std::vector<size_t> &nodeIndices,
+                                 const std::vector<size_t> &lightIndices) {
   for (Node &node : s_nodes) {
     node.selected = false;
   }
-  for (size_t index : indices) {
+  for (LightInstance &inst : s_lightInstances) {
+    inst.selected = false;
+  }
+
+  for (size_t index : nodeIndices) {
     if (index < s_nodes.size()) {
       s_nodes[index].selected = true;
     }
   }
+
   s_selectedLightIdx = -1;
-  for (LightInstance &inst : s_lightInstances) {
-    inst.selected = false;
+  for (size_t index : lightIndices) {
+    if (index >= s_lightInstances.size()) {
+      continue;
+    }
+    s_lightInstances[index].selected = true;
+    s_selectedLightIdx = static_cast<int>(index);
   }
+
   NotifySceneChanged();
+}
+
+static void SelectOnlyNodes(const std::vector<size_t> &indices) {
+  SelectNodesAndLights(indices, {});
 }
 
 static void ToggleNodeSelection(size_t index) {
@@ -3767,9 +3786,8 @@ void ResolvePendingCloneAsCopy() {
   if (!s_shiftCloneDrag.optionsPending) {
     return;
   }
-  const std::vector<size_t> cloneRootIndices = s_shiftCloneDrag.cloneRootIndices;
   ConvertClonedInstancesToCopies(s_shiftCloneDrag.cloneNodeIndices);
-  SelectOnlyNodes(cloneRootIndices);
+  SelectShiftCloneResult();
   s_shiftCloneDrag = {};
 }
 
@@ -3777,10 +3795,9 @@ void ResolvePendingCloneAsInstance() {
   if (!s_shiftCloneDrag.optionsPending) {
     return;
   }
-  const std::vector<size_t> cloneRootIndices = s_shiftCloneDrag.cloneRootIndices;
   ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
   NotifySceneChanged();
-  SelectOnlyNodes(cloneRootIndices);
+  SelectShiftCloneResult();
   s_shiftCloneDrag = {};
 }
 
@@ -6307,13 +6324,9 @@ CloneLightInstancesAsInstances(const std::vector<size_t> &indices) {
       continue;
     }
     LightInstance clone = s_lightInstances[index];
-    clone.selected = true;
+    clone.selected = false;
     clones.push_back(s_lightInstances.size());
     s_lightInstances.push_back(clone);
-  }
-  if (!clones.empty()) {
-    SelectLights(clones);
-    UpdateLights();
   }
   return clones;
 }
@@ -6349,9 +6362,9 @@ void DrawLightGizmo() {
   }
 
   std::vector<size_t> selectedIndices = GetSelectedLightIndices();
-  if (s_shiftLightCloneDrag.active &&
-      !s_shiftLightCloneDrag.cloneIndices.empty()) {
-    selectedIndices = s_shiftLightCloneDrag.cloneIndices;
+  if (s_shiftCloneDrag.active && s_shiftCloneDrag.cloneRootIndices.empty() &&
+      !s_shiftCloneDrag.cloneLightIndices.empty()) {
+    selectedIndices = s_shiftCloneDrag.cloneLightIndices;
   }
   if (selectedIndices.empty() || !GetSelectedTransformRoots().empty()) {
     ImGui::End();
@@ -6393,8 +6406,9 @@ void DrawLightGizmo() {
                                                 : g_currentGizmoMode;
 
   const int gizmoId =
-      s_shiftLightCloneDrag.active && s_shiftLightCloneDrag.gizmoId >= 0
-          ? s_shiftLightCloneDrag.gizmoId
+      s_shiftCloneDrag.active &&
+              s_shiftCloneDrag.gizmoId != static_cast<size_t>(-1)
+          ? static_cast<int>(s_shiftCloneDrag.gizmoId)
           : static_cast<int>(activeIndex);
   ImGuizmo::SetID(10000 + gizmoId);
   ImGuizmo::SetOrthographic(false);
@@ -6420,16 +6434,19 @@ void DrawLightGizmo() {
   }
 
   if (ImGuizmo::Manipulate(view, proj, op, mode, pivotMatrix)) {
-    if (IsShiftDown() && !s_shiftLightCloneDrag.active) {
+    if (IsShiftDown() && !s_shiftCloneDrag.active &&
+        !s_shiftCloneDrag.optionsPending) {
       const std::vector<size_t> clones =
           CloneLightInstancesAsInstances(selectedIndices);
       if (!clones.empty()) {
-        s_shiftLightCloneDrag.active = true;
-        s_shiftLightCloneDrag.sawLeftMouseDown = IsLeftMouseDown();
-        s_shiftLightCloneDrag.gizmoId = static_cast<int>(activeIndex);
-        s_shiftLightCloneDrag.cloneIndices = clones;
+        s_shiftCloneDrag.active = true;
+        s_shiftCloneDrag.sawLeftMouseDown = IsLeftMouseDown();
+        s_shiftCloneDrag.gizmoId = activeIndex;
+        s_shiftCloneDrag.cloneLightIndices = clones;
         selectedIndices = clones;
         activeIndex = selectedIndices.front();
+        SelectNodesAndLights({}, clones);
+        UpdateLights();
       }
     }
 
@@ -6455,12 +6472,14 @@ void DrawLightGizmo() {
     }
   }
 
-  if (s_shiftLightCloneDrag.active && IsLeftMouseDown()) {
-    s_shiftLightCloneDrag.sawLeftMouseDown = true;
+  if (s_shiftCloneDrag.active && s_shiftCloneDrag.cloneRootIndices.empty() &&
+      IsLeftMouseDown()) {
+    s_shiftCloneDrag.sawLeftMouseDown = true;
   }
-  if (s_shiftLightCloneDrag.active && s_shiftLightCloneDrag.sawLeftMouseDown &&
+  if (s_shiftCloneDrag.active && s_shiftCloneDrag.cloneRootIndices.empty() &&
+      s_shiftCloneDrag.sawLeftMouseDown &&
       !IsLeftMouseDown()) {
-    s_shiftLightCloneDrag = ShiftLightCloneDragState{};
+    s_shiftCloneDrag = ShiftCloneDragState{};
   }
 
   ImGui::End();
@@ -6866,7 +6885,7 @@ void DrawGizmo() {
   if (s_shiftCloneDrag.active &&
       !s_shiftCloneDrag.cloneRootIndices.empty()) {
     selectedRoots = s_shiftCloneDrag.cloneRootIndices;
-    selectedLightIndices.clear();
+    selectedLightIndices = s_shiftCloneDrag.cloneLightIndices;
   }
 
   // ImGuizmo::BeginFrame() called in main.cpp
@@ -6975,13 +6994,23 @@ void DrawGizmo() {
     if (IsShiftDown() && !s_shiftCloneDrag.active &&
         !s_shiftCloneDrag.optionsPending) {
       ClonedNodeSet clones = CloneNodesAsInstances(selectedRoots);
-      if (!clones.rootIndices.empty()) {
+      std::vector<size_t> lightClones =
+          CloneLightInstancesAsInstances(selectedLightIndices);
+      if (!clones.rootIndices.empty() || !lightClones.empty()) {
         s_shiftCloneDrag.active = true;
         s_shiftCloneDrag.sawLeftMouseDown = IsLeftMouseDown();
-        s_shiftCloneDrag.gizmoId = selectedRoots.front();
+        s_shiftCloneDrag.gizmoId =
+            !clones.rootIndices.empty() ? clones.rootIndices.front()
+                                        : selectedRoots.front();
         s_shiftCloneDrag.cloneRootIndices = clones.rootIndices;
         s_shiftCloneDrag.cloneNodeIndices = clones.nodeIndices;
+        s_shiftCloneDrag.cloneLightIndices = lightClones;
         selectedRoots = clones.rootIndices;
+        selectedLightIndices = lightClones;
+        SelectNodesAndLights(selectedRoots, selectedLightIndices);
+        if (!selectedLightIndices.empty()) {
+          UpdateLights();
+        }
       }
     }
 
@@ -7030,7 +7059,12 @@ void DrawGizmo() {
   if (s_shiftCloneDrag.active && s_shiftCloneDrag.sawLeftMouseDown &&
       !IsLeftMouseDown()) {
     s_shiftCloneDrag.active = false;
-    s_shiftCloneDrag.optionsPending = true;
+    if (!ShiftCloneHasMeshChoice()) {
+      SelectShiftCloneResult();
+      s_shiftCloneDrag = {};
+    } else {
+      s_shiftCloneDrag.optionsPending = true;
+    }
   }
 
   ImGui::End();
@@ -7186,29 +7220,7 @@ static void AppendUniqueIndex(std::vector<size_t> &indices, size_t index) {
 
 static void ApplySelectionSets(const std::vector<size_t> &nodeIndices,
                                const std::vector<size_t> &lightIndices) {
-  for (Node &node : s_nodes) {
-    node.selected = false;
-  }
-  for (LightInstance &inst : s_lightInstances) {
-    inst.selected = false;
-  }
-
-  for (size_t index : nodeIndices) {
-    if (index < s_nodes.size()) {
-      s_nodes[index].selected = true;
-    }
-  }
-
-  s_selectedLightIdx = -1;
-  for (size_t index : lightIndices) {
-    if (index >= s_lightInstances.size()) {
-      continue;
-    }
-    s_lightInstances[index].selected = true;
-    s_selectedLightIdx = static_cast<int>(index);
-  }
-
-  NotifySceneChanged();
+  SelectNodesAndLights(nodeIndices, lightIndices);
 }
 
 static bool ProjectNodeBoundsToScreen(
