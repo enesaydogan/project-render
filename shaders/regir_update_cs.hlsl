@@ -71,7 +71,10 @@ void finalize_cell_reservoir(inout CellReservoir r,
         outSlot.W = 0.0;
 }
 
-// Sphere vs AABB overlap test
+// Sphere vs AABB overlap. Cheap fast-path skip: if the light's reach
+// sphere doesn't touch the cell at all, we can drop it before the more
+// expensive weight/cone math. This is a real win once N_lights grows
+// into the hundreds.
 bool SphereOverlapsCell(float3 sphereCenter, float sphereRadius,
                         float3 cellMin, float3 cellMax)
 {
@@ -80,38 +83,48 @@ bool SphereOverlapsCell(float3 sphereCenter, float sphereRadius,
     return dot(diff, diff) <= (sphereRadius * sphereRadius);
 }
 
-bool SpotConeOverlapsCell(ReGIRLightBound lb, float3 cellCenter,
-                          float cellRadius)
+// Angular falloff for spot/IES lights. Folds the cone direction into the
+// proposal distribution so RIS doesn't pick a spotlight whose axis points
+// away from the cell — those candidates contribute zero radiance and inflate
+// variance once the per-cell light count gets large.
+float ComputeSpotAngularFactor(ReGIRLightBound lb, float3 cellCenter)
 {
-    if (lb.type != 2u)
-        return true;
-
-    float3 axis = normalize(lb.direction);
-    float axisLenSq = dot(axis, axis);
-    if (!isfinite(axisLenSq) || axisLenSq < 0.25)
-        axis = float3(0.0, -1.0, 0.0);
-
     float3 toCell = cellCenter - lb.center;
-    float axial = dot(toCell, axis);
-    if (axial < -cellRadius || axial > lb.radius + cellRadius)
-        return false;
+    float distSq = dot(toCell, toCell);
+    if (distSq < 1.0e-6)
+        return 1.0;
 
+    float3 axis = lb.direction;
+    if (dot(axis, axis) < 0.25)
+        return 1.0;
+
+    float cosTheta = dot(axis, toCell) * rsqrt(distSq);
     float outerCos = clamp(lb.outerConeAngle, 0.01, 0.999);
-    float tanOuter = sqrt(max(0.0, 1.0 - outerCos * outerCos)) / outerCos;
-    float3 radial = toCell - axis * max(axial, 0.0);
-    float allowedRadius = max(axial, 0.0) * tanOuter + cellRadius;
-    return dot(radial, radial) <= allowedRadius * allowedRadius;
+    // Soft inner boundary so cells straddling the cone edge still get
+    // nonzero proposal weight. Width is 25% of (1 - outer) — gentle ramp.
+    float innerCos = lerp(outerCos, 1.0, 0.25);
+    return smoothstep(outerCos, innerCos, cosTheta);
 }
 
 // Compute a target importance weight for a light relative to a cell.
-// Uses power / distance² with a soft floor.
-float ComputeLightCellWeight(float3 lightCenter, float lightRadius,
-                             float lightPower, float3 cellCenter)
+// Uses power / distance² gated by the spotlight cone direction so the RIS
+// proposal matches the actual radiance contribution. Reach is handled by
+// the AABB cull in the caller.
+float ComputeLightCellWeight(ReGIRLightBound lb, float3 cellCenter)
 {
-    float3 toLight = lightCenter - cellCenter;
+    float3 toLight = lb.center - cellCenter;
     float dist2 = dot(toLight, toLight);
-    float effectiveDist2 = max(dist2, lightRadius * lightRadius * 0.25);
-    return lightPower / max(effectiveDist2, 1.0e-6);
+
+    float effectiveDist2 = max(dist2, lb.radius * lb.radius * 0.25);
+    float spatialWeight = lb.power / max(effectiveDist2, 1.0e-6);
+
+    // Spot/IES cone term. Type IDs match LightType in src/light.h:
+    //   2 = Spot, 5 = IES (IES profiles have a forward lobe — same axis).
+    float angular = 1.0;
+    if (lb.type == 2u || lb.type == 5u)
+        angular = ComputeSpotAngularFactor(lb, cellCenter);
+
+    return spatialWeight * angular;
 }
 
 [numthreads(64, 1, 1)]
@@ -123,7 +136,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     if (g_numLightBounds == 0u)
         return;
 
-    // Compute world-space cell AABB
+    // Compute world-space cell AABB + center
     uint cx = cellIndex % g_regirParams.gridRes.x;
     uint cy = (cellIndex / g_regirParams.gridRes.x) % g_regirParams.gridRes.y;
     uint cz = cellIndex / (g_regirParams.gridRes.x * g_regirParams.gridRes.y);
@@ -132,7 +145,6 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                      float3(cx, cy, cz) * g_regirParams.cellSize;
     float3 cellMax = cellMin + g_regirParams.cellSize;
     float3 cellCenter = (cellMin + cellMax) * 0.5;
-    float cellRadius = length(g_regirParams.cellSize) * 0.5;
 
     // Initialize per-slot reservoirs
     CellReservoir slots[REGIR_CANDIDATES_PER_CELL];
@@ -152,14 +164,15 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         uint lightIdx = (startLight + li) % g_numLightBounds;
         ReGIRLightBound lb = g_regirLightBounds[lightIdx];
 
-        // Bounding sphere test
+        // Fast-path reach skip: light's bounding sphere doesn't touch
+        // the cell AABB → no contribution. Saves the cone math for the
+        // common case of 500+ lights where most are out of range.
         if (!SphereOverlapsCell(lb.center, lb.radius, cellMin, cellMax))
             continue;
-        if (!SpotConeOverlapsCell(lb, cellCenter, cellRadius))
-            continue;
 
-        float weight = ComputeLightCellWeight(
-            lb.center, lb.radius, lb.power, cellCenter);
+        // Weight folds in cone direction, so out-of-cone spots fall
+        // out of the proposal naturally with weight = 0.
+        float weight = ComputeLightCellWeight(lb, cellCenter);
 
         if (weight <= 0.0)
             continue;

@@ -351,11 +351,15 @@ uint ReGIR_SampleCandidateWeighted(float3 worldPos, inout RNG rng,
         if (slot.lightIndex != 0xFFFFFFFFu &&
             slot.weight > 0.0 && slot.W > 0.0) {
             if (found == target) {
+                float inversePdf = slot.W / max(slot.weight, 1.0e-12);
+                // Cap to the proposal-domain size so a numerically lucky
+                // pick (tiny selected weight, large sum) can't generate a
+                // firefly larger than the unbiased estimator would allow.
                 const float domainCap =
                     max((float)max(params.lightBoundCount, validCount), 1.0);
-                sampleWeight =
-                    clamp(slot.W / max(slot.weight, 1.0e-8),
-                          1.0, domainCap);
+                sampleWeight = (isfinite(inversePdf) && inversePdf > 0.0)
+                    ? clamp(inversePdf, 1.0, domainCap)
+                    : 0.0;
                 return slot.lightIndex;
             }
             ++found;

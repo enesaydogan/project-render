@@ -14,6 +14,7 @@
 #include "scene.h"
 #include "streamline_manager.h"
 #include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <cstdarg>
@@ -6807,6 +6808,13 @@ static void StoreReGIRLightDirection(const Light &light,
     dy *= invLen;
     dz *= invLen;
   } else {
+    // Only spot/IES actually consume the cone axis. A zero-direction
+    // spot/IES is a scene-data bug (likely a duplicate path that didn't
+    // copy direction) — surface it loudly in debug builds. Other light
+    // types fall back silently since they ignore this field.
+    assert((light.type != (uint32_t)LightType::Spot &&
+            light.type != (uint32_t)LightType::IES) &&
+           "Spot/IES light has zero direction vector");
     dx = 0.0f;
     dy = -1.0f;
     dz = 0.0f;
@@ -7151,7 +7159,7 @@ static void UploadReGIRConstants(UINT numLightBounds) {
   cb.gridRes[3] = s_regirCandidatesPerCell;
   cb.totalCells =
       (numLightBounds > 0u && s_sceneBoundsValid) ? s_regirTotalCells : 0u;
-  cb.frameIndex = s_frameIndexPtr ? *s_frameIndexPtr : 0u;
+  cb.frameIndex = s_jitterFrameIndex;
   cb.lightsDirty = s_regirDirty ? 1u : 0u;
   cb.lightBoundCount = numLightBounds;
   cb.numLightBounds = numLightBounds;
@@ -7385,44 +7393,49 @@ static void PrepareReGIRFrame(ID3D12GraphicsCommandList4 *list) {
   if (!s_device || !s_srvHeap) {
     return;
   }
+  if (!s_regirEnabled) {
+    return;
+  }
 
   EnsureReGIRResources();
   if (!s_regirConstantsBuffer) {
     return;
   }
 
-  if (!s_sceneBoundsValid || s_regirDirty) {
+  const bool rebuildLightBounds = s_regirDirty;
+  if (!s_sceneBoundsValid || rebuildLightBounds) {
     ComputeSceneBounds();
   }
 
   UINT lightBoundCount = s_regirLightBoundCount;
-  if (s_regirDirty && !s_lastLightsCpu.empty()) {
-    lightBoundCount = BuildReGIRLightBounds(s_lastLightsCpu);
-  }
+  if (rebuildLightBounds) {
+    s_regirLightBoundCount = 0;
+    lightBoundCount = 0;
+    if (!s_lastLightsCpu.empty()) {
+      lightBoundCount = BuildReGIRLightBounds(s_lastLightsCpu);
+    }
 
-  // Append emissive mesh proxies to light bounds for ReGIR (cheap point lights)
-  if (s_regirDirty) {
-    UINT emissiveProxyCount = BuildEmissiveProxyBounds();
-    lightBoundCount += emissiveProxyCount;
+    // Append emissive mesh proxies to light bounds for ReGIR (cheap point lights)
+    BuildEmissiveProxyBounds();
+    lightBoundCount = s_regirLightBoundCount;
   }
 
   if (!s_sceneBoundsValid || lightBoundCount == 0u) {
+    s_regirLightBoundCount = 0;
     s_regirDirty = false;
     UploadReGIRConstants(0u);
     return;
   }
 
   UploadReGIRConstants(lightBoundCount);
-  if (!list || !s_regirDirty) {
+  if (!list) {
     return;
   }
 
-  DispatchReGIRClear(list);
-  D3D12_RESOURCE_BARRIER regirClearBarrier = {};
-  regirClearBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-  regirClearBarrier.UAV.pResource = nullptr;
-  list->ResourceBarrier(1, &regirClearBarrier);
-
+  // ReGIR cell reservoirs are proposals, not persistent lighting state. Keeping
+  // them frozen biases many-light scenes toward the first few cell candidates.
+  // Refresh them every rendered frame so the cell reservoir PDF is represented
+  // over accumulation while CPU light bounds still rebuild only when dirty.
   DispatchReGIRUpdate(list, lightBoundCount);
   D3D12_RESOURCE_BARRIER regirUpdateBarrier = {};
   regirUpdateBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;

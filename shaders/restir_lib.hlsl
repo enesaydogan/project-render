@@ -100,9 +100,12 @@ void finalize_reservoir(inout Reservoir r, float p_target)
         r.W = 0.0;
     }
     
-    // Sanity check and hard cap to prevent over-exposure feedback loops
+    // Sanity check and hard cap to prevent feedback loops. With cone-aware
+    // ReGIR weights the inverse PDF tracks N_relevant (lights actually
+    // illuminating the cell), not N_total — a cap in the low hundreds is
+    // safe for interior archviz scenes and still suppresses fireflies.
     if (isinf(r.W) || isnan(r.W) || r.W < 0.0) r.W = 0.0;
-    r.W = min(r.W, 15.0); // Reduced to 15.0 for interior archviz stability
+    r.W = min(r.W, 100.0);
 }
 
 // ReSTIR GI Reservoir
