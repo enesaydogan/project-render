@@ -172,6 +172,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     const uint numLightBounds = g_regirParams.lightBoundCount;
     if (numLightBounds == 0u)
         return;
+    const uint activeCandidates =
+        clamp(g_regirParams.candidatesPerCell, 1u, REGIR_CANDIDATES_PER_CELL);
 
     // Compute world-space cell AABB + center
     uint cx = cellIndex % g_regirParams.gridRes.x;
@@ -185,7 +187,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     // Initialize per-slot reservoirs
     CellReservoir slots[REGIR_CANDIDATES_PER_CELL];
-    for (uint s = 0u; s < REGIR_CANDIDATES_PER_CELL; ++s)
+    for (uint s = 0u; s < activeCandidates; ++s)
         slots[s] = init_cell_reservoir();
 
     // Temporal reuse: seed each slot from the previous frame's matching slot
@@ -194,7 +196,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     // at shading time never gets a chance to settle.
     if (g_regirParams.frameIndex > 0u) {
         uint prevBase = ReGIR_CellBaseIndexPrev(cellIndex, g_regirParams);
-        for (uint s = 0u; s < REGIR_CANDIDATES_PER_CELL; ++s) {
+        for (uint s = 0u; s < activeCandidates; ++s) {
             ReGIRCellReservoir prev = g_regirCells[prevBase + s];
             if (prev.lightIndex == 0xFFFFFFFFu || prev.W <= 0.0 ||
                 prev.weight <= 0.0 || prev.M == 0u)
@@ -246,13 +248,13 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             continue;
 
         // Reservoir sampling: insert into each slot
-        for (uint s = 0u; s < REGIR_CANDIDATES_PER_CELL; ++s)
+        for (uint s = 0u; s < activeCandidates; ++s)
             update_cell_reservoir(slots[s], lb.lightIndex, weight, rng);
     }
 
     // Write back to global buffer
     uint base = ReGIR_CellBaseIndex(cellIndex, g_regirParams);
-    for (uint s = 0u; s < REGIR_CANDIDATES_PER_CELL; ++s) {
+    for (uint s = 0u; s < activeCandidates; ++s) {
         finalize_cell_reservoir(slots[s], g_regirCells[base + s]);
     }
 }

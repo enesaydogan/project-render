@@ -145,6 +145,9 @@ static Microsoft::WRL::ComPtr<ID3D12Resource> s_shaderCountersReadbackBuffer;
 static Microsoft::WRL::ComPtr<ID3D12Resource>
     s_wavefrontShadowContributionUAV;
 static UINT s_lastShaderCounters[16] = {0};
+// Last value uploaded to camera CB's dxrFeatureFlags so the debug panel can
+// verify the REGIR bit is actually set when the user toggles the checkbox.
+static uint32_t s_lastDxrFeatureMask = 0;
 #if defined(_DEBUG)
 static constexpr bool kShaderCountersEnabled = true;
 #else
@@ -781,6 +784,7 @@ static const char *s_wavefrontStageName = "idle";
 
 // ReGIR resources
 static ComPtr<ID3D12Resource> s_regirCellBuffer;
+static ComPtr<ID3D12Resource> s_regirCellReadbackBuffer;
 static ComPtr<ID3D12Resource> s_regirLightBoundsBuffer;
 static ComPtr<ID3D12Resource> s_regirConstantsBuffer;
 static ComPtr<ID3D12Resource> s_emissiveProxyBuffer;
@@ -793,6 +797,59 @@ static UINT s_regirLightBoundCount = 0;
 static UINT s_regirEmissiveProxyCount = 0;
 static UINT s_regirCandidatesPerCell = 8;
 static UINT s_regirGridRes[3] = {16, 8, 16};
+static constexpr UINT kReGIRMaxGridRes[3] = {32u, 16u, 32u};
+static constexpr UINT kReGIRMaxCandidatesPerCell = 8u;
+static constexpr UINT kReGIRInvalidLightIndex = 0xFFFFFFFFu;
+static float s_regirCellJitterScale = 1.0f;
+static float s_regirLightReachScale = 1.0f;
+static bool s_regirDebugReadbackEnabled = true;
+static UINT s_regirDebugReadbackInterval = 8u;
+static UINT s_regirDebugSelectedLightIndex = kReGIRInvalidLightIndex;
+static UINT s_regirMaxTotalCells = 0;
+static UINT64 s_regirCellBufferBytes = 0;
+static UINT64 s_regirActiveCellBufferBytes = 0;
+static UINT64 s_regirReadbackCapacityBytes = 0;
+static bool s_regirReadbackPending = false;
+static bool s_regirReadbackValid = false;
+static UINT64 s_regirReadbackCopyBytes = 0;
+static UINT s_regirReadbackCopyCells = 0;
+static UINT s_regirReadbackCopyCandidates = 0;
+static UINT s_regirReadbackCopyFrameIndex = 0;
+static UINT s_regirLastUpdateFrameIndex = 0;
+static UINT s_regirLastDispatchGroups = 0;
+static UINT s_regirUpdateCount = 0;
+static UINT s_regirSkippedDirectionalLights = 0;
+static UINT s_regirSkippedZeroPowerLights = 0;
+static UINT s_regirReadbackFrameIndex = 0;
+static UINT s_regirOccupiedCells = 0;
+static UINT s_regirEmptyCells = 0;
+static UINT s_regirValidSlots = 0;
+static UINT s_regirSelectedLightSlotCount = 0;
+static float s_regirOccupancyPercent = 0.0f;
+static float s_regirSlotFillPercent = 0.0f;
+static float s_regirAvgSlotsPerOccupiedCell = 0.0f;
+static float s_regirMinCandidateWeight = 0.0f;
+static float s_regirMaxCandidateWeight = 0.0f;
+static float s_regirAvgCandidateWeight = 0.0f;
+static float s_regirMinReservoirWeightSum = 0.0f;
+static float s_regirMaxReservoirWeightSum = 0.0f;
+static float s_regirAvgReservoirWeightSum = 0.0f;
+static float s_regirMinInversePdf = 0.0f;
+static float s_regirMaxInversePdf = 0.0f;
+static float s_regirAvgInversePdf = 0.0f;
+static float s_regirAvgCandidateCountM = 0.0f;
+static UINT s_regirMaxCandidateCountM = 0;
+enum class ReGIRFallbackReason : UINT {
+  Ready = 0,
+  Disabled = 1,
+  MissingResources = 2,
+  InvalidSceneBounds = 3,
+  NoLights = 4,
+  NoBoundedLights = 5,
+  NoCommandList = 6,
+};
+static ReGIRFallbackReason s_regirFallbackReason =
+    ReGIRFallbackReason::NoLights;
 // Frame counter dedicated to ReGIR ping-pong + history-validity gating.
 // Resets to 0 on dirty so the first frame after a scene change doesn't read
 // garbage from the now-stale "previous" half of the cell buffer.
@@ -804,6 +861,12 @@ static bool s_sceneBoundsValid = false;
 static void InvalidateReGIRGrid() {
   s_regirDirty = true;
   s_sceneBoundsValid = false;
+  s_regirReadbackValid = false;
+  s_regirReadbackPending = false;
+  s_regirOccupiedCells = 0;
+  s_regirEmptyCells = 0;
+  s_regirValidSlots = 0;
+  s_regirSelectedLightSlotCount = 0;
   // Stale temporal history must not be read on the next frame. Resetting the
   // counter both gates the prev-buffer read in the update shader and re-seeds
   // the ping-pong from half 0.
@@ -6790,7 +6853,54 @@ struct ReGIRConstantsGpu {
   uint32_t frameIndex;
   uint32_t proxyCount;    // entries in s_emissiveProxyBuffer
   uint32_t lightBoundCount;
+  float cellJitterScale;
+  uint32_t debugFlags;
+  uint32_t pad3[2];
 };
+
+static UINT ComputeReGIRTotalCells(const UINT gridRes[3]) {
+  return gridRes[0] * gridRes[1] * gridRes[2];
+}
+
+static UINT64 ComputeReGIRCellBufferBytes(UINT totalCells,
+                                          UINT candidatesPerCell,
+                                          bool includePingPong) {
+  const UINT64 halfBytes = static_cast<UINT64>(totalCells) *
+                           static_cast<UINT64>(candidatesPerCell) *
+                           sizeof(ReGIRCellReservoirGpu);
+  return includePingPong ? halfBytes * 2ull : halfBytes;
+}
+
+static void UpdateReGIRDerivedGridState() {
+  s_regirTotalCells = ComputeReGIRTotalCells(s_regirGridRes);
+  s_regirMaxTotalCells = kReGIRMaxGridRes[0] * kReGIRMaxGridRes[1] *
+                         kReGIRMaxGridRes[2];
+  s_regirActiveCellBufferBytes = ComputeReGIRCellBufferBytes(
+      s_regirTotalCells, s_regirCandidatesPerCell, false);
+}
+
+static void ClearReGIRReadbackSummary() {
+  s_regirReadbackValid = false;
+  s_regirReadbackFrameIndex = 0;
+  s_regirOccupiedCells = 0;
+  s_regirEmptyCells = 0;
+  s_regirValidSlots = 0;
+  s_regirSelectedLightSlotCount = 0;
+  s_regirOccupancyPercent = 0.0f;
+  s_regirSlotFillPercent = 0.0f;
+  s_regirAvgSlotsPerOccupiedCell = 0.0f;
+  s_regirMinCandidateWeight = 0.0f;
+  s_regirMaxCandidateWeight = 0.0f;
+  s_regirAvgCandidateWeight = 0.0f;
+  s_regirMinReservoirWeightSum = 0.0f;
+  s_regirMaxReservoirWeightSum = 0.0f;
+  s_regirAvgReservoirWeightSum = 0.0f;
+  s_regirMinInversePdf = 0.0f;
+  s_regirMaxInversePdf = 0.0f;
+  s_regirAvgInversePdf = 0.0f;
+  s_regirAvgCandidateCountM = 0.0f;
+  s_regirMaxCandidateCountM = 0;
+}
 
 static float ComputeReGIRLocalLightReach(const Light &light, float power) {
   // Light::radius is the emitter/soft-shadow radius, not the attenuation reach.
@@ -6799,7 +6909,9 @@ static float ComputeReGIRLocalLightReach(const Light &light, float power) {
   // light picking for most surfaces.
   const float emitterRadius = (std::max)(light.radius, 0.0f);
   const float powerReach =
-      (std::clamp)(std::sqrt((std::max)(power, 0.0f)) * 2.0f, 2.0f, 64.0f);
+      (std::clamp)(std::sqrt((std::max)(power, 0.0f)) * 2.0f *
+                       s_regirLightReachScale,
+                   2.0f, 128.0f);
   return (std::max)(emitterRadius, powerReach);
 }
 
@@ -6841,13 +6953,18 @@ static void StoreReGIRLightDirection(const Light &light,
 }
 
 static void EnsureReGIRResources() {
+  UpdateReGIRDerivedGridState();
   if (s_regirResourcesCreated) return;
 
-  s_regirTotalCells =
-      s_regirGridRes[0] * s_regirGridRes[1] * s_regirGridRes[2];
   // Buffer is doubled to ping-pong frame N writes against frame N-1 reads.
-  UINT cellBufferElements =
-      s_regirTotalCells * s_regirCandidatesPerCell * 2u;
+  const UINT cellBufferElements =
+      s_regirMaxTotalCells * kReGIRMaxCandidatesPerCell * 2u;
+  s_regirCellBufferBytes =
+      ComputeReGIRCellBufferBytes(s_regirMaxTotalCells,
+                                  kReGIRMaxCandidatesPerCell, true);
+  s_regirReadbackCapacityBytes =
+      ComputeReGIRCellBufferBytes(s_regirMaxTotalCells,
+                                  kReGIRMaxCandidatesPerCell, false);
 
   // Cell reservoir buffer (UAV)
   {
@@ -6855,7 +6972,7 @@ static void EnsureReGIRResources() {
     heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
     D3D12_RESOURCE_DESC bufDesc = {};
     bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    bufDesc.Width = cellBufferElements * sizeof(ReGIRCellReservoirGpu);
+    bufDesc.Width = s_regirCellBufferBytes;
     bufDesc.Height = 1;
     bufDesc.DepthOrArraySize = 1;
     bufDesc.MipLevels = 1;
@@ -6883,6 +7000,28 @@ static void EnsureReGIRResources() {
     uavDesc.Buffer.StructureByteStride = sizeof(ReGIRCellReservoirGpu);
     s_device->CreateUnorderedAccessView(s_regirCellBuffer.Get(), nullptr,
                                         &uavDesc, cpuHandle);
+  }
+
+  // Cell reservoir readback buffer. We copy only the active ping-pong half into
+  // this resource when debug readback is enabled.
+  {
+    D3D12_HEAP_PROPERTIES heapProps = {};
+    heapProps.Type = D3D12_HEAP_TYPE_READBACK;
+    D3D12_RESOURCE_DESC bufDesc = {};
+    bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufDesc.Width = s_regirReadbackCapacityBytes;
+    bufDesc.Height = 1;
+    bufDesc.DepthOrArraySize = 1;
+    bufDesc.MipLevels = 1;
+    bufDesc.Format = DXGI_FORMAT_UNKNOWN;
+    bufDesc.SampleDesc.Count = 1;
+    bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    bufDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+    ThrowIfFailed(s_device->CreateCommittedResource(
+        &heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+        IID_PPV_ARGS(&s_regirCellReadbackBuffer)));
+    s_regirCellReadbackBuffer->SetName(L"ReGIR Cell Readback");
   }
 
   // Light bounds buffer (upload heap, SRV)
@@ -6984,6 +7123,8 @@ static void EnsureReGIRResources() {
 
 static UINT BuildReGIRLightBounds(const std::vector<Light> &lights) {
   s_regirLightBoundCount = 0;
+  s_regirSkippedDirectionalLights = 0;
+  s_regirSkippedZeroPowerLights = 0;
   if (!s_regirLightBoundsBuffer) return 0;
 
   std::vector<ReGIRLightBoundGpu> bounds;
@@ -7075,6 +7216,8 @@ static UINT BuildReGIRLightBounds(const std::vector<Light> &lights) {
   }
   s_regirLightBoundsBuffer->Unmap(0, nullptr);
   s_regirLightBoundCount = (UINT)bounds.size();
+  s_regirSkippedDirectionalLights = skippedDirectional;
+  s_regirSkippedZeroPowerLights = skippedZeroPower;
 
   if (g_debugLog) {
     fprintf(stderr,
@@ -7117,6 +7260,10 @@ static void UploadReGIRConstants(UINT numLightBounds) {
   cb.frameIndex = s_regirFrameCounter;
   cb.proxyCount = s_regirEmissiveProxyCount;
   cb.lightBoundCount = numLightBounds;
+  cb.cellJitterScale = (std::clamp)(s_regirCellJitterScale, 0.0f, 2.0f);
+  cb.debugFlags = 0u;
+  cb.pad3[0] = 0u;
+  cb.pad3[1] = 0u;
 
   void *pData = nullptr;
   ThrowIfFailed(s_regirConstantsBuffer->Map(0, nullptr, &pData));
@@ -7146,7 +7293,173 @@ static void DispatchReGIRUpdate(ID3D12GraphicsCommandList4 *list,
       2, s_regirLightBoundsBuffer->GetGPUVirtualAddress());
 
   list->SetPipelineState(s_regirUpdatePSO.Get());
-  list->Dispatch((s_regirTotalCells + 63) / 64, 1, 1);
+  s_regirLastDispatchGroups = (s_regirTotalCells + 63) / 64;
+  list->Dispatch(s_regirLastDispatchGroups, 1, 1);
+}
+
+static void ConsumeReGIRCellReadback() {
+  if (!s_regirReadbackPending || !s_regirCellReadbackBuffer ||
+      s_regirReadbackCopyBytes == 0 ||
+      s_regirReadbackCopyCells == 0 ||
+      s_regirReadbackCopyCandidates == 0) {
+    return;
+  }
+
+  void *mapped = nullptr;
+  if (FAILED(s_regirCellReadbackBuffer->Map(0, nullptr, &mapped)) || !mapped) {
+    return;
+  }
+
+  const auto *slots =
+      reinterpret_cast<const ReGIRCellReservoirGpu *>(mapped);
+  const UINT totalCells = s_regirReadbackCopyCells;
+  const UINT candidates = s_regirReadbackCopyCandidates;
+  UINT occupiedCells = 0;
+  UINT validSlots = 0;
+  UINT selectedLightSlots = 0;
+  UINT maxM = 0;
+  double sumSlotsPerOccupiedCell = 0.0;
+  double sumCandidateWeight = 0.0;
+  double sumReservoirWeightSum = 0.0;
+  double sumInversePdf = 0.0;
+  double sumM = 0.0;
+  float minCandidateWeight = (std::numeric_limits<float>::max)();
+  float maxCandidateWeight = 0.0f;
+  float minReservoirWeightSum = (std::numeric_limits<float>::max)();
+  float maxReservoirWeightSum = 0.0f;
+  float minInversePdf = (std::numeric_limits<float>::max)();
+  float maxInversePdf = 0.0f;
+
+  for (UINT cell = 0; cell < totalCells; ++cell) {
+    UINT cellValidSlots = 0;
+    for (UINT candidate = 0; candidate < candidates; ++candidate) {
+      const ReGIRCellReservoirGpu &slot =
+          slots[static_cast<size_t>(cell) * candidates + candidate];
+      const bool valid =
+          slot.lightIndex != kReGIRInvalidLightIndex && slot.weight > 0.0f &&
+          slot.W > 0.0f && slot.M > 0u && std::isfinite(slot.weight) &&
+          std::isfinite(slot.W);
+      if (!valid) {
+        continue;
+      }
+      ++cellValidSlots;
+      ++validSlots;
+      if (slot.lightIndex == s_regirDebugSelectedLightIndex) {
+        ++selectedLightSlots;
+      }
+      minCandidateWeight = (std::min)(minCandidateWeight, slot.weight);
+      maxCandidateWeight = (std::max)(maxCandidateWeight, slot.weight);
+      minReservoirWeightSum = (std::min)(minReservoirWeightSum, slot.W);
+      maxReservoirWeightSum = (std::max)(maxReservoirWeightSum, slot.W);
+      sumCandidateWeight += slot.weight;
+      sumReservoirWeightSum += slot.W;
+      sumM += static_cast<double>(slot.M);
+      maxM = (std::max)(maxM, slot.M);
+
+      const float inversePdf = slot.W / (std::max)(slot.weight, 1.0e-12f);
+      if (std::isfinite(inversePdf) && inversePdf > 0.0f) {
+        minInversePdf = (std::min)(minInversePdf, inversePdf);
+        maxInversePdf = (std::max)(maxInversePdf, inversePdf);
+        sumInversePdf += inversePdf;
+      }
+    }
+    if (cellValidSlots > 0) {
+      ++occupiedCells;
+      sumSlotsPerOccupiedCell += static_cast<double>(cellValidSlots);
+    }
+  }
+
+  s_regirCellReadbackBuffer->Unmap(0, nullptr);
+  s_regirReadbackPending = false;
+  s_regirReadbackValid = true;
+  s_regirReadbackFrameIndex = s_regirReadbackCopyFrameIndex;
+  s_regirOccupiedCells = occupiedCells;
+  s_regirEmptyCells = totalCells - occupiedCells;
+  s_regirValidSlots = validSlots;
+  s_regirSelectedLightSlotCount = selectedLightSlots;
+  s_regirOccupancyPercent =
+      totalCells > 0 ? (100.0f * occupiedCells) / static_cast<float>(totalCells)
+                     : 0.0f;
+  const UINT totalSlots = totalCells * candidates;
+  s_regirSlotFillPercent =
+      totalSlots > 0 ? (100.0f * validSlots) / static_cast<float>(totalSlots)
+                     : 0.0f;
+  s_regirAvgSlotsPerOccupiedCell =
+      occupiedCells > 0
+          ? static_cast<float>(sumSlotsPerOccupiedCell / occupiedCells)
+          : 0.0f;
+  if (validSlots > 0) {
+    s_regirMinCandidateWeight = minCandidateWeight;
+    s_regirMaxCandidateWeight = maxCandidateWeight;
+    s_regirAvgCandidateWeight =
+        static_cast<float>(sumCandidateWeight / validSlots);
+    s_regirMinReservoirWeightSum = minReservoirWeightSum;
+    s_regirMaxReservoirWeightSum = maxReservoirWeightSum;
+    s_regirAvgReservoirWeightSum =
+        static_cast<float>(sumReservoirWeightSum / validSlots);
+    s_regirMinInversePdf =
+        (minInversePdf == (std::numeric_limits<float>::max)()) ? 0.0f
+                                                               : minInversePdf;
+    s_regirMaxInversePdf = maxInversePdf;
+    s_regirAvgInversePdf = static_cast<float>(sumInversePdf / validSlots);
+    s_regirAvgCandidateCountM = static_cast<float>(sumM / validSlots);
+    s_regirMaxCandidateCountM = maxM;
+  } else {
+    s_regirMinCandidateWeight = 0.0f;
+    s_regirMaxCandidateWeight = 0.0f;
+    s_regirAvgCandidateWeight = 0.0f;
+    s_regirMinReservoirWeightSum = 0.0f;
+    s_regirMaxReservoirWeightSum = 0.0f;
+    s_regirAvgReservoirWeightSum = 0.0f;
+    s_regirMinInversePdf = 0.0f;
+    s_regirMaxInversePdf = 0.0f;
+    s_regirAvgInversePdf = 0.0f;
+    s_regirAvgCandidateCountM = 0.0f;
+    s_regirMaxCandidateCountM = 0;
+  }
+}
+
+static void QueueReGIRCellReadback(ID3D12GraphicsCommandList *commandList) {
+  if (!commandList || !s_regirDebugReadbackEnabled ||
+      !s_regirCellBuffer || !s_regirCellReadbackBuffer ||
+      s_regirTotalCells == 0 || s_regirCandidatesPerCell == 0 ||
+      s_regirLastUpdateFrameIndex == 0xFFFFFFFFu) {
+    return;
+  }
+
+  static UINT s_regirReadbackTick = 0;
+  const UINT interval = (std::max)(1u, s_regirDebugReadbackInterval);
+  if ((s_regirReadbackTick++ % interval) != 0u) {
+    return;
+  }
+
+  const UINT64 copyBytes = ComputeReGIRCellBufferBytes(
+      s_regirTotalCells, s_regirCandidatesPerCell, false);
+  if (copyBytes == 0 || copyBytes > s_regirReadbackCapacityBytes) {
+    return;
+  }
+
+  const UINT sourceHalf = s_regirLastUpdateFrameIndex & 1u;
+  const UINT64 sourceOffset = sourceHalf * copyBytes;
+
+  D3D12_RESOURCE_BARRIER toCopy = {};
+  toCopy.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+  toCopy.Transition.pResource = s_regirCellBuffer.Get();
+  toCopy.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+  toCopy.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+  toCopy.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+  commandList->ResourceBarrier(1, &toCopy);
+  commandList->CopyBufferRegion(s_regirCellReadbackBuffer.Get(), 0,
+                                s_regirCellBuffer.Get(), sourceOffset,
+                                copyBytes);
+  std::swap(toCopy.Transition.StateBefore, toCopy.Transition.StateAfter);
+  commandList->ResourceBarrier(1, &toCopy);
+
+  s_regirReadbackPending = true;
+  s_regirReadbackCopyBytes = copyBytes;
+  s_regirReadbackCopyCells = s_regirTotalCells;
+  s_regirReadbackCopyCandidates = s_regirCandidatesPerCell;
+  s_regirReadbackCopyFrameIndex = s_regirLastUpdateFrameIndex;
 }
 
 // Emissive proxy data GPU struct (must match common.hlsli EmissiveProxyData)
@@ -7337,6 +7650,7 @@ static UINT BuildEmissiveProxyBounds() {
 
 static void PrepareReGIRFrame(ID3D12GraphicsCommandList4 *list) {
   if (!s_device || !s_srvHeap) {
+    s_regirFallbackReason = ReGIRFallbackReason::MissingResources;
     return;
   }
 
@@ -7345,11 +7659,16 @@ static void PrepareReGIRFrame(ID3D12GraphicsCommandList4 *list) {
   // (undefined behavior in D3D12).
   EnsureReGIRResources();
   if (!s_regirConstantsBuffer) {
+    s_regirFallbackReason = ReGIRFallbackReason::MissingResources;
     return;
   }
 
   if (!s_regirEnabled) {
     s_regirEmissiveProxyCount = 0;
+    s_regirLastDispatchGroups = 0;
+    s_regirLastUpdateFrameIndex = 0xFFFFFFFFu;
+    s_regirFallbackReason = ReGIRFallbackReason::Disabled;
+    ClearReGIRReadbackSummary();
     UploadReGIRConstants(0u);
     return;
   }
@@ -7377,12 +7696,23 @@ static void PrepareReGIRFrame(ID3D12GraphicsCommandList4 *list) {
     s_regirLightBoundCount = 0;
     s_regirEmissiveProxyCount = 0;
     s_regirDirty = false;
+    s_regirLastDispatchGroups = 0;
+    s_regirLastUpdateFrameIndex = 0xFFFFFFFFu;
+    s_regirFallbackReason =
+        !s_sceneBoundsValid
+            ? ReGIRFallbackReason::InvalidSceneBounds
+            : (s_lastLightsCpu.empty() ? ReGIRFallbackReason::NoLights
+                                       : ReGIRFallbackReason::NoBoundedLights);
+    ClearReGIRReadbackSummary();
     UploadReGIRConstants(0u);
     return;
   }
 
   UploadReGIRConstants(lightBoundCount);
   if (!list) {
+    s_regirLastUpdateFrameIndex = 0xFFFFFFFFu;
+    s_regirLastDispatchGroups = 0;
+    s_regirFallbackReason = ReGIRFallbackReason::NoCommandList;
     return;
   }
 
@@ -7391,12 +7721,15 @@ static void PrepareReGIRFrame(ID3D12GraphicsCommandList4 *list) {
   // Refresh them every rendered frame so the cell reservoir PDF is represented
   // over accumulation while CPU light bounds still rebuild only when dirty.
   DispatchReGIRUpdate(list, lightBoundCount);
+  s_regirLastUpdateFrameIndex = s_regirFrameCounter;
   D3D12_RESOURCE_BARRIER regirUpdateBarrier = {};
   regirUpdateBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
   regirUpdateBarrier.UAV.pResource = nullptr;
   list->ResourceBarrier(1, &regirUpdateBarrier);
 
   s_regirDirty = false;
+  s_regirFallbackReason = ReGIRFallbackReason::Ready;
+  ++s_regirUpdateCount;
   // Advance the ReGIR counter after a successful dispatch so the next frame
   // reads the buffer half we just wrote as its "previous".
   ++s_regirFrameCounter;
@@ -7409,13 +7742,163 @@ void MarkReGIRDirty() {
 void SetReGIREnabled(bool enabled) {
   if (s_regirEnabled != enabled) {
     s_regirEnabled = enabled;
-    if (enabled)
-      InvalidateReGIRGrid();
+    InvalidateReGIRGrid();
   }
 }
 
 bool GetReGIREnabled() {
   return s_regirEnabled;
+}
+
+ReGIRSettings GetReGIRSettings() {
+  ReGIRSettings settings;
+  settings.enabled = s_regirEnabled;
+  settings.gridRes[0] = s_regirGridRes[0];
+  settings.gridRes[1] = s_regirGridRes[1];
+  settings.gridRes[2] = s_regirGridRes[2];
+  settings.candidatesPerCell = s_regirCandidatesPerCell;
+  settings.cellJitterScale = s_regirCellJitterScale;
+  settings.lightReachScale = s_regirLightReachScale;
+  settings.debugReadbackEnabled = s_regirDebugReadbackEnabled;
+  settings.debugReadbackInterval = s_regirDebugReadbackInterval;
+  return settings;
+}
+
+void SetReGIRSettings(const ReGIRSettings &settings) {
+  const UINT newGridRes[3] = {
+      (std::clamp)(settings.gridRes[0], 1u, kReGIRMaxGridRes[0]),
+      (std::clamp)(settings.gridRes[1], 1u, kReGIRMaxGridRes[1]),
+      (std::clamp)(settings.gridRes[2], 1u, kReGIRMaxGridRes[2]),
+  };
+  const UINT newCandidates =
+      (std::clamp)(settings.candidatesPerCell, 1u,
+                   kReGIRMaxCandidatesPerCell);
+  const float newJitter =
+      (std::clamp)(settings.cellJitterScale, 0.0f, 2.0f);
+  const float newReach =
+      (std::clamp)(settings.lightReachScale, 0.1f, 8.0f);
+
+  bool rebuildGrid = false;
+  for (int i = 0; i < 3; ++i) {
+    if (s_regirGridRes[i] != newGridRes[i]) {
+      s_regirGridRes[i] = newGridRes[i];
+      rebuildGrid = true;
+    }
+  }
+  if (s_regirCandidatesPerCell != newCandidates) {
+    s_regirCandidatesPerCell = newCandidates;
+    rebuildGrid = true;
+  }
+  if (std::fabs(s_regirLightReachScale - newReach) > 1.0e-4f) {
+    s_regirLightReachScale = newReach;
+    rebuildGrid = true;
+  }
+  s_regirCellJitterScale = newJitter;
+  s_regirDebugReadbackEnabled = settings.debugReadbackEnabled;
+  s_regirDebugReadbackInterval =
+      (std::clamp)(settings.debugReadbackInterval, 1u, 120u);
+
+  if (s_regirEnabled != settings.enabled) {
+    s_regirEnabled = settings.enabled;
+    rebuildGrid = true;
+  }
+
+  if (rebuildGrid) {
+    UpdateReGIRDerivedGridState();
+    InvalidateReGIRGrid();
+  }
+}
+
+ReGIRStats GetReGIRStats() {
+  UpdateReGIRDerivedGridState();
+  ReGIRStats stats;
+  stats.enabled = s_regirEnabled;
+  stats.resourcesCreated = s_regirResourcesCreated;
+  stats.sceneBoundsValid = s_sceneBoundsValid;
+  stats.dirty = s_regirDirty;
+  stats.readbackEnabled = s_regirDebugReadbackEnabled;
+  stats.readbackValid = s_regirReadbackValid;
+  for (int i = 0; i < 3; ++i) {
+    stats.gridRes[i] = s_regirGridRes[i];
+    stats.maxGridRes[i] = kReGIRMaxGridRes[i];
+    stats.gridMin[i] = s_sceneBoundsMin[i];
+    stats.gridMax[i] = s_sceneBoundsMax[i];
+    const float extent = s_sceneBoundsMax[i] - s_sceneBoundsMin[i];
+    stats.cellSize[i] =
+        (s_regirGridRes[i] > 0) ? extent / static_cast<float>(s_regirGridRes[i])
+                                : 0.0f;
+  }
+  stats.candidatesPerCell = s_regirCandidatesPerCell;
+  stats.maxCandidatesPerCell = kReGIRMaxCandidatesPerCell;
+  stats.totalCells = s_regirTotalCells;
+  stats.maxTotalCells = s_regirMaxTotalCells;
+  stats.lightCount = s_lightCount;
+  stats.lightBoundCount = s_regirLightBoundCount;
+  stats.emissiveProxyCount = s_regirEmissiveProxyCount;
+  stats.skippedDirectionalLights = s_regirSkippedDirectionalLights;
+  stats.skippedZeroPowerLights = s_regirSkippedZeroPowerLights;
+  stats.lastUpdateFrameIndex = s_regirLastUpdateFrameIndex;
+  stats.frameCounter = s_regirFrameCounter;
+  stats.updateCount = s_regirUpdateCount;
+  stats.lastDispatchGroups = s_regirLastDispatchGroups;
+  stats.fallbackReason = static_cast<uint32_t>(s_regirFallbackReason);
+  stats.cellBufferBytes = s_regirCellBufferBytes;
+  stats.activeCellBufferBytes = s_regirActiveCellBufferBytes;
+  stats.lightBoundsBufferBytes =
+      s_regirLightBoundsBuffer ? s_regirLightBoundsBuffer->GetDesc().Width : 0;
+  stats.readbackFrameIndex = s_regirReadbackFrameIndex;
+  stats.occupiedCells = s_regirOccupiedCells;
+  stats.emptyCells = s_regirEmptyCells;
+  stats.validSlots = s_regirValidSlots;
+  stats.selectedLightSlotCount = s_regirSelectedLightSlotCount;
+  stats.selectedLightIndex = s_regirDebugSelectedLightIndex;
+  stats.occupancyPercent = s_regirOccupancyPercent;
+  stats.slotFillPercent = s_regirSlotFillPercent;
+  stats.avgSlotsPerOccupiedCell = s_regirAvgSlotsPerOccupiedCell;
+  stats.minCandidateWeight = s_regirMinCandidateWeight;
+  stats.maxCandidateWeight = s_regirMaxCandidateWeight;
+  stats.avgCandidateWeight = s_regirAvgCandidateWeight;
+  stats.minReservoirWeightSum = s_regirMinReservoirWeightSum;
+  stats.maxReservoirWeightSum = s_regirMaxReservoirWeightSum;
+  stats.avgReservoirWeightSum = s_regirAvgReservoirWeightSum;
+  stats.minInversePdf = s_regirMinInversePdf;
+  stats.maxInversePdf = s_regirMaxInversePdf;
+  stats.avgInversePdf = s_regirAvgInversePdf;
+  stats.avgCandidateCountM = s_regirAvgCandidateCountM;
+  stats.maxCandidateCountM = s_regirMaxCandidateCountM;
+  // Sampling-side counters: written by ReGIR_SampleCandidateWeighted in every
+  // shader that uses the grid. Reset to 0 at the start of each frame in the
+  // path-tracing dispatch, so these are per-frame totals across all dispatches.
+  stats.sampleHits = s_lastShaderCounters[10];
+  stats.sampleOutOfBounds = s_lastShaderCounters[11];
+  stats.sampleNoCandidate = s_lastShaderCounters[12];
+  stats.sampleClamped = s_lastShaderCounters[13];
+  stats.currentFeatureMask = s_lastDxrFeatureMask;
+  return stats;
+}
+
+void SetReGIRDebugSelectedLight(UINT lightIndex) {
+  s_regirDebugSelectedLightIndex = lightIndex;
+}
+
+const char *GetReGIRFallbackReasonName(uint32_t reason) {
+  switch (static_cast<ReGIRFallbackReason>(reason)) {
+  case ReGIRFallbackReason::Ready:
+    return "Ready";
+  case ReGIRFallbackReason::Disabled:
+    return "Disabled";
+  case ReGIRFallbackReason::MissingResources:
+    return "Missing resources";
+  case ReGIRFallbackReason::InvalidSceneBounds:
+    return "Invalid scene bounds";
+  case ReGIRFallbackReason::NoLights:
+    return "No local lights";
+  case ReGIRFallbackReason::NoBoundedLights:
+    return "No bounded local lights";
+  case ReGIRFallbackReason::NoCommandList:
+    return "No command list";
+  }
+  return "Unknown";
 }
 
 bool IsReady() {
@@ -7673,6 +8156,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       cam->triPlanarWorldRotationDegrees =
           g_cameraData.triPlanarWorldRotationDegrees;
       cam->dxrFeatureFlags = static_cast<float>(dxrFeatureMask);
+      s_lastDxrFeatureMask = dxrFeatureMask;
 
       // Keep actual still-frame count even for RR so shaders can compute
       // variance/noise for adaptive sampling and diagnostics.
@@ -10151,6 +10635,7 @@ void EndFrameProfiling(ID3D12GraphicsCommandList *commandList) {
   const bool readbackShaderCounters = ShaderCountersEnabled();
   const bool readbackWavefrontStats =
       g_verboseRenderLogs || ((s_wavefrontStatsReadbackFrame++ & 7u) == 0u);
+  ConsumeReGIRCellReadback();
 
   if (s_queryHeap) {
     commandList->EndQuery(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
@@ -10178,6 +10663,7 @@ void EndFrameProfiling(ID3D12GraphicsCommandList *commandList) {
                          D3D12_RESOURCE_STATE_COPY_SOURCE,
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
+    QueueReGIRCellReadback(commandList);
 
     commandList->ResolveQueryData(s_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
                                   0, 10, s_queryReadbackBuffer.Get(), 0);

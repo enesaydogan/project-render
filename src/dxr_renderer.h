@@ -186,6 +186,77 @@ void MarkReGIRDirty();
 // Runtime toggle for ReGIR enable/disable (default: true).
 void SetReGIREnabled(bool enabled);
 bool GetReGIREnabled();
+struct ReGIRSettings {
+  bool enabled = true;
+  uint32_t gridRes[3] = {16u, 8u, 16u};
+  uint32_t candidatesPerCell = 8u;
+  float cellJitterScale = 1.0f;
+  float lightReachScale = 1.0f;
+  bool debugReadbackEnabled = true;
+  uint32_t debugReadbackInterval = 8u;
+};
+struct ReGIRStats {
+  bool enabled = true;
+  bool resourcesCreated = false;
+  bool sceneBoundsValid = false;
+  bool dirty = true;
+  bool readbackEnabled = true;
+  bool readbackValid = false;
+  uint32_t gridRes[3] = {16u, 8u, 16u};
+  uint32_t maxGridRes[3] = {32u, 16u, 32u};
+  uint32_t candidatesPerCell = 8u;
+  uint32_t maxCandidatesPerCell = 8u;
+  uint32_t totalCells = 0;
+  uint32_t maxTotalCells = 0;
+  float gridMin[3] = {};
+  float gridMax[3] = {};
+  float cellSize[3] = {};
+  uint32_t lightCount = 0;
+  uint32_t lightBoundCount = 0;
+  uint32_t emissiveProxyCount = 0;
+  uint32_t skippedDirectionalLights = 0;
+  uint32_t skippedZeroPowerLights = 0;
+  uint32_t lastUpdateFrameIndex = 0;
+  uint32_t frameCounter = 0;
+  uint32_t updateCount = 0;
+  uint32_t lastDispatchGroups = 0;
+  uint32_t fallbackReason = 0;
+  uint64_t cellBufferBytes = 0;
+  uint64_t activeCellBufferBytes = 0;
+  uint64_t lightBoundsBufferBytes = 0;
+  uint32_t readbackFrameIndex = 0;
+  uint32_t occupiedCells = 0;
+  uint32_t emptyCells = 0;
+  uint32_t validSlots = 0;
+  uint32_t selectedLightSlotCount = 0;
+  uint32_t selectedLightIndex = 0xFFFFFFFFu;
+  float occupancyPercent = 0.0f;
+  float slotFillPercent = 0.0f;
+  float avgSlotsPerOccupiedCell = 0.0f;
+  float minCandidateWeight = 0.0f;
+  float maxCandidateWeight = 0.0f;
+  float avgCandidateWeight = 0.0f;
+  float minReservoirWeightSum = 0.0f;
+  float maxReservoirWeightSum = 0.0f;
+  float avgReservoirWeightSum = 0.0f;
+  float minInversePdf = 0.0f;
+  float maxInversePdf = 0.0f;
+  float avgInversePdf = 0.0f;
+  float avgCandidateCountM = 0.0f;
+  uint32_t maxCandidateCountM = 0;
+  // Sampling-side counters from g_shaderCounters (per-frame).
+  // Tells you whether sampling actually goes through ReGIR vs falls back.
+  uint32_t sampleHits = 0;          // ReGIR pick returned a valid lightIndex
+  uint32_t sampleOutOfBounds = 0;   // shading point outside grid AABB
+  uint32_t sampleNoCandidate = 0;   // cell had no valid slots
+  uint32_t sampleClamped = 0;       // inversePdf hit the domainCap clamp
+  uint32_t currentFeatureMask = 0;  // dxrFeatureFlags as bound this frame
+};
+ReGIRSettings GetReGIRSettings();
+void SetReGIRSettings(const ReGIRSettings &settings);
+ReGIRStats GetReGIRStats();
+void SetReGIRDebugSelectedLight(UINT lightIndex);
+const char *GetReGIRFallbackReasonName(uint32_t reason);
 // Camera jitter scale applied only when DLSS-RR is active.
 // 1.0 = full jitter (best DLSS sampling), 0.0 = disable jitter.
 void SetRrJitterScale(float scale);

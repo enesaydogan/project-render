@@ -95,6 +95,7 @@ bool g_showLightsWindow = false;
 bool g_showMaterialEditor = false;
 bool g_showControlsWindow = false;
 bool g_showRenderSettingsWindow = false;
+static bool g_showReGIRDebugWindow = false;
 bool g_forceUncollapse = false;
 
 // Master toggle: when false the entire ImGui frame is skipped and no UI
@@ -470,6 +471,52 @@ static int DenoiserIndexFromMode(DxrRenderer::DenoiserMode mode) {
   default:
     return 0;
   }
+}
+
+static const char *DebugLightTypeName(uint32_t type) {
+  switch (static_cast<LightType>(type)) {
+  case LightType::Directional:
+    return "Directional";
+  case LightType::Omni:
+    return "Point";
+  case LightType::Spot:
+    return "Spot";
+  case LightType::AreaRect:
+    return "Area Rect";
+  case LightType::AreaDisk:
+    return "Area Disk";
+  case LightType::IES:
+    return "IES";
+  }
+  return "Unknown";
+}
+
+static UINT FlattenedLightIndexForInstance(int instanceIndex) {
+  if (instanceIndex < 0) {
+    return 0xFFFFFFFFu;
+  }
+  const auto &instances = Scene::GetLightInstances();
+  const auto &prototypes = Scene::GetLightPrototypes();
+  UINT flattenedIndex = 0;
+  for (size_t i = 0; i < instances.size(); ++i) {
+    const LightInstance &inst = instances[i];
+    if (inst.prototypeIndex >= prototypes.size()) {
+      continue;
+    }
+    const LightPrototype &proto = prototypes[inst.prototypeIndex];
+    const bool emits = proto.enabled && inst.enabled;
+    if (static_cast<int>(i) == instanceIndex) {
+      return emits ? flattenedIndex : 0xFFFFFFFFu;
+    }
+    if (emits) {
+      ++flattenedIndex;
+    }
+  }
+  return 0xFFFFFFFFu;
+}
+
+static float BytesToMiB(uint64_t bytes) {
+  return static_cast<float>(bytes) / (1024.0f * 1024.0f);
 }
 
 static bool RecreateDxrPipelineSafe(UINT width, UINT height,
@@ -1565,6 +1612,259 @@ void CancelBatchRenderExport() {
   g_renderExportStatus = "Batch render canceled.";
 }
 
+static void DrawReGIRDebugPanel() {
+  ImGui::SetNextWindowSize(ImVec2(430, 520), ImGuiCond_FirstUseEver);
+  if (!ImGui::Begin("regir debug", &g_showReGIRDebugWindow,
+                    ImGuiWindowFlags_None)) {
+    ImGui::End();
+    return;
+  }
+
+  DxrRenderer::ReGIRSettings settings = DxrRenderer::GetReGIRSettings();
+  bool settingsChanged = false;
+  bool rendererSettingsChanged = false;
+  bool enabled = settings.enabled;
+  if (ImGui::Checkbox("Enable ReGIR", &enabled)) {
+    settings.enabled = enabled;
+    settingsChanged = true;
+    rendererSettingsChanged = true;
+  }
+
+  int gridRes[3] = {static_cast<int>(settings.gridRes[0]),
+                    static_cast<int>(settings.gridRes[1]),
+                    static_cast<int>(settings.gridRes[2])};
+  if (ImGui::DragInt3("Grid cells", gridRes, 1.0f, 1, 64)) {
+    settings.gridRes[0] = static_cast<uint32_t>((std::max)(1, gridRes[0]));
+    settings.gridRes[1] = static_cast<uint32_t>((std::max)(1, gridRes[1]));
+    settings.gridRes[2] = static_cast<uint32_t>((std::max)(1, gridRes[2]));
+    settingsChanged = true;
+    rendererSettingsChanged = true;
+  }
+
+  int candidates = static_cast<int>(settings.candidatesPerCell);
+  if (ImGui::SliderInt("Candidates / cell", &candidates, 1, 8)) {
+    settings.candidatesPerCell = static_cast<uint32_t>(candidates);
+    settingsChanged = true;
+    rendererSettingsChanged = true;
+  }
+
+  float jitterScale = settings.cellJitterScale;
+  if (ImGui::SliderFloat("Cell jitter", &jitterScale, 0.0f, 2.0f, "%.2f")) {
+    settings.cellJitterScale = jitterScale;
+    settingsChanged = true;
+    rendererSettingsChanged = true;
+  }
+
+  float reachScale = settings.lightReachScale;
+  if (ImGui::SliderFloat("Light reach scale", &reachScale, 0.1f, 8.0f,
+                         "%.2f")) {
+    settings.lightReachScale = reachScale;
+    settingsChanged = true;
+    rendererSettingsChanged = true;
+  }
+
+  bool readbackEnabled = settings.debugReadbackEnabled;
+  if (ImGui::Checkbox("Cell readback", &readbackEnabled)) {
+    settings.debugReadbackEnabled = readbackEnabled;
+    settingsChanged = true;
+  }
+  int readbackInterval = static_cast<int>(settings.debugReadbackInterval);
+  if (ImGui::SliderInt("Readback interval", &readbackInterval, 1, 120)) {
+    settings.debugReadbackInterval =
+        static_cast<uint32_t>((std::max)(1, readbackInterval));
+    settingsChanged = true;
+  }
+
+  if (settingsChanged) {
+    DxrRenderer::SetReGIRSettings(settings);
+    if (rendererSettingsChanged) {
+      DxrRenderer::ResetAccumulation();
+    }
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Rebuild Grid")) {
+    DxrRenderer::MarkReGIRDirty();
+    DxrRenderer::ResetAccumulation();
+  }
+
+  DxrRenderer::ReGIRStats stats = DxrRenderer::GetReGIRStats();
+  ImGui::Separator();
+  const bool ready = stats.fallbackReason == 0u;
+  ImGui::Text("State: ");
+  ImGui::SameLine();
+  ImGui::TextColored(ready ? ImVec4(0.35f, 0.9f, 0.45f, 1.0f)
+                           : ImVec4(1.0f, 0.55f, 0.25f, 1.0f),
+                     "%s",
+                     DxrRenderer::GetReGIRFallbackReasonName(
+                         stats.fallbackReason));
+  ImGui::Text("Updates: %u  Frame: %u  Dispatch groups: %u",
+              stats.updateCount, stats.lastUpdateFrameIndex,
+              stats.lastDispatchGroups);
+  ImGui::Text("Cells: %u (%u x %u x %u)", stats.totalCells, stats.gridRes[0],
+              stats.gridRes[1], stats.gridRes[2]);
+  ImGui::Text("Cell size: %.3f, %.3f, %.3f", stats.cellSize[0],
+              stats.cellSize[1], stats.cellSize[2]);
+  ImGui::Text("Grid min: %.2f, %.2f, %.2f", stats.gridMin[0],
+              stats.gridMin[1], stats.gridMin[2]);
+  ImGui::Text("Grid max: %.2f, %.2f, %.2f", stats.gridMax[0],
+              stats.gridMax[1], stats.gridMax[2]);
+  ImGui::Text("Cell buffer: %.2f MiB active / %.2f MiB allocated",
+              BytesToMiB(stats.activeCellBufferBytes),
+              BytesToMiB(stats.cellBufferBytes));
+
+  ImGui::Separator();
+  const auto &prototypes = Scene::GetLightPrototypes();
+  const auto &instances = Scene::GetLightInstances();
+  const auto &iesProfiles = Scene::GetIESProfiles();
+  uint32_t typeCounts[6] = {};
+  uint32_t enabledInstances = 0;
+  for (const LightInstance &inst : instances) {
+    if (inst.prototypeIndex >= prototypes.size()) {
+      continue;
+    }
+    const LightPrototype &proto = prototypes[inst.prototypeIndex];
+    if (proto.type < 6u) {
+      ++typeCounts[proto.type];
+    }
+    if (proto.enabled && inst.enabled) {
+      ++enabledInstances;
+    }
+  }
+  ImGui::Text("Scene lights: %zu prototypes, %zu instances, %u enabled",
+              prototypes.size(), instances.size(), enabledInstances);
+  ImGui::Text("GPU lights: %u  ReGIR bounds: %u  emissive proxies: %u",
+              stats.lightCount, stats.lightBoundCount,
+              stats.emissiveProxyCount);
+  ImGui::Text("Skipped directional / zero power: %u / %u",
+              stats.skippedDirectionalLights, stats.skippedZeroPowerLights);
+  ImGui::Text("Types P/S/Rect/Disk/IES: %u / %u / %u / %u / %u",
+              typeCounts[static_cast<uint32_t>(LightType::Omni)],
+              typeCounts[static_cast<uint32_t>(LightType::Spot)],
+              typeCounts[static_cast<uint32_t>(LightType::AreaRect)],
+              typeCounts[static_cast<uint32_t>(LightType::AreaDisk)],
+              typeCounts[static_cast<uint32_t>(LightType::IES)]);
+  ImGui::Text("Queue overflow continuation / shadow / bins: %u / %u / %u",
+              DxrRenderer::GetWavefrontContinuationOverflowCount(),
+              DxrRenderer::GetWavefrontShadowOverflowCount(),
+              DxrRenderer::GetWavefrontMaterialBinOverflowCount());
+
+  // Sampling-side diagnostics. The other stats above show that the UPDATE
+  // shader is building cells, but they don't prove that shading actually
+  // pulls from those cells. These counters tally what happened at the
+  // sampling site over the last GPU frame and answer "is ReGIR really
+  // affecting the render?" directly.
+  ImGui::Separator();
+  const uint32_t hits = stats.sampleHits;
+  const uint32_t oob = stats.sampleOutOfBounds;
+  const uint32_t nocand = stats.sampleNoCandidate;
+  const uint32_t clamped = stats.sampleClamped;
+  const uint64_t totalAttempts =
+      static_cast<uint64_t>(hits) + oob + nocand;
+  ImGui::Text("Sample attempts: %llu",
+              static_cast<unsigned long long>(totalAttempts));
+  if (totalAttempts > 0) {
+    const float hitPct = 100.0f * static_cast<float>(hits) /
+                         static_cast<float>(totalAttempts);
+    const float oobPct = 100.0f * static_cast<float>(oob) /
+                         static_cast<float>(totalAttempts);
+    const float nocandPct = 100.0f * static_cast<float>(nocand) /
+                            static_cast<float>(totalAttempts);
+    ImGui::Text("  hit: %u (%.1f%%)", hits, hitPct);
+    ImGui::Text("  out-of-bounds: %u (%.1f%%)", oob, oobPct);
+    ImGui::Text("  no candidate: %u (%.1f%%)", nocand, nocandPct);
+    const float clampPct = hits > 0u
+                               ? 100.0f * static_cast<float>(clamped) /
+                                     static_cast<float>(hits)
+                               : 0.0f;
+    ImGui::Text("  clamped to domain cap: %u (%.1f%% of hits)", clamped,
+                clampPct);
+  } else {
+    ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.25f, 1.0f),
+                       "  ReGIR sampler was NOT called this frame.");
+  }
+  // dxrFeatureFlags bit 8 (DXR_FEATURE_REGIR_ENABLED) is the runtime gate the
+  // shader checks. If this is 0 while State says Ready, the integration is
+  // misconfigured upstream.
+  const uint32_t kRegirBit = 1u << 8;
+  const bool maskHasRegir = (stats.currentFeatureMask & kRegirBit) != 0u;
+  ImGui::Text("dxrFeatureFlags: 0x%08x", stats.currentFeatureMask);
+  ImGui::SameLine();
+  ImGui::TextColored(maskHasRegir ? ImVec4(0.35f, 0.9f, 0.45f, 1.0f)
+                                  : ImVec4(1.0f, 0.55f, 0.25f, 1.0f),
+                     "%s", maskHasRegir ? "(REGIR bit set)" : "(REGIR bit MISSING)");
+
+  ImGui::Separator();
+  const int selectedInstance = Scene::GetSelectedLightIndex();
+  const UINT selectedFlat = FlattenedLightIndexForInstance(selectedInstance);
+  DxrRenderer::SetReGIRDebugSelectedLight(selectedFlat);
+  if (selectedInstance >= 0 &&
+      selectedInstance < static_cast<int>(instances.size())) {
+    const LightInstance &inst = instances[static_cast<size_t>(selectedInstance)];
+    const bool hasPrototype = inst.prototypeIndex < prototypes.size();
+    ImGui::Text("Selected instance: %d", selectedInstance);
+    if (hasPrototype) {
+      const LightPrototype &proto = prototypes[inst.prototypeIndex];
+      ImGui::Text("Selected prototype: %zu (%s)", inst.prototypeIndex,
+                  DebugLightTypeName(proto.type));
+      if (selectedFlat == 0xFFFFFFFFu) {
+        ImGui::TextUnformatted("Flattened light index: disabled/not emitted");
+      } else {
+        ImGui::Text("Flattened light index: %u", selectedFlat);
+      }
+      if (proto.iesProfileIndex >= 0 &&
+          proto.iesProfileIndex < static_cast<int>(iesProfiles.size())) {
+        const auto &profile =
+            iesProfiles[static_cast<size_t>(proto.iesProfileIndex)];
+        ImGui::Text("IES: %s  slice=%d  ready=%s",
+                    profile.displayName.c_str(), proto.iesAtlasIndex,
+                    profile.gpuReady ? "yes" : "no");
+      } else {
+        ImGui::TextUnformatted("IES: none");
+      }
+    }
+  } else {
+    ImGui::TextUnformatted("Selected light: none");
+  }
+
+  ImGui::Separator();
+  if (!stats.readbackEnabled) {
+    ImGui::TextUnformatted("Cell occupancy: readback disabled");
+  } else if (!stats.readbackValid) {
+    ImGui::TextUnformatted("Cell occupancy: waiting for GPU readback");
+  } else {
+    ImGui::Text("Readback frame: %u", stats.readbackFrameIndex);
+    ImGui::Text("Occupied cells: %u / %u (%.1f%%)", stats.occupiedCells,
+                stats.totalCells, stats.occupancyPercent);
+    ImGui::Text("Valid slots: %u (%.1f%% fill, %.2f / occupied cell)",
+                stats.validSlots, stats.slotFillPercent,
+                stats.avgSlotsPerOccupiedCell);
+    ImGui::Text("Selected light slots: %u", stats.selectedLightSlotCount);
+    ImGui::Text("Candidate weight min / avg / max: %.4g / %.4g / %.4g",
+                stats.minCandidateWeight, stats.avgCandidateWeight,
+                stats.maxCandidateWeight);
+    ImGui::Text("Reservoir W min / avg / max: %.4g / %.4g / %.4g",
+                stats.minReservoirWeightSum, stats.avgReservoirWeightSum,
+                stats.maxReservoirWeightSum);
+    ImGui::Text("Inverse PDF min / avg / max: %.4g / %.4g / %.4g",
+                stats.minInversePdf, stats.avgInversePdf,
+                stats.maxInversePdf);
+    ImGui::Text("M avg / max: %.2f / %u", stats.avgCandidateCountM,
+                stats.maxCandidateCountM);
+  }
+
+  if (ImGui::CollapsingHeader("IES atlas status")) {
+    ImGui::Text("Profiles: %zu", iesProfiles.size());
+    for (size_t i = 0; i < iesProfiles.size(); ++i) {
+      const auto &profile = iesProfiles[i];
+      ImGui::Text("%zu: slice=%d ready=%s %s", i, profile.atlasSlice,
+                  profile.gpuReady ? "yes" : "no",
+                  profile.displayName.c_str());
+    }
+  }
+
+  ImGui::End();
+}
+
 bool StartAnimationRenderExport(const std::wstring &outputDirectory) {
   if (g_renderExportJob.active || g_renderBatchExport.active ||
       g_renderAnimationExport.active || outputDirectory.empty() ||
@@ -1988,6 +2288,7 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
       ImGui::MenuItem("Render Mode", nullptr, &g_showRenderModeWindow);
       ImGui::MenuItem("Render Settings", nullptr,
                       &g_showRenderSettingsWindow);
+      ImGui::MenuItem("regir debug", nullptr, &g_showReGIRDebugWindow);
       ImGui::MenuItem("Material Editor", nullptr, &g_showMaterialEditor);
       ImGui::EndMenu();
     }
@@ -2020,6 +2321,10 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
     ImGui::Checkbox("##RenderSettingsToggle", &g_showRenderSettingsWindow);
     ImGui::SameLine();
     ImGui::Text("Render Settings");
+    ImGui::SameLine();
+    ImGui::Checkbox("##ReGIRDebugToggle", &g_showReGIRDebugWindow);
+    ImGui::SameLine();
+    ImGui::Text("regir debug");
     ImGui::SameLine();
     ImGui::Checkbox("##MaterialEditorToggle", &g_showMaterialEditor);
     ImGui::SameLine();
@@ -3397,6 +3702,8 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
             g_showControlsWindow = (atoi(line.c_str() + 9) != 0);
           } else if (line.rfind("Lights=", 0) == 0) {
             g_showLightsWindow = (atoi(line.c_str() + 7) != 0);
+          } else if (line.rfind("ReGIRDebug=", 0) == 0) {
+            g_showReGIRDebugWindow = (atoi(line.c_str() + 11) != 0);
           }
         }
       } else {
@@ -3440,6 +3747,10 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
           if (lightsCollapsed >= 0) {
             g_showLightsWindow = (lightsCollapsed == 0);
           }
+          int regirCollapsed = readCollapsed("regir debug");
+          if (regirCollapsed >= 0) {
+            g_showReGIRDebugWindow = (regirCollapsed == 0);
+          }
         }
       }
     }
@@ -3469,6 +3780,9 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
   if (g_showMaterialEditor) {
     MaterialEditor::Draw(g_hwnd, g_showMaterialEditor);
   }
+  if (g_showReGIRDebugWindow) {
+    DrawReGIRDebugPanel();
+  }
 
   Scene::DrawGizmo();
   Scene::DrawLightGizmo();
@@ -3493,5 +3807,6 @@ void SavePanelVisibility() {
   fprintf(f, "MaterialEditor=%d\n", g_showMaterialEditor ? 1 : 0);
   fprintf(f, "Controls=%d\n", g_showControlsWindow ? 1 : 0);
   fprintf(f, "Lights=%d\n", g_showLightsWindow ? 1 : 0);
+  fprintf(f, "ReGIRDebug=%d\n", g_showReGIRDebugWindow ? 1 : 0);
   fclose(f);
 }

@@ -56,6 +56,9 @@ struct ReGIRConstants
     uint   frameIndex;
     uint   proxyCount;     // emissive proxy entries in g_emissiveProxyData
     uint   lightBoundCount;
+    float  cellJitterScale;
+    uint   debugFlags;
+    uint2  pad3;
 };
 
 // ---- world-position to cell index ------------------------------------------

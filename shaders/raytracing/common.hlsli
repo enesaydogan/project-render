@@ -62,6 +62,14 @@ static const uint SHADER_COUNTER_RESERVOIR_READS = 6;  // reservoir reads
 static const uint SHADER_COUNTER_RESERVOIR_WRITES = 7; // reservoir writes
 static const uint SHADER_COUNTER_SPATIAL_NEIGHBOR_READS = 8;
 static const uint SHADER_COUNTER_ENV_SAMPLES = 9;
+// ReGIR sample-side counters: tally what actually happens when shaders try to
+// pull a light from the grid. These are ALWAYS on (not gated by
+// SHADER_ENABLE_DEBUG) — the whole point is to verify the integration is
+// firing in release builds where users see "no visible difference".
+static const uint SHADER_COUNTER_REGIR_SAMPLE_HIT = 10;        // pick succeeded
+static const uint SHADER_COUNTER_REGIR_SAMPLE_OOB = 11;        // worldPos outside grid
+static const uint SHADER_COUNTER_REGIR_SAMPLE_NOCAND = 12;     // cell had no valid slots
+static const uint SHADER_COUNTER_REGIR_SAMPLE_CLAMPED = 13;    // inversePdf hit domainCap
 static const uint SHADER_COUNTER_COUNT = 16; // allocated counters
 
 // GPU-writable counters buffer (read back by host)
@@ -327,7 +335,7 @@ uint ReGIR_WorldPosToCellJittered(float3 worldPos, inout RNG rng,
 {
     float3 jitter = (float3(next_float(rng), next_float(rng),
                             next_float(rng)) - 0.5) *
-                    params.cellSize;
+                    params.cellSize * clamp(params.cellJitterScale, 0.0, 2.0);
     return ReGIR_WorldPosToCell(worldPos + jitter, params);
 }
 
@@ -337,8 +345,10 @@ uint ReGIR_SampleCandidateWeighted(float3 worldPos, inout RNG rng,
 {
     sampleWeight = 0.0;
     uint cellIdx = ReGIR_WorldPosToCellJittered(worldPos, rng, params);
-    if (cellIdx == 0xFFFFFFFFu)
+    if (cellIdx == 0xFFFFFFFFu) {
+        InterlockedAdd(g_shaderCounters[SHADER_COUNTER_REGIR_SAMPLE_OOB], 1u);
         return 0xFFFFFFFFu;
+    }
 
     uint base = ReGIR_CellBaseIndex(cellIdx, params);
 
@@ -366,8 +376,10 @@ uint ReGIR_SampleCandidateWeighted(float3 worldPos, inout RNG rng,
         }
     }
 
-    if (selectedIdx == 0xFFFFFFFFu)
+    if (selectedIdx == 0xFFFFFFFFu) {
+        InterlockedAdd(g_shaderCounters[SHADER_COUNTER_REGIR_SAMPLE_NOCAND], 1u);
         return 0xFFFFFFFFu;
+    }
 
     float inversePdf = selectedW / max(selectedTarget, 1.0e-12);
     // Cap to the proposal-domain size so a numerically lucky pick (tiny
@@ -375,9 +387,12 @@ uint ReGIR_SampleCandidateWeighted(float3 worldPos, inout RNG rng,
     // unbiased estimator would allow.
     const float domainCap =
         max((float)max(params.lightBoundCount, validCount), 1.0);
-    sampleWeight = (isfinite(inversePdf) && inversePdf > 0.0)
-        ? clamp(inversePdf, 1.0, domainCap)
-        : 0.0;
+    bool finite = isfinite(inversePdf) && inversePdf > 0.0;
+    if (finite && inversePdf > domainCap) {
+        InterlockedAdd(g_shaderCounters[SHADER_COUNTER_REGIR_SAMPLE_CLAMPED], 1u);
+    }
+    sampleWeight = finite ? clamp(inversePdf, 1.0, domainCap) : 0.0;
+    InterlockedAdd(g_shaderCounters[SHADER_COUNTER_REGIR_SAMPLE_HIT], 1u);
     return selectedIdx;
 }
 
