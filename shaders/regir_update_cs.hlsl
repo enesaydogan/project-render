@@ -188,6 +188,26 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     for (uint s = 0u; s < REGIR_CANDIDATES_PER_CELL; ++s)
         slots[s] = init_cell_reservoir();
 
+    // Temporal reuse: seed each slot from the previous frame's matching slot
+    // with an M cap so history doesn't grow unbounded. Without this, every
+    // frame restarts RIS over hundreds of lights and the single-sample variance
+    // at shading time never gets a chance to settle.
+    if (g_regirParams.frameIndex > 0u) {
+        uint prevBase = ReGIR_CellBaseIndexPrev(cellIndex, g_regirParams);
+        for (uint s = 0u; s < REGIR_CANDIDATES_PER_CELL; ++s) {
+            ReGIRCellReservoir prev = g_regirCells[prevBase + s];
+            if (prev.lightIndex == 0xFFFFFFFFu || prev.W <= 0.0 ||
+                prev.weight <= 0.0 || prev.M == 0u)
+                continue;
+            uint  cappedM = min(prev.M, REGIR_TEMPORAL_M_CAP);
+            float scale   = (float)cappedM / (float)prev.M;
+            slots[s].lightIndex     = prev.lightIndex;
+            slots[s].selectedWeight = prev.weight;
+            slots[s].w_sum          = prev.W * scale;
+            slots[s].M              = cappedM;
+        }
+    }
+
     // RNG seeded by cell index + frame index (temporal rotation)
     RNG rng;
     rng.state = (cellIndex * 0x9E3779B1u) ^

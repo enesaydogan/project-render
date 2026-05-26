@@ -793,6 +793,10 @@ static UINT s_regirLightBoundCount = 0;
 static UINT s_regirEmissiveProxyCount = 0;
 static UINT s_regirCandidatesPerCell = 8;
 static UINT s_regirGridRes[3] = {16, 8, 16};
+// Frame counter dedicated to ReGIR ping-pong + history-validity gating.
+// Resets to 0 on dirty so the first frame after a scene change doesn't read
+// garbage from the now-stale "previous" half of the cell buffer.
+static UINT s_regirFrameCounter = 0;
 static float s_sceneBoundsMin[3] = {0, 0, 0};
 static float s_sceneBoundsMax[3] = {1, 1, 1};
 static bool s_sceneBoundsValid = false;
@@ -800,6 +804,10 @@ static bool s_sceneBoundsValid = false;
 static void InvalidateReGIRGrid() {
   s_regirDirty = true;
   s_sceneBoundsValid = false;
+  // Stale temporal history must not be read on the next frame. Resetting the
+  // counter both gates the prev-buffer read in the update shader and re-seeds
+  // the ping-pong from half 0.
+  s_regirFrameCounter = 0;
 }
 
 static void SetWavefrontStage(const char *stageName) {
@@ -6837,7 +6845,9 @@ static void EnsureReGIRResources() {
 
   s_regirTotalCells =
       s_regirGridRes[0] * s_regirGridRes[1] * s_regirGridRes[2];
-  UINT cellBufferElements = s_regirTotalCells * s_regirCandidatesPerCell;
+  // Buffer is doubled to ping-pong frame N writes against frame N-1 reads.
+  UINT cellBufferElements =
+      s_regirTotalCells * s_regirCandidatesPerCell * 2u;
 
   // Cell reservoir buffer (UAV)
   {
@@ -7102,7 +7112,9 @@ static void UploadReGIRConstants(UINT numLightBounds) {
   cb.gridRes[3] = s_regirCandidatesPerCell;
   cb.totalCells =
       (numLightBounds > 0u && s_sceneBoundsValid) ? s_regirTotalCells : 0u;
-  cb.frameIndex = s_jitterFrameIndex;
+  // ReGIR's own frame counter, not the TAA jitter index, so dirty rebuilds
+  // produce frameIndex==0 and the update shader skips reading stale history.
+  cb.frameIndex = s_regirFrameCounter;
   cb.proxyCount = s_regirEmissiveProxyCount;
   cb.lightBoundCount = numLightBounds;
 
@@ -7385,6 +7397,9 @@ static void PrepareReGIRFrame(ID3D12GraphicsCommandList4 *list) {
   list->ResourceBarrier(1, &regirUpdateBarrier);
 
   s_regirDirty = false;
+  // Advance the ReGIR counter after a successful dispatch so the next frame
+  // reads the buffer half we just wrote as its "previous".
+  ++s_regirFrameCounter;
 }
 
 void MarkReGIRDirty() {

@@ -342,15 +342,15 @@ uint ReGIR_SampleCandidateWeighted(float3 worldPos, inout RNG rng,
 
     uint base = ReGIR_CellBaseIndex(cellIdx, params);
 
-    // Single-pass reservoir sample uniformly across valid slots. Replaces the
-    // old count-then-index two-pass, which iterated twice and lost the ability
-    // to favor slots with stronger W. Here we weight each slot by its RIS
-    // strength (slot.W) so a slot whose target sum is larger is proportionally
-    // more likely to be chosen — strictly better quality than uniform.
+    // Single-pass UNIFORM reservoir sample across valid slots. Each slot is an
+    // i.i.d. RIS sample of the same proposal distribution, so a uniform pick is
+    // the unbiased estimator (weight = W/p). A previous version weighted the
+    // slot pick by slot.W without the matching sum_W/(K·p) correction, which
+    // amplified variance in dense many-light scenes — exactly the "darker with
+    // more lights" symptom this code is meant to prevent.
     uint   selectedIdx = 0xFFFFFFFFu;
     float  selectedW = 0.0;
     float  selectedTarget = 0.0;
-    float  wTotal = 0.0;
     uint   validCount = 0u;
     for (uint i = 0u; i < params.candidatesPerCell; ++i) {
         ReGIRCellReservoir slot = g_regirCells[base + i];
@@ -358,9 +358,8 @@ uint ReGIR_SampleCandidateWeighted(float3 worldPos, inout RNG rng,
             slot.weight <= 0.0 || slot.W <= 0.0)
             continue;
         ++validCount;
-        float w = slot.W;
-        wTotal += w;
-        if (next_float(rng) * wTotal < w) {
+        // Equal-weight reservoir sample: each valid slot picked with prob 1/n.
+        if (next_float(rng) * (float)validCount < 1.0) {
             selectedIdx = slot.lightIndex;
             selectedW = slot.W;
             selectedTarget = slot.weight;
