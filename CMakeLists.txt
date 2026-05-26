@@ -646,6 +646,12 @@ if(DXC_COMPILER)
   list(APPEND SHADER_COMPILE_LIST "pbr_mesh.hlsl|VSMainGrassShadow|vs_6_0")
   list(REMOVE_DUPLICATES SHADER_COMPILE_LIST)
 
+  set(REGIR_SHADER_FILES
+      "restir_spatial_cs.hlsl"
+      "wavefront_resolve_primary_cs.hlsl"
+      "wavefront_resolve_secondary_cs.hlsl"
+      "wavefront_restir_seed_cs.hlsl")
+
   set(COMPILED_SHADERS)
   foreach(entry IN LISTS SHADER_COMPILE_LIST)
     # convert pipe-separated string into a proper CMake list by swapping | for ;
@@ -669,6 +675,9 @@ if(DXC_COMPILER)
     set(out "${SHADER_BINARY_DIR}/${base}_${ep}_${profile}.cso")
 
     set(dxc_args -T ${profile} -D ${PROJECT_RENDER_SHADER_COUNTER_DEFINE})
+    if(file IN_LIST REGIR_SHADER_FILES)
+      list(APPEND dxc_args -D REGIR_ENABLED)
+    endif()
     if(NOT ep STREQUAL "")
       list(APPEND dxc_args -E ${ep})
     endif()

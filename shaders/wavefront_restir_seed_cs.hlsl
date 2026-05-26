@@ -140,14 +140,16 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                     }
                     if (WavefrontIsEmissiveProxyLightIndex(lightIndex) ||
                         lightIndex < numLights) {
-                        WavefrontLightSample localSample =
-                            WavefrontIsEmissiveProxyLightIndex(lightIndex)
-                                ? WavefrontSampleEmissiveProxyLight(
-                                      hitPos, lightIndex,
-                                      max(regirSampleWeight, 1.0))
-                                : WavefrontSampleFlatLight(
-                                      hitPos, lightIndex,
-                                      max(regirSampleWeight, 1.0), rng);
+                        WavefrontLightSample localSample;
+                        if (WavefrontIsEmissiveProxyLightIndex(lightIndex)) {
+                            localSample = WavefrontSampleEmissiveProxyLight(
+                                hitPos, lightIndex,
+                                max(regirSampleWeight, 1.0));
+                        } else {
+                            localSample = WavefrontSampleFlatLight(
+                                hitPos, lightIndex,
+                                max(regirSampleWeight, 1.0), rng);
+                        }
                         float localTarget = WavefrontEvaluateReservoirTarget(
                             record, normal, hitPos, localSample);
                         update_reservoir(reservoir, lightIndex, localTarget,
