@@ -250,6 +250,14 @@ struct ReGIRStats {
   uint32_t sampleOutOfBounds = 0;   // shading point outside grid AABB
   uint32_t sampleNoCandidate = 0;   // cell had no valid slots
   uint32_t sampleClamped = 0;       // inversePdf hit the domainCap clamp
+  uint32_t samplerCreateCalls = 0;
+  uint32_t samplerReGIRMode = 0;
+  uint32_t samplerFlatNoFeature = 0;
+  uint32_t samplerFlatNoCells = 0;
+  uint32_t samplerCompiledOut = 0;
+  uint32_t samplerMaxTotalCells = 0;
+  uint32_t samplerMaxLights = 0;
+  bool sampleCounterReadbackEnabled = false;
   uint32_t currentFeatureMask = 0;  // dxrFeatureFlags as bound this frame
 };
 ReGIRSettings GetReGIRSettings();

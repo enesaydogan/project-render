@@ -1760,9 +1760,21 @@ static void DrawReGIRDebugPanel() {
   const uint32_t clamped = stats.sampleClamped;
   const uint64_t totalAttempts =
       static_cast<uint64_t>(hits) + oob + nocand;
+  ImGui::Text("Counter readback: %s",
+              stats.sampleCounterReadbackEnabled ? "active" : "unavailable");
+  ImGui::Text("Sampler create / ReGIR mode: %u / %u",
+              stats.samplerCreateCalls, stats.samplerReGIRMode);
+  ImGui::Text("Flat no feature / no cells / compiled out: %u / %u / %u",
+              stats.samplerFlatNoFeature, stats.samplerFlatNoCells,
+              stats.samplerCompiledOut);
+  ImGui::Text("Shader max cells / lights: %u / %u",
+              stats.samplerMaxTotalCells, stats.samplerMaxLights);
   ImGui::Text("Sample attempts: %llu",
               static_cast<unsigned long long>(totalAttempts));
-  if (totalAttempts > 0) {
+  if (!stats.sampleCounterReadbackEnabled) {
+    ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.25f, 1.0f),
+                       "  sampler verdict unavailable in this frame.");
+  } else if (totalAttempts > 0) {
     const float hitPct = 100.0f * static_cast<float>(hits) /
                          static_cast<float>(totalAttempts);
     const float oobPct = 100.0f * static_cast<float>(oob) /

@@ -70,7 +70,14 @@ static const uint SHADER_COUNTER_REGIR_SAMPLE_HIT = 10;        // pick succeeded
 static const uint SHADER_COUNTER_REGIR_SAMPLE_OOB = 11;        // worldPos outside grid
 static const uint SHADER_COUNTER_REGIR_SAMPLE_NOCAND = 12;     // cell had no valid slots
 static const uint SHADER_COUNTER_REGIR_SAMPLE_CLAMPED = 13;    // inversePdf hit domainCap
-static const uint SHADER_COUNTER_COUNT = 16; // allocated counters
+static const uint SHADER_COUNTER_REGIR_SAMPLER_CREATE = 14;    // WavefrontCreateLightSampler calls
+static const uint SHADER_COUNTER_REGIR_SAMPLER_MODE = 15;      // sampler chose ReGIR mode
+static const uint SHADER_COUNTER_REGIR_FLAT_NO_FEATURE = 16;   // REGIR feature bit missing in shader
+static const uint SHADER_COUNTER_REGIR_FLAT_NO_CELLS = 17;     // g_regirParams.totalCells was 0
+static const uint SHADER_COUNTER_REGIR_COMPILED_OUT = 18;      // REGIR_ENABLED not in this shader variant
+static const uint SHADER_COUNTER_REGIR_MAX_TOTAL_CELLS = 19;   // max totalCells seen by shader
+static const uint SHADER_COUNTER_REGIR_MAX_LIGHTS = 20;        // max local light count seen by shader
+static const uint SHADER_COUNTER_COUNT = 24; // allocated counters
 
 // GPU-writable counters buffer (read back by host)
 RWStructuredBuffer<uint> g_shaderCounters : register(u24);
@@ -982,14 +989,26 @@ inline WavefrontLightSamplerContext WavefrontCreateLightSampler(float3 surfacePo
     WavefrontLightSamplerContext sampler;
     uint numLights = WavefrontGetAvailableLightCount();
     sampler.availableLights = numLights;
+    InterlockedAdd(g_shaderCounters[SHADER_COUNTER_REGIR_SAMPLER_CREATE], 1u);
+    InterlockedMax(g_shaderCounters[SHADER_COUNTER_REGIR_MAX_LIGHTS], numLights);
 #ifdef REGIR_ENABLED
-    if ((dxrFeatureFlags & DXR_FEATURE_REGIR_ENABLED) &&
+    InterlockedMax(g_shaderCounters[SHADER_COUNTER_REGIR_MAX_TOTAL_CELLS],
+                   g_regirParams.totalCells);
+    if (DxrFeatureEnabled(DXR_FEATURE_REGIR_ENABLED) &&
         g_regirParams.totalCells > 0u) {
+        InterlockedAdd(g_shaderCounters[SHADER_COUNTER_REGIR_SAMPLER_MODE], 1u);
         sampler.mode = WAVEFRONT_LIGHT_SAMPLER_REGIR;
     } else {
+        if (!DxrFeatureEnabled(DXR_FEATURE_REGIR_ENABLED)) {
+            InterlockedAdd(g_shaderCounters[SHADER_COUNTER_REGIR_FLAT_NO_FEATURE], 1u);
+        }
+        if (g_regirParams.totalCells == 0u) {
+            InterlockedAdd(g_shaderCounters[SHADER_COUNTER_REGIR_FLAT_NO_CELLS], 1u);
+        }
         sampler.mode = WAVEFRONT_LIGHT_SAMPLER_FLAT;
     }
 #else
+    InterlockedAdd(g_shaderCounters[SHADER_COUNTER_REGIR_COMPILED_OUT], 1u);
     sampler.mode = WAVEFRONT_LIGHT_SAMPLER_FLAT;
 #endif
     return sampler;

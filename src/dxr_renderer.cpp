@@ -144,15 +144,14 @@ static Microsoft::WRL::ComPtr<ID3D12Resource> s_shaderCountersBuffer;
 static Microsoft::WRL::ComPtr<ID3D12Resource> s_shaderCountersReadbackBuffer;
 static Microsoft::WRL::ComPtr<ID3D12Resource>
     s_wavefrontShadowContributionUAV;
-static UINT s_lastShaderCounters[16] = {0};
+static UINT s_lastShaderCounters[24] = {0};
 // Last value uploaded to camera CB's dxrFeatureFlags so the debug panel can
 // verify the REGIR bit is actually set when the user toggles the checkbox.
 static uint32_t s_lastDxrFeatureMask = 0;
-#if defined(_DEBUG)
+// Keep the tiny counter readback alive in Release. Generic shader counters are
+// still controlled by SHADER_ENABLE_DEBUG in HLSL; the always-on ReGIR counters
+// need this host path so the debug panel can make a trustworthy call.
 static constexpr bool kShaderCountersEnabled = true;
-#else
-static constexpr bool kShaderCountersEnabled = false;
-#endif
 static bool ShaderCountersEnabled() { return kShaderCountersEnabled; }
 
 struct WavefrontPathStateGpu {
@@ -4726,7 +4725,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
 
   // Create a small GPU buffer for shader instrumentation counters (u24)
   {
-    const UINT kNumCounters = 16;
+    const UINT kNumCounters = 24;
     D3D12_RESOURCE_DESC bufDesc = {};
     bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
     bufDesc.Alignment = 0;
@@ -7873,6 +7872,16 @@ ReGIRStats GetReGIRStats() {
   stats.sampleOutOfBounds = s_lastShaderCounters[11];
   stats.sampleNoCandidate = s_lastShaderCounters[12];
   stats.sampleClamped = s_lastShaderCounters[13];
+  stats.samplerCreateCalls = s_lastShaderCounters[14];
+  stats.samplerReGIRMode = s_lastShaderCounters[15];
+  stats.samplerFlatNoFeature = s_lastShaderCounters[16];
+  stats.samplerFlatNoCells = s_lastShaderCounters[17];
+  stats.samplerCompiledOut = s_lastShaderCounters[18];
+  stats.samplerMaxTotalCells = s_lastShaderCounters[19];
+  stats.samplerMaxLights = s_lastShaderCounters[20];
+  stats.sampleCounterReadbackEnabled =
+      ShaderCountersEnabled() && s_shaderCountersBuffer &&
+      s_shaderCountersReadbackBuffer;
   stats.currentFeatureMask = s_lastDxrFeatureMask;
   return stats;
 }
@@ -8534,6 +8543,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       dxrList->ClearUnorderedAccessViewUint(
           s_shaderCountersGpuHandle, cpuCounters, s_shaderCountersBuffer.Get(),
           zeroVals, 0, nullptr);
+      D3D12_RESOURCE_BARRIER counterBarrier = {};
+      counterBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+      counterBarrier.UAV.pResource = s_shaderCountersBuffer.Get();
+      dxrList->ResourceBarrier(1, &counterBarrier);
     }
 
     // End ReSTIR timer
@@ -8570,6 +8583,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       dxrList->ClearUnorderedAccessViewUint(
           s_shaderCountersGpuHandle, cpuCounters, s_shaderCountersBuffer.Get(),
           zeros, 0, nullptr);
+      D3D12_RESOURCE_BARRIER counterBarrier = {};
+      counterBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+      counterBarrier.UAV.pResource = s_shaderCountersBuffer.Get();
+      dxrList->ResourceBarrier(1, &counterBarrier);
     }
     if (cameraCB) {
       SetWavefrontStage("bootstrap");
@@ -10731,7 +10748,7 @@ void EndFrameProfiling(ID3D12GraphicsCommandList *commandList) {
     UINT *c = nullptr;
     if (SUCCEEDED(
             s_shaderCountersReadbackBuffer->Map(0, nullptr, (void **)&c))) {
-      for (UINT i = 0; i < 16; ++i)
+      for (UINT i = 0; i < _countof(s_lastShaderCounters); ++i)
         s_lastShaderCounters[i] = c[i];
       s_shaderCountersReadbackBuffer->Unmap(0, nullptr);
 
