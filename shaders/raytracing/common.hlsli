@@ -302,7 +302,6 @@ StructuredBuffer<Light> g_lights : register(t5000);
 #include "../regir_lib.hlsl"
 RWStructuredBuffer<ReGIRCellReservoir> g_regirCells : register(u36);
 StructuredBuffer<ReGIRLightBound> g_regirLightBounds : register(t5001);
-#ifdef REGIR_ENABLED
 // Emissive mesh proxy data (sentinel lightIndex 0x80000000 | proxyIndex)
 struct EmissiveProxyData
 {
@@ -312,7 +311,6 @@ struct EmissiveProxyData
     uint   pad;
 };
 StructuredBuffer<EmissiveProxyData> g_emissiveProxyData : register(t5003);
-#endif
 cbuffer ReGIRParams : register(b11, space3)
 {
     ReGIRConstants g_regirParams;
@@ -375,19 +373,6 @@ uint ReGIR_SampleCandidate(float3 worldPos, inout RNG rng,
     float sampleWeight = 0.0;
     return ReGIR_SampleCandidateWeighted(worldPos, rng, params,
                                          sampleWeight);
-}
-
-uint ReGIR_GetCellOccupancy(uint cellIndex, ReGIRConstants params)
-{
-    uint base = ReGIR_CellBaseIndex(cellIndex, params);
-    uint count = 0u;
-    for (uint i = 0u; i < params.candidatesPerCell; ++i) {
-        ReGIRCellReservoir slot = g_regirCells[base + i];
-        if (slot.lightIndex != 0xFFFFFFFFu &&
-            slot.weight > 0.0 && slot.W > 0.0)
-            ++count;
-    }
-    return count;
 }
 #endif // REGIR_ENABLED
 
@@ -1103,6 +1088,17 @@ inline WavefrontLightSample WavefrontSampleEmissiveProxyLight(
 {
     WavefrontLightSample sample;
     uint proxyIdx = packedProxyIndex & 0x7FFFFFFFu;
+    // Guard against stale proxy sentinels surviving a partial rebuild. If the
+    // index is past the current proxy buffer, return a zero-radiance sample
+    // so the downstream shadow ray is cheap and contributes nothing.
+    if (proxyIdx >= g_regirParams.proxyCount) {
+        sample.direction = float3(0.0, 1.0, 0.0);
+        sample.maxDistance = 0.0;
+        sample.radiance = float3(0.0, 0.0, 0.0);
+        sample.packedLightIndex =
+            WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_FLAT, 0xFFFFFFFFu);
+        return sample;
+    }
     EmissiveProxyData proxy = g_emissiveProxyData[proxyIdx];
     float3 toProxy = proxy.center - surfacePos;
     float dist = length(toProxy);

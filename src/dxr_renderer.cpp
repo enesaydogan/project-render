@@ -302,7 +302,7 @@ static const UINT DXR_HEAP_TEX_OFFSET = 0;
 static const UINT DXR_HEAP_VB_OFFSET = DXR_HEAP_TEX_OFFSET + DXR_HEAP_TEX_COUNT;
 static const UINT DXR_HEAP_IB_OFFSET = DXR_HEAP_VB_OFFSET + DXR_HEAP_VB_COUNT;
 static const UINT DXR_HEAP_UAV_OFFSET = DXR_HEAP_IB_OFFSET + DXR_HEAP_IB_COUNT;
-static const UINT DXR_HEAP_UAV_COUNT = 38; // u0..u37 (ReGIR at u36-u37)
+static const UINT DXR_HEAP_UAV_COUNT = 38; // u0..u37 (ReGIR cells at u36; u37 reserved)
 static const UINT DXR_HEAP_ACCUM_UAV_OFFSET = DXR_HEAP_UAV_OFFSET + 1;
 static const UINT DXR_HEAP_RESERVOIR_0_OFFSET = DXR_HEAP_UAV_OFFSET + 2;
 static const UINT DXR_HEAP_RESERVOIR_1_OFFSET = DXR_HEAP_UAV_OFFSET + 3;
@@ -352,7 +352,6 @@ static const UINT DXR_HEAP_OIDN_ALBEDO_GUIDE_OFFSET =
 static const UINT DXR_HEAP_OIDN_NORMAL_GUIDE_OFFSET =
     DXR_HEAP_UAV_OFFSET + 35;
 static const UINT DXR_HEAP_REGIR_CELLS_OFFSET = DXR_HEAP_UAV_OFFSET + 36;
-static const UINT DXR_HEAP_REGIR_DEBUG_OFFSET = DXR_HEAP_UAV_OFFSET + 37;
 
 // Dedicated SRV blocks after UAV range so UAV registers stay stable.
 static const UINT DXR_HEAP_ENV_SRV_OFFSET =
@@ -782,18 +781,16 @@ static const char *s_wavefrontStageName = "idle";
 
 // ReGIR resources
 static ComPtr<ID3D12Resource> s_regirCellBuffer;
-static ComPtr<ID3D12Resource> s_regirDebugBuffer;
 static ComPtr<ID3D12Resource> s_regirLightBoundsBuffer;
 static ComPtr<ID3D12Resource> s_regirConstantsBuffer;
 static ComPtr<ID3D12Resource> s_emissiveProxyBuffer;
-static ComPtr<ID3D12RootSignature> s_regirClearRootSig;
-static ComPtr<ID3D12PipelineState> s_regirClearPSO;
 static ComPtr<ID3D12RootSignature> s_regirUpdateRootSig;
 static ComPtr<ID3D12PipelineState> s_regirUpdatePSO;
 static bool s_regirResourcesCreated = false;
 static bool s_regirDirty = true;
 static UINT s_regirTotalCells = 0;
 static UINT s_regirLightBoundCount = 0;
+static UINT s_regirEmissiveProxyCount = 0;
 static UINT s_regirCandidatesPerCell = 8;
 static UINT s_regirGridRes[3] = {16, 8, 16};
 static float s_sceneBoundsMin[3] = {0, 0, 0};
@@ -4945,6 +4942,11 @@ void MarkMaterialDirty(int materialIndex) {
     s_dirtyMaterialFlags.resize(idx + 1, 0);
   }
   s_dirtyMaterialFlags[idx] = 1;
+  // Emissive proxies for ReGIR are derived from material.emissiveColor *
+  // intensity; a material edit can change a proxy's existence or radiance.
+  // Without this, the next material tweak doesn't update proxy bounds until
+  // another scene-level invalidation runs.
+  MarkReGIRDirty();
   QueueInteractiveWake("material dirtied");
 }
 
@@ -6778,11 +6780,8 @@ struct ReGIRConstantsGpu {
   uint32_t gridRes[4];    // x, y, z, candidatesPerCell
   uint32_t totalCells;
   uint32_t frameIndex;
-  uint32_t lightsDirty;
+  uint32_t proxyCount;    // entries in s_emissiveProxyBuffer
   uint32_t lightBoundCount;
-  // Extended fields for ReGIR update shader (after ReGIRConstants)
-  uint32_t numLightBounds;
-  uint32_t updatePad[3];
 };
 
 static float ComputeReGIRLocalLightReach(const Light &light, float power) {
@@ -6810,11 +6809,19 @@ static void StoreReGIRLightDirection(const Light &light,
   } else {
     // Only spot/IES actually consume the cone axis. A zero-direction
     // spot/IES is a scene-data bug (likely a duplicate path that didn't
-    // copy direction) — surface it loudly in debug builds. Other light
-    // types fall back silently since they ignore this field.
-    assert((light.type != (uint32_t)LightType::Spot &&
-            light.type != (uint32_t)LightType::IES) &&
-           "Spot/IES light has zero direction vector");
+    // copy direction) — assert in debug, warn once in release so the
+    // fall-through "down" direction doesn't silently misdirect lighting.
+    if (light.type == (uint32_t)LightType::Spot ||
+        light.type == (uint32_t)LightType::IES) {
+      static bool warnedZeroSpotDir = false;
+      if (!warnedZeroSpotDir) {
+        fprintf(stderr,
+                "DxrRenderer: Spot/IES light has zero direction vector — "
+                "falling back to (0,-1,0). Fix the scene data.\n");
+        warnedZeroSpotDir = true;
+      }
+      assert(false && "Spot/IES light has zero direction vector");
+    }
     dx = 0.0f;
     dy = -1.0f;
     dz = 0.0f;
@@ -6868,41 +6875,6 @@ static void EnsureReGIRResources() {
                                         &uavDesc, cpuHandle);
   }
 
-  // Debug buffer (UAV, small)
-  {
-    D3D12_HEAP_PROPERTIES heapProps = {};
-    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-    D3D12_RESOURCE_DESC bufDesc = {};
-    bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    bufDesc.Width = 256 * sizeof(uint32_t) * 4; // 4KB
-    bufDesc.Height = 1;
-    bufDesc.DepthOrArraySize = 1;
-    bufDesc.MipLevels = 1;
-    bufDesc.Format = DXGI_FORMAT_UNKNOWN;
-    bufDesc.SampleDesc.Count = 1;
-    bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    bufDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-
-    ThrowIfFailed(s_device->CreateCommittedResource(
-        &heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
-        IID_PPV_ARGS(&s_regirDebugBuffer)));
-
-    UINT descInc = s_device->GetDescriptorHandleIncrementSize(
-        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-    D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle =
-        s_srvHeap->GetCPUDescriptorHandleForHeapStart();
-    cpuHandle.ptr += DXR_HEAP_REGIR_DEBUG_OFFSET * descInc;
-
-    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-    uavDesc.Format = DXGI_FORMAT_UNKNOWN;
-    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-    uavDesc.Buffer.NumElements = 256;
-    uavDesc.Buffer.StructureByteStride = sizeof(uint32_t) * 4;
-    s_device->CreateUnorderedAccessView(s_regirDebugBuffer.Get(), nullptr,
-                                        &uavDesc, cpuHandle);
-  }
-
   // Light bounds buffer (upload heap, SRV)
   {
     D3D12_HEAP_PROPERTIES heapProps = {};
@@ -6947,44 +6919,12 @@ static void EnsureReGIRResources() {
         IID_PPV_ARGS(&s_regirConstantsBuffer)));
   }
 
-  // Root signatures for ReGIR passes
-  if (!s_regirClearRootSig) {
-    // Clear: needs UAV table (u36-u37) + four root constants at b0.
-    D3D12_DESCRIPTOR_RANGE uavRange = {};
-    uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    uavRange.NumDescriptors = 2; // u36-u37
-    uavRange.BaseShaderRegister = 36;
-    uavRange.RegisterSpace = 0;
-
-    D3D12_ROOT_PARAMETER params[2] = {};
-    params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    params[0].Constants.ShaderRegister = 0;
-    params[0].Constants.RegisterSpace = 0;
-    params[0].Constants.Num32BitValues = 4;
-    params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    params[1].DescriptorTable.NumDescriptorRanges = 1;
-    params[1].DescriptorTable.pDescriptorRanges = &uavRange;
-    params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    D3D12_ROOT_SIGNATURE_DESC rootSigDesc = {};
-    rootSigDesc.NumParameters = 2;
-    rootSigDesc.pParameters = params;
-    rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
-
-    ComPtr<ID3DBlob> sigBlob, errBlob;
-    ThrowIfFailed(D3D12SerializeRootSignature(
-        &rootSigDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob));
-    ThrowIfFailed(s_device->CreateRootSignature(
-        0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(),
-        IID_PPV_ARGS(&s_regirClearRootSig)));
-  }
-
+  // Root signature for ReGIR update pass
   if (!s_regirUpdateRootSig) {
-    // Update: needs UAV table (u36-u37) + SRV t5001 + root CBV
+    // Update: needs UAV table (u36) + SRV t5001 + root CBV
     D3D12_DESCRIPTOR_RANGE uavRange = {};
     uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    uavRange.NumDescriptors = 2;
+    uavRange.NumDescriptors = 1;
     uavRange.BaseShaderRegister = 36;
     uavRange.RegisterSpace = 0;
 
@@ -7015,20 +6955,7 @@ static void EnsureReGIRResources() {
         IID_PPV_ARGS(&s_regirUpdateRootSig)));
   }
 
-  // Compile ReGIR compute shaders
-  if (!s_regirClearPSO) {
-    std::vector<std::wstring> defines;
-    ComPtr<IDxcBlob> cs =
-        s_dxcHelper.Compile(L"shaders/regir_clear_cs.hlsl", L"CSMain",
-                            L"cs_6_5", defines);
-    D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
-    psoDesc.pRootSignature = s_regirClearRootSig.Get();
-    psoDesc.CS.pShaderBytecode = cs->GetBufferPointer();
-    psoDesc.CS.BytecodeLength = cs->GetBufferSize();
-    ThrowIfFailed(s_device->CreateComputePipelineState(
-        &psoDesc, IID_PPV_ARGS(&s_regirClearPSO)));
-  }
-
+  // Compile ReGIR update compute shader
   if (!s_regirUpdatePSO) {
     std::vector<std::wstring> defines;
     ComPtr<IDxcBlob> cs =
@@ -7160,29 +7087,13 @@ static void UploadReGIRConstants(UINT numLightBounds) {
   cb.totalCells =
       (numLightBounds > 0u && s_sceneBoundsValid) ? s_regirTotalCells : 0u;
   cb.frameIndex = s_jitterFrameIndex;
-  cb.lightsDirty = s_regirDirty ? 1u : 0u;
+  cb.proxyCount = s_regirEmissiveProxyCount;
   cb.lightBoundCount = numLightBounds;
-  cb.numLightBounds = numLightBounds;
 
   void *pData = nullptr;
   ThrowIfFailed(s_regirConstantsBuffer->Map(0, nullptr, &pData));
   memcpy(pData, &cb, sizeof(ReGIRConstantsGpu));
   s_regirConstantsBuffer->Unmap(0, nullptr);
-}
-
-static void DispatchReGIRClear(ID3D12GraphicsCommandList4 *list) {
-  if (!s_regirClearPSO || !s_regirClearRootSig || !s_regirCellBuffer) return;
-
-  UINT totalEntries = s_regirTotalCells * s_regirCandidatesPerCell;
-  UINT cbData[4] = {s_regirTotalCells, s_regirCandidatesPerCell, 0, 0};
-
-  list->SetComputeRootSignature(s_regirClearRootSig.Get());
-  list->SetComputeRoot32BitConstants(0, 4, cbData, 0);
-  list->SetComputeRootDescriptorTable(
-      1, GetDxrHeapGpuHandle(DXR_HEAP_REGIR_CELLS_OFFSET));
-
-  list->SetPipelineState(s_regirClearPSO.Get());
-  list->Dispatch((totalEntries + 63) / 64, 1, 1);
 }
 
 static void DispatchReGIRUpdate(ID3D12GraphicsCommandList4 *list,
@@ -7386,6 +7297,7 @@ static UINT BuildEmissiveProxyBounds() {
     s_regirLightBoundCount = totalCount;
   }
 
+  s_regirEmissiveProxyCount = (UINT)proxies.size();
   return (UINT)proxyBounds.size();
 }
 
@@ -7393,12 +7305,18 @@ static void PrepareReGIRFrame(ID3D12GraphicsCommandList4 *list) {
   if (!s_device || !s_srvHeap) {
     return;
   }
-  if (!s_regirEnabled) {
+
+  // Always create resources, even when ReGIR is runtime-disabled, so the root
+  // SRV/CBV bindings in the wavefront passes never receive a GPUVA of 0
+  // (undefined behavior in D3D12).
+  EnsureReGIRResources();
+  if (!s_regirConstantsBuffer) {
     return;
   }
 
-  EnsureReGIRResources();
-  if (!s_regirConstantsBuffer) {
+  if (!s_regirEnabled) {
+    s_regirEmissiveProxyCount = 0;
+    UploadReGIRConstants(0u);
     return;
   }
 
@@ -7410,6 +7328,7 @@ static void PrepareReGIRFrame(ID3D12GraphicsCommandList4 *list) {
   UINT lightBoundCount = s_regirLightBoundCount;
   if (rebuildLightBounds) {
     s_regirLightBoundCount = 0;
+    s_regirEmissiveProxyCount = 0;
     lightBoundCount = 0;
     if (!s_lastLightsCpu.empty()) {
       lightBoundCount = BuildReGIRLightBounds(s_lastLightsCpu);
@@ -7422,6 +7341,7 @@ static void PrepareReGIRFrame(ID3D12GraphicsCommandList4 *list) {
 
   if (!s_sceneBoundsValid || lightBoundCount == 0u) {
     s_regirLightBoundCount = 0;
+    s_regirEmissiveProxyCount = 0;
     s_regirDirty = false;
     UploadReGIRConstants(0u);
     return;
@@ -7443,7 +7363,6 @@ static void PrepareReGIRFrame(ID3D12GraphicsCommandList4 *list) {
   list->ResourceBarrier(1, &regirUpdateBarrier);
 
   s_regirDirty = false;
-  UploadReGIRConstants(lightBoundCount);
 }
 
 void MarkReGIRDirty() {

@@ -16,10 +16,6 @@ RWStructuredBuffer<ReGIRCellReservoir> g_regirCells : register(u36);
 cbuffer ReGIRUpdateConstants : register(b0)
 {
     ReGIRConstants g_regirParams;
-    uint g_numLightBounds;
-    uint g_updatePad0;
-    uint g_updatePad1;
-    uint g_updatePad2;
 };
 
 // Simple cell reservoir (local to the update shader, unpacked from global buffer)
@@ -44,12 +40,15 @@ CellReservoir init_cell_reservoir()
 bool update_cell_reservoir(inout CellReservoir r, uint lightIndex,
                            float weight, inout RNG rng)
 {
+    // Count every proposal — M is "number of candidates considered", not
+    // "number of accepted candidates". Skipping M++ on zero-weight inputs
+    // breaks the RIS interpretation downstream (sample_weight = W / (M * p)).
+    r.M++;
+
     if (!isfinite(weight) || weight <= 0.0)
         return false;
 
     float newWSum = r.w_sum + weight;
-    r.M++;
-
     bool selected = (next_float(rng) * newWSum < weight);
     if (selected) {
         r.lightIndex = lightIndex;
@@ -133,7 +132,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     uint cellIndex = dispatchThreadID.x;
     if (cellIndex >= g_regirParams.totalCells)
         return;
-    if (g_numLightBounds == 0u)
+    const uint numLightBounds = g_regirParams.lightBoundCount;
+    if (numLightBounds == 0u)
         return;
 
     // Compute world-space cell AABB + center
@@ -157,11 +157,11 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 (g_regirParams.frameIndex * 0x6C8E9CF5u) ^ 0xA24BAED5u;
 
     // Stagger: start at a different light each frame to amortize
-    uint startLight = next_uint(rng) % max(g_numLightBounds, 1u);
+    uint startLight = next_uint(rng) % max(numLightBounds, 1u);
 
     // Iterate all lights (wrapping around from startLight)
-    for (uint li = 0u; li < g_numLightBounds; ++li) {
-        uint lightIdx = (startLight + li) % g_numLightBounds;
+    for (uint li = 0u; li < numLightBounds; ++li) {
+        uint lightIdx = (startLight + li) % numLightBounds;
         ReGIRLightBound lb = g_regirLightBounds[lightIdx];
 
         // Fast-path reach skip: light's bounding sphere doesn't touch

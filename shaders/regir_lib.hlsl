@@ -47,7 +47,7 @@ struct ReGIRConstants
     uint   candidatesPerCell;
     uint   totalCells;
     uint   frameIndex;
-    uint   lightsDirty;
+    uint   proxyCount;     // emissive proxy entries in g_emissiveProxyData
     uint   lightBoundCount;
 };
 
