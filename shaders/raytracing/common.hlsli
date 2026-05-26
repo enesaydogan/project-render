@@ -318,53 +318,68 @@ cbuffer ReGIRParams : register(b11, space3)
 
 // ReGIR sampling functions (require g_regirCells, declared above)
 
+// Stochastically jitter the lookup position by up to +/-0.5 cell extents so a
+// receiver near a cell boundary effectively samples from a 2x2x2 neighborhood
+// over accumulation. Removes the visible cell-boundary discontinuity in light
+// selection without the cost of 8 lookups per shading point.
+uint ReGIR_WorldPosToCellJittered(float3 worldPos, inout RNG rng,
+                                  ReGIRConstants params)
+{
+    float3 jitter = (float3(next_float(rng), next_float(rng),
+                            next_float(rng)) - 0.5) *
+                    params.cellSize;
+    return ReGIR_WorldPosToCell(worldPos + jitter, params);
+}
+
 uint ReGIR_SampleCandidateWeighted(float3 worldPos, inout RNG rng,
                                    ReGIRConstants params,
                                    out float sampleWeight)
 {
     sampleWeight = 0.0;
-    uint cellIdx = ReGIR_WorldPosToCell(worldPos, params);
+    uint cellIdx = ReGIR_WorldPosToCellJittered(worldPos, rng, params);
     if (cellIdx == 0xFFFFFFFFu)
         return 0xFFFFFFFFu;
 
     uint base = ReGIR_CellBaseIndex(cellIdx, params);
 
-    // Count valid candidates in this cell
-    uint validCount = 0u;
+    // Single-pass reservoir sample uniformly across valid slots. Replaces the
+    // old count-then-index two-pass, which iterated twice and lost the ability
+    // to favor slots with stronger W. Here we weight each slot by its RIS
+    // strength (slot.W) so a slot whose target sum is larger is proportionally
+    // more likely to be chosen — strictly better quality than uniform.
+    uint   selectedIdx = 0xFFFFFFFFu;
+    float  selectedW = 0.0;
+    float  selectedTarget = 0.0;
+    float  wTotal = 0.0;
+    uint   validCount = 0u;
     for (uint i = 0u; i < params.candidatesPerCell; ++i) {
         ReGIRCellReservoir slot = g_regirCells[base + i];
-        if (slot.lightIndex != 0xFFFFFFFFu &&
-            slot.weight > 0.0 && slot.W > 0.0)
-            ++validCount;
-    }
-
-    if (validCount == 0u)
-        return 0xFFFFFFFFu;
-
-    // Pick a random valid slot (uniform among valid candidates)
-    uint target = next_uint(rng) % validCount;
-    uint found = 0u;
-    for (uint j = 0u; j < params.candidatesPerCell; ++j) {
-        ReGIRCellReservoir slot = g_regirCells[base + j];
-        if (slot.lightIndex != 0xFFFFFFFFu &&
-            slot.weight > 0.0 && slot.W > 0.0) {
-            if (found == target) {
-                float inversePdf = slot.W / max(slot.weight, 1.0e-12);
-                // Cap to the proposal-domain size so a numerically lucky
-                // pick (tiny selected weight, large sum) can't generate a
-                // firefly larger than the unbiased estimator would allow.
-                const float domainCap =
-                    max((float)max(params.lightBoundCount, validCount), 1.0);
-                sampleWeight = (isfinite(inversePdf) && inversePdf > 0.0)
-                    ? clamp(inversePdf, 1.0, domainCap)
-                    : 0.0;
-                return slot.lightIndex;
-            }
-            ++found;
+        if (slot.lightIndex == 0xFFFFFFFFu ||
+            slot.weight <= 0.0 || slot.W <= 0.0)
+            continue;
+        ++validCount;
+        float w = slot.W;
+        wTotal += w;
+        if (next_float(rng) * wTotal < w) {
+            selectedIdx = slot.lightIndex;
+            selectedW = slot.W;
+            selectedTarget = slot.weight;
         }
     }
 
-    return 0xFFFFFFFFu;
+    if (selectedIdx == 0xFFFFFFFFu)
+        return 0xFFFFFFFFu;
+
+    float inversePdf = selectedW / max(selectedTarget, 1.0e-12);
+    // Cap to the proposal-domain size so a numerically lucky pick (tiny
+    // selected weight, large sum) can't generate a firefly larger than the
+    // unbiased estimator would allow.
+    const float domainCap =
+        max((float)max(params.lightBoundCount, validCount), 1.0);
+    sampleWeight = (isfinite(inversePdf) && inversePdf > 0.0)
+        ? clamp(inversePdf, 1.0, domainCap)
+        : 0.0;
+    return selectedIdx;
 }
 
 uint ReGIR_SampleCandidate(float3 worldPos, inout RNG rng,

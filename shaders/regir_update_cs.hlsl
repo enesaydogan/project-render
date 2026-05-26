@@ -82,6 +82,43 @@ bool SphereOverlapsCell(float3 sphereCenter, float sphereRadius,
     return dot(diff, diff) <= (sphereRadius * sphereRadius);
 }
 
+// Cone vs AABB conservative overlap. For spotlights the sphere bound is
+// inflated by 1/cos(outer), which keeps narrow spots oriented across a room
+// hitting every cell within the sphere even when most of those cells are
+// outside the cone. This test rejects cells whose AABB lies entirely outside
+// the (cone half-angle + cell subtended angle) cone.
+//
+// Approximation: the cell's angular footprint from the apex is bounded by the
+// angle subtended by the cell's bounding sphere (half-diagonal). We accept if
+// cos(axis, toCellCenter) >= cos(coneHalfAngle + subtended), and also accept
+// if the apex is inside the cell (cells near the emitter).
+bool ConeOverlapsCell(float3 apex, float3 axis, float cosHalfAngle,
+                      float3 cellMin, float3 cellMax)
+{
+    float3 cellCenter = (cellMin + cellMax) * 0.5;
+    float3 halfExtent = (cellMax - cellMin) * 0.5;
+    float3 toCenter = cellCenter - apex;
+    float dist = length(toCenter);
+
+    // Apex inside (or extremely close to) the cell — assume overlap.
+    float cellRadius = length(halfExtent);
+    if (dist <= cellRadius + 1.0e-4)
+        return true;
+
+    float cosAxis = dot(axis, toCenter) / dist;
+
+    // Cell subtended half-angle from apex: sin = cellRadius / dist.
+    float sinSub = saturate(cellRadius / dist);
+    float cosSub = sqrt(max(1.0 - sinSub * sinSub, 0.0));
+
+    // cos(coneHalf + sub) = cosCone * cosSub - sinCone * sinSub.
+    float cosConeClamped = clamp(cosHalfAngle, -1.0, 1.0);
+    float sinCone = sqrt(max(1.0 - cosConeClamped * cosConeClamped, 0.0));
+    float cosCombined = cosConeClamped * cosSub - sinCone * sinSub;
+
+    return cosAxis >= cosCombined;
+}
+
 // Angular falloff for spot/IES lights. Folds the cone direction into the
 // proposal distribution so RIS doesn't pick a spotlight whose axis points
 // away from the cell — those candidates contribute zero radiance and inflate
@@ -169,6 +206,17 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         // common case of 500+ lights where most are out of range.
         if (!SphereOverlapsCell(lb.center, lb.radius, cellMin, cellMax))
             continue;
+
+        // Tighter cull for spot/IES: spotlights have a directional cone that
+        // the sphere bound doesn't capture, so we'd otherwise process every
+        // cell within reach even when most of them are outside the cone.
+        if (lb.type == 2u || lb.type == 5u) {
+            if (dot(lb.direction, lb.direction) >= 0.25 &&
+                !ConeOverlapsCell(lb.center, lb.direction,
+                                  clamp(lb.outerConeAngle, 0.01, 0.999),
+                                  cellMin, cellMax))
+                continue;
+        }
 
         // Weight folds in cone direction, so out-of-cone spots fall
         // out of the proposal naturally with weight = 0.

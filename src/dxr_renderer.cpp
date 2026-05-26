@@ -6979,9 +6979,16 @@ static UINT BuildReGIRLightBounds(const std::vector<Light> &lights) {
   std::vector<ReGIRLightBoundGpu> bounds;
   bounds.reserve(lights.size());
 
+  // Diagnostics: surface why ReGIR is or isn't picking up the scene's lights.
+  // Without this, an all-directional or all-zero-power light set silently
+  // produces zero bounds and ReGIR falls through to flat sampling.
+  UINT skippedDirectional = 0;
+  UINT skippedZeroPower = 0;
+
   for (size_t i = 0; i < lights.size(); ++i) {
     const Light &l = lights[i];
     if (l.type == (uint32_t)LightType::Directional) {
+      ++skippedDirectional;
       continue;
     }
 
@@ -6989,6 +6996,7 @@ static UINT BuildReGIRLightBounds(const std::vector<Light> &lights) {
         (std::max)(0.0f, (l.emission[0] + l.emission[1] + l.emission[2]) *
                              0.33333334f);
     if (power <= 0.0f) {
+      ++skippedZeroPower;
       continue;
     }
 
@@ -7057,6 +7065,14 @@ static UINT BuildReGIRLightBounds(const std::vector<Light> &lights) {
   }
   s_regirLightBoundsBuffer->Unmap(0, nullptr);
   s_regirLightBoundCount = (UINT)bounds.size();
+
+  if (g_debugLog) {
+    fprintf(stderr,
+            "ReGIR: built %u light bounds from %zu lights (skipped %u "
+            "directional, %u zero-power)\n",
+            s_regirLightBoundCount, lights.size(), skippedDirectional,
+            skippedZeroPower);
+  }
   return s_regirLightBoundCount;
 }
 
@@ -7298,6 +7314,12 @@ static UINT BuildEmissiveProxyBounds() {
   }
 
   s_regirEmissiveProxyCount = (UINT)proxies.size();
+
+  if (g_debugLog) {
+    fprintf(stderr,
+            "ReGIR: built %u emissive proxies (combined light-bound total: %u)\n",
+            s_regirEmissiveProxyCount, s_regirLightBoundCount);
+  }
   return (UINT)proxyBounds.size();
 }
 
