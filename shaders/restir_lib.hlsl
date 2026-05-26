@@ -100,12 +100,17 @@ void finalize_reservoir(inout Reservoir r, float p_target)
         r.W = 0.0;
     }
     
-    // Sanity check and hard cap to prevent feedback loops. With cone-aware
-    // ReGIR weights the inverse PDF tracks N_relevant (lights actually
-    // illuminating the cell), not N_total — a cap in the low hundreds is
-    // safe for interior archviz scenes and still suppresses fireflies.
+    // Sanity check and hard cap. The cap must sit ABOVE the largest legitimate
+    // unbiased inverse PDF, otherwise many-light scenes lose energy.
+    //
+    // With sun + ReGIR (M=2) the per-frame r.W for a local pick equals roughly
+    // (sun_target + N_rel * local_target) / (2 * local_target), which scales
+    // with the number of relevant lights N_rel. For dense spot scenes (~500
+    // lights, ~150 cone-relevant per cell) that's already 100–200; a 100 cap
+    // here was the source of the "more lights = dimmer" symptom. Cap high
+    // enough to clear those without inviting fireflies from cone-edge picks.
     if (isinf(r.W) || isnan(r.W) || r.W < 0.0) r.W = 0.0;
-    r.W = min(r.W, 100.0);
+    r.W = min(r.W, 5000.0);
 }
 
 // ReSTIR GI Reservoir

@@ -117,31 +117,58 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             (lightSampler.mode == WAVEFRONT_LIGHT_SAMPLER_REGIR);
 #endif
         if (hasLocalCandidate) {
+            // Multi-sample seed: with only 1 ReGIR sample per pixel per
+            // frame, dense many-light scenes need the temporal+spatial
+            // reuse to do all the variance reduction — and the temporal M
+            // cap (~30) bottlenecks convergence. Drawing K candidates here
+            // divides per-frame variance by ~K and lifts the load off the
+            // temporal pass. Cost: K cheap light evaluations (no shadow
+            // rays), so it's roughly free compared to the rest of the
+            // frame work.
+            const uint kLocalSeedSamples = 4u;
             uint lightIndex = 0xFFFFFFFFu;
 #ifdef REGIR_ENABLED
             if (lightSampler.mode == WAVEFRONT_LIGHT_SAMPLER_REGIR) {
-                float regirSampleWeight = 0.0;
-                lightIndex = ReGIR_SampleCandidateWeighted(
-                    hitPos, rng, g_regirParams, regirSampleWeight);
-                if (lightIndex == 0xFFFFFFFFu && numLights > 0u) {
-                    lightIndex = next_uint(rng) % numLights;
-                    regirSampleWeight = (float)numLights;
+                [unroll]
+                for (uint k = 0u; k < kLocalSeedSamples; ++k) {
+                    float regirSampleWeight = 0.0;
+                    lightIndex = ReGIR_SampleCandidateWeighted(
+                        hitPos, rng, g_regirParams, regirSampleWeight);
+                    if (lightIndex == 0xFFFFFFFFu && numLights > 0u) {
+                        lightIndex = next_uint(rng) % numLights;
+                        regirSampleWeight = (float)numLights;
+                    }
+                    if (WavefrontIsEmissiveProxyLightIndex(lightIndex) ||
+                        lightIndex < numLights) {
+                        WavefrontLightSample localSample =
+                            WavefrontIsEmissiveProxyLightIndex(lightIndex)
+                                ? WavefrontSampleEmissiveProxyLight(
+                                      hitPos, lightIndex,
+                                      max(regirSampleWeight, 1.0))
+                                : WavefrontSampleFlatLight(
+                                      hitPos, lightIndex,
+                                      max(regirSampleWeight, 1.0), rng);
+                        float localTarget = WavefrontEvaluateReservoirTarget(
+                            record, normal, hitPos, localSample);
+                        update_reservoir(reservoir, lightIndex, localTarget,
+                                         rng);
+                    }
                 }
-                if (WavefrontIsEmissiveProxyLightIndex(lightIndex) ||
-                    lightIndex < numLights) {
+            } else {
+                [unroll]
+                for (uint k = 0u; k < kLocalSeedSamples; ++k) {
+                    lightIndex = next_uint(rng) % numLights;
                     WavefrontLightSample localSample =
-                        WavefrontIsEmissiveProxyLightIndex(lightIndex)
-                            ? WavefrontSampleEmissiveProxyLight(
-                                  hitPos, lightIndex,
-                                  max(regirSampleWeight, 1.0))
-                            : WavefrontSampleFlatLight(
-                                  hitPos, lightIndex,
-                                  max(regirSampleWeight, 1.0), rng);
+                        WavefrontSampleFlatLight(hitPos, lightIndex,
+                                                 (float)numLights, rng);
                     float localTarget = WavefrontEvaluateReservoirTarget(
                         record, normal, hitPos, localSample);
                     update_reservoir(reservoir, lightIndex, localTarget, rng);
                 }
-            } else {
+            }
+#else
+            [unroll]
+            for (uint k = 0u; k < kLocalSeedSamples; ++k) {
                 lightIndex = next_uint(rng) % numLights;
                 WavefrontLightSample localSample =
                     WavefrontSampleFlatLight(hitPos, lightIndex,
@@ -150,14 +177,6 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                     record, normal, hitPos, localSample);
                 update_reservoir(reservoir, lightIndex, localTarget, rng);
             }
-#else
-            lightIndex = next_uint(rng) % numLights;
-            WavefrontLightSample localSample =
-                WavefrontSampleFlatLight(hitPos, lightIndex,
-                                         (float)numLights, rng);
-            float localTarget = WavefrontEvaluateReservoirTarget(
-                record, normal, hitPos, localSample);
-            update_reservoir(reservoir, lightIndex, localTarget, rng);
 #endif
         }
 
