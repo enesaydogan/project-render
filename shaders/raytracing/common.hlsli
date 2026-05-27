@@ -371,7 +371,6 @@ uint ReGIR_SampleCandidateWeighted(float3 worldPos, inout RNG rng,
     uint   selectedIdx = 0xFFFFFFFFu;
     float  selectedW = 0.0;
     float  selectedTarget = 0.0;
-    uint   selectedM = 0u;
     uint   validCount = 0u;
     for (uint i = 0u; i < params.candidatesPerCell; ++i) {
         ReGIRCellReservoir slot = g_regirCells[base + i];
@@ -384,7 +383,6 @@ uint ReGIR_SampleCandidateWeighted(float3 worldPos, inout RNG rng,
             selectedIdx = slot.lightIndex;
             selectedW = slot.W;
             selectedTarget = slot.weight;
-            selectedM = slot.M;
         }
     }
 
@@ -393,19 +391,16 @@ uint ReGIR_SampleCandidateWeighted(float3 worldPos, inout RNG rng,
         return 0xFFFFFFFFu;
     }
 
-    // Unbiased RIS estimator: 1/q(x*) = W / (M * p_target(x*)).
-    // The earlier formulation dropped the 1/M factor, which silently boosted
-    // every ReGIR-sampled pixel by ~M (the same M reported in the readback).
-    // With this factor in place, E[inversePdf] ~ 1 and the radiance scale
-    // matches uniform-flat sampling in expectation.
-    float denom = max(selectedTarget, 1.0e-12) *
-                  max((float)selectedM, 1.0);
+    // The reservoir stores W as the target-weight sum for the cell. Once a
+    // candidate is selected with probability target / W, the unbiased discrete
+    // light-sampling weight is W / target. M describes how many proposals built
+    // the reservoir, not the selected-light PDF.
+    float denom = max(selectedTarget, 1.0e-12);
     float inversePdf = selectedW / denom;
-    // Firefly cap. With M factored in, inversePdf typically lives near 1, so
-    // the cap rarely triggers; it only kicks in for pathological picks where
+    // Firefly cap: it only kicks in for pathological picks where
     // a tiny selected target produces an outlier ratio. No lower clamp — a
-    // sample whose target is above average should legitimately weight LESS
-    // than 1 in the estimator, not get boosted up.
+    // sample whose target is above average should legitimately weight less
+    // than the uniform light count in the estimator.
     const float domainCap =
         max((float)max(params.lightBoundCount, validCount), 1.0);
     bool finite = isfinite(inversePdf) && inversePdf > 0.0;

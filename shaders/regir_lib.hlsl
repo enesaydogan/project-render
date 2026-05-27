@@ -35,13 +35,6 @@ struct ReGIRLightBound
 #define REGIR_GRID_RES_Z 16
 #define REGIR_CANDIDATES_PER_CELL 8
 
-// Temporal reuse: how many frames of history each cell retains.
-// Higher = more variance reduction but slower reaction to scene changes.
-// 64 is a moderate default — static scenes converge ~sqrt(64)=8x faster
-// than the no-reuse baseline, dynamic edits still propagate within a
-// handful of frames.
-#define REGIR_TEMPORAL_M_CAP 64u
-
 struct ReGIRConstants
 {
     float3 gridMin;
@@ -79,21 +72,14 @@ uint ReGIR_WorldPosToCell(float3 worldPos, ReGIRConstants params)
 }
 
 // ---- cell-index to reservoir base offset -----------------------------------
-// Cell buffer is ping-ponged: frame N writes & samples from half (N & 1),
-// reads previous-frame state from half ((N+1) & 1). Stride is the total
-// per-half size in reservoir entries.
+// Cell buffer is ping-ponged so the active half can be rebuilt without
+// overwriting the other half while GPU work from the previous frame drains.
+// Stride is the total per-half size in reservoir entries.
 
 uint ReGIR_CellBaseIndex(uint cellIndex, ReGIRConstants params)
 {
     uint stride = params.totalCells * params.candidatesPerCell;
     uint half_ = params.frameIndex & 1u;
-    return half_ * stride + cellIndex * params.candidatesPerCell;
-}
-
-uint ReGIR_CellBaseIndexPrev(uint cellIndex, ReGIRConstants params)
-{
-    uint stride = params.totalCells * params.candidatesPerCell;
-    uint half_ = (params.frameIndex + 1u) & 1u;
     return half_ * stride + cellIndex * params.candidatesPerCell;
 }
 

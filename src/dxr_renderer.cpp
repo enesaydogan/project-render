@@ -814,7 +814,7 @@ static UINT64 s_regirReadbackCopyBytes = 0;
 static UINT s_regirReadbackCopyCells = 0;
 static UINT s_regirReadbackCopyCandidates = 0;
 static UINT s_regirReadbackCopyFrameIndex = 0;
-static UINT s_regirLastUpdateFrameIndex = 0;
+static UINT s_regirLastUpdateFrameIndex = 0xFFFFFFFFu;
 static UINT s_regirLastDispatchGroups = 0;
 static UINT s_regirUpdateCount = 0;
 static UINT s_regirSkippedDirectionalLights = 0;
@@ -849,9 +849,8 @@ enum class ReGIRFallbackReason : UINT {
 };
 static ReGIRFallbackReason s_regirFallbackReason =
     ReGIRFallbackReason::NoLights;
-// Frame counter dedicated to ReGIR ping-pong + history-validity gating.
-// Resets to 0 on dirty so the first frame after a scene change doesn't read
-// garbage from the now-stale "previous" half of the cell buffer.
+// Proposal generation counter dedicated to ReGIR cell-buffer selection.
+// Resets on dirty so the next proposal rebuild starts from a known buffer half.
 static UINT s_regirFrameCounter = 0;
 static float s_sceneBoundsMin[3] = {0, 0, 0};
 static float s_sceneBoundsMax[3] = {1, 1, 1};
@@ -866,9 +865,8 @@ static void InvalidateReGIRGrid() {
   s_regirEmptyCells = 0;
   s_regirValidSlots = 0;
   s_regirSelectedLightSlotCount = 0;
-  // Stale temporal history must not be read on the next frame. Resetting the
-  // counter both gates the prev-buffer read in the update shader and re-seeds
-  // the ping-pong from half 0.
+  s_regirLastUpdateFrameIndex = 0xFFFFFFFFu;
+  s_regirLastDispatchGroups = 0;
   s_regirFrameCounter = 0;
 }
 
@@ -7759,6 +7757,14 @@ static void PrepareReGIRFrame(ID3D12GraphicsCommandList4 *list) {
   }
 
   UploadReGIRConstants(lightBoundCount);
+
+  const bool rebuildCells =
+      s_regirDirty || s_regirLastUpdateFrameIndex == 0xFFFFFFFFu;
+  if (!rebuildCells) {
+    s_regirFallbackReason = ReGIRFallbackReason::Ready;
+    return;
+  }
+
   if (!list) {
     s_regirLastUpdateFrameIndex = 0xFFFFFFFFu;
     s_regirLastDispatchGroups = 0;
@@ -7766,10 +7772,9 @@ static void PrepareReGIRFrame(ID3D12GraphicsCommandList4 *list) {
     return;
   }
 
-  // ReGIR cell reservoirs are proposals, not persistent lighting state. Keeping
-  // them frozen biases many-light scenes toward the first few cell candidates.
-  // Refresh them every rendered frame so the cell reservoir PDF is represented
-  // over accumulation while CPU light bounds still rebuild only when dirty.
+  // ReGIR cell reservoirs are a spatial proposal field. Rebuilding them every
+  // rendered frame rotates coherent per-cell light choices and shows up as
+  // strobing, so keep the proposal stable until scene/lights/settings change.
   DispatchReGIRUpdate(list, lightBoundCount);
   s_regirLastUpdateFrameIndex = s_regirFrameCounter;
   D3D12_RESOURCE_BARRIER regirUpdateBarrier = {};
@@ -7780,9 +7785,6 @@ static void PrepareReGIRFrame(ID3D12GraphicsCommandList4 *list) {
   s_regirDirty = false;
   s_regirFallbackReason = ReGIRFallbackReason::Ready;
   ++s_regirUpdateCount;
-  // Advance the ReGIR counter after a successful dispatch so the next frame
-  // reads the buffer half we just wrote as its "previous".
-  ++s_regirFrameCounter;
 }
 
 void MarkReGIRDirty() {
