@@ -312,12 +312,10 @@ inline float2 DirectionToUVRotated(float3 dir) {
 
 StructuredBuffer<Light> g_lights : register(t5000);
 
-#ifdef REGIR_ENABLED
-// ReGIR resources (defined in regir_lib.hlsl)
-#include "../regir_lib.hlsl"
-RWStructuredBuffer<ReGIRCellReservoir> g_regirCells : register(u36);
-StructuredBuffer<ReGIRLightBound> g_regirLightBounds : register(t5001);
-// Emissive mesh proxy data (sentinel lightIndex 0x80000000 | proxyIndex)
+#if defined(REGIR_ENABLED) || defined(REGIR_EMISSIVE_PROXY_ENABLED)
+// Emissive mesh proxy data (sentinel lightIndex 0x80000000 | proxyIndex).
+// Full ReGIR passes also bind ReGIRParams; spatial reuse only needs the proxy
+// buffer so it uses REGIR_EMISSIVE_PROXY_ENABLED without pulling in u36/b11.
 struct EmissiveProxyData
 {
     float3 center;
@@ -326,11 +324,33 @@ struct EmissiveProxyData
     uint   pad;
 };
 StructuredBuffer<EmissiveProxyData> g_emissiveProxyData : register(t5003);
+#endif
+
+#ifdef REGIR_ENABLED
+// ReGIR resources (defined in regir_lib.hlsl)
+#include "../regir_lib.hlsl"
+RWStructuredBuffer<ReGIRCellReservoir> g_regirCells : register(u36);
+StructuredBuffer<ReGIRLightBound> g_regirLightBounds : register(t5001);
 cbuffer ReGIRParams : register(b11, space3)
 {
     ReGIRConstants g_regirParams;
 };
 
+uint WavefrontGetEmissiveProxyCount()
+{
+    return g_regirParams.proxyCount;
+}
+#elif defined(REGIR_EMISSIVE_PROXY_ENABLED)
+uint WavefrontGetEmissiveProxyCount()
+{
+    uint count = 0u;
+    uint stride = 0u;
+    g_emissiveProxyData.GetDimensions(count, stride);
+    return count;
+}
+#endif
+
+#ifdef REGIR_ENABLED
 // ReGIR sampling functions (require g_regirCells, declared above)
 
 // Stochastically jitter the lookup position by up to +/-0.5 cell extents so a
@@ -360,14 +380,11 @@ uint ReGIR_SampleCandidateWeighted(float3 worldPos, inout RNG rng,
     uint base = ReGIR_CellBaseIndex(cellIdx, params);
 
     // Single-pass UNIFORM reservoir sample across valid slots. Each slot is an
-    // i.i.d. RIS sample of the same proposal distribution, so a uniform pick is
-    // the unbiased estimator (weight = W/p). A previous version weighted the
-    // slot pick by slot.W without the matching sum_W/(K·p) correction, which
-    // amplified variance in dense many-light scenes — exactly the "darker with
-    // more lights" symptom this code is meant to prevent.
+    // i.i.d. RIS sample of the same proposal distribution.
     uint   selectedIdx = 0xFFFFFFFFu;
     float  selectedW = 0.0;
     float  selectedTarget = 0.0;
+    uint   selectedM = 0u;
     uint   validCount = 0u;
     for (uint i = 0u; i < params.candidatesPerCell; ++i) {
         ReGIRCellReservoir slot = g_regirCells[base + i];
@@ -380,6 +397,7 @@ uint ReGIR_SampleCandidateWeighted(float3 worldPos, inout RNG rng,
             selectedIdx = slot.lightIndex;
             selectedW = slot.W;
             selectedTarget = slot.weight;
+            selectedM = slot.M;
         }
     }
 
@@ -388,17 +406,26 @@ uint ReGIR_SampleCandidateWeighted(float3 worldPos, inout RNG rng,
         return 0xFFFFFFFFu;
     }
 
-    float inversePdf = selectedW / max(selectedTarget, 1.0e-12);
-    // Cap to the proposal-domain size so a numerically lucky pick (tiny
-    // selected weight, large sum) can't generate a firefly larger than the
-    // unbiased estimator would allow.
+    // Unbiased RIS estimator: 1/q(x*) = W / (M * p_target(x*)).
+    // The earlier formulation dropped the 1/M factor, which silently boosted
+    // every ReGIR-sampled pixel by ~M (the same M reported in the readback).
+    // With this factor in place, E[inversePdf] ~ 1 and the radiance scale
+    // matches uniform-flat sampling in expectation.
+    float denom = max(selectedTarget, 1.0e-12) *
+                  max((float)selectedM, 1.0);
+    float inversePdf = selectedW / denom;
+    // Firefly cap. With M factored in, inversePdf typically lives near 1, so
+    // the cap rarely triggers; it only kicks in for pathological picks where
+    // a tiny selected target produces an outlier ratio. No lower clamp — a
+    // sample whose target is above average should legitimately weight LESS
+    // than 1 in the estimator, not get boosted up.
     const float domainCap =
         max((float)max(params.lightBoundCount, validCount), 1.0);
     bool finite = isfinite(inversePdf) && inversePdf > 0.0;
     if (finite && inversePdf > domainCap) {
         InterlockedAdd(g_shaderCounters[SHADER_COUNTER_REGIR_SAMPLE_CLAMPED], 1u);
     }
-    sampleWeight = finite ? clamp(inversePdf, 1.0, domainCap) : 0.0;
+    sampleWeight = finite ? min(inversePdf, domainCap) : 0.0;
     InterlockedAdd(g_shaderCounters[SHADER_COUNTER_REGIR_SAMPLE_HIT], 1u);
     return selectedIdx;
 }
@@ -1123,7 +1150,7 @@ inline WavefrontLightSample WavefrontSampleFlatLightUnweighted(
     return sample;
 }
 
-#ifdef REGIR_ENABLED
+#if defined(REGIR_ENABLED) || defined(REGIR_EMISSIVE_PROXY_ENABLED)
 inline bool WavefrontIsEmissiveProxyLightIndex(uint lightIndex)
 {
     return lightIndex != 0xFFFFFFFFu && ((lightIndex & 0x80000000u) != 0u);
@@ -1139,7 +1166,7 @@ inline WavefrontLightSample WavefrontSampleEmissiveProxyLight(
     // Guard against stale proxy sentinels surviving a partial rebuild. If the
     // index is past the current proxy buffer, return a zero-radiance sample
     // so the downstream shadow ray is cheap and contributes nothing.
-    if (proxyIdx >= g_regirParams.proxyCount) {
+    if (proxyIdx >= WavefrontGetEmissiveProxyCount()) {
         sample.direction = float3(0.0, 1.0, 0.0);
         sample.maxDistance = 0.0;
         sample.radiance = float3(0.0, 0.0, 0.0);
@@ -1159,7 +1186,9 @@ inline WavefrontLightSample WavefrontSampleEmissiveProxyLight(
         WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_FLAT, 0xFFFFFFFFu);
     return sample;
 }
+#endif
 
+#ifdef REGIR_ENABLED
 inline WavefrontLightSample WavefrontSampleReGIRLight(
     float3 surfacePos,
     float sampleWeight,

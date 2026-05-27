@@ -1427,7 +1427,7 @@ static void EnsureRestirSpatialPipeline() {
   ComPtr<IDxcBlob> cs;
   try {
     std::vector<std::wstring> defines;
-    defines.push_back(L"REGIR_ENABLED");
+    defines.push_back(L"REGIR_EMISSIVE_PROXY_ENABLED");
     cs = s_dxcHelper.Compile(L"shaders/restir_spatial_cs.hlsl", L"CSMain",
                              L"cs_6_5", defines);
   } catch (const std::exception &e) {

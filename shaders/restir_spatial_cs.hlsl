@@ -101,7 +101,7 @@ float EvalCandidatePTarget(uint candidateLightIndex, float3 N, float3 P)
     }
     uint numLights = (uint)max(lightCount, 0.0);
     if (candidateLightIndex != 0xFFFFFFFFu) {
-#ifdef REGIR_ENABLED
+#if defined(REGIR_ENABLED) || defined(REGIR_EMISSIVE_PROXY_ENABLED)
         if (WavefrontIsEmissiveProxyLightIndex(candidateLightIndex)) {
             WavefrontLightSample proxy =
                 WavefrontSampleEmissiveProxyLight(P, candidateLightIndex, 1.0);
