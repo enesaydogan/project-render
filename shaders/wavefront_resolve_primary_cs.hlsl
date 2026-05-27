@@ -1217,22 +1217,18 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
     WavefrontLightSamplerContext giSampler =
         WavefrontCreateLightSampler(surfacePos);
     bool hasGiLocalSampler = giSampler.availableLights > 0u;
-#ifdef REGIR_ENABLED
     hasGiLocalSampler =
         hasGiLocalSampler ||
         (giSampler.mode == WAVEFRONT_LIGHT_SAMPLER_REGIR);
-#endif
     if (hasGiLocalSampler) {
         RNG giLightRng;
         giLightRng.state = (asuint(surfacePos.x) ^ asuint(surfacePos.y) ^
                             asuint(surfacePos.z) ^ asuint(incomingDirection.x)) *
                            0x6C8E9CF5u;
         WavefrontLightSample giLocal;
-#ifdef REGIR_ENABLED
         if (giSampler.mode == WAVEFRONT_LIGHT_SAMPLER_REGIR) {
             giLocal = WavefrontSampleReGIRLight(surfacePos, 1.0, giLightRng);
         } else
-#endif
         {
             if (giSampler.availableLights == 0u)
                 return max(emissive + giLighting * ao, 0.0);
@@ -1545,12 +1541,10 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 if (diReservoir.lightIndex == 0xFFFFFFFFu &&
                     WavefrontDirectionalLightActive()) {
                     finalSample = WavefrontSampleDirectionalLight(1.0);
-#ifdef REGIR_ENABLED
                 } else if (WavefrontIsEmissiveProxyLightIndex(
                                diReservoir.lightIndex)) {
                     finalSample = WavefrontSampleEmissiveProxyLight(
                         hitPos, diReservoir.lightIndex, 1.0);
-#endif
                 } else if (diReservoir.lightIndex < numLights) {
                     finalSample = WavefrontSampleFlatLightUnweighted(
                         hitPos, diReservoir.lightIndex, rng);

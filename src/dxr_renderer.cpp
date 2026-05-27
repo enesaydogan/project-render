@@ -1153,6 +1153,7 @@ static void EnsureNoiseStatsPipeline();
 static void EnsureAvgLumPipeline();
 static void EnsureRestirSpatialPipeline();
 static void EnsureRestirGiSpatialPipeline();
+static void EnsureReGIRResources();
 static void EnsureWavefrontBootstrapPipeline();
 static void EnsureWavefrontCounterResetPipeline();
 static void EnsureWavefrontPrepareIndirectArgsPipeline();
@@ -1361,7 +1362,15 @@ static void EnsureRestirSpatialPipeline() {
   texRange.OffsetInDescriptorsFromTableStart =
       D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-  D3D12_ROOT_PARAMETER params[6] = {};
+  D3D12_DESCRIPTOR_RANGE regirCellRange = {};
+  regirCellRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+  regirCellRange.NumDescriptors = 1;
+  regirCellRange.BaseShaderRegister = 36;
+  regirCellRange.RegisterSpace = 0;
+  regirCellRange.OffsetInDescriptorsFromTableStart =
+      D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+  D3D12_ROOT_PARAMETER params[9] = {};
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
   params[0].Descriptor.ShaderRegister = 0;
   params[0].Descriptor.RegisterSpace = 0;
@@ -1404,6 +1413,23 @@ static void EnsureRestirSpatialPipeline() {
   params[5].Descriptor.RegisterSpace = 0;
   params[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
+  // ReGIR resources are part of the shader ABI; the runtime feature flag
+  // decides whether spatial reuse consumes proxy candidates from them.
+  params[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[6].Descriptor.ShaderRegister = 5001;
+  params[6].Descriptor.RegisterSpace = 0;
+  params[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[7].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+  params[7].Descriptor.ShaderRegister = 11;
+  params[7].Descriptor.RegisterSpace = 3;
+  params[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[8].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+  params[8].DescriptorTable.NumDescriptorRanges = 1;
+  params[8].DescriptorTable.pDescriptorRanges = &regirCellRange;
+  params[8].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
   D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
   rsDesc.NumParameters = _countof(params);
   rsDesc.pParameters = params;
@@ -1427,7 +1453,6 @@ static void EnsureRestirSpatialPipeline() {
   ComPtr<IDxcBlob> cs;
   try {
     std::vector<std::wstring> defines;
-    defines.push_back(L"REGIR_EMISSIVE_PROXY_ENABLED");
     cs = s_dxcHelper.Compile(L"shaders/restir_spatial_cs.hlsl", L"CSMain",
                              L"cs_6_5", defines);
   } catch (const std::exception &e) {
@@ -1756,6 +1781,7 @@ static void DispatchRestirDiSpatialPass(ID3D12GraphicsCommandList4 *list,
     return;
   }
 
+  EnsureReGIRResources();
   EnsureRestirSpatialPipeline();
   if (s_restirSpatialPSO && s_restirSpatialRootSig) {
     D3D12_RESOURCE_BARRIER uavBarrier = {};
@@ -1782,12 +1808,22 @@ static void DispatchRestirDiSpatialPass(ID3D12GraphicsCommandList4 *list,
 
     list->SetComputeRootDescriptorTable(4, s_iesAtlasSrvGpu);
 
-    if (s_restirSpatialRootSig) {
-      list->SetComputeRootShaderResourceView(
-          5, s_emissiveProxyBuffer
-                 ? s_emissiveProxyBuffer->GetGPUVirtualAddress()
-                 : 0);
-    }
+    list->SetComputeRootShaderResourceView(
+        5, s_emissiveProxyBuffer
+               ? s_emissiveProxyBuffer->GetGPUVirtualAddress()
+               : 0);
+    list->SetComputeRootShaderResourceView(
+        6, s_regirLightBoundsBuffer
+               ? s_regirLightBoundsBuffer->GetGPUVirtualAddress()
+               : 0);
+    list->SetComputeRootConstantBufferView(
+        7, s_regirConstantsBuffer
+               ? s_regirConstantsBuffer->GetGPUVirtualAddress()
+               : 0);
+    D3D12_GPU_DESCRIPTOR_HANDLE regirCells =
+        s_srvHeap->GetGPUDescriptorHandleForHeapStart();
+    regirCells.ptr += (UINT64)DXR_HEAP_REGIR_CELLS_OFFSET * (UINT64)inc;
+    list->SetComputeRootDescriptorTable(8, regirCells);
 
     const UINT gx = (s_outputWidth + 7) / 8;
     const UINT gy = (s_outputHeight + 7) / 8;
@@ -1842,7 +1878,7 @@ static void EnsureWavefrontBootstrapPipeline() {
 
   D3D12_DESCRIPTOR_RANGE uavRange = {};
   uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-  uavRange.NumDescriptors = DXR_HEAP_UAV_COUNT; // u0..u35
+  uavRange.NumDescriptors = DXR_HEAP_UAV_COUNT; // u0..u37
   uavRange.BaseShaderRegister = 0;
   uavRange.RegisterSpace = 0;
   uavRange.OffsetInDescriptorsFromTableStart =
@@ -2559,7 +2595,7 @@ static void EnsureWavefrontResolvePipeline() {
 
   D3D12_DESCRIPTOR_RANGE uavRange = {};
   uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-  uavRange.NumDescriptors = DXR_HEAP_UAV_COUNT; // u0..u35
+  uavRange.NumDescriptors = DXR_HEAP_UAV_COUNT; // u0..u37
   uavRange.BaseShaderRegister = 0;
   uavRange.RegisterSpace = 0;
   uavRange.OffsetInDescriptorsFromTableStart =
@@ -2677,7 +2713,8 @@ static void EnsureWavefrontResolvePipeline() {
   params[13].DescriptorTable.pDescriptorRanges = &cloudSrvRange;
   params[13].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-  // ReGIR bindings (only used when REGIR_ENABLED is defined in shader)
+  // ReGIR bindings are always part of the wavefront shader ABI. The runtime
+  // feature flag decides whether the sampler actually uses them.
   params[14].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
   params[14].Descriptor.ShaderRegister = 5001;
   params[14].Descriptor.RegisterSpace = 0;
@@ -2751,7 +2788,6 @@ static void EnsureWavefrontResolvePipeline() {
   ComPtr<IDxcBlob> cs;
   try {
     std::vector<std::wstring> defines;
-    defines.push_back(L"REGIR_ENABLED");
     cs = s_dxcHelper.Compile(L"shaders/wavefront_resolve_primary_cs.hlsl",
                              L"CSMain", L"cs_6_5", defines);
   } catch (const std::exception &e) {
@@ -2789,7 +2825,6 @@ static void EnsureWavefrontSecondaryResolvePipeline() {
   ComPtr<IDxcBlob> cs;
   try {
     std::vector<std::wstring> defines;
-    defines.push_back(L"REGIR_ENABLED");
     cs = s_dxcHelper.Compile(L"shaders/wavefront_resolve_secondary_cs.hlsl",
                              L"CSMain", L"cs_6_5", defines);
   } catch (const std::exception &e) {
@@ -2827,7 +2862,6 @@ static void EnsureWavefrontRestirSeedPipeline() {
   ComPtr<IDxcBlob> cs;
   try {
     std::vector<std::wstring> defines;
-    defines.push_back(L"REGIR_ENABLED");
     cs = s_dxcHelper.Compile(L"shaders/wavefront_restir_seed_cs.hlsl",
                              L"CSMain", L"cs_6_5", defines);
   } catch (const std::exception &e) {
@@ -2986,7 +3020,7 @@ static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
                   s_device->GetDescriptorHandleIncrementSize(
                       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
   list->SetComputeRootDescriptorTable(13, cloudSRV);
-  // ReGIR SRV + CBV (only referenced when REGIR_ENABLED is defined in shader)
+  // ReGIR SRV + CBV: always bound, runtime feature flag controls use.
   list->SetComputeRootShaderResourceView(
       14, s_regirLightBoundsBuffer
               ? s_regirLightBoundsBuffer->GetGPUVirtualAddress()
@@ -3066,7 +3100,7 @@ static void DispatchWavefrontRestirSeed(ID3D12GraphicsCommandList4 *list,
                   s_device->GetDescriptorHandleIncrementSize(
                       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
   list->SetComputeRootDescriptorTable(13, cloudSRV);
-  // ReGIR SRV + CBV (only referenced when REGIR_ENABLED is defined in shader)
+  // ReGIR SRV + CBV: always bound, runtime feature flag controls use.
   list->SetComputeRootShaderResourceView(
       14, s_regirLightBoundsBuffer
               ? s_regirLightBoundsBuffer->GetGPUVirtualAddress()
@@ -3152,7 +3186,7 @@ static void DispatchWavefrontResolveSecondary(ID3D12GraphicsCommandList4 *list,
                   s_device->GetDescriptorHandleIncrementSize(
                       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
   list->SetComputeRootDescriptorTable(13, cloudSRV);
-  // ReGIR SRV + CBV (only referenced when REGIR_ENABLED is defined in shader)
+  // ReGIR SRV + CBV: always bound, runtime feature flag controls use.
   list->SetComputeRootShaderResourceView(
       14, s_regirLightBoundsBuffer
               ? s_regirLightBoundsBuffer->GetGPUVirtualAddress()
@@ -4033,14 +4067,14 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   }
 
   // Create global root signature
-  D3D12_ROOT_PARAMETER params[16] =
-      {}; // Lights, material extras, grass data, cloud resources, IES atlas.
+  D3D12_ROOT_PARAMETER params[19] =
+      {}; // Lights, material extras, grass/cloud/IES, and ReGIR resources.
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
   params[0].Descriptor.ShaderRegister = 0;
   params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
   D3D12_DESCRIPTOR_RANGE uavRange = {};
   uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-  uavRange.NumDescriptors = DXR_HEAP_UAV_COUNT; // u0..u35
+  uavRange.NumDescriptors = DXR_HEAP_UAV_COUNT; // u0..u37
   uavRange.BaseShaderRegister = 0;
   params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
   params[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -4163,6 +4197,23 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   params[15].DescriptorTable.NumDescriptorRanges = 1;
   params[15].DescriptorTable.pDescriptorRanges = &iesSrvRange;
   params[15].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  // ReGIR resources are always in the raytracing shader ABI. Shaders branch on
+  // dxrFeatureFlags at runtime instead of relying on a build define.
+  params[16].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[16].Descriptor.ShaderRegister = 5001;
+  params[16].Descriptor.RegisterSpace = 0;
+  params[16].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[17].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+  params[17].Descriptor.ShaderRegister = 11;
+  params[17].Descriptor.RegisterSpace = 3;
+  params[17].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[18].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[18].Descriptor.ShaderRegister = 5003;
+  params[18].Descriptor.RegisterSpace = 0;
+  params[18].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
   D3D12_ROOT_SIGNATURE_DESC rootDesc = {};
   rootDesc.NumParameters = _countof(params);
@@ -7876,7 +7927,6 @@ ReGIRStats GetReGIRStats() {
   stats.samplerReGIRMode = s_lastShaderCounters[15];
   stats.samplerFlatNoFeature = s_lastShaderCounters[16];
   stats.samplerFlatNoCells = s_lastShaderCounters[17];
-  stats.samplerCompiledOut = s_lastShaderCounters[18];
   stats.samplerMaxTotalCells = s_lastShaderCounters[19];
   stats.samplerMaxLights = s_lastShaderCounters[20];
   stats.sampleCounterReadbackEnabled =
@@ -8104,6 +8154,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     }
   }
 
+  EnsureReGIRResources();
+
   // Set pipeline and root signature
   dxrList->SetPipelineState1(s_rtStateObject.Get());
   dxrList->SetComputeRootSignature(s_rtGlobalRootSignature.Get());
@@ -8198,6 +8250,18 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   dxrList->SetComputeRootShaderResourceView(13, grassBladesGpu);
   dxrList->SetComputeRoot32BitConstants(14, 1, &s_grassTlasStartIndex, 0);
   dxrList->SetComputeRootDescriptorTable(15, s_iesAtlasSrvGpu);
+  dxrList->SetComputeRootShaderResourceView(
+      16, s_regirLightBoundsBuffer
+              ? s_regirLightBoundsBuffer->GetGPUVirtualAddress()
+              : 0);
+  dxrList->SetComputeRootConstantBufferView(
+      17, s_regirConstantsBuffer
+              ? s_regirConstantsBuffer->GetGPUVirtualAddress()
+              : 0);
+  dxrList->SetComputeRootShaderResourceView(
+      18, s_emissiveProxyBuffer
+              ? s_emissiveProxyBuffer->GetGPUVirtualAddress()
+              : 0);
 
   // --- Bind Cloud Resources (Slot 10) ---
   if (g_cloudManager.GetBaseTexture() && g_cloudManager.GetDetailTexture()) {
@@ -8404,6 +8468,18 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     dxrList->SetComputeRootShaderResourceView(13, grassBladesGpu);
     dxrList->SetComputeRoot32BitConstants(14, 1, &s_grassTlasStartIndex, 0);
     dxrList->SetComputeRootDescriptorTable(15, s_iesAtlasSrvGpu);
+    dxrList->SetComputeRootShaderResourceView(
+        16, s_regirLightBoundsBuffer
+                ? s_regirLightBoundsBuffer->GetGPUVirtualAddress()
+                : 0);
+    dxrList->SetComputeRootConstantBufferView(
+        17, s_regirConstantsBuffer
+                ? s_regirConstantsBuffer->GetGPUVirtualAddress()
+                : 0);
+    dxrList->SetComputeRootShaderResourceView(
+        18, s_emissiveProxyBuffer
+                ? s_emissiveProxyBuffer->GetGPUVirtualAddress()
+                : 0);
   };
 
   // (Legacy) maxSPP early-out used to be here. We now freeze using the

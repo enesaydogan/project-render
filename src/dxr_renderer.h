@@ -254,7 +254,6 @@ struct ReGIRStats {
   uint32_t samplerReGIRMode = 0;
   uint32_t samplerFlatNoFeature = 0;
   uint32_t samplerFlatNoCells = 0;
-  uint32_t samplerCompiledOut = 0;
   uint32_t samplerMaxTotalCells = 0;
   uint32_t samplerMaxLights = 0;
   bool sampleCounterReadbackEnabled = false;

@@ -1764,9 +1764,8 @@ static void DrawReGIRDebugPanel() {
               stats.sampleCounterReadbackEnabled ? "active" : "unavailable");
   ImGui::Text("Sampler create / ReGIR mode: %u / %u",
               stats.samplerCreateCalls, stats.samplerReGIRMode);
-  ImGui::Text("Flat no feature / no cells / compiled out: %u / %u / %u",
-              stats.samplerFlatNoFeature, stats.samplerFlatNoCells,
-              stats.samplerCompiledOut);
+  ImGui::Text("Flat no feature / no cells: %u / %u",
+              stats.samplerFlatNoFeature, stats.samplerFlatNoCells);
   ImGui::Text("Shader max cells / lights: %u / %u",
               stats.samplerMaxTotalCells, stats.samplerMaxLights);
   ImGui::Text("Sample attempts: %llu",

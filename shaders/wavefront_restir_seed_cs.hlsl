@@ -111,11 +111,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             WavefrontCreateLightSampler(hitPos);
         const uint numLights = lightSampler.availableLights;
         bool hasLocalCandidate = numLights > 0u;
-#ifdef REGIR_ENABLED
         hasLocalCandidate =
             hasLocalCandidate ||
             (lightSampler.mode == WAVEFRONT_LIGHT_SAMPLER_REGIR);
-#endif
         if (hasLocalCandidate) {
             // Multi-sample seed: with only 1 ReGIR sample per pixel per
             // frame, dense many-light scenes need the temporal+spatial
@@ -127,7 +125,6 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             // frame work.
             const uint kLocalSeedSamples = 4u;
             uint lightIndex = 0xFFFFFFFFu;
-#ifdef REGIR_ENABLED
             if (lightSampler.mode == WAVEFRONT_LIGHT_SAMPLER_REGIR) {
                 [unroll]
                 for (uint k = 0u; k < kLocalSeedSamples; ++k) {
@@ -168,18 +165,6 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                     update_reservoir(reservoir, lightIndex, localTarget, rng);
                 }
             }
-#else
-            [unroll]
-            for (uint k = 0u; k < kLocalSeedSamples; ++k) {
-                lightIndex = next_uint(rng) % numLights;
-                WavefrontLightSample localSample =
-                    WavefrontSampleFlatLight(hitPos, lightIndex,
-                                             (float)numLights, rng);
-                float localTarget = WavefrontEvaluateReservoirTarget(
-                    record, normal, hitPos, localSample);
-                update_reservoir(reservoir, lightIndex, localTarget, rng);
-            }
-#endif
         }
 
         WavefrontLightSample finalSample;
@@ -191,14 +176,10 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         if (reservoir.lightIndex == 0xFFFFFFFFu &&
             WavefrontDirectionalLightActive()) {
             finalSample = WavefrontSampleDirectionalLight(1.0);
-#ifdef REGIR_ENABLED
         } else if (WavefrontIsEmissiveProxyLightIndex(reservoir.lightIndex)) {
             finalSample = WavefrontSampleEmissiveProxyLight(
                 hitPos, reservoir.lightIndex, 1.0);
         } else if (reservoir.lightIndex < numLights) {
-#else
-        } else if (reservoir.lightIndex < numLights) {
-#endif
             finalSample = WavefrontSampleFlatLightUnweighted(
                 hitPos, reservoir.lightIndex, rng);
         }

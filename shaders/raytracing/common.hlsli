@@ -72,9 +72,8 @@ static const uint SHADER_COUNTER_REGIR_SAMPLE_NOCAND = 12;     // cell had no va
 static const uint SHADER_COUNTER_REGIR_SAMPLE_CLAMPED = 13;    // inversePdf hit domainCap
 static const uint SHADER_COUNTER_REGIR_SAMPLER_CREATE = 14;    // WavefrontCreateLightSampler calls
 static const uint SHADER_COUNTER_REGIR_SAMPLER_MODE = 15;      // sampler chose ReGIR mode
-static const uint SHADER_COUNTER_REGIR_FLAT_NO_FEATURE = 16;   // REGIR feature bit missing in shader
+static const uint SHADER_COUNTER_REGIR_FLAT_NO_FEATURE = 16;   // runtime REGIR feature bit off
 static const uint SHADER_COUNTER_REGIR_FLAT_NO_CELLS = 17;     // g_regirParams.totalCells was 0
-static const uint SHADER_COUNTER_REGIR_COMPILED_OUT = 18;      // REGIR_ENABLED not in this shader variant
 static const uint SHADER_COUNTER_REGIR_MAX_TOTAL_CELLS = 19;   // max totalCells seen by shader
 static const uint SHADER_COUNTER_REGIR_MAX_LIGHTS = 20;        // max local light count seen by shader
 static const uint SHADER_COUNTER_COUNT = 24; // allocated counters
@@ -312,10 +311,14 @@ inline float2 DirectionToUVRotated(float3 dir) {
 
 StructuredBuffer<Light> g_lights : register(t5000);
 
-#if defined(REGIR_ENABLED) || defined(REGIR_EMISSIVE_PROXY_ENABLED)
+// ReGIR resources are always part of the wavefront shader ABI. The runtime
+// feature bit decides whether the sampler uses them; source/build-time defines
+// must not decide whether ReGIR exists.
+#include "../regir_lib.hlsl"
+RWStructuredBuffer<ReGIRCellReservoir> g_regirCells : register(u36);
+StructuredBuffer<ReGIRLightBound> g_regirLightBounds : register(t5001);
+
 // Emissive mesh proxy data (sentinel lightIndex 0x80000000 | proxyIndex).
-// Full ReGIR passes also bind ReGIRParams; spatial reuse only needs the proxy
-// buffer so it uses REGIR_EMISSIVE_PROXY_ENABLED without pulling in u36/b11.
 struct EmissiveProxyData
 {
     float3 center;
@@ -324,13 +327,7 @@ struct EmissiveProxyData
     uint   pad;
 };
 StructuredBuffer<EmissiveProxyData> g_emissiveProxyData : register(t5003);
-#endif
 
-#ifdef REGIR_ENABLED
-// ReGIR resources (defined in regir_lib.hlsl)
-#include "../regir_lib.hlsl"
-RWStructuredBuffer<ReGIRCellReservoir> g_regirCells : register(u36);
-StructuredBuffer<ReGIRLightBound> g_regirLightBounds : register(t5001);
 cbuffer ReGIRParams : register(b11, space3)
 {
     ReGIRConstants g_regirParams;
@@ -340,17 +337,7 @@ uint WavefrontGetEmissiveProxyCount()
 {
     return g_regirParams.proxyCount;
 }
-#elif defined(REGIR_EMISSIVE_PROXY_ENABLED)
-uint WavefrontGetEmissiveProxyCount()
-{
-    uint count = 0u;
-    uint stride = 0u;
-    g_emissiveProxyData.GetDimensions(count, stride);
-    return count;
-}
-#endif
 
-#ifdef REGIR_ENABLED
 // ReGIR sampling functions (require g_regirCells, declared above)
 
 // Stochastically jitter the lookup position by up to +/-0.5 cell extents so a
@@ -437,7 +424,6 @@ uint ReGIR_SampleCandidate(float3 worldPos, inout RNG rng,
     return ReGIR_SampleCandidateWeighted(worldPos, rng, params,
                                          sampleWeight);
 }
-#endif // REGIR_ENABLED
 
 // Material flags (bit-packed in MaterialData.pbrParams_flags.w as uint bits).
 static const uint MATERIAL_FLAG_ALPHA_TESTED = 1u << 0;
@@ -721,9 +707,7 @@ static const uint WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL = 0u;
 static const uint WAVEFRONT_LIGHT_SAMPLE_FLAT = 1u;
 static const uint WAVEFRONT_LIGHT_SAMPLE_ENV = 2u;
 static const uint WAVEFRONT_LIGHT_SAMPLER_FLAT = 0u;
-#ifdef REGIR_ENABLED
 static const uint WAVEFRONT_LIGHT_SAMPLER_REGIR = 1u;
-#endif
 
 struct WavefrontLightSample
 {
@@ -1018,7 +1002,6 @@ inline WavefrontLightSamplerContext WavefrontCreateLightSampler(float3 surfacePo
     sampler.availableLights = numLights;
     InterlockedAdd(g_shaderCounters[SHADER_COUNTER_REGIR_SAMPLER_CREATE], 1u);
     InterlockedMax(g_shaderCounters[SHADER_COUNTER_REGIR_MAX_LIGHTS], numLights);
-#ifdef REGIR_ENABLED
     InterlockedMax(g_shaderCounters[SHADER_COUNTER_REGIR_MAX_TOTAL_CELLS],
                    g_regirParams.totalCells);
     if (DxrFeatureEnabled(DXR_FEATURE_REGIR_ENABLED) &&
@@ -1034,10 +1017,6 @@ inline WavefrontLightSamplerContext WavefrontCreateLightSampler(float3 surfacePo
         }
         sampler.mode = WAVEFRONT_LIGHT_SAMPLER_FLAT;
     }
-#else
-    InterlockedAdd(g_shaderCounters[SHADER_COUNTER_REGIR_COMPILED_OUT], 1u);
-    sampler.mode = WAVEFRONT_LIGHT_SAMPLER_FLAT;
-#endif
     return sampler;
 }
 
@@ -1150,7 +1129,6 @@ inline WavefrontLightSample WavefrontSampleFlatLightUnweighted(
     return sample;
 }
 
-#if defined(REGIR_ENABLED) || defined(REGIR_EMISSIVE_PROXY_ENABLED)
 inline bool WavefrontIsEmissiveProxyLightIndex(uint lightIndex)
 {
     return lightIndex != 0xFFFFFFFFu && ((lightIndex & 0x80000000u) != 0u);
@@ -1186,9 +1164,7 @@ inline WavefrontLightSample WavefrontSampleEmissiveProxyLight(
         WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_FLAT, 0xFFFFFFFFu);
     return sample;
 }
-#endif
 
-#ifdef REGIR_ENABLED
 inline WavefrontLightSample WavefrontSampleReGIRLight(
     float3 surfacePos,
     float sampleWeight,
@@ -1241,7 +1217,6 @@ inline WavefrontLightSample WavefrontSampleReGIRLight(
         surfacePos, lightIndex,
         sampleWeight * max(regirSampleWeight, 1.0), rng);
 }
-#endif // REGIR_ENABLED
 
 inline WavefrontLightSample WavefrontSampleDirectLight(
     WavefrontLightSamplerContext sampler,
@@ -1250,12 +1225,10 @@ inline WavefrontLightSample WavefrontSampleDirectLight(
 {
     const uint numLights = sampler.availableLights;
     const bool directionalActive = WavefrontDirectionalLightActive();
-#ifdef REGIR_ENABLED
     const bool useReGIR = (sampler.mode == WAVEFRONT_LIGHT_SAMPLER_REGIR);
     if (numLights == 0u && useReGIR) {
         return WavefrontSampleReGIRLight(surfacePos, 1.0, rng);
     }
-#endif
 
     if (numLights == 0u) {
         if (directionalActive) {
@@ -1269,11 +1242,9 @@ inline WavefrontLightSample WavefrontSampleDirectLight(
     }
 
     const float localSampleWeight = directionalActive ? 2.0 : 1.0;
-#ifdef REGIR_ENABLED
     if (sampler.mode == WAVEFRONT_LIGHT_SAMPLER_REGIR) {
         return WavefrontSampleReGIRLight(surfacePos, localSampleWeight, rng);
     }
-#endif
 
     const uint lightIndex = next_uint(rng) % numLights;
     return WavefrontSampleFlatLight(surfacePos, lightIndex,
