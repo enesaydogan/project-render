@@ -18,14 +18,16 @@ struct ReGIRCellReservoir
 
 struct ReGIRLightBound
 {
-    float3 center;     // world-space bounding sphere center
-    float  radius;     // bounding sphere radius
-    float3 direction;  // normalized spotlight direction
+    float3 center;        // world-space influence sphere center
+    float  radius;        // influence/culling radius, not emitter radius
+    float3 direction;     // normalized spot/area/IES direction
     float  outerConeAngle; // cos(outer cone), spot only
-    float  power;      // total emissive power for importance sampling
-    uint   lightIndex; // back-reference into g_lights
+    float  power;         // total emissive power for importance sampling
+    uint   lightIndex;    // back-reference into g_lights
     uint   type;
-    uint   pad0;
+    float  emitterRadius; // physical radius/area smoothing for attenuation
+    float  innerConeAngle; // cos(inner cone), spot only
+    float3 pad0;
 };
 
 // ---- grid constants --------------------------------------------------------

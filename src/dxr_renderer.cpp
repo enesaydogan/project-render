@@ -6889,8 +6889,12 @@ struct ReGIRLightBoundGpu {
   float power;
   uint32_t lightIndex;
   uint32_t type;
-  uint32_t pad;
+  float emitterRadius;
+  float innerConeAngle;
+  float pad[3];
 };
+static_assert(sizeof(ReGIRLightBoundGpu) == 64,
+              "ReGIRLightBoundGpu must match shaders/regir_lib.hlsl");
 
 struct ReGIRConstantsGpu {
   float gridMin[4];       // pad0 in [3]
@@ -6975,20 +6979,21 @@ static void StoreReGIRLightDirection(const Light &light,
     dy *= invLen;
     dz *= invLen;
   } else {
-    // Only spot/IES actually consume the cone axis. A zero-direction
-    // spot/IES is a scene-data bug (likely a duplicate path that didn't
-    // copy direction) — assert in debug, warn once in release so the
-    // fall-through "down" direction doesn't silently misdirect lighting.
+    // Spot, IES, and one-sided area lights consume the direction. A zero
+    // direction is a scene-data bug, so warn once in release and assert in
+    // debug.
     if (light.type == (uint32_t)LightType::Spot ||
+        light.type == (uint32_t)LightType::AreaRect ||
+        light.type == (uint32_t)LightType::AreaDisk ||
         light.type == (uint32_t)LightType::IES) {
-      static bool warnedZeroSpotDir = false;
-      if (!warnedZeroSpotDir) {
+      static bool warnedZeroLightDir = false;
+      if (!warnedZeroLightDir) {
         fprintf(stderr,
-                "DxrRenderer: Spot/IES light has zero direction vector — "
+                "DxrRenderer: directional light type has zero direction vector; "
                 "falling back to (0,-1,0). Fix the scene data.\n");
-        warnedZeroSpotDir = true;
+        warnedZeroLightDir = true;
       }
-      assert(false && "Spot/IES light has zero direction vector");
+      assert(false && "Directional light type has zero direction vector");
     }
     dx = 0.0f;
     dy = -1.0f;
@@ -6997,7 +7002,9 @@ static void StoreReGIRLightDirection(const Light &light,
   bound.direction[0] = dx;
   bound.direction[1] = dy;
   bound.direction[2] = dz;
-  bound.outerConeAngle = (std::clamp)(light.outerConeAngle, 0.0f, 1.0f);
+  bound.outerConeAngle = (std::clamp)(light.outerConeAngle, -1.0f, 1.0f);
+  bound.innerConeAngle =
+      (std::clamp)(light.innerConeAngle, bound.outerConeAngle, 1.0f);
 }
 
 static void EnsureReGIRResources() {
@@ -7207,6 +7214,7 @@ static UINT BuildReGIRLightBounds(const std::vector<Light> &lights) {
     lb.power = power;
     lb.type = l.type;
     StoreReGIRLightDirection(l, lb);
+    lb.emitterRadius = (std::max)(l.radius, 0.0f);
 
     // Bounding sphere radius. These are influence bounds for ReGIR candidate
     // placement, not emitter geometry bounds.
@@ -7223,10 +7231,15 @@ static UINT BuildReGIRLightBounds(const std::vector<Light> &lights) {
       lb.radius = (std::min)(reach / outerCos, 96.0f);
     } else if (l.type == (uint32_t)LightType::AreaRect ||
                l.type == (uint32_t)LightType::AreaDisk) {
-      float halfDiag =
-          sqrtf(l.areaExtents[0] * l.areaExtents[0] +
-                l.areaExtents[1] * l.areaExtents[1]) * 0.5f;
-      lb.radius = (std::max)(halfDiag, ComputeReGIRLocalLightReach(l, power));
+      const float areaX = (std::max)(l.areaExtents[0], 0.0f);
+      const float areaY = (std::max)(l.areaExtents[1], 0.0f);
+      float areaBoundRadius =
+          sqrtf(areaX * areaX + areaY * areaY) * 0.5f;
+      if (l.type == (uint32_t)LightType::AreaDisk) {
+        areaBoundRadius = areaX;
+      }
+      lb.emitterRadius = (std::max)(areaBoundRadius, l.radius);
+      lb.radius = areaBoundRadius + ComputeReGIRLocalLightReach(l, power);
     } else {
       lb.radius = 1.0f;
     }
@@ -7595,6 +7608,8 @@ static UINT BuildEmissiveProxyBounds() {
     lb.direction[1] = -1.0f;
     lb.direction[2] = 0.0f;
     lb.outerConeAngle = 0.0f;
+    lb.emitterRadius = proxy.radius * 0.5f;
+    lb.innerConeAngle = 1.0f;
     proxyBounds.push_back(lb);
   }
 

@@ -118,7 +118,7 @@ bool ConeOverlapsCell(float3 apex, float3 axis, float cosHalfAngle,
     return cosAxis >= cosCombined;
 }
 
-// Angular falloff for spot/IES lights. Folds the cone direction into the
+// Angular falloff for spot lights. Folds the cone direction into the
 // proposal distribution so RIS doesn't pick a spotlight whose axis points
 // away from the cell — those candidates contribute zero radiance and inflate
 // variance once the per-cell light count gets large.
@@ -134,30 +134,46 @@ float ComputeSpotAngularFactor(ReGIRLightBound lb, float3 cellCenter)
         return 1.0;
 
     float cosTheta = dot(axis, toCell) * rsqrt(distSq);
-    float outerCos = clamp(lb.outerConeAngle, 0.01, 0.999);
-    // Soft inner boundary so cells straddling the cone edge still get
-    // nonzero proposal weight. Width is 25% of (1 - outer) — gentle ramp.
-    float innerCos = lerp(outerCos, 1.0, 0.25);
+    float outerCos = clamp(lb.outerConeAngle, -1.0, 1.0);
+    float innerCos = clamp(lb.innerConeAngle, outerCos, 1.0);
     return smoothstep(outerCos, innerCos, cosTheta);
 }
 
+float ComputeAreaFacingFactor(ReGIRLightBound lb, float3 cellCenter)
+{
+    float3 toCell = cellCenter - lb.center;
+    float distSq = dot(toCell, toCell);
+    if (distSq < 1.0e-6)
+        return 1.0;
+
+    float3 normal = lb.direction;
+    if (dot(normal, normal) < 0.25)
+        return 1.0;
+
+    // sample_area_light() uses cosLight = dot(lightNormal, light -> receiver).
+    return saturate(dot(normal, toCell) * rsqrt(distSq));
+}
+
 // Compute a target importance weight for a light relative to a cell.
-// Uses power / distance² gated by the spotlight cone direction so the RIS
-// proposal matches the actual radiance contribution. Reach is handled by
-// the AABB cull in the caller.
+// Uses power / distance^2 with the same per-type shaping used by the light
+// evaluators. Reach is handled by the AABB cull in the caller.
 float ComputeLightCellWeight(ReGIRLightBound lb, float3 cellCenter)
 {
     float3 toLight = lb.center - cellCenter;
     float dist2 = dot(toLight, toLight);
 
-    float effectiveDist2 = max(dist2, lb.radius * lb.radius * 0.25);
-    float spatialWeight = lb.power / max(effectiveDist2, 1.0e-6);
+    float emitterRadius = max(lb.emitterRadius, 0.0);
+    float attenuationDenom = max(dist2 + emitterRadius * emitterRadius, 1.0e-6);
+    if ((lb.lightIndex & 0x80000000u) != 0u)
+        attenuationDenom = max(max(dist2, emitterRadius * emitterRadius), 1.0e-6);
+    float spatialWeight = lb.power / attenuationDenom;
 
-    // Spot/IES cone term. Type IDs match LightType in src/light.h:
-    //   2 = Spot, 5 = IES (IES profiles have a forward lobe — same axis).
+    // Type IDs match LightType in src/light.h.
     float angular = 1.0;
-    if (lb.type == 2u || lb.type == 5u)
+    if (lb.type == 2u)
         angular = ComputeSpotAngularFactor(lb, cellCenter);
+    else if (lb.type == 3u || lb.type == 4u)
+        angular = ComputeAreaFacingFactor(lb, cellCenter);
 
     return spatialWeight * angular;
 }
@@ -210,13 +226,13 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         if (!SphereOverlapsCell(lb.center, lb.radius, cellMin, cellMax))
             continue;
 
-        // Tighter cull for spot/IES: spotlights have a directional cone that
+        // Tighter cull for spots: spotlights have a directional cone that
         // the sphere bound doesn't capture, so we'd otherwise process every
         // cell within reach even when most of them are outside the cone.
-        if (lb.type == 2u || lb.type == 5u) {
+        if (lb.type == 2u) {
             if (dot(lb.direction, lb.direction) >= 0.25 &&
                 !ConeOverlapsCell(lb.center, lb.direction,
-                                  clamp(lb.outerConeAngle, 0.01, 0.999),
+                                  clamp(lb.outerConeAngle, -1.0, 1.0),
                                   cellMin, cellMax))
                 continue;
         }
