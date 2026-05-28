@@ -214,6 +214,7 @@ struct ReGIRStats {
   uint32_t lightCount = 0;
   uint32_t lightBoundCount = 0;
   uint32_t emissiveProxyCount = 0;
+  uint32_t emissiveTriangleCount = 0;
   uint32_t skippedDirectionalLights = 0;
   uint32_t skippedZeroPowerLights = 0;
   uint32_t lastUpdateFrameIndex = 0;

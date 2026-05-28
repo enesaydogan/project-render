@@ -1544,7 +1544,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 } else if (WavefrontIsEmissiveProxyLightIndex(
                                diReservoir.lightIndex)) {
                     finalSample = WavefrontSampleEmissiveProxyLight(
-                        hitPos, diReservoir.lightIndex, 1.0);
+                        hitPos, diReservoir.lightIndex, 1.0, rng);
                 } else if (diReservoir.lightIndex < numLights) {
                     finalSample = WavefrontSampleFlatLightUnweighted(
                         hitPos, diReservoir.lightIndex, rng);

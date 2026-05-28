@@ -787,6 +787,10 @@ static ComPtr<ID3D12Resource> s_regirCellReadbackBuffer;
 static ComPtr<ID3D12Resource> s_regirLightBoundsBuffer;
 static ComPtr<ID3D12Resource> s_regirConstantsBuffer;
 static ComPtr<ID3D12Resource> s_emissiveProxyBuffer;
+static ComPtr<ID3D12Resource> s_emissiveProxyTriangleBuffer;
+static UINT s_regirEmissiveTriangleCount = 0;
+static D3D12_GPU_VIRTUAL_ADDRESS s_lastMaterialDataGpuVA = 0;
+static D3D12_GPU_VIRTUAL_ADDRESS s_lastMaterialExtraGpuVA = 0;
 static ComPtr<ID3D12RootSignature> s_regirUpdateRootSig;
 static ComPtr<ID3D12PipelineState> s_regirUpdatePSO;
 static bool s_regirResourcesCreated = false;
@@ -1190,12 +1194,16 @@ static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
                                             bool doBarriers = true);
 static void DispatchWavefrontRestirSeed(ID3D12GraphicsCommandList4 *list,
                                         ID3D12Resource *cameraCB,
+                                        ID3D12Resource *materialCB,
+                                        ID3D12Resource *materialExtraSB,
                                         UINT seedFlags = 0u,
                                         bool useIndirectDispatch = false,
                                         UINT dispatchArgsIndex = 2,
                                         bool doBarriers = true);
 static void DispatchWavefrontResolveSecondary(ID3D12GraphicsCommandList4 *list,
                                               ID3D12Resource *cameraCB,
+                                              ID3D12Resource *materialCB,
+                                              ID3D12Resource *materialExtraSB,
                                               UINT sourceQueueCounterIndex,
                                               UINT extraResolveFlags = 0u,
                                               bool useIndirectDispatch = false,
@@ -1368,7 +1376,7 @@ static void EnsureRestirSpatialPipeline() {
   regirCellRange.OffsetInDescriptorsFromTableStart =
       D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-  D3D12_ROOT_PARAMETER params[9] = {};
+  D3D12_ROOT_PARAMETER params[12] = {};
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
   params[0].Descriptor.ShaderRegister = 0;
   params[0].Descriptor.RegisterSpace = 0;
@@ -1428,10 +1436,44 @@ static void EnsureRestirSpatialPipeline() {
   params[8].DescriptorTable.pDescriptorRanges = &regirCellRange;
   params[8].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
+  // Emissive proxy mesh triangles (t5004), sampled by real mesh-light proxies.
+  params[9].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[9].Descriptor.ShaderRegister = 5004;
+  params[9].Descriptor.RegisterSpace = 0;
+  params[9].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  // Material buffers for emissive texture evaluation during spatial reuse.
+  params[10].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[10].Descriptor.ShaderRegister = 2049;
+  params[10].Descriptor.RegisterSpace = 0;
+  params[10].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[11].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[11].Descriptor.ShaderRegister = 4099;
+  params[11].Descriptor.RegisterSpace = 0;
+  params[11].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
   D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
   rsDesc.NumParameters = _countof(params);
   rsDesc.pParameters = params;
   rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+  D3D12_STATIC_SAMPLER_DESC linearSampler = {};
+  linearSampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+  linearSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  linearSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  linearSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  linearSampler.MipLODBias = 0;
+  linearSampler.MaxAnisotropy = 1;
+  linearSampler.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+  linearSampler.BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK;
+  linearSampler.MinLOD = 0.0f;
+  linearSampler.MaxLOD = D3D12_FLOAT32_MAX;
+  linearSampler.ShaderRegister = 0;
+  linearSampler.RegisterSpace = 0;
+  linearSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+  rsDesc.NumStaticSamplers = 1;
+  rsDesc.pStaticSamplers = &linearSampler;
 
   ComPtr<ID3DBlob> sig, err;
   HRESULT hrSerialize = D3D12SerializeRootSignature(
@@ -1774,7 +1816,10 @@ void WaitForAsyncRestirIdle() {
 }
 
 static void DispatchRestirDiSpatialPass(ID3D12GraphicsCommandList4 *list,
-                                        ID3D12Resource *cameraCB) {
+                                        ID3D12Resource *cameraCB,
+                                        ID3D12Resource *materialCB = nullptr,
+                                        ID3D12Resource *materialExtraSB =
+                                            nullptr) {
   if (!list || !cameraCB || !s_srvHeap || !s_device) {
     return;
   }
@@ -1822,6 +1867,18 @@ static void DispatchRestirDiSpatialPass(ID3D12GraphicsCommandList4 *list,
         s_srvHeap->GetGPUDescriptorHandleForHeapStart();
     regirCells.ptr += (UINT64)DXR_HEAP_REGIR_CELLS_OFFSET * (UINT64)inc;
     list->SetComputeRootDescriptorTable(8, regirCells);
+    list->SetComputeRootShaderResourceView(
+        9, s_emissiveProxyTriangleBuffer
+               ? s_emissiveProxyTriangleBuffer->GetGPUVirtualAddress()
+               : 0);
+    const D3D12_GPU_VIRTUAL_ADDRESS materialGpu =
+        materialCB ? materialCB->GetGPUVirtualAddress()
+                   : s_lastMaterialDataGpuVA;
+    const D3D12_GPU_VIRTUAL_ADDRESS materialExtraGpu =
+        materialExtraSB ? materialExtraSB->GetGPUVirtualAddress()
+                        : s_lastMaterialExtraGpuVA;
+    list->SetComputeRootShaderResourceView(10, materialGpu);
+    list->SetComputeRootShaderResourceView(11, materialExtraGpu);
 
     const UINT gx = (s_outputWidth + 7) / 8;
     const UINT gy = (s_outputHeight + 7) / 8;
@@ -2639,7 +2696,7 @@ static void EnsureWavefrontResolvePipeline() {
   cloudSrvRange.OffsetInDescriptorsFromTableStart =
       D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-  D3D12_ROOT_PARAMETER params[18] = {};
+  D3D12_ROOT_PARAMETER params[19] = {};
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
   params[0].Descriptor.ShaderRegister = 0;
   params[0].Descriptor.RegisterSpace = 0;
@@ -2741,6 +2798,12 @@ static void EnsureWavefrontResolvePipeline() {
   params[17].DescriptorTable.NumDescriptorRanges = 1;
   params[17].DescriptorTable.pDescriptorRanges = &iesResolveRange;
   params[17].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  // Emissive proxy mesh triangles (t5004)
+  params[18].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[18].Descriptor.ShaderRegister = 5004;
+  params[18].Descriptor.RegisterSpace = 0;
+  params[18].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
   D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
   rsDesc.NumParameters = _countof(params);
@@ -3032,6 +3095,10 @@ static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
               ? s_emissiveProxyBuffer->GetGPUVirtualAddress()
               : 0);
   list->SetComputeRootDescriptorTable(17, s_iesAtlasSrvGpu);
+  list->SetComputeRootShaderResourceView(
+      18, s_emissiveProxyTriangleBuffer
+              ? s_emissiveProxyTriangleBuffer->GetGPUVirtualAddress()
+              : 0);
 
   const bool dispatchedIndirect =
       useIndirectDispatch &&
@@ -3053,6 +3120,8 @@ static void DispatchWavefrontResolvePrimary(ID3D12GraphicsCommandList4 *list,
 
 static void DispatchWavefrontRestirSeed(ID3D12GraphicsCommandList4 *list,
                                         ID3D12Resource *cameraCB,
+                                        ID3D12Resource *materialCB,
+                                        ID3D12Resource *materialExtraSB,
                                         UINT seedFlags,
                                         bool useIndirectDispatch,
                                         UINT dispatchArgsIndex,
@@ -3084,9 +3153,13 @@ static void DispatchWavefrontRestirSeed(ID3D12GraphicsCommandList4 *list,
       4, s_lightBuffer ? s_lightBuffer->GetGPUVirtualAddress() : 0);
   list->SetComputeRootShaderResourceView(
       5, s_tlas.result ? s_tlas.result->GetGPUVirtualAddress() : 0);
-  list->SetComputeRootShaderResourceView(6, 0);
+  list->SetComputeRootShaderResourceView(
+      6, materialCB ? materialCB->GetGPUVirtualAddress()
+                    : s_lastMaterialDataGpuVA);
   list->SetComputeRootShaderResourceView(7, 0);
-  list->SetComputeRootShaderResourceView(8, 0);
+  list->SetComputeRootShaderResourceView(
+      8, materialExtraSB ? materialExtraSB->GetGPUVirtualAddress()
+                         : s_lastMaterialExtraGpuVA);
   list->SetComputeRootDescriptorTable(9, s_vbTableGpu);
   list->SetComputeRootDescriptorTable(10, s_ibTableGpu);
   list->SetComputeRootDescriptorTable(11, s_texTableGpu);
@@ -3112,6 +3185,10 @@ static void DispatchWavefrontRestirSeed(ID3D12GraphicsCommandList4 *list,
               ? s_emissiveProxyBuffer->GetGPUVirtualAddress()
               : 0);
   list->SetComputeRootDescriptorTable(17, s_iesAtlasSrvGpu);
+  list->SetComputeRootShaderResourceView(
+      18, s_emissiveProxyTriangleBuffer
+              ? s_emissiveProxyTriangleBuffer->GetGPUVirtualAddress()
+              : 0);
 
   const bool dispatchedIndirect =
       useIndirectDispatch &&
@@ -3133,6 +3210,8 @@ static void DispatchWavefrontRestirSeed(ID3D12GraphicsCommandList4 *list,
 
 static void DispatchWavefrontResolveSecondary(ID3D12GraphicsCommandList4 *list,
                                               ID3D12Resource *cameraCB,
+                                              ID3D12Resource *materialCB,
+                                              ID3D12Resource *materialExtraSB,
                                               UINT sourceQueueCounterIndex,
                                               UINT extraResolveFlags,
                                               bool useIndirectDispatch,
@@ -3170,9 +3249,13 @@ static void DispatchWavefrontResolveSecondary(ID3D12GraphicsCommandList4 *list,
       4, s_lightBuffer ? s_lightBuffer->GetGPUVirtualAddress() : 0);
   list->SetComputeRootShaderResourceView(
       5, s_tlas.result ? s_tlas.result->GetGPUVirtualAddress() : 0);
-  list->SetComputeRootShaderResourceView(6, 0);
+  list->SetComputeRootShaderResourceView(
+      6, materialCB ? materialCB->GetGPUVirtualAddress()
+                    : s_lastMaterialDataGpuVA);
   list->SetComputeRootShaderResourceView(7, 0);
-  list->SetComputeRootShaderResourceView(8, 0);
+  list->SetComputeRootShaderResourceView(
+      8, materialExtraSB ? materialExtraSB->GetGPUVirtualAddress()
+                         : s_lastMaterialExtraGpuVA);
   list->SetComputeRootDescriptorTable(9, s_vbTableGpu);
   list->SetComputeRootDescriptorTable(10, s_ibTableGpu);
   list->SetComputeRootDescriptorTable(11, s_texTableGpu);
@@ -3198,6 +3281,10 @@ static void DispatchWavefrontResolveSecondary(ID3D12GraphicsCommandList4 *list,
               ? s_emissiveProxyBuffer->GetGPUVirtualAddress()
               : 0);
   list->SetComputeRootDescriptorTable(17, s_iesAtlasSrvGpu);
+  list->SetComputeRootShaderResourceView(
+      18, s_emissiveProxyTriangleBuffer
+              ? s_emissiveProxyTriangleBuffer->GetGPUVirtualAddress()
+              : 0);
 
   const bool dispatchedIndirect =
       useIndirectDispatch &&
@@ -4065,7 +4152,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   }
 
   // Create global root signature
-  D3D12_ROOT_PARAMETER params[19] =
+  D3D12_ROOT_PARAMETER params[20] =
       {}; // Lights, material extras, grass/cloud/IES, and ReGIR resources.
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
   params[0].Descriptor.ShaderRegister = 0;
@@ -4212,6 +4299,11 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   params[18].Descriptor.ShaderRegister = 5003;
   params[18].Descriptor.RegisterSpace = 0;
   params[18].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+  params[19].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  params[19].Descriptor.ShaderRegister = 5004;
+  params[19].Descriptor.RegisterSpace = 0;
+  params[19].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
   D3D12_ROOT_SIGNATURE_DESC rootDesc = {};
   rootDesc.NumParameters = _countof(params);
@@ -6954,17 +7046,23 @@ static void ClearReGIRReadbackSummary() {
   s_regirMaxCandidateCountM = 0;
 }
 
+static float ComputeReGIRPowerReach(float emitterRadius, float power) {
+  // The bound radius is an influence/culling radius for ReGIR cells, while the
+  // physical emitter radius is carried separately for proposal attenuation.
+  const float safeEmitterRadius = (std::max)(emitterRadius, 0.0f);
+  const float powerReach =
+      (std::clamp)(std::sqrt((std::max)(power, 0.0f)) * 2.0f *
+                       s_regirLightReachScale,
+                   2.0f, 128.0f);
+  return (std::max)(safeEmitterRadius, powerReach);
+}
+
 static float ComputeReGIRLocalLightReach(const Light &light, float power) {
   // Light::radius is the emitter/soft-shadow radius, not the attenuation reach.
   // ReGIR bounds need to cover receiver cells that the light can meaningfully
   // illuminate; otherwise dense point/spot scenes fall back to flat random
   // light picking for most surfaces.
-  const float emitterRadius = (std::max)(light.radius, 0.0f);
-  const float powerReach =
-      (std::clamp)(std::sqrt((std::max)(power, 0.0f)) * 2.0f *
-                       s_regirLightReachScale,
-                   2.0f, 128.0f);
-  return (std::max)(emitterRadius, powerReach);
+  return ComputeReGIRPowerReach(light.radius, power);
 }
 
 static void StoreReGIRLightDirection(const Light &light,
@@ -7528,8 +7626,112 @@ struct EmissiveProxyDataGpu {
   float center[3];
   float radius;
   float radiance[3];
-  uint32_t pad;
+  uint32_t triangleStart;
+  uint32_t triangleCount;
+  float totalArea;
+  uint32_t materialIndex;
+  uint32_t pad0;
 };
+static_assert(sizeof(EmissiveProxyDataGpu) == 48,
+              "EmissiveProxyDataGpu must match common.hlsli");
+
+struct EmissiveTriangleDataGpu {
+  float p0[3];
+  float cumulativeArea;
+  float p1[3];
+  float area;
+  float p2[3];
+  float pad0;
+  float normal[3];
+  float pad1;
+  float uv0[2];
+  float uv1[2];
+  float uv2[2];
+  float pad2[2];
+};
+static_assert(sizeof(EmissiveTriangleDataGpu) == 96,
+              "EmissiveTriangleDataGpu must match common.hlsli");
+
+static UINT AppendEmissiveMeshTriangles(
+    const Scene::Instance &instance,
+    std::vector<EmissiveTriangleDataGpu> &triangles,
+    float &outTotalArea) {
+  outTotalArea = 0.0f;
+  if (!instance.mesh || instance.mesh->cpuVertices.empty() ||
+      instance.mesh->cpuIndices.size() < 3) {
+    return 0;
+  }
+
+  const auto &vertices = instance.mesh->cpuVertices;
+  const auto &indices = instance.mesh->cpuIndices;
+  const UINT startCount = static_cast<UINT>(triangles.size());
+  double cumulativeArea = 0.0;
+
+  for (size_t idx = 0; idx + 2 < indices.size(); idx += 3) {
+    const uint32_t i0 = indices[idx + 0];
+    const uint32_t i1 = indices[idx + 1];
+    const uint32_t i2 = indices[idx + 2];
+    if (i0 >= vertices.size() || i1 >= vertices.size() ||
+        i2 >= vertices.size()) {
+      continue;
+    }
+
+    const Asset::Vertex &v0 = vertices[i0];
+    const Asset::Vertex &v1 = vertices[i1];
+    const Asset::Vertex &v2 = vertices[i2];
+    DirectX::XMVECTOR lp0 =
+        DirectX::XMVectorSet(v0.pos[0], v0.pos[1], v0.pos[2], 1.0f);
+    DirectX::XMVECTOR lp1 =
+        DirectX::XMVectorSet(v1.pos[0], v1.pos[1], v1.pos[2], 1.0f);
+    DirectX::XMVECTOR lp2 =
+        DirectX::XMVectorSet(v2.pos[0], v2.pos[1], v2.pos[2], 1.0f);
+    DirectX::XMVECTOR p0 = DirectX::XMVector4Transform(lp0, instance.transform);
+    DirectX::XMVECTOR p1 = DirectX::XMVector4Transform(lp1, instance.transform);
+    DirectX::XMVECTOR p2 = DirectX::XMVector4Transform(lp2, instance.transform);
+    DirectX::XMVECTOR e0 = DirectX::XMVectorSubtract(p1, p0);
+    DirectX::XMVECTOR e1 = DirectX::XMVectorSubtract(p2, p0);
+    DirectX::XMVECTOR n = DirectX::XMVector3Cross(e0, e1);
+    const float twiceArea = DirectX::XMVectorGetX(DirectX::XMVector3Length(n));
+    const float area = twiceArea * 0.5f;
+    if (!(area > 1.0e-8f) || !std::isfinite(area)) {
+      continue;
+    }
+
+    cumulativeArea += static_cast<double>(area);
+    DirectX::XMVECTOR unitNormal =
+        DirectX::XMVectorScale(n, 1.0f / twiceArea);
+
+    EmissiveTriangleDataGpu tri = {};
+    tri.p0[0] = DirectX::XMVectorGetX(p0);
+    tri.p0[1] = DirectX::XMVectorGetY(p0);
+    tri.p0[2] = DirectX::XMVectorGetZ(p0);
+    tri.p1[0] = DirectX::XMVectorGetX(p1);
+    tri.p1[1] = DirectX::XMVectorGetY(p1);
+    tri.p1[2] = DirectX::XMVectorGetZ(p1);
+    tri.p2[0] = DirectX::XMVectorGetX(p2);
+    tri.p2[1] = DirectX::XMVectorGetY(p2);
+    tri.p2[2] = DirectX::XMVectorGetZ(p2);
+    tri.normal[0] = DirectX::XMVectorGetX(unitNormal);
+    tri.normal[1] = DirectX::XMVectorGetY(unitNormal);
+    tri.normal[2] = DirectX::XMVectorGetZ(unitNormal);
+    tri.uv0[0] = v0.uv[0];
+    tri.uv0[1] = v0.uv[1];
+    tri.uv1[0] = v1.uv[0];
+    tri.uv1[1] = v1.uv[1];
+    tri.uv2[0] = v2.uv[0];
+    tri.uv2[1] = v2.uv[1];
+    tri.area = area;
+    tri.cumulativeArea =
+        static_cast<float>((std::min)(cumulativeArea,
+                                      static_cast<double>(FLT_MAX)));
+    triangles.push_back(tri);
+  }
+
+  outTotalArea =
+      static_cast<float>((std::min)(cumulativeArea,
+                                    static_cast<double>(FLT_MAX)));
+  return static_cast<UINT>(triangles.size()) - startCount;
+}
 
 static UINT BuildEmissiveProxyBounds() {
   // Scan scene instances for emissive materials and create light-like proxy
@@ -7538,7 +7740,9 @@ static UINT BuildEmissiveProxyBounds() {
   const auto &materials = g_loadedMaterials;
 
   std::vector<EmissiveProxyDataGpu> proxies;
+  std::vector<EmissiveTriangleDataGpu> emissiveTriangles;
   std::vector<ReGIRLightBoundGpu> proxyBounds;
+  constexpr float kEmissiveDirectBoost = 5.0f;
 
   for (size_t instIdx = 0; instIdx < instances.size(); ++instIdx) {
     const auto &inst = instances[instIdx];
@@ -7551,11 +7755,18 @@ static UINT BuildEmissiveProxyBounds() {
     float emisR = mat.emissiveColor[0];
     float emisG = mat.emissiveColor[1];
     float emisB = mat.emissiveColor[2];
-    float emisIntensity = mat.emissiveIntensity;
+    float emisIntensity =
+        (std::max)(mat.emissiveIntensity, 0.0f) * kEmissiveDirectBoost;
     float maxEmis = (emisR + emisG + emisB) * emisIntensity / 3.0f;
     if (maxEmis < 10.0f) continue; // skip negligible emissive
 
-    EmissiveProxyDataGpu proxy;
+    const uint32_t triangleStart =
+        static_cast<uint32_t>(emissiveTriangles.size());
+    float totalArea = 0.0f;
+    const uint32_t triangleCount =
+        AppendEmissiveMeshTriangles(inst, emissiveTriangles, totalArea);
+
+    EmissiveProxyDataGpu proxy = {};
     float worldMin[3] = {FLT_MAX, FLT_MAX, FLT_MAX};
     float worldMax[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
     for (int corner = 0; corner < 8; ++corner) {
@@ -7591,17 +7802,26 @@ static UINT BuildEmissiveProxyBounds() {
     proxy.radiance[0] = emisR * emisIntensity;
     proxy.radiance[1] = emisG * emisIntensity;
     proxy.radiance[2] = emisB * emisIntensity;
-    proxy.pad = 0;
+    proxy.triangleStart = triangleStart;
+    proxy.triangleCount = triangleCount;
+    proxy.totalArea = totalArea;
+    proxy.materialIndex = static_cast<uint32_t>(matIdx);
+    proxy.pad0 = 0;
 
     uint32_t proxyIndex = (uint32_t)proxies.size();
     proxies.push_back(proxy);
+
+    const float avgRadiance =
+        (proxy.radiance[0] + proxy.radiance[1] + proxy.radiance[2]) / 3.0f;
+    const float proxyArea = (totalArea > 1.0e-6f) ? totalArea : 1.0f;
+    const float proxyPower = avgRadiance * proxyArea;
 
     ReGIRLightBoundGpu lb = {};
     lb.center[0] = proxy.center[0];
     lb.center[1] = proxy.center[1];
     lb.center[2] = proxy.center[2];
-    lb.radius = proxy.radius;
-    lb.power = (proxy.radiance[0] + proxy.radiance[1] + proxy.radiance[2]) / 3.0f;
+    lb.radius = ComputeReGIRPowerReach(proxy.radius, proxyPower);
+    lb.power = proxyPower;
     lb.lightIndex = 0x80000000u | proxyIndex;
     lb.type = (uint32_t)LightType::Omni;
     lb.direction[0] = 0.0f;
@@ -7613,7 +7833,14 @@ static UINT BuildEmissiveProxyBounds() {
     proxyBounds.push_back(lb);
   }
 
-  if (proxies.empty()) return 0;
+  s_regirEmissiveTriangleCount = static_cast<UINT>(emissiveTriangles.size());
+
+  if (proxies.empty()) {
+    s_emissiveProxyBuffer.Reset();
+    s_emissiveProxyTriangleBuffer.Reset();
+    s_regirEmissiveTriangleCount = 0;
+    return 0;
+  }
 
   // Upload emissive proxy data buffer
   {
@@ -7644,6 +7871,42 @@ static UINT BuildEmissiveProxyBounds() {
     memcpy(pData, proxies.data(),
            proxies.size() * sizeof(EmissiveProxyDataGpu));
     s_emissiveProxyBuffer->Unmap(0, nullptr);
+  }
+
+  // Upload area-weighted emissive mesh triangle data for real mesh-light
+  // sampling. The proxy path falls back to the old sphere approximation only
+  // when no CPU triangles are available for a mesh.
+  if (!emissiveTriangles.empty()) {
+    UINT needed =
+        (UINT)(emissiveTriangles.size() * sizeof(EmissiveTriangleDataGpu));
+    if (!s_emissiveProxyTriangleBuffer ||
+        s_emissiveProxyTriangleBuffer->GetDesc().Width < needed) {
+      s_emissiveProxyTriangleBuffer.Reset();
+      D3D12_HEAP_PROPERTIES heapProps = {};
+      heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+      D3D12_RESOURCE_DESC bufDesc = {};
+      bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+      bufDesc.Width =
+          (std::max)(needed, (UINT)sizeof(EmissiveTriangleDataGpu) * 64);
+      bufDesc.Height = 1;
+      bufDesc.DepthOrArraySize = 1;
+      bufDesc.MipLevels = 1;
+      bufDesc.Format = DXGI_FORMAT_UNKNOWN;
+      bufDesc.SampleDesc.Count = 1;
+      bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+      bufDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+      ThrowIfFailed(s_device->CreateCommittedResource(
+          &heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
+          D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+          IID_PPV_ARGS(&s_emissiveProxyTriangleBuffer)));
+    }
+    void *pData = nullptr;
+    ThrowIfFailed(s_emissiveProxyTriangleBuffer->Map(0, nullptr, &pData));
+    memcpy(pData, emissiveTriangles.data(),
+           emissiveTriangles.size() * sizeof(EmissiveTriangleDataGpu));
+    s_emissiveProxyTriangleBuffer->Unmap(0, nullptr);
+  } else {
+    s_emissiveProxyTriangleBuffer.Reset();
   }
 
   // Append proxy entries to the light bounds upload buffer
@@ -7705,8 +7968,10 @@ static UINT BuildEmissiveProxyBounds() {
 
   if (g_debugLog) {
     fprintf(stderr,
-            "ReGIR: built %u emissive proxies (combined light-bound total: %u)\n",
-            s_regirEmissiveProxyCount, s_regirLightBoundCount);
+            "ReGIR: built %u emissive proxies, %u emissive triangles "
+            "(combined light-bound total: %u)\n",
+            s_regirEmissiveProxyCount, s_regirEmissiveTriangleCount,
+            s_regirLightBoundCount);
   }
   return (UINT)proxyBounds.size();
 }
@@ -7728,6 +7993,7 @@ static void PrepareReGIRFrame(ID3D12GraphicsCommandList4 *list) {
 
   if (!s_regirEnabled) {
     s_regirEmissiveProxyCount = 0;
+    s_regirEmissiveTriangleCount = 0;
     s_regirLastDispatchGroups = 0;
     s_regirLastUpdateFrameIndex = 0xFFFFFFFFu;
     s_regirFallbackReason = ReGIRFallbackReason::Disabled;
@@ -7745,6 +8011,7 @@ static void PrepareReGIRFrame(ID3D12GraphicsCommandList4 *list) {
   if (rebuildLightBounds) {
     s_regirLightBoundCount = 0;
     s_regirEmissiveProxyCount = 0;
+    s_regirEmissiveTriangleCount = 0;
     lightBoundCount = 0;
     if (!s_lastLightsCpu.empty()) {
       lightBoundCount = BuildReGIRLightBounds(s_lastLightsCpu);
@@ -7758,6 +8025,7 @@ static void PrepareReGIRFrame(ID3D12GraphicsCommandList4 *list) {
   if (!s_sceneBoundsValid || lightBoundCount == 0u) {
     s_regirLightBoundCount = 0;
     s_regirEmissiveProxyCount = 0;
+    s_regirEmissiveTriangleCount = 0;
     s_regirDirty = false;
     s_regirLastDispatchGroups = 0;
     s_regirLastUpdateFrameIndex = 0xFFFFFFFFu;
@@ -7902,6 +8170,7 @@ ReGIRStats GetReGIRStats() {
   stats.lightCount = s_lightCount;
   stats.lightBoundCount = s_regirLightBoundCount;
   stats.emissiveProxyCount = s_regirEmissiveProxyCount;
+  stats.emissiveTriangleCount = s_regirEmissiveTriangleCount;
   stats.skippedDirectionalLights = s_regirSkippedDirectionalLights;
   stats.skippedZeroPowerLights = s_regirSkippedZeroPowerLights;
   stats.lastUpdateFrameIndex = s_regirLastUpdateFrameIndex;
@@ -8008,6 +8277,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                       "DXR core state missing (support/stateObject/srvHeap)");
   }
   EnsureCurrentFeatureResources();
+  s_lastMaterialDataGpuVA =
+      materialCB ? materialCB->GetGPUVirtualAddress() : 0;
+  s_lastMaterialExtraGpuVA =
+      materialExtraSB ? materialExtraSB->GetGPUVirtualAddress() : 0;
   if (!renderTarget) {
     return ReturnFail(2, "renderTarget is null");
   }
@@ -8279,6 +8552,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       18, s_emissiveProxyBuffer
               ? s_emissiveProxyBuffer->GetGPUVirtualAddress()
               : 0);
+  dxrList->SetComputeRootShaderResourceView(
+      19, s_emissiveProxyTriangleBuffer
+              ? s_emissiveProxyTriangleBuffer->GetGPUVirtualAddress()
+              : 0);
 
   // --- Bind Cloud Resources (Slot 10) ---
   if (g_cloudManager.GetBaseTexture() && g_cloudManager.GetDetailTexture()) {
@@ -8496,6 +8773,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     dxrList->SetComputeRootShaderResourceView(
         18, s_emissiveProxyBuffer
                 ? s_emissiveProxyBuffer->GetGPUVirtualAddress()
+                : 0);
+    dxrList->SetComputeRootShaderResourceView(
+        19, s_emissiveProxyTriangleBuffer
+                ? s_emissiveProxyTriangleBuffer->GetGPUVirtualAddress()
                 : 0);
   };
 
@@ -8755,12 +9036,15 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
           const UINT binFlags =
               kWavefrontQueueFlagUseMaterialBinList |
               (materialBin << kWavefrontQueueFlagMaterialBinShift);
-          DispatchWavefrontRestirSeed(dxrList.Get(), cameraCB, binFlags, true, materialBin, false);
+          DispatchWavefrontRestirSeed(dxrList.Get(), cameraCB, materialCB,
+                                      materialExtraSB, binFlags, true,
+                                      materialBin, false);
         }
 
         dxrList->ResourceBarrier(1, &toUavBarrier);
 
-        DispatchWavefrontRestirSeed(dxrList.Get(), cameraCB,
+        DispatchWavefrontRestirSeed(dxrList.Get(), cameraCB, materialCB,
+                                    materialExtraSB,
                                     kWavefrontQueueFlagMissOnly, false);
 
         // Primary resolve: shade primary hits by material bin, read
@@ -8863,15 +9147,17 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                 kWavefrontQueueFlagUseMaterialBinList |
                 (materialBin << kWavefrontQueueFlagMaterialBinShift) |
                 wavefrontTransportFlags;
-            DispatchWavefrontResolveSecondary(dxrList.Get(), cameraCB,
-                                             sourceCounter, binFlags, true, materialBin, false);
+            DispatchWavefrontResolveSecondary(
+                dxrList.Get(), cameraCB, materialCB, materialExtraSB,
+                sourceCounter, binFlags, true, materialBin, false);
           }
           
           dxrList->ResourceBarrier(1, &toUavBarrier);
 
           DispatchWavefrontPrepareIndirectArgs(dxrList.Get(), sourceCounter, kWavefrontSecondaryResolveDispatchArgsIndex, ~0u, 0u);
           DispatchWavefrontResolveSecondary(
-              dxrList.Get(), cameraCB, sourceCounter,
+              dxrList.Get(), cameraCB, materialCB, materialExtraSB,
+              sourceCounter,
               kWavefrontQueueFlagMissOnly | wavefrontTransportFlags, true);
 
           // Secondary shadow visibility: trace shadow rays from this bounce.
@@ -8933,7 +9219,8 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   if (didWavefrontRestirSeed) {
     if (cameraCB) {
       SetWavefrontStage("restir-di-spatial");
-      DispatchRestirDiSpatialPass(dxrList.Get(), cameraCB);
+      DispatchRestirDiSpatialPass(dxrList.Get(), cameraCB, materialCB,
+                                  materialExtraSB);
       SetWavefrontStage("restir-gi-spatial");
       DispatchRestirGiSpatialPass(dxrList.Get(), cameraCB);
     }

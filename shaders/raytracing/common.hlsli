@@ -324,9 +324,30 @@ struct EmissiveProxyData
     float3 center;
     float  radius;
     float3 radiance;
-    uint   pad;
+    uint   triangleStart;
+    uint   triangleCount;
+    float  totalArea;
+    uint   materialIndex;
+    uint   pad0;
 };
 StructuredBuffer<EmissiveProxyData> g_emissiveProxyData : register(t5003);
+
+struct EmissiveTriangleData
+{
+    float3 p0;
+    float  cumulativeArea;
+    float3 p1;
+    float  area;
+    float3 p2;
+    float  pad0;
+    float3 normal;
+    float  pad1;
+    float2 uv0;
+    float2 uv1;
+    float2 uv2;
+    float2 pad2;
+};
+StructuredBuffer<EmissiveTriangleData> g_emissiveTriangleData : register(t5004);
 
 cbuffer ReGIRParams : register(b11, space3)
 {
@@ -1129,10 +1150,62 @@ inline bool WavefrontIsEmissiveProxyLightIndex(uint lightIndex)
     return lightIndex != 0xFFFFFFFFu && ((lightIndex & 0x80000000u) != 0u);
 }
 
+inline float3 WavefrontBlendTextureRgb(float3 sampleValue, float amount)
+{
+    return lerp(float3(1.0, 1.0, 1.0), sampleValue, saturate(amount));
+}
+
+inline uint WavefrontHashFloat3(float3 value, uint seed)
+{
+    uint3 bits = asuint(value);
+    uint h = seed ^ 0x9E3779B9u;
+    h ^= bits.x + 0x85EBCA6Bu + (h << 6) + (h >> 2);
+    h ^= bits.y + 0xC2B2AE35u + (h << 6) + (h >> 2);
+    h ^= bits.z + 0x27D4EB2Du + (h << 6) + (h >> 2);
+    return h | 1u;
+}
+
+inline uint WavefrontSampleEmissiveTriangleIndex(EmissiveProxyData proxy,
+                                                 float xi)
+{
+    uint lo = proxy.triangleStart;
+    uint hi = proxy.triangleStart + proxy.triangleCount - 1u;
+    float target = saturate(xi) * max(proxy.totalArea, 1.0e-6);
+    [loop]
+    for (uint iter = 0u; iter < 24u && lo < hi; ++iter) {
+        uint mid = (lo + hi) >> 1;
+        if (g_emissiveTriangleData[mid].cumulativeArea < target)
+            lo = mid + 1u;
+        else
+            hi = mid;
+    }
+    return lo;
+}
+
+inline float3 WavefrontEvaluateEmissiveProxyRadiance(EmissiveProxyData proxy,
+                                                     float2 uv)
+{
+    float3 radiance = proxy.radiance;
+    if (proxy.materialIndex != 0xFFFFFFFFu) {
+        MaterialData material = materials[proxy.materialIndex];
+        MaterialExtraData materialExtra = materialExtras[proxy.materialIndex];
+        int texEmis = UnpackTextureIndexLow(material.packedTextures.z);
+        if (texEmis >= 0) {
+            uint texSlot = NonUniformResourceIndex((uint)texEmis);
+            float3 tex = sRGBToLinear(textures[texSlot].SampleLevel(
+                linearSampler, uv, 0.0).rgb);
+            radiance *= WavefrontBlendTextureRgb(
+                tex, materialExtra.textureWeight1.z);
+        }
+    }
+    return radiance;
+}
+
 inline WavefrontLightSample WavefrontSampleEmissiveProxyLight(
     float3 surfacePos,
     uint packedProxyIndex,
-    float sampleWeight)
+    float sampleWeight,
+    inout RNG rng)
 {
     WavefrontLightSample sample;
     uint proxyIdx = packedProxyIndex & 0x7FFFFFFFu;
@@ -1148,6 +1221,34 @@ inline WavefrontLightSample WavefrontSampleEmissiveProxyLight(
         return sample;
     }
     EmissiveProxyData proxy = g_emissiveProxyData[proxyIdx];
+    if (proxy.triangleCount > 0u && proxy.totalArea > 1.0e-6) {
+        uint triIndex = WavefrontSampleEmissiveTriangleIndex(
+            proxy, next_float(rng));
+        EmissiveTriangleData tri = g_emissiveTriangleData[triIndex];
+        float2 baryXi = next_float2(rng);
+        float su = sqrt(saturate(baryXi.x));
+        float b0 = 1.0 - su;
+        float b1 = baryXi.y * su;
+        float b2 = 1.0 - b0 - b1;
+        float3 samplePos = tri.p0 * b0 + tri.p1 * b1 + tri.p2 * b2;
+        float2 uv = tri.uv0 * b0 + tri.uv1 * b1 + tri.uv2 * b2;
+        float3 toSample = samplePos - surfacePos;
+        float distSq = dot(toSample, toSample);
+        float dist = sqrt(max(distSq, 1.0e-8));
+        float3 L = toSample / max(dist, 1.0e-4);
+        float3 Nl = normalize(tri.normal);
+        float cosLight = abs(dot(Nl, -L));
+        float3 radiance = WavefrontEvaluateEmissiveProxyRadiance(proxy, uv);
+        sample.direction = L;
+        sample.maxDistance = dist;
+        sample.radiance =
+            radiance * (cosLight * proxy.totalArea) /
+            max(distSq, 1.0e-6) * sampleWeight;
+        sample.packedLightIndex =
+            WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_FLAT, 0xFFFFFFFFu);
+        return sample;
+    }
+
     float3 toProxy = proxy.center - surfacePos;
     float dist = length(toProxy);
     float3 L = dist > 1e-4 ? toProxy / dist : float3(0.0, 1.0, 0.0);
@@ -1158,6 +1259,17 @@ inline WavefrontLightSample WavefrontSampleEmissiveProxyLight(
     sample.packedLightIndex =
         WavefrontPackLightSampleMetadata(WAVEFRONT_LIGHT_SAMPLE_FLAT, 0xFFFFFFFFu);
     return sample;
+}
+
+inline WavefrontLightSample WavefrontSampleEmissiveProxyLight(
+    float3 surfacePos,
+    uint packedProxyIndex,
+    float sampleWeight)
+{
+    RNG rng;
+    rng.state = WavefrontHashFloat3(surfacePos, packedProxyIndex);
+    return WavefrontSampleEmissiveProxyLight(surfacePos, packedProxyIndex,
+                                             sampleWeight, rng);
 }
 
 inline WavefrontLightSample WavefrontSampleReGIRLight(
@@ -1191,7 +1303,7 @@ inline WavefrontLightSample WavefrontSampleReGIRLight(
     // Handle emissive proxy sentinel
     if (WavefrontIsEmissiveProxyLightIndex(lightIndex)) {
         return WavefrontSampleEmissiveProxyLight(
-            surfacePos, lightIndex, effectiveSampleWeight);
+            surfacePos, lightIndex, effectiveSampleWeight, rng);
     }
 
     if (lightIndex >= numLights) {

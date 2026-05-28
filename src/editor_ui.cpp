@@ -1735,6 +1735,7 @@ static void DrawReGIRDebugPanel() {
   ImGui::Text("GPU lights: %u  ReGIR bounds: %u  emissive proxies: %u",
               stats.lightCount, stats.lightBoundCount,
               stats.emissiveProxyCount);
+  ImGui::Text("Emissive mesh triangles: %u", stats.emissiveTriangleCount);
   ImGui::Text("Skipped directional / zero power: %u / %u",
               stats.skippedDirectionalLights, stats.skippedZeroPowerLights);
   ImGui::Text("Types P/S/Rect/Disk/IES: %u / %u / %u / %u / %u",

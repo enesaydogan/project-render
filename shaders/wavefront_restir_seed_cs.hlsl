@@ -141,7 +141,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                         if (WavefrontIsEmissiveProxyLightIndex(lightIndex)) {
                             localSample = WavefrontSampleEmissiveProxyLight(
                                 hitPos, lightIndex,
-                                max(regirSampleWeight, 1.0));
+                                max(regirSampleWeight, 1.0), rng);
                         } else {
                             localSample = WavefrontSampleFlatLight(
                                 hitPos, lightIndex,
@@ -178,7 +178,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             finalSample = WavefrontSampleDirectionalLight(1.0);
         } else if (WavefrontIsEmissiveProxyLightIndex(reservoir.lightIndex)) {
             finalSample = WavefrontSampleEmissiveProxyLight(
-                hitPos, reservoir.lightIndex, 1.0);
+                hitPos, reservoir.lightIndex, 1.0, rng);
         } else if (reservoir.lightIndex < numLights) {
             finalSample = WavefrontSampleFlatLightUnweighted(
                 hitPos, reservoir.lightIndex, rng);
