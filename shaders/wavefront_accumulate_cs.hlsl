@@ -70,13 +70,19 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     if (dlssRayReconstruction > 0.5) {
         // DLSS-RR performs its own temporal accumulation; feed it the raw
-        // single-sample color. Apply a tighter firefly clamp than the generic
-        // 100k-nit cap so that extreme ReSTIR outliers in multi-light scenes
-        // don't destabilize the denoiser's temporal history.
-        const float kDLSSFireflyMaxLuminance = 10000.0;
-        if (sampleLum > kDLSSFireflyMaxLuminance) {
-            sampleColor *= kDLSSFireflyMaxLuminance / sampleLum;
-        }
+        // single-sample color (already clamped to kMaxSampleLuminance=100k
+        // earlier in this shader). A previous version applied an extra
+        // 10k-nit DLSS-only clamp here trying to suppress ReSTIR fireflies,
+        // but for sunlit outdoor scenes legitimate bright pixels (white
+        // walls in direct sun, the sun disc itself, bright sky) routinely
+        // sit between 30k and 80k nits in scene-referred units. The 10k
+        // cap was crushing all those values by 3-8x while the non-RR path
+        // (which reads g_accumulation) was unaffected — visible as RR's
+        // whites coming out mid-grey relative to the final-denoiser path.
+        //
+        // Outlier rejection for RR should be done with a neighborhood /
+        // variance check, not a hard global cap. Leave that as future work
+        // and let RR see the same 100k-clamped value other paths get.
         g_output[pixel] = float4(sampleColor, 1.0);
     } else {
         g_output[pixel] = float4(nextMean, 1.0);

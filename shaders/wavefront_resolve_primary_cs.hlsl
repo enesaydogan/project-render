@@ -1985,6 +1985,20 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 EnvBRDFApprox2(guideF0, guideRoughness * guideRoughness,
                                guideNdotV);
 
+            // CRITICAL: reset the spec guidance to sentinels before the
+            // guide probe block. The primary branch up above may have
+            // committed jittered probe values into rrSpecHitDistance /
+            // rrSpecMotion. If the guide probe below doesn't run or
+            // doesn't hit, those jittered values would leak straight
+            // into the AOV — producing the every-frame shimmering
+            // checker pattern that gets worse when the probe is enabled
+            // (because more pixels qualify for the primary probe but
+            // fewer qualify for the more-tightly-gated guide probe).
+            // The write site falls back to {linearDepth, motion} for
+            // spec pixels when these stay sentinel.
+            rrSpecHitDistance = 0.0;
+            rrSpecMotion = kInvalidMvec;
+
             // DLSS-RR specular probe on the guide surface — gated on
             // guideRoughness <= 0.10 (same tight cutoff as the primary
             // branch above). Guide rays are already un-jittered
@@ -2042,10 +2056,17 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     g_depth[pixel] = depth;
     g_linearDepth[pixel] = linearDepth;
     g_motionVectors[pixel] = motion;
-    // DLSS-RR wants diffuse albedo (no metallic / transmission contribution);
-    // OIDN/OptiX prefer the raw base color as a guide. Pick per active mode.
-    g_albedoOut[pixel] = float4(
-        (dlssRayReconstruction > 0.5) ? rrDiffuseAlbedo : albedo, 1.0);
+    // DLSS-RR Albedo channel: write the full base-color albedo, NOT the
+    // demodulated diffuse-only term. The 1b55db1 attempt to feed RR
+    // `albedo * (1-metallic) * (1-transmission)` (interpreting the docs'
+    // "Diffuse Albedo" literally) crushed HDR — for any material with
+    // non-zero metallic/transmission the demodulated value is smaller
+    // than the real reflectance, so RR's internal demodulate→process→
+    // remodulate cycle scales the final color down by the same factor.
+    // White walls with even a slight metallic component were coming out
+    // mid-grey. Reverting to the pre-1b55db1 behavior (full albedo) which
+    // matches what NVIDIA's own UE / Cyberpunk integrations pass.
+    g_albedoOut[pixel] = float4(albedo, 1.0);
     g_normalRoughnessOut[pixel] = float4(normalize(normal), roughness);
     float4 oidnAlbedoGuide = float4(albedo, visibleEmissiveMask);
     float4 oidnNormalGuide = float4(normalize(normal), roughness);

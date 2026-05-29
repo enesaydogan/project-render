@@ -863,9 +863,24 @@ bool StreamlineManager::Evaluate(
   sl::Resource outRes(sl::ResourceType::eTex2d, colorOut,
                       (uint32_t)colorOutState);
 
-  const sl::BufferType depthType =
-      (m_mode == Mode::DLSS_RayReconstruction) ? sl::kBufferTypeLinearDepth
-                                              : sl::kBufferTypeDepth;
+  // Depth tagging: pre-1b55db1 used kBufferTypeDepth for BOTH SR and RR
+  // even though the shader writes view-space linear Z for RR mode. RR
+  // tolerated the "mislabelled" tag and produced instantly-plausible
+  // images. Switching to kBufferTypeLinearDepth (which is technically
+  // more correct per the SDK docs) routes RR through its linear-depth
+  // reprojection code path, which depends on the worldToCameraView /
+  // cameraViewToWorld matrices set in DLSSDOptions. If those matrices
+  // have any row/column-major mismatch with what SL expects, RR's
+  // reprojection collapses and temporal accumulation falls back to
+  // pure color history — producing the "starts flat, converges over
+  // many frames, never quite reaches energy" symptom plus the residual
+  // checker that the network can't smooth without good depth.
+  //
+  // Pass kBufferTypeDepth for both modes to match the working pre-1b55db1
+  // configuration. If we want true linear-depth tagging in the future,
+  // first audit MakeWorldToCameraView / MakeCameraViewToWorld against
+  // sl_consts.h conventions and validate with sl::eLogLevelVerbose.
+  const sl::BufferType depthType = sl::kBufferTypeDepth;
   // Lifecycle: all RR inputs use eValidUntilEvaluate. The caller transitions
   // depth and mvec back to UAV state immediately after Evaluate returns
   // (dxr_renderer.cpp ~9860), which violates the eValidUntilPresent
