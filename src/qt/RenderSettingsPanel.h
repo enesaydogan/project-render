@@ -51,6 +51,10 @@ private:
     SliderControl *m_rrJitterScale = nullptr;
     QPushButton *m_resetDlssHistory = nullptr;
     QLabel *m_renderSizeLabel = nullptr;
+    QCheckBox *m_dlssSpecProbe = nullptr;
+    QCheckBox *m_drrEnabled = nullptr;
+    SliderControl *m_drrTargetFps = nullptr;
+    QLabel *m_drrStatusLabel = nullptr;
 
     QComboBox *m_finalDenoiser = nullptr;
     QComboBox *m_oidnQuality = nullptr;

@@ -10,6 +10,13 @@ constexpr uint32_t kDxrFeaturePrimaryGuide = 1u << 1;
 constexpr uint32_t kDxrFeatureClayPreserveTransparency = 1u << 2;
 constexpr uint32_t kDxrFeatureClayPreserveEmission = 1u << 3;
 constexpr uint32_t kDxrFeatureReGIREnabled = 1u << 8;
+// Runtime toggle for the DLSS-RR specular probe ray (see
+// wavefront_resolve_primary_cs.hlsl). When set, the resolve pass fires a
+// mirror-direction RayQuery on glossy surfaces to populate
+// kBufferTypeSpecularHitDistance / kBufferTypeSpecularMotionVectors.
+// Turn off to fall back to primary mvec for reflections (more stable on
+// scenes where the probe shows boiling, slightly less accurate AA).
+constexpr uint32_t kDxrFeatureDlssSpecProbe = 1u << 9;
 
 enum class CameraProjectionMode : int {
   Perspective = 0,

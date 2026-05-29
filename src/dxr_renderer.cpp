@@ -384,14 +384,52 @@ static const UINT DXR_HEAP_TOTAL_COUNT =
     DXR_HEAP_UAV_COUNT + DXR_HEAP_ENV_SRV_COUNT +
     DXR_HEAP_CLOUD_SRV_COUNT + DXR_HEAP_IES_SRV_COUNT;
 
-// Output texture dimensions used by DXR (kept local to module)
+// Output texture dimensions used by DXR (kept local to module). Note: the
+// naming pre-dates DLSS support; s_outputWidth/Height is actually the
+// *render* resolution (the size at which the wavefront dispatches), which
+// upscaling features (DLSS/DLSS-RR) then resolve to s_presentWidth/Height.
+// When DRR (Dynamic Resolution) is active these vary per frame inside
+// [s_renderBufferWidth, s_renderBufferHeight].
 static UINT s_outputWidth = 1280;
 static UINT s_outputHeight = 720;
+// Render-resolution buffer allocation size. Equals s_outputWidth/Height
+// in the static-resolution path; equals the DLSS-RR mode's max-render
+// dimensions when DRR is enabled so per-frame size changes never trigger
+// reallocation.
+static UINT s_renderBufferWidth = 1280;
+static UINT s_renderBufferHeight = 720;
 // Output (swapchain) dimensions last requested by the host
 static UINT s_presentWidth = 1280;
 static UINT s_presentHeight = 720;
 static UINT s_readyPresentWidth = 0;
 static UINT s_readyPresentHeight = 0;
+
+// DRR per-frame feedback state. The controller targets a frame-time
+// budget and scales the per-frame render rect inside the DLSS-RR
+// [min, max] range. Updated each RenderFrame when DRR is enabled and
+// DLSS-RR is the active mode. Step sizes are deliberately small and
+// the deadband is wide to keep the render rect from oscillating —
+// every size change introduces a brief reprojection discontinuity in
+// the DLSS-RR temporal accumulator that shows as boiling, so we want
+// the controller to settle as quickly as possible and then stay put.
+static float s_drrTargetFrameTimeMs = 1000.0f / 60.0f; // default: 60 fps
+static float s_drrScaleStepUp = 1.01f;    // raise resolution 1%/frame
+static float s_drrScaleStepDown = 0.98f;  // drop resolution 2%/frame
+// Exponential moving average of frame time used to drive the controller.
+// Smooths out per-frame spikes (BLAS rebuild, async OIDN, GC) so the
+// resolution doesn't react to one-off costs.
+static float s_drrSmoothedFrameTimeMs = 0.0f;
+static const float s_drrSmoothingAlpha = 0.15f;  // EMA weight on new sample
+static UINT s_drrLastReportWidth = 0;
+static UINT s_drrLastReportHeight = 0;
+// Spec-probe runtime toggle. The DLSS-RR specular probe (mirror-direction
+// RayQuery in wavefront_resolve_primary_cs.hlsl) populates
+// kBufferTypeSpecularHitDistance / kBufferTypeSpecularMotionVectors for
+// glossy surfaces. On scenes dominated by stable mirror-like geometry it
+// improves reflection AA; on heavily textured glossy surfaces it can
+// introduce subtle boiling because the probe direction inherits the
+// camera ray's sub-pixel jitter. Exposed via the UI so users can A/B test.
+static bool s_dlssSpecularProbeEnabled = true;
 
 // Tile-based panorama export constants (0 = no tiling)
 static UINT s_exportFullWidth = 0;
@@ -470,6 +508,11 @@ static uint32_t ComputeDxrFeatureMask(bool dlssActive, bool rrActive,
            kDxrFeatureClayPreserveEmission);
   if (s_regirEnabled)
     mask |= kDxrFeatureReGIREnabled;
+  // Spec probe is meaningful only when DLSS-RR is the active mode (other
+  // modes don't consume the spec-hit-distance / spec-mvec buffers).
+  if (rrActive && s_dlssSpecularProbeEnabled) {
+    mask |= kDxrFeatureDlssSpecProbe;
+  }
   return mask;
 }
 
@@ -3996,6 +4039,120 @@ static void EnsureCurrentFeatureResources() {
   CreateRayTracingPipeline(s_presentWidth, s_presentHeight);
 }
 
+// Per-frame Dynamic Resolution adjustment. Reads the last measured frame
+// time (s_frameTimeMs, populated by the present loop) and scales the
+// current dispatch size toward a target frame time, clamped to the
+// DLSS-RR mode's [renderWidthMin/Min, renderWidthMax/Max] range.
+//
+// Called once per RenderFrame, right after the feature-mask check. Touches
+// only s_outputWidth/Height (the per-frame dispatch dims) and pushes the
+// new target into the manager so Streamline tagging picks it up. Does NOT
+// reset DLSS-RR history — RR's DRR support handles intra-range size
+// changes natively.
+static void UpdateDynamicResolutionFeedback() {
+  if (!s_streamline || !s_streamline->IsDrrEnabled() ||
+      !s_streamline->IsInitialized() || !s_streamline->IsDeviceSet()) {
+    return;
+  }
+  if (s_streamline->GetMode() !=
+      StreamlineManager::Mode::DLSS_RayReconstruction) {
+    return;
+  }
+  if (!s_streamline->SupportsDlssRayReconstruction()) {
+    return;
+  }
+
+  const auto range =
+      s_streamline->GetRenderSizeRange(s_presentWidth, s_presentHeight);
+  if (range.maxRenderWidth == 0 || range.maxRenderHeight == 0) {
+    return;
+  }
+
+  // Pipeline rebuild has not yet caught up to the DRR toggle — buffers are
+  // still sized for optimal-render dimensions. Don't dispatch at sizes the
+  // buffers can't hold; the pipeline-recreate request queued by
+  // SetDrrEnabled() will land on the next frame.
+  if (s_renderBufferWidth < range.maxRenderWidth ||
+      s_renderBufferHeight < range.maxRenderHeight) {
+    return;
+  }
+
+  // First frame after DRR enable / mode change — sit at optimal.
+  if (s_outputWidth < range.minRenderWidth ||
+      s_outputWidth > range.maxRenderWidth ||
+      s_outputHeight < range.minRenderHeight ||
+      s_outputHeight > range.maxRenderHeight) {
+    s_outputWidth = range.optimalRenderWidth ? range.optimalRenderWidth
+                                             : range.maxRenderWidth;
+    s_outputHeight = range.optimalRenderHeight ? range.optimalRenderHeight
+                                               : range.maxRenderHeight;
+    s_streamline->SetDrrTargetRenderSize(s_outputWidth, s_outputHeight);
+    return;
+  }
+
+  // Need a frame-time measurement to drive the controller. The first frame
+  // after init has s_frameTimeMs == 0; just hold steady until we have data.
+  if (s_frameTimeMs <= 0.0f || !std::isfinite(s_frameTimeMs)) {
+    return;
+  }
+
+  // EMA-smooth the frame-time signal so the controller reacts to the
+  // sustained workload rather than to one-frame spikes (BLAS rebuild,
+  // OIDN dispatch, allocator GC). Without this the resolution oscillates
+  // whenever the scene briefly hitches, which the RR temporal accumulator
+  // sees as boiling.
+  if (s_drrSmoothedFrameTimeMs <= 0.0f) {
+    s_drrSmoothedFrameTimeMs = s_frameTimeMs;
+  } else {
+    s_drrSmoothedFrameTimeMs =
+        s_drrSmoothingAlpha * s_frameTimeMs +
+        (1.0f - s_drrSmoothingAlpha) * s_drrSmoothedFrameTimeMs;
+  }
+
+  // Wide deadband: only act when we're meaningfully outside the target.
+  // The DLSS-RR network handles small render-size changes cleanly, but
+  // each change forces it to re-train history for the newly-revealed
+  // pixels, so we trade a bit of FPS tracking precision for a quieter
+  // image.
+  const float overBudget = s_drrTargetFrameTimeMs * 1.15f;  // 15% over → drop
+  const float underBudget = s_drrTargetFrameTimeMs * 0.80f; // 20% under → raise
+
+  float scale = 1.0f;
+  if (s_drrSmoothedFrameTimeMs > overBudget) {
+    scale = s_drrScaleStepDown;
+  } else if (s_drrSmoothedFrameTimeMs < underBudget) {
+    scale = s_drrScaleStepUp;
+  } else {
+    return; // inside the deadband, don't churn
+  }
+
+  uint32_t newW = (uint32_t)((float)s_outputWidth * scale + 0.5f);
+  uint32_t newH = (uint32_t)((float)s_outputHeight * scale + 0.5f);
+  // Quantize to a multiple of 4 so dispatch thread groups stay aligned.
+  newW = (newW + 3u) & ~3u;
+  newH = (newH + 3u) & ~3u;
+  if (newW < range.minRenderWidth)
+    newW = range.minRenderWidth;
+  if (newH < range.minRenderHeight)
+    newH = range.minRenderHeight;
+  if (newW > range.maxRenderWidth)
+    newW = range.maxRenderWidth;
+  if (newH > range.maxRenderHeight)
+    newH = range.maxRenderHeight;
+
+  if (newW == s_outputWidth && newH == s_outputHeight) {
+    return; // already at the clamp
+  }
+
+  s_outputWidth = newW;
+  s_outputHeight = newH;
+  s_drrLastReportWidth = newW;
+  s_drrLastReportHeight = newH;
+  s_streamline->SetDrrTargetRenderSize(newW, newH);
+  // IMPORTANT: do NOT touch s_streamlineResetHistory here — RR handles
+  // intra-range size changes without history reset.
+}
+
 void CreateRayTracingPipeline(UINT width, UINT height) {
   if (!g_rayTracingSupported || !s_dxrDevice)
     return;
@@ -4041,26 +4198,70 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
       s_streamline->ReleaseResourcesForMode(
           StreamlineManager::Mode::DLSS_RayReconstruction);
     }
+
+    // Mode toggles (SR↔RR, on↔off) must invalidate the SL temporal history;
+    // the network state is feature-specific and we just released the old one.
+    if (wantsDlss || wantsRr) {
+      s_streamlineResetHistory = true;
+    }
   }
 
   // Compute internal render size (DLSS wants us to render smaller and upscale).
   UINT renderW = outW;
   UINT renderH = outH;
+  UINT bufferW = outW;
+  UINT bufferH = outH;
+  const bool wantsRrLocal =
+      (resourceFeatureMask & ResourceFeature_DlssRayReconstruction) != 0;
+  const bool drrActive =
+      s_streamline && s_streamline->IsDrrEnabled() && wantsRrLocal;
   if (IsDlssActive()) {
     auto rec = s_streamline->GetRecommendedRenderSize(outW, outH);
     if (rec.renderWidth > 0 && rec.renderHeight > 0) {
       renderW = rec.renderWidth;
       renderH = rec.renderHeight;
+      bufferW = renderW;
+      bufferH = renderH;
     }
+    // DRR: allocate render-resolution buffers at the mode's max-render
+    // size so per-frame DRR adjustments never trigger reallocation. The
+    // dispatch (s_outputWidth/Height) still varies inside [min, max].
+    if (drrActive) {
+      auto range = s_streamline->GetRenderSizeRange(outW, outH);
+      if (range.maxRenderWidth > 0 && range.maxRenderHeight > 0) {
+        bufferW = range.maxRenderWidth;
+        bufferH = range.maxRenderHeight;
+        // Initial per-frame dispatch starts at optimal; the runtime
+        // feedback loop in RenderFrame nudges it from there.
+        if (range.optimalRenderWidth > 0 && range.optimalRenderHeight > 0) {
+          renderW = range.optimalRenderWidth;
+          renderH = range.optimalRenderHeight;
+        }
+        s_streamline->SetDrrTargetRenderSize(renderW, renderH);
+      }
+    }
+  }
+
+  // Render-size change (window resize, DLSS quality preset swap, mode
+  // toggle that changes the optimal render size) invalidates the DLSS
+  // temporal history — the network has no valid reprojection target at the
+  // new resolution. NOTE: this fires on the *buffer* size change, which
+  // is stable across DRR's per-frame size variations.
+  if (bufferW != s_renderBufferWidth || bufferH != s_renderBufferHeight) {
+    s_streamlineResetHistory = true;
   }
 
   // Update module-local render size so Dispatch uses correct dimensions.
   s_outputWidth = renderW;
   s_outputHeight = renderH;
+  s_renderBufferWidth = bufferW;
+  s_renderBufferHeight = bufferH;
 
-  // Resize accumulation buffer to match new render size
-  s_accumulation.Resize(s_outputWidth, s_outputHeight);
-  s_transmissionAccumulation.Resize(s_outputWidth, s_outputHeight);
+  // Resize accumulation buffer to match max render size so DRR's per-frame
+  // dispatch-size variations don't invalidate the allocation. Dispatch
+  // bounds (s_outputWidth/Height) gate writes; unused texels stay defined.
+  s_accumulation.Resize(s_renderBufferWidth, s_renderBufferHeight);
+  s_transmissionAccumulation.Resize(s_renderBufferWidth, s_renderBufferHeight);
   s_textureTableDirty = true;
   s_cloudDescriptorsDone = false;
   s_asyncRestirPending = false;
@@ -4512,12 +4713,14 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   s_uploadedWavefrontSecondaryRayGen = 0;
   s_uploadedWavefrontShadowRayGen = 0;
 
-  // Create a default heap 2D texture to hold raytracing output (render-size)
+  // Create a default heap 2D texture to hold raytracing output. Sized at
+  // the *render-buffer* max so DRR can vary the per-frame dispatch rect
+  // (s_outputWidth/Height) inside [min, max] without reallocating.
   D3D12_RESOURCE_DESC texDesc = {};
   texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
   texDesc.Alignment = 0;
-  texDesc.Width = s_outputWidth;
-  texDesc.Height = s_outputHeight;
+  texDesc.Width = s_renderBufferWidth;
+  texDesc.Height = s_renderBufferHeight;
   texDesc.DepthOrArraySize = 1;
   texDesc.MipLevels = 1;
   // Render output is linear HDR (pre-tonemap / pre-DLSS).
@@ -4738,9 +4941,10 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   PrepareWavefrontBackendPipelines();
   PrepareSelectedFinalDenoiserResources();
 
-  // Create Accumulation UAV
-  s_accumulation.Resize(s_outputWidth, s_outputHeight);
-  s_transmissionAccumulation.Resize(s_outputWidth, s_outputHeight);
+  // Create Accumulation UAV at render-buffer (max) size so DRR per-frame
+  // dispatch-size changes never invalidate the accumulation allocation.
+  s_accumulation.Resize(s_renderBufferWidth, s_renderBufferHeight);
+  s_transmissionAccumulation.Resize(s_renderBufferWidth, s_renderBufferHeight);
   D3D12_CPU_DESCRIPTOR_HANDLE accumUavCpu =
       s_srvHeap->GetCPUDescriptorHandleForHeapStart();
   accumUavCpu.ptr += (SIZE_T)DXR_HEAP_ACCUM_UAV_OFFSET *
@@ -4975,18 +5179,21 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
         WavefrontPathQueueMultiplier(s_wavefrontQueueProfile);
     const UINT64 shadowQueueMultiplier =
         WavefrontShadowQueueMultiplier(s_wavefrontQueueProfile);
+    // Size queues to the render-buffer (max DRR) dims so the bootstrap can
+    // emit a full path-per-pixel even when the dynamic-resolution
+    // controller temporarily raises us to maxRenderWidth/Max.
     s_wavefrontPathQueueCapacity = ComputeWavefrontQueueCapacity(
-      s_outputWidth, s_outputHeight, kWavefrontMaxPathQueueEntries,
+      s_renderBufferWidth, s_renderBufferHeight, kWavefrontMaxPathQueueEntries,
       pathQueueMultiplier);
     s_wavefrontHitQueueCapacity = ComputeWavefrontQueueCapacity(
-      s_outputWidth, s_outputHeight, kWavefrontMaxPathQueueEntries,
+      s_renderBufferWidth, s_renderBufferHeight, kWavefrontMaxPathQueueEntries,
       pathQueueMultiplier);
     // Secondary resolve can enqueue sun, local-light, and environment
     // visibility tasks for each active path. If this queue overflows, atomic
     // allocation keeps a nondeterministic subset of tasks, which reads as
     // random lighting/reservoir flicker while accumulation continues.
     s_wavefrontShadowQueueCapacity = ComputeWavefrontQueueCapacity(
-      s_outputWidth, s_outputHeight, kWavefrontMaxShadowQueueEntries,
+      s_renderBufferWidth, s_renderBufferHeight, kWavefrontMaxShadowQueueEntries,
       shadowQueueMultiplier);
 
     CreateStructuredBufferUav(s_wavefrontQueueCountersBuffer,
@@ -6782,6 +6989,78 @@ void SetRrJitterScale(float scale) {
 
 float GetRrJitterScale() { return s_rrJitterScale; }
 
+// --- DLSS-RR Dynamic Resolution (DRR) controls ---------------------------
+
+void SetDrrEnabled(bool enabled) {
+  if (!s_streamline) {
+    return;
+  }
+  if (s_streamline->IsDrrEnabled() == enabled) {
+    return;
+  }
+  s_streamline->SetDrrEnabled(enabled);
+  // Buffer allocation differs between DRR off (optimal render dims) and
+  // DRR on (max render dims) — request a pipeline rebuild via the
+  // existing recreate mechanism so the next frame allocates at the right
+  // size. Also reset the temporal history because the buffer extent is
+  // changing.
+  s_streamlineResetHistory = true;
+  RequestPipelineRecreate("DLSS-RR DRR toggle");
+}
+
+bool GetDrrEnabled() {
+  return s_streamline && s_streamline->IsDrrEnabled();
+}
+
+void SetDrrTargetFrameTimeMs(float ms) {
+  if (ms < 1.0f) {
+    ms = 1.0f;
+  }
+  if (ms > 200.0f) {
+    ms = 200.0f;
+  }
+  s_drrTargetFrameTimeMs = ms;
+}
+
+float GetDrrTargetFrameTimeMs() { return s_drrTargetFrameTimeMs; }
+
+void GetDrrCurrentRenderSize(uint32_t &width, uint32_t &height) {
+  width = static_cast<uint32_t>(s_outputWidth);
+  height = static_cast<uint32_t>(s_outputHeight);
+}
+
+void SetDlssSpecularProbeEnabled(bool enabled) {
+  s_dlssSpecularProbeEnabled = enabled;
+  // Flip propagates through the camera CB feature mask on the next frame
+  // (ComputeDxrFeatureMask checks s_dlssSpecularProbeEnabled). Reset RR
+  // history so the network doesn't see a sudden change in the spec
+  // guidance buffer contents.
+  s_streamlineResetHistory = true;
+}
+
+bool GetDlssSpecularProbeEnabled() { return s_dlssSpecularProbeEnabled; }
+
+DrrRange GetDrrRange() {
+  DrrRange out{};
+  if (!s_streamline || !s_streamline->IsInitialized() ||
+      !s_streamline->IsDeviceSet()) {
+    return out;
+  }
+  if (s_streamline->GetMode() !=
+      StreamlineManager::Mode::DLSS_RayReconstruction) {
+    return out;
+  }
+  const auto range =
+      s_streamline->GetRenderSizeRange(s_presentWidth, s_presentHeight);
+  out.minRenderWidth = range.minRenderWidth;
+  out.minRenderHeight = range.minRenderHeight;
+  out.optimalRenderWidth = range.optimalRenderWidth;
+  out.optimalRenderHeight = range.optimalRenderHeight;
+  out.maxRenderWidth = range.maxRenderWidth;
+  out.maxRenderHeight = range.maxRenderHeight;
+  return out;
+}
+
 GpuMemoryBreakdown GetGpuMemoryBreakdown() {
   GpuMemoryBreakdown breakdown = {};
   if (!s_device) {
@@ -8277,6 +8556,10 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                       "DXR core state missing (support/stateObject/srvHeap)");
   }
   EnsureCurrentFeatureResources();
+  // DRR per-frame controller. Runs after EnsureCurrentFeatureResources so
+  // any buffer resize triggered by mode change has already happened and
+  // s_renderBufferWidth/Height is up to date for the new range.
+  UpdateDynamicResolutionFeedback();
   s_lastMaterialDataGpuVA =
       materialCB ? materialCB->GetGPUVirtualAddress() : 0;
   s_lastMaterialExtraGpuVA =
@@ -8469,6 +8752,13 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
 
   // Compute jitter for this frame.
   // Note: DLSS expects jitter in range [-0.5, 0.5] pixel space.
+  // When the Streamline history is about to be reset (camera teleport, mode
+  // change, resolution change), restart the Halton sequence too so the
+  // first few post-reset sub-pixel samples are deterministic and converge
+  // RR predictably regardless of accumulated frame count since boot.
+  if (s_streamlineResetHistory) {
+    s_jitterFrameIndex = 0;
+  }
   s_jitterFrameIndex++;
   uint32_t frameIdx = s_jitterFrameIndex;
   float jitterX = Halton(frameIdx, 2) - 0.5f;
@@ -9524,6 +9814,12 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     const bool resetHistory = s_streamlineResetHistory;
     s_streamlineResetHistory = false;
 
+    // Both specularHitDistance and specularMotionVectors are now produced
+    // by the wavefront resolve pass via a mirror-direction RayQuery probe
+    // (see wavefront_resolve_primary_cs.hlsl). Streamline prefers spec mvec
+    // when both are present (per ProgrammingGuideDLSS_RR.md §4.1.8/§4.1.9)
+    // and falls back to spec hit distance + the worldToCameraView /
+    // cameraViewToWorld matrices set in DLSSDOptions otherwise.
     if (s_streamline->Evaluate(
             dxrList.Get(), s_outputUAV.Get(),
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,

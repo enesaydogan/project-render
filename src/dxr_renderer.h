@@ -270,6 +270,49 @@ const char *GetReGIRFallbackReasonName(uint32_t reason);
 void SetRrJitterScale(float scale);
 float GetRrJitterScale();
 
+// DLSS-RR Dynamic Resolution (DRR).
+//
+// When enabled the per-frame internal render rect floats inside the
+// DLSS-RR mode's [minRender*, maxRender*] range. A simple frame-time
+// feedback controller drops resolution when the GPU misses the target and
+// raises it when there's headroom. DLSS-RR handles the intra-range size
+// changes natively (no history reset).
+//
+// Toggling Enable triggers a buffer reallocation (CreateRayTracingPipeline)
+// because the render-resolution buffers must size at max-render dims when
+// DRR is on, optimal-render dims when off.
+void SetDrrEnabled(bool enabled);
+bool GetDrrEnabled();
+// Target frame time the controller aims for, in milliseconds. Lower
+// target = lower render resolution to stay within budget.
+void SetDrrTargetFrameTimeMs(float ms);
+float GetDrrTargetFrameTimeMs();
+// Reported current render size (the dispatch rect being used this frame).
+// Useful for UI overlays.
+void GetDrrCurrentRenderSize(uint32_t &width, uint32_t &height);
+// Reported full DRR range (min / optimal / max render dims) for the
+// currently-active DLSS-RR mode+quality+output size. All fields are 0
+// when DLSS-RR isn't active or not supported.
+struct DrrRange {
+  uint32_t minRenderWidth = 0;
+  uint32_t minRenderHeight = 0;
+  uint32_t optimalRenderWidth = 0;
+  uint32_t optimalRenderHeight = 0;
+  uint32_t maxRenderWidth = 0;
+  uint32_t maxRenderHeight = 0;
+};
+DrrRange GetDrrRange();
+
+// Runtime toggle for the DLSS-RR specular probe (mirror-direction
+// RayQuery in wavefront_resolve_primary_cs.hlsl that populates
+// kBufferTypeSpecularHitDistance / kBufferTypeSpecularMotionVectors).
+// Off → RR uses primary motion vector for reflections (more stable, no
+// per-pixel inline RT cost). On → glossy reflections track more
+// accurately under motion but may boil on scenes with high-frequency
+// glossy texture variation.
+void SetDlssSpecularProbeEnabled(bool enabled);
+bool GetDlssSpecularProbeEnabled();
+
 struct GpuMemoryBreakdown {
   uint64_t renderTargetBytes = 0;
   uint64_t accumulationBytes = 0;

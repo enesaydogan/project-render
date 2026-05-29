@@ -49,7 +49,10 @@ void WaitGPUIdle();
 void QueueResize(UINT width, UINT height);
 bool ConsumePendingResize(UINT &width, UINT &height);
 
-// GPU Adapter query
-void GetHardwareAdapter(IDXGIFactory4 *pFactory, IDXGIAdapter1 **ppAdapter);
+// GPU Adapter query. When streamlineReady is true the probe routes through
+// the Streamline interposer's D3D12CreateDevice so every CreateDevice call
+// after slInit is observed by SL, per the Streamline Programming Guide.
+void GetHardwareAdapter(IDXGIFactory4 *pFactory, IDXGIAdapter1 **ppAdapter,
+                        bool streamlineReady = false);
 
 } // namespace DX12Context

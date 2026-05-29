@@ -23,10 +23,13 @@ void WavefrontShadowRayGen()
 
     WavefrontShadowTask task = g_wavefrontShadowQueue[taskIndex];
 
-    uint width = 0u;
-    uint height = 0u;
-    g_output.GetDimensions(width, height);
-    if (width == 0u || height == 0u) {
+    // pixelIndex is encoded with the bootstrap's current-frame render
+    // width (see g_wavefrontStats[0]/[1]). With DRR enabled the texture
+    // dims (g_output.GetDimensions) are at max-render — not what the
+    // index was packed with — so decode using the stashed current width.
+    const uint width = max(g_wavefrontStats[0], 1u);
+    const uint height = max(g_wavefrontStats[1], 1u);
+    if (g_wavefrontStats[0] == 0u || g_wavefrontStats[1] == 0u) {
         return;
     }
 

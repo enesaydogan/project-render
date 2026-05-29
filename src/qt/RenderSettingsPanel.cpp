@@ -227,11 +227,29 @@ void RenderSettingsPanel::createUi()
     m_resetDlssHistory = new QPushButton(tr("Reset DLSS History"), dlssGroup);
     m_renderSizeLabel = new QLabel(dlssGroup);
     m_renderSizeLabel->setWordWrap(true);
+    m_dlssSpecProbe = new QCheckBox(tr("RR Specular Probe"), dlssGroup);
+    m_dlssSpecProbe->setToolTip(
+        tr("Trace a mirror-direction RayQuery on glossy primary surfaces "
+           "to give DLSS-RR accurate specular-hit-distance and "
+           "specular-motion-vector guidance. Disable if you see boiling "
+           "on reflective surfaces."));
+    m_drrEnabled = new QCheckBox(tr("Dynamic Resolution (DRR)"), dlssGroup);
+    m_drrEnabled->setToolTip(
+        tr("Vary the internal DLSS-RR render resolution per frame to hold "
+           "the target frame time. DLSS-RR handles in-range size changes "
+           "without temporal history reset."));
+    m_drrTargetFps = CreateSliderControl(30.0, 240.0, 1.0, 0);
+    m_drrStatusLabel = new QLabel(dlssGroup);
+    m_drrStatusLabel->setWordWrap(true);
     dlssForm->addRow(tr("Mode"), m_dlssMode);
     dlssForm->addRow(tr("Quality"), m_dlssQuality);
     dlssForm->addRow(tr("RR Jitter Scale"), m_rrJitterScale);
+    dlssForm->addRow(m_dlssSpecProbe);
     dlssForm->addRow(m_resetDlssHistory);
     dlssForm->addRow(tr("Render Resolution"), m_renderSizeLabel);
+    dlssForm->addRow(m_drrEnabled);
+    dlssForm->addRow(tr("DRR Target FPS"), m_drrTargetFps);
+    dlssForm->addRow(tr("DRR Status"), m_drrStatusLabel);
     dxrLayout->addWidget(dlssGroup);
 
     auto *finalGroup = new QGroupBox(tr("Final / Export Denoiser"), m_dxrSection);
@@ -372,6 +390,29 @@ void RenderSettingsPanel::createUi()
     connect(m_resetDlssHistory, &QPushButton::clicked, this, []() {
         DxrRenderer::ResetStreamlineHistory();
     });
+    connect(m_dlssSpecProbe, &QCheckBox::toggled, this, [this](bool checked) {
+        if (m_syncing) {
+            return;
+        }
+        DxrRenderer::SetDlssSpecularProbeEnabled(checked);
+    });
+    connect(m_drrEnabled, &QCheckBox::toggled, this, [this](bool checked) {
+        if (m_syncing) {
+            return;
+        }
+        DxrRenderer::SetDrrEnabled(checked);
+    });
+    connect(m_drrTargetFps->spinBox(),
+            qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+            [this](double value) {
+                if (m_syncing) {
+                    return;
+                }
+                if (value > 1.0) {
+                    DxrRenderer::SetDrrTargetFrameTimeMs(
+                        1000.0f / static_cast<float>(value));
+                }
+            });
 
     connect(m_finalDenoiser, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
         if (m_syncing) {
@@ -543,6 +584,44 @@ void RenderSettingsPanel::syncFromRenderer()
     m_rrJitterScale->setEnabled(streamlineMode ==
                                 StreamlineManager::Mode::DLSS_RayReconstruction);
     m_resetDlssHistory->setEnabled(streamlineMode != StreamlineManager::Mode::Off);
+
+    const bool rrActive =
+        streamlineMode == StreamlineManager::Mode::DLSS_RayReconstruction;
+    if (!IsWidgetBeingEdited(m_dlssSpecProbe)) {
+        m_dlssSpecProbe->setChecked(DxrRenderer::GetDlssSpecularProbeEnabled());
+    }
+    m_dlssSpecProbe->setEnabled(rrActive);
+
+    if (!IsWidgetBeingEdited(m_drrEnabled)) {
+        m_drrEnabled->setChecked(DxrRenderer::GetDrrEnabled());
+    }
+    m_drrEnabled->setEnabled(rrActive);
+
+    if (!m_drrTargetFps->isInteracting()) {
+        const float ms = DxrRenderer::GetDrrTargetFrameTimeMs();
+        const double fps = (ms > 0.0f) ? (1000.0 / static_cast<double>(ms))
+                                       : 60.0;
+        m_drrTargetFps->setValue(fps);
+    }
+    m_drrTargetFps->setEnabled(rrActive && DxrRenderer::GetDrrEnabled());
+
+    if (rrActive && DxrRenderer::GetDrrEnabled()) {
+        uint32_t curW = 0, curH = 0;
+        DxrRenderer::GetDrrCurrentRenderSize(curW, curH);
+        const auto range = DxrRenderer::GetDrrRange();
+        m_drrStatusLabel->setText(
+            tr("Current %1 x %2  |  Range [%3 x %4 .. %5 x %6]")
+                .arg(curW)
+                .arg(curH)
+                .arg(range.minRenderWidth)
+                .arg(range.minRenderHeight)
+                .arg(range.maxRenderWidth)
+                .arg(range.maxRenderHeight));
+    } else {
+        m_drrStatusLabel->setText(
+            rrActive ? tr("(disabled — render size locked to optimal)")
+                     : tr("(requires DLSS Ray Reconstruction)"));
+    }
 
     if (!IsWidgetBeingEdited(m_finalDenoiser)) {
         m_finalDenoiser->setCurrentIndex(DenoiserIndexFromMode(DxrRenderer::GetDenoiserMode()));

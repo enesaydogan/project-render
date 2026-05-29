@@ -1436,9 +1436,22 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     float2 motion = ComputeWavefrontSkyMotion(rayDir, currScreen);
     float3 normal = float3(0.0, 1.0, 0.0);
     float3 albedo = float3(0.0, 0.0, 0.0);
+    // rrDiffuseAlbedo is the demodulated diffuse term for DLSS-RR.
+    // RR's pre-net demodulation divides lighting by this; passing the raw
+    // base color for metals/glass gives wrong (often zero) demodulation
+    // results. See ProgrammingGuideDLSS_RR.md S4.1.1 "Diffuse Albedo".
+    float3 rrDiffuseAlbedo = float3(0.0, 0.0, 0.0);
     float3 specularAlbedo = float3(0.0, 0.0, 0.0);
     float3 rrSpecularAlbedo = float3(0.0, 0.0, 0.0);
     float roughness = 1.0;
+    // DLSS-RR specular guidance buffers. Filled by a single mirror-direction
+    // RayQuery against the TLAS at primary-resolve time when the surface has
+    // non-negligible specular albedo. Hit-distance feeds
+    // kBufferTypeSpecularHitDistance (paired with worldToCameraView /
+    // cameraViewToWorld in DLSSDOptions); reflected-point screen motion
+    // feeds kBufferTypeSpecularMotionVectors.
+    float rrSpecHitDistance = 0.0;
+    float2 rrSpecMotion = kInvalidMvec;
     uint pathQueueCapacity = 0u;
     uint pathQueueStride = 0u;
     uint shadowQueueCapacity = 0u;
@@ -1462,6 +1475,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         float translucency = saturate(surface.w);
         float3 diffuseAlbedo = albedo * (1.0 - metallic) *
                                (1.0 - transmission);
+        rrDiffuseAlbedo = diffuseAlbedo;
         float specularWeight = saturate(UnpackPayloadSpecularWeight(record.packedIorType));
         float ior = UnpackPayloadIor(record.packedIorType);
         bool thinWalled = UnpackPayloadThinWalled(record.packedIorType);
@@ -1479,6 +1493,53 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                                               nDotV);
         }
         motion = ComputeWavefrontSurfaceMotion(hitPos, currScreen);
+
+        // DLSS-RR specular probe: trace a single mirror-direction ray from
+        // the primary surface to find the reflected point. Gated on
+        //   (a) the runtime feature flag (UI toggle),
+        //   (b) non-negligible specular albedo, and
+        //   (c) sufficiently glossy surfaces (roughness <= 0.35).
+        // The probe direction uses the *un-jittered* camera ray (rebuilt
+        // from the pixel centre via BuildCameraPrimaryDirection) instead
+        // of the actual jittered ray that hit this pixel — otherwise the
+        // mirror direction drifts a fraction of a degree per frame from
+        // the Halton jitter, the probe hits slightly different points on
+        // the reflected surface each frame, and the resulting spec-mvec
+        // / spec-hit-distance values jitter too. RR sees that as new
+        // geometry per frame and produces visible boiling. Centre-pixel
+        // direction is stable frame-to-frame for a static camera.
+        if (DxrFeatureEnabled(DXR_FEATURE_DLSS_SPEC_PROBE) &&
+            roughness <= 0.35 && any(rrSpecularAlbedo > 1.0e-4)) {
+            const float2 uvCentre =
+                (float2(pixel) + 0.5) /
+                float2(max(outputWidth, 1u), max(outputHeight, 1u));
+            const float3 stableRayDir = BuildCameraPrimaryDirection(uvCentre);
+            float3 mirrorDir = reflect(stableRayDir, normal);
+            float dirLenSq = dot(mirrorDir, mirrorDir);
+            if (dirLenSq > 1.0e-8) {
+                mirrorDir *= rsqrt(dirLenSq);
+                RayDesc specProbe;
+                specProbe.Origin = hitPos + normal * kWavefrontRayBias;
+                specProbe.Direction = mirrorDir;
+                specProbe.TMin = 0.001;
+                specProbe.TMax = 10000.0;
+                RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> specQuery;
+                specQuery.TraceRayInline(g_accel, RAY_FLAG_NONE, 0xFF,
+                                         specProbe);
+                specQuery.Proceed();
+                if (specQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
+                    rrSpecHitDistance = specQuery.CommittedRayT();
+                    float3 reflectedPos =
+                        specProbe.Origin + mirrorDir * rrSpecHitDistance;
+                    rrSpecMotion = ComputeWavefrontSurfaceMotion(
+                        reflectedPos, currScreen);
+                }
+                // On miss the reflection sees the (static) environment;
+                // rrSpecHitDistance stays 0 and rrSpecMotion stays
+                // kInvalidMvec so RR treats this pixel's reflection as
+                // having no temporal correspondence.
+            }
+        }
 
         float3 forwardDir;
         float3 projectionRight;
@@ -1851,8 +1912,12 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             motion = ComputeWavefrontSkyMotion(guideSkyDir, currScreen);
             normal = float3(0.0, 1.0, 0.0);
             albedo = float3(0.0, 0.0, 0.0);
+            rrDiffuseAlbedo = float3(0.0, 0.0, 0.0);
             roughness = 1.0;
             rrSpecularAlbedo = float3(0.0, 0.0, 0.0);
+            // Guide-sky: no reflective surface, no specular probe needed.
+            rrSpecHitDistance = 0.0;
+            rrSpecMotion = kInvalidMvec;
         } else {
             float3 guideDir = normalize(record.guideDirection);
             float3 guideHitPos = record.guideOrigin + guideDir * record.guideHitT;
@@ -1862,6 +1927,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             float4 guideSurface = WavefrontHitRecordGuideSurface(record);
             float guideRoughness = saturate(guideSurface.x);
             float guideMetallic = saturate(guideSurface.y);
+            float guideTransmission = saturate(guideSurface.z);
             float guideSpecularWeight =
                 saturate(UnpackPayloadSpecularWeight(
                     record.guidePackedIorType));
@@ -1871,6 +1937,8 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 
             normal = guideNormal;
             albedo = guideAlbedo;
+            rrDiffuseAlbedo = guideAlbedo * (1.0 - guideMetallic) *
+                              (1.0 - guideTransmission);
             roughness = guideRoughness;
             motion = ComputeWavefrontSurfaceMotion(guideHitPos, currScreen);
 
@@ -1905,6 +1973,42 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             rrSpecularAlbedo =
                 EnvBRDFApprox2(guideF0, guideRoughness * guideRoughness,
                                guideNdotV);
+
+            // DLSS-RR specular probe on the guide surface — same approach
+            // as the primary-surface probe above, gated on guideRoughness
+            // for the same boiling-on-rough-surfaces reason. Guide rays
+            // are already un-jittered (BuildPrimaryCenterDirection in
+            // wavefront_primary_raygen.hlsl) so we can use guideDir
+            // directly without recomputing.
+            if (DxrFeatureEnabled(DXR_FEATURE_DLSS_SPEC_PROBE) &&
+                guideRoughness <= 0.35 &&
+                any(rrSpecularAlbedo > 1.0e-4)) {
+                float3 guideMirror = reflect(guideDir, guideNormal);
+                float guideDirLenSq = dot(guideMirror, guideMirror);
+                if (guideDirLenSq > 1.0e-8) {
+                    guideMirror *= rsqrt(guideDirLenSq);
+                    RayDesc guideSpecProbe;
+                    guideSpecProbe.Origin =
+                        guideHitPos + guideNormal * kWavefrontRayBias;
+                    guideSpecProbe.Direction = guideMirror;
+                    guideSpecProbe.TMin = 0.001;
+                    guideSpecProbe.TMax = 10000.0;
+                    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH>
+                        guideSpecQuery;
+                    guideSpecQuery.TraceRayInline(g_accel, RAY_FLAG_NONE,
+                                                  0xFF, guideSpecProbe);
+                    guideSpecQuery.Proceed();
+                    if (guideSpecQuery.CommittedStatus() ==
+                        COMMITTED_TRIANGLE_HIT) {
+                        rrSpecHitDistance = guideSpecQuery.CommittedRayT();
+                        float3 guideReflectedPos =
+                            guideSpecProbe.Origin +
+                            guideMirror * rrSpecHitDistance;
+                        rrSpecMotion = ComputeWavefrontSurfaceMotion(
+                            guideReflectedPos, currScreen);
+                    }
+                }
+            }
         }
     }
 
@@ -1928,7 +2032,10 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     g_depth[pixel] = depth;
     g_linearDepth[pixel] = linearDepth;
     g_motionVectors[pixel] = motion;
-    g_albedoOut[pixel] = float4(albedo, 1.0);
+    // DLSS-RR wants diffuse albedo (no metallic / transmission contribution);
+    // OIDN/OptiX prefer the raw base color as a guide. Pick per active mode.
+    g_albedoOut[pixel] = float4(
+        (dlssRayReconstruction > 0.5) ? rrDiffuseAlbedo : albedo, 1.0);
     g_normalRoughnessOut[pixel] = float4(normalize(normal), roughness);
     float4 oidnAlbedoGuide = float4(albedo, visibleEmissiveMask);
     float4 oidnNormalGuide = float4(normalize(normal), roughness);
@@ -1951,11 +2058,13 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     g_oidnAlbedoGuideOut[pixel] = oidnAlbedoGuide;
     g_oidnNormalRoughnessGuideOut[pixel] = oidnNormalGuide;
     g_specularAlbedo[pixel] = float4(rrSpecularAlbedo, 1.0);
-    // specHitDistance: provide linear depth for specular pixels so DLSS-RR
-    // can disambiguate specular-path depth from diffuse depth. Use farZ as
-    // sentinel for diffuse-only pixels where specular tracking is irrelevant.
-    g_specHitDistance[pixel] = any(rrSpecularAlbedo > 0.0) ? linearDepth : farZ;
-    g_specularMotionVectors[pixel] = any(rrSpecularAlbedo > 0.0) ? motion : kInvalidMvec;
+    // DLSS-RR specular guidance (filled by the mirror-direction probe ray
+    // earlier in this shader). rrSpecHitDistance == 0 and
+    // rrSpecMotion == kInvalidMvec mark pixels with no reflective surface
+    // or a sky-only reflection — RR treats those as having no temporal
+    // correspondence and falls back to the primary motion vector.
+    g_specHitDistance[pixel] = rrSpecHitDistance;
+    g_specularMotionVectors[pixel] = rrSpecMotion;
     g_transmissionAccumulation[pixel] = float4(0.0, 0.0, 0.0, 0.0);
     g_transmissionVariance[pixel] = 0.0;
 }

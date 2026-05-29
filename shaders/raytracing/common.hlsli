@@ -280,6 +280,9 @@ static const uint DXR_FEATURE_PRIMARY_GUIDE = 1u << 1;
 static const uint DXR_FEATURE_CLAY_PRESERVE_TRANSPARENCY = 1u << 2;
 static const uint DXR_FEATURE_CLAY_PRESERVE_EMISSION = 1u << 3;
 static const uint DXR_FEATURE_REGIR_ENABLED = 1u << 8;
+// Mirrors kDxrFeatureDlssSpecProbe in camera.h. Gates the spec-probe
+// RayQuery in wavefront_resolve_primary_cs.hlsl.
+static const uint DXR_FEATURE_DLSS_SPEC_PROBE = 1u << 9;
 
 inline bool DxrFeatureEnabled(uint feature)
 {

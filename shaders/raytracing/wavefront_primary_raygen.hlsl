@@ -19,11 +19,20 @@ void WavefrontPrimaryRayGen()
     float3 traceOrigin = state.origin;
     float3 traceDirection = normalize(state.direction);
 
-    uint width = 0u;
-    uint height = 0u;
-    g_output.GetDimensions(width, height);
-    uint2 pixel = uint2(state.pixelIndex % max(width, 1u),
-                        state.pixelIndex / max(width, 1u));
+    // IMPORTANT: pixelIndex was packed by the bootstrap as
+    //   pixelIndex = y * currentRenderWidth + x
+    // where currentRenderWidth is the per-frame dispatch width (the value
+    // the bootstrap CB calls `outputWidth`). With DRR enabled the
+    // render-resolution textures are allocated at the mode's max-render
+    // dims, so g_output.GetDimensions() returns *max*-render dims, not the
+    // current-frame value. Using that to decode pixelIndex shifts every
+    // pixel to the wrong row and produces horizontal streak corruption.
+    // The bootstrap stashes the actual current width/height in
+    // g_wavefrontStats[0/1] for exactly this reason.
+    const uint width = max(g_wavefrontStats[0], 1u);
+    const uint height = max(g_wavefrontStats[1], 1u);
+    uint2 pixel = uint2(state.pixelIndex % width,
+                        state.pixelIndex / width);
     float3 guideOrigin = camPos;
     float3 guideDirection = BuildPrimaryCenterDirection(pixel,
                                                         uint2(width, height));

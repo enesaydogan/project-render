@@ -48,11 +48,28 @@ static void EnableD3D12DebugLayer() {
 #endif
 }
 
-void GetHardwareAdapter(IDXGIFactory4 *pFactory, IDXGIAdapter1 **ppAdapter) {
+void GetHardwareAdapter(IDXGIFactory4 *pFactory, IDXGIAdapter1 **ppAdapter,
+                        bool streamlineReady) {
   *ppAdapter = nullptr;
   ComPtr<IDXGIAdapter1> adapter;
   SIZE_T maxDedicatedMem = 0;
   ComPtr<IDXGIAdapter1> bestAdapter;
+
+  // Probe adapters through the Streamline interposer when available. The
+  // Programming Guide expects every D3D12CreateDevice call after slInit to
+  // go through the interposer; using the global ::D3D12CreateDevice for
+  // the probe is technically a violation and could trip future SL
+  // tightening (e.g. interposer-only feature checks).
+  auto probeCreateDevice = [&](IUnknown *a, REFIID riid,
+                               void **ppDev) -> HRESULT {
+    if (streamlineReady) {
+      HRESULT hrSL = g_streamline.D3D12CreateDevice(
+          a, D3D_FEATURE_LEVEL_11_0, riid, ppDev);
+      if (SUCCEEDED(hrSL))
+        return hrSL;
+    }
+    return ::D3D12CreateDevice(a, D3D_FEATURE_LEVEL_11_0, riid, ppDev);
+  };
 
   for (UINT adapterIndex = 0;; ++adapterIndex) {
     if (DXGI_ERROR_NOT_FOUND == pFactory->EnumAdapters1(adapterIndex, &adapter))
@@ -66,7 +83,7 @@ void GetHardwareAdapter(IDXGIFactory4 *pFactory, IDXGIAdapter1 **ppAdapter) {
 
     // Check D3D12 support
     ComPtr<ID3D12Device> testDevice;
-    if (SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0,
+    if (SUCCEEDED(probeCreateDevice(adapter.Get(),
                                     IID_PPV_ARGS(&testDevice)))) {
       if (desc.DedicatedVideoMemory > maxDedicatedMem) {
         maxDedicatedMem = desc.DedicatedVideoMemory;
@@ -111,7 +128,7 @@ bool InitD3D12(HWND hwnd) {
   };
 
   ComPtr<IDXGIAdapter1> hardwareAdapter;
-  GetHardwareAdapter(g_factory.Get(), &hardwareAdapter);
+  GetHardwareAdapter(g_factory.Get(), &hardwareAdapter, streamlineReady);
 
   HRESULT hr = E_FAIL;
   if (hardwareAdapter) {

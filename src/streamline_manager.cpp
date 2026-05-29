@@ -221,6 +221,12 @@ void StreamlineManager::SetApplicationId(uint32_t applicationId) {
   if (m_initialized)
     return; // too late
   m_applicationId = applicationId;
+  // A non-zero id from the caller is treated as a real production id; only
+  // a 0 (= "use defaults") keeps the placeholder flag set so the env / file
+  // / built-in fallback chain still runs in InitializeEarly.
+  if (applicationId != 0) {
+    m_applicationIdIsPlaceholder = false;
+  }
 }
 
 void StreamlineManager::SetLogToFile(bool enabled) {
@@ -248,15 +254,26 @@ bool StreamlineManager::InitializeEarly() {
   m_mirrorLogsToStderr =
       ReadBoolEnv(L"PROJECT_RENDER_SL_MIRROR_LOGS", m_mirrorLogsToStderr);
 
-  if (m_applicationId == 0) {
-    // Allow config without code changes.
+  // Track whether the id came from a real source (caller / env / sl_appid.txt)
+  // or fell back to the built-in dev placeholder. Production NGX DLLs require
+  // a registered id; the placeholder works only with the development NGX
+  // binaries shipped alongside Streamline.
+  if (m_applicationId != 0) {
+    m_applicationIdIsPlaceholder = false;
+  } else {
     m_applicationId = ReadApplicationIdFromEnv();
-    if (m_applicationId == 0) {
+    if (m_applicationId != 0) {
+      m_applicationIdIsPlaceholder = false;
+    } else {
       m_applicationId = ReadApplicationIdFromFile(m_pluginDir);
+      if (m_applicationId != 0) {
+        m_applicationIdIsPlaceholder = false;
+      }
     }
   }
   if (m_applicationId == 0) {
     m_applicationId = kDefaultNgxApplicationId;
+    m_applicationIdIsPlaceholder = true;
   }
 
   if (!LoadInterposer()) {
@@ -314,11 +331,15 @@ bool StreamlineManager::InitializeEarly() {
     return false;
   }
 
-  if (m_applicationId == 0) {
+  if (m_applicationIdIsPlaceholder) {
     fprintf(stderr,
-            "StreamlineManager: NOTE: No NGX applicationId configured. "
-            "Using placeholder id=1. For production NGX DLLs you must set "
-            "SL_APPLICATION_ID or sl_appid.txt.\n");
+            "StreamlineManager: WARNING: NGX applicationId not configured; "
+            "using placeholder id=%u. DLSS / DLSS-RR will work only with the "
+            "development NGX DLLs shipped beside the app. For production "
+            "set SL_APPLICATION_ID, PROJECT_RENDER_SL_APPLICATION_ID, or "
+            "drop your NVIDIA-issued id into sl_appid.txt next to the "
+            "executable.\n",
+            m_applicationId);
   }
 
   m_initialized = true;
@@ -369,6 +390,29 @@ void StreamlineManager::Shutdown() {
     m_interposerModule = nullptr;
   }
 
+  // Null every pointer loaded from the now-unloaded interposer module.
+  // Without this, any subsequent public call (or a retry of
+  // InitializeEarly that fails mid-way before LoadCoreFunctions runs)
+  // would dispatch through a dangling function address from the freed DLL.
+  m_slInit = nullptr;
+  m_slShutdown = nullptr;
+  m_slSetD3DDevice = nullptr;
+  m_slIsFeatureSupported = nullptr;
+  m_slGetNewFrameToken = nullptr;
+  m_slSetConstants = nullptr;
+  m_slEvaluateFeature = nullptr;
+  m_slGetFeatureFunction = nullptr;
+  m_slFreeResources = nullptr;
+  m_slDLSSGetOptimalSettings = nullptr;
+  m_slDLSSSetOptions = nullptr;
+  m_slDLSSDGetOptimalSettings = nullptr;
+  m_slDLSSDSetOptions = nullptr;
+  m_CreateDXGIFactory2 = nullptr;
+  m_D3D12CreateDevice = nullptr;
+
+  m_supportsDlss = false;
+  m_supportsDlssRr = false;
+  m_featureSupportCached = false;
   m_cachedOptimalValid = false;
 }
 
@@ -512,7 +556,87 @@ StreamlineManager::GetRecommendedRenderSize(uint32_t outputWidth,
     out.renderHeight = m_cachedDlssdOptimal.optimalRenderHeight;
   }
 
+  // DRR override (DLSS-RR only — SR's DLSS plugin doesn't expose the same
+  // min/max range fields). If the caller pushed a per-frame target via
+  // SetDrrTargetRenderSize, clamp it into the current mode's [min, max]
+  // and return that instead of the optimal. This is how DLSS-RR's
+  // Dynamic Resolution support is consumed: render at any size in-range
+  // per frame; RR handles the resize without history reset.
+  if (m_drrEnabled && m_mode == Mode::DLSS_RayReconstruction &&
+      m_drrTargetWidth > 0 && m_drrTargetHeight > 0) {
+    const uint32_t minW = m_cachedDlssdOptimal.renderWidthMin;
+    const uint32_t minH = m_cachedDlssdOptimal.renderHeightMin;
+    const uint32_t maxW = m_cachedDlssdOptimal.renderWidthMax;
+    const uint32_t maxH = m_cachedDlssdOptimal.renderHeightMax;
+    if (maxW > 0 && maxH > 0) {
+      uint32_t targetW = m_drrTargetWidth;
+      uint32_t targetH = m_drrTargetHeight;
+      if (targetW < minW)
+        targetW = minW;
+      if (targetH < minH)
+        targetH = minH;
+      if (targetW > maxW)
+        targetW = maxW;
+      if (targetH > maxH)
+        targetH = maxH;
+      out.renderWidth = targetW;
+      out.renderHeight = targetH;
+    }
+  }
+
   return out;
+}
+
+StreamlineManager::RenderSizeRange
+StreamlineManager::GetRenderSizeRange(uint32_t outputWidth,
+                                      uint32_t outputHeight) const {
+  RenderSizeRange range{};
+
+  // Drive the cache: GetRecommendedRenderSize populates m_cachedDlssOptimal
+  // / m_cachedDlssdOptimal for the (mode, quality, outputWidth, outputHeight)
+  // we're asking about.
+  (void)GetRecommendedRenderSize(outputWidth, outputHeight);
+
+  if (!m_initialized || !m_deviceSet || !m_cachedOptimalValid ||
+      m_cachedOptimalOutW != outputWidth ||
+      m_cachedOptimalOutH != outputHeight) {
+    // Cache miss / not ready — fall back to outputSize for all fields so
+    // callers can still allocate buffers without crashing.
+    range.minRenderWidth = outputWidth;
+    range.minRenderHeight = outputHeight;
+    range.optimalRenderWidth = outputWidth;
+    range.optimalRenderHeight = outputHeight;
+    range.maxRenderWidth = outputWidth;
+    range.maxRenderHeight = outputHeight;
+    return range;
+  }
+
+  if (m_mode == Mode::DLSS_RayReconstruction) {
+    range.minRenderWidth = m_cachedDlssdOptimal.renderWidthMin;
+    range.minRenderHeight = m_cachedDlssdOptimal.renderHeightMin;
+    range.optimalRenderWidth = m_cachedDlssdOptimal.optimalRenderWidth;
+    range.optimalRenderHeight = m_cachedDlssdOptimal.optimalRenderHeight;
+    range.maxRenderWidth = m_cachedDlssdOptimal.renderWidthMax;
+    range.maxRenderHeight = m_cachedDlssdOptimal.renderHeightMax;
+    range.optimalSharpness = m_cachedDlssdOptimal.optimalSharpness;
+  } else if (m_mode == Mode::DLSS_SuperResolution) {
+    range.minRenderWidth = m_cachedDlssOptimal.renderWidthMin;
+    range.minRenderHeight = m_cachedDlssOptimal.renderHeightMin;
+    range.optimalRenderWidth = m_cachedDlssOptimal.optimalRenderWidth;
+    range.optimalRenderHeight = m_cachedDlssOptimal.optimalRenderHeight;
+    range.maxRenderWidth = m_cachedDlssOptimal.renderWidthMax;
+    range.maxRenderHeight = m_cachedDlssOptimal.renderHeightMax;
+    range.optimalSharpness = m_cachedDlssOptimal.optimalSharpness;
+  } else {
+    range.minRenderWidth = outputWidth;
+    range.minRenderHeight = outputHeight;
+    range.optimalRenderWidth = outputWidth;
+    range.optimalRenderHeight = outputHeight;
+    range.maxRenderWidth = outputWidth;
+    range.maxRenderHeight = outputHeight;
+  }
+
+  return range;
 }
 
 bool StreamlineManager::Evaluate(
@@ -535,6 +659,12 @@ bool StreamlineManager::Evaluate(
   if (!m_initialized || !m_deviceSet)
     return false;
   if (!m_featureFunctionsReady)
+    return false;
+  // Skip evaluation when the requested feature isn't supported on this
+  // adapter; avoids per-frame slEvaluateFeature errors.
+  if (m_mode == Mode::DLSS_SuperResolution && !m_supportsDlss)
+    return false;
+  if (m_mode == Mode::DLSS_RayReconstruction && !m_supportsDlssRr)
     return false;
   if (!cmdList || !colorIn || !colorOut || !depth || !mvec)
     return false;
@@ -617,12 +747,21 @@ bool StreamlineManager::Evaluate(
   // Using passed jitter values to ensure synchronization with shader.
   c.jitterOffset = sl::float2(jitterX, jitterY);
 
-  // Required by Streamline common validation; 0 offset for a pinhole camera.
-  c.cameraPinholeOffset = sl::float2(0.0f, 0.0f);
+  // Off-center principal-point support: the project's vertical-tilt
+  // correction shifts the principal point by `verticalCenterShift` in
+  // unit-less NDC terms (see MakePerspectiveViewToClip — the projection
+  // adds `-verticalCenterShift * f * z` to clip.y so the principal point
+  // ends up at NDC.y = -verticalCenterShift). Hand the same offset to
+  // Streamline so RR's reprojection logic understands the optical axis
+  // isn't at image centre when tilt correction is engaged.
+  c.cameraPinholeOffset = sl::float2(0.0f, -verticalCenterShift);
 
-  // Motion vectors are in pixel space (see ProgrammingGuideDLSS_RR.md).
-  // Streamline expects motion vectors in [-1,1] after applying mvecScale.
-  // Our motion vectors are in pixel units.
+  // Motion vector convention:
+  //   shader writes `prev_pixel - curr_pixel` at render resolution into
+  //   g_motionVectors (range roughly [-renderWidth, +renderWidth]).
+  // Streamline wants mvec * mvecScale to land in [-1, 1] (per
+  // ProgrammingGuideDLSS_RR.md §6 example: pixel-space motion uses
+  //   mvecScale = {1.0f / renderWidth, 1.0f / renderHeight}).
   c.mvecScale = sl::float2(1.0f / (float)renderWidth, 1.0f / (float)renderHeight);
   m_lastMvecScaleX = c.mvecScale.x;
   m_lastMvecScaleY = c.mvecScale.y;
@@ -632,6 +771,12 @@ bool StreamlineManager::Evaluate(
   c.cameraFOV = cam.fov * 3.14159265359f / 180.0f;
   c.cameraAspectRatio = cam.aspect;
 
+  // c.depthInverted: the shader writes NDC z from
+  //   A = far / (far - near); B = -near * far / (far - near);
+  //   ndc = A + B / z;    // near→0, far→1  (non-reverse-Z)
+  // for SR mode and view-space linear Z (meters) for RR mode. Either way
+  // the depth buffer is NOT reverse-Z. If you ever switch to reverse-Z
+  // for SR, flip this to eTrue.
   c.depthInverted = sl::Boolean::eFalse;
   c.cameraMotionIncluded = sl::Boolean::eTrue;
   c.motionVectors3D = sl::Boolean::eFalse;
@@ -643,9 +788,11 @@ bool StreamlineManager::Evaluate(
   c.reset = resetHistory ? sl::Boolean::eTrue : sl::Boolean::eFalse;
   // Streamline 2.10 Constants has no 'renderingGameFrames' field.
 
-  // Match OptiX path: use an impossible sentinel for invalid motion vectors.
-  // Shader must write this value for invalid pixels.
-  c.motionVectorsInvalidValue = -1e6f;
+  // Sentinel for "no valid motion vector at this pixel" (occlusion, sky
+  // outside re-projection, etc.). MUST match kInvalidMvec in
+  // shaders/wavefront_resolve_primary_cs.hlsl. If you change one, change
+  // the other.
+  c.motionVectorsInvalidValue = kStreamlineInvalidMvecValue;
 
   res = m_slSetConstants(c, *frameToken, m_viewport);
   if (res != sl::Result::eOk) {
@@ -719,11 +866,31 @@ bool StreamlineManager::Evaluate(
   const sl::BufferType depthType =
       (m_mode == Mode::DLSS_RayReconstruction) ? sl::kBufferTypeLinearDepth
                                               : sl::kBufferTypeDepth;
+  // Lifecycle policy:
+  //   depth + motion vectors → eValidUntilPresent. They're written once
+  //     by the resolve pass and never modified again until next frame's
+  //     resolve, so Streamline can hold the reference through Present
+  //     instead of refreshing per-evaluate. This also makes them ready
+  //     for future post-evaluate consumers (DLSS-G frame gen, Reflex
+  //     analyses).
+  //   color in/out, AOVs → eValidUntilEvaluate. Conservative because
+  //     these buffers MAY be touched between Evaluate and Present in
+  //     some code paths (OIDN one-shot denoise, debug overlays, the
+  //     accumulation reset path). eValidUntilEvaluate releases the SL
+  //     reference as soon as the feature evaluation returns, avoiding
+  //     a dangling-pointer window during CreateRayTracingPipeline.
+  //
+  // Trade-off: depth/mvec resources must NOT be destroyed between Eval
+  // and Present without releasing the tag first. CreateRayTracingPipeline
+  // is the only path that destroys them, and it's called either at the
+  // start of RenderFrame (before next Eval+Present cycle) or during
+  // resize where the swapchain is also being recreated; both windows are
+  // safe under the current call structure.
   sl::ResourceTag depthTag{&depthRes, depthType,
-                           sl::ResourceLifecycle::eValidUntilEvaluate,
+                           sl::ResourceLifecycle::eValidUntilPresent,
                            &renderExtent};
   sl::ResourceTag mvecTag{&mvecRes, sl::kBufferTypeMotionVectors,
-                          sl::ResourceLifecycle::eValidUntilEvaluate,
+                          sl::ResourceLifecycle::eValidUntilPresent,
                           &renderExtent};
   sl::ResourceTag colorInTag{&inRes, sl::kBufferTypeScalingInputColor,
                              sl::ResourceLifecycle::eValidUntilEvaluate,
@@ -845,13 +1012,24 @@ bool StreamlineManager::LoadInterposer() {
 
   std::wstring dllPath = GetExecutableDir() + L"\\sl.interposer.dll";
 
-  // Verify signature if present (development DLLs may be unsigned)
-  // If verification fails, we still attempt to load in development.
-  bool sigOk = sl::security::verifyEmbeddedSignature(dllPath.c_str());
+  // Verify signature. In release builds we refuse to load an unsigned
+  // interposer (Streamline Programming Guide recommendation: production
+  // apps must reject unsigned plugins). Debug builds keep the historical
+  // soft-warning behaviour so devs can iterate on local rebuilds without
+  // re-signing.
+  const bool sigOk = sl::security::verifyEmbeddedSignature(dllPath.c_str());
   if (!sigOk) {
-    fprintf(
-        stderr,
-        "StreamlineManager: sl.interposer.dll signature not verified (dev?)\n");
+#ifdef NDEBUG
+    fprintf(stderr,
+            "StreamlineManager: sl.interposer.dll failed signature "
+            "verification; refusing to load in release build. Place a "
+            "signed copy next to the executable.\n");
+    return false;
+#else
+    fprintf(stderr,
+            "StreamlineManager: sl.interposer.dll signature not verified "
+            "(debug build, allowing load).\n");
+#endif
   }
 
   m_interposerModule = LoadLibraryW(dllPath.c_str());
@@ -909,20 +1087,34 @@ bool StreamlineManager::LoadFeatureFunctions() {
     return m_slIsFeatureSupported(f, ai) == sl::Result::eOk;
   };
 
+  // Probe support once. The UI uses this to grey out unsupported modes and
+  // Evaluate uses it to short-circuit instead of calling slEvaluateFeature
+  // (which would log an error every frame on non-RTX adapters).
+  m_supportsDlss = isSupported(sl::kFeatureDLSS);
+  m_supportsDlssRr = isSupported(sl::kFeatureDLSS_RR);
+  m_featureSupportCached = true;
+
   void *fn = nullptr;
-  sl::Result res =
-      m_slGetFeatureFunction(sl::kFeatureDLSS, "slDLSSGetOptimalSettings", fn);
-  if (res == sl::Result::eOk)
-    m_slDLSSGetOptimalSettings =
-        reinterpret_cast<PFun_slDLSSGetOptimalSettings *>(fn);
+  sl::Result res = sl::Result::eOk;
 
-  fn = nullptr;
-  res = m_slGetFeatureFunction(sl::kFeatureDLSS, "slDLSSSetOptions", fn);
-  if (res == sl::Result::eOk)
-    m_slDLSSSetOptions = reinterpret_cast<PFun_slDLSSSetOptions *>(fn);
+  if (m_supportsDlss) {
+    res = m_slGetFeatureFunction(sl::kFeatureDLSS, "slDLSSGetOptimalSettings",
+                                 fn);
+    if (res == sl::Result::eOk)
+      m_slDLSSGetOptimalSettings =
+          reinterpret_cast<PFun_slDLSSGetOptimalSettings *>(fn);
 
-  fn = nullptr;
-  if (isSupported(sl::kFeatureDLSS_RR)) {
+    fn = nullptr;
+    res = m_slGetFeatureFunction(sl::kFeatureDLSS, "slDLSSSetOptions", fn);
+    if (res == sl::Result::eOk)
+      m_slDLSSSetOptions = reinterpret_cast<PFun_slDLSSSetOptions *>(fn);
+  } else {
+    m_slDLSSGetOptimalSettings = nullptr;
+    m_slDLSSSetOptions = nullptr;
+  }
+
+  if (m_supportsDlssRr) {
+    fn = nullptr;
     res = m_slGetFeatureFunction(sl::kFeatureDLSS_RR,
                                  "slDLSSDGetOptimalSettings", fn);
     if (res == sl::Result::eOk)

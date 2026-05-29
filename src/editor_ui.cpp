@@ -3354,6 +3354,57 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
           ImGui::TextWrapped("Lowering jitter can reduce edge/silhouette "
                              "shimmer (especially near screen borders) but "
                              "may reduce DLSS-RR reconstruction/AA quality.");
+
+          // DLSS-RR Dynamic Resolution (DRR). The per-frame render rect
+          // floats inside [minRender, maxRender] driven by a frame-time
+          // controller so we can hold a target FPS even when the scene
+          // load varies. Toggling DRR triggers a buffer reallocation
+          // (buffers must be sized at maxRender for DRR vs optimal-render
+          // when DRR is off).
+          bool specProbeEnabled = DxrRenderer::GetDlssSpecularProbeEnabled();
+          if (ImGui::Checkbox("RR Spec Probe", &specProbeEnabled)) {
+            DxrRenderer::SetDlssSpecularProbeEnabled(specProbeEnabled);
+            uiChanged = true;
+          }
+          ImGui::SameLine();
+          ImGui::TextDisabled("(?)");
+          if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "Trace a mirror-direction RayQuery on glossy primary\n"
+                "surfaces to give DLSS-RR accurate reflection guidance.\n"
+                "Disable if you see boiling on reflective surfaces.");
+          }
+
+          bool drrEnabled = DxrRenderer::GetDrrEnabled();
+          if (ImGui::Checkbox("Dynamic Resolution (DRR)", &drrEnabled)) {
+            DxrRenderer::SetDrrEnabled(drrEnabled);
+            uiChanged = true;
+          }
+          if (drrEnabled) {
+            float targetMs = DxrRenderer::GetDrrTargetFrameTimeMs();
+            const float targetFps = (targetMs > 0.0f) ? (1000.0f / targetMs)
+                                                      : 60.0f;
+            float editFps = targetFps;
+            if (ImGui::SliderFloat("DRR Target FPS", &editFps, 30.0f, 240.0f,
+                                   "%.0f")) {
+              if (editFps > 1.0f) {
+                DxrRenderer::SetDrrTargetFrameTimeMs(1000.0f / editFps);
+              }
+            }
+            uint32_t currW = 0, currH = 0;
+            DxrRenderer::GetDrrCurrentRenderSize(currW, currH);
+            const auto range = DxrRenderer::GetDrrRange();
+            ImGui::Text("Current: %u x %u    Range: [%u x %u .. %u x %u]",
+                        (unsigned)currW, (unsigned)currH,
+                        (unsigned)range.minRenderWidth,
+                        (unsigned)range.minRenderHeight,
+                        (unsigned)range.maxRenderWidth,
+                        (unsigned)range.maxRenderHeight);
+            ImGui::TextWrapped("DRR adjusts the internal render resolution "
+                               "per frame to hit the target frame time. "
+                               "DLSS-RR handles the resize without temporal "
+                               "history reset.");
+          }
         }
 
         ImGui::Separator();
