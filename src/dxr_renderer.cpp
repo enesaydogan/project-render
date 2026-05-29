@@ -413,15 +413,30 @@ static UINT s_readyPresentHeight = 0;
 // the DLSS-RR temporal accumulator that shows as boiling, so we want
 // the controller to settle as quickly as possible and then stay put.
 static float s_drrTargetFrameTimeMs = 1000.0f / 60.0f; // default: 60 fps
-static float s_drrScaleStepUp = 1.01f;    // raise resolution 1%/frame
-static float s_drrScaleStepDown = 0.98f;  // drop resolution 2%/frame
-// Exponential moving average of frame time used to drive the controller.
-// Smooths out per-frame spikes (BLAS rebuild, async OIDN, GC) so the
-// resolution doesn't react to one-off costs.
+// Exponential moving average of frame time, sampled every frame. The
+// adjustment itself only fires on history-reset edges (see
+// UpdateDynamicResolutionFeedback) — the smoothing exists so that when the
+// edge fires, the workload estimate reflects sustained cost rather than the
+// most recent spike (BLAS rebuild, async OIDN finishing, allocator GC).
 static float s_drrSmoothedFrameTimeMs = 0.0f;
 static const float s_drrSmoothingAlpha = 0.15f;  // EMA weight on new sample
 static UINT s_drrLastReportWidth = 0;
 static UINT s_drrLastReportHeight = 0;
+
+// Discrete render-scale presets, expressed as a fraction of the current
+// DLSS-RR mode's maxRender dimensions. Ordered highest quality →
+// lowest. The controller steps one preset at a time per interactive
+// session: it never jumps multiple slots in a single adjustment, so the
+// reconvergence after a reset is bounded.
+static const float s_drrPresetScales[] = { 1.00f, 0.85f, 0.75f, 0.67f, 0.50f };
+static constexpr UINT kDrrPresetCount =
+    sizeof(s_drrPresetScales) / sizeof(s_drrPresetScales[0]);
+static UINT s_drrPresetIndex = 0;
+// Edge detector for s_streamlineResetHistory. We adjust on the *rising*
+// edge so sustained drag (which keeps the flag latched true frame after
+// frame via repeated ResetAccumulation calls) doesn't ratchet the
+// resolution down every frame.
+static bool s_drrPrevResetHistory = false;
 // Spec-probe runtime toggle. The DLSS-RR specular probe (mirror-direction
 // RayQuery in wavefront_resolve_primary_cs.hlsl) populates
 // kBufferTypeSpecularHitDistance / kBufferTypeSpecularMotionVectors for
@@ -4040,16 +4055,23 @@ static void EnsureCurrentFeatureResources() {
   CreateRayTracingPipeline(s_presentWidth, s_presentHeight);
 }
 
-// Per-frame Dynamic Resolution adjustment. Reads the last measured frame
-// time (s_frameTimeMs, populated by the present loop) and scales the
-// current dispatch size toward a target frame time, clamped to the
-// DLSS-RR mode's [renderWidthMin/Min, renderWidthMax/Max] range.
+// Dynamic Resolution adjustment, gated to history-reset events.
 //
-// Called once per RenderFrame, right after the feature-mask check. Touches
-// only s_outputWidth/Height (the per-frame dispatch dims) and pushes the
-// new target into the manager so Streamline tagging picks it up. Does NOT
-// reset DLSS-RR history — RR's DRR support handles intra-range size
-// changes natively.
+// Continuous DRR (adjusting every frame) produced visible shimmer because
+// every resolution change shifts the input sample grid and RR has to
+// re-learn the newly-revealed sub-pixel positions before the temporal
+// accumulator settles. During converged / static viewing the user wants
+// a stable image, so any resolution churn shows as boiling.
+//
+// Design: piggyback on the existing history-reset signal. Whenever
+// ResetAccumulation / a fresh user interaction sets s_streamlineResetHistory
+// true, RR is going to discard its history *anyway*, so a resolution
+// change rides along at zero additional cost. Between resets the
+// resolution stays locked and the image converges cleanly.
+//
+// Adjustment is one preset step per session — never a multi-step jump —
+// so the next reconvergence is bounded. Multiple sessions of sustained
+// over/under budget naturally ratchet the resolution toward equilibrium.
 static void UpdateDynamicResolutionFeedback() {
   if (!s_streamline || !s_streamline->IsDrrEnabled() ||
       !s_streamline->IsInitialized() || !s_streamline->IsDeviceSet()) {
@@ -4075,74 +4097,94 @@ static void UpdateDynamicResolutionFeedback() {
   // SetDrrEnabled() will land on the next frame.
   if (s_renderBufferWidth < range.maxRenderWidth ||
       s_renderBufferHeight < range.maxRenderHeight) {
+    s_drrPrevResetHistory = s_streamlineResetHistory;
     return;
   }
 
-  // First frame after DRR enable / mode change — sit at optimal.
-  if (s_outputWidth < range.minRenderWidth ||
-      s_outputWidth > range.maxRenderWidth ||
-      s_outputHeight < range.minRenderHeight ||
-      s_outputHeight > range.maxRenderHeight) {
-    s_outputWidth = range.optimalRenderWidth ? range.optimalRenderWidth
-                                             : range.maxRenderWidth;
-    s_outputHeight = range.optimalRenderHeight ? range.optimalRenderHeight
-                                               : range.maxRenderHeight;
-    s_streamline->SetDrrTargetRenderSize(s_outputWidth, s_outputHeight);
+  // Always sample the frametime — the EMA must reflect sustained workload
+  // by the time the next reset edge arrives, not stale data from when DRR
+  // was last triggered.
+  if (s_frameTimeMs > 0.0f && std::isfinite(s_frameTimeMs)) {
+    if (s_drrSmoothedFrameTimeMs <= 0.0f) {
+      s_drrSmoothedFrameTimeMs = s_frameTimeMs;
+    } else {
+      s_drrSmoothedFrameTimeMs =
+          s_drrSmoothingAlpha * s_frameTimeMs +
+          (1.0f - s_drrSmoothingAlpha) * s_drrSmoothedFrameTimeMs;
+    }
+  }
+
+  // First-frame sanity: if the current dispatch is outside the mode's
+  // valid range (e.g. just toggled into DRR with stale dims), snap to the
+  // current preset and let the regular reset-edge path handle subsequent
+  // adjustments.
+  const bool outOfRange = s_outputWidth < range.minRenderWidth ||
+                          s_outputWidth > range.maxRenderWidth ||
+                          s_outputHeight < range.minRenderHeight ||
+                          s_outputHeight > range.maxRenderHeight;
+  if (outOfRange) {
+    const float scale = s_drrPresetScales[s_drrPresetIndex];
+    uint32_t w = (uint32_t)((float)range.maxRenderWidth * scale + 0.5f);
+    uint32_t h = (uint32_t)((float)range.maxRenderHeight * scale + 0.5f);
+    w = (w + 3u) & ~3u;
+    h = (h + 3u) & ~3u;
+    if (w < range.minRenderWidth) w = range.minRenderWidth;
+    if (h < range.minRenderHeight) h = range.minRenderHeight;
+    if (w > range.maxRenderWidth) w = range.maxRenderWidth;
+    if (h > range.maxRenderHeight) h = range.maxRenderHeight;
+    s_outputWidth = w;
+    s_outputHeight = h;
+    s_drrLastReportWidth = w;
+    s_drrLastReportHeight = h;
+    s_streamline->SetDrrTargetRenderSize(w, h);
+    s_drrPrevResetHistory = s_streamlineResetHistory;
     return;
   }
 
-  // Need a frame-time measurement to drive the controller. The first frame
-  // after init has s_frameTimeMs == 0; just hold steady until we have data.
-  if (s_frameTimeMs <= 0.0f || !std::isfinite(s_frameTimeMs)) {
+  // Rising-edge gate. The flag latches true through a sustained drag
+  // (each input event re-asserts it); only the first frame of a new
+  // session triggers an adjustment. The flag itself is cleared later in
+  // RenderFrame after the SL Evaluate consumes it.
+  const bool resetEdge =
+      s_streamlineResetHistory && !s_drrPrevResetHistory;
+  s_drrPrevResetHistory = s_streamlineResetHistory;
+  if (!resetEdge) {
     return;
   }
-
-  // EMA-smooth the frame-time signal so the controller reacts to the
-  // sustained workload rather than to one-frame spikes (BLAS rebuild,
-  // OIDN dispatch, allocator GC). Without this the resolution oscillates
-  // whenever the scene briefly hitches, which the RR temporal accumulator
-  // sees as boiling.
   if (s_drrSmoothedFrameTimeMs <= 0.0f) {
-    s_drrSmoothedFrameTimeMs = s_frameTimeMs;
-  } else {
-    s_drrSmoothedFrameTimeMs =
-        s_drrSmoothingAlpha * s_frameTimeMs +
-        (1.0f - s_drrSmoothingAlpha) * s_drrSmoothedFrameTimeMs;
+    return;  // no measurement yet, hold steady
   }
 
-  // Wide deadband: only act when we're meaningfully outside the target.
-  // The DLSS-RR network handles small render-size changes cleanly, but
-  // each change forces it to re-train history for the newly-revealed
-  // pixels, so we trade a bit of FPS tracking precision for a quieter
-  // image.
-  const float overBudget = s_drrTargetFrameTimeMs * 1.15f;  // 15% over → drop
-  const float underBudget = s_drrTargetFrameTimeMs * 0.80f; // 20% under → raise
-
-  float scale = 1.0f;
-  if (s_drrSmoothedFrameTimeMs > overBudget) {
-    scale = s_drrScaleStepDown;
-  } else if (s_drrSmoothedFrameTimeMs < underBudget) {
-    scale = s_drrScaleStepUp;
-  } else {
-    return; // inside the deadband, don't churn
+  // Step one preset based on the smoothed frametime. Thresholds match the
+  // previous controller (15% over → step down, 20% under → step up); the
+  // difference is one discrete step per session instead of a continuous
+  // 1%/frame nudge.
+  const float overBudget = s_drrTargetFrameTimeMs * 1.15f;
+  const float underBudget = s_drrTargetFrameTimeMs * 0.80f;
+  UINT newPresetIndex = s_drrPresetIndex;
+  if (s_drrSmoothedFrameTimeMs > overBudget &&
+      newPresetIndex + 1u < kDrrPresetCount) {
+    newPresetIndex++;
+  } else if (s_drrSmoothedFrameTimeMs < underBudget &&
+             newPresetIndex > 0u) {
+    newPresetIndex--;
   }
+  if (newPresetIndex == s_drrPresetIndex) {
+    return;  // already at the right preset for this workload
+  }
+  s_drrPresetIndex = newPresetIndex;
 
-  uint32_t newW = (uint32_t)((float)s_outputWidth * scale + 0.5f);
-  uint32_t newH = (uint32_t)((float)s_outputHeight * scale + 0.5f);
-  // Quantize to a multiple of 4 so dispatch thread groups stay aligned.
+  const float scale = s_drrPresetScales[s_drrPresetIndex];
+  uint32_t newW = (uint32_t)((float)range.maxRenderWidth * scale + 0.5f);
+  uint32_t newH = (uint32_t)((float)range.maxRenderHeight * scale + 0.5f);
   newW = (newW + 3u) & ~3u;
   newH = (newH + 3u) & ~3u;
-  if (newW < range.minRenderWidth)
-    newW = range.minRenderWidth;
-  if (newH < range.minRenderHeight)
-    newH = range.minRenderHeight;
-  if (newW > range.maxRenderWidth)
-    newW = range.maxRenderWidth;
-  if (newH > range.maxRenderHeight)
-    newH = range.maxRenderHeight;
-
+  if (newW < range.minRenderWidth) newW = range.minRenderWidth;
+  if (newH < range.minRenderHeight) newH = range.minRenderHeight;
+  if (newW > range.maxRenderWidth) newW = range.maxRenderWidth;
+  if (newH > range.maxRenderHeight) newH = range.maxRenderHeight;
   if (newW == s_outputWidth && newH == s_outputHeight) {
-    return; // already at the clamp
+    return;
   }
 
   s_outputWidth = newW;
@@ -4150,8 +4192,9 @@ static void UpdateDynamicResolutionFeedback() {
   s_drrLastReportWidth = newW;
   s_drrLastReportHeight = newH;
   s_streamline->SetDrrTargetRenderSize(newW, newH);
-  // IMPORTANT: do NOT touch s_streamlineResetHistory here — RR handles
-  // intra-range size changes without history reset.
+  // IMPORTANT: do NOT touch s_streamlineResetHistory here — RR is already
+  // about to reset history (that's why we got the edge in the first place),
+  // and the resolution change rides along on that reset for free.
 }
 
 void CreateRayTracingPipeline(UINT width, UINT height) {
