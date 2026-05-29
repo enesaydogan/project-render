@@ -1450,6 +1450,13 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     // kBufferTypeSpecularHitDistance (paired with worldToCameraView /
     // cameraViewToWorld in DLSSDOptions); reflected-point screen motion
     // feeds kBufferTypeSpecularMotionVectors.
+    //
+    // Sentinels here mean "no real probe data". The write site below
+    // substitutes the primary linearDepth / motion when these stay sentinel
+    // so RR sees "the reflection is the surface itself" — Streamline's
+    // spec channels have NO documented invalid sentinel, and feeding raw
+    // 0 / kInvalidMvec was producing checkerboard fireflies on flat
+    // surfaces (RR reading the spec mvec as a literal -1e6 px motion).
     float rrSpecHitDistance = 0.0;
     float2 rrSpecMotion = kInvalidMvec;
     uint pathQueueCapacity = 0u;
@@ -1533,10 +1540,12 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                     rrSpecMotion = ComputeWavefrontSurfaceMotion(
                         reflectedPos, currScreen);
                 }
-                // On miss the reflection sees the (static) environment;
+                // On miss the probe found nothing reflective;
                 // rrSpecHitDistance stays 0 and rrSpecMotion stays
-                // kInvalidMvec so RR treats this pixel's reflection as
-                // having no temporal correspondence.
+                // kInvalidMvec. The write site replaces both with the
+                // primary surface's linearDepth / motion so RR sees
+                // "reflection coincident with the surface" instead of
+                // garbage geometry at -1e6 px / 0 m.
             }
         }
 
@@ -1914,7 +1923,10 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
             rrDiffuseAlbedo = float3(0.0, 0.0, 0.0);
             roughness = 1.0;
             rrSpecularAlbedo = float3(0.0, 0.0, 0.0);
-            // Guide-sky: no reflective surface, no specular probe needed.
+            // Guide-sky: no reflective surface. Leave sentinels here; the
+            // write site below substitutes linearDepth (= farZ) and the
+            // sky motion so RR's spec channel reprojects against the same
+            // far-plane reference as the primary channel.
             rrSpecHitDistance = 0.0;
             rrSpecMotion = kInvalidMvec;
         } else {
@@ -2056,13 +2068,31 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     g_oidnAlbedoGuideOut[pixel] = oidnAlbedoGuide;
     g_oidnNormalRoughnessGuideOut[pixel] = oidnNormalGuide;
     g_specularAlbedo[pixel] = float4(rrSpecularAlbedo, 1.0);
-    // DLSS-RR specular guidance (filled by the mirror-direction probe ray
-    // earlier in this shader). rrSpecHitDistance == 0 and
-    // rrSpecMotion == kInvalidMvec mark pixels with no reflective surface
-    // or a sky-only reflection — RR treats those as having no temporal
-    // correspondence and falls back to the primary motion vector.
-    g_specHitDistance[pixel] = rrSpecHitDistance;
-    g_specularMotionVectors[pixel] = rrSpecMotion;
+    // DLSS-RR specular guidance writes. The pre-1b55db1 behavior gated
+    // on `any(rrSpecularAlbedo > 0.0)` (any non-zero specular term) and
+    // wrote {linearDepth, primary motion} for spec pixels, {farZ,
+    // kInvalidMvec} for non-spec pixels. That worked. The 1b55db1
+    // rework switched to a mirror-probe RayQuery with {0, kInvalidMvec}
+    // fallbacks, which RR's spec channels read literally and produced
+    // the macroblock fireflies seen in the bug video.
+    //
+    // Restore the proven gating, with the probe result preferred when it
+    // actually hit:
+    //   probe hit  → {probe distance, reflected-point motion}
+    //   spec pixel → {primary linearDepth, primary motion}
+    //   else       → {farZ, kInvalidMvec}      (non-reflective fallback)
+    const bool hasSpecProbe = (rrSpecHitDistance > 0.0);
+    const bool isSpecPixel = any(rrSpecularAlbedo > 0.0);
+    if (hasSpecProbe) {
+        g_specHitDistance[pixel] = rrSpecHitDistance;
+        g_specularMotionVectors[pixel] = rrSpecMotion;
+    } else if (isSpecPixel) {
+        g_specHitDistance[pixel] = linearDepth;
+        g_specularMotionVectors[pixel] = motion;
+    } else {
+        g_specHitDistance[pixel] = farZ;
+        g_specularMotionVectors[pixel] = kInvalidMvec;
+    }
     g_transmissionAccumulation[pixel] = float4(0.0, 0.0, 0.0, 0.0);
     g_transmissionVariance[pixel] = 0.0;
 }

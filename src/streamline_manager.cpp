@@ -866,31 +866,20 @@ bool StreamlineManager::Evaluate(
   const sl::BufferType depthType =
       (m_mode == Mode::DLSS_RayReconstruction) ? sl::kBufferTypeLinearDepth
                                               : sl::kBufferTypeDepth;
-  // Lifecycle policy:
-  //   depth + motion vectors → eValidUntilPresent. They're written once
-  //     by the resolve pass and never modified again until next frame's
-  //     resolve, so Streamline can hold the reference through Present
-  //     instead of refreshing per-evaluate. This also makes them ready
-  //     for future post-evaluate consumers (DLSS-G frame gen, Reflex
-  //     analyses).
-  //   color in/out, AOVs → eValidUntilEvaluate. Conservative because
-  //     these buffers MAY be touched between Evaluate and Present in
-  //     some code paths (OIDN one-shot denoise, debug overlays, the
-  //     accumulation reset path). eValidUntilEvaluate releases the SL
-  //     reference as soon as the feature evaluation returns, avoiding
-  //     a dangling-pointer window during CreateRayTracingPipeline.
-  //
-  // Trade-off: depth/mvec resources must NOT be destroyed between Eval
-  // and Present without releasing the tag first. CreateRayTracingPipeline
-  // is the only path that destroys them, and it's called either at the
-  // start of RenderFrame (before next Eval+Present cycle) or during
-  // resize where the swapchain is also being recreated; both windows are
-  // safe under the current call structure.
+  // Lifecycle: all RR inputs use eValidUntilEvaluate. The caller transitions
+  // depth and mvec back to UAV state immediately after Evaluate returns
+  // (dxr_renderer.cpp ~9860), which violates the eValidUntilPresent
+  // contract — SL is allowed to dereference those resources up to Present
+  // and would find them in the wrong state. A previous experiment with
+  // eValidUntilPresent (commit 1b55db1) appeared to cause the macroblock
+  // / brightness instability artifacts on DLSS-RR; revert to the
+  // conservative lifecycle that matches when we actually own the
+  // resources in NON_PIXEL_SHADER_RESOURCE state.
   sl::ResourceTag depthTag{&depthRes, depthType,
-                           sl::ResourceLifecycle::eValidUntilPresent,
+                           sl::ResourceLifecycle::eValidUntilEvaluate,
                            &renderExtent};
   sl::ResourceTag mvecTag{&mvecRes, sl::kBufferTypeMotionVectors,
-                          sl::ResourceLifecycle::eValidUntilPresent,
+                          sl::ResourceLifecycle::eValidUntilEvaluate,
                           &renderExtent};
   sl::ResourceTag colorInTag{&inRes, sl::kBufferTypeScalingInputColor,
                              sl::ResourceLifecycle::eValidUntilEvaluate,
