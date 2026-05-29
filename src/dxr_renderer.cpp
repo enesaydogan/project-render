@@ -8757,7 +8757,14 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
   // change, resolution change), restart the Halton sequence too so the
   // first few post-reset sub-pixel samples are deterministic and converge
   // RR predictably regardless of accumulated frame count since boot.
-  if (s_streamlineResetHistory) {
+  //
+  // Capture the reset flag before consumption and clear it immediately.
+  // If we defer the clear to the DLSS Evaluate block, the flag stays set
+  // forever when DLSS is Off, pinning jitter to the same sample every
+  // frame and preventing convergence despite increasing SPP.
+  const bool frameResetHistory = s_streamlineResetHistory;
+  s_streamlineResetHistory = false;
+  if (frameResetHistory) {
     s_jitterFrameIndex = 0;
   }
   s_jitterFrameIndex++;
@@ -9812,8 +9819,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
-    const bool resetHistory = s_streamlineResetHistory;
-    s_streamlineResetHistory = false;
+    const bool resetHistory = frameResetHistory;
 
     // Both specularHitDistance and specularMotionVectors are now produced
     // by the wavefront resolve pass via a mirror-direction RayQuery probe
