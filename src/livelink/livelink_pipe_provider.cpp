@@ -530,7 +530,7 @@ bool NamedPipeLiveLinkProvider::Connect() {
   m_impl->pipe = CreateNamedPipeA(
       pipePath.c_str(), PIPE_ACCESS_INBOUND,
       PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT,
-      1, 0, 64 * 1024, 0, nullptr);
+      1, 512 * 1024, 512 * 1024, 0, nullptr);
   if (m_impl->pipe == INVALID_HANDLE_VALUE) {
     m_lastError = "CreateNamedPipeA failed: " +
                   FormatWindowsError(::GetLastError());

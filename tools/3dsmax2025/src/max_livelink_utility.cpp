@@ -5665,6 +5665,62 @@ NodeSnapshot CaptureNodeSnapshot(Interface *ip, INode *node,
   return snapshot;
 }
 
+// Sorts node snapshots so that parent nodes always appear before their
+// children. This is critical for the engine-side ApplyNodeAdded: if a
+// child's NodeAdded delta is processed before its parent's, the parent
+// binding won't exist yet and the child will be orphaned at the root,
+// breaking the scene hierarchy and causing an incomplete sync.
+template <typename TMap>
+std::vector<typename TMap::mapped_type>
+BuildParentFirstNodeOrder(const TMap &nodeMap) {
+  using NodeType = typename TMap::mapped_type;
+
+  // Compute depth for each node by following parentHandle links.
+  // Nodes with parentHandle == 0 (or parent not in the map) are at depth 0.
+  std::unordered_map<ULONG_PTR, size_t> depthCache;
+  std::function<size_t(ULONG_PTR)> computeDepth =
+      [&](ULONG_PTR handle) -> size_t {
+    auto cacheIt = depthCache.find(handle);
+    if (cacheIt != depthCache.end()) {
+      return cacheIt->second;
+    }
+    auto nodeIt = nodeMap.find(handle);
+    if (nodeIt == nodeMap.end()) {
+      depthCache[handle] = 0;
+      return 0;
+    }
+    const ULONG_PTR parent = nodeIt->second.parentHandle;
+    if (parent == 0 || nodeMap.find(parent) == nodeMap.end()) {
+      depthCache[handle] = 0;
+      return 0;
+    }
+    const size_t depth = 1 + computeDepth(parent);
+    depthCache[handle] = depth;
+    return depth;
+  };
+
+  std::vector<std::pair<ULONG_PTR, size_t>> handleDepths;
+  handleDepths.reserve(nodeMap.size());
+  for (const auto &[handle, _] : nodeMap) {
+    handleDepths.emplace_back(handle, computeDepth(handle));
+  }
+
+  std::sort(handleDepths.begin(), handleDepths.end(),
+            [](const auto &a, const auto &b) {
+              return a.second < b.second;
+            });
+
+  std::vector<NodeType> sortedNodes;
+  sortedNodes.reserve(handleDepths.size());
+  for (const auto &[handle, _] : handleDepths) {
+    auto nodeIt = nodeMap.find(handle);
+    if (nodeIt != nodeMap.end()) {
+      sortedNodes.push_back(nodeIt->second);
+    }
+  }
+  return sortedNodes;
+}
+
 void GatherNodeSnapshots(
     Interface *ip, INode *node,
     std::unordered_map<ULONG_PTR, NodeSnapshot> *outState,
@@ -6221,7 +6277,11 @@ bool SendInitialSnapshot(Interface *ip,
   CameraSnapshot cameraSnapshot;
   CaptureActiveCameraSnapshot(ip, &cameraSnapshot);
   std::unordered_map<ULONG_PTR, NodeSnapshot> queuedMeshExports;
-  for (const auto &[_, snapshot] : state) {
+  // Sort nodes parent-first so that child NodeAdded deltas always
+  // arrive after their parent's NodeAdded delta.  This prevents the
+  // engine from orphaning children at the root when unordered_map
+  // iteration produces a child before its parent.
+  for (const NodeSnapshot &snapshot : BuildParentFirstNodeOrder(state)) {
     AppendNodeAddedDelta(documentId, snapshot, &revision, &deltas);
     AppendNodeTransformDelta(documentId, snapshot, &revision, &deltas);
     AppendNodeVisibilityDelta(documentId, snapshot, &revision, &deltas);
@@ -6377,8 +6437,10 @@ bool SendResumeSnapshot(Interface *ip,
     AppendMaterialLibraryDelta(documentId, materialLibraryPayloadUri, &revision,
                                &deltas);
   }
-  for (const auto &[objectId, snapshot] : currentNodesByObjectId) {
-    const auto previousIt = persistedState.nodeStateByObjectId.find(objectId);
+  // Sort nodes parent-first so that child NodeAdded deltas always
+  // arrive after their parent's NodeAdded delta.
+  for (const NodeSnapshot &snapshot : BuildParentFirstNodeOrder(currentState)) {
+    const auto previousIt = persistedState.nodeStateByObjectId.find(snapshot.objectId);
     if (previousIt == persistedState.nodeStateByObjectId.end()) {
       AppendNodeAddedDelta(documentId, snapshot, &revision, &deltas);
       AppendNodeTransformDelta(documentId, snapshot, &revision, &deltas);
@@ -7994,8 +8056,10 @@ private:
                                    &m_nextRevision, &deltas);
       }
 
-      for (const auto &[handle, snapshot] : currentState) {
-        auto previousIt = m_lastNodeState.find(handle);
+      // Sort nodes parent-first so that child NodeAdded deltas always
+      // arrive after their parent's NodeAdded delta.
+      for (const NodeSnapshot &snapshot : BuildParentFirstNodeOrder(currentState)) {
+        auto previousIt = m_lastNodeState.find(snapshot.handle);
         if (previousIt == m_lastNodeState.end()) {
           AppendNodeAddedDelta(m_documentId, snapshot, &m_nextRevision, &deltas);
           AppendNodeTransformDelta(m_documentId, snapshot, &m_nextRevision,
@@ -8030,7 +8094,7 @@ private:
                                     &deltas);
         }
         if (!snapshot.hasMesh && previous.hasMesh) {
-          CancelQueuedMeshPayloadExport_NoLock(handle);
+          CancelQueuedMeshPayloadExport_NoLock(snapshot.handle);
           QueuePayloadRemoval_NoLock(previous.objectId);
         }
         if (snapshot.hasMesh) {

@@ -5,7 +5,7 @@
 namespace {
 
 constexpr DWORD kPipeConnectTimeoutMs = 2000;
-constexpr DWORD kPipeWriteTimeoutMs = 5000;
+constexpr DWORD kPipeWriteTimeoutMs = 30000;
 constexpr DWORD kPipeCancelWaitTimeoutMs = 100;
 
 std::string MakePipePath(const std::string &pipeName) {
