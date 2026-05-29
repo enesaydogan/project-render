@@ -25,8 +25,10 @@
 #include <QPixmap>
 #include <QPushButton>
 #include <QKeySequence>
+#include <QScrollArea>
 #include <QShortcut>
 #include <QSignalBlocker>
+#include <QSlider>
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeWidget>
@@ -60,6 +62,12 @@ enum class LightToolIcon {
     SelectGizmo,
     Remove,
     MoveToSurface,
+    Intensity,
+    Radius,
+    InnerAngle,
+    OuterAngle,
+    AreaWidth,
+    AreaHeight,
 };
 
 QIcon MakeLightToolIcon(LightToolIcon icon)
@@ -190,6 +198,74 @@ QIcon MakeLightToolIcon(LightToolIcon icon)
         painter.drawLine(QPointF(12.0, 8.5), QPointF(9.0, 11.5));
         break;
     }
+    case LightToolIcon::Intensity: {
+        // Half-sun rising over a horizon = "brightness level"
+        painter.setBrush(accent);
+        painter.setPen(accentPen);
+        QPainterPath halfSun;
+        halfSun.moveTo(5.0, 13.0);
+        halfSun.arcTo(QRectF(5.0, 9.0, 8.0, 8.0), 0.0, 180.0);
+        halfSun.closeSubpath();
+        painter.drawPath(halfSun);
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(strokePen);
+        painter.drawLine(QPointF(2.0, 14.0), QPointF(16.0, 14.0));
+        painter.drawLine(QPointF(9.0, 2.0), QPointF(9.0, 5.0));
+        painter.drawLine(QPointF(3.0, 6.5), QPointF(5.0, 8.0));
+        painter.drawLine(QPointF(15.0, 6.5), QPointF(13.0, 8.0));
+        break;
+    }
+    case LightToolIcon::Radius: {
+        // Concentric rings = falloff distance
+        painter.setPen(mutedPen);
+        painter.drawEllipse(QPointF(9.0, 9.0), 6.5, 6.5);
+        painter.setPen(strokePen);
+        painter.drawEllipse(QPointF(9.0, 9.0), 4.0, 4.0);
+        painter.setPen(accentPen);
+        painter.setBrush(accent);
+        painter.drawEllipse(QPointF(9.0, 9.0), 1.4, 1.4);
+        break;
+    }
+    case LightToolIcon::InnerAngle: {
+        painter.setPen(strokePen);
+        painter.drawLine(QPointF(9.0, 3.0), QPointF(7.0, 15.0));
+        painter.drawLine(QPointF(9.0, 3.0), QPointF(11.0, 15.0));
+        painter.setPen(accentPen);
+        painter.drawArc(QRectF(6.5, 13.0, 5.0, 4.0), 0 * 16, 180 * 16);
+        break;
+    }
+    case LightToolIcon::OuterAngle: {
+        painter.setPen(strokePen);
+        painter.drawLine(QPointF(9.0, 3.0), QPointF(3.0, 15.0));
+        painter.drawLine(QPointF(9.0, 3.0), QPointF(15.0, 15.0));
+        painter.setPen(accentPen);
+        painter.drawArc(QRectF(2.5, 13.0, 13.0, 4.0), 0 * 16, 180 * 16);
+        break;
+    }
+    case LightToolIcon::AreaWidth: {
+        painter.setPen(strokePen);
+        painter.drawLine(QPointF(3.0, 4.0), QPointF(3.0, 14.0));
+        painter.drawLine(QPointF(15.0, 4.0), QPointF(15.0, 14.0));
+        painter.setPen(accentPen);
+        painter.drawLine(QPointF(4.5, 9.0), QPointF(13.5, 9.0));
+        painter.drawLine(QPointF(4.5, 9.0), QPointF(6.5, 7.0));
+        painter.drawLine(QPointF(4.5, 9.0), QPointF(6.5, 11.0));
+        painter.drawLine(QPointF(13.5, 9.0), QPointF(11.5, 7.0));
+        painter.drawLine(QPointF(13.5, 9.0), QPointF(11.5, 11.0));
+        break;
+    }
+    case LightToolIcon::AreaHeight: {
+        painter.setPen(strokePen);
+        painter.drawLine(QPointF(4.0, 3.0), QPointF(14.0, 3.0));
+        painter.drawLine(QPointF(4.0, 15.0), QPointF(14.0, 15.0));
+        painter.setPen(accentPen);
+        painter.drawLine(QPointF(9.0, 4.5), QPointF(9.0, 13.5));
+        painter.drawLine(QPointF(9.0, 4.5), QPointF(7.0, 6.5));
+        painter.drawLine(QPointF(9.0, 4.5), QPointF(11.0, 6.5));
+        painter.drawLine(QPointF(9.0, 13.5), QPointF(7.0, 11.5));
+        painter.drawLine(QPointF(9.0, 13.5), QPointF(11.0, 11.5));
+        break;
+    }
     }
 
     return QIcon(pixmap);
@@ -221,6 +297,78 @@ QDoubleSpinBox *CreateDoubleSpinBox(double minValue,
     spinBox->setDecimals(decimals);
     spinBox->setAccelerated(true);
     return spinBox;
+}
+
+// Creates a compact "icon + slider + spinbox" row. The spinbox is the source of
+// truth (range = [minValue, maxValue]); the slider visually maps 0..1000 onto
+// [minValue, sliderMaxValue]. Values outside the slider's range still display
+// correctly in the spinbox but the slider clamps. sliderMaxValue defaults to
+// maxValue when negative.
+QWidget *CreateSliderRow(LightToolIcon icon,
+                         const QString &tooltip,
+                         double minValue,
+                         double maxValue,
+                         double step,
+                         int decimals,
+                         double sliderMaxValue,
+                         QSlider *&outSlider,
+                         QDoubleSpinBox *&outSpin)
+{
+    if (sliderMaxValue <= minValue) {
+        sliderMaxValue = maxValue;
+    }
+
+    auto *row = new QWidget();
+    auto *layout = new QHBoxLayout(row);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(4);
+
+    auto *iconLabel = new QLabel(row);
+    iconLabel->setPixmap(MakeLightToolIcon(icon).pixmap(16, 16));
+    iconLabel->setFixedSize(18, 18);
+    iconLabel->setToolTip(tooltip);
+
+    auto *slider = new QSlider(Qt::Horizontal, row);
+    slider->setRange(0, 1000);
+    slider->setSingleStep(1);
+    slider->setPageStep(50);
+    slider->setToolTip(tooltip);
+
+    auto *spin = CreateDoubleSpinBox(minValue, maxValue, step, decimals);
+    spin->setParent(row);
+    spin->setFixedWidth(78);
+    spin->setToolTip(tooltip);
+    spin->setButtonSymbols(QAbstractSpinBox::NoButtons);
+
+    layout->addWidget(iconLabel);
+    layout->addWidget(slider, 1);
+    layout->addWidget(spin);
+
+    // Slider drives spin: emits valueChanged → spin's own listeners fire.
+    QObject::connect(slider, &QSlider::valueChanged, spin,
+                     [slider, spin, minValue, sliderMaxValue](int pos) {
+        const double frac = double(pos) / 1000.0;
+        const double val = minValue + frac * (sliderMaxValue - minValue);
+        if (std::abs(spin->value() - val) > 1e-6) {
+            spin->setValue(val);
+        }
+        (void)slider;
+    });
+    // Spin drives slider visually (signals blocked to avoid feedback loop).
+    QObject::connect(spin, qOverload<double>(&QDoubleSpinBox::valueChanged), slider,
+                     [slider, minValue, sliderMaxValue](double val) {
+        const double range = sliderMaxValue - minValue;
+        const double frac = (range > 0.0) ? std::clamp((val - minValue) / range, 0.0, 1.0) : 0.0;
+        const int pos = int(std::round(frac * 1000.0));
+        QSignalBlocker b(slider);
+        if (slider->value() != pos) {
+            slider->setValue(pos);
+        }
+    });
+
+    outSlider = slider;
+    outSpin = spin;
+    return row;
 }
 
 QWidget *CreateVec3Editor(QDoubleSpinBox *&x,
@@ -335,7 +483,7 @@ void LightsPanel::createUi()
     toolbarLayout->addWidget(m_placementStatusLabel, 1);
     layout->addWidget(m_toolbar);
 
-    // --- Lights tree (no group box wrapper, the tab is already labeled Lights) ---
+    // --- Lights tree with subtle background tint to set it apart from below ---
     m_lightTree = new QTreeWidget(this);
     m_lightTree->setColumnCount(4);
     m_lightTree->setHeaderLabels({tr("Group / Instance"), tr("On"),
@@ -344,6 +492,9 @@ void LightsPanel::createUi()
     m_lightTree->setAlternatingRowColors(true);
     m_lightTree->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_lightTree->setMinimumHeight(120);
+    m_lightTree->setStyleSheet(QStringLiteral(
+        "QTreeWidget { background-color: #1a1d1f; }"
+        "QTreeWidget::item:alternate { background-color: #1f2225; }"));
     layout->addWidget(m_lightTree, 1);
 
     auto *deleteShortcut = new QShortcut(QKeySequence(Qt::Key_Delete), this);
@@ -351,100 +502,132 @@ void LightsPanel::createUi()
     connect(deleteShortcut, &QShortcut::activated, this,
             [this]() { removeSelectedItems(); });
 
-    // --- Properties section ---
+    // --- Divider between selection list and properties ---
+    auto *divider1 = new QFrame(this);
+    divider1->setFrameShape(QFrame::HLine);
+    divider1->setFrameShadow(QFrame::Sunken);
+    layout->addWidget(divider1);
+
+    // --- Properties section (fixed height; scrollable so its vertical
+    //     footprint stays constant regardless of what is selected) ---
     m_propertiesGroup = new QWidget(this);
     auto *propertiesLayout = new QVBoxLayout(m_propertiesGroup);
     propertiesLayout->setContentsMargins(0, 0, 0, 0);
-    propertiesLayout->setSpacing(6);
+    propertiesLayout->setSpacing(4);
 
+    // Header row: title on the left, the prototype's on/off on the right
+    // (mirrors the instance section, and frees the Type row from clutter).
+    auto *propsHeaderRow = new QHBoxLayout();
+    propsHeaderRow->setContentsMargins(0, 0, 0, 0);
+    propsHeaderRow->setSpacing(6);
     auto *propsHeader = new QLabel(tr("Properties"), m_propertiesGroup);
     propsHeader->setStyleSheet(QStringLiteral("color: #58d0f4; font-weight: bold;"));
-    propertiesLayout->addWidget(propsHeader);
+    m_protoEnabled = new QCheckBox(tr("On"), m_propertiesGroup);
+    m_protoEnabled->setToolTip(tr("Enable / disable this light group"));
+    propsHeaderRow->addWidget(propsHeader);
+    propsHeaderRow->addStretch(1);
+    propsHeaderRow->addWidget(m_protoEnabled);
+    propertiesLayout->addLayout(propsHeaderRow);
 
-    // --- Action row (icon buttons): Add Instance, Copy, Merge, Select, Remove ---
-    auto *actionRow = new QHBoxLayout();
-    actionRow->setContentsMargins(0, 0, 0, 0);
-    actionRow->setSpacing(2);
-    m_addInstanceButton = CreateLightToolButton(m_propertiesGroup,
-        tr("Add Instance — duplicate selected light sharing this group"),
-        LightToolIcon::AddInstance);
-    m_duplicateCopyButton = CreateLightToolButton(m_propertiesGroup,
-        tr("Copy — duplicate selected light as an independent editable copy"),
-        LightToolIcon::Copy);
-    m_mergeCopiesButton = CreateLightToolButton(m_propertiesGroup,
-        tr("Merge Copies — merge compatible copied groups back into this prototype"),
-        LightToolIcon::MergeCopies);
-    m_selectButton = CreateLightToolButton(m_propertiesGroup,
-        tr("Select Gizmo for the selected instance"),
-        LightToolIcon::SelectGizmo);
-    m_removeButton = CreateLightToolButton(m_propertiesGroup,
-        tr("Remove selected (Del)"),
-        LightToolIcon::Remove);
-    actionRow->addWidget(m_addInstanceButton);
-    actionRow->addWidget(m_duplicateCopyButton);
-    actionRow->addWidget(m_mergeCopiesButton);
-    actionRow->addWidget(m_selectButton);
-    actionRow->addWidget(m_removeButton);
-    actionRow->addStretch(1);
-    propertiesLayout->addLayout(actionRow);
+    // A fixed-height scroll area reserves a constant block for the inspector,
+    // so the light list above and the action bar below never jump when the
+    // selection changes. Content scrolls only if it exceeds the reserved space.
+    auto *propsScroll = new QScrollArea(m_propertiesGroup);
+    propsScroll->setWidgetResizable(true);
+    propsScroll->setFrameShape(QFrame::NoFrame);
+    propsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    propsScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    propsScroll->setFixedHeight(400);
+    propertiesLayout->addWidget(propsScroll);
+
+    auto *propsContent = new QWidget(propsScroll);
+    auto *propsContentLayout = new QVBoxLayout(propsContent);
+    propsContentLayout->setContentsMargins(0, 0, 0, 0);
+    propsContentLayout->setSpacing(4);
+
+    m_emptyHint = new QLabel(
+        tr("Select a light from the list above to edit its properties,\n"
+           "or click one of the light-type icons at the top to add a new light."),
+        propsContent);
+    m_emptyHint->setStyleSheet(QStringLiteral("color: #808080; padding: 6px;"));
+    m_emptyHint->setWordWrap(true);
+    m_emptyHint->setAlignment(Qt::AlignCenter);
+    propsContentLayout->addWidget(m_emptyHint);
 
     // --- Prototype shared properties ---
-    m_protoPropsWidget = new QWidget(m_propertiesGroup);
+    m_protoPropsWidget = new QWidget(propsContent);
     auto *protoLayout = new QVBoxLayout(m_protoPropsWidget);
     protoLayout->setContentsMargins(0, 0, 0, 0);
     protoLayout->setSpacing(4);
 
+    // Top form: one short, left-aligned labelled row per field.
     auto *protoForm = new QFormLayout();
     protoForm->setContentsMargins(0, 0, 0, 0);
     protoForm->setSpacing(4);
+    protoForm->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    protoForm->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
+    protoForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
 
     m_typeLabel = new QLabel(tr("None"), m_protoPropsWidget);
     m_typeLabel->setStyleSheet(QStringLiteral("color: #58d0f4; font-weight: bold;"));
     protoForm->addRow(tr("Type"), m_typeLabel);
 
+    m_colorButton = new QPushButton(QString(), m_protoPropsWidget);
+    m_colorButton->setFixedSize(60, 18);
+    m_colorButton->setToolTip(tr("Pick light color"));
+    protoForm->addRow(tr("Color"), m_colorButton);
+
     m_nameEdit = new QLineEdit(m_protoPropsWidget);
     m_nameEdit->setMaxLength(63);
     protoForm->addRow(tr("Name"), m_nameEdit);
 
-    m_protoEnabled = new QCheckBox(tr("Enabled"), m_protoPropsWidget);
-    protoForm->addRow(m_protoEnabled);
-
     m_instCountLabel = new QLabel(tr("1 instance"), m_protoPropsWidget);
+    m_instCountLabel->setStyleSheet(QStringLiteral("color: #aaaaaa;"));
     protoForm->addRow(tr("Instances"), m_instCountLabel);
-
-    m_colorButton = new QPushButton(QString(), m_protoPropsWidget);
-    m_colorButton->setFixedSize(60, 22);
-    m_colorButton->setToolTip(tr("Pick light color"));
-    protoForm->addRow(tr("Color"), m_colorButton);
-
-    m_intensity = CreateDoubleSpinBox(0.0, 1000000.0, 10.0, 2);
-    protoForm->addRow(tr("Intensity"), m_intensity);
-
-    m_radius = CreateDoubleSpinBox(0.0, 10.0, 0.01, 3);
-    protoForm->addRow(tr("Radius"), m_radius);
 
     protoLayout->addLayout(protoForm);
 
-    m_spotGroup = new QGroupBox(tr("Spot"), m_protoPropsWidget);
-    auto *spotForm = new QFormLayout(m_spotGroup);
-    spotForm->setContentsMargins(6, 12, 6, 6);
-    spotForm->setSpacing(4);
-    m_innerAngle = CreateDoubleSpinBox(0.0, 90.0, 0.1, 1);
-    m_outerAngle = CreateDoubleSpinBox(0.0, 90.0, 0.1, 1);
-    spotForm->addRow(tr("Inner Angle"), m_innerAngle);
-    spotForm->addRow(tr("Outer Angle"), m_outerAngle);
+    // Slider rows: intensity + radius are always relevant for any light type.
+    protoLayout->addWidget(CreateSliderRow(
+        LightToolIcon::Intensity, tr("Intensity"),
+        0.0, 1000000.0, 10.0, 2, 5000.0,
+        m_intensitySlider, m_intensity));
+    protoLayout->addWidget(CreateSliderRow(
+        LightToolIcon::Radius, tr("Radius / soft size"),
+        0.0, 10.0, 0.01, 3, 2.0,
+        m_radiusSlider, m_radius));
+
+    // Spot subgroup (plain widget — no group box border).
+    m_spotGroup = new QWidget(m_protoPropsWidget);
+    auto *spotLayout = new QVBoxLayout(m_spotGroup);
+    spotLayout->setContentsMargins(0, 2, 0, 0);
+    spotLayout->setSpacing(4);
+    spotLayout->addWidget(CreateSliderRow(
+        LightToolIcon::InnerAngle, tr("Inner cone angle (degrees)"),
+        0.0, 90.0, 0.5, 1, 90.0,
+        m_innerAngleSlider, m_innerAngle));
+    spotLayout->addWidget(CreateSliderRow(
+        LightToolIcon::OuterAngle, tr("Outer cone angle (degrees)"),
+        0.0, 90.0, 0.5, 1, 90.0,
+        m_outerAngleSlider, m_outerAngle));
     protoLayout->addWidget(m_spotGroup);
 
-    m_areaGroup = new QGroupBox(tr("Area"), m_protoPropsWidget);
-    auto *areaForm = new QFormLayout(m_areaGroup);
-    areaForm->setContentsMargins(6, 12, 6, 6);
-    areaForm->setSpacing(4);
-    m_areaWidth = CreateDoubleSpinBox(0.01, 50.0, 0.1, 2);
-    m_areaHeight = CreateDoubleSpinBox(0.01, 50.0, 0.1, 2);
-    areaForm->addRow(tr("Width"), m_areaWidth);
-    areaForm->addRow(tr("Height"), m_areaHeight);
+    // Area subgroup.
+    m_areaGroup = new QWidget(m_protoPropsWidget);
+    auto *areaLayout = new QVBoxLayout(m_areaGroup);
+    areaLayout->setContentsMargins(0, 2, 0, 0);
+    areaLayout->setSpacing(4);
+    areaLayout->addWidget(CreateSliderRow(
+        LightToolIcon::AreaWidth, tr("Area light width"),
+        0.01, 50.0, 0.05, 2, 10.0,
+        m_areaWidthSlider, m_areaWidth));
+    areaLayout->addWidget(CreateSliderRow(
+        LightToolIcon::AreaHeight, tr("Area light height"),
+        0.01, 50.0, 0.05, 2, 10.0,
+        m_areaHeightSlider, m_areaHeight));
     protoLayout->addWidget(m_areaGroup);
 
+    // IES profile loader.
     m_iesGroup = new QGroupBox(tr("IES Profile"), m_protoPropsWidget);
     auto *iesLayout = new QVBoxLayout(m_iesGroup);
     iesLayout->setContentsMargins(6, 12, 6, 6);
@@ -464,20 +647,25 @@ void LightsPanel::createUi()
     iesLayout->addLayout(iesBtnRow);
     protoLayout->addWidget(m_iesGroup);
 
-    propertiesLayout->addWidget(m_protoPropsWidget);
+    propsContentLayout->addWidget(m_protoPropsWidget);
 
     // --- Instance transform properties ---
-    m_instancePropsWidget = new QWidget(m_propertiesGroup);
+    m_instancePropsWidget = new QWidget(propsContent);
     auto *instLayout = new QVBoxLayout(m_instancePropsWidget);
     instLayout->setContentsMargins(0, 0, 0, 0);
     instLayout->setSpacing(4);
 
+    auto *instHeaderRow = new QHBoxLayout();
+    instHeaderRow->setContentsMargins(0, 0, 0, 0);
+    instHeaderRow->setSpacing(6);
     m_instanceLabel = new QLabel(tr("Instance Transform"), m_instancePropsWidget);
     m_instanceLabel->setStyleSheet(QStringLiteral("color: #58d0f4; font-weight: bold;"));
-    instLayout->addWidget(m_instanceLabel);
-
-    m_instanceEnabled = new QCheckBox(tr("Enabled"), m_instancePropsWidget);
-    instLayout->addWidget(m_instanceEnabled);
+    m_instanceEnabled = new QCheckBox(tr("On"), m_instancePropsWidget);
+    m_instanceEnabled->setToolTip(tr("Enable / disable this instance"));
+    instHeaderRow->addWidget(m_instanceLabel);
+    instHeaderRow->addStretch(1);
+    instHeaderRow->addWidget(m_instanceEnabled);
+    instLayout->addLayout(instHeaderRow);
 
     // Position row with inline "click to move to surface" icon button.
     auto *posHeaderRow = new QHBoxLayout();
@@ -503,9 +691,50 @@ void LightsPanel::createUi()
     instLayout->addWidget(m_directionLabel);
     instLayout->addWidget(m_directionRow);
 
-    propertiesLayout->addWidget(m_instancePropsWidget);
+    propsContentLayout->addWidget(m_instancePropsWidget);
 
-    layout->addWidget(m_propertiesGroup, 2);
+    // Top-align everything inside the scroll area so short content sits at the
+    // top and the spare space falls below it rather than re-centring.
+    propsContentLayout->addStretch(1);
+    propsScroll->setWidget(propsContent);
+
+    // Fixed-height properties block; the tree above (stretch 1) absorbs slack,
+    // pinning this block at a constant distance from the bottom action bar.
+    layout->addWidget(m_propertiesGroup);
+
+    // --- Divider above bottom action toolbar ---
+    auto *divider2 = new QFrame(this);
+    divider2->setFrameShape(QFrame::HLine);
+    divider2->setFrameShadow(QFrame::Sunken);
+    layout->addWidget(divider2);
+
+    // --- Bottom action toolbar (always visible, fixed position) ---
+    m_actionBar = new QWidget(this);
+    auto *actionRow = new QHBoxLayout(m_actionBar);
+    actionRow->setContentsMargins(0, 0, 0, 0);
+    actionRow->setSpacing(2);
+    m_addInstanceButton = CreateLightToolButton(m_actionBar,
+        tr("Add Instance — duplicate selected light sharing this group"),
+        LightToolIcon::AddInstance);
+    m_duplicateCopyButton = CreateLightToolButton(m_actionBar,
+        tr("Copy — duplicate selected light as an independent editable copy"),
+        LightToolIcon::Copy);
+    m_mergeCopiesButton = CreateLightToolButton(m_actionBar,
+        tr("Merge Copies — merge compatible copied groups back into this prototype"),
+        LightToolIcon::MergeCopies);
+    m_selectButton = CreateLightToolButton(m_actionBar,
+        tr("Select Gizmo for the selected instance"),
+        LightToolIcon::SelectGizmo);
+    m_removeButton = CreateLightToolButton(m_actionBar,
+        tr("Remove selected (Del)"),
+        LightToolIcon::Remove);
+    actionRow->addWidget(m_addInstanceButton);
+    actionRow->addWidget(m_duplicateCopyButton);
+    actionRow->addWidget(m_mergeCopiesButton);
+    actionRow->addWidget(m_selectButton);
+    actionRow->addWidget(m_removeButton);
+    actionRow->addStretch(1);
+    layout->addWidget(m_actionBar);
 
     // --- Connections ---
 
@@ -1199,9 +1428,13 @@ void LightsPanel::refreshLights()
     const bool hasProto = (curProtoIdx >= 0 && curProtoIdx < static_cast<int>(protos.size()));
     const bool hasInst = (curInstIdx >= 0 && curInstIdx < static_cast<int>(insts.size()));
 
-    m_propertiesGroup->setEnabled(hasProto || hasInst);
+    // Keep properties container always visible; toggle real content vs the
+    // empty-state hint so the section's vertical footprint stays steady and
+    // the bottom action toolbar doesn't jump around.
+    m_emptyHint->setVisible(!hasProto && !hasInst);
     m_protoPropsWidget->setVisible(hasProto);
     m_instancePropsWidget->setVisible(hasInst);
+    m_protoEnabled->setVisible(hasProto);
     m_addInstanceButton->setEnabled(hasProto);
     m_duplicateCopyButton->setEnabled(hasInst);
     m_mergeCopiesButton->setEnabled(hasProto);

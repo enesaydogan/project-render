@@ -17,6 +17,7 @@ class QCheckBox;
 class QComboBox;
 class QGroupBox;
 class QLineEdit;
+class QSlider;
 class QTimer;
 class QTreeWidget;
 class QTreeWidgetItem;
@@ -51,6 +52,8 @@ private:
     QWidget *m_toolbar = nullptr;
     QTreeWidget *m_lightTree = nullptr;
     QWidget *m_propertiesGroup = nullptr;
+    QWidget *m_actionBar = nullptr;
+    QLabel *m_emptyHint = nullptr;
     QLabel *m_placementStatusLabel = nullptr;
 
     QToolButton *m_addPointButton = nullptr;
@@ -69,15 +72,21 @@ private:
     QColor m_currentColor;
 
     QDoubleSpinBox *m_intensity = nullptr;
+    QSlider *m_intensitySlider = nullptr;
     QDoubleSpinBox *m_radius = nullptr;
+    QSlider *m_radiusSlider = nullptr;
 
-    QGroupBox *m_spotGroup = nullptr;
+    QWidget *m_spotGroup = nullptr;
     QDoubleSpinBox *m_innerAngle = nullptr;
+    QSlider *m_innerAngleSlider = nullptr;
     QDoubleSpinBox *m_outerAngle = nullptr;
+    QSlider *m_outerAngleSlider = nullptr;
 
-    QGroupBox *m_areaGroup = nullptr;
+    QWidget *m_areaGroup = nullptr;
     QDoubleSpinBox *m_areaWidth = nullptr;
+    QSlider *m_areaWidthSlider = nullptr;
     QDoubleSpinBox *m_areaHeight = nullptr;
+    QSlider *m_areaHeightSlider = nullptr;
 
     QGroupBox *m_iesGroup = nullptr;
     QLabel *m_iesLabel = nullptr;
