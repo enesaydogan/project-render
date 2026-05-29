@@ -65,6 +65,7 @@ static ScatterRuntimeStats s_scatterRuntimeStats;
 static size_t s_scatterPickTargetIndex = static_cast<size_t>(-1);
 static LightPlacementMode s_lightPlacementMode = LightPlacementMode::None;
 static LightType s_lightPlacementCreateType = LightType::Omni;
+static int s_lightPlacementCreateIesProfile = -1;
 static int s_lightPlacementMoveInstance = -1;
 static bool s_lightGizmosVisible = true;
 // Import progress & pending results (for async import)
@@ -8260,8 +8261,9 @@ static bool ResolveLightPlacement(float screenX, float screenY,
   return true;
 }
 
-void BeginCreateLightAtClick(LightType type) {
+void BeginCreateLightAtClick(LightType type, int iesProfileIndex) {
   s_lightPlacementCreateType = type;
+  s_lightPlacementCreateIesProfile = iesProfileIndex;
   s_lightPlacementMoveInstance = -1;
   s_lightPlacementMode = LightPlacementMode::Create;
 }
@@ -8291,6 +8293,7 @@ LightPlacementMode GetLightPlacementMode() { return s_lightPlacementMode; }
 
 void CancelLightPlacement() {
   s_lightPlacementMoveInstance = -1;
+  s_lightPlacementCreateIesProfile = -1;
   s_lightPlacementMode = LightPlacementMode::None;
 }
 
@@ -8313,6 +8316,11 @@ bool HandleLightPlacement(float screenX, float screenY, float screenWidth,
       s_lightPlacementMode = LightPlacementMode::None;
       return false;
     }
+    if (s_lightPlacementCreateIesProfile >= 0) {
+      LightPrototype proto = s_lightPrototypes[prototypeIndex];
+      proto.iesProfileIndex = s_lightPlacementCreateIesProfile;
+      UpdateLightPrototype(prototypeIndex, proto);
+    }
     const size_t instanceIndex = s_lightInstances.size() - 1;
     LightInstance inst = s_lightInstances[instanceIndex];
     inst.position[0] = position[0];
@@ -8323,6 +8331,7 @@ bool HandleLightPlacement(float screenX, float screenY, float screenWidth,
     inst.direction[2] = direction[2];
     UpdateLightInstance(instanceIndex, inst);
     SelectLight(static_cast<int>(instanceIndex));
+    s_lightPlacementCreateIesProfile = -1;
     s_lightPlacementMoveInstance = -1;
     s_lightPlacementMode = LightPlacementMode::None;
     return true;
@@ -8608,6 +8617,7 @@ void ResetScene() {
   s_flattenedLights.clear();
   s_lightFlattenMapping.clear();
   s_lightPlacementMoveInstance = -1;
+  s_lightPlacementCreateIesProfile = -1;
   s_lightPlacementMode = LightPlacementMode::None;
   s_iesProfiles.clear();
   s_selectedLightIdx = -1;

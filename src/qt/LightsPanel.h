@@ -11,6 +11,7 @@ struct LightInstance;
 class QLabel;
 class QListWidget;
 class QPushButton;
+class QToolButton;
 class QDoubleSpinBox;
 class QCheckBox;
 class QComboBox;
@@ -35,29 +36,29 @@ private:
     bool hasPropertyEditorFocus() const;
     uint64_t lightListSignature() const;
     void removeSelectedItems();
+    void beginCreateForType(uint32_t lightType);
 
-    // Returns the currently selected instance index, or -1
     int selectedInstanceIndex() const;
-    // Returns the prototype index for the selected tree item, or -1
     int selectedPrototypeIndex() const;
 
     bool m_syncing = false;
     uint64_t m_lastLightListSignature = 0;
     int m_lastInspectorProtoIndex = -2;
     int m_lastInspectorInstIndex = -2;
+    int m_armedCreateType = -1;
 
     QLabel *m_loadNotice = nullptr;
-    QGroupBox *m_listGroup = nullptr;
+    QWidget *m_toolbar = nullptr;
     QTreeWidget *m_lightTree = nullptr;
-    QGroupBox *m_propertiesGroup = nullptr;
+    QWidget *m_propertiesGroup = nullptr;
+    QLabel *m_placementStatusLabel = nullptr;
 
-    QPushButton *m_addPointButton = nullptr;
-    QPushButton *m_addSpotButton = nullptr;
-    QPushButton *m_addRectButton = nullptr;
-    QPushButton *m_addDiskButton = nullptr;
-    QPushButton *m_addIESButton = nullptr;
+    QToolButton *m_addPointButton = nullptr;
+    QToolButton *m_addSpotButton = nullptr;
+    QToolButton *m_addRectButton = nullptr;
+    QToolButton *m_addDiskButton = nullptr;
+    QToolButton *m_addIESButton = nullptr;
 
-    // Prototype property widgets
     QLabel *m_typeLabel = nullptr;
     QWidget *m_protoPropsWidget = nullptr;
     QLineEdit *m_nameEdit = nullptr;
@@ -83,7 +84,6 @@ private:
     QPushButton *m_loadIESButton = nullptr;
     QPushButton *m_clearIESButton = nullptr;
 
-    // Instance transform widgets
     QWidget *m_instancePropsWidget = nullptr;
     QLabel *m_instanceLabel = nullptr;
     QCheckBox *m_instanceEnabled = nullptr;
@@ -98,15 +98,12 @@ private:
     QDoubleSpinBox *m_dirY = nullptr;
     QDoubleSpinBox *m_dirZ = nullptr;
 
-    QPushButton *m_selectButton = nullptr;
-    QPushButton *m_removeButton = nullptr;
-    QPushButton *m_addInstanceButton = nullptr;
-    QPushButton *m_duplicateCopyButton = nullptr;
-    QPushButton *m_mergeCopiesButton = nullptr;
-    QPushButton *m_moveToSurfaceButton = nullptr;
-    QComboBox *m_placeTypeCombo = nullptr;
-    QPushButton *m_createAtClickButton = nullptr;
-    QLabel *m_placementStatusLabel = nullptr;
+    QToolButton *m_moveToSurfaceButton = nullptr;
+    QToolButton *m_selectButton = nullptr;
+    QToolButton *m_removeButton = nullptr;
+    QToolButton *m_addInstanceButton = nullptr;
+    QToolButton *m_duplicateCopyButton = nullptr;
+    QToolButton *m_mergeCopiesButton = nullptr;
 
     QTimer *m_refreshTimer = nullptr;
 };

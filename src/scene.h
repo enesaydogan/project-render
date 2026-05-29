@@ -311,7 +311,7 @@ void SelectLights(const std::vector<size_t> &instanceIndices);
 void ToggleLightSelection(size_t instanceIndex);
 
 // Viewport light placement.
-void BeginCreateLightAtClick(LightType type);
+void BeginCreateLightAtClick(LightType type, int iesProfileIndex = -1);
 void BeginMoveLightToSurface(int instanceIndex);
 void BeginMoveSelectedLightToSurface();
 bool IsLightPlacementActive();
