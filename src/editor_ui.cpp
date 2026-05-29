@@ -3370,9 +3370,12 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
           ImGui::TextDisabled("(?)");
           if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip(
-                "Trace a mirror-direction RayQuery on glossy primary\n"
-                "surfaces to give DLSS-RR accurate reflection guidance.\n"
-                "Disable if you see boiling on reflective surfaces.");
+                "Off by default. Traces a mirror-direction RayQuery on\n"
+                "near-mirror surfaces (roughness <= 0.10) to give DLSS-RR\n"
+                "spec hit distance + spec mvec guidance. On path-traced\n"
+                "scenes the per-pixel guidance picks up stochastic noise\n"
+                "that RR reads as shifting geometry, producing visible\n"
+                "boiling. Only enable for scenes with mirror geometry.");
           }
 
           bool drrEnabled = DxrRenderer::GetDrrEnabled();

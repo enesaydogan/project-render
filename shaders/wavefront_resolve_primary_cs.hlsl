@@ -1495,21 +1495,20 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         motion = ComputeWavefrontSurfaceMotion(hitPos, currScreen);
 
         // DLSS-RR specular probe: trace a single mirror-direction ray from
-        // the primary surface to find the reflected point. Gated on
-        //   (a) the runtime feature flag (UI toggle),
+        // the primary surface to find the reflected point. Off by default
+        // (see s_dlssSpecularProbeEnabled in dxr_renderer.cpp) because in
+        // practice the per-pixel guidance values inherit too much
+        // stochastic noise from the path tracer and RR reads that as
+        // shifting geometry, producing whole-frame boiling. When the user
+        // does opt in we gate aggressively:
+        //   (a) the runtime feature flag,
         //   (b) non-negligible specular albedo, and
-        //   (c) sufficiently glossy surfaces (roughness <= 0.35).
-        // The probe direction uses the *un-jittered* camera ray (rebuilt
-        // from the pixel centre via BuildCameraPrimaryDirection) instead
-        // of the actual jittered ray that hit this pixel — otherwise the
-        // mirror direction drifts a fraction of a degree per frame from
-        // the Halton jitter, the probe hits slightly different points on
-        // the reflected surface each frame, and the resulting spec-mvec
-        // / spec-hit-distance values jitter too. RR sees that as new
-        // geometry per frame and produces visible boiling. Centre-pixel
-        // direction is stable frame-to-frame for a static camera.
+        //   (c) roughness <= 0.10 — only true mirror-like surfaces
+        //       (polished metal, glass, water). Above that the GGX lobe
+        //       is wide enough that mirror-direction guidance doesn't
+        //       match what was actually shaded.
         if (DxrFeatureEnabled(DXR_FEATURE_DLSS_SPEC_PROBE) &&
-            roughness <= 0.35 && any(rrSpecularAlbedo > 1.0e-4)) {
+            roughness <= 0.10 && any(rrSpecularAlbedo > 1.0e-4)) {
             const float2 uvCentre =
                 (float2(pixel) + 0.5) /
                 float2(max(outputWidth, 1u), max(outputHeight, 1u));
@@ -1974,14 +1973,13 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                 EnvBRDFApprox2(guideF0, guideRoughness * guideRoughness,
                                guideNdotV);
 
-            // DLSS-RR specular probe on the guide surface — same approach
-            // as the primary-surface probe above, gated on guideRoughness
-            // for the same boiling-on-rough-surfaces reason. Guide rays
-            // are already un-jittered (BuildPrimaryCenterDirection in
-            // wavefront_primary_raygen.hlsl) so we can use guideDir
-            // directly without recomputing.
+            // DLSS-RR specular probe on the guide surface — gated on
+            // guideRoughness <= 0.10 (same tight cutoff as the primary
+            // branch above). Guide rays are already un-jittered
+            // (BuildPrimaryCenterDirection in wavefront_primary_raygen),
+            // so we can use guideDir directly without recomputing.
             if (DxrFeatureEnabled(DXR_FEATURE_DLSS_SPEC_PROBE) &&
-                guideRoughness <= 0.35 &&
+                guideRoughness <= 0.10 &&
                 any(rrSpecularAlbedo > 1.0e-4)) {
                 float3 guideMirror = reflect(guideDir, guideNormal);
                 float guideDirLenSq = dot(guideMirror, guideMirror);

@@ -425,11 +425,12 @@ static UINT s_drrLastReportHeight = 0;
 // Spec-probe runtime toggle. The DLSS-RR specular probe (mirror-direction
 // RayQuery in wavefront_resolve_primary_cs.hlsl) populates
 // kBufferTypeSpecularHitDistance / kBufferTypeSpecularMotionVectors for
-// glossy surfaces. On scenes dominated by stable mirror-like geometry it
-// improves reflection AA; on heavily textured glossy surfaces it can
-// introduce subtle boiling because the probe direction inherits the
-// camera ray's sub-pixel jitter. Exposed via the UI so users can A/B test.
-static bool s_dlssSpecularProbeEnabled = true;
+// glossy surfaces. Off by default because in practice it introduces
+// visible boiling across the whole render on path-traced scenes — the
+// guidance values inherit per-frame stochastic variation from the path
+// tracer that DLSS-RR's temporal accumulator interprets as new geometry.
+// Users on scenes with dedicated mirror geometry can opt-in via the UI.
+static bool s_dlssSpecularProbeEnabled = false;
 
 // Tile-based panorama export constants (0 = no tiling)
 static UINT s_exportFullWidth = 0;

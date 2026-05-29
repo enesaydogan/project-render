@@ -229,10 +229,14 @@ void RenderSettingsPanel::createUi()
     m_renderSizeLabel->setWordWrap(true);
     m_dlssSpecProbe = new QCheckBox(tr("RR Specular Probe"), dlssGroup);
     m_dlssSpecProbe->setToolTip(
-        tr("Trace a mirror-direction RayQuery on glossy primary surfaces "
-           "to give DLSS-RR accurate specular-hit-distance and "
-           "specular-motion-vector guidance. Disable if you see boiling "
-           "on reflective surfaces."));
+        tr("Off by default. When on, traces a mirror-direction RayQuery "
+           "on near-mirror primary surfaces (roughness <= 0.10) to give "
+           "DLSS-RR specular-hit-distance and specular-motion-vector "
+           "guidance. On path-traced scenes the per-pixel guidance "
+           "values inherit stochastic noise from the path tracer and RR "
+           "interprets it as shifting geometry, producing whole-frame "
+           "boiling. Only enable if your scene has dedicated mirror or "
+           "polished-metal geometry and you can tolerate the trade-off."));
     m_drrEnabled = new QCheckBox(tr("Dynamic Resolution (DRR)"), dlssGroup);
     m_drrEnabled->setToolTip(
         tr("Vary the internal DLSS-RR render resolution per frame to hold "
