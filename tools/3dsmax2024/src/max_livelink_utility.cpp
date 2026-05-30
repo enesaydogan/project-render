@@ -4452,6 +4452,14 @@ bool GetTriObjectForNode(Interface *ip, INode *node, TriObject **outTriObject,
     return false;
   }
 
+  // Bare splines/shapes report CanConvertToType(TRIOBJ) == TRUE, and a closed
+  // spline tessellates into a capped face. Filter them out here so all mesh
+  // extraction paths (snapshot, payload, material-slot scan) skip shapes
+  // unless an Extrude/Sweep/Lathe modifier has promoted them to a GEOMOBJECT.
+  if (!NodeCanPotentiallyProduceMesh(ip, node)) {
+    return false;
+  }
+
   ObjectState objectState = node->EvalWorldState(ip->GetTime());
   if (!objectState.obj ||
       !objectState.obj->CanConvertToType(Class_ID(TRIOBJ_CLASS_ID, 0))) {
@@ -4555,17 +4563,32 @@ bool NodeCanPotentiallyProduceMesh(Interface *ip, INode *node) {
     return false;
   }
 
-  // Use the evaluated (post-modifier) object so that splines with
-  // Extrude/Sweep/Lathe modifiers are recognized as geometry, while
-  // bare splines/shapes (even renderable ones) are excluded.
-  ObjectState objectState = node->EvalWorldState(ip->GetTime());
-  if (!objectState.obj) {
+  Object *objectRef = node->GetObjectRef();
+  if (!objectRef) {
+    return false;
+  }
+  Object *baseObject = objectRef->FindBaseObject();
+  if (!baseObject) {
     return false;
   }
 
-  const SClass_ID superClass = objectState.obj->SuperClassID();
-  if (superClass == GEOMOBJECT_CLASS_ID) {
+  const SClass_ID baseSuperClass = baseObject->SuperClassID();
+
+  // Real geometry (TriObject, PolyObject, EditableMesh, primitives, etc.)
+  // is always a candidate.
+  if (baseSuperClass == GEOMOBJECT_CLASS_ID) {
     return true;
+  }
+
+  // Splines/shapes: a bare ShapeObject is tessellated by Max into a capped
+  // face when closed, which is never wanted in livelink. Include the shape
+  // only when the modifier stack is non-empty — assume the user added an
+  // Extrude/Sweep/Lathe/Bevel that turns it into real geometry.
+  // INode::GetObjectRef() returns the base object directly when no modifier
+  // is present, and an IDerivedObject wrapper when at least one is, so a
+  // pointer mismatch is a structural signal that modifiers exist.
+  if (baseSuperClass == SHAPE_CLASS_ID) {
+    return objectRef != baseObject;
   }
 
   return false;
