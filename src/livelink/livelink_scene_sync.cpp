@@ -2061,21 +2061,6 @@ bool LiveLinkSceneSync::ApplyLightChanged(const SceneDeltaBatch &batch,
   const LightInstance &inst = insts[instIdx];
   if (inst.prototypeIndex >= protos.size()) return false;
 
-  LightPrototype proto = protos[inst.prototypeIndex];
-  proto.type = static_cast<uint32_t>(ParseEngineLightType(payload->lightType));
-  {
-    const float maxComp = (std::max)({payload->color[0], payload->color[1], payload->color[2], 0.001f});
-    proto.color[0] = payload->color[0] / maxComp;
-    proto.color[1] = payload->color[1] / maxComp;
-    proto.color[2] = payload->color[2] / maxComp;
-    proto.intensity = maxComp * payload->intensity;
-  }
-  proto.radius = payload->radius;
-  proto.innerConeAngle = cosf(DirectX::XMConvertToRadians(payload->innerConeDegrees));
-  proto.outerConeAngle = cosf(DirectX::XMConvertToRadians(payload->outerConeDegrees));
-  proto.areaExtents[0] = payload->areaExtents[0];
-  proto.areaExtents[1] = payload->areaExtents[1];
-
   LightInstance newInst = inst;
   newInst.position[0] = payload->position[0];
   newInst.position[1] = payload->position[1];
@@ -2088,11 +2073,43 @@ bool LiveLinkSceneSync::ApplyLightChanged(const SceneDeltaBatch &batch,
     Normalize3(newInst.direction, fallbackDirection);
   }
 
-  if (!Scene::UpdateLightPrototype(inst.prototypeIndex, proto)) {
-    LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
-                  "Failed to apply light prototype change");
-    return false;
+  // For instanced lights, only update the prototype if this is the
+  // first instance (no existing instance with the same prototypeId).
+  // Subsequent instances only need their per-instance position/direction.
+  const bool isInstanced = !payload->lightPrototypeId.empty();
+  bool prototypeAlreadyHasInstances = false;
+  if (isInstanced) {
+    for (size_t i = 0; i < insts.size(); ++i) {
+      if (i != instIdx && insts[i].prototypeIndex == inst.prototypeIndex) {
+        prototypeAlreadyHasInstances = true;
+        break;
+      }
+    }
   }
+
+  if (!isInstanced || !prototypeAlreadyHasInstances) {
+    LightPrototype proto = protos[inst.prototypeIndex];
+    proto.type = static_cast<uint32_t>(ParseEngineLightType(payload->lightType));
+    {
+      const float maxComp = (std::max)({payload->color[0], payload->color[1], payload->color[2], 0.001f});
+      proto.color[0] = payload->color[0] / maxComp;
+      proto.color[1] = payload->color[1] / maxComp;
+      proto.color[2] = payload->color[2] / maxComp;
+      proto.intensity = maxComp * payload->intensity;
+    }
+    proto.radius = payload->radius;
+    proto.innerConeAngle = cosf(DirectX::XMConvertToRadians(payload->innerConeDegrees));
+    proto.outerConeAngle = cosf(DirectX::XMConvertToRadians(payload->outerConeDegrees));
+    proto.areaExtents[0] = payload->areaExtents[0];
+    proto.areaExtents[1] = payload->areaExtents[1];
+
+    if (!Scene::UpdateLightPrototype(inst.prototypeIndex, proto)) {
+      LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
+                    "Failed to apply light prototype change");
+      return false;
+    }
+  }
+
   if (!Scene::UpdateLightInstance(instIdx, newInst)) {
     LogApplyIssue("Warning", batch.providerName, batch.sessionId, &delta,
                   "Failed to apply light instance change");
@@ -2379,13 +2396,30 @@ bool LiveLinkSceneSync::EnsureNodeBinding(const SceneDeltaBatch &batch,
 bool LiveLinkSceneSync::EnsureLightBinding(const SceneDeltaBatch &batch,
                                            const SceneDelta &delta,
                                            ObjectBinding **outBinding) {
+  const LightChangedPayload *payload = FindPayload<LightChangedPayload>(delta);
+  const bool hasPrototypeId = payload && !payload->lightPrototypeId.empty();
+
   ObjectBinding *binding = FindBinding(delta.target);
   if (!binding) {
-    // Create a new prototype + instance pair
-    Scene::AddLightPrototype(LightType::Omni);
-    const size_t instIdx = Scene::GetLightInstances().size() - 1;
-    binding = &BindObject(delta.target, batch.sessionId,
-                          EngineHandleKind::SceneLight, instIdx);
+    if (hasPrototypeId) {
+      // Instanced light: find or create the shared prototype, then add
+      // a new instance referencing it.
+      int protoIdx = Scene::FindLightPrototypeByStableId(payload->lightPrototypeId);
+      if (protoIdx < 0) {
+        const size_t newProtoIdx = Scene::AddLightPrototype(LightType::Omni);
+        Scene::SetLightPrototypeStableId(newProtoIdx, payload->lightPrototypeId);
+        protoIdx = static_cast<int>(newProtoIdx);
+      }
+      const size_t instIdx = Scene::AddLightInstance(static_cast<size_t>(protoIdx));
+      binding = &BindObject(delta.target, batch.sessionId,
+                            EngineHandleKind::SceneLight, instIdx);
+    } else {
+      // Non-instanced light: create a new prototype + instance pair.
+      Scene::AddLightPrototype(LightType::Omni);
+      const size_t instIdx = Scene::GetLightInstances().size() - 1;
+      binding = &BindObject(delta.target, batch.sessionId,
+                            EngineHandleKind::SceneLight, instIdx);
+    }
   }
 
   if (binding->handleKind != EngineHandleKind::SceneLight) {
@@ -2396,8 +2430,18 @@ bool LiveLinkSceneSync::EnsureLightBinding(const SceneDeltaBatch &batch,
 
   if (binding->handleIndex == kInvalidHandle ||
       binding->handleIndex >= Scene::GetLightInstances().size()) {
-    Scene::AddLightPrototype(LightType::Omni);
-    binding->handleIndex = Scene::GetLightInstances().size() - 1;
+    if (hasPrototypeId) {
+      int protoIdx = Scene::FindLightPrototypeByStableId(payload->lightPrototypeId);
+      if (protoIdx < 0) {
+        const size_t newProtoIdx = Scene::AddLightPrototype(LightType::Omni);
+        Scene::SetLightPrototypeStableId(newProtoIdx, payload->lightPrototypeId);
+        protoIdx = static_cast<int>(newProtoIdx);
+      }
+      binding->handleIndex = Scene::AddLightInstance(static_cast<size_t>(protoIdx));
+    } else {
+      Scene::AddLightPrototype(LightType::Omni);
+      binding->handleIndex = Scene::GetLightInstances().size() - 1;
+    }
   }
 
   if (binding->sessionId != batch.sessionId) {

@@ -240,6 +240,7 @@ struct LightChangedPayload {
   float innerConeDegrees = 30.0f;
   float outerConeDegrees = 45.0f;
   std::array<float, 2> areaExtents = {1.0f, 1.0f};
+  std::string lightPrototypeId;  // shared stable ID for instanced lights
 };
 
 struct CameraChangedPayload {

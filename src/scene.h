@@ -296,6 +296,8 @@ void RemoveLightPrototype(size_t index);
 size_t DuplicateLightInstanceAsInstance(size_t instanceIndex);
 size_t DuplicateLightInstanceAsCopy(size_t instanceIndex);
 int MergeCompatibleLightPrototypes(size_t targetPrototypeIndex);
+int FindLightPrototypeByStableId(const std::string &stableId);
+bool SetLightPrototypeStableId(size_t index, const std::string &stableId);
 
 // Instance operations
 size_t AddLightInstance(size_t prototypeIndex);

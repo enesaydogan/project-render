@@ -1333,6 +1333,7 @@ struct LightSnapshot {
   float innerConeDegrees = 30.0f;
   float outerConeDegrees = 45.0f;
   std::array<float, 2> areaExtents = {1.0f, 1.0f};
+  std::string lightPrototypeId;  // shared base-object GUID for instanced lights
 };
 
 struct NativeMeshPayloadHeader {
@@ -1863,7 +1864,7 @@ json SerializeMaterialSnapshot(const MaterialSnapshot &snapshot) {
 }
 
 json SerializeLightSnapshot(const LightSnapshot &snapshot) {
-  return json{{"oi", snapshot.objectId},
+  json result = json{{"oi", snapshot.objectId},
               {"n", snapshot.name},
               {"lt", snapshot.lightType},
               {"p", snapshot.position},
@@ -1874,6 +1875,10 @@ json SerializeLightSnapshot(const LightSnapshot &snapshot) {
               {"ic", snapshot.innerConeDegrees},
               {"oc", snapshot.outerConeDegrees},
               {"ae", snapshot.areaExtents}};
+  if (!snapshot.lightPrototypeId.empty()) {
+    result["lpi"] = snapshot.lightPrototypeId;
+  }
+  return result;
 }
 
 json SerializeCameraSnapshot(const CameraSnapshot &snapshot) {
@@ -2026,6 +2031,7 @@ bool DeserializeLightSnapshot(const json &value, LightSnapshot *outSnapshot) {
   snapshot.innerConeDegrees = value.value("ic", 30.0f);
   snapshot.outerConeDegrees = value.value("oc", 45.0f);
   if (value.contains("ae")) snapshot.areaExtents = value["ae"].get<std::array<float, 2>>();
+  snapshot.lightPrototypeId = value.value("lpi", std::string());
   if (snapshot.objectId.empty()) {
     return false;
   }
@@ -4415,6 +4421,12 @@ bool CaptureLightSnapshot(Interface *ip, INode *node, LightSnapshot *outSnapshot
     }
   }
 #endif
+  // Assign a shared prototype ID derived from the base object so that
+  // instanced lights (multiple nodes referencing the same light object)
+  // share a single light prototype on the engine side.
+  if (baseObject) {
+    snapshot.lightPrototypeId = GetOrCreateSharedObjectGuid(baseObject);
+  }
   *outSnapshot = snapshot;
   return true;
 }
@@ -4543,19 +4555,16 @@ bool NodeCanPotentiallyProduceMesh(Interface *ip, INode *node) {
     return false;
   }
 
-  Object *objectRef = node->GetObjectRef();
-  if (!objectRef) {
+  // Use the evaluated (post-modifier) object so that splines with
+  // Extrude/Sweep/Lathe modifiers are recognized as geometry, while
+  // bare splines/shapes (even renderable ones) are excluded.
+  ObjectState objectState = node->EvalWorldState(ip->GetTime());
+  if (!objectState.obj) {
     return false;
   }
 
-  Object *baseObject = objectRef->FindBaseObject();
-  Object *typeObject = baseObject ? baseObject : objectRef;
-  if (!typeObject) {
-    return false;
-  }
-
-  const SClass_ID superClass = typeObject->SuperClassID();
-  if (superClass == GEOMOBJECT_CLASS_ID || superClass == SHAPE_CLASS_ID) {
+  const SClass_ID superClass = objectState.obj->SuperClassID();
+  if (superClass == GEOMOBJECT_CLASS_ID) {
     return true;
   }
 
@@ -6146,19 +6155,24 @@ void AppendLightDelta(const std::string &documentId,
     return;
   }
 
+  json payload = json{{"lightType", snapshot.lightType},
+                       {"intensity", snapshot.intensity},
+                       {"color", snapshot.color},
+                       {"position", snapshot.position},
+                       {"direction", snapshot.direction},
+                       {"radius", snapshot.radius},
+                       {"innerConeDegrees", snapshot.innerConeDegrees},
+                       {"outerConeDegrees", snapshot.outerConeDegrees},
+                       {"areaExtents", snapshot.areaExtents}};
+  if (!snapshot.lightPrototypeId.empty()) {
+    payload["lightPrototypeId"] = snapshot.lightPrototypeId;
+  }
+
   outDeltas->push_back(json{{"kind", "LightChanged"},
                             {"target", MakeObjectId(documentId, snapshot.objectId, "Light")},
                             {"revision", (*revision)++},
                             {"debugLabel", snapshot.name},
-                            {"payload", json{{"lightType", snapshot.lightType},
-                                              {"intensity", snapshot.intensity},
-                                              {"color", snapshot.color},
-                                              {"position", snapshot.position},
-                                              {"direction", snapshot.direction},
-                                              {"radius", snapshot.radius},
-                                              {"innerConeDegrees", snapshot.innerConeDegrees},
-                                              {"outerConeDegrees", snapshot.outerConeDegrees},
-                                              {"areaExtents", snapshot.areaExtents}}}});
+                            {"payload", std::move(payload)}});
 }
 
 void AppendLightRemovedDelta(const std::string &documentId,

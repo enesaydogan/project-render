@@ -5240,6 +5240,26 @@ void RemoveLightPrototype(size_t index) {
   NotifySceneChanged();
 }
 
+int FindLightPrototypeByStableId(const std::string &stableId) {
+  if (stableId.empty()) return -1;
+  for (size_t i = 0; i < s_lightPrototypes.size(); ++i) {
+    if (s_lightPrototypes[i].stableId[0] != '\0' &&
+        stableId == s_lightPrototypes[i].stableId) {
+      return static_cast<int>(i);
+    }
+  }
+  return -1;
+}
+
+bool SetLightPrototypeStableId(size_t index, const std::string &stableId) {
+  if (index >= s_lightPrototypes.size() || stableId.empty()) return false;
+  const size_t maxLen = sizeof(LightPrototype::stableId) - 1;
+  const size_t copyLen = (std::min)(stableId.size(), maxLen);
+  std::memcpy(s_lightPrototypes[index].stableId, stableId.c_str(), copyLen);
+  s_lightPrototypes[index].stableId[copyLen] = '\0';
+  return true;
+}
+
 size_t DuplicateLightInstanceAsInstance(size_t instanceIndex) {
   if (instanceIndex >= s_lightInstances.size()) {
     return static_cast<size_t>(-1);

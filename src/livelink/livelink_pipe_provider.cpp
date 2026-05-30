@@ -379,6 +379,7 @@ bool ParsePayload(const SceneDeltaKind kind, const json &payloadJson,
     if (payloadJson.contains("areaExtents")) {
       FillFloatArray(payloadJson.at("areaExtents"), &payload.areaExtents);
     }
+    payload.lightPrototypeId = payloadJson.value("lightPrototypeId", "");
     *outPayload = std::move(payload);
     return true;
   }
