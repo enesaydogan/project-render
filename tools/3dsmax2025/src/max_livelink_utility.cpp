@@ -4452,14 +4452,6 @@ bool GetTriObjectForNode(Interface *ip, INode *node, TriObject **outTriObject,
     return false;
   }
 
-  // Bare splines/shapes report CanConvertToType(TRIOBJ) == TRUE, and a closed
-  // spline tessellates into a capped face. Filter them out here so all mesh
-  // extraction paths (snapshot, payload, material-slot scan) skip shapes
-  // unless an Extrude/Sweep/Lathe modifier has promoted them to a GEOMOBJECT.
-  if (!NodeCanPotentiallyProduceMesh(ip, node)) {
-    return false;
-  }
-
   ObjectState objectState = node->EvalWorldState(ip->GetTime());
   if (!objectState.obj ||
       !objectState.obj->CanConvertToType(Class_ID(TRIOBJ_CLASS_ID, 0))) {
@@ -4481,6 +4473,49 @@ bool GetTriObjectForNode(Interface *ip, INode *node, TriObject **outTriObject,
 bool GetNodeMeshAccess(Interface *ip, INode *node, NodeMeshAccess *outAccess) {
   if (!ip || !node || !outAccess) {
     return false;
+  }
+
+  // Single gate for every mesh-extraction path (snapshot, payload writer,
+  // material-slot scan). Bare non-renderable splines are stopped here, so
+  // Max never gets a chance to tessellate them into a capped face.
+  if (!NodeCanPotentiallyProduceMesh(ip, node)) {
+    return false;
+  }
+
+  // For a bare renderable shape (Enable In Renderer / In Viewport with a
+  // Radial or Rectangular profile) we must go through INode::GetRenderMesh
+  // so the captured geometry is the tube/rectangular profile the user sees,
+  // not the capped face that ConvertToType(TRIOBJ) would produce.
+  Object *objectRef = node->GetObjectRef();
+  Object *baseObject = objectRef ? objectRef->FindBaseObject() : nullptr;
+  const bool isBareShape = baseObject != nullptr &&
+                           baseObject->SuperClassID() == SHAPE_CLASS_ID &&
+                           objectRef == baseObject;
+  if (isBareShape) {
+    ObjectState objectState = node->EvalWorldState(ip->GetTime());
+    // ShapeObject derives from GeomObject, where GetRenderMesh is declared.
+    GeomObject *geomObj =
+        objectState.obj && objectState.obj->SuperClassID() == SHAPE_CLASS_ID
+            ? static_cast<GeomObject *>(objectState.obj)
+            : nullptr;
+    if (!geomObj) {
+      return false;
+    }
+    LiveLinkNullView view;
+    BOOL needDelete = FALSE;
+    Mesh *renderMesh =
+        geomObj->GetRenderMesh(ip->GetTime(), node, view, needDelete);
+    if (!renderMesh || renderMesh->getNumFaces() == 0) {
+      if (renderMesh && needDelete) {
+        delete renderMesh;
+      }
+      return false;
+    }
+    *outAccess = NodeMeshAccess{};
+    outAccess->mesh = renderMesh;
+    outAccess->deleteMesh = (needDelete != FALSE);
+    outAccess->fromRenderMesh = true;
+    return true;
   }
 
   NodeMeshAccess access;
@@ -4582,13 +4617,19 @@ bool NodeCanPotentiallyProduceMesh(Interface *ip, INode *node) {
 
   // Splines/shapes: a bare ShapeObject is tessellated by Max into a capped
   // face when closed, which is never wanted in livelink. Include the shape
-  // only when the modifier stack is non-empty — assume the user added an
-  // Extrude/Sweep/Lathe/Bevel that turns it into real geometry.
-  // INode::GetObjectRef() returns the base object directly when no modifier
-  // is present, and an IDerivedObject wrapper when at least one is, so a
-  // pointer mismatch is a structural signal that modifiers exist.
+  // when either:
+  //   - the modifier stack is non-empty (assume Extrude/Sweep/Lathe/Bevel
+  //     turning it into real geometry — INode::GetObjectRef() returns the
+  //     base directly when no modifier is present and an IDerivedObject
+  //     wrapper otherwise, so a pointer mismatch signals modifiers exist), or
+  //   - the shape itself is renderable (Enable In Renderer / In Viewport),
+  //     so Max's render-mesh path can generate the tube/rectangular profile.
   if (baseSuperClass == SHAPE_CLASS_ID) {
-    return objectRef != baseObject;
+    if (objectRef != baseObject) {
+      return true;
+    }
+    ShapeObject *shape = static_cast<ShapeObject *>(baseObject);
+    return shape->GetRenderable() || shape->GetDispRenderMesh();
   }
 
   return false;
