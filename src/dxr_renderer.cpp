@@ -6379,6 +6379,39 @@ void BuildAccelerationStructures(
 static UINT BuildReGIRLightBounds(const std::vector<Light> &lights);
 void MarkReGIRDirty();
 
+// The light buffer GPUVA is bound via SetComputeRootShaderResourceView in the
+// wavefront/legacy paths. D3D12 does not track lifetime through root SRVs, so
+// releasing s_lightBuffer while a prior frame's dispatch still references it
+// causes the driver to read freed memory and the device to drop. Drain the
+// direct queue before tearing the resource down. Only used on the realloc
+// branch so steady-state map/memcpy updates stay cheap.
+static void DrainRendererDirectQueueForLightBufferRealloc() {
+  if (!s_commandQueue || !s_fence || !s_fenceValues || !s_frameIndexPtr ||
+      !s_fenceEvent) {
+    return;
+  }
+  const UINT64 signalValue = s_fenceValues[*s_frameIndexPtr];
+  HRESULT hr = s_commandQueue->Signal(s_fence, signalValue);
+  if (FAILED(hr)) {
+    fprintf(stderr,
+            "DxrRenderer: Signal before light-buffer realloc failed: 0x%08x\n",
+            (unsigned)hr);
+    return;
+  }
+  s_fenceValues[*s_frameIndexPtr]++;
+  if (s_fence->GetCompletedValue() >= signalValue) {
+    return;
+  }
+  if (FAILED(s_fence->SetEventOnCompletion(signalValue, s_fenceEvent))) {
+    return;
+  }
+  if (WaitForSingleObject(s_fenceEvent, 5000) == WAIT_TIMEOUT) {
+    fprintf(stderr,
+            "DxrRenderer: Timeout draining direct queue before light-buffer "
+            "realloc (5s). GPU might have hung.\n");
+  }
+}
+
 void UpdateLights(const std::vector<Light> &lights, bool resetAccumulation) {
   WaitForAsyncRestirIdleForLightUpdates();
 
@@ -6417,6 +6450,7 @@ void UpdateLights(const std::vector<Light> &lights, bool resetAccumulation) {
 
   // Recreate buffer if size changed
   if (!s_lightBuffer || s_lightBuffer->GetDesc().Width < bufferSize) {
+    DrainRendererDirectQueueForLightBufferRealloc();
     s_lightBuffer.Reset();
     D3D12_HEAP_PROPERTIES heapProps = {D3D12_HEAP_TYPE_UPLOAD,
                                        D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
