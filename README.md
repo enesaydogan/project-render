@@ -2,23 +2,21 @@
 
 # I created this renderer for my use. I dont know any coding. 99% of the code is from Agentic coding. It does the job for me. And features i put in based on projects i made. If projects need spherical panoram i add spherical panorama. Its free and always be free. I hope you like it. Good Luck! 
 
-# project-render 0.4.5 - High-End ArchViz Real-Time Engine
+# project-render 0.5.0 - LET THERE BE LIGHT
 
 `project-render` is a real-time rendering engine for high-fidelity Architectural Visualization (ArchViz). It uses DirectX 12, DXR ray tracing, NVIDIA Streamline, and optional final-frame denoisers for physically based lighting and export workflows.
 
 ---
 
-## What's New in 0.4.5
+## What's New in 0.5.0
 
-- **Major VRAM and memory work**: Added GPU-side BC texture compression, texture usage detection, a detailed VRAM Breakdown tool, and additional renderer memory reductions aimed at fitting larger arch-viz scenes on smaller GPUs.
-- **Tile-based high-resolution export**: Added tile rendering for large panorama and perspective stills so 4K+ exports can be rendered in smaller GPU-memory slices, then stitched into the final image.
-- **Guide-aware tiled denoising**: Tiled exports now stitch HDR beauty plus OIDN albedo/normal guide buffers and run a final full-frame CPU OIDN pass for cleaner output without per-tile denoise seams.
-- **Panorama and perspective export upgrades**: Added spherical 360 render export, vertical tilt correction, custom resolution controls, aspect-ratio locking, and corrected perspective tile projection.
-- **More reliable final render stopping**: Export progress now honors the configured noise stop directly while still stopping at Max SPP if that comes first.
-- **Export UX polish**: Added clearer tile progress, denoising progress feedback, tile-render warnings, automatic higher SPP defaults for tiled rendering, and a cleaner batch-render UI.
-- **Scene and import reliability**: Improved scene save/load performance, first-interaction stability after loading, drag-and-drop import placement, SketchUp texture channel handling, and close/save reminder behavior.
-- **Editor and material workflow improvements**: Added UV rotation controls, live material/light color preview, mirror tools, Clay Render options, material thumbnail fixes after compression, and several Qt polish passes.
-- **Denoiser robustness**: Improved OIDN handling for NaN/Inf and emissive edge cases, plus safer export denoise behavior for tiled and non-tiled renders.
+- **LET THERE BE LİGHT**: A dedicated lighting release centered on scalable local-light sampling, IES profiles, instanced fixtures, and faster light authoring.
+- **ReGIR local-light sampling**: Added a GPU ReGIR path for point, spot, area, IES, and emissive-proxy lights, with runtime fallback handling and a `regir debug` panel for live renderer state.
+- **Real IES workflow**: IES profiles are parsed, saved with scenes, bound on the GPU, and exposed through the Lights panel as authored light-profile data instead of a placeholder light type.
+- **Grouped and instanced lights**: Lights now support prototype/instance style editing, multi-selection, Shift-drag duplication, grouped fixture workflows, and LiveLink instance updates.
+- **Viewport light authoring**: Added click-to-create and click-to-move light placement using viewport surface picks, plus better light gizmos, box selection, and multi-type selection behavior.
+- **Emissive mesh participation**: ReGIR can sample emissive mesh proxies through real triangle-backed emissive data instead of rough sphere/point approximations.
+- **DLSS-RR stability work**: Disabled unsupported DLSS-RR dynamic input resolution and tightened dense motion/AOV inputs to reduce shimmer, checker flashes, and stale reconstruction guidance.
 
 ---
 
@@ -177,7 +175,7 @@ Check `tools/3dsmax2025/README.md` or `tools/archicad28/README.md` for plugin in
 
 ### Troubleshooting
 - **Grey viewport**: Ensure a sky model is selected or an HDRI is loaded in the Environment panel.
-- **Non-English file paths**: 0.4.5 keeps the UTF-8 path handling improvements for glTF/GLB and scene I/O. If an importer still fails, try moving the asset to a short ASCII-only path and report the original path.
+- **Non-English file paths**: 0.5.0 keeps the UTF-8 path handling improvements for glTF/GLB and scene I/O. If an importer still fails, try moving the asset to a short ASCII-only path and report the original path.
 - **OptiX stub log**: Reconfigure and rebuild the exact executable you launch with `-DUSE_OPTIX_DENOISER=ON`.
 - **OptiX runtime failure**: Verify CUDA Toolkit installation, NVIDIA driver support, and that the D3D12 adapter matches the CUDA device.
 - **Deleting objects with DXR enabled**: The renderer forces an acceleration-structure rebuild. If you see crashes, verify build geometry flags.

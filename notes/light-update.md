@@ -1,4 +1,4 @@
-# Project Render 0.5.0: LET THERE BE LIGHT
+# Project Render 0.5.0: LET THERE BE LİGHT
 
 ## Summary
 - 0.5.0 becomes a dedicated lighting release: ReGIR, real IES, grouped light instancing, better light gizmos, and fast viewport light placement.
@@ -120,7 +120,7 @@
 - Release work:
   - Bump version to `0.5.0` in CMake, app resources, README, and release notes.
   - Add `RELEASE_NOTES_0.5.0.md`.
-  - Release title: **LET THERE BE LIGHT**.
+  - Release title: **LET THERE BE LİGHT**.
   - Verify Release executable and installer package.
 
 ## Assumptions
