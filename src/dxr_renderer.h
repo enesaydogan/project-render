@@ -272,15 +272,11 @@ float GetRrJitterScale();
 
 // DLSS-RR Dynamic Resolution (DRR).
 //
-// When enabled the per-frame internal render rect floats inside the
-// DLSS-RR mode's [minRender*, maxRender*] range. A simple frame-time
-// feedback controller drops resolution when the GPU misses the target and
-// raises it when there's headroom. DLSS-RR handles the intra-range size
-// changes natively (no history reset).
-//
-// Toggling Enable triggers a buffer reallocation (CreateRayTracingPipeline)
-// because the render-resolution buffers must size at max-render dims when
-// DRR is on, optimal-render dims when off.
+// Streamline DLSS-RR does not support dynamic input resolution in the SDK
+// version used by this renderer; changing input size reinitializes the
+// denoiser. The API remains so old UI/control paths can query the disabled
+// state, and future SDK support has one contained integration point.
+bool IsDrrSupported();
 void SetDrrEnabled(bool enabled);
 bool GetDrrEnabled();
 // Target frame time the controller aims for, in milliseconds. Lower

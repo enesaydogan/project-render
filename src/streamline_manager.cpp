@@ -556,12 +556,9 @@ StreamlineManager::GetRecommendedRenderSize(uint32_t outputWidth,
     out.renderHeight = m_cachedDlssdOptimal.optimalRenderHeight;
   }
 
-  // DRR override (DLSS-RR only — SR's DLSS plugin doesn't expose the same
-  // min/max range fields). If the caller pushed a per-frame target via
-  // SetDrrTargetRenderSize, clamp it into the current mode's [min, max]
-  // and return that instead of the optimal. This is how DLSS-RR's
-  // Dynamic Resolution support is consumed: render at any size in-range
-  // per frame; RR handles the resize without history reset.
+  // Dynamic input resolution is disabled for DLSS-RR in this SDK. Keep the
+  // clamp path behind m_drrEnabled so future SDK support has one place to
+  // re-enable it after validating Streamline's RR behavior.
   if (m_drrEnabled && m_mode == Mode::DLSS_RayReconstruction &&
       m_drrTargetWidth > 0 && m_drrTargetHeight > 0) {
     const uint32_t minW = m_cachedDlssdOptimal.renderWidthMin;

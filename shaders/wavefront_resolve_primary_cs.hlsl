@@ -89,6 +89,13 @@ inline float WavefrontEvaluateReservoirTarget(WavefrontHitRecord record,
     return length(max(lightSample.radiance * directWeight, 0.0));
 }
 
+// Primary g_motionVectors channel has no documented invalid sentinel in
+// Streamline — feeding kInvalidMvec=(-1e6,-1e6) makes RR sample the history
+// buffer thousands of pixels off-screen, which the reconstruction net turns
+// into stable structured noise. See the spec-channel comment further down
+// in this file for the matching diagnosis. Return zero motion on no-prev /
+// behind-camera / off-screen reprojection so RR's normal disocclusion logic
+// owns the "history not usable" decision instead of getting fed garbage.
 inline float2 ComputeWavefrontSkyMotion(float3 rayDir, float2 currScreen)
 {
     float2 motion = float2(0.0, 0.0);
@@ -115,7 +122,7 @@ inline float2 ComputeWavefrontSkyMotion(float3 rayDir, float2 currScreen)
             float2 screenMin = float2(0.0, 0.0);
             float2 screenMax = float2(outputWidth, outputHeight);
             motion = (any(prevScreen < screenMin) || any(prevScreen > screenMax))
-                         ? kInvalidMvec
+                         ? float2(0.0, 0.0)
                          : (prevScreen - currScreen);
         }
     }
@@ -124,7 +131,7 @@ inline float2 ComputeWavefrontSkyMotion(float3 rayDir, float2 currScreen)
 
 inline float2 ComputeWavefrontSurfaceMotion(float3 hitPos, float2 currScreen)
 {
-    float2 motion = kInvalidMvec;
+    float2 motion = float2(0.0, 0.0);
     if (prevValid > 0.5 &&
         projectionMode < CAMERA_PROJECTION_SPHERICAL_360 - 0.5) {
         float3 forwardPrev;
@@ -149,7 +156,7 @@ inline float2 ComputeWavefrontSurfaceMotion(float3 hitPos, float2 currScreen)
             float2 screenMin = float2(0.0, 0.0);
             float2 screenMax = float2(outputWidth, outputHeight);
             motion = (any(prevScreen < screenMin) || any(prevScreen > screenMax))
-                         ? kInvalidMvec
+                         ? float2(0.0, 0.0)
                          : (prevScreen - currScreen);
         }
     }
@@ -1451,12 +1458,11 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     // cameraViewToWorld in DLSSDOptions); reflected-point screen motion
     // feeds kBufferTypeSpecularMotionVectors.
     //
-    // Sentinels here mean "no real probe data". The write site below
-    // substitutes the primary linearDepth / motion when these stay sentinel
-    // so RR sees "the reflection is the surface itself" — Streamline's
-    // spec channels have NO documented invalid sentinel, and feeding raw
-    // 0 / kInvalidMvec was producing checkerboard fireflies on flat
-    // surfaces (RR reading the spec mvec as a literal -1e6 px motion).
+    // Sentinels here mean "no real probe data" internally only. The write
+    // site must not store kInvalidMvec into the Streamline specular-motion
+    // buffer: that buffer is dense, R16G16_FLOAT, and has no documented
+    // invalid sentinel. Feeding RR a literal -1e6 px motion produces the
+    // dark/bright checker flashes seen on otherwise stable surfaces.
     float rrSpecHitDistance = 0.0;
     float2 rrSpecMotion = kInvalidMvec;
     uint pathQueueCapacity = 0u;
@@ -2089,19 +2095,16 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     g_oidnAlbedoGuideOut[pixel] = oidnAlbedoGuide;
     g_oidnNormalRoughnessGuideOut[pixel] = oidnNormalGuide;
     g_specularAlbedo[pixel] = float4(rrSpecularAlbedo, 1.0);
-    // DLSS-RR specular guidance writes. The pre-1b55db1 behavior gated
-    // on `any(rrSpecularAlbedo > 0.0)` (any non-zero specular term) and
-    // wrote {linearDepth, primary motion} for spec pixels, {farZ,
-    // kInvalidMvec} for non-spec pixels. That worked. The 1b55db1
-    // rework switched to a mirror-probe RayQuery with {0, kInvalidMvec}
-    // fallbacks, which RR's spec channels read literally and produced
-    // the macroblock fireflies seen in the bug video.
+    // DLSS-RR specular guidance writes. Keep this output dense: specular
+    // motion is tagged as an RG16/RG32 motion-vector field, not a sparse
+    // field with an invalid sentinel. The mirror probe can improve true
+    // mirror pixels, but every fallback path still stores finite motion.
     //
     // Restore the proven gating, with the probe result preferred when it
     // actually hit:
     //   probe hit  → {probe distance, reflected-point motion}
     //   spec pixel → {primary linearDepth, primary motion}
-    //   else       → {farZ, kInvalidMvec}      (non-reflective fallback)
+    //   else       → {farZ, primary motion}   (dense non-reflective fallback)
     const bool hasSpecProbe = (rrSpecHitDistance > 0.0);
     const bool isSpecPixel = any(rrSpecularAlbedo > 0.0);
     if (hasSpecProbe) {
@@ -2112,7 +2115,7 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
         g_specularMotionVectors[pixel] = motion;
     } else {
         g_specHitDistance[pixel] = farZ;
-        g_specularMotionVectors[pixel] = kInvalidMvec;
+        g_specularMotionVectors[pixel] = motion;
     }
     g_transmissionAccumulation[pixel] = float4(0.0, 0.0, 0.0, 0.0);
     g_transmissionVariance[pixel] = 0.0;

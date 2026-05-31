@@ -239,9 +239,9 @@ void RenderSettingsPanel::createUi()
            "polished-metal geometry and you can tolerate the trade-off."));
     m_drrEnabled = new QCheckBox(tr("Dynamic Resolution (DRR)"), dlssGroup);
     m_drrEnabled->setToolTip(
-        tr("Vary the internal DLSS-RR render resolution per frame to hold "
-           "the target frame time. DLSS-RR handles in-range size changes "
-           "without temporal history reset."));
+        tr("Disabled: Streamline DLSS-RR does not support dynamic input "
+           "resolution in this SDK. Changing render size reinitializes "
+           "the RR denoiser."));
     m_drrTargetFps = CreateSliderControl(30.0, 240.0, 1.0, 0);
     m_drrStatusLabel = new QLabel(dlssGroup);
     m_drrStatusLabel->setWordWrap(true);
@@ -599,7 +599,8 @@ void RenderSettingsPanel::syncFromRenderer()
     if (!IsWidgetBeingEdited(m_drrEnabled)) {
         m_drrEnabled->setChecked(DxrRenderer::GetDrrEnabled());
     }
-    m_drrEnabled->setEnabled(rrActive);
+    const bool drrSupported = DxrRenderer::IsDrrSupported();
+    m_drrEnabled->setEnabled(rrActive && drrSupported);
 
     if (!m_drrTargetFps->isInteracting()) {
         const float ms = DxrRenderer::GetDrrTargetFrameTimeMs();
@@ -607,9 +608,10 @@ void RenderSettingsPanel::syncFromRenderer()
                                        : 60.0;
         m_drrTargetFps->setValue(fps);
     }
-    m_drrTargetFps->setEnabled(rrActive && DxrRenderer::GetDrrEnabled());
+    m_drrTargetFps->setEnabled(rrActive && drrSupported &&
+                               DxrRenderer::GetDrrEnabled());
 
-    if (rrActive && DxrRenderer::GetDrrEnabled()) {
+    if (rrActive && drrSupported && DxrRenderer::GetDrrEnabled()) {
         uint32_t curW = 0, curH = 0;
         DxrRenderer::GetDrrCurrentRenderSize(curW, curH);
         const auto range = DxrRenderer::GetDrrRange();
@@ -621,9 +623,13 @@ void RenderSettingsPanel::syncFromRenderer()
                 .arg(range.minRenderHeight)
                 .arg(range.maxRenderWidth)
                 .arg(range.maxRenderHeight));
+    } else if (rrActive && !drrSupported) {
+        m_drrStatusLabel->setText(
+            tr("(disabled - Streamline DLSS-RR reinitializes when input "
+               "resolution changes)"));
     } else {
         m_drrStatusLabel->setText(
-            rrActive ? tr("(disabled — render size locked to optimal)")
+            rrActive ? tr("(disabled - render size locked to optimal)")
                      : tr("(requires DLSS Ray Reconstruction)"));
     }
 

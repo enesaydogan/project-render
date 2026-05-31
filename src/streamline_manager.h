@@ -121,11 +121,15 @@ public:
 
   // DRR (Dynamic Resolution) controls.
   //
-  // When DRR is enabled the caller picks a per-frame render rect inside
-  // [minRender*, maxRender*] via SetDrrTargetRenderSize() and DLSS-RR
-  // handles the resize natively (no history reset). When disabled the
-  // recommended size is locked to the optimal value for the current mode.
-  void SetDrrEnabled(bool enabled) { m_drrEnabled = enabled; }
+  // Streamline DLSS-RR does not support Dynamic Resolution Scaling in the
+  // SDK used here; changing input size reinitializes the denoiser. Enable
+  // requests are ignored until a future SDK explicitly supports it.
+  void SetDrrEnabled(bool enabled) {
+    (void)enabled;
+    m_drrEnabled = false;
+    m_drrTargetWidth = 0;
+    m_drrTargetHeight = 0;
+  }
   bool IsDrrEnabled() const { return m_drrEnabled; }
 
   // Override the per-frame render rect. Clamped to the current mode's
@@ -247,11 +251,8 @@ private:
   Mode m_mode = Mode::DLSS_RayReconstruction;
   Quality m_quality = Quality::Balanced;
 
-  // DRR state. When m_drrEnabled is true the renderer is expected to
-  // (a) allocate render-resolution buffers at max-range size, and
-  // (b) call SetDrrTargetRenderSize each frame with the desired per-frame
-  // render rect. The override is clamped against the current mode's
-  // [min, max] in GetRecommendedRenderSize.
+  // DRR state. Kept for future SDK support, but disabled because current
+  // Streamline DLSS-RR reinitializes when the input resolution changes.
   bool m_drrEnabled = false;
   uint32_t m_drrTargetWidth = 0;
   uint32_t m_drrTargetHeight = 0;

@@ -404,14 +404,13 @@ static UINT s_presentHeight = 720;
 static UINT s_readyPresentWidth = 0;
 static UINT s_readyPresentHeight = 0;
 
-// DRR per-frame feedback state. The controller targets a frame-time
-// budget and scales the per-frame render rect inside the DLSS-RR
-// [min, max] range. Updated each RenderFrame when DRR is enabled and
-// DLSS-RR is the active mode. Step sizes are deliberately small and
-// the deadband is wide to keep the render rect from oscillating —
-// every size change introduces a brief reprojection discontinuity in
-// the DLSS-RR temporal accumulator that shows as boiling, so we want
-// the controller to settle as quickly as possible and then stay put.
+// Streamline DLSS-RR in this SDK does not support Dynamic Resolution
+// Scaling; input-size changes reinitialize the RR denoiser. Keep the old
+// controller state behind this support gate so future SDK support can be
+// integrated deliberately instead of accidentally exposed.
+static bool s_dlssRrDrrSupported = false;
+
+// DRR per-frame feedback state. Support-gated by s_dlssRrDrrSupported.
 static float s_drrTargetFrameTimeMs = 1000.0f / 60.0f; // default: 60 fps
 // Exponential moving average of frame time, sampled every frame. The
 // adjustment itself only fires on history-reset edges (see
@@ -4073,6 +4072,9 @@ static void EnsureCurrentFeatureResources() {
 // so the next reconvergence is bounded. Multiple sessions of sustained
 // over/under budget naturally ratchet the resolution toward equilibrium.
 static void UpdateDynamicResolutionFeedback() {
+  if (!s_dlssRrDrrSupported) {
+    return;
+  }
   if (!s_streamline || !s_streamline->IsDrrEnabled() ||
       !s_streamline->IsInitialized() || !s_streamline->IsDeviceSet()) {
     return;
@@ -7073,10 +7075,27 @@ void SetDrrEnabled(bool enabled) {
   if (!s_streamline) {
     return;
   }
+  if (enabled && !s_dlssRrDrrSupported) {
+    if (g_verboseRenderLogs) {
+      fprintf(stderr,
+              "DxrRenderer: DLSS-RR DRR is disabled because Streamline "
+              "Ray Reconstruction does not support dynamic input "
+              "resolution in this SDK.\n");
+    }
+    enabled = false;
+  }
   if (s_streamline->IsDrrEnabled() == enabled) {
     return;
   }
   s_streamline->SetDrrEnabled(enabled);
+  if (!enabled) {
+    s_streamline->SetDrrTargetRenderSize(0, 0);
+    s_drrSmoothedFrameTimeMs = 0.0f;
+    s_drrLastReportWidth = 0;
+    s_drrLastReportHeight = 0;
+    s_drrPresetIndex = 0;
+    s_drrPrevResetHistory = false;
+  }
   // Buffer allocation differs between DRR off (optimal render dims) and
   // DRR on (max render dims) — request a pipeline rebuild via the
   // existing recreate mechanism so the next frame allocates at the right
@@ -7087,8 +7106,10 @@ void SetDrrEnabled(bool enabled) {
 }
 
 bool GetDrrEnabled() {
-  return s_streamline && s_streamline->IsDrrEnabled();
+  return s_dlssRrDrrSupported && s_streamline && s_streamline->IsDrrEnabled();
 }
+
+bool IsDrrSupported() { return s_dlssRrDrrSupported; }
 
 void SetDrrTargetFrameTimeMs(float ms) {
   if (ms < 1.0f) {
@@ -7120,7 +7141,8 @@ bool GetDlssSpecularProbeEnabled() { return s_dlssSpecularProbeEnabled; }
 
 DrrRange GetDrrRange() {
   DrrRange out{};
-  if (!s_streamline || !s_streamline->IsInitialized() ||
+  if (!s_dlssRrDrrSupported || !s_streamline ||
+      !s_streamline->IsInitialized() ||
       !s_streamline->IsDeviceSet()) {
     return out;
   }

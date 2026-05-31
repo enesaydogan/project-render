@@ -68,7 +68,10 @@ inline bool ShouldSkipWavefrontAdaptiveSample(uint2 pixel, uint frame)
     const uint accumFrame = (uint)accumulationCount;
     const bool debugViewActive = (debugMode > 0.0) ||
                                  (debugVisualizationMode == 1.0);
-    if (debugViewActive || accumFrame <= kAdaptiveStartSpp ||
+    const bool streamlineActive = dlssEnabled > 0.5;
+    // Streamline consumes dense color, depth, motion, and AOV inputs every frame.
+    // Skipping bootstrap pixels leaves stale guidance for DLSS/RR reconstruction.
+    if (debugViewActive || streamlineActive || accumFrame <= kAdaptiveStartSpp ||
         useAdaptiveSampling <= 0.5) {
         return false;
     }

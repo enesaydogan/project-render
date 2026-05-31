@@ -3355,12 +3355,8 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
                              "shimmer (especially near screen borders) but "
                              "may reduce DLSS-RR reconstruction/AA quality.");
 
-          // DLSS-RR Dynamic Resolution (DRR). The per-frame render rect
-          // floats inside [minRender, maxRender] driven by a frame-time
-          // controller so we can hold a target FPS even when the scene
-          // load varies. Toggling DRR triggers a buffer reallocation
-          // (buffers must be sized at maxRender for DRR vs optimal-render
-          // when DRR is off).
+          // DLSS-RR Dynamic Resolution (DRR). Disabled with this Streamline
+          // SDK because RR reinitializes when the input resolution changes.
           bool specProbeEnabled = DxrRenderer::GetDlssSpecularProbeEnabled();
           if (ImGui::Checkbox("RR Spec Probe", &specProbeEnabled)) {
             DxrRenderer::SetDlssSpecularProbeEnabled(specProbeEnabled);
@@ -3378,12 +3374,19 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
                 "boiling. Only enable for scenes with mirror geometry.");
           }
 
+          const bool drrSupported = DxrRenderer::IsDrrSupported();
           bool drrEnabled = DxrRenderer::GetDrrEnabled();
+          ImGui::BeginDisabled(!drrSupported);
           if (ImGui::Checkbox("Dynamic Resolution (DRR)", &drrEnabled)) {
             DxrRenderer::SetDrrEnabled(drrEnabled);
             uiChanged = true;
           }
-          if (drrEnabled) {
+          ImGui::EndDisabled();
+          if (!drrSupported) {
+            ImGui::TextWrapped(
+                "DRR disabled: Streamline DLSS-RR reinitializes when the "
+                "input resolution changes.");
+          } else if (drrEnabled) {
             float targetMs = DxrRenderer::GetDrrTargetFrameTimeMs();
             const float targetFps = (targetMs > 0.0f) ? (1000.0f / targetMs)
                                                       : 60.0f;
