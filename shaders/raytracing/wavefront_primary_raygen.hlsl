@@ -79,13 +79,15 @@ void WavefrontPrimaryRayGen()
     record.packedTransmission = payload.packedTransmission;
     record.packedSpecular = payload.packedSpecular;
     record.packedState = state.packedState;
-    record.reserved = WavefrontPackMaterialSortKey(
-        currentRayType,
-        WavefrontClassifyMaterialBinFromSurface(payload.surface,
-                                                payload.packedIorType,
-                                                payload.packedColor0,
-                                                payload.packedColor1),
-        0u);
+    record.reserved = WavefrontApplyParallaxSelfShadowToSortKey(
+        WavefrontPackMaterialSortKey(
+            currentRayType,
+            WavefrontClassifyMaterialBinFromSurface(payload.surface,
+                                                    payload.packedIorType,
+                                                    payload.packedColor0,
+                                                    payload.packedColor1),
+            0u),
+        payload.packedParallaxSelfShadow / 255.0);
     record.surface = payload.surface;
     record.guideOrigin = guideOrigin;
     record.guidePackedState = guideState;

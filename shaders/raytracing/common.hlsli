@@ -754,6 +754,7 @@ struct RayPayload
     uint packedTransmission; // 3x8 UNORM transmission color
     uint packedSpecular;  // 3x8 UNORM specular color
     float4 surface;       // full precision: roughness/metallic/transmission/translucency
+    uint packedParallaxSelfShadow; // 8-bit sun self-shadow for wavefront direct lighting
 };
 
 inline uint PackNormalOctahedron(float3 n)
@@ -928,6 +929,23 @@ inline uint WavefrontPackMaterialSortKey(uint rayType,
 {
     return ((rayType & 0xFFu) << 16) | ((materialBin & 0xFFu) << 8) |
            (flags & 0xFFu);
+}
+
+inline uint PackWavefrontParallaxSelfShadow(float selfShadow)
+{
+    return (uint)round(saturate(selfShadow) * 255.0);
+}
+
+inline uint WavefrontApplyParallaxSelfShadowToSortKey(uint sortKey,
+                                                      float selfShadow)
+{
+    return (sortKey & 0x00FFFFFFu) |
+           (PackWavefrontParallaxSelfShadow(selfShadow) << 24);
+}
+
+inline float WavefrontGetParallaxSelfShadowFromSortKey(uint sortKey)
+{
+    return ((sortKey >> 24) & 0xFFu) / 255.0;
 }
 
 inline uint WavefrontGetMaterialBinFromSortKey(uint sortKey)
@@ -1488,6 +1506,7 @@ inline RayPayload InitRayPayload(uint rayType)
         PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
     p.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
     p.surface = float4(1.0, 0.0, 0.0, 0.0);
+    p.packedParallaxSelfShadow = PackWavefrontParallaxSelfShadow(1.0);
     return p;
 }
 

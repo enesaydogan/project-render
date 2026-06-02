@@ -4644,7 +4644,7 @@ void CreateRayTracingPipeline(UINT width, UINT height) {
   hitSub.pDesc = &hitGroupDesc;
 
   constexpr UINT kRayPayloadSizeInBytes =
-      sizeof(float) + 8u * sizeof(uint32_t) + 4u * sizeof(float);
+      sizeof(float) + 9u * sizeof(uint32_t) + 4u * sizeof(float);
   fprintf(stderr, "DxrRenderer: MaxPayloadSizeInBytes=%u\n",
           kRayPayloadSizeInBytes);
   shaderConfig.MaxPayloadSizeInBytes = kRayPayloadSizeInBytes;

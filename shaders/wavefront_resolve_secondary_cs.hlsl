@@ -379,7 +379,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                                  ComputeWavefrontDirectLightingWeightForView(
                                      record, normal, -rayDir,
                                      explicitSunSample.direction) *
-                                 explicitSunSample.radiance;
+                                 explicitSunSample.radiance *
+                                 WavefrontGetParallaxSelfShadowFromSortKey(
+                                     record.reserved);
         if (any(sunShadowWeight > 1.0e-4) &&
             KeepWavefrontSecondaryShadow(secondaryShadowKeepProbability,
                                          rng, sunShadowWeight)) {

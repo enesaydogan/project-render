@@ -4,6 +4,7 @@
 /src-example/
 /build/_deps/*
 /build/Debug/*
+/debug_video_frames/*
 
 # Ignore all build directories (VS, CMake, Archicad, Max)
 build/

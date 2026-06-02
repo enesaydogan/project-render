@@ -64,6 +64,7 @@ void WavefrontShadowRayGen()
     shadowPayload.packedIorType = PackPayloadIorType(1.0, RAY_TYPE_SHADOW, false, 1.0);
     shadowPayload.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
     shadowPayload.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
+    shadowPayload.packedParallaxSelfShadow = PackWavefrontParallaxSelfShadow(1.0);
 
     RayDesc shadowRay;
     shadowRay.Origin = task.origin;

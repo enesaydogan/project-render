@@ -86,4 +86,5 @@ void Miss(inout RayPayload payload)
     payload.packedIorType = PackPayloadIorType(1.0, rayType, false, 1.0);
     payload.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
     payload.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
+    payload.packedParallaxSelfShadow = PackWavefrontParallaxSelfShadow(1.0);
 }

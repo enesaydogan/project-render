@@ -1005,17 +1005,18 @@ float3 GetParallaxHeightNormal(float2 uv, float3 worldNormal,
     uint width;
     uint height;
     textures[parallaxTexIndex].GetDimensions(width, height);
-    float2 texel = 1.0 / float2(max(width, 1u), max(height, 1u));
+    float2 texel = max(4.0 / float2(max(width, 1u), max(height, 1u)),
+                       0.0015.xx);
     float hL = SampleParallaxHeight(parallaxTexIndex, uv - float2(texel.x, 0.0));
     float hR = SampleParallaxHeight(parallaxTexIndex, uv + float2(texel.x, 0.0));
     float hD = SampleParallaxHeight(parallaxTexIndex, uv - float2(0.0, texel.y));
     float hU = SampleParallaxHeight(parallaxTexIndex, uv + float2(0.0, texel.y));
     float dHdU = clamp((hR - hL) * 0.5 * saturate(depthScale) /
                            max(texel.x, 1.0e-5),
-                       -8.0, 8.0);
+                       -4.0, 4.0);
     float dHdV = clamp((hU - hD) * 0.5 * saturate(depthScale) /
                            max(texel.y, 1.0e-5),
-                       -8.0, 8.0);
+                       -4.0, 4.0);
 
     float3 N = normalize(worldNormal);
     float3 T, B;
@@ -1056,6 +1057,8 @@ float EvaluateParallaxSelfShadow(float2 uv, float3 lightWorld,
         stepUv *= 0.05 / stepUvLen;
     }
 
+    float shadowStrength = saturate(depthScale * 12.0);
+    float heightBias = lerp(0.045, 0.015, shadowStrength);
     float occlusion = 0.0;
     [loop]
     for (int i = 1; i <= 24; ++i) {
@@ -1066,11 +1069,12 @@ float EvaluateParallaxSelfShadow(float2 uv, float3 lightWorld,
         float sampledDepth =
             1.0 - SampleParallaxHeight(parallaxTexIndex, uv + stepUv * (float)i);
         occlusion = max(occlusion,
-                        saturate((traceDepth - sampledDepth - 0.015) * 24.0));
+                        saturate((traceDepth - sampledDepth - heightBias) *
+                                 20.0));
     }
 
     float grazingFade = smoothstep(0.04, 0.25, lightTs.z);
-    return lerp(1.0, 1.0 - occlusion, grazingFade);
+    return lerp(1.0, 1.0 - occlusion * shadowStrength, grazingFade);
 }
 
 float WindowBoxAtlasAlpha(int alphaTexIndex, float2 uv, float fallbackAlpha)

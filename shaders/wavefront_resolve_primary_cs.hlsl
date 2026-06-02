@@ -86,6 +86,11 @@ inline float WavefrontEvaluateReservoirTarget(WavefrontHitRecord record,
 {
     float3 directWeight = ComputeWavefrontDirectLightingWeight(
         record, worldNormal, hitPos, lightSample.direction);
+    if (WavefrontGetLightSampleType(lightSample.packedLightIndex) ==
+        WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL) {
+        directWeight *= WavefrontGetParallaxSelfShadowFromSortKey(
+            record.reserved);
+    }
     return length(max(lightSample.radiance * directWeight, 0.0));
 }
 
@@ -607,7 +612,8 @@ inline float3 WavefrontGiParallaxHeightNormal(float2 uv,
     uint width;
     uint height;
     textures[texSlot].GetDimensions(width, height);
-    float2 texel = 1.0 / float2(max(width, 1u), max(height, 1u));
+    float2 texel = max(4.0 / float2(max(width, 1u), max(height, 1u)),
+                       0.0015.xx);
     float hL = WavefrontGiSampleParallaxHeight(
         parallaxTexIndex, uv - float2(texel.x, 0.0), lod);
     float hR = WavefrontGiSampleParallaxHeight(
@@ -618,10 +624,10 @@ inline float3 WavefrontGiParallaxHeightNormal(float2 uv,
         parallaxTexIndex, uv + float2(0.0, texel.y), lod);
     float dHdU = clamp((hR - hL) * 0.5 * saturate(depthScale) /
                            max(texel.x, 1.0e-5),
-                       -8.0, 8.0);
+                       -4.0, 4.0);
     float dHdV = clamp((hU - hD) * 0.5 * saturate(depthScale) /
                            max(texel.y, 1.0e-5),
-                       -8.0, 8.0);
+                       -4.0, 4.0);
 
     float3 n = normalize(worldNormal);
     float3 t;
@@ -669,6 +675,8 @@ inline float WavefrontGiParallaxSelfShadow(float2 uv,
         stepUv *= 0.05 / stepUvLen;
     }
 
+    float shadowStrength = saturate(depthScale * 12.0);
+    float heightBias = lerp(0.045, 0.015, shadowStrength);
     float occlusion = 0.0;
     [loop]
     for (int i = 1; i <= 24; ++i) {
@@ -680,11 +688,12 @@ inline float WavefrontGiParallaxSelfShadow(float2 uv,
             1.0 - WavefrontGiSampleParallaxHeight(
                       parallaxTexIndex, uv + stepUv * (float)i, lod);
         occlusion = max(occlusion,
-                        saturate((traceDepth - sampledDepth - 0.015) * 24.0));
+                        saturate((traceDepth - sampledDepth - heightBias) *
+                                 20.0));
     }
 
     float grazingFade = smoothstep(0.04, 0.25, lightTs.z);
-    return lerp(1.0, 1.0 - occlusion, grazingFade);
+    return lerp(1.0, 1.0 - occlusion * shadowStrength, grazingFade);
 }
 
 inline float WavefrontGiWindowBoxAtlasAlpha(int alphaTexIndex, float2 uv,
@@ -1999,7 +2008,9 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
                                      ComputeWavefrontDirectLightingWeight(
                                          record, normal, hitPos,
                                          explicitSunSample.direction) *
-                                     explicitSunSample.radiance;
+                                     explicitSunSample.radiance *
+                                     WavefrontGetParallaxSelfShadowFromSortKey(
+                                         record.reserved);
             if (any(sunShadowWeight > 1.0e-4)) {
                 uint shadowIndex = 0u;
                 InterlockedAdd(g_wavefrontQueueCounters[kWavefrontShadowQueueCounter],

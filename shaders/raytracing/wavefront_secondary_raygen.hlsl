@@ -13,6 +13,7 @@ static RayPayload InitWavefrontSecondaryPayload(uint rayType)
     payload.packedIorType = PackPayloadIorType(1.0, rayType, false, 1.0);
     payload.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
     payload.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
+    payload.packedParallaxSelfShadow = PackWavefrontParallaxSelfShadow(1.0);
     return payload;
 }
 
@@ -100,13 +101,15 @@ void WavefrontSecondaryRayGen()
     record.packedTransmission = payload.packedTransmission;
     record.packedSpecular = payload.packedSpecular;
     record.packedState = state.packedState;
-    record.reserved = WavefrontPackMaterialSortKey(
-        rayType,
-        WavefrontClassifyMaterialBinFromSurface(payload.surface,
-                                                payload.packedIorType,
-                                                payload.packedColor0,
-                                                payload.packedColor1),
-        0u);
+    record.reserved = WavefrontApplyParallaxSelfShadowToSortKey(
+        WavefrontPackMaterialSortKey(
+            rayType,
+            WavefrontClassifyMaterialBinFromSurface(payload.surface,
+                                                    payload.packedIorType,
+                                                    payload.packedColor0,
+                                                    payload.packedColor1),
+            0u),
+        payload.packedParallaxSelfShadow / 255.0);
     record.surface = payload.surface;
     record.guideOrigin = state.origin;
     record.guidePackedState = (payload.t < 0.0) ? WAVEFRONT_GUIDE_STATE_MISS : 0u;

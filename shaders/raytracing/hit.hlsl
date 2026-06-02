@@ -715,17 +715,18 @@ float3 GetParallaxHeightNormal(float2 uv, float3 worldNormal,
     uint width;
     uint height;
     textures[texSlot].GetDimensions(width, height);
-    float2 texel = 1.0 / float2(max(width, 1u), max(height, 1u));
+    float2 texel = max(4.0 / float2(max(width, 1u), max(height, 1u)),
+                       0.0015.xx);
     float hL = SampleParallaxHeight(parallaxTexIndex, uv - float2(texel.x, 0.0), lod);
     float hR = SampleParallaxHeight(parallaxTexIndex, uv + float2(texel.x, 0.0), lod);
     float hD = SampleParallaxHeight(parallaxTexIndex, uv - float2(0.0, texel.y), lod);
     float hU = SampleParallaxHeight(parallaxTexIndex, uv + float2(0.0, texel.y), lod);
     float dHdU = clamp((hR - hL) * 0.5 * saturate(depthScale) /
                            max(texel.x, 1.0e-5),
-                       -8.0, 8.0);
+                       -4.0, 4.0);
     float dHdV = clamp((hU - hD) * 0.5 * saturate(depthScale) /
                            max(texel.y, 1.0e-5),
-                       -8.0, 8.0);
+                       -4.0, 4.0);
 
     float3 N = normalize(worldNormal);
     float3 T, B;
@@ -767,6 +768,8 @@ float EvaluateParallaxSelfShadow(float2 uv, float3 lightWorld,
         stepUv *= 0.05 / stepUvLen;
     }
 
+    float shadowStrength = saturate(depthScale * 12.0);
+    float heightBias = lerp(0.045, 0.015, shadowStrength);
     float occlusion = 0.0;
     [loop]
     for (int i = 1; i <= 24; ++i) {
@@ -778,11 +781,12 @@ float EvaluateParallaxSelfShadow(float2 uv, float3 lightWorld,
             1.0 - SampleParallaxHeight(parallaxTexIndex,
                                        uv + stepUv * (float)i, lod);
         occlusion = max(occlusion,
-                        saturate((traceDepth - sampledDepth - 0.015) * 24.0));
+                        saturate((traceDepth - sampledDepth - heightBias) *
+                                 20.0));
     }
 
     float grazingFade = smoothstep(0.04, 0.25, lightTs.z);
-    return lerp(1.0, 1.0 - occlusion, grazingFade);
+    return lerp(1.0, 1.0 - occlusion * shadowStrength, grazingFade);
 }
 
 float WindowBoxAtlasAlpha(int alphaTexIndex, float2 uv, float fallbackAlpha,
@@ -1096,6 +1100,13 @@ void ClosestHitImpl(inout RayPayload payload,
                                       texParallax, parallaxDepthScale,
                                       textureLod)
             : worldNormal;
+    float parallaxSunSelfShadow =
+        parallaxMapped
+            ? EvaluateParallaxSelfShadow(uv, normalize(lightDir.xyz),
+                                         worldNormal, worldTangent,
+                                         texParallax, parallaxDepthScale,
+                                         textureLod)
+            : 1.0;
 
     float3 BaseColor = diffColor.rgb;
     float opacity = diffColor.a;
@@ -1356,6 +1367,8 @@ void ClosestHitImpl(inout RayPayload payload,
             PackPayloadTransmissionColor(effectiveTransmissionColor);
         payload.packedSpecular =
             PackPayloadSpecularColorThickness(specularColor, thickness);
+        payload.packedParallaxSelfShadow =
+            PackWavefrontParallaxSelfShadow(parallaxSunSelfShadow);
         return;
     }
     
@@ -1395,6 +1408,8 @@ void ClosestHitImpl(inout RayPayload payload,
             shadowPayload.packedIorType = PackPayloadIorType(1.0, RAY_TYPE_SHADOW, false, 1.0);
             shadowPayload.packedTransmission = PackPayloadTransmissionColor(float3(1.0, 1.0, 1.0));
             shadowPayload.packedSpecular = PackPayloadSpecularColor(float3(1.0, 1.0, 1.0));
+            shadowPayload.packedParallaxSelfShadow =
+                PackWavefrontParallaxSelfShadow(1.0);
             TraceRay(g_accel, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 0, 0, 0, shadowRay, shadowPayload);
 
             if (shadowPayload.t < 0.0) { // Miss = not occluded
@@ -1478,6 +1493,8 @@ void ClosestHitImpl(inout RayPayload payload,
     payload.packedIorType = PackPayloadIorType(emisColor.w, rayType, thinWalled, specularWeight);
     payload.packedTransmission = PackPayloadTransmissionColor(effectiveTransmissionColor);
     payload.packedSpecular = PackPayloadSpecularColorThickness(specularColor, thickness);
+    payload.packedParallaxSelfShadow =
+        PackWavefrontParallaxSelfShadow(parallaxSunSelfShadow);
 }
 
 [shader("closesthit")]

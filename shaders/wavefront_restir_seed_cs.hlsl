@@ -37,6 +37,11 @@ inline float WavefrontEvaluateReservoirTarget(WavefrontHitRecord record,
 {
     float3 directWeight = ComputeWavefrontDirectLightingWeight(
         record, worldNormal, hitPos, lightSample.direction);
+    if (WavefrontGetLightSampleType(lightSample.packedLightIndex) ==
+        WAVEFRONT_LIGHT_SAMPLE_DIRECTIONAL) {
+        directWeight *= WavefrontGetParallaxSelfShadowFromSortKey(
+            record.reserved);
+    }
     return length(max(lightSample.radiance * directWeight, 0.0));
 }
 
