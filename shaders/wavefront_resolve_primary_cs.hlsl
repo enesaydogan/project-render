@@ -512,7 +512,14 @@ inline float2 WavefrontGiApplyParallaxUv(float2 uv, float3 viewWorld,
     }
 
     float3 n = normalize(worldNormal);
-    float3 t = normalize(worldTangent.xyz - n * dot(n, worldTangent.xyz));
+    float3 t = worldTangent.xyz;
+    if (length(t) < 1.0e-4) {
+        float3 helper = abs(n.z) < 0.999 ? float3(0.0, 0.0, 1.0)
+                                         : float3(0.0, 1.0, 0.0);
+        t = normalize(cross(helper, n));
+    } else {
+        t = normalize(t - n * dot(n, t));
+    }
     float3 b = normalize(cross(n, t)) * (worldTangent.w >= 0.0 ? 1.0 : -1.0);
     float3 v = normalize(viewWorld);
     float3 viewTs = normalize(float3(dot(v, t), dot(v, b), dot(v, n)));
@@ -523,8 +530,14 @@ inline float2 WavefrontGiApplyParallaxUv(float2 uv, float3 viewWorld,
     uint texSlot = NonUniformResourceIndex((uint)parallaxTexIndex);
     int layerCount = (int)round(lerp(28.0, 10.0, saturate(viewTs.z)));
     float layerDepth = 1.0 / max((float)layerCount, 1.0);
-    float2 deltaUv = (viewTs.xy / max(viewTs.z, 0.08)) *
-                     saturate(depthScale) / max((float)layerCount, 1.0);
+    float effectiveDepth = saturate(depthScale) *
+                           smoothstep(0.08, 0.35, viewTs.z);
+    float2 totalOffset = (viewTs.xy / max(viewTs.z, 0.12)) * effectiveDepth;
+    float totalOffsetLen = length(totalOffset);
+    if (totalOffsetLen > 0.25) {
+        totalOffset *= 0.25 / totalOffsetLen;
+    }
+    float2 deltaUv = totalOffset / max((float)layerCount, 1.0);
 
     float2 currentUv = uv;
     float2 previousUv = uv;
@@ -552,6 +565,126 @@ inline float2 WavefrontGiApplyParallaxUv(float2 uv, float3 viewWorld,
     float denom = afterDepth - beforeDepth;
     float weight = (abs(denom) > 1.0e-5) ? saturate(afterDepth / denom) : 0.0;
     return lerp(currentUv, previousUv, weight);
+}
+
+inline void WavefrontGiBuildShadingBasis(float3 n,
+                                         float4 worldTangent,
+                                         out float3 t,
+                                         out float3 b)
+{
+    t = worldTangent.xyz;
+    if (length(t) < 1.0e-4) {
+        float3 helper = abs(n.z) < 0.999 ? float3(0.0, 0.0, 1.0)
+                                         : float3(0.0, 1.0, 0.0);
+        t = normalize(cross(helper, n));
+    } else {
+        t = normalize(t - n * dot(n, t));
+    }
+    b = normalize(cross(n, t)) * (worldTangent.w >= 0.0 ? 1.0 : -1.0);
+}
+
+inline float WavefrontGiSampleParallaxHeight(int parallaxTexIndex,
+                                             float2 uv,
+                                             float lod)
+{
+    uint texSlot = NonUniformResourceIndex((uint)parallaxTexIndex);
+    return textures[texSlot].SampleLevel(linearSampler, uv, lod).r;
+}
+
+inline float3 WavefrontGiParallaxHeightNormal(float2 uv,
+                                              float3 worldNormal,
+                                              float4 worldTangent,
+                                              int parallaxTexIndex,
+                                              float depthScale,
+                                              float lod)
+{
+    if (parallaxTexIndex < 0 || depthScale <= 1.0e-5 ||
+        dot(worldTangent.xyz, worldTangent.xyz) < 1.0e-6) {
+        return normalize(worldNormal);
+    }
+
+    uint texSlot = NonUniformResourceIndex((uint)parallaxTexIndex);
+    uint width;
+    uint height;
+    textures[texSlot].GetDimensions(width, height);
+    float2 texel = 1.0 / float2(max(width, 1u), max(height, 1u));
+    float hL = WavefrontGiSampleParallaxHeight(
+        parallaxTexIndex, uv - float2(texel.x, 0.0), lod);
+    float hR = WavefrontGiSampleParallaxHeight(
+        parallaxTexIndex, uv + float2(texel.x, 0.0), lod);
+    float hD = WavefrontGiSampleParallaxHeight(
+        parallaxTexIndex, uv - float2(0.0, texel.y), lod);
+    float hU = WavefrontGiSampleParallaxHeight(
+        parallaxTexIndex, uv + float2(0.0, texel.y), lod);
+    float dHdU = clamp((hR - hL) * 0.5 * saturate(depthScale) /
+                           max(texel.x, 1.0e-5),
+                       -8.0, 8.0);
+    float dHdV = clamp((hU - hD) * 0.5 * saturate(depthScale) /
+                           max(texel.y, 1.0e-5),
+                       -8.0, 8.0);
+
+    float3 n = normalize(worldNormal);
+    float3 t;
+    float3 b;
+    WavefrontGiBuildShadingBasis(n, worldTangent, t, b);
+    float3 tangentNormal = normalize(float3(-dHdU, -dHdV, 1.0));
+    return normalize(mul(tangentNormal, float3x3(t, b, n)));
+}
+
+inline float WavefrontGiParallaxSelfShadow(float2 uv,
+                                           float3 lightWorld,
+                                           float3 worldNormal,
+                                           float4 worldTangent,
+                                           int parallaxTexIndex,
+                                           float depthScale,
+                                           float lod)
+{
+    if (parallaxTexIndex < 0 || depthScale <= 1.0e-5 ||
+        dot(worldTangent.xyz, worldTangent.xyz) < 1.0e-6) {
+        return 1.0;
+    }
+
+    float3 n = normalize(worldNormal);
+    float3 t;
+    float3 b;
+    WavefrontGiBuildShadingBasis(n, worldTangent, t, b);
+    float3 l = normalize(lightWorld);
+    float3 lightTs = normalize(float3(dot(l, t), dot(l, b), dot(l, n)));
+    if (lightTs.z <= 0.03) {
+        return 0.0;
+    }
+
+    float receiverDepth =
+        1.0 - WavefrontGiSampleParallaxHeight(parallaxTexIndex, uv, lod);
+    if (receiverDepth <= 1.0e-4) {
+        return 1.0;
+    }
+
+    int stepCount = (int)round(lerp(24.0, 8.0, saturate(lightTs.z)));
+    float stepDepth = receiverDepth / max((float)stepCount, 1.0);
+    float2 stepUv = (lightTs.xy / max(lightTs.z, 0.12)) *
+                    saturate(depthScale) * stepDepth;
+    float stepUvLen = length(stepUv);
+    if (stepUvLen > 0.05) {
+        stepUv *= 0.05 / stepUvLen;
+    }
+
+    float occlusion = 0.0;
+    [loop]
+    for (int i = 1; i <= 24; ++i) {
+        if (i > stepCount) {
+            break;
+        }
+        float traceDepth = receiverDepth - stepDepth * (float)i;
+        float sampledDepth =
+            1.0 - WavefrontGiSampleParallaxHeight(
+                      parallaxTexIndex, uv + stepUv * (float)i, lod);
+        occlusion = max(occlusion,
+                        saturate((traceDepth - sampledDepth - 0.015) * 24.0));
+    }
+
+    float grazingFade = smoothstep(0.04, 0.25, lightTs.z);
+    return lerp(1.0, 1.0 - occlusion, grazingFade);
 }
 
 inline float WavefrontGiWindowBoxAtlasAlpha(int alphaTexIndex, float2 uv,
@@ -724,8 +857,9 @@ inline float3 WavefrontGiSampleNormalMap(int texIndex,
             WavefrontGiApplyRegularUvNormalRotation(tangentNormal,
                                                     uvRotationParams);
         float3 n = normalize(worldNormal);
-        float3 t = normalize(worldTangent.xyz);
-        float3 b = cross(n, t) * worldTangent.w;
+        float3 t;
+        float3 b;
+        WavefrontGiBuildShadingBasis(n, worldTangent, t, b);
         return normalize(mul(tangentNormal, float3x3(t, b, n)));
     }
 
@@ -999,6 +1133,12 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
                                         worldTangent, texParallax,
                                         parallaxDepthScale, textureLod);
     }
+    float3 parallaxNormal =
+        parallaxMapped
+            ? WavefrontGiParallaxHeightNormal(
+                  uv, worldNormal, worldTangent, texParallax,
+                  parallaxDepthScale, textureLod)
+            : worldNormal;
 
     float3 baseColor = saturate(material.baseColor_opacity.rgb);
     float opacity = clayPreserveTransparency
@@ -1112,14 +1252,14 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
     float3 normal = clayMode
         ? worldNormal
         : WavefrontGiSampleNormalMap(
-              texNorm, uv, surfacePos, worldNormal, worldTangent,
+              texNorm, uv, surfacePos, parallaxNormal, worldTangent,
               texWeight1.x, triPlanar, triScale, triSharp, triNormalStrength,
               mappingVariation, triRotation, materialExtra.uvRotationParams,
               objectOrigin, primitiveIndex, textureLod);
     if (!clayMode && clearcoat > 0.001 && texCoatNormal >= 0 &&
         lobeParams.x > 1.0e-4) {
         float3 coatNormal = WavefrontGiSampleNormalMap(
-            texCoatNormal, uv, surfacePos, worldNormal, worldTangent,
+            texCoatNormal, uv, surfacePos, parallaxNormal, worldTangent,
             lobeParams.x, triPlanar, triScale, triSharp, triNormalStrength,
             mappingVariation, triRotation, materialExtra.uvRotationParams,
             objectOrigin, primitiveIndex, textureLod);
@@ -1214,9 +1354,15 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
     if (nDotL > 0.0 &&
         WavefrontGiIsShadowVisible(surfacePos + normal * kWavefrontRayBias,
                                    sun.direction, sun.maxDistance)) {
-        direct += WavefrontGiEvaluateBrdfLighting(
+        float3 sunDirect = WavefrontGiEvaluateBrdfLighting(
             diffuseAlbedo, f0, roughness, clearcoat,
             normal, viewDir, sun.direction, sun.radiance);
+        if (parallaxMapped) {
+            sunDirect *= WavefrontGiParallaxSelfShadow(
+                uv, sun.direction, worldNormal, worldTangent, texParallax,
+                parallaxDepthScale, textureLod);
+        }
+        direct += sunDirect;
     }
     float3 giLighting = direct;
 
@@ -1248,9 +1394,15 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
             WavefrontGiIsShadowVisible(
                 surfacePos + normal * kWavefrontRayBias,
                 giLocal.direction, giLocal.maxDistance)) {
-            giLighting += WavefrontGiEvaluateBrdfLighting(
+            float3 localDirect = WavefrontGiEvaluateBrdfLighting(
                 diffuseAlbedo, f0, roughness, clearcoat,
                 normal, viewDir, giLocal.direction, giLocal.radiance);
+            if (parallaxMapped) {
+                localDirect *= WavefrontGiParallaxSelfShadow(
+                    uv, giLocal.direction, worldNormal, worldTangent,
+                    texParallax, parallaxDepthScale, textureLod);
+            }
+            giLighting += localDirect;
         }
     }
     float translucency =

@@ -597,6 +597,22 @@ float3 SampleTriPlanarNormal(int texIndex, float3 worldPos, float3 worldNormal,
     return normalize(wx * w.x + wy * w.y + wz * w.z);
 }
 
+void BuildHitShadingBasis(float3 N, float4 worldTangent,
+                          out float3 T, out float3 B)
+{
+    float3 tangentDir = worldTangent.xyz;
+    if (length(tangentDir) < 1.0e-4) {
+        float3 helper = abs(N.z) < 0.999 ? float3(0.0, 0.0, 1.0)
+                                         : float3(0.0, 1.0, 0.0);
+        tangentDir = normalize(cross(helper, N));
+    } else {
+        tangentDir = normalize(tangentDir - N * dot(N, tangentDir));
+    }
+    float handedness = worldTangent.w >= 0.0 ? 1.0 : -1.0;
+    T = tangentDir;
+    B = normalize(cross(N, T)) * handedness;
+}
+
 // Extract normal from normal map and transform to world space
 float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent,
                         int normalTexIndex, float amount, float lod,
@@ -615,11 +631,17 @@ float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent,
                                                  uvRotationParams);
     
     float3 N = normalize(worldNormal);
-    float3 T = normalize(worldTangent.xyz);
-    float3 B = cross(N, T) * worldTangent.w;
+    float3 T, B;
+    BuildHitShadingBasis(N, worldTangent, T, B);
     float3x3 TBN = float3x3(T, B, N);
     
     return normalize(mul(tangentNormal, TBN));
+}
+
+float SampleParallaxHeight(int parallaxTexIndex, float2 uv, float lod)
+{
+    uint texSlot = NonUniformResourceIndex((uint)parallaxTexIndex);
+    return textures[texSlot].SampleLevel(linearSampler, uv, lod).r;
 }
 
 float2 ApplyParallaxOcclusionUv(float2 uv, float3 viewWorld,
@@ -633,25 +655,30 @@ float2 ApplyParallaxOcclusionUv(float2 uv, float3 viewWorld,
     }
 
     float3 N = normalize(worldNormal);
-    float3 T = normalize(worldTangent.xyz - N * dot(N, worldTangent.xyz));
-    float3 B = normalize(cross(N, T)) * (worldTangent.w >= 0.0 ? 1.0 : -1.0);
+    float3 T, B;
+    BuildHitShadingBasis(N, worldTangent, T, B);
     float3 V = normalize(viewWorld);
     float3 viewTs = normalize(float3(dot(V, T), dot(V, B), dot(V, N)));
     if (viewTs.z <= 0.05) {
         return uv;
     }
 
-    uint texSlot = NonUniformResourceIndex((uint)parallaxTexIndex);
     int layerCount = (int)round(lerp(28.0, 10.0, saturate(viewTs.z)));
     float layerDepth = 1.0 / max((float)layerCount, 1.0);
-    float2 deltaUv = (viewTs.xy / max(viewTs.z, 0.08)) *
-                     saturate(depthScale) / max((float)layerCount, 1.0);
+    float effectiveDepth = saturate(depthScale) *
+                           smoothstep(0.08, 0.35, viewTs.z);
+    float2 totalOffset = (viewTs.xy / max(viewTs.z, 0.12)) * effectiveDepth;
+    float totalOffsetLen = length(totalOffset);
+    if (totalOffsetLen > 0.25) {
+        totalOffset *= 0.25 / totalOffsetLen;
+    }
+    float2 deltaUv = totalOffset / max((float)layerCount, 1.0);
 
     float2 currentUv = uv;
     float2 previousUv = uv;
     float currentLayerDepth = 0.0;
-    float currentDepth = 1.0 - textures[texSlot].SampleLevel(
-        linearSampler, currentUv, lod).r;
+    float currentDepth = 1.0 - SampleParallaxHeight(parallaxTexIndex,
+                                                    currentUv, lod);
 
     [loop]
     for (int step = 0; step < 32; ++step) {
@@ -661,18 +688,101 @@ float2 ApplyParallaxOcclusionUv(float2 uv, float3 viewWorld,
         previousUv = currentUv;
         currentUv -= deltaUv;
         currentLayerDepth += layerDepth;
-        currentDepth = 1.0 - textures[texSlot].SampleLevel(
-            linearSampler, currentUv, lod).r;
+        currentDepth = 1.0 - SampleParallaxHeight(parallaxTexIndex,
+                                                  currentUv, lod);
     }
 
     float previousLayerDepth = currentLayerDepth - layerDepth;
-    float previousDepth = 1.0 - textures[texSlot].SampleLevel(
-        linearSampler, previousUv, lod).r;
+    float previousDepth = 1.0 - SampleParallaxHeight(parallaxTexIndex,
+                                                     previousUv, lod);
     float afterDepth = currentDepth - currentLayerDepth;
     float beforeDepth = previousDepth - previousLayerDepth;
     float denom = afterDepth - beforeDepth;
     float weight = (abs(denom) > 1.0e-5) ? saturate(afterDepth / denom) : 0.0;
     return lerp(currentUv, previousUv, weight);
+}
+
+float3 GetParallaxHeightNormal(float2 uv, float3 worldNormal,
+                               float4 worldTangent, int parallaxTexIndex,
+                               float depthScale, float lod)
+{
+    if (parallaxTexIndex < 0 || depthScale <= 1.0e-5 ||
+        dot(worldTangent.xyz, worldTangent.xyz) < 1.0e-6) {
+        return normalize(worldNormal);
+    }
+
+    uint texSlot = NonUniformResourceIndex((uint)parallaxTexIndex);
+    uint width;
+    uint height;
+    textures[texSlot].GetDimensions(width, height);
+    float2 texel = 1.0 / float2(max(width, 1u), max(height, 1u));
+    float hL = SampleParallaxHeight(parallaxTexIndex, uv - float2(texel.x, 0.0), lod);
+    float hR = SampleParallaxHeight(parallaxTexIndex, uv + float2(texel.x, 0.0), lod);
+    float hD = SampleParallaxHeight(parallaxTexIndex, uv - float2(0.0, texel.y), lod);
+    float hU = SampleParallaxHeight(parallaxTexIndex, uv + float2(0.0, texel.y), lod);
+    float dHdU = clamp((hR - hL) * 0.5 * saturate(depthScale) /
+                           max(texel.x, 1.0e-5),
+                       -8.0, 8.0);
+    float dHdV = clamp((hU - hD) * 0.5 * saturate(depthScale) /
+                           max(texel.y, 1.0e-5),
+                       -8.0, 8.0);
+
+    float3 N = normalize(worldNormal);
+    float3 T, B;
+    BuildHitShadingBasis(N, worldTangent, T, B);
+    float3 tangentNormal = normalize(float3(-dHdU, -dHdV, 1.0));
+    return normalize(mul(tangentNormal, float3x3(T, B, N)));
+}
+
+float EvaluateParallaxSelfShadow(float2 uv, float3 lightWorld,
+                                 float3 worldNormal, float4 worldTangent,
+                                 int parallaxTexIndex, float depthScale,
+                                 float lod)
+{
+    if (parallaxTexIndex < 0 || depthScale <= 1.0e-5 ||
+        dot(worldTangent.xyz, worldTangent.xyz) < 1.0e-6) {
+        return 1.0;
+    }
+
+    float3 N = normalize(worldNormal);
+    float3 T, B;
+    BuildHitShadingBasis(N, worldTangent, T, B);
+    float3 L = normalize(lightWorld);
+    float3 lightTs = normalize(float3(dot(L, T), dot(L, B), dot(L, N)));
+    if (lightTs.z <= 0.03) {
+        return 0.0;
+    }
+
+    float receiverDepth = 1.0 - SampleParallaxHeight(parallaxTexIndex, uv, lod);
+    if (receiverDepth <= 1.0e-4) {
+        return 1.0;
+    }
+
+    int stepCount = (int)round(lerp(24.0, 8.0, saturate(lightTs.z)));
+    float stepDepth = receiverDepth / max((float)stepCount, 1.0);
+    float2 stepUv = (lightTs.xy / max(lightTs.z, 0.12)) *
+                    saturate(depthScale) * stepDepth;
+    float stepUvLen = length(stepUv);
+    if (stepUvLen > 0.05) {
+        stepUv *= 0.05 / stepUvLen;
+    }
+
+    float occlusion = 0.0;
+    [loop]
+    for (int i = 1; i <= 24; ++i) {
+        if (i > stepCount) {
+            break;
+        }
+        float traceDepth = receiverDepth - stepDepth * (float)i;
+        float sampledDepth =
+            1.0 - SampleParallaxHeight(parallaxTexIndex,
+                                       uv + stepUv * (float)i, lod);
+        occlusion = max(occlusion,
+                        saturate((traceDepth - sampledDepth - 0.015) * 24.0));
+    }
+
+    float grazingFade = smoothstep(0.04, 0.25, lightTs.z);
+    return lerp(1.0, 1.0 - occlusion, grazingFade);
 }
 
 float WindowBoxAtlasAlpha(int alphaTexIndex, float2 uv, float fallbackAlpha,
@@ -980,6 +1090,12 @@ void ClosestHitImpl(inout RayPayload payload,
                                       worldNormal, worldTangent, texParallax,
                                       parallaxDepthScale, textureLod);
     }
+    float3 parallaxNormal =
+        parallaxMapped
+            ? GetParallaxHeightNormal(uv, worldNormal, worldTangent,
+                                      texParallax, parallaxDepthScale,
+                                      textureLod)
+            : worldNormal;
 
     float3 BaseColor = diffColor.rgb;
     float opacity = diffColor.a;
@@ -1157,10 +1273,10 @@ void ClosestHitImpl(inout RayPayload payload,
     
     // Normal mapping
     float3 N = triPlanar ? SampleTriPlanarNormal(texNorm, P, worldNormal, triScale, triSharp, triNormStrength, texWeight1.x, samplingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar)
-                         : GetNormalFromMap(uv, worldNormal, worldTangent, texNorm, texWeight1.x, textureLod, samplingVariation, triRotation, matExtra.uvRotationParams, objectOrigin, primIndex);
+                         : GetNormalFromMap(uv, parallaxNormal, worldTangent, texNorm, texWeight1.x, textureLod, samplingVariation, triRotation, matExtra.uvRotationParams, objectOrigin, primIndex);
     if (clearcoat > 0.001 && texCoatNormal >= 0 && lobeParams.x > 1.0e-4) {
         float3 coatN = triPlanar ? SampleTriPlanarNormal(texCoatNormal, P, worldNormal, triScale, triSharp, triNormStrength, lobeParams.x, samplingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar)
-                                 : GetNormalFromMap(uv, worldNormal, worldTangent, texCoatNormal, lobeParams.x, textureLod, samplingVariation, triRotation, matExtra.uvRotationParams, objectOrigin, primIndex);
+                                 : GetNormalFromMap(uv, parallaxNormal, worldTangent, texCoatNormal, lobeParams.x, textureLod, samplingVariation, triRotation, matExtra.uvRotationParams, objectOrigin, primIndex);
         N = normalize(lerp(N, coatN, saturate(clearcoat)));
     }
     // Two-sided shading guard for reverse-oriented faces.
@@ -1314,6 +1430,11 @@ void ClosestHitImpl(inout RayPayload payload,
 
                 Lo = ((BaseBRDF * (1.0 - clearcoat)) + CoatBRDF * clearcoat) *
                      radiance * NdotL;
+                if (parallaxMapped) {
+                    Lo *= EvaluateParallaxSelfShadow(
+                        uv, L, worldNormal, worldTangent, texParallax,
+                        parallaxDepthScale, textureLod);
+                }
                 Lo *= grassDirectContact;
             }
         }

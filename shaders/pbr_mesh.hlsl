@@ -934,6 +934,11 @@ void BuildShadingBasis(float3 N, float4 tangent, float rotationDegrees,
     B = normalize(cross(N, T)) * handedness;
 }
 
+float SampleParallaxHeight(int parallaxTexIndex, float2 uv)
+{
+    return textures[parallaxTexIndex].Sample(linearSampler, uv).r;
+}
+
 float2 ApplyParallaxOcclusionUv(float2 uv, float3 worldPos, float3 worldNormal,
                                 float4 worldTangent, int parallaxTexIndex,
                                 float depthScale)
@@ -954,14 +959,19 @@ float2 ApplyParallaxOcclusionUv(float2 uv, float3 worldPos, float3 worldNormal,
 
     int layerCount = (int)round(lerp(28.0, 10.0, saturate(viewTs.z)));
     float layerDepth = 1.0 / max((float)layerCount, 1.0);
-    float2 deltaUv = (viewTs.xy / max(viewTs.z, 0.08)) *
-                     saturate(depthScale) / max((float)layerCount, 1.0);
+    float effectiveDepth = saturate(depthScale) *
+                           smoothstep(0.08, 0.35, viewTs.z);
+    float2 totalOffset = (viewTs.xy / max(viewTs.z, 0.12)) * effectiveDepth;
+    float totalOffsetLen = length(totalOffset);
+    if (totalOffsetLen > 0.25) {
+        totalOffset *= 0.25 / totalOffsetLen;
+    }
+    float2 deltaUv = totalOffset / max((float)layerCount, 1.0);
 
     float2 currentUv = uv;
     float2 previousUv = uv;
     float currentLayerDepth = 0.0;
-    float currentDepth = 1.0 - textures[parallaxTexIndex].Sample(
-        linearSampler, currentUv).r;
+    float currentDepth = 1.0 - SampleParallaxHeight(parallaxTexIndex, currentUv);
 
     [loop]
     for (int step = 0; step < 32; ++step) {
@@ -971,18 +981,96 @@ float2 ApplyParallaxOcclusionUv(float2 uv, float3 worldPos, float3 worldNormal,
         previousUv = currentUv;
         currentUv -= deltaUv;
         currentLayerDepth += layerDepth;
-        currentDepth = 1.0 - textures[parallaxTexIndex].Sample(
-            linearSampler, currentUv).r;
+        currentDepth = 1.0 - SampleParallaxHeight(parallaxTexIndex, currentUv);
     }
 
     float previousLayerDepth = currentLayerDepth - layerDepth;
-    float previousDepth = 1.0 - textures[parallaxTexIndex].Sample(
-        linearSampler, previousUv).r;
+    float previousDepth = 1.0 - SampleParallaxHeight(parallaxTexIndex, previousUv);
     float afterDepth = currentDepth - currentLayerDepth;
     float beforeDepth = previousDepth - previousLayerDepth;
     float denom = afterDepth - beforeDepth;
     float weight = (abs(denom) > 1.0e-5) ? saturate(afterDepth / denom) : 0.0;
     return lerp(currentUv, previousUv, weight);
+}
+
+float3 GetParallaxHeightNormal(float2 uv, float3 worldNormal,
+                               float4 worldTangent, int parallaxTexIndex,
+                               float depthScale)
+{
+    if (parallaxTexIndex < 0 || depthScale <= 1.0e-5 ||
+        length(worldTangent.xyz) < 1.0e-4) {
+        return normalize(worldNormal);
+    }
+
+    uint width;
+    uint height;
+    textures[parallaxTexIndex].GetDimensions(width, height);
+    float2 texel = 1.0 / float2(max(width, 1u), max(height, 1u));
+    float hL = SampleParallaxHeight(parallaxTexIndex, uv - float2(texel.x, 0.0));
+    float hR = SampleParallaxHeight(parallaxTexIndex, uv + float2(texel.x, 0.0));
+    float hD = SampleParallaxHeight(parallaxTexIndex, uv - float2(0.0, texel.y));
+    float hU = SampleParallaxHeight(parallaxTexIndex, uv + float2(0.0, texel.y));
+    float dHdU = clamp((hR - hL) * 0.5 * saturate(depthScale) /
+                           max(texel.x, 1.0e-5),
+                       -8.0, 8.0);
+    float dHdV = clamp((hU - hD) * 0.5 * saturate(depthScale) /
+                           max(texel.y, 1.0e-5),
+                       -8.0, 8.0);
+
+    float3 N = normalize(worldNormal);
+    float3 T, B;
+    BuildShadingBasis(N, worldTangent, 0.0, T, B);
+    float3 tangentNormal = normalize(float3(-dHdU, -dHdV, 1.0));
+    return normalize(mul(tangentNormal, float3x3(T, B, N)));
+}
+
+float EvaluateParallaxSelfShadow(float2 uv, float3 lightWorld,
+                                 float3 worldNormal, float4 worldTangent,
+                                 int parallaxTexIndex, float depthScale)
+{
+    if (parallaxTexIndex < 0 || depthScale <= 1.0e-5 ||
+        length(worldTangent.xyz) < 1.0e-4) {
+        return 1.0;
+    }
+
+    float3 N = normalize(worldNormal);
+    float3 T, B;
+    BuildShadingBasis(N, worldTangent, 0.0, T, B);
+    float3 L = normalize(lightWorld);
+    float3 lightTs = normalize(float3(dot(L, T), dot(L, B), dot(L, N)));
+    if (lightTs.z <= 0.03) {
+        return 0.0;
+    }
+
+    float receiverDepth = 1.0 - SampleParallaxHeight(parallaxTexIndex, uv);
+    if (receiverDepth <= 1.0e-4) {
+        return 1.0;
+    }
+
+    int stepCount = (int)round(lerp(24.0, 8.0, saturate(lightTs.z)));
+    float stepDepth = receiverDepth / max((float)stepCount, 1.0);
+    float2 stepUv = (lightTs.xy / max(lightTs.z, 0.12)) *
+                    saturate(depthScale) * stepDepth;
+    float stepUvLen = length(stepUv);
+    if (stepUvLen > 0.05) {
+        stepUv *= 0.05 / stepUvLen;
+    }
+
+    float occlusion = 0.0;
+    [loop]
+    for (int i = 1; i <= 24; ++i) {
+        if (i > stepCount) {
+            break;
+        }
+        float traceDepth = receiverDepth - stepDepth * (float)i;
+        float sampledDepth =
+            1.0 - SampleParallaxHeight(parallaxTexIndex, uv + stepUv * (float)i);
+        occlusion = max(occlusion,
+                        saturate((traceDepth - sampledDepth - 0.015) * 24.0));
+    }
+
+    float grazingFade = smoothstep(0.04, 0.25, lightTs.z);
+    return lerp(1.0, 1.0 - occlusion, grazingFade);
 }
 
 float WindowBoxAtlasAlpha(int alphaTexIndex, float2 uv, float fallbackAlpha)
@@ -1195,8 +1283,8 @@ float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent,
     tangentNormal = ApplyRegularUvNormalRotation(tangentNormal);
     
     float3 N = normalize(worldNormal);
-    float3 T = normalize(worldTangent.xyz);
-    float3 B = cross(N, T) * worldTangent.w;
+    float3 T, B;
+    BuildShadingBasis(N, worldTangent, 0.0, T, B);
     float3x3 TBN = float3x3(T, B, N);
     
     return normalize(mul(tangentNormal, TBN));
@@ -1335,6 +1423,11 @@ PSOutput PSMainMesh(PSInputMesh input, uint primitiveId : SV_PrimitiveID)
                                       input.tangent, textureIndices2.z,
                                       textureWeight2.w);
     }
+    float3 parallaxNormal =
+        parallaxMapped
+            ? GetParallaxHeightNormal(uv, worldNormal, input.tangent,
+                                      textureIndices2.z, textureWeight2.w)
+            : worldNormal;
 
     float3 BaseColor = diffuseColor.rgb;
     float alpha = diffuseColor.a;
@@ -1431,10 +1524,10 @@ PSOutput PSMainMesh(PSInputMesh input, uint primitiveId : SV_PrimitiveID)
     float3 N = clayMode
         ? worldNormal
         : (triPlanar ? SampleTriPlanarNormal(textureIndices.z, worldPos, worldNormal, triScale, triSharp, triNormStrength, textureWeight1.x, objectOrigin, objectPos, primitiveId)
-                     : GetNormalFromMap(uv, worldNormal, input.tangent, textureIndices.z, textureWeight1.x, objectOrigin, primitiveId));
+                     : GetNormalFromMap(uv, parallaxNormal, input.tangent, textureIndices.z, textureWeight1.x, objectOrigin, primitiveId));
     if (!clayMode && coatLayerParams.x > 0.001 && textureIndices2.x >= 0 && lobeParams.w > 1.0e-4) {
         float3 coatN = triPlanar ? SampleTriPlanarNormal(textureIndices2.x, worldPos, worldNormal, triScale, triSharp, triNormStrength, lobeParams.w, objectOrigin, objectPos, primitiveId)
-                                 : GetNormalFromMap(uv, worldNormal, input.tangent, textureIndices2.x, lobeParams.w, objectOrigin, primitiveId);
+                                 : GetNormalFromMap(uv, parallaxNormal, input.tangent, textureIndices2.x, lobeParams.w, objectOrigin, primitiveId);
         N = normalize(lerp(N, coatN, saturate(coatLayerParams.x)));
     }
 
@@ -1578,6 +1671,11 @@ PSOutput PSMainMesh(PSInputMesh input, uint primitiveId : SV_PrimitiveID)
     // Modulate direct light by shadow
     ShadowData shadowData = EvaluateShadow(input.worldPos, N);
     float shadow = shadowData.factor;
+    if (parallaxMapped) {
+        shadow *= EvaluateParallaxSelfShadow(uv, L, worldNormal,
+                                             input.tangent, textureIndices2.z,
+                                             textureWeight2.w);
+    }
     directLight *= shadow;
     directLight *= grassDirectContact;
 
