@@ -3,7 +3,8 @@
 #include <QAbstractSpinBox>
 #include <QApplication>
 #include <QDoubleSpinBox>
-#include <QHBoxLayout>
+#include <QGridLayout>
+#include <QLabel>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QWidget>
@@ -24,10 +25,11 @@ public:
         , m_maxValue(std::max(maxValue, minValue))
         , m_slider(new QSlider(Qt::Horizontal, this))
         , m_spinBox(new QDoubleSpinBox(this))
+        , m_layout(new QGridLayout(this))
     {
-        auto *layout = new QHBoxLayout(this);
-        layout->setContentsMargins(0, 0, 0, 0);
-        layout->setSpacing(8);
+        m_layout->setContentsMargins(0, 0, 0, 0);
+        m_layout->setHorizontalSpacing(8);
+        m_layout->setVerticalSpacing(5);
 
         m_slider->setRange(0, kSliderSteps);
         m_slider->setSingleStep(1);
@@ -42,8 +44,9 @@ public:
         m_spinBox->setMaximumWidth(80);
         m_slider->setMinimumWidth(100);
 
-        layout->addWidget(m_slider, 1);
-        layout->addWidget(m_spinBox);
+        m_layout->addWidget(m_slider, 0, 0);
+        m_layout->addWidget(m_spinBox, 0, 1);
+        m_layout->setColumnStretch(0, 1);
 
         connect(m_slider, &QSlider::valueChanged, this, [this](int sliderValue) {
             if (m_updating) {
@@ -103,6 +106,32 @@ public:
         m_spinBox->setSuffix(suffix);
     }
 
+    void setStackedLabel(const QString &text)
+    {
+        if (!m_captionLabel) {
+            m_captionLabel = new QLabel(this);
+            m_captionLabel->setObjectName(QStringLiteral("SliderControlCaption"));
+        }
+        m_spinBox->setObjectName(QStringLiteral("SliderControlValue"));
+        m_captionLabel->setText(text);
+        m_layout->removeWidget(m_slider);
+        m_layout->removeWidget(m_spinBox);
+        m_layout->removeWidget(m_captionLabel);
+        m_layout->addWidget(m_captionLabel, 0, 0);
+        m_layout->addWidget(m_spinBox, 0, 1, Qt::AlignRight);
+        m_layout->addWidget(m_slider, 1, 0, 1, 2);
+        m_layout->setColumnStretch(0, 1);
+        m_layout->setColumnStretch(1, 0);
+        m_slider->setMinimumWidth(0);
+        m_spinBox->setMinimumWidth(64);
+        m_spinBox->setMaximumWidth(82);
+    }
+
+    QLabel *captionLabel() const
+    {
+        return m_captionLabel;
+    }
+
     void setEnabled(bool enabled)
     {
         QWidget::setEnabled(enabled);
@@ -160,4 +189,6 @@ private:
     bool m_updating = false;
     QSlider *m_slider = nullptr;
     QDoubleSpinBox *m_spinBox = nullptr;
+    QGridLayout *m_layout = nullptr;
+    QLabel *m_captionLabel = nullptr;
 };

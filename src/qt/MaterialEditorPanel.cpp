@@ -42,6 +42,9 @@
 #include <QSignalBlocker>
 #include <QStandardItem>
 #include <QStandardItemModel>
+#include <QStylePainter>
+#include <QStyleOptionTab>
+#include <QTabBar>
 
 #include <algorithm>
 #include <cmath>
@@ -62,6 +65,180 @@ enum class TextureToolIcon {
     Load,
     Clear
 };
+
+enum class MaterialTabIcon {
+    Surface,
+    Advanced,
+    Opacity,
+    Maps,
+    Grass,
+    Mapping,
+    Parallax,
+    Qa
+};
+
+class MaterialIconTabBar final : public QTabBar
+{
+public:
+    explicit MaterialIconTabBar(QWidget *parent = nullptr)
+        : QTabBar(parent)
+    {
+        setDrawBase(false);
+        setExpanding(false);
+        setUsesScrollButtons(false);
+    }
+
+protected:
+    QSize tabSizeHint(int index) const override
+    {
+        Q_UNUSED(index);
+        const int availableWidth =
+            parentWidget() ? parentWidget()->contentsRect().width() : width();
+        const int tabWidth =
+            count() > 0 ? std::max(32, availableWidth / count()) : 36;
+        return QSize(tabWidth, 42);
+    }
+
+    QSize minimumTabSizeHint(int index) const override
+    {
+        return tabSizeHint(index);
+    }
+
+    void paintEvent(QPaintEvent *) override
+    {
+        QStylePainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+
+        for (int index = 0; index < count(); ++index) {
+            QStyleOptionTab option;
+            initStyleOption(&option, index);
+            const QRect tabRect = option.rect.adjusted(2, 3, -2, -3);
+            const bool selected = index == currentIndex();
+
+            if (selected) {
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(QColor(45, 54, 58));
+                painter.drawRoundedRect(tabRect, 7.0, 7.0);
+            }
+
+            const QIcon::Mode mode = selected ? QIcon::Selected : QIcon::Normal;
+            const QPixmap pixmap =
+                tabIcon(index).pixmap(iconSize(), mode, QIcon::Off);
+            const QPoint topLeft(tabRect.center().x() - pixmap.width() / 2,
+                                 tabRect.center().y() - pixmap.height() / 2);
+            painter.drawPixmap(topLeft, pixmap);
+        }
+    }
+};
+
+class MaterialTabWidget final : public QTabWidget
+{
+public:
+    explicit MaterialTabWidget(QWidget *parent = nullptr)
+        : QTabWidget(parent)
+    {
+        setTabBar(new MaterialIconTabBar(this));
+    }
+};
+
+QPixmap DrawMaterialTabIcon(MaterialTabIcon icon, const QColor &color)
+{
+    constexpr int kIconSize = 20;
+    QPixmap pixmap(kIconSize, kIconSize);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(QPen(color, 1.7, Qt::SolidLine, Qt::RoundCap,
+                        Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+
+    switch (icon) {
+    case MaterialTabIcon::Surface:
+        painter.drawEllipse(QRectF(3.0, 3.0, 14.0, 14.0));
+        painter.drawArc(QRectF(6.0, 6.0, 8.0, 8.0), 25 * 16, 130 * 16);
+        painter.drawLine(QPointF(3.0, 10.0), QPointF(17.0, 10.0));
+        break;
+    case MaterialTabIcon::Advanced:
+        painter.drawLine(QPointF(3.0, 5.0), QPointF(17.0, 5.0));
+        painter.drawLine(QPointF(3.0, 10.0), QPointF(17.0, 10.0));
+        painter.drawLine(QPointF(3.0, 15.0), QPointF(17.0, 15.0));
+        painter.setBrush(color);
+        painter.drawEllipse(QRectF(6.0, 3.0, 4.0, 4.0));
+        painter.drawEllipse(QRectF(12.0, 8.0, 4.0, 4.0));
+        painter.drawEllipse(QRectF(4.0, 13.0, 4.0, 4.0));
+        break;
+    case MaterialTabIcon::Opacity: {
+        QPainterPath drop;
+        drop.moveTo(10.0, 2.5);
+        drop.cubicTo(8.2, 5.7, 4.8, 9.0, 4.8, 12.2);
+        drop.cubicTo(4.8, 15.3, 7.1, 17.5, 10.0, 17.5);
+        drop.cubicTo(12.9, 17.5, 15.2, 15.3, 15.2, 12.2);
+        drop.cubicTo(15.2, 9.0, 11.8, 5.7, 10.0, 2.5);
+        painter.drawPath(drop);
+        painter.drawLine(QPointF(7.2, 13.8), QPointF(12.8, 8.2));
+        break;
+    }
+    case MaterialTabIcon::Maps:
+        painter.drawRect(QRectF(3.0, 3.0, 14.0, 14.0));
+        painter.drawLine(QPointF(10.0, 3.0), QPointF(10.0, 17.0));
+        painter.drawLine(QPointF(3.0, 10.0), QPointF(17.0, 10.0));
+        painter.fillRect(QRectF(3.8, 3.8, 5.4, 5.4), color);
+        painter.fillRect(QRectF(10.8, 10.8, 5.4, 5.4), color);
+        break;
+    case MaterialTabIcon::Grass:
+        painter.drawLine(QPointF(10.0, 17.0), QPointF(10.0, 6.0));
+        painter.drawLine(QPointF(9.5, 16.5), QPointF(4.0, 9.0));
+        painter.drawLine(QPointF(10.5, 16.5), QPointF(16.0, 8.0));
+        painter.drawLine(QPointF(7.5, 17.0), QPointF(6.0, 12.0));
+        painter.drawLine(QPointF(12.5, 17.0), QPointF(14.5, 12.0));
+        break;
+    case MaterialTabIcon::Mapping:
+        painter.drawRect(QRectF(4.0, 4.0, 12.0, 12.0));
+        painter.drawLine(QPointF(4.0, 10.0), QPointF(16.0, 10.0));
+        painter.drawLine(QPointF(10.0, 4.0), QPointF(10.0, 16.0));
+        painter.drawLine(QPointF(10.0, 10.0), QPointF(18.0, 10.0));
+        painter.drawLine(QPointF(10.0, 10.0), QPointF(10.0, 2.0));
+        break;
+    case MaterialTabIcon::Parallax:
+        painter.drawRect(QRectF(3.0, 5.0, 11.0, 11.0));
+        painter.drawRect(QRectF(6.0, 2.0, 11.0, 11.0));
+        painter.drawLine(QPointF(9.0, 10.0), QPointF(14.5, 4.5));
+        painter.drawLine(QPointF(11.5, 4.5), QPointF(14.5, 4.5));
+        painter.drawLine(QPointF(14.5, 4.5), QPointF(14.5, 7.5));
+        break;
+    case MaterialTabIcon::Qa:
+        painter.drawEllipse(QRectF(3.0, 3.0, 14.0, 14.0));
+        painter.drawLine(QPointF(6.5, 10.0), QPointF(9.0, 12.7));
+        painter.drawLine(QPointF(9.0, 12.7), QPointF(14.2, 7.2));
+        break;
+    }
+
+    return pixmap;
+}
+
+QIcon MakeMaterialTabIcon(MaterialTabIcon icon)
+{
+    QIcon result;
+    result.addPixmap(DrawMaterialTabIcon(icon, QColor(174, 181, 185)),
+                     QIcon::Normal, QIcon::Off);
+    result.addPixmap(DrawMaterialTabIcon(icon, QColor(100, 214, 248)),
+                     QIcon::Selected, QIcon::Off);
+    result.addPixmap(DrawMaterialTabIcon(icon, QColor(100, 214, 248)),
+                     QIcon::Active, QIcon::Off);
+    return result;
+}
+
+int AddMaterialTab(QTabWidget *tabs,
+                   QWidget *page,
+                   MaterialTabIcon icon,
+                   const QString &name)
+{
+    const int index = tabs->addTab(page, MakeMaterialTabIcon(icon), QString());
+    tabs->setTabToolTip(index, name);
+    tabs->setTabWhatsThis(index, name);
+    return index;
+}
 
 Asset::TextureUsageSemantic TextureCompressionSemantic(int slot)
 {
@@ -459,7 +636,7 @@ void MaterialEditorPanel::createUi()
     presetRow->addWidget(m_applyPresetButton);
     inspectorLayout->addLayout(presetRow);
 
-    m_tabs = new QTabWidget(m_inspectorGroup);
+    m_tabs = new MaterialTabWidget(m_inspectorGroup);
     m_textureOptionsModel = new QStandardItemModel(this);
 
     auto createTextureSlot = [this](TextureSlot slot, const QString &title) {
@@ -623,12 +800,40 @@ void MaterialEditorPanel::createUi()
                                              TextureSlot slot,
                                              QWidget *parent) {
         auto *rowWidget = new QWidget(parent);
-        auto *row = new QHBoxLayout(rowWidget);
+        auto *row = new QGridLayout(rowWidget);
         row->setContentsMargins(0, 0, 0, 0);
-        row->setSpacing(8);
-        row->addWidget(control, 1);
-        row->addWidget(createMapShortcut(slot, rowWidget));
-        form->addRow(label, rowWidget);
+        row->setHorizontalSpacing(10);
+        auto *caption = new QLabel(label, rowWidget);
+        row->addWidget(caption, 0, 0);
+        row->addWidget(control, 0, 1, Qt::AlignRight | Qt::AlignVCenter);
+        row->addWidget(createMapShortcut(slot, rowWidget), 0, 2,
+                       Qt::AlignCenter);
+        row->setColumnStretch(0, 1);
+        form->addRow(rowWidget);
+    };
+    auto addSliderRow = [&createMapShortcut](QFormLayout *form,
+                                             const QString &label,
+                                             SliderControl *control,
+                                             int textureSlot,
+                                             QWidget *parent) {
+        control->setStackedLabel(label);
+        auto *rowWidget = new QWidget(parent);
+        auto *row = new QGridLayout(rowWidget);
+        row->setContentsMargins(0, 0, 0, 0);
+        row->setHorizontalSpacing(10);
+        row->addWidget(control, 0, 0);
+        if (textureSlot >= 0) {
+            row->addWidget(
+                createMapShortcut(static_cast<TextureSlot>(textureSlot),
+                                  rowWidget),
+                0, 1, Qt::AlignVCenter);
+        } else {
+            auto *mapSpacer = new QWidget(rowWidget);
+            mapSpacer->setFixedWidth(48);
+            row->addWidget(mapSpacer, 0, 1);
+        }
+        row->setColumnStretch(0, 1);
+        form->addRow(rowWidget);
     };
 
     auto *surfaceTab = new QWidget(m_tabs);
@@ -658,7 +863,8 @@ void MaterialEditorPanel::createUi()
     surfaceForm->addRow(tr("Bump map"),
                         createMapShortcut(Normal, surfaceTab));
     m_bumpAmount = CreateSliderControl(0.0, 1.0, 0.01, 3);
-    surfaceForm->addRow(tr("Bump amount"), m_bumpAmount);
+    addSliderRow(surfaceForm, tr("Bump amount"), m_bumpAmount, Normal,
+                 surfaceTab);
 
     addDivider(surfaceForm, surfaceTab);
 
@@ -680,50 +886,43 @@ void MaterialEditorPanel::createUi()
     });
     m_workflowCombo->setVisible(false);
 
-    m_secondarySurfaceLabel = new QLabel(tr("Metalness"), surfaceTab);
     m_metalness = CreateSliderControl(0.0, 1.0, 0.01, 3);
-    auto *metalnessRow = new QWidget(surfaceTab);
-    auto *metalnessLayout = new QHBoxLayout(metalnessRow);
-    metalnessLayout->setContentsMargins(0, 0, 0, 0);
-    metalnessLayout->setSpacing(8);
-    metalnessLayout->addWidget(m_metalness, 1);
-    metalnessLayout->addWidget(createMapShortcut(Metalness, metalnessRow));
-    surfaceForm->addRow(m_secondarySurfaceLabel, metalnessRow);
+    addSliderRow(surfaceForm, tr("Metalness"), m_metalness, Metalness,
+                 surfaceTab);
+    m_secondarySurfaceLabel = m_metalness->captionLabel();
 
-    m_specularWeightLabel = new QLabel(tr("Specular Weight"), surfaceTab);
     m_specularWeight = CreateSliderControl(0.0, 1.0, 0.01, 3);
-    surfaceForm->addRow(m_specularWeightLabel, m_specularWeight);
+    addSliderRow(surfaceForm, tr("Specular weight"), m_specularWeight, -1,
+                 surfaceTab);
+    m_specularWeightLabel = m_specularWeight->captionLabel();
     m_specularColorButton = new QPushButton(surfaceTab);
     addMappedRow(surfaceForm, tr("Reflection color"), m_specularColorButton,
                  SpecularColor, surfaceTab);
 
-    m_roughnessSurfaceLabel = new QLabel(tr("Roughness"), surfaceTab);
     m_roughness = CreateSliderControl(0.0, 1.0, 0.01, 3);
-    auto *roughnessRow = new QWidget(surfaceTab);
-    auto *roughnessLayout = new QHBoxLayout(roughnessRow);
-    roughnessLayout->setContentsMargins(0, 0, 0, 0);
-    roughnessLayout->setSpacing(8);
-    roughnessLayout->addWidget(m_roughness, 1);
-    roughnessLayout->addWidget(
-        createMapShortcut(RoughnessGlossiness, roughnessRow));
-    surfaceForm->addRow(m_roughnessSurfaceLabel, roughnessRow);
+    addSliderRow(surfaceForm, tr("Roughness"), m_roughness,
+                 RoughnessGlossiness, surfaceTab);
+    m_roughnessSurfaceLabel = m_roughness->captionLabel();
 
     addDivider(surfaceForm, surfaceTab);
 
     m_coatWeight = CreateSliderControl(0.0, 1.0, 0.01, 3);
-    surfaceForm->addRow(tr("Coat amount"), m_coatWeight);
+    addSliderRow(surfaceForm, tr("Coat amount"), m_coatWeight, -1,
+                 surfaceTab);
     m_coatRoughness = CreateSliderControl(0.0, 1.0, 0.01, 3);
-    surfaceForm->addRow(tr("Coat glossiness"), m_coatRoughness);
+    addSliderRow(surfaceForm, tr("Coat glossiness"), m_coatRoughness, -1,
+                 surfaceTab);
 
     addDivider(surfaceForm, surfaceTab);
 
     m_transmission = CreateSliderControl(0.0, 1.0, 0.01, 3);
-    surfaceForm->addRow(tr("Refraction amount"), m_transmission);
+    addSliderRow(surfaceForm, tr("Refraction amount"), m_transmission, -1,
+                 surfaceTab);
     m_transmissionColorButton = new QPushButton(surfaceTab);
     surfaceForm->addRow(tr("Refraction color"), m_transmissionColorButton);
     m_ior = CreateSliderControl(MaterialSystem::kMinMaterialIor,
                                 MaterialSystem::kMaxMaterialIor, 0.001, 3);
-    surfaceForm->addRow(tr("Refraction IOR"), m_ior);
+    addSliderRow(surfaceForm, tr("Refraction IOR"), m_ior, -1, surfaceTab);
 
     addDivider(surfaceForm, surfaceTab);
 
@@ -731,10 +930,11 @@ void MaterialEditorPanel::createUi()
     addMappedRow(surfaceForm, tr("Self-illumination color"),
                  m_emissiveColorButton, Emissive, surfaceTab);
     m_emissiveIntensity = CreateSliderControl(0.0, 1000000.0, 1.0, 1);
-    surfaceForm->addRow(tr("Self-illumination intensity"),
-                        m_emissiveIntensity);
+    addSliderRow(surfaceForm, tr("Self-illumination intensity"),
+                 m_emissiveIntensity, -1, surfaceTab);
     surfaceLayout->addStretch(1);
-    m_tabs->addTab(surfaceTab, tr("Surface"));
+    AddMaterialTab(m_tabs, surfaceTab, MaterialTabIcon::Surface,
+                   tr("Surface"));
 
     auto *advancedTab = new QWidget(m_tabs);
     auto *advancedLayout = new QVBoxLayout(advancedTab);
@@ -761,7 +961,8 @@ void MaterialEditorPanel::createUi()
     ggxTail->setEnabled(false);
     ggxTail->setToolTip(
         tr("Placeholder: configurable reflection-tail shaping is not implemented."));
-    advancedForm->addRow(tr("Highlight tail"), ggxTail);
+    addSliderRow(advancedForm, tr("Highlight tail"), ggxTail, -1,
+                 advancedTab);
 
     m_useRoughness = new QCheckBox(tr("Use roughness"), advancedTab);
     m_useRoughness->setToolTip(
@@ -781,13 +982,15 @@ void MaterialEditorPanel::createUi()
     advancedForm->addRow(tr("Coat color"), coatColor);
     m_coatIor = CreateSliderControl(MaterialSystem::kMinMaterialIor,
                                     MaterialSystem::kMaxMaterialIor, 0.01, 3);
-    advancedForm->addRow(tr("Coat IOR"), m_coatIor);
+    addSliderRow(advancedForm, tr("Coat IOR"), m_coatIor, -1,
+                 advancedTab);
     auto *refractionGloss = CreateSliderControl(0.0, 1.0, 0.01, 3);
     refractionGloss->setValue(1.0);
     refractionGloss->setEnabled(false);
     refractionGloss->setToolTip(
         tr("Placeholder: refraction currently shares the surface roughness."));
-    advancedForm->addRow(tr("Refraction glossiness"), refractionGloss);
+    addSliderRow(advancedForm, tr("Refraction glossiness"),
+                 refractionGloss, -1, advancedTab);
     advancedForm->addRow(createPlaceholderCheck(
         tr("Transmission shadows"), true, advancedTab,
         tr("Transmission is included in visibility by the renderer.")));
@@ -803,15 +1006,19 @@ void MaterialEditorPanel::createUi()
 
     addDivider(advancedForm, advancedTab);
     m_anisotropy = CreateSliderControl(-1.0, 1.0, 0.01, 3);
-    advancedForm->addRow(tr("Anisotropy"), m_anisotropy);
+    addSliderRow(advancedForm, tr("Anisotropy"), m_anisotropy, -1,
+                 advancedTab);
     m_anisotropyRotation = CreateSliderControl(0.0, 360.0, 1.0, 1);
-    advancedForm->addRow(tr("Anisotropy rotation"), m_anisotropyRotation);
+    addSliderRow(advancedForm, tr("Anisotropy rotation"),
+                 m_anisotropyRotation, -1, advancedTab);
     m_sheenWeight = CreateSliderControl(0.0, 1.0, 0.01, 3);
-    advancedForm->addRow(tr("Sheen amount"), m_sheenWeight);
+    addSliderRow(advancedForm, tr("Sheen amount"), m_sheenWeight, -1,
+                 advancedTab);
     m_sheenColorButton = new QPushButton(advancedTab);
     advancedForm->addRow(tr("Sheen color"), m_sheenColorButton);
     advancedLayout->addStretch(1);
-    m_tabs->addTab(advancedTab, tr("Advanced"));
+    AddMaterialTab(m_tabs, advancedTab, MaterialTabIcon::Advanced,
+                   tr("Surface Details"));
 
     auto *opacityTab = new QWidget(m_tabs);
     auto *opacityLayout = new QVBoxLayout(opacityTab);
@@ -829,13 +1036,13 @@ void MaterialEditorPanel::createUi()
         tr("The renderer multiplies material alpha by the optional opacity texture."));
     opacityForm->addRow(tr("Opacity input"), opacitySource);
     m_opacity = CreateSliderControl(0.0, 1.0, 0.01, 3);
-    addMappedRow(opacityForm, tr("Opacity"), m_opacity, Opacity,
-                 opacityTab);
+    addSliderRow(opacityForm, tr("Opacity"), m_opacity, Opacity, opacityTab);
     m_alphaMode = new QComboBox(opacityTab);
     m_alphaMode->addItems({tr("Opaque"), tr("Clip"), tr("Stochastic")});
     opacityForm->addRow(tr("Opacity mode"), m_alphaMode);
     m_alphaCutoff = CreateSliderControl(0.0, 1.0, 0.01, 3);
-    opacityForm->addRow(tr("Clip threshold"), m_alphaCutoff);
+    addSliderRow(opacityForm, tr("Clip threshold"), m_alphaCutoff, -1,
+                 opacityTab);
 
     addDivider(opacityForm, opacityTab);
     m_translucencyType = new QComboBox(opacityTab);
@@ -851,13 +1058,17 @@ void MaterialEditorPanel::createUi()
     }
     opacityForm->addRow(tr("Translucency type"), m_translucencyType);
     m_translucency = CreateSliderControl(0.0, 1.0, 0.01, 3);
-    opacityForm->addRow(tr("Translucency amount"), m_translucency);
+    addSliderRow(opacityForm, tr("Translucency amount"), m_translucency, -1,
+                 opacityTab);
     m_thickness = CreateSliderControl(0.0, 1.0, 0.001, 4);
-    addMappedRow(opacityForm, tr("Depth"), m_thickness, Thickness, opacityTab);
+    addSliderRow(opacityForm, tr("Depth"), m_thickness, Thickness,
+                 opacityTab);
     m_attenuationDistance = CreateSliderControl(0.0, 100.0, 0.01, 3);
-    opacityForm->addRow(tr("Attenuation distance"), m_attenuationDistance);
+    addSliderRow(opacityForm, tr("Attenuation distance"),
+                 m_attenuationDistance, -1, opacityTab);
     opacityLayout->addStretch(1);
-    m_tabs->addTab(opacityTab, tr("Opacity + Volume"));
+    AddMaterialTab(m_tabs, opacityTab, MaterialTabIcon::Opacity,
+                   tr("Opacity and Volume"));
 
     for (int slot = 0; slot < TextureSlotCount; ++slot) {
         if (m_textureSlots[slot].group) {
@@ -865,7 +1076,7 @@ void MaterialEditorPanel::createUi()
         }
     }
     textureLayout->addStretch(1);
-    m_tabs->addTab(textureTab, tr("Maps"));
+    AddMaterialTab(m_tabs, textureTab, MaterialTabIcon::Maps, tr("Maps"));
 
     auto *grassTab = new QWidget(m_tabs);
     auto *grassLayout = new QVBoxLayout(grassTab);
@@ -893,7 +1104,7 @@ void MaterialEditorPanel::createUi()
     grassForm->addRow(tr("Blade Variation"), m_grassBladeVariation);
     grassLayout->addLayout(grassForm);
     grassLayout->addStretch(1);
-    m_tabs->addTab(grassTab, tr("Grass"));
+    AddMaterialTab(m_tabs, grassTab, MaterialTabIcon::Grass, tr("Grass"));
 
     auto *mappingTab = new QWidget(m_tabs);
     auto *mappingForm = new QFormLayout(mappingTab);
@@ -940,7 +1151,8 @@ void MaterialEditorPanel::createUi()
     m_stochasticTilingColorVariation = CreateSliderControl(0.0, 1.0, 0.01, 2);
     mappingForm->addRow(tr("Color Variation"), m_stochasticTilingColorVariation);
 
-    m_tabs->addTab(mappingTab, tr("Mapping"));
+    AddMaterialTab(m_tabs, mappingTab, MaterialTabIcon::Mapping,
+                   tr("Mapping"));
 
     auto *parallaxTab = new QWidget(m_tabs);
     auto *parallaxForm = new QFormLayout(parallaxTab);
@@ -975,7 +1187,8 @@ void MaterialEditorPanel::createUi()
     m_parallaxBackFace->setToolTip(
         tr("Uses the opposite surface side for Window Box parallax on reversed window planes."));
     parallaxForm->addRow(m_parallaxBackFace);
-    m_tabs->addTab(parallaxTab, tr("Parallax"));
+    AddMaterialTab(m_tabs, parallaxTab, MaterialTabIcon::Parallax,
+                   tr("Parallax"));
 
     auto *qaTab = new QWidget(m_tabs);
     auto *qaLayout = new QVBoxLayout(qaTab);
@@ -984,33 +1197,44 @@ void MaterialEditorPanel::createUi()
     m_qaLabel->setTextFormat(Qt::RichText);
     qaLayout->addWidget(m_qaLabel);
     qaLayout->addStretch(1);
-    m_tabs->addTab(qaTab, tr("QA"));
+    AddMaterialTab(m_tabs, qaTab, MaterialTabIcon::Qa,
+                   tr("Material QA"));
 
     m_tabs->setObjectName(QStringLiteral("ProjectMaterialTabs"));
     m_tabs->setDocumentMode(true);
-    m_tabs->setUsesScrollButtons(true);
+    m_tabs->setUsesScrollButtons(false);
+    m_tabs->setIconSize(QSize(20, 20));
+    m_tabs->tabBar()->setAccessibleName(tr("Material editor sections"));
     m_tabs->setStyleSheet(QStringLiteral(R"(
         QTabWidget#ProjectMaterialTabs::pane {
             background: #242424;
             border: none;
         }
-        QTabWidget#ProjectMaterialTabs QTabBar::tab {
-            min-height: 30px;
-            padding: 7px 12px;
+        QTabWidget#ProjectMaterialTabs QTabBar {
             background: #242424;
-            color: #aaaaaa;
             border: none;
-        }
-        QTabWidget#ProjectMaterialTabs QTabBar::tab:selected {
-            background: #2d363a;
-            color: #72d8fa;
-            border-radius: 7px;
         }
         QLabel#MaterialPageTitle {
             color: white;
             font-size: 16px;
             font-weight: 700;
             padding: 12px 6px 2px 6px;
+        }
+        QLabel#SliderControlCaption {
+            color: #d7d7d7;
+            font-size: 13px;
+        }
+        QDoubleSpinBox#SliderControlValue {
+            min-height: 22px;
+            padding: 1px 4px;
+            background: transparent;
+            color: #ffffff;
+            border: none;
+            font-size: 13px;
+        }
+        QDoubleSpinBox#SliderControlValue:focus {
+            background: #303030;
+            border: 1px solid #58d0f4;
         }
         QFrame#MaterialDivider {
             color: #505050;
@@ -1022,7 +1246,7 @@ void MaterialEditorPanel::createUi()
             color: #b8b8b8;
             background: transparent;
             border: 1px solid #686868;
-            min-height: 25px;
+            min-height: 30px;
             padding: 2px 5px;
         }
         QToolButton[materialMapShortcut="true"]:hover {
