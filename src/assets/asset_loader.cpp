@@ -117,6 +117,15 @@ static float ComputeLinearTransformHandedness(const float transform[16]) {
   return determinant < 0.0f ? -1.0f : 1.0f;
 }
 
+static bool PathUsesDirectXNormalConvention(const std::string &path) {
+  std::string lower = path;
+  std::transform(lower.begin(), lower.end(), lower.begin(),
+                 [](unsigned char c) { return static_cast<char>(tolower(c)); });
+  return lower.find("_nor_dx") != std::string::npos ||
+         lower.find("_normal_dx") != std::string::npos ||
+         lower.find("directx") != std::string::npos;
+}
+
 static void SetIdentityMatrix(float out[16]) {
   if (!out) {
     return;
@@ -1049,6 +1058,8 @@ bool LoadGltf(const std::string &path, std::vector<GpuMesh> &outMeshes,
           GetImgIdx(m.pbrMetallicRoughness.baseColorTexture.index);
       mat.diffuseTexture = baseColorTexIdx;
       mat.normalTexture = GetImgIdx(m.normalTexture.index);
+      // glTF normal textures use the renderer's native OpenGL-style +Y basis.
+      mat.normalMapFlipY = false;
       mat.emissiveTexture = GetImgIdx(m.emissiveTexture.index);
       mat.occlusionTexture = GetImgIdx(m.occlusionTexture.index);
       mat.metalRoughTexture =
@@ -2170,6 +2181,9 @@ bool LoadWithAssimp(const std::string &path, std::vector<GpuMesh> &outMeshes,
         if (np.empty())
           np = GetTexturePath(aiTextureType_HEIGHT); // Fallback
         TryAddTexture(np, mat.normalTexture);
+        if (mat.normalTexture >= 0 && PathUsesDirectXNormalConvention(np)) {
+          mat.normalMapFlipY = true;
+        }
 
         std::string ep = GetTexturePath(aiTextureType_EMISSIVE);
         TryAddTexture(ep, mat.emissiveTexture);

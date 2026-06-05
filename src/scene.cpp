@@ -3861,19 +3861,19 @@ void AddDefaultPlane(float offset_y) {
     const float half = 5.0f;
     Asset::Vertex verts[4] = {{{-half, offset_y, -half},
                                {0.0f, 1.0f, 0.0f},
-                               {1, 0, 0, 1},
+                               {1, 0, 0, -1},
                                {0.0f, 0.0f}},
                               {{half, offset_y, -half},
                                {0.0f, 1.0f, 0.0f},
-                               {1, 0, 0, 1},
+                               {1, 0, 0, -1},
                                {1.0f, 0.0f}},
                               {{half, offset_y, half},
                                {0.0f, 1.0f, 0.0f},
-                               {1, 0, 0, 1},
+                               {1, 0, 0, -1},
                                {1.0f, 1.0f}},
                               {{-half, offset_y, half},
                                {0.0f, 1.0f, 0.0f},
-                               {1, 0, 0, 1},
+                               {1, 0, 0, -1},
                                {0.0f, 1.0f}}};
     // Use CCW winding that points UP (0-3-2 and 0-2-1)
     UINT indices[6] = {0, 3, 2, 0, 2, 1};

@@ -2065,6 +2065,26 @@ bool LoadScenePRS(const std::string &path) {
     Scene::RegisterTextures(g_loadedTextures);
     ReportProgress(0.82f, "Uploading textures and meshes");
 
+    // Ground planes saved by older builds stored tangent.w=+1 even though
+    // their UV V axis points toward +Z. With N=+Y and T=+X that reconstructs
+    // B=-Z, mirroring the green normal-map channel. Repair those embedded
+    // meshes before uploading them.
+    if (meta.contains("nod")) {
+      for (const auto &node : meta["nod"]) {
+        if (node.value("n", "") != "Ground Plane" || !node.contains("mi")) {
+          continue;
+        }
+        for (size_t meshIndex : node["mi"].get<std::vector<size_t>>()) {
+          if (meshIndex >= rawMeshes.size()) {
+            continue;
+          }
+          for (Asset::Vertex &vertex : rawMeshes[meshIndex].verts) {
+            vertex.tangent[3] = -1.0f;
+          }
+        }
+      }
+    }
+
     // Create GPU meshes
     bool hasEmbedded = (numMeshes > 0);
     for (auto &rm : rawMeshes) {

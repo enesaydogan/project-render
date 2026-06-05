@@ -77,6 +77,29 @@ enum class MaterialTabIcon {
     Qa
 };
 
+enum class NormalMapConvention {
+    Unknown,
+    OpenGl,
+    DirectX
+};
+
+NormalMapConvention InferNormalMapConvention(const std::wstring &path)
+{
+    QString lower = QString::fromStdWString(path).toLower();
+    lower.replace('\\', '/');
+    if (lower.contains(QStringLiteral("_nor_gl")) ||
+        lower.contains(QStringLiteral("_normal_gl")) ||
+        lower.contains(QStringLiteral("opengl"))) {
+        return NormalMapConvention::OpenGl;
+    }
+    if (lower.contains(QStringLiteral("_nor_dx")) ||
+        lower.contains(QStringLiteral("_normal_dx")) ||
+        lower.contains(QStringLiteral("directx"))) {
+        return NormalMapConvention::DirectX;
+    }
+    return NormalMapConvention::Unknown;
+}
+
 class MaterialIconTabBar final : public QTabBar
 {
 public:
@@ -972,7 +995,7 @@ void MaterialEditorPanel::createUi()
         new QCheckBox(tr("DirectX normal map (-Y)"), advancedTab);
     m_normalMapFlipY->setToolTip(
         tr("Flips the tangent-space green channel for DirectX-style -Y maps. "
-           "Leave this off for OpenGL/glTF maps, including filenames containing _nor_gl_."));
+           "Leave this off for OpenGL/glTF maps and filenames containing _nor_gl_."));
     advancedForm->addRow(m_normalMapFlipY);
     m_doubleSided = new QCheckBox(tr("Double-sided"), advancedTab);
     advancedForm->addRow(m_doubleSided);
@@ -2046,8 +2069,19 @@ void MaterialEditorPanel::createUi()
                     isHdr ? Asset::TextureUsageSemantic::Hdr
                           : TextureCompressionSemantic(slot));
                 if (newTex >= 0) {
-                    applyMaterialChange([this, newTex, slot](Asset::Material &m) {
+                    const NormalMapConvention normalConvention =
+                        slot == Normal
+                            ? InferNormalMapConvention(chosen)
+                            : NormalMapConvention::Unknown;
+                    applyMaterialChange([this, newTex, slot, normalConvention](Asset::Material &m) {
                         setTextureIndexForSlot(m, static_cast<TextureSlot>(slot), newTex);
+                        if (slot == Normal) {
+                            if (normalConvention == NormalMapConvention::OpenGl) {
+                                m.normalMapFlipY = false;
+                            } else if (normalConvention == NormalMapConvention::DirectX) {
+                                m.normalMapFlipY = true;
+                            }
+                        }
                     }, false, false, true);
                 }
             }
