@@ -968,12 +968,12 @@ void MaterialEditorPanel::createUi()
     m_useRoughness->setToolTip(
         tr("Switches between the metalness/roughness and reflection/glossiness authoring workflows."));
     advancedForm->addRow(m_useRoughness);
-    m_normalMapOpenGl =
-        new QCheckBox(tr("OpenGL normal map (+Y)"), advancedTab);
-    m_normalMapOpenGl->setToolTip(
-        tr("Flips the tangent-space green channel for OpenGL-style normal maps. "
-           "Enable this when grooves appear raised or directional lighting looks inverted."));
-    advancedForm->addRow(m_normalMapOpenGl);
+    m_normalMapFlipY =
+        new QCheckBox(tr("DirectX normal map (-Y)"), advancedTab);
+    m_normalMapFlipY->setToolTip(
+        tr("Flips the tangent-space green channel for DirectX-style -Y maps. "
+           "Leave this off for OpenGL/glTF maps, including filenames containing _nor_gl_."));
+    advancedForm->addRow(m_normalMapFlipY);
     m_doubleSided = new QCheckBox(tr("Double-sided"), advancedTab);
     advancedForm->addRow(m_doubleSided);
     advancedForm->addRow(
@@ -1345,7 +1345,7 @@ void MaterialEditorPanel::createUi()
             const float da = mat.diffuseTextureAmount;
             const float aa = mat.opacityTextureAmount;
             const float na = mat.normalTextureAmount;
-            const bool normalMapOpenGl = mat.normalMapOpenGl;
+            const bool normalMapFlipY = mat.normalMapFlipY;
             const float cna = mat.coatNormalTextureAmount;
             const float ea = mat.emissiveTextureAmount;
             const float oa = mat.occlusionTextureAmount;
@@ -1380,7 +1380,7 @@ void MaterialEditorPanel::createUi()
             mat.diffuseTextureAmount = da;
             mat.opacityTextureAmount = aa;
             mat.normalTextureAmount = na;
-            mat.normalMapOpenGl = normalMapOpenGl;
+            mat.normalMapFlipY = normalMapFlipY;
             mat.coatNormalTextureAmount = cna;
             mat.emissiveTextureAmount = ea;
             mat.occlusionTextureAmount = oa;
@@ -1521,13 +1521,13 @@ void MaterialEditorPanel::createUi()
             }
         });
     });
-    connect(m_normalMapOpenGl, &QCheckBox::toggled, this,
+    connect(m_normalMapFlipY, &QCheckBox::toggled, this,
             [this](bool enabled) {
         if (m_syncing) {
             return;
         }
         applyMaterialChange([enabled](Asset::Material &m) {
-            m.normalMapOpenGl = enabled;
+            m.normalMapFlipY = enabled;
         });
     });
 
@@ -2294,7 +2294,7 @@ void MaterialEditorPanel::syncInspectorMaterialState(const Asset::Material &mat,
                       static_cast<int>(std::clamp(mat.workflow, 0u, 1u)));
     SyncCheckBoxState(m_useRoughness,
                       !IsReflectionGlossinessWorkflow(mat));
-    SyncCheckBoxState(m_normalMapOpenGl, mat.normalMapOpenGl);
+    SyncCheckBoxState(m_normalMapFlipY, mat.normalMapFlipY);
     updateWorkflowUi(mat);
 
     SyncSliderControlValue(m_roughness,

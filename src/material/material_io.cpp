@@ -249,7 +249,7 @@ nlohmann::json BuildMaterialsMetadata(
         {"tamt", mat.metalnessTextureAmount},
         {"targ", mat.roughnessGlossTextureAmount},
         {"tan", mat.normalTextureAmount},
-        {"nmgl", mat.normalMapOpenGl},
+        {"nmfy", mat.normalMapFlipY},
         {"tacn", mat.coatNormalTextureAmount},
         {"tao", mat.occlusionTextureAmount},
         {"tae", mat.emissiveTextureAmount},
@@ -456,8 +456,8 @@ void RestoreMaterialsFromMetadata(const nlohmann::json &materialsJson,
       savedMaterial.value("targ", material.roughnessGlossTextureAmount);
     material.normalTextureAmount =
       savedMaterial.value("tan", material.normalTextureAmount);
-    material.normalMapOpenGl =
-      savedMaterial.value("nmgl", material.normalMapOpenGl);
+    material.normalMapFlipY = savedMaterial.value(
+        "nmfy", savedMaterial.value("nmgl", material.normalMapFlipY));
     material.coatNormalTextureAmount =
       savedMaterial.value("tacn", material.coatNormalTextureAmount);
     material.occlusionTextureAmount =

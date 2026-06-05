@@ -92,6 +92,9 @@ void ComputeLiveLinkTangents(std::vector<Asset::Vertex> &vertices,
     float tx = (dv2 * dx1 - dv1 * dx2) * r;
     float ty = (dv2 * dy1 - dv1 * dy2) * r;
     float tz = (dv2 * dz1 - dv1 * dz2) * r;
+    float bx = (-du2 * dx1 + du1 * dx2) * r;
+    float by = (-du2 * dy1 + du1 * dy2) * r;
+    float bz = (-du2 * dz1 + du1 * dz2) * r;
 
     auto applyTangent = [&](Asset::Vertex &v) {
       float nx = v.normal[0], ny = v.normal[1], nz = v.normal[2];
@@ -105,7 +108,12 @@ void ComputeLiveLinkTangents(std::vector<Asset::Vertex> &vertices,
         v.tangent[0] = ox / len;
         v.tangent[1] = oy / len;
         v.tangent[2] = oz / len;
-        v.tangent[3] = 1.0f;
+        const float crossX = ny * v.tangent[2] - nz * v.tangent[1];
+        const float crossY = nz * v.tangent[0] - nx * v.tangent[2];
+        const float crossZ = nx * v.tangent[1] - ny * v.tangent[0];
+        v.tangent[3] =
+            (crossX * bx + crossY * by + crossZ * bz) < 0.0f ? -1.0f
+                                                               : 1.0f;
       }
     };
 

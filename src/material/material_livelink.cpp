@@ -86,7 +86,7 @@ void ApplyPayloadToMaterial(const LiveLink::MaterialChangedPayload &payload,
       std::clamp(payload.roughnessGlossTextureAmount, 0.0f, 1.0f);
   material->normalTextureAmount =
       std::clamp(payload.normalTextureAmount, 0.0f, 1.0f);
-  material->normalMapOpenGl = payload.normalMapOpenGl;
+  material->normalMapFlipY = payload.normalMapFlipY;
   material->coatNormalTextureAmount =
       std::clamp(payload.coatNormalTextureAmount, 0.0f, 1.0f);
   material->occlusionTextureAmount =

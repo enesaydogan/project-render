@@ -395,7 +395,7 @@ void Draw(HWND hwnd, bool &visible) {
           float da = mat.diffuseTextureAmount;
           float aa = mat.opacityTextureAmount;
           float na = mat.normalTextureAmount;
-          bool normalMapOpenGl = mat.normalMapOpenGl;
+          bool normalMapFlipY = mat.normalMapFlipY;
           float cna = mat.coatNormalTextureAmount;
           float ea = mat.emissiveTextureAmount;
           float oa = mat.occlusionTextureAmount;
@@ -422,7 +422,7 @@ void Draw(HWND hwnd, bool &visible) {
             mat.diffuseTextureAmount = da;
             mat.opacityTextureAmount = aa;
             mat.normalTextureAmount = na;
-            mat.normalMapOpenGl = normalMapOpenGl;
+            mat.normalMapFlipY = normalMapFlipY;
             mat.coatNormalTextureAmount = cna;
             mat.emissiveTextureAmount = ea;
             mat.occlusionTextureAmount = oa;

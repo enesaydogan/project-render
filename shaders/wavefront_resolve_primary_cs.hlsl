@@ -1118,7 +1118,9 @@ inline float3 EvaluateWavefrontGiSurfaceRadiance(
     float4 worldTangent;
     worldTangent.xyz = normalize(mul((float3x3)objectToWorld,
                                      localTangent.xyz));
-    worldTangent.w = localTangent.w;
+    worldTangent.w =
+        localTangent.w *
+        (determinant((float3x3)objectToWorld) < 0.0 ? -1.0 : 1.0);
     if (dot(worldNormal, -incomingDirection) < 0.0) {
         worldNormal = -worldNormal;
     }

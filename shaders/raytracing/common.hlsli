@@ -471,7 +471,7 @@ struct MaterialExtraData
 {
     float4 coatLayerParams;     // x=coatWeight, y=coatRoughness, z=thinWalled, w=translucency
     float4 uvTransform;         // xy=uvScale, zw=uvOffset
-    float4 uvRotationParams;    // x=regular UV rotation, y=OpenGL normal map (+Y)
+    float4 uvRotationParams;    // x=regular UV rotation, y=flip normal-map Y
     float4 triPlanarParams;     // x=enabled, y=scale, z=sharpness, w=normalStrength
     float4 mappingVariationParams; // x=mode, y=offsetJitter, z=randomRotation, w=colorVariation
     float4 triPlanarRotationParams; // xyz=materialRotationDegrees, w=stochasticMirror

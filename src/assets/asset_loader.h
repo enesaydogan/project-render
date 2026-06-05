@@ -139,7 +139,7 @@ struct Material {
   float metalnessTextureAmount = 1.0f;
   float roughnessGlossTextureAmount = 1.0f;
   float normalTextureAmount = 1.0f;
-  bool normalMapOpenGl = false;
+  bool normalMapFlipY = false;
   float occlusionTextureAmount = 1.0f;
   float emissiveTextureAmount = 1.0f;
   float specularColorTextureAmount = 1.0f;

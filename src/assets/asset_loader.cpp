@@ -95,6 +95,28 @@ static std::filesystem::path NativePathFromUtf8(const std::string &path) {
                           : std::filesystem::path(widePath);
 }
 
+static float ComputeTangentHandedness(const aiVector3D &normal,
+                                      const aiVector3D &tangent,
+                                      const aiVector3D &bitangent) {
+  const float crossX = normal.y * tangent.z - normal.z * tangent.y;
+  const float crossY = normal.z * tangent.x - normal.x * tangent.z;
+  const float crossZ = normal.x * tangent.y - normal.y * tangent.x;
+  const float orientation =
+      crossX * bitangent.x + crossY * bitangent.y + crossZ * bitangent.z;
+  return orientation < 0.0f ? -1.0f : 1.0f;
+}
+
+static float ComputeLinearTransformHandedness(const float transform[16]) {
+  const float determinant =
+      transform[0] *
+          (transform[5] * transform[10] - transform[9] * transform[6]) -
+      transform[4] *
+          (transform[1] * transform[10] - transform[9] * transform[2]) +
+      transform[8] *
+          (transform[1] * transform[6] - transform[5] * transform[2]);
+  return determinant < 0.0f ? -1.0f : 1.0f;
+}
+
 static void SetIdentityMatrix(float out[16]) {
   if (!out) {
     return;
@@ -2212,10 +2234,13 @@ bool LoadWithAssimp(const std::string &path, std::vector<GpuMesh> &outMeshes,
 
         if (mesh->HasTangentsAndBitangents()) {
           const aiVector3D tangent = mesh->mTangents[vertexIndex];
+          const aiVector3D bitangent = mesh->mBitangents[vertexIndex];
+          const aiVector3D normal = mesh->mNormals[vertexIndex];
           vertex.tangent[0] = tangent.x;
           vertex.tangent[1] = tangent.y;
           vertex.tangent[2] = tangent.z;
-          vertex.tangent[3] = 1.0f;
+          vertex.tangent[3] =
+              ComputeTangentHandedness(normal, tangent, bitangent);
         } else {
           vertex.tangent[0] = 1.0f;
           vertex.tangent[3] = 1.0f;
@@ -2341,13 +2366,17 @@ bool LoadWithAssimp(const std::string &path, std::vector<GpuMesh> &outMeshes,
             }
             if (mesh->HasTangentsAndBitangents()) {
               aiVector3D t = mesh->mTangents[vIdx];
+              const aiVector3D b = mesh->mBitangents[vIdx];
+              const aiVector3D n = mesh->mNormals[vIdx];
               v.tangent[0] =
                   t.x * worldMat[0] + t.y * worldMat[4] + t.z * worldMat[8];
               v.tangent[1] =
                   t.x * worldMat[1] + t.y * worldMat[5] + t.z * worldMat[9];
               v.tangent[2] =
                   t.x * worldMat[2] + t.y * worldMat[6] + t.z * worldMat[10];
-              v.tangent[3] = 1.0f;
+              v.tangent[3] =
+                  ComputeTangentHandedness(n, t, b) *
+                  ComputeLinearTransformHandedness(worldMat);
             }
             for (int c = 0; c < 3; ++c) {
               minB[c] = std::min(minB[c], v.pos[c]);
