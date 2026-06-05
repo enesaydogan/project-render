@@ -114,7 +114,7 @@ cbuffer MaterialCB : register(b1)
     float4 extraParams;         // x=emissiveIntensity, y=alphaCutoff, z=isMask, w=isGrass
     float4 coatLayerParams;     // x=coatWeight, y=coatRoughness, z=thinWalled, w=translucency
     float4 uvTransform;         // xy=uvScale, zw=uvOffset
-    float4 uvRotationParams;    // x=regular UV rotation in degrees
+    float4 uvRotationParams;    // x=regular UV rotation, y=OpenGL normal map (+Y)
     float4 triPlanarParams;     // x=enabled, y=scale, z=sharpness, w=normalStrength
     float4 mappingVariationParams; // x=mode, y=offsetJitter, z=randomRotation, w=colorVariation
     float4 triPlanarRotationParams; // xyz=materialRotationDegrees, w=stochasticMirror
@@ -504,6 +504,15 @@ float4 SampleUvTexture(int texIndex, float2 uv, float3 objectOrigin,
     return s0 * weights.x + s1 * weights.y + s2 * weights.z;
 }
 
+float3 DecodeNormalTexel(float3 encodedNormal)
+{
+    float3 tangentNormal = encodedNormal * 2.0f - 1.0f;
+    if (uvRotationParams.y > 0.5f) {
+        tangentNormal.y = -tangentNormal.y;
+    }
+    return tangentNormal;
+}
+
 float3 SampleUvNormalTexture(int texIndex, float2 uv, float amount,
                              float3 objectOrigin, float3 worldNormal,
                              uint primitiveId)
@@ -512,7 +521,8 @@ float3 SampleUvNormalTexture(int texIndex, float2 uv, float amount,
     if (!UseUvStochasticTiling()) {
         return normalize(lerp(
             float3(0.0f, 0.0f, 1.0f),
-            textures[texIndex].Sample(linearSampler, uv).xyz * 2.0f - 1.0f,
+            DecodeNormalTexel(
+                textures[texIndex].Sample(linearSampler, uv).xyz),
             saturate(amount)));
     }
 
@@ -544,27 +554,24 @@ float3 SampleUvNormalTexture(int texIndex, float2 uv, float amount,
     float blendAmount = saturate(amount);
     float3 n0 = normalize(lerp(
         float3(0.0f, 0.0f, 1.0f),
-        textures[texIndex].SampleGrad(
+        DecodeNormalTexel(textures[texIndex].SampleGrad(
             linearSampler, TransformUvForCell(uv, offset0, mirror0, sin0, cos0),
             TransformUvGradientForCell(uvDx, mirror0, sin0, cos0),
-            TransformUvGradientForCell(uvDy, mirror0, sin0, cos0)).xyz *
-                2.0f - 1.0f,
+            TransformUvGradientForCell(uvDy, mirror0, sin0, cos0)).xyz),
         blendAmount));
     float3 n1 = normalize(lerp(
         float3(0.0f, 0.0f, 1.0f),
-        textures[texIndex].SampleGrad(
+        DecodeNormalTexel(textures[texIndex].SampleGrad(
             linearSampler, TransformUvForCell(uv, offset1, mirror1, sin1, cos1),
             TransformUvGradientForCell(uvDx, mirror1, sin1, cos1),
-            TransformUvGradientForCell(uvDy, mirror1, sin1, cos1)).xyz *
-                2.0f - 1.0f,
+            TransformUvGradientForCell(uvDy, mirror1, sin1, cos1)).xyz),
         blendAmount));
     float3 n2 = normalize(lerp(
         float3(0.0f, 0.0f, 1.0f),
-        textures[texIndex].SampleGrad(
+        DecodeNormalTexel(textures[texIndex].SampleGrad(
             linearSampler, TransformUvForCell(uv, offset2, mirror2, sin2, cos2),
             TransformUvGradientForCell(uvDx, mirror2, sin2, cos2),
-            TransformUvGradientForCell(uvDy, mirror2, sin2, cos2)).xyz *
-                2.0f - 1.0f,
+            TransformUvGradientForCell(uvDy, mirror2, sin2, cos2)).xyz),
         blendAmount));
     n0.xy = RotateNormalLocal(n0.xy, mirror0, sin0, cos0);
     n1.xy = RotateNormalLocal(n1.xy, mirror1, sin1, cos1);
@@ -617,7 +624,7 @@ float4 SampleTriPlanar(int texIndex, float3 worldPos, float3 worldNormal,
 
 float3 UnpackNormal(float4 n)
 {
-    return n.xyz * 2.0 - 1.0;
+    return DecodeNormalTexel(n.xyz);
 }
 
 float3 BlendTextureRgb(float3 sampleValue, float amount)

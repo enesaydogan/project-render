@@ -732,7 +732,7 @@ void BuildRuntimeDxrMaterialData(const Asset::Material &material,
   outExtra->uvTransform[2] = material.uvOffset[0];
   outExtra->uvTransform[3] = material.uvOffset[1];
   outExtra->uvRotationParams[0] = material.uvRotationDegrees;
-  outExtra->uvRotationParams[1] = 0.0f;
+  outExtra->uvRotationParams[1] = material.normalMapOpenGl ? 1.0f : 0.0f;
   outExtra->uvRotationParams[2] = 0.0f;
   outExtra->uvRotationParams[3] = 0.0f;
 
@@ -903,7 +903,8 @@ void BuildRuntimeRasterMaterialConstants(
   outConstants->uvTransform[2] = material.uvOffset[0];
   outConstants->uvTransform[3] = material.uvOffset[1];
   outConstants->uvRotationParams[0] = material.uvRotationDegrees;
-  outConstants->uvRotationParams[1] = 0.0f;
+  outConstants->uvRotationParams[1] =
+      material.normalMapOpenGl ? 1.0f : 0.0f;
   outConstants->uvRotationParams[2] = 0.0f;
   outConstants->uvRotationParams[3] = 0.0f;
 

@@ -826,6 +826,15 @@ inline float3 WavefrontGiUnpackNormal(float4 n)
     return n.xyz * 2.0 - 1.0;
 }
 
+inline float3 WavefrontGiApplyNormalMapConvention(
+    float3 tangentNormal, float4 uvRotationParams)
+{
+    if (uvRotationParams.y > 0.5) {
+        tangentNormal.y = -tangentNormal.y;
+    }
+    return tangentNormal;
+}
+
 inline float3 WavefrontGiBlendNormalSample(float3 tangentNormal, float amount)
 {
     return normalize(lerp(float3(0.0, 0.0, 1.0), tangentNormal,
@@ -861,6 +870,8 @@ inline float3 WavefrontGiSampleNormalMap(int texIndex,
             texIndex, uv, objectOrigin, worldNormal,
             variationParams, rotationParams, lod, primitiveId, false).xyz *
             2.0 - 1.0;
+        tangentNormal = WavefrontGiApplyNormalMapConvention(
+            tangentNormal, uvRotationParams);
         tangentNormal = WavefrontGiBlendNormalSample(tangentNormal, amount);
         tangentNormal =
             WavefrontGiApplyRegularUvNormalRotation(tangentNormal,
@@ -910,6 +921,8 @@ inline float3 WavefrontGiSampleNormalMap(int texIndex,
             lod));
         axisTbn = float3x3(axisX * sz, axisY, axisZ * sz);
     }
+    axisNormal = WavefrontGiApplyNormalMapConvention(
+        axisNormal, uvRotationParams);
     axisNormal = WavefrontGiBlendNormalSample(axisNormal, amount);
     axisNormal.xy *= triNormalStrength;
     return normalize(mul(normalize(axisNormal), axisTbn));

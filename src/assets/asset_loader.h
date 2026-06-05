@@ -74,7 +74,7 @@ struct Texture {
 
 struct Material {
   static constexpr uint32_t kSchemaVersionOpenPbrSubset = 9;
-  static constexpr uint32_t kSchemaVersionCoronaArchviz = 13;
+  static constexpr uint32_t kSchemaVersionCoronaArchviz = 14;
   static constexpr uint32_t kWorkflowMetalRoughness = 0;
   static constexpr uint32_t kWorkflowReflectionGlossiness = 1;
   static constexpr uint32_t kMaterialClassGeneric = 0;
@@ -139,6 +139,7 @@ struct Material {
   float metalnessTextureAmount = 1.0f;
   float roughnessGlossTextureAmount = 1.0f;
   float normalTextureAmount = 1.0f;
+  bool normalMapOpenGl = false;
   float occlusionTextureAmount = 1.0f;
   float emissiveTextureAmount = 1.0f;
   float specularColorTextureAmount = 1.0f;

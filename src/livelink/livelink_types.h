@@ -192,6 +192,7 @@ struct MaterialChangedPayload {
   float metalnessTextureAmount = 1.0f;
   float roughnessGlossTextureAmount = 1.0f;
   float normalTextureAmount = 1.0f;
+  bool normalMapOpenGl = false;
   float coatNormalTextureAmount = 1.0f;
   float occlusionTextureAmount = 1.0f;
   float emissiveTextureAmount = 1.0f;

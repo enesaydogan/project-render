@@ -153,6 +153,7 @@ private:
     QPushButton *m_sheenColorButton = nullptr;
     QCheckBox *m_thinWalled = nullptr;
     QCheckBox *m_useRoughness = nullptr;
+    QCheckBox *m_normalMapOpenGl = nullptr;
 
     // Grass tab
     QCheckBox *m_grassEnabled = nullptr;
