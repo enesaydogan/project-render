@@ -1617,6 +1617,22 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     float depth = (dlssRayReconstruction > 0.5) ? farZ : 1.0;
     float linearDepth = farZ;
     float2 motion = ComputeWavefrontSkyMotion(rayDir, currScreen);
+
+    // Debug views (g_debugMode 1..7, 25..28): the closest-hit shader packs
+    // the diagnostic color into the hit record via PayloadSetColor, but the
+    // BSDF evaluation below would overwrite it with a full lighting result.
+    // Short-circuit here for surface hits so the debug payload reaches the
+    // screen. Misses fall through so the sky shows through unchanged. Skip
+    // accumulation — debug frames should not be averaged with each other.
+    if (SHADER_DEBUG_MODE > 0.0 && !isMiss) {
+        float3 debugColor = max(visibleEmissive, 0.0);
+        g_output[pixel] = float4(debugColor, 1.0);
+        g_accumulation[pixel] = float4(debugColor, 1.0);
+        g_depth[pixel] = depth;
+        g_linearDepth[pixel] = linearDepth;
+        g_motionVectors[pixel] = motion;
+        return;
+    }
     float3 normal = float3(0.0, 1.0, 0.0);
     float3 albedo = float3(0.0, 0.0, 0.0);
     // rrDiffuseAlbedo is the demodulated diffuse term for DLSS-RR.

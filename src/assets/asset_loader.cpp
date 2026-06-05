@@ -1988,11 +1988,29 @@ bool LoadWithAssimp(const std::string &path, std::vector<GpuMesh> &outMeshes,
 
   if (s_progressCb)
     s_progressCb(0.01f, std::string("Starting import: ") + path);
-  // Base flags: fast loading, fewer optimizations
-  unsigned int assimpFlags =
-      aiProcess_Triangulate | aiProcess_CalcTangentSpace |
-      aiProcess_GenSmoothNormals | aiProcess_SortByPType | aiProcess_FlipUVs |
-      aiProcess_GlobalScale;
+  // Base flags: fast loading, fewer optimizations.
+  //
+  // aiProcess_CalcTangentSpace is intentionally NOT included here. With
+  // aiProcess_FlipUVs in the same pass, FlipUVsProcess runs early and
+  // mirrors V (V -> 1 - V) on all UV channels but does NOT touch any
+  // pre-existing mTangents/mBitangents loaded from the file. Later in the
+  // pipeline CalcTangentsProcess skips any mesh that already has tangents
+  // (CalcTangentsProcess.cpp:109). The net effect for files that ship with
+  // baked tangents (FBX from Max/Maya/Blender, USDC, ...) is that the
+  // bitangent ends up pointing along the *un-flipped* +V direction while
+  // the UVs point along the flipped axis. Shading silently picks up an
+  // inverted green channel for those meshes, which the per-material
+  // normalMapFlipY toggle cannot fully correct because half of the basis
+  // is wrong, not the texel.
+  //
+  // We work around this by stripping any pre-existing tangents *after*
+  // ReadFile and asking the importer to recompute them via a separate
+  // ApplyPostProcessing pass. By then UVs are final, so the generated
+  // bitangents agree with the actual ∂P/∂v direction.
+  unsigned int assimpFlags = aiProcess_Triangulate |
+                             aiProcess_GenSmoothNormals |
+                             aiProcess_SortByPType | aiProcess_FlipUVs |
+                             aiProcess_GlobalScale;
 
   if (g_fastImport) {
     assimpFlags |= aiProcess_JoinIdenticalVertices |
@@ -2013,6 +2031,27 @@ bool LoadWithAssimp(const std::string &path, std::vector<GpuMesh> &outMeshes,
     if (s_progressCb)
       s_progressCb(0.0f,
                    std::string("Assimp Error: ") + importer.GetErrorString());
+    return false;
+  }
+
+  // See the note above on FlipUVs / CalcTangentSpace ordering: discard any
+  // tangents that came in from the file (or that may have been generated
+  // before all import steps settled) and regenerate them now that UVs are
+  // in their final orientation. aiMesh owns these arrays via new[]/delete[].
+  for (unsigned int meshIdx = 0; meshIdx < scene->mNumMeshes; ++meshIdx) {
+    aiMesh *mesh = scene->mMeshes[meshIdx];
+    if (!mesh) {
+      continue;
+    }
+    delete[] mesh->mTangents;
+    mesh->mTangents = nullptr;
+    delete[] mesh->mBitangents;
+    mesh->mBitangents = nullptr;
+  }
+  scene = importer.ApplyPostProcessing(aiProcess_CalcTangentSpace);
+  if (!scene) {
+    fprintf(stderr, "Assimp tangent regeneration failed: %s\n",
+            importer.GetErrorString());
     return false;
   }
 

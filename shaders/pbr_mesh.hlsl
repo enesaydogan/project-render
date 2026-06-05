@@ -1781,40 +1781,64 @@ PSOutput PSMainMesh(PSInputMesh input, uint primitiveId : SV_PrimitiveID)
     int mode = (int)debugMode;
     if (mode > 0) {
         PSOutput o_dbg;
-        // Raster debug views are shown through the HDR tonemap path, so boost
-        // them back into a visible range instead of letting exposure crush
-        // ordinary 0..1 diagnostic colors to near-black.
-        float debugExposureComp = 1.0 / max(intensity, 0.02);
+        // Tonemap CS now bypasses exposure / SSAO / bloom when debug mode
+        // is active (see tonemap_cs.hlsl tonemapDebugMode), so the debug
+        // color we emit here lands on screen unchanged apart from gamma.
+        // Keep all raw values in 0..1; tonemap will only apply gamma 2.2.
         o_dbg.normal = float4(N * 0.5 + 0.5, 1.0);
-        if (mode == 1) o_dbg.color = float4(BaseColor * debugExposureComp, 1.0);
-        else if (mode == 2) o_dbg.color = float4((N * 0.5 + 0.5) * debugExposureComp, 1.0);
-        else if (mode == 3) o_dbg.color = float4(emiss * debugExposureComp, 1.0);
-        else if (mode == 4) o_dbg.color = float4((1.0 - roughness).xxx * debugExposureComp, 1.0);
-        else if (mode == 5) o_dbg.color = float4(F0 * debugExposureComp, 1.0);
-        else if (mode == 6) o_dbg.color = float4(metalness.xxx * debugExposureComp, 1.0);
-        else if (mode == 7) o_dbg.color = float4(ao.xxx * debugExposureComp, 1.0);
-        else if (mode == 8) o_dbg.color = float4(float3(1.0 - shadow, shadow, 0.0) * debugExposureComp, 1.0);
-        else if (mode == 22) o_dbg.color = float4(float3(1.0 - shadow, shadow, 0.0) * debugExposureComp, 1.0);
+        if (mode == 1) o_dbg.color = float4(saturate(BaseColor), 1.0);
+        else if (mode == 2) o_dbg.color = float4(N * 0.5 + 0.5, 1.0);
+        else if (mode == 3) o_dbg.color = float4(saturate(emiss), 1.0);
+        else if (mode == 4) o_dbg.color = float4((1.0 - roughness).xxx, 1.0);
+        else if (mode == 5) o_dbg.color = float4(saturate(F0), 1.0);
+        else if (mode == 6) o_dbg.color = float4(metalness.xxx, 1.0);
+        else if (mode == 7) o_dbg.color = float4(ao.xxx, 1.0);
+        else if (mode == 25 || mode == 26 || mode == 27 || mode == 28) {
+            // Tangent-space debug views: T / B / raw normal-map texel / geom N.
+            float3 dbgColor;
+            if (mode == 28) {
+                dbgColor = normalize(worldNormal) * 0.5 + 0.5;
+            } else {
+                float3 dbgN = normalize(worldNormal);
+                float3 dbgT, dbgB;
+                BuildShadingBasis(dbgN, input.tangent, 0.0, dbgT, dbgB);
+                if (mode == 25) {
+                    dbgColor = dbgT * 0.5 + 0.5;
+                } else if (mode == 26) {
+                    dbgColor = dbgB * 0.5 + 0.5;
+                } else {
+                    float3 ts = float3(0.0, 0.0, 1.0);
+                    if (textureIndices.z >= 0) {
+                        float3 raw = textures[textureIndices.z]
+                            .Sample(linearSampler, uv).xyz;
+                        ts = normalize(DecodeNormalTexel(raw));
+                    }
+                    dbgColor = ts * 0.5 + 0.5;
+                }
+            }
+            o_dbg.color = float4(dbgColor, 1.0);
+        }
+        else if (mode == 22) o_dbg.color = float4(float3(1.0 - shadow, shadow, 0.0), 1.0);
         else if (mode == 23) o_dbg.color = (shadowData.valid > 0.5)
             ? float4(float3(shadowData.uv.x,
                             shadowData.uv.y,
-                            0.2 + 0.8 * saturate(shadowData.currentDepth)) * debugExposureComp, 1.0)
+                            0.2 + 0.8 * saturate(shadowData.currentDepth)), 1.0)
             : (shadowData.invalidReason < 1.5
-                ? float4(float3(1.0, 0.0, 0.0) * debugExposureComp, 1.0)
+                ? float4(float3(1.0, 0.0, 0.0), 1.0)
                 : (shadowData.invalidReason < 2.5
-                    ? float4(float3(0.0, 0.0, 1.0) * debugExposureComp, 1.0)
-                    : float4(float3(1.0, 1.0, 0.0) * debugExposureComp, 1.0)));
+                    ? float4(float3(0.0, 0.0, 1.0), 1.0)
+                    : float4(float3(1.0, 1.0, 0.0), 1.0)));
         else if (mode == 24) {
             float diff = saturate(0.5 + (shadowData.rawDepth - shadowData.currentDepth) * 200.0);
             o_dbg.color = (shadowData.valid > 0.5)
                 ? float4(float3(0.2 + 0.8 * shadowData.rawDepth,
                                 0.2 + 0.8 * saturate(shadowData.currentDepth),
-                                diff) * debugExposureComp, 1.0)
+                                diff), 1.0)
                 : (shadowData.invalidReason < 1.5
-                    ? float4(float3(1.0, 0.0, 0.0) * debugExposureComp, 1.0)
+                    ? float4(float3(1.0, 0.0, 0.0), 1.0)
                     : (shadowData.invalidReason < 2.5
-                        ? float4(float3(0.0, 0.0, 1.0) * debugExposureComp, 1.0)
-                        : float4(float3(1.0, 1.0, 0.0) * debugExposureComp, 1.0)));
+                        ? float4(float3(0.0, 0.0, 1.0), 1.0)
+                        : float4(float3(1.0, 1.0, 0.0), 1.0)));
         }
         else o_dbg.color = float4(0,0,0,1);
         return o_dbg;

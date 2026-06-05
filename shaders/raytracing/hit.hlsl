@@ -1358,6 +1358,37 @@ void ClosestHitImpl(inout RayPayload payload,
     if (mode == 5) { PayloadSetColor(payload, F0); payload.t = RayTCurrent(); return; }
     if (mode == 6) { PayloadSetColor(payload, float3(metalness, metalness, metalness)); payload.t = RayTCurrent(); return; }
     if (mode == 7) { PayloadSetColor(payload, float3(ao, ao, ao)); payload.t = RayTCurrent(); return; }
+    // Tangent-space debug views (25..28): help diagnose normal-map / TBN issues.
+    // 25=T, 26=B, 27=raw tangent-space normal texel, 28=interpolated geom normal.
+    if (mode >= 25 && mode <= 28) {
+        float3 dbgColor;
+        if (mode == 28) {
+            dbgColor = normalize(worldNormal) * 0.5 + 0.5;
+        } else {
+            float3 dbgN = normalize(worldNormal);
+            float3 dbgT, dbgB;
+            BuildHitShadingBasis(dbgN, worldTangent, dbgT, dbgB);
+            if (mode == 25) {
+                dbgColor = dbgT * 0.5 + 0.5;
+            } else if (mode == 26) {
+                dbgColor = dbgB * 0.5 + 0.5;
+            } else {
+                float3 ts = float3(0.0, 0.0, 1.0);
+                if (texNorm >= 0) {
+                    uint nSlot = NonUniformResourceIndex((uint)texNorm);
+                    float3 raw = textures[nSlot].SampleLevel(linearSampler, uv,
+                                                             textureLod).xyz;
+                    ts = raw * 2.0 - 1.0;
+                    if (flipNormalMapY) ts.y = -ts.y;
+                    ts = normalize(ts);
+                }
+                dbgColor = ts * 0.5 + 0.5;
+            }
+        }
+        PayloadSetColor(payload, dbgColor);
+        payload.t = RayTCurrent();
+        return;
+    }
 
     // Archviz extensions
     float translucency =

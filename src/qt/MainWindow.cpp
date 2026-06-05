@@ -1437,6 +1437,11 @@ void MainWindow::createToolBar()
     debugViewCombo->addItem(tr("Emissive"), 3);
     debugViewCombo->addItem(tr("Roughness"), 4);
     debugViewCombo->addItem(tr("AO"), 7);
+    debugViewCombo->insertSeparator(debugViewCombo->count());
+    debugViewCombo->addItem(tr("Tangent (T)"), 25);
+    debugViewCombo->addItem(tr("Bitangent (B)"), 26);
+    debugViewCombo->addItem(tr("Tangent-Space Normal"), 27);
+    debugViewCombo->addItem(tr("Geometric Normal"), 28);
     debugViewCombo->setToolTip(tr("Viewport display pass"));
     debugViewCombo->setMinimumWidth(112);
     connect(debugViewCombo, qOverload<int>(&QComboBox::currentIndexChanged),

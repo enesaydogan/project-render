@@ -3639,7 +3639,14 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
                                   "Debug: Recent Reset Mask",
                                   "Raster: Shadow",
                                   "Raster: Shadow UV/Depth",
-                                  "Raster: Shadow Map Depth"};
+                                  "Raster: Shadow Map Depth",
+                                  // Indices 25..28 are dispatched on by the
+                                  // shaders; keep them in this order if you
+                                  // extend the array.
+                                  "Debug: Tangent (T)",
+                                  "Debug: Bitangent (B)",
+                                  "Debug: Tangent-Space Normal",
+                                  "Debug: Geometric Normal"};
       if (ImGui::Combo("Debug View", &g_debugMode, debugModes,
                        IM_ARRAYSIZE(debugModes))) {
         // Keep history when switching diagnostics so comparisons are from the

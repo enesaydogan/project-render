@@ -17,7 +17,8 @@ cbuffer TonemapCB : register(b0)
     float ssaoEnabled;
     float ssaoCompositeWeight;
     float whiteBalance; // -1.0 cool, 0.0 neutral, 1.0 warm
-    float3 _pad0;
+    float tonemapDebugMode; // >0 -> bypass tonemap so debug colors aren't crushed
+    float2 _pad0;
 };
 
 float3 ApplyWhiteBalance(float3 color, float balance)
@@ -55,6 +56,17 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     g_bloomTexture.GetDimensions(bloomWidth, bloomHeight);
 
     float3 hdr = g_hdrInput.Load(int3(id.xy, 0)).rgb;
+
+    // Debug view bypass: skip exposure / tonemap / SSAO / bloom / vignette
+    // and just write the raster PS output through a gamma curve. Without
+    // this, SSAO composite (aoTerm) can multiply diagnostic colors to zero,
+    // which is what made every g_debugMode > 0 mode look black on raster.
+    if (tonemapDebugMode > 0.0) {
+        float3 dbgSrgb = pow(max(hdr, 0.0), 1.0 / 2.2);
+        g_out[id.xy] = float4(dbgSrgb, 1.0);
+        return;
+    }
+
     float ssao = g_ssaoTexture.Load(int3(id.xy, 0)).r;
     if (ssaoEnabled == 0.0) ssao = 1.0;
     float aoTerm = lerp(1.0, saturate(ssao), saturate(ssaoCompositeWeight));

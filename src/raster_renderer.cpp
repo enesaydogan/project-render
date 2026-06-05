@@ -23,6 +23,7 @@ using namespace DX12Context;
 extern bool g_rasterDebugUV;
 extern bool g_rasterWireframe;
 extern bool g_rasterDebugDepth;
+extern int g_debugMode;
 
 // Define raster-specific resources here
 ComPtr<ID3D12Resource> RasterRenderer::g_gridVertexBuffer;
@@ -727,7 +728,8 @@ struct TonemapConstants {
   float ssaoEnabled;
   float ssaoCompositeWeight;
   float whiteBalance;
-  float _pad0[3];
+  float debugMode; // 0 = normal tonemap; >0 = gamma-only pass-through for debug views
+  float _pad0[2];
 };
 
 static bool EnsureTonemapPipeline(ID3D12Device *device) {
@@ -1192,6 +1194,7 @@ bool TonemapHdrToBackbuffer(ID3D12Device *device, ID3D12GraphicsCommandList *cmd
   tc.ssaoEnabled = (s_renderSettings.enableSSAO && s_ssaoMap) ? 1.0f : 0.0f;
   tc.ssaoCompositeWeight = s_renderSettings.ssaoCompositeWeight;
   tc.whiteBalance = s_renderSettings.tonemapWhiteBalance;
+  tc.debugMode = (float)g_debugMode;
   if (SUCCEEDED(s_tonemapCB->Map(0, nullptr, &p))) {
     memcpy(p, &tc, sizeof(tc));
     s_tonemapCB->Unmap(0, nullptr);
