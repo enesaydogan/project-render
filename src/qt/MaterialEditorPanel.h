@@ -128,6 +128,7 @@ private:
     QPushButton *m_baseColorButton = nullptr;
     QComboBox *m_materialClassCombo = nullptr;
     QComboBox *m_workflowCombo = nullptr;
+    QComboBox *m_translucencyType = nullptr;
     QLabel *m_secondarySurfaceLabel = nullptr;
     QLabel *m_roughnessSurfaceLabel = nullptr;
     QLabel *m_specularWeightLabel = nullptr;
@@ -144,11 +145,14 @@ private:
     SliderControl *m_coatRoughness = nullptr;
     SliderControl *m_coatIor = nullptr;
     SliderControl *m_translucency = nullptr;
+    SliderControl *m_opacity = nullptr;
+    SliderControl *m_bumpAmount = nullptr;
     SliderControl *m_anisotropy = nullptr;
     SliderControl *m_anisotropyRotation = nullptr;
     SliderControl *m_sheenWeight = nullptr;
     QPushButton *m_sheenColorButton = nullptr;
     QCheckBox *m_thinWalled = nullptr;
+    QCheckBox *m_useRoughness = nullptr;
 
     // Grass tab
     QCheckBox *m_grassEnabled = nullptr;

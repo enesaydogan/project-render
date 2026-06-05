@@ -553,16 +553,114 @@ void MaterialEditorPanel::createUi()
         m_textureSlots[Parallax].amount->setVisible(false);
     }
 
+    auto configureMaterialForm = [](QFormLayout *form) {
+        form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+        form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        form->setFormAlignment(Qt::AlignTop);
+        form->setHorizontalSpacing(12);
+        form->setVerticalSpacing(10);
+        form->setContentsMargins(6, 10, 6, 10);
+    };
+    auto addDivider = [](QFormLayout *form, QWidget *parent) {
+        auto *divider = new QFrame(parent);
+        divider->setFrameShape(QFrame::HLine);
+        divider->setObjectName(QStringLiteral("MaterialDivider"));
+        form->addRow(divider);
+    };
+    auto createPlaceholderCheck = [this](const QString &text,
+                                         bool checked,
+                                         QWidget *parent,
+                                         const QString &reason = QString()) {
+        auto *check = new QCheckBox(text, parent);
+        check->setChecked(checked);
+        check->setEnabled(false);
+        check->setToolTip(
+            reason.isEmpty()
+                ? tr("Placeholder: this material option is not implemented by the renderer yet.")
+                : reason);
+        return check;
+    };
+    auto createPlaceholderCombo = [this](const QStringList &items,
+                                         int index,
+                                         QWidget *parent,
+                                         const QString &reason = QString()) {
+        auto *combo = new QComboBox(parent);
+        combo->addItems(items);
+        combo->setCurrentIndex(index);
+        combo->setEnabled(false);
+        combo->setToolTip(
+            reason.isEmpty()
+                ? tr("Placeholder: this material option is not implemented by the renderer yet.")
+                : reason);
+        return combo;
+    };
+
+    auto *textureTab = new QWidget(m_tabs);
+    auto *textureLayout = new QVBoxLayout(textureTab);
+    textureLayout->setContentsMargins(6, 10, 6, 10);
+    textureLayout->setSpacing(7);
+
+    auto createMapShortcut = [this, textureTab](TextureSlot slot,
+                                                QWidget *parent) {
+        auto *button = new QToolButton(parent);
+        button->setText(tr("Map"));
+        button->setToolTip(tr("Open the texture slot editor."));
+        button->setProperty("materialMapShortcut", true);
+        button->setFixedWidth(48);
+        connect(button, &QToolButton::clicked, this, [this, textureTab, slot]() {
+            m_tabs->setCurrentWidget(textureTab);
+            QWidget *group = m_textureSlots[slot].group;
+            if (group) {
+                group->setFocus(Qt::OtherFocusReason);
+            }
+        });
+        return button;
+    };
+    auto addMappedRow = [&createMapShortcut](QFormLayout *form,
+                                             const QString &label,
+                                             QWidget *control,
+                                             TextureSlot slot,
+                                             QWidget *parent) {
+        auto *rowWidget = new QWidget(parent);
+        auto *row = new QHBoxLayout(rowWidget);
+        row->setContentsMargins(0, 0, 0, 0);
+        row->setSpacing(8);
+        row->addWidget(control, 1);
+        row->addWidget(createMapShortcut(slot, rowWidget));
+        form->addRow(label, rowWidget);
+    };
+
     auto *surfaceTab = new QWidget(m_tabs);
-    auto *surfaceForm = new QFormLayout(surfaceTab);
-    surfaceForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
-    surfaceForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
-    surfaceForm->setHorizontalSpacing(6);
-    surfaceForm->setVerticalSpacing(4);
-    
-    m_baseColorButton = new QPushButton(tr("Pick"), surfaceTab);
-    surfaceForm->addRow(tr("Base Color"), m_baseColorButton);
-    surfaceForm->addRow(m_textureSlots[Albedo].group);
+    auto *surfaceLayout = new QVBoxLayout(surfaceTab);
+    surfaceLayout->setContentsMargins(0, 0, 0, 0);
+    auto *surfaceTitle = new QLabel(tr("Surface"), surfaceTab);
+    surfaceTitle->setObjectName(QStringLiteral("MaterialPageTitle"));
+    surfaceLayout->addWidget(surfaceTitle);
+    auto *surfaceForm = new QFormLayout();
+    configureMaterialForm(surfaceForm);
+    surfaceLayout->addLayout(surfaceForm);
+
+    m_baseColorButton = new QPushButton(surfaceTab);
+    addMappedRow(surfaceForm, tr("Diffuse color"), m_baseColorButton, Albedo,
+                 surfaceTab);
+
+    auto *bumpType = new QComboBox(surfaceTab);
+    bumpType->addItems({tr("Normal Map"), tr("Bump Map (placeholder)")});
+    bumpType->setToolTip(
+        tr("Normal maps are supported. Height/bump conversion is a placeholder."));
+    if (auto *model = qobject_cast<QStandardItemModel *>(bumpType->model())) {
+        if (QStandardItem *item = model->item(1)) {
+            item->setEnabled(false);
+        }
+    }
+    surfaceForm->addRow(tr("Bump type"), bumpType);
+    surfaceForm->addRow(tr("Bump map"),
+                        createMapShortcut(Normal, surfaceTab));
+    m_bumpAmount = CreateSliderControl(0.0, 1.0, 0.01, 3);
+    surfaceForm->addRow(tr("Bump amount"), m_bumpAmount);
+
+    addDivider(surfaceForm, surfaceTab);
 
     m_materialClassCombo = new QComboBox(surfaceTab);
     m_materialClassCombo->addItems({
@@ -573,83 +671,201 @@ void MaterialEditorPanel::createUi()
         tr("Leaf"),
         tr("Emissive"),
     });
-    surfaceForm->addRow(tr("Material Class"), m_materialClassCombo);
+    surfaceForm->addRow(tr("Material class"), m_materialClassCombo);
 
     m_workflowCombo = new QComboBox(surfaceTab);
     m_workflowCombo->addItems({
         tr("Metalness / Roughness"),
         tr("Reflection / Glossiness"),
     });
-    surfaceForm->addRow(tr("Workflow"), m_workflowCombo);
-
-    m_roughnessSurfaceLabel = new QLabel(tr("Roughness"), surfaceTab);
-    m_roughness = CreateSliderControl(0.0, 1.0, 0.01, 3);
-    surfaceForm->addRow(m_roughnessSurfaceLabel, m_roughness);
-    surfaceForm->addRow(m_textureSlots[RoughnessGlossiness].group);
+    m_workflowCombo->setVisible(false);
 
     m_secondarySurfaceLabel = new QLabel(tr("Metalness"), surfaceTab);
     m_metalness = CreateSliderControl(0.0, 1.0, 0.01, 3);
-    surfaceForm->addRow(m_secondarySurfaceLabel, m_metalness);
-    surfaceForm->addRow(m_textureSlots[Metalness].group);
-    surfaceForm->addRow(m_textureSlots[PackedMetalRough].group);
-
-    surfaceForm->addRow(m_textureSlots[Normal].group);
-    surfaceForm->addRow(m_textureSlots[Occlusion].group);
+    auto *metalnessRow = new QWidget(surfaceTab);
+    auto *metalnessLayout = new QHBoxLayout(metalnessRow);
+    metalnessLayout->setContentsMargins(0, 0, 0, 0);
+    metalnessLayout->setSpacing(8);
+    metalnessLayout->addWidget(m_metalness, 1);
+    metalnessLayout->addWidget(createMapShortcut(Metalness, metalnessRow));
+    surfaceForm->addRow(m_secondarySurfaceLabel, metalnessRow);
 
     m_specularWeightLabel = new QLabel(tr("Specular Weight"), surfaceTab);
     m_specularWeight = CreateSliderControl(0.0, 1.0, 0.01, 3);
     surfaceForm->addRow(m_specularWeightLabel, m_specularWeight);
-    m_specularColorButton = new QPushButton(tr("Pick"), surfaceTab);
-    surfaceForm->addRow(tr("Specular Color"), m_specularColorButton);
-    surfaceForm->addRow(m_textureSlots[SpecularColor].group);
+    m_specularColorButton = new QPushButton(surfaceTab);
+    addMappedRow(surfaceForm, tr("Reflection color"), m_specularColorButton,
+                 SpecularColor, surfaceTab);
 
-    m_ior = CreateSliderControl(MaterialSystem::kMinMaterialIor,
-                                MaterialSystem::kMaxMaterialIor, 0.001, 3);
-    surfaceForm->addRow(tr("IOR"), m_ior);
+    m_roughnessSurfaceLabel = new QLabel(tr("Roughness"), surfaceTab);
+    m_roughness = CreateSliderControl(0.0, 1.0, 0.01, 3);
+    auto *roughnessRow = new QWidget(surfaceTab);
+    auto *roughnessLayout = new QHBoxLayout(roughnessRow);
+    roughnessLayout->setContentsMargins(0, 0, 0, 0);
+    roughnessLayout->setSpacing(8);
+    roughnessLayout->addWidget(m_roughness, 1);
+    roughnessLayout->addWidget(
+        createMapShortcut(RoughnessGlossiness, roughnessRow));
+    surfaceForm->addRow(m_roughnessSurfaceLabel, roughnessRow);
 
-    auto *transmissionDivider = new QFrame(surfaceTab);
-    transmissionDivider->setFrameShape(QFrame::HLine);
-    transmissionDivider->setFrameShadow(QFrame::Sunken);
-    surfaceForm->addRow(transmissionDivider);
+    addDivider(surfaceForm, surfaceTab);
+
+    m_coatWeight = CreateSliderControl(0.0, 1.0, 0.01, 3);
+    surfaceForm->addRow(tr("Coat amount"), m_coatWeight);
+    m_coatRoughness = CreateSliderControl(0.0, 1.0, 0.01, 3);
+    surfaceForm->addRow(tr("Coat glossiness"), m_coatRoughness);
+
+    addDivider(surfaceForm, surfaceTab);
 
     m_transmission = CreateSliderControl(0.0, 1.0, 0.01, 3);
-    surfaceForm->addRow(tr("Transmission"), m_transmission);
-    m_transmissionColorButton = new QPushButton(tr("Pick"), surfaceTab);
-    surfaceForm->addRow(tr("Transmission Color"), m_transmissionColorButton);
-    
-    m_thickness = CreateSliderControl(0.0, 1.0, 0.001, 4);
-    surfaceForm->addRow(tr("Thickness"), m_thickness);
-    surfaceForm->addRow(m_textureSlots[Thickness].group);
+    surfaceForm->addRow(tr("Refraction amount"), m_transmission);
+    m_transmissionColorButton = new QPushButton(surfaceTab);
+    surfaceForm->addRow(tr("Refraction color"), m_transmissionColorButton);
+    m_ior = CreateSliderControl(MaterialSystem::kMinMaterialIor,
+                                MaterialSystem::kMaxMaterialIor, 0.001, 3);
+    surfaceForm->addRow(tr("Refraction IOR"), m_ior);
 
-    m_attenuationDistance = CreateSliderControl(0.0, 100.0, 0.01, 3);
-    surfaceForm->addRow(tr("Attenuation Dist"), m_attenuationDistance);
-    
-    m_coatWeight = CreateSliderControl(0.0, 1.0, 0.01, 3);
-    surfaceForm->addRow(tr("Coat"), m_coatWeight);
-    m_coatRoughness = CreateSliderControl(0.0, 1.0, 0.01, 3);
-    surfaceForm->addRow(tr("Coat Roughness"), m_coatRoughness);
+    addDivider(surfaceForm, surfaceTab);
+
+    m_emissiveColorButton = new QPushButton(surfaceTab);
+    addMappedRow(surfaceForm, tr("Self-illumination color"),
+                 m_emissiveColorButton, Emissive, surfaceTab);
+    m_emissiveIntensity = CreateSliderControl(0.0, 1000000.0, 1.0, 1);
+    surfaceForm->addRow(tr("Self-illumination intensity"),
+                        m_emissiveIntensity);
+    surfaceLayout->addStretch(1);
+    m_tabs->addTab(surfaceTab, tr("Surface"));
+
+    auto *advancedTab = new QWidget(m_tabs);
+    auto *advancedLayout = new QVBoxLayout(advancedTab);
+    advancedLayout->setContentsMargins(0, 0, 0, 0);
+    auto *advancedTitle = new QLabel(tr("Surface Details"), advancedTab);
+    advancedTitle->setObjectName(QStringLiteral("MaterialPageTitle"));
+    advancedLayout->addWidget(advancedTitle);
+    auto *advancedForm = new QFormLayout();
+    configureMaterialForm(advancedForm);
+    advancedLayout->addLayout(advancedForm);
+    advancedForm->addRow(createPlaceholderCheck(
+        tr("Physically based Fresnel"), true, advancedTab,
+        tr("Always enabled by the renderer's physically based GGX model.")));
+    advancedForm->addRow(createPlaceholderCheck(
+        tr("Shared surface IOR"), true, advancedTab,
+        tr("The renderer currently uses the shared material IOR.")));
+    addDivider(advancedForm, advancedTab);
+    advancedForm->addRow(
+        tr("Reflection model"),
+        createPlaceholderCombo({tr("GGX")}, 0, advancedTab,
+                               tr("The renderer currently uses GGX.")));
+    auto *ggxTail = CreateSliderControl(0.0, 5.0, 0.01, 3);
+    ggxTail->setValue(2.0);
+    ggxTail->setEnabled(false);
+    ggxTail->setToolTip(
+        tr("Placeholder: configurable reflection-tail shaping is not implemented."));
+    advancedForm->addRow(tr("Highlight tail"), ggxTail);
+
+    m_useRoughness = new QCheckBox(tr("Use roughness"), advancedTab);
+    m_useRoughness->setToolTip(
+        tr("Switches between the metalness/roughness and reflection/glossiness authoring workflows."));
+    advancedForm->addRow(m_useRoughness);
+    m_doubleSided = new QCheckBox(tr("Double-sided"), advancedTab);
+    advancedForm->addRow(m_doubleSided);
+    advancedForm->addRow(
+        createPlaceholderCheck(tr("Back-face reflections"), false, advancedTab));
+
+    addDivider(advancedForm, advancedTab);
+    auto *coatColor = new QPushButton(advancedTab);
+    coatColor->setText(tr("White"));
+    coatColor->setEnabled(false);
+    coatColor->setToolTip(
+        tr("Placeholder: the current coat layer has no independent color."));
+    advancedForm->addRow(tr("Coat color"), coatColor);
     m_coatIor = CreateSliderControl(MaterialSystem::kMinMaterialIor,
                                     MaterialSystem::kMaxMaterialIor, 0.01, 3);
-    surfaceForm->addRow(tr("Coat IOR"), m_coatIor);
-    surfaceForm->addRow(m_textureSlots[CoatNormal].group);
+    advancedForm->addRow(tr("Coat IOR"), m_coatIor);
+    auto *refractionGloss = CreateSliderControl(0.0, 1.0, 0.01, 3);
+    refractionGloss->setValue(1.0);
+    refractionGloss->setEnabled(false);
+    refractionGloss->setToolTip(
+        tr("Placeholder: refraction currently shares the surface roughness."));
+    advancedForm->addRow(tr("Refraction glossiness"), refractionGloss);
+    advancedForm->addRow(createPlaceholderCheck(
+        tr("Transmission shadows"), true, advancedTab,
+        tr("Transmission is included in visibility by the renderer.")));
+    m_thinWalled = new QCheckBox(tr("Thin-walled transmission"), advancedTab);
+    advancedForm->addRow(m_thinWalled);
 
-    m_translucency = CreateSliderControl(0.0, 1.0, 0.01, 3);
-    surfaceForm->addRow(tr("Translucency"), m_translucency);
-    
+    addDivider(advancedForm, advancedTab);
+    advancedForm->addRow(createPlaceholderCheck(
+        tr("Emission contributes to lighting"), true, advancedTab,
+        tr("Emissive materials already participate in renderer lighting.")));
+    advancedForm->addRow(createPlaceholderCheck(
+        tr("Emission exposure compensation"), false, advancedTab));
+
+    addDivider(advancedForm, advancedTab);
     m_anisotropy = CreateSliderControl(-1.0, 1.0, 0.01, 3);
-    surfaceForm->addRow(tr("Anisotropy"), m_anisotropy);
+    advancedForm->addRow(tr("Anisotropy"), m_anisotropy);
     m_anisotropyRotation = CreateSliderControl(0.0, 360.0, 1.0, 1);
-    surfaceForm->addRow(tr("Aniso Rotation"), m_anisotropyRotation);
-    
+    advancedForm->addRow(tr("Anisotropy rotation"), m_anisotropyRotation);
     m_sheenWeight = CreateSliderControl(0.0, 1.0, 0.01, 3);
-    surfaceForm->addRow(tr("Sheen"), m_sheenWeight);
-    m_sheenColorButton = new QPushButton(tr("Pick"), surfaceTab);
-    surfaceForm->addRow(tr("Sheen Color"), m_sheenColorButton);
-    
-    m_thinWalled = new QCheckBox(tr("Thin Walled"), surfaceTab);
-    surfaceForm->addRow(m_thinWalled);
+    advancedForm->addRow(tr("Sheen amount"), m_sheenWeight);
+    m_sheenColorButton = new QPushButton(advancedTab);
+    advancedForm->addRow(tr("Sheen color"), m_sheenColorButton);
+    advancedLayout->addStretch(1);
+    m_tabs->addTab(advancedTab, tr("Advanced"));
 
-    m_tabs->addTab(surfaceTab, tr("Surface"));
+    auto *opacityTab = new QWidget(m_tabs);
+    auto *opacityLayout = new QVBoxLayout(opacityTab);
+    opacityLayout->setContentsMargins(0, 0, 0, 0);
+    auto *opacityTitle =
+        new QLabel(tr("Opacity and Volume"), opacityTab);
+    opacityTitle->setObjectName(QStringLiteral("MaterialPageTitle"));
+    opacityLayout->addWidget(opacityTitle);
+    auto *opacityForm = new QFormLayout();
+    configureMaterialForm(opacityForm);
+    opacityLayout->addLayout(opacityForm);
+    auto *opacitySource = new QComboBox(opacityTab);
+    opacitySource->addItem(tr("Material alpha x opacity map"));
+    opacitySource->setToolTip(
+        tr("The renderer multiplies material alpha by the optional opacity texture."));
+    opacityForm->addRow(tr("Opacity input"), opacitySource);
+    m_opacity = CreateSliderControl(0.0, 1.0, 0.01, 3);
+    addMappedRow(opacityForm, tr("Opacity"), m_opacity, Opacity,
+                 opacityTab);
+    m_alphaMode = new QComboBox(opacityTab);
+    m_alphaMode->addItems({tr("Opaque"), tr("Clip"), tr("Stochastic")});
+    opacityForm->addRow(tr("Opacity mode"), m_alphaMode);
+    m_alphaCutoff = CreateSliderControl(0.0, 1.0, 0.01, 3);
+    opacityForm->addRow(tr("Clip threshold"), m_alphaCutoff);
+
+    addDivider(opacityForm, opacityTab);
+    m_translucencyType = new QComboBox(opacityTab);
+    m_translucencyType->addItems(
+        {tr("None"), tr("Thin translucency"), tr("SSS (placeholder)")});
+    m_translucencyType->setToolTip(
+        tr("Thin translucency is supported. Full subsurface scattering is a placeholder."));
+    if (auto *model =
+            qobject_cast<QStandardItemModel *>(m_translucencyType->model())) {
+        if (QStandardItem *item = model->item(2)) {
+            item->setEnabled(false);
+        }
+    }
+    opacityForm->addRow(tr("Translucency type"), m_translucencyType);
+    m_translucency = CreateSliderControl(0.0, 1.0, 0.01, 3);
+    opacityForm->addRow(tr("Translucency amount"), m_translucency);
+    m_thickness = CreateSliderControl(0.0, 1.0, 0.001, 4);
+    addMappedRow(opacityForm, tr("Depth"), m_thickness, Thickness, opacityTab);
+    m_attenuationDistance = CreateSliderControl(0.0, 100.0, 0.01, 3);
+    opacityForm->addRow(tr("Attenuation distance"), m_attenuationDistance);
+    opacityLayout->addStretch(1);
+    m_tabs->addTab(opacityTab, tr("Opacity + Volume"));
+
+    for (int slot = 0; slot < TextureSlotCount; ++slot) {
+        if (m_textureSlots[slot].group) {
+            textureLayout->addWidget(m_textureSlots[slot].group);
+        }
+    }
+    textureLayout->addStretch(1);
+    m_tabs->addTab(textureTab, tr("Maps"));
 
     auto *grassTab = new QWidget(m_tabs);
     auto *grassLayout = new QVBoxLayout(grassTab);
@@ -761,35 +977,6 @@ void MaterialEditorPanel::createUi()
     parallaxForm->addRow(m_parallaxBackFace);
     m_tabs->addTab(parallaxTab, tr("Parallax"));
 
-    auto *emissionTab = new QWidget(m_tabs);
-    auto *emissionForm = new QFormLayout(emissionTab);
-    emissionForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
-    emissionForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
-    emissionForm->setHorizontalSpacing(6);
-    emissionForm->setVerticalSpacing(4);
-    m_emissiveColorButton = new QPushButton(tr("Pick"), emissionTab);
-    emissionForm->addRow(tr("Emissive Color"), m_emissiveColorButton);
-    m_emissiveIntensity = CreateSliderControl(0.0, 1000000.0, 1.0, 1);
-    emissionForm->addRow(tr("Emissive Intensity"), m_emissiveIntensity);
-    emissionForm->addRow(m_textureSlots[Emissive].group);
-    m_tabs->addTab(emissionTab, tr("Emission"));
-
-    auto *flagsTab = new QWidget(m_tabs);
-    auto *flagsForm = new QFormLayout(flagsTab);
-    flagsForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
-    flagsForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
-    flagsForm->setHorizontalSpacing(6);
-    flagsForm->setVerticalSpacing(4);
-    m_doubleSided = new QCheckBox(tr("Double Sided"), flagsTab);
-    flagsForm->addRow(m_doubleSided);
-    m_alphaMode = new QComboBox(flagsTab);
-    m_alphaMode->addItems({tr("OPAQUE"), tr("MASK"), tr("BLEND")});
-    flagsForm->addRow(tr("Alpha Mode"), m_alphaMode);
-    m_alphaCutoff = CreateSliderControl(0.0, 1.0, 0.01, 3);
-    flagsForm->addRow(tr("Alpha Cutoff"), m_alphaCutoff);
-    flagsForm->addRow(m_textureSlots[Opacity].group);
-    m_tabs->addTab(flagsTab, tr("Flags"));
-
     auto *qaTab = new QWidget(m_tabs);
     auto *qaLayout = new QVBoxLayout(qaTab);
     m_qaLabel = new QLabel(qaTab);
@@ -798,6 +985,51 @@ void MaterialEditorPanel::createUi()
     qaLayout->addWidget(m_qaLabel);
     qaLayout->addStretch(1);
     m_tabs->addTab(qaTab, tr("QA"));
+
+    m_tabs->setObjectName(QStringLiteral("ProjectMaterialTabs"));
+    m_tabs->setDocumentMode(true);
+    m_tabs->setUsesScrollButtons(true);
+    m_tabs->setStyleSheet(QStringLiteral(R"(
+        QTabWidget#ProjectMaterialTabs::pane {
+            background: #242424;
+            border: none;
+        }
+        QTabWidget#ProjectMaterialTabs QTabBar::tab {
+            min-height: 30px;
+            padding: 7px 12px;
+            background: #242424;
+            color: #aaaaaa;
+            border: none;
+        }
+        QTabWidget#ProjectMaterialTabs QTabBar::tab:selected {
+            background: #2d363a;
+            color: #72d8fa;
+            border-radius: 7px;
+        }
+        QLabel#MaterialPageTitle {
+            color: white;
+            font-size: 16px;
+            font-weight: 700;
+            padding: 12px 6px 2px 6px;
+        }
+        QFrame#MaterialDivider {
+            color: #505050;
+            background: #505050;
+            max-height: 1px;
+            margin: 7px 0px;
+        }
+        QToolButton[materialMapShortcut="true"] {
+            color: #b8b8b8;
+            background: transparent;
+            border: 1px solid #686868;
+            min-height: 25px;
+            padding: 2px 5px;
+        }
+        QToolButton[materialMapShortcut="true"]:hover {
+            color: #72d8fa;
+            border-color: #72d8fa;
+        }
+    )"));
 
     inspectorLayout->addWidget(m_tabs);
     layout->addWidget(m_inspectorGroup);
@@ -1043,6 +1275,20 @@ void MaterialEditorPanel::createUi()
             }
         });
     });
+    connect(m_useRoughness, &QCheckBox::toggled, this, [this](bool enabled) {
+        if (m_syncing) {
+            return;
+        }
+        const int workflow =
+            enabled ? Asset::Material::kWorkflowMetalRoughness
+                    : Asset::Material::kWorkflowReflectionGlossiness;
+        applyMaterialChange([workflow](Asset::Material &m) {
+            m.workflow = static_cast<uint32_t>(workflow);
+            if (m.workflow == Asset::Material::kWorkflowReflectionGlossiness) {
+                m.metalness = 0.0f;
+            }
+        });
+    });
 
     connect(m_materialClassCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
         if (m_syncing) {
@@ -1066,6 +1312,18 @@ void MaterialEditorPanel::createUi()
                 v = 1.0f;
             }
             m.roughness = IsReflectionGlossinessWorkflow(m) ? (1.0f - v) : v;
+        });
+    });
+    connect(m_bumpAmount->spinBox(),
+            qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+            [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            MaterialSystem::SetTextureAmount(
+                m, MaterialSystem::TextureSlot::Normal,
+                static_cast<float>(value));
         });
     });
     connect(m_metalness->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
@@ -1135,7 +1393,8 @@ void MaterialEditorPanel::createUi()
             return;
         }
         applyMaterialChange([value](Asset::Material &m) {
-            m.coatRoughness = static_cast<float>(value);
+            m.coatRoughness =
+                1.0f - std::clamp(static_cast<float>(value), 0.0f, 1.0f);
         });
     });
     connect(m_coatIor->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
@@ -1152,6 +1411,20 @@ void MaterialEditorPanel::createUi()
         }
         applyMaterialChange([value](Asset::Material &m) {
             m.translucency = static_cast<float>(value);
+        }, true);
+    });
+    connect(m_translucencyType,
+            qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this](int index) {
+        if (m_syncing || index > 1) {
+            return;
+        }
+        applyMaterialChange([index](Asset::Material &m) {
+            if (index == 0) {
+                m.translucency = 0.0f;
+            } else if (m.translucency <= 1.0e-5f) {
+                m.translucency = 0.5f;
+            }
         }, true);
     });
     connect(m_anisotropy->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
@@ -1449,6 +1722,17 @@ void MaterialEditorPanel::createUi()
         applyMaterialChange([value](Asset::Material &m) {
             m.emissiveIntensity = static_cast<float>(value);
         });
+    });
+    connect(m_opacity->spinBox(),
+            qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+            [this](double value) {
+        if (m_syncing) {
+            return;
+        }
+        applyMaterialChange([value](Asset::Material &m) {
+            m.diffuseColor[3] =
+                std::clamp(static_cast<float>(value), 0.0f, 1.0f);
+        }, true);
     });
 
     connect(m_doubleSided, &QCheckBox::toggled, this, [this](bool enabled) {
@@ -1767,12 +2051,18 @@ void MaterialEditorPanel::syncInspectorMaterialState(const Asset::Material &mat,
                           mat.materialClass)));
     SyncComboBoxIndex(m_workflowCombo,
                       static_cast<int>(std::clamp(mat.workflow, 0u, 1u)));
+    SyncCheckBoxState(m_useRoughness,
+                      !IsReflectionGlossinessWorkflow(mat));
     updateWorkflowUi(mat);
 
     SyncSliderControlValue(m_roughness,
                            IsReflectionGlossinessWorkflow(mat)
                                ? (1.0f - mat.roughness)
                                : mat.roughness);
+    SyncSliderControlValue(
+        m_bumpAmount,
+        MaterialSystem::GetTextureAmount(
+            mat, MaterialSystem::TextureSlot::Normal));
     SyncSliderControlValue(m_metalness,
                            IsReflectionGlossinessWorkflow(mat)
                                ? mat.specularWeight
@@ -1785,9 +2075,11 @@ void MaterialEditorPanel::syncInspectorMaterialState(const Asset::Material &mat,
     SyncSliderControlValue(m_thickness, mat.thickness);
     SyncSliderControlValue(m_attenuationDistance, mat.attenuationDistance);
     SyncSliderControlValue(m_coatWeight, mat.coatWeight);
-    SyncSliderControlValue(m_coatRoughness, mat.coatRoughness);
+    SyncSliderControlValue(m_coatRoughness, 1.0f - mat.coatRoughness);
     SyncSliderControlValue(m_coatIor, mat.coatIor);
     SyncSliderControlValue(m_translucency, mat.translucency);
+    SyncComboBoxIndex(m_translucencyType,
+                      mat.translucency > 1.0e-5f ? 1 : 0);
     SyncSliderControlValue(m_anisotropy, mat.anisotropy);
     SyncSliderControlValue(m_anisotropyRotation, mat.anisotropyRotation);
     SyncSliderControlValue(m_sheenWeight, mat.sheenWeight);
@@ -1870,6 +2162,7 @@ void MaterialEditorPanel::syncInspectorMaterialState(const Asset::Material &mat,
     SyncSliderControlValue(m_emissiveIntensity, mat.emissiveIntensity);
 
     SyncCheckBoxState(m_doubleSided, mat.doubleSided);
+    SyncSliderControlValue(m_opacity, mat.diffuseColor[3]);
     SyncComboBoxIndex(m_alphaMode, AlphaModeIndex(mat.alphaMode));
     SyncSliderControlValue(m_alphaCutoff, mat.alphaCutoff);
     m_alphaCutoff->setEnabled(mat.alphaMode == "MASK");
@@ -2293,10 +2586,12 @@ void MaterialEditorPanel::setColorButton(QPushButton *button, const QColor &colo
         return;
     }
     const QString bg = color.name(QColor::HexRgb);
-    const QString fg = (color.lightness() < 128) ? QStringLiteral("#ffffff")
-                                                 : QStringLiteral("#000000");
-    button->setText(tr("Pick"));
-    button->setStyleSheet(QStringLiteral("background-color:%1;color:%2;").arg(bg, fg));
+    button->setText(QString());
+    button->setFixedSize(58, 32);
+    button->setStyleSheet(
+        QStringLiteral(
+            "background-color:%1;border:2px solid #666;border-radius:7px;")
+            .arg(bg));
     button->setToolTip(tr("RGB %1 %2 %3")
                            .arg(color.red())
                            .arg(color.green())
