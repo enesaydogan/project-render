@@ -32,6 +32,7 @@
 
 // Expose global debug flag (set by WinMain parsing)
 extern bool g_debugLog;
+extern int g_debugMode;
 
 using Microsoft::WRL::ComPtr;
 
@@ -1280,7 +1281,8 @@ struct TonemapConstants {
   uint32_t aoMode;
   float _pad0;
   float whiteBalance;
-  float _pad1[3];
+  float tonemapDebugMode; // >0 -> bypass tonemap so debug colors aren't crushed
+  float _pad1[2];
 };
 
 static void EnsureTonemapPipeline() {
@@ -10416,6 +10418,7 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     tc.aoIntensity = 0.0f;
     tc.aoRadiusMeters = 0.0f;
     tc.aoMode = static_cast<uint32_t>(s_tonemapAoMode);
+    tc.tonemapDebugMode = static_cast<float>(g_debugMode);
     const bool useTonemapAo = false;
 
     void *p = nullptr;

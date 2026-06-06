@@ -1622,12 +1622,13 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     // the diagnostic color into the hit record via PayloadSetColor, but the
     // BSDF evaluation below would overwrite it with a full lighting result.
     // Short-circuit here for surface hits so the debug payload reaches the
-    // screen. Misses fall through so the sky shows through unchanged. Skip
-    // accumulation — debug frames should not be averaged with each other.
+    // screen. Misses fall through so the sky shows unchanged. We only write
+    // the raw per-frame sample to g_output; wavefront_accumulate_cs then
+    // averages it across frames, which smooths out per-pixel UV jitter for
+    // texture-sampling modes (Normal, Tangent-Space Normal).
     if (SHADER_DEBUG_MODE > 0.0 && !isMiss) {
         float3 debugColor = max(visibleEmissive, 0.0);
         g_output[pixel] = float4(debugColor, 1.0);
-        g_accumulation[pixel] = float4(debugColor, 1.0);
         g_depth[pixel] = depth;
         g_linearDepth[pixel] = linearDepth;
         g_motionVectors[pixel] = motion;

@@ -17,7 +17,8 @@ cbuffer TonemapCB : register(b0)
     uint aoMode;
     float _pad0;
     float whiteBalance;
-    float3 _pad1;
+    float tonemapDebugMode; // >0 -> bypass tonemap so debug colors aren't crushed
+    float2 _pad1;
 };
 
 float3 ApplyWhiteBalance(float3 color, float balance)
@@ -211,6 +212,18 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     }
 
     float3 hdr = g_hdrInput.Load(int3(id.xy, 0)).rgb;
+
+    // Debug view bypass: skip tonemap AO / exposure / filmic / contrast /
+    // saturation / vignette and gamma the raster/wavefront output directly.
+    // Without this, ComputeDxrTonemapAo() and the exposure multiply could
+    // crush diagnostic colors to zero (that is what made g_debugMode > 0
+    // appear as solid black geometry on the DXR path).
+    if (tonemapDebugMode > 0.0f) {
+        float3 dbgSrgb = pow(max(hdr, 0.0f), 1.0f / 2.2f);
+        g_out[id.xy] = float4(dbgSrgb, 1.0f);
+        return;
+    }
+
     hdr *= ComputeDxrTonemapAo(id.xy);
     hdr *= exposure;
     hdr = ApplyWhiteBalance(hdr, whiteBalance);

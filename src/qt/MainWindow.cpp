@@ -1442,6 +1442,7 @@ void MainWindow::createToolBar()
     debugViewCombo->addItem(tr("Bitangent (B)"), 26);
     debugViewCombo->addItem(tr("Tangent-Space Normal"), 27);
     debugViewCombo->addItem(tr("Geometric Normal"), 28);
+    debugViewCombo->addItem(tr("Normal Tex Raw RGB"), 29);
     debugViewCombo->setToolTip(tr("Viewport display pass"));
     debugViewCombo->setMinimumWidth(112);
     connect(debugViewCombo, qOverload<int>(&QComboBox::currentIndexChanged),

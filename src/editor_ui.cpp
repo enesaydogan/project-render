@@ -3646,7 +3646,8 @@ void DrawEditorUI(float fps, float &timeOfDay, float &northOffset,
                                   "Debug: Tangent (T)",
                                   "Debug: Bitangent (B)",
                                   "Debug: Tangent-Space Normal",
-                                  "Debug: Geometric Normal"};
+                                  "Debug: Geometric Normal",
+                                  "Debug: Normal Tex Raw RGB"};
       if (ImGui::Combo("Debug View", &g_debugMode, debugModes,
                        IM_ARRAYSIZE(debugModes))) {
         // Keep history when switching diagnostics so comparisons are from the

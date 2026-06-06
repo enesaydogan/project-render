@@ -1358,12 +1358,22 @@ void ClosestHitImpl(inout RayPayload payload,
     if (mode == 5) { PayloadSetColor(payload, F0); payload.t = RayTCurrent(); return; }
     if (mode == 6) { PayloadSetColor(payload, float3(metalness, metalness, metalness)); payload.t = RayTCurrent(); return; }
     if (mode == 7) { PayloadSetColor(payload, float3(ao, ao, ao)); payload.t = RayTCurrent(); return; }
-    // Tangent-space debug views (25..28): help diagnose normal-map / TBN issues.
-    // 25=T, 26=B, 27=raw tangent-space normal texel, 28=interpolated geom normal.
-    if (mode >= 25 && mode <= 28) {
+    // Tangent-space debug views (25..29): help diagnose normal-map / TBN issues.
+    // 25=T, 26=B, 27=decoded tangent-space normal (after Y-flip + normalize),
+    // 28=interpolated geom normal, 29=raw RGB texel from the normal-map slot
+    // with no decode at all (compare against the PNG opened in an image viewer
+    // to confirm what bytes actually reach the GPU sampler).
+    if (mode >= 25 && mode <= 29) {
         float3 dbgColor;
         if (mode == 28) {
             dbgColor = normalize(worldNormal) * 0.5 + 0.5;
+        } else if (mode == 29) {
+            dbgColor = float3(0.0, 0.0, 0.0);
+            if (texNorm >= 0) {
+                uint nSlot = NonUniformResourceIndex((uint)texNorm);
+                dbgColor = textures[nSlot].SampleLevel(linearSampler, uv,
+                                                       textureLod).xyz;
+            }
         } else {
             float3 dbgN = normalize(worldNormal);
             float3 dbgT, dbgB;

@@ -1793,11 +1793,17 @@ PSOutput PSMainMesh(PSInputMesh input, uint primitiveId : SV_PrimitiveID)
         else if (mode == 5) o_dbg.color = float4(saturate(F0), 1.0);
         else if (mode == 6) o_dbg.color = float4(metalness.xxx, 1.0);
         else if (mode == 7) o_dbg.color = float4(ao.xxx, 1.0);
-        else if (mode == 25 || mode == 26 || mode == 27 || mode == 28) {
-            // Tangent-space debug views: T / B / raw normal-map texel / geom N.
+        else if (mode == 25 || mode == 26 || mode == 27 || mode == 28 || mode == 29) {
+            // 25=T, 26=B, 27=decoded TS normal, 28=geom N, 29=raw RGB texel.
             float3 dbgColor;
             if (mode == 28) {
                 dbgColor = normalize(worldNormal) * 0.5 + 0.5;
+            } else if (mode == 29) {
+                dbgColor = float3(0.0, 0.0, 0.0);
+                if (textureIndices.z >= 0) {
+                    dbgColor = textures[textureIndices.z]
+                        .Sample(linearSampler, uv).xyz;
+                }
             } else {
                 float3 dbgN = normalize(worldNormal);
                 float3 dbgT, dbgB;
