@@ -1571,8 +1571,18 @@ PSOutput PSMainMesh(PSInputMesh input, uint primitiveId : SV_PrimitiveID)
 
     // Lighting
     float3 V = normalize(pos - input.worldPos);
-    // Two-sided shading guard for assets with inconsistent face orientation.
-    if (dot(N, V) < 0.0) N = -N;
+    // Two-sided shading guard. Decide back-facing from the GEOMETRIC normal,
+    // not the bumped N — see the matching comment in
+    // shaders/raytracing/hit.hlsl. Using bumped N falsely flipped lighting at
+    // grazing camera angles on high-frequency normal maps.
+    if (dot(normalize(worldNormal), V) < 0.0) {
+        N = -N;
+    } else {
+        float NdotV = dot(N, V);
+        if (NdotV < 1.0e-3) {
+            N = normalize(N + V * (1.0e-3 - NdotV));
+        }
+    }
     float3 L = normalize(lightDir.xyz);
     if (length(lightDir.xyz) < 0.001) L = float3(0, 1, 0);
     float3 H = normalize(V + L);

@@ -1318,9 +1318,26 @@ void ClosestHitImpl(inout RayPayload payload,
                                  : GetNormalFromMap(uv, parallaxNormal, worldTangent, texCoatNormal, lobeParams.x, textureLod, samplingVariation, triRotation, matExtra.uvRotationParams, objectOrigin, primIndex);
         N = normalize(lerp(N, coatN, saturate(clearcoat)));
     }
-    // Two-sided shading guard for reverse-oriented faces.
+    // Two-sided shading guard for reverse-oriented faces. The front/back
+    // decision MUST use the geometric normal, not the normal-mapped N — a
+    // high-frequency normal map can perturb N below the view horizon on a
+    // perfectly front-facing surface at grazing camera angles, and flipping
+    // it there inverts lighting. That false flip is what produced the
+    // long-standing "lighting goes wrong at certain camera angles, Y-flip
+    // doesn't help, flipping just shifts which angles look wrong" bug on
+    // high-detail scanned normal maps (e.g. _nor_gl_4k stone walls).
     float3 viewDirTwoSided = normalize(-WorldRayDirection());
-    if (dot(N, viewDirTwoSided) < 0.0) N = -N;
+    if (dot(normalize(worldNormal), viewDirTwoSided) < 0.0) {
+        N = -N;
+    } else {
+        // Front-facing: prevent the bumped normal from pointing into the
+        // view (NdotV <= 0 makes BRDF terms cancel/blow up). Tilt the
+        // shaded normal back just above the view horizon when needed.
+        float NdotV = dot(N, viewDirTwoSided);
+        if (NdotV < 1.0e-3) {
+            N = normalize(N + viewDirTwoSided * (1.0e-3 - NdotV));
+        }
+    }
     
     // Ambient occlusion (only needed for GI_EVAL which computes Lo)
     float ao = 1.0;
