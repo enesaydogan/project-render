@@ -733,7 +733,7 @@ void BuildRuntimeDxrMaterialData(const Asset::Material &material,
   outExtra->uvTransform[3] = material.uvOffset[1];
   outExtra->uvRotationParams[0] = material.uvRotationDegrees;
   outExtra->uvRotationParams[1] = material.normalMapFlipY ? 1.0f : 0.0f;
-  outExtra->uvRotationParams[2] = 0.0f;
+  outExtra->uvRotationParams[2] = material.useBumpMap ? 1.0f : 0.0f;
   outExtra->uvRotationParams[3] = 0.0f;
 
   outExtra->triPlanarParams[0] = material.triPlanarEnabled;
@@ -905,7 +905,8 @@ void BuildRuntimeRasterMaterialConstants(
   outConstants->uvRotationParams[0] = material.uvRotationDegrees;
   outConstants->uvRotationParams[1] =
       material.normalMapFlipY ? 1.0f : 0.0f;
-  outConstants->uvRotationParams[2] = 0.0f;
+  outConstants->uvRotationParams[2] =
+      material.useBumpMap ? 1.0f : 0.0f;
   outConstants->uvRotationParams[3] = 0.0f;
 
   outConstants->triPlanarParams[0] = material.triPlanarEnabled;

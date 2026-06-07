@@ -147,6 +147,7 @@ private:
     SliderControl *m_translucency = nullptr;
     SliderControl *m_opacity = nullptr;
     SliderControl *m_bumpAmount = nullptr;
+    QComboBox *m_bumpType = nullptr;
     SliderControl *m_anisotropy = nullptr;
     SliderControl *m_anisotropyRotation = nullptr;
     SliderControl *m_sheenWeight = nullptr;

@@ -140,6 +140,10 @@ struct Material {
   float roughnessGlossTextureAmount = 1.0f;
   float normalTextureAmount = 1.0f;
   bool normalMapFlipY = false;
+  // When true, the normal texture is treated as a grayscale height map; the
+  // shader derives a tangent-space normal from the height gradient instead of
+  // unpacking the RGB as XYZ. Lets the Normal slot accept either format.
+  bool useBumpMap = false;
   float occlusionTextureAmount = 1.0f;
   float emissiveTextureAmount = 1.0f;
   float specularColorTextureAmount = 1.0f;

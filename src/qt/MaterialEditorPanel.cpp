@@ -873,16 +873,14 @@ void MaterialEditorPanel::createUi()
     addMappedRow(surfaceForm, tr("Diffuse color"), m_baseColorButton, Albedo,
                  surfaceTab);
 
-    auto *bumpType = new QComboBox(surfaceTab);
-    bumpType->addItems({tr("Normal Map"), tr("Bump Map (placeholder)")});
-    bumpType->setToolTip(
-        tr("Normal maps are supported. Height/bump conversion is a placeholder."));
-    if (auto *model = qobject_cast<QStandardItemModel *>(bumpType->model())) {
-        if (QStandardItem *item = model->item(1)) {
-            item->setEnabled(false);
-        }
-    }
-    surfaceForm->addRow(tr("Bump type"), bumpType);
+    m_bumpType = new QComboBox(surfaceTab);
+    m_bumpType->addItems({tr("Normal Map"), tr("Bump Map (height)")});
+    m_bumpType->setToolTip(
+        tr("Normal Map: RGB encodes tangent-space XYZ directly.\n"
+           "Bump Map: grayscale heightfield — the shader derives the normal "
+           "from the height gradient.\n"
+           "Both use the Normal Map texture slot."));
+    surfaceForm->addRow(tr("Bump type"), m_bumpType);
     surfaceForm->addRow(tr("Bump map"),
                         createMapShortcut(Normal, surfaceTab));
     m_bumpAmount = CreateSliderControl(0.0, 1.0, 0.01, 3);
@@ -1369,6 +1367,7 @@ void MaterialEditorPanel::createUi()
             const float aa = mat.opacityTextureAmount;
             const float na = mat.normalTextureAmount;
             const bool normalMapFlipY = mat.normalMapFlipY;
+            const bool useBumpMap = mat.useBumpMap;
             const float cna = mat.coatNormalTextureAmount;
             const float ea = mat.emissiveTextureAmount;
             const float oa = mat.occlusionTextureAmount;
@@ -1404,6 +1403,7 @@ void MaterialEditorPanel::createUi()
             mat.opacityTextureAmount = aa;
             mat.normalTextureAmount = na;
             mat.normalMapFlipY = normalMapFlipY;
+            mat.useBumpMap = useBumpMap;
             mat.coatNormalTextureAmount = cna;
             mat.emissiveTextureAmount = ea;
             mat.occlusionTextureAmount = oa;
@@ -1588,6 +1588,16 @@ void MaterialEditorPanel::createUi()
             MaterialSystem::SetTextureAmount(
                 m, MaterialSystem::TextureSlot::Normal,
                 static_cast<float>(value));
+        });
+    });
+    connect(m_bumpType, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this](int index) {
+        if (m_syncing) {
+            return;
+        }
+        const bool bump = (index == 1);
+        applyMaterialChange([bump](Asset::Material &m) {
+            m.useBumpMap = bump;
         });
     });
     connect(m_metalness->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
@@ -2329,6 +2339,10 @@ void MaterialEditorPanel::syncInspectorMaterialState(const Asset::Material &mat,
     SyncCheckBoxState(m_useRoughness,
                       !IsReflectionGlossinessWorkflow(mat));
     SyncCheckBoxState(m_normalMapFlipY, mat.normalMapFlipY);
+    if (m_bumpType) {
+        QSignalBlocker blocker(m_bumpType);
+        m_bumpType->setCurrentIndex(mat.useBumpMap ? 1 : 0);
+    }
     updateWorkflowUi(mat);
 
     SyncSliderControlValue(m_roughness,

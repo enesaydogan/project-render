@@ -337,6 +337,123 @@ float3 DecodeNormalTexel(float3 encodedNormal, bool flipNormalMapY)
     return tangentNormal;
 }
 
+// Treat the bound "normal" texture as a grayscale height map and derive a
+// tangent-space normal from the central-difference gradient. amount drives
+// the height-to-normal slope; <=0 returns the flat tangent normal.
+// Y-flip toggle is reused: if set, the V gradient sign is inverted so the
+// same bump map reads consistently with whichever convention the user
+// expects for the normal-map slot.
+float3 SampleBumpToTangentNormal(int texIndex, float2 uv, float amount,
+                                 float lod, bool flipNormalMapY)
+{
+    if (texIndex < 0 || amount <= 0.0f) {
+        return float3(0.0f, 0.0f, 1.0f);
+    }
+    uint texSlot = NonUniformResourceIndex((uint)texIndex);
+    uint texWidth = 0u;
+    uint texHeight = 0u;
+    textures[texSlot].GetDimensions(texWidth, texHeight);
+    float2 texelSize = float2(1.0f / max((float)texWidth, 1.0f),
+                              1.0f / max((float)texHeight, 1.0f));
+    float h_l = textures[texSlot]
+        .SampleLevel(linearSampler, uv - float2(texelSize.x, 0.0f), lod).r;
+    float h_r = textures[texSlot]
+        .SampleLevel(linearSampler, uv + float2(texelSize.x, 0.0f), lod).r;
+    float h_d = textures[texSlot]
+        .SampleLevel(linearSampler, uv - float2(0.0f, texelSize.y), lod).r;
+    float h_u = textures[texSlot]
+        .SampleLevel(linearSampler, uv + float2(0.0f, texelSize.y), lod).r;
+    // 8.0 keeps the visual response in roughly the same range as the normal
+    // map's amount slider when slopes are gentle; users can still push past
+    // 1.0 on the slider for stronger bumps if the height map is faint.
+    float strength = 8.0f * saturate(amount);
+    float dhdu = (h_r - h_l) * 0.5f * strength;
+    float dhdv = (h_u - h_d) * 0.5f * strength;
+    if (flipNormalMapY) {
+        dhdv = -dhdv;
+    }
+    return normalize(float3(-dhdu, -dhdv, 1.0f));
+}
+
+// Stochastic UV variant: 3-cell weighted bump-map blend.
+// The 4 gradient taps per cell are offset in *original* UV space, then each
+// tap is run through TransformUvForCell, so the finite differences come back
+// as dh/du, dh/dv in the mesh tangent frame directly — no per-cell rotation
+// undo needed (unlike the normal-map path, where the texel encodes XY in
+// post-rotation space and must be inverse-rotated before blending).
+float3 SampleStochasticBumpToTangentNormal(int texIndex, float2 uv,
+                                           float amount, float3 objectOrigin,
+                                           float3 worldNormal,
+                                           float4 variationParams,
+                                           float4 rotationParams, float lod,
+                                           uint primitiveId,
+                                           bool flipNormalMapY)
+{
+    if (texIndex < 0 || amount <= 0.0f) {
+        return float3(0.0f, 0.0f, 1.0f);
+    }
+    uint texSlot = NonUniformResourceIndex((uint)texIndex);
+    uint texWidth = 0u;
+    uint texHeight = 0u;
+    textures[texSlot].GetDimensions(texWidth, texHeight);
+    float2 texelSize = float2(1.0f / max((float)texWidth, 1.0f),
+                              1.0f / max((float)texHeight, 1.0f));
+    float strength = 8.0f * saturate(amount);
+
+    uint baseSeed = ComputeUvVariationBaseSeed(variationParams, objectOrigin,
+                                               normalize(worldNormal),
+                                               primitiveId);
+    int2 cell0, cell1, cell2;
+    float3 weights;
+    ComputeUvVariationCells(uv, cell0, cell1, cell2, weights);
+    uint seed0 = ComputeUvVariationCellSeed(cell0, baseSeed);
+    uint seed1 = ComputeUvVariationCellSeed(cell1, baseSeed);
+    uint seed2 = ComputeUvVariationCellSeed(cell2, baseSeed);
+
+    float2 off0, mir0, off1, mir1, off2, mir2;
+    float s0, c0, s1, c1, s2, c2;
+    float3 colorUnused;
+    ComputeUvVariationTransform(seed0, variationParams, rotationParams,
+                                off0, mir0, s0, c0, colorUnused);
+    ComputeUvVariationTransform(seed1, variationParams, rotationParams,
+                                off1, mir1, s1, c1, colorUnused);
+    ComputeUvVariationTransform(seed2, variationParams, rotationParams,
+                                off2, mir2, s2, c2, colorUnused);
+
+    // Per-cell 4-tap gradient. Offsets are in original UV; TransformUvForCell
+    // maps each tap to its texture-space sample location.
+    float2 uvL = float2(texelSize.x, 0.0f);
+    float2 uvV = float2(0.0f, texelSize.y);
+    float3 nCells[3];
+    [unroll]
+    for (uint i = 0; i < 3; ++i) {
+        float2 off = (i == 0) ? off0 : (i == 1 ? off1 : off2);
+        float2 mir = (i == 0) ? mir0 : (i == 1 ? mir1 : mir2);
+        float sR  = (i == 0) ? s0   : (i == 1 ? s1   : s2);
+        float cR  = (i == 0) ? c0   : (i == 1 ? c1   : c2);
+
+        float h_l = textures[texSlot].SampleLevel(linearSampler,
+            TransformUvForCell(uv - uvL, off, mir, sR, cR), lod).r;
+        float h_r = textures[texSlot].SampleLevel(linearSampler,
+            TransformUvForCell(uv + uvL, off, mir, sR, cR), lod).r;
+        float h_d = textures[texSlot].SampleLevel(linearSampler,
+            TransformUvForCell(uv - uvV, off, mir, sR, cR), lod).r;
+        float h_u = textures[texSlot].SampleLevel(linearSampler,
+            TransformUvForCell(uv + uvV, off, mir, sR, cR), lod).r;
+        float dhdu = (h_r - h_l) * 0.5f * strength;
+        float dhdv = (h_u - h_d) * 0.5f * strength;
+        if (flipNormalMapY) dhdv = -dhdv;
+        nCells[i] = normalize(float3(-dhdu, -dhdv, 1.0f));
+    }
+    return normalize(nCells[0] * weights.x +
+                     nCells[1] * weights.y +
+                     nCells[2] * weights.z);
+}
+
+// SampleTriPlanarBumpToWorldNormal: definition moved below
+// SampleTriPlanarNormal so the TriPlanarUV_X/Y/Z helpers it references are
+// already in scope (HLSL has no forward declarations).
+
 float3 SampleUvNormalTexture(int texIndex, float2 uv, float amount,
                              float3 objectOrigin, float3 worldNormal,
                              float4 variationParams,
@@ -621,6 +738,112 @@ float3 SampleTriPlanarNormal(int texIndex, float3 worldPos, float3 worldNormal,
     return normalize(wx * w.x + wy * w.y + wz * w.z);
 }
 
+// Triplanar variant of the bump path. Returns a world-space normal (already
+// transformed through the per-axis TBN), matching SampleTriPlanarNormal's
+// return convention. Each axis projection gets its own 4-tap gradient in its
+// local 2D UV, the resulting tangent normal is rotated through that axis's
+// TBN, then the three world normals are blended by triplanar weights (or
+// the dominant axis is picked).
+float3 SampleTriPlanarBumpToWorldNormal(int texIndex, float3 worldPos,
+                                        float3 worldNormal, float scale,
+                                        float sharpness, float strength,
+                                        float amount, float4 variationParams,
+                                        float4 rotationParams,
+                                        float3 objectOrigin, uint primitiveId,
+                                        float lod, bool dominantAxisOnly,
+                                        bool flipNormalMapY)
+{
+    if (texIndex < 0 || amount <= 0.0f) return normalize(worldNormal);
+    uint texSlot = NonUniformResourceIndex((uint)texIndex);
+    uint texWidth = 0u;
+    uint texHeight = 0u;
+    textures[texSlot].GetDimensions(texWidth, texHeight);
+    float2 texelSize = float2(1.0f / max((float)texWidth, 1.0f),
+                              1.0f / max((float)texHeight, 1.0f));
+    float heightStrength = 8.0f * saturate(amount) * max(strength, 0.0f);
+
+    float3 rotatedPos = RotateTriPlanarVector(worldPos, rotationParams);
+    float3 rotatedNormal = normalize(RotateTriPlanarVector(worldNormal,
+                                                           rotationParams));
+    float2 variationOffset = ComputeTriPlanarVariationOffset(
+        variationParams, objectOrigin, primitiveId);
+
+    float sx = (rotatedNormal.x >= 0.0f) ? 1.0f : -1.0f;
+    float sy = (rotatedNormal.y >= 0.0f) ? 1.0f : -1.0f;
+    float sz = (rotatedNormal.z >= 0.0f) ? 1.0f : -1.0f;
+
+    float3 axisX = RotateTriPlanarAxis(float3(1, 0, 0), rotationParams);
+    float3 axisY = RotateTriPlanarAxis(float3(0, 1, 0), rotationParams);
+    float3 axisZ = RotateTriPlanarAxis(float3(0, 0, 1), rotationParams);
+
+    float3 nx_world;
+    {
+        float2 uvC = TriPlanarUV_X(rotatedPos, rotatedNormal, scale,
+                                   variationOffset);
+        float h_l = textures[texSlot].SampleLevel(linearSampler,
+            uvC - float2(texelSize.x, 0), lod).r;
+        float h_r = textures[texSlot].SampleLevel(linearSampler,
+            uvC + float2(texelSize.x, 0), lod).r;
+        float h_d = textures[texSlot].SampleLevel(linearSampler,
+            uvC - float2(0, texelSize.y), lod).r;
+        float h_u = textures[texSlot].SampleLevel(linearSampler,
+            uvC + float2(0, texelSize.y), lod).r;
+        float dhdu = (h_r - h_l) * 0.5f * heightStrength;
+        float dhdv = (h_u - h_d) * 0.5f * heightStrength;
+        if (flipNormalMapY) dhdv = -dhdv;
+        float3 nTs = normalize(float3(-dhdu, -dhdv, 1.0f));
+        float3x3 tbnX = float3x3(-axisZ * sx, axisY, axisX * sx);
+        nx_world = normalize(mul(nTs, tbnX));
+    }
+    float3 ny_world;
+    {
+        float2 uvC = TriPlanarUV_Y(rotatedPos, rotatedNormal, scale,
+                                   variationOffset);
+        float h_l = textures[texSlot].SampleLevel(linearSampler,
+            uvC - float2(texelSize.x, 0), lod).r;
+        float h_r = textures[texSlot].SampleLevel(linearSampler,
+            uvC + float2(texelSize.x, 0), lod).r;
+        float h_d = textures[texSlot].SampleLevel(linearSampler,
+            uvC - float2(0, texelSize.y), lod).r;
+        float h_u = textures[texSlot].SampleLevel(linearSampler,
+            uvC + float2(0, texelSize.y), lod).r;
+        float dhdu = (h_r - h_l) * 0.5f * heightStrength;
+        float dhdv = (h_u - h_d) * 0.5f * heightStrength;
+        if (flipNormalMapY) dhdv = -dhdv;
+        float3 nTs = normalize(float3(-dhdu, -dhdv, 1.0f));
+        float3x3 tbnY = float3x3(axisX, -axisZ * sy, axisY * sy);
+        ny_world = normalize(mul(nTs, tbnY));
+    }
+    float3 nz_world;
+    {
+        float2 uvC = TriPlanarUV_Z(rotatedPos, rotatedNormal, scale,
+                                   variationOffset);
+        float h_l = textures[texSlot].SampleLevel(linearSampler,
+            uvC - float2(texelSize.x, 0), lod).r;
+        float h_r = textures[texSlot].SampleLevel(linearSampler,
+            uvC + float2(texelSize.x, 0), lod).r;
+        float h_d = textures[texSlot].SampleLevel(linearSampler,
+            uvC - float2(0, texelSize.y), lod).r;
+        float h_u = textures[texSlot].SampleLevel(linearSampler,
+            uvC + float2(0, texelSize.y), lod).r;
+        float dhdu = (h_r - h_l) * 0.5f * heightStrength;
+        float dhdv = (h_u - h_d) * 0.5f * heightStrength;
+        if (flipNormalMapY) dhdv = -dhdv;
+        float3 nTs = normalize(float3(-dhdu, -dhdv, 1.0f));
+        float3x3 tbnZ = float3x3(axisX * sz, axisY, axisZ * sz);
+        nz_world = normalize(mul(nTs, tbnZ));
+    }
+
+    if (dominantAxisOnly) {
+        float3 an = abs(rotatedNormal);
+        if (an.x >= an.y && an.x >= an.z) return nx_world;
+        if (an.y >= an.z) return ny_world;
+        return nz_world;
+    }
+    float3 w = TriPlanarWeights(rotatedNormal, sharpness);
+    return normalize(nx_world * w.x + ny_world * w.y + nz_world * w.z);
+}
+
 void BuildHitShadingBasis(float3 N, float4 worldTangent,
                           out float3 T, out float3 B)
 {
@@ -646,12 +869,27 @@ float3 GetNormalFromMap(float2 uv, float3 worldNormal, float4 worldTangent,
 {
     if (normalTexIndex < 0 || amount <= 0.0 ||
         dot(worldTangent.xyz, worldTangent.xyz) < 1e-6) return normalize(worldNormal);
-    
-    float3 tangentNormal =
-        SampleUvNormalTexture(normalTexIndex, uv, amount, objectOrigin,
-                              worldNormal, variationParams,
-                              rotationParams, lod, primitiveId,
-                              uvRotationParams.y > 0.5);
+
+    const bool useBumpMap = uvRotationParams.z > 0.5;
+    float3 tangentNormal;
+    if (useBumpMap) {
+        if (UseUvStochasticTiling(variationParams, rotationParams)) {
+            tangentNormal = SampleStochasticBumpToTangentNormal(
+                normalTexIndex, uv, amount, objectOrigin, worldNormal,
+                variationParams, rotationParams, lod, primitiveId,
+                uvRotationParams.y > 0.5);
+        } else {
+            tangentNormal = SampleBumpToTangentNormal(
+                normalTexIndex, uv, amount, lod,
+                uvRotationParams.y > 0.5);
+        }
+    } else {
+        tangentNormal =
+            SampleUvNormalTexture(normalTexIndex, uv, amount, objectOrigin,
+                                  worldNormal, variationParams,
+                                  rotationParams, lod, primitiveId,
+                                  uvRotationParams.y > 0.5);
+    }
     tangentNormal = ApplyRegularUvNormalRotation(tangentNormal,
                                                  uvRotationParams);
     
@@ -1311,11 +1549,18 @@ void ClosestHitImpl(inout RayPayload payload,
     
     // Normal mapping
     bool flipNormalMapY = matExtra.uvRotationParams.y > 0.5;
-    float3 N = triPlanar ? SampleTriPlanarNormal(texNorm, P, worldNormal, triScale, triSharp, triNormStrength, texWeight1.x, samplingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar, flipNormalMapY)
-                         : GetNormalFromMap(uv, parallaxNormal, worldTangent, texNorm, texWeight1.x, textureLod, samplingVariation, triRotation, matExtra.uvRotationParams, objectOrigin, primIndex);
+    bool useBumpMap = matExtra.uvRotationParams.z > 0.5;
+    float3 N = triPlanar
+        ? (useBumpMap
+              ? SampleTriPlanarBumpToWorldNormal(texNorm, P, worldNormal, triScale, triSharp, triNormStrength, texWeight1.x, samplingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar, flipNormalMapY)
+              : SampleTriPlanarNormal(texNorm, P, worldNormal, triScale, triSharp, triNormStrength, texWeight1.x, samplingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar, flipNormalMapY))
+        : GetNormalFromMap(uv, parallaxNormal, worldTangent, texNorm, texWeight1.x, textureLod, samplingVariation, triRotation, matExtra.uvRotationParams, objectOrigin, primIndex);
     if (clearcoat > 0.001 && texCoatNormal >= 0 && lobeParams.x > 1.0e-4) {
-        float3 coatN = triPlanar ? SampleTriPlanarNormal(texCoatNormal, P, worldNormal, triScale, triSharp, triNormStrength, lobeParams.x, samplingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar, flipNormalMapY)
-                                 : GetNormalFromMap(uv, parallaxNormal, worldTangent, texCoatNormal, lobeParams.x, textureLod, samplingVariation, triRotation, matExtra.uvRotationParams, objectOrigin, primIndex);
+        float3 coatN = triPlanar
+            ? (useBumpMap
+                  ? SampleTriPlanarBumpToWorldNormal(texCoatNormal, P, worldNormal, triScale, triSharp, triNormStrength, lobeParams.x, samplingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar, flipNormalMapY)
+                  : SampleTriPlanarNormal(texCoatNormal, P, worldNormal, triScale, triSharp, triNormStrength, lobeParams.x, samplingVariation, triRotation, objectOrigin, primIndex, textureLod, dominantTriPlanar, flipNormalMapY))
+            : GetNormalFromMap(uv, parallaxNormal, worldTangent, texCoatNormal, lobeParams.x, textureLod, samplingVariation, triRotation, matExtra.uvRotationParams, objectOrigin, primIndex);
         N = normalize(lerp(N, coatN, saturate(clearcoat)));
     }
     // Two-sided shading guard for reverse-oriented faces. The front/back
