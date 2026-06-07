@@ -15,6 +15,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <unordered_map>
 #include <vector>
 
@@ -33,6 +34,12 @@ uint64_t s_scatterRuntimeRevision = 1;
 uint64_t s_scatterInstanceCacheRevision = 0;
 ScatterRuntimeStats s_scatterRuntimeStats;
 size_t s_scatterPickTargetIndex = static_cast<size_t>(-1);
+// Cache invalidation for camera-distance culling (A1). When any object uses
+// min/max distance, moving the camera must invalidate the cache. Without
+// this the cache key was just s_scatterRuntimeRevision, so distance-faded
+// scatter froze on cache build and snapped on the next authoring edit.
+float s_scatterCacheCameraPos[3] = {0.0f, 0.0f, 0.0f};
+bool s_scatterCacheUsesCameraDistance = false;
 
 void MarkScatterRuntimeChanged(
     RendererInvalidationPlan plan =
@@ -274,7 +281,8 @@ void GatherScatterTriangles(const ScatterTarget &target,
 void AppendScatterInstancesForObject(
     const ScatterModel &model, size_t modelIndex, const ScatterObject &object,
     size_t objectIndex, const std::vector<ScatterTriangle> &triangles,
-    float weightedArea, uint32_t &remainingModelBudget,
+    const std::vector<float> &triangleWeightCdf, float weightedArea,
+    uint32_t &remainingModelBudget,
     std::vector<Instance> &outInstances) {
   if (!model.enabled || !object.enabled || object.meshIndices.empty() ||
       triangles.empty() || weightedArea <= 1e-6f ||
@@ -285,11 +293,17 @@ void AppendScatterInstancesForObject(
     return;
   }
 
-  const float desired =
+  // A3: clamp before float->uint32 to avoid wrap on huge terrains
+  // (100 km² * 10/m² overflows UINT32_MAX). Pre-cast clamp protects against
+  // both signed values from upstream multiplication errors and the silent
+  // wrap that produced "scatter went away when I cranked density."
+  const float rawDesired =
       weightedArea * object.densityPerSquareMeter * object.weight *
       (std::clamp)(model.previewDensityScale, 0.0f, 1.0f);
-  uint32_t instanceCount =
-      static_cast<uint32_t>((std::max)(0.0f, std::round(desired)));
+  const float desired =
+      (std::clamp)(std::round(rawDesired), 0.0f,
+                   static_cast<float>((std::numeric_limits<uint32_t>::max)()));
+  uint32_t instanceCount = static_cast<uint32_t>(desired);
   instanceCount = (std::min)(instanceCount, object.maxInstances);
   if (object.previewMaxInstances > 0) {
     instanceCount = (std::min)(instanceCount, object.previewMaxInstances);
@@ -382,16 +396,18 @@ void AppendScatterInstancesForObject(
         static_cast<uint32_t>(objectIndex + 1) * 0xc2b2ae35u ^
         instanceIndex * 0x27d4eb2du;
 
+    // A4: binary-search the prefix-sum CDF instead of linear walking the
+    // triangle list per instance. Was O(N) per instance, ~5 B ops at 100k
+    // triangles * 50k instances; now O(log N). CDF is built once per model
+    // at the AppendScatterInstances level and passed down.
     const float triPick = ScatterHash01(baseSeed ^ 0x165667b1u) * weightedArea;
-    float accum = 0.0f;
-    const ScatterTriangle *chosen = &triangles.back();
-    for (const ScatterTriangle &tri : triangles) {
-      accum += tri.weight;
-      if (triPick <= accum) {
-        chosen = &tri;
-        break;
-      }
-    }
+    auto cdfIt = std::upper_bound(triangleWeightCdf.begin(),
+                                  triangleWeightCdf.end(), triPick);
+    const size_t triIdx =
+        (cdfIt == triangleWeightCdf.end())
+            ? triangles.size() - 1
+            : static_cast<size_t>(cdfIt - triangleWeightCdf.begin());
+    const ScatterTriangle *chosen = &triangles[triIdx];
 
     const float u = ScatterHash01(baseSeed ^ 0x9f123bb5u);
     const float v = ScatterHash01(baseSeed ^ 0x4f1bbcdcu);
@@ -546,6 +562,53 @@ bool UpdateScatterModel(size_t index, const ScatterModel &model) {
   }
   s_scatterModels[index] = model;
   MarkScatterRuntimeChanged();
+  return true;
+}
+
+bool UpdateScatterModelHeader(size_t index, const ScatterModel &header) {
+  if (index >= s_scatterModels.size()) {
+    return false;
+  }
+  ScatterModel &model = s_scatterModels[index];
+  model.name = header.name;
+  model.seed = header.seed;
+  model.enabled = header.enabled;
+  model.previewDensityScale = header.previewDensityScale;
+  model.previewInstanceBudget = header.previewInstanceBudget;
+  // Header doesn't touch mesh set membership; TlasRefresh is enough.
+  MarkScatterRuntimeChanged(RendererInvalidationPlan::TlasRefresh);
+  return true;
+}
+
+bool UpdateScatterTarget(size_t modelIndex, size_t targetIndex,
+                         const ScatterTarget &target) {
+  if (modelIndex >= s_scatterModels.size() ||
+      targetIndex >= s_scatterModels[modelIndex].targets.size()) {
+    return false;
+  }
+  ScatterTarget &existing =
+      s_scatterModels[modelIndex].targets[targetIndex];
+  const bool meshBindingChanged = existing.nodeIndex != target.nodeIndex ||
+                                  existing.meshIndex != target.meshIndex;
+  existing = target;
+  MarkScatterRuntimeChanged(
+      meshBindingChanged ? RendererInvalidationPlan::FullAccelerationStructureRebuild
+                         : RendererInvalidationPlan::TlasRefresh);
+  return true;
+}
+
+bool UpdateScatterObject(size_t modelIndex, size_t objectIndex,
+                         const ScatterObject &object) {
+  if (modelIndex >= s_scatterModels.size() ||
+      objectIndex >= s_scatterModels[modelIndex].objects.size()) {
+    return false;
+  }
+  ScatterObject &existing = s_scatterModels[modelIndex].objects[objectIndex];
+  const bool meshSetChanged = existing.meshIndices != object.meshIndices;
+  existing = object;
+  MarkScatterRuntimeChanged(
+      meshSetChanged ? RendererInvalidationPlan::FullAccelerationStructureRebuild
+                     : RendererInvalidationPlan::TlasRefresh);
   return true;
 }
 
@@ -833,6 +896,25 @@ void OnSceneStateChanged() {
   s_scatterInstanceCacheRevision = 0;
 }
 
+// A1 helper: does any object in any enabled model use min/max distance
+// culling? If so, the cache must invalidate when the camera moves.
+bool AnyModelUsesCameraDistance() {
+  for (const ScatterModel &model : s_scatterModels) {
+    if (!model.enabled) {
+      continue;
+    }
+    for (const ScatterObject &object : model.objects) {
+      if (!object.enabled) {
+        continue;
+      }
+      if (object.minDistance > 0.0f || object.maxDistance > 0.0f) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 void AppendScatterInstances(std::vector<Instance> &outInstances) {
   if (s_scatterModels.empty()) {
     s_scatterInstanceCache.clear();
@@ -842,7 +924,16 @@ void AppendScatterInstances(std::vector<Instance> &outInstances) {
     return;
   }
 
-  if (s_scatterInstanceCacheRevision == s_scatterRuntimeRevision) {
+  // A1: camera-relative distance culling means the cache is stale when the
+  // camera moves, even though the authoring revision hasn't bumped.
+  const bool cameraMoved =
+      s_scatterCacheUsesCameraDistance &&
+      (g_cameraData.pos[0] != s_scatterCacheCameraPos[0] ||
+       g_cameraData.pos[1] != s_scatterCacheCameraPos[1] ||
+       g_cameraData.pos[2] != s_scatterCacheCameraPos[2]);
+
+  if (s_scatterInstanceCacheRevision == s_scatterRuntimeRevision &&
+      !cameraMoved) {
     outInstances.insert(outInstances.end(), s_scatterInstanceCache.begin(),
                         s_scatterInstanceCache.end());
     return;
@@ -879,13 +970,22 @@ void AppendScatterInstances(std::vector<Instance> &outInstances) {
       continue;
     }
 
+    // A4: build the weight CDF once per model. All objects in the model
+    // sample from the same triangle pool, so the CDF is shared.
+    std::vector<float> triangleWeightCdf(triangles.size());
+    float runningWeight = 0.0f;
+    for (size_t i = 0; i < triangles.size(); ++i) {
+      runningWeight += triangles[i].weight;
+      triangleWeightCdf[i] = runningWeight;
+    }
+
     uint32_t remainingModelBudget = model.previewInstanceBudget;
     for (size_t objectIndex = 0; objectIndex < model.objects.size();
          ++objectIndex) {
       AppendScatterInstancesForObject(model, modelIndex,
                                       model.objects[objectIndex], objectIndex,
-                                      triangles, weightedArea,
-                                      remainingModelBudget,
+                                      triangles, triangleWeightCdf,
+                                      weightedArea, remainingModelBudget,
                                       s_scatterInstanceCache);
       if (remainingModelBudget == 0) {
         break;
@@ -893,6 +993,10 @@ void AppendScatterInstances(std::vector<Instance> &outInstances) {
     }
   }
   s_scatterInstanceCacheRevision = s_scatterRuntimeRevision;
+  s_scatterCacheUsesCameraDistance = AnyModelUsesCameraDistance();
+  s_scatterCacheCameraPos[0] = g_cameraData.pos[0];
+  s_scatterCacheCameraPos[1] = g_cameraData.pos[1];
+  s_scatterCacheCameraPos[2] = g_cameraData.pos[2];
   outInstances.insert(outInstances.end(), s_scatterInstanceCache.begin(),
                       s_scatterInstanceCache.end());
 }

@@ -84,7 +84,24 @@ const std::vector<ScatterModel> &GetScatterModels();
 void SetScatterModels(std::vector<ScatterModel> models);
 size_t AddScatterModel(const std::string &name = "Scatter");
 bool RemoveScatterModel(size_t index);
+
+// Full-replace update. Conservatively requests a full BLAS+TLAS rebuild
+// because mesh set membership may have changed. Prefer the granular
+// updates below for slider-drag edits — they pick TlasRefresh when the
+// mesh set is identical, avoiding the GPU stutter that a full AS rebuild
+// causes on every spinbox tick.
 bool UpdateScatterModel(size_t index, const ScatterModel &model);
+// Header = name, seed, enabled, previewDensityScale, previewInstanceBudget.
+// Never changes mesh set, so always TlasRefresh.
+bool UpdateScatterModelHeader(size_t index, const ScatterModel &header);
+// Per-target update. Uses TlasRefresh if nodeIndex/meshIndex are unchanged,
+// full rebuild otherwise.
+bool UpdateScatterTarget(size_t modelIndex, size_t targetIndex,
+                         const ScatterTarget &target);
+// Per-object update. Uses TlasRefresh if meshIndices vector is unchanged,
+// full rebuild otherwise.
+bool UpdateScatterObject(size_t modelIndex, size_t objectIndex,
+                         const ScatterObject &object);
 
 // ---- Target / object population from current selection -------------------
 bool AddSelectedNodesAsScatterTargets(size_t scatterIndex);

@@ -545,15 +545,17 @@ void ScatterPanel::applyModelEdit()
     if (row < 0 || row >= static_cast<int>(models.size())) {
         return;
     }
-    Scene::ScatterModel model = models[static_cast<size_t>(row)];
-    model.name = m_modelName->text().toStdString();
-    model.enabled = m_modelEnabled->isChecked();
-    model.seed = static_cast<uint32_t>(std::max(1, m_modelSeed->value()));
-    model.previewDensityScale =
+    // Header-only update — no mesh set change, so use the lite path that
+    // requests a TlasRefresh instead of a full AS rebuild on every tick.
+    Scene::ScatterModel header = models[static_cast<size_t>(row)];
+    header.name = m_modelName->text().toStdString();
+    header.enabled = m_modelEnabled->isChecked();
+    header.seed = static_cast<uint32_t>(std::max(1, m_modelSeed->value()));
+    header.previewDensityScale =
         std::clamp(static_cast<float>(m_previewDensityScale->value()), 0.0f, 1.0f);
-    model.previewInstanceBudget =
+    header.previewInstanceBudget =
         static_cast<uint32_t>(std::max(0, m_previewBudget->value()));
-    Scene::UpdateScatterModel(static_cast<size_t>(row), model);
+    Scene::UpdateScatterModelHeader(static_cast<size_t>(row), header);
 }
 
 void ScatterPanel::applyTargetEdit()
@@ -569,11 +571,12 @@ void ScatterPanel::applyTargetEdit()
         targetRow >= static_cast<int>(models[static_cast<size_t>(modelRow)].targets.size())) {
         return;
     }
-    Scene::ScatterModel model = models[static_cast<size_t>(modelRow)];
-    Scene::ScatterTarget &target = model.targets[static_cast<size_t>(targetRow)];
+    Scene::ScatterTarget target =
+        models[static_cast<size_t>(modelRow)].targets[static_cast<size_t>(targetRow)];
     target.enabled = m_targetEnabled->isChecked();
     target.weight = static_cast<float>(m_targetWeight->value());
-    Scene::UpdateScatterModel(static_cast<size_t>(modelRow), model);
+    Scene::UpdateScatterTarget(static_cast<size_t>(modelRow),
+                               static_cast<size_t>(targetRow), target);
 }
 
 void ScatterPanel::applyObjectEdit()
@@ -589,8 +592,8 @@ void ScatterPanel::applyObjectEdit()
         objectRow >= static_cast<int>(models[static_cast<size_t>(modelRow)].objects.size())) {
         return;
     }
-    Scene::ScatterModel model = models[static_cast<size_t>(modelRow)];
-    Scene::ScatterObject &object = model.objects[static_cast<size_t>(objectRow)];
+    Scene::ScatterObject object =
+        models[static_cast<size_t>(modelRow)].objects[static_cast<size_t>(objectRow)];
     object.name = m_objectName->text().toStdString();
     object.enabled = m_objectEnabled->isChecked();
     object.densityPerSquareMeter = static_cast<float>(m_density->value());
@@ -613,7 +616,8 @@ void ScatterPanel::applyObjectEdit()
     object.clumpStrength = static_cast<float>(m_clumpStrength->value());
     object.edgeAvoidance = static_cast<float>(m_edgeAvoidance->value());
     object.collisionAvoidanceRadius = static_cast<float>(m_collisionAvoidance->value());
-    Scene::UpdateScatterModel(static_cast<size_t>(modelRow), model);
+    Scene::UpdateScatterObject(static_cast<size_t>(modelRow),
+                               static_cast<size_t>(objectRow), object);
 }
 
 int ScatterPanel::selectedModelIndex() const
