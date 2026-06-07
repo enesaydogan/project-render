@@ -71,12 +71,28 @@ struct ScatterModel {
   std::vector<ScatterObject> objects;
 };
 
+// Per-object slice of the last cache rebuild. Exposed so the panel can show
+// a per-object instance breakdown rather than just a single total.
+struct ScatterObjectStats {
+  size_t modelIndex = 0;
+  size_t objectIndex = 0;
+  std::string modelName;
+  std::string objectName;
+  uint32_t instancesGenerated = 0;
+  uint32_t skippedByObjectCap = 0;
+};
+
 struct ScatterRuntimeStats {
   uint32_t generatedInstances = 0;
+  // Renamed conceptually: this is now "model preview budget overflow".
+  // Per-object cap overflow is tracked separately so the stats label can
+  // distinguish "raise the model budget" from "raise the per-object cap."
   uint32_t skippedByBudget = 0;
+  uint32_t skippedByObjectCap = 0;
   uint32_t activeTargets = 0;
   uint32_t activeObjects = 0;
   uint64_t revision = 0;
+  std::vector<ScatterObjectStats> perObject; // unsorted; UI sorts as it sees fit
 };
 
 // ---- Model CRUD ----------------------------------------------------------
@@ -119,6 +135,9 @@ void CancelScatterPick();
 // ---- Library housekeeping ------------------------------------------------
 bool SetScatterObjectSourcesHidden(size_t scatterIndex, size_t objectIndex,
                                    bool hidden);
+// Prunes scatter objects whose meshes are gone AND scatter targets whose
+// node references became invalid (nodeIndex == size_t(-1)) after node
+// removal. Single sweep so the panel only needs one "Clean" button.
 bool RemoveUnusedScatterObjects(size_t scatterIndex);
 
 // ---- Runtime stats -------------------------------------------------------

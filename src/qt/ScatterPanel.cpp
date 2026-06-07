@@ -12,24 +12,32 @@
 #include <QListWidget>
 #include <QMetaObject>
 #include <QPushButton>
+#include <QRandomGenerator>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QTabWidget>
-#include <QTimer>
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <limits>
 
 namespace {
 
 QDoubleSpinBox *CreateDoubleSpin(double minValue, double maxValue,
-                                 double step, int decimals)
+                                 double step, int decimals,
+                                 bool adaptiveStep = false)
 {
     auto *spin = new QDoubleSpinBox();
     spin->setRange(minValue, maxValue);
     spin->setSingleStep(step);
     spin->setDecimals(decimals);
     spin->setAccelerated(true);
+    if (adaptiveStep) {
+        // B11: large-range fields (jitter, collision avoidance, distance
+        // bounds) get scale-aware steps so dragging from 0..10 000 isn't a
+        // ten-million-click slog.
+        spin->setStepType(QAbstractSpinBox::AdaptiveDecimalStepType);
+    }
     return spin;
 }
 
@@ -58,19 +66,15 @@ ScatterPanel::ScatterPanel(QWidget *parent)
     createUi();
     refreshUi();
 
+    // C1: previously polled the scatter revision at 4 Hz to catch stats
+    // updates that happen during render (no scene-change event). Authoring
+    // edits already trigger the scene change listener below, so the panel
+    // refreshes immediately on user input; per-frame stat changes catch up
+    // on the next edit. The 250 ms timer is gone.
     m_sceneChangeListenerId = Scene::RegisterChangeListener([this]() {
         QMetaObject::invokeMethod(this, [this]() { refreshUi(); },
                                   Qt::QueuedConnection);
     });
-
-    m_refreshTimer = new QTimer(this);
-    connect(m_refreshTimer, &QTimer::timeout, this, [this]() {
-        const uint64_t rev = Scene::GetScatterRuntimeRevision();
-        if (rev != m_lastScatterRevision) {
-            refreshUi();
-        }
-    });
-    m_refreshTimer->start(250);
 }
 
 ScatterPanel::~ScatterPanel()
@@ -101,14 +105,34 @@ void ScatterPanel::createUi()
     auto *modelForm = new QFormLayout(modelGroup);
     m_modelName = new QLineEdit(modelGroup);
     m_modelEnabled = new QCheckBox(tr("Enabled"), modelGroup);
-    m_modelSeed = new QSpinBox(modelGroup);
+    m_modelEnabled->setToolTip(
+        tr("Disable to stop generating instances without losing settings."));
+    // B3: seed + reseed button on one row.
+    auto *seedRow = new QWidget(modelGroup);
+    auto *seedRowLayout = new QHBoxLayout(seedRow);
+    seedRowLayout->setContentsMargins(0, 0, 0, 0);
+    seedRowLayout->setSpacing(4);
+    m_modelSeed = new QSpinBox(seedRow);
     m_modelSeed->setRange(1, 2147483647);
+    m_modelSeed->setToolTip(
+        tr("Random seed for instance placement. Same seed = same layout."));
+    m_reseedButton = new QPushButton(tr("\xf0\x9f\x8e\xb2"), seedRow); // 🎲
+    m_reseedButton->setToolTip(tr("Reseed with a random value."));
+    m_reseedButton->setFixedWidth(28);
+    seedRowLayout->addWidget(m_modelSeed, 1);
+    seedRowLayout->addWidget(m_reseedButton, 0);
     m_previewDensityScale = CreateDoubleSpin(0.0, 1.0, 0.05, 2);
+    m_previewDensityScale->setToolTip(
+        tr("0..1 scaler on density for editor preview. Does not affect "
+           "authored density value."));
     m_previewBudget = new QSpinBox(modelGroup);
     m_previewBudget->setRange(0, 2000000);
+    m_previewBudget->setToolTip(
+        tr("Model-wide hard cap across all objects. If reached, remaining "
+           "objects produce no instances (see 'Budget skipped' in stats)."));
     modelForm->addRow(tr("Name"), m_modelName);
     modelForm->addRow(tr("State"), m_modelEnabled);
-    modelForm->addRow(tr("Seed"), m_modelSeed);
+    modelForm->addRow(tr("Seed"), seedRow);
     modelForm->addRow(tr("Preview Density"), m_previewDensityScale);
     modelForm->addRow(tr("Preview Budget"), m_previewBudget);
     layout->addWidget(modelGroup);
@@ -165,54 +189,135 @@ void ScatterPanel::createUi()
     objectLayout->addWidget(m_removeObjectButton);
     m_tabs->addTab(objectGroup, tr("Objects"));
 
-    auto *objectEditGroup = new QGroupBox(tr("Object Settings"), this);
-    auto *objectForm = new QFormLayout(objectEditGroup);
-    m_objectName = new QLineEdit(objectEditGroup);
-    m_objectEnabled = new QCheckBox(tr("Enabled"), objectEditGroup);
-    m_density = CreateDoubleSpin(0.0, 10000.0, 0.5, 2);
+    // B6: Placement tab broken into labelled QGroupBox sections so the user
+    // isn't staring at a wall of 20 spinboxes.
+    auto *placementHost = new QWidget(this);
+    auto *placementLayout = new QVBoxLayout(placementHost);
+    placementLayout->setContentsMargins(0, 0, 0, 0);
+    placementLayout->setSpacing(6);
+
+    // Identity ----------------------------------------------------------------
+    auto *identityGroup = new QGroupBox(tr("Identity"), placementHost);
+    auto *identityForm = new QFormLayout(identityGroup);
+    m_objectName = new QLineEdit(identityGroup);
+    m_objectEnabled = new QCheckBox(tr("Enabled"), identityGroup);
+    m_objectEnabled->setToolTip(
+        tr("Disable to skip this prototype without losing settings."));
+    identityForm->addRow(tr("Name"), m_objectName);
+    identityForm->addRow(tr("State"), m_objectEnabled);
+    placementLayout->addWidget(identityGroup);
+
+    // Density / caps ----------------------------------------------------------
+    auto *densityGroup = new QGroupBox(tr("Density && Caps"), placementHost);
+    auto *densityForm = new QFormLayout(densityGroup);
+    m_density = CreateDoubleSpin(0.0, 10000.0, 0.5, 2, true);
+    m_density->setToolTip(tr("Target instances per square meter of surface."));
     m_weight = CreateDoubleSpin(0.0, 100.0, 0.1, 2);
-    m_maxInstances = new QSpinBox(objectEditGroup);
+    m_weight->setToolTip(
+        tr("Multiplier on this prototype's share of the model density."));
+    m_maxInstances = new QSpinBox(densityGroup);
     m_maxInstances->setRange(0, 2000000);
-    m_previewMaxInstances = new QSpinBox(objectEditGroup);
+    m_maxInstances->setToolTip(
+        tr("Hard cap for this prototype regardless of computed density."));
+    m_previewMaxInstances = new QSpinBox(densityGroup);
     m_previewMaxInstances->setRange(0, 2000000);
-    m_minScale = CreateDoubleSpin(0.001, 1000.0, 0.05, 3);
-    m_maxScale = CreateDoubleSpin(0.001, 1000.0, 0.05, 3);
+    m_previewMaxInstances->setToolTip(
+        tr("Editor-only soft cap. 0 = ignore (use Max Instances)."));
+    densityForm->addRow(tr("Density / m\xc2\xb2"), m_density);
+    densityForm->addRow(tr("Weight"), m_weight);
+    densityForm->addRow(tr("Max Instances"), m_maxInstances);
+    densityForm->addRow(tr("Preview Max"), m_previewMaxInstances);
+    placementLayout->addWidget(densityGroup);
+
+    // Scale -------------------------------------------------------------------
+    auto *scaleGroup = new QGroupBox(tr("Scale"), placementHost);
+    auto *scaleForm = new QFormLayout(scaleGroup);
+    m_minScale = CreateDoubleSpin(0.001, 1000.0, 0.05, 3, true);
+    m_maxScale = CreateDoubleSpin(0.001, 1000.0, 0.05, 3, true);
+    scaleForm->addRow(tr("Min Scale"), m_minScale);
+    scaleForm->addRow(tr("Max Scale"), m_maxScale);
+    placementLayout->addWidget(scaleGroup);
+
+    // Rotation ----------------------------------------------------------------
+    auto *rotationGroup = new QGroupBox(tr("Rotation"), placementHost);
+    auto *rotationForm = new QFormLayout(rotationGroup);
     m_yaw = CreateDoubleSpin(0.0, 360.0, 5.0, 1);
     m_pitch = CreateDoubleSpin(0.0, 180.0, 1.0, 1);
     m_roll = CreateDoubleSpin(0.0, 180.0, 1.0, 1);
     m_normalAlign = CreateDoubleSpin(0.0, 1.0, 0.05, 2);
+    m_normalAlign->setToolTip(
+        tr("0 = align to world up. 1 = align to surface normal."));
+    rotationForm->addRow(tr("Yaw Random"), m_yaw);
+    rotationForm->addRow(tr("Pitch Random"), m_pitch);
+    rotationForm->addRow(tr("Roll Random"), m_roll);
+    rotationForm->addRow(tr("Normal Align"), m_normalAlign);
+    placementLayout->addWidget(rotationGroup);
+
+    // Slope & height filter ---------------------------------------------------
+    auto *filterGroup = new QGroupBox(tr("Surface Filter"), placementHost);
+    auto *filterForm = new QFormLayout(filterGroup);
     m_slopeMin = CreateDoubleSpin(0.0, 89.0, 1.0, 1);
     m_slopeMax = CreateDoubleSpin(0.0, 89.0, 1.0, 1);
-    m_jitter = CreateDoubleSpin(0.0, 1000.0, 0.01, 3);
-    m_minDistance = CreateDoubleSpin(0.0, 100000.0, 1.0, 2);
-    m_maxDistance = CreateDoubleSpin(0.0, 100000.0, 1.0, 2);
-    m_clumpScale = CreateDoubleSpin(0.0, 10000.0, 0.25, 2);
-    m_clumpStrength = CreateDoubleSpin(0.0, 1.0, 0.05, 2);
-    m_edgeAvoidance = CreateDoubleSpin(0.0, 0.33, 0.01, 2);
-    m_collisionAvoidance = CreateDoubleSpin(0.0, 10000.0, 0.05, 3);
+    // B1: heightMin / heightMax controls (data existed in ScatterObject,
+    // the panel never exposed them).
+    m_heightMin = CreateDoubleSpin(-100000.0, 100000.0, 1.0, 3, true);
+    m_heightMin->setToolTip(tr("Minimum world-Y at which placements are kept."));
+    m_heightMax = CreateDoubleSpin(-100000.0, 100000.0, 1.0, 3, true);
+    m_heightMax->setToolTip(tr("Maximum world-Y at which placements are kept."));
+    filterForm->addRow(tr("Slope Min (deg)"), m_slopeMin);
+    filterForm->addRow(tr("Slope Max (deg)"), m_slopeMax);
+    filterForm->addRow(tr("Y Min"), m_heightMin);
+    filterForm->addRow(tr("Y Max"), m_heightMax);
+    placementLayout->addWidget(filterGroup);
 
-    objectForm->addRow(tr("Name"), m_objectName);
-    objectForm->addRow(tr("State"), m_objectEnabled);
-    objectForm->addRow(tr("Density / m2"), m_density);
-    objectForm->addRow(tr("Weight"), m_weight);
-    objectForm->addRow(tr("Max Instances"), m_maxInstances);
-    objectForm->addRow(tr("Preview Max"), m_previewMaxInstances);
-    objectForm->addRow(tr("Min Scale"), m_minScale);
-    objectForm->addRow(tr("Max Scale"), m_maxScale);
-    objectForm->addRow(tr("Yaw Random"), m_yaw);
-    objectForm->addRow(tr("Pitch Random"), m_pitch);
-    objectForm->addRow(tr("Roll Random"), m_roll);
-    objectForm->addRow(tr("Normal Align"), m_normalAlign);
-    objectForm->addRow(tr("Slope Min"), m_slopeMin);
-    objectForm->addRow(tr("Slope Max"), m_slopeMax);
-    objectForm->addRow(tr("Jitter"), m_jitter);
-    objectForm->addRow(tr("Min Distance"), m_minDistance);
-    objectForm->addRow(tr("Max Distance"), m_maxDistance);
-    objectForm->addRow(tr("Clump Scale"), m_clumpScale);
-    objectForm->addRow(tr("Clump Strength"), m_clumpStrength);
-    objectForm->addRow(tr("Edge Avoid"), m_edgeAvoidance);
-    objectForm->addRow(tr("Avoid Collision"), m_collisionAvoidance);
-    m_tabs->addTab(objectEditGroup, tr("Placement"));
+    // Distribution ------------------------------------------------------------
+    auto *distGroup = new QGroupBox(tr("Distribution"), placementHost);
+    auto *distForm = new QFormLayout(distGroup);
+    m_jitter = CreateDoubleSpin(0.0, 1000.0, 0.05, 3, true);
+    m_edgeAvoidance = CreateDoubleSpin(0.0, 0.33, 0.01, 2);
+    m_edgeAvoidance->setToolTip(
+        tr("Skip placements within this fractional barycentric distance of a "
+           "triangle edge. 0 = off, ~0.1 hides instances from tile seams."));
+    m_collisionAvoidance = CreateDoubleSpin(0.0, 10000.0, 0.05, 3, true);
+    m_collisionAvoidance->setToolTip(
+        tr("Minimum world-space distance between accepted instances within "
+           "this prototype. 0 = off. Per-object (does not see other "
+           "prototypes)."));
+    distForm->addRow(tr("Jitter (m)"), m_jitter);
+    distForm->addRow(tr("Edge Avoid"), m_edgeAvoidance);
+    distForm->addRow(tr("Avoid Collision (m)"), m_collisionAvoidance);
+    placementLayout->addWidget(distGroup);
+
+    // Clumping ----------------------------------------------------------------
+    auto *clumpGroup = new QGroupBox(tr("Clumping"), placementHost);
+    auto *clumpForm = new QFormLayout(clumpGroup);
+    m_clumpScale = CreateDoubleSpin(0.0, 10000.0, 0.25, 2, true);
+    m_clumpScale->setToolTip(
+        tr("World-space spatial scale of clump noise. 0 = uniform."));
+    m_clumpStrength = CreateDoubleSpin(0.0, 1.0, 0.05, 2);
+    m_clumpStrength->setToolTip(
+        tr("How aggressively to thin out non-clump regions. 0 = uniform, "
+           "1 = full noise mask."));
+    clumpForm->addRow(tr("Clump Scale"), m_clumpScale);
+    clumpForm->addRow(tr("Clump Strength"), m_clumpStrength);
+    placementLayout->addWidget(clumpGroup);
+
+    // Camera / fade -----------------------------------------------------------
+    auto *cameraGroup = new QGroupBox(tr("Camera Fade"), placementHost);
+    auto *cameraForm = new QFormLayout(cameraGroup);
+    m_minDistance = CreateDoubleSpin(0.0, 100000.0, 1.0, 2, true);
+    m_minDistance->setToolTip(
+        tr("Skip placements closer than this distance from the camera."));
+    m_maxDistance = CreateDoubleSpin(0.0, 100000.0, 1.0, 2, true);
+    m_maxDistance->setToolTip(
+        tr("Skip placements further than this distance from the camera. "
+           "0 = no max."));
+    cameraForm->addRow(tr("Min Distance"), m_minDistance);
+    cameraForm->addRow(tr("Max Distance"), m_maxDistance);
+    placementLayout->addWidget(cameraGroup);
+
+    placementLayout->addStretch(1);
+    m_tabs->addTab(placementHost, tr("Placement"));
 
     m_statsLabel = new QLabel(this);
     m_statsLabel->setWordWrap(true);
@@ -329,6 +434,13 @@ void ScatterPanel::createUi()
     connect(m_modelSeed, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { applyModelEdit(); });
     connect(m_previewDensityScale, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) { applyModelEdit(); });
     connect(m_previewBudget, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { applyModelEdit(); });
+    connect(m_reseedButton, &QPushButton::clicked, this, [this]() {
+        // B3: stay inside QSpinBox int range; bumping bits 31..63 wraps to
+        // negative and the spinbox clamps to 1, which would feel broken.
+        const int randomSeed = static_cast<int>(
+            QRandomGenerator::global()->bounded(1, std::numeric_limits<int>::max()));
+        m_modelSeed->setValue(randomSeed);
+    });
 
     auto objectEdit = [this]() { applyObjectEdit(); };
     connect(m_objectName, &QLineEdit::editingFinished, this, objectEdit);
@@ -346,6 +458,8 @@ void ScatterPanel::createUi()
     connect(m_slopeMin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
     connect(m_slopeMax, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
     connect(m_jitter, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
+    connect(m_heightMin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
+    connect(m_heightMax, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
     connect(m_minDistance, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
     connect(m_maxDistance, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
     connect(m_clumpScale, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
@@ -393,12 +507,20 @@ void ScatterPanel::syncInspector()
     m_deleteModelButton->setEnabled(hasModel);
     m_addTargetsButton->setEnabled(hasModel);
     m_pickTargetButton->setEnabled(hasModel);
-    m_cancelPickButton->setEnabled(Scene::IsScatterPickingTarget());
+    // B5: visual indicator of pick mode. Tells the user the next viewport
+    // click will land a scatter target and dims the rest of the model so it
+    // doesn't look like a regular toggle button.
+    const bool picking = Scene::IsScatterPickingTarget();
+    m_pickTargetButton->setText(picking ? tr("Picking\xe2\x80\xa6 click viewport")
+                                        : tr("Pick Target"));
+    m_pickTargetButton->setEnabled(hasModel && !picking);
+    m_cancelPickButton->setEnabled(picking);
     m_addObjectsButton->setEnabled(hasModel);
     m_cleanupObjectsButton->setEnabled(hasModel);
     m_modelName->setEnabled(hasModel);
     m_modelEnabled->setEnabled(hasModel);
     m_modelSeed->setEnabled(hasModel);
+    m_reseedButton->setEnabled(hasModel);
     m_previewDensityScale->setEnabled(hasModel);
     m_previewBudget->setEnabled(hasModel);
 
@@ -441,11 +563,62 @@ void ScatterPanel::syncInspector()
             m_objectList->setCurrentRow(std::clamp(previousObjectRow, 0, static_cast<int>(model.objects.size()) - 1));
         }
         const Scene::ScatterRuntimeStats stats = Scene::GetScatterRuntimeStats();
-        m_statsLabel->setText(tr("Generated %1 render instances. Active: %2 targets, %3 objects. Budget skipped: %4.")
-                                  .arg(static_cast<qulonglong>(stats.generatedInstances))
-                                  .arg(static_cast<unsigned>(stats.activeTargets))
-                                  .arg(static_cast<unsigned>(stats.activeObjects))
-                                  .arg(static_cast<unsigned>(stats.skippedByBudget)));
+        QString headline = tr("Generated %1 instances  \xe2\x80\xa2  "
+                              "%2 targets active  \xe2\x80\xa2  "
+                              "%3 objects active")
+                               .arg(static_cast<qulonglong>(stats.generatedInstances))
+                               .arg(static_cast<unsigned>(stats.activeTargets))
+                               .arg(static_cast<unsigned>(stats.activeObjects));
+        // A2: distinguish skipped-by-model-budget from skipped-by-object-cap
+        // so the user knows which knob to raise.
+        if (stats.skippedByBudget > 0 || stats.skippedByObjectCap > 0) {
+            QStringList skipped;
+            if (stats.skippedByBudget > 0) {
+                skipped << tr("budget %1")
+                                .arg(static_cast<unsigned>(stats.skippedByBudget));
+            }
+            if (stats.skippedByObjectCap > 0) {
+                skipped << tr("per-object cap %1")
+                                .arg(static_cast<unsigned>(stats.skippedByObjectCap));
+            }
+            headline += tr("  \xe2\x80\xa2  Skipped: %1").arg(skipped.join(", "));
+        }
+        // B9: per-object breakdown (top entries by instance count).
+        if (!stats.perObject.empty()) {
+            std::vector<Scene::ScatterObjectStats> sorted = stats.perObject;
+            std::sort(sorted.begin(), sorted.end(),
+                      [](const Scene::ScatterObjectStats &a,
+                         const Scene::ScatterObjectStats &b) {
+                          return a.instancesGenerated > b.instancesGenerated;
+                      });
+            QStringList rows;
+            const size_t limit = std::min<size_t>(sorted.size(), 6);
+            for (size_t i = 0; i < limit; ++i) {
+                const auto &e = sorted[i];
+                QString name = QString::fromStdString(e.objectName);
+                if (e.modelIndex != static_cast<size_t>(modelRow)) {
+                    name = QString("[%1] %2")
+                               .arg(QString::fromStdString(e.modelName))
+                               .arg(name);
+                }
+                if (e.skippedByObjectCap > 0) {
+                    rows << tr("%1: %2 (+%3 capped)")
+                                .arg(name)
+                                .arg(static_cast<unsigned>(e.instancesGenerated))
+                                .arg(static_cast<unsigned>(e.skippedByObjectCap));
+                } else {
+                    rows << tr("%1: %2")
+                                .arg(name)
+                                .arg(static_cast<unsigned>(e.instancesGenerated));
+                }
+            }
+            if (sorted.size() > limit) {
+                rows << tr("\xe2\x80\xa6 +%1 more")
+                            .arg(static_cast<int>(sorted.size() - limit));
+            }
+            headline += "\n" + rows.join("  \xe2\x80\xa2  ");
+        }
+        m_statsLabel->setText(headline);
     }
 
     const int objectRow = selectedObjectIndex();
@@ -485,6 +658,8 @@ void ScatterPanel::syncInspector()
     m_slopeMin->setEnabled(hasObject);
     m_slopeMax->setEnabled(hasObject);
     m_jitter->setEnabled(hasObject);
+    m_heightMin->setEnabled(hasObject);
+    m_heightMax->setEnabled(hasObject);
     m_minDistance->setEnabled(hasObject);
     m_maxDistance->setEnabled(hasObject);
     m_clumpScale->setEnabled(hasObject);
@@ -511,6 +686,8 @@ void ScatterPanel::syncInspector()
         m_slopeMin->setValue(object.slopeMinDegrees);
         m_slopeMax->setValue(object.slopeMaxDegrees);
         m_jitter->setValue(object.jitterMeters);
+        m_heightMin->setValue(object.heightMin);
+        m_heightMax->setValue(object.heightMax);
         m_minDistance->setValue(object.minDistance);
         m_maxDistance->setValue(object.maxDistance);
         m_clumpScale->setValue(object.clumpScale);
@@ -525,6 +702,8 @@ void ScatterPanel::syncInspector()
         m_weight->setValue(0.0);
         m_maxInstances->setValue(0);
         m_previewMaxInstances->setValue(0);
+        m_heightMin->setValue(0.0);
+        m_heightMax->setValue(0.0);
         m_minDistance->setValue(0.0);
         m_maxDistance->setValue(0.0);
         m_clumpScale->setValue(0.0);
@@ -610,6 +789,8 @@ void ScatterPanel::applyObjectEdit()
     object.slopeMinDegrees = static_cast<float>(m_slopeMin->value());
     object.slopeMaxDegrees = static_cast<float>(m_slopeMax->value());
     object.jitterMeters = static_cast<float>(m_jitter->value());
+    object.heightMin = static_cast<float>(m_heightMin->value());
+    object.heightMax = static_cast<float>(m_heightMax->value());
     object.minDistance = static_cast<float>(m_minDistance->value());
     object.maxDistance = static_cast<float>(m_maxDistance->value());
     object.clumpScale = static_cast<float>(m_clumpScale->value());

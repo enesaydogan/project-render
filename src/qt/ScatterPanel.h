@@ -44,6 +44,7 @@ private:
     QLineEdit *m_modelName = nullptr;
     QCheckBox *m_modelEnabled = nullptr;
     QSpinBox *m_modelSeed = nullptr;
+    QPushButton *m_reseedButton = nullptr;
     QDoubleSpinBox *m_previewDensityScale = nullptr;
     QSpinBox *m_previewBudget = nullptr;
     QPushButton *m_addModelButton = nullptr;
@@ -75,11 +76,12 @@ private:
     QDoubleSpinBox *m_slopeMin = nullptr;
     QDoubleSpinBox *m_slopeMax = nullptr;
     QDoubleSpinBox *m_jitter = nullptr;
+    QDoubleSpinBox *m_heightMin = nullptr;
+    QDoubleSpinBox *m_heightMax = nullptr;
     QDoubleSpinBox *m_minDistance = nullptr;
     QDoubleSpinBox *m_maxDistance = nullptr;
     QDoubleSpinBox *m_clumpScale = nullptr;
     QDoubleSpinBox *m_clumpStrength = nullptr;
     QDoubleSpinBox *m_edgeAvoidance = nullptr;
     QDoubleSpinBox *m_collisionAvoidance = nullptr;
-    QTimer *m_refreshTimer = nullptr;
 };

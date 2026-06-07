@@ -15,8 +15,10 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 // Mesh library lives in main.cpp / scene.cpp; we read it directly the same
@@ -40,6 +42,15 @@ size_t s_scatterPickTargetIndex = static_cast<size_t>(-1);
 // scatter froze on cache build and snapped on the next authoring edit.
 float s_scatterCacheCameraPos[3] = {0.0f, 0.0f, 0.0f};
 bool s_scatterCacheUsesCameraDistance = false;
+
+// A7: targets whose mesh has no CPU vertex copy produce zero triangles
+// silently. Log once per (model, target) pair so the user sees the cause
+// without spamming the console every frame.
+std::unordered_set<uint64_t> s_warnedMissingCpuMesh;
+uint64_t MakeMissingCpuMeshKey(size_t modelIndex, size_t targetIndex) {
+  return (static_cast<uint64_t>(modelIndex) << 32) |
+         static_cast<uint32_t>(targetIndex);
+}
 
 void MarkScatterRuntimeChanged(
     RendererInvalidationPlan plan =
@@ -206,14 +217,31 @@ struct ScatterTriangle {
 };
 
 void GatherScatterTriangles(const ScatterTarget &target,
+                            size_t modelIndex, size_t targetIndex,
                             const float *nodeWorld,
                             std::vector<ScatterTriangle> &triangles,
                             float &weightedArea) {
   const auto &nodes = GetNodes();
   if (!target.enabled || target.nodeIndex >= nodes.size() ||
-      target.meshIndex >= g_loadedMeshes.size() ||
-      !g_loadedMeshes[target.meshIndex].cpuVertices.size() ||
+      target.meshIndex >= g_loadedMeshes.size()) {
+    return;
+  }
+  if (!g_loadedMeshes[target.meshIndex].cpuVertices.size() ||
       g_loadedMeshes[target.meshIndex].cpuIndices.size() < 3) {
+    // A7: this is the silent-failure case the user kept hitting after the
+    // texture-compression CPU-evict pass started dropping cpuVertices for
+    // already-uploaded meshes. Warn once per (model, target) pair.
+    const uint64_t key = MakeMissingCpuMeshKey(modelIndex, targetIndex);
+    if (s_warnedMissingCpuMesh.insert(key).second) {
+      fprintf(stderr,
+              "Scatter: target %zu/%zu on node '%s' references mesh %zu "
+              "which has no CPU vertex copy; scatter will see zero area for "
+              "this target. (Skip the CPU-evict pass for scatter source "
+              "meshes, or re-import the asset.)\n",
+              modelIndex, targetIndex,
+              target.nodeName.empty() ? "?" : target.nodeName.c_str(),
+              target.meshIndex);
+    }
     return;
   }
 
@@ -303,20 +331,41 @@ void AppendScatterInstancesForObject(
   const float desired =
       (std::clamp)(std::round(rawDesired), 0.0f,
                    static_cast<float>((std::numeric_limits<uint32_t>::max)()));
-  uint32_t instanceCount = static_cast<uint32_t>(desired);
-  instanceCount = (std::min)(instanceCount, object.maxInstances);
-  if (object.previewMaxInstances > 0) {
-    instanceCount = (std::min)(instanceCount, object.previewMaxInstances);
+  // A2: track per-cap overflow so the panel can distinguish "raise model
+  // budget" from "raise per-object cap."
+  uint32_t requested = static_cast<uint32_t>(desired);
+  uint32_t instanceCount = requested;
+  const uint32_t objectHardCap = (object.previewMaxInstances > 0)
+                                     ? (std::min)(object.maxInstances,
+                                                  object.previewMaxInstances)
+                                     : object.maxInstances;
+  uint32_t skippedByObjectCap = 0;
+  if (instanceCount > objectHardCap) {
+    skippedByObjectCap = instanceCount - objectHardCap;
+    instanceCount = objectHardCap;
   }
+  s_scatterRuntimeStats.skippedByObjectCap += skippedByObjectCap;
+  uint32_t skippedByModelBudget = 0;
   if (instanceCount > remainingModelBudget) {
-    s_scatterRuntimeStats.skippedByBudget +=
-        instanceCount - remainingModelBudget;
+    skippedByModelBudget = instanceCount - remainingModelBudget;
+    s_scatterRuntimeStats.skippedByBudget += skippedByModelBudget;
     instanceCount = remainingModelBudget;
   }
   if (instanceCount == 0) {
     return;
   }
   ++s_scatterRuntimeStats.activeObjects;
+  // Per-object stats slot. instancesGenerated is filled in at the end of
+  // this function from the actual emitted count (which can differ when
+  // collision/edge/slope rejects drop instances).
+  ScatterObjectStats perObjectStats = {};
+  perObjectStats.modelIndex = modelIndex;
+  perObjectStats.objectIndex = objectIndex;
+  perObjectStats.modelName = model.name;
+  perObjectStats.objectName = object.name;
+  perObjectStats.skippedByObjectCap = skippedByObjectCap;
+  const uint32_t generatedBeforeObject =
+      s_scatterRuntimeStats.generatedInstances;
 
   const float twoPi = 6.283185307179586f;
   const float yawRange =
@@ -522,6 +571,13 @@ void AppendScatterInstancesForObject(
     if (emittedPlacement) {
       addAcceptedCollisionPoint(position);
     }
+  }
+
+  perObjectStats.instancesGenerated =
+      s_scatterRuntimeStats.generatedInstances - generatedBeforeObject;
+  if (perObjectStats.instancesGenerated > 0 ||
+      perObjectStats.skippedByObjectCap > 0) {
+    s_scatterRuntimeStats.perObject.push_back(std::move(perObjectStats));
   }
 }
 
@@ -787,7 +843,8 @@ bool RemoveUnusedScatterObjects(size_t scatterIndex) {
     return false;
   }
   ScatterModel &model = s_scatterModels[scatterIndex];
-  const size_t before = model.objects.size();
+  const size_t objectsBefore = model.objects.size();
+  const size_t targetsBefore = model.targets.size();
   model.objects.erase(
       std::remove_if(model.objects.begin(), model.objects.end(),
                      [](const ScatterObject &object) {
@@ -800,11 +857,24 @@ bool RemoveUnusedScatterObjects(size_t scatterIndex) {
                                   });
                      }),
       model.objects.end());
-  if (model.objects.size() != before) {
+  // A8: also prune targets that lost their node (nodeIndex set to -1 by
+  // ReindexScatterNodeReferencesAfterRemoval). Without this they sit as
+  // "<missing node>" rows in the panel forever.
+  const auto &nodes = GetNodes();
+  model.targets.erase(
+      std::remove_if(model.targets.begin(), model.targets.end(),
+                     [&nodes](const ScatterTarget &target) {
+                       return target.nodeIndex == static_cast<size_t>(-1) ||
+                              target.nodeIndex >= nodes.size() ||
+                              target.meshIndex >= g_loadedMeshes.size();
+                     }),
+      model.targets.end());
+  const bool changed = model.objects.size() != objectsBefore ||
+                       model.targets.size() != targetsBefore;
+  if (changed) {
     MarkScatterRuntimeChanged();
-    return true;
   }
-  return false;
+  return changed;
 }
 
 bool AddScatterTargetFromPick(size_t scatterIndex, float screenX, float screenY,
@@ -955,13 +1025,16 @@ void AppendScatterInstances(std::vector<Instance> &outInstances) {
     std::vector<ScatterTriangle> triangles;
     triangles.reserve(4096);
     float weightedArea = 0.0f;
-    for (const ScatterTarget &target : model.targets) {
+    for (size_t targetIndex = 0; targetIndex < model.targets.size();
+         ++targetIndex) {
+      const ScatterTarget &target = model.targets[targetIndex];
       if (!target.enabled || target.nodeIndex >= nodes.size() ||
           !nodes[target.nodeIndex].visible ||
           target.nodeIndex >= worldTransforms.size()) {
         continue;
       }
-      GatherScatterTriangles(target, worldTransforms[target.nodeIndex].data(),
+      GatherScatterTriangles(target, modelIndex, targetIndex,
+                             worldTransforms[target.nodeIndex].data(),
                              triangles, weightedArea);
       ++s_scatterRuntimeStats.activeTargets;
     }
