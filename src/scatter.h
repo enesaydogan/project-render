@@ -1,0 +1,129 @@
+#pragma once
+// scatter.h
+//
+// Scatter authoring and runtime. Owned by scatter.cpp. Lives in the Scene
+// namespace so existing call sites (Scene::ScatterModel, Scene::AddScatterModel,
+// etc.) continue to compile unchanged after the extraction out of scene.cpp.
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace Scene {
+
+// Forward decl from scene.h. We only need the type for the
+// std::vector<Instance>& signature on AppendScatterInstances; full definition
+// is supplied by including scene.h at the call site.
+struct Instance;
+
+struct ScatterTarget {
+  size_t nodeIndex = static_cast<size_t>(-1);
+  size_t meshIndex = static_cast<size_t>(-1);
+  std::string nodeName;
+  std::string sourcePath;
+  std::string importGroupKey;
+  int materialIndex = -1;
+  int materialSlot = -1;
+  float weight = 1.0f;
+  bool enabled = true;
+};
+
+struct ScatterObject {
+  std::string name = "Scatter Object";
+  std::string sourceNodeName;
+  std::string sourcePath;
+  std::vector<size_t> meshIndices;
+  std::vector<std::array<float, 16>> meshLocalTransforms;
+  float densityPerSquareMeter = 12.0f;
+  float weight = 1.0f;
+  uint32_t maxInstances = 25000;
+  uint32_t previewMaxInstances = 25000;
+  float minScale = 0.85f;
+  float maxScale = 1.15f;
+  float randomYawDegrees = 360.0f;
+  float randomPitchDegrees = 0.0f;
+  float randomRollDegrees = 0.0f;
+  float normalAlign = 1.0f;
+  float slopeMinDegrees = 0.0f;
+  float slopeMaxDegrees = 55.0f;
+  float heightMin = -100000.0f;
+  float heightMax = 100000.0f;
+  float jitterMeters = 0.0f;
+  float minDistance = 0.0f;
+  float maxDistance = 0.0f; // 0 = unlimited
+  float clumpScale = 0.0f;
+  float clumpStrength = 0.0f;
+  float edgeAvoidance = 0.0f;
+  float collisionAvoidanceRadius = 0.0f;
+  bool enabled = true;
+  bool librarySourceHidden = false;
+};
+
+struct ScatterModel {
+  std::string name = "Scatter";
+  uint32_t seed = 1;
+  bool enabled = true;
+  float previewDensityScale = 1.0f;
+  uint32_t previewInstanceBudget = 200000;
+  std::vector<ScatterTarget> targets;
+  std::vector<ScatterObject> objects;
+};
+
+struct ScatterRuntimeStats {
+  uint32_t generatedInstances = 0;
+  uint32_t skippedByBudget = 0;
+  uint32_t activeTargets = 0;
+  uint32_t activeObjects = 0;
+  uint64_t revision = 0;
+};
+
+// ---- Model CRUD ----------------------------------------------------------
+const std::vector<ScatterModel> &GetScatterModels();
+void SetScatterModels(std::vector<ScatterModel> models);
+size_t AddScatterModel(const std::string &name = "Scatter");
+bool RemoveScatterModel(size_t index);
+bool UpdateScatterModel(size_t index, const ScatterModel &model);
+
+// ---- Target / object population from current selection -------------------
+bool AddSelectedNodesAsScatterTargets(size_t scatterIndex);
+bool AddSelectedNodesAsScatterObjects(size_t scatterIndex);
+
+// ---- Viewport pick targeting ---------------------------------------------
+bool AddScatterTargetFromPick(size_t scatterIndex, float screenX, float screenY,
+                              float screenWidth, float screenHeight);
+void SetScatterPickTarget(size_t scatterIndex);
+bool IsScatterPickingTarget();
+bool HandleScatterPick(float screenX, float screenY, float screenWidth,
+                       float screenHeight);
+void CancelScatterPick();
+
+// ---- Library housekeeping ------------------------------------------------
+bool SetScatterObjectSourcesHidden(size_t scatterIndex, size_t objectIndex,
+                                   bool hidden);
+bool RemoveUnusedScatterObjects(size_t scatterIndex);
+
+// ---- Runtime stats -------------------------------------------------------
+ScatterRuntimeStats GetScatterRuntimeStats();
+uint64_t GetScatterRuntimeRevision();
+
+// ---- Hooks called from scene.cpp -----------------------------------------
+// Append scatter-generated instances to the render list. Called by
+// Scene::GetInstances() during BLAS / TLAS gathering.
+void AppendScatterInstances(std::vector<Instance> &outInstances);
+
+// Called when a scene node is removed so target.nodeIndex references can be
+// fixed up (decremented or disabled). Bumps the scatter runtime revision.
+void ReindexScatterNodeReferencesAfterRemoval(size_t removedNodeIndex);
+
+// Apply a material-index remap (after material compaction) to all scatter
+// target material hints. Returns the number of indices rewritten.
+size_t RemapScatterTargetMaterialIndices(const std::vector<int> &remap);
+
+// Called by scene's NotifySceneChanged path to bump the scatter cache
+// revision when scene-side state changes. Decoupled from
+// InvalidateScatterRuntimeCache (which is for scatter's own use).
+void OnSceneStateChanged();
+
+} // namespace Scene

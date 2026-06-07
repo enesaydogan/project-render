@@ -121,7 +121,8 @@ target_sources(project-render PRIVATE
     src/streamline_manager.cpp
     src/raster_renderer.cpp 
     src/file_import.cpp 
-    src/scene.cpp 
+    src/scene.cpp
+    src/scatter.cpp
     src/material_editor.cpp
     src/material/material_io.cpp
     src/material/material_livelink.cpp
