@@ -59,8 +59,14 @@ struct ScatterObject {
   float distanceFadeMeters = 0.0f;
   float clumpScale = 0.0f;
   float clumpStrength = 0.0f;
-  float edgeAvoidance = 0.0f;
-  float collisionAvoidanceRadius = 0.0f;
+  // World-space inset from open target-mesh boundaries. Internal triangle
+  // edges are ignored.
+  float edgeTrimMeters = 0.0f;
+  // Minimum center-to-center spacing shared by every prototype in the model.
+  // This is deliberate density thinning, not scene-geometry collision.
+  float instanceSpacingMeters = 0.0f;
+  // Reject placements this close to visible, non-target scene geometry.
+  float meshClearanceMeters = 0.0f;
   // D5: skip placements within this radius of any enabled scene light.
   // 0 = disabled. Cheap O(instances * lights) check; lights are usually few.
   float avoidLightRadius = 0.0f;
@@ -87,6 +93,9 @@ struct ScatterObjectStats {
   std::string objectName;
   uint32_t instancesGenerated = 0;
   uint32_t skippedByObjectCap = 0;
+  uint32_t skippedByEdgeTrim = 0;
+  uint32_t skippedByMeshClearance = 0;
+  uint32_t skippedBySpacing = 0;
 };
 
 struct ScatterRuntimeStats {
@@ -96,6 +105,9 @@ struct ScatterRuntimeStats {
   // distinguish "raise the model budget" from "raise the per-object cap."
   uint32_t skippedByBudget = 0;
   uint32_t skippedByObjectCap = 0;
+  uint32_t skippedByEdgeTrim = 0;
+  uint32_t skippedByMeshClearance = 0;
+  uint32_t skippedBySpacing = 0;
   uint32_t activeTargets = 0;
   uint32_t activeObjects = 0;
   uint64_t revision = 0;

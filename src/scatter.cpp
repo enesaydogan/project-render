@@ -162,6 +162,180 @@ ScatterCollisionCell ScatterCollisionCellFor(const DirectX::XMFLOAT3 &position,
           static_cast<int>(std::floor(position.z / cellSize))};
 }
 
+struct ScatterAcceptedPoint {
+  DirectX::XMFLOAT3 position;
+  float radius = 0.0f;
+};
+
+struct ScatterSpacingGrid {
+  float cellSize = 0.0f;
+  std::unordered_map<ScatterCollisionCell, std::vector<ScatterAcceptedPoint>,
+                     ScatterCollisionCellHash>
+      cells;
+};
+
+struct ScatterExclusionTriangle {
+  DirectX::XMFLOAT3 p0;
+  DirectX::XMFLOAT3 p1;
+  DirectX::XMFLOAT3 p2;
+  DirectX::XMFLOAT3 minBound;
+  DirectX::XMFLOAT3 maxBound;
+};
+
+struct ScatterExclusionGrid {
+  float cellSize = 0.0f;
+  std::vector<ScatterExclusionTriangle> triangles;
+  std::unordered_map<ScatterCollisionCell, std::vector<size_t>,
+                     ScatterCollisionCellHash>
+      cells;
+  std::vector<size_t> largeTriangles;
+};
+
+struct ScatterTopologyVertexKey {
+  int64_t x = 0;
+  int64_t y = 0;
+  int64_t z = 0;
+  bool operator==(const ScatterTopologyVertexKey &rhs) const {
+    return x == rhs.x && y == rhs.y && z == rhs.z;
+  }
+  bool operator<(const ScatterTopologyVertexKey &rhs) const {
+    if (x != rhs.x) {
+      return x < rhs.x;
+    }
+    if (y != rhs.y) {
+      return y < rhs.y;
+    }
+    return z < rhs.z;
+  }
+};
+
+struct ScatterTopologyEdgeKey {
+  ScatterTopologyVertexKey a;
+  ScatterTopologyVertexKey b;
+  bool operator==(const ScatterTopologyEdgeKey &rhs) const {
+    return a == rhs.a && b == rhs.b;
+  }
+};
+
+struct ScatterTopologyEdgeKeyHash {
+  size_t operator()(const ScatterTopologyEdgeKey &edge) const {
+    auto mix = [](uint64_t value) {
+      value ^= value >> 30;
+      value *= 0xbf58476d1ce4e5b9ull;
+      value ^= value >> 27;
+      value *= 0x94d049bb133111ebull;
+      return value ^ (value >> 31);
+    };
+    uint64_t hash = mix(static_cast<uint64_t>(edge.a.x));
+    hash ^= mix(static_cast<uint64_t>(edge.a.y) + 0x9e3779b97f4a7c15ull);
+    hash ^= mix(static_cast<uint64_t>(edge.a.z) + 0x3c79ac492ba7b653ull);
+    hash ^= mix(static_cast<uint64_t>(edge.b.x) + 0x1c69b3f74ac4ae35ull);
+    hash ^= mix(static_cast<uint64_t>(edge.b.y) + 0xd6e8feb86659fd93ull);
+    hash ^= mix(static_cast<uint64_t>(edge.b.z) + 0xa5a3564e27f8862full);
+    return static_cast<size_t>(hash);
+  }
+};
+
+ScatterTopologyVertexKey ScatterTopologyKey(
+    const DirectX::XMFLOAT3 &position) {
+  constexpr double kWeldScale = 100000.0;
+  return {static_cast<int64_t>(std::llround(position.x * kWeldScale)),
+          static_cast<int64_t>(std::llround(position.y * kWeldScale)),
+          static_cast<int64_t>(std::llround(position.z * kWeldScale))};
+}
+
+ScatterTopologyEdgeKey ScatterTopologyKey(const DirectX::XMFLOAT3 &a,
+                                          const DirectX::XMFLOAT3 &b) {
+  ScatterTopologyVertexKey keyA = ScatterTopologyKey(a);
+  ScatterTopologyVertexKey keyB = ScatterTopologyKey(b);
+  if (keyB < keyA) {
+    std::swap(keyA, keyB);
+  }
+  return {keyA, keyB};
+}
+
+float PointSegmentDistanceSq(const DirectX::XMFLOAT3 &point,
+                             const DirectX::XMFLOAT3 &a,
+                             const DirectX::XMFLOAT3 &b) {
+  const float abX = b.x - a.x;
+  const float abY = b.y - a.y;
+  const float abZ = b.z - a.z;
+  const float apX = point.x - a.x;
+  const float apY = point.y - a.y;
+  const float apZ = point.z - a.z;
+  const float lengthSq = abX * abX + abY * abY + abZ * abZ;
+  const float t =
+      lengthSq > 1e-12f
+          ? (std::clamp)((apX * abX + apY * abY + apZ * abZ) / lengthSq,
+                         0.0f, 1.0f)
+          : 0.0f;
+  const float dx = point.x - (a.x + abX * t);
+  const float dy = point.y - (a.y + abY * t);
+  const float dz = point.z - (a.z + abZ * t);
+  return dx * dx + dy * dy + dz * dz;
+}
+
+float PointTriangleDistanceSq(const DirectX::XMFLOAT3 &point,
+                              const ScatterExclusionTriangle &triangle) {
+  using namespace DirectX;
+  const XMVECTOR p = XMLoadFloat3(&point);
+  const XMVECTOR a = XMLoadFloat3(&triangle.p0);
+  const XMVECTOR b = XMLoadFloat3(&triangle.p1);
+  const XMVECTOR c = XMLoadFloat3(&triangle.p2);
+  const XMVECTOR ab = XMVectorSubtract(b, a);
+  const XMVECTOR ac = XMVectorSubtract(c, a);
+  const XMVECTOR ap = XMVectorSubtract(p, a);
+  const float d1 = XMVectorGetX(XMVector3Dot(ab, ap));
+  const float d2 = XMVectorGetX(XMVector3Dot(ac, ap));
+  if (d1 <= 0.0f && d2 <= 0.0f) {
+    return XMVectorGetX(XMVector3LengthSq(ap));
+  }
+
+  const XMVECTOR bp = XMVectorSubtract(p, b);
+  const float d3 = XMVectorGetX(XMVector3Dot(ab, bp));
+  const float d4 = XMVectorGetX(XMVector3Dot(ac, bp));
+  if (d3 >= 0.0f && d4 <= d3) {
+    return XMVectorGetX(XMVector3LengthSq(bp));
+  }
+
+  const float vc = d1 * d4 - d3 * d2;
+  if (vc <= 0.0f && d1 >= 0.0f && d3 <= 0.0f) {
+    const float v = d1 / (d1 - d3);
+    return XMVectorGetX(XMVector3LengthSq(
+        XMVectorSubtract(p, XMVectorMultiplyAdd(XMVectorReplicate(v), ab, a))));
+  }
+
+  const XMVECTOR cp = XMVectorSubtract(p, c);
+  const float d5 = XMVectorGetX(XMVector3Dot(ab, cp));
+  const float d6 = XMVectorGetX(XMVector3Dot(ac, cp));
+  if (d6 >= 0.0f && d5 <= d6) {
+    return XMVectorGetX(XMVector3LengthSq(cp));
+  }
+
+  const float vb = d5 * d2 - d1 * d6;
+  if (vb <= 0.0f && d2 >= 0.0f && d6 <= 0.0f) {
+    const float w = d2 / (d2 - d6);
+    return XMVectorGetX(XMVector3LengthSq(
+        XMVectorSubtract(p, XMVectorMultiplyAdd(XMVectorReplicate(w), ac, a))));
+  }
+
+  const float va = d3 * d6 - d5 * d4;
+  if (va <= 0.0f && (d4 - d3) >= 0.0f && (d5 - d6) >= 0.0f) {
+    const XMVECTOR bc = XMVectorSubtract(c, b);
+    const float w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+    return XMVectorGetX(XMVector3LengthSq(
+        XMVectorSubtract(p, XMVectorMultiplyAdd(XMVectorReplicate(w), bc, b))));
+  }
+
+  const float denominator = 1.0f / (va + vb + vc);
+  const float v = vb * denominator;
+  const float w = vc * denominator;
+  const XMVECTOR closest =
+      XMVectorMultiplyAdd(XMVectorReplicate(w), ac,
+                          XMVectorMultiplyAdd(XMVectorReplicate(v), ab, a));
+  return XMVectorGetX(XMVector3LengthSq(XMVectorSubtract(p, closest)));
+}
+
 DirectX::XMVECTOR ScatterSafeNormalize(DirectX::XMVECTOR v,
                                        DirectX::XMVECTOR fallback) {
   if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(v)) < 1e-10f) {
@@ -216,7 +390,32 @@ struct ScatterTriangle {
   DirectX::XMFLOAT3 n1;
   DirectX::XMFLOAT3 n2;
   float weight = 0.0f;
+  uint8_t boundaryEdges = 0;
 };
+
+void FinalizeScatterBoundaryEdges(std::vector<ScatterTriangle> &triangles) {
+  std::unordered_map<ScatterTopologyEdgeKey, uint32_t,
+                     ScatterTopologyEdgeKeyHash>
+      edgeUseCounts;
+  edgeUseCounts.reserve(triangles.size() * 3);
+  for (const ScatterTriangle &triangle : triangles) {
+    ++edgeUseCounts[ScatterTopologyKey(triangle.p0, triangle.p1)];
+    ++edgeUseCounts[ScatterTopologyKey(triangle.p1, triangle.p2)];
+    ++edgeUseCounts[ScatterTopologyKey(triangle.p2, triangle.p0)];
+  }
+  for (ScatterTriangle &triangle : triangles) {
+    triangle.boundaryEdges = 0;
+    if (edgeUseCounts[ScatterTopologyKey(triangle.p0, triangle.p1)] == 1) {
+      triangle.boundaryEdges |= 1u << 0;
+    }
+    if (edgeUseCounts[ScatterTopologyKey(triangle.p1, triangle.p2)] == 1) {
+      triangle.boundaryEdges |= 1u << 1;
+    }
+    if (edgeUseCounts[ScatterTopologyKey(triangle.p2, triangle.p0)] == 1) {
+      triangle.boundaryEdges |= 1u << 2;
+    }
+  }
+}
 
 void GatherScatterTriangles(const ScatterTarget &target,
                             size_t modelIndex, size_t targetIndex,
@@ -252,7 +451,6 @@ void GatherScatterTriangles(const ScatterTarget &target,
       reinterpret_cast<const DirectX::XMFLOAT4X4 *>(nodeWorld));
   const DirectX::XMVECTOR worldUp =
       DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
-
   for (size_t tri = 0; tri + 2 < mesh.cpuIndices.size(); tri += 3) {
     const uint32_t i0 = mesh.cpuIndices[tri + 0];
     const uint32_t i1 = mesh.cpuIndices[tri + 1];
@@ -308,11 +506,167 @@ void GatherScatterTriangles(const ScatterTarget &target,
   }
 }
 
+ScatterExclusionGrid BuildScatterExclusionGrid(
+    const ScatterModel &model,
+    const std::vector<std::array<float, 16>> &worldTransforms,
+    float maxClearance) {
+  ScatterExclusionGrid grid;
+  if (maxClearance <= 1e-4f) {
+    return grid;
+  }
+  grid.cellSize = (std::max)(maxClearance, 0.25f);
+
+  std::unordered_set<uint64_t> targetBindings;
+  for (const ScatterTarget &target : model.targets) {
+    if (target.enabled) {
+      targetBindings.insert((static_cast<uint64_t>(target.nodeIndex) << 32) |
+                            static_cast<uint32_t>(target.meshIndex));
+    }
+  }
+
+  const auto &nodes = GetNodes();
+  for (size_t nodeIndex = 0; nodeIndex < nodes.size(); ++nodeIndex) {
+    if (!nodes[nodeIndex].visible || nodeIndex >= worldTransforms.size()) {
+      continue;
+    }
+    const DirectX::XMMATRIX world = DirectX::XMLoadFloat4x4(
+        reinterpret_cast<const DirectX::XMFLOAT4X4 *>(
+            worldTransforms[nodeIndex].data()));
+    for (size_t meshIndex : nodes[nodeIndex].meshIndices) {
+      if (meshIndex >= g_loadedMeshes.size() ||
+          targetBindings.count((static_cast<uint64_t>(nodeIndex) << 32) |
+                               static_cast<uint32_t>(meshIndex)) != 0) {
+        continue;
+      }
+      const Asset::GpuMesh &mesh = g_loadedMeshes[meshIndex];
+      if (mesh.cpuVertices.empty() || mesh.cpuIndices.size() < 3) {
+        continue;
+      }
+      for (size_t tri = 0; tri + 2 < mesh.cpuIndices.size(); tri += 3) {
+        const uint32_t i0 = mesh.cpuIndices[tri + 0];
+        const uint32_t i1 = mesh.cpuIndices[tri + 1];
+        const uint32_t i2 = mesh.cpuIndices[tri + 2];
+        if (i0 >= mesh.cpuVertices.size() || i1 >= mesh.cpuVertices.size() ||
+            i2 >= mesh.cpuVertices.size()) {
+          continue;
+        }
+        ScatterExclusionTriangle out = {};
+        DirectX::XMStoreFloat3(
+            &out.p0, DirectX::XMVector3TransformCoord(
+                         DirectX::XMLoadFloat3(reinterpret_cast<
+                                               const DirectX::XMFLOAT3 *>(
+                             mesh.cpuVertices[i0].pos)),
+                         world));
+        DirectX::XMStoreFloat3(
+            &out.p1, DirectX::XMVector3TransformCoord(
+                         DirectX::XMLoadFloat3(reinterpret_cast<
+                                               const DirectX::XMFLOAT3 *>(
+                             mesh.cpuVertices[i1].pos)),
+                         world));
+        DirectX::XMStoreFloat3(
+            &out.p2, DirectX::XMVector3TransformCoord(
+                         DirectX::XMLoadFloat3(reinterpret_cast<
+                                               const DirectX::XMFLOAT3 *>(
+                             mesh.cpuVertices[i2].pos)),
+                         world));
+        const DirectX::XMVECTOR edge0 = DirectX::XMVectorSubtract(
+            DirectX::XMLoadFloat3(&out.p1), DirectX::XMLoadFloat3(&out.p0));
+        const DirectX::XMVECTOR edge1 = DirectX::XMVectorSubtract(
+            DirectX::XMLoadFloat3(&out.p2), DirectX::XMLoadFloat3(&out.p0));
+        if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(
+                DirectX::XMVector3Cross(edge0, edge1))) < 1e-12f) {
+          continue;
+        }
+        out.minBound = {
+            (std::min)(out.p0.x, (std::min)(out.p1.x, out.p2.x)),
+            (std::min)(out.p0.y, (std::min)(out.p1.y, out.p2.y)),
+            (std::min)(out.p0.z, (std::min)(out.p1.z, out.p2.z))};
+        out.maxBound = {
+            (std::max)(out.p0.x, (std::max)(out.p1.x, out.p2.x)),
+            (std::max)(out.p0.y, (std::max)(out.p1.y, out.p2.y)),
+            (std::max)(out.p0.z, (std::max)(out.p1.z, out.p2.z))};
+        grid.triangles.push_back(out);
+      }
+    }
+  }
+
+  for (size_t triangleIndex = 0; triangleIndex < grid.triangles.size();
+       ++triangleIndex) {
+    const ScatterExclusionTriangle &triangle = grid.triangles[triangleIndex];
+    const ScatterCollisionCell minCell = ScatterCollisionCellFor(
+        {triangle.minBound.x - maxClearance,
+         triangle.minBound.y - maxClearance,
+         triangle.minBound.z - maxClearance},
+        grid.cellSize);
+    const ScatterCollisionCell maxCell = ScatterCollisionCellFor(
+        {triangle.maxBound.x + maxClearance,
+         triangle.maxBound.y + maxClearance,
+         triangle.maxBound.z + maxClearance},
+        grid.cellSize);
+    const int64_t cellCount =
+        static_cast<int64_t>(maxCell.x - minCell.x + 1) *
+        static_cast<int64_t>(maxCell.y - minCell.y + 1) *
+        static_cast<int64_t>(maxCell.z - minCell.z + 1);
+    if (cellCount > 4096) {
+      grid.largeTriangles.push_back(triangleIndex);
+      continue;
+    }
+    for (int z = minCell.z; z <= maxCell.z; ++z) {
+      for (int y = minCell.y; y <= maxCell.y; ++y) {
+        for (int x = minCell.x; x <= maxCell.x; ++x) {
+          grid.cells[{x, y, z}].push_back(triangleIndex);
+        }
+      }
+    }
+  }
+  return grid;
+}
+
+bool IsWithinMeshClearance(const ScatterExclusionGrid &grid,
+                           const DirectX::XMFLOAT3 &position,
+                           float clearance) {
+  if (clearance <= 1e-4f || grid.cellSize <= 0.0f) {
+    return false;
+  }
+  const float clearanceSq = clearance * clearance;
+  auto isTooClose = [&](size_t triangleIndex) {
+    const ScatterExclusionTriangle &triangle = grid.triangles[triangleIndex];
+    const float dx =
+        (std::max)(triangle.minBound.x - position.x,
+                   (std::max)(0.0f, position.x - triangle.maxBound.x));
+    const float dy =
+        (std::max)(triangle.minBound.y - position.y,
+                   (std::max)(0.0f, position.y - triangle.maxBound.y));
+    const float dz =
+        (std::max)(triangle.minBound.z - position.z,
+                   (std::max)(0.0f, position.z - triangle.maxBound.z));
+    return dx * dx + dy * dy + dz * dz <= clearanceSq &&
+           PointTriangleDistanceSq(position, triangle) < clearanceSq;
+  };
+
+  const auto cellIt =
+      grid.cells.find(ScatterCollisionCellFor(position, grid.cellSize));
+  if (cellIt != grid.cells.end()) {
+    for (size_t triangleIndex : cellIt->second) {
+      if (isTooClose(triangleIndex)) {
+        return true;
+      }
+    }
+  }
+  for (size_t triangleIndex : grid.largeTriangles) {
+    if (isTooClose(triangleIndex)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void AppendScatterInstancesForObject(
     const ScatterModel &model, size_t modelIndex, const ScatterObject &object,
     size_t objectIndex, const std::vector<ScatterTriangle> &triangles,
     const std::vector<float> &triangleWeightCdf, float weightedArea,
-    uint32_t &remainingModelBudget,
+    const ScatterExclusionGrid &exclusionGrid,
+    ScatterSpacingGrid &spacingGrid, uint32_t &remainingModelBudget,
     std::vector<Instance> &outInstances) {
   if (!model.enabled || !object.enabled || object.meshIndices.empty() ||
       triangles.empty() || weightedArea <= 1e-6f ||
@@ -389,11 +743,11 @@ void AppendScatterInstancesForObject(
   const float clumpScale = (std::max)(0.0f, object.clumpScale);
   const float clumpStrength =
       (std::clamp)(object.clumpStrength, 0.0f, 1.0f);
-  const float edgeAvoidance =
-      (std::clamp)(object.edgeAvoidance, 0.0f, 0.33f);
-  const float collisionRadius =
-      (std::max)(0.0f, object.collisionAvoidanceRadius);
-  const float collisionRadius2 = collisionRadius * collisionRadius;
+  const float edgeTrim = (std::max)(0.0f, object.edgeTrimMeters);
+  const float spacingRadius =
+      (std::max)(0.0f, object.instanceSpacingMeters);
+  const float meshClearance =
+      (std::max)(0.0f, object.meshClearanceMeters);
   const float cameraX = g_cameraData.pos[0];
   const float cameraY = g_cameraData.pos[1];
   const float cameraZ = g_cameraData.pos[2];
@@ -423,31 +777,30 @@ void AppendScatterInstancesForObject(
           {li.position[0], li.position[1], li.position[2]});
     }
   }
-  std::unordered_map<ScatterCollisionCell, std::vector<DirectX::XMFLOAT3>,
-                     ScatterCollisionCellHash>
-      acceptedCollisionPoints;
   auto collidesWithAcceptedPoint = [&](const DirectX::XMFLOAT3 &position) {
-    if (collisionRadius <= 1e-4f) {
+    if (spacingRadius <= 1e-4f || spacingGrid.cellSize <= 0.0f) {
       return false;
     }
     const ScatterCollisionCell cell =
-        ScatterCollisionCellFor(position, collisionRadius);
+        ScatterCollisionCellFor(position, spacingGrid.cellSize);
     for (int dz = -1; dz <= 1; ++dz) {
       for (int dy = -1; dy <= 1; ++dy) {
         for (int dx = -1; dx <= 1; ++dx) {
           const ScatterCollisionCell neighbor{cell.x + dx, cell.y + dy,
                                               cell.z + dz};
-          const auto it = acceptedCollisionPoints.find(neighbor);
-          if (it == acceptedCollisionPoints.end()) {
+          const auto it = spacingGrid.cells.find(neighbor);
+          if (it == spacingGrid.cells.end()) {
             continue;
           }
-          for (const DirectX::XMFLOAT3 &accepted : it->second) {
-            const float diffX = position.x - accepted.x;
-            const float diffY = position.y - accepted.y;
-            const float diffZ = position.z - accepted.z;
+          for (const ScatterAcceptedPoint &accepted : it->second) {
+            const float requiredSpacing =
+                (std::max)(spacingRadius, accepted.radius);
+            const float diffX = position.x - accepted.position.x;
+            const float diffY = position.y - accepted.position.y;
+            const float diffZ = position.z - accepted.position.z;
             const float dist2 =
                 diffX * diffX + diffY * diffY + diffZ * diffZ;
-            if (dist2 < collisionRadius2) {
+            if (dist2 < requiredSpacing * requiredSpacing) {
               return true;
             }
           }
@@ -457,11 +810,11 @@ void AppendScatterInstancesForObject(
     return false;
   };
   auto addAcceptedCollisionPoint = [&](const DirectX::XMFLOAT3 &position) {
-    if (collisionRadius <= 1e-4f) {
+    if (spacingGrid.cellSize <= 0.0f) {
       return;
     }
-    acceptedCollisionPoints[ScatterCollisionCellFor(position, collisionRadius)]
-        .push_back(position);
+    spacingGrid.cells[ScatterCollisionCellFor(position, spacingGrid.cellSize)]
+        .push_back({position, spacingRadius});
   };
 
   for (uint32_t instanceIndex = 0;
@@ -492,10 +845,6 @@ void AppendScatterInstancesForObject(
     const float b0 = 1.0f - su;
     const float b1 = su * (1.0f - v);
     const float b2 = su * v;
-    if (edgeAvoidance > 0.0f &&
-        (std::min)(b0, (std::min)(b1, b2)) < edgeAvoidance) {
-      continue;
-    }
     DirectX::XMFLOAT3 position = {
         chosen->p0.x * b0 + chosen->p1.x * b1 + chosen->p2.x * b2,
         chosen->p0.y * b0 + chosen->p1.y * b1 + chosen->p2.y * b2,
@@ -504,6 +853,24 @@ void AppendScatterInstancesForObject(
         chosen->n0.x * b0 + chosen->n1.x * b1 + chosen->n2.x * b2,
         chosen->n0.y * b0 + chosen->n1.y * b1 + chosen->n2.y * b2,
         chosen->n0.z * b0 + chosen->n1.z * b1 + chosen->n2.z * b2};
+
+    const float effectiveEdgeTrim =
+        edgeTrim + (std::max)(0.0f, object.jitterMeters);
+    if (effectiveEdgeTrim > 0.0f && chosen->boundaryEdges != 0) {
+      const float trimSq = effectiveEdgeTrim * effectiveEdgeTrim;
+      const bool nearBoundary =
+          ((chosen->boundaryEdges & (1u << 0)) != 0 &&
+           PointSegmentDistanceSq(position, chosen->p0, chosen->p1) < trimSq) ||
+          ((chosen->boundaryEdges & (1u << 1)) != 0 &&
+           PointSegmentDistanceSq(position, chosen->p1, chosen->p2) < trimSq) ||
+          ((chosen->boundaryEdges & (1u << 2)) != 0 &&
+           PointSegmentDistanceSq(position, chosen->p2, chosen->p0) < trimSq);
+      if (nearBoundary) {
+        ++s_scatterRuntimeStats.skippedByEdgeTrim;
+        ++perObjectStats.skippedByEdgeTrim;
+        continue;
+      }
+    }
 
     if (position.y < object.heightMin || position.y > object.heightMax) {
       continue;
@@ -556,9 +923,6 @@ void AppendScatterInstancesForObject(
         continue;
       }
     }
-    if (collidesWithAcceptedPoint(position)) {
-      continue;
-    }
     DirectX::XMVECTOR n = ScatterSafeNormalize(
         DirectX::XMLoadFloat3(&normal),
         DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f));
@@ -577,6 +941,16 @@ void AppendScatterInstancesForObject(
       position.z +=
           (ScatterHash01(baseSeed ^ 0xabc98388u) * 2.0f - 1.0f) *
           object.jitterMeters;
+    }
+    if (IsWithinMeshClearance(exclusionGrid, position, meshClearance)) {
+      ++s_scatterRuntimeStats.skippedByMeshClearance;
+      ++perObjectStats.skippedByMeshClearance;
+      continue;
+    }
+    if (collidesWithAcceptedPoint(position)) {
+      ++s_scatterRuntimeStats.skippedBySpacing;
+      ++perObjectStats.skippedBySpacing;
+      continue;
     }
 
     const float scale =
@@ -630,7 +1004,10 @@ void AppendScatterInstancesForObject(
   perObjectStats.instancesGenerated =
       s_scatterRuntimeStats.generatedInstances - generatedBeforeObject;
   if (perObjectStats.instancesGenerated > 0 ||
-      perObjectStats.skippedByObjectCap > 0) {
+      perObjectStats.skippedByObjectCap > 0 ||
+      perObjectStats.skippedByEdgeTrim > 0 ||
+      perObjectStats.skippedByMeshClearance > 0 ||
+      perObjectStats.skippedBySpacing > 0) {
     s_scatterRuntimeStats.perObject.push_back(std::move(perObjectStats));
   }
 }
@@ -1167,6 +1544,23 @@ void AppendScatterInstances(std::vector<Instance> &outInstances) {
     if (triangles.empty() || weightedArea <= 1e-6f) {
       continue;
     }
+    FinalizeScatterBoundaryEdges(triangles);
+
+    float maxMeshClearance = 0.0f;
+    float maxInstanceSpacing = 0.0f;
+    for (const ScatterObject &object : model.objects) {
+      if (!object.enabled) {
+        continue;
+      }
+      maxMeshClearance =
+          (std::max)(maxMeshClearance, object.meshClearanceMeters);
+      maxInstanceSpacing =
+          (std::max)(maxInstanceSpacing, object.instanceSpacingMeters);
+    }
+    const ScatterExclusionGrid exclusionGrid = BuildScatterExclusionGrid(
+        model, worldTransforms, (std::max)(0.0f, maxMeshClearance));
+    ScatterSpacingGrid spacingGrid;
+    spacingGrid.cellSize = (std::max)(0.0f, maxInstanceSpacing);
 
     // A4: build the weight CDF once per model. All objects in the model
     // sample from the same triangle pool, so the CDF is shared.
@@ -1181,10 +1575,11 @@ void AppendScatterInstances(std::vector<Instance> &outInstances) {
     for (size_t objectIndex = 0; objectIndex < model.objects.size();
          ++objectIndex) {
       AppendScatterInstancesForObject(model, modelIndex,
-                                      model.objects[objectIndex], objectIndex,
-                                      triangles, triangleWeightCdf,
-                                      weightedArea, remainingModelBudget,
-                                      s_scatterInstanceCache);
+                                       model.objects[objectIndex], objectIndex,
+                                       triangles, triangleWeightCdf,
+                                       weightedArea, exclusionGrid, spacingGrid,
+                                       remainingModelBudget,
+                                       s_scatterInstanceCache);
       if (remainingModelBudget == 0) {
         break;
       }

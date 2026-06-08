@@ -743,21 +743,28 @@ void ScatterPanel::createUi()
         distForm->setContentsMargins(8, 6, 8, 6);
         distForm->setSpacing(4);
         m_jitter = MakeDoubleSpin(0.0, 1000.0, 0.05, 3, true);
-        m_edgeAvoidance = MakeDoubleSpin(0.0, 0.33, 0.01, 2);
+        m_edgeAvoidance = MakeDoubleSpin(0.0, 1000.0, 0.05, 3, true);
         m_edgeAvoidance->setToolTip(
-            tr("Skip placements within this fractional barycentric distance "
-               "of a triangle edge."));
+            tr("World-space inset from true open target boundaries. Internal "
+               "triangle seams are ignored."));
         m_collisionAvoidance = MakeDoubleSpin(0.0, 10000.0, 0.05, 3, true);
         m_collisionAvoidance->setToolTip(
-            tr("Minimum world-space distance between accepted instances "
-               "within this prototype."));
+            tr("Minimum center spacing shared by all prototypes in this "
+               "scatter model. Rejected placements reduce instance count, "
+               "making this a predictable performance-density control."));
+        m_meshClearance = MakeDoubleSpin(0.0, 10000.0, 0.05, 3, true);
+        m_meshClearance->setToolTip(
+            tr("Reject placements near visible scene meshes that are not "
+               "scatter targets. Use this to keep grass out of rocks, walls, "
+               "buildings, and other overlapping geometry."));
         m_avoidLightRadius = MakeDoubleSpin(0.0, 10000.0, 0.1, 3, true);
         m_avoidLightRadius->setToolTip(
             tr("Skip placements within this radius of any enabled scene "
                "light."));
         distForm->addRow(tr("Jitter (m)"), m_jitter);
-        distForm->addRow(tr("Edge Avoid"), m_edgeAvoidance);
-        distForm->addRow(tr("Avoid Collision (m)"), m_collisionAvoidance);
+        distForm->addRow(tr("Edge Trim (m)"), m_edgeAvoidance);
+        distForm->addRow(tr("Instance Spacing (m)"), m_collisionAvoidance);
+        distForm->addRow(tr("Mesh Clearance (m)"), m_meshClearance);
         distForm->addRow(tr("Avoid Lights (m)"), m_avoidLightRadius);
         col->addWidget(distGroup);
 
@@ -1019,6 +1026,9 @@ void ScatterPanel::createUi()
     connect(m_collisionAvoidance,
             qOverload<double>(&QDoubleSpinBox::valueChanged), this,
             [objectEdit](double) { objectEdit(); });
+    connect(m_meshClearance,
+            qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+            [objectEdit](double) { objectEdit(); });
 }
 
 void ScatterPanel::refreshUi()
@@ -1136,7 +1146,10 @@ void ScatterPanel::syncInspector()
                 .arg(static_cast<qulonglong>(stats.generatedInstances))
                 .arg(static_cast<unsigned>(stats.activeTargets))
                 .arg(static_cast<unsigned>(stats.activeObjects));
-        if (stats.skippedByBudget > 0 || stats.skippedByObjectCap > 0) {
+        if (stats.skippedByBudget > 0 || stats.skippedByObjectCap > 0 ||
+            stats.skippedByEdgeTrim > 0 ||
+            stats.skippedByMeshClearance > 0 ||
+            stats.skippedBySpacing > 0) {
             QStringList skipped;
             if (stats.skippedByBudget > 0) {
                 skipped << tr("budget %1")
@@ -1145,6 +1158,19 @@ void ScatterPanel::syncInspector()
             if (stats.skippedByObjectCap > 0) {
                 skipped << tr("per-object cap %1")
                                 .arg(static_cast<unsigned>(stats.skippedByObjectCap));
+            }
+            if (stats.skippedByEdgeTrim > 0) {
+                skipped << tr("edge trim %1")
+                                .arg(static_cast<unsigned>(stats.skippedByEdgeTrim));
+            }
+            if (stats.skippedByMeshClearance > 0) {
+                skipped << tr("mesh clearance %1")
+                                .arg(static_cast<unsigned>(
+                                    stats.skippedByMeshClearance));
+            }
+            if (stats.skippedBySpacing > 0) {
+                skipped << tr("spacing %1")
+                                .arg(static_cast<unsigned>(stats.skippedBySpacing));
             }
             headline += tr("  \xc2\xb7  Skipped: %1").arg(skipped.join(", "));
         }
@@ -1165,16 +1191,31 @@ void ScatterPanel::syncInspector()
                                .arg(QString::fromStdString(e.modelName))
                                .arg(name);
                 }
+                QStringList objectSkipped;
                 if (e.skippedByObjectCap > 0) {
-                    rows << tr("%1: %2 (+%3 capped)")
-                                .arg(name)
-                                .arg(static_cast<unsigned>(e.instancesGenerated))
-                                .arg(static_cast<unsigned>(e.skippedByObjectCap));
-                } else {
-                    rows << tr("%1: %2")
-                                .arg(name)
-                                .arg(static_cast<unsigned>(e.instancesGenerated));
+                    objectSkipped << tr("%1 capped").arg(
+                        static_cast<unsigned>(e.skippedByObjectCap));
                 }
+                if (e.skippedByEdgeTrim > 0) {
+                    objectSkipped << tr("%1 edge").arg(
+                        static_cast<unsigned>(e.skippedByEdgeTrim));
+                }
+                if (e.skippedByMeshClearance > 0) {
+                    objectSkipped << tr("%1 mesh").arg(
+                        static_cast<unsigned>(e.skippedByMeshClearance));
+                }
+                if (e.skippedBySpacing > 0) {
+                    objectSkipped << tr("%1 spacing").arg(
+                        static_cast<unsigned>(e.skippedBySpacing));
+                }
+                QString rowText =
+                    tr("%1: %2")
+                        .arg(name)
+                        .arg(static_cast<unsigned>(e.instancesGenerated));
+                if (!objectSkipped.empty()) {
+                    rowText += tr(" (%1)").arg(objectSkipped.join(", "));
+                }
+                rows << rowText;
             }
             if (sorted.size() > limit) {
                 rows << tr("\xe2\x80\xa6 +%1 more")
@@ -1238,6 +1279,7 @@ void ScatterPanel::syncInspector()
     m_clumpStrength->setEnabled(hasObject);
     m_edgeAvoidance->setEnabled(hasObject);
     m_collisionAvoidance->setEnabled(hasObject);
+    m_meshClearance->setEnabled(hasObject);
 
     if (hasObject) {
         const Scene::ScatterObject &object =
@@ -1272,8 +1314,9 @@ void ScatterPanel::syncInspector()
         m_avoidLightRadius->setValue(object.avoidLightRadius);
         m_clumpScale->setValue(object.clumpScale);
         m_clumpStrength->setValue(object.clumpStrength);
-        m_edgeAvoidance->setValue(object.edgeAvoidance);
-        m_collisionAvoidance->setValue(object.collisionAvoidanceRadius);
+        m_edgeAvoidance->setValue(object.edgeTrimMeters);
+        m_collisionAvoidance->setValue(object.instanceSpacingMeters);
+        m_meshClearance->setValue(object.meshClearanceMeters);
     } else {
         m_objectName->clear();
         m_objectEnabled->setChecked(false);
@@ -1291,6 +1334,7 @@ void ScatterPanel::syncInspector()
         m_clumpStrength->setValue(0.0);
         m_edgeAvoidance->setValue(0.0);
         m_collisionAvoidance->setValue(0.0);
+        m_meshClearance->setValue(0.0);
     }
     m_syncing = false;
 }
@@ -1373,9 +1417,11 @@ void ScatterPanel::applyObjectEdit()
     object.avoidLightRadius = static_cast<float>(m_avoidLightRadius->value());
     object.clumpScale = static_cast<float>(m_clumpScale->value());
     object.clumpStrength = static_cast<float>(m_clumpStrength->value());
-    object.edgeAvoidance = static_cast<float>(m_edgeAvoidance->value());
-    object.collisionAvoidanceRadius =
+    object.edgeTrimMeters = static_cast<float>(m_edgeAvoidance->value());
+    object.instanceSpacingMeters =
         static_cast<float>(m_collisionAvoidance->value());
+    object.meshClearanceMeters =
+        static_cast<float>(m_meshClearance->value());
     Scene::UpdateScatterObject(static_cast<size_t>(modelRow),
                                static_cast<size_t>(objectRow), object);
 }

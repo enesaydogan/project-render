@@ -96,6 +96,7 @@ private:
     QDoubleSpinBox *m_clumpStrength = nullptr;
     QDoubleSpinBox *m_edgeAvoidance = nullptr;
     QDoubleSpinBox *m_collisionAvoidance = nullptr;
+    QDoubleSpinBox *m_meshClearance = nullptr;
 
     QLabel *m_statsLabel = nullptr;
 };

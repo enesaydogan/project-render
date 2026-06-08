@@ -879,8 +879,9 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap,
           {"alr", object.avoidLightRadius},
           {"cs", object.clumpScale},
           {"cl", object.clumpStrength},
-          {"ea", object.edgeAvoidance},
-          {"ca", object.collisionAvoidanceRadius},
+          {"etm", object.edgeTrimMeters},
+          {"ism", object.instanceSpacingMeters},
+          {"mcm", object.meshClearanceMeters},
           {"lhs", object.librarySourceHidden},
           {"en", object.enabled},
       });
@@ -1685,9 +1686,15 @@ static void RestoreScatterPRS(const json &j) {
             savedObject.value("alr", object.avoidLightRadius);
         object.clumpScale = savedObject.value("cs", object.clumpScale);
         object.clumpStrength = savedObject.value("cl", object.clumpStrength);
-        object.edgeAvoidance = savedObject.value("ea", object.edgeAvoidance);
-        object.collisionAvoidanceRadius =
-            savedObject.value("ca", object.collisionAvoidanceRadius);
+        object.edgeTrimMeters =
+            savedObject.value("etm",
+                              savedObject.value("ea", object.edgeTrimMeters));
+        object.instanceSpacingMeters =
+            savedObject.value("ism",
+                              savedObject.value("ca",
+                                                object.instanceSpacingMeters));
+        object.meshClearanceMeters =
+            savedObject.value("mcm", object.meshClearanceMeters);
         object.librarySourceHidden = savedObject.value("lhs", object.librarySourceHidden);
         object.enabled = savedObject.value("en", object.enabled);
         if (object.meshIndices.empty()) {
