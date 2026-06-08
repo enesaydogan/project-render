@@ -6,6 +6,7 @@
 
 #include "assets/asset_loader.h"
 #include "camera.h"
+#include "light.h"
 #include "scene.h"
 #include "scene_internal.h"
 
@@ -16,6 +17,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
@@ -395,6 +397,32 @@ void AppendScatterInstancesForObject(
   const float cameraX = g_cameraData.pos[0];
   const float cameraY = g_cameraData.pos[1];
   const float cameraZ = g_cameraData.pos[2];
+
+  // D7: smooth distance fade. fadeBegin..maxDistance ramps acceptance prob
+  // from 1 to 0. fadeBegin equals maxDistance when distanceFadeMeters==0
+  // (legacy hard cutoff).
+  const float fadeWidth = (std::max)(0.0f, object.distanceFadeMeters);
+  const float fadeBegin = object.maxDistance > 0.0f
+                              ? (std::max)(0.0f, object.maxDistance - fadeWidth)
+                              : 0.0f;
+  const bool hasDistanceFade = object.maxDistance > 0.0f && fadeWidth > 0.0f;
+  const float fadeBegin2 = fadeBegin * fadeBegin;
+
+  // D5: pre-collect enabled scene light positions for the avoid-lights
+  // check. Reads the same flattened LightInstance vector the scene panel
+  // shows; respects per-instance enabled toggle.
+  const float avoidLightRadius = (std::max)(0.0f, object.avoidLightRadius);
+  const float avoidLightRadius2 = avoidLightRadius * avoidLightRadius;
+  std::vector<std::array<float, 3>> lightAvoidPositions;
+  if (avoidLightRadius > 0.0f) {
+    for (const LightInstance &li : GetLightInstances()) {
+      if (!li.enabled) {
+        continue;
+      }
+      lightAvoidPositions.push_back(
+          {li.position[0], li.position[1], li.position[2]});
+    }
+  }
   std::unordered_map<ScatterCollisionCell, std::vector<DirectX::XMFLOAT3>,
                      ScatterCollisionCellHash>
       acceptedCollisionPoints;
@@ -490,6 +518,32 @@ void AppendScatterInstancesForObject(
     }
     if (maxDistance2 > 0.0f && cameraDist2 > maxDistance2) {
       continue;
+    }
+    // D7: linear soft fade inside the hard maxDistance. Squared compare
+    // until the boundary check, then take sqrt only for the ramp.
+    if (hasDistanceFade && cameraDist2 > fadeBegin2) {
+      const float cameraDist = std::sqrt(cameraDist2);
+      const float keepProbability =
+          (std::clamp)((object.maxDistance - cameraDist) / fadeWidth, 0.0f, 1.0f);
+      if (ScatterHash01(baseSeed ^ 0xdeadbeefu) > keepProbability) {
+        continue;
+      }
+    }
+    // D5: reject placements within avoidLightRadius of any enabled light.
+    if (avoidLightRadius > 0.0f) {
+      bool tooCloseToLight = false;
+      for (const auto &lp : lightAvoidPositions) {
+        const float dx = position.x - lp[0];
+        const float dy = position.y - lp[1];
+        const float dz = position.z - lp[2];
+        if (dx * dx + dy * dy + dz * dz < avoidLightRadius2) {
+          tooCloseToLight = true;
+          break;
+        }
+      }
+      if (tooCloseToLight) {
+        continue;
+      }
     }
     if (clumpScale > 1e-4f && clumpStrength > 0.0f) {
       const float noise = ScatterFractalNoise2D(
@@ -964,6 +1018,57 @@ size_t RemapScatterTargetMaterialIndices(const std::vector<int> &remap) {
 void OnSceneStateChanged() {
   ++s_scatterRuntimeRevision;
   s_scatterInstanceCacheRevision = 0;
+}
+
+// D2: flatten the requested model into real Scene::Nodes. Forces a cache
+// rebuild first so we bake whatever the user sees in the preview. The
+// caller (UI) typically disables the source model afterwards so the baked
+// nodes don't double-up with the procedural pass.
+size_t BakeScatterModelToNodes(size_t modelIndex) {
+  if (modelIndex >= s_scatterModels.size()) {
+    return 0;
+  }
+  // Force a fresh cache, ignoring camera/revision checks.
+  s_scatterInstanceCacheRevision = 0;
+  std::vector<Instance> drain;
+  AppendScatterInstances(drain);
+
+  const int markerId = -100000 - static_cast<int>(modelIndex);
+  const Asset::GpuMesh *meshBase = g_loadedMeshes.data();
+  const size_t meshCount = g_loadedMeshes.size();
+  const std::string &modelName = s_scatterModels[modelIndex].name;
+  size_t created = 0;
+  for (const Instance &inst : s_scatterInstanceCache) {
+    if (inst.id != markerId || inst.mesh == nullptr) {
+      continue;
+    }
+    // Recover mesh index by pointer arithmetic against the global mesh
+    // array. Skip instances whose mesh pointer doesn't lie inside the array
+    // (defensive — shouldn't happen given scatter only emits library
+    // meshes, but instance generation predates this assertion).
+    if (inst.mesh < meshBase || inst.mesh >= meshBase + meshCount) {
+      continue;
+    }
+    const size_t meshIndex = static_cast<size_t>(inst.mesh - meshBase);
+
+    Node node;
+    node.name = modelName + " bake " + std::to_string(created);
+    node.parentIndex = static_cast<size_t>(-1);
+    DirectX::XMFLOAT4X4 m;
+    DirectX::XMStoreFloat4x4(&m, inst.transform);
+    std::memcpy(node.transform, &m, sizeof(node.transform));
+    node.meshIndices.push_back(meshIndex);
+    AddNode(std::move(node));
+    ++created;
+  }
+  if (created > 0) {
+    // Bake doesn't itself modify scatter state, but we created new nodes so
+    // the renderer needs a full AS rebuild.
+    ApplyRendererInvalidation(
+        RendererInvalidationPlan::FullAccelerationStructureRebuild);
+    NotifySceneChanged();
+  }
+  return created;
 }
 
 // A1 helper: does any object in any enabled model use min/max distance

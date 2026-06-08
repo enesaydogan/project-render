@@ -54,6 +54,7 @@ private:
     QPushButton *m_cancelPickButton = nullptr;
     QPushButton *m_addObjectsButton = nullptr;
     QPushButton *m_cleanupObjectsButton = nullptr;
+    QPushButton *m_bakeToNodesButton = nullptr;
     QPushButton *m_removeTargetButton = nullptr;
     QPushButton *m_removeObjectButton = nullptr;
     QPushButton *m_hideSourceButton = nullptr;
@@ -80,6 +81,8 @@ private:
     QDoubleSpinBox *m_heightMax = nullptr;
     QDoubleSpinBox *m_minDistance = nullptr;
     QDoubleSpinBox *m_maxDistance = nullptr;
+    QDoubleSpinBox *m_distanceFade = nullptr;
+    QDoubleSpinBox *m_avoidLightRadius = nullptr;
     QDoubleSpinBox *m_clumpScale = nullptr;
     QDoubleSpinBox *m_clumpStrength = nullptr;
     QDoubleSpinBox *m_edgeAvoidance = nullptr;

@@ -53,10 +53,17 @@ struct ScatterObject {
   float jitterMeters = 0.0f;
   float minDistance = 0.0f;
   float maxDistance = 0.0f; // 0 = unlimited
+  // D7: smooth fade width *inside* maxDistance. e.g. maxDistance=100,
+  // distanceFadeMeters=20 -> full density to 80m, linear thin to 0 at 100m.
+  // 0 = hard cutoff (legacy behavior).
+  float distanceFadeMeters = 0.0f;
   float clumpScale = 0.0f;
   float clumpStrength = 0.0f;
   float edgeAvoidance = 0.0f;
   float collisionAvoidanceRadius = 0.0f;
+  // D5: skip placements within this radius of any enabled scene light.
+  // 0 = disabled. Cheap O(instances * lights) check; lights are usually few.
+  float avoidLightRadius = 0.0f;
   bool enabled = true;
   bool librarySourceHidden = false;
 };
@@ -143,6 +150,13 @@ bool RemoveUnusedScatterObjects(size_t scatterIndex);
 // ---- Runtime stats -------------------------------------------------------
 ScatterRuntimeStats GetScatterRuntimeStats();
 uint64_t GetScatterRuntimeRevision();
+
+// D2: flatten a scatter model's current instances into real Scene::Nodes.
+// Triggers a cache rebuild so the result reflects current authoring state.
+// Returns the number of nodes created. On success the source model can be
+// optionally disabled by the caller (UI does this so baked + procedural
+// don't double-render).
+size_t BakeScatterModelToNodes(size_t modelIndex);
 
 // ---- Hooks called from scene.cpp -----------------------------------------
 // Append scatter-generated instances to the render list. Called by

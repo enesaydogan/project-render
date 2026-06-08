@@ -152,10 +152,18 @@ void ScatterPanel::createUi()
     auto *objectButtons = new QHBoxLayout();
     m_addObjectsButton = new QPushButton(tr("Add Objects"), this);
     m_addObjectsButton->setToolTip(tr("Use meshes from the current scene selection as scatter prototypes"));
-    m_cleanupObjectsButton = new QPushButton(tr("Clean Objects"), this);
-    m_cleanupObjectsButton->setToolTip(tr("Remove scatter prototypes whose mesh library entries no longer exist"));
+    m_cleanupObjectsButton = new QPushButton(tr("Clean"), this);
+    m_cleanupObjectsButton->setToolTip(
+        tr("Drop scatter prototypes whose meshes are gone, and scatter "
+           "targets whose source nodes were deleted."));
+    m_bakeToNodesButton = new QPushButton(tr("Bake to Nodes"), this);
+    m_bakeToNodesButton->setToolTip(
+        tr("Flatten the current scatter into real scene nodes (one node per "
+           "instance). Use after authoring is final; disables the source "
+           "scatter model so render output doesn't double up."));
     objectButtons->addWidget(m_addObjectsButton);
     objectButtons->addWidget(m_cleanupObjectsButton);
+    objectButtons->addWidget(m_bakeToNodesButton);
     layout->addLayout(objectButtons);
 
     m_tabs = new QTabWidget(this);
@@ -283,9 +291,15 @@ void ScatterPanel::createUi()
         tr("Minimum world-space distance between accepted instances within "
            "this prototype. 0 = off. Per-object (does not see other "
            "prototypes)."));
+    // D5: avoid scene lights.
+    m_avoidLightRadius = CreateDoubleSpin(0.0, 10000.0, 0.1, 3, true);
+    m_avoidLightRadius->setToolTip(
+        tr("Skip placements within this radius of any enabled scene light. "
+           "Useful for 'don't grow grass under lamps' patterns. 0 = off."));
     distForm->addRow(tr("Jitter (m)"), m_jitter);
     distForm->addRow(tr("Edge Avoid"), m_edgeAvoidance);
     distForm->addRow(tr("Avoid Collision (m)"), m_collisionAvoidance);
+    distForm->addRow(tr("Avoid Lights (m)"), m_avoidLightRadius);
     placementLayout->addWidget(distGroup);
 
     // Clumping ----------------------------------------------------------------
@@ -312,8 +326,14 @@ void ScatterPanel::createUi()
     m_maxDistance->setToolTip(
         tr("Skip placements further than this distance from the camera. "
            "0 = no max."));
+    // D7: smooth fade inside maxDistance.
+    m_distanceFade = CreateDoubleSpin(0.0, 100000.0, 1.0, 2, true);
+    m_distanceFade->setToolTip(
+        tr("Soft falloff width inside Max Distance. Density ramps from "
+           "full at (max - fade) to zero at max. 0 = hard cutoff."));
     cameraForm->addRow(tr("Min Distance"), m_minDistance);
     cameraForm->addRow(tr("Max Distance"), m_maxDistance);
+    cameraForm->addRow(tr("Fade Width"), m_distanceFade);
     placementLayout->addWidget(cameraGroup);
 
     placementLayout->addStretch(1);
@@ -383,6 +403,25 @@ void ScatterPanel::createUi()
             Scene::RemoveUnusedScatterObjects(static_cast<size_t>(row));
             refreshUi();
         }
+    });
+    connect(m_bakeToNodesButton, &QPushButton::clicked, this, [this]() {
+        const int row = selectedModelIndex();
+        if (row < 0) {
+            return;
+        }
+        const size_t created =
+            Scene::BakeScatterModelToNodes(static_cast<size_t>(row));
+        if (created > 0) {
+            // Disable the source model so the baked nodes don't double-render.
+            const auto &models = Scene::GetScatterModels();
+            if (static_cast<size_t>(row) < models.size()) {
+                Scene::ScatterModel header = models[static_cast<size_t>(row)];
+                header.enabled = false;
+                Scene::UpdateScatterModelHeader(static_cast<size_t>(row),
+                                                header);
+            }
+        }
+        refreshUi();
     });
     connect(m_removeTargetButton, &QPushButton::clicked, this, [this]() {
         const int modelRow = selectedModelIndex();
@@ -462,6 +501,8 @@ void ScatterPanel::createUi()
     connect(m_heightMax, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
     connect(m_minDistance, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
     connect(m_maxDistance, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
+    connect(m_distanceFade, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
+    connect(m_avoidLightRadius, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
     connect(m_clumpScale, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
     connect(m_clumpStrength, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
     connect(m_edgeAvoidance, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [objectEdit](double) { objectEdit(); });
@@ -517,6 +558,7 @@ void ScatterPanel::syncInspector()
     m_cancelPickButton->setEnabled(picking);
     m_addObjectsButton->setEnabled(hasModel);
     m_cleanupObjectsButton->setEnabled(hasModel);
+    m_bakeToNodesButton->setEnabled(hasModel);
     m_modelName->setEnabled(hasModel);
     m_modelEnabled->setEnabled(hasModel);
     m_modelSeed->setEnabled(hasModel);
@@ -662,6 +704,8 @@ void ScatterPanel::syncInspector()
     m_heightMax->setEnabled(hasObject);
     m_minDistance->setEnabled(hasObject);
     m_maxDistance->setEnabled(hasObject);
+    m_distanceFade->setEnabled(hasObject);
+    m_avoidLightRadius->setEnabled(hasObject);
     m_clumpScale->setEnabled(hasObject);
     m_clumpStrength->setEnabled(hasObject);
     m_edgeAvoidance->setEnabled(hasObject);
@@ -690,6 +734,8 @@ void ScatterPanel::syncInspector()
         m_heightMax->setValue(object.heightMax);
         m_minDistance->setValue(object.minDistance);
         m_maxDistance->setValue(object.maxDistance);
+        m_distanceFade->setValue(object.distanceFadeMeters);
+        m_avoidLightRadius->setValue(object.avoidLightRadius);
         m_clumpScale->setValue(object.clumpScale);
         m_clumpStrength->setValue(object.clumpStrength);
         m_edgeAvoidance->setValue(object.edgeAvoidance);
@@ -706,6 +752,8 @@ void ScatterPanel::syncInspector()
         m_heightMax->setValue(0.0);
         m_minDistance->setValue(0.0);
         m_maxDistance->setValue(0.0);
+        m_distanceFade->setValue(0.0);
+        m_avoidLightRadius->setValue(0.0);
         m_clumpScale->setValue(0.0);
         m_clumpStrength->setValue(0.0);
         m_edgeAvoidance->setValue(0.0);
@@ -793,6 +841,8 @@ void ScatterPanel::applyObjectEdit()
     object.heightMax = static_cast<float>(m_heightMax->value());
     object.minDistance = static_cast<float>(m_minDistance->value());
     object.maxDistance = static_cast<float>(m_maxDistance->value());
+    object.distanceFadeMeters = static_cast<float>(m_distanceFade->value());
+    object.avoidLightRadius = static_cast<float>(m_avoidLightRadius->value());
     object.clumpScale = static_cast<float>(m_clumpScale->value());
     object.clumpStrength = static_cast<float>(m_clumpStrength->value());
     object.edgeAvoidance = static_cast<float>(m_edgeAvoidance->value());

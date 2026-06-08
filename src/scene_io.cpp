@@ -875,6 +875,8 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap,
           {"jt", object.jitterMeters},
           {"md", object.minDistance},
           {"xd", object.maxDistance},
+          {"df", object.distanceFadeMeters},
+          {"alr", object.avoidLightRadius},
           {"cs", object.clumpScale},
           {"cl", object.clumpStrength},
           {"ea", object.edgeAvoidance},
@@ -1677,6 +1679,10 @@ static void RestoreScatterPRS(const json &j) {
         object.jitterMeters = savedObject.value("jt", object.jitterMeters);
         object.minDistance = savedObject.value("md", object.minDistance);
         object.maxDistance = savedObject.value("xd", object.maxDistance);
+        object.distanceFadeMeters =
+            savedObject.value("df", object.distanceFadeMeters);
+        object.avoidLightRadius =
+            savedObject.value("alr", object.avoidLightRadius);
         object.clumpScale = savedObject.value("cs", object.clumpScale);
         object.clumpStrength = savedObject.value("cl", object.clumpStrength);
         object.edgeAvoidance = savedObject.value("ea", object.edgeAvoidance);
