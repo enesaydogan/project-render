@@ -1020,6 +1020,26 @@ void OnSceneStateChanged() {
   s_scatterInstanceCacheRevision = 0;
 }
 
+void TickScatterCameraInvalidation() {
+  if (!s_scatterCacheUsesCameraDistance) {
+    return;
+  }
+  if (g_cameraData.pos[0] == s_scatterCacheCameraPos[0] &&
+      g_cameraData.pos[1] == s_scatterCacheCameraPos[1] &&
+      g_cameraData.pos[2] == s_scatterCacheCameraPos[2]) {
+    return;
+  }
+  // A1 follow-up: cache invalidation alone wasn't enough. The renderer
+  // never asked Scene::GetInstances() for the fresh list unless something
+  // queued a rebuild, so the TLAS stayed frozen even though the scatter
+  // cache was correctly invalidating. Queuing a full rebuild here lets
+  // distance-faded scatter actually move with the camera. Full (not
+  // refresh) because the instance count changes as instances appear and
+  // disappear past the fade.
+  ApplyRendererInvalidation(
+      RendererInvalidationPlan::FullAccelerationStructureRebuild);
+}
+
 // D2: flatten the requested model into real Scene::Nodes. Forces a cache
 // rebuild first so we bake whatever the user sees in the preview. The
 // caller (UI) typically disables the source model afterwards so the baked

@@ -176,4 +176,13 @@ size_t RemapScatterTargetMaterialIndices(const std::vector<int> &remap);
 // InvalidateScatterRuntimeCache (which is for scatter's own use).
 void OnSceneStateChanged();
 
+// Per-frame tick the renderer calls *before* deciding whether the TLAS
+// needs rebuild. When any scatter object uses min/max distance culling
+// and the camera has moved since the last scatter cache build, this
+// queues a full-AS rebuild for the current frame so distance-faded
+// scatter actually moves with the camera (without this, the scatter
+// cache rebuilds correctly but the renderer never asks for the new
+// instance set, leaving the TLAS frozen until the next authoring edit).
+void TickScatterCameraInvalidation();
+
 } // namespace Scene

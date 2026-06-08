@@ -4097,6 +4097,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
     g_cameraData.iblIndirectBoost = g_iblIndirectBoost;
     UpdateCameraCB();
 
+    // Camera-relative scatter (min/max distance, fade) needs a full AS
+    // rebuild whenever the camera moves, because the instance set
+    // changes. The scatter cache check inside AppendScatterInstances
+    // detects this but can't itself queue a rebuild — by the time it
+    // runs, the renderer has already decided whether to call
+    // Scene::GetInstances(). Tick here so the flag is set before the
+    // next AS pass.
+    Scene::TickScatterCameraInvalidation();
+
     if (!g_renderExportJob.active && g_currentRenderMode == RenderMode::DXR) {
       EnsureInteractiveDxrPipelineSize(previewWidth, previewHeight,
                                        "interactive preview resize");
