@@ -145,6 +145,10 @@ target_sources(project-render PRIVATE
     src/livelink/livelink_pipe_provider.cpp
     src/livelink/livelink_scene_sync.cpp
     src/livelink/livelink_runtime.cpp
+    src/asset_library/asset_paths.cpp
+    src/asset_library/asset_registry.cpp
+    src/asset_library/thumbnail_cache.cpp
+    src/asset_library/global_registry.cpp
 )
 
 if(USE_QT_UI)
@@ -163,6 +167,7 @@ if(USE_QT_UI)
       src/qt/LightsPanel.cpp
       src/qt/MaterialEditorPanel.cpp
       src/qt/ViewsPanel.cpp
+      src/qt/AssetManagerPanel.cpp
       # additional panel widgets will be added here later
   )
   target_link_libraries(project-render PRIVATE Qt6::Widgets)
@@ -840,6 +845,46 @@ set(CPACK_COMPONENT_MAX2025PLUGIN_DESCRIPTION "Installs the Live Link plugin for
 
 set(CPACK_COMPONENT_ARCHICAD28PLUGIN_DISPLAY_NAME "Archicad 28 Live Link")
 set(CPACK_COMPONENT_ARCHICAD28PLUGIN_DESCRIPTION "Installs the Live Link plugin for Graphisoft Archicad 28.")
+
+# -----------------------------------------------------------------------------
+# Asset library unit tests (headless; no GPU/Qt). Primary correctness gate for
+# the Phase 1 asset management foundation. Run the produced exe; it returns the
+# number of failed checks.
+# -----------------------------------------------------------------------------
+option(BUILD_ASSET_TESTS "Build the asset_library unit test executable" ON)
+if(BUILD_ASSET_TESTS)
+  add_executable(asset-registry-tests
+    src/tests/asset_registry_tests.cpp
+    src/asset_library/asset_paths.cpp
+    src/asset_library/asset_registry.cpp
+    src/asset_library/thumbnail_cache.cpp
+  )
+  target_include_directories(asset-registry-tests PRIVATE
+    "${VCPKG_INSTALLED_DIR}/include")
+  if(MSVC)
+    target_compile_options(asset-registry-tests PRIVATE /permissive-)
+  endif()
+  set_target_properties(asset-registry-tests PROPERTIES EXCLUDE_FROM_ALL TRUE)
+
+  # Offscreen Qt layout smoke-test for AssetManagerPanel: catches recursive
+  # size-negotiation crashes without needing the GPU/DXGI renderer.
+  if(USE_QT_UI)
+    add_executable(asset-panel-smoketest
+      src/tests/asset_panel_smoketest.cpp
+      src/qt/AssetManagerPanel.cpp
+      src/asset_library/asset_paths.cpp
+      src/asset_library/asset_registry.cpp
+      src/asset_library/thumbnail_cache.cpp
+      src/asset_library/global_registry.cpp
+    )
+    set_target_properties(asset-panel-smoketest PROPERTIES
+      AUTOMOC ON
+      EXCLUDE_FROM_ALL TRUE)
+    target_include_directories(asset-panel-smoketest PRIVATE
+      "${VCPKG_INSTALLED_DIR}/include")
+    target_link_libraries(asset-panel-smoketest PRIVATE Qt6::Widgets)
+  endif()
+endif()
 
 # Explicitly tell CPack where NSIS is installed
 set(CPACK_MAKENSIS_EXECUTABLE "C:/Program Files (x86)/NSIS/makensis.exe")

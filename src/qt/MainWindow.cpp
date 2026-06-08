@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include "AnimationPanel.h"
+#include "AssetManagerPanel.h"
 #include "CameraPanel.h"
 #include "DX12View.h"
 #include "EnvironmentPanel.h"
@@ -11,6 +12,7 @@
 #include "ScenePanel.h"
 #include "ViewsPanel.h"
 #include "../animation_sequence.h"
+#include "../asset_library/global_registry.h"
 #include "../camera.h"
 #include "../d3d12_helpers.h"
 #include "../dx12_context.h"
@@ -23,6 +25,8 @@
 #include "../saved_views.h"
 #include "../scene.h"
 #include "../streamline_manager.h"
+#include <QStandardPaths>
+#include <filesystem>
 #include <QAction>
 #include <QActionGroup>
 #include <QAbstractItemView>
@@ -1541,6 +1545,17 @@ void MainWindow::restoreDefaultDockLayout()
 
 void MainWindow::createDocks()
 {
+    // Initialize the process-wide asset registry under the platform's standard
+    // writable per-user location (e.g. %LOCALAPPDATA%/Project Render on Windows)
+    // before any panel that reads it is constructed.
+    {
+        const QString dataRoot =
+            QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        if (!dataRoot.isEmpty())
+            assetlib::InitGlobalRegistry(
+                std::filesystem::path(dataRoot.toStdWString()));
+    }
+
     auto wrapScroll = [](QWidget *content, QWidget *parent) {
         auto *scroll = new QScrollArea(parent);
         scroll->setWidget(content);
@@ -1566,6 +1581,11 @@ void MainWindow::createDocks()
     scatterDock->setWidget(wrapScroll(new ScatterPanel(scatterDock), scatterDock));
     registerDockPanel(scatterDock);
     addDockWidget(Qt::RightDockWidgetArea, scatterDock);
+    auto *assetsDock = new QDockWidget(tr("Assets"), this);
+    assetsDock->setObjectName(tr("Assets"));
+    assetsDock->setWidget(new AssetManagerPanel(assetsDock));
+    registerDockPanel(assetsDock);
+    addDockWidget(Qt::RightDockWidgetArea, assetsDock);
     auto *renderDock = new QDockWidget(tr("Render Settings"), this);
     renderDock->setObjectName(tr("Render Settings"));
     {
