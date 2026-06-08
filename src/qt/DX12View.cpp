@@ -480,6 +480,21 @@ void DX12View::dropEvent(QDropEvent *e)
                         Scene::InstantiateAssetModel(id);
                 } else if (type == QStringLiteral("material")) {
                     Scene::AssignMaterialAssetToSelection(id);
+                } else if (type == QStringLiteral("scatter_object")) {
+                    // Drop a saved scatter onto a surface: build a scatter
+                    // model from the asset's prototypes and target the surface
+                    // under the cursor — instant scattering on that surface.
+                    const QPoint dropPos = mapToGlobal(e->position().toPoint());
+                    const size_t modelIndex = Scene::AddScatterModel();
+                    if (Scene::AddScatterObjectAssetToModel(modelIndex, id)) {
+                        Scene::AddScatterTargetFromPick(
+                            modelIndex, static_cast<float>(dropPos.x()),
+                            static_cast<float>(dropPos.y()),
+                            static_cast<float>(DX12Context::g_windowWidth),
+                            static_cast<float>(DX12Context::g_windowHeight));
+                    } else {
+                        Scene::RemoveScatterModel(modelIndex);
+                    }
                 }
                 e->acceptProposedAction();
                 return;

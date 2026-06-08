@@ -5,6 +5,7 @@
 // namespace so existing call sites (Scene::ScatterModel, Scene::AddScatterModel,
 // etc.) continue to compile unchanged after the extraction out of scene.cpp.
 
+#include "asset_library/asset_id.h"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -141,6 +142,37 @@ bool UpdateScatterObject(size_t modelIndex, size_t objectIndex,
 // ---- Target / object population from current selection -------------------
 bool AddSelectedNodesAsScatterTargets(size_t scatterIndex);
 bool AddSelectedNodesAsScatterObjects(size_t scatterIndex);
+
+// ---- Asset library integration (Phase 3) ---------------------------------
+// Drag a library Model asset into a scatter model: instantiates the model as a
+// hidden source node and adds it as a scatter object with correct orientation
+// and materials. Returns true on success.
+bool AddLibraryModelAsScatterObject(size_t scatterIndex,
+                                    const assetlib::AssetId &modelId);
+// Drag a library ScatterObject asset into a scatter model: instantiates its
+// source model and applies the asset's saved placement params.
+bool AddScatterObjectAssetToModel(size_t scatterIndex,
+                                  const assetlib::AssetId &scatterObjectId);
+// Apply a library ScatterPreset asset. objectIndex < 0 applies the preset to
+// every object in the model (plus model header); otherwise to that object only.
+bool ApplyScatterPresetAsset(size_t scatterIndex, int objectIndex,
+                             const assetlib::AssetId &presetId);
+// Save a configured scatter object as a reusable ScatterObject library asset
+// (records its source Model AssetId dependency via sourcePath). Returns the new
+// asset id (invalid on failure, e.g. no resolvable source model).
+assetlib::AssetId SaveScatterObjectAsAsset(size_t scatterIndex,
+                                           size_t objectIndex,
+                                           const std::string &assetName);
+// Save ALL prototypes of a scatter model as a single multi-object ScatterObject
+// library asset (e.g. a grass+flowers+rocks mix). Each prototype records its
+// source Model AssetId. Objects whose source model is not in the library are
+// skipped. Returns invalid if none could be saved.
+assetlib::AssetId SaveScatterModelAsAsset(size_t scatterIndex,
+                                          const std::string &assetName);
+// Save placement params as a reusable ScatterPreset library asset. Captures the
+// given object's params (objectIndex >= 0) plus the model header settings.
+assetlib::AssetId SaveScatterPresetAsset(size_t scatterIndex, int objectIndex,
+                                         const std::string &assetName);
 
 // ---- Viewport pick targeting ---------------------------------------------
 bool AddScatterTargetFromPick(size_t scatterIndex, float screenX, float screenY,

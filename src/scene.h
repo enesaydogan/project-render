@@ -89,11 +89,23 @@ bool CanReimportNode(size_t index);
 // Instantiate a library Model asset into the scene by resolving its cooked
 // payload (the Assets panel drag-and-drop target). Returns true on success.
 bool InstantiateAssetModel(const assetlib::AssetId &id,
-                           const float *rootTranslation = nullptr);
+                           const float *rootTranslation = nullptr,
+                           size_t *outNodeIndex = nullptr);
 // Assign a library Material asset to every currently selected node (the
 // Assets-panel material drag target). Returns true if at least one node was
 // updated.
 bool AssignMaterialAssetToSelection(const assetlib::AssetId &id);
+
+// Extract a self-contained Model asset directly from a set of global scene
+// meshes (with the meshes' materials and textures), baking the supplied
+// per-mesh local transforms into the geometry so orientation/arrangement is
+// preserved. Used to auto-register scatter prototype source models that are not
+// yet in the library. Returns the new Model AssetId (invalid on failure).
+assetlib::AssetId ExtractModelAssetFromMeshes(
+    const std::vector<size_t> &meshIndices,
+    const std::vector<std::array<float, 16>> &localTransforms,
+    const std::string &displayName, const std::string &folder,
+    const std::string &sourcePath);
 // Open file dialog and import selected model
 bool ImportModelWithDialog(HWND hwnd);
 // Open file dialog and import selected HDR/EXR

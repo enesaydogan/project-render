@@ -1,8 +1,15 @@
 #include "ScatterPanel.h"
 
 #include "../scene.h"
+#include "asset_mime.h"
 
 #include <QCheckBox>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QInputDialog>
+#include <QMenu>
+#include <QMessageBox>
+#include <QMimeData>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QFrame>
@@ -65,7 +72,8 @@ enum class ScatterToolIcon {
     Bake,
     Reseed,
     HideSource,
-    RemoveListItem
+    RemoveListItem,
+    SaveLibrary
 };
 
 QIcon MakeScatterToolIcon(ScatterToolIcon icon)
@@ -201,6 +209,18 @@ QIcon MakeScatterToolIcon(ScatterToolIcon icon)
     }
     case ScatterToolIcon::RemoveListItem: {
         painter.drawLine(QPointF(4.5, 9.0), QPointF(13.5, 9.0));
+        break;
+    }
+    case ScatterToolIcon::SaveLibrary: {
+        // Down arrow into an open tray — "save to library".
+        painter.setPen(accentPen);
+        painter.drawLine(QPointF(9.0, 3.0), QPointF(9.0, 10.5));
+        painter.drawLine(QPointF(6.0, 7.5), QPointF(9.0, 10.5));
+        painter.drawLine(QPointF(12.0, 7.5), QPointF(9.0, 10.5));
+        painter.setPen(strokePen);
+        painter.drawLine(QPointF(3.5, 11.5), QPointF(3.5, 14.5));
+        painter.drawLine(QPointF(14.5, 11.5), QPointF(14.5, 14.5));
+        painter.drawLine(QPointF(3.5, 14.5), QPointF(14.5, 14.5));
         break;
     }
     }
@@ -406,6 +426,7 @@ QFrame *MakeHLine(QWidget *parent)
 ScatterPanel::ScatterPanel(QWidget *parent)
     : QWidget(parent)
 {
+    setAcceptDrops(true); // accept Model / ScatterObject / ScatterPreset assets
     createUi();
     refreshUi();
 
@@ -463,6 +484,10 @@ void ScatterPanel::createUi()
     m_bakeToNodesButton = MakeToolButton(toolbar, ScatterToolIcon::Bake,
         tr("Bake to nodes — flatten current scatter into real Scene::Nodes "
            "and disable the source model so output doesn't double up"));
+    m_saveToLibraryButton = MakeToolButton(toolbar, ScatterToolIcon::SaveLibrary,
+        tr("Save scatter to asset library — stores all prototypes and their "
+           "settings (not the target surfaces) as one asset. Drag it from the "
+           "Assets panel onto any surface to scatter it there."));
 
     m_pickStatusLabel = new QLabel(QString(), toolbar);
     m_pickStatusLabel->setStyleSheet(QStringLiteral("color: #58d0f4;"));
@@ -476,6 +501,7 @@ void ScatterPanel::createUi()
     toolbarLayout->addWidget(sep2);
     toolbarLayout->addWidget(m_cleanupObjectsButton);
     toolbarLayout->addWidget(m_bakeToNodesButton);
+    toolbarLayout->addWidget(m_saveToLibraryButton);
     toolbarLayout->addWidget(m_pickStatusLabel, 1);
     root->addWidget(toolbar);
 
@@ -888,6 +914,8 @@ void ScatterPanel::createUi()
             refreshUi();
         }
     });
+    connect(m_saveToLibraryButton, &QToolButton::clicked, this,
+            [this]() { saveScatterToLibrary(); });
     connect(m_bakeToNodesButton, &QToolButton::clicked, this, [this]() {
         const int row = selectedModelIndex();
         if (row < 0) return;
@@ -1440,4 +1468,80 @@ void ScatterPanel::setSelectedModel(int row)
 {
     if (m_modelList) m_modelList->setCurrentRow(row);
     refreshUi();
+}
+
+// --- Asset drag-and-drop into the Scatter panel (Phase 3) -------------------
+
+void ScatterPanel::dragEnterEvent(QDragEnterEvent *event)
+{
+    if (event->mimeData() && event->mimeData()->hasFormat(kAssetMimeType))
+        event->acceptProposedAction();
+    else
+        QWidget::dragEnterEvent(event);
+}
+
+void ScatterPanel::dropEvent(QDropEvent *event)
+{
+    if (!event->mimeData() || !event->mimeData()->hasFormat(kAssetMimeType)) {
+        QWidget::dropEvent(event);
+        return;
+    }
+    const QString payload =
+        QString::fromUtf8(event->mimeData()->data(kAssetMimeType));
+    const int colon = payload.indexOf(':');
+    if (colon <= 0)
+        return;
+    const QString type = payload.left(colon);
+    assetlib::AssetId id;
+    if (!assetlib::AssetId::FromString(payload.mid(colon + 1).toStdString(), id))
+        return;
+
+    // Ensure there is a scatter model to receive the drop.
+    int modelRow = selectedModelIndex();
+    if (modelRow < 0)
+        modelRow = static_cast<int>(Scene::AddScatterModel());
+
+    bool ok = false;
+    if (type == QStringLiteral("model")) {
+        ok = Scene::AddLibraryModelAsScatterObject(
+            static_cast<size_t>(modelRow), id);
+    } else if (type == QStringLiteral("scatter_object")) {
+        ok = Scene::AddScatterObjectAssetToModel(static_cast<size_t>(modelRow),
+                                                 id);
+    } else if (type == QStringLiteral("scatter_preset")) {
+        ok = Scene::ApplyScatterPresetAsset(static_cast<size_t>(modelRow),
+                                            selectedObjectIndex(), id);
+    }
+
+    if (ok) {
+        event->acceptProposedAction();
+        setSelectedModel(modelRow);
+        refreshUi();
+    }
+}
+
+void ScatterPanel::saveScatterToLibrary()
+{
+    const int modelRow = selectedModelIndex();
+    if (modelRow < 0) {
+        QMessageBox::information(this, tr("Save Scatter"),
+                                 tr("Select a scatter model first."));
+        return;
+    }
+    bool okName = false;
+    const QString name = QInputDialog::getText(
+        this, tr("Save Scatter to Library"),
+        tr("Asset name (saves all objects + settings, not the target "
+           "surfaces):"),
+        QLineEdit::Normal, QString(), &okName);
+    if (!okName)
+        return;
+    const assetlib::AssetId id = Scene::SaveScatterModelAsAsset(
+        static_cast<size_t>(modelRow), name.trimmed().toStdString());
+    if (!id.valid())
+        QMessageBox::warning(
+            this, tr("Save Scatter to Library"),
+            tr("Could not save: none of the scatter objects' source models are "
+               "in the asset library. Import the source models first, then "
+               "rebuild the scatter from the library."));
 }

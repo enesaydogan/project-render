@@ -6,6 +6,8 @@
 
 class QCheckBox;
 class QDoubleSpinBox;
+class QDragEnterEvent;
+class QDropEvent;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -22,8 +24,13 @@ public:
     explicit ScatterPanel(QWidget *parent = nullptr);
     ~ScatterPanel() override;
 
+protected:
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
+
 private:
     void createUi();
+    void saveScatterToLibrary();
     void refreshUi();
     void syncInspector();
     void applyModelEdit();
@@ -54,6 +61,7 @@ private:
     QToolButton *m_addObjectsButton = nullptr;
     QToolButton *m_cleanupObjectsButton = nullptr;
     QToolButton *m_bakeToNodesButton = nullptr;
+    QToolButton *m_saveToLibraryButton = nullptr;
     QLabel *m_pickStatusLabel = nullptr;
 
     // Tabs --------------------------------------------------------------

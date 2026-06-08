@@ -4,6 +4,8 @@
 
 #include "scatter.h"
 
+#include "asset_library/asset_metadata.h"
+#include "asset_library/global_registry.h"
 #include "assets/asset_loader.h"
 #include "camera.h"
 #include "light.h"
@@ -11,6 +13,7 @@
 #include "scene_internal.h"
 
 #include <DirectXMath.h>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
@@ -1150,64 +1153,71 @@ bool AddSelectedNodesAsScatterTargets(size_t scatterIndex) {
   return added;
 }
 
+// Build a ScatterObject prototype from a scene node (plus its descendants),
+// preserving the source branch's authored world orientation and scale while
+// moving its pivot to the node's world position. Returns false if the node has
+// no usable meshes. Shared by selection-based and library-drag scatter object
+// creation.
+static bool BuildScatterObjectFromNode(size_t nodeIndex, ScatterObject &object) {
+  const auto &nodes = GetNodes();
+  const std::vector<std::array<float, 16>> worldTransforms =
+      BuildNodeWorldTransforms();
+  if (nodeIndex >= nodes.size() || nodeIndex >= worldTransforms.size()) {
+    return false;
+  }
+  const auto &rootWorld = worldTransforms[nodeIndex];
+  std::vector<std::pair<size_t, std::array<float, 16>>> meshEntries;
+  auto appendNodeMeshes = [&](size_t sourceNodeIndex) {
+    if (sourceNodeIndex >= nodes.size() ||
+        sourceNodeIndex >= worldTransforms.size()) {
+      return;
+    }
+    std::array<float, 16> localTransform = worldTransforms[sourceNodeIndex];
+    localTransform[12] -= rootWorld[12];
+    localTransform[13] -= rootWorld[13];
+    localTransform[14] -= rootWorld[14];
+    for (size_t meshIndex : nodes[sourceNodeIndex].meshIndices) {
+      if (meshIndex < g_loadedMeshes.size()) {
+        meshEntries.push_back({meshIndex, localTransform});
+      }
+    }
+  };
+
+  appendNodeMeshes(nodeIndex);
+  for (size_t childIndex = 0; childIndex < nodes.size(); ++childIndex) {
+    if (childIndex == nodeIndex || !IsNodeDescendantOf(childIndex, nodeIndex)) {
+      continue;
+    }
+    appendNodeMeshes(childIndex);
+  }
+  if (meshEntries.empty()) {
+    return false;
+  }
+  object.name =
+      nodes[nodeIndex].name.empty() ? "Scatter Object" : nodes[nodeIndex].name;
+  object.sourceNodeName = nodes[nodeIndex].name;
+  object.sourcePath = nodes[nodeIndex].sourcePath;
+  object.meshIndices.clear();
+  object.meshLocalTransforms.clear();
+  object.meshIndices.reserve(meshEntries.size());
+  object.meshLocalTransforms.reserve(meshEntries.size());
+  for (const auto &entry : meshEntries) {
+    object.meshIndices.push_back(entry.first);
+    object.meshLocalTransforms.push_back(entry.second);
+  }
+  return true;
+}
+
 bool AddSelectedNodesAsScatterObjects(size_t scatterIndex) {
   if (scatterIndex >= s_scatterModels.size()) {
     return false;
   }
   ScatterModel &model = s_scatterModels[scatterIndex];
-  const auto &nodes = GetNodes();
   bool added = false;
-  const std::vector<std::array<float, 16>> worldTransforms =
-      BuildNodeWorldTransforms();
   for (size_t nodeIndex : GetSelectedNodeIndices()) {
-    if (nodeIndex >= nodes.size() || nodeIndex >= worldTransforms.size()) {
-      continue;
-    }
-
-    // Preserve the source branch's authored world orientation and scale while
-    // moving its pivot to the selected node's world position. Using
-    // inverse(root) * child erased FBX axis-conversion rotations for exploded
-    // standalone meshes, so they rendered correctly as scene nodes but lay
-    // sideways when reused as scatter prototypes.
-    const auto &rootWorld = worldTransforms[nodeIndex];
-    std::vector<std::pair<size_t, std::array<float, 16>>> meshEntries;
-    auto appendNodeMeshes = [&](size_t sourceNodeIndex) {
-      if (sourceNodeIndex >= nodes.size() ||
-          sourceNodeIndex >= worldTransforms.size()) {
-        return;
-      }
-      std::array<float, 16> localTransform = worldTransforms[sourceNodeIndex];
-      localTransform[12] -= rootWorld[12];
-      localTransform[13] -= rootWorld[13];
-      localTransform[14] -= rootWorld[14];
-      for (size_t meshIndex : nodes[sourceNodeIndex].meshIndices) {
-        if (meshIndex < g_loadedMeshes.size()) {
-          meshEntries.push_back({meshIndex, localTransform});
-        }
-      }
-    };
-
-    appendNodeMeshes(nodeIndex);
-    for (size_t childIndex = 0; childIndex < nodes.size(); ++childIndex) {
-      if (childIndex == nodeIndex ||
-          !IsNodeDescendantOf(childIndex, nodeIndex)) {
-        continue;
-      }
-      appendNodeMeshes(childIndex);
-    }
-    if (meshEntries.empty()) {
-      continue;
-    }
     ScatterObject object;
-    object.name = nodes[nodeIndex].name.empty() ? "Scatter Object"
-                                                : nodes[nodeIndex].name;
-    object.sourceNodeName = nodes[nodeIndex].name;
-    object.sourcePath = nodes[nodeIndex].sourcePath;
-    object.meshIndices.reserve(meshEntries.size());
-    object.meshLocalTransforms.reserve(meshEntries.size());
-    for (const auto &entry : meshEntries) {
-      object.meshIndices.push_back(entry.first);
-      object.meshLocalTransforms.push_back(entry.second);
+    if (!BuildScatterObjectFromNode(nodeIndex, object)) {
+      continue;
     }
     object.densityPerSquareMeter = 8.0f;
     object.maxInstances = 12000;
@@ -1218,6 +1228,320 @@ bool AddSelectedNodesAsScatterObjects(size_t scatterIndex) {
     MarkScatterRuntimeChanged();
   }
   return added;
+}
+
+// ---- Scatter asset library integration (Phase 3) -------------------------
+namespace {
+
+nlohmann::json ScatterParamsToJson(const ScatterObject &o) {
+  nlohmann::json j;
+  j["density"] = o.densityPerSquareMeter;
+  j["weight"] = o.weight;
+  j["maxInstances"] = o.maxInstances;
+  j["previewMaxInstances"] = o.previewMaxInstances;
+  j["minScale"] = o.minScale;
+  j["maxScale"] = o.maxScale;
+  j["yaw"] = o.randomYawDegrees;
+  j["pitch"] = o.randomPitchDegrees;
+  j["roll"] = o.randomRollDegrees;
+  j["normalAlign"] = o.normalAlign;
+  j["slopeMin"] = o.slopeMinDegrees;
+  j["slopeMax"] = o.slopeMaxDegrees;
+  j["heightMin"] = o.heightMin;
+  j["heightMax"] = o.heightMax;
+  j["jitter"] = o.jitterMeters;
+  j["minDistance"] = o.minDistance;
+  j["maxDistance"] = o.maxDistance;
+  j["distanceFade"] = o.distanceFadeMeters;
+  j["clumpScale"] = o.clumpScale;
+  j["clumpStrength"] = o.clumpStrength;
+  j["edgeTrim"] = o.edgeTrimMeters;
+  j["instanceSpacing"] = o.instanceSpacingMeters;
+  j["meshClearance"] = o.meshClearanceMeters;
+  j["avoidLightRadius"] = o.avoidLightRadius;
+  return j;
+}
+
+void ScatterParamsFromJson(const nlohmann::json &j, ScatterObject &o) {
+  o.densityPerSquareMeter = j.value("density", o.densityPerSquareMeter);
+  o.weight = j.value("weight", o.weight);
+  o.maxInstances = j.value("maxInstances", o.maxInstances);
+  o.previewMaxInstances = j.value("previewMaxInstances", o.previewMaxInstances);
+  o.minScale = j.value("minScale", o.minScale);
+  o.maxScale = j.value("maxScale", o.maxScale);
+  o.randomYawDegrees = j.value("yaw", o.randomYawDegrees);
+  o.randomPitchDegrees = j.value("pitch", o.randomPitchDegrees);
+  o.randomRollDegrees = j.value("roll", o.randomRollDegrees);
+  o.normalAlign = j.value("normalAlign", o.normalAlign);
+  o.slopeMinDegrees = j.value("slopeMin", o.slopeMinDegrees);
+  o.slopeMaxDegrees = j.value("slopeMax", o.slopeMaxDegrees);
+  o.heightMin = j.value("heightMin", o.heightMin);
+  o.heightMax = j.value("heightMax", o.heightMax);
+  o.jitterMeters = j.value("jitter", o.jitterMeters);
+  o.minDistance = j.value("minDistance", o.minDistance);
+  o.maxDistance = j.value("maxDistance", o.maxDistance);
+  o.distanceFadeMeters = j.value("distanceFade", o.distanceFadeMeters);
+  o.clumpScale = j.value("clumpScale", o.clumpScale);
+  o.clumpStrength = j.value("clumpStrength", o.clumpStrength);
+  o.edgeTrimMeters = j.value("edgeTrim", o.edgeTrimMeters);
+  o.instanceSpacingMeters = j.value("instanceSpacing", o.instanceSpacingMeters);
+  o.meshClearanceMeters = j.value("meshClearance", o.meshClearanceMeters);
+  o.avoidLightRadius = j.value("avoidLightRadius", o.avoidLightRadius);
+}
+
+// Locate a registered Model asset whose source file matches `sourcePath`.
+assetlib::AssetId FindModelAssetBySourcePath(const assetlib::AssetRegistry &reg,
+                                             const std::string &sourcePath) {
+  if (sourcePath.empty())
+    return {};
+  for (const assetlib::AssetId &id : reg.AllAssets()) {
+    const assetlib::AssetMetadata *m = reg.Get(id);
+    if (m && m->type == assetlib::AssetType::Model && m->sourcePath == sourcePath)
+      return id;
+  }
+  return {};
+}
+
+} // namespace
+
+bool AddLibraryModelAsScatterObject(size_t scatterIndex,
+                                    const assetlib::AssetId &modelId) {
+  if (scatterIndex >= s_scatterModels.size())
+    return false;
+  size_t nodeIndex = static_cast<size_t>(-1);
+  if (!InstantiateAssetModel(modelId, nullptr, &nodeIndex))
+    return false;
+  ScatterObject object;
+  if (!BuildScatterObjectFromNode(nodeIndex, object))
+    return false;
+  object.librarySourceHidden = true;
+  s_scatterModels[scatterIndex].objects.push_back(std::move(object));
+  // Hide the instantiated source so only scatter instances render.
+  SetNodeVisibility(nodeIndex, false);
+  MarkScatterRuntimeChanged();
+  return true;
+}
+
+bool AddScatterObjectAssetToModel(size_t scatterIndex,
+                                  const assetlib::AssetId &scatterObjectId) {
+  if (scatterIndex >= s_scatterModels.size())
+    return false;
+  assetlib::AssetRegistry *reg = assetlib::GlobalRegistry();
+  if (!reg)
+    return false;
+  const assetlib::AssetMetadata *meta = reg->Get(scatterObjectId);
+  if (!meta || meta->type != assetlib::AssetType::ScatterObject)
+    return false;
+
+  nlohmann::json doc;
+  try {
+    doc = nlohmann::json::parse(meta->importSettingsJson);
+  } catch (const nlohmann::json::exception &) {
+    return false;
+  }
+
+  // Normalize to a list of prototype entries. Newer assets store "objects";
+  // accept a single {modelId,params} object too for forward compatibility.
+  std::vector<nlohmann::json> entries;
+  if (doc.contains("objects") && doc["objects"].is_array()) {
+    for (const auto &e : doc["objects"])
+      entries.push_back(e);
+  } else if (doc.contains("modelId")) {
+    entries.push_back(doc);
+  }
+  if (entries.empty())
+    return false;
+
+  bool any = false;
+  for (const auto &entry : entries) {
+    assetlib::AssetId modelId;
+    if (!entry.contains("modelId") || !entry["modelId"].is_string() ||
+        !assetlib::AssetId::FromString(entry["modelId"].get<std::string>(),
+                                       modelId))
+      continue;
+    if (!AddLibraryModelAsScatterObject(scatterIndex, modelId))
+      continue;
+    ScatterModel &model = s_scatterModels[scatterIndex];
+    if (!model.objects.empty()) {
+      if (entry.contains("params"))
+        ScatterParamsFromJson(entry["params"], model.objects.back());
+      if (entry.contains("name") && entry["name"].is_string())
+        model.objects.back().name = entry["name"].get<std::string>();
+    }
+    any = true;
+  }
+  if (any)
+    MarkScatterRuntimeChanged();
+  return any;
+}
+
+bool ApplyScatterPresetAsset(size_t scatterIndex, int objectIndex,
+                             const assetlib::AssetId &presetId) {
+  if (scatterIndex >= s_scatterModels.size())
+    return false;
+  assetlib::AssetRegistry *reg = assetlib::GlobalRegistry();
+  if (!reg)
+    return false;
+  const assetlib::AssetMetadata *meta = reg->Get(presetId);
+  if (!meta || (meta->type != assetlib::AssetType::ScatterPreset &&
+                meta->type != assetlib::AssetType::ScatterObject))
+    return false;
+  nlohmann::json doc;
+  try {
+    doc = nlohmann::json::parse(meta->importSettingsJson);
+  } catch (const nlohmann::json::exception &) {
+    return false;
+  }
+  if (!doc.contains("params"))
+    return false;
+
+  ScatterModel &model = s_scatterModels[scatterIndex];
+  if (objectIndex >= 0 && static_cast<size_t>(objectIndex) < model.objects.size()) {
+    ScatterParamsFromJson(doc["params"], model.objects[objectIndex]);
+  } else {
+    for (ScatterObject &o : model.objects)
+      ScatterParamsFromJson(doc["params"], o);
+    if (doc.contains("model")) {
+      const auto &mj = doc["model"];
+      model.seed = mj.value("seed", model.seed);
+      model.previewDensityScale =
+          mj.value("previewDensityScale", model.previewDensityScale);
+      model.previewInstanceBudget =
+          mj.value("previewInstanceBudget", model.previewInstanceBudget);
+    }
+  }
+  MarkScatterRuntimeChanged();
+  return true;
+}
+
+namespace {
+
+// Build one prototype entry { modelId, params, name } for `obj`, appending its
+// source Model AssetId to `deps`. Returns a null json if the object's source
+// model is not in the library.
+nlohmann::json BuildScatterObjectEntry(const assetlib::AssetRegistry &reg,
+                                       const ScatterObject &obj,
+                                       std::vector<assetlib::AssetId> &deps) {
+  assetlib::AssetId modelId = FindModelAssetBySourcePath(reg, obj.sourcePath);
+  if (!modelId.valid()) {
+    // The prototype's source model isn't in the library (e.g. imported before
+    // the asset system, or built from meshes with no source file). Extract a
+    // self-contained Model asset straight from its meshes so saving always
+    // works. Lands under "Scatter/Source Models".
+    modelId = ExtractModelAssetFromMeshes(obj.meshIndices,
+                                          obj.meshLocalTransforms, obj.name,
+                                          "Scatter/Source Models",
+                                          obj.sourcePath);
+  }
+  if (!modelId.valid())
+    return nlohmann::json(); // null — meshes are gone entirely
+  nlohmann::json e;
+  e["modelId"] = modelId.ToString();
+  e["params"] = ScatterParamsToJson(obj);
+  e["name"] = obj.name;
+  if (std::find(deps.begin(), deps.end(), modelId) == deps.end())
+    deps.push_back(modelId);
+  return e;
+}
+
+// Register a ScatterObject asset from a prebuilt entries array + deps.
+assetlib::AssetId RegisterScatterObjectAsset(
+    assetlib::AssetRegistry &reg, const std::string &displayName,
+    nlohmann::json entries, std::vector<assetlib::AssetId> deps) {
+  assetlib::AssetMetadata m;
+  m.type = assetlib::AssetType::ScatterObject;
+  m.displayName = displayName;
+  m.virtualPath = "Scatter/Objects";
+  m.dependencies = std::move(deps);
+  m.cookState = assetlib::CookState::Current; // params are the payload
+  nlohmann::json doc;
+  doc["objects"] = std::move(entries);
+  m.importSettingsJson = doc.dump();
+  assetlib::AssetId id = reg.Add(std::move(m));
+  reg.TouchRecent(id);
+  reg.Save();
+  return id;
+}
+
+} // namespace
+
+assetlib::AssetId SaveScatterObjectAsAsset(size_t scatterIndex,
+                                           size_t objectIndex,
+                                           const std::string &assetName) {
+  if (scatterIndex >= s_scatterModels.size())
+    return {};
+  const ScatterModel &model = s_scatterModels[scatterIndex];
+  if (objectIndex >= model.objects.size())
+    return {};
+  assetlib::AssetRegistry *reg = assetlib::GlobalRegistry();
+  if (!reg)
+    return {};
+  const ScatterObject &obj = model.objects[objectIndex];
+  std::vector<assetlib::AssetId> deps;
+  nlohmann::json entry = BuildScatterObjectEntry(*reg, obj, deps);
+  if (entry.is_null())
+    return {}; // no resolvable source model — cannot reconstruct meshes
+  nlohmann::json entries = nlohmann::json::array();
+  entries.push_back(std::move(entry));
+  return RegisterScatterObjectAsset(
+      *reg, assetName.empty() ? obj.name : assetName, std::move(entries),
+      std::move(deps));
+}
+
+assetlib::AssetId SaveScatterModelAsAsset(size_t scatterIndex,
+                                          const std::string &assetName) {
+  if (scatterIndex >= s_scatterModels.size())
+    return {};
+  const ScatterModel &model = s_scatterModels[scatterIndex];
+  assetlib::AssetRegistry *reg = assetlib::GlobalRegistry();
+  if (!reg)
+    return {};
+  std::vector<assetlib::AssetId> deps;
+  nlohmann::json entries = nlohmann::json::array();
+  for (const ScatterObject &obj : model.objects) {
+    nlohmann::json entry = BuildScatterObjectEntry(*reg, obj, deps);
+    if (!entry.is_null())
+      entries.push_back(std::move(entry));
+  }
+  if (entries.empty())
+    return {}; // no objects with a resolvable source model
+  return RegisterScatterObjectAsset(
+      *reg, assetName.empty() ? model.name : assetName, std::move(entries),
+      std::move(deps));
+}
+
+assetlib::AssetId SaveScatterPresetAsset(size_t scatterIndex, int objectIndex,
+                                         const std::string &assetName) {
+  if (scatterIndex >= s_scatterModels.size())
+    return {};
+  const ScatterModel &model = s_scatterModels[scatterIndex];
+  assetlib::AssetRegistry *reg = assetlib::GlobalRegistry();
+  if (!reg)
+    return {};
+
+  ScatterObject paramsSource;
+  if (objectIndex >= 0 && static_cast<size_t>(objectIndex) < model.objects.size())
+    paramsSource = model.objects[objectIndex];
+  else if (!model.objects.empty())
+    paramsSource = model.objects.front();
+
+  assetlib::AssetMetadata m;
+  m.type = assetlib::AssetType::ScatterPreset;
+  m.displayName = assetName.empty() ? (model.name + " Preset") : assetName;
+  m.virtualPath = "Scatter/Presets";
+  m.cookState = assetlib::CookState::Current;
+  nlohmann::json doc;
+  doc["params"] = ScatterParamsToJson(paramsSource);
+  nlohmann::json mj;
+  mj["seed"] = model.seed;
+  mj["previewDensityScale"] = model.previewDensityScale;
+  mj["previewInstanceBudget"] = model.previewInstanceBudget;
+  doc["model"] = std::move(mj);
+  m.importSettingsJson = doc.dump();
+  assetlib::AssetId id = reg->Add(std::move(m));
+  reg->TouchRecent(id);
+  reg->Save();
+  return id;
 }
 
 uint64_t GetScatterRuntimeRevision() { return s_scatterRuntimeRevision; }
