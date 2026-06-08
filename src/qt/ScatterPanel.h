@@ -12,7 +12,7 @@ class QListWidget;
 class QPushButton;
 class QSpinBox;
 class QTabWidget;
-class QTimer;
+class QToolButton;
 
 class ScatterPanel : public QWidget
 {
@@ -37,31 +37,40 @@ private:
     size_t m_sceneChangeListenerId = 0;
     uint64_t m_lastScatterRevision = 0;
 
+    // Model list + per-model header --------------------------------------
     QListWidget *m_modelList = nullptr;
-    QListWidget *m_targetList = nullptr;
-    QListWidget *m_objectList = nullptr;
-    QLabel *m_statsLabel = nullptr;
     QLineEdit *m_modelName = nullptr;
     QCheckBox *m_modelEnabled = nullptr;
     QSpinBox *m_modelSeed = nullptr;
-    QPushButton *m_reseedButton = nullptr;
+    QToolButton *m_reseedButton = nullptr;
     QDoubleSpinBox *m_previewDensityScale = nullptr;
     QSpinBox *m_previewBudget = nullptr;
-    QPushButton *m_addModelButton = nullptr;
-    QPushButton *m_deleteModelButton = nullptr;
-    QPushButton *m_addTargetsButton = nullptr;
-    QPushButton *m_pickTargetButton = nullptr;
-    QPushButton *m_cancelPickButton = nullptr;
-    QPushButton *m_addObjectsButton = nullptr;
-    QPushButton *m_cleanupObjectsButton = nullptr;
-    QPushButton *m_bakeToNodesButton = nullptr;
-    QPushButton *m_removeTargetButton = nullptr;
-    QPushButton *m_removeObjectButton = nullptr;
-    QPushButton *m_hideSourceButton = nullptr;
+
+    // Header toolbar buttons --------------------------------------------
+    QToolButton *m_addModelButton = nullptr;
+    QToolButton *m_deleteModelButton = nullptr;
+    QToolButton *m_addTargetsButton = nullptr;
+    QToolButton *m_pickTargetButton = nullptr;
+    QToolButton *m_addObjectsButton = nullptr;
+    QToolButton *m_cleanupObjectsButton = nullptr;
+    QToolButton *m_bakeToNodesButton = nullptr;
+    QLabel *m_pickStatusLabel = nullptr;
+
+    // Tabs --------------------------------------------------------------
     QTabWidget *m_tabs = nullptr;
+
+    // Targets tab --------------------------------------------------------
+    QListWidget *m_targetList = nullptr;
+    QToolButton *m_removeTargetButton = nullptr;
     QCheckBox *m_targetEnabled = nullptr;
     QDoubleSpinBox *m_targetWeight = nullptr;
 
+    // Objects tab --------------------------------------------------------
+    QListWidget *m_objectList = nullptr;
+    QToolButton *m_removeObjectButton = nullptr;
+    QToolButton *m_hideSourceButton = nullptr;
+
+    // Placement tab ------------------------------------------------------
     QLineEdit *m_objectName = nullptr;
     QCheckBox *m_objectEnabled = nullptr;
     QDoubleSpinBox *m_density = nullptr;
@@ -87,4 +96,6 @@ private:
     QDoubleSpinBox *m_clumpStrength = nullptr;
     QDoubleSpinBox *m_edgeAvoidance = nullptr;
     QDoubleSpinBox *m_collisionAvoidance = nullptr;
+
+    QLabel *m_statsLabel = nullptr;
 };
