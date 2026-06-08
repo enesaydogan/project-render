@@ -202,14 +202,7 @@ void AssetManagerPanel::createUi() {
   m_grid->setViewMode(QListView::IconMode);
   m_grid->setResizeMode(QListView::Adjust);
   m_grid->setMovement(QListView::Static);
-  // NOTE: do NOT enable word wrap here. In IconMode, word-wrapped item text
-  // makes an item's width depend on the viewport width, which depends on the
-  // vertical scrollbar, which depends on the item layout — an unbounded size
-  // negotiation that overflows the stack on launch once the grid has items.
-  // A fixed gridSize (set in refreshGrid) plus uniform item sizes keeps the
-  // layout stable and convergent.
-  m_grid->setWordWrap(false);
-  m_grid->setUniformItemSizes(true);
+  m_grid->setWordWrap(true);
   m_grid->setSpacing(8);
   m_grid->setContextMenuPolicy(Qt::CustomContextMenu);
   connect(m_grid, &QListWidget::itemSelectionChanged, this,

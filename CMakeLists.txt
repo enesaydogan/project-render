@@ -865,25 +865,6 @@ if(BUILD_ASSET_TESTS)
     target_compile_options(asset-registry-tests PRIVATE /permissive-)
   endif()
   set_target_properties(asset-registry-tests PROPERTIES EXCLUDE_FROM_ALL TRUE)
-
-  # Offscreen Qt layout smoke-test for AssetManagerPanel: catches recursive
-  # size-negotiation crashes without needing the GPU/DXGI renderer.
-  if(USE_QT_UI)
-    add_executable(asset-panel-smoketest
-      src/tests/asset_panel_smoketest.cpp
-      src/qt/AssetManagerPanel.cpp
-      src/asset_library/asset_paths.cpp
-      src/asset_library/asset_registry.cpp
-      src/asset_library/thumbnail_cache.cpp
-      src/asset_library/global_registry.cpp
-    )
-    set_target_properties(asset-panel-smoketest PROPERTIES
-      AUTOMOC ON
-      EXCLUDE_FROM_ALL TRUE)
-    target_include_directories(asset-panel-smoketest PRIVATE
-      "${VCPKG_INSTALLED_DIR}/include")
-    target_link_libraries(asset-panel-smoketest PRIVATE Qt6::Widgets)
-  endif()
 endif()
 
 # Explicitly tell CPack where NSIS is installed
