@@ -45,6 +45,7 @@ enum class SceneToolIcon {
     ImportModel,
     Reimport,
     AddGroundPlane,
+    ExplodeSelected,
     DeleteSelected
 };
 
@@ -145,6 +146,23 @@ QIcon MakeSceneToolIcon(SceneToolIcon icon)
         painter.setPen(QPen(accent, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         painter.drawLine(QPointF(9.0, 2.5), QPointF(9.0, 7.5));
         painter.drawLine(QPointF(6.5, 5.0), QPointF(11.5, 5.0));
+        break;
+    case SceneToolIcon::ExplodeSelected:
+        painter.drawRect(QRectF(6.0, 6.0, 6.0, 6.0));
+        painter.setPen(QPen(accent, 1.7, Qt::SolidLine, Qt::RoundCap,
+                            Qt::RoundJoin));
+        painter.drawLine(QPointF(6.0, 6.0), QPointF(3.0, 3.0));
+        painter.drawLine(QPointF(12.0, 6.0), QPointF(15.0, 3.0));
+        painter.drawLine(QPointF(6.0, 12.0), QPointF(3.0, 15.0));
+        painter.drawLine(QPointF(12.0, 12.0), QPointF(15.0, 15.0));
+        painter.drawLine(QPointF(3.0, 3.0), QPointF(5.0, 3.0));
+        painter.drawLine(QPointF(3.0, 3.0), QPointF(3.0, 5.0));
+        painter.drawLine(QPointF(15.0, 3.0), QPointF(13.0, 3.0));
+        painter.drawLine(QPointF(15.0, 3.0), QPointF(15.0, 5.0));
+        painter.drawLine(QPointF(3.0, 15.0), QPointF(5.0, 15.0));
+        painter.drawLine(QPointF(3.0, 15.0), QPointF(3.0, 13.0));
+        painter.drawLine(QPointF(15.0, 15.0), QPointF(13.0, 15.0));
+        painter.drawLine(QPointF(15.0, 15.0), QPointF(15.0, 13.0));
         break;
     case SceneToolIcon::DeleteSelected:
         painter.drawLine(QPointF(5.0, 6.0), QPointF(14.0, 6.0));
@@ -283,6 +301,11 @@ void ScenePanel::createUi()
     m_importButton = CreateSceneToolButton(this, tr("Import Model"), SceneToolIcon::ImportModel);
     m_reimportButton = CreateSceneToolButton(this, tr("Reimport Selected"), SceneToolIcon::Reimport);
     m_addPlaneButton = CreateSceneToolButton(this, tr("Add Ground Plane"), SceneToolIcon::AddGroundPlane);
+    m_explodeButton = CreateSceneToolButton(
+        this,
+        tr("Explode Selected - split a multi-mesh node into independent child "
+           "nodes. The exploded branch stops following source reimport."),
+        SceneToolIcon::ExplodeSelected);
     m_deleteButton = CreateSceneToolButton(this, tr("Delete Selected (Del)"), SceneToolIcon::DeleteSelected);
     m_deleteButton->setText(tr("Del"));
     m_deleteButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
@@ -290,6 +313,7 @@ void ScenePanel::createUi()
     toolRow->addWidget(m_importButton);
     toolRow->addWidget(m_reimportButton);
     toolRow->addWidget(m_addPlaneButton);
+    toolRow->addWidget(m_explodeButton);
     toolRow->addWidget(m_deleteButton);
     toolRow->addStretch(1);
     layout->addLayout(toolRow);
@@ -330,6 +354,13 @@ void ScenePanel::createUi()
     });
     connect(m_addPlaneButton, &QToolButton::clicked, this, []() {
         Scene::AddDefaultPlane(0.0f);
+    });
+    connect(m_explodeButton, &QToolButton::clicked, this, [this]() {
+        const int nodeIndex = selectedNodeIndex();
+        if (nodeIndex >= 0 &&
+            Scene::ExplodeNodeMeshes(static_cast<size_t>(nodeIndex)) > 0) {
+            refreshSceneList();
+        }
     });
     connect(m_deleteButton, &QToolButton::clicked, this, [this]() {
         requestDeleteSelectedNode();
@@ -494,6 +525,7 @@ void ScenePanel::refreshSceneList()
         m_importStatusLabel->hide();
         m_importButton->setEnabled(false);
         m_addPlaneButton->setEnabled(false);
+        m_explodeButton->setEnabled(false);
         m_deleteButton->setEnabled(false);
         m_nodeList->setEnabled(false);
         m_statusLabel->setText(tr("Scene I/O in progress..."));
@@ -650,5 +682,12 @@ void ScenePanel::refreshSceneList()
             .arg(QString::fromStdString(Scene::LastStatus())));
 
     m_deleteButton->setEnabled(!selectedRows.empty());
+    const bool canExplode =
+        selectedRows.size() == 1 &&
+        selectedRows.front() >= 0 &&
+        selectedRows.front() < static_cast<int>(nodes.size()) &&
+        Scene::CanExplodeNodeMeshes(
+            static_cast<size_t>(selectedRows.front()));
+    m_explodeButton->setEnabled(canExplode && !importing);
     m_syncing = false;
 }

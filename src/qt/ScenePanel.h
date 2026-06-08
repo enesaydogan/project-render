@@ -36,6 +36,7 @@ private:
     QToolButton *m_importButton = nullptr;
     QToolButton *m_reimportButton = nullptr;
     QToolButton *m_addPlaneButton = nullptr;
+    QToolButton *m_explodeButton = nullptr;
     QToolButton *m_deleteButton = nullptr;
     QTimer *m_refreshTimer = nullptr;
     bool m_syncing = false;

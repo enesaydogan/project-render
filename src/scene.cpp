@@ -3204,6 +3204,103 @@ bool SetNodeParent(size_t index, size_t parentIndex) {
   return true;
 }
 
+bool CanExplodeNodeMeshes(size_t index) {
+  if (index >= s_nodes.size() || s_nodes[index].liveLinkManaged) {
+    return false;
+  }
+  size_t meshCount = 0;
+  for (size_t nodeIndex = 0; nodeIndex < s_nodes.size(); ++nodeIndex) {
+    if (!IsNodeDescendantOf(nodeIndex, index)) {
+      continue;
+    }
+    for (size_t meshIndex : s_nodes[nodeIndex].meshIndices) {
+      if (meshIndex < g_loadedMeshes.size() && ++meshCount >= 2) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+size_t ExplodeNodeMeshes(size_t index) {
+  if (!CanExplodeNodeMeshes(index)) {
+    s_lastStatus =
+        "Explode failed: select a non-Live-Sync branch containing multiple "
+        "meshes.";
+    return 0;
+  }
+
+  ClearTransformHistory();
+  const std::string sourceName = s_nodes[index].name;
+  const std::vector<std::array<float, 16>> worldTransforms =
+      BuildNodeWorldTransforms();
+  std::vector<size_t> sourceIndices;
+  for (size_t nodeIndex = 0; nodeIndex < s_nodes.size(); ++nodeIndex) {
+    if (IsNodeDescendantOf(nodeIndex, index)) {
+      sourceIndices.push_back(nodeIndex);
+    }
+  }
+
+  size_t createdCount = 0;
+  for (size_t sourceIndex : sourceIndices) {
+    if (sourceIndex >= s_nodes.size() ||
+        sourceIndex >= worldTransforms.size()) {
+      continue;
+    }
+    const Node source = s_nodes[sourceIndex];
+    for (size_t meshOffset = 0; meshOffset < source.meshIndices.size();
+         ++meshOffset) {
+      const size_t meshIndex = source.meshIndices[meshOffset];
+      if (meshIndex >= g_loadedMeshes.size()) {
+        continue;
+      }
+
+      Node part;
+      part.name = source.name.empty() ? sourceName : source.name;
+      if (source.meshIndices.size() > 1) {
+        part.name += " / Mesh " + std::to_string(meshOffset + 1);
+      }
+      const int materialIndex = g_loadedMeshes[meshIndex].materialIndex;
+      if (materialIndex >= 0 &&
+          materialIndex < static_cast<int>(g_loadedMaterials.size()) &&
+          g_loadedMaterials[static_cast<size_t>(materialIndex)].name[0] !=
+              '\0') {
+        part.name +=
+            " - " +
+            std::string(
+                g_loadedMaterials[static_cast<size_t>(materialIndex)].name);
+      }
+      part.meshIndices = {meshIndex};
+      memcpy(part.transform, worldTransforms[sourceIndex].data(),
+             sizeof(part.transform));
+      part.parentIndex = static_cast<size_t>(-1);
+      part.linkedMaterialIndices = source.linkedMaterialIndices;
+      part.linkedMaterialSourceNames = source.linkedMaterialSourceNames;
+      part.visible = source.visible;
+      part.selected = true;
+      part.selectionLocked = false;
+      part.liveLinkManaged = false;
+      part.importGroupRoot = false;
+      s_nodes.push_back(std::move(part));
+      ++createdCount;
+    }
+  }
+
+  if (createdCount == 0) {
+    s_lastStatus = "Explode failed: branch has no valid mesh references.";
+    return 0;
+  }
+
+  RemoveNodesByIndexSet(std::move(sourceIndices), false, true);
+  InvalidateScatterRuntimeCache();
+  ApplyRendererInvalidation(
+      RendererInvalidationPlan::FullAccelerationStructureRebuild);
+  NotifySceneChanged();
+  s_lastStatus = "Exploded '" + sourceName + "' into " +
+                 std::to_string(createdCount) + " independent mesh nodes.";
+  return createdCount;
+}
+
 // Scatter API moved to scatter.cpp. The Scene namespace surface
 // (GetScatterModels, AddScatterModel, AddSelectedNodesAsScatter*, ...)
 // is declared in scatter.h and stays callable as Scene::* unchanged.

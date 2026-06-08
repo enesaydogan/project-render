@@ -1160,24 +1160,26 @@ bool AddSelectedNodesAsScatterObjects(size_t scatterIndex) {
   const std::vector<std::array<float, 16>> worldTransforms =
       BuildNodeWorldTransforms();
   for (size_t nodeIndex : GetSelectedNodeIndices()) {
-    if (nodeIndex >= nodes.size()) {
-      continue;
-    }
-    float invRoot[16];
-    if (nodeIndex >= worldTransforms.size() ||
-        !Inverse4x4(worldTransforms[nodeIndex].data(), invRoot)) {
+    if (nodeIndex >= nodes.size() || nodeIndex >= worldTransforms.size()) {
       continue;
     }
 
+    // Preserve the source branch's authored world orientation and scale while
+    // moving its pivot to the selected node's world position. Using
+    // inverse(root) * child erased FBX axis-conversion rotations for exploded
+    // standalone meshes, so they rendered correctly as scene nodes but lay
+    // sideways when reused as scatter prototypes.
+    const auto &rootWorld = worldTransforms[nodeIndex];
     std::vector<std::pair<size_t, std::array<float, 16>>> meshEntries;
     auto appendNodeMeshes = [&](size_t sourceNodeIndex) {
       if (sourceNodeIndex >= nodes.size() ||
           sourceNodeIndex >= worldTransforms.size()) {
         return;
       }
-      std::array<float, 16> localTransform = {};
-      MulColumnMajor4x4(invRoot, worldTransforms[sourceNodeIndex].data(),
-                        localTransform.data());
+      std::array<float, 16> localTransform = worldTransforms[sourceNodeIndex];
+      localTransform[12] -= rootWorld[12];
+      localTransform[13] -= rootWorld[13];
+      localTransform[14] -= rootWorld[14];
       for (size_t meshIndex : nodes[sourceNodeIndex].meshIndices) {
         if (meshIndex < g_loadedMeshes.size()) {
           meshEntries.push_back({meshIndex, localTransform});

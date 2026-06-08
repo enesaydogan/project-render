@@ -192,6 +192,13 @@ bool SetNodeVisibility(size_t index, bool visible);
 bool SetNodeSelectionLocked(size_t index, bool locked);
 bool SetNodeLiveLinkManaged(size_t index, bool liveLinkManaged);
 bool SetNodeParent(size_t index, size_t parentIndex);
+// Converts a multi-mesh node into a transform group with one independently
+// selectable standalone node per mesh. Meshes in descendants are included and
+// their world transforms are preserved. The exploded result is detached from
+// import/reimport linkage so later source updates cannot overwrite authored
+// deletions. Returns the number of mesh nodes created.
+bool CanExplodeNodeMeshes(size_t index);
+size_t ExplodeNodeMeshes(size_t index);
 bool RemoveNode(size_t index);
 void SelectNode(size_t index);
 void SelectNodes(const std::vector<size_t> &indices);
