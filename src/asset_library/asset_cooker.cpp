@@ -216,6 +216,30 @@ RegisterAndCookImport(AssetRegistry &registry, const AssetPaths &paths,
   return set;
 }
 
+AssetId RegisterAndCookTexture(AssetRegistry &registry, const AssetPaths &paths,
+                               const std::string &displayName,
+                               const std::string &sourcePath,
+                               const Asset::Texture &tex) {
+  AssetMetadata m;
+  m.type = AssetType::Texture;
+  m.displayName = displayName;
+  m.virtualPath = "Imported/Textures";
+  m.sourcePath = sourcePath;
+  m.sourceContentHash = sourcePath.empty() ? 0 : HashFile(sourcePath);
+  m.sourceTimestamp = sourcePath.empty() ? 0 : FileTimestamp(sourcePath);
+  m.cookerVersion = kCookerVersionTexture;
+  m.cookState = CookState::Stale;
+  AssetId id = registry.Add(std::move(m));
+
+  CookService::Get().Enqueue(
+      id, paths.cookedTexturePath(id), [cooked = ToCookedTexture(tex)]() {
+        std::vector<uint8_t> blob;
+        SerializeCookedTexture(cooked, blob);
+        return blob;
+      });
+  return id;
+}
+
 bool HasCurrentCookedModel(const AssetRegistry &registry,
                            const AssetPaths &paths, const AssetId &modelId) {
   const AssetMetadata *m = registry.Get(modelId);

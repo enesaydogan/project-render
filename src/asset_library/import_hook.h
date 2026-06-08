@@ -17,4 +17,11 @@ AssetId RegisterImportedModel(const std::string &displayName,
                               const std::vector<Asset::Material> &materials,
                               const std::vector<Asset::Texture> &textures);
 
+// Decode a file (model or image) and register + cook it into the library
+// WITHOUT adding it to the scene — backs the Assets panel "Add Asset…" action.
+// Returns the created (or existing, for models) AssetId, or invalid on an
+// unsupported/undecodable file. Requires the Asset:: loader to be initialized.
+// Decodes synchronously on the calling (main) thread; cooking is backgrounded.
+AssetId ImportFileToLibrary(const std::string &path);
+
 } // namespace assetlib

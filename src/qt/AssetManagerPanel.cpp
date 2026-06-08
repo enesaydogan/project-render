@@ -4,9 +4,12 @@
 #include "../asset_library/asset_registry.h"
 #include "../asset_library/cook_jobs.h"
 #include "../asset_library/global_registry.h"
+#include "../asset_library/import_hook.h"
 #include "../asset_library/thumbnail_cache.h"
 #include "asset_mime.h"
 
+#include <QGuiApplication>
+#include <QImage>
 #include <QMimeData>
 #include <QTimer>
 
@@ -51,6 +54,7 @@ namespace {
 constexpr int kUserRoleId = Qt::UserRole + 1;   // AssetId hex string
 constexpr int kUserRolePath = Qt::UserRole + 2; // folder virtualPath
 constexpr int kUserRoleDrag = Qt::UserRole + 3; // drag payload "type:hex"
+constexpr int kUserRoleCooking = Qt::UserRole + 4; // bool: cook in progress
 
 // QListWidget that exposes a dragged asset as our shared MIME type so the
 // viewport / other panels can accept it.
@@ -116,6 +120,71 @@ QPixmap PlaceholderThumb(AssetType t, int size) {
   p.drawText(pm.rect(), Qt::AlignCenter, QString(QChar(name[0])));
   p.end();
   return pm;
+}
+
+// Draw a rotating arc "cooking" spinner over the lower-right of a thumbnail.
+void DrawSpinnerOverlay(QPixmap &pm, int frame) {
+  QPainter p(&pm);
+  p.setRenderHint(QPainter::Antialiasing, true);
+  // Darken the whole thumbnail slightly so the spinner reads as "busy".
+  p.fillRect(pm.rect(), QColor(0, 0, 0, 90));
+  const int d = qMax(16, pm.width() / 2);
+  const QRectF arc((pm.width() - d) / 2.0, (pm.height() - d) / 2.0, d, d);
+  const int pen = qMax(2, d / 10);
+  p.setPen(QPen(QColor(0xff, 0xff, 0xff, 60), pen));
+  p.drawArc(arc, 0, 360 * 16);
+  p.setPen(QPen(QColor(0x58, 0xd0, 0xf4), pen, Qt::SolidLine, Qt::RoundCap));
+  // Qt angles are in 1/16 degree; sweep 270° rotated by the frame.
+  p.drawArc(arc, (90 - frame * 12) * 16, -270 * 16);
+  p.end();
+}
+
+// Compose the final grid icon: real thumbnail (if any) or typed placeholder,
+// dimmed when missing, with a spinner overlay while cooking.
+QPixmap ComposeThumb(const QString &thumbPath, AssetType type, int sz,
+                     bool missing, bool cooking, int spinnerFrame) {
+  QPixmap pm;
+  if (!thumbPath.isEmpty())
+    pm.load(thumbPath);
+  if (pm.isNull())
+    pm = PlaceholderThumb(type, sz);
+  else
+    pm = pm.scaled(sz, sz, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+
+  if (missing) {
+    QPixmap dimmed(pm.size());
+    dimmed.fill(Qt::transparent);
+    QPainter p(&dimmed);
+    p.setOpacity(0.4);
+    p.drawPixmap(0, 0, pm);
+    p.end();
+    pm = dimmed;
+  }
+  if (cooking)
+    DrawSpinnerOverlay(pm, spinnerFrame);
+  return pm;
+}
+
+// For image-like assets, generate (and cache) a real preview from the source
+// file. Models need a GPU render pass (a later phase) and stay placeholder.
+// Returns the cached thumbnail path, or empty if none could be produced.
+QString EnsureThumbnail(const AssetId &id, const AssetMetadata *m,
+                        const assetlib::ThumbnailCache &thumbs) {
+  const QString path = QString::fromStdString(thumbs.PathFor(id).string());
+  if (thumbs.Has(id))
+    return path;
+  if (!m || m->sourcePath.empty())
+    return {};
+  if (m->type != AssetType::Texture && m->type != AssetType::Hdri)
+    return {};
+  QImage img(QString::fromStdString(m->sourcePath));
+  if (img.isNull()) // e.g. exr/dds/tga that Qt can't decode
+    return {};
+  const QImage scaled =
+      img.scaled(256, 256, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+  if (!scaled.save(path, "PNG"))
+    return {};
+  return path;
 }
 
 } // namespace
@@ -196,17 +265,13 @@ void AssetManagerPanel::createUi() {
           &AssetManagerPanel::onAddAsset);
   toolbar->addWidget(addButton);
 
-  // Live background-cook progress indicator.
-  auto *cookStatus = new QLabel(this);
-  cookStatus->setStyleSheet("color:#808890;");
-  toolbar->addWidget(cookStatus);
+  // Live background-cook progress indicator + per-item spinner animation.
+  m_cookStatus = new QLabel(this);
+  m_cookStatus->setStyleSheet("color:#808890;");
+  toolbar->addWidget(m_cookStatus);
   auto *cookTimer = new QTimer(this);
-  connect(cookTimer, &QTimer::timeout, this, [cookStatus]() {
-    const size_t n = assetlib::CookService::Get().pending();
-    cookStatus->setText(n == 0 ? QString()
-                               : tr("Cooking %1…").arg(static_cast<int>(n)));
-  });
-  cookTimer->start(500);
+  connect(cookTimer, &QTimer::timeout, this, &AssetManagerPanel::onCookTick);
+  cookTimer->start(150);
 
   root->addLayout(toolbar);
 
@@ -471,23 +536,13 @@ void AssetManagerPanel::refreshGrid() {
                                            ":" + id.ToString()));
     item->setTextAlignment(Qt::AlignHCenter | Qt::AlignTop);
 
-    QPixmap pm;
-    if (m && thumbs.Has(id))
-      pm.load(QString::fromStdString(thumbs.PathFor(id).string()));
-    if (pm.isNull())
-      pm = PlaceholderThumb(type, sz);
-    if (unavailable) {
-      // Dim missing assets.
-      QPixmap dimmed(pm.size());
-      dimmed.fill(Qt::transparent);
-      QPainter p(&dimmed);
-      p.setOpacity(0.4);
-      p.drawPixmap(0, 0, pm);
-      p.end();
-      pm = dimmed;
+    const bool cooking = (m && m->cookState == assetlib::CookState::Stale);
+    item->setData(kUserRoleCooking, cooking);
+    if (unavailable)
       item->setForeground(QColor(0xb0, 0x70, 0x70));
-    }
-    item->setIcon(QIcon(pm));
+    const QString thumbPath = m ? EnsureThumbnail(id, m, thumbs) : QString();
+    item->setIcon(QIcon(
+        ComposeThumb(thumbPath, type, sz, unavailable, cooking, m_spinnerFrame)));
   }
 
   m_refreshing = false;
@@ -579,28 +634,88 @@ void AssetManagerPanel::onAddAsset() {
     return;
 
   const std::string folder = selectedFolder();
+  QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+  int imported = 0, cataloged = 0, failed = 0;
   for (const QString &file : files) {
     QFileInfo fi(file);
+    // Decode + cook supported files into the library so they are immediately
+    // usable (draggable into the scene). Models land under Imported/Models and
+    // textures under Imported/Textures.
+    const assetlib::AssetId id =
+        assetlib::ImportFileToLibrary(fi.absoluteFilePath().toStdString());
+    if (id.valid()) {
+      ++imported;
+      continue;
+    }
+
+    // Unsupported-for-cooking types (e.g. .vdb until Phase 5): catalog the
+    // path only. These appear in the library but cannot yet be instantiated.
+    const QString ext = fi.suffix().toLower();
+    if (ext == "gltf" || ext == "glb" || ext == "obj" || ext == "stl" ||
+        ext == "fbx" || ext == "png" || ext == "jpg" || ext == "jpeg" ||
+        ext == "tga" || ext == "dds" || ext == "exr" || ext == "hdr" ||
+        ext == "bmp") {
+      ++failed; // a supported type that failed to decode
+      continue;
+    }
     AssetMetadata m;
     m.displayName = fi.completeBaseName().toStdString();
     m.virtualPath = folder;
     m.sourcePath = fi.absoluteFilePath().toStdString();
-
-    const QString ext = fi.suffix().toLower();
-    if (ext == "gltf" || ext == "glb" || ext == "obj" || ext == "stl" ||
-        ext == "fbx")
-      m.type = AssetType::Model;
-    else if (ext == "vdb")
-      m.type = AssetType::CloudVolume;
-    else if (ext == "exr" || ext == "hdr")
-      m.type = AssetType::Hdri;
-    else
-      m.type = AssetType::Texture;
-
+    m.type = (ext == "vdb") ? AssetType::CloudVolume : AssetType::Texture;
     m_registry->Add(std::move(m));
+    ++cataloged;
   }
   m_registry->RefreshSourceStates();
   m_registry->Save();
+  QGuiApplication::restoreOverrideCursor();
+
+  if (failed > 0)
+    QMessageBox::warning(
+        this, tr("Add Asset"),
+        tr("%1 file(s) could not be decoded and were skipped.").arg(failed));
+}
+
+void AssetManagerPanel::onCookTick() {
+  // Apply finished cook results here too, not only from the render loop: when
+  // the app is idle the renderer may not tick ProcessPendingImport, which would
+  // leave cookState stuck at Stale (and the spinner spinning) until the next
+  // frame. This timer is a reliable main-thread heartbeat.
+  if (m_registry)
+    assetlib::CookService::Get().Pump(*m_registry);
+
+  const size_t pending = assetlib::CookService::Get().pending();
+  if (m_cookStatus)
+    m_cookStatus->setText(
+        pending == 0 ? QString()
+                     : tr("Cooking %1…").arg(static_cast<int>(pending)));
+  if (!m_registry || !m_grid)
+    return;
+
+  // Advance the spinner and repaint only the cooking items in place (no grid
+  // rebuild, so selection/scroll are preserved). Items flip out of the cooking
+  // state once their cookState is no longer Stale.
+  m_spinnerFrame = (m_spinnerFrame + 1) % 30;
+  const int sz = m_thumbSize ? m_thumbSize->value() : 96;
+  assetlib::ThumbnailCache thumbs(m_registry->paths());
+  for (int i = 0; i < m_grid->count(); ++i) {
+    QListWidgetItem *item = m_grid->item(i);
+    if (!item->data(kUserRoleCooking).toBool())
+      continue;
+    AssetId id;
+    if (!AssetId::FromString(item->data(kUserRoleId).toString().toStdString(),
+                             id))
+      continue;
+    const AssetMetadata *m = m_registry->Get(id);
+    const bool stillCooking = (m && m->cookState == assetlib::CookState::Stale);
+    const AssetType type = m ? m->type : AssetType::Unknown;
+    const bool missing = (m && m->sourceState == assetlib::SourceState::Missing);
+    if (!stillCooking)
+      item->setData(kUserRoleCooking, false);
+    const QString thumbPath = m ? EnsureThumbnail(id, m, thumbs) : QString();
+    item->setIcon(QIcon(
+        ComposeThumb(thumbPath, type, sz, missing, stillCooking, m_spinnerFrame)));
+  }
 }
 
 void AssetManagerPanel::onNewFolder() {

@@ -45,6 +45,7 @@ private:
     bool selectedAssetId(assetlib::AssetId &out) const;
 
     void onAddAsset();
+    void onCookTick(); // animates per-item cooking spinners + updates status
     void onNewFolder();
     void onRenameFolder();
     void onDeleteFolder();
@@ -68,6 +69,8 @@ private:
     QPushButton *m_viewMissingButton = nullptr;
     QSlider *m_thumbSize = nullptr;
     QListWidget *m_grid = nullptr;
+    QLabel *m_cookStatus = nullptr;
+    int m_spinnerFrame = 0;
 
     // Right (inspector)
     QLabel *m_inspName = nullptr;

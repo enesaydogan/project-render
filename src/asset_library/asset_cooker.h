@@ -47,6 +47,14 @@ RegisterAndCookImport(AssetRegistry &registry, const AssetPaths &paths,
                       const std::vector<Asset::Material> &materials,
                       const std::vector<Asset::Texture> &textures);
 
+// Registers and cooks a single standalone texture asset (e.g. the Assets panel
+// "Add Asset…" on an image file). Records the source path for relinking. Marks
+// the registry dirty; caller decides when to Save().
+AssetId RegisterAndCookTexture(AssetRegistry &registry, const AssetPaths &paths,
+                               const std::string &displayName,
+                               const std::string &sourcePath,
+                               const Asset::Texture &tex);
+
 // Re-decode a model asset's source file and rewrite its cooked payloads. Used
 // by background recook jobs when a source changes. Returns false if the source
 // is missing or fails to load. Requires the Asset:: loader to be initialized.
