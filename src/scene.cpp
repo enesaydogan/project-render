@@ -4,6 +4,10 @@
 #include "animation_sequence.h"
 #include "saved_views.h"
 #include "ImGuizmo.h"
+#include "asset_library/asset_runtime.h"
+#include "asset_library/cook_jobs.h"
+#include "asset_library/global_registry.h"
+#include "asset_library/import_hook.h"
 #include "assets/asset_loader.h"
 #include "camera.h"
 #include "d3d12_helpers.h"
@@ -2708,6 +2712,24 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
   const bool isLiveLinkPayload =
       IsShareableLiveLinkPayloadPath(payload.sourcePath);
 
+  // Register the imported model into the asset library (Phase 2). Skipped for
+  // streamed live-link payloads, library re-instantiations, and sources that
+  // are not real files on disk.
+  if (!payload.skipLibraryRegister && !isLiveLinkPayload &&
+      !payload.sourcePath.empty()) {
+    std::error_code regEc;
+    if (std::filesystem::exists(std::filesystem::path(payload.sourcePath),
+                                regEc)) {
+      std::string libName =
+          payload.displayName.empty()
+              ? std::filesystem::path(payload.sourcePath).stem().string()
+              : payload.displayName;
+      assetlib::RegisterImportedModel(libName, payload.sourcePath,
+                                      payload.meshes, payload.materials,
+                                      payload.textures);
+    }
+  }
+
   if (!payload.sceneNodes.empty()) {
     EnsureGpuBuffersForMeshes(payload.meshes);
 
@@ -3315,6 +3337,11 @@ std::string GetImportStatus() {
 }
 
 void ProcessPendingImport() {
+  // Apply any finished background cook results to the registry every frame
+  // (runs regardless of whether an import is pending).
+  if (assetlib::AssetRegistry *reg = assetlib::GlobalRegistry())
+    assetlib::CookService::Get().Pump(*reg);
+
   if (!s_pendingReady.load()) {
     return;
   }
@@ -3386,6 +3413,111 @@ void ProcessPendingImport() {
     std::lock_guard<std::mutex> lg(s_importStatusMutex);
     s_importStatus = ok ? BuildSceneLoadFinishedStatus(action) : s_lastStatus;
   }
+}
+
+bool InstantiateAssetModel(const assetlib::AssetId &id,
+                           const float *rootTranslation) {
+  assetlib::AssetRegistry *reg = assetlib::GlobalRegistry();
+  if (!reg) {
+    s_lastStatus = "Instantiate failed: asset library unavailable";
+    return false;
+  }
+  assetlib::ResolvedModel rm = assetlib::ResolveModel(*reg, reg->paths(), id);
+  if (!rm.valid || rm.meshes.empty()) {
+    s_lastStatus = "Instantiate failed: could not resolve cooked asset";
+    return false;
+  }
+
+  // Cooked geometry comes back CPU-only; create GPU buffers now.
+  Asset::UploadMeshes(rm.meshes);
+
+  ImportedNodePayload payload;
+  payload.materials = std::move(rm.materials);
+  payload.textures = std::move(rm.textures);
+  payload.meshes = std::move(rm.meshes);
+  payload.materialsContainFullDefinitions = true;
+  payload.skipLibraryRegister = true; // already a library asset
+  if (const assetlib::AssetMetadata *meta = reg->Get(id)) {
+    payload.displayName = meta->displayName;
+    payload.sourcePath = meta->sourcePath;
+  }
+  if (rootTranslation) {
+    payload.rootTranslation = {rootTranslation[0], rootTranslation[1],
+                               rootTranslation[2]};
+    payload.hasRootTranslation = true;
+  }
+
+  // Wrap all meshes in a single synthetic scene node so the well-tested
+  // hierarchical import path handles material/texture registration. Phase 2
+  // does not yet cook the original node hierarchy.
+  Asset::ImportedSceneNode rootNode;
+  rootNode.name = payload.displayName.empty() ? "Asset" : payload.displayName;
+  for (size_t i = 0; i < payload.meshes.size(); ++i)
+    rootNode.meshIndices.push_back(i);
+  payload.sceneNodes.push_back(std::move(rootNode));
+
+  reg->TouchRecent(id);
+  return AddImportedNode(std::move(payload));
+}
+
+bool AssignMaterialAssetToSelection(const assetlib::AssetId &id) {
+  assetlib::AssetRegistry *reg = assetlib::GlobalRegistry();
+  if (!reg)
+    return false;
+  std::vector<size_t> selection = GetSelectedNodeIndices();
+  if (selection.empty()) {
+    s_lastStatus = "Drop a material onto a selected object";
+    return false;
+  }
+  assetlib::ResolvedMaterial rm =
+      assetlib::ResolveMaterial(*reg, reg->paths(), id);
+  if (!rm.valid) {
+    s_lastStatus = "Material assign failed: could not resolve cooked material";
+    return false;
+  }
+
+  // Register the material's textures into the global array and remap its slots
+  // from local (resolved) indices to global texture indices.
+  std::vector<int> localToGlobal(rm.textures.size(), -1);
+  for (size_t i = 0; i < rm.textures.size(); ++i)
+    localToGlobal[i] = AddTexture(std::move(rm.textures[i]));
+
+  Asset::Material mat = rm.material;
+  int *slots[] = {&mat.diffuseTexture,        &mat.normalTexture,
+                  &mat.opacityTexture,        &mat.emissiveTexture,
+                  &mat.occlusionTexture,      &mat.metalRoughTexture,
+                  &mat.metalnessTexture,      &mat.roughnessGlossTexture,
+                  &mat.specularColorTexture,  &mat.thicknessTexture,
+                  &mat.coatNormalTexture,     &mat.parallaxTexture};
+  for (int *s : slots) {
+    if (*s >= 0 && *s < static_cast<int>(localToGlobal.size()))
+      *s = localToGlobal[static_cast<size_t>(*s)];
+    else
+      *s = -1;
+  }
+  mat.runtimeMetalRoughTexture = -1; // regenerated by the runtime refresh below
+
+  int materialIndex = FindOrCreateMaterial(mat);
+  if (materialIndex < 0) {
+    s_lastStatus = "Material assign failed";
+    return false;
+  }
+
+  bool any = false;
+  for (size_t nodeIndex : selection) {
+    if (nodeIndex >= s_nodes.size())
+      continue;
+    size_t slotCount = s_nodes[nodeIndex].linkedMaterialIndices.size();
+    if (slotCount == 0)
+      slotCount = 1;
+    for (size_t slot = 0; slot < slotCount; ++slot)
+      any |= RebindNodeMaterialSlot(nodeIndex, slot, materialIndex);
+  }
+  if (any) {
+    RefreshAllMaterialRuntimeTextures();
+    s_lastStatus = "Assigned material to selection";
+  }
+  return any;
 }
 
 bool ImportModel(const std::string &utf8path, const float *rootTranslation) {

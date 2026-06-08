@@ -149,6 +149,11 @@ target_sources(project-render PRIVATE
     src/asset_library/asset_registry.cpp
     src/asset_library/thumbnail_cache.cpp
     src/asset_library/global_registry.cpp
+    src/asset_library/cooked_payload.cpp
+    src/asset_library/asset_cooker.cpp
+    src/asset_library/asset_runtime.cpp
+    src/asset_library/cook_jobs.cpp
+    src/asset_library/import_hook.cpp
 )
 
 if(USE_QT_UI)
@@ -858,9 +863,11 @@ if(BUILD_ASSET_TESTS)
     src/asset_library/asset_paths.cpp
     src/asset_library/asset_registry.cpp
     src/asset_library/thumbnail_cache.cpp
+    src/asset_library/cooked_payload.cpp
   )
   target_include_directories(asset-registry-tests PRIVATE
     "${VCPKG_INSTALLED_DIR}/include")
+  target_link_libraries(asset-registry-tests PRIVATE Cabinet)
   if(MSVC)
     target_compile_options(asset-registry-tests PRIVATE /permissive-)
   endif()

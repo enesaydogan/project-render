@@ -1,5 +1,6 @@
 #pragma once
 
+#include "asset_library/asset_id.h"
 #include "assets/asset_loader.h"
 #include "ies_profile.h"
 #include "light.h"
@@ -63,6 +64,9 @@ struct ImportedNodePayload {
   std::vector<std::string> textureSourceUris;
   bool materialsContainFullDefinitions = true;
   bool hasRootTranslation = false;
+  // Set when the payload was rebuilt from a library asset (InstantiateAssetModel)
+  // so AddImportedNode does not re-register/recook it into the asset library.
+  bool skipLibraryRegister = false;
 };
 
 struct GpuUploadStats {
@@ -82,6 +86,14 @@ bool ResolveViewportImportPlacement(float screenX, float screenY,
                                     float outTranslation[3]);
 bool ReimportNode(size_t index);
 bool CanReimportNode(size_t index);
+// Instantiate a library Model asset into the scene by resolving its cooked
+// payload (the Assets panel drag-and-drop target). Returns true on success.
+bool InstantiateAssetModel(const assetlib::AssetId &id,
+                           const float *rootTranslation = nullptr);
+// Assign a library Material asset to every currently selected node (the
+// Assets-panel material drag target). Returns true if at least one node was
+// updated.
+bool AssignMaterialAssetToSelection(const assetlib::AssetId &id);
 // Open file dialog and import selected model
 bool ImportModelWithDialog(HWND hwnd);
 // Open file dialog and import selected HDR/EXR

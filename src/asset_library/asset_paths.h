@@ -1,4 +1,5 @@
 #pragma once
+#include "asset_id.h"
 #include <filesystem>
 
 // Resolves the on-disk layout of a Project Render user-data root, per
@@ -28,6 +29,17 @@ public:
   }
   std::filesystem::path thumbnailsDir() const {
     return cacheDir() / "Thumbnails";
+  }
+
+  // Cooked runtime payload locations, keyed by AssetId.
+  std::filesystem::path cookedMeshPath(const AssetId &id) const {
+    return cacheDir() / "Meshes" / (id.ToString() + ".prmesh");
+  }
+  std::filesystem::path cookedTexturePath(const AssetId &id) const {
+    return cacheDir() / "Textures" / (id.ToString() + ".prtex");
+  }
+  std::filesystem::path cookedMaterialPath(const AssetId &id) const {
+    return cacheDir() / "Materials" / (id.ToString() + ".prmat");
   }
 
   // Creates the full directory tree if missing. Returns false on filesystem

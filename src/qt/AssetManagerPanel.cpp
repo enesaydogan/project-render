@@ -2,8 +2,13 @@
 
 #include "../asset_library/asset_metadata.h"
 #include "../asset_library/asset_registry.h"
+#include "../asset_library/cook_jobs.h"
 #include "../asset_library/global_registry.h"
 #include "../asset_library/thumbnail_cache.h"
+#include "asset_mime.h"
+
+#include <QMimeData>
+#include <QTimer>
 
 #include <QComboBox>
 #include <QDesktopServices>
@@ -45,6 +50,27 @@ namespace {
 
 constexpr int kUserRoleId = Qt::UserRole + 1;   // AssetId hex string
 constexpr int kUserRolePath = Qt::UserRole + 2; // folder virtualPath
+constexpr int kUserRoleDrag = Qt::UserRole + 3; // drag payload "type:hex"
+
+// QListWidget that exposes a dragged asset as our shared MIME type so the
+// viewport / other panels can accept it.
+class AssetGridList : public QListWidget {
+public:
+  using QListWidget::QListWidget;
+
+protected:
+  QMimeData *mimeData(const QList<QListWidgetItem *> &items) const override {
+    QMimeData *md = QListWidget::mimeData(items);
+    if (!md)
+      md = new QMimeData();
+    if (!items.isEmpty()) {
+      const QString payload = items.first()->data(kUserRoleDrag).toString();
+      if (!payload.isEmpty())
+        md->setData(kAssetMimeType, payload.toUtf8());
+    }
+    return md;
+  }
+};
 
 // Accent color per asset type for the placeholder thumbnail.
 QColor TypeColor(AssetType t) {
@@ -169,6 +195,19 @@ void AssetManagerPanel::createUi() {
   connect(addButton, &QPushButton::clicked, this,
           &AssetManagerPanel::onAddAsset);
   toolbar->addWidget(addButton);
+
+  // Live background-cook progress indicator.
+  auto *cookStatus = new QLabel(this);
+  cookStatus->setStyleSheet("color:#808890;");
+  toolbar->addWidget(cookStatus);
+  auto *cookTimer = new QTimer(this);
+  connect(cookTimer, &QTimer::timeout, this, [cookStatus]() {
+    const size_t n = assetlib::CookService::Get().pending();
+    cookStatus->setText(n == 0 ? QString()
+                               : tr("Cooking %1…").arg(static_cast<int>(n)));
+  });
+  cookTimer->start(500);
+
   root->addLayout(toolbar);
 
   // Main splitter: source tree | grid | inspector.
@@ -198,13 +237,17 @@ void AssetManagerPanel::createUi() {
   sizeRow->addWidget(m_thumbSize, 1);
   centerLayout->addLayout(sizeRow);
 
-  m_grid = new QListWidget(centerWrap);
+  m_grid = new AssetGridList(centerWrap);
   m_grid->setViewMode(QListView::IconMode);
   m_grid->setResizeMode(QListView::Adjust);
   m_grid->setMovement(QListView::Static);
   m_grid->setWordWrap(true);
   m_grid->setSpacing(8);
   m_grid->setContextMenuPolicy(Qt::CustomContextMenu);
+  // Drag assets out to the viewport / other panels (drop targets read
+  // kAssetMimeType). The panel itself does not accept drops.
+  m_grid->setDragEnabled(true);
+  m_grid->setDragDropMode(QAbstractItemView::DragOnly);
   connect(m_grid, &QListWidget::itemSelectionChanged, this,
           [this]() { refreshInspector(); });
   connect(m_grid, &QListWidget::itemDoubleClicked, this,
@@ -422,6 +465,10 @@ void AssetManagerPanel::refreshGrid() {
     auto *item = new QListWidgetItem(m_grid);
     item->setText(name);
     item->setData(kUserRoleId, QString::fromStdString(id.ToString()));
+    if (m) // draggable only when the asset is present
+      item->setData(kUserRoleDrag,
+                    QString::fromStdString(std::string(AssetTypeToString(type)) +
+                                           ":" + id.ToString()));
     item->setTextAlignment(Qt::AlignHCenter | Qt::AlignTop);
 
     QPixmap pm;

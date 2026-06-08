@@ -19,6 +19,7 @@ bool AssetPaths::EnsureLayout() const {
       cacheDir(),
       cacheDir() / "Meshes",
       cacheDir() / "Textures",
+      cacheDir() / "Materials",
       cacheDir() / "Volumes",
       thumbnailsDir(),
       packsDir(),

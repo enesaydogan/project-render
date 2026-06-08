@@ -7,6 +7,7 @@
 
 #include "../asset_library/asset_paths.h"
 #include "../asset_library/asset_registry.h"
+#include "../asset_library/cooked_payload.h"
 #include "../asset_library/thumbnail_cache.h"
 
 #include <cstdio>
@@ -282,6 +283,109 @@ void TestThumbnailCache() {
   CHECK(!cache.Has(id));
 }
 
+void TestCookedModelRoundTrip() {
+  std::printf("TestCookedModelRoundTrip\n");
+  CookedModel model;
+  CookedMesh a;
+  a.materialIndex = 2;
+  a.materialSlot = 1;
+  a.vertexCount = 3;
+  a.indexCount = 3;
+  a.minBound[0] = -1.0f; a.maxBound[2] = 5.5f;
+  a.vertexBytes = std::vector<uint8_t>(3 * 48, 0xAB); // 48 = sizeof Asset::Vertex
+  a.indexBytes = {0, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0};
+  model.meshes.push_back(a);
+  CookedMesh b;
+  b.vertexCount = 0; // empty mesh edge case
+  model.meshes.push_back(b);
+
+  std::vector<uint8_t> blob;
+  CHECK(SerializeCookedModel(model, blob));
+  CHECK(blob.size() > 16); // has header
+
+  CookedModel back;
+  CHECK(DeserializeCookedModel(blob.data(), blob.size(), back));
+  CHECK(back.meshes.size() == 2);
+  if (back.meshes.size() == 2) {
+    CHECK(back.meshes[0].materialIndex == 2);
+    CHECK(back.meshes[0].materialSlot == 1);
+    CHECK(back.meshes[0].vertexCount == 3);
+    CHECK(back.meshes[0].minBound[0] == -1.0f);
+    CHECK(back.meshes[0].maxBound[2] == 5.5f);
+    CHECK(back.meshes[0].vertexBytes.size() == 3 * 48);
+    CHECK(back.meshes[0].vertexBytes == a.vertexBytes);
+    CHECK(back.meshes[0].indexBytes == a.indexBytes);
+    CHECK(back.meshes[1].vertexCount == 0);
+  }
+
+  // Corruption / truncation must be rejected, not crash.
+  CookedModel bad;
+  CHECK(!DeserializeCookedModel(blob.data(), 8, bad));
+  std::vector<uint8_t> garbage = {1, 2, 3, 4, 5, 6, 7, 8,
+                                  9, 10, 11, 12, 13, 14, 15, 16};
+  CHECK(!DeserializeCookedModel(garbage.data(), garbage.size(), bad));
+}
+
+void TestCookedTextureRoundTrip() {
+  std::printf("TestCookedTextureRoundTrip\n");
+  CookedTexture tex;
+  tex.width = 256;
+  tex.height = 128;
+  tex.cpuFormat = 87; // some DXGI_FORMAT value
+  tex.cpuMipLevels = 9;
+  tex.usageSemantic = 3;
+  tex.data = std::vector<uint8_t>(4096, 0x7E);
+
+  std::vector<uint8_t> blob;
+  CHECK(SerializeCookedTexture(tex, blob));
+  CookedTexture back;
+  CHECK(DeserializeCookedTexture(blob.data(), blob.size(), back));
+  CHECK(back.width == 256);
+  CHECK(back.height == 128);
+  CHECK(back.cpuFormat == 87);
+  CHECK(back.cpuMipLevels == 9);
+  CHECK(back.usageSemantic == 3);
+  CHECK(back.data == tex.data);
+}
+
+void TestCookedFileIoAndHash() {
+  std::printf("TestCookedFileIoAndHash\n");
+  TempDir tmp;
+  AssetPaths paths(tmp.path);
+  paths.EnsureLayout();
+  AssetId id = AssetId::Generate();
+
+  CookedModel model;
+  CookedMesh m;
+  m.vertexCount = 1;
+  m.vertexBytes = std::vector<uint8_t>(48, 0x11);
+  model.meshes.push_back(m);
+  std::vector<uint8_t> blob;
+  CHECK(SerializeCookedModel(model, blob));
+
+  std::filesystem::path file = paths.cookedMeshPath(id);
+  CHECK(WriteCookedFile(file, blob));
+  CHECK(std::filesystem::exists(file));
+
+  std::vector<uint8_t> readBack;
+  CHECK(ReadCookedFile(file, readBack));
+  CHECK(readBack == blob);
+
+  CookedModel decoded;
+  CHECK(DeserializeCookedModel(readBack.data(), readBack.size(), decoded));
+  CHECK(decoded.meshes.size() == 1);
+
+  // Hashing: deterministic, content-sensitive.
+  uint64_t h1 = HashBytes(blob.data(), blob.size());
+  uint64_t h2 = HashBytes(blob.data(), blob.size());
+  CHECK(h1 == h2);
+  CHECK(h1 != 0);
+  std::vector<uint8_t> mutated = blob;
+  mutated.back() ^= 0xFF;
+  CHECK(HashBytes(mutated.data(), mutated.size()) != h1);
+  CHECK(HashFile(file) != 0);
+}
+
 } // namespace
 
 int main() {
@@ -293,6 +397,9 @@ int main() {
   TestMissingState();
   TestChangeListener();
   TestThumbnailCache();
+  TestCookedModelRoundTrip();
+  TestCookedTextureRoundTrip();
+  TestCookedFileIoAndHash();
 
   std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
   return g_failures;

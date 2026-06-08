@@ -1,4 +1,5 @@
 #include "DX12View.h"
+#include "../asset_library/asset_id.h"
 #include "../dx12_context.h" // adapt include path
 #include "../dxr_renderer.h"
 #include "../editor_ui.h"
@@ -6,6 +7,7 @@
 #include "../imgui.h"
 #include "../material_editor.h"
 #include "../scene.h"
+#include "asset_mime.h"
 #include <algorithm>
 #include <cfloat>
 #include <vector>
@@ -441,6 +443,10 @@ void DX12View::resizeEvent(QResizeEvent *e)
 
 void DX12View::dragEnterEvent(QDragEnterEvent *e)
 {
+    if (e->mimeData() && e->mimeData()->hasFormat(kAssetMimeType)) {
+        e->acceptProposedAction();
+        return;
+    }
     if (!FirstSupportedDroppedModelPath(e->mimeData()).isEmpty()) {
         e->acceptProposedAction();
         return;
@@ -450,6 +456,37 @@ void DX12View::dragEnterEvent(QDragEnterEvent *e)
 
 void DX12View::dropEvent(QDropEvent *e)
 {
+    // Asset Manager drag-and-drop (model → instantiate, material → assign).
+    if (e->mimeData() && e->mimeData()->hasFormat(kAssetMimeType)) {
+        const QString payload =
+            QString::fromUtf8(e->mimeData()->data(kAssetMimeType));
+        const int colon = payload.indexOf(':');
+        if (colon > 0) {
+            const QString type = payload.left(colon);
+            assetlib::AssetId id;
+            if (assetlib::AssetId::FromString(
+                    payload.mid(colon + 1).toStdString(), id)) {
+                if (type == QStringLiteral("model")) {
+                    float placement[3] = {};
+                    const QPoint dropPos = mapToGlobal(e->position().toPoint());
+                    if (Scene::ResolveViewportImportPlacement(
+                            static_cast<float>(dropPos.x()),
+                            static_cast<float>(dropPos.y()),
+                            static_cast<float>(DX12Context::g_windowWidth),
+                            static_cast<float>(DX12Context::g_windowHeight),
+                            placement))
+                        Scene::InstantiateAssetModel(id, placement);
+                    else
+                        Scene::InstantiateAssetModel(id);
+                } else if (type == QStringLiteral("material")) {
+                    Scene::AssignMaterialAssetToSelection(id);
+                }
+                e->acceptProposedAction();
+                return;
+            }
+        }
+    }
+
     const QString path = FirstSupportedDroppedModelPath(e->mimeData());
     if (!path.isEmpty()) {
         float placement[3] = {};
