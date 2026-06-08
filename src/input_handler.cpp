@@ -119,6 +119,14 @@ void Update(float dt) {
   bool appFocused = s_qtWidgetFocused || (foreground == g_hwnd) ||
                     (rootWindow && foreground == rootWindow);
 
+  // Right-mouse camera look must only engage when the 3D viewport itself is the
+  // active input surface — not merely when the top-level window is foreground.
+  // Otherwise right-clicking a dock panel (e.g. the Assets browser context
+  // menu) would be polled by GetAsyncKeyState(VK_RBUTTON) and hijacked into
+  // camera movement. In the Qt build that means the DX12View widget is focused;
+  // in the native build it means the render window is foreground.
+  const bool viewportFocused = s_qtWidgetFocused || (foreground == g_hwnd);
+
   // Handle mouse rotation when RMB is pressed (only when the app is focused)
   // Use FPS-style capture: confine cursor and recenter each frame for smooth
   // relative motion
@@ -127,7 +135,7 @@ void Update(float dt) {
   POINT centerScreen = {clientRect.right / 2, clientRect.bottom / 2};
   ClientToScreen(g_hwnd, &centerScreen);
 
-  if (appFocused && IsMouseButtonDown(VK_RBUTTON)) {
+  if (viewportFocused && IsMouseButtonDown(VK_RBUTTON)) {
     if (!g_mouseCaptured) {
       // Enter capture mode
       ShowCursor(FALSE);
@@ -197,9 +205,10 @@ void Update(float dt) {
     }
   }
 
-  // Movement: WASD (only when app is focused)
+  // Movement: WASD (only when the 3D viewport is focused, so typing in a dock
+  // panel such as the Assets search box does not drive the camera)
   float moveSpeed = g_camSpeed;
-  if (appFocused) {
+  if (viewportFocused) {
     if (IsKeyDown(VK_SHIFT))
       moveSpeed *= 3.0f;
   }
@@ -244,6 +253,10 @@ void Update(float dt) {
 
   Vec3 move = {0, 0, 0};
   if (appFocused) {
+    // Fly keys are gated on viewport focus (not just window focus) so they do
+    // not fire while a dock panel's text field has focus. Other shortcuts in
+    // this block (F4, etc.) remain available whenever the app is focused.
+    if (viewportFocused) {
     // W/S forward/back (horizontal)
     if (IsKeyDown('W')) {
       move.x += moveF.x;
@@ -277,6 +290,7 @@ void Update(float dt) {
       move.y -= worldUp.y;
       move.z -= worldUp.z;
     }
+    } // end viewport-focused fly keys
 
     // F4: Toggle between Raster and Raytracing modes (used to be TAB)
     static bool f4Down = false;
