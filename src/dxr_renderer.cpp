@@ -3427,18 +3427,20 @@ static void DispatchWavefrontShadowIntegration(
 }
 
 static void DispatchVolumetricIntegration(
-    ID3D12GraphicsCommandList4 *list, ID3D12Resource *cameraCB) {
-  if (!list || !cameraCB || !s_device || !s_outputUAV ||
+    ID3D12GraphicsCommandList4 *list, ID3D12Resource *cameraCB,
+    ID3D12Resource *colorTarget) {
+  if (!list || !cameraCB || !s_device || !colorTarget ||
       !s_linearDepthUAV || !VolumetricRenderer::HasActiveVolume()) {
     return;
   }
 
+  const D3D12_RESOURCE_DESC colorDesc = colorTarget->GetDesc();
   TransitionResource(list, s_linearDepthUAV.Get(),
                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
   VolumetricRenderer::Composite(
-      s_device, list, cameraCB, s_outputUAV.Get(), s_linearDepthUAV.Get(),
-      s_outputWidth, s_outputHeight,
+      s_device, list, cameraCB, colorTarget, s_linearDepthUAV.Get(),
+      static_cast<UINT>(colorDesc.Width), colorDesc.Height,
       VolumetricRenderer::DepthEncoding::LinearViewDepth);
   TransitionResource(list, s_linearDepthUAV.Get(),
                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
@@ -9415,23 +9417,12 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       if (s_pathTracingBackend == PathTracingBackend::WavefrontParity) {
         // Phase 2 parity gate: resolve queue-backed primary hits into the
         // existing output/AOV surfaces without scheduling transport work.
-        // Defer accumulation when a VDB is active so the dedicated volume
-        // stage integrates the camera segment into the raw sample first.
         SetWavefrontStage("primary-surface-resolve");
-        const bool integrateVolume =
-            VolumetricRenderer::HasActiveVolume();
         const UINT parityFlags =
-            kWavefrontResolveFlagPrimarySurfaceOnly |
-            (integrateVolume ? kWavefrontResolveFlagDeferAccumulation : 0u);
+            kWavefrontResolveFlagPrimarySurfaceOnly;
         DispatchWavefrontResolvePrimary(
             dxrList.Get(), cameraCB, materialCB, meshDataSB, materialExtraSB,
             parityFlags);
-        if (integrateVolume) {
-          SetWavefrontStage("volume-integrate");
-          DispatchVolumetricIntegration(dxrList.Get(), cameraCB);
-          SetWavefrontStage("accumulate");
-          DispatchWavefrontAccumulate(dxrList.Get(), cameraCB);
-        }
         didPathTracingWork = true;
       } else if (s_pathTracingBackend == PathTracingBackend::WavefrontOptimized) {
         ClearWavefrontShadowContribution(dxrList.Get());
@@ -9608,9 +9599,6 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         SetWavefrontStage("shadow-integrate");
         DispatchWavefrontShadowIntegration(
             dxrList.Get(), cameraCB, kWavefrontResolveFlagDeferAccumulation);
-
-        SetWavefrontStage("volume-integrate");
-        DispatchVolumetricIntegration(dxrList.Get(), cameraCB);
 
         SetWavefrontStage("accumulate");
         DispatchWavefrontAccumulate(dxrList.Get(), cameraCB);
@@ -10211,6 +10199,17 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
     }
 
     // postColor is in UAV state so the Tonemap block can transition it to SRV.
+  }
+
+  // Volumes are a camera-space integration over the stable HDR result. Keep
+  // them outside path accumulation, DLSS-RR, and final denoisers so temporal
+  // reconstruction cannot erase sparse fire emission. Only composite when a
+  // new HDR result was produced; frozen frames reuse the already-composited
+  // postColor without adding it again.
+  if (VolumetricRenderer::HasActiveVolume() &&
+      (didPathTracingWork || usedDlss || usedFinalDenoiser)) {
+    SetWavefrontStage("volume-post-composite");
+    DispatchVolumetricIntegration(dxrList.Get(), cameraCB, postColor);
   }
 
   bool postColorInSrv = false;

@@ -846,6 +846,7 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap,
           {"ec", {vm.emissionColor[0], vm.emissionColor[1],
                   vm.emissionColor[2]}},
           {"es", vm.emissionStrength},
+          {"lgs", vm.lightingStrength},
           {"tl", vm.temperatureLow},
           {"th", vm.temperatureHigh},
           {"tg", vm.temperatureGamma},
@@ -1520,6 +1521,8 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
             vm.value("es", node.volumeMaterial.emissionStrength);
         if (vm.contains("es") && !vm.contains("tg"))
           node.volumeMaterial.emissionStrength *= 1000.0f;
+        node.volumeMaterial.lightingStrength =
+            vm.value("lgs", node.volumeMaterial.lightingStrength);
         node.volumeMaterial.temperatureLow =
             vm.value("tl", node.volumeMaterial.temperatureLow);
         node.volumeMaterial.temperatureHigh =

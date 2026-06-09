@@ -45,6 +45,7 @@ private:
     QDoubleSpinBox *m_volumeScattering = nullptr;
     QDoubleSpinBox *m_volumeAmbient = nullptr;
     QDoubleSpinBox *m_volumeEmission = nullptr;
+    QDoubleSpinBox *m_volumeLightingStrength = nullptr;
     QDoubleSpinBox *m_volumeTemperatureLow = nullptr;
     QDoubleSpinBox *m_volumeTemperatureHigh = nullptr;
     QDoubleSpinBox *m_volumeTemperatureGamma = nullptr;

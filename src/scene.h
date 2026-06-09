@@ -29,6 +29,8 @@ struct VolumeMaterial {
   float emissionColor[3] = {1.0f, 0.35f, 0.05f};
   // Scene-linear radiance scale. Only volumes with a heat channel emit.
   float emissionStrength = 100000.0f;
+  // Fraction of visible emission represented as scene lights.
+  float lightingStrength = 0.001f;
   float temperatureLow = 0.02f;
   float temperatureHigh = 0.98f;
   float temperatureGamma = 1.5f;

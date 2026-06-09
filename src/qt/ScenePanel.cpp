@@ -384,6 +384,8 @@ void ScenePanel::createUi()
         makeFloat(tr("Ambient"), 0.0, 10.0, 0.05, 3);
     m_volumeEmission =
         makeFloat(tr("Emission radiance"), 0.0, 10000000.0, 1000.0, 1);
+    m_volumeLightingStrength =
+        makeFloat(tr("Scene light"), 0.0, 1.0, 0.001, 4);
     m_volumeTemperatureLow =
         makeFloat(tr("Heat low"), 0.0, 0.999, 0.01, 3);
     m_volumeTemperatureHigh =
@@ -537,6 +539,7 @@ void ScenePanel::syncVolumeMaterialInspector()
     m_volumeScattering->setValue(m.scattering);
     m_volumeAmbient->setValue(m.ambient);
     m_volumeEmission->setValue(m.emissionStrength);
+    m_volumeLightingStrength->setValue(m.lightingStrength);
     m_volumeTemperatureLow->setValue(m.temperatureLow);
     m_volumeTemperatureHigh->setValue(m.temperatureHigh);
     m_volumeTemperatureGamma->setValue(m.temperatureGamma);
@@ -563,6 +566,8 @@ void ScenePanel::applyVolumeMaterialInspector()
     material.scattering = static_cast<float>(m_volumeScattering->value());
     material.ambient = static_cast<float>(m_volumeAmbient->value());
     material.emissionStrength = static_cast<float>(m_volumeEmission->value());
+    material.lightingStrength =
+        static_cast<float>(m_volumeLightingStrength->value());
     material.temperatureLow =
         static_cast<float>(m_volumeTemperatureLow->value());
     material.temperatureHigh =

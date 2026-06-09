@@ -41,6 +41,7 @@ struct RuntimeVolume {
   bool uploadFailed = false;
   ComPtr<ID3D12Resource> texture;
   ComPtr<ID3D12Resource> uploadBuffer;
+  ComPtr<ID3D12DescriptorHeap> descriptorHeap;
 };
 
 std::unordered_map<std::string, RuntimeVolume> s_volumes;
@@ -49,13 +50,11 @@ assetlib::AssetId s_lastResolvedId;
 ComPtr<ID3D12RootSignature> s_compositeRootSig;
 ComPtr<ID3D12PipelineState> s_rasterCompositePSO;
 ComPtr<ID3D12PipelineState> s_dxrCompositePSO;
-ComPtr<ID3D12DescriptorHeap> s_compositeHeap;
 DxcHelper s_dxcHelper;
 uint32_t s_frameIndex = 0;
 
 bool EnsureCompositePipeline(ID3D12Device *device) {
-  if (s_compositeRootSig && s_rasterCompositePSO && s_dxrCompositePSO &&
-      s_compositeHeap) {
+  if (s_compositeRootSig && s_rasterCompositePSO && s_dxrCompositePSO) {
     return true;
   }
 
@@ -115,13 +114,6 @@ bool EnsureCompositePipeline(ID3D12Device *device) {
     CreatePipeline(L"CSMain", s_rasterCompositePSO);
     CreatePipeline(L"CSMainDXR", s_dxrCompositePSO);
 
-    D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heapDesc.NumDescriptors = 3;
-    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-    ThrowIfFailed(
-        device->CreateDescriptorHeap(&heapDesc,
-                                     IID_PPV_ARGS(&s_compositeHeap)));
     return true;
   } catch (const std::exception &e) {
     fprintf(stderr, "Volumetric composite pipeline creation failed: %s\n",
@@ -129,7 +121,6 @@ bool EnsureCompositePipeline(ID3D12Device *device) {
     s_compositeRootSig.Reset();
     s_rasterCompositePSO.Reset();
     s_dxrCompositePSO.Reset();
-    s_compositeHeap.Reset();
     return false;
   }
 }
@@ -531,7 +522,8 @@ void AppendEmissionLights(std::vector<Light> &lights) {
   for (const Scene::Node &node : Scene::GetNodes()) {
     const Scene::VolumeMaterial &material = node.volumeMaterial;
     if (!node.visible || node.volumeAssetId.empty() ||
-        material.emissionStrength <= 0.0f)
+        material.emissionStrength <= 0.0f ||
+        material.lightingStrength <= 0.0f)
       continue;
     assetlib::AssetId id;
     if (!assetlib::AssetId::FromString(node.volumeAssetId, id))
@@ -597,7 +589,8 @@ void AppendEmissionLights(std::vector<Light> &lights) {
               (std::max)(1u, z1 - z0));
           const float averageHeat = static_cast<float>(weight / voxelCount);
           const float clusterScale =
-              material.emissionStrength * averageHeat /
+              material.emissionStrength * material.lightingStrength *
+              averageHeat /
               static_cast<float>(kClustersPerAxis * kClustersPerAxis *
                                  kClustersPerAxis);
           for (int channel = 0; channel < 3; ++channel)
@@ -675,27 +668,6 @@ bool Composite(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList,
 
   const UINT descriptorSize = device->GetDescriptorHandleIncrementSize(
       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-  D3D12_CPU_DESCRIPTOR_HANDLE cpu =
-      s_compositeHeap->GetCPUDescriptorHandleForHeapStart();
-
-  D3D12_SHADER_RESOURCE_VIEW_DESC depthSrv = {};
-  depthSrv.Format = DXGI_FORMAT_R32_FLOAT;
-  depthSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-  depthSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-  depthSrv.Texture2D.MipLevels = 1;
-  D3D12_CPU_DESCRIPTOR_HANDLE depthCpu = cpu;
-  depthCpu.ptr += descriptorSize;
-  device->CreateShaderResourceView(depthTexture, &depthSrv, depthCpu);
-  D3D12_CPU_DESCRIPTOR_HANDLE colorCpu = depthCpu;
-  colorCpu.ptr += descriptorSize;
-
-  D3D12_UNORDERED_ACCESS_VIEW_DESC colorUav = {};
-  colorUav.Format = colorTarget->GetDesc().Format;
-  colorUav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-  device->CreateUnorderedAccessView(colorTarget, nullptr, &colorUav, colorCpu);
-
-  ID3D12DescriptorHeap *heaps[] = {s_compositeHeap.Get()};
-  cmdList->SetDescriptorHeaps(_countof(heaps), heaps);
   cmdList->SetPipelineState(
       depthEncoding == DepthEncoding::LinearViewDepth
           ? s_dxrCompositePSO.Get()
@@ -703,12 +675,6 @@ bool Composite(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList,
   cmdList->SetComputeRootSignature(s_compositeRootSig.Get());
   cmdList->SetComputeRootConstantBufferView(
       0, cameraCB->GetGPUVirtualAddress());
-  D3D12_GPU_DESCRIPTOR_HANDLE gpu =
-      s_compositeHeap->GetGPUDescriptorHandleForHeapStart();
-  cmdList->SetComputeRootDescriptorTable(2, gpu);
-  gpu.ptr += 2ull * descriptorSize;
-  cmdList->SetComputeRootDescriptorTable(3, gpu);
-
   std::vector<const Scene::Node *> visibleVolumes;
   for (const Scene::Node &node : Scene::GetNodes())
     if (node.visible && !node.volumeAssetId.empty())
@@ -743,6 +709,16 @@ bool Composite(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList,
     RuntimeVolume *volume = ResolveVolume(id);
     if (!volume || !EnsureUploaded(*volume, device, cmdList))
       continue;
+    if (!volume->descriptorHeap) {
+      D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
+      heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+      heapDesc.NumDescriptors = 3;
+      heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+      if (FAILED(device->CreateDescriptorHeap(
+              &heapDesc, IID_PPV_ARGS(&volume->descriptorHeap)))) {
+        continue;
+      }
+    }
 
     const DirectX::XMMATRIX localToWorld = DirectX::XMLoadFloat4x4(
         reinterpret_cast<const DirectX::XMFLOAT4X4 *>(node.transform));
@@ -787,8 +763,35 @@ bool Composite(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList,
     densitySrv.Shader4ComponentMapping =
         D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     densitySrv.Texture3D.MipLevels = 1;
+    D3D12_CPU_DESCRIPTOR_HANDLE cpu =
+        volume->descriptorHeap->GetCPUDescriptorHandleForHeapStart();
     device->CreateShaderResourceView(volume->texture.Get(), &densitySrv, cpu);
 
+    D3D12_SHADER_RESOURCE_VIEW_DESC depthSrv = {};
+    depthSrv.Format = DXGI_FORMAT_R32_FLOAT;
+    depthSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    depthSrv.Shader4ComponentMapping =
+        D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    depthSrv.Texture2D.MipLevels = 1;
+    D3D12_CPU_DESCRIPTOR_HANDLE depthCpu = cpu;
+    depthCpu.ptr += descriptorSize;
+    device->CreateShaderResourceView(depthTexture, &depthSrv, depthCpu);
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC colorUav = {};
+    colorUav.Format = colorTarget->GetDesc().Format;
+    colorUav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    D3D12_CPU_DESCRIPTOR_HANDLE colorCpu = depthCpu;
+    colorCpu.ptr += descriptorSize;
+    device->CreateUnorderedAccessView(colorTarget, nullptr, &colorUav,
+                                      colorCpu);
+
+    ID3D12DescriptorHeap *heaps[] = {volume->descriptorHeap.Get()};
+    cmdList->SetDescriptorHeaps(_countof(heaps), heaps);
+    D3D12_GPU_DESCRIPTOR_HANDLE gpu =
+        volume->descriptorHeap->GetGPUDescriptorHandleForHeapStart();
+    cmdList->SetComputeRootDescriptorTable(2, gpu);
+    gpu.ptr += 2ull * descriptorSize;
+    cmdList->SetComputeRootDescriptorTable(3, gpu);
     cmdList->SetComputeRoot32BitConstants(1, 36, &constants, 0);
     cmdList->Dispatch((width + 7) / 8, (height + 7) / 8, 1);
     D3D12_RESOURCE_BARRIER barrier = {};

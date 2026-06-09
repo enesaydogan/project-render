@@ -221,7 +221,12 @@ void RenderVolume(uint3 id, bool linearDepthInput)
     if (id.x >= width || id.y >= height) return;
 
     float2 uv = (float2(id.xy) + 0.5) / float2(width, height);
-    float sceneDepth = DepthTex.Load(int3(id.xy, 0));
+    uint depthWidth, depthHeight;
+    DepthTex.GetDimensions(depthWidth, depthHeight);
+    uint2 depthPixel = min(
+        uint2(uv * float2(depthWidth, depthHeight)),
+        uint2(max(depthWidth, 1u) - 1u, max(depthHeight, 1u) - 1u));
+    float sceneDepth = DepthTex.Load(int3(depthPixel, 0));
 
     float3 ro = pos;
     float3 projectionForward;
