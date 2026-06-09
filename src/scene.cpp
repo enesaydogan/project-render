@@ -3654,30 +3654,31 @@ size_t AddVolumeNode(const assetlib::AssetId &id) {
   const DirectX::XMFLOAT3 bmin = VolumetricRenderer::BoundsMin();
   const DirectX::XMFLOAT3 bmax = VolumetricRenderer::BoundsMax();
 
-  // Default fit: center the volume at the world origin and scale its largest
-  // extent to ~10 units so an arbitrarily-scaled VDB shows at a usable size.
+  // The volume occupies a unit cube [0,1]^3 in local space; this transform maps
+  // that cube to a world box matching the volume's real proportions, with its
+  // largest dimension ~10 units, centered at the world origin. The user can then
+  // move/scale/rotate it with the gizmo.
   const float ex = bmax.x - bmin.x, ey = bmax.y - bmin.y, ez = bmax.z - bmin.z;
   const float maxExtent = (std::max)(ex, (std::max)(ey, ez));
-  const float scale = maxExtent > 1e-6f ? 10.0f / maxExtent : 1.0f;
-  const float cx = (bmin.x + bmax.x) * 0.5f;
-  const float cy = (bmin.y + bmax.y) * 0.5f;
-  const float cz = (bmin.z + bmax.z) * 0.5f;
+  const float norm = maxExtent > 1e-6f ? 10.0f / maxExtent : 10.0f;
+  const float sxv = (std::max)(ex * norm, 0.5f);
+  const float syv = (std::max)(ey * norm, 0.5f);
+  const float szv = (std::max)(ez * norm, 0.5f);
 
   Node node;
   const assetlib::AssetRegistry *reg = assetlib::GlobalRegistry();
   const assetlib::AssetMetadata *meta = reg ? reg->Get(id) : nullptr;
   node.name = meta && !meta->displayName.empty() ? meta->displayName : "Volume";
   node.volumeAssetId = id.ToString();
-  // Column-major: diagonal scale + translation that maps the cooked-bounds
-  // center to the origin.
+  // Column-major diagonal scale + translation centering the cube on the origin.
   for (float &f : node.transform)
     f = 0.0f;
-  node.transform[0] = scale;
-  node.transform[5] = scale;
-  node.transform[10] = scale;
-  node.transform[12] = -scale * cx;
-  node.transform[13] = -scale * cy;
-  node.transform[14] = -scale * cz;
+  node.transform[0] = sxv;
+  node.transform[5] = syv;
+  node.transform[10] = szv;
+  node.transform[12] = -sxv * 0.5f;
+  node.transform[13] = -syv * 0.5f;
+  node.transform[14] = -szv * 0.5f;
   node.transform[15] = 1.0f;
 
   const size_t index = AddNode(std::move(node));

@@ -15,6 +15,7 @@ struct Params {
   float densityScale = 1.0f;   // multiplies sampled density
   float absorption = 1.0f;     // extinction multiplier
   int marchSteps = 96;         // primary view-march steps
+  int lightSteps = 8;          // secondary march toward the directional light
   float scatter = 0.6f;        // HG forward-scattering g
   float ambient = 0.35f;       // ambient fill (sky) contribution
   float stepJitter = 1.0f;     // 0..1 dither to hide banding

@@ -12,6 +12,7 @@
 #include "volumetric_renderer.h"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <fstream>
 #include <vector>
 #include <wrl.h>
@@ -1485,7 +1486,7 @@ static bool EnsureVolumetricPipeline(ID3D12Device *device) {
     params[0].Descriptor.ShaderRegister = 0;
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     params[1].Constants.ShaderRegister = 1;
-    params[1].Constants.Num32BitValues = 16;
+    params[1].Constants.Num32BitValues = 24; // worldToLocal(16) + 8 params
     params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     params[2].DescriptorTable.NumDescriptorRanges = 1;
     params[2].DescriptorTable.pDescriptorRanges = &ranges[0];
@@ -1575,36 +1576,43 @@ void RunVolumetric(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList,
   cmdList->SetDescriptorHeaps(1, s_volHeap.GetAddressOf());
   cmdList->SetComputeRootConstantBufferView(0, cameraCB->GetGPUVirtualAddress());
 
-  // Place/scale the volume by its scene node's transform (translation + scale;
-  // rotation ignored in v1). If the node was deleted, stop rendering it.
-  const DirectX::XMFLOAT3 lmin = VolumetricRenderer::BoundsMin();
-  const DirectX::XMFLOAT3 lmax = VolumetricRenderer::BoundsMax();
+  // The volume lives in a unit cube [0,1]^3. Scene transforms are stored in the
+  // same column-major layout consumed by the mesh shaders. XMLoadFloat4x4 sees
+  // those bytes as the equivalent transposed row-vector matrix, so its inverse
+  // already has the byte layout HLSL needs for a column-major worldToLocal
+  // matrix. Do not transpose it again here.
   float xf[16];
   if (!Scene::FindVolumeNodeTransform(VolumetricRenderer::ActiveVolumeId(), xf))
+    return; // node deleted - stop rendering
+  const DirectX::XMMATRIX localToWorld =
+      DirectX::XMLoadFloat4x4(reinterpret_cast<const DirectX::XMFLOAT4X4 *>(xf));
+  DirectX::XMVECTOR determinant = DirectX::XMMatrixDeterminant(localToWorld);
+  if (std::abs(DirectX::XMVectorGetX(determinant)) < 1.0e-8f)
     return;
-  const float sx = std::sqrt(xf[0] * xf[0] + xf[1] * xf[1] + xf[2] * xf[2]);
-  const float sy = std::sqrt(xf[4] * xf[4] + xf[5] * xf[5] + xf[6] * xf[6]);
-  const float sz = std::sqrt(xf[8] * xf[8] + xf[9] * xf[9] + xf[10] * xf[10]);
-  DirectX::XMFLOAT3 bmin = {sx * lmin.x + xf[12], sy * lmin.y + xf[13],
-                           sz * lmin.z + xf[14]};
-  DirectX::XMFLOAT3 bmax = {sx * lmax.x + xf[12], sy * lmax.y + xf[13],
-                           sz * lmax.z + xf[14]};
-  if (bmin.x > bmax.x) std::swap(bmin.x, bmax.x);
-  if (bmin.y > bmax.y) std::swap(bmin.y, bmax.y);
-  if (bmin.z > bmax.z) std::swap(bmin.z, bmax.z);
+  const DirectX::XMMATRIX worldToLocal =
+      DirectX::XMMatrixInverse(&determinant, localToWorld);
+  DirectX::XMFLOAT4X4 wtl;
+  DirectX::XMStoreFloat4x4(&wtl, worldToLocal);
+
   const VolumetricRenderer::Params &p = VolumetricRenderer::GetParams();
   struct {
-    float bminx, bminy, bminz, densityScale;
-    float bmaxx, bmaxy, bmaxz, absorption;
-    float scatterG, ambient, stepJitter;
+    float m[16];
+    float densityScale, absorption, scatterG, ambient;
+    float stepJitter;
     uint32_t marchSteps;
-    float frameSeed, pad0, pad1, pad2;
-  } vp = {bmin.x,    bmin.y,    bmin.z,
-          p.densityScale, bmax.x, bmax.y, bmax.z, p.absorption,
-          p.scatter, p.ambient, p.stepJitter,
-          static_cast<uint32_t>((std::max)(1, p.marchSteps)),
-          static_cast<float>(s_volFrame++ & 1023u), 0.0f, 0.0f, 0.0f};
-  cmdList->SetComputeRoot32BitConstants(1, 16, &vp, 0);
+    float frameSeed;
+    uint32_t lightSteps;
+  } vp;
+  std::memcpy(vp.m, &wtl, sizeof(vp.m));
+  vp.densityScale = p.densityScale;
+  vp.absorption = p.absorption;
+  vp.scatterG = p.scatter;
+  vp.ambient = p.ambient;
+  vp.stepJitter = p.stepJitter;
+  vp.marchSteps = static_cast<uint32_t>((std::max)(1, p.marchSteps));
+  vp.frameSeed = static_cast<float>(s_volFrame++ & 1023u);
+  vp.lightSteps = static_cast<uint32_t>((std::clamp)(p.lightSteps, 1, 32));
+  cmdList->SetComputeRoot32BitConstants(1, 24, &vp, 0);
 
   D3D12_GPU_DESCRIPTOR_HANDLE gpu =
       s_volHeap->GetGPUDescriptorHandleForHeapStart();

@@ -1,6 +1,7 @@
-// Volumetric ray-march: marches a cooked density volume (3D texture) along the
-// view ray and composites the result into the raster HDR color target. Single
-// scattering toward the global light + ambient fill (no shadow march in v1).
+// Volumetric ray-march: marches a cooked density volume along the view ray and
+// composites the result into the raster HDR color target. The volume occupies a
+// unit cube [0,1]^3 in local space; the scene node's transform (worldToLocal)
+// places/scales/rotates it. Single scattering toward the global light + ambient.
 
 cbuffer CameraCB : register(b0)
 {
@@ -22,8 +23,8 @@ cbuffer CameraCB : register(b0)
     float maxGIBounces;
     float maxSPP;
     float accumulationCount;
-    float4 lightDir;   // xyz = direction towards light
-    float4 lightColor; // rgb + intensity in .w
+    float4 lightDir;
+    float4 lightColor;
     float3 prevPos;
     float prevValid;
     float3 prevForward;
@@ -57,16 +58,15 @@ cbuffer CameraCB : register(b0)
 
 cbuffer VolumeParams : register(b1)
 {
-    float3 boundsMin;
+    float4x4 worldToLocal; // maps world space into the volume's unit cube
     float densityScale;
-    float3 boundsMax;
     float absorption;
     float scatterG;
     float ambient;
     float stepJitter;
     uint  marchSteps;
     float frameSeed;
-    float3 _vpad;
+    uint  lightSteps;
 };
 
 Texture3D<float> DensityTex : register(t0);
@@ -74,28 +74,62 @@ Texture2D<float>  DepthTex   : register(t1);
 RWTexture2D<float4> OutputTex : register(u0);
 SamplerState linearSampler : register(s0);
 
-float3 GetWorldPos(float2 uv, float depth)
+void BuildPerspectiveCameraBasis(out float3 projectionForward,
+                                 out float3 projectionRight,
+                                 out float3 projectionUp,
+                                 out float verticalCenterShift)
 {
-    float4 clip = float4(uv.x * 2.0 - 1.0, (1.0 - uv.y) * 2.0 - 1.0, depth, 1.0);
-    float4 w = mul(clip, invViewProj);
-    return w.xyz / w.w;
+    float3 forwardDir = normalize(forward);
+    projectionRight = normalize(cross(forwardDir, up));
+    projectionUp = normalize(cross(projectionRight, forwardDir));
+    projectionForward = forwardDir;
+    verticalCenterShift = 0.0;
+
+    if (verticalTiltCorrection <= 0.5)
+        return;
+
+    const float3 worldUp = float3(0.0, 1.0, 0.0);
+    float3 levelForward = forwardDir - worldUp * dot(forwardDir, worldUp);
+    float levelLengthSq = dot(levelForward, levelForward);
+    if (levelLengthSq <= 1.0e-6)
+        return;
+
+    projectionForward = levelForward * rsqrt(levelLengthSq);
+    projectionRight = normalize(cross(projectionForward, worldUp));
+    projectionUp = normalize(cross(projectionRight, projectionForward));
+    verticalCenterShift =
+        clamp(dot(forwardDir, projectionUp) /
+                  max(dot(forwardDir, projectionForward), 0.025),
+              -40.0, 40.0);
 }
 
-// Ray vs AABB slab test. Returns (tNear, tFar); tNear>tFar means miss.
-float2 IntersectAABB(float3 ro, float3 rd, float3 bmin, float3 bmax)
+float3 BuildPerspectiveCameraDirection(
+    float2 uv, float3 projectionForward, float3 projectionRight,
+    float3 projectionUp, float verticalCenterShift)
+{
+    float2 ndc = uv * 2.0 - 1.0;
+    float fInv = tan(radians(fov) * 0.5);
+    float xView = ndc.x * aspect * fInv;
+    float yView = (-ndc.y) * fInv + verticalCenterShift;
+    return normalize(xView * projectionRight + yView * projectionUp +
+                     projectionForward);
+}
+
+// Ray vs unit-cube [0,1]^3. Returns (tNear, tFar); tNear>tFar means miss.
+float2 IntersectUnitCube(float3 ro, float3 rd)
 {
     float3 inv = 1.0 / rd;
-    float3 t0 = (bmin - ro) * inv;
-    float3 t1 = (bmax - ro) * inv;
+    float3 t0 = (float3(0, 0, 0) - ro) * inv;
+    float3 t1 = (float3(1, 1, 1) - ro) * inv;
     float3 tsmall = min(t0, t1);
     float3 tbig = max(t0, t1);
-    float tn = max(max(tsmall.x, tsmall.y), tsmall.z);
-    float tf = min(min(tbig.x, tbig.y), tbig.z);
-    return float2(tn, tf);
+    return float2(max(max(tsmall.x, tsmall.y), tsmall.z),
+                  min(min(tbig.x, tbig.y), tbig.z));
 }
 
 float HenyeyGreenstein(float cosTheta, float g)
 {
+    g = clamp(g, -0.95, 0.95);
     float g2 = g * g;
     float denom = 1.0 + g2 - 2.0 * g * cosTheta;
     return (1.0 - g2) / (4.0 * 3.14159265 * pow(max(denom, 1e-4), 1.5));
@@ -105,6 +139,34 @@ float Hash(uint2 p, float seed)
 {
     float h = dot(float2(p), float2(12.9898, 78.233)) + seed * 37.17;
     return frac(sin(h) * 43758.5453);
+}
+
+float TraceLightTransmittance(float3 localPos, float3 localSunDir,
+                              uint steps, float jitter)
+{
+    float2 hit = IntersectUnitCube(localPos, localSunDir);
+    float distanceToExit = hit.y;
+    if (distanceToExit <= 1.0e-5)
+        return 1.0;
+
+    steps = clamp(steps, 1u, 32u);
+    float dt = distanceToExit / float(steps);
+    float lightT = (0.5 + 0.5 * jitter) * dt;
+    float opticalDepth = 0.0;
+
+    [loop]
+    for (uint i = 0; i < steps; ++i)
+    {
+        float3 uvw = localPos + localSunDir * lightT;
+        float density =
+            DensityTex.SampleLevel(linearSampler, saturate(uvw), 0) *
+            densityScale;
+        opticalDepth += density * absorption * dt;
+        if (opticalDepth >= 12.0)
+            return 0.0;
+        lightT += dt;
+    }
+    return exp(-opticalDepth);
 }
 
 [numthreads(8, 8, 1)]
@@ -118,43 +180,72 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     float sceneDepth = DepthTex.Load(int3(id.xy, 0));
 
     float3 ro = pos;
-    float3 farPos = GetWorldPos(uv, 1.0);
-    float3 rd = normalize(farPos - ro);
+    float3 projectionForward;
+    float3 projectionRight;
+    float3 projectionUp;
+    float verticalCenterShift;
+    BuildPerspectiveCameraBasis(projectionForward, projectionRight,
+                                projectionUp, verticalCenterShift);
+    float3 rd = BuildPerspectiveCameraDirection(
+        uv, projectionForward, projectionRight, projectionUp,
+        verticalCenterShift);
 
-    // Distance to opaque scene geometry (limits the march).
+    // Convert hardware depth back to view-space Z using the same projection
+    // equation as pbr_mesh.hlsl, then project that onto this pixel's world ray.
     float tScene = 1e30;
     if (sceneDepth < 1.0)
-        tScene = length(GetWorldPos(uv, sceneDepth) - ro);
+    {
+        float A = farZ / (farZ - nearZ);
+        float B = -nearZ * farZ / (farZ - nearZ);
+        float viewZ = B / min(sceneDepth - A, -1.0e-6);
+        tScene = viewZ / max(dot(rd, projectionForward), 1.0e-6);
+    }
 
-    float2 t = IntersectAABB(ro, rd, boundsMin, boundsMax);
+    // Transform the ray into the volume's local (unit-cube) space. The direction
+    // is transformed without normalization so t stays in world units.
+    float3 lro = mul(worldToLocal, float4(ro, 1.0)).xyz;
+    float3 lrd = mul(worldToLocal, float4(rd, 0.0)).xyz;
+
+    float2 t = IntersectUnitCube(lro, lrd);
     float tStart = max(t.x, 0.0);
     float tEnd = min(t.y, tScene);
     if (t.x > t.y || tEnd <= tStart)
-        return; // ray misses the volume — leave scene color untouched
+        return;
 
     uint steps = max(marchSteps, 1u);
     float dt = (tEnd - tStart) / float(steps);
     float jitter = stepJitter * Hash(id.xy, frameSeed);
     float marchT = tStart + jitter * dt;
 
-    float3 sunDir = normalize(lightDir.xyz);
     float3 sunCol = lightColor.rgb * max(lightColor.w, 0.0);
-    float phase = HenyeyGreenstein(dot(rd, sunDir), scatterG);
-    float3 extent = max(boundsMax - boundsMin, 1e-4);
+    bool hasSun = dot(lightDir.xyz, lightDir.xyz) > 1.0e-8 &&
+                  any(sunCol > 1.0e-8);
+    float3 sunDir = hasSun ? normalize(lightDir.xyz) : float3(0.0, 1.0, 0.0);
+    float phase =
+        hasSun ? HenyeyGreenstein(dot(rd, sunDir), scatterG) : 0.0;
+    float3 localSunDir = hasSun
+        ? mul(worldToLocal, float4(sunDir, 0.0)).xyz
+        : float3(0.0, 0.0, 0.0);
 
     float transmittance = 1.0;
     float3 scattered = float3(0, 0, 0);
     for (uint i = 0; i < steps; ++i)
     {
-        float3 p = ro + rd * marchT;
-        float3 uvw = (p - boundsMin) / extent;
-        float density = DensityTex.SampleLevel(linearSampler, uvw, 0) * densityScale;
+        float3 uvw = lro + lrd * marchT; // already in [0,1] cube space
+        float density = DensityTex.SampleLevel(linearSampler, saturate(uvw), 0) *
+                        densityScale;
         if (density > 1e-4)
         {
             float sigma = density * absorption;
             float aT = exp(-sigma * dt);
-            float3 Lin = sunCol * phase + ambient.xxx;
-            scattered += transmittance * Lin * density * (1.0 - aT);
+            float lightTransmittance = hasSun
+                ? TraceLightTransmittance(
+                      uvw, localSunDir, lightSteps,
+                      Hash(id.xy + uint2(i * 17u, i * 31u), frameSeed))
+                : 0.0;
+            float3 Lin =
+                sunCol * (phase * lightTransmittance) + ambient.xxx;
+            scattered += transmittance * Lin * (1.0 - aT);
             transmittance *= aT;
             if (transmittance < 0.01)
                 break;
