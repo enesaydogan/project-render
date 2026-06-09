@@ -44,6 +44,9 @@ public:
   std::filesystem::path cookedMaterialPath(const AssetId &id) const {
     return cacheDir() / "Materials" / (id.ToString() + ".prmat");
   }
+  std::filesystem::path cookedVolumePath(const AssetId &id) const {
+    return cacheDir() / "Volumes" / (id.ToString() + ".prvol");
+  }
 
   // Creates the full directory tree if missing. Returns false on filesystem
   // error (e.g. unwritable location).

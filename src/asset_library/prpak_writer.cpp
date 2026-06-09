@@ -58,6 +58,7 @@ bool WritePack(const std::filesystem::path &path, const PackMeta &meta,
     const int meshIdx = addChunk(a.meshPayload);
     const int texIdx = addChunk(a.texturePayload);
     const int matIdx = addChunk(a.materialPayload);
+    const int volIdx = addChunk(a.volumePayload);
     json ja = MetadataToJson(a.meta);
     json payloads = json::object();
     if (meshIdx >= 0)
@@ -66,6 +67,8 @@ bool WritePack(const std::filesystem::path &path, const PackMeta &meta,
       payloads["texture"] = texIdx;
     if (matIdx >= 0)
       payloads["material"] = matIdx;
+    if (volIdx >= 0)
+      payloads["volume"] = volIdx;
     ja["payloads"] = std::move(payloads);
     assetArr.push_back(std::move(ja));
   }

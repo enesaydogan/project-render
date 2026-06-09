@@ -16,6 +16,7 @@ namespace assetlib {
 // then detected and recooked.
 constexpr uint32_t kCookerVersionMesh = 1;
 constexpr uint32_t kCookerVersionTexture = 1;
+constexpr uint32_t kCookerVersionVolume = 1;
 
 struct CookedMesh {
   int32_t materialIndex = -1;
@@ -42,6 +43,25 @@ struct CookedTexture {
   std::vector<uint8_t> data;  // cpuData (possibly GPU-block-compressed)
 };
 
+// Project Render's sparse, bricked runtime volume (e.g. cooked from a VDB
+// density grid). Only non-empty bricks are stored; each brick's density is
+// quantized to 8-bit over its own [minVal,maxVal] range (dequantize:
+// value = minVal + (b/255)*(maxVal-minVal)). data.size() == brickSize^3.
+struct CookedVolumeBrick {
+  uint32_t bx = 0, by = 0, bz = 0; // brick coordinate (in bricks)
+  float minVal = 0.0f, maxVal = 0.0f;
+  std::vector<uint8_t> data; // quantized densities, brickSize^3 bytes
+};
+
+struct CookedVolume {
+  uint32_t dim[3] = {0, 0, 0}; // voxel dimensions
+  uint32_t brickSize = 8;
+  float boundsMin[3] = {0, 0, 0};
+  float boundsMax[3] = {0, 0, 0};
+  uint64_t activeVoxels = 0; // statistics (non-empty voxel count)
+  std::vector<CookedVolumeBrick> bricks;
+};
+
 // Serialize to a self-describing, compressed byte blob (header + payload).
 // Returns false only on a compression failure.
 bool SerializeCookedModel(const CookedModel &model, std::vector<uint8_t> &out);
@@ -52,6 +72,9 @@ bool SerializeCookedTexture(const CookedTexture &tex, std::vector<uint8_t> &out)
 bool DeserializeCookedModel(const uint8_t *data, size_t size, CookedModel &out);
 bool DeserializeCookedTexture(const uint8_t *data, size_t size,
                               CookedTexture &out);
+bool SerializeCookedVolume(const CookedVolume &vol, std::vector<uint8_t> &out);
+bool DeserializeCookedVolume(const uint8_t *data, size_t size,
+                             CookedVolume &out);
 
 // Atomic file write (temp + rename) and whole-file read.
 bool WriteCookedFile(const std::filesystem::path &path,

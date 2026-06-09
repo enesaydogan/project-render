@@ -388,6 +388,46 @@ void TestCookedFileIoAndHash() {
   CHECK(HashFile(file) != 0);
 }
 
+void TestCookedVolumeRoundTrip() {
+  std::printf("TestCookedVolumeRoundTrip\n");
+  CookedVolume vol;
+  vol.dim[0] = 64;
+  vol.dim[1] = 32;
+  vol.dim[2] = 48;
+  vol.brickSize = 8;
+  vol.boundsMin[0] = -1.0f;
+  vol.boundsMax[1] = 2.5f;
+  vol.activeVoxels = 12345;
+  CookedVolumeBrick b0;
+  b0.bx = 1; b0.by = 2; b0.bz = 3;
+  b0.minVal = 0.1f; b0.maxVal = 0.9f;
+  b0.data = std::vector<uint8_t>(8 * 8 * 8, 0x42);
+  vol.bricks.push_back(b0);
+  CookedVolumeBrick b1;
+  b1.bx = 4; b1.by = 0; b1.bz = 1;
+  b1.data = std::vector<uint8_t>(8 * 8 * 8, 0xC0);
+  vol.bricks.push_back(b1);
+
+  std::vector<uint8_t> blob;
+  CHECK(SerializeCookedVolume(vol, blob));
+  CookedVolume back;
+  CHECK(DeserializeCookedVolume(blob.data(), blob.size(), back));
+  CHECK(back.dim[0] == 64 && back.dim[1] == 32 && back.dim[2] == 48);
+  CHECK(back.brickSize == 8);
+  CHECK(back.boundsMin[0] == -1.0f);
+  CHECK(back.boundsMax[1] == 2.5f);
+  CHECK(back.activeVoxels == 12345);
+  CHECK(back.bricks.size() == 2);
+  if (back.bricks.size() == 2) {
+    CHECK(back.bricks[0].bx == 1 && back.bricks[0].bz == 3);
+    CHECK(back.bricks[0].maxVal == 0.9f);
+    CHECK(back.bricks[0].data == b0.data);
+    CHECK(back.bricks[1].data.size() == 512);
+  }
+  CookedVolume bad;
+  CHECK(!DeserializeCookedVolume(blob.data(), 8, bad));
+}
+
 void TestPrPakRoundTrip() {
   std::printf("TestPrPakRoundTrip\n");
   TempDir tmp;
@@ -522,6 +562,7 @@ int main() {
   TestCookedModelRoundTrip();
   TestCookedTextureRoundTrip();
   TestCookedFileIoAndHash();
+  TestCookedVolumeRoundTrip();
   TestPrPakRoundTrip();
   TestPrPakDedup();
   TestPrPakCorruption();

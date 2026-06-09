@@ -3655,6 +3655,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine,
         }
 
         if (rasterHdrReady) {
+          // Composite any active volumetric volume into the HDR target before
+          // tonemapping (reads scene depth, marches the density field).
+          RasterRenderer::RunVolumetric(
+              DX12Context::g_device.Get(), DX12Context::g_commandList.Get(),
+              g_cameraConstantBuffer.Get(), DX12Context::g_depthBuffer.Get());
+        }
+
+        if (rasterHdrReady) {
           RasterRenderer::TonemapHdrToBackbuffer(
               DX12Context::g_device.Get(), DX12Context::g_commandList.Get(),
               DX12Context::g_renderTargets[DX12Context::g_frameIndex].Get(),

@@ -115,6 +115,7 @@ bool PrPakReader::Open(const std::filesystem::path &path, std::string *error) {
         pa.meshChunk = pl.value("mesh", -1);
         pa.textureChunk = pl.value("texture", -1);
         pa.materialChunk = pl.value("material", -1);
+        pa.volumeChunk = pl.value("volume", -1);
       }
       m_assets.push_back(std::move(pa));
     }
@@ -185,7 +186,8 @@ bool PrPakReader::Validate(std::string &report) const {
   }
   // Every asset's chunk references must be in range.
   for (const auto &a : m_assets) {
-    const int refs[] = {a.meshChunk, a.textureChunk, a.materialChunk};
+    const int refs[] = {a.meshChunk, a.textureChunk, a.materialChunk,
+                        a.volumeChunk};
     for (int r : refs) {
       if (r >= static_cast<int>(m_chunks.size())) {
         report += "asset " + a.meta.id.ToString() +

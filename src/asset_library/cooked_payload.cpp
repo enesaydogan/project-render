@@ -15,6 +15,7 @@ namespace {
 
 constexpr uint8_t kMagicModel[4] = {'P', 'R', 'C', 'M'};
 constexpr uint8_t kMagicTexture[4] = {'P', 'R', 'C', 'T'};
+constexpr uint8_t kMagicVolume[4] = {'P', 'R', 'C', 'V'};
 constexpr uint32_t kCompressNone = 0;
 constexpr uint32_t kCompressLzms = 1;
 
@@ -251,6 +252,68 @@ bool DeserializeCookedTexture(const uint8_t *data, size_t size,
   uint32_t db = r.u32();
   r.bytes(out.data, db);
   return r.ok;
+}
+
+bool SerializeCookedVolume(const CookedVolume &vol, std::vector<uint8_t> &out) {
+  std::vector<uint8_t> payload;
+  Writer w(payload);
+  for (int i = 0; i < 3; ++i)
+    w.u32(vol.dim[i]);
+  w.u32(vol.brickSize);
+  for (float b : vol.boundsMin)
+    w.f32(b);
+  for (float b : vol.boundsMax)
+    w.f32(b);
+  w.u32(static_cast<uint32_t>(vol.activeVoxels & 0xFFFFFFFF));
+  w.u32(static_cast<uint32_t>(vol.activeVoxels >> 32));
+  w.u32(static_cast<uint32_t>(vol.bricks.size()));
+  for (const auto &b : vol.bricks) {
+    w.u32(b.bx);
+    w.u32(b.by);
+    w.u32(b.bz);
+    w.f32(b.minVal);
+    w.f32(b.maxVal);
+    w.u32(static_cast<uint32_t>(b.data.size()));
+    w.bytes(b.data.data(), b.data.size());
+  }
+  return Finalize(kMagicVolume, kCookerVersionVolume, payload, out);
+}
+
+bool DeserializeCookedVolume(const uint8_t *data, size_t size,
+                             CookedVolume &out) {
+  std::vector<uint8_t> body;
+  if (!OpenBlob(data, size, kMagicVolume, kCookerVersionVolume, body))
+    return false;
+  Reader r(body.data(), body.size());
+  for (int i = 0; i < 3; ++i)
+    out.dim[i] = r.u32();
+  out.brickSize = r.u32();
+  for (float &b : out.boundsMin)
+    b = r.f32();
+  for (float &b : out.boundsMax)
+    b = r.f32();
+  const uint32_t lo = r.u32();
+  const uint32_t hi = r.u32();
+  out.activeVoxels = (static_cast<uint64_t>(hi) << 32) | lo;
+  uint32_t brickCount = r.u32();
+  if (!r.ok || brickCount > (1u << 24))
+    return false;
+  out.bricks.clear();
+  out.bricks.reserve(brickCount);
+  for (uint32_t i = 0; i < brickCount; ++i) {
+    CookedVolumeBrick b;
+    b.bx = r.u32();
+    b.by = r.u32();
+    b.bz = r.u32();
+    b.minVal = r.f32();
+    b.maxVal = r.f32();
+    uint32_t len = r.u32();
+    r.bytes(b.data, len);
+    if (!r.ok)
+      return false;
+    out.bricks.push_back(std::move(b));
+  }
+  return true;
 }
 
 bool WriteCookedFile(const std::filesystem::path &path,

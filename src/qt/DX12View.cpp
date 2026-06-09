@@ -1,6 +1,7 @@
 #include "DX12View.h"
 #include "../asset_library/asset_id.h"
 #include "../dx12_context.h" // adapt include path
+#include "../volumetric_renderer.h"
 #include "../dxr_renderer.h"
 #include "../editor_ui.h"
 #include "../input_handler.h"
@@ -480,6 +481,9 @@ void DX12View::dropEvent(QDropEvent *e)
                         Scene::InstantiateAssetModel(id);
                 } else if (type == QStringLiteral("material")) {
                     Scene::AssignMaterialAssetToSelection(id);
+                } else if (type == QStringLiteral("volume")) {
+                    // Activate a cooked Volume asset for volumetric rendering.
+                    VolumetricRenderer::SetActiveVolume(id);
                 } else if (type == QStringLiteral("scatter_object")) {
                     // Drop a saved scatter onto a surface: build a scatter
                     // model from the asset's prototypes and target the surface

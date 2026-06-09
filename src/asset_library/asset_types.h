@@ -14,7 +14,7 @@ enum class AssetType : uint32_t {
   Texture = 3,
   ScatterObject = 4,
   ScatterPreset = 5,
-  CloudVolume = 6,
+  Volume = 6, // VDB-cooked volumetric data (distinct from the baked-sky clouds)
   CloudPreset = 7,
   Hdri = 8,
   EnvironmentPreset = 9,
@@ -34,8 +34,8 @@ inline const char *AssetTypeToString(AssetType t) {
     return "scatter_object";
   case AssetType::ScatterPreset:
     return "scatter_preset";
-  case AssetType::CloudVolume:
-    return "cloud_volume";
+  case AssetType::Volume:
+    return "volume";
   case AssetType::CloudPreset:
     return "cloud_preset";
   case AssetType::Hdri:
@@ -59,8 +59,8 @@ inline AssetType AssetTypeFromString(const std::string &s) {
     return AssetType::ScatterObject;
   if (s == "scatter_preset")
     return AssetType::ScatterPreset;
-  if (s == "cloud_volume")
-    return AssetType::CloudVolume;
+  if (s == "volume" || s == "cloud_volume") // accept legacy token
+    return AssetType::Volume;
   if (s == "cloud_preset")
     return AssetType::CloudPreset;
   if (s == "hdri")
@@ -83,8 +83,8 @@ inline const char *AssetTypeDisplayName(AssetType t) {
     return "Scatter Object";
   case AssetType::ScatterPreset:
     return "Scatter Preset";
-  case AssetType::CloudVolume:
-    return "Cloud Volume";
+  case AssetType::Volume:
+    return "Volume";
   case AssetType::CloudPreset:
     return "Cloud Preset";
   case AssetType::Hdri:

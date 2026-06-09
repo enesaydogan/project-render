@@ -55,6 +55,13 @@ AssetId RegisterAndCookTexture(AssetRegistry &registry, const AssetPaths &paths,
                                const std::string &sourcePath,
                                const Asset::Texture &tex);
 
+// Registers and cooks a Volume asset from an already-imported sparse volume
+// (e.g. from a .vdb). Records voxel/brick statistics in importSettings.
+AssetId RegisterAndCookVolume(AssetRegistry &registry, const AssetPaths &paths,
+                              const std::string &displayName,
+                              const std::string &sourcePath,
+                              const CookedVolume &volume);
+
 // Re-decode a model asset's source file and rewrite its cooked payloads. Used
 // by background recook jobs when a source changes. Returns false if the source
 // is missing or fails to load. Requires the Asset:: loader to be initialized.

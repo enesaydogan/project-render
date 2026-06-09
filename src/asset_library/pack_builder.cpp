@@ -70,6 +70,11 @@ bool BuildPack(const AssetRegistry &registry, const AssetPaths &paths,
           warnings)
         warnings->push_back("missing cooked material for " + m->displayName);
       break;
+    case AssetType::Volume:
+      if (!ReadCookedFile(paths.cookedVolumePath(id), in.volumePayload) &&
+          warnings)
+        warnings->push_back("missing cooked volume for " + m->displayName);
+      break;
     default:
       break; // scatter/preset/etc: metadata-only
     }

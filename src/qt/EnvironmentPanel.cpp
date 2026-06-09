@@ -2,16 +2,24 @@
 
 #include "SliderControl.h"
 
+#include "../asset_library/asset_id.h"
 #include "../camera.h"
+#include "../cloud_assets.h"
 #include "../clouds.h"
 #include "../dxr_renderer.h"
 #include "../ibl_manager.h"
 #include "../scene.h"
+#include "asset_mime.h"
 
 #include <QAbstractSpinBox>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QFormLayout>
+#include <QInputDialog>
+#include <QLineEdit>
+#include <QMimeData>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -46,6 +54,7 @@ SliderControl *CreateSliderControl(double minValue,
 EnvironmentPanel::EnvironmentPanel(QWidget *parent)
     : QWidget(parent)
 {
+    setAcceptDrops(true); // accept Cloud Preset assets to apply
     createUi();
 
     m_skyUpdateTimer = new QTimer(this);
@@ -159,6 +168,11 @@ void EnvironmentPanel::createUi()
     cloudForm->setVerticalSpacing(6);
     m_cloudEnabled = new QCheckBox(tr("Enable Cloud Rendering"), cloudGroup);
     m_resetCloudsButton = new QPushButton(tr("Reset To Defaults"), cloudGroup);
+    m_saveCloudPresetButton =
+        new QPushButton(tr("Save Cloud Preset…"), cloudGroup);
+    m_saveCloudPresetButton->setToolTip(
+        tr("Save the current cloud look as a reusable Cloud Preset asset. Drag "
+           "a preset from the Assets panel here to apply it."));
     m_cloudDensity = CreateSliderControl(0.0, 5.0, 0.05, 2);
     m_cloudAbsorption = CreateSliderControl(0.0, 2.0, 0.05, 2);
     m_cloudCoverage = CreateSliderControl(0.0, 1.0, 0.01, 2);
@@ -193,6 +207,7 @@ void EnvironmentPanel::createUi()
     m_shadowSoftness = CreateSliderControl(0.0, 1.0, 0.01, 2);
     cloudForm->addRow(m_cloudEnabled);
     cloudForm->addRow(m_resetCloudsButton);
+    cloudForm->addRow(m_saveCloudPresetButton);
     cloudForm->addRow(tr("Density"), m_cloudDensity);
     cloudForm->addRow(tr("Absorption"), m_cloudAbsorption);
     cloudForm->addRow(tr("Coverage"), m_cloudCoverage);
@@ -290,6 +305,8 @@ void EnvironmentPanel::createUi()
         DxrRenderer::ResetAccumulation();
         syncFromRenderer();
     });
+    connect(m_saveCloudPresetButton, &QPushButton::clicked, this,
+            [this]() { saveCloudPreset(); });
     auto connectCloudControl = [this](SliderControl *control) {
         connect(control->spinBox(), qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) {
             applyCloudSettings();
@@ -585,6 +602,48 @@ void EnvironmentPanel::applyLightingSettings(bool updateSkyModel, bool updateCam
     DxrRenderer::ResetAccumulation();
     if (sourceChanged || !anyControlInteracting()) {
         syncFromRenderer();
+    }
+}
+
+void EnvironmentPanel::saveCloudPreset()
+{
+    bool ok = false;
+    const QString name = QInputDialog::getText(
+        this, tr("Save Cloud Preset"), tr("Preset name:"), QLineEdit::Normal,
+        tr("My Sky"), &ok);
+    if (!ok)
+        return;
+    CloudAssets::SaveCurrentAsPreset(name.trimmed().toStdString());
+}
+
+void EnvironmentPanel::dragEnterEvent(QDragEnterEvent *event)
+{
+    if (event->mimeData() && event->mimeData()->hasFormat(kAssetMimeType))
+        event->acceptProposedAction();
+    else
+        QWidget::dragEnterEvent(event);
+}
+
+void EnvironmentPanel::dropEvent(QDropEvent *event)
+{
+    if (!event->mimeData() || !event->mimeData()->hasFormat(kAssetMimeType)) {
+        QWidget::dropEvent(event);
+        return;
+    }
+    const QString payload =
+        QString::fromUtf8(event->mimeData()->data(kAssetMimeType));
+    const int colon = payload.indexOf(':');
+    if (colon <= 0)
+        return;
+    if (payload.left(colon) == QStringLiteral("cloud_preset")) {
+        assetlib::AssetId id;
+        if (assetlib::AssetId::FromString(payload.mid(colon + 1).toStdString(),
+                                          id) &&
+            CloudAssets::ApplyPreset(id)) {
+            DxrRenderer::ResetAccumulation();
+            syncFromRenderer();
+            event->acceptProposedAction();
+        }
     }
 }
 

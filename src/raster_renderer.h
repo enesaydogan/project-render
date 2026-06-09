@@ -63,6 +63,9 @@ namespace RasterRenderer {
   void ResetRenderSettings();
   
   void RunSSR(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB, ID3D12Resource* depthBuffer);
+  // Composite the active VolumetricRenderer volume into the HDR target. No-op if
+  // no volume is active. Call after scene geometry, before tonemap.
+  void RunVolumetric(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB, ID3D12Resource* depthBuffer);
   void RunSSAO(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList, ID3D12Resource* cameraCB, ID3D12Resource* depthBuffer);
 
   // Expose some resources so main can inspect them (if necessary)

@@ -133,6 +133,9 @@ bool ResolveCookedPayload(const AssetPaths &paths, const AssetId &id,
   case PayloadKind::Material:
     file = paths.cookedMaterialPath(id);
     break;
+  case PayloadKind::Volume:
+    file = paths.cookedVolumePath(id);
+    break;
   }
   return ReadCookedFile(file, out);
 }

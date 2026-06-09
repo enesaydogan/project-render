@@ -5,6 +5,7 @@
 #include "asset_registry.h"
 #include "cooked_payload.h"
 #include "global_registry.h"
+#include "vdb_import.h"
 
 #include <cctype>
 #include <filesystem>
@@ -89,6 +90,18 @@ AssetId ImportFileToLibrary(const std::string &path) {
     if (!ok || meshes.empty())
       return {};
     return RegisterImportedModel(name, path, meshes, materials, textures);
+  }
+
+  if (ext == "vdb") {
+    CookedVolume vol;
+    std::string vdbErr;
+    if (!VdbImport::ImportVdbToVolume(path, vol, &vdbErr))
+      return {};
+    AssetId id = RegisterAndCookVolume(*registry, registry->paths(), name, path,
+                                       vol);
+    registry->TouchRecent(id);
+    registry->Save();
+    return id;
   }
 
   const bool isImage = ext == "png" || ext == "jpg" || ext == "jpeg" ||

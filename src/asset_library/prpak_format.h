@@ -24,7 +24,7 @@ constexpr uint8_t kPrPakFooterMagic[8] = {'P', 'R', 'P', 'A', 'K',
 constexpr uint32_t kPrPakSchemaVersion = 1;
 constexpr size_t kPrPakFooterSize = 32;
 
-enum class PayloadKind { Mesh, Texture, Material };
+enum class PayloadKind { Mesh, Texture, Material, Volume };
 
 struct PackMeta {
   std::string name;
@@ -48,6 +48,7 @@ struct PackedAsset {
   int meshChunk = -1;
   int textureChunk = -1;
   int materialChunk = -1;
+  int volumeChunk = -1;
 
   int chunkFor(PayloadKind k) const {
     switch (k) {
@@ -57,6 +58,8 @@ struct PackedAsset {
       return textureChunk;
     case PayloadKind::Material:
       return materialChunk;
+    case PayloadKind::Volume:
+      return volumeChunk;
     }
     return -1;
   }
@@ -69,6 +72,7 @@ struct PackAssetInput {
   std::vector<uint8_t> meshPayload;
   std::vector<uint8_t> texturePayload;
   std::vector<uint8_t> materialPayload;
+  std::vector<uint8_t> volumePayload;
 };
 
 } // namespace assetlib

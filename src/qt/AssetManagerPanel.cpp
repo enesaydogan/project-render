@@ -90,7 +90,7 @@ QColor TypeColor(AssetType t) {
   case AssetType::ScatterObject:
   case AssetType::ScatterPreset:
     return QColor(0x6f, 0xc4, 0x8a);
-  case AssetType::CloudVolume:
+  case AssetType::Volume:
   case AssetType::CloudPreset:
     return QColor(0x9a, 0xa6, 0xc4);
   case AssetType::Hdri:
@@ -694,7 +694,7 @@ void AssetManagerPanel::onAddAsset() {
     m.displayName = fi.completeBaseName().toStdString();
     m.virtualPath = folder;
     m.sourcePath = fi.absoluteFilePath().toStdString();
-    m.type = (ext == "vdb") ? AssetType::CloudVolume : AssetType::Texture;
+    m.type = (ext == "vdb") ? AssetType::Volume : AssetType::Texture;
     m_registry->Add(std::move(m));
     ++cataloged;
   }

@@ -240,6 +240,37 @@ AssetId RegisterAndCookTexture(AssetRegistry &registry, const AssetPaths &paths,
   return id;
 }
 
+AssetId RegisterAndCookVolume(AssetRegistry &registry, const AssetPaths &paths,
+                              const std::string &displayName,
+                              const std::string &sourcePath,
+                              const CookedVolume &volume) {
+  AssetMetadata m;
+  m.type = AssetType::Volume;
+  m.displayName = displayName;
+  m.virtualPath = "Imported/Volumes";
+  m.sourcePath = sourcePath;
+  m.sourceContentHash = sourcePath.empty() ? 0 : HashFile(sourcePath);
+  m.sourceTimestamp = sourcePath.empty() ? 0 : FileTimestamp(sourcePath);
+  m.cookerVersion = kCookerVersionVolume;
+  m.cookState = CookState::Stale;
+  // Statistics for the inspector / diagnostics.
+  json stats;
+  stats["dim"] = {volume.dim[0], volume.dim[1], volume.dim[2]};
+  stats["activeVoxels"] = volume.activeVoxels;
+  stats["bricks"] = volume.bricks.size();
+  stats["brickSize"] = volume.brickSize;
+  m.importSettingsJson = stats.dump();
+  AssetId id = registry.Add(std::move(m));
+
+  CookService::Get().Enqueue(id, paths.cookedVolumePath(id),
+                             [volume]() {
+                               std::vector<uint8_t> blob;
+                               SerializeCookedVolume(volume, blob);
+                               return blob;
+                             });
+  return id;
+}
+
 bool HasCurrentCookedModel(const AssetRegistry &registry,
                            const AssetPaths &paths, const AssetId &modelId) {
   const AssetMetadata *m = registry.Get(modelId);

@@ -4,6 +4,8 @@
 
 class QCheckBox;
 class QComboBox;
+class QDragEnterEvent;
+class QDropEvent;
 class QLabel;
 class QPushButton;
 class QTabWidget;
@@ -17,8 +19,13 @@ class EnvironmentPanel : public QWidget
 public:
     explicit EnvironmentPanel(QWidget *parent = nullptr);
 
+protected:
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
+
 private:
     void createUi();
+    void saveCloudPreset();
     void syncFromRenderer();
     void applyLightingSettings(bool updateSkyModel, bool updateCameraBuffer);
     void applyCloudSettings();
@@ -54,6 +61,7 @@ private:
 
     QCheckBox *m_cloudEnabled = nullptr;
     QPushButton *m_resetCloudsButton = nullptr;
+    QPushButton *m_saveCloudPresetButton = nullptr;
     SliderControl *m_cloudDensity = nullptr;
     SliderControl *m_cloudAbsorption = nullptr;
     SliderControl *m_cloudCoverage = nullptr;

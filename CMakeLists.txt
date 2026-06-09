@@ -134,6 +134,8 @@ target_sources(project-render PRIVATE
     src/oidn_denoiser.cpp
     src/optix_denoiser.cpp
     src/clouds.cpp
+    src/cloud_assets.cpp
+    src/volumetric_renderer.cpp
     src/imgui_theme.cpp
     src/scene_io.cpp
     src/animation_sequence.cpp
@@ -239,7 +241,6 @@ target_include_directories(project-render PRIVATE "${STREAMLINE_ROOT}/external/j
 # vcpkg roots (used by asset_loader and runtime copy steps)
 set(VCPKG_ROOT "${CMAKE_SOURCE_DIR}/repos/vcpkg")
 set(VCPKG_INSTALLED_DIR "${VCPKG_ROOT}/installed/x64-windows")
-
 
 # Optional OpenImageDenoise support (GPU zero-copy requires building OIDN with
 # a GPU backend and platform support for D3D12 shared resource import)
@@ -389,6 +390,57 @@ set(ASSIMP_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(imgui assimp)
+
+# Optional OpenVDB support for .vdb cloud-volume import (Phase 5). Resolved AFTER
+# assimp: OpenVDB's transitive find_package(ZLIB) sets ZLIB_FOUND, and assimp's
+# CMake adds an INSTALL(TARGETS zlib) when ZLIB_FOUND is set in its scope — so it
+# must configure first (with its own bundled zlib) before ZLIB is found here.
+# OpenVDB ships a Find module (not a CONFIG package); deps resolve from vcpkg.
+# (VCPKG_INSTALLED_DIR is defined earlier in this file.)
+option(USE_OPENVDB "Enable .vdb volume import via OpenVDB (vcpkg)" ON)
+set(OpenVDB_FOUND FALSE)
+if(USE_OPENVDB)
+  list(APPEND CMAKE_MODULE_PATH "${VCPKG_INSTALLED_DIR}/share/openvdb")
+  list(APPEND CMAKE_PREFIX_PATH "${VCPKG_INSTALLED_DIR}")
+  find_package(OpenVDB MODULE QUIET)
+endif()
+
+if(OpenVDB_FOUND)
+  # Isolate OpenVDB in its own static lib: linking OpenVDB::openvdb propagates
+  # compile definitions (notably NOMINMAX) that break the rest of the app (which
+  # uses the Windows min/max macros). Keeping OpenVDB PRIVATE to this lib stops
+  # those definitions leaking into project-render's other translation units.
+  add_library(vdb_support STATIC src/asset_library/vdb_import.cpp)
+  target_compile_definitions(vdb_support PRIVATE PR_HAVE_OPENVDB=1)
+  target_include_directories(vdb_support PRIVATE
+    "${CMAKE_SOURCE_DIR}/src" "${VCPKG_INSTALLED_DIR}/include")
+  target_link_libraries(vdb_support PRIVATE OpenVDB::openvdb)
+  target_link_libraries(project-render PRIVATE vdb_support)
+  message(STATUS "OpenVDB found: .vdb import enabled (isolated in vdb_support)")
+  # Deploy OpenVDB's runtime DLLs next to the exe so the app can launch.
+  file(GLOB OPENVDB_RUNTIME_DLLS
+    "${VCPKG_INSTALLED_DIR}/bin/openvdb.dll"
+    "${VCPKG_INSTALLED_DIR}/bin/blosc.dll"
+    "${VCPKG_INSTALLED_DIR}/bin/tbb12.dll"
+    "${VCPKG_INSTALLED_DIR}/bin/tbbmalloc.dll"
+    "${VCPKG_INSTALLED_DIR}/bin/lz4.dll"
+    "${VCPKG_INSTALLED_DIR}/bin/zstd.dll"
+    "${VCPKG_INSTALLED_DIR}/bin/snappy.dll"
+    "${VCPKG_INSTALLED_DIR}/bin/z.dll"
+    "${VCPKG_INSTALLED_DIR}/bin/Imath*.dll"
+    "${VCPKG_INSTALLED_DIR}/bin/OpenEXR*.dll"
+    "${VCPKG_INSTALLED_DIR}/bin/boost_iostreams*.dll")
+  add_custom_command(TARGET project-render POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      ${OPENVDB_RUNTIME_DLLS} "$<TARGET_FILE_DIR:project-render>"
+    COMMENT "Copying OpenVDB runtime DLLs...")
+else()
+  # No OpenVDB: compile the stub so VdbImport::ImportVdbToVolume is still defined.
+  target_sources(project-render PRIVATE src/asset_library/vdb_import.cpp)
+  if(USE_OPENVDB)
+    message(WARNING "OpenVDB not found; .vdb import disabled (stub)")
+  endif()
+endif()
 
 # ImGui sources (core + backend for Win32 + DX12)
 set(IMGUI_SOURCES
