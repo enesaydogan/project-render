@@ -11,6 +11,7 @@
 #include "scene.h"
 #include "volumetric_renderer.h"
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <vector>
 #include <wrl.h>
@@ -1574,8 +1575,23 @@ void RunVolumetric(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList,
   cmdList->SetDescriptorHeaps(1, s_volHeap.GetAddressOf());
   cmdList->SetComputeRootConstantBufferView(0, cameraCB->GetGPUVirtualAddress());
 
-  const DirectX::XMFLOAT3 bmin = VolumetricRenderer::BoundsMin();
-  const DirectX::XMFLOAT3 bmax = VolumetricRenderer::BoundsMax();
+  // Place/scale the volume by its scene node's transform (translation + scale;
+  // rotation ignored in v1). If the node was deleted, stop rendering it.
+  const DirectX::XMFLOAT3 lmin = VolumetricRenderer::BoundsMin();
+  const DirectX::XMFLOAT3 lmax = VolumetricRenderer::BoundsMax();
+  float xf[16];
+  if (!Scene::FindVolumeNodeTransform(VolumetricRenderer::ActiveVolumeId(), xf))
+    return;
+  const float sx = std::sqrt(xf[0] * xf[0] + xf[1] * xf[1] + xf[2] * xf[2]);
+  const float sy = std::sqrt(xf[4] * xf[4] + xf[5] * xf[5] + xf[6] * xf[6]);
+  const float sz = std::sqrt(xf[8] * xf[8] + xf[9] * xf[9] + xf[10] * xf[10]);
+  DirectX::XMFLOAT3 bmin = {sx * lmin.x + xf[12], sy * lmin.y + xf[13],
+                           sz * lmin.z + xf[14]};
+  DirectX::XMFLOAT3 bmax = {sx * lmax.x + xf[12], sy * lmax.y + xf[13],
+                           sz * lmax.z + xf[14]};
+  if (bmin.x > bmax.x) std::swap(bmin.x, bmax.x);
+  if (bmin.y > bmax.y) std::swap(bmin.y, bmax.y);
+  if (bmin.z > bmax.z) std::swap(bmin.z, bmax.z);
   const VolumetricRenderer::Params &p = VolumetricRenderer::GetParams();
   struct {
     float bminx, bminy, bminz, densityScale;

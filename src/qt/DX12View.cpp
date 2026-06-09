@@ -482,8 +482,9 @@ void DX12View::dropEvent(QDropEvent *e)
                 } else if (type == QStringLiteral("material")) {
                     Scene::AssignMaterialAssetToSelection(id);
                 } else if (type == QStringLiteral("volume")) {
-                    // Activate a cooked Volume asset for volumetric rendering.
-                    VolumetricRenderer::SetActiveVolume(id);
+                    // Instantiate the volume as a selectable, transformable
+                    // scene node (which also activates it for rendering).
+                    Scene::AddVolumeNode(id);
                 } else if (type == QStringLiteral("scatter_object")) {
                     // Drop a saved scatter onto a surface: build a scatter
                     // model from the asset's prototypes and target the surface

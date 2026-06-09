@@ -27,6 +27,7 @@ struct Node {
   float transform[16];             // 4x4 column-major matrix
   std::string sourcePath;          // Path to the asset file for re-loading
   std::string importGroupKey;      // Shared key for imported multi-node groups
+  std::string volumeAssetId;       // non-empty => this node is a volumetric asset
   std::vector<int> linkedMaterialIndices; // global material indices per import slot
   std::vector<std::string> linkedMaterialSourceNames; // original imported names per slot
   bool selected = false;
@@ -95,6 +96,15 @@ bool InstantiateAssetModel(const assetlib::AssetId &id,
 // Assets-panel material drag target). Returns true if at least one node was
 // updated.
 bool AssignMaterialAssetToSelection(const assetlib::AssetId &id);
+
+// Instantiate a library Volume asset as a selectable, transformable scene node
+// (the Assets-panel volume drag target). The node carries no meshes; the
+// volumetric renderer places/scales the volume by this node's transform. The
+// default transform fits the volume to a sensible size. Returns the node index.
+size_t AddVolumeNode(const assetlib::AssetId &id);
+// Copies the (root) volume node's column-major transform for `id` into out[16].
+// Returns false if no such node exists. Used by the volumetric renderer.
+bool FindVolumeNodeTransform(const assetlib::AssetId &id, float out[16]);
 
 // Extract a self-contained Model asset directly from a set of global scene
 // meshes (with the meshes' materials and textures), baking the supplied

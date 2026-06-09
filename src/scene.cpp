@@ -11,6 +11,7 @@
 #include "asset_library/import_hook.h"
 #include "assets/asset_loader.h"
 #include "camera.h"
+#include "volumetric_renderer.h"
 #include "d3d12_helpers.h"
 #include "dx12_context.h"
 #include "dxr_renderer.h"
@@ -3644,6 +3645,57 @@ assetlib::AssetId ExtractModelAssetFromMeshes(
   }
   reg->Save();
   return set.modelId;
+}
+
+size_t AddVolumeNode(const assetlib::AssetId &id) {
+  // Load the volume into the renderer (also gives us its cooked bounds).
+  if (!VolumetricRenderer::SetActiveVolume(id))
+    return static_cast<size_t>(-1);
+  const DirectX::XMFLOAT3 bmin = VolumetricRenderer::BoundsMin();
+  const DirectX::XMFLOAT3 bmax = VolumetricRenderer::BoundsMax();
+
+  // Default fit: center the volume at the world origin and scale its largest
+  // extent to ~10 units so an arbitrarily-scaled VDB shows at a usable size.
+  const float ex = bmax.x - bmin.x, ey = bmax.y - bmin.y, ez = bmax.z - bmin.z;
+  const float maxExtent = (std::max)(ex, (std::max)(ey, ez));
+  const float scale = maxExtent > 1e-6f ? 10.0f / maxExtent : 1.0f;
+  const float cx = (bmin.x + bmax.x) * 0.5f;
+  const float cy = (bmin.y + bmax.y) * 0.5f;
+  const float cz = (bmin.z + bmax.z) * 0.5f;
+
+  Node node;
+  const assetlib::AssetRegistry *reg = assetlib::GlobalRegistry();
+  const assetlib::AssetMetadata *meta = reg ? reg->Get(id) : nullptr;
+  node.name = meta && !meta->displayName.empty() ? meta->displayName : "Volume";
+  node.volumeAssetId = id.ToString();
+  // Column-major: diagonal scale + translation that maps the cooked-bounds
+  // center to the origin.
+  for (float &f : node.transform)
+    f = 0.0f;
+  node.transform[0] = scale;
+  node.transform[5] = scale;
+  node.transform[10] = scale;
+  node.transform[12] = -scale * cx;
+  node.transform[13] = -scale * cy;
+  node.transform[14] = -scale * cz;
+  node.transform[15] = 1.0f;
+
+  const size_t index = AddNode(std::move(node));
+  SelectNode(index);
+  NotifySceneChanged();
+  return index;
+}
+
+bool FindVolumeNodeTransform(const assetlib::AssetId &id, float out[16]) {
+  const std::string hex = id.ToString();
+  for (const Node &node : s_nodes) {
+    if (node.volumeAssetId == hex) {
+      for (int i = 0; i < 16; ++i)
+        out[i] = node.transform[i];
+      return true;
+    }
+  }
+  return false;
 }
 
 bool ImportModel(const std::string &utf8path, const float *rootTranslation) {

@@ -57,7 +57,11 @@ struct TreeUiState {
 QString BuildNodeLabel(const Scene::Node &node)
 {
     QString label = QString::fromStdString(node.name);
-    label += QObject::tr(" (%1 meshes)").arg(static_cast<int>(node.meshIndices.size()));
+    if (!node.volumeAssetId.empty()) {
+        label += QObject::tr(" (volume)");
+    } else {
+        label += QObject::tr(" (%1 meshes)").arg(static_cast<int>(node.meshIndices.size()));
+    }
     if (!node.visible) {
         label += QObject::tr(" [hidden]");
     }
