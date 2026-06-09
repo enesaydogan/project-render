@@ -407,6 +407,13 @@ void TestCookedVolumeRoundTrip() {
   b1.bx = 4; b1.by = 0; b1.bz = 1;
   b1.data = std::vector<uint8_t>(8 * 8 * 8, 0xC0);
   vol.bricks.push_back(b1);
+  vol.temperatureMin = 0.25f;
+  vol.temperatureMax = 3.5f;
+  CookedVolumeBrick temperature = b0;
+  temperature.minVal = 0.25f;
+  temperature.maxVal = 3.5f;
+  temperature.data.assign(8 * 8 * 8, 0xA0);
+  vol.temperatureBricks.push_back(temperature);
 
   std::vector<uint8_t> blob;
   CHECK(SerializeCookedVolume(vol, blob));
@@ -418,6 +425,12 @@ void TestCookedVolumeRoundTrip() {
   CHECK(back.boundsMax[1] == 2.5f);
   CHECK(back.activeVoxels == 12345);
   CHECK(back.bricks.size() == 2);
+  CHECK(back.temperatureMin == 0.25f);
+  CHECK(back.temperatureMax == 3.5f);
+  CHECK(back.temperatureBricks.size() == 1);
+  if (back.temperatureBricks.size() == 1) {
+    CHECK(back.temperatureBricks[0].data == temperature.data);
+  }
   if (back.bricks.size() == 2) {
     CHECK(back.bricks[0].bx == 1 && back.bricks[0].bz == 3);
     CHECK(back.bricks[0].maxVal == 0.9f);

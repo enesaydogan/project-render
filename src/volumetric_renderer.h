@@ -7,7 +7,7 @@
 
 // Renders a cooked Volume asset (from a .vdb) as a ray-marched density field
 // composited into the raster HDR target. The active volume is resolved into a
-// dense R32F 3D density texture and uploaded lazily on the render command list.
+// bounded dense R16F 3D density texture and uploaded lazily on the render command list.
 // This is the consumer the Phase-5 volume pipeline was missing.
 namespace VolumetricRenderer {
 

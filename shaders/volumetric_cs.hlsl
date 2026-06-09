@@ -67,9 +67,15 @@ cbuffer VolumeParams : register(b1)
     uint  marchSteps;
     float frameSeed;
     uint  lightSteps;
+    float3 volumeColor;
+    float emissionStrength;
+    float3 emissionColor;
+    float _materialPad;
+    float temperatureMin;
+    float temperatureInvRange;
 };
 
-Texture3D<float> DensityTex : register(t0);
+Texture3D<float2> VolumeTex : register(t0);
 Texture2D<float>  DepthTex   : register(t1);
 RWTexture2D<float4> OutputTex : register(u0);
 SamplerState linearSampler : register(s0);
@@ -177,7 +183,7 @@ float TraceLightTransmittance(float3 localPos, float3 localSunDir,
     {
         float3 uvw = localPos + localSunDir * lightT;
         float density =
-            DensityTex.SampleLevel(linearSampler, saturate(uvw), 0) *
+            VolumeTex.SampleLevel(linearSampler, saturate(uvw), 0).x *
             densityScale;
         opticalDepth += density * absorption * dt;
         if (opticalDepth >= 12.0)
@@ -185,6 +191,19 @@ float TraceLightTransmittance(float3 localPos, float3 localSunDir,
         lightT += dt;
     }
     return exp(-opticalDepth);
+}
+
+float3 FireColor(float temperature)
+{
+    float t = saturate((temperature - temperatureMin) *
+                       temperatureInvRange);
+    float3 red = float3(1.0, 0.025, 0.001);
+    float3 orange = float3(1.0, 0.22, 0.015);
+    float3 yellow = float3(1.0, 0.72, 0.12);
+    float3 white = float3(1.0, 0.96, 0.82);
+    float3 low = lerp(red, orange, smoothstep(0.0, 0.35, t));
+    float3 high = lerp(yellow, white, smoothstep(0.70, 1.0, t));
+    return lerp(low, high, smoothstep(0.30, 0.78, t));
 }
 
 void RenderVolume(uint3 id, bool linearDepthInput)
@@ -262,8 +281,20 @@ void RenderVolume(uint3 id, bool linearDepthInput)
     for (uint i = 0; i < steps; ++i)
     {
         float3 uvw = lro + lrd * marchT; // already in [0,1] cube space
-        float density = DensityTex.SampleLevel(linearSampler, saturate(uvw), 0) *
-                        densityScale;
+        float2 volumeSample =
+            VolumeTex.SampleLevel(linearSampler, saturate(uvw), 0);
+        float density = volumeSample.x * densityScale;
+        float fireMask = temperatureInvRange > 0.0
+            ? saturate((volumeSample.y - temperatureMin) *
+                       temperatureInvRange)
+            : 0.0;
+        if (fireMask > 1.0e-4 && emissionStrength > 0.0)
+        {
+            float3 fire =
+                FireColor(volumeSample.y) * max(emissionColor, 0.0);
+            scattered += transmittance * fire *
+                         (fireMask * fireMask) * emissionStrength * dt;
+        }
         if (density > 1e-4)
         {
             float sigma = density * absorption;
@@ -275,7 +306,8 @@ void RenderVolume(uint3 id, bool linearDepthInput)
                 : 0.0;
             float3 Lin =
                 sunCol * (phase * lightTransmittance) + ambient.xxx;
-            scattered += transmittance * Lin * (1.0 - aT);
+            float3 source = Lin * max(volumeColor, 0.0);
+            scattered += transmittance * source * (1.0 - aT);
             transmittance *= aT;
             if (transmittance < 0.01)
                 break;

@@ -60,6 +60,11 @@ struct CookedVolume {
   float boundsMax[3] = {0, 0, 0};
   uint64_t activeVoxels = 0; // statistics (non-empty voxel count)
   std::vector<CookedVolumeBrick> bricks;
+  // Optional fire/heat channel, sampled in the same index domain as density.
+  // Kept separate so smoke-only assets retain their compact representation.
+  float temperatureMin = 0.0f;
+  float temperatureMax = 0.0f;
+  std::vector<CookedVolumeBrick> temperatureBricks;
 };
 
 // Serialize to a self-describing, compressed byte blob (header + payload).

@@ -27,7 +27,10 @@ Params s_params;
 
 // CPU dense density field (R32F), built when a volume is set; uploaded lazily.
 std::vector<float> s_density;
+std::vector<float> s_temperature;
 uint32_t s_dim[3] = {0, 0, 0};
+float s_temperatureMin = 0.0f;
+float s_temperatureInvRange = 0.0f;
 DirectX::XMFLOAT3 s_boundsMin{0, 0, 0};
 DirectX::XMFLOAT3 s_boundsMax{0, 0, 0};
 bool s_needsUpload = false;
@@ -64,7 +67,7 @@ bool EnsureCompositePipeline(ID3D12Device *device) {
     params[0].Descriptor.ShaderRegister = 0;
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     params[1].Constants.ShaderRegister = 1;
-    params[1].Constants.Num32BitValues = 24;
+    params[1].Constants.Num32BitValues = 34;
     params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     params[2].DescriptorTable.NumDescriptorRanges = 1;
     params[2].DescriptorTable.pDescriptorRanges = &ranges[0];
@@ -127,7 +130,7 @@ bool EnsureCompositePipeline(ID3D12Device *device) {
 
 constexpr uint64_t kMaxRuntimeDensityBytes = 64ull * 1024ull * 1024ull;
 constexpr uint64_t kMaxRuntimeVoxels =
-    kMaxRuntimeDensityBytes / sizeof(DirectX::PackedVector::HALF);
+    kMaxRuntimeDensityBytes / (2ull * sizeof(DirectX::PackedVector::HALF));
 
 std::array<uint32_t, 3>
 ChooseRuntimeDimensions(const uint32_t sourceDim[3]) {
@@ -256,14 +259,76 @@ bool BuildDenseField(const assetlib::CookedVolume &vol) {
     }
     fprintf(stderr,
             "Volume runtime grid reduced from %ux%ux%u to %ux%ux%u "
-            "(%.1f MiB R16F)\n",
+            "(%.1f MiB R16G16F)\n",
             vol.dim[0], vol.dim[1], vol.dim[2], runtimeDim[0], runtimeDim[1],
             runtimeDim[2],
-            static_cast<double>(runtimeVoxelCount * sizeof(uint16_t)) /
+            static_cast<double>(runtimeVoxelCount * 2 * sizeof(uint16_t)) /
                 (1024.0 * 1024.0));
   }
 
+  std::vector<float> temperature;
+  if (!vol.temperatureBricks.empty()) {
+    try {
+      temperature.assign(static_cast<size_t>(runtimeVoxelCount), 0.0f);
+    } catch (const std::bad_alloc &) {
+      return false;
+    }
+    for (const auto &brick : vol.temperatureBricks) {
+      if (brick.data.size() != expectedBrickBytes)
+        return false;
+      const float range = brick.maxVal - brick.minVal;
+      for (int lz = 0; lz < B; ++lz)
+        for (int ly = 0; ly < B; ++ly)
+          for (int lx = 0; lx < B; ++lx) {
+            const uint64_t gx64 =
+                static_cast<uint64_t>(brick.bx) * vol.brickSize + lx;
+            const uint64_t gy64 =
+                static_cast<uint64_t>(brick.by) * vol.brickSize + ly;
+            const uint64_t gz64 =
+                static_cast<uint64_t>(brick.bz) * vol.brickSize + lz;
+            if (gx64 >= vol.dim[0] || gy64 >= vol.dim[1] ||
+                gz64 >= vol.dim[2])
+              continue;
+            const uint32_t gx = static_cast<uint32_t>(gx64);
+            const uint32_t gy = static_cast<uint32_t>(gy64);
+            const uint32_t gz = static_cast<uint32_t>(gz64);
+            const uint8_t q =
+                brick.data[static_cast<size_t>((lz * B + ly) * B + lx)];
+            const float value =
+                (std::max)(0.0f, brick.minVal + (q / 255.0f) * range);
+            if (value == 0.0f)
+              continue;
+            const uint32_t tx = static_cast<uint32_t>(
+                (static_cast<uint64_t>(gx) * runtimeDim[0]) / vol.dim[0]);
+            const uint32_t ty = static_cast<uint32_t>(
+                (static_cast<uint64_t>(gy) * runtimeDim[1]) / vol.dim[1]);
+            const uint32_t tz = static_cast<uint32_t>(
+                (static_cast<uint64_t>(gz) * runtimeDim[2]) / vol.dim[2]);
+            temperature[(static_cast<size_t>(tz) * runtimeDim[1] + ty) *
+                            runtimeDim[0] +
+                        tx] += value;
+          }
+    }
+    if (runtimeDim[0] != vol.dim[0] || runtimeDim[1] != vol.dim[1] ||
+        runtimeDim[2] != vol.dim[2]) {
+      for (uint32_t z = 0; z < runtimeDim[2]; ++z)
+        for (uint32_t y = 0; y < runtimeDim[1]; ++y)
+          for (uint32_t x = 0; x < runtimeDim[0]; ++x)
+            temperature[(static_cast<size_t>(z) * runtimeDim[1] + y) *
+                            runtimeDim[0] +
+                        x] /=
+                static_cast<float>(countX[x]) *
+                static_cast<float>(countY[y]) *
+                static_cast<float>(countZ[z]);
+    }
+  }
+
   s_density = std::move(density);
+  s_temperature = std::move(temperature);
+  s_temperatureMin = vol.temperatureMin;
+  const float temperatureRange = vol.temperatureMax - vol.temperatureMin;
+  s_temperatureInvRange =
+      temperatureRange > 1.0e-6f ? 1.0f / temperatureRange : 0.0f;
   s_dim[0] = runtimeDim[0];
   s_dim[1] = runtimeDim[1];
   s_dim[2] = runtimeDim[2];
@@ -300,6 +365,7 @@ bool SetActiveVolume(const assetlib::AssetId &id) {
 void ClearActiveVolume() {
   s_activeId = {};
   s_density.clear();
+  s_temperature.clear();
   s_dim[0] = s_dim[1] = s_dim[2] = 0;
   s_needsUpload = false;
   s_uploadFailed = false;
@@ -329,7 +395,7 @@ bool EnsureUploaded(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList) {
   desc.Height = s_dim[1];
   desc.DepthOrArraySize = static_cast<UINT16>(s_dim[2]);
   desc.MipLevels = 1;
-  desc.Format = DXGI_FORMAT_R16_FLOAT;
+  desc.Format = DXGI_FORMAT_R16G16_FLOAT;
   desc.SampleDesc.Count = 1;
   desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
   D3D12_HEAP_PROPERTIES defaultProp = {D3D12_HEAP_TYPE_DEFAULT};
@@ -338,7 +404,7 @@ bool EnsureUploaded(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList) {
       D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&s_densityTex));
   if (FAILED(hr)) {
     fprintf(stderr,
-            "Volume texture allocation failed for %ux%ux%u R16F "
+            "Volume texture allocation failed for %ux%ux%u R16G16F "
             "(HRESULT 0x%08X)\n",
             s_dim[0], s_dim[1], s_dim[2], static_cast<unsigned>(hr));
     s_uploadFailed = true;
@@ -402,8 +468,19 @@ bool EnsureUploaded(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList) {
           mapped + footprint.Offset + z * dstSlicePitch +
           static_cast<UINT64>(y) * dstRowPitch);
       DirectX::PackedVector::XMConvertFloatToHalfStream(
-          dst, sizeof(DirectX::PackedVector::HALF), src, sizeof(float),
+          dst, 2 * sizeof(DirectX::PackedVector::HALF), src, sizeof(float),
           s_dim[0]);
+      if (s_temperature.empty()) {
+        for (uint32_t x = 0; x < s_dim[0]; ++x)
+          dst[x * 2 + 1] = 0;
+      } else {
+        const float *temperatureSrc =
+            &s_temperature[(static_cast<size_t>(z) * s_dim[1] + y) *
+                           s_dim[0]];
+        DirectX::PackedVector::XMConvertFloatToHalfStream(
+            dst + 1, 2 * sizeof(DirectX::PackedVector::HALF), temperatureSrc,
+            sizeof(float), s_dim[0]);
+      }
     }
   }
   s_uploadBuffer->Unmap(0, nullptr);
@@ -458,7 +535,17 @@ bool Composite(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList,
   DirectX::XMFLOAT4X4 worldToLocalData;
   DirectX::XMStoreFloat4x4(&worldToLocalData, worldToLocal);
 
-  const Params &params = GetParams();
+  Scene::VolumeMaterial material;
+  if (!Scene::FindVolumeNodeMaterial(ActiveVolumeId(), material)) {
+    const Params &defaults = GetParams();
+    material.densityScale = defaults.densityScale;
+    material.absorption = defaults.absorption;
+    material.scattering = defaults.scatter;
+    material.ambient = defaults.ambient;
+    material.stepJitter = defaults.stepJitter;
+    material.marchSteps = defaults.marchSteps;
+    material.lightSteps = defaults.lightSteps;
+  }
   struct CompositeConstants {
     float worldToLocal[16];
     float densityScale;
@@ -469,19 +556,31 @@ bool Composite(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList,
     uint32_t marchSteps;
     float frameSeed;
     uint32_t lightSteps;
+    float color[3];
+    float emissionStrength;
+    float emissionColor[3];
+    float padding;
+    float temperatureMin;
+    float temperatureInvRange;
   } constants = {};
   std::memcpy(constants.worldToLocal, &worldToLocalData,
               sizeof(constants.worldToLocal));
-  constants.densityScale = params.densityScale;
-  constants.absorption = params.absorption;
-  constants.scatterG = params.scatter;
-  constants.ambient = params.ambient;
-  constants.stepJitter = params.stepJitter;
+  constants.densityScale = material.densityScale;
+  constants.absorption = material.absorption;
+  constants.scatterG = material.scattering;
+  constants.ambient = material.ambient;
+  constants.stepJitter = material.stepJitter;
   constants.marchSteps =
-      static_cast<uint32_t>((std::max)(1, params.marchSteps));
+      static_cast<uint32_t>((std::clamp)(material.marchSteps, 1, 1024));
   constants.frameSeed = static_cast<float>(s_frameIndex++ & 1023u);
   constants.lightSteps =
-      static_cast<uint32_t>((std::clamp)(params.lightSteps, 1, 32));
+      static_cast<uint32_t>((std::clamp)(material.lightSteps, 1, 32));
+  std::memcpy(constants.color, material.color, sizeof(constants.color));
+  constants.emissionStrength = material.emissionStrength;
+  std::memcpy(constants.emissionColor, material.emissionColor,
+              sizeof(constants.emissionColor));
+  constants.temperatureMin = s_temperatureMin;
+  constants.temperatureInvRange = s_temperatureInvRange;
 
   const UINT descriptorSize = device->GetDescriptorHandleIncrementSize(
       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
@@ -489,7 +588,7 @@ bool Composite(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList,
       s_compositeHeap->GetCPUDescriptorHandleForHeapStart();
 
   D3D12_SHADER_RESOURCE_VIEW_DESC densitySrv = {};
-  densitySrv.Format = DXGI_FORMAT_R16_FLOAT;
+  densitySrv.Format = DXGI_FORMAT_R16G16_FLOAT;
   densitySrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
   densitySrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
   densitySrv.Texture3D.MipLevels = 1;
@@ -519,7 +618,7 @@ bool Composite(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList,
   cmdList->SetComputeRootConstantBufferView(
       0, cameraCB->GetGPUVirtualAddress());
   cmdList->SetComputeRoot32BitConstants(
-      1, 24, &constants, 0);
+      1, 34, &constants, 0);
 
   D3D12_GPU_DESCRIPTOR_HANDLE gpu =
       s_compositeHeap->GetGPUDescriptorHandleForHeapStart();

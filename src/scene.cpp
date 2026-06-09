@@ -3699,6 +3699,29 @@ bool FindVolumeNodeTransform(const assetlib::AssetId &id, float out[16]) {
   return false;
 }
 
+bool FindVolumeNodeMaterial(const assetlib::AssetId &id,
+                            VolumeMaterial &out) {
+  const std::string hex = id.ToString();
+  for (const Node &node : s_nodes) {
+    if (node.volumeAssetId == hex) {
+      out = node.volumeMaterial;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool SetVolumeNodeMaterial(size_t nodeIndex, const VolumeMaterial &material) {
+  if (nodeIndex >= s_nodes.size() ||
+      s_nodes[nodeIndex].volumeAssetId.empty()) {
+    return false;
+  }
+  s_nodes[nodeIndex].volumeMaterial = material;
+  DxrRenderer::ResetAccumulation();
+  NotifySceneChanged();
+  return true;
+}
+
 bool ImportModel(const std::string &utf8path, const float *rootTranslation) {
   try {
     fprintf(stderr, "Scene::ImportModel: importing %s\n", utf8path.c_str());

@@ -20,6 +20,19 @@ enum class RenderMode {
 
 namespace Scene {
 
+struct VolumeMaterial {
+  float densityScale = 1.0f;
+  float absorption = 1.0f;
+  float scattering = 0.6f;
+  float ambient = 0.35f;
+  float color[3] = {1.0f, 1.0f, 1.0f};
+  float emissionColor[3] = {1.0f, 0.35f, 0.05f};
+  float emissionStrength = 2.0f;
+  float stepJitter = 1.0f;
+  int marchSteps = 96;
+  int lightSteps = 8;
+};
+
 struct Node {
   std::string name;
   std::vector<size_t> meshIndices; // indices into global g_loadedMeshes
@@ -28,6 +41,7 @@ struct Node {
   std::string sourcePath;          // Path to the asset file for re-loading
   std::string importGroupKey;      // Shared key for imported multi-node groups
   std::string volumeAssetId;       // non-empty => this node is a volumetric asset
+  VolumeMaterial volumeMaterial;
   std::vector<int> linkedMaterialIndices; // global material indices per import slot
   std::vector<std::string> linkedMaterialSourceNames; // original imported names per slot
   bool selected = false;
@@ -105,6 +119,9 @@ size_t AddVolumeNode(const assetlib::AssetId &id);
 // Copies the (root) volume node's column-major transform for `id` into out[16].
 // Returns false if no such node exists. Used by the volumetric renderer.
 bool FindVolumeNodeTransform(const assetlib::AssetId &id, float out[16]);
+bool FindVolumeNodeMaterial(const assetlib::AssetId &id,
+                            VolumeMaterial &out);
+bool SetVolumeNodeMaterial(size_t nodeIndex, const VolumeMaterial &material);
 
 // Extract a self-contained Model asset directly from a set of global scene
 // meshes (with the meshes' materials and textures), baking the supplied

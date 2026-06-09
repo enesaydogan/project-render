@@ -8,6 +8,7 @@
 #include "saved_views.h"
 #include "scene.h"
 #include "raster_renderer.h"
+#include "volumetric_renderer.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -809,7 +810,7 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap,
   for (const auto &node : Scene::GetNodes()) {
     std::vector<float> xf(16);
     for (int i = 0; i < 16; ++i) xf[i] = node.transform[i];
-    j["nod"].push_back({
+    json savedNode = {
       {"n", node.name}, {"sp", node.sourcePath},
       {"igk", node.importGroupKey}, {"igr", node.importGroupRoot},
       {"v", node.visible}, {"s", node.selected},
@@ -817,7 +818,25 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap,
       {"ll", node.liveLinkManaged}, {"pi", node.parentIndex},
       {"mi", node.meshIndices}, {"lmi", node.linkedMaterialIndices},
       {"lmn", node.linkedMaterialSourceNames}, {"t", xf}
-    });
+    };
+    if (!node.volumeAssetId.empty()) {
+      const Scene::VolumeMaterial &vm = node.volumeMaterial;
+      savedNode["va"] = node.volumeAssetId;
+      savedNode["vm"] = {
+          {"den", vm.densityScale},
+          {"abs", vm.absorption},
+          {"sca", vm.scattering},
+          {"amb", vm.ambient},
+          {"col", {vm.color[0], vm.color[1], vm.color[2]}},
+          {"ec", {vm.emissionColor[0], vm.emissionColor[1],
+                  vm.emissionColor[2]}},
+          {"es", vm.emissionStrength},
+          {"jit", vm.stepJitter},
+          {"ms", vm.marchSteps},
+          {"ls", vm.lightSteps},
+      };
+    }
+    j["nod"].push_back(std::move(savedNode));
   }
 
   j["sct"] = json::array();
@@ -1439,7 +1458,7 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
   if (!j.contains("nod")) return;
   for (const auto &n : j["nod"]) {
     std::string srcPath = n.value("sp", "");
-    if (hasEmbedded && n.contains("mi")) {
+    if ((hasEmbedded && n.contains("mi")) || n.contains("va")) {
       Scene::Node node;
       node.name = n.value("n", "EmbeddedNode");
       node.sourcePath = srcPath;
@@ -1448,6 +1467,7 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
       node.visible = n.value("v", true);
       node.selectionLocked = n.value("sl", node.importGroupRoot);
       node.liveLinkManaged = n.value("ll", false);
+      node.volumeAssetId = n.value("va", std::string());
       node.parentIndex = n.value("pi", static_cast<size_t>(-1));
       node.meshIndices = n["mi"].get<std::vector<size_t>>();
       if (n.contains("lmi")) {
@@ -1458,6 +1478,35 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
             n["lmn"].get<std::vector<std::string>>();
       }
       if (n.contains("t")) for (int i=0;i<16;++i) node.transform[i]=n["t"][i];
+      if (n.contains("vm") && n["vm"].is_object()) {
+        const auto &vm = n["vm"];
+        node.volumeMaterial.densityScale =
+            vm.value("den", node.volumeMaterial.densityScale);
+        node.volumeMaterial.absorption =
+            vm.value("abs", node.volumeMaterial.absorption);
+        node.volumeMaterial.scattering =
+            vm.value("sca", node.volumeMaterial.scattering);
+        node.volumeMaterial.ambient =
+            vm.value("amb", node.volumeMaterial.ambient);
+        node.volumeMaterial.emissionStrength =
+            vm.value("es", node.volumeMaterial.emissionStrength);
+        node.volumeMaterial.stepJitter =
+            vm.value("jit", node.volumeMaterial.stepJitter);
+        node.volumeMaterial.marchSteps =
+            vm.value("ms", node.volumeMaterial.marchSteps);
+        node.volumeMaterial.lightSteps =
+            vm.value("ls", node.volumeMaterial.lightSteps);
+        if (vm.contains("col") && vm["col"].is_array() &&
+            vm["col"].size() >= 3) {
+          for (int i = 0; i < 3; ++i)
+            node.volumeMaterial.color[i] = vm["col"][i];
+        }
+        if (vm.contains("ec") && vm["ec"].is_array() &&
+            vm["ec"].size() >= 3) {
+          for (int i = 0; i < 3; ++i)
+            node.volumeMaterial.emissionColor[i] = vm["ec"][i];
+        }
+      }
       node.selected = n.value("s", false);
       const_cast<std::vector<Scene::Node>&>(Scene::GetNodes()).push_back(node);
       continue;
@@ -1509,6 +1558,14 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
         if (n.contains("t")) for (int i=0;i<16;++i) nodes[restoredIndex].transform[i]=n["t"][i];
         nodes[restoredIndex].selected = n.value("s", false);
       }
+    }
+  }
+  for (const Scene::Node &node : Scene::GetNodes()) {
+    assetlib::AssetId volumeId;
+    if (!node.volumeAssetId.empty() &&
+        assetlib::AssetId::FromString(node.volumeAssetId, volumeId)) {
+      VolumetricRenderer::SetActiveVolume(volumeId);
+      break;
     }
   }
 }

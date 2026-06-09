@@ -6,7 +6,11 @@
 #include <QAbstractItemView>
 #include <QAction>
 #include <QColor>
+#include <QColorDialog>
+#include <QDoubleSpinBox>
 #include <QFileInfo>
+#include <QFormLayout>
+#include <QGroupBox>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -18,8 +22,10 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QProgressBar>
+#include <QPushButton>
 #include <QShortcut>
 #include <QSignalBlocker>
+#include <QSpinBox>
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeWidget>
@@ -194,6 +200,20 @@ QToolButton *CreateSceneToolButton(QWidget *parent, const QString &toolTip, Scen
     return button;
 }
 
+void SetColorButton(QPushButton *button, const float color[3])
+{
+    if (!button) {
+        return;
+    }
+    const QColor q = QColor::fromRgbF(
+        std::clamp(color[0], 0.0f, 1.0f),
+        std::clamp(color[1], 0.0f, 1.0f),
+        std::clamp(color[2], 0.0f, 1.0f));
+    button->setProperty("volumeColor", q);
+    button->setStyleSheet(
+        QStringLiteral("background-color: %1;").arg(q.name()));
+}
+
 void HashCombine(uint64_t *hash, uint64_t value)
 {
     *hash ^= value;
@@ -338,6 +358,71 @@ void ScenePanel::createUi()
     m_nodeList->header()->setSectionResizeMode(kNodeLockColumn, QHeaderView::ResizeToContents);
     layout->addWidget(m_nodeList);
 
+    m_volumeMaterialGroup = new QGroupBox(tr("Volume Material"), this);
+    auto *volumeForm = new QFormLayout(m_volumeMaterialGroup);
+    const auto makeFloat = [this, volumeForm](
+                               const QString &label, double min, double max,
+                               double step, int decimals) {
+        auto *control = new QDoubleSpinBox(m_volumeMaterialGroup);
+        control->setRange(min, max);
+        control->setSingleStep(step);
+        control->setDecimals(decimals);
+        volumeForm->addRow(label, control);
+        connect(control, qOverload<double>(&QDoubleSpinBox::valueChanged),
+                this, [this](double) {
+                    if (!m_syncing) applyVolumeMaterialInspector();
+                });
+        return control;
+    };
+    m_volumeDensity =
+        makeFloat(tr("Density"), 0.0, 100.0, 0.05, 3);
+    m_volumeAbsorption =
+        makeFloat(tr("Absorption"), 0.0, 20.0, 0.05, 3);
+    m_volumeScattering =
+        makeFloat(tr("Scattering g"), -0.95, 0.95, 0.01, 3);
+    m_volumeAmbient =
+        makeFloat(tr("Ambient"), 0.0, 10.0, 0.05, 3);
+    m_volumeEmission =
+        makeFloat(tr("Emission"), 0.0, 1000.0, 0.1, 3);
+    m_volumeJitter =
+        makeFloat(tr("Step jitter"), 0.0, 1.0, 0.05, 2);
+    m_volumeColor = new QPushButton(tr("Choose"), m_volumeMaterialGroup);
+    m_volumeEmissionColor =
+        new QPushButton(tr("Choose"), m_volumeMaterialGroup);
+    volumeForm->addRow(tr("Scatter color"), m_volumeColor);
+    volumeForm->addRow(tr("Emission color"), m_volumeEmissionColor);
+    m_volumeMarchSteps = new QSpinBox(m_volumeMaterialGroup);
+    m_volumeMarchSteps->setRange(8, 1024);
+    m_volumeLightSteps = new QSpinBox(m_volumeMaterialGroup);
+    m_volumeLightSteps->setRange(1, 32);
+    volumeForm->addRow(tr("March steps"), m_volumeMarchSteps);
+    volumeForm->addRow(tr("Light steps"), m_volumeLightSteps);
+    connect(m_volumeMarchSteps, qOverload<int>(&QSpinBox::valueChanged),
+            this, [this](int) {
+                if (!m_syncing) applyVolumeMaterialInspector();
+            });
+    connect(m_volumeLightSteps, qOverload<int>(&QSpinBox::valueChanged),
+            this, [this](int) {
+                if (!m_syncing) applyVolumeMaterialInspector();
+            });
+    const auto chooseColor = [this](QPushButton *button) {
+        const QColor current =
+            button->property("volumeColor").value<QColor>();
+        const QColor selected =
+            QColorDialog::getColor(current, this, tr("Volume Color"));
+        if (!selected.isValid()) return;
+        button->setProperty("volumeColor", selected);
+        button->setStyleSheet(
+            QStringLiteral("background-color: %1;").arg(selected.name()));
+        applyVolumeMaterialInspector();
+    };
+    connect(m_volumeColor, &QPushButton::clicked, this,
+            [this, chooseColor]() { chooseColor(m_volumeColor); });
+    connect(m_volumeEmissionColor, &QPushButton::clicked, this,
+            [this, chooseColor]() { chooseColor(m_volumeEmissionColor); });
+    m_volumeMaterialGroup->hide();
+    layout->addWidget(m_volumeMaterialGroup);
+
     m_statusLabel = new QLabel(this);
     m_statusLabel->setWordWrap(true);
     layout->addWidget(m_statusLabel);
@@ -392,6 +477,7 @@ void ScenePanel::createUi()
             }
         }
         Scene::SelectNodes(selectedNodeIndices);
+        syncVolumeMaterialInspector();
     });
     connect(m_nodeList, &QTreeWidget::customContextMenuRequested,
             this, &ScenePanel::showNodeContextMenu);
@@ -423,6 +509,65 @@ void ScenePanel::createUi()
             refreshSceneList();
         }
     });
+}
+
+void ScenePanel::syncVolumeMaterialInspector()
+{
+    if (!m_volumeMaterialGroup) return;
+    const int nodeIndex = selectedNodeIndex();
+    const auto &nodes = Scene::GetNodes();
+    const bool valid = nodeIndex >= 0 &&
+                       static_cast<size_t>(nodeIndex) < nodes.size() &&
+                       !nodes[static_cast<size_t>(nodeIndex)].volumeAssetId.empty();
+    m_volumeMaterialGroup->setVisible(valid);
+    if (!valid) return;
+
+    const bool wasSyncing = m_syncing;
+    m_syncing = true;
+    const Scene::VolumeMaterial &m =
+        nodes[static_cast<size_t>(nodeIndex)].volumeMaterial;
+    m_volumeDensity->setValue(m.densityScale);
+    m_volumeAbsorption->setValue(m.absorption);
+    m_volumeScattering->setValue(m.scattering);
+    m_volumeAmbient->setValue(m.ambient);
+    m_volumeEmission->setValue(m.emissionStrength);
+    m_volumeJitter->setValue(m.stepJitter);
+    m_volumeMarchSteps->setValue(m.marchSteps);
+    m_volumeLightSteps->setValue(m.lightSteps);
+    SetColorButton(m_volumeColor, m.color);
+    SetColorButton(m_volumeEmissionColor, m.emissionColor);
+    m_syncing = wasSyncing;
+}
+
+void ScenePanel::applyVolumeMaterialInspector()
+{
+    const int nodeIndex = selectedNodeIndex();
+    const auto &nodes = Scene::GetNodes();
+    if (nodeIndex < 0 || static_cast<size_t>(nodeIndex) >= nodes.size() ||
+        nodes[static_cast<size_t>(nodeIndex)].volumeAssetId.empty()) {
+        return;
+    }
+    Scene::VolumeMaterial material =
+        nodes[static_cast<size_t>(nodeIndex)].volumeMaterial;
+    material.densityScale = static_cast<float>(m_volumeDensity->value());
+    material.absorption = static_cast<float>(m_volumeAbsorption->value());
+    material.scattering = static_cast<float>(m_volumeScattering->value());
+    material.ambient = static_cast<float>(m_volumeAmbient->value());
+    material.emissionStrength = static_cast<float>(m_volumeEmission->value());
+    material.stepJitter = static_cast<float>(m_volumeJitter->value());
+    material.marchSteps = m_volumeMarchSteps->value();
+    material.lightSteps = m_volumeLightSteps->value();
+    const QColor scatter =
+        m_volumeColor->property("volumeColor").value<QColor>();
+    const QColor emission =
+        m_volumeEmissionColor->property("volumeColor").value<QColor>();
+    material.color[0] = static_cast<float>(scatter.redF());
+    material.color[1] = static_cast<float>(scatter.greenF());
+    material.color[2] = static_cast<float>(scatter.blueF());
+    material.emissionColor[0] = static_cast<float>(emission.redF());
+    material.emissionColor[1] = static_cast<float>(emission.greenF());
+    material.emissionColor[2] = static_cast<float>(emission.blueF());
+    Scene::SetVolumeNodeMaterial(static_cast<size_t>(nodeIndex), material);
 }
 
 int ScenePanel::selectedNodeIndex() const
@@ -694,4 +839,5 @@ void ScenePanel::refreshSceneList()
             static_cast<size_t>(selectedRows.front()));
     m_explodeButton->setEnabled(canExplode && !importing);
     m_syncing = false;
+    syncVolumeMaterialInspector();
 }

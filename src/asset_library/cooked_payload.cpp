@@ -276,6 +276,18 @@ bool SerializeCookedVolume(const CookedVolume &vol, std::vector<uint8_t> &out) {
     w.u32(static_cast<uint32_t>(b.data.size()));
     w.bytes(b.data.data(), b.data.size());
   }
+  w.f32(vol.temperatureMin);
+  w.f32(vol.temperatureMax);
+  w.u32(static_cast<uint32_t>(vol.temperatureBricks.size()));
+  for (const auto &b : vol.temperatureBricks) {
+    w.u32(b.bx);
+    w.u32(b.by);
+    w.u32(b.bz);
+    w.f32(b.minVal);
+    w.f32(b.maxVal);
+    w.u32(static_cast<uint32_t>(b.data.size()));
+    w.bytes(b.data.data(), b.data.size());
+  }
   return Finalize(kMagicVolume, kCookerVersionVolume, payload, out);
 }
 
@@ -312,6 +324,32 @@ bool DeserializeCookedVolume(const uint8_t *data, size_t size,
     if (!r.ok)
       return false;
     out.bricks.push_back(std::move(b));
+  }
+  out.temperatureMin = 0.0f;
+  out.temperatureMax = 0.0f;
+  out.temperatureBricks.clear();
+  // Temperature data was appended compatibly; legacy density-only payloads
+  // end here and remain valid.
+  if (r.pos == r.size)
+    return true;
+  out.temperatureMin = r.f32();
+  out.temperatureMax = r.f32();
+  const uint32_t temperatureBrickCount = r.u32();
+  if (!r.ok || temperatureBrickCount > (1u << 24))
+    return false;
+  out.temperatureBricks.reserve(temperatureBrickCount);
+  for (uint32_t i = 0; i < temperatureBrickCount; ++i) {
+    CookedVolumeBrick b;
+    b.bx = r.u32();
+    b.by = r.u32();
+    b.bz = r.u32();
+    b.minVal = r.f32();
+    b.maxVal = r.f32();
+    const uint32_t len = r.u32();
+    r.bytes(b.data, len);
+    if (!r.ok)
+      return false;
+    out.temperatureBricks.push_back(std::move(b));
   }
   return true;
 }

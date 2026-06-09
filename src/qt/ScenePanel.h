@@ -7,7 +7,11 @@
 #include <cstdint>
 
 class QLabel;
+class QDoubleSpinBox;
+class QGroupBox;
 class QProgressBar;
+class QPushButton;
+class QSpinBox;
 class QTimer;
 class QToolButton;
 class QTreeWidget;
@@ -27,12 +31,25 @@ private:
     int selectedNodeIndex() const;
     void requestDeleteSelectedNode();
     void showNodeContextMenu(const QPoint &pos);
+    void syncVolumeMaterialInspector();
+    void applyVolumeMaterialInspector();
 
     QTreeWidget *m_nodeList = nullptr;
     QProgressBar *m_importProgress = nullptr;
     QLabel *m_importStatusLabel = nullptr;
     QLabel *m_statusLabel = nullptr;
     QLabel *m_sourceLabel = nullptr;
+    QGroupBox *m_volumeMaterialGroup = nullptr;
+    QDoubleSpinBox *m_volumeDensity = nullptr;
+    QDoubleSpinBox *m_volumeAbsorption = nullptr;
+    QDoubleSpinBox *m_volumeScattering = nullptr;
+    QDoubleSpinBox *m_volumeAmbient = nullptr;
+    QDoubleSpinBox *m_volumeEmission = nullptr;
+    QDoubleSpinBox *m_volumeJitter = nullptr;
+    QSpinBox *m_volumeMarchSteps = nullptr;
+    QSpinBox *m_volumeLightSteps = nullptr;
+    QPushButton *m_volumeColor = nullptr;
+    QPushButton *m_volumeEmissionColor = nullptr;
     QToolButton *m_importButton = nullptr;
     QToolButton *m_reimportButton = nullptr;
     QToolButton *m_addPlaneButton = nullptr;

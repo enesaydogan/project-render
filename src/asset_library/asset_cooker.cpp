@@ -258,6 +258,8 @@ AssetId RegisterAndCookVolume(AssetRegistry &registry, const AssetPaths &paths,
   stats["dim"] = {volume.dim[0], volume.dim[1], volume.dim[2]};
   stats["activeVoxels"] = volume.activeVoxels;
   stats["bricks"] = volume.bricks.size();
+  stats["temperatureBricks"] = volume.temperatureBricks.size();
+  stats["hasTemperature"] = !volume.temperatureBricks.empty();
   stats["brickSize"] = volume.brickSize;
   m.importSettingsJson = stats.dump();
   AssetId id = registry.Add(std::move(m));
