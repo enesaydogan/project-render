@@ -3670,14 +3670,17 @@ size_t AddVolumeNode(const assetlib::AssetId &id) {
   const assetlib::AssetMetadata *meta = reg ? reg->Get(id) : nullptr;
   node.name = meta && !meta->displayName.empty() ? meta->displayName : "Volume";
   node.volumeAssetId = id.ToString();
-  // Column-major diagonal scale + translation centering the cube on the origin.
+  // Column-major diagonal scale + translation. Rest the volume ON the ground
+  // (bottom at Y=0), centered in X/Z. Centering on the origin would bury the
+  // lower half below the ground plane, where the scene-depth clip hides it —
+  // and for fire VDBs the flame lives at the bottom, so it would vanish.
   for (float &f : node.transform)
     f = 0.0f;
   node.transform[0] = sxv;
   node.transform[5] = syv;
   node.transform[10] = szv;
   node.transform[12] = -sxv * 0.5f;
-  node.transform[13] = -syv * 0.5f;
+  node.transform[13] = 0.0f;
   node.transform[14] = -szv * 0.5f;
   node.transform[15] = 1.0f;
 

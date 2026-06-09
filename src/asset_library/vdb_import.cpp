@@ -423,6 +423,51 @@ bool ImportVdbToVolume(const std::string &path, CookedVolume &out,
   return true;
 }
 
+std::string DescribeGrids(const std::string &path) {
+  EnsureInit();
+  std::string out;
+  char line[512];
+  try {
+    openvdb::io::File file(path);
+    file.open();
+    for (auto it = file.beginName(); it != file.endName(); ++it) {
+      openvdb::GridBase::Ptr base = file.readGrid(it.gridName());
+      const char *cls = "?";
+      switch (base->getGridClass()) {
+      case openvdb::GRID_FOG_VOLUME: cls = "fog"; break;
+      case openvdb::GRID_LEVEL_SET: cls = "levelset"; break;
+      case openvdb::GRID_STAGGERED: cls = "staggered"; break;
+      default: cls = "unknown"; break;
+      }
+      double mn = 0, mx = 0;
+      bool haveRange = false;
+      if (auto fg = openvdb::gridPtrCast<openvdb::FloatGrid>(base)) {
+        float lo, hi;
+        fg->evalMinMax(lo, hi);
+        mn = lo; mx = hi; haveRange = true;
+      } else if (auto dg = openvdb::gridPtrCast<openvdb::DoubleGrid>(base)) {
+        double lo, hi;
+        dg->evalMinMax(lo, hi);
+        mn = lo; mx = hi; haveRange = true;
+      }
+      snprintf(line, sizeof(line),
+               "  grid '%s'  type=%s  class=%s  activeVox=%llu%s",
+               it.gridName().c_str(), base->type().c_str(), cls,
+               static_cast<unsigned long long>(base->activeVoxelCount()),
+               haveRange ? "" : "\n");
+      out += line;
+      if (haveRange) {
+        snprintf(line, sizeof(line), "  range=%.4g..%.4g\n", mn, mx);
+        out += line;
+      }
+    }
+    file.close();
+  } catch (const std::exception &e) {
+    out += std::string("DescribeGrids failed: ") + e.what() + "\n";
+  }
+  return out;
+}
+
 } // namespace VdbImport
 
 #else // PR_HAVE_OPENVDB
@@ -435,6 +480,7 @@ bool ImportVdbToVolume(const std::string &, assetlib::CookedVolume &,
     *error = "this build was configured without OpenVDB (.vdb unsupported)";
   return false;
 }
+std::string DescribeGrids(const std::string &) { return "OpenVDB disabled\n"; }
 } // namespace VdbImport
 
 #endif // PR_HAVE_OPENVDB

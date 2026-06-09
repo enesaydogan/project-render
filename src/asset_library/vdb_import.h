@@ -15,4 +15,8 @@ bool IsAvailable();
 bool ImportVdbToVolume(const std::string &path, assetlib::CookedVolume &out,
                        std::string *error);
 
+// Diagnostic: returns a human-readable listing of every grid in the file
+// (name, type, class, active voxel count, value range). For tooling/debugging.
+std::string DescribeGrids(const std::string &path);
+
 } // namespace VdbImport

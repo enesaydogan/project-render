@@ -290,10 +290,17 @@ void RenderVolume(uint3 id, bool linearDepthInput)
             : 0.0;
         if (fireMask > 1.0e-4 && emissionStrength > 0.0)
         {
+            // Linear (not squared) temperature mask: the visible flame body is
+            // mostly mid-temperature orange/red; squaring would leave only the
+            // tiny white-hot core. A mild gamma keeps cool smoke from glowing.
+            float fireWeight = pow(fireMask, 1.5);
             float3 fire =
                 FireColor(volumeSample.y) * max(emissionColor, 0.0);
+            // Internal x1000 scale so the slider works in a friendly ~1..1000
+            // range (fire emission is otherwise tiny after smoke attenuation and
+            // dt integration, forcing absurd values).
             scattered += transmittance * fire *
-                         (fireMask * fireMask) * emissionStrength * dt;
+                         fireWeight * (emissionStrength * 1000.0) * dt;
         }
         if (density > 1e-4)
         {

@@ -450,8 +450,21 @@ void AssetManagerPanel::refreshFolderTree() {
 
   auto *project = new QTreeWidgetItem(m_sourceTree, {tr("Project (none)")});
   project->setDisabled(true);
-  auto *packs = new QTreeWidgetItem(m_sourceTree, {tr("Mounted Packs (none)")});
+
+  const std::vector<std::filesystem::path> mounts =
+      assetlib::PackMounts::Get().mountedPaths();
+  auto *packs = new QTreeWidgetItem(
+      m_sourceTree, {mounts.empty()
+                         ? tr("Mounted Packs (none)")
+                         : tr("Mounted Packs (%1)")
+                               .arg(static_cast<int>(mounts.size()))});
   packs->setDisabled(true);
+  for (const std::filesystem::path &p : mounts) {
+    auto *packItem = new QTreeWidgetItem(
+        packs, {QString::fromStdString(p.filename().string())});
+    packItem->setDisabled(true);
+  }
+  packs->setExpanded(true);
 
   // Restore selection by stored path.
   std::function<bool(QTreeWidgetItem *)> restore =
@@ -791,48 +804,65 @@ void AssetManagerPanel::onMountPack() {
 void AssetManagerPanel::onClearLibrary() {
   if (!m_registry)
     return;
-  // Count user (non-pack) assets.
+  // Count user (non-pack) assets and mounted packs separately — pack assets are
+  // read-only and visible but live in their .prpak, not the user library.
   int userCount = 0;
   for (const assetlib::AssetId &id : m_registry->AllAssets()) {
     const AssetMetadata *m = m_registry->Get(id);
     if (m && !m->fromPack)
       ++userCount;
   }
-  if (userCount == 0) {
+  const std::vector<std::filesystem::path> mounts =
+      assetlib::PackMounts::Get().mountedPaths();
+  const int mountCount = static_cast<int>(mounts.size());
+
+  if (userCount == 0 && mountCount == 0) {
     QMessageBox::information(this, tr("Clear Library"),
-                             tr("There are no user assets to clear."));
+                             tr("The library is already empty."));
     return;
   }
 
-  // First confirmation.
+  // Describe exactly what will be removed (the visible assets may all be from a
+  // mounted pack, which is why a plain "user asset" count can be zero).
+  QString what;
+  if (userCount > 0)
+    what = tr("%1 imported asset(s) and their cooked cache").arg(userCount);
+  if (mountCount > 0) {
+    if (!what.isEmpty())
+      what += tr(", and ");
+    what += tr("unmount %1 pack(s) (the .prpak files are kept)").arg(mountCount);
+  }
+
   if (QMessageBox::warning(
           this, tr("Clear Library"),
-          tr("Delete all %1 user asset(s) from the library and remove their "
-             "cooked cache?\n\nMounted packs are kept. This cannot be undone.")
-              .arg(userCount),
+          tr("Remove %1?\n\nThis cannot be undone.").arg(what),
           QMessageBox::Yes | QMessageBox::Cancel,
           QMessageBox::Cancel) != QMessageBox::Yes)
     return;
-
-  // Second confirmation (defaults to Cancel).
   if (QMessageBox::critical(
           this, tr("Clear Library — are you sure?"),
-          tr("This permanently deletes every user asset and all cooked data. "
-             "Really continue?"),
+          tr("Really empty the asset library now?"),
           QMessageBox::Yes | QMessageBox::Cancel,
           QMessageBox::Cancel) != QMessageBox::Yes)
     return;
 
   const assetlib::AssetPaths &paths = m_registry->paths();
+
+  // Unmount every pack (removes its read-only assets; the .prpak files remain).
+  for (const std::filesystem::path &packPath : mounts)
+    assetlib::PackMounts::Get().Unmount(packPath, *m_registry);
+  assetlib::PackMounts::Get().SaveMountList(paths);
+
+  // Remove user assets + favorites/recents, then persist.
   m_registry->ClearUserAssets();
   m_registry->Save();
 
-  // Wipe the cooked cache + thumbnails (regenerated as needed). Pack payloads
-  // live in the .prpak files, not here, so mounted packs are unaffected.
+  // Wipe the cooked cache + thumbnails (regenerated on next import).
   std::error_code ec;
   for (const std::filesystem::path &dir :
        {paths.cacheDir() / "Meshes", paths.cacheDir() / "Textures",
-        paths.cacheDir() / "Materials", paths.thumbnailsDir()}) {
+        paths.cacheDir() / "Materials", paths.cacheDir() / "Volumes",
+        paths.thumbnailsDir()}) {
     std::filesystem::remove_all(dir, ec);
     std::filesystem::create_directories(dir, ec);
   }

@@ -383,7 +383,7 @@ void ScenePanel::createUi()
     m_volumeAmbient =
         makeFloat(tr("Ambient"), 0.0, 10.0, 0.05, 3);
     m_volumeEmission =
-        makeFloat(tr("Emission"), 0.0, 1000.0, 0.1, 3);
+        makeFloat(tr("Emission"), 0.0, 1000.0, 1.0, 1);
     m_volumeJitter =
         makeFloat(tr("Step jitter"), 0.0, 1.0, 0.05, 2);
     m_volumeColor = new QPushButton(tr("Choose"), m_volumeMaterialGroup);

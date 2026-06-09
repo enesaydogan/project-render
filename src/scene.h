@@ -27,7 +27,9 @@ struct VolumeMaterial {
   float ambient = 0.35f;
   float color[3] = {1.0f, 1.0f, 1.0f};
   float emissionColor[3] = {1.0f, 0.35f, 0.05f};
-  float emissionStrength = 2.0f;
+  // ~100 with the shader's internal x1000 scale gives a full flame; headroom to
+  // 1000. Only volumes with a temperature channel emit (smoke-only unaffected).
+  float emissionStrength = 100.0f;
   float stepJitter = 1.0f;
   int marchSteps = 96;
   int lightSteps = 8;

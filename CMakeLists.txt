@@ -417,6 +417,13 @@ if(OpenVDB_FOUND)
   target_link_libraries(vdb_support PRIVATE OpenVDB::openvdb)
   target_link_libraries(project-render PRIVATE vdb_support)
   message(STATUS "OpenVDB found: .vdb import enabled (isolated in vdb_support)")
+
+  # Headless .vdb inspector (debug tooling). Links vdb_support; needs the
+  # OpenVDB runtime DLLs on PATH (deployed next to project-render.exe).
+  add_executable(vdb-inspect src/tools/vdb_inspect.cpp
+                 src/asset_library/cooked_payload.cpp)
+  target_link_libraries(vdb-inspect PRIVATE vdb_support Cabinet)
+  set_target_properties(vdb-inspect PROPERTIES EXCLUDE_FROM_ALL TRUE)
   # Deploy OpenVDB's runtime DLLs next to the exe so the app can launch.
   file(GLOB OPENVDB_RUNTIME_DLLS
     "${VCPKG_INSTALLED_DIR}/bin/openvdb.dll"
