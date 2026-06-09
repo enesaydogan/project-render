@@ -115,6 +115,24 @@ float3 BuildPerspectiveCameraDirection(
                      projectionForward);
 }
 
+float3 BuildSphericalCameraDirection(float2 uv)
+{
+    float3 forwardDir = normalize(forward);
+    float3 rightDir = normalize(cross(forwardDir, up));
+    float3 upDir = normalize(cross(rightDir, forwardDir));
+    float azimuth = (uv.x - 0.5) * (2.0 * 3.14159265);
+    float elevation = (0.5 - saturate(uv.y)) * 3.14159265;
+    float sinAzimuth;
+    float cosAzimuth;
+    float sinElevation;
+    float cosElevation;
+    sincos(azimuth, sinAzimuth, cosAzimuth);
+    sincos(elevation, sinElevation, cosElevation);
+    float3 horizonDir =
+        cosAzimuth * forwardDir + sinAzimuth * rightDir;
+    return normalize(horizonDir * cosElevation + upDir * sinElevation);
+}
+
 // Ray vs unit-cube [0,1]^3. Returns (tNear, tFar); tNear>tFar means miss.
 float2 IntersectUnitCube(float3 ro, float3 rd)
 {
@@ -169,8 +187,7 @@ float TraceLightTransmittance(float3 localPos, float3 localSunDir,
     return exp(-opticalDepth);
 }
 
-[numthreads(8, 8, 1)]
-void CSMain(uint3 id : SV_DispatchThreadID)
+void RenderVolume(uint3 id, bool linearDepthInput)
 {
     uint width, height;
     OutputTex.GetDimensions(width, height);
@@ -186,15 +203,28 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     float verticalCenterShift;
     BuildPerspectiveCameraBasis(projectionForward, projectionRight,
                                 projectionUp, verticalCenterShift);
-    float3 rd = BuildPerspectiveCameraDirection(
-        uv, projectionForward, projectionRight, projectionUp,
-        verticalCenterShift);
+    bool spherical = projectionMode >= 0.5;
+    float3 rd = spherical
+        ? BuildSphericalCameraDirection(uv)
+        : BuildPerspectiveCameraDirection(
+              uv, projectionForward, projectionRight, projectionUp,
+              verticalCenterShift);
 
-    // Convert hardware depth back to view-space Z using the same projection
-    // equation as pbr_mesh.hlsl, then project that onto this pixel's world ray.
     float tScene = 1e30;
-    if (sceneDepth < 1.0)
+    if (linearDepthInput)
     {
+        if (sceneDepth < farZ)
+        {
+            tScene = spherical
+                ? sceneDepth
+                : sceneDepth /
+                      max(dot(rd, projectionForward), 1.0e-6);
+        }
+    }
+    else if (sceneDepth < 1.0)
+    {
+        // Convert hardware depth back to view-space Z using the same projection
+        // equation as pbr_mesh.hlsl, then project that onto this pixel's ray.
         float A = farZ / (farZ - nearZ);
         float B = -nearZ * farZ / (farZ - nearZ);
         float viewZ = B / min(sceneDepth - A, -1.0e-6);
@@ -255,4 +285,16 @@ void CSMain(uint3 id : SV_DispatchThreadID)
 
     float3 sceneColor = OutputTex[id.xy].rgb;
     OutputTex[id.xy] = float4(sceneColor * transmittance + scattered, 1.0);
+}
+
+[numthreads(8, 8, 1)]
+void CSMain(uint3 id : SV_DispatchThreadID)
+{
+    RenderVolume(id, false);
+}
+
+[numthreads(8, 8, 1)]
+void CSMainDXR(uint3 id : SV_DispatchThreadID)
+{
+    RenderVolume(id, true);
 }

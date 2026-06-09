@@ -13,6 +13,7 @@
 #include "raster_renderer.h"
 #include "scene.h"
 #include "streamline_manager.h"
+#include "volumetric_renderer.h"
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -577,8 +578,11 @@ static bool NeedsSurfaceDataBuffers(uint32_t mask) {
 }
 
 static bool NeedsLinearDepthBuffer(uint32_t mask) {
-  return (mask & (ResourceFeature_TonemapAo | ResourceFeature_FinalDenoiser)) !=
-         0;
+  // Primary resolve writes linear depth every frame, and the dedicated VDB
+  // integration stage consumes it before accumulation. Keep it resident
+  // independently of denoiser/AO feature toggles.
+  (void)mask;
+  return true;
 }
 
 static bool NeedsSpecularAuxBuffers(uint32_t mask) {
@@ -3420,6 +3424,25 @@ static void DispatchWavefrontShadowIntegration(
   uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
   uavBarrier.UAV.pResource = nullptr;
   list->ResourceBarrier(1, &uavBarrier);
+}
+
+static void DispatchVolumetricIntegration(
+    ID3D12GraphicsCommandList4 *list, ID3D12Resource *cameraCB) {
+  if (!list || !cameraCB || !s_device || !s_outputUAV ||
+      !s_linearDepthUAV || !VolumetricRenderer::HasActiveVolume()) {
+    return;
+  }
+
+  TransitionResource(list, s_linearDepthUAV.Get(),
+                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+  VolumetricRenderer::Composite(
+      s_device, list, cameraCB, s_outputUAV.Get(), s_linearDepthUAV.Get(),
+      s_outputWidth, s_outputHeight,
+      VolumetricRenderer::DepthEncoding::LinearViewDepth);
+  TransitionResource(list, s_linearDepthUAV.Get(),
+                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 }
 
 static void DispatchWavefrontAccumulate(ID3D12GraphicsCommandList4 *list,
@@ -9392,10 +9415,23 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
       if (s_pathTracingBackend == PathTracingBackend::WavefrontParity) {
         // Phase 2 parity gate: resolve queue-backed primary hits into the
         // existing output/AOV surfaces without scheduling transport work.
+        // Defer accumulation when a VDB is active so the dedicated volume
+        // stage integrates the camera segment into the raw sample first.
         SetWavefrontStage("primary-surface-resolve");
+        const bool integrateVolume =
+            VolumetricRenderer::HasActiveVolume();
+        const UINT parityFlags =
+            kWavefrontResolveFlagPrimarySurfaceOnly |
+            (integrateVolume ? kWavefrontResolveFlagDeferAccumulation : 0u);
         DispatchWavefrontResolvePrimary(
             dxrList.Get(), cameraCB, materialCB, meshDataSB, materialExtraSB,
-            kWavefrontResolveFlagPrimarySurfaceOnly);
+            parityFlags);
+        if (integrateVolume) {
+          SetWavefrontStage("volume-integrate");
+          DispatchVolumetricIntegration(dxrList.Get(), cameraCB);
+          SetWavefrontStage("accumulate");
+          DispatchWavefrontAccumulate(dxrList.Get(), cameraCB);
+        }
         didPathTracingWork = true;
       } else if (s_pathTracingBackend == PathTracingBackend::WavefrontOptimized) {
         ClearWavefrontShadowContribution(dxrList.Get());
@@ -9572,6 +9608,9 @@ bool RenderFrame(ID3D12GraphicsCommandList *commandListBase,
         SetWavefrontStage("shadow-integrate");
         DispatchWavefrontShadowIntegration(
             dxrList.Get(), cameraCB, kWavefrontResolveFlagDeferAccumulation);
+
+        SetWavefrontStage("volume-integrate");
+        DispatchVolumetricIntegration(dxrList.Get(), cameraCB);
 
         SetWavefrontStage("accumulate");
         DispatchWavefrontAccumulate(dxrList.Get(), cameraCB);

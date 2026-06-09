@@ -3,9 +3,13 @@
 #ifdef PR_HAVE_OPENVDB
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdio>
 #include <mutex>
 #include <openvdb/openvdb.h>
+#include <openvdb/tools/Interpolation.h>
+#include <openvdb/tools/LevelSetUtil.h>
 #include <unordered_map>
 
 using namespace assetlib;
@@ -16,6 +20,33 @@ namespace {
 std::once_flag g_vdbInit;
 void EnsureInit() {
   std::call_once(g_vdbInit, []() { openvdb::initialize(); });
+}
+
+constexpr uint64_t kMaxImportedVoxels = 32ull * 1024ull * 1024ull;
+constexpr uint32_t kMaxImportedDimension = 2048;
+
+std::array<uint32_t, 3>
+ChooseImportedDimensions(const openvdb::Coord &sourceDim) {
+  const uint32_t dim[3] = {
+      static_cast<uint32_t>(sourceDim.x()),
+      static_cast<uint32_t>(sourceDim.y()),
+      static_cast<uint32_t>(sourceDim.z())};
+  const long double sourceVoxels =
+      static_cast<long double>(dim[0]) * dim[1] * dim[2];
+  long double scale = 1.0L;
+  if (sourceVoxels > static_cast<long double>(kMaxImportedVoxels)) {
+    scale = std::cbrt(static_cast<long double>(kMaxImportedVoxels) /
+                      sourceVoxels);
+  }
+  const uint32_t sourceMax = (std::max)({dim[0], dim[1], dim[2]});
+  if (sourceMax > kMaxImportedDimension) {
+    scale = (std::min)(
+        scale, static_cast<long double>(kMaxImportedDimension) / sourceMax);
+  }
+  return {
+      (std::max)(1u, static_cast<uint32_t>(std::floor(dim[0] * scale))),
+      (std::max)(1u, static_cast<uint32_t>(std::floor(dim[1] * scale))),
+      (std::max)(1u, static_cast<uint32_t>(std::floor(dim[2] * scale)))};
 }
 
 } // namespace
@@ -55,14 +86,24 @@ bool ImportVdbToVolume(const std::string &path, CookedVolume &out,
   if (bbox.empty())
     return fail("VDB grid has no active voxels");
 
+  const bool wasLevelSet = grid->getGridClass() == openvdb::GRID_LEVEL_SET;
+  if (wasLevelSet) {
+    try {
+      openvdb::tools::sdfToFogVolume(*grid);
+    } catch (const std::exception &e) {
+      return fail(std::string("VDB level-set conversion failed: ") + e.what());
+    }
+  }
+
   const openvdb::Coord origin = bbox.min();
-  const openvdb::Coord ext = bbox.dim(); // voxels along each axis
+  const openvdb::Coord sourceDim = bbox.dim();
+  const std::array<uint32_t, 3> importedDim =
+      ChooseImportedDimensions(sourceDim);
   out = CookedVolume{};
-  out.dim[0] = static_cast<uint32_t>(ext.x());
-  out.dim[1] = static_cast<uint32_t>(ext.y());
-  out.dim[2] = static_cast<uint32_t>(ext.z());
+  out.dim[0] = importedDim[0];
+  out.dim[1] = importedDim[1];
+  out.dim[2] = importedDim[2];
   out.brickSize = 8;
-  out.activeVoxels = static_cast<uint64_t>(grid->activeVoxelCount());
 
   // World-space AABB from the grid transform.
   const openvdb::Vec3d wmin =
@@ -75,7 +116,9 @@ bool ImportVdbToVolume(const std::string &path, CookedVolume &out,
     out.boundsMax[i] = static_cast<float>(std::max(wmin[i], wmax[i]));
   }
 
-  // Accumulate active voxels into dense per-brick float buffers.
+  // Sample the source tree into bounded runtime dimensions. Sampling instead
+  // of walking only leaf voxels also handles constant active tiles produced by
+  // level-set-to-fog conversion.
   const int B = static_cast<int>(out.brickSize);
   const int voxPerBrick = B * B * B;
   struct BrickKey {
@@ -93,21 +136,65 @@ bool ImportVdbToVolume(const std::string &path, CookedVolume &out,
   };
   std::unordered_map<BrickKey, std::vector<float>, BrickKeyHash> buffers;
 
-  for (auto it = grid->cbeginValueOn(); it; ++it) {
-    const float v = it.getValue();
-    if (v <= 0.0f)
-      continue;
-    const openvdb::Coord c = it.getCoord() - origin; // local index
-    const int lx = c.x(), ly = c.y(), lz = c.z();
-    if (lx < 0 || ly < 0 || lz < 0)
-      continue;
-    BrickKey key{static_cast<uint32_t>(lx / B), static_cast<uint32_t>(ly / B),
-                 static_cast<uint32_t>(lz / B)};
-    auto &buf = buffers[key];
-    if (buf.empty())
-      buf.assign(static_cast<size_t>(voxPerBrick), 0.0f);
-    const int ox = lx % B, oy = ly % B, oz = lz % B;
-    buf[static_cast<size_t>((oz * B + oy) * B + ox)] = v;
+  auto accessor = grid->getConstAccessor();
+  using Accessor = openvdb::FloatGrid::ConstAccessor;
+  openvdb::tools::GridSampler<Accessor, openvdb::tools::BoxSampler> sampler(
+      accessor, grid->transform());
+  const bool reduced =
+      importedDim[0] != static_cast<uint32_t>(sourceDim.x()) ||
+      importedDim[1] != static_cast<uint32_t>(sourceDim.y()) ||
+      importedDim[2] != static_cast<uint32_t>(sourceDim.z());
+  uint64_t activeVoxels = 0;
+  for (uint32_t z = 0; z < importedDim[2]; ++z) {
+    const double sourceZ =
+        origin.z() + ((static_cast<double>(z) + 0.5) * sourceDim.z() /
+                          importedDim[2] -
+                      0.5);
+    for (uint32_t y = 0; y < importedDim[1]; ++y) {
+      const double sourceY =
+          origin.y() + ((static_cast<double>(y) + 0.5) * sourceDim.y() /
+                            importedDim[1] -
+                        0.5);
+      for (uint32_t x = 0; x < importedDim[0]; ++x) {
+        float value = 0.0f;
+        if (reduced) {
+          const double sourceX =
+              origin.x() + ((static_cast<double>(x) + 0.5) * sourceDim.x() /
+                                importedDim[0] -
+                            0.5);
+          value = sampler.isSample(
+              openvdb::Vec3d(sourceX, sourceY, sourceZ));
+        } else {
+          value = accessor.getValue(
+              origin + openvdb::Coord(static_cast<int>(x),
+                                      static_cast<int>(y),
+                                      static_cast<int>(z)));
+        }
+        if (!(value > 0.0f) || !std::isfinite(value))
+          continue;
+
+        ++activeVoxels;
+        BrickKey key{x / out.brickSize, y / out.brickSize,
+                     z / out.brickSize};
+        auto &buf = buffers[key];
+        if (buf.empty())
+          buf.assign(static_cast<size_t>(voxPerBrick), 0.0f);
+        const uint32_t ox = x % out.brickSize;
+        const uint32_t oy = y % out.brickSize;
+        const uint32_t oz = z % out.brickSize;
+        buf[static_cast<size_t>((oz * B + oy) * B + ox)] = value;
+      }
+    }
+  }
+  out.activeVoxels = activeVoxels;
+
+  if (wasLevelSet || reduced) {
+    fprintf(stderr,
+            "VDB import: %s%s%dx%dx%d -> %ux%ux%u, %llu active voxels\n",
+            wasLevelSet ? "level set converted to fog, " : "",
+            reduced ? "resampled " : "", sourceDim.x(), sourceDim.y(),
+            sourceDim.z(), out.dim[0], out.dim[1], out.dim[2],
+            static_cast<unsigned long long>(out.activeVoxels));
   }
 
   // Quantize each touched brick to 8-bit over its own [min,max] range.

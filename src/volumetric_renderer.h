@@ -38,4 +38,18 @@ ID3D12Resource *GetDensityTexture();
 DirectX::XMFLOAT3 BoundsMin();
 DirectX::XMFLOAT3 BoundsMax();
 
+enum class DepthEncoding {
+  HardwareDepth,
+  LinearViewDepth,
+};
+
+// Composites the active volume into colorTarget. colorTarget must be in UAV
+// state and depthTexture must be in NON_PIXEL_SHADER_RESOURCE state. The caller
+// owns resource transitions because raster and DXR have different surrounding
+// stages.
+bool Composite(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList,
+               ID3D12Resource *cameraCB, ID3D12Resource *colorTarget,
+               ID3D12Resource *depthTexture, UINT width, UINT height,
+               DepthEncoding depthEncoding);
+
 } // namespace VolumetricRenderer

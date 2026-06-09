@@ -12,7 +12,6 @@
 #include "volumetric_renderer.h"
 #include <algorithm>
 #include <cmath>
-#include <cstring>
 #include <fstream>
 #include <vector>
 #include <wrl.h>
@@ -1461,167 +1460,18 @@ void RunSSR(ID3D12Device* device, ID3D12GraphicsCommandList* cmdList, ID3D12Reso
   s_normalState = D3D12_RESOURCE_STATE_RENDER_TARGET;
 }
 
-// ---- Volumetric volume raymarch ------------------------------------------
-static ComPtr<ID3D12RootSignature> s_volRootSig;
-static ComPtr<ID3D12PipelineState> s_volPSO;
-static ComPtr<ID3D12DescriptorHeap> s_volHeap;
-static uint32_t s_volFrame = 0;
-
-static bool EnsureVolumetricPipeline(ID3D12Device *device) {
-  if (s_volPSO) return true;
-  try {
-    std::wstring path = FindShaderFileLocal(L"shaders\\volumetric_cs.hlsl");
-    ComPtr<IDxcBlob> csBlob = s_dxcHelper.Compile(path, L"CSMain", L"cs_6_0", {});
-
-    D3D12_DESCRIPTOR_RANGE ranges[2] = {};
-    ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    ranges[0].NumDescriptors = 2; // DensityTex(t0), DepthTex(t1)
-    ranges[0].BaseShaderRegister = 0;
-    ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    ranges[1].NumDescriptors = 1;
-    ranges[1].BaseShaderRegister = 0;
-
-    D3D12_ROOT_PARAMETER params[4] = {};
-    params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-    params[0].Descriptor.ShaderRegister = 0;
-    params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    params[1].Constants.ShaderRegister = 1;
-    params[1].Constants.Num32BitValues = 24; // worldToLocal(16) + 8 params
-    params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    params[2].DescriptorTable.NumDescriptorRanges = 1;
-    params[2].DescriptorTable.pDescriptorRanges = &ranges[0];
-    params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    params[3].DescriptorTable.NumDescriptorRanges = 1;
-    params[3].DescriptorTable.pDescriptorRanges = &ranges[1];
-
-    D3D12_STATIC_SAMPLER_DESC sampler = {};
-    sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
-    D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
-    rsDesc.NumParameters = 4;
-    rsDesc.pParameters = params;
-    rsDesc.NumStaticSamplers = 1;
-    rsDesc.pStaticSamplers = &sampler;
-    ComPtr<ID3DBlob> rsBlob, err;
-    D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &rsBlob,
-                                &err);
-    ThrowIfFailed(device->CreateRootSignature(0, rsBlob->GetBufferPointer(),
-                                              rsBlob->GetBufferSize(),
-                                              IID_PPV_ARGS(&s_volRootSig)));
-    D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
-    psoDesc.pRootSignature = s_volRootSig.Get();
-    psoDesc.CS = {csBlob->GetBufferPointer(), csBlob->GetBufferSize()};
-    ThrowIfFailed(device->CreateComputePipelineState(
-        &psoDesc, IID_PPV_ARGS(&s_volPSO)));
-
-    D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-                                           3,
-                                           D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE};
-    ThrowIfFailed(device->CreateDescriptorHeap(&heapDesc,
-                                               IID_PPV_ARGS(&s_volHeap)));
-    return true;
-  } catch (const std::exception &e) {
-    fprintf(stderr, "Volumetric pipeline creation failed: %s\n", e.what());
-    return false;
-  }
-}
-
 void RunVolumetric(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList,
                    ID3D12Resource *cameraCB, ID3D12Resource *depthBuffer) {
   if (!VolumetricRenderer::HasActiveVolume() || !s_hdrColor)
     return;
-  if (!EnsureVolumetricPipeline(device))
-    return;
-  if (!VolumetricRenderer::EnsureUploaded(device, cmdList))
-    return;
-  ID3D12Resource *densityTex = VolumetricRenderer::GetDensityTexture();
-  if (!densityTex)
-    return;
-
-  const UINT inc = device->GetDescriptorHandleIncrementSize(
-      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-  D3D12_CPU_DESCRIPTOR_HANDLE cpu =
-      s_volHeap->GetCPUDescriptorHandleForHeapStart();
-  {
-    D3D12_SHADER_RESOURCE_VIEW_DESC srv = {};
-    srv.Format = DXGI_FORMAT_R32_FLOAT;
-    srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
-    srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srv.Texture3D.MipLevels = 1;
-    device->CreateShaderResourceView(densityTex, &srv, cpu);
-    cpu.ptr += inc;
-  }
-  {
-    D3D12_SHADER_RESOURCE_VIEW_DESC srv = {};
-    srv.Format = DXGI_FORMAT_R32_FLOAT;
-    srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srv.Texture2D.MipLevels = 1;
-    device->CreateShaderResourceView(depthBuffer, &srv, cpu);
-    cpu.ptr += inc;
-  }
-  device->CreateUnorderedAccessView(s_hdrColor.Get(), nullptr, nullptr, cpu);
 
   TransitionResource(cmdList, s_hdrColor.Get(), s_hdrState,
                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
   TransitionResource(cmdList, depthBuffer, D3D12_RESOURCE_STATE_DEPTH_WRITE,
                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-
-  cmdList->SetPipelineState(s_volPSO.Get());
-  cmdList->SetComputeRootSignature(s_volRootSig.Get());
-  cmdList->SetDescriptorHeaps(1, s_volHeap.GetAddressOf());
-  cmdList->SetComputeRootConstantBufferView(0, cameraCB->GetGPUVirtualAddress());
-
-  // The volume lives in a unit cube [0,1]^3. Scene transforms are stored in the
-  // same column-major layout consumed by the mesh shaders. XMLoadFloat4x4 sees
-  // those bytes as the equivalent transposed row-vector matrix, so its inverse
-  // already has the byte layout HLSL needs for a column-major worldToLocal
-  // matrix. Do not transpose it again here.
-  float xf[16];
-  if (!Scene::FindVolumeNodeTransform(VolumetricRenderer::ActiveVolumeId(), xf))
-    return; // node deleted - stop rendering
-  const DirectX::XMMATRIX localToWorld =
-      DirectX::XMLoadFloat4x4(reinterpret_cast<const DirectX::XMFLOAT4X4 *>(xf));
-  DirectX::XMVECTOR determinant = DirectX::XMMatrixDeterminant(localToWorld);
-  if (std::abs(DirectX::XMVectorGetX(determinant)) < 1.0e-8f)
-    return;
-  const DirectX::XMMATRIX worldToLocal =
-      DirectX::XMMatrixInverse(&determinant, localToWorld);
-  DirectX::XMFLOAT4X4 wtl;
-  DirectX::XMStoreFloat4x4(&wtl, worldToLocal);
-
-  const VolumetricRenderer::Params &p = VolumetricRenderer::GetParams();
-  struct {
-    float m[16];
-    float densityScale, absorption, scatterG, ambient;
-    float stepJitter;
-    uint32_t marchSteps;
-    float frameSeed;
-    uint32_t lightSteps;
-  } vp;
-  std::memcpy(vp.m, &wtl, sizeof(vp.m));
-  vp.densityScale = p.densityScale;
-  vp.absorption = p.absorption;
-  vp.scatterG = p.scatter;
-  vp.ambient = p.ambient;
-  vp.stepJitter = p.stepJitter;
-  vp.marchSteps = static_cast<uint32_t>((std::max)(1, p.marchSteps));
-  vp.frameSeed = static_cast<float>(s_volFrame++ & 1023u);
-  vp.lightSteps = static_cast<uint32_t>((std::clamp)(p.lightSteps, 1, 32));
-  cmdList->SetComputeRoot32BitConstants(1, 24, &vp, 0);
-
-  D3D12_GPU_DESCRIPTOR_HANDLE gpu =
-      s_volHeap->GetGPUDescriptorHandleForHeapStart();
-  cmdList->SetComputeRootDescriptorTable(2, gpu);
-  D3D12_GPU_DESCRIPTOR_HANDLE uavGpu = gpu;
-  uavGpu.ptr += 2 * inc;
-  cmdList->SetComputeRootDescriptorTable(3, uavGpu);
-
-  cmdList->Dispatch((s_hdrWidth + 7) / 8, (s_hdrHeight + 7) / 8, 1);
+  VolumetricRenderer::Composite(
+      device, cmdList, cameraCB, s_hdrColor.Get(), depthBuffer, s_hdrWidth,
+      s_hdrHeight, VolumetricRenderer::DepthEncoding::HardwareDepth);
 
   TransitionResource(cmdList, s_hdrColor.Get(),
                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
