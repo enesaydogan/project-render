@@ -27,6 +27,9 @@ public:
   std::filesystem::path favoritesFile() const {
     return metadataDir() / "favorites.json";
   }
+  std::filesystem::path mountsFile() const {
+    return metadataDir() / "packs.json";
+  }
   std::filesystem::path thumbnailsDir() const {
     return cacheDir() / "Thumbnails";
   }

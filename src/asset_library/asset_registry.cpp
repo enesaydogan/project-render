@@ -1,5 +1,7 @@
 #include "asset_registry.h"
 
+#include "asset_metadata_json.h"
+
 #include <algorithm>
 #include <cctype>
 #include <fstream>
@@ -63,75 +65,8 @@ bool IsUnder(const std::string &child, const std::string &prefix) {
          child[prefix.size()] == '/';
 }
 
-json MetadataToJson(const AssetMetadata &m) {
-  json j;
-  j["id"] = m.id.ToString();
-  j["type"] = AssetTypeToString(m.type);
-  j["displayName"] = m.displayName;
-  j["virtualPath"] = m.virtualPath;
-  j["sourcePath"] = m.sourcePath;
-  j["sourceContentHash"] = m.sourceContentHash;
-  j["sourceTimestamp"] = m.sourceTimestamp;
-  j["cookerVersion"] = m.cookerVersion;
-  j["cookedPayloadHash"] = m.cookedPayloadHash;
-  j["cookState"] = CookStateToString(m.cookState);
-  json deps = json::array();
-  for (const auto &d : m.dependencies)
-    deps.push_back(d.ToString());
-  j["dependencies"] = std::move(deps);
-  j["tags"] = m.tags;
-  j["thumbnailRef"] = m.thumbnailRef;
-  j["importSettings"] = m.importSettingsJson;
-  j["license"] = m.license;
-  j["attribution"] = m.attribution;
-  // sourceState is derived at runtime and intentionally not persisted.
-  return j;
-}
-
-CookState CookStateFromString(const std::string &s) {
-  if (s == "current")
-    return CookState::Current;
-  if (s == "stale")
-    return CookState::Stale;
-  if (s == "corrupt")
-    return CookState::Corrupt;
-  if (s == "failed")
-    return CookState::Failed;
-  return CookState::NotCooked;
-}
-
-bool MetadataFromJson(const json &j, AssetMetadata &m) {
-  if (!j.is_object() || !j.contains("id"))
-    return false;
-  if (!AssetId::FromString(j.value("id", std::string()), m.id))
-    return false;
-  m.type = AssetTypeFromString(j.value("type", std::string("unknown")));
-  m.displayName = j.value("displayName", std::string());
-  m.virtualPath = NormalizeFolder(j.value("virtualPath", std::string()));
-  m.sourcePath = j.value("sourcePath", std::string());
-  m.sourceContentHash = j.value("sourceContentHash", uint64_t{0});
-  m.sourceTimestamp = j.value("sourceTimestamp", int64_t{0});
-  m.cookerVersion = j.value("cookerVersion", uint32_t{0});
-  m.cookedPayloadHash = j.value("cookedPayloadHash", uint64_t{0});
-  m.cookState = CookStateFromString(j.value("cookState", std::string()));
-  if (j.contains("dependencies") && j["dependencies"].is_array()) {
-    for (const auto &d : j["dependencies"]) {
-      AssetId dep;
-      if (d.is_string() && AssetId::FromString(d.get<std::string>(), dep))
-        m.dependencies.push_back(dep);
-    }
-  }
-  if (j.contains("tags") && j["tags"].is_array()) {
-    for (const auto &t : j["tags"])
-      if (t.is_string())
-        m.tags.push_back(t.get<std::string>());
-  }
-  m.thumbnailRef = j.value("thumbnailRef", std::string());
-  m.importSettingsJson = j.value("importSettings", std::string());
-  m.license = j.value("license", std::string());
-  m.attribution = j.value("attribution", std::string());
-  return true;
-}
+// AssetMetadata <-> JSON now lives in asset_metadata_json.{h,cpp} (shared with
+// the .prpak pack TOC). The registry normalizes virtualPath after parsing.
 
 // Write `text` to `target` atomically: write a sibling temp file, then rename
 // over the destination. Returns false on any filesystem error.
@@ -208,6 +143,7 @@ bool AssetRegistry::Load() {
       for (const auto &ja : root["assets"]) {
         AssetMetadata m;
         if (MetadataFromJson(ja, m)) {
+          m.virtualPath = NormalizeFolder(m.virtualPath);
           RegisterFolderChain(m.virtualPath);
           m_assets[m.id] = std::move(m);
         }
@@ -257,7 +193,8 @@ bool AssetRegistry::SaveRegistryFile() {
   root["folders"] = std::move(folders);
   json assets = json::array();
   for (const auto &kv : m_assets)
-    assets.push_back(MetadataToJson(kv.second));
+    if (!kv.second.fromPack) // mounted-pack assets live in the pack, not here
+      assets.push_back(MetadataToJson(kv.second));
   root["assets"] = std::move(assets);
   return AtomicWrite(m_paths.registryFile(), root.dump(2));
 }
@@ -320,6 +257,26 @@ bool AssetRegistry::Update(const AssetMetadata &meta) {
 const AssetMetadata *AssetRegistry::Get(const AssetId &id) const {
   auto it = m_assets.find(id);
   return it == m_assets.end() ? nullptr : &it->second;
+}
+
+size_t AssetRegistry::ClearUserAssets() {
+  size_t removed = 0;
+  for (auto it = m_assets.begin(); it != m_assets.end();) {
+    if (!it->second.fromPack) {
+      it = m_assets.erase(it);
+      ++removed;
+    } else {
+      ++it;
+    }
+  }
+  m_favorites.clear();
+  m_recent.clear();
+  // Rebuild folder set from the assets that remain (mounted-pack assets).
+  m_folders.clear();
+  for (const auto &kv : m_assets)
+    RegisterFolderChain(kv.second.virtualPath);
+  NotifyChanged();
+  return removed;
 }
 
 std::vector<AssetId> AssetRegistry::AllAssets() const {

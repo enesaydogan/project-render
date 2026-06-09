@@ -53,6 +53,11 @@ public:
   std::vector<AssetId> AllAssets() const;
   size_t AssetCount() const { return m_assets.size(); }
 
+  // Removes every non-pack (user) asset plus all favorites and recents; keeps
+  // mounted-pack (read-only) assets. Returns the number of assets removed.
+  // Caller is responsible for deleting cooked cache files and Save()-ing.
+  size_t ClearUserAssets();
+
   // --- Folders (virtual) --------------------------------------------------
   const std::set<std::string> &Folders() const { return m_folders; }
   void CreateFolder(const std::string &path);

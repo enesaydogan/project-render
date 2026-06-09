@@ -4,6 +4,7 @@
 #include "asset_cooker.h"
 #include "asset_registry.h"
 #include "cooked_payload.h"
+#include "pack_mounts.h"
 
 #include <nlohmann/json.hpp>
 
@@ -42,7 +43,7 @@ ResolvedTexture ResolveTexture(const AssetRegistry &registry,
   if (!meta || meta->type != AssetType::Texture)
     return out;
   std::vector<uint8_t> blob;
-  if (!ReadCookedFile(paths.cookedTexturePath(id), blob))
+  if (!ResolveCookedPayload(paths, id, PayloadKind::Texture, blob))
     return out;
   CookedTexture cooked;
   if (!DeserializeCookedTexture(blob.data(), blob.size(), cooked))
@@ -60,7 +61,7 @@ ResolvedMaterial ResolveMaterial(const AssetRegistry &registry,
     return out;
 
   std::vector<uint8_t> bytes;
-  if (!ReadCookedFile(paths.cookedMaterialPath(id), bytes))
+  if (!ResolveCookedPayload(paths, id, PayloadKind::Material, bytes))
     return out;
   json doc;
   try {
@@ -102,7 +103,7 @@ ResolvedModel ResolveModel(const AssetRegistry &registry,
     return out;
 
   std::vector<uint8_t> blob;
-  if (!ReadCookedFile(paths.cookedMeshPath(id), blob))
+  if (!ResolveCookedPayload(paths, id, PayloadKind::Mesh, blob))
     return out;
   CookedModel cooked;
   if (!DeserializeCookedModel(blob.data(), blob.size(), cooked))

@@ -8,6 +8,8 @@
 #include "../asset_library/asset_paths.h"
 #include "../asset_library/asset_registry.h"
 #include "../asset_library/cooked_payload.h"
+#include "../asset_library/prpak_reader.h"
+#include "../asset_library/prpak_writer.h"
 #include "../asset_library/thumbnail_cache.h"
 
 #include <cstdio>
@@ -386,6 +388,126 @@ void TestCookedFileIoAndHash() {
   CHECK(HashFile(file) != 0);
 }
 
+void TestPrPakRoundTrip() {
+  std::printf("TestPrPakRoundTrip\n");
+  TempDir tmp;
+  const std::filesystem::path packPath = tmp.path / "test.prpak";
+
+  // Two assets; the second shares an identical mesh payload with the first to
+  // exercise content-hash dedup.
+  std::vector<uint8_t> meshBytes(2000, 0x5A);
+  std::vector<uint8_t> texBytes(1500, 0x33);
+
+  PackAssetInput a;
+  a.meta.id = AssetId::Generate();
+  a.meta.type = AssetType::Model;
+  a.meta.displayName = "Oak";
+  a.meta.tags = {"foliage"};
+  a.meta.attribution = "Acme";
+  a.meshPayload = meshBytes;
+
+  PackAssetInput b;
+  b.meta.id = AssetId::Generate();
+  b.meta.type = AssetType::Texture;
+  b.meta.displayName = "Bark";
+  b.texturePayload = texBytes;
+  b.meshPayload = meshBytes; // identical to a's mesh -> dedup
+
+  PackMeta pm;
+  pm.name = "TestPack";
+  pm.attribution = "Acme";
+
+  std::string err;
+  CHECK(WritePack(packPath, pm, {a, b}, &err));
+  CHECK(std::filesystem::exists(packPath));
+
+  PrPakReader reader;
+  CHECK(reader.Open(packPath, &err));
+  CHECK(reader.meta().name == "TestPack");
+  CHECK(reader.assets().size() == 2);
+  CHECK(reader.has(a.meta.id));
+  CHECK(reader.hasPayload(a.meta.id, PayloadKind::Mesh));
+  CHECK(!reader.hasPayload(a.meta.id, PayloadKind::Texture));
+  CHECK(reader.hasPayload(b.meta.id, PayloadKind::Texture));
+
+  // Random-access payload read returns the exact bytes.
+  std::vector<uint8_t> got;
+  CHECK(reader.ReadPayload(a.meta.id, PayloadKind::Mesh, got));
+  CHECK(got == meshBytes);
+  CHECK(reader.ReadPayload(b.meta.id, PayloadKind::Texture, got));
+  CHECK(got == texBytes);
+
+  // Metadata round-tripped.
+  const PackedAsset *pa = nullptr;
+  for (const auto &x : reader.assets())
+    if (x.meta.id == a.meta.id)
+      pa = &x;
+  CHECK(pa != nullptr);
+  if (pa) {
+    CHECK(pa->meta.displayName == "Oak");
+    CHECK(pa->meta.tags.size() == 1);
+    CHECK(pa->meta.attribution == "Acme");
+  }
+
+  std::string report;
+  CHECK(reader.Validate(report));
+}
+
+void TestPrPakDedup() {
+  std::printf("TestPrPakDedup\n");
+  TempDir tmp;
+  const std::filesystem::path packPath = tmp.path / "dedup.prpak";
+  std::vector<uint8_t> shared(10000, 0x77);
+  PackAssetInput a, b;
+  a.meta.id = AssetId::Generate();
+  a.meta.type = AssetType::Model;
+  a.meshPayload = shared;
+  b.meta.id = AssetId::Generate();
+  b.meta.type = AssetType::Model;
+  b.meshPayload = shared; // identical
+  CHECK(WritePack(packPath, PackMeta{}, {a, b}, nullptr));
+  // Deduped: one 10KB chunk stored, not two. File well under 2x payload.
+  const auto sz = std::filesystem::file_size(packPath);
+  CHECK(sz < 15000);
+}
+
+void TestPrPakCorruption() {
+  std::printf("TestPrPakCorruption\n");
+  TempDir tmp;
+  const std::filesystem::path packPath = tmp.path / "corrupt.prpak";
+  PackAssetInput a;
+  a.meta.id = AssetId::Generate();
+  a.meta.type = AssetType::Model;
+  a.meshPayload = std::vector<uint8_t>(500, 0x10);
+  CHECK(WritePack(packPath, PackMeta{}, {a}, nullptr));
+
+  // Flip a byte inside the payload region (after the 8-byte magic).
+  {
+    std::fstream f(packPath, std::ios::binary | std::ios::in | std::ios::out);
+    f.seekp(20);
+    char c = 0x00;
+    f.read(&c, 1);
+    f.seekp(20);
+    c ^= 0xFF;
+    f.write(&c, 1);
+  }
+  PrPakReader reader;
+  // Header/TOC still parse (corruption is in a payload chunk), but reading the
+  // payload must fail its checksum, and Validate must report invalid.
+  if (reader.Open(packPath, nullptr)) {
+    std::vector<uint8_t> got;
+    CHECK(!reader.ReadPayload(a.meta.id, PayloadKind::Mesh, got));
+    std::string report;
+    CHECK(!reader.Validate(report));
+  }
+
+  // A garbage file must not open.
+  const std::filesystem::path junk = tmp.path / "junk.prpak";
+  { std::ofstream(junk, std::ios::binary) << "not a pack at all............."; }
+  PrPakReader r2;
+  CHECK(!r2.Open(junk, nullptr));
+}
+
 } // namespace
 
 int main() {
@@ -400,6 +522,9 @@ int main() {
   TestCookedModelRoundTrip();
   TestCookedTextureRoundTrip();
   TestCookedFileIoAndHash();
+  TestPrPakRoundTrip();
+  TestPrPakDedup();
+  TestPrPakCorruption();
 
   std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
   return g_failures;

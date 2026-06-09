@@ -56,6 +56,18 @@ inline const char *CookStateToString(CookState s) {
   }
 }
 
+inline CookState CookStateFromString(const std::string &s) {
+  if (s == "current")
+    return CookState::Current;
+  if (s == "stale")
+    return CookState::Stale;
+  if (s == "corrupt")
+    return CookState::Corrupt;
+  if (s == "failed")
+    return CookState::Failed;
+  return CookState::NotCooked;
+}
+
 struct AssetMetadata {
   AssetId id;
   AssetType type = AssetType::Unknown;
@@ -95,6 +107,12 @@ struct AssetMetadata {
 
   // Derived at runtime from sourcePath; not persisted authoritatively.
   SourceState sourceState = SourceState::None;
+
+  // Runtime-only (never serialized): set for assets provided by a mounted
+  // read-only .prpak. Such assets are excluded from the user registry file and
+  // are not editable; their payloads resolve from the pack, not the cache.
+  bool fromPack = false;
+  std::string packPath;
 };
 
 } // namespace assetlib

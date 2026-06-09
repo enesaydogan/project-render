@@ -5,6 +5,8 @@
 #include "../asset_library/cook_jobs.h"
 #include "../asset_library/global_registry.h"
 #include "../asset_library/import_hook.h"
+#include "../asset_library/pack_builder.h"
+#include "../asset_library/pack_mounts.h"
 #include "../asset_library/thumbnail_cache.h"
 #include "asset_mime.h"
 
@@ -265,6 +267,30 @@ void AssetManagerPanel::createUi() {
           &AssetManagerPanel::onAddAsset);
   toolbar->addWidget(addButton);
 
+  auto *createPackButton = new QPushButton(tr("Create Pack…"), this);
+  createPackButton->setToolTip(
+      tr("Bundle the selected assets (or the whole library) and their "
+         "dependencies into a distributable .prpak"));
+  connect(createPackButton, &QPushButton::clicked, this,
+          &AssetManagerPanel::onCreatePack);
+  toolbar->addWidget(createPackButton);
+
+  auto *mountPackButton = new QPushButton(tr("Mount Pack…"), this);
+  mountPackButton->setToolTip(
+      tr("Mount a .prpak read-only so its assets appear in the library"));
+  connect(mountPackButton, &QPushButton::clicked, this,
+          &AssetManagerPanel::onMountPack);
+  toolbar->addWidget(mountPackButton);
+
+  auto *clearButton = new QPushButton(tr("Clear Library…"), this);
+  clearButton->setToolTip(
+      tr("Delete ALL user assets and their cooked cache (mounted packs are "
+         "kept). For testing — asks twice."));
+  clearButton->setStyleSheet("color:#d08080;");
+  connect(clearButton, &QPushButton::clicked, this,
+          &AssetManagerPanel::onClearLibrary);
+  toolbar->addWidget(clearButton);
+
   // Live background-cook progress indicator + per-item spinner animation.
   m_cookStatus = new QLabel(this);
   m_cookStatus->setStyleSheet("color:#808890;");
@@ -309,6 +335,7 @@ void AssetManagerPanel::createUi() {
   m_grid->setWordWrap(true);
   m_grid->setSpacing(8);
   m_grid->setContextMenuPolicy(Qt::CustomContextMenu);
+  m_grid->setSelectionMode(QAbstractItemView::ExtendedSelection); // multi-select for packing
   // Drag assets out to the viewport / other panels (drop targets read
   // kAssetMimeType). The panel itself does not accept drops.
   m_grid->setDragEnabled(true);
@@ -595,11 +622,16 @@ void AssetManagerPanel::refreshInspector() {
                             ? tr("(root)")
                             : QString::fromStdString(m->virtualPath));
 
-  QString src = m->sourcePath.empty()
-                    ? tr("(none)")
-                    : QString::fromStdString(m->sourcePath);
-  if (m->sourceState == assetlib::SourceState::Missing)
-    src += tr("  [MISSING]");
+  QString src;
+  if (m->fromPack) {
+    src = tr("Mounted pack: %1")
+              .arg(QFileInfo(QString::fromStdString(m->packPath)).fileName());
+  } else {
+    src = m->sourcePath.empty() ? tr("(none)")
+                                : QString::fromStdString(m->sourcePath);
+    if (m->sourceState == assetlib::SourceState::Missing)
+      src += tr("  [MISSING]");
+  }
   m_inspSource->setText(src);
   m_inspCook->setText(QString::fromUtf8(assetlib::CookStateToString(m->cookState)));
   m_inspDeps->setText(QString::number(m->dependencies.size()));
@@ -674,6 +706,140 @@ void AssetManagerPanel::onAddAsset() {
     QMessageBox::warning(
         this, tr("Add Asset"),
         tr("%1 file(s) could not be decoded and were skipped.").arg(failed));
+}
+
+void AssetManagerPanel::onCreatePack() {
+  if (!m_registry)
+    return;
+  // Pack the selected assets; if none selected, pack the whole (non-pack)
+  // library. Dependencies are pulled in automatically by BuildPack.
+  std::vector<assetlib::AssetId> ids;
+  for (QListWidgetItem *item : m_grid->selectedItems()) {
+    assetlib::AssetId id;
+    if (assetlib::AssetId::FromString(
+            item->data(kUserRoleId).toString().toStdString(), id))
+      ids.push_back(id);
+  }
+  if (ids.empty()) {
+    for (const assetlib::AssetId &id : m_registry->AllAssets()) {
+      const AssetMetadata *m = m_registry->Get(id);
+      if (m && !m->fromPack)
+        ids.push_back(id);
+    }
+  }
+  if (ids.empty()) {
+    QMessageBox::information(this, tr("Create Pack"),
+                             tr("There are no assets to pack."));
+    return;
+  }
+
+  bool ok = false;
+  const QString name = QInputDialog::getText(
+      this, tr("Create Pack"), tr("Pack name:"), QLineEdit::Normal,
+      tr("My Pack"), &ok);
+  if (!ok)
+    return;
+  const QString out = QFileDialog::getSaveFileName(
+      this, tr("Save Asset Pack"), name.trimmed() + ".prpak",
+      tr("Project Render Pack (*.prpak)"));
+  if (out.isEmpty())
+    return;
+
+  assetlib::PackMeta meta;
+  meta.name = name.trimmed().toStdString();
+  std::string err;
+  std::vector<std::string> warnings;
+  const bool built = assetlib::BuildPack(
+      *m_registry, m_registry->paths(), ids,
+      meta, std::filesystem::path(out.toStdWString()), &err, &warnings);
+  if (!built) {
+    QMessageBox::warning(this, tr("Create Pack"),
+                         tr("Pack creation failed: %1")
+                             .arg(QString::fromStdString(err)));
+    return;
+  }
+  QString msg = tr("Packed %1 asset(s).").arg(static_cast<int>(ids.size()));
+  if (!warnings.empty()) {
+    msg += tr("\n\nWarnings:\n");
+    for (const auto &w : warnings)
+      msg += QStringLiteral("• ") + QString::fromStdString(w) + QChar('\n');
+  }
+  QMessageBox::information(this, tr("Create Pack"), msg);
+}
+
+void AssetManagerPanel::onMountPack() {
+  if (!m_registry)
+    return;
+  const QString path = QFileDialog::getOpenFileName(
+      this, tr("Mount Asset Pack"), QString(),
+      tr("Project Render Pack (*.prpak)"));
+  if (path.isEmpty())
+    return;
+  std::string err;
+  if (!assetlib::PackMounts::Get().Mount(
+          std::filesystem::path(path.toStdWString()), *m_registry, &err)) {
+    QMessageBox::warning(this, tr("Mount Pack"),
+                         tr("Could not mount pack: %1")
+                             .arg(QString::fromStdString(err)));
+    return;
+  }
+  assetlib::PackMounts::Get().SaveMountList(m_registry->paths());
+  refreshFolderTree();
+  refreshGrid();
+}
+
+void AssetManagerPanel::onClearLibrary() {
+  if (!m_registry)
+    return;
+  // Count user (non-pack) assets.
+  int userCount = 0;
+  for (const assetlib::AssetId &id : m_registry->AllAssets()) {
+    const AssetMetadata *m = m_registry->Get(id);
+    if (m && !m->fromPack)
+      ++userCount;
+  }
+  if (userCount == 0) {
+    QMessageBox::information(this, tr("Clear Library"),
+                             tr("There are no user assets to clear."));
+    return;
+  }
+
+  // First confirmation.
+  if (QMessageBox::warning(
+          this, tr("Clear Library"),
+          tr("Delete all %1 user asset(s) from the library and remove their "
+             "cooked cache?\n\nMounted packs are kept. This cannot be undone.")
+              .arg(userCount),
+          QMessageBox::Yes | QMessageBox::Cancel,
+          QMessageBox::Cancel) != QMessageBox::Yes)
+    return;
+
+  // Second confirmation (defaults to Cancel).
+  if (QMessageBox::critical(
+          this, tr("Clear Library — are you sure?"),
+          tr("This permanently deletes every user asset and all cooked data. "
+             "Really continue?"),
+          QMessageBox::Yes | QMessageBox::Cancel,
+          QMessageBox::Cancel) != QMessageBox::Yes)
+    return;
+
+  const assetlib::AssetPaths &paths = m_registry->paths();
+  m_registry->ClearUserAssets();
+  m_registry->Save();
+
+  // Wipe the cooked cache + thumbnails (regenerated as needed). Pack payloads
+  // live in the .prpak files, not here, so mounted packs are unaffected.
+  std::error_code ec;
+  for (const std::filesystem::path &dir :
+       {paths.cacheDir() / "Meshes", paths.cacheDir() / "Textures",
+        paths.cacheDir() / "Materials", paths.thumbnailsDir()}) {
+    std::filesystem::remove_all(dir, ec);
+    std::filesystem::create_directories(dir, ec);
+  }
+
+  refreshFolderTree();
+  refreshGrid();
+  refreshInspector();
 }
 
 void AssetManagerPanel::onCookTick() {

@@ -154,6 +154,11 @@ target_sources(project-render PRIVATE
     src/asset_library/asset_runtime.cpp
     src/asset_library/cook_jobs.cpp
     src/asset_library/import_hook.cpp
+    src/asset_library/asset_metadata_json.cpp
+    src/asset_library/prpak_writer.cpp
+    src/asset_library/prpak_reader.cpp
+    src/asset_library/pack_builder.cpp
+    src/asset_library/pack_mounts.cpp
 )
 
 if(USE_QT_UI)
@@ -858,13 +863,18 @@ set(CPACK_COMPONENT_ARCHICAD28PLUGIN_DESCRIPTION "Installs the Live Link plugin 
 # -----------------------------------------------------------------------------
 option(BUILD_ASSET_TESTS "Build the asset_library unit test executable" ON)
 if(BUILD_ASSET_TESTS)
-  add_executable(asset-registry-tests
-    src/tests/asset_registry_tests.cpp
+  set(ASSET_TEST_CORE_SOURCES
     src/asset_library/asset_paths.cpp
     src/asset_library/asset_registry.cpp
     src/asset_library/thumbnail_cache.cpp
     src/asset_library/cooked_payload.cpp
-  )
+    src/asset_library/asset_metadata_json.cpp
+    src/asset_library/prpak_writer.cpp
+    src/asset_library/prpak_reader.cpp)
+
+  add_executable(asset-registry-tests
+    src/tests/asset_registry_tests.cpp
+    ${ASSET_TEST_CORE_SOURCES})
   target_include_directories(asset-registry-tests PRIVATE
     "${VCPKG_INSTALLED_DIR}/include")
   target_link_libraries(asset-registry-tests PRIVATE Cabinet)
@@ -872,6 +882,17 @@ if(BUILD_ASSET_TESTS)
     target_compile_options(asset-registry-tests PRIVATE /permissive-)
   endif()
   set_target_properties(asset-registry-tests PROPERTIES EXCLUDE_FROM_ALL TRUE)
+
+  # Command-line .prpak validator (release/CI use).
+  add_executable(prpak-tool
+    src/tools/prpak_tool.cpp
+    ${ASSET_TEST_CORE_SOURCES})
+  target_include_directories(prpak-tool PRIVATE "${VCPKG_INSTALLED_DIR}/include")
+  target_link_libraries(prpak-tool PRIVATE Cabinet)
+  if(MSVC)
+    target_compile_options(prpak-tool PRIVATE /permissive-)
+  endif()
+  set_target_properties(prpak-tool PROPERTIES EXCLUDE_FROM_ALL TRUE)
 endif()
 
 # Explicitly tell CPack where NSIS is installed

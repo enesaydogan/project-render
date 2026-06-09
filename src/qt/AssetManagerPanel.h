@@ -45,6 +45,9 @@ private:
     bool selectedAssetId(assetlib::AssetId &out) const;
 
     void onAddAsset();
+    void onCreatePack();
+    void onMountPack();
+    void onClearLibrary();
     void onCookTick(); // animates per-item cooking spinners + updates status
     void onNewFolder();
     void onRenameFolder();
