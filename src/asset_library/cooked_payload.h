@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <string>
 #include <vector>
 
 // Versioned, standalone cooked runtime payloads for meshes and textures. The
@@ -16,7 +17,7 @@ namespace assetlib {
 // then detected and recooked.
 constexpr uint32_t kCookerVersionMesh = 1;
 constexpr uint32_t kCookerVersionTexture = 1;
-constexpr uint32_t kCookerVersionVolume = 1;
+constexpr uint32_t kCookerVersionVolume = 2;
 
 struct CookedMesh {
   int32_t materialIndex = -1;
@@ -65,6 +66,8 @@ struct CookedVolume {
   float temperatureMin = 0.0f;
   float temperatureMax = 0.0f;
   std::vector<CookedVolumeBrick> temperatureBricks;
+  std::string densityGridName;
+  std::string temperatureGridName;
 };
 
 // Serialize to a self-describing, compressed byte blob (header + payload).

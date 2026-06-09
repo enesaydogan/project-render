@@ -67,6 +67,17 @@ int main(int argc, char **argv) {
   }
 
   std::printf("=== grids in %s ===\n", argv[1]);
+  std::vector<VdbImport::GridInfo> gridInfos;
+  std::string listError;
+  if (!VdbImport::ListGrids(argv[1], gridInfos, &listError)) {
+    std::printf("GRID LIST FAILED: %s\n", listError.c_str());
+    return 1;
+  }
+  for (const auto &grid : gridInfos) {
+    std::printf("  selectable '%s' value=%s scalar=%s vector=%s\n",
+                grid.name.c_str(), grid.valueType.c_str(),
+                grid.scalar ? "yes" : "no", grid.vector ? "yes" : "no");
+  }
   std::printf("%s", VdbImport::DescribeGrids(argv[1]).c_str());
 
   std::printf("\n=== import result ===\n");

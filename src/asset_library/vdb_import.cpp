@@ -83,7 +83,9 @@ bool IsTemperatureGridName(const std::string &name) {
   return lower.find("temperature") != std::string::npos ||
          lower.find("flame") != std::string::npos ||
          lower.find("heat") != std::string::npos ||
-         lower.find("fire") != std::string::npos;
+         lower.find("fire") != std::string::npos ||
+         lower.find("burn") != std::string::npos ||
+         lower.find("emission") != std::string::npos;
 }
 
 template <typename ValueT>
@@ -152,8 +154,45 @@ openvdb::FloatGrid::Ptr ConvertSupportedGrid(
 
 bool IsAvailable() { return true; }
 
+bool ListGrids(const std::string &path, std::vector<GridInfo> &out,
+               std::string *error) {
+  EnsureInit();
+  out.clear();
+  try {
+    openvdb::io::File file(path);
+    file.open();
+    for (auto it = file.beginName(); it != file.endName(); ++it) {
+      openvdb::GridBase::Ptr base = file.readGridMetadata(it.gridName());
+      GridInfo info;
+      info.name = it.gridName();
+      info.valueType = base ? base->valueType() : std::string();
+      info.scalar =
+          base && (base->isType<openvdb::FloatGrid>() ||
+                   base->isType<openvdb::DoubleGrid>() ||
+                   base->isType<openvdb::Int32Grid>() ||
+                   base->isType<openvdb::Int64Grid>() ||
+                   base->isType<openvdb::BoolGrid>());
+      info.vector =
+          base && (base->isType<openvdb::Vec3SGrid>() ||
+                   base->isType<openvdb::Vec3DGrid>());
+      out.push_back(std::move(info));
+    }
+    file.close();
+    return true;
+  } catch (const std::exception &e) {
+    if (error)
+      *error = std::string("VDB grid listing failed: ") + e.what();
+    return false;
+  }
+}
+
 bool ImportVdbToVolume(const std::string &path, CookedVolume &out,
                        std::string *error) {
+  return ImportVdbToVolume(path, ImportOptions{}, out, error);
+}
+
+bool ImportVdbToVolume(const std::string &path, const ImportOptions &options,
+                       CookedVolume &out, std::string *error) {
   auto fail = [&](const std::string &m) {
     if (error)
       *error = m;
@@ -168,8 +207,16 @@ bool ImportVdbToVolume(const std::string &path, CookedVolume &out,
     file.open();
     std::vector<std::pair<int, openvdb::GridBase::Ptr>> scalarCandidates;
     std::vector<std::pair<int, openvdb::GridBase::Ptr>> vectorCandidates;
+    openvdb::GridBase::Ptr selectedDensity;
+    openvdb::GridBase::Ptr selectedTemperature;
     for (auto it = file.beginName(); it != file.endName(); ++it) {
       openvdb::GridBase::Ptr base = file.readGrid(it.gridName());
+      if (!options.densityGrid.empty() &&
+          it.gridName() == options.densityGrid)
+        selectedDensity = base;
+      if (!options.temperatureGrid.empty() &&
+          it.gridName() == options.temperatureGrid)
+        selectedTemperature = base;
       const int rank = DensityGridRank(it.gridName(), base->getGridClass());
       if (base->isType<openvdb::FloatGrid>() ||
           base->isType<openvdb::DoubleGrid>() ||
@@ -186,12 +233,18 @@ bool ImportVdbToVolume(const std::string &path, CookedVolume &out,
       }
     }
     file.close();
-    for (const auto &candidate : scalarCandidates) {
-      if (candidate.second &&
-          IsTemperatureGridName(candidate.second->getName())) {
-        temperatureGrid = ConvertSupportedGrid(candidate.second, false);
-        if (temperatureGrid)
-          break;
+    if (!options.temperatureGrid.empty()) {
+      temperatureGrid = ConvertSupportedGrid(selectedTemperature, false);
+      if (!temperatureGrid)
+        return fail("selected temperature grid is missing or not scalar");
+    } else {
+      for (const auto &candidate : scalarCandidates) {
+        if (candidate.second &&
+            IsTemperatureGridName(candidate.second->getName())) {
+          temperatureGrid = ConvertSupportedGrid(candidate.second, false);
+          if (temperatureGrid)
+            break;
+        }
       }
     }
     auto pickBest = [](auto &candidates, bool allowVector) {
@@ -201,14 +254,44 @@ bool ImportVdbToVolume(const std::string &path, CookedVolume &out,
                 [](const auto &a, const auto &b) { return a.first > b.first; });
       return ConvertSupportedGrid(candidates.front().second, allowVector);
     };
-    grid = pickBest(scalarCandidates, false);
-    if (!grid)
-      grid = pickBest(vectorCandidates, true);
+    if (!options.densityGrid.empty()) {
+      grid = ConvertSupportedGrid(selectedDensity, true);
+      if (!grid)
+        return fail("selected density grid is missing or unsupported");
+    } else {
+      scalarCandidates.erase(
+          std::remove_if(scalarCandidates.begin(), scalarCandidates.end(),
+                         [](const auto &candidate) {
+                           return candidate.second &&
+                                  IsTemperatureGridName(
+                                      candidate.second->getName());
+                         }),
+          scalarCandidates.end());
+      grid = pickBest(scalarCandidates, false);
+      if (!grid && !vectorCandidates.empty()) {
+        vectorCandidates.erase(
+            std::remove_if(
+                vectorCandidates.begin(), vectorCandidates.end(),
+                [](const auto &candidate) {
+                  if (!candidate.second)
+                    return true;
+                  const std::string name = Lower(candidate.second->getName());
+                  return name.find("density") == std::string::npos &&
+                         name.find("smoke") == std::string::npos &&
+                         name.find("fog") == std::string::npos;
+                }),
+            vectorCandidates.end());
+        grid = pickBest(vectorCandidates, true);
+      }
+    }
   } catch (const std::exception &e) {
     return fail(std::string("VDB read failed: ") + e.what());
   }
   if (!grid)
     return fail("no renderable scalar or vector grid found in VDB");
+  const std::string densityGridName = grid->getName();
+  const std::string temperatureGridName =
+      temperatureGrid ? temperatureGrid->getName() : std::string();
 
   const openvdb::CoordBBox bbox = grid->evalActiveVoxelBoundingBox();
   if (bbox.empty())
@@ -228,17 +311,31 @@ bool ImportVdbToVolume(const std::string &path, CookedVolume &out,
   const std::array<uint32_t, 3> importedDim =
       ChooseImportedDimensions(sourceDim);
   out = CookedVolume{};
+  out.densityGridName = densityGridName;
+  out.temperatureGridName = temperatureGridName;
   out.dim[0] = importedDim[0];
   out.dim[1] = importedDim[1];
   out.dim[2] = importedDim[2];
   out.brickSize = 8;
 
-  // World-space AABB from the grid transform.
-  const openvdb::Vec3d wmin =
-      grid->indexToWorld(openvdb::Vec3d(bbox.min().x(), bbox.min().y(),
-                                        bbox.min().z()));
-  const openvdb::Vec3d wmax = grid->indexToWorld(openvdb::Vec3d(
-      bbox.max().x() + 1, bbox.max().y() + 1, bbox.max().z() + 1));
+  // Transform all corners: two-corner bounds are invalid for rotated/sheared
+  // index transforms.
+  openvdb::Vec3d wmin((std::numeric_limits<double>::max)());
+  openvdb::Vec3d wmax((std::numeric_limits<double>::lowest)());
+  const openvdb::Vec3d imin(bbox.min().x(), bbox.min().y(), bbox.min().z());
+  const openvdb::Vec3d imax(bbox.max().x() + 1, bbox.max().y() + 1,
+                            bbox.max().z() + 1);
+  for (int corner = 0; corner < 8; ++corner) {
+    const openvdb::Vec3d index(
+        (corner & 1) ? imax.x() : imin.x(),
+        (corner & 2) ? imax.y() : imin.y(),
+        (corner & 4) ? imax.z() : imin.z());
+    const openvdb::Vec3d world = grid->indexToWorld(index);
+    for (int axis = 0; axis < 3; ++axis) {
+      wmin[axis] = (std::min)(wmin[axis], world[axis]);
+      wmax[axis] = (std::max)(wmax[axis], world[axis]);
+    }
+  }
   for (int i = 0; i < 3; ++i) {
     out.boundsMin[i] = static_cast<float>(std::min(wmin[i], wmax[i]));
     out.boundsMax[i] = static_cast<float>(std::max(wmin[i], wmax[i]));
@@ -474,8 +571,20 @@ std::string DescribeGrids(const std::string &path) {
 
 namespace VdbImport {
 bool IsAvailable() { return false; }
+bool ListGrids(const std::string &, std::vector<GridInfo> &,
+               std::string *error) {
+  if (error)
+    *error = "OpenVDB disabled";
+  return false;
+}
 bool ImportVdbToVolume(const std::string &, assetlib::CookedVolume &,
                        std::string *error) {
+  if (error)
+    *error = "this build was configured without OpenVDB (.vdb unsupported)";
+  return false;
+}
+bool ImportVdbToVolume(const std::string &, const ImportOptions &,
+                       assetlib::CookedVolume &, std::string *error) {
   if (error)
     *error = "this build was configured without OpenVDB (.vdb unsupported)";
   return false;

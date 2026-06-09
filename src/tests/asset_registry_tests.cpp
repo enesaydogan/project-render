@@ -409,6 +409,8 @@ void TestCookedVolumeRoundTrip() {
   vol.bricks.push_back(b1);
   vol.temperatureMin = 0.25f;
   vol.temperatureMax = 3.5f;
+  vol.densityGridName = "density";
+  vol.temperatureGridName = "flame";
   CookedVolumeBrick temperature = b0;
   temperature.minVal = 0.25f;
   temperature.maxVal = 3.5f;
@@ -428,6 +430,8 @@ void TestCookedVolumeRoundTrip() {
   CHECK(back.temperatureMin == 0.25f);
   CHECK(back.temperatureMax == 3.5f);
   CHECK(back.temperatureBricks.size() == 1);
+  CHECK(back.densityGridName == "density");
+  CHECK(back.temperatureGridName == "flame");
   if (back.temperatureBricks.size() == 1) {
     CHECK(back.temperatureBricks[0].data == temperature.data);
   }

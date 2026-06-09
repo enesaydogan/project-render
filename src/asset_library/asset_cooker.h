@@ -67,9 +67,13 @@ AssetId RegisterAndCookVolume(AssetRegistry &registry, const AssetPaths &paths,
 // is missing or fails to load. Requires the Asset:: loader to be initialized.
 bool RecookModelFromSource(AssetRegistry &registry, const AssetPaths &paths,
                            const AssetId &modelId);
+bool RecookVolumeFromSource(AssetRegistry &registry, const AssetPaths &paths,
+                            const AssetId &volumeId);
 
 // True if a current, version-matching cooked mesh payload exists for the asset.
 bool HasCurrentCookedModel(const AssetRegistry &registry,
                            const AssetPaths &paths, const AssetId &modelId);
+bool HasCurrentCookedVolume(const AssetRegistry &registry,
+                            const AssetPaths &paths, const AssetId &volumeId);
 
 } // namespace assetlib

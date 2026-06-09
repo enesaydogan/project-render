@@ -26,6 +26,10 @@ struct Writer {
   void u32(uint32_t v) { raw(&v, 4); }
   void i32(int32_t v) { raw(&v, 4); }
   void f32(float v) { raw(&v, 4); }
+  void string(const std::string &v) {
+    u32(static_cast<uint32_t>(v.size()));
+    bytes(v.data(), v.size());
+  }
   void bytes(const void *p, size_t n) {
     if (n)
       raw(p, n);
@@ -73,6 +77,14 @@ struct Reader {
       pos += 4;
     }
     return v;
+  }
+  std::string string() {
+    const uint32_t length = u32();
+    if (!need(length))
+      return {};
+    std::string value(reinterpret_cast<const char *>(data + pos), length);
+    pos += length;
+    return value;
   }
   // Copies n bytes into out. Fails (and leaves out empty) on overrun.
   void bytes(std::vector<uint8_t> &out, size_t n) {
@@ -288,13 +300,21 @@ bool SerializeCookedVolume(const CookedVolume &vol, std::vector<uint8_t> &out) {
     w.u32(static_cast<uint32_t>(b.data.size()));
     w.bytes(b.data.data(), b.data.size());
   }
+  w.string(vol.densityGridName);
+  w.string(vol.temperatureGridName);
   return Finalize(kMagicVolume, kCookerVersionVolume, payload, out);
 }
 
 bool DeserializeCookedVolume(const uint8_t *data, size_t size,
                              CookedVolume &out) {
+  if (size < 8)
+    return false;
+  uint32_t storedVersion = 0;
+  std::memcpy(&storedVersion, data + 4, sizeof(storedVersion));
+  if (storedVersion != 1 && storedVersion != kCookerVersionVolume)
+    return false;
   std::vector<uint8_t> body;
-  if (!OpenBlob(data, size, kMagicVolume, kCookerVersionVolume, body))
+  if (!OpenBlob(data, size, kMagicVolume, storedVersion, body))
     return false;
   Reader r(body.data(), body.size());
   for (int i = 0; i < 3; ++i)
@@ -351,7 +371,11 @@ bool DeserializeCookedVolume(const uint8_t *data, size_t size,
       return false;
     out.temperatureBricks.push_back(std::move(b));
   }
-  return true;
+  if (storedVersion == 1)
+    return r.ok && r.pos == r.size;
+  out.densityGridName = r.string();
+  out.temperatureGridName = r.string();
+  return r.ok;
 }
 
 bool WriteCookedFile(const std::filesystem::path &path,

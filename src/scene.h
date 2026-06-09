@@ -27,9 +27,11 @@ struct VolumeMaterial {
   float ambient = 0.35f;
   float color[3] = {1.0f, 1.0f, 1.0f};
   float emissionColor[3] = {1.0f, 0.35f, 0.05f};
-  // ~100 with the shader's internal x1000 scale gives a full flame; headroom to
-  // 1000. Only volumes with a temperature channel emit (smoke-only unaffected).
-  float emissionStrength = 100.0f;
+  // Scene-linear radiance scale. Only volumes with a heat channel emit.
+  float emissionStrength = 100000.0f;
+  float temperatureLow = 0.02f;
+  float temperatureHigh = 0.98f;
+  float temperatureGamma = 1.5f;
   float stepJitter = 1.0f;
   int marchSteps = 96;
   int lightSteps = 8;
@@ -43,6 +45,7 @@ struct Node {
   std::string sourcePath;          // Path to the asset file for re-loading
   std::string importGroupKey;      // Shared key for imported multi-node groups
   std::string volumeAssetId;       // non-empty => this node is a volumetric asset
+  std::vector<uint8_t> volumePayload; // embedded cooked payload for portable scenes
   VolumeMaterial volumeMaterial;
   std::vector<int> linkedMaterialIndices; // global material indices per import slot
   std::vector<std::string> linkedMaterialSourceNames; // original imported names per slot

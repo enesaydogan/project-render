@@ -1,6 +1,7 @@
 #pragma once
 #include "../assets/asset_loader.h"
 #include "asset_id.h"
+#include "vdb_import.h"
 #include <string>
 #include <vector>
 
@@ -23,5 +24,7 @@ AssetId RegisterImportedModel(const std::string &displayName,
 // unsupported/undecodable file. Requires the Asset:: loader to be initialized.
 // Decodes synchronously on the calling (main) thread; cooking is backgrounded.
 AssetId ImportFileToLibrary(const std::string &path);
+AssetId ImportVdbFileToLibrary(const std::string &path,
+                               const VdbImport::ImportOptions &options);
 
 } // namespace assetlib

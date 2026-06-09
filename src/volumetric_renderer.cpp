@@ -1,8 +1,10 @@
 #include "volumetric_renderer.h"
 
 #include "asset_library/cooked_payload.h"
+#include "asset_library/asset_cooker.h"
 #include "asset_library/global_registry.h"
 #include "asset_library/pack_mounts.h"
+#include "camera.h"
 #include "d3d12_helpers.h"
 #include "dxc_wrapper.h"
 #include "scene.h"
@@ -15,6 +17,8 @@
 #include <cstring>
 #include <limits>
 #include <new>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 using Microsoft::WRL::ComPtr;
@@ -22,23 +26,25 @@ using Microsoft::WRL::ComPtr;
 namespace VolumetricRenderer {
 namespace {
 
-assetlib::AssetId s_activeId;
 Params s_params;
 
-// CPU dense density field (R32F), built when a volume is set; uploaded lazily.
-std::vector<float> s_density;
-std::vector<float> s_temperature;
-uint32_t s_dim[3] = {0, 0, 0};
-float s_temperatureMin = 0.0f;
-float s_temperatureInvRange = 0.0f;
-DirectX::XMFLOAT3 s_boundsMin{0, 0, 0};
-DirectX::XMFLOAT3 s_boundsMax{0, 0, 0};
-bool s_needsUpload = false;
-bool s_uploadFailed = false;
+struct RuntimeVolume {
+  assetlib::AssetId id;
+  std::vector<float> density;
+  std::vector<float> temperature;
+  uint32_t dim[3] = {0, 0, 0};
+  float temperatureMin = 0.0f;
+  float temperatureInvRange = 0.0f;
+  DirectX::XMFLOAT3 boundsMin{0, 0, 0};
+  DirectX::XMFLOAT3 boundsMax{0, 0, 0};
+  bool needsUpload = false;
+  bool uploadFailed = false;
+  ComPtr<ID3D12Resource> texture;
+  ComPtr<ID3D12Resource> uploadBuffer;
+};
 
-ComPtr<ID3D12Resource> s_densityTex;
-ComPtr<ID3D12Resource> s_uploadBuffer; // kept alive across frames
-D3D12_RESOURCE_STATES s_densityState = D3D12_RESOURCE_STATE_COMMON;
+std::unordered_map<std::string, RuntimeVolume> s_volumes;
+assetlib::AssetId s_lastResolvedId;
 
 ComPtr<ID3D12RootSignature> s_compositeRootSig;
 ComPtr<ID3D12PipelineState> s_rasterCompositePSO;
@@ -67,7 +73,7 @@ bool EnsureCompositePipeline(ID3D12Device *device) {
     params[0].Descriptor.ShaderRegister = 0;
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     params[1].Constants.ShaderRegister = 1;
-    params[1].Constants.Num32BitValues = 34;
+    params[1].Constants.Num32BitValues = 36;
     params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     params[2].DescriptorTable.NumDescriptorRanges = 1;
     params[2].DescriptorTable.pDescriptorRanges = &ranges[0];
@@ -171,7 +177,7 @@ std::vector<uint32_t> SourceBinCounts(uint32_t sourceDim,
 // Dequantize sparse bricks directly into a bounded dense runtime grid. When
 // reduction is required, each target voxel stores the box average of all source
 // voxels it represents, including empty voxels, preserving integrated density.
-bool BuildDenseField(const assetlib::CookedVolume &vol) {
+bool BuildDenseField(const assetlib::CookedVolume &vol, RuntimeVolume &runtime) {
   if (vol.brickSize == 0 || vol.brickSize > 64) {
     return false;
   }
@@ -323,77 +329,74 @@ bool BuildDenseField(const assetlib::CookedVolume &vol) {
     }
   }
 
-  s_density = std::move(density);
-  s_temperature = std::move(temperature);
-  s_temperatureMin = vol.temperatureMin;
+  runtime.density = std::move(density);
+  runtime.temperature = std::move(temperature);
+  runtime.temperatureMin = vol.temperatureMin;
   const float temperatureRange = vol.temperatureMax - vol.temperatureMin;
-  s_temperatureInvRange =
+  runtime.temperatureInvRange =
       temperatureRange > 1.0e-6f ? 1.0f / temperatureRange : 0.0f;
-  s_dim[0] = runtimeDim[0];
-  s_dim[1] = runtimeDim[1];
-  s_dim[2] = runtimeDim[2];
-  s_boundsMin = {vol.boundsMin[0], vol.boundsMin[1], vol.boundsMin[2]};
-  s_boundsMax = {vol.boundsMax[0], vol.boundsMax[1], vol.boundsMax[2]};
+  runtime.dim[0] = runtimeDim[0];
+  runtime.dim[1] = runtimeDim[1];
+  runtime.dim[2] = runtimeDim[2];
+  runtime.boundsMin = {vol.boundsMin[0], vol.boundsMin[1], vol.boundsMin[2]};
+  runtime.boundsMax = {vol.boundsMax[0], vol.boundsMax[1], vol.boundsMax[2]};
   return true;
 }
 
-} // namespace
+RuntimeVolume *ResolveVolume(const assetlib::AssetId &id) {
+  if (!id.valid())
+    return nullptr;
+  const std::string key = id.ToString();
+  if (auto it = s_volumes.find(key); it != s_volumes.end())
+    return &it->second;
 
-bool SetActiveVolume(const assetlib::AssetId &id) {
   assetlib::AssetRegistry *reg = assetlib::GlobalRegistry();
-  if (!reg)
-    return false;
   std::vector<uint8_t> blob;
-  if (!assetlib::ResolveCookedPayload(reg->paths(), id,
-                                      assetlib::PayloadKind::Volume, blob))
-    return false;
-  assetlib::CookedVolume vol;
-  if (!assetlib::DeserializeCookedVolume(blob.data(), blob.size(), vol))
-    return false;
-  if (vol.dim[0] == 0 || vol.dim[1] == 0 || vol.dim[2] == 0)
-    return false;
-  if (!BuildDenseField(vol))
-    return false;
-  s_activeId = id;
-  s_needsUpload = true;
-  s_uploadFailed = false;
-  s_densityTex.Reset(); // force recreate at new dims
-  s_uploadBuffer.Reset();
-  return true;
+  if (reg) {
+    if (!assetlib::HasCurrentCookedVolume(*reg, reg->paths(), id))
+      assetlib::RecookVolumeFromSource(*reg, reg->paths(), id);
+    assetlib::ResolveCookedPayload(reg->paths(), id,
+                                   assetlib::PayloadKind::Volume, blob);
+  }
+  if (blob.empty()) {
+    const std::string idString = id.ToString();
+    for (const Scene::Node &node : Scene::GetNodes()) {
+      if (node.volumeAssetId == idString && !node.volumePayload.empty()) {
+        blob = node.volumePayload;
+        break;
+      }
+    }
+  }
+  if (blob.empty())
+    return nullptr;
+  assetlib::CookedVolume cooked;
+  if (!assetlib::DeserializeCookedVolume(blob.data(), blob.size(), cooked) ||
+      cooked.dim[0] == 0 || cooked.dim[1] == 0 || cooked.dim[2] == 0)
+    return nullptr;
+
+  RuntimeVolume runtime;
+  runtime.id = id;
+  if (!BuildDenseField(cooked, runtime))
+    return nullptr;
+  runtime.needsUpload = true;
+  auto [it, inserted] = s_volumes.emplace(key, std::move(runtime));
+  return inserted ? &it->second : nullptr;
 }
 
-void ClearActiveVolume() {
-  s_activeId = {};
-  s_density.clear();
-  s_temperature.clear();
-  s_dim[0] = s_dim[1] = s_dim[2] = 0;
-  s_needsUpload = false;
-  s_uploadFailed = false;
-  s_densityTex.Reset();
-  s_uploadBuffer.Reset();
-}
-
-bool HasActiveVolume() { return s_activeId.valid() && !s_density.empty(); }
-const assetlib::AssetId &ActiveVolumeId() { return s_activeId; }
-Params &GetParams() { return s_params; }
-ID3D12Resource *GetDensityTexture() { return s_densityTex.Get(); }
-DirectX::XMFLOAT3 BoundsMin() { return s_boundsMin; }
-DirectX::XMFLOAT3 BoundsMax() { return s_boundsMax; }
-
-bool EnsureUploaded(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList) {
-  if (!HasActiveVolume())
+bool EnsureUploaded(RuntimeVolume &volume, ID3D12Device *device,
+                    ID3D12GraphicsCommandList *cmdList) {
+  if (volume.density.empty())
     return false;
-  if (!s_needsUpload && s_densityTex)
+  if (!volume.needsUpload && volume.texture)
     return true;
-  if (s_uploadFailed)
+  if (volume.uploadFailed)
     return false;
 
-  // Create the 3D texture.
   D3D12_RESOURCE_DESC desc = {};
   desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE3D;
-  desc.Width = s_dim[0];
-  desc.Height = s_dim[1];
-  desc.DepthOrArraySize = static_cast<UINT16>(s_dim[2]);
+  desc.Width = volume.dim[0];
+  desc.Height = volume.dim[1];
+  desc.DepthOrArraySize = static_cast<UINT16>(volume.dim[2]);
   desc.MipLevels = 1;
   desc.Format = DXGI_FORMAT_R16G16_FLOAT;
   desc.SampleDesc.Count = 1;
@@ -401,19 +404,18 @@ bool EnsureUploaded(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList) {
   D3D12_HEAP_PROPERTIES defaultProp = {D3D12_HEAP_TYPE_DEFAULT};
   HRESULT hr = device->CreateCommittedResource(
       &defaultProp, D3D12_HEAP_FLAG_NONE, &desc,
-      D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&s_densityTex));
+      D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&volume.texture));
   if (FAILED(hr)) {
     fprintf(stderr,
             "Volume texture allocation failed for %ux%ux%u R16G16F "
             "(HRESULT 0x%08X)\n",
-            s_dim[0], s_dim[1], s_dim[2], static_cast<unsigned>(hr));
-    s_uploadFailed = true;
-    s_needsUpload = false;
+            volume.dim[0], volume.dim[1], volume.dim[2],
+            static_cast<unsigned>(hr));
+    volume.uploadFailed = true;
+    volume.needsUpload = false;
     return false;
   }
-  s_densityState = D3D12_RESOURCE_STATE_COPY_DEST;
 
-  // Upload buffer sized from the copyable footprint (256-aligned row pitch).
   D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
   UINT numRows = 0;
   UINT64 rowSizeBytes = 0, totalBytes = 0;
@@ -432,79 +434,210 @@ bool EnsureUploaded(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList) {
   hr = device->CreateCommittedResource(
       &uploadProp, D3D12_HEAP_FLAG_NONE, &bufDesc,
       D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-      IID_PPV_ARGS(&s_uploadBuffer));
+      IID_PPV_ARGS(&volume.uploadBuffer));
   if (FAILED(hr)) {
-    fprintf(stderr,
-            "Volume upload allocation failed for %llu bytes "
-            "(HRESULT 0x%08X)\n",
-            static_cast<unsigned long long>(totalBytes),
-            static_cast<unsigned>(hr));
-    s_densityTex.Reset();
-    s_uploadFailed = true;
-    s_needsUpload = false;
+    volume.texture.Reset();
+    volume.uploadFailed = true;
+    volume.needsUpload = false;
     return false;
   }
 
-  // Copy dense data into the (row-padded) upload buffer.
   uint8_t *mapped = nullptr;
   D3D12_RANGE noRead = {0, 0};
-  hr = s_uploadBuffer->Map(0, &noRead, reinterpret_cast<void **>(&mapped));
+  hr = volume.uploadBuffer->Map(0, &noRead,
+                                reinterpret_cast<void **>(&mapped));
   if (FAILED(hr)) {
-    fprintf(stderr, "Volume upload map failed (HRESULT 0x%08X)\n",
-            static_cast<unsigned>(hr));
-    s_densityTex.Reset();
-    s_uploadBuffer.Reset();
-    s_uploadFailed = true;
-    s_needsUpload = false;
+    volume.texture.Reset();
+    volume.uploadBuffer.Reset();
+    volume.uploadFailed = true;
+    volume.needsUpload = false;
     return false;
   }
   const UINT64 dstRowPitch = footprint.Footprint.RowPitch;
   const UINT64 dstSlicePitch = dstRowPitch * numRows;
-  for (uint32_t z = 0; z < s_dim[2]; ++z) {
-    for (uint32_t y = 0; y < s_dim[1]; ++y) {
+  for (uint32_t z = 0; z < volume.dim[2]; ++z) {
+    for (uint32_t y = 0; y < volume.dim[1]; ++y) {
       const float *src =
-          &s_density[(static_cast<size_t>(z) * s_dim[1] + y) * s_dim[0]];
+          &volume.density[(static_cast<size_t>(z) * volume.dim[1] + y) *
+                          volume.dim[0]];
       auto *dst = reinterpret_cast<DirectX::PackedVector::HALF *>(
           mapped + footprint.Offset + z * dstSlicePitch +
           static_cast<UINT64>(y) * dstRowPitch);
       DirectX::PackedVector::XMConvertFloatToHalfStream(
           dst, 2 * sizeof(DirectX::PackedVector::HALF), src, sizeof(float),
-          s_dim[0]);
-      if (s_temperature.empty()) {
-        for (uint32_t x = 0; x < s_dim[0]; ++x)
+          volume.dim[0]);
+      if (volume.temperature.empty()) {
+        for (uint32_t x = 0; x < volume.dim[0]; ++x)
           dst[x * 2 + 1] = 0;
       } else {
         const float *temperatureSrc =
-            &s_temperature[(static_cast<size_t>(z) * s_dim[1] + y) *
-                           s_dim[0]];
+            &volume.temperature[(static_cast<size_t>(z) * volume.dim[1] + y) *
+                                volume.dim[0]];
         DirectX::PackedVector::XMConvertFloatToHalfStream(
             dst + 1, 2 * sizeof(DirectX::PackedVector::HALF), temperatureSrc,
-            sizeof(float), s_dim[0]);
+            sizeof(float), volume.dim[0]);
       }
     }
   }
-  s_uploadBuffer->Unmap(0, nullptr);
+  volume.uploadBuffer->Unmap(0, nullptr);
 
   D3D12_TEXTURE_COPY_LOCATION dstLoc = {};
-  dstLoc.pResource = s_densityTex.Get();
+  dstLoc.pResource = volume.texture.Get();
   dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-  dstLoc.SubresourceIndex = 0;
   D3D12_TEXTURE_COPY_LOCATION srcLoc = {};
-  srcLoc.pResource = s_uploadBuffer.Get();
+  srcLoc.pResource = volume.uploadBuffer.Get();
   srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
   srcLoc.PlacedFootprint = footprint;
   cmdList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, nullptr);
 
   D3D12_RESOURCE_BARRIER barrier = {};
   barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-  barrier.Transition.pResource = s_densityTex.Get();
+  barrier.Transition.pResource = volume.texture.Get();
   barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
   barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
   barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
   cmdList->ResourceBarrier(1, &barrier);
-  s_densityState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-  s_needsUpload = false;
+  volume.needsUpload = false;
   return true;
+}
+
+} // namespace
+
+bool SetActiveVolume(const assetlib::AssetId &id) {
+  RuntimeVolume *volume = ResolveVolume(id);
+  if (!volume)
+    return false;
+  s_lastResolvedId = id;
+  return true;
+}
+
+void ClearActiveVolume() {
+  s_lastResolvedId = {};
+  s_volumes.clear();
+}
+
+bool HasActiveVolume() {
+  for (const Scene::Node &node : Scene::GetNodes()) {
+    if (node.visible && !node.volumeAssetId.empty())
+      return true;
+  }
+  return false;
+}
+const assetlib::AssetId &ActiveVolumeId() { return s_lastResolvedId; }
+Params &GetParams() { return s_params; }
+
+void AppendEmissionLights(std::vector<Light> &lights) {
+  constexpr uint32_t kClustersPerAxis = 3;
+  for (const Scene::Node &node : Scene::GetNodes()) {
+    const Scene::VolumeMaterial &material = node.volumeMaterial;
+    if (!node.visible || node.volumeAssetId.empty() ||
+        material.emissionStrength <= 0.0f)
+      continue;
+    assetlib::AssetId id;
+    if (!assetlib::AssetId::FromString(node.volumeAssetId, id))
+      continue;
+    RuntimeVolume *volume = ResolveVolume(id);
+    if (!volume || volume->temperature.empty() ||
+        volume->temperatureInvRange <= 0.0f)
+      continue;
+
+    const float low = (std::clamp)(material.temperatureLow, 0.0f, 1.0f);
+    const float high =
+        (std::clamp)(material.temperatureHigh, low + 1.0e-4f, 1.0f);
+    for (uint32_t cz = 0; cz < kClustersPerAxis; ++cz) {
+      for (uint32_t cy = 0; cy < kClustersPerAxis; ++cy) {
+        for (uint32_t cx = 0; cx < kClustersPerAxis; ++cx) {
+          const uint32_t x0 = cx * volume->dim[0] / kClustersPerAxis;
+          const uint32_t x1 = (cx + 1) * volume->dim[0] / kClustersPerAxis;
+          const uint32_t y0 = cy * volume->dim[1] / kClustersPerAxis;
+          const uint32_t y1 = (cy + 1) * volume->dim[1] / kClustersPerAxis;
+          const uint32_t z0 = cz * volume->dim[2] / kClustersPerAxis;
+          const uint32_t z1 = (cz + 1) * volume->dim[2] / kClustersPerAxis;
+          double weight = 0.0;
+          double px = 0.0, py = 0.0, pz = 0.0;
+          for (uint32_t z = z0; z < z1; ++z)
+            for (uint32_t y = y0; y < y1; ++y)
+              for (uint32_t x = x0; x < x1; ++x) {
+                const size_t index =
+                    (static_cast<size_t>(z) * volume->dim[1] + y) *
+                        volume->dim[0] +
+                    x;
+                const float raw =
+                    (volume->temperature[index] - volume->temperatureMin) *
+                    volume->temperatureInvRange;
+                const float heat =
+                    (std::clamp)((raw - low) / (high - low), 0.0f, 1.0f);
+                const float w =
+                    std::pow(heat, (std::max)(material.temperatureGamma, 0.05f));
+                weight += w;
+                px += (static_cast<double>(x) + 0.5) * w;
+                py += (static_cast<double>(y) + 0.5) * w;
+                pz += (static_cast<double>(z) + 0.5) * w;
+              }
+          if (weight <= 1.0e-6)
+            continue;
+
+          const float local[3] = {
+              static_cast<float>(px / weight / volume->dim[0]),
+              static_cast<float>(py / weight / volume->dim[1]),
+              static_cast<float>(pz / weight / volume->dim[2])};
+          Light light = {};
+          light.type = static_cast<uint32_t>(LightType::Omni);
+          light.position[0] = local[0] * node.transform[0] +
+                              local[1] * node.transform[4] +
+                              local[2] * node.transform[8] + node.transform[12];
+          light.position[1] = local[0] * node.transform[1] +
+                              local[1] * node.transform[5] +
+                              local[2] * node.transform[9] + node.transform[13];
+          light.position[2] = local[0] * node.transform[2] +
+                              local[1] * node.transform[6] +
+                              local[2] * node.transform[10] + node.transform[14];
+          const double voxelCount = static_cast<double>(
+              (std::max)(1u, x1 - x0) * (std::max)(1u, y1 - y0) *
+              (std::max)(1u, z1 - z0));
+          const float averageHeat = static_cast<float>(weight / voxelCount);
+          const float clusterScale =
+              material.emissionStrength * averageHeat /
+              static_cast<float>(kClustersPerAxis * kClustersPerAxis *
+                                 kClustersPerAxis);
+          for (int channel = 0; channel < 3; ++channel)
+            light.emission[channel] =
+                (std::max)(material.emissionColor[channel], 0.0f) *
+                clusterScale;
+          const float sx = std::sqrt(node.transform[0] * node.transform[0] +
+                                     node.transform[1] * node.transform[1] +
+                                     node.transform[2] * node.transform[2]);
+          const float sy = std::sqrt(node.transform[4] * node.transform[4] +
+                                     node.transform[5] * node.transform[5] +
+                                     node.transform[6] * node.transform[6]);
+          const float sz = std::sqrt(node.transform[8] * node.transform[8] +
+                                     node.transform[9] * node.transform[9] +
+                                     node.transform[10] * node.transform[10]);
+          light.radius = (sx + sy + sz) /
+                         (3.0f * static_cast<float>(kClustersPerAxis));
+          light.iesAtlasIndex = -1;
+          lights.push_back(light);
+        }
+      }
+    }
+  }
+}
+ID3D12Resource *GetDensityTexture() {
+  auto it = s_volumes.find(s_lastResolvedId.ToString());
+  return it == s_volumes.end() ? nullptr : it->second.texture.Get();
+}
+DirectX::XMFLOAT3 BoundsMin() {
+  auto it = s_volumes.find(s_lastResolvedId.ToString());
+  return it == s_volumes.end() ? DirectX::XMFLOAT3{} : it->second.boundsMin;
+}
+DirectX::XMFLOAT3 BoundsMax() {
+  auto it = s_volumes.find(s_lastResolvedId.ToString());
+  return it == s_volumes.end() ? DirectX::XMFLOAT3{} : it->second.boundsMax;
+}
+
+bool EnsureUploaded(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList) {
+  RuntimeVolume *volume = ResolveVolume(s_lastResolvedId);
+  return volume && EnsureUploaded(*volume, device, cmdList);
 }
 
 bool Composite(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList,
@@ -515,37 +648,10 @@ bool Composite(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList,
       width == 0 || height == 0 || !HasActiveVolume()) {
     return false;
   }
-  if (!EnsureUploaded(device, cmdList) || !EnsureCompositePipeline(device)) {
+  if (!EnsureCompositePipeline(device)) {
     return false;
   }
 
-  float transform[16];
-  if (!Scene::FindVolumeNodeTransform(ActiveVolumeId(), transform)) {
-    return false;
-  }
-
-  const DirectX::XMMATRIX localToWorld = DirectX::XMLoadFloat4x4(
-      reinterpret_cast<const DirectX::XMFLOAT4X4 *>(transform));
-  DirectX::XMVECTOR determinant = DirectX::XMMatrixDeterminant(localToWorld);
-  if (std::abs(DirectX::XMVectorGetX(determinant)) < 1.0e-8f) {
-    return false;
-  }
-  const DirectX::XMMATRIX worldToLocal =
-      DirectX::XMMatrixInverse(&determinant, localToWorld);
-  DirectX::XMFLOAT4X4 worldToLocalData;
-  DirectX::XMStoreFloat4x4(&worldToLocalData, worldToLocal);
-
-  Scene::VolumeMaterial material;
-  if (!Scene::FindVolumeNodeMaterial(ActiveVolumeId(), material)) {
-    const Params &defaults = GetParams();
-    material.densityScale = defaults.densityScale;
-    material.absorption = defaults.absorption;
-    material.scattering = defaults.scatter;
-    material.ambient = defaults.ambient;
-    material.stepJitter = defaults.stepJitter;
-    material.marchSteps = defaults.marchSteps;
-    material.lightSteps = defaults.lightSteps;
-  }
   struct CompositeConstants {
     float worldToLocal[16];
     float densityScale;
@@ -559,54 +665,34 @@ bool Composite(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList,
     float color[3];
     float emissionStrength;
     float emissionColor[3];
-    float padding;
     float temperatureMin;
     float temperatureInvRange;
-  } constants = {};
-  std::memcpy(constants.worldToLocal, &worldToLocalData,
-              sizeof(constants.worldToLocal));
-  constants.densityScale = material.densityScale;
-  constants.absorption = material.absorption;
-  constants.scatterG = material.scattering;
-  constants.ambient = material.ambient;
-  constants.stepJitter = material.stepJitter;
-  constants.marchSteps =
-      static_cast<uint32_t>((std::clamp)(material.marchSteps, 1, 1024));
-  constants.frameSeed = static_cast<float>(s_frameIndex++ & 1023u);
-  constants.lightSteps =
-      static_cast<uint32_t>((std::clamp)(material.lightSteps, 1, 32));
-  std::memcpy(constants.color, material.color, sizeof(constants.color));
-  constants.emissionStrength = material.emissionStrength;
-  std::memcpy(constants.emissionColor, material.emissionColor,
-              sizeof(constants.emissionColor));
-  constants.temperatureMin = s_temperatureMin;
-  constants.temperatureInvRange = s_temperatureInvRange;
+    float temperatureLow;
+    float temperatureHigh;
+    float temperatureGamma;
+  };
+  static_assert(sizeof(CompositeConstants) == 36 * sizeof(uint32_t));
 
   const UINT descriptorSize = device->GetDescriptorHandleIncrementSize(
       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
   D3D12_CPU_DESCRIPTOR_HANDLE cpu =
       s_compositeHeap->GetCPUDescriptorHandleForHeapStart();
 
-  D3D12_SHADER_RESOURCE_VIEW_DESC densitySrv = {};
-  densitySrv.Format = DXGI_FORMAT_R16G16_FLOAT;
-  densitySrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
-  densitySrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-  densitySrv.Texture3D.MipLevels = 1;
-  device->CreateShaderResourceView(s_densityTex.Get(), &densitySrv, cpu);
-  cpu.ptr += descriptorSize;
-
   D3D12_SHADER_RESOURCE_VIEW_DESC depthSrv = {};
   depthSrv.Format = DXGI_FORMAT_R32_FLOAT;
   depthSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
   depthSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
   depthSrv.Texture2D.MipLevels = 1;
-  device->CreateShaderResourceView(depthTexture, &depthSrv, cpu);
-  cpu.ptr += descriptorSize;
+  D3D12_CPU_DESCRIPTOR_HANDLE depthCpu = cpu;
+  depthCpu.ptr += descriptorSize;
+  device->CreateShaderResourceView(depthTexture, &depthSrv, depthCpu);
+  D3D12_CPU_DESCRIPTOR_HANDLE colorCpu = depthCpu;
+  colorCpu.ptr += descriptorSize;
 
   D3D12_UNORDERED_ACCESS_VIEW_DESC colorUav = {};
   colorUav.Format = colorTarget->GetDesc().Format;
   colorUav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-  device->CreateUnorderedAccessView(colorTarget, nullptr, &colorUav, cpu);
+  device->CreateUnorderedAccessView(colorTarget, nullptr, &colorUav, colorCpu);
 
   ID3D12DescriptorHeap *heaps[] = {s_compositeHeap.Get()};
   cmdList->SetDescriptorHeaps(_countof(heaps), heaps);
@@ -617,21 +703,101 @@ bool Composite(ID3D12Device *device, ID3D12GraphicsCommandList *cmdList,
   cmdList->SetComputeRootSignature(s_compositeRootSig.Get());
   cmdList->SetComputeRootConstantBufferView(
       0, cameraCB->GetGPUVirtualAddress());
-  cmdList->SetComputeRoot32BitConstants(
-      1, 34, &constants, 0);
-
   D3D12_GPU_DESCRIPTOR_HANDLE gpu =
       s_compositeHeap->GetGPUDescriptorHandleForHeapStart();
   cmdList->SetComputeRootDescriptorTable(2, gpu);
   gpu.ptr += 2ull * descriptorSize;
   cmdList->SetComputeRootDescriptorTable(3, gpu);
-  cmdList->Dispatch((width + 7) / 8, (height + 7) / 8, 1);
 
-  D3D12_RESOURCE_BARRIER barrier = {};
-  barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-  barrier.UAV.pResource = colorTarget;
-  cmdList->ResourceBarrier(1, &barrier);
-  return true;
+  std::vector<const Scene::Node *> visibleVolumes;
+  for (const Scene::Node &node : Scene::GetNodes())
+    if (node.visible && !node.volumeAssetId.empty())
+      visibleVolumes.push_back(&node);
+  std::stable_sort(
+      visibleVolumes.begin(), visibleVolumes.end(),
+      [](const Scene::Node *a, const Scene::Node *b) {
+        const auto distanceSquared = [](const Scene::Node *node) {
+          const float x = node->transform[12] + 0.5f * (node->transform[0] +
+                                                        node->transform[4] +
+                                                        node->transform[8]) -
+                          g_cameraData.pos[0];
+          const float y = node->transform[13] + 0.5f * (node->transform[1] +
+                                                        node->transform[5] +
+                                                        node->transform[9]) -
+                          g_cameraData.pos[1];
+          const float z = node->transform[14] + 0.5f * (node->transform[2] +
+                                                        node->transform[6] +
+                                                        node->transform[10]) -
+                          g_cameraData.pos[2];
+          return x * x + y * y + z * z;
+        };
+        return distanceSquared(a) > distanceSquared(b);
+      });
+
+  bool rendered = false;
+  for (const Scene::Node *nodePtr : visibleVolumes) {
+    const Scene::Node &node = *nodePtr;
+    assetlib::AssetId id;
+    if (!assetlib::AssetId::FromString(node.volumeAssetId, id))
+      continue;
+    RuntimeVolume *volume = ResolveVolume(id);
+    if (!volume || !EnsureUploaded(*volume, device, cmdList))
+      continue;
+
+    const DirectX::XMMATRIX localToWorld = DirectX::XMLoadFloat4x4(
+        reinterpret_cast<const DirectX::XMFLOAT4X4 *>(node.transform));
+    DirectX::XMVECTOR determinant = DirectX::XMMatrixDeterminant(localToWorld);
+    if (std::abs(DirectX::XMVectorGetX(determinant)) < 1.0e-8f)
+      continue;
+    DirectX::XMFLOAT4X4 worldToLocalData;
+    DirectX::XMStoreFloat4x4(
+        &worldToLocalData, DirectX::XMMatrixInverse(&determinant, localToWorld));
+
+    CompositeConstants constants = {};
+    std::memcpy(constants.worldToLocal, &worldToLocalData,
+                sizeof(constants.worldToLocal));
+    const Scene::VolumeMaterial &material = node.volumeMaterial;
+    constants.densityScale = material.densityScale;
+    constants.absorption = material.absorption;
+    constants.scatterG = material.scattering;
+    constants.ambient = material.ambient;
+    constants.stepJitter = material.stepJitter;
+    constants.marchSteps =
+        static_cast<uint32_t>((std::clamp)(material.marchSteps, 1, 1024));
+    constants.frameSeed = static_cast<float>(s_frameIndex++ & 1023u);
+    constants.lightSteps =
+        static_cast<uint32_t>((std::clamp)(material.lightSteps, 1, 32));
+    std::memcpy(constants.color, material.color, sizeof(constants.color));
+    constants.emissionStrength = (std::max)(material.emissionStrength, 0.0f);
+    std::memcpy(constants.emissionColor, material.emissionColor,
+                sizeof(constants.emissionColor));
+    constants.temperatureMin = volume->temperatureMin;
+    constants.temperatureInvRange = volume->temperatureInvRange;
+    constants.temperatureLow =
+        (std::clamp)(material.temperatureLow, 0.0f, 1.0f);
+    constants.temperatureHigh =
+        (std::clamp)(material.temperatureHigh,
+                     constants.temperatureLow + 1.0e-4f, 1.0f);
+    constants.temperatureGamma =
+        (std::clamp)(material.temperatureGamma, 0.05f, 8.0f);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC densitySrv = {};
+    densitySrv.Format = DXGI_FORMAT_R16G16_FLOAT;
+    densitySrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
+    densitySrv.Shader4ComponentMapping =
+        D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    densitySrv.Texture3D.MipLevels = 1;
+    device->CreateShaderResourceView(volume->texture.Get(), &densitySrv, cpu);
+
+    cmdList->SetComputeRoot32BitConstants(1, 36, &constants, 0);
+    cmdList->Dispatch((width + 7) / 8, (height + 7) / 8, 1);
+    D3D12_RESOURCE_BARRIER barrier = {};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    barrier.UAV.pResource = colorTarget;
+    cmdList->ResourceBarrier(1, &barrier);
+    rendered = true;
+  }
+  return rendered;
 }
 
 } // namespace VolumetricRenderer

@@ -383,7 +383,13 @@ void ScenePanel::createUi()
     m_volumeAmbient =
         makeFloat(tr("Ambient"), 0.0, 10.0, 0.05, 3);
     m_volumeEmission =
-        makeFloat(tr("Emission"), 0.0, 1000.0, 1.0, 1);
+        makeFloat(tr("Emission radiance"), 0.0, 10000000.0, 1000.0, 1);
+    m_volumeTemperatureLow =
+        makeFloat(tr("Heat low"), 0.0, 0.999, 0.01, 3);
+    m_volumeTemperatureHigh =
+        makeFloat(tr("Heat high"), 0.001, 1.0, 0.01, 3);
+    m_volumeTemperatureGamma =
+        makeFloat(tr("Heat gamma"), 0.05, 8.0, 0.05, 3);
     m_volumeJitter =
         makeFloat(tr("Step jitter"), 0.0, 1.0, 0.05, 2);
     m_volumeColor = new QPushButton(tr("Choose"), m_volumeMaterialGroup);
@@ -531,6 +537,9 @@ void ScenePanel::syncVolumeMaterialInspector()
     m_volumeScattering->setValue(m.scattering);
     m_volumeAmbient->setValue(m.ambient);
     m_volumeEmission->setValue(m.emissionStrength);
+    m_volumeTemperatureLow->setValue(m.temperatureLow);
+    m_volumeTemperatureHigh->setValue(m.temperatureHigh);
+    m_volumeTemperatureGamma->setValue(m.temperatureGamma);
     m_volumeJitter->setValue(m.stepJitter);
     m_volumeMarchSteps->setValue(m.marchSteps);
     m_volumeLightSteps->setValue(m.lightSteps);
@@ -554,6 +563,16 @@ void ScenePanel::applyVolumeMaterialInspector()
     material.scattering = static_cast<float>(m_volumeScattering->value());
     material.ambient = static_cast<float>(m_volumeAmbient->value());
     material.emissionStrength = static_cast<float>(m_volumeEmission->value());
+    material.temperatureLow =
+        static_cast<float>(m_volumeTemperatureLow->value());
+    material.temperatureHigh =
+        static_cast<float>(m_volumeTemperatureHigh->value());
+    material.temperatureGamma =
+        static_cast<float>(m_volumeTemperatureGamma->value());
+    if (material.temperatureHigh <= material.temperatureLow) {
+        material.temperatureHigh =
+            (std::min)(1.0f, material.temperatureLow + 0.001f);
+    }
     material.stepJitter = static_cast<float>(m_volumeJitter->value());
     material.marchSteps = m_volumeMarchSteps->value();
     material.lightSteps = m_volumeLightSteps->value();

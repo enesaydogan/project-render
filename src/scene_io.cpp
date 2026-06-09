@@ -5,6 +5,8 @@
 #include "livelink/livelink_scene_sync.h"
 #include "material/material_io.h"
 #include "animation_sequence.h"
+#include "asset_library/global_registry.h"
+#include "asset_library/pack_mounts.h"
 #include "saved_views.h"
 #include "scene.h"
 #include "raster_renderer.h"
@@ -822,6 +824,19 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap,
     if (!node.volumeAssetId.empty()) {
       const Scene::VolumeMaterial &vm = node.volumeMaterial;
       savedNode["va"] = node.volumeAssetId;
+      std::vector<uint8_t> volumePayload = node.volumePayload;
+      if (volumePayload.empty()) {
+        assetlib::AssetId volumeId;
+        assetlib::AssetRegistry *registry = assetlib::GlobalRegistry();
+        if (registry &&
+            assetlib::AssetId::FromString(node.volumeAssetId, volumeId)) {
+          assetlib::ResolveCookedPayload(
+              registry->paths(), volumeId, assetlib::PayloadKind::Volume,
+              volumePayload);
+        }
+      }
+      if (!volumePayload.empty() && !j["vol"].contains(node.volumeAssetId))
+        j["vol"][node.volumeAssetId] = json::binary(std::move(volumePayload));
       savedNode["vm"] = {
           {"den", vm.densityScale},
           {"abs", vm.absorption},
@@ -831,6 +846,9 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap,
           {"ec", {vm.emissionColor[0], vm.emissionColor[1],
                   vm.emissionColor[2]}},
           {"es", vm.emissionStrength},
+          {"tl", vm.temperatureLow},
+          {"th", vm.temperatureHigh},
+          {"tg", vm.temperatureGamma},
           {"jit", vm.stepJitter},
           {"ms", vm.marchSteps},
           {"ls", vm.lightSteps},
@@ -1468,6 +1486,16 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
       node.selectionLocked = n.value("sl", node.importGroupRoot);
       node.liveLinkManaged = n.value("ll", false);
       node.volumeAssetId = n.value("va", std::string());
+      if (n.contains("vp") && n["vp"].is_binary()) {
+        const auto &payload = n["vp"].get_binary();
+        node.volumePayload.assign(payload.begin(), payload.end());
+      } else if (!node.volumeAssetId.empty() && j.contains("vol") &&
+                 j["vol"].is_object() &&
+                 j["vol"].contains(node.volumeAssetId) &&
+                 j["vol"][node.volumeAssetId].is_binary()) {
+        const auto &payload = j["vol"][node.volumeAssetId].get_binary();
+        node.volumePayload.assign(payload.begin(), payload.end());
+      }
       node.parentIndex = n.value("pi", static_cast<size_t>(-1));
       node.meshIndices = n["mi"].get<std::vector<size_t>>();
       if (n.contains("lmi")) {
@@ -1490,6 +1518,14 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
             vm.value("amb", node.volumeMaterial.ambient);
         node.volumeMaterial.emissionStrength =
             vm.value("es", node.volumeMaterial.emissionStrength);
+        if (vm.contains("es") && !vm.contains("tg"))
+          node.volumeMaterial.emissionStrength *= 1000.0f;
+        node.volumeMaterial.temperatureLow =
+            vm.value("tl", node.volumeMaterial.temperatureLow);
+        node.volumeMaterial.temperatureHigh =
+            vm.value("th", node.volumeMaterial.temperatureHigh);
+        node.volumeMaterial.temperatureGamma =
+            vm.value("tg", node.volumeMaterial.temperatureGamma);
         node.volumeMaterial.stepJitter =
             vm.value("jit", node.volumeMaterial.stepJitter);
         node.volumeMaterial.marchSteps =

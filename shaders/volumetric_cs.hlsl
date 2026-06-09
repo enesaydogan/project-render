@@ -70,9 +70,11 @@ cbuffer VolumeParams : register(b1)
     float3 volumeColor;
     float emissionStrength;
     float3 emissionColor;
-    float _materialPad;
     float temperatureMin;
     float temperatureInvRange;
+    float temperatureLow;
+    float temperatureHigh;
+    float temperatureGamma;
 };
 
 Texture3D<float2> VolumeTex : register(t0);
@@ -195,15 +197,21 @@ float TraceLightTransmittance(float3 localPos, float3 localSunDir,
 
 float3 FireColor(float temperature)
 {
-    float t = saturate((temperature - temperatureMin) *
-                       temperatureInvRange);
-    float3 red = float3(1.0, 0.025, 0.001);
-    float3 orange = float3(1.0, 0.22, 0.015);
-    float3 yellow = float3(1.0, 0.72, 0.12);
-    float3 white = float3(1.0, 0.96, 0.82);
-    float3 low = lerp(red, orange, smoothstep(0.0, 0.35, t));
-    float3 high = lerp(yellow, white, smoothstep(0.70, 1.0, t));
-    return lerp(low, high, smoothstep(0.30, 0.78, t));
+    float raw = saturate((temperature - temperatureMin) *
+                         temperatureInvRange);
+    float t = saturate((raw - temperatureLow) /
+                       max(temperatureHigh - temperatureLow, 1.0e-4));
+    float k = lerp(1000.0, 12000.0, t) / 100.0;
+    float3 rgb;
+    rgb.r = k <= 66.0 ? 1.0 :
+        saturate(1.2929362 * pow(k - 60.0, -0.13320476));
+    rgb.g = k <= 66.0
+        ? saturate(0.39008158 * log(max(k, 1.0)) - 0.63184144)
+        : saturate(1.1298909 * pow(k - 60.0, -0.07551485));
+    rgb.b = k >= 66.0 ? 1.0 :
+        (k <= 19.0 ? 0.0 :
+         saturate(0.5432068 * log(k - 10.0) - 1.1962541));
+    return rgb;
 }
 
 void RenderVolume(uint3 id, bool linearDepthInput)
@@ -284,23 +292,20 @@ void RenderVolume(uint3 id, bool linearDepthInput)
         float2 volumeSample =
             VolumeTex.SampleLevel(linearSampler, saturate(uvw), 0);
         float density = volumeSample.x * densityScale;
-        float fireMask = temperatureInvRange > 0.0
+        float rawHeat = temperatureInvRange > 0.0
             ? saturate((volumeSample.y - temperatureMin) *
                        temperatureInvRange)
             : 0.0;
+        float fireMask = saturate((rawHeat - temperatureLow) /
+                                  max(temperatureHigh - temperatureLow,
+                                      1.0e-4));
         if (fireMask > 1.0e-4 && emissionStrength > 0.0)
         {
-            // Linear (not squared) temperature mask: the visible flame body is
-            // mostly mid-temperature orange/red; squaring would leave only the
-            // tiny white-hot core. A mild gamma keeps cool smoke from glowing.
-            float fireWeight = pow(fireMask, 1.5);
+            float fireWeight = pow(fireMask, max(temperatureGamma, 0.05));
             float3 fire =
                 FireColor(volumeSample.y) * max(emissionColor, 0.0);
-            // Internal x1000 scale so the slider works in a friendly ~1..1000
-            // range (fire emission is otherwise tiny after smoke attenuation and
-            // dt integration, forcing absurd values).
             scattered += transmittance * fire *
-                         fireWeight * (emissionStrength * 1000.0) * dt;
+                         fireWeight * emissionStrength * dt;
         }
         if (density > 1e-4)
         {

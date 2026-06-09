@@ -3163,6 +3163,8 @@ bool UpdateNodeTransform(size_t index, const float *columnMajor4x4) {
   }
   memcpy(s_nodes[index].transform, columnMajor4x4,
          sizeof(s_nodes[index].transform));
+  if (!s_nodes[index].volumeAssetId.empty())
+    UpdateLights();
   InvalidateScatterRuntimeCache();
   ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
   return true;
@@ -3176,6 +3178,8 @@ bool SetNodeVisibility(size_t index, bool visible) {
     return true;
   }
   s_nodes[index].visible = visible;
+  if (!s_nodes[index].volumeAssetId.empty())
+    UpdateLights();
   InvalidateScatterRuntimeCache();
   ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
   return true;
@@ -3686,6 +3690,7 @@ size_t AddVolumeNode(const assetlib::AssetId &id) {
 
   const size_t index = AddNode(std::move(node));
   SelectNode(index);
+  UpdateLights();
   NotifySceneChanged();
   return index;
 }
@@ -3720,6 +3725,7 @@ bool SetVolumeNodeMaterial(size_t nodeIndex, const VolumeMaterial &material) {
     return false;
   }
   s_nodes[nodeIndex].volumeMaterial = material;
+  UpdateLights();
   DxrRenderer::ResetAccumulation();
   NotifySceneChanged();
   return true;
@@ -3998,6 +4004,7 @@ bool RemoveNode(size_t index) {
     return true;
   }
 
+  const bool removedVolume = !s_nodes[index].volumeAssetId.empty();
   std::vector<int> candidateMaterialIndices;
   CollectNodeMaterialCandidates(s_nodes[index], candidateMaterialIndices);
   ReleaseNodeMeshes(s_nodes[index]);
@@ -4014,6 +4021,8 @@ bool RemoveNode(size_t index) {
 
   LiveLink::GetSceneSync().ReindexSceneNodeBindingsAfterRemoval(index);
   ReindexScatterNodeReferencesAfterRemoval(index);
+  if (removedVolume)
+    UpdateLights();
   PruneOrphanedImportAssets(candidateMaterialIndices);
   ApplyRendererInvalidation(
       RendererInvalidationPlan::FullAccelerationStructureRebuild);
@@ -4271,6 +4280,7 @@ void UpdateLights() {
 
   FlattenLights(s_lightPrototypes, s_lightInstances, s_flattenedLights,
                 s_lightFlattenMapping);
+  VolumetricRenderer::AppendEmissionLights(s_flattenedLights);
   if (s_batchedUpdateDepth > 0) {
     s_batchedLightsDirty = true;
     return;
@@ -8209,6 +8219,7 @@ void ResetScene() {
   ClearTransformHistory();
   PrepareForDestructiveMeshMutation();
   s_nodes.clear();
+  VolumetricRenderer::ClearActiveVolume();
   g_loadedMeshes.clear();
   g_loadedMaterials.clear();
   g_loadedTextures.clear();

@@ -686,8 +686,75 @@ void AssetManagerPanel::onAddAsset() {
     // Decode + cook supported files into the library so they are immediately
     // usable (draggable into the scene). Models land under Imported/Models and
     // textures under Imported/Textures.
-    const assetlib::AssetId id =
-        assetlib::ImportFileToLibrary(fi.absoluteFilePath().toStdString());
+    assetlib::AssetId id;
+    if (fi.suffix().compare(QStringLiteral("vdb"), Qt::CaseInsensitive) == 0) {
+      std::vector<VdbImport::GridInfo> grids;
+      std::string gridError;
+      if (!VdbImport::ListGrids(fi.absoluteFilePath().toStdString(), grids,
+                                &gridError)) {
+        ++failed;
+        continue;
+      }
+      QStringList densityItems;
+      QStringList temperatureItems;
+      int suggestedDensity = 0;
+      int suggestedTemperature = 0;
+      for (const VdbImport::GridInfo &grid : grids) {
+        const QString name = QString::fromStdString(grid.name);
+        if (grid.scalar || grid.vector) {
+          densityItems.push_back(name);
+          const QString lower = name.toLower();
+          if (lower == QStringLiteral("density") ||
+              lower.contains(QStringLiteral("smoke")) ||
+              lower.contains(QStringLiteral("fog"))) {
+            suggestedDensity = densityItems.size() - 1;
+          }
+        }
+        if (grid.scalar) {
+          temperatureItems.push_back(name);
+          const QString lower = name.toLower();
+          if (lower.contains(QStringLiteral("temperature")) ||
+              lower.contains(QStringLiteral("flame")) ||
+              lower.contains(QStringLiteral("heat")) ||
+              lower.contains(QStringLiteral("fire")) ||
+              lower.contains(QStringLiteral("burn")) ||
+              lower.contains(QStringLiteral("emission"))) {
+            suggestedTemperature = temperatureItems.size();
+          }
+        }
+      }
+      if (densityItems.isEmpty()) {
+        ++failed;
+        continue;
+      }
+      QGuiApplication::restoreOverrideCursor();
+      bool accepted = false;
+      const QString density = QInputDialog::getItem(
+          this, tr("VDB Density Channel"),
+          tr("Density/fog channel for %1").arg(fi.fileName()), densityItems,
+          suggestedDensity, false, &accepted);
+      if (!accepted) {
+        QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+        continue;
+      }
+      temperatureItems.prepend(tr("(none)"));
+      const QString temperature = QInputDialog::getItem(
+          this, tr("VDB Heat Channel"),
+          tr("Temperature/flame/emission channel for %1").arg(fi.fileName()),
+          temperatureItems, suggestedTemperature, false, &accepted);
+      QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+      if (!accepted)
+        continue;
+      VdbImport::ImportOptions options;
+      options.densityGrid = density.toStdString();
+      if (temperature != tr("(none)"))
+        options.temperatureGrid = temperature.toStdString();
+      id = assetlib::ImportVdbFileToLibrary(
+          fi.absoluteFilePath().toStdString(), options);
+    } else {
+      id = assetlib::ImportFileToLibrary(
+          fi.absoluteFilePath().toStdString());
+    }
     if (id.valid()) {
       ++imported;
       continue;

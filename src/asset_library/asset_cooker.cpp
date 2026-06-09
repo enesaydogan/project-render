@@ -1,4 +1,5 @@
 #include "asset_cooker.h"
+#include "vdb_import.h"
 
 #include "../material/material_io.h"
 #include "asset_registry.h"
@@ -261,6 +262,8 @@ AssetId RegisterAndCookVolume(AssetRegistry &registry, const AssetPaths &paths,
   stats["temperatureBricks"] = volume.temperatureBricks.size();
   stats["hasTemperature"] = !volume.temperatureBricks.empty();
   stats["brickSize"] = volume.brickSize;
+  stats["densityGrid"] = volume.densityGridName;
+  stats["temperatureGrid"] = volume.temperatureGridName;
   m.importSettingsJson = stats.dump();
   AssetId id = registry.Add(std::move(m));
 
@@ -283,6 +286,70 @@ bool HasCurrentCookedModel(const AssetRegistry &registry,
     return false;
   std::error_code ec;
   return std::filesystem::exists(paths.cookedMeshPath(modelId), ec);
+}
+
+bool HasCurrentCookedVolume(const AssetRegistry &registry,
+                            const AssetPaths &paths, const AssetId &volumeId) {
+  const AssetMetadata *m = registry.Get(volumeId);
+  if (!m || m->type != AssetType::Volume ||
+      m->cookState != CookState::Current ||
+      m->cookerVersion != kCookerVersionVolume)
+    return false;
+  std::error_code ec;
+  return std::filesystem::exists(paths.cookedVolumePath(volumeId), ec);
+}
+
+bool RecookVolumeFromSource(AssetRegistry &registry, const AssetPaths &paths,
+                            const AssetId &volumeId) {
+  const AssetMetadata *meta = registry.Get(volumeId);
+  if (!meta || meta->type != AssetType::Volume || meta->sourcePath.empty())
+    return false;
+  std::error_code ec;
+  if (!std::filesystem::exists(std::filesystem::path(meta->sourcePath), ec))
+    return false;
+
+  VdbImport::ImportOptions options;
+  if (!meta->importSettingsJson.empty()) {
+    try {
+      const json settings = json::parse(meta->importSettingsJson);
+      options.densityGrid = settings.value("densityGrid", std::string());
+      options.temperatureGrid =
+          settings.value("temperatureGrid", std::string());
+    } catch (...) {
+    }
+  }
+  CookedVolume cooked;
+  std::string error;
+  const bool imported = VdbImport::ImportVdbToVolume(
+      meta->sourcePath, options, cooked, &error);
+  std::vector<uint8_t> blob;
+  const bool ok = imported && SerializeCookedVolume(cooked, blob) &&
+                  WriteCookedFile(paths.cookedVolumePath(volumeId), blob);
+
+  AssetMetadata updated = *registry.Get(volumeId);
+  updated.cookState = ok ? CookState::Current : CookState::Failed;
+  updated.cookerVersion = kCookerVersionVolume;
+  updated.sourceContentHash = HashFile(meta->sourcePath);
+  updated.sourceTimestamp = FileTimestamp(meta->sourcePath);
+  if (ok) {
+    updated.cookedPayloadHash = HashBytes(blob.data(), blob.size());
+    json stats;
+    stats["dim"] = {cooked.dim[0], cooked.dim[1], cooked.dim[2]};
+    stats["activeVoxels"] = cooked.activeVoxels;
+    stats["bricks"] = cooked.bricks.size();
+    stats["temperatureBricks"] = cooked.temperatureBricks.size();
+    stats["hasTemperature"] = !cooked.temperatureBricks.empty();
+    stats["brickSize"] = cooked.brickSize;
+    stats["densityGrid"] = cooked.densityGridName;
+    stats["temperatureGrid"] = cooked.temperatureGridName;
+    updated.importSettingsJson = stats.dump();
+  } else if (!error.empty()) {
+    fprintf(stderr, "Volume recook failed for '%s': %s\n",
+            meta->sourcePath.c_str(), error.c_str());
+  }
+  registry.Update(updated);
+  registry.Save();
+  return ok;
 }
 
 bool RecookModelFromSource(AssetRegistry &registry, const AssetPaths &paths,

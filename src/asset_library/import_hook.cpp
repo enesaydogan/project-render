@@ -93,15 +93,7 @@ AssetId ImportFileToLibrary(const std::string &path) {
   }
 
   if (ext == "vdb") {
-    CookedVolume vol;
-    std::string vdbErr;
-    if (!VdbImport::ImportVdbToVolume(path, vol, &vdbErr))
-      return {};
-    AssetId id = RegisterAndCookVolume(*registry, registry->paths(), name, path,
-                                       vol);
-    registry->TouchRecent(id);
-    registry->Save();
-    return id;
+    return ImportVdbFileToLibrary(path, {});
   }
 
   const bool isImage = ext == "png" || ext == "jpg" || ext == "jpeg" ||
@@ -120,6 +112,26 @@ AssetId ImportFileToLibrary(const std::string &path) {
   }
 
   return {}; // unsupported type for cooking
+}
+
+AssetId ImportVdbFileToLibrary(const std::string &path,
+                               const VdbImport::ImportOptions &options) {
+  AssetRegistry *registry = GlobalRegistry();
+  if (!registry)
+    return {};
+  CookedVolume vol;
+  std::string error;
+  if (!VdbImport::ImportVdbToVolume(path, options, vol, &error)) {
+    if (!error.empty())
+      fprintf(stderr, "VDB import failed: %s\n", error.c_str());
+    return {};
+  }
+  const std::string name = std::filesystem::path(path).stem().string();
+  AssetId id = RegisterAndCookVolume(*registry, registry->paths(), name, path,
+                                     vol);
+  registry->TouchRecent(id);
+  registry->Save();
+  return id;
 }
 
 } // namespace assetlib

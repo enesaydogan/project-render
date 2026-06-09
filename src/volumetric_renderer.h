@@ -1,14 +1,14 @@
 #pragma once
 #include "asset_library/asset_id.h"
+#include "light.h"
 #include <DirectXMath.h>
 #include <cstdint>
 #include <d3d12.h>
 #include <wrl.h>
+#include <vector>
 
-// Renders a cooked Volume asset (from a .vdb) as a ray-marched density field
-// composited into the raster HDR target. The active volume is resolved into a
-// bounded dense R16F 3D density texture and uploaded lazily on the render command list.
-// This is the consumer the Phase-5 volume pipeline was missing.
+// Renders cooked Volume assets as ray-marched density fields. Runtime data is
+// cached per asset while transforms/materials remain owned by scene nodes.
 namespace VolumetricRenderer {
 
 struct Params {
@@ -21,14 +21,17 @@ struct Params {
   float stepJitter = 1.0f;     // 0..1 dither to hide banding
 };
 
-// Resolve + stage a Volume asset for rendering (main thread). Pass an invalid
-// id to clear. Returns false if the asset can't be resolved.
+// Resolve + cache a Volume asset. Rendering walks all visible scene volume nodes.
 bool SetActiveVolume(const assetlib::AssetId &id);
 void ClearActiveVolume();
 bool HasActiveVolume();
 const assetlib::AssetId &ActiveVolumeId();
 
 Params &GetParams();
+
+// Adds a bounded set of point-light representatives sampled from visible
+// emissive volume nodes. These participate in DXR/ReSTIR and raster lighting.
+void AppendEmissionLights(std::vector<Light> &lights);
 
 // --- Used by the raster renderer ---------------------------------------
 // Performs any pending GPU upload onto cmdList. Returns false if nothing is
@@ -43,7 +46,7 @@ enum class DepthEncoding {
   LinearViewDepth,
 };
 
-// Composites the active volume into colorTarget. colorTarget must be in UAV
+// Composites every visible scene volume into colorTarget. colorTarget must be in UAV
 // state and depthTexture must be in NON_PIXEL_SHADER_RESOURCE state. The caller
 // owns resource transitions because raster and DXR have different surrounding
 // stages.
