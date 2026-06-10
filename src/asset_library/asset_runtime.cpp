@@ -40,7 +40,8 @@ ResolvedTexture ResolveTexture(const AssetRegistry &registry,
                                const AssetPaths &paths, const AssetId &id) {
   ResolvedTexture out;
   const AssetMetadata *meta = registry.Get(id);
-  if (!meta || meta->type != AssetType::Texture)
+  if (!meta || meta->type != AssetType::Texture ||
+      !registry.IsRuntimeReady(id))
     return out;
   std::vector<uint8_t> blob;
   if (!ResolveCookedPayload(paths, id, PayloadKind::Texture, blob))
@@ -57,7 +58,8 @@ ResolvedMaterial ResolveMaterial(const AssetRegistry &registry,
                                  const AssetPaths &paths, const AssetId &id) {
   ResolvedMaterial out;
   const AssetMetadata *meta = registry.Get(id);
-  if (!meta || meta->type != AssetType::Material)
+  if (!meta || meta->type != AssetType::Material ||
+      !registry.IsRuntimeReady(id))
     return out;
 
   std::vector<uint8_t> bytes;
@@ -99,7 +101,8 @@ ResolvedModel ResolveModel(const AssetRegistry &registry,
                            const AssetPaths &paths, const AssetId &id) {
   ResolvedModel out;
   const AssetMetadata *meta = registry.Get(id);
-  if (!meta || meta->type != AssetType::Model)
+  if (!meta || meta->type != AssetType::Model ||
+      !registry.IsRuntimeReady(id))
     return out;
 
   std::vector<uint8_t> blob;
@@ -115,21 +118,21 @@ ResolvedModel ResolveModel(const AssetRegistry &registry,
   // material's slot indices so the assembled set is self-consistent.
   for (const AssetId &matId : meta->dependencies) {
     ResolvedMaterial rm = ResolveMaterial(registry, paths, matId);
+    if (!rm.valid)
+      return {};
     int base = static_cast<int>(out.textures.size());
-    if (rm.valid) {
-      ForEachTextureSlot(rm.material, OffsetSlot, &base);
-      for (auto &t : rm.textures)
-        out.textures.push_back(std::move(t));
-      out.materials.push_back(rm.material);
-    } else {
-      out.materials.push_back(Asset::Material{}); // keep index alignment
-    }
+    ForEachTextureSlot(rm.material, OffsetSlot, &base);
+    for (auto &t : rm.textures)
+      out.textures.push_back(std::move(t));
+    out.materials.push_back(rm.material);
   }
 
-  // Clamp any mesh material index that points outside the resolved set.
+  // Invalid dependency mappings indicate a corrupt/incompatible cooked model.
+  // Do not silently substitute another material.
   for (auto &mesh : out.meshes) {
-    if (mesh.materialIndex >= static_cast<int>(out.materials.size()))
-      mesh.materialIndex = out.materials.empty() ? -1 : 0;
+    if (mesh.materialIndex < -1 ||
+        mesh.materialIndex >= static_cast<int>(out.materials.size()))
+      return {};
   }
 
   out.valid = true;

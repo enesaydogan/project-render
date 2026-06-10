@@ -3466,7 +3466,10 @@ bool InstantiateAssetModel(const assetlib::AssetId &id,
   }
   assetlib::ResolvedModel rm = assetlib::ResolveModel(*reg, reg->paths(), id);
   if (!rm.valid || rm.meshes.empty()) {
-    s_lastStatus = "Instantiate failed: could not resolve cooked asset";
+    s_lastStatus =
+        reg->IsRuntimeReady(id)
+            ? "Instantiate failed: cooked model or dependency is invalid"
+            : "Instantiate failed: model dependencies are still cooking or failed";
     return false;
   }
 
@@ -5590,19 +5593,41 @@ bool RebindNodeMaterialSlot(size_t nodeIndex, size_t materialSlot,
     return false;
   }
 
-  const int previousMaterialIndex = node.linkedMaterialIndices[materialSlot];
-  if (previousMaterialIndex == materialIndex) {
-    return true;
+  std::vector<size_t> targetNodes = {nodeIndex};
+  if (node.importGroupRoot) {
+    for (size_t i = 0; i < s_nodes.size(); ++i) {
+      if (i != nodeIndex && FindSceneTransformRootAncestor(i) == nodeIndex)
+        targetNodes.push_back(i);
+    }
   }
 
-  node.linkedMaterialIndices[materialSlot] = materialIndex;
-  for (size_t meshIndex : node.meshIndices) {
-    if (meshIndex >= g_loadedMeshes.size()) {
-      continue;
+  bool changed = false;
+  for (size_t targetNodeIndex : targetNodes) {
+    Node &target = s_nodes[targetNodeIndex];
+    if (materialSlot < target.linkedMaterialIndices.size() &&
+        target.linkedMaterialIndices[materialSlot] != materialIndex) {
+      target.linkedMaterialIndices[materialSlot] = materialIndex;
+      changed = true;
     }
-    if (g_loadedMeshes[meshIndex].materialSlot == static_cast<int>(materialSlot)) {
-      g_loadedMeshes[meshIndex].materialIndex = materialIndex;
+    for (size_t meshIndex : target.meshIndices) {
+      if (meshIndex >= g_loadedMeshes.size()) {
+        continue;
+      }
+      Asset::GpuMesh &mesh = g_loadedMeshes[meshIndex];
+      if (mesh.materialSlot == static_cast<int>(materialSlot) &&
+          mesh.materialIndex != materialIndex) {
+        mesh.materialIndex = materialIndex;
+        changed = true;
+      }
     }
+  }
+
+  if (!changed) {
+    // The requested binding is already in place.
+    if (node.linkedMaterialIndices[materialSlot] == materialIndex)
+      return true;
+    // A malformed import group had no bindable target for this slot.
+    return false;
   }
 
   ApplyRendererInvalidation(RendererInvalidationPlan::AccumulationOnly);

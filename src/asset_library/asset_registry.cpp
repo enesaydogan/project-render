@@ -481,6 +481,52 @@ std::vector<AssetId> AssetRegistry::MissingOrFailed() const {
   return out;
 }
 
+bool AssetRegistry::IsRuntimeReady(const AssetId &id) const {
+  std::set<AssetId> visiting;
+  std::set<AssetId> ready;
+  std::function<bool(const AssetId &)> visit = [&](const AssetId &current) {
+    if (ready.find(current) != ready.end())
+      return true;
+    if (!visiting.insert(current).second)
+      return false;
+
+    const AssetMetadata *metadata = Get(current);
+    if (!metadata || metadata->cookState != CookState::Current) {
+      visiting.erase(current);
+      return false;
+    }
+    for (const AssetId &dependency : metadata->dependencies) {
+      if (!visit(dependency)) {
+        visiting.erase(current);
+        return false;
+      }
+    }
+
+    visiting.erase(current);
+    ready.insert(current);
+    return true;
+  };
+  return visit(id);
+}
+
+bool AssetRegistry::IsRuntimePending(const AssetId &id) const {
+  std::set<AssetId> visited;
+  std::function<bool(const AssetId &)> visit = [&](const AssetId &current) {
+    if (!visited.insert(current).second)
+      return false;
+    const AssetMetadata *metadata = Get(current);
+    if (!metadata)
+      return false;
+    if (metadata->cookState == CookState::Stale)
+      return true;
+    for (const AssetId &dependency : metadata->dependencies)
+      if (visit(dependency))
+        return true;
+    return false;
+  };
+  return visit(id);
+}
+
 size_t AssetRegistry::AddChangeListener(ChangeListener cb) {
   size_t id = m_nextListenerId++;
   m_listeners[id] = std::move(cb);

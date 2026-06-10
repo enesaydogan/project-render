@@ -610,6 +610,57 @@ void TestAtomicBatchCook() {
   CHECK(std::filesystem::exists(tmp.path / "frame_2.prvol"));
 }
 
+void TestRuntimeReadinessIncludesDependencies() {
+  std::printf("TestRuntimeReadinessIncludesDependencies\n");
+  TempDir tmp;
+  AssetRegistry registry(AssetPaths(tmp.path));
+  CHECK(registry.Load());
+
+  AssetMetadata texture =
+      MakeAsset(AssetType::Texture, "Texture", "Imported/Textures");
+  texture.cookState = CookState::Current;
+  const AssetId textureId = registry.Add(std::move(texture));
+
+  AssetMetadata material =
+      MakeAsset(AssetType::Material, "Material", "Imported/Materials");
+  material.cookState = CookState::Stale;
+  material.dependencies = {textureId};
+  const AssetId materialId = registry.Add(std::move(material));
+
+  AssetMetadata model =
+      MakeAsset(AssetType::Model, "Model", "Imported/Models");
+  model.cookState = CookState::Current;
+  model.dependencies = {materialId};
+  const AssetId modelId = registry.Add(std::move(model));
+
+  CHECK(registry.IsRuntimeReady(textureId));
+  CHECK(!registry.IsRuntimePending(textureId));
+  CHECK(!registry.IsRuntimeReady(materialId));
+  CHECK(registry.IsRuntimePending(materialId));
+  CHECK(!registry.IsRuntimeReady(modelId));
+  CHECK(registry.IsRuntimePending(modelId));
+
+  AssetMetadata readyMaterial = *registry.Get(materialId);
+  readyMaterial.cookState = CookState::Current;
+  CHECK(registry.Update(readyMaterial));
+  CHECK(registry.IsRuntimeReady(materialId));
+  CHECK(registry.IsRuntimeReady(modelId));
+  CHECK(!registry.IsRuntimePending(modelId));
+
+  AssetMetadata cyclic = *registry.Get(materialId);
+  cyclic.dependencies.push_back(modelId);
+  CHECK(registry.Update(cyclic));
+  CHECK(!registry.IsRuntimeReady(modelId));
+  CHECK(!registry.IsRuntimePending(modelId));
+
+  AssetMetadata catalogOnly =
+      MakeAsset(AssetType::Texture, "Catalog Only", "Imported/Textures");
+  catalogOnly.cookState = CookState::NotCooked;
+  const AssetId catalogOnlyId = registry.Add(std::move(catalogOnly));
+  CHECK(!registry.IsRuntimeReady(catalogOnlyId));
+  CHECK(!registry.IsRuntimePending(catalogOnlyId));
+}
+
 // Phase 6: identical embedded textures must collapse to one saved slot, while
 // distinct textures keep distinct slots and material indices remap correctly.
 void TestTextureSaveDedup() {
@@ -673,6 +724,7 @@ int main() {
   TestPrPakDedup();
   TestPrPakCorruption();
   TestAtomicBatchCook();
+  TestRuntimeReadinessIncludesDependencies();
 
   std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
   return g_failures;

@@ -802,13 +802,14 @@ void AssetManagerPanel::refreshGrid() {
     auto *item = new QListWidgetItem(m_grid);
     item->setText(name);
     item->setData(kUserRoleId, QString::fromStdString(id.ToString()));
-    if (m && m->cookState == assetlib::CookState::Current)
+    const bool runtimeReady = m && m_registry->IsRuntimeReady(id);
+    if (runtimeReady)
       item->setData(kUserRoleDrag,
                     QString::fromStdString(std::string(AssetTypeToString(type)) +
                                            ":" + id.ToString()));
     item->setTextAlignment(Qt::AlignHCenter | Qt::AlignTop);
 
-    const bool cooking = (m && m->cookState == assetlib::CookState::Stale);
+    const bool cooking = m && m_registry->IsRuntimePending(id);
     item->setData(kUserRoleCooking, cooking);
     if (unavailable)
       item->setForeground(QColor(0xb0, 0x70, 0x70));
@@ -1024,6 +1025,20 @@ void AssetManagerPanel::onAddAsset() {
   m_registry->Save();
   QGuiApplication::restoreOverrideCursor();
 
+  if (imported > 0 || cataloged > 0) {
+    // Imports are organized into type-specific folders. Surface the completed
+    // operation explicitly instead of leaving the user in a different folder
+    // whose filter hides the newly added records.
+    m_viewMode = ViewMode::Recent;
+    m_viewAllButton->setChecked(false);
+    m_viewFavoritesButton->setChecked(false);
+    m_viewRecentButton->setChecked(true);
+    m_viewMissingButton->setChecked(false);
+    refreshFolderTree();
+    refreshGrid();
+    refreshInspector();
+  }
+
   if (failed > 0)
     QMessageBox::warning(
         this, tr("Add Asset"),
@@ -1220,11 +1235,18 @@ void AssetManagerPanel::onCookTick() {
                              id))
       continue;
     const AssetMetadata *m = m_registry->Get(id);
-    const bool stillCooking = (m && m->cookState == assetlib::CookState::Stale);
+    const bool runtimeReady = m && m_registry->IsRuntimeReady(id);
+    const bool stillCooking = m && m_registry->IsRuntimePending(id);
     const AssetType type = m ? m->type : AssetType::Unknown;
     const bool missing = (m && m->sourceState == assetlib::SourceState::Missing);
-    if (!stillCooking)
+    if (!stillCooking) {
       item->setData(kUserRoleCooking, false);
+      if (runtimeReady)
+        item->setData(
+            kUserRoleDrag,
+            QString::fromStdString(std::string(AssetTypeToString(type)) + ":" +
+                                   id.ToString()));
+    }
     const QString thumbPath = m ? EnsureThumbnail(id, m, thumbs) : QString();
     item->setIcon(QIcon(
         ComposeThumb(thumbPath, type, sz, missing, stillCooking, m_spinnerFrame)));

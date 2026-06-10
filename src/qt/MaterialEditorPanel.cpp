@@ -530,6 +530,35 @@ void ApplyPreset(Asset::Material &m, int presetIdx)
     MaterialSystem::ApplyPreset(m, presetIdx);
 }
 
+std::vector<int> CollectNodeMaterialIndices(const Scene::Node &node)
+{
+    std::vector<int> indices;
+    const auto add = [&](int materialIndex) {
+        if (materialIndex < 0 ||
+            materialIndex >= static_cast<int>(g_loadedMaterials.size()) ||
+            std::find(indices.begin(), indices.end(), materialIndex) !=
+                indices.end()) {
+            return;
+        }
+        indices.push_back(materialIndex);
+    };
+
+    for (size_t meshIndex : node.meshIndices) {
+        if (meshIndex < g_loadedMeshes.size()) {
+            add(g_loadedMeshes[meshIndex].materialIndex);
+        }
+    }
+
+    // Hierarchical imports keep their complete material-slot table on the
+    // import root while geometry lives on child nodes.
+    if (node.importGroupRoot) {
+        for (int materialIndex : node.linkedMaterialIndices) {
+            add(materialIndex);
+        }
+    }
+    return indices;
+}
+
 } // namespace
 MaterialEditorPanel::MaterialEditorPanel(QWidget *parent)
     : QWidget(parent)
@@ -2123,18 +2152,11 @@ void MaterialEditorPanel::refreshMaterials()
             }
             if (selectedNodeIndex >= 0) {
                 const Scene::Node &node = nodes[static_cast<size_t>(selectedNodeIndex)];
-                bool inNode = false;
-                for (size_t mi = 0; mi < node.meshIndices.size(); ++mi) {
-                    const size_t meshIndex = node.meshIndices[mi];
-                    if (meshIndex >= g_loadedMeshes.size()) {
-                        continue;
-                    }
-                    const int matIdx = g_loadedMeshes[meshIndex].materialIndex;
-                    if (matIdx == pending) {
-                        inNode = true;
-                        break;
-                    }
-                }
+                const std::vector<int> nodeMaterials =
+                    CollectNodeMaterialIndices(node);
+                const bool inNode =
+                    std::find(nodeMaterials.begin(), nodeMaterials.end(),
+                              pending) != nodeMaterials.end();
                 if (!inNode) {
                     m_syncing = true;
                     m_showAllCheck->setChecked(true);
@@ -2203,19 +2225,7 @@ void MaterialEditorPanel::rebuildMaterialList()
     if (showAll || !selectedNode) {
         scopeIndices = gatherSceneMaterialIndices();
     } else {
-        for (size_t i = 0; i < selectedNode->meshIndices.size(); ++i) {
-            const size_t meshIndex = selectedNode->meshIndices[i];
-            if (meshIndex >= g_loadedMeshes.size()) {
-                continue;
-            }
-            const int matIdx = g_loadedMeshes[meshIndex].materialIndex;
-            if (matIdx < 0 || matIdx >= static_cast<int>(g_loadedMaterials.size())) {
-                continue;
-            }
-            if (std::find(scopeIndices.begin(), scopeIndices.end(), matIdx) == scopeIndices.end()) {
-                scopeIndices.push_back(matIdx);
-            }
-        }
+        scopeIndices = CollectNodeMaterialIndices(*selectedNode);
     }
 
     if (selectedNodeIndex != m_lastSelectedNodeIndex) {
@@ -2224,20 +2234,7 @@ void MaterialEditorPanel::rebuildMaterialList()
             m_syncing = true;
             m_showAllCheck->setChecked(false);
             m_syncing = false;
-            scopeIndices.clear();
-            for (size_t i = 0; i < selectedNode->meshIndices.size(); ++i) {
-                const size_t meshIndex = selectedNode->meshIndices[i];
-                if (meshIndex >= g_loadedMeshes.size()) {
-                    continue;
-                }
-                const int matIdx = g_loadedMeshes[meshIndex].materialIndex;
-                if (matIdx < 0 || matIdx >= static_cast<int>(g_loadedMaterials.size())) {
-                    continue;
-                }
-                if (std::find(scopeIndices.begin(), scopeIndices.end(), matIdx) == scopeIndices.end()) {
-                    scopeIndices.push_back(matIdx);
-                }
-            }
+            scopeIndices = CollectNodeMaterialIndices(*selectedNode);
         }
         bool ok = false;
         for (int idx : scopeIndices) {

@@ -89,6 +89,12 @@ public:
   void RefreshSourceStates();
   // Ids whose source is recorded but missing, or whose cook failed/corrupt.
   std::vector<AssetId> MissingOrFailed() const;
+  // True only when this asset and every transitive dependency have completed
+  // cooking successfully. Missing records and dependency cycles are not ready.
+  bool IsRuntimeReady(const AssetId &id) const;
+  // True when this asset or a transitive dependency is currently stale and
+  // expected to complete through the cook service.
+  bool IsRuntimePending(const AssetId &id) const;
 
   // --- Change notification ------------------------------------------------
   size_t AddChangeListener(ChangeListener cb);
