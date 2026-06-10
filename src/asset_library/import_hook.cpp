@@ -368,6 +368,14 @@ AssetId ImportVdbFileToLibrary(const std::string &path,
                 options.temperatureGrid;
         settings["densityGrid"] = options.densityGrid;
         settings["temperatureGrid"] = options.temperatureGrid;
+        if (settings.contains("sequence") &&
+            settings["sequence"].is_object()) {
+          json &storedSequence = settings["sequence"];
+          if (!storedSequence.contains("fps") ||
+              storedSequence.value("fps", 30.0f) == 30.0f) {
+            storedSequence["fps"] = 24.0f;
+          }
+        }
         updated.displayName = name;
         updated.sourcePath = firstSource.string();
         updated.sourceContentHash = HashFile(firstSource);
@@ -402,7 +410,7 @@ AssetId ImportVdbFileToLibrary(const std::string &path,
         {"firstFrame", sequence.firstFrame},
         {"frameCount", sequence.frameCount},
         {"padding", sequence.padding},
-        {"fps", 30.0},
+        {"fps", 24.0},
     };
     metadata.importSettingsJson = settings.dump();
     const AssetId id = registry->Add(std::move(metadata));
@@ -434,15 +442,31 @@ bool EnsureVdbSequenceCooked(const AssetId &id) {
   const AssetMetadata *metadata = registry->Get(id);
   if (!metadata || metadata->type != AssetType::Volume)
     return true;
+  AssetMetadata effectiveMetadata = *metadata;
+  try {
+    json settings = json::parse(effectiveMetadata.importSettingsJson);
+    if (settings.contains("sequence") &&
+        settings["sequence"].is_object()) {
+      json &sequenceSettings = settings["sequence"];
+      if (!sequenceSettings.contains("fps") ||
+          sequenceSettings.value("fps", 30.0f) == 30.0f) {
+        sequenceSettings["fps"] = 24.0f;
+        effectiveMetadata.importSettingsJson = settings.dump();
+        registry->Update(effectiveMetadata);
+        registry->Save();
+      }
+    }
+  } catch (...) {
+  }
   VdbSequence sequence;
   VdbImport::ImportOptions options;
-  if (!ParseVdbSequenceSettings(*metadata, sequence, options))
+  if (!ParseVdbSequenceSettings(effectiveMetadata, sequence, options))
     return true;
   if (CookService::Get().IsPending(id))
     return false;
   if (SequenceCookComplete(registry->paths(), id, sequence)) {
-    if (metadata->cookState != CookState::Current) {
-      AssetMetadata updated = *metadata;
+    if (effectiveMetadata.cookState != CookState::Current) {
+      AssetMetadata updated = effectiveMetadata;
       updated.cookState = CookState::Current;
       registry->Update(updated);
       registry->Save();

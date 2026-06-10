@@ -34,7 +34,7 @@ struct SequenceInfo {
   uint32_t currentFrame = 0;
   uint32_t pendingFrame = 0;
   bool loading = false;
-  float sourceFps = 30.0f;
+  float sourceFps = 24.0f;
 };
 
 struct VolumeStats {

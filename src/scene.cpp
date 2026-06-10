@@ -3680,6 +3680,42 @@ assetlib::AssetId ExtractModelAssetFromMeshes(
   return set.modelId;
 }
 
+namespace {
+void ApplyHeatVolumeDefaults(
+    VolumeMaterial &material,
+    const VolumetricRenderer::VolumeStats &volumeStats) {
+  const float normalizedDensity =
+      volumeStats.densityMax > 1.0e-6f ? 0.05f / volumeStats.densityMax
+                                      : 1.0f;
+  material.densityScale = (std::clamp)(normalizedDensity, 0.35f, 20.0f);
+  material.absorption = 1.0f;
+  material.scattering = 0.15f;
+  material.ambient = 0.02f;
+  material.color[0] = 0.24f;
+  material.color[1] = 0.27f;
+  material.color[2] = 0.32f;
+  material.emissionColor[0] = 1.0f;
+  material.emissionColor[1] = 0.55f;
+  material.emissionColor[2] = 0.12f;
+  material.emissionStrength = 60000.0f;
+  material.lightingStrength = 0.03f;
+  material.temperatureLow = 0.005f;
+  material.temperatureHigh = 0.45f;
+  material.temperatureGamma = 0.7f;
+  material.marchSteps = 128;
+}
+
+bool IsLegacyOverdenseHeatPreset(const VolumeMaterial &material) {
+  return std::abs(material.absorption - 1.5f) < 1.0e-4f &&
+         std::abs(material.scattering - 0.25f) < 1.0e-4f &&
+         std::abs(material.ambient - 0.04f) < 1.0e-4f &&
+         std::abs(material.emissionStrength - 15000.0f) < 0.1f &&
+         std::abs(material.temperatureLow - 0.03f) < 1.0e-4f &&
+         std::abs(material.temperatureHigh - 0.78f) < 1.0e-4f &&
+         std::abs(material.temperatureGamma - 1.8f) < 1.0e-4f;
+}
+} // namespace
+
 size_t AddVolumeNode(const assetlib::AssetId &id) {
   // Load the volume into the renderer (also gives us its cooked bounds).
   if (!VolumetricRenderer::SetActiveVolume(id))
@@ -3709,28 +3745,8 @@ size_t AddVolumeNode(const assetlib::AssetId &id) {
       VolumetricRenderer::GetVolumeStats(id);
   if (sequence.animated)
     node.volumePlayback.fps = sequence.sourceFps;
-  if (volumeStats.hasTemperature) {
-    const float normalizedDensity =
-        volumeStats.densityMax > 1.0e-6f
-            ? 0.2f / volumeStats.densityMax
-            : 1.0f;
-    node.volumeMaterial.densityScale =
-        (std::clamp)(normalizedDensity, 0.5f, 100.0f);
-    node.volumeMaterial.absorption = 1.5f;
-    node.volumeMaterial.scattering = 0.25f;
-    node.volumeMaterial.ambient = 0.04f;
-    node.volumeMaterial.color[0] = 0.32f;
-    node.volumeMaterial.color[1] = 0.37f;
-    node.volumeMaterial.color[2] = 0.45f;
-    node.volumeMaterial.emissionColor[0] = 1.0f;
-    node.volumeMaterial.emissionColor[1] = 0.72f;
-    node.volumeMaterial.emissionColor[2] = 0.32f;
-    node.volumeMaterial.emissionStrength = 15000.0f;
-    node.volumeMaterial.temperatureLow = 0.03f;
-    node.volumeMaterial.temperatureHigh = 0.78f;
-    node.volumeMaterial.temperatureGamma = 1.8f;
-    node.volumeMaterial.marchSteps = 128;
-  }
+  if (volumeStats.hasTemperature)
+    ApplyHeatVolumeDefaults(node.volumeMaterial, volumeStats);
   // Column-major diagonal scale + translation. Rest the volume ON the ground
   // (bottom at Y=0), centered in X/Z. Centering on the origin would bury the
   // lower half below the ground plane, where the scene-depth clip hides it —
@@ -3824,6 +3840,7 @@ void SetVolumeTimelineTime(float seconds) {
 
 void TickVolumeAnimations(float deltaSeconds) {
   bool frameChanged = false;
+  bool materialMigrated = false;
   for (Node &node : s_nodes) {
     if (!node.visible || node.volumeAssetId.empty())
       continue;
@@ -3832,6 +3849,20 @@ void TickVolumeAnimations(float deltaSeconds) {
       continue;
     const VolumetricRenderer::SequenceInfo sequence =
         VolumetricRenderer::GetSequenceInfo(id);
+    if (sequence.animated &&
+        std::abs(node.volumePlayback.fps - 30.0f) < 1.0e-4f &&
+        std::abs(sequence.sourceFps - 24.0f) < 1.0e-4f) {
+      node.volumePlayback.fps = sequence.sourceFps;
+      materialMigrated = true;
+    }
+    if (IsLegacyOverdenseHeatPreset(node.volumeMaterial)) {
+      const VolumetricRenderer::VolumeStats volumeStats =
+          VolumetricRenderer::GetVolumeStats(id);
+      if (volumeStats.hasTemperature) {
+        ApplyHeatVolumeDefaults(node.volumeMaterial, volumeStats);
+        materialMigrated = true;
+      }
+    }
     if (!sequence.animated || sequence.frameCount < 2)
       continue;
 
@@ -3861,9 +3892,11 @@ void TickVolumeAnimations(float deltaSeconds) {
     frameChanged |= VolumetricRenderer::UpdateSequenceFrame(
         id, static_cast<uint32_t>(frame));
   }
-  if (frameChanged) {
+  if (frameChanged || materialMigrated) {
     UpdateLights();
     DxrRenderer::ResetAccumulation();
+    if (materialMigrated)
+      NotifySceneChanged();
   }
 }
 

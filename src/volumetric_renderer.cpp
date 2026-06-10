@@ -509,7 +509,7 @@ RuntimeVolume *ResolveVolume(const assetlib::AssetId &id) {
           runtime.sequenceFrameCount =
               sequence.value("frameCount", 1u);
           runtime.sequence = runtime.sequenceFrameCount > 1;
-          runtime.sequenceFps = sequence.value("fps", 30.0f);
+          runtime.sequenceFps = sequence.value("fps", 24.0f);
         }
       } catch (...) {
       }
