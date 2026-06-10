@@ -3,10 +3,12 @@
 #include "asset_registry.h"
 #include "cooked_payload.h"
 
+#include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
+#include <set>
 #include <thread>
 #include <vector>
 
@@ -15,8 +17,7 @@ namespace assetlib {
 struct CookService::Impl {
   struct Job {
     AssetId id;
-    std::filesystem::path path;
-    std::function<std::vector<uint8_t>()> produce;
+    std::vector<CookService::Output> outputs;
   };
   struct Completion {
     AssetId id;
@@ -30,6 +31,9 @@ struct CookService::Impl {
   std::deque<Job> jobs;
   std::vector<Completion> done;
   std::atomic<size_t> inFlight{0}; // queued + currently-processing
+  std::atomic<size_t> workTotal{0};
+  std::atomic<size_t> workCompleted{0};
+  std::set<AssetId> pendingIds;
   bool stop = false;
 
   Impl() {
@@ -58,9 +62,20 @@ struct CookService::Impl {
       }
       Completion c;
       c.id = job.id;
-      std::vector<uint8_t> blob = job.produce ? job.produce() : std::vector<uint8_t>();
-      c.ok = !blob.empty() && WriteCookedFile(job.path, blob);
-      c.hash = blob.empty() ? 0 : HashBytes(blob.data(), blob.size());
+      c.ok = !job.outputs.empty();
+      for (const CookService::Output &output : job.outputs) {
+        std::vector<uint8_t> blob =
+            output.produce ? output.produce() : std::vector<uint8_t>();
+        const bool outputOk =
+            !blob.empty() && WriteCookedFile(output.path, blob);
+        c.ok = c.ok && outputOk;
+        if (outputOk) {
+          const uint64_t outputHash = HashBytes(blob.data(), blob.size());
+          c.hash ^= outputHash + 0x9e3779b97f4a7c15ull + (c.hash << 6) +
+                    (c.hash >> 2);
+        }
+        workCompleted.fetch_add(1, std::memory_order_acq_rel);
+      }
       {
         std::lock_guard<std::mutex> lk(mtx);
         done.push_back(c);
@@ -80,12 +95,36 @@ CookService &CookService::Get() {
 
 void CookService::Enqueue(const AssetId &id, std::filesystem::path path,
                           std::function<std::vector<uint8_t>()> produce) {
+  std::vector<Output> outputs;
+  outputs.push_back({std::move(path), std::move(produce)});
+  EnqueueBatch(id, std::move(outputs));
+}
+
+void CookService::EnqueueBatch(const AssetId &id,
+                               std::vector<Output> outputs) {
+  if (outputs.empty())
+    return;
   {
     std::lock_guard<std::mutex> lk(m_impl->mtx);
-    m_impl->inFlight.fetch_add(1, std::memory_order_acq_rel);
-    m_impl->jobs.push_back({id, std::move(path), std::move(produce)});
+    if (m_impl->pendingIds.find(id) != m_impl->pendingIds.end())
+      return;
+    const size_t previous =
+        m_impl->inFlight.fetch_add(1, std::memory_order_acq_rel);
+    if (previous == 0) {
+      m_impl->workTotal.store(outputs.size(), std::memory_order_release);
+      m_impl->workCompleted.store(0, std::memory_order_release);
+    } else {
+      m_impl->workTotal.fetch_add(outputs.size(), std::memory_order_acq_rel);
+    }
+    m_impl->pendingIds.insert(id);
+    m_impl->jobs.push_back({id, std::move(outputs)});
   }
   m_impl->cv.notify_one();
+}
+
+bool CookService::IsPending(const AssetId &id) const {
+  std::lock_guard<std::mutex> lk(m_impl->mtx);
+  return m_impl->pendingIds.find(id) != m_impl->pendingIds.end();
 }
 
 void CookService::Pump(AssetRegistry &registry) {
@@ -99,13 +138,20 @@ void CookService::Pump(AssetRegistry &registry) {
   bool changed = false;
   for (const auto &c : ready) {
     const AssetMetadata *meta = registry.Get(c.id);
-    if (!meta)
+    if (!meta) {
+      std::lock_guard<std::mutex> lk(m_impl->mtx);
+      m_impl->pendingIds.erase(c.id);
       continue; // asset removed before cook finished
+    }
     AssetMetadata updated = *meta;
     updated.cookState = c.ok ? CookState::Current : CookState::Failed;
     if (c.ok)
       updated.cookedPayloadHash = c.hash;
     registry.Update(updated);
+    {
+      std::lock_guard<std::mutex> lk(m_impl->mtx);
+      m_impl->pendingIds.erase(c.id);
+    }
     changed = true;
   }
   // Persist once the backlog is fully drained.
@@ -122,6 +168,18 @@ std::string CookService::statusText() const {
   if (n == 0)
     return "Cook: idle";
   return "Cooking " + std::to_string(n) + " asset(s)…";
+}
+
+std::string CookService::progressText() const {
+  const size_t assets = pending();
+  if (assets == 0)
+    return {};
+  const size_t total = m_impl->workTotal.load(std::memory_order_acquire);
+  const size_t completed =
+      (std::min)(m_impl->workCompleted.load(std::memory_order_acquire), total);
+  return "Cooking " + std::to_string(completed) + "/" +
+         std::to_string(total) + " output(s) for " +
+         std::to_string(assets) + " asset(s)...";
 }
 
 } // namespace assetlib

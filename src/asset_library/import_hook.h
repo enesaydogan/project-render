@@ -26,5 +26,6 @@ AssetId RegisterImportedModel(const std::string &displayName,
 AssetId ImportFileToLibrary(const std::string &path);
 AssetId ImportVdbFileToLibrary(const std::string &path,
                                const VdbImport::ImportOptions &options);
+bool EnsureVdbSequenceCooked(const AssetId &id);
 
 } // namespace assetlib

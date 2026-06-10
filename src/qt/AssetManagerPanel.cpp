@@ -792,7 +792,7 @@ void AssetManagerPanel::refreshGrid() {
     auto *item = new QListWidgetItem(m_grid);
     item->setText(name);
     item->setData(kUserRoleId, QString::fromStdString(id.ToString()));
-    if (m) // draggable only when the asset is present
+    if (m && m->cookState == assetlib::CookState::Current)
       item->setData(kUserRoleDrag,
                     QString::fromStdString(std::string(AssetTypeToString(type)) +
                                            ":" + id.ToString()));
@@ -1172,6 +1172,11 @@ void AssetManagerPanel::onClearLibrary() {
 }
 
 void AssetManagerPanel::onCookTick() {
+  if (m_registry && !m_sequenceCooksValidated) {
+    m_sequenceCooksValidated = true;
+    for (const AssetId &id : m_registry->AllAssets())
+      assetlib::EnsureVdbSequenceCooked(id);
+  }
   // Apply finished cook results here too, not only from the render loop: when
   // the app is idle the renderer may not tick ProcessPendingImport, which would
   // leave cookState stuck at Stale (and the spinner spinning) until the next
@@ -1184,6 +1189,9 @@ void AssetManagerPanel::onCookTick() {
     m_cookStatus->setText(
         pending == 0 ? QString()
                      : tr("Cooking %1…").arg(static_cast<int>(pending)));
+  if (m_cookStatus && pending != 0)
+    m_cookStatus->setText(QString::fromStdString(
+        assetlib::CookService::Get().progressText()));
   if (!m_registry || !m_grid)
     return;
 

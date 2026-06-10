@@ -7,16 +7,19 @@
 
 #include "../asset_library/asset_paths.h"
 #include "../asset_library/asset_registry.h"
+#include "../asset_library/cook_jobs.h"
 #include "../asset_library/cooked_payload.h"
 #include "../asset_library/prpak_reader.h"
 #include "../asset_library/prpak_writer.h"
 #include "../asset_library/thumbnail_cache.h"
 
 #include <cstdio>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <random>
 #include <string>
+#include <thread>
 
 using namespace assetlib;
 
@@ -565,6 +568,46 @@ void TestPrPakCorruption() {
   CHECK(!r2.Open(junk, nullptr));
 }
 
+void TestAtomicBatchCook() {
+  std::printf("TestAtomicBatchCook\n");
+  TempDir tmp;
+  AssetPaths paths(tmp.path);
+  AssetRegistry registry(paths);
+  CHECK(registry.Load());
+
+  AssetMetadata metadata =
+      MakeAsset(AssetType::Volume, "Sequence", "Imported/Volumes");
+  metadata.cookState = CookState::Stale;
+  const AssetId id = registry.Add(std::move(metadata));
+
+  std::vector<CookService::Output> outputs;
+  for (int frame = 0; frame < 3; ++frame) {
+    outputs.push_back(
+        {tmp.path / ("frame_" + std::to_string(frame) + ".prvol"),
+         [frame]() {
+           return std::vector<uint8_t>{
+               static_cast<uint8_t>(frame + 1),
+               static_cast<uint8_t>(frame + 2)};
+         }});
+  }
+  CookService &cook = CookService::Get();
+  cook.EnqueueBatch(id, std::move(outputs));
+  CHECK(cook.IsPending(id));
+  CHECK(registry.Get(id)->cookState == CookState::Stale);
+
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (cook.pending() != 0 && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  cook.Pump(registry);
+
+  CHECK(!cook.IsPending(id));
+  CHECK(registry.Get(id)->cookState == CookState::Current);
+  CHECK(std::filesystem::exists(tmp.path / "frame_0.prvol"));
+  CHECK(std::filesystem::exists(tmp.path / "frame_1.prvol"));
+  CHECK(std::filesystem::exists(tmp.path / "frame_2.prvol"));
+}
+
 } // namespace
 
 int main() {
@@ -583,6 +626,7 @@ int main() {
   TestPrPakRoundTrip();
   TestPrPakDedup();
   TestPrPakCorruption();
+  TestAtomicBatchCook();
 
   std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
   return g_failures;

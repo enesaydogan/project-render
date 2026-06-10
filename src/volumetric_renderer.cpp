@@ -3,8 +3,8 @@
 #include "asset_library/cooked_payload.h"
 #include "asset_library/asset_cooker.h"
 #include "asset_library/global_registry.h"
+#include "asset_library/import_hook.h"
 #include "asset_library/pack_mounts.h"
-#include "asset_library/vdb_import.h"
 #include "camera.h"
 #include "d3d12_helpers.h"
 #include "dxc_wrapper.h"
@@ -19,12 +19,10 @@
 #include <cstring>
 #include <filesystem>
 #include <future>
-#include <iomanip>
 #include <limits>
 #include <new>
 #include <nlohmann/json.hpp>
 #include <string>
-#include <sstream>
 #include <unordered_map>
 #include <vector>
 
@@ -37,9 +35,17 @@ namespace {
 Params s_params;
 EmissionLightStats s_emissionLightStats;
 
+struct HeatVoxel {
+  uint32_t x = 0;
+  uint32_t y = 0;
+  uint32_t z = 0;
+  float value = 0.0f;
+};
+
 struct CpuVolumeFrame {
   std::vector<float> density;
   std::vector<float> temperature;
+  std::vector<HeatVoxel> heatVoxels;
   uint32_t dim[3] = {0, 0, 0};
   float temperatureMin = 0.0f;
   float temperatureInvRange = 0.0f;
@@ -58,6 +64,7 @@ struct RuntimeVolume {
   assetlib::AssetId id;
   std::vector<float> density;
   std::vector<float> temperature;
+  std::vector<HeatVoxel> heatVoxels;
   uint32_t dim[3] = {0, 0, 0};
   float temperatureMin = 0.0f;
   float temperatureInvRange = 0.0f;
@@ -70,14 +77,7 @@ struct RuntimeVolume {
   ComPtr<ID3D12DescriptorHeap> descriptorHeap;
   std::vector<RetiredVolumeGpuFrame> retiredGpuFrames;
   bool sequence = false;
-  std::string sequenceDirectory;
-  std::string sequencePrefix;
-  std::string sequenceSuffix = ".vdb";
-  std::string sequenceDensityGrid;
-  std::string sequenceTemperatureGrid;
-  uint32_t sequenceFirstFrame = 0;
   uint32_t sequenceFrameCount = 1;
-  uint32_t sequencePadding = 0;
   float sequenceFps = 30.0f;
   uint32_t currentFrame = 0;
   uint32_t requestedFrame = 0;
@@ -390,6 +390,22 @@ bool BuildDenseField(const assetlib::CookedVolume &vol, RuntimeVolume &runtime) 
 
   runtime.density = std::move(density);
   runtime.temperature = std::move(temperature);
+  runtime.heatVoxels.clear();
+  if (!runtime.temperature.empty()) {
+    runtime.heatVoxels.reserve(vol.activeVoxels);
+    for (uint32_t z = 0; z < runtimeDim[2]; ++z) {
+      for (uint32_t y = 0; y < runtimeDim[1]; ++y) {
+        for (uint32_t x = 0; x < runtimeDim[0]; ++x) {
+          const float value =
+              runtime.temperature[(static_cast<size_t>(z) * runtimeDim[1] + y) *
+                                      runtimeDim[0] +
+                                  x];
+          if (value > 0.0f)
+            runtime.heatVoxels.push_back({x, y, z, value});
+        }
+      }
+    }
+  }
   runtime.temperatureMin = vol.temperatureMin;
   const float temperatureRange = vol.temperatureMax - vol.temperatureMin;
   runtime.temperatureInvRange =
@@ -406,6 +422,7 @@ CpuVolumeFrame TakeCpuFrame(RuntimeVolume &runtime) {
   CpuVolumeFrame frame;
   frame.density = std::move(runtime.density);
   frame.temperature = std::move(runtime.temperature);
+  frame.heatVoxels = std::move(runtime.heatVoxels);
   std::copy(std::begin(runtime.dim), std::end(runtime.dim),
             std::begin(frame.dim));
   frame.temperatureMin = runtime.temperatureMin;
@@ -419,6 +436,7 @@ void ApplyCpuFrame(RuntimeVolume &runtime, CpuVolumeFrame frame,
                    uint32_t frameIndex) {
   runtime.density = std::move(frame.density);
   runtime.temperature = std::move(frame.temperature);
+  runtime.heatVoxels = std::move(frame.heatVoxels);
   std::copy(std::begin(frame.dim), std::end(frame.dim),
             std::begin(runtime.dim));
   runtime.temperatureMin = frame.temperatureMin;
@@ -437,16 +455,6 @@ void ApplyCpuFrame(RuntimeVolume &runtime, CpuVolumeFrame frame,
   runtime.uploadFailed = false;
 }
 
-std::filesystem::path SequenceSourcePath(const RuntimeVolume &runtime,
-                                         uint32_t frameIndex) {
-  std::ostringstream number;
-  number << std::setw(static_cast<int>(runtime.sequencePadding))
-         << std::setfill('0')
-         << (runtime.sequenceFirstFrame + frameIndex);
-  return std::filesystem::path(runtime.sequenceDirectory) /
-         (runtime.sequencePrefix + number.str() + runtime.sequenceSuffix);
-}
-
 RuntimeVolume *ResolveVolume(const assetlib::AssetId &id) {
   if (!id.valid())
     return nullptr;
@@ -457,6 +465,8 @@ RuntimeVolume *ResolveVolume(const assetlib::AssetId &id) {
   assetlib::AssetRegistry *reg = assetlib::GlobalRegistry();
   std::vector<uint8_t> blob;
   if (reg) {
+    if (!assetlib::EnsureVdbSequenceCooked(id))
+      return nullptr;
     if (!assetlib::HasCurrentCookedVolume(*reg, reg->paths(), id))
       assetlib::RecookVolumeFromSource(*reg, reg->paths(), id);
     assetlib::ResolveCookedPayload(reg->paths(), id,
@@ -492,19 +502,6 @@ RuntimeVolume *ResolveVolume(const assetlib::AssetId &id) {
           runtime.sequenceFrameCount =
               sequence.value("frameCount", 1u);
           runtime.sequence = runtime.sequenceFrameCount > 1;
-          runtime.sequenceDirectory =
-              sequence.value("directory", std::string());
-          runtime.sequencePrefix =
-              sequence.value("prefix", std::string());
-          runtime.sequenceSuffix =
-              sequence.value("suffix", std::string(".vdb"));
-          runtime.sequenceDensityGrid =
-              settings.value("densityGrid", std::string());
-          runtime.sequenceTemperatureGrid =
-              settings.value("temperatureGrid", std::string());
-          runtime.sequenceFirstFrame =
-              sequence.value("firstFrame", 0u);
-          runtime.sequencePadding = sequence.value("padding", 0u);
           runtime.sequenceFps = sequence.value("fps", 30.0f);
         }
       } catch (...) {
@@ -697,46 +694,22 @@ bool UpdateSequenceFrame(const assetlib::AssetId &id, uint32_t frameIndex) {
   if (!volume->pendingLoad.valid() &&
       volume->requestedFrame != volume->currentFrame) {
     const uint32_t requested = volume->requestedFrame;
-    const std::filesystem::path sourcePath =
-        SequenceSourcePath(*volume, requested);
     assetlib::AssetRegistry *registry = assetlib::GlobalRegistry();
     if (!registry)
       return changed;
     const std::filesystem::path cachePath =
-        registry->paths().cookedVolumeFramePath(id, requested);
-    const std::string densityGrid = volume->sequenceDensityGrid;
-    const std::string temperatureGrid = volume->sequenceTemperatureGrid;
+        requested == 0
+            ? registry->paths().cookedVolumePath(id)
+            : registry->paths().cookedVolumeFramePath(id, requested);
     volume->pendingFrame = requested;
     volume->pendingLoad = std::async(
-        std::launch::async,
-        [sourcePath, cachePath, densityGrid, temperatureGrid]() {
+        std::launch::async, [cachePath]() {
           assetlib::CookedVolume cooked;
           std::vector<uint8_t> blob;
-          bool loaded =
+          const bool loaded =
               assetlib::ReadCookedFile(cachePath, blob) &&
               assetlib::DeserializeCookedVolume(blob.data(), blob.size(),
                                                 cooked);
-          if (!loaded) {
-            std::string error;
-            VdbImport::ImportOptions options;
-            options.densityGrid = densityGrid;
-            options.temperatureGrid = temperatureGrid;
-            loaded = VdbImport::ImportVdbToVolume(sourcePath.string(), options,
-                                                  cooked, &error);
-            if (loaded) {
-              blob.clear();
-              if (assetlib::SerializeCookedVolume(cooked, blob) &&
-                  !assetlib::WriteCookedFile(cachePath, blob)) {
-                fprintf(stderr,
-                        "VDB sequence cache write failed for '%s'; using the "
-                        "imported frame without caching\n",
-                        cachePath.string().c_str());
-              }
-            }
-            if (!loaded && !error.empty())
-              fprintf(stderr, "VDB sequence import failed for '%s': %s\n",
-                      sourcePath.string().c_str(), error.c_str());
-          }
           RuntimeVolume temporary;
           if (!loaded || !BuildDenseField(cooked, temporary))
             return std::make_pair(false, CpuVolumeFrame{});
@@ -748,6 +721,16 @@ bool UpdateSequenceFrame(const assetlib::AssetId &id, uint32_t frameIndex) {
 
 void AppendEmissionLights(std::vector<Light> &lights) {
   constexpr uint32_t kClustersPerAxis = 4;
+  constexpr uint32_t kClusterCount =
+      kClustersPerAxis * kClustersPerAxis * kClustersPerAxis;
+  struct ClusterAccum {
+    double weight = 0.0;
+    double colorWeight[3] = {};
+    double px = 0.0;
+    double py = 0.0;
+    double pz = 0.0;
+    uint64_t hotVoxelCount = 0;
+  };
   s_emissionLightStats = {};
   for (const Scene::Node &node : Scene::GetNodes()) {
     const Scene::VolumeMaterial &material = node.volumeMaterial;
@@ -759,7 +742,7 @@ void AppendEmissionLights(std::vector<Light> &lights) {
     if (!assetlib::AssetId::FromString(node.volumeAssetId, id))
       continue;
     RuntimeVolume *volume = ResolveVolume(id);
-    if (!volume || volume->temperature.empty() ||
+    if (!volume || volume->heatVoxels.empty() ||
         volume->temperatureInvRange <= 0.0f)
       continue;
 
@@ -786,52 +769,50 @@ void AppendEmissionLights(std::vector<Light> &lights) {
     const float low = (std::clamp)(material.temperatureLow, 0.0f, 1.0f);
     const float high =
         (std::clamp)(material.temperatureHigh, low + 1.0e-4f, 1.0f);
+    std::array<ClusterAccum, kClusterCount> clusters;
+    for (const HeatVoxel &voxel : volume->heatVoxels) {
+      const float raw = (voxel.value - volume->temperatureMin) *
+                        volume->temperatureInvRange;
+      const float heat =
+          (std::clamp)((raw - low) / (high - low), 0.0f, 1.0f);
+      const float w =
+          std::pow(heat, (std::max)(material.temperatureGamma, 0.05f));
+      if (w <= 1.0e-8f)
+        continue;
+      const uint32_t cx =
+          (std::min)(voxel.x * kClustersPerAxis / volume->dim[0],
+                     kClustersPerAxis - 1);
+      const uint32_t cy =
+          (std::min)(voxel.y * kClustersPerAxis / volume->dim[1],
+                     kClustersPerAxis - 1);
+      const uint32_t cz =
+          (std::min)(voxel.z * kClustersPerAxis / volume->dim[2],
+                     kClustersPerAxis - 1);
+      ClusterAccum &cluster =
+          clusters[(cz * kClustersPerAxis + cy) * kClustersPerAxis + cx];
+      const DirectX::XMFLOAT3 fireColor = FireColor(heat);
+      cluster.weight += w;
+      cluster.colorWeight[0] += static_cast<double>(fireColor.x) * w;
+      cluster.colorWeight[1] += static_cast<double>(fireColor.y) * w;
+      cluster.colorWeight[2] += static_cast<double>(fireColor.z) * w;
+      cluster.px += (static_cast<double>(voxel.x) + 0.5) * w;
+      cluster.py += (static_cast<double>(voxel.y) + 0.5) * w;
+      cluster.pz += (static_cast<double>(voxel.z) + 0.5) * w;
+      ++cluster.hotVoxelCount;
+    }
+
     for (uint32_t cz = 0; cz < kClustersPerAxis; ++cz) {
       for (uint32_t cy = 0; cy < kClustersPerAxis; ++cy) {
         for (uint32_t cx = 0; cx < kClustersPerAxis; ++cx) {
-          const uint32_t x0 = cx * volume->dim[0] / kClustersPerAxis;
-          const uint32_t x1 = (cx + 1) * volume->dim[0] / kClustersPerAxis;
-          const uint32_t y0 = cy * volume->dim[1] / kClustersPerAxis;
-          const uint32_t y1 = (cy + 1) * volume->dim[1] / kClustersPerAxis;
-          const uint32_t z0 = cz * volume->dim[2] / kClustersPerAxis;
-          const uint32_t z1 = (cz + 1) * volume->dim[2] / kClustersPerAxis;
-          double weight = 0.0;
-          double colorWeight[3] = {};
-          uint64_t hotVoxelCount = 0;
-          double px = 0.0, py = 0.0, pz = 0.0;
-          for (uint32_t z = z0; z < z1; ++z)
-            for (uint32_t y = y0; y < y1; ++y)
-              for (uint32_t x = x0; x < x1; ++x) {
-                const size_t index =
-                    (static_cast<size_t>(z) * volume->dim[1] + y) *
-                        volume->dim[0] +
-                    x;
-                const float raw =
-                    (volume->temperature[index] - volume->temperatureMin) *
-                    volume->temperatureInvRange;
-                const float heat =
-                    (std::clamp)((raw - low) / (high - low), 0.0f, 1.0f);
-                const float w =
-                    std::pow(heat, (std::max)(material.temperatureGamma, 0.05f));
-                if (w <= 1.0e-8f)
-                  continue;
-                const DirectX::XMFLOAT3 fireColor = FireColor(heat);
-                weight += w;
-                colorWeight[0] += static_cast<double>(fireColor.x) * w;
-                colorWeight[1] += static_cast<double>(fireColor.y) * w;
-                colorWeight[2] += static_cast<double>(fireColor.z) * w;
-                px += (static_cast<double>(x) + 0.5) * w;
-                py += (static_cast<double>(y) + 0.5) * w;
-                pz += (static_cast<double>(z) + 0.5) * w;
-                ++hotVoxelCount;
-              }
-          if (weight <= 1.0e-6)
+          const ClusterAccum &cluster =
+              clusters[(cz * kClustersPerAxis + cy) * kClustersPerAxis + cx];
+          if (cluster.weight <= 1.0e-6)
             continue;
 
           const float local[3] = {
-              static_cast<float>(px / weight / volume->dim[0]),
-              static_cast<float>(py / weight / volume->dim[1]),
-              static_cast<float>(pz / weight / volume->dim[2])};
+              static_cast<float>(cluster.px / cluster.weight / volume->dim[0]),
+              static_cast<float>(cluster.py / cluster.weight / volume->dim[1]),
+              static_cast<float>(cluster.pz / cluster.weight / volume->dim[2])};
           Light light = {};
           light.type = static_cast<uint32_t>(LightType::Omni);
           light.position[0] = local[0] * node.transform[0] +
@@ -853,9 +834,9 @@ void AppendEmissionLights(std::vector<Light> &lights) {
             light.emission[channel] =
                 static_cast<float>(
                     (std::max)(material.emissionColor[channel], 0.0f) *
-                    colorWeight[channel] * clusterScale);
+                    cluster.colorWeight[channel] * clusterScale);
           const double occupiedWorldVolume =
-              static_cast<double>(hotVoxelCount) * worldVoxelVolume;
+              static_cast<double>(cluster.hotVoxelCount) * worldVoxelVolume;
           light.radius = static_cast<float>(
               (std::max)(0.05, 0.5 * std::cbrt(occupiedWorldVolume)));
           light.iesAtlasIndex = -1;

@@ -76,6 +76,7 @@ private:
     QLabel *m_cookStatus = nullptr;    // bottom status bar, right side
     QLabel *m_libraryStatus = nullptr; // bottom status bar, left side
     int m_spinnerFrame = 0;
+    bool m_sequenceCooksValidated = false;
 
     // Right (inspector)
     QLabel *m_inspName = nullptr;

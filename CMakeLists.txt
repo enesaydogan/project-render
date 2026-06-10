@@ -933,6 +933,7 @@ if(BUILD_ASSET_TESTS)
 
   add_executable(asset-registry-tests
     src/tests/asset_registry_tests.cpp
+    src/asset_library/cook_jobs.cpp
     ${ASSET_TEST_CORE_SOURCES})
   target_include_directories(asset-registry-tests PRIVATE
     "${VCPKG_INSTALLED_DIR}/include")

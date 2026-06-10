@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <vector>
 
 // Background cook worker. Heavy serialize/compress/file-write work runs on a
 // single worker thread; the registry is only ever touched on the main thread
@@ -15,6 +16,11 @@ class AssetRegistry;
 
 class CookService {
 public:
+  struct Output {
+    std::filesystem::path path;
+    std::function<std::vector<uint8_t>()> produce;
+  };
+
   static CookService &Get();
 
   // Enqueue a unit of cook work. `produce` runs on the worker thread and
@@ -23,6 +29,8 @@ public:
   // `id`. Capture inputs by value/move — `produce` must not touch shared state.
   void Enqueue(const AssetId &id, std::filesystem::path path,
                std::function<std::vector<uint8_t>()> produce);
+  void EnqueueBatch(const AssetId &id, std::vector<Output> outputs);
+  bool IsPending(const AssetId &id) const;
 
   // Apply finished cook results to the registry (sets cookState + payload hash)
   // on the calling (main) thread. Saves the registry once when the queue fully
@@ -32,6 +40,7 @@ public:
   // For UI progress.
   size_t pending() const;
   std::string statusText() const;
+  std::string progressText() const;
 
   ~CookService();
 

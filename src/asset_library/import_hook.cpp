@@ -3,6 +3,7 @@
 #include "asset_cooker.h"
 #include "asset_paths.h"
 #include "asset_registry.h"
+#include "cook_jobs.h"
 #include "cooked_payload.h"
 #include "global_registry.h"
 #include "vdb_import.h"
@@ -76,6 +77,13 @@ std::string LowerExt(const std::string &path) {
   return ext;
 }
 
+int64_t SourceTimestamp(const std::filesystem::path &path) {
+  std::error_code ec;
+  const auto timestamp = std::filesystem::last_write_time(path, ec);
+  return ec ? 0
+            : static_cast<int64_t>(timestamp.time_since_epoch().count());
+}
+
 struct VdbSequence {
   std::string directory;
   std::string prefix;
@@ -84,6 +92,15 @@ struct VdbSequence {
   uint32_t frameCount = 0;
   uint32_t padding = 0;
 };
+
+std::filesystem::path SequenceSourcePath(const VdbSequence &sequence,
+                                         uint32_t frameIndex) {
+  std::ostringstream number;
+  number << std::setw(static_cast<int>(sequence.padding))
+         << std::setfill('0') << (sequence.firstFrame + frameIndex);
+  return std::filesystem::path(sequence.directory) /
+         (sequence.prefix + number.str() + sequence.suffix);
+}
 
 bool DetectVdbSequence(const std::string &path, VdbSequence &out) {
   const std::filesystem::path source(path);
@@ -178,6 +195,103 @@ AssetId FindImportedSequence(const AssetRegistry &registry,
   }
   return {};
 }
+
+bool ParseVdbSequenceSettings(const AssetMetadata &metadata,
+                              VdbSequence &sequence,
+                              VdbImport::ImportOptions &options) {
+  try {
+    const json settings = json::parse(metadata.importSettingsJson);
+    if (!settings.contains("sequence") ||
+        !settings["sequence"].is_object()) {
+      return false;
+    }
+    const json &stored = settings["sequence"];
+    sequence.directory = stored.value("directory", std::string());
+    sequence.prefix = stored.value("prefix", std::string());
+    sequence.suffix = stored.value("suffix", std::string(".vdb"));
+    sequence.firstFrame = stored.value("firstFrame", 0u);
+    sequence.frameCount = stored.value("frameCount", 0u);
+    sequence.padding = stored.value("padding", 0u);
+    options.densityGrid = settings.value("densityGrid", std::string());
+    options.temperatureGrid =
+        settings.value("temperatureGrid", std::string());
+    return !sequence.directory.empty() && sequence.frameCount > 1;
+  } catch (...) {
+    return false;
+  }
+}
+
+std::filesystem::path SequenceCookedPath(const AssetPaths &paths,
+                                         const AssetId &id,
+                                         uint32_t frameIndex) {
+  return frameIndex == 0 ? paths.cookedVolumePath(id)
+                         : paths.cookedVolumeFramePath(id, frameIndex);
+}
+
+bool SequenceCookComplete(const AssetPaths &paths, const AssetId &id,
+                          const VdbSequence &sequence) {
+  for (uint32_t frame = 0; frame < sequence.frameCount; ++frame) {
+    std::error_code ec;
+    if (!std::filesystem::exists(
+            SequenceCookedPath(paths, id, frame), ec) ||
+        ec) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool QueueVdbSequenceCook(AssetRegistry &registry, const AssetId &id,
+                          const VdbSequence &sequence,
+                          const VdbImport::ImportOptions &options,
+                          bool recookAll) {
+  CookService &cook = CookService::Get();
+  if (cook.IsPending(id))
+    return false;
+
+  std::vector<CookService::Output> outputs;
+  outputs.reserve(sequence.frameCount);
+  for (uint32_t frame = 0; frame < sequence.frameCount; ++frame) {
+    const std::filesystem::path cookedPath =
+        SequenceCookedPath(registry.paths(), id, frame);
+    std::error_code ec;
+    if (!recookAll && std::filesystem::exists(cookedPath, ec) && !ec)
+      continue;
+    const std::filesystem::path sourcePath =
+        SequenceSourcePath(sequence, frame);
+    outputs.push_back(
+        {cookedPath, [sourcePath, options]() {
+           CookedVolume cooked;
+           std::string error;
+           if (!VdbImport::ImportVdbToVolume(sourcePath.string(), options,
+                                             cooked, &error)) {
+             fprintf(stderr, "VDB sequence cook failed for '%s': %s\n",
+                     sourcePath.string().c_str(), error.c_str());
+             return std::vector<uint8_t>{};
+           }
+           std::vector<uint8_t> blob;
+           if (!SerializeCookedVolume(cooked, blob))
+             blob.clear();
+           return blob;
+         }});
+  }
+
+  const AssetMetadata *metadata = registry.Get(id);
+  if (!metadata)
+    return false;
+  AssetMetadata updated = *metadata;
+  if (outputs.empty()) {
+    updated.cookState = CookState::Current;
+    registry.Update(updated);
+    registry.Save();
+    return true;
+  }
+  updated.cookState = CookState::Stale;
+  registry.Update(updated);
+  registry.Save();
+  cook.EnqueueBatch(id, std::move(outputs));
+  return false;
+}
 } // namespace
 
 AssetId ImportFileToLibrary(const std::string &path) {
@@ -233,23 +347,71 @@ AssetId ImportVdbFileToLibrary(const std::string &path,
   VdbSequence sequence;
   const bool isSequence = DetectVdbSequence(path, sequence);
   if (isSequence) {
+    const std::string name =
+        sequence.prefix.empty() ? std::filesystem::path(path).stem().string()
+                                : sequence.prefix;
+    const std::filesystem::path firstSource =
+        SequenceSourcePath(sequence, 0);
     const AssetId existing = FindImportedSequence(*registry, sequence);
     if (existing.valid()) {
+      if (const AssetMetadata *metadata = registry->Get(existing)) {
+        AssetMetadata updated = *metadata;
+        json settings = json::object();
+        try {
+          settings = json::parse(updated.importSettingsJson);
+        } catch (...) {
+        }
+        const bool channelChanged =
+            settings.value("densityGrid", std::string()) !=
+                options.densityGrid ||
+            settings.value("temperatureGrid", std::string()) !=
+                options.temperatureGrid;
+        settings["densityGrid"] = options.densityGrid;
+        settings["temperatureGrid"] = options.temperatureGrid;
+        updated.displayName = name;
+        updated.sourcePath = firstSource.string();
+        updated.sourceContentHash = HashFile(firstSource);
+        updated.sourceTimestamp = SourceTimestamp(firstSource);
+        updated.cookerVersion = kCookerVersionVolume;
+        updated.importSettingsJson = settings.dump();
+        registry->Update(updated);
+        QueueVdbSequenceCook(*registry, existing, sequence, options,
+                             channelChanged);
+      }
       registry->TouchRecent(existing);
       registry->Save();
       return existing;
     }
+
+    AssetMetadata metadata;
+    metadata.type = AssetType::Volume;
+    metadata.displayName = name;
+    metadata.virtualPath = "Imported/Volumes";
+    metadata.sourcePath = firstSource.string();
+    metadata.sourceContentHash = HashFile(firstSource);
+    metadata.sourceTimestamp = SourceTimestamp(firstSource);
+    metadata.cookerVersion = kCookerVersionVolume;
+    metadata.cookState = CookState::Stale;
+    json settings;
+    settings["densityGrid"] = options.densityGrid;
+    settings["temperatureGrid"] = options.temperatureGrid;
+    settings["sequence"] = {
+        {"directory", sequence.directory},
+        {"prefix", sequence.prefix},
+        {"suffix", sequence.suffix},
+        {"firstFrame", sequence.firstFrame},
+        {"frameCount", sequence.frameCount},
+        {"padding", sequence.padding},
+        {"fps", 30.0},
+    };
+    metadata.importSettingsJson = settings.dump();
+    const AssetId id = registry->Add(std::move(metadata));
+    QueueVdbSequenceCook(*registry, id, sequence, options, true);
+    registry->TouchRecent(id);
+    registry->Save();
+    return id;
   }
   std::string importPath = path;
-  if (isSequence) {
-    std::ostringstream number;
-    number << std::setw(static_cast<int>(sequence.padding))
-           << std::setfill('0') << sequence.firstFrame;
-    importPath =
-        (std::filesystem::path(sequence.directory) /
-         (sequence.prefix + number.str() + sequence.suffix))
-            .string();
-  }
   CookedVolume vol;
   std::string error;
   if (!VdbImport::ImportVdbToVolume(importPath, options, vol, &error)) {
@@ -257,36 +419,40 @@ AssetId ImportVdbFileToLibrary(const std::string &path,
       fprintf(stderr, "VDB import failed: %s\n", error.c_str());
     return {};
   }
-  const std::string name = isSequence && !sequence.prefix.empty()
-                               ? sequence.prefix
-                               : std::filesystem::path(path).stem().string();
+  const std::string name = std::filesystem::path(path).stem().string();
   AssetId id = RegisterAndCookVolume(*registry, registry->paths(), name,
                                      importPath, vol);
-  if (id.valid() && isSequence) {
-    if (const AssetMetadata *metadata = registry->Get(id)) {
-      AssetMetadata updated = *metadata;
-      json settings = json::object();
-      try {
-        settings = json::parse(updated.importSettingsJson);
-      } catch (...) {
-      }
-      settings["sequence"] = {
-          {"directory", sequence.directory},
-          {"prefix", sequence.prefix},
-          {"suffix", sequence.suffix},
-          {"firstFrame", sequence.firstFrame},
-          {"frameCount", sequence.frameCount},
-          {"padding", sequence.padding},
-          {"fps", 30.0},
-      };
-      updated.displayName = sequence.prefix.empty() ? name : sequence.prefix;
-      updated.importSettingsJson = settings.dump();
-      registry->Update(updated);
-    }
-  }
   registry->TouchRecent(id);
   registry->Save();
   return id;
+}
+
+bool EnsureVdbSequenceCooked(const AssetId &id) {
+  AssetRegistry *registry = GlobalRegistry();
+  if (!registry)
+    return false;
+  const AssetMetadata *metadata = registry->Get(id);
+  if (!metadata || metadata->type != AssetType::Volume)
+    return true;
+  VdbSequence sequence;
+  VdbImport::ImportOptions options;
+  if (!ParseVdbSequenceSettings(*metadata, sequence, options))
+    return true;
+  if (CookService::Get().IsPending(id))
+    return false;
+  if (SequenceCookComplete(registry->paths(), id, sequence)) {
+    if (metadata->cookState != CookState::Current) {
+      AssetMetadata updated = *metadata;
+      updated.cookState = CookState::Current;
+      registry->Update(updated);
+      registry->Save();
+    }
+    return true;
+  }
+  if (metadata->cookState == CookState::Failed)
+    return false;
+  QueueVdbSequenceCook(*registry, id, sequence, options, false);
+  return false;
 }
 
 } // namespace assetlib
