@@ -560,6 +560,10 @@ void AssetManagerPanel::createUi() {
 
   // Right: inspector.
   auto *inspWrap = new QWidget(splitter);
+  // Keep the asset grid stable when inspector values change. Without a
+  // content-independent minimum, long IDs and source paths increase the
+  // inspector's splitter size as soon as an asset is selected.
+  inspWrap->setMinimumWidth(250);
   auto *inspLayout = new QVBoxLayout(inspWrap);
   inspLayout->setContentsMargins(6, 0, 0, 0);
   inspLayout->setSpacing(4);
@@ -576,6 +580,8 @@ void AssetManagerPanel::createUi() {
     l->setStyleSheet(QStringLiteral("color: #848c90;"));
     auto *v = new QLabel(inspWrap);
     v->setWordWrap(true);
+    v->setMinimumWidth(0);
+    v->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     v->setTextInteractionFlags(Qt::TextSelectableByMouse);
     form->addRow(l, v);
     return v;
@@ -617,7 +623,11 @@ void AssetManagerPanel::createUi() {
 
   splitter->setStretchFactor(0, 1);
   splitter->setStretchFactor(1, 3);
-  splitter->setStretchFactor(2, 1);
+  splitter->setStretchFactor(2, 0);
+  splitter->setCollapsible(0, false);
+  splitter->setCollapsible(1, false);
+  splitter->setCollapsible(2, false);
+  splitter->setSizes({220, 680, 250});
   root->addWidget(splitter, 1);
 
   // --- Bottom status bar: library summary left, cook progress right ---------

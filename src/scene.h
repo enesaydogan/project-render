@@ -132,6 +132,13 @@ bool InstantiateAssetModel(const assetlib::AssetId &id,
 // Assets-panel material drag target). Returns true if at least one node was
 // updated.
 bool AssignMaterialAssetToSelection(const assetlib::AssetId &id);
+// Assign a library Material asset to the material slot of the mesh surface
+// under the viewport position. All submeshes on that node sharing the picked
+// source material slot are updated, while the node's other slots are preserved.
+bool AssignMaterialAssetAtViewportPosition(const assetlib::AssetId &id,
+                                           float screenX, float screenY,
+                                           float screenWidth,
+                                           float screenHeight);
 
 // Instantiate a library Volume asset as a selectable, transformable scene node
 // (the Assets-panel volume drag target). The node carries no meshes; the

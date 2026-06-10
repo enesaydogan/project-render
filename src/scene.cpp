@@ -3496,20 +3496,15 @@ bool InstantiateAssetModel(const assetlib::AssetId &id,
   return AddImportedNode(std::move(payload), outNodeIndex);
 }
 
-bool AssignMaterialAssetToSelection(const assetlib::AssetId &id) {
+static int ResolveMaterialAssetForScene(const assetlib::AssetId &id) {
   assetlib::AssetRegistry *reg = assetlib::GlobalRegistry();
   if (!reg)
-    return false;
-  std::vector<size_t> selection = GetSelectedNodeIndices();
-  if (selection.empty()) {
-    s_lastStatus = "Drop a material onto a selected object";
-    return false;
-  }
+    return -1;
   assetlib::ResolvedMaterial rm =
       assetlib::ResolveMaterial(*reg, reg->paths(), id);
   if (!rm.valid) {
     s_lastStatus = "Material assign failed: could not resolve cooked material";
-    return false;
+    return -1;
   }
 
   // Register the material's textures into the global array and remap its slots
@@ -3536,8 +3531,21 @@ bool AssignMaterialAssetToSelection(const assetlib::AssetId &id) {
   int materialIndex = FindOrCreateMaterial(mat);
   if (materialIndex < 0) {
     s_lastStatus = "Material assign failed";
+    return -1;
+  }
+  reg->TouchRecent(id);
+  return materialIndex;
+}
+
+bool AssignMaterialAssetToSelection(const assetlib::AssetId &id) {
+  std::vector<size_t> selection = GetSelectedNodeIndices();
+  if (selection.empty()) {
+    s_lastStatus = "Drop a material onto a selected object";
     return false;
   }
+  const int materialIndex = ResolveMaterialAssetForScene(id);
+  if (materialIndex < 0)
+    return false;
 
   bool any = false;
   for (size_t nodeIndex : selection) {
@@ -3554,6 +3562,73 @@ bool AssignMaterialAssetToSelection(const assetlib::AssetId &id) {
     s_lastStatus = "Assigned material to selection";
   }
   return any;
+}
+
+bool AssignMaterialAssetAtViewportPosition(const assetlib::AssetId &id,
+                                           float screenX, float screenY,
+                                           float screenWidth,
+                                           float screenHeight) {
+  SceneMeshPickHit hit;
+  if (!PickSceneMeshAt(screenX, screenY, screenWidth, screenHeight, hit)) {
+    s_lastStatus = "Drop the material onto a mesh surface";
+    return false;
+  }
+  if (hit.nodeIndex >= s_nodes.size() ||
+      hit.meshIndex >= g_loadedMeshes.size()) {
+    s_lastStatus = "Material assign failed: invalid mesh target";
+    return false;
+  }
+
+  const int materialIndex = ResolveMaterialAssetForScene(id);
+  if (materialIndex < 0)
+    return false;
+
+  Node &node = s_nodes[hit.nodeIndex];
+  const Asset::GpuMesh &pickedMesh = g_loadedMeshes[hit.meshIndex];
+  const int pickedSlot = pickedMesh.materialSlot;
+  const int previousMaterialIndex = pickedMesh.materialIndex;
+
+  bool assigned = false;
+  if (pickedSlot >= 0 &&
+      static_cast<size_t>(pickedSlot) < node.linkedMaterialIndices.size()) {
+    assigned = RebindNodeMaterialSlot(
+        hit.nodeIndex, static_cast<size_t>(pickedSlot), materialIndex);
+  } else {
+    // Legacy meshes may not have a linked slot table. Preserve the same UX by
+    // replacing every submesh on this node that shared the picked slot, or the
+    // picked material index when no source slot exists.
+    for (size_t meshIndex : node.meshIndices) {
+      if (meshIndex >= g_loadedMeshes.size())
+        continue;
+      Asset::GpuMesh &mesh = g_loadedMeshes[meshIndex];
+      const bool sameBinding =
+          pickedSlot >= 0 ? mesh.materialSlot == pickedSlot
+                          : mesh.materialIndex == previousMaterialIndex;
+      if (!sameBinding)
+        continue;
+      mesh.materialIndex = materialIndex;
+      assigned = true;
+    }
+    if (assigned) {
+      ApplyRendererInvalidation(RendererInvalidationPlan::AccumulationOnly);
+      NotifySceneChanged();
+    }
+  }
+
+  if (!assigned) {
+    s_lastStatus = "Material assign failed: mesh has no assignable material slot";
+    return false;
+  }
+
+  RefreshAllMaterialRuntimeTextures();
+  const char *materialName =
+      materialIndex >= 0 &&
+              materialIndex < static_cast<int>(g_loadedMaterials.size())
+          ? g_loadedMaterials[static_cast<size_t>(materialIndex)].name
+          : "material";
+  s_lastStatus = std::string("Assigned ") + materialName +
+                 " to the dropped mesh material slot";
+  return true;
 }
 
 assetlib::AssetId ExtractModelAssetFromMeshes(

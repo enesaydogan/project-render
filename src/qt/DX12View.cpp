@@ -480,7 +480,13 @@ void DX12View::dropEvent(QDropEvent *e)
                     else
                         Scene::InstantiateAssetModel(id);
                 } else if (type == QStringLiteral("material")) {
-                    Scene::AssignMaterialAssetToSelection(id);
+                    const QPoint dropPos =
+                        mapToGlobal(e->position().toPoint());
+                    Scene::AssignMaterialAssetAtViewportPosition(
+                        id, static_cast<float>(dropPos.x()),
+                        static_cast<float>(dropPos.y()),
+                        static_cast<float>(DX12Context::g_windowWidth),
+                        static_cast<float>(DX12Context::g_windowHeight));
                 } else if (type == QStringLiteral("volume")) {
                     // Instantiate the volume as a selectable, transformable
                     // scene node (which also activates it for rendering).
