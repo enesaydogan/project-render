@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <climits>
 #include <filesystem>
 #include <iomanip>
 #include <nlohmann/json.hpp>
@@ -249,6 +250,39 @@ bool QueueVdbSequenceCook(AssetRegistry &registry, const AssetId &id,
   if (cook.IsPending(id))
     return false;
 
+  // Pre-pass: union active-voxel bboxes across the full sequence so every
+  // cooked frame samples the same world-space region. Without this the
+  // per-frame bbox shifts each frame and the volume "jumps" at playback.
+  VdbImport::ImportOptions sequenceOptions = options;
+  {
+    int32_t unionMin[3] = {INT32_MAX, INT32_MAX, INT32_MAX};
+    int32_t unionMax[3] = {INT32_MIN, INT32_MIN, INT32_MIN};
+    bool anyValid = false;
+    for (uint32_t frame = 0; frame < sequence.frameCount; ++frame) {
+      const std::filesystem::path sourcePath =
+          SequenceSourcePath(sequence, frame);
+      int32_t mn[3], mx[3];
+      std::string error;
+      if (!VdbImport::QueryActiveBounds(sourcePath.string(), options, mn, mx,
+                                        &error)) {
+        // Skip empty / unreadable frames; they will fail at cook time too.
+        continue;
+      }
+      anyValid = true;
+      for (int i = 0; i < 3; ++i) {
+        if (mn[i] < unionMin[i]) unionMin[i] = mn[i];
+        if (mx[i] > unionMax[i]) unionMax[i] = mx[i];
+      }
+    }
+    if (anyValid) {
+      sequenceOptions.overrideBoundsValid = true;
+      for (int i = 0; i < 3; ++i) {
+        sequenceOptions.overrideBoundsMin[i] = unionMin[i];
+        sequenceOptions.overrideBoundsMax[i] = unionMax[i];
+      }
+    }
+  }
+
   std::vector<CookService::Output> outputs;
   outputs.reserve(sequence.frameCount);
   for (uint32_t frame = 0; frame < sequence.frameCount; ++frame) {
@@ -260,11 +294,12 @@ bool QueueVdbSequenceCook(AssetRegistry &registry, const AssetId &id,
     const std::filesystem::path sourcePath =
         SequenceSourcePath(sequence, frame);
     outputs.push_back(
-        {cookedPath, [sourcePath, options]() {
+        {cookedPath, [sourcePath, sequenceOptions]() {
            CookedVolume cooked;
            std::string error;
-           if (!VdbImport::ImportVdbToVolume(sourcePath.string(), options,
-                                             cooked, &error)) {
+           if (!VdbImport::ImportVdbToVolume(sourcePath.string(),
+                                             sequenceOptions, cooked,
+                                             &error)) {
              fprintf(stderr, "VDB sequence cook failed for '%s': %s\n",
                      sourcePath.string().c_str(), error.c_str());
              return std::vector<uint8_t>{};

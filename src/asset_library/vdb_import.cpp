@@ -293,7 +293,18 @@ bool ImportVdbToVolume(const std::string &path, const ImportOptions &options,
   const std::string temperatureGridName =
       temperatureGrid ? temperatureGrid->getName() : std::string();
 
-  const openvdb::CoordBBox bbox = grid->evalActiveVoxelBoundingBox();
+  openvdb::CoordBBox bbox;
+  if (options.overrideBoundsValid) {
+    bbox = openvdb::CoordBBox(
+        openvdb::Coord(options.overrideBoundsMin[0],
+                       options.overrideBoundsMin[1],
+                       options.overrideBoundsMin[2]),
+        openvdb::Coord(options.overrideBoundsMax[0],
+                       options.overrideBoundsMax[1],
+                       options.overrideBoundsMax[2]));
+  } else {
+    bbox = grid->evalActiveVoxelBoundingBox();
+  }
   if (bbox.empty())
     return fail("VDB grid has no active voxels");
 
@@ -565,6 +576,138 @@ std::string DescribeGrids(const std::string &path) {
   return out;
 }
 
+bool QueryActiveBounds(const std::string &path, const ImportOptions &options,
+                       int32_t outMin[3], int32_t outMax[3],
+                       std::string *error) {
+  auto fail = [&](const std::string &m) {
+    if (error)
+      *error = m;
+    return false;
+  };
+  EnsureInit();
+
+  auto pickFromMetadataList =
+      [&](std::vector<openvdb::GridBase::Ptr> &all) -> openvdb::GridBase::Ptr {
+    openvdb::GridBase::Ptr selectedDensity;
+    std::vector<std::pair<int, openvdb::GridBase::Ptr>> scalarCandidates;
+    std::vector<std::pair<int, openvdb::GridBase::Ptr>> vectorCandidates;
+    for (auto &base : all) {
+      if (!base)
+        continue;
+      if (!options.densityGrid.empty() &&
+          base->getName() == options.densityGrid)
+        selectedDensity = base;
+      const int rank = DensityGridRank(base->getName(), base->getGridClass());
+      if (base->isType<openvdb::FloatGrid>() ||
+          base->isType<openvdb::DoubleGrid>() ||
+          base->isType<openvdb::Int32Grid>() ||
+          base->isType<openvdb::Int64Grid>() ||
+          base->isType<openvdb::BoolGrid>()) {
+        scalarCandidates.emplace_back(rank, base);
+      } else if (base->isType<openvdb::Vec3SGrid>() ||
+                 base->isType<openvdb::Vec3DGrid>()) {
+        vectorCandidates.emplace_back(rank, base);
+      }
+    }
+    if (!options.densityGrid.empty())
+      return selectedDensity;
+    scalarCandidates.erase(
+        std::remove_if(scalarCandidates.begin(), scalarCandidates.end(),
+                       [](const auto &candidate) {
+                         return candidate.second &&
+                                IsTemperatureGridName(
+                                    candidate.second->getName());
+                       }),
+        scalarCandidates.end());
+    auto pickBest = [](auto &candidates) -> openvdb::GridBase::Ptr {
+      if (candidates.empty())
+        return {};
+      std::sort(candidates.begin(), candidates.end(),
+                [](const auto &a, const auto &b) {
+                  return a.first > b.first;
+                });
+      return candidates.front().second;
+    };
+    if (auto picked = pickBest(scalarCandidates))
+      return picked;
+    vectorCandidates.erase(
+        std::remove_if(vectorCandidates.begin(), vectorCandidates.end(),
+                       [](const auto &candidate) {
+                         if (!candidate.second)
+                           return true;
+                         const std::string name =
+                             Lower(candidate.second->getName());
+                         return name.find("density") == std::string::npos &&
+                                name.find("smoke") == std::string::npos &&
+                                name.find("fog") == std::string::npos;
+                       }),
+        vectorCandidates.end());
+    return pickBest(vectorCandidates);
+  };
+
+  // Pass 1: try metadata-only. OpenVDB writers store file_bbox_min/max as
+  // Vec3i metadata in index space; when present we avoid loading the tree.
+  try {
+    openvdb::io::File file(path);
+    file.open();
+    std::vector<openvdb::GridBase::Ptr> metadataGrids;
+    for (auto it = file.beginName(); it != file.endName(); ++it)
+      metadataGrids.push_back(file.readGridMetadata(it.gridName()));
+    file.close();
+    if (openvdb::GridBase::Ptr picked = pickFromMetadataList(metadataGrids)) {
+      auto bboxMin = picked->template getMetadata<openvdb::Vec3IMetadata>(
+          "file_bbox_min");
+      auto bboxMax = picked->template getMetadata<openvdb::Vec3IMetadata>(
+          "file_bbox_max");
+      if (bboxMin && bboxMax) {
+        const openvdb::Vec3i mn = bboxMin->value();
+        const openvdb::Vec3i mx = bboxMax->value();
+        if (mn.x() <= mx.x() && mn.y() <= mx.y() && mn.z() <= mx.z()) {
+          outMin[0] = mn.x();
+          outMin[1] = mn.y();
+          outMin[2] = mn.z();
+          outMax[0] = mx.x();
+          outMax[1] = mx.y();
+          outMax[2] = mx.z();
+          return true;
+        }
+      }
+    }
+  } catch (const std::exception &) {
+    // Fall through to full read.
+  }
+
+  // Pass 2: full grid read (slower but always works).
+  openvdb::FloatGrid::Ptr grid;
+  try {
+    openvdb::io::File file(path);
+    file.open();
+    std::vector<openvdb::GridBase::Ptr> all;
+    for (auto it = file.beginName(); it != file.endName(); ++it)
+      all.push_back(file.readGrid(it.gridName()));
+    file.close();
+    if (openvdb::GridBase::Ptr picked = pickFromMetadataList(all)) {
+      const bool allowVector = options.densityGrid.empty() ||
+                               picked->getName() == options.densityGrid;
+      grid = ConvertSupportedGrid(picked, allowVector);
+    }
+  } catch (const std::exception &e) {
+    return fail(std::string("VDB read failed: ") + e.what());
+  }
+  if (!grid)
+    return fail("no renderable scalar or vector grid found in VDB");
+  const openvdb::CoordBBox bbox = grid->evalActiveVoxelBoundingBox();
+  if (bbox.empty())
+    return fail("VDB grid has no active voxels");
+  outMin[0] = bbox.min().x();
+  outMin[1] = bbox.min().y();
+  outMin[2] = bbox.min().z();
+  outMax[0] = bbox.max().x();
+  outMax[1] = bbox.max().y();
+  outMax[2] = bbox.max().z();
+  return true;
+}
+
 } // namespace VdbImport
 
 #else // PR_HAVE_OPENVDB
@@ -585,6 +728,12 @@ bool ImportVdbToVolume(const std::string &, assetlib::CookedVolume &,
 }
 bool ImportVdbToVolume(const std::string &, const ImportOptions &,
                        assetlib::CookedVolume &, std::string *error) {
+  if (error)
+    *error = "this build was configured without OpenVDB (.vdb unsupported)";
+  return false;
+}
+bool QueryActiveBounds(const std::string &, const ImportOptions &,
+                       int32_t[3], int32_t[3], std::string *error) {
   if (error)
     *error = "this build was configured without OpenVDB (.vdb unsupported)";
   return false;
