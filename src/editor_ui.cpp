@@ -1022,6 +1022,13 @@ static bool StartNextAnimationRenderJob() {
   const int fps = (std::max)(1, g_renderAnimationExport.fps);
   SavedViews::SavedView frameCamera =
       AnimationSequence::EvaluateAtFrame(frameIndex, fps);
+  // Drive Timeline-mode VDB sequences from the export frame. Interactive
+  // scrubbing goes through AnimationSequence::ApplyAtFrame which sets this,
+  // but the export path applies the camera directly, so set it here too —
+  // otherwise the volume stays frozen on the last scrubbed frame while the
+  // camera animates.
+  Scene::SetVolumeTimelineTime(static_cast<float>(frameIndex) /
+                               static_cast<float>(fps));
   SavedViews::ApplyView(frameCamera);
 
   const auto &animationSettings = AnimationSequence::GetExportSettings();
