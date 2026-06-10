@@ -27,6 +27,7 @@ namespace VolumetricRenderer {
 namespace {
 
 Params s_params;
+EmissionLightStats s_emissionLightStats;
 
 struct RuntimeVolume {
   assetlib::AssetId id;
@@ -52,6 +53,33 @@ ComPtr<ID3D12PipelineState> s_rasterCompositePSO;
 ComPtr<ID3D12PipelineState> s_dxrCompositePSO;
 DxcHelper s_dxcHelper;
 uint32_t s_frameIndex = 0;
+
+DirectX::XMFLOAT3 FireColor(float normalizedHeat) {
+  const float k =
+      (1000.0f +
+       11000.0f * (std::clamp)(normalizedHeat, 0.0f, 1.0f)) /
+      100.0f;
+  DirectX::XMFLOAT3 rgb;
+  rgb.x = k <= 66.0f
+              ? 1.0f
+              : (std::clamp)(1.2929362f * std::pow(k - 60.0f, -0.13320476f),
+                             0.0f, 1.0f);
+  rgb.y = k <= 66.0f
+              ? (std::clamp)(0.39008158f * std::log((std::max)(k, 1.0f)) -
+                                 0.63184144f,
+                             0.0f, 1.0f)
+              : (std::clamp)(1.1298909f * std::pow(k - 60.0f, -0.07551485f),
+                             0.0f, 1.0f);
+  rgb.z =
+      k >= 66.0f
+          ? 1.0f
+          : (k <= 19.0f
+                 ? 0.0f
+                 : (std::clamp)(0.5432068f * std::log(k - 10.0f) -
+                                    1.1962541f,
+                                0.0f, 1.0f));
+  return rgb;
+}
 
 bool EnsureCompositePipeline(ID3D12Device *device) {
   if (s_compositeRootSig && s_rasterCompositePSO && s_dxrCompositePSO) {
@@ -518,7 +546,8 @@ const assetlib::AssetId &ActiveVolumeId() { return s_lastResolvedId; }
 Params &GetParams() { return s_params; }
 
 void AppendEmissionLights(std::vector<Light> &lights) {
-  constexpr uint32_t kClustersPerAxis = 3;
+  constexpr uint32_t kClustersPerAxis = 4;
+  s_emissionLightStats = {};
   for (const Scene::Node &node : Scene::GetNodes()) {
     const Scene::VolumeMaterial &material = node.volumeMaterial;
     if (!node.visible || node.volumeAssetId.empty() ||
@@ -533,6 +562,26 @@ void AppendEmissionLights(std::vector<Light> &lights) {
         volume->temperatureInvRange <= 0.0f)
       continue;
 
+    const double voxelCountTotal =
+        static_cast<double>(volume->dim[0]) * volume->dim[1] * volume->dim[2];
+    if (voxelCountTotal <= 0.0)
+      continue;
+    const float determinant =
+        node.transform[0] *
+            (node.transform[5] * node.transform[10] -
+             node.transform[9] * node.transform[6]) -
+        node.transform[4] *
+            (node.transform[1] * node.transform[10] -
+             node.transform[9] * node.transform[2]) +
+        node.transform[8] *
+            (node.transform[1] * node.transform[6] -
+             node.transform[5] * node.transform[2]);
+    const double worldVoxelVolume =
+        std::abs(static_cast<double>(determinant)) / voxelCountTotal;
+    if (worldVoxelVolume <= 1.0e-12)
+      continue;
+
+    bool emittedVolumeLight = false;
     const float low = (std::clamp)(material.temperatureLow, 0.0f, 1.0f);
     const float high =
         (std::clamp)(material.temperatureHigh, low + 1.0e-4f, 1.0f);
@@ -546,6 +595,8 @@ void AppendEmissionLights(std::vector<Light> &lights) {
           const uint32_t z0 = cz * volume->dim[2] / kClustersPerAxis;
           const uint32_t z1 = (cz + 1) * volume->dim[2] / kClustersPerAxis;
           double weight = 0.0;
+          double colorWeight[3] = {};
+          uint64_t hotVoxelCount = 0;
           double px = 0.0, py = 0.0, pz = 0.0;
           for (uint32_t z = z0; z < z1; ++z)
             for (uint32_t y = y0; y < y1; ++y)
@@ -561,10 +612,17 @@ void AppendEmissionLights(std::vector<Light> &lights) {
                     (std::clamp)((raw - low) / (high - low), 0.0f, 1.0f);
                 const float w =
                     std::pow(heat, (std::max)(material.temperatureGamma, 0.05f));
+                if (w <= 1.0e-8f)
+                  continue;
+                const DirectX::XMFLOAT3 fireColor = FireColor(heat);
                 weight += w;
+                colorWeight[0] += static_cast<double>(fireColor.x) * w;
+                colorWeight[1] += static_cast<double>(fireColor.y) * w;
+                colorWeight[2] += static_cast<double>(fireColor.z) * w;
                 px += (static_cast<double>(x) + 0.5) * w;
                 py += (static_cast<double>(y) + 0.5) * w;
                 pz += (static_cast<double>(z) + 0.5) * w;
+                ++hotVoxelCount;
               }
           if (weight <= 1.0e-6)
             continue;
@@ -584,37 +642,41 @@ void AppendEmissionLights(std::vector<Light> &lights) {
           light.position[2] = local[0] * node.transform[2] +
                               local[1] * node.transform[6] +
                               local[2] * node.transform[10] + node.transform[14];
-          const double voxelCount = static_cast<double>(
-              (std::max)(1u, x1 - x0) * (std::max)(1u, y1 - y0) *
-              (std::max)(1u, z1 - z0));
-          const float averageHeat = static_cast<float>(weight / voxelCount);
-          const float clusterScale =
-              material.emissionStrength * material.lightingStrength *
-              averageHeat /
-              static_cast<float>(kClustersPerAxis * kClustersPerAxis *
-                                 kClustersPerAxis);
+          // The volume shader stores an emission coefficient integrated over
+          // world distance. Integrating that coefficient over world volume
+          // produces the radiant intensity represented by this point proxy.
+          const double clusterScale =
+              static_cast<double>(material.emissionStrength) *
+              material.lightingStrength * worldVoxelVolume;
           for (int channel = 0; channel < 3; ++channel)
             light.emission[channel] =
-                (std::max)(material.emissionColor[channel], 0.0f) *
-                clusterScale;
-          const float sx = std::sqrt(node.transform[0] * node.transform[0] +
-                                     node.transform[1] * node.transform[1] +
-                                     node.transform[2] * node.transform[2]);
-          const float sy = std::sqrt(node.transform[4] * node.transform[4] +
-                                     node.transform[5] * node.transform[5] +
-                                     node.transform[6] * node.transform[6]);
-          const float sz = std::sqrt(node.transform[8] * node.transform[8] +
-                                     node.transform[9] * node.transform[9] +
-                                     node.transform[10] * node.transform[10]);
-          light.radius = (sx + sy + sz) /
-                         (3.0f * static_cast<float>(kClustersPerAxis));
+                static_cast<float>(
+                    (std::max)(material.emissionColor[channel], 0.0f) *
+                    colorWeight[channel] * clusterScale);
+          const double occupiedWorldVolume =
+              static_cast<double>(hotVoxelCount) * worldVoxelVolume;
+          light.radius = static_cast<float>(
+              (std::max)(0.05, 0.5 * std::cbrt(occupiedWorldVolume)));
           light.iesAtlasIndex = -1;
           lights.push_back(light);
+          const float intensity =
+              (light.emission[0] + light.emission[1] + light.emission[2]) /
+              3.0f;
+          s_emissionLightStats.totalIntensity += intensity;
+          s_emissionLightStats.maxIntensity =
+              (std::max)(s_emissionLightStats.maxIntensity, intensity);
+          ++s_emissionLightStats.lightCount;
+          emittedVolumeLight = true;
         }
       }
     }
+    if (emittedVolumeLight)
+      ++s_emissionLightStats.volumeCount;
   }
 }
+
+EmissionLightStats GetEmissionLightStats() { return s_emissionLightStats; }
+
 ID3D12Resource *GetDensityTexture() {
   auto it = s_volumes.find(s_lastResolvedId.ToString());
   return it == s_volumes.end() ? nullptr : it->second.texture.Get();

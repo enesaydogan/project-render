@@ -2,6 +2,7 @@
 
 #include "../editor_ui.h"
 #include "../scene.h"
+#include "../volumetric_renderer.h"
 
 #include <QAbstractItemView>
 #include <QAction>
@@ -385,7 +386,10 @@ void ScenePanel::createUi()
     m_volumeEmission =
         makeFloat(tr("Emission radiance"), 0.0, 10000000.0, 1000.0, 1);
     m_volumeLightingStrength =
-        makeFloat(tr("Scene light"), 0.0, 1.0, 0.001, 4);
+        makeFloat(tr("Scene light"), 0.0, 100.0, 0.001, 4);
+    m_volumeLightStats = new QLabel(m_volumeMaterialGroup);
+    m_volumeLightStats->setWordWrap(true);
+    volumeForm->addRow(tr("DXR light proxies"), m_volumeLightStats);
     m_volumeTemperatureLow =
         makeFloat(tr("Heat low"), 0.0, 0.999, 0.01, 3);
     m_volumeTemperatureHigh =
@@ -540,6 +544,14 @@ void ScenePanel::syncVolumeMaterialInspector()
     m_volumeAmbient->setValue(m.ambient);
     m_volumeEmission->setValue(m.emissionStrength);
     m_volumeLightingStrength->setValue(m.lightingStrength);
+    const VolumetricRenderer::EmissionLightStats lightStats =
+        VolumetricRenderer::GetEmissionLightStats();
+    m_volumeLightStats->setText(
+        tr("%1 volume(s), %2 lights, total %3, peak %4")
+            .arg(lightStats.volumeCount)
+            .arg(lightStats.lightCount)
+            .arg(lightStats.totalIntensity, 0, 'g', 4)
+            .arg(lightStats.maxIntensity, 0, 'g', 4));
     m_volumeTemperatureLow->setValue(m.temperatureLow);
     m_volumeTemperatureHigh->setValue(m.temperatureHigh);
     m_volumeTemperatureGamma->setValue(m.temperatureGamma);

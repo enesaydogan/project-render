@@ -847,6 +847,7 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap,
                   vm.emissionColor[2]}},
           {"es", vm.emissionStrength},
           {"lgs", vm.lightingStrength},
+          {"lvm", 2},
           {"tl", vm.temperatureLow},
           {"th", vm.temperatureHigh},
           {"tg", vm.temperatureGamma},
@@ -1523,6 +1524,8 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
           node.volumeMaterial.emissionStrength *= 1000.0f;
         node.volumeMaterial.lightingStrength =
             vm.value("lgs", node.volumeMaterial.lightingStrength);
+        if (vm.contains("lgs") && vm.value("lvm", 1) < 2)
+          node.volumeMaterial.lightingStrength *= 10.0f;
         node.volumeMaterial.temperatureLow =
             vm.value("tl", node.volumeMaterial.temperatureLow);
         node.volumeMaterial.temperatureHigh =
@@ -1607,6 +1610,10 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
       break;
     }
   }
+  // ApplyMetadataPRS rebuilds ordinary lights before volume nodes exist.
+  // Rebuild once more after resolving the restored VDB runtime so emissive
+  // volume proxies reach the DXR light buffer and ReGIR on the first frame.
+  Scene::UpdateLights();
 }
 
 static size_t JsonToSizeT(const json &entry, const char *key,

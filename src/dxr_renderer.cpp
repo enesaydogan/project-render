@@ -7315,11 +7315,6 @@ static void ComputeSceneBounds() {
     s_sceneBoundsValid = true;
   };
 
-  if (instances.empty()) {
-    UseDefaultBounds();
-    return;
-  }
-
   bool foundBounds = false;
   for (const auto &inst : instances) {
     if (!inst.mesh) continue;
@@ -7347,6 +7342,29 @@ static void ComputeSceneBounds() {
       if (wx > s_sceneBoundsMax[0]) s_sceneBoundsMax[0] = wx;
       if (wy > s_sceneBoundsMax[1]) s_sceneBoundsMax[1] = wy;
       if (wz > s_sceneBoundsMax[2]) s_sceneBoundsMax[2] = wz;
+    }
+  }
+
+  for (const Scene::Node &node : Scene::GetNodes()) {
+    if (!node.visible || node.volumeAssetId.empty())
+      continue;
+    foundBounds = true;
+    for (int c = 0; c < 8; ++c) {
+      const float lx = (c & 1) ? 1.0f : 0.0f;
+      const float ly = (c & 2) ? 1.0f : 0.0f;
+      const float lz = (c & 4) ? 1.0f : 0.0f;
+      const float wx = lx * node.transform[0] + ly * node.transform[4] +
+                       lz * node.transform[8] + node.transform[12];
+      const float wy = lx * node.transform[1] + ly * node.transform[5] +
+                       lz * node.transform[9] + node.transform[13];
+      const float wz = lx * node.transform[2] + ly * node.transform[6] +
+                       lz * node.transform[10] + node.transform[14];
+      s_sceneBoundsMin[0] = (std::min)(s_sceneBoundsMin[0], wx);
+      s_sceneBoundsMin[1] = (std::min)(s_sceneBoundsMin[1], wy);
+      s_sceneBoundsMin[2] = (std::min)(s_sceneBoundsMin[2], wz);
+      s_sceneBoundsMax[0] = (std::max)(s_sceneBoundsMax[0], wx);
+      s_sceneBoundsMax[1] = (std::max)(s_sceneBoundsMax[1], wy);
+      s_sceneBoundsMax[2] = (std::max)(s_sceneBoundsMax[2], wz);
     }
   }
 

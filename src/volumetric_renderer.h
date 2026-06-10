@@ -21,6 +21,13 @@ struct Params {
   float stepJitter = 1.0f;     // 0..1 dither to hide banding
 };
 
+struct EmissionLightStats {
+  uint32_t volumeCount = 0;
+  uint32_t lightCount = 0;
+  float totalIntensity = 0.0f;
+  float maxIntensity = 0.0f;
+};
+
 // Resolve + cache a Volume asset. Rendering walks all visible scene volume nodes.
 bool SetActiveVolume(const assetlib::AssetId &id);
 void ClearActiveVolume();
@@ -32,6 +39,7 @@ Params &GetParams();
 // Adds a bounded set of point-light representatives sampled from visible
 // emissive volume nodes. These participate in DXR/ReSTIR and raster lighting.
 void AppendEmissionLights(std::vector<Light> &lights);
+EmissionLightStats GetEmissionLightStats();
 
 // --- Used by the raster renderer ---------------------------------------
 // Performs any pending GPU upload onto cmdList. Returns false if nothing is

@@ -5,6 +5,8 @@
 #include "../asset_library/cooked_payload.h"
 #include "../asset_library/vdb_import.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <string>
@@ -21,6 +23,46 @@ static void PrintVolumeStats(const assetlib::CookedVolume &vol) {
   std::printf("temperature bricks = %zu, range = %.4f .. %.4f\n",
               vol.temperatureBricks.size(), vol.temperatureMin,
               vol.temperatureMax);
+  if (!vol.temperatureBricks.empty() &&
+      vol.temperatureMax > vol.temperatureMin) {
+    constexpr float kHeatLow = 0.02f;
+    constexpr float kHeatHigh = 0.98f;
+    constexpr float kHeatGamma = 1.5f;
+    uint64_t hotVoxelCount = 0;
+    double integratedFireWeight = 0.0;
+    const float invTemperatureRange =
+        1.0f / (vol.temperatureMax - vol.temperatureMin);
+    for (const auto &brick : vol.temperatureBricks) {
+      const float brickRange = brick.maxVal - brick.minVal;
+      for (uint8_t q : brick.data) {
+        const float temperature =
+            brick.minVal + (static_cast<float>(q) / 255.0f) * brickRange;
+        const float rawHeat = std::clamp(
+            (temperature - vol.temperatureMin) * invTemperatureRange, 0.0f,
+            1.0f);
+        const float fireMask = std::clamp(
+            (rawHeat - kHeatLow) / (kHeatHigh - kHeatLow), 0.0f, 1.0f);
+        if (fireMask <= 1.0e-4f)
+          continue;
+        ++hotVoxelCount;
+        integratedFireWeight += std::pow(fireMask, kHeatGamma);
+      }
+    }
+    const uint64_t totalVoxelCount =
+        static_cast<uint64_t>(vol.dim[0]) * vol.dim[1] * vol.dim[2];
+    std::printf(
+        "default fire mask: %llu hot voxels (%.4f%%), integrated weight %.3f, "
+        "mean %.8f\n",
+        static_cast<unsigned long long>(hotVoxelCount),
+        totalVoxelCount > 0
+            ? 100.0 * static_cast<double>(hotVoxelCount) /
+                  static_cast<double>(totalVoxelCount)
+            : 0.0,
+        integratedFireWeight,
+        totalVoxelCount > 0
+            ? integratedFireWeight / static_cast<double>(totalVoxelCount)
+            : 0.0);
+  }
   // Peek a few non-zero temperature samples to confirm real data survived.
   int shown = 0;
   for (const auto &b : vol.temperatureBricks) {
