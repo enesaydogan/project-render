@@ -61,7 +61,7 @@ namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 static const char PRS_MAGIC[4] = {'P', 'R', 'S', '1'};
-static const uint32_t PRS_VERSION = 4;
+static const uint32_t PRS_VERSION = 5; // v5: node modelAssetId + texture dedup
 static const char PRS_CHUNK_MAGIC[4] = {'P', 'R', 'S', 'C'};
 static const char PRS_CHUNK_V3_MAGIC[4] = {'P', 'R', 'S', '3'};
 static constexpr size_t PRS_CHUNK_SIZE = 4ull * 1024ull * 1024ull;
@@ -821,6 +821,10 @@ static json BuildMetadata(const std::vector<int> &textureSaveRemap,
       {"mi", node.meshIndices}, {"lmi", node.linkedMaterialIndices},
       {"lmn", node.linkedMaterialSourceNames}, {"t", xf}
     };
+    // Phase 6: library link for relink/reimport (scene stays self-contained via
+    // embedded geometry; this is metadata only).
+    if (!node.modelAssetId.empty())
+      savedNode["ma"] = node.modelAssetId;
     if (!node.volumeAssetId.empty()) {
       const Scene::VolumeMaterial &vm = node.volumeMaterial;
       savedNode["va"] = node.volumeAssetId;
@@ -1486,6 +1490,7 @@ static void RestoreNodesPRS(const json &j, bool hasEmbedded) {
       Scene::Node node;
       node.name = n.value("n", "EmbeddedNode");
       node.sourcePath = srcPath;
+      node.modelAssetId = n.value("ma", std::string());
       node.importGroupKey = n.value("igk", std::string());
       node.importGroupRoot = n.value("igr", false);
       node.visible = n.value("v", true);
@@ -1918,18 +1923,31 @@ bool SaveScene(const std::string &path) {
 
     const std::vector<int> textureSaveRemap =
       MaterialIO::BuildTextureSaveRemap(g_loadedTextures, g_loadedMaterials);
-    uint32_t savedTextureCount = 0;
-    size_t savedTextureBytes = 0;
+    // textureSaveRemap may be non-injective (content-deduplicated): several
+    // source textures can map to one saved slot. Build slot -> representative
+    // source index so each distinct slot is embedded exactly once, in slot
+    // order, matching how the loader reads them back.
+    int textureSlotCount = 0;
+    for (int slot : textureSaveRemap)
+      textureSlotCount = (std::max)(textureSlotCount, slot + 1);
+    std::vector<int> textureSlotToSource(
+        static_cast<size_t>(textureSlotCount), -1);
     for (size_t textureIndex = 0; textureIndex < g_loadedTextures.size();
          ++textureIndex) {
-      if (textureSaveRemap[textureIndex] < 0) {
-        continue;
-      }
-      ++savedTextureCount;
-      savedTextureBytes += g_loadedTextures[textureIndex].cpuData.size();
+      const int slot = textureSaveRemap[textureIndex];
+      if (slot >= 0 && textureSlotToSource[static_cast<size_t>(slot)] < 0)
+        textureSlotToSource[static_cast<size_t>(slot)] =
+            static_cast<int>(textureIndex);
+    }
+    uint32_t savedTextureCount = static_cast<uint32_t>(textureSlotCount);
+    size_t savedTextureBytes = 0;
+    for (int source : textureSlotToSource) {
+      if (source >= 0)
+        savedTextureBytes +=
+            g_loadedTextures[static_cast<size_t>(source)].cpuData.size();
     }
     fprintf(stderr,
-            "PRS: Texture save set: %u referenced / %zu loaded (%.2f MB)\n",
+            "PRS: Texture save set: %u slots / %zu loaded (%.2f MB)\n",
             savedTextureCount, g_loadedTextures.size(),
             savedTextureBytes / (1024.0 * 1024.0));
 
@@ -1948,10 +1966,10 @@ bool SaveScene(const std::string &path) {
       // Pre-estimate size
       size_t est = 4 + msgpack.size() + 4 + 4;
       for (auto &m : g_loadedMeshes) est += 40 + m.cpuVertices.size()*sizeof(Asset::Vertex) + m.cpuIndices.size()*sizeof(uint32_t);
-      for (size_t textureIndex = 0; textureIndex < g_loadedTextures.size();
-           ++textureIndex)
-        if (textureSaveRemap[textureIndex] >= 0)
-          est += 20 + g_loadedTextures[textureIndex].cpuData.size();
+      for (int source : textureSlotToSource)
+        if (source >= 0)
+          est += 20 +
+                 g_loadedTextures[static_cast<size_t>(source)].cpuData.size();
       payload.reserve(est);
     }
 
@@ -1982,14 +2000,14 @@ bool SaveScene(const std::string &path) {
       if (ib) w.writeBytes(mesh.cpuIndices.data(), ib);
     }
 
-    // Textures — raw binary
+    // Textures — raw binary. One entry per distinct (deduplicated) slot, in
+    // slot order, so material indices saved via textureSaveRemap stay valid.
     w.writeU32(savedTextureCount);
-    for (size_t textureIndex = 0; textureIndex < g_loadedTextures.size();
-         ++textureIndex) {
-      if (textureSaveRemap[textureIndex] < 0) {
+    for (int source : textureSlotToSource) {
+      if (source < 0) {
         continue;
       }
-      const auto &tex = g_loadedTextures[textureIndex];
+      const auto &tex = g_loadedTextures[static_cast<size_t>(source)];
       w.writeU32(tex.width);
       w.writeU32(tex.height);
       w.writeU32((uint32_t)tex.cpuFormat);

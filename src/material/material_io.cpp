@@ -1,7 +1,10 @@
 #include "material_io.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
+#include <unordered_map>
+#include <vector>
 
 namespace MaterialIO {
 namespace {
@@ -154,13 +157,63 @@ std::vector<int> BuildTextureSaveRemap(
     markTexture(material.parallaxTexture);
   }
 
+  // Content-deduplicate referenced textures so identical images (e.g. the same
+  // texture pulled in by several instantiations of one library asset) are
+  // embedded once. Identical-content textures share a saved slot; slots are
+  // numbered 0..N-1 in first-occurrence order so the writer can emit each slot
+  // exactly once and the loader reconstructs them by slot index.
+  const auto sameContent = [](const Asset::Texture &a,
+                              const Asset::Texture &b) {
+    return a.width == b.width && a.height == b.height &&
+           a.cpuFormat == b.cpuFormat && a.cpuMipLevels == b.cpuMipLevels &&
+           a.cpuData.size() == b.cpuData.size() &&
+           (a.cpuData.empty() ||
+            std::memcmp(a.cpuData.data(), b.cpuData.data(),
+                        a.cpuData.size()) == 0);
+  };
+  const auto hashContent = [](const Asset::Texture &t) -> uint64_t {
+    uint64_t h = 1469598103934665603ULL; // FNV-1a offset basis
+    const auto mix = [&](const void *p, size_t n) {
+      const uint8_t *b = static_cast<const uint8_t *>(p);
+      for (size_t i = 0; i < n; ++i) {
+        h ^= b[i];
+        h *= 1099511628211ULL;
+      }
+    };
+    mix(&t.width, sizeof(t.width));
+    mix(&t.height, sizeof(t.height));
+    uint32_t fmt = static_cast<uint32_t>(t.cpuFormat);
+    mix(&fmt, sizeof(fmt));
+    mix(&t.cpuMipLevels, sizeof(t.cpuMipLevels));
+    if (!t.cpuData.empty())
+      mix(t.cpuData.data(), t.cpuData.size());
+    return h;
+  };
+
+  // hash -> representative source texture index per distinct slot under it.
+  std::unordered_map<uint64_t, std::vector<size_t>> byHash;
   int nextIndex = 0;
   for (size_t textureIndex = 0; textureIndex < textures.size();
        ++textureIndex) {
     if (!referenced[textureIndex] || textures[textureIndex].hiddenInEditor) {
       continue;
     }
-    remap[textureIndex] = nextIndex++;
+    const uint64_t h = hashContent(textures[textureIndex]);
+    int slot = -1;
+    auto it = byHash.find(h);
+    if (it != byHash.end()) {
+      for (size_t rep : it->second) {
+        if (sameContent(textures[rep], textures[textureIndex])) {
+          slot = remap[rep];
+          break;
+        }
+      }
+    }
+    if (slot < 0) {
+      slot = nextIndex++;
+      byHash[h].push_back(textureIndex);
+    }
+    remap[textureIndex] = slot;
   }
   return remap;
 }

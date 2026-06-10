@@ -12,7 +12,9 @@
 #include "../asset_library/prpak_reader.h"
 #include "../asset_library/prpak_writer.h"
 #include "../asset_library/thumbnail_cache.h"
+#include "../material/material_io.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <chrono>
 #include <filesystem>
@@ -608,6 +610,49 @@ void TestAtomicBatchCook() {
   CHECK(std::filesystem::exists(tmp.path / "frame_2.prvol"));
 }
 
+// Phase 6: identical embedded textures must collapse to one saved slot, while
+// distinct textures keep distinct slots and material indices remap correctly.
+void TestTextureSaveDedup() {
+  std::printf("TestTextureSaveDedup\n");
+
+  const auto makeTex = [](uint8_t fill, size_t bytes) {
+    Asset::Texture t;
+    t.width = 4;
+    t.height = 4;
+    t.cpuMipLevels = 1;
+    t.cpuData.assign(bytes, fill);
+    return t;
+  };
+
+  std::vector<Asset::Texture> textures;
+  textures.push_back(makeTex(0xAA, 64)); // 0: unique
+  textures.push_back(makeTex(0xBB, 64)); // 1: duplicate of 3
+  textures.push_back(makeTex(0xCC, 64)); // 2: unreferenced (dropped)
+  textures.push_back(makeTex(0xBB, 64)); // 3: duplicate of 1
+
+  Asset::Material m0;
+  m0.diffuseTexture = 0;
+  m0.normalTexture = 1;
+  Asset::Material m1;
+  m1.diffuseTexture = 3; // same content as texture 1
+  std::vector<Asset::Material> materials = {m0, m1};
+
+  const std::vector<int> remap =
+      MaterialIO::BuildTextureSaveRemap(textures, materials);
+
+  CHECK(remap.size() == 4);
+  CHECK(remap[2] == -1);          // unreferenced dropped
+  CHECK(remap[0] == 0);           // first referenced unique -> slot 0
+  CHECK(remap[1] == 1);           // first 0xBB -> slot 1
+  CHECK(remap[3] == remap[1]);    // identical content shares the slot
+  // Exactly two distinct saved slots.
+  int slotCount = 0;
+  for (int s : remap) slotCount = (std::max)(slotCount, s + 1);
+  CHECK(slotCount == 2);
+  // Material indices remap onto the deduplicated slots.
+  CHECK(MaterialIO::MapSavedTextureIndex(remap, m1.diffuseTexture) == remap[1]);
+}
+
 } // namespace
 
 int main() {
@@ -621,6 +666,7 @@ int main() {
   TestThumbnailCache();
   TestCookedModelRoundTrip();
   TestCookedTextureRoundTrip();
+  TestTextureSaveDedup();
   TestCookedFileIoAndHash();
   TestCookedVolumeRoundTrip();
   TestPrPakRoundTrip();

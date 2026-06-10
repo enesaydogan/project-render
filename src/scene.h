@@ -59,6 +59,9 @@ struct Node {
   float transform[16];             // 4x4 column-major matrix
   std::string sourcePath;          // Path to the asset file for re-loading
   std::string importGroupKey;      // Shared key for imported multi-node groups
+  std::string modelAssetId;        // library Model AssetId this node was imported/
+                                   // instantiated from (relink/reimport metadata);
+                                   // set on the import-group root node only
   std::string volumeAssetId;       // non-empty => this node is a volumetric asset
   std::vector<uint8_t> volumePayload; // embedded cooked payload for portable scenes
   VolumeMaterial volumeMaterial;
@@ -90,6 +93,8 @@ struct ImportedNodePayload {
   std::string sourcePath;
   std::string displayName;
   std::string importGroupKey;
+  std::string modelAssetId; // library Model AssetId, when imported/instantiated
+                            // from the asset library (relink/reimport metadata)
   std::array<float, 3> rootTranslation = {};
   std::vector<Asset::GpuMesh> meshes;
   std::vector<Asset::ImportedSceneNode> sceneNodes;
@@ -166,6 +171,33 @@ assetlib::AssetId ExtractModelAssetFromMeshes(
     const std::vector<std::array<float, 16>> &localTransforms,
     const std::string &displayName, const std::string &folder,
     const std::string &sourcePath);
+
+// Phase 6 scene-portability: relink / missing-library workflow.
+// Describes one importable model node's link to a library Model asset. A scene
+// always carries self-contained embedded geometry; this is the optional link
+// used for relinking and reimport.
+struct SceneAssetLink {
+  size_t nodeIndex = static_cast<size_t>(-1);
+  std::string nodeName;
+  std::string modelAssetId; // empty => node has no recorded library link
+  std::string sourcePath;
+  bool linkRecorded = false; // node carries a modelAssetId
+  bool inLibrary = false;    // that AssetId currently resolves in the registry
+  bool sourceExists = false; // sourcePath is a readable file on disk
+};
+// Enumerate the scene's importable model nodes (import-group roots and
+// standalone imported nodes) and their library link status. Volume and
+// live-link nodes are excluded.
+std::vector<SceneAssetLink> GetSceneAssetLinks();
+// Point a node's library link at a library Model asset (metadata only; does not
+// touch the node's embedded geometry). Pass an invalid id to clear the link.
+// Returns false on a bad node index.
+bool RelinkNodeToLibraryAsset(size_t nodeIndex, const assetlib::AssetId &id);
+// Add a node's embedded geometry into the asset library as a new Model asset
+// and link the node to it, making a previously portable-only asset reusable.
+// Works on import-group roots (captures the whole group) and standalone nodes.
+// Returns the new AssetId (invalid on failure).
+assetlib::AssetId SaveNodeAsLibraryAsset(size_t nodeIndex);
 // Open file dialog and import selected model
 bool ImportModelWithDialog(HWND hwnd);
 // Open file dialog and import selected HDR/EXR

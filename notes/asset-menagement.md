@@ -506,7 +506,7 @@ pack file directly.
 
 ### Phase 7: Starter Pack and Release
 
-- Curate redistributable grass and cloud assets.
+
 - Normalize scale, pivots, materials, and texture semantics.
 - Add attribution metadata.
 - Build `starter.prpak`.
@@ -544,4 +544,3 @@ pack file directly.
 - Whether packs can contain optional source files for editable distribution.
 - Thumbnail rendering ownership and background GPU scheduling.
 - Public stability policy for `.prpak` across Project Render versions.
-

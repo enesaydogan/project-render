@@ -2756,9 +2756,13 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
           payload.displayName.empty()
               ? std::filesystem::path(payload.sourcePath).stem().string()
               : payload.displayName;
-      assetlib::RegisterImportedModel(libName, payload.sourcePath,
-                                      payload.meshes, payload.materials,
-                                      payload.textures);
+      assetlib::AssetId registeredId = assetlib::RegisterImportedModel(
+          libName, payload.sourcePath, payload.meshes, payload.materials,
+          payload.textures);
+      // Record the library link so the scene can later relink/reimport this
+      // node, even though it carries self-contained embedded geometry.
+      if (registeredId.valid() && payload.modelAssetId.empty())
+        payload.modelAssetId = registeredId.ToString();
     }
   }
 
@@ -2802,6 +2806,7 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
     rootNode.name = ResolveNodeDisplayName(payload);
     rootNode.sourcePath = payload.sourcePath;
     rootNode.importGroupKey = groupKey;
+    rootNode.modelAssetId = payload.modelAssetId;
     rootNode.importGroupRoot = true;
     rootNode.selectionLocked = true;
     rootNode.linkedMaterialIndices = localToGlobal;
@@ -2931,6 +2936,7 @@ bool AddImportedNode(ImportedNodePayload payload, size_t *outNodeIndex) {
   Node node;
   node.name = ResolveNodeDisplayName(payload);
   node.sourcePath = payload.sourcePath;
+  node.modelAssetId = payload.modelAssetId;
   node.selectionLocked = true;
   node.meshIndices.reserve(payload.meshes.size());
   for (size_t i = 0; i < payload.meshes.size(); ++i) {
@@ -3473,6 +3479,7 @@ bool InstantiateAssetModel(const assetlib::AssetId &id,
   payload.meshes = std::move(rm.meshes);
   payload.materialsContainFullDefinitions = true;
   payload.skipLibraryRegister = true; // already a library asset
+  payload.modelAssetId = id.ToString();
   if (const assetlib::AssetMetadata *meta = reg->Get(id)) {
     payload.displayName = meta->displayName;
     payload.sourcePath = meta->sourcePath;
@@ -3753,6 +3760,99 @@ assetlib::AssetId ExtractModelAssetFromMeshes(
   }
   reg->Save();
   return set.modelId;
+}
+
+static bool NodeIsImportableModelRoot(const Node &node) {
+  if (!node.volumeAssetId.empty() || node.liveLinkManaged)
+    return false;
+  if (node.importGroupRoot)
+    return true;
+  return node.parentIndex == static_cast<size_t>(-1) &&
+         !node.meshIndices.empty();
+}
+
+std::vector<SceneAssetLink> GetSceneAssetLinks() {
+  std::vector<SceneAssetLink> links;
+  assetlib::AssetRegistry *reg = assetlib::GlobalRegistry();
+  for (size_t i = 0; i < s_nodes.size(); ++i) {
+    const Node &node = s_nodes[i];
+    if (!NodeIsImportableModelRoot(node))
+      continue;
+    SceneAssetLink link;
+    link.nodeIndex = i;
+    link.nodeName = node.name;
+    link.modelAssetId = node.modelAssetId;
+    link.sourcePath = node.sourcePath;
+    link.linkRecorded = !node.modelAssetId.empty();
+    if (reg && link.linkRecorded) {
+      assetlib::AssetId id;
+      if (assetlib::AssetId::FromString(node.modelAssetId, id))
+        link.inLibrary = reg->Get(id) != nullptr;
+    }
+    if (!node.sourcePath.empty()) {
+      std::error_code ec;
+      link.sourceExists =
+          std::filesystem::exists(std::filesystem::path(node.sourcePath), ec) &&
+          !ec;
+    }
+    links.push_back(std::move(link));
+  }
+  return links;
+}
+
+bool RelinkNodeToLibraryAsset(size_t nodeIndex, const assetlib::AssetId &id) {
+  if (nodeIndex >= s_nodes.size())
+    return false;
+  s_nodes[nodeIndex].modelAssetId = id.valid() ? id.ToString() : std::string();
+  NotifySceneChanged();
+  return true;
+}
+
+assetlib::AssetId SaveNodeAsLibraryAsset(size_t nodeIndex) {
+  if (nodeIndex >= s_nodes.size())
+    return {};
+  const Node &root = s_nodes[nodeIndex];
+  if (!NodeIsImportableModelRoot(root))
+    return {};
+
+  // Gather every mesh in this node's import group with its transform relative to
+  // the group root. Child node transforms are already stored local-to-root (see
+  // ResolveNodeWorldTransform), so they bake straight in; the root contributes
+  // identity (its own transform is the scene placement, not part of the model).
+  static const std::array<float, 16> kIdentity = {1, 0, 0, 0, 0, 1, 0, 0,
+                                                  0, 0, 1, 0, 0, 0, 0, 1};
+  std::vector<size_t> meshIndices;
+  std::vector<std::array<float, 16>> localTransforms;
+
+  const auto appendNodeMeshes = [&](const Node &n, bool isRoot) {
+    std::array<float, 16> xf = kIdentity;
+    if (!isRoot)
+      for (int i = 0; i < 16; ++i)
+        xf[static_cast<size_t>(i)] = n.transform[i];
+    for (size_t mi : n.meshIndices) {
+      meshIndices.push_back(mi);
+      localTransforms.push_back(xf);
+    }
+  };
+
+  appendNodeMeshes(root, /*isRoot=*/true);
+  if (root.importGroupRoot) {
+    for (size_t i = 0; i < s_nodes.size(); ++i) {
+      if (i == nodeIndex)
+        continue;
+      if (FindSceneTransformRootAncestor(i) == nodeIndex)
+        appendNodeMeshes(s_nodes[i], /*isRoot=*/false);
+    }
+  }
+  if (meshIndices.empty())
+    return {};
+
+  const std::string name = root.name.empty() ? "Scene Asset" : root.name;
+  assetlib::AssetId newId = ExtractModelAssetFromMeshes(
+      meshIndices, localTransforms, name, "Imported/Models", root.sourcePath);
+  if (newId.valid())
+    s_nodes[nodeIndex].modelAssetId = newId.ToString();
+  return newId;
 }
 
 namespace {

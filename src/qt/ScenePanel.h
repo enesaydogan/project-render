@@ -33,6 +33,9 @@ private:
     int selectedNodeIndex() const;
     void requestDeleteSelectedNode();
     void showNodeContextMenu(const QPoint &pos);
+    void relinkNodeToLibrary(int nodeIndex);
+    void saveNodeToLibrary(int nodeIndex);
+    void applyLinkDecorations();
     void syncVolumeMaterialInspector();
     void applyVolumeMaterialInspector();
     void applyVolumePlaybackInspector();

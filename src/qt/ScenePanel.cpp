@@ -3,10 +3,16 @@
 #include "../editor_ui.h"
 #include "../scene.h"
 #include "../volumetric_renderer.h"
+#include "../asset_library/asset_id.h"
+#include "../asset_library/asset_registry.h"
+#include "../asset_library/asset_types.h"
+#include "../asset_library/global_registry.h"
 
 #include <QAbstractItemView>
 #include <QAction>
+#include <QBrush>
 #include <QColor>
+#include <QInputDialog>
 #include <QColorDialog>
 #include <QCheckBox>
 #include <QComboBox>
@@ -38,6 +44,7 @@
 #include <functional>
 #include <algorithm>
 #include <cstdint>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -768,6 +775,48 @@ void ScenePanel::showNodeContextMenu(const QPoint &pos)
     addMirrorAction(tr("Flip Z"), tr("Mirror across the XY plane"),
                     Scene::MirrorAxis::Z);
 
+    // Phase 6 scene-portability: per-node library link actions. Available when a
+    // single importable model node is the context target.
+    const int contextNodeIndex = selectedNodeIndex();
+    if (contextNodeIndex >= 0) {
+        for (const Scene::SceneAssetLink &link : Scene::GetSceneAssetLinks()) {
+            if (static_cast<int>(link.nodeIndex) != contextNodeIndex) {
+                continue;
+            }
+            menu.addSeparator();
+            auto *linkMenu = menu.addMenu(tr("Library Link"));
+            if (link.linkRecorded && !link.inLibrary) {
+                QAction *header =
+                    linkMenu->addAction(tr("Library asset is missing"));
+                header->setEnabled(false);
+                linkMenu->addSeparator();
+            }
+            QAction *save = linkMenu->addAction(
+                tr("Save Embedded → Library"), this,
+                [this, contextNodeIndex]() { saveNodeToLibrary(contextNodeIndex); });
+            save->setToolTip(tr("Add this node's embedded geometry to the asset "
+                                "library and link it."));
+            QAction *relink = linkMenu->addAction(
+                tr("Relink to Library Asset…"), this,
+                [this, contextNodeIndex]() {
+                    relinkNodeToLibrary(contextNodeIndex);
+                });
+            relink->setToolTip(tr("Point this node at an existing library Model "
+                                  "asset (metadata only)."));
+            if (link.linkRecorded) {
+                QAction *clear = linkMenu->addAction(
+                    tr("Clear Library Link"), this, [this, contextNodeIndex]() {
+                        Scene::RelinkNodeToLibraryAsset(
+                            static_cast<size_t>(contextNodeIndex),
+                            assetlib::AssetId{});
+                        refreshSceneList();
+                    });
+                clear->setToolTip(tr("Forget the recorded library AssetId."));
+            }
+            break;
+        }
+    }
+
     menu.exec(m_nodeList->viewport()->mapToGlobal(pos));
 }
 
@@ -955,6 +1004,113 @@ void ScenePanel::refreshSceneList()
         Scene::CanExplodeNodeMeshes(
             static_cast<size_t>(selectedRows.front()));
     m_explodeButton->setEnabled(canExplode && !importing);
+    applyLinkDecorations();
     m_syncing = false;
     syncVolumeMaterialInspector();
+}
+
+void ScenePanel::applyLinkDecorations()
+{
+    if (!m_nodeList) {
+        return;
+    }
+    // Map node index -> library link status for this scene. A node whose
+    // recorded library AssetId no longer resolves is flagged so the user can
+    // Save it back to the library or relink it (the geometry itself is always
+    // embedded and renders regardless).
+    std::unordered_map<int, Scene::SceneAssetLink> linkByNode;
+    for (const Scene::SceneAssetLink &link : Scene::GetSceneAssetLinks()) {
+        linkByNode.emplace(static_cast<int>(link.nodeIndex), link);
+    }
+
+    const QColor missingColor(0xE0, 0x8A, 0x3C); // warm amber
+    std::function<void(QTreeWidgetItem *)> decorate = [&](QTreeWidgetItem *item) {
+        if (!item) {
+            return;
+        }
+        const QVariant nodeIndexData = item->data(kNodeNameColumn, kNodeIndexRole);
+        if (nodeIndexData.isValid()) {
+            const int nodeIndex = nodeIndexData.toInt();
+            auto it = linkByNode.find(nodeIndex);
+            const bool missing =
+                it != linkByNode.end() && it->second.linkRecorded &&
+                !it->second.inLibrary;
+            if (missing) {
+                item->setForeground(kNodeNameColumn, QBrush(missingColor));
+                item->setToolTip(
+                    kNodeNameColumn,
+                    tr("Library asset missing — geometry is embedded and "
+                       "renders, but the library link is broken. Right-click to "
+                       "Save to Library or Relink."));
+            } else {
+                item->setData(kNodeNameColumn, Qt::ForegroundRole, QVariant());
+                item->setToolTip(kNodeNameColumn, QString());
+            }
+        }
+        for (int i = 0; i < item->childCount(); ++i) {
+            decorate(item->child(i));
+        }
+    };
+    for (int i = 0; i < m_nodeList->topLevelItemCount(); ++i) {
+        decorate(m_nodeList->topLevelItem(i));
+    }
+}
+
+void ScenePanel::relinkNodeToLibrary(int nodeIndex)
+{
+    assetlib::AssetRegistry *reg = assetlib::GlobalRegistry();
+    if (!reg) {
+        QMessageBox::warning(this, tr("Relink"),
+                             tr("The asset library is unavailable."));
+        return;
+    }
+    assetlib::AssetQuery query;
+    query.type = assetlib::AssetType::Model;
+    const std::vector<assetlib::AssetId> ids = reg->SearchAssets(query);
+    if (ids.empty()) {
+        QMessageBox::information(
+            this, tr("Relink"),
+            tr("The library has no Model assets to relink to. Use "
+               "\"Save to Library\" to add this node's geometry instead."));
+        return;
+    }
+    QStringList labels;
+    for (const assetlib::AssetId &id : ids) {
+        const assetlib::AssetMetadata *meta = reg->Get(id);
+        const QString name = meta ? QString::fromStdString(meta->displayName)
+                                  : QString::fromStdString(id.ToString());
+        labels << name;
+    }
+    bool ok = false;
+    const QString chosen = QInputDialog::getItem(
+        this, tr("Relink to Library Asset"),
+        tr("Choose the library Model asset to link this node to:"), labels, 0,
+        false, &ok);
+    if (!ok) {
+        return;
+    }
+    const int chosenRow = labels.indexOf(chosen);
+    if (chosenRow < 0 || chosenRow >= static_cast<int>(ids.size())) {
+        return;
+    }
+    if (Scene::RelinkNodeToLibraryAsset(static_cast<size_t>(nodeIndex),
+                                        ids[static_cast<size_t>(chosenRow)])) {
+        refreshSceneList();
+    }
+}
+
+void ScenePanel::saveNodeToLibrary(int nodeIndex)
+{
+    const assetlib::AssetId id =
+        Scene::SaveNodeAsLibraryAsset(static_cast<size_t>(nodeIndex));
+    if (id.valid()) {
+        QMessageBox::information(
+            this, tr("Save to Library"),
+            tr("Added this node's geometry to the asset library and linked it."));
+        refreshSceneList();
+    } else {
+        QMessageBox::warning(
+            this, tr("Save to Library"),
+            tr("Could not save this node to the asset library."));
+    }
 }
