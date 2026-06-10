@@ -20,6 +20,8 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFont>
+#include <QFormLayout>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QIcon>
@@ -31,16 +33,20 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPixmap>
+#include <QPolygonF>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSlider>
 #include <QSplitter>
+#include <QToolButton>
 #include <QTreeWidget>
 #include <QUrl>
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -57,6 +63,180 @@ constexpr int kUserRoleId = Qt::UserRole + 1;   // AssetId hex string
 constexpr int kUserRolePath = Qt::UserRole + 2; // folder virtualPath
 constexpr int kUserRoleDrag = Qt::UserRole + 3; // drag payload "type:hex"
 constexpr int kUserRoleCooking = Qt::UserRole + 4; // bool: cook in progress
+
+// =============================================================================
+// Design language matches ScatterPanel.cpp / MaterialEditorPanel.cpp:
+//   - 30px QToolButton strip with 18px hand-drawn vector icons
+//   - #58d0f4 accent for active/checked states and section headers
+//   - List/tree widgets with the subtle #1a1d1f / #1f2225 stripe
+// =============================================================================
+
+constexpr int kToolButtonSize = 30;
+constexpr int kToolIconPx = 18;
+
+QColor StrokeColor() { return QColor(206, 214, 218); }
+QColor AccentColor() { return QColor(88, 208, 244); }
+QColor MutedColor()  { return QColor(132, 140, 144); }
+QColor DangerColor() { return QColor(208, 128, 128); }
+
+enum class AssetToolIcon {
+    AddAsset,
+    CreatePack,
+    MountPack,
+    ClearLibrary,
+    ViewAll,
+    ViewFavorites,
+    ViewRecent,
+    ViewMissing,
+};
+
+QIcon MakeAssetToolIcon(AssetToolIcon icon, bool accented = false)
+{
+    QPixmap pixmap(kToolIconPx, kToolIconPx);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QColor stroke = accented ? AccentColor() : StrokeColor();
+    const QColor accent = AccentColor();
+    QPen strokePen(stroke, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+    QPen accentPen(accent, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+    QPen mutedPen(MutedColor(), 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+    painter.setPen(strokePen);
+    painter.setBrush(Qt::NoBrush);
+
+    switch (icon) {
+    case AssetToolIcon::AddAsset: {
+        // Open tray with a plus dropping in — "import into the library".
+        painter.drawLine(QPointF(3.5, 11.5), QPointF(3.5, 14.5));
+        painter.drawLine(QPointF(14.5, 11.5), QPointF(14.5, 14.5));
+        painter.drawLine(QPointF(3.5, 14.5), QPointF(14.5, 14.5));
+        painter.setPen(accentPen);
+        painter.drawLine(QPointF(9.0, 3.5), QPointF(9.0, 9.5));
+        painter.drawLine(QPointF(6.0, 6.5), QPointF(12.0, 6.5));
+        break;
+    }
+    case AssetToolIcon::CreatePack: {
+        // Closed box with an arrow leaving upward — "export a pack".
+        painter.drawRect(QRectF(4.0, 8.5, 10.0, 6.0));
+        painter.drawLine(QPointF(4.0, 11.0), QPointF(14.0, 11.0));
+        painter.setPen(accentPen);
+        painter.drawLine(QPointF(9.0, 8.0), QPointF(9.0, 2.5));
+        painter.drawLine(QPointF(6.5, 5.0), QPointF(9.0, 2.5));
+        painter.drawLine(QPointF(11.5, 5.0), QPointF(9.0, 2.5));
+        break;
+    }
+    case AssetToolIcon::MountPack: {
+        // Box with an arrow entering — "mount an existing pack".
+        painter.drawRect(QRectF(4.0, 8.5, 10.0, 6.0));
+        painter.drawLine(QPointF(4.0, 11.0), QPointF(14.0, 11.0));
+        painter.setPen(accentPen);
+        painter.drawLine(QPointF(9.0, 2.5), QPointF(9.0, 8.0));
+        painter.drawLine(QPointF(6.5, 5.5), QPointF(9.0, 8.0));
+        painter.drawLine(QPointF(11.5, 5.5), QPointF(9.0, 8.0));
+        break;
+    }
+    case AssetToolIcon::ClearLibrary: {
+        // Trash can in the danger tint (destructive action).
+        QPen danger(DangerColor(), 1.6, Qt::SolidLine, Qt::RoundCap,
+                    Qt::RoundJoin);
+        painter.setPen(danger);
+        painter.drawLine(QPointF(3.5, 5.0),  QPointF(14.5, 5.0));
+        painter.drawLine(QPointF(7.0, 3.5),  QPointF(11.0, 3.5));
+        painter.drawLine(QPointF(5.0, 6.5),  QPointF(6.0, 15.0));
+        painter.drawLine(QPointF(13.0, 6.5), QPointF(12.0, 15.0));
+        painter.drawLine(QPointF(6.0, 15.0), QPointF(12.0, 15.0));
+        painter.setPen(mutedPen);
+        painter.drawLine(QPointF(9.0, 7.5), QPointF(9.0, 13.5));
+        break;
+    }
+    case AssetToolIcon::ViewAll: {
+        // 2x2 thumbnail grid.
+        painter.drawRect(QRectF(3.5, 3.5, 4.5, 4.5));
+        painter.drawRect(QRectF(10.0, 3.5, 4.5, 4.5));
+        painter.drawRect(QRectF(3.5, 10.0, 4.5, 4.5));
+        painter.drawRect(QRectF(10.0, 10.0, 4.5, 4.5));
+        break;
+    }
+    case AssetToolIcon::ViewFavorites: {
+        // Five-point star.
+        QPainterPath star;
+        const QPointF c(9.0, 9.6);
+        const double rOuter = 6.2, rInner = 2.6;
+        constexpr double kPi = 3.14159265358979323846;
+        for (int i = 0; i < 10; ++i) {
+            const double angle = -kPi / 2.0 + i * kPi / 5.0;
+            const double r = (i % 2 == 0) ? rOuter : rInner;
+            const QPointF p(c.x() + r * std::cos(angle),
+                            c.y() + r * std::sin(angle));
+            if (i == 0)
+                star.moveTo(p);
+            else
+                star.lineTo(p);
+        }
+        star.closeSubpath();
+        painter.drawPath(star);
+        break;
+    }
+    case AssetToolIcon::ViewRecent: {
+        // Clock.
+        painter.drawEllipse(QPointF(9.0, 9.0), 5.8, 5.8);
+        painter.setPen(accentPen);
+        painter.drawLine(QPointF(9.0, 9.0), QPointF(9.0, 5.5));
+        painter.drawLine(QPointF(9.0, 9.0), QPointF(11.8, 10.5));
+        break;
+    }
+    case AssetToolIcon::ViewMissing: {
+        // Warning triangle with exclamation.
+        painter.drawPolygon(QPolygonF()
+                            << QPointF(9.0, 3.0) << QPointF(15.5, 14.5)
+                            << QPointF(2.5, 14.5));
+        painter.setPen(accentPen);
+        painter.drawLine(QPointF(9.0, 7.0), QPointF(9.0, 10.8));
+        painter.drawPoint(QPointF(9.0, 12.8));
+        break;
+    }
+    }
+    painter.end();
+    return QIcon(pixmap);
+}
+
+QToolButton *MakeToolButton(QWidget *parent, AssetToolIcon icon,
+                            const QString &tip, bool checkable = false)
+{
+    auto *btn = new QToolButton(parent);
+    btn->setIcon(MakeAssetToolIcon(icon));
+    btn->setIconSize(QSize(kToolIconPx, kToolIconPx));
+    btn->setFixedSize(kToolButtonSize, kToolButtonSize);
+    btn->setAutoRaise(false);
+    btn->setFocusPolicy(Qt::NoFocus);
+    btn->setToolTip(tip);
+    btn->setStatusTip(tip);
+    btn->setCheckable(checkable);
+    return btn;
+}
+
+QLabel *MakeSectionHeader(const QString &text, QWidget *parent)
+{
+    auto *label = new QLabel(text, parent);
+    label->setStyleSheet(QStringLiteral("color: #58d0f4; font-weight: bold;"));
+    return label;
+}
+
+QFrame *MakeVLine(QWidget *parent)
+{
+    auto *line = new QFrame(parent);
+    line->setFrameShape(QFrame::VLine);
+    line->setFrameShadow(QFrame::Sunken);
+    return line;
+}
+
+QFrame *MakeHLine(QWidget *parent)
+{
+    auto *line = new QFrame(parent);
+    line->setFrameShape(QFrame::HLine);
+    line->setFrameShadow(QFrame::Sunken);
+    return line;
+}
 
 // QListWidget that exposes a dragged asset as our shared MIME type so the
 // viewport / other panels can accept it.
@@ -220,13 +400,81 @@ void AssetManagerPanel::createUi() {
   root->setContentsMargins(6, 6, 6, 6);
   root->setSpacing(6);
 
-  // Top toolbar: search + type filter + view-mode buttons + add.
+  // --- Header toolbar: library actions as icon buttons ----------------------
   auto *toolbar = new QHBoxLayout();
+  toolbar->setContentsMargins(0, 0, 0, 0);
+  toolbar->setSpacing(2);
+
+  auto *addButton = MakeToolButton(this, AssetToolIcon::AddAsset,
+      tr("Add assets — import model/texture/volume files into the library"));
+  connect(addButton, &QToolButton::clicked, this,
+          &AssetManagerPanel::onAddAsset);
+
+  auto *createPackButton = MakeToolButton(this, AssetToolIcon::CreatePack,
+      tr("Create pack — bundle the selected assets (or the whole library) "
+         "and their dependencies into a distributable .prpak"));
+  connect(createPackButton, &QToolButton::clicked, this,
+          &AssetManagerPanel::onCreatePack);
+
+  auto *mountPackButton = MakeToolButton(this, AssetToolIcon::MountPack,
+      tr("Mount pack — open a .prpak read-only so its assets appear in the "
+         "library"));
+  connect(mountPackButton, &QToolButton::clicked, this,
+          &AssetManagerPanel::onMountPack);
+
+  auto *clearButton = MakeToolButton(this, AssetToolIcon::ClearLibrary,
+      tr("Clear library — delete all user assets, cooked cache, and unmount "
+         "packs (asks twice)"));
+  connect(clearButton, &QToolButton::clicked, this,
+          &AssetManagerPanel::onClearLibrary);
+
+  toolbar->addWidget(addButton);
+  toolbar->addWidget(MakeVLine(this));
+  toolbar->addWidget(createPackButton);
+  toolbar->addWidget(mountPackButton);
+  toolbar->addWidget(MakeVLine(this));
+  toolbar->addWidget(clearButton);
+  toolbar->addStretch(1);
+
+  // View-mode icon group lives on the toolbar's right edge.
+  auto makeViewButton = [&](AssetToolIcon icon, const QString &tip,
+                            ViewMode mode) {
+    auto *b = MakeToolButton(this, icon, tip, /*checkable*/ true);
+    connect(b, &QToolButton::clicked, this, [this, mode]() {
+      m_viewMode = mode;
+      m_viewAllButton->setChecked(mode == ViewMode::All);
+      m_viewFavoritesButton->setChecked(mode == ViewMode::Favorites);
+      m_viewRecentButton->setChecked(mode == ViewMode::Recent);
+      m_viewMissingButton->setChecked(mode == ViewMode::Missing);
+      refreshGrid();
+    });
+    return b;
+  };
+  m_viewAllButton = makeViewButton(AssetToolIcon::ViewAll,
+      tr("Show every asset"), ViewMode::All);
+  m_viewAllButton->setChecked(true);
+  m_viewFavoritesButton = makeViewButton(AssetToolIcon::ViewFavorites,
+      tr("Show favorites only"), ViewMode::Favorites);
+  m_viewRecentButton = makeViewButton(AssetToolIcon::ViewRecent,
+      tr("Show recently used assets"), ViewMode::Recent);
+  m_viewMissingButton = makeViewButton(AssetToolIcon::ViewMissing,
+      tr("Show missing or failed assets"), ViewMode::Missing);
+  toolbar->addWidget(m_viewAllButton);
+  toolbar->addWidget(m_viewFavoritesButton);
+  toolbar->addWidget(m_viewRecentButton);
+  toolbar->addWidget(m_viewMissingButton);
+  root->addLayout(toolbar);
+
+  // --- Filter row: search gets the full width it needs ----------------------
+  auto *filterRow = new QHBoxLayout();
+  filterRow->setContentsMargins(0, 0, 0, 0);
+  filterRow->setSpacing(4);
   m_search = new QLineEdit(this);
   m_search->setPlaceholderText(tr("Search name, tag, folder, attribution…"));
+  m_search->setClearButtonEnabled(true);
   connect(m_search, &QLineEdit::textChanged, this,
           [this]() { refreshGrid(); });
-  toolbar->addWidget(m_search, 1);
+  filterRow->addWidget(m_search, 1);
 
   m_typeFilter = new QComboBox(this);
   m_typeFilter->addItem(tr("All Types"), -1);
@@ -237,69 +485,13 @@ void AssetManagerPanel::createUi() {
   }
   connect(m_typeFilter, QOverload<int>::of(&QComboBox::currentIndexChanged),
           this, [this]() { refreshGrid(); });
-  toolbar->addWidget(m_typeFilter);
+  filterRow->addWidget(m_typeFilter);
+  root->addLayout(filterRow);
 
-  auto makeViewButton = [&](const QString &text, ViewMode mode) {
-    auto *b = new QPushButton(text, this);
-    b->setCheckable(true);
-    connect(b, &QPushButton::clicked, this, [this, mode]() {
-      m_viewMode = mode;
-      m_viewAllButton->setChecked(mode == ViewMode::All);
-      m_viewFavoritesButton->setChecked(mode == ViewMode::Favorites);
-      m_viewRecentButton->setChecked(mode == ViewMode::Recent);
-      m_viewMissingButton->setChecked(mode == ViewMode::Missing);
-      refreshGrid();
-    });
-    return b;
-  };
-  m_viewAllButton = makeViewButton(tr("All"), ViewMode::All);
-  m_viewAllButton->setChecked(true);
-  m_viewFavoritesButton = makeViewButton(tr("Favorites"), ViewMode::Favorites);
-  m_viewRecentButton = makeViewButton(tr("Recent"), ViewMode::Recent);
-  m_viewMissingButton = makeViewButton(tr("Missing"), ViewMode::Missing);
-  toolbar->addWidget(m_viewAllButton);
-  toolbar->addWidget(m_viewFavoritesButton);
-  toolbar->addWidget(m_viewRecentButton);
-  toolbar->addWidget(m_viewMissingButton);
-
-  auto *addButton = new QPushButton(tr("Add Asset…"), this);
-  connect(addButton, &QPushButton::clicked, this,
-          &AssetManagerPanel::onAddAsset);
-  toolbar->addWidget(addButton);
-
-  auto *createPackButton = new QPushButton(tr("Create Pack…"), this);
-  createPackButton->setToolTip(
-      tr("Bundle the selected assets (or the whole library) and their "
-         "dependencies into a distributable .prpak"));
-  connect(createPackButton, &QPushButton::clicked, this,
-          &AssetManagerPanel::onCreatePack);
-  toolbar->addWidget(createPackButton);
-
-  auto *mountPackButton = new QPushButton(tr("Mount Pack…"), this);
-  mountPackButton->setToolTip(
-      tr("Mount a .prpak read-only so its assets appear in the library"));
-  connect(mountPackButton, &QPushButton::clicked, this,
-          &AssetManagerPanel::onMountPack);
-  toolbar->addWidget(mountPackButton);
-
-  auto *clearButton = new QPushButton(tr("Clear Library…"), this);
-  clearButton->setToolTip(
-      tr("Delete ALL user assets and their cooked cache (mounted packs are "
-         "kept). For testing — asks twice."));
-  clearButton->setStyleSheet("color:#d08080;");
-  connect(clearButton, &QPushButton::clicked, this,
-          &AssetManagerPanel::onClearLibrary);
-  toolbar->addWidget(clearButton);
-
-  // Live background-cook progress indicator + per-item spinner animation.
-  m_cookStatus = new QLabel(this);
-  m_cookStatus->setStyleSheet("color:#808890;");
-  toolbar->addWidget(m_cookStatus);
+  // Per-item spinner animation + status updates run on a steady timer.
   auto *cookTimer = new QTimer(this);
   connect(cookTimer, &QTimer::timeout, this, &AssetManagerPanel::onCookTick);
   cookTimer->start(150);
-
-  root->addLayout(toolbar);
 
   // Main splitter: source tree | grid | inspector.
   auto *splitter = new QSplitter(Qt::Horizontal, this);
@@ -307,6 +499,8 @@ void AssetManagerPanel::createUi() {
   // Left: source + folder tree.
   m_sourceTree = new QTreeWidget(splitter);
   m_sourceTree->setHeaderHidden(true);
+  m_sourceTree->setStyleSheet(QStringLiteral(
+      "QTreeWidget { background-color: #1a1d1f; }"));
   m_sourceTree->setContextMenuPolicy(Qt::CustomContextMenu);
   connect(m_sourceTree, &QTreeWidget::itemSelectionChanged, this,
           [this]() { refreshGrid(); });
@@ -318,14 +512,20 @@ void AssetManagerPanel::createUi() {
   auto *centerWrap = new QWidget(splitter);
   auto *centerLayout = new QVBoxLayout(centerWrap);
   centerLayout->setContentsMargins(0, 0, 0, 0);
+  centerLayout->setSpacing(4);
   auto *sizeRow = new QHBoxLayout();
-  sizeRow->addWidget(new QLabel(tr("Thumbnail size"), centerWrap));
+  sizeRow->setContentsMargins(0, 0, 0, 0);
+  auto *sizeLabel = new QLabel(tr("Size"), centerWrap);
+  sizeLabel->setStyleSheet(QStringLiteral("color: #848c90;"));
+  sizeRow->addWidget(sizeLabel);
   m_thumbSize = new QSlider(Qt::Horizontal, centerWrap);
   m_thumbSize->setRange(48, 160);
   m_thumbSize->setValue(96);
+  m_thumbSize->setMaximumWidth(160);
   connect(m_thumbSize, &QSlider::valueChanged, this,
           [this]() { refreshGrid(); });
-  sizeRow->addWidget(m_thumbSize, 1);
+  sizeRow->addWidget(m_thumbSize);
+  sizeRow->addStretch(1);
   centerLayout->addLayout(sizeRow);
 
   m_grid = new AssetGridList(centerWrap);
@@ -334,6 +534,8 @@ void AssetManagerPanel::createUi() {
   m_grid->setMovement(QListView::Static);
   m_grid->setWordWrap(true);
   m_grid->setSpacing(8);
+  m_grid->setStyleSheet(QStringLiteral(
+      "QListWidget { background-color: #1a1d1f; }"));
   m_grid->setContextMenuPolicy(Qt::CustomContextMenu);
   m_grid->setSelectionMode(QAbstractItemView::ExtendedSelection); // multi-select for packing
   // Drag assets out to the viewport / other panels (drop targets read
@@ -359,29 +561,39 @@ void AssetManagerPanel::createUi() {
   // Right: inspector.
   auto *inspWrap = new QWidget(splitter);
   auto *inspLayout = new QVBoxLayout(inspWrap);
-  inspLayout->setContentsMargins(0, 0, 0, 0);
-  inspLayout->setSpacing(3);
+  inspLayout->setContentsMargins(6, 0, 0, 0);
+  inspLayout->setSpacing(4);
+  inspLayout->addWidget(MakeSectionHeader(tr("Inspector"), inspWrap));
+  inspLayout->addWidget(MakeHLine(inspWrap));
+
+  auto *form = new QFormLayout();
+  form->setContentsMargins(0, 0, 0, 0);
+  form->setHorizontalSpacing(8);
+  form->setVerticalSpacing(4);
+  form->setLabelAlignment(Qt::AlignLeft | Qt::AlignTop);
   auto addRow = [&](const QString &label) {
     auto *l = new QLabel(label, inspWrap);
-    l->setStyleSheet("color:#808890;");
-    inspLayout->addWidget(l);
+    l->setStyleSheet(QStringLiteral("color: #848c90;"));
     auto *v = new QLabel(inspWrap);
     v->setWordWrap(true);
     v->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    inspLayout->addWidget(v);
+    form->addRow(l, v);
     return v;
   };
   m_inspName = addRow(tr("Name"));
   m_inspType = addRow(tr("Type"));
-  m_inspId = addRow(tr("Asset ID"));
+  m_inspId = addRow(tr("ID"));
   m_inspFolder = addRow(tr("Folder"));
   m_inspSource = addRow(tr("Source"));
   m_inspCook = addRow(tr("Cooked"));
-  m_inspDeps = addRow(tr("Dependencies"));
+  m_inspDeps = addRow(tr("Deps"));
   m_inspTags = addRow(tr("Tags"));
-  m_inspLicense = addRow(tr("License / Attribution"));
+  m_inspLicense = addRow(tr("License"));
+  inspLayout->addLayout(form);
+  inspLayout->addStretch(1);
 
-  m_favoriteButton = new QPushButton(tr("Toggle Favorite"), inspWrap);
+  inspLayout->addWidget(MakeHLine(inspWrap));
+  m_favoriteButton = new QPushButton(tr("Add to Favorites"), inspWrap);
   connect(m_favoriteButton, &QPushButton::clicked, this, [this]() {
     AssetId id;
     if (m_registry && selectedAssetId(id))
@@ -401,13 +613,23 @@ void AssetManagerPanel::createUi() {
     }
   });
   inspLayout->addWidget(m_revealButton);
-  inspLayout->addStretch(1);
   splitter->addWidget(inspWrap);
 
   splitter->setStretchFactor(0, 1);
   splitter->setStretchFactor(1, 3);
   splitter->setStretchFactor(2, 1);
   root->addWidget(splitter, 1);
+
+  // --- Bottom status bar: library summary left, cook progress right ---------
+  auto *statusRow = new QHBoxLayout();
+  statusRow->setContentsMargins(0, 0, 0, 0);
+  m_libraryStatus = new QLabel(this);
+  m_libraryStatus->setStyleSheet(QStringLiteral("color: #848c90;"));
+  statusRow->addWidget(m_libraryStatus, 1);
+  m_cookStatus = new QLabel(this);
+  m_cookStatus->setStyleSheet(QStringLiteral("color: #58d0f4;"));
+  statusRow->addWidget(m_cookStatus, 0, Qt::AlignRight);
+  root->addLayout(statusRow);
 }
 
 // ---------------------------------------------------------------------------
@@ -583,6 +805,16 @@ void AssetManagerPanel::refreshGrid() {
     const QString thumbPath = m ? EnsureThumbnail(id, m, thumbs) : QString();
     item->setIcon(QIcon(
         ComposeThumb(thumbPath, type, sz, unavailable, cooking, m_spinnerFrame)));
+  }
+
+  // Bottom-left summary: how much of the library the current view shows.
+  if (m_libraryStatus) {
+    const int shown = m_grid->count();
+    const int total =
+        m_registry ? static_cast<int>(m_registry->AssetCount()) : 0;
+    m_libraryStatus->setText(shown == total
+                                 ? tr("%1 asset(s)").arg(total)
+                                 : tr("%1 of %2 asset(s)").arg(shown).arg(total));
   }
 
   m_refreshing = false;

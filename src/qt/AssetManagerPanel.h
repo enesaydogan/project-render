@@ -14,6 +14,7 @@ class QListWidget;
 class QListWidgetItem;
 class QPushButton;
 class QSlider;
+class QToolButton;
 class QTreeWidget;
 class QTreeWidgetItem;
 
@@ -66,13 +67,14 @@ private:
     // Center
     QLineEdit *m_search = nullptr;
     QComboBox *m_typeFilter = nullptr;
-    QPushButton *m_viewAllButton = nullptr;
-    QPushButton *m_viewFavoritesButton = nullptr;
-    QPushButton *m_viewRecentButton = nullptr;
-    QPushButton *m_viewMissingButton = nullptr;
+    QToolButton *m_viewAllButton = nullptr;
+    QToolButton *m_viewFavoritesButton = nullptr;
+    QToolButton *m_viewRecentButton = nullptr;
+    QToolButton *m_viewMissingButton = nullptr;
     QSlider *m_thumbSize = nullptr;
     QListWidget *m_grid = nullptr;
-    QLabel *m_cookStatus = nullptr;
+    QLabel *m_cookStatus = nullptr;    // bottom status bar, right side
+    QLabel *m_libraryStatus = nullptr; // bottom status bar, left side
     int m_spinnerFrame = 0;
 
     // Right (inspector)

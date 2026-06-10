@@ -1585,7 +1585,7 @@ void MainWindow::createDocks()
     assetsDock->setObjectName(tr("Assets"));
     assetsDock->setWidget(new AssetManagerPanel(assetsDock));
     registerDockPanel(assetsDock);
-    addDockWidget(Qt::RightDockWidgetArea, assetsDock);
+    addDockWidget(Qt::BottomDockWidgetArea, assetsDock);
     auto *renderDock = new QDockWidget(tr("Render Settings"), this);
     renderDock->setObjectName(tr("Render Settings"));
     {
@@ -1727,9 +1727,11 @@ void MainWindow::createDocks()
     splitDockWidget(environmentDock, viewsDock, Qt::Vertical);
     environmentDock->raise();
 
-    animationDock->raise();
+    // Bottom strip: Animation and Assets share one tabbed dock, Assets active.
+    tabifyDockWidget(animationDock, assetsDock);
+    assetsDock->raise();
 
-    QTimer::singleShot(0, this, [this, sceneDock, renderExportDock, environmentDock, viewsDock, animationDock]() {
+    QTimer::singleShot(0, this, [this, sceneDock, renderExportDock, environmentDock, viewsDock, animationDock, assetsDock]() {
         resizeDocks({environmentDock, sceneDock},
                     {415, 420},
                     Qt::Horizontal);
@@ -1737,12 +1739,12 @@ void MainWindow::createDocks()
                     {640, 210},
                     Qt::Vertical);
         resizeDocks({animationDock},
-                    {220},
+                    {280},
                     Qt::Vertical);
         environmentDock->raise();
         sceneDock->raise();
         renderExportDock->hide();
-        animationDock->hide();
+        assetsDock->raise();
         m_defaultDockState = saveState();
     });
 }
