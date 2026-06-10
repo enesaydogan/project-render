@@ -274,9 +274,23 @@ void RenderVolume(uint3 id, bool linearDepthInput)
     if (t.x > t.y || tEnd <= tStart)
         return;
 
+    // On the converged/frozen viewport frame and during export, the volume is
+    // composited once on top of the already-denoised background and is never
+    // temporally accumulated. Per-pixel white-noise jitter would freeze as
+    // static colored speckle in the high-energy emission core (neighboring
+    // pixels cross the fire threshold at different march offsets and saturate
+    // to different FireColors). Switch to a deterministic offset and a denser
+    // march so the emission integral is smooth across pixels. Interactive
+    // accumulation keeps the per-pixel jitter (motion hides it).
+    bool stabilize = (exportRendering > 0.5) ||
+                     (maxSPP > 0.5 && accumulationCount + 0.5 >= maxSPP);
+
     uint steps = max(marchSteps, 1u);
+    if (stabilize)
+        steps = min(steps * 2u, 1024u);
     float dt = (tEnd - tStart) / float(steps);
-    float jitter = stepJitter * Hash(id.xy, frameSeed);
+    float jitterRand = stabilize ? 0.5 : Hash(id.xy, frameSeed);
+    float jitter = stepJitter * jitterRand;
     float marchT = tStart + jitter * dt;
 
     float3 sunCol = lightColor.rgb * max(lightColor.w, 0.0);
@@ -316,10 +330,12 @@ void RenderVolume(uint3 id, bool linearDepthInput)
         {
             float sigma = density * absorption;
             float aT = exp(-sigma * dt);
+            float lightJitter = stabilize
+                ? 0.5
+                : Hash(id.xy + uint2(i * 17u, i * 31u), frameSeed);
             float lightTransmittance = hasSun
                 ? TraceLightTransmittance(
-                      uvw, localSunDir, lightSteps,
-                      Hash(id.xy + uint2(i * 17u, i * 31u), frameSeed))
+                      uvw, localSunDir, lightSteps, lightJitter)
                 : 0.0;
             float3 Lin =
                 sunCol * (phase * lightTransmittance) + ambient.xxx;
