@@ -37,6 +37,11 @@ struct SequenceInfo {
   float sourceFps = 30.0f;
 };
 
+struct VolumeStats {
+  bool hasTemperature = false;
+  float densityMax = 0.0f;
+};
+
 // Resolve + cache a Volume asset. Rendering walks all visible scene volume nodes.
 bool SetActiveVolume(const assetlib::AssetId &id);
 void ClearActiveVolume();
@@ -50,6 +55,7 @@ Params &GetParams();
 void AppendEmissionLights(std::vector<Light> &lights);
 EmissionLightStats GetEmissionLightStats();
 SequenceInfo GetSequenceInfo(const assetlib::AssetId &id);
+VolumeStats GetVolumeStats(const assetlib::AssetId &id);
 // Requests a zero-based sequence frame and applies a completed asynchronous
 // load. Returns true only when the resident volume frame changed.
 bool UpdateSequenceFrame(const assetlib::AssetId &id, uint32_t frameIndex);

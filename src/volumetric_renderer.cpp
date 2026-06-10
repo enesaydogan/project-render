@@ -46,6 +46,7 @@ struct CpuVolumeFrame {
   std::vector<float> density;
   std::vector<float> temperature;
   std::vector<HeatVoxel> heatVoxels;
+  float densityMax = 0.0f;
   uint32_t dim[3] = {0, 0, 0};
   float temperatureMin = 0.0f;
   float temperatureInvRange = 0.0f;
@@ -65,6 +66,7 @@ struct RuntimeVolume {
   std::vector<float> density;
   std::vector<float> temperature;
   std::vector<HeatVoxel> heatVoxels;
+  float densityMax = 0.0f;
   uint32_t dim[3] = {0, 0, 0};
   float temperatureMin = 0.0f;
   float temperatureInvRange = 0.0f;
@@ -389,6 +391,9 @@ bool BuildDenseField(const assetlib::CookedVolume &vol, RuntimeVolume &runtime) 
   }
 
   runtime.density = std::move(density);
+  runtime.densityMax = 0.0f;
+  for (const float value : runtime.density)
+    runtime.densityMax = (std::max)(runtime.densityMax, value);
   runtime.temperature = std::move(temperature);
   runtime.heatVoxels.clear();
   if (!runtime.temperature.empty()) {
@@ -423,6 +428,7 @@ CpuVolumeFrame TakeCpuFrame(RuntimeVolume &runtime) {
   frame.density = std::move(runtime.density);
   frame.temperature = std::move(runtime.temperature);
   frame.heatVoxels = std::move(runtime.heatVoxels);
+  frame.densityMax = runtime.densityMax;
   std::copy(std::begin(runtime.dim), std::end(runtime.dim),
             std::begin(frame.dim));
   frame.temperatureMin = runtime.temperatureMin;
@@ -437,6 +443,7 @@ void ApplyCpuFrame(RuntimeVolume &runtime, CpuVolumeFrame frame,
   runtime.density = std::move(frame.density);
   runtime.temperature = std::move(frame.temperature);
   runtime.heatVoxels = std::move(frame.heatVoxels);
+  runtime.densityMax = frame.densityMax;
   std::copy(std::begin(frame.dim), std::end(frame.dim),
             std::begin(runtime.dim));
   runtime.temperatureMin = frame.temperatureMin;
@@ -668,6 +675,16 @@ SequenceInfo GetSequenceInfo(const assetlib::AssetId &id) {
   info.loading = volume->pendingLoad.valid();
   info.sourceFps = volume->sequenceFps;
   return info;
+}
+
+VolumeStats GetVolumeStats(const assetlib::AssetId &id) {
+  VolumeStats stats;
+  RuntimeVolume *volume = ResolveVolume(id);
+  if (!volume)
+    return stats;
+  stats.hasTemperature = !volume->temperature.empty();
+  stats.densityMax = volume->densityMax;
+  return stats;
 }
 
 bool UpdateSequenceFrame(const assetlib::AssetId &id, uint32_t frameIndex) {

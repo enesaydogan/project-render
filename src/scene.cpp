@@ -3705,20 +3705,55 @@ size_t AddVolumeNode(const assetlib::AssetId &id) {
   node.volumeAssetId = id.ToString();
   const VolumetricRenderer::SequenceInfo sequence =
       VolumetricRenderer::GetSequenceInfo(id);
+  const VolumetricRenderer::VolumeStats volumeStats =
+      VolumetricRenderer::GetVolumeStats(id);
   if (sequence.animated)
     node.volumePlayback.fps = sequence.sourceFps;
+  if (volumeStats.hasTemperature) {
+    const float normalizedDensity =
+        volumeStats.densityMax > 1.0e-6f
+            ? 0.2f / volumeStats.densityMax
+            : 1.0f;
+    node.volumeMaterial.densityScale =
+        (std::clamp)(normalizedDensity, 0.5f, 100.0f);
+    node.volumeMaterial.absorption = 1.5f;
+    node.volumeMaterial.scattering = 0.25f;
+    node.volumeMaterial.ambient = 0.04f;
+    node.volumeMaterial.color[0] = 0.32f;
+    node.volumeMaterial.color[1] = 0.37f;
+    node.volumeMaterial.color[2] = 0.45f;
+    node.volumeMaterial.emissionColor[0] = 1.0f;
+    node.volumeMaterial.emissionColor[1] = 0.72f;
+    node.volumeMaterial.emissionColor[2] = 0.32f;
+    node.volumeMaterial.emissionStrength = 15000.0f;
+    node.volumeMaterial.temperatureLow = 0.03f;
+    node.volumeMaterial.temperatureHigh = 0.78f;
+    node.volumeMaterial.temperatureGamma = 1.8f;
+    node.volumeMaterial.marchSteps = 128;
+  }
   // Column-major diagonal scale + translation. Rest the volume ON the ground
   // (bottom at Y=0), centered in X/Z. Centering on the origin would bury the
   // lower half below the ground plane, where the scene-depth clip hides it —
   // and for fire VDBs the flame lives at the bottom, so it would vanish.
   for (float &f : node.transform)
     f = 0.0f;
+  const bool sourceIsZUp =
+      volumeStats.hasTemperature && ez > ey * 1.2f;
   node.transform[0] = sxv;
-  node.transform[5] = syv;
-  node.transform[10] = szv;
-  node.transform[12] = -sxv * 0.5f;
-  node.transform[13] = 0.0f;
-  node.transform[14] = -szv * 0.5f;
+  if (sourceIsZUp) {
+    // Standard Z-up to Y-up conversion: source X,Z,-Y -> engine X,Y,Z.
+    node.transform[6] = -syv;
+    node.transform[9] = szv;
+    node.transform[12] = -sxv * 0.5f;
+    node.transform[13] = 0.0f;
+    node.transform[14] = syv * 0.5f;
+  } else {
+    node.transform[5] = syv;
+    node.transform[10] = szv;
+    node.transform[12] = -sxv * 0.5f;
+    node.transform[13] = 0.0f;
+    node.transform[14] = -szv * 0.5f;
+  }
   node.transform[15] = 1.0f;
 
   const size_t index = AddNode(std::move(node));
