@@ -1224,6 +1224,25 @@ static bool MatrixEquals(const std::array<float, 16> &a,
   return memcmp(a.data(), b.data(), a.size() * sizeof(float)) == 0;
 }
 
+static bool NodeHasVolume(size_t nodeIndex) {
+  return nodeIndex < s_nodes.size() &&
+         !s_nodes[nodeIndex].volumeAssetId.empty();
+}
+
+static bool NodeSetHasVolume(const std::vector<size_t> &nodeIndices) {
+  return std::any_of(nodeIndices.begin(), nodeIndices.end(),
+                     [](size_t nodeIndex) { return NodeHasVolume(nodeIndex); });
+}
+
+static bool TransformEntryChangesVolume(const TransformHistoryEntry &entry) {
+  return std::any_of(
+      entry.nodes.begin(), entry.nodes.end(),
+      [](const TransformNodeHistory &node) {
+        return NodeHasVolume(node.nodeIndex) &&
+               !MatrixEquals(node.before, node.after);
+      });
+}
+
 static bool CaptureNodeTransform(size_t nodeIndex,
                                  TransformNodeHistory *outSnapshot) {
   if (!outSnapshot || nodeIndex >= s_nodes.size()) {
@@ -1291,7 +1310,11 @@ static void CommitTransformHistoryEdit() {
       node.after = node.before;
     }
   }
+  const bool volumeTransformChanged = TransformEntryChangesVolume(entry);
   PushTransformHistoryEntry(std::move(entry));
+  if (volumeTransformChanged) {
+    UpdateLights();
+  }
 }
 
 static bool IsTransformHistoryEntryValid(const TransformHistoryEntry &entry) {
@@ -1310,6 +1333,12 @@ static void ApplyTransformHistoryEntry(const TransformHistoryEntry &entry,
     }
     const std::array<float, 16> &matrix = useAfter ? node.after : node.before;
     CopyMatrix4x4(matrix.data(), s_nodes[node.nodeIndex].transform);
+  }
+  if (std::any_of(entry.nodes.begin(), entry.nodes.end(),
+                  [](const TransformNodeHistory &node) {
+                    return NodeHasVolume(node.nodeIndex);
+                  })) {
+    UpdateLights();
   }
   ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
   NotifySceneChanged();
@@ -6532,8 +6561,13 @@ bool MirrorSelectedNodes(MirrorAxis axis, MirrorPivot pivot,
       node.after = node.before;
     }
   }
+  const bool volumeTransformChanged =
+      TransformEntryChangesVolume(historyEntry);
   PushTransformHistoryEntry(std::move(historyEntry));
 
+  if (volumeTransformChanged) {
+    UpdateLights();
+  }
   ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
   NotifySceneChanged();
   s_lastStatus = std::string("Mirrored selected nodes on ") +
@@ -6909,6 +6943,9 @@ void DrawGizmo() {
   if (s_shiftCloneDrag.active && s_shiftCloneDrag.sawLeftMouseDown &&
       s_shiftCloneDrag.releaseFramesArmed <= 0 && !ImGuizmo::IsUsing() &&
       !IsLeftMouseDown()) {
+    if (NodeSetHasVolume(s_shiftCloneDrag.cloneNodeIndices)) {
+      UpdateLights();
+    }
     s_shiftCloneDrag.active = false;
     if (!ShiftCloneHasMeshChoice()) {
       SelectShiftCloneResult();
