@@ -3217,6 +3217,43 @@ bool SetNodeVisibility(size_t index, bool visible) {
     UpdateLights();
   InvalidateScatterRuntimeCache();
   ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
+  NotifySceneChanged();
+  return true;
+}
+
+bool SetNodeBranchVisibility(size_t index, bool visible) {
+  if (index >= s_nodes.size()) {
+    return false;
+  }
+
+  bool changed = false;
+  bool volumeChanged = false;
+  for (size_t candidate = 0; candidate < s_nodes.size(); ++candidate) {
+    bool inBranch = candidate == index;
+    size_t cursor = s_nodes[candidate].parentIndex;
+    for (size_t guard = 0; !inBranch && guard < s_nodes.size(); ++guard) {
+      if (cursor == static_cast<size_t>(-1) || cursor >= s_nodes.size())
+        break;
+      if (cursor == index) {
+        inBranch = true;
+        break;
+      }
+      cursor = s_nodes[cursor].parentIndex;
+    }
+    if (!inBranch || s_nodes[candidate].visible == visible)
+      continue;
+    s_nodes[candidate].visible = visible;
+    changed = true;
+    volumeChanged |= !s_nodes[candidate].volumeAssetId.empty();
+  }
+
+  if (!changed)
+    return true;
+  if (volumeChanged)
+    UpdateLights();
+  InvalidateScatterRuntimeCache();
+  ApplyRendererInvalidation(RendererInvalidationPlan::TlasRefresh);
+  NotifySceneChanged();
   return true;
 }
 

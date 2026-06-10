@@ -28,7 +28,9 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QMetaObject>
+#include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPixmap>
 #include <QProgressBar>
 #include <QPushButton>
@@ -53,9 +55,22 @@ extern HWND g_hwnd;
 namespace {
 
 constexpr int kNodeIndexRole = Qt::UserRole;
+constexpr int kNodeBaseTooltipRole = Qt::UserRole + 1;
 constexpr int kNodeNameColumn = 0;
-constexpr int kNodeLockColumn = 1;
+constexpr int kNodeVisibilityColumn = 1;
+constexpr int kNodeLockColumn = 2;
 constexpr int kSceneToolButtonSize = 30;
+
+enum class OutlinerIcon {
+    Object,
+    Group,
+    Volume,
+    LiveSync,
+    Visible,
+    Hidden,
+    Locked,
+    Unlocked
+};
 
 enum class SceneToolIcon {
     ImportModel,
@@ -72,17 +87,135 @@ struct TreeUiState {
 
 QString BuildNodeLabel(const Scene::Node &node)
 {
-    QString label = QString::fromStdString(node.name);
-    if (!node.volumeAssetId.empty()) {
-        label += QObject::tr(" (volume)");
-    } else {
-        label += QObject::tr(" (%1 meshes)").arg(static_cast<int>(node.meshIndices.size()));
-    }
-    if (!node.visible) {
-        label += QObject::tr(" [hidden]");
-    }
-    return label;
+    return QString::fromStdString(node.name);
 }
+
+QIcon MakeOutlinerIcon(OutlinerIcon icon)
+{
+    constexpr int kIconSize = 18;
+    QPixmap pixmap(kIconSize, kIconSize);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    const QColor stroke(190, 199, 204);
+    const QColor muted(104, 112, 117);
+    const QColor accent(88, 208, 244);
+    painter.setPen(
+        QPen(stroke, 1.45, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+
+    switch (icon) {
+    case OutlinerIcon::Object:
+        painter.drawPolygon(QPolygonF({QPointF(9, 2.5), QPointF(15, 5.8),
+                                       QPointF(15, 12.2), QPointF(9, 15.5),
+                                       QPointF(3, 12.2), QPointF(3, 5.8)}));
+        painter.drawLine(QPointF(3, 5.8), QPointF(9, 9.2));
+        painter.drawLine(QPointF(15, 5.8), QPointF(9, 9.2));
+        painter.drawLine(QPointF(9, 9.2), QPointF(9, 15.2));
+        break;
+    case OutlinerIcon::Group:
+        painter.setBrush(QColor(69, 91, 101));
+        painter.drawRect(QRectF(3, 5, 12, 9));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawLine(QPointF(4, 5), QPointF(6.5, 2.8));
+        painter.drawLine(QPointF(6.5, 2.8), QPointF(11, 2.8));
+        painter.drawLine(QPointF(11, 2.8), QPointF(13.5, 5));
+        break;
+    case OutlinerIcon::Volume:
+        painter.setPen(QPen(accent, 1.4, Qt::SolidLine, Qt::RoundCap,
+                            Qt::RoundJoin));
+        painter.drawRoundedRect(QRectF(3, 3, 12, 12), 2, 2);
+        painter.drawEllipse(QPointF(6.5, 7), 1.1, 1.1);
+        painter.drawEllipse(QPointF(11.5, 6), 1.3, 1.3);
+        painter.drawEllipse(QPointF(9, 11.5), 1.5, 1.5);
+        break;
+    case OutlinerIcon::LiveSync:
+        painter.setPen(QPen(accent, 1.55, Qt::SolidLine, Qt::RoundCap,
+                            Qt::RoundJoin));
+        painter.drawArc(QRectF(3, 3, 12, 12), 35 * 16, 120 * 16);
+        painter.drawArc(QRectF(3, 3, 12, 12), 215 * 16, 120 * 16);
+        painter.drawLine(QPointF(13.8, 3.8), QPointF(15.2, 6.7));
+        painter.drawLine(QPointF(13.8, 3.8), QPointF(10.8, 4.2));
+        painter.drawLine(QPointF(4.2, 14.2), QPointF(2.8, 11.3));
+        painter.drawLine(QPointF(4.2, 14.2), QPointF(7.2, 13.8));
+        break;
+    case OutlinerIcon::Visible:
+    case OutlinerIcon::Hidden:
+        painter.setPen(QPen(icon == OutlinerIcon::Visible ? stroke : muted,
+                            1.45, Qt::SolidLine, Qt::RoundCap,
+                            Qt::RoundJoin));
+        painter.drawPath([] {
+            QPainterPath path;
+            path.moveTo(2.5, 9);
+            path.cubicTo(5.2, 4.5, 12.8, 4.5, 15.5, 9);
+            path.cubicTo(12.8, 13.5, 5.2, 13.5, 2.5, 9);
+            return path;
+        }());
+        painter.drawEllipse(QPointF(9, 9), 2.1, 2.1);
+        if (icon == OutlinerIcon::Hidden) {
+            painter.setPen(QPen(muted, 1.8, Qt::SolidLine, Qt::RoundCap));
+            painter.drawLine(QPointF(3.2, 3.2), QPointF(14.8, 14.8));
+        }
+        break;
+    case OutlinerIcon::Locked:
+    case OutlinerIcon::Unlocked:
+        painter.setPen(QPen(icon == OutlinerIcon::Locked ? accent : muted,
+                            1.5, Qt::SolidLine, Qt::RoundCap,
+                            Qt::RoundJoin));
+        painter.drawRoundedRect(QRectF(4.5, 8, 9, 7), 1.4, 1.4);
+        if (icon == OutlinerIcon::Locked) {
+            painter.drawArc(QRectF(5.8, 2.8, 6.4, 8), 0, 180 * 16);
+        } else {
+            painter.drawArc(QRectF(7.2, 2.8, 6.4, 8), 0, 180 * 16);
+        }
+        break;
+    }
+    return QIcon(pixmap);
+}
+
+QIcon NodeOutlinerIcon(const Scene::Node &node)
+{
+    if (node.liveLinkManaged)
+        return MakeOutlinerIcon(OutlinerIcon::LiveSync);
+    if (!node.volumeAssetId.empty())
+        return MakeOutlinerIcon(OutlinerIcon::Volume);
+    if (node.importGroupRoot || node.meshIndices.empty())
+        return MakeOutlinerIcon(OutlinerIcon::Group);
+    return MakeOutlinerIcon(OutlinerIcon::Object);
+}
+
+class SceneOutliner final : public QTreeWidget
+{
+public:
+    using ControlHandler = std::function<void(QTreeWidgetItem *, int)>;
+
+    explicit SceneOutliner(QWidget *parent) : QTreeWidget(parent) {}
+
+    void setControlHandler(ControlHandler handler)
+    {
+        m_controlHandler = std::move(handler);
+    }
+
+protected:
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        QTreeWidgetItem *item = itemAt(event->position().toPoint());
+        const int column = columnAt(event->position().toPoint().x());
+        if (event->button() == Qt::LeftButton && item &&
+            (column == kNodeVisibilityColumn || column == kNodeLockColumn) &&
+            item->data(kNodeNameColumn, kNodeIndexRole).isValid()) {
+            if (m_controlHandler)
+                m_controlHandler(item, column);
+            event->accept();
+            return;
+        }
+        QTreeWidget::mousePressEvent(event);
+    }
+
+private:
+    ControlHandler m_controlHandler;
+};
 
 void CaptureTreeItemState(const QTreeWidgetItem *item, TreeUiState *state)
 {
@@ -362,13 +495,82 @@ void ScenePanel::createUi()
     m_sourceLabel->setOpenExternalLinks(false);
     layout->addWidget(m_sourceLabel);
 
-    m_nodeList = new QTreeWidget(this);
-    m_nodeList->setColumnCount(2);
-    m_nodeList->setHeaderHidden(true);
+    auto *outliner = new SceneOutliner(this);
+    m_nodeList = outliner;
+    m_nodeList->setColumnCount(3);
+    m_nodeList->setHeaderLabels({tr("Scene Collection"), QString(), QString()});
+    m_nodeList->setHeaderHidden(false);
     m_nodeList->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_nodeList->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_nodeList->setAlternatingRowColors(true);
+    m_nodeList->setRootIsDecorated(true);
+    m_nodeList->setIndentation(16);
+    m_nodeList->setUniformRowHeights(true);
+    m_nodeList->setIconSize(QSize(18, 18));
+    m_nodeList->setAllColumnsShowFocus(true);
+    m_nodeList->setStyleSheet(QStringLiteral(
+        "QTreeWidget {"
+        "  background: #181b1d;"
+        "  alternate-background-color: #202427;"
+        "  border: 1px solid #2b3033;"
+        "  border-radius: 4px;"
+        "  outline: 0;"
+        "}"
+        "QTreeWidget::item {"
+        "  min-height: 25px;"
+        "  padding: 1px 3px;"
+        "  color: #cdd4d8;"
+        "}"
+        "QTreeWidget::item:hover { background: #293136; }"
+        "QTreeWidget::item:selected {"
+        "  background: #315463;"
+        "  color: #eefcff;"
+        "}"
+        "QHeaderView::section {"
+        "  background: #22272a;"
+        "  color: #8f999e;"
+        "  border: 0;"
+        "  border-bottom: 1px solid #30363a;"
+        "  padding: 5px 7px;"
+        "  font-weight: 600;"
+        "}"));
     m_nodeList->header()->setSectionResizeMode(kNodeNameColumn, QHeaderView::Stretch);
-    m_nodeList->header()->setSectionResizeMode(kNodeLockColumn, QHeaderView::ResizeToContents);
+    m_nodeList->header()->setSectionResizeMode(kNodeVisibilityColumn,
+                                               QHeaderView::Fixed);
+    m_nodeList->header()->setSectionResizeMode(kNodeLockColumn,
+                                               QHeaderView::Fixed);
+    m_nodeList->header()->resizeSection(kNodeVisibilityColumn, 30);
+    m_nodeList->header()->resizeSection(kNodeLockColumn, 30);
+    m_nodeList->headerItem()->setIcon(
+        kNodeVisibilityColumn, MakeOutlinerIcon(OutlinerIcon::Visible));
+    m_nodeList->headerItem()->setIcon(
+        kNodeLockColumn, MakeOutlinerIcon(OutlinerIcon::Locked));
+    m_nodeList->headerItem()->setToolTip(kNodeVisibilityColumn,
+                                        tr("Viewport and render visibility"));
+    m_nodeList->headerItem()->setToolTip(kNodeLockColumn,
+                                        tr("Viewport selection lock"));
+    outliner->setControlHandler(
+        [this](QTreeWidgetItem *item, int column) {
+            if (m_syncing || !item)
+                return;
+            const QVariant nodeIndexData =
+                item->data(kNodeNameColumn, kNodeIndexRole);
+            if (!nodeIndexData.isValid())
+                return;
+            const size_t nodeIndex =
+                static_cast<size_t>(nodeIndexData.toInt());
+            const auto &nodes = Scene::GetNodes();
+            if (nodeIndex >= nodes.size())
+                return;
+            if (column == kNodeVisibilityColumn) {
+                Scene::SetNodeBranchVisibility(nodeIndex,
+                                               !nodes[nodeIndex].visible);
+            } else if (column == kNodeLockColumn) {
+                Scene::SetNodeSelectionLocked(
+                    nodeIndex, !nodes[nodeIndex].selectionLocked);
+            }
+            refreshSceneList();
+        });
     layout->addWidget(m_nodeList);
 
     m_volumeMaterialGroup = new QGroupBox(tr("Volume Material"), this);
@@ -540,24 +742,6 @@ void ScenePanel::createUi()
     });
     connect(m_nodeList, &QTreeWidget::customContextMenuRequested,
             this, &ScenePanel::showNodeContextMenu);
-    connect(m_nodeList, &QTreeWidget::itemClicked, this,
-            [this](QTreeWidgetItem *item, int column) {
-        if (m_syncing || !item || column != kNodeLockColumn) {
-            return;
-        }
-        const QVariant nodeIndexData = item->data(kNodeNameColumn, kNodeIndexRole);
-        if (!nodeIndexData.isValid()) {
-            return;
-        }
-        const size_t nodeIndex = static_cast<size_t>(nodeIndexData.toInt());
-        const auto &nodes = Scene::GetNodes();
-        if (nodeIndex >= nodes.size()) {
-            return;
-        }
-        Scene::SetNodeSelectionLocked(nodeIndex,
-                                      !nodes[nodeIndex].selectionLocked);
-        refreshSceneList();
-    });
     connect(m_sourceLabel, &QLabel::linkActivated, this, [this](const QString &link) {
         if (link != QStringLiteral("reimport")) {
             return;
@@ -907,8 +1091,12 @@ void ScenePanel::refreshSceneList()
         m_nodeList->clear();
         auto *liveSyncRoot = new QTreeWidgetItem(m_nodeList);
         liveSyncRoot->setText(0, tr("Live Sync"));
-        liveSyncRoot->setText(kNodeLockColumn, QString());
+        liveSyncRoot->setIcon(0, MakeOutlinerIcon(OutlinerIcon::LiveSync));
         liveSyncRoot->setFlags(liveSyncRoot->flags() & ~Qt::ItemIsSelectable);
+        QFont liveSyncFont = liveSyncRoot->font(0);
+        liveSyncFont.setBold(true);
+        liveSyncRoot->setFont(0, liveSyncFont);
+        liveSyncRoot->setForeground(0, QBrush(QColor(132, 140, 144)));
         liveSyncRoot->setExpanded(treeState.liveSyncExpanded);
 
         std::function<void(size_t, QTreeWidgetItem *, bool)> addNodeRecursive;
@@ -924,12 +1112,42 @@ void ScenePanel::refreshSceneList()
             }
 
             item->setText(kNodeNameColumn, BuildNodeLabel(node));
-            item->setText(kNodeLockColumn, node.selectionLocked ? tr("Lock") : tr("Free"));
+            item->setIcon(kNodeNameColumn, NodeOutlinerIcon(node));
+            item->setIcon(
+                kNodeVisibilityColumn,
+                MakeOutlinerIcon(node.visible ? OutlinerIcon::Visible
+                                              : OutlinerIcon::Hidden));
+            item->setIcon(
+                kNodeLockColumn,
+                MakeOutlinerIcon(node.selectionLocked ? OutlinerIcon::Locked
+                                                      : OutlinerIcon::Unlocked));
+            item->setTextAlignment(kNodeVisibilityColumn, Qt::AlignCenter);
+            item->setTextAlignment(kNodeLockColumn, Qt::AlignCenter);
+            const QString details =
+                !node.volumeAssetId.empty()
+                    ? tr("Volume node")
+                    : node.importGroupRoot
+                          ? tr("Import group - %1 material slot(s)")
+                                .arg(static_cast<int>(
+                                    node.linkedMaterialIndices.size()))
+                          : tr("%1 mesh(es)")
+                                .arg(static_cast<int>(node.meshIndices.size()));
+            item->setToolTip(kNodeNameColumn, details);
+            item->setData(kNodeNameColumn, kNodeBaseTooltipRole, details);
+            item->setToolTip(
+                kNodeVisibilityColumn,
+                node.visible
+                    ? tr("Visible in viewport and render. Click to hide this branch.")
+                    : tr("Hidden in viewport and render. Click to show this branch."));
             item->setToolTip(kNodeLockColumn,
                              node.selectionLocked
-                                 ? tr("Click to allow selecting child meshes")
-                                 : tr("Click to select this node when descendants are hit"));
+                                 ? tr("Selection locked. Click to allow direct child selection.")
+                                 : tr("Selection unlocked. Click to select the group when descendants are hit."));
             item->setData(kNodeNameColumn, kNodeIndexRole, static_cast<int>(index));
+            if (!node.visible) {
+                item->setForeground(kNodeNameColumn,
+                                    QBrush(QColor(112, 120, 124)));
+            }
             if (treeState.expandedNodeIndices.find(static_cast<int>(index)) !=
                 treeState.expandedNodeIndices.end()) {
                 item->setExpanded(true);
@@ -1043,8 +1261,22 @@ void ScenePanel::applyLinkDecorations()
                        "renders, but the library link is broken. Right-click to "
                        "Save to Library or Relink."));
             } else {
-                item->setData(kNodeNameColumn, Qt::ForegroundRole, QVariant());
-                item->setToolTip(kNodeNameColumn, QString());
+                const auto &nodes = Scene::GetNodes();
+                const bool hidden =
+                    nodeIndex >= 0 &&
+                    nodeIndex < static_cast<int>(nodes.size()) &&
+                    !nodes[static_cast<size_t>(nodeIndex)].visible;
+                if (hidden) {
+                    item->setForeground(kNodeNameColumn,
+                                        QBrush(QColor(112, 120, 124)));
+                } else {
+                    item->setData(kNodeNameColumn, Qt::ForegroundRole,
+                                  QVariant());
+                }
+                item->setToolTip(
+                    kNodeNameColumn,
+                    item->data(kNodeNameColumn, kNodeBaseTooltipRole)
+                        .toString());
             }
         }
         for (int i = 0; i < item->childCount(); ++i) {
