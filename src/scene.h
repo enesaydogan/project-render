@@ -307,6 +307,9 @@ bool UpdateNodeTransform(size_t index, const float *columnMajor4x4);
 bool SetNodeVisibility(size_t index, bool visible);
 bool SetNodeBranchVisibility(size_t index, bool visible);
 bool SetNodeSelectionLocked(size_t index, bool locked);
+// Moves the editor camera along its current view direction so the selected
+// node branches and/or lights fit in frame. Also updates the orbit target.
+bool FrameSelected();
 bool SetNodeLiveLinkManaged(size_t index, bool liveLinkManaged);
 bool SetNodeParent(size_t index, size_t parentIndex);
 // Converts a multi-mesh node into a transform group with one independently

@@ -7033,6 +7033,109 @@ static bool ComputeSelectedRootWorldBounds(
   return hasBounds;
 }
 
+bool FrameSelected() {
+  if (static_cast<int>(g_cameraData.projectionMode) !=
+      static_cast<int>(CameraProjectionMode::Perspective)) {
+    s_lastStatus = "Frame selected is available in perspective view";
+    return false;
+  }
+
+  const std::vector<size_t> selectedRoots = GetSelectedTransformRoots();
+  const std::vector<size_t> selectedLights = GetSelectedLightIndices();
+  if (selectedRoots.empty() && selectedLights.empty()) {
+    s_lastStatus = "Frame selected: nothing selected";
+    return false;
+  }
+
+  const std::vector<std::array<float, 16>> worldTransforms =
+      BuildNodeWorldTransforms();
+  float minPoint[3] = {FLT_MAX, FLT_MAX, FLT_MAX};
+  float maxPoint[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
+  bool hasBounds = false;
+  const auto includePoint = [&](const float point[3]) {
+    for (int axis = 0; axis < 3; ++axis) {
+      minPoint[axis] = (std::min)(minPoint[axis], point[axis]);
+      maxPoint[axis] = (std::max)(maxPoint[axis], point[axis]);
+    }
+    hasBounds = true;
+  };
+
+  for (size_t rootIndex : selectedRoots) {
+    float rootMin[3] = {};
+    float rootMax[3] = {};
+    if (ComputeSelectedRootWorldBounds(rootIndex, worldTransforms, rootMin,
+                                       rootMax)) {
+      includePoint(rootMin);
+      includePoint(rootMax);
+    } else if (rootIndex < worldTransforms.size()) {
+      const float *transform = worldTransforms[rootIndex].data();
+      const float position[3] = {transform[12], transform[13], transform[14]};
+      includePoint(position);
+    }
+  }
+  for (size_t lightIndex : selectedLights) {
+    if (lightIndex < s_lightInstances.size())
+      includePoint(s_lightInstances[lightIndex].position);
+  }
+  if (!hasBounds)
+    return false;
+
+  const float center[3] = {
+      (minPoint[0] + maxPoint[0]) * 0.5f,
+      (minPoint[1] + maxPoint[1]) * 0.5f,
+      (minPoint[2] + maxPoint[2]) * 0.5f,
+  };
+  const float halfExtent[3] = {
+      (maxPoint[0] - minPoint[0]) * 0.5f,
+      (maxPoint[1] - minPoint[1]) * 0.5f,
+      (maxPoint[2] - minPoint[2]) * 0.5f,
+  };
+  const float radius =
+      (std::max)(0.05f, std::sqrt(halfExtent[0] * halfExtent[0] +
+                                  halfExtent[1] * halfExtent[1] +
+                                  halfExtent[2] * halfExtent[2]));
+
+  const float verticalHalfFov =
+      (std::clamp)(g_cameraData.fov * (3.14159265359f / 360.0f), 0.05f,
+                   1.45f);
+  const float aspect = (std::max)(g_cameraData.aspect, 0.05f);
+  const float horizontalHalfFov =
+      std::atan(std::tan(verticalHalfFov) * aspect);
+  const float limitingHalfFov =
+      (std::max)(0.05f, (std::min)(verticalHalfFov, horizontalHalfFov));
+  const float distance =
+      (std::max)(g_cameraData.nearZ * 2.5f,
+                 radius / std::sin(limitingHalfFov) * 1.12f);
+
+  float forward[3] = {g_cameraData.forward[0], g_cameraData.forward[1],
+                      g_cameraData.forward[2]};
+  const float forwardLength =
+      std::sqrt(forward[0] * forward[0] + forward[1] * forward[1] +
+                forward[2] * forward[2]);
+  if (forwardLength <= 1.0e-5f) {
+    forward[0] = 0.0f;
+    forward[1] = 0.0f;
+    forward[2] = -1.0f;
+  } else {
+    for (float &component : forward)
+      component /= forwardLength;
+  }
+
+  LiveLink::GetSceneSync().DetachCameraControl();
+  for (int axis = 0; axis < 3; ++axis) {
+    g_cameraData.forward[axis] = forward[axis];
+    g_cameraData.pos[axis] = center[axis] - forward[axis] * distance;
+    g_cameraTarget[axis] = center[axis];
+  }
+  g_cameraTargetDistance = distance;
+  g_camYaw = std::atan2(forward[0], -forward[2]);
+  g_camPitch = std::asin((std::clamp)(forward[1], -1.0f, 1.0f));
+  UpdateCameraCB();
+  DxrRenderer::RequestInteractiveWake("frame selected");
+  s_lastStatus = "Framed selected scene items";
+  return true;
+}
+
 static void DrawSelectedRootOutline(
     ImDrawList *drawList, size_t rootIndex,
     const std::vector<std::array<float, 16>> &worldTransforms,

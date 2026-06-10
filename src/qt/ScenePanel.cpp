@@ -8,8 +8,10 @@
 #include "../asset_library/asset_types.h"
 #include "../asset_library/global_registry.h"
 
+#include <QAbstractSpinBox>
 #include <QAbstractItemView>
 #include <QAction>
+#include <QApplication>
 #include <QBrush>
 #include <QColor>
 #include <QInputDialog>
@@ -25,6 +27,7 @@
 #include <QIcon>
 #include <QItemSelectionModel>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMetaObject>
@@ -32,6 +35,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QPlainTextEdit>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QShortcut>
@@ -39,6 +43,7 @@
 #include <QSpinBox>
 #include <QTimer>
 #include <QToolButton>
+#include <QTextEdit>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QVBoxLayout>
@@ -53,6 +58,27 @@
 extern HWND g_hwnd;
 
 namespace {
+
+bool IsTextEntryFocused()
+{
+    QWidget *focusedWidget = QApplication::focusWidget();
+    if (!focusedWidget) {
+        return false;
+    }
+
+    if (qobject_cast<QLineEdit *>(focusedWidget) ||
+        qobject_cast<QTextEdit *>(focusedWidget) ||
+        qobject_cast<QPlainTextEdit *>(focusedWidget) ||
+        qobject_cast<QAbstractSpinBox *>(focusedWidget)) {
+        return true;
+    }
+
+    if (auto *comboBox = qobject_cast<QComboBox *>(focusedWidget)) {
+        return comboBox->isEditable();
+    }
+
+    return false;
+}
 
 constexpr int kNodeIndexRole = Qt::UserRole;
 constexpr int kNodeBaseTooltipRole = Qt::UserRole + 1;
@@ -76,6 +102,7 @@ enum class SceneToolIcon {
     ImportModel,
     Reimport,
     AddGroundPlane,
+    FrameSelected,
     ExplodeSelected,
     DeleteSelected
 };
@@ -300,6 +327,21 @@ QIcon MakeSceneToolIcon(SceneToolIcon icon)
         painter.drawLine(QPointF(9.0, 2.5), QPointF(9.0, 7.5));
         painter.drawLine(QPointF(6.5, 5.0), QPointF(11.5, 5.0));
         break;
+    case SceneToolIcon::FrameSelected:
+        painter.setPen(QPen(accent, 1.7, Qt::SolidLine, Qt::RoundCap,
+                            Qt::RoundJoin));
+        painter.drawLine(QPointF(3, 7), QPointF(3, 3));
+        painter.drawLine(QPointF(3, 3), QPointF(7, 3));
+        painter.drawLine(QPointF(11, 3), QPointF(15, 3));
+        painter.drawLine(QPointF(15, 3), QPointF(15, 7));
+        painter.drawLine(QPointF(15, 11), QPointF(15, 15));
+        painter.drawLine(QPointF(15, 15), QPointF(11, 15));
+        painter.drawLine(QPointF(7, 15), QPointF(3, 15));
+        painter.drawLine(QPointF(3, 15), QPointF(3, 11));
+        painter.setPen(QPen(stroke, 1.4, Qt::SolidLine, Qt::RoundCap,
+                            Qt::RoundJoin));
+        painter.drawEllipse(QPointF(9, 9), 2.7, 2.7);
+        break;
     case SceneToolIcon::ExplodeSelected:
         painter.drawRect(QRectF(6.0, 6.0, 6.0, 6.0));
         painter.setPen(QPen(accent, 1.7, Qt::SolidLine, Qt::RoundCap,
@@ -471,6 +513,8 @@ void ScenePanel::createUi()
     m_importButton = CreateSceneToolButton(this, tr("Import Model"), SceneToolIcon::ImportModel);
     m_reimportButton = CreateSceneToolButton(this, tr("Reimport Selected"), SceneToolIcon::Reimport);
     m_addPlaneButton = CreateSceneToolButton(this, tr("Add Ground Plane"), SceneToolIcon::AddGroundPlane);
+    m_frameSelectedButton = CreateSceneToolButton(
+        this, tr("Frame Selected (F)"), SceneToolIcon::FrameSelected);
     m_explodeButton = CreateSceneToolButton(
         this,
         tr("Explode Selected - split a multi-mesh node into independent child "
@@ -483,6 +527,7 @@ void ScenePanel::createUi()
     toolRow->addWidget(m_importButton);
     toolRow->addWidget(m_reimportButton);
     toolRow->addWidget(m_addPlaneButton);
+    toolRow->addWidget(m_frameSelectedButton);
     toolRow->addWidget(m_explodeButton);
     toolRow->addWidget(m_deleteButton);
     toolRow->addStretch(1);
@@ -704,6 +749,18 @@ void ScenePanel::createUi()
     });
     connect(m_addPlaneButton, &QToolButton::clicked, this, []() {
         Scene::AddDefaultPlane(0.0f);
+    });
+    connect(m_frameSelectedButton, &QToolButton::clicked, this, []() {
+        Scene::FrameSelected();
+    });
+    auto *frameShortcut = new QShortcut(QKeySequence(Qt::Key_F), this);
+    frameShortcut->setContext(Qt::ApplicationShortcut);
+    connect(frameShortcut, &QShortcut::activated, this, []() {
+        if (QApplication::activeModalWidget() || IsTextEntryFocused()) {
+            return;
+        }
+
+        Scene::FrameSelected();
     });
     connect(m_explodeButton, &QToolButton::clicked, this, [this]() {
         const int nodeIndex = selectedNodeIndex();
@@ -1024,6 +1081,7 @@ void ScenePanel::refreshSceneList()
         m_importStatusLabel->hide();
         m_importButton->setEnabled(false);
         m_addPlaneButton->setEnabled(false);
+        m_frameSelectedButton->setEnabled(false);
         m_explodeButton->setEnabled(false);
         m_deleteButton->setEnabled(false);
         m_nodeList->setEnabled(false);
@@ -1036,6 +1094,9 @@ void ScenePanel::refreshSceneList()
 
     m_importButton->setEnabled(true);
     m_addPlaneButton->setEnabled(true);
+    m_frameSelectedButton->setEnabled(
+        !Scene::GetSelectedNodeIndices().empty() ||
+        !Scene::GetSelectedLightIndices().empty());
     m_nodeList->setEnabled(true);
 
     const bool importing = importActive;
